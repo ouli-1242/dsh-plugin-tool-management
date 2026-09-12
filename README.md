@@ -7,12 +7,14 @@
 
 **简体中文** · [English](README_EN.md)
 
-**DeepSeek Harness 的 MCP 服务与技能管理插件。** 一个设置面板管好四件事：
+**DeepSeek Harness 的 MCP 服务、技能与规则管理插件。** 一个设置面板管好六件事：
 
 - **MCP**：连接了哪些服务、每个服务有哪些工具、哪些工具该让模型用——增删改查、启停、重启，全部即改即生效；
 - **Skills**：本机各处的技能（DSH / Agents / Codex / Claude / 项目级 / 你自己指定的任意目录）一目了然，逐个或整组启停、创建、导入、回收；
 - **AGENTS.md**：管理多套全局指令基线预设，一键「应用」写入 `~/.dsh/AGENTS.md`，新会话生效、当前会话不变；
-- **History**：已归档会话统一管理，按项目分组、批量恢复/删除，对话导入/导出，保留期自动清理。
+- **History**：已归档会话统一管理，按项目分组、批量恢复/删除，对话导入/导出，保留期自动清理；
+- **Rules**：把「规则 / 记忆」做成 `~/.dsh/rules/` 下的 Markdown 文件——按需层按会话场景投影为技能、始终层编译进 `~/.dsh/AGENTS.md`，新建、编辑、启停、体检、回收站；
+- **Scenes**：把 agent preset 与规则分组绑定，让不同场景的会话看到不同的规则集合。
 
 不手改 `cordis.patch.yml`，不碰任何技能源文件，重启与升级后配置依旧。
 
@@ -49,9 +51,12 @@
 | AGENTS.md 预设 | 多套全局指令基线预设库：新建 / 导入 / 编辑 / 应用 / 删除；「应用」写入 `~/.dsh/AGENTS.md`（新会话生效，当前会话不变） |
 | 会话归档管理 | History 页按项目分组展示已归档会话：搜索、全选、批量恢复 / 永久删除、保留期自动清理（改保留期后倒计时以修改时间为基准重置） |
 | 对话导入 / 导出 | 从 Claude Code / Cursor（JSONL）、Codex（Markdown）、任意文本无痛接管对话；导出可选会话范围，目录默认桌面，支持 Markdown / JSONL |
-| 斜杠命令 | 聊天框直接输入 `/mcp`、`/skills`、`/agents-md` 查看状态 |
-| 模型工具 | **7 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能（创建前需用户确认） |
-| 界面 | 独立的 `dsm-*` 设计系统，四页风格统一 |
+| 斜杠命令 | 聊天框直接输入 `/mcp`、`/skills`、`/agents-md`、`/rules` 查看状态 |
+| 规则双投影 | 规则 = `~/.dsh/rules/<group>/<name>.md` 文件；`always` 规则确定性编译进 `~/.dsh/AGENTS.md`（新会话生效），其余按会话场景按需投影为技能目录条目 |
+| 场景过滤 | `~/.dsh/tool-management/scenes.json` 记录「preset → 可见分组」，会话按 `agentPreset` 自动看到对应规则 |
+| 规则体检 | 一键扫描 6 类异常：同名遮蔽、描述超长、文件名与 name 不一致、frontmatter 非法、空正文、描述过于笼统 |
+| 模型工具 | **10 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能，`rule_manager_*` 管规则（创建前需用户确认，可在设置中关闭） |
+| 界面 | 独立的 `dsm-*` 设计系统，六页风格统一 |
 
 ## 快速开始
 
@@ -66,7 +71,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 dsh plugin --profile web remove dsh-plugin-tool-management
 ```
 
-装完硬刷新浏览器（Cmd/Ctrl+Shift-R），设置里出现 **MCP**、**Skills**、**AGENTS.md** 与 **History** 四页即安装成功（客户端改动由 DSH 热加载，无需重启）。
+装完硬刷新浏览器（Cmd/Ctrl+Shift-R），设置里出现 **MCP**、**Skills**、**AGENTS.md**、**History**、**Rules** 与 **Scenes** 六页即安装成功（客户端改动由 DSH 热加载，无需重启）。
 
 也可以直接对任意 DSH 会话说：
 
@@ -106,13 +111,27 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 - **导入对话**：无痛接管其他工具的会话——Claude Code / Cursor 的 JSONL、Codex 的 Markdown、以及任意文本格式，导入后即可继续对话。
 - **导出对话**：按会话范围（全部 / 仅归档 / 按工作区）导出，每个会话一个 Markdown 或 JSONL 文件；导出目录默认桌面，旁边带「选择文件夹」按钮弹出目录树，逐级浏览选中后自动回填绝对路径。
 
+### 管规则（Rules）
+
+- **规则 = 一个 Markdown 文件**：`~/.dsh/rules/<group>/<name>.md`（flat）或 `<group>/<name>/SKILL.md`（bundle，可带附件）。新建规则时填分组、名称、描述与正文，frontmatter 全部可选，缺失时插件自动派生。
+- **双投影**：默认规则进入**按需层**——按当前会话的场景投影为技能目录条目，模型需要时再加载；勾选「始终」后进入**始终层**——确定性拼接进 `~/.dsh/AGENTS.md`（新会话生效），占用独立字节预算，超限会拒绝写入。
+- **启停与回收**：逐条启停、编辑、移入回收站后恢复，源文件由本插件管理、不会污染用户手工文件；`always` / `enabled` 状态存在侧车索引里，绝不回写规则文件。
+- **体检**：一键扫描 6 类异常（同名遮蔽、描述超长、文件名与 name 不一致、frontmatter 非法、空正文、描述过于笼统），并显示始终层字节预算。
+
+### 管场景（Scenes）
+
+- **场景 = preset 与规则分组的绑定**：系统内置 `standard` preset 只读；「复制为自定义场景」或「新建场景」从某个 preset 整目录复制生成自定义 preset（`~/.dsh/.agent-presets/<id>/`），永不修改任何 `agent.cordis.yml`。
+- **绑定可见分组**：每个场景卡片勾选要看到的规则分组，写入 `scenes.json`；会话按其 `agentPreset` 自动只看到绑定分组里的规则，切换场景无需重载插件。
+- **默认场景**：卡片上「设为默认」记录在插件设置中；删除只对自定义场景开放，系统 preset 会被拒绝并给出指引。
+
 ### 让模型和脚本参与管理
 
 | 入口 | 能做什么 |
 |---|---|
-| `/mcp`、`/skills`、`/agents-md` | 聊天框查看当前状态 |
+| `/mcp`、`/skills`、`/agents-md`、`/rules` | 聊天框查看当前状态 |
 | `skill_mcp_manager_list / set_enabled / restart / add` | 模型查询与操作 MCP 服务 |
 | `skill_manager_list / set_enabled / create` | 模型查询与操作技能（创建前会征求你同意） |
+| `rule_manager_list / read / write` | 模型查询与读写规则（写入前会征求你同意，可在设置中关闭确认） |
 | `POST /dsh-plugin-tool-management/api` | 脚本调用的 HTTP API（`{op, args}` 协议） |
 
 ## 配置与安全
@@ -136,6 +155,10 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 技能回收站 / 导入暂存 | `~/.dsh/tool-management/trash`、`uploads` |
 | AGENTS.md 预设库 / 应用结果 | 插件目录 `data/agents-md-presets/`；「应用」写入 `~/.dsh/AGENTS.md` |
 | 归档会话账本 / 保留期 | 插件目录 `data/history-archived-at.json`、`data/history-retention.json` |
+| 规则文件（真源） | `~/.dsh/rules/<group>/<name>.md`（flat）或 `<group>/<name>/SKILL.md`（bundle） |
+| 规则索引 / 场景绑定 | `~/.dsh/tool-management/rules-index.json`（启停/排序/标签）、`scenes.json`（preset → 可见分组） |
+| 规则回收站 | `~/.dsh/tool-management/rules-trash/<trashId>/`（删除规则先进这里，可恢复） |
+| 场景 preset | `~/.dsh/.agent-presets/<id>/`（自定义场景整目录复制；永不改写 `agent.cordis.yml`） |
 | 运行日志 | `~/.dsh/dsh-plugin-tool-management.log`（滚动） |
 
 ## 常见问题
@@ -157,7 +180,7 @@ npm run test:fast    # 跳过构建直接跑测试
 npm run build        # 仅构建（tsc + 同步客户端 bundle）
 ```
 
-结构：宿主端 `src/index.ts`（Cordis 对象插件，`lib/index.js` 为发布产物）；技能核心 `src/skills/core.js`（纯 Node，可独立单测）；AGENTS.md 预设库 `src/agents-md/service.ts`；归档会话管理 `lib/history/`（`workspace.js` / `projcache.js` / `tombstone.js`）；对话导入解析 `src/imports/parsers.js`；浏览器端 `src/client.js`（ModuleLoader CJS bundle，`dsm-*` 设计系统，经同源 API 与宿主通信）。运行时依赖仅 `fflate`（ZIP 解压）。
+结构：宿主端 `src/index.ts`（Cordis 对象插件，`lib/index.js` 为发布产物）；技能核心 `src/skills/core.js`（纯 Node，可独立单测）；AGENTS.md 预设库 `src/agents-md/service.ts`；归档会话管理 `lib/history/`（`workspace.js` / `projcache.js` / `tombstone.js`）；对话导入解析 `src/imports/parsers.js`；规则服务 `src/rules/`（`service.ts` 发现/CRUD/索引/体检、`provider.ts` 场景过滤投影、`project.ts` 始终层编译）；场景服务 `src/scenes/service.ts` + `src/presets/service.ts`（preset roster）；浏览器端 `src/client.js`（ModuleLoader CJS bundle，`dsm-*` 设计系统，经同源 API 与宿主通信）。运行时依赖仅 `fflate`（ZIP 解压）。
 
 发布：`npm version patch && npm publish`（`prepublishOnly` 自动构建）。
 

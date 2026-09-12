@@ -148,3 +148,31 @@ test('rules: hand-written flat rule with derived fields is listed', async () => 
     assert.equal(rule.descriptionDerived, true)
   } finally { t.cleanup() }
 })
+
+test('rules: diagnose reproduces shadowed / long-description / name-mismatch / bad-frontmatter', async () => {
+  const t = temp()
+  try {
+    // ① 同名遮蔽：bundle 优先，flat 被 shadowed。
+    mkdirSync(join(t.rulesRoot, 'office', 'dup'), { recursive: true })
+    writeFileSync(join(t.rulesRoot, 'office', 'dup', 'SKILL.md'), '---\nname: dup\ndescription: bundle 版本\n---\nbundle body', 'utf8')
+    writeFileSync(join(t.rulesRoot, 'office', 'dup.md'), '---\nname: dup\ndescription: flat 版本\n---\nflat body', 'utf8')
+    // ② 描述超长（显式 description > 500）。
+    writeFileSync(join(t.rulesRoot, 'office', 'long-desc.md'), '---\nname: long-desc\ndescription: ' + '长'.repeat(520) + '\n---\nbody', 'utf8')
+    // ③ 文件名与 name 不一致：文件 foo.md，frontmatter name: bar。
+    writeFileSync(join(t.rulesRoot, 'office', 'foo.md'), '---\nname: bar\ndescription: 名字对不上\n---\nbody', 'utf8')
+    // ④ frontmatter 非法：--- 开头但无字段。
+    writeFileSync(join(t.rulesRoot, 'office', 'bad-fm.md'), '---\n\n正文没有 frontmatter 字段', 'utf8')
+
+    const ctx = makeCtx(t.home)
+    plugin.apply(ctx, { rulesRoot: t.rulesRoot, rulesStateDir: t.stateDir })
+    const r = await call(ctx._route(), { op: 'rules-diagnose', args: {} })
+    assert.equal(r.json.ok, true)
+    const codes = new Set(r.json.issues.map((i) => i.code))
+    assert.ok(codes.has('shadowed'), 'shadowed detected')
+    assert.ok(codes.has('descriptionTooLong'), 'descriptionTooLong detected')
+    assert.ok(codes.has('nameMismatch'), 'nameMismatch detected')
+    assert.ok(codes.has('badFrontmatter'), 'badFrontmatter detected')
+    assert.equal(typeof r.json.budget.usedBytes, 'number')
+    assert.equal(typeof r.json.counts.rules, 'number')
+  } finally { t.cleanup() }
+})

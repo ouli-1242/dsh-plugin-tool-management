@@ -732,6 +732,58 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     }
   }
 
+  /**
+   * 规则体检 + 诊断汇总（Phase 3）：逐条规则检查 6 类异常，附始终层预算与场景统计。
+   * 只读；结果只用于 UI 展示，不做任何写操作。
+   */
+  async function rulesDiagnose(): Promise<any> {
+    const snap = await snapshot()
+    const issues: Array<{ severity: 'error' | 'warning' | 'info'; code: string; ruleId?: string; message: string }> = []
+    for (const rule of snap.rules) {
+      if (rule.shadowed) {
+        issues.push({ severity: 'warning', code: 'shadowed', ruleId: rule.id, message: `规则「${rule.id}」被同名 bundle 遮蔽，不会被加载。` })
+      }
+      if (String(rule.description || '').length > MAX_DESCRIPTION_LENGTH) {
+        issues.push({ severity: 'error', code: 'descriptionTooLong', ruleId: rule.id, message: `规则「${rule.id}」描述超过 ${MAX_DESCRIPTION_LENGTH} 字符，会被 skill 校验丢弃。` })
+      }
+      if (rule.form === 'flat') {
+        const fileBase = basename(rule.path)
+        const base = fileBase.toLowerCase().endsWith('.md') ? fileBase.slice(0, -3) : fileBase
+        if (base !== rule.name) {
+          issues.push({ severity: 'error', code: 'nameMismatch', ruleId: rule.id, message: `规则「${rule.id}」文件名（${fileBase}）与 name（${rule.name}）不一致，无法按 name 定位。` })
+        }
+      }
+      const body = snap.bodies.get(rule.id) || ''
+      if (body.trim() === '') {
+        issues.push({ severity: 'error', code: 'emptyBody', ruleId: rule.id, message: `规则「${rule.id}」正文为空。` })
+      }
+      if (rule.descriptionDerived && String(rule.description || '').length < 10) {
+        issues.push({ severity: 'info', code: 'vagueDescription', ruleId: rule.id, message: `规则「${rule.id}」描述过于笼统（自动派生，不足 10 字符），建议补充。` })
+      }
+    }
+    // frontmatter 非法：以 --- 开头但解析不出任何字段（残缺 frontmatter）。
+    for (const entry of snap.entries.values()) {
+      try {
+        const text = await readFile(entry.docPath, 'utf8')
+        const stripped = String(text || '').replace(/^\uFEFF/, '').trimStart()
+        if (stripped.startsWith('---')) {
+          const doc = parseSkillDoc(text) as ParsedSkillDoc
+          if (Object.keys(doc.map || {}).length === 0) {
+            issues.push({ severity: 'warning', code: 'badFrontmatter', ruleId: entry.id, message: `规则「${entry.id}」frontmatter 无法解析（以 --- 开头但无有效字段）。` })
+          }
+        }
+      } catch { /* 读取失败由上面的 emptyBody 兜底 */ }
+    }
+    const budget = await rulesBudget()
+    const scenes = await readScenes(stateDir)
+    return {
+      ok: true,
+      issues,
+      budget: { usedBytes: budget.usedBytes, maxBytes: budget.maxBytes, over: budget.maxBytes > 0 && budget.usedBytes > budget.maxBytes },
+      counts: { rules: snap.rules.length, groups: snap.groups.length, scenes: Object.keys(scenes.presets || {}).length },
+    }
+  }
+
   // ── ops：写（串行队列内）───────────────────────────────────────────────
 
   async function rulesCreate(args: any): Promise<any> {
@@ -1040,6 +1092,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     'rules-list': (args) => rulesList(args || {}),
     'rules-read': (args) => rulesRead(args || {}),
     'rules-budget': () => rulesBudget(),
+    'rules-diagnose': () => rulesDiagnose(),
     'rules-create': (args) => runWrite(() => rulesCreate(args || {})),
     'rules-update': (args) => runWrite(() => rulesUpdate(args || {})),
     'rules-remove': (args) => runWrite(() => rulesRemove(args || {})),

@@ -757,6 +757,8 @@ window.__ModuleLoader__.load({
         "root.dsh": "DSH 技能", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "rules.desc": "管理规则层（Rules）的始终层与常规规则：新建、编辑、启停、移入回收站；始终层规则占用独立字节预算。",
         "rules.btn.refresh": "刷新", "rules.btn.new": "新建规则", "rules.btn.create": "创建", "rules.btn.save": "保存",
+        "rules.btn.diagnose": "体检", "rules.diagnose.title": "规则体检", "rules.diagnose.summary": "{rules} 条规则 · {groups} 个分组 · {scenes} 个场景 · {issues} 个问题",
+        "rules.diagnose.clean": "未发现问题，一切正常。", "rules.diag.error": "错误", "rules.diag.warning": "警告", "rules.diag.info": "提示",
         "rules.stat.total": "条规则", "rules.stat.always": "条始终层", "rules.stat.enabled": "条已启用", "rules.stat.budget": "始终层字节预算", "rules.budget.over": "已超限",
         "rules.search.placeholder": "搜索名称 / 描述 / 分组", "rules.filter.all": "全部分组", "rules.group.count": "{count} 条规则",
         "rules.form.flat": "flat", "rules.form.bundle": "bundle", "rules.derived": "派生", "rules.fill.frontmatter": "补齐 frontmatter",
@@ -816,7 +818,9 @@ window.__ModuleLoader__.load({
         "scenes.id.invalid": "Scene ID must be kebab-case (lowercase letters and digits, dash-separated)",
         "scenes.delete.title": "Delete scene?", "scenes.delete.desc": "The custom scene “{name}” and its preset directory will be deleted. System scenes cannot be deleted.",
         "scenes.result.created": "Scene created: {id}", "scenes.result.removed": "Scene deleted: {id}", "scenes.result.default": "Set as default: {id}", "scenes.result.groups": "Visible groups updated.",
-        "scenes.loading": "Loading scenes…", "scenes.empty": "No scenes yet. Click “New scene” to start from a system preset."
+        "scenes.loading": "Loading scenes…", "scenes.empty": "No scenes yet. Click “New scene” to start from a system preset.",
+        "rules.btn.diagnose": "Check", "rules.diagnose.title": "Rule checkup", "rules.diagnose.summary": "{rules} rules · {groups} groups · {scenes} scenes · {issues} issues",
+        "rules.diagnose.clean": "No issues found.", "rules.diag.error": "Error", "rules.diag.warning": "Warning", "rules.diag.info": "Info"
       }
     };
 
@@ -1537,6 +1541,18 @@ function callApi(path, options) {
           }
           React.useEffect(function () { refresh(); refreshBudget() }, [])
 
+          var ds = React.useState(null)
+          var diag = ds[0], setDiag = ds[1]
+          function runDiagnose() {
+            if (busy) return
+            setBusy(true); setDiag(null); setResult(null)
+            apiCall('rules-diagnose', {}).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) setDiag({ issues: res.issues || [], budget: res.budget || {}, counts: res.counts || {} })
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+
           function toggleEnabled(rule) {
             if (busy) return
             setBusy(true); setResult(null)
@@ -1715,6 +1731,7 @@ function callApi(path, options) {
                 React.createElement('p', { className: 'dsm-desc' }, t('rules.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('rules.btn.refresh')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: runDiagnose, title: t('rules.diagnose.title') }, t('rules.btn.diagnose')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: openCreate }, t('rules.btn.new')))),
             React.createElement('div', { className: 'dsm-summary dsm-summary-4' },
               React.createElement('div', { key: 'total', className: 'dsm-stat' }, React.createElement('strong', null, stats.total || 0), t('rules.stat.total')),
@@ -1734,6 +1751,24 @@ function callApi(path, options) {
                 React.createElement(SourceSelect, { options: groupOptions, value: groupFilter, onChange: setGroupFilter }))),
             result ? React.createElement('div', { key: 'result', className: 'dsm-feedback' + (result.ok ? '' : ' dsm-error'), role: 'alert' }, result.text) : null,
             data.error ? React.createElement('div', { key: 'error', className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
+            diag ? React.createElement('div', { key: 'diag', className: 'dsm-diag' },
+              React.createElement('div', { className: 'dsm-diag-head' },
+                React.createElement('strong', null, t('rules.diagnose.title')),
+                React.createElement('span', { className: 'dsm-count' }, t('rules.diagnose.summary', {
+                  rules: diag.counts.rules || 0,
+                  groups: diag.counts.groups || 0,
+                  scenes: diag.counts.scenes || 0,
+                  issues: (diag.issues || []).length,
+                })),
+                React.createElement('span', { className: 'dsm-count' }, t('rules.stat.budget') + ': ' + formatBytes(Number(diag.budget.usedBytes || 0)) + ' / ' + formatBytes(Number(diag.budget.maxBytes || 0))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setDiag(null) } }, t('btn.close'))),
+              (diag.issues || []).length
+                ? React.createElement('ul', { className: 'dsm-diag-list' }, diag.issues.map(function (it, i) {
+                  return React.createElement('li', { key: i, className: 'dsm-diag-item dsm-diag-' + (it.severity || 'info') },
+                    React.createElement('span', { className: 'dsm-diag-sev' }, it.severity === 'error' ? t('rules.diag.error') : it.severity === 'warning' ? t('rules.diag.warning') : t('rules.diag.info')),
+                    React.createElement('span', null, it.message))
+                }))
+                : React.createElement('p', { className: 'dsm-help' }, t('rules.diagnose.clean'))) : null,
             data.loading && !data.rules.length ? React.createElement('div', { key: 'loading', className: 'dsm-empty' }, t('rules.loading'))
               : groups.length ? React.createElement('div', { key: 'sources', className: 'dsm-sources' }, groups.map(renderGroupCard))
               : React.createElement('div', { key: 'empty', className: 'dsm-empty' }, query ? t('rules.empty.search') : t('rules.empty')),

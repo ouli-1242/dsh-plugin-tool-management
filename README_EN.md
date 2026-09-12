@@ -7,12 +7,14 @@
 
 [简体中文](README.md) · **English**
 
-**An MCP server & skills manager for DeepSeek Harness.** One settings panel keeps four things under control:
+**An MCP server, skills & rules manager for DeepSeek Harness.** One settings panel keeps six things under control:
 
 - **MCP**: which servers are configured, what tools each one exposes, and which tools the model may call — add, edit, remove, toggle, restart; every change takes effect immediately;
 - **Skills**: every skill on the machine (DSH / Agents / Codex / Claude / project-level / any directory you add) at a glance — toggle individually or per source, create, import, recycle;
 - **AGENTS.md**: keep multiple global instruction baselines as presets, apply one with a click to write `~/.dsh/AGENTS.md` — new sessions pick it up, current sessions stay unchanged;
-- **History**: archived sessions in one place — grouped by project, batch restore / delete, import & export transcripts, retention-based auto-cleanup.
+- **History**: archived sessions in one place — grouped by project, batch restore / delete, import & export transcripts, retention-based auto-cleanup;
+- **Rules**: rules / memories are Markdown files under `~/.dsh/rules/` — the on-demand layer projects them as skills per scene, the always layer compiles them into `~/.dsh/AGENTS.md`; create, edit, toggle, check up, recycle;
+- **Scenes**: bind agent presets to rule groups so sessions in different scenes see different rule sets.
 
 No hand-editing of `cordis.patch.yml`, and skill source files are never touched. Configuration survives restarts and upgrades.
 
@@ -49,9 +51,12 @@ No hand-editing of `cordis.patch.yml`, and skill source files are never touched.
 | AGENTS.md presets | Multiple global instruction baselines as presets — create / import / edit / apply / delete; "Apply" writes `~/.dsh/AGENTS.md` (new sessions pick it up, current sessions stay unchanged) |
 | Archived session management | History page groups archived sessions by project: search, select-all, batch restore / permanent delete, retention-based auto-cleanup (changing the retention resets the countdown from the change time) |
 | Transcript import / export | Seamlessly take over conversations from Claude Code / Cursor (JSONL), Codex (Markdown), or any text; export picks the session scope, defaults to the desktop, in Markdown / JSONL |
-| Slash commands | `/mcp`, `/skills`, `/agents-md` right from the chat box |
-| Model tools | **7 tools**: `skill_mcp_manager_*` for MCP servers, `skill_manager_*` for skills (creating asks for user confirmation first) |
-| UI | Its own `dsm-*` design system, consistent across all four pages |
+| Slash commands | `/mcp`, `/skills`, `/agents-md`, `/rules` right from the chat box |
+| Rule dual projection | Rules are `~/.dsh/rules/<group>/<name>.md` files; `always` rules compile deterministically into `~/.dsh/AGENTS.md` (new sessions), the rest project as skill catalog entries per scene |
+| Scene filtering | `~/.dsh/tool-management/scenes.json` maps preset → visible groups; sessions see the matching rules automatically via their `agentPreset` |
+| Rule checkup | One-click scan of 6 issue classes: shadowed by bundle, description too long, filename ≠ name, bad frontmatter, empty body, vague description |
+| Model tools | **10 tools**: `skill_mcp_manager_*` for MCP servers, `skill_manager_*` for skills, `rule_manager_*` for rules (writes ask for user confirmation; can be disabled in settings) |
+| UI | Its own `dsm-*` design system, consistent across all six pages |
 
 ## Getting started
 
@@ -66,7 +71,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 dsh plugin --profile web remove dsh-plugin-tool-management
 ```
 
-Hard-refresh the browser (Cmd/Ctrl+Shift-R) after installing — the **MCP**, **Skills**, **AGENTS.md** and **History** pages appear in Settings (client changes are hot-loaded by DSH, no restart needed).
+Hard-refresh the browser (Cmd/Ctrl+Shift-R) after installing — the **MCP**, **Skills**, **AGENTS.md**, **History**, **Rules** and **Scenes** pages appear in Settings (client changes are hot-loaded by DSH, no restart needed).
 
 You can also tell any DSH session:
 
@@ -106,13 +111,27 @@ Then remind me to hard-refresh the browser.
 - **Import conversations**: take over sessions from other tools — Claude Code / Cursor JSONL, Codex Markdown, and arbitrary text — and keep chatting right after import.
 - **Export conversations**: pick a session scope (all / archived only / by workspace); each session becomes a Markdown or JSONL file; the export directory defaults to the desktop, and the adjacent "Select" button opens a directory tree to browse and fill in the absolute path.
 
+### Managing rules
+
+- **One rule = one Markdown file**: `~/.dsh/rules/<group>/<name>.md` (flat) or `<group>/<name>/SKILL.md` (bundle, with attachments). When creating, fill in group, name, description and body — frontmatter is entirely optional and derived automatically when missing.
+- **Dual projection**: rules land in the **on-demand layer** by default — projected as skill catalog entries for the current scene, loaded by the model when needed; ticking "Always" moves them to the **always layer** — compiled deterministically into `~/.dsh/AGENTS.md` (new sessions) under a dedicated byte budget, and writes over the budget are refused.
+- **Toggle & recycle**: toggle, edit, and move to the plugin recycle bin per rule; the source files are managed by the plugin and user hand-edits are never polluted — `always` / `enabled` live in the sidecar index, never written back to the rule file.
+- **Checkup**: one click scans 6 issue classes (shadowed by bundle, description too long, filename ≠ name, bad frontmatter, empty body, vague description) and shows the always-layer byte budget.
+
+### Managing scenes
+
+- **Scene = preset ↔ rule groups**: the built-in `standard` preset is read-only; "Copy as custom" or "New scene" copies a preset directory wholesale into `~/.dsh/.agent-presets/<id>/` — no `agent.cordis.yml` is ever modified.
+- **Bind visible groups**: tick the rule groups each scene card should see; the binding is written to `scenes.json`, and sessions automatically see only those groups per their `agentPreset` — no plugin reload needed when switching scenes.
+- **Default scene**: "Set default" on a card is recorded in the plugin settings; deletion is open only to custom scenes, system presets are refused with guidance.
+
 ### Let the model and scripts help
 
 | Entry point | What it does |
 |---|---|
-| `/mcp`, `/skills`, `/agents-md` | Check the current state from the chat box |
+| `/mcp`, `/skills`, `/agents-md`, `/rules` | Check the current state from the chat box |
 | `skill_mcp_manager_list / set_enabled / restart / add` | Let the model query and operate MCP servers |
 | `skill_manager_list / set_enabled / create` | Let the model query and operate skills (creating asks for your consent) |
+| `rule_manager_list / read / write` | Let the model query and write rules (writes ask for your consent; can be disabled in settings) |
 | `POST /dsh-plugin-tool-management/api` | HTTP API for scripts (`{op, args}` protocol) |
 
 ## Configuration & security
@@ -136,6 +155,10 @@ Why a token: the cross-site protection (POST-only + custom header + same-origin 
 | Skill recycle bin / import staging | `~/.dsh/tool-management/trash`, `uploads` |
 | AGENTS.md presets / applied file | Plugin dir `data/agents-md-presets/`; "Apply" writes `~/.dsh/AGENTS.md` |
 | Archived session ledger / retention | Plugin dir `data/history-archived-at.json`, `data/history-retention.json` |
+| Rule files (source of truth) | `~/.dsh/rules/<group>/<name>.md` (flat) or `<group>/<name>/SKILL.md` (bundle) |
+| Rule index / scene binding | `~/.dsh/tool-management/rules-index.json` (toggle/order/tags), `scenes.json` (preset → visible groups) |
+| Rule recycle bin | `~/.dsh/tool-management/rules-trash/<trashId>/` (deleted rules land here, restorable) |
+| Scene presets | `~/.dsh/.agent-presets/<id>/` (custom scenes are whole-directory copies; `agent.cordis.yml` is never rewritten) |
 | Runtime log | `~/.dsh/dsh-plugin-tool-management.log` (rolling) |
 
 ## FAQ
@@ -157,7 +180,7 @@ npm run test:fast    # run tests without building
 npm run build        # build only (tsc + sync client bundle)
 ```
 
-Layout: host half `src/index.ts` (object-form Cordis plugin, `lib/index.js` is the shipped artifact); skill core `src/skills/core.js` (pure Node, unit-testable); AGENTS.md presets `src/agents-md/service.ts`; archived session management `lib/history/` (`workspace.js` / `projcache.js` / `tombstone.js`); transcript import parsing `src/imports/parsers.js`; browser half `src/client.js` (ModuleLoader CJS bundle, `dsm-*` design system, talks to the host through the same-origin API). The only runtime dependency is `fflate` (ZIP extraction).
+Layout: host half `src/index.ts` (object-form Cordis plugin, `lib/index.js` is the shipped artifact); skill core `src/skills/core.js` (pure Node, unit-testable); AGENTS.md presets `src/agents-md/service.ts`; archived session management `lib/history/` (`workspace.js` / `projcache.js` / `tombstone.js`); transcript import parsing `src/imports/parsers.js`; rule store `src/rules/` (`service.ts` discovery/CRUD/index/checkup, `provider.ts` scene-filtered projection, `project.ts` always-layer compile); scene services `src/scenes/service.ts` + `src/presets/service.ts` (preset roster); browser half `src/client.js` (ModuleLoader CJS bundle, `dsm-*` design system, talks to the host through the same-origin API). The only runtime dependency is `fflate` (ZIP extraction).
 
 Publish: `npm version patch && npm publish` (`prepublishOnly` builds automatically).
 
