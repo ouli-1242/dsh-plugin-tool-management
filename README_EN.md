@@ -7,14 +7,13 @@
 
 [简体中文](README.md) · **English**
 
-**An MCP server, skills & rules manager for DeepSeek Harness.** One settings panel keeps six things under control:
+**An MCP server, skills & memory manager for DeepSeek Harness.** One settings panel keeps five things under control:
 
 - **MCP**: which servers are configured, what tools each one exposes, and which tools the model may call — add, edit, remove, toggle, restart; every change takes effect immediately;
 - **Skills**: every skill on the machine (DSH / Agents / Codex / Claude / project-level / any directory you add) at a glance — toggle individually or per source, create, import, recycle;
 - **AGENTS.md**: keep multiple global instruction baselines as presets, apply one with a click to write `~/.dsh/AGENTS.md` — new sessions pick it up, current sessions stay unchanged;
 - **History**: archived sessions in one place — grouped by project, batch restore / delete, import & export transcripts, retention-based auto-cleanup;
-- **Rules**: rules / memories are Markdown files under `~/.dsh/rules/` — the on-demand layer projects them as skills per scene, the always layer compiles them into `~/.dsh/AGENTS.md`; create, edit, toggle, check up, recycle;
-- **Scenes**: bind agent presets to rule groups so sessions in different scenes see different rule sets.
+- **Scene Memory**: under `~/.dsh/scene-memory/<scene>/`, one folder = one scene and one `.md` = one memory — **create a scene**, drop `.md` files in (Chinese file names are fine), toggle the scene; the full body of every memory in an enabled scene is **injected into the system prompt automatically**, so you never repeat yourself.
 
 No hand-editing of `cordis.patch.yml`, and skill source files are never touched. Configuration survives restarts and upgrades.
 
@@ -22,19 +21,23 @@ No hand-editing of `cordis.patch.yml`, and skill source files are never touched.
 
 <!-- Image slot 1: MCP management page screenshot → docs/images/mcp.png -->
 
-![MCP management](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/mcp.png)
+![MCP management](docs/images/mcp.png)
 
 <!-- Image slot 2: Skills management page screenshot → docs/images/skills.png -->
 
-![Skills management](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/skills.png)
+![Skills management](docs/images/skills.png)
 
 <!-- Image slot 3: AGENTS.md presets page screenshot → docs/images/agents-md.png -->
 
-![AGENTS.md presets](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/agents-md.png)
+![AGENTS.md presets](docs/images/agents-md.png)
 
 <!-- Image slot 4: History archived sessions page screenshot → docs/images/history.png -->
 
-![History archived sessions](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/history.png)
+![History archived sessions](docs/images/history.png)
+
+<!-- Image slot 5: Scene memory page screenshot → docs/images/场景记忆.png -->
+
+![Scene memory](docs/images/场景记忆.png)
 
 ## Highlights
 
@@ -51,10 +54,12 @@ No hand-editing of `cordis.patch.yml`, and skill source files are never touched.
 | AGENTS.md presets | Multiple global instruction baselines as presets — create / import / edit / apply / delete; "Apply" writes `~/.dsh/AGENTS.md` (new sessions pick it up, current sessions stay unchanged) |
 | Archived session management | History page groups archived sessions by project: search, select-all, batch restore / permanent delete, retention-based auto-cleanup (changing the retention resets the countdown from the change time) |
 | Transcript import / export | Seamlessly take over conversations from Claude Code / Cursor (JSONL), Codex (Markdown), or any text; export picks the session scope, defaults to the desktop, in Markdown / JSONL |
-| Slash commands | `/mcp`, `/skills`, `/agents-md`, `/rules` right from the chat box |
-| Rule dual projection | Rules are `~/.dsh/rules/<group>/<name>.md` files; `always` rules compile deterministically into `~/.dsh/AGENTS.md` (new sessions), the rest project as skill catalog entries per scene |
-| Scene filtering | `~/.dsh/tool-management/scenes.json` maps preset → visible groups; sessions see the matching rules automatically via their `agentPreset` |
-| Rule checkup | One-click scan of 6 issue classes: shadowed by bundle, description too long, filename ≠ name, bad frontmatter, empty body, vague description |
+| Slash commands | `/mcp`, `/skills`, `/agents-md`, `/scene-memory` right from the chat box |
+| Scene memory auto-injected | A memory is `~/.dsh/scene-memory/<scene>/<name>.md`; every `.md` inside an enabled scene is **injected into the system prompt automatically** (per-agent `systemPrompt` section) with no tool call, and toggling takes effect on the next request |
+| Scene enable switch | A scene is a top-level `scene-memory/` folder (Unicode names fine); the multi-select switch persists globally in `rules-index.json`'s `active`; **all scenes enabled by default**, `_shared/` always on |
+| Prefix-cache friendly | Section text depends only on enabled scenes + file contents, so it is byte-stable; switching scenes or editing a memory changes it exactly once, every other request keeps hitting the cache (this does not violate the "no injection layer" rule — that one only bans per-turn dynamic content) |
+| Rule checkup | One click scans for shadowed rules, over-long descriptions, filename ≠ name, bad frontmatter, empty bodies, and memories whose scene is disabled |
+| Model tools | **10**: `skill_mcp_manager_*` for MCP, `skill_manager_*` for skills, `rule_manager_*` for memories (creation asks for confirmation unless disabled in settings) |
 | Model tools | **10 tools**: `skill_mcp_manager_*` for MCP servers, `skill_manager_*` for skills, `rule_manager_*` for rules (writes ask for user confirmation; can be disabled in settings) |
 | UI | Its own `dsm-*` design system, consistent across all six pages |
 
@@ -71,7 +76,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 dsh plugin --profile web remove dsh-plugin-tool-management
 ```
 
-Hard-refresh the browser (Cmd/Ctrl+Shift-R) after installing — the **MCP**, **Skills**, **AGENTS.md**, **History**, **Rules** and **Scenes** pages appear in Settings (client changes are hot-loaded by DSH, no restart needed).
+Hard-refresh the browser (Cmd/Ctrl+Shift-R) after installing — the **MCP**, **Skills**, **AGENTS.md**, **History** and **Scene Memory** pages appear in Settings (client changes are hot-loaded by DSH, no restart needed).
 
 You can also tell any DSH session:
 
@@ -111,24 +116,58 @@ Then remind me to hard-refresh the browser.
 - **Import conversations**: take over sessions from other tools — Claude Code / Cursor JSONL, Codex Markdown, and arbitrary text — and keep chatting right after import.
 - **Export conversations**: pick a session scope (all / archived only / by workspace); each session becomes a Markdown or JSONL file; the export directory defaults to the desktop, and the adjacent "Select" button opens a directory tree to browse and fill in the absolute path.
 
-### Managing rules
+### Managing scene memory (the Scene Memory page)
 
-- **One rule = one Markdown file**: `~/.dsh/rules/<group>/<name>.md` (flat) or `<group>/<name>/SKILL.md` (bundle, with attachments). When creating, fill in group, name, description and body — frontmatter is entirely optional and derived automatically when missing.
-- **Dual projection**: rules land in the **on-demand layer** by default — projected as skill catalog entries for the current scene, loaded by the model when needed; ticking "Always" moves them to the **always layer** — compiled deterministically into `~/.dsh/AGENTS.md` (new sessions) under a dedicated byte budget, and writes over the budget are refused.
-- **Toggle & recycle**: toggle, edit, and move to the plugin recycle bin per rule; the source files are managed by the plugin and user hand-edits are never polluted — `always` / `enabled` live in the sidecar index, never written back to the rule file.
-- **Checkup**: one click scans 6 issue classes (shadowed by bundle, description too long, filename ≠ name, bad frontmatter, empty body, vague description) and shows the always-layer byte budget.
+> This page merges the former "Rules" and "Scenes" pages: **a scene (top-level folder) is the grouping dimension, a memory (`.md`) is the content.**
+> The folder was also renamed from `~/.dsh/rules/` to **`~/.dsh/scene-memory/`** — move your existing files over after upgrading (see "Upgrade note" below).
 
-### Managing scenes
+- **A scene is a top-level folder under `scene-memory/`; the folder name *is* the scene name**: `~/.dsh/scene-memory/办公/流程.md` is one memory in the "办公" scene. Folder names accept any Unicode (≤64 chars, no `/ \ < > : " | ? *`, must not start with a dot); `_shared/` is the reserved shared scene.
+- **New scene**: "New scene" creates the folder for you (or just `mkdir` under `scene-memory/` — same result). Empty scenes are listed and get a "Delete scene" button; a scene that still holds memories cannot be deleted, so nothing is lost in one click.
+- **Every `.md` is one memory**: a sentence or a paragraph, no frontmatter needed, and the whole body is injected. Drop a file into the scene folder and it takes effect, or use "New memory" on the card to write it on the page — **file names can be Chinese** (e.g. `站会流程.md`).
+- **Toggle a scene**: the switch on the right of each scene card enables/disables it (same component and layout as the Skills page). Every `.md` inside an enabled scene is **injected into the system prompt automatically**; the model needs no tool call and you never have to explain again. Toggling takes effect on the **very next request**, with no new session and no plugin reload.
+- **All scenes are enabled by default**: with no configuration at all, every scene is live ("drop it in and it works"); narrow the set in the UI once you have many scenes. `_shared/` is always on (its card has no checkbox).
+- **One memory = one Markdown file**: `<scene>/<name>.md` (flat) or `<scene>/<name>/SKILL.md` (bundle, with attachments). When creating, fill in the scene (pick an existing one or **type a new scene name** — its folder is created for you), the name (= file name), description and body — frontmatter is entirely optional and derived automatically when missing.
+- **Bundle attachments**: with the bundle form you can **add attachments** right in the dialog (multi-select, ≤8 MB each, ≤16 MB / 32 files per upload); they live in the memory folder and are **never injected into the prompt** (only the `SKILL.md` body is), and you can remove them one by one while editing. The flat form is a single file, so it has nowhere to put attachments.
+- **Toggle & recycle**: enable/disable each memory (the switch on the right of every row — a disabled memory stays on disk and is simply left out of the prompt), edit, and move to trash; the "Trash" button in the page header can **restore** or **permanently delete** removed memories, with a confirmation step before the permanent delete. `enabled` and friends live in the sidecar index and are never written back to your files.
+- **Injection budget is visible**: a budget bar (used / max bytes) sits under the summary and turns red with an "Over budget" label. Default cap 64 KiB; when one memory does not fit it is **skipped** while smaller ones behind it are still included, and the section tail carries a "not injected (over budget)" list — both the model and you can see what was left out instead of losing it silently.
+- **`~/.dsh/AGENTS.md` is no longer written**: the old "always layer" is gone; the shared baseline now lives in `_shared/` and flows through the system-prompt section.
 
-- **Scene = preset ↔ rule groups**: the built-in `standard` preset is read-only; "Copy as custom" or "New scene" copies a preset directory wholesale into `~/.dsh/.agent-presets/<id>/` — no `agent.cordis.yml` is ever modified.
-- **Bind visible groups**: tick the rule groups each scene card should see; the binding is written to `scenes.json`, and sessions automatically see only those groups per their `agentPreset` — no plugin reload needed when switching scenes.
-- **Default scene**: "Set default" on a card is recorded in the plugin settings; deletion is open only to custom scenes, system presets are refused with guidance.
+#### Caching and refresh (§5.2)
+
+| Situation | Is the prefix stable? | Result |
+|---|---|---|
+| Scene set unchanged, memory files unchanged | byte-for-byte stable | ✅ prompt prefix cache hits |
+| Enabling/disabling a scene (explicit action) | changes once | ⚠️ that session re-warms once — acceptable |
+| Editing a memory (page or editor) | changes once | ⚠️ same, and it takes effect on the **next request** |
+| Timestamps / counts / relative time in the section | changes every request | ❌ forbidden (and absent from the implementation) |
+
+The implementation uses a **two-phase scan with a fingerprint cache**: each assembly only walks
+directories with `stat` to build a fingerprint (no body reads) and reuses the previous rendering
+when it is unchanged; only a changed fingerprint (scene toggle, file edit, enable/disable) triggers
+reading bodies and re-rendering. **`fs.watch` is deliberately not used** — recursive watching is
+unreliable on Windows, and a silently dead watcher would return stale content forever; the
+fingerprint probe costs sub-milliseconds and buys "always fresh, never silently stale".
+
+#### Upgrade note: the folder was renamed
+
+Since v0.3 the default folder is `~/.dsh/scene-memory/`; the plugin **neither reads nor migrates** the
+old `~/.dsh/rules/` automatically. Just move your content over (instant on the same volume):
+
+```sh
+# Windows PowerShell
+Move-Item ~/.dsh/rules ~/.dsh/scene-memory
+# macOS / Linux
+mv ~/.dsh/rules ~/.dsh/scene-memory
+```
+
+If the new folder already exists, move the **scene subfolders** one by one instead; `_shared/` is an
+ordinary scene folder and moves along with the rest.
 
 ### Let the model and scripts help
 
 | Entry point | What it does |
 |---|---|
-| `/mcp`, `/skills`, `/agents-md`, `/rules` | Check the current state from the chat box |
+| `/mcp`, `/skills`, `/agents-md`, `/scene-memory` | Check the current state from the chat box |
 | `skill_mcp_manager_list / set_enabled / restart / add` | Let the model query and operate MCP servers |
 | `skill_manager_list / set_enabled / create` | Let the model query and operate skills (creating asks for your consent) |
 | `rule_manager_list / read / write` | Let the model query and write rules (writes ask for your consent; can be disabled in settings) |
@@ -155,10 +194,9 @@ Why a token: the cross-site protection (POST-only + custom header + same-origin 
 | Skill recycle bin / import staging | `~/.dsh/tool-management/trash`, `uploads` |
 | AGENTS.md presets / applied file | Plugin dir `data/agents-md-presets/`; "Apply" writes `~/.dsh/AGENTS.md` |
 | Archived session ledger / retention | Plugin dir `data/history-archived-at.json`, `data/history-retention.json` |
-| Rule files (source of truth) | `~/.dsh/rules/<group>/<name>.md` (flat) or `<group>/<name>/SKILL.md` (bundle) |
-| Rule index / scene binding | `~/.dsh/tool-management/rules-index.json` (toggle/order/tags), `scenes.json` (preset → visible groups) |
-| Rule recycle bin | `~/.dsh/tool-management/rules-trash/<trashId>/` (deleted rules land here, restorable) |
-| Scene presets | `~/.dsh/.agent-presets/<id>/` (custom scenes are whole-directory copies; `agent.cordis.yml` is never rewritten) |
+| Rule files (source of truth) | `~/.dsh/scene-memory/<scene>/<name>.md` (flat) or `<scene>/<name>/SKILL.md` (bundle); scene folder names may be non-ASCII |
+| Rule index / enabled scenes | `~/.dsh/tool-management/rules-index.json` (`enabled` / order / tags + `active` enabled-scene set; `active: null` = all scenes enabled) |
+| Rule recycle bin | `~/.dsh/tool-management/rules-trash/<trashId>/` (deleted memories land here and can be restored) |
 | Runtime log | `~/.dsh/dsh-plugin-tool-management.log` (rolling) |
 
 ## FAQ
@@ -175,12 +213,16 @@ Why a token: the cross-site protection (POST-only + custom header + same-origin 
 
 ```bash
 npm install
-npm test             # build + full test suite (node:test, ~1s)
-npm run test:fast    # run tests without building
-npm run build        # build only (tsc + sync client bundle)
+npm run build        # build (tsc + sync client bundle)
+npm run build:client # sync src/client.js → lib/client.js only
+npm run lint         # syntax self-check (node --check on both artifacts)
 ```
 
-Layout: host half `src/index.ts` (object-form Cordis plugin, `lib/index.js` is the shipped artifact); skill core `src/skills/core.js` (pure Node, unit-testable); AGENTS.md presets `src/agents-md/service.ts`; archived session management `lib/history/` (`workspace.js` / `projcache.js` / `tombstone.js`); transcript import parsing `src/imports/parsers.js`; rule store `src/rules/` (`service.ts` discovery/CRUD/index/checkup, `provider.ts` scene-filtered projection, `project.ts` always-layer compile); scene services `src/scenes/service.ts` + `src/presets/service.ts` (preset roster); browser half `src/client.js` (ModuleLoader CJS bundle, `dsm-*` design system, talks to the host through the same-origin API). The only runtime dependency is `fflate` (ZIP extraction).
+> This project keeps no test suite. Changes are verified by **actually exercising the real
+> behaviour** (see the acceptance items in the change requests under `docs/`) instead of asserting
+> what the code currently does — the latter just copies the implementation and passes by construction.
+
+Layout: host half `src/index.ts` (object-form Cordis plugin, `lib/index.js` is the shipped artifact); skill core `src/skills/core.js` (pure Node); AGENTS.md presets `src/agents-md/service.ts`; archived session management `lib/history/` (`workspace.js` / `projcache.js` / `tombstone.js`); transcript import parsing `src/imports/parsers.js`; scene-memory store `src/rules/` (`service.ts` discovery/CRUD/index/checkup/two-phase section render, `provider.ts` per-agent `systemPrompt` section registration; the module path and `rules-*` op names stay as internal protocol, while the user-visible page and folder became “Scene Memory” / `scene-memory/`); browser half `src/client.js` (ModuleLoader CJS bundle, `dsm-*` design system, talks to the host through the same-origin API). The only runtime dependency is `fflate` (ZIP extraction).
 
 Publish: `npm version patch && npm publish` (`prepublishOnly` builds automatically).
 

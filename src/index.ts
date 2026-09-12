@@ -17,8 +17,6 @@ import { createRequire } from 'node:module'
 import { createSkillsService } from './skills/service.js'
 import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService } from './rules/service.js'
-import { createPresetsService } from './presets/service.js'
-import { createScenesService } from './scenes/service.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -245,10 +243,11 @@ export default {
       'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
       'history-unarchive-batch', 'history-delete-batch', 'history-import', 'history-export',
       'history-archive-batch',
-      // rules 写操作（v0.2：create/update/remove/restore 改规则文件；toggle/set-index 改侧车索引）
-      'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle', 'rules-set-index',
-      // scenes 写操作（v0.2：set-groups 改 scenes.json；create/remove 改 preset 目录；set-default 写 settings sidecar）
-      'scene-set-groups', 'scene-create', 'scene-remove', 'scene-set-default',
+      // rules 写操作（v0.3：create/update/remove/restore 改记忆文件；toggle/set-index/
+      // set-active 改侧车索引；create-scene/remove-scene 建删场景目录。
+      // set-active = 插件内"启用场景"开关，全局持久化）
+      'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle', 'rules-set-index', 'rules-set-active',
+      'rules-create-scene', 'rules-remove-scene',
     ])
 
     const wait = (ms: number) => ctx.timeout(ms)
@@ -291,58 +290,24 @@ export default {
       },
     })
 
-    // ---------- rules（规则/记忆，v0.2）----------
-    // 规则真源 $DSH_HOME/rules/<group>/<name>.md（仅用户级，D1）。双投影：
-    // 按需层 = 按会话 agentPreset 过滤投影为该 agent 的 skill 目录条目；
-    // 始终层 = always:true 规则确定性拼接写入 ~/.dsh/AGENTS.md（新会话生效）。
+    // ---------- rules（规则/记忆，v0.3）----------
+    // 规则真源 $DSH_HOME/rules/<场景>/<name>.md（仅用户级，D1）。**场景 = 一级目录**；
+    // 单投影 = 活动场景记忆 → per-agent systemPrompt 段（自动在场，模型无需调用任何工具）。
+    // 原"始终层写 ~/.dsh/AGENTS.md"已下线（变更单 01 §4/§10）：公共基线由 _shared/ 承担。
     // rulesRoot / rulesStateDir 仅测试注入，生产留空由服务按 DSH_HOME 解析。
     const rulesService = createRulesService(ctx, {
       rulesRoot: String((config as { rulesRoot?: unknown } | undefined)?.rulesRoot || ''),
       stateDir: String((config as { rulesStateDir?: unknown } | undefined)?.rulesStateDir || ''),
-      getGlobalAgentsMdPath: async () => {
-        const p = await ensurePaths()
-        const sep = p.home.indexOf('\\') >= 0 ? '\\' : '/'
-        return p.home + sep + 'AGENTS.md'
-      },
+      // 场景记忆段预算（字节），默认 65536；仅用于测试与特殊部署调优。
+      ...(Number.isFinite(Number((config as { rulesMaxBytes?: unknown } | undefined)?.rulesMaxBytes))
+        ? { maxBytes: Number((config as { rulesMaxBytes?: unknown }).rulesMaxBytes) }
+        : {}),
     })
     try {
       ctx.effect(() => rulesService.registerProviders(), 'dsh-plugin-tool-management: rules providers')
     } catch (e) {
       console.error('[dsh-plugin-tool-management] rules provider setup failed:', message(e))
     }
-
-    // ---------- scenes（场景管理：preset roster + 规则分组绑定）----------
-    // preset 根 $DSH_HOME/.agent-presets（仅测试注入）；scenes.json 与 rules 共用
-    // tool-management 侧车目录。setDefault 落点在插件 settings sidecar
-    // （defaultAgentPreset 字段；DSH 官方写入机制待 spike，见 PLAN-v0.2 附录 B S2）。
-    const presetsService = createPresetsService(ctx, {
-      presetsRoot: String((config as { presetsRoot?: unknown } | undefined)?.presetsRoot || ''),
-    })
-    const scenesService = createScenesService(ctx, {
-      stateDir: String((config as { rulesStateDir?: unknown } | undefined)?.rulesStateDir || ''),
-      presets: presetsService,
-      readDefault: async () => {
-        const p = await ensurePaths()
-        const raw = await readJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json'))
-        return String((raw && raw.defaultAgentPreset) || '')
-      },
-      writeDefault: async (id: string) => {
-        const p = await ensurePaths()
-        await withWriteLock(async () => {
-          const raw = Object.assign({}, await readJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json')))
-          raw.defaultAgentPreset = id
-          await writeJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json'), raw)
-        })
-      },
-      invalidateRules: () => {
-        const inv = (rulesService as { _invalidate?: () => void })._invalidate
-        if (typeof inv === 'function') inv()
-      },
-      listRuleGroups: async () => {
-        const r: any = await rulesService.ops['rules-list']({})
-        return (r && r.ok && Array.isArray(r.groups)) ? r.groups.map((g: any) => ({ key: g.key, label: g.label || g.key, count: g.count })) : []
-      },
-    })
 
     // ---------- history（归档会话管理，折叠自 dsh-archive-manager）----------
     // cordis.patch.yml 禁用官方 workspace 与 session-projection-cache，插入本插件
@@ -1016,8 +981,8 @@ export default {
       })
     }
 
-    const SETTINGS_DEFAULTS = { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true, defaultAgentPreset: '' }
-    let pluginSettingsCache: { at: number; value: { pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; defaultAgentPreset: string } } | null = null
+    const SETTINGS_DEFAULTS = { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true }
+    let pluginSettingsCache: { at: number; value: { pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean } } | null = null
     function clampInt(value: unknown, min: number, max: number, fallback: number): number {
       // Number(null) is 0 — treat missing/empty input as "use the default".
       if (value === null || value === undefined || value === '') return fallback
@@ -1025,7 +990,7 @@ export default {
       if (!Number.isFinite(n)) return fallback
       return Math.min(max, Math.max(min, Math.round(n)))
     }
-    async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; defaultAgentPreset: string }> {
+    async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean }> {
       if (pluginSettingsCache && !force && Date.now() - pluginSettingsCache.at < SIDECAR_TTL_MS) return pluginSettingsCache.value
       const p = await ensurePaths()
       const raw = await readJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json'))
@@ -1039,10 +1004,6 @@ export default {
           requireConfirmForModelRuleWrite: (raw && typeof raw.requireConfirmForModelRuleWrite === 'boolean')
             ? raw.requireConfirmForModelRuleWrite
             : SETTINGS_DEFAULTS.requireConfirmForModelRuleWrite,
-          // 场景默认 preset（scenes 服务写入；DSH 官方机制待 spike）。
-          defaultAgentPreset: (raw && typeof raw.defaultAgentPreset === 'string')
-            ? raw.defaultAgentPreset
-            : SETTINGS_DEFAULTS.defaultAgentPreset,
         },
       }
       return pluginSettingsCache.value
@@ -1056,8 +1017,6 @@ export default {
         requireConfirmForModelRuleWrite: (args && typeof args.requireConfirmForModelRuleWrite === 'boolean')
           ? args.requireConfirmForModelRuleWrite
           : current.requireConfirmForModelRuleWrite,
-        // 保留其他字段（如 scenes 的 defaultAgentPreset），避免被覆盖。
-        defaultAgentPreset: current.defaultAgentPreset,
       }
       const p = await ensurePaths()
       return withWriteLock(async () => {
@@ -1774,12 +1733,11 @@ export default {
       // 成功返回 {ok:true, data}；core 业务失败原样透传 {ok:false, error, code?, params?}。
       ...skillsService.ops,
       // rules ops（由 ./rules/service.js 提供）：rules-list / rules-read / rules-budget /
-      // rules-create / rules-update / rules-remove / rules-restore / rules-toggle /
-      // rules-set-index。成功返回扁平 {ok:true, ...}（不套 data），失败 {ok:false, error, code?}。
+      // rules-diagnose / rules-create / rules-update / rules-remove / rules-restore /
+      // rules-trash-list / rules-trash-remove / rules-toggle / rules-set-index /
+      // rules-set-active / rules-create-scene / rules-remove-scene。
+      // 成功返回扁平 {ok:true, ...}（不套 data），失败 {ok:false, error, code?}。
       ...rulesService.ops,
-      // scenes ops（由 ./scenes/service.js 提供）：scene-list / scene-set-groups /
-      // scene-create / scene-remove / scene-set-default。
-      ...scenesService.ops,
       // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
       // agentsmd-read / agentsmd-create / agentsmd-update / agentsmd-remove /
       // agentsmd-apply / agentsmd-get-current
@@ -2248,30 +2206,33 @@ export default {
         return 'OK: preset ' + args.id + ' applied to ~/.dsh/AGENTS.md (next session; current session unchanged' + (r.backedUp ? '; previous backed up to __last-applied__' : '') + ')'
       },
     }))
-    // ---------- rules model tools（v0.2）----------
-    // rule_manager_write 受 tools/pre-execute 审批门禁（D2），见下方 hook。
+    // ---------- rules model tools（v0.3）----------
+    // 活动场景的记忆正文会自动进入系统提示词（无需调用工具读取）；这里的工具用于
+    // 查询/编辑规则本身。rule_manager_write 受 tools/pre-execute 审批门禁（D2）。
     tools.register(defineTool({
       name: 'rule_manager_list',
-      description: 'List rules/memories under ~/.dsh/rules (id, group, always, enabled, description).',
+      description: 'List rules/memories under ~/.dsh/scene-memory (id, scene, enabled, description).',
       parameters: {
-        group: { type: 'string', description: 'Optional group filter.' },
+        group: { type: 'string', description: 'Optional group/scene filter.' },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
         const r: any = await rulesService.ops['rules-list'](args)
         if (!r || r.ok === false) throw new Error((r && r.error) || '读取规则失败')
         const lines = (r.rules || []).map((x: any) => (
-          '- ' + x.id + ' [' + (x.always ? '始终' : '按需') + '] ' + (x.enabled ? '已启用' : '已停用') +
+          '- ' + x.id + ' [' + (x.group || '全局') + '] ' + (x.enabled ? '已启用' : '已停用') +
           (x.description ? ' — ' + x.description : '')
         ))
-        return '规则（' + (r.rules || []).length + '）：\n' + (lines.join('\n') || '(无规则)')
+        const scenes = (r.scenes || []).map((s: any) => s.name + (s.active ? '(启用)' : '(未启用)')).join('、')
+        return '规则（' + (r.rules || []).length + '）：\n' + (lines.join('\n') || '(无规则)') +
+          '\n场景：' + (scenes || '(无)') + (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）')
       },
     }))
     tools.register(defineTool({
       name: 'rule_manager_read',
-      description: 'Read the full body of one rule/memory under ~/.dsh/rules.',
+      description: 'Read the full body of one rule/memory under ~/.dsh/scene-memory.',
       parameters: {
-        id: { type: 'string', required: true, description: 'Rule id like <group>/<name>.' },
+        id: { type: 'string', required: true, description: 'Rule id like <scene>/<name>.' },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
@@ -2282,19 +2243,18 @@ export default {
     }))
     tools.register(defineTool({
       name: 'rule_manager_write',
-      description: 'Create a new rule/memory as ~/.dsh/rules/<group>/<name>.md. Requires user confirmation (configurable).',
+      description: 'Create a new rule/memory as ~/.dsh/scene-memory/<scene>/<name>.md. It becomes active automatically once its scene is enabled. Requires user confirmation (configurable).',
       parameters: {
-        group: { type: 'string', required: true, description: 'Group name (lowercase letters, digits, hyphens).' },
-        name: { type: 'string', required: true, description: 'Rule name (kebab-case).' },
+        group: { type: 'string', required: true, description: 'Scene/folder name under ~/.dsh/scene-memory (any Unicode except path separators and < > : " | ? *).' },
+        name: { type: 'string', required: true, description: 'Memory name = the .md file name without the extension; any Unicode is fine (Chinese included), <=64 chars, no path separators or < > : " | ? *, must not start with a dot.' },
         description: { type: 'string', required: true, description: 'One-sentence description (<=500 chars).' },
         body: { type: 'string', required: true, description: 'Markdown body (<=256 KiB).' },
-        always: { type: 'boolean', description: 'true compiles the rule into ~/.dsh/AGENTS.md.' },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
         const r: any = await rulesService.ops['rules-create'](args)
         if (!r || r.ok === false) throw new Error((r && r.error) || '创建规则失败')
-        return 'OK: rule ' + r.rule.id + (r.rule.always ? ' (始终层，新会话生效)' : ' (按需)')
+        return 'OK: rule ' + r.rule.id + '（场景「' + (r.rule.group || '全局') + '」启用后自动生效）'
       },
     }))
     if (typeof ctx.on === 'function') {
@@ -2307,9 +2267,9 @@ export default {
           // 不在此处做任何兜底放行。
           return readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite
-              ? { kind: 'ask', reason: 'Write a rule under ~/.dsh/rules' }
+              ? { kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }
               : next()))
-            .catch(() => ({ kind: 'ask', reason: 'Write a rule under ~/.dsh/rules' }))
+            .catch(() => ({ kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }))
         }
         return next()
       })
@@ -2514,19 +2474,22 @@ export default {
           },
         }), 'dsh-plugin-tool-management: /agents-md command')
         ctx.effect(() => commands.register({
-          name: 'rules',
-          description: '列出规则/记忆及其投影层级（按需 / 始终）',
+          name: 'scene-memory',
+          description: '列出场景记忆及其场景启用状态',
           handler: async () => {
             const r: any = await rulesService.ops['rules-list']({})
-            if (!r || r.ok === false) return { kind: 'error', text: (r && r.error) || '读取规则失败' }
+            if (!r || r.ok === false) return { kind: 'error', text: (r && r.error) || '读取记忆失败' }
             const rules: any[] = r.rules || []
-            if (!rules.length) return { kind: 'success', text: '未发现任何规则（~/.dsh/rules 为空）。' }
-            const text = '规则（' + rules.length + '）：\n' + rules.map((rule: any) => (
-              '- ' + rule.name + ' [' + rule.group + '] ' + (rule.always ? '始终' : '按需') + ' · ' + (rule.enabled ? '已启用' : '已停用')
-            )).join('\n') + '\n（"始终" = 已编译进 AGENTS.md，新会话生效）'
+            if (!rules.length) return { kind: 'success', text: '未发现任何记忆（~/.dsh/scene-memory 为空）。' }
+            const scenes: any[] = r.scenes || []
+            const text = '场景记忆（' + rules.length + '）：\n' + rules.map((rule: any) => (
+              '- ' + rule.name + ' [' + (rule.group || '全局') + '] · ' + (rule.enabled ? '已启用' : '已停用')
+            )).join('\n') + '\n场景：' + (scenes.map((s: any) => s.name + (s.active ? '(启用)' : '(未启用)')).join('、') || '(无)') +
+              (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）') +
+              '\n（启用场景的记忆正文自动进入系统提示词，无需任何工具调用）'
             return { kind: 'success', text }
           },
-        }), 'dsh-plugin-tool-management: /rules command')
+        }), 'dsh-plugin-tool-management: /scene-memory command')
       }
     } catch (e) {
       console.error('[dsh-plugin-tool-management] command registration failed:', message(e))

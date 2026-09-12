@@ -7,14 +7,13 @@
 
 **简体中文** · [English](README_EN.md)
 
-**DeepSeek Harness 的 MCP 服务、技能与规则管理插件。** 一个设置面板管好六件事：
+**DeepSeek Harness 的 MCP 服务、技能与记忆管理插件。** 一个设置面板管好五件事：
 
 - **MCP**：连接了哪些服务、每个服务有哪些工具、哪些工具该让模型用——增删改查、启停、重启，全部即改即生效；
 - **Skills**：本机各处的技能（DSH / Agents / Codex / Claude / 项目级 / 你自己指定的任意目录）一目了然，逐个或整组启停、创建、导入、回收；
 - **AGENTS.md**：管理多套全局指令基线预设，一键「应用」写入 `~/.dsh/AGENTS.md`，新会话生效、当前会话不变；
 - **History**：已归档会话统一管理，按项目分组、批量恢复/删除，对话导入/导出，保留期自动清理；
-- **Rules**：把「规则 / 记忆」做成 `~/.dsh/rules/` 下的 Markdown 文件——按需层按会话场景投影为技能、始终层编译进 `~/.dsh/AGENTS.md`，新建、编辑、启停、体检、回收站；
-- **Scenes**：把 agent preset 与规则分组绑定，让不同场景的会话看到不同的规则集合。
+- **场景记忆**：`~/.dsh/scene-memory/<场景>/` 下一个文件夹 = 一个场景、一个 `.md` = 一条记忆——**新建场景**、往里放 `.md`（文件名支持中文）、开关场景；启用场景里的记忆正文**整篇自动进入系统提示词**，不用每次重复解释。
 
 不手改 `cordis.patch.yml`，不碰任何技能源文件，重启与升级后配置依旧。
 
@@ -22,19 +21,23 @@
 
 <!-- 图片占位 1：MCP 管理页截图 → docs/images/mcp.png -->
 
-![MCP 管理](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/mcp.png)
+![MCP 管理](docs/images/mcp.png)
 
 <!-- 图片占位 2：Skills 管理页截图 → docs/images/skills.png -->
 
-![Skills 管理](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/skills.png)
+![Skills 管理](docs/images/skills.png)
 
 <!-- 图片占位 3：AGENTS.md 预设页截图 → docs/images/agents-md.png -->
 
-![AGENTS.md 预设](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/agents-md.png)
+![AGENTS.md 预设](docs/images/agents-md.png)
 
 <!-- 图片占位 4：History 归档会话页截图 → docs/images/history.png -->
 
-![History 归档会话](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/history.png)
+![History 归档会话](docs/images/history.png)
+
+<!-- 图片占位 5：场景记忆页截图 → docs/images/场景记忆.png -->
+
+![场景记忆](docs/images/场景记忆.png)
 
 ## 核心亮点
 
@@ -51,12 +54,12 @@
 | AGENTS.md 预设 | 多套全局指令基线预设库：新建 / 导入 / 编辑 / 应用 / 删除；「应用」写入 `~/.dsh/AGENTS.md`（新会话生效，当前会话不变） |
 | 会话归档管理 | History 页按项目分组展示已归档会话：搜索、全选、批量恢复 / 永久删除、保留期自动清理（改保留期后倒计时以修改时间为基准重置） |
 | 对话导入 / 导出 | 从 Claude Code / Cursor（JSONL）、Codex（Markdown）、任意文本无痛接管对话；导出可选会话范围，目录默认桌面，支持 Markdown / JSONL |
-| 斜杠命令 | 聊天框直接输入 `/mcp`、`/skills`、`/agents-md`、`/rules` 查看状态 |
-| 规则双投影 | 规则 = `~/.dsh/rules/<group>/<name>.md` 文件；`always` 规则确定性编译进 `~/.dsh/AGENTS.md`（新会话生效），其余按会话场景按需投影为技能目录条目 |
-| 场景过滤 | `~/.dsh/tool-management/scenes.json` 记录「preset → 可见分组」，会话按 `agentPreset` 自动看到对应规则 |
-| 规则体检 | 一键扫描 6 类异常：同名遮蔽、描述超长、文件名与 name 不一致、frontmatter 非法、空正文、描述过于笼统 |
-| 模型工具 | **10 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能，`rule_manager_*` 管规则（创建前需用户确认，可在设置中关闭） |
-| 界面 | 独立的 `dsm-*` 设计系统，六页风格统一 |
+| 斜杠命令 | 聊天框直接输入 `/mcp`、`/skills`、`/agents-md`、`/scene-memory` 查看状态 |
+| 场景记忆自动生效 | 记忆 = `~/.dsh/scene-memory/<场景>/<name>.md`；勾选启用的场景，其目录树内所有 `.md` 正文**自动进入系统提示词**（per-agent `systemPrompt` 段），模型无需任何工具调用，切换后**下一个请求即生效** |
+| 场景启用开关 | 场景 = `scene-memory/` 一级目录，目录名支持中文；「启用场景」多选开关全局持久化在 `rules-index.json` 的 `active`；**无配置时全部启用**，`_shared/` 恒常生效 |
+| 前缀缓存友好 | 段文本只由「启用场景 + 文件内容」决定，逐字节稳定；场景切换 / 编辑记忆只变化一次，其余请求缓存照常命中（不违反"零注入层"——那条只禁每轮动态变化的内容） |
+| 模型工具 | **10 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能，`rule_manager_*` 管场景记忆（创建前需用户确认，可在设置中关闭） |
+| 界面 | 独立的 `dsm-*` 设计系统，五页风格统一（Rules 与 Scenes 已合并为「场景记忆」） |
 
 ## 快速开始
 
@@ -71,7 +74,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 dsh plugin --profile web remove dsh-plugin-tool-management
 ```
 
-装完硬刷新浏览器（Cmd/Ctrl+Shift-R），设置里出现 **MCP**、**Skills**、**AGENTS.md**、**History**、**Rules** 与 **Scenes** 六页即安装成功（客户端改动由 DSH 热加载，无需重启）。
+装完硬刷新浏览器（Cmd/Ctrl+Shift-R），设置里出现 **MCP**、**Skills**、**AGENTS.md**、**History**、**场景记忆** 五页即安装成功（客户端改动由 DSH 热加载，无需重启）。
 
 也可以直接对任意 DSH 会话说：
 
@@ -111,27 +114,59 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 - **导入对话**：无痛接管其他工具的会话——Claude Code / Cursor 的 JSONL、Codex 的 Markdown、以及任意文本格式，导入后即可继续对话。
 - **导出对话**：按会话范围（全部 / 仅归档 / 按工作区）导出，每个会话一个 Markdown 或 JSONL 文件；导出目录默认桌面，旁边带「选择文件夹」按钮弹出目录树，逐级浏览选中后自动回填绝对路径。
 
-### 管规则（Rules）
+### 管场景记忆（场景记忆页）
 
-- **规则 = 一个 Markdown 文件**：`~/.dsh/rules/<group>/<name>.md`（flat）或 `<group>/<name>/SKILL.md`（bundle，可带附件）。新建规则时填分组、名称、描述与正文，frontmatter 全部可选，缺失时插件自动派生。
-- **双投影**：默认规则进入**按需层**——按当前会话的场景投影为技能目录条目，模型需要时再加载；勾选「始终」后进入**始终层**——确定性拼接进 `~/.dsh/AGENTS.md`（新会话生效），占用独立字节预算，超限会拒绝写入。
-- **启停与回收**：逐条启停、编辑、移入回收站后恢复，源文件由本插件管理、不会污染用户手工文件；`always` / `enabled` 状态存在侧车索引里，绝不回写规则文件。
-- **体检**：一键扫描 6 类异常（同名遮蔽、描述超长、文件名与 name 不一致、frontmatter 非法、空正文、描述过于笼统），并显示始终层字节预算。
+> 这一页由原「Rules」与「Scenes」两页合并而来：**场景（一级目录）是分组维度，记忆（`.md`）是内容**。
+> 目录名也从 `~/.dsh/rules/` 更名为 **`~/.dsh/scene-memory/`**——升级后请把原有文件移过去（见下方「升级注意」）。
 
-### 管场景（Scenes）
+- **场景 = `scene-memory/` 下的一级目录，目录名就是场景名**：`~/.dsh/scene-memory/办公/流程.md` 即"办公"场景下的一条记忆。目录名支持中文等任意 Unicode（≤64 字符，不含 `/ \ < > : " | ? *`，不以 `.` 开头）；`_shared/` 是保留的公共场景。
+- **新建场景**：点「新建场景」直接建一个文件夹（也可以自己在 `scene-memory/` 下 `mkdir`，效果一样）。空场景会列出来，卡片上有「删除场景」按钮；里面还有记忆时不允许删除，避免一次操作带走整组内容。
+- **每个 `.md` 就是一条记忆**：一句话或一段话都行，不用写 frontmatter，整篇正文都会注入。往场景文件夹里丢文件就生效，也可以点卡片上的「新建记忆」在页面里写——**文件名支持中文**（如 `站会流程.md`）。
+- **开关场景**：场景卡片右侧的开关就是启用/停用（与 Skills 页同一套组件和布局）。其目录树内**所有 `.md` 的正文会自动进入系统提示词**——模型不需要做任何动作，也不用每次重复解释。切换**下一个请求即生效**，无需重开会话或重载插件。
+- **默认全部启用**：没有任何配置时所有场景都生效（"丢进去就有用"）；场景多了再在页面上收窄，`_shared/` 恒常生效（卡片上没有勾选框）。
+- **记忆 = 一个 Markdown 文件**：`<场景>/<name>.md`（flat）或 `<场景>/<name>/SKILL.md`（bundle，可带附件）。新建时填场景（从已有场景里挑，或**直接输入新场景名**——目录会自动创建）、名称（= 文件名）、描述与正文，frontmatter 全部可选，缺失时插件自动派生。
+- **bundle 附件**：形态选 bundle 时可直接**添加附件**（多选，单个 ≤8 MB、单次 ≤16 MB / 32 个）；附件存在记忆目录里，**不会进入提示词**（只有 `SKILL.md` 正文注入），编辑时可逐个移除。flat 是单文件，没有目录可放附件。
+- **启停与回收**：逐条启停（每行右侧开关，停用的记忆仍留在磁盘上，只是不进提示词）、编辑、移入回收站；页头「回收站」可以**恢复**或**永久删除**已删记忆，删除前有二次确认。`enabled` 等状态存在侧车索引里，绝不回写记忆文件。
+- **注入预算可见**：页头下方常驻一条预算条（已用 / 上限字节），超限变红并标「已超限」。默认上限 64 KiB；**某条记忆放不下时只跳过它**、继续装后面放得下的小记忆，段尾会附一份「未注入（超出预算）」清单——模型与用户都能看到哪些记忆这次没进提示词，而不是静默丢失。
+- **不再改写 `~/.dsh/AGENTS.md`**：原"始终层"已下线，公共基线改由 `_shared/` 承担，统一走系统提示词段。
 
-- **场景 = preset 与规则分组的绑定**：系统内置 `standard` preset 只读；「复制为自定义场景」或「新建场景」从某个 preset 整目录复制生成自定义 preset（`~/.dsh/.agent-presets/<id>/`），永不修改任何 `agent.cordis.yml`。
-- **绑定可见分组**：每个场景卡片勾选要看到的规则分组，写入 `scenes.json`；会话按其 `agentPreset` 自动只看到绑定分组里的规则，切换场景无需重载插件。
-- **默认场景**：卡片上「设为默认」记录在插件设置中；删除只对自定义场景开放，系统 preset 会被拒绝并给出指引。
+#### 缓存与刷新（§5.2）
+
+| 情形 | 前缀是否稳定 | 结果 |
+|---|---|---|
+| 场景组合不变、记忆文件不变 | 逐字节稳定 | ✅ 提示词前缀缓存命中 |
+| 切换启用场景（显式动作） | 变化一次 | ⚠️ 该会话重新预热一次，可接受 |
+| 编辑某条记忆（页面或编辑器） | 变化一次 | ⚠️ 同上，**下一个请求即生效** |
+| 段落里放时间戳 / 计数 / 相对时间 | 每请求都变 | ❌ 禁止（实现里也没有） |
+
+实现上采用「**两相扫描 + 指纹缓存**」：每次装配只做一次 `stat` 遍历产出指纹（不读正文），
+指纹不变就直接复用上次拼接结果；指纹一变（切场景 / 改文件 / 改启停）才读正文并重排。
+**没有用 `fs.watch`**——Windows 上递归监听不可靠，而监听静默失效的后果是永久返回过期内容；
+指纹探测是亚毫秒级，换来"永远最新且永不静默失效"。
+
+#### 升级注意：目录改名
+
+v0.3 起默认目录是 `~/.dsh/scene-memory/`，插件**不再读取也不再自动迁移**旧的 `~/.dsh/rules/`。
+升级后把原有内容移过去即可（同盘瞬时完成）：
+
+```sh
+# Windows PowerShell
+Move-Item ~/.dsh/rules ~/.dsh/scene-memory
+# macOS / Linux
+mv ~/.dsh/rules ~/.dsh/scene-memory
+```
+
+如果新目录已存在（例如你已手工建过），把旧目录里的**场景文件夹**逐个移进去即可；
+`_shared/` 也是普通场景目录，一并移动。
 
 ### 让模型和脚本参与管理
 
 | 入口 | 能做什么 |
 |---|---|
-| `/mcp`、`/skills`、`/agents-md`、`/rules` | 聊天框查看当前状态 |
+| `/mcp`、`/skills`、`/agents-md`、`/scene-memory` | 聊天框查看当前状态 |
 | `skill_mcp_manager_list / set_enabled / restart / add` | 模型查询与操作 MCP 服务 |
 | `skill_manager_list / set_enabled / create` | 模型查询与操作技能（创建前会征求你同意） |
-| `rule_manager_list / read / write` | 模型查询与读写规则（写入前会征求你同意，可在设置中关闭确认） |
+| `rule_manager_list / read / write` | 模型查询与读写场景记忆（写入前会征求你同意，可在设置中关闭确认） |
 | `POST /dsh-plugin-tool-management/api` | 脚本调用的 HTTP API（`{op, args}` 协议） |
 
 ## 配置与安全
@@ -155,10 +190,9 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 技能回收站 / 导入暂存 | `~/.dsh/tool-management/trash`、`uploads` |
 | AGENTS.md 预设库 / 应用结果 | 插件目录 `data/agents-md-presets/`；「应用」写入 `~/.dsh/AGENTS.md` |
 | 归档会话账本 / 保留期 | 插件目录 `data/history-archived-at.json`、`data/history-retention.json` |
-| 规则文件（真源） | `~/.dsh/rules/<group>/<name>.md`（flat）或 `<group>/<name>/SKILL.md`（bundle） |
-| 规则索引 / 场景绑定 | `~/.dsh/tool-management/rules-index.json`（启停/排序/标签）、`scenes.json`（preset → 可见分组） |
-| 规则回收站 | `~/.dsh/tool-management/rules-trash/<trashId>/`（删除规则先进这里，可恢复） |
-| 场景 preset | `~/.dsh/.agent-presets/<id>/`（自定义场景整目录复制；永不改写 `agent.cordis.yml`） |
+| 记忆文件（真源） | `~/.dsh/scene-memory/<场景>/<name>.md`（flat）或 `<场景>/<name>/SKILL.md`（bundle）；场景目录名可含中文 |
+| 记忆索引 / 启用场景 | `~/.dsh/tool-management/rules-index.json`（`enabled`/排序/标签 + `active` 启用场景集合；`active: null` = 全部启用） |
+| 记忆回收站 | `~/.dsh/tool-management/rules-trash/<trashId>/`（删除记忆先进这里，可恢复） |
 | 运行日志 | `~/.dsh/dsh-plugin-tool-management.log`（滚动） |
 
 ## 常见问题
@@ -175,12 +209,15 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ```bash
 npm install
-npm test             # 构建 + 全量测试（node:test，约 1 秒）
-npm run test:fast    # 跳过构建直接跑测试
-npm run build        # 仅构建（tsc + 同步客户端 bundle）
+npm run build        # 构建（tsc + 同步客户端 bundle）
+npm run build:client # 只同步 src/client.js → lib/client.js
+npm run lint         # 语法自检（node --check 两个产物）
 ```
 
-结构：宿主端 `src/index.ts`（Cordis 对象插件，`lib/index.js` 为发布产物）；技能核心 `src/skills/core.js`（纯 Node，可独立单测）；AGENTS.md 预设库 `src/agents-md/service.ts`；归档会话管理 `lib/history/`（`workspace.js` / `projcache.js` / `tombstone.js`）；对话导入解析 `src/imports/parsers.js`；规则服务 `src/rules/`（`service.ts` 发现/CRUD/索引/体检、`provider.ts` 场景过滤投影、`project.ts` 始终层编译）；场景服务 `src/scenes/service.ts` + `src/presets/service.ts`（preset roster）；浏览器端 `src/client.js`（ModuleLoader CJS bundle，`dsm-*` 设计系统，经同源 API 与宿主通信）。运行时依赖仅 `fflate`（ZIP 解压）。
+> 本项目不维护测试套件。改动的验证方式是**直接跑一遍真实行为**（见 `docs/` 下的变更单验收项），
+> 而不是断言代码当前怎么实现——后者只是把实现抄一遍，必然通过。
+
+结构：宿主端 `src/index.ts`（Cordis 对象插件，`lib/index.js` 为发布产物）；技能核心 `src/skills/core.js`（纯 Node）；AGENTS.md 预设库 `src/agents-md/service.ts`；归档会话管理 `lib/history/`（`workspace.js` / `projcache.js` / `tombstone.js`）；对话导入解析 `src/imports/parsers.js`；场景记忆服务 `src/rules/`（`service.ts` 发现/CRUD/索引/两相扫描段渲染、`provider.ts` per-agent `systemPrompt` 段注册；模块路径与 `rules-*` op 名保留为内部协议，用户可见的页面与目录名已改为「场景记忆」/`scene-memory/`）；浏览器端 `src/client.js`（ModuleLoader CJS bundle，`dsm-*` 设计系统，经同源 API 与宿主通信）。运行时依赖仅 `fflate`（ZIP 解压）。
 
 发布：`npm version patch && npm publish`（`prepublishOnly` 自动构建）。
 

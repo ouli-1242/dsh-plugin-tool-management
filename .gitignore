@@ -20,3 +20,7 @@ data/
 # Submission entry for awesome-dsh-plugin; the canonical copy lives in that
 # repository under data/plugins/.
 ouli-1242__dsh-plugin-tool-management.yml
+
+# Ad-hoc GitHub API dumps captured while debugging CI (e.g. `gh api .../check-runs`).
+# Never a source artifact — keep them out of the repo.
+cr.json

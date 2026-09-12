@@ -123,8 +123,8 @@ async function permanentlyDeleteTrashSafely(
 // ── 文件监听：外部改动自动失效 ────────────────────────────────────────────
 
 /**
- * 监听技能来源目录，200ms 防抖后失效 provider 缓存：在编辑器或其他工具里
- * 新增/修改/删除技能后，无需手动刷新即可出现在列表里。
+ * 监听目录，200ms 防抖后回调：在编辑器或其他工具里新增/修改/删除文件后，无需手动
+ * 刷新即可看到变化。技能来源与规则根目录共用（见 src/rules/service.ts 的场景记忆段缓存）。
  *
  * 为什么用 worker_threads：Windows 上 fs.watch(recursive) 的句柄在「被监听
  * 目录被删除」时会静默卡死事件循环（不触发 error、unref 也无效）——宿主
@@ -132,7 +132,7 @@ async function permanentlyDeleteTrashSafely(
  * unref()，无论目录发生什么，宿主与测试进程都能正常收尾；worker 内部失败
  * 也不影响主线程。目录不存在或平台不支持递归监听时静默跳过。
  */
-function watchSkillRoots(paths: string[], invalidate: () => void): () => void {
+function watchDirectories(paths: string[], invalidate: () => void): () => void {
   const valid = paths.filter((dir) => dir && existsSync(dir))
   if (!valid.length) return () => {}
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -342,7 +342,7 @@ export function createSkillsService(ctx: any): SkillsService {
     }
     try {
       const watchPaths = roots.map((root: any) => String((root && root.path) || '')).filter(Boolean)
-      disposers.push(watchSkillRoots(watchPaths, invalidateSkills))
+      disposers.push(watchDirectories(watchPaths, invalidateSkills))
       // 自定义目录在状态文件里，注册时读取一次并一并监听（后添加的目录由
       // provider 首次 list 天然覆盖，等插件重载后才有 watcher）。
       readManagerState()
@@ -350,7 +350,7 @@ export function createSkillsService(ctx: any): SkillsService {
           const customPaths = customRootsFromState(current.state)
             .map((root: any) => String((root && root.path) || ''))
             .filter(Boolean)
-          if (customPaths.length) disposers.push(watchSkillRoots(customPaths, invalidateSkills))
+          if (customPaths.length) disposers.push(watchDirectories(customPaths, invalidateSkills))
         })
         .catch(() => { /* 状态不可用时仅监听静态根 */ })
     } catch (e) {
