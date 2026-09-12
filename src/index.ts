@@ -17,6 +17,8 @@ import { createRequire } from 'node:module'
 import { createSkillsService } from './skills/service.js'
 import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService } from './rules/service.js'
+import { createPresetsService } from './presets/service.js'
+import { createScenesService } from './scenes/service.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -245,6 +247,8 @@ export default {
       'history-archive-batch',
       // rules 写操作（v0.2：create/update/remove/restore 改规则文件；toggle/set-index 改侧车索引）
       'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle', 'rules-set-index',
+      // scenes 写操作（v0.2：set-groups 改 scenes.json；create/remove 改 preset 目录；set-default 写 settings sidecar）
+      'scene-set-groups', 'scene-create', 'scene-remove', 'scene-set-default',
     ])
 
     const wait = (ms: number) => ctx.timeout(ms)
@@ -306,6 +310,39 @@ export default {
     } catch (e) {
       console.error('[dsh-plugin-tool-management] rules provider setup failed:', message(e))
     }
+
+    // ---------- scenes（场景管理：preset roster + 规则分组绑定）----------
+    // preset 根 $DSH_HOME/.agent-presets（仅测试注入）；scenes.json 与 rules 共用
+    // tool-management 侧车目录。setDefault 落点在插件 settings sidecar
+    // （defaultAgentPreset 字段；DSH 官方写入机制待 spike，见 PLAN-v0.2 附录 B S2）。
+    const presetsService = createPresetsService(ctx, {
+      presetsRoot: String((config as { presetsRoot?: unknown } | undefined)?.presetsRoot || ''),
+    })
+    const scenesService = createScenesService(ctx, {
+      stateDir: String((config as { rulesStateDir?: unknown } | undefined)?.rulesStateDir || ''),
+      presets: presetsService,
+      readDefault: async () => {
+        const p = await ensurePaths()
+        const raw = await readJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json'))
+        return String((raw && raw.defaultAgentPreset) || '')
+      },
+      writeDefault: async (id: string) => {
+        const p = await ensurePaths()
+        await withWriteLock(async () => {
+          const raw = Object.assign({}, await readJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json')))
+          raw.defaultAgentPreset = id
+          await writeJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json'), raw)
+        })
+      },
+      invalidateRules: () => {
+        const inv = (rulesService as { _invalidate?: () => void })._invalidate
+        if (typeof inv === 'function') inv()
+      },
+      listRuleGroups: async () => {
+        const r: any = await rulesService.ops['rules-list']({})
+        return (r && r.ok && Array.isArray(r.groups)) ? r.groups.map((g: any) => ({ key: g.key, label: g.label || g.key, count: g.count })) : []
+      },
+    })
 
     // ---------- history（归档会话管理，折叠自 dsh-archive-manager）----------
     // cordis.patch.yml 禁用官方 workspace 与 session-projection-cache，插入本插件
@@ -979,8 +1016,8 @@ export default {
       })
     }
 
-    const SETTINGS_DEFAULTS = { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true }
-    let pluginSettingsCache: { at: number; value: { pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean } } | null = null
+    const SETTINGS_DEFAULTS = { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true, defaultAgentPreset: '' }
+    let pluginSettingsCache: { at: number; value: { pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; defaultAgentPreset: string } } | null = null
     function clampInt(value: unknown, min: number, max: number, fallback: number): number {
       // Number(null) is 0 — treat missing/empty input as "use the default".
       if (value === null || value === undefined || value === '') return fallback
@@ -988,7 +1025,7 @@ export default {
       if (!Number.isFinite(n)) return fallback
       return Math.min(max, Math.max(min, Math.round(n)))
     }
-    async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean }> {
+    async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; defaultAgentPreset: string }> {
       if (pluginSettingsCache && !force && Date.now() - pluginSettingsCache.at < SIDECAR_TTL_MS) return pluginSettingsCache.value
       const p = await ensurePaths()
       const raw = await readJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json'))
@@ -1002,6 +1039,10 @@ export default {
           requireConfirmForModelRuleWrite: (raw && typeof raw.requireConfirmForModelRuleWrite === 'boolean')
             ? raw.requireConfirmForModelRuleWrite
             : SETTINGS_DEFAULTS.requireConfirmForModelRuleWrite,
+          // 场景默认 preset（scenes 服务写入；DSH 官方机制待 spike）。
+          defaultAgentPreset: (raw && typeof raw.defaultAgentPreset === 'string')
+            ? raw.defaultAgentPreset
+            : SETTINGS_DEFAULTS.defaultAgentPreset,
         },
       }
       return pluginSettingsCache.value
@@ -1015,6 +1056,8 @@ export default {
         requireConfirmForModelRuleWrite: (args && typeof args.requireConfirmForModelRuleWrite === 'boolean')
           ? args.requireConfirmForModelRuleWrite
           : current.requireConfirmForModelRuleWrite,
+        // 保留其他字段（如 scenes 的 defaultAgentPreset），避免被覆盖。
+        defaultAgentPreset: current.defaultAgentPreset,
       }
       const p = await ensurePaths()
       return withWriteLock(async () => {
@@ -1734,6 +1777,9 @@ export default {
       // rules-create / rules-update / rules-remove / rules-restore / rules-toggle /
       // rules-set-index。成功返回扁平 {ok:true, ...}（不套 data），失败 {ok:false, error, code?}。
       ...rulesService.ops,
+      // scenes ops（由 ./scenes/service.js 提供）：scene-list / scene-set-groups /
+      // scene-create / scene-remove / scene-set-default。
+      ...scenesService.ops,
       // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
       // agentsmd-read / agentsmd-create / agentsmd-update / agentsmd-remove /
       // agentsmd-apply / agentsmd-get-current

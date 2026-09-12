@@ -407,11 +407,11 @@ test('mcpm-note keeps a user note across config rewrites; mcpm-settings clamps a
   assert.equal(r.json.rows.find((x) => x.id === 'mcp-svc1').notes, '')
 
   r = await call(ctx._route(), { op: 'mcpm-settings', args: {} })
-  assert.deepEqual(r.json.settings, { pollIntervalMs: 5000, toolDescriptionMaxLength: 0 })
+  assert.deepEqual(r.json.settings, { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true, defaultAgentPreset: '' })
   r = await call(ctx._route(), { op: 'mcpm-settings', args: { set: true, pollIntervalMs: 100, toolDescriptionMaxLength: 99999 } })
-  assert.deepEqual(r.json.settings, { pollIntervalMs: 2000, toolDescriptionMaxLength: 2000 }, 'settings are clamped to sane ranges')
+  assert.deepEqual(r.json.settings, { pollIntervalMs: 2000, toolDescriptionMaxLength: 2000, requireConfirmForModelRuleWrite: true, defaultAgentPreset: '' }, 'settings are clamped to sane ranges')
   r = await call(ctx._route(), { op: 'mcpm-settings', args: {} })
-  assert.deepEqual(r.json.settings, { pollIntervalMs: 2000, toolDescriptionMaxLength: 2000 }, 'settings persist for the next read')
+  assert.deepEqual(r.json.settings, { pollIntervalMs: 2000, toolDescriptionMaxLength: 2000, requireConfirmForModelRuleWrite: true, defaultAgentPreset: '' }, 'settings persist for the next read')
 })
 
 test('mcpm-list flags duplicate loader ids from a hand-edited patch', async () => {

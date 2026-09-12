@@ -322,6 +322,27 @@ function makePage(opts) {
     else if (body.op === 'rules-budget') payload = { ok: true, usedBytes: 128, maxBytes: 65536, items: [{ id: '_shared/glossary', bytes: 128 }] }
     else if (body.op === 'rules-toggle') payload = { ok: true, rule: { id: 'office/doc-writing', enabled: false, always: false } }
     else if (body.op === 'rules-read') payload = { ok: true, rule: { id: 'office/doc-writing', group: 'office', name: 'doc-writing', form: 'flat', path: 'C:/rules/office/doc-writing.md', description: '文档写作约定', always: false, enabled: true, body: '正文内容' } }
+    else if (body.op === 'scene-list') payload = {
+      ok: true,
+      presets: [
+        { id: 'standard', name: '标准（standard）', description: 'DSH 内置标准 preset', order: 0, trust: 'system', path: '', healthy: true },
+        { id: 'daily', name: '日常办公', trust: 'user', path: 'C:/presets/daily', healthy: true },
+        { id: 'broken', name: 'broken', trust: 'user', path: 'C:/presets/broken', healthy: false, reason: '缺少 agent.cordis.yml' },
+      ],
+      scenes: [
+        { presetId: 'standard', label: '标准（standard）', groups: [], note: '', isDefault: false },
+        { presetId: 'daily', label: '日常办公', groups: ['office'], note: '', isDefault: true },
+        { presetId: 'broken', label: 'broken', groups: [], note: '', isDefault: false },
+      ],
+      ruleGroups: [
+        { key: '_shared', label: '共享', count: 1 },
+        { key: 'office', label: '办公', count: 1 },
+      ],
+    }
+    else if (body.op === 'scene-set-groups') payload = { ok: true, scene: { presetId: body.args.presetId, groups: body.args.groups || [] } }
+    else if (body.op === 'scene-set-default') payload = { ok: true, default: body.args.id }
+    else if (body.op === 'scene-create') payload = { ok: true, preset: { id: body.args.id, trust: 'user' } }
+    else if (body.op === 'scene-remove') payload = { ok: true }
     else payload = { ok: true, data: {} }
     return Promise.resolve({
       ok: true,
@@ -494,13 +515,13 @@ test('history page: 保留期下拉选择发出 history-retention-set', async ()
   assert.ok(page.requests.some((r) => r.op === 'history-retention-set' && r.args.retentionDays === 7), 'selecting 7 天 issues history-retention-set(7)')
 })
 
-test('TOOLS section: registers one section with five tabs', async () => {
+test('TOOLS section: registers one section with six tabs', async () => {
   const page = await makePage()
   const tree = await page.openToolsPage()
   const tabs = byClass(tree, 'dsm-tab')
-  assert.equal(tabs.length, 5, 'five tabs render (MCP / Skills / AGENTS.md / History / Rules)')
+  assert.equal(tabs.length, 6, 'six tabs render (MCP / Skills / AGENTS.md / History / Rules / Scenes)')
   const labels = tabs.map((t) => t.props.children)
-  assert.deepEqual(labels, ['MCP', 'Skills', 'AGENTS.md', 'History', 'Rules'])
+  assert.deepEqual(labels, ['MCP', 'Skills', 'AGENTS.md', 'History', 'Rules', 'Scenes'])
 })
 
 test('client: skills page renders a row per host skill after expanding a source', async () => {
@@ -1228,4 +1249,52 @@ test('rules page: 新建规则 opens the editor modal; 编辑 loads via rules-re
   const req = page.requests.find((r) => r.op === 'rules-read')
   assert.ok(req, 'issues rules-read on edit')
   assert.equal(req.args.id, 'office/doc-writing')
+})
+
+test('scenes page: loads scenes, renders cards, binds groups, sets default, removes user preset', async () => {
+  const page = makePage()
+  let tree = await page.render(page._pages.ScenesPage)
+  await page.settle()
+  assert.ok(page.requests.some((r) => r.op === 'scene-list'), 'issues scene-list on open')
+  tree = page.getTree()
+  const cards = byClass(tree, 'dsm-source')
+  assert.equal(cards.length, 3, 'three scene cards rendered')
+  const titles = byClass(tree, 'dsm-source-title').map((n) => n.props.children)
+  assert.ok(titles.includes('标准（standard）'), 'system preset card')
+  assert.ok(titles.includes('日常办公'), 'user preset card')
+  // 系统 preset 只读：无「删除」，有「复制为自定义场景」；用户 preset 相反。
+  const standardCard = cards.find((c) => collect(c, (n) => n.props && n.props.className === 'dsm-source-title' && n.props.children === '标准（standard）').length)
+  const dailyCard = cards.find((c) => collect(c, (n) => n.props && n.props.className === 'dsm-source-title' && n.props.children === '日常办公').length)
+  assert.ok(byClass(standardCard, 'dsm-btn').some((n) => n.props.children === '复制为自定义场景'), 'system card offers copy')
+  assert.ok(!byClass(standardCard, 'dsm-btn').some((n) => n.props.children === '删除'), 'system card has no delete')
+  assert.ok(byClass(dailyCard, 'dsm-btn').some((n) => n.props.children === '删除'), 'user card has delete')
+  // 勾选分组 → scene-set-groups
+  const officeCheck = collect(dailyCard, (n) => n.props && n.props.type === 'checkbox' && n.props.checked === true)[0]
+  officeCheck.props.onChange()
+  await page.settle()
+  const sg = page.requests.find((r) => r.op === 'scene-set-groups')
+  assert.ok(sg, 'issues scene-set-groups on group toggle')
+  assert.equal(sg.args.presetId, 'daily')
+  assert.deepEqual(sg.args.groups, [], 'office unchecked removed from groups')
+  // 设为默认 → scene-set-default
+  const defBtn = byClass(standardCard, 'dsm-btn').find((n) => n.props.children === '设为默认')
+  assert.ok(defBtn, 'set-default button present for non-default')
+  defBtn.props.onClick()
+  await page.settle()
+  const sd = page.requests.find((r) => r.op === 'scene-set-default')
+  assert.ok(sd, 'issues scene-set-default')
+  assert.equal(sd.args.id, 'standard')
+  // 删除用户 preset → 确认弹窗 → scene-remove
+  const delBtn = byClass(dailyCard, 'dsm-btn').find((n) => n.props.children === '删除')
+  delBtn.props.onClick()
+  await page.settle()
+  const delModal = findModal(page.getTree())[0]
+  assert.ok(delModal, 'delete confirm modal opens')
+  const confirmBtn = byClass(delModal, 'dsm-btn').find((n) => n.props.children === '删除')
+  assert.ok(confirmBtn, 'confirm delete button')
+  confirmBtn.props.onClick()
+  await page.settle()
+  const rm = page.requests.find((r) => r.op === 'scene-remove')
+  assert.ok(rm, 'issues scene-remove')
+  assert.equal(rm.args.id, 'daily')
 })
