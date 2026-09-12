@@ -97,7 +97,7 @@ function call(route, payload, headers = {}) {
   return Promise.resolve(route.handler(req, res)).then(() => ({ status: res.status, json: res.bodyText ? JSON.parse(res.bodyText) : null }))
 }
 
-const statePath = (env) => join(env.home, 'dsh-plugin-tool-management', 'state.json')
+const statePath = (env) => join(env.home, 'tool-management', 'state.json')
 
 test('skill-state lists skills across the four roots with summary', async () => {
   const env = setup()

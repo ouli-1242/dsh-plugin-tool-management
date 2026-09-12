@@ -688,7 +688,7 @@ test('custom skill roots: add → discover in skill-state → source toggle → 
     assert.equal(r.json.ok, true)
     state = await call(ctx._route(), { op: 'skill-state', args: {} })
     assert.equal(state.json.data.roots.some((x) => x.key === key), false, 'custom root gone after removal')
-    const stateFile = JSON.parse(readFileSync(join(home, 'dsh-plugin-tool-management', 'state.json'), 'utf8'))
+    const stateFile = JSON.parse(readFileSync(join(home, 'tool-management', 'state.json'), 'utf8'))
     assert.equal(stateFile.customRoots.length, 0)
     assert.equal(stateFile.sources[key], undefined)
   } finally {

@@ -104,8 +104,8 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 |---|---|
 | MCP 服务器定义 | `profiles/<profile>/cordis.patch.yml`（项目级）或 `~/.dsh/cordis.patch.yml`（全局），改写前自动 `.bak` |
 | 服务器备注 / 页面设置 / 工具停用列表 / 导出 | DSH 主目录下的旁路 JSON（`skill-mcp-manager-*.json`） |
-| 技能启停策略 / 自定义目录 | `~/.dsh/skill-mcp-manager/state.json` |
-| 技能回收站 / 导入暂存 | `~/.dsh/skill-mcp-manager/trash`、`uploads` |
+| 技能启停策略 / 自定义目录 | `~/.dsh/tool-management/state.json` |
+| 技能回收站 / 导入暂存 | `~/.dsh/tool-management/trash`、`uploads` |
 | 运行日志 | `~/.dsh/dsh-plugin-tool-management.log`（滚动） |
 
 ## 常见问题

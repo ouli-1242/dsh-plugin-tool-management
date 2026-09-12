@@ -384,7 +384,7 @@ export async function projectRoots(projectCwds = [], diagnostics) {
 }
 
 export function managerHomePath() {
-  return join(resolveDshHome(), "dsh-plugin-tool-management");
+  return join(resolveDshHome(), "tool-management");
 }
 
 export function managerStatePath() {

@@ -104,8 +104,8 @@ Why a token: the cross-site protection (POST-only + custom header + same-origin 
 |---|---|
 | MCP server definitions | `profiles/<profile>/cordis.patch.yml` (project) or `~/.dsh/cordis.patch.yml` (global), auto-`.bak` before every rewrite |
 | Server notes / page settings / disabled tools / export | Sidecar JSON files under the DSH home (`dsh-plugin-tool-management-*.json`) |
-| Skill toggle policy / custom directories | `~/.dsh/dsh-plugin-tool-management/state.json` |
-| Skill recycle bin / import staging | `~/.dsh/dsh-plugin-tool-management/trash`, `uploads` |
+| Skill toggle policy / custom directories | `~/.dsh/tool-management/state.json` |
+| Skill recycle bin / import staging | `~/.dsh/tool-management/trash`, `uploads` |
 | Runtime log | `~/.dsh/dsh-plugin-tool-management.log` (rolling) |
 
 ## FAQ
