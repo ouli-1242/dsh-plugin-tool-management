@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log*
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+
+.superpowers/
+*.tgz
+
+# Local-only release tooling (scripts/release-notes.mjs + releases.json)
+scripts/

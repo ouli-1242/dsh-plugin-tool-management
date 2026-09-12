@@ -1,0 +1,71 @@
+{
+  "name": "dsh-plugin-tool-management",
+  "version": "0.1.0",
+  "description": "DSH plugin: unified Skills and MCP manager — Settings UI + HTTP API + model-facing skill_mcp_manager_* / skill_manager_* tools. Install with one command: dsh plugin --profile web add dsh-plugin-tool-management@latest",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README_EN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/sync-client.mjs",
+    "build:client": "node scripts/sync-client.mjs",
+    "test": "npm run build && node --test",
+    "test:fast": "node --test",
+    "test:client": "node scripts/sync-client.mjs && node --test tests/client.test.mjs",
+    "prepublishOnly": "npm run build",
+    "lint": "node --check lib/client.js && node --check lib/index.js"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "skill",
+    "skills",
+    "mcp",
+    "mcp-server",
+    "plugin",
+    "cordis"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "fflate": "^0.8.3"
+  }
+}
