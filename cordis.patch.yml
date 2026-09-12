@@ -25,7 +25,25 @@
 # short-circuits on every unrelated entry (e.g. dsh-better-sidebar's own
 # guard), so `!e.disabled` is only ever read on a genuinely matching
 # legacy/aggregate row (a plain boolean, no re-entry).
+# 折叠 dsh-archive-manager：替换官方 workspace 与 session-projection-cache
+# 服务为归档感知子类（永久删除 + unarchive + 批量 + archivedAt 保留期账本）。
+# 官方 ui-workspace 保持启用；归档菜单仍由官方 UI 提供，删除/恢复/保留期
+# 由本插件的 TOOLS → History 页面经 HTTP API 驱动。
+#
+# 冲突告警：不要同时安装独立的 @michengai/dsh-archive-manager——两个补丁都
+# 禁用官方 workspace 行并插入替换，会导致重复服务注册、启动失败。
+- id: workspace
+  disabled: true
+- id: session-projection-cache
+  disabled: true
 - insert:
     - id: dsh-plugin-tool-management
       name: 'dsh-plugin-tool-management'
       disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.id !== 'dsh-plugin-tool-management' && e.options.name === 'dsh-plugin-tool-management' && !e.disabled)"
+    - id: workspace-tool-management-history
+      name: 'dsh-plugin-tool-management/workspace'
+    - id: session-projection-cache-tool-management-history
+      name: 'dsh-plugin-tool-management/projcache'
+      config:
+        writeEveryEvents: 200
+        writeIntervalMs: 5000

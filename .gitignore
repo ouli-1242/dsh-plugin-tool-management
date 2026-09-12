@@ -7,5 +7,16 @@ Thumbs.db
 .superpowers/
 *.tgz
 
-# Local-only release tooling (scripts/release-notes.mjs + releases.json)
-scripts/
+# Local-only release tooling, but keep the build step that npm scripts call:
+# `npm run build` / `npm test` run `node scripts/sync-client.mjs`, and tsc never
+# writes lib/client.js on its own — ignoring it breaks a fresh clone's build.
+scripts/*
+!scripts/sync-client.mjs
+
+# Runtime state written into the plugin directory at run time (archived-session
+# ledger, retention setting, seeded AGENTS.md presets). Machine-specific.
+data/
+
+# Submission entry for awesome-dsh-plugin; the canonical copy lives in that
+# repository under data/plugins/.
+ouli-1242__dsh-plugin-tool-management.yml

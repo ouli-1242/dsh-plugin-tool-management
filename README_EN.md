@@ -5,22 +5,34 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js)](package.json)
 [![GitHub](https://img.shields.io/badge/GitHub-ouli--1242%2Fdsh--plugin--tool--management-181717?logo=github)](https://github.com/ouli-1242/dsh-plugin-tool-management)
 
-**An MCP server & skills manager for DeepSeek Harness.** One settings panel keeps two things under control:
+[简体中文](README.md) · **English**
+
+**An MCP server & skills manager for DeepSeek Harness.** One settings panel keeps four things under control:
 
 - **MCP**: which servers are configured, what tools each one exposes, and which tools the model may call — add, edit, remove, toggle, restart; every change takes effect immediately;
-- **Skills**: every skill on the machine (DSH / Agents / Codex / Claude / project-level / any directory you add) at a glance — toggle individually or per source, create, import, recycle.
+- **Skills**: every skill on the machine (DSH / Agents / Codex / Claude / project-level / any directory you add) at a glance — toggle individually or per source, create, import, recycle;
+- **AGENTS.md**: keep multiple global instruction baselines as presets, apply one with a click to write `~/.dsh/AGENTS.md` — new sessions pick it up, current sessions stay unchanged;
+- **History**: archived sessions in one place — grouped by project, batch restore / delete, import & export transcripts, retention-based auto-cleanup.
 
 No hand-editing of `cordis.patch.yml`, and skill source files are never touched. Configuration survives restarts and upgrades.
 
 ---
 
-<!-- Image slot 1: MCP management page screenshot → docs/images/mcp-page.png -->
+<!-- Image slot 1: MCP management page screenshot → docs/images/mcp.png -->
 
-![MCP management](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/mcp-page.png)
+![MCP management](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/mcp.png)
 
-<!-- Image slot 2: Skills management page screenshot → docs/images/skills-page.png -->
+<!-- Image slot 2: Skills management page screenshot → docs/images/skills.png -->
 
-![Skills management](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/skills-page.png)
+![Skills management](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/skills.png)
+
+<!-- Image slot 3: AGENTS.md presets page screenshot → docs/images/agents-md.png -->
+
+![AGENTS.md presets](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/agents-md.png)
+
+<!-- Image slot 4: History archived sessions page screenshot → docs/images/history.png -->
+
+![History archived sessions](https://raw.githubusercontent.com/ouli-1242/dsh-plugin-tool-management/main/docs/images/history.png)
 
 ## Highlights
 
@@ -34,9 +46,12 @@ No hand-editing of `cordis.patch.yml`, and skill source files are never touched.
 | Skill sources | Hooks up `~/.agents` / `~/.codex` / `~/.claude` (three directories official DSH does not load) plus **any custom skill directory** you add (read-only, overlapping paths rejected) |
 | Skill operations | Create skills, import ZIP / folders, plugin recycle bin (restore / permanent delete with OS-trash fallback), open the source file in the system editor |
 | Live refresh | Skill directories are watched from a background thread — edits made in an editor show up automatically |
-| Slash commands | `/mcp` and `/skills` right from the chat box |
+| AGENTS.md presets | Multiple global instruction baselines as presets — create / import / edit / apply / delete; "Apply" writes `~/.dsh/AGENTS.md` (new sessions pick it up, current sessions stay unchanged) |
+| Archived session management | History page groups archived sessions by project: search, select-all, batch restore / permanent delete, retention-based auto-cleanup (changing the retention resets the countdown from the change time) |
+| Transcript import / export | Seamlessly take over conversations from Claude Code / Cursor (JSONL), Codex (Markdown), or any text; export picks the session scope, defaults to the desktop, in Markdown / JSONL |
+| Slash commands | `/mcp`, `/skills`, `/agents-md` right from the chat box |
 | Model tools | **7 tools**: `skill_mcp_manager_*` for MCP servers, `skill_manager_*` for skills (creating asks for user confirmation first) |
-| UI | Its own `dsm-*` design system, consistent across both pages |
+| UI | Its own `dsm-*` design system, consistent across all four pages |
 
 ## Getting started
 
@@ -51,7 +66,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 dsh plugin --profile web remove dsh-plugin-tool-management
 ```
 
-Hard-refresh the browser (Cmd/Ctrl+Shift-R) after installing — the **MCP** and **Skills** pages appear in Settings (client changes are hot-loaded by DSH, no restart needed).
+Hard-refresh the browser (Cmd/Ctrl+Shift-R) after installing — the **MCP**, **Skills**, **AGENTS.md** and **History** pages appear in Settings (client changes are hot-loaded by DSH, no restart needed).
 
 You can also tell any DSH session:
 
@@ -78,11 +93,24 @@ Then remind me to hard-refresh the browser.
 - **Custom directories**: click "Add directory", enter an absolute path, and that directory becomes a read-only skill source — ideal for skill collections living in repos or synced folders; overlapping paths are rejected to keep the shadow policy sound.
 - **Create / import / recycle**: create from a form; drag in a ZIP, a `.md` file or a skill folder; deleted skills go to the plugin recycle bin first, and permanent delete still tries the OS trash as a last safety net.
 
+### Managing AGENTS.md presets
+
+- **Preset library**: create, import and edit multiple global instruction baselines (e.g. different teams' coding standards or role behaviors).
+- **Apply = write**: "Apply" writes the selected preset to `~/.dsh/AGENTS.md` — **new sessions pick it up, current sessions stay unchanged**; "Re-apply" syncs the latest content after editing; switch to another preset before deleting.
+
+### Managing archived sessions
+
+- **Grouped by project**: archived sessions are grouped by workspace automatically; search by title / session ID / project path; sessions whose workspace folder no longer exists are flagged with ⚠.
+- **Batch operations**: "Select all" then batch-restore or permanently delete; restored sessions return to the workspace list, and deletion cascades to their subagent sessions.
+- **Retention**: pick the cleanup period from the dropdown (0 = keep forever); the expiry baseline is the later of the archive time and the last retention change, so changing the retention resets the countdown.
+- **Import conversations**: take over sessions from other tools — Claude Code / Cursor JSONL, Codex Markdown, and arbitrary text — and keep chatting right after import.
+- **Export conversations**: pick a session scope (all / archived only / by workspace); each session becomes a Markdown or JSONL file; the export directory defaults to the desktop, and the adjacent "Select" button opens a directory tree to browse and fill in the absolute path.
+
 ### Let the model and scripts help
 
 | Entry point | What it does |
 |---|---|
-| `/mcp`, `/skills` | Check the current state from the chat box |
+| `/mcp`, `/skills`, `/agents-md` | Check the current state from the chat box |
 | `skill_mcp_manager_list / set_enabled / restart / add` | Let the model query and operate MCP servers |
 | `skill_manager_list / set_enabled / create` | Let the model query and operate skills (creating asks for your consent) |
 | `POST /dsh-plugin-tool-management/api` | HTTP API for scripts (`{op, args}` protocol) |
@@ -106,6 +134,8 @@ Why a token: the cross-site protection (POST-only + custom header + same-origin 
 | Server notes / page settings / disabled tools / export | Sidecar JSON files under the DSH home (`dsh-plugin-tool-management-*.json`) |
 | Skill toggle policy / custom directories | `~/.dsh/tool-management/state.json` |
 | Skill recycle bin / import staging | `~/.dsh/tool-management/trash`, `uploads` |
+| AGENTS.md presets / applied file | Plugin dir `data/agents-md-presets/`; "Apply" writes `~/.dsh/AGENTS.md` |
+| Archived session ledger / retention | Plugin dir `data/history-archived-at.json`, `data/history-retention.json` |
 | Runtime log | `~/.dsh/dsh-plugin-tool-management.log` (rolling) |
 
 ## FAQ
@@ -127,7 +157,7 @@ npm run test:fast    # run tests without building
 npm run build        # build only (tsc + sync client bundle)
 ```
 
-Layout: host half `src/index.ts` (object-form Cordis plugin, `lib/index.js` is the shipped artifact); skill core `src/skills/core.js` (pure Node, unit-testable); browser half `src/client.js` (ModuleLoader CJS bundle, `dsm-*` design system, talks to the host through the same-origin API). The only runtime dependency is `fflate` (ZIP extraction).
+Layout: host half `src/index.ts` (object-form Cordis plugin, `lib/index.js` is the shipped artifact); skill core `src/skills/core.js` (pure Node, unit-testable); AGENTS.md presets `src/agents-md/service.ts`; archived session management `lib/history/` (`workspace.js` / `projcache.js` / `tombstone.js`); transcript import parsing `src/imports/parsers.js`; browser half `src/client.js` (ModuleLoader CJS bundle, `dsm-*` design system, talks to the host through the same-origin API). The only runtime dependency is `fflate` (ZIP extraction).
 
 Publish: `npm version patch && npm publish` (`prepublishOnly` builds automatically).
 

@@ -15,9 +15,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
 import { createSkillsService } from './skills/service.js'
+import { createAgentsMdService } from './agents-md/service.js'
+import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
-import { readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 // ---------------------------------------------------------------------------
 // Minimal structural types for the service surfaces this plugin touches.
@@ -117,6 +120,32 @@ interface SkillService {
   get(name: string, options?: unknown): Promise<SkillDefinition | undefined>
 }
 
+/** 批量操作目标（与 deleteArchivedSessions 的 target 同构）。 */
+type HistoryBatchTarget = {
+  scope: 'all' | 'ungrouped' | 'sessions' | 'workspace'
+  sessionIds?: string[]
+  workspaceId?: string
+}
+
+/** 归档工作区注册表（折叠自 dsh-archive-manager）的最小调用面。 */
+interface HistoryRegistry {
+  archiveSession(sessionId: string): Promise<void>
+  unarchiveSession(sessionId: string): Promise<{ archivedSessionIds: string[] }>
+  deleteSession(sessionId: string): Promise<{ deleted: true }>
+  deleteArchivedSessions(target: HistoryBatchTarget): Promise<{ requestedSessionIds: string[]; deletedSessionIds: string[]; skippedSessionIds: string[]; failures: Array<{ sessionId: string; message: string }> }>
+  archivedSessionMetadata(): Promise<{ items: Array<{ sessionId: string; createdAt: number }> }>
+  archivedSessionDetails?: () => Promise<{ items: Array<{ sessionId: string; createdAt?: number; cwd?: string; title?: string; archivedAt?: number }> }>
+  archivedAt?(sessionId: string): number | undefined
+  /** 可选：工作区记账表（ArchiveWorkspaceRegistry 提供），history-list 用它反查会话归属与组标题。 */
+  requireTable?(): { get(id: string): { title?: string; path?: string; sessionIds: string[] } | undefined; entries(): Array<[string, { title?: string; path?: string; sessionIds: string[] }]> }
+  /** 可选：注册表状态；workspaceIds 为权威显示顺序。 */
+  requireState?(): { workspaceIds: string[] }
+  /** 可选：批量恢复；缺失时 history-unarchive-batch 返回明确错误。 */
+  unarchiveSessions?(target: HistoryBatchTarget): Promise<{ unarchivedSessionIds: string[]; archivedSessionIds: string[] }>
+  /** 可选：枚举全部持久化会话（含未归档/冷会话）头部，供导出弹窗选择。 */
+  listStoredHeaders?(): Promise<Array<{ id: string; cwd?: string; createdAt?: number }>>
+}
+
 interface DshContext extends Context {
   timer: unknown
   fs: FsService
@@ -135,6 +164,35 @@ interface ManagedRow {
   disabled?: boolean
   managed?: boolean
   config: Record<string, unknown>
+}
+
+// ---------------------------------------------------------------------------
+// Transcript export helpers — mirror the import parsers (src/imports/parsers.js)
+// so an exported file can be imported back losslessly. Pure Node, no ctx.
+// ---------------------------------------------------------------------------
+
+/** 从会话事件数组提取用户/助手纯文本轮次（与导入解析器对称）。 */
+function extractTurnsFromEvents(events: unknown[]): Array<{ role: 'user' | 'assistant'; text: string }> {
+  const turns: Array<{ role: 'user' | 'assistant'; text: string }> = []
+  for (const ev of events || []) {
+    if (!ev || typeof ev !== 'object') continue
+    const e = ev as { type?: string; data?: { content?: unknown; message?: { content?: unknown } } }
+    let content: unknown
+    if (e.type === 'user/message') content = e.data && e.data.content
+    else if (e.type === 'assistant/message') content = e.data && e.data.message && e.data.message.content
+    else continue
+    const text = extractText(content).trim()
+    if (text) turns.push({ role: e.type === 'user/message' ? 'user' : 'assistant', text })
+  }
+  return turns
+}
+
+/** 序列化为可再导入的转录文本：Codex 风格 Markdown 或 Claude Code 风格 JSONL。 */
+function serializeTurns(turns: Array<{ role: 'user' | 'assistant'; text: string }>, format: 'markdown' | 'jsonl'): string {
+  if (format === 'jsonl') {
+    return turns.map((t) => JSON.stringify({ type: t.role, message: { role: t.role, content: t.text } })).join('\n')
+  }
+  return turns.map((t) => (t.role === 'user' ? '## User\n' : '### Assistant\n') + t.text).join('\n\n')
 }
 
 export default {
@@ -178,6 +236,12 @@ export default {
       'skill-create', 'skill-import', 'skill-upload', 'skill-delete',
       'skill-trash-restore', 'skill-trash-delete', 'skill-open',
       'skill-custom-add', 'skill-custom-remove',
+      // agents-md 写操作（create/update/remove 改预设库；apply 写全局 AGENTS.md；import 从外部内容建预设）
+      'agentsmd-create', 'agentsmd-update', 'agentsmd-apply', 'agentsmd-remove', 'agentsmd-import',
+      // history 写操作（archive/unarchive 改归档集合；delete 永久删除；retention-set 写保留期）
+      'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
+      'history-unarchive-batch', 'history-delete-batch', 'history-import', 'history-export',
+      'history-archive-batch',
     ])
 
     const wait = (ms: number) => ctx.timeout(ms)
@@ -201,6 +265,119 @@ export default {
     } catch (e) {
       console.error('[dsh-plugin-tool-management] skills provider setup failed:', message(e))
     }
+
+    // ---------- agents-md 预设库 + 切换 ----------
+    // DSH 全局指令基线只有 ~/.dsh/AGENTS.md 一个文件，无内置多预设切换；
+    // 本服务在插件目录内 data/agents-md-presets/ 维护预设库，「应用」= 写入
+    // ~/.dsh/AGENTS.md，新会话生效（当前会话不变，DSH 本身如此）。
+    // presetsDir 可由 config 注入（测试用），否则落到插件根 data/。
+    const PLUGIN_ROOT = (() => {
+      try { return dirname(createRequire(import.meta.url).resolve('../package.json')) } catch { return process.cwd() }
+    })()
+    const agentsMdPresetsDir = String((config as { presetsDir?: unknown } | undefined)?.presetsDir || join(PLUGIN_ROOT, 'data', 'agents-md-presets'))
+    const agentsMdService = createAgentsMdService(ctx, {
+      presetsDir: agentsMdPresetsDir,
+      getGlobalAgentsMdPath: async () => {
+        const p = await ensurePaths()
+        const sep = p.home.indexOf('\\') >= 0 ? '\\' : '/'
+        return p.home + sep + 'AGENTS.md'
+      },
+    })
+
+    // ---------- history（归档会话管理，折叠自 dsh-archive-manager）----------
+    // cordis.patch.yml 禁用官方 workspace 与 session-projection-cache，插入本插件
+    // 的归档感知子类（lib/history/workspace.js + lib/history/projcache.js）。子类
+    // 经 Service.constructor 继承官方服务名（workspaceRegistry / sessionProjectionCache），
+    // 因此 ctx.get('workspaceRegistry') 拿到的就是归档子类实例。
+    //
+    // 保留期（retentionDays）：0 = 永久不删除，7/30 = 归档满 N 天后自动永久删除。
+    // archivedAt 账本由子类自身维护（data/history-archived-at.json）；保留期配置
+    // 由本插件 data/history-retention.json 存储。sweeper 在 apply 时跑一次并周期
+    // 复跑（默认 6h，可经 config.sweepIntervalMs 覆盖），把到期归档会话批量永久删除。
+    const historyRetentionPath = String((config as { historyRetentionPath?: unknown } | undefined)?.historyRetentionPath || join(PLUGIN_ROOT, 'data', 'history-retention.json'))
+    const sweepIntervalMs = Number((config as { sweepIntervalMs?: unknown } | undefined)?.sweepIntervalMs || 0) || 6 * 60 * 60 * 1000
+    function getHistoryRegistry(): HistoryRegistry | undefined {
+      const r = ctx.get('workspaceRegistry') as HistoryRegistry | undefined
+      return r && typeof r.archiveSession === 'function' ? r : undefined
+    }
+    async function readHistoryRetention(): Promise<{ retentionDays: number; updatedAt: number }> {
+      try {
+        const raw = await readFile(historyRetentionPath, 'utf8')
+        const obj = JSON.parse(raw)
+        const days = Number((obj && (obj as { retentionDays?: unknown }).retentionDays) ?? 0)
+        const updatedAt = Number((obj && (obj as { updatedAt?: unknown }).updatedAt) ?? 0)
+        return {
+          retentionDays: Number.isFinite(days) && days >= 0 ? days : 0,
+          updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0,
+        }
+      } catch { return { retentionDays: 0, updatedAt: 0 } }
+    }
+    async function writeHistoryRetention(retentionDays: number): Promise<void> {
+      try {
+        const dir = dirname(historyRetentionPath)
+        await mkdir(dir, { recursive: true })
+        // updatedAt = 修改时刻：每次改保留期，已归档会话的到期基线重置为此时刻。
+        await writeFile(historyRetentionPath, JSON.stringify({ retentionDays, updatedAt: Date.now() }), 'utf8')
+      } catch (e) {
+        console.error('[dsh-plugin-tool-management] write history-retention failed:', message(e))
+      }
+    }
+    /**
+     * 计算到期应删的归档会话。基线 = max(archivedAt（账本）?? createdAt（元数据),
+     * updatedAt（最近一次修改保留期的时刻）)。改保留期即重置倒计时：到期时刻从
+     * 修改时刻起按新天数重新计算；updatedAt 缺失（旧配置）时退回归档时刻语义。
+     * retentionDays <= 0 表示永久不删除，返回空集。纯函数：便于测试。
+     */
+    function expiredArchivedIds(
+      items: Array<{ sessionId: string; createdAt?: number; archivedAt?: number }>,
+      retentionDays: number,
+      now: number,
+      updatedAt = 0,
+    ): string[] {
+      if (!(retentionDays > 0)) return []
+      const cutoff = now - retentionDays * 86400000
+      const out: string[] = []
+      for (const it of items) {
+        const archived = (typeof it.archivedAt === 'number' && Number.isFinite(it.archivedAt))
+          ? it.archivedAt
+          : (typeof it.createdAt === 'number' && Number.isFinite(it.createdAt) ? it.createdAt : undefined)
+        if (archived === undefined) continue
+        const baseline = updatedAt > 0 ? Math.max(archived, updatedAt) : archived
+        if (baseline <= cutoff) out.push(it.sessionId)
+      }
+      return out
+    }
+    async function sweepHistory(): Promise<{ swept: string[] }> {
+      const registry = getHistoryRegistry()
+      if (!registry) return { swept: [] }
+      const { retentionDays, updatedAt } = await readHistoryRetention()
+      if (!(retentionDays > 0)) return { swept: [] }
+      try {
+        const details = (typeof registry.archivedSessionDetails === 'function')
+          ? (await registry.archivedSessionDetails()).items
+          : (await registry.archivedSessionMetadata()).items.map((i) => ({ sessionId: i.sessionId, createdAt: i.createdAt, archivedAt: registry.archivedAt?.(i.sessionId) }))
+        const expired = expiredArchivedIds(details, retentionDays, Date.now(), updatedAt)
+        if (expired.length === 0) return { swept: [] }
+        const res = await registry.deleteArchivedSessions({ scope: 'sessions', sessionIds: expired })
+        return { swept: res.deletedSessionIds || [] }
+      } catch (e) {
+        console.error('[dsh-plugin-tool-management] history sweep failed:', message(e))
+        return { swept: [] }
+      }
+    }
+    // 启动时扫一次，再周期复跑。fake-ctx 测试里 ctx.effect 立即调用并 dispose，
+    // interval 未提供时退化为不挂钟（不阻塞测试）。
+    try {
+      void sweepHistory()
+    } catch { /* 非致命 */ }
+    try {
+      ctx.effect(() => {
+        const timer = ctx as unknown as { interval?: (cb: () => void, ms: number) => () => void; setInterval?: (cb: () => void, ms: number) => () => void }
+        const fn = typeof timer.interval === 'function' ? timer.interval : (typeof timer.setInterval === 'function' ? timer.setInterval : undefined)
+        if (!fn) return () => {}
+        return fn(() => { void sweepHistory() }, sweepIntervalMs)
+      }, 'dsh-plugin-tool-management: history sweep')
+    } catch { /* timer 缺失时静默 */ }
 
     // ---------- path discovery ----------
     // Known limitation: profile detection probes 'web' then 'headless' by
@@ -1472,6 +1649,34 @@ export default {
       return { ok: true, path: abs }
     }
 
+    // 批量操作目标校验：scope 白名单；sessions 需非空 sessionIds；workspace 需
+    // workspaceId。与 ArchiveWorkspaceRegistry.archivedBatchTargetSchema 语义一致。
+    function parseHistoryBatchTarget(raw: unknown): { ok: true; target: HistoryBatchTarget } | { ok: false; error: string } {
+      const t = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+      if (!t) return { ok: false, error: '缺少 target' }
+      const scope = t.scope
+      if (scope !== 'all' && scope !== 'ungrouped' && scope !== 'sessions' && scope !== 'workspace') {
+        return { ok: false, error: 'target.scope 不合法' }
+      }
+      if (scope === 'sessions') {
+        if (!Array.isArray(t.sessionIds) || t.sessionIds.length === 0 ||
+            t.sessionIds.some((id) => typeof id !== 'string' || !String(id).trim())) {
+          return { ok: false, error: 'scope=sessions 需要非空的 sessionIds 数组' }
+        }
+      }
+      if (scope === 'workspace' && !(typeof t.workspaceId === 'string' && String(t.workspaceId).trim())) {
+        return { ok: false, error: 'scope=workspace 需要 workspaceId' }
+      }
+      return {
+        ok: true,
+        target: {
+          scope,
+          ...(scope === 'sessions' ? { sessionIds: (t.sessionIds as string[]).map((s) => String(s).trim()) } : {}),
+          ...(scope === 'workspace' ? { workspaceId: String(t.workspaceId).trim() } : {}),
+        },
+      }
+    }
+
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
       'mcpm-list': mcpmListView,
@@ -1495,6 +1700,327 @@ export default {
       // skill-delete / skill-trash-restore / skill-trash-delete
       // 成功返回 {ok:true, data}；core 业务失败原样透传 {ok:false, error, code?, params?}。
       ...skillsService.ops,
+      // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
+      // agentsmd-read / agentsmd-create / agentsmd-update / agentsmd-remove /
+      // agentsmd-apply / agentsmd-get-current
+      'agentsmd-list': () => agentsMdService.list(),
+      'agentsmd-read': (args: any) => agentsMdService.read(String((args && args.id) || '')),
+      'agentsmd-create': (args: any) => agentsMdService.create(String((args && args.id) || ''), args && args.from ? String(args.from) : undefined),
+      'agentsmd-update': (args: any) => agentsMdService.update(String((args && args.id) || ''), String((args && args.content) ?? '')),
+      'agentsmd-apply': (args: any) => agentsMdService.apply(String((args && args.id) || '')),
+      'agentsmd-get-current': () => agentsMdService.getCurrent(),
+      'agentsmd-remove': (args: any) => agentsMdService.remove(String((args && args.id) || '')),
+      'agentsmd-import': (args: any) => agentsMdService.importPreset(String((args && args.id) || ''), String((args && args.content) ?? '')),
+      // History（归档会话管理）ops。只读：history-list / history-retention-get；
+      // 写：history-archive / history-unarchive / history-delete / history-retention-set。
+      // workspaceRegistry 缺失（补丁未生效）时返回明确错误，不崩页面。
+      'history-list': async () => {
+        const registry = getHistoryRegistry()
+        if (!registry) return { ok: false, error: '归档服务未挂载：workspace 已被替换？请确认本插件补丁已生效。' }
+        try {
+          const items = (typeof registry.archivedSessionDetails === 'function')
+            ? (await registry.archivedSessionDetails()).items
+            : (await registry.archivedSessionMetadata()).items.map((i) => ({ sessionId: i.sessionId, createdAt: i.createdAt, archivedAt: registry.archivedAt?.(i.sessionId) }))
+          const { retentionDays } = await readHistoryRetention()
+          // 分组增强（best-effort）：用 workspace 记账表反查每个归档会话的归属，
+          // 供客户端按项目分组。requireTable 缺失或任何异常都静默降级为扁平列表。
+          if (typeof registry.requireTable === 'function') {
+            try {
+              const table = registry.requireTable()
+              const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
+              const wsIds = state && Array.isArray(state.workspaceIds) && state.workspaceIds.length
+                ? state.workspaceIds
+                : [...table.entries()].map(([id]) => id)
+              const owned = new Map<string, string>()
+              const workspaces: Record<string, { title: string; path?: string }> = {}
+              for (const wid of wsIds) {
+                const rec = table.get(wid)
+                if (!rec || !Array.isArray(rec.sessionIds)) continue
+                for (const sid of rec.sessionIds) if (!owned.has(sid)) owned.set(sid, wid)
+                workspaces[wid] = {
+                  title: (rec.title && String(rec.title)) || String(wid),
+                  ...(typeof rec.path === 'string' && rec.path ? { path: rec.path } : {}),
+                }
+              }
+              for (const it of items) {
+                const wid = owned.get(it.sessionId)
+                if (wid !== undefined) (it as { workspaceId?: string }).workspaceId = wid
+              }
+              return { ok: true, items, workspaces, retentionDays }
+            } catch (e) { /* 降级为下方扁平返回 */ }
+          }
+          return { ok: true, items, retentionDays }
+        } catch (e) { return { ok: false, error: message(e) } }
+      },
+      // 枚举全部持久化会话（含未归档/冷会话）供导出弹窗选择；只读，不门控。
+      // 标题经投影缓存 best-effort；任何一步失败只降级为缺字段。
+      'history-sessions': async () => {
+        const registry = getHistoryRegistry()
+        if (!registry || typeof registry.listStoredHeaders !== 'function') {
+          return { ok: false, error: '当前环境不支持枚举全部会话（registry 未实现 listStoredHeaders）' }
+        }
+        try {
+          const headers = await registry.listStoredHeaders()
+          const archivedItems = typeof registry.archivedSessionDetails === 'function'
+            ? (await registry.archivedSessionDetails()).items
+            : (await registry.archivedSessionMetadata()).items
+          const archived = new Set(archivedItems.map((i) => i.sessionId))
+          // 工作区归属反查（与 history-list 一致；best-effort）。
+          const table = typeof registry.requireTable === 'function' ? registry.requireTable() : undefined
+          const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
+          const wsIds = state && Array.isArray(state.workspaceIds) && state.workspaceIds.length
+            ? state.workspaceIds
+            : (table ? [...table.entries()].map(([id]) => id) : [])
+          const owned = new Map<string, string>()
+          if (table) {
+            for (const wid of wsIds) {
+              const rec = table.get(wid)
+              if (!rec || !Array.isArray(rec.sessionIds)) continue
+              for (const sid of rec.sessionIds) if (!owned.has(sid)) owned.set(sid, wid)
+            }
+          }
+          const cache = ctx.get('sessionProjectionCache') as { cachedSnapshot?(header: unknown, seq: number, fields: string[]): { values?: { title?: string } } } | undefined
+          const items: Array<{ sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; cwdMissing?: boolean }> = []
+          for (const h of headers) {
+            const sessionId = h && typeof h.id === 'string' ? h.id : undefined
+            if (!sessionId) continue
+            // 过滤子代理派生的会话：不占用用户会话列表，也不应出现在导出选择里。
+            if ((h as { origin?: string }).origin === 'subagent') continue
+            const item: { sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; cwdMissing?: boolean } = {
+              sessionId,
+              archived: archived.has(sessionId),
+            }
+            if (typeof h.cwd === 'string' && h.cwd) item.cwd = h.cwd
+            if (typeof h.createdAt === 'number' && Number.isFinite(h.createdAt)) item.createdAt = h.createdAt
+            const wid = owned.get(sessionId)
+            if (wid !== undefined) item.workspaceId = wid
+            if (cache && typeof cache.cachedSnapshot === 'function') {
+              try {
+                const snap = cache.cachedSnapshot(h, 0, ['title'])
+                if (snap && snap.values && typeof snap.values.title === 'string') item.title = snap.values.title
+              } catch { /* title best-effort */ }
+            }
+            // 工作区目录可能已被删除/移动（孤儿会话）：best-effort 标记，供导出选择时识别。
+            if (item.cwd) {
+              try {
+                const st = await stat(item.cwd)
+                item.cwdMissing = !st.isDirectory()
+              } catch { item.cwdMissing = true }
+            }
+            items.push(item)
+          }
+          return { ok: true, items }
+        } catch (e) { return { ok: false, error: message(e) } }
+      },
+      // 导出默认目录：桌面（存在时）否则用户主目录。只读，不门控。
+      'history-export-defaults': async () => {
+        let dir = homedir()
+        try {
+          const desktop = join(homedir(), 'Desktop')
+          const st = await stat(desktop)
+          if (st.isDirectory()) dir = desktop
+        } catch { /* 桌面路径不可用 → 回退主目录 */ }
+        return { ok: true, defaultDir: dir }
+      },
+      // 列出目录的子目录，供客户端「选择文件夹」弹窗逐级浏览。dir 为空时返回根
+      // 视图（Windows 枚举盘符，其他平台返回 '/'）。只读，不门控。
+      'dir-list': async (args: any) => {
+        const raw = String((args && args.dir) || '').trim()
+        try {
+          if (!raw) {
+            if (process.platform !== 'win32') return { ok: true, current: '/', parent: null, entries: [] }
+            const drives: Array<{ name: string; path: string }> = []
+            for (let c = 65; c <= 90; c++) {
+              const root = String.fromCharCode(c) + ':\\'
+              try { await stat(root); drives.push({ name: root, path: root }) } catch { /* 跳过不存在的盘符 */ }
+            }
+            return { ok: true, current: '', parent: null, entries: drives }
+          }
+          const st = await stat(raw)
+          if (!st.isDirectory()) return { ok: false, error: '该路径不是目录' }
+          const parent = dirname(raw)
+          const names = await readdir(raw, { withFileTypes: true })
+          const entries = names
+            .filter((d) => d.isDirectory())
+            .map((d) => ({ name: d.name, path: join(raw, d.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+          return { ok: true, current: raw, parent: parent === raw ? null : parent, entries }
+        } catch (e) {
+          return { ok: false, error: message(e) }
+        }
+      },
+      'history-archive': async (args: any) => {
+        const registry = getHistoryRegistry()
+        if (!registry) return { ok: false, error: '归档服务未挂载' }
+        const sessionId = String((args && args.sessionId) || '').trim()
+        if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+        try { await registry.archiveSession(sessionId); return { ok: true, sessionId } } catch (e) { return { ok: false, error: message(e) } }
+      },
+      // 批量归档（导出弹窗「归档所选」）：把选中的会话收进 History，纳入保留期管理。
+      'history-archive-batch': async (args: any) => {
+        const registry = getHistoryRegistry()
+        if (!registry) return { ok: false, error: '归档服务未挂载' }
+        const rawIds = (args && args.sessionIds) || []
+        const ids = Array.isArray(rawIds) ? rawIds.map((s: unknown) => String(s).trim()).filter(Boolean) : []
+        if (!ids.length) return { ok: false, error: '请至少选择一个会话' }
+        const archived: string[] = []
+        const failed: Array<{ sessionId: string; error: string }> = []
+        for (const sessionId of ids) {
+          try { await registry.archiveSession(sessionId); archived.push(sessionId) }
+          catch (e) { failed.push({ sessionId, error: message(e) }) }
+        }
+        return { ok: true, archived, failed }
+      },
+      'history-unarchive': async (args: any) => {
+        const registry = getHistoryRegistry()
+        if (!registry) return { ok: false, error: '归档服务未挂载' }
+        const sessionId = String((args && args.sessionId) || '').trim()
+        if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+        try { const r = await registry.unarchiveSession(sessionId); return { ok: true, archivedSessionIds: r.archivedSessionIds } } catch (e) { return { ok: false, error: message(e) } }
+      },
+      'history-delete': async (args: any) => {
+        const registry = getHistoryRegistry()
+        if (!registry) return { ok: false, error: '归档服务未挂载' }
+        const sessionId = String((args && args.sessionId) || '').trim()
+        if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+        try { await registry.deleteSession(sessionId); return { ok: true, sessionId, deleted: true } } catch (e) { return { ok: false, error: message(e) } }
+      },
+      'history-unarchive-batch': async (args: any) => {
+        const registry = getHistoryRegistry()
+        if (!registry) return { ok: false, error: '归档服务未挂载' }
+        if (typeof registry.unarchiveSessions !== 'function') return { ok: false, error: '当前环境不支持批量恢复（registry 未实现 unarchiveSessions）' }
+        const parsed = parseHistoryBatchTarget(args && args.target)
+        if (!parsed.ok) return parsed
+        try {
+          const r = await registry.unarchiveSessions(parsed.target)
+          return { ok: true, unarchivedSessionIds: r.unarchivedSessionIds, archivedSessionIds: r.archivedSessionIds }
+        } catch (e) { return { ok: false, error: message(e) } }
+      },
+      'history-delete-batch': async (args: any) => {
+        const registry = getHistoryRegistry()
+        if (!registry) return { ok: false, error: '归档服务未挂载' }
+        const parsed = parseHistoryBatchTarget(args && args.target)
+        if (!parsed.ok) return parsed
+        try {
+          const r = await registry.deleteArchivedSessions(parsed.target)
+          return { ok: true, requestedSessionIds: r.requestedSessionIds, deletedSessionIds: r.deletedSessionIds, skippedSessionIds: r.skippedSessionIds, failures: r.failures }
+        } catch (e) { return { ok: false, error: message(e) } }
+      },
+      // 从其他 Agent（Claude Code / Cursor JSONL、Codex Markdown、通用文本）导入对话，
+      // 通过 sessions.create 的 seed 机制生成一个可继续对话的全新会话。
+      'history-import': async (args: any) => {
+        const fileName = String((args && args.fileName) || '').trim()
+        const content = String((args && args.content) ?? '')
+        if (!fileName || !content.trim()) return { ok: false, error: '缺少文件内容' }
+        let turns: Array<{ role: 'user' | 'assistant'; text: string }>
+        try {
+          const format = detectFormat(fileName, content)
+          turns = format === 'jsonl' ? parseJsonlTranscript(content)
+            : format === 'markdown' ? parseMarkdownTranscript(content)
+            : parseGenericText(content)
+        } catch (e) {
+          return { ok: false, error: '对话解析失败: ' + message(e) }
+        }
+        if (!turns.length) return { ok: false, error: '未能从该文件中识别出对话内容' }
+        const sessions = ctx.get('sessions') as { create?(id: string | undefined, options: { seed?: unknown[]; meta?: Record<string, unknown> }): { id: string } } | undefined
+        if (!sessions || typeof sessions.create !== 'function') return { ok: false, error: '当前环境不支持创建会话（sessions.create 不可用）' }
+        // 仅接受绝对路径的 cwd；非法或缺失时会话不带目录（归入未分组）。
+        const cwdArg = String((args && args.cwd) || '').trim()
+        const cwd = /^([A-Za-z]:[\\/]|\\\\|\/)/.test(cwdArg) ? cwdArg : undefined
+        // seed 事件信封：seq 从 0 连续、time 为安全整数、surface 事件必须带 surfaceOp:'append'。
+        const base = Date.now()
+        const seed = turns.map((turn, i) => ({
+          type: turn.role === 'user' ? 'user/message' : 'assistant/message',
+          seq: i,
+          time: base + i,
+          data: turn.role === 'user'
+            ? { id: 'msg-' + i, role: 'user', content: [{ type: 'text', text: turn.text }], source: { kind: 'typed' } }
+            : { message: { id: 'msg-' + i, role: 'assistant', content: [{ type: 'text', text: turn.text }], source: { kind: 'model', provider: 'imported', model: 'imported' } }, turn: i, step: 0, stream: [] },
+          surfaceOp: 'append',
+        }))
+        try {
+          const created = sessions.create(undefined, { seed, meta: { ...(cwd ? { cwd } : {}), createdAt: base } })
+          return { ok: true, sessionId: created.id, count: turns.length }
+        } catch (e) {
+          return { ok: false, error: '创建会话失败: ' + message(e) }
+        }
+      },
+      // 把选中的归档会话导出为可再导入的转录文件（Markdown / JSONL），写入指定目录。
+      // 每个会话一个文件；读不到正文的冷会话列入 skipped，不中断其余导出。
+      'history-export': async (args: any) => {
+        const rawIds = (args && args.sessionIds) || []
+        const ids = Array.isArray(rawIds) ? rawIds.map((s: unknown) => String(s).trim()).filter(Boolean) : []
+        if (!ids.length) return { ok: false, error: '请至少选择一个会话' }
+        const format = String((args && args.format) || 'markdown').toLowerCase()
+        if (format !== 'markdown' && format !== 'jsonl') return { ok: false, error: 'format 需为 markdown 或 jsonl' }
+        const outDir = String((args && args.outDir) || '').trim()
+        if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(outDir)) return { ok: false, error: '导出目录需为绝对路径' }
+        const sessions = ctx.get('sessions') as { get?(id: string): unknown } | undefined
+        if (!sessions || typeof sessions.get !== 'function') return { ok: false, error: '当前环境不支持读取会话（sessions.get 不可用）' }
+        // 读会话事件：先取活动 store；冷会话（进程重启后）从持久化后端恢复只读句柄。
+        const readEvents = async (sessionId: string): Promise<unknown[] | undefined> => {
+          const live = sessions.get!(sessionId)
+          if (live && typeof (live as { snapshotEvents?: unknown }).snapshotEvents === 'function') {
+            const ev = (live as { snapshotEvents(): unknown[] }).snapshotEvents()
+            return Array.isArray(ev) ? ev : undefined
+          }
+          const persistence = ctx.get('sessionPersistence') as { prepare?(id: string): Promise<unknown> } | undefined
+          if (persistence && typeof persistence.prepare === 'function') {
+            try {
+              const prep = await persistence.prepare(sessionId)
+              const ps = prep && (prep as { session?: unknown }).session
+              try {
+                if (ps && typeof (ps as { snapshotEvents?: unknown }).snapshotEvents === 'function') {
+                  const ev = (ps as { snapshotEvents(): unknown[] }).snapshotEvents()
+                  return Array.isArray(ev) ? ev : undefined
+                }
+              } finally {
+                const dispose = (prep as { [Symbol.dispose]?: () => void })[Symbol.dispose]
+                if (typeof dispose === 'function') dispose()
+              }
+            } catch { return undefined }
+          }
+          return undefined
+        }
+        try {
+          await mkdir(outDir, { recursive: true })
+        } catch (e) {
+          return { ok: false, error: '创建导出目录失败: ' + message(e) }
+        }
+        const ext = format === 'jsonl' ? '.jsonl' : '.md'
+        const exported: Array<{ sessionId: string; fileName: string; path: string; count: number }> = []
+        const skipped: Array<{ sessionId: string; error: string }> = []
+        for (const sessionId of ids) {
+          const safe = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, '_')
+          const fileName = safe + ext
+          const path = join(outDir, fileName)
+          try {
+            const events = await readEvents(sessionId)
+            const turns = extractTurnsFromEvents(events || [])
+            if (!turns.length) {
+              skipped.push({ sessionId, error: events ? '会话中没有可导出的消息' : '无法读取会话内容（不在活动存储且无持久化句柄）' })
+              continue
+            }
+            await writeFile(path, serializeTurns(turns, format), 'utf8')
+            exported.push({ sessionId, fileName, path, count: turns.length })
+          } catch (e) {
+            skipped.push({ sessionId, error: '导出失败: ' + message(e) })
+          }
+        }
+        return { ok: true, exported, skipped }
+      },
+      'history-retention-get': async () => {
+        const { retentionDays } = await readHistoryRetention()
+        return { ok: true, retentionDays }
+      },
+      'history-retention-set': async (args: any) => {
+        const days = Number((args && args.retentionDays) ?? -1)
+        if (!Number.isFinite(days) || days < 0) return { ok: false, error: 'retentionDays 需为非负整数（0=永久不删除）' }
+        await writeHistoryRetention(Math.floor(days))
+        // 设置变更后立即扫一次，UI 反映新策略。
+        await sweepHistory().catch(() => {})
+        return { ok: true, retentionDays: Math.floor(days) }
+      },
     }
 
     // ---------- agent-facing tools (standard ctx.tools.register + defineTool) ----------
@@ -1614,6 +2140,32 @@ export default {
         if (!r || r.ok === false) throw new Error((r && r.error) || 'skill create failed')
         const data: any = r.data || {}
         return 'Created DSH skill ' + (data.name || args.name) + ' at ' + (data.path || '(unknown)')
+      },
+    }))
+    // AGENTS.md 预设库：模型可查/切，不能造/删（避免模型乱删用户预设）。
+    tools.register(defineTool({
+      name: 'agentsmd_list',
+      description: 'List AGENTS.md presets in the plugin preset library (id, active state).',
+      parameters: {},
+      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+      async execute() {
+        const r = await agentsMdService.list()
+        if (!r.ok) throw new Error(r.error)
+        const summary = r.presets.map((p) => p.id + (p.active ? ' [active]' : ''))
+        return 'AGENTS.md presets:\n' + (summary.join('\n') || '(none)') + '\n(Applying takes effect on the next session created; the current session is unchanged.)'
+      },
+    }))
+    tools.register(defineTool({
+      name: 'agentsmd_apply',
+      description: 'Apply one AGENTS.md preset by writing it to ~/.dsh/AGENTS.md. Takes effect on the next session created; the current session is unchanged.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'Preset id (lowercase letters, digits, hyphens).' },
+      },
+      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+      async execute(args) {
+        const r = await agentsMdService.apply(args.id)
+        if (!r.ok) throw new Error(r.error)
+        return 'OK: preset ' + args.id + ' applied to ~/.dsh/AGENTS.md (next session; current session unchanged' + (r.backedUp ? '; previous backed up to __last-applied__' : '') + ')'
       },
     }))
     if (typeof ctx.on === 'function') {
@@ -1809,6 +2361,20 @@ export default {
             return { kind: 'success', text: lines.length ? '技能（' + lines.length + '）：\n' + lines.join('\n') : '未发现任何技能。' }
           },
         }), 'dsh-plugin-tool-management: /skills command')
+        ctx.effect(() => commands.register({
+          name: 'agents-md',
+          description: '列出 AGENTS.md 预设及当前生效（应用后新会话生效，当前会话不变）',
+          handler: async () => {
+            const r: any = await agentsMdService.list()
+            if (!r || r.ok === false) return { kind: 'error', text: (r && r.error) || '读取 AGENTS.md 预设失败' }
+            const presets = r.presets || []
+            if (!presets.length) return { kind: 'success', text: '未发现任何 AGENTS.md 预设。' }
+            const text = 'AGENTS.md 预设（' + presets.length + '）：\n' + presets.map((p: any) => (
+              '- ' + p.id + (p.active ? ' [生效中]' : '')
+            )).join('\n') + '\n（应用后新会话生效，当前会话不变）'
+            return { kind: 'success', text }
+          },
+        }), 'dsh-plugin-tool-management: /agents-md command')
       }
     } catch (e) {
       console.error('[dsh-plugin-tool-management] command registration failed:', message(e))

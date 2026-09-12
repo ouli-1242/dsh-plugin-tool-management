@@ -452,14 +452,16 @@ test('mcpm writes keep a timestamped backup of the previous patch', async () => 
   assert.ok(!/disable:mcp-svc1/.test(recovered), 'the backup predates the disable override')
 })
 
-test('host registers the /mcp and /skills chat commands', async () => {
+test('host registers the /mcp, /skills and /agents-md chat commands', async () => {
   const home = mkdtempSync(join(tmpdir(), 'dsh-mcp-'))
-  const ctx = makeCtx(home)
+  const presetsDir = mkdtempSync(join(tmpdir(), 'dsh-amd-cmd-'))
+  const ctx = makeCtx(home, undefined, { presetsDir })
   const commands = {}
   ctx.get = (name) => (name === 'commands' ? { register(def) { commands[def.name] = def; return () => {} } } : undefined)
-  plugin.apply(ctx)
+  plugin.apply(ctx, { presetsDir })
   assert.ok(commands.mcp, '/mcp is registered')
   assert.ok(commands.skills, '/skills is registered')
+  assert.ok(commands['agents-md'], '/agents-md is registered')
 
   const added = await call(ctx._route(), { op: 'mcpm-add', args: { serverName: 'svc1', transport: 'stdio', command: 'echo hi' } })
   assert.equal(added.json.ok, true)
@@ -470,6 +472,12 @@ test('host registers the /mcp and /skills chat commands', async () => {
   const skillsText = await commands.skills.handler()
   assert.equal(skillsText.kind, 'success')
   assert.ok(typeof skillsText.text === 'string' && skillsText.text.length > 0)
+
+  const created = await call(ctx._route(), { op: 'agentsmd-create', args: { id: 'work' } })
+  assert.equal(created.json.ok, true)
+  const amdText = await commands['agents-md'].handler()
+  assert.equal(amdText.kind, 'success')
+  assert.match(amdText.text, /work/)
 })
 
 test('skill-open validates the path instead of launching anything unexpected', async () => {
