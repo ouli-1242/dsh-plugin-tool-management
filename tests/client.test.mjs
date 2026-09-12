@@ -307,6 +307,21 @@ function makePage(opts) {
       else if (dir === '') payload = { ok: true, current: '', parent: null, entries: [{ name: 'C:\\', path: 'C:\\' }, { name: 'D:\\', path: 'D:\\' }] }
       else payload = { ok: false, error: '无法读取目录: ' + dir }
     }
+    else if (body.op === 'rules-list') payload = {
+      ok: true,
+      rules: [
+        { id: 'office/doc-writing', group: 'office', name: 'doc-writing', form: 'flat', path: 'C:/rules/office/doc-writing.md', description: '文档写作约定', descriptionDerived: false, always: false, enabled: true, order: 1000, tags: [], pinned: false, shadowed: false },
+        { id: '_shared/glossary', group: '_shared', name: 'glossary', form: 'bundle', path: 'C:/rules/_shared/glossary/SKILL.md', description: '术语表', descriptionDerived: false, always: true, enabled: true, order: 1000, tags: [], pinned: false, shadowed: false },
+      ],
+      groups: [
+        { key: '_shared', name: '_shared', label: '共享', order: 0, count: 1 },
+        { key: 'office', name: 'office', label: '办公', order: 100, count: 1 },
+      ],
+      stats: { total: 2, always: 1, enabled: 2 },
+    }
+    else if (body.op === 'rules-budget') payload = { ok: true, usedBytes: 128, maxBytes: 65536, items: [{ id: '_shared/glossary', bytes: 128 }] }
+    else if (body.op === 'rules-toggle') payload = { ok: true, rule: { id: 'office/doc-writing', enabled: false, always: false } }
+    else if (body.op === 'rules-read') payload = { ok: true, rule: { id: 'office/doc-writing', group: 'office', name: 'doc-writing', form: 'flat', path: 'C:/rules/office/doc-writing.md', description: '文档写作约定', always: false, enabled: true, body: '正文内容' } }
     else payload = { ok: true, data: {} }
     return Promise.resolve({
       ok: true,
@@ -414,7 +429,7 @@ function makePage(opts) {
     return render(mod._pages.HistoryPage)
   }
 
-  return { requests, render, settle, openToolsPage, openSkillsPage, openMcpPage, openAgentsMdPage, openHistoryPage, getTree, tools, registered }
+  return { requests, render, settle, openToolsPage, openSkillsPage, openMcpPage, openAgentsMdPage, openHistoryPage, getTree, tools, registered, _pages: mod._pages }
 }
 
 // ---------- tests ----------
@@ -479,13 +494,13 @@ test('history page: 保留期下拉选择发出 history-retention-set', async ()
   assert.ok(page.requests.some((r) => r.op === 'history-retention-set' && r.args.retentionDays === 7), 'selecting 7 天 issues history-retention-set(7)')
 })
 
-test('TOOLS section: registers one section with four tabs', async () => {
+test('TOOLS section: registers one section with five tabs', async () => {
   const page = await makePage()
   const tree = await page.openToolsPage()
   const tabs = byClass(tree, 'dsm-tab')
-  assert.equal(tabs.length, 4, 'four tabs render (MCP / Skills / AGENTS.md / History)')
+  assert.equal(tabs.length, 5, 'five tabs render (MCP / Skills / AGENTS.md / History / Rules)')
   const labels = tabs.map((t) => t.props.children)
-  assert.deepEqual(labels, ['MCP', 'Skills', 'AGENTS.md', 'History'])
+  assert.deepEqual(labels, ['MCP', 'Skills', 'AGENTS.md', 'History', 'Rules'])
 })
 
 test('client: skills page renders a row per host skill after expanding a source', async () => {
@@ -1161,4 +1176,56 @@ test('skills page: 添加目录弹窗的「选择文件夹」目录树回填路�
   selectBtn.props.onClick()
   await page.settle()
   assert.equal(picked, 'C:\\', 'path picked via onPick')
+})
+
+test('rules page: loads rules + budget, renders rows and issues rules-toggle', async () => {
+  const page = makePage()
+  let tree = await page.render(page._pages.RulesPage)
+  await page.settle()
+  assert.ok(page.requests.some((r) => r.op === 'rules-list'), 'issues rules-list on open')
+  assert.ok(page.requests.some((r) => r.op === 'rules-budget'), 'issues rules-budget on open')
+  tree = page.getTree()
+  const rows = byClass(tree, 'dsm-rule-row')
+  assert.equal(rows.length, 2, 'two rule rows rendered')
+  const names = byClass(tree, 'dsm-name').map((n) => n.props.children)
+  assert.ok(names.includes('doc-writing'), 'flat rule name rendered')
+  assert.ok(names.includes('glossary'), 'bundle rule name rendered')
+  // 行内「启用」开关 → rules-toggle（定位 office 组 doc-writing 行，不依赖分组排序）
+  const dwRow = rows.find((n) => collect(n, (x) => x.props && x.props.className === 'dsm-name' && x.props.children === 'doc-writing').length)
+  assert.ok(dwRow, 'doc-writing row found')
+  const rowSwitches = switchesOf(tree, dwRow)
+  assert.ok(rowSwitches.length >= 2, 'row exposes enable + always switches')
+  rowSwitches[0].props.onClick()
+  await page.settle()
+  const toggle = page.requests.find((r) => r.op === 'rules-toggle')
+  assert.ok(toggle, 'issues rules-toggle')
+  assert.equal(toggle.args.id, 'office/doc-writing')
+  assert.equal(toggle.args.enabled, false)
+})
+
+test('rules page: 新建规则 opens the editor modal; 编辑 loads via rules-read', async () => {
+  const page = makePage()
+  let tree = await page.render(page._pages.RulesPage)
+  await page.settle()
+  tree = page.getTree()
+  const newBtn = byClass(tree, 'dsm-btn').find((n) => n.props.children === '新建规则')
+  assert.ok(newBtn, '新建规则 button present')
+  newBtn.props.onClick()
+  await page.settle()
+  const modal = findModal(page.getTree())[0]
+  assert.ok(modal, 'editor modal opens')
+  // 关闭，改走「编辑」→ rules-read
+  const closeBtn = byClass(modal, 'dsm-btn').find((n) => n.props.children === '取消')
+  closeBtn.props.onClick()
+  await page.settle()
+  tree = page.getTree()
+  const rows2 = byClass(tree, 'dsm-rule-row')
+  const dwRow = rows2.find((n) => collect(n, (x) => x.props && x.props.className === 'dsm-name' && x.props.children === 'doc-writing').length)
+  const editBtn = byClass(dwRow, 'dsm-btn').find((n) => n.props.children === '编辑')
+  assert.ok(editBtn, '编辑 button present')
+  editBtn.props.onClick()
+  await page.settle()
+  const req = page.requests.find((r) => r.op === 'rules-read')
+  assert.ok(req, 'issues rules-read on edit')
+  assert.equal(req.args.id, 'office/doc-writing')
 })

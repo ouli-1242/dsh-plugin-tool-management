@@ -43,6 +43,7 @@ window.__ModuleLoader__.load({
 .dsm-fm{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-fm-row{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr);gap:10px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px;line-height:18px}.dsm-fm-row:last-child{border-bottom:0}.dsm-fm-key{color:var(--dsw-alias-label-secondary);word-break:break-word}.dsm-fm-raw{margin-left:5px;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px}.dsm-fm-val{min-width:0;color:var(--dsw-alias-label-primary);word-break:break-word;white-space:pre-wrap}
 @container(max-width:780px){.dsm-table-head{display:none}.dsm-row{grid-template-columns:minmax(0,1fr) max-content;gap:8px;padding:11px 13px}.dsm-row>.dsm-tags,.dsm-row>.dsm-status{grid-column:1}.dsm-row-actions{grid-column:2;grid-row:1 / span 3}.dsm-path{display:none}}@media(max-width:760px){.dsm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.dsm-title-row{flex-wrap:wrap}}@container(max-width:520px){.dsm-head{flex-direction:column}.dsm-actions{width:100%;margin-left:0}.dsm-actions .dsm-btn{flex:1}.dsm-filters{flex-direction:column}.dsm-source-filter{width:100%}.dsm-summary{grid-template-columns:1fr}}
 .dsm-hist-row{display:flex;align-items:center;gap:11px;padding:10px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-hist-row:last-child{border-bottom:0}.dsm-hist-main{min-width:0;flex:1}.dsm-hist-title{overflow:hidden;font-size:13px;font-weight:580;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd-missing{color:var(--dsw-alias-state-error-primary)}.dsm-hist-actions{display:flex;gap:6px;flex:none}.dsm-hist-check,.dsm-hist-group-check{flex:none;width:15px;height:15px;margin:0 4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}.dsm-hist-group-head{gap:10px}.dsm-hist-batch{display:flex;align-items:center;gap:8px;margin-left:2px;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l2)}.dsm-hist-batch-count{color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-hist-batch-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none}.dsm-dir-row{display:flex;gap:8px}.dsm-dir-row .dsm-control{flex:1}.dsm-dir-list{display:flex;max-height:220px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-dir-item{display:flex;width:100%;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}.dsm-dir-item:last-child{border-bottom:0}.dsm-dir-item:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-dir-item::before{content:"📁";margin-right:8px;font-size:12px}
+.dsm-rule-row{display:grid;grid-template-columns:minmax(200px,1fr) auto auto max-content;align-items:center;column-gap:12px;padding:0 13px;min-height:58px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-rule-row:last-child{border-bottom:0}.dsm-rule-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-rule-shadowed .dsm-name,.dsm-rule-shadowed .dsm-note{color:var(--dsw-alias-state-error-primary)}.dsm-rule-shadow-hint{margin-top:3px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:17px}.dsm-rule-switches{display:flex;align-items:center;justify-content:flex-end;gap:9px}.dsm-rule-invalid{border-color:var(--dsw-alias-state-error-primary)!important}.dsm-rule-hint{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:17px}.dsm-rule-budget{display:flex;flex-direction:column;gap:6px}.dsm-budget-meta{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.dsm-budget-meta strong{margin-right:0;font-size:13px;font-weight:680}.dsm-budget-over-text{color:var(--dsw-alias-state-error-primary);font-size:11px}.dsm-budget-bar{height:6px;overflow:hidden;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover)}.dsm-budget-fill{height:100%;border-radius:99px;background:var(--dsw-alias-state-success-primary);transition:width 160ms ease}.dsm-budget-fill.dsm-budget-over{background:var(--dsw-alias-state-error-primary)}.dsm-char-count{color:var(--dsw-alias-label-tertiary);font-size:11px}.dsm-char-over{color:var(--dsw-alias-state-error-primary)}@container(max-width:780px){.dsm-rule-row{grid-template-columns:minmax(0,1fr) max-content;gap:8px;padding:11px 13px}.dsm-rule-row>.dsm-tags,.dsm-rule-row>.dsm-rule-switches{grid-column:1}.dsm-rule-row>.dsm-row-actions{grid-column:2;grid-row:1 / span 4}.dsm-rule-switches{justify-content:flex-start}}
 `
 
     function ensureCss() {
@@ -661,20 +662,22 @@ window.__ModuleLoader__.load({
             React.createElement('input', { ref: importInput, type: 'file', accept: '.md,.markdown,.txt', className: 'dsm-hidden-input', onChange: function (e) { if (e.target.files && e.target.files[0]) doImport(e.target.files[0]); e.target.value = ''; } }))
         }
 
-        // TOOLS 设置页：一个侧栏项，内部 tab 切换 MCP / Skills / AGENTS.md / History。
+        // TOOLS 设置页：一个侧栏项，内部 tab 切换 MCP / Skills / AGENTS.md / History / Rules。
         function ToolsSection() {
           var tabState = React.useState('mcp')
           var active = tabState[0], setActive = tabState[1]
           var page = active === 'mcp' ? React.createElement(MCPPage)
             : active === 'skills' ? React.createElement(SkillManagerSection, { t: t })
             : active === 'agents-md' ? React.createElement(AgentsMdPage)
-            : React.createElement(HistoryPage)
+            : active === 'history' ? React.createElement(HistoryPage)
+            : React.createElement(RulesPage)
           return React.createElement('section', { className: 'dsm-section' },
             React.createElement('div', { className: 'dsm-tabs' },
               React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'mcp' ? ' dsm-tab-active' : ''), onClick: function () { setActive('mcp') } }, 'MCP'),
               React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'skills' ? ' dsm-tab-active' : ''), onClick: function () { setActive('skills') } }, 'Skills'),
               React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'agents-md' ? ' dsm-tab-active' : ''), onClick: function () { setActive('agents-md') } }, 'AGENTS.md'),
               React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'history' ? ' dsm-tab-active' : ''), onClick: function () { setActive('history') } }, 'History'),
+              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'rules' ? ' dsm-tab-active' : ''), onClick: function () { setActive('rules') } }, 'Rules'),
               React.createElement('div', { style: { marginLeft: 'auto' } }, React.createElement(FeedbackLinks, null))),
             page)
         }
@@ -749,7 +752,24 @@ window.__ModuleLoader__.load({
         "error.proto.forbidden": "禁止的修改请求（缺少客户端标记）", "error.proto.forbiddenHost": "禁止的请求来源（非法 Host）", "error.proto.contentType": "请求体必须是 application/json", "error.proto.method": "不支持的请求方法", "error.proto.unknownAction": "未知操作", "error.proto.bodyTooLarge": "请求体过大", "error.proto.invalidJson": "请求体不是合法 JSON", "error.proto.nonJson": "服务端返回非 JSON 响应（HTTP {status}）",
         "diagnostic.frontmatter.missing": "缺少完整 YAML frontmatter", "diagnostic.name.missing": "frontmatter 缺少 name", "diagnostic.name.invalid": "技能名称不是合法 kebab-case：{name}", "diagnostic.description.missing": "frontmatter 缺少 description", "diagnostic.invocation.invalid": "调用策略字段值无效", "diagnostic.shadowed": "被更高优先级来源 {root} 覆盖",
         "action.enable": "启用", "action.disable": "停用", "action.create": "创建", "action.delete": "删除", "action.restore": "恢复", "action.toggle": "启用或停用",
-        "root.dsh": "DSH 技能", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor"
+        "root.dsh": "DSH 技能", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
+        "rules.desc": "管理规则层（Rules）的始终层与常规规则：新建、编辑、启停、移入回收站；始终层规则占用独立字节预算。",
+        "rules.btn.refresh": "刷新", "rules.btn.new": "新建规则", "rules.btn.create": "创建", "rules.btn.save": "保存",
+        "rules.stat.total": "条规则", "rules.stat.always": "条始终层", "rules.stat.enabled": "条已启用", "rules.stat.budget": "始终层字节预算", "rules.budget.over": "已超限",
+        "rules.search.placeholder": "搜索名称 / 描述 / 分组", "rules.filter.all": "全部分组", "rules.group.count": "{count} 条规则",
+        "rules.form.flat": "flat", "rules.form.bundle": "bundle", "rules.derived": "派生", "rules.fill.frontmatter": "补齐 frontmatter",
+        "rules.shadowed.hint": "同名 bundle 存在，本条不会被加载", "rules.enable": "启用", "rules.always": "始终", "rules.edit": "编辑", "rules.delete": "删除",
+        "rules.create.title": "新建规则", "rules.edit.title": "编辑规则", "rules.edit.group.lock": "编辑时分组不可修改",
+        "rules.field.group": "分组", "rules.field.group.placeholder": "例如 code-review", "rules.field.group.hint": "可输入新分组名：小写字母/数字开头，仅含小写字母、数字与连字符，≤64 字符",
+        "rules.field.name": "名称", "rules.field.name.placeholder": "例如 always-be-concise", "rules.name.hint": "kebab-case：小写字母/数字，以连字符分隔", "rules.name.invalid": "名称须为 kebab-case（小写字母/数字，以连字符分隔）",
+        "rules.field.description": "描述", "rules.field.description.placeholder": "一句话说明本条规则的作用",
+        "rules.field.body": "正文（Markdown）", "rules.field.body.placeholder": "写下规则要遵循的指令、步骤和边界…",
+        "rules.field.form": "形态", "rules.bundle.hint": "附件目录：{path}", "rules.bundle.hint.create": "附件目录将在创建后自动生成",
+        "rules.field.always": "始终层规则（占用始终层字节预算）",
+        "rules.delete.title": "移入回收站？", "rules.delete.desc": "将把规则「{name}」移入回收站，可随时恢复。", "rules.btn.delete.confirm": "移入回收站",
+        "rules.result.created": "已创建规则：{name}", "rules.result.updated": "已保存规则：{name}", "rules.result.removed": "已移入回收站：{name}（回收站 ID：{trashId}）", "rules.result.toggled": "已更新规则状态：{name}",
+        "rules.loading": "正在加载规则…", "rules.empty": "暂无规则，点「新建规则」创建。", "rules.empty.search": "没有匹配的规则。",
+        "error.rules.invalidGroup": "分组名不合法（小写字母/数字开头，仅含小写字母、数字与连字符，≤64）", "error.rules.invalidName": "规则名不是合法 kebab-case", "error.rules.descriptionRequired": "描述不能为空", "error.rules.descriptionTooLong": "描述过长（不能超过 500 字符）", "error.rules.bodyRequired": "正文不能为空", "error.rules.tooLarge": "规则内容过大", "error.rules.shadowed": "规则被同名 bundle 遮蔽，无法写入", "error.rules.notFound": "规则不存在", "error.rules.budgetExceeded": "始终层字节预算超限"
       },
       en: {
         "title": "Skills", "desc": "Load and manage Agent Skills on this computer in one place.", "link.project": "GitHub", "link.feedback": "Issues",
@@ -1445,11 +1465,300 @@ function callApi(path, options) {
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setModal(null) } }, '关闭'))) : null)
         }
 
+        // ---------- Rules 页（v0.2 规则层：始终层 / 常规规则管理）----------
+        var KEBAB_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+        var GROUP_RE = /^[a-z0-9][a-z0-9-]*$/
+        var RULE_FORM_OPTIONS = [
+          { value: 'flat', label: 'flat' },
+          { value: 'bundle', label: 'bundle' },
+        ]
+        function RulesPage() {
+          var state = React.useState({ loading: true, error: null, rules: [], groups: [], stats: { total: 0, always: 0, enabled: 0 } })
+          var data = state[0], setData = state[1]
+          var budgetState = React.useState({ usedBytes: 0, maxBytes: 0 })
+          var budget = budgetState[0], setBudget = budgetState[1]
+          var qs = React.useState('')
+          var query = qs[0], setQuery = qs[1]
+          var gs = React.useState('')
+          var groupFilter = gs[0], setGroupFilter = gs[1]
+          var cs = React.useState({})
+          var collapsed = cs[0], setCollapsed = cs[1]
+          var ms = React.useState(null)
+          var modal = ms[0], setModal = ms[1]
+          var rs = React.useState(null)
+          var result = rs[0], setResult = rs[1]
+          var bs = React.useState(false)
+          var busy = bs[0], setBusy = bs[1]
+          var es = React.useState(null)
+          var editor = es[0], setEditor = es[1]
+
+          function formatBytes(n) {
+            n = Number(n || 0)
+            if (n < 1024) return n + ' B'
+            if (n < 1024 * 1024) return (Math.round(n / 1024 * 10) / 10) + ' KB'
+            return (Math.round(n / (1024 * 1024) * 10) / 10) + ' MB'
+          }
+          function refreshBudget() {
+            apiCall('rules-budget', {}).then(function (r) {
+              if (r && r.ok) setBudget({ usedBytes: r.usedBytes || 0, maxBytes: r.maxBytes || 0 })
+            }).catch(function () {})
+          }
+          function refresh(silent) {
+            if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
+            apiCall('rules-list', {}).then(function (r) {
+              if (r && r.ok) {
+                setData({ loading: false, error: null, rules: r.rules || [], groups: r.groups || [], stats: r.stats || { total: 0, always: 0, enabled: 0 } })
+              } else {
+                setData({ loading: false, error: translateError(t, r), rules: [], groups: [], stats: { total: 0, always: 0, enabled: 0 } })
+              }
+            }).catch(function (e) {
+              setData({ loading: false, error: String((e && e.message) || e), rules: [], groups: [], stats: { total: 0, always: 0, enabled: 0 } })
+            })
+          }
+          React.useEffect(function () { refresh(); refreshBudget() }, [])
+
+          function toggleEnabled(rule) {
+            if (busy) return
+            setBusy(true); setResult(null)
+            apiCall('rules-toggle', { id: rule.id, enabled: !rule.enabled }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setResult({ ok: true, text: t('rules.result.toggled', { name: rule.name }) }); refresh(true) }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function toggleAlways(rule) {
+            if (busy) return
+            setBusy(true); setResult(null)
+            apiCall('rules-toggle', { id: rule.id, always: !rule.always }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setResult({ ok: true, text: t('rules.result.toggled', { name: rule.name }) }); refresh(true); refreshBudget() }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function openCreate() {
+            setEditor({ mode: 'create', id: '', group: groupFilter || '', name: '', description: '', body: '', form: 'flat', always: false, path: '', error: null })
+            setModal({ type: 'editor' })
+          }
+          function openEditor(rule) {
+            if (busy) return
+            setBusy(true); setResult(null)
+            apiCall('rules-read', { id: rule.id }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok && res.rule) {
+                var rd = res.rule
+                setEditor({ mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', always: !!rd.always, path: rd.path || '', error: null })
+                setModal({ type: 'editor' })
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function closeEditor() { setModal(null) }
+          function submitCreate() {
+            var payload = {
+              group: String(editor.group || '').trim(),
+              name: String(editor.name || '').trim(),
+              description: String(editor.description || '').trim(),
+              body: editor.body || '',
+              always: !!editor.always,
+              form: editor.form || 'flat',
+            }
+            setBusy(true)
+            apiCall('rules-create', payload).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) {
+                var name = (res.rule && (res.rule.id || res.rule.name)) || payload.name
+                setModal(null); setEditor(null)
+                setResult({ ok: true, text: t('rules.result.created', { name: name }) })
+                refresh(true)
+                if (payload.always) refreshBudget()
+              } else setEditor(Object.assign({}, editor, { error: translateError(t, res) }))
+            }).catch(function (e) { setBusy(false); setEditor(Object.assign({}, editor, { error: String((e && e.message) || e) })) })
+          }
+          function submitUpdate() {
+            var payload = {
+              id: editor.id,
+              name: String(editor.name || '').trim(),
+              description: String(editor.description || '').trim(),
+              body: editor.body || '',
+              form: editor.form || 'flat',
+            }
+            setBusy(true)
+            apiCall('rules-update', payload).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) {
+                var name = (res.rule && (res.rule.id || res.rule.name)) || payload.name
+                setModal(null); setEditor(null)
+                setResult({ ok: true, text: t('rules.result.updated', { name: name }) })
+                refresh(true)
+              } else setEditor(Object.assign({}, editor, { error: translateError(t, res) }))
+            }).catch(function (e) { setBusy(false); setEditor(Object.assign({}, editor, { error: String((e && e.message) || e) })) })
+          }
+          function submitDelete(rule) {
+            setBusy(true)
+            apiCall('rules-remove', { id: rule.id }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) {
+                setModal(null)
+                setResult({ ok: true, text: t('rules.result.removed', { name: rule.name, trashId: res.trashId != null ? res.trashId : '' }) })
+                refresh(true)
+                if (rule.always) refreshBudget()
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function toggleGroupCollapse(key) {
+            setCollapsed(function (prev) {
+              var next = Object.assign({}, prev)
+              next[key] = !next[key]
+              return next
+            })
+          }
+
+          var stats = data.stats || { total: 0, always: 0, enabled: 0 }
+          var q = String(query || '').toLowerCase()
+          function matchRule(r) {
+            if (groupFilter && r.group !== groupFilter) return false
+            if (!q) return true
+            return (r.name || '').toLowerCase().indexOf(q) >= 0
+              || (r.description || '').toLowerCase().indexOf(q) >= 0
+              || (r.group || '').toLowerCase().indexOf(q) >= 0
+          }
+          // 按分组折叠卡片（样式与 History 页分组卡片一致）；规则按 order 升序、再按名称排序。
+          // 注意：groupMap 存克隆对象，避免把 __rules 附加到 data.groups 原始对象上（跨渲染污染导致分组丢失）。
+          var groupMap = {}
+          data.groups.forEach(function (g) { groupMap[g.key] = Object.assign({}, g) })
+          var groups = []
+          data.rules.forEach(function (r) {
+            if (!matchRule(r)) return
+            var rec = groupMap[r.group]
+            if (!rec) { rec = { key: r.group, label: r.group, order: 999, count: 0 }; groupMap[r.group] = rec }
+            if (!rec.__rules) { rec.__rules = []; groups.push(rec) }
+            rec.__rules.push(r)
+          })
+          groups.sort(function (a, b) {
+            var d = (a.order || 0) - (b.order || 0)
+            if (d) return d
+            return String(a.label || a.key).localeCompare(String(b.label || b.key))
+          })
+          groups.forEach(function (g) {
+            g.__rules.sort(function (a, b) {
+              var d = (a.order || 0) - (b.order || 0)
+              if (d) return d
+              return String(a.name || '').localeCompare(String(b.name || ''))
+            })
+          })
+          var groupOptions = [{ value: '', label: t('rules.filter.all') }].concat(data.groups.map(function (g) {
+            return { value: g.key, label: t('filter.option', { name: g.label || g.key, count: g.count }) }
+          }))
+
+          function renderRuleRow(r) {
+            var shadowed = r.shadowed === true
+            return React.createElement('div', { key: r.id, className: 'dsm-rule-row' + (shadowed ? ' dsm-rule-shadowed' : '') },
+              React.createElement('div', { className: 'dsm-main' },
+                React.createElement('div', { className: 'dsm-name' }, r.name),
+                React.createElement('div', { className: 'dsm-note' }, r.description || ''),
+                shadowed ? React.createElement('div', { className: 'dsm-rule-shadow-hint' }, t('rules.shadowed.hint')) : null),
+              React.createElement('div', { className: 'dsm-tags' },
+                React.createElement('span', { className: 'dsm-tag' }, r.group),
+                React.createElement('span', { className: 'dsm-tag' + (r.form === 'bundle' ? ' dsm-tag-on' : '') }, r.form === 'bundle' ? t('rules.form.bundle') : t('rules.form.flat')),
+                r.descriptionDerived ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('rules.derived')) : null,
+                r.descriptionDerived ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditor(r) }, title: t('rules.fill.frontmatter') }, t('rules.fill.frontmatter')) : null),
+              React.createElement('div', { className: 'dsm-rule-switches' },
+                React.createElement(Switch, { on: r.enabled === true, disabled: busy, label: t('rules.enable') + ' ' + r.name, onClick: function () { toggleEnabled(r) } }),
+                React.createElement(Switch, { on: r.always === true, disabled: busy, label: t('rules.always') + ' ' + r.name, onClick: function () { toggleAlways(r) } })),
+              React.createElement('div', { className: 'dsm-row-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditor(r) } }, t('rules.edit')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'delete', rule: r }) } }, t('rules.delete'))))
+          }
+          function renderGroupCard(g) {
+            var open = !collapsed[g.key]
+            return React.createElement('div', { className: 'dsm-source', key: 'g:' + g.key },
+              React.createElement('div', { className: 'dsm-source-head' },
+                React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroupCollapse(g.key) } },
+                  React.createElement('span', { className: 'dsm-source-title' }, g.label || g.key),
+                  React.createElement('span', { className: 'dsm-count' }, t('rules.group.count', { count: g.__rules.length })))),
+              open ? React.createElement('div', { className: 'dsm-source-body' }, g.__rules.map(renderRuleRow)) : null)
+          }
+
+          var usedBytes = Number(budget.usedBytes || 0)
+          var maxBytes = Number(budget.maxBytes || 0)
+          var over = maxBytes > 0 && usedBytes > maxBytes
+          var pct = maxBytes > 0 ? Math.min(100, Math.round(usedBytes / maxBytes * 100)) : 0
+          var editorNameInvalid = editor ? !KEBAB_RE.test(String(editor.name || '').trim()) : false
+          var editorGroupInvalid = editor && editor.mode === 'create' ? !GROUP_RE.test(String(editor.group || '').trim()) || String(editor.group || '').length > 64 : false
+          var editorDescLen = editor ? String(editor.description || '').length : 0
+
+          return React.createElement('section', { className: 'dsm-section' },
+            React.createElement('div', { className: 'dsm-head' },
+              React.createElement('div', { className: 'dsm-title-block' },
+                React.createElement('div', { className: 'dsm-title-row' },
+                  React.createElement('h2', { className: 'dsm-title' }, 'Rules'),
+                  React.createElement(VersionBadge, null)),
+                React.createElement('p', { className: 'dsm-desc' }, t('rules.desc'))),
+              React.createElement('div', { className: 'dsm-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('rules.btn.refresh')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: openCreate }, t('rules.btn.new')))),
+            React.createElement('div', { className: 'dsm-summary dsm-summary-4' },
+              React.createElement('div', { key: 'total', className: 'dsm-stat' }, React.createElement('strong', null, stats.total || 0), t('rules.stat.total')),
+              React.createElement('div', { key: 'always', className: 'dsm-stat' }, React.createElement('strong', null, stats.always || 0), t('rules.stat.always')),
+              React.createElement('div', { key: 'enabled', className: 'dsm-stat' }, React.createElement('strong', null, stats.enabled || 0), t('rules.stat.enabled')),
+              React.createElement('div', { key: 'budget', className: 'dsm-stat' },
+                React.createElement('div', { className: 'dsm-rule-budget' },
+                  React.createElement('div', { className: 'dsm-budget-meta' },
+                    React.createElement('span', null, t('rules.stat.budget')),
+                    React.createElement('strong', { className: over ? 'dsm-budget-over-text' : null }, formatBytes(usedBytes) + ' / ' + formatBytes(maxBytes))),
+                  React.createElement('div', { className: 'dsm-budget-bar' },
+                    React.createElement('div', { className: 'dsm-budget-fill' + (over ? ' dsm-budget-over' : ''), style: { width: pct + '%' } })),
+                  over ? React.createElement('div', { className: 'dsm-budget-over-text' }, t('rules.budget.over')) : null))),
+            React.createElement('div', { className: 'dsm-filters' },
+              React.createElement('input', { className: 'dsm-control dsm-search', type: 'text', placeholder: t('rules.search.placeholder'), value: query, onChange: function (e) { setQuery(e.target.value) } }),
+              React.createElement('div', { className: 'dsm-source-filter' },
+                React.createElement(SourceSelect, { options: groupOptions, value: groupFilter, onChange: setGroupFilter }))),
+            result ? React.createElement('div', { key: 'result', className: 'dsm-feedback' + (result.ok ? '' : ' dsm-error'), role: 'alert' }, result.text) : null,
+            data.error ? React.createElement('div', { key: 'error', className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
+            data.loading && !data.rules.length ? React.createElement('div', { key: 'loading', className: 'dsm-empty' }, t('rules.loading'))
+              : groups.length ? React.createElement('div', { key: 'sources', className: 'dsm-sources' }, groups.map(renderGroupCard))
+              : React.createElement('div', { key: 'empty', className: 'dsm-empty' }, query ? t('rules.empty.search') : t('rules.empty')),
+            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', title: t('rules.delete.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('rules.delete.desc', { name: modal.rule.name })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('rules.btn.delete.confirm')))) : null,
+            editor && modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'editor', className: 'dsm-modal-wide', title: editor.mode === 'create' ? t('rules.create.title') : t('rules.edit.title'), closeLabel: t('btn.cancel'), onClose: closeEditor },
+              React.createElement('div', { className: 'dsm-form' },
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('rules.field.group')),
+                  React.createElement('input', { className: 'dsm-control' + (editorGroupInvalid ? ' dsm-rule-invalid' : ''), value: editor.group || '', disabled: editor.mode === 'edit', placeholder: t('rules.field.group.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { group: e.target.value })) } }),
+                  React.createElement('p', { className: editorGroupInvalid ? 'dsm-rule-hint' : 'dsm-help' }, editor.mode === 'create' ? t('rules.field.group.hint') : t('rules.edit.group.lock'))),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('rules.field.name')),
+                  React.createElement('input', { className: 'dsm-control' + (editorNameInvalid ? ' dsm-rule-invalid' : ''), value: editor.name || '', placeholder: t('rules.field.name.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { name: e.target.value })) } }),
+                  React.createElement('p', { className: editorNameInvalid ? 'dsm-rule-hint' : 'dsm-help' }, editorNameInvalid ? t('rules.name.invalid') : t('rules.name.hint'))),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('rules.field.description')),
+                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: editor.description || '', placeholder: t('rules.field.description.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { description: e.target.value })) } }),
+                  React.createElement('div', { className: 'dsm-char-count' + (editorDescLen > 500 ? ' dsm-char-over' : '') }, editorDescLen + ' / 500')),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('rules.field.body')),
+                  React.createElement('textarea', { className: 'dsm-control', style: { minHeight: '220px' }, value: editor.body || '', placeholder: t('rules.field.body.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { body: e.target.value })) } })),
+                React.createElement('div', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('rules.field.form')),
+                  React.createElement(SourceSelect, { options: RULE_FORM_OPTIONS, value: editor.form || 'flat', onChange: function (v) { setEditor(Object.assign({}, editor, { form: v })) } }),
+                  editor.form === 'bundle'
+                    ? React.createElement('p', { className: 'dsm-help' }, editor.path ? t('rules.bundle.hint', { path: editor.path }) : t('rules.bundle.hint.create'))
+                    : null),
+                editor.mode === 'create' ? React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('rules.field.always')),
+                  React.createElement(Switch, { on: editor.always === true, label: t('rules.field.always'), onClick: function () { setEditor(Object.assign({}, editor, { always: !editor.always })) } })) : null,
+                editor.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(editor.error)) : null),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: closeEditor }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : submitUpdate }, editor.mode === 'create' ? t('rules.btn.create') : t('rules.btn.save')))) : null)
+        }
+
         module.exports.DICT = DICT
         // Test-only export: page 组件 + i18n t，让 client 测试直接渲染 page（绕开
         // ToolsSection 的子组件嵌套——minimal React 不支持子组件 hook 隔离）。
         // 生产环境浏览器 React 会正确递归渲染 ToolsSection 内的 page。
-        module.exports._pages = { MCPPage: MCPPage, SkillManagerSection: SkillManagerSection, AgentsMdPage: AgentsMdPage, HistoryPage: HistoryPage, t: t }
+        module.exports._pages = { MCPPage: MCPPage, SkillManagerSection: SkillManagerSection, AgentsMdPage: AgentsMdPage, HistoryPage: HistoryPage, RulesPage: RulesPage, t: t }
       },
     }
     return module.exports
