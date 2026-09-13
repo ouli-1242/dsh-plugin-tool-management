@@ -36,7 +36,7 @@
     "build:client": "node scripts/sync-client.mjs",
     "prepublishOnly": "npm run build",
     "lint": "node --check lib/client.js && node --check lib/index.js",
-    "test": "npm run build && node --test test/archive.test.mjs test/import.test.mjs test/approval-policy.test.mjs test/subagent-scene.test.mjs"
+    "test": "npm run build && node --test test/archive.test.mjs test/import.test.mjs test/approval-policy.test.mjs test/subagent-scene.test.mjs test/subagent-persona.test.mjs"
   },
   "keywords": [
     "dsh",

@@ -57,6 +57,24 @@ test('expandUploads: 空内容与超量文件只记问题，不阻断同批', ()
   assert.deepEqual(r.problems, [{ name: 'empty.md', reason: '内容为空' }])
 })
 
+test('expandUploads: zip 内超 8 MiB 的条目必须回报原因（曾静默丢失，2026-09-13 实测）', () => {
+  const big = 'A'.repeat(8 * 1024 * 1024 + 1)
+  const r = expandUploads([zipUpload('pack.zip', {
+    'scene-a/SKILL.md': '# bundle',
+    'scene-a/huge.bin': big,
+  })])
+  assert.deepEqual(r.entries.map((e) => e.path), ['scene-a/SKILL.md'])
+  assert.deepEqual(r.problems, [{ name: 'scene-a/huge.bin', reason: 'zip 内单条目超过 8 MiB，已跳过' }])
+})
+
+test('expandUploads: zip 内条目超 2000 只报一次（不刷屏），其余条目照常保留', () => {
+  const files = {}
+  for (let i = 0; i < 2001; i++) files[`s/e${String(i).padStart(4, '0')}.md`] = '# x'
+  const r = expandUploads([zipUpload('pack.zip', files)])
+  assert.equal(r.entries.length, 2000)
+  assert.deepEqual(r.problems, [{ name: 'pack.zip', reason: 'zip 内条目超过 2000 个，其余条目已忽略' }])
+})
+
 test('planPersonaImport: 只看文件名（zip 目录层级忽略）；同批次重名与非法名跳过', () => {
   const r = planPersonaImport([
     { path: 'pack/a/code-review.md', bytes: new Uint8Array([1]) },

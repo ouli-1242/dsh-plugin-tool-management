@@ -81,8 +81,20 @@ export function expandUploads(files: unknown): { entries: RawEntry[]; problems: 
         unzipped = unzipSync(bytes, {
           filter(info) {
             count += 1
-            if (count > MAX_IMPORT_ENTRIES) return false
-            if (!info.name.endsWith('/') && info.originalSize > MAX_IMPORT_ENTRY_BYTES) return false
+            // 被 filter 丢掉的条目必须回报：静默丢弃会让用户以为「全都导入成功了」。
+            // 2026-09-13 实测（限额验证批）：9 MiB 附件与第 2001 个条目都曾无声消失，
+            // 响应里 imported=1 / skipped=[] —— 用户完全看不出少了东西。
+            if (count > MAX_IMPORT_ENTRIES) {
+              // 超条目数时只报一次，避免 2000+ 条问题刷屏。
+              if (count === MAX_IMPORT_ENTRIES + 1) {
+                problems.push({ name, reason: `zip 内条目超过 ${MAX_IMPORT_ENTRIES} 个，其余条目已忽略` })
+              }
+              return false
+            }
+            if (!info.name.endsWith('/') && info.originalSize > MAX_IMPORT_ENTRY_BYTES) {
+              problems.push({ name: info.name, reason: `zip 内单条目超过 ${MAX_IMPORT_ENTRY_BYTES >> 20} MiB，已跳过` })
+              return false
+            }
             return true
           },
         })

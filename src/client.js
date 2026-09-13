@@ -848,7 +848,7 @@ window.__ModuleLoader__.load({
         "subagents.create": "新建人设", "subagents.edit": "编辑人设",
         "subagents.field.name": "人设名", "subagents.field.name.hint": "就是文件名（非空、≤64 字符、不含路径分隔符与 < > : | ? *、不以 . 开头）；创建后不可改名。",
         "subagents.field.description": "描述", "subagents.field.description.placeholder": "例如 擅长 Java 后端实现与重构；需要写或改 Java 代码时调用", "subagents.field.description.hint": "一句话即可：模型据此判断何时调用它。",
-        "subagents.field.model": "模型", "subagents.field.model.placeholder": "留空继承主会话",
+        "subagents.field.model": "模型", "subagents.field.model.placeholder": "留空继承主会话", "subagents.field.provider": "模型来源", "subagents.field.provider.placeholder": "留空继承主会话；跨来源换模型时必填（如 sensenova）", "subagents.field.provider.hint": "「模型来源」与「模型」是一对：只填模型会落在主会话的来源上，跨来源会解析失败。",
         "subagents.field.tools": "工具白名单", "subagents.field.tools.hint": "逗号分隔；留空 = 不限制（基础组合全集）。",
         "subagents.field.body": "人设提示词", "subagents.field.body.placeholder": "写下这个人设的身份、职责与工作方式…",
         "subagents.result.saved": "已保存人设：{name}", "subagents.result.deleted": "已删除人设：{name}",
@@ -972,7 +972,7 @@ window.__ModuleLoader__.load({
         "subagents.create": "New persona", "subagents.edit": "Edit persona",
         "subagents.field.name": "Persona name", "subagents.field.name.hint": "The file name (non-empty, ≤64 chars, no path separators or < > : | ? *, must not start with a dot); it cannot be renamed later.",
         "subagents.field.description": "Description", "subagents.field.description.placeholder": "e.g. Senior Java engineer — use when writing or refactoring Java code", "subagents.field.description.hint": "One sentence is enough — the model routes on it.",
-        "subagents.field.model": "Model", "subagents.field.model.placeholder": "Blank inherits the main session",
+        "subagents.field.model": "Model", "subagents.field.model.placeholder": "Blank inherits the main session", "subagents.field.provider": "Model provider", "subagents.field.provider.placeholder": "Blank inherits the main session; required when switching providers, e.g. sensenova", "subagents.field.provider.hint": "Provider and model are a pair: a model alone resolves against the main session's provider and fails across providers.",
         "subagents.field.tools": "Tool allowlist", "subagents.field.tools.hint": "Comma separated; blank means no restriction (the base tool set).",
         "subagents.field.body": "Persona prompt", "subagents.field.body.placeholder": "Describe the persona's role, responsibilities, and working style…",
         "subagents.result.saved": "Persona saved: {name}", "subagents.result.deleted": "Persona deleted: {name}",
@@ -1112,7 +1112,7 @@ function callApi(path, options) {
       function add(list) {
         var picked = Array.prototype.slice.call(list || [])
         if (!picked.length) return
-        Promise.all(picked.map(function (f) { return f.arrayBuffer().then(function (buf) { return { name: String(f.name || ""), data: bytesToBase64(buf) } }) }))
+        Promise.all(picked.map(function (f) { return f.arrayBuffer().then(function (buf) { return { name: uploadFilePath(f), data: bytesToBase64(buf) } }) }))
           .then(function (entries) { setFiles(function (prev) { return prev.concat(entries) }) })
           .catch(function () {})
       }
@@ -2203,13 +2203,13 @@ function callApi(path, options) {
           }
           React.useEffect(function () { refresh() }, [])
           function openEditor(name) {
-            if (!name) { setModal({ type: 'editor', mode: 'create', form: { name: '', description: '', model: '', tools: '', body: '', error: null } }); return }
+            if (!name) { setModal({ type: 'editor', mode: 'create', form: { name: '', description: '', provider: '', model: '', tools: '', body: '', error: null } }); return }
             setBusy(true)
             apiCall('subagent-get', { name: name }).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
                 var p = res.persona || {}
-                setModal({ type: 'editor', mode: 'edit', form: { name: p.name || name, description: p.description || '', model: p.model || '', tools: (p.tools || []).join(', '), body: p.body || '', error: null } })
+                setModal({ type: 'editor', mode: 'edit', form: { name: p.name || name, description: p.description || '', provider: p.provider || '', model: p.model || '', tools: (p.tools || []).join(', '), body: p.body || '', error: null } })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
@@ -2218,7 +2218,7 @@ function callApi(path, options) {
             if (!modal || modal.type !== 'editor') return
             setBusy(true)
             var op = modal.mode === 'create' ? 'subagent-create' : 'subagent-update'
-            apiCall(op, { name: modal.form.name, description: modal.form.description, model: modal.form.model, tools: modal.form.tools, body: modal.form.body }).then(function (res) {
+            apiCall(op, { name: modal.form.name, description: modal.form.description, provider: modal.form.provider, model: modal.form.model, tools: modal.form.tools, body: modal.form.body }).then(function (res) {
               setBusy(false)
               if (res && res.ok) { setModal(null); setResult({ ok: true, text: t('subagents.result.saved', { name: modal.form.name }) }); refresh(true) }
               else setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, { error: translateError(t, res) }) }))
@@ -2284,6 +2284,10 @@ function callApi(path, options) {
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
                   React.createElement('input', { className: 'dsm-control', value: modal.form.model || '', placeholder: t('subagents.field.model.placeholder'), onChange: function (e) { setForm({ model: e.target.value }) } })),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.provider')),
+                  React.createElement('input', { className: 'dsm-control', value: modal.form.provider || '', placeholder: t('subagents.field.provider.placeholder'), onChange: function (e) { setForm({ provider: e.target.value }) } }),
+                  React.createElement('p', { className: 'dsm-help' }, t('subagents.field.provider.hint'))),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.tools')),
                   React.createElement('input', { className: 'dsm-control', value: modal.form.tools || '', placeholder: 'read_file, glob', onChange: function (e) { setForm({ tools: e.target.value }) } }),

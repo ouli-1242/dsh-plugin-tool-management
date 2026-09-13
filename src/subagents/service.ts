@@ -12,6 +12,8 @@ const message = (e: unknown): string => String((e && (e as Error).message) || e)
 export interface PersonaDoc {
   name: string
   description: string
+  /** 模型路由的 provider 半边（与 model 配对；缺省 = 继承主会话）。 */
+  provider?: string
   model?: string
   tools?: string[]
   body: string
@@ -27,8 +29,8 @@ export interface SubagentService {
   writeOps: ReadonlySet<string>
 }
 
-/** 行式 frontmatter 解析：只认 description / model / tools 三个键（人设文件不需要完整 YAML）。 */
-function parsePersona(raw: string, fallbackName: string): PersonaDoc {
+/** 行式 frontmatter 解析：只认 description / provider / model / tools 四个键（人设文件不需要完整 YAML）。 */
+export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw)
   const data: Record<string, string> = {}
   let body = raw
@@ -44,6 +46,7 @@ function parsePersona(raw: string, fallbackName: string): PersonaDoc {
   return {
     name: fallbackName,
     description: data.description || firstLine,
+    provider: data.provider || undefined,
     model: data.model || undefined,
     tools: tools && tools.length ? tools : undefined,
     body: body.trim(),
@@ -123,7 +126,12 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       persona: p.body,
       ...(p.tools?.length ? { toolFilter: { allow: p.tools } } : {}),
       maxDepth: 1,
-      ...(p.model ? { agentOptions: { model: p.model } } : {}),
+      // provider 与 model 是模型路由的两半：DSH 的 resolveModel(provider, model) 不做
+      // `provider/model` 字符串拆分，只改 model 会落在**主会话的 provider** 上——跨来源
+      // 指定模型（如 sensenova 的 sensenova-6.8-flash-lite）必须两个键一起给。
+      ...(p.provider || p.model
+        ? { agentOptions: { ...(p.provider ? { provider: p.provider } : {}), ...(p.model ? { model: p.model } : {}) } }
+        : {}),
     })
     try {
       const result = await run.result   // 官方契约：child 级失败不 reject（stopReason 体现）
@@ -155,7 +163,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       const docs = await list()
       return {
         ok: true,
-        subagents: docs.map((p) => ({ name: p.name, description: p.description, model: p.model ?? null, tools: p.tools ?? null })),
+        subagents: docs.map((p) => ({ name: p.name, description: p.description, provider: p.provider ?? null, model: p.model ?? null, tools: p.tools ?? null })),
       }
     },
     'subagent-get': async (args: any) => {
@@ -163,7 +171,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       const docs = await list()
       const p = docs.find((d) => d.name === name)
       if (!p) return { ok: false, error: `人设不存在: ${name}` }
-      return { ok: true, persona: { name: p.name, description: p.description, model: p.model ?? '', tools: p.tools ?? [], body: p.body } }
+      return { ok: true, persona: { name: p.name, description: p.description, provider: p.provider ?? '', model: p.model ?? '', tools: p.tools ?? [], body: p.body } }
     },
     'subagent-create': async (args: any) => {
       const name = String((args && args.name) || '').trim()
@@ -232,13 +240,15 @@ function validPersonaName(name: string): boolean {
 }
 
 /** 人设文件序列化：frontmatter 只写用户填过的键；正文 = 人设提示词。 */
-function serializePersona(args: any): string {
+export function serializePersona(args: any): string {
   const description = String((args && args.description) || '').replace(/\r?\n/g, ' ').trim()
+  const provider = String((args && args.provider) || '').trim()
   const model = String((args && args.model) || '').trim()
   const tools = Array.isArray(args?.tools) ? args.tools.map((x: unknown) => String(x).trim()).filter(Boolean) : []
   const body = String((args && args.body) ?? '').trim()
   const lines = ['---']
   if (description) lines.push('description: ' + description)
+  if (provider) lines.push('provider: ' + provider)
   if (model) lines.push('model: ' + model)
   if (tools.length) lines.push('tools: ' + tools.join(', '))
   lines.push('---', '', body, '')
