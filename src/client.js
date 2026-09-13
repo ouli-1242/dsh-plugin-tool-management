@@ -68,8 +68,13 @@ window.__ModuleLoader__.load({
 .dsm-pick-empty{padding:18px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}
 .dsm-archive-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:12px}
 /* 档案弹窗固定高度：加/删段、进出「选工具」子视图都不改变弹窗尺寸。 */
-.dsm-modal-archive{height:min(620px,calc(100vh - 64px))}
-.dsm-modal-archive .dsm-form{min-height:0;overflow:auto}
+.dsm-modal-archive{height:min(720px,calc(100vh - 48px))}
+.dsm-modal-archive .dsm-form{min-height:0;gap:10px;overflow:auto}
+/* 段体高度：min-height 给下限、flex-shrink:0 保证下限优先（四项都在时也各占 300px），
+   装不下由 .dsm-form 整体滚动。列表自身 overflow:auto，永远是它出滚动条。
+   注意不要写成 flex:1 平分——那样四项分 720px 每段只剩约 155px，比原来的固定 216px 还矮。 */
+.dsm-modal-archive .dsm-seg{min-height:300px;flex:0 0 auto}
+.dsm-modal-archive .dsm-seg-body{height:auto;flex:1 1 auto}
 /* ── 段内筛选（场景/记忆等条目多的选段用；条目少时不必显示）────────────────────
    .dsm-seg-filter 段体顶部的搜索行；.dsm-seg-cards 场景卡片列表（比纯勾选行信息量大）。 */
 .dsm-seg-filter{display:flex;align-items:center;gap:8px;padding:6px 6px 0}

@@ -199,11 +199,11 @@ npm run build        # 构建（tsc + 同步客户端 bundle）
 npm run build:client # 只同步 src/client.js → lib/client.js
 npm run lint         # 语法自检（node --check 两个产物）
 npm run check:i18n   # 中英词典键集合 + 占位符对齐
-npm test             # 构建 + i18n 自检 + 全部语义契约测试（node --test test/*.test.mjs，71 例）
+npm test             # 构建 + i18n 自检 + 全部语义契约测试（node --test test/*.test.mjs，72 例）
 ```
 
 > 本项目的验证方式是**直接跑一遍真实行为**（验收证据与已知问题见 [Changelog](docs/Changelog.md)），而不是断言代码当前怎么实现——
-> 后者只是把实现抄一遍，必然通过。例外是九组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 71 例）：
+> 后者只是把实现抄一遍，必然通过。例外是九组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 72 例）：
 > `archive.test.mjs`（引擎状态机：勾=启用、空段可持久化、失败回滚与如实上报）、
 > `import.test.mjs`（导入展开、落点规划与限额回报）、
 > `approval-policy.test.mjs`（never 审批策略探测；用真实 cordis + 真实 `ApprovalService` 复现读取链）、

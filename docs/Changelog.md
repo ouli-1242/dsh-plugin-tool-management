@@ -48,6 +48,8 @@
 - **场景页**：卡片补齐「描述 + 记忆条数 + 已绑定摘要（MCP/技能/子智能体/记忆各多少）+ 磁盘目录名」；新增「改描述」（`rules-update-scene`）；保留场景不显示删除/停用开关；统计标签从硬编码中文改走 i18n。
 - **新建/改场景表单**：独立字段与文案（原来直接复用记忆的字段，出现「留空 = 全局」这类错误语义的占位符）。
 - **场景档案编辑器**：新增第 4 段「记忆」（`archive.memories`，id = `<场景>/<名>`）。勾选语义与其余段同构——**段未定义 = 不碰；段已定义但没勾的记忆不进提示词**；勾选**只影响投影**，记忆文件与内容一律不动。场景改成卡片（描述 + 已勾/总数 + 「始终注入」标记），点「选记忆」进场景内的记忆明细钻取视图。四段都加筛选框。
+- **档案弹窗里的勾选区拉高**（用户反馈「记忆、各种集的选择滑动框都很小」）：弹窗上限 620px → 720px，段体从写死 `height:216px` 改成 `min-height:300px` + `flex:0 0 auto`（**下限优先**），列表自身出滚动条，装不下时由 `.dsm-form` 整体滚动。
+  两种写法的取舍记一笔：`flex:1` 平分看似「填满空间」，但四项分 720px 每段只剩约 155px，**比原来的 216px 还矮**——第一版就是这么写的，算完才发现。已把这条写成断言（禁止 `flex:1`、下限 ≥ 260px、弹窗上限要装得下四段下限）。
 - **人设表单**：模型与工具限制收进「**高级选项**」折叠区（已配置则自动展开）。模型 = 宿主 LLM 目录里的 `provider · model` 下拉 + 「自定义」手填兜底；工具白名单/黑名单 = 勾选器，候选是**全部 Agent 预设工具名的并集**并标注「当前会话可见 / 其它预设里可用」。折叠区**首次展开才拉候选**（枚举预设需要 standing mount，不该在开弹窗时付代价）。
 - **勾选类原语提到模块作用域**（段卡片 / 勾选行 / 筛选行 / 分组标题 / 段头动作 / 段脚注），档案编辑器与人设工具选择器共用同一套排版。
 - **七个页面的副标题统一为同一句式**（`管理X：动作、动作与动作。`）：场景从「定义式 + 两句」改为与其他页同构；子智能体去掉绝对路径；提示词页与会话页的两条原本是**硬编码中文**（英文界面下永远是中文），一并接进 i18n（新增 `prompts.desc` / `sessions.desc`）。
@@ -146,7 +148,7 @@ client.js:526 slot entry crashed in 'settings.section': ReferenceError: sceneLab
 
 ### 契约测试
 
-`npm test` = build + `check:i18n` + **71 例** node --test：
+`npm test` = build + `check:i18n` + **72 例** node --test：
 
 - `archive.test.mjs`（13）：档案纯逻辑 + 引擎状态机
 - `import.test.mjs`（16）：zip/上传展开、落点规划、限额**回报**（不静默丢）
@@ -155,9 +157,9 @@ client.js:526 slot entry crashed in 'settings.section': ReferenceError: sceneLab
 - `subagent-persona.test.mjs`（9）：frontmatter 往返（`provider`/`model`/`toolsDeny`）、目录不存在时创建、重名拒绝
 - `hub-layout.test.mjs`（12）：旧布局搬移不覆盖、`global` 恒在且不可删、记忆必须归属已存在场景、档案记忆段只影响投影、路径回传
 - `skills-state.test.mjs`（3）：**技能状态文件读取韧性** —— 旧文档缺后来新增的来源键 → 自愈补默认值不 fail-closed；文件不存在 → 默认状态；version 不认识 / 非 JSON / 类型写错 → warning + 锁定 + 全部来源停用（fail-closed）
-- `client-exports.test.mjs`（3）：**运行时导出契约** —— 只求值 factory（不跑 `apply`）就必须拿到
+- `client-exports.test.mjs`（4）：**运行时导出契约** —— 只求值 factory（不跑 `apply`）就必须拿到
   `dict`/`pages`/`apply`；词典 zh/en 键集合一致、无空文案；代码里每个字面量 `t('键')` 都能解析。
-  反向护栏：禁止缩进 ≥ 8 空格的 `module.exports.X =`
+  反向护栏：禁止缩进 ≥ 8 空格的 `module.exports.X =`；另有**档案弹窗布局契约**（段体下限优先、禁止 flex:1 平分、列表自身出滚动条）
 - `client-render.test.mjs`（4）：**装配与渲染** —— 假 ctx 跑完整 `apply`，断言它往 `settings.section`
   注入并注册 `dsm-tools`；七个页面组件都被填充；整棵组件树（自建 hook dispatcher，真实 React dispatcher
   接口）递归渲染不抛错；**带数据挂载**：假 fetch 按 op 返回真实形状的夹具并真的执行 effect，
