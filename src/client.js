@@ -767,7 +767,7 @@ window.__ModuleLoader__.load({
         "memory.mode.current": "当前模式", "memory.mode.set": "设为当前模式", "memory.mode.exit": "退出模式",
         "memory.archive.edit": "档案", "memory.archive.title": "场景档案",
         "memory.archive.tools": "MCP 工具集", "memory.archive.skills": "技能集", "memory.archive.subagents": "子智能体绑定",
-        "memory.archive.removeSection": "移除段",
+        "memory.archive.removeSection": "移除段", "memory.archive.save": "保存到场景",
         "memory.archive.addTools": "+ 添加 MCP 工具集", "memory.archive.addSkills": "+ 添加技能集", "memory.archive.addSubagents": "+ 添加子智能体绑定",
         "memory.archive.stale": "失效项（已不存在，已跳过）: {items}",
         "memory.result.archiveSaved": "已保存场景档案：{name}", "memory.result.modeSet": "已进入模式：{name}", "memory.result.modeExited": "已退出模式",
@@ -866,7 +866,7 @@ window.__ModuleLoader__.load({
         "memory.mode.current": "Active mode", "memory.mode.set": "Set as active mode", "memory.mode.exit": "Exit mode",
         "memory.archive.edit": "Profile", "memory.archive.title": "Scene profile",
         "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding",
-        "memory.archive.removeSection": "Remove section",
+        "memory.archive.removeSection": "Remove section", "memory.archive.save": "Save to scene",
         "memory.archive.stale": "Stale entries (no longer exist, skipped): {items}",
         "memory.result.archiveSaved": "Scene profile saved: {name}", "memory.result.modeSet": "Entered mode: {name}", "memory.result.modeExited": "Exited mode",
         "memory.mode.current": "Active mode", "memory.mode.set": "Set as active mode", "memory.mode.exit": "Exit mode",
@@ -1639,8 +1639,6 @@ function callApi(path, options) {
           var sceneForm = sfs[0], setSceneForm = sfs[1]
           var dts = React.useState(null)
           var drillTools = dts[0], setDrillTools = dts[1]
-          var dss = React.useState(null)
-          var drillServer = dss[0], setDrillServer = dss[1]
           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
@@ -1719,12 +1717,12 @@ function callApi(path, options) {
           function toggleMcpServer(server) {
             var sections = modalSections(); if (!sections) return
             var mcp = Object.assign({}, sections.mcp || {})
-            if (mcp[server] !== undefined) { delete mcp[server]; if (drillServer === server) setDrillServer(null) }
+            if (mcp[server] !== undefined) delete mcp[server]
             else mcp[server] = '*'
             setSections(Object.assign({}, sections, { mcp: mcp }))
           }
           function openDrill(server) {
-            setDrillServer(server)
+            setModal(Object.assign({}, modal, { drill: server }))
             setDrillTools(null)
             apiCall('mcpm-tools', { serverName: server }).then(function (res) {
               if (res && res.ok) setDrillTools((res.tools || []).map(function (x) { return { key: server + '/' + x.name, short: x.name, enabled: x.enabled !== false } }))
@@ -1743,7 +1741,7 @@ function callApi(path, options) {
           function submitArchive() {
             if (!modalSections()) return
             setBusy(true)
-            apiCall('scene-archive-save', { scene: modal.name, archive: modal.sections }).then(function (res) {
+            apiCall('scene-archive-save', { scene: modal.name, archive: (function () { var payload = {}; if (modal.sections.mcp) payload.mcp = modal.sections.mcp; if (modal.sections.skills) payload.skills = modal.sections.skills; if (modal.sections.subagents) payload.subagents = modal.sections.subagents; return payload })() }).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
                 setModal(null)
@@ -1829,7 +1827,7 @@ function callApi(path, options) {
                   return React.createElement('div', { className: 'dsm-field' },
                     React.createElement('div', { className: 'dsm-source-head' },
                       React.createElement('span', { className: 'dsm-label' }, t('scenes.mcp.toolsOf') + ' · ' + modal.drill),
-                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setDrillServer(null) } }, t('scenes.mcp.back'))),
+                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(Object.assign({}, modal, { drill: null })) } }, t('scenes.mcp.back'))),
                     known === null ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
                       : known.length ? React.createElement('div', { style: { maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(127,127,127,.35)', borderRadius: '6px', padding: '4px' } },
                         known.map(function (item) {

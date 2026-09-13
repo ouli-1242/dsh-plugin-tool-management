@@ -39,13 +39,13 @@ export function normalizeMcpSpec(raw: unknown): Record<string, '*' | string[]> |
   return out
 }
 
-/** 'mcp'/'skills'/'subagents' 键存在才归一——存在性独立于集合空否。 */
+/** 'mcp'/'skills'/'subagents' 键存在且值非 null 才视为"段已定义"——存在性独立于集合空否（null/缺失 = 未定义）。 */
 export function normalizeArchive(raw: unknown): SceneArchive {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const out: SceneArchive = {}
-  if ('mcp' in obj) { const mcp = normalizeMcpSpec(obj.mcp); if (mcp) out.mcp = mcp }
-  if ('skills' in obj) out.skills = normalizeStringList(obj.skills)
-  if ('subagents' in obj) out.subagents = normalizeStringList(obj.subagents)
+  if (obj.mcp != null) { const mcp = normalizeMcpSpec(obj.mcp); if (mcp) out.mcp = mcp }
+  if (obj.skills != null) out.skills = normalizeStringList(obj.skills)
+  if (obj.subagents != null) out.subagents = normalizeStringList(obj.subagents)
   return out
 }
 
