@@ -19,6 +19,7 @@ import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService } from './rules/service.js'
 import { createArchiveEngine } from './rules/archive-engine.js'
 import { createSubagentService } from './subagents/service.js'
+import { isApprovalNever, neverPolicyHint } from './approval-policy.js'
 import { defineSubagentListTool, defineSubagentRunTool } from './subagents/tools.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
@@ -2456,8 +2457,14 @@ export default {
     }
 
     if (typeof ctx.on === 'function') {
+      // 会话审批策略为 never（「完全权限」预设把 approval 设为 never）时，ask 会被审批层
+      // 自动以「用户拒绝」fail-closed——与其让模型收到莫名其妙拒绝，不如在此直接给可行动报错。
+      // 探测走 ctx.get('approval')（不能用 ctx.approval：inject 未声明该服务时 cordis
+      // 代理会抛 "cannot get property without inject"），实现与回归测试见 approval-policy.ts。
+      const approvalNever = (exec: any): boolean => isApprovalNever(ctx, exec)
       ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', (exec, next) => {
         if (exec && exec.name === 'skill_manager_create') {
+          if (approvalNever(exec)) return Promise.resolve({ kind: 'deny', reason: neverPolicyHint('「新建技能」的确认无法弹出') })
           return Promise.resolve({ kind: 'ask', reason: 'Create a new skill under DSH_HOME/skills' })
         }
         if (exec && exec.name === 'rule_manager_write') {
@@ -2465,7 +2472,9 @@ export default {
           // 不在此处做任何兜底放行。
           return readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite
-              ? { kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }
+              ? (approvalNever(exec)
+                ? { kind: 'deny', reason: neverPolicyHint('「写入记忆」的确认无法弹出') }
+                : { kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' })
               : next()))
             .catch(() => ({ kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }))
         }
@@ -2473,7 +2482,9 @@ export default {
           // 子代理运行花真 token：默认确认（requireConfirmForModelSubagentRun !== false），可关。
           return readPluginSettings()
             .then((s) => ((s as any).requireConfirmForModelSubagentRun !== false
-              ? { kind: 'ask', reason: 'Run a subagent (consumes tokens)' }
+              ? (approvalNever(exec)
+                ? { kind: 'deny', reason: neverPolicyHint('「运行子代理」的确认无法弹出') }
+                : { kind: 'ask', reason: 'Run a subagent (consumes tokens)' })
               : next()))
             .catch(() => ({ kind: 'ask', reason: 'Run a subagent (consumes tokens)' }))
         }

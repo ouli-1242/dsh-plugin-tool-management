@@ -94,7 +94,7 @@ export function expandUploads(files: unknown): { entries: RawEntry[]; problems: 
         if (entryName.endsWith('/')) continue
         const normalized = normalizeEntryPath(entryName)
         if (!normalized) { problems.push({ name: entryName, reason: '路径非法或隐藏项，已跳过' }); continue }
-        if (!normalized.toLowerCase().endsWith('.md')) continue // zip 内只取 .md（其余文件如附件一律不带入）
+        // zip 内保留全部扩展名：bundle 导入需要 SKILL.md 的附件（图片等）；各 planner 自行取舍。
         entries.push({ path: normalized, bytes: content })
       }
       continue
@@ -121,13 +121,14 @@ export function isValidImportGroup(group: string): boolean {
 
 export interface PersonaTarget { name: string; bytes: Uint8Array }
 
-/** 人设落点：**只看文件名**（zip 内的目录层级忽略），一个 .md 一个人设。 */
+/** 人设落点：**只看文件名**（zip 内的目录层级忽略），一个 .md 一个人设；zip 里顺带的非 .md（如附件）忽略。 */
 export function planPersonaImport(entries: RawEntry[]): { targets: PersonaTarget[]; problems: ImportProblem[] } {
   const targets: PersonaTarget[] = []
   const problems: ImportProblem[] = []
   const seen = new Set<string>()
   for (const entry of entries) {
     const base = entry.path.slice(entry.path.lastIndexOf('/') + 1)
+    if (!base.toLowerCase().endsWith('.md')) continue
     const name = base.slice(0, -3) // 去掉 .md
     if (!isValidImportName(name)) {
       problems.push({ name: entry.path, reason: '人设名不合法（非空、≤64 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）' })
@@ -140,26 +141,90 @@ export function planPersonaImport(entries: RawEntry[]): { targets: PersonaTarget
   return { targets, problems }
 }
 
-export interface MemoryTarget { group: string; name: string; bytes: Uint8Array }
+export interface MemoryAttachment { name: string; bytes: Uint8Array }
+export interface MemoryTarget {
+  group: string
+  name: string
+  bytes: Uint8Array
+  kind: 'flat' | 'bundle'
+  /** 仅 bundle：SKILL.md 的同层附件（名字平铺在 bundle 目录里，与 rules-attach 落点一致）。 */
+  attachments?: MemoryAttachment[]
+}
+
+/** bundle 附件限额：与 rules-attach 同口径（名字平铺、单个 8 MiB 由 expandUploads 兜底、单包 32 个/16 MiB）。 */
+const MAX_BUNDLE_ATTACHMENTS = 32
+const MAX_BUNDLE_ATTACH_TOTAL = 16 * 1024 * 1024
 
 /**
- * 记忆落点：zip 内带目录 → 目录路径即场景/分组；裸 .md → 落到 defaultScene
- * （空串 = 全局：任何对话都注入）。bundle（`SKILL.md`）本轮不支持，跳过并回报。
+ * 记忆落点：
+ * - 裸 `.md` → 落到 defaultScene（空串 = 全局：任何对话都注入）；zip 内带目录 → 目录路径即场景/分组。
+ * - zip 内 `<场景路径>/<名>/SKILL.md` → bundle 记忆（目录末段是记忆名，其余前缀是场景）；同层非 `.md`
+ *   文件作为附件一并带入（`.md` 不带——bundle 是叶子，塞进去不会被发现，静默降级反而误导）。
+ * - zip 根层的裸 `SKILL.md` 没有目录名可当记忆名 → 跳过并回报；`SKILL.md` 的大小写变体也跳过
+ *   （发现层只认精确 `SKILL.md`，NTFS 大小写不敏感下两者不能共存）。
  */
 export function planMemoryImport(entries: RawEntry[], defaultScene: string): { targets: MemoryTarget[]; problems: ImportProblem[] } {
   const fallback = String(defaultScene || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim()
   const targets: MemoryTarget[] = []
   const problems: ImportProblem[] = []
   const seen = new Set<string>()
+
+  const split = (path: string): { dir: string; base: string } => {
+    const idx = path.lastIndexOf('/')
+    return { dir: idx >= 0 ? path.slice(0, idx) : '', base: path.slice(idx + 1) }
+  }
+
+  // pass 1：认 bundle 目录（精确 SKILL.md；大小写变体只报跳过，不当 bundle 也不当 flat）。
+  const bundleDocs = new Map<string, RawEntry>()
   for (const entry of entries) {
-    const idx = entry.path.lastIndexOf('/')
-    const dir = idx >= 0 ? entry.path.slice(0, idx) : ''
-    const base = entry.path.slice(idx + 1)
-    const name = base.slice(0, -3) // 去掉 .md
-    if (name.toLowerCase() === 'skill') {
-      problems.push({ name: entry.path, reason: 'SKILL.md（bundle 形态）暂不支持导入，已跳过' })
+    const { dir, base } = split(entry.path)
+    if (base !== 'SKILL.md' && base.toLowerCase() !== 'skill.md') continue
+    if (base !== 'SKILL.md') { problems.push({ name: entry.path, reason: 'SKILL.md 大小写变体不导入（发现层只认精确 SKILL.md，且与 NTFS 大小写不敏感冲突），已跳过' }); continue }
+    if (dir === '') { problems.push({ name: entry.path, reason: 'SKILL.md 在 zip 根层，没有目录名可作记忆名，已跳过' }); continue }
+    bundleDocs.set(dir, entry)
+  }
+
+  // pass 2：bundle 附件（同层非 .md）；深层与同层 .md 明确回报，bundle 目录外的非 .md 维持旧口径静默忽略。
+  const attachments = new Map<string, MemoryAttachment[]>()
+  for (const entry of entries) {
+    const { dir, base } = split(entry.path)
+    if (base.toLowerCase().endsWith('.md')) continue
+    const bundleDir = bundleDocs.has(dir) ? dir : [...bundleDocs.keys()].find((d) => dir.startsWith(d + '/'))
+    if (!bundleDir) continue
+    if (dir !== bundleDir) { problems.push({ name: entry.path, reason: 'bundle 只支持一层附件（SKILL.md 同层），子目录条目已跳过' }); continue }
+    if (!entry.bytes.length) { problems.push({ name: entry.path, reason: '附件内容为空，已跳过' }); continue }
+    const name = base
+    if (!isValidImportName(name)) { problems.push({ name: entry.path, reason: '附件名不合法，已跳过' }); continue }
+    const list = attachments.get(bundleDir) || []
+    if (list.length >= MAX_BUNDLE_ATTACHMENTS) { problems.push({ name: entry.path, reason: `附件超过 ${MAX_BUNDLE_ATTACHMENTS} 个，已跳过` }); continue }
+    const total = list.reduce((sum, a) => sum + a.bytes.length, 0) + entry.bytes.length
+    if (total > MAX_BUNDLE_ATTACH_TOTAL) { problems.push({ name: entry.path, reason: `附件合计超过 ${MAX_BUNDLE_ATTACH_TOTAL >> 20} MiB，已跳过` }); continue }
+    list.push({ name, bytes: entry.bytes })
+    attachments.set(bundleDir, list)
+  }
+
+  // pass 3：先规划 bundle 目标（含 SKILL.md 同层 .md 的明确跳过），再走 flat。
+  for (const [dir, doc] of bundleDocs) {
+    const segs = dir.split('/')
+    const name = segs[segs.length - 1]
+    const group = segs.slice(0, -1).join('/')
+    if (!isValidImportName(name)) { problems.push({ name: doc.path, reason: 'bundle 名不合法（非空、≤64 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头），已跳过' }); continue }
+    if (!isValidImportGroup(group)) { problems.push({ name: doc.path, reason: '场景名不合法，已跳过' }); continue }
+    const id = group ? `${group}/${name}` : name
+    if (seen.has(id)) { problems.push({ name: doc.path, reason: '同批次重名，已跳过' }); continue }
+    seen.add(id)
+    targets.push({ group, name, bytes: doc.bytes, kind: 'bundle', attachments: attachments.get(dir) || [] })
+  }
+  for (const entry of entries) {
+    const { dir, base } = split(entry.path)
+    if (!base.toLowerCase().endsWith('.md')) continue
+    if (base === 'SKILL.md') continue
+    if (base.toLowerCase() === 'skill.md') continue // pass 1 已回报
+    if ([...bundleDocs.keys()].some((d) => dir === d || dir.startsWith(d + '/'))) {
+      problems.push({ name: entry.path, reason: 'bundle 目录内的非 SKILL.md 的 .md 不导入（bundle 是叶子，放进去不会被发现），已跳过' })
       continue
     }
+    const name = base.slice(0, -3) // 去掉 .md
     if (!isValidImportName(name)) {
       problems.push({ name: entry.path, reason: '记忆名不合法（非空、≤64 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）' })
       continue
@@ -169,7 +234,7 @@ export function planMemoryImport(entries: RawEntry[], defaultScene: string): { t
     const id = group ? `${group}/${name}` : name
     if (seen.has(id)) { problems.push({ name: entry.path, reason: '同批次重名，已跳过' }); continue }
     seen.add(id)
-    targets.push({ group, name, bytes: entry.bytes })
+    targets.push({ group, name, bytes: entry.bytes, kind: 'flat' })
   }
   return { targets, problems }
 }

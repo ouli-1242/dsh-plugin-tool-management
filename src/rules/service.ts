@@ -1426,7 +1426,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const planned = planMemoryImport(entries, scene)
     const skipped: Array<{ name: string; reason: string }> = [...problems, ...planned.problems]
     const imported: string[] = []
-    const accepted: Array<{ group: string; name: string; text: string }> = []
+    const accepted: Array<{ group: string; name: string; text: string; kind: 'flat' | 'bundle'; attachments: Array<{ name: string; data: Buffer }> }> = []
     for (const target of planned.targets) {
       if (target.group !== '' && !isValidGroupPath(target.group)) { skipped.push({ name: target.name, reason: '场景名非法，已跳过' }); continue }
       if (!isValidGroupSegment(target.name)) { skipped.push({ name: target.name, reason: '记忆名不合法，已跳过' }); continue }
@@ -1436,20 +1436,41 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
         skipped.push({ name: target.name, reason: `正文超过 ${MAX_RULE_BYTES >> 10} KiB，已跳过` })
         continue
       }
+      // bundle 附件复检（规划层已过滤，这里按 rules-attach 同口径再拦一次，防绕过规划层的调用方）。
+      const rawAttachments = target.kind === 'bundle' ? target.attachments || [] : []
+      const checkedAttachments: Array<{ name: string; data: Buffer }> = []
+      let attachTotal = 0
+      for (const att of rawAttachments) {
+        if (!isValidGroupSegment(att.name)) { skipped.push({ name: `${target.name}/${att.name}`, reason: '附件名不合法，已跳过' }); continue }
+        const data = Buffer.from(att.bytes)
+        if (!data.length) { skipped.push({ name: `${target.name}/${att.name}`, reason: '附件内容为空，已跳过' }); continue }
+        if (data.length > MAX_ATTACH_ENTRY_BYTES) { skipped.push({ name: `${target.name}/${att.name}`, reason: `附件过大（单个上限 ${MAX_ATTACH_ENTRY_BYTES >> 20} MiB），已跳过` }); continue }
+        attachTotal += data.length
+        if (attachTotal > MAX_ATTACH_TOTAL_BYTES) { skipped.push({ name: `${target.name}/${att.name}`, reason: `附件合计超过 ${MAX_ATTACH_TOTAL_BYTES >> 20} MiB，已跳过` }); continue }
+        checkedAttachments.push({ name: att.name, data })
+      }
       const existing = await locateRule(target.group, target.name)
       if (existing) {
         skipped.push({ name: target.group ? `${target.group}/${target.name}` : target.name, reason: '同名已存在（已跳过）' })
         continue
       }
-      accepted.push({ group: target.group, name: target.name, text })
+      accepted.push({ group: target.group, name: target.name, text, kind: target.kind, attachments: checkedAttachments })
     }
     if (!accepted.length) return { ok: true, imported, skipped }
     const index = await readIndex(stateDir)
     for (const item of accepted) {
       const id = item.group ? `${item.group}/${item.name}` : item.name
       try {
-        await mkdir(join(rulesRoot, item.group), { recursive: true })
-        await writeFileAtomically(join(rulesRoot, item.group, item.name + '.md'), item.text)
+        if (item.kind === 'bundle') {
+          // 与 rules-create 同落点：bundle = <场景>/<名>/ 目录，正文 SKILL.md，附件平铺同层。
+          const bundleDir = join(rulesRoot, item.group, item.name)
+          await mkdir(bundleDir, { recursive: true })
+          await writeFileAtomically(join(bundleDir, 'SKILL.md'), item.text)
+          for (const att of item.attachments) await writeFileAtomicBinary(join(bundleDir, att.name), att.data)
+        } else {
+          await mkdir(join(rulesRoot, item.group), { recursive: true })
+          await writeFileAtomically(join(rulesRoot, item.group, item.name + '.md'), item.text)
+        }
       } catch (e) {
         skipped.push({ name: id, reason: '写入失败：' + message(e) })
         continue
