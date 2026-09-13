@@ -1154,11 +1154,35 @@ function defaultManagerState() {
     disabledSkills[root.key] = [];
     enabledSkills[root.key] = [];
   }
-  return { version: 1, sources, disabledSkills, enabledSkills, customRoots: [] };
+  return {
+    version: 1,
+    sources,
+    disabledSkills,
+    enabledSkills,
+    customRoots: [],
+    // 同名技能「首选来源」：技能名 → 来源 key。缺键 = 按来源 rank 取最高优先级者。
+    preferredSkills: Object.create(null),
+  };
 }
 
 function validStateSkillName(name) {
   return validDiscoveryName(name);
+}
+
+/**
+ * 首选表的键是技能**声明名**（不是文件名）——声明名允许大小写与空格（此时技能本身带
+ * name.invalid 诊断，但仍可被选择）。这里只做「能当 JSON 键、不像路径」的宽松校验，
+ * 避免一个脏键把整份状态文件判为非法（那会让全部技能 fail-closed 停用）。
+ */
+function validPreferredSkillName(name) {
+  return (
+    typeof name === "string" &&
+    name.length > 0 &&
+    name.length <= MAX_ENTRY_NAME_LENGTH &&
+    !name.includes("\0") &&
+    !name.includes("/") &&
+    !name.includes("\\")
+  );
 }
 
 /** 状态文件已存在但不可用时一律关闭外部来源，避免损坏配置重新暴露技能。 */
@@ -1205,6 +1229,17 @@ function validManagerStateDocument(value) {
   // 自定义来源列表：可选字段；容器必须是数组（条目级合法性由 normalize 逐条裁剪）。
   if (value.customRoots !== undefined && !Array.isArray(value.customRoots))
     return false;
+  // 同名首选表：可选字段；只校验容器与值类型，键值逐条在 normalize 里裁剪（见 validPreferredSkillName）。
+  if (value.preferredSkills !== undefined) {
+    if (
+      !value.preferredSkills ||
+      typeof value.preferredSkills !== "object" ||
+      Array.isArray(value.preferredSkills)
+    )
+      return false;
+    for (const key of Object.values(value.preferredSkills))
+      if (typeof key !== "string") return false;
+  }
   for (const root of userRoots()) {
     if (root.key === "dsh") continue;
     if (typeof value.sources[root.key] !== "boolean") return false;
@@ -1265,6 +1300,21 @@ function normalizeManagerState(value) {
           ...new Set(list.filter(validStateSkillName)),
         ].sort();
       }
+    }
+  }
+  // 同名首选表：键必须是技能声明名、值必须指向一个已知来源（用户级 / 自定义 / 项目级），
+  // 否则丢弃该条（源目录被移除后残留的首选会自然失效）。
+  const preferred = value.preferredSkills;
+  if (preferred && typeof preferred === "object" && !Array.isArray(preferred)) {
+    for (const [name, rootKey] of Object.entries(preferred)) {
+      if (!validPreferredSkillName(name) || typeof rootKey !== "string") continue;
+      if (
+        !userRoots().some((root) => root.key === rootKey) &&
+        !customKeys.has(rootKey) &&
+        !PROJECT_ROOT_KEY_RE.test(rootKey)
+      )
+        continue;
+      normalized.preferredSkills[name] = rootKey;
     }
   }
   return normalized;
@@ -1523,6 +1573,67 @@ async function setPolicySkillEnabled(root, name, enabled, log) {
 /** enabled=true 恢复模型与 / 手动调用；false 同时停用两种调用入口。 */
 export async function setSkillEnabled(root, name, enabled, log) {
   return setPolicySkillEnabled(root, name, enabled, log);
+}
+
+/**
+ * 同名技能「首选来源」：默认同名技能按来源 rank 取优先级最高者生效、其余显示为被覆盖；
+ * 这里让用户显式指定哪个同名技能生效（preferred=false 取消，回到 rank 顺序）。
+ * 只写本地策略，不改任何源文件。
+ */
+export async function setPreferredSkill(root, name, preferred, log) {
+  const definition = await checkedPolicyRootDefinition(root);
+  if (definition && definition.ok === false) return definition;
+  if (!definition) return readonlyError("toggle");
+  const resolved = await resolveEntry(definition, name);
+  if (resolved === null)
+    return {
+      ok: false,
+      error: `技能不存在: ${name}`,
+      code: "error.skill.notFound",
+      params: { name },
+    };
+  let summary;
+  try {
+    summary = entryOf(
+      name,
+      resolved.kind,
+      resolved.docPath,
+      parseSkillDoc(
+        await fs.readFile(resolved.realDocPath || resolved.docPath, "utf8"),
+      ),
+    );
+  } catch {
+    return {
+      ok: false,
+      error: `技能不存在: ${name}`,
+      code: "error.skill.notFound",
+      params: { name },
+    };
+  }
+  if (!summary.loadable)
+    return {
+      ok: false,
+      error: `技能结构不完整，无法设为同名首选: ${name}`,
+      code: "error.skill.notLoadable",
+      params: { name, action: "prefer" },
+    };
+  // 首选表按**声明名**索引（与 groupLoadableSkillsByName 的分组键同源），不是文件名。
+  const canonicalName = summary.declaredName || name;
+  const current = await readManagerState();
+  if (current.writable === false) return invalidManagerStateWrite();
+  const map = { ...(current.state.preferredSkills || {}) };
+  if (preferred === false) delete map[canonicalName];
+  else map[canonicalName] = definition.key;
+  current.state.preferredSkills = map;
+  await writeManagerState(current.state);
+  if (log)
+    log(
+      preferred === false ? "skill-unprefer" : "skill-prefer",
+      preferred === false
+        ? `取消同名首选 ${canonicalName}`
+        : `同名首选 ${canonicalName} → ${definition.key}`,
+    );
+  return { name: canonicalName, root: preferred === false ? null : definition.key };
 }
 
 async function safeExistingEntryPaths(root, name) {
@@ -2773,10 +2884,26 @@ function canonicalSkillName(item) {
   return item.entry.declaredName || item.entry.name;
 }
 
-/** 真实路径去重后按声明名分组；管理页与当前工作区 provider 共用来源优先级。 */
-function groupLoadableSkillsByName(items) {
+/**
+ * 真实路径去重后按声明名分组；管理页与当前工作区 provider 共用来源优先级。
+ *
+ * `preferred`（技能名 → 来源 key）是用户对同名技能的显式选择：命中的来源排到同名前，
+ * 其余仍按来源 rank 排序；未命中（或键已失效）时退化为纯 rank 顺序。
+ */
+export function groupLoadableSkillsByName(items, preferred) {
+  const preferredFor = (item) => {
+    if (!preferred) return null;
+    const key = preferred[canonicalSkillName(item)];
+    return typeof key === "string" ? key : null;
+  };
+  const ordered = [...items].sort((a, b) => {
+    const rankA = preferredFor(a) === a.root.key ? 0 : 1;
+    const rankB = preferredFor(b) === b.root.key ? 0 : 1;
+    if (rankA !== rankB) return rankA - rankB;
+    return a.root.rank - b.root.rank;
+  });
   const groups = new Map();
-  for (const item of [...items].sort((a, b) => a.root.rank - b.root.rank)) {
+  for (const item of ordered) {
     if (!item.entry.loadable) continue;
     const name = canonicalSkillName(item);
     const group = groups.get(name) || [];
@@ -2788,11 +2915,15 @@ function groupLoadableSkillsByName(items) {
 
 function markWinners(items, options = {}) {
   const winners = new Map();
+  const preferred = options.preferred;
   for (const [
     canonicalName,
     [winner, ...shadowed],
-  ] of groupLoadableSkillsByName(items)) {
+  ] of groupLoadableSkillsByName(items, preferred)) {
     winners.set(canonicalName, winner);
+    // 只有「首选命中且确实赢了」才算首选；来源被停用/移除时不谎报。
+    if (preferred && preferred[canonicalName] === winner.root.key)
+      winner.view.preferred = true;
     if (options.markShadowed !== false) {
       for (const item of shadowed)
         item.view.shadowedBy = {
@@ -2913,7 +3044,8 @@ export async function state(options = {}) {
     });
   }
   const userItems = all.filter((item) => item.root.scope !== "project");
-  markWinners(userItems);
+  const preferredSkills = policyResult.state.preferredSkills || null;
+  markWinners(userItems, { preferred: preferredSkills });
   const projectGroups = new Map();
   for (const item of all.filter(
     (candidate) => candidate.root.scope === "project",
@@ -2928,7 +3060,7 @@ export async function state(options = {}) {
       ...item,
       view: { ...item.view },
     }));
-    markWinners([...projectItems, ...userCopies]);
+    markWinners([...projectItems, ...userCopies], { preferred: preferredSkills });
   }
   const seenProjects = new Set();
   for (const root of result.roots.filter((item) => item.scope === "project")) {

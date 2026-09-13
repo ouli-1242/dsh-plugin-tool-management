@@ -12,6 +12,7 @@ import { basename, join } from 'node:path'
 import {
   state,
   setSkillEnabled,
+  setPreferredSkill,
   setSourceEnabled,
   deleteSkill,
   restoreTrash,
@@ -374,6 +375,7 @@ export function createSkillsService(ctx: any): SkillsService {
   // 写操作清单：与下方 ops 表同文件同源维护；HTTP 端门禁由 index.ts 从本集合派生，勿在宿主端另抄一份。
   const writeOps: ReadonlySet<string> = new Set([
     'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable',
+    'skill-prefer', 'skill-unprefer',
     'skill-create', 'skill-import', 'skill-upload', 'skill-delete',
     'skill-trash-restore', 'skill-trash-delete', 'skill-custom-add', 'skill-custom-remove',
   ])
@@ -402,6 +404,15 @@ export function createSkillsService(ctx: any): SkillsService {
     ),
     'skill-source-disable': wrap(
       (args) => write(async () => setSourceEnabled(await requestRoot(String(args.root || '')), false, log)),
+      afterWrite,
+    ),
+    // 同名技能首选来源（手工指定哪个同名版本生效；只写本地策略）。
+    'skill-prefer': wrap(
+      (args) => write(async () => setPreferredSkill(await requestRoot(String(args.root || 'dsh')), String(args.name || ''), true, log)),
+      afterWrite,
+    ),
+    'skill-unprefer': wrap(
+      (args) => write(async () => setPreferredSkill(await requestRoot(String(args.root || 'dsh')), String(args.name || ''), false, log)),
       afterWrite,
     ),
     // 创建 / 导入 / 删除 / 回收站
