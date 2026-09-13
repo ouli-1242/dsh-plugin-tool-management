@@ -88,6 +88,34 @@ window.__ModuleLoader__.load({
 .dsm-scene-card-head{display:flex;min-height:36px;align-items:center;gap:9px;padding:6px 9px}
 .dsm-scene-card-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsm-scene-card-body{border-top:1px solid var(--dsw-alias-border-l1);padding:4px 6px}
+/* 记忆段场景卡片：名称与说明各占一行。
+   .dsm-pick-main 是行内 span（只在 .dsm-pick 里靠 flex:1 撑开），直接塞两段文字会**同行内联换行**——
+   描述一长卡片就被撑成纵向。这里显式改成纵向 flex，两行各自单行省略。 */
+.dsm-scene-card-head .dsm-pick-main{display:flex;flex-direction:column;gap:2px}
+/* ── 场景页（场景档案）────────────────────────────────────────────────────
+   四类信息各占一行，互不挤：标题行（名字/别名/标签/开关）、描述行（单行省略）、动作行（主次按钮）。
+   卡片上**不再出现数量**（记忆条数、已配 N 台 MCP…）：它们是上次「卡片显得杂乱」的直接来源，
+   现在统一收进页首的「当前模式」条里，只有一处。 */
+.dsm-mode-bar{display:flex;min-width:0;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-mode-bar-on{border-color:var(--dsw-alias-state-success-primary)}
+.dsm-mode-bar .dsm-btn{margin-left:auto;flex:none}
+.dsm-mode-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--dsw-alias-label-tertiary)}
+.dsm-mode-bar-on .dsm-mode-dot{background:var(--dsw-alias-state-success-primary)}
+.dsm-mode-main{min-width:0;flex:1}
+.dsm-mode-title{overflow:hidden;font-size:13px;font-weight:620;text-overflow:ellipsis;white-space:nowrap}
+.dsm-mode-sub{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}
+.dsm-scenes{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.dsm-scene-tile{display:flex;min-width:0;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-scene-tile-mode{border-color:var(--dsw-alias-state-success-primary)}
+.dsm-scene-tile-head{display:flex;min-width:0;align-items:center;gap:7px;padding:11px 12px 0}
+.dsm-scene-tile-name{overflow:hidden;font-size:14px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
+.dsm-scene-tile-key{flex:none;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px}
+.dsm-scene-tile-head .dsm-tag{flex:none}
+.dsm-scene-tile-switch{margin-left:auto;flex:none}
+.dsm-scene-tile-desc{overflow:hidden;margin:5px 0 0;padding:0 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
+.dsm-scene-tile-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:11px;padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-scene-tile-links{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-left:auto}
+@container(max-width:640px){.dsm-scenes{grid-template-columns:1fr}}
 .dsm-tools-grid{display:flex;max-height:180px;padding:6px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}
 .dsm-tools-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .dsm-chip{display:inline-flex;min-height:22px;align-items:center;gap:5px;padding:0 7px;border:1px solid var(--dsw-alias-border-l3);border-radius:6px;color:var(--dsw-alias-label-secondary);font-size:11px}
@@ -237,10 +265,13 @@ window.__ModuleLoader__.load({
         "tabs.scenes": "场景", "tabs.skills": "技能", "tabs.subagents": "子智能体", "tabs.prompts": "提示词", "tabs.memory": "记忆", "tabs.sessions": "会话",
         "scenes.title": "场景", "scenes.desc": "管理场景：可以预设不同的使用场景，包含 MCP、Skills、子智能体、记忆",
         "scenes.stat.total": "个场景", "scenes.stat.active": "个已启用", "scenes.stat.archives": "个有档案",
-        "scenes.noDesc": "还没有描述（点「改描述」补一句）", "scenes.memCount": "{count} 条记忆",
-        "scenes.profile.summary": "已配：{parts}", "scenes.profile.empty": "档案为空",
+        "scenes.noDesc": "还没有描述",
+        "scenes.mode.free": "自由模式", "scenes.mode.free.hint": "各场景按自己的启用开关注入记忆；切入某个模式后按它的档案收窄。",
+        "scenes.mode.active": "当前模式：{name}", "scenes.mode.profile": "档案：{parts}", "scenes.mode.noProfile": "这个场景还没有档案",
+        "scenes.mode.enter": "切入此模式", "scenes.empty": "还没有场景，点「新建场景」创建",
+        "scenes.field.desc.limit": "最多 {count} 字；超出部分在卡片上省略。",
         "scenes.profile.mcp": "MCP {count} 台", "scenes.profile.skills": "技能 {count} 个", "scenes.profile.subagents": "子智能体 {count} 个", "scenes.profile.memories": "记忆 {count} 条",
-        "scenes.hasArchive": "档案", "scenes.mcp.hint": "添加「MCP 工具集」后，勾选要启用的服务器（含未运行的）；「选工具」可细化到具体工具。",
+        "scenes.mcp.hint": "添加「MCP 工具集」后，勾选要启用的服务器（含未运行的）；「选工具」可细化到具体工具。",
         "scenes.seg.selectAll": "全选", "scenes.seg.clear": "清空", "scenes.seg.checked": "{checked}/{total} 已勾选",
         "scenes.archive.sectionOff": "未定义",
         "scenes.archive.summary": "档案：MCP {mcp} 台 · 技能 {skills} 个 · 子智能体 {subagents} 个 · 记忆 {memories} 条",
@@ -255,7 +286,7 @@ window.__ModuleLoader__.load({
         "scenes.mem.noMatch": "没有匹配项", "scenes.mem.noScenes": "还没有场景——到「场景」页创建。", "scenes.mem.emptyScene": "该场景还没有记忆",
         "scenes.mem.pick": "选记忆", "scenes.mem.drill": "记忆明细", "scenes.mem.drillHint": "勾选 = 该场景下注入这条记忆；不勾 = 不注入（文件与内容都不动）。",
         "scenes.mem.sceneCount": "{checked}/{total} 条已勾选", "scenes.mem.alwaysOn": "始终注入",
-        "memory.mode.current": "当前模式", "memory.mode.set": "设为当前模式", "memory.mode.exit": "退出模式",
+        "memory.mode.current": "当前模式", "memory.mode.exit": "退出模式",
         "memory.archive.edit": "档案", "memory.archive.title": "场景档案",
         "memory.archive.tools": "MCP 工具集", "memory.archive.skills": "技能集", "memory.archive.subagents": "子智能体绑定", "memory.archive.memories": "记忆",
         "memory.archive.removeSection": "移除段", "memory.archive.save": "保存到场景",
@@ -423,10 +454,13 @@ window.__ModuleLoader__.load({
         "tabs.scenes": "Scenes", "tabs.skills": "Skills", "tabs.subagents": "Subagents", "tabs.prompts": "Prompts", "tabs.memory": "Memories", "tabs.sessions": "Sessions",
         "scenes.title": "Scenes", "scenes.desc": "Manage scenes: preset different usage scenes combining MCP servers, skills, subagents and memories",
         "scenes.stat.total": "scene(s)", "scenes.stat.active": "enabled", "scenes.stat.archives": "with a profile",
-        "scenes.noDesc": "No description yet (use Edit to add one)", "scenes.memCount": "{count} memor(ies)",
-        "scenes.profile.summary": "Configured: {parts}", "scenes.profile.empty": "empty profile",
+        "scenes.noDesc": "No description yet",
+        "scenes.mode.free": "Free mode", "scenes.mode.free.hint": "Each scene injects memories by its own switch; entering a mode narrows injection to that profile.",
+        "scenes.mode.active": "Active mode: {name}", "scenes.mode.profile": "Profile: {parts}", "scenes.mode.noProfile": "This scene has no profile yet",
+        "scenes.mode.enter": "Enter this mode", "scenes.empty": "No scenes yet — use New scene",
+        "scenes.field.desc.limit": "Up to {count} characters; longer text is clipped on the card.",
         "scenes.profile.mcp": "{count} MCP", "scenes.profile.skills": "{count} skill(s)", "scenes.profile.subagents": "{count} subagent(s)", "scenes.profile.memories": "{count} memor(ies)",
-        "scenes.hasArchive": "profile", "scenes.mcp.hint": "Add the MCP section first, then check the servers to enable (stopped ones included); use Pick tools to narrow to specific tools.",
+        "scenes.mcp.hint": "Add the MCP section first, then check the servers to enable (stopped ones included); use Pick tools to narrow to specific tools.",
         "scenes.seg.selectAll": "Select all", "scenes.seg.clear": "Clear", "scenes.seg.checked": "{checked}/{total} selected",
         "scenes.archive.sectionOff": "not defined",
         "scenes.archive.summary": "Profile: {mcp} MCP server(s) · {skills} skill(s) · {subagents} subagent(s) · {memories} memory item(s)",
@@ -441,7 +475,7 @@ window.__ModuleLoader__.load({
         "scenes.mem.noMatch": "Nothing matches", "scenes.mem.noScenes": "No scenes yet — create one on the Scenes page.", "scenes.mem.emptyScene": "This scene has no memories yet",
         "scenes.mem.pick": "Pick memories", "scenes.mem.drill": "Memory details", "scenes.mem.drillHint": "Checked = this memory is injected for the scene; unchecked = not injected (file and content untouched).",
         "scenes.mem.sceneCount": "{checked}/{total} checked", "scenes.mem.alwaysOn": "always injected",
-        "memory.mode.current": "Active mode", "memory.mode.set": "Set as active mode", "memory.mode.exit": "Exit mode",
+        "memory.mode.current": "Active mode", "memory.mode.exit": "Exit mode",
         "memory.archive.edit": "Profile", "memory.archive.title": "Scene profile",
         "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding", "memory.archive.memories": "Memories",
         "memory.archive.addTools": "+ Tools", "memory.archive.addSkills": "+ Skills", "memory.archive.addSubagents": "+ Subagents", "memory.archive.addMemories": "+ Memories",
@@ -2011,6 +2045,37 @@ function callApi(path, options) {
       return name
     }
 
+    /**
+     * 场景描述在卡片上最多显示多少个字。
+     *
+     * 描述是自由文本，卡片只留一行：不裁的话一个长描述会把卡片撑成纵向（整页高度失控），
+     * 保留场景「全局」尤其明显——它的名字只有两个字，剩下的宽度全被描述占满。
+     * 上限同时写在新建/编辑表单的 `maxLength` 上（见场景表单），显示层再裁一次兜住历史数据。
+     */
+    var SCENE_DESC_MAX = 60
+    /** 压平空白并裁到 max 个字符（含省略号）；返回空串 = 没有描述。 */
+    function clipText(value, max) {
+      var s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim()
+      if (s.length <= max) return s
+      return s.slice(0, max - 1) + '…'
+    }
+    /** 场景页卡片上的描述行：**只有描述**，数量（记忆条数 / 已配 N 台 MCP…）不进卡片。 */
+    function sceneTileDesc(scene) {
+      return clipText(scene && scene.description, SCENE_DESC_MAX)
+    }
+    /**
+     * 档案弹窗「记忆」段里场景卡片的说明行。
+     *
+     * 保留场景「全局」的记忆恒定注入，「已勾选 N/M」对它没有意义（勾不勾都一样注入）——
+     * 所以全局只显示描述；其余场景的描述后面接勾选进度（那是这一段唯一的行为依据，不能省）。
+     */
+    function sceneMemDesc(scene, checked, total) {
+      var desc = clipText(scene && scene.description, SCENE_DESC_MAX)
+      if (scene && scene.global === true) return desc
+      var progress = t('scenes.mem.sceneCount', { checked: checked, total: total })
+      return desc ? desc + ' · ' + progress : progress
+    }
+
     // ---------- 场景记忆页（场景 = scene-memory/ 下的一级目录；内容自动生效）----------
         //
         // 变更单 01 之后 Rules 与 Scenes 合并为本页：**场景（一级目录）是分组维度，
@@ -2274,12 +2339,13 @@ function callApi(path, options) {
                       return React.createElement('div', null, shown.map(function (g) {
                         var ids = g.items.map(function (m) { return String(m.id) })
                         var on = ids.filter(function (id) { return (sections.memories || []).indexOf(id) >= 0 }).length
+                        // 说明行由 sceneMemDesc 统一决定：全局只说描述，其余「描述 · 勾选进度」。
+                        var sub = sceneMemDesc(g.scene, on, ids.length)
                         return React.createElement('div', { key: 'mg:' + g.scene.name, className: 'dsm-scene-card' },
                           React.createElement('div', { className: 'dsm-scene-card-head' },
                             React.createElement('span', { className: 'dsm-pick-main' },
                               React.createElement('span', { className: 'dsm-pick-name' }, g.scene.label || g.scene.name),
-                              React.createElement('span', { className: 'dsm-pick-desc' },
-                                (g.scene.description ? g.scene.description + ' · ' : '') + t('scenes.mem.sceneCount', { checked: on, total: ids.length }))),
+                              sub ? React.createElement('span', { className: 'dsm-pick-desc', title: String(g.scene.description || '') }, sub) : null),
                             g.scene.global ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('scenes.mem.alwaysOn')) : null,
                             React.createElement('span', { className: 'dsm-pick-actions' },
                               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !g.items.length, onClick: function (e) { e.preventDefault(); e.stopPropagation(); setModal(Object.assign({}, modal, { memDrill: g.scene.name, memQuery: '' })) } }, t('scenes.mem.pick')))))
@@ -2522,8 +2588,10 @@ function callApi(path, options) {
             }
           })()
           /**
-           * 场景已绑定的东西，一行摘要（没绑的域不出现）。
-           * 之前卡片上只有一个「档案」标签，用户点进去才知道里面配了什么。
+           * 档案里已配的东西，一行摘要（没绑的域不出现）。
+           *
+           * 它只出现在页首的「当前模式」条上：卡片上不再挂任何数量——那正是「卡片又乱又挤」
+           * 的来源。全页只有这一处回答「当前生效的配置是什么」。
            */
           function archiveSummary(archive) {
             if (!archive) return ''
@@ -2534,6 +2602,7 @@ function callApi(path, options) {
             if (Array.isArray(archive.memories)) parts.push(t('scenes.profile.memories', { count: archive.memories.length }))
             return parts.join(' · ')
           }
+          var modeSummary = modeScene ? archiveSummary(data.archives[modeScene]) : ''
           return React.createElement('section', { className: 'dsm-section' },
             React.createElement('div', { className: 'dsm-head' },
               React.createElement('div', { className: 'dsm-title-block' },
@@ -2542,8 +2611,6 @@ function callApi(path, options) {
                   React.createElement(VersionBadge, null)),
                 React.createElement('p', { className: 'dsm-desc' }, t('scenes.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                modeScene ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current') + ': ' + (sceneLabel(data.scenes, modeScene) || modeScene)) : null,
-                modeScene ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: exitMode }, t('memory.mode.exit')) : null,
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')))),
             React.createElement('div', { key: 'stats', className: 'dsm-summary dsm-summary-3' },
@@ -2551,37 +2618,50 @@ function callApi(path, options) {
                 return React.createElement('div', { key: item[1], className: 'dsm-stat' },
                   React.createElement('strong', null, item[0]), item[1])
               })),
+            // 当前模式条：全页唯一讲「现在生效的是什么」的地方
+            //（原先是页头一个标签 + 每张卡片尾部一串「已配：MCP N 台 · 技能 N 个…」）。
+            React.createElement('div', { key: 'mode', className: 'dsm-mode-bar' + (modeScene ? ' dsm-mode-bar-on' : '') },
+              React.createElement('span', { className: 'dsm-mode-dot' }),
+              React.createElement('div', { className: 'dsm-mode-main' },
+                React.createElement('div', { className: 'dsm-mode-title' },
+                  modeScene ? t('scenes.mode.active', { name: sceneLabel(data.scenes, modeScene) || modeScene }) : t('scenes.mode.free')),
+                React.createElement('div', { className: 'dsm-mode-sub' },
+                  modeScene ? (modeSummary ? t('scenes.mode.profile', { parts: modeSummary }) : t('scenes.mode.noProfile')) : t('scenes.mode.free.hint'))),
+              modeScene ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: exitMode }, t('memory.mode.exit')) : null),
             React.createElement(Notice, { key: 'notice', kind: result && result.ok ? 'ok' : 'err', text: result && result.text }),
             data.error ? React.createElement('div', { key: 'gerr', className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
             data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
-              : React.createElement('div', { className: 'dsm-sources' }, (data.scenes || []).map(function (scene) {
+              : (data.scenes || []).length ? React.createElement('div', { key: 'scenes', className: 'dsm-scenes' }, (data.scenes || []).map(function (scene) {
                 var name = scene.name
+                var label = sceneLabel(data.scenes, name) || name
                 var archive = data.archives[name]
-                var hasModeSections = !!(archive && (archive.mcp || Array.isArray(archive.skills)))
-                var summary = archiveSummary(archive)
-                return React.createElement('div', { key: 's:' + name, className: 'dsm-source' },
-                  React.createElement('div', { className: 'dsm-source-head' },
-                    React.createElement('div', { className: 'dsm-source-head-main' },
-                      React.createElement('span', { className: 'dsm-source-title' }, sceneLabel(data.scenes, name) || name),
-                      scene.global === true ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
-                      scene.shared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
-                      modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
-                      scene.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null,
-                      // 描述 + 记忆条数 + 已绑定内容：卡片本身就把「这个场景是什么」说清楚。
-                      React.createElement('span', { className: 'dsm-note' },
-                        (scene.description ? scene.description : t('scenes.noDesc'))
-                        + ' · ' + t('scenes.memCount', { count: scene.count || 0 })
-                        + (summary ? ' · ' + t('scenes.profile.summary', { parts: summary })
-                          : (archive ? ' · ' + t('scenes.profile.empty') : ''))),
-                      // 场景名（磁盘上的目录名）与显示名可能不同——把真名放在路径位，方便对文件。
-                      React.createElement('span', { className: 'dsm-path' }, name)),
-                    React.createElement('div', { className: 'dsm-source-actions' },
+                var isGlobal = scene.global === true
+                var isShared = scene.shared === true
+                // 「全局」与「常开」是恒定注入的保留场景：没有启用开关，也不能删除。
+                var locked = isGlobal || isShared
+                // 档案里有任何一段才值得「切入此模式」——空档案切进去等于什么都没变。
+                var hasModeSections = !!(archive && (archive.mcp || Array.isArray(archive.skills) || Array.isArray(archive.subagents) || Array.isArray(archive.memories)))
+                var desc = sceneTileDesc(scene)
+                return React.createElement('article', { key: 's:' + name, className: 'dsm-scene-tile' + (modeScene === name ? ' dsm-scene-tile-mode' : '') },
+                  React.createElement('div', { className: 'dsm-scene-tile-head' },
+                    React.createElement('span', { className: 'dsm-scene-tile-name', title: label }, label),
+                    // 显示名与磁盘目录名不同时才标出真名，方便对文件核对。
+                    name === label ? null : React.createElement('span', { className: 'dsm-scene-tile-key' }, name),
+                    isGlobal ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
+                    isShared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
+                    modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
+                    !locked && scene.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null,
+                    locked ? null : React.createElement('span', { className: 'dsm-scene-tile-switch' },
+                      React.createElement(Switch, { on: scene.active === true, disabled: busy, label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } }))),
+                  // 描述行**只有描述**（数量都收进上面的模式条了）；全文放 title，卡片本身永远一行。
+                  React.createElement('p', { className: 'dsm-scene-tile-desc', title: desc || '' }, desc || t('scenes.noDesc')),
+                  React.createElement('div', { className: 'dsm-scene-tile-foot' },
+                    hasModeSections && modeScene !== name ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { enterMode(name) } }, t('scenes.mode.enter')) : null,
+                    React.createElement('div', { className: 'dsm-scene-tile-links' },
                       React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openArchive(name) } }, t('memory.archive.edit')),
                       React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditScene(scene) } }, t('memory.scene.edit')),
-                      hasModeSections && modeScene !== name ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { enterMode(name) } }, t('memory.mode.set')) : null,
-                      scene.global === true || scene.shared ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')),
-                      scene.global === true || scene.shared ? null : React.createElement(Switch, { on: scene.active === true, disabled: busy, label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } }))))
-              })),
+                      locked ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')))))
+              })) : React.createElement('div', { key: 'empty', className: 'dsm-empty' }, t('scenes.empty')),
             modal && (modal.type === 'scene-create' || modal.type === 'scene-edit') ? React.createElement(Modal, { key: 'screate', title: modal.type === 'scene-create' ? t('memory.scene.createTitle') : t('memory.scene.editTitle'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('label', { className: 'dsm-field' },
@@ -2595,13 +2675,18 @@ function callApi(path, options) {
                   }),
                   React.createElement('p', { className: sceneForm.error ? 'dsm-rule-hint' : 'dsm-help' }, sceneForm.error || (modal.type === 'scene-create' ? t('memory.scene.field.name.hint') : t('memory.scene.field.name.lock')))),
                 React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.desc')),
+                  React.createElement('div', { className: 'dsm-budget-meta' },
+                    React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.desc')),
+                    // 与描述行一一对应的字数上限：卡片只显示一行，超长的描述会把卡片撑成纵向。
+                    React.createElement('span', { className: 'dsm-char-count' }, String(String(sceneForm.description || '').length) + '/' + SCENE_DESC_MAX)),
                   React.createElement('input', {
                     className: 'dsm-control',
                     value: sceneForm.description || '',
+                    maxLength: SCENE_DESC_MAX,
                     placeholder: t('memory.scene.field.desc.placeholder'),
                     onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { description: e.target.value, error: null })) },
-                  })),
+                  }),
+                  React.createElement('p', { className: 'dsm-help' }, t('scenes.field.desc.limit', { count: SCENE_DESC_MAX }))),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitSceneForm }, t(modal.type === 'scene-create' ? 'memory.btn.create' : 'memory.btn.saveScene'))))) : null,
@@ -3480,6 +3565,13 @@ function callApi(path, options) {
         _pages.SubagentsPage = SubagentsPage
         _pages.MemoryPage = MemoryPage
         _pages.t = t
+        // 纯字符串构造器（无状态、可单测）：卡片上「描述行到底显示什么」由它们决定，
+        // 契约是「全局只显示描述、不带任何数量」「超长必裁」。测试直接调这两个函数。
+        _pages.sceneTileDesc = sceneTileDesc
+        _pages.sceneMemDesc = sceneMemDesc
+        _pages.clipText = clipText
+        // 常量用函数包一层：测试会把 _pages 的每个值当组件渲染一遍，数字会被 React 当成非法元素类型报警告。
+        _pages.sceneDescMax = function () { return SCENE_DESC_MAX }
       },
     }
     return module.exports

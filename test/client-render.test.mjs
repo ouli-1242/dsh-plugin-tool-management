@@ -248,6 +248,60 @@ function createDispatcher() {
   }
 }
 
+/**
+ * 场景卡片的**文案契约**（纯函数，可直接调）。
+ *
+ * 来自一次真实反馈：「全局框只显示描述，不显示当前记忆、skill 等这些数量，描述也要有字数限制，
+ * 不然会导致全局变成纵向布局」。三件事各有一条断言，缺一条这个缺陷就会以另一种形式回来：
+ *   ① 保留场景「全局」的说明行 = 描述，**一个数字都不许有**（它恒定注入，勾选进度毫无意义）；
+ *   ② 普通场景仍要显示勾选进度（那是「记忆」段唯一的行为依据，不能一起删掉）；
+ *   ③ 描述必裁到上限——描述是自由文本，卡片只留一行，否则卡片被撑成纵向。
+ */
+test('场景卡片文案：全局只显示描述（无任何数量），普通场景保留勾选进度，描述超长必裁', () => {
+  const exported = loadModule()
+  exported.apply(fakeCtx(fakeSlots(), exported.dict))
+  const { sceneTileDesc, sceneMemDesc, sceneDescMax, clipText } = exported.pages
+  for (const [name, fn] of Object.entries({ sceneTileDesc, sceneMemDesc, clipText })) {
+    assert.equal(typeof fn, 'function', `pages.${name} 未导出（测试接缝丢失）`)
+  }
+  const max = sceneDescMax()
+  assert.ok(max >= 20 && max <= 120, `描述字数上限不合理：${max}`)
+
+  // ① 全局：只有描述，没有数量、没有勾选进度。
+  const globalScene = { name: 'global', label: '全局', global: true, description: '任何对话都注入' }
+  const globalLine = sceneMemDesc(globalScene, 0, 3)
+  assert.equal(globalLine, '任何对话都注入')
+  assert.equal(/\d/.test(globalLine), false, `全局卡片出现了数量：${globalLine}`)
+  // 没有描述 → 空串，调用方连描述行都不渲染（不是渲染一个空行把卡片撑高）。
+  assert.equal(sceneMemDesc({ name: 'global', global: true }, 0, 0), '')
+
+  // ② 普通场景：描述 + 勾选进度。
+  assert.equal(sceneMemDesc({ name: '办公', description: '写周报' }, 1, 2), '写周报 · 1/2 条已勾选')
+  assert.equal(sceneMemDesc({ name: '办公' }, 0, 4), '0/4 条已勾选')
+
+  // ③ 场景页卡片：只有描述（数量已收进页首的「当前模式」条）。
+  assert.equal(sceneTileDesc({ description: '写周报与站会', count: 7 }), '写周报与站会')
+
+  // ④ 超长描述必裁到上限并以省略号结尾。
+  const clipped = sceneTileDesc({ description: '一'.repeat(200) })
+  assert.equal(clipped.length, max, `裁剪后长度应为上限 ${max}，实际 ${clipped.length}`)
+  assert.equal(clipped.endsWith('…'), true, '裁剪后应以省略号结尾')
+  assert.equal(clipText('  a\n\nb  ', 10), 'a b', '裁剪前应压平空白')
+
+  // CSS 侧的兜底（双保险）：描述行单行省略；记忆段场景卡片的名称/说明各占一行。
+  // 后者是「纵向布局」的直接成因——.dsm-pick-main 在行内布局下会把两段文字排在同一行里换行。
+  const cssOf = (selector) => {
+    const line = src.split('\n').map((l) => l.trim()).find((l) => l.startsWith(selector) && l.includes('{'))
+    assert.ok(line, `找不到 CSS 规则 ${selector}`)
+    return line.slice(line.indexOf('{') + 1, line.lastIndexOf('}'))
+  }
+  assert.match(cssOf('.dsm-scene-tile-desc{'), /white-space:nowrap/, '描述行必须单行')
+  assert.match(cssOf('.dsm-scene-tile-desc{'), /text-overflow:ellipsis/, '描述行超出要省略号')
+  assert.match(cssOf('.dsm-scene-card-head .dsm-pick-main{'), /flex-direction:column/, '名称与说明必须各占一行')
+  // 描述输入框的字数上限：显示层裁剪只兜住历史数据，新写的必须在输入处就挡住。
+  assert.match(src, /maxLength:\s*SCENE_DESC_MAX/, '场景描述输入框缺少 maxLength')
+})
+
 test('apply 装配：注册 settings.section（slots 缺失时会静默什么都不注册，这条挡住白屏）', () => {
   const exported = loadModule()
   const slots = fakeSlots()
@@ -269,7 +323,6 @@ test('apply 装配：页面组件全部填充，且都是函数', () => {
   }
   assert.equal(typeof pages.t, 'function', 'pages.t 未被填充')
 })
-
 test('面板渲染：整棵组件树首次渲染都不抛错（递归进页面组件）', () => {
   const exported = loadModule()
   const slots = fakeSlots()
