@@ -249,7 +249,7 @@ npm test             # build + all semantic-contract tests (node --test test/*.t
 > Changes are verified by **actually exercising the real behaviour** (evidence and known issues live in
 > [Changelog](docs/Changelog.md)) instead of asserting what the code currently does — the latter
 > just copies the implementation and passes by construction. The exception is eight groups of
-> **semantic-contract** tests (`npm test`, run against the built `lib/`, 67 cases):
+> **semantic-contract** tests (`npm test`, run against the built `lib/`, 68 cases):
 > `archive.test.mjs` (engine state machine), `import.test.mjs` (ZIP expansion, landing plans, limit
 > reporting), `approval-policy.test.mjs` (never-policy detection, driving a real cordis context and
 > a real `ApprovalService`), `subagent-scene.test.mjs` (scene binding must reject *before* a

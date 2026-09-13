@@ -1972,7 +1972,24 @@ function callApi(path, options) {
         var RULE_FORM_OPTIONS = [
           { value: 'flat', label: 'flat' },
           { value: 'bundle', label: 'bundle' },
-        ]        // ---------- 场景记忆页（场景 = scene-memory/ 下的一级目录；内容自动生效）----------
+        ]        /**
+     * 场景显示名：宿主给出的 `label` 优先（保留场景 `global` 的 label 是「全局」，由宿主决定），
+     * 界面不再自己拼中文；没有元数据的游离桶（`''`）用专门的说明文案。
+     *
+     * 定义在模块作用域、把 `scenes` 作为**参数**传入：它原本是 MemoryPage 内部的闭包，
+     * 而 ScenesPage 也调用它——两个页面是各自独立的函数作用域，闭包不可能共享。
+     * 那正是「工具」页整页白屏的原因（ScenesPage 渲染卡片时 ReferenceError: sceneLabel
+     * is not defined，被 shell 的 slot 边界吞成一条日志，面板什么都不画）。
+     */
+    function sceneLabel(scenes, name) {
+      if (name === '') return t('memory.scene.orphan')
+      var row = (scenes || []).filter(function (s) { return s.name === name })[0]
+      if (row && row.label) return row.label
+      if (name === 'global') return t('memory.scene.global')
+      return name
+    }
+
+    // ---------- 场景记忆页（场景 = scene-memory/ 下的一级目录；内容自动生效）----------
         //
         // 变更单 01 之后 Rules 与 Scenes 合并为本页：**场景（一级目录）是分组维度，
         // 记忆（.md）是内容**；勾选启用后该目录树内所有 .md 正文自动进入系统提示词。
@@ -2503,7 +2520,7 @@ function callApi(path, options) {
                   React.createElement(VersionBadge, null)),
                 React.createElement('p', { className: 'dsm-desc' }, t('scenes.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                modeScene ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current') + ': ' + (sceneLabel(modeScene) || modeScene)) : null,
+                modeScene ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current') + ': ' + (sceneLabel(data.scenes, modeScene) || modeScene)) : null,
                 modeScene ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: exitMode }, t('memory.mode.exit')) : null,
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')))),
@@ -2523,7 +2540,7 @@ function callApi(path, options) {
                 return React.createElement('div', { key: 's:' + name, className: 'dsm-source' },
                   React.createElement('div', { className: 'dsm-source-head' },
                     React.createElement('div', { className: 'dsm-source-head-main' },
-                      React.createElement('span', { className: 'dsm-source-title' }, sceneLabel(name) || name),
+                      React.createElement('span', { className: 'dsm-source-title' }, sceneLabel(data.scenes, name) || name),
                       scene.global === true ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
                       scene.shared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
                       modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
@@ -2931,17 +2948,6 @@ function callApi(path, options) {
             var i = s.indexOf('/')
             return i >= 0 ? s.slice(0, i) : s
           }
-          /**
-           * 场景显示名：宿主 scenes 里的 label 为准（保留场景 global 的 label 是「全局」，
-           * 由宿主给出，界面不再自己拼）。没有元数据的游离桶用专门的说明文案。
-           */
-          function sceneLabel(name) {
-            if (name === '') return t('memory.scene.orphan')
-            var row = (data.scenes || []).filter(function (s) { return s.name === name })[0]
-            if (row && row.label) return row.label
-            if (name === 'global') return t('memory.scene.global')
-            return name
-          }
           function toggleCollapse(key) {
             setCollapsed(function (prev) {
               var next = Object.assign({}, prev)
@@ -3227,10 +3233,10 @@ function callApi(path, options) {
             return String(a).localeCompare(String(b))
           })
           var sceneOptions = [{ value: '', label: t('memory.filter.all') }].concat(
-            order.map(function (n) { return { value: n, label: sceneLabel(n) } }))
+            order.map(function (n) { return { value: n, label: sceneLabel(data.scenes, n) } }))
           // 场景选择：保留场景「全局」排最前（它是真实场景，不是「留空」）；
           // 游离桶只在真的存在游离记忆时才出现。
-          var sceneChoices = order.map(function (n) { return { value: n, label: sceneLabel(n) } })
+          var sceneChoices = order.map(function (n) { return { value: n, label: sceneLabel(data.scenes, n) } })
           // 名称 = .md 文件名（单个路径段，不是路径）：用 segment 校验器，与宿主逐字对齐。
           // 中文等任意 Unicode 都合法（`站会流程` → `站会流程.md`）。
           // 未输入时不标红/不报「不合法」——一打开弹窗就飘红会让人以为中文名被拒；
@@ -3285,7 +3291,7 @@ function callApi(path, options) {
             return React.createElement('div', { key: 's:' + name, className: 'dsm-source' + (meta.active === false || isOrphan ? ' dsm-rule-shadowed' : '') },
               React.createElement('div', { className: 'dsm-source-head' },
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleCollapse('s:' + name) } },
-                  React.createElement('span', { className: 'dsm-source-title' }, sceneLabel(name)),
+                  React.createElement('span', { className: 'dsm-source-title' }, sceneLabel(data.scenes, name)),
                   React.createElement('span', { className: 'dsm-count' }, t('memory.scene.count', { count: bucket.rules.length })),
                   isShared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
                   isGlobal ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
@@ -3433,7 +3439,7 @@ function callApi(path, options) {
                           React.createElement('div', { className: 'dsm-trash-main' },
                             React.createElement('div', { className: 'dsm-name' }, entry.name),
                             React.createElement('div', { className: 'dsm-note' },
-                              sceneLabel(entry.group) + ' · ' + t('memory.form.' + (entry.form === 'bundle' ? 'bundle' : 'flat')) + ' · ' + entry.bytes + ' B · '
+                              sceneLabel(data.scenes, entry.group) + ' · ' + t('memory.form.' + (entry.form === 'bundle' ? 'bundle' : 'flat')) + ' · ' + entry.bytes + ' B · '
                               + t('memory.trash.deletedAt', { time: entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : '' }))),
                           React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { submitRestore(entry) } }, t('memory.trash.restore')),
                           React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'trash-delete', entry: entry }) } }, t('memory.trash.purge')))

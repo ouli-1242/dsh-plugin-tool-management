@@ -98,23 +98,53 @@
   （`test/client-exports.test.mjs` 与 `test/client-render.test.mjs`），它们挡「导出丢失 / 装配失败 /
   渲染期抛错」，挡不住交互行为。
 
-### 未定性的界面故障（2026-09-13 用户报告）
+### 界面故障：整页白屏（2026-09-13 用户报告，已定位并修复）
 
-用户报告「工具打开什么都没显示」。**未能复现、未能确认根因**，如实记录边界：
+用户报告「工具打开什么都没显示」，并提供了浏览器控制台栈。**根因已确定**：
 
-- 不能进浏览器复现：3080 宿主要求 launch token 才能开页面（`dsh-client-connection` 的 `authorizeIndex`），
-  我不会去进程里取用户凭据，故**全程未做浏览器观测**。
-- 查过并排除的：宿主侧插件已加载（`rules-list` op 返回 200）；`lib/client.js` 语法与解析均正常；
-  `apply` 用到的 `ctx.get('slots')` 与官方 `dsh-client-ui-layout` 注册的服务名一致（`slots`）；
-  bundle 除 `react`（平台种子模块）外无其它 `require`。
-- **顺手抓到并修掉的真缺陷**见上方「修复」表最后一行（导出静默丢失）。它是真 bug，但**没有任何证据**
-  表明它就是该现象的原因——也可能是导入内容的问题，或浏览器缓存了旧 bundle（
-  本次修好后需要**刷新页面**才会生效）。
-- 本轮新增两道护栏（导出契约 + 装配/渲染），并把「假 React 驱动真实 bundle」的失败教训留在上文。
+```
+ReferenceError: sceneLabel is not defined
+    at ScenesPage (client.js:2526)
+client.js:526 slot entry crashed in 'settings.section': ReferenceError: sceneLabel is not defined
+```
+
+`sceneLabel()` 定义在 **`MemoryPage` 函数体内部**（闭包），而 `ScenesPage` 渲染场景卡片时也调用它。
+两个页面是各自独立的函数作用域，闭包无法共享 → `ScenesPage` 一渲染就抛 `ReferenceError`，
+被 shell 的 slot 边界捕获成一条 `slot entry crashed` 日志，面板什么也不画（**整页空白**）。
+
+- 修法：`sceneLabel` 提到**模块作用域**并把 `scenes` 作为参数传入（`sceneLabel(data.scenes, name)`），
+  五处调用点全部改为显式传参。
+- 同类排查：写了一次性 AST 静态扫描（页面组件里「以调用/读取形式出现、但既不在本页声明、也不在
+  模块作用域声明」的标识符），**只有 `undefined` 与浏览器全局 `FileReader` 两处误报**，无第二处同类缺陷。
+- 为什么前一轮的渲染测试没抓住：那一版把 `fetch` 写成直接 reject，页面停在 loading 态，
+  `(data.scenes || []).map(...)` 的回调一次都没执行。**修测试**：`test/client-render.test.mjs`
+  新增「带数据挂载」用例——假 fetch 按 op 返回**真实形状**的夹具（scenes / rules / 人设 / 归档都非空）、
+  真的执行 effect、等 promise settle 后再渲染 4 轮。已用「把 `sceneLabel` 改名为 `sceneLabelBROKEN`」
+  注入验证：该用例确实报 `ScenesPage（第 2 次渲染）: sceneLabelBROKEN is not defined`。
+- 教训（与上一节同源）：**空数据的渲染测试等于没测**。列表、回调、条件分支都必须有数据走一遍。
+
+### 排查过程留档（2026-09-13 白屏）
+
+定位过程本身有两条可复用的教训，记下来避免重走：
+
+- **不能进浏览器复现**：3080 宿主要求 launch token 才能开页面（`dsh-client-connection` 的
+  `authorizeIndex`），我不会去进程里取用户凭据，所以**全程没有浏览器观测**，只能靠静态分析与
+  自建 harness 逼近——最终是**用户贴出的控制台栈**一句话定位。以后遇到同类现象，第一件事就该是
+  要控制台输出，而不是先写探针。
+- **自建探针会骗人**：我一度用自写的花括号扫描器判断作用域，被 CSS 模板串与正则里的花括号带偏，
+  得出「导出语句在 factory 作用域」的错误结论，随后连续多轮插桩自相矛盾。改用 **TypeScript
+  编译器的 AST**（`ts.createSourceFile` + `getLineAndCharacterOfPosition`）才得到权威结论：
+  `module.exports = {` 与 `return module.exports` 同属 factory，而 `_pages` 挂在 `method:apply` 里。
+  **结论：判断作用域用真解析器，不要用手写扫描器。**
+- 已排除的假设：宿主侧插件正常（`rules-list` op 返回 200）；`lib/client.js` 语法与解析正常；
+  `ctx.get('slots')` 与官方 `dsh-client-ui-layout` 注册的服务名一致；bundle 除 `react`
+  （平台种子模块）外无其它 `require`。
+- 本轮第一个修复（导出的 `_pages`/`DICT` 静默丢失，见「修复」表）是**真缺陷但不是本次白屏的原因**，
+  两者都保留在记录里，不合并叙述。
 
 ### 契约测试
 
-`npm test` = build + `check:i18n` + **67 例** node --test：
+`npm test` = build + `check:i18n` + **68 例** node --test：
 
 - `archive.test.mjs`（13）：档案纯逻辑 + 引擎状态机
 - `import.test.mjs`（16）：zip/上传展开、落点规划、限额**回报**（不静默丢）
@@ -125,9 +155,11 @@
 - `client-exports.test.mjs`（3）：**运行时导出契约** —— 只求值 factory（不跑 `apply`）就必须拿到
   `dict`/`pages`/`apply`；词典 zh/en 键集合一致、无空文案；代码里每个字面量 `t('键')` 都能解析。
   反向护栏：禁止缩进 ≥ 8 空格的 `module.exports.X =`
-- `client-render.test.mjs`（3）：**装配与渲染** —— 假 ctx 跑完整 `apply`，断言它往 `settings.section`
+- `client-render.test.mjs`（4）：**装配与渲染** —— 假 ctx 跑完整 `apply`，断言它往 `settings.section`
   注入并注册 `dsm-tools`；七个页面组件都被填充；整棵组件树（自建 hook dispatcher，真实 React dispatcher
-  接口）递归渲染不抛错。已用「注入缺陷 → 必须失败」自检过
+  接口）递归渲染不抛错；**带数据挂载**：假 fetch 按 op 返回真实形状的夹具并真的执行 effect，
+  等 promise settle 后再渲染 4 轮，列表/回调/条件分支都走到。已用「注入缺陷 → 必须失败」自检过两次
+  （面板抛错；`sceneLabel` 改名 → 报 `not defined`）
 
 辅助脚本：`npm run check:i18n`（中英键集合 + 占位符一致）、`node scripts/i18n-debt.mjs`（按页面统计硬编码中文欠账）、`node scripts/find-hardcoded-zh.mjs`（逐行定位）。
 

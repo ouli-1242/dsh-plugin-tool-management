@@ -20,18 +20,84 @@ const require = createRequire(import.meta.url)
 const React = require('react')
 const src = readFileSync('lib/client.js', 'utf8')
 
+/**
+ * 宿主 op 的假响应：**按真实形状**（键名取自宿主 3080 的实回），并且刻意带数据。
+ *
+ * 为什么必须带数据：本文件第一版把 fetch 写成直接 reject，于是页面停在 loading 态、
+ * `(data.scenes || []).map(...)` 的回调一次都没执行——`ScenesPage` 里那个
+ * `sceneLabel is not defined` 的 ReferenceError 就这样从测试里溜过去了（真实后果是
+ * 「工具」页整页白屏）。**渲染测试必须让列表渲染路径真的跑起来。**
+ */
+function fixtureFor(op) {
+  const scenes = [
+    { name: 'global', label: '全局', order: 0, count: 1, active: true, shared: false, global: true, description: '任何对话都注入' },
+    { name: '办公', label: '办公', order: 1, count: 2, active: true, shared: false, global: false, description: '写周报与站会' },
+    { name: 'code-review', label: 'code-review', order: 2, count: 0, active: false, shared: false, global: false, description: '' },
+  ]
+  const rules = [
+    { id: 'global/总则', name: '总则', group: 'global', description: '全局约定', enabled: true, form: 'flat', bytes: 120 },
+    { id: '办公/周报格式', name: '周报格式', group: '办公', description: '周报写法', enabled: true, form: 'flat', bytes: 240 },
+    { id: '办公/流程/站会', name: '站会', group: '办公', description: '站会流程', enabled: false, form: 'bundle', bytes: 300 },
+  ]
+  switch (op) {
+    case 'rules-list':
+      return { ok: true, rules, groups: [{ name: 'global', label: '全局', order: 0, count: 1 }], scenes, activeMode: 'all', sceneMemory: { usedBytes: 660, maxBytes: 65536, truncated: false, dropped: [] }, paths: { memories: 'C:/m', scenes: 'C:/s', hub: 'C:/h' }, stats: { total: 3, enabled: 2, scenes: 3 } }
+    case 'scene-mode-get':
+      return { ok: true, mode: { scene: '办公', snapshot: { mcp: ['github'], skills: ['find-extensions'], subagents: [] } }, archives: { 办公: { mcp: ['github'], skills: ['find-extensions'], subagents: [], memories: ['办公/周报格式'] } } }
+    case 'rules-budget':
+      return { ok: true, usedBytes: 660, maxBytes: 65536, truncated: false, scenes, items: rules.map((r) => ({ id: r.id, bytes: r.bytes, injected: r.enabled, scene: r.group })) }
+    case 'subagent-list':
+      return { ok: true, personas: [{ name: 'java-helper', description: 'Java 后端实现与重构', provider: 'sensenova', model: 'sensenova-6.8-flash-lite', tools: ['read_file'], toolsDeny: ['bash'] }] }
+    case 'agentsmd-list':
+      return { ok: true, presets: [{ id: 'default', name: '默认预设', applied: true, size: 1024 }], current: 'default' }
+    case 'history-list':
+    case 'history-sessions':
+      return { ok: true, items: [], groups: [], total: 0 }
+    case 'rules-trash-list':
+      return { ok: true, entries: [{ id: 't1', name: '旧记忆', group: '办公', form: 'flat', bytes: 100, deletedAt: '2026-09-13T10:00:00.000Z' }] }
+    case 'mcpm-list':
+      return { ok: true, rows: [{ serverName: 'github', transport: 'stdio', level: 'project', enabled: true, tools: ['create_issue'] }], paths: {}, errors: [], warnings: [] }
+    case 'plugin-version':
+      return { ok: true, version: '0.4.0' }
+    case 'model-candidates':
+      return { ok: true, candidates: [{ provider: 'sensenova', providerName: 'SenseNova', id: 'sensenova-6.8-flash-lite', name: '6.8 Flash Lite' }] }
+    case 'preset-tools':
+      return { ok: true, tools: [{ name: 'read_file', presets: ['default'], current: true }] }
+    case 'skill-state':
+      return { ok: true, roots: [], trash: [], summary: { total: 0, enabled: 0, disabled: 0, issues: 0 } }
+    default:
+      return { ok: true }
+  }
+}
+
+/** 按 op 分发的假 fetch：异步 settle，让 effect 里的 .then 链真的把数据写进 state。 */
+function makeFetch(calls) {
+  return (url, init) => {
+    let op = ''
+    try { op = JSON.parse(init && init.body).op } catch { /* 非 API 调用 */ }
+    calls.push(op)
+    return Promise.resolve({ status: 200, json: () => Promise.resolve(fixtureFor(op)) })
+  }
+}
+
+/** 让所有已 resolve 的 promise 链跑完（setState 在 effect 的 .then 里发生）。 */
+async function settle(rounds = 8) {
+  for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 /** 求值 bundle 的 factory（不跑 apply）。 */
-function loadModule() {
+function loadModule({ fetchImpl } = {}) {
   const registration = {}
   const win = {
     __ModuleLoader__: { load: (value) => { registration.value = value } },
     localStorage: { getItem: () => null, setItem: () => {} },
     addEventListener: () => {}, removeEventListener: () => {},
   }
-  const prev = { window: globalThis.window, __ModuleLoader__: globalThis.__ModuleLoader__, localStorage: globalThis.localStorage }
+  const prev = { window: globalThis.window, __ModuleLoader__: globalThis.__ModuleLoader__, localStorage: globalThis.localStorage, fetch: globalThis.fetch }
   globalThis.window = win
   globalThis.__ModuleLoader__ = win.__ModuleLoader__
   globalThis.localStorage = win.localStorage
+  if (fetchImpl) globalThis.fetch = fetchImpl
   try {
     // eslint-disable-next-line no-new-func
     new Function(src)()
@@ -87,6 +153,7 @@ function fakeCtx(slots, dict) {
 /** 最小 hook dispatcher：真实 React 的 dispatcher 接口，槽位按组件身份复用。 */
 function createDispatcher() {
   const slotsByComponent = new WeakMap()
+  const pendingEffects = []
   let current = null
   const slotAt = (index, create) => {
     const list = slotsByComponent.get(current)
@@ -104,12 +171,13 @@ function createDispatcher() {
     },
     useEffect(effect, deps) {
       const index = current.__cursor++
-      const slot = slotAt(index, () => ({ deps: undefined }))
+      const slot = slotAt(index, () => ({ deps: undefined, effect: undefined }))
       const changed = slot.deps === undefined || deps === undefined
         || deps.length !== slot.deps.length || deps.some((d, i) => !Object.is(d, slot.deps[i]))
       if (!changed) return
       slot.deps = deps ? deps.slice() : undefined
-      // 不执行 effect：effect 里是数据请求，本测试只关心渲染期是否抛错。
+      slot.effect = effect
+      pendingEffects.push({ component: current, effect, cleanup: slot.cleanup })
     },
     useMemo(factory) { current.__cursor++; return factory() },
     useCallback(factory) { current.__cursor++; return factory },
@@ -124,6 +192,23 @@ function createDispatcher() {
   }
   return {
     dispatcher,
+    /** 执行已排队的 effect（真实 React 在提交阶段做），effect 里的请求才会发出。 */
+    runEffects() {
+      const batch = pendingEffects.splice(0, pendingEffects.length)
+      for (const item of batch) {
+        if (typeof item.cleanup === 'function') item.cleanup()
+        try {
+          const cleanup = item.effect()
+          if (typeof cleanup === 'function') {
+            const slots = slotsByComponent.get(item.component) || []
+            for (const slot of slots) if (slot && slot.effect === item.effect) slot.cleanup = cleanup
+          }
+        } catch (error) {
+          throw new Error(`effect 抛错: ${error && error.message}`)
+        }
+      }
+      return batch.length
+    },
     render(component, props) {
       current = component
       if (!slotsByComponent.has(component)) slotsByComponent.set(component, [])
@@ -208,4 +293,44 @@ test('面板渲染：整棵组件树首次渲染都不抛错（递归进页面�
     for (const line of result.failures) failures.push(`${name}: ${line}`)
   }
   assert.deepEqual(failures, [], '页面渲染抛错:\n' + failures.join('\n'))
+})
+
+/**
+ * 带数据的挂载：effect 真的执行、假 fetch 真的回数据、拿到数据后再渲染一次。
+ * 这条才是能抓住「列表回调里引用未定义变量」的用例——scenes/rules/personas 都必须非空。
+ */
+test('带数据挂载：每个页面在数据到达后再渲染一遍都不抛错（列表回调真的执行）', async () => {
+  const calls = []
+  const prevFetch = globalThis.fetch
+  globalThis.fetch = makeFetch(calls)
+  try {
+    const exported = loadModule({ fetchImpl: globalThis.fetch })
+    const slots = fakeSlots()
+    exported.apply(fakeCtx(slots, exported.dict))
+    const pages = exported.pages
+    const failures = []
+
+    for (const [name, component] of Object.entries(pages)) {
+      if (name === 't') continue
+      const view = createDispatcher()
+      for (let pass = 0; pass < 4; pass += 1) {
+        try {
+          const tree = view.renderTree(React.createElement(component, { t: pages.t }))
+          for (const line of tree.failures) failures.push(`${name}（第 ${pass + 1} 次渲染）: ${line}`)
+        } catch (error) {
+          failures.push(`${name}（第 ${pass + 1} 次渲染）: ${error && error.message}`)
+        }
+        try { view.runEffects() } catch (error) { failures.push(`${name}（effect）: ${error && error.message}`) }
+        await settle()
+      }
+    }
+
+    assert.deepEqual(failures, [], '带数据渲染抛错:\n' + failures.join('\n'))
+    // 反向护栏：确认假数据真的被请求过，否则上面的遍历等于空跑（历史教训）。
+    assert.ok(calls.includes('rules-list'), '规则列表没被请求，带数据用例没生效')
+    assert.ok(calls.filter((op) => op === 'rules-list').length >= 2, '规则列表只请求了一次，页面可能不止一个')
+  } finally {
+    if (prevFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = prevFetch
+  }
 })
