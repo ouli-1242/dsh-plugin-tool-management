@@ -23,6 +23,8 @@
 - **界面**：工具页七标签（场景 / MCP / 技能 / 子智能体 / 提示词 / 记忆 / 会话）；场景卡片补描述与绑定摘要；场景档案编辑器新增第 4 段「记忆」；人设表单的模型与工具限制收进「高级选项」（模型下拉 + 白/黑名单勾选器）。
 - **契约测试 61 → 76 例**：新增客户端导出契约、装配与渲染（含带数据挂载）、技能状态文件读取韧性、技能删除权限四组。
 - **DSH Market 收录徽章**：本插件已被 [DSH Market](https://dsh.market/) 收录（issue [#145](https://github.com/2BingLing/dsh-market/issues/145) 标记 `accepted`）。`README.md` 挂中文徽章、`README_EN.md` 挂英文徽章，片段取自该仓库 [PLUGIN-BADGE.md](https://github.com/2BingLing/dsh-market/blob/master/PLUGIN-BADGE.md)；两张 SVG 均实测 HTTP 200。
+- **英文 README 与中文对齐**（`README_EN.md`）：此前英文版落后于中文版若干处——「Model tools」重复两行且都写 10 个（实为 12）、UI 写 "six pages"（实为七栏）、缺「记忆导入」「场景档案」「轻量子智能体」三行、多出中文版没有的「Rule checkup」一行（导致整表错位）、快速开始仍写旧的五个独立页面（实为一个「工具」面板七栏）、`rule_manager_*` 描述仍用 "rules"（应为 scene memories）。逐行核对后两版核心亮点表均为 **22 行（20 数据行）且逐行对齐**，21 条图片引用与 git 索引逐字符一致。
+- **截图 `MCP.png` 大小写修复**：`docs/images/mcp.png` 被提交成小写而 README/screenshots.json 都引用 `MCP.png`，Windows 不区分大小写掩盖了这点，GitHub 上该图 404（其余六张正常）。两步 `git mv` 改名后实测 `MCP.png` → HTTP 200、`mcp.png` → 404。
 
 ### 修复（本轮真实故障）
 - **「工具」页整页白屏**：`sceneLabel` 定义在 `MemoryPage` 闭包里却被 `ScenesPage` 调用 → `ReferenceError`，被 slot 边界吞成日志。已提到模块作用域并参数化。

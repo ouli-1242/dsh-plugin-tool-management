@@ -62,12 +62,13 @@ No hand-editing of `cordis.patch.yml`, and skill source files are never touched.
 | Archived session management | History page groups archived sessions by project: search, select-all, batch restore / permanent delete, retention-based auto-cleanup (changing the retention resets the countdown from the change time) |
 | Transcript import / export | Seamlessly take over conversations from Claude Code / Cursor (JSONL), Codex (Markdown), or any text; export picks the session scope, defaults to the desktop, in Markdown / JSONL |
 | Scene memory auto-injected | A memory is `~/.dsh/tool-management/memories/<scene>/<name>.md`; every `.md` inside an enabled scene has its body **injected into the system prompt automatically** (per-agent `systemPrompt` section), with no tool call from the model and effect on the **very next request**; the reserved scene **`global`** ("Global" in the UI) is injected into every conversation. |
+| Memory import | "Import memory" on the Memory page: `.md` / `.zip` (multi-select, drag-and-drop); inside a zip a directory name is the scene, and a bare `.md` lands in the scene picked in the dialog (leave it empty = the reserved scene "Global"); `<scene>/<name>/SKILL.md` inside a zip is imported as a **bundle** (sibling files become attachments); same names are skipped and listed, **including scenes created just for this import** |
 | Scene enable switch | A scene is an **explicit record** (with a description and order); the multi-select switch persists globally in `rules-index.json`'s `active`; **all scenes enabled by default**, `global` and `_shared/` always on |
+| Scene profile (four free-form sections) | Each scene can select its own **MCP tool set / skill set / subagent bindings / memories** in any combination (the lists show only what exists right now; checked = enabled, unchecked = disabled; MCP has two levels: not checking a server disables it entirely, checking a server but none of its tools stops that whole server). **The memory section only affects injection** (an unchecked memory stays out of the prompt while the file is left exactly as it is). A scene with a tool or skill section also gets "Set as active mode": applying the profile persists a snapshot first, and exiting restores it **verbatim**; a scene with only memories or only subagents shows no mode button; the change takes effect on the next request |
+| Lightweight subagents | `~/.dsh/tool-management/agents/<persona>.md` — one file per persona (optional frontmatter: `description` / `provider` + `model` / `tools` allowlist / `toolsDeny` denylist; the body is the persona prompt and is derived automatically when missing); the page header's "Import" takes `.md` / `.zip` (same names skipped and listed); the model calls them through `subagent_list` / `subagent_run` — the child runs with the persona, returns only its result, and is discarded (it never enters History); it **inherits the memories of the currently enabled scenes automatically**; a scene profile can bind "which personas are available in this scene" (calls outside the binding are refused); running asks for confirmation by default, which can be turned off in settings |
 | Prefix-cache friendly | Section text depends only on enabled scenes + file contents, so it is byte-stable; switching scenes or editing a memory changes it exactly once, every other request keeps hitting the cache (this does not violate the "no injection layer" rule — that one only bans per-turn dynamic content) |
-| Rule checkup | One click scans for shadowed rules, over-long descriptions, filename ≠ name, bad frontmatter, empty bodies, and memories whose scene is disabled |
-| Model tools | **10**: `skill_mcp_manager_*` for MCP, `skill_manager_*` for skills, `rule_manager_*` for memories (creation asks for confirmation unless disabled in settings) |
-| Model tools | **10 tools**: `skill_mcp_manager_*` for MCP servers, `skill_manager_*` for skills, `rule_manager_*` for rules (writes ask for user confirmation; can be disabled in settings) |
-| UI | Its own `dsm-*` design system, consistent across all six pages |
+| Model tools | **12**: `skill_mcp_manager_*` for MCP, `skill_manager_*` for skills, `rule_manager_*` for scene memories (creating asks for your consent; can be turned off in settings), `subagent_list` / `subagent_run` for persona subagents (running asks for your consent by default; turn off with `requireConfirmForModelSubagentRun`). **All three confirm gates respect the session approval policy**: under `approval=never` (full access) no card can appear, so the plugin treats it as "the user has pre-approved" and passes through, logging `confirm-bypass` — matching the official subagent tools' behaviour under full access |
+| UI | Its own `dsm-*` design system, **seven columns** (Scenes / MCP / Skills / Subagents / Prompts / Memory / Sessions) with a uniform page header and shared section cards; every checkbox-style surface (the four profile sections, the persona tool allow/deny lists) uses one layout, and long lists all have a filter box; a persona's model and tool limits live in an "Advanced options" fold-out (auto-expanded once configured); notices come in two levels (success = toast, warning/error = in-page banner); the profile dialog has a fixed height so adding or removing sections never makes it jump |
 
 ## Getting started
 
@@ -82,7 +83,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 dsh plugin --profile web remove dsh-plugin-tool-management
 ```
 
-Hard-refresh the browser (Cmd/Ctrl+Shift-R) after installing — the **MCP**, **Skills**, **AGENTS.md**, **History** and **Scene Memory** pages appear in Settings (client changes are hot-loaded by DSH, no restart needed).
+Hard-refresh the browser (Cmd/Ctrl+Shift-R) after installing — a **Tools** panel appears in Settings with seven tabs (Scenes / MCP / Skills / Subagents / Prompts / Memory / Sessions), which means the install worked (client changes are hot-loaded by DSH, no restart needed).
 
 You can also tell any DSH session:
 
@@ -194,7 +195,7 @@ stays listed as a switchable source, while skills **created or imported by the p
 |---|---|
 | `skill_mcp_manager_list / set_enabled / restart / add` | Let the model query and operate MCP servers |
 | `skill_manager_list / set_enabled / create` | Let the model query and operate skills (creating asks for your consent) |
-| `rule_manager_list / read / write` | Let the model query and write rules (writes ask for your consent; can be disabled in settings) |
+| `rule_manager_list / read / write` | Let the model query and write scene memories (writes ask for your consent; can be disabled in settings) |
 | `POST /dsh-plugin-tool-management/api` | HTTP API for scripts (`{op, args}` protocol) |
 
 > v0.4 **no longer registers slash commands** (there used to be `/mcp`, `/skills`, `/agents-md`,
