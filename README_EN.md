@@ -107,6 +107,7 @@ Then remind me to hard-refresh the browser.
 
 - **See everything**: skills are grouped by source — project, runtime, built-in, plugin-shipped, the four user directories (`~/.dsh` / `~/.agents` / `~/.codex` / `~/.claude`; the last three are hooked up by this plugin) and any custom directories you added.
 - **Toggle**: individual skills, whole sources or whole projects — implemented as an override-provider shadow policy, so not a single byte of the source file changes; moving machines is just copying the state file.
+- **Remove a source**: unlike disabling one — a disabled source is still scanned and listed (its skills simply cannot be called) — **removing means the directory is not scanned at all**: its skills disappear from the list, drop out of the same-name priority, and become invisible to the model too (provider candidates). Not a single byte is touched on disk, and it can be restored at any time. The reserved `dsh` (official DSH skills) and `hub` (the plugin's own import target) sources, and project-level sources, cannot be removed and show no button.
 - **Custom directories**: click "Add directory", enter an absolute path, and that directory becomes a read-only skill source — ideal for skill collections living in repos or synced folders; overlapping paths are rejected to keep the shadow policy sound.
 - **Create / import / recycle**: create from a form; drag in a ZIP, a `.md` file or a skill folder; deleted skills go to the plugin recycle bin first, and permanent delete still tries the OS trash as a last safety net.
 
