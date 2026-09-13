@@ -268,9 +268,9 @@ test('场景卡片文案：全局只显示描述（无任何数量），普通�
   assert.ok(max >= 20 && max <= 120, `描述字数上限不合理：${max}`)
 
   // ① 全局：只有描述，没有数量、没有勾选进度。
-  const globalScene = { name: 'global', label: '全局', global: true, description: '任何对话都注入' }
+  const globalScene = { name: 'global', label: '全局', global: true, description: '跨项目通用约定' }
   const globalLine = sceneMemDesc(globalScene, 0, 3)
-  assert.equal(globalLine, '任何对话都注入')
+  assert.equal(globalLine, '跨项目通用约定')
   assert.equal(/\d/.test(globalLine), false, `全局卡片出现了数量：${globalLine}`)
   // 没有描述 → 空串，调用方连描述行都不渲染（不是渲染一个空行把卡片撑高）。
   assert.equal(sceneMemDesc({ name: 'global', global: true }, 0, 0), '')
