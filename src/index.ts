@@ -217,7 +217,7 @@ export default {
 
     // Optional access token (defense in depth for LAN exposure). Enabled by
     // setting `config.token` on this plugin's loader row (profile
-    // cordis.patch.yml override) or the DSH_SKILL_MCP_MANAGER_TOKEN env var. When
+    // cordis.patch.yml override) or the DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN env var. When
     // set, every state-changing op requires `x-dsh-token: <token>`. Read-only
     // ops (plugin-version, mcpm-list, skill-state) stay open so the UI still
     // renders; mcpm-export is guarded too because it leaks full configs.
@@ -226,29 +226,6 @@ export default {
     // is not an injected service and throws "cannot get property without
     // inject" at boot.
     const TOKEN = String((config as { token?: unknown } | undefined)?.token || process.env.DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN || '').trim()
-    const WRITE_OPS = new Set([
-      'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
-      'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
-      // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
-      // token-gated like a write — on a LAN-exposed port the token must be the
-      // last line of defense for plaintext credentials too, not just writes.
-      'mcpm-reveal',
-      'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable',
-      'skill-create', 'skill-import', 'skill-upload', 'skill-delete',
-      'skill-trash-restore', 'skill-trash-delete', 'skill-open',
-      'skill-custom-add', 'skill-custom-remove',
-      // agents-md 写操作（create/update/remove 改预设库；apply 写全局 AGENTS.md；import 从外部内容建预设）
-      'agentsmd-create', 'agentsmd-update', 'agentsmd-apply', 'agentsmd-remove', 'agentsmd-import',
-      // history 写操作（archive/unarchive 改归档集合；delete 永久删除；retention-set 写保留期）
-      'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
-      'history-unarchive-batch', 'history-delete-batch', 'history-import', 'history-export',
-      'history-archive-batch',
-      // rules 写操作（v0.3：create/update/remove/restore 改记忆文件；toggle/set-index/
-      // set-active 改侧车索引；create-scene/remove-scene 建删场景目录。
-      // set-active = 插件内"启用场景"开关，全局持久化）
-      'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle', 'rules-set-index', 'rules-set-active',
-      'rules-create-scene', 'rules-remove-scene',
-    ])
 
     const wait = (ms: number) => ctx.timeout(ms)
     const message = (e: unknown) => String((e && (e as Error).message) || e)
@@ -309,6 +286,28 @@ export default {
       console.error('[dsh-plugin-tool-management] rules provider setup failed:', message(e))
     }
 
+    // HTTP 写操作门禁清单。skills 与 rules 域由各自 service 导出的 writeOps 派生
+    // （与其 ops 表同文件维护，新增写 op 改对应 service 即可）；本文件内联域
+    // （mcpm-* / skill-open / agentsmd-* / history-*）在此列举。
+    // 注意：必须在这两个 service 创建之后构造（依赖其 writeOps）。
+    const WRITE_OPS = new Set<string>([
+      ...skillsService.writeOps,
+      ...rulesService.writeOps,
+      'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
+      'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
+      // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
+      // token-gated like a write — on a LAN-exposed port the token must be the
+      // last line of defense for plaintext credentials too, not just writes.
+      'mcpm-reveal',
+      'skill-open',
+      // agents-md 写操作（create/update/remove 改预设库；apply 写全局 AGENTS.md；import 从外部内容建预设）
+      'agentsmd-create', 'agentsmd-update', 'agentsmd-apply', 'agentsmd-remove', 'agentsmd-import',
+      // history 写操作（archive/unarchive 改归档集合；delete 永久删除；retention-set 写保留期）
+      'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
+      'history-unarchive-batch', 'history-delete-batch', 'history-import', 'history-export',
+      'history-archive-batch',
+    ])
+
     // ---------- history（归档会话管理，折叠自 dsh-archive-manager）----------
     // cordis.patch.yml 禁用官方 workspace 与 session-projection-cache，插入本插件
     // 的归档感知子类（lib/history/workspace.js + lib/history/projcache.js）。子类
@@ -338,14 +337,10 @@ export default {
       } catch { return { retentionDays: 0, updatedAt: 0 } }
     }
     async function writeHistoryRetention(retentionDays: number): Promise<void> {
-      try {
-        const dir = dirname(historyRetentionPath)
-        await mkdir(dir, { recursive: true })
-        // updatedAt = 修改时刻：每次改保留期，已归档会话的到期基线重置为此时刻。
-        await writeFile(historyRetentionPath, JSON.stringify({ retentionDays, updatedAt: Date.now() }), 'utf8')
-      } catch (e) {
-        console.error('[dsh-plugin-tool-management] write history-retention failed:', message(e))
-      }
+      const dir = dirname(historyRetentionPath)
+      await mkdir(dir, { recursive: true })
+      // updatedAt = 修改时刻：每次改保留期，已归档会话的到期基线重置为此时刻。
+      await writeFile(historyRetentionPath, JSON.stringify({ retentionDays, updatedAt: Date.now() }), 'utf8')
     }
     /**
      * 计算到期应删的归档会话。基线 = max(archivedAt（账本）?? createdAt（元数据),
@@ -1734,8 +1729,9 @@ export default {
       ...skillsService.ops,
       // rules ops（由 ./rules/service.js 提供）：rules-list / rules-read / rules-budget /
       // rules-diagnose / rules-create / rules-update / rules-remove / rules-restore /
-      // rules-trash-list / rules-trash-remove / rules-toggle / rules-set-index /
-      // rules-set-active / rules-create-scene / rules-remove-scene。
+      // rules-attach / rules-detach / rules-trash-list / rules-trash-remove /
+      // rules-toggle / rules-set-index / rules-set-active / rules-create-scene /
+      // rules-remove-scene。
       // 成功返回扁平 {ok:true, ...}（不套 data），失败 {ok:false, error, code?}。
       ...rulesService.ops,
       // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
@@ -2054,7 +2050,11 @@ export default {
       'history-retention-set': async (args: any) => {
         const days = Number((args && args.retentionDays) ?? -1)
         if (!Number.isFinite(days) || days < 0) return { ok: false, error: 'retentionDays 需为非负整数（0=永久不删除）' }
-        await writeHistoryRetention(Math.floor(days))
+        try {
+          await writeHistoryRetention(Math.floor(days))
+        } catch (e) {
+          return { ok: false, error: '写入保留期失败: ' + message(e) }
+        }
         // 设置变更后立即扫一次，UI 反映新策略。
         await sweepHistory().catch(() => {})
         return { ok: true, retentionDays: Math.floor(days) }

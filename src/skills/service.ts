@@ -275,6 +275,8 @@ function notifyChatCatalog(ctx: any, invalidateSkills: () => void): void {
 
 export interface SkillsService {
   ops: Record<string, (args: any) => Promise<any>>
+  /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
+  writeOps: ReadonlySet<string>
   /** 注册全局层与 agent-scope provider；返回清理函数（配合 ctx.effect）。 */
   registerProviders: () => () => void
 }
@@ -369,10 +371,21 @@ export function createSkillsService(ctx: any): SkillsService {
 
   const write = <T>(task: () => Promise<T>): Promise<T> => enqueueMutation(task)
 
+  // 写操作清单：与下方 ops 表同文件同源维护；HTTP 端门禁由 index.ts 从本集合派生，勿在宿主端另抄一份。
+  const writeOps: ReadonlySet<string> = new Set([
+    'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable',
+    'skill-create', 'skill-import', 'skill-upload', 'skill-delete',
+    'skill-trash-restore', 'skill-trash-delete', 'skill-custom-add', 'skill-custom-remove',
+  ])
+
   const ops: Record<string, (args: any) => Promise<any>> = {
     // 读操作（state 走短 TTL 缓存，见上方 readState）
     'skill-state': wrap(() => readState()),
-    'skill-detail': wrap(async (args) => skillDetail(await requestRoot(String(args.root || 'dsh')), String(args.name || ''), projectOptions())),
+    'skill-detail': wrap(async (args) => {
+      const key = String(args.root || 'dsh')
+      // requestRoot 未命中时回传原始 key，让 core 的 error.root.unknown 带上来源名（而非 undefined）。
+      return skillDetail((await requestRoot(key)) || key, String(args.name || ''), projectOptions())
+    }),
     'skill-browse': wrap((args) => browseDirectories(args && args.path)),
     // 启停（写 manager 状态，不改源文件）
     'skill-enable': wrap(
@@ -435,5 +448,5 @@ export function createSkillsService(ctx: any): SkillsService {
     ),
   }
 
-  return { ops, registerProviders }
+  return { ops, writeOps, registerProviders }
 }

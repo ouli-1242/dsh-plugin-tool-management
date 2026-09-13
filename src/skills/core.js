@@ -2590,13 +2590,15 @@ export async function skillDetail(keyOrRoot, name, options = {}) {
     (keyOrRoot && typeof keyOrRoot === "object" && typeof keyOrRoot.key === "string" ? keyOrRoot : null) ||
     rootByKey(keyOrRoot) ||
     scopedRoots.find((item) => item.key === keyOrRoot);
-  if (!root)
+  if (!root) {
+    const unknownRoot = (keyOrRoot && typeof keyOrRoot === "object" && keyOrRoot.key) || keyOrRoot;
     return {
       ok: false,
-      error: `未知技能来源: ${key}`,
+      error: `未知技能来源: ${unknownRoot}`,
       code: "error.root.unknown",
-      params: { root: key },
+      params: { root: unknownRoot },
     };
+  }
   const entry = await visibleEntryForRoot(root, name);
   if (!entry)
     return {

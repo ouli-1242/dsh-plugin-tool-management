@@ -94,8 +94,6 @@ export interface RulesDeps {
   stateDir: string
   /** 场景记忆段预算上限（字节），默认 65536。 */
   maxBytes?: number
-  /** 历史遗留：始终层曾写入 AGENTS.md；本版本不再写 AGENTS.md，仅为兼容既有装配保留。 */
-  getGlobalAgentsMdPath?: () => Promise<string>
 }
 
 export interface Rule {
@@ -156,16 +154,12 @@ export interface SceneMemoryProjection {
 
 export interface RulesService {
   ops: Record<string, (args: any) => Promise<any>>
+  /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
+  writeOps: ReadonlySet<string>
   /** 注册全局 + agent-scope 的 systemPrompt 段；返回清理函数（配合 ctx.effect）。 */
   registerProviders: () => () => void
   /** 失效快照与场景记忆缓存（写操作后调用）。 */
   refresh: () => Promise<void>
-  // ── 内部（provider.ts / 测试使用）──
-  _invalidate: () => void
-  /** 同步渲染活动场景记忆段（systemPrompt provider 必须同步求值）。无内容返回 `''`。 */
-  _renderActiveScenes: () => string
-  /** 同步渲染的完整结果（预算/截断/条目），供 UI 与测试读取。 */
-  _sceneMemory: () => SceneMemoryProjection
 }
 
 // ── 内部类型 ───────────────────────────────────────────────────────────────
@@ -1752,6 +1746,15 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       return result
     })
 
+  // 写操作清单：与下方 ops 表同文件同源维护（含此前漂移漏掉的
+  // rules-attach / rules-detach / rules-trash-remove）；HTTP 端门禁由
+  // index.ts 从本集合派生，勿在宿主端另抄一份。
+  const writeOps: ReadonlySet<string> = new Set([
+    'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle',
+    'rules-set-index', 'rules-set-active', 'rules-create-scene', 'rules-remove-scene',
+    'rules-attach', 'rules-detach', 'rules-trash-remove',
+  ])
+
   const ops: Record<string, (args: any) => Promise<any>> = {
     'rules-list': (args) => rulesList(args || {}),
     'rules-read': (args) => rulesRead(args || {}),
@@ -1774,11 +1777,9 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
 
   const service: RulesService = {
     ops,
+    writeOps,
     registerProviders,
     refresh,
-    _invalidate: invalidateProviders,
-    _renderActiveScenes: () => sceneMemory().text,
-    _sceneMemory: () => sceneMemory(),
   }
   return service
 }

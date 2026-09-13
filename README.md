@@ -217,7 +217,7 @@ npm run lint         # 语法自检（node --check 两个产物）
 > 本项目不维护测试套件。改动的验证方式是**直接跑一遍真实行为**（见 `docs/` 下的变更单验收项），
 > 而不是断言代码当前怎么实现——后者只是把实现抄一遍，必然通过。
 
-结构：宿主端 `src/index.ts`（Cordis 对象插件，`lib/index.js` 为发布产物）；技能核心 `src/skills/core.js`（纯 Node）；AGENTS.md 预设库 `src/agents-md/service.ts`；归档会话管理 `lib/history/`（`workspace.js` / `projcache.js` / `tombstone.js`）；对话导入解析 `src/imports/parsers.js`；场景记忆服务 `src/rules/`（`service.ts` 发现/CRUD/索引/两相扫描段渲染、`provider.ts` per-agent `systemPrompt` 段注册；模块路径与 `rules-*` op 名保留为内部协议，用户可见的页面与目录名已改为「场景记忆」/`scene-memory/`）；浏览器端 `src/client.js`（ModuleLoader CJS bundle，`dsm-*` 设计系统，经同源 API 与宿主通信）。运行时依赖仅 `fflate`（ZIP 解压）。
+结构：宿主端 `src/index.ts`（Cordis 对象插件，`lib/index.js` 为发布产物；`lib/` 全部由 `npm run build` 生成、**不入版本库**，克隆后先构建）；技能核心 `src/skills/core.js`（纯 Node）；AGENTS.md 预设库 `src/agents-md/service.ts`；归档会话管理 `lib/history/`（`workspace.js` / `projcache.js` / `tombstone.js`）；对话导入解析 `src/imports/parsers.js`；场景记忆服务 `src/rules/`（`service.ts` 发现/CRUD/索引/两相扫描段渲染、`provider.ts` per-agent `systemPrompt` 段注册；模块路径与 `rules-*` op 名保留为内部协议，用户可见的页面与目录名已改为「场景记忆」/`scene-memory/`）；浏览器端 `src/client.js`（ModuleLoader CJS bundle，`dsm-*` 设计系统，经同源 API 与宿主通信）。运行时依赖仅 `fflate`（ZIP 解压）。
 
 发布：`npm version patch && npm publish`（`prepublishOnly` 自动构建）。
 
