@@ -261,40 +261,25 @@ function createDispatcher() {
 }
 
 /**
- * 场景卡片的**文案契约**（纯函数，可直接调）。
+ * 场景卡片的**描述契约**（纯函数，可直接调）。
  *
- * 来自一次真实反馈：「全局框只显示描述，不显示当前记忆、skill 等这些数量，描述也要有字数限制，
- * 不然会导致全局变成纵向布局」。三件事各有一条断言，缺一条这个缺陷就会以另一种形式回来：
- *   ① 保留场景「全局」的说明行 = 描述，**一个数字都不许有**（它恒定注入，勾选进度毫无意义）；
- *   ② 普通场景仍要显示勾选进度（那是「记忆」段唯一的行为依据，不能一起删掉）；
- *   ③ 描述必裁到上限——描述是自由文本，卡片只留一行，否则卡片被撑成纵向。
+ * 来自一次真实反馈：「描述也要有字数限制，不然会导致全局变成纵向布局」——
+ * 描述是自由文本，卡片只留一行，不裁就会把卡片撑成纵向。
  */
-test('场景卡片文案：全局只显示描述（无任何数量），普通场景保留勾选进度，描述超长必裁', () => {
+test('场景卡片描述：只显示描述、超长必裁，且勾选行的排版契约不被改回去', () => {
   const exported = loadModule()
   exported.apply(fakeCtx(fakeSlots(), exported.dict))
-  const { sceneTileDesc, sceneMemDesc, sceneDescMax, clipText } = exported.pages
-  for (const [name, fn] of Object.entries({ sceneTileDesc, sceneMemDesc, clipText })) {
+  const { sceneTileDesc, sceneDescMax, clipText } = exported.pages
+  for (const [name, fn] of Object.entries({ sceneTileDesc, clipText })) {
     assert.equal(typeof fn, 'function', `pages.${name} 未导出（测试接缝丢失）`)
   }
   const max = sceneDescMax()
   assert.ok(max >= 20 && max <= 120, `描述字数上限不合理：${max}`)
 
-  // ① 全局：只有描述，没有数量、没有勾选进度。
-  const globalScene = { name: 'global', label: '全局', global: true, description: '跨项目通用约定' }
-  const globalLine = sceneMemDesc(globalScene, 0, 3)
-  assert.equal(globalLine, '跨项目通用约定')
-  assert.equal(/\d/.test(globalLine), false, `全局卡片出现了数量：${globalLine}`)
-  // 没有描述 → 空串，调用方连描述行都不渲染（不是渲染一个空行把卡片撑高）。
-  assert.equal(sceneMemDesc({ name: 'global', global: true }, 0, 0), '')
-
-  // ② 普通场景：描述 + 勾选进度。
-  assert.equal(sceneMemDesc({ name: '办公', description: '写周报' }, 1, 2), '写周报 · 1/2 条已勾选')
-  assert.equal(sceneMemDesc({ name: '办公' }, 0, 4), '0/4 条已勾选')
-
-  // ③ 场景页卡片：只有描述（数量已收进页首的「当前模式」条）。
+  // 场景页卡片：只有描述（数量已收进页首的「当前模式」条）。
   assert.equal(sceneTileDesc({ description: '写周报与站会', count: 7 }), '写周报与站会')
 
-  // ④ 超长描述必裁到上限并以省略号结尾。
+  // 超长描述必裁到上限并以省略号结尾。
   const clipped = sceneTileDesc({ description: '一'.repeat(200) })
   assert.equal(clipped.length, max, `裁剪后长度应为上限 ${max}，实际 ${clipped.length}`)
   assert.equal(clipped.endsWith('…'), true, '裁剪后应以省略号结尾')
@@ -320,12 +305,62 @@ test('场景卡片文案：全局只显示描述（无任何数量），普通�
 })
 
 /**
- * 档案弹窗各段的**默认勾选**契约（用户要求）：
- *   - MCP 工具集 / 技能集 / 子智能体绑定：点「添加」后一律**不勾选**；
- *   - 记忆：只勾**保留场景「全局」里已启用**的那几条，其余（其它场景、全局里已停用的）不勾。
- * 记忆的默认值是真逻辑（memDefaultPickIds），直接调；另外两段是常量动作，用源码守卫。
+ * 档案弹窗「记忆」段的**作用域契约**（纯函数，可直接调）。
+ *
+ * 宿主侧 `memoryAllowed(archives, file.scene, id)` 是按**记忆所属场景**取档案的
+ * （`src/rules/archive.ts:135`，渲染调用点 `src/rules/service.ts:1044`；回归测试
+ * `hub-layout.test.mjs`「保留场景 global 的记忆不受其它场景的勾选段影响」）。
+ * 所以一个场景的记忆段**只能门控它自己的记忆**：列别的场景（含全局）是陷阱——勾了不生效。
+ * 用户也对齐了这一点：「其他场景的记忆也不需要显示全局」。
  */
-test('档案弹窗默认勾选：MCP/技能/子智能体空集，记忆只勾「全局」已启用的那几条', () => {
+test('记忆段只认本场景的记忆：全局与其它场景都不出现，多级分组按一级目录归位', () => {
+  const exported = loadModule()
+  exported.apply(fakeCtx(fakeSlots(), exported.dict))
+  const { sceneMemoriesOf, sceneOfGroup, memDefaultPickIds } = exported.pages
+  for (const [name, fn] of Object.entries({ sceneMemoriesOf, sceneOfGroup, memDefaultPickIds })) {
+    assert.equal(typeof fn, 'function', `pages.${name} 未导出（测试接缝丢失）`)
+  }
+  const memories = [
+    { id: 'global/总则', scene: 'global', name: '总则', description: '跨项目通用约定' },
+    { id: '办公/周报格式', scene: '办公', name: '周报格式', description: '写周报' },
+    { id: '办公/流程/站会', scene: '办公/流程', name: '站会', description: '站会只说三件事' },
+    { id: '生活/记账', scene: '生活', name: '记账', description: '记账格式' },
+  ]
+  // ① 只出本场景自己的；多级分组（办公/流程）按一级目录归到「办公」——否则那条记忆整个看不见。
+  // 顺序依赖 locale（站会 / 周报格式 谁在前由拼音定），所以比较集合而不是顺序。
+  const ids = (list) => list.map((m) => m.id).sort()
+  assert.deepEqual(ids(sceneMemoriesOf(memories, '办公')), ['办公/流程/站会', '办公/周报格式'].sort())
+  assert.deepEqual(ids(sceneMemoriesOf(memories, 'global')), ['global/总则'], '全局只在自己的档案里出现')
+  assert.deepEqual(ids(sceneMemoriesOf(memories, '生活')), ['生活/记账'])
+  assert.deepEqual(sceneMemoriesOf(memories, '不存在'), [])
+  assert.equal(sceneOfGroup('办公/流程/站会'), '办公')
+  assert.equal(sceneOfGroup('global'), 'global')
+
+  // ② 默认勾选 = 本场景里已启用的那几条（全局/别的场景一条都不进来）。
+  const rules = [
+    { id: 'global/总则', group: 'global', enabled: true },
+    { id: '办公/周报格式', group: '办公', enabled: true },
+    { id: '办公/流程/站会', group: '办公/流程', enabled: false },
+    { id: '生活/记账', group: '生活', enabled: true },
+  ]
+  assert.deepEqual(memDefaultPickIds(memories, rules, '办公'), ['办公/周报格式'])
+  assert.deepEqual(memDefaultPickIds(memories, rules, 'global'), ['global/总则'])
+  assert.deepEqual(memDefaultPickIds(memories, [], '办公'), [], '拿不到 rules 时不预勾，宁少不滥')
+
+  // ③ 源码守卫：那一段不许再出现场景卡片/钻取（它们正是「列了不生效」的载体）。
+  assert.equal(/dsm-scene-card/.test(src), false, '记忆段的场景卡片应已删除')
+  assert.equal(/memDrill/.test(src), false, '「选记忆」钻取应已删除')
+  assert.match(src, /function allMemoryIds\(\) \{\s*return sceneMemories\(modal\.name\)/, '「全选」必须只覆盖本场景')
+})
+
+/**
+ * 档案弹窗各段的**默认勾选 + 描述截断**契约（用户要求）：
+ *   - MCP 工具集 / 技能集 / 子智能体绑定：点「添加」后一律**不勾选**；
+ *   - 记忆：只勾**本场景里已启用**的那几条（作用域见上一条用例），「全选」= 本场景全部；
+ *   - 记忆描述按 80 字截断（太长会横向溢出段边框）。
+ * 记忆的默认值是真逻辑（memDefaultPickIds），直接调；其余是常量动作，用源码守卫。
+ */
+test('档案弹窗：三段「添加」即空集，记忆默认只勾本场景已启用的，描述按上限截断', () => {
   const exported = loadModule()
   exported.apply(fakeCtx(fakeSlots(), exported.dict))
   const { memDefaultPickIds, memDescMax, clipText } = exported.pages
@@ -333,19 +368,17 @@ test('档案弹窗默认勾选：MCP/技能/子智能体空集，记忆只勾「
 
   const memories = [
     { id: 'global/总则', scene: 'global', name: '总则', description: 'x' },
-    { id: 'global/停用的', scene: 'global', name: '停用的', description: 'y' },
     { id: '办公/周报', scene: '办公', name: '周报', description: 'z' },
-    { id: 'global/被覆盖的', scene: 'global', name: '被覆盖的', description: 'w' },
+    { id: '办公/停用的', scene: '办公', name: '停用的', description: 'y' },
   ]
   const rules = [
     { id: 'global/总则', group: 'global', enabled: true },
-    { id: 'global/停用的', group: 'global', enabled: false },
     { id: '办公/周报', group: '办公', enabled: true },
-    { id: 'global/被覆盖的', group: 'global', enabled: true, shadowed: true },
+    { id: '办公/停用的', group: '办公', enabled: false },
   ]
-  assert.deepEqual(memDefaultPickIds(memories, rules), ['global/总则'], '默认只勾「全局」+ 已启用 + 未被覆盖')
-  assert.deepEqual(memDefaultPickIds(memories, []), [], '拿不到 rules（老宿主/请求失败）时不预勾，宁少不滥')
-  assert.deepEqual(memDefaultPickIds([{ id: 'global/a', scene: 'global' }], [{ id: 'global/a', enabled: undefined }]), ['global/a'], 'enabled 缺省视为启用（与记忆页一致）')
+  assert.deepEqual(memDefaultPickIds(memories, rules, '办公'), ['办公/周报'], '默认只勾本场景 + 已启用')
+  assert.deepEqual(memDefaultPickIds(memories, [], '办公'), [], '拿不到 rules（老宿主/请求失败）时不预勾，宁少不滥')
+  assert.deepEqual(memDefaultPickIds([{ id: '办公/a', scene: '办公' }], [{ id: '办公/a', enabled: undefined }], '办公'), ['办公/a'], 'enabled 缺省视为启用（与记忆页一致）')
 
   // 记忆描述必须截断：上限存在、且超长必裁（记忆正文可能很长，行内只留一行）。
   const max = memDescMax()
@@ -354,12 +387,12 @@ test('档案弹窗默认勾选：MCP/技能/子智能体空集，记忆只勾「
   assert.equal(clipped.length, max)
   assert.equal(clipped.endsWith('…'), true)
 
-  // 源码守卫：两段的「添加」动作必须是空集（默认不勾选）。
+  // 源码守卫：三段的「添加」动作必须是空集（默认不勾选）。
   assert.match(src, /\{ mcp: emptyMcpPreset\(\) \}/, 'MCP 工具集「添加」必须默认不勾选')
   assert.match(src, /\{ skills: \[\] \}/, '技能集「添加」必须默认不勾选')
   assert.match(src, /subagents: \[\] \}/, '子智能体绑定「添加」必须默认不勾选')
-  // 反向守卫：记忆段的「全选」必须是真正的全选，不能还是默认值那一个子集。
-  assert.match(src, /memories: allMemoryIds\(\) \}/, '记忆段「全选」必须勾上全部记忆')
+  // 反向守卫：记忆段的「全选」= 本场景全部，不能退化成默认值那一个子集。
+  assert.match(src, /memories: allMemoryIds\(\) \}/, '记忆段「全选」必须勾上本场景全部记忆')
 })
 
 test('apply 装配：注册 settings.section（slots 缺失时会静默什么都不注册，这条挡住白屏）', () => {
