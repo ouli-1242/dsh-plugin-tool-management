@@ -14,6 +14,7 @@ import {
   setSkillEnabled,
   setPreferredSkill,
   setSourceEnabled,
+  setSourceRemoved,
   deleteSkill,
   restoreTrash,
   permanentlyDeleteTrash,
@@ -411,6 +412,15 @@ export function createSkillsService(ctx: any): SkillsService {
     ),
     'skill-source-disable': wrap(
       (args) => write(async () => setSourceEnabled(await requestRoot(String(args.root || '')), false, log)),
+      afterWrite,
+    ),
+    // 移除 / 恢复来源（「不再读取这个文件夹」）：只改本地状态，源目录一个字节都不动。
+    'skill-source-remove': wrap(
+      (args) => write(async () => setSourceRemoved(await requestRoot(String(args.root || '')), true, log)),
+      afterWrite,
+    ),
+    'skill-source-restore': wrap(
+      (args) => write(async () => setSourceRemoved(await requestRoot(String(args.root || '')), false, log)),
       afterWrite,
     ),
     // 同名技能首选来源（手工指定哪个同名版本生效；只写本地策略）。

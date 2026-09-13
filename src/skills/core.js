@@ -1211,6 +1211,10 @@ function defaultManagerState() {
     customRoots: [],
     // 同名技能「首选来源」：技能名 → 来源 key。缺键 = 按来源 rank 取最高优先级者。
     preferredSkills: Object.create(null),
+    // 用户从技能页「移除」的来源：插件**不再读取**这些目录（技能不出现在列表里，
+    // 也不参与 provider 候选）。与「停用来源」不同——停用仍列出技能、只是不可调用。
+    // 源文件一个字节都不动；清空这个数组即可恢复。
+    removedSources: [],
   };
 }
 
@@ -1278,6 +1282,16 @@ function validManagerStateDocument(value) {
   // 自定义来源列表：可选字段；容器必须是数组（条目级合法性由 normalize 逐条裁剪）。
   if (value.customRoots !== undefined && !Array.isArray(value.customRoots))
     return false;
+  // 已移除的来源：可选字段；数组里的每一项必须能当来源 key 用。
+  if (value.removedSources !== undefined) {
+    if (
+      !Array.isArray(value.removedSources) ||
+      value.removedSources.some(
+        (key) => typeof key !== "string" || key.length === 0 || key.length > 128,
+      )
+    )
+      return false;
+  }
   // 同名首选表：可选字段；只校验容器与值类型，键值逐条在 normalize 里裁剪（见 validPreferredSkillName）。
   if (value.preferredSkills !== undefined) {
     if (
@@ -1366,7 +1380,43 @@ function normalizeManagerState(value) {
       normalized.preferredSkills[name] = rootKey;
     }
   }
+  // 已移除的来源：只保留「确实是已知来源 key」的条目，其余丢弃（避免脏键让整份状态非法）。
+  {
+    const raw = Array.isArray(value.removedSources) ? value.removedSources : [];
+    const known = new Set([
+      ...userRoots().map((root) => root.key),
+      ...customKeys,
+    ]);
+    normalized.removedSources = [
+      ...new Set(
+        raw.filter(
+          (key) =>
+            typeof key === "string" &&
+            known.has(key) &&
+            key !== "dsh" &&
+            key !== "hub",
+        ),
+      ),
+    ].sort();
+  }
   return normalized;
+}
+
+/**
+ * 参与扫描的来源 = 全部来源 − 用户已移除的。
+ *
+ * 「移除来源」与「停用来源」是两件事：
+ *   - 停用（`sources[key] = false`）：仍然读取并列出技能，只是不可调用；
+ *   - 移除（出现在 `removedSources`）：**连目录都不读**，技能不出现在列表里，
+ *     也不参与 provider 候选。源文件不动，清掉这个标记即恢复。
+ */
+export function activeUserRoots(stateValue) {
+  const removed = new Set(
+    stateValue && Array.isArray(stateValue.removedSources)
+      ? stateValue.removedSources
+      : [],
+  );
+  return userRoots().filter((root) => !removed.has(root.key));
 }
 
 /** 裁剪自定义来源列表：非法条目丢弃，key/path 绑定校验，label 规整。 */
@@ -1542,6 +1592,51 @@ export async function setSourceEnabled(rootOrKey, enabled, log) {
       `${enabled ? "启用" : "停用"}来源 ${root.key}: ${root.path}`,
     );
   return { root: root.key, enabled: enabled === true };
+}
+
+/**
+ * 移除 / 恢复一个来源（用户要求：「是不读取这个文件夹了，不是把文件夹删除」）。
+ *
+ * - `removed = true`：来源进入 `removedSources`，插件**不再读取该目录** —— 技能不出现在
+ *   技能页，也不参与 provider 候选。**源文件与目录一个字节都不动。**
+ * - `removed = false`：清除标记，下一步扫描即恢复。
+ *
+ * 与 `setSourceEnabled(false)` 的区别：停用仍然读目录、仍然列出技能（只是不可调用）；
+ * 移除是"当它不存在"。`dsh`（官方技能目录）与 `hub`（导入技能落点）不允许移除 ——
+ * 它们是插件自身的读写根，移除会让创建/导入无处落脚。
+ */
+export async function setSourceRemoved(rootOrKey, removed, log) {
+  const root =
+    rootOrKey && typeof rootOrKey === "object" && typeof rootOrKey.key === "string"
+      ? rootOrKey
+      : rootByKey(rootOrKey);
+  if (!root) return readonlyError(removed === true ? "remove" : "restore");
+  if (root.key === "dsh" || root.key === "hub")
+    return {
+      ok: false,
+      code: "error.source.reserved",
+      params: { root: root.key },
+      error:
+        root.key === "dsh"
+          ? "DSH 技能目录是官方来源，不能从管理器移除"
+          : "导入技能目录是插件自身的读写落点，不能移除",
+    };
+  if (root.scope === "project") return readonlyError("remove");
+  const current = await readManagerState();
+  if (current.writable === false) return invalidManagerStateWrite();
+  const set = new Set(
+    Array.isArray(current.state.removedSources) ? current.state.removedSources : [],
+  );
+  if (removed === true) set.add(root.key);
+  else set.delete(root.key);
+  current.state.removedSources = [...set].sort();
+  await writeManagerState(current.state);
+  if (log)
+    log(
+      removed === true ? "source-remove" : "source-restore",
+      `${removed === true ? "移除（不再读取）" : "恢复读取"}来源 ${root.key}: ${root.path}`,
+    );
+  return { root: root.key, removed: removed === true };
 }
 
 async function checkedPolicyRootDefinition(root) {
@@ -2842,7 +2937,11 @@ export async function skillDetail(keyOrRoot, name, options = {}) {
 export async function listProviderCandidates(options = {}) {
   const policyResult = await readManagerState();
   const candidates = [];
-  const user = userRoots().concat(customRootsFromState(policyResult.state));
+  const user = activeUserRoots(policyResult.state).concat(
+    customRootsFromState(policyResult.state).filter(
+      (root) => !policyResult.state.removedSources.includes(root.key),
+    ),
+  );
   const userScans = await scanDeduplicatedRoots(user);
   const items = user.flatMap((root) =>
     userScans.get(root.key).entries.map((entry) => ({ root, entry })),
@@ -3031,8 +3130,18 @@ function markWinners(items, options = {}) {
 /** DSH、常见 Agent、自定义目录与活动 Session 项目根的技能快照。 */
 export async function state(options = {}) {
   const policyResult = await readManagerState();
-  const user = userRoots().concat(customRootsFromState(policyResult.state));
-  const userScans = await scanDeduplicatedRoots(user);
+  const removedKeys = new Set(
+    Array.isArray(policyResult.state.removedSources)
+      ? policyResult.state.removedSources
+      : [],
+  );
+  // 已移除的来源仍然出现在 roots 里（界面要能显示「已移除」并允许恢复），但**不扫描**：
+  // 技能不入列表、不参与重名决胜 —— 这正是用户要的「不读取这个文件夹」。
+  // 注意这里必须用**全部**来源 + 自定义来源，不能只用 activeUserRoots()，
+  // 否则被移除的来源会连行都不剩，界面就无从提供「恢复读取」。
+  const user = [...userRoots(), ...customRootsFromState(policyResult.state)];
+  const scannable = user.filter((root) => !removedKeys.has(root.key));
+  const userScans = await scanDeduplicatedRoots(scannable);
   const projectWarnings = [];
   const scoped = await projectRoots(options.projectCwds, projectWarnings);
   const trash = await listTrash();
@@ -3060,10 +3169,35 @@ export async function state(options = {}) {
     });
   const all = [];
   for (const root of [...scoped, ...user]) {
-    const { exists, entries, truncated } =
-      root.scope === "project"
+    const isRemoved = removedKeys.has(root.key);
+    const { exists, entries, truncated } = isRemoved
+      ? { exists: false, entries: [], truncated: false }
+      : root.scope === "project"
         ? (await scanDeduplicatedRoots([root])).get(root.key)
         : userScans.get(root.key);
+    if (isRemoved) {
+      // 已移除：登记一行（供界面显示与恢复），但没有任何技能。
+      result.roots.push({
+        key: root.key,
+        ...(root.kind ? { kind: root.kind } : {}),
+        ...(root.localeKey ? { localeKey: root.localeKey } : {}),
+        path: root.path,
+        label: root.label,
+        mutable: root.mutable,
+        deletable: root.deletable === true,
+        removable: root.key !== "dsh" && root.key !== "hub" && root.scope !== "project",
+        toggleable: root.toggleable,
+        native: root.native,
+        rank: root.rank,
+        scope: root.scope || "user",
+        exists: false,
+        truncated: false,
+        removed: true,
+        enabled: false,
+        skills: [],
+      });
+      continue;
+    }
     // 即使项目 .dsh/skills 尚不存在，也要把可写根返回给创建表单；只读项目根仍按实际存在性展示。
     if (root.scope === "project" && !exists && root.kind !== "project-dsh")
       continue;
@@ -3127,6 +3261,10 @@ export async function state(options = {}) {
         : {}),
       exists,
       truncated: truncated === true,
+      // 界面用：能否从管理器「移除」（不再读取）。dsh / hub / 项目级不可移除。
+      removable:
+        root.key !== "dsh" && root.key !== "hub" && root.scope !== "project",
+      removed: false,
       enabled:
         policyResult.writable !== false &&
         (root.scope === "project" ||

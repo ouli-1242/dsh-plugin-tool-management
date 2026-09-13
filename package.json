@@ -37,7 +37,7 @@
     "prepublishOnly": "npm run build",
     "lint": "node --check lib/client.js && node --check lib/index.js",
     "check:i18n": "node scripts/check-i18n.mjs src/client.js",
-    "test": "npm run build && npm run check:i18n && node --test test/archive.test.mjs test/import.test.mjs test/approval-policy.test.mjs test/subagent-scene.test.mjs test/subagent-persona.test.mjs test/hub-layout.test.mjs test/skills-state.test.mjs test/skills-delete.test.mjs test/client-exports.test.mjs test/client-render.test.mjs"
+    "test": "npm run build && npm run check:i18n && node --test test/archive.test.mjs test/import.test.mjs test/approval-policy.test.mjs test/subagent-scene.test.mjs test/subagent-persona.test.mjs test/hub-layout.test.mjs test/skills-state.test.mjs test/skills-delete.test.mjs test/skills-source-remove.test.mjs test/client-exports.test.mjs test/client-render.test.mjs"
   },
   "keywords": [
     "dsh",
