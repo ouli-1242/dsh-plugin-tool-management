@@ -1368,14 +1368,50 @@ function normalizeCustomRoots(value) {
   return out;
 }
 
+/**
+ * 读状态文件。
+ *
+ * **校验的是「归一化之后」的文档，不是磁盘上的原始 JSON** —— 这一条是踩出来的：
+ * 校验器要求每个 `userRoots()` 来源都在 `sources` 里有布尔值、在 `disabledSkills` 里有数组，
+ * 而来源列表会随版本增加（v0.4 加了 `hub` 来源）。于是**版本升级本身**就会把一份完好的旧
+ * 状态文件判成「非法」，紧接着 fail-closed：所有来源停用、写入锁定，Skills 页弹
+ * 「状态文件不可读，已拒绝覆盖」。文件其实一个字节都没坏。
+ *
+ * 归一化会把缺失的键补成默认值（新来源默认启用），所以「我们后来加过键」与「文件真的坏了」
+ * 由此区分开：前者修复后通过，后者（不是对象、version 不是 1、字段类型不对）仍然拒绝。
+ */
 export async function readManagerState() {
   try {
     const raw = await fs.readFile(managerStatePath(), "utf8");
     const parsed = JSON.parse(raw);
-    if (!validManagerStateDocument(parsed))
+    // 版本号在归一化时不会被保留（恒为 1），所以要在解析结果上直接判：
+    // 缺失按 1 处理（更早的文档没有这个字段），存在但不是 1 才判非法。
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      && parsed.version !== undefined && parsed.version !== 1)
+      throw codedError("invalid manager state schema", "error.state.invalid");
+    // 结构守卫：字段**可以缺**（旧文档），但**一旦存在就必须形状正确**。
+    // 少了这道守卫，归一化会把「类型写错」当成「键缺失」一起补默认值——于是 `sources: []`
+    // 或 `disabledSkills: { dsh: "x" }` 这种真损坏反而被自愈放行，静默丢掉文件里的策略。
+    // 契约：**缺键自愈（我们后来加过的东西），类型错必须报错。**
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const field of ["sources", "disabledSkills", "enabledSkills"]) {
+        const value = parsed[field];
+        if (value === undefined) continue;
+        if (value === null || typeof value !== "object" || Array.isArray(value))
+          throw codedError("invalid manager state schema", "error.state.invalid");
+        // 策略表的每个桶必须是数组（条目级合法性仍由 normalize 逐条裁剪）。
+        if (field === "disabledSkills" || field === "enabledSkills") {
+          for (const bucket of Object.values(value))
+            if (!Array.isArray(bucket))
+              throw codedError("invalid manager state schema", "error.state.invalid");
+        }
+      }
+    }
+    const normalized = normalizeManagerState(parsed);
+    if (!validManagerStateDocument(normalized))
       throw codedError("invalid manager state schema", "error.state.invalid");
     return {
-      state: normalizeManagerState(parsed),
+      state: normalized,
       warning: null,
       writable: true,
     };

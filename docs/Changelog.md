@@ -50,12 +50,14 @@
 - **场景档案编辑器**：新增第 4 段「记忆」（`archive.memories`，id = `<场景>/<名>`）。勾选语义与其余段同构——**段未定义 = 不碰；段已定义但没勾的记忆不进提示词**；勾选**只影响投影**，记忆文件与内容一律不动。场景改成卡片（描述 + 已勾/总数 + 「始终注入」标记），点「选记忆」进场景内的记忆明细钻取视图。四段都加筛选框。
 - **人设表单**：模型与工具限制收进「**高级选项**」折叠区（已配置则自动展开）。模型 = 宿主 LLM 目录里的 `provider · model` 下拉 + 「自定义」手填兜底；工具白名单/黑名单 = 勾选器，候选是**全部 Agent 预设工具名的并集**并标注「当前会话可见 / 其它预设里可用」。折叠区**首次展开才拉候选**（枚举预设需要 standing mount，不该在开弹窗时付代价）。
 - **勾选类原语提到模块作用域**（段卡片 / 勾选行 / 筛选行 / 分组标题 / 段头动作 / 段脚注），档案编辑器与人设工具选择器共用同一套排版。
+- **七个页面的副标题统一为同一句式**（`管理X：动作、动作与动作。`）：场景从「定义式 + 两句」改为与其他页同构；子智能体去掉绝对路径；提示词页与会话页的两条原本是**硬编码中文**（英文界面下永远是中文），一并接进 i18n（新增 `prompts.desc` / `sessions.desc`）。
 - **i18n**：MCP 页与共享状态层（级别、运行状态、表头、表单字段、详情、确认弹窗、工具栏）从硬编码中文改为 `t()`。**剩余欠账 113 条**：提示词页 38、会话页 75（见「已知问题」）。
 
 ### 修复
 
 | 缺陷 | 根因 | 证据 |
 |---|---|---|
+| **Skills 页被锁死**：弹「状态文件不可读，已拒绝覆盖」+「已安全停用所有技能」 | 校验器 `validManagerStateDocument` 要求**每个** `userRoots()` 来源都在 `sources` 里有布尔值、在 `disabledSkills` 里有数组；而 v0.4 给来源列表加了 `hub`。用户磁盘上那份 `state.json` 是加 `hub` **之前**写的（`sources` 只有 `agents/codex/claude/custom-*`），于是**版本升级本身**把一份完好文件判成非法 → `failClosedManagerState()`：全部来源停用 + 写入锁定。文件一个字节都没坏（1483 字节、合法 JSON、无 BOM，实测 `JSON.parse` 通过） | 活体验收：用户报告 + 对比 `userRoots()`（`dsh, hub, agents, codex, claude`）与文件键（缺 `hub`）。**修法**：`readManagerState` 改为校验**归一化之后**的文档（缺键补默认值），并加一道结构守卫——**缺键自愈，类型错（`sources: []`、`disabledSkills: {dsh: "x"}`）与不认识 `version` 仍然拒绝**。回归测试 `test/skills-state.test.mjs`（3 例）覆盖两侧；测试本身抓到过「自愈过宽」（`sources: []` 被静默放行） |
 | 人设目录不存在时 `subagent-create` 直接 ENOENT | 人设搬到 hub 内的 `agents/` 后，全新安装该目录不存在；旧目录 `$DSH_HOME/subagents/` 一直有人建，所以从未暴露 | 活体探测返回 `ENOENT: ...\tool-management\agents\hub-probe.md` → 修后单测 `test/subagent-persona.test.mjs` 覆盖 |
 | 旧布局迁移把场景目录**多套一层**（`memories/办公/办公/周报.md`） | `relocateLegacyLayout` 对目录也用了 `join(memoriesRoot, name, name)` | `test/hub-layout.test.mjs` 迁移用例抓出 |
 | 英文界面下 MCP 级别筛选永远是中文且翻不过来 | `MCP_LEVEL_OPTIONS` 是**模块级常量**，`apply()` 早于 locale 注册 | 改为渲染时求值 `mcpLevelOptions()` |
@@ -144,7 +146,7 @@ client.js:526 slot entry crashed in 'settings.section': ReferenceError: sceneLab
 
 ### 契约测试
 
-`npm test` = build + `check:i18n` + **68 例** node --test：
+`npm test` = build + `check:i18n` + **71 例** node --test：
 
 - `archive.test.mjs`（13）：档案纯逻辑 + 引擎状态机
 - `import.test.mjs`（16）：zip/上传展开、落点规划、限额**回报**（不静默丢）
@@ -152,6 +154,7 @@ client.js:526 slot entry crashed in 'settings.section': ReferenceError: sceneLab
 - `subagent-scene.test.mjs`（6）：场景绑定必须在子代理运行**之前**拒绝
 - `subagent-persona.test.mjs`（9）：frontmatter 往返（`provider`/`model`/`toolsDeny`）、目录不存在时创建、重名拒绝
 - `hub-layout.test.mjs`（12）：旧布局搬移不覆盖、`global` 恒在且不可删、记忆必须归属已存在场景、档案记忆段只影响投影、路径回传
+- `skills-state.test.mjs`（3）：**技能状态文件读取韧性** —— 旧文档缺后来新增的来源键 → 自愈补默认值不 fail-closed；文件不存在 → 默认状态；version 不认识 / 非 JSON / 类型写错 → warning + 锁定 + 全部来源停用（fail-closed）
 - `client-exports.test.mjs`（3）：**运行时导出契约** —— 只求值 factory（不跑 `apply`）就必须拿到
   `dict`/`pages`/`apply`；词典 zh/en 键集合一致、无空文案；代码里每个字面量 `t('键')` 都能解析。
   反向护栏：禁止缩进 ≥ 8 空格的 `module.exports.X =`
