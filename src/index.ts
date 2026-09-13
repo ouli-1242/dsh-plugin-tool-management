@@ -1060,8 +1060,8 @@ export default {
       })
     }
 
-    const SETTINGS_DEFAULTS = { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true }
-    let pluginSettingsCache: { at: number; value: { pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean } } | null = null
+    const SETTINGS_DEFAULTS = { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true, requireConfirmForModelSubagentRun: true }
+    let pluginSettingsCache: { at: number; value: { pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean } } | null = null
     function clampInt(value: unknown, min: number, max: number, fallback: number): number {
       // Number(null) is 0 — treat missing/empty input as "use the default".
       if (value === null || value === undefined || value === '') return fallback
@@ -1069,7 +1069,7 @@ export default {
       if (!Number.isFinite(n)) return fallback
       return Math.min(max, Math.max(min, Math.round(n)))
     }
-    async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean }> {
+    async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean }> {
       if (pluginSettingsCache && !force && Date.now() - pluginSettingsCache.at < SIDECAR_TTL_MS) return pluginSettingsCache.value
       const p = await ensurePaths()
       const raw = await readJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-settings.json'))
@@ -1083,6 +1083,10 @@ export default {
           requireConfirmForModelRuleWrite: (raw && typeof raw.requireConfirmForModelRuleWrite === 'boolean')
             ? raw.requireConfirmForModelRuleWrite
             : SETTINGS_DEFAULTS.requireConfirmForModelRuleWrite,
+          // 子代理运行花真 token：默认确认，设置可关（设计 §3.2）。
+          requireConfirmForModelSubagentRun: (raw && typeof raw.requireConfirmForModelSubagentRun === 'boolean')
+            ? raw.requireConfirmForModelSubagentRun
+            : SETTINGS_DEFAULTS.requireConfirmForModelSubagentRun,
         },
       }
       return pluginSettingsCache.value
@@ -1096,6 +1100,9 @@ export default {
         requireConfirmForModelRuleWrite: (args && typeof args.requireConfirmForModelRuleWrite === 'boolean')
           ? args.requireConfirmForModelRuleWrite
           : current.requireConfirmForModelRuleWrite,
+        requireConfirmForModelSubagentRun: (args && typeof args.requireConfirmForModelSubagentRun === 'boolean')
+          ? args.requireConfirmForModelSubagentRun
+          : current.requireConfirmForModelSubagentRun,
       }
       const p = await ensurePaths()
       return withWriteLock(async () => {

@@ -21,7 +21,9 @@ export function defineSubagentListTool(subagents: { list(): Promise<PersonaDoc[]
   return {
     name: 'subagent_list',
     description: 'List available personas (pre-configured subagent profiles) with their descriptions. Call before subagent_run.',
-    parameters: {},
+    parameters: {
+      scene: { type: 'string', description: 'Optional scene name filter (informational; the tool already reflects scene binding).' },
+    },
     output: { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => text(String(v)) },
     async execute() {
       const { allowed, reason } = await filterBySceneBinding(await subagents.list(), await subagents.sceneLists())

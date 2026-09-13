@@ -1660,18 +1660,19 @@ function callApi(path, options) {
             }).catch(function () {})
             apiCall('rules-list', {}).then(function (r) {
               if (r && r.ok) {
-                setData({
+                // 合并式更新：保留并行 scene-mode-get 写入的 modeInfo/archives（整对象替换会抹掉它们）。
+                setData(function (prev) { return Object.assign({}, prev, {
                   loading: false, error: null,
                   rules: r.rules || [], scenes: r.scenes || [],
                   activeMode: r.activeMode === 'custom' ? 'custom' : 'all',
                   sceneMemory: r.sceneMemory || EMPTY_MEMORY,
                   stats: r.stats || EMPTY_STATS,
-                })
+                }) })
               } else {
-                setData({ loading: false, error: translateError(t, r), rules: [], scenes: [], activeMode: 'all', sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS })
+                setData(function (prev) { return Object.assign({}, prev, { loading: false, error: translateError(t, r), rules: [], scenes: [], activeMode: 'all', sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS }) })
               }
             }).catch(function (e) {
-              setData({ loading: false, error: String((e && e.message) || e), rules: [], scenes: [], activeMode: 'all', sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS })
+              setData(function (prev) { return Object.assign({}, prev, { loading: false, error: String((e && e.message) || e), rules: [], scenes: [], activeMode: 'all', sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS }) })
             })
           }
           React.useEffect(function () { refresh() }, [])
