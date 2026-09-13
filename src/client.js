@@ -97,11 +97,10 @@ window.__ModuleLoader__.load({
    四类信息各占一行，互不挤：标题行（名字/别名/标签/开关）、描述行（单行省略）、动作行（主次按钮）。
    卡片上**不再出现数量**（记忆条数、已配 N 台 MCP…）：它们是上次「卡片显得杂乱」的直接来源，
    现在统一收进页首的「当前模式」条里，只有一处。 */
-.dsm-mode-bar{display:flex;min-width:0;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
-.dsm-mode-bar-on{border-color:var(--dsw-alias-state-success-primary)}
+/* 当前模式条：只在进入模式后出现（没有条 = 自由模式，不需要常驻的解释文案）。 */
+.dsm-mode-bar{display:flex;min-width:0;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--dsw-alias-state-success-primary);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 .dsm-mode-bar .dsm-btn{margin-left:auto;flex:none}
-.dsm-mode-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--dsw-alias-label-tertiary)}
-.dsm-mode-bar-on .dsm-mode-dot{background:var(--dsw-alias-state-success-primary)}
+.dsm-mode-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
 .dsm-mode-main{min-width:0;flex:1}
 .dsm-mode-title{overflow:hidden;font-size:13px;font-weight:620;text-overflow:ellipsis;white-space:nowrap}
 .dsm-mode-sub{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}
@@ -268,7 +267,6 @@ window.__ModuleLoader__.load({
         "scenes.title": "场景", "scenes.desc": "管理场景：可以预设不同的使用场景，包含 MCP、Skills、子智能体、记忆",
         "scenes.stat.total": "个场景", "scenes.stat.active": "个已启用", "scenes.stat.archives": "个有档案",
         "scenes.noDesc": "还没有描述",
-        "scenes.mode.free": "自由模式", "scenes.mode.free.hint": "各场景按自己的启用开关注入记忆；切入某个模式后按它的档案收窄。",
         "scenes.mode.active": "当前模式：{name}", "scenes.mode.profile": "档案：{parts}", "scenes.mode.noProfile": "这个场景还没有档案",
         "scenes.mode.enter": "切入此模式", "scenes.empty": "还没有场景，点「新建场景」创建",
         "scenes.field.desc.limit": "最多 {count} 字；超出部分在卡片上省略。",
@@ -457,7 +455,6 @@ window.__ModuleLoader__.load({
         "scenes.title": "Scenes", "scenes.desc": "Manage scenes: preset different usage scenes combining MCP servers, skills, subagents and memories",
         "scenes.stat.total": "scene(s)", "scenes.stat.active": "enabled", "scenes.stat.archives": "with a profile",
         "scenes.noDesc": "No description yet",
-        "scenes.mode.free": "Free mode", "scenes.mode.free.hint": "Each scene injects memories by its own switch; entering a mode narrows injection to that profile.",
         "scenes.mode.active": "Active mode: {name}", "scenes.mode.profile": "Profile: {parts}", "scenes.mode.noProfile": "This scene has no profile yet",
         "scenes.mode.enter": "Enter this mode", "scenes.empty": "No scenes yet — use New scene",
         "scenes.field.desc.limit": "Up to {count} characters; longer text is clipped on the card.",
@@ -2647,16 +2644,18 @@ function callApi(path, options) {
                 return React.createElement('div', { key: item[1], className: 'dsm-stat' },
                   React.createElement('strong', null, item[0]), item[1])
               })),
-            // 当前模式条：全页唯一讲「现在生效的是什么」的地方
-            //（原先是页头一个标签 + 每张卡片尾部一串「已配：MCP N 台 · 技能 N 个…」）。
-            React.createElement('div', { key: 'mode', className: 'dsm-mode-bar' + (modeScene ? ' dsm-mode-bar-on' : '') },
+            // 当前模式条：**只在真的进入了模式时才出现**。
+            // 以前没有模式时也常驻一条「自由模式 + 一句解释」，用户反馈「这个是干什么的，感觉没什么用」——
+            // 静态解释占一整条，而「没有条 = 没有模式」本来就不言自明。现在它只承载有状态的信息：
+            // 哪个场景是当前模式、它包含什么档案、怎么退出。
+            modeScene ? React.createElement('div', { key: 'mode', className: 'dsm-mode-bar' },
               React.createElement('span', { className: 'dsm-mode-dot' }),
               React.createElement('div', { className: 'dsm-mode-main' },
                 React.createElement('div', { className: 'dsm-mode-title' },
-                  modeScene ? t('scenes.mode.active', { name: sceneLabel(data.scenes, modeScene) || modeScene }) : t('scenes.mode.free')),
+                  t('scenes.mode.active', { name: sceneLabel(data.scenes, modeScene) || modeScene })),
                 React.createElement('div', { className: 'dsm-mode-sub' },
-                  modeScene ? (modeSummary ? t('scenes.mode.profile', { parts: modeSummary }) : t('scenes.mode.noProfile')) : t('scenes.mode.free.hint'))),
-              modeScene ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: exitMode }, t('memory.mode.exit')) : null),
+                  modeSummary ? t('scenes.mode.profile', { parts: modeSummary }) : t('scenes.mode.noProfile'))),
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: exitMode }, t('memory.mode.exit'))) : null,
             React.createElement(Notice, { key: 'notice', kind: result && result.ok ? 'ok' : 'err', text: result && result.text }),
             data.error ? React.createElement('div', { key: 'gerr', className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
             data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))

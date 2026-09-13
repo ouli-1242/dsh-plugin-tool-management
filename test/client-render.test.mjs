@@ -28,6 +28,12 @@ const src = readFileSync('lib/client.js', 'utf8')
  * `sceneLabel is not defined` 的 ReferenceError 就这样从测试里溜过去了（真实后果是
  * 「工具」页整页白屏）。**渲染测试必须让列表渲染路径真的跑起来。**
  */
+/**
+ * 当前模式（`scene-mode-get` 回的 `mode.scene`）。测试可临时改成 null 表示「没进任何模式」——
+ * 「自由模式」那条常驻解释已被删除，这条用两种模式状态各渲染一遍来守。
+ */
+let modeSceneFixture = '办公'
+
 function fixtureFor(op) {
   const scenes = [
     { name: 'global', label: '全局', order: 0, count: 1, active: true, shared: false, global: true, description: '任何对话都注入' },
@@ -43,7 +49,7 @@ function fixtureFor(op) {
     case 'rules-list':
       return { ok: true, rules, groups: [{ name: 'global', label: '全局', order: 0, count: 1 }], scenes, activeMode: 'all', sceneMemory: { usedBytes: 660, maxBytes: 65536, truncated: false, dropped: [] }, paths: { memories: 'C:/m', scenes: 'C:/s', hub: 'C:/h' }, stats: { total: 3, enabled: 2, scenes: 3 } }
     case 'scene-mode-get':
-      return { ok: true, mode: { scene: '办公', snapshot: { mcp: ['github'], skills: ['find-extensions'], subagents: [] } }, archives: { 办公: { mcp: ['github'], skills: ['find-extensions'], subagents: [], memories: ['办公/周报格式'] } } }
+      return { ok: true, mode: { scene: modeSceneFixture, snapshot: { mcp: ['github'], skills: ['find-extensions'], subagents: [] } }, archives: { 办公: { mcp: ['github'], skills: ['find-extensions'], subagents: [], memories: ['办公/周报格式'] } } }
     case 'rules-budget':
       return { ok: true, usedBytes: 660, maxBytes: 65536, truncated: false, scenes, items: rules.map((r) => ({ id: r.id, bytes: r.bytes, injected: r.enabled, scene: r.group })) }
     case 'subagent-list':
@@ -394,6 +400,69 @@ test('面板渲染：整棵组件树首次渲染都不抛错（递归进页面�
     for (const line of result.failures) failures.push(`${name}: ${line}`)
   }
   assert.deepEqual(failures, [], '页面渲染抛错:\n' + failures.join('\n'))
+})
+
+/**
+ * 场景页「当前模式」条：**只在真的进入模式后出现**。
+ * 用户反馈「自由模式 / 各场景按自己的启用开关注入记忆…这个是干什么的，感觉没什么用」——
+ * 那条常驻的静态解释已删；这里两种状态各渲染一遍，确认「有条」与「没条」的差别只由状态决定。
+ */
+test('场景页：「当前模式」条只在进入模式后出现（不再常驻一条「自由模式」解释）', async () => {
+  /** 展开函数组件并把 class / 文本收集出来（同一个组件只展开一次，避免 hook 槽位错位）。 */
+  const collect = (element, view, seen = new Set(), out = { classes: new Set(), text: [] }) => {
+    if (element === null || element === undefined || typeof element === 'boolean') return out
+    if (typeof element === 'string' || typeof element === 'number') { out.text.push(String(element)); return out }
+    if (Array.isArray(element)) { for (const item of element) collect(item, view, seen, out); return out }
+    if (typeof element !== 'object' || element.type === undefined) return out
+    if (typeof element.type === 'function') {
+      if (seen.has(element.type)) return out
+      seen.add(element.type)
+      collect(view.render(element.type, element.props), view, seen, out)
+      return out
+    }
+    const cls = element.props && element.props.className
+    if (typeof cls === 'string') for (const name of cls.split(/\s+/)) if (name) out.classes.add(name)
+    collect(element.props && element.props.children, view, seen, out)
+    return out
+  }
+  const renderMode = async () => {
+    const calls = []
+    const prevFetch = globalThis.fetch
+    globalThis.fetch = makeFetch(calls)
+    try {
+      const exported = loadModule({ fetchImpl: globalThis.fetch })
+      exported.apply(fakeCtx(fakeSlots(), exported.dict))
+      const view = createDispatcher()
+      let out = null
+      for (let pass = 0; pass < 4; pass += 1) {
+        const tree = view.renderTree(React.createElement(exported.pages.ScenesPage, { t: exported.pages.t }))
+        assert.deepEqual(tree.failures, [], `渲染抛错:\n${tree.failures.join('\n')}`)
+        out = collect(React.createElement(exported.pages.ScenesPage, { t: exported.pages.t }), view)
+        try { view.runEffects() } catch { /* 交互行为不在这里断言 */ }
+        await settle()
+      }
+      assert.ok(calls.includes('rules-list'), '规则列表没被请求，用例没生效')
+      return out
+    } finally {
+      if (prevFetch === undefined) delete globalThis.fetch
+      else globalThis.fetch = prevFetch
+    }
+  }
+
+  modeSceneFixture = '办公'
+  const withMode = await renderMode()
+  assert.ok(withMode.classes.has('dsm-mode-bar'), '进入模式后必须有「当前模式」条')
+  assert.ok(withMode.text.some((s) => s.includes('当前模式：办公')), `模式条没显示当前模式：${withMode.text.slice(0, 12).join(' | ')}`)
+  assert.ok(withMode.text.some((s) => s.includes('MCP 1 台')), '模式条应给出档案摘要')
+
+  modeSceneFixture = null
+  const freeMode = await renderMode()
+  assert.equal(freeMode.classes.has('dsm-mode-bar'), false, '没进任何模式时不该有模式条（自由模式解释已删除）')
+  assert.equal(freeMode.text.some((s) => s.includes('自由模式')), false, '「自由模式」文案应已下线')
+  // 反向护栏：卡片本身照常渲染（别把整页一起弄没了）。
+  assert.ok(freeMode.classes.has('dsm-scenes'), '场景卡片网格必须仍在渲染')
+  assert.equal(freeMode.classes.has('dsm-scene-tile'), true, '场景卡片必须仍在渲染')
+  modeSceneFixture = '办公'
 })
 
 /**
