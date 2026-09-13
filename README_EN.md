@@ -248,16 +248,21 @@ npm test             # build + all semantic-contract tests (node --test test/*.t
 
 > Changes are verified by **actually exercising the real behaviour** (evidence and known issues live in
 > [Changelog](docs/Changelog.md)) instead of asserting what the code currently does — the latter
-> just copies the implementation and passes by construction. The exception is six groups of
-> **semantic-contract** tests (`npm test`, run against the built `lib/`, 61 cases):
+> just copies the implementation and passes by construction. The exception is eight groups of
+> **semantic-contract** tests (`npm test`, run against the built `lib/`, 67 cases):
 > `archive.test.mjs` (engine state machine), `import.test.mjs` (ZIP expansion, landing plans, limit
 > reporting), `approval-policy.test.mjs` (never-policy detection, driving a real cordis context and
 > a real `ApprovalService`), `subagent-scene.test.mjs` (scene binding must reject *before* a
 > subagent runs), `subagent-persona.test.mjs` (persona frontmatter round-trip: `provider`,
-> `model` and `toolsDeny` survive a UI save; creating a persona with no directory present), and
+> `model` and `toolsDeny` survive a UI save; creating a persona with no directory present),
 > `hub-layout.test.mjs` (unified data directory: legacy layouts move without overwriting, the
 > reserved `global` scene always exists and cannot be deleted, a memory must belong to an existing
-> scene, and the profile memory section only affects projection). They assert contracts, not
+> scene, and the profile memory section only affects projection), `client-exports.test.mjs`
+> (client export contract: evaluating the factory alone — without running `apply` — must already
+> expose `dict`/`pages`; exports written inside the `apply` method body are rejected), and
+> `client-render.test.mjs` (assembly and rendering: a fake ctx drives the whole `apply`, asserts
+> `settings.section` is registered, then renders the entire component tree without throwing). They
+> assert contracts, not
 > implementation copies; real-behaviour
 > acceptance still happens
 > in the browser/host and these tests do not replace it.

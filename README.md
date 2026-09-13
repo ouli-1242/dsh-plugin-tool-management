@@ -199,17 +199,19 @@ npm run build        # 构建（tsc + 同步客户端 bundle）
 npm run build:client # 只同步 src/client.js → lib/client.js
 npm run lint         # 语法自检（node --check 两个产物）
 npm run check:i18n   # 中英词典键集合 + 占位符对齐
-npm test             # 构建 + i18n 自检 + 全部语义契约测试（node --test test/*.test.mjs，61 例）
+npm test             # 构建 + i18n 自检 + 全部语义契约测试（node --test test/*.test.mjs，67 例）
 ```
 
 > 本项目的验证方式是**直接跑一遍真实行为**（验收证据与已知问题见 [Changelog](docs/Changelog.md)），而不是断言代码当前怎么实现——
-> 后者只是把实现抄一遍，必然通过。例外是六组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 61 例）：
+> 后者只是把实现抄一遍，必然通过。例外是八组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 67 例）：
 > `archive.test.mjs`（引擎状态机：勾=启用、空段可持久化、失败回滚与如实上报）、
 > `import.test.mjs`（导入展开、落点规划与限额回报）、
 > `approval-policy.test.mjs`（never 审批策略探测；用真实 cordis + 真实 `ApprovalService` 复现读取链）、
 > `subagent-scene.test.mjs`（场景绑定必须在子代理运行**之前**拒绝）、
 > `subagent-persona.test.mjs`（人设 frontmatter 往返：`provider`/`model`/`toolsDeny` 读写不丢；目录不存在时创建）、
-> `hub-layout.test.mjs`（统一数据目录：旧布局搬移不覆盖、保留场景 global 恒在且不可删、记忆必须归属已存在场景、档案记忆段只影响投影）。
+> `hub-layout.test.mjs`（统一数据目录：旧布局搬移不覆盖、保留场景 global 恒在且不可删、记忆必须归属已存在场景、档案记忆段只影响投影）、
+> `client-exports.test.mjs`（**客户端导出契约**：只求值 factory 不跑 `apply` 也能拿到 `dict`/`pages`；禁止把导出写在 `apply` 方法体里）、
+> `client-render.test.mjs`（**装配与渲染**：假 ctx 跑完整 `apply`，断言注册了 `settings.section`，并递归渲染整棵组件树不抛错）。
 > 它们断言语义契约而非实现抄写；真实行为验收仍以浏览器/宿主实测为准，契约测试不能替代。
 > 另有 `npm run check:i18n`（中英词典键集合 + 占位符对齐）与 `node scripts/i18n-debt.mjs`（还剩多少硬编码中文，当前 113 条：提示词页 38 / 会话页 75）。
 

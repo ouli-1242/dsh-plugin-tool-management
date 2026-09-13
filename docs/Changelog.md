@@ -61,6 +61,7 @@
 | 英文界面下 MCP 级别筛选永远是中文且翻不过来 | `MCP_LEVEL_OPTIONS` 是**模块级常量**，`apply()` 早于 locale 注册 | 改为渲染时求值 `mcpLevelOptions()` |
 | 中文界面丢失「已移除自定义目录」的目录名 | `result.custom.removed` 中文缺 `{name}` 占位符（英文有） | 新增 `scripts/check-i18n.mjs` 做键集合 + 占位符比对并接进 `npm test` |
 | `skill-create` 不传 root 时技能落到 `~/.dsh/skills/` 而非 hub | 服务层 `String(args.root \|\| 'dsh')` 的默认值漏改（只改了 `core.js` 的默认值，UI 实际总是显式传 root） | 活体实测抓出 → 服务层默认值改 `'hub'`，技能页「新建」的默认来源同样改为 hub（`activeSource` 优先） |
+| **导出静默丢失**：`module.exports._pages` / `module.exports.DICT` 从未生效 | 两条追加语句写在 **`apply(ctx)` 方法体末尾**（方法体从 `apply(ctx) {` 一直延续到文件倒数第 3 行），而 `apply` 开头是 `const slots = ctx.get('slots'); if (slots === undefined) return`。对象字面量在 factory 求值时定型，方法体里的追加随提前返回一起消失 | 由本轮新增的 `test/client-exports.test.mjs` 抓出（**不是浏览器抓到的**，见下方「未定性的界面故障」）。修法：`DICT` 与 `_pages` 都移到 factory 作用域，`apply` 只向占位对象填充；护栏断言「缩进 ≥ 8 空格的 `module.exports.X =` 一律不允许」 |
 
 ### 新增只读 op
 
@@ -93,12 +94,27 @@
   被写进了 state 槽）。判定为**不可靠地基** → 整体回退删除（不留在仓库里充数）。
 - 尝试用 Playwright 打开 3080 做界面验收失败：8123 测试宿主已停，其 token 对 3080 无效（401）；
   另起的测试宿主（8134）因 `npx` 启动链路卡住未起来。
-- **结论**：浏览器交互验收仍以**真浏览器 + 有效 token** 为准，本轮**未跑**；能进 CI 的那层用
-  `test/client-i18n.test.mjs` 覆盖（词典结构与引用完整性），它挡不住渲染缺陷，只能挡「界面显示原始键名」。
+- **结论**：浏览器交互验收仍以**真浏览器 + 有效 token** 为准，本轮**未跑**；能进 CI 的那两层见下
+  （`test/client-exports.test.mjs` 与 `test/client-render.test.mjs`），它们挡「导出丢失 / 装配失败 /
+  渲染期抛错」，挡不住交互行为。
+
+### 未定性的界面故障（2026-09-13 用户报告）
+
+用户报告「工具打开什么都没显示」。**未能复现、未能确认根因**，如实记录边界：
+
+- 不能进浏览器复现：3080 宿主要求 launch token 才能开页面（`dsh-client-connection` 的 `authorizeIndex`），
+  我不会去进程里取用户凭据，故**全程未做浏览器观测**。
+- 查过并排除的：宿主侧插件已加载（`rules-list` op 返回 200）；`lib/client.js` 语法与解析均正常；
+  `apply` 用到的 `ctx.get('slots')` 与官方 `dsh-client-ui-layout` 注册的服务名一致（`slots`）；
+  bundle 除 `react`（平台种子模块）外无其它 `require`。
+- **顺手抓到并修掉的真缺陷**见上方「修复」表最后一行（导出静默丢失）。它是真 bug，但**没有任何证据**
+  表明它就是该现象的原因——也可能是导入内容的问题，或浏览器缓存了旧 bundle（
+  本次修好后需要**刷新页面**才会生效）。
+- 本轮新增两道护栏（导出契约 + 装配/渲染），并把「假 React 驱动真实 bundle」的失败教训留在上文。
 
 ### 契约测试
 
-`npm test` = build + `check:i18n` + **64 例** node --test：
+`npm test` = build + `check:i18n` + **67 例** node --test：
 
 - `archive.test.mjs`（13）：档案纯逻辑 + 引擎状态机
 - `import.test.mjs`（16）：zip/上传展开、落点规划、限额**回报**（不静默丢）
@@ -106,7 +122,12 @@
 - `subagent-scene.test.mjs`（6）：场景绑定必须在子代理运行**之前**拒绝
 - `subagent-persona.test.mjs`（9）：frontmatter 往返（`provider`/`model`/`toolsDeny`）、目录不存在时创建、重名拒绝
 - `hub-layout.test.mjs`（12）：旧布局搬移不覆盖、`global` 恒在且不可删、记忆必须归属已存在场景、档案记忆段只影响投影、路径回传
-- `client-i18n.test.mjs`（3）：**把真实 bundle 的 DICT 取出来**与代码里所有字面量 `t('键')` 比对（结构一致 / 引用完整 / 无空文案）
+- `client-exports.test.mjs`（3）：**运行时导出契约** —— 只求值 factory（不跑 `apply`）就必须拿到
+  `dict`/`pages`/`apply`；词典 zh/en 键集合一致、无空文案；代码里每个字面量 `t('键')` 都能解析。
+  反向护栏：禁止缩进 ≥ 8 空格的 `module.exports.X =`
+- `client-render.test.mjs`（3）：**装配与渲染** —— 假 ctx 跑完整 `apply`，断言它往 `settings.section`
+  注入并注册 `dsm-tools`；七个页面组件都被填充；整棵组件树（自建 hook dispatcher，真实 React dispatcher
+  接口）递归渲染不抛错。已用「注入缺陷 → 必须失败」自检过
 
 辅助脚本：`npm run check:i18n`（中英键集合 + 占位符一致）、`node scripts/i18n-debt.mjs`（按页面统计硬编码中文欠账）、`node scripts/find-hardcoded-zh.mjs`（逐行定位）。
 
@@ -221,7 +242,7 @@ npm install
 npm run build        # tsc + 同步客户端 bundle
 npm run lint         # node --check 两个产物
 npm run check:i18n   # 中英词典键集合 + 占位符对齐
-npm test             # build + check:i18n + 全部契约测试（61 例）
+npm test             # build + check:i18n + 全部契约测试（67 例）
 ```
 
 **验证哲学**：真实行为验收优先于断言代码当前怎么实现（后者只是把实现抄一遍，必然通过）。
