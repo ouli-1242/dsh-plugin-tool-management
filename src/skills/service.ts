@@ -282,8 +282,15 @@ export interface SkillsService {
   registerProviders: () => () => void
 }
 
+/** 全插件共用的审计日志：单一串行写队列，避免多处写同一文件交叉。 */
+let sharedLog: ((event: string, detail?: unknown) => Promise<void>) | null = null
+export function pluginLog(): (event: string, detail?: unknown) => Promise<void> {
+  if (!sharedLog) sharedLog = makeLog()
+  return sharedLog
+}
+
 export function createSkillsService(ctx: any): SkillsService {
-  const log = makeLog()
+  const log = pluginLog()
   const roots = userRoots()
   const rootByKey: Record<string, any> = Object.fromEntries(roots.map((root: any) => [root.key, root]))
   const projectOptions = () => ({ projectCwds: activeSessionCwds(ctx) })

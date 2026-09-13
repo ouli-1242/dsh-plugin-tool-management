@@ -14,12 +14,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
-import { createSkillsService } from './skills/service.js'
+import { createSkillsService, pluginLog } from './skills/service.js'
 import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService } from './rules/service.js'
 import { createArchiveEngine } from './rules/archive-engine.js'
 import { createSubagentService } from './subagents/service.js'
-import { isApprovalNever, neverPolicyHint } from './approval-policy.js'
+import { isApprovalNever } from './approval-policy.js'
 import { defineSubagentListTool, defineSubagentRunTool } from './subagents/tools.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
@@ -2457,38 +2457,44 @@ export default {
     }
 
     if (typeof ctx.on === 'function') {
-      // 会话审批策略为 never（「完全权限」预设把 approval 设为 never）时，ask 会被审批层
-      // 自动以「用户拒绝」fail-closed——与其让模型收到莫名其妙拒绝，不如在此直接给可行动报错。
-      // 探测走 ctx.get('approval')（不能用 ctx.approval：inject 未声明该服务时 cordis
-      // 代理会抛 "cannot get property without inject"），实现与回归测试见 approval-policy.ts。
-      const approvalNever = (exec: any): boolean => isApprovalNever(ctx, exec)
+      // 三个确认门的统一前裁决。口径（用户裁定，方案 B）：会话审批策略为 never（「完全权限」预设）
+      // = 用户已在预设层面预先批准一切确认门，**直接放行**并写审计日志留痕。
+      // 不能把 ask 丢给审批层：宿主 decide() 对 never 直接返回 rejected（fail-closed），确认卡
+      // 永远弹不出，模型只会收到一句无信息量的「用户拒绝」。这与官方子代理工具（无 ask 门）
+      // 在完全权限下的行为一致；探测实现与回归测试见 approval-policy.ts（必须 ctx.get('approval')，
+      // 不能用 ctx.approval——inject 未声明该服务时 cordis 代理会抛 "cannot get property without inject"）。
+      const CONFIRM_LABELS: Record<string, string> = {
+        skill_manager_create: '「新建技能」',
+        rule_manager_write: '「写入记忆」',
+        subagent_run: '「运行子代理」',
+      }
+      const bypassedByFullAccess = (exec: any): boolean => {
+        if (!isApprovalNever(ctx, exec)) return false
+        // 留痕：完全权限下跳过确认属于「用户已授权」，但要可审计（日志失败不阻塞主流程）。
+        pluginLog()('confirm-bypass', `完全权限（approval=never）：跳过${CONFIRM_LABELS[String(exec && exec.name)]}的确认，直接放行`).catch(() => {})
+        return true
+      }
       ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', (exec, next) => {
-        if (exec && exec.name === 'skill_manager_create') {
-          if (approvalNever(exec)) return Promise.resolve({ kind: 'deny', reason: neverPolicyHint('「新建技能」的确认无法弹出') })
+        if (!exec || !CONFIRM_LABELS[String(exec.name)]) return next()
+        if (bypassedByFullAccess(exec)) return next()
+        if (exec.name === 'skill_manager_create') {
           return Promise.resolve({ kind: 'ask', reason: 'Create a new skill under DSH_HOME/skills' })
         }
-        if (exec && exec.name === 'rule_manager_write') {
+        if (exec.name === 'rule_manager_write') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
           // 不在此处做任何兜底放行。
           return readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite
-              ? (approvalNever(exec)
-                ? { kind: 'deny', reason: neverPolicyHint('「写入记忆」的确认无法弹出') }
-                : { kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' })
+              ? { kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }
               : next()))
             .catch(() => ({ kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }))
         }
-        if (exec && exec.name === 'subagent_run') {
-          // 子代理运行花真 token：默认确认（requireConfirmForModelSubagentRun !== false），可关。
-          return readPluginSettings()
-            .then((s) => ((s as any).requireConfirmForModelSubagentRun !== false
-              ? (approvalNever(exec)
-                ? { kind: 'deny', reason: neverPolicyHint('「运行子代理」的确认无法弹出') }
-                : { kind: 'ask', reason: 'Run a subagent (consumes tokens)' })
-              : next()))
-            .catch(() => ({ kind: 'ask', reason: 'Run a subagent (consumes tokens)' }))
-        }
-        return next()
+        // subagent_run：子代理运行花真 token：默认确认（requireConfirmForModelSubagentRun !== false），可关。
+        return readPluginSettings()
+          .then((s) => ((s as any).requireConfirmForModelSubagentRun !== false
+            ? { kind: 'ask', reason: 'Run a subagent (consumes tokens)' }
+            : next()))
+          .catch(() => ({ kind: 'ask', reason: 'Run a subagent (consumes tokens)' }))
       })
     }
 

@@ -1,11 +1,17 @@
-// 审批策略预检（宿主端）。
+// 审批策略探测（宿主端）：确认门在「完全权限」会话里该怎么行为。
 //
 // 背景：DSH 的审批策略是「会话级 fold + 全局默认」两级（dsh-user-approval：
 // effectivePolicy(session) = overrideOf(session) ?? config.policy ?? 'ask'），
 // 「完全权限」预设写的是**会话级** approval/policy fold（dsh-permission-presets
-// 调 approval.setPolicy(agent, 'never')）。此时 ask 会在审批层被自动判成
-// rejected（fail-closed），插件的确认门永远等不到确认卡，模型只看到一句
-// 无信息量的「用户拒绝」。这里把 never 预检出来，换成可行动报错。
+// 调 approval.setPolicy(agent, 'never')，预设自述 "without approval prompts"）。
+//
+// 口径（2026-09-13 用户裁定，方案 B）：**never = 用户在预设层面已预先批准一切确认门**。
+// 因此插件的三个确认门在 never 会话里直接放行（并写插件审计日志留痕），不再把 ask
+// 交给审批层——宿主 ApprovalService.decide() 对 never 直接返回 rejected（fail-closed），
+// 确认卡永远不会弹出，模型只会收到一句无信息量的「用户拒绝」。这也与 DSH 官方子代理
+// 工具（dsh-tool-subagent 无 ask 门）在完全权限下的行为一致。
+// 注意这是**插件自定策略**，与宿主 decide() 的 never=自动拒 相反，属有意选择：
+// 插件确认门的语义是「问用户」，而用户已在会话层面声明「不要再问我」。
 //
 // 读取链的关键约束：**必须用 ctx.get('approval')，不能用 ctx.approval**。
 // 本插件的 inject 未声明 approval，cordis 的上下文代理会沿 fiber 链找 provider，
@@ -23,17 +29,11 @@ export interface ApprovalSeam {
   config?: { policy?: string } | undefined
 }
 
-/** never 会话里确认门无法弹出时给模型的可行动报错。 */
-export function neverPolicyHint(what: string): string {
-  return `${what}：当前会话审批策略为 never（完全权限模式会自动拒绝一切需确认的操作，不会弹确认卡）。` +
-    '请把访问模式切换为「工作区内修改」后重试，或在插件设置里关闭对应确认开关（requireConfirmForModel*）。'
-}
-
 /**
- * 判断本次工具调用的会话是否处于 never 审批策略。
+ * 判断本次工具调用的会话是否处于 never 审批策略（= 完全权限，确认门应直接放行）。
  *
  * 任一步不可用（无 approval 服务、无 agent/session、读取抛错）都返回 false：
- * 预检只做「提前给可行动报错」，绝不代替审批层放行或拒绝。
+ * 探测失败一律退回正常问询流程，绝不代替审批层做放行决定。
  */
 export function isApprovalNever(ctx: unknown, exec: unknown): boolean {
   try {
