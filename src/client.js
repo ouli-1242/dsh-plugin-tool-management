@@ -809,7 +809,11 @@ window.__ModuleLoader__.load({
         "root.dsh": "DSH 技能", "root.hub": "管理器技能", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "memory.title": "记忆",
         "tabs.scenes": "场景", "tabs.skills": "技能", "tabs.subagents": "子智能体", "tabs.prompts": "提示词", "tabs.memory": "记忆", "tabs.sessions": "会话",
-        "scenes.title": "场景", "scenes.desc": "按场景搭配 MCP 工具、技能、子智能体与记忆；启用场景后记忆自动注入，档案可一键切入/退出。",
+        "scenes.title": "场景", "scenes.desc": "场景 = 一套搭配：MCP 工具、技能、子智能体与记忆。启用场景后它的记忆自动进系统提示词；带 MCP/技能段的场景还能一键切入/退出「当前模式」。",
+        "scenes.stat.total": "个场景", "scenes.stat.active": "个已启用", "scenes.stat.archives": "个有档案",
+        "scenes.noDesc": "还没有描述（点「改描述」补一句）", "scenes.memCount": "{count} 条记忆",
+        "scenes.profile.summary": "已配：{parts}", "scenes.profile.empty": "档案为空",
+        "scenes.profile.mcp": "MCP {count} 台", "scenes.profile.skills": "技能 {count} 个", "scenes.profile.subagents": "子智能体 {count} 个", "scenes.profile.memories": "记忆 {count} 条",
         "scenes.hasArchive": "档案", "scenes.mcp.hint": "添加「MCP 工具集」后，勾选要启用的服务器（含未运行的）；「选工具」可细化到具体工具。",
         "scenes.seg.selectAll": "全选", "scenes.seg.clear": "清空", "scenes.seg.checked": "{checked}/{total} 已勾选",
         "scenes.archive.sectionOff": "未定义",
@@ -843,8 +847,15 @@ window.__ModuleLoader__.load({
         "memory.budget.truncated": "超出预算，段尾已列出未注入的记忆",
         "memory.budget.dropped": "本次未注入：{names}",
         "memory.scene.enable": "启用", "memory.scene.enableAll": "全部启用", "memory.scene.off": "未启用", "memory.scene.shared": "常开", "memory.scene.global.tag": "任何对话都注入",
-        "memory.scene.global": "全局", "memory.scene.count": "{count} 条记忆", "memory.scene.new": "新建记忆", "memory.scene.pick": "留空 = 全局（任何对话都注入）；也可选已有场景或直接输入新场景名", "memory.scene.browse": "选择已有",
+        "memory.scene.global": "全局", "memory.scene.count": "{count} 条记忆", "memory.scene.new": "新建记忆", "memory.scene.pick": "选场景 = 这条记忆只在场景启用时注入；「全局」= 任何对话都注入。场景要先在「场景」页创建。", "memory.scene.browse": "选择已有",
         "memory.scene.empty": "该场景暂无记忆",
+        "memory.scene.orphan": "未归属场景", "memory.scene.orphan.tag": "不会注入", "memory.scene.orphan.hint": "这些记忆直接放在 memories/ 根层，没有归属场景，因此不会进入系统提示词。请把它们移入某个场景目录（或放到 memories/global/ 作为「全局」记忆）。",
+        "memory.scene.edit": "改描述", "memory.scene.editTitle": "修改场景", "memory.scene.editHelp": "只改场景的名称显示与描述，记忆文件不受影响。",
+        "memory.scene.field.name": "场景名", "memory.scene.field.name.placeholder": "例如 办公 / 日常 / code-review",
+        "memory.scene.field.name.hint": "就是 memories/ 下的目录名；创建后不可改名（改名等于换一个场景）。",
+        "memory.scene.field.name.lock": "场景名创建后不可修改",
+        "memory.scene.field.desc": "描述（可选）", "memory.scene.field.desc.placeholder": "一句话说明这个场景是干什么的",
+        "memory.scene.field.desc.hint": "会显示在场景卡片上，也用于在档案编辑器里筛选场景；不参与提示词注入。",
         "memory.search.placeholder": "搜索名称 / 描述 / 场景", "memory.filter.all": "全部场景",
         "memory.empty": "还没有记忆，点「新建记忆」", "memory.empty.search": "没有匹配的记忆",
         "memory.loading": "正在加载…",
@@ -867,10 +878,10 @@ window.__ModuleLoader__.load({
         "memory.trash.count": "{count} 条已删除的记忆", "memory.trash.deletedAt": "删除于 {time}",
         "memory.trash.restore": "恢复", "memory.trash.purge": "永久删除",
         "memory.trash.confirmTitle": "永久删除？", "memory.trash.confirmDesc": "「{name}」将永久删除，无法恢复",
-        "memory.btn.newScene": "新建场景", "memory.btn.deleteScene": "删除场景",
-        "memory.scene.createTitle": "新建场景", "memory.scene.createHelp": "建好后往里丢 .md 即可，每个文件就是一条记忆",
-        "memory.deleteScene.title": "删除场景？", "memory.deleteScene.desc": "将删除空文件夹「{name}」（非空不能删）",
-        "memory.result.sceneCreated": "已创建场景：{name}", "memory.result.sceneRemoved": "已删除场景：{name}",
+        "memory.btn.newScene": "新建场景", "memory.btn.deleteScene": "删除场景", "memory.btn.saveScene": "保存修改",
+        "memory.scene.createTitle": "新建场景", "memory.scene.createHelp": "场景是记忆的分组：建好后往里放记忆，启用该场景时这些记忆才进系统提示词。空场景也可以先建着。",
+        "memory.deleteScene.title": "删除场景？", "memory.deleteScene.desc": "将删除「{name}」的场景记录与空目录（里面还有记忆或正处在当前模式时不能删；「全局」是保留场景，不可删除）",
+        "memory.result.sceneCreated": "已创建场景：{name}", "memory.result.sceneUpdated": "已保存场景：{name}", "memory.result.sceneRemoved": "已删除场景：{name}",
         "memory.table.name": "记忆名称与描述", "memory.table.tags": "标记", "memory.table.status": "状态",
         "error.rules.invalidGroup": "场景/分组名不合法（非空、≤64 字符、不含路径分隔符与 < > : \" | ? *、不以 . 开头）", "error.rules.invalidName": "记忆名不合法（非空、≤64 字符、不含路径分隔符与 < > : \" | ? *、不以 . 开头）", "error.rules.descriptionRequired": "描述不能为空", "error.rules.descriptionTooLong": "描述过长（不能超过 500 字符）", "error.rules.bodyRequired": "正文不能为空", "error.rules.tooLarge": "规则内容过大", "error.rules.shadowed": "规则被同名 bundle 遮蔽，无法写入", "error.rules.notFound": "规则不存在", "error.rules.budgetExceeded": "场景记忆段超出预算", "error.rules.ioFailed": "文件操作失败", "error.rules.sceneNotEmpty": "场景不为空，无法删除", "error.rules.notBundle": "该记忆是 flat（单文件），不能带附件", "error.rules.noFiles": "没有选择附件", "error.rules.emptyFile": "附件内容为空", "error.rules.fileTooLarge": "附件过大（单个上限 {limit} MB）", "error.rules.tooManyFiles": "一次最多 {limit} 个附件", "error.rules.sceneInMode": "该场景正处在当前模式，请先退出模式再删除",
         "memory.archive.emptySection": "该段已定义但没有勾选任何条目 = 全部停用",
@@ -879,18 +890,25 @@ window.__ModuleLoader__.load({
         "subagents.create": "新建人设", "subagents.edit": "编辑人设",
         "subagents.field.name": "人设名", "subagents.field.name.hint": "就是文件名（非空、≤64 字符、不含路径分隔符与 < > : | ? *、不以 . 开头）；创建后不可改名。",
         "subagents.field.description": "描述", "subagents.field.description.placeholder": "例如 擅长 Java 后端实现与重构；需要写或改 Java 代码时调用", "subagents.field.description.hint": "一句话即可：模型据此判断何时调用它。",
-        "subagents.field.model": "模型", "subagents.field.model.placeholder": "留空继承主会话", "subagents.field.provider": "模型来源", "subagents.field.provider.placeholder": "留空继承主会话；跨来源换模型时必填（如 sensenova）", "subagents.field.provider.hint": "「模型来源」与「模型」是一对：只填模型会落在主会话的来源上，跨来源会解析失败。",
-        "subagents.field.tools": "工具白名单", "subagents.field.tools.hint": "逗号分隔；留空 = 不限制（基础组合全集）。",
+        "subagents.field.model": "模型", "subagents.field.model.placeholder": "自定义模型 id（例如 sensenova-6.8-flash-lite）", "subagents.field.model.hint": "从宿主模型目录里选（provider + model 一起给）；目录里没有的模型切到「自定义」手填。留空继承主会话。", "subagents.field.provider": "模型来源", "subagents.field.provider.placeholder": "留空继承主会话；跨来源换模型时必填（如 sensenova）", "subagents.field.provider.hint": "「模型来源」与「模型」是一对：只填模型会落在主会话的来源上，跨来源会解析失败。",
+        "subagents.model.inherit": "继承主会话（不指定）", "subagents.model.customOption": "自定义 / 目录里没有…",
+        "subagents.field.tools": "工具白名单", "subagents.field.tools.hint": "勾选 = 子代理只保留这些工具；一个都不勾 = 不限制（基础组合全集）。工具名写错会让子代理启动失败，所以用勾选而不是手打。",
+        "subagents.field.toolsDeny": "工具黑名单", "subagents.field.toolsDeny.hint": "勾选 = 从子代理可见的工具里移除这些（优先级高于白名单）。适合「除了 bash 什么都能用」这类配置。",
+        "subagents.tools.chosen": "未选择 = 不限制", "subagents.tools.filter": "筛选工具名", "subagents.tools.empty": "宿主没有回传任何可选工具（模型可能不支持工具目录枚举）",
+        "subagents.tools.unavailable": "当前会话不可见", "subagents.tools.current": "当前可用", "subagents.tools.groupCurrent": "当前会话可用", "subagents.tools.groupOther": "其它 Agent 预设里可用",
+        "subagents.tools.count": "已选 {count} 个", "subagents.tools.remove": "移除",
+        "subagents.adv.title": "高级选项", "subagents.adv.inherit": "继承主会话", "subagents.adv.summary": "模型 {model} · 白名单 {allow} · 黑名单 {deny}", "subagents.adv.note": "候选工具是全部 Agent 预设工具名的并集：人设可能在任何预设下被复用，只列当前会话的工具会让换预设后的子代理启动失败。", "subagents.adv.loadFailed": "读取候选数据失败（模型目录 / 工具清单）；仍可手动填写。",
         "subagents.field.body": "人设提示词", "subagents.field.body.placeholder": "写下这个人设的身份、职责与工作方式…",
         "subagents.result.saved": "已保存人设：{name}", "subagents.result.deleted": "已删除人设：{name}",
         "subagents.delete.title": "删除人设？", "subagents.delete.desc": "将删除「{name}」的人设文件，不可恢复",
         "subagents.import": "导入", "subagents.import.title": "导入人设", "subagents.import.hint": "支持 .md 或 .zip（可多选、可拖入）：一个 .md = 一个人设，文件名即人设名；同名自动跳过。",
         "subagents.result.imported": "已导入 {count} 个人设：{names}",
         "memory.import": "导入记忆", "memory.import.title": "导入记忆", "memory.import.scene": "导入到场景",
-        "memory.import.sceneHint": "留空 = 全局（任何对话都注入）；.zip 内带目录时以目录名当场景。",
+        "memory.import.sceneHint": "填场景名（留空 = 保留场景「全局」）；.zip 内带目录时以目录名当场景，被补出来的场景会在结果里列出。",
         "memory.import.hint": "支持 .md 或 .zip（可多选、可拖入）：一个 .md = 一条记忆；zip 内 <场景>/<名>/SKILL.md 按 bundle 导入，同层文件作附件；同名自动跳过。",
         "memory.result.imported": "已导入 {count} 条记忆：{names}",
-        "memory.scene.global.hint": "全局（不选场景 · 任何对话都注入）",
+        "memory.import.scenesCreated": "为此新建了场景：{names}",
+        "memory.scene.global.hint": "全部场景",
         "import.pick": "选择文件", "import.selected": "已选 {count} 个文件", "import.clear": "清空选择", "import.submit": "安装",
         "import.none": "没有导入任何文件（全部被跳过）", "import.skipped": "已跳过：{items}",
         "error.import.noFiles": "没有选择要导入的文件"
@@ -940,7 +958,11 @@ window.__ModuleLoader__.load({
         "root.dsh": "DSH skills", "root.hub": "Manager skills", "root.agents": "Shared Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "Project DSH", "root.projectAgents": "Project Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "memory.title": "Memories",
         "tabs.scenes": "Scenes", "tabs.skills": "Skills", "tabs.subagents": "Subagents", "tabs.prompts": "Prompts", "tabs.memory": "Memories", "tabs.sessions": "Sessions",
-        "scenes.title": "Scenes", "scenes.desc": "Combine MCP tools, skills, subagents and memories per scene; enabling a scene injects its memories, and a profile can be entered or left in one click.",
+        "scenes.title": "Scenes", "scenes.desc": "A scene is one combination: MCP tools, skills, subagents and memories. Enabling a scene injects its memories into the system prompt; a scene with MCP/skill sections can also be entered as the active mode in one click.",
+        "scenes.stat.total": "scene(s)", "scenes.stat.active": "enabled", "scenes.stat.archives": "with a profile",
+        "scenes.noDesc": "No description yet (use Edit to add one)", "scenes.memCount": "{count} memor(ies)",
+        "scenes.profile.summary": "Configured: {parts}", "scenes.profile.empty": "empty profile",
+        "scenes.profile.mcp": "{count} MCP", "scenes.profile.skills": "{count} skill(s)", "scenes.profile.subagents": "{count} subagent(s)", "scenes.profile.memories": "{count} memor(ies)",
         "scenes.hasArchive": "profile", "scenes.mcp.hint": "Add the MCP section first, then check the servers to enable (stopped ones included); use Pick tools to narrow to specific tools.",
         "scenes.seg.selectAll": "Select all", "scenes.seg.clear": "Clear", "scenes.seg.checked": "{checked}/{total} selected",
         "scenes.archive.sectionOff": "not defined",
@@ -974,8 +996,15 @@ window.__ModuleLoader__.load({
         "memory.budget.truncated": "Over budget — the memories left out are listed at the end",
         "memory.budget.dropped": "Not injected this time: {names}",
         "memory.scene.enable": "Enabled", "memory.scene.enableAll": "Enable all", "memory.scene.off": "Off", "memory.scene.shared": "always on", "memory.scene.global.tag": "injected everywhere",
-        "memory.scene.global": "Global", "memory.scene.count": "{count} memories", "memory.scene.new": "New memory", "memory.scene.pick": "Blank = global (injected into every conversation); or pick a scene / type a new one", "memory.scene.browse": "Pick existing",
+        "memory.scene.global": "Global", "memory.scene.count": "{count} memories", "memory.scene.new": "New memory", "memory.scene.pick": "The scene decides when this memory is injected; “Global” is injected into every conversation. Create scenes on the Scenes page first.", "memory.scene.browse": "Pick existing",
         "memory.scene.empty": "No memories in this scene yet",
+        "memory.scene.orphan": "No scene", "memory.scene.orphan.tag": "never injected", "memory.scene.orphan.hint": "These memories sit directly in the memories/ root and belong to no scene, so they never reach the system prompt. Move them into a scene directory (or into memories/global/ to make them “Global”).",
+        "memory.scene.edit": "Edit", "memory.scene.editTitle": "Edit scene", "memory.scene.editHelp": "Only the display name and description change; memory files are untouched.",
+        "memory.scene.field.name": "Scene name", "memory.scene.field.name.placeholder": "e.g. office / daily / code-review",
+        "memory.scene.field.name.hint": "This is the directory name under memories/; it cannot be renamed later (renaming means a different scene).",
+        "memory.scene.field.name.lock": "The scene name cannot be changed after creation",
+        "memory.scene.field.desc": "Description (optional)", "memory.scene.field.desc.placeholder": "One line on what this scene is for",
+        "memory.scene.field.desc.hint": "Shown on the scene card and used to filter scenes in the profile editor; it is never injected into the prompt.",
         "memory.search.placeholder": "Search name / description / scene", "memory.filter.all": "All scenes",
         "memory.empty": "No memories yet — click “New memory”", "memory.empty.search": "No matching memories",
         "memory.loading": "Loading…",
@@ -998,10 +1027,10 @@ window.__ModuleLoader__.load({
         "memory.trash.count": "{count} deleted memories", "memory.trash.deletedAt": "Deleted {time}",
         "memory.trash.restore": "Restore", "memory.trash.purge": "Delete forever",
         "memory.trash.confirmTitle": "Delete forever?", "memory.trash.confirmDesc": "“{name}” is deleted forever and cannot be recovered",
-        "memory.btn.newScene": "New scene", "memory.btn.deleteScene": "Delete scene",
-        "memory.scene.createTitle": "New scene", "memory.scene.createHelp": "Drop .md files in afterwards — each file is one memory",
-        "memory.deleteScene.title": "Delete scene?", "memory.deleteScene.desc": "Deletes the empty folder “{name}”; non-empty scenes cannot be deleted",
-        "memory.result.sceneCreated": "Scene created: {name}", "memory.result.sceneRemoved": "Scene deleted: {name}",
+        "memory.btn.newScene": "New scene", "memory.btn.deleteScene": "Delete scene", "memory.btn.saveScene": "Save changes",
+        "memory.scene.createTitle": "New scene", "memory.scene.createHelp": "A scene groups memories: put memories in it, and they only reach the system prompt while the scene is enabled. An empty scene is fine to create up front.",
+        "memory.deleteScene.title": "Delete scene?", "memory.deleteScene.desc": "Deletes the scene record and its empty folder “{name}” (refused while it still holds memories or is the active mode; “Global” is reserved and cannot be deleted)",
+        "memory.result.sceneCreated": "Scene created: {name}", "memory.result.sceneUpdated": "Scene saved: {name}", "memory.result.sceneRemoved": "Scene deleted: {name}",
         "memory.table.name": "Memory name and description", "memory.table.tags": "Tags", "memory.table.status": "Status",
         "error.rules.invalidGroup": "Invalid scene/group name (non-empty, ≤64 chars, no path separators or < > : \" | ? *, must not start with a dot)", "error.rules.invalidName": "Invalid memory name (non-empty, ≤64 chars, no / \\ < > : \" | ? *, must not start with a dot)", "error.rules.descriptionRequired": "Description is required", "error.rules.descriptionTooLong": "Description is too long (max 500 chars)", "error.rules.bodyRequired": "Body is required", "error.rules.tooLarge": "Rule content is too large", "error.rules.shadowed": "Rule is shadowed by a bundle of the same name", "error.rules.notFound": "Rule not found", "error.rules.budgetExceeded": "Scene memory section exceeds its budget", "error.rules.ioFailed": "File operation failed", "error.rules.sceneNotEmpty": "Scene is not empty; cannot be deleted", "error.rules.notBundle": "This memory is flat (a single file) and cannot carry attachments", "error.rules.noFiles": "No files selected", "error.rules.emptyFile": "Empty file", "error.rules.fileTooLarge": "File too large (max {limit} MB each)", "error.rules.tooManyFiles": "At most {limit} files per upload", "error.rules.sceneInMode": "This scene is the active mode; exit the mode before deleting it",
         "subagents.title": "Subagents", "subagents.desc": "Manage persona files (~/.dsh/tool-management/agents/*.md): one file per persona, its body is the subagent's system prompt.",
@@ -1009,18 +1038,25 @@ window.__ModuleLoader__.load({
         "subagents.create": "New persona", "subagents.edit": "Edit persona",
         "subagents.field.name": "Persona name", "subagents.field.name.hint": "The file name (non-empty, ≤64 chars, no path separators or < > : | ? *, must not start with a dot); it cannot be renamed later.",
         "subagents.field.description": "Description", "subagents.field.description.placeholder": "e.g. Senior Java engineer — use when writing or refactoring Java code", "subagents.field.description.hint": "One sentence is enough — the model routes on it.",
-        "subagents.field.model": "Model", "subagents.field.model.placeholder": "Blank inherits the main session", "subagents.field.provider": "Model provider", "subagents.field.provider.placeholder": "Blank inherits the main session; required when switching providers, e.g. sensenova", "subagents.field.provider.hint": "Provider and model are a pair: a model alone resolves against the main session's provider and fails across providers.",
-        "subagents.field.tools": "Tool allowlist", "subagents.field.tools.hint": "Comma separated; blank means no restriction (the base tool set).",
+        "subagents.field.model": "Model", "subagents.field.model.placeholder": "Custom model id (e.g. sensenova-6.8-flash-lite)", "subagents.field.model.hint": "Pick from the host model catalogue (provider + model together); for a model it does not list, switch to “Custom” and type it. Blank inherits the main session.", "subagents.field.provider": "Model provider", "subagents.field.provider.placeholder": "Blank inherits the main session; required when switching providers, e.g. sensenova", "subagents.field.provider.hint": "Provider and model are a pair: a model alone resolves against the main session's provider and fails across providers.",
+        "subagents.model.inherit": "Inherit the main session (unspecified)", "subagents.model.customOption": "Custom / not in the catalogue…",
+        "subagents.field.tools": "Tool allowlist", "subagents.field.tools.hint": "Checked = the subagent keeps only these tools; nothing checked = no restriction (the base tool set). A typo would make the child fail to start, which is why this is a picker, not free text.",
+        "subagents.field.toolsDeny": "Tool denylist", "subagents.field.toolsDeny.hint": "Checked = remove these from the subagent's visible tools (takes precedence over the allowlist). Use it for “everything except bash” style setups.",
+        "subagents.tools.chosen": "Nothing selected = no restriction", "subagents.tools.filter": "Filter tool names", "subagents.tools.empty": "The host returned no selectable tools (the model may not support catalogue enumeration)",
+        "subagents.tools.unavailable": "not visible here", "subagents.tools.current": "available now", "subagents.tools.groupCurrent": "Available in this session", "subagents.tools.groupOther": "Available in other agent presets",
+        "subagents.tools.count": "{count} selected", "subagents.tools.remove": "Remove",
+        "subagents.adv.title": "Advanced options", "subagents.adv.inherit": "inherit", "subagents.adv.summary": "model {model} · allow {allow} · deny {deny}", "subagents.adv.note": "Candidates are the UNION of tool names across all agent presets: a persona can be reused under any preset, and listing only this session's tools would make the child fail to start after a preset switch.", "subagents.adv.loadFailed": "Could not read the candidate data (model catalogue / tool list); you can still fill the fields by hand.",
         "subagents.field.body": "Persona prompt", "subagents.field.body.placeholder": "Describe the persona's role, responsibilities, and working style…",
         "subagents.result.saved": "Persona saved: {name}", "subagents.result.deleted": "Persona deleted: {name}",
         "subagents.delete.title": "Delete persona?", "subagents.delete.desc": "Deletes the persona file “{name}”; this cannot be undone",
         "subagents.import": "Import", "subagents.import.title": "Import personas", "subagents.import.hint": "Accepts .md or .zip (multi-select or drag in): one .md = one persona, the file name is the persona name; existing names are skipped.",
         "subagents.result.imported": "Imported {count} persona(s): {names}",
         "memory.import": "Import memories", "memory.import.title": "Import memories", "memory.import.scene": "Import into scene",
-        "memory.import.sceneHint": "Leave blank = global (injected into every conversation); directories inside a .zip become scenes.",
+        "memory.import.sceneHint": "Type a scene name (blank = the reserved “Global” scene); directories inside a .zip become scenes, and any scene created that way is reported in the result.",
         "memory.import.hint": "Accepts .md or .zip (multi-select or drag in): one .md = one memory; <scene>/<name>/SKILL.md inside a zip imports as a bundle with sibling files as attachments; existing names are skipped.",
         "memory.result.imported": "Imported {count} memory/memories: {names}",
-        "memory.scene.global.hint": "Global (no scene · injected into every conversation)",
+        "memory.import.scenesCreated": "Scenes created for them: {names}",
+        "memory.scene.global.hint": "All scenes",
         "import.pick": "Choose files", "import.selected": "{count} file(s) selected", "import.clear": "Clear", "import.submit": "Install",
         "import.none": "Nothing was imported (all skipped)", "import.skipped": "Skipped: {items}",
         "error.import.noFiles": "No files selected"
@@ -1140,6 +1176,60 @@ function callApi(path, options) {
       if (props.kind === "ok") return h("div", { className: "dsm-toast", role: "status", "aria-live": "polite" }, text)
       return h("div", { className: "dsm-feedback" + (props.kind === "warn" ? " dsm-warning" : " dsm-error"), role: "alert" }, text)
     }
+    /* ── 勾选列表原语（场景档案编辑器 / 人设工具选择器 / 任何「多选一组条目」的地方共用）────
+       原先这套排版只在 ScenesPage 内部，人设的工具选择器要么复制一份、要么写成裸 input；
+       现在提到模块作用域，页面之间才可能真正长得一样。 */
+    /** 段卡片：标题栏 + 固定高度滚动体 + 脚注（高度不随内容增减变化，弹窗不跳）。 */
+    function seg(props) {
+      return h('div', { className: 'dsm-seg' },
+        h('div', { className: 'dsm-seg-head' },
+          h('span', { className: 'dsm-seg-title' }, props.title),
+          h('span', { className: 'dsm-seg-count' }, props.count),
+          h('div', { className: 'dsm-seg-actions' }, props.actions)),
+        props.body,
+        props.foot || null)
+    }
+    /** 勾选行：复选框 + 名称/说明 + 右侧指标 + 可选行内动作。 */
+    function pickRow(props) {
+      return h('label', { key: props.key, className: 'dsm-pick' },
+        h('input', { type: 'checkbox', checked: props.checked === true, disabled: props.disabled === true, onChange: props.onChange }),
+        h('span', { className: 'dsm-pick-main' },
+          h('span', { className: 'dsm-pick-name' }, props.name),
+          props.desc ? h('span', { className: 'dsm-pick-desc' }, props.desc) : null),
+        props.meta ? h('span', { className: 'dsm-pick-meta' }, props.meta) : null,
+        props.actions ? h('span', { className: 'dsm-pick-actions' }, props.actions) : null)
+    }
+    /** 段体顶部的筛选行（条目多的段用；勾选状态不受筛选影响）。 */
+    function segFilter(value, onChange, placeholder) {
+      return h('div', { className: 'dsm-seg-filter' },
+        h('input', { className: 'dsm-control', value: value || '', placeholder: placeholder, onChange: function (e) { onChange(e.target.value) } }))
+    }
+    /** 分组小标题（长列表里给用户地标，避免「一屏看不出层次」）。 */
+    function segGroup(label) {
+      return h('div', { className: 'dsm-seg-group' },
+        h('span', null, label),
+        h('span', { className: 'dsm-seg-group-line' }))
+    }
+    /** 段头公共动作：全选 / 清空 / 移除段（未定义时改为「添加」）。 */
+    function segActions(props) {
+      if (!props.defined) return [h('button', { key: 'add', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy, onClick: props.onAdd }, props.addLabel)]
+      return [
+        h('button', { key: 'all', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy, onClick: props.onAll }, props.selectAllLabel),
+        h('button', { key: 'clear', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy, onClick: props.onClear }, props.clearLabel),
+        h('button', { key: 'rm', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy, onClick: props.onRemove }, props.removeLabel),
+      ]
+    }
+    /** 段脚注：段已定义但一项未勾 = 该域全部停用（必须显式提示，否则像没保存上）。 */
+    function segFoot(defined, count, emptyLabel) {
+      if (!defined || count > 0) return null
+      return h('div', { className: 'dsm-seg-foot' }, emptyLabel)
+    }
+    /** 固定高度滚动体内的条目列表（空态居中提示）。 */
+    function segList(nodes, emptyText) {
+      if (!nodes.length) return h('div', { className: 'dsm-seg-body' }, h('div', { className: 'dsm-pick-empty' }, emptyText))
+      return h('div', { className: 'dsm-seg-body' }, nodes)
+    }
+
     // 通用导入弹窗（人设 / 记忆共用）：拖放或点选 .md / .zip → 已选计数 → 交由调用方走自己的写 op。
     // t 由调用方注入（各页的 t 是局部函数，不在模块作用域）；extra 用于注入「导入到场景」一类的额外字段。
     function ImportModal(props) {
@@ -1828,7 +1918,7 @@ function callApi(path, options) {
           function setActiveScenes(names) {
             if (busy) return
             setBusy(true); setResult(null)
-            var real = (data.scenes || []).filter(function (s) { return !s.shared }).map(function (s) { return s.name })
+            var real = (data.scenes || []).filter(function (s) { return !s.shared && !s.global }).map(function (s) { return s.name })
             var payload = real.length > 0 && real.every(function (n) { return names.indexOf(n) >= 0 }) ? { all: true } : { scenes: names }
             apiCall('rules-set-active', payload).then(function (res) {
               setBusy(false)
@@ -1837,23 +1927,33 @@ function callApi(path, options) {
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           function toggleScene(scene) {
-            if (busy || scene.shared) return
-            var names = (data.scenes || []).filter(function (s) { return s.active && !s.shared }).map(function (s) { return s.name })
+            if (busy || scene.shared || scene.global) return
+            var names = (data.scenes || []).filter(function (s) { return s.active && !s.shared && !s.global }).map(function (s) { return s.name })
             var i = names.indexOf(scene.name)
             if (i >= 0) names.splice(i, 1)
             else names.push(scene.name)
             setActiveScenes(names)
           }
-          // ── 场景建 / 删 ──
-          function openCreateScene() { setSceneForm({ name: '', error: null }); setModal({ type: 'scene-create' }) }
-          function submitCreateScene() {
+          // ── 场景建 / 改描述 / 删 ──
+          function openCreateScene() { setSceneForm({ name: '', description: '', error: null }); setModal({ type: 'scene-create' }) }
+          function openEditScene(scene) {
+            setSceneForm({ name: scene.name, description: scene.description || '', error: null })
+            setModal({ type: 'scene-edit', name: scene.name })
+          }
+          /** 新建与编辑共用一个表单：字段相同，只是分别走 rules-create-scene / rules-update-scene。 */
+          function submitSceneForm() {
+            var isEdit = modal && modal.type === 'scene-edit'
             var name = String(sceneForm.name || '').trim()
             if (!isValidSceneName(name)) { setSceneForm(Object.assign({}, sceneForm, { error: t('error.rules.invalidGroup') })); return }
+            var description = String(sceneForm.description || '').trim()
             setBusy(true)
-            apiCall('rules-create-scene', { name: name }).then(function (res) {
+            apiCall(isEdit ? 'rules-update-scene' : 'rules-create-scene', isEdit ? { name: name, description: description } : { name: name, description: description }).then(function (res) {
               setBusy(false)
-              if (res && res.ok) { setModal(null); setResult({ ok: true, text: t('memory.result.sceneCreated', { name: name }) }); refresh(true) }
-              else setSceneForm(Object.assign({}, sceneForm, { error: translateError(t, res) }))
+              if (res && res.ok) {
+                setModal(null)
+                setResult({ ok: true, text: t(isEdit ? 'memory.result.sceneUpdated' : 'memory.result.sceneCreated', { name: name }) })
+                refresh(true)
+              } else setSceneForm(Object.assign({}, sceneForm, { error: translateError(t, res) }))
             }).catch(function (e) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: String((e && e.message) || e) })) })
           }
           function submitDeleteScene(name) {
@@ -1927,57 +2027,16 @@ function callApi(path, options) {
             mcp[modal.drill] = value
             setSections(Object.assign({}, sections, { mcp: mcp }))
           }
-          /**
-           * 段卡片：所有「勾选一组条目」的段共用同一排版（标题栏 + 固定高度滚动体 + 脚注），
-           * 高度不随内容增减变化，弹窗不会因为加/删段或进出工具明细而跳动。
-           */
-          function seg(props) {
-            return React.createElement('div', { className: 'dsm-seg' },
-              React.createElement('div', { className: 'dsm-seg-head' },
-                React.createElement('span', { className: 'dsm-seg-title' }, props.title),
-                React.createElement('span', { className: 'dsm-seg-count' }, props.count),
-                React.createElement('div', { className: 'dsm-seg-actions' }, props.actions)),
-              props.body,
-              props.foot || null)
+          /** 档案各段共用的段头动作（包装共享的 segActions，把 busy / 文案在这里补上）。 */
+          function archiveSegActions(defined, addLabel, onAdd, onRemove, onAll, onClear) {
+            return segActions({
+              defined: defined, busy: busy, addLabel: addLabel,
+              selectAllLabel: t('scenes.seg.selectAll'), clearLabel: t('scenes.seg.clear'), removeLabel: t('memory.archive.removeSection'),
+              onAdd: onAdd, onRemove: onRemove, onAll: onAll, onClear: onClear,
+            })
           }
-          /** 勾选行：复选框 + 名称/说明 + 右侧指标 + 可选行内动作。 */
-          function pickRow(props) {
-            return React.createElement('label', { key: props.key, className: 'dsm-pick' },
-              React.createElement('input', { type: 'checkbox', checked: props.checked === true, disabled: busy, onChange: props.onChange }),
-              React.createElement('span', { className: 'dsm-pick-main' },
-                React.createElement('span', { className: 'dsm-pick-name' }, props.name),
-                props.desc ? React.createElement('span', { className: 'dsm-pick-desc' }, props.desc) : null),
-              props.meta ? React.createElement('span', { className: 'dsm-pick-meta' }, props.meta) : null,
-              props.actions ? React.createElement('span', { className: 'dsm-pick-actions' }, props.actions) : null)
-          }
-          /** 段头公共动作：全选 / 清空 / 移除段（未定义时改为「添加」）。 */
-          function segActions(defined, addLabel, onAdd, onRemove, onAll, onClear) {
-            if (!defined) return [React.createElement('button', { key: 'add', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: onAdd }, addLabel)]
-            return [
-              React.createElement('button', { key: 'all', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: onAll }, t('scenes.seg.selectAll')),
-              React.createElement('button', { key: 'clear', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: onClear }, t('scenes.seg.clear')),
-              React.createElement('button', { key: 'rm', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: onRemove }, t('memory.archive.removeSection')),
-            ]
-          }
-          /** 段脚注：段已定义但一项未勾 = 该域全部停用（必须显式提示，否则像没保存上）。 */
-          function segFoot(defined, count) {
-            if (!defined || count > 0) return null
-            return React.createElement('div', { className: 'dsm-seg-foot' }, t('memory.archive.emptySection'))
-          }
-          function segList(nodes, emptyText) {
-            if (!nodes.length) return React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, emptyText))
-            return React.createElement('div', { className: 'dsm-seg-body' }, nodes)
-          }
-          /** 段体顶部的筛选行（条目多的段用；勾选状态不受筛选影响）。 */
-          function segFilter(value, onChange, placeholder) {
-            return React.createElement('div', { className: 'dsm-seg-filter' },
-              React.createElement('input', { className: 'dsm-control', value: value || '', placeholder: placeholder, onChange: function (e) { onChange(e.target.value) } }))
-          }
-          /** 分组小标题（在长列表里给用户地标，避免「一屏看不出层次」）。 */
-          function segGroup(label) {
-            return React.createElement('div', { className: 'dsm-seg-group' },
-              React.createElement('span', null, label),
-              React.createElement('span', { className: 'dsm-seg-group-line' }))
+          function archiveSegFoot(defined, count) {
+            return segFoot(defined, count, t('memory.archive.emptySection'))
           }
 
           // ── 段 4：记忆（v3）────────────────────────────────────────────────
@@ -2048,6 +2107,7 @@ function callApi(path, options) {
                   items.length
                     ? React.createElement('div', null, items.map(function (m) {
                         return pickRow({
+                disabled: busy,
                           key: m.id,
                           checked: (sections.memories || []).indexOf(String(m.id)) >= 0,
                           name: m.name,
@@ -2062,7 +2122,7 @@ function callApi(path, options) {
             return seg({
               title: t('memory.archive.memories'),
               count: defined ? t('scenes.seg.checked', { checked: memCheckedCount(), total: total }) : t('scenes.archive.sectionOff'),
-              actions: segActions(defined, t('memory.archive.addMemories'),
+              actions: archiveSegActions(defined, t('memory.archive.addMemories'),
                 function () { setSections(Object.assign({}, modalSections(), { memories: memPreset() })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.memories; setSections(s) },
                 function () { setSections(Object.assign({}, modalSections(), { memories: memPreset() })) },
@@ -2090,11 +2150,11 @@ function callApi(path, options) {
                                 (g.scene.description ? g.scene.description + ' · ' : '') + t('scenes.mem.sceneCount', { checked: on, total: ids.length }))),
                             g.scene.global ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('scenes.mem.alwaysOn')) : null,
                             React.createElement('span', { className: 'dsm-pick-actions' },
-                              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !g.items.length, onClick: function (e) { e.preventDefault(); e.stopPropagation(); setModal(Object.assign({}, modal, { memDrill: g.scene.name, memQuery: '' })) } }, t('scenes.mem.pick'))))
+                              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !g.items.length, onClick: function (e) { e.preventDefault(); e.stopPropagation(); setModal(Object.assign({}, modal, { memDrill: g.scene.name, memQuery: '' })) } }, t('scenes.mem.pick')))))
                       }))
                     })())
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.mem.hint'))),
-              foot: segFoot(defined, memCheckedCount()),
+              foot: archiveSegFoot(defined, memCheckedCount()),
             })
           }
           /** 段 1：MCP 工具集（服务器级勾选 → 行内「选工具」进工具明细，明细留在同一段内）。 */
@@ -2119,6 +2179,7 @@ function callApi(path, options) {
                   : segList(known.map(function (item) {
                       var on = spec === '*' ? true : (Array.isArray(spec) && spec.indexOf(item.short) >= 0)
                       return pickRow({
+                disabled: busy,
                         key: item.key,
                         checked: on,
                         name: item.short,
@@ -2131,7 +2192,7 @@ function callApi(path, options) {
             return seg({
               title: t('memory.archive.tools'),
               count: defined ? t('scenes.seg.checked', { checked: Object.keys(sections.mcp).length, total: servers.length }) : t('scenes.archive.sectionOff'),
-              actions: segActions(defined, t('memory.archive.addTools'),
+              actions: archiveSegActions(defined, t('memory.archive.addTools'),
                 function () { setSections(Object.assign({}, modalSections(), { mcp: mcpPreset() })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.mcp; setSections(s) },
                 mcpSelectAll,
@@ -2148,6 +2209,7 @@ function callApi(path, options) {
                         var spec2 = sections.mcp[server.name]
                         var specText = !selected ? '' : spec2 === '*' ? t('scenes.mcp.allTools') : t('scenes.mcp.pickedCount', { count: spec2.length })
                         return pickRow({
+                disabled: busy,
                           key: server.name,
                           checked: selected,
                           name: server.name,
@@ -2162,7 +2224,7 @@ function callApi(path, options) {
                       }))
                     })())
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.mcp.hint'))),
-              foot: segFoot(defined, defined ? Object.keys(sections.mcp).length : 0),
+              foot: archiveSegFoot(defined, defined ? Object.keys(sections.mcp).length : 0),
             })
           }
           /** 段 2：技能集。 */
@@ -2178,7 +2240,7 @@ function callApi(path, options) {
             return seg({
               title: t('memory.archive.skills'),
               count: defined ? t('scenes.seg.checked', { checked: sections.skills.length, total: allItems.length }) : t('scenes.archive.sectionOff'),
-              actions: segActions(defined, t('memory.archive.addSkills'),
+              actions: archiveSegActions(defined, t('memory.archive.addSkills'),
                 function () { setSections(Object.assign({}, modalSections(), { skills: allItems.filter(function (x) { return x.enabled }).map(function (x) { return x.key }) })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.skills; setSections(s) },
                 function () { setSections(Object.assign({}, modalSections(), { skills: allItems.map(function (x) { return x.key }) })) },
@@ -2189,6 +2251,7 @@ function callApi(path, options) {
                     items.length
                       ? React.createElement('div', null, items.map(function (item) {
                           return pickRow({
+                disabled: busy,
                             key: item.key,
                             checked: sections.skills.indexOf(item.key) >= 0,
                             name: item.key,
@@ -2202,7 +2265,7 @@ function callApi(path, options) {
                         }))
                       : React.createElement('div', { className: 'dsm-pick-empty' }, modal.skillQuery ? t('scenes.mem.noMatch') : t('scenes.skills.empty')))
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.skills.hint'))),
-              foot: segFoot(defined, defined ? sections.skills.length : 0),
+              foot: archiveSegFoot(defined, defined ? sections.skills.length : 0),
             })
           }
           /** 段 3：子智能体绑定。 */
@@ -2219,7 +2282,7 @@ function callApi(path, options) {
             return seg({
               title: t('memory.archive.subagents'),
               count: defined ? t('scenes.seg.checked', { checked: sections.subagents.length, total: allItems.length }) : t('scenes.archive.sectionOff'),
-              actions: segActions(defined, t('memory.archive.addSubagents'),
+              actions: archiveSegActions(defined, t('memory.archive.addSubagents'),
                 function () { setSections(Object.assign({}, modalSections(), { subagents: [] })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.subagents; setSections(s) },
                 function () { setSections(Object.assign({}, modalSections(), { subagents: allItems.map(function (x) { return x.name }) })) },
@@ -2230,6 +2293,7 @@ function callApi(path, options) {
                     items.length
                       ? React.createElement('div', null, items.map(function (item) {
                           return pickRow({
+                disabled: busy,
                             key: item.name,
                             checked: sections.subagents.indexOf(item.name) >= 0,
                             name: item.name,
@@ -2243,7 +2307,7 @@ function callApi(path, options) {
                         }))
                       : React.createElement('div', { className: 'dsm-pick-empty' }, modal.subQuery ? t('scenes.mem.noMatch') : t('scenes.subagents.empty')))
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.subagents.hint'))),
-              foot: segFoot(defined, defined ? sections.subagents.length : 0),
+              foot: archiveSegFoot(defined, defined ? sections.subagents.length : 0),
             })
           }
           /**
@@ -2318,13 +2382,26 @@ function callApi(path, options) {
           var modeScene = data.mode && data.mode.scene
           // 与 MCP / 技能页同构的三格统计（页面之间「头顶长什么样」保持一致）。
           var sceneStats = (function () {
-            var own = (data.scenes || []).filter(function (s) { return s.shared !== true })
+            var own = (data.scenes || [])
             return {
               total: own.length,
               active: own.filter(function (s) { return s.active === true }).length,
               archives: Object.keys(data.archives || {}).length,
             }
           })()
+          /**
+           * 场景已绑定的东西，一行摘要（没绑的域不出现）。
+           * 之前卡片上只有一个「档案」标签，用户点进去才知道里面配了什么。
+           */
+          function archiveSummary(archive) {
+            if (!archive) return ''
+            var parts = []
+            if (archive.mcp) parts.push(t('scenes.profile.mcp', { count: Object.keys(archive.mcp).length }))
+            if (Array.isArray(archive.skills)) parts.push(t('scenes.profile.skills', { count: archive.skills.length }))
+            if (Array.isArray(archive.subagents)) parts.push(t('scenes.profile.subagents', { count: archive.subagents.length }))
+            if (Array.isArray(archive.memories)) parts.push(t('scenes.profile.memories', { count: archive.memories.length }))
+            return parts.join(' · ')
+          }
           return React.createElement('section', { className: 'dsm-section' },
             React.createElement('div', { className: 'dsm-head' },
               React.createElement('div', { className: 'dsm-title-block' },
@@ -2333,12 +2410,12 @@ function callApi(path, options) {
                   React.createElement(VersionBadge, null)),
                 React.createElement('p', { className: 'dsm-desc' }, t('scenes.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                modeScene ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current') + ': ' + modeScene) : null,
+                modeScene ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current') + ': ' + (sceneLabel(modeScene) || modeScene)) : null,
                 modeScene ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: exitMode }, t('memory.mode.exit')) : null,
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')))),
             React.createElement('div', { key: 'stats', className: 'dsm-summary dsm-summary-3' },
-              [[sceneStats.total, '个场景'], [sceneStats.active, '个已启用'], [sceneStats.archives, '个有档案']].map(function (item) {
+              [[sceneStats.total, t('scenes.stat.total')], [sceneStats.active, t('scenes.stat.active')], [sceneStats.archives, t('scenes.stat.archives')]].map(function (item) {
                 return React.createElement('div', { key: item[1], className: 'dsm-stat' },
                   React.createElement('strong', null, item[0]), item[1])
               })),
@@ -2349,30 +2426,55 @@ function callApi(path, options) {
                 var name = scene.name
                 var archive = data.archives[name]
                 var hasModeSections = !!(archive && (archive.mcp || Array.isArray(archive.skills)))
+                var summary = archiveSummary(archive)
                 return React.createElement('div', { key: 's:' + name, className: 'dsm-source' },
                   React.createElement('div', { className: 'dsm-source-head' },
                     React.createElement('div', { className: 'dsm-source-head-main' },
-                      React.createElement('span', { className: 'dsm-source-title' }, name === '' ? t('memory.scene.global') : name),
+                      React.createElement('span', { className: 'dsm-source-title' }, sceneLabel(name) || name),
+                      scene.global === true ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
                       scene.shared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
                       modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
-                      archive ? React.createElement('span', { className: 'dsm-tag' }, t('scenes.hasArchive')) : null,
-                      scene.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null),
+                      scene.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null,
+                      // 描述 + 记忆条数 + 已绑定内容：卡片本身就把「这个场景是什么」说清楚。
+                      React.createElement('span', { className: 'dsm-note' },
+                        (scene.description ? scene.description : t('scenes.noDesc'))
+                        + ' · ' + t('scenes.memCount', { count: scene.count || 0 })
+                        + (summary ? ' · ' + t('scenes.profile.summary', { parts: summary })
+                          : (archive ? ' · ' + t('scenes.profile.empty') : ''))),
+                      // 场景名（磁盘上的目录名）与显示名可能不同——把真名放在路径位，方便对文件。
+                      React.createElement('span', { className: 'dsm-path' }, name)),
                     React.createElement('div', { className: 'dsm-source-actions' },
                       React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openArchive(name) } }, t('memory.archive.edit')),
+                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditScene(scene) } }, t('memory.scene.edit')),
                       hasModeSections && modeScene !== name ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { enterMode(name) } }, t('memory.mode.set')) : null,
-                      !scene.shared && name !== '' ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')) : null,
-                      scene.shared ? null : React.createElement(Switch, { on: scene.active === true, disabled: busy, label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } }))))
+                      scene.global === true || scene.shared ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')),
+                      scene.global === true || scene.shared ? null : React.createElement(Switch, { on: scene.active === true, disabled: busy, label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } }))))
               })),
-            modal && modal.type === 'scene-create' ? React.createElement(Modal, { key: 'screate', title: t('memory.scene.createTitle'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+            modal && (modal.type === 'scene-create' || modal.type === 'scene-edit') ? React.createElement(Modal, { key: 'screate', title: modal.type === 'scene-create' ? t('memory.scene.createTitle') : t('memory.scene.editTitle'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
-                  React.createElement('input', { className: 'dsm-control' + (sceneForm.error ? ' dsm-rule-invalid' : ''), value: sceneForm.name || '', placeholder: t('memory.field.group.placeholder'), onChange: function (e) { setSceneForm({ name: e.target.value, error: null }) } }),
-                  React.createElement('p', { className: sceneForm.error ? 'dsm-rule-hint' : 'dsm-help' }, sceneForm.error || t('memory.field.group.hint'))),
-                React.createElement('p', { className: 'dsm-help' }, t('memory.scene.createHelp'))),
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.name')),
+                  React.createElement('input', {
+                    className: 'dsm-control' + (sceneForm.error ? ' dsm-rule-invalid' : ''),
+                    value: sceneForm.name || '',
+                    disabled: modal.type === 'scene-edit',
+                    placeholder: t('memory.scene.field.name.placeholder'),
+                    onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { name: e.target.value, error: null })) },
+                  }),
+                  React.createElement('p', { className: sceneForm.error ? 'dsm-rule-hint' : 'dsm-help' }, sceneForm.error || (modal.type === 'scene-create' ? t('memory.scene.field.name.hint') : t('memory.scene.field.name.lock')))),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.desc')),
+                  React.createElement('input', {
+                    className: 'dsm-control',
+                    value: sceneForm.description || '',
+                    placeholder: t('memory.scene.field.desc.placeholder'),
+                    onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { description: e.target.value, error: null })) },
+                  }),
+                  React.createElement('p', { className: 'dsm-help' }, t('memory.scene.field.desc.hint'))),
+                React.createElement('p', { className: 'dsm-help' }, modal.type === 'scene-create' ? t('memory.scene.createHelp') : t('memory.scene.editHelp'))),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitCreateScene }, t('memory.btn.create')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitSceneForm }, t(modal.type === 'scene-create' ? 'memory.btn.create' : 'memory.btn.saveScene')))) : null,
             modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', title: t('memory.deleteScene.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.deleteScene.desc', { name: modal.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
@@ -2401,23 +2503,140 @@ function callApi(path, options) {
             }).catch(function (e) { setData({ loading: false, error: String((e && e.message) || e), subagents: [] }) })
           }
           React.useEffect(function () { refresh() }, [])
+          /**
+           * 人设表单的候选数据（模型目录 / 全体预设工具并集）只在**首次展开高级选项**时拉取：
+           * 宿主枚举预设需要为尚未挂载的预设建立 standing mount，不该在打开弹窗时就付这个代价。
+           */
+          var cands = React.useState({ loaded: false, loading: false, error: null, models: [], tools: [] })
+          var cand = cands[0], setCand = cands[1]
+          function loadCandidates() {
+            if (cand.loaded || cand.loading) return
+            setCand(Object.assign({}, cand, { loading: true, error: null }))
+            Promise.all([apiCall('model-candidates', {}), apiCall('preset-tools', {})]).then(function (rs) {
+              var mres = rs[0], tres = rs[1]
+              var failed = (!mres || mres.ok === false) && (!tres || tres.ok === false)
+              setCand({
+                loaded: true, loading: false,
+                error: failed ? t('subagents.adv.loadFailed') : null,
+                models: (mres && mres.models) || [],
+                tools: (tres && tres.tools) || [],
+              })
+            }).catch(function (e) {
+              setCand({ loaded: true, loading: false, error: String((e && e.message) || e), models: [], tools: [] })
+            })
+          }
+          /** 高级选项：默认收起；已经在用模型/工具限制的人设自动展开（否则用户看不见自己配了什么）。 */
+          function initialAdvanced(p) {
+            return !!((p && (p.model || p.provider)) || (p && ((p.tools || []).length || (p.toolsDeny || []).length)))
+          }
           function openEditor(name) {
-            if (!name) { setModal({ type: 'editor', mode: 'create', form: { name: '', description: '', provider: '', model: '', tools: '', body: '', error: null } }); return }
+            if (!name) {
+              setModal({ type: 'editor', mode: 'create', advanced: false, form: { name: '', description: '', provider: '', model: '', tools: [], toolsDeny: [], body: '', error: null } })
+              return
+            }
             setBusy(true)
             apiCall('subagent-get', { name: name }).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
                 var p = res.persona || {}
-                setModal({ type: 'editor', mode: 'edit', form: { name: p.name || name, description: p.description || '', provider: p.provider || '', model: p.model || '', tools: (p.tools || []).join(', '), body: p.body || '', error: null } })
+                setModal({ type: 'editor', mode: 'edit', advanced: initialAdvanced(p), form: {
+                  name: p.name || name, description: p.description || '', provider: p.provider || '', model: p.model || '',
+                  tools: (p.tools || []).slice(), toolsDeny: (p.toolsDeny || []).slice(), body: p.body || '', error: null,
+                } })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           function setForm(patch) { if (modal && modal.type === 'editor') setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, patch) })) }
+          /** 列表里增删一项（勾选语义：存在 = 勾上）。 */
+          function toggled(list, name) {
+            var next = (list || []).slice()
+            var i = next.indexOf(name)
+            if (i >= 0) next.splice(i, 1); else next.push(name)
+            return next
+          }
+          /**
+           * 模型下拉的当前值。
+           * 宿主目录里有这对 (provider, model) → 用它；只有 model 没有 provider（跨来源手工填的）
+           * 或目录里没有 → 走「自定义」，同时把输入框露出来，避免把用户已配好的值悄悄改掉。
+           */
+          function modelSelectValue() {
+            if (!modal || modal.type !== 'editor') return ''
+            var f = modal.form
+            if (!f.model) return ''
+            var hit = (cand.models || []).filter(function (m) { return m.provider === f.provider && m.id === f.model })[0]
+            return hit ? (f.provider + '\u0000' + f.model) : '__custom__'
+          }
+          /**
+           * 工具选择器（白名单 / 黑名单共用）。
+           *
+           * 候选 = 宿主回传的**全体 Agent 预设工具并集**，并标注「当前会话可见」：
+           * 人设可能在任何预设下被子代理复用，只列当前会话的工具会让换预设后的子代理启动失败
+           * （官方 toolFilter 对未知名直接拒绝启动）。因此这里宁可多列，并把手填入口留出来。
+           */
+          function toolPicker(props) {
+            var all = cand.tools || []
+            var q = String(modal.toolQuery || '').trim().toLowerCase()
+            var list = q ? all.filter(function (x) { return String(x.name).toLowerCase().indexOf(q) >= 0 }) : all
+            var picked = props.selected || []
+            var current = list.filter(function (x) { return x.current })
+            var others = list.filter(function (x) { return !x.current })
+            function row(item) {
+              return pickRow({
+                disabled: busy,
+                key: (props.deny ? 'd:' : 'a:') + item.name,
+                checked: picked.indexOf(item.name) >= 0,
+                name: item.name,
+                meta: item.current
+                  ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, props.current)
+                  : React.createElement('span', { className: 'dsm-tag' }, props.unavailable),
+                onChange: function () { props.onToggle(item.name) },
+              })
+            }
+            return React.createElement('div', { className: 'dsm-field' },
+              React.createElement('span', { className: 'dsm-label' },
+                props.label + (picked.length ? ' · ' + t('subagents.tools.count', { count: picked.length }) : '')),
+              picked.length
+                ? React.createElement('div', { className: 'dsm-tools-chips' }, picked.map(function (name) {
+                    return React.createElement('span', { key: 'c:' + name, className: 'dsm-chip' + (props.deny ? ' dsm-chip-deny' : '') },
+                      name,
+                      React.createElement('button', { type: 'button', title: t('subagents.tools.remove'), onClick: function () { props.onToggle(name) } }, '×'))
+                  }))
+                : React.createElement('span', { className: 'dsm-adv-note' }, props.chosen),
+              React.createElement('div', { className: 'dsm-combo-row' },
+                React.createElement('input', {
+                  className: 'dsm-control',
+                  value: modal.toolQuery || '',
+                  placeholder: props.filterPlaceholder,
+                  onChange: function (e) { setModal(Object.assign({}, modal, { toolQuery: e.target.value })) },
+                }),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !all.length, onClick: props.onAll }, t('scenes.seg.selectAll')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !picked.length, onClick: props.onClear }, t('scenes.seg.clear'))),
+              React.createElement('div', { className: 'dsm-tools-grid' },
+                list.length
+                  ? React.createElement('div', null,
+                      current.length ? segGroup(props.groupCurrent) : null,
+                      current.map(row),
+                      others.length ? segGroup(props.groupOther) : null,
+                      others.map(row))
+                  : React.createElement('div', { className: 'dsm-pick-empty' }, all.length ? t('scenes.mem.noMatch') : props.empty)),
+              React.createElement('p', { className: 'dsm-help' }, props.hint))
+          }
+          function toggleAdvanced() {
+            if (!modal || modal.type !== 'editor') return
+            var next = !modal.advanced
+            setModal(Object.assign({}, modal, { advanced: next }))
+            if (next) loadCandidates()
+          }
           function submitEditor() {
             if (!modal || modal.type !== 'editor') return
             setBusy(true)
             var op = modal.mode === 'create' ? 'subagent-create' : 'subagent-update'
-            apiCall(op, { name: modal.form.name, description: modal.form.description, provider: modal.form.provider, model: modal.form.model, tools: modal.form.tools, body: modal.form.body }).then(function (res) {
+            apiCall(op, {
+              name: modal.form.name, description: modal.form.description,
+              provider: modal.form.provider, model: modal.form.model,
+              tools: modal.form.tools || [], toolsDeny: modal.form.toolsDeny || [],
+              body: modal.form.body,
+            }).then(function (res) {
               setBusy(false)
               if (res && res.ok) { setModal(null); setResult({ ok: true, text: t('subagents.result.saved', { name: modal.form.name }) }); refresh(true) }
               else setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, { error: translateError(t, res) }) }))
@@ -2481,19 +2700,92 @@ function callApi(path, options) {
                   React.createElement('input', { className: 'dsm-control', value: modal.form.description || '', placeholder: t('subagents.field.description.placeholder'), onChange: function (e) { setForm({ description: e.target.value }) } }),
                   React.createElement('p', { className: 'dsm-help' }, t('subagents.field.description.hint'))),
                 React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
-                  React.createElement('input', { className: 'dsm-control', value: modal.form.model || '', placeholder: t('subagents.field.model.placeholder'), onChange: function (e) { setForm({ model: e.target.value }) } })),
-                React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.provider')),
-                  React.createElement('input', { className: 'dsm-control', value: modal.form.provider || '', placeholder: t('subagents.field.provider.placeholder'), onChange: function (e) { setForm({ provider: e.target.value }) } }),
-                  React.createElement('p', { className: 'dsm-help' }, t('subagents.field.provider.hint'))),
-                React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.tools')),
-                  React.createElement('input', { className: 'dsm-control', value: modal.form.tools || '', placeholder: 'read_file, glob', onChange: function (e) { setForm({ tools: e.target.value }) } }),
-                  React.createElement('p', { className: 'dsm-help' }, t('subagents.field.tools.hint'))),
-                React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.body')),
                   React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: modal.form.body || '', placeholder: t('subagents.field.body.placeholder'), onChange: function (e) { setForm({ body: e.target.value }) } })),
+                // ── 高级选项（默认收起）──
+                // 模型 / 工具限制是「少数人才改」的字段，但一旦改错代价高（跨来源模型、工具名打错
+                // 会让子代理直接启动失败）。所以：收起来但**有值就自动展开**，并把候选做成选择器。
+                React.createElement('div', { className: 'dsm-adv' },
+                  React.createElement('button', { type: 'button', className: 'dsm-adv-head', 'aria-expanded': modal.advanced === true, onClick: toggleAdvanced },
+                    React.createElement('span', { className: 'dsm-adv-caret' }, modal.advanced ? '▼' : '▶'),
+                    React.createElement('span', null, t('subagents.adv.title')),
+                    React.createElement('span', { className: 'dsm-adv-note' },
+                      modal.advanced ? '' : t('subagents.adv.summary', {
+                        model: modal.form.model ? (modal.form.provider ? modal.form.provider + '/' + modal.form.model : modal.form.model) : t('subagents.adv.inherit'),
+                        allow: (modal.form.tools || []).length,
+                        deny: (modal.form.toolsDeny || []).length,
+                      }))),
+                  modal.advanced ? React.createElement('div', { className: 'dsm-adv-body' },
+                    // 模型：宿主 LLM 目录里的 (provider, model) 对 + 自定义兜底。
+                    React.createElement('div', { className: 'dsm-field' },
+                      React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
+                      React.createElement('div', { className: 'dsm-combo-row' },
+                        React.createElement('div', { className: 'dsm-select' },
+                          React.createElement('select', {
+                            className: 'dsm-control',
+                            value: modelSelectValue(),
+                            disabled: busy || cand.loading,
+                            onChange: function (e) {
+                              var v = e.target.value
+                              if (v === '') setForm({ provider: '', model: '' })
+                              else if (v !== '__custom__') {
+                                var parts = v.split('\u0000')
+                                setForm({ provider: parts[0], model: parts[1] })
+                              } else setForm({ model: modal.form.model || '' })
+                            },
+                          },
+                            React.createElement('option', { value: '' }, t('subagents.model.inherit')),
+                            (cand.models || []).map(function (m) {
+                              return React.createElement('option', { key: m.provider + '/' + m.id, value: m.provider + '\u0000' + m.id }, m.provider + ' · ' + m.name)
+                            }),
+                            React.createElement('option', { value: '__custom__' }, t('subagents.model.customOption')))),
+                        modelSelectValue() === '__custom__'
+                          ? React.createElement('input', { className: 'dsm-control', value: modal.form.model || '', placeholder: t('subagents.field.model.placeholder'), onChange: function (e) { setForm({ model: e.target.value }) } })
+                          : null),
+                      React.createElement('p', { className: 'dsm-help' }, cand.loading ? t('memory.loading') : t('subagents.field.model.hint'))),
+                    // provider 独立成一项：跨来源模型（如 sensenova）需要 provider+model 两个键同时给。
+                    React.createElement('label', { className: 'dsm-field' },
+                      React.createElement('span', { className: 'dsm-label' }, t('subagents.field.provider')),
+                      React.createElement('input', { className: 'dsm-control', value: modal.form.provider || '', placeholder: t('subagents.field.provider.placeholder'), onChange: function (e) { setForm({ provider: e.target.value }) } }),
+                      React.createElement('p', { className: 'dsm-help' }, t('subagents.field.provider.hint'))),
+                    // 工具白名单：勾选 = 子代理只保留这些工具（不勾 = 基础组合全集）。
+                    toolPicker({
+                      key: 'allow',
+                      label: t('subagents.field.tools'),
+                      hint: t('subagents.field.tools.hint'),
+                      selected: modal.form.tools || [],
+                      onToggle: function (name) { setForm({ tools: toggled(modal.form.tools || [], name) }) },
+                      onClear: function () { setForm({ tools: [] }) },
+                      onAll: function () { setForm({ tools: (cand.tools || []).map(function (x) { return x.name }) }) },
+                      chosen: t('subagents.tools.chosen'),
+                      filterPlaceholder: t('subagents.tools.filter'),
+                      empty: t('subagents.tools.empty'),
+                      unavailable: t('subagents.tools.unavailable'),
+                      current: t('subagents.tools.current'),
+                      groupCurrent: t('subagents.tools.groupCurrent'),
+                      groupOther: t('subagents.tools.groupOther'),
+                    }),
+                    // 工具黑名单：勾选 = 从子代理可见集合里移除（官方 ToolRestriction.deny，优先级高于白名单）。
+                    toolPicker({
+                      key: 'deny',
+                      label: t('subagents.field.toolsDeny'),
+                      hint: t('subagents.field.toolsDeny.hint'),
+                      deny: true,
+                      selected: modal.form.toolsDeny || [],
+                      onToggle: function (name) { setForm({ toolsDeny: toggled(modal.form.toolsDeny || [], name) }) },
+                      onClear: function () { setForm({ toolsDeny: [] }) },
+                      onAll: function () { setForm({ toolsDeny: (cand.tools || []).map(function (x) { return x.name }) }) },
+                      chosen: t('subagents.tools.chosen'),
+                      filterPlaceholder: t('subagents.tools.filter'),
+                      empty: t('subagents.tools.empty'),
+                      unavailable: t('subagents.tools.unavailable'),
+                      current: t('subagents.tools.current'),
+                      groupCurrent: t('subagents.tools.groupCurrent'),
+                      groupOther: t('subagents.tools.groupOther'),
+                    }),
+                    cand.error ? React.createElement('div', { className: 'dsm-feedback dsm-warning' }, String(cand.error)) : null,
+                    React.createElement('p', { className: 'dsm-adv-note' }, t('subagents.adv.note')))
+                    : null),
                 modal.form.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(modal.form.error)) : null),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
@@ -2546,7 +2838,17 @@ function callApi(path, options) {
             var i = s.indexOf('/')
             return i >= 0 ? s.slice(0, i) : s
           }
-          function sceneLabel(name) { return name === '' ? t('memory.scene.global') : name }
+          /**
+           * 场景显示名：宿主 scenes 里的 label 为准（保留场景 global 的 label 是「全局」，
+           * 由宿主给出，界面不再自己拼）。没有元数据的游离桶用专门的说明文案。
+           */
+          function sceneLabel(name) {
+            if (name === '') return t('memory.scene.orphan')
+            var row = (data.scenes || []).filter(function (s) { return s.name === name })[0]
+            if (row && row.label) return row.label
+            if (name === 'global') return t('memory.scene.global')
+            return name
+          }
           function toggleCollapse(key) {
             setCollapsed(function (prev) {
               var next = Object.assign({}, prev)
@@ -2566,6 +2868,7 @@ function callApi(path, options) {
                   activeMode: r.activeMode === 'custom' ? 'custom' : 'all',
                   sceneMemory: r.sceneMemory || EMPTY_MEMORY,
                   stats: r.stats || EMPTY_STATS,
+                  paths: r.paths || null,
                 }) })
               } else {
                 setData(function (prev) { return Object.assign({}, prev, { loading: false, error: translateError(t, r), rules: [], scenes: [], activeMode: 'all', sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS }) })
@@ -2604,7 +2907,7 @@ function callApi(path, options) {
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           function closeEditor() { setModal(null) }
-          // ── 导入记忆（.md / .zip；场景留空 = 全局：任何对话都注入）──
+          // ── 导入记忆（.md / .zip；场景留空 = 保留场景「全局」）──
           function submitImport(files) {
             if (!files || !files.length) return
             setBusy(true)
@@ -2615,6 +2918,9 @@ function callApi(path, options) {
                 var names = res.imported || [], skipped = res.skipped || []
                 var text = names.length ? t('memory.result.imported', { count: names.length, names: names.join('、') }) : t('import.none')
                 if (skipped.length) text += ' · ' + t('import.skipped', { items: skipped.map(function (s) { return s.name + '（' + s.reason + '）' }).join('；') })
+                // 导入会为引用的目录名补出场景记录（宿主回传 scenes）——必须告诉用户，
+                // 否则「我的场景列表怎么多了一个」就是静默造数据。
+                if (res.scenes && res.scenes.length) text += ' · ' + t('memory.import.scenesCreated', { names: res.scenes.join('、') })
                 setResult({ ok: true, text: text }); refresh(true)
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
@@ -2800,8 +3106,9 @@ function callApi(path, options) {
               || (r.group || '').toLowerCase().indexOf(q) >= 0
           }
 
-          // 场景 → 记忆：场景元数据来自 scenes（含空目录），记忆按一级目录归位；
-          // 根层记忆（group 为空）归入「全局」桶，始终生效。
+          // 场景 → 记忆：场景元数据来自宿主 scenes（含**空场景**与保留场景 global），
+          // 记忆按一级目录归位。没有归属场景的记忆（直接放在 memories/ 根层）也单独列出来，
+          // 并在体检里报 noScene —— 不能让它既不在列表里、也不在提示词里。
           var buckets = {}
           var order = []
           function ensureBucket(name, meta) {
@@ -2811,22 +3118,26 @@ function callApi(path, options) {
           }
           ;(data.scenes || []).forEach(function (s) { ensureBucket(s.name, s) })
           data.rules.forEach(function (r) {
-            var b = ensureBucket(sceneOf(r.group), null)
+            var g = String(r.group == null ? '' : r.group)
+            var b = ensureBucket(g === '' ? '' : sceneOf(g), null)
             if (matchRule(r)) b.rules.push(r)
           })
           order.sort(function (a, b) {
             if (a === b) return 0
-            if (a === '') return -1
-            if (b === '') return 1
             var am = buckets[a].meta, bm = buckets[b].meta
-            if (!!(am && am.shared) !== !!(bm && bm.shared)) return (am && am.shared) ? -1 : 1
+            // 宿主给的 order（保留场景 global = 0，恒在最前）；无元数据的游离桶排最后。
+            var ao = am && typeof am.order === 'number' ? am.order : 1e9
+            var bo = bm && typeof bm.order === 'number' ? bm.order : 1e9
+            if (ao !== bo) return ao - bo
+            if (a === '') return 1
+            if (b === '') return -1
             return String(a).localeCompare(String(b))
           })
           var sceneOptions = [{ value: '', label: t('memory.filter.all') }].concat(
             order.map(function (n) { return { value: n, label: sceneLabel(n) } }))
-          // 全局（不选场景）排在最前：选中即清空场景 = 任何对话都注入。
-          var sceneChoices = [{ value: '', label: t('memory.scene.global.hint') }].concat(
-            order.filter(function (n) { return n !== '' }).map(function (n) { return { value: n, label: sceneLabel(n) } }))
+          // 场景选择：保留场景「全局」排最前（它是真实场景，不是「留空」）；
+          // 游离桶只在真的存在游离记忆时才出现。
+          var sceneChoices = order.map(function (n) { return { value: n, label: sceneLabel(n) } })
           // 名称 = .md 文件名（单个路径段，不是路径）：用 segment 校验器，与宿主逐字对齐。
           // 中文等任意 Unicode 都合法（`站会流程` → `站会流程.md`）。
           // 未输入时不标红/不报「不合法」——一打开弹窗就飘红会让人以为中文名被拒；
@@ -2872,20 +3183,26 @@ function callApi(path, options) {
 
           function renderSceneCard(name) {
             var bucket = buckets[name]
-            var meta = bucket.meta || { name: name, count: 0, active: name === '', shared: false }
+            var meta = bucket.meta || { name: name, count: 0, active: true, shared: false, label: null }
             var isShared = meta.shared === true
+            var isGlobal = meta.global === true || name === 'global'
+            var isOrphan = name === '' && !bucket.meta
             var open = !collapsed['s:' + name]
-            return React.createElement('div', { key: 's:' + name, className: 'dsm-source' + (meta.active === false ? ' dsm-rule-shadowed' : '') },
+            // 游离记忆（没有归属场景）用错误色提示：它们不会进系统提示词。
+            return React.createElement('div', { key: 's:' + name, className: 'dsm-source' + (meta.active === false || isOrphan ? ' dsm-rule-shadowed' : '') },
               React.createElement('div', { className: 'dsm-source-head' },
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleCollapse('s:' + name) } },
                   React.createElement('span', { className: 'dsm-source-title' }, sceneLabel(name)),
                   React.createElement('span', { className: 'dsm-count' }, t('memory.scene.count', { count: bucket.rules.length })),
                   isShared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
-                  name === '' ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
-                  meta.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null),
+                  isGlobal ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
+                  isOrphan ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.orphan.tag')) : null,
+                  meta.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null,
+                  isOrphan ? null : React.createElement('span', { className: 'dsm-note' }, meta.description || '')),
                 React.createElement('div', { className: 'dsm-source-actions' },
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openCreate(name) } }, t('memory.scene.new')))),
+                  isOrphan ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openCreate(name) } }, t('memory.scene.new')))),
               open ? React.createElement('div', { className: 'dsm-source-body' },
+                isOrphan ? React.createElement('div', { className: 'dsm-source-note' }, t('memory.scene.orphan.hint')) : null,
                 bucket.rules.length
                   ? React.createElement(React.Fragment, null,
                     React.createElement('div', { className: 'dsm-table-head' },
@@ -3046,3 +3363,4 @@ function callApi(path, options) {
     return module.exports
   }
 })
+
