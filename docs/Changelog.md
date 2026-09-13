@@ -27,6 +27,7 @@
 - **截图 `MCP.png` 大小写修复**：`docs/images/mcp.png` 被提交成小写而 README/screenshots.json 都引用 `MCP.png`，Windows 不区分大小写掩盖了这点，GitHub 上该图 404（其余六张正常）。两步 `git mv` 改名后实测 `MCP.png` → HTTP 200、`mcp.png` → 404。
 - **模型工具计数与入口表更正（中英双版）**：「模型工具」由 **12 → 14**——此前两版都漏了 `agentsmd_list` / `agentsmd_apply`（模型可查/切 AGENTS.md 预设库，不提供新建/删除以免误删用户预设），现按四组写出各占几个：MCP 4 / 技能 3 / AGENTS.md 2 / 场景记忆 3 / 子智能体 2 = 14。依据是代码实测 `tools.register()` 共 14 处（`src/index.ts` 12 处 + `src/subagents/tools.ts` 2 处）。「让模型和脚本参与管理」入口表同步补上 `agentsmd_*` 与 `subagent_*` 两行（4 → 6 行数据），中英两版表格逐行对齐。
 - **`package.json` description 补全**：原文只列 `skill_mcp_manager_*` / `skill_manager_*` / `rule_manager_*`（漏 `agentsmd_*` 与 `subagent_*`，也未提子智能体）。现补为五域 + 场景记忆注入系统提示词 + 一次性人设子代理，并写明 **14 model tools** 与五个前缀族。校验：22 项断言逐条对代码核对（各族工具数 4/3/2/3/2、`dsh.client`、`dsh.bundle`、HTTP API 路由、`systemPrompt` 段、subagent 工具）全部通过。
+- **两版 README 的测试计数校正**：开发小节原写「十组 / 76 例」（英文版还写成 "ten groups / 76 cases"），实际 `npm test` 跑 **11 组 / 81 例**；英文版的组清单还漏列 `skills-delete`、`skills-state`、`skills-source-remove` 三组，中文版漏列 `skills-source-remove`。现两版均改为 11 组 / 81 例，并补上遗漏的组名与各自断言内容（含新增的「移除来源」语义组）。
 
 ### 修复（本轮真实故障）
 - **「工具」页整页白屏**：`sceneLabel` 定义在 `MemoryPage` 闭包里却被 `ScenesPage` 调用 → `ReferenceError`，被 slot 边界吞成日志。已提到模块作用域并参数化。

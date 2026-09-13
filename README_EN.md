@@ -254,13 +254,14 @@ npm install
 npm run build        # build (tsc + sync client bundle)
 npm run build:client # sync src/client.js → lib/client.js only
 npm run lint         # syntax self-check (node --check on both artifacts)
-npm test             # build + all semantic-contract tests (node --test test/*.test.mjs)
+npm run check:i18n   # zh/en dictionary key-set + placeholder alignment
+npm test             # build + i18n check + all semantic-contract tests (node --test test/*.test.mjs, 11 groups / 81 cases)
 ```
 
 > Changes are verified by **actually exercising the real behaviour** (evidence and known issues live in
 > [Changelog](docs/Changelog.md)) instead of asserting what the code currently does — the latter
-> just copies the implementation and passes by construction. The exception is ten groups of
-> **semantic-contract** tests (`npm test`, run against the built `lib/`, 76 cases):
+> just copies the implementation and passes by construction. The exception is eleven groups of
+> **semantic-contract** tests (`npm test`, run against the built `lib/`, 81 cases):
 > `archive.test.mjs` (engine state machine), `import.test.mjs` (ZIP expansion, landing plans, limit
 > reporting), `approval-policy.test.mjs` (never-policy detection, driving a real cordis context and
 > a real `ApprovalService`), `subagent-scene.test.mjs` (scene binding must reject *before* a
@@ -268,7 +269,12 @@ npm test             # build + all semantic-contract tests (node --test test/*.t
 > `model` and `toolsDeny` survive a UI save; creating a persona with no directory present),
 > `hub-layout.test.mjs` (unified data directory: legacy layouts move without overwriting, the
 > reserved `global` scene always exists and cannot be deleted, a memory must belong to an existing
-> scene, and the profile memory section only affects projection), `client-exports.test.mjs`
+> scene, and the profile memory section only affects projection), `skills-delete.test.mjs` (which
+> skills may be deleted: user-level sources cannot be, read-only sources stay read-only),
+> `skills-state.test.mjs` (state-file read resilience: missing keys self-heal, type errors stay
+> fail-closed), `skills-source-remove.test.mjs` (the "remove a source" semantics: a removed source is
+> no longer read, drops out of the same-name priority and is invisible to the model, while not a byte
+> on disk changes and it can be restored), `client-exports.test.mjs`
 > (client export contract: evaluating the factory alone — without running `apply` — must already
 > expose `dict`/`pages`; exports written inside the `apply` method body are rejected), and
 > `client-render.test.mjs` (assembly and rendering: a fake ctx drives the whole `apply`, asserts
