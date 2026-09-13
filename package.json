@@ -35,7 +35,8 @@
     "build": "tsc -p tsconfig.json && node scripts/sync-client.mjs",
     "build:client": "node scripts/sync-client.mjs",
     "prepublishOnly": "npm run build",
-    "lint": "node --check lib/client.js && node --check lib/index.js"
+    "lint": "node --check lib/client.js && node --check lib/index.js",
+    "test": "npm run build && node --test test/archive.test.mjs"
   },
   "keywords": [
     "dsh",
