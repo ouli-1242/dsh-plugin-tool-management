@@ -1746,6 +1746,17 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       index.active = index.active.filter((s) => s !== name)
       await writeIndex(stateDir, index)
     }
+    // 场景删除时同步清理其档案（否则 archives 留下孤儿条目）。
+    if (index.archives && index.archives[name]) {
+      delete index.archives[name]
+      await writeIndex(stateDir, index)
+    }
+    // 若删的正是当前模式场景：退出模式。运行时启停不在此恢复快照（恢复属引擎职责、
+    // 依赖反向注入会成环）——保留现状，用户可手动退出/重进任一模式。
+    if (index.mode?.scene === name) {
+      index.mode = { scene: null, snapshot: null }
+      await writeIndex(stateDir, index)
+    }
     invalidateSnapshot()
     invalidateProviders()
     return { ok: true, name }
