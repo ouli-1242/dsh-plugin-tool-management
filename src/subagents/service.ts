@@ -86,7 +86,8 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
 
   async function runOnce(parentAgent: any, p: PersonaDoc, task: string, signal: AbortSignal | undefined): Promise<{ text: string; runId: string; stopReason: string }> {
     const runtime = await ensureSpawnProvider()
-    const run = await runtime.start({
+    // 官方签名：start(name, request) —— name = ctx.subagents 上的 provider 注册名。
+    const run = await runtime.start('spawn', {
       provider: 'spawn',
       label: p.name,
       parent: parentAgent,
