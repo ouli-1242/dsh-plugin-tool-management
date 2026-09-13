@@ -137,7 +137,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 - **注入预算可见**：页头下方常驻一条预算条（已用 / 上限字节），超限变红并标「已超限」。默认上限 64 KiB；**某条记忆放不下时只跳过它**、继续装后面放得下的小记忆，段尾会附一份「未注入（超出预算）」清单——模型与用户都能看到哪些记忆这次没进提示词，而不是静默丢失。
 - **不再改写 `~/.dsh/AGENTS.md`**：原"始终层"已下线，公共基线改由 `_shared/` 承担，统一走系统提示词段。
 - **场景档案（三段自由搭配）**：卡片上「档案」打开编辑器，三段各自独立"添加/移除"——**MCP 工具集**（两级勾选：先勾服务器，「添加」时按当前运行时状态预勾；不勾=整台停用，勾了但一个工具都不勾=该服务器全停）、**技能集**（勾选器只列实时发现的条目，预勾当前启用状态，勾=启用/未勾=停用）、**子智能体绑定**（勾人设名单，全不选=不限制）。编辑器里「选工具」在段内切换钻取（不离开弹窗），每段带 全选/清空，顶部常驻勾选摘要；弹窗固定高度，加减段不跳动。只选记忆的场景完全不用碰档案。勾了工具/技能段的场景出现「设为当前模式」按钮：**进入模式 = 快照当前启停 → 先落盘快照 → 应用勾选集 → 记忆收窄到该场景**；「退出模式」按快照**原文**恢复（模式期间写进去的整台停用键随之消失）。运行中手动改动不会偷偷回写，点「保存到场景」才落盘。进入后下一请求生效。任一步失败自动回滚并如实上报（回滚未完成会写进错误文本，不谎报「已回滚」）。
-- **子智能体（人设）**：`~/.dsh/subagents/<人设>.md`，一个文件一个人设——frontmatter 可选（`description` 何时调用，**一句话即可** / `provider` + `model` 指定模型路由（**两者是一对**：跨来源换模型必须都填，如 `provider: sensenova` + `model: sensenova-6.8-flash-lite`；只填 `model` 会落在主会话的来源上） / `tools` 工具白名单，缺省自动派生），正文就是人设提示词。页头「导入」支持 `.md` 与 `.zip`（zip 内任意层级的 `.md` 都按文件名导入，**同名自动跳过并列出名单**）。模型用 `subagent_list` 看清单、`subagent_run{agent, task}` 调用：子代理**带人设独立运行**、自动继承当前启用场景的记忆段、只把最终输出回传主模型（≤16 KiB），跑完即弃不进 History。场景档案里绑定「本场景可用哪些人设」（绑定外调用报"人设不可用"）；运行默认弹确认（花的是真 token），设置 `requireConfirmForModelSubagentRun: false` 可关，完全权限（`approval=never`）下视为已预先批准直接放行（见 FAQ）。
+- **子智能体（人设）**：`~/.dsh/subagents/<人设>.md`，一个文件一个人设——frontmatter 可选（`description` 何时调用，**一句话即可** / `provider` + `model` 指定模型路由（**两者是一对**：跨来源换模型必须都填，如 `provider: sensenova` + `model: sensenova-6.8-flash-lite`；只填 `model` 会落在主会话的来源上） / `tools` 工具白名单，缺省自动派生），正文就是人设提示词。页头「导入」支持 `.md` 与 `.zip`（zip 内任意层级的 `.md` 都按文件名导入，**同名自动跳过并列出名单**）。模型用 `subagent_list` 看清单、`subagent_run{agent, task}` 调用：子代理**带人设独立运行**、自动继承当前启用场景的记忆段、只把最终输出回传主模型（≤16 KiB），跑完即弃不进 History。场景档案里绑定「本场景可用哪些人设」（绑定外调用报"人设不可用"）；运行默认弹确认（花的是真 token），设置 `requireConfirmForModelSubagentRun: false` 可关，完全权限（`approval=never`）下视为已预先批准直接放行（见 FAQ）。**治理边界**：以上约束只覆盖 `subagent_run` 这一条通道——DSH 官方的 `subagent` / `subagent_fork` 是宿主能力，无确认门、也不认这套人设，任何模式下都不受本插件约束（见 FAQ「两条子代理通道」）。
 
 #### 缓存与刷新（§5.2）
 
@@ -217,6 +217,7 @@ mv ~/.dsh/rules ~/.dsh/scene-memory
 | 镜像源装不到最新版 | 加 `--registry=https://registry.npmjs.org` 稍后再试。 |
 | 完全权限（`approval=never`）下还需要确认吗？ | **不需要，也不会弹卡**：三个确认门（`rule_manager_write` / `skill_manager_create` / `subagent_run`）在 never 会话里被视作「用户已预先批准」，直接放行，并在 `~/.dsh/dsh-plugin-tool-management.log` 记一条 `confirm-bypass` 留痕。想让它们重新问一次，就把访问模式切回「工作区内修改」；只想关掉某一项，用插件设置里的 `requireConfirmForModel*` 开关。 |
 | `subagent_run` 报「spawn provider 不可用」 | **条件式**：宿主自带 `spawn` provider（最新版无需装包、无需挂载），只有宿主确实没注册、且本插件也挂载不了 `@deepseek-ai/dsh-subagent-spawn-in-process` 时才会出现（错误文本里带原始原因，多见于旧版或特定 profile）。此时在宿主 profile 里挂载该包后重启 DSH——本插件不把它写进 `cordis.patch.yml`，以免缺包的宿主整棵树起不来（取舍见该文件注释）。 |
+| 场景里只绑了 A 人设，为什么模型还是跑起了没绑定的子代理？ | **子代理有两条通道**。本插件的 `subagent_run` 走确认门 + 场景人设绑定；DSH 官方的 `subagent` / `subagent_fork` 是宿主能力，**没有确认门、也没有「用哪个人设」的概念**，因此任何模式下都不受本插件的确认与绑定约束（实测：同一条消息里官方 `subagent` 无审批卡直接返回，紧接着的 `subagent_run` 才弹卡；`subagent_fork` 同样无卡）。本插件的治理只覆盖 `subagent_run`；要收紧官方那两个通道得由宿主侧约定或后续版本把它们纳入插件前裁决。 |
 
 ## 开发
 
