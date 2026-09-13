@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { deleteSkill, userRoots, customRootKey, addCustomRoot } from '../lib/skills/core.js'
@@ -65,6 +65,26 @@ test('来源定义：用户级 dsh / hub 可写但不可删；可写性不受影
 test('导入技能的界面名是「导入技能」（不再是「管理器技能」）', () => {
   const hub = userRoots().find((r) => r.key === 'hub')
   assert.equal(hub.label, '导入技能')
+})
+
+/**
+ * 显示名的实际来源：客户端 `rootDisplayName` 是**词典优先、宿主 label 兜底**
+ * （`translateOrFallback(t, 'root.' + localeKey, root.label)`）。
+ *
+ * 这条护栏来自一次真漏改：宿主侧 label 已改成「导入技能」（API 也回传新值），
+ * 但客户端词典里的 `root.hub` 忘了同步 —— 界面上仍然显示「管理器技能」。
+ * 只查宿主 label 是查不出来的，必须查词典。
+ */
+test('客户端词典：root.hub 必须是「导入技能」（词典优先于宿主 label，漏改看不出来）', () => {
+  const client = readFileSync('src/client.js', 'utf8')
+  assert.equal(/管理器技能/.test(client), false, '客户端词典/文案里不该再有「管理器技能」')
+  assert.equal(/Manager skills/.test(client), false, '英文侧不该再有 "Manager skills"')
+  // 只取**词典条目**（`"root.hub": "..."`），不要把 `t("root.hub")` 的调用行也当成条目
+  const entries = client.split('\n').filter((line) => /"root\.hub"\s*:/.test(line))
+  assert.ok(entries.length >= 2, `词典应有中英两条 root.hub，实际 ${entries.length} 条`)
+  for (const line of entries) {
+    assert.ok(/导入技能|Imported skills/.test(line), `root.hub 的显示名没改：${line.trim().slice(0, 120)}`)
+  }
 })
 
 test('删除被拒：dsh / hub 在碰文件之前就返回 error.skill.notDeletable', async () => {

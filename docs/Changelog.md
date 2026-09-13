@@ -91,6 +91,7 @@
   - 共删 6 条提示行、改短 4 条，并同步删除词典里随之失效的 6 个键（中英各一份）。`check:i18n` 在过程中抓到一处漏删（英文词典残留 `memory.scene.field.desc.hint`），引用完整性测试抓到一处漏改（`memory.name.hint` 仍被 `t()` 调用）——两条护栏都按预期生效。
 - **技能来源改名与删除权限**（用户裁定）：
   - hub 来源的界面名 **「管理器技能」→「导入技能」** —— 它是插件导入/新建技能的落点，不是"管理器自己的一类技能"。
+    ⚠️ 第一次**只改了宿主侧**：`src/skills/core.js` 的 `label` 与 API 回传值都是「导入技能」，但客户端词典的 `root.hub` 忘了同步。而客户端显示名是**词典优先、宿主 label 兜底**（`translateOrFallback(t, 'root.' + localeKey, root.label)`），结果界面上仍显示「管理器技能」——**只查宿主侧查不出这个问题**。已补 `root.hub` 中英两条，并在 `test/skills-delete.test.mjs` 加断言（词典条目必须是「导入技能」/「Imported skills」）。
   - **用户级来源不可删**：`DSH 技能`（`~/.dsh/skills/`）与 `导入技能`（`~/.dsh/tool-management/skills/`）**可写但不可删**，界面不再显示「移到回收站」；删除只在**项目级来源**（`<项目>/.dsh/skills`）开放。理由是用户自己放进来源目录的技能不该被插件从磁盘上搬走。
   - 可删除位是来源定义上的显式标记（`deletable`），不再从 `mutable` 推断；服务端在**碰文件之前**拒绝，错误码 `error.skill.notDeletable`（与「只读来源」的 `error.root.readonly` 区分开，提示能说清"你还能做什么"）。
   - 注意：刷新页面即可看到名称与按钮变化，但**服务端那道闸要重启宿主才生效**。
