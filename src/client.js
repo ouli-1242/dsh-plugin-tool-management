@@ -268,7 +268,7 @@ window.__ModuleLoader__.load({
         "scenes.stat.total": "个场景", "scenes.stat.active": "个已启用", "scenes.stat.archives": "个有档案",
         "scenes.noDesc": "还没有描述",
         "scenes.mode.active": "当前模式：{name}", "scenes.mode.profile": "档案：{parts}", "scenes.mode.noProfile": "这个场景还没有档案",
-        "scenes.mode.enter": "切入此模式", "scenes.empty": "还没有场景，点「新建场景」创建",
+        "scenes.mode.enter": "切入此模式", "scenes.empty": "还没有专门设置的场景；全局记忆不需要场景就能注入，需要切换 MCP / 技能 / 人设时再新建。",
         "scenes.field.desc.limit": "最多 {count} 字；超出部分在卡片上省略。",
         "scenes.profile.mcp": "MCP {count} 台", "scenes.profile.skills": "技能 {count} 个", "scenes.profile.subagents": "子智能体 {count} 个", "scenes.profile.memories": "记忆 {count} 条",
         "scenes.mcp.hint": "添加「MCP 工具集」后，勾选要启用的服务器（含未运行的）；「选工具」可细化到具体工具。",
@@ -456,7 +456,7 @@ window.__ModuleLoader__.load({
         "scenes.stat.total": "scene(s)", "scenes.stat.active": "enabled", "scenes.stat.archives": "with a profile",
         "scenes.noDesc": "No description yet",
         "scenes.mode.active": "Active mode: {name}", "scenes.mode.profile": "Profile: {parts}", "scenes.mode.noProfile": "This scene has no profile yet",
-        "scenes.mode.enter": "Enter this mode", "scenes.empty": "No scenes yet — use New scene",
+        "scenes.mode.enter": "Enter this mode", "scenes.empty": "No dedicated scenes yet — global memories are injected without one; create a scene when you need to switch MCP servers, skills or personas.",
         "scenes.field.desc.limit": "Up to {count} characters; longer text is clipped on the card.",
         "scenes.profile.mcp": "{count} MCP", "scenes.profile.skills": "{count} skill(s)", "scenes.profile.subagents": "{count} subagent(s)", "scenes.profile.memories": "{count} memor(ies)",
         "scenes.mcp.hint": "Add the MCP section first, then check the servers to enable (stopped ones included); use Pick tools to narrow to specific tools.",
@@ -2604,13 +2604,23 @@ function callApi(path, options) {
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           var modeScene = data.mode && data.mode.scene
-          // 与 MCP / 技能页同构的三格统计（页面之间「头顶长什么样」保持一致）。
+          /**
+           * 场景页只列**可切换的预设场景**：保留场景 `global`（「全局」）不在这里出现。
+           *
+           * 用户裁定：「全局记忆都不用设置场景就能注入上下文，如果我需要设置 skills、mcp，我直接去具体页
+           * 设置就好了，所以说场景不需要展示全局，不需要设置全局，只有有特定需求才需要设置专门的场景。」
+           * —— 全局不是预设而是恒定基线，列成卡片只会让人以为它可启停/可切换；它的记忆在「记忆」页照常
+           * 管理，档案弹窗「记忆」段与各种场景选择器也照常保留全局（否则全局记忆在界面上就没有落点了）。
+           * 过滤只做在这一页：宿主回传的 `scenes` 仍含全局，记忆页与选择器都依赖它。
+           */
+          var presetScenes = (data.scenes || []).filter(function (s) { return s.global !== true })
+          // 与 MCP / 技能页同构的三格统计（页面之间「头顶长什么样」保持一致）——同样只数可见的预设场景。
           var sceneStats = (function () {
-            var own = (data.scenes || [])
+            var own = presetScenes
             return {
               total: own.length,
               active: own.filter(function (s) { return s.active === true }).length,
-              archives: Object.keys(data.archives || {}).length,
+              archives: own.filter(function (s) { return !!data.archives[s.name] }).length,
             }
           })()
           /**
@@ -2659,14 +2669,13 @@ function callApi(path, options) {
             React.createElement(Notice, { key: 'notice', kind: result && result.ok ? 'ok' : 'err', text: result && result.text }),
             data.error ? React.createElement('div', { key: 'gerr', className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
             data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
-              : (data.scenes || []).length ? React.createElement('div', { key: 'scenes', className: 'dsm-scenes' }, (data.scenes || []).map(function (scene) {
+              : presetScenes.length ? React.createElement('div', { key: 'scenes', className: 'dsm-scenes' }, presetScenes.map(function (scene) {
                 var name = scene.name
                 var label = sceneLabel(data.scenes, name) || name
                 var archive = data.archives[name]
-                var isGlobal = scene.global === true
-                var isShared = scene.shared === true
-                // 「全局」与「常开」是恒定注入的保留场景：没有启用开关，也不能删除。
-                var locked = isGlobal || isShared
+                // 全局已被上面的 presetScenes 过滤掉，这里只会遇到可切换的预设；
+                // 历史保留场景 `_shared`（「常开」）仍然恒定注入，所以不给开关也不给删除。
+                var locked = scene.shared === true
                 // 档案里有任何一段才值得「切入此模式」——空档案切进去等于什么都没变。
                 var hasModeSections = !!(archive && (archive.mcp || Array.isArray(archive.skills) || Array.isArray(archive.subagents) || Array.isArray(archive.memories)))
                 var desc = sceneTileDesc(scene)
@@ -2675,8 +2684,7 @@ function callApi(path, options) {
                     React.createElement('span', { className: 'dsm-scene-tile-name', title: label }, label),
                     // 显示名与磁盘目录名不同时才标出真名，方便对文件核对。
                     name === label ? null : React.createElement('span', { className: 'dsm-scene-tile-key' }, name),
-                    isGlobal ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
-                    isShared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
+                    locked ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
                     modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
                     !locked && scene.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null,
                     locked ? null : React.createElement('span', { className: 'dsm-scene-tile-switch' },

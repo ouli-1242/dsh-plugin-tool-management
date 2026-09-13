@@ -34,6 +34,12 @@ const src = readFileSync('lib/client.js', 'utf8')
  */
 let modeSceneFixture = '办公'
 
+/**
+ * 测试用：替换 `rules-list` 的场景清单（null = 用默认三场景）。
+ * 「只剩保留场景 global」是用户机器的真实形状——场景页必须显示空态，而不是列出一张全局卡片。
+ */
+let scenesFixtureOverride = null
+
 function fixtureFor(op) {
   const scenes = [
     { name: 'global', label: '全局', order: 0, count: 1, active: true, shared: false, global: true, description: '任何对话都注入' },
@@ -47,7 +53,7 @@ function fixtureFor(op) {
   ]
   switch (op) {
     case 'rules-list':
-      return { ok: true, rules, groups: [{ name: 'global', label: '全局', order: 0, count: 1 }], scenes, activeMode: 'all', sceneMemory: { usedBytes: 660, maxBytes: 65536, truncated: false, dropped: [] }, paths: { memories: 'C:/m', scenes: 'C:/s', hub: 'C:/h' }, stats: { total: 3, enabled: 2, scenes: 3 } }
+      return { ok: true, rules, groups: [{ name: 'global', label: '全局', order: 0, count: 1 }], scenes: scenesFixtureOverride || scenes, activeMode: 'all', sceneMemory: { usedBytes: 660, maxBytes: 65536, truncated: false, dropped: [] }, paths: { memories: 'C:/m', scenes: 'C:/s', hub: 'C:/h' }, stats: { total: 3, enabled: 2, scenes: 3 } }
     case 'scene-mode-get':
       return { ok: true, mode: { scene: modeSceneFixture, snapshot: { mcp: ['github'], skills: ['find-extensions'], subagents: [] } }, archives: { 办公: { mcp: ['github'], skills: ['find-extensions'], subagents: [], memories: ['办公/周报格式'] } } }
     case 'rules-budget':
@@ -462,6 +468,21 @@ test('场景页：「当前模式」条只在进入模式后出现（不再常�
   // 反向护栏：卡片本身照常渲染（别把整页一起弄没了）。
   assert.ok(freeMode.classes.has('dsm-scenes'), '场景卡片网格必须仍在渲染')
   assert.equal(freeMode.classes.has('dsm-scene-tile'), true, '场景卡片必须仍在渲染')
+
+  // 保留场景「全局」不在场景页出现（用户裁定：全局恒定注入、skills/MCP 各有专页，列成卡片只是噪声）。
+  // 三个场景的 fixture 里应当只剩「办公」「code-review」两张卡。
+  for (const [label, out] of [['有模式', withMode], ['无模式', freeMode]]) {
+    assert.equal(out.text.includes('全局'), false, `${label}：全局不该出现在场景页（标签、卡片、统计都不该有）`)
+    assert.equal(out.text.includes('常驻'), false, `${label}：「常驻」标签随全局卡片一起消失`)
+    assert.ok(out.text.includes('办公'), `${label}：可切换的预设场景必须仍在`)
+    assert.ok(out.text.includes('code-review'), `${label}：可切换的预设场景必须仍在`)
+  }
+  // 用户机器的真实形状：只剩保留场景 global → 显示空态，一张卡片都不该有。
+  scenesFixtureOverride = [{ name: 'global', label: '全局', order: 0, count: 2, active: true, shared: false, global: true, description: '' }]
+  const onlyGlobal = await renderMode()
+  assert.ok(onlyGlobal.text.some((s) => s.includes('还没有专门设置的场景')), `只剩全局时应显示空态：${onlyGlobal.text.slice(0, 10).join(' | ')}`)
+  assert.equal(onlyGlobal.classes.has('dsm-scene-tile'), false, '只剩全局时不该有任何场景卡片')
+  scenesFixtureOverride = null
   modeSceneFixture = '办公'
 })
 
