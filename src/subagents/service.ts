@@ -1,13 +1,52 @@
 // src/subagents/service.ts —— 轻量子智能体：人设发现（TTL 扫描）+ 官方 ctx.subagents.start 薄封装。
-// 设计 §3：人设 = ~/.dsh/subagents/<name>.md（frontmatter 可选，缺省派生）；v1 串行运行；
+// 设计 §3：人设 = $DSH_HOME/tool-management/agents/<name>.md（frontmatter 可选，缺省派生）；v1 串行运行；
 // spawn provider 缺失时经 createRequire 挂载官方 dsh-subagent-spawn-in-process（宿主侧包）。
+//
+// v0.4 目录变更：人设由 `$DSH_HOME/subagents/` 搬到 `$DSH_HOME/tool-management/agents/`
+// （插件产生的文件统一收在 tool-management/ 下）。旧目录在首次扫描时搬入，见 relocateLegacyPersonas。
 import { createRequire } from 'node:module'
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveDshHome } from '../skills/core.js'
 import { expandUploads, planPersonaImport } from '../imports/upload.js'
 
 const message = (e: unknown): string => String((e && (e as Error).message) || e)
+
+/** 人设默认目录：`$DSH_HOME/tool-management/agents/`。 */
+export function defaultPersonasDir(): string {
+  return join(resolveDshHome(), 'tool-management', 'agents')
+}
+
+/**
+ * 旧目录 `$DSH_HOME/subagents/` → `tool-management/agents/` 一次性搬移（幂等）。
+ * 只在目标不存在同名文件时搬（绝不覆盖）；源目录保留空壳。每个进程只跑一次。
+ */
+let personasRelocated = false
+async function relocateLegacyPersonas(dir: string): Promise<void> {
+  if (personasRelocated) return
+  personasRelocated = true
+  const legacy = join(resolveDshHome(), 'subagents')
+  if (legacy === dir) return
+  let names: string[]
+  try {
+    names = (await readdir(legacy)).filter((n) => n.toLowerCase().endsWith('.md'))
+  } catch {
+    return
+  }
+  if (!names.length) return
+  await mkdir(dir, { recursive: true }).catch(() => undefined)
+  for (const name of names) {
+    const from = join(legacy, name)
+    const to = join(dir, name)
+    try {
+      const exists = await stat(to).then(() => true).catch(() => false)
+      if (exists) continue
+      await rename(from, to)
+    } catch {
+      /* 单项失败（被占用等）不阻断其余；保留源文件，下次启动再试 */
+    }
+  }
+}
 
 export interface PersonaDoc {
   name: string
@@ -15,7 +54,10 @@ export interface PersonaDoc {
   /** 模型路由的 provider 半边（与 model 配对；缺省 = 继承主会话）。 */
   provider?: string
   model?: string
+  /** 工具白名单：只保留列出的工具（与 toolsDeny 组合，deny 优先）。 */
   tools?: string[]
+  /** 工具黑名单：从子代理可见集合里移除（优先级高于白名单）。 */
+  toolsDeny?: string[]
   body: string
   path: string
 }
@@ -29,7 +71,7 @@ export interface SubagentService {
   writeOps: ReadonlySet<string>
 }
 
-/** 行式 frontmatter 解析：只认 description / provider / model / tools 四个键（人设文件不需要完整 YAML）。 */
+/** 行式 frontmatter 解析：只认 description / provider / model / tools / toolsDeny 五个键。 */
 export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw)
   const data: Record<string, string> = {}
@@ -41,14 +83,22 @@ export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
     }
     body = raw.slice(m[0].length)
   }
-  const tools = data.tools ? data.tools.split(/[,，]/).map((s) => s.trim()).filter(Boolean) : undefined
+  const listOf = (value: string | undefined): string[] | undefined => {
+    if (!value) return undefined
+    const list = value.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+    return list.length ? list : undefined
+  }
+  const tools = listOf(data.tools)
+  // 兼容两种写法：`toolsdeny: a, b`（线上格式）与 `toolsDeny: a, b`（键名统一小写后同形）。
+  const toolsDeny = listOf(data.toolsdeny)
   const firstLine = body.split(/\r?\n/).find((l) => l.trim())?.trim() ?? ''
   return {
     name: fallbackName,
     description: data.description || firstLine,
     provider: data.provider || undefined,
     model: data.model || undefined,
-    tools: tools && tools.length ? tools : undefined,
+    tools,
+    toolsDeny,
     body: body.trim(),
     path: '',
   }
@@ -57,12 +107,14 @@ export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
 const RESULT_MAX = 16 * 1024
 
 export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }): SubagentService {
-  const dir = opts?.subagentsDir || join(resolveDshHome(), 'subagents')
+  const dir = opts?.subagentsDir || defaultPersonasDir()
   const req = createRequire(import.meta.url)
 
   let cache: { at: number; value: PersonaDoc[] } | null = null
   async function list(): Promise<PersonaDoc[]> {
     if (cache && Date.now() - cache.at < 1000) return cache.value
+    // 旧目录搬家放在首次扫描前（幂等；失败不阻断，旧目录仍会被下面的读取兜底看到）。
+    await relocateLegacyPersonas(dir).catch(() => undefined)
     const docs: PersonaDoc[] = []
     try {
       const entries = await readdir(dir)
@@ -124,7 +176,11 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       signal: signal ?? new AbortController().signal,
       prompt: [{ type: 'text', text: task }],
       persona: p.body,
-      ...(p.tools?.length ? { toolFilter: { allow: p.tools } } : {}),
+      // 工具白/黑名单 → 官方 ToolRestriction（`deny` 优先级高于 `allow`；未知名官方会直接拒绝启动，
+      // 所以选择器给的是「全体预设工具并集」，见 index.ts presetToolCandidates）。
+      ...((p.tools?.length || p.toolsDeny?.length)
+        ? { toolFilter: { ...(p.tools?.length ? { allow: p.tools } : {}), ...(p.toolsDeny?.length ? { deny: p.toolsDeny } : {}) } }
+        : {}),
       maxDepth: 1,
       // provider 与 model 是模型路由的两半：DSH 的 resolveModel(provider, model) 不做
       // `provider/model` 字符串拆分，只改 model 会落在**主会话的 provider** 上——跨来源
@@ -163,7 +219,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       const docs = await list()
       return {
         ok: true,
-        subagents: docs.map((p) => ({ name: p.name, description: p.description, provider: p.provider ?? null, model: p.model ?? null, tools: p.tools ?? null })),
+        subagents: docs.map((p) => ({ name: p.name, description: p.description, provider: p.provider ?? null, model: p.model ?? null, tools: p.tools ?? null, toolsDeny: p.toolsDeny ?? null })),
       }
     },
     'subagent-get': async (args: any) => {
@@ -171,7 +227,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       const docs = await list()
       const p = docs.find((d) => d.name === name)
       if (!p) return { ok: false, error: `人设不存在: ${name}` }
-      return { ok: true, persona: { name: p.name, description: p.description, provider: p.provider ?? '', model: p.model ?? '', tools: p.tools ?? [], body: p.body } }
+      return { ok: true, persona: { name: p.name, description: p.description, provider: p.provider ?? '', model: p.model ?? '', tools: p.tools ?? [], toolsDeny: p.toolsDeny ?? [], body: p.body } }
     },
     'subagent-create': async (args: any) => {
       const name = String((args && args.name) || '').trim()
@@ -244,13 +300,17 @@ export function serializePersona(args: any): string {
   const description = String((args && args.description) || '').replace(/\r?\n/g, ' ').trim()
   const provider = String((args && args.provider) || '').trim()
   const model = String((args && args.model) || '').trim()
-  const tools = Array.isArray(args?.tools) ? args.tools.map((x: unknown) => String(x).trim()).filter(Boolean) : []
+  const toList = (v: unknown): string[] => (Array.isArray(v) ? v.map((x: unknown) => String(x).trim()).filter(Boolean) : [])
+  const tools = toList(args?.tools)
+  // 黑名单字段兼容两种入参名：toolsDeny（UI/camel）与 tools_deny（snake）。
+  const toolsDeny = toList(args?.toolsDeny ?? args?.tools_deny)
   const body = String((args && args.body) ?? '').trim()
   const lines = ['---']
   if (description) lines.push('description: ' + description)
   if (provider) lines.push('provider: ' + provider)
   if (model) lines.push('model: ' + model)
   if (tools.length) lines.push('tools: ' + tools.join(', '))
+  if (toolsDeny.length) lines.push('toolsDeny: ' + toolsDeny.join(', '))
   lines.push('---', '', body, '')
   return lines.join('\n')
 }

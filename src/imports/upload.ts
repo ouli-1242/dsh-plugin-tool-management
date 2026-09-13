@@ -1,5 +1,6 @@
 // src/imports/upload.ts —— 导入通道共享纯逻辑（无 I/O）：base64 解码、ZIP 解包、路径校验、落点规划。
-// 两个使用方：子智能体（人设 = ~/.dsh/subagents/<名>.md）与场景记忆（<场景>/<名>.md，场景可为空 = 全局）。
+// 两个使用方：子智能体（人设 = ~/.dsh/tool-management/agents/<名>.md）与
+// 场景记忆（~/.dsh/tool-management/memories/<场景>/<名>.md；场景留空 = 保留场景 global）。
 // 约定：只认 .md；zip 内任意层级；隐藏项 / 绝对路径 / `..` 穿越 / 超限条目一律跳过并回报；
 //       重名策略（跳过 or 覆盖）不在这里实现——由调用方按文件系统现状裁决（本项目取「跳过并报告」）。
 import { unzipSync } from 'fflate'

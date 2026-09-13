@@ -30,3 +30,7 @@ ouli-1242__dsh-plugin-tool-management.yml
 # Ad-hoc GitHub API dumps captured while debugging CI (e.g. `gh api .../check-runs`).
 # Never a source artifact — keep them out of the repo.
 cr.json
+
+# Playwright MCP CLI session dumps (page snapshots / console logs) written into the
+# project by the `playwright-cli` tool during UI checks. Test scratch, not source.
+.playwright-cli/

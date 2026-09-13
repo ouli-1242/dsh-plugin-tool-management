@@ -20,6 +20,7 @@ import { createRulesService } from './rules/service.js'
 import { createArchiveEngine } from './rules/archive-engine.js'
 import { createSubagentService } from './subagents/service.js'
 import { isApprovalNever } from './approval-policy.js'
+import { hubPath, relocateEntries } from './hub.js'
 import { defineSubagentListTool, defineSubagentRunTool } from './subagents/tools.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
@@ -255,13 +256,18 @@ export default {
 
     // ---------- agents-md 预设库 + 切换 ----------
     // DSH 全局指令基线只有 ~/.dsh/AGENTS.md 一个文件，无内置多预设切换；
-    // 本服务在插件目录内 data/agents-md-presets/ 维护预设库，「应用」= 写入
-    // ~/.dsh/AGENTS.md，新会话生效（当前会话不变，DSH 本身如此）。
-    // presetsDir 可由 config 注入（测试用），否则落到插件根 data/。
+    // 本服务在 hub 内 agents-md/ 维护预设库，「应用」= 写入 ~/.dsh/AGENTS.md，
+    // 新会话生效（当前会话不变，DSH 本身如此）。
+    // presetsDir 可由 config 注入（测试用），否则落到 $DSH_HOME/tool-management/agents-md。
+    // v0.4：旧位置（插件目录 data/agents-md-presets/）在启动时搬入 hub——
+    // 插件目录在 npm 安装下会被覆盖，放用户数据在那里本身就丢数据风险。
     const PLUGIN_ROOT = (() => {
       try { return dirname(createRequire(import.meta.url).resolve('../package.json')) } catch { return process.cwd() }
     })()
-    const agentsMdPresetsDir = String((config as { presetsDir?: unknown } | undefined)?.presetsDir || join(PLUGIN_ROOT, 'data', 'agents-md-presets'))
+    const legacyAgentsMdPresetsDir = join(PLUGIN_ROOT, 'data', 'agents-md-presets')
+    const agentsMdPresetsDir = String((config as { presetsDir?: unknown } | undefined)?.presetsDir || hubPath('agents-md'))
+    void relocateEntries(legacyAgentsMdPresetsDir, agentsMdPresetsDir, (n) => n !== '__last-applied__')
+      .catch(() => 0)
     const agentsMdService = createAgentsMdService(ctx, {
       presetsDir: agentsMdPresetsDir,
       getGlobalAgentsMdPath: async () => {
@@ -271,14 +277,18 @@ export default {
       },
     })
 
-    // ---------- rules（规则/记忆，v0.3）----------
-    // 规则真源 $DSH_HOME/rules/<场景>/<name>.md（仅用户级，D1）。**场景 = 一级目录**；
+    // ---------- rules（规则/记忆，v0.4）----------
+    // 记忆真源 $DSH_HOME/tool-management/memories/<场景>/<name>.md（仅用户级，D1）。
+    // **场景是显式记录**（rules-index.json 的 scenes 切片）：含保留场景 `global`（界面「全局」，
+    // 其记忆注入任何对话），空场景也合法存在——不再是"恰好有这个目录名"的隐式约定。
     // 单投影 = 活动场景记忆 → per-agent systemPrompt 段（自动在场，模型无需调用任何工具）。
     // 原"始终层写 ~/.dsh/AGENTS.md"已下线（变更单 01 §4/§10）：公共基线由 _shared/ 承担。
-    // rulesRoot / rulesStateDir 仅测试注入，生产留空由服务按 DSH_HOME 解析。
+    // 旧的 $DSH_HOME/scene-memory 与 $DSH_HOME/rules 由服务在首次读盘前搬入本目录。
+    // rulesRoot / rulesStateDir / rulesScenesDir 仅测试注入，生产留空由服务按 DSH_HOME 解析。
     const rulesService = createRulesService(ctx, {
       rulesRoot: String((config as { rulesRoot?: unknown } | undefined)?.rulesRoot || ''),
       stateDir: String((config as { rulesStateDir?: unknown } | undefined)?.rulesStateDir || ''),
+      scenesDir: String((config as { rulesScenesDir?: unknown } | undefined)?.rulesScenesDir || ''),
       // 场景记忆段预算（字节），默认 65536；仅用于测试与特殊部署调优。
       ...(Number.isFinite(Number((config as { rulesMaxBytes?: unknown } | undefined)?.rulesMaxBytes))
         ? { maxBytes: Number((config as { rulesMaxBytes?: unknown }).rulesMaxBytes) }
@@ -395,7 +405,7 @@ export default {
     })
 
     // ---------- 轻量子智能体（设计 §3）----------
-    // 人设 = ~/.dsh/subagents/<name>.md；运行走官方 ctx.subagents.start（spawn provider）。
+    // 人设 = $DSH_HOME/tool-management/agents/<name>.md；运行走官方 ctx.subagents.start（spawn provider）。
     // sceneLists 供场景绑定校验：启用场景（rules-list 的 active 行）档案里的 subagents 并集。
     const subagentService = createSubagentService(ctx, {})
     const subagentSceneLists = async (): Promise<string[][]> => {
@@ -1856,6 +1866,149 @@ export default {
       }
     }
 
+    /**
+     * 记忆候选（档案编辑器第 4 段「记忆」）：`[{ id, scene, name, description }]`。
+     * 只读、不读正文（勾选集只存 id）；任何异常降级为空列表，不让档案弹窗崩掉。
+     */
+    async function memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; description: string }>> {
+      try {
+        const r: any = await rulesService.ops['rules-list']({})
+        if (!r || r.ok === false) return []
+        return (r.rules || [])
+          .filter((x: any) => !x.shadowed)
+          .map((x: any) => ({
+            id: String(x.id),
+            scene: String(x.group || ''),
+            name: String(x.name || ''),
+            description: String(x.description || ''),
+          }))
+      } catch {
+        return []
+      }
+    }
+
+    /** 场景候选（档案编辑器第 4 段的分组维度）：`[{ name, label, description, count, global }]`。 */
+    async function memorySceneCandidates(): Promise<Array<{ name: string; label: string; description: string; count: number; global: boolean }>> {
+      try {
+        const r: any = await rulesService.ops['rules-list']({})
+        if (!r || r.ok === false) return []
+        return (r.scenes || []).map((s: any) => ({
+          name: String(s.name),
+          label: String(s.label || s.name),
+          description: String(s.description || ''),
+          count: Number(s.count || 0),
+          global: s.global === true,
+        }))
+      } catch {
+        return []
+      }
+    }
+
+    /**
+     * 工具候选（人设的「工具白名单 / 黑名单」选择器）：
+     * 取**全体 Agent 预设工具名的并集**——人设可能在任意预设下被子代理复用，
+     * 只列当前会话的工具会让换预设后的子代理启动失败（官方 `toolFilter` 对未知名直接拒绝）。
+     * 同时标注 `current`：当前会话可见的工具（其余只是「本预设可用，当前会话看不到」）。
+     *
+     * 每次调用都会为尚未挂载的预设建立 standing mount（官方语义：一个预设在本进程内只挂一次，
+     * 正常创建会话时同样会挂），因此结果会按需缓存 60 秒，避免频繁枚举。
+     */
+    let presetToolsCache: { at: number; value: { tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string }> } } | null = null
+    async function presetToolCandidates(): Promise<{ tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string }> }> {
+      if (presetToolsCache && Date.now() - presetToolsCache.at < 60000) return presetToolsCache.value
+      const byName = new Map<string, { name: string; presets: Set<string>; current: boolean }>()
+      const presets: Array<{ id: string; name: string }> = []
+      // 当前会话的可见工具（用于标 current）；拿不到就全部按「非当前」处理。
+      const currentNames = new Set<string>()
+      try {
+        const schemas = await tools.schemas()
+        for (const s of schemas || []) currentNames.add(String((s as any).name))
+      } catch { /* 无 live 工具 → current 全 false */ }
+
+      const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
+      if (agentPresets && typeof agentPresets.list === 'function') {
+        try {
+          const roster = await agentPresets.list()
+          for (const p of roster || []) {
+            const id = String((p && p.id) || '')
+            if (!id) continue
+            presets.push({ id, name: String((p && (p.name || p.id)) || id) })
+            let scopeKey: unknown
+            try {
+              // 官方说明：该调用会确保预设的 standing mount（不创建 agent/session），
+              // 已挂载的预设直接复用；正因如此才需要这里的 60 秒缓存。
+              scopeKey = typeof agentPresets.standingKeyFor === 'function' ? await agentPresets.standingKeyFor(id) : undefined
+            } catch { scopeKey = undefined }
+            let names: string[] = []
+            try {
+              names = (await tools.schemas(scopeKey as any) || []).map((s: any) => String(s.name)).filter(Boolean)
+            } catch { names = [] }
+            for (const name of names) {
+              // MCP 工具名形如 `mcp__<server>__<tool>`：面向上百个条目，噪声大于价值 → 不进候选。
+              if (name.startsWith('mcp__')) continue
+              const rec = byName.get(name) || { name, presets: new Set<string>(), current: false }
+              rec.presets.add(id)
+              byName.set(name, rec)
+            }
+          }
+        } catch { /* 预设服务不可用 → 退回「仅当前会话工具」 */ }
+      }
+      // 当前会话的工具即便没有任何预设可枚举，也要出现在候选里（否则选择器是空的）。
+      for (const name of currentNames) {
+        if (name.startsWith('mcp__')) continue
+        const rec = byName.get(name) || { name, presets: new Set<string>(), current: false }
+        byName.set(name, rec)
+      }
+      for (const rec of byName.values()) rec.current = currentNames.has(rec.name)
+
+      const value = {
+        tools: [...byName.values()]
+          .map((r) => ({ name: r.name, presets: [...r.presets].sort(), current: r.current }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+        presets: presets.sort((a, b) => a.id.localeCompare(b.id)),
+      }
+      presetToolsCache = { at: Date.now(), value }
+      return value
+    }
+
+    /**
+     * 模型候选（人设的「模型」下拉）：宿主已注册的 provider + 各 provider 能宣告的模型。
+     * 只读宿主 LLM 目录，**不发起网络请求**（`discoverModels` 会打端点，这里不用）；
+     * 拿不到就返回空列表，UI 退回手填（跨来源模型如 sensenova 的手工条目仍需手填兜底）。
+     * 返回扁平列表：DSH 的模型路由是 (provider, model) 一对，两个键必须同时给。
+     */
+    async function modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }> }> {
+      const llm = (typeof ctx.get === 'function' ? ctx.get('llm') : undefined) as any
+      if (!llm || typeof llm.listProviders !== 'function') return { models: [] }
+      let list: any[] = []
+      try {
+        list = llm.listProviders() || []
+      } catch {
+        return { models: [] }
+      }
+      const models: Array<{ provider: string; providerName: string; id: string; name: string }> = []
+      const seen = new Set<string>()
+      for (const p of list) {
+        const provider = String((p && (p.id || p.provider)) || '')
+        if (!provider) continue
+        const providerName = String((p && (p.name || p.displayName)) || provider)
+        let discovered: any[] = []
+        try {
+          // 适配器可选提供 listModels（官方 LlmAdapter 契约）；未提供时该 provider 只报名字。
+          if (typeof llm.listModels === 'function') discovered = (await llm.listModels(provider)) || []
+        } catch { /* 该 provider 的目录读失败 → 只报 provider 本身 */ }
+        for (const m of discovered) {
+          const id = String((m && (m.id || m.model)) || '')
+          if (!id) continue
+          const key = provider + '\u0000' + id
+          if (seen.has(key)) continue
+          seen.add(key)
+          models.push({ provider, providerName, id, name: String((m && m.name) || id) })
+        }
+      }
+      return { models }
+    }
+
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
       'mcpm-list': mcpmListView,
@@ -1893,6 +2046,11 @@ export default {
       // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list/get（只读）
       // + subagent-create/update/delete（写，writeOps 已派生进门禁）。
       ...subagentService.ops,
+      // 人设表单的两个候选源（只读，均为「按需拉取」——不进 scene-inventory，避免每次开档案弹窗都枚举预设）。
+      // preset-tools：全体 Agent 预设工具名并集 + 各工具所属预设 + 当前会话是否可见。
+      'preset-tools': async () => ({ ok: true, ...(await presetToolCandidates()) }),
+      // model-candidates：宿主 LLM 目录里的 (provider, model) 对（不发网络请求）。
+      'model-candidates': async () => ({ ok: true, ...(await modelCandidates()) }),
       // 场景档案勾选器数据源 v2：全部 MCP 服务器（含未运行）+ 技能全集 + 人设清单。
       'scene-inventory': async () => {
         const [rowsR, tools, skills, subs] = await Promise.all([mcpmListView(), toolStates(), skillStates(), subagentService.list()])
@@ -1920,6 +2078,10 @@ export default {
           tools: Object.entries(tools).map(([key, enabled]) => ({ key, enabled })),
           skills: Object.entries(skills).map(([key, enabled]) => ({ key, enabled })),
           subagents: subs.map((p) => ({ name: p.name, description: p.description })),
+          // 档案编辑器第 4 段「记忆」的候选：场景 + 每个场景里的记忆条数。
+          // 记忆正文不在这里返回（勾选集只存 id，渲染时才读盘）。
+          scenes: await memorySceneCandidates(),
+          memories: await memoryCandidates(),
         }
       },
       // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
@@ -2394,33 +2556,34 @@ export default {
         return 'OK: preset ' + args.id + ' applied to ~/.dsh/AGENTS.md (next session; current session unchanged' + (r.backedUp ? '; previous backed up to __last-applied__' : '') + ')'
       },
     }))
-    // ---------- rules model tools（v0.3）----------
+    // ---------- rules model tools（v0.4）----------
     // 活动场景的记忆正文会自动进入系统提示词（无需调用工具读取）；这里的工具用于
     // 查询/编辑规则本身。rule_manager_write 受 tools/pre-execute 审批门禁（D2）。
+    // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
     tools.register(defineTool({
       name: 'rule_manager_list',
-      description: 'List rules/memories under ~/.dsh/scene-memory (id, scene, enabled, description).',
+      description: 'List memories under ~/.dsh/tool-management/memories (id, scene, enabled, description).',
       parameters: {
-        group: { type: 'string', description: 'Optional group/scene filter.' },
+        group: { type: 'string', description: 'Optional scene filter.' },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
         const r: any = await rulesService.ops['rules-list'](args)
         if (!r || r.ok === false) throw new Error((r && r.error) || '读取规则失败')
         const lines = (r.rules || []).map((x: any) => (
-          '- ' + x.id + ' [' + (x.group || '全局') + '] ' + (x.enabled ? '已启用' : '已停用') +
+          '- ' + x.id + ' [' + (x.group || '未归属场景') + '] ' + (x.enabled ? '已启用' : '已停用') +
           (x.description ? ' — ' + x.description : '')
         ))
-        const scenes = (r.scenes || []).map((s: any) => s.name + (s.active ? '(启用)' : '(未启用)')).join('、')
-        return '规则（' + (r.rules || []).length + '）：\n' + (lines.join('\n') || '(无规则)') +
+        const scenes = (r.scenes || []).map((s: any) => (s.label || s.name) + (s.active ? '(启用)' : '(未启用)')).join('、')
+        return '记忆（' + (r.rules || []).length + '）：\n' + (lines.join('\n') || '(无记忆)') +
           '\n场景：' + (scenes || '(无)') + (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）')
       },
     }))
     tools.register(defineTool({
       name: 'rule_manager_read',
-      description: 'Read the full body of one rule/memory under ~/.dsh/scene-memory.',
+      description: 'Read the full body of one memory under ~/.dsh/tool-management/memories.',
       parameters: {
-        id: { type: 'string', required: true, description: 'Rule id like <scene>/<name>.' },
+        id: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
@@ -2431,9 +2594,9 @@ export default {
     }))
     tools.register(defineTool({
       name: 'rule_manager_write',
-      description: 'Create a new rule/memory as ~/.dsh/scene-memory/<scene>/<name>.md. It becomes active automatically once its scene is enabled. Requires user confirmation (configurable).',
+      description: 'Create a new memory as ~/.dsh/tool-management/memories/<scene>/<name>.md. The scene must already exist (use global for the always-on scene). It becomes active automatically once its scene is enabled. Requires user confirmation (configurable).',
       parameters: {
-        group: { type: 'string', required: true, description: 'Scene/folder name under ~/.dsh/scene-memory (any Unicode except path separators and < > : " | ? *).' },
+        group: { type: 'string', required: true, description: 'Scene name under ~/.dsh/tool-management/memories; `global` = the always-on scene (any Unicode except path separators and < > : " | ? *).' },
         name: { type: 'string', required: true, description: 'Memory name = the .md file name without the extension; any Unicode is fine (Chinese included), <=64 chars, no path separators or < > : " | ? *, must not start with a dot.' },
         description: { type: 'string', required: true, description: 'One-sentence description (<=500 chars).' },
         body: { type: 'string', required: true, description: 'Markdown body (<=256 KiB).' },
@@ -2442,7 +2605,7 @@ export default {
       async execute(args) {
         const r: any = await rulesService.ops['rules-create'](args)
         if (!r || r.ok === false) throw new Error((r && r.error) || '创建规则失败')
-        return 'OK: rule ' + r.rule.id + '（场景「' + (r.rule.group || '全局') + '」启用后自动生效）'
+        return 'OK: memory ' + r.rule.id + '（场景「' + (r.rule.group || '未归属') + '」启用后自动生效）'
       },
     }))
     // ---------- 子智能体工具（subagent_list / subagent_run）----------
@@ -2485,9 +2648,9 @@ export default {
           // 不在此处做任何兜底放行。
           return readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite
-              ? { kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }
+              ? { kind: 'ask', reason: 'Write a memory under ~/.dsh/tool-management/memories' }
               : next()))
-            .catch(() => ({ kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }))
+            .catch(() => ({ kind: 'ask', reason: 'Write a memory under ~/.dsh/tool-management/memories' }))
         }
         // subagent_run：子代理运行花真 token：默认确认（requireConfirmForModelSubagentRun !== false），可关。
         return readPluginSettings()

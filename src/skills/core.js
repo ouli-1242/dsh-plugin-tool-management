@@ -92,6 +92,19 @@ export function userRoots() {
       rank: 400,
     },
     {
+      // v0.4：插件**新建/导入**的技能落到 hub 内（用户要求：插件产生的文件收在
+      // $DSH_HOME/tool-management/）。rank 高于 DSH 技能，同名时 hub 版本遮蔽官方目录里的；
+      // 官方 ~/.dsh/skills/ 仍作为可切换来源列出（不搬走、不删）。
+      key: "hub",
+      path: join(resolveDshHome(), "tool-management", "skills"),
+      label: "管理器技能",
+      localeKey: "hub",
+      mutable: true,
+      toggleable: true,
+      native: false,
+      rank: 350,
+    },
+    {
       key: "agents",
       path: join(resolveAgentsHome(), "skills"),
       label: "公共 Agent",
@@ -500,6 +513,15 @@ function dshRootPath() {
   return userRoots().find((root) => root.key === "dsh").path;
 }
 
+/**
+ * v0.4 新建/导入技能的落点：hub 内 `tool-management/skills/`（用户要求插件产物集中）。
+ * hub 根缺失（旧版本状态文件/异常）时退回官方 DSH 技能目录，保证创建功能永不因布局变化而失效。
+ */
+function skillCreateRootPath() {
+  const hub = userRoots().find((root) => root.key === "hub");
+  return hub && hub.path ? hub.path : dshRootPath();
+}
+
 /** 只读来源的拒绝结果；action 为可翻译语义值（toggle/delete）。 */
 function readonlyError(action) {
   return {
@@ -525,13 +547,18 @@ function rootByKey(key) {
   return userRoots().find((item) => item.key === key) || null;
 }
 
-/** 只允许用户 DSH 根，或由活动 Session 推导出的项目 DSH 根参与文件写入。 */
+/** 只允许用户 DSH 根 / hub 根，或由活动 Session 推导出的项目 DSH 根参与文件写入。 */
 function writableRootDefinition(root) {
   const definition = rootDefinition(root);
   if (!definition || definition.mutable !== true) return null;
   if (definition.key === "dsh")
     return resolve(definition.path) === resolve(dshRootPath())
       ? rootByKey("dsh")
+      : null;
+  // v0.4：hub 内技能目录同为用户级可写根（插件新建/导入的落点）。
+  if (definition.key === "hub")
+    return resolve(definition.path) === resolve(skillCreateRootPath())
+      ? rootByKey("hub")
       : null;
   if (
     definition.scope !== "project" ||
@@ -2193,7 +2220,7 @@ async function replaceWithCopy(source, dest, isDir, existing = []) {
  * 成功返回 { kind, imported, skipped, failed }；失败返回 { ok:false, error }。
  */
 export async function importSkill(source, log, options = {}) {
-  const targetRoot = dshRootPath();
+  const targetRoot = skillCreateRootPath();
   const conflict = options.conflict === "overwrite" ? "overwrite" : "skip";
   const dryRun = options.dryRun === true;
 
@@ -2629,9 +2656,11 @@ function yamlString(value) {
 }
 
 export async function createSkill(input, log, options = {}) {
+  // v0.4：默认落点由「DSH 技能目录」改为 hub 内的 `tool-management/skills/`；
+  // 调用方显式传 options.root（如项目根）时仍以调用方为准。
   const requestedRoot = Object.prototype.hasOwnProperty.call(options, "root")
     ? options.root
-    : rootByKey("dsh");
+    : rootByKey("hub") || rootByKey("dsh");
   const definition = await checkedWritableRootDefinition(requestedRoot);
   if (definition && definition.ok === false) return definition;
   if (!definition) return readonlyError("create");
