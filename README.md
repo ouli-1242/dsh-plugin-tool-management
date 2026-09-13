@@ -19,25 +19,30 @@
 
 ---
 
-<!-- 图片占位 1：MCP 管理页截图 → docs/images/mcp.png -->
+<!-- 图片占位 1：MCP 管理页截图 → docs/images/MCP.png -->
 
-![MCP 管理](docs/images/mcp.png)
+![MCP 管理](docs/images/MCP.png)
 
-<!-- 图片占位 2：Skills 管理页截图 → docs/images/skills.png -->
+<!-- 图片占位 2：Skills 管理页截图 → docs/images/技能.png -->
 
-![Skills 管理](docs/images/skills.png)
+![Skills 管理](docs/images/技能.png)
 
-<!-- 图片占位 3：AGENTS.md 预设页截图 → docs/images/agents-md.png -->
+<!-- 图片占位 3：AGENTS.md 预设页截图 → docs/images/提示词.png -->
 
-![AGENTS.md 预设](docs/images/agents-md.png)
+![AGENTS.md 预设](docs/images/提示词.png)
 
-<!-- 图片占位 4：History 归档会话页截图 → docs/images/history.png -->
+<!-- 图片占位 4：History 归档会话页截图 → docs/images/会话.png -->
 
-![History 归档会话](docs/images/history.png)
+![History 归档会话](docs/images/会话.png)
 
-<!-- 图片占位 5：场景记忆页截图 → docs/images/场景记忆.png -->
+<!-- 图片占位 5：场景记忆页截图 → docs/images/场景.png -->
 
-![场景记忆](docs/images/场景记忆.png)
+![场景记忆](docs/images/场景.png)
+<!-- 图片占位 6：记忆页截图 → docs/images/记忆.png -->
+![记忆](docs/images/记忆.png)
+
+<!-- 图片占位 7：子智能体页截图 → docs/images/子智能体.png -->
+![子智能体](docs/images/子智能体.png)
 
 ## 核心亮点
 

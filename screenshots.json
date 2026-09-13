@@ -1,7 +1,9 @@
 [
-  "docs/images/mcp.png",
-  "docs/images/skills.png",
-  "docs/images/agents-md.png",
-  "docs/images/history.png",
-  "docs/images/场景记忆.png"
+  "docs/images/MCP.png",
+  "docs/images/技能.png",
+  "docs/images/提示词.png",
+  "docs/images/会话.png",
+  "docs/images/场景.png",
+  "docs/images/记忆.png",
+  "docs/images/子智能体.png"
 ]

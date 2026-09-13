@@ -19,25 +19,30 @@ No hand-editing of `cordis.patch.yml`, and skill source files are never touched.
 
 ---
 
-<!-- Image slot 1: MCP management page screenshot → docs/images/mcp.png -->
+<!-- Image slot 1: MCP management page screenshot → docs/images/MCP.png -->
 
-![MCP management](docs/images/mcp.png)
+![MCP management](docs/images/MCP.png)
 
-<!-- Image slot 2: Skills management page screenshot → docs/images/skills.png -->
+<!-- Image slot 2: Skills management page screenshot → docs/images/技能.png -->
 
-![Skills management](docs/images/skills.png)
+![Skills management](docs/images/技能.png)
 
-<!-- Image slot 3: AGENTS.md presets page screenshot → docs/images/agents-md.png -->
+<!-- Image slot 3: AGENTS.md presets page screenshot → docs/images/提示词.png -->
 
-![AGENTS.md presets](docs/images/agents-md.png)
+![AGENTS.md presets](docs/images/提示词.png)
 
-<!-- Image slot 4: History archived sessions page screenshot → docs/images/history.png -->
+<!-- Image slot 4: History archived sessions page screenshot → docs/images/会话.png -->
 
-![History archived sessions](docs/images/history.png)
+![History archived sessions](docs/images/会话.png)
 
-<!-- Image slot 5: Scene memory page screenshot → docs/images/场景记忆.png -->
+<!-- Image slot 5: Scene memory page screenshot → docs/images/场景.png -->
 
-![Scene memory](docs/images/场景记忆.png)
+![Scene memory](docs/images/场景.png)
+<!-- Image slot 6: Memory page screenshot → docs/images/记忆.png -->
+![Memory](docs/images/记忆.png)
+
+<!-- Image slot 7: Subagents page screenshot → docs/images/子智能体.png -->
+![Subagents](docs/images/子智能体.png)
 
 ## Highlights
 
