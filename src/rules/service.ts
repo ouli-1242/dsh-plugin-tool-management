@@ -28,6 +28,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
+import { expandUploads, planMemoryImport } from '../imports/upload.js'
 import { createRuleProviderRegistrar } from './provider.js'
 import { normalizeArchive, type ModeState, type SceneArchive } from './archive.js'
 
@@ -51,6 +52,7 @@ const MAX_ATTACH_TOTAL_BYTES = 16 << 20 // 单次总大小 16 MiB
 const MAX_ATTACH_ENTRIES = 32 // 单次最多 32 个
 const BUNDLE_DOC = 'SKILL.md' // bundle 的正文文件（附件列表里排除）
 const SHARED_GROUP = '_shared'       // 保留场景名：公共基线，所有场景共用、始终生效
+const GLOBAL_GROUP = ''              // 「全局」桶：不选场景的记忆（scene-memory/ 根层），任何对话都注入
 const INDEX_VERSION = 1
 
 // 场景/子目录段名约束（§4 对照表 + §5.3）：任意 Unicode，但必须对文件系统安全。
@@ -161,10 +163,10 @@ export interface RulesService {
   registerProviders: () => () => void
   /** 失效快照与场景记忆缓存（写操作后调用）。 */
   refresh: () => Promise<void>
-  /** 场景档案引擎专用：读-改-写 mode/archives 切片（写队列内执行，非公开 op，无门禁面）。 */
-  patchIndex: (patch: { mode?: ModeState; archives?: Record<string, SceneArchive> }) => Promise<void>
-  /** 场景档案引擎专用：读 mode/archives 切片。 */
-  readArchiveSlice: () => Promise<{ mode: ModeState; archives: Record<string, SceneArchive> }>
+  /** 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内执行，非公开 op，无门禁面）。 */
+  patchIndex: (patch: { mode?: ModeState; archives?: Record<string, SceneArchive>; active?: string[] | null }) => Promise<void>
+  /** 场景档案引擎专用：读 mode/archives/active 切片。 */
+  readArchiveSlice: () => Promise<{ mode: ModeState; archives: Record<string, SceneArchive>; active: string[] | null }>
 }
 
 // ── 内部类型 ───────────────────────────────────────────────────────────────
@@ -497,12 +499,24 @@ function parseModeState(raw: unknown): ModeState {
     return out
   }
   // v2 快照：mcp = 停用表原文（serverName → ['*'] / 工具名）；skills = 启停布尔表。
-  const mcpRaw = (snapshotRaw.mcp && typeof snapshotRaw.mcp === 'object' && !Array.isArray(snapshotRaw.mcp)
-    ? snapshotRaw.mcp
-    : (snapshotRaw.tools && typeof snapshotRaw.tools === 'object' ? {} : {})) as Record<string, unknown>
   const mcp: Record<string, string[]> = {}
-  for (const [server, list] of Object.entries(mcpRaw as Record<string, unknown>)) {
-    if (Array.isArray(list)) mcp[server] = list.map((x) => String(x))
+  const mcpRaw = snapshotRaw.mcp
+  if (mcpRaw && typeof mcpRaw === 'object' && !Array.isArray(mcpRaw)) {
+    for (const [server, list] of Object.entries(mcpRaw as Record<string, unknown>)) {
+      if (Array.isArray(list)) mcp[server] = list.map((x) => String(x))
+    }
+  } else if (snapshotRaw.tools && typeof snapshotRaw.tools === 'object' && !Array.isArray(snapshotRaw.tools)) {
+    // v1 快照兼容（升级前数据）：tools = 布尔启停表（key = `<server>/<tool>`，false = 停用）
+    // → 折算成 v2 的停用名单；否则退出模式会把「快照启停」错误还原成「全部启用」。
+    for (const [key, on] of Object.entries(snapshotRaw.tools as Record<string, unknown>)) {
+      if (on !== false) continue
+      const i = key.indexOf('/')
+      if (i <= 0 || i === key.length - 1) continue
+      const server = key.slice(0, i)
+      const tool = key.slice(i + 1)
+      const list = mcp[server] || (mcp[server] = [])
+      if (list.indexOf(tool) < 0) list.push(tool)
+    }
   }
   return {
     scene,
@@ -568,6 +582,7 @@ function normalizeActive(raw: unknown): string[] | null {
  *   - `index.active` 缺失 / null → **全部场景启用**（默认；保证"丢进去就有用"）
  *   - `index.active` 为数组 → 只有列出的场景启用（显式收窄）
  *   - `_shared` 恒常启用（公共基线），不受开关影响
+ *   - 根层（空串 = 「全局」桶）恒常启用：不选场景的记忆 = 任何对话都注入
  * 缺失 rules-index.json 一律按默认值运行（"全部场景启用"），不抛错（§9.3）。
  * 场景生效与否只由 index.active 决定，不读 scenes.json（preset 绑定已移除）。
  */
@@ -576,6 +591,7 @@ function resolveActiveScenes(index: RulesIndex, knownScenes: string[]): { active
   const mode: 'all' | 'custom' = stored === null ? 'all' : 'custom'
   const active = new Set<string>(stored === null ? knownScenes : stored)
   active.add(SHARED_GROUP)
+  active.add(GLOBAL_GROUP)
   return { active, mode }
 }
 
@@ -1147,20 +1163,22 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     invalidateProviders()
   }
 
-  /** 场景档案引擎专用：读-改-写 mode/archives 切片（写队列内，保持与其余索引写串行）。 */
-  const patchIndex = (patch: { mode?: ModeState; archives?: Record<string, SceneArchive> }): Promise<void> =>
+  /** 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内，保持与其余索引写串行）。 */
+  const patchIndex = (patch: { mode?: ModeState; archives?: Record<string, SceneArchive>; active?: string[] | null }): Promise<void> =>
     enqueueMutation(async () => {
       const index = await readIndex(stateDir)
       if (patch.mode !== undefined) index.mode = patch.mode
       if (patch.archives !== undefined) index.archives = patch.archives
+      // active 复用「记忆启用集」语义（null = 全部启用）；进入模式时引擎收窄为 [S]。
+      if (patch.active !== undefined) index.active = patch.active
       await writeIndex(stateDir, index)
       await refresh()
     })
 
-  /** 场景档案引擎专用：读 mode/archives 切片（容忍缺失，缺省 = 无档案 + 自由模式）。 */
-  const readArchiveSlice = async (): Promise<{ mode: ModeState; archives: Record<string, SceneArchive> }> => {
+  /** 场景档案引擎专用：读 mode/archives/active 切片（容忍缺失，缺省 = 无档案 + 自由模式 + 全部启用）。 */
+  const readArchiveSlice = async (): Promise<{ mode: ModeState; archives: Record<string, SceneArchive>; active: string[] | null }> => {
     const index = await readIndex(stateDir)
-    return { mode: index.mode ?? { scene: null, snapshot: null }, archives: index.archives ?? {} }
+    return { mode: index.mode ?? { scene: null, snapshot: null }, archives: index.archives ?? {}, active: normalizeActive(index.active) }
   }
 
   // ── 场景行（UI 用：启用/停用开关）──────────────────────────────────────
@@ -1344,7 +1362,8 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const group = String((args && args.group) || '').trim()
     const name = String((args && args.name) || '').trim()
     const form = args && args.form === 'bundle' ? 'bundle' : 'flat'
-    if (!isValidGroupPath(group)) return fail('error.rules.invalidGroup', `场景/分组名非法：${group || '(空)'}（非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头、首尾无空白）`)
+    // 场景留空 = 全局（scene-memory/ 根层）：任何对话都注入，所以空场景是**合法**值，不能按非法名拒绝。
+    if (group !== '' && !isValidGroupPath(group)) return fail('error.rules.invalidGroup', `场景/分组名非法：${group}（留空 = 全局；否则非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头、首尾无空白）`)
     if (!isValidGroupSegment(name)) return fail('error.rules.invalidName', `记忆名非法：${name}（非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含 / \\ < > : " | ? *、不以 . 开头）`)
     // 目标已存在（bundle 或 flat 皆算）→ 拒绝，避免静默覆盖。
     const existing = await locateRule(group, name)
@@ -1379,13 +1398,70 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       await writeFileAtomically(join(rulesRoot, group, name + '.md'), text)
     }
     // 更新索引（force 重读后合并，避免覆盖用户手工编辑）
+    // id 必须与 parseId 同构：全局记忆的 id 就是裸名字（`/名字` 会被 parseId 判非法 → 悬空条目）。
+    const createdId = group ? `${group}/${name}` : name
     const index = await readIndex(stateDir)
-    index.rules[`${group}/${name}`] = { order: DEFAULT_ORDER, enabled: true, updatedAt: new Date().toISOString() }
-    if (!index.groups[group]) index.groups[group] = { order: DEFAULT_GROUP_ORDER, label: group }
+    index.rules[createdId] = { order: DEFAULT_ORDER, enabled: true, updatedAt: new Date().toISOString() }
+    if (group && !index.groups[group]) index.groups[group] = { order: DEFAULT_GROUP_ORDER, label: group }
     await writeIndex(stateDir, index)
     invalidateSnapshot()
     invalidateProviders()
-    return { ok: true, rule: await buildProjected(`${group}/${name}`) }
+    return { ok: true, rule: await buildProjected(createdId) }
+  }
+
+  /**
+   * 导入记忆（.md / .zip）：文件即真源——把 .md 原文落进 `<场景>/<名>.md`，场景为空 = 全局根层
+   * （任何对话都注入）。zip 内带目录 → 目录路径当场景/分组；裸 .md → 落到 `args.scene`。
+   * 重名一律**跳过并报告**（与技能导入同策略），绝不覆盖用户既有文件。
+   * 部分成功：单条失败只记 skipped，不影响同批其余条目。
+   */
+  async function rulesImport(args: any): Promise<any> {
+    const scene = String((args && args.scene) || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim()
+    if (scene !== '' && !isValidGroupPath(scene)) {
+      return fail('error.rules.invalidGroup', `场景名非法：${scene}（留空 = 全局；否则非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头、首尾无空白）`)
+    }
+    const files = args && args.files
+    if (!Array.isArray(files) || !files.length) return fail('error.import.noFiles', '没有选择要导入的文件')
+    const { entries, problems } = expandUploads(files)
+    const planned = planMemoryImport(entries, scene)
+    const skipped: Array<{ name: string; reason: string }> = [...problems, ...planned.problems]
+    const imported: string[] = []
+    const accepted: Array<{ group: string; name: string; text: string }> = []
+    for (const target of planned.targets) {
+      if (target.group !== '' && !isValidGroupPath(target.group)) { skipped.push({ name: target.name, reason: '场景名非法，已跳过' }); continue }
+      if (!isValidGroupSegment(target.name)) { skipped.push({ name: target.name, reason: '记忆名不合法，已跳过' }); continue }
+      const text = Buffer.from(target.bytes).toString('utf8').replace(/^\uFEFF/, '')
+      if (text.trim() === '') { skipped.push({ name: target.name, reason: '内容为空，已跳过' }); continue }
+      if (Buffer.byteLength(text, 'utf8') > MAX_RULE_BYTES) {
+        skipped.push({ name: target.name, reason: `正文超过 ${MAX_RULE_BYTES >> 10} KiB，已跳过` })
+        continue
+      }
+      const existing = await locateRule(target.group, target.name)
+      if (existing) {
+        skipped.push({ name: target.group ? `${target.group}/${target.name}` : target.name, reason: '同名已存在（已跳过）' })
+        continue
+      }
+      accepted.push({ group: target.group, name: target.name, text })
+    }
+    if (!accepted.length) return { ok: true, imported, skipped }
+    const index = await readIndex(stateDir)
+    for (const item of accepted) {
+      const id = item.group ? `${item.group}/${item.name}` : item.name
+      try {
+        await mkdir(join(rulesRoot, item.group), { recursive: true })
+        await writeFileAtomically(join(rulesRoot, item.group, item.name + '.md'), item.text)
+      } catch (e) {
+        skipped.push({ name: id, reason: '写入失败：' + message(e) })
+        continue
+      }
+      // 索引记录：与 rules-create 同口径（order/enabled/updatedAt + 场景分组），用户既有设置不覆盖。
+      const entry = index.rules[id]
+      index.rules[id] = { ...(entry || {}), order: entry?.order ?? DEFAULT_ORDER, enabled: entry?.enabled ?? true, updatedAt: new Date().toISOString() }
+      if (item.group && !index.groups[item.group]) index.groups[item.group] = { order: DEFAULT_GROUP_ORDER, label: item.group }
+      imported.push(id)
+    }
+    if (imported.length) await writeIndex(stateDir, index)
+    return { ok: true, imported, skipped }
   }
 
   async function rulesUpdate(args: any): Promise<any> {
@@ -1743,28 +1819,29 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       return fail('error.rules.notFound', `场景不存在：${name}`)
     }
     if (entries.length > 0) return fail('error.rules.sceneNotEmpty', `场景「${name}」里还有 ${entries.length} 项，请先删除其中的记忆`)
+    const index = await readIndex(stateDir)
+    // 当前模式场景不可删：快照只在引擎里可退（rules service 反向注入会成环），
+    // 直接删除会让运行时启停永久停在档案态且无恢复路径 → 给出可逆出路（先退出模式）。
+    if (index.mode?.scene === name) {
+      return fail('error.rules.sceneInMode', `场景「${name}」正处在当前模式，请先退出模式再删除`)
+    }
     try {
       // fs.rm 删目录必须 recursive（即使已确认它是空的），否则报 EISDIR。
       await rm(join(rulesRoot, name), { recursive: true })
     } catch (e) {
       return fail('error.rules.ioFailed', `删除场景目录失败：${message(e)}`)
     }
-    const index = await readIndex(stateDir)
-    if (Array.isArray(index.active)) {
+    // 索引清理一次读-改-写：启用集合摘掉悬空引用 + 清理该场景档案（否则 archives 留孤儿条目）。
+    let dirty = false
+    if (Array.isArray(index.active) && index.active.indexOf(name) >= 0) {
       index.active = index.active.filter((s) => s !== name)
-      await writeIndex(stateDir, index)
+      dirty = true
     }
-    // 场景删除时同步清理其档案（否则 archives 留下孤儿条目）。
     if (index.archives && index.archives[name]) {
       delete index.archives[name]
-      await writeIndex(stateDir, index)
+      dirty = true
     }
-    // 若删的正是当前模式场景：退出模式。运行时启停不在此恢复快照（恢复属引擎职责、
-    // 依赖反向注入会成环）——保留现状，用户可手动退出/重进任一模式。
-    if (index.mode?.scene === name) {
-      index.mode = { scene: null, snapshot: null }
-      await writeIndex(stateDir, index)
-    }
+    if (dirty) await writeIndex(stateDir, index)
     invalidateSnapshot()
     invalidateProviders()
     return { ok: true, name }
@@ -1824,7 +1901,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   // rules-attach / rules-detach / rules-trash-remove）；HTTP 端门禁由
   // index.ts 从本集合派生，勿在宿主端另抄一份。
   const writeOps: ReadonlySet<string> = new Set([
-    'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle',
+    'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle', 'rules-import',
     'rules-set-index', 'rules-set-active', 'rules-create-scene', 'rules-remove-scene',
     'rules-attach', 'rules-detach', 'rules-trash-remove',
   ])
@@ -1835,6 +1912,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     'rules-budget': () => rulesBudget(),
     'rules-diagnose': () => rulesDiagnose(),
     'rules-create': (args) => runWrite(() => rulesCreate(args || {})),
+    'rules-import': (args) => runWrite(() => rulesImport(args || {})),
     'rules-update': (args) => runWrite(() => rulesUpdate(args || {})),
     'rules-remove': (args) => runWrite(() => rulesRemove(args || {})),
     'rules-restore': (args) => runWrite(() => rulesRestore(args || {})),

@@ -13,8 +13,9 @@ export interface ModeSnapshot { mcp: Record<string, string[]>; skills: Record<st
 export interface ModeState { scene: string | null; snapshot: ModeSnapshot | null }
 
 export interface McpPlan {
-  /** 每台服务器的精确停用名单（[] = 全部启用）；wildcards 里的服务器写 ['*']。 */
+  /** 每台服务器的精确停用名单（[] = 全部启用；['*'] = 整台停用）。 */
   entries: Record<string, string[]>
+  /** 整台停用的服务器（entries[server] === ['*']）。 */
   wildcards: string[]
   stale: string[]
 }
@@ -25,7 +26,11 @@ export function normalizeStringList(raw: unknown): string[] {
   return [...new Set(raw.map((x) => String(x).trim()).filter(Boolean))]
 }
 
-/** MCP 规范化：serverName → '*' 或工具名清单；非法形态丢弃。 */
+/**
+ * MCP 规范化：serverName → '*' 或工具名清单；非法形态丢弃。
+ * 空清单是**合法值**（勾了服务器但一个工具都不勾 = 该服务器全部停用），必须保留——
+ * 否则「段已定义但全不勾 = 全部停用」（设计 §2.1）无法持久化。
+ */
 export function normalizeMcpSpec(raw: unknown): Record<string, '*' | string[]> | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const out: Record<string, '*' | string[]> = {}
@@ -33,8 +38,8 @@ export function normalizeMcpSpec(raw: unknown): Record<string, '*' | string[]> |
     const server = serverRaw.trim()
     if (!server) continue
     if (v === '*' || (typeof v === 'string' && v.trim() === '*')) { out[server] = '*'; continue }
-    const list = normalizeStringList(v)
-    if (list.length) out[server] = list
+    if (typeof v !== 'string' && !Array.isArray(v)) continue   // 畸形形态（null/数字/对象）丢弃
+    out[server] = normalizeStringList(v)
   }
   return out
 }
@@ -61,9 +66,12 @@ export interface McpPlanInput {
 }
 
 /**
- * MCP 段应用计划：段已定义 → 对并集里每台服务器产出精确停用名单；
- * '*' 整台 → 写 ['*']（guard/restrict 原生支持通配，服务器后加载也会被拦）；
- * 段内服务器若配置里根本不存在 → stale 上报且不写。
+ * MCP 段应用计划：段已定义 → 对并集里每台服务器产出**精确停用名单（勾选集的补集）**。
+ *   服务器未勾（键缺失）→ ['*'] 整台停用（guard/restrict 原生支持通配，服务器后加载也会被拦）；
+ *   服务器勾 '*'      → [] 全启用；
+ *   服务器勾清单      → known − 勾选（未运行且无已知工具名的服务器无法枚举补集：不做停用，
+ *                       上报 `mcp/<server>/*` 让用户知道未勾项这次没生效）；
+ *   段内服务器若配置里根本不存在 → stale 上报且不写。
  */
 export function computeMcpPlan(mcp: Record<string, '*' | string[]>, input: McpPlanInput): McpPlan {
   const configured = new Set(input.configuredServers)
@@ -74,11 +82,13 @@ export function computeMcpPlan(mcp: Record<string, '*' | string[]>, input: McpPl
   for (const server of servers) {
     if (!configured.has(server)) { if (mcp[server] !== undefined) stale.push('mcp/' + server); continue }
     const spec = mcp[server]
-    if (spec === undefined) { entries[server] = []; continue }
-    if (spec === '*') { entries[server] = ['*']; wildcards.push(server); continue }
+    if (spec === undefined) { entries[server] = ['*']; wildcards.push(server); continue }
+    if (spec === '*') { entries[server] = []; continue }
     const known = input.knownTools[server] || []
-    if (known.length) stale.push(...spec.filter((t) => known.indexOf(t) < 0).map((t) => 'mcp/' + server + '/' + t))
-    entries[server] = spec.slice()
+    if (!known.length) { entries[server] = []; stale.push('mcp/' + server + '/*'); continue }
+    const checked = new Set(spec)
+    entries[server] = known.filter((t) => !checked.has(t))
+    for (const t of spec) if (known.indexOf(t) < 0) stale.push('mcp/' + server + '/' + t)
   }
   return { entries, wildcards, stale }
 }
@@ -96,14 +106,4 @@ export function snapshotRuntime(mcpRaw: Record<string, string[]>, skills: Record
     mcp: Object.fromEntries(Object.entries(mcpRaw).map(([k, v]) => [k, v.slice()])),
     skills: { ...skills },
   }
-}
-
-/** 退出模式：MCP 按快照原文整体还原；技能按快照键还原、快照后新增键保持现状。 */
-export function computeRestorePlan(snapshot: ModeSnapshot, current: { mcp: Record<string, string[]>; skills: Record<string, boolean> }): { mcp: Record<string, string[]>; skills: Record<string, boolean> } {
-  const mcp = Object.fromEntries(Object.entries(snapshot.mcp).map(([k, v]) => [k, v.slice()]))
-  for (const [k, v] of Object.entries(current.mcp)) if (!(k in mcp)) mcp[k] = v
-  const skillsOut: Record<string, boolean> = {}
-  for (const [k, on] of Object.entries(snapshot.skills)) skillsOut[k] = on
-  for (const [k, on] of Object.entries(current.skills)) if (!(k in skillsOut)) skillsOut[k] = on
-  return { mcp, skills: skillsOut }
 }

@@ -2,9 +2,12 @@
 // 设计 §3：人设 = ~/.dsh/subagents/<name>.md（frontmatter 可选，缺省派生）；v1 串行运行；
 // spawn provider 缺失时经 createRequire 挂载官方 dsh-subagent-spawn-in-process（宿主侧包）。
 import { createRequire } from 'node:module'
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveDshHome } from '../skills/core.js'
+import { expandUploads, planPersonaImport } from '../imports/upload.js'
+
+const message = (e: unknown): string => String((e && (e as Error).message) || e)
 
 export interface PersonaDoc {
   name: string
@@ -70,19 +73,41 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
     return docs
   }
 
-  let spawnReady = false
+  // spawn provider 在场性（设计 §3.2，落地方式见 cordis.patch.yml 的取舍注释）：
+  // 官方通道探测（ctx.subagents.list()）→ 缺失才挂载 → 失败把原因原样带出（不吞、不谎报）。
+  // 不是一次性静默标记：每次调用都先探测，宿主后来注册了 provider 也能立刻跟上。
+  let spawnMount: { ok: true } | { ok: false; error: string } | null = null
+  function hasSpawnProvider(runtime: any): boolean {
+    if (typeof runtime.list !== 'function') return false
+    try {
+      const names = runtime.list()
+      return Array.isArray(names) && names.indexOf('spawn') >= 0
+    } catch { return false }
+  }
   async function ensureSpawnProvider(): Promise<any> {
     const runtime = ctx.get?.('subagents')
     if (!runtime || typeof runtime.start !== 'function') {
       throw new Error('子代理服务未挂载（ctx.subagents 缺失；请确认 DSH 版本 ≥0.1.5-rc.2）')
     }
-    if (!spawnReady) {
+    if (hasSpawnProvider(runtime)) return runtime
+    // 宿主没有 list() 就探测不了：不重复挂载（避免同名 provider 二次注册），交给 start 报官方错误兜底。
+    if (typeof runtime.list !== 'function') return runtime
+    if (!spawnMount) {
       try {
         const mod = req('@deepseek-ai/dsh-subagent-spawn-in-process')
-        if (mod && typeof mod.apply === 'function') mod.apply(ctx, { providerName: 'spawn' })
-      } catch { /* 宿主已自带或不可得 → start 报错兜底 */ }
-      spawnReady = true
+        if (!mod || typeof mod.apply !== 'function') throw new Error('模块未导出 apply(ctx, config)（版本不匹配？）')
+        mod.apply(ctx, { providerName: 'spawn' })
+        spawnMount = { ok: true }
+      } catch (e) {
+        spawnMount = {
+          ok: false,
+          error: 'spawn provider 不可用：宿主没有注册它，本插件挂载 @deepseek-ai/dsh-subagent-spawn-in-process 也失败（'
+            + message(e) + '）。请在宿主 profile 挂载该包（本插件已声明为可选 peerDependency），或安装后重启 DSH。',
+        }
+      }
     }
+    if (!spawnMount.ok) throw new Error(spawnMount.error)
+    if (!hasSpawnProvider(runtime)) throw new Error('spawn provider 挂载后仍未出现在 ctx.subagents.list()（宿主版本不匹配？）')
     return runtime
   }
 
@@ -90,10 +115,10 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
     const runtime = await ensureSpawnProvider()
     // 官方签名：start(name, request) —— name = ctx.subagents 上的 provider 注册名。
     const run = await runtime.start('spawn', {
-      provider: 'spawn',
       label: p.name,
       parent: parentAgent,
-      signal: signal ?? undefined,
+      // 官方 SubagentStartRequest.signal 为必填：调用方缺省时给一个永不中止的信号，不传 undefined。
+      signal: signal ?? new AbortController().signal,
       prompt: [{ type: 'text', text: task }],
       persona: p.body,
       ...(p.tools?.length ? { toolFilter: { allow: p.tools } } : {}),
@@ -105,9 +130,10 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       const text = (result.output ?? [])
         .map((b: any) => (b && typeof b === 'object' && typeof b.text === 'string' ? b.text : ''))
         .join('').trim()
-      const detail = (result as any).detail ? `\n\n[provider] ${String((result as any).detail)}` : ''
+      // 官方 SubagentResult 的诊断字段是 `diagnostic`（旧代码读 .detail 恒空 → 失败时模型只见空输出）。
+      const diagnostic = (result as any).diagnostic ? `\n\n[provider] ${String((result as any).diagnostic)}` : ''
       return {
-        text: ((text || '(子代理无输出)') + detail).slice(0, RESULT_MAX),
+        text: ((text || '(子代理无输出)') + diagnostic).slice(0, RESULT_MAX),
         runId: String(run.id ?? ''),
         stopReason: String((result as any).stopReason ?? 'completed'),
       }
@@ -166,8 +192,39 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       cache = null
       return { ok: true, name }
     },
+    /**
+     * 导入人设（.md / .zip）：一个 .md 一个人设，文件名（去扩展名）= 人设名；
+     * zip 内任意层级的 .md 都按文件名导入（目录层级忽略）。同名**跳过并报告**，不覆盖既有文件。
+     * 部分成功：单条失败只记 skipped。
+     */
+    'subagent-import': async (args: any) => {
+      const files = args && args.files
+      if (!Array.isArray(files) || !files.length) return { ok: false, error: '没有选择要导入的文件' }
+      const { entries, problems } = expandUploads(files)
+      const planned = planPersonaImport(entries)
+      const skipped: Array<{ name: string; reason: string }> = [...problems, ...planned.problems]
+      const imported: string[] = []
+      for (const target of planned.targets) {
+        if (!validPersonaName(target.name)) { skipped.push({ name: target.name, reason: '人设名不合法（≤64 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）' }); continue }
+        const text = Buffer.from(target.bytes).toString('utf8').replace(/^\uFEFF/, '')
+        if (!text.trim()) { skipped.push({ name: target.name, reason: '内容为空，已跳过' }); continue }
+        const targetPath = join(dir, target.name + '.md')
+        const exists = await readFile(targetPath, 'utf8').then(() => true).catch(() => false)
+        if (exists) { skipped.push({ name: target.name, reason: '同名已存在（已跳过）' }); continue }
+        try {
+          await mkdir(dir, { recursive: true })
+          await writeFile(targetPath, text, 'utf8')
+        } catch (e) {
+          skipped.push({ name: target.name, reason: '写入失败：' + message(e) })
+          continue
+        }
+        imported.push(target.name)
+      }
+      if (imported.length) cache = null
+      return { ok: true, imported, skipped }
+    },
   }
-  return { list, runSerial, ops, writeOps: new Set(['subagent-create', 'subagent-update', 'subagent-delete']) }
+  return { list, runSerial, ops, writeOps: new Set(['subagent-create', 'subagent-update', 'subagent-delete', 'subagent-import']) }
 }
 
 function validPersonaName(name: string): boolean {

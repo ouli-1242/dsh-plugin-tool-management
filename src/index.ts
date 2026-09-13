@@ -305,12 +305,25 @@ export default {
     async function toolStates(): Promise<Record<string, boolean>> {
       const disabled = await readDisabledTools()
       const states: Record<string, boolean> = {}
-      for (const [server, list] of Object.entries(disabled)) for (const t of list) states[server + '/' + t] = false
       let schemas: any[] = []
       try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅启停表 */ }
+      const liveByServer: Record<string, string[]> = {}
       for (const s of schemas) {
         const p = toolKeyParts(String((s && s.name) || ''))
-        if (p && !(p.key in states)) states[p.key] = true
+        if (!p) continue
+        const list = liveByServer[p.server] || (liveByServer[p.server] = [])
+        if (list.indexOf(p.tool) < 0) list.push(p.tool)
+      }
+      for (const [server, list] of Object.entries(disabled)) {
+        // 整台停用（['*']）：在 live 工具上展开成具体键，不产出 `server/*` 伪键（那会污染勾选器）。
+        if (list.indexOf('*') >= 0) {
+          for (const t of (liveByServer[server] || [])) states[server + '/' + t] = false
+          continue
+        }
+        for (const t of list) states[server + '/' + t] = false
+      }
+      for (const [server, list] of Object.entries(liveByServer)) {
+        for (const t of list) if (!(server + '/' + t in states)) states[server + '/' + t] = true
       }
       return states
     }
@@ -376,6 +389,8 @@ export default {
         const r: any = await rulesService.ops['rules-list']({})
         return !!(r && r.ok !== false && (r.scenes || []).some((s: any) => s.name === name))
       },
+      // 人设名全集（保存 subagents 段时校验并报 stale，与 mcp/skills 两段同口径）。
+      knownPersonas: async () => new Set((await subagentService.list()).map((p) => p.name)),
     })
 
     // ---------- 轻量子智能体（设计 §3）----------
@@ -1156,7 +1171,9 @@ export default {
         for (const serverName of Object.keys(raw)) {
           const list = (raw as Record<string, unknown>)[serverName]
           if (Array.isArray(list)) {
-            const names = list.map((name) => String(name)).filter((name) => /^[A-Za-z0-9_-]{1,128}$/.test(name))
+            // `*` 必须原样保留：它是「整台服务器停用」的通配（场景档案未勾选的服务器写的就是它），
+            // 被这里过滤掉的话 guard / restrict / 快照三条链路一起失效——整台停用变成空转。
+            const names = list.map((name) => String(name)).filter((name) => name === '*' || /^[A-Za-z0-9_-]{1,128}$/.test(name))
             if (names.length) out[serverName] = names
           }
         }
@@ -1878,6 +1895,7 @@ export default {
       // 场景档案勾选器数据源 v2：全部 MCP 服务器（含未运行）+ 技能全集 + 人设清单。
       'scene-inventory': async () => {
         const [rowsR, tools, skills, subs] = await Promise.all([mcpmListView(), toolStates(), skillStates(), subagentService.list()])
+        const disabledRaw = await readDisabledTools()
         const rows: any[] = (rowsR && rowsR.rows) || []
         const mcpServers: any[] = []
         const seen = new Set<string>()
@@ -1890,6 +1908,8 @@ export default {
             level: row.level || null,
             live: !!(row.live && row.live.enabled),
             serverDisabled: !!row.disabled,
+            // 停用表里的 ['*'] = 整台工具停用（勾选器据此预勾，避免把"全停"读成"全启用"）。
+            allToolsDisabled: (disabledRaw[name] || []).indexOf('*') >= 0,
             toolCount: typeof row.toolCount === 'number' ? row.toolCount : null,
           })
         }
@@ -2427,8 +2447,10 @@ export default {
     // ---------- 子智能体工具（subagent_list / subagent_run）----------
     // exec.agent / exec.signal 由工具运行时提供（parent 与取消信号的官方通道）。
     try {
-      tools.register(defineSubagentListTool({ list: () => subagentService.list(), sceneLists: subagentSceneLists }))
-      tools.register(defineSubagentRunTool({ ...subagentService, sceneLists: subagentSceneLists }))
+      // 与其余 12 个工具同一条注册通道：defineTool 负责编译 parameters（object root + required），
+      // 裸 register 会把未编译的参数声明直接发给模型 API。
+      tools.register(defineTool(defineSubagentListTool({ list: () => subagentService.list(), sceneLists: subagentSceneLists })))
+      tools.register(defineTool(defineSubagentRunTool({ ...subagentService, sceneLists: subagentSceneLists })))
     } catch (e) {
       console.error('[dsh-plugin-tool-management] subagent tool registration failed:', message(e))
     }
@@ -2666,10 +2688,23 @@ export default {
             const rules: any[] = r.rules || []
             if (!rules.length) return { kind: 'success', text: '未发现任何记忆（~/.dsh/scene-memory 为空）。' }
             const scenes: any[] = r.scenes || []
+            // 设计 §2.4：输出追加当前模式与档案摘要（读 op，无门禁面）。
+            const modeRes: any = await archiveService.ops['scene-mode-get']({}).catch(() => null)
+            const mode: any = (modeRes && modeRes.mode) || { scene: null, snapshot: null }
+            const archives: Record<string, any> = (modeRes && modeRes.archives) || {}
+            const archiveLines = Object.entries(archives).map(([name, a]) => {
+              const segs: string[] = []
+              if (a && a.mcp) segs.push('MCP ' + Object.keys(a.mcp).length + ' 台')
+              if (a && Array.isArray(a.skills)) segs.push('技能 ' + a.skills.length + ' 个')
+              if (a && Array.isArray(a.subagents)) segs.push('子智能体 ' + a.subagents.length + ' 个')
+              return name + '(' + (segs.join('/') || '空档案') + ')'
+            })
             const text = '场景记忆（' + rules.length + '）：\n' + rules.map((rule: any) => (
               '- ' + rule.name + ' [' + (rule.group || '全局') + '] · ' + (rule.enabled ? '已启用' : '已停用')
             )).join('\n') + '\n场景：' + (scenes.map((s: any) => s.name + (s.active ? '(启用)' : '(未启用)')).join('、') || '(无)') +
               (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）') +
+              '\n当前模式：' + (mode.scene ? mode.scene + '（退出按快照恢复 MCP/技能）' : '自由模式') +
+              '\n档案：' + (archiveLines.join('、') || '(无)') +
               '\n（启用场景的记忆正文自动进入系统提示词，无需任何工具调用）'
             return { kind: 'success', text }
           },

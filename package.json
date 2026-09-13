@@ -36,7 +36,7 @@
     "build:client": "node scripts/sync-client.mjs",
     "prepublishOnly": "npm run build",
     "lint": "node --check lib/client.js && node --check lib/index.js",
-    "test": "npm run build && node --test test/archive.test.mjs"
+    "test": "npm run build && node --test test/archive.test.mjs test/import.test.mjs"
   },
   "keywords": [
     "dsh",
@@ -67,7 +67,13 @@
     "@deepseek-ai/dsh-spill-local": ">=0.1.5-rc.2 <0.2.0-0",
     "@deepseek-ai/dsh-session-projection-cache": ">=0.1.5-rc.2 <0.2.0-0",
     "@deepseek-ai/dsh-storage-domain": ">=0.1.5-rc.2 <0.2.0-0",
+    "@deepseek-ai/dsh-subagent-spawn-in-process": ">=0.1.5-rc.2 <0.2.0-0",
     "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-subagent-spawn-in-process": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

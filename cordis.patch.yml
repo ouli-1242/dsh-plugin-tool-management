@@ -32,6 +32,17 @@
 #
 # 冲突告警：不要同时安装独立的 @michengai/dsh-archive-manager——两个补丁都
 # 禁用官方 workspace 行并插入替换，会导致重复服务注册、启动失败。
+#
+# spawn provider（子智能体）挂载：本文件**故意不**插入
+# `@deepseek-ai/dsh-subagent-spawn-in-process` 行。取舍理由：
+#   1) insert 行在启动期解析：换台没有该包的宿主会因单行加载失败拖垮整棵插件树，
+#      而缺 provider 时受影响面只有一个 subagent_run 调用；
+#   2) 该行与本插件运行时的 ctx.plugin 兜底挂载存在双挂载窗口（同名 provider 重复注册）。
+# 改由 src/subagents/service.ts 走官方通道：ctx.subagents.list() 探测到 spawn 即跳过；
+# 缺失才经 createRequire + apply(ctx, {providerName:'spawn'}) 挂载；失败把原因原样抛给模型。
+# 该包在 package.json 声明为**可选** peerDependency（peerDependenciesMeta.optional）——
+# 宿主/profile 自带时可以照常挂载。设计 §3.2 字面要求「挂载声明进 cordis.patch.yml」，
+# 这里按上述风险裁定为有意偏离（记录见 docs/审查/2026-09-13-场景档案v2双轴评审.md）。
 - id: workspace
   disabled: true
 - id: session-projection-cache
