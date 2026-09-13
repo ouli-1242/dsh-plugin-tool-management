@@ -60,6 +60,7 @@
 | 旧布局迁移把场景目录**多套一层**（`memories/办公/办公/周报.md`） | `relocateLegacyLayout` 对目录也用了 `join(memoriesRoot, name, name)` | `test/hub-layout.test.mjs` 迁移用例抓出 |
 | 英文界面下 MCP 级别筛选永远是中文且翻不过来 | `MCP_LEVEL_OPTIONS` 是**模块级常量**，`apply()` 早于 locale 注册 | 改为渲染时求值 `mcpLevelOptions()` |
 | 中文界面丢失「已移除自定义目录」的目录名 | `result.custom.removed` 中文缺 `{name}` 占位符（英文有） | 新增 `scripts/check-i18n.mjs` 做键集合 + 占位符比对并接进 `npm test` |
+| `skill-create` 不传 root 时技能落到 `~/.dsh/skills/` 而非 hub | 服务层 `String(args.root \|\| 'dsh')` 的默认值漏改（只改了 `core.js` 的默认值，UI 实际总是显式传 root） | 活体实测抓出 → 服务层默认值改 `'hub'`，技能页「新建」的默认来源同样改为 hub（`activeSource` 优先） |
 
 ### 新增只读 op
 
@@ -78,13 +79,26 @@
 | 游离记忆 | ✅ | 体检报 `noScene`（warning），且不进 `rules-budget` 投影 |
 | `model-candidates` | ✅ | 列出 4 个来源，含 `sensenova/sensenova-6.8-flash-lite` |
 | `preset-tools` | ✅ | 4 个预设、49 个工具，其中 15 个标为当前会话可见 |
-| 人设黑名单落盘 | ⏳ 未验证 | 被 mkdir 缺陷挡住；修复后待宿主重载复测 |
-| 技能落 hub + 官方通道可见 | ⏳ 未验证 | 同上 |
-| 新界面（浏览器交互） | ⏳ 未验证 | 同上 |
+| 人设黑名单落盘 | ✅ | 修 mkdir 后活体复测：`subagent-create{provider:sensenova, model:sensenova-6.8-flash-lite, tools:[read_file,glob,grep], toolsDeny:[bash,pwsh]}` → 文件落在 `tool-management/agents/hub-probe.md`，frontmatter 含 `tools: read_file, glob, grep` + `toolsDeny: bash, pwsh`；`subagent-get` 原样读回 |
+| 技能落 hub | ✅（需显式 root） | `skill-state` 来源表出现 `hub  mutable=true  path=...\tool-management\skills`；`skill-create{root:hub}` → 文件落 `tool-management/skills/hub-probe-skill-hub/SKILL.md`。**实测暴露**：不传 root 时仍落到 `~/.dsh/skills/`（服务层默认值漏改）→ 已修（见「修复」表） |
+| 官方技能通道可见 hub | ✅（间接） | 插件把自己的技能源注册进官方 `ctx.skills.registerProvider`（`skills/service.ts:343`），`skill-state` 的 hub 来源与 `skill-detail` 都能列出/读取 hub 内技能；**未做**「模型真实调用 `skill` 工具读到它」的端到端（会烧 token） |
+| 新界面（浏览器交互） | ❌ 未验证 | 见下「本轮诚实的失败」 |
+
+### 本轮诚实的失败（记录过程，避免下次重走）
+
+- **想用「假 React + 假 fetch 在 Node 里驱动真实 bundle」做交互级 UI 验收**，投入很大但渲染循环迟迟不收敛：
+  依次踩到 ①setState 同值高亮 → 用浅比较解决；②`build` 与事件 `insert` 顺序；③ useEffect 依赖里的
+  新闭包（`[refresh]`）导致每轮重跑 → 对函数依赖改用源码文本比较；④**按树位置给组件身份会让匿名组件撞 key**，
+  hook 状态串到别的组件上；⑤组件某轮未渲染时残留的 hook 游标会写错槽位（该条最隐蔽：`{deps,effect}`
+  被写进了 state 槽）。判定为**不可靠地基** → 整体回退删除（不留在仓库里充数）。
+- 尝试用 Playwright 打开 3080 做界面验收失败：8123 测试宿主已停，其 token 对 3080 无效（401）；
+  另起的测试宿主（8134）因 `npx` 启动链路卡住未起来。
+- **结论**：浏览器交互验收仍以**真浏览器 + 有效 token** 为准，本轮**未跑**；能进 CI 的那层用
+  `test/client-i18n.test.mjs` 覆盖（词典结构与引用完整性），它挡不住渲染缺陷，只能挡「界面显示原始键名」。
 
 ### 契约测试
 
-`npm test` = build + `check:i18n` + **61 例** node --test：
+`npm test` = build + `check:i18n` + **64 例** node --test：
 
 - `archive.test.mjs`（13）：档案纯逻辑 + 引擎状态机
 - `import.test.mjs`（16）：zip/上传展开、落点规划、限额**回报**（不静默丢）
@@ -92,6 +106,7 @@
 - `subagent-scene.test.mjs`（6）：场景绑定必须在子代理运行**之前**拒绝
 - `subagent-persona.test.mjs`（9）：frontmatter 往返（`provider`/`model`/`toolsDeny`）、目录不存在时创建、重名拒绝
 - `hub-layout.test.mjs`（12）：旧布局搬移不覆盖、`global` 恒在且不可删、记忆必须归属已存在场景、档案记忆段只影响投影、路径回传
+- `client-i18n.test.mjs`（3）：**把真实 bundle 的 DICT 取出来**与代码里所有字面量 `t('键')` 比对（结构一致 / 引用完整 / 无空文案）
 
 辅助脚本：`npm run check:i18n`（中英键集合 + 占位符一致）、`node scripts/i18n-debt.mjs`（按页面统计硬编码中文欠账）、`node scripts/find-hardcoded-zh.mjs`（逐行定位）。
 
