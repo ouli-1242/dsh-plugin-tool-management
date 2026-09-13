@@ -95,9 +95,12 @@ export function userRoots() {
       // v0.4：插件**新建/导入**的技能落到 hub 内（用户要求：插件产生的文件收在
       // $DSH_HOME/tool-management/）。rank 高于 DSH 技能，同名时 hub 版本遮蔽官方目录里的；
       // 官方 ~/.dsh/skills/ 仍作为可切换来源列出（不搬走、不删）。
+      //
+      // 界面名「导入技能」：它是插件导入/新建技能的落点，不是"管理器自己的一类技能"。
+      // **用户级来源不可删**（dsh / hub 都是）：技能只能停用，删除留给项目级来源。
       key: "hub",
       path: join(resolveDshHome(), "tool-management", "skills"),
-      label: "管理器技能",
+      label: "导入技能",
       localeKey: "hub",
       mutable: true,
       toggleable: true,
@@ -359,6 +362,9 @@ export async function projectRoots(projectCwds = [], diagnostics) {
     const id = projectIdentity(project.root);
     const common = {
       mutable: false,
+      // 项目级 DSH 根是**唯一**允许删除技能文件的来源；用户级来源（dsh / hub）一律不可删。
+      // 用「作用域」推导而不是再加一个平行开关：这是项目根与用户根的本质差别。
+      deletable: false,
       toggleable: false,
       native: true,
       scope: "project",
@@ -376,6 +382,7 @@ export async function projectRoots(projectCwds = [], diagnostics) {
         label: "Project DSH",
         rank: 100,
         mutable: true,
+        deletable: true,
         toggleable: true,
       },
       {
@@ -532,6 +539,21 @@ function readonlyError(action) {
       action === "delete"
         ? "该技能来源不允许删除"
         : "该技能来源不允许启用或停用",
+  };
+}
+
+/**
+ * 来源可写但**不允许删除**时的拒绝结果（用户级 DSH 技能 / 导入技能）。
+ * 与「只读来源」区分开：这两种来源可以创建、可以停用，只是不提供删除 —— 提示要能说清
+ * 「你还能做什么」，否则用户会以为是权限坏了。
+ */
+function notDeletableError(definition) {
+  return {
+    ok: false,
+    code: "error.skill.notDeletable",
+    params: { root: definition && definition.key ? definition.key : "" },
+    error:
+      "该来源的技能不能删除（技能只能停用）：只在项目级来源（<项目>/.dsh/skills）提供删除",
   };
 }
 
@@ -1826,11 +1848,14 @@ async function restoreRootDefinition(metadata, options = {}) {
   return checkedWritableRootDefinition(root);
 }
 
-/** 把用户或活动项目的 DSH 根中的单个技能移入 manager-owned 回收站。 */
+/** 把项目级 DSH 根中的单个技能移入 manager-owned 回收站。 */
 export async function deleteSkill(root, name, log, options = {}) {
   const definition = await checkedWritableRootDefinition(root);
   if (definition && definition.ok === false) return definition;
   if (!definition) return readonlyError("delete");
+  // 用户级来源（dsh / hub）**不可删**：技能只能停用。删除会把用户自己放进去的技能
+  // 从磁盘上搬走，代价远大于收益；项目级来源（本仓库自己的 .dsh/skills）才允许删。
+  if (definition.deletable !== true) return notDeletableError(definition);
   const resolved = await resolveEntry(definition, name);
   if (resolved === null)
     return {
@@ -3087,6 +3112,8 @@ export async function state(options = {}) {
       path: root.path,
       label: root.label,
       mutable: root.mutable,
+      // 是否提供「删除」：只有项目级 DSH 根为 true。用户级 dsh / hub 可写但不可删。
+      deletable: root.deletable === true,
       toggleable: root.toggleable,
       native: root.native,
       rank: root.rank,

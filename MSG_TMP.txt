@@ -1,0 +1,33 @@
+feat(skills): 来源改名「导入技能」；用户级来源（DSH 技能 / 导入技能）不可删除
+
+用户裁定两条：
+  1. hub 来源的界面名「管理器技能」→「导入技能」（它是插件导入/新建技能的落点，
+     不是"管理器自己的一类技能"）；
+  2. 「也是和 DSH 技能一样无法删除的」—— 用户级来源可写但不可删，删除只留项目级。
+
+实现：
+  - src/skills/core.js：hub root 的 label 改「导入技能」；来源定义新增显式 deletable 标记
+    （只给 project-dsh 置 true，不再从 mutable 推断）；deleteSkill 在**碰文件之前**拒绝，
+    错误码 error.skill.notDeletable，与只读来源的 error.root.readonly 区分开；
+    skill-state 的 root 行新增 deletable 字段。
+  - src/client.js：回收站按钮改由 root.deletable 决定；新增「不可删除」标记 + 悬停说明；
+    补 error.skill.notDeletable 与 status.notDeletable 的中英文案。
+
+测试 test/skills-delete.test.mjs（4 例，新增）：
+  - 用户级 dsh / hub 可写但 deletable 不为 true（可写性不受影响）
+  - 界面名是「导入技能」
+  - 真调用 deleteSkill：dsh / hub 返回 error.skill.notDeletable，且文件、内容、回收站
+    一个都不动
+  - 对照：只读来源（自定义目录）走的仍是 error.root.readonly
+
+写测试过程中发现两处自己写错的地方（已修）：
+  - 传 { key } 会让路径校验失败、落到「只读」分支，测不到这次的改动 → 必须用
+    userRoots() 里那份规范定义；
+  - 该测试用例名一度写成"自定义目录走同一道闸"，其实它是另一道闸，改名并把断言
+    改成 error.root.readonly。
+
+副作用（已知、可接受）：服务端那道闸要重启宿主才生效；在此之前若先刷新页面，
+项目级来源的「移到回收站」按钮会暂时消失（客户端按 deletable 渲染，旧宿主不发这个
+字段）——重启后恢复。回收站里已有的条目不受影响。
+
+npm test 76 例全绿；check:i18n 一致。

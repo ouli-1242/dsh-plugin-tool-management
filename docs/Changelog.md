@@ -51,6 +51,11 @@
 - **档案弹窗里的勾选区拉高**（用户反馈「记忆、各种集的选择滑动框都很小」）：弹窗上限 620px → 720px，段体从写死 `height:216px` 改成 `min-height:300px` + `flex:0 0 auto`（**下限优先**），列表自身出滚动条，装不下时由 `.dsm-form` 整体滚动。
   两种写法的取舍记一笔：`flex:1` 平分看似「填满空间」，但四项分 720px 每段只剩约 155px，**比原来的 216px 还矮**——第一版就是这么写的，算完才发现。已把这条写成断言（禁止 `flex:1`、下限 ≥ 260px、弹窗上限要装得下四段下限）。
 - **人设表单**：模型与工具限制收进「**高级选项**」折叠区（已配置则自动展开）。模型 = 宿主 LLM 目录里的 `provider · model` 下拉 + 「自定义」手填兜底；工具白名单/黑名单 = 勾选器，候选是**全部 Agent 预设工具名的并集**并标注「当前会话可见 / 其它预设里可用」。折叠区**首次展开才拉候选**（枚举预设需要 standing mount，不该在开弹窗时付代价）。
+- **技能来源改名与删除权限**（用户裁定）：
+  - hub 来源的界面名 **「管理器技能」→「导入技能」** —— 它是插件导入/新建技能的落点，不是"管理器自己的一类技能"。
+  - **用户级来源不可删**：`DSH 技能`（`~/.dsh/skills/`）与 `导入技能`（`~/.dsh/tool-management/skills/`）**可写但不可删**，界面不再显示「移到回收站」；删除只在**项目级来源**（`<项目>/.dsh/skills`）开放。理由是用户自己放进来源目录的技能不该被插件从磁盘上搬走。
+  - 可删除位是来源定义上的显式标记（`deletable`），不再从 `mutable` 推断；服务端在**碰文件之前**拒绝，错误码 `error.skill.notDeletable`（与「只读来源」的 `error.root.readonly` 区分开，提示能说清"你还能做什么"）。
+  - 注意：刷新页面即可看到名称与按钮变化，但**服务端那道闸要重启宿主才生效**。
 - **勾选类原语提到模块作用域**（段卡片 / 勾选行 / 筛选行 / 分组标题 / 段头动作 / 段脚注），档案编辑器与人设工具选择器共用同一套排版。
 - **七个页面的副标题统一为同一句式**（`管理X：动作、动作与动作。`）：场景从「定义式 + 两句」改为与其他页同构；子智能体去掉绝对路径；提示词页与会话页的两条原本是**硬编码中文**（英文界面下永远是中文），一并接进 i18n（新增 `prompts.desc` / `sessions.desc`）。
 - **i18n**：MCP 页与共享状态层（级别、运行状态、表头、表单字段、详情、确认弹窗、工具栏）从硬编码中文改为 `t()`。**剩余欠账 113 条**：提示词页 38、会话页 75（见「已知问题」）。
@@ -148,7 +153,7 @@ client.js:526 slot entry crashed in 'settings.section': ReferenceError: sceneLab
 
 ### 契约测试
 
-`npm test` = build + `check:i18n` + **72 例** node --test：
+`npm test` = build + `check:i18n` + **76 例** node --test：
 
 - `archive.test.mjs`（13）：档案纯逻辑 + 引擎状态机
 - `import.test.mjs`（16）：zip/上传展开、落点规划、限额**回报**（不静默丢）
@@ -157,6 +162,7 @@ client.js:526 slot entry crashed in 'settings.section': ReferenceError: sceneLab
 - `subagent-persona.test.mjs`（9）：frontmatter 往返（`provider`/`model`/`toolsDeny`）、目录不存在时创建、重名拒绝
 - `hub-layout.test.mjs`（12）：旧布局搬移不覆盖、`global` 恒在且不可删、记忆必须归属已存在场景、档案记忆段只影响投影、路径回传
 - `skills-state.test.mjs`（3）：**技能状态文件读取韧性** —— 旧文档缺后来新增的来源键 → 自愈补默认值不 fail-closed；文件不存在 → 默认状态；version 不认识 / 非 JSON / 类型写错 → warning + 锁定 + 全部来源停用（fail-closed）
+- `skills-delete.test.mjs`（4）：**哪些技能可以删** —— 用户级来源（DSH 技能 / 导入技能）可写但不可删，删除在碰文件之前就被拒（`error.skill.notDeletable`）；只读来源仍报 `error.root.readonly`；界面名「导入技能」
 - `client-exports.test.mjs`（4）：**运行时导出契约** —— 只求值 factory（不跑 `apply`）就必须拿到
   `dict`/`pages`/`apply`；词典 zh/en 键集合一致、无空文案；代码里每个字面量 `t('键')` 都能解析。
   反向护栏：禁止缩进 ≥ 8 空格的 `module.exports.X =`；另有**档案弹窗布局契约**（段体下限优先、禁止 flex:1 平分、列表自身出滚动条）

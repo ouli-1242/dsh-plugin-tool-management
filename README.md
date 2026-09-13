@@ -49,7 +49,8 @@
 | 写入保护 | 每次改写补丁前自动留 `.bak` 时间戳备份（保留 5 份）；重复 loader id 写前拦截、跨级迁移失败自动回滚 |
 | 备份恢复 | JSON 导入支持 `overwrite` 覆盖同 id 条目，不再只能跳过 |
 | 技能来源 | 接入 `~/.agents` / `~/.codex` / `~/.claude` 三个官方不加载的技能目录，并支持**自定义任意技能目录**（只读接入、重叠拒绝） |
-| 技能操作 | 创建技能、ZIP/文件夹导入、插件回收站（恢复 / 永久删除 / 系统回收站兜底）、系统编辑器打开源文件 |
+| 技能操作 | 创建技能、ZIP/文件夹导入、插件回收站（恢复 / 永久删除 / 系统回收站兜底）、系统编辑器打开源文件。**删除只对项目级来源开放**：DSH 技能与导入技能（`~/.dsh/skills/`、`~/.dsh/tool-management/skills/`）**不可删除**，只能停用 |
+| 技能来源命名 | `DSH 技能` = 官方 `~/.dsh/skills/`；**`导入技能`** = 插件导入/新建的落点 `~/.dsh/tool-management/skills/`（优先级高于 DSH 技能，同名时遮蔽官方那份） |
 | 即时刷新 | 技能目录由后台线程监听，编辑器里改完技能页面自动刷新 |
 | AGENTS.md 预设 | 多套全局指令基线预设库：新建 / 导入 / 编辑 / 应用 / 删除；「应用」写入 `~/.dsh/AGENTS.md`（新会话生效，当前会话不变） |
 | 会话归档管理 | History 页按项目分组展示已归档会话：搜索、全选、批量恢复 / 永久删除、保留期自动清理（改保留期后倒计时以修改时间为基准重置） |
@@ -199,17 +200,18 @@ npm run build        # 构建（tsc + 同步客户端 bundle）
 npm run build:client # 只同步 src/client.js → lib/client.js
 npm run lint         # 语法自检（node --check 两个产物）
 npm run check:i18n   # 中英词典键集合 + 占位符对齐
-npm test             # 构建 + i18n 自检 + 全部语义契约测试（node --test test/*.test.mjs，72 例）
+npm test             # 构建 + i18n 自检 + 全部语义契约测试（node --test test/*.test.mjs，76 例）
 ```
 
 > 本项目的验证方式是**直接跑一遍真实行为**（验收证据与已知问题见 [Changelog](docs/Changelog.md)），而不是断言代码当前怎么实现——
-> 后者只是把实现抄一遍，必然通过。例外是九组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 72 例）：
+> 后者只是把实现抄一遍，必然通过。例外是十组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 76 例）：
 > `archive.test.mjs`（引擎状态机：勾=启用、空段可持久化、失败回滚与如实上报）、
 > `import.test.mjs`（导入展开、落点规划与限额回报）、
 > `approval-policy.test.mjs`（never 审批策略探测；用真实 cordis + 真实 `ApprovalService` 复现读取链）、
 > `subagent-scene.test.mjs`（场景绑定必须在子代理运行**之前**拒绝）、
 > `subagent-persona.test.mjs`（人设 frontmatter 往返：`provider`/`model`/`toolsDeny` 读写不丢；目录不存在时创建）、
 > `hub-layout.test.mjs`（统一数据目录：旧布局搬移不覆盖、保留场景 global 恒在且不可删、记忆必须归属已存在场景、档案记忆段只影响投影）、
+> `skills-delete.test.mjs`（哪些技能可以删：用户级来源不可删、只读来源仍只读）、
 > `skills-state.test.mjs`（技能状态文件读取韧性：缺键自愈、类型错仍 fail-closed）、
 > `client-exports.test.mjs`（**客户端导出契约**：只求值 factory 不跑 `apply` 也能拿到 `dict`/`pages`；禁止把导出写在 `apply` 方法体里）、
 > `client-render.test.mjs`（**装配与渲染**：假 ctx 跑完整 `apply`，断言注册了 `settings.section`，并递归渲染整棵组件树不抛错）。

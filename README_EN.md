@@ -49,7 +49,8 @@ No hand-editing of `cordis.patch.yml`, and skill source files are never touched.
 | Write protection | Every patch rewrite keeps a timestamped `.bak` backup (last 5); duplicate loader ids are rejected before write; failed cross-level migration rolls back |
 | Backup / restore | JSON import supports `conflict: 'overwrite'` to replace entries with the same id, not just skip them |
 | Skill sources | Hooks up `~/.agents` / `~/.codex` / `~/.claude` (three directories official DSH does not load) plus **any custom skill directory** you add (read-only, overlapping paths rejected) |
-| Skill operations | Create skills, import ZIP / folders, plugin recycle bin (restore / permanent delete with OS-trash fallback), open the source file in the system editor |
+| Skill operations | Create skills, import ZIP / folders, plugin recycle bin (restore / permanent delete with OS-trash fallback), open the source file in the system editor. **Deletion is project-level only**: DSH skills and imported skills (`~/.dsh/skills/`, `~/.dsh/tool-management/skills/`) cannot be deleted — disable them instead |
+| Skill source names | `DSH skills` = the official `~/.dsh/skills/`; **`Imported skills`** = where this plugin puts what you create/import, `~/.dsh/tool-management/skills/` (higher priority, so a same-named copy shadows the official one) |
 | Live refresh | Skill directories are watched from a background thread — edits made in an editor show up automatically |
 | AGENTS.md presets | Multiple global instruction baselines as presets — create / import / edit / apply / delete; "Apply" writes `~/.dsh/AGENTS.md` (new sessions pick it up, current sessions stay unchanged) |
 | Archived session management | History page groups archived sessions by project: search, select-all, batch restore / permanent delete, retention-based auto-cleanup (changing the retention resets the countdown from the change time) |
@@ -248,8 +249,8 @@ npm test             # build + all semantic-contract tests (node --test test/*.t
 
 > Changes are verified by **actually exercising the real behaviour** (evidence and known issues live in
 > [Changelog](docs/Changelog.md)) instead of asserting what the code currently does — the latter
-> just copies the implementation and passes by construction. The exception is nine groups of
-> **semantic-contract** tests (`npm test`, run against the built `lib/`, 72 cases):
+> just copies the implementation and passes by construction. The exception is ten groups of
+> **semantic-contract** tests (`npm test`, run against the built `lib/`, 76 cases):
 > `archive.test.mjs` (engine state machine), `import.test.mjs` (ZIP expansion, landing plans, limit
 > reporting), `approval-policy.test.mjs` (never-policy detection, driving a real cordis context and
 > a real `ApprovalService`), `subagent-scene.test.mjs` (scene binding must reject *before* a
