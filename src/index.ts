@@ -18,6 +18,8 @@ import { createSkillsService } from './skills/service.js'
 import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService } from './rules/service.js'
 import { createArchiveEngine } from './rules/archive-engine.js'
+import { createSubagentService } from './subagents/service.js'
+import { defineSubagentListTool, defineSubagentRunTool } from './subagents/tools.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -353,6 +355,19 @@ export default {
         return !!(r && r.ok !== false && (r.scenes || []).some((s: any) => s.name === name))
       },
     })
+
+    // ---------- 轻量子智能体（设计 §3）----------
+    // 人设 = ~/.dsh/subagents/<name>.md；运行走官方 ctx.subagents.start（spawn provider）。
+    // sceneLists 供场景绑定校验：启用场景（rules-list 的 active 行）档案里的 subagents 并集。
+    const subagentService = createSubagentService(ctx, {})
+    const subagentSceneLists = async (): Promise<string[][]> => {
+      const slice = await rulesService.readArchiveSlice()
+      const r: any = await rulesService.ops['rules-list']({})
+      if (!r || r.ok === false) return []
+      return (r.scenes || [])
+        .filter((s: any) => s.active)
+        .map((s: any) => slice.archives[s.name]?.subagents ?? [])
+    }
 
     // HTTP 写操作门禁清单。skills/rules/档案引擎域由各自 service 导出的 writeOps 派生
     // （与其 ops 表同文件维护，新增写 op 改对应 service 即可）；本文件内联域
@@ -1807,6 +1822,8 @@ export default {
       // scene-archive-save / scene-mode-set。成功返回扁平 {ok:true, ...}，
       // 失败 {ok:false, error}；写 op 已含 archiveService.writeOps 门禁派生。
       ...archiveService.ops,
+      // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list（只读）。
+      ...subagentService.ops,
       // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
       // agentsmd-read / agentsmd-create / agentsmd-update / agentsmd-remove /
       // agentsmd-apply / agentsmd-get-current
@@ -2330,6 +2347,15 @@ export default {
         return 'OK: rule ' + r.rule.id + '（场景「' + (r.rule.group || '全局') + '」启用后自动生效）'
       },
     }))
+    // ---------- 子智能体工具（subagent_list / subagent_run）----------
+    // exec.agent / exec.signal 由工具运行时提供（parent 与取消信号的官方通道）。
+    try {
+      tools.register(defineSubagentListTool({ list: () => subagentService.list(), sceneLists: subagentSceneLists }))
+      tools.register(defineSubagentRunTool({ ...subagentService, sceneLists: subagentSceneLists }))
+    } catch (e) {
+      console.error('[dsh-plugin-tool-management] subagent tool registration failed:', message(e))
+    }
+
     if (typeof ctx.on === 'function') {
       ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', (exec, next) => {
         if (exec && exec.name === 'skill_manager_create') {
@@ -2343,6 +2369,14 @@ export default {
               ? { kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }
               : next()))
             .catch(() => ({ kind: 'ask', reason: 'Write a rule under ~/.dsh/scene-memory' }))
+        }
+        if (exec && exec.name === 'subagent_run') {
+          // 子代理运行花真 token：默认确认（requireConfirmForModelSubagentRun !== false），可关。
+          return readPluginSettings()
+            .then((s) => ((s as any).requireConfirmForModelSubagentRun !== false
+              ? { kind: 'ask', reason: 'Run a subagent (consumes tokens)' }
+              : next()))
+            .catch(() => ({ kind: 'ask', reason: 'Run a subagent (consumes tokens)' }))
         }
         return next()
       })
