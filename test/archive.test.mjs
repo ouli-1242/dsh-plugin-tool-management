@@ -1,35 +1,46 @@
 // test/archive.test.mjs —— 场景档案纯逻辑冒烟（node --test）。跑 lib 编译产物，改 src 后先 npm run build。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeArchive, hasSection, computeApplyPlan, snapshotRuntime, computeRestorePlan } from '../lib/rules/archive.js'
+import { normalizeArchive, hasSection, computeMcpPlan, computeSkillsPlan, snapshotRuntime, computeRestorePlan } from '../lib/rules/archive.js'
 
-test('normalizeArchive: 键存在性独立于集合空否', () => {
-  const a = normalizeArchive({ tools: [], subagents: 'x, y' })
-  assert.deepEqual(a.tools, [])
-  assert.equal(a.skills, undefined)
-  assert.deepEqual(a.subagents, ['x', 'y'])
-  assert.equal(hasSection(a, 'tools'), true)
-  assert.equal(hasSection(a, 'skills'), false)
+test('normalizeArchive: 段存在性独立于集合空否；mcp 两级规范化', () => {
+  const a = normalizeArchive({ mcp: { github: '*', tavily: 'a, b' }, skills: [] })
+  assert.deepEqual(a.mcp, { github: '*', tavily: ['a', 'b'] })
+  assert.equal(a.subagents, undefined)
+  assert.equal(hasSection(a, 'mcp'), true)
+  assert.equal(hasSection(a, 'skills'), true)
+  assert.equal(hasSection(a, 'subagents'), false)
 })
 
-test('computeApplyPlan: 勾选集→目标启停，stale 跳过，未定义段不碰', () => {
-  const known = { tools: new Set(['a/t1', 'a/t2', 'b/t3']), skills: new Set(['dsh/s1', 'dsh/s2']) }
-  const plan = computeApplyPlan(normalizeArchive({ tools: ['a/t1', 'gone/t9'] }), known)
-  assert.deepEqual(plan.tools, { 'a/t1': true, 'a/t2': false, 'b/t3': false })
-  assert.equal(plan.skills, null)
-  assert.deepEqual(plan.stale, ['tools/gone/t9'])
+test('computeMcpPlan: 勾选服务器→停用名单，* 整台，未勾→清空，未配置→stale', () => {
+  const plan = computeMcpPlan(
+    { github: '*', context7: ['query-docs', 'ghost'], tavily: [] },
+    { configuredServers: ['github', 'context7', 'tavily', 'serena'], knownTools: { github: ['x', 'y'], context7: ['query-docs', 'other'], tavily: [], serena: ['s1'] } },
+  )
+  assert.deepEqual(plan.entries.github, ['*'])
+  assert.deepEqual(plan.wildcards, ['github'])
+  assert.deepEqual(plan.entries.context7, ['query-docs', 'ghost'])
+  assert.deepEqual(plan.entries.tavily, [])
+  assert.deepEqual(plan.entries.serena, [])
+  assert.deepEqual(plan.stale, ['mcp/context7/ghost'])
 })
 
-test('computeApplyPlan: 段全不勾 = 全停（合法），两段同时应用', () => {
-  const known = { tools: new Set(['a/t1']), skills: new Set(['dsh/s1']) }
-  const plan = computeApplyPlan(normalizeArchive({ tools: [], skills: ['dsh/s1'] }), known)
-  assert.deepEqual(plan.tools, { 'a/t1': false })
-  assert.deepEqual(plan.skills, { 'dsh/s1': true })
+test('computeMcpPlan: 档案里不存在于配置的服务器 → stale 且不写入', () => {
+  const plan = computeMcpPlan({ gone: ['t'] }, { configuredServers: ['github'], knownTools: {} })
+  assert.deepEqual(plan.entries.github, [])
+  assert.equal(plan.entries.gone, undefined)
+  assert.deepEqual(plan.stale, ['mcp/gone'])
 })
 
-test('restore: 快照键按快照值还原，快照后新增键保持现状', () => {
-  const snapshot = snapshotRuntime({ 'a/t1': true, 'a/t2': false }, { 'dsh/s1': true })
-  const plan = computeRestorePlan(snapshot, { tools: { 'a/t1': false, 'new/t': true }, skills: { 'dsh/s1': false } })
-  assert.deepEqual(plan.tools, { 'a/t1': true, 'a/t2': false, 'new/t': true })
+test('computeSkillsPlan: 勾选集→目标启停，stale 上报', () => {
+  const plan = computeSkillsPlan(['dsh/s1', 'gone/s'], new Set(['dsh/s1', 'dsh/s2']))
+  assert.deepEqual(plan.target, { 'dsh/s1': true, 'dsh/s2': false })
+  assert.deepEqual(plan.stale, ['skills/gone/s'])
+})
+
+test('restore: mcp 按快照原文整体还原（含 *），快照后新增键保持现状；技能同前', () => {
+  const snapshot = snapshotRuntime({ github: ['*'], tavily: [] }, { 'dsh/s1': true })
+  const plan = computeRestorePlan(snapshot, { mcp: { github: [], tavily: [], fresh: ['f'] }, skills: { 'dsh/s1': false } })
+  assert.deepEqual(plan.mcp, { github: ['*'], tavily: [], fresh: ['f'] })
   assert.deepEqual(plan.skills, { 'dsh/s1': true })
 })

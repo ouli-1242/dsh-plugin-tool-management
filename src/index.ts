@@ -328,19 +328,41 @@ export default {
     const archiveService = createArchiveEngine({
       loadSlice: async () => ({ ...(await rulesService.readArchiveSlice()) }),
       saveSlice: (slice) => rulesService.patchIndex(slice),
-      knownToolKeys: async () => new Set(Object.keys(await toolStates())),
-      knownSkillKeys: async () => new Set(Object.keys(await skillStates())),
-      currentTools: toolStates,
-      currentSkills: skillStates,
-      applyTools: async (target) => {
-        for (const [key, on] of Object.entries(target)) {
-          const i = key.indexOf('/')
-          if (i <= 0) throw new Error(`工具 key 不合法: ${key}`)
-          const r: any = await mcpmToolEnabled({ serverName: key.slice(0, i), tool: key.slice(i + 1), enabled: on })
-          if (r && r.ok === false) throw new Error(`工具 ${key} 应用失败: ${r.error}`)
+      configuredServers: async () => {
+        const r: any = await mcpmListView()
+        const out: string[] = []
+        for (const row of ((r && r.rows) || [])) {
+          const n = String((row && row.serverName) || '')
+          if (n && out.indexOf(n) < 0) out.push(n)
         }
+        return out
       },
-      applySkills: async (target) => {
+      serverKnownTools: async () => {
+        const out: Record<string, string[]> = {}
+        const raw = await readDisabledTools()
+        for (const [server, list] of Object.entries(raw)) out[server] = list.filter((t) => t !== '*')
+        let schemas: any[] = []
+        try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅启停表 */ }
+        for (const s of schemas) {
+          const p = toolKeyParts(String((s && s.name) || ''))
+          if (!p) continue
+          const list = out[p.server] || (out[p.server] = [])
+          if (list.indexOf(p.tool) < 0) list.push(p.tool)
+        }
+        return out
+      },
+      currentMcpRaw: () => readDisabledTools(),
+      applyMcpEntries: async (entries: Record<string, string[]>) => {
+        const p = await ensurePaths()
+        await withWriteLock(async () => {
+          await writeJsonFile(sidecarPath(p.home, DISABLED_TOOLS_FILE), entries)
+        })
+        disabledToolsCache = { at: Date.now(), value: entries }
+        scheduleToolRestrictions()
+      },
+      knownSkillKeys: async () => new Set(Object.keys(await skillStates())),
+      currentSkills: skillStates,
+      applySkills: async (target: Record<string, boolean>) => {
         for (const [key, on] of Object.entries(target)) {
           const i = key.indexOf('/')
           if (i <= 0) throw new Error(`技能 key 不合法: ${key}`)
@@ -377,6 +399,7 @@ export default {
       ...skillsService.writeOps,
       ...rulesService.writeOps,
       ...archiveService.writeOps,
+      ...subagentService.writeOps,
       'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
       'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
       // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
@@ -1149,6 +1172,17 @@ export default {
       }
       return out
     }
+    /** 单工具停用判定（含整服务器通配 `*`——场景档案的"MCP 工具集=整台"写的就是它）。 */
+    function isToolDisabled(map: Record<string, string[]>, fullName: string): boolean {
+      if (!fullName.startsWith('mcp__')) return false
+      const rest = fullName.slice(5)
+      const i = rest.indexOf('__')
+      if (i <= 0) return false
+      const list = map[rest.slice(0, i)]
+      if (!list) return false
+      if (list.indexOf('*') >= 0) return true
+      return list.indexOf(rest.slice(i + 2)) >= 0
+    }
     async function mcpmToolEnabled(args: any): Promise<any> {
       const serverName = String((args && args.serverName) || '').trim()
       const tool = String((args && args.tool) || '').trim()
@@ -1185,11 +1219,17 @@ export default {
       // Force re-read: this runs on the tools/change path, which is rare, so a
       // stale cache must not keep an externally edited deny list hidden.
       const map = await readDisabledTools(true)
+      // 通配 `*`（整服务器停用）先展开成已注册的全名，再与精确名单合并。
       const wanted = disabledToolNames(map)
       let registered: Set<string>
       try {
         registered = new Set((await tools.schemas()).map((schema) => String(schema.name)))
       } catch (e) { return }
+      for (const [serverName, list] of Object.entries(map)) {
+        if (list.indexOf('*') < 0) continue
+        const prefix = 'mcp__' + serverName + '__'
+        for (const fullName of registered) if (fullName.startsWith(prefix)) wanted.push(fullName)
+      }
       const names = wanted.filter((name) => registered.has(name))
       if (restrictDisposer) { try { restrictDisposer() } catch (e) { /* ignore */ } restrictDisposer = null }
       if (!names.length) return
@@ -1279,7 +1319,9 @@ export default {
         return { ok: false, error: message(e) }
       }
       const descriptionLimit = (await readPluginSettings()).toolDescriptionMaxLength
-      const disabledHere = new Set((await readDisabledTools())[serverName] || [])
+      const disabledMapHere = await readDisabledTools()
+      const disabledHere = new Set(disabledMapHere[serverName] || [])
+      const wildcardHere = disabledHere.has('*')
       const toolsList: any[] = []
       for (const s of schemas) {
         const fullName = String(s && s.name || '')
@@ -1305,7 +1347,7 @@ export default {
         toolsList.push({
           name: rawName,
           description: truncateText(typeof s.description === 'string' ? s.description : '', descriptionLimit),
-          enabled: !disabledHere.has(rawName),
+          enabled: wildcardHere ? false : !disabledHere.has(rawName),
           parameters: params,
         })
       }
@@ -1315,6 +1357,7 @@ export default {
       // stay reachable; the description is unavailable once the schema is gone.
       const listed = new Set(toolsList.map((t: any) => t.name))
       for (const name of disabledHere) {
+        if (name === '*') continue // 整服务器通配：已在上方逐工具体现，不再展示占位行
         if (!listed.has(name)) {
           toolsList.push({ name, description: '（已停用；描述暂不可用）', enabled: false, parameters: [] })
         }
@@ -1829,13 +1872,30 @@ export default {
       // scene-archive-save / scene-mode-set。成功返回扁平 {ok:true, ...}，
       // 失败 {ok:false, error}；写 op 已含 archiveService.writeOps 门禁派生。
       ...archiveService.ops,
-      // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list（只读）。
+      // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list/get（只读）
+      // + subagent-create/update/delete（写，writeOps 已派生进门禁）。
       ...subagentService.ops,
-      // 场景档案勾选器数据源：实时发现的工具/技能全集 + 人设清单（一次往返）。
+      // 场景档案勾选器数据源 v2：全部 MCP 服务器（含未运行）+ 技能全集 + 人设清单。
       'scene-inventory': async () => {
-        const [tools, skills, subs] = await Promise.all([toolStates(), skillStates(), subagentService.list()])
+        const [rowsR, tools, skills, subs] = await Promise.all([mcpmListView(), toolStates(), skillStates(), subagentService.list()])
+        const rows: any[] = (rowsR && rowsR.rows) || []
+        const mcpServers: any[] = []
+        const seen = new Set<string>()
+        for (const row of rows) {
+          const name = String((row && row.serverName) || '')
+          if (!name || seen.has(name)) continue
+          seen.add(name)
+          mcpServers.push({
+            name,
+            level: row.level || null,
+            live: !!(row.live && row.live.enabled),
+            serverDisabled: !!row.disabled,
+            toolCount: typeof row.toolCount === 'number' ? row.toolCount : null,
+          })
+        }
         return {
           ok: true,
+          mcpServers,
           tools: Object.entries(tools).map(([key, enabled]) => ({ key, enabled })),
           skills: Object.entries(skills).map(([key, enabled]) => ({ key, enabled })),
           subagents: subs.map((p) => ({ name: p.name, description: p.description })),
@@ -2408,7 +2468,7 @@ export default {
         try {
           // Reads the TTL cache without I/O: the guard runs on the hot path.
           const value = disabledToolsCache ? disabledToolsCache.value : {}
-          if (disabledToolNames(value).indexOf(String((exec && exec.name) || '')) >= 0) {
+          if (isToolDisabled(value, String((exec && exec.name) || ''))) {
             return '该工具已在 MCP 管理页停用'
           }
         } catch (e) { /* fallthrough to allow */ }

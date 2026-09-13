@@ -630,7 +630,7 @@ window.__ModuleLoader__.load({
             React.createElement('div', { className: 'dsm-head' },
               React.createElement('div', { className: 'dsm-title-block' },
                 React.createElement('div', { className: 'dsm-title-row' },
-                  React.createElement('h2', { className: 'dsm-title' }, 'AGENTS.md'),
+                  React.createElement('h2', { className: 'dsm-title' }, t('tabs.prompts')),
                   React.createElement(VersionBadge, null)),
                 React.createElement('p', { className: 'dsm-desc' }, '管理全局指令基线；「应用」写入 ~/.dsh/AGENTS.md')),
               React.createElement('div', { className: 'dsm-actions' },
@@ -662,22 +662,26 @@ window.__ModuleLoader__.load({
             React.createElement('input', { ref: importInput, type: 'file', accept: '.md,.markdown,.txt', className: 'dsm-hidden-input', onChange: function (e) { if (e.target.files && e.target.files[0]) doImport(e.target.files[0]); e.target.value = ''; } }))
         }
 
-        // TOOLS 设置页：一个侧栏项，内部 tab 切换 MCP / Skills / AGENTS.md / History / Rules。
+        // TOOLS 设置页：一个侧栏项，内部 tab 切换 场景 / MCP / Skills / 子智能体 / 提示词 / 记忆 / 会话。
         function ToolsSection() {
-          var tabState = React.useState('mcp')
+          var tabState = React.useState('scenes')
           var active = tabState[0], setActive = tabState[1]
-          var page = active === 'mcp' ? React.createElement(MCPPage)
+          var page = active === 'scenes' ? React.createElement(ScenesPage)
+            : active === 'mcp' ? React.createElement(MCPPage)
             : active === 'skills' ? React.createElement(SkillManagerSection, { t: t })
-            : active === 'agents-md' ? React.createElement(AgentsMdPage)
-            : active === 'history' ? React.createElement(HistoryPage)
-            : React.createElement(SceneMemoryPage)
+            : active === 'subagents' ? React.createElement(SubagentsPage)
+            : active === 'prompts' ? React.createElement(AgentsMdPage)
+            : active === 'memory' ? React.createElement(MemoryPage)
+            : React.createElement(HistoryPage)
           return React.createElement('section', { className: 'dsm-section' },
             React.createElement('div', { className: 'dsm-tabs' },
+              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'scenes' ? ' dsm-tab-active' : ''), onClick: function () { setActive('scenes') } }, t('tabs.scenes')),
               React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'mcp' ? ' dsm-tab-active' : ''), onClick: function () { setActive('mcp') } }, 'MCP'),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'skills' ? ' dsm-tab-active' : ''), onClick: function () { setActive('skills') } }, 'Skills'),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'agents-md' ? ' dsm-tab-active' : ''), onClick: function () { setActive('agents-md') } }, 'AGENTS.md'),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'history' ? ' dsm-tab-active' : ''), onClick: function () { setActive('history') } }, 'History'),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'memory' ? ' dsm-tab-active' : ''), onClick: function () { setActive('memory') } }, t('memory.title')),
+              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'skills' ? ' dsm-tab-active' : ''), onClick: function () { setActive('skills') } }, t('tabs.skills')),
+              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'subagents' ? ' dsm-tab-active' : ''), onClick: function () { setActive('subagents') } }, t('tabs.subagents')),
+              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'prompts' ? ' dsm-tab-active' : ''), onClick: function () { setActive('prompts') } }, t('tabs.prompts')),
+              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'memory' ? ' dsm-tab-active' : ''), onClick: function () { setActive('memory') } }, t('tabs.memory')),
+              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'sessions' ? ' dsm-tab-active' : ''), onClick: function () { setActive('sessions') } }, t('tabs.sessions')),
               React.createElement('div', { style: { marginLeft: 'auto' } }, React.createElement(FeedbackLinks, null))),
             page)
         }
@@ -753,13 +757,19 @@ window.__ModuleLoader__.load({
         "diagnostic.frontmatter.missing": "缺少完整 YAML frontmatter", "diagnostic.name.missing": "frontmatter 缺少 name", "diagnostic.name.invalid": "技能名需 kebab-case：{name}", "diagnostic.description.missing": "frontmatter 缺少 description", "diagnostic.invocation.invalid": "调用策略字段值无效", "diagnostic.shadowed": "被更高优先级来源 {root} 覆盖",
         "action.enable": "启用", "action.disable": "停用", "action.create": "创建", "action.delete": "删除", "action.restore": "恢复", "action.toggle": "启用或停用",
         "root.dsh": "DSH 技能", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
-        "memory.title": "场景",
+        "memory.title": "记忆",
+        "tabs.scenes": "场景", "tabs.skills": "技能", "tabs.subagents": "子智能体", "tabs.prompts": "提示词", "tabs.memory": "记忆", "tabs.sessions": "会话",
+        "scenes.title": "场景", "scenes.desc": "场景档案：把 MCP 工具、技能、子智能体、记忆按场景自由搭配；勾选启用后记忆自动注入，档案可一键切入/退出。",
+        "scenes.hasArchive": "档案", "scenes.mcp.hint": "添加「MCP 工具集」后，勾选要启用的服务器（含未运行的）；「选工具」可细化到具体工具。",
+        "scenes.mcp.allTools": "全部工具", "scenes.mcp.pickedCount": "指定 {count} 个工具", "scenes.mcp.notRunning": "未运行", "scenes.mcp.pickTools": "选工具",
+        "scenes.mcp.toolsOf": "工具明细", "scenes.mcp.back": "返回", "scenes.mcp.noTools": "该服务器当前没有可列出的工具（未运行或无工具）", "scenes.mcp.drillHint": "勾选 = 该场景下启用；不勾 = 停用。整台勾选时默认全部工具。",
+        "scenes.skills.hint": "添加「技能集」后，勾选该场景下启用的技能。", "scenes.subagents.hint": "添加「子智能体绑定」后，勾选本场景可调用的人设。", "scenes.subagents.empty": "还没有人设——到「子智能体」页创建。",
         "memory.mode.current": "当前模式", "memory.mode.set": "设为当前模式", "memory.mode.exit": "退出模式",
         "memory.archive.edit": "档案", "memory.archive.title": "场景档案",
         "memory.archive.tools": "MCP 工具集", "memory.archive.skills": "技能集", "memory.archive.subagents": "子智能体绑定",
-        "memory.archive.addTools": "+ 工具集", "memory.archive.addSkills": "+ 技能集", "memory.archive.addSubagents": "+ 子智能体",
-        "memory.archive.removeSection": "移除段", "memory.archive.save": "保存到场景",
-        "memory.archive.emptySection": "该段已定义且全不勾 = 全部停用", "memory.archive.stale": "失效项（已不存在，已跳过）: {items}",
+        "memory.archive.removeSection": "移除段",
+        "memory.archive.addTools": "+ 添加 MCP 工具集", "memory.archive.addSkills": "+ 添加技能集", "memory.archive.addSubagents": "+ 添加子智能体绑定",
+        "memory.archive.stale": "失效项（已不存在，已跳过）: {items}",
         "memory.result.archiveSaved": "已保存场景档案：{name}", "memory.result.modeSet": "已进入模式：{name}", "memory.result.modeExited": "已退出模式",
         "memory.desc": "勾选启用的场景，里面的记忆会自动进入系统提示词，不用每次重复解释。",
         "memory.btn.refresh": "刷新", "memory.btn.new": "新建记忆", "memory.btn.create": "创建", "memory.btn.save": "保存",
@@ -846,7 +856,19 @@ window.__ModuleLoader__.load({
         "diagnostic.frontmatter.missing": "Missing complete YAML frontmatter", "diagnostic.name.missing": "Frontmatter is missing name", "diagnostic.name.invalid": "Skill name must be kebab-case: {name}", "diagnostic.description.missing": "Frontmatter is missing description", "diagnostic.invocation.invalid": "Invocation policy value is invalid", "diagnostic.shadowed": "Shadowed by higher-priority source {root}",
         "action.enable": "enable", "action.disable": "disable", "action.create": "create", "action.delete": "delete", "action.restore": "restore", "action.toggle": "enabling or disabling",
         "root.dsh": "DSH skills", "root.agents": "Shared Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "Project DSH", "root.projectAgents": "Project Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
-        "memory.title": "Scenes",
+        "memory.title": "Memories",
+        "tabs.scenes": "Scenes", "tabs.skills": "Skills", "tabs.subagents": "Subagents", "tabs.prompts": "Prompts", "tabs.memory": "Memories", "tabs.sessions": "Sessions",
+        "scenes.title": "Scenes", "scenes.desc": "Scene profiles: combine MCP tools, skills, subagents and memories per scene. Enable a scene to inject its memories; apply a profile with one click.",
+        "scenes.hasArchive": "profile", "scenes.mcp.hint": "Add the MCP section first, then check the servers to enable (stopped ones included); use Pick tools to narrow to specific tools.",
+        "scenes.mcp.allTools": "all tools", "scenes.mcp.pickedCount": "{count} tools picked", "scenes.mcp.notRunning": "not running", "scenes.mcp.pickTools": "Pick tools",
+        "scenes.mcp.toolsOf": "Tool details", "scenes.mcp.back": "Back", "scenes.mcp.noTools": "No tools listed for this server (not running or no tools)", "scenes.mcp.drillHint": "Checked = enabled in this scene; unchecked = disabled. A whole-server check defaults to all tools.",
+        "scenes.skills.hint": "Add the skills section first, then check the skills enabled in this scene.", "scenes.subagents.hint": "Add the subagent section first, then check the personas callable in this scene.", "scenes.subagents.empty": "No personas yet — create one on the Subagents page.",
+        "memory.mode.current": "Active mode", "memory.mode.set": "Set as active mode", "memory.mode.exit": "Exit mode",
+        "memory.archive.edit": "Profile", "memory.archive.title": "Scene profile",
+        "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding",
+        "memory.archive.removeSection": "Remove section",
+        "memory.archive.stale": "Stale entries (no longer exist, skipped): {items}",
+        "memory.result.archiveSaved": "Scene profile saved: {name}", "memory.result.modeSet": "Entered mode: {name}", "memory.result.modeExited": "Exited mode",
         "memory.mode.current": "Active mode", "memory.mode.set": "Set as active mode", "memory.mode.exit": "Exit mode",
         "memory.archive.edit": "Profile", "memory.archive.title": "Scene profile",
         "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding",
@@ -1480,7 +1502,7 @@ function callApi(path, options) {
             React.createElement('div', { className: 'dsm-head' },
               React.createElement('div', { className: 'dsm-title-block' },
                 React.createElement('div', { className: 'dsm-title-row' },
-                  React.createElement('h2', { className: 'dsm-title' }, 'History'),
+                  React.createElement('h2', { className: 'dsm-title' }, t('tabs.sessions')),
                   React.createElement(VersionBadge, null)),
                 React.createElement('p', { className: 'dsm-desc' }, '管理已归档会话；超保留期自动清理')),
               React.createElement('div', { className: 'dsm-actions' },
@@ -1602,14 +1624,388 @@ function callApi(path, options) {
         // 变更单 01 之后 Rules 与 Scenes 合并为本页：**场景（一级目录）是分组维度，
         // 记忆（.md）是内容**；勾选启用后该目录树内所有 .md 正文自动进入系统提示词。
         // 原 Scenes 页的「agent preset ↔ 分组绑定」降级为页底的「高级」折叠区（可选）。
-        function SceneMemoryPage() {
+        // ---------- 场景页：场景清单 + 档案（MCP 工具集/技能集/子智能体绑定，三段自由搭配）+ 当前模式 ----------
+        function ScenesPage() {
+          var EMPTY_MODE = { scene: null, snapshot: null }
+          var state = React.useState({ loading: true, error: null, scenes: [], activeMode: 'all', mode: EMPTY_MODE, archives: {} })
+          var data = state[0], setData = state[1]
+          var bs = React.useState(false)
+          var busy = bs[0], setBusy = bs[1]
+          var rs = React.useState(null)
+          var result = rs[0], setResult = rs[1]
+          var ms = React.useState(null)
+          var modal = ms[0], setModal = ms[1]
+          var sfs = React.useState({ name: '', error: null })
+          var sceneForm = sfs[0], setSceneForm = sfs[1]
+          var dts = React.useState(null)
+          var drillTools = dts[0], setDrillTools = dts[1]
+          var dss = React.useState(null)
+          var drillServer = dss[0], setDrillServer = dss[1]
+          React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
+          function refresh(silent) {
+            if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
+            apiCall('scene-mode-get', {}).then(function (m) {
+              if (m && m.ok) setData(function (prev) { return Object.assign({}, prev, { mode: m.mode || EMPTY_MODE, archives: m.archives || {} }) })
+            }).catch(function () {})
+            apiCall('rules-list', {}).then(function (r) {
+              if (r && r.ok) setData(function (prev) { return Object.assign({}, prev, { loading: false, error: null, scenes: r.scenes || [], activeMode: r.activeMode === 'custom' ? 'custom' : 'all', stats: r.stats || prev.stats }) })
+              else setData(function (prev) { return Object.assign({}, prev, { loading: false, error: translateError(t, r) }) })
+            }).catch(function (e) { setData(function (prev) { return Object.assign({}, prev, { loading: false, error: String((e && e.message) || e) }) }) })
+          }
+          React.useEffect(function () { refresh() }, [])
+          function isValidSceneName(name) {
+            return name.length > 0 && name.length <= 64 && !name.startsWith('.') && !/[\\/<>:"|?*]/.test(name)
+          }
+          // ── 场景启用开关（记忆注入；勾满全部 = 默认全部启用）──
+          function setActiveScenes(names) {
+            if (busy) return
+            setBusy(true); setResult(null)
+            var real = (data.scenes || []).filter(function (s) { return !s.shared }).map(function (s) { return s.name })
+            var payload = real.length > 0 && real.every(function (n) { return names.indexOf(n) >= 0 }) ? { all: true } : { scenes: names }
+            apiCall('rules-set-active', payload).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.active') }); refresh(true) }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function toggleScene(scene) {
+            if (busy || scene.shared) return
+            var names = (data.scenes || []).filter(function (s) { return s.active && !s.shared }).map(function (s) { return s.name })
+            var i = names.indexOf(scene.name)
+            if (i >= 0) names.splice(i, 1)
+            else names.push(scene.name)
+            setActiveScenes(names)
+          }
+          // ── 场景建 / 删 ──
+          function openCreateScene() { setSceneForm({ name: '', error: null }); setModal({ type: 'scene-create' }) }
+          function submitCreateScene() {
+            var name = String(sceneForm.name || '').trim()
+            if (!isValidSceneName(name)) { setSceneForm(Object.assign({}, sceneForm, { error: t('error.rules.invalidGroup') })); return }
+            setBusy(true)
+            apiCall('rules-create-scene', { name: name }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setModal(null); setResult({ ok: true, text: t('memory.result.sceneCreated', { name: name }) }); refresh(true) }
+              else setSceneForm(Object.assign({}, sceneForm, { error: translateError(t, res) }))
+            }).catch(function (e) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: String((e && e.message) || e) })) })
+          }
+          function submitDeleteScene(name) {
+            setBusy(true)
+            apiCall('rules-remove-scene', { name: name }).then(function (res) {
+              setBusy(false); setModal(null)
+              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.sceneRemoved', { name: name }) }); refresh(true) }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          // ── 档案（mcp 两级 / skills / subagents 三段自由搭配）──
+          function openArchive(name) {
+            setBusy(true)
+            Promise.all([apiCall('scene-mode-get', {}), apiCall('scene-inventory', {})]).then(function (rs) {
+              setBusy(false)
+              var modeRes = rs[0], inv = rs[1]
+              if (!(inv && inv.ok)) { setResult({ ok: false, text: translateError(t, inv) }); return }
+              var archives = (modeRes && modeRes.ok ? modeRes.archives : null) || data.archives || {}
+              var archive = archives[name] || {}
+              setModal({ type: 'scene-archive', name: name, drill: null,
+                sections: {
+                  mcp: archive.mcp ? Object.assign({}, archive.mcp) : null,
+                  skills: Array.isArray(archive.skills) ? archive.skills.slice() : null,
+                  subagents: Array.isArray(archive.subagents) ? archive.subagents.slice() : null,
+                },
+                inventory: { mcpServers: inv.mcpServers || [], skills: inv.skills || [], subagents: inv.subagents || [] } })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function modalSections() { return modal && modal.type === 'scene-archive' ? modal.sections : null }
+          function setSections(sections) { if (modal && modal.type === 'scene-archive') setModal(Object.assign({}, modal, { sections: sections })) }
+          function toggleMcpServer(server) {
+            var sections = modalSections(); if (!sections) return
+            var mcp = Object.assign({}, sections.mcp || {})
+            if (mcp[server] !== undefined) { delete mcp[server]; if (drillServer === server) setDrillServer(null) }
+            else mcp[server] = '*'
+            setSections(Object.assign({}, sections, { mcp: mcp }))
+          }
+          function openDrill(server) {
+            setDrillServer(server)
+            setDrillTools(null)
+            apiCall('mcpm-tools', { serverName: server }).then(function (res) {
+              if (res && res.ok) setDrillTools((res.tools || []).map(function (x) { return { key: server + '/' + x.name, short: x.name, enabled: x.enabled !== false } }))
+              else setDrillTools([])
+            }).catch(function () { setDrillTools([]) })
+          }
+          function toggleDrillTool(server, short) {
+            var sections = modalSections(); if (!sections) return
+            var mcp = Object.assign({}, sections.mcp || {})
+            var cur = mcp[server] === '*' ? (drillTools || []).filter(function (t) { return t.enabled }).map(function (t) { return t.short }) : (mcp[server] || []).slice()
+            var i = cur.indexOf(short)
+            if (i >= 0) cur.splice(i, 1); else cur.push(short)
+            mcp[server] = cur
+            setSections(Object.assign({}, sections, { mcp: mcp }))
+          }
+          function submitArchive() {
+            if (!modalSections()) return
+            setBusy(true)
+            apiCall('scene-archive-save', { scene: modal.name, archive: modal.sections }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) {
+                setModal(null)
+                setResult({ ok: true, text: t('memory.result.archiveSaved', { name: modal.name }) + (res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : '') })
+                refresh(true)
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function enterMode(name) {
+            setBusy(true)
+            apiCall('scene-mode-set', { scene: name }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.modeSet', { name: name }) + (res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : '') }); refresh(true) }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function exitMode() {
+            setBusy(true)
+            apiCall('scene-mode-set', { scene: null }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.modeExited') }); refresh(true) }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          var modeScene = data.mode && data.mode.scene
+          return React.createElement('section', { className: 'dsm-section' },
+            React.createElement('div', { className: 'dsm-head' },
+              React.createElement('div', { className: 'dsm-title-block' },
+                React.createElement('div', { className: 'dsm-title-row' },
+                  React.createElement('h2', { className: 'dsm-title' }, t('scenes.title')),
+                  React.createElement(VersionBadge, null)),
+                React.createElement('p', { className: 'dsm-desc' }, t('scenes.desc'))),
+              React.createElement('div', { className: 'dsm-actions' },
+                modeScene ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current') + ': ' + modeScene) : null,
+                modeScene ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: exitMode }, t('memory.mode.exit')) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')))),
+            result && !result.ok ? React.createElement('div', { key: 'rerr', className: 'dsm-feedback dsm-error', role: 'alert' }, result.text) : null,
+            result && result.ok ? React.createElement('div', { key: 'rtoast', className: 'dsm-toast', role: 'status', 'aria-live': 'polite' }, result.text) : null,
+            data.error ? React.createElement('div', { key: 'gerr', className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
+            data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+              : React.createElement('div', { className: 'dsm-sources' }, (data.scenes || []).map(function (scene) {
+                var name = scene.name
+                var archive = data.archives[name]
+                var hasModeSections = !!(archive && (archive.mcp || Array.isArray(archive.skills)))
+                return React.createElement('div', { key: 's:' + name, className: 'dsm-source' },
+                  React.createElement('div', { className: 'dsm-source-head' },
+                    React.createElement('div', { className: 'dsm-source-head-main' },
+                      React.createElement('span', { className: 'dsm-source-title' }, name === '' ? t('memory.scene.global') : name),
+                      scene.shared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
+                      modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
+                      archive ? React.createElement('span', { className: 'dsm-tag' }, t('scenes.hasArchive')) : null,
+                      scene.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null),
+                    React.createElement('div', { className: 'dsm-source-actions' },
+                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openArchive(name) } }, t('memory.archive.edit')),
+                      hasModeSections && modeScene !== name ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { enterMode(name) } }, t('memory.mode.set')) : null,
+                      !scene.shared && name !== '' ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')) : null,
+                      scene.shared ? null : React.createElement(Switch, { on: scene.active === true, disabled: busy, label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } }))))
+              })),
+            modal && modal.type === 'scene-create' ? React.createElement(Modal, { key: 'screate', title: t('memory.scene.createTitle'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('div', { className: 'dsm-form' },
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
+                  React.createElement('input', { className: 'dsm-control' + (sceneForm.error ? ' dsm-rule-invalid' : ''), value: sceneForm.name || '', placeholder: t('memory.field.group.placeholder'), onChange: function (e) { setSceneForm({ name: e.target.value, error: null }) } }),
+                  React.createElement('p', { className: sceneForm.error ? 'dsm-rule-hint' : 'dsm-help' }, sceneForm.error || t('memory.field.group.hint'))),
+                React.createElement('p', { className: 'dsm-help' }, t('memory.scene.createHelp'))),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitCreateScene }, t('memory.btn.create')))) : null,
+            modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', title: t('memory.deleteScene.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('memory.deleteScene.desc', { name: modal.name })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDeleteScene(modal.name) } }, t('memory.btn.deleteScene')))) : null,
+            // 档案编辑器：三段自由搭配；MCP 段两级——先勾服务器（全部展示，含未运行），最右「选工具」进明细
+            modal && modal.type === 'scene-archive' ? React.createElement(Modal, { key: 'sarch', wide: true, title: t('memory.archive.title') + ' · ' + modal.name, closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('div', { className: 'dsm-form' },
+                modal.drill ? (function () {
+                  var mcp = modal.sections.mcp || {}
+                  var spec = mcp[modal.drill]
+                  var isStar = spec === '*'
+                  var known = drillTools
+                  return React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('div', { className: 'dsm-source-head' },
+                      React.createElement('span', { className: 'dsm-label' }, t('scenes.mcp.toolsOf') + ' · ' + modal.drill),
+                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setDrillServer(null) } }, t('scenes.mcp.back'))),
+                    known === null ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+                      : known.length ? React.createElement('div', { style: { maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(127,127,127,.35)', borderRadius: '6px', padding: '4px' } },
+                        known.map(function (item) {
+                          var checked = isStar ? true : (Array.isArray(spec) && spec.indexOf(item.short) >= 0)
+                          return React.createElement('label', { key: item.key, style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '2px 4px', cursor: 'pointer' } },
+                            React.createElement('input', { type: 'checkbox', checked: checked, disabled: busy, onChange: function () { toggleDrillTool(modal.drill, item.short) } }),
+                            React.createElement('span', { style: { flex: '1' } }, item.short),
+                            item.enabled === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null)
+                        })) : React.createElement('div', { className: 'dsm-empty' }, t('scenes.mcp.noTools')),
+                    React.createElement('p', { className: 'dsm-rule-hint' }, t('scenes.mcp.drillHint')))
+                })() : React.createElement(React.Fragment, null,
+                  React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('div', { className: 'dsm-source-head', style: { marginBottom: '4px' } },
+                      React.createElement('span', { className: 'dsm-label' }, t('memory.archive.tools')),
+                      modal.sections.mcp ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { var s = Object.assign({}, modalSections()); delete s.mcp; setSections(s) } }, t('memory.archive.removeSection'))  : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setSections(Object.assign({}, modalSections(), { mcp: {} })) } }, t('memory.archive.addTools'))),
+                    modal.sections.mcp ? React.createElement('div', { style: { maxHeight: '220px', overflowY: 'auto', border: '1px solid rgba(127,127,127,.35)', borderRadius: '6px', padding: '4px' } },
+                      (modal.inventory.mcpServers || []).map(function (server) {
+                        var selected = modal.sections.mcp[server.name] !== undefined
+                        var spec = modal.sections.mcp[server.name]
+                        var specText = !selected ? '' : spec === '*' ? t('scenes.mcp.allTools') : t('scenes.mcp.pickedCount', { count: spec.length })
+                        return React.createElement('div', { key: server.name, style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '3px 4px' } },
+                          React.createElement('input', { type: 'checkbox', checked: selected, disabled: busy, onChange: function () { toggleMcpServer(server.name) } }),
+                          React.createElement('span', { style: { flex: '1' } }, server.name),
+                          server.live ? null : React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
+                          specText ? React.createElement('span', { className: 'dsm-help' }, specText) : null,
+                          selected ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openDrill(server.name) } }, t('scenes.mcp.pickTools')) : null)
+                      }))
+                      : React.createElement('p', { className: 'dsm-help' }, t('scenes.mcp.hint'))),
+                  React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('div', { className: 'dsm-source-head', style: { marginBottom: '4px' } },
+                      React.createElement('span', { className: 'dsm-label' }, t('memory.archive.skills')),
+                      modal.sections.skills ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { var s = Object.assign({}, modalSections()); delete s.skills; setSections(s) } }, t('memory.archive.removeSection'))  : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setSections(Object.assign({}, modalSections(), { skills: (modal.inventory.skills || []).filter(function (s2) { return s2.enabled }).map(function (s2) { return s2.key }) })) } }, t('memory.archive.addSkills'))),
+                    modal.sections.skills ? React.createElement('div', { style: { maxHeight: '220px', overflowY: 'auto', border: '1px solid rgba(127,127,127,.35)', borderRadius: '6px', padding: '4px' } },
+                      (modal.inventory.skills || []).map(function (item) {
+                        var on = modal.sections.skills.indexOf(item.key) >= 0
+                        return React.createElement('label', { key: item.key, style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '2px 4px', cursor: 'pointer' } },
+                          React.createElement('input', { type: 'checkbox', checked: on, disabled: busy, onChange: function () {
+                            var list = modal.sections.skills.slice(); var i = list.indexOf(item.key)
+                            if (i >= 0) list.splice(i, 1); else list.push(item.key)
+                            setSections(Object.assign({}, modalSections(), { skills: list }))
+                          } }),
+                          React.createElement('span', { style: { flex: '1' } }, item.key),
+                          item.enabled === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null)
+                      }))
+                      : React.createElement('p', { className: 'dsm-help' }, t('scenes.skills.hint'))),
+                  React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('div', { className: 'dsm-source-head', style: { marginBottom: '4px' } },
+                      React.createElement('span', { className: 'dsm-label' }, t('memory.archive.subagents')),
+                      modal.sections.subagents ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { var s = Object.assign({}, modalSections()); delete s.subagents; setSections(s) } }, t('memory.archive.removeSection'))  : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setSections(Object.assign({}, modalSections(), { subagents: [] })) } }, t('memory.archive.addSubagents'))),
+                    modal.sections.subagents ? React.createElement('div', { style: { maxHeight: '220px', overflowY: 'auto', border: '1px solid rgba(127,127,127,.35)', borderRadius: '6px', padding: '4px' } },
+                      (modal.inventory.subagents || []).length ? (modal.inventory.subagents || []).map(function (s) {
+                        var on = modal.sections.subagents.indexOf(s.name) >= 0
+                        return React.createElement('label', { key: s.name, style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '2px 4px', cursor: 'pointer' } },
+                          React.createElement('input', { type: 'checkbox', checked: on, disabled: busy, onChange: function () {
+                            var list = modal.sections.subagents.slice(); var i = list.indexOf(s.name)
+                            if (i >= 0) list.splice(i, 1); else list.push(s.name)
+                            setSections(Object.assign({}, modalSections(), { subagents: list }))
+                          } }),
+                          React.createElement('span', { style: { flex: '1' } }, s.name + (s.description ? ' — ' + s.description : '')))
+                      }) : React.createElement('div', { className: 'dsm-empty' }, t('scenes.subagents.empty')))
+                      : React.createElement('p', { className: 'dsm-help' }, t('scenes.subagents.hint'))))),
+                React.createElement('div', { className: 'dsm-modal-actions' },
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-primary', disabled: busy, onClick: submitArchive }, t('memory.archive.save')))) : null)
+        }
+        // ---------- 子智能体页：人设文件（~/.dsh/subagents/*.md）管理 ----------
+        function SubagentsPage() {
+          var state = React.useState({ loading: true, error: null, subagents: [] })
+          var data = state[0], setData = state[1]
+          var bs = React.useState(false)
+          var busy = bs[0], setBusy = bs[1]
+          var rs = React.useState(null)
+          var result = rs[0], setResult = rs[1]
+          var ms = React.useState(null)
+          var modal = ms[0], setModal = ms[1]
+          React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
+          function refresh(silent) {
+            if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
+            apiCall('subagent-list', {}).then(function (r) {
+              if (r && r.ok) setData({ loading: false, error: null, subagents: r.subagents || [] })
+              else setData({ loading: false, error: translateError(t, r), subagents: [] })
+            }).catch(function (e) { setData({ loading: false, error: String((e && e.message) || e), subagents: [] }) })
+          }
+          React.useEffect(function () { refresh() }, [])
+          function openEditor(name) {
+            if (!name) { setModal({ type: 'editor', mode: 'create', form: { name: '', description: '', model: '', tools: '', body: '', error: null } }); return }
+            setBusy(true)
+            apiCall('subagent-get', { name: name }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) {
+                var p = res.persona || {}
+                setModal({ type: 'editor', mode: 'edit', form: { name: p.name || name, description: p.description || '', model: p.model || '', tools: (p.tools || []).join(', '), body: p.body || '', error: null } })
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function setForm(patch) { if (modal && modal.type === 'editor') setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, patch) })) }
+          function submitEditor() {
+            if (!modal || modal.type !== 'editor') return
+            setBusy(true)
+            var op = modal.mode === 'create' ? 'subagent-create' : 'subagent-update'
+            apiCall(op, { name: modal.form.name, description: modal.form.description, model: modal.form.model, tools: modal.form.tools, body: modal.form.body }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setModal(null); setResult({ ok: true, text: t('subagents.result.saved', { name: modal.form.name }) }); refresh(true) }
+              else setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, { error: translateError(t, res) }) }))
+            }).catch(function (e) { setBusy(false); setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, { error: String((e && e.message) || e) }) })) })
+          }
+          function submitDelete(name) {
+            setBusy(true)
+            apiCall('subagent-delete', { name: name }).then(function (res) {
+              setBusy(false); setModal(null)
+              if (res && res.ok) { setResult({ ok: true, text: t('subagents.result.deleted', { name: name }) }); refresh(true) }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          return React.createElement('section', { className: 'dsm-section' },
+            React.createElement('div', { className: 'dsm-head' },
+              React.createElement('div', { className: 'dsm-title-block' },
+                React.createElement('div', { className: 'dsm-title-row' },
+                  React.createElement('h2', { className: 'dsm-title' }, t('subagents.title')),
+                  React.createElement(VersionBadge, null)),
+                React.createElement('p', { className: 'dsm-desc' }, t('subagents.desc'))),
+              React.createElement('div', { className: 'dsm-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { openEditor(null) } }, t('subagents.new')))),
+            result && !result.ok ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, result.text) : null,
+            result && result.ok ? React.createElement('div', { className: 'dsm-toast', role: 'status', 'aria-live': 'polite' }, result.text) : null,
+            data.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
+            data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+              : data.subagents.length ? React.createElement('div', { className: 'dsm-sources' }, data.subagents.map(function (p) {
+                return React.createElement('div', { key: p.name, className: 'dsm-source' },
+                  React.createElement('div', { className: 'dsm-source-head' },
+                    React.createElement('div', { className: 'dsm-source-head-main' },
+                      React.createElement('span', { className: 'dsm-source-title' }, p.name),
+                      React.createElement('span', { className: 'dsm-note' }, p.description || '')),
+                    React.createElement('div', { className: 'dsm-source-actions' },
+                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditor(p.name) } }, t('memory.edit')),
+                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'delete', name: p.name }) } }, t('memory.delete')))))
+              })) : React.createElement('div', { className: 'dsm-empty' }, t('subagents.empty')),
+            modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'sedit', wide: true, title: modal.mode === 'create' ? t('subagents.create') : t('subagents.edit') + ' · ' + modal.form.name, closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('div', { className: 'dsm-form' },
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.name')),
+                  React.createElement('input', { className: 'dsm-control', value: modal.form.name || '', disabled: modal.mode === 'edit', placeholder: 'code-review', onChange: function (e) { setForm({ name: e.target.value }) } }),
+                  React.createElement('p', { className: 'dsm-help' }, t('subagents.field.name.hint'))),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.description')),
+                  React.createElement('input', { className: 'dsm-control', value: modal.form.description || '', placeholder: t('subagents.field.description.placeholder'), onChange: function (e) { setForm({ description: e.target.value }) } }),
+                  React.createElement('p', { className: 'dsm-help' }, t('subagents.field.description.hint'))),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
+                  React.createElement('input', { className: 'dsm-control', value: modal.form.model || '', placeholder: t('subagents.field.model.placeholder'), onChange: function (e) { setForm({ model: e.target.value }) } })),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.tools')),
+                  React.createElement('input', { className: 'dsm-control', value: modal.form.tools || '', placeholder: 'read_file, glob', onChange: function (e) { setForm({ tools: e.target.value }) } }),
+                  React.createElement('p', { className: 'dsm-help' }, t('subagents.field.tools.hint'))),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.body')),
+                  React.createElement('textarea', { className: 'dsm-control', style: { minHeight: '200px' }, value: modal.form.body || '', placeholder: t('subagents.field.body.placeholder'), onChange: function (e) { setForm({ body: e.target.value }) } })),
+                modal.form.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(modal.form.error)) : null),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-primary', disabled: busy || (modal.mode === 'create' && !String(modal.form.name || '').trim()) || !String(modal.form.body || '').trim(), onClick: submitEditor }, t('memory.btn.save')))) : null,
+            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'sdel2', title: t('subagents.delete.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('subagents.delete.desc', { name: modal.name })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.name) } }, t('memory.btn.delete.confirm')))) : null)
+        }
+
+        function MemoryPage() {
           var EMPTY_STATS = { total: 0, enabled: 0, scenes: 0 }
           var EMPTY_MEMORY = { usedBytes: 0, maxBytes: 0, truncated: false }
           var state = React.useState({
             loading: true, error: null,
             rules: [], scenes: [], activeMode: 'all',
             sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS,
-            modeInfo: { scene: null, snapshot: null }, archives: {},
           })
           var data = state[0], setData = state[1]
           var qs = React.useState('')
@@ -1626,9 +2022,7 @@ function callApi(path, options) {
           var busy = bs[0], setBusy = bs[1]
           var es = React.useState(null)
           var editor = es[0], setEditor = es[1]
-          // 新建场景弹窗（场景 = scene-memory/ 下的一级目录）。
-          var scfs = React.useState({ name: '', error: null })
-          var sceneForm = scfs[0], setSceneForm = scfs[1]
+          // 新建场景弹窗与场景建/删已移至「场景」页（ScenesPage）。
           // 记忆回收站：列表在打开弹窗时按需拉取（rules-trash-list）。
           var trs = React.useState({ loading: false, error: null, entries: [] })
           var trash = trs[0], setTrash = trs[1]
@@ -1654,10 +2048,6 @@ function callApi(path, options) {
 
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
-            // 模式/档案与规则清单并行拉取；模式失败不打断主数据渲染。
-            apiCall('scene-mode-get', {}).then(function (m) {
-              if (m && m.ok) setData(function (prev) { return Object.assign({}, prev, { modeInfo: m.mode || { scene: null, snapshot: null }, archives: m.archives || {} }) })
-            }).catch(function () {})
             apiCall('rules-list', {}).then(function (r) {
               if (r && r.ok) {
                 // 合并式更新：保留并行 scene-mode-get 写入的 modeInfo/archives（整对象替换会抹掉它们）。
@@ -1685,31 +2075,7 @@ function callApi(path, options) {
             return function () { clearTimeout(timer) }
           }, [result])
 
-          // ── 启用场景（全局持久化，切换后下一个请求即生效）──
-          // 勾满全部场景 → 回到「默认全部启用」（清空显式集合，新建场景自动生效）。
-          function setActiveScenes(names) {
-            if (busy) return
-            setBusy(true); setResult(null)
-            var real = (data.scenes || []).filter(function (s) { return !s.shared }).map(function (s) { return s.name })
-            var payload = real.length > 0 && real.every(function (n) { return names.indexOf(n) >= 0 }) ? { all: true } : { scenes: names }
-            apiCall('rules-set-active', payload).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.active') }); refresh(true) }
-              else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
-          }
-          function toggleScene(scene) {
-            if (busy || scene.shared) return
-            var names = (data.scenes || []).filter(function (s) { return s.active && !s.shared }).map(function (s) { return s.name })
-            var i = names.indexOf(scene.name)
-            if (i >= 0) names.splice(i, 1)
-            else names.push(scene.name)
-            setActiveScenes(names)
-          }
-          function enableAllScenes() {
-            if (busy) return
-            setActiveScenes((data.scenes || []).filter(function (s) { return !s.shared }).map(function (s) { return s.name }))
-          }
+          // ── 启用场景开关已移至「场景」页（ScenesPage）──
 
           // ── 记忆 CRUD ──
           function openCreate(sceneName) {
@@ -1779,103 +2145,9 @@ function callApi(path, options) {
             return apiCall('rules-attach', { id: id, files: files.map(function (f) { return { path: f.name, data: f.data } }) })
           }
 
-          // ── 场景档案（勾选集）与当前模式（设计 §2/§3.3）──
-          function openArchive(name) {
-            setBusy(true)
-            Promise.all([apiCall('scene-mode-get', {}), apiCall('scene-inventory', {})]).then(function (rs) {
-              setBusy(false)
-              var modeRes = rs[0], inv = rs[1]
-              if (!(inv && inv.ok)) { setResult({ ok: false, text: translateError(t, inv) }); return }
-              var archives = (modeRes && modeRes.ok ? modeRes.archives : null) || data.archives || {}
-              var archive = archives[name] || {}
-              setModal({ type: 'scene-archive', name: name,
-                sections: {
-                  tools: Array.isArray(archive.tools) ? archive.tools.slice() : null,
-                  skills: Array.isArray(archive.skills) ? archive.skills.slice() : null,
-                  subagents: Array.isArray(archive.subagents) ? archive.subagents.slice() : null,
-                },
-                inventory: { tools: inv.tools || [], skills: inv.skills || [], subagents: inv.subagents || [] } })
-            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
-          }
-          function modalSections() { return modal && modal.type === 'scene-archive' ? modal.sections : null }
-          function setSections(sections) { if (modal && modal.type === 'scene-archive') setModal(Object.assign({}, modal, { sections: sections })) }
-          function toggleArchiveItem(section, key) {
-            var sections = modalSections(); if (!sections) return
-            var list = (sections[section] || []).slice()
-            var i = list.indexOf(key)
-            if (i >= 0) list.splice(i, 1); else list.push(key)
-            var next = Object.assign({}, sections); next[section] = list
-            setSections(next)
-          }
-          function addArchiveSection(section) {
-            var sections = modalSections(); if (!sections || sections[section]) return
-            var next = Object.assign({}, sections)
-            // 添加段时预勾当前启用状态，方便在此基础上微调（设计 §2.4）。
-            next[section] = section === 'subagents' ? []
-              : (modal.inventory[section] || []).filter(function (item) { return item.enabled }).map(function (item) { return item.key })
-            setSections(next)
-          }
-          function removeArchiveSection(section) {
-            var sections = modalSections(); if (!sections) return
-            var next = Object.assign({}, sections); delete next[section]
-            setSections(next)
-          }
-          function submitArchive() {
-            if (!modalSections()) return
-            setBusy(true)
-            apiCall('scene-archive-save', { scene: modal.name, archive: modal.sections }).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) {
-                setModal(null)
-                setResult({ ok: true, text: t('memory.result.archiveSaved', { name: modal.name }) + (res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : '') })
-                refresh(true)
-              } else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
-          }
-          function enterMode(name) {
-            setBusy(true)
-            apiCall('scene-mode-set', { scene: name }).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.modeSet', { name: name }) + (res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : '') }); refresh(true) }
-              else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
-          }
-          function exitMode() {
-            setBusy(true)
-            apiCall('scene-mode-set', { scene: null }).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.modeExited') }); refresh(true) }
-              else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
-          }
+          // （场景档案与当前模式的功能已移至 ScenesPage——「场景」页）
 
-          // ── 场景（= scene-memory/ 下的一级目录）建 / 删 ──
-          function openCreateScene() {
-            setSceneForm({ name: '', error: null })
-            setModal({ type: 'scene-create' })
-          }
-          function submitCreateScene() {
-            var name = String(sceneForm.name || '').trim()
-            if (!isValidScenePath(name)) { setSceneForm(Object.assign({}, sceneForm, { error: t('error.rules.invalidGroup') })); return }
-            setBusy(true)
-            apiCall('rules-create-scene', { name: name }).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) {
-                setModal(null)
-                setResult({ ok: true, text: t('memory.result.sceneCreated', { name: name }) })
-                refresh(true)
-              } else setSceneForm(Object.assign({}, sceneForm, { error: translateError(t, res) }))
-            }).catch(function (e) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: String((e && e.message) || e) })) })
-          }
-          function submitDeleteScene(name) {
-            setBusy(true)
-            apiCall('rules-remove-scene', { name: name }).then(function (res) {
-              setBusy(false); setModal(null)
-              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.sceneRemoved', { name: name }) }); refresh(true) }
-              else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
-          }
-
+          // （场景建/删也已移至 ScenesPage；场景启停开关同）
           // ── 记忆回收站（rules-remove 移入 / rules-restore 恢复 / rules-trash-remove 永久删除）──
           // 此前删除后只能看到一句"回收站 ID"，界面上无法恢复；这里把入口补齐。
           function loadTrash() {
@@ -2076,9 +2348,6 @@ function callApi(path, options) {
             var bucket = buckets[name]
             var meta = bucket.meta || { name: name, count: 0, active: name === '', shared: false }
             var isShared = meta.shared === true
-            var alwaysOn = isShared || name === '' // 根层「全局」桶没有开关（不是目录）
-            // 空场景（且不是 _shared / 全局桶）才允许删除：避免一次操作带走整组记忆。
-            var emptyRemovable = name !== '' && !isShared && bucket.rules.length === 0
             var open = !collapsed['s:' + name]
             return React.createElement('div', { key: 's:' + name, className: 'dsm-source' + (meta.active === false ? ' dsm-rule-shadowed' : '') },
               React.createElement('div', { className: 'dsm-source-head' },
@@ -2088,18 +2357,7 @@ function callApi(path, options) {
                   isShared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
                   meta.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null),
                 React.createElement('div', { className: 'dsm-source-actions' },
-                  (data.modeInfo && data.modeInfo.scene === name) ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
-                  (function () {
-                    var archive = data.archives[name]
-                    var hasModeSections = !!(archive && (Array.isArray(archive.tools) || Array.isArray(archive.skills)))
-                    return hasModeSections && (!data.modeInfo || data.modeInfo.scene !== name)
-                      ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { enterMode(name) } }, t('memory.mode.set'))
-                      : null
-                  })(),
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openArchive(name) } }, t('memory.archive.edit')),
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openCreate(name) } }, t('memory.scene.new')),
-                  emptyRemovable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')) : null,
-                  alwaysOn ? null : React.createElement(Switch, { on: meta.active === true, disabled: busy, label: t('memory.scene.enable') + ' ' + sceneLabel(name), onClick: function () { toggleScene(meta) } }))),
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openCreate(name) } }, t('memory.scene.new')))),
               open ? React.createElement('div', { className: 'dsm-source-body' },
                 bucket.rules.length
                   ? React.createElement(React.Fragment, null,
@@ -2120,12 +2378,8 @@ function callApi(path, options) {
                   React.createElement(VersionBadge, null)),
                 React.createElement('p', { className: 'dsm-desc' }, t('memory.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                data.modeInfo && data.modeInfo.scene ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current') + ': ' + data.modeInfo.scene) : null,
-                data.modeInfo && data.modeInfo.scene ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: exitMode }, t('memory.mode.exit')) : null,
-                data.activeMode === 'custom' ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: enableAllScenes }, t('memory.scene.enableAll')) : null,
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { openCreate(sceneFilter || '') } }, t('memory.btn.new')))),
             React.createElement('div', { className: 'dsm-summary dsm-summary-3' },
               React.createElement('div', { key: 'total', className: 'dsm-stat' }, React.createElement('strong', null, stats.total || 0), t('memory.stat.total')),
@@ -2222,53 +2476,7 @@ function callApi(path, options) {
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: closeEditor }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim() || (editor.mode === 'create' && !String(editor.group || '').trim()), onClick: editor.mode === 'create' ? submitCreate : submitUpdate }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
-            modal && modal.type === 'scene-create' ? React.createElement(Modal, { key: 'screate', title: t('memory.scene.createTitle'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
-              React.createElement('div', { className: 'dsm-form' },
-                React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
-                  React.createElement('input', { className: 'dsm-control' + (sceneForm.error ? ' dsm-rule-invalid' : ''), value: sceneForm.name || '', placeholder: t('memory.field.group.placeholder'), onChange: function (e) { setSceneForm({ name: e.target.value, error: null }) } }),
-                  React.createElement('p', { className: sceneForm.error ? 'dsm-rule-hint' : 'dsm-help' }, sceneForm.error || t('memory.field.group.hint'))),
-                React.createElement('p', { className: 'dsm-help' }, t('memory.scene.createHelp'))),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitCreateScene }, t('memory.btn.create')))) : null,
-            modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', title: t('memory.deleteScene.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('memory.deleteScene.desc', { name: modal.name })),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDeleteScene(modal.name) } }, t('memory.btn.deleteScene')))) : null,
-            // 场景档案编辑：三段自由搭配（设计 §2.1）——每段独立"添加/移除"，段内勾选集即启用集合。
-            modal && modal.type === 'scene-archive' ? React.createElement(Modal, { key: 'sarch', wide: true, title: t('memory.archive.title') + ' · ' + modal.name, closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
-              React.createElement('div', { className: 'dsm-form' },
-                ['tools', 'skills', 'subagents'].map(function (section) {
-                  var defined = !!modal.sections[section]
-                  var checked = modal.sections[section] || []
-                  var items = section === 'tools' ? (modal.inventory.tools || [])
-                    : section === 'skills' ? (modal.inventory.skills || [])
-                    : (modal.inventory.subagents || []).map(function (s) { return { key: s.name, enabled: true, description: s.description } })
-                  var title = section === 'tools' ? t('memory.archive.tools') : section === 'skills' ? t('memory.archive.skills') : t('memory.archive.subagents')
-                  return React.createElement('div', { key: section, className: 'dsm-field' },
-                    React.createElement('div', { className: 'dsm-source-head', style: { marginBottom: '4px' } },
-                      React.createElement('span', { className: 'dsm-label' }, title),
-                      defined
-                        ? React.createElement('div', { className: 'dsm-source-actions' },
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { removeArchiveSection(section) } }, t('memory.archive.removeSection')))
-                        : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { addArchiveSection(section) } },
-                          section === 'tools' ? t('memory.archive.addTools') : section === 'skills' ? t('memory.archive.addSkills') : t('memory.archive.addSubagents'))),
-                    defined ? React.createElement('div', { style: { maxHeight: '180px', overflowY: 'auto', border: '1px solid var(--dsm-border, rgba(127,127,127,.35))', borderRadius: '6px', padding: '4px' } },
-                      items.length ? items.map(function (item) {
-                        var on = checked.indexOf(item.key) >= 0
-                        return React.createElement('label', { key: item.key, style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '2px 4px', cursor: 'pointer' } },
-                          React.createElement('input', { type: 'checkbox', checked: on, disabled: busy, onChange: function () { toggleArchiveItem(section, item.key) } }),
-                          React.createElement('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-                            item.key + (item.description ? ' — ' + item.description : '')),
-                          item.enabled === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null)
-                      }) : React.createElement('div', { className: 'dsm-empty' }, t('memory.archive.emptySection')))
-                    : null)
-                }),
-                React.createElement('div', { className: 'dsm-modal-actions' },
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-primary', disabled: busy, onClick: submitArchive }, t('memory.archive.save'))))) : null,
+            // 场景建/删/档案弹窗已移至「场景」页（ScenesPage）。
             modal && modal.type === 'trash' ? React.createElement(Modal, { key: 'trash', wide: true, title: t('memory.trash.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               trash.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
                 : React.createElement(React.Fragment, null,
@@ -2298,7 +2506,7 @@ function callApi(path, options) {
         // Test-only export: page 组件 + i18n t，让 client 测试直接渲染 page（绕开
         // ToolsSection 的子组件嵌套——minimal React 不支持子组件 hook 隔离）。
         // 生产环境浏览器 React 会正确递归渲染 ToolsSection 内的 page。
-        module.exports._pages = { MCPPage: MCPPage, SkillManagerSection: SkillManagerSection, AgentsMdPage: AgentsMdPage, HistoryPage: HistoryPage, SceneMemoryPage: SceneMemoryPage, t: t }
+        module.exports._pages = { MCPPage: MCPPage, SkillManagerSection: SkillManagerSection, AgentsMdPage: AgentsMdPage, HistoryPage: HistoryPage, ScenesPage: ScenesPage, SubagentsPage: SubagentsPage, MemoryPage: MemoryPage, t: t }
       },
     }
     return module.exports

@@ -2,7 +2,7 @@
 // 设计 §3：人设 = ~/.dsh/subagents/<name>.md（frontmatter 可选，缺省派生）；v1 串行运行；
 // spawn provider 缺失时经 createRequire 挂载官方 dsh-subagent-spawn-in-process（宿主侧包）。
 import { createRequire } from 'node:module'
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveDshHome } from '../skills/core.js'
 
@@ -20,6 +20,8 @@ export interface SubagentService {
   /** 场景绑定校验 + 串行运行一个子代理（结果文本截断 ≤16 KiB）。 */
   runSerial(parentAgent: any, persona: PersonaDoc, task: string, signal: AbortSignal | undefined): Promise<{ text: string; runId: string; stopReason: string }>
   ops: Record<string, (args: any) => Promise<any>>
+  /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生）。 */
+  writeOps: ReadonlySet<string>
 }
 
 /** 行式 frontmatter 解析：只认 description / model / tools 三个键（人设文件不需要完整 YAML）。 */
@@ -130,6 +132,58 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
         subagents: docs.map((p) => ({ name: p.name, description: p.description, model: p.model ?? null, tools: p.tools ?? null })),
       }
     },
+    'subagent-get': async (args: any) => {
+      const name = String((args && args.name) || '').trim()
+      const docs = await list()
+      const p = docs.find((d) => d.name === name)
+      if (!p) return { ok: false, error: `人设不存在: ${name}` }
+      return { ok: true, persona: { name: p.name, description: p.description, model: p.model ?? '', tools: p.tools ?? [], body: p.body } }
+    },
+    'subagent-create': async (args: any) => {
+      const name = String((args && args.name) || '').trim()
+      if (!validPersonaName(name)) return { ok: false, error: `人设名不合法: ${name || '(空)'}（≤64 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）` }
+      const target = join(dir, name + '.md')
+      const exists = await readFile(target, 'utf8').then(() => true).catch(() => false)
+      if (exists) return { ok: false, error: `人设已存在: ${name}` }
+      await writeFile(target, serializePersona(args), 'utf8')
+      cache = null
+      return { ok: true, name }
+    },
+    'subagent-update': async (args: any) => {
+      const name = String((args && args.name) || '').trim()
+      if (!validPersonaName(name)) return { ok: false, error: `人设名不合法: ${name || '(空)'}` }
+      const target = join(dir, name + '.md')
+      const exists = await readFile(target, 'utf8').then(() => true).catch(() => false)
+      if (!exists) return { ok: false, error: `人设不存在: ${name}` }
+      await writeFile(target, serializePersona(args), 'utf8')
+      cache = null
+      return { ok: true, name }
+    },
+    'subagent-delete': async (args: any) => {
+      const name = String((args && args.name) || '').trim()
+      if (!validPersonaName(name)) return { ok: false, error: `人设名不合法: ${name || '(空)'}` }
+      await rm(join(dir, name + '.md')).catch(() => {})
+      cache = null
+      return { ok: true, name }
+    },
   }
-  return { list, runSerial, ops }
+  return { list, runSerial, ops, writeOps: new Set(['subagent-create', 'subagent-update', 'subagent-delete']) }
+}
+
+function validPersonaName(name: string): boolean {
+  return name.length > 0 && name.length <= 64 && !name.startsWith('.') && !/[\\/<>:"|?*]/.test(name)
+}
+
+/** 人设文件序列化：frontmatter 只写用户填过的键；正文 = 人设提示词。 */
+function serializePersona(args: any): string {
+  const description = String((args && args.description) || '').replace(/\r?\n/g, ' ').trim()
+  const model = String((args && args.model) || '').trim()
+  const tools = Array.isArray(args?.tools) ? args.tools.map((x: unknown) => String(x).trim()).filter(Boolean) : []
+  const body = String((args && args.body) ?? '').trim()
+  const lines = ['---']
+  if (description) lines.push('description: ' + description)
+  if (model) lines.push('model: ' + model)
+  if (tools.length) lines.push('tools: ' + tools.join(', '))
+  lines.push('---', '', body, '')
+  return lines.join('\n')
 }

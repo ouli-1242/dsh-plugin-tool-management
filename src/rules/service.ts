@@ -496,9 +496,17 @@ function parseModeState(raw: unknown): ModeState {
     }
     return out
   }
+  // v2 快照：mcp = 停用表原文（serverName → ['*'] / 工具名）；skills = 启停布尔表。
+  const mcpRaw = (snapshotRaw.mcp && typeof snapshotRaw.mcp === 'object' && !Array.isArray(snapshotRaw.mcp)
+    ? snapshotRaw.mcp
+    : (snapshotRaw.tools && typeof snapshotRaw.tools === 'object' ? {} : {})) as Record<string, unknown>
+  const mcp: Record<string, string[]> = {}
+  for (const [server, list] of Object.entries(mcpRaw as Record<string, unknown>)) {
+    if (Array.isArray(list)) mcp[server] = list.map((x) => String(x))
+  }
   return {
     scene,
-    snapshot: scene ? { tools: toFlagMap(snapshotRaw.tools), skills: toFlagMap(snapshotRaw.skills) } : null,
+    snapshot: scene ? { mcp, skills: toFlagMap(snapshotRaw.skills) } : null,
   }
 }
 
