@@ -17,6 +17,7 @@ import { createRequire } from 'node:module'
 import { createSkillsService } from './skills/service.js'
 import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService } from './rules/service.js'
+import { createArchiveEngine } from './rules/archive-engine.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -286,13 +287,81 @@ export default {
       console.error('[dsh-plugin-tool-management] rules provider setup failed:', message(e))
     }
 
-    // HTTP 写操作门禁清单。skills 与 rules 域由各自 service 导出的 writeOps 派生
+    // ---------- 场景档案引擎（设计 §2）----------
+    // deps 把既有写通道（MCP 单工具启停 / 技能启停）注入引擎；引擎自身串行，
+    // 状态机与纯逻辑在 ./rules/archive*.ts。mcpmToolEnabled / readDisabledTools
+    // 为函数声明（提升），此处引用安全。
+    const toolKeyParts = (toolName: string): { key: string; server: string; tool: string } | null => {
+      if (!toolName.startsWith('mcp__')) return null
+      const rest = toolName.slice(5)
+      const i = rest.indexOf('__')
+      if (i <= 0) return null
+      const server = rest.slice(0, i)
+      const tool = rest.slice(i + 2)
+      return server && tool ? { key: server + '/' + tool, server, tool } : null
+    }
+    async function toolStates(): Promise<Record<string, boolean>> {
+      const disabled = await readDisabledTools()
+      const states: Record<string, boolean> = {}
+      for (const [server, list] of Object.entries(disabled)) for (const t of list) states[server + '/' + t] = false
+      let schemas: any[] = []
+      try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅启停表 */ }
+      for (const s of schemas) {
+        const p = toolKeyParts(String((s && s.name) || ''))
+        if (p && !(p.key in states)) states[p.key] = true
+      }
+      return states
+    }
+    async function skillStates(): Promise<Record<string, boolean>> {
+      const r: any = await skillsService.ops['skill-state']({})
+      const states: Record<string, boolean> = {}
+      for (const root of ((r && r.data && r.data.roots) || [])) {
+        for (const sk of (root.skills || [])) {
+          const name = String(sk.declaredName || sk.name || '')
+          if (name) states[String(root.key || '') + '/' + name] = sk.enabled !== false
+        }
+      }
+      return states
+    }
+    const archiveService = createArchiveEngine({
+      loadSlice: async () => ({ ...(await rulesService.readArchiveSlice()) }),
+      saveSlice: (slice) => rulesService.patchIndex(slice),
+      knownToolKeys: async () => new Set(Object.keys(await toolStates())),
+      knownSkillKeys: async () => new Set(Object.keys(await skillStates())),
+      currentTools: toolStates,
+      currentSkills: skillStates,
+      applyTools: async (target) => {
+        for (const [key, on] of Object.entries(target)) {
+          const i = key.indexOf('/')
+          if (i <= 0) throw new Error(`工具 key 不合法: ${key}`)
+          const r: any = await mcpmToolEnabled({ serverName: key.slice(0, i), tool: key.slice(i + 1), enabled: on })
+          if (r && r.ok === false) throw new Error(`工具 ${key} 应用失败: ${r.error}`)
+        }
+      },
+      applySkills: async (target) => {
+        for (const [key, on] of Object.entries(target)) {
+          const i = key.indexOf('/')
+          if (i <= 0) throw new Error(`技能 key 不合法: ${key}`)
+          const root = key.slice(0, i)
+          const name = key.slice(i + 1)
+          const r: any = await skillsService.ops[on ? 'skill-enable' : 'skill-disable']({ root, name })
+          if (r && r.ok === false) throw new Error(`技能 ${key} 应用失败: ${r.error}`)
+        }
+      },
+      sceneExists: async (name) => {
+        const r: any = await rulesService.ops['rules-list']({})
+        return !!(r && r.ok !== false && (r.scenes || []).some((s: any) => s.name === name))
+      },
+    })
+
+    // HTTP 写操作门禁清单。skills/rules/档案引擎域由各自 service 导出的 writeOps 派生
     // （与其 ops 表同文件维护，新增写 op 改对应 service 即可）；本文件内联域
     // （mcpm-* / skill-open / agentsmd-* / history-*）在此列举。
-    // 注意：必须在这两个 service 创建之后构造（依赖其 writeOps）。
+    // 注意：必须在上述 service 创建之后构造（依赖其 writeOps）。
     const WRITE_OPS = new Set<string>([
       ...skillsService.writeOps,
       ...rulesService.writeOps,
+      ...archiveService.writeOps,
       'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
       'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
       // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
@@ -1734,6 +1803,10 @@ export default {
       // rules-remove-scene。
       // 成功返回扁平 {ok:true, ...}（不套 data），失败 {ok:false, error, code?}。
       ...rulesService.ops,
+      // 场景档案 ops（由 ./rules/archive-engine.ts 提供）：scene-mode-get /
+      // scene-archive-save / scene-mode-set。成功返回扁平 {ok:true, ...}，
+      // 失败 {ok:false, error}；写 op 已含 archiveService.writeOps 门禁派生。
+      ...archiveService.ops,
       // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
       // agentsmd-read / agentsmd-create / agentsmd-update / agentsmd-remove /
       // agentsmd-apply / agentsmd-get-current

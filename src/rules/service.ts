@@ -29,6 +29,7 @@ import { copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, st
 import { basename, dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
 import { createRuleProviderRegistrar } from './provider.js'
+import { normalizeArchive, type ModeState, type SceneArchive } from './archive.js'
 
 // ── 常量 ───────────────────────────────────────────────────────────────────
 
@@ -160,6 +161,10 @@ export interface RulesService {
   registerProviders: () => () => void
   /** 失效快照与场景记忆缓存（写操作后调用）。 */
   refresh: () => Promise<void>
+  /** 场景档案引擎专用：读-改-写 mode/archives 切片（写队列内执行，非公开 op，无门禁面）。 */
+  patchIndex: (patch: { mode?: ModeState; archives?: Record<string, SceneArchive> }) => Promise<void>
+  /** 场景档案引擎专用：读 mode/archives 切片。 */
+  readArchiveSlice: () => Promise<{ mode: ModeState; archives: Record<string, SceneArchive> }>
 }
 
 // ── 内部类型 ───────────────────────────────────────────────────────────────
@@ -197,6 +202,10 @@ interface RulesIndex {
   groups: Record<string, GroupIndexEntry>
   /** 启用场景集合；`null` / 缺失 = 全部场景启用（默认，保证"丢进去就有用"）。 */
   active?: string[] | null
+  /** 场景档案（设计 §2.1）：每场景可选的 tools/skills/subagents 勾选集，键存在性独立于集合空否。 */
+  archives?: Record<string, SceneArchive>
+  /** 当前模式（设计 §2.2）：至多一个场景的档案生效；snapshot = 进入时的运行时启停，退出恢复。 */
+  mode?: ModeState
 }
 
 interface RuleIndexEntry {
@@ -463,7 +472,35 @@ function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxEntry: R
 
 // ── 侧车文件（索引 / 场景）─────────────────────────────────────────────────
 
-const defaultIndex = (): RulesIndex => ({ version: INDEX_VERSION, rules: {}, groups: {}, active: null })
+const defaultIndex = (): RulesIndex => ({ version: INDEX_VERSION, rules: {}, groups: {}, active: null, archives: {}, mode: { scene: null, snapshot: null } })
+
+/** 档案切片归一化：未知形态 → 空对象（容忍脏数据，与 §9.3 同哲学）。 */
+function parseArchives(raw: unknown): Record<string, SceneArchive> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, SceneArchive> = {}
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    const archive = normalizeArchive(value)
+    if (Object.keys(archive).length) out[name] = archive
+  }
+  return out
+}
+
+function parseModeState(raw: unknown): ModeState {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const scene = typeof obj.scene === 'string' && obj.scene.trim() !== '' ? obj.scene : null
+  const snapshotRaw = (obj.snapshot && typeof obj.snapshot === 'object' ? obj.snapshot : {}) as Record<string, unknown>
+  const toFlagMap = (v: unknown): Record<string, boolean> => {
+    const out: Record<string, boolean> = {}
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const [k, b] of Object.entries(v as Record<string, unknown>)) if (typeof b === 'boolean') out[k] = b
+    }
+    return out
+  }
+  return {
+    scene,
+    snapshot: scene ? { tools: toFlagMap(snapshotRaw.tools), skills: toFlagMap(snapshotRaw.skills) } : null,
+  }
+}
 
 /** 解析 rules-index.json 原文；任何异常/版本不符 → 默认索引（容忍缺失，§9.3）。 */
 function parseIndex(raw: string): RulesIndex {
@@ -474,6 +511,8 @@ function parseIndex(raw: string): RulesIndex {
     rules: (parsed.rules || {}) as Record<string, RuleIndexEntry>,
     groups: (parsed.groups || {}) as Record<string, GroupIndexEntry>,
     active: normalizeActive(parsed.active),
+    archives: parseArchives((parsed as Record<string, unknown>).archives),
+    mode: parseModeState((parsed as Record<string, unknown>).mode),
   }
 }
 
@@ -1098,6 +1137,22 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     invalidateSnapshot()
     sceneCache = null
     invalidateProviders()
+  }
+
+  /** 场景档案引擎专用：读-改-写 mode/archives 切片（写队列内，保持与其余索引写串行）。 */
+  const patchIndex = (patch: { mode?: ModeState; archives?: Record<string, SceneArchive> }): Promise<void> =>
+    enqueueMutation(async () => {
+      const index = await readIndex(stateDir)
+      if (patch.mode !== undefined) index.mode = patch.mode
+      if (patch.archives !== undefined) index.archives = patch.archives
+      await writeIndex(stateDir, index)
+      await refresh()
+    })
+
+  /** 场景档案引擎专用：读 mode/archives 切片（容忍缺失，缺省 = 无档案 + 自由模式）。 */
+  const readArchiveSlice = async (): Promise<{ mode: ModeState; archives: Record<string, SceneArchive> }> => {
+    const index = await readIndex(stateDir)
+    return { mode: index.mode ?? { scene: null, snapshot: null }, archives: index.archives ?? {} }
   }
 
   // ── 场景行（UI 用：启用/停用开关）──────────────────────────────────────
@@ -1780,6 +1835,8 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     writeOps,
     registerProviders,
     refresh,
+    patchIndex,
+    readArchiveSlice,
   }
   return service
 }
