@@ -2798,105 +2798,11 @@ export default {
       }
     }
 
-    // ---------- human chat commands (/mcp, /skills) ----------
-    // The commands service is optional, so probe for it and skip silently when
-    // it is missing (same defensive shape as pluginInventory above).
-    try {
-      const commands = (typeof ctx.get === 'function' ? ctx.get('commands') : undefined) as
-        | { register(def: { name: string; description?: string; handler: () => Promise<unknown> }): () => void }
-        | undefined
-      if (commands && typeof commands.register === 'function') {
-        ctx.effect(() => commands.register({
-          name: 'mcp',
-          description: '列出已配置的 MCP 服务（级别 / 启停 / loader 状态 / 工具数）',
-          handler: async () => {
-            const r: any = await mcpmList()
-            if (!r || r.ok === false) return { kind: 'error', text: (r && r.error) || '读取 MCP 服务失败' }
-            // 启用的在前，同组内按名称排序。
-            const rows = (r.rows || []).slice().sort((a: any, b: any) => {
-              if (!!a.disabled !== !!b.disabled) return a.disabled ? 1 : -1
-              return String(a.serverName).localeCompare(String(b.serverName))
-            })
-            if (!rows.length) return { kind: 'success', text: '未配置任何 MCP 服务。' }
-            // Human-facing command: show localized levels, not the raw keys.
-            const labels: Record<string, string> = { project: 'Profile 级', global: '全局', loader: '已加载' }
-            const text = 'MCP 服务（' + rows.length + '）：\n' + rows.map((row: any) => (
-              '- ' + row.serverName + ' [' + (labels[row.level] || row.level) + '] ' + (row.disabled ? '已停用' : '已启用') +
-              (row.live ? ' · loader:' + (row.live.enabled ? 'on' : 'off') + (row.live.phase ? '/' + row.live.phase : '') : '') +
-              (typeof row.toolCount === 'number' ? ' · ' + row.toolCount + ' 工具' : '')
-            )).join('\n')
-            return { kind: 'success', text }
-          },
-        }), 'dsh-plugin-tool-management: /mcp command')
-        ctx.effect(() => commands.register({
-          name: 'skills',
-          description: '列出各来源的技能及其启停状态',
-          handler: async () => {
-            const r: any = await skillsService.ops['skill-state']({})
-            if (!r || r.ok === false) return { kind: 'error', text: (r && r.error) || '读取技能失败' }
-            const data: any = r.data || {}
-            const entries: Array<{ line: string; enabled: boolean }> = []
-            for (const root of data.roots || []) {
-              for (const skill of root.skills || []) {
-                entries.push({
-                  line: '- ' + (skill.declaredName || skill.name) + ' [' + (root.label || root.key) + '] ' + (skill.enabled === false ? '已停用' : '已启用'),
-                  enabled: skill.enabled !== false,
-                })
-              }
-            }
-            // 启用的在前，同组内保持原有顺序（来源与名称序）。
-            entries.sort((a, b) => (a.enabled === b.enabled ? 0 : a.enabled ? -1 : 1))
-            const lines = entries.map((entry) => entry.line)
-            return { kind: 'success', text: lines.length ? '技能（' + lines.length + '）：\n' + lines.join('\n') : '未发现任何技能。' }
-          },
-        }), 'dsh-plugin-tool-management: /skills command')
-        ctx.effect(() => commands.register({
-          name: 'agents-md',
-          description: '列出 AGENTS.md 预设及当前生效（应用后新会话生效，当前会话不变）',
-          handler: async () => {
-            const r: any = await agentsMdService.list()
-            if (!r || r.ok === false) return { kind: 'error', text: (r && r.error) || '读取 AGENTS.md 预设失败' }
-            const presets = r.presets || []
-            if (!presets.length) return { kind: 'success', text: '未发现任何 AGENTS.md 预设。' }
-            const text = 'AGENTS.md 预设（' + presets.length + '）：\n' + presets.map((p: any) => (
-              '- ' + p.id + (p.active ? ' [生效中]' : '')
-            )).join('\n') + '\n（应用后新会话生效，当前会话不变）'
-            return { kind: 'success', text }
-          },
-        }), 'dsh-plugin-tool-management: /agents-md command')
-        ctx.effect(() => commands.register({
-          name: 'scene-memory',
-          description: '列出场景记忆及其场景启用状态',
-          handler: async () => {
-            const r: any = await rulesService.ops['rules-list']({})
-            if (!r || r.ok === false) return { kind: 'error', text: (r && r.error) || '读取记忆失败' }
-            const rules: any[] = r.rules || []
-            if (!rules.length) return { kind: 'success', text: '未发现任何记忆（~/.dsh/scene-memory 为空）。' }
-            const scenes: any[] = r.scenes || []
-            // 设计 §2.4：输出追加当前模式与档案摘要（读 op，无门禁面）。
-            const modeRes: any = await archiveService.ops['scene-mode-get']({}).catch(() => null)
-            const mode: any = (modeRes && modeRes.mode) || { scene: null, snapshot: null }
-            const archives: Record<string, any> = (modeRes && modeRes.archives) || {}
-            const archiveLines = Object.entries(archives).map(([name, a]) => {
-              const segs: string[] = []
-              if (a && a.mcp) segs.push('MCP ' + Object.keys(a.mcp).length + ' 台')
-              if (a && Array.isArray(a.skills)) segs.push('技能 ' + a.skills.length + ' 个')
-              if (a && Array.isArray(a.subagents)) segs.push('子智能体 ' + a.subagents.length + ' 个')
-              return name + '(' + (segs.join('/') || '空档案') + ')'
-            })
-            const text = '场景记忆（' + rules.length + '）：\n' + rules.map((rule: any) => (
-              '- ' + rule.name + ' [' + (rule.group || '全局') + '] · ' + (rule.enabled ? '已启用' : '已停用')
-            )).join('\n') + '\n场景：' + (scenes.map((s: any) => s.name + (s.active ? '(启用)' : '(未启用)')).join('、') || '(无)') +
-              (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）') +
-              '\n当前模式：' + (mode.scene ? mode.scene + '（退出按快照恢复 MCP/技能）' : '自由模式') +
-              '\n档案：' + (archiveLines.join('、') || '(无)') +
-              '\n（启用场景的记忆正文自动进入系统提示词，无需任何工具调用）'
-            return { kind: 'success', text }
-          },
-        }), 'dsh-plugin-tool-management: /scene-memory command')
-      }
-    } catch (e) {
-      console.error('[dsh-plugin-tool-management] command registration failed:', message(e))
-    }
+    // ---------- 斜杠命令：已下线 ----------
+    // 曾有 /mcp、/skills、/agents-md、/scene-memory 四条（注册到 commands 服务）。
+    // 用户 2026-09-13 判定「斜杠命令没多大用」→ 全部删除：面板里每一项都有等价入口，
+    // 而命令输出是纯文本快照，既不能操作也容易与面板状态不一致。
+    // 保留这段注释是为了让「为什么没有 /mcp」这个问题有答案可查。
   },
 }
+
