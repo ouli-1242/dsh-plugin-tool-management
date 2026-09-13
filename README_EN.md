@@ -208,7 +208,7 @@ Why a token: the cross-site protection (POST-only + custom header + same-origin 
 | Broken config, DSH won't boot | Restore the newest `cordis.patch.yml.bak-<timestamp>` next to it. |
 | Page data not refreshing | Wait for the automatic polling (default 5s) or click "Refresh". |
 | Latest version not found on a mirror | Add `--registry=https://registry.npmjs.org` and retry later. |
-| `rule_manager_write` / `skill_manager_create` / `subagent_run` reports an "approval policy is never" error | The session runs in **full access** (`approval=never`): the approval layer rejects every `ask` outright, so no confirmation card can ever appear (fail closed). Switch the access mode to "workspace write", or turn off the matching confirm switch in the plugin settings (`requireConfirmForModelRuleWrite` / `requireConfirmForModelSubagentRun`; `skill_manager_create` has none). |
+| Do the confirmations still apply in full access (`approval=never`)? | **No, and no card appears.** The three confirm gates (`rule_manager_write` / `skill_manager_create` / `subagent_run`) treat a `never` session as "the user has pre-approved", so they pass straight through and write a `confirm-bypass` line to `~/.dsh/dsh-plugin-tool-management.log`. Switch the access mode back to "workspace write" to get asked again, or turn off a single gate with the matching `requireConfirmForModel*` setting. |
 | `subagent_run` reports "spawn provider unavailable" | **Conditional**: the host ships a `spawn` provider (recent versions need no extra package and no mount). It only appears when the host really registers none *and* this plugin cannot mount `@deepseek-ai/dsh-subagent-spawn-in-process` either — the message carries the original reason, and it is mostly an older version or a specific profile. Mount that package in the host profile and restart DSH: this plugin deliberately keeps it out of `cordis.patch.yml` so a host without the package still boots. |
 
 ## Development
@@ -224,9 +224,9 @@ npm test             # build + all semantic-contract tests (node --test test/*.t
 > Changes are verified by **actually exercising the real behaviour** (see the acceptance items in
 > the change requests under `docs/`) instead of asserting what the code currently does — the latter
 > just copies the implementation and passes by construction. The exception is four groups of
-> **semantic-contract** tests (`npm test`, run against the built `lib/`, 40 cases):
+> **semantic-contract** tests (`npm test`, run against the built `lib/`, 39 cases):
 > `archive.test.mjs` (engine state machine), `import.test.mjs` (ZIP expansion and landing plans),
-> `approval-policy.test.mjs` (the never-policy pre-check, driving a real cordis context and a real
+> `approval-policy.test.mjs` (never-policy detection, driving a real cordis context and a real
 > `ApprovalService`), and `subagent-scene.test.mjs` (scene binding must reject *before* a subagent
 > runs). They assert contracts, not implementation copies; real-behaviour acceptance still happens
 > in the browser/host and these tests do not replace it.

@@ -61,7 +61,7 @@
 | 场景档案（自由搭配） | 每个场景可勾选自己的 **MCP 工具集 / 技能集 / 子智能体绑定**（任意组合、也可只选记忆；清单只列实时存在的条目，勾=启用/未勾=停用；MCP 还支持两级：不勾服务器=整台停用，勾了服务器但一个工具都不勾=该服务器全停）。勾了工具/技能段的场景可「设为当前模式」：应用档案前先落盘快照、退出按快照**原文**恢复；仅记忆 / 仅子智能体的场景不显示模式按钮；进入后下一请求生效 |
 | 轻量子智能体 | `~/.dsh/subagents/<人设>.md` 一个文件一个人设（frontmatter 可选：description/model/tools，正文=人设提示词，缺省自动派生）；页头「导入」支持 `.md` / `.zip`（同名跳过并列出名单）；模型经 `subagent_list` / `subagent_run` 调用——子代理带人设运行、只回传结果、即用即弃（不进 History）；**自动继承当前启用场景的记忆段**；场景档案可绑定「本场景可用哪些人设」（绑定外调用直接拒绝）；运行默认需确认，设置可关 |
 | 前缀缓存友好 | 段文本只由「启用场景 + 文件内容」决定，逐字节稳定；场景切换 / 编辑记忆只变化一次，其余请求缓存照常命中（不违反"零注入层"——那条只禁每轮动态变化的内容） |
-| 模型工具 | **12 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能，`rule_manager_*` 管场景记忆（创建前需用户确认，可在设置中关闭），`subagent_list` / `subagent_run` 调用人设子智能体（运行前默认需确认，设置 `requireConfirmForModelSubagentRun` 可关）。**三个确认门都会预检会话审批策略**：`approval=never`（完全权限）下确认卡不可能弹出，直接给可行动报错而不是让模型收到通用拒绝 |
+| 模型工具 | **12 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能，`rule_manager_*` 管场景记忆（创建前需用户确认，可在设置中关闭），`subagent_list` / `subagent_run` 调用人设子智能体（运行前默认需确认，设置 `requireConfirmForModelSubagentRun` 可关）。**三个确认门都识别会话审批策略**：`approval=never`（完全权限）下确认卡不可能弹出，插件视为「用户已预先批准」直接放行并记 `confirm-bypass` 日志（与官方子代理工具在完全权限下的行为一致） |
 | 界面 | 独立的 `dsm-*` 设计系统，**七栏**（场景 / MCP / 技能 / 子智能体 / 提示词 / 记忆 / 会话）页头同构、段卡片统一；通知分两级（成功 = 浮层，警告/错误 = 页内横幅）；档案弹窗固定高度，加减段不跳动 |
 
 ## 快速开始
@@ -215,7 +215,7 @@ mv ~/.dsh/rules ~/.dsh/scene-memory
 | 改坏了配置 DSH 起不来 | 同目录取最近的 `cordis.patch.yml.bak-<时间戳>` 恢复。 |
 | 页面数据不刷新 | 等待页面自动轮询（默认 5 秒）；或手动点「刷新」。 |
 | 镜像源装不到最新版 | 加 `--registry=https://registry.npmjs.org` 稍后再试。 |
-| `rule_manager_write` / `skill_manager_create` / `subagent_run` 报「审批策略为 never……确认无法弹出」 | 会话处于**完全权限**（`approval=never`）：审批层会把一切 `ask` 直接判拒绝，确认卡根本不会弹出（fail-closed）。把访问模式切到「工作区内修改」，或在插件设置里关掉对应确认开关（`requireConfirmForModelRuleWrite` / `requireConfirmForModelSubagentRun`；`skill_manager_create` 无开关）。 |
+| 完全权限（`approval=never`）下还需要确认吗？ | **不需要，也不会弹卡**：三个确认门（`rule_manager_write` / `skill_manager_create` / `subagent_run`）在 never 会话里被视作「用户已预先批准」，直接放行，并在 `~/.dsh/dsh-plugin-tool-management.log` 记一条 `confirm-bypass` 留痕。想让它们重新问一次，就把访问模式切回「工作区内修改」；只想关掉某一项，用插件设置里的 `requireConfirmForModel*` 开关。 |
 | `subagent_run` 报「spawn provider 不可用」 | **条件式**：宿主自带 `spawn` provider（最新版无需装包、无需挂载），只有宿主确实没注册、且本插件也挂载不了 `@deepseek-ai/dsh-subagent-spawn-in-process` 时才会出现（错误文本里带原始原因，多见于旧版或特定 profile）。此时在宿主 profile 里挂载该包后重启 DSH——本插件不把它写进 `cordis.patch.yml`，以免缺包的宿主整棵树起不来（取舍见该文件注释）。 |
 
 ## 开发
@@ -229,10 +229,10 @@ npm test             # 构建 + 全部语义契约测试（node --test test/*.te
 ```
 
 > 本项目的验证方式是**直接跑一遍真实行为**（见 `docs/` 下的变更单验收项），而不是断言代码当前怎么实现——
-> 后者只是把实现抄一遍，必然通过。例外是四组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 40 例）：
+> 后者只是把实现抄一遍，必然通过。例外是四组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 39 例）：
 > `archive.test.mjs`（引擎状态机：勾=启用、空段可持久化、失败回滚与如实上报）、
 > `import.test.mjs`（导入展开与落点规划）、
-> `approval-policy.test.mjs`（never 预检；用真实 cordis + 真实 `ApprovalService` 复现读取链）、
+> `approval-policy.test.mjs`（never 审批策略探测；用真实 cordis + 真实 `ApprovalService` 复现读取链）、
 > `subagent-scene.test.mjs`（场景绑定必须在子代理运行**之前**拒绝）。
 > 它们断言语义契约而非实现抄写；真实行为验收仍以浏览器/宿主实测为准，契约测试不能替代。
 
