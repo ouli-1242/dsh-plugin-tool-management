@@ -423,11 +423,13 @@ export function createSkillsService(ctx: any): SkillsService {
       afterWrite,
     ),
     // 创建 / 导入 / 删除 / 回收站
+    // 创建默认落 hub（`tool-management/skills/`）：UI 不传 root 时走这里；
+    // core.js 的 createSkill 默认值是第二道保险（同口径）。官方 `~/.dsh/skills/` 仍作为来源列出。
     'skill-create': wrap(
       (args) => write(async () => createSkill(
         { name: args.name, description: args.description, body: args.body },
         log,
-        { root: await requestRoot(String(args.root || 'dsh')) },
+        { root: await requestRoot(String(args.root || 'hub')) },
       )),
       afterWrite,
     ),

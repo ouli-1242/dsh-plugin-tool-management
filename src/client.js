@@ -151,6 +151,9 @@ window.__ModuleLoader__.load({
     module.exports = {
       name: 'dsh-plugin-tool-management-client',
       inject: ['timer'],
+      // 词典也导出：让 Node 契约测试能断言「bundle 里每个 t('键') 在两份词典里都存在」。
+      // 浏览器 UI 的交互验收仍要真浏览器；这一条挡的是「界面直接显示原始键名」这类缺陷。
+      dict: DICT,
       apply(ctx) {
         ensureCss()
         const slots = ctx.get('slots')
@@ -1423,8 +1426,15 @@ function callApi(path, options) {
       function openNativePicker(ref) { if (busy || pickerOpenRef.current || !ref.current) return; pickerOpenRef.current = true; ref.current.value = ""; function release() { setTimeout(function () { pickerOpenRef.current = false; }, 0); } window.addEventListener("focus", release, { once: true }); ref.current.click(); setTimeout(function () { pickerOpenRef.current = false; }, 30000); }
       function submitImport() { if (!upload) return; buildUploadPayload(upload).then(function (payload) { return post("/upload", payload, null); }).then(function (data) { var summary = summarizeImportResult(t, data); setResult({ ok: summary.ok, warning: summary.warning, text: summary.text }); if (summary.imported) { setModal(null); setUpload(null); } }).catch(function () {}); }
       var data = snapshot.data || { roots: [], trash: [], summary: { total: 0, enabled: 0, disabled: 0, issues: 0 } }, allRoots = data.roots || [], roots = visibleSkillRoots(allRoots), activeSource = roots.some(function (root) { return root.key === source; }) ? source : "";
-      var createRoots = allRoots.filter(function (root) { return root.mutable === true; }), createOptions = createRoots.map(function (root) { return { value: root.key, label: rootDisplayName(t, root) }; }); if (!createOptions.length) createOptions.push({ value: "dsh", label: t("root.dsh") });
-      function openCreate() { var selectedRoot = createRoots.some(function (root) { return root.key === activeSource; }) ? activeSource : "dsh"; setForm(Object.assign({}, form, { root: selectedRoot })); setModal("create"); }
+      var createRoots = allRoots.filter(function (root) { return root.mutable === true; }), createOptions = createRoots.map(function (root) { return { value: root.key, label: rootDisplayName(t, root) }; }); if (!createOptions.length) createOptions.push({ value: "hub", label: t("root.hub") });
+      // 新建技能的默认落点：hub（`tool-management/skills/`）。
+      // 用户在技能页筛选了某个来源时，优先用那个来源；两者都不可用时退回 dsh。
+      function defaultCreateRoot() {
+        if (createRoots.some(function (root) { return root.key === activeSource; })) return activeSource;
+        if (createRoots.some(function (root) { return root.key === "hub"; })) return "hub";
+        return "dsh";
+      }
+      function openCreate() { setForm(Object.assign({}, form, { root: defaultCreateRoot() })); setModal("create"); }
       function trashRootLabel(item) { return item.root && item.root.scope === "project" ? t("root.projectDsh") + " · " + (item.root.projectName || item.root.projectRoot) : t("root.dsh"); }
       var options = [{ value: "", label: t("filter.all") }].concat(roots.map(function (root) { return { value: root.key, label: t("filter.option", { name: rootDisplayName(t, root), count: root.count == null ? root.skills.length : root.count }) }; }));
 
