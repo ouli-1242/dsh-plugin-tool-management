@@ -226,3 +226,44 @@ test('paths：rules-list 回传真实目录，供 UI 显示（不再由界面硬
   assert.equal(r.paths.hub, stateDir)
   assert.equal((await stat(rulesRoot)).isDirectory(), true)
 })
+
+test('记忆勾选（档案 memories 段）：只注入勾选的记忆，文件不动', async () => {
+  const { stateDir, service } = await makeService()
+  await service.ops['rules-create-scene']({ name: '办公' })
+  await service.ops['rules-create']({ group: '办公', name: '甲', body: '甲正文' })
+  await service.ops['rules-create']({ group: '办公', name: '乙', body: '乙正文' })
+
+  const before = await service.ops['rules-budget']({})
+  // 顺序由渲染顺序决定（场景 order → 记忆 order/名称），locale 相关 → 比较集合而非顺序。
+  assert.deepEqual(before.items.map((i) => i.id).sort(), ['办公/甲', '办公/乙'].sort(), '没有 memories 段时两条都注入')
+
+  // 只勾甲：段已定义 → 乙不进系统提示词。
+  await service.patchIndex({ archives: { 办公: { memories: ['办公/甲'] } } })
+  const after = await service.ops['rules-budget']({})
+  assert.deepEqual(after.items.map((i) => i.id), ['办公/甲'])
+
+  // 勾选只影响投影：两条记忆文件都还在，列表里也都还在。
+  const listed = await service.ops['rules-list']({})
+  assert.deepEqual(listed.rules.map((x) => x.id).sort(), ['办公/甲', '办公/乙'].sort())
+  assert.equal(existsSync(join(stateDir, 'memories', '办公', '乙.md')), true)
+
+  // 段清空 = 该场景记忆全部不注入（与其余段「已定义但空 = 全部停用」同构）。
+  await service.patchIndex({ archives: { 办公: { memories: [] } } })
+  assert.deepEqual((await service.ops['rules-budget']({})).items, [])
+
+  // 移掉段 → 回到「不碰」。
+  await service.patchIndex({ archives: {} })
+  assert.deepEqual((await service.ops['rules-budget']({})).items.map((i) => i.id).sort(), ['办公/甲', '办公/乙'].sort())
+})
+
+test('保留场景 global 的记忆不受其它场景的勾选段影响（global 恒定注入）', async () => {
+  const { service } = await makeService()
+  await service.ops['rules-create']({ group: '', name: '总则', body: '总则正文' })
+  await service.ops['rules-create-scene']({ name: '办公' })
+  await service.ops['rules-create']({ group: '办公', name: '甲', body: '甲正文' })
+
+  // 办公场景的段把记忆收窄为「一条都不勾」：办公的记忆不注入，global 的仍注入。
+  await service.patchIndex({ archives: { 办公: { memories: [] } } })
+  const items = (await service.ops['rules-budget']({})).items.map((i) => i.id)
+  assert.deepEqual(items, [GLOBAL_SCENE + '/总则'], 'global 是恒定注入的保留场景')
+})

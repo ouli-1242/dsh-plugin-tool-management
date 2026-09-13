@@ -33,7 +33,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
 import { createRuleProviderRegistrar } from './provider.js'
-import { normalizeArchive, type ModeState, type SceneArchive } from './archive.js'
+import { normalizeArchive, memoryAllowed, type ModeState, type SceneArchive } from './archive.js'
 
 // ── 常量 ───────────────────────────────────────────────────────────────────
 
@@ -1040,6 +1040,8 @@ function renderSceneMemory(
   for (const file of files) {
     // 保留场景 global 恒定生效（「全局」= 任何对话都注入）；其余由 index.active 决定。
     if (file.scene !== GLOBAL_SCENE && !active.has(file.scene)) continue
+    // 场景档案的记忆段（v3）：该场景定过 memories 段 → 只有勾选的记忆进段（纯投影，不改文件）。
+    if (!memoryAllowed(index.archives, file.scene, file.id)) continue
     const list = buckets.get(file.scene)
     if (list) list.push(file)
     else buckets.set(file.scene, [file])

@@ -70,6 +70,31 @@ window.__ModuleLoader__.load({
 /* 档案弹窗固定高度：加/删段、进出「选工具」子视图都不改变弹窗尺寸。 */
 .dsm-modal-archive{height:min(620px,calc(100vh - 64px))}
 .dsm-modal-archive .dsm-form{min-height:0;overflow:auto}
+/* ── 段内筛选（场景/记忆等条目多的选段用；条目少时不必显示）────────────────────
+   .dsm-seg-filter 段体顶部的搜索行；.dsm-seg-cards 场景卡片列表（比纯勾选行信息量大）。 */
+.dsm-seg-filter{display:flex;align-items:center;gap:8px;padding:6px 6px 0}
+.dsm-seg-filter .dsm-control{min-height:30px;font-size:12px}
+.dsm-seg-group{display:flex;align-items:center;gap:8px;padding:7px 8px 3px;color:var(--dsw-alias-label-tertiary);font-size:11px}
+.dsm-seg-group-line{height:1px;flex:1;background:var(--dsw-alias-border-l1)}
+.dsm-seg-sub{padding-left:22px}
+.dsm-seg-more{padding:6px 8px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px}
+.dsm-scene-card{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}
+.dsm-scene-card + .dsm-scene-card{margin-top:6px}
+.dsm-scene-card-head{display:flex;min-height:36px;align-items:center;gap:9px;padding:6px 9px}
+.dsm-scene-card-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsm-scene-card-body{border-top:1px solid var(--dsw-alias-border-l1);padding:4px 6px}
+.dsm-tools-grid{display:flex;max-height:180px;padding:6px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}
+.dsm-tools-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.dsm-chip{display:inline-flex;min-height:22px;align-items:center;gap:5px;padding:0 7px;border:1px solid var(--dsw-alias-border-l3);border-radius:6px;color:var(--dsw-alias-label-secondary);font-size:11px}
+.dsm-chip-deny{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+.dsm-chip button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-size:12px;line-height:1;cursor:pointer}
+/* ── 高级选项折叠区（人设表单；默认收起，展开后才拉候选数据）────────────────── */
+.dsm-adv{border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1)}
+.dsm-adv-head{display:flex;width:100%;min-height:40px;align-items:center;gap:8px;padding:0 11px;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.dsm-adv-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsm-adv-caret{color:var(--dsw-alias-label-tertiary);font-size:10px}
+.dsm-adv-body{display:flex;flex-direction:column;gap:12px;padding:11px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-adv-note{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
 `
 
     function ensureCss() {
@@ -758,7 +783,7 @@ window.__ModuleLoader__.load({
         "custom.add.help": "只读接入该目录；目录与源文件都不会被修改",
         "confirm.custom.remove.title": "移除自定义目录",
         "confirm.custom.remove.desc": "移除后该目录的技能不再列出（文件不受影响）：{name}",
-        "result.custom.added": "已添加自定义目录：{path}", "result.custom.removed": "已移除自定义目录",
+        "result.custom.added": "已添加自定义目录：{path}", "result.custom.removed": "已移除自定义目录：{name}",
         "status.enabled": "已启用", "status.disabled": "已停用", "status.invalid": "诊断异常", "status.shadowed": "被覆盖", "status.shadowed.hint": "同名技能「{name}」正在生效；点「启用这个」可改用当前来源的版本", "status.preferred": "同名首选", "status.readonly": "源文件只读", "status.manageable": "可管理", "status.project": "项目级", "status.rank": "优先级 {rank}", "status.source.on": "已启用", "status.source.off": "已停用", "status.bundle": "目录技能", "status.single": "单文件",
         "summary.total.one": "{count} 个技能", "summary.total.other": "{count} 个技能", "summary.enabled.one": "{count} 个已启用", "summary.enabled.other": "{count} 个已启用", "summary.disabled.one": "{count} 个已停用", "summary.disabled.other": "{count} 个已停用", "summary.issues.one": "{count} 个诊断项", "summary.issues.other": "{count} 个诊断项", "summary.group.one": "{count} 个技能", "summary.group.other": "{count} 个技能", "table.skill": "技能名称与描述", "table.status": "调用状态",
         "filter.source": "来源", "filter.all": "全部来源", "filter.option": "{name}（{count}）", "search": "搜索", "search.placeholder": "搜索技能名称或描述", "search.clear": "清除搜索",
@@ -788,17 +813,23 @@ window.__ModuleLoader__.load({
         "scenes.hasArchive": "档案", "scenes.mcp.hint": "添加「MCP 工具集」后，勾选要启用的服务器（含未运行的）；「选工具」可细化到具体工具。",
         "scenes.seg.selectAll": "全选", "scenes.seg.clear": "清空", "scenes.seg.checked": "{checked}/{total} 已勾选",
         "scenes.archive.sectionOff": "未定义",
-        "scenes.archive.summary": "档案：MCP {mcp} 台 · 技能 {skills} 个 · 子智能体 {subagents} 个",
-        "scenes.archive.note": "段未定义 = 不改动该域；段已定义但一项不勾 = 全部停用。",
+        "scenes.archive.summary": "档案：MCP {mcp} 台 · 技能 {skills} 个 · 子智能体 {subagents} 个 · 记忆 {memories} 条",
+        "scenes.archive.note": "段未定义 = 不改动该域；段已定义但一项不勾 = 全部停用（记忆段只影响注入，不会删文件）。",
         "scenes.mcp.noServers": "还没有可选的 MCP 服务器", "scenes.mcp.toolCount": "{count} 个工具", "scenes.skills.empty": "还没有可选的技能",
         "scenes.mcp.allTools": "全部工具", "scenes.mcp.pickedCount": "指定 {count} 个工具", "scenes.mcp.notRunning": "未运行", "scenes.mcp.pickTools": "选工具",
         "scenes.mcp.toolsOf": "工具明细", "scenes.mcp.back": "返回", "scenes.mcp.noTools": "该服务器当前没有可列出的工具（未运行或无工具）", "scenes.mcp.drillHint": "勾选 = 该场景下启用；不勾 = 停用。整台勾选时默认全部工具。",
         "scenes.skills.hint": "添加「技能集」后，勾选该场景下启用的技能。", "scenes.subagents.hint": "添加「子智能体绑定」后，勾选本场景可调用的人设。", "scenes.subagents.empty": "还没有人设——到「子智能体」页创建。",
+        "scenes.filter.skills": "筛选技能（名称）", "scenes.filter.subagents": "筛选人设（名称或描述）", "scenes.filter.servers": "筛选服务器",
+        "scenes.mem.hint": "添加「记忆」段后，勾选本场景要注入的记忆；不勾的记忆不会进系统提示词（文件保留）。",
+        "scenes.mem.title": "记忆", "scenes.mem.search": "在场景内筛选记忆（名称或描述）", "scenes.mem.searchScene": "筛选场景（名称、描述或记忆名）",
+        "scenes.mem.noMatch": "没有匹配项", "scenes.mem.noScenes": "还没有场景——到「场景」页创建。", "scenes.mem.emptyScene": "该场景还没有记忆",
+        "scenes.mem.pick": "选记忆", "scenes.mem.drill": "记忆明细", "scenes.mem.drillHint": "勾选 = 该场景下注入这条记忆；不勾 = 不注入（文件与内容都不动）。",
+        "scenes.mem.sceneCount": "{checked}/{total} 条已勾选", "scenes.mem.alwaysOn": "始终注入",
         "memory.mode.current": "当前模式", "memory.mode.set": "设为当前模式", "memory.mode.exit": "退出模式",
         "memory.archive.edit": "档案", "memory.archive.title": "场景档案",
-        "memory.archive.tools": "MCP 工具集", "memory.archive.skills": "技能集", "memory.archive.subagents": "子智能体绑定",
+        "memory.archive.tools": "MCP 工具集", "memory.archive.skills": "技能集", "memory.archive.subagents": "子智能体绑定", "memory.archive.memories": "记忆",
         "memory.archive.removeSection": "移除段", "memory.archive.save": "保存到场景",
-        "memory.archive.addTools": "+ 添加 MCP 工具集", "memory.archive.addSkills": "+ 添加技能集", "memory.archive.addSubagents": "+ 添加子智能体绑定",
+        "memory.archive.addTools": "+ 添加 MCP 工具集", "memory.archive.addSkills": "+ 添加技能集", "memory.archive.addSubagents": "+ 添加子智能体绑定", "memory.archive.addMemories": "+ 添加记忆",
         "memory.archive.stale": "失效项（已不存在，已跳过）: {items}",
         "memory.result.archiveSaved": "已保存场景档案：{name}", "memory.result.modeSet": "已进入模式：{name}", "memory.result.modeExited": "已退出模式",
         "memory.desc": "管理场景记忆：启用场景里的记忆自动进入系统提示词；场景留空 = 全局注入。",
@@ -913,16 +944,22 @@ window.__ModuleLoader__.load({
         "scenes.hasArchive": "profile", "scenes.mcp.hint": "Add the MCP section first, then check the servers to enable (stopped ones included); use Pick tools to narrow to specific tools.",
         "scenes.seg.selectAll": "Select all", "scenes.seg.clear": "Clear", "scenes.seg.checked": "{checked}/{total} selected",
         "scenes.archive.sectionOff": "not defined",
-        "scenes.archive.summary": "Profile: {mcp} MCP server(s) · {skills} skill(s) · {subagents} subagent(s)",
-        "scenes.archive.note": "An undefined section leaves that domain untouched; a defined-but-empty section disables everything in it.",
+        "scenes.archive.summary": "Profile: {mcp} MCP server(s) · {skills} skill(s) · {subagents} subagent(s) · {memories} memory item(s)",
+        "scenes.archive.note": "An undefined section leaves that domain untouched; a defined-but-empty section disables everything in it (the memory section only affects injection — no file is deleted).",
         "scenes.mcp.noServers": "No MCP servers to pick from yet", "scenes.mcp.toolCount": "{count} tool(s)", "scenes.skills.empty": "No skills to pick from yet",
         "scenes.mcp.allTools": "all tools", "scenes.mcp.pickedCount": "{count} tools picked", "scenes.mcp.notRunning": "not running", "scenes.mcp.pickTools": "Pick tools",
         "scenes.mcp.toolsOf": "Tool details", "scenes.mcp.back": "Back", "scenes.mcp.noTools": "No tools listed for this server (not running or no tools)", "scenes.mcp.drillHint": "Checked = enabled in this scene; unchecked = disabled. A whole-server check defaults to all tools.",
         "scenes.skills.hint": "Add the skills section first, then check the skills enabled in this scene.", "scenes.subagents.hint": "Add the subagent section first, then check the personas callable in this scene.", "scenes.subagents.empty": "No personas yet — create one on the Subagents page.",
+        "scenes.filter.skills": "Filter skills (name)", "scenes.filter.subagents": "Filter personas (name or description)", "scenes.filter.servers": "Filter servers",
+        "scenes.mem.hint": "Add the memory section, then check the memories injected for this scene; unchecked memories never reach the system prompt (their files stay).",
+        "scenes.mem.title": "Memories", "scenes.mem.search": "Filter memories in this scene (name or description)", "scenes.mem.searchScene": "Filter scenes (name, description or memory name)",
+        "scenes.mem.noMatch": "Nothing matches", "scenes.mem.noScenes": "No scenes yet — create one on the Scenes page.", "scenes.mem.emptyScene": "This scene has no memories yet",
+        "scenes.mem.pick": "Pick memories", "scenes.mem.drill": "Memory details", "scenes.mem.drillHint": "Checked = this memory is injected for the scene; unchecked = not injected (file and content untouched).",
+        "scenes.mem.sceneCount": "{checked}/{total} checked", "scenes.mem.alwaysOn": "always injected",
         "memory.mode.current": "Active mode", "memory.mode.set": "Set as active mode", "memory.mode.exit": "Exit mode",
         "memory.archive.edit": "Profile", "memory.archive.title": "Scene profile",
-        "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding",
-        "memory.archive.addTools": "+ Tools", "memory.archive.addSkills": "+ Skills", "memory.archive.addSubagents": "+ Subagents",
+        "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding", "memory.archive.memories": "Memories",
+        "memory.archive.addTools": "+ Tools", "memory.archive.addSkills": "+ Skills", "memory.archive.addSubagents": "+ Subagents", "memory.archive.addMemories": "+ Memories",
         "memory.archive.removeSection": "Remove section", "memory.archive.save": "Save to scene",
         "memory.archive.emptySection": "Section defined with nothing checked = all disabled", "memory.archive.stale": "Stale entries (no longer exist, skipped): {items}",
         "memory.result.archiveSaved": "Scene profile saved: {name}", "memory.result.modeSet": "Entered mode: {name}", "memory.result.modeExited": "Exited mode",
@@ -1836,13 +1873,18 @@ function callApi(path, options) {
               if (!(inv && inv.ok)) { setResult({ ok: false, text: translateError(t, inv) }); return }
               var archives = (modeRes && modeRes.ok ? modeRes.archives : null) || data.archives || {}
               var archive = archives[name] || {}
-              setModal({ type: 'scene-archive', name: name, drill: null,
+              setModal({ type: 'scene-archive', name: name, drill: null, memDrill: null, memQuery: '', skillQuery: '', subQuery: '', mcpQuery: '',
                 sections: {
                   mcp: archive.mcp ? Object.assign({}, archive.mcp) : null,
                   skills: Array.isArray(archive.skills) ? archive.skills.slice() : null,
                   subagents: Array.isArray(archive.subagents) ? archive.subagents.slice() : null,
+                  memories: Array.isArray(archive.memories) ? archive.memories.slice() : null,
                 },
-                inventory: { mcpServers: inv.mcpServers || [], skills: inv.skills || [], subagents: inv.subagents || [], tools: inv.tools || [] } })
+                inventory: {
+                  mcpServers: inv.mcpServers || [], skills: inv.skills || [], subagents: inv.subagents || [], tools: inv.tools || [],
+                  // 记忆段的数据源（宿主 scene-inventory 回传；老宿主缺失时退化为空列表而不是崩）。
+                  memScenes: inv.scenes || [], memories: inv.memories || [],
+                } })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           function modalSections() { return modal && modal.type === 'scene-archive' ? modal.sections : null }
@@ -1926,6 +1968,135 @@ function callApi(path, options) {
             if (!nodes.length) return React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, emptyText))
             return React.createElement('div', { className: 'dsm-seg-body' }, nodes)
           }
+          /** 段体顶部的筛选行（条目多的段用；勾选状态不受筛选影响）。 */
+          function segFilter(value, onChange, placeholder) {
+            return React.createElement('div', { className: 'dsm-seg-filter' },
+              React.createElement('input', { className: 'dsm-control', value: value || '', placeholder: placeholder, onChange: function (e) { onChange(e.target.value) } }))
+          }
+          /** 分组小标题（在长列表里给用户地标，避免「一屏看不出层次」）。 */
+          function segGroup(label) {
+            return React.createElement('div', { className: 'dsm-seg-group' },
+              React.createElement('span', null, label),
+              React.createElement('span', { className: 'dsm-seg-group-line' }))
+          }
+
+          // ── 段 4：记忆（v3）────────────────────────────────────────────────
+          // 数据源是宿主的 scene-inventory（scenes + memories 两个扁平列表）。
+          // 勾选语义与其余段一致：段已定义 → 没勾的记忆在该场景下不注入；段未定义 = 不碰。
+          // 记忆文件不受影响（纯投影），所以这一段没有「运行时副作用」。
+          function memGrouped() {
+            var scenes = (modal.inventory.memScenes || []).slice()
+            var all = modal.inventory.memories || []
+            return scenes.map(function (s) {
+              return {
+                scene: s,
+                items: all.filter(function (m) { return m.scene === s.name })
+                  .sort(function (a, b) { return String(a.name).localeCompare(String(b.name)) }),
+              }
+            })
+          }
+          /** 记忆段已定义时的初值 = 当前全部记忆（「添加」不改变现状，是最小惊讶的选择）。 */
+          function memPreset() {
+            return (modal.inventory.memories || []).map(function (m) { return String(m.id) })
+          }
+          function memCheckedCount() {
+            var sections = modalSections()
+            return sections.memories ? sections.memories.length : 0
+          }
+          function toggleMemory(id) {
+            var sections = modalSections(); if (!sections) return
+            var list = (sections.memories || []).slice()
+            var i = list.indexOf(id)
+            if (i >= 0) list.splice(i, 1); else list.push(id)
+            setSections(Object.assign({}, sections, { memories: list }))
+          }
+          function memDrillList() {
+            var all = (modal.inventory.memories || []).filter(function (m) { return m.scene === modal.memDrill })
+            var q = String(modal.memQuery || '').trim().toLowerCase()
+            var list = q ? all.filter(function (m) {
+              return String(m.name).toLowerCase().indexOf(q) >= 0 || String(m.description || '').toLowerCase().indexOf(q) >= 0
+            }) : all
+            return list.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)) })
+          }
+          function memoriesSeg() {
+            var sections = modalSections()
+            var defined = !!sections.memories
+            var groups = memGrouped()
+            var total = (modal.inventory.memories || []).length
+            if (modal.memDrill) {
+              // 场景内的记忆明细：与 MCP「选工具」同构的钻取视图，弹窗尺寸不变。
+              var scene = (modal.inventory.memScenes || []).filter(function (s) { return s.name === modal.memDrill })[0] || { name: modal.memDrill, label: modal.memDrill, count: 0 }
+              var items = memDrillList()
+              var sceneIds = (modal.inventory.memories || []).filter(function (m) { return m.scene === modal.memDrill }).map(function (m) { return String(m.id) })
+              var checkedInScene = sceneIds.filter(function (id) { return (sections.memories || []).indexOf(id) >= 0 }).length
+              return seg({
+                title: t('scenes.mem.drill') + ' · ' + (scene.label || scene.name),
+                count: t('scenes.seg.checked', { checked: checkedInScene, total: sceneIds.length }),
+                actions: [
+                  React.createElement('button', { key: 'back', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setModal(Object.assign({}, modal, { memDrill: null, memQuery: '' })) } }, t('scenes.mcp.back')),
+                  React.createElement('button', { key: 'all', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () {
+                    var list = (sections.memories || []).slice()
+                    sceneIds.forEach(function (id) { if (list.indexOf(id) < 0) list.push(id) })
+                    setSections(Object.assign({}, sections, { memories: list }))
+                  } }, t('scenes.seg.selectAll')),
+                  React.createElement('button', { key: 'none', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () {
+                    setSections(Object.assign({}, sections, { memories: (sections.memories || []).filter(function (id) { return sceneIds.indexOf(id) < 0 }) }))
+                  } }, t('scenes.seg.clear')),
+                ],
+                body: React.createElement('div', { className: 'dsm-seg-body' },
+                  segFilter(modal.memQuery, function (v) { setModal(Object.assign({}, modal, { memQuery: v })) }, t('scenes.mem.search')),
+                  items.length
+                    ? React.createElement('div', null, items.map(function (m) {
+                        return pickRow({
+                          key: m.id,
+                          checked: (sections.memories || []).indexOf(String(m.id)) >= 0,
+                          name: m.name,
+                          desc: m.description || null,
+                          onChange: function () { toggleMemory(String(m.id)) },
+                        })
+                      }))
+                    : React.createElement('div', { className: 'dsm-pick-empty' }, modal.memQuery ? t('scenes.mem.noMatch') : t('scenes.mem.emptyScene'))),
+                foot: React.createElement('div', { className: 'dsm-seg-foot' }, t('scenes.mem.drillHint')),
+              })
+            }
+            return seg({
+              title: t('memory.archive.memories'),
+              count: defined ? t('scenes.seg.checked', { checked: memCheckedCount(), total: total }) : t('scenes.archive.sectionOff'),
+              actions: segActions(defined, t('memory.archive.addMemories'),
+                function () { setSections(Object.assign({}, modalSections(), { memories: memPreset() })) },
+                function () { var s = Object.assign({}, modalSections()); delete s.memories; setSections(s) },
+                function () { setSections(Object.assign({}, modalSections(), { memories: memPreset() })) },
+                function () { setSections(Object.assign({}, modalSections(), { memories: [] })) }),
+              body: defined
+                ? React.createElement('div', { className: 'dsm-seg-body' },
+                    segFilter(modal.memQuery, function (v) { setModal(Object.assign({}, modal, { memQuery: v })) }, t('scenes.mem.searchScene')),
+                    (function () {
+                      var q = String(modal.memQuery || '').trim().toLowerCase()
+                      var shown = q ? groups.filter(function (g) {
+                        return String(g.scene.label || g.scene.name).toLowerCase().indexOf(q) >= 0
+                          || String(g.scene.description || '').toLowerCase().indexOf(q) >= 0
+                          || g.items.some(function (m) { return String(m.name).toLowerCase().indexOf(q) >= 0 })
+                      }) : groups
+                      if (!shown.length) return React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mem.noScenes'))
+                      // 场景卡片：一行就能看到「这是在管哪个场景的哪些记忆」，比纯勾选行信息量大。
+                      return React.createElement('div', null, shown.map(function (g) {
+                        var ids = g.items.map(function (m) { return String(m.id) })
+                        var on = ids.filter(function (id) { return (sections.memories || []).indexOf(id) >= 0 }).length
+                        return React.createElement('div', { key: 'mg:' + g.scene.name, className: 'dsm-scene-card' },
+                          React.createElement('div', { className: 'dsm-scene-card-head' },
+                            React.createElement('span', { className: 'dsm-pick-main' },
+                              React.createElement('span', { className: 'dsm-pick-name' }, g.scene.label || g.scene.name),
+                              React.createElement('span', { className: 'dsm-pick-desc' },
+                                (g.scene.description ? g.scene.description + ' · ' : '') + t('scenes.mem.sceneCount', { checked: on, total: ids.length }))),
+                            g.scene.global ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('scenes.mem.alwaysOn')) : null,
+                            React.createElement('span', { className: 'dsm-pick-actions' },
+                              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !g.items.length, onClick: function (e) { e.preventDefault(); e.stopPropagation(); setModal(Object.assign({}, modal, { memDrill: g.scene.name, memQuery: '' })) } }, t('scenes.mem.pick'))))
+                      }))
+                    })())
+                : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.mem.hint'))),
+              foot: segFoot(defined, memCheckedCount()),
+            })
+          }
           /** 段 1：MCP 工具集（服务器级勾选 → 行内「选工具」进工具明细，明细留在同一段内）。 */
           function mcpSeg() {
             var sections = modalSections()
@@ -1966,23 +2137,30 @@ function callApi(path, options) {
                 mcpSelectAll,
                 function () { setSections(Object.assign({}, modalSections(), { mcp: {} })) }),
               body: defined
-                ? segList(servers.map(function (server) {
-                    var selected = sections.mcp[server.name] !== undefined
-                    var spec2 = sections.mcp[server.name]
-                    var specText = !selected ? '' : spec2 === '*' ? t('scenes.mcp.allTools') : t('scenes.mcp.pickedCount', { count: spec2.length })
-                    return pickRow({
-                      key: server.name,
-                      checked: selected,
-                      name: server.name,
-                      desc: server.toolCount === null || server.toolCount === undefined ? null : (server.toolCount + ' 个工具'),
-                      meta: [
-                        server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
-                        specText ? React.createElement('span', { key: 'spec' }, specText) : null,
-                      ],
-                      actions: selected ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function (e) { e.preventDefault(); e.stopPropagation(); openDrill(server.name) } }, t('scenes.mcp.pickTools')) : null,
-                      onChange: function () { toggleMcpServer(server.name) },
-                    })
-                  }), t('scenes.mcp.noServers'))
+                ? React.createElement('div', { className: 'dsm-seg-body' },
+                    segFilter(modal.mcpQuery, function (v) { setModal(Object.assign({}, modal, { mcpQuery: v })) }, t('scenes.filter.servers')),
+                    (function () {
+                      var q = String(modal.mcpQuery || '').trim().toLowerCase()
+                      var shown = q ? servers.filter(function (s) { return String(s.name).toLowerCase().indexOf(q) >= 0 }) : servers
+                      if (!shown.length) return React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mcp.noServers'))
+                      return React.createElement('div', null, shown.map(function (server) {
+                        var selected = sections.mcp[server.name] !== undefined
+                        var spec2 = sections.mcp[server.name]
+                        var specText = !selected ? '' : spec2 === '*' ? t('scenes.mcp.allTools') : t('scenes.mcp.pickedCount', { count: spec2.length })
+                        return pickRow({
+                          key: server.name,
+                          checked: selected,
+                          name: server.name,
+                          desc: server.toolCount === null || server.toolCount === undefined ? null : (server.toolCount + ' 个工具'),
+                          meta: [
+                            server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
+                            specText ? React.createElement('span', { key: 'spec' }, specText) : null,
+                          ],
+                          actions: selected ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function (e) { e.preventDefault(); e.stopPropagation(); openDrill(server.name) } }, t('scenes.mcp.pickTools')) : null,
+                          onChange: function () { toggleMcpServer(server.name) },
+                        })
+                      }))
+                    })())
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.mcp.hint'))),
               foot: segFoot(defined, defined ? Object.keys(sections.mcp).length : 0),
             })
@@ -1991,29 +2169,38 @@ function callApi(path, options) {
           function skillsSeg() {
             var sections = modalSections()
             var defined = !!sections.skills
-            var items = modal.inventory.skills || []
+            var items = (function () {
+              var q = String(modal.skillQuery || '').trim().toLowerCase()
+              var all = modal.inventory.skills || []
+              return q ? all.filter(function (x) { return String(x.key).toLowerCase().indexOf(q) >= 0 }) : all
+            })()
+            var allItems = modal.inventory.skills || []
             return seg({
               title: t('memory.archive.skills'),
-              count: defined ? t('scenes.seg.checked', { checked: sections.skills.length, total: items.length }) : t('scenes.archive.sectionOff'),
+              count: defined ? t('scenes.seg.checked', { checked: sections.skills.length, total: allItems.length }) : t('scenes.archive.sectionOff'),
               actions: segActions(defined, t('memory.archive.addSkills'),
-                function () { setSections(Object.assign({}, modalSections(), { skills: items.filter(function (x) { return x.enabled }).map(function (x) { return x.key }) })) },
+                function () { setSections(Object.assign({}, modalSections(), { skills: allItems.filter(function (x) { return x.enabled }).map(function (x) { return x.key }) })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.skills; setSections(s) },
-                function () { setSections(Object.assign({}, modalSections(), { skills: items.map(function (x) { return x.key }) })) },
+                function () { setSections(Object.assign({}, modalSections(), { skills: allItems.map(function (x) { return x.key }) })) },
                 function () { setSections(Object.assign({}, modalSections(), { skills: [] })) }),
               body: defined
-                ? segList(items.map(function (item) {
-                    return pickRow({
-                      key: item.key,
-                      checked: sections.skills.indexOf(item.key) >= 0,
-                      name: item.key,
-                      meta: item.enabled === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null,
-                      onChange: function () {
-                        var list = sections.skills.slice(); var i = list.indexOf(item.key)
-                        if (i >= 0) list.splice(i, 1); else list.push(item.key)
-                        setSections(Object.assign({}, modalSections(), { skills: list }))
-                      },
-                    })
-                  }), t('scenes.skills.empty'))
+                ? React.createElement('div', { className: 'dsm-seg-body' },
+                    segFilter(modal.skillQuery, function (v) { setModal(Object.assign({}, modal, { skillQuery: v })) }, t('scenes.filter.skills')),
+                    items.length
+                      ? React.createElement('div', null, items.map(function (item) {
+                          return pickRow({
+                            key: item.key,
+                            checked: sections.skills.indexOf(item.key) >= 0,
+                            name: item.key,
+                            meta: item.enabled === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null,
+                            onChange: function () {
+                              var list = sections.skills.slice(); var i = list.indexOf(item.key)
+                              if (i >= 0) list.splice(i, 1); else list.push(item.key)
+                              setSections(Object.assign({}, modalSections(), { skills: list }))
+                            },
+                          })
+                        }))
+                      : React.createElement('div', { className: 'dsm-pick-empty' }, modal.skillQuery ? t('scenes.mem.noMatch') : t('scenes.skills.empty')))
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.skills.hint'))),
               foot: segFoot(defined, defined ? sections.skills.length : 0),
             })
@@ -2022,36 +2209,46 @@ function callApi(path, options) {
           function subagentsSeg() {
             var sections = modalSections()
             var defined = !!sections.subagents
-            var items = modal.inventory.subagents || []
+            var allItems = modal.inventory.subagents || []
+            var items = (function () {
+              var q = String(modal.subQuery || '').trim().toLowerCase()
+              return q ? allItems.filter(function (x) {
+                return String(x.name).toLowerCase().indexOf(q) >= 0 || String(x.description || '').toLowerCase().indexOf(q) >= 0
+              }) : allItems
+            })()
             return seg({
               title: t('memory.archive.subagents'),
-              count: defined ? t('scenes.seg.checked', { checked: sections.subagents.length, total: items.length }) : t('scenes.archive.sectionOff'),
+              count: defined ? t('scenes.seg.checked', { checked: sections.subagents.length, total: allItems.length }) : t('scenes.archive.sectionOff'),
               actions: segActions(defined, t('memory.archive.addSubagents'),
                 function () { setSections(Object.assign({}, modalSections(), { subagents: [] })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.subagents; setSections(s) },
-                function () { setSections(Object.assign({}, modalSections(), { subagents: items.map(function (x) { return x.name }) })) },
+                function () { setSections(Object.assign({}, modalSections(), { subagents: allItems.map(function (x) { return x.name }) })) },
                 function () { setSections(Object.assign({}, modalSections(), { subagents: [] })) }),
               body: defined
-                ? segList(items.map(function (item) {
-                    return pickRow({
-                      key: item.name,
-                      checked: sections.subagents.indexOf(item.name) >= 0,
-                      name: item.name,
-                      desc: item.description || null,
-                      onChange: function () {
-                        var list = sections.subagents.slice(); var i = list.indexOf(item.name)
-                        if (i >= 0) list.splice(i, 1); else list.push(item.name)
-                        setSections(Object.assign({}, modalSections(), { subagents: list }))
-                      },
-                    })
-                  }), t('scenes.subagents.empty'))
+                ? React.createElement('div', { className: 'dsm-seg-body' },
+                    segFilter(modal.subQuery, function (v) { setModal(Object.assign({}, modal, { subQuery: v })) }, t('scenes.filter.subagents')),
+                    items.length
+                      ? React.createElement('div', null, items.map(function (item) {
+                          return pickRow({
+                            key: item.name,
+                            checked: sections.subagents.indexOf(item.name) >= 0,
+                            name: item.name,
+                            desc: item.description || null,
+                            onChange: function () {
+                              var list = sections.subagents.slice(); var i = list.indexOf(item.name)
+                              if (i >= 0) list.splice(i, 1); else list.push(item.name)
+                              setSections(Object.assign({}, modalSections(), { subagents: list }))
+                            },
+                          })
+                        }))
+                      : React.createElement('div', { className: 'dsm-pick-empty' }, modal.subQuery ? t('scenes.mem.noMatch') : t('scenes.subagents.empty')))
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.subagents.hint'))),
               foot: segFoot(defined, defined ? sections.subagents.length : 0),
             })
           }
           /**
-           * 档案编辑弹窗：顶部一行摘要（MCP/技能/子智能体各勾了多少）+ 三段 + 底部动作。
-           * 结构固定 —— 加/删段、进出「选工具」明细都不会改变弹窗尺寸或元素顺序。
+           * 档案编辑弹窗：顶部一行摘要（MCP/技能/子智能体/记忆各勾了多少）+ 四段 + 底部动作。
+           * 结构固定 —— 加/删段、进出「选工具」/「选记忆」明细都不会改变弹窗尺寸或元素顺序。
            */
           function archiveNode() {
             if (!modal || modal.type !== 'scene-archive') return null
@@ -2062,11 +2259,13 @@ function callApi(path, options) {
                     mcp: modal.sections.mcp ? Object.keys(modal.sections.mcp).length : 0,
                     skills: modal.sections.skills ? modal.sections.skills.length : 0,
                     subagents: modal.sections.subagents ? modal.sections.subagents.length : 0,
+                    memories: modal.sections.memories ? modal.sections.memories.length : 0,
                   })),
                   React.createElement('span', { className: 'dsm-help' }, t('scenes.archive.note'))),
                 mcpSeg(),
                 skillsSeg(),
                 subagentsSeg(),
+                memoriesSeg(),
                 React.createElement('div', { className: 'dsm-modal-actions' },
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-primary', disabled: busy, onClick: submitArchive }, t('memory.archive.save')))))
@@ -2091,7 +2290,7 @@ function callApi(path, options) {
           function submitArchive() {
             if (!modalSections()) return
             setBusy(true)
-            apiCall('scene-archive-save', { scene: modal.name, archive: (function () { var payload = {}; if (modal.sections.mcp) payload.mcp = modal.sections.mcp; if (modal.sections.skills) payload.skills = modal.sections.skills; if (modal.sections.subagents) payload.subagents = modal.sections.subagents; return payload })() }).then(function (res) {
+            apiCall('scene-archive-save', { scene: modal.name, archive: (function () { var payload = {}; if (modal.sections.mcp) payload.mcp = modal.sections.mcp; if (modal.sections.skills) payload.skills = modal.sections.skills; if (modal.sections.subagents) payload.subagents = modal.sections.subagents; if (modal.sections.memories) payload.memories = modal.sections.memories; return payload })() }).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
                 setModal(null)

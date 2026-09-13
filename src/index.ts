@@ -402,6 +402,11 @@ export default {
       },
       // 人设名全集（保存 subagents 段时校验并报 stale，与 mcp/skills 两段同口径）。
       knownPersonas: async () => new Set((await subagentService.list()).map((p) => p.name)),
+      // 记忆 id 全集（保存 memories 段时校验并报 stale）。
+      knownMemoryIds: async () => {
+        const r: any = await rulesService.ops['rules-list']({})
+        return new Set<string>(((r && r.rules) || []).filter((x: any) => !x.shadowed).map((x: any) => String(x.id)))
+      },
     })
 
     // ---------- 轻量子智能体（设计 §3）----------

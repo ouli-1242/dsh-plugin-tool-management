@@ -5,6 +5,7 @@
 // v2：MCP 段两级（服务器勾选 + '*' / 工具明细），停用表存勾选集的补集，通配由 index.ts 的 guard/restrict 原生支持。
 import {
   computeMcpPlan,
+  computeMemoriesPlan,
   computeSkillsPlan,
   normalizeArchive,
   snapshotRuntime,
@@ -44,6 +45,8 @@ export interface ArchiveEngineDeps {
   sceneExists(name: string): Promise<boolean>
   /** 实时发现的人设名全集（保存档案时校验 subagents 段）。 */
   knownPersonas(): Promise<Set<string>>
+  /** 实时发现的记忆 id 全集（保存档案时校验 memories 段）。 */
+  knownMemoryIds(): Promise<Set<string>>
 }
 
 export interface ArchiveEngine {
@@ -130,6 +133,16 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         stale.push(...archive.subagents.filter((p) => !known.has(p)).map((p) => 'subagents/' + p))
         archive.subagents = archive.subagents.filter((p) => known.has(p))
         if (hadKeys && archive.subagents.length === 0) delete archive.subagents
+      }
+      if (archive.memories) {
+        // 记忆段只影响投影（正文是否进 system prompt），不写任何运行时状态；
+        // 这里只把已不存在的记忆 id 剔掉并上报，避免档案里留下指向空气的勾选。
+        const known = await deps.knownMemoryIds()
+        const hadKeys = archive.memories.length > 0
+        const { stale: memStale } = computeMemoriesPlan(archive.memories, known)
+        stale.push(...memStale)
+        archive.memories = archive.memories.filter((id) => known.has(id))
+        if (hadKeys && archive.memories.length === 0) delete archive.memories
       }
       const slice = await deps.loadSlice()
       if (Object.keys(archive).length === 0) delete slice.archives[scene]

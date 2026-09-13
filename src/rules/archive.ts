@@ -7,6 +7,13 @@ export interface SceneArchive {
   mcp?: Record<string, '*' | string[]>   // serverName → '*' 整台 | 工具名清单；键存在 = 段已定义
   skills?: string[]                      // 勾选的技能选集，key = `<rootKey>/<name>`
   subagents?: string[]                   // 绑定的人设名清单
+  /**
+   * v3：勾选的记忆（id = `<场景>/<名>`）。
+   * 勾选集语义与其余段一致：段已定义 → 未勾的记忆在该场景下**不注入**系统提示词；
+   * 段未定义 → 该场景全部记忆照常注入（向后兼容：老档案没有这一段）。
+   * 记忆文件不会被删改，只影响投影（真实数据零风险）。
+   */
+  memories?: string[]
 }
 
 export interface ModeSnapshot { mcp: Record<string, string[]>; skills: Record<string, boolean> }
@@ -44,17 +51,18 @@ export function normalizeMcpSpec(raw: unknown): Record<string, '*' | string[]> |
   return out
 }
 
-/** 'mcp'/'skills'/'subagents' 键存在且值非 null 才视为"段已定义"——存在性独立于集合空否（null/缺失 = 未定义）。 */
+/** 'mcp'/'skills'/'subagents'/'memories' 键存在且值非 null 才视为"段已定义"——存在性独立于集合空否（null/缺失 = 未定义）。 */
 export function normalizeArchive(raw: unknown): SceneArchive {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const out: SceneArchive = {}
   if (obj.mcp != null) { const mcp = normalizeMcpSpec(obj.mcp); if (mcp) out.mcp = mcp }
   if (obj.skills != null) out.skills = normalizeStringList(obj.skills)
   if (obj.subagents != null) out.subagents = normalizeStringList(obj.subagents)
+  if (obj.memories != null) out.memories = normalizeStringList(obj.memories)
   return out
 }
 
-export function hasSection(archive: SceneArchive, section: 'mcp' | 'skills' | 'subagents'): boolean {
+export function hasSection(archive: SceneArchive, section: 'mcp' | 'skills' | 'subagents' | 'memories'): boolean {
   return archive[section] !== undefined
 }
 
@@ -106,4 +114,38 @@ export function snapshotRuntime(mcpRaw: Record<string, string[]>, skills: Record
     mcp: Object.fromEntries(Object.entries(mcpRaw).map(([k, v]) => [k, v.slice()])),
     skills: { ...skills },
   }
+}
+
+// ── 记忆勾选（v3）──────────────────────────────────────────────────────────
+//
+// 记忆段与其余三段有一处关键差别：MCP / 技能是**运行时启停**（改了要落表、进/退模式要回滚），
+// 记忆只是**投影**（正文进 system prompt）。所以记忆段不产生"应用计划"、不进模式快照，
+// 而是在渲染时被查询——勾选后下一个请求即生效，退出模式无需回滚任何东西。
+
+/**
+ * 记忆是否应当注入（纯函数，供渲染路径同步调用）。
+ *
+ * 口径与其余段同构：
+ *   - 该记忆所属场景**没有** memories 段 → 全部记忆照常注入（老档案 = 未定义 = 不碰）；
+ *   - 有段 → 只有列在段里的记忆注入（段已定义但空 = 该场景记忆全部不注入）。
+ *
+ * 入参 `sceneEnabled` 是索引里的单条启停（`enabled === false` 的条目在上游已被过滤，
+ * 这里只为把两种"不注入"的原因分开，便于体检报告区分）。
+ */
+export function memoryAllowed(
+  archives: Record<string, SceneArchive> | undefined,
+  scene: string,
+  id: string,
+): boolean {
+  const archive = archives ? archives[scene] : undefined
+  if (!archive || archive.memories === undefined) return true
+  return archive.memories.indexOf(id) >= 0
+}
+
+/**
+ * 记忆段的 stale 上报（档案保存时调用）：段里引用了已经不存在的记忆 id。
+ * 记忆段不写任何运行时状态，因此除 stale 外没有别的计划产物。
+ */
+export function computeMemoriesPlan(memories: string[], knownMemoryIds: Set<string>): { stale: string[] } {
+  return { stale: memories.filter((id) => !knownMemoryIds.has(id)).map((id) => 'memories/' + id) }
 }
