@@ -26,6 +26,7 @@
 - **英文 README 与中文对齐**（`README_EN.md`）：此前英文版落后于中文版若干处——「Model tools」重复两行且都写 10 个（实为 12）、UI 写 "six pages"（实为七栏）、缺「记忆导入」「场景档案」「轻量子智能体」三行、多出中文版没有的「Rule checkup」一行（导致整表错位）、快速开始仍写旧的五个独立页面（实为一个「工具」面板七栏）、`rule_manager_*` 描述仍用 "rules"（应为 scene memories）。逐行核对后两版核心亮点表均为 **22 行（20 数据行）且逐行对齐**，21 条图片引用与 git 索引逐字符一致。
 - **截图 `MCP.png` 大小写修复**：`docs/images/mcp.png` 被提交成小写而 README/screenshots.json 都引用 `MCP.png`，Windows 不区分大小写掩盖了这点，GitHub 上该图 404（其余六张正常）。两步 `git mv` 改名后实测 `MCP.png` → HTTP 200、`mcp.png` → 404。
 - **模型工具计数与入口表更正（中英双版）**：「模型工具」由 **12 → 14**——此前两版都漏了 `agentsmd_list` / `agentsmd_apply`（模型可查/切 AGENTS.md 预设库，不提供新建/删除以免误删用户预设），现按四组写出各占几个：MCP 4 / 技能 3 / AGENTS.md 2 / 场景记忆 3 / 子智能体 2 = 14。依据是代码实测 `tools.register()` 共 14 处（`src/index.ts` 12 处 + `src/subagents/tools.ts` 2 处）。「让模型和脚本参与管理」入口表同步补上 `agentsmd_*` 与 `subagent_*` 两行（4 → 6 行数据），中英两版表格逐行对齐。
+- **`package.json` description 补全**：原文只列 `skill_mcp_manager_*` / `skill_manager_*` / `rule_manager_*`（漏 `agentsmd_*` 与 `subagent_*`，也未提子智能体）。现补为五域 + 场景记忆注入系统提示词 + 一次性人设子代理，并写明 **14 model tools** 与五个前缀族。校验：22 项断言逐条对代码核对（各族工具数 4/3/2/3/2、`dsh.client`、`dsh.bundle`、HTTP API 路由、`systemPrompt` 段、subagent 工具）全部通过。
 
 ### 修复（本轮真实故障）
 - **「工具」页整页白屏**：`sceneLabel` 定义在 `MemoryPage` 闭包里却被 `ScenesPage` 调用 → `ReferenceError`，被 slot 边界吞成日志。已提到模块作用域并参数化。

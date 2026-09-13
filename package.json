@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-tool-management",
   "version": "0.5.0",
-  "description": "DSH plugin: unified MCP, Skills, AGENTS.md presets, archived-session and scene-memory manager — Settings UI + HTTP API + model-facing skill_mcp_manager_* / skill_manager_* / rule_manager_* tools. Install with one command: dsh plugin --profile web add dsh-plugin-tool-management@latest",
+  "description": "DSH plugin: one settings panel for MCP servers, Skills, AGENTS.md presets, archived sessions and scene memories — plus scene memory injected into the system prompt and one-shot persona subagents. Settings UI + HTTP API + 14 model tools (skill_mcp_manager_*, skill_manager_*, agentsmd_*, rule_manager_*, subagent_*). Install with one command: dsh plugin --profile web add dsh-plugin-tool-management@latest",
   "repository": {
     "type": "git",
     "url": "https://github.com/ouli-1242/dsh-plugin-tool-management"
