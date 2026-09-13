@@ -57,9 +57,11 @@
 | 斜杠命令 | 聊天框直接输入 `/mcp`、`/skills`、`/agents-md`、`/scene-memory` 查看状态 |
 | 场景记忆自动生效 | 记忆 = `~/.dsh/scene-memory/<场景>/<name>.md`；勾选启用的场景，其目录树内所有 `.md` 正文**自动进入系统提示词**（per-agent `systemPrompt` 段），模型无需任何工具调用，切换后**下一个请求即生效** |
 | 场景启用开关 | 场景 = `scene-memory/` 一级目录，目录名支持中文；「启用场景」多选开关全局持久化在 `rules-index.json` 的 `active`；**无配置时全部启用**，`_shared/` 恒常生效 |
+| 场景档案（自由搭配） | 每个场景可勾选自己的 **MCP 工具集 / 技能集 / 子智能体绑定**（任意组合、也可只选记忆；清单只列实时存在的条目，勾=启用/未勾=停用）。勾了工具/技能段的场景可「设为当前模式」：应用档案前自动快照、退出即恢复；进入后下一请求生效 |
+| 轻量子智能体 | `~/.dsh/subagents/<人设>.md` 一个文件一个人设（frontmatter 可选：description/model/tools，正文=人设提示词，缺省自动派生）；模型经 `subagent_list` / `subagent_run` 调用——子代理带人设运行、只回传结果、即用即弃（不进 History）；**自动继承当前启用场景的记忆段**；场景档案可绑定「本场景可用哪些人设」（绑定外调用直接拒绝）；运行默认需确认，设置可关 |
 | 前缀缓存友好 | 段文本只由「启用场景 + 文件内容」决定，逐字节稳定；场景切换 / 编辑记忆只变化一次，其余请求缓存照常命中（不违反"零注入层"——那条只禁每轮动态变化的内容） |
-| 模型工具 | **10 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能，`rule_manager_*` 管场景记忆（创建前需用户确认，可在设置中关闭） |
-| 界面 | 独立的 `dsm-*` 设计系统，五页风格统一（Rules 与 Scenes 已合并为「场景记忆」） |
+| 模型工具 | **12 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能，`rule_manager_*` 管场景记忆（创建前需用户确认，可在设置中关闭），`subagent_list` / `subagent_run` 调用人设子智能体（运行前默认需确认，设置 `requireConfirmForModelSubagentRun` 可关） |
+| 界面 | 独立的 `dsm-*` 设计系统，五页风格统一（Rules 与 Scenes 已合并为「场景」） |
 
 ## 快速开始
 
@@ -114,9 +116,10 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 - **导入对话**：无痛接管其他工具的会话——Claude Code / Cursor 的 JSONL、Codex 的 Markdown、以及任意文本格式，导入后即可继续对话。
 - **导出对话**：按会话范围（全部 / 仅归档 / 按工作区）导出，每个会话一个 Markdown 或 JSONL 文件；导出目录默认桌面，旁边带「选择文件夹」按钮弹出目录树，逐级浏览选中后自动回填绝对路径。
 
-### 管场景记忆（场景记忆页）
+### 管场景（场景页）
 
 > 这一页由原「Rules」与「Scenes」两页合并而来：**场景（一级目录）是分组维度，记忆（`.md`）是内容**。
+> v0.3 起场景可挂「档案」：MCP 工具集 / 技能集 / 子智能体绑定，三段自由搭配。
 > 目录名也从 `~/.dsh/rules/` 更名为 **`~/.dsh/scene-memory/`**——升级后请把原有文件移过去（见下方「升级注意」）。
 
 - **场景 = `scene-memory/` 下的一级目录，目录名就是场景名**：`~/.dsh/scene-memory/办公/流程.md` 即"办公"场景下的一条记忆。目录名支持中文等任意 Unicode（≤64 字符，不含 `/ \ < > : " | ? *`，不以 `.` 开头）；`_shared/` 是保留的公共场景。
@@ -129,6 +132,8 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 - **启停与回收**：逐条启停（每行右侧开关，停用的记忆仍留在磁盘上，只是不进提示词）、编辑、移入回收站；页头「回收站」可以**恢复**或**永久删除**已删记忆，删除前有二次确认。`enabled` 等状态存在侧车索引里，绝不回写记忆文件。
 - **注入预算可见**：页头下方常驻一条预算条（已用 / 上限字节），超限变红并标「已超限」。默认上限 64 KiB；**某条记忆放不下时只跳过它**、继续装后面放得下的小记忆，段尾会附一份「未注入（超出预算）」清单——模型与用户都能看到哪些记忆这次没进提示词，而不是静默丢失。
 - **不再改写 `~/.dsh/AGENTS.md`**：原"始终层"已下线，公共基线改由 `_shared/` 承担，统一走系统提示词段。
+- **场景档案（三段自由搭配）**：卡片上「档案」打开编辑器，三段各自独立"添加/移除"——**MCP 工具集**、**技能集**（勾选器只列实时发现的条目，预勾当前启用状态，勾=启用/未勾=停用）、**子智能体绑定**（勾人设名单）。只选记忆的场景完全不用碰档案。勾了工具/技能段的场景出现「设为当前模式」按钮：**进入模式 = 快照当前启停 → 应用勾选集 → 记忆收窄到该场景**；「退出模式」按快照恢复；运行中手动改动不会偷偷回写，点「保存到场景」才落盘。进入后下一请求生效。应用失败自动回滚（fail-closed）。
+- **子智能体（人设）**：`~/.dsh/subagents/<人设>.md`，一个文件一个人设——frontmatter 可选（`description` 何时调用 / `model` 指定模型 / `tools` 工具白名单，缺省自动派生），正文就是人设提示词。模型用 `subagent_list` 看清单、`subagent_run{agent, task}` 调用：子代理**带人设独立运行**、自动继承当前启用场景的记忆段、只把最终输出回传主模型（≤16 KiB），跑完即弃不进 History。场景档案里绑定「本场景可用哪些人设」（绑定外调用报"人设不可用"）；运行默认弹确认（花的是真 token），设置 `requireConfirmForModelSubagentRun: false` 可关。
 
 #### 缓存与刷新（§5.2）
 
@@ -191,7 +196,9 @@ mv ~/.dsh/rules ~/.dsh/scene-memory
 | AGENTS.md 预设库 / 应用结果 | 插件目录 `data/agents-md-presets/`；「应用」写入 `~/.dsh/AGENTS.md` |
 | 归档会话账本 / 保留期 | 插件目录 `data/history-archived-at.json`、`data/history-retention.json` |
 | 记忆文件（真源） | `~/.dsh/scene-memory/<场景>/<name>.md`（flat）或 `<场景>/<name>/SKILL.md`（bundle）；场景目录名可含中文 |
-| 记忆索引 / 启用场景 | `~/.dsh/tool-management/rules-index.json`（`enabled`/排序/标签 + `active` 启用场景集合；`active: null` = 全部启用） |
+| 记忆索引 / 启用场景 | `~/.dsh/tool-management/rules-index.json`（`enabled`/排序/标签 + `active` 启用场景集合；`active: null` = 全部启用；`archives` 场景档案勾选集 + `mode` 当前模式快照） |
+| 人设文件（真源） | `~/.dsh/subagents/<人设>.md`（frontmatter 可选，正文 = 人设提示词） |
+| 页面设置 / 确认开关 | `~/.dsh/dsh-plugin-tool-management-settings.json`（`requireConfirmForModelSubagentRun` 等） |
 | 记忆回收站 | `~/.dsh/tool-management/rules-trash/<trashId>/`（删除记忆先进这里，可恢复） |
 | 运行日志 | `~/.dsh/dsh-plugin-tool-management.log`（滚动） |
 
