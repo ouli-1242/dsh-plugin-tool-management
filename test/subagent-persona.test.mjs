@@ -5,7 +5,10 @@
 // （如 sensenova 的 sensenova-6.8-flash-lite）会静默落回主会话的 provider 并解析失败。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parsePersona, serializePersona } from '../lib/subagents/service.js'
+import { mkdtemp, readFile, readdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { parsePersona, serializePersona, createSubagentService } from '../lib/subagents/service.js'
 
 const doc = (raw, name = 'p') => parsePersona(raw, name)
 
@@ -52,4 +55,37 @@ test('往返：只给 model（继承主会话 provider）时 provider 保持缺�
   const back = doc(serializePersona({ description: 'd', model: 'deepseek-flash', body: 'B' }))
   assert.equal(back.model, 'deepseek-flash')
   assert.equal(back.provider, undefined)
+})
+
+test('parsePersona / serializePersona：工具黑名单 toolsDeny 往返不丢', () => {
+  const back = doc(serializePersona({ description: 'd', tools: ['read_file'], toolsDeny: ['bash', 'pwsh'], body: 'B' }))
+  assert.deepEqual(back.tools, ['read_file'])
+  assert.deepEqual(back.toolsDeny, ['bash', 'pwsh'])
+})
+
+test('create 会在目录不存在时把它建出来（v0.4 人设搬到 hub 内的新目录）', async () => {
+  // 回归点：活体验收时 subagent-create 直接 ENOENT —— 旧目录 $DSH_HOME/subagents/ 一直有人建，
+  // 换成 hub 内的 agents/ 后全新安装并不存在这个目录，写入前必须先 mkdir。
+  const base = await mkdtemp(join(tmpdir(), 'dsh-persona-'))
+  const dir = join(base, 'tool-management', 'agents')
+  const svc = createSubagentService({}, { subagentsDir: dir })
+
+  const created = await svc.ops['subagent-create']({ name: 'probe', description: 'd', tools: ['read_file'], toolsDeny: ['bash'], body: 'B' })
+  assert.equal(created.ok, true, '目录不存在时创建应成功（不存在则自动建）')
+
+  const files = await readdir(dir)
+  assert.deepEqual(files, ['probe.md'])
+  const raw = await readFile(join(dir, 'probe.md'), 'utf8')
+  assert.match(raw, /toolsDeny: bash/)
+
+  // 读回：黑名单从文件里真的被解析回来（不是只写不读）。
+  const got = await svc.ops['subagent-get']({ name: 'probe' })
+  assert.equal(got.ok, true)
+  assert.deepEqual(got.persona.tools, ['read_file'])
+  assert.deepEqual(got.persona.toolsDeny, ['bash'])
+
+  // 重名仍拒绝（mkdir 不该把「已存在」检查挤掉）。
+  const again = await svc.ops['subagent-create']({ name: 'probe', description: 'd', body: 'B' })
+  assert.equal(again.ok, false)
+  assert.match(again.error, /已存在/)
 })

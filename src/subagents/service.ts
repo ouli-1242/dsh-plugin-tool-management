@@ -235,6 +235,13 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       const target = join(dir, name + '.md')
       const exists = await readFile(target, 'utf8').then(() => true).catch(() => false)
       if (exists) return { ok: false, error: `人设已存在: ${name}` }
+      // 目录必须先建：v0.4 起人设落在 hub 内的 agents/，全新安装时它还不存在
+      // （旧版本落在 $DSH_HOME/subagents/，那个目录一直有人建，所以这个坑以前不显形）。
+      try {
+        await mkdir(dir, { recursive: true })
+      } catch (e) {
+        return { ok: false, error: `创建人设目录失败: ${dir}（${message(e)}）` }
+      }
       await writeFile(target, serializePersona(args), 'utf8')
       cache = null
       return { ok: true, name }
