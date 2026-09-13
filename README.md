@@ -5,7 +5,7 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js)](package.json)
 [![GitHub](https://img.shields.io/badge/GitHub-ouli--1242%2Fdsh--plugin--tool--management-181717?logo=github)](https://github.com/ouli-1242/dsh-plugin-tool-management)
 
-**简体中文** · [English](README_EN.md)
+**简体中文** · [English](README_EN.md) · [Changelog](docs/Changelog.md)
 
 **DeepSeek Harness 的 MCP 服务、技能与记忆管理插件。** 一个设置面板管好五件事：
 
@@ -119,11 +119,8 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ### 管场景（场景页）
 
-> 这一页由原「Rules」与「Scenes」两页合并而来：**场景是分组维度，记忆（`.md`）是内容**。
-> 场景可挂「档案」：MCP 工具集 / 技能集 / 子智能体绑定 / 记忆，四段自由搭配。
-> v0.4 起数据统一收在 `~/.dsh/tool-management/` 一个目录里（`memories/` 记忆、`agents/` 人设、
-> `agents-md/` 预设库、`skills/` 插件新建的技能）；旧路径（`~/.dsh/scene-memory/`、
-> `~/.dsh/subagents/`、插件目录 `data/agents-md-presets/`）**首次启动自动搬入，只搬不删、绝不覆盖**。
+> 场景 = 分组维度，记忆（`.md`）= 内容；场景可挂「档案」：MCP 工具集 / 技能集 / 子智能体绑定 / 记忆，四段自由搭配。
+> 数据统一收在 `~/.dsh/tool-management/`（目录结构、旧路径自动搬迁、缓存设计见 [Changelog](docs/Changelog.md)）。
 
 - **场景是显式记录**：`memories/<场景>/` 是它的记忆目录，场景本身带**描述**与顺序（存在 `rules-index.json` 的 `scenes` 切片）。`~/.dsh/tool-management/memories/办公/流程.md` 即"办公"场景下的一条记忆。场景名支持中文等任意 Unicode（≤64 字符，不含 `/ \ < > : " | ? *`，不以 `.` 开头，**单个路径段**）；`global` 是保留场景（界面显示「全局」），`_shared/` 是历史保留的公共场景。
 - **新建场景**：点「新建场景」填名字与一句描述（也可以自己在 `memories/` 下 `mkdir`，效果一样，下次读取会补上记录）。**空场景也合法**——可以先把场景建好、之后再往里放记忆。卡片上还有「改描述」随时补说明。
@@ -139,49 +136,6 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 - **不再改写 `~/.dsh/AGENTS.md`**：原"始终层"已下线，公共基线改由 `_shared/` 承担，统一走系统提示词段。
 - **场景档案（四段自由搭配）**：卡片上「档案」打开编辑器，四段各自独立"添加/移除"——**MCP 工具集**（两级勾选：先勾服务器，「添加」时按当前运行时状态预勾；不勾=整台停用，勾了但一个工具都不勾=该服务器全停）、**技能集**（勾选器只列实时发现的条目，预勾当前启用状态，勾=启用/未勾=停用）、**子智能体绑定**（勾人设名单，全不选=不限制）、**记忆**（场景卡片列出每个场景的记忆与已勾条数，点「选记忆」进场景内明细；**只影响注入**——没勾的记忆不进系统提示词，文件与内容一律不动）。编辑器顶部有筛选框，长列表不用靠滚动找；弹窗固定高度，加减段不跳动。勾了工具/技能段的场景出现「设为当前模式」按钮：**进入模式 = 快照当前启停 → 先落盘快照 → 应用勾选集 → 记忆收窄到该场景**；「退出模式」按快照**原文**恢复（模式期间写进去的整台停用键随之消失）。运行中手动改动不会偷偷回写，点「保存到场景」才落盘。进入后下一请求生效。任一步失败自动回滚并如实上报（回滚未完成会写进错误文本，不谎报「已回滚」）。
 - **子智能体（人设）**：`~/.dsh/tool-management/agents/<人设>.md`，一个文件一个人设——frontmatter 可选（`description` 何时调用，**一句话即可** / `provider` + `model` 指定模型路由（**两者是一对**：跨来源换模型必须都填，如 `provider: sensenova` + `model: sensenova-6.8-flash-lite`；只填 `model` 会落在主会话的来源上） / `tools` 工具白名单 / `toolsDeny` 工具黑名单，缺省自动派生），正文就是人设提示词。页面上这些都在「**高级选项**」折叠区里（已经在用模型/工具限制的人设自动展开）：模型是**下拉选择**（宿主 LLM 目录里的 `provider · model` 对，目录里没有的可切「自定义」手填），工具白/黑名单是**勾选器**——候选是**全部 Agent 预设工具名的并集**并标注「当前会话可见 / 其它预设里可用」，因为人设可能在任何预设下被复用，只列当前会话的工具会让换预设后的子代理启动失败（官方 `toolFilter` 对未知名直接拒绝启动）。页头「导入」支持 `.md` 与 `.zip`（zip 内任意层级的 `.md` 都按文件名导入，**同名自动跳过并列出名单**）。模型用 `subagent_list` 看清单、`subagent_run{agent, task}` 调用：子代理**带人设独立运行**、自动继承当前启用场景的记忆段、只把最终输出回传主模型（≤16 KiB），跑完即弃不进 History。场景档案里绑定「本场景可用哪些人设」（绑定外调用报"人设不可用"）；运行默认弹确认（花的是真 token），设置 `requireConfirmForModelSubagentRun: false` 可关，完全权限（`approval=never`）下视为已预先批准直接放行（见 FAQ）。**治理边界**：以上约束只覆盖 `subagent_run` 这一条通道——DSH 官方的 `subagent` / `subagent_fork` 是宿主能力，无确认门、也不认这套人设，任何模式下都不受本插件约束（见 FAQ「两条子代理通道」）。
-
-#### 缓存与刷新（§5.2）
-
-| 情形 | 前缀是否稳定 | 结果 |
-|---|---|---|
-| 场景组合不变、记忆文件不变 | 逐字节稳定 | ✅ 提示词前缀缓存命中 |
-| 切换启用场景（显式动作） | 变化一次 | ⚠️ 该会话重新预热一次，可接受 |
-| 编辑某条记忆（页面或编辑器） | 变化一次 | ⚠️ 同上，**下一个请求即生效** |
-| 段落里放时间戳 / 计数 / 相对时间 | 每请求都变 | ❌ 禁止（实现里也没有） |
-
-实现上采用「**两相扫描 + 指纹缓存**」：每次装配只做一次 `stat` 遍历产出指纹（不读正文），
-指纹不变就直接复用上次拼接结果；指纹一变（切场景 / 改文件 / 改启停）才读正文并重排。
-**没有用 `fs.watch`**——Windows 上递归监听不可靠，而监听静默失效的后果是永久返回过期内容；
-指纹探测是亚毫秒级，换来"永远最新且永不静默失效"。
-
-#### 升级注意：数据目录搬迁（v0.4）
-
-v0.4 起插件的**全部数据收在 `~/.dsh/tool-management/` 一个目录里**（方便统一查看与备份）：
-
-```
-~/.dsh/tool-management/
-├─ memories/<场景>/<名>.md | <场景>/<名>/SKILL.md   记忆正文（真源）
-├─ agents/<人设>.md                                  子智能体人设
-├─ agents-md/<预设 id>/AGENTS.md                     全局指令基线预设库
-├─ skills/                                           插件新建/导入的技能
-├─ trash/                                            技能回收站；rules-trash/ 记忆回收站
-├─ rules-index.json                                  启停/顺序/场景记录/档案/模式
-└─ state.json                                        技能启停策略与自定义目录
-```
-
-**旧路径会在首次启动时自动搬入**（只搬不删、目标已存在则跳过、每进程一次、失败不阻断）：
-
-| 旧位置 | 新位置 |
-|---|---|
-| `~/.dsh/scene-memory/<场景>/…` | `~/.dsh/tool-management/memories/<场景>/…` |
-| `~/.dsh/scene-memory/<根层>.md`（旧的全局记忆） | `~/.dsh/tool-management/memories/global/<根层>.md` |
-| `~/.dsh/rules/…`（v0.3 之前） | 同上两条 |
-| `~/.dsh/subagents/<人设>.md` | `~/.dsh/tool-management/agents/<人设>.md` |
-| 插件目录 `data/agents-md-presets/` | `~/.dsh/tool-management/agents-md/` |
-
-搬移走的是 `rename`（同盘瞬时），源目录会留一个空壳，确认无误后自行删除即可。
-`~/.dsh/skills/`（DSH 官方技能目录）**不搬**：它仍作为一个可切换来源列出，只是插件**新建/导入**
-的技能改落到 `tool-management/skills/`（同名时 hub 内的版本优先）。
 
 ### 让模型和脚本参与管理
 
@@ -248,7 +202,7 @@ npm run check:i18n   # 中英词典键集合 + 占位符对齐
 npm test             # 构建 + i18n 自检 + 全部语义契约测试（node --test test/*.test.mjs，61 例）
 ```
 
-> 本项目的验证方式是**直接跑一遍真实行为**（见 `docs/` 下的变更单验收项），而不是断言代码当前怎么实现——
+> 本项目的验证方式是**直接跑一遍真实行为**（验收证据与已知问题见 [Changelog](docs/Changelog.md)），而不是断言代码当前怎么实现——
 > 后者只是把实现抄一遍，必然通过。例外是六组**语义契约**测试（`npm test`，跑 `lib/` 产物，共 61 例）：
 > `archive.test.mjs`（引擎状态机：勾=启用、空段可持久化、失败回滚与如实上报）、
 > `import.test.mjs`（导入展开、落点规划与限额回报）、

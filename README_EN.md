@@ -5,7 +5,7 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js)](package.json)
 [![GitHub](https://img.shields.io/badge/GitHub-ouli--1242%2Fdsh--plugin--tool--management-181717?logo=github)](https://github.com/ouli-1242/dsh-plugin-tool-management)
 
-[简体中文](README.md) · **English**
+[简体中文](README.md) · **English** · [Changelog](docs/Changelog.md)
 
 **An MCP server, skills & memory manager for DeepSeek Harness.** One settings panel keeps five things under control:
 
@@ -246,8 +246,8 @@ npm run lint         # syntax self-check (node --check on both artifacts)
 npm test             # build + all semantic-contract tests (node --test test/*.test.mjs)
 ```
 
-> Changes are verified by **actually exercising the real behaviour** (see the acceptance items in
-> the change requests under `docs/`) instead of asserting what the code currently does — the latter
+> Changes are verified by **actually exercising the real behaviour** (evidence and known issues live in
+> [Changelog](docs/Changelog.md)) instead of asserting what the code currently does — the latter
 > just copies the implementation and passes by construction. The exception is six groups of
 > **semantic-contract** tests (`npm test`, run against the built `lib/`, 61 cases):
 > `archive.test.mjs` (engine state machine), `import.test.mjs` (ZIP expansion, landing plans, limit
