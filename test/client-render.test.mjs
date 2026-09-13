@@ -288,8 +288,9 @@ test('场景卡片文案：全局只显示描述（无任何数量），普通�
   assert.equal(clipped.endsWith('…'), true, '裁剪后应以省略号结尾')
   assert.equal(clipText('  a\n\nb  ', 10), 'a b', '裁剪前应压平空白')
 
-  // CSS 侧的兜底（双保险）：描述行单行省略；记忆段场景卡片的名称/说明各占一行。
-  // 后者是「纵向布局」的直接成因——.dsm-pick-main 在行内布局下会把两段文字排在同一行里换行。
+  // CSS 侧的兜底（双保险）：描述行单行省略；勾选行的名称/说明各占一行（否则长描述横向溢出段边框）。
+  // 后者是「文字超出边框」的直接成因——.dsm-pick-main 原是行内 span，text-overflow 对行内元素无效，
+  // 实测溢出 353px（Playwright 量过）。
   const cssOf = (selector) => {
     const line = src.split('\n').map((l) => l.trim()).find((l) => l.startsWith(selector) && l.includes('{'))
     assert.ok(line, `找不到 CSS 规则 ${selector}`)
@@ -297,9 +298,56 @@ test('场景卡片文案：全局只显示描述（无任何数量），普通�
   }
   assert.match(cssOf('.dsm-scene-tile-desc{'), /white-space:nowrap/, '描述行必须单行')
   assert.match(cssOf('.dsm-scene-tile-desc{'), /text-overflow:ellipsis/, '描述行超出要省略号')
-  assert.match(cssOf('.dsm-scene-card-head .dsm-pick-main{'), /flex-direction:column/, '名称与说明必须各占一行')
+  assert.match(cssOf('.dsm-pick-main{'), /flex-direction:column/, '勾选行的名称与说明必须各占一行')
+  assert.match(cssOf('.dsm-pick-desc{'), /text-overflow:ellipsis/, '勾选行说明超出要省略号')
+  // 滚动容器里的子项不许被压缩（否则筛选框会被压扁、与下面的条目叠在一起）。
+  assert.match(cssOf('.dsm-seg-body>*{'), /flex:none/, '段体子项必须禁止收缩')
+  assert.match(cssOf('.dsm-tools-grid>*{'), /flex:none/, '工具勾选列表子项必须禁止收缩')
   // 描述输入框的字数上限：显示层裁剪只兜住历史数据，新写的必须在输入处就挡住。
   assert.match(src, /maxLength:\s*SCENE_DESC_MAX/, '场景描述输入框缺少 maxLength')
+})
+
+/**
+ * 档案弹窗各段的**默认勾选**契约（用户要求）：
+ *   - MCP 工具集 / 技能集 / 子智能体绑定：点「添加」后一律**不勾选**；
+ *   - 记忆：只勾**保留场景「全局」里已启用**的那几条，其余（其它场景、全局里已停用的）不勾。
+ * 记忆的默认值是真逻辑（memDefaultPickIds），直接调；另外两段是常量动作，用源码守卫。
+ */
+test('档案弹窗默认勾选：MCP/技能/子智能体空集，记忆只勾「全局」已启用的那几条', () => {
+  const exported = loadModule()
+  exported.apply(fakeCtx(fakeSlots(), exported.dict))
+  const { memDefaultPickIds, memDescMax, clipText } = exported.pages
+  assert.equal(typeof memDefaultPickIds, 'function', 'pages.memDefaultPickIds 未导出（测试接缝丢失）')
+
+  const memories = [
+    { id: 'global/总则', scene: 'global', name: '总则', description: 'x' },
+    { id: 'global/停用的', scene: 'global', name: '停用的', description: 'y' },
+    { id: '办公/周报', scene: '办公', name: '周报', description: 'z' },
+    { id: 'global/被覆盖的', scene: 'global', name: '被覆盖的', description: 'w' },
+  ]
+  const rules = [
+    { id: 'global/总则', group: 'global', enabled: true },
+    { id: 'global/停用的', group: 'global', enabled: false },
+    { id: '办公/周报', group: '办公', enabled: true },
+    { id: 'global/被覆盖的', group: 'global', enabled: true, shadowed: true },
+  ]
+  assert.deepEqual(memDefaultPickIds(memories, rules), ['global/总则'], '默认只勾「全局」+ 已启用 + 未被覆盖')
+  assert.deepEqual(memDefaultPickIds(memories, []), [], '拿不到 rules（老宿主/请求失败）时不预勾，宁少不滥')
+  assert.deepEqual(memDefaultPickIds([{ id: 'global/a', scene: 'global' }], [{ id: 'global/a', enabled: undefined }]), ['global/a'], 'enabled 缺省视为启用（与记忆页一致）')
+
+  // 记忆描述必须截断：上限存在、且超长必裁（记忆正文可能很长，行内只留一行）。
+  const max = memDescMax()
+  assert.ok(max >= 40 && max <= 160, `记忆描述上限不合理：${max}`)
+  const clipped = clipText('一'.repeat(300), max)
+  assert.equal(clipped.length, max)
+  assert.equal(clipped.endsWith('…'), true)
+
+  // 源码守卫：两段的「添加」动作必须是空集（默认不勾选）。
+  assert.match(src, /\{ mcp: emptyMcpPreset\(\) \}/, 'MCP 工具集「添加」必须默认不勾选')
+  assert.match(src, /\{ skills: \[\] \}/, '技能集「添加」必须默认不勾选')
+  assert.match(src, /subagents: \[\] \}/, '子智能体绑定「添加」必须默认不勾选')
+  // 反向守卫：记忆段的「全选」必须是真正的全选，不能还是默认值那一个子集。
+  assert.match(src, /memories: allMemoryIds\(\) \}/, '记忆段「全选」必须勾上全部记忆')
 })
 
 test('apply 装配：注册 settings.section（slots 缺失时会静默什么都不注册，这条挡住白屏）', () => {

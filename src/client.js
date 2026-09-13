@@ -56,11 +56,16 @@ window.__ModuleLoader__.load({
 .dsm-seg-count{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
 .dsm-seg-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}
 .dsm-seg-body{display:flex;height:216px;padding:6px;overflow:auto;flex-direction:column}
+/* 滚动容器里的子项不许被压缩：否则内容一多，筛选框会被压到比 input 还矮、与下面的条目叠在一起。 */
+.dsm-seg-body>*{flex:none}
 .dsm-seg-foot{display:flex;align-items:center;gap:8px;padding:7px 12px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .dsm-pick{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px}
 .dsm-pick:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
-.dsm-pick-main{min-width:0;flex:1}
+/* .dsm-pick-main 必须是**纵向 flex**：它原本只是个行内 span，名称与说明会在同一行里内联排布，
+   而 text-overflow:ellipsis 对行内元素无效 → 长描述直接横向溢出段边框（实测溢出 353px）。
+   改成列向 flex 后两行各自成为块级子项，各自单行省略。 */
+.dsm-pick-main{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}
 .dsm-pick-name{overflow:hidden;font-size:13px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-pick-desc{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-pick-meta{display:flex;align-items:center;gap:6px;flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
@@ -77,7 +82,7 @@ window.__ModuleLoader__.load({
 .dsm-modal-archive .dsm-seg-body{height:auto;flex:1 1 auto}
 /* ── 段内筛选（场景/记忆等条目多的选段用；条目少时不必显示）────────────────────
    .dsm-seg-filter 段体顶部的搜索行；.dsm-seg-cards 场景卡片列表（比纯勾选行信息量大）。 */
-.dsm-seg-filter{display:flex;align-items:center;gap:8px;padding:6px 6px 0}
+.dsm-seg-filter{display:flex;align-items:center;gap:8px;padding:6px 6px 8px}
 .dsm-seg-filter .dsm-control{min-height:30px;font-size:12px}
 .dsm-seg-group{display:flex;align-items:center;gap:8px;padding:7px 8px 3px;color:var(--dsw-alias-label-tertiary);font-size:11px}
 .dsm-seg-group-line{height:1px;flex:1;background:var(--dsw-alias-border-l1)}
@@ -88,10 +93,6 @@ window.__ModuleLoader__.load({
 .dsm-scene-card-head{display:flex;min-height:36px;align-items:center;gap:9px;padding:6px 9px}
 .dsm-scene-card-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsm-scene-card-body{border-top:1px solid var(--dsw-alias-border-l1);padding:4px 6px}
-/* 记忆段场景卡片：名称与说明各占一行。
-   .dsm-pick-main 是行内 span（只在 .dsm-pick 里靠 flex:1 撑开），直接塞两段文字会**同行内联换行**——
-   描述一长卡片就被撑成纵向。这里显式改成纵向 flex，两行各自单行省略。 */
-.dsm-scene-card-head .dsm-pick-main{display:flex;flex-direction:column;gap:2px}
 /* ── 场景页（场景档案）────────────────────────────────────────────────────
    四类信息各占一行，互不挤：标题行（名字/别名/标签/开关）、描述行（单行省略）、动作行（主次按钮）。
    卡片上**不再出现数量**（记忆条数、已配 N 台 MCP…）：它们是上次「卡片显得杂乱」的直接来源，
@@ -117,6 +118,7 @@ window.__ModuleLoader__.load({
 .dsm-scene-tile-links{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-left:auto}
 @container(max-width:640px){.dsm-scenes{grid-template-columns:1fr}}
 .dsm-tools-grid{display:flex;max-height:180px;padding:6px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}
+.dsm-tools-grid>*{flex:none}
 .dsm-tools-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .dsm-chip{display:inline-flex;min-height:22px;align-items:center;gap:5px;padding:0 7px;border:1px solid var(--dsw-alias-border-l3);border-radius:6px;color:var(--dsw-alias-label-secondary);font-size:11px}
 .dsm-chip-deny{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
@@ -275,7 +277,7 @@ window.__ModuleLoader__.load({
         "scenes.seg.selectAll": "全选", "scenes.seg.clear": "清空", "scenes.seg.checked": "{checked}/{total} 已勾选",
         "scenes.archive.sectionOff": "未定义",
         "scenes.archive.summary": "档案：MCP {mcp} 台 · 技能 {skills} 个 · 子智能体 {subagents} 个 · 记忆 {memories} 条",
-        "scenes.archive.note": "段未定义 = 不改动该域；段已定义但一项不勾 = 全部停用（记忆段只影响注入，不会删文件）。",
+        "scenes.archive.note": "新添加的段默认一项不勾。段未定义 = 不改动该域；段已定义但一项不勾 = 该域全部停用（子智能体段例外：不勾 = 不限制；记忆段只影响注入，不会删文件）。",
         "scenes.mcp.noServers": "还没有可选的 MCP 服务器", "scenes.mcp.toolCount": "{count} 个工具", "scenes.skills.empty": "还没有可选的技能",
         "scenes.mcp.allTools": "全部工具", "scenes.mcp.pickedCount": "指定 {count} 个工具", "scenes.mcp.notRunning": "未运行", "scenes.mcp.pickTools": "选工具",
         "scenes.mcp.toolsOf": "工具明细", "scenes.mcp.back": "返回", "scenes.mcp.noTools": "该服务器当前没有可列出的工具（未运行或无工具）", "scenes.mcp.drillHint": "勾选 = 该场景下启用；不勾 = 停用。整台勾选时默认全部工具。",
@@ -340,7 +342,7 @@ window.__ModuleLoader__.load({
         "memory.result.sceneCreated": "已创建场景：{name}", "memory.result.sceneUpdated": "已保存场景：{name}", "memory.result.sceneRemoved": "已删除场景：{name}",
         "memory.table.name": "记忆名称与描述", "memory.table.tags": "标记", "memory.table.status": "状态",
         "error.rules.invalidGroup": "场景/分组名不合法（非空、≤64 字符、不含路径分隔符与 < > : \" | ? *、不以 . 开头）", "error.rules.invalidName": "记忆名不合法（非空、≤64 字符、不含路径分隔符与 < > : \" | ? *、不以 . 开头）", "error.rules.descriptionRequired": "描述不能为空", "error.rules.descriptionTooLong": "描述过长（不能超过 500 字符）", "error.rules.bodyRequired": "正文不能为空", "error.rules.tooLarge": "规则内容过大", "error.rules.shadowed": "规则被同名 bundle 遮蔽，无法写入", "error.rules.notFound": "规则不存在", "error.rules.budgetExceeded": "场景记忆段超出预算", "error.rules.ioFailed": "文件操作失败", "error.rules.sceneNotEmpty": "场景不为空，无法删除", "error.rules.notBundle": "该记忆是 flat（单文件），不能带附件", "error.rules.noFiles": "没有选择附件", "error.rules.emptyFile": "附件内容为空", "error.rules.fileTooLarge": "附件过大（单个上限 {limit} MB）", "error.rules.tooManyFiles": "一次最多 {limit} 个附件", "error.rules.sceneInMode": "该场景正处在当前模式，请先退出模式再删除",
-        "memory.archive.emptySection": "该段已定义但没有勾选任何条目 = 全部停用",
+        "memory.archive.emptySection": "该段已定义但没有勾选任何条目 = 全部停用", "memory.archive.emptySubagents": "该段已定义但没有勾选任何条目 = 不限制（全部人设可用）",
         "subagents.title": "子智能体", "subagents.desc": "管理人设：一个人设一个文件，正文即子代理的系统提示词。",
         "prompts.desc": "管理全局指令基线：应用后写入 AGENTS.md，新会话生效。",
         "sessions.desc": "管理已归档会话：可恢复或永久删除，超保留期自动清理。",
@@ -464,7 +466,7 @@ window.__ModuleLoader__.load({
         "scenes.seg.selectAll": "Select all", "scenes.seg.clear": "Clear", "scenes.seg.checked": "{checked}/{total} selected",
         "scenes.archive.sectionOff": "not defined",
         "scenes.archive.summary": "Profile: {mcp} MCP server(s) · {skills} skill(s) · {subagents} subagent(s) · {memories} memory item(s)",
-        "scenes.archive.note": "An undefined section leaves that domain untouched; a defined-but-empty section disables everything in it (the memory section only affects injection — no file is deleted).",
+        "scenes.archive.note": "A newly added section starts with nothing checked. An undefined section leaves that domain untouched; a defined-but-empty section disables that domain (the subagent section is the exception: empty means no restriction; the memory section only affects injection — no file is deleted).",
         "scenes.mcp.noServers": "No MCP servers to pick from yet", "scenes.mcp.toolCount": "{count} tool(s)", "scenes.skills.empty": "No skills to pick from yet",
         "scenes.mcp.allTools": "all tools", "scenes.mcp.pickedCount": "{count} tools picked", "scenes.mcp.notRunning": "not running", "scenes.mcp.pickTools": "Pick tools",
         "scenes.mcp.toolsOf": "Tool details", "scenes.mcp.back": "Back", "scenes.mcp.noTools": "No tools listed for this server (not running or no tools)", "scenes.mcp.drillHint": "Checked = enabled in this scene; unchecked = disabled. A whole-server check defaults to all tools.",
@@ -480,7 +482,7 @@ window.__ModuleLoader__.load({
         "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding", "memory.archive.memories": "Memories",
         "memory.archive.addTools": "+ Tools", "memory.archive.addSkills": "+ Skills", "memory.archive.addSubagents": "+ Subagents", "memory.archive.addMemories": "+ Memories",
         "memory.archive.removeSection": "Remove section", "memory.archive.save": "Save to scene",
-        "memory.archive.emptySection": "Section defined with nothing checked = all disabled", "memory.archive.stale": "Stale entries (no longer exist, skipped): {items}",
+        "memory.archive.emptySection": "Section defined with nothing checked = all disabled", "memory.archive.emptySubagents": "Section defined with nothing checked = no restriction (all personas allowed)", "memory.archive.stale": "Stale entries (no longer exist, skipped): {items}",
         "memory.result.archiveSaved": "Scene profile saved: {name}", "memory.result.modeSet": "Entered mode: {name}", "memory.result.modeExited": "Exited mode",
         "memory.desc": "Manage scene memories: memories in enabled scenes are injected into the system prompt automatically, and a blank scene means global injection.",
         "memory.btn.refresh": "Refresh", "memory.btn.new": "New memory", "memory.btn.create": "Create", "memory.btn.save": "Save",
@@ -1336,7 +1338,8 @@ function callApi(path, options) {
         h('input', { type: 'checkbox', checked: props.checked === true, disabled: props.disabled === true, onChange: props.onChange }),
         h('span', { className: 'dsm-pick-main' },
           h('span', { className: 'dsm-pick-name' }, props.name),
-          props.desc ? h('span', { className: 'dsm-pick-desc' }, props.desc) : null),
+          // 行内传进来的 desc 可能已被调用方截断，全文走 descTitle（悬浮可见）。
+          props.desc ? h('span', { className: 'dsm-pick-desc', title: props.descTitle || undefined }, props.desc) : null),
         props.meta ? h('span', { className: 'dsm-pick-meta' }, props.meta) : null,
         props.actions ? h('span', { className: 'dsm-pick-actions' }, props.actions) : null)
     }
@@ -2053,11 +2056,33 @@ function callApi(path, options) {
      * 上限同时写在新建/编辑表单的 `maxLength` 上（见场景表单），显示层再裁一次兜住历史数据。
      */
     var SCENE_DESC_MAX = 60
+    /** 记忆描述在勾选行里最多显示多少个字：记忆正文可能很长，行内只留一行，超长截断（全文进 title）。 */
+    var MEM_DESC_MAX = 80
     /** 压平空白并裁到 max 个字符（含省略号）；返回空串 = 没有描述。 */
     function clipText(value, max) {
       var s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim()
       if (s.length <= max) return s
       return s.slice(0, max - 1) + '…'
+    }
+    /**
+     * 「添加记忆段」的默认勾选：**只勾保留场景「全局」里已启用的记忆**，其余（其它场景的、
+     * 以及全局里被停用的）一律不勾。
+     *
+     * 记忆段的语义是「勾 = 该场景下注入」，所以默认值取「用户已经让全局生效的那几条」——
+     * 既不改变现状，也不会把一堆没打算注入的记忆塞进档案。启用状态来自 `rules-list`，
+     * 因此纯客户端可算，不需要宿主配合（id 与 `scene-inventory` 的 memories 一致）。
+     */
+    function memDefaultPickIds(memories, rules) {
+      var enabled = {}
+      var rows = Array.isArray(rules) ? rules : []
+      var list = Array.isArray(memories) ? memories : []
+      rows.forEach(function (r) {
+        if (!r || r.shadowed === true || r.enabled === false) return
+        enabled[String(r.id)] = true
+      })
+      return list
+        .filter(function (m) { return String(m && m.scene) === 'global' && enabled[String(m && m.id)] === true })
+        .map(function (m) { return String(m.id) })
     }
     /** 场景页卡片上的描述行：**只有描述**，数量（记忆条数 / 已配 N 台 MCP…）不进卡片。 */
     function sceneTileDesc(scene) {
@@ -2084,7 +2109,7 @@ function callApi(path, options) {
         // ---------- 场景页：场景清单 + 档案（MCP 工具集/技能集/子智能体绑定，三段自由搭配）+ 当前模式 ----------
         function ScenesPage() {
           var EMPTY_MODE = { scene: null, snapshot: null }
-          var state = React.useState({ loading: true, error: null, scenes: [], activeMode: 'all', mode: EMPTY_MODE, archives: {} })
+          var state = React.useState({ loading: true, error: null, scenes: [], rules: [], activeMode: 'all', mode: EMPTY_MODE, archives: {} })
           var data = state[0], setData = state[1]
           var bs = React.useState(false)
           var busy = bs[0], setBusy = bs[1]
@@ -2103,7 +2128,9 @@ function callApi(path, options) {
               if (m && m.ok) setData(function (prev) { return Object.assign({}, prev, { mode: m.mode || EMPTY_MODE, archives: m.archives || {} }) })
             }).catch(function () {})
             apiCall('rules-list', {}).then(function (r) {
-              if (r && r.ok) setData(function (prev) { return Object.assign({}, prev, { loading: false, error: null, scenes: r.scenes || [], activeMode: r.activeMode === 'custom' ? 'custom' : 'all', stats: r.stats || prev.stats }) })
+              // rules 也留下来：档案弹窗「记忆」段的默认勾选要用每条记忆的启用状态
+              //（scene-inventory 的 memories 里没有 enabled，客户端自己算，省一次宿主改动）。
+              if (r && r.ok) setData(function (prev) { return Object.assign({}, prev, { loading: false, error: null, scenes: r.scenes || [], rules: r.rules || [], activeMode: r.activeMode === 'custom' ? 'custom' : 'all', stats: r.stats || prev.stats }) })
               else setData(function (prev) { return Object.assign({}, prev, { loading: false, error: translateError(t, r) }) })
             }).catch(function (e) { setData(function (prev) { return Object.assign({}, prev, { loading: false, error: String((e && e.message) || e) }) }) })
           }
@@ -2194,24 +2221,15 @@ function callApi(path, options) {
             setSections(Object.assign({}, sections, { mcp: mcp }))
           }
           /**
-           * 「添加 MCP 工具集」的初值 = 当前运行时启用状态（设计 §2.4「预勾当前启用状态」）。
-           * 勾选集语义是「勾 = 启用」，空段 = 全部停用，所以绝不能拿 {} 当默认值——
-           * 否则用户点一下「添加」就把所有 MCP 服务器关掉。
+           * 新加段一律**默认不勾选**（用户明确要求：MCP 工具集 / 技能集 / 子智能体绑定都不预勾）。
+           *
+           * 取 2026-09-13 前的「预勾当前运行时状态」是错的方向：用户点「添加」只是想开始配，
+           * 不是想把自己现有的启用状态抄进档案。代价要讲清楚——勾选集语义是「勾 = 启用」，
+           * 空段 = 全部停用，所以「添加 MCP 工具集」当下就等价于「该场景下全部 MCP 停用」，
+           * 段脚注（`memory.archive.emptySection`）与弹窗顶部说明会同时把这句话显示出来。
+           * 子智能体段例外：空段 = 不限制（全部人设可用，见 filterBySceneBinding）。
            */
-          function mcpPreset() {
-            var preset = {}
-            var states = modal.inventory.tools || []
-            ;(modal.inventory.mcpServers || []).forEach(function (server) {
-              if (server.allToolsDisabled) return                    // 整台已停用 → 不勾（等价）
-              var prefix = server.name + '/'
-              var list = states.filter(function (x) { return x.key.indexOf(prefix) === 0 })
-              var enabled = list.filter(function (x) { return x.enabled !== false })
-              if (!list.length || enabled.length === list.length) { preset[server.name] = '*'; return }
-              if (!enabled.length) return                            // 全停用 → 不勾（等价）
-              preset[server.name] = enabled.map(function (x) { return x.key.slice(prefix.length) })
-            })
-            return preset
-          }
+          function emptyMcpPreset() { return {} }
           /** 全选：列出全部服务器（含未运行的）并各勾「全部工具」。 */
           function mcpSelectAll() {
             var all = {}
@@ -2232,8 +2250,12 @@ function callApi(path, options) {
               onAdd: onAdd, onRemove: onRemove, onAll: onAll, onClear: onClear,
             })
           }
-          function archiveSegFoot(defined, count) {
-            return segFoot(defined, count, t('memory.archive.emptySection'))
+          /**
+           * 段脚注：段已定义但一项未勾必须显式提示，否则像「没保存上」。
+           * 各域的后果不同（MCP/技能/记忆 = 全部停用；子智能体 = 不限制），所以文案由调用方给。
+           */
+          function archiveSegFoot(defined, count, emptyLabel) {
+            return segFoot(defined, count, emptyLabel || t('memory.archive.emptySection'))
           }
 
           // ── 段 4：记忆（v3）────────────────────────────────────────────────
@@ -2251,9 +2273,13 @@ function callApi(path, options) {
               }
             })
           }
-          /** 记忆段已定义时的初值 = 当前全部记忆（「添加」不改变现状，是最小惊讶的选择）。 */
-          function memPreset() {
+          /** 「全选」= 勾上全部记忆（真正的全选，与「添加」的默认值不再是一回事）。 */
+          function allMemoryIds() {
             return (modal.inventory.memories || []).map(function (m) { return String(m.id) })
+          }
+          /** 「添加记忆段」的默认勾选：只勾保留场景「全局」里**已启用**的那几条，其余一律不勾。 */
+          function memPreset() {
+            return memDefaultPickIds(modal.inventory.memories, data.rules)
           }
           function memCheckedCount() {
             var sections = modalSections()
@@ -2308,7 +2334,10 @@ function callApi(path, options) {
                           key: m.id,
                           checked: (sections.memories || []).indexOf(String(m.id)) >= 0,
                           name: m.name,
-                          desc: m.description || null,
+                          // 记忆描述是自由正文的首行，可能很长：这里截断到 MEM_DESC_MAX，
+                          // 全文放 title。CSS 侧还有单行省略兜底（超长不再横向溢出段边框）。
+                          desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
+                          descTitle: m.description || null,
                           onChange: function () { toggleMemory(String(m.id)) },
                         })
                       }))
@@ -2322,7 +2351,7 @@ function callApi(path, options) {
               actions: archiveSegActions(defined, t('memory.archive.addMemories'),
                 function () { setSections(Object.assign({}, modalSections(), { memories: memPreset() })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.memories; setSections(s) },
-                function () { setSections(Object.assign({}, modalSections(), { memories: memPreset() })) },
+                function () { setSections(Object.assign({}, modalSections(), { memories: allMemoryIds() })) },
                 function () { setSections(Object.assign({}, modalSections(), { memories: [] })) }),
               body: defined
                 ? React.createElement('div', { className: 'dsm-seg-body' },
@@ -2391,7 +2420,7 @@ function callApi(path, options) {
               title: t('memory.archive.tools'),
               count: defined ? t('scenes.seg.checked', { checked: Object.keys(sections.mcp).length, total: servers.length }) : t('scenes.archive.sectionOff'),
               actions: archiveSegActions(defined, t('memory.archive.addTools'),
-                function () { setSections(Object.assign({}, modalSections(), { mcp: mcpPreset() })) },
+                function () { setSections(Object.assign({}, modalSections(), { mcp: emptyMcpPreset() })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.mcp; setSections(s) },
                 mcpSelectAll,
                 function () { setSections(Object.assign({}, modalSections(), { mcp: {} })) }),
@@ -2439,7 +2468,7 @@ function callApi(path, options) {
               title: t('memory.archive.skills'),
               count: defined ? t('scenes.seg.checked', { checked: sections.skills.length, total: allItems.length }) : t('scenes.archive.sectionOff'),
               actions: archiveSegActions(defined, t('memory.archive.addSkills'),
-                function () { setSections(Object.assign({}, modalSections(), { skills: allItems.filter(function (x) { return x.enabled }).map(function (x) { return x.key }) })) },
+                function () { setSections(Object.assign({}, modalSections(), { skills: [] })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.skills; setSections(s) },
                 function () { setSections(Object.assign({}, modalSections(), { skills: allItems.map(function (x) { return x.key }) })) },
                 function () { setSections(Object.assign({}, modalSections(), { skills: [] })) }),
@@ -2505,7 +2534,7 @@ function callApi(path, options) {
                         }))
                       : React.createElement('div', { className: 'dsm-pick-empty' }, modal.subQuery ? t('scenes.mem.noMatch') : t('scenes.subagents.empty')))
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.subagents.hint'))),
-              foot: archiveSegFoot(defined, defined ? sections.subagents.length : 0),
+              foot: archiveSegFoot(defined, defined ? sections.subagents.length : 0, t('memory.archive.emptySubagents')),
             })
           }
           /**
@@ -3570,8 +3599,10 @@ function callApi(path, options) {
         _pages.sceneTileDesc = sceneTileDesc
         _pages.sceneMemDesc = sceneMemDesc
         _pages.clipText = clipText
+        _pages.memDefaultPickIds = memDefaultPickIds
         // 常量用函数包一层：测试会把 _pages 的每个值当组件渲染一遍，数字会被 React 当成非法元素类型报警告。
         _pages.sceneDescMax = function () { return SCENE_DESC_MAX }
+        _pages.memDescMax = function () { return MEM_DESC_MAX }
       },
     }
     return module.exports
