@@ -67,7 +67,7 @@
 | 场景档案（自由搭配） | 每个场景可勾选自己的 **MCP 工具集 / 技能集 / 子智能体绑定 / 记忆**（任意组合；清单只列实时存在的条目，勾=启用/未勾=停用；MCP 还支持两级：不勾服务器=整台停用，勾了服务器但一个工具都不勾=该服务器全停）。**记忆段只影响注入**（没勾的记忆不进提示词，文件原样保留）。勾了工具/技能段的场景可「设为当前模式」：应用档案前先落盘快照、退出按快照**原文**恢复；仅记忆 / 仅子智能体的场景不显示模式按钮；进入后下一请求生效 |
 | 轻量子智能体 | `~/.dsh/tool-management/agents/<人设>.md` 一个文件一个人设（frontmatter 可选：`description` / `provider` + `model` / `tools` 白名单 / `toolsDeny` 黑名单，正文=人设提示词，缺省自动派生）；页头「导入」支持 `.md` / `.zip`（同名跳过并列出名单）；模型经 `subagent_list` / `subagent_run` 调用——子代理带人设运行、只回传结果、即用即弃（不进 History）；**自动继承当前启用场景的记忆段**；场景档案可绑定「本场景可用哪些人设」（绑定外调用直接拒绝）；运行默认需确认，设置可关 |
 | 前缀缓存友好 | 段文本只由「启用场景 + 文件内容」决定，逐字节稳定；场景切换 / 编辑记忆只变化一次，其余请求缓存照常命中（不违反"零注入层"——那条只禁每轮动态变化的内容） |
-| 模型工具 | **12 个**：`skill_mcp_manager_*` 管 MCP，`skill_manager_*` 管技能，`rule_manager_*` 管场景记忆（创建前需用户确认，可在设置中关闭），`subagent_list` / `subagent_run` 调用人设子智能体（运行前默认需确认，设置 `requireConfirmForModelSubagentRun` 可关）。**三个确认门都识别会话审批策略**：`approval=never`（完全权限）下确认卡不可能弹出，插件视为「用户已预先批准」直接放行并记 `confirm-bypass` 日志（与官方子代理工具在完全权限下的行为一致） |
+| 模型工具 | **14 个**：`skill_mcp_manager_*` 管 MCP（4），`skill_manager_*` 管技能（3），`agentsmd_list` / `agentsmd_apply` 管 AGENTS.md 预设库（2，模型只能查与切换，不能新建/删除，以免误删用户预设），`rule_manager_*` 管场景记忆（3，创建前需用户确认，可在设置中关闭），`subagent_list` / `subagent_run` 调用人设子智能体（2，运行前默认需确认，设置 `requireConfirmForModelSubagentRun` 可关）。**三个确认门都识别会话审批策略**：`approval=never`（完全权限）下确认卡不可能弹出，插件视为「用户已预先批准」直接放行并记 `confirm-bypass` 日志（与官方子代理工具在完全权限下的行为一致） |
 | 界面 | 独立的 `dsm-*` 设计系统，**七栏**（场景 / MCP / 技能 / 子智能体 / 提示词 / 记忆 / 会话）页头同构、段卡片统一；勾选类界面（档案四段 / 人设工具黑白名单）共用同一套排版，长列表都有筛选框；人设的模型与工具限制收在「高级选项」折叠区（已配置则自动展开）；通知分两级（成功 = 浮层，警告/错误 = 页内横幅）；档案弹窗固定高度，加减段不跳动 |
 
 ## 快速开始
@@ -150,7 +150,9 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 |---|---|
 | `skill_mcp_manager_list / set_enabled / restart / add` | 模型查询与操作 MCP 服务 |
 | `skill_manager_list / set_enabled / create` | 模型查询与操作技能（创建前会征求你同意） |
+| `agentsmd_list / agentsmd_apply` | 模型查询 AGENTS.md 预设库、切换当前预设（写入 `~/.dsh/AGENTS.md`，新会话生效）；**不提供新建/删除**，避免模型误删你的预设 |
 | `rule_manager_list / read / write` | 模型查询与读写场景记忆（写入前会征求你同意，可在设置中关闭确认） |
+| `subagent_list / subagent_run` | 模型列出人设、按人设运行一次性子代理（只回传结果、跑完即弃；运行前默认需确认，可在设置中关闭） |
 | `POST /dsh-plugin-tool-management/api` | 脚本调用的 HTTP API（`{op, args}` 协议） |
 
 > v0.4 起**不再注册斜杠命令**（曾有 `/mcp`、`/skills`、`/agents-md`、`/scene-memory`）：
