@@ -156,14 +156,23 @@ window.__ModuleLoader__.load({
         const slots = ctx.get('slots')
         if (slots === undefined) return
 
-        const LEVEL_LABEL = { project: 'Profile 级', global: '全局', loader: '已加载' }
+        /** MCP 页的本地取词：模块作用域的 t 在 apply 里被 locale 覆盖，这里每次取值都用最新的那个。 */
+        const mt = (key, params) => t(key, params)
+        /** MCP 保存后统一的操作反馈：成功 / 成功但有 loader 告警 / 失败。 */
+        const opMsg = (res) => (
+          res && res.warning
+            ? { kind: 'warn', text: mt('mcp.msg.warn', { warning: res.warning }) }
+            : { kind: 'ok', text: mt('mcp.msg.ok') }
+        )
         const emptyForm = () => ({ serverName: '', transport: 'streamable-http', url: '', command: '', args: '', headers: '', env: '', level: 'project' })
         const kvToLines = (obj) => (obj ? Object.keys(obj).map((k) => k + '=' + obj[k]).join('\n') : '')
-        const MCP_LEVEL_OPTIONS = [
-          { value: '', label: '全部级别' },
-          { value: 'project', label: 'Profile 级' },
-          { value: 'global', label: '全局' },
-          { value: 'loader', label: '已加载' },
+        // 级别筛选选项：必须在**渲染时**取词。原来写成模块级常量，apply() 早于 locale
+        // 注册，导致英文界面下这四项永远显示中文（且再也翻不过来）。
+        const mcpLevelOptions = () => [
+          { value: '', label: mt('mcp.level.all') },
+          { value: 'project', label: mt('mcp.level.project') },
+          { value: 'global', label: mt('mcp.level.global') },
+          { value: 'loader', label: mt('mcp.level.loader') },
         ]
         const MCP_TRANSPORT_OPTIONS = [
           { value: 'streamable-http', label: 'streamable-http' },
@@ -206,7 +215,7 @@ window.__ModuleLoader__.load({
               const rows = (res && res.rows) || []
               setState({
                 loading: false,
-                error: res && res.ok ? null : ((res && res.error) || '加载失败'),
+                error: res && res.ok ? null : ((res && res.error) || mt('mcp.msg.loadFailed')),
                 rows,
                 paths: (res && res.paths) || null,
                 errors: (res && res.errors) || [],
@@ -241,10 +250,10 @@ window.__ModuleLoader__.load({
             setBusy(label)
             apiCall(method, args).then((res) => {
               if (res && res.ok) {
-                setMsg(res.warning ? { kind: 'warn', text: '操作完成，但加载器有提示：' + res.warning } : { kind: 'ok', text: '操作成功' })
+                setMsg(opMsg(res))
                 refresh()
                 if (onOk) onOk()
-              } else setMsg({ kind: 'err', text: (res && res.error) || '操作失败' })
+              } else setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
             }).catch((e) => setMsg({ kind: 'err', text: String((e && e.message) || e) })).then(() => { setBusy(null); setRestartInfo(null) })
           }
 
@@ -297,10 +306,10 @@ window.__ModuleLoader__.load({
             setBusy(row.id + ':toggle')
             apiCall('mcpm-set-enabled', { id: row.id, level: row.level, enabled: row.disabled }).then((res) => {
               if (res && !res.ok) {
-                setMsg({ kind: 'err', text: (res && res.error) || '操作失败' })
+                setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
                 refresh()
               } else if (res && res.warning) {
-                setMsg({ kind: 'warn', text: '操作完成，但加载器有提示：' + res.warning })
+                setMsg({ kind: 'warn', text: mt('mcp.msg.warn', { warning: res.warning }) })
               }
             }).catch((e) => {
               setMsg({ kind: 'err', text: String((e && e.message) || e) })
@@ -340,7 +349,7 @@ window.__ModuleLoader__.load({
             setDetail({ row, loading: true, error: null, tools: [] })
             apiCall('mcpm-tools', { serverName: row.serverName }).then((res) => {
               if (res && res.ok) setDetail({ row, loading: false, error: null, tools: res.tools || [] })
-              else setDetail({ row, loading: false, error: (res && res.error) || '加载工具失败', tools: [] })
+              else setDetail({ row, loading: false, error: (res && res.error) || mt('mcp.tools.loadFailed'), tools: [] })
             }).catch((e) => setDetail({ row, loading: false, error: String((e && e.message) || e), tools: [] }))
           }
 
@@ -351,8 +360,8 @@ window.__ModuleLoader__.load({
             apiCall('mcpm-tool-enabled', { serverName: row.serverName, tool: tool.name, enabled: nextEnabled }).then((res) => {
               if (res && res.ok) {
                 setDetail(Object.assign({}, detail, { tools: (detail.tools || []).map((item) => (item.name === tool.name ? Object.assign({}, item, { enabled: nextEnabled }) : item)) }))
-                setMsg({ kind: 'ok', text: '已' + (nextEnabled ? '启用' : '停用') + '工具：' + tool.name })
-              } else setMsg({ kind: 'err', text: (res && res.error) || '操作失败' })
+                setMsg({ kind: 'ok', text: mt(nextEnabled ? 'mcp.msg.toolOn' : 'mcp.msg.toolOff', { name: tool.name }) })
+              } else setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
             }).catch((e) => setMsg({ kind: 'err', text: String((e && e.message) || e) })).then(() => setBusy(null))
           }
 
@@ -374,25 +383,25 @@ window.__ModuleLoader__.load({
           }
           const profilePath = state.paths && state.paths.profile ? 'profile: ' + state.paths.profile : null
           const groups = levelFilter === 'loader'
-            ? [{ key: 'live', title: '已加载', path: profilePath, match: isRunning }]
+            ? [{ key: 'live', title: mt('mcp.level.loader'), path: profilePath, match: isRunning }]
             : [
-                { key: 'project', title: 'Profile 级', path: state.paths ? state.paths.project : null, match: (row) => row.level === 'project' },
-                { key: 'global', title: '全局', path: state.paths ? state.paths.global : null, match: (row) => row.level === 'global' },
-                { key: 'loader', title: '已加载', path: profilePath, match: (row) => row.level === 'loader' && isRunning(row) },
+                { key: 'project', title: mt('mcp.level.project'), path: state.paths ? state.paths.project : null, match: (row) => row.level === 'project' },
+                { key: 'global', title: mt('mcp.level.global'), path: state.paths ? state.paths.global : null, match: (row) => row.level === 'global' },
+                { key: 'loader', title: mt('mcp.level.loader'), path: profilePath, match: (row) => row.level === 'loader' && isRunning(row) },
               ]
 
           const liveStatus = (row) => {
-            if (!row.live) return { text: '未加载', cls: 'dsm-shadowed' }
-            if (row.live.phase === 'failed') return { text: '启动失败', cls: 'dsm-failed' }
-            if (!row.live.enabled) return { text: '未运行', cls: 'dsm-shadowed' }
-            if (row.live.phase && row.live.phase !== 'active') return { text: '加载中', cls: 'dsm-shadowed' }
-            if (typeof row.toolCount === 'number' && row.toolCount === 0) return { text: '无工具', cls: 'dsm-disabled' }
-            return { text: '运行中', cls: 'dsm-enabled' }
+            if (!row.live) return { text: mt('mcp.live.notLoaded'), cls: 'dsm-shadowed' }
+            if (row.live.phase === 'failed') return { text: mt('mcp.live.failed'), cls: 'dsm-failed' }
+            if (!row.live.enabled) return { text: mt('mcp.live.stopped'), cls: 'dsm-shadowed' }
+            if (row.live.phase && row.live.phase !== 'active') return { text: mt('mcp.live.loading'), cls: 'dsm-shadowed' }
+            if (typeof row.toolCount === 'number' && row.toolCount === 0) return { text: mt('mcp.live.noTools'), cls: 'dsm-disabled' }
+            return { text: mt('mcp.live.running'), cls: 'dsm-enabled' }
           }
           const liveHint = (row) => {
             if (!row.live) return null
-            if (row.live.phase === 'failed') return '启动失败，检查配置后点「重启」重试'
-            if (row.live.phase === 'active' && typeof row.toolCount === 'number' && row.toolCount === 0) return '已连接但没有工具：服务端可能未就绪'
+            if (row.live.phase === 'failed') return mt('mcp.live.failedHint')
+            if (row.live.phase === 'active' && typeof row.toolCount === 'number' && row.toolCount === 0) return mt('mcp.live.noToolsHint')
             return null
           }
 
@@ -403,18 +412,18 @@ window.__ModuleLoader__.load({
             return React.createElement('div', { key: row.id, className: 'dsm-row' },
               React.createElement('div', { className: 'dsm-main' },
                 React.createElement('div', { className: 'dsm-name' }, row.serverName),
-                row.notes ? React.createElement('div', { className: 'dsm-note dsm-note-user', title: row.notes }, '备注：' + row.notes) : null),
+                row.notes ? React.createElement('div', { className: 'dsm-note dsm-note-user', title: row.notes }, mt('mcp.note.prefix') + row.notes) : null),
               React.createElement('div', { className: 'dsm-tags' },
-                (levelFilter === 'loader' && row.level && row.level !== 'loader') ? React.createElement('span', { className: 'dsm-tag' }, LEVEL_LABEL[row.level] || row.level) : null,
-                (typeof row.toolCount === 'number' && row.toolCount > 0) ? React.createElement('span', { className: 'dsm-tag' }, row.toolCount + ' 个工具') : null,
-                row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, '重复 id') : null),
+                (levelFilter === 'loader' && row.level && row.level !== 'loader') ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.level.' + row.level)) : null,
+                (typeof row.toolCount === 'number' && row.toolCount > 0) ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.count', { count: row.toolCount })) : null,
+                row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null),
               React.createElement('div', { className: 'dsm-status ' + status.cls }, status.text),
               React.createElement('div', { className: 'dsm-row-actions' },
-                editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null, label: '启停服务 ' + row.serverName, onClick: () => toggleRow(row) }) : null,
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: () => openDetail(row) }, '详情'),
-                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => openEdit(row) }, '编辑') : null,
-                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => restartRow(row) }, '重启') : null,
-                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null, onClick: () => setConfirmRow(row) }, '删除') : null),
+                editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: () => openDetail(row) }, mt('mcp.btn.detail')),
+                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => openEdit(row) }, mt('mcp.btn.edit')) : null,
+                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => restartRow(row) }, mt('mcp.btn.restart')) : null,
+                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null, onClick: () => setConfirmRow(row) }, mt('mcp.btn.remove')) : null),
               hint ? React.createElement('div', { className: 'dsm-row-hint' }, '⚠ ' + hint) : null)
           }
 
@@ -426,14 +435,14 @@ window.__ModuleLoader__.load({
               React.createElement('div', { className: 'dsm-source-head' },
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: () => setCollapsed(Object.assign({}, collapsed, { [group.key]: !open })) },
                   React.createElement('span', { className: 'dsm-source-title' }, group.title),
-                  React.createElement('span', { className: 'dsm-count' }, groupRows.length + ' 个服务'),
+                  React.createElement('span', { className: 'dsm-count' }, mt('mcp.servers.count', { count: groupRows.length })),
                   group.path ? React.createElement('span', { className: 'dsm-path', title: group.path }, group.path) : null)),
               open ? React.createElement('div', { className: 'dsm-source-body' },
                 React.createElement(React.Fragment, null,
                   React.createElement('div', { className: 'dsm-table-head' },
-                    React.createElement('span', null, '服务名称与地址'),
-                    React.createElement('span', null, '传输与工具'),
-                    React.createElement('span', null, '运行状态'),
+                    React.createElement('span', null, mt('mcp.table.name')),
+                    React.createElement('span', null, mt('mcp.table.transport')),
+                    React.createElement('span', null, mt('mcp.table.status')),
                     React.createElement('span', null, '')),
                   groupRows.map(renderRow))) : null)
           }
@@ -443,17 +452,17 @@ window.__ModuleLoader__.load({
             React.createElement('div', { className: 'dsm-fm-val' }, value))
 
           const toolListNode = detail && (detail.loading
-            ? React.createElement('div', { className: 'dsm-help' }, '正在获取工具列表…')
+            ? React.createElement('div', { className: 'dsm-help' }, mt('mcp.tools.loading'))
             : detail.error
-              ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, '加载工具失败：' + detail.error)
+              ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, mt('mcp.tools.loadFailed') + detail.error)
               : (detail.tools || []).length === 0
-                ? React.createElement('div', { className: 'dsm-help' }, '该服务暂无已注册工具。')
+                ? React.createElement('div', { className: 'dsm-help' }, mt('mcp.tools.none'))
                 : React.createElement(React.Fragment, null,
-                    React.createElement('div', { className: 'dsm-help' }, '停用的工具对模型不可见，改动即时生效'),
+                    React.createElement('div', { className: 'dsm-help' }, mt('mcp.tools.note')),
                     React.createElement('div', { className: 'dsm-tools' }, (detail.tools || []).map((tool) => React.createElement('div', { className: 'dsm-tool' + (tool.enabled === false ? ' dsm-tool-off' : ''), key: tool.name },
                       React.createElement('div', { className: 'dsm-tool-name-row' },
                         React.createElement('div', { className: 'dsm-tool-name' }, tool.name),
-                        React.createElement(Switch, { on: tool.enabled !== false, disabled: busy !== null, label: '启停工具 ' + tool.name, onClick: () => toggleTool(detail.row, tool) })),
+                        React.createElement(Switch, { on: tool.enabled !== false, disabled: busy !== null, label: mt('mcp.toggleTool') + ' ' + tool.name, onClick: () => toggleTool(detail.row, tool) })),
                       tool.description ? React.createElement('div', { className: 'dsm-tool-desc' }, tool.description) : null,
                       (tool.parameters && tool.parameters.length > 0) ? React.createElement('div', { className: 'dsm-tool-params' }, tool.parameters.map((param) => React.createElement('div', { className: 'dsm-tool-param', key: param.key },
                           React.createElement('span', { className: 'dsm-tool-param-key' }, param.key + (param.required ? ' *' : '')),
@@ -462,104 +471,104 @@ window.__ModuleLoader__.load({
 
           const anyGroupVisible = groups.some((group) => visibleRows.some(group.match))
           const groupsNode = (state.loading && rows.length === 0)
-            ? React.createElement('div', { className: 'dsm-empty' }, '正在加载 MCP 服务…')
+            ? React.createElement('div', { className: 'dsm-empty' }, mt('mcp.loading'))
             : anyGroupVisible
               ? React.createElement('div', { className: 'dsm-sources' }, groups.map(renderGroup))
-              : React.createElement('div', { className: 'dsm-empty' }, (normalizedQuery || levelFilter) ? '没有匹配的服务。' : '暂无 MCP 服务，点「新增服务」添加')
+              : React.createElement('div', { className: 'dsm-empty' }, (normalizedQuery || levelFilter) ? mt('mcp.empty.search') : mt('mcp.empty'))
 
           const formModalNode = formModal && React.createElement(Modal, {
             key: 'mcp-form',
-            title: formModal.mode === 'edit' ? '编辑 MCP 服务：' + formModal.id : '新增 MCP 服务',
-            closeLabel: '关闭',
+            title: formModal.mode === 'edit' ? mt('mcp.form.editTitle') + formModal.id : mt('mcp.form.addTitle'),
+            closeLabel: mt('btn.close'),
             onClose: closeForm,
           },
             React.createElement('div', { className: 'dsm-form' },
               React.createElement('label', { className: 'dsm-field' },
-                React.createElement('span', { className: 'dsm-label' }, '服务名称 serverName'),
+                React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.serverName')),
                 React.createElement('input', { className: 'dsm-control', value: formModal.serverName, placeholder: 'e.g. github', onChange: setFormField('serverName') }),
-                React.createElement('span', { className: 'dsm-help' }, '1-32 位 [A-Za-z0-9_-]，补丁里按此名注册')),
+                React.createElement('span', { className: 'dsm-help' }, mt('mcp.field.serverName.hint'))),
               React.createElement('label', { className: 'dsm-field' },
-                React.createElement('span', { className: 'dsm-label' }, '传输方式'),
+                React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.transport')),
                 React.createElement(SourceSelect, { value: formModal.transport, options: MCP_TRANSPORT_OPTIONS, onChange: (value) => setFormValue('transport', value) })),
               React.createElement('label', { className: 'dsm-field' },
-                React.createElement('span', { className: 'dsm-label' }, '级别'),
+                React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.level')),
                 React.createElement(SourceSelect, {
                   value: formModal.level,
                   options: [
-                    { value: 'project', label: 'Profile 级（本应用：' + (state.paths ? state.paths.project : 'profiles/*/cordis.patch.yml') + '）' },
-                    { value: 'global', label: '全局（跨 Profile：' + (state.paths ? state.paths.global : '~/.dsh/cordis.patch.yml') + '）' },
+                    { value: 'project', label: mt('mcp.field.level.project', { path: state.paths ? state.paths.project : 'profiles/*/cordis.patch.yml' }) },
+                    { value: 'global', label: mt('mcp.field.level.global', { path: state.paths ? state.paths.global : '~/.dsh/cordis.patch.yml' }) },
                   ],
                   onChange: (value) => setFormValue('level', value),
                 })),
               formModal.transport === 'streamable-http'
                 ? React.createElement('label', { className: 'dsm-field' },
-                    React.createElement('span', { className: 'dsm-label' }, '服务 URL'),
+                    React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.url')),
                     React.createElement('input', { className: 'dsm-control', value: formModal.url, placeholder: 'https://host/mcp', onChange: setFormField('url') }),
-                    React.createElement('span', { className: 'dsm-help' }, '需以 http(s):// 开头'))
+                    React.createElement('span', { className: 'dsm-help' }, mt('mcp.field.url.hint')))
                 : React.createElement(React.Fragment, null,
                     React.createElement('label', { className: 'dsm-field' },
-                      React.createElement('span', { className: 'dsm-label' }, '启动命令'),
+                      React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.command')),
                       React.createElement('input', { className: 'dsm-control', value: formModal.command, placeholder: 'npx -y @modelcontextprotocol/server-github', onChange: setFormField('command') })),
                     React.createElement('label', { className: 'dsm-field' },
-                      React.createElement('span', { className: 'dsm-label' }, '参数（空格或换行分隔）'),
+                      React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.args')),
                       React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.args, placeholder: '-y\n@modelcontextprotocol/server-github', onChange: setFormField('args') })),
                     React.createElement('label', { className: 'dsm-field' },
-                      React.createElement('span', { className: 'dsm-label' }, '环境变量（每行 key=value）'),
-                      React.createElement('span', { className: 'dsm-help' }, '路径按系统路径写法填（Windows 用 \\，macOS/Linux 用 /）。'),
+                      React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.env')),
+                      React.createElement('span', { className: 'dsm-help' }, mt('mcp.field.env.hint')),
                       React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.env, placeholder: 'GITHUB_TOKEN=xxx', onChange: setFormField('env') }))),
               formModal.transport === 'streamable-http'
                 ? React.createElement('label', { className: 'dsm-field' },
-                    React.createElement('span', { className: 'dsm-label' }, '请求头（每行 key=value）'),
+                    React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.headers')),
                     React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.headers, placeholder: 'Authorization=Bearer xxx', onChange: setFormField('headers') }))
                 : null),
             React.createElement('div', { className: 'dsm-modal-actions' },
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeForm }, '取消'),
-              React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy === 'form' || !formModal.serverName.trim(), onClick: submitForm }, formModal.mode === 'edit' ? '保存' : '添加')))
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeForm }, mt('btn.cancel')),
+              React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy === 'form' || !formModal.serverName.trim(), onClick: submitForm }, formModal.mode === 'edit' ? mt('btn.save') : mt('mcp.btn.add'))))
 
           const detailStatus = detail ? liveStatus(detail.row) : null
           const detailHint = detail ? liveHint(detail.row) : null
           const detailNode = detail && React.createElement(Modal, {
             key: 'mcp-detail',
             wide: true,
-            title: '服务详情：' + detail.row.serverName,
-            closeLabel: '关闭',
+            title: mt('mcp.detail.title') + detail.row.serverName,
+            closeLabel: mt('btn.close'),
             onClose: () => setDetail(null),
           },
             React.createElement('div', { className: 'dsm-detail-section' },
               React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
-                '配置',
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: toggleReveal }, reveal ? '隐藏密钥' : '显示密钥')),
+                mt('mcp.detail.config'),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: toggleReveal }, reveal ? mt('mcp.detail.hideSecret') : mt('mcp.detail.showSecret'))),
               React.createElement('div', { className: 'dsm-fm' },
-                configRow('条目 ID', detail.row.id),
-                configRow('级别', LEVEL_LABEL[detail.row.level] || detail.row.level),
-                configRow('传输方式', detail.row.transport || '—'),
-                detail.row.url ? configRow('服务 URL', detail.row.url) : null,
-                detail.row.command ? configRow('启动命令', detail.row.command + ((detail.row.args && detail.row.args.length) ? ' ' + detail.row.args.join(' ') : '')) : null,
-                (detail.row.headers && Object.keys(detail.row.headers).length > 0) ? configRow('请求头', Object.keys(detail.row.headers).map((k) => k + ': ' + maskSecret(detail.row.headers[k])).join('\n')) : null,
-                (detail.row.env && Object.keys(detail.row.env).length > 0) ? configRow('环境变量', Object.keys(detail.row.env).map((k) => k + ' = ' + maskSecret(detail.row.env[k])).join('\n')) : null)),
+                configRow(mt('mcp.field.entryId'), detail.row.id),
+                configRow(mt('mcp.field.level'), mt('mcp.level.' + detail.row.level)),
+                configRow(mt('mcp.field.transport'), detail.row.transport || '—'),
+                detail.row.url ? configRow(mt('mcp.field.url'), detail.row.url) : null,
+                detail.row.command ? configRow(mt('mcp.field.command'), detail.row.command + ((detail.row.args && detail.row.args.length) ? ' ' + detail.row.args.join(' ') : '')) : null,
+                (detail.row.headers && Object.keys(detail.row.headers).length > 0) ? configRow(mt('mcp.field.headersShort'), Object.keys(detail.row.headers).map((k) => k + ': ' + maskSecret(detail.row.headers[k])).join('\n')) : null,
+                (detail.row.env && Object.keys(detail.row.env).length > 0) ? configRow(mt('mcp.field.envShort'), Object.keys(detail.row.env).map((k) => k + ' = ' + maskSecret(detail.row.env[k])).join('\n')) : null)),
             React.createElement('div', { className: 'dsm-detail-section' },
-              React.createElement('div', { className: 'dsm-detail-title' }, '运行状态'),
+              React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.status')),
               React.createElement('div', { className: 'dsm-feedback' + (detailStatus.cls === 'dsm-failed' ? ' dsm-error' : detailStatus.cls === 'dsm-disabled' ? ' dsm-warning' : '') },
-                detailStatus.text + '：' + (detailHint || '该服务已登记在 Loader 中。'))),
+                detailStatus.text + '：' + (detailHint || mt('mcp.detail.registered')))),
             React.createElement('div', { className: 'dsm-detail-section' },
-              React.createElement('div', { className: 'dsm-detail-title' }, '备注（仅本机可见）'),
-              React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: noteDraft, placeholder: '例如：A 不可用时改用 B 兜底', onChange: (ev) => setNoteDraft(ev.target.value) }),
+              React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.note')),
+              React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: noteDraft, placeholder: mt('mcp.detail.note.placeholder'), onChange: (ev) => setNoteDraft(ev.target.value) }),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, '保存备注'))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save')))),
             React.createElement('div', { className: 'dsm-detail-section' },
-              React.createElement('div', { className: 'dsm-detail-title' }, '工具（' + (detail.loading ? '…' : (detail.tools || []).length) + '）'),
+              React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length })),
               toolListNode))
 
           const confirmNode = confirmRow && React.createElement(Modal, {
             key: 'mcp-remove',
-            title: '删除 MCP 服务',
-            closeLabel: '关闭',
+            title: mt('mcp.remove.title'),
+            closeLabel: mt('btn.close'),
             onClose: () => setConfirmRow(null),
           },
-            React.createElement('p', { className: 'dsm-desc' }, '确定要删除「' + confirmRow.serverName + '」？配置将从补丁文件移除、工具立即下线，不可撤销'),
+            React.createElement('p', { className: 'dsm-desc' }, mt('mcp.remove.desc', { name: confirmRow.serverName })),
             React.createElement('div', { className: 'dsm-modal-actions' },
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: () => setConfirmRow(null) }, '取消'),
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: confirmRemove }, '删除')))
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: () => setConfirmRow(null) }, mt('btn.cancel')),
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: confirmRemove }, mt('mcp.btn.remove'))))
 
           return React.createElement('section', { className: 'dsm-section' },
             React.createElement('div', { className: 'dsm-head' },
@@ -567,24 +576,24 @@ window.__ModuleLoader__.load({
                 React.createElement('div', { className: 'dsm-title-row' },
                   React.createElement('h2', { className: 'dsm-title' }, 'MCP'),
                   React.createElement(VersionBadge, null)),
-                React.createElement('p', { className: 'dsm-desc' }, '管理本机 MCP 服务：新增、启停、重启与工具级开关。')),
+                React.createElement('p', { className: 'dsm-desc' }, mt('mcp.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }, '刷新'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openAdd }, '新增服务'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: true }, 'setall') }, '全部启用'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: false }, 'setall') }, '全部停用'))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }, mt('btn.refresh')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openAdd }, mt('mcp.btn.new')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: true }, 'setall') }, mt('mcp.btn.enableAll')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: false }, 'setall') }, mt('mcp.btn.disableAll')))),
             React.createElement('div', { className: 'dsm-summary dsm-summary-3' },
-              [[summary.total, '个服务'], [summary.enabled, '个已启用'], [summary.tools, '个工具']].map((item) =>
+              [[summary.total, mt('mcp.stat.total')], [summary.enabled, mt('mcp.stat.enabled')], [summary.tools, mt('mcp.stat.tools')]].map((item) =>
                 React.createElement('div', { key: item[1], className: 'dsm-stat' },
                   React.createElement('strong', null, item[0]), item[1]))),
             React.createElement('div', { className: 'dsm-filters' },
-              React.createElement('input', { className: 'dsm-control dsm-search', value: query, 'aria-label': '搜索服务', placeholder: '搜索服务名称、地址或命令', onChange: (ev) => setQuery(ev.target.value) }),
+              React.createElement('input', { className: 'dsm-control dsm-search', value: query, 'aria-label': mt('mcp.search'), placeholder: mt('mcp.search.placeholder'), onChange: (ev) => setQuery(ev.target.value) }),
               React.createElement('div', { className: 'dsm-source-filter' },
-                React.createElement(SourceSelect, { value: levelFilter, options: MCP_LEVEL_OPTIONS, onChange: setLevelFilter }))),
-            restartInfo ? React.createElement('div', { className: 'dsm-feedback' }, '重启中… ' + restartInfo.name + '（已等待 ' + Math.max(0, Math.floor((Date.now() - restartInfo.startedAt) / 1000)) + ' 秒，完成后自动刷新）') : null,
+                React.createElement(SourceSelect, { value: levelFilter, options: mcpLevelOptions(), onChange: setLevelFilter }))),
+            restartInfo ? React.createElement('div', { className: 'dsm-feedback' }, mt('mcp.restarting', { name: restartInfo.name, seconds: Math.max(0, Math.floor((Date.now() - restartInfo.startedAt) / 1000)) })) : null,
             React.createElement(Notice, { kind: msg && msg.kind, text: msg && msg.text }),
             React.createElement(Notice, { kind: 'err', text: state.error }),
-            React.createElement(Notice, { kind: 'warn', text: (state.errors && state.errors.length > 0) ? '读取补丁告警：' + state.errors.join('；') : null }),
+            React.createElement(Notice, { kind: 'warn', text: (state.errors && state.errors.length > 0) ? mt('mcp.err.warnings') + state.errors.join('；') : null }),
             React.createElement(Notice, { kind: 'warn', text: (state.warnings && state.warnings.length > 0) ? state.warnings.join('；') : null }),
             groupsNode,
             formModalNode,
@@ -618,7 +627,7 @@ window.__ModuleLoader__.load({
 
           function refresh() {
             apiCall('agentsmd-list', {}).then(function (res) {
-              setState(function (s) { return { loading: false, error: res && res.ok ? null : ((res && res.error) || '加载失败'), presets: (res && res.presets) || [], current: s.current } })
+              setState(function (s) { return { loading: false, error: res && res.ok ? null : ((res && res.error) || mt('mcp.msg.loadFailed')), presets: (res && res.presets) || [], current: s.current } })
             }).catch(function (e) { setState({ loading: false, error: String((e && e.message) || e), presets: [], current: null }) })
             apiCall('agentsmd-get-current', {}).then(function (res) {
               if (res && res.ok) setState(function (s) { return Object.assign({}, s, { current: res }) })
@@ -806,6 +815,37 @@ window.__ModuleLoader__.load({
         "error.proto.forbidden": "禁止的修改请求（缺少客户端标记）", "error.proto.forbiddenHost": "禁止的请求来源（非法 Host）", "error.proto.contentType": "请求体必须是 application/json", "error.proto.method": "不支持的请求方法", "error.proto.unknownAction": "未知操作", "error.proto.bodyTooLarge": "请求体过大", "error.proto.invalidJson": "请求体不是合法 JSON", "error.proto.nonJson": "服务端返回非 JSON 响应（HTTP {status}）",
         "diagnostic.frontmatter.missing": "缺少完整 YAML frontmatter", "diagnostic.name.missing": "frontmatter 缺少 name", "diagnostic.name.invalid": "技能名需 kebab-case：{name}", "diagnostic.description.missing": "frontmatter 缺少 description", "diagnostic.invocation.invalid": "调用策略字段值无效", "diagnostic.shadowed": "被更高优先级来源 {root} 覆盖",
         "action.enable": "启用", "action.disable": "停用", "action.create": "创建", "action.delete": "删除", "action.restore": "恢复", "action.toggle": "启用或停用",
+        "mcp.desc": "管理本机 MCP 服务：新增、启停、重启与工具级开关。",
+        "mcp.level.all": "全部级别", "mcp.level.project": "Profile 级", "mcp.level.global": "全局", "mcp.level.loader": "已加载",
+        "mcp.stat.total": "个服务", "mcp.stat.enabled": "个已启用", "mcp.stat.tools": "个工具",
+        "mcp.search": "搜索服务", "mcp.search.placeholder": "搜索服务名称、地址或命令",
+        "mcp.btn.new": "新增服务", "mcp.btn.add": "添加", "mcp.btn.detail": "详情", "mcp.btn.edit": "编辑", "mcp.btn.restart": "重启", "mcp.btn.remove": "删除",
+        "mcp.btn.enableAll": "全部启用", "mcp.btn.disableAll": "全部停用",
+        "mcp.loading": "正在加载 MCP 服务…", "mcp.empty": "暂无 MCP 服务，点「新增服务」添加", "mcp.empty.search": "没有匹配的服务。",
+        "mcp.servers.count": "{count} 个服务", "mcp.tools.count": "{count} 个工具", "mcp.duplicate": "重复 id",
+        "mcp.table.name": "服务名称与地址", "mcp.table.transport": "传输与工具", "mcp.table.status": "运行状态",
+        "mcp.live.notLoaded": "未加载", "mcp.live.failed": "启动失败", "mcp.live.stopped": "未运行", "mcp.live.loading": "加载中", "mcp.live.noTools": "无工具", "mcp.live.running": "运行中",
+        "mcp.live.failedHint": "启动失败，检查配置后点「重启」重试", "mcp.live.noToolsHint": "已连接但没有工具：服务端可能未就绪",
+        "mcp.note.prefix": "备注：", "mcp.toggleServer": "启停服务", "mcp.toggleTool": "启停工具",
+        "mcp.msg.ok": "操作成功", "mcp.msg.failed": "操作失败", "mcp.msg.loadFailed": "加载失败", "mcp.msg.warn": "操作完成，但加载器有提示：{warning}",
+        "mcp.msg.toolOn": "已启用工具：{name}", "mcp.msg.toolOff": "已停用工具：{name}",
+        "mcp.form.addTitle": "新增 MCP 服务", "mcp.form.editTitle": "编辑 MCP 服务：",
+        "mcp.field.serverName": "服务名称 serverName", "mcp.field.serverName.hint": "1-32 位 [A-Za-z0-9_-]，补丁里按此名注册",
+        "mcp.field.transport": "传输方式", "mcp.field.level": "级别",
+        "mcp.field.level.project": "Profile 级（本应用：{path}）", "mcp.field.level.global": "全局（跨 Profile：{path}）",
+        "mcp.field.url": "服务 URL", "mcp.field.url.hint": "需以 http(s):// 开头",
+        "mcp.field.command": "启动命令", "mcp.field.args": "参数（空格或换行分隔）",
+        "mcp.field.env": "环境变量（每行 key=value）", "mcp.field.env.hint": "路径按系统路径写法填（Windows 用 \\，macOS/Linux 用 /）。",
+        "mcp.field.headers": "请求头（每行 key=value）",
+        "mcp.detail.title": "服务详情：", "mcp.detail.config": "配置", "mcp.detail.showSecret": "显示密钥", "mcp.detail.hideSecret": "隐藏密钥",
+        "mcp.detail.entryId": "条目 ID", "mcp.detail.status": "运行状态", "mcp.detail.registered": "该服务已登记在 Loader 中。",
+        "mcp.detail.note": "备注（仅本机可见）", "mcp.detail.note.placeholder": "例如：A 不可用时改用 B 兜底", "mcp.detail.note.save": "保存备注",
+        "mcp.detail.tools": "工具（{count}）",
+        "mcp.field.headersShort": "请求头", "mcp.field.envShort": "环境变量",
+        "mcp.tools.loading": "正在获取工具列表…", "mcp.tools.loadFailed": "加载工具失败：", "mcp.tools.none": "该服务暂无已注册工具。",
+        "mcp.tools.note": "停用的工具对模型不可见，改动即时生效",
+        "mcp.remove.title": "删除 MCP 服务", "mcp.remove.desc": "确定要删除「{name}」？配置将从补丁文件移除、工具立即下线，不可撤销",
+        "mcp.restarting": "重启中… {name}（已等待 {seconds} 秒，完成后自动刷新）", "mcp.err.warnings": "读取补丁告警：",
         "root.dsh": "DSH 技能", "root.hub": "管理器技能", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "memory.title": "记忆",
         "tabs.scenes": "场景", "tabs.skills": "技能", "tabs.subagents": "子智能体", "tabs.prompts": "提示词", "tabs.memory": "记忆", "tabs.sessions": "会话",
@@ -955,6 +995,37 @@ window.__ModuleLoader__.load({
         "error.proto.forbidden": "Forbidden mutation request (missing client marker)", "error.proto.forbiddenHost": "Forbidden request origin (invalid host)", "error.proto.contentType": "Content type must be application/json", "error.proto.method": "Method not allowed", "error.proto.unknownAction": "Unknown action", "error.proto.bodyTooLarge": "Request body too large", "error.proto.invalidJson": "Invalid JSON request body", "error.proto.nonJson": "Server returned a non-JSON response (HTTP {status})",
         "diagnostic.frontmatter.missing": "Missing complete YAML frontmatter", "diagnostic.name.missing": "Frontmatter is missing name", "diagnostic.name.invalid": "Skill name must be kebab-case: {name}", "diagnostic.description.missing": "Frontmatter is missing description", "diagnostic.invocation.invalid": "Invocation policy value is invalid", "diagnostic.shadowed": "Shadowed by higher-priority source {root}",
         "action.enable": "enable", "action.disable": "disable", "action.create": "create", "action.delete": "delete", "action.restore": "restore", "action.toggle": "enabling or disabling",
+        "mcp.desc": "Manage this machine's MCP servers: add, enable/disable, restart, and per-tool switches.",
+        "mcp.level.all": "All levels", "mcp.level.project": "Profile level", "mcp.level.global": "Global", "mcp.level.loader": "Loaded",
+        "mcp.stat.total": "server(s)", "mcp.stat.enabled": "enabled", "mcp.stat.tools": "tool(s)",
+        "mcp.search": "Search servers", "mcp.search.placeholder": "Search a server name, URL or command",
+        "mcp.btn.new": "Add server", "mcp.btn.add": "Add", "mcp.btn.detail": "Details", "mcp.btn.edit": "Edit", "mcp.btn.restart": "Restart", "mcp.btn.remove": "Delete",
+        "mcp.btn.enableAll": "Enable all", "mcp.btn.disableAll": "Disable all",
+        "mcp.loading": "Loading MCP servers…", "mcp.empty": "No MCP servers yet — click “Add server”.", "mcp.empty.search": "No matching server.",
+        "mcp.servers.count": "{count} server(s)", "mcp.tools.count": "{count} tool(s)", "mcp.duplicate": "duplicate id",
+        "mcp.table.name": "Server name and URL", "mcp.table.transport": "Transport and tools", "mcp.table.status": "Status",
+        "mcp.live.notLoaded": "not loaded", "mcp.live.failed": "start failed", "mcp.live.stopped": "stopped", "mcp.live.loading": "loading", "mcp.live.noTools": "no tools", "mcp.live.running": "running",
+        "mcp.live.failedHint": "Start failed — check the configuration and click “Restart” to retry", "mcp.live.noToolsHint": "Connected but with no tools: the server may not be ready yet",
+        "mcp.note.prefix": "Note: ", "mcp.toggleServer": "Toggle server", "mcp.toggleTool": "Toggle tool",
+        "mcp.msg.ok": "Done", "mcp.msg.failed": "Operation failed", "mcp.msg.loadFailed": "Load failed", "mcp.msg.warn": "Done, but the loader reported: {warning}",
+        "mcp.msg.toolOn": "Enabled tool: {name}", "mcp.msg.toolOff": "Disabled tool: {name}",
+        "mcp.form.addTitle": "Add MCP server", "mcp.form.editTitle": "Edit MCP server: ",
+        "mcp.field.serverName": "Server name (serverName)", "mcp.field.serverName.hint": "1-32 chars of [A-Za-z0-9_-]; the patch registers it under this name",
+        "mcp.field.transport": "Transport", "mcp.field.level": "Level",
+        "mcp.field.level.project": "Profile level (this app: {path})", "mcp.field.level.global": "Global (across profiles: {path})",
+        "mcp.field.url": "Server URL", "mcp.field.url.hint": "Must start with http(s)://",
+        "mcp.field.command": "Command", "mcp.field.args": "Arguments (space or newline separated)",
+        "mcp.field.env": "Environment (one key=value per line)", "mcp.field.env.hint": "Use the platform's own path syntax (backslashes on Windows, / on macOS/Linux).",
+        "mcp.field.headers": "Headers (one key=value per line)",
+        "mcp.detail.title": "Server details: ", "mcp.detail.config": "Configuration", "mcp.detail.showSecret": "Reveal secrets", "mcp.detail.hideSecret": "Hide secrets",
+        "mcp.detail.entryId": "Entry id", "mcp.detail.status": "Status", "mcp.detail.registered": "This server is registered in the loader.",
+        "mcp.detail.note": "Note (local only)", "mcp.detail.note.placeholder": "e.g. fall back to B when A is unavailable", "mcp.detail.note.save": "Save note",
+        "mcp.detail.tools": "Tools ({count})",
+        "mcp.field.headersShort": "Headers", "mcp.field.envShort": "Environment",
+        "mcp.tools.loading": "Fetching the tool list…", "mcp.tools.loadFailed": "Could not load tools: ", "mcp.tools.none": "This server has no registered tools.",
+        "mcp.tools.note": "Disabled tools are invisible to the model; changes take effect immediately",
+        "mcp.remove.title": "Delete MCP server", "mcp.remove.desc": "Delete “{name}”? Its configuration is removed from the patch file and the tools go offline at once; this cannot be undone",
+        "mcp.restarting": "Restarting… {name} (waited {seconds}s; the list refreshes when it finishes)", "mcp.err.warnings": "Patch warnings: ",
         "root.dsh": "DSH skills", "root.hub": "Manager skills", "root.agents": "Shared Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "Project DSH", "root.projectAgents": "Project Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "memory.title": "Memories",
         "tabs.scenes": "Scenes", "tabs.skills": "Skills", "tabs.subagents": "Subagents", "tabs.prompts": "Prompts", "tabs.memory": "Memories", "tabs.sessions": "Sessions",
@@ -2213,7 +2284,7 @@ function callApi(path, options) {
                           key: server.name,
                           checked: selected,
                           name: server.name,
-                          desc: server.toolCount === null || server.toolCount === undefined ? null : (server.toolCount + ' 个工具'),
+                          desc: server.toolCount === null || server.toolCount === undefined ? null : t('scenes.mcp.toolCount', { count: server.toolCount }),
                           meta: [
                             server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
                             specText ? React.createElement('span', { key: 'spec' }, specText) : null,
@@ -3363,4 +3434,5 @@ function callApi(path, options) {
     return module.exports
   }
 })
+
 
