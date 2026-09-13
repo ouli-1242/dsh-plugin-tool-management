@@ -1824,6 +1824,16 @@ export default {
       ...archiveService.ops,
       // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list（只读）。
       ...subagentService.ops,
+      // 场景档案勾选器数据源：实时发现的工具/技能全集 + 人设清单（一次往返）。
+      'scene-inventory': async () => {
+        const [tools, skills, subs] = await Promise.all([toolStates(), skillStates(), subagentService.list()])
+        return {
+          ok: true,
+          tools: Object.entries(tools).map(([key, enabled]) => ({ key, enabled })),
+          skills: Object.entries(skills).map(([key, enabled]) => ({ key, enabled })),
+          subagents: subs.map((p) => ({ name: p.name, description: p.description })),
+        }
+      },
       // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
       // agentsmd-read / agentsmd-create / agentsmd-update / agentsmd-remove /
       // agentsmd-apply / agentsmd-get-current

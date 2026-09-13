@@ -753,7 +753,14 @@ window.__ModuleLoader__.load({
         "diagnostic.frontmatter.missing": "缺少完整 YAML frontmatter", "diagnostic.name.missing": "frontmatter 缺少 name", "diagnostic.name.invalid": "技能名需 kebab-case：{name}", "diagnostic.description.missing": "frontmatter 缺少 description", "diagnostic.invocation.invalid": "调用策略字段值无效", "diagnostic.shadowed": "被更高优先级来源 {root} 覆盖",
         "action.enable": "启用", "action.disable": "停用", "action.create": "创建", "action.delete": "删除", "action.restore": "恢复", "action.toggle": "启用或停用",
         "root.dsh": "DSH 技能", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
-        "memory.title": "场景记忆",
+        "memory.title": "场景",
+        "memory.mode.current": "当前模式", "memory.mode.set": "设为当前模式", "memory.mode.exit": "退出模式",
+        "memory.archive.edit": "档案", "memory.archive.title": "场景档案",
+        "memory.archive.tools": "MCP 工具集", "memory.archive.skills": "技能集", "memory.archive.subagents": "子智能体绑定",
+        "memory.archive.addTools": "+ 工具集", "memory.archive.addSkills": "+ 技能集", "memory.archive.addSubagents": "+ 子智能体",
+        "memory.archive.removeSection": "移除段", "memory.archive.save": "保存到场景",
+        "memory.archive.emptySection": "该段已定义且全不勾 = 全部停用", "memory.archive.stale": "失效项（已不存在，已跳过）: {items}",
+        "memory.result.archiveSaved": "已保存场景档案：{name}", "memory.result.modeSet": "已进入模式：{name}", "memory.result.modeExited": "已退出模式",
         "memory.desc": "勾选启用的场景，里面的记忆会自动进入系统提示词，不用每次重复解释。",
         "memory.btn.refresh": "刷新", "memory.btn.new": "新建记忆", "memory.btn.create": "创建", "memory.btn.save": "保存",
         "memory.btn.diagnose": "体检", "memory.btn.delete.confirm": "移入回收站",
@@ -839,7 +846,14 @@ window.__ModuleLoader__.load({
         "diagnostic.frontmatter.missing": "Missing complete YAML frontmatter", "diagnostic.name.missing": "Frontmatter is missing name", "diagnostic.name.invalid": "Skill name must be kebab-case: {name}", "diagnostic.description.missing": "Frontmatter is missing description", "diagnostic.invocation.invalid": "Invocation policy value is invalid", "diagnostic.shadowed": "Shadowed by higher-priority source {root}",
         "action.enable": "enable", "action.disable": "disable", "action.create": "create", "action.delete": "delete", "action.restore": "restore", "action.toggle": "enabling or disabling",
         "root.dsh": "DSH skills", "root.agents": "Shared Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "Project DSH", "root.projectAgents": "Project Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
-        "memory.title": "Scene Memory",
+        "memory.title": "Scenes",
+        "memory.mode.current": "Active mode", "memory.mode.set": "Set as active mode", "memory.mode.exit": "Exit mode",
+        "memory.archive.edit": "Profile", "memory.archive.title": "Scene profile",
+        "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding",
+        "memory.archive.addTools": "+ Tools", "memory.archive.addSkills": "+ Skills", "memory.archive.addSubagents": "+ Subagents",
+        "memory.archive.removeSection": "Remove section", "memory.archive.save": "Save to scene",
+        "memory.archive.emptySection": "Section defined with nothing checked = all disabled", "memory.archive.stale": "Stale entries (no longer exist, skipped): {items}",
+        "memory.result.archiveSaved": "Scene profile saved: {name}", "memory.result.modeSet": "Entered mode: {name}", "memory.result.modeExited": "Exited mode",
         "memory.desc": "Everything inside an enabled scene is injected into the system prompt automatically — no need to repeat yourself.",
         "memory.btn.refresh": "Refresh", "memory.btn.new": "New memory", "memory.btn.create": "Create", "memory.btn.save": "Save",
         "memory.btn.diagnose": "Check", "memory.btn.delete.confirm": "Move to trash",
@@ -1595,6 +1609,7 @@ function callApi(path, options) {
             loading: true, error: null,
             rules: [], scenes: [], activeMode: 'all',
             sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS,
+            modeInfo: { scene: null, snapshot: null }, archives: {},
           })
           var data = state[0], setData = state[1]
           var qs = React.useState('')
@@ -1639,6 +1654,10 @@ function callApi(path, options) {
 
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
+            // 模式/档案与规则清单并行拉取；模式失败不打断主数据渲染。
+            apiCall('scene-mode-get', {}).then(function (m) {
+              if (m && m.ok) setData(function (prev) { return Object.assign({}, prev, { modeInfo: m.mode || { scene: null, snapshot: null }, archives: m.archives || {} }) })
+            }).catch(function () {})
             apiCall('rules-list', {}).then(function (r) {
               if (r && r.ok) {
                 setData({
@@ -1757,6 +1776,76 @@ function callApi(path, options) {
           function flushAttachments(id, files) {
             if (!files || !files.length) return Promise.resolve({ ok: true, empty: true })
             return apiCall('rules-attach', { id: id, files: files.map(function (f) { return { path: f.name, data: f.data } }) })
+          }
+
+          // ── 场景档案（勾选集）与当前模式（设计 §2/§3.3）──
+          function openArchive(name) {
+            setBusy(true)
+            Promise.all([apiCall('scene-mode-get', {}), apiCall('scene-inventory', {})]).then(function (rs) {
+              setBusy(false)
+              var modeRes = rs[0], inv = rs[1]
+              if (!(inv && inv.ok)) { setResult({ ok: false, text: translateError(t, inv) }); return }
+              var archives = (modeRes && modeRes.ok ? modeRes.archives : null) || data.archives || {}
+              var archive = archives[name] || {}
+              setModal({ type: 'scene-archive', name: name,
+                sections: {
+                  tools: Array.isArray(archive.tools) ? archive.tools.slice() : null,
+                  skills: Array.isArray(archive.skills) ? archive.skills.slice() : null,
+                  subagents: Array.isArray(archive.subagents) ? archive.subagents.slice() : null,
+                },
+                inventory: { tools: inv.tools || [], skills: inv.skills || [], subagents: inv.subagents || [] } })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function modalSections() { return modal && modal.type === 'scene-archive' ? modal.sections : null }
+          function setSections(sections) { if (modal && modal.type === 'scene-archive') setModal(Object.assign({}, modal, { sections: sections })) }
+          function toggleArchiveItem(section, key) {
+            var sections = modalSections(); if (!sections) return
+            var list = (sections[section] || []).slice()
+            var i = list.indexOf(key)
+            if (i >= 0) list.splice(i, 1); else list.push(key)
+            var next = Object.assign({}, sections); next[section] = list
+            setSections(next)
+          }
+          function addArchiveSection(section) {
+            var sections = modalSections(); if (!sections || sections[section]) return
+            var next = Object.assign({}, sections)
+            // 添加段时预勾当前启用状态，方便在此基础上微调（设计 §2.4）。
+            next[section] = section === 'subagents' ? []
+              : (modal.inventory[section] || []).filter(function (item) { return item.enabled }).map(function (item) { return item.key })
+            setSections(next)
+          }
+          function removeArchiveSection(section) {
+            var sections = modalSections(); if (!sections) return
+            var next = Object.assign({}, sections); delete next[section]
+            setSections(next)
+          }
+          function submitArchive() {
+            if (!modalSections()) return
+            setBusy(true)
+            apiCall('scene-archive-save', { scene: modal.name, archive: modal.sections }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) {
+                setModal(null)
+                setResult({ ok: true, text: t('memory.result.archiveSaved', { name: modal.name }) + (res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : '') })
+                refresh(true)
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function enterMode(name) {
+            setBusy(true)
+            apiCall('scene-mode-set', { scene: name }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.modeSet', { name: name }) + (res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : '') }); refresh(true) }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+          function exitMode() {
+            setBusy(true)
+            apiCall('scene-mode-set', { scene: null }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.modeExited') }); refresh(true) }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
 
           // ── 场景（= scene-memory/ 下的一级目录）建 / 删 ──
@@ -1998,6 +2087,15 @@ function callApi(path, options) {
                   isShared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
                   meta.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null),
                 React.createElement('div', { className: 'dsm-source-actions' },
+                  (data.modeInfo && data.modeInfo.scene === name) ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
+                  (function () {
+                    var archive = data.archives[name]
+                    var hasModeSections = !!(archive && (Array.isArray(archive.tools) || Array.isArray(archive.skills)))
+                    return hasModeSections && (!data.modeInfo || data.modeInfo.scene !== name)
+                      ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { enterMode(name) } }, t('memory.mode.set'))
+                      : null
+                  })(),
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openArchive(name) } }, t('memory.archive.edit')),
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openCreate(name) } }, t('memory.scene.new')),
                   emptyRemovable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')) : null,
                   alwaysOn ? null : React.createElement(Switch, { on: meta.active === true, disabled: busy, label: t('memory.scene.enable') + ' ' + sceneLabel(name), onClick: function () { toggleScene(meta) } }))),
@@ -2021,6 +2119,8 @@ function callApi(path, options) {
                   React.createElement(VersionBadge, null)),
                 React.createElement('p', { className: 'dsm-desc' }, t('memory.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
+                data.modeInfo && data.modeInfo.scene ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current') + ': ' + data.modeInfo.scene) : null,
+                data.modeInfo && data.modeInfo.scene ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: exitMode }, t('memory.mode.exit')) : null,
                 data.activeMode === 'custom' ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: enableAllScenes }, t('memory.scene.enableAll')) : null,
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
@@ -2136,6 +2236,38 @@ function callApi(path, options) {
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDeleteScene(modal.name) } }, t('memory.btn.deleteScene')))) : null,
+            // 场景档案编辑：三段自由搭配（设计 §2.1）——每段独立"添加/移除"，段内勾选集即启用集合。
+            modal && modal.type === 'scene-archive' ? React.createElement(Modal, { key: 'sarch', wide: true, title: t('memory.archive.title') + ' · ' + modal.name, closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('div', { className: 'dsm-form' },
+                ['tools', 'skills', 'subagents'].map(function (section) {
+                  var defined = !!modal.sections[section]
+                  var checked = modal.sections[section] || []
+                  var items = section === 'tools' ? (modal.inventory.tools || [])
+                    : section === 'skills' ? (modal.inventory.skills || [])
+                    : (modal.inventory.subagents || []).map(function (s) { return { key: s.name, enabled: true, description: s.description } })
+                  var title = section === 'tools' ? t('memory.archive.tools') : section === 'skills' ? t('memory.archive.skills') : t('memory.archive.subagents')
+                  return React.createElement('div', { key: section, className: 'dsm-field' },
+                    React.createElement('div', { className: 'dsm-source-head', style: { marginBottom: '4px' } },
+                      React.createElement('span', { className: 'dsm-label' }, title),
+                      defined
+                        ? React.createElement('div', { className: 'dsm-source-actions' },
+                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { removeArchiveSection(section) } }, t('memory.archive.removeSection')))
+                        : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { addArchiveSection(section) } },
+                          section === 'tools' ? t('memory.archive.addTools') : section === 'skills' ? t('memory.archive.addSkills') : t('memory.archive.addSubagents'))),
+                    defined ? React.createElement('div', { style: { maxHeight: '180px', overflowY: 'auto', border: '1px solid var(--dsm-border, rgba(127,127,127,.35))', borderRadius: '6px', padding: '4px' } },
+                      items.length ? items.map(function (item) {
+                        var on = checked.indexOf(item.key) >= 0
+                        return React.createElement('label', { key: item.key, style: { display: 'flex', gap: '6px', alignItems: 'center', padding: '2px 4px', cursor: 'pointer' } },
+                          React.createElement('input', { type: 'checkbox', checked: on, disabled: busy, onChange: function () { toggleArchiveItem(section, item.key) } }),
+                          React.createElement('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                            item.key + (item.description ? ' — ' + item.description : '')),
+                          item.enabled === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null)
+                      }) : React.createElement('div', { className: 'dsm-empty' }, t('memory.archive.emptySection')))
+                    : null)
+                }),
+                React.createElement('div', { className: 'dsm-modal-actions' },
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-primary', disabled: busy, onClick: submitArchive }, t('memory.archive.save'))))) : null,
             modal && modal.type === 'trash' ? React.createElement(Modal, { key: 'trash', wide: true, title: t('memory.trash.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               trash.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
                 : React.createElement(React.Fragment, null,
