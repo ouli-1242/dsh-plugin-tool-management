@@ -14,13 +14,18 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
+import { ArchiveWorkspaceRegistry as HistoryService, workspaceBaseName, workspacePathKey } from './history/workspace.js'
 import { createSkillsService, pluginLog } from './skills/service.js'
 import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService } from './rules/service.js'
 import { createArchiveEngine } from './rules/archive-engine.js'
 import { createSubagentService } from './subagents/service.js'
 import { isApprovalNever } from './approval-policy.js'
-import { hubPath, relocateEntries } from './hub.js'
+import { EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
+import { fenceRejection, type ConnectionSeam } from './http-fence.js'
+import { hubPath, hubRoot, relocateEntries } from './hub.js'
+import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentListTool, defineSubagentRunTool } from './subagents/tools.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
@@ -133,6 +138,22 @@ type HistoryBatchTarget = {
   workspaceId?: string
 }
 
+/**
+ * 归档列表的分组视图。宿主侧算好，客户端只按键归并：
+ * `live` = 有活登记（含「路径命中但未记账」）；`detached` = 无活登记、按会话目录重建。
+ */
+type HistoryGroupView = {
+  id: string
+  title: string
+  kind: 'live' | 'detached'
+  /** 活登记为登记路径；重建组为会话目录（目录已不在时为 header 里的原始 cwd）。 */
+  path?: string
+  /** 该路径在插件「见过的登记」快照里出现过 —— 区分「曾登记、已被移除」与「从未登记」。 */
+  registered?: boolean
+  /** 目录当前存在，可一键重新登记为工作区（仅 detached 组有意义）。 */
+  canRegister?: boolean
+}
+
 /** 归档工作区注册表（折叠自 dsh-archive-manager）的最小调用面。 */
 interface HistoryRegistry {
   archiveSession(sessionId: string): Promise<void>
@@ -146,10 +167,40 @@ interface HistoryRegistry {
   requireTable?(): { get(id: string): { title?: string; path?: string; sessionIds: string[] } | undefined; entries(): Array<[string, { title?: string; path?: string; sessionIds: string[] }]> }
   /** 可选：注册表状态；workspaceIds 为权威显示顺序。 */
   requireState?(): { workspaceIds: string[] }
+  /** 可选：会话 → 规范路径索引（宿主启动时对全部存储会话建立）。 */
+  sessionPaths?: Map<string, string>
+  /** 可选：会话 → header（含 cwd）。目录已不在时 cwd 仍是唯一归属线索。 */
+  headers?: Map<string, { cwd?: string }>
+  /** 可选：「见过的登记」快照（标题/路径），供登记被删后仍按目录显示原命名。 */
+  workspaceSnapshot?(): Promise<Map<string, { path: string; title: string; id?: string; at: number }>>
+  /** 可选：把当前活登记记入插件自己的快照（未变化时不写盘）。 */
+  rememberWorkspaces?(records: Array<{ id?: string; path?: string; title?: string }>): Promise<void>
+  /** 可选：为一个已存在目录重新创建宿主工作区登记，并把该目录下已知会话挂回（宿主 resolveByPath / create / attachSession）。 */
+  registerWorkspace?(path: string, title?: string): Promise<{
+    id: string
+    title: string
+    path: string
+    created: boolean
+    attached: string[]
+    attachSkipped: Array<{ sessionId: string; reason: string }>
+  }>
+  /**
+   * 可选：恢复归档后把工作区归属一起恢复（按会话 cwd 找到/重建登记并挂回其 sessionIds）。
+   * 登记被删除后再重建的记录 `sessionIds` 是空的，不挂回的话恢复出来的会话在宿主侧就是「未分组」。
+   */
+  ensureWorkspaceAccounting?(sessionIds: string[]): Promise<{
+    registered: Array<{ path: string; title: string; created: boolean }>
+    attached: string[]
+    skipped: Array<{ sessionId: string; reason: string }>
+  }>
   /** 可选：批量恢复；缺失时 history-unarchive-batch 返回明确错误。 */
   unarchiveSessions?(target: HistoryBatchTarget): Promise<{ unarchivedSessionIds: string[]; archivedSessionIds: string[] }>
   /** 可选：枚举全部持久化会话（含未归档/冷会话）头部，供导出弹窗选择。 */
   listStoredHeaders?(): Promise<Array<{ id: string; cwd?: string; createdAt?: number }>>
+  /** 可选：宿主能力评估快照（compat-status op 与设置页「兼容」页使用）。 */
+  capabilities?(force?: boolean): import('./compat/probe.js').HostAssessment
+  /** 可选：指定能力 id 中不可用的那些（只读路径降级用，不抛错）。 */
+  capabilityRefusals?(ids: readonly string[]): import('./compat/probe.js').CapabilityRefusal[]
 }
 
 interface DshContext extends Context {
@@ -203,13 +254,16 @@ function serializeTurns(turns: Array<{ role: 'user' | 'assistant'; text: string 
 
 export default {
   name: 'dsh-plugin-tool-management-host',
-  inject: ['timer', 'fs', 'settings', 'sandboxPolicy', 'webServer', 'tools', 'skills', 'sessions'],
+  inject: ['timer', 'fs', 'settings', 'sandboxPolicy', 'webServer', 'tools', 'skills', 'sessions', 'agents', 'workspaceRegistry', 'sessionProjectionCache', 'sessionPersistence'],
   apply(ctx: DshContext, config?: Record<string, unknown>) {
     const fs = ctx.fs
     const settings = ctx.settings
     const sandboxPolicy = ctx.sandboxPolicy
     const webServer = ctx.webServer
     const tools = ctx.tools
+    const agents = ctx.get('agents') as unknown as {
+      create?(options: Record<string, unknown>): Promise<unknown>
+    } | undefined
     // pluginInventory is optional: probe at use time, degrade to no live info.
     const pluginInventory = ctx.get('pluginInventory') as PluginInventoryService | undefined
 
@@ -220,12 +274,17 @@ export default {
       PKG_VERSION = (createRequire(import.meta.url)('../package.json') as { version?: string }).version || 'unknown'
     } catch (e) { /* keep unknown */ }
 
-    // Optional access token (defense in depth for LAN exposure). Enabled by
-    // setting `config.token` on this plugin's loader row (profile
-    // cordis.patch.yml override) or the DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN env var. When
-    // set, every state-changing op requires `x-dsh-token: <token>`. Read-only
-    // ops (plugin-version, mcpm-list, skill-state) stay open so the UI still
-    // renders; mcpm-export is guarded too because it leaks full configs.
+    // Optional access token. Enabled by setting `config.token` on this plugin's
+    // loader row (profile cordis.patch.yml override) or the
+    // DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN env var. Two roles now:
+    //   1. escape hatch — a correct token is accepted *in place of* the host's
+    //      browser authentication, so curl/scripts and LAN tooling keep working;
+    //   2. defense in depth — when set, every state-changing op additionally
+    //      requires `x-dsh-token: <token>`.
+    // It is NOT the primary gate anymore: the route calls the host's
+    // connection.requestRejection fence first (Host must be loopback/LAN
+    // IP-literal → defeats DNS rebinding, plus browser-session cookie auth),
+    // so an unset token no longer means "anyone may call writes".
     // NOTE: the entry config arrives as the SECOND apply argument (Cordis
     // calls `callback(ctx, config)`) — never read it off `ctx.config`, which
     // is not an injected service and throws "cannot get property without
@@ -338,16 +397,47 @@ export default {
       }
       return states
     }
-    async function skillStates(): Promise<Record<string, boolean>> {
+    /**
+     * 一次扫描同时给出三样东西（避免为了三份视图各扫一遍磁盘）：
+     *  - `states`：**真实生效**的技能 `<rootKey>/<name>` → boolean；
+     *  - `shadowed`：被同名技能覆盖的键集合（`sk.shadowedBy` 存在）；
+     *  - `all`：全部键 → boolean（被覆盖的副本记 `false`，但键保留）。
+     *
+     * 为什么要区分：`sk.enabled` 只有**同名竞争的胜者**才有值，被覆盖的副本恒为 `undefined`。
+     * 旧实现用 `sk.enabled !== false` 取值，把副本误判成「已启用」，于是场景模式退出回放快照时
+     * 会凭空往 `enabledSkills` 写条目；反过来把副本当成「已停用」又会在进入模式时把用户
+     * 显式启用的记录改写成显式停用。两种都会在「同名竞争消失 / 来源重新打开」后改变实际行为。
+     */
+    async function skillScan(): Promise<{
+      states: Record<string, boolean>
+      shadowed: Set<string>
+      all: Record<string, boolean>
+    }> {
       const r: any = await skillsService.ops['skill-state']({})
       const states: Record<string, boolean> = {}
+      const all: Record<string, boolean> = {}
+      const shadowed = new Set<string>()
       for (const root of ((r && r.data && r.data.roots) || [])) {
         for (const sk of (root.skills || [])) {
           const name = String(sk.declaredName || sk.name || '')
-          if (name) states[String(root.key || '') + '/' + name] = sk.enabled !== false
+          if (!name) continue
+          const key = String(root.key || '') + '/' + name
+          if (sk.shadowedBy) {
+            shadowed.add(key)
+            all[key] = false
+            continue
+          }
+          const on = sk.enabled === true
+          states[key] = on
+          all[key] = on
         }
       }
-      return states
+      return { states, shadowed, all }
+    }
+    async function skillStates(): Promise<Record<string, boolean>> {
+      // knownSkillKeys 需要**全量键**（含被覆盖的副本）：场景档案里允许勾选任意一条技能，
+      // 用生效集去校验会把合法勾选判成 stale 丢掉。
+      return (await skillScan()).all
     }
     const archiveService = createArchiveEngine({
       loadSlice: async () => ({ ...(await rulesService.readArchiveSlice()) }),
@@ -385,11 +475,21 @@ export default {
         scheduleToolRestrictions()
       },
       knownSkillKeys: async () => new Set(Object.keys(await skillStates())),
-      currentSkills: skillStates,
+      // 快照只取**真实生效**的条目（不含被同名覆盖的副本）——副本不参与模式应用，
+      // 退出回放时也不该去动它们，否则会改写用户对副本的显式策略记录。
+      currentSkills: async () => (await skillScan()).states,
       applySkills: async (target: Record<string, boolean>) => {
+        // 两道过滤，缺一不可：
+        //  1. 被同名覆盖的副本直接跳过——它们本来就不生效，写策略只会污染用户的记录。
+        //  2. **已经处于目标状态的技能不再写**。`applySkills` 写的是显式策略记录，而目标
+        //     状态是生效状态，两者不等价：对已经生效为「停用」的技能再 disable 一次，
+        //     只是把「没有记录」固化成「显式停用」，场景模式进出一次就会改写 state.json。
+        const { states, shadowed } = await skillScan()
         for (const [key, on] of Object.entries(target)) {
           const i = key.indexOf('/')
           if (i <= 0) throw new Error(`技能 key 不合法: ${key}`)
+          if (shadowed.has(key)) continue
+          if (states[key] === on) continue
           const root = key.slice(0, i)
           const name = key.slice(i + 1)
           const r: any = await skillsService.ops[on ? 'skill-enable' : 'skill-disable']({ root, name })
@@ -440,30 +540,115 @@ export default {
       'skill-open',
       // agents-md 写操作（create/update/remove 改预设库；apply 写全局 AGENTS.md；import 从外部内容建预设）
       'agentsmd-create', 'agentsmd-update', 'agentsmd-apply', 'agentsmd-remove', 'agentsmd-import',
-      // history 写操作（archive/unarchive 改归档集合；delete 永久删除；retention-set 写保留期）
+      // history 写操作（archive/unarchive 改归档集合；delete 永久删除；retention-set 写保留期；
+      // workspace-register 会新增一条宿主工作区登记，同样是写）
       'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
       'history-unarchive-batch', 'history-delete-batch', 'history-import', 'history-export',
-      'history-archive-batch',
+      'history-archive-batch', 'history-workspace-register',
     ])
 
-    // ---------- history（归档会话管理，折叠自 dsh-archive-manager）----------
-    // cordis.patch.yml 禁用官方 workspace 与 session-projection-cache，插入本插件
-    // 的归档感知子类（lib/history/workspace.js + lib/history/projcache.js）。子类
-    // 经 Service.constructor 继承官方服务名（workspaceRegistry / sessionProjectionCache），
-    // 因此 ctx.get('workspaceRegistry') 拿到的就是归档子类实例。
-    //
-    // 保留期（retentionDays）：0 = 永久不删除，7/30 = 归档满 N 天后自动永久删除。
-    // archivedAt 账本由子类自身维护（data/history-archived-at.json）；保留期配置
-    // 由本插件 data/history-retention.json 存储。sweeper 在 apply 时跑一次并周期
-    // 复跑（默认 6h，可经 config.sweepIntervalMs 覆盖），把到期归档会话批量永久删除。
-    const historyRetentionPath = String((config as { historyRetentionPath?: unknown } | undefined)?.historyRetentionPath || join(PLUGIN_ROOT, 'data', 'history-retention.json'))
+    // 会泄露明文凭据 / 完整配置的 op：额外要求请求带同源 Origin 头（见路由内的注释）。
+    const SENSITIVE_OPS = new Set<string>(['mcpm-reveal', 'mcpm-export'])
+
+    // 兼容体检的日志去重：同一宿主版本只写一条 compat/probe，避免轮询刷屏。
+    let compatLoggedFor: string | undefined
+
+    // ---------- independent history facade ----------
+    // Keep the active workspaceRegistry/sessionProjectionCache instances intact.
+    // Native archive extensions are delegated by capability, not package name.
+    // Official gaps use a checked adapter (history/bridge.js); no service or
+    // storage-domain replacement. Retention uses the existing sidecar ledger.
+    // 历史侧车三件套（归档时刻账本 / 保留期设置 / 工作区登记快照）统一放 hub 根
+    // （`$DSH_HOME/tool-management/`），**不放插件目录**：npm 安装下插件目录会被
+    // `dsh plugin update` 整体替换，放那里等于"升级即丢账本"——账本一丢，保留期基线
+    // 就从 archivedAt 退回 createdAt，归档会话会被提前清掉（v0.4 把 agents-md 预设
+    // 搬进 hub 是同一条理由，见上方注释；这三个是当时漏掉的）。
+    // 旧位置（插件目录 data/）在启动时一次性搬入：只搬不删、绝不覆盖、失败下次再试。
+    const historyArchivedAtFile = String((config as { archivedAtFile?: unknown } | undefined)?.archivedAtFile || hubPath('history-archived-at.json'))
+    const historyWorkspaceSnapshotFile = String((config as { workspaceSnapshotFile?: unknown } | undefined)?.workspaceSnapshotFile || hubPath('history-workspaces.json'))
+    const historyRetentionPath = String((config as { historyRetentionPath?: unknown } | undefined)?.historyRetentionPath || hubPath('history-retention.json'))
+    const historySidecarFiles = new Set(['history-archived-at.json', 'history-retention.json', 'history-workspaces.json'])
+    const historyStandby = relocateEntries(join(PLUGIN_ROOT, 'data'), hubRoot(), (name) => historySidecarFiles.has(name))
+      .catch(() => 0)
     const sweepIntervalMs = Number((config as { sweepIntervalMs?: unknown } | undefined)?.sweepIntervalMs || 0) || 6 * 60 * 60 * 1000
+    let history: InstanceType<typeof HistoryService> | undefined
+    ctx.effect(() => {
+      const registry = ctx.get('workspaceRegistry')
+      if (registry && typeof (registry as any).archiveSession === 'function') {
+        history = new HistoryService(ctx, registry, {
+          archivedAtFile: historyArchivedAtFile,
+          workspaceSnapshotFile: historyWorkspaceSnapshotFile,
+          ready: historyStandby,
+        })
+      }
+      return async () => { const current = history; history = undefined; await current?.dispose() }
+    }, 'dsh-plugin-tool-management: independent history')
     function getHistoryRegistry(): HistoryRegistry | undefined {
-      const r = ctx.get('workspaceRegistry') as HistoryRegistry | undefined
-      return r && typeof r.archiveSession === 'function' ? r : undefined
+      return history as unknown as HistoryRegistry | undefined
     }
+    // ── 场景提示词 → 全局基线（AGENTS.md）同步 ────────────────────────────────
+    //
+    // 用户裁定（2026-09-15）：「切换场景，对应的提示词直接把 AGENTS.md 直接修改」。
+    // 实现收在 ./scene-prompt-sync.ts（可在临时目录上端到端验证）：启用/切换场景、
+    // 关掉场景、改绑定、编辑"驱动基线的那份预设"四个动作都会同步；关掉场景时按
+    // 进场景前的基线快照（`scene-baseline.json`，hub 内）原文写回。
+    const scenePromptSync = createScenePromptSync({
+      agentsMd: agentsMdService,
+      rules: rulesService,
+      baselineFile: hubPath('scene-baseline.json'),
+      logger: ctx.logger,
+    })
+
+    /**
+     * 把同步结果并进 op 响应：只在原操作成功时同步，失败原样透传。
+     * 同步失败**不改**原操作的成功结论（场景确实切了），而是把原因放进 `agentsMd.error`，
+     * 由界面如实显示成警告 —— 绝不假装文件已经改好。
+     */
+    const withAgentsMdSync = (res: any): Promise<any> => scenePromptSync.withSync(res)
+
+    /**
+     * 恢复归档后的**归属恢复**（best-effort，绝不阻断恢复本身）：按会话 cwd 找到或重建
+     * 工作区登记，并把会话挂回该登记的 `sessionIds`。恢复成功但归属恢复失败时返回 undefined，
+     * 由客户端按"会话已恢复、工作区归属未恢复"如实呈现。
+     */
+    async function restoreWorkspaceAccounting(sessionIds: string[]): Promise<{
+      registered: Array<{ path: string; title: string; created: boolean }>
+      attached: string[]
+      skipped: Array<{ sessionId: string; reason: string }>
+    } | undefined> {
+      const registry = getHistoryRegistry()
+      if (!registry || typeof registry.ensureWorkspaceAccounting !== 'function' || !sessionIds.length) return undefined
+      try { return await registry.ensureWorkspaceAccounting(sessionIds) } catch (e) {
+        ctx.logger?.warn?.(`history: workspace accounting after restore failed: ${message(e)}`)
+        return undefined
+      }
+    }
+    /**
+     * **当前生效的提示词预设 id**（界面「生效中」的那一份），供写操作做门禁：
+     *   ① 启用的场景绑定了它 → 就是它（场景优先级最高，与 agentsmd-list 的标记同一口径）；
+     *   ② 否则回退到文件比对（`~/.dsh/AGENTS.md` 内容 == 某份预设）。
+     * 探测失败返回 `null`（调用方决定放行还是拒绝；当前只在删除上使用，放行 + warn）。
+     */
+    async function effectivePresetId(): Promise<string | null> {
+      try {
+        const r: any = await rulesService.ops['rules-list']({})
+        const sp = r && r.ok ? r.scenePrompt : null
+        if (sp && sp.scene && !sp.missing && sp.presetId) return String(sp.presetId)
+      } catch (e) {
+        ctx.logger?.warn?.(`agents-md: scene prompt probe failed: ${message(e)}`)
+      }
+      try {
+        const cur: any = await agentsMdService.getCurrent()
+        if (cur && cur.ok && cur.presetId) return String(cur.presetId)
+      } catch (e) {
+        ctx.logger?.warn?.(`agents-md: global baseline probe failed: ${message(e)}`)
+      }
+      return null
+    }
+
     async function readHistoryRetention(): Promise<{ retentionDays: number; updatedAt: number }> {
       try {
+        await historyStandby
         const raw = await readFile(historyRetentionPath, 'utf8')
         const obj = JSON.parse(raw)
         const days = Number((obj && (obj as { retentionDays?: unknown }).retentionDays) ?? 0)
@@ -475,6 +660,7 @@ export default {
       } catch { return { retentionDays: 0, updatedAt: 0 } }
     }
     async function writeHistoryRetention(retentionDays: number): Promise<void> {
+      await historyStandby
       const dir = dirname(historyRetentionPath)
       await mkdir(dir, { recursive: true })
       // updatedAt = 修改时刻：每次改保留期，已归档会话的到期基线重置为此时刻。
@@ -1605,7 +1791,12 @@ export default {
           if (row && row.disabled) c = appendBlock(c, buildDisableBlock(id, false))
         } else {
           c = removeMarked(c, id, 'enable')
-          c = appendBlock(c, buildDisableBlock(id, true))
+          // 幂等：已经生效为「停用」时不再追加 disable 块。无条件 append 会让每次点
+          // 「停用」都往 patch 里塞一条重复条目（历史上 18 条互相矛盾的条目就是这么来的，
+          // 最终生效值只能靠 last-wins 合并顺序猜），且文件会随每次启停线性膨胀。
+          const { rows } = parseRows(c)
+          const row = rows.find((r) => r.id === id)
+          if (!row || !row.disabled) c = appendBlock(c, buildDisableBlock(id, true))
         }
         await writePatch(abs, c)
         return { ok: true }
@@ -1872,6 +2063,101 @@ export default {
     }
 
     /**
+     * 归档会话的归属解析（三级，宿主侧算好再给客户端）：
+     *   1. 活登记的 sessionIds 命中            → 组 = 该登记；
+     *   2. 未命中但规范路径命中某活登记        → 组 = 该登记（会话不在其记账里，属正常）；
+     *   3. 没有任何活登记                      → 按会话目录重建分组（`path:<归一化路径>`），
+     *      目录仍在则可一键重新登记（写回宿主），目录已不在则退到 header 里的原始 cwd。
+     * 宿主删除工作区是硬删、不留墓碑，登记一没，`workspaceId` 就再也查不到；但会话目录
+     * （`registry.sessionPaths` / header.cwd）还在，所以归属可以按目录重建、并在目录回来时
+     * 自动并回同一组。除插件自己 `data/` 下的「见过的登记」快照外，本函数不写任何宿主状态。
+     * 任何一步失败都降级为「不分组」，绝不阻断列表。
+     */
+    async function buildHistoryGroups(
+      registry: HistoryRegistry,
+      items: Array<{ sessionId: string; cwd?: string; workspaceId?: string; groupId?: string }>,
+    ): Promise<{ groups: HistoryGroupView[]; workspaces: Record<string, { title: string; path?: string }> }> {
+      const groups: HistoryGroupView[] = []
+      const workspaces: Record<string, { title: string; path?: string }> = {}
+      try {
+        const groupsById = new Map<string, HistoryGroupView>()
+        const liveByPath = new Map<string, string>()
+        const owned = new Map<string, string>()
+        const liveRecords: Array<{ id: string; path: string; title: string }> = []
+        const table = typeof registry.requireTable === 'function' ? registry.requireTable() : undefined
+        const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
+        if (table) {
+          const ids = state && Array.isArray(state.workspaceIds) && state.workspaceIds.length
+            ? state.workspaceIds
+            : [...table.entries()].map(([id]) => id)
+          for (const wid of ids) {
+            const rec = table.get(wid)
+            if (!rec || !Array.isArray(rec.sessionIds)) continue
+            const path = typeof rec.path === 'string' && rec.path ? rec.path : undefined
+            const title = (rec.title && String(rec.title)) || (path ? workspaceBaseName(path) : String(wid))
+            for (const sid of rec.sessionIds) if (!owned.has(sid)) owned.set(sid, wid)
+            if (path) {
+              liveByPath.set(workspacePathKey(path), wid)
+              liveRecords.push({ id: String(wid), path, title })
+            }
+            const view: HistoryGroupView = { id: 'ws:' + wid, title, kind: 'live', registered: true, ...(path ? { path } : {}) }
+            groupsById.set(view.id, view)
+            groups.push(view)
+            workspaces[wid] = { title, ...(path ? { path } : {}) }
+          }
+        }
+        // 「见过的登记」快照：登记被删后仍能给出原命名，并区分「已移除」与「从未登记」。
+        const snapshot = typeof registry.workspaceSnapshot === 'function' ? await registry.workspaceSnapshot() : undefined
+        if (liveRecords.length && typeof registry.rememberWorkspaces === 'function') {
+          try { await registry.rememberWorkspaces(liveRecords) } catch { /* 快照写失败不影响分组 */ }
+        }
+        const sessionPaths = registry.sessionPaths instanceof Map ? registry.sessionPaths : undefined
+        const headers = registry.headers instanceof Map ? registry.headers : undefined
+        for (const it of items) {
+          const sid = it.sessionId
+          let wid = owned.get(sid)
+          const canonical = sessionPaths ? sessionPaths.get(sid) : undefined
+          if (wid === undefined && typeof canonical === 'string' && canonical) {
+            const byPath = liveByPath.get(workspacePathKey(canonical))
+            if (byPath !== undefined) wid = byPath
+          }
+          if (wid !== undefined) {
+            it.workspaceId = wid
+            it.groupId = 'ws:' + wid
+            continue
+          }
+          let path = typeof canonical === 'string' && canonical ? canonical : undefined
+          if (path === undefined && it.cwd) path = it.cwd
+          if (path === undefined && headers) {
+            const cwd = headers.get(sid)?.cwd
+            if (typeof cwd === 'string' && cwd) path = cwd
+          }
+          if (!path) continue
+          const key = 'path:' + workspacePathKey(path)
+          it.groupId = key
+          const known = snapshot ? snapshot.get(workspacePathKey(path)) : undefined
+          const existing = groupsById.get(key)
+          if (existing) {
+            // 同目录的多个会话：目录存在（sessionPaths 命中）即可重新登记。
+            if (canonical !== undefined) existing.canRegister = true
+            continue
+          }
+          const view: HistoryGroupView = {
+            id: key,
+            title: known?.title || workspaceBaseName(path) || path,
+            kind: 'detached',
+            registered: known !== undefined,
+            canRegister: canonical !== undefined,
+            path: known?.path || path,
+          }
+          groupsById.set(key, view)
+          groups.push(view)
+        }
+      } catch { /* 分组是增强：任何异常都退回扁平列表 */ }
+      return { groups, workspaces }
+    }
+
+    /**
      * 记忆候选（档案编辑器第 4 段「记忆」）：`[{ id, scene, name, description }]`。
      * 只读、不读正文（勾选集只存 id）；任何异常降级为空列表，不让档案弹窗崩掉。
      */
@@ -2044,6 +2330,15 @@ export default {
       // rules-remove-scene。
       // 成功返回扁平 {ok:true, ...}（不套 data），失败 {ok:false, error, code?}。
       ...rulesService.ops,
+      // 场景 ↔ 全局基线（AGENTS.md）同步：用户裁定「切换场景，对应的提示词直接把 AGENTS.md
+      // 直接修改」，所以这四个 rules 写 op 走包装 —— 先执行原逻辑，成功后把当前场景绑定的
+      // 提示词写进 `~/.dsh/AGENTS.md`（或关掉场景时恢复进场景前的基线），结果并进响应
+      // 的 `agentsMd` 字段（`applied` / `restored` / `unchanged` / `error`）。
+      // 放在 spread 之后，显式覆盖同名 op。
+      'rules-set-active': async (args: any) => withAgentsMdSync(await rulesService.ops['rules-set-active'](args)),
+      'rules-update-scene': async (args: any) => withAgentsMdSync(await rulesService.ops['rules-update-scene'](args)),
+      'rules-create-scene': async (args: any) => withAgentsMdSync(await rulesService.ops['rules-create-scene'](args)),
+      'rules-remove-scene': async (args: any) => withAgentsMdSync(await rulesService.ops['rules-remove-scene'](args)),
       // 场景档案 ops（由 ./rules/archive-engine.ts 提供）：scene-mode-get /
       // scene-archive-save / scene-mode-set。成功返回扁平 {ok:true, ...}，
       // 失败 {ok:false, error}；写 op 已含 archiveService.writeOps 门禁派生。
@@ -2092,53 +2387,87 @@ export default {
       // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
       // agentsmd-read / agentsmd-create / agentsmd-update / agentsmd-remove /
       // agentsmd-apply / agentsmd-get-current
-      'agentsmd-list': () => agentsMdService.list(),
+      // 提示词预设库（由 ./agents-md/service.ts 提供）。这里把两件事对齐成用户看到的一份状态：
+      //   - `active`（界面「生效中」）= **当前真正在起作用的基线**：启用的场景绑了预设就是它，
+      //     否则才看文件比对（预设正文 == ~/.dsh/AGENTS.md）。用户裁定：「场景启动了，
+      //     提示词页生效中的应该是场景选择的那个」。
+      //   - `fileApplied` = 文件比对结果（AGENTS.md 里确实是它）。两者同时为真说明
+      //     场景绑的就是已应用的那份，正文一致时宿主不会再注入第二遍（去重）。
+      'agentsmd-list': async () => {
+        const base = await agentsMdService.list()
+        if (!base || base.ok === false) return base
+        let scenePrompt: { scene: string | null; presetId: string | null; missing: boolean; duplicate?: boolean; bytes: number } | undefined
+        try {
+          const r: any = await rulesService.ops['rules-list']({})
+          if (r && r.ok && r.scenePrompt) scenePrompt = r.scenePrompt
+        } catch { /* 场景服务不可用 → 只回预设库 */ }
+        const sceneId = scenePrompt && !scenePrompt.missing && scenePrompt.scene ? scenePrompt.presetId : null
+        // 场景驱动时**只有场景绑的那份**算生效中（用户裁定）；文件里那份降级为「文件里是它」，
+        // 因为场景的提示词已经接管基线。没有场景驱动时才按文件比对定「生效中」。
+        const sceneDrives = sceneId !== null
+        const presets = base.presets.map((p) => {
+          const fileApplied = p.active === true
+          const byScene = sceneDrives && sceneId === p.id
+          const active = sceneDrives ? byScene : fileApplied
+          return { ...p, active, fileApplied, activeVia: byScene ? 'scene' : (active && fileApplied ? 'file' : null) }
+        })
+        return { ...base, presets, ...(scenePrompt ? { scenePrompt } : {}) }
+      },
       'agentsmd-read': (args: any) => agentsMdService.read(String((args && args.id) || '')),
-      'agentsmd-create': (args: any) => agentsMdService.create(String((args && args.id) || ''), args && args.from ? String(args.from) : undefined),
-      'agentsmd-update': (args: any) => agentsMdService.update(String((args && args.id) || ''), String((args && args.content) ?? '')),
+      // content 与 from 都可选：新建弹窗里直接写正文（content），或从现有预设复制（from）。
+      'agentsmd-create': (args: any) => agentsMdService.create(String((args && args.id) || ''), {
+        ...(args && args.from ? { from: String(args.from) } : {}),
+        ...(args && typeof args.content === 'string' ? { content: String(args.content) } : {}),
+      }),
+      // 保存：改正文 + 可选改名（nextId）。改名成功顺带把场景绑定一起改名 ——
+      // 绑定存在 rules-index.json 里，预设库自己看不到，不叫这一声就会留悬空绑定。
+      // 保存后同步一次全局基线：若改的正是「正在驱动基线的那份」，正文要跟着写进
+      // `~/.dsh/AGENTS.md`（否则页面标着「生效中」而文件里还是旧内容）。
+      'agentsmd-update': async (args: any) => {
+        const res = await agentsMdService.update(
+          String((args && args.id) || ''),
+          String((args && args.content) ?? ''),
+          args && args.nextId !== undefined ? String(args.nextId) : undefined,
+        )
+        if (!res || res.ok === false) return res
+        let renamed: any = {}
+        if (res.renamedFrom) {
+          try {
+            const r: any = await rulesService.ops['rules-rebind-prompt']({ from: res.renamedFrom, to: res.id })
+            renamed = r && r.ok ? { reboundScenes: r.changed } : {}
+          } catch { /* 改名同步失败不影响保存本身 */ }
+        }
+        return withAgentsMdSync({ ...res, ...renamed })
+      },
       'agentsmd-apply': (args: any) => agentsMdService.apply(String((args && args.id) || '')),
       'agentsmd-get-current': () => agentsMdService.getCurrent(),
-      'agentsmd-remove': (args: any) => agentsMdService.remove(String((args && args.id) || '')),
+      // 删除：**正在生效的那份拒绝删除**（用户裁定）。生效 = 启用的场景绑定了它，
+      // 否则 = 文件内容就是它。禁用的按钮只是提示，真正的门在这里（模型与旧页面也会走这条路）。
+      // 探测失败时放行并记一条 warn：删预设不动 ~/.dsh/AGENTS.md，最坏是少一份副本，可重建。
+      'agentsmd-remove': async (args: any) => {
+        const id = String((args && args.id) || '')
+        const effective = await effectivePresetId()
+        if (effective !== null && effective === id) {
+          return { ok: false, error: `「${id}」正在生效，不能删除：先启用别的场景或换绑提示词，或先把别的预设应用上去。` }
+        }
+        return agentsMdService.remove(id)
+      },
       'agentsmd-import': (args: any) => agentsMdService.importPreset(String((args && args.id) || ''), String((args && args.content) ?? '')),
       // History（归档会话管理）ops。只读：history-list / history-retention-get；
       // 写：history-archive / history-unarchive / history-delete / history-retention-set。
       // workspaceRegistry 缺失（补丁未生效）时返回明确错误，不崩页面。
       'history-list': async () => {
         const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未挂载：workspace 已被替换？请确认本插件补丁已生效。' }
+        if (!registry) return { ok: false, error: '归档服务未就绪：请检查宿主 workspaceRegistry 服务。' }
         try {
           const items = (typeof registry.archivedSessionDetails === 'function')
             ? (await registry.archivedSessionDetails()).items
             : (await registry.archivedSessionMetadata()).items.map((i) => ({ sessionId: i.sessionId, createdAt: i.createdAt, archivedAt: registry.archivedAt?.(i.sessionId) }))
           const { retentionDays } = await readHistoryRetention()
-          // 分组增强（best-effort）：用 workspace 记账表反查每个归档会话的归属，
-          // 供客户端按项目分组。requireTable 缺失或任何异常都静默降级为扁平列表。
-          if (typeof registry.requireTable === 'function') {
-            try {
-              const table = registry.requireTable()
-              const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
-              const wsIds = state && Array.isArray(state.workspaceIds) && state.workspaceIds.length
-                ? state.workspaceIds
-                : [...table.entries()].map(([id]) => id)
-              const owned = new Map<string, string>()
-              const workspaces: Record<string, { title: string; path?: string }> = {}
-              for (const wid of wsIds) {
-                const rec = table.get(wid)
-                if (!rec || !Array.isArray(rec.sessionIds)) continue
-                for (const sid of rec.sessionIds) if (!owned.has(sid)) owned.set(sid, wid)
-                workspaces[wid] = {
-                  title: (rec.title && String(rec.title)) || String(wid),
-                  ...(typeof rec.path === 'string' && rec.path ? { path: rec.path } : {}),
-                }
-              }
-              for (const it of items) {
-                const wid = owned.get(it.sessionId)
-                if (wid !== undefined) (it as { workspaceId?: string }).workspaceId = wid
-              }
-              return { ok: true, items, workspaces, retentionDays }
-            } catch (e) { /* 降级为下方扁平返回 */ }
-          }
-          return { ok: true, items, retentionDays }
+          // 归属分组（best-effort）：活登记 → 路径命中 → 按会话目录重建。
+          // 宿主删除工作区后登记消失，靠会话目录把分组补回来（详见 buildHistoryGroups）。
+          const { groups, workspaces } = await buildHistoryGroups(registry, items as Array<{ sessionId: string; cwd?: string }>)
+          return { ok: true, items, groups, workspaces, retentionDays }
         } catch (e) { return { ok: false, error: message(e) } }
       },
       // 枚举全部持久化会话（含未归档/冷会话）供导出弹窗选择；只读，不门控。
@@ -2154,35 +2483,19 @@ export default {
             ? (await registry.archivedSessionDetails()).items
             : (await registry.archivedSessionMetadata()).items
           const archived = new Set(archivedItems.map((i) => i.sessionId))
-          // 工作区归属反查（与 history-list 一致；best-effort）。
-          const table = typeof registry.requireTable === 'function' ? registry.requireTable() : undefined
-          const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
-          const wsIds = state && Array.isArray(state.workspaceIds) && state.workspaceIds.length
-            ? state.workspaceIds
-            : (table ? [...table.entries()].map(([id]) => id) : [])
-          const owned = new Map<string, string>()
-          if (table) {
-            for (const wid of wsIds) {
-              const rec = table.get(wid)
-              if (!rec || !Array.isArray(rec.sessionIds)) continue
-              for (const sid of rec.sessionIds) if (!owned.has(sid)) owned.set(sid, wid)
-            }
-          }
           const cache = ctx.get('sessionProjectionCache') as { cachedSnapshot?(header: unknown, seq: number, fields: string[]): { values?: { title?: string } } } | undefined
-          const items: Array<{ sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; cwdMissing?: boolean }> = []
+          const items: Array<{ sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; groupId?: string; cwdMissing?: boolean }> = []
           for (const h of headers) {
             const sessionId = h && typeof h.id === 'string' ? h.id : undefined
             if (!sessionId) continue
             // 过滤子代理派生的会话：不占用用户会话列表，也不应出现在导出选择里。
             if ((h as { origin?: string }).origin === 'subagent') continue
-            const item: { sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; cwdMissing?: boolean } = {
+            const item: { sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; groupId?: string; cwdMissing?: boolean } = {
               sessionId,
               archived: archived.has(sessionId),
             }
             if (typeof h.cwd === 'string' && h.cwd) item.cwd = h.cwd
             if (typeof h.createdAt === 'number' && Number.isFinite(h.createdAt)) item.createdAt = h.createdAt
-            const wid = owned.get(sessionId)
-            if (wid !== undefined) item.workspaceId = wid
             if (cache && typeof cache.cachedSnapshot === 'function') {
               try {
                 const snap = cache.cachedSnapshot(h, 0, ['title'])
@@ -2198,7 +2511,9 @@ export default {
             }
             items.push(item)
           }
-          return { ok: true, items }
+          // 归属分组（与 history-list 同源）：导出弹窗的工作区筛选按同一套组 id。
+          const { groups } = await buildHistoryGroups(registry, items)
+          return { ok: true, items, groups }
         } catch (e) { return { ok: false, error: message(e) } }
       },
       // 导出默认目录：桌面（存在时）否则用户主目录。只读，不门控。
@@ -2244,8 +2559,7 @@ export default {
         const sessionId = String((args && args.sessionId) || '').trim()
         if (!sessionId) return { ok: false, error: '缺少 sessionId' }
         try { await registry.archiveSession(sessionId); return { ok: true, sessionId } } catch (e) { return { ok: false, error: message(e) } }
-      },
-      // 批量归档（导出弹窗「归档所选」）：把选中的会话收进 History，纳入保留期管理。
+      },      // 批量归档（导出弹窗「归档所选」）：把选中的会话收进 History，纳入保留期管理。
       'history-archive-batch': async (args: any) => {
         const registry = getHistoryRegistry()
         if (!registry) return { ok: false, error: '归档服务未挂载' }
@@ -2260,12 +2574,62 @@ export default {
         }
         return { ok: true, archived, failed }
       },
+      // 兼容体检：把"宿主到底支持哪些操作、哪些降级了、为什么"变成可读状态，
+      // 而不是等用户点删除时才看见报错。只读，不改任何数据。
+      'compat-status': async (args: any) => {
+        const force = Boolean(args && args.refresh)
+        try {
+          const registry = getHistoryRegistry()
+          const assessment = registry && typeof registry.capabilities === 'function'
+            ? registry.capabilities(force)
+            : undefined
+          if (assessment === undefined) {
+            return {
+              ok: true,
+              host: { version: 'unknown' },
+              findings: [],
+              degraded: [],
+              blockers: ['归档服务未挂载：无法探测宿主能力'],
+              summary: '宿主能力探测不可用（归档服务未挂载）',
+            }
+          }
+          const summary = summarize(assessment)
+          // 每次刷新都留一条结构化日志：升级当天就能在日志里看到降级发生。
+          if (force || !compatLoggedFor || compatLoggedFor !== assessment.identity.version) {
+            compatLoggedFor = assessment.identity.version
+            void pluginLog()('compat/probe', {
+              hostVersion: assessment.identity.version,
+              summary,
+              degraded: assessment.degraded.map((item: import('./compat/probe.js').CapabilityFinding) => ({ id: item.id, state: item.state, detail: item.detail })),
+              blockers: assessment.identity.blockers,
+              sameAsHost: assessment.identity.sameAsHost,
+            }).catch(() => {})
+          }
+          return {
+            ok: true,
+            host: { version: assessment.identity.version, modules: assessment.identity.modules },
+            sameAsHost: assessment.identity.sameAsHost,
+            findings: assessment.findings,
+            degraded: assessment.degraded,
+            blockers: assessment.identity.blockers,
+            mayDelete: assessment.mayDelete,
+            verifiedVersion: VERIFIED_HOST_VERSION,
+            expectedPeerRange: EXPECTED_PEER_RANGE,
+            generatedAt: assessment.generatedAt,
+            summary,
+          }
+        } catch (e) { return { ok: false, error: message(e) } }
+      },
       'history-unarchive': async (args: any) => {
         const registry = getHistoryRegistry()
         if (!registry) return { ok: false, error: '归档服务未挂载' }
         const sessionId = String((args && args.sessionId) || '').trim()
         if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-        try { const r = await registry.unarchiveSession(sessionId); return { ok: true, archivedSessionIds: r.archivedSessionIds } } catch (e) { return { ok: false, error: message(e) } }
+        try {
+          const r = await registry.unarchiveSession(sessionId)
+          const workspace = await restoreWorkspaceAccounting([sessionId])
+          return { ok: true, archivedSessionIds: r.archivedSessionIds, ...(workspace ? { workspace } : {}) }
+        } catch (e) { return { ok: false, error: message(e) } }
       },
       'history-delete': async (args: any) => {
         const registry = getHistoryRegistry()
@@ -2282,7 +2646,8 @@ export default {
         if (!parsed.ok) return parsed
         try {
           const r = await registry.unarchiveSessions(parsed.target)
-          return { ok: true, unarchivedSessionIds: r.unarchivedSessionIds, archivedSessionIds: r.archivedSessionIds }
+          const workspace = await restoreWorkspaceAccounting(r.unarchivedSessionIds || [])
+          return { ok: true, unarchivedSessionIds: r.unarchivedSessionIds, archivedSessionIds: r.archivedSessionIds, ...(workspace ? { workspace } : {}) }
         } catch (e) { return { ok: false, error: message(e) } }
       },
       'history-delete-batch': async (args: any) => {
@@ -2293,6 +2658,23 @@ export default {
         try {
           const r = await registry.deleteArchivedSessions(parsed.target)
           return { ok: true, requestedSessionIds: r.requestedSessionIds, deletedSessionIds: r.deletedSessionIds, skippedSessionIds: r.skippedSessionIds, failures: r.failures }
+        } catch (e) { return { ok: false, error: message(e) } }
+      },
+      // 重新登记工作区（写宿主状态）：为「工作区已被删除、目录仍在」的分组补回一条登记。
+      // 只在用户显式确认后调用；宿主 realpath 会拒绝不存在的目录，同路径已登记则幂等返回。
+      // 不移动、不删除任何文件或会话，也不改写 sessionIds 记账。
+      'history-workspace-register': async (args: any) => {
+        const registry = getHistoryRegistry()
+        if (!registry) return { ok: false, error: '归档服务未挂载' }
+        const path = String((args && args.path) || '').trim()
+        if (!path) return { ok: false, error: '缺少工作区目录 path' }
+        if (typeof registry.registerWorkspace !== 'function') {
+          return { ok: false, error: '当前环境不支持重新登记工作区（registry 未实现 registerWorkspace）' }
+        }
+        const title = args && args.title ? String(args.title) : undefined
+        try {
+          const workspace = await registry.registerWorkspace(path, title)
+          return { ok: true, workspace }
         } catch (e) { return { ok: false, error: message(e) } }
       },
       // 从其他 Agent（Claude Code / Cursor JSONL、Codex Markdown、通用文本）导入对话，
@@ -2311,8 +2693,7 @@ export default {
           return { ok: false, error: '对话解析失败: ' + message(e) }
         }
         if (!turns.length) return { ok: false, error: '未能从该文件中识别出对话内容' }
-        const sessions = ctx.get('sessions') as { create?(id: string | undefined, options: { seed?: unknown[]; meta?: Record<string, unknown> }): { id: string } } | undefined
-        if (!sessions || typeof sessions.create !== 'function') return { ok: false, error: '当前环境不支持创建会话（sessions.create 不可用）' }
+        if (!agents || typeof agents.create !== 'function') return { ok: false, error: '当前环境不支持创建会话（agents.create 不可用）' }
         // 仅接受绝对路径的 cwd；非法或缺失时会话不带目录（归入未分组）。
         const cwdArg = String((args && args.cwd) || '').trim()
         const cwd = /^([A-Za-z]:[\\/]|\\\\|\/)/.test(cwdArg) ? cwdArg : undefined
@@ -2328,8 +2709,19 @@ export default {
           surfaceOp: 'append',
         }))
         try {
-          const created = sessions.create(undefined, { seed, meta: { ...(cwd ? { cwd } : {}), createdAt: base } })
-          return { ok: true, sessionId: created.id, count: turns.length }
+          // `sessions.create()` 只创建裸 Session；它不经过 DSH agent factory / workspace
+          // / session-log，所以返回的内存 id 不会进入 UI 的会话列表。必须走官方的
+          // `ctx.agents.create()`，它会在同一事务里创建 Agent、发布 Session，并触发宿主
+          // 的持久化与 projection 链路。这里使用 UUID，避免 SessionStore 的裸自增 id 与
+          // 宿主 API 会话 id 空间混用。
+          const id = 'session-' + randomUUID()
+          await agents.create({ sessionId: id, seed, ...(cwd ? { meta: { cwd } } : {}) })
+          const sessions = ctx.get('sessions') as { get?(sessionId: string): unknown } | undefined
+          const live = sessions && typeof sessions.get === 'function' ? sessions.get(id) : undefined
+          if (live === undefined || live === null) {
+            return { ok: false, error: `创建会话失败：宿主未登记该会话（${id}），未导入任何内容` }
+          }
+          return { ok: true, sessionId: id, count: turns.length }
         } catch (e) {
           return { ok: false, error: '创建会话失败: ' + message(e) }
         }
@@ -2404,15 +2796,19 @@ export default {
       },
       'history-retention-set': async (args: any) => {
         const days = Number((args && args.retentionDays) ?? -1)
-        if (!Number.isFinite(days) || days < 0) return { ok: false, error: 'retentionDays 需为非负整数（0=永久不删除）' }
+        // 错误文案承诺的是「非负整数」，就按整数校验：1.5 这类小数以前会被静默取整成 1，
+        // 用户看到的回执与输入不符。
+        if (!Number.isSafeInteger(days) || days < 0) {
+          return { ok: false, error: 'retentionDays 需为非负整数（0=永久不删除），收到: ' + String((args && args.retentionDays)) }
+        }
         try {
-          await writeHistoryRetention(Math.floor(days))
+          await writeHistoryRetention(days)
         } catch (e) {
           return { ok: false, error: '写入保留期失败: ' + message(e) }
         }
         // 设置变更后立即扫一次，UI 反映新策略。
         await sweepHistory().catch(() => {})
-        return { ok: true, retentionDays: Math.floor(days) }
+        return { ok: true, retentionDays: days }
       },
     }
 
@@ -2521,7 +2917,10 @@ export default {
     }))
     tools.register(defineTool({
       name: 'skill_manager_create',
-      description: 'Create a new local DSH skill under DSH_HOME/skills. Use only when the user explicitly asks to create or save a reusable skill.',
+      // 落点必须和 UI「创建技能」一致：两者都走 core 的默认落点（hub 的
+      // tool-management/skills/，hub 缺失时退回 DSH_HOME/skills）。以前这里硬编码
+      // root:'dsh'，于是同一个「新建技能」动作，人点界面和模型调用会落到两个不同的根。
+      description: 'Create a new local DSH skill under the tool-management skills root (DSH_HOME/tool-management/skills). Use only when the user explicitly asks to create or save a reusable skill.',
       parameters: {
         name: { type: 'string', required: true, description: 'Skill name; normalized to kebab-case.' },
         description: { type: 'string', required: true, description: 'A concise routing description for when to use the skill.' },
@@ -2529,7 +2928,7 @@ export default {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
-        const r = await skillsService.ops['skill-create']({ name: args.name, description: args.description, body: args.body, root: 'dsh' })
+        const r = await skillsService.ops['skill-create']({ name: args.name, description: args.description, body: args.body })
         if (!r || r.ok === false) throw new Error((r && r.error) || 'skill create failed')
         const data: any = r.data || {}
         return 'Created DSH skill ' + (data.name || args.name) + ' at ' + (data.path || '(unknown)')
@@ -2642,11 +3041,26 @@ export default {
         pluginLog()('confirm-bypass', `完全权限（approval=never）：跳过${CONFIRM_LABELS[String(exec && exec.name)]}的确认，直接放行`).catch(() => {})
         return true
       }
-      ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', (exec, next) => {
+      // subagent_run 的目标人设是否真实存在。确认门是「问用户要不要做」，如果这个请求
+      // 本来就做不成（人设不存在），弹卡 / 写 bypass 日志只会产生一次无效审批：
+      // 用户批准之后模型收到的是「人设不可用」。所以先校验，再决定要不要问。
+      // 校验本身不可用时返回 true（保持原行为，绝不因为探测失败而少问一次）。
+      const subagentRunTargetExists = async (exec: any): Promise<boolean> => {
+        try {
+          const name = String((exec && exec.arguments && exec.arguments.agent) || '').trim()
+          if (!name) return false
+          const list = await subagentService.list()
+          return list.some((p) => p.name === name)
+        } catch (e) {
+          return true
+        }
+      }
+      ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', async (exec, next) => {
         if (!exec || !CONFIRM_LABELS[String(exec.name)]) return next()
+        if (exec.name === 'subagent_run' && !(await subagentRunTargetExists(exec))) return next()
         if (bypassedByFullAccess(exec)) return next()
         if (exec.name === 'skill_manager_create') {
-          return Promise.resolve({ kind: 'ask', reason: 'Create a new skill under DSH_HOME/skills' })
+          return Promise.resolve({ kind: 'ask', reason: 'Create a new skill under ~/.dsh/tool-management/skills' })
         }
         if (exec.name === 'rule_manager_write') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
@@ -2700,9 +3114,10 @@ export default {
     // ---------- HTTP API route (UI half), registered defensively ----------
     if (webServer) {
       // Cap request bodies (88 MiB): skill-upload carries Base64 folder/ZIP
-      // payloads (64 MiB of raw content). The route is only reachable from
-      // local/trusted origins (Host + CSRF header + optional token gate).
-      // `config.maxBodyBytes` overrides the cap (tests use a small value).
+      // payloads (64 MiB of raw content). Reachability is decided by
+      // fenceRejection() below — the host's Host/Origin + browser-session fence
+      // (or a correct explicit token). `config.maxBodyBytes` overrides the cap
+      // (tests use a small value).
       const configuredMaxBody = Number((config as { maxBodyBytes?: unknown } | undefined)?.maxBodyBytes)
       const MAX_BODY = Number.isFinite(configuredMaxBody) && configuredMaxBody > 0 ? configuredMaxBody : 88 * 1024 * 1024
       const readBody = (req: HttpReq) => new Promise<string>((resolve, reject) => {
@@ -2720,6 +3135,16 @@ export default {
         req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
         req.on('error', reject)
       })
+      // 宿主 BrowserAuth 栅栏。宿主的鉴权**只包在它自己注册的路由上**——dsh-host-webserver
+      // 没有全局中间件，既定约定是每个注册方自己调 connection.requestRejection(req)：
+      // 它先做 Host/Origin 栅栏（Host 必须是回环或 deployment 派生的 LAN IP 字面量，
+      // 这是 DNS rebinding 唯一伪造不了的头），再叠加 browser-session cookie 鉴权。
+      // 本插件此前只查公开常量 x-dsh-plugin 与自比对（Origin.host === Host）的 "同源"，
+      // 两者都挡不住 rebind 后的网页或本机任意进程 —— 等于没鉴权。现在优先走宿主栅栏。
+      const connection = ((): ConnectionSeam | undefined => {
+        try { return ctx.get('connection') as ConnectionSeam | undefined }
+        catch { return undefined }
+      })()
       try {
         // ctx.effect wires the route's disposer into this plugin's scope, so an
         // unload (HMR removal, disable, update) unregisters the route — the
@@ -2728,12 +3153,10 @@ export default {
           kind: 'exact',
           path: '/dsh-plugin-tool-management/api',
           handler: async (req, res) => {
-            // Cross-site (CSRF) gate. This route mutates config files, so it
-            // must only be reachable from the DSH web UI (same origin) or
-            // local tooling. A browser cross-site request cannot attach a
-            // custom header without a CORS preflight, and this route never
-            // answers preflights — requiring `x-dsh-plugin` is the primary
-            // gate; POST-only and the Origin check are defense in depth.
+            // 鉴权顺序：POST-only → 插件门禁头（防误触，不是凭证）→ 宿主栅栏
+            // （Host/Origin + browser-session cookie）→ 可选访问令牌。令牌是本地工具与
+            // LAN 部署的逃生门：**令牌正确即视为已授权**，可越过浏览器鉴权；
+            // 未配置令牌时不再有"谁都放行"的缺口。
             const hdr = (name: string): string => {
               const v = req.headers?.[name]
               return Array.isArray(v) ? v[0] ?? '' : v ?? ''
@@ -2749,17 +3172,12 @@ export default {
               return
             }
             const origin = hdr('origin')
-            if (origin) {
-              let sameOrigin = false
-              try {
-                const u = new URL(origin)
-                const hostHdr = hdr('host') || ''
-                sameOrigin =
-                  /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(u.hostname) || u.host === hostHdr
-              } catch (e) { /* unparseable origin → rejected below */ }
-              if (!sameOrigin) {
-                res.writeHead(403, { 'content-type': 'application/json' })
-                res.end(JSON.stringify({ ok: false, error: 'cross-origin request rejected' }))
+            const tokenAccepted = TOKEN !== '' && hdr('x-dsh-token') === TOKEN
+            if (!tokenAccepted) {
+              const fence = fenceRejection(req, connection)
+              if (fence) {
+                res.writeHead(fence.status, { 'content-type': 'application/json' })
+                res.end(JSON.stringify({ ok: false, error: fence.error }))
                 return
               }
             }
@@ -2776,6 +3194,13 @@ export default {
                 /* otherwise fall through with {} */
               }
               const op = String(payload.op || '')
+              // 敏感 op（会吐明文密钥与完整配置）额外要求带 Origin 头：即使在宿主栅栏
+              // 缺失的组合里，也不接受"无 Origin 的本机请求"直接取密钥。持有效令牌的
+              // 本地工具不属于此类，直接放行。
+              if (SENSITIVE_OPS.has(op) && !origin && !tokenAccepted) {
+                res.end(JSON.stringify({ ok: false, error: '该操作仅接受同源浏览器请求（缺少 Origin 头）' }))
+                return
+              }
               if (TOKEN && WRITE_OPS.has(op) && hdr('x-dsh-token') !== TOKEN) {
                 res.end(JSON.stringify({ ok: false, error: '缺少或错误的访问令牌（x-dsh-token）' }))
                 return

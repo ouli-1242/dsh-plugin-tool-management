@@ -1,12 +1,24 @@
-import { lstat, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { CapabilityRefusalError, createHistoryBridge, requiredSessionCapabilities } from "./bridge.js";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { createRequire } from "node:module";
-import { WorkspaceRegistry } from "@deepseek-ai/dsh-workspace";
+import { hubPath } from "../hub.js";
 import { sessionDir } from "@deepseek-ai/dsh-spill-local";
 import { trackTombstone } from "./tombstone.js";
 //#region lib/types/index.js
 /**
- * dsh-archive-manager 宿主侧归档会话管理。
+ * 独立归档门面：消费当前宿主服务，不注册或替换 workspaceRegistry。
+ * 外部服务有原生接口时优先委托；官方缺口由受检查的兼容层补齐。
+ *
+ * 实测边界（2026-09-14，对抗式审查）：现装宿主**没有任何**原生归档扩展接口
+ * ——全量 grep `archivedSessionDetails` / `deleteArchivedSessions` / `unarchiveSessions`
+ * 均不存在，`@michengai/dsh-archive-manager` 也未安装。因此下面所有
+ * `typeof this.registry.X === "function"` 的委托分支在当前环境**都是死代码**，
+ * 实际执行路径永远是 history/bridge.js 的私有适配（依赖官方声明为 private 的方法，
+ * 并直接改 registry.headers / sessionPaths / invalidSessionPaths）。
+ * 所以「不再替换服务、不再与外部插件争注册」成立，但**不能由此推出耦合下降或零侵入**。
+ * 另：改为门面后新增的墓碑 indexHeader 守卫只覆盖本门面的调用；宿主自身的
+ * WorkspaceRegistry.indexHeaders()（dsh-workspace index.js:706/735/466）不再经过它，
+ * 「阻止 stale list 把已删会话编回索引」的保护范围是门面内部而非宿主全量。
  *
  * `deleteSession(sessionId)` 的顺序即语义：校验已知会话；实时会话先
  * flush 再 detach；等待投影缓存写入完成；移除归档标记和工作区记账；
@@ -17,15 +29,10 @@ import { trackTombstone } from "./tombstone.js";
  * 记账和头部索引，以便再次调用同一入口完成删除。SUBAGENT 级联跨多个转录
  * 工件，无法组成事务：子会话可能已先删除，重试会跳过它们并继续处理仍保留的
  * 父会话。
- * 物理删除成功后必须遗忘父类内存索引（headers / sessionPaths /
- * invalidSessionPaths）并打上删除墓碑：父类 sessionKnown 以 headers.has
- * 短路，indexHeaders 只增不减，stale list() 否则会把已删 id 救活，
- * 进而被 archiveSession 重新写回 archivedSessionIds。
- * 墓碑同时记录被删生命周期的日志身份（createdAt/cwd）：其他进程以同 id
- * 重建并落盘新会话时（冷复用），sessionKnown 的探针以身份差异区分新旧
- * 生命周期并撤掉墓碑，避免已重建的会话在本进程永久 UNKNOWN_SESSION。
- * 单会话与批量恢复/删除方法均通过 Typert Remote 暴露给浏览器，并注册到
- * typert.local，避免生产环境只靠 SRC 扫描时 404。
+ * 物理删除成功后清理宿主索引（headers / sessionPaths / invalidSessionPaths），
+ * 本门面的墓碑阻止重试时误认旧生命周期，并允许不同创建时间的同 id 新会话。
+ * 方法只通过插件自己的 History HTTP ops 暴露，不注册同名宿主 RPC。
+ * 兼容层不拦截官方的 indexHeader，因此不承诺修正外部后端返回陈旧列表的行为。
  */
 /**
  * Compatibility adapter for the official JSONL backend's session-owned layout.
@@ -257,24 +264,48 @@ const archivedSessionMetadataSchema = {
  * 折叠进 dsh-plugin-tool-management 的归档工作区注册表。
  * 原始实现来自 @michengai/dsh-archive-manager（Apache-2.0），剥离了
  * Typert Remote 暴露层——本插件客户端经 HTTP API 调用，不依赖 typert 远程。
+ * 账本默认位置已从「插件目录 data/」改为 hub 根 `$DSH_HOME/tool-management/`：
+ * npm 安装下插件目录会被 `dsh plugin update` 整体替换，账本放那里等于升级即丢。
  */
-function pluginRootDir() {
-	try {
-		const require = createRequire(import.meta.url);
-		return dirname(require.resolve("../../package.json"));
-	} catch {
-		return process.cwd();
-	}
-}
 function defaultArchivedAtFile() {
-	return join(pluginRootDir(), "data", "history-archived-at.json");
+	return hubPath("history-archived-at.json");
 }
-var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
-	static inject = [
-		"storageDomain",
-		"sessionPersistence",
-		"sessionProjectionCache",
-	];
+function defaultWorkspaceSnapshotFile() {
+	return hubPath("history-workspaces.json");
+}
+/**
+ * 路径比较键：工作区的唯一性在宿主侧是 realpath 字符串相等（dsh-workspace
+ * `realpathNormalize`），Windows 盘符大小写与分隔符拼写却可能不同，因此比较前
+ * 先归一化。仅用于**分组与快照索引**，不参与任何写入或归属判定。
+ * @param {string} path - 原始路径。
+ * @returns {string} 归一化后的比较键（空路径返回空串）。
+ */
+function workspacePathKey(path) {
+	const raw = String(path ?? "").trim();
+	if (!raw) return "";
+	const windows = /^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("\\\\");
+	let out = windows ? raw.replace(/\//g, "\\") : raw;
+	while (out.length > 1 && (out.endsWith("\\") || out.endsWith("/"))) out = out.slice(0, -1);
+	return windows ? out.toLowerCase() : out;
+}
+/**
+ * 展示用目录名（与宿主 `defaultWorkspaceTitle` 同义：末段，无末段则用根拼写）。
+ * @param {string} path - 原始路径。
+ * @returns {string} 非空展示名。
+ */
+function workspaceBaseName(path) {
+	const raw = String(path ?? "").trim();
+	if (!raw) return "";
+	const trimmed = raw.replace(/[\\/]+$/, "");
+	const index = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
+	const segment = index >= 0 ? trimmed.slice(index + 1) : trimmed;
+	if (segment) return segment;
+	const root = trimmed.match(/^(?:[A-Za-z]:[\\/]|[\\/]{1,2})/);
+	return root ? root[0] : trimmed || raw;
+}
+// Standalone facade over the existing registry. Never instantiate/register a
+// second WorkspaceRegistry, and never open another copy of its storage domain.
+var ArchiveWorkspaceRegistry = class {
 	/** 本进程内已物理删除的会话；阻止父类把 stale list() 重新编入索引。 */
 	deletedSessionIds = /* @__PURE__ */ new Set();
 	/** 墓碑插入顺序，用于在上限处淘汰最旧项。 */
@@ -287,11 +318,86 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	archivedAtMap = /* @__PURE__ */ new Map();
 	archivedAtFile = null;
 	archivedAtLoaded = false;
-	constructor(ctx, config) {
-		super(ctx);
-		this.archivedAtFile = (config && config.archivedAtFile) || defaultArchivedAtFile();
+	/**
+	 * 「见过的登记」快照：归一化路径 → { path, title, id, at }。
+	 * 宿主删除工作区是硬删、不留墓碑（dsh-workspace `deleteKnown`），登记一没，
+	 * 归档会话的归属就只剩会话自己的 cwd。本表把**活着时见过**的登记标题留下来，
+	 * 使按目录重建的分组仍能显示用户命名，并能区分「曾经登记过、现在被移除」
+	 * 与「从未登记过的目录」。只读辅助信息，不参与任何归属判定或写入。
+	 */
+	workspaceSnapshotMap = /* @__PURE__ */ new Map();
+	workspaceSnapshotFile = null;
+	workspaceSnapshotLoaded = false;
+	/** 快照上限：足够覆盖常见工作区数，又避免长驻进程无限增长。 */
+	workspaceSnapshotLimit = 200;
+	/**
+	 * 启动期一次性迁移（插件目录 → hub）的完成信号。两个账本都是**首次用到才读盘**，
+	 * 但"首次用到"可能与迁移并发，因此读盘前先等它落定；未提供时立即就绪。
+	 */
+	ready = Promise.resolve();
+	constructor(ctx, registry, config = {}) {
+		this.ctx = ctx;
+		this.registry = registry;
+		this.archivedAtFile = config.archivedAtFile || defaultArchivedAtFile();
+		this.workspaceSnapshotFile = config.workspaceSnapshotFile || defaultWorkspaceSnapshotFile();
+		if (config.ready && typeof config.ready.then === "function") {
+			this.ready = Promise.resolve(config.ready).then(() => undefined, () => undefined);
+		}
+		this.ledgerTail = Promise.resolve();
+		this.bridge = createHistoryBridge(ctx, registry, (id, at) => this.recordArchive(id, at));
+		this.registry = this.bridge.registry;
+		this.bridge.observe();
+	}
+	async dispose() { await this.bridge.dispose(); await this.ledgerTail; }
+	get headers() { return this.registry.headers; }
+	get sessionPaths() { return this.registry.sessionPaths; }
+	get invalidSessionPaths() { return this.registry.invalidSessionPaths; }
+	get entities() { return this.registry.entities; }
+	get archivedSessionIds() { return this.registry.archivedSessionIds; }
+	requireState() { return this.bridge.state(); }
+	requireTable() { return this.bridge.table(); }
+	setState(state) { return this.bridge.setState(state); }
+	enqueueOperation(fn) { return this.bridge.enqueue(fn); }
+	readSessionHeader(id) { return this.bridge.readHeader(id); }
+	getProjectionCache() { return this.bridge.cache(); }
+	/** 宿主能力评估快照（供 HTTP compat-status op 与设置页使用）。 */
+	capabilities(force = false) { return this.bridge.capabilities(force); }
+	/** 指定能力 id 中不可用的那些；不抛错，供只读路径降级。 */
+	capabilityRefusals(ids) { return this.bridge.refusalsFor("read", ids); }
+	recordArchive(id, at) {
+		const task = this.ledgerTail.then(async () => {
+			await this.ensureArchivedAtLoaded();
+			if (at === null) this.archivedAtMap.delete(id);
+			else this.archivedAtMap.set(id, at);
+			await this.saveArchivedAt();
+		});
+		this.ledgerTail = task.catch(() => {});
+		return task;
+	}
+	reconcileArchiveLedger() {
+		const task = this.ledgerTail.then(() => this.reconcileArchiveLedgerCore());
+		this.ledgerTail = task.catch(() => {});
+		return task;
+	}
+	async reconcileArchiveLedgerCore() {
+		await this.ensureArchivedAtLoaded();
+		const ids = new Set(this.registry.archivedSessionIds);
+		let changed = false;
+		for (const id of this.archivedAtMap.keys()) {
+			if (!ids.has(id)) { this.archivedAtMap.delete(id); changed = true; }
+		}
+		for (const id of ids) {
+			// Existing entries without a timestamp must get a full retention window,
+			// never be expired using their potentially much older creation time.
+			if (!this.archivedAtMap.has(id)) {
+				this.archivedAtMap.set(id, this.registry.archivedAt?.(id) ?? Date.now());
+				changed = true;
+			}
+		}
+		if (changed) await this.saveArchivedAt();
 	}
 	async ensureArchivedAtLoaded() {
+		await this.ready;
 		if (this.archivedAtLoaded) return;
 		this.archivedAtLoaded = true;
 		try {
@@ -310,6 +416,7 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 		try {
 			const obj = {};
 			for (const [k, v] of this.archivedAtMap) obj[k] = v;
+			await mkdir(dirname(this.archivedAtFile), { recursive: true });
 			await writeFile(this.archivedAtFile, JSON.stringify(obj), "utf8");
 		} catch (e) {
 			this.ctx.logger?.warn?.(`history: could not persist archived-at ledger: ${String(e)}`);
@@ -319,15 +426,233 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 		return this.archivedAtMap.get(sessionId);
 	}
 	/**
-	 * 归档一个会话并记录归档时刻（保留期自动删除的基线）。覆盖父类
-	 * `archiveSession`：官方 UI 的「归档会话」菜单与本插件 HTTP op 都经此入口，
-	 * 因此所有归档路径的 archivedAt 都被捕获。
+	 * 读取「见过的登记」快照（首次调用读盘）。键为 `workspacePathKey` 归一化路径。
+	 * @returns {Promise<Map<string, { path: string, title: string, id?: string, at: number }>>} 快照副本。
+	 */
+	async workspaceSnapshot() {
+		await this.ensureWorkspaceSnapshotLoaded();
+		const out = /* @__PURE__ */ new Map();
+		for (const [key, record] of this.workspaceSnapshotMap) out.set(key, { ...record });
+		return out;
+	}
+	async ensureWorkspaceSnapshotLoaded() {
+		await this.ready;
+		if (this.workspaceSnapshotLoaded) return;
+		this.workspaceSnapshotLoaded = true;
+		try {
+			const raw = await readFile(this.workspaceSnapshotFile, "utf8");
+			const parsed = JSON.parse(raw);
+			const items = parsed && typeof parsed === "object" && parsed.items && typeof parsed.items === "object" ? parsed.items : parsed;
+			if (items && typeof items === "object") {
+				for (const [key, value] of Object.entries(items)) {
+					if (!value || typeof value !== "object") continue;
+					const path = typeof value.path === "string" ? value.path : "";
+					const title = typeof value.title === "string" ? value.title : "";
+					if (!path || !title) continue;
+					this.workspaceSnapshotMap.set(key, {
+						path,
+						title,
+						...(typeof value.id === "string" ? { id: value.id } : {}),
+						at: Number.isFinite(value.at) ? Number(value.at) : 0,
+					});
+				}
+			}
+		} catch (e) {
+			/* 缺失文件视为空表 */
+		}
+	}
+	async saveWorkspaceSnapshot() {
+		try {
+			const items = {};
+			for (const [key, value] of this.workspaceSnapshotMap) items[key] = value;
+			await mkdir(dirname(this.workspaceSnapshotFile), { recursive: true });
+			await writeFile(this.workspaceSnapshotFile, JSON.stringify({ v: 1, items }), "utf8");
+		} catch (error) {
+			this.ctx.logger?.warn?.(`history: could not persist workspace snapshot: ${String(error)}`);
+		}
+	}
+	/**
+	 * 记下当前活着的登记（路径 / 标题）。内容未变化时不写盘；超出上限按 `at` FIFO 淘汰。
+	 * 由 history-list 每次读取时顺手调用，因此覆盖的是「插件见过它活着」的登记。
+	 * @param {Array<{ id?: string, path?: string, title?: string }>} records - 当前活登记快照。
+	 */
+	async rememberWorkspaces(records) {
+		const list = Array.isArray(records) ? records : [];
+		if (!list.length) return;
+		const task = this.ledgerTail.then(async () => {
+			await this.ensureWorkspaceSnapshotLoaded();
+			const at = Date.now();
+			let changed = false;
+			for (const record of list) {
+				const path = record && typeof record.path === "string" ? record.path : "";
+				if (!path) continue;
+				const key = workspacePathKey(path);
+				if (!key) continue;
+				const title = record && typeof record.title === "string" && record.title ? record.title : workspaceBaseName(path) || path;
+				const id = record && typeof record.id === "string" ? record.id : undefined;
+				const previous = this.workspaceSnapshotMap.get(key);
+				if (previous && previous.path === path && previous.title === title && previous.id === id) continue;
+				this.workspaceSnapshotMap.set(key, { path, title, ...(id === undefined ? {} : { id }), at });
+				changed = true;
+			}
+			if (!changed) return;
+			if (this.workspaceSnapshotMap.size > this.workspaceSnapshotLimit) {
+				const ordered = [...this.workspaceSnapshotMap.entries()].sort((a, b) => (a[1].at || 0) - (b[1].at || 0));
+				for (const [key] of ordered.slice(0, this.workspaceSnapshotMap.size - this.workspaceSnapshotLimit)) this.workspaceSnapshotMap.delete(key);
+			}
+			await this.saveWorkspaceSnapshot();
+		});
+		this.ledgerTail = task.catch(() => {});
+		return task;
+	}
+	/**
+	 * 恢复归档时把**工作区归属一起恢复**。宿主归档只把会话放进全局归档集合，
+	 * 登记的 `sessionIds` 记账位保持不动 —— 所以登记还在时恢复即自动归位。但登记被删除后
+	 * 再重建的那条记录 `sessionIds` 是空的，恢复出来的会话在宿主侧就落进「未分组」。
+	 * 这里按会话 header 的 `cwd` 找到（必要时重建）对应登记，并把会话挂回其记账位：
+	 * 全部走宿主自己的方法（`resolveByPath` / `create` / 实体的 `attachSession`）；
+	 * 目录已不存在时不凭空登记，只如实上报跳过原因。
+	 * @param {string[]} sessionIds - 要恢复归属的会话。
+	 * @returns {Promise<{ registered: Array<{ path: string, title: string, created: boolean }>, attached: string[], skipped: Array<{ sessionId: string, reason: string }> }>} 归属恢复结果。
+	 */
+	async ensureWorkspaceAccounting(sessionIds) {
+		const ids = [...new Set((Array.isArray(sessionIds) ? sessionIds : []).map((id) => String(id ?? "").trim()).filter(Boolean))];
+		const result = { registered: [], attached: [], skipped: [] };
+		if (!ids.length) return result;
+		const host = this.registry;
+		if (typeof host.resolveByPath !== "function" || typeof host.create !== "function") {
+			throw new Error("宿主未提供工作区登记入口（workspaceRegistry.resolveByPath / create），本次未做任何修改");
+		}
+		/** 同一目录只解析/登记一次；值为 { entity, record } 或 { failure }。 */
+		const byPath = /* @__PURE__ */ new Map();
+		for (const sessionId of ids) {
+			let cwd;
+			try {
+				const header = await this.readSessionHeader(sessionId);
+				cwd = header && typeof header.cwd === "string" && header.cwd ? header.cwd : undefined;
+			} catch (error) {
+				result.skipped.push({ sessionId, reason: `读不到会话头部：${String(error?.message ?? error)}` });
+				continue;
+			}
+			if (cwd === undefined) {
+				result.skipped.push({ sessionId, reason: "会话头部没有工作目录（cwd），无法恢复工作区归属" });
+				continue;
+			}
+			const key = workspacePathKey(cwd);
+			let entry = byPath.get(key);
+			if (entry === undefined) {
+				entry = {};
+				byPath.set(key, entry);
+				try {
+					let entity = await host.resolveByPath(cwd);
+					const created = entity === undefined;
+					if (created) entity = await host.create(cwd);
+					entry.entity = entity;
+					const record = {
+						path: String(entity?.path ?? cwd),
+						title: String(entity?.title ?? "") || workspaceBaseName(cwd) || cwd,
+						created,
+					};
+					entry.record = record;
+					result.registered.push(record);
+				} catch (error) {
+					entry.failure = `无法解析工作区目录「${cwd}」：${String(error?.message ?? error)}`;
+				}
+			}
+			if (entry.failure !== undefined) {
+				result.skipped.push({ sessionId, reason: entry.failure });
+				continue;
+			}
+			if (typeof entry.entity?.attachSession !== "function") {
+				result.skipped.push({ sessionId, reason: "宿主登记对象没有 attachSession，无法把会话挂回该工作区" });
+				continue;
+			}
+			try {
+				const already = Array.isArray(entry.entity.sessionIds) && entry.entity.sessionIds.includes(sessionId);
+				await entry.entity.attachSession(sessionId);
+				// 只在**真的挂上**时上报：正常恢复（登记里本来就有这个会话）不该弹提示。
+				if (!already) result.attached.push(sessionId);
+			} catch (error) {
+				result.skipped.push({ sessionId, reason: String(error?.message ?? error) });
+			}
+		}
+		// 这次新建的登记记进快照：组标题与「已移除 / 未登记」判定都靠它。
+		const fresh = result.registered.filter((record) => record.created).map((record) => ({ path: record.path, title: record.title }));
+		if (fresh.length) await this.rememberWorkspaces(fresh);
+		return result;
+	}
+	/**
+	 * 为一个**已存在**的目录重新创建宿主工作区登记（用户显式点击才走这里），
+	 * 并把**该目录下已知的会话挂回**这条登记 —— 登记被删除时它的 `sessionIds`
+	 * 记账一起没了，不挂回的话这些会话在宿主侧仍然显示为「未分组」
+	 * （已恢复的会话不会再有第二次「恢复」动作，只能靠这里补）。
+	 * 只调用宿主自身的 resolveByPath / create / attachSession：同路径已有登记时
+	 * 原样复用、不重复创建；目录不存在时宿主 realpath 直接拒绝，因此不会凭空登记
+	 * 一个不存在的路径。不移动、不删除任何文件与会话。
+	 * @param {string} path - 要登记的目录路径。
+	 * @param {string} [title] - 可选展示标题；缺省由宿主取目录名。
+	 * @returns {Promise<{ id: string, title: string, path: string, created: boolean, attached: string[], attachSkipped: Array<{ sessionId: string, reason: string }> }>} 登记与挂回结果。
+	 */
+	async registerWorkspace(path, title) {
+		const target = String(path ?? "").trim();
+		if (!target) throw new Error("workspace path is required");
+		const host = this.registry;
+		if (typeof host.resolveByPath !== "function" || typeof host.create !== "function") {
+			throw new Error("宿主未提供工作区登记入口（workspaceRegistry.resolveByPath / create），本次未做任何修改");
+		}
+		// 这一条走宿主自己的方法（ctx.workspaceRegistry 就是宿主服务本体），
+		// 因此不需要 bridge 的归档适配能力门禁；真正的守卫是宿主 create 自己的
+		// realpath + isDirectory 校验，以及下面的 resolveByPath 幂等判断。
+		let entity = await host.resolveByPath(target);
+		const created = entity === undefined;
+		if (created) entity = await host.create(target, typeof title === "string" && title.trim() ? title.trim() : undefined);
+		const record = {
+			id: String(entity.id),
+			path: String(entity.path ?? target),
+			title: String(entity.title ?? "") || workspaceBaseName(target) || target,
+		};
+		await this.rememberWorkspaces([record]);
+		const { attached, attachSkipped } = await this.attachKnownSessions(entity, record.path);
+		return { ...record, created, attached, attachSkipped };
+	}
+	/**
+	 * 把宿主索引里**属于该目录**的已知会话挂回这条登记（幂等；已在册的不重复上报）。
+	 * 只信 `registry.sessionPaths`（宿主按真实目录建的规范路径索引），不猜路径。
+	 * @param {{ sessionIds?: string[], attachSession?: (id: string) => Promise<void> }} entity - 宿主登记对象。
+	 * @param {string} path - 该登记的规范路径。
+	 * @returns {Promise<{ attached: string[], attachSkipped: Array<{ sessionId: string, reason: string }> }>} 挂回结果。
+	 */
+	async attachKnownSessions(entity, path) {
+		const attached = [];
+		const attachSkipped = [];
+		const sessionPaths = this.registry?.sessionPaths;
+		if (!(sessionPaths instanceof Map) || typeof entity?.attachSession !== "function") return { attached, attachSkipped };
+		const key = workspacePathKey(path);
+		const candidates = [];
+		for (const [sessionId, sessionPath] of sessionPaths) {
+			if (typeof sessionPath !== "string" || workspacePathKey(sessionPath) !== key) continue;
+			if (Array.isArray(entity.sessionIds) && entity.sessionIds.includes(sessionId)) continue;
+			candidates.push(String(sessionId));
+		}
+		for (const sessionId of candidates) {
+			try {
+				await entity.attachSession(sessionId);
+				attached.push(sessionId);
+			} catch (error) {
+				attachSkipped.push({ sessionId, reason: String(error?.message ?? error) });
+			}
+		}
+		return { attached, attachSkipped };
+	}
+	/**
+	 * 归档委托宿主。官方 UI 不经过本方法，而由 domain/changed 事件
+	 * 同步归档时刻；重复归档不重置保留期。
 	 */
 	async archiveSession(sessionId) {
-		await super.archiveSession(sessionId);
-		await this.ensureArchivedAtLoaded();
-		this.archivedAtMap.set(sessionId, Date.now());
-		await this.saveArchivedAt();
+		// 委托宿主原生入口；宿主没有原生入口时走本门面的适配路径（能力探测决定）。
+		this.bridge.checkWorkspace("archive");
+		await this.registry.archiveSession(sessionId);
+		await this.reconcileArchiveLedger();
 	}
 	/**
 	 * 列出已归档会话的展示元数据：sessionId / createdAt / cwd / title / archivedAt。
@@ -335,7 +660,11 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	 * 任何一步失败只降级为缺字段，不阻断列表。
 	 */
 	async archivedSessionDetails() {
-		await this.ensureArchivedAtLoaded();
+		await this.reconcileArchiveLedger();
+		if (typeof this.registry.archivedSessionDetails === "function") {
+			const result = await this.registry.archivedSessionDetails();
+			return { ...result, items: result.items.map((item) => ({ ...item, archivedAt: item.archivedAt ?? this.archivedAtMap.get(item.sessionId) })) };
+		}
 		const items = [];
 		for (const sessionId of [...new Set(this.requireState().archivedSessionIds)]) {
 			const entry = { sessionId, archivedAt: this.archivedAtMap.get(sessionId) };
@@ -486,6 +815,12 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	 * @returns 更新后的完整归档集合。
 	 */
 	async unarchiveSession(sessionId) {
+		this.bridge.checkWorkspace("unarchive");
+		if (typeof this.registry.unarchiveSession === "function") {
+			const result = await this.registry.unarchiveSession(sessionId);
+			await this.reconcileArchiveLedger();
+			return result;
+		}
 		return this.enqueueOperation(async () => {
 			if (!(await this.sessionKnown(sessionId)))
 				throw new ArchiveUnknownSessionError(sessionId);
@@ -509,6 +844,12 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	 * 再执行单次状态写入，因此未知会话不会导致项目只归档一部分。
 	 */
 	async archiveWorkspaceSessions(workspaceId) {
+		this.bridge.checkWorkspace("batch");
+		if (typeof this.registry.archiveWorkspaceSessions === "function") {
+			const result = await this.registry.archiveWorkspaceSessions(workspaceId);
+			await this.reconcileArchiveLedger();
+			return result;
+		}
 		return this.enqueueOperation(async () => {
 			workspaceId = workspaceIdSchema.parse(workspaceId);
 			const workspace = this.requireTable().get(workspaceId);
@@ -547,6 +888,16 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	 * 目标全部来自已归档集合，因此即使日志已被外部移除，也会清掉陈旧归档标记。
 	 */
 	async unarchiveSessions(target) {
+		if (typeof this.registry.unarchiveSessions === "function") {
+			const result = await this.registry.unarchiveSessions(target);
+			await this.reconcileArchiveLedger();
+			return result;
+		}
+		if (typeof this.registry.unarchiveSession === "function") {
+			const ids = this.archivedSessionIdsForTarget(target);
+			for (const id of ids) await this.unarchiveSession(id);
+			return { unarchivedSessionIds: ids, archivedSessionIds: [...this.registry.archivedSessionIds] };
+		}
 		return this.enqueueOperation(async () => {
 			const unarchivedSessionIds = this.archivedSessionIdsForTarget(target);
 			if (unarchivedSessionIds.length === 0)
@@ -574,6 +925,22 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	 * 后续目标并把成功、并发消失和失败分别返回给客户端。
 	 */
 	async deleteArchivedSessions(target) {
+		if (typeof this.registry.deleteArchivedSessions === "function") {
+			const result = await this.registry.deleteArchivedSessions(target);
+			await this.reconcileArchiveLedger();
+			return result;
+		}
+		// 适配路径（无宿主原生批量入口）：在任何会话被删除之前确认整条链路可用。
+		this.bridge.checkWorkspace("delete");
+		if (typeof this.registry.deleteSession === "function") {
+			const requestedSessionIds = this.archivedSessionIdsForTarget(target);
+			const result = { requestedSessionIds, deletedSessionIds: [], skippedSessionIds: [], failures: [] };
+			for (const id of requestedSessionIds) {
+				try { await this.deleteSession(id); result.deletedSessionIds.push(id); }
+				catch (error) { result.failures.push({ sessionId: id, message: String(error) }); }
+			}
+			return result;
+		}
 		return this.enqueueOperation(async () => {
 			const requestedSessionIds = this.archivedSessionIdsForTarget(target);
 			const deletedSessionIds = [];
@@ -612,7 +979,8 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	 * 归档标记最后清除，前序可失败步骤出错时批量入口仍能再次命中。
 	 */
 	async cleanupUnknownArchivedSession(sessionId) {
-		const projCache = this.ctx.get("sessionProjectionCache");
+		await this.bridge.beginDelete(sessionId);
+		const projCache = this.getProjectionCache();
 		await projCache?.whenIdle?.();
 		if (projCache !== void 0) {
 			await projCache.delete(sessionId);
@@ -632,8 +1000,7 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 				),
 			});
 		}
-		await this.ensureArchivedAtLoaded();
-		if (this.archivedAtMap.delete(sessionId)) await this.saveArchivedAt();
+		await this.recordArchive(sessionId, null);
 	}
 	/** 以归档集合顺序解析批量目标，避免依赖浏览器尚未加载完整的摘要投影。 */
 	archivedSessionIdsForTarget(target) {
@@ -668,17 +1035,48 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	 * @throws {@link ArchiveUnknownSessionError} 会话未知时抛出。
 	 */
 	async deleteSession(sessionId) {
+		if (typeof this.registry.deleteSession === "function") {
+			const result = await this.registry.deleteSession(sessionId);
+			await this.reconcileArchiveLedger();
+			return result;
+		}
 		return this.enqueueOperation(() => this.deleteSessionCore(sessionId));
 	}
 	/** 串行化后的删除主体（级联路径复用：它已持有操作链，绝不能再入队）。 */
 	async deleteSessionCore(sessionId) {
+		if (typeof this.registry.deleteSession === "function") return this.registry.deleteSession(sessionId);
+		if (this.deleting?.has(sessionId)) throw new Error(`cyclic subagent lineage at "${sessionId}"`);
+		this.deleting ??= new Set();
+		this.deleting.add(sessionId);
+		try {
+			return await this.deleteLocalSession(sessionId);
+		} catch (error) {
+			// Failed deletion must not permanently suppress a still-live session.
+			this.getProjectionCache()?.clearTombstone?.(sessionId);
+			throw error;
+		} finally {
+			this.deleting.delete(sessionId);
+		}
+	}
+	async deleteLocalSession(sessionId) {
 		if (!(await this.sessionKnown(sessionId)))
 			throw new ArchiveUnknownSessionError(sessionId);
 		const sessions = this.ctx.get("sessions");
+		// 快速失败：删掉的顺序（flush → detach → 清缓存 → 删目录 → 清记账）里，
+		// 实时会话接口一旦缺失，失败点会落在「转录已删但记账还在」的中段。
+		// 这里在任何破坏性步骤（含 beginDelete 装的写屏障）之前先把实现检查完。
+		if (sessions !== void 0 && typeof sessions.get !== "function")
+			throw new Error("宿主会话实现缺少 get（官方接口已变动）；操作在改动任何数据前停止，请更新本插件");
 		const live = sessions?.get(sessionId);
+		// 能力门禁（在任何破坏性步骤之前）：实时分支需要 flush/liveEntryFor/detachEntered，
+		// 冷分支需要 enter/announce。缺失即在此停止，失败点不会落到链路中段。
+		const sessionRefusals = this.bridge.refusalsFor("delete", requiredSessionCapabilities(live !== void 0));
+		if (sessionRefusals.length > 0) throw new CapabilityRefusalError("delete", sessionRefusals);
 		// 先记录被删生命周期的日志身份：目录删除后头部不可再读，
 		// 冷复用探针（sessionKnown 墓碑分支）靠它区分同 id 的新生命周期。
 		const deletedHeader = this.headers.get(sessionId) ?? live?.header;
+		// Install the barrier BEFORE flush/detach can schedule a final cache put.
+		await this.bridge.beginDelete(sessionId, deletedHeader);
 		if (live !== void 0) {
 			// 持久化屏障先行：不能有未落盘的转录写入与目录删除竞争
 			//（持久化后端按批关闭句柄，flush 过的会话不再持有打开的文件）。
@@ -689,7 +1087,7 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 			sessions.detachEntered(entry);
 		} else if (sessions !== void 0)
 			await this.publishColdSessionRemoval(sessionId, sessions);
-		const projCache = this.ctx.get("sessionProjectionCache");
+		const projCache = this.getProjectionCache();
 		// dispose 的写后落盘必须先于缓存行删除完成，
 		// 否则该行会在删除之后被写回（复活）。
 		await projCache?.whenIdle?.();
@@ -711,8 +1109,7 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 		await this.removeFromWorkspaceAccounts(sessionId);
 		// 物理删除已成功：此时再清父类索引。后续记账失败时保留索引，便于重试。
 		this.forgetIndexedSession(sessionId);
-		await this.ensureArchivedAtLoaded();
-		if (this.archivedAtMap.delete(sessionId)) await this.saveArchivedAt();
+		await this.recordArchive(sessionId, null);
 		if (deletedHeader !== void 0)
 			this.deletedIdentities.set(sessionId, headerIdentity(deletedHeader));
 		this.publishDeletedSession(sessionId);
@@ -739,7 +1136,7 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 		if (idx !== -1) this.deletedSessionOrder.splice(idx, 1);
 		// workspace 与 projection-cache 共同描述同一删除生命周期；新生命周期
 		// 被接纳时必须同步撤销两处墓碑，否则缓存写入仍会永久被拦截。
-		this.ctx.get("sessionProjectionCache")?.clearTombstone?.(sessionId);
+		this.getProjectionCache()?.clearTombstone?.(sessionId);
 	}
 	forgetIndexedSession(sessionId) {
 		for (const evicted of trackTombstone(
@@ -763,7 +1160,11 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 			return true;
 		}
 		if (this.deletedSessionIds.has(id)) return this.coldReuseKnown(id);
-		return super.sessionKnown(id);
+		// Refresh from authoritative persistence, not the host's stale header cache.
+		const header = (await this.listStoredHeaders()).find((item) => item.id === id);
+		if (!header) return false;
+		await this.indexHeader(header);
+		return true;
 	}
 	/**
 	 * 墓碑分支的冷复用探针：其他进程以同 id 重建并落盘的新会话（日志身份
@@ -802,7 +1203,7 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	 */
 	async indexHeader(header) {
 		if (this.deletedSessionIds.has(header.id)) return;
-		return super.indexHeader(header);
+		return this.registry.indexHeader(header);
 	}
 	/** 统一旧版头部数组与 0.1.3 的持久化快照，供父类索引和本插件枚举共用。 */
 	async listStoredHeaders() {
@@ -966,4 +1367,4 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
 	}
 };
 //#endregion
-export { ArchiveWorkspaceRegistry, ArchiveWorkspaceRegistry as default };
+export { ArchiveWorkspaceRegistry, ArchiveWorkspaceRegistry as default, workspaceBaseName, workspacePathKey };

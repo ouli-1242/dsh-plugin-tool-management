@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
 .dsm-mask{position:fixed;z-index:1100;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.62)}.dsm-modal{box-sizing:border-box;display:flex;width:min(560px,100%)!important;max-height:min(760px,calc(100vh - 48px));min-width:0;flex-direction:column;gap:16px;padding:22px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}.dsm-modal-wide{width:min(720px,100%)!important}.dsm-modal-import{width:min(480px,100%)!important;padding:24px}.dsm-modal-head{display:flex;align-items:flex-start;gap:12px}.dsm-modal-title{margin:0;flex:1;font-size:17px;line-height:24px;font-weight:670}.dsm-form,.dsm-field,.dsm-detail-section{display:flex;flex-direction:column}.dsm-form{gap:12px}.dsm-field{gap:6px}.dsm-label,.dsm-detail-title{font-size:12px}.dsm-label{color:var(--dsw-alias-label-secondary)}.dsm-detail-title{font-weight:650}.dsm-help{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:18px}.dsm-modal-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}.dsm-hidden-input{display:none}.dsm-dropzone{box-sizing:border-box;display:flex;width:100%;min-height:170px;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:22px;border:1px dashed var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);transition:border-color 180ms ease,background 180ms ease;cursor:pointer}.dsm-dropzone:hover,.dsm-dropzone-active{border-color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-interactive-bg-hover)}.dsm-dropzone-title{color:var(--dsw-alias-label-primary);font-size:18px;font-weight:700}.dsm-dropzone-copy{font-size:12px;line-height:18px;text-align:center}.dsm-upload-choices{display:flex;align-items:center;gap:7px}.dsm-upload-link,.dsm-file-remove{padding:0;border:0;background:transparent;font:inherit;font-size:12px;cursor:pointer}.dsm-upload-link{color:var(--dsw-alias-label-secondary)}.dsm-upload-link:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}.dsm-upload-link:disabled{opacity:.45;cursor:default}.dsm-upload-divider{color:var(--dsw-alias-label-tertiary);font-size:11px}.dsm-file{display:flex;align-items:center;gap:9px;padding:10px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px}.dsm-file-kind{display:inline-flex;min-width:30px;height:24px;align-items:center;justify-content:center;border-radius:5px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:700}.dsm-file-name{min-width:0;overflow:hidden;flex:1;text-overflow:ellipsis;white-space:nowrap}.dsm-file-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}.dsm-file-remove{width:24px;height:24px;color:var(--dsw-alias-label-secondary);font-size:18px}.dsm-upload-requirements{padding:1px 1px 0}.dsm-upload-requirements ul{display:flex;margin:7px 0 0;padding-left:18px;flex-direction:column;gap:5px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}.dsm-detail-section{gap:7px}.dsm-detail-path,.dsm-code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.dsm-detail-path{padding:8px 10px;border-radius:7px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);word-break:break-all}.dsm-code{max-height:280px;margin:0;padding:12px;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);line-height:18px;white-space:pre-wrap}.dsm-diag{padding:8px 10px;border-left:2px solid #d49245;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:12px}.dsm-trash-item{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-trash-item:last-child{border-bottom:0}.dsm-trash-main{min-width:0;flex:1}
 .dsm-fm{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-fm-row{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr);gap:10px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px;line-height:18px}.dsm-fm-row:last-child{border-bottom:0}.dsm-fm-key{color:var(--dsw-alias-label-secondary);word-break:break-word}.dsm-fm-raw{margin-left:5px;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px}.dsm-fm-val{min-width:0;color:var(--dsw-alias-label-primary);word-break:break-word;white-space:pre-wrap}
 @container(max-width:780px){.dsm-table-head{display:none}.dsm-row{grid-template-columns:minmax(0,1fr) max-content;gap:8px;padding:11px 13px}.dsm-row>.dsm-tags,.dsm-row>.dsm-status{grid-column:1}.dsm-row-actions{grid-column:2;grid-row:1 / span 3}.dsm-path{display:none}}@media(max-width:760px){.dsm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.dsm-title-row{flex-wrap:wrap}}@container(max-width:520px){.dsm-head{flex-direction:column}.dsm-actions{width:100%;margin-left:0}.dsm-actions .dsm-btn{flex:1}.dsm-filters{flex-direction:column}.dsm-source-filter{width:100%}.dsm-summary{grid-template-columns:1fr}}
-.dsm-hist-row{display:flex;align-items:center;gap:11px;padding:10px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-hist-row:last-child{border-bottom:0}.dsm-hist-main{min-width:0;flex:1}.dsm-hist-title{overflow:hidden;font-size:13px;font-weight:580;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd-missing{color:var(--dsw-alias-state-error-primary)}.dsm-hist-actions{display:flex;gap:6px;flex:none}.dsm-hist-check,.dsm-hist-group-check{flex:none;width:15px;height:15px;margin:0 4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}.dsm-hist-group-head{gap:10px}.dsm-hist-batch{display:flex;align-items:center;gap:8px;margin-left:2px;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l2)}.dsm-hist-batch-count{color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-hist-batch-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none}.dsm-dir-row{display:flex;gap:8px}.dsm-dir-row .dsm-control{flex:1}.dsm-dir-list{display:flex;max-height:220px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-dir-item{display:flex;width:100%;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}.dsm-dir-item:last-child{border-bottom:0}.dsm-dir-item:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-dir-item::before{content:"📁";margin-right:8px;font-size:12px}
+.dsm-hist-row{display:flex;align-items:center;gap:11px;padding:10px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-hist-row:last-child{border-bottom:0}.dsm-hist-main{min-width:0;flex:1}.dsm-hist-title{overflow:hidden;font-size:13px;font-weight:580;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd-missing{color:var(--dsw-alias-state-error-primary)}.dsm-hist-actions{display:flex;gap:6px;flex:none}.dsm-hist-check,.dsm-hist-group-check{flex:none;width:15px;height:15px;margin:0 4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}.dsm-hist-group-head{gap:10px}.dsm-hist-group-extra{display:flex;align-items:center;gap:8px;flex:none;margin-left:4px}.dsm-hist-group-extra .dsm-tag{flex:none}.dsm-hist-register-path{margin-top:-4px;color:var(--dsw-alias-label-tertiary);font-family:var(--dsw-font-mono,monospace);font-size:11px;word-break:break-all}.dsm-hist-batch{display:flex;align-items:center;gap:8px;margin-left:2px;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l2)}.dsm-hist-batch-count{color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-hist-batch-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none}.dsm-dir-row{display:flex;gap:8px}.dsm-dir-row .dsm-control{flex:1}.dsm-dir-list{display:flex;max-height:220px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-dir-item{display:flex;width:100%;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}.dsm-dir-item:last-child{border-bottom:0}.dsm-dir-item:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-dir-item::before{content:"📁";margin-right:8px;font-size:12px}
 .dsm-rule-shadowed .dsm-name,.dsm-rule-shadowed .dsm-note{color:var(--dsw-alias-state-error-primary)}.dsm-rule-shadow-hint{margin-top:3px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:17px}.dsm-rule-invalid{border-color:var(--dsw-alias-state-error-primary)!important}.dsm-rule-hint{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:17px}.dsm-rule-budget{display:flex;flex-direction:column;gap:6px}.dsm-budget-meta{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.dsm-budget-meta strong{margin-right:0;font-size:13px;font-weight:680}.dsm-budget-over-text{color:var(--dsw-alias-state-error-primary);font-size:11px}.dsm-budget-bar{height:6px;overflow:hidden;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover)}.dsm-budget-fill{height:100%;border-radius:99px;background:var(--dsw-alias-state-success-primary);transition:width 160ms ease}.dsm-budget-fill.dsm-budget-over{background:var(--dsw-alias-state-error-primary)}.dsm-char-count{color:var(--dsw-alias-label-tertiary);font-size:11px}.dsm-char-over{color:var(--dsw-alias-state-error-primary)}
 .dsm-combo-row{display:flex;gap:8px}.dsm-combo-row .dsm-control{flex:1}
 .dsm-attach-list{display:flex;flex-direction:column;gap:6px}.dsm-attach-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
@@ -124,6 +124,49 @@ window.__ModuleLoader__.load({
 .dsm-adv-caret{color:var(--dsw-alias-label-tertiary);font-size:10px}
 .dsm-adv-body{display:flex;flex-direction:column;gap:12px;padding:11px;border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-adv-note{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
+/* ── 兼容页（宿主能力体检）──────────────────────────────────────────────
+   一块"体检报告"：先给结论卡，再给动作可用性、降级项、模块实体、阻塞项。
+   状态色只用设计系统里已有的三档：成功 / 告警(#d49245) / 错误。 */
+.dsm-compat{display:flex;flex-direction:column;gap:14px}
+.dsm-compat-bar{display:flex;min-width:0;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--dsw-alias-state-success-primary);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-compat-bar-warn{border-color:#d49245}
+.dsm-compat-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
+.dsm-compat-dot-warn{background:#d49245}
+.dsm-compat-bar strong{margin:0;font-size:13px;font-weight:650}
+.dsm-compat-sum{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+/* 三个指标格：左对齐、等分，窄屏落成单列。 */
+.dsm-compat-grid{display:grid;gap:10px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.dsm-compat-card{display:flex;min-width:0;flex-direction:column;gap:3px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-compat-card-bad{border-color:var(--dsw-alias-state-error-primary)}
+.dsm-compat-card-label{color:var(--dsw-alias-label-tertiary);font-size:11px}
+.dsm-compat-card-value{color:var(--dsw-alias-label-primary);font-size:17px;font-weight:680;line-height:22px;word-break:break-all}
+.dsm-compat-card-value-bad{color:var(--dsw-alias-state-error-primary)}
+.dsm-compat-card-note{color:var(--dsw-alias-label-tertiary);font-size:11px}
+.dsm-compat-section{display:flex;min-width:0;flex-direction:column;gap:7px}
+.dsm-compat-section-head{display:flex;min-width:0;align-items:baseline;gap:8px}
+.dsm-compat-section-title{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:650}
+.dsm-compat-section-hint{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+/* 动作可用性：一行一个动作 + 路径标记，窄容器落成"名称在上、标记在下"。 */
+.dsm-compat-mod-list{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-compat-mod-row{display:flex;min-height:38px;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px}
+.dsm-compat-mod-row:last-child{border-bottom:0}
+.dsm-compat-mod-list.dsm-compat-cards .dsm-compat-mod-row{display:grid;min-height:0;grid-template-columns:minmax(0,1fr) max-content;gap:4px 10px;padding:9px 12px}
+.dsm-compat-mod-self{grid-column:1/-1}
+.dsm-compat-mod{min-width:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;line-height:17px;word-break:break-word}
+.dsm-compat-mod-sep{color:var(--dsw-alias-label-tertiary)}
+.dsm-compat-pill{display:inline-flex;min-height:20px;flex:none;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:999px;color:var(--dsw-alias-label-secondary);font-size:11px;white-space:nowrap}
+.dsm-compat-pill-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+.dsm-compat-pill-warn{border-color:#d49245;color:#d49245}
+.dsm-compat-pill-bad{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+.dsm-compat-name{min-width:0;flex:1;font-size:12px;font-weight:560;word-break:break-word}
+.dsm-compat-label{margin-right:6px;color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
+.dsm-compat-code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}
+.dsm-compat-list{margin:0;padding-left:16px}.dsm-compat-list li+li{margin-top:4px}
+@container(max-width:640px){.dsm-compat-grid{grid-template-columns:1fr}}
+html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-tabs-shell{display:flex;min-width:0;align-items:center;gap:6px;margin-bottom:14px}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(8,minmax(0,1fr));gap:0;overflow:hidden;margin-bottom:0}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:2px;padding-left:2px;font-size:11px}}
+/* 动作可用性表：表头列宽与 dsm-compat-mod-row 一致；窄容器下隐藏表头。 */
+.dsm-compat-table-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:10px;padding:6px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px}
+.dsm-compat-cards .dsm-compat-table-head{display:none}
 `
 
     function ensureCss() {
@@ -167,7 +210,7 @@ window.__ModuleLoader__.load({
     // Small version badge shown next to each settings-page title; reads the
     // package version from the host (plugin-version op) so it always matches
     // the installed release.
-    function VersionBadge() {
+    function VersionBadgeComponent() {
       const [v, setV] = React.useState(null)
       React.useEffect(() => {
         let alive = true
@@ -175,6 +218,216 @@ window.__ModuleLoader__.load({
         return () => { alive = false }
       }, [])
       return v ? React.createElement('span', { className: 'dsm-version' }, 'v' + v) : null
+    }
+
+    // ── 兼容页（/compat-status 的只读投影）──────────────────────────────────────
+    // 排布按"先看结论、再看明细"：结论条 → 指标卡 → 阻塞项 → 动作可用性 →
+    // 降级能力 → 模块实体 → 命令行提示。回答的是"能不能安全动数据"。
+    var OPERATION_LABELS = {
+      list: 'compat.op.list', archive: 'compat.op.archive', unarchive: 'compat.op.unarchive',
+      batch: 'compat.op.batch', delete: 'compat.op.delete',
+    }
+    /** 每个操作走哪条路线：仅当有"原生委托"能力可用时才算原生。 */
+    function operationRoutes(data) {
+      const findings = (data && data.findings) || []
+      const byId = {}
+      findings.forEach(function (f) { byId[f.id] = f })
+      const ok = function (id) { return byId[id] === undefined || byId[id].state === 'ok' }
+      const routes = {}
+      routes.list = ok('workspace.read-state') && ok('workspace.read-table') && ok('workspace.index-shape') ? 'adapter' : 'none'
+      routes.archive = ok('workspace.archive-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
+      routes.unarchive = ok('workspace.unarchive-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
+      routes.batch = ok('workspace.batch-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
+      routes.delete = ok('workspace.delete-native') ? 'native'
+        : (ok('workspace.enqueue') && ok('workspace.set-state') && ok('workspace.index-header')
+          && ok('sessions.detach-live') && ok('sessions.cold-announce') && ok('projection.delete-native') ? 'adapter' : 'none')
+      return routes
+    }
+
+    function CompatPage(props) {
+      const t = props.t
+      const [data, setData] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState(null)
+      const apply = function (r, alive) {
+        if (alive === false) return
+        if (r && r.ok) { setData(r); setError(null) } else { setError((r && r.error) || 'unknown') }
+        setBusy(false)
+      }
+      React.useEffect(function () {
+        let alive = true
+        setBusy(true)
+        apiCall('compat-status', { refresh: true })
+          .then(function (r) { apply(r, alive) })
+          .catch(function (e) { if (alive) { setError(String((e && e.message) || e)); setBusy(false) } })
+        return function () { alive = false }
+      }, [])
+      const reload = function () {
+        setBusy(true)
+        apiCall('compat-status', { refresh: true })
+          .then(function (r) { apply(r, true) })
+          .catch(function (e) { setError(String((e && e.message) || e)); setBusy(false) })
+      }
+
+      const findings = (data && data.findings) || []
+      const degraded = (data && data.degraded) || []
+      const blockers = (data && data.blockers) || []
+      const routes = operationRoutes(data)
+      const sameAsHost = (data && data.sameAsHost) || {}
+      const separateCopies = Object.keys(sameAsHost).filter(function (name) { return sameAsHost[name] === false })
+      const healthy = degraded.length === 0 && blockers.length === 0 && separateCopies.length === 0
+      // 可用 = 探测通过 + 宿主没有但插件自己顶上的（optional）。
+      // 后者若不算进分子，本机这种"官方缺三个入口"的正常形态会显示成 12/15，
+      // 让人以为三成能力坏了 —— 实际上它们全部可用。
+      const usableCount = findings.filter(function (item) { return item.state === 'ok' || item.optional === true }).length
+      // 真正拦路的只有"宿主有该服务但缺关键成员"（如 requireState 改名）与未解析的包。
+      const blockedCount = degraded.length
+        + Object.keys(sameAsHost).filter(function (name) { return sameAsHost[name] === false }).length
+      const unavailableCount = Object.keys(OPERATION_LABELS).filter(function (op) { return routes[op] === 'none' }).length
+
+      const routeClass = function (via) {
+        return 'dsm-compat-pill' + (via === 'none' ? ' dsm-compat-pill-bad' : via === 'native' ? ' dsm-compat-pill-ok' : '')
+      }
+      const routeText = function (via) {
+        return via === 'none' ? t('compat.op.unavailable') : via === 'native' ? t('compat.op.native') : t('compat.op.adapter')
+      }
+      const card = function (label, value, note, bad) {
+        return React.createElement('div', { className: 'dsm-compat-card' + (bad ? ' dsm-compat-card-bad' : '') },
+          React.createElement('span', { className: 'dsm-compat-card-label' }, label),
+          React.createElement('strong', { className: 'dsm-compat-card-value' + (bad ? ' dsm-compat-card-value-bad' : '') }, value),
+          note ? React.createElement('span', { className: 'dsm-compat-card-note' }, note) : null)
+      }
+      const section = function (title, hint, body) {
+        return React.createElement('section', { className: 'dsm-compat-section' },
+          React.createElement('div', { className: 'dsm-compat-section-head' },
+            React.createElement('h3', { className: 'dsm-compat-section-title' }, title),
+            hint ? React.createElement('span', { className: 'dsm-compat-section-hint' }, hint) : null),
+          body)
+      }
+
+      const body = []
+      // 块级子项统一在这里加 key：`body` 是数组，React 要求每个直接子项有稳定 key。
+      const push = function (node) {
+        body.push(React.cloneElement(node, { key: 'compat-' + String(body.length) }))
+      }
+      if (error) body.push(React.createElement('div', { className: 'dsm-feedback dsm-error' }, t('compat.failed') + ': ' + error))
+      if (!busy && !data && !error) body.push(React.createElement('div', { className: 'dsm-empty' }, t('compat.empty')))
+
+      if (data) {
+        // 结论条：一句话说清"现在能不能安全动数据"。边框颜色只表达"有没有事"，
+        // 与"官方少了几个入口"无关 —— 那些入口缺失时插件自己顶上，不算异常。
+        // 这句在客户端按当前语言拼（服务端的 compat-status 只给结构化字段，
+        // 它自带的 summary 是中文，直接渲染会让英文界面露出中文）。
+        const findingsN = Array.isArray(data.findings) ? data.findings.length : 0
+        const degradedN = Array.isArray(data.degraded) ? data.degraded.length : 0
+        const summaryText = findingsN === 0
+          ? (data.summary || '')
+          : t(degradedN === 0 ? 'compat.summary.ok' : 'compat.summary.degraded')
+            .replace('{version}', String((data.host && data.host.version) || '?'))
+            .replace('{ok}', String(findingsN - degradedN))
+            .replace('{total}', String(findingsN))
+            .replace('{count}', String(degradedN))
+        push(React.createElement('div', { className: 'dsm-compat-bar' + (blockedCount > 0 ? ' dsm-compat-bar-warn' : '') },
+          React.createElement('span', { className: 'dsm-compat-dot' + (blockedCount > 0 ? ' dsm-compat-dot-warn' : '') }),
+          React.createElement('strong', null, blockedCount > 0 ? t('compat.state.blocked') : t('compat.state.ok')),
+          React.createElement('span', { className: 'dsm-compat-sum' }, summaryText)))
+
+        // 指标卡：宿主 / 本插件适配版本 / 可用能力（含插件自补的 optional 槽位）。
+        push(React.createElement('div', { className: 'dsm-compat-grid' },
+          card(t('compat.host'), (data.host && data.host.version) || '?', t('compat.peer') + ' ' + (data.expectedPeerRange || '-'), false),
+          card(t('compat.verified'), data.verifiedVersion || '?', t('compat.verified.note'), false),
+          card(t('compat.caps'), String(usableCount) + '/' + String(findings.length),
+            blockedCount > 0
+              ? t('compat.caps.degraded').replace('{count}', String(blockedCount))
+              : (usableCount === findings.length ? t('compat.caps.all') : t('compat.caps.substituted')),
+            blockedCount > 0)))
+
+        // 阻塞项放最前：这是唯一"必须动手"的东西。
+        if (blockers.length) {
+          push(section(t('compat.blockers'), null,
+            React.createElement('div', { className: 'dsm-feedback dsm-error' },
+              React.createElement('ul', { className: 'dsm-compat-list' },
+                blockers.map(function (item, i) { return React.createElement('li', { key: i }, item) })))))
+        }
+
+        // 动作可用性：一行一个动作 + 路径标记（不可用的标红）。
+        push(section(t('compat.ops'), t('compat.ops.hint'),
+          React.createElement('div', { className: 'dsm-compat-mod-list' },
+            React.createElement('div', { className: 'dsm-compat-table-head' },
+              React.createElement('span', null, t('compat.op.name')),
+              React.createElement('span', null, t('compat.op.state'))),
+            Object.keys(OPERATION_LABELS).map(function (op) {
+              const via = routes[op]
+              return React.createElement('div', { className: 'dsm-compat-mod-row', key: op },
+                React.createElement('span', { className: 'dsm-compat-name' }, t(OPERATION_LABELS[op])),
+                React.createElement('span', { className: routeClass(via) }, routeText(via)))
+            }))))
+
+        if (unavailableCount > 0) {
+          push(React.createElement('p', { className: 'dsm-help' },
+            t('compat.ops.disabled').replace('{count}', String(unavailableCount))))
+        }
+
+        // 真降级：名称 + 后果 + 原因。原因必须给全，否则用户只看到"不可用"。
+        if (degraded.length) {
+          push(section(t('compat.degraded'), t('compat.degraded.hint'),
+            React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+              degraded.map(function (item) {
+                return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.id },
+                  React.createElement('span', { className: 'dsm-compat-name' }, item.label),
+                  React.createElement('span', { className: 'dsm-compat-pill dsm-compat-pill-warn' },
+                    item.fallback === 'native-entry' ? t('compat.fallback.native') : t('compat.fallback.blocked')),
+                  React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
+                    React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')),
+                    item.detail))
+              }))))
+        }
+
+        // 其它非 ok 项：`optional` 表示"宿主没有这个入口，插件自己顶上"——功能完好，
+        // 既不算降级，也不能说按钮被禁用（那句只对真降级成立；早先把两者混在一起
+        // 会让用户以为删除功能坏了，实际它照常可用）。
+        const optionalAbsent = findings.filter(function (item) { return item.state !== 'ok' && item.optional === true })
+        if (optionalAbsent.length) {
+          push(section(t('compat.others'), t('compat.others.hint'),
+            React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+              optionalAbsent.map(function (item) {
+                return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.id },
+                  React.createElement('span', { className: 'dsm-compat-name' }, item.label),
+                  React.createElement('span', { className: 'dsm-compat-pill' }, t('compat.fallback.substituted')),
+                  React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
+                    React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')),
+                    item.detail))
+              }))))
+        }
+
+        // 模块实体：一行一个包，右侧是"同一份模块 / 两份拷贝"。
+        push(section(t('compat.modules'), t('compat.modules.hint'),
+          React.createElement('div', { className: 'dsm-compat-mod-list' },
+            Object.keys(sameAsHost).map(function (name) {
+              const same = sameAsHost[name]
+              const cls = same === true ? 'dsm-compat-pill-ok' : same === false ? 'dsm-compat-pill-bad' : ''
+              const text = same === true ? t('compat.module.same') : same === false ? t('compat.module.separate') : t('compat.module.unknown')
+              return React.createElement('div', { className: 'dsm-compat-mod-row', key: name },
+                React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, name),
+                React.createElement('span', { className: 'dsm-compat-pill ' + cls }, text))
+            }))))
+
+        push(React.createElement('p', { className: 'dsm-help' },
+          t('compat.hint.doctor'),
+          React.createElement('code', { className: 'dsm-compat-code' }, ' node scripts/doctor.mjs')))
+      }
+
+      return React.createElement('div', { className: 'dsm-compat' },
+        React.createElement('div', { className: 'dsm-head' },
+          React.createElement('div', { className: 'dsm-title-block' },
+            React.createElement('div', { className: 'dsm-title-row' },
+              React.createElement('h2', { className: 'dsm-title' }, t('compat.title')),
+              VersionBadgeComponent ? React.createElement(VersionBadgeComponent, null) : null),
+            React.createElement('p', { className: 'dsm-desc' }, t('compat.desc')))),
+        React.createElement('div', { className: 'dsm-actions' },
+          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: reload },
+            busy ? t('compat.checking') : t('compat.recheck'))),
+        body)
     }
 
     // 曾经把导出写成 apply 方法体的最后两条语句（`module.exports.DICT = ...` /
@@ -203,11 +456,11 @@ window.__ModuleLoader__.load({
         "confirm.custom.remove.title": "移除自定义目录",
         "confirm.custom.remove.desc": "移除后该目录的技能不再列出（文件不受影响）：{name}",
         "result.custom.added": "已添加自定义目录：{path}", "result.custom.removed": "已移除自定义目录：{name}",
-        "status.enabled": "已启用", "status.disabled": "已停用", "status.invalid": "诊断异常", "status.shadowed": "被覆盖", "status.shadowed.hint": "同名技能「{name}」正在生效；点「启用这个」可改用当前来源的版本", "status.preferred": "同名首选", "status.readonly": "源文件只读", "status.notDeletable": "不可删除", "status.notDeletable.hint": "用户级来源的技能只能停用，不能删除（删除只对项目级来源开放）", "status.manageable": "可管理", "status.project": "项目级", "status.rank": "优先级 {rank}", "status.source.on": "已启用", "status.source.off": "已停用", "status.bundle": "目录技能", "status.single": "单文件",
+        "status.enabled": "已启用", "status.disabled": "已停用", "status.invalid": "诊断异常", "status.shadowed": "被覆盖", "status.shadowed.hint": "同名技能「{name}」正在生效；点「启用这个」可改用当前来源的版本", "status.preferred": "同名首选", "status.readonly": "源文件只读", "status.notDeletable": "不可删除", "status.notDeletable.hint": "删除只对插件可管理的来源开放（DSH 技能 / 导入技能 / 项目级 .dsh/skills）；外部 Agent 与自定义目录只读，里面的技能不能删", "status.manageable": "可管理", "status.project": "项目级", "status.rank": "优先级 {rank}", "status.source.on": "已启用", "status.source.off": "已停用", "status.bundle": "目录技能", "status.single": "单文件",
         "summary.total.one": "{count} 个技能", "summary.total.other": "{count} 个技能", "summary.enabled.one": "{count} 个已启用", "summary.enabled.other": "{count} 个已启用", "summary.disabled.one": "{count} 个已停用", "summary.disabled.other": "{count} 个已停用", "summary.issues.one": "{count} 个诊断项", "summary.issues.other": "{count} 个诊断项", "summary.group.one": "{count} 个技能", "summary.group.other": "{count} 个技能", "table.skill": "技能名称与描述", "table.status": "调用状态",
         "filter.source": "来源", "filter.all": "全部来源", "filter.option": "{name}（{count}）", "search": "搜索", "search.placeholder": "搜索技能名称或描述", "search.clear": "清除搜索",
         "empty.search": "没有匹配的技能", "empty.source": "该来源不存在或暂无技能", "loading": "正在加载技能…", "note.missing": "未提供简介", "source.toggle": "启停来源", "skill.toggle": "启停技能",
-        "source.external.note": "只读接入，启停不改写源文件", "source.dsh.note": "可创建、导入、移到回收站；启停只改管理器状态",
+        "source.external.note": "只读接入，启停不改写源文件", "source.dsh.note": "可创建、导入、移到回收站；默认来源必须读取，不能移除或停用",
         "detail.title": "技能详情", "detail.body": "正文", "detail.frontmatter": "元数据", "detail.noFrontmatter": "该技能未提供元数据。", "detail.diagnostics": "诊断", "detail.path": "源文件", "detail.noIssues": "未发现诊断问题。",
         "create.title": "创建技能", "create.target": "创建位置", "create.name": "名称", "create.name.placeholder": "例如 code-review-helper", "create.description": "简介", "create.description.placeholder": "一句话说明什么时候使用", "create.body": "正文（Markdown）", "create.body.placeholder": "写下技能要遵循的指令、步骤和边界…", "create.chat.note": "对话里 create_skill 建的是用户级技能",
         "import.title": "导入技能", "upload.drop.title": "点击或拖入此处", "upload.drop.copy": "支持 .zip、技能文件夹或单个 SKILL.md", "upload.selected.one": "{count} 个文件 · {size}", "upload.selected.other": "{count} 个文件 · {size}", "upload.remove": "移除所选内容", "upload.requirements": "文件要求", "upload.requirement.skill": "压缩包或文件夹需包含 SKILL.md", "upload.requirement.frontmatter": "SKILL.md 需包含 YAML 格式的技能名称和描述", "upload.requirement.copy": "导入时复制完整内容，不修改原始来源", "upload.importing": "正在安装…", "status.selected": "已选择", "select.file.invalid": "请选择 .zip 或单个 SKILL.md", "select.folder.invalid": "该文件夹里没有 SKILL.md", "error.browse.absolute": "目录路径必须是绝对路径：{path}", "error.browse.unreadable": "无法读取目录：{path}", "error.browse.notDirectory": "不是目录：{path}",
@@ -229,7 +482,7 @@ window.__ModuleLoader__.load({
         "mcp.level.all": "全部级别", "mcp.level.project": "Profile 级", "mcp.level.global": "全局", "mcp.level.loader": "已加载",
         "mcp.stat.total": "个服务", "mcp.stat.enabled": "个已启用", "mcp.stat.tools": "个工具",
         "mcp.search": "搜索服务", "mcp.search.placeholder": "搜索服务名称、地址或命令",
-        "mcp.btn.new": "新增服务", "mcp.btn.add": "添加", "mcp.btn.detail": "详情", "mcp.btn.edit": "编辑", "mcp.btn.restart": "重启", "mcp.btn.remove": "删除",
+        "mcp.btn.new": "新增服务", "mcp.btn.add": "添加", "mcp.btn.save": "保存", "mcp.btn.detail": "详情", "mcp.btn.edit": "编辑", "mcp.btn.restart": "重启", "mcp.btn.remove": "删除",
         "mcp.btn.enableAll": "全部启用", "mcp.btn.disableAll": "全部停用",
         "mcp.loading": "正在加载 MCP 服务…", "mcp.empty": "暂无 MCP 服务，点「新增服务」添加", "mcp.empty.search": "没有匹配的服务。",
         "mcp.servers.count": "{count} 个服务", "mcp.tools.count": "{count} 个工具", "mcp.duplicate": "重复 id",
@@ -258,7 +511,26 @@ window.__ModuleLoader__.load({
         "mcp.restarting": "重启中… {name}（已等待 {seconds} 秒，完成后自动刷新）", "mcp.err.warnings": "读取补丁告警：",
         "root.dsh": "DSH 技能", "root.hub": "导入技能", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "memory.title": "记忆",
-        "tabs.scenes": "场景", "tabs.skills": "技能", "tabs.subagents": "子智能体", "tabs.prompts": "提示词", "tabs.memory": "记忆", "tabs.sessions": "会话",
+        "tabs.scenes": "场景", "tabs.skills": "技能", "tabs.subagents": "子智能体", "tabs.prompts": "提示词", "tabs.memory": "记忆", "tabs.sessions": "会话", "tabs.compat": "兼容",
+        "compat.title": "宿主兼容", "compat.desc": "本插件与宿主 DSH 的对接体检：加载的是不是同一份模块、每个动作走哪条路径、哪些能力已降级。只读检查，不改动任何数据。",
+        "compat.state.ok": "一切正常", "compat.state.degraded": "有降级项", "compat.state.blocked": "有需要处理的问题",
+        "compat.checking": "检查中…", "compat.recheck": "重新检查", "compat.empty": "尚未检查", "compat.failed": "检查失败",
+        "compat.summary.ok": "宿主 {version} · 能力 {ok}/{total} · 全部可用", "compat.summary.degraded": "宿主 {version} · 能力 {ok}/{total} · 降级 {count} 项",
+        "compat.host": "宿主版本", "compat.peer": "要求范围", "compat.verified": "插件适配版本", "compat.verified.note": "本插件按此版本验证",
+        "compat.caps": "可用能力", "compat.caps.all": "全部通过", "compat.caps.degraded": "{count} 项不可用",
+        "compat.caps.substituted": "缺口由插件自补",
+        "compat.ops": "宿主动作可用性", "compat.ops.hint": "每个动作走哪条路径", "compat.ops.disabled": "有 {count} 个动作当前不可用（相关按钮已禁用并会说明原因）",
+        "compat.op.name": "动作", "compat.op.state": "路径",
+        "compat.op.list": "列出归档会话", "compat.op.archive": "归档会话", "compat.op.unarchive": "恢复会话",
+        "compat.op.batch": "批量归档", "compat.op.delete": "永久删除",
+        "compat.op.native": "宿主原生入口", "compat.op.adapter": "插件适配层", "compat.op.unavailable": "不可用（已禁用）",
+        "compat.degraded": "已降级能力", "compat.degraded.hint": "缺什么 + 后果", "compat.reason": "原因：",
+        "compat.others": "其它能力项", "compat.others.hint": "不算降级：宿主没有这些入口时，由插件自己顶上",
+        "compat.fallback.substituted": "插件适配层（宿主无此入口）",
+        "compat.fallback.native": "改走原生入口", "compat.fallback.blocked": "相关按钮已禁用",
+        "compat.modules": "模块实体（插件 vs 宿主）", "compat.modules.hint": "同一份模块才谈得上适配", "compat.module.same": "同一份模块", "compat.module.separate": "两份拷贝（需修复）", "compat.module.unknown": "无法比较",
+        "compat.blockers": "阻塞项（按此修复）",
+        "compat.hint.doctor": "命令行体检：",
         "scenes.title": "场景", "scenes.desc": "管理场景：可以预设不同的使用场景，包含 MCP、Skills、子智能体、记忆",
         "scenes.stat.total": "个场景", "scenes.stat.active": "个已启用", "scenes.stat.archives": "个有档案",
         "scenes.noDesc": "还没有描述",
@@ -332,7 +604,7 @@ window.__ModuleLoader__.load({
         "memory.deleteScene.title": "删除场景？", "memory.deleteScene.desc": "将删除「{name}」的场景记录与空目录（里面还有记忆或正处在当前模式时不能删；「全局」是保留场景，不可删除）",
         "memory.result.sceneCreated": "已创建场景：{name}", "memory.result.sceneUpdated": "已保存场景：{name}", "memory.result.sceneRemoved": "已删除场景：{name}",
         "memory.table.name": "记忆名称与描述", "memory.table.tags": "标记", "memory.table.status": "状态",
-        "error.rules.invalidGroup": "场景/分组名不合法（非空、≤64 字符、不含路径分隔符与 < > : \" | ? *、不以 . 开头）", "error.rules.invalidName": "记忆名不合法（非空、≤64 字符、不含路径分隔符与 < > : \" | ? *、不以 . 开头）", "error.rules.descriptionRequired": "描述不能为空", "error.rules.descriptionTooLong": "描述过长（不能超过 500 字符）", "error.rules.bodyRequired": "正文不能为空", "error.rules.tooLarge": "规则内容过大", "error.rules.shadowed": "规则被同名 bundle 遮蔽，无法写入", "error.rules.notFound": "规则不存在", "error.rules.budgetExceeded": "场景记忆段超出预算", "error.rules.ioFailed": "文件操作失败", "error.rules.sceneNotEmpty": "场景不为空，无法删除", "error.rules.notBundle": "该记忆是 flat（单文件），不能带附件", "error.rules.noFiles": "没有选择附件", "error.rules.emptyFile": "附件内容为空", "error.rules.fileTooLarge": "附件过大（单个上限 {limit} MB）", "error.rules.tooManyFiles": "一次最多 {limit} 个附件", "error.rules.sceneInMode": "该场景正处在当前模式，请先退出模式再删除",
+        "error.rules.invalidArgs": "缺少参数：需要 all:true（回到全部启用）或 scenes:[...]（显式收窄）", "error.rules.invalidGroup": "场景/分组名不合法（非空、≤64 字符、不含路径分隔符与 < > : \" | ? *、不以 . 开头）", "error.rules.invalidName": "记忆名不合法（非空、≤64 字符、不含路径分隔符与 < > : \" | ? *、不以 . 开头）", "error.rules.descriptionRequired": "描述不能为空", "error.rules.descriptionTooLong": "描述过长（不能超过 500 字符）", "error.rules.bodyRequired": "正文不能为空", "error.rules.tooLarge": "规则内容过大", "error.rules.shadowed": "规则被同名 bundle 遮蔽，无法写入", "error.rules.notFound": "规则不存在", "error.rules.budgetExceeded": "场景记忆段超出预算", "error.rules.ioFailed": "文件操作失败", "error.rules.sceneNotEmpty": "场景不为空，无法删除", "error.rules.notBundle": "该记忆是 flat（单文件），不能带附件", "error.rules.noFiles": "没有选择附件", "error.rules.emptyFile": "附件内容为空", "error.rules.fileTooLarge": "附件过大（单个上限 {limit} MB）", "error.rules.tooManyFiles": "一次最多 {limit} 个附件", "error.rules.sceneInMode": "该场景正处在当前模式，请先退出模式再删除",
         "memory.archive.emptySection": "该段已定义但没有勾选任何条目 = 全部停用", "memory.archive.emptySubagents": "该段已定义但没有勾选任何条目 = 不限制（全部人设可用）",
         "subagents.title": "子智能体", "subagents.desc": "管理人设：一个人设一个文件，正文即子代理的系统提示词。",
         "prompts.desc": "管理全局指令基线：应用后写入 AGENTS.md，新会话生效。",
@@ -348,7 +620,7 @@ window.__ModuleLoader__.load({
         "subagents.tools.chosen": "未选择 = 不限制", "subagents.tools.filter": "筛选工具名", "subagents.tools.empty": "宿主没有回传任何可选工具（模型可能不支持工具目录枚举）",
         "subagents.tools.unavailable": "当前会话不可见", "subagents.tools.current": "当前可用", "subagents.tools.groupCurrent": "当前会话可用", "subagents.tools.groupOther": "其它 Agent 预设里可用",
         "subagents.tools.count": "已选 {count} 个", "subagents.tools.remove": "移除",
-        "subagents.adv.title": "高级选项", "subagents.adv.inherit": "继承主会话", "subagents.adv.summary": "模型 {model} · 白名单 {allow} · 黑名单 {deny}", "subagents.adv.note": "候选工具是全部 Agent 预设工具名的并集：人设可能在任何预设下被复用，只列当前会话的工具会让换预设后的子代理启动失败。", "subagents.adv.loadFailed": "读取候选数据失败（模型目录 / 工具清单）；仍可手动填写。",
+        "subagents.adv.title": "高级选项", "subagents.adv.inherit": "继承主会话", "subagents.adv.summary": "模型 {model} · 白名单 {allow} · 黑名单 {deny}", "subagents.adv.note": "工具按官方 Agent 预设分组展示；同名工具可能属于多个预设，勾选后仅在对应预设下生效。", "subagents.adv.loadFailed": "读取候选数据失败（模型目录 / 工具清单）；仍可手动填写。",
         "subagents.field.body": "人设提示词", "subagents.field.body.placeholder": "写下这个人设的身份、职责与工作方式…",
         "subagents.result.saved": "已保存人设：{name}", "subagents.result.deleted": "已删除人设：{name}",
         "subagents.delete.title": "删除人设？", "subagents.delete.desc": "将删除「{name}」的人设文件，不可恢复",
@@ -362,7 +634,9 @@ window.__ModuleLoader__.load({
         "memory.scene.global.hint": "全局",
         "import.pick": "选择文件", "import.selected": "已选 {count} 个文件", "import.clear": "清空选择", "import.submit": "安装",
         "import.none": "没有导入任何文件（全部被跳过）", "import.skipped": "已跳过：{items}",
-        "error.import.noFiles": "没有选择要导入的文件"
+        "error.import.noFiles": "没有选择要导入的文件",
+        "nav.title": "工具",
+        "agm.current.external": "（已外部修改）", "agm.current.none": "（未设置）", "agm.current.label": "当前：{label}", "agm.loading": "加载中…", "agm.empty": "暂无预设，点「新建预设」创建", "agm.btn.delete.blocked": "正在生效的提示词预设不能删除；先启用别的场景、换绑提示词，或先把别的预设应用上去。", "agm.active": "生效中", "agm.active.hint.scene": "当前生效：场景「{scene}」绑定的提示词预设", "agm.active.hint.file": "当前生效：AGENTS.md 就是这一份", "agm.file.applied": "文件里是它", "agm.file.applied.hint": "AGENTS.md 当前内容是它；启用的场景绑了别的提示词，切换场景时已按场景把文件改成那一份", "agm.current.byScene": "{id}（场景「{scene}」）", "agm.apply.hint": "应用后新会话生效，当前会话不变", "agm.btn.reapply": "重新应用", "agm.btn.apply": "应用", "agm.applyModal.title": "应用预设", "agm.edit.title": "编辑预设", "agm.remove.title": "删除预设", "agm.btn.edit": "编辑", "agm.btn.delete": "删除", "agm.btn.new": "新建预设", "agm.btn.import": "导入", "agm.btn.save": "保存", "agm.btn.create": "创建", "agm.btn.confirmRemove": "确认删除", "agm.btn.confirmApply": "确认应用", "agm.field.id": "id（目录名）", "agm.field.id.hint": "中文、空格、下划线、点都可以；不能含 / \\ < > : \" | ? *，不能以点开头、不能以点或空格结尾，≤64 字符。改 id = 目录改名，场景绑定会一起改。", "agm.field.id.placeholder": "例如：工作基线", "agm.field.content": "内容", "agm.field.content.placeholder": "直接写这份预设的正文（Markdown）；留空 = 用空白模板", "agm.field.copyFrom": "或从现有预设复制", "agm.field.copyFrom.none": "不复制（空白模板）", "agm.result.renamed": "已保存，id 改为「{id}」", "agm.result.rebound": "（同步了 {count} 个场景的绑定）", "agm.remove.suffix": " ？此操作不可恢复。", "agm.apply.prefix": "将把 ", "agm.apply.suffix": " 的内容写入 ~/.dsh/AGENTS.md。", "agm.apply.note": "新会话生效；当前内容已备份到 __last-applied__（保留最近 5 代）", "hist.err.load": "加载失败", "hist.err.unarchive": "恢复失败", "hist.err.delete": "删除失败", "hist.err.retention": "设置失败", "hist.err.import": "导入失败", "hist.err.sessions": "加载会话列表失败", "hist.err.export": "导出失败", "hist.err.archive": "归档失败", "hist.retention.forever": "永久保留", "hist.retention.days": "{count} 天", "hist.arch.all": "全部会话", "hist.arch.archived": "仅已归档", "hist.arch.live": "仅未归档", "hist.arch.missing": "仅目录丢失", "hist.ws.all": "全部工作区", "hist.ungrouped": "未分组", "hist.group.removed": "工作区已移除", "hist.group.removed.hint": "该目录的工作区登记已被删除；分组按会话目录重建，重新登记后会自动并回同一组", "hist.group.unregistered": "未登记的工作区", "hist.group.unregistered.hint": "该目录当前在 DSH 里没有工作区登记；分组按会话目录重建", "hist.btn.registerWs": "重新登记为工作区", "hist.btn.registerWs.hint": "重新登记这个目录为工作区，并把该目录下已有的会话挂回该组（只写工作区记账，不移动、不删除文件与会话）", "hist.register.title": "重新登记为工作区？", "hist.register.body": "将为「{title}」在 DSH 中重新创建一条工作区登记，并把该目录下已有的会话挂回这个工作区（恢复其分组）。只写工作区记账，不移动、不删除任何文件与会话。", "hist.register.confirm": "确认登记", "hist.register.done.title": "已重新登记", "hist.register.done.body": "工作区「{title}」已登记；该目录下的归档会话会在刷新后并入这一组。", "hist.register.done.attached": "已把该目录下 {count} 个已有会话挂回这个工作区。", "hist.register.done.skipped": "{count} 个会话未能挂回：{reason}", "hist.err.register": "登记失败", "scenes.field.prompt": "提示词预设", "scenes.agents.note.applied": "已把「{id}」写入 AGENTS.md", "scenes.agents.note.restored": "已恢复进场景前的 AGENTS.md", "scenes.agents.note.error": "AGENTS.md 未写入：{reason}", "scenes.field.prompt.hint": "启用这个场景时，就用这份预设作为当前的全局指令基线。默认选中当前生效的那份。", "scenes.prompt.activeTag": "生效中", "scenes.prompt.noPresets": "还没有提示词预设；可先去「提示词」页新建一个。", "scenes.prompt.bound": "提示词：{id}", "scenes.prompt.live": "提示词生效中：{id}", "scenes.prompt.missing": "预设不存在：{id}", "scenes.prompt.tag.hint": "这个场景绑定的提示词预设", "scenes.enable.blocked": "已启用场景「{name}」；先关掉它才能启用别的", "scenes.result.created.collapsed": "场景「{name}」已创建，默认不启动（原先的「全部启用」已收敛为单选）", "scenes.legacyAll": "检测到 {count} 个场景同时处于启用状态（历史「全部启用」遗留）；除「全局」外同时只能启用一个。", "scenes.legacyAll.fix": "收敛为单选", "agm.scene.tag": "场景「{scene}」正在使用", "agm.scene.tag.hint": "由这个场景绑定，随场景开关生效", "agm.scene.missing": "场景「{scene}」绑定了它，但文件不存在", "hist.restore.note.registered": "已恢复 {count} 个会话；工作区「{title}」已重新登记，会话已挂回该组。", "hist.restore.note.attached": "已恢复 {count} 个会话，并挂回工作区「{title}」。", "hist.restore.note.skip": "{count} 个会话的工作区归属未能恢复：{reason}", "hist.purge.title": "永久删除？", "hist.purge.one": "永久删除会话「{title}」及其全部记录，不可恢复", "hist.purge.batch": "永久删除所选 {count} 个会话及其全部记录，不可恢复", "hist.btn.restore": "恢复", "hist.btn.purge": "永久删除", "hist.btn.confirmPurge": "确认删除", "hist.selectGroup": "全选组 {title}", "hist.group.count": "{count} 个", "hist.selectAll": "全选", "hist.deselectAll": "取消全选", "hist.btn.import": "导入对话", "hist.btn.export": "导出对话", "hist.selected": "已选 {count} 项", "hist.btn.restoreSelected": "恢复所选 ({count})", "hist.btn.deleteSelected": "删除所选 ({count})", "hist.stat.archived": "个归档", "hist.stat.projects": "个项目", "hist.stat.selected": "个已选", "hist.search.placeholder": "搜索标题 / 会话 ID / 项目路径", "hist.loading": "加载中…", "hist.empty.search": "无匹配的归档会话", "hist.empty.none": "暂无归档会话", "hist.import.hint": "导入其他 Agent 的对话记录，生成可继续对话的新会话", "hist.import.cwd": "项目目录（可留空）", "hist.import.cwd.placeholder": "绝对路径，可留空（会话归入未分组）", "hist.import.drop": "选择或拖入对话文件", "hist.import.done": "已创建会话 {id}（{count} 条消息），可在 DSH 会话列表中继续对话。", "hist.export.hint": "导出选中会话为转录文件，可再次导入", "hist.export.dir": "导出目录（绝对路径，自动创建）", "hist.export.browse": "浏览并选择文件夹", "hist.btn.browse": "选择", "hist.export.pickDir": "选择导出目录", "hist.export.format": "格式", "hist.export.scope": "会话范围", "hist.export.workspace": "工作区", "hist.export.sessions": "会话（{count} 个）", "hist.export.loading": "加载会话列表…", "hist.cwd.missing": "⚠ 工作区目录已不存在：", "hist.tag.archived": "已归档", "hist.tag.live": "未归档", "hist.export.empty": "没有符合条件的会话", "hist.result.exported": "已导出 {count} 个会话到 {dir}", "hist.result.skipped": "；跳过 {count} 个（{ids}）", "hist.result.archived": "已归档 {count} 个会话到 History，可到 History 页继续管理", "hist.btn.archiveSelected": "归档所选", "hist.btn.archiveSelected.title": "把选中的会话收进 History，纳入保留期管理", "hist.export.busy": "处理中…", "hist.btn.exportSelected": "导出 {count} 个会话", "hist.error.title": "操作失败", "hist.error.unknown": "未知错误",
       },
       en: {
         "title": "Skills", "desc": "Manage skills on this machine: enable, import, create and trash; pick which copy of a shared name is active.", "link.project": "GitHub", "link.feedback": "Issues",
@@ -389,11 +663,11 @@ window.__ModuleLoader__.load({
         "result.custom.added": "Custom folder added: {path}",
         "result.custom.removed": "Custom folder removed: {name}",
         "result.opened": "Opened with the system default app: {path}",
-        "status.enabled": "Enabled", "status.disabled": "Disabled", "status.invalid": "Needs attention", "status.shadowed": "Shadowed", "status.shadowed.hint": "The copy “{name}” is the active one; click “Use this one” to switch to this source instead", "status.preferred": "Manually chosen", "status.readonly": "Source read-only", "status.notDeletable": "Cannot delete", "status.notDeletable.hint": "Skills from a user-level source can only be disabled, not deleted (deletion is available for project-level sources only)", "status.manageable": "Manageable", "status.project": "Project scoped", "status.rank": "Rank {rank}", "status.source.on": "Enabled", "status.source.off": "Disabled", "status.bundle": "Bundle", "status.single": "Single file",
+        "status.enabled": "Enabled", "status.disabled": "Disabled", "status.invalid": "Needs attention", "status.shadowed": "Shadowed", "status.shadowed.hint": "The copy “{name}” is the active one; click “Use this one” to switch to this source instead", "status.preferred": "Manually chosen", "status.readonly": "Source read-only", "status.notDeletable": "Cannot delete", "status.notDeletable.hint": "Deleting is available for plugin-managed sources (DSH skills / Imported skills / project .dsh/skills); external agent and custom directories are read-only", "status.manageable": "Manageable", "status.project": "Project scoped", "status.rank": "Rank {rank}", "status.source.on": "Enabled", "status.source.off": "Disabled", "status.bundle": "Bundle", "status.single": "Single file",
         "summary.total.one": "{count} skill", "summary.total.other": "{count} skills", "summary.enabled.one": "{count} enabled", "summary.enabled.other": "{count} enabled", "summary.disabled.one": "{count} disabled", "summary.disabled.other": "{count} disabled", "summary.issues.one": "{count} diagnostic", "summary.issues.other": "{count} diagnostics", "summary.group.one": "{count} skill", "summary.group.other": "{count} skills", "table.skill": "Skill name and description", "table.status": "Invocation status",
         "filter.source": "Source", "filter.all": "All sources", "filter.option": "{name} ({count})", "search": "Search", "search.placeholder": "Search skill names or descriptions", "search.clear": "Clear search",
         "empty.search": "No matching skills", "empty.source": "This source is missing or has no skills", "loading": "Loading skills…", "note.missing": "No description provided", "source.toggle": "Toggle source", "skill.toggle": "Toggle skill",
-        "source.external.note": "Read-only; toggles never rewrite source files", "source.dsh.note": "Create, import, trash; toggles only change manager state",
+        "source.external.note": "Read-only; toggles never rewrite source files", "source.dsh.note": "Create, import, trash; a default source, always read — it cannot be removed or toggled off",
         "detail.title": "Skill details", "detail.body": "Body", "detail.frontmatter": "Metadata", "detail.noFrontmatter": "This skill provides no metadata.", "detail.diagnostics": "Diagnostics", "detail.path": "Source file", "detail.noIssues": "No diagnostic issues found.",
         "create.title": "Create skill", "create.target": "Create in", "create.name": "Name", "create.name.placeholder": "e.g. code-review-helper", "create.description": "Description", "create.description.placeholder": "One sentence describing when to use it", "create.body": "Body (Markdown)", "create.body.placeholder": "Write the instructions, steps, and boundaries…", "create.chat.note": "create_skill in chat creates user-level skills",
         "import.title": "Import skill", "upload.drop.title": "Click or drop here", "upload.drop.copy": "Supported: .zip, a skill folder, or one SKILL.md", "upload.selected.one": "{count} file · {size}", "upload.selected.other": "{count} files · {size}", "upload.remove": "Remove selection", "upload.requirements": "File requirements", "upload.requirement.skill": "Archives and folders must contain SKILL.md", "upload.requirement.frontmatter": "SKILL.md must include a YAML name and description", "upload.requirement.copy": "Import copies all content and never modifies the source", "upload.importing": "Installing…", "status.selected": "Selected", "select.file.invalid": "Choose a .zip archive or one SKILL.md.", "select.folder.invalid": "No SKILL.md was found in the selected folder.", "error.browse.absolute": "Folder path must be absolute: {path}", "error.browse.unreadable": "Could not read folder: {path}", "error.browse.notDirectory": "Not a folder: {path}",
@@ -415,7 +689,7 @@ window.__ModuleLoader__.load({
         "mcp.level.all": "All levels", "mcp.level.project": "Profile level", "mcp.level.global": "Global", "mcp.level.loader": "Loaded",
         "mcp.stat.total": "server(s)", "mcp.stat.enabled": "enabled", "mcp.stat.tools": "tool(s)",
         "mcp.search": "Search servers", "mcp.search.placeholder": "Search a server name, URL or command",
-        "mcp.btn.new": "Add server", "mcp.btn.add": "Add", "mcp.btn.detail": "Details", "mcp.btn.edit": "Edit", "mcp.btn.restart": "Restart", "mcp.btn.remove": "Delete",
+        "mcp.btn.new": "Add server", "mcp.btn.add": "Add", "mcp.btn.save": "Save", "mcp.btn.detail": "Details", "mcp.btn.edit": "Edit", "mcp.btn.restart": "Restart", "mcp.btn.remove": "Delete",
         "mcp.btn.enableAll": "Enable all", "mcp.btn.disableAll": "Disable all",
         "mcp.loading": "Loading MCP servers…", "mcp.empty": "No MCP servers yet — click “Add server”.", "mcp.empty.search": "No matching server.",
         "mcp.servers.count": "{count} server(s)", "mcp.tools.count": "{count} tool(s)", "mcp.duplicate": "duplicate id",
@@ -444,7 +718,26 @@ window.__ModuleLoader__.load({
         "mcp.restarting": "Restarting… {name} (waited {seconds}s; the list refreshes when it finishes)", "mcp.err.warnings": "Patch warnings: ",
         "root.dsh": "DSH skills", "root.hub": "Imported skills", "root.agents": "Shared Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "Project DSH", "root.projectAgents": "Project Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "memory.title": "Memories",
-        "tabs.scenes": "Scenes", "tabs.skills": "Skills", "tabs.subagents": "Subagents", "tabs.prompts": "Prompts", "tabs.memory": "Memories", "tabs.sessions": "Sessions",
+        "tabs.scenes": "Scenes", "tabs.skills": "Skills", "tabs.subagents": "Subagents", "tabs.prompts": "Prompts", "tabs.memory": "Memories", "tabs.sessions": "Sessions", "tabs.compat": "Host",
+        "compat.title": "Host compatibility", "compat.desc": "How this plugin attaches to the running DSH: whether it loads the same module instances, which route each action takes, and which capabilities are degraded. Read-only; no data is touched.",
+        "compat.state.ok": "All good", "compat.state.degraded": "Degraded", "compat.state.blocked": "Needs attention",
+        "compat.checking": "Checking…", "compat.recheck": "Check again", "compat.empty": "Not checked yet", "compat.failed": "Check failed",
+        "compat.summary.ok": "host {version} · capabilities {ok}/{total} · all usable", "compat.summary.degraded": "host {version} · capabilities {ok}/{total} · {count} degraded",
+        "compat.host": "Host version", "compat.peer": "Required range", "compat.verified": "Verified against", "compat.verified.note": "the release this plugin was tested with",
+        "compat.caps": "Usable capabilities", "compat.caps.all": "all present", "compat.caps.degraded": "{count} unavailable",
+        "compat.caps.substituted": "gaps covered by the plugin",
+        "compat.ops": "Host action availability", "compat.ops.hint": "which route each action takes", "compat.ops.disabled": "{count} action(s) are unavailable right now (the affected buttons are disabled and explain why)",
+        "compat.op.name": "Action", "compat.op.state": "Route",
+        "compat.op.list": "List archived sessions", "compat.op.archive": "Archive session", "compat.op.unarchive": "Unarchive session",
+        "compat.op.batch": "Batch archive", "compat.op.delete": "Delete permanently",
+        "compat.op.native": "Host-native entry", "compat.op.adapter": "Plugin adapter", "compat.op.unavailable": "Unavailable (disabled)",
+        "compat.degraded": "Degraded capabilities", "compat.degraded.hint": "what is missing + the consequence", "compat.reason": "Reason:",
+        "compat.others": "Other capability slots", "compat.others.hint": "not degraded: the plugin supplies its own implementation when the host has no such entry",
+        "compat.fallback.substituted": "Plugin adapter (no host entry)",
+        "compat.fallback.native": "Falls back to native entry", "compat.fallback.blocked": "Affected buttons disabled",
+        "compat.modules": "Module identity (plugin vs host)", "compat.modules.hint": "adapting only works on one shared module", "compat.module.same": "same module", "compat.module.separate": "separate copy (repair needed)", "compat.module.unknown": "not comparable",
+        "compat.blockers": "Blockers (fix these)",
+        "compat.hint.doctor": "Command-line check:",
         "scenes.title": "Scenes", "scenes.desc": "Manage scenes: preset different usage scenes combining MCP servers, skills, subagents and memories",
         "scenes.stat.total": "scene(s)", "scenes.stat.active": "enabled", "scenes.stat.archives": "with a profile",
         "scenes.noDesc": "No description yet",
@@ -518,7 +811,7 @@ window.__ModuleLoader__.load({
         "memory.deleteScene.title": "Delete scene?", "memory.deleteScene.desc": "Deletes the scene record and its empty folder “{name}” (refused while it still holds memories or is the active mode; “Global” is reserved and cannot be deleted)",
         "memory.result.sceneCreated": "Scene created: {name}", "memory.result.sceneUpdated": "Scene saved: {name}", "memory.result.sceneRemoved": "Scene deleted: {name}",
         "memory.table.name": "Memory name and description", "memory.table.tags": "Tags", "memory.table.status": "Status",
-        "error.rules.invalidGroup": "Invalid scene/group name (non-empty, ≤64 chars, no path separators or < > : \" | ? *, must not start with a dot)", "error.rules.invalidName": "Invalid memory name (non-empty, ≤64 chars, no / \\ < > : \" | ? *, must not start with a dot)", "error.rules.descriptionRequired": "Description is required", "error.rules.descriptionTooLong": "Description is too long (max 500 chars)", "error.rules.bodyRequired": "Body is required", "error.rules.tooLarge": "Rule content is too large", "error.rules.shadowed": "Rule is shadowed by a bundle of the same name", "error.rules.notFound": "Rule not found", "error.rules.budgetExceeded": "Scene memory section exceeds its budget", "error.rules.ioFailed": "File operation failed", "error.rules.sceneNotEmpty": "Scene is not empty; cannot be deleted", "error.rules.notBundle": "This memory is flat (a single file) and cannot carry attachments", "error.rules.noFiles": "No files selected", "error.rules.emptyFile": "Empty file", "error.rules.fileTooLarge": "File too large (max {limit} MB each)", "error.rules.tooManyFiles": "At most {limit} files per upload", "error.rules.sceneInMode": "This scene is the active mode; exit the mode before deleting it",
+        "error.rules.invalidArgs": "Missing arguments: pass all:true (enable everything) or scenes:[...] (explicit narrowing)", "error.rules.invalidGroup": "Invalid scene/group name (non-empty, ≤64 chars, no path separators or < > : \" | ? *, must not start with a dot)", "error.rules.invalidName": "Invalid memory name (non-empty, ≤64 chars, no / \\ < > : \" | ? *, must not start with a dot)", "error.rules.descriptionRequired": "Description is required", "error.rules.descriptionTooLong": "Description is too long (max 500 chars)", "error.rules.bodyRequired": "Body is required", "error.rules.tooLarge": "Rule content is too large", "error.rules.shadowed": "Rule is shadowed by a bundle of the same name", "error.rules.notFound": "Rule not found", "error.rules.budgetExceeded": "Scene memory section exceeds its budget", "error.rules.ioFailed": "File operation failed", "error.rules.sceneNotEmpty": "Scene is not empty; cannot be deleted", "error.rules.notBundle": "This memory is flat (a single file) and cannot carry attachments", "error.rules.noFiles": "No files selected", "error.rules.emptyFile": "Empty file", "error.rules.fileTooLarge": "File too large (max {limit} MB each)", "error.rules.tooManyFiles": "At most {limit} files per upload", "error.rules.sceneInMode": "This scene is the active mode; exit the mode before deleting it",
         "subagents.title": "Subagents", "subagents.desc": "Manage personas: one persona per file, its body is the subagent's system prompt.",
         "prompts.desc": "Manage the global instruction baseline: applying writes AGENTS.md; it takes effect in new sessions.",
         "sessions.desc": "Manage archived sessions: restore or delete them permanently; expired ones are cleaned up automatically.",
@@ -533,7 +826,7 @@ window.__ModuleLoader__.load({
         "subagents.tools.chosen": "Nothing selected = no restriction", "subagents.tools.filter": "Filter tool names", "subagents.tools.empty": "The host returned no selectable tools (the model may not support catalogue enumeration)",
         "subagents.tools.unavailable": "not visible here", "subagents.tools.current": "available now", "subagents.tools.groupCurrent": "Available in this session", "subagents.tools.groupOther": "Available in other agent presets",
         "subagents.tools.count": "{count} selected", "subagents.tools.remove": "Remove",
-        "subagents.adv.title": "Advanced options", "subagents.adv.inherit": "inherit", "subagents.adv.summary": "model {model} · allow {allow} · deny {deny}", "subagents.adv.note": "Candidates are the UNION of tool names across all agent presets: a persona can be reused under any preset, and listing only this session's tools would make the child fail to start after a preset switch.", "subagents.adv.loadFailed": "Could not read the candidate data (model catalogue / tool list); you can still fill the fields by hand.",
+        "subagents.adv.title": "Advanced options", "subagents.adv.inherit": "inherit", "subagents.adv.summary": "model {model} · allow {allow} · deny {deny}", "subagents.adv.note": "Tools are grouped by official Agent preset; the same tool may belong to multiple presets and only applies under the matching preset.", "subagents.adv.loadFailed": "Could not read the candidate data (model catalogue / tool list); you can still fill the fields by hand.",
         "subagents.field.body": "Persona prompt", "subagents.field.body.placeholder": "Describe the persona's role, responsibilities, and working style…",
         "subagents.result.saved": "Persona saved: {name}", "subagents.result.deleted": "Persona deleted: {name}",
         "subagents.delete.title": "Delete persona?", "subagents.delete.desc": "Deletes the persona file “{name}”; this cannot be undone",
@@ -547,13 +840,17 @@ window.__ModuleLoader__.load({
         "memory.scene.global.hint": "Global",
         "import.pick": "Choose files", "import.selected": "{count} file(s) selected", "import.clear": "Clear", "import.submit": "Install",
         "import.none": "Nothing was imported (all skipped)", "import.skipped": "Skipped: {items}",
-        "error.import.noFiles": "No files selected"
+        "error.import.noFiles": "No files selected",
+        "nav.title": "Tools",
+        "agm.current.external": "(edited externally)", "agm.current.none": "(not set)", "agm.current.label": "Current: {label}", "agm.loading": "Loading…", "agm.empty": "No presets yet — click “New preset” to create one", "agm.btn.delete.blocked": "The preset currently in effect cannot be deleted; enable another scene, rebind the prompt, or apply a different preset first.", "agm.active": "Active", "agm.active.hint.scene": "Currently active: the prompt preset bound to scene “{scene}”", "agm.active.hint.file": "Currently active: AGENTS.md is exactly this preset", "agm.file.applied": "In AGENTS.md", "agm.file.applied.hint": "AGENTS.md currently holds this one; the enabled scene binds a different preset, which now takes effect", "agm.current.byScene": "{id} (scene “{scene}”)", "agm.apply.hint": "Takes effect in new sessions; the current session is unchanged", "agm.btn.reapply": "Apply again", "agm.btn.apply": "Apply", "agm.applyModal.title": "Apply preset", "agm.edit.title": "Edit preset", "agm.remove.title": "Delete preset", "agm.btn.edit": "Edit", "agm.btn.delete": "Delete", "agm.btn.new": "New preset", "agm.btn.import": "Import", "agm.btn.save": "Save", "agm.btn.create": "Create", "agm.btn.confirmRemove": "Delete", "agm.btn.confirmApply": "Apply", "agm.field.id": "id (directory name)", "agm.field.id.hint": "Any characters are fine (spaces, dots, non-ASCII); no / \\ < > : \" | ? *, must not start with a dot, must not end with a dot or space, ≤64 chars. Changing it renames the directory and follows scene bindings.", "agm.field.id.placeholder": "e.g. work-baseline", "agm.field.content": "Content", "agm.field.content.placeholder": "Write the preset body (Markdown) here; leave blank to start from the empty template", "agm.field.copyFrom": "Or copy from an existing preset", "agm.field.copyFrom.none": "Do not copy (empty template)", "agm.result.renamed": "Saved; id is now “{id}”", "agm.result.rebound": " ({count} scene binding(s) updated)", "agm.remove.suffix": "? This cannot be undone.", "agm.apply.prefix": "Write the contents of ", "agm.apply.suffix": " into ~/.dsh/AGENTS.md.", "agm.apply.note": "Takes effect in new sessions; the current content is backed up to __last-applied__ (last 5 kept)", "hist.err.load": "Load failed", "hist.err.unarchive": "Restore failed", "hist.err.delete": "Delete failed", "hist.err.retention": "Update failed", "hist.err.import": "Import failed", "hist.err.sessions": "Failed to load sessions", "hist.err.export": "Export failed", "hist.err.archive": "Archive failed", "hist.retention.forever": "Keep forever", "hist.retention.days": "{count} days", "hist.arch.all": "All sessions", "hist.arch.archived": "Archived only", "hist.arch.live": "Not archived only", "hist.arch.missing": "Missing directory only", "hist.ws.all": "All workspaces", "hist.ungrouped": "Ungrouped", "hist.group.removed": "Workspace removed", "hist.group.removed.hint": "This directory's workspace registration was deleted; the group is rebuilt from session directories and re-joins automatically once registered again", "hist.group.unregistered": "Unregistered directory", "hist.group.unregistered.hint": "This directory currently has no DSH workspace registration; the group is rebuilt from session directories", "hist.btn.registerWs": "Register as workspace", "hist.btn.registerWs.hint": "Register this directory as a workspace again and attach its existing sessions back to that group (workspace accounting only — no file or session is moved or deleted)", "hist.register.title": "Register as workspace?", "hist.register.body": "A workspace registration will be created in DSH for “{title}”, and the sessions under this directory will be attached back to it (restoring their grouping). This writes workspace accounting only — no file or session is moved or deleted.", "hist.register.confirm": "Register", "hist.register.done.title": "Registered", "hist.register.done.body": "Workspace “{title}” is registered; archived sessions under this directory join that group after a refresh.", "hist.register.done.attached": "Attached {count} existing session(s) under this directory back to the workspace.", "hist.register.done.skipped": "{count} session(s) could not be attached: {reason}", "hist.err.register": "Registration failed", "scenes.field.prompt": "Prompt preset", "scenes.agents.note.applied": "wrote “{id}” into AGENTS.md", "scenes.agents.note.restored": "restored the AGENTS.md baseline from before the scene", "scenes.agents.note.error": "AGENTS.md was not written: {reason}", "scenes.field.prompt.hint": "While this scene is enabled, its preset is the active global baseline. Defaults to the one currently in effect.", "scenes.prompt.activeTag": "in effect", "scenes.prompt.noPresets": "No prompt presets yet — create one on the Prompts page.", "scenes.prompt.bound": "Prompt: {id}", "scenes.prompt.live": "Prompt active: {id}", "scenes.prompt.missing": "Preset missing: {id}", "scenes.prompt.tag.hint": "The prompt preset bound to this scene", "scenes.enable.blocked": "Scene “{name}” is already enabled; turn it off first", "scenes.result.created.collapsed": "Scene “{name}” created and left off (the legacy “all enabled” default collapsed to a single choice)", "scenes.legacyAll": "{count} scenes are enabled at once (a leftover of the legacy “all enabled” default); only one scene besides “Global” may be enabled.", "scenes.legacyAll.fix": "Collapse to one", "agm.scene.tag": "In use by scene “{scene}”", "agm.scene.tag.hint": "Bound by that scene; takes effect with the scene switch", "agm.scene.missing": "Bound by scene “{scene}”, but the file is missing", "hist.restore.note.registered": "Restored {count} session(s); workspace “{title}” was registered again and the sessions are back in that group.", "hist.restore.note.attached": "Restored {count} session(s) and attached them to workspace “{title}”.", "hist.restore.note.skip": "Workspace ownership could not be restored for {count} session(s): {reason}", "hist.purge.title": "Delete forever?", "hist.purge.one": "Delete “{title}” and all of its records forever — this cannot be undone", "hist.purge.batch": "Delete the {count} selected sessions and all of their records forever — this cannot be undone", "hist.btn.restore": "Restore", "hist.btn.purge": "Delete forever", "hist.btn.confirmPurge": "Delete", "hist.selectGroup": "Select group {title}", "hist.group.count": "{count}", "hist.selectAll": "Select all", "hist.deselectAll": "Clear selection", "hist.btn.import": "Import conversation", "hist.btn.export": "Export conversations", "hist.selected": "{count} selected", "hist.btn.restoreSelected": "Restore selected ({count})", "hist.btn.deleteSelected": "Delete selected ({count})", "hist.stat.archived": " archived", "hist.stat.projects": " projects", "hist.stat.selected": " selected", "hist.search.placeholder": "Search title / session id / project path", "hist.loading": "Loading…", "hist.empty.search": "No matching archived sessions", "hist.empty.none": "No archived sessions yet", "hist.import.hint": "Import transcripts from other agents to create a new, continuable session", "hist.import.cwd": "Project directory (optional)", "hist.import.cwd.placeholder": "Absolute path, optional (the session goes to Ungrouped)", "hist.import.drop": "Choose or drop a conversation file", "hist.import.done": "Created session {id} ({count} messages); continue it from the DSH session list.", "hist.export.hint": "Export the selected sessions as transcript files that can be imported again", "hist.export.dir": "Export directory (absolute path, created automatically)", "hist.export.browse": "Browse and choose a folder", "hist.btn.browse": "Choose", "hist.export.pickDir": "Choose export directory", "hist.export.format": "Format", "hist.export.scope": "Session scope", "hist.export.workspace": "Workspace", "hist.export.sessions": "Sessions ({count})", "hist.export.loading": "Loading sessions…", "hist.cwd.missing": "⚠ The workspace directory no longer exists: ", "hist.tag.archived": "Archived", "hist.tag.live": "Not archived", "hist.export.empty": "No matching sessions", "hist.result.exported": "Exported {count} session(s) to {dir}", "hist.result.skipped": "; skipped {count} ({ids})", "hist.result.archived": "Archived {count} session(s) to History; manage them on the History page", "hist.btn.archiveSelected": "Archive selected", "hist.btn.archiveSelected.title": "Move the selected sessions into History so retention applies to them", "hist.export.busy": "Working…", "hist.btn.exportSelected": "Export {count} session(s)", "hist.error.title": "Operation failed", "hist.error.unknown": "Unknown error",
       }
     };
 
     module.exports = {
       name: 'dsh-plugin-tool-management-client',
-      inject: ['timer'],
+      // 显式注入 locale：兄弟插件提供的服务不会可靠地通过未声明的 ctx.get() 暴露；
+      // 不声明时本页会退回中文兜底，导致宿主已切到 English 但「工具」和七个页签仍是中文。
+      inject: ['timer', 'locale'],
       // 词典也导出：让 Node 契约测试能断言「bundle 里每个 t('键') 在两份词典里都存在」。
       // 浏览器 UI 的交互验收仍要真浏览器；这一条挡的是「界面直接显示原始键名」这类缺陷。
       dict: DICT,
@@ -562,6 +859,36 @@ window.__ModuleLoader__.load({
       pages: _pages,
       apply(ctx) {
         ensureCss()
+        // ---------- 取词服务（必须最先绑定）----------
+        // 放在 apply 开头而不是页面组件附近：设置页的导航标题（slots.inject('settings.section')）
+        // 是**注册期**取值，晚绑定会让它在英文界面下永远是中文。
+        var NS = 'dsh-plugin-tool-management'
+        // 注册期也要跟随宿主当前语言：如果 locale 服务尚未完成注入，读取 html[lang]
+        // 作为兜底，不能无条件回退中文，否则设置侧栏会固定显示「工具」。
+        var initialLocale = (typeof document !== 'undefined' && document.documentElement && /^en(?:-|$)/i.test(document.documentElement.lang || '')) ? 'en' : 'zh'
+        var t = function (key, params) {
+          var s = (DICT[initialLocale] && DICT[initialLocale][key]) || (DICT.en && DICT.en[key]) || key
+          if (params) Object.keys(params).forEach(function (k) { s = String(s).replace("{" + k + "}", params[k]) })
+          return s
+        }
+        try {
+          // 取词服务走显式注入的 locale；直接访问未声明的 `ctx.locale` 会被 cordis
+          // 上下文代理拒绝（cannot get property without inject）。同时保留 ctx.get 兼容
+          // 不同宿主上下文；locale 注册失败不能让 t 静默退回中文。
+          var locale = (typeof ctx.get === 'function' ? ctx.get('locale') : undefined) || ctx.locale
+          if (locale && typeof locale.register === 'function') {
+            try {
+              locale.register(NS, DICT)
+            } catch (e) {
+              // apply 被重复调用时 register 会因「该 ns 已有该 locale」抛错；
+              // 词典已在宿主手里，直接 bind 即可，绝不能因此退回内置兜底。
+            }
+            t = locale.bind(NS)
+          }
+        } catch (e) {
+          try { console.warn('[dsh-plugin-tool-management] locale 服务不可用，界面将固定使用中文：', e) } catch (e2) { /* ignore */ }
+        }
+
         const slots = ctx.get('slots')
         if (slots === undefined) return
 
@@ -595,8 +922,8 @@ window.__ModuleLoader__.load({
         // 顶部栏反馈入口：合并成一个「GitHub 和反馈」链接，指向仓库（issues 在那）。
         function FeedbackLinks() {
           return React.createElement('div', { className: 'dsm-feedback-links' },
-            React.createElement('a', { className: 'dsm-feedback-link', href: 'https://github.com/ouli-1242/dsh-plugin-tool-management', target: '_blank', rel: 'noreferrer', 'aria-label': 'GitHub' },
-              React.createElement(GithubMark16, null), 'GitHub'))
+            React.createElement('a', { className: 'dsm-feedback-link', href: 'https://github.com/ouli-1242/dsh-plugin-tool-management', target: '_blank', rel: 'noreferrer', 'aria-label': t('link.project'), title: t('link.project') },
+              React.createElement(GithubMark16, null)))
         }
 
         // MCP 服务页：与 Skills 页共用 dsm-* 设计语言（统计卡 / 筛选 / 分组卡片 / 模态框）。
@@ -931,8 +1258,7 @@ window.__ModuleLoader__.load({
                     React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.headers, placeholder: 'Authorization=Bearer xxx', onChange: setFormField('headers') }))
                 : null),
             React.createElement('div', { className: 'dsm-modal-actions' },
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeForm }, mt('btn.cancel')),
-              React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy === 'form' || !formModal.serverName.trim(), onClick: submitForm }, formModal.mode === 'edit' ? mt('btn.save') : mt('mcp.btn.add'))))
+              React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy === 'form' || !formModal.serverName.trim(), onClick: submitForm }, formModal.mode === 'edit' ? mt('mcp.btn.save') : mt('mcp.btn.add'))))
 
           const detailStatus = detail ? liveStatus(detail.row) : null
           const detailHint = detail ? liveHint(detail.row) : null
@@ -948,7 +1274,7 @@ window.__ModuleLoader__.load({
                 mt('mcp.detail.config'),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: toggleReveal }, reveal ? mt('mcp.detail.hideSecret') : mt('mcp.detail.showSecret'))),
               React.createElement('div', { className: 'dsm-fm' },
-                configRow(mt('mcp.field.entryId'), detail.row.id),
+                configRow(mt('mcp.detail.entryId'), detail.row.id),
                 configRow(mt('mcp.field.level'), mt('mcp.level.' + detail.row.level)),
                 configRow(mt('mcp.field.transport'), detail.row.transport || '—'),
                 detail.row.url ? configRow(mt('mcp.field.url'), detail.row.url) : null,
@@ -976,7 +1302,6 @@ window.__ModuleLoader__.load({
           },
             React.createElement('p', { className: 'dsm-desc' }, mt('mcp.remove.desc', { name: confirmRow.serverName })),
             React.createElement('div', { className: 'dsm-modal-actions' },
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: () => setConfirmRow(null) }, mt('btn.cancel')),
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: confirmRemove }, mt('mcp.btn.remove'))))
 
           return React.createElement('section', { className: 'dsm-section' },
@@ -984,7 +1309,7 @@ window.__ModuleLoader__.load({
               React.createElement('div', { className: 'dsm-title-block' },
                 React.createElement('div', { className: 'dsm-title-row' },
                   React.createElement('h2', { className: 'dsm-title' }, 'MCP'),
-                  React.createElement(VersionBadge, null)),
+                  VersionBadgeComponent ? React.createElement(VersionBadgeComponent, null) : null),
                 React.createElement('p', { className: 'dsm-desc' }, mt('mcp.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }, mt('btn.refresh')),
@@ -1023,7 +1348,7 @@ window.__ModuleLoader__.load({
             if (!file) return
             var reader = new FileReader()
             reader.onload = function () {
-              var id = String(file.name).replace(/\.(md|markdown|txt)$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'imported'
+              var id = String(file.name).replace(/\.(md|markdown|txt)$/i, '').trim().replace(/[\\/<>:"|?*]+/g, '-') || 'imported'
               setBusy('import')
               apiCall('agentsmd-import', { id: id, content: String(reader.result) }).then(function (res) {
                 setBusy(null)
@@ -1036,8 +1361,8 @@ window.__ModuleLoader__.load({
 
           function refresh() {
             apiCall('agentsmd-list', {}).then(function (res) {
-              setState(function (s) { return { loading: false, error: res && res.ok ? null : ((res && res.error) || mt('mcp.msg.loadFailed')), presets: (res && res.presets) || [], current: s.current } })
-            }).catch(function (e) { setState({ loading: false, error: String((e && e.message) || e), presets: [], current: null }) })
+              setState(function (s) { return { loading: false, error: res && res.ok ? null : ((res && res.error) || mt('mcp.msg.loadFailed')), presets: (res && res.presets) || [], current: s.current, scenePrompt: (res && res.scenePrompt) || null } })
+            }).catch(function (e) { setState({ loading: false, error: String((e && e.message) || e), presets: [], current: null, scenePrompt: null }) })
             apiCall('agentsmd-get-current', {}).then(function (res) {
               if (res && res.ok) setState(function (s) { return Object.assign({}, s, { current: res }) })
             }).catch(function () {})
@@ -1045,11 +1370,22 @@ window.__ModuleLoader__.load({
           React.useEffect(function () { refresh() }, [])
 
           var cur = state.current
-          var curLabel = cur && cur.exists ? (cur.presetId || '（已外部修改）') : '（未设置）'
+          // 顶部「当前」：场景启用且绑了预设时，**以场景绑定的那份为准**（它就是生效中的基线）。
+          var sceneLive = state.scenePrompt && state.scenePrompt.presetId && state.scenePrompt.scene && !state.scenePrompt.missing ? state.scenePrompt : null
+          var curLabel = sceneLive
+            ? t('agm.current.byScene', { id: sceneLive.presetId, scene: sceneLive.scene })
+            : (cur && cur.exists ? (cur.presetId || t('agm.current.external')) : t('agm.current.none'))
+          // 改名结果提示：短暂显示后自动消失（与场景页的结果条同一节奏）。
+          React.useEffect(function () {
+            if (!state.notice) return undefined
+            var timer = setTimeout(function () { setState(function (s) { return Object.assign({}, s, { notice: null }) }) }, 4000)
+            return function () { clearTimeout(timer) }
+          }, [state.notice])
 
           function openEdit(p) {
+            // id 可改：改名 = 目录改名，宿主会把场景绑定一起改名（见 rules-rebind-prompt）。
             apiCall('agentsmd-read', { id: p.id }).then(function (res) {
-              if (res && res.ok) setEditModal({ id: p.id, content: res.content })
+              if (res && res.ok) setEditModal({ id: p.id, nextId: p.id, content: res.content })
             }).catch(function () {})
           }
           function doApply(id) {
@@ -1058,11 +1394,22 @@ window.__ModuleLoader__.load({
           }
           function doRemove(p) {
             setBusy('rm-' + p.id)
-            apiCall('agentsmd-remove', { id: p.id }).then(function () { setBusy(null); setApplyConfirm(null); refresh() }).catch(function () { setBusy(null) })
+            // 宿主会拒绝删除「正在生效」的预设（按钮已禁用，这里兜住旧页面/竞态），
+            // 因此必须把响应里的错误显示出来，不能静默什么都不发生。
+            apiCall('agentsmd-remove', { id: p.id }).then(function (res) {
+              setBusy(null); setApplyConfirm(null)
+              if (res && res.ok === false) setState(function (s) { return Object.assign({}, s, { error: res.error }) })
+              else refresh()
+            }).catch(function (e) { setBusy(null); setApplyConfirm(null); setState(function (s) { return Object.assign({}, s, { error: String((e && e.message) || e) }) }) })
           }
-          function doCreate(id, from) {
+          function doCreate(id, from, content) {
             setBusy('create')
-            apiCall('agentsmd-create', { id: id, from: from || undefined }).then(function (res) {
+            // content 优先（用户直接写的内容）；留空才走 from 复制；都没有 = 宿主空模板。
+            apiCall('agentsmd-create', {
+              id: id,
+              ...(content ? { content: content } : {}),
+              ...(from ? { from: from } : {}),
+            }).then(function (res) {
               setBusy(null)
               if (res && res.ok) { setCreateModal(null); refresh() }
               else if (res) setCreateModal(Object.assign({}, createModal, { error: res.error }))
@@ -1070,28 +1417,49 @@ window.__ModuleLoader__.load({
           }
           function doUpdate() {
             setBusy('update')
-            apiCall('agentsmd-update', { id: editModal.id, content: editModal.content }).then(function (res) {
+            apiCall('agentsmd-update', { id: editModal.id, nextId: String(editModal.nextId || editModal.id), content: editModal.content }).then(function (res) {
               setBusy(null)
-              if (res && res.ok) { setEditModal(null); refresh() }
+              if (res && res.ok) {
+                setEditModal(null)
+                if (res.renamedFrom) setState(function (s) { return Object.assign({}, s, { notice: t('agm.result.renamed', { id: res.id }) + (res.reboundScenes ? t('agm.result.rebound', { count: res.reboundScenes }) : '') }) })
+                refresh()
+              } else if (res) setEditModal(Object.assign({}, editModal, { error: res.error }))
             }).catch(function () { setBusy(null) })
+          }
+          /** 「或从现有预设复制」：把选中预设的正文读进表单，之后仍可自由编辑。 */
+          function loadFromPreset(target, id) {
+            if (!id) { if (target === 'create') setCreateModal(Object.assign({}, createModal, { from: '' })); return }
+            apiCall('agentsmd-read', { id: id }).then(function (res) {
+              if (!res || !res.ok) return
+              if (target === 'create') setCreateModal(Object.assign({}, createModal, { from: id, content: res.content }))
+            }).catch(function () {})
           }
 
           var body = state.loading
-            ? React.createElement('div', { className: 'dsm-empty' }, '加载中…')
+            ? React.createElement('div', { className: 'dsm-empty' }, t('agm.loading'))
             : state.error
               ? React.createElement(Notice, { kind: 'err', text: state.error })
               : !state.presets.length
-                ? React.createElement('div', { className: 'dsm-empty' }, '暂无预设，点「新建预设」创建')
+                ? React.createElement('div', { className: 'dsm-empty' }, t('agm.empty'))
                 : React.createElement('div', { className: 'dsm-sources' }, state.presets.map(function (p) {
+                    // 「生效中」= 当前真正在起作用的基线：启用的场景绑了它，就是它（用户裁定）；
+                    // 否则看文件比对。p.fileApplied 单独留着，说明「AGENTS.md 里确实是它」。
+                    var viaScene = p.activeVia === 'scene'
+                    var boundByScene = state.scenePrompt && state.scenePrompt.presetId === p.id ? state.scenePrompt : null
                     return React.createElement('div', { key: p.id, className: 'dsm-source' },
                       React.createElement('div', { className: 'dsm-source-head' },
                         React.createElement('div', { className: 'dsm-source-head-main' },
                           React.createElement('span', { className: 'dsm-source-title' }, p.id),
-                          p.active ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, '生效中') : null),
+                          p.active ? React.createElement('span', { className: 'dsm-tag dsm-tag-on', title: viaScene ? t('agm.active.hint.scene', { scene: (state.scenePrompt && state.scenePrompt.scene) || '' }) : t('agm.active.hint.file') }, t('agm.active')) : null,
+                          !p.active && p.fileApplied ? React.createElement('span', { className: 'dsm-tag', title: t('agm.file.applied.hint') }, t('agm.file.applied')) : null,
+                          boundByScene && !viaScene ? React.createElement('span', { className: 'dsm-tag' + (boundByScene.missing ? ' dsm-tag-off' : ''), title: t('agm.scene.tag.hint') },
+                            boundByScene.missing
+                              ? t('agm.scene.missing', { scene: boundByScene.scene })
+                              : t('agm.scene.tag', { scene: boundByScene.scene })) : null),
                         React.createElement('div', { className: 'dsm-source-actions' },
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { openEdit(p) } }, '编辑'),
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: function () { setApplyConfirm({ id: p.id }) }, title: '应用后新会话生效，当前会话不变' }, p.active ? '重新应用' : '应用'),
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null, onClick: function () { setApplyConfirm({ id: p.id, remove: true }) } }, '删除'))))
+                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { openEdit(p) } }, t('agm.btn.edit')),
+                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: function () { setApplyConfirm({ id: p.id }) }, title: t('agm.apply.hint') }, p.fileApplied ? t('agm.btn.reapply') : t('agm.btn.apply')),
+                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || p.active === true, title: p.active === true ? t('agm.btn.delete.blocked') : '', onClick: function () { setApplyConfirm({ id: p.id, remove: true }) } }, t('agm.btn.delete')))))
                   }))
 
           return React.createElement('section', { className: 'dsm-section' },
@@ -1099,34 +1467,55 @@ window.__ModuleLoader__.load({
               React.createElement('div', { className: 'dsm-title-block' },
                 React.createElement('div', { className: 'dsm-title-row' },
                   React.createElement('h2', { className: 'dsm-title' }, t('tabs.prompts')),
-                  React.createElement(VersionBadge, null)),
-                React.createElement('p', { className: 'dsm-desc' }, t('prompts.desc'))),
+                  VersionBadgeComponent ? React.createElement(VersionBadgeComponent, null) : null),
+                React.createElement('p', { className: 'dsm-desc' }, t('prompts.desc')),
+                // 当前基线：场景启用并绑了预设时，这里显示的就是**场景绑的那份**（用户裁定）。
+                React.createElement('p', { className: 'dsm-help' }, t('agm.current.label', { label: curLabel }))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setCreateModal({ id: '', from: '', error: null }) } }, '新建预设'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null, onClick: function () { if (importInput.current) importInput.current.click() } }, '导入'))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setCreateModal({ id: '', from: '', content: '', error: null }) } }, t('agm.btn.new')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null, onClick: function () { if (importInput.current) importInput.current.click() } }, t('agm.btn.import')))),
             body,
-            editModal ? React.createElement(Modal, { title: '编辑预设 · ' + editModal.id, closeLabel: '取消', onClose: function () { setEditModal(null) } },
-              React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', value: editModal.content, onChange: function (e) { setEditModal(Object.assign({}, editModal, { content: e.target.value })) } }),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null, onClick: doUpdate }, '保存'))) : null,
-            createModal ? React.createElement(Modal, { title: '新建预设', closeLabel: '取消', onClose: function () { setCreateModal(null) } },
+            state.notice ? React.createElement(Notice, { kind: 'ok', text: state.notice }) : null,
+            // 编辑：id 与内容都可改（改 id = 目录改名，场景绑定由宿主一起改名）。
+            editModal ? React.createElement(Modal, { title: t('agm.edit.title') + ' · ' + editModal.id, closeLabel: t('btn.cancel'), onClose: function () { setEditModal(null) } },
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, 'id（小写字母/数字/连字符）'),
-                React.createElement('input', { className: 'dsm-control', value: createModal.id, onChange: function (e) { setCreateModal(Object.assign({}, createModal, { id: e.target.value })) } })),
+                React.createElement('label', { className: 'dsm-label' }, t('agm.field.id')),
+                React.createElement('input', { className: 'dsm-control', value: editModal.nextId || '', onChange: function (e) { setEditModal(Object.assign({}, editModal, { nextId: e.target.value, error: null })) } }),
+                React.createElement('p', { className: 'dsm-help' }, t('agm.field.id.hint'))),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, '从现有预设复制（可选，留空=空白模板）'),
-                React.createElement('input', { className: 'dsm-control', value: createModal.from, onChange: function (e) { setCreateModal(Object.assign({}, createModal, { from: e.target.value })) } })),
-              createModal && createModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, createModal.error) : null,
+                React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
+                React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', value: editModal.content, onChange: function (e) { setEditModal(Object.assign({}, editModal, { content: e.target.value })) } })),
+              editModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, editModal.error) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null, onClick: function () { doCreate(createModal.id, createModal.from) } }, '创建'))) : null,
-            applyConfirm ? React.createElement(Modal, { title: applyConfirm.remove ? ('删除预设 · ' + applyConfirm.id) : ('应用预设 · ' + applyConfirm.id), closeLabel: '取消', onClose: function () { setApplyConfirm(null) } },
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(editModal.nextId || '').trim(), onClick: doUpdate }, t('agm.btn.save')))) : null,
+            // 新建：id + **正文文本框**（用户直接写内容）；「从现有预设复制」是可选下拉，
+            // 选中后把那份正文填进文本框，仍可继续改——不再是容易被当成搜索框的文本输入。
+            createModal ? React.createElement(Modal, { title: t('agm.btn.new'), closeLabel: t('btn.cancel'), onClose: function () { setCreateModal(null) } },
+              React.createElement('div', { className: 'dsm-field' },
+                React.createElement('label', { className: 'dsm-label' }, t('agm.field.id')),
+                React.createElement('input', { className: 'dsm-control', placeholder: t('agm.field.id.placeholder'), value: createModal.id, onChange: function (e) { setCreateModal(Object.assign({}, createModal, { id: e.target.value, error: null })) } }),
+                React.createElement('p', { className: 'dsm-help' }, t('agm.field.id.hint'))),
+              (state.presets || []).length ? React.createElement('div', { className: 'dsm-field' },
+                React.createElement('label', { className: 'dsm-label' }, t('agm.field.copyFrom')),
+                React.createElement(SourceSelect, {
+                  options: [{ value: '', label: t('agm.field.copyFrom.none') }].concat((state.presets || []).map(function (p) { return { value: p.id, label: p.id } })),
+                  value: createModal.from || '',
+                  onChange: function (v) { loadFromPreset('create', v) },
+                })) : null,
+              React.createElement('div', { className: 'dsm-field' },
+                React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
+                React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', placeholder: t('agm.field.content.placeholder'), value: createModal.content || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { content: e.target.value })) } })),
+              createModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, createModal.error) : null,
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(createModal.id || '').trim(), onClick: function () { doCreate(createModal.id, createModal.from, createModal.content) } }, t('agm.btn.create')))) : null,
+            applyConfirm ? React.createElement(Modal, { title: applyConfirm.remove ? (t('agm.remove.title') + ' · ' + applyConfirm.id) : (t('agm.applyModal.title') + ' · ' + applyConfirm.id), closeLabel: t('btn.cancel'), onClose: function () { setApplyConfirm(null) } },
               applyConfirm.remove
-                ? React.createElement('p', { className: 'dsm-help' }, '删除预设 ' + applyConfirm.id + ' ？此操作不可恢复。')
+                ? React.createElement('p', { className: 'dsm-help' }, t('agm.remove.title') + ' ' + applyConfirm.id + t('agm.remove.suffix'))
                 : React.createElement('div', null,
-                    React.createElement('p', { className: 'dsm-help' }, '将把 ' + applyConfirm.id + ' 的内容写入 ~/.dsh/AGENTS.md。'),
-                    React.createElement('div', { className: 'dsm-feedback dsm-warning' }, '新会话生效；当前内容已备份到 __last-applied__')),
+                    React.createElement('p', { className: 'dsm-help' }, t('agm.apply.prefix') + applyConfirm.id + t('agm.apply.suffix')),
+                    React.createElement('div', { className: 'dsm-feedback dsm-warning' }, t('agm.apply.note'))),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn ' + (applyConfirm.remove ? 'dsm-btn-danger' : ''), disabled: busy !== null, onClick: function () { if (applyConfirm.remove) doRemove({ id: applyConfirm.id }); else doApply(applyConfirm.id) } }, applyConfirm.remove ? '确认删除' : '确认应用'))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn ' + (applyConfirm.remove ? 'dsm-btn-danger' : ''), disabled: busy !== null, onClick: function () { if (applyConfirm.remove) doRemove({ id: applyConfirm.id }); else doApply(applyConfirm.id) } }, applyConfirm.remove ? t('agm.btn.confirmRemove') : t('agm.btn.confirmApply')))) : null,
             React.createElement('input', { ref: importInput, type: 'file', accept: '.md,.markdown,.txt', className: 'dsm-hidden-input', onChange: function (e) { if (e.target.files && e.target.files[0]) doImport(e.target.files[0]); e.target.value = ''; } }))
         }
 
@@ -1134,27 +1523,40 @@ window.__ModuleLoader__.load({
         function ToolsSection() {
           var tabState = React.useState('scenes')
           var active = tabState[0], setActive = tabState[1]
+          var sectionRef = React.useRef(null)
+          React.useEffect(function () {
+            // 设置宿主的真正滚动容器，而不是 body：不同页签内容高度不同，
+            // 让滚动条按需出现会改变 options 宽度，页签/GitHub 随之左右跳动。
+            var section = sectionRef.current
+            var host = section && section.parentElement && section.parentElement.parentElement
+            if (!host) return undefined
+            host.classList.add('dsm-settings-scroll-host')
+            return function () { host.classList.remove('dsm-settings-scroll-host') }
+          }, [])
           var page = active === 'scenes' ? React.createElement(ScenesPage)
             : active === 'mcp' ? React.createElement(MCPPage)
             : active === 'skills' ? React.createElement(SkillManagerSection, { t: t })
             : active === 'subagents' ? React.createElement(SubagentsPage)
             : active === 'prompts' ? React.createElement(AgentsMdPage)
             : active === 'memory' ? React.createElement(MemoryPage)
+            : active === 'compat' ? React.createElement(CompatPage, { t: t })
             : React.createElement(HistoryPage)
-          return React.createElement('section', { className: 'dsm-section' },
-            React.createElement('div', { className: 'dsm-tabs' },
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'scenes' ? ' dsm-tab-active' : ''), onClick: function () { setActive('scenes') } }, t('tabs.scenes')),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'mcp' ? ' dsm-tab-active' : ''), onClick: function () { setActive('mcp') } }, 'MCP'),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'skills' ? ' dsm-tab-active' : ''), onClick: function () { setActive('skills') } }, t('tabs.skills')),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'subagents' ? ' dsm-tab-active' : ''), onClick: function () { setActive('subagents') } }, t('tabs.subagents')),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'prompts' ? ' dsm-tab-active' : ''), onClick: function () { setActive('prompts') } }, t('tabs.prompts')),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'memory' ? ' dsm-tab-active' : ''), onClick: function () { setActive('memory') } }, t('tabs.memory')),
-              React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'sessions' ? ' dsm-tab-active' : ''), onClick: function () { setActive('sessions') } }, t('tabs.sessions')),
-              React.createElement('div', { className: 'dsm-tabs-end' }, React.createElement(FeedbackLinks, null))),
+          return React.createElement('section', { ref: sectionRef, className: 'dsm-section' },
+            React.createElement('div', { className: 'dsm-tabs-shell' },
+              React.createElement('div', { className: 'dsm-tabs' },
+                React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'scenes' ? ' dsm-tab-active' : ''), onClick: function () { setActive('scenes') } }, t('tabs.scenes')),
+                React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'mcp' ? ' dsm-tab-active' : ''), onClick: function () { setActive('mcp') } }, 'MCP'),
+                React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'skills' ? ' dsm-tab-active' : ''), onClick: function () { setActive('skills') } }, t('tabs.skills')),
+                React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'subagents' ? ' dsm-tab-active' : ''), onClick: function () { setActive('subagents') } }, t('tabs.subagents')),
+                React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'prompts' ? ' dsm-tab-active' : ''), onClick: function () { setActive('prompts') } }, t('tabs.prompts')),
+                React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'memory' ? ' dsm-tab-active' : ''), onClick: function () { setActive('memory') } }, t('tabs.memory')),
+                React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'sessions' ? ' dsm-tab-active' : ''), onClick: function () { setActive('sessions') } }, t('tabs.sessions')),
+                React.createElement('button', { type: 'button', className: 'dsm-tab' + (active === 'compat' ? ' dsm-tab-active' : ''), onClick: function () { setActive('compat') } }, t('tabs.compat'))),
+              React.createElement(FeedbackLinks, null)),
             page)
         }
         slots.inject('settings.section', () => slots.register(
-          { name: 'settings.section', id: 'dsm-tools', order: 16, label: '工具' },
+          { name: 'settings.section', id: 'dsm-tools', order: 16, label: function () { return t('nav.title') }, locale: NS },
           () => React.createElement(ToolsSection)
         ))
 
@@ -1390,7 +1792,6 @@ function callApi(path, options) {
             files.length ? h("div", { className: "dsm-help" }, t("import.selected", { count: files.length })) : null),
           h("input", { ref: ref, type: "file", multiple: true, accept: ".md,.zip", className: "dsm-hidden-input", onChange: function (e) { add(e.target.files); e.target.value = "" } })),
         h("div", { className: "dsm-modal-actions" },
-          h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: props.busy, onClick: props.onClose }, t("btn.cancel")),
           files.length ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: props.busy, onClick: function () { setFiles([]) } }, t("import.clear")) : null,
           h("button", { type: "button", className: "dsm-btn dsm-btn-primary", disabled: props.busy || !files.length, onClick: function () { props.onSubmit(files) } }, props.busy ? t("upload.importing") : t("import.submit"))))
     }
@@ -1431,7 +1832,6 @@ function callApi(path, options) {
               : h("div", { className: "dsm-empty" }, '（当前目录没有子文件夹）')),
           h("div", { className: "dsm-modal-actions" },
             h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: st.loading || !st.parent, onClick: goUp }, '上级'),
-            h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: props.onClose }, '取消'),
             h("button", { type: "button", className: "dsm-btn", disabled: st.loading || !(String(st.current || '').trim() || String(text || '').trim()), onClick: pick }, '选择此文件夹'))))
     }
 
@@ -1493,7 +1893,20 @@ function callApi(path, options) {
         return "dsh";
       }
       function openCreate() { setForm(Object.assign({}, form, { root: defaultCreateRoot() })); setModal("create"); }
-      function trashRootLabel(item) { return item.root && item.root.scope === "project" ? t("root.projectDsh") + " · " + (item.root.projectName || item.root.projectRoot) : t("root.dsh"); }
+      // 项目作用域的来源不一定带 projectName / projectRoot（hub「导入技能」就没有），
+      // 旧实现直接拼字符串会把字面量 "undefined" 显示到回收站里。
+      function trashRootLabel(item) {
+        var root = (item && item.root) || {};
+        // 用户级可写来源不止 dsh（hub 也能删，而且是「导入技能」页删除的主战场）：
+        // 走和来源卡片同一套显示名解析，别把 hub 的条目显示成「DSH 技能」。
+        if (root.scope !== "project") return rootDisplayName(t, root) || t("root.dsh");
+        var owner = root.projectName || root.projectRoot || "";
+        if (!owner) {
+          var byKey = root.localeKey || root.key;
+          owner = (byKey ? translateOrFallback(t, "root." + byKey, "") : "") || root.label || "";
+        }
+        return owner ? t("root.projectDsh") + " · " + owner : t("root.projectDsh");
+      }
       var options = [{ value: "", label: t("filter.all") }].concat(roots.map(function (root) { return { value: root.key, label: t("filter.option", { name: rootDisplayName(t, root), count: root.count == null ? root.skills.length : root.count }) }; }));
 
       // 同名技能：默认按来源优先级取一个生效，其余显示为「被覆盖」。
@@ -1523,13 +1936,13 @@ function callApi(path, options) {
         if (activeSource && activeSource !== root.key) return null;
         var displayName = rootDisplayName(t, root), filtered = root.skills.filter(function (skill) { return matchSkillQuery(Object.assign({}, skill, { rootKey: root.key, rootLabel: displayName }), query); }); if (query && !filtered.length) return null; var open = !!expanded[root.key] || !!query;
         var rootCount = root.count == null ? root.skills.length : root.count;
-        return h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !open })); } }, h("span", { className: "dsm-source-title" }, displayName), h("span", { className: "dsm-count" }, t(countKey("summary.group", rootCount), { count: rootCount })), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.key === "dsh" ? "" : root.enabled ? "dsm-tag-on" : "dsm-tag-off") }, root.scope === "project" ? t("status.project") : root.key === "dsh" ? t("status.manageable") : t(root.enabled ? "status.source.on" : "status.source.off")), root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), root.scope !== "project" && root.key !== "dsh" && root.toggleable !== false ? h("span", { className: "dsm-source-actions" }, root.removable === true ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy, title: t("btn.source.remove.title"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, t("btn.source.remove")) : null, h(Switch, { on: root.enabled, disabled: busy, label: t("source.toggle") + " " + displayName, onClick: function () { post(root.enabled ? "/source-disable" : "/source-enable", { root: root.key }); } })) : null), open ? h("div", { className: "dsm-source-body" }, filtered.length ? h(react.Fragment, null, h("div", { className: "dsm-table-head" }, h("span", null, t("table.skill")), h("span", null, t("filter.source")), h("span", null, t("table.status")), h("span", null, "")), filtered.map(function (skill) { return renderSkill(root, skill); })) : h("div", { className: "dsm-empty" }, query ? t("empty.search") : t("empty.source"))) : null);
+        return h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !open })); } }, h("span", { className: "dsm-source-title" }, displayName), h("span", { className: "dsm-count" }, t(countKey("summary.group", rootCount), { count: rootCount })), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.defaultSource === true ? "" : root.enabled ? "dsm-tag-on" : "dsm-tag-off") }, root.scope === "project" ? t("status.project") : root.defaultSource === true ? t("status.manageable") : t(root.enabled ? "status.source.on" : "status.source.off")), root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), root.scope !== "project" && root.defaultSource !== true && root.toggleable !== false ? h("span", { className: "dsm-source-actions" }, root.removable === true ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy, title: t("btn.source.remove.title"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, t("btn.source.remove")) : null, h(Switch, { on: root.enabled, disabled: busy, label: t("source.toggle") + " " + displayName, onClick: function () { post(root.enabled ? "/source-disable" : "/source-enable", { root: root.key }); } })) : null), open ? h("div", { className: "dsm-source-body" }, filtered.length ? h(react.Fragment, null, h("div", { className: "dsm-table-head" }, h("span", null, t("table.skill")), h("span", null, t("filter.source")), h("span", null, t("table.status")), h("span", null, "")), filtered.map(function (skill) { return renderSkill(root, skill); })) : h("div", { className: "dsm-empty" }, query ? t("empty.search") : t("empty.source"))) : null);
       }
 
       var summary = data.summary || { total: 0, enabled: 0, disabled: 0, issues: 0 };
-      var content = [h("style", { key: "css" }, CSS), h("div", { key: "head", className: "dsm-head" }, h("div", { className: "dsm-title-block" }, h("div", { className: "dsm-title-row" }, h("h2", { className: "dsm-title" }, t("title")), h(VersionBadge, null)), h("p", { className: "dsm-desc" }, t("desc"))), h("div", { className: "dsm-actions" }, h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy || snapshot.loading, onClick: function () { refresh(false); } }, t("btn.refresh")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: openCreate }, t("btn.create")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setResult(null); setUpload(null); setModal("import"); } }, t("btn.import")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setCustomForm({ path: "", label: "" }); setModal("custom-add"); } }, t("btn.custom.add")))), h("div", { key: "summary", className: "dsm-summary dsm-summary-3" }, [[summary.total, "summary.total"], [summary.enabled, "summary.enabled"], [summary.disabled, "summary.disabled"]].map(function (item) { return h("div", { key: item[1], className: "dsm-stat" }, h("strong", null, item[0]), t(countKey(item[1], item[0]), { count: item[0] }).replace(String(item[0]), "")); })), h("div", { key: "filters", className: "dsm-filters" }, h("input", { className: "dsm-control dsm-search", value: query, "aria-label": t("search"), placeholder: t("search.placeholder"), onChange: function (e) { setQuery(e.target.value); } }), h("div", { className: "dsm-source-filter" }, h(SourceSelect, { value: activeSource, options: options, onChange: setSource }))), result && modal !== "import" ? h(Notice, { key: "result", kind: result.warning ? "warn" : result.ok ? "ok" : "err", text: result.text }) : null].concat((data.warnings || []).map(function (warning, index) { return h(Notice, { key: "warning-" + index, kind: "warn", text: translateError(t, warning) }); }), [snapshot.error ? h(Notice, { key: "error", kind: "err", text: snapshot.error }) : null, snapshot.loading && !snapshot.data ? h("div", { key: "loading", className: "dsm-empty" }, t("loading")) : h("div", { key: "sources", className: "dsm-sources" }, roots.map(renderRoot)),removedRoots.length ? h("section", { key: "removed-sources", className: "dsm-source dsm-source-removed" }, h("div", { className: "dsm-source-head" }, h("div", { className: "dsm-source-head-main" }, h("span", { className: "dsm-source-title" }, t("removed.title")), h("span", { className: "dsm-count" }, t("removed.count", { count: removedRoots.length })), h("span", { className: "dsm-note" }, t("removed.hint")))), h("div", { className: "dsm-source-body" }, removedRoots.map(function (root) {  var name = rootDisplayName(t, root);  return h("div", { key: root.key, className: "dsm-row" },   h("div", { className: "dsm-main" },    h("div", { className: "dsm-name" }, name),    h("div", { className: "dsm-note", title: root.path }, root.path)),   h("div", { className: "dsm-row-actions" },    h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy, onClick: function () { post("/source-restore", { root: root.key }, "result.sourceRestored", { name: name }); } }, t("btn.source.restore")))); }))) : null, h("button", { key: "trash", type: "button", className: "dsm-trash-row", onClick: function () { setModal("trash"); } }, h("span", null, t("trash.title")), h("span", { className: "dsm-trash-count" }, (data.trash || []).length))]);
+      var content = [h("style", { key: "css" }, CSS), h("div", { key: "head", className: "dsm-head" }, h("div", { className: "dsm-title-block" }, h("div", { className: "dsm-title-row" }, h("h2", { className: "dsm-title" }, t("title")), h(VersionBadgeComponent, null)), h("p", { className: "dsm-desc" }, t("desc"))), h("div", { className: "dsm-actions" }, h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy || snapshot.loading, onClick: function () { refresh(false); } }, t("btn.refresh")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: openCreate }, t("btn.create")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setResult(null); setUpload(null); setModal("import"); } }, t("btn.import")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setCustomForm({ path: "", label: "" }); setModal("custom-add"); } }, t("btn.custom.add")))), h("div", { key: "summary", className: "dsm-summary dsm-summary-3" }, [[summary.total, "summary.total"], [summary.enabled, "summary.enabled"], [summary.disabled, "summary.disabled"]].map(function (item) { return h("div", { key: item[1], className: "dsm-stat" }, h("strong", null, item[0]), t(countKey(item[1], item[0]), { count: item[0] }).replace(String(item[0]), "")); })), h("div", { key: "filters", className: "dsm-filters" }, h("input", { className: "dsm-control dsm-search", value: query, "aria-label": t("search"), placeholder: t("search.placeholder"), onChange: function (e) { setQuery(e.target.value); } }), h("div", { className: "dsm-source-filter" }, h(SourceSelect, { value: activeSource, options: options, onChange: setSource }))), result && modal !== "import" ? h(Notice, { key: "result", kind: result.warning ? "warn" : result.ok ? "ok" : "err", text: result.text }) : null].concat((data.warnings || []).map(function (warning, index) { return h(Notice, { key: "warning-" + index, kind: "warn", text: translateError(t, warning) }); }), [snapshot.error ? h(Notice, { key: "error", kind: "err", text: snapshot.error }) : null, snapshot.loading && !snapshot.data ? h("div", { key: "loading", className: "dsm-empty" }, t("loading")) : h("div", { key: "sources", className: "dsm-sources" }, roots.map(renderRoot)),removedRoots.length ? h("section", { key: "removed-sources", className: "dsm-source dsm-source-removed" }, h("div", { className: "dsm-source-head" }, h("div", { className: "dsm-source-head-main" }, h("span", { className: "dsm-source-title" }, t("removed.title")), h("span", { className: "dsm-count" }, t("removed.count", { count: removedRoots.length })), h("span", { className: "dsm-note" }, t("removed.hint")))), h("div", { className: "dsm-source-body" }, removedRoots.map(function (root) {  var name = rootDisplayName(t, root);  return h("div", { key: root.key, className: "dsm-row" },   h("div", { className: "dsm-main" },    h("div", { className: "dsm-name" }, name),    h("div", { className: "dsm-note", title: root.path }, root.path)),   h("div", { className: "dsm-row-actions" },    h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy, onClick: function () { post("/source-restore", { root: root.key }, "result.sourceRestored", { name: name }); } }, t("btn.source.restore")))); }))) : null, h("button", { key: "trash", type: "button", className: "dsm-trash-row", onClick: function () { setModal("trash"); } }, h("span", null, t("trash.title")), h("span", { className: "dsm-trash-count" }, (data.trash || []).length))]);
 
-      if (modal === "create") content.push(h(Modal, { key: "create", title: t("create.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("div", { className: "dsm-form" }, h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("create.target")), h(SourceSelect, { value: form.root, options: createOptions, onChange: function (value) { updateForm("root", value); } })), [["name", "create.name", "create.name.placeholder"], ["description", "create.description", "create.description.placeholder"]].map(function (field) { return h("label", { key: field[0], className: "dsm-field" }, h("span", { className: "dsm-label" }, t(field[1])), h("input", { className: "dsm-control", value: form[field[0]], placeholder: t(field[2]), onChange: function (e) { updateForm(field[0], e.target.value); } })); }), h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("create.body")), h("textarea", { className: "dsm-control", value: form.body, placeholder: t("create.body.placeholder"), onChange: function (e) { updateForm("body", e.target.value); } })), h("p", { className: "dsm-help" }, t("create.chat.note"))), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal(null); } }, t("btn.cancel")), h("button", { className: "dsm-btn", disabled: busy || !form.name.trim() || !form.description.trim() || !form.body.trim(), onClick: submitCreate }, t("btn.create.now")))));
+      if (modal === "create") content.push(h(Modal, { key: "create", title: t("create.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("div", { className: "dsm-form" }, h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("create.target")), h(SourceSelect, { value: form.root, options: createOptions, onChange: function (value) { updateForm("root", value); } })), [["name", "create.name", "create.name.placeholder"], ["description", "create.description", "create.description.placeholder"]].map(function (field) { return h("label", { key: field[0], className: "dsm-field" }, h("span", { className: "dsm-label" }, t(field[1])), h("input", { className: "dsm-control", value: form[field[0]], placeholder: t(field[2]), onChange: function (e) { updateForm(field[0], e.target.value); } })); }), h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("create.body")), h("textarea", { className: "dsm-control", value: form.body, placeholder: t("create.body.placeholder"), onChange: function (e) { updateForm("body", e.target.value); } })), h("p", { className: "dsm-help" }, t("create.chat.note"))), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn", disabled: busy || !form.name.trim() || !form.description.trim() || !form.body.trim(), onClick: submitCreate }, t("btn.create.now")))));
       if (modal === "import") content.push(h(Modal, { key: "import", className: "dsm-modal-import", title: t("import.title"), closeLabel: t("btn.close"), onClose: function () { pickerOpenRef.current = false; setUpload(null); setResult(null); setModal(null); } },
         h("input", { ref: importInputRef, className: "dsm-hidden-input", type: "file", accept: ".zip,.md", onChange: function (event) { selectUploadFiles(event.target.files); event.target.value = ""; } }),
         h("input", { ref: folderInputRef, className: "dsm-hidden-input", type: "file", multiple: true, webkitdirectory: "", directory: "", onChange: function (event) { selectUploadFiles(event.target.files); event.target.value = ""; } }),
@@ -1539,36 +1952,25 @@ function callApi(path, options) {
         upload ? h("div", { className: "dsm-file", title: upload.name }, h("span", { className: "dsm-file-kind", "aria-hidden": "true" }, upload.kind === "zip" ? "ZIP" : upload.kind === "folder" ? "DIR" : "MD"), h("span", { className: "dsm-file-name" }, upload.name), h("span", { className: "dsm-file-meta" }, t(countKey("upload.selected", upload.count), { count: upload.count, size: upload.size < 1024 ? upload.size + " B" : Math.ceil(upload.size / 1024) + " KB" })), h("button", { type: "button", className: "dsm-file-remove", "aria-label": t("upload.remove"), onClick: function () { setUpload(null); } }, "×")) : null,
         result ? h("div", { className: "dsm-feedback" + (result.warning ? " dsm-warning" : result.ok ? "" : " dsm-error"), role: "alert" }, result.text) : null,
         h("div", { className: "dsm-upload-requirements" }, h("div", { className: "dsm-label" }, t("upload.requirements")), h("ul", null, h("li", null, t("upload.requirement.skill")), h("li", null, t("upload.requirement.frontmatter")), h("li", null, t("upload.requirement.copy")))),
-        h("div", { className: "dsm-modal-actions" }, h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { pickerOpenRef.current = false; setUpload(null); setResult(null); setModal(null); } }, t("btn.cancel")), h("button", { type: "button", className: "dsm-btn", disabled: busy || !upload, onClick: submitImport }, busy ? t("upload.importing") : t("btn.import.now")))
+        h("div", { className: "dsm-modal-actions" }, h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { openNativePicker(folderInputRef); } }, t("btn.folder.pick")), h("button", { type: "button", className: "dsm-btn", disabled: busy || !upload, onClick: submitImport }, busy ? t("upload.importing") : t("btn.import.now")))
       ));      if (modal === "detail") content.push(h(Modal, { key: "detail", wide: true, title: t("detail.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, detail ? h(react.Fragment, null, h("div", { className: "dsm-detail-path" }, detail.path), h("div", { className: "dsm-modal-actions" }, h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: openSource }, t("btn.open.editor"))), h("div", { className: "dsm-detail-section" }, h("div", { className: "dsm-detail-title" }, t("detail.diagnostics")), detail.diagnostics.length ? detail.diagnostics.map(function (item, index) { return h("div", { key: index, className: "dsm-diag" }, t(item.code, item.params || {})); }) : h("div", { className: "dsm-note" }, t("detail.noIssues"))), h("div", { className: "dsm-detail-section" }, h("div", { className: "dsm-detail-title" }, t("detail.frontmatter")), renderFrontmatter(t, detail.frontmatter)), h("div", { className: "dsm-detail-section" }, h("div", { className: "dsm-detail-title" }, t("detail.body")), h("pre", { className: "dsm-code" }, detail.body || ""))) : h("div", { className: "dsm-empty" }, t("loading"))));
       if (modal === "trash") content.push(h(Modal, { key: "trash-modal", title: t("trash.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("div", { className: "dsm-count" }, t(countKey("trash.count", data.trash.length), { count: data.trash.length })), data.trash.length ? data.trash.map(function (item) { return h("div", { key: item.id, className: "dsm-trash-item" }, h("div", { className: "dsm-trash-main" }, h("div", { className: "dsm-name" }, item.name), h("div", { className: "dsm-note" }, t("trash.deletedAt", { time: new Date(item.deletedAt).toLocaleString() }) + " · " + t("trash.source", { source: trashRootLabel(item) }))), h("button", { className: "dsm-btn dsm-btn-quiet", disabled: busy, onClick: function () { post("/trash-restore", { id: item.id }, "result.restored", { name: item.name }); } }, t("btn.restore")), h("button", { className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy, onClick: function () { setModal({ type: "delete-confirm", id: item.id, name: item.name }); } }, t("btn.delete.forever"))); }) : h("div", { className: "dsm-empty" }, t("trash.empty"))));
-      if (modal && modal.type === "trash-confirm") content.push(h(Modal, { key: "trash-confirm", title: t("confirm.trash.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.trash.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal(null); } }, t("btn.cancel")), h("button", { className: "dsm-btn", disabled: busy, onClick: function () { post("/delete", { root: modal.root, name: modal.name }, "result.trashed", { name: modal.name }).then(function () { setModal(null); }).catch(function () {}); } }, t("btn.trash")))));
-      if (modal && modal.type === "delete-confirm") content.push(h(Modal, { key: "delete-confirm", title: t("confirm.delete.title"), closeLabel: t("btn.close"), onClose: function () { setModal("trash"); } }, h("p", { className: "dsm-desc" }, t("confirm.delete.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal("trash"); } }, t("btn.cancel")), h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { post("/trash-delete", { id: modal.id }, "result.deleted", { name: modal.name }).then(function () { setModal("trash"); }).catch(function () {}); } }, t("btn.delete.forever")))));
-      if (modal === "custom-add") content.push(h(Modal, { key: "custom-add", title: t("custom.add.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("div", { className: "dsm-form" }, h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("custom.add.path")), h("div", { className: "dsm-dir-row" }, h("input", { className: "dsm-control", value: customForm.path, placeholder: t("custom.add.path.placeholder"), onChange: function (e) { setCustomForm(Object.assign({}, customForm, { path: e.target.value })); } }), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: openCustomDir, title: t("custom.add.openDir.title") }, t("btn.openDir")))), h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("custom.add.label")), h("input", { className: "dsm-control", value: customForm.label, placeholder: t("custom.add.label.placeholder"), onChange: function (e) { setCustomForm(Object.assign({}, customForm, { label: e.target.value })); } })), h("p", { className: "dsm-help" }, t("custom.add.help")), result ? h("div", { className: "dsm-feedback" + (result.warning ? " dsm-warning" : result.ok ? "" : " dsm-error"), role: "alert" }, result.text) : null), customForm.picking ? h(DirPickerModal, { key: "custom-dir-picker", title: t("custom.add.picker.title"), initial: String(customForm.path || ""), closeLabel: t("btn.close"), onClose: function () { setCustomForm(Object.assign({}, customForm, { picking: false })); }, onPick: function (path) { setCustomForm(Object.assign({}, customForm, { path: path, picking: false })); } }) : null, h("div", { className: "dsm-modal-actions" }, h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal(null); } }, t("btn.cancel")), h("button", { type: "button", className: "dsm-btn", disabled: busy || !String(customForm.path || "").trim(), onClick: submitCustomAdd }, t("custom.add.submit")))));
-      if (modal && modal.type === "source-remove-confirm") content.push(h(Modal, { key: "source-remove-confirm", title: t("confirm.source.remove.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.source.remove.desc", { name: modal.name })), h("p", { className: "dsm-help" }, t("confirm.source.remove.hint")), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal(null); } }, t("btn.cancel")), h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { post("/source-remove", { root: modal.key }, "result.sourceRemoved", { name: modal.name }).then(function () { setModal(null); }).catch(function () {}); } }, t("btn.source.remove")))));
-      if (modal && modal.type === "custom-remove-confirm") content.push(h(Modal, { key: "custom-remove-confirm", title: t("confirm.custom.remove.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.custom.remove.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal(null); } }, t("btn.cancel")), h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { submitCustomRemove(modal.key, modal.name); } }, t("btn.custom.remove")))));
+      if (modal && modal.type === "trash-confirm") content.push(h(Modal, { key: "trash-confirm", title: t("confirm.trash.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.trash.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn", disabled: busy, onClick: function () { post("/delete", { root: modal.root, name: modal.name }, "result.trashed", { name: modal.name }).then(function () { setModal(null); }).catch(function () {}); } }, t("btn.trash")))));
+      if (modal && modal.type === "delete-confirm") content.push(h(Modal, { key: "delete-confirm", title: t("confirm.delete.title"), closeLabel: t("btn.close"), onClose: function () { setModal("trash"); } }, h("p", { className: "dsm-desc" }, t("confirm.delete.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { post("/trash-delete", { id: modal.id }, "result.deleted", { name: modal.name }).then(function () { setModal("trash"); }).catch(function () {}); } }, t("btn.delete.forever")))));
+      if (modal === "custom-add") content.push(h(Modal, { key: "custom-add", title: t("custom.add.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("div", { className: "dsm-form" }, h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("custom.add.path")), h("div", { className: "dsm-dir-row" }, h("input", { className: "dsm-control", value: customForm.path, placeholder: t("custom.add.path.placeholder"), onChange: function (e) { setCustomForm(Object.assign({}, customForm, { path: e.target.value })); } }), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: openCustomDir, title: t("custom.add.openDir.title") }, t("btn.openDir")))), h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("custom.add.label")), h("input", { className: "dsm-control", value: customForm.label, placeholder: t("custom.add.label.placeholder"), onChange: function (e) { setCustomForm(Object.assign({}, customForm, { label: e.target.value })); } })), h("p", { className: "dsm-help" }, t("custom.add.help")), result ? h("div", { className: "dsm-feedback" + (result.warning ? " dsm-warning" : result.ok ? "" : " dsm-error"), role: "alert" }, result.text) : null), customForm.picking ? h(DirPickerModal, { key: "custom-dir-picker", title: t("custom.add.picker.title"), initial: String(customForm.path || ""), closeLabel: t("btn.close"), onClose: function () { setCustomForm(Object.assign({}, customForm, { picking: false })); }, onPick: function (path) { setCustomForm(Object.assign({}, customForm, { path: path, picking: false })); } }) : null, h("div", { className: "dsm-modal-actions" }, h("button", { type: "button", className: "dsm-btn", disabled: busy || !String(customForm.path || "").trim(), onClick: submitCustomAdd }, t("custom.add.submit")))));
+      if (modal && modal.type === "source-remove-confirm") content.push(h(Modal, { key: "source-remove-confirm", title: t("confirm.source.remove.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.source.remove.desc", { name: modal.name })), h("p", { className: "dsm-help" }, t("confirm.source.remove.hint")), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { post("/source-remove", { root: modal.key }, "result.sourceRemoved", { name: modal.name }).then(function () { setModal(null); }).catch(function () {}); } }, t("btn.source.remove")))));
+      if (modal && modal.type === "custom-remove-confirm") content.push(h(Modal, { key: "custom-remove-confirm", title: t("confirm.custom.remove.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.custom.remove.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { submitCustomRemove(modal.key, modal.name); } }, t("btn.custom.remove")))));
       return h("section", { className: "dsm-section" }, content);
     }
 
-        var NS = 'dsh-plugin-tool-management'
-        var t = function (key, params) {
-          var s = (DICT.zh && DICT.zh[key]) || key
-          if (params) Object.keys(params).forEach(function (k) { s = String(s).replace("{" + k + "}", params[k]) })
-          return s
-        }
-        try {
-          if (ctx.locale && typeof ctx.locale.register === 'function') {
-            ctx.locale.register(NS, DICT)
-            t = ctx.locale.bind(NS)
-          }
-        } catch (e) { /* locale 服务缺失时退回内置词典 */ }
-
+        // NS / t 与 locale 绑定已提到 apply 开头（见上方「取词服务」段）：
+        // 设置页的导航标题是**注册期**取值，晚绑定会让它在英文界面下永远是中文。
         // ---------- History 页（归档会话管理：恢复 / 永久删除 / 保留期）----------
         // 折叠自 dsh-archive-manager 的归档会话设置页，但客户端经本插件 HTTP API
         // 驱动（history-list / -archive / -unarchive / -delete / -retention-*），不依赖
         // ui-workspace 客户端 store 或 typert remote——会话标题由 host 端 best-effort 读取。
         function HistoryPage() {
-          var state = React.useState({ loading: true, items: [], workspaces: {}, retentionDays: 0, error: null })
+          var state = React.useState({ loading: true, items: [], workspaces: {}, groups: [], retentionDays: 0, error: null })
           var data = state[0], setData = state[1]
           var modalState = React.useState(null)
           var modal = modalState[0], setModal = modalState[1]
@@ -1589,12 +1991,15 @@ function callApi(path, options) {
           // 分组卡片折叠状态：key → true（收起）。默认全部展开。
           var collState = React.useState({})
           var collapsed = collState[0], setCollapsed = collState[1]
+          // 操作结果提示（成功/警告一句话），与 MCP 等页共用 Notice 组件。
+          var noticeState = React.useState(null)
+          var notice = noticeState[0], setNotice = noticeState[1]
 
           function refresh() {
             apiCall('history-list', {}).then(function (r) {
               if (r && r.ok) {
                 var items = r.items || []
-                setData({ loading: false, items: items, workspaces: r.workspaces || {}, retentionDays: r.retentionDays || 0, error: null })
+                setData({ loading: false, items: items, workspaces: r.workspaces || {}, groups: r.groups || [], retentionDays: r.retentionDays || 0, error: null })
                 // 裁剪选中集合：已被外部恢复/删除的会话不再计入。
                 setSelected(function (prev) {
                   var has = new Set(items.map(function (it) { return it.sessionId }))
@@ -1602,7 +2007,7 @@ function callApi(path, options) {
                   prev.forEach(function (id) { if (has.has(id)) next.add(id) })
                   return next
                 })
-              } else setData({ loading: false, items: [], workspaces: {}, retentionDays: 0, error: (r && r.error) || '加载失败' })
+              } else setData({ loading: false, items: [], workspaces: {}, groups: [], retentionDays: 0, error: (r && r.error) || t('hist.err.load') })
             })
           }
           React.useEffect(function () { refresh() }, [])
@@ -1619,11 +2024,46 @@ function callApi(path, options) {
             })
           }
 
-          // 按项目分组（host 提供 workspaces 时启用；否则扁平列表）。
-          var grouped = !!(data.workspaces && Object.keys(data.workspaces).length)
+          // 按项目分组：宿主回传 groups（活登记 + 按会话目录重建的分组）时用组 id 归并；
+          // 旧宿主只回 workspaces 时退回原来的扁平/工作区分组逻辑。
+          var groupMeta = new Map()
+          ;(data.groups || []).forEach(function (g) { if (g && g.id) groupMeta.set(g.id, g) })
+          var grouped = groupMeta.size > 0
           var visibleIds = filtered.map(function (it) { return it.sessionId })
           var groups = []
           if (grouped) {
+            var byKey = new Map()
+            filtered.forEach(function (it) {
+              var key = it.groupId || 'ungrouped'
+              if (!byKey.has(key)) byKey.set(key, [])
+              byKey.get(key).push(it)
+            })
+            byKey.forEach(function (items2, key) {
+              var meta = groupMeta.get(key)
+              var wid = key.indexOf('ws:') === 0 ? key.slice(3) : null
+              var wsRec = wid ? data.workspaces[wid] : null
+              var title = (meta && meta.title) || (wid ? ((wsRec && wsRec.title) || wid) : t('hist.ungrouped'))
+              items2.sort(function (a, b) { return ((b.archivedAt || b.createdAt) || 0) - ((a.archivedAt || a.createdAt) || 0) })
+              var maxAt = 0
+              items2.forEach(function (it) { var at = (it.archivedAt || it.createdAt) || 0; if (at > maxAt) maxAt = at })
+              groups.push({
+                key: key, title: title, workspaceId: wid,
+                path: (meta && meta.path) || (wsRec && wsRec.path),
+                kind: meta ? meta.kind : null,
+                registered: !!(meta && meta.registered),
+                canRegister: !!(meta && meta.canRegister),
+                ungrouped: key === 'ungrouped',
+                items: items2, maxAt: maxAt,
+              })
+            })
+            // 组按组内最新时间戳降序；未分组固定最后。
+            groups.sort(function (g1, g2) {
+              if (g1.ungrouped) return 1
+              if (g2.ungrouped) return -1
+              return g2.maxAt - g1.maxAt
+            })
+          } else if (data.workspaces && Object.keys(data.workspaces).length) {
+            grouped = true
             var byWs = new Map()
             filtered.forEach(function (it) {
               var wid = data.workspaces[it.workspaceId] ? it.workspaceId : null
@@ -1634,18 +2074,20 @@ function callApi(path, options) {
             byWs.forEach(function (items2, key) {
               var wid = key === 'ungrouped' ? null : key.slice(3)
               var wsRec = wid ? data.workspaces[wid] : null
-              var title = wid ? ((wsRec && wsRec.title) || wid) : '未分组'
+              var title = wid ? ((wsRec && wsRec.title) || wid) : t('hist.ungrouped')
               items2.sort(function (a, b) { return ((b.archivedAt || b.createdAt) || 0) - ((a.archivedAt || a.createdAt) || 0) })
               var maxAt = 0
               items2.forEach(function (it) { var at = (it.archivedAt || it.createdAt) || 0; if (at > maxAt) maxAt = at })
-              groups.push({ key: key, title: title, workspaceId: wid, path: wsRec && wsRec.path, items: items2, maxAt: maxAt })
+              groups.push({ key: key, title: title, workspaceId: wid, path: wsRec && wsRec.path, kind: null, registered: false, canRegister: false, ungrouped: key === 'ungrouped', items: items2, maxAt: maxAt })
             })
             // 组按组内最新时间戳降序；未分组固定最后。
             groups.sort(function (g1, g2) {
-              if (g1.key === 'ungrouped') return 1
-              if (g2.key === 'ungrouped') return -1
+              if (g1.ungrouped) return 1
+              if (g2.ungrouped) return -1
               return g2.maxAt - g1.maxAt
             })
+          } else {
+            grouped = false
           }
 
           // 「全选」状态：当前过滤结果是否全部选中（按钮文案切换为「取消全选」）。
@@ -1655,20 +2097,41 @@ function callApi(path, options) {
             setBusy(true)
             apiCall('history-unarchive', { sessionId: sessionId }).then(function (r) {
               setBusy(false)
-              if (r && r.ok) refresh(); else setModal({ type: 'error', message: (r && r.error) || '恢复失败' })
+              if (r && r.ok) { setNotice(restoreNotice(r, 1)); refresh() } else setModal({ type: 'error', message: (r && r.error) || t('hist.err.unarchive') })
             })
+          }
+          /**
+           * 恢复归档的归属结果 → 一句话结论。宿主恢复只移出归档集合；登记被删过的情况下
+           * 插件会顺带把工作区重新登记并把会话挂回（`ensureWorkspaceAccounting`），
+           * 这属于写宿主状态，必须如实告诉用户；没有变化时返回 null（不打扰）。
+           */
+          function restoreNotice(res, count) {
+            var ws = res && res.workspace
+            if (!ws) return null
+            var attached = (ws.attached || []).length
+            var createdList = (ws.registered || []).filter(function (item) { return item.created })
+            var skipped = ws.skipped || []
+            var title = (ws.registered && ws.registered[0] && ws.registered[0].title) || ''
+            if (skipped.length) {
+              return { kind: 'warn', text: t('hist.restore.note.skip', { count: skipped.length, reason: String(skipped[0].reason || '') }) }
+            }
+            if (attached && createdList.length) {
+              return { kind: 'ok', text: t('hist.restore.note.registered', { count: attached, title: (createdList[0] && createdList[0].title) || title }) }
+            }
+            if (attached) return { kind: 'ok', text: t('hist.restore.note.attached', { count: attached, title: title }) }
+            return null
           }
           function doDelete(sessionId) {
             setBusy(true)
             apiCall('history-delete', { sessionId: sessionId }).then(function (r) {
               setBusy(false)
-              if (r && r.ok) { setModal(null); refresh() } else setModal({ type: 'error', message: (r && r.error) || '删除失败' })
+              if (r && r.ok) { setModal(null); refresh() } else setModal({ type: 'error', message: (r && r.error) || t('hist.err.delete') })
             })
           }
           function setRetention(days) {
             apiCall('history-retention-set', { retentionDays: days }).then(function (r) {
               if (r && r.ok) setData(Object.assign({}, data, { retentionDays: days }))
-              else setModal({ type: 'error', message: (r && r.error) || '设置失败' })
+              else setModal({ type: 'error', message: (r && r.error) || t('hist.err.retention') })
             })
           }
 
@@ -1706,8 +2169,9 @@ function callApi(path, options) {
               if (r && r.ok) {
                 var gone = new Set(r.unarchivedSessionIds || [])
                 setSelected(function (prev) { var next = new Set(prev); gone.forEach(function (id) { next.delete(id) }); return next })
+                setNotice(restoreNotice(r, gone.size))
                 refresh()
-              } else setModal({ type: 'error', message: (r && r.error) || '恢复失败' })
+              } else setModal({ type: 'error', message: (r && r.error) || t('hist.err.unarchive') })
             })
           }
           function doDeleteBatch() {
@@ -1717,7 +2181,17 @@ function callApi(path, options) {
             apiCall('history-delete-batch', { target: { scope: 'sessions', sessionIds: ids } }).then(function (r) {
               setBusy(false)
               if (r && r.ok) { setModal(null); setSelected(new Set()); refresh() }
-              else setModal({ type: 'error', message: (r && r.error) || '删除失败' })
+              else setModal({ type: 'error', message: (r && r.error) || t('hist.err.delete') })
+            })
+          }
+          // 重新登记工作区：写宿主状态（新增一条登记），因此只走确认弹窗，不静默执行。
+          function doRegisterWorkspace(path) {
+            if (busy) return
+            setBusy(true)
+            apiCall('history-workspace-register', { path: path }).then(function (r) {
+              setBusy(false)
+              if (r && r.ok) { setModal({ type: 'registered', workspace: r.workspace || {} }); refresh() }
+              else setModal({ type: 'error', message: (r && r.error) || t('hist.err.register') })
             })
           }
 
@@ -1736,9 +2210,9 @@ function callApi(path, options) {
                 if (res && res.ok) {
                   setImp(Object.assign({}, snap, { busy: false, result: res }))
                   refresh()
-                } else setImp(Object.assign({}, snap, { busy: false, error: (res && res.error) || '导入失败' }))
+                } else setImp(Object.assign({}, snap, { busy: false, error: (res && res.error) || t('hist.err.import') }))
               }).catch(function () {
-                setImp(Object.assign({}, snap, { busy: false, error: '导入失败' }))
+                setImp(Object.assign({}, snap, { busy: false, error: t('hist.err.import') }))
               })
             }
             reader.readAsText(file)
@@ -1762,12 +2236,12 @@ function callApi(path, options) {
                 if (!prev) return prev
                 return Object.assign({}, prev, {
                   loading: false,
-                  error: (res && res.ok) ? prev.error : ((res && res.error) || '加载会话列表失败'),
+                  error: (res && res.ok) ? prev.error : ((res && res.error) || t('hist.err.sessions')),
                   items: (res && res.ok && Array.isArray(res.items)) ? res.items : prev.items,
                 })
               })
             }).catch(function () {
-              setExp(function (prev) { return prev ? Object.assign({}, prev, { loading: false, error: '加载会话列表失败' }) : prev })
+              setExp(function (prev) { return prev ? Object.assign({}, prev, { loading: false, error: t('hist.err.sessions') }) : prev })
             })
             // 拉取默认导出目录（桌面），仅当用户尚未输入时填充。
             apiCall('history-export-defaults', {}).then(function (res) {
@@ -1798,9 +2272,9 @@ function callApi(path, options) {
             setExp(Object.assign({}, exp, { busy: true, error: null, result: null }))
             apiCall('history-export', { sessionIds: ids, format: exp.format, outDir: String(exp.outDir).trim() }).then(function (res) {
               if (res && res.ok) setExp(Object.assign({}, exp, { busy: false, result: res }))
-              else setExp(Object.assign({}, exp, { busy: false, error: (res && res.error) || '导出失败' }))
+              else setExp(Object.assign({}, exp, { busy: false, error: (res && res.error) || t('hist.err.export') }))
             }).catch(function () {
-              setExp(Object.assign({}, exp, { busy: false, error: '导出失败' }))
+              setExp(Object.assign({}, exp, { busy: false, error: t('hist.err.export') }))
             })
           }
           // 把选中的会话批量归档到 History（纳入保留期管理），随后刷新列表与页面。
@@ -1823,42 +2297,51 @@ function callApi(path, options) {
                   })
                 })
               }
-              setExp(function (prev) { return prev ? Object.assign({}, prev, { busy: false, error: (res && res.error) || '归档失败' }) : prev })
+              setExp(function (prev) { return prev ? Object.assign({}, prev, { busy: false, error: (res && res.error) || t('hist.err.archive') }) : prev })
             }).catch(function () {
-              setExp(function (prev) { return prev ? Object.assign({}, prev, { busy: false, error: '归档失败' }) : prev })
+              setExp(function (prev) { return prev ? Object.assign({}, prev, { busy: false, error: t('hist.err.archive') }) : prev })
             })
           }
 
           var RETENTION_OPTS = [
-            { value: 0, label: '永久保留' },
-            { value: 7, label: '7 天' },
-            { value: 30, label: '30 天' },
+            { value: 0, label: t('hist.retention.forever') },
+            { value: 7, label: t('hist.retention.days', { count: 7 }) },
+            { value: 30, label: t('hist.retention.days', { count: 30 }) },
           ]
           var EXPORT_FORMAT_OPTS = [
             { value: 'markdown', label: 'Markdown' },
             { value: 'jsonl', label: 'JSONL' },
           ]
           var EXPORT_ARCH_OPTS = [
-            { value: 'all', label: '全部会话' },
-            { value: 'archived', label: '仅已归档' },
-            { value: 'live', label: '仅未归档' },
-            { value: 'missing', label: '仅目录丢失' },
+            { value: 'all', label: t('hist.arch.all') },
+            { value: 'archived', label: t('hist.arch.archived') },
+            { value: 'live', label: t('hist.arch.live') },
+            { value: 'missing', label: t('hist.arch.missing') },
           ]
           // 导出弹窗内的工作区筛选选项与候选会话（随弹窗状态/数据刷新重算）。
-          var exportWsOptions = [{ value: '', label: '全部工作区' }]
-          if (exp && data.workspaces) {
+          // 组 id 与列表页同源（活登记 + 按会话目录重建的分组）。
+          var exportWsOptions = [{ value: '', label: t('hist.ws.all') }]
+          if (exp && data.groups && data.groups.length) {
+            data.groups.forEach(function (g) { exportWsOptions.push({ value: g.id, label: g.title }) })
+            exportWsOptions.push({ value: 'ungrouped', label: t('hist.ungrouped') })
+          } else if (exp && data.workspaces) {
             Object.keys(data.workspaces).forEach(function (wid) {
               exportWsOptions.push({ value: 'ws:' + wid, label: (data.workspaces[wid].title || wid) })
             })
-            exportWsOptions.push({ value: 'ungrouped', label: '未分组' })
+            exportWsOptions.push({ value: 'ungrouped', label: t('hist.ungrouped') })
           }
           var exportItems = []
           if (exp) {
+            var useGroups = !!(data.groups && data.groups.length)
             exportItems = (exp.items || []).filter(function (it) {
               if (exp.archFilter === 'archived' && !it.archived) return false
               if (exp.archFilter === 'live' && it.archived) return false
               if (exp.archFilter === 'missing' && !it.cwdMissing) return false
               if (!exp.wsFilter) return true
+              if (useGroups) {
+                if (exp.wsFilter === 'ungrouped') return !it.groupId
+                return it.groupId === exp.wsFilter
+              }
               if (exp.wsFilter === 'ungrouped') return !it.workspaceId || !data.workspaces[it.workspaceId]
               var wid = exp.wsFilter.slice(3)
               return it.workspaceId === wid && !!data.workspaces[wid]
@@ -1872,8 +2355,8 @@ function callApi(path, options) {
                 React.createElement('div', { className: 'dsm-hist-title' }, it.title || ('Session ' + shortId(it.sessionId))),
                 it.cwd ? React.createElement('div', { className: 'dsm-hist-cwd', title: it.cwd }, it.cwd) : null),
               React.createElement('div', { className: 'dsm-hist-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { doUnarchive(it.sessionId) } }, '恢复'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'delete', sessionId: it.sessionId, title: it.title || ('Session ' + shortId(it.sessionId)) }) } }, '永久删除')))
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { doUnarchive(it.sessionId) } }, t('hist.btn.restore')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'delete', sessionId: it.sessionId, title: it.title || ('Session ' + shortId(it.sessionId)) }) } }, t('hist.btn.purge'))))
           }
 
           // 分组卡片：dsm-source 卡片 + 可折叠表头（与 MCP / Skills 页一致的源卡片语言）。
@@ -1888,12 +2371,18 @@ function callApi(path, options) {
             var groupIds = g.items.map(function (it) { return it.sessionId })
             var allChecked = groupIds.length > 0 && groupIds.every(function (id) { return selected.has(id) })
             var open = !collapsed[g.key]
+            // 重建组（宿主里没有对应登记）：标出「曾登记、已被移除」或「从未登记」，目录仍在则给一键重新登记。
+            var detached = g.kind === 'detached'
             return React.createElement('div', { className: 'dsm-source', key: 'g:' + g.key },
               React.createElement('div', { className: 'dsm-source-head dsm-hist-group-head' },
-                React.createElement('input', { type: 'checkbox', className: 'dsm-hist-group-check', checked: allChecked, onChange: function () { toggleGroup(groupIds) }, 'aria-label': '全选组 ' + g.title }),
+                React.createElement('input', { type: 'checkbox', className: 'dsm-hist-group-check', checked: allChecked, onChange: function () { toggleGroup(groupIds) }, 'aria-label': t('hist.selectGroup', { title: g.title }) }),
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroupCollapse(g.key) } },
                   React.createElement('span', { className: 'dsm-source-title dsm-hist-group-title', title: g.title }, g.title),
-                  React.createElement('span', { className: 'dsm-count' }, g.items.length + ' 个')),
+                  React.createElement('span', { className: 'dsm-count' }, t('hist.group.count', { count: g.items.length }))),
+                detached ? React.createElement('div', { className: 'dsm-hist-group-extra' },
+                  React.createElement('span', { className: 'dsm-tag' + (g.registered ? '' : ' dsm-tag-off'), title: g.registered ? t('hist.group.removed.hint') : t('hist.group.unregistered.hint') },
+                    g.registered ? t('hist.group.removed') : t('hist.group.unregistered')),
+                  g.canRegister ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, title: t('hist.btn.registerWs.hint'), onClick: function () { setModal({ type: 'register', path: g.path, title: g.title }) } }, t('hist.btn.registerWs')) : null) : null,
                 g.path ? React.createElement('span', { className: 'dsm-path', title: g.path }, g.path) : null),
               open ? React.createElement('div', { className: 'dsm-source-body' }, g.items.map(renderRow)) : null)
           }
@@ -1903,98 +2392,108 @@ function callApi(path, options) {
               React.createElement('div', { className: 'dsm-title-block' },
                 React.createElement('div', { className: 'dsm-title-row' },
                   React.createElement('h2', { className: 'dsm-title' }, t('tabs.sessions')),
-                  React.createElement(VersionBadge, null)),
+                  VersionBadgeComponent ? React.createElement(VersionBadgeComponent, null) : null),
                 React.createElement('p', { className: 'dsm-desc' }, t('sessions.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !filtered.length, onClick: function () { toggleAllVisible(visibleIds) } }, allVisible ? '取消全选' : '全选'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openImportPicker }, '导入对话'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openExportPicker }, '导出对话'),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !filtered.length, onClick: function () { toggleAllVisible(visibleIds) } }, allVisible ? t('hist.deselectAll') : t('hist.selectAll')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openImportPicker }, t('hist.btn.import')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openExportPicker }, t('hist.btn.export')),
                 selected.size > 0 ? React.createElement('div', { className: 'dsm-hist-batch' },
-                  React.createElement('span', { className: 'dsm-hist-batch-count' }, '已选 ' + selected.size + ' 项'),
+                  React.createElement('span', { className: 'dsm-hist-batch-count' }, t('hist.selected', { count: selected.size })),
                   React.createElement('div', { className: 'dsm-hist-batch-actions' },
-                    React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { doUnarchiveBatch() } }, '恢复所选 (' + selected.size + ')'),
-                    React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'deleteBatch', count: selected.size }) } }, '删除所选 (' + selected.size + ')'))) : null)),
+                    React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { doUnarchiveBatch() } }, t('hist.btn.restoreSelected', { count: selected.size })),
+                    React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'deleteBatch', count: selected.size }) } }, t('hist.btn.deleteSelected', { count: selected.size })))) : null)),
             React.createElement('div', { className: 'dsm-summary dsm-summary-3' },
-              [[data.items.length, '个归档'], [grouped ? groups.length : '—', '个项目'], [selected.size, '个已选']].map(function (item) {
+              [[data.items.length, t('hist.stat.archived')], [grouped ? groups.length : '—', t('hist.stat.projects')], [selected.size, t('hist.stat.selected')]].map(function (item) {
                 return React.createElement('div', { key: item[1], className: 'dsm-stat' },
                   React.createElement('strong', null, item[0]), item[1])
               })),
             React.createElement('div', { className: 'dsm-filters' },
-              React.createElement('input', { className: 'dsm-control dsm-search', type: 'text', placeholder: '搜索标题 / 会话 ID / 项目路径', value: query, onChange: function (e) { setQuery(e.target.value) } }),
+              React.createElement('input', { className: 'dsm-control dsm-search', type: 'text', placeholder: t('hist.search.placeholder'), value: query, onChange: function (e) { setQuery(e.target.value) } }),
               React.createElement('div', { className: 'dsm-source-filter' },
                 React.createElement(SourceSelect, {
                   options: RETENTION_OPTS, value: data.retentionDays, onChange: function (v) { setRetention(Number(v)) },
                 }))),
             data.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
-            data.loading ? React.createElement('div', { className: 'dsm-empty' }, '加载中…')
-              : filtered.length === 0 ? React.createElement('div', { className: 'dsm-empty' }, query ? '无匹配的归档会话' : '暂无归档会话')
+            notice ? React.createElement(Notice, { kind: notice.kind, text: notice.text }) : null,
+            data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('hist.loading'))
+              : filtered.length === 0 ? React.createElement('div', { className: 'dsm-empty' }, query ? t('hist.empty.search') : t('hist.empty.none'))
               : React.createElement('div', { className: 'dsm-sources' },
                 grouped ? groups.map(renderGroup) : React.createElement('div', { className: 'dsm-source' }, filtered.map(renderRow))),
-            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', title: '永久删除？', closeLabel: '取消', onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, '永久删除会话「' + modal.title + '」及其全部记录，不可恢复'),
+            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', title: t('hist.purge.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('hist.purge.one', { title: modal.title })),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, '取消'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { doDelete(modal.sessionId) } }, '确认删除'))) : null,
-            modal && modal.type === 'deleteBatch' ? React.createElement(Modal, { key: 'delb', title: '永久删除？', closeLabel: '取消', onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, '永久删除所选 ' + modal.count + ' 个会话及其全部记录，不可恢复'),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { doDelete(modal.sessionId) } }, t('hist.btn.confirmPurge')))) : null,
+            modal && modal.type === 'deleteBatch' ? React.createElement(Modal, { key: 'delb', title: t('hist.purge.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('hist.purge.batch', { count: modal.count })),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, '取消'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { doDeleteBatch() } }, '确认删除'))) : null,
-            imp ? React.createElement(Modal, { key: 'imp', className: 'dsm-modal-import', title: '导入对话', closeLabel: '关闭', onClose: function () { setImp(null) } },
-              React.createElement('p', { className: 'dsm-help' }, '导入其他 Agent 的对话记录，生成可继续对话的新会话'),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { doDeleteBatch() } }, t('hist.btn.confirmPurge')))) : null,
+            modal && modal.type === 'register' ? React.createElement(Modal, { key: 'reg', title: t('hist.register.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('hist.register.body', { title: modal.title })),
+              React.createElement('p', { className: 'dsm-help dsm-hist-register-path' }, String(modal.path || '')),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy, onClick: function () { doRegisterWorkspace(modal.path) } }, t('hist.register.confirm')))) : null,
+            modal && modal.type === 'registered' ? React.createElement(Modal, { key: 'regdone', title: t('hist.register.done.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('hist.register.done.body', { title: (modal.workspace && modal.workspace.title) || '' })),
+              (modal.workspace && modal.workspace.attached && modal.workspace.attached.length)
+                ? React.createElement('p', { className: 'dsm-help' }, t('hist.register.done.attached', { count: modal.workspace.attached.length }))
+                : null,
+              (modal.workspace && modal.workspace.attachSkipped && modal.workspace.attachSkipped.length)
+                ? React.createElement('p', { className: 'dsm-help dsm-warning' }, t('hist.register.done.skipped', { count: modal.workspace.attachSkipped.length, reason: String(modal.workspace.attachSkipped[0].reason || '') }))
+                : null) : null,
+            imp ? React.createElement(Modal, { key: 'imp', className: 'dsm-modal-import', title: t('hist.btn.import'), closeLabel: t('btn.close'), onClose: function () { setImp(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('hist.import.hint')),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, '项目目录（可留空）'),
-                React.createElement('input', { className: 'dsm-control', type: 'text', placeholder: '绝对路径，可留空（会话归入未分组）', value: imp.cwd || '', onChange: function (e) { setImp(Object.assign({}, imp, { cwd: e.target.value })) } })),
+                React.createElement('label', { className: 'dsm-label' }, t('hist.import.cwd')),
+                React.createElement('input', { className: 'dsm-control', type: 'text', placeholder: t('hist.import.cwd.placeholder'), value: imp.cwd || '', onChange: function (e) { setImp(Object.assign({}, imp, { cwd: e.target.value })) } })),
               React.createElement('div', { className: 'dsm-dropzone', onDragOver: function (e) { if (e.preventDefault) e.preventDefault() }, onDrop: onImportDrop, onClick: function () { if (importInputRef.current) importInputRef.current.click() } },
-                React.createElement('div', { className: 'dsm-dropzone-title' }, '选择或拖入对话文件'),
+                React.createElement('div', { className: 'dsm-dropzone-title' }, t('hist.import.drop')),
                 React.createElement('div', { className: 'dsm-dropzone-copy' }, '.jsonl / .json / .md / .txt')),
               React.createElement('input', { type: 'file', ref: importInputRef, className: 'dsm-hidden-input', accept: '.jsonl,.json,.md,.markdown,.txt', onChange: function (e) { var f = e.target && e.target.files && e.target.files[0]; if (f) doImportFile(f) } }),
               imp.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(imp.error)) : null,
-              imp.result ? React.createElement('div', { className: 'dsm-feedback' }, '已创建会话 ' + imp.result.sessionId + '（' + imp.result.count + ' 条消息），可在 DSH 会话列表中继续对话。') : null) : null,
-            exp ? React.createElement(Modal, { key: 'exp', className: 'dsm-modal-import', title: '导出对话', closeLabel: '关闭', onClose: function () { setExp(null) } },
-              React.createElement('p', { className: 'dsm-help' }, '导出选中会话为转录文件，可再次导入'),
+              imp.result ? React.createElement('div', { className: 'dsm-feedback' }, t('hist.import.done', { id: imp.result.sessionId, count: imp.result.count })) : null) : null,
+            exp ? React.createElement(Modal, { key: 'exp', className: 'dsm-modal-import', title: t('hist.btn.export'), closeLabel: t('btn.close'), onClose: function () { setExp(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('hist.export.hint')),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, '导出目录（绝对路径，自动创建）'),
+                React.createElement('label', { className: 'dsm-label' }, t('hist.export.dir')),
                 React.createElement('div', { className: 'dsm-dir-row' },
                   React.createElement('input', { className: 'dsm-control', type: 'text', placeholder: 'D:\\backups\\dsh\\exports', value: exp.outDir || '', onChange: function (e) { setExp(Object.assign({}, exp, { outDir: e.target.value })) } }),
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: exp.busy, onClick: openExportDir, title: '浏览并选择文件夹' }, '选择')),
-                exp.pickingDir ? React.createElement(DirPickerModal, { key: 'exp-dir-picker', title: '选择导出目录', initial: String(exp.outDir || ''), closeLabel: '关闭', onClose: function () { setExp(Object.assign({}, exp, { pickingDir: false })) }, onPick: function (path) { setExp(Object.assign({}, exp, { outDir: path, pickingDir: false })) } }) : null),
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: exp.busy, onClick: openExportDir, title: t('hist.export.browse') }, t('hist.btn.browse'))),
+                exp.pickingDir ? React.createElement(DirPickerModal, { key: 'exp-dir-picker', title: t('hist.export.pickDir'), initial: String(exp.outDir || ''), closeLabel: t('btn.close'), onClose: function () { setExp(Object.assign({}, exp, { pickingDir: false })) }, onPick: function (path) { setExp(Object.assign({}, exp, { outDir: path, pickingDir: false })) } }) : null),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, '格式'),
+                React.createElement('label', { className: 'dsm-label' }, t('hist.export.format')),
                 React.createElement(SourceSelect, { options: EXPORT_FORMAT_OPTS, value: exp.format, onChange: function (v) { setExp(Object.assign({}, exp, { format: v })) } })),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, '会话范围'),
+                React.createElement('label', { className: 'dsm-label' }, t('hist.export.scope')),
                 React.createElement(SourceSelect, { options: EXPORT_ARCH_OPTS, value: exp.archFilter, onChange: function (v) { setExp(Object.assign({}, exp, { archFilter: v, selectedIds: new Set() })) } })),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, '工作区'),
+                React.createElement('label', { className: 'dsm-label' }, t('hist.export.workspace')),
                 React.createElement(SourceSelect, { options: exportWsOptions, value: exp.wsFilter, onChange: function (v) { setExp(Object.assign({}, exp, { wsFilter: v, selectedIds: new Set() })) } })),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('div', { className: 'dsm-label' }, '会话（' + exportItems.length + ' 个）'),
+                React.createElement('div', { className: 'dsm-label' }, t('hist.export.sessions', { count: exportItems.length })),
                 React.createElement('div', { className: 'dsm-source' },
-                  exp.loading ? React.createElement('div', { className: 'dsm-empty' }, '加载会话列表…')
+                  exp.loading ? React.createElement('div', { className: 'dsm-empty' }, t('hist.export.loading'))
                     : exportItems.length ? exportItems.map(function (it) {
                         return React.createElement('label', { key: it.sessionId, className: 'dsm-hist-row' },
                           React.createElement('input', { type: 'checkbox', className: 'dsm-hist-check', checked: exp.selectedIds.has(it.sessionId), onChange: function () { toggleExportSelect(it.sessionId) } }),
                           React.createElement('div', { className: 'dsm-hist-main' },
                             React.createElement('div', { className: 'dsm-hist-title' }, it.title || ('Session ' + shortId(it.sessionId))),
-                            it.cwd ? React.createElement('div', { className: 'dsm-hist-cwd' + (it.cwdMissing ? ' dsm-hist-cwd-missing' : ''), title: (it.cwdMissing ? '⚠ 工作区目录已不存在：' : '') + it.cwd }, (it.cwdMissing ? '⚠ ' : '') + it.cwd) : null),
+                            it.cwd ? React.createElement('div', { className: 'dsm-hist-cwd' + (it.cwdMissing ? ' dsm-hist-cwd-missing' : ''), title: (it.cwdMissing ? t('hist.cwd.missing') : '') + it.cwd }, (it.cwdMissing ? '⚠ ' : '') + it.cwd) : null),
                           React.createElement('div', { className: 'dsm-hist-actions' },
-                            React.createElement('span', { className: 'dsm-tag' + (it.archived ? '' : ' dsm-tag-on') }, it.archived ? '已归档' : '未归档')))
-                      }) : React.createElement('div', { className: 'dsm-empty' }, '没有符合条件的会话'))),
+                            React.createElement('span', { className: 'dsm-tag' + (it.archived ? '' : ' dsm-tag-on') }, it.archived ? t('hist.tag.archived') : t('hist.tag.live'))))
+                      }) : React.createElement('div', { className: 'dsm-empty' }, t('hist.export.empty')))),
               exp.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(exp.error)) : null,
               exp.result ? React.createElement('div', { className: 'dsm-feedback' },
                 exp.result.exported
-                  ? ('已导出 ' + (exp.result.exported || []).length + ' 个会话到 ' + String(exp.outDir || '').trim()
-                    + ((exp.result.skipped && exp.result.skipped.length) ? '；跳过 ' + exp.result.skipped.length + ' 个（' + exp.result.skipped.map(function (s) { return s.sessionId }).join('、') + '）' : ''))
-                  : ('已归档 ' + exp.result.archived + ' 个会话到 History，可到 History 页继续管理')) : null,
+                  ? (t('hist.result.exported', { count: (exp.result.exported || []).length, dir: String(exp.outDir || '').trim() })
+                    + ((exp.result.skipped && exp.result.skipped.length) ? t('hist.result.skipped', { count: exp.result.skipped.length, ids: exp.result.skipped.map(function (s) { return s.sessionId }).join('、') }) : ''))
+                  : (t('hist.result.archived', { count: exp.result.archived }))) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('span', { className: 'dsm-hist-batch-count' }, '已选 ' + exp.selectedIds.size + ' 个'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: exp.busy || !exp.selectedIds.size, onClick: doArchiveSelected, title: '把选中的会话收进 History，纳入保留期管理' }, '归档所选'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: exp.busy || !exp.selectedIds.size || !String(exp.outDir || '').trim(), onClick: doExport }, exp.busy ? '处理中…' : '导出 ' + exp.selectedIds.size + ' 个会话'))) : null,
-            modal && modal.type === 'error' ? React.createElement(Modal, { key: 'err', title: '操作失败', closeLabel: '关闭', onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, String(modal.message || '未知错误')),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setModal(null) } }, '关闭'))) : null)
+                React.createElement('span', { className: 'dsm-hist-batch-count' }, t('hist.selected', { count: exp.selectedIds.size })),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: exp.busy || !exp.selectedIds.size, onClick: doArchiveSelected, title: t('hist.btn.archiveSelected.title') }, t('hist.btn.archiveSelected')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: exp.busy || !exp.selectedIds.size || !String(exp.outDir || '').trim(), onClick: doExport }, exp.busy ? t('hist.export.busy') : t('hist.btn.exportSelected', { count: exp.selectedIds.size })))) : null,
+            modal && modal.type === 'error' ? React.createElement(Modal, { key: 'err', title: t('hist.error.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, String(modal.message || t('hist.error.unknown')))) : null)
         }
 
         // ---------- Rules 页（v0.3 规则层：场景 = 一级目录，勾选即自动生效）----------
@@ -2030,9 +2529,12 @@ function callApi(path, options) {
      */
     function sceneLabel(scenes, name) {
       if (name === '') return t('memory.scene.orphan')
+      // 两个保留场景的名字由宿主回传（label 恒为中文「全局」/「常开」），必须先按名字取词条：
+      // 放在 `row.label` 之后就会被中文 label 抢先，英文界面下这两个名字一直是中文。
+      if (name === 'global') return t('memory.scene.global')
+      if (name === '_shared') return t('memory.scene.shared')
       var row = (scenes || []).filter(function (s) { return s.name === name })[0]
       if (row && row.label) return row.label
-      if (name === 'global') return t('memory.scene.global')
       return name
     }
 
@@ -2111,6 +2613,8 @@ function callApi(path, options) {
           var modal = ms[0], setModal = ms[1]
           var sfs = React.useState({ name: '', error: null })
           var sceneForm = sfs[0], setSceneForm = sfs[1]
+          var pos = React.useState([])
+          var presetOptions = pos[0], setPresetOptions = pos[1]
           var dts = React.useState(null)
           var drillTools = dts[0], setDrillTools = dts[1]
           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
@@ -2122,7 +2626,7 @@ function callApi(path, options) {
             apiCall('rules-list', {}).then(function (r) {
               // rules 也留下来：档案弹窗「记忆」段的默认勾选要用每条记忆的启用状态
               //（scene-inventory 的 memories 里没有 enabled，客户端自己算，省一次宿主改动）。
-              if (r && r.ok) setData(function (prev) { return Object.assign({}, prev, { loading: false, error: null, scenes: r.scenes || [], rules: r.rules || [], activeMode: r.activeMode === 'custom' ? 'custom' : 'all', stats: r.stats || prev.stats }) })
+              if (r && r.ok) setData(function (prev) { return Object.assign({}, prev, { loading: false, error: null, scenes: r.scenes || [], rules: r.rules || [], activeMode: r.activeMode === 'custom' ? 'custom' : 'all', activeScene: r.activeScene || null, scenePrompt: r.scenePrompt || null, stats: r.stats || prev.stats }) })
               else setData(function (prev) { return Object.assign({}, prev, { loading: false, error: translateError(t, r) }) })
             }).catch(function (e) { setData(function (prev) { return Object.assign({}, prev, { loading: false, error: String((e && e.message) || e) }) }) })
           }
@@ -2130,31 +2634,64 @@ function callApi(path, options) {
           function isValidSceneName(name) {
             return name.length > 0 && name.length <= 64 && !name.startsWith('.') && !/[\\/<>:"|?*]/.test(name)
           }
-          // ── 场景启用开关（记忆注入；勾满全部 = 默认全部启用）──
+          /**
+           * 切场景的结果提示：宿主会把场景绑定的提示词**写进 `~/.dsh/AGENTS.md`**，
+           * 因此必须如实说清写没写、写的是哪份、或者为什么没写成。
+           */
+          function agentsMdNote(res) {
+            var sync = res && res.agentsMd
+            if (!sync) return ''
+            if (sync.error) return ' · ' + t('scenes.agents.note.error', { reason: String(sync.error) })
+            if (sync.applied) return ' · ' + t('scenes.agents.note.applied', { id: String(sync.applied) })
+            if (sync.restored) return ' · ' + t('scenes.agents.note.restored')
+            return ''
+          }
+          // ── 场景启用：**除「全局」外同时只能启用一个**（用户裁定）──
+          // 空数组 = 全部关闭（只留恒常的 `_shared` 与 `global`）；服务端也会拒绝多个。
           function setActiveScenes(names) {
             if (busy) return
             setBusy(true); setResult(null)
-            var real = (data.scenes || []).filter(function (s) { return !s.shared && !s.global }).map(function (s) { return s.name })
-            var payload = real.length > 0 && real.every(function (n) { return names.indexOf(n) >= 0 }) ? { all: true } : { scenes: names }
-            apiCall('rules-set-active', payload).then(function (res) {
+            apiCall('rules-set-active', { scenes: names }).then(function (res) {
               setBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.active') }); refresh(true) }
+              if (res && res.ok) { setResult({ ok: !(res.agentsMd && res.agentsMd.error), text: t('memory.result.active') + agentsMdNote(res) }); refresh(true) }
               else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           function toggleScene(scene) {
             if (busy || scene.shared || scene.global) return
-            var names = (data.scenes || []).filter(function (s) { return s.active && !s.shared && !s.global }).map(function (s) { return s.name })
-            var i = names.indexOf(scene.name)
-            if (i >= 0) names.splice(i, 1)
-            else names.push(scene.name)
-            setActiveScenes(names)
+            // 单选：点已启用的 = 关闭；点未启用的 = 只启用它（其余自动关掉，服务端也只接受一个）。
+            setActiveScenes(scene.active === true ? [] : [scene.name])
           }
-          // ── 场景建 / 改描述 / 删 ──
-          function openCreateScene() { setSceneForm({ name: '', description: '', error: null }); setModal({ type: 'scene-create' }) }
+          /**
+           * 提示词预设候选（打开表单时拉一次；失败就只留「不绑定」）。
+           * 顺带回传**当前生效的预设 id**：场景表单默认就选它（用户裁定「默认就是当前启动的」），
+           * 用户仍可改成别的或选「不绑定」。
+           */
+          function loadPresetOptions(onLoaded) {
+            apiCall('agentsmd-list', {}).then(function (res) {
+              var list = (res && res.presets) || []
+              // 不再提供「不绑定」：候选就是预设本身，默认选中当前生效的那份。
+              var opts = []
+              list.forEach(function (p) { opts.push({ value: p.id, label: p.active ? (p.id + ' · ' + t('scenes.prompt.activeTag')) : p.id }) })
+              setPresetOptions(opts)
+              var activeId = ''
+              for (var i = 0; i < list.length; i += 1) { if (list[i].active) { activeId = list[i].id; break } }
+              if (typeof onLoaded === 'function') onLoaded(activeId)
+            }).catch(function () {})
+          }
+          /** 表单里没显式选过时，把「提示词」默认填成当前生效的那份（不覆盖已有选择）。 */
+          function defaultPromptToActive(activeId) {
+            if (!activeId) return
+            setSceneForm(function (f) { return (f && String(f.prompt || '') !== '') ? f : Object.assign({}, f, { prompt: activeId }) })
+          }
+          // ── 场景建 / 改描述 / 改绑定的提示词 / 删 ──
+          function openCreateScene() { setSceneForm({ name: '', description: '', prompt: '', error: null }); setModal({ type: 'scene-create' }); loadPresetOptions(defaultPromptToActive) }
           function openEditScene(scene) {
-            setSceneForm({ name: scene.name, description: scene.description || '', error: null })
+            setSceneForm({ name: scene.name, description: scene.description || '', prompt: scene.prompt || '', error: null })
             setModal({ type: 'scene-edit', name: scene.name })
+            // 该场景还没绑定时，默认选中当前生效的那份（用户裁定「默认就是当前启动的」）。
+            if (!scene.prompt) loadPresetOptions(defaultPromptToActive)
+            else loadPresetOptions()
           }
           /** 新建与编辑共用一个表单：字段相同，只是分别走 rules-create-scene / rules-update-scene。 */
           function submitSceneForm() {
@@ -2162,12 +2699,14 @@ function callApi(path, options) {
             var name = String(sceneForm.name || '').trim()
             if (!isValidSceneName(name)) { setSceneForm(Object.assign({}, sceneForm, { error: t('error.rules.invalidGroup') })); return }
             var description = String(sceneForm.description || '').trim()
+            var prompt = String(sceneForm.prompt || '').trim()
             setBusy(true)
-            apiCall(isEdit ? 'rules-update-scene' : 'rules-create-scene', isEdit ? { name: name, description: description } : { name: name, description: description }).then(function (res) {
+            apiCall(isEdit ? 'rules-update-scene' : 'rules-create-scene', { name: name, description: description, prompt: prompt }).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
                 setModal(null)
-                setResult({ ok: true, text: t(isEdit ? 'memory.result.sceneUpdated' : 'memory.result.sceneCreated', { name: name }) })
+                // 新建时若把历史默认（全部启用）收敛成单选，如实说一句，别让用户以为场景"自己开了"。
+                setResult({ ok: true, text: res.collapsedActive ? t('scenes.result.created.collapsed', { name: name }) : t(isEdit ? 'memory.result.sceneUpdated' : 'memory.result.sceneCreated', { name: name }) })
                 refresh(true)
               } else setSceneForm(Object.assign({}, sceneForm, { error: translateError(t, res) }))
             }).catch(function (e) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: String((e && e.message) || e) })) })
@@ -2495,7 +3034,6 @@ function callApi(path, options) {
                 subagentsSeg(),
                 memoriesSeg(),
                 React.createElement('div', { className: 'dsm-modal-actions' },
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-primary', disabled: busy, onClick: submitArchive }, t('memory.archive.save')))))
           }
           function openDrill(server) {
@@ -2527,12 +3065,19 @@ function callApi(path, options) {
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
+          // 「进入某个场景」= 应用它的档案 + 启用它（单选），于是它的记忆与绑定的提示词
+          // 一起生效——用户裁定：「进入其中一个场景，提示词就启动成场景的设置的」。
           function enterMode(name) {
             setBusy(true)
             apiCall('scene-mode-set', { scene: name }).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.modeSet', { name: name }) + (res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : '') }); refresh(true) }
-              else setResult({ ok: false, text: translateError(t, res) })
+              if (!res || !res.ok) { setBusy(false); setResult({ ok: false, text: translateError(t, res) }); return }
+              apiCall('rules-set-active', { scenes: [name] }).then(function (act) {
+                setBusy(false)
+                var staleNote = res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : ''
+                if (act && act.ok) setResult({ ok: true, text: t('memory.result.modeSet', { name: name }) + staleNote })
+                else setResult({ ok: false, text: t('memory.result.modeSet', { name: name }) + staleNote + ' · ' + translateError(t, act) })
+                refresh(true)
+              }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }); refresh(true) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           function exitMode() {
@@ -2544,6 +3089,8 @@ function callApi(path, options) {
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           var modeScene = data.mode && data.mode.scene
+          // 历史「全部启用」遗留检测：单选模型下同时启用多个场景是歧义状态（见下方收敛条）。
+          var legacyAllScenes = (data.scenes || []).filter(function (s) { return s.active === true && !s.shared && !s.global })
           /**
            * 场景页只列**可切换的预设场景**：保留场景 `global`（「全局」）不在这里出现。
            *
@@ -2584,7 +3131,7 @@ function callApi(path, options) {
               React.createElement('div', { className: 'dsm-title-block' },
                 React.createElement('div', { className: 'dsm-title-row' },
                   React.createElement('h2', { className: 'dsm-title' }, t('scenes.title')),
-                  React.createElement(VersionBadge, null)),
+                  VersionBadgeComponent ? React.createElement(VersionBadgeComponent, null) : null),
                 React.createElement('p', { className: 'dsm-desc' }, t('scenes.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
@@ -2607,6 +3154,11 @@ function callApi(path, options) {
                   modeSummary ? t('scenes.mode.profile', { parts: modeSummary }) : t('scenes.mode.noProfile'))),
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: exitMode }, t('memory.mode.exit'))) : null,
             React.createElement(Notice, { key: 'notice', kind: result && result.ok ? 'ok' : 'err', text: result && result.text }),
+            // 历史「全部启用」（active=null）遗留：单选模型下多名场景同时在场是歧义状态。
+            // 不静默改写（那会改变注入范围），而是给一个显式收敛按钮，并说清点下去会发生什么。
+            legacyAllScenes.length > 1 ? React.createElement('div', { key: 'legacyall', className: 'dsm-feedback dsm-warning' },
+              React.createElement('span', null, t('scenes.legacyAll', { count: legacyAllScenes.length })),
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setActiveScenes([legacyAllScenes[0].name]) } }, t('scenes.legacyAll.fix'))) : null,
             data.error ? React.createElement('div', { key: 'gerr', className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
             data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
               : presetScenes.length ? React.createElement('div', { key: 'scenes', className: 'dsm-scenes' }, presetScenes.map(function (scene) {
@@ -2619,6 +3171,12 @@ function callApi(path, options) {
                 // 档案里有任何一段才值得「切入此模式」——空档案切进去等于什么都没变。
                 var hasModeSections = !!(archive && (archive.mcp || Array.isArray(archive.skills) || Array.isArray(archive.subagents) || Array.isArray(archive.memories)))
                 var desc = sceneTileDesc(scene)
+                // 单选：别的场景已启用时，这个开关置灰（点也没用，服务端只接受一个）。
+                var blockedByOther = scene.active !== true && scene.selectable === false
+                // 绑定的提示词预设：生效中 / 已启用但预设不见了 / 绑了但没启用，三种如实分开。
+                var boundPrompt = scene.prompt || ''
+                var promptLive = !!(boundPrompt && data.scenePrompt && data.scenePrompt.scene === name)
+                var promptMissing = promptLive && data.scenePrompt.missing === true
                 return React.createElement('article', { key: 's:' + name, className: 'dsm-scene-tile' + (modeScene === name ? ' dsm-scene-tile-mode' : '') },
                   React.createElement('div', { className: 'dsm-scene-tile-head' },
                     React.createElement('span', { className: 'dsm-scene-tile-name', title: label }, label),
@@ -2627,8 +3185,16 @@ function callApi(path, options) {
                     locked ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
                     modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
                     !locked && scene.active === false ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.off')) : null,
-                    locked ? null : React.createElement('span', { className: 'dsm-scene-tile-switch' },
-                      React.createElement(Switch, { on: scene.active === true, disabled: busy, label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } }))),
+                    boundPrompt ? React.createElement('span', {
+                      className: 'dsm-tag' + (promptMissing ? ' dsm-tag-off' : promptLive ? ' dsm-tag-on' : ''),
+                      title: t('scenes.prompt.tag.hint'),
+                    }, promptMissing
+                      ? t('scenes.prompt.missing', { id: boundPrompt })
+                      : promptLive ? t('scenes.prompt.live', { id: boundPrompt }) : t('scenes.prompt.bound', { id: boundPrompt })) : null,
+                    locked ? null : React.createElement('span', {
+                      className: 'dsm-scene-tile-switch',
+                      title: blockedByOther ? t('scenes.enable.blocked', { name: sceneLabel(data.scenes, data.activeScene) || data.activeScene || '' }) : '',
+                    }, React.createElement(Switch, { on: scene.active === true, disabled: busy || blockedByOther, label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } }))),
                   // 描述行**只有描述**（数量都收进上面的模式条了）；全文放 title，卡片本身永远一行。
                   React.createElement('p', { className: 'dsm-scene-tile-desc', title: desc || '' }, desc || t('scenes.noDesc')),
                   React.createElement('div', { className: 'dsm-scene-tile-foot' },
@@ -2663,13 +3229,18 @@ function callApi(path, options) {
                     onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { description: e.target.value, error: null })) },
                   }),
                   React.createElement('p', { className: 'dsm-help' }, t('scenes.field.desc.limit', { count: SCENE_DESC_MAX }))),
+                // 提示词预设：一个场景**只能绑一个**（单值字段天然单选）；「不绑定」= 解绑。
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('scenes.field.prompt')),
+                  presetOptions.length > 0
+                    ? React.createElement(SourceSelect, { options: presetOptions, value: sceneForm.prompt || '', onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { prompt: v })) } })
+                    : React.createElement('p', { className: 'dsm-help' }, t('scenes.prompt.noPresets')),
+                  React.createElement('p', { className: 'dsm-help' }, t('scenes.field.prompt.hint'))),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitSceneForm }, t(modal.type === 'scene-create' ? 'memory.btn.create' : 'memory.btn.saveScene'))))) : null,
             modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', title: t('memory.deleteScene.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.deleteScene.desc', { name: modal.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDeleteScene(modal.name) } }, t('memory.btn.deleteScene')))) : null,
             // 档案编辑器（见 archiveNode）：三段共用「段卡片 + 勾选行」排版。
             archiveNode(),
@@ -2769,17 +3340,30 @@ function callApi(path, options) {
             var q = String(modal.toolQuery || '').trim().toLowerCase()
             var list = q ? all.filter(function (x) { return String(x.name).toLowerCase().indexOf(q) >= 0 }) : all
             var picked = props.selected || []
-            var current = list.filter(function (x) { return x.current })
-            var others = list.filter(function (x) { return !x.current })
-            function row(item) {
+            // 不再把官方预设之外的工具统一标成「当前会话不可见」。工具白/黑名单是
+            // 子代理启动时按 Agent 预设装配的：不同官方预设拥有不同的工具集合，
+            // 选择器必须按预设展示来源，用户才能知道这个工具在哪个预设下可用。
+            var presetMap = {}
+            ;(cand.presets || []).forEach(function (p) { presetMap[p.id] = p.name || p.id })
+            var grouped = {}
+            list.forEach(function (item) {
+              var ids = Array.isArray(item.presets) && item.presets.length ? item.presets : ['__other__']
+              ids.forEach(function (id) {
+                if (!grouped[id]) grouped[id] = []
+                grouped[id].push(item)
+              })
+            })
+            var groupIds = Object.keys(grouped).sort(function (a, b) {
+              if (a === '__other__') return 1
+              if (b === '__other__') return -1
+              return String(presetMap[a] || a).localeCompare(String(presetMap[b] || b))
+            })
+            function row(item, id) {
               return pickRow({
                 disabled: busy,
-                key: (props.deny ? 'd:' : 'a:') + item.name,
+                key: (props.deny ? 'd:' : 'a:') + id + ':' + item.name,
                 checked: picked.indexOf(item.name) >= 0,
                 name: item.name,
-                meta: item.current
-                  ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, props.current)
-                  : React.createElement('span', { className: 'dsm-tag' }, props.unavailable),
                 onChange: function () { props.onToggle(item.name) },
               })
             }
@@ -2803,12 +3387,12 @@ function callApi(path, options) {
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !all.length, onClick: props.onAll }, t('scenes.seg.selectAll')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !picked.length, onClick: props.onClear }, t('scenes.seg.clear'))),
               React.createElement('div', { className: 'dsm-tools-grid' },
-                list.length
-                  ? React.createElement('div', null,
-                      current.length ? segGroup(props.groupCurrent) : null,
-                      current.map(row),
-                      others.length ? segGroup(props.groupOther) : null,
-                      others.map(row))
+                groupIds.length
+                  ? groupIds.map(function (id) {
+                      return React.createElement(React.Fragment, { key: 'g:' + id },
+                        segGroup(id === '__other__' ? props.groupOther : (presetMap[id] || id)),
+                        grouped[id].map(function (item) { return row(item, id) }))
+                    })
                   : React.createElement('div', { className: 'dsm-pick-empty' }, all.length ? t('scenes.mem.noMatch') : props.empty)),
               React.createElement('p', { className: 'dsm-help' }, props.hint))
           }
@@ -2861,7 +3445,7 @@ function callApi(path, options) {
               React.createElement('div', { className: 'dsm-title-block' },
                 React.createElement('div', { className: 'dsm-title-row' },
                   React.createElement('h2', { className: 'dsm-title' }, t('subagents.title')),
-                  React.createElement(VersionBadge, null)),
+                  VersionBadgeComponent ? React.createElement(VersionBadgeComponent, null) : null),
                 React.createElement('p', { className: 'dsm-desc' }, t('subagents.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
@@ -2977,12 +3561,10 @@ function callApi(path, options) {
                     : null),
                 modal.form.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(modal.form.error)) : null),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-primary', disabled: busy || (modal.mode === 'create' && !String(modal.form.name || '').trim()) || !String(modal.form.body || '').trim(), onClick: submitEditor }, t('memory.btn.save')))) : null,
             modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'sdel2', title: t('subagents.delete.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('subagents.delete.desc', { name: modal.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.name) } }, t('memory.btn.delete.confirm')))) : null,
             modal && modal.type === 'import' ? React.createElement(ImportModal, { key: 'simp', t: t, title: t('subagents.import.title'), hint: t('subagents.import.hint'), busy: busy, onClose: function () { setModal(null) }, onSubmit: submitImport }) : null)
         }
@@ -3397,7 +3979,7 @@ function callApi(path, options) {
               React.createElement('div', { className: 'dsm-title-block' },
                 React.createElement('div', { className: 'dsm-title-row' },
                   React.createElement('h2', { className: 'dsm-title' }, t('memory.title')),
-                  React.createElement(VersionBadge, null)),
+                  VersionBadgeComponent ? React.createElement(VersionBadgeComponent, null) : null),
                 React.createElement('p', { className: 'dsm-desc' }, t('memory.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, t('memory.btn.refresh')),
@@ -3431,7 +4013,6 @@ function callApi(path, options) {
             modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', title: t('memory.delete.title'), closeLabel: t('btn.cancel'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.delete.desc', { name: modal.rule.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('memory.btn.delete.confirm')))) : null,
             modal && modal.type === 'import' ? React.createElement(ImportModal, {
               key: 'mimp', t: t, title: t('memory.import.title'), hint: t('memory.import.hint'), busy: busy,
@@ -3503,7 +4084,6 @@ function callApi(path, options) {
                     : React.createElement('p', { className: 'dsm-help' }, t('memory.attach.flat'))),
                 editor.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(editor.error)) : null),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: closeEditor }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : submitUpdate }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
             // 场景建/删/档案弹窗已移至「场景」页（ScenesPage）。
             modal && modal.type === 'trash' ? React.createElement(Modal, { key: 'trash', wide: true, title: t('memory.trash.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
@@ -3527,7 +4107,6 @@ function callApi(path, options) {
             modal && modal.type === 'trash-delete' ? React.createElement(Modal, { key: 'trash-delete', title: t('memory.trash.confirmTitle'), closeLabel: t('btn.cancel'), onClose: function () { setModal({ type: 'trash' }) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.trash.confirmDesc', { name: modal.entry.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal({ type: 'trash' }) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitTrashDelete(modal.entry) } }, t('memory.trash.purge')))) : null)
         }
 
@@ -3540,6 +4119,9 @@ function callApi(path, options) {
         _pages.ScenesPage = ScenesPage
         _pages.SubagentsPage = SubagentsPage
         _pages.MemoryPage = MemoryPage
+        _pages.CompatPage = CompatPage
+        // 标题旁的版本徽标也导出：其他页面（提示词页）在用它，测试与排版预览需要能单独渲染。
+        _pages.VersionBadge = VersionBadgeComponent
         _pages.t = t
         // 纯函数（无状态、可单测）：卡片描述行、场景归属判定、记忆段默认勾选都靠它们，
         // 契约是「描述超长必裁」「记忆段的勾选只认本场景自己的记忆」。测试直接调这几个函数。

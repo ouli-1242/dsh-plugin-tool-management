@@ -76,6 +76,17 @@ export interface CapabilityFinding {
    * repair — never a reason to refuse data operations.
    */
   readonly textMatch?: boolean
+  /**
+   * True for slots whose ABSENCE is a routing fact rather than a failure: the
+   * plugin ships its own implementation for exactly this gap, so a host without
+   * the member keeps full functionality through the adapter route.
+   *
+   * These must never be reported as "degraded": the DSH release this plugin was
+   * verified against does not have them, and telling the user that a working
+   * feature is degraded (worse: "the affected buttons are disabled") is a
+   * factual lie about their installation.
+   */
+  readonly optional?: boolean
 }
 
 export interface HostIdentity {
@@ -89,9 +100,13 @@ export interface HostIdentity {
 export interface HostAssessment {
   readonly identity: HostIdentity
   readonly findings: readonly CapabilityFinding[]
-  /** Capabilities that are not `ok`. */
+  /**
+   * Capabilities that are genuinely unavailable — optional slots excluded.
+   * `findings` remains the full picture (the UI renders every slot, marking the
+   * optional-absent ones as "adapter takes over").
+   */
   readonly degraded: readonly CapabilityFinding[]
-  /** True when no `delete`-kind capability is degraded. */
+  /** True when the delete operation has a viable route (native or adapter). */
   readonly mayDelete: boolean
   readonly generatedAt: number
 }
@@ -213,6 +228,8 @@ interface CapabilitySpec {
   readonly probe?: (target: Target) => string | undefined
   /** Members that must be callable when the capability applies. */
   readonly when?: (target: Target) => boolean
+  /** Absence is a routing fact, not a failure — see {@link CapabilityFinding.optional}. */
+  readonly optional?: boolean
 }
 
 /**
@@ -313,6 +330,7 @@ const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     owner: 'workspace',
     fallback: 'native-entry',
     methods: ['archiveSession'],
+    optional: true,
   },
   {
     id: 'workspace.unarchive-native',
@@ -321,6 +339,7 @@ const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     owner: 'workspace',
     fallback: 'native-entry',
     methods: ['unarchiveSession'],
+    optional: true,
   },
   {
     id: 'workspace.batch-native',
@@ -329,14 +348,19 @@ const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     owner: 'workspace',
     fallback: 'native-entry',
     methods: ['archiveWorkspaceSessions'],
+    optional: true,
   },
   {
     id: 'workspace.delete-native',
     label: '宿主原生删除入口',
     kind: 'delete',
     owner: 'workspace',
-    fallback: 'disable-destructive',
+    // NOT `disable-destructive`: when this slot is empty the plugin performs the
+    // whole delete itself, so nothing is disabled. `native-entry` describes what
+    // actually happens (the adapter takes over).
+    fallback: 'native-entry',
     methods: ['deleteSession'],
+    optional: true,
   },
   // ---- sessions runtime (private members, used only on the live branch) ---
   {
@@ -373,6 +397,7 @@ const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     // instead, so absence is a routing fact, not a failure. Only a cache whose
     // write path cannot be wrapped at all is a real problem.
     fallback: 'native-entry',
+    optional: true,
     probe: (t) => {
       if (isFn(t?.delete) && isFn(t?.whenIdle)) return undefined
       const wrappable = ['write', 'put'].filter((name) => !isFn(t?.[name]))
@@ -430,7 +455,14 @@ function recoveryFor(_finding: CapabilityFinding): string {
  * this plugin's copy of the same implementation when the package is importable.
  */
 function inspectCapability(spec: CapabilitySpec, target: Target, reference: Record<string, unknown> | undefined): CapabilityFinding {
-  const base = { id: spec.id, label: spec.label, kind: spec.kind, owner: spec.owner, fallback: spec.fallback }
+  const base = {
+    id: spec.id,
+    label: spec.label,
+    kind: spec.kind,
+    owner: spec.owner,
+    fallback: spec.fallback,
+    ...(spec.optional === true ? { optional: true } : {}),
+  }
   if (target === undefined || target === null) {
     return { ...base, state: 'not-available', detail: '宿主未提供该服务（ctx.get 返回 undefined）', missing: [] }
   }
@@ -484,8 +516,15 @@ function inspectCapability(spec: CapabilitySpec, target: Target, reference: Reco
  * Capability ids whose absence is a routing fact rather than a failure: the
  * plugin substitutes its own implementation. They never appear as degraded and
  * never block a route.
+ *
+ * Superseded by {@link CapabilityFinding.optional}, which marks the same fact on
+ * the finding itself (the UI and the doctor both read that flag). Kept as the
+ * exported id list so callers can ask "which slots does the plugin itself back?"
+ * without duplicating the table.
  */
-export const SUBSTITUTED_CAPABILITIES: readonly string[] = ['projection.delete-native']
+export const SUBSTITUTED_CAPABILITIES: readonly string[] = CAPABILITY_SPECS
+  .filter((spec) => spec.optional === true)
+  .map((spec) => spec.id)
 
 /**
  * Inspect the live host behind one plugin context.
@@ -568,7 +607,11 @@ export function assessHost(ctx: {
     if (same === false) blockers.push(`${name}：插件与宿主加载的是两份不同拷贝（运行 node scripts/host-deps.mjs --fix）`)
   }
 
-  const degraded = findings.filter((finding) => finding.state !== 'ok')
+  // Degraded = something is genuinely unavailable. Optional slots are excluded:
+  // their absence selects the adapter route and leaves the feature fully
+  // working, so listing them here would tell the user a working feature is
+  // broken (and, with the destructive wording, that its buttons are disabled).
+  const degraded = findings.filter((finding) => finding.state !== 'ok' && finding.optional !== true)
   // Deletion is possible when SOME route reaches it. The optional native
   // delegate slots (`workspace.delete-native`, `workspace.unarchive-native`,
   // `workspace.batch-native`) are expected to be ABSENT on hosts whose official

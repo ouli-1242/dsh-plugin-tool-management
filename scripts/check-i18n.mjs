@@ -67,14 +67,24 @@ const badArgs = [...zhMap.keys()]
   .filter((k) => enMap.has(k) && placeholders(zhMap.get(k)) !== placeholders(enMap.get(k)))
   .map((k) => `${k} (zh:${placeholders(zhMap.get(k)) || '-'} en:${placeholders(enMap.get(k)) || '-'})`)
 
+// 代码里以字面量形式引用的键必须都在词典里：少一个键，界面上就会直接把原始键名
+// 显示给用户（例如把 `mcp.detail.entryId` 写成 `mcp.field.entryId`）。
+// 动态键（`t(item.code)` / `t('root.' + key)`）不是字面量，天然不在此列。
+const referenced = new Set(
+  [...src.matchAll(/\b(?:mt|t)\(\s*'([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9_-]+)+)'/g)].map((m) => m[1]),
+)
+const missingKeys = [...referenced].filter((k) => !zhMap.has(k)).sort()
+
 console.log(`file: ${file}`)
 console.log(`zh keys: ${zh.length} | en keys: ${en.length}`)
+console.log(`referenced literal keys: ${referenced.size}`)
+console.log(`missing in dict: ${missingKeys.length ? missingKeys.join(', ') : '(none)'}`)
 console.log(`only zh: ${onlyZh.length ? onlyZh.join(', ') : '(none)'}`)
 console.log(`only en: ${onlyEn.length ? onlyEn.join(', ') : '(none)'}`)
 console.log(`duplicate zh: ${dup(zh).length ? dup(zh).join(', ') : '(none)'}`)
 console.log(`duplicate en: ${dup(en).length ? dup(en).join(', ') : '(none)'}`)
 console.log(`placeholder mismatch: ${badArgs.length ? badArgs.join(' | ') : '(none)'}`)
 
-const failed = onlyZh.length || onlyEn.length || dup(zh).length || dup(en).length || badArgs.length
+const failed = onlyZh.length || onlyEn.length || dup(zh).length || dup(en).length || badArgs.length || missingKeys.length
 console.log(failed ? 'RESULT: FAIL' : 'RESULT: OK')
 process.exit(failed ? 1 : 0)

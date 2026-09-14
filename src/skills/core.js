@@ -87,6 +87,10 @@ export function userRoots() {
       path: join(resolveDshHome(), "skills"),
       label: "DSH 技能",
       mutable: true,
+      // 默认来源：路径不可移除、不可停用（必须读取），但里面的技能可删（见 isDefaultSkillSource）。
+      deletable: true,
+      // 注意：`toggleable` 指的是「这个来源里的**单个技能**能否启停」，与来源开关无关 ——
+      // 来源层的启停/移除由 isDefaultSkillSource 判定，两者别混。
       toggleable: true,
       native: true,
       rank: 400,
@@ -97,12 +101,13 @@ export function userRoots() {
       // 官方 ~/.dsh/skills/ 仍作为可切换来源列出（不搬走、不删）。
       //
       // 界面名「导入技能」：它是插件导入/新建技能的落点，不是"管理器自己的一类技能"。
-      // **用户级来源不可删**（dsh / hub 都是）：技能只能停用，删除留给项目级来源。
+      // 与 dsh 同为默认来源：路径必须读取（不可移除、不可停用），里面的技能可删。
       key: "hub",
       path: join(resolveDshHome(), "tool-management", "skills"),
       label: "导入技能",
       localeKey: "hub",
       mutable: true,
+      deletable: true,
       toggleable: true,
       native: false,
       rank: 350,
@@ -141,6 +146,30 @@ export function userRoots() {
       rank: 530,
     },
   ];
+}
+
+/**
+ * 默认来源：插件自己的读写根 —— `dsh`（官方技能目录）与 `hub`（新建/导入落点）。
+ *
+ * 用户裁定的是**不对称**语义，两个方向必须成对记住，只改一半就是漏改：
+ *
+ *   - 来源**路径**：必须读取。既不能「移除来源」（连目录都不扫），也不能「停用来源」
+ *     （仍然扫描但仍算不读取的策略位）—— 界面上没有来源开关，服务端也拒绝这两个写操作。
+ *     因为它们是插件自己的读写根：移除会让创建/导入无处落脚。
+ *   - 路径**里面的技能**：可以删除（`deletable: true`，移入插件回收站，可恢复）。
+ *
+ * 其余来源（外部 Agent / 自定义绝对路径 / 项目级）恰好相反：来源可以停用或移除
+ * （「不再读取这个文件夹」），但目录里的技能只读、不可删除。
+ *
+ * 一句话记法：**`mutable` 与 `deletable` 同向，`removable` 与 `mutable` 反向。**
+ */
+const DEFAULT_SOURCE_KEYS = Object.freeze(["dsh", "hub"]);
+
+/** 是否为默认来源。接受 root 对象或 key 字符串；`dsh` / `hub` 的所有特判都走这里。 */
+export function isDefaultSkillSource(rootOrKey) {
+  const key =
+    rootOrKey && typeof rootOrKey === "object" ? rootOrKey.key : rootOrKey;
+  return DEFAULT_SOURCE_KEYS.includes(key);
 }
 
 function projectIdentity(path) {
@@ -362,8 +391,8 @@ export async function projectRoots(projectCwds = [], diagnostics) {
     const id = projectIdentity(project.root);
     const common = {
       mutable: false,
-      // 项目级 DSH 根是**唯一**允许删除技能文件的来源；用户级来源（dsh / hub）一律不可删。
-      // 用「作用域」推导而不是再加一个平行开关：这是项目根与用户根的本质差别。
+      // 未知/只读来源（外部 Agent 与自定义绝对路径）一律不可删；用户级 dsh / hub
+      // 与本仓库的项目级 .dsh/skills 都是可删的（见上方两处 `deletable: true`）。
       deletable: false,
       toggleable: false,
       native: true,
@@ -543,9 +572,11 @@ function readonlyError(action) {
 }
 
 /**
- * 来源可写但**不允许删除**时的拒绝结果（用户级 DSH 技能 / 导入技能）。
- * 与「只读来源」区分开：这两种来源可以创建、可以停用，只是不提供删除 —— 提示要能说清
- * 「你还能做什么」，否则用户会以为是权限坏了。
+ * 来源可写但**没有删除权**时的拒绝结果 —— 防御性分支。
+ *
+ * 来源表里可写的三种根（dsh / hub / 项目级 `.dsh/skills`）现在都带 `deletable: true`，
+ * 正常路径走不到这里。它守的是「以后新增可写来源时忘了标 deletable」：那种情况下
+ * 必须拒绝删除，而不是照搬一个用户目录进回收站。
  */
 function notDeletableError(definition) {
   return {
@@ -553,7 +584,29 @@ function notDeletableError(definition) {
     code: "error.skill.notDeletable",
     params: { root: definition && definition.key ? definition.key : "" },
     error:
-      "该来源的技能不能删除（技能只能停用）：只在项目级来源（<项目>/.dsh/skills）提供删除",
+      "该来源没有开启删除（可写来源需要显式标记 deletable: true 才提供删除）",
+  };
+}
+
+/**
+ * 默认来源（dsh / hub）被要求「停用」或「移除」时的拒绝结果。
+ *
+ * 这两种来源是插件自己的读写根，**必须读取**：停用会让它退化成"读出来但不可调用"，
+ * 移除则连目录都不扫，两者都与「路径不能不读取」冲突。
+ *
+ * 被拒的只有**来源层**操作 —— 来源**里面的技能**照常可以删除（那是 `deletable`，
+ * 与来源的 removable / 停用无关），提示里要写清这一点，否则用户会以为整个来源被锁死。
+ */
+function reservedSourceError(root) {
+  const key = root && root.key ? root.key : "";
+  return {
+    ok: false,
+    code: "error.source.reserved",
+    params: { root: key },
+    error:
+      key === "dsh"
+        ? "DSH 技能目录是默认来源，必须读取：不能停用或移除（里面的技能可以删除）"
+        : "导入技能目录是默认来源、插件新建/导入的落点，必须读取：不能停用或移除（里面的技能可以删除）",
   };
 }
 
@@ -1199,7 +1252,9 @@ function defaultManagerState() {
   const disabledSkills = Object.create(null);
   const enabledSkills = Object.create(null);
   for (const root of userRoots()) {
-    if (root.key !== "dsh") sources[root.key] = true;
+    // 默认来源（dsh / hub）没有来源开关，所以不落进 sources 表 —— 它们永远「读取」。
+    // 旧版本可能往这里写过 hub 的 false，normalizeManagerState 会顺手丢掉。
+    if (!isDefaultSkillSource(root.key)) sources[root.key] = true;
     disabledSkills[root.key] = [];
     enabledSkills[root.key] = [];
   }
@@ -1304,7 +1359,7 @@ function validManagerStateDocument(value) {
       if (typeof key !== "string") return false;
   }
   for (const root of userRoots()) {
-    if (root.key === "dsh") continue;
+    if (isDefaultSkillSource(root.key)) continue;
     if (typeof value.sources[root.key] !== "boolean") return false;
     const list = value.disabledSkills[root.key];
     if (!Array.isArray(list) || list.some((name) => !validStateSkillName(name)))
@@ -1330,8 +1385,10 @@ function normalizeManagerState(value) {
   normalized.customRoots = normalizeCustomRoots(value.customRoots);
   const customKeys = new Set(normalized.customRoots.map((root) => root.key));
   for (const root of userRoots()) {
+    // 默认来源不接收 sources 标志：旧版本写过的 `sources.hub = false` 在这里被丢弃，
+    // 于是「曾经把 hub 停用掉」的用户升级后自动回到必须读取的状态（技能不丢，只是策略位作废）。
     if (
-      root.key !== "dsh" &&
+      !isDefaultSkillSource(root.key) &&
       value.sources &&
       typeof value.sources[root.key] === "boolean"
     )
@@ -1393,8 +1450,7 @@ function normalizeManagerState(value) {
           (key) =>
             typeof key === "string" &&
             known.has(key) &&
-            key !== "dsh" &&
-            key !== "hub",
+            !isDefaultSkillSource(key),
         ),
       ),
     ].sort();
@@ -1533,7 +1589,7 @@ function effectiveSkillPolicy(policyResult, root, entry) {
     entry.policyAliases,
   );
   const sourceEnabled =
-    root.key === "dsh" ||
+    isDefaultSkillSource(root) ||
     root.scope === "project" ||
     policyResult.state.sources[root.key] !== false;
   if (policyResult.writable === false || !sourceEnabled || override === false) {
@@ -1574,14 +1630,20 @@ function invalidManagerStateWrite() {
   };
 }
 
+/**
+ * 停用 / 启用一个来源（仍然扫描目录、仍然列出技能，只是不可调用）。
+ *
+ * 默认来源（dsh / hub）不允许停用 —— 停用等于「不读取」，而它们必须读取。
+ * 其余来源（外部 Agent、自定义绝对路径）随来源开关。
+ */
 export async function setSourceEnabled(rootOrKey, enabled, log) {
   // 支持传 key（静态来源）或 definition 对象（自定义来源由 service 层从状态文件生成）。
   const root =
     rootOrKey && typeof rootOrKey === "object" && typeof rootOrKey.key === "string"
       ? rootOrKey
       : rootByKey(rootOrKey);
-  if (!root || root.key === "dsh" || !root.toggleable)
-    return readonlyError("toggle");
+  if (!root || !root.toggleable) return readonlyError("toggle");
+  if (isDefaultSkillSource(root)) return reservedSourceError(root);
   const current = await readManagerState();
   if (current.writable === false) return invalidManagerStateWrite();
   current.state.sources[root.key] = enabled === true;
@@ -1603,7 +1665,7 @@ export async function setSourceEnabled(rootOrKey, enabled, log) {
  *
  * 与 `setSourceEnabled(false)` 的区别：停用仍然读目录、仍然列出技能（只是不可调用）；
  * 移除是"当它不存在"。`dsh`（官方技能目录）与 `hub`（导入技能落点）不允许移除 ——
- * 它们是插件自身的读写根，移除会让创建/导入无处落脚。
+ * 它们是插件自身的读写根，移除会让创建/导入无处落脚（见 isDefaultSkillSource）。
  */
 export async function setSourceRemoved(rootOrKey, removed, log) {
   const root =
@@ -1611,16 +1673,7 @@ export async function setSourceRemoved(rootOrKey, removed, log) {
       ? rootOrKey
       : rootByKey(rootOrKey);
   if (!root) return readonlyError(removed === true ? "remove" : "restore");
-  if (root.key === "dsh" || root.key === "hub")
-    return {
-      ok: false,
-      code: "error.source.reserved",
-      params: { root: root.key },
-      error:
-        root.key === "dsh"
-          ? "DSH 技能目录是官方来源，不能从管理器移除"
-          : "导入技能目录是插件自身的读写落点，不能移除",
-    };
+  if (isDefaultSkillSource(root)) return reservedSourceError(root);
   if (root.scope === "project") return readonlyError("remove");
   const current = await readManagerState();
   if (current.writable === false) return invalidManagerStateWrite();
@@ -1893,9 +1946,16 @@ async function publishTrashStage(stage, finalPath, metadata, renameOptions) {
   return { fallback: true, cleanupError };
 }
 
+/**
+ * 回收站条目的来源元数据 —— 恢复时靠它把技能放回原处。
+ *
+ * 用户级可写来源不止 dsh 一个（hub 也是，而且它是「导入技能」页删除的主战场），
+ * 所以这里必须按 scope 分岔：早先只特判 `dsh`，hub 会被记成项目级、`projectRoot`
+ * 为 undefined，恢复时被判「原项目当前不在活动工作区中」—— 删除进去就再也拿不回来。
+ */
 function trashRootMetadata(definition) {
-  if (definition.key === "dsh")
-    return { key: "dsh", scope: "user", label: definition.label };
+  if (definition.scope !== "project")
+    return { key: definition.key, scope: "user", label: definition.label };
   return {
     key: definition.key,
     scope: "project",
@@ -1909,8 +1969,9 @@ function trashRootMetadata(definition) {
 async function restoreRootDefinition(metadata, options = {}) {
   // version 1 entries predate scoped Trash and always belong to $DSH_HOME/skills.
   if (!metadata.root) return rootByKey("dsh");
-  if (metadata.root.scope === "user" && metadata.root.key === "dsh")
-    return rootByKey("dsh");
+  // 用户级来源按 key 重新解析：路径来自 userRoots()，不信元数据里记住的 path
+  // （DSH_HOME 换过之后，旧路径可能已经不在读取范围内了）。
+  if (metadata.root.scope === "user") return rootByKey(metadata.root.key);
   if (
     metadata.root.scope !== "project" ||
     metadata.root.kind !== "project-dsh" ||
@@ -1948,8 +2009,8 @@ export async function deleteSkill(root, name, log, options = {}) {
   const definition = await checkedWritableRootDefinition(root);
   if (definition && definition.ok === false) return definition;
   if (!definition) return readonlyError("delete");
-  // 用户级来源（dsh / hub）**不可删**：技能只能停用。删除会把用户自己放进去的技能
-  // 从磁盘上搬走，代价远大于收益；项目级来源（本仓库自己的 .dsh/skills）才允许删。
+  // 删除只对插件可管理的来源开放（用户级 dsh / hub、项目级 .dsh/skills）；外部 Agent
+  // 目录与自定义绝对路径来源只读，返回明确错误而不是"假装删了"。
   if (definition.deletable !== true) return notDeletableError(definition);
   const resolved = await resolveEntry(definition, name);
   if (resolved === null)
@@ -2819,7 +2880,19 @@ export async function createSkill(input, log, options = {}) {
     : rootByKey("hub") || rootByKey("dsh");
   const definition = await checkedWritableRootDefinition(requestedRoot);
   if (definition && definition.ok === false) return definition;
-  if (!definition) return readonlyError("create");
+  if (!definition) {
+    // 区分「来源根本不存在」与「来源存在但只读」：旧实现两种都回
+    // 「该技能来源不允许启用或停用」，创建失败时这条提示既指错动作又指错原因。
+    if (!rootDefinition(requestedRoot)) {
+      return {
+        ok: false,
+        code: "error.root.unknown",
+        params: { root: String(requestedRoot == null ? "" : requestedRoot) },
+        error: `技能来源不存在：${requestedRoot == null || requestedRoot === "" ? "(空)" : requestedRoot}`,
+      };
+    }
+    return readonlyError("create");
+  }
   const root = definition.path;
   const requestedName = String((input && input.name) || "").trim();
   const name = toKebab(requestedName);
@@ -3185,7 +3258,9 @@ export async function state(options = {}) {
         label: root.label,
         mutable: root.mutable,
         deletable: root.deletable === true,
-        removable: root.key !== "dsh" && root.key !== "hub" && root.scope !== "project",
+        removable: !isDefaultSkillSource(root) && root.scope !== "project",
+        // 默认来源（dsh / hub）：界面据此隐藏来源开关、只显示「可管理」标记。
+        defaultSource: isDefaultSkillSource(root),
         toggleable: root.toggleable,
         native: root.native,
         rank: root.rank,
@@ -3246,7 +3321,8 @@ export async function state(options = {}) {
       path: root.path,
       label: root.label,
       mutable: root.mutable,
-      // 是否提供「删除」：只有项目级 DSH 根为 true。用户级 dsh / hub 可写但不可删。
+      // 是否提供「删除」：dsh / hub / 项目级 .dsh/skills 为 true；
+      // 外部 Agent 与自定义绝对路径来源为 false（只读）。
       deletable: root.deletable === true,
       toggleable: root.toggleable,
       native: root.native,
@@ -3262,13 +3338,14 @@ export async function state(options = {}) {
       exists,
       truncated: truncated === true,
       // 界面用：能否从管理器「移除」（不再读取）。dsh / hub / 项目级不可移除。
-      removable:
-        root.key !== "dsh" && root.key !== "hub" && root.scope !== "project",
+      removable: !isDefaultSkillSource(root) && root.scope !== "project",
+      // 默认来源（dsh / hub）：界面据此隐藏来源开关（它们不能停用），换成「可管理」标记。
+      defaultSource: isDefaultSkillSource(root),
       removed: false,
       enabled:
         policyResult.writable !== false &&
         (root.scope === "project" ||
-          root.key === "dsh" ||
+          isDefaultSkillSource(root) ||
           policyResult.state.sources[root.key] !== false),
       skills,
     });

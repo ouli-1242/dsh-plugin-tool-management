@@ -33,6 +33,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
 import { createRuleProviderRegistrar } from './provider.js'
+import { normalizePresetId } from '../agents-md/preset-id.js'
 import { normalizeArchive, memoryAllowed, type ModeState, type SceneArchive } from './archive.js'
 
 // ── 常量 ───────────────────────────────────────────────────────────────────
@@ -177,6 +178,23 @@ export interface SceneMemoryProjection {
   dropped: Array<{ id: string; scene: string; name: string; bytes: number }>
 }
 
+/** 当前生效的场景提示词投影（供 systemPrompt 段与只读状态展示）。 */
+export interface ScenePromptProjection {
+  /** 提供这段提示词的场景；`null` = 没有任何场景绑定提示词。 */
+  scene: string | null
+  /** 绑定的预设 id；`null` = 未绑定。 */
+  presetId: string | null
+  /** 预设正文（逐字节原样；段为空时宿主会删除该段）。 */
+  text: string
+  /** 绑定了预设但文件不存在/为空（UI 要如实标出来，别让用户以为注入了）。 */
+  missing: boolean
+  /**
+   * 绑定的预设与**当前 `~/.dsh/AGENTS.md` 内容一致** → 不重复注入（否则同一份正文会出现两遍）。
+   * 此时这份预设本来就是生效中的基线，用户看不出差别；界面据此显示「生效中」。
+   */
+  duplicate?: boolean
+}
+
 export interface RulesService {
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
@@ -244,6 +262,12 @@ export interface SceneRecord {
   label?: string
   /** 一句话说明这个场景是干什么的（界面卡片副标题）。 */
   description?: string
+  /**
+   * 绑定的提示词预设 id（`tool-management/agents-md/<id>/AGENTS.md`）。
+   * 启用该场景时，这份预设的正文作为独立 systemPrompt 段注入（**不写** `~/.dsh/AGENTS.md`）。
+   * 一个场景至多绑定一个（单值字段即天然单选）；未启用/未绑定 → 不注入。
+   */
+  prompt?: string
   order?: number
   /** ISO 时间戳；只要**创建**时间，不参与提示词段（段必须逐字节稳定）。 */
   createdAt?: string
@@ -253,6 +277,7 @@ export interface SceneRecord {
 interface SceneIndexEntry {
   label?: string
   description?: string
+  prompt?: string
   order?: number
   createdAt?: string
 }
@@ -535,6 +560,10 @@ function parseSceneEntry(raw: unknown): SceneIndexEntry | null {
   const out: SceneIndexEntry = {}
   if (typeof obj.label === 'string' && obj.label.trim() !== '') out.label = obj.label
   if (typeof obj.description === 'string' && obj.description !== '') out.description = obj.description
+  if (typeof obj.prompt === 'string') {
+    const prompt = normalizeScenePromptId(obj.prompt)
+    if (prompt) out.prompt = prompt
+  }
   if (typeof obj.order === 'number' && Number.isFinite(obj.order)) out.order = obj.order
   if (typeof obj.createdAt === 'string' && obj.createdAt !== '') out.createdAt = obj.createdAt
   return out
@@ -647,9 +676,20 @@ function sceneRecordOf(name: string, entry: SceneIndexEntry | undefined): SceneR
     name,
     ...(name === GLOBAL_SCENE ? { label: e.label || GLOBAL_SCENE_LABEL } : (e.label ? { label: e.label } : {})),
     ...(e.description ? { description: e.description } : {}),
+    ...(e.prompt ? { prompt: e.prompt } : {}),
     order: e.order ?? (name === GLOBAL_SCENE ? 0 : DEFAULT_GROUP_ORDER),
     ...(e.createdAt ? { createdAt: e.createdAt } : {}),
   }
+}
+
+/** 提示词预设 id 的口径与 agents-md 服务**同源**（用户裁定：id 什么都能写）。 */
+
+/** 校验场景要绑定的提示词预设 id；返回 `''` 表示解绑，`null` 表示非法。 */
+function normalizeScenePromptId(value: unknown): string | null {
+  const id = String(value ?? '').trim()
+  if (id === '') return ''
+  const result = normalizePresetId(id)
+  return result.ok ? result.id : null
 }
 
 /** 路径是否存在（不跟随符号链接；用于迁移前置判断）。 */
@@ -742,12 +782,14 @@ function normalizeActive(raw: unknown): string[] | null {  if (!Array.isArray(ra
 }
 
 /**
- * 活动场景解析（§4 对照表）：
- *   - `index.active` 缺失 / null → **全部场景启用**（默认；保证"丢进去就有用"）
- *   - `index.active` 为数组 → 只有列出的场景启用（显式收窄）
+ * 活动场景解析（用户裁定 2026-09-15：**除「全局」外同时只能启用一个场景**）：
+ *   - `index.active` 为数组（新写入的唯一形态）→ 至多一个非保留场景启用；
+ *   - `index.active` 缺失 / null → 历史默认（"全部场景启用"）；**不再产生**新值，
+ *     新建场景时会被收敛成显式数组（见 `collapseActiveForNewScene`），
+ *     因此"新建即启用"不会发生；存量数据仍按老语义读，避免升级后注入范围突变。
  *   - `_shared` 恒常启用（公共基线），不受开关影响
  *   - 保留场景 `global` 恒常启用：它的记忆对任何对话都成立
- * 缺失 rules-index.json 一律按默认值运行（"全部场景启用"），不抛错（§9.3）。
+ * 缺失 rules-index.json 一律按默认值运行，不抛错（§9.3）。
  * 场景生效与否只由 index.active 决定（场景档案/模式也写这一份）。
  */
 function resolveActiveScenes(index: RulesIndex, knownScenes: string[]): { active: Set<string>; mode: 'all' | 'custom' } {
@@ -757,6 +799,31 @@ function resolveActiveScenes(index: RulesIndex, knownScenes: string[]): { active
   active.add(SHARED_GROUP)
   active.add(GLOBAL_SCENE)
   return { active, mode }
+}
+
+/** 当前启用的**非保留**场景（单选模型下至多一个；多个时按场景顺序取第一个）。 */
+function enabledSceneOf(index: RulesIndex): string | null {
+  const names = Object.keys(index.scenes || {})
+  const { active } = resolveActiveScenes(index, names)
+  const enabled = names
+    .filter((n) => n !== SHARED_GROUP && n !== GLOBAL_SCENE && active.has(n))
+    .sort((a, b) => sceneOrderOf(index, a) - sceneOrderOf(index, b) || a.localeCompare(b))
+  return enabled[0] ?? null
+}
+
+/**
+ * 新建场景前把历史默认（`active = null` = 全部启用）收敛成显式数组，保证
+ * **新场景默认不启动**、且收敛后仍满足"至多一个非保留场景启用"：
+ *   - 已存在其它非保留场景 → 取顺序第一个作为启用场景（其余收敛掉，返回 `collapsed: true`）
+ *   - 不存在 → 空数组（什么都不启用）
+ * @returns 是否发生了收敛（供 UI 如实提示）。
+ */
+function collapseActiveForNewScene(index: RulesIndex): boolean {
+  if (normalizeActive(index.active) !== null) return false
+  const names = Object.keys(index.scenes || {}).filter((n) => n !== SHARED_GROUP && n !== GLOBAL_SCENE)
+  const first = names.sort((a, b) => sceneOrderOf(index, a) - sceneOrderOf(index, b) || a.localeCompare(b))[0]
+  index.active = first === undefined ? [] : [first]
+  return true
 }
 
 /** 场景名 = 分组路径的第一段（`web/frontend` 属于场景 `web`）。 */
@@ -1255,6 +1322,105 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     return value
   }
 
+  // ── 场景提示词段（绑定预设正文；只读，绝不写 ~/.dsh/AGENTS.md）──────────────
+  //
+  // 语义（用户裁定 2026-09-15）：
+  //   - 场景可绑定**一个**提示词预设（`scenes[].prompt` → `agents-md/<id>/AGENTS.md`）；
+  //   - 除保留场景 `global` 外**同时只能启用一个场景**，所以同一时刻至多一份提示词在场；
+  //   - 没有启用其它场景时才轮到 `global` 自己的绑定（它恒常生效，覆盖"永远在场的提示词"）；
+  //   - 预设文件不存在 / 未绑定 → 返回 `''`（renderPrompt 会删掉空段，不产生空标题）。
+  //
+  // 为什么不用 fs.watch 也不用每请求读盘：段契约要求**同步返回**且逐字节稳定，
+  // 因此按 `mtimeMs + size` 做一次 stat 缓存 —— 命中时零读盘，外部编辑器改了预设
+  // 也会在下一个请求自动刷新（与记忆段的"两相扫描"同一哲学）。
+  const promptFileCache = new Map<string, { key: string; text: string }>()
+
+  /** 读一个预设正文（同步、带 stat 指纹缓存）；不存在返回 `''`。 */
+  function readPresetTextSync(id: string): string {
+    const file = join(stateDir, 'agents-md', id, 'AGENTS.md')
+    let key: string
+    try {
+      const st = statSync(file)
+      if (!st.isFile()) return ''
+      key = `${st.mtimeMs}:${st.size}`
+    } catch {
+      promptFileCache.delete(id)
+      return ''
+    }
+    const cached = promptFileCache.get(id)
+    if (cached && cached.key === key) return cached.text
+    let text = ''
+    try { text = readFileSync(file, 'utf8') } catch { return '' }
+    promptFileCache.set(id, { key, text })
+    return text
+  }
+
+  /** 预设文件是否存在（同步；绑定前校验用，避免悬空绑定）。 */
+  function presetExistsSync(id: string): boolean {
+    try {
+      return statSync(join(stateDir, 'agents-md', id, 'AGENTS.md')).isFile()
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 读当前 `~/.dsh/AGENTS.md`（同步、带 stat 指纹缓存）。
+   * 用途只有一个：**去重**——绑定的预设与文件内容逐字节相同时不再注入第二遍正文。
+   */
+  let globalAgentsCache: { key: string; text: string } | null = null
+  function readGlobalAgentsMdSync(): string {
+    const file = join(resolveDshHome(), 'AGENTS.md')
+    let key: string
+    try {
+      const st = statSync(file)
+      if (!st.isFile()) return ''
+      key = `${st.mtimeMs}:${st.size}`
+    } catch {
+      globalAgentsCache = null
+      return ''
+    }
+    if (globalAgentsCache && globalAgentsCache.key === key) return globalAgentsCache.text
+    let text = ''
+    try { text = readFileSync(file, 'utf8') } catch { return '' }
+    globalAgentsCache = { key, text }
+    return text
+  }
+
+  /**
+   * 当前生效的场景提示词：启用场景的绑定优先，其次 `global` 的绑定；都没有则 `''`。
+   * 绑定内容与 `~/.dsh/AGENTS.md` 相同时标记 `duplicate` 且返回空段 —— 那份正文已经在
+   * 基线里了，再注入一遍只会把同样的内容塞进上下文两次。
+   */
+  function scenePrompt(): ScenePromptProjection {
+    const index = readIndexSync(stateDir)
+    const names = Object.keys(index.scenes || {})
+    const { active } = resolveActiveScenes(index, names)
+    const globalText = readGlobalAgentsMdSync().trim()
+    /** 绑定 → 投影；与文件一致时是 duplicate（不注入），否则原样注入。 */
+    const project = (scene: string, id: string): ScenePromptProjection => {
+      const text = readPresetTextSync(id)
+      if (text.trim() === '') return { scene, presetId: id, text: '', missing: true }
+      if (globalText !== '' && text.trim() === globalText) return { scene, presetId: id, text: '', missing: false, duplicate: true }
+      return { scene, presetId: id, text, missing: false }
+    }
+    // 单选：取唯一一个非保留启用场景（resolveActiveScenes 已保证 ≤1，这里仍做确定性排序兜底）。
+    const enabled = names
+      .filter((n) => n !== SHARED_GROUP && n !== GLOBAL_SCENE && active.has(n))
+      .sort((a, b) => sceneOrderOf(index, a) - sceneOrderOf(index, b) || a.localeCompare(b))
+    for (const scene of enabled) {
+      const id = index.scenes?.[scene]?.prompt
+      if (!id) continue
+      const projected = project(scene, id)
+      // 绑了但预设为空/已删 → 继续找下一个（不注入空段）。
+      if (projected.missing) continue
+      return projected
+    }
+    const globalId = index.scenes?.[GLOBAL_SCENE]?.prompt
+    if (globalId) return project(GLOBAL_SCENE, globalId)
+    return { scene: null, presetId: null, text: '', missing: false }
+  }
+
   const providerInvalidators = new Set<() => void>()
   /** 通知已注册的 provider 提示词已变化（best-effort）。 */
   const invalidateProviders = (): void => {
@@ -1400,6 +1566,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     }
     const known = [...names]
     const { active } = resolveActiveScenes(index, known)
+    const enabledScene = enabledSceneOf(index)
     return known
       .map((name) => ({
         name,
@@ -1410,6 +1577,9 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
         shared: name === SHARED_GROUP,
         global: name === GLOBAL_SCENE,
         description: index.scenes?.[name]?.description || '',
+        prompt: index.scenes?.[name]?.prompt || '',
+        // 单选模型下"能不能点开"：已被别的场景占用时，这个开关要置灰。
+        selectable: name !== SHARED_GROUP && name !== GLOBAL_SCENE && (enabledScene === null || enabledScene === name),
       }))
       .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
   }
@@ -1426,6 +1596,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const groups = groupFilter ? snap.groups.filter((g) => g.name === groupFilter) : snap.groups
     const scenes = sceneRows(snap, index)
     const projection = sceneMemory()
+    const promptProjection = scenePrompt()
     return {
       ok: true,
       rules,
@@ -1434,7 +1605,17 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       // 场景 = 显式记录（含保留场景 global 与尚无记忆的空场景）；active = 是否参与注入。
       scenes,
       activeMode: normalizeActive(index.active) === null ? 'all' : 'custom',
+      // 单选模型：当前启用的那个场景（null = 只留 `_shared` 与 `global`）。
+      activeScene: enabledSceneOf(index),
       sceneMemory: { usedBytes: projection.bytes, maxBytes: projection.maxBytes, truncated: projection.truncated, dropped: projection.dropped },
+      // 当前生效的场景提示词（绑定的预设正文；与 ~/.dsh/AGENTS.md 一致时不重复注入）。
+      scenePrompt: {
+        scene: promptProjection.scene,
+        presetId: promptProjection.presetId,
+        missing: promptProjection.missing,
+        duplicate: promptProjection.duplicate === true,
+        bytes: Buffer.byteLength(promptProjection.text, 'utf8'),
+      },
       // 路径供 UI 显示「文件在哪」；不再让界面硬编码 ~/.dsh/scene-memory。
       paths: { memories: rulesRoot, scenes: scenesRoot, hub: stateDir },
       stats: {
@@ -2001,32 +2182,43 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   }
 
   /**
-   * 设置"启用场景"集合（全局持久化，切换后**下一个请求即生效**，§4 对照表）。
-   *   - `args.all === true` → 清空显式集合，回到"全部启用"默认（新建场景自动生效）
-   *   - `args.scenes` 数组 → 显式收窄（`_shared` 恒常，无需列出）
+   * 设置"启用场景"（全局持久化，切换后**下一个请求即生效**，§4 对照表）。
+   *   - `args.scenes` 数组 → 启用集合；**至多一个非保留场景**（用户裁定：除「全局」外
+   *     同时只能启用一个），`[]` = 全部关闭（只留恒常的 `_shared` 与 `global`）
+   *   - `args.all === true` → 旧的"全部启用"形态，与新模型冲突，明确拒绝（不猜）
    * 场景名按放宽后的规则校验；不存在的场景名也允许保存（目录随后创建即可生效）。
    */
   async function rulesSetActive(args: any): Promise<any> {
-    const index = await readIndex(stateDir)
-    if (args && args.all === true) {
-      index.active = null
-    } else {
-      const raw = Array.isArray(args && args.scenes) ? args.scenes : []
-      const names: string[] = []
-      const seen = new Set<string>()
-      for (const item of raw) {
-        const name = String(item == null ? '' : item).trim()
-        // 恒常启用的保留场景不入显式集合：`_shared`（公共基线）与 `global`（「全局」）。
-        if (name === '' || name === SHARED_GROUP || name === GLOBAL_SCENE) continue
-        if (!isValidGroupPath(name)) {
-          return fail('error.rules.invalidGroup', `场景名非法：${name}（非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）`)
-        }
-        if (seen.has(name)) continue
-        seen.add(name)
-        names.push(name)
-      }
-      index.active = names
+    // 参数必须显式二选一。旧实现把「没传参数」「传了未知参数名」都落进 else 分支、
+    // 用空数组覆盖 active，于是 `rules-set-active {}` 会静默把模式切成 custom 且零激活场景
+    // （用户以为自己只是"没改动"，实际已经改了注入范围）。这里显式拒绝。
+    const hasAll = !!(args && args.all === true)
+    const hasScenes = Array.isArray(args && args.scenes)
+    if (!hasAll && !hasScenes) {
+      return fail('error.rules.invalidArgs', '缺少参数：需要 scenes:[...]（启用集合，至多一个场景）')
     }
+    if (hasAll) {
+      return fail('error.rules.singleSceneOnly', '除「全局」外同时只能启用一个场景：不支持"全部启用"，请改用 scenes:[<场景名>] 或 scenes:[]（全部关闭）')
+    }
+    const index = await readIndex(stateDir)
+    const raw = Array.isArray(args && args.scenes) ? args.scenes : []
+    const names: string[] = []
+    const seen = new Set<string>()
+    for (const item of raw) {
+      const name = String(item == null ? '' : item).trim()
+      // 恒常启用的保留场景不入显式集合：`_shared`（公共基线）与 `global`（「全局」）。
+      if (name === '' || name === SHARED_GROUP || name === GLOBAL_SCENE) continue
+      if (!isValidGroupPath(name)) {
+        return fail('error.rules.invalidGroup', `场景名非法：${name}（非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）`)
+      }
+      if (seen.has(name)) continue
+      seen.add(name)
+      names.push(name)
+    }
+    if (names.length > 1) {
+      return fail('error.rules.singleSceneOnly', `除「全局」外同时只能启用一个场景（收到 ${names.length} 个：${names.join('、')}）`)
+    }
+    index.active = names
     await writeIndex(stateDir, index)
     invalidateSnapshot()
     invalidateProviders()
@@ -2056,6 +2248,10 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (description.length > MAX_DESCRIPTION_LENGTH) {
       return fail('error.rules.descriptionTooLong', `场景描述过长（≤${MAX_DESCRIPTION_LENGTH} 字符）`)
     }
+    const prompt = args && args.prompt !== undefined ? normalizeScenePromptId(args.prompt) : undefined
+    if (prompt === null) {
+      return fail('error.rules.invalidGroup', `提示词预设 id 非法：${String(args.prompt)}（仅小写字母/数字/连字符，且不能是备份槽）`)
+    }
     await ensureLayout()
     try {
       await mkdir(join(rulesRoot, name), { recursive: true })
@@ -2063,12 +2259,16 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       return fail('error.rules.ioFailed', `创建场景目录失败：${message(e)}`)
     }
     const index = await readIndex(stateDir)
+    // **新场景默认不启动**：先把历史默认（active=null=全部启用）收敛成显式集合，
+    // 新建的这个自然不在其中；收敛后仍是"至多一个场景启用"。
+    const collapsed = collapseActiveForNewScene(index)
     if (!index.scenes) index.scenes = {}
     const prev = index.scenes[name] || {}
     const next: SceneIndexEntry = {
       ...prev,
       ...(label !== '' && name !== GLOBAL_SCENE ? { label } : {}),
       ...(description !== '' ? { description } : {}),
+      ...(prompt !== undefined && prompt !== '' ? { prompt } : {}),
       order: prev.order ?? DEFAULT_GROUP_ORDER,
       createdAt: prev.createdAt ?? new Date().toISOString(),
     }
@@ -2077,11 +2277,11 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     await writeIndex(stateDir, index)
     invalidateSnapshot()
     invalidateProviders()
-    return { ok: true, scene: sceneRecordOf(name, next) }
+    return { ok: true, scene: sceneRecordOf(name, next), ...(collapsed ? { collapsedActive: true } : {}) }
   }
 
   /**
-   * 更新场景记录（描述 / 显示名 / 顺序）。记忆文件不动。
+   * 更新场景记录（描述 / 显示名 / 顺序 / 绑定的提示词预设）。记忆文件不动。
    * 这是「场景有描述」的写入口——旧版场景只有目录名，没有可编辑元数据。
    */
   async function rulesUpdateScene(args: any): Promise<any> {
@@ -2099,6 +2299,18 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       }
       if (description === '') delete next.description
       else next.description = description
+    }
+    if (args && args.prompt !== undefined) {
+      const prompt = normalizeScenePromptId(args.prompt)
+      if (prompt === null) {
+        return fail('error.rules.invalidGroup', `提示词预设 id 非法：${String(args.prompt)}（仅小写字母/数字/连字符，且不能是备份槽）`)
+      }
+      // 绑定前校验预设确实存在：宁可现在拒绝，也不要留一个永远注入不出东西的悬空绑定。
+      if (prompt !== '' && !presetExistsSync(prompt)) {
+        return fail('error.rules.notFound', `提示词预设不存在：${prompt}`)
+      }
+      if (prompt === '') delete next.prompt
+      else next.prompt = prompt
     }
     if (args && args.label !== undefined && name !== GLOBAL_SCENE) {
       const label = String(args.label).trim()
@@ -2173,6 +2385,31 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     return { ok: true, name }
   }
 
+  /**
+   * 提示词预设改名后**同步场景绑定**：把所有 `scenes[].prompt === from` 改成 `to`。
+   * 由 AGENTS.md 预设库的改名路径调用——绑定存在 `rules-index.json` 里，预设库
+   * 自己看不到它，不叫这一声改名就会留下悬空绑定（场景卡片显示「预设不存在」）。
+   * @returns 改了几个场景。
+   */
+  async function rulesRebindPrompt(args: any): Promise<any> {
+    const from = String((args && args.from) || '').trim()
+    const to = String((args && args.to) || '').trim()
+    if (!from || !to) return fail('error.rules.invalidArgs', '需要 from 与 to 两个预设 id')
+    const index = await readIndex(stateDir)
+    const scenes = index.scenes || {}
+    let changed = 0
+    for (const [name, entry] of Object.entries(scenes)) {
+      if (entry && entry.prompt === from) { scenes[name] = { ...entry, prompt: to }; changed++ }
+    }
+    if (changed) {
+      index.scenes = scenes
+      await writeIndex(stateDir, index)
+      invalidateSnapshot()
+      invalidateProviders()
+    }
+    return { ok: true, from, to, changed }
+  }
+
   async function rulesSetIndex(args: any): Promise<any> {
     const id = String((args && args.id) || '')
     const parts = parseId(id)
@@ -2228,7 +2465,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   // index.ts 从本集合派生，勿在宿主端另抄一份。
   const writeOps: ReadonlySet<string> = new Set([
     'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle', 'rules-import',
-    'rules-set-index', 'rules-set-active', 'rules-create-scene', 'rules-update-scene', 'rules-remove-scene',
+    'rules-set-index', 'rules-set-active', 'rules-create-scene', 'rules-update-scene', 'rules-remove-scene', 'rules-rebind-prompt',
     'rules-attach', 'rules-detach', 'rules-trash-remove',
   ])
 
@@ -2252,6 +2489,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     'rules-create-scene': (args) => runWrite(() => rulesCreateScene(args || {})),
     'rules-update-scene': (args) => runWrite(() => rulesUpdateScene(args || {})),
     'rules-remove-scene': (args) => runWrite(() => rulesRemoveScene(args || {})),
+    'rules-rebind-prompt': (args) => runWrite(() => rulesRebindPrompt(args || {})),
   }
 
   const service: RulesService = {

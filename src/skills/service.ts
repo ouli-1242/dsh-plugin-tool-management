@@ -436,11 +436,16 @@ export function createSkillsService(ctx: any): SkillsService {
     // 创建默认落 hub（`tool-management/skills/`）：UI 不传 root 时走这里；
     // core.js 的 createSkill 默认值是第二道保险（同口径）。官方 `~/.dsh/skills/` 仍作为来源列出。
     'skill-create': wrap(
-      (args) => write(async () => createSkill(
-        { name: args.name, description: args.description, body: args.body },
-        log,
-        { root: await requestRoot(String(args.root || 'hub')) },
-      )),
+      (args) => write(async () => {
+        // requestRoot 未命中时回传原始 key，让 core 的 error.root.unknown 带上来源名
+        // （否则传了不存在的 root 会收到「技能来源不存在：(空)」这种指错方向的提示）。
+        const key = String(args.root || 'hub')
+        return createSkill(
+          { name: args.name, description: args.description, body: args.body },
+          log,
+          { root: (await requestRoot(key)) || key },
+        )
+      }),
       afterWrite,
     ),
     'skill-import': wrap(

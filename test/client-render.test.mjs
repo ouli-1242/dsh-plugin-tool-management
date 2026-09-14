@@ -40,6 +40,73 @@ let modeSceneFixture = '办公'
  */
 let scenesFixtureOverride = null
 
+/**
+ * 兼容页 fixture 模式：
+ * - `'blocked'`（默认）：一项真降级 + 三项可选槽位缺失 + 一个阻塞项；
+ * - `'optional-only'`：**只有**宿主本来就没有的原生入口缺失，其余全通过、无阻塞 ——
+ *   插件自己顶上，结论条不得着色（这是本页唯一必须守住的口径）；
+ * - `'healthy'`：全部通过。
+ */
+let compatFixtureMode = 'blocked'
+
+/**
+ * 兼容页 fixture 构造器：形状按宿主实回（`/compat-status`）来，两类"非 ok"都覆盖到：
+ *
+ * - **optional**（`workspace.delete-native` 等）：宿主没有这个入口，插件自己顶上 ——
+ *   功能完好，必须显示为"插件适配层"，**不得**出现在降级清单、**不得**说按钮被禁用。
+ *   本机 rc.2 的真实形状就是这三个槽位都缺。
+ * - **真降级**（`projection.write`）：能力不可用且插件也补不上 → 才进降级清单。
+ */
+function compatFixture() {
+  const healthy = compatFixtureMode === 'healthy'
+  const optionalOnly = compatFixtureMode === 'optional-only'
+  const withRealDegrade = compatFixtureMode === 'blocked'
+  const ok = (id, label, kind, fallback, owner) => ({ id, label, kind, fallback, owner, state: 'ok', detail: '成员齐备', missing: [] })
+  const optionalAbsent = (id, label, missingName, kind) => ({
+    id, label, kind, owner: 'workspace', fallback: 'native-entry', optional: true,
+    state: 'missing-member', detail: '宿主实现缺少 ' + missingName, missing: [missingName],
+  })
+  const degradedItem = {
+    // 真降级选 projection.write：它在五条动作路由里**都不是**必需项，所以断言
+    // "本 fixture 下没有不可用动作"仍然成立。若拿 sessions.detach-live 当降级样本，
+    // 删除路由会合理地变成"不可用"，那条断言就会误报（fixture 与断言互相打架）。
+    id: 'projection.write', label: '投影缓存写入路径', kind: 'write', owner: 'projectionCache',
+    fallback: 'disable-destructive', state: 'missing-member', detail: '宿主实现缺少 put', missing: ['put'],
+  }
+  const findings = [
+    ok('workspace.read-state', '读取工作区状态', 'read', 'degrade-read', 'workspace'),
+    ok('workspace.enqueue', '串行写事务', 'write', 'disable-destructive', 'workspace'),
+    ok('workspace.set-state', '写工作区状态', 'write', 'disable-destructive', 'workspace'),
+    ok('workspace.index-header', '索引会话头部', 'write', 'disable-destructive', 'workspace'),
+    ok('projection.delete-native', '投影缓存删除屏障', 'delete', 'native-entry', 'projectionCache'),
+    healthy
+      ? ok('workspace.delete-native', '宿主原生删除入口', 'delete', 'native-entry', 'workspace')
+      : optionalAbsent('workspace.delete-native', '宿主原生删除入口', 'deleteSession', 'delete'),
+    ok('sessions.cold-announce', '冷会话移除广播', 'delete', 'disable-destructive', 'sessions'),
+    ok('sessions.detach-live', '实时会话落盘与分离', 'delete', 'disable-destructive', 'sessions'),
+    withRealDegrade ? degradedItem : ok('projection.write', '投影缓存写入路径', 'write', 'disable-destructive', 'projectionCache'),
+    optionalAbsent('workspace.unarchive-native', '宿主原生恢复入口', 'unarchiveSession', 'write'),
+    optionalAbsent('workspace.batch-native', '宿主原生批量入口', 'archiveWorkspaceSessions', 'write'),
+  ]
+  const degraded = withRealDegrade ? [degradedItem] : []
+  return {
+    ok: true,
+    host: { version: '0.1.5-rc.2', modules: { '@deepseek-ai/dsh-workspace': 'C:/x/dsh-workspace/lib/index.js' } },
+    sameAsHost: { '@deepseek-ai/dsh-workspace': true, '@deepseek-ai/dsh-tools': !withRealDegrade },
+    findings,
+    degraded,
+    blockers: withRealDegrade
+      ? ['@deepseek-ai/dsh-tools：插件与宿主加载的是两份不同拷贝（运行 node scripts/host-deps.mjs --fix）']
+      : [],
+    mayDelete: true,
+    verifiedVersion: '0.1.5-rc.2',
+    expectedPeerRange: '>=0.1.5-rc.2 <0.2.0-0',
+    generatedAt: 1757836000000,
+    summary: '宿主 0.1.5-rc.2 · 能力 ' + String(findings.length - degraded.length) + '/' + String(findings.length)
+      + (degraded.length ? ' · 降级 ' + String(degraded.length) + ' 项' : ' · 全部可用'),
+  }
+}
+
 function fixtureFor(op) {
   const scenes = [
     { name: 'global', label: '全局', order: 0, count: 1, active: true, shared: false, global: true, description: '任何对话都注入' },
@@ -77,6 +144,11 @@ function fixtureFor(op) {
       return { ok: true, tools: [{ name: 'read_file', presets: ['default'], current: true }] }
     case 'skill-state':
       return { ok: true, roots: [], trash: [], summary: { total: 0, enabled: 0, disabled: 0, issues: 0 } }
+    // 兼容页的假响应按宿主实回形状给出。默认 fixture **刻意带一项降级 + 一个阻塞项**：
+    // 全部 ok 的响应会让降级/阻塞两块的回调一次都不执行，那两块就等于没被渲染过。
+    // `compatFixtureMode = 'optional-only' | 'healthy'` 时改成对应的另一支。
+    case 'compat-status':
+      return compatFixture()
     default:
       return { ok: true }
   }
@@ -145,16 +217,18 @@ function fakeSlots() {
 }
 
 /** 假 ctx：只实现 apply 真正用到的那几个成员（ctx.get / locale / interval / timeout）。 */
-function fakeCtx(slots, dict) {
+function fakeCtx(slots, dict, lang) {
+  // 默认中文表；传 lang='en' 时改用英文表（供"英文界面不得露出中文"这类回归用）。
+  const table = (dict && dict[lang || 'zh']) || {}
   return {
     get: (name) => (name === 'slots' ? slots : undefined),
     interval: () => (() => {}),
     timeout: () => (() => {}),
     locale: {
       register: () => (() => {}),
-      // 宿主 locale.bind(ns) 返回的取词函数签名是 (key, params)；这里用导出词典里的中文表。
+      // 宿主 locale.bind(ns) 返回的取词函数签名是 (key, params)。
       bind: () => (key, params) => {
-        let text = dict.zh[key] || key
+        let text = table[key] || key
         if (params) for (const k of Object.keys(params)) text = text.replace('{' + k + '}', String(params[k]))
         return text
       },
@@ -265,8 +339,12 @@ function createDispatcher() {
  *
  * 来自一次真实反馈：「描述也要有字数限制，不然会导致全局变成纵向布局」——
  * 描述是自由文本，卡片只留一行，不裁就会把卡片撑成纵向。
+ *
+ * 只断言**函数行为**（裁到上限、压平空白）；具体 CSS 与视觉排版不做逐条断言 ——
+ * 用户裁定（2026-09-15）：排版/文案的逐条断言是刻舟求剑，改一次样式就要改一次断言，
+ * 真实观感由人在页面上确认。
  */
-test('场景卡片描述：只显示描述、超长必裁，且勾选行的排版契约不被改回去', () => {
+test('场景卡片描述：只显示描述、超长必裁', () => {
   const exported = loadModule()
   exported.apply(fakeCtx(fakeSlots(), exported.dict))
   const { sceneTileDesc, sceneDescMax, clipText } = exported.pages
@@ -284,24 +362,6 @@ test('场景卡片描述：只显示描述、超长必裁，且勾选行的排�
   assert.equal(clipped.length, max, `裁剪后长度应为上限 ${max}，实际 ${clipped.length}`)
   assert.equal(clipped.endsWith('…'), true, '裁剪后应以省略号结尾')
   assert.equal(clipText('  a\n\nb  ', 10), 'a b', '裁剪前应压平空白')
-
-  // CSS 侧的兜底（双保险）：描述行单行省略；勾选行的名称/说明各占一行（否则长描述横向溢出段边框）。
-  // 后者是「文字超出边框」的直接成因——.dsm-pick-main 原是行内 span，text-overflow 对行内元素无效，
-  // 实测溢出 353px（Playwright 量过）。
-  const cssOf = (selector) => {
-    const line = src.split('\n').map((l) => l.trim()).find((l) => l.startsWith(selector) && l.includes('{'))
-    assert.ok(line, `找不到 CSS 规则 ${selector}`)
-    return line.slice(line.indexOf('{') + 1, line.lastIndexOf('}'))
-  }
-  assert.match(cssOf('.dsm-scene-tile-desc{'), /white-space:nowrap/, '描述行必须单行')
-  assert.match(cssOf('.dsm-scene-tile-desc{'), /text-overflow:ellipsis/, '描述行超出要省略号')
-  assert.match(cssOf('.dsm-pick-main{'), /flex-direction:column/, '勾选行的名称与说明必须各占一行')
-  assert.match(cssOf('.dsm-pick-desc{'), /text-overflow:ellipsis/, '勾选行说明超出要省略号')
-  // 滚动容器里的子项不许被压缩（否则筛选框会被压扁、与下面的条目叠在一起）。
-  assert.match(cssOf('.dsm-seg-body>*{'), /flex:none/, '段体子项必须禁止收缩')
-  assert.match(cssOf('.dsm-tools-grid>*{'), /flex:none/, '工具勾选列表子项必须禁止收缩')
-  // 描述输入框的字数上限：显示层裁剪只兜住历史数据，新写的必须在输入处就挡住。
-  assert.match(src, /maxLength:\s*SCENE_DESC_MAX/, '场景描述输入框缺少 maxLength')
 })
 
 /**
@@ -354,16 +414,16 @@ test('记忆段只认本场景的记忆：全局与其它场景都不出现，�
 })
 
 /**
- * 档案弹窗各段的**默认勾选 + 描述截断**契约（用户要求）：
+ * 档案弹窗各段的**默认勾选**契约（用户要求）：
  *   - MCP 工具集 / 技能集 / 子智能体绑定：点「添加」后一律**不勾选**；
- *   - 记忆：只勾**本场景里已启用**的那几条（作用域见上一条用例），「全选」= 本场景全部；
- *   - 记忆描述按 80 字截断（太长会横向溢出段边框）。
+ *   - 记忆：只勾**本场景里已启用**的那几条（作用域见上一条用例），「全选」= 本场景全部。
  * 记忆的默认值是真逻辑（memDefaultPickIds），直接调；其余是常量动作，用源码守卫。
+ * 描述截断/排版不做断言（用户裁定：刻舟求剑）。
  */
-test('档案弹窗：三段「添加」即空集，记忆默认只勾本场景已启用的，描述按上限截断', () => {
+test('档案弹窗：三段「添加」即空集，记忆默认只勾本场景已启用的', () => {
   const exported = loadModule()
   exported.apply(fakeCtx(fakeSlots(), exported.dict))
-  const { memDefaultPickIds, memDescMax, clipText } = exported.pages
+  const { memDefaultPickIds } = exported.pages
   assert.equal(typeof memDefaultPickIds, 'function', 'pages.memDefaultPickIds 未导出（测试接缝丢失）')
 
   const memories = [
@@ -380,13 +440,6 @@ test('档案弹窗：三段「添加」即空集，记忆默认只勾本场景�
   assert.deepEqual(memDefaultPickIds(memories, [], '办公'), [], '拿不到 rules（老宿主/请求失败）时不预勾，宁少不滥')
   assert.deepEqual(memDefaultPickIds([{ id: '办公/a', scene: '办公' }], [{ id: '办公/a', enabled: undefined }], '办公'), ['办公/a'], 'enabled 缺省视为启用（与记忆页一致）')
 
-  // 记忆描述必须截断：上限存在、且超长必裁（记忆正文可能很长，行内只留一行）。
-  const max = memDescMax()
-  assert.ok(max >= 40 && max <= 160, `记忆描述上限不合理：${max}`)
-  const clipped = clipText('一'.repeat(300), max)
-  assert.equal(clipped.length, max)
-  assert.equal(clipped.endsWith('…'), true)
-
   // 源码守卫：三段的「添加」动作必须是空集（默认不勾选）。
   assert.match(src, /\{ mcp: emptyMcpPreset\(\) \}/, 'MCP 工具集「添加」必须默认不勾选')
   assert.match(src, /\{ skills: \[\] \}/, '技能集「添加」必须默认不勾选')
@@ -402,7 +455,8 @@ test('apply 装配：注册 settings.section（slots 缺失时会静默什么都
   assert.deepEqual(slots.injected, ['settings.section'], 'apply 必须往 settings.section 注入一次')
   assert.equal(slots.registered.length, 1, '并且注册恰好一个设置项')
   assert.equal(slots.registered[0].id, 'dsm-tools')
-  assert.equal(slots.registered[0].label, '工具')
+  assert.equal(typeof slots.registered[0].label, 'function')
+  assert.equal(slots.registered[0].label(), '工具')
   assert.equal(slots.registered[0].order, 16)
 })
 
@@ -410,7 +464,7 @@ test('apply 装配：页面组件全部填充，且都是函数', () => {
   const exported = loadModule()
   exported.apply(fakeCtx(fakeSlots(), exported.dict))
   const pages = exported.pages
-  const names = ['MCPPage', 'SkillManagerSection', 'AgentsMdPage', 'HistoryPage', 'ScenesPage', 'SubagentsPage', 'MemoryPage']
+  const names = ['MCPPage', 'SkillManagerSection', 'AgentsMdPage', 'HistoryPage', 'ScenesPage', 'SubagentsPage', 'MemoryPage', 'CompatPage']
   for (const name of names) {
     assert.equal(typeof pages[name], 'function', `pages.${name} 未被填充（apply 是否提前返回了？）`)
   }
@@ -446,7 +500,7 @@ test('面板渲染：整棵组件树首次渲染都不抛错（递归进页面�
  * 用户反馈「自由模式 / 各场景按自己的启用开关注入记忆…这个是干什么的，感觉没什么用」——
  * 那条常驻的静态解释已删；这里两种状态各渲染一遍，确认「有条」与「没条」的差别只由状态决定。
  */
-test('场景页：「当前模式」条只在进入模式后出现（不再常驻一条「自由模式」解释）', async () => {
+test('场景页：模式条按状态出现/消失，卡片网格照常渲染（只看结构，不断言文案）', async () => {
   /** 展开函数组件并把 class / 文本收集出来（同一个组件只展开一次，避免 hook 槽位错位）。 */
   const collect = (element, view, seen = new Set(), out = { classes: new Set(), text: [] }) => {
     if (element === null || element === undefined || typeof element === 'boolean') return out
@@ -491,29 +545,18 @@ test('场景页：「当前模式」条只在进入模式后出现（不再常�
   modeSceneFixture = '办公'
   const withMode = await renderMode()
   assert.ok(withMode.classes.has('dsm-mode-bar'), '进入模式后必须有「当前模式」条')
-  assert.ok(withMode.text.some((s) => s.includes('当前模式：办公')), `模式条没显示当前模式：${withMode.text.slice(0, 12).join(' | ')}`)
-  assert.ok(withMode.text.some((s) => s.includes('MCP 1 台')), '模式条应给出档案摘要')
 
   modeSceneFixture = null
   const freeMode = await renderMode()
-  assert.equal(freeMode.classes.has('dsm-mode-bar'), false, '没进任何模式时不该有模式条（自由模式解释已删除）')
-  assert.equal(freeMode.text.some((s) => s.includes('自由模式')), false, '「自由模式」文案应已下线')
+  assert.equal(freeMode.classes.has('dsm-mode-bar'), false, '没进任何模式时不该有模式条')
   // 反向护栏：卡片本身照常渲染（别把整页一起弄没了）。
   assert.ok(freeMode.classes.has('dsm-scenes'), '场景卡片网格必须仍在渲染')
   assert.equal(freeMode.classes.has('dsm-scene-tile'), true, '场景卡片必须仍在渲染')
 
   // 保留场景「全局」不在场景页出现（用户裁定：全局恒定注入、skills/MCP 各有专页，列成卡片只是噪声）。
-  // 三个场景的 fixture 里应当只剩「办公」「code-review」两张卡。
-  for (const [label, out] of [['有模式', withMode], ['无模式', freeMode]]) {
-    assert.equal(out.text.includes('全局'), false, `${label}：全局不该出现在场景页（标签、卡片、统计都不该有）`)
-    assert.equal(out.text.includes('常驻'), false, `${label}：「常驻」标签随全局卡片一起消失`)
-    assert.ok(out.text.includes('办公'), `${label}：可切换的预设场景必须仍在`)
-    assert.ok(out.text.includes('code-review'), `${label}：可切换的预设场景必须仍在`)
-  }
-  // 用户机器的真实形状：只剩保留场景 global → 显示空态，一张卡片都不该有。
+  // 只断言**结构**（卡片数），具体标签与文案由人在页面上看。
   scenesFixtureOverride = [{ name: 'global', label: '全局', order: 0, count: 2, active: true, shared: false, global: true, description: '' }]
   const onlyGlobal = await renderMode()
-  assert.ok(onlyGlobal.text.some((s) => s.includes('还没有专门设置的场景')), `只剩全局时应显示空态：${onlyGlobal.text.slice(0, 10).join(' | ')}`)
   assert.equal(onlyGlobal.classes.has('dsm-scene-tile'), false, '只剩全局时不该有任何场景卡片')
   scenesFixtureOverride = null
   modeSceneFixture = '办公'
@@ -556,5 +599,103 @@ test('带数据挂载：每个页面在数据到达后再渲染一遍都不抛�
   } finally {
     if (prevFetch === undefined) delete globalThis.fetch
     else globalThis.fetch = prevFetch
+  }
+})
+
+/**
+ * 渲染兼容页并收集 class / 文本（含 effect 跑完、数据到达后的那一遍）。
+ * @returns 收集结果与请求过的 op 列表。
+ */
+async function renderCompatPage(lang) {
+  const calls = []
+  const prevFetch = globalThis.fetch
+  globalThis.fetch = makeFetch(calls)
+  try {
+    const exported = loadModule({ fetchImpl: globalThis.fetch })
+    exported.apply(fakeCtx(fakeSlots(), exported.dict, lang))
+    const view = createDispatcher()
+    // `collected` 每轮重建、只保留最后一轮（数据已到达）的文本：
+    // 兼容页的数据是异步到的，若把各轮结果累加，loading 态的文本会混进断言。
+    let collected = { classes: new Set(), text: [], summary: '' }
+    const collect = (element, seen = new Set(), out = collected) => {
+      if (element === null || element === undefined || typeof element === 'boolean') return out
+      if (typeof element === 'string' || typeof element === 'number') { out.text.push(String(element)); return out }
+      if (Array.isArray(element)) { for (const item of element) collect(item, seen, out); return out }
+      if (typeof element !== 'object' || element.type === undefined) return out
+      if (typeof element.type === 'function') {
+        if (seen.has(element.type)) return out
+        seen.add(element.type)
+        collect(view.render(element.type, element.props), seen, out)
+        return out
+      }
+      const cls = element.props && element.props.className
+      if (typeof cls === 'string') for (const name of cls.split(/\s+/)) if (name) out.classes.add(name)
+      // 结论条那整句单独留一份：它必须由客户端按当前语言拼，不能渲染服务端返回的中文 summary。
+      if (typeof cls === 'string' && cls.includes('dsm-compat-sum') && typeof (element.props && element.props.children) === 'string') {
+        out.summary = element.props.children
+      }
+      collect(element.props && element.props.children, seen, out)
+      return out
+    }
+    for (let pass = 0; pass < 4; pass += 1) {
+      const tree = view.renderTree(React.createElement(exported.pages.CompatPage, { t: exported.pages.t }))
+      assert.deepEqual(tree.failures, [], `兼容页渲染抛错:\n${tree.failures.join('\n')}`)
+      try { view.runEffects() } catch (error) { assert.fail(`effect 抛错：${error && error.message}`) }
+      await settle()
+      collected = { classes: new Set(), text: [], summary: '' }
+      collect(React.createElement(exported.pages.CompatPage, { t: exported.pages.t }))
+    }
+    assert.ok(calls.includes('compat-status'), '兼容页没有请求 compat-status（用例没生效）')
+    return { out: collected, calls }
+  } finally {
+    if (prevFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = prevFetch
+  }
+}
+
+/**
+ * 兼容页：宿主升级后用户该看的那一页。
+ *
+ * 只断言**结构与状态**（渲染不抛错 + 请求发出 + 结论条是否着色），不含任何文案/排版逐条断言
+ * —— 用户裁定（2026-09-15）：那些断言是刻舟求剑，页面观感由人在真实页面上确认。
+ *
+ * 保留项目里唯一重要的那条业务口径：**宿主没提供原生入口 ≠ 降级**
+ * （删除/恢复/批量入口官方本来就没有，插件自己顶上，功能完好，结论条不得变红）。
+ */
+test('兼容页：只缺官方入口时不着色，渲染不抛错', async () => {
+  compatFixtureMode = 'optional-only'
+  try {
+    const { out, calls } = await renderCompatPage()
+    assert.ok(calls.includes('compat-status'), '兼容页没有请求 compat-status')
+    assert.ok(out.classes.has('dsm-compat'), '整页必须用 dsm-compat 容器')
+    assert.equal(out.classes.has('dsm-compat-bar-warn'), false, '只缺官方入口时结论条不得标成"需要处理"')
+    assert.equal(out.classes.has('dsm-compat-pill-warn'), false, '只缺官方入口时不得出现降级标记')
+  } finally {
+    compatFixtureMode = 'blocked'
+  }
+})
+
+test('兼容页：真有阻塞项/真降级时才着色', async () => {
+  compatFixtureMode = 'blocked'
+  const { out } = await renderCompatPage()
+  assert.ok(out.classes.has('dsm-compat-bar-warn'), '真有阻塞项时结论条必须着色')
+  assert.ok(out.classes.has('dsm-compat-pill-warn'), '真降级项必须带降级标记')
+})
+
+/**
+ * 兼容页的结论条：由客户端按当前语言拼（服务端 `compat-status` 的 summary 是中文）。
+ *
+ * 这是**本地化契约**而不是文案断言：断言的是"英文界面下这一句不能出现中文"，
+ * 不锁具体措辞（措辞改了这条仍然通过）。曾经的缺陷就是英文界面照抄服务端中文。
+ */
+test('兼容页：英文界面下结论条不得露出中文', async () => {
+  compatFixtureMode = 'optional-only'
+  try {
+    const { out } = await renderCompatPage('en')
+    assert.ok(out.summary, '没有渲染出结论条（用例没生效）')
+    assert.equal(/[\u4e00-\u9fff]/.test(out.summary), false, '英文界面下结论条出现中文：' + out.summary)
+    assert.match(out.summary, /host |capabilities /, '英文界面下结论条应当走英文词典：' + out.summary)
+  } finally {
+    compatFixtureMode = 'blocked'
   }
 })

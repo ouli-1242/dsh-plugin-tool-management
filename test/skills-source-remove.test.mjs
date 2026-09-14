@@ -6,7 +6,9 @@
 //   - 停用来源（sources[key]=false）：仍然读取、仍然列出技能，只是不可调用；
 //   - 移除来源（removedSources 含 key）：**连目录都不扫**，技能不出现在快照里，
 //     也不参与 provider 候选；源目录与文件一个字节都不动，清掉标记即恢复；
-//   - dsh（官方技能目录）与 hub（导入落点）不可移除 —— 移除会让创建/导入无处落脚。
+//   - dsh（官方技能目录）与 hub（导入落点）不可移除、**也不可停用** —— 默认来源必须读取，
+//     移除会让创建/导入无处落脚，停用则等于「读出来但不可调用」，两者都是「不读取」。
+//     注意被锁的只是**来源层**：来源里面的技能照常可以删除（见 skills-delete.test.mjs）。
 //
 // 跑 lib 编译产物；改 src 后先 npm run build。
 import { test } from 'node:test'
@@ -113,18 +115,38 @@ test('移除 ≠ 停用：停用仍列出技能（只是不可调用），移除
   }
 })
 
-test('保留来源不可移除：dsh 与 hub 被明确拒绝', async () => {
+test('保留来源不可移除、也不可停用：dsh 与 hub 都被明确拒绝', async () => {
   const ctx = await withAgentsSkill()
   try {
     for (const key of ['dsh', 'hub']) {
-      const result = await setSourceRemoved(key, true)
-      assert.equal(result.ok, false, `${key} 不该允许移除`)
-      assert.equal(result.code, 'error.source.reserved')
+      const removed = await setSourceRemoved(key, true)
+      assert.equal(removed.ok, false, `${key} 不该允许移除`)
+      assert.equal(removed.code, 'error.source.reserved')
+      // 「必须读取」的另一半：不可停用。停用=读出来但不可调用，界面上也不该出现这个开关。
+      const disabled = await setSourceEnabled(key, false)
+      assert.equal(disabled.ok, false, `${key} 不该允许停用`)
+      assert.equal(
+        disabled.code,
+        'error.source.reserved',
+        `${key} 停用应报 error.source.reserved（实际 ${disabled.code}）`,
+      )
+      // 启用同样没有意义：默认来源本来就没有来源开关
+      assert.equal((await setSourceEnabled(key, true)).ok, false, `${key} 不该有「启用」这个动作`)
     }
+    // 被拒的写操作不该在状态文件里留下任何默认来源的痕迹
+    const persisted = await readManagerState()
+    assert.deepEqual(persisted.state.removedSources, [], '默认来源不该进 removedSources')
+    assert.equal('dsh' in persisted.state.sources, false, 'sources 表里不该有 dsh')
+    assert.equal('hub' in persisted.state.sources, false, 'sources 表里不该有 hub')
+
     const snapshot = await state({})
     assert.ok(skillNames(snapshot).includes('demo-dsh'), 'dsh 来源应照常可读')
-    assert.equal(rootRow(snapshot, 'dsh').removable, false, 'dsh 不应显示移除入口')
-    assert.equal(rootRow(snapshot, 'hub').removable, false, 'hub 不应显示移除入口')
+    for (const key of ['dsh', 'hub']) {
+      const row = rootRow(snapshot, key)
+      assert.equal(row.removable, false, `${key} 不应显示移除入口`)
+      assert.equal(row.defaultSource, true, `${key} 应被标为默认来源（界面据此隐藏来源开关）`)
+      assert.equal(row.enabled, true, `${key} 必须处于读取状态`)
+    }
   } finally {
     ctx.restore()
   }

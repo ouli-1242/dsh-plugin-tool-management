@@ -1,11 +1,15 @@
-// test/skills-delete.test.mjs —— 「哪些技能可以删」的契约。
+// test/skills-delete.test.mjs —— 「哪些技能可以删、哪些来源不能动」的契约。
 //
-// 产品裁定（用户要求）：
-//   - 用户级来源 **DSH 技能 / 导入技能**（`~/.dsh/skills/`、`~/.dsh/tool-management/skills/`）
-//     **不可删除** —— 技能只能停用，避免把用户自己放进去的技能从磁盘上搬走；
-//   - 删除只对**项目级来源**（`<项目>/.dsh/skills`）开放。
+// 用户裁定的来源语义（两组正好相反，只记住一半就会改错）：
+//   - **默认来源** `dsh`（~/.dsh/skills/）与 `hub`（~/.dsh/tool-management/skills/）：
+//     来源路径**必须读取**（不可移除、不可停用），但里面的技能**可以删**（移入插件回收站）；
+//   - **其他来源**（公共 Agent / Codex / Claude / 自定义绝对路径）：来源路径**可以不读取**
+//     （可停用、可移除），但里面的技能**不能删**（只读）。
 //
-// 这里守两件事：① 来源定义上的可删除位正确；② 真的调用删除时**在碰文件之前**就拒绝。
+// 一句话记法：`mutable` 与 `deletable` 同向，`removable` 与 `mutable` 反向。
+//
+// 这里守三件事：① 来源定义上的可写/可删/只读位正确；② 默认来源的技能删得掉、且**能恢复**
+// （回收站记的来源元数据要对，否则搬进去就回不来）；③ 只读来源在碰文件之前就拒绝。
 //
 // 跑 lib 编译产物；改 src 后先 npm run build。
 import { test } from 'node:test'
@@ -14,7 +18,15 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { deleteSkill, userRoots, customRootKey, addCustomRoot } from '../lib/skills/core.js'
+import {
+  deleteSkill,
+  userRoots,
+  customRootKey,
+  addCustomRoot,
+  isDefaultSkillSource,
+  listTrash,
+  restoreTrash,
+} from '../lib/skills/core.js'
 
 /** 在临时 $DSH_HOME 里铺两个技能：一个在 DSH 来源、一个在导入技能来源。 */
 async function withSkills() {
@@ -47,17 +59,19 @@ async function withSkills() {
   }
 }
 
-test('来源定义：用户级 dsh / hub 可写但不可删；可写性不受影响', () => {
+test('来源定义：默认来源 dsh / hub 可写且里面的技能可删；外部来源只读且不可删', () => {
   const roots = userRoots()
   const byKey = Object.fromEntries(roots.map((r) => [r.key, r]))
   for (const key of ['dsh', 'hub']) {
     assert.ok(byKey[key], `缺少来源 ${key}`)
-    assert.equal(byKey[key].mutable, true, `${key} 应该仍可写（要能在这里创建/导入技能）`)
-    assert.notEqual(byKey[key].deletable, true, `${key} 不应标记为可删除`)
+    assert.equal(byKey[key].mutable, true, `${key} 应该可写（要能在这里创建/导入技能）`)
+    assert.equal(byKey[key].deletable, true, `${key} 可删（移入插件回收站，可恢复）`)
+    assert.equal(isDefaultSkillSource(key), true, `${key} 应被认作默认来源`)
   }
-  // 其余来源（外部目录）本来就不能删
+  // 其余用户级来源（外部 Agent 目录）只读：既不能写，也不能删
   for (const root of roots) {
-    if (root.scope === 'project') continue
+    if (root.scope === 'project' || isDefaultSkillSource(root)) continue
+    assert.equal(root.mutable, false, `${root.key} 应该是只读来源`)
     assert.notEqual(root.deletable, true, `${root.key} 不应标记为可删除`)
   }
 })
@@ -87,25 +101,45 @@ test('客户端词典：root.hub 必须是「导入技能」（词典优先于�
   }
 })
 
-test('删除被拒：dsh / hub 在碰文件之前就返回 error.skill.notDeletable', async () => {
+test('默认来源的技能删得掉：进插件回收站，并且能从回收站原样放回', async () => {
   const ctx = await withSkills()
   try {
-    const before = await readFile(join(ctx.dshSkill, 'SKILL.md'), 'utf8')
+    const before = {
+      dsh: await readFile(join(ctx.dshSkill, 'SKILL.md'), 'utf8'),
+      hub: await readFile(join(ctx.hubSkill, 'SKILL.md'), 'utf8'),
+    }
+    const ids = []
     for (const target of ctx.targets) {
       const result = await deleteSkill(target.root, target.name)
-      assert.equal(result.ok, false, `${target.root.key}: 删除必须被拒绝`)
-      assert.equal(
-        result.code,
-        'error.skill.notDeletable',
-        `${target.root.key}: 错误码应为 error.skill.notDeletable（实际 ${result.code}）`,
-      )
-      assert.ok(result.error && result.error.length > 0, `${target.root.key}: 拒绝要带可读原因`)
+      assert.equal(result.ok !== false, true, `${target.root.key}: 默认来源的技能应可删（实际 ${result.code || ''}）`)
+      assert.ok(result.id, `${target.root.key}: 应返回回收站条目 id`)
+      ids.push(result.id)
+      assert.equal(result.root.key, target.root.key, `${target.root.key}: 元数据应记住来源 key`)
+      assert.equal(result.root.scope, 'user', `${target.root.key}: 用户级来源必须记成 user scope`)
     }
-    // 文件必须原地不动（连回收站都不该出现）
-    assert.equal(existsSync(ctx.dshSkill), true, 'DSH 技能目录不能被搬走')
-    assert.equal(existsSync(ctx.hubSkill), true, '导入技能目录不能被搬走')
-    assert.equal(await readFile(join(ctx.dshSkill, 'SKILL.md'), 'utf8'), before, '内容不能被改动')
-    assert.equal(existsSync(join(ctx.home, 'tool-management', 'trash')), false, '不该产生回收站条目')
+    // 技能已从各自来源目录里搬走（不是留在原地）
+    assert.equal(existsSync(ctx.dshSkill), false, 'DSH 技能应被移走')
+    assert.equal(existsSync(ctx.hubSkill), false, '导入技能应被移走')
+
+    // 回收站里能查到两条，且来源名可分辨（hub 不该被显示成 DSH 技能）
+    const items = await listTrash()
+    assert.deepEqual(items.map((item) => item.name).sort(), ['demo-dsh', 'demo-hub'])
+    assert.deepEqual(
+      items.map((item) => item.root.key).sort(),
+      ['dsh', 'hub'],
+      '回收站条目必须记住各自来源，否则恢复时不知道放回哪里',
+    )
+
+    // 逐个恢复：内容必须与删除前逐字节一致（这是「可删」的前提 —— 删的是位置，不是内容）
+    for (const [index, id] of ids.entries()) {
+      const restored = await restoreTrash(id)
+      assert.equal(restored.ok !== false, true, `恢复 ${id} 应成功（实际 ${restored && restored.code}）`)
+      const name = ctx.targets[index].name
+      const dir = name === 'demo-dsh' ? ctx.dshSkill : ctx.hubSkill
+      assert.equal(existsSync(dir), true, `${name} 应回到原来源目录`)
+      assert.equal(await readFile(join(dir, 'SKILL.md'), 'utf8'), before[name === 'demo-dsh' ? 'dsh' : 'hub'], '内容必须逐字节一致')
+    }
+    assert.deepEqual(await listTrash(), [], '恢复后回收站应清空')
   } finally {
     ctx.restore()
     await rm(join(ctx.home, '..'), { recursive: true, force: true })

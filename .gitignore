@@ -30,8 +30,12 @@ scripts/*
 !scripts/host-deps.mjs
 !scripts/doctor.mjs
 
-# Runtime state written into the plugin directory at run time (archived-session
-# ledger, retention setting, seeded AGENTS.md presets). Machine-specific.
+# Legacy runtime location inside the plugin directory: the archived-session
+# ledger, the retention setting and the seeded AGENTS.md presets all used to be
+# written here, and reading user data out of a plugin directory loses it on every
+# `dsh plugin update` (the directory is replaced wholesale). Everything now lives
+# in `$DSH_HOME/tool-management/`, and startup moves any leftover file in (moved,
+# never overwritten). Kept ignored so the empty shell never lands in the repo.
 data/
 
 # Submission entry for awesome-dsh-plugin; the canonical copy lives in that
@@ -45,3 +49,7 @@ cr.json
 # Playwright MCP CLI session dumps (page snapshots / console logs) written into the
 # project by the `playwright-cli` tool during UI checks. Test scratch, not source.
 .playwright-cli/
+
+# Compat-page layout preview written by `scripts/preview-compat.mjs` (its default
+# output; that script's own comment already promised this ignore rule).
+.compat-preview.html

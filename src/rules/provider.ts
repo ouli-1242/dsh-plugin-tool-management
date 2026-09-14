@@ -25,6 +25,12 @@ const SECTION_NAME = 'tool-management:scene-memory'
  */
 const SECTION_ORDER = 3000
 const GLOBAL_KEY = '@global'
+// 场景绑定的提示词**不再注入**（2026-09-15 用户裁定：「切换场景，对应的提示词直接把
+// AGENTS.md 修改」）：启用/切换场景、改绑、编辑绑定的预设时，宿主把那份正文写进
+// `~/.dsh/AGENTS.md`（与「提示词」页的「应用」同一条路，覆盖前多代备份），关掉场景时
+// 恢复进场景之前的基线。真改文件之后再注入一遍，同一份正文会进上下文两次，而且用户手改
+// 基线之后还会被重新注入 —— 所以这里只保留场景记忆段。绑定关系的**只读投影**仍由 rules
+// 服务提供（页面「生效中」标记，以及"文件是否已经同步成它"的判断）。
 
 export interface RulesProviderFacade {
   /** 同步返回活动场景记忆段文本；无内容返回 `''`（renderPrompt 会删除空段）。 */
@@ -49,7 +55,7 @@ function systemPromptOf(scope: any): any {
   }
 }
 
-/** 注册全局 + agent-scope 的场景记忆段。 */
+/** 注册全局 + agent-scope 的场景记忆段与场景提示词段。 */
 export function createRuleProviderRegistrar(ctx: any, facade: RulesProviderFacade): RulesProviderRegistration {
   const registrations = new Map<string, { scope: any; dispose: () => void }>()
 
@@ -67,8 +73,8 @@ export function createRuleProviderRegistrar(ctx: any, facade: RulesProviderFacad
       })
       registrations.set(key, { scope, dispose: typeof dispose === 'function' ? dispose : () => {} })
     } catch (e) {
-      // 同层重名注册会抛错：降级为"该 scope 不注入"，不影响其余 scope。
-      console.error('[dsh-plugin-tool-management] scene-memory section registration failed:', String((e && (e as Error).message) || e))
+      // 同层重名注册会抛错：降级为"该段不注入"，不影响其余 scope。
+      console.error(`[dsh-plugin-tool-management] ${SECTION_NAME} section registration failed:`, String((e && (e as Error).message) || e))
     }
   }
 
