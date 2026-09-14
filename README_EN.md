@@ -8,7 +8,7 @@
 
 [简体中文](README.md) · **English** · [Changelog](docs/Changelog.md) · [Release overview](docs/update.md)
 
-An **MCP, skills & memory** manager for DeepSeek Harness. After install, a **Tools** panel with eight tabs appears in Settings:
+An **MCP, skills, scene memory, subagents, prompts & archived sessions** manager for DeepSeek Harness. Eight tabs: Scenes · MCP · Skills · Subagents · Prompts · Memories · Sessions · Host.
 
 ```sh
 dsh plugin --profile web add dsh-plugin-tool-management@latest
