@@ -156,7 +156,7 @@ window.__ModuleLoader__.load({
 .dsm-compat-mod-sep{color:var(--dsw-alias-label-tertiary)}
 .dsm-compat-pill{display:inline-flex;min-height:20px;flex:none;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:999px;color:var(--dsw-alias-label-secondary);font-size:11px;white-space:nowrap}
 .dsm-compat-pill-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
-.dsm-compat-pill-warn{border-color:#d49245;color:#d49245}
+.dsm-compat-pill-warn,.dsm-compat-pill-note{border-color:#d49245;color:#d49245}
 .dsm-compat-pill-bad{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 .dsm-compat-name{min-width:0;flex:1;font-size:12px;font-weight:560;word-break:break-word}
 .dsm-compat-label{margin-right:6px;color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
@@ -247,6 +247,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
     function CompatPage(props) {
       const t = props.t
       const [data, setData] = React.useState(null)
+      const [presetReach, setPresetReach] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState(null)
       const apply = function (r, alive) {
@@ -254,12 +255,24 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         if (r && r.ok) { setData(r); setError(null) } else { setError((r && r.error) || 'unknown') }
         setBusy(false)
       }
+      // 预设可达性是独立的一面镜子：它取不到只意味着这一节不显示，
+      // 绝不让它的失败顶掉 compat-status 的结论。
+      const applyReach = function (r, alive) {
+        if (alive === false) return
+        if (r && r.ok) setPresetReach(r)
+      }
+      const loadReach = function (alive) {
+        apiCall('preset-reach', {})
+          .then(function (r) { applyReach(r, alive) })
+          .catch(function () { /* 未挂载预设服务 → 不渲染这一节 */ })
+      }
       React.useEffect(function () {
         let alive = true
         setBusy(true)
         apiCall('compat-status', { refresh: true })
           .then(function (r) { apply(r, alive) })
           .catch(function (e) { if (alive) { setError(String((e && e.message) || e)); setBusy(false) } })
+        loadReach(alive)
         return function () { alive = false }
       }, [])
       const reload = function () {
@@ -267,6 +280,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         apiCall('compat-status', { refresh: true })
           .then(function (r) { apply(r, true) })
           .catch(function (e) { setError(String((e && e.message) || e)); setBusy(false) })
+        loadReach(true)
       }
 
       const findings = (data && data.findings) || []
@@ -417,6 +431,37 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           React.createElement('code', { className: 'dsm-compat-code' }, ' node scripts/doctor.mjs')))
       }
 
+      // 预设注入边界：本插件的注入类能力（场景记忆 / AGENTS.md / 技能目录）在**每个
+      // Agent 预设**下到不到得了模型。回答的是"面板标着已注入，模型真的看得到吗"——
+      // 官方 minimal 预设的 persona 是 complete，会把除自己以外的提示词段全部压掉。
+      // 单独一块：它取不到时这一节不显示，不影响上面的宿主能力结论。
+      if (presetReach && Array.isArray(presetReach.rows) && presetReach.rows.length) {
+        push(section(t('compat.reach'), t('compat.reach.hint'),
+          React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+            presetReach.rows.map(function (row) {
+              const suppressed = row.memory === 'suppressed'
+              const short = suppressed ? t('compat.reach.suppressed')
+                : row.memory === 'ok'
+                  ? (row.skillCatalog === 'ok' ? t('compat.reach.allOk') : t('compat.reach.partial'))
+                  : t('compat.reach.unknown')
+              const detail = []
+              if (row.memory === 'suppressed') detail.push(t('compat.reach.whyComplete'))
+              if (row.agentInstructions === 'absent') detail.push(t('compat.reach.whyNoInstructions'))
+              if (row.skillCatalog === 'absent') detail.push(t('compat.reach.whyNoSkill'))
+              if (row.broken) detail.push(t('compat.reach.broken') + ': ' + row.broken)
+              if (row.reason) detail.push(row.reason)
+              return React.createElement('div', { className: 'dsm-compat-mod-row', key: row.presetId },
+                React.createElement('span', { className: 'dsm-compat-name' },
+                  (row.name || row.presetId) + (row.isDefault ? ' · ' + t('compat.reach.default') : '')),
+                React.createElement('span', { className: 'dsm-compat-pill' + (suppressed ? ' dsm-compat-pill-note' : ' dsm-compat-pill-ok') }, short),
+                detail.length
+                  ? React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' }, detail.join('；'))
+                  : null)
+            }))))
+
+        push(React.createElement('p', { className: 'dsm-help' }, t('compat.reach.tools')))
+      }
+
       return React.createElement('div', { className: 'dsm-compat' },
         React.createElement('div', { className: 'dsm-head' },
           React.createElement('div', { className: 'dsm-title-block' },
@@ -530,6 +575,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "compat.fallback.native": "改走原生入口", "compat.fallback.blocked": "相关按钮已禁用",
         "compat.modules": "模块实体（插件 vs 宿主）", "compat.modules.hint": "同一份模块才谈得上适配", "compat.module.same": "同一份模块", "compat.module.separate": "两份拷贝（需修复）", "compat.module.unknown": "无法比较",
         "compat.blockers": "阻塞项（按此修复）",
+        "compat.reach": "预设注入边界", "compat.reach.hint": "面板说已注入，模型真的看得到吗",
+        "compat.reach.suppressed": "记忆不注入", "compat.reach.allOk": "全部注入", "compat.reach.partial": "部分注入", "compat.reach.unknown": "无法判断",
+        "compat.reach.default": "默认",
+        "compat.reach.whyComplete": "persona 是 complete：提示词只保留该 persona 本身，场景记忆与 AGENTS.md 都进不去",
+        "compat.reach.whyNoInstructions": "未挂载 @deepseek-ai/dsh-agent-instructions（~/.dsh/AGENTS.md 不注入）",
+        "compat.reach.whyNoSkill": "未挂载 @deepseek-ai/dsh-tool-skill（技能目录不可见）",
+        "compat.reach.broken": "预设损坏",
+        "compat.reach.tools": "本插件的 14 个模型工具在任何预设下都可调用（它们注册在宿主层，不受预设组装影响）。",
         "compat.hint.doctor": "命令行体检：",
         "scenes.title": "场景", "scenes.desc": "管理场景：可以预设不同的使用场景，包含 MCP、Skills、子智能体、记忆",
         "scenes.stat.total": "个场景", "scenes.stat.active": "个已启用", "scenes.stat.archives": "个有档案",
@@ -737,6 +790,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "compat.fallback.native": "Falls back to native entry", "compat.fallback.blocked": "Affected buttons disabled",
         "compat.modules": "Module identity (plugin vs host)", "compat.modules.hint": "adapting only works on one shared module", "compat.module.same": "same module", "compat.module.separate": "separate copy (repair needed)", "compat.module.unknown": "not comparable",
         "compat.blockers": "Blockers (fix these)",
+        "compat.reach": "Preset injection reach", "compat.reach.hint": "the panel says injected — does the model actually see it?",
+        "compat.reach.suppressed": "memories not injected", "compat.reach.allOk": "all injected", "compat.reach.partial": "partly injected", "compat.reach.unknown": "cannot tell",
+        "compat.reach.default": "default",
+        "compat.reach.whyComplete": "the persona is complete: the prompt keeps only that persona, so scene memories and AGENTS.md never arrive",
+        "compat.reach.whyNoInstructions": "@deepseek-ai/dsh-agent-instructions is not mounted (~/.dsh/AGENTS.md is not injected)",
+        "compat.reach.whyNoSkill": "@deepseek-ai/dsh-tool-skill is not mounted (the skill catalog is invisible)",
+        "compat.reach.broken": "preset broken",
+        "compat.reach.tools": "This plugin's 14 model tools stay callable under every preset (they register on the host plane, outside preset assembly).",
         "compat.hint.doctor": "Command-line check:",
         "scenes.title": "Scenes", "scenes.desc": "Manage scenes: preset different usage scenes combining MCP servers, skills, subagents and memories",
         "scenes.stat.total": "scene(s)", "scenes.stat.active": "enabled", "scenes.stat.archives": "with a profile",

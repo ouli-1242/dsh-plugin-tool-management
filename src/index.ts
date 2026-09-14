@@ -23,6 +23,7 @@ import { createArchiveEngine } from './rules/archive-engine.js'
 import { createSubagentService } from './subagents/service.js'
 import { isApprovalNever } from './approval-policy.js'
 import { EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
+import { assessPresetReach, presetRosterOf, reachNoticeForAgent } from './compat/preset-reach.js'
 import { fenceRejection, type ConnectionSeam } from './http-fence.js'
 import { hubPath, hubRoot, relocateEntries } from './hub.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
@@ -266,6 +267,9 @@ export default {
     } | undefined
     // pluginInventory is optional: probe at use time, degrade to no live info.
     const pluginInventory = ctx.get('pluginInventory') as PluginInventoryService | undefined
+    // Agent 预设名单（@deepseek-ai/dsh-agent-presets）：同样是可选服务，按需取用。
+    // 读它只为了回答"当前预设下本插件注入的东西到不到得了模型"——只读，不挂载任何预设。
+    const presetRoster = () => presetRosterOf(ctx as unknown as { get?: (name: string) => unknown })
 
     // Package version, surfaced in the Settings pages and the HTTP API. Read
     // from the installed package.json so it always matches the release tag.
@@ -2620,6 +2624,15 @@ export default {
           }
         } catch (e) { return { ok: false, error: message(e) } }
       },
+      // 预设可达性矩阵：每个 Agent 预设下，本插件的注入类能力到不到得了模型。
+      // 只读预设组合文本，不挂载任何预设、不改任何数据。回答的是"面板上说注入了，
+      // 模型真的看得到吗" —— minimal 这类 persona complete 的预设会压制全部提示词段。
+      'preset-reach': async () => {
+        try {
+          const report = await assessPresetReach(presetRoster())
+          return { ok: true, ...report }
+        } catch (e) { return { ok: false, error: message(e) } }
+      },
       'history-unarchive': async (args: any) => {
         const registry = getHistoryRegistry()
         if (!registry) return { ok: false, error: '归档服务未挂载' }
@@ -2940,11 +2953,14 @@ export default {
       description: 'List AGENTS.md presets in the plugin preset library (id, active state).',
       parameters: {},
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute() {
+      async execute(_args, exec: any) {
         const r = await agentsMdService.list()
         if (!r.ok) throw new Error(r.error)
         const summary = r.presets.map((p) => p.id + (p.active ? ' [active]' : ''))
-        return 'AGENTS.md presets:\n' + (summary.join('\n') || '(none)') + '\n(Applying takes effect on the next session created; the current session is unchanged.)'
+        // 同上：AGENTS.md 由 dsh-agent-instructions 行承载，预设没挂这一行（或 persona
+        // 是 complete）时文件内容不会进提示词。
+        const notice = await reachNoticeForAgent(presetRoster(), exec && exec.agent && exec.agent.ctx)
+        return 'AGENTS.md presets:\n' + (summary.join('\n') || '(none)') + '\n(Applying takes effect on the next session created; the current session is unchanged.)' + notice
       },
     }))
     tools.register(defineTool({
@@ -2971,7 +2987,7 @@ export default {
         group: { type: 'string', description: 'Optional scene filter.' },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
+      async execute(args, exec: any) {
         const r: any = await rulesService.ops['rules-list'](args)
         if (!r || r.ok === false) throw new Error((r && r.error) || '读取规则失败')
         const lines = (r.rules || []).map((x: any) => (
@@ -2979,8 +2995,11 @@ export default {
           (x.description ? ' — ' + x.description : '')
         ))
         const scenes = (r.scenes || []).map((s: any) => (s.label || s.name) + (s.active ? '(启用)' : '(未启用)')).join('、')
+        // 注入边界：预设可能压制提示词段（complete persona，或未挂 agent-instructions），
+        // 此时列出的记忆**不在**模型上下文里。必须说出来，否则模型会假设自己已经看到正文。
+        const notice = await reachNoticeForAgent(presetRoster(), exec && exec.agent && exec.agent.ctx)
         return '记忆（' + (r.rules || []).length + '）：\n' + (lines.join('\n') || '(无记忆)') +
-          '\n场景：' + (scenes || '(无)') + (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）')
+          '\n场景：' + (scenes || '(无)') + (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）') + notice
       },
     }))
     tools.register(defineTool({

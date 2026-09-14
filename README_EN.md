@@ -47,6 +47,7 @@ Hard-refresh the browser afterwards (Cmd/Ctrl+Shift-R); a **Tools** panel in Set
 | Capability | In one line |
 |---|---|
 | Host compatibility | The **Host** tab is a read-only check-up: whether plugin and host load the same module instances, which route each action takes (host-native entry vs plugin adapter), and which capabilities are degraded — with reasons |
+| Preset injection reach | Per Agent preset, whether "memory / AGENTS.md / skill catalog" reaches the model; suppressed presets are flagged in the Host tab, and the model tools state the boundary themselves so the model never assumes it has read the bodies |
 | Per-tool switches | **Individual tools** inside one MCP server can be disabled: invisible to the model and blocked at call time, restorable at any moment; whole-server batch toggling too |
 | Restart semantics | Restart only reconnects — it **never flips the enabled state** (restarting a disabled server does not silently enable it) |
 | Secret safety | Secret-looking values in `env` / `headers` are masked by default and URL query strings are redacted; "Reveal" accepts only same-origin requests or local tooling holding a valid token |
@@ -174,6 +175,38 @@ node scripts/host-deps.mjs --restore  # put the originals back
 Re-run `--fix` after a DSH upgrade that moves the installation directory. When the host is missing a package, the plugin refuses the affected action and says why instead of guessing.
 
 > `doctor.mjs` carries a **static subset** of the capability list (it only checks whether members exist, performs no runtime behaviour probe and does not cover the delete route); for the full runtime verdict, trust the **Host tab**.
+
+### Agent preset compatibility (injection vs operation)
+
+DSH's **Agent presets** (`standard` / `ptc` / `cordis` / `minimal`, from `@deepseek-ai/dsh-agent-presets`) are a per-session plugin assembly: each session gets its own tools, prompt sections and skills from its preset's `agent.cordis.yml`. This plugin is **in no preset's composition** — it mounts from the profile's `cordis.patch.yml` (the host plane), so switching presets does not change whether it loads.
+
+But "does it work" splits into two classes with completely different boundaries:
+
+| Capability | What makes it work | `standard` / `ptc` / `cordis` | `minimal` |
+|---|---|---|---|
+| The 14 model tools, the eight settings tabs, archive / MCP management | Registered on the host plane; preset-independent | ✅ | ✅ |
+| Scene memory injection (a per-agent `systemPrompt` section) | The preset's persona is **not** `complete` | ✅ | ❌ suppressed |
+| `~/.dsh/AGENTS.md` | The preset mounts `@deepseek-ai/dsh-agent-instructions` | ✅ | ❌ not mounted |
+| Skill catalog (the `skill` tool) | The preset mounts `@deepseek-ai/dsh-tool-skill` | ✅ | ❌ not mounted |
+
+**Why injection fails entirely under `minimal`**: its persona row sets `complete: true`, which officially means "the prompt registry restores this exact prefix as the sole section; no identity, suffix, tool guidance, or listener can append prompt text". That is the preset's **design intent** (a minimal configuration), not a defect — this plugin does not fight it, it only says so.
+
+Measured, not inferred (2026-09-14, an empty `minimal` session):
+
+| Probe | Result |
+|---|---|
+| Call `rule_manager_list` | ✅ Callable, returned the memory list → the tool layer is preset-independent |
+| Call `skill` | ❌ No such tool → the skill catalog really is absent under that preset |
+| Recite the system prompt | ❌ No memory marker, no AGENTS.md text → injection is suppressed |
+| Read `~/.dsh/AGENTS.md` via shell | ✅ The marker is on disk → closed loop: the file is there, it just never reaches the prompt |
+
+**How the plugin makes this visible**:
+
+- **Host tab → Preset injection reach**: per preset, the reachability of "scene memory / AGENTS.md / skill catalog", with suppressed presets flagged and the reason spelled out. It reads preset composition text only — **it mounts nothing** and changes no data.
+- **Model tools**: under a suppressing preset, `rule_manager_list` / `agentsmd_list` append a boundary notice telling the model that those memories are **not** in its context and that `rule_manager_read` is how to get the bodies — so listing memories can no longer be mistaken for having read them.
+- Answers come from each preset's own composition text (via the roster's `read(id)`), never from a guess; anything unparsable reports "cannot tell", never "fine".
+
+> "Agent presets" and "AGENTS.md presets" are two different things: the latter is this plugin's own preset library (see "AGENTS.md presets" above) and it writes the `~/.dsh/AGENTS.md` file — which is equally inert under `minimal`, for the reason in the table above.
 
 ### Let the model and scripts help
 

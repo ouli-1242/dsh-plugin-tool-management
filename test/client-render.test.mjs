@@ -107,6 +107,37 @@ function compatFixture() {
   }
 }
 
+/**
+ * 预设可达性 fixture：形状按 `preset-reach` op 的实回（src/compat/preset-reach.ts）。
+ *
+ * 刻意带上一个**被压制**的预设：`minimal` 的 persona 是 complete，场景记忆与
+ * AGENTS.md 都进不了提示词。全部 `{ok:true}` 的空响应会让"被压制"那一支的回调
+ * 一次都不执行——那等于新增的渲染路径从没被跑过，而本文件存在的理由正是抓这种空白。
+ */
+function presetReachFixture() {
+  return {
+    ok: true,
+    rows: [
+      {
+        presetId: 'standard', name: '标准模式', trust: 'system', isDefault: true,
+        personaComplete: false, personaMounted: true,
+        agentInstructions: 'mounted', toolSkill: 'mounted',
+        memory: 'ok', agentsMd: 'ok', skillCatalog: 'ok',
+      },
+      {
+        presetId: 'minimal', name: '极简', trust: 'system', isDefault: false,
+        personaComplete: true, personaMounted: true,
+        agentInstructions: 'absent', toolSkill: 'absent',
+        memory: 'suppressed', agentsMd: 'suppressed', skillCatalog: 'absent',
+      },
+    ],
+    defaultId: 'standard',
+    generatedAt: 1757836000000,
+    summary: '预设 2 个 · 抑制记忆注入 1 个 · 技能目录缺失 1 个',
+    blockers: [],
+  }
+}
+
 function fixtureFor(op) {
   const scenes = [
     { name: 'global', label: '全局', order: 0, count: 1, active: true, shared: false, global: true, description: '任何对话都注入' },
@@ -149,6 +180,8 @@ function fixtureFor(op) {
     // `compatFixtureMode = 'optional-only' | 'healthy'` 时改成对应的另一支。
     case 'compat-status':
       return compatFixture()
+    case 'preset-reach':
+      return presetReachFixture()
     default:
       return { ok: true }
   }
@@ -695,6 +728,50 @@ test('兼容页：英文界面下结论条不得露出中文', async () => {
     assert.ok(out.summary, '没有渲染出结论条（用例没生效）')
     assert.equal(/[\u4e00-\u9fff]/.test(out.summary), false, '英文界面下结论条出现中文：' + out.summary)
     assert.match(out.summary, /host |capabilities /, '英文界面下结论条应当走英文词典：' + out.summary)
+  } finally {
+    compatFixtureMode = 'blocked'
+  }
+})
+
+/**
+ * 兼容页「预设注入边界」——本页新增的那一支渲染路径。
+ *
+ * 它只在 `preset-reach` 真的带回 rows 时才执行，所以必须有一个带数据的 fixture
+ * 把它跑起来（空响应下这段代码一次都不跑，等于没测）。
+ *
+ * 同时钉住两类**语义不同**的状态不得混用标记：
+ *   - `dsm-compat-pill-warn` = 宿主能力真降级（上面「只缺官方入口时不着色」那条守它）；
+ *   - `dsm-compat-pill-note` = 预设的设计意图压制了注入（既不是宿主缺能力，也不是插件故障）。
+ * 用 `optional-only` 跑，是为了让页面上**不可能**出现降级标记——于是"note 出现而 warn
+ * 不出现"就证明了这一节没有冒充降级，而不是碰巧被降级节盖住。
+ */
+test('兼容页：预设注入边界渲染不抛错，被压制项带 note 标记且不冒充降级', async () => {
+  compatFixtureMode = 'optional-only'
+  try {
+    const { out, calls } = await renderCompatPage()
+    assert.ok(calls.includes('preset-reach'), '兼容页没有请求 preset-reach（用例没生效）')
+    assert.equal(out.classes.has('dsm-compat-pill-note'), true, '被压制的预设必须带 note 标记')
+    assert.equal(out.classes.has('dsm-compat-pill-warn'), false, '预设压制不得冒充宿主降级标记')
+    assert.equal(out.classes.has('dsm-compat-bar-warn'), false, '预设压制不得把结论条染成"需要处理"')
+  } finally {
+    compatFixtureMode = 'blocked'
+  }
+})
+
+/**
+ * 这一节的文案全部走词典：英文界面下必须出英文，不能退回中文。
+ *
+ * 只断言**插件自己拼的**那两句（`short` 与原因说明）——预设的显示名来自预设自己的
+ * `preset.yml`（官方 `minimal` 就叫「极简」），那是数据、不是本插件的文案，不能要求它是英文。
+ */
+test('兼容页：预设注入边界在英文界面走英文词典', async () => {
+  compatFixtureMode = 'optional-only'
+  try {
+    const { out, calls } = await renderCompatPage('en')
+    assert.ok(calls.includes('preset-reach'), '兼容页没有请求 preset-reach（用例没生效）')
+    const joined = out.text.join(' | ')
+    assert.match(joined, /memories not injected/, '英文界面下应走英文词典：' + joined)
+    assert.match(joined, /all injected/, '英文界面下应走英文词典：' + joined)
   } finally {
     compatFixtureMode = 'blocked'
   }
