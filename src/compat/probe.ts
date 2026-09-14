@@ -369,8 +369,23 @@ const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     label: '投影缓存删除屏障',
     kind: 'delete',
     owner: 'projectionCache',
+    // Absent on rc.2: `history/bridge.js` installs a checked write barrier
+    // instead, so absence is a routing fact, not a failure. Only a cache whose
+    // write path cannot be wrapped at all is a real problem.
     fallback: 'native-entry',
-    methods: ['delete', 'whenIdle'],
+    probe: (t) => {
+      if (isFn(t?.delete) && isFn(t?.whenIdle)) return undefined
+      const wrappable = ['write', 'put'].filter((name) => !isFn(t?.[name]))
+      if (wrappable.length > 0) return `宿主缓存无法安全包裹（缺少 ${wrappable.join(', ')}）`
+      let table: unknown
+      try {
+        table = (t as { requireTable: () => unknown }).requireTable()
+      } catch (error) {
+        return `requireTable() 抛错：${String((error as Error)?.message ?? error)}`
+      }
+      if (!isFn((table as { delete?: unknown })?.delete)) return '宿主缓存存储不支持行删除（table.delete 缺失）'
+      return undefined
+    },
   },
 ]
 
@@ -464,6 +479,13 @@ function inspectCapability(spec: CapabilitySpec, target: Target, reference: Reco
     ...(textMatch === undefined ? {} : { textMatch }),
   }
 }
+
+/**
+ * Capability ids whose absence is a routing fact rather than a failure: the
+ * plugin substitutes its own implementation. They never appear as degraded and
+ * never block a route.
+ */
+export const SUBSTITUTED_CAPABILITIES: readonly string[] = ['projection.delete-native']
 
 /**
  * Inspect the live host behind one plugin context.

@@ -44,12 +44,13 @@ function realRegistry(overrides = {}) {
 
 function realCache(overrides = {}) {
   const cache = Object.create(SessionProjectionCache.prototype)
+  // NOTE: the real rc.2 prototype does NOT define `delete`/`whenIdle` — the
+  // plugin wraps the write path instead. The stub must not invent them, or the
+  // probe would be certified against a host that does not exist.
   Object.assign(cache, {
     write: async () => {},
     put: async () => {},
     requireTable: () => ({ delete: async () => true, get: () => undefined }),
-    delete: async () => true,
-    whenIdle: async () => {},
     ...overrides,
   })
   return cache
@@ -136,13 +137,25 @@ test(`本机宿主（本次验证版本 ${VERIFIED_HOST_VERSION}）上，删除�
     'workspace.set-state',
     'workspace.index-header',
     'projection.write',
-    'projection.delete-native',
   ]) {
     const item = finding(assessment, id)
     assert.ok(item !== undefined, `能力 ${id} 缺失于探测表`)
     assert.equal(item.state, 'ok', `${id} 在本机宿主应为 ok，实际 ${item.state}：${item.detail}`)
   }
+  // 宿主缓存**没有**原生删除屏障（rc.2 实测）：插件包裹写路径来补，
+  // 因此它不能算降级，也不能阻断删除。
+  assert.equal(finding(assessment, 'projection.delete-native').state, 'ok')
+  assert.equal(routeFor(assessment, 'delete').via, 'adapter')
   assert.equal(assessment.mayDelete, true)
+  assert.equal(assessment.degraded.some((item) => item.id === 'projection.delete-native'), false, '被插件接管的可选槽位不得报成降级')
+})
+
+test('宿主缓存连包裹都做不到（缺 put/write）→ 该能力必须真的失败并拦住删除', () => {
+  const cache = absent(realCache(), ['write', 'put'])
+  const assessment = assessHost(fakeCtx({ registry: realRegistry(), cache, sessions: realSessions() }))
+  const item = finding(assessment, 'projection.delete-native')
+  assert.equal(item.state, 'shape-mismatch')
+  assert.match(item.detail, /无法安全包裹/)
 })
 
 test('插件与宿主共享同一模块实体：文本比对不再是否决条件', () => {

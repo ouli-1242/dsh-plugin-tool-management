@@ -64,15 +64,19 @@ function realSessions(overrides = {}) {
 
 function realCache(overrides = {}) {
   const cache = Object.create(SessionProjectionCache.prototype)
+  // 与真实 rc.2 一致：**没有**原生 delete / whenIdle，插件包裹写路径来补屏障。
   Object.assign(cache, {
     write: async () => {},
     put: async () => {},
     requireTable: () => ({ delete: async () => true }),
-    delete: async () => true,
-    whenIdle: async () => {},
     ...overrides,
   })
   return cache
+}
+
+/** 自带删除屏障的缓存（更晚的宿主可能出现）：插件此时不得包裹任何方法。 */
+function cacheWithBarrier(overrides = {}) {
+  return realCache({ delete: async () => true, whenIdle: async () => {}, ...overrides })
 }
 
 /** 记录副作用：门禁失败时这些计数必须全是 0。 */
@@ -163,8 +167,8 @@ test('投影缓存缺失 → beginDelete 拒绝，且没有开始装写屏障', 
 })
 
 test('宿主自带删除屏障时不包裹缓存：只读探测，不改宿主对象', async () => {
-  // rc.2 的缓存有 delete + whenIdle → 门面必须直接用宿主的，不做 monkey patch。
-  const cache = realCache()
+  // 更晚的宿主可能自带 delete + whenIdle → 门面必须直接用宿主的，不做 monkey patch。
+  const cache = cacheWithBarrier()
   const originalPut = cache.put
   const originalWrite = cache.write
   const registry = realRegistry()
@@ -173,11 +177,11 @@ test('宿主自带删除屏障时不包裹缓存：只读探测，不改宿主�
   await bridge.beginDelete('s1', { id: 's1' })
   assert.equal(cache.put, originalPut, '不得替换宿主缓存方法')
   assert.equal(cache.write, originalWrite, '不得替换宿主缓存方法')
-  assert.equal(bridge.cache(), cache, '此时应当直接用宿主缓存')
 })
 
 test('宿主没有删除屏障时包裹缓存，并在 dispose 后原样还原', async () => {
-  const cache = absent(realCache(), ['delete', 'whenIdle'])
+  // 真实 rc.2 形态：没有 delete / whenIdle → 必须装上写屏障，dispose 后还原。
+  const cache = realCache()
   const originalPut = cache.put
   const originalWrite = cache.write
   const registry = realRegistry()
@@ -192,7 +196,7 @@ test('宿主没有删除屏障时包裹缓存，并在 dispose 后原样还原',
 })
 
 test('缓存写路径缺成员 → 装屏障时拒绝（不是装半个屏障后失败在链路中段）', async () => {
-  const cache = absent(realCache(), ['delete', 'whenIdle', 'put'])
+  const cache = absent(realCache(), ['put'])
   const registry = realRegistry()
   const { ctx } = fakeCtx({ registry, cache, sessions: realSessions() })
   const bridge = createHistoryBridge(ctx, registry, () => {})

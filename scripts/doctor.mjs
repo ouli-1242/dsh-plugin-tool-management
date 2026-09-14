@@ -27,30 +27,36 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// Single source of truth: the runtime probe itself. A second hand-written
+// capability list here would drift from what the plugin actually gates on, and
+// the doctor would then certify a host the plugin refuses to use.
+import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE } from '../lib/compat/probe.js'
+
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const JSON_OUT = process.argv.includes('--json')
 const require = createRequire(join(ROOT, 'package.json'))
 
-/** Packages whose module identity must match the host's exactly. */
-const RUNTIME_PACKAGES = [
-  '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-tools',
-  '@deepseek-ai/dsh-workspace',
-  '@deepseek-ai/dsh-session-projection-cache',
-  '@deepseek-ai/dsh-storage-domain',
-  '@deepseek-ai/dsh-spill-local',
-]
+/** Packages whose module identity must match the host's — the runtime list. */
+const RUNTIME_PACKAGES = IDENTITY_PACKAGES
 
-/** Host capabilities the adapters consume, with the risk if missing. */
-const CAPABILITIES = [
+/**
+ * Host-side presence of each capability the runtime probe gates on, read off the
+ * official class prototypes. This is a *static* view (the runtime probe inspects
+ * the live service instances and adds behaviour dry-runs); it exists so the CLI
+ * can answer the question without a running host.
+ */
+const CAPABILITY_SOURCES = [
   { id: 'workspace.read-state', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['requireState'], kind: 'read' },
   { id: 'workspace.read-table', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['requireTable'], kind: 'read' },
   { id: 'workspace.read-header', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['readSessionHeader'], kind: 'read' },
-  { id: 'workspace.index-header', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['indexHeader'], kind: 'read' },
+  { id: 'workspace.index-header', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['indexHeader'], kind: 'write' },
   { id: 'workspace.enqueue', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['enqueueOperation'], kind: 'write' },
   { id: 'workspace.set-state', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['setState'], kind: 'write' },
-  { id: 'workspace.archive', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['archiveSession'], kind: 'write' },
   { id: 'projection.write', pkg: '@deepseek-ai/dsh-session-projection-cache', target: 'SessionProjectionCache', members: ['write', 'put', 'requireTable'], kind: 'write' },
+  // Optional native delegate slots: rc.2 does not ship them, and their absence
+  // selects the plugin's adapter route instead of disabling the feature.
+  { id: 'workspace.archive-native', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['archiveSession'], kind: 'write', optional: true },
+  { id: 'projection.delete-native', pkg: '@deepseek-ai/dsh-session-projection-cache', target: 'SessionProjectionCache', members: ['delete', 'whenIdle'], kind: 'delete', optional: true },
 ]
 
 /** Version of a package root, read from its own manifest. */
@@ -137,7 +143,7 @@ function inspectPackages() {
 
 function inspectCapabilities() {
   const rows = []
-  for (const capability of CAPABILITIES) {
+  for (const capability of CAPABILITY_SOURCES) {
     let mod
     try {
       mod = require(capability.pkg)
@@ -153,8 +159,12 @@ function inspectCapabilities() {
     const absent = capability.members.filter((member) => typeof klass.prototype?.[member] !== 'function')
     rows.push({
       ...capability,
-      status: absent.length === 0 ? 'ok' : 'missing',
-      detail: absent.length === 0 ? 'present' : `missing: ${absent.join(', ')}`,
+      // An optional slot that is absent is the EXPECTED state on hosts whose
+      // official API lacks it — it selects the adapter route, it is not a fault.
+      status: absent.length === 0 ? 'ok' : capability.optional ? 'absent-optional' : 'missing',
+      detail: absent.length === 0 ? 'present'
+        : capability.optional ? `absent (optional native slot; adapter route is used): ${absent.join(', ')}`
+        : `missing: ${absent.join(', ')}`,
     })
   }
   return rows
@@ -170,16 +180,25 @@ function main() {
     else if (row.sameFile === false) blockers.push(`${row.package}: the plugin loads a SEPARATE copy — run 'node scripts/host-deps.mjs --fix'`)
   }
   for (const row of capabilities) {
-    if (row.status !== 'ok') blockers.push(`${row.id}: ${row.detail}`)
+    if (row.status === 'missing') blockers.push(`${row.id}: ${row.detail}`)
   }
 
   if (JSON_OUT) {
-    console.log(JSON.stringify({ ok: blockers.length === 0, host: installed.host, packages: installed.rows, capabilities, blockers }, null, 2))
+    console.log(JSON.stringify({
+      ok: blockers.length === 0,
+      host: installed.host,
+      verifiedVersion: VERIFIED_HOST_VERSION,
+      expectedPeerRange: EXPECTED_PEER_RANGE,
+      packages: installed.rows,
+      capabilities,
+      blockers,
+    }, null, 2))
     return blockers.length === 0 ? 0 : 1
   }
 
   console.log('dsh-plugin-tool-management — host compatibility doctor')
-  console.log(`host packages : ${installed.host ?? '(not found)'}`)
+  console.log(`host packages   : ${installed.host ?? '(not found)'}`)
+  console.log(`verified against: DSH ${VERIFIED_HOST_VERSION} (peer range ${EXPECTED_PEER_RANGE})`)
   console.log('')
   console.log('module identity (plugin vs host):')
   for (const row of installed.rows) {
@@ -189,11 +208,12 @@ function main() {
   console.log('')
   console.log('host capabilities:')
   for (const row of capabilities) {
-    console.log(`  [${row.status === 'ok' ? 'ok  ' : 'FAIL'}] ${row.id.padEnd(24)} ${row.kind.padEnd(5)} ${row.detail}`)
+    const mark = row.status === 'ok' ? 'ok  ' : row.status === 'absent-optional' ? 'n/a ' : 'FAIL'
+    console.log(`  [${mark}] ${row.id.padEnd(26)} ${row.kind.padEnd(5)} ${row.detail}`)
   }
   console.log('')
   if (blockers.length === 0) {
-    console.log('OK — the plugin shares the host modules and every capability it consumes is present.')
+    console.log('OK — the plugin shares the host modules and every required capability is present.')
     return 0
   }
   console.log(`${blockers.length} blocker(s):`)
