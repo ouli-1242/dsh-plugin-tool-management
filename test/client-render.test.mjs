@@ -125,7 +125,7 @@ function presetReachFixture() {
         memory: 'ok', agentsMd: 'ok', skillCatalog: 'ok',
       },
       {
-        presetId: 'minimal', name: '极简', trust: 'system', isDefault: false,
+        presetId: 'minimal', name: '极简模式', trust: 'system', isDefault: false,
         personaComplete: true, personaMounted: true,
         agentInstructions: 'absent', toolSkill: 'absent',
         memory: 'suppressed', agentsMd: 'suppressed', skillCatalog: 'absent',
@@ -736,42 +736,24 @@ test('兼容页：英文界面下结论条不得露出中文', async () => {
 /**
  * 兼容页「预设注入边界」——本页新增的那一支渲染路径。
  *
- * 它只在 `preset-reach` 真的带回 rows 时才执行，所以必须有一个带数据的 fixture
- * 把它跑起来（空响应下这段代码一次都不跑，等于没测）。
+ * fixture 的唯一作用是把它**跑起来**：这段代码只在 `preset-reach` 带回 rows 时才执行，
+ * 空响应下一次都不跑，等于没测。
  *
- * 同时钉住两类**语义不同**的状态不得混用标记：
- *   - `dsm-compat-pill-warn` = 宿主能力真降级（上面「只缺官方入口时不着色」那条守它）；
- *   - `dsm-compat-pill-note` = 预设的设计意图压制了注入（既不是宿主缺能力，也不是插件故障）。
- * 用 `optional-only` 跑，是为了让页面上**不可能**出现降级标记——于是"note 出现而 warn
- * 不出现"就证明了这一节没有冒充降级，而不是碰巧被降级节盖住。
+ * 断言只留语义契约，不锁文案、符号与类名——用户裁定（2026-09-14）：文案与排版的逐条
+ * 断言是刻舟求剑，改一次样式就要改一次断言，页面观感由人在真实页面上确认：
+ *   ① 带数据渲染整页不抛错（本文件存在的理由就是抓渲染期抛错，见文件头）；
+ *   ② 请求真的发出去了（反向护栏，否则遍历等于空跑）；
+ *   ③ 预设压制**不得**冒充宿主降级——这是业务口径而非排版：它既不是宿主缺能力、
+ *      也不是插件故障，混用标记会让人以为自己的安装坏了。
+ * 用 `optional-only` 跑，是为了让页面上不可能出现降级标记，于是 ③ 才真的在测这一节。
  */
-test('兼容页：预设注入边界渲染不抛错，被压制项带 note 标记且不冒充降级', async () => {
+test('兼容页：预设注入边界带数据渲染不抛错，且不冒充宿主降级', async () => {
   compatFixtureMode = 'optional-only'
   try {
     const { out, calls } = await renderCompatPage()
     assert.ok(calls.includes('preset-reach'), '兼容页没有请求 preset-reach（用例没生效）')
-    assert.equal(out.classes.has('dsm-compat-pill-note'), true, '被压制的预设必须带 note 标记')
     assert.equal(out.classes.has('dsm-compat-pill-warn'), false, '预设压制不得冒充宿主降级标记')
     assert.equal(out.classes.has('dsm-compat-bar-warn'), false, '预设压制不得把结论条染成"需要处理"')
-  } finally {
-    compatFixtureMode = 'blocked'
-  }
-})
-
-/**
- * 这一节的文案全部走词典：英文界面下必须出英文，不能退回中文。
- *
- * 只断言**插件自己拼的**那两句（`short` 与原因说明）——预设的显示名来自预设自己的
- * `preset.yml`（官方 `minimal` 就叫「极简」），那是数据、不是本插件的文案，不能要求它是英文。
- */
-test('兼容页：预设注入边界在英文界面走英文词典', async () => {
-  compatFixtureMode = 'optional-only'
-  try {
-    const { out, calls } = await renderCompatPage('en')
-    assert.ok(calls.includes('preset-reach'), '兼容页没有请求 preset-reach（用例没生效）')
-    const joined = out.text.join(' | ')
-    assert.match(joined, /memories not injected/, '英文界面下应走英文词典：' + joined)
-    assert.match(joined, /all injected/, '英文界面下应走英文词典：' + joined)
   } finally {
     compatFixtureMode = 'blocked'
   }
