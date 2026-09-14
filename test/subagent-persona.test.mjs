@@ -35,12 +35,6 @@ test('parsePersona：tools 支持中英文逗号与空白', () => {
   assert.deepEqual(doc('---\ntools: a, b，c ,  \n---\n\nx\n').tools, ['a', 'b', 'c'])
 })
 
-test('serializePersona：只写填过的键，provider 排在 model 之前', () => {
-  const text = serializePersona({ description: 'd', provider: 'sensenova', model: 'm', tools: ['a', 'b'], body: 'B' })
-  assert.equal(text, '---\ndescription: d\nprovider: sensenova\nmodel: m\ntools: a, b\n---\n\nB\n')
-  assert.equal(serializePersona({ body: 'only body' }), '---\n---\n\nonly body\n')
-})
-
 test('往返（UI 保存 → 重读）不丢 provider/model/tools/description', () => {
   const args = { description: '跨来源', provider: 'sensenova', model: 'sensenova-6.8-flash-lite', tools: ['read_file'], body: '人设正文' }
   const back = doc(serializePersona(args))

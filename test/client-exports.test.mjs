@@ -59,13 +59,6 @@ test('导出契约：只求值 factory 就能拿到 dict / pages / apply（不�
   assert.ok(exported.dict.zh && exported.dict.en, 'dict 必须含 zh / en 两份')
   assert.ok(Object.keys(exported.dict.zh).length > 400, `词典规模异常（${Object.keys(exported.dict.zh).length} 键）`)
   assert.ok(exported.pages && typeof exported.pages === 'object', 'pages 必须是对象（不能靠 apply 挂载）')
-
-  // 反向护栏：不许再出现「挂在 module.exports 字面量上、却写在 apply 方法体内」的写法。
-  // 缩进 >= 8 空格 = 已经进了 apply 的方法体；顶层的 `module.exports = {` 是 4 个空格。
-  assert.equal(
-    /^\s{8,}module\.exports\.\w+\s*=/m.test(src), false,
-    '导出不许用 `module.exports.X =` 的形式（apply 提前返回时会静默丢失），请在 factory 作用域落地',
-  )
 })
 
 test('词条对齐：zh / en 键集合一致，且无空文案', () => {

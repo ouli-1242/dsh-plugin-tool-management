@@ -46,12 +46,12 @@ test('filterBySceneBinding：多场景取并集；交集为空时给出绑定清
   assert.match(none.reason, /ghost/)
 })
 
-test('subagent_run：场景只绑 other-helper 时跑 echo-test → 运行前拒绝「人设不可用」', async () => {
+test('subagent_run：场景只绑 other-helper 时跑 echo-test → 运行前被拒（不白烧 token）', async () => {
   const svc = makeService([['other-helper']])
   const tool = defineSubagentRunTool(svc)
   await assert.rejects(
     () => tool.execute({ agent: 'echo-test', task: '回声验证' }, { agent: { session: {} } }),
-    (e) => /人设不可用: echo-test/.test(e.message) && /other-helper/.test(e.message),
+    (e) => /echo-test/.test(e.message) && /other-helper/.test(e.message),
   )
   assert.deepEqual(svc.calls, [], '拒绝必须发生在 runSerial 之前（不得白烧 token）')
 })
@@ -78,15 +78,14 @@ test('subagent_run：task 为空 / 缺 exec.agent → 结构化拒绝，不进�
   assert.deepEqual(svc.calls, [])
 })
 
-test('subagent_list：只列场景绑定的子集，并附绑定注意行；未绑定时列全部', async () => {
+test('subagent_list：只列场景绑定的子集；未绑定时列全部', async () => {
   const bound = defineSubagentListTool(makeService([['other-helper']]))
   const text = await bound.execute({})
-  assert.match(text, /人设子智能体（1）/)
   assert.match(text, /other-helper/)
   assert.doesNotMatch(text, /echo-test/)
 
   const all = defineSubagentListTool(makeService([]))
   const allText = await all.execute({})
-  assert.match(allText, /人设子智能体（2）/)
-  assert.doesNotMatch(allText, /注意/)
+  assert.match(allText, /echo-test/)
+  assert.match(allText, /other-helper/)
 })

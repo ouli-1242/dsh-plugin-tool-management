@@ -439,21 +439,16 @@ test('记忆段只认本场景的记忆：全局与其它场景都不出现，�
   assert.deepEqual(memDefaultPickIds(memories, rules, '办公'), ['办公/周报格式'])
   assert.deepEqual(memDefaultPickIds(memories, rules, 'global'), ['global/总则'])
   assert.deepEqual(memDefaultPickIds(memories, [], '办公'), [], '拿不到 rules 时不预勾，宁少不滥')
-
-  // ③ 源码守卫：那一段不许再出现场景卡片/钻取（它们正是「列了不生效」的载体）。
-  assert.equal(/dsm-scene-card/.test(src), false, '记忆段的场景卡片应已删除')
-  assert.equal(/memDrill/.test(src), false, '「选记忆」钻取应已删除')
-  assert.match(src, /function allMemoryIds\(\) \{\s*return sceneMemories\(modal\.name\)/, '「全选」必须只覆盖本场景')
 })
 
 /**
  * 档案弹窗各段的**默认勾选**契约（用户要求）：
  *   - MCP 工具集 / 技能集 / 子智能体绑定：点「添加」后一律**不勾选**；
  *   - 记忆：只勾**本场景里已启用**的那几条（作用域见上一条用例），「全选」= 本场景全部。
- * 记忆的默认值是真逻辑（memDefaultPickIds），直接调；其余是常量动作，用源码守卫。
- * 描述截断/排版不做断言（用户裁定：刻舟求剑）。
+ * 记忆的默认值是唯一的真逻辑（memDefaultPickIds），直接调；三段的「添加即空集」是界面动作，
+ * 由人在页面上确认（源码文本守卫是刻舟求剑，改一次实现就要改一次正则）。
  */
-test('档案弹窗：三段「添加」即空集，记忆默认只勾本场景已启用的', () => {
+test('档案弹窗：记忆默认只勾本场景已启用的', () => {
   const exported = loadModule()
   exported.apply(fakeCtx(fakeSlots(), exported.dict))
   const { memDefaultPickIds } = exported.pages

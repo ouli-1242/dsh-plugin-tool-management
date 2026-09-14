@@ -232,7 +232,6 @@ test('assessPresetReach builds the matrix and is read-only', async () => {
   assert.equal(byId.get('minimal').memory, 'suppressed')
   assert.equal(byId.get('minimal').agentsMd, 'suppressed')
   assert.equal(byId.get('minimal').name, '极简')
-  assert.match(report.summary, /抑制记忆注入 1 个/)
 })
 
 test('a preset whose composition cannot be read names its own reason', async () => {

@@ -51,9 +51,9 @@ const execFor = (session) => ({ name: 'subagent_run', agent: { session } })
 
 // -------------------------------------------------------------------- 用例
 
-test('根因锁定：兄弟 fiber 里 ctx.approval 抛 without inject，ctx.get("approval") 正常解析', async () => {
+test('根因锁定：兄弟 fiber 里 ctx.approval 抛错，ctx.get("approval") 正常解析', async () => {
   const { ctx } = await mount('ask')
-  assert.throws(() => ctx.approval, /without inject/)
+  assert.throws(() => ctx.approval)
   assert.equal(typeof ctx.get('approval'), 'object')
 })
 

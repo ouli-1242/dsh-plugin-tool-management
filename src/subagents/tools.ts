@@ -2,7 +2,7 @@
 // 本文件返回的是 **author 侧 tool 定义**（parameters 是 property-spec 形态），装配处必须经
 // defineTool() 编译后再 register（C4：裸 register 会把未编译的参数声明直接发给模型 API）。
 // 参数与 output schema 用 as const 保留字面量类型，defineTool 才能推断出参数表。
-import type { PersonaDoc, SubagentService } from './service.js'
+import type { PersonaDoc, SubagentService, ToolFilterDecision } from './service.js'
 
 export function text(v: string) {
   return [{ type: 'text' as const, text: v }]
@@ -38,7 +38,17 @@ export function defineSubagentListTool(subagents: { list(): Promise<PersonaDoc[]
   }
 }
 
-export function defineSubagentRunTool(subagents: SubagentService & { sceneLists(): Promise<string[][]> }) {
+/** `subagent_run` 的依赖：服务本体 + 场景绑定 + 按当前预设决定工具限制。 */
+export interface RunToolDeps extends SubagentService {
+  sceneLists(): Promise<string[][]>
+  /**
+   * 按当前会话的 Agent 预设决定这次委派的工具限制（宿主侧实现：读预设名单 +
+   * 枚举该预设的工具名，见 index.ts 的 subagentToolFilterFor）。
+   */
+  toolFilterFor?(persona: PersonaDoc, agentCtx: unknown): Promise<ToolFilterDecision>
+}
+
+export function defineSubagentRunTool(subagents: RunToolDeps) {
   return {
     name: 'subagent_run',
     description: 'Run a named persona as a one-shot subagent: it receives the persona as its own system prompt, works on `task` in a fresh context, and returns only its final output. Discover personas with subagent_list first. Each run is stateless and ephemeral; it does not see this conversation.',
@@ -63,9 +73,15 @@ export function defineSubagentRunTool(subagents: SubagentService & { sceneLists(
         const available = allowed.map((p) => p.name).join('、') || '(无)'
         throw new Error('人设不可用: ' + name + (reason ? '（' + reason + '）' : '（可用: ' + available + '）'))
       }
-      const r = await subagents.runSerial(exec.agent, persona, task, exec.signal)
+      // 按当前会话的 Agent 预设算工具限制：判断不了当前预设、或名单里的工具已经不存在时，
+      // 结论里会带一句实话，跟着结果一起返回——不静默改变限制的强度。
+      const decision = typeof subagents.toolFilterFor === 'function'
+        ? await subagents.toolFilterFor(persona, exec.agent && exec.agent.ctx)
+        : undefined
+      const r = await subagents.runSerial(exec.agent, persona, task, exec.signal, decision === undefined ? undefined : decision.filter)
       const prefix = r.stopReason && r.stopReason !== 'completed' ? `[stopReason: ${r.stopReason}]\n` : ''
-      return prefix + r.text
+      const note = decision && decision.note ? `⚠ ${decision.note}\n\n` : ''
+      return note + prefix + r.text
     },
   }
 }

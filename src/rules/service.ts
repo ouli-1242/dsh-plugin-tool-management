@@ -35,6 +35,7 @@ import { expandUploads, planMemoryImport } from '../imports/upload.js'
 import { createRuleProviderRegistrar } from './provider.js'
 import { normalizePresetId } from '../agents-md/preset-id.js'
 import { normalizeArchive, memoryAllowed, type ModeState, type SceneArchive } from './archive.js'
+import { listTrashEntries, moveToTrash, purgeTrashEntry, readTrashEntry } from '../hub.js'
 
 // ── 常量 ───────────────────────────────────────────────────────────────────
 
@@ -2366,6 +2367,15 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (index.mode?.scene === name) {
       return fail('error.rules.sceneInMode', `场景「${name}」正处在当前模式，请先退出模式再删除`)
     }
+    // 场景本体（记录 + 档案）**先移入回收站**，再从索引里摘掉——这样「删除场景」
+    // 是可恢复的。记忆目录必须是空的（上面已拦），所以没有正文需要搬。
+    const trashed = await moveToTrash('scenes', name, [], {
+      record: (index.scenes && index.scenes[name]) || null,
+      archive: (index.archives && index.archives[name]) || null,
+    })
+    if (trashed.ok === false) {
+      return fail('error.rules.ioFailed', `移入回收站失败：${trashed.error}`)
+    }
     try {
       // fs.rm 删目录必须 recursive（即使已确认它是空的），否则报 EISDIR。
       await rm(join(rulesRoot, name), { recursive: true, force: true })
@@ -2389,7 +2399,53 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (dirty) await writeIndex(stateDir, index)
     invalidateSnapshot()
     invalidateProviders()
+    return { ok: true, name, trashId: trashed.id }
+  }
+
+  /** 场景回收站列表（只读）：`<hub>/trash/scenes-trash/<id>/manifest.json`。 */
+  async function sceneTrashList(): Promise<any> {
+    return { ok: true, trash: await listTrashEntries('scenes') }
+  }
+
+  /**
+   * 从回收站恢复一个场景：重建记忆目录 + 写回记录与档案。
+   * 同名场景已存在时**拒绝**（绝不覆盖既有场景）。
+   */
+  async function sceneTrashRestore(args: any): Promise<any> {
+    const id = String((args && args.id) || '').trim()
+    const entry = await readTrashEntry('scenes', id)
+    if (!entry) return fail('error.rules.notFound', `回收站条目不存在：${id}`)
+    const name = String(entry.name || '').trim()
+    if (!isValidGroupSegment(name)) return fail('error.rules.invalidGroup', `回收站里的场景名非法：${name || '(空)'}`)
+    const index = await readIndex(stateDir)
+    if (index.scenes?.[name]) return fail('error.rules.invalidGroup', `无法恢复，同名场景已存在：${name}`)
+    const dir = join(rulesRoot, name)
+    let entries: string[] = []
+    try { entries = await readdir(dir) } catch { entries = [] }
+    if (entries.filter((n) => !n.startsWith('.')).length > 0) {
+      return fail('error.rules.sceneNotEmpty', `无法恢复，记忆目录「${name}」里已有内容，请先处理`)
+    }
+    const data = (entry.data || {}) as { record?: unknown; archive?: unknown }
+    try {
+      await mkdir(dir, { recursive: true })
+    } catch (e) {
+      return fail('error.rules.ioFailed', `重建场景目录失败：${message(e)}`)
+    }
+    if (data.record && typeof data.record === 'object') index.scenes = { ...(index.scenes || {}), [name]: data.record as SceneIndexEntry }
+    if (data.archive && typeof data.archive === 'object') index.archives = { ...(index.archives || {}), [name]: data.archive as SceneArchive }
+    await writeIndex(stateDir, index)
+    await purgeTrashEntry('scenes', id)
+    invalidateSnapshot()
+    invalidateProviders()
     return { ok: true, name }
+  }
+
+  /** 永久删除一条场景回收站条目。 */
+  async function sceneTrashDelete(args: any): Promise<any> {
+    const id = String((args && args.id) || '').trim()
+    const gone = await purgeTrashEntry('scenes', id)
+    if (!gone) return fail('error.rules.notFound', `回收站条目不存在：${id}`)
+    return { ok: true, id }
   }
 
   /**
@@ -2474,6 +2530,8 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle', 'rules-import',
     'rules-set-index', 'rules-set-active', 'rules-create-scene', 'rules-update-scene', 'rules-remove-scene', 'rules-rebind-prompt',
     'rules-attach', 'rules-detach', 'rules-trash-remove',
+    // 场景回收站（与记忆回收站 rules-trash-* 分开：那套管记忆正文，这套管场景记录与档案）
+    'scene-trash-restore', 'scene-trash-delete',
   ])
 
   const ops: Record<string, (args: any) => Promise<any>> = {
@@ -2496,6 +2554,9 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     'rules-create-scene': (args) => runWrite(() => rulesCreateScene(args || {})),
     'rules-update-scene': (args) => runWrite(() => rulesUpdateScene(args || {})),
     'rules-remove-scene': (args) => runWrite(() => rulesRemoveScene(args || {})),
+    'scene-trash-list': () => sceneTrashList(),
+    'scene-trash-restore': (args) => runWrite(() => sceneTrashRestore(args || {})),
+    'scene-trash-delete': (args) => runWrite(() => sceneTrashDelete(args || {})),
     'rules-rebind-prompt': (args) => runWrite(() => rulesRebindPrompt(args || {})),
   }
 

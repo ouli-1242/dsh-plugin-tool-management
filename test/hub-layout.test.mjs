@@ -137,11 +137,13 @@ test('记忆写入：必须落到已存在的场景；留空 = 保留场景 glob
   assert.equal(g.rule.id, `${GLOBAL_SCENE}/总则`, '留空场景落到保留场景 global')
 
   await service.ops['rules-create-scene']({ name: '办公' })
+  // 单选模型：新建场景默认不启用，显式启用后才进投影。
+  await service.patchIndex({ active: ['办公'] })
   const ok = await service.ops['rules-create']({ group: '办公', name: '周报', body: '办公记忆正文' })
   assert.equal(ok.ok, true)
   assert.equal(ok.rule.id, '办公/周报')
 
-  // 投影：global 恒注入；办公场景默认（active=null = 全部启用）也注入。
+  // 投影：global 恒注入；已启用的办公场景也注入。
   const budget = await service.ops['rules-budget']({})
   assert.match(budget.items.map((i) => i.id).join(','), /global\/总则/)
   assert.match(budget.items.map((i) => i.id).join(','), /办公\/周报/)
@@ -232,6 +234,8 @@ test('记忆勾选（档案 memories 段）：只注入勾选的记忆，文件�
   await service.ops['rules-create-scene']({ name: '办公' })
   await service.ops['rules-create']({ group: '办公', name: '甲', body: '甲正文' })
   await service.ops['rules-create']({ group: '办公', name: '乙', body: '乙正文' })
+  // 单选模型：新建场景默认不启用；不启用就没有「没段 = 全部注入」这回事。
+  await service.patchIndex({ active: ['办公'] })
 
   const before = await service.ops['rules-budget']({})
   // 顺序由渲染顺序决定（场景 order → 记忆 order/名称），locale 相关 → 比较集合而非顺序。
@@ -262,8 +266,9 @@ test('保留场景 global 的记忆不受其它场景的勾选段影响（global
   await service.ops['rules-create-scene']({ name: '办公' })
   await service.ops['rules-create']({ group: '办公', name: '甲', body: '甲正文' })
 
-  // 办公场景的段把记忆收窄为「一条都不勾」：办公的记忆不注入，global 的仍注入。
-  await service.patchIndex({ archives: { 办公: { memories: [] } } })
+  // 办公场景启用后，它的段把记忆收窄为「一条都不勾」：办公的记忆不注入，global 的仍注入。
+  // （不启用时这条断言会碰巧通过——办公的记忆本就不会注入——所以必须显式启用。）
+  await service.patchIndex({ active: ['办公'], archives: { 办公: { memories: [] } } })
   const items = (await service.ops['rules-budget']({})).items.map((i) => i.id)
   assert.deepEqual(items, [GLOBAL_SCENE + '/总则'], 'global 是恒定注入的保留场景')
 })

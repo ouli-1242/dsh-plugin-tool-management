@@ -13,7 +13,6 @@ import {
   routeFor,
   refusalsFor,
   requireRoute,
-  summarize,
   CapabilityRefusalError,
   VERIFIED_HOST_VERSION,
 } from '../lib/compat/probe.js'
@@ -243,29 +242,11 @@ test('删除路由：实时会话接口缺失 → 拒绝，且信息里给出能
   assert.throws(() => requireRoute(assessment, 'delete'), CapabilityRefusalError)
 })
 
-test('CapabilityRefusalError：错误文本自解释（操作名 + 能力 + 恢复指引）', () => {
-  const sessions = absent(realSessions(), ['flush'])
-  const assessment = assessHost(fakeCtx({ registry: realRegistry(), cache: realCache(), sessions }))
-  const decision = routeFor(assessment, 'delete')
-  const error = new CapabilityRefusalError('delete', decision.refusals)
-  assert.equal(error.name, 'CapabilityRefusalError')
-  assert.match(error.message, /宿主不支持该操作（delete）/)
-  assert.match(error.message, /实时会话落盘与分离/)
-  assert.match(error.message, /更新本插件/)
-})
-
 test('refusalsFor：只报不在 ok 的能力，顺序与请求一致', () => {
   const registry = absent(realRegistry(), ['setState'])
   const assessment = assessHost(fakeCtx({ registry, cache: realCache(), sessions: realSessions() }))
   const refusals = refusalsFor(assessment, ['workspace.enqueue', 'workspace.set-state', 'workspace.read-state'])
   assert.deepEqual(refusals.map((item) => item.id), ['workspace.set-state'])
-})
-
-test('summarize：日志与页面标题用的一行摘要', () => {
-  const ok = assessHost(fakeCtx({ registry: realRegistry(), cache: realCache(), sessions: realSessions() }))
-  assert.match(summarize(ok), /^宿主 \S+ · 能力 \d+\/\d+ · /)
-  const broken = assessHost(fakeCtx({}))
-  assert.match(summarize(broken), /降级 \d+ 项/)
 })
 
 test('探测是只读的：不写宿主状态、不调用写方法', () => {

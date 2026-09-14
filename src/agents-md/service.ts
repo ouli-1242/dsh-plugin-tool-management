@@ -13,6 +13,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { isValidPresetId, LAST_APPLIED_PRESET_ID, normalizePresetId } from './preset-id.js'
+import { listTrashEntries, moveOutOfTrash, moveToTrash, purgeTrashEntry, readTrashEntry, type TrashEntry } from '../hub.js'
 
 const FILENAME = 'AGENTS.md'
 const LAST_APPLIED_ID = LAST_APPLIED_PRESET_ID
@@ -47,6 +48,10 @@ export interface AgentsMdService {
   restore(content: string): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }>
   getCurrent(): Promise<{ ok: true; content: string; presetId: string | null; exists: boolean } | { ok: false; error: string }>
   remove(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
+  /** 回收站：列出 / 恢复 / 永久删除（删除预设 = 把整个预设目录移入回收站）。 */
+  trashList(): Promise<{ ok: true; trash: TrashEntry[] }>
+  trashRestore(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
+  trashDelete(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
   importPreset(id: string, content: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
 }
 
@@ -258,6 +263,10 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     }
   }
 
+  /**
+   * 删除预设 = **移入回收站**（整个 `agents-md/<id>/` 目录搬走）。
+   * 备份槽 `__last-applied__` 不可删；正在生效的预设由调用方先拦（见 index.ts）。
+   */
   async function remove(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
     const safeId = String(id ?? '').trim()
     if (safeId === LAST_APPLIED_ID) return { ok: false, error: '备份槽不可删除' }
@@ -265,8 +274,38 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     if (bad) return { ok: false, error: '非法 id：' + bad }
     const dir = join(deps.presetsDir, safeId)
     try { await stat(dir) } catch { return { ok: false, error: '预设不存在：' + safeId } }
-    await rm(dir, { recursive: true, force: true })
+    const moved = await moveToTrash('agents-md', safeId, [{ from: dir, dest: 'preset' }])
+    if (moved.ok === false) return { ok: false, error: '移入回收站失败：' + moved.error }
     return { ok: true, id: safeId }
+  }
+
+  async function trashList(): Promise<{ ok: true; trash: TrashEntry[] }> {
+    return { ok: true, trash: await listTrashEntries('agents-md') }
+  }
+
+  /** 从回收站恢复预设：同 id 已存在时**拒绝**（绝不覆盖）。 */
+  async function trashRestore(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+    const entry = await readTrashEntry('agents-md', String(id ?? '').trim())
+    if (!entry) return { ok: false, error: '回收站条目不存在：' + String(id ?? '').trim() }
+    const bad = idError(entry.name)
+    if (bad) return { ok: false, error: '回收站里的 id 不合法：' + bad }
+    const target = join(deps.presetsDir, entry.name)
+    try { await stat(target); return { ok: false, error: '无法恢复，同 id 预设已存在：' + entry.name } } catch { /* 可用 */ }
+    try {
+      await mkdir(deps.presetsDir, { recursive: true })
+      await moveOutOfTrash('agents-md', entry.id, 'preset', target)
+    } catch (e) {
+      return { ok: false, error: '恢复失败：' + message(e) }
+    }
+    await purgeTrashEntry('agents-md', entry.id)
+    return { ok: true, id: entry.name }
+  }
+
+  async function trashDelete(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+    const clean = String(id ?? '').trim()
+    const gone = await purgeTrashEntry('agents-md', clean)
+    if (!gone) return { ok: false, error: '回收站条目不存在：' + clean }
+    return { ok: true, id: clean }
   }
 
   // 从外部文本内容（如导入的 .md 文件）建预设：id 校验 + 重复检查 + 写 AGENTS.md。
@@ -281,5 +320,5 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     return { ok: true, id: safeId }
   }
 
-  return { list, read, create, update, apply, restore, getCurrent, remove, importPreset }
+  return { list, read, create, update, apply, restore, getCurrent, remove, trashList, trashRestore, trashDelete, importPreset }
 }

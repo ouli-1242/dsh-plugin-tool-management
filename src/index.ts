@@ -20,7 +20,8 @@ import { createSkillsService, pluginLog } from './skills/service.js'
 import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService } from './rules/service.js'
 import { createArchiveEngine } from './rules/archive-engine.js'
-import { createSubagentService } from './subagents/service.js'
+import { createSubagentService, decideToolFilter } from './subagents/service.js'
+import type { ToolFilterDecision } from './subagents/service.js'
 import { isApprovalNever } from './approval-policy.js'
 import { EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
 import { assessPresetReach, presetRosterOf, reachNoticeForAgent } from './compat/preset-reach.js'
@@ -444,6 +445,54 @@ export default {
       // 用生效集去校验会把合法勾选判成 stale 丢掉。
       return (await skillScan()).all
     }
+
+    /** 场景档案「技能集」用的一行。 */
+    interface SceneSkillRow {
+      key: string
+      name: string
+      enabled: boolean
+      shadowed: boolean
+      rootKey: string
+      rootLabel: string
+      rootLocaleKey?: string
+      rootKind?: string
+    }
+
+    /**
+     * 场景档案「技能集」的技能行 —— 技能名与来源名**分开**给出。
+     *
+     * 界面早先直接渲染 `key`（形如 `<来源 key>/<技能名>`），而自定义目录的来源 key 是
+     * `custom-<sha256-16>`，于是导入的技能在场景档案里显示成一串哈希（用户 2026-09-15 报的）。
+     * 这里把来源的 label / localeKey 一并带上，界面就能显示「技能名 · 来源名」。
+     *
+     * 含被覆盖的副本（`shadowed`）：场景允许勾选任意一条技能，用生效集校验会把合法勾选判成 stale。
+     */
+    async function skillRows(): Promise<SceneSkillRow[]> {
+      const rows: SceneSkillRow[] = []
+      try {
+        const r: any = await skillsService.ops['skill-state']({})
+        for (const root of ((r && r.data && r.data.roots) || [])) {
+          const rootKey = String((root && root.key) || '')
+          if (!rootKey) continue
+          for (const sk of ((root && root.skills) || [])) {
+            const name = String((sk && (sk.declaredName || sk.name)) || '')
+            if (!name) continue
+            rows.push({
+              key: rootKey + '/' + name,
+              name,
+              enabled: sk.enabled === true && !sk.shadowedBy,
+              shadowed: !!sk.shadowedBy,
+              rootKey,
+              rootLabel: String((root && root.label) || rootKey),
+              ...(root && root.localeKey ? { rootLocaleKey: String(root.localeKey) } : {}),
+              ...(root && root.kind ? { rootKind: String(root.kind) } : {}),
+            })
+          }
+        }
+      } catch { /* 技能状态读不到 → 空列表（界面如实显示"没有可选项"） */ }
+      // 平铺列表按技能名排（同名再按来源），比按来源聚在一起更好找。
+      return rows.sort((a, b) => a.name.localeCompare(b.name) || a.rootKey.localeCompare(b.rootKey))
+    }
     const archiveService = createArchiveEngine({
       loadSlice: async () => ({ ...(await rulesService.readArchiveSlice()) }),
       saveSlice: (slice) => rulesService.patchIndex(slice),
@@ -546,6 +595,8 @@ export default {
       'skill-open',
       // agents-md 写操作（create/update/remove 改预设库；apply 写全局 AGENTS.md；import 从外部内容建预设）
       'agentsmd-create', 'agentsmd-update', 'agentsmd-apply', 'agentsmd-remove', 'agentsmd-import',
+      // 提示词预设的回收站（恢复 / 永久删除都是写）
+      'agentsmd-trash-restore', 'agentsmd-trash-delete',
       // history 写操作（archive/unarchive 改归档集合；delete 永久删除；retention-set 写保留期；
       // workspace-register 会新增一条宿主工作区登记，同样是写）
       'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
@@ -2253,11 +2304,11 @@ export default {
      * 每次调用都会为尚未挂载的预设建立 standing mount（官方语义：一个预设在本进程内只挂一次，
      * 正常创建会话时同样会挂），因此结果会按需缓存 60 秒，避免频繁枚举。
      */
-    let presetToolsCache: { at: number; value: { tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string }> } } | null = null
+    let presetToolsCache: { at: number; value: { tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string; trust: string; broken: boolean; tools: string[] }> } } | null = null
     async function presetToolCandidates(): Promise<{ tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string }> }> {
       if (presetToolsCache && Date.now() - presetToolsCache.at < 60000) return presetToolsCache.value
       const byName = new Map<string, { name: string; presets: Set<string>; current: boolean }>()
-      const presets: Array<{ id: string; name: string }> = []
+      const presets: Array<{ id: string; name: string; trust: string; broken: boolean; tools: string[] }> = []
       // 当前会话的可见工具（用于标 current）；拿不到就全部按「非当前」处理。
       const currentNames = new Set<string>()
       try {
@@ -2268,24 +2319,23 @@ export default {
       const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
       if (agentPresets && typeof agentPresets.list === 'function') {
         try {
+          // roster 顺序 = 官方的展示顺序（preset.yml 的 order：标准 1 / PTC 2 / 极简 3 / 创造 4，
+          // 自建预设排在其后）。人设编辑器的四行照抄这个顺序，**不要**再按 id 排序。
           const roster = await agentPresets.list()
           for (const p of roster || []) {
             const id = String((p && p.id) || '')
             if (!id) continue
-            presets.push({ id, name: String((p && (p.name || p.id)) || id) })
-            let scopeKey: unknown
-            try {
-              // 官方说明：该调用会确保预设的 standing mount（不创建 agent/session），
-              // 已挂载的预设直接复用；正因如此才需要这里的 60 秒缓存。
-              scopeKey = typeof agentPresets.standingKeyFor === 'function' ? await agentPresets.standingKeyFor(id) : undefined
-            } catch { scopeKey = undefined }
-            let names: string[] = []
-            try {
-              names = (await tools.schemas(scopeKey as any) || []).map((s: any) => String(s.name)).filter(Boolean)
-            } catch { names = [] }
+            // MCP 工具名形如 `mcp__<server>__<tool>`：面向上百个条目，噪声大于价值 → 不进候选。
+            // 子代理照样能用当前在跑的 MCP —— 那份名单在 decideToolFilter 里运行时并进白名单。
+            const names = (await presetToolNames(id)).filter((name) => !name.startsWith('mcp__'))
+            presets.push({
+              id,
+              name: String((p && (p.name || p.id)) || id),
+              trust: String((p && p.trust) || 'user'),
+              broken: typeof (p && p.broken) === 'string',
+              tools: names,
+            })
             for (const name of names) {
-              // MCP 工具名形如 `mcp__<server>__<tool>`：面向上百个条目，噪声大于价值 → 不进候选。
-              if (name.startsWith('mcp__')) continue
               const rec = byName.get(name) || { name, presets: new Set<string>(), current: false }
               rec.presets.add(id)
               byName.set(name, rec)
@@ -2305,10 +2355,76 @@ export default {
         tools: [...byName.values()]
           .map((r) => ({ name: r.name, presets: [...r.presets].sort(), current: r.current }))
           .sort((a, b) => a.name.localeCompare(b.name)),
-        presets: presets.sort((a, b) => a.id.localeCompare(b.id)),
+        // 保持 roster 顺序（官方的展示顺序），前端四行直接照用。
+        presets,
       }
       presetToolsCache = { at: Date.now(), value }
       return value
+    }
+
+    /**
+     * 单个预设的工具名（列表里含 MCP 与宿主平面的工具，因为子代理的可见集合是
+     * "宿主平面 ∪ 该预设"的并集）。枚举会为该预设建立 standing mount —— 官方语义：
+     * 一个预设每进程只挂一次，正常创建会话时同样会挂，所以这里按 id 缓存 60 秒；
+     * `subagent_run` 每次委派都要用它校验名单，不能每次都重新枚举。
+     */
+    const presetNamesCache = new Map<string, { at: number; names: string[] }>()
+    async function presetToolNames(id: string): Promise<string[]> {
+      const hit = presetNamesCache.get(id)
+      if (hit && Date.now() - hit.at < 60000) return hit.names
+      const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
+      let scopeKey: unknown
+      try {
+        scopeKey = agentPresets && typeof agentPresets.standingKeyFor === 'function'
+          ? await agentPresets.standingKeyFor(id)
+          : undefined
+      } catch { scopeKey = undefined }
+      let names: string[] = []
+      try {
+        names = ((await tools.schemas(scopeKey as any)) || []).map((s: any) => String(s.name)).filter(Boolean)
+      } catch { names = [] }
+      presetNamesCache.set(id, { at: Date.now(), names })
+      return names
+    }
+
+    /** 预设名单的名字投影（只读 roster，不挂载任何预设）：场景页显示模式名用。 */
+    async function presetNames(): Promise<Array<{ id: string; name: string; trust: string }>> {
+      const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
+      if (!agentPresets || typeof agentPresets.list !== 'function') return []
+      try {
+        const roster = await agentPresets.list()
+        return (roster || [])
+          .map((p: any) => ({ id: String((p && p.id) || ''), name: String((p && (p.name || p.id)) || ''), trust: String((p && p.trust) || 'user') }))
+          .filter((p: { id: string }) => p.id !== '')
+      } catch { return [] }
+    }
+
+    /** 调用方 agent 跑在哪个 Agent 预设上；判断不了返回 null（绝不猜）。 */
+    function currentPresetId(agentCtx: unknown): string | null {
+      if (agentCtx === undefined || agentCtx === null) return null
+      try {
+        const roster = presetRoster()
+        if (roster === undefined || typeof roster.composedPreset !== 'function') return null
+        const id = String(roster.composedPreset(agentCtx) ?? '')
+        return id === '' ? null : id
+      } catch { return null }
+    }
+
+    /**
+     * 人设的工具限制：按**当前会话的预设**决定这次委派下发什么（规则见 decideToolFilter）。
+     * 已知工具名 = 宿主平面（含 MCP）∪ 当前预设的工具；枚举失败时退化成宿主平面，
+     * 于是模式名单里的预设侧工具会被如实记为"当前不存在"，而不是造成官方 restrict 抛错。
+     */
+    async function subagentToolFilterFor(persona: any, agentCtx: unknown): Promise<ToolFilterDecision> {
+      let hostNames: string[] = []
+      try {
+        hostNames = ((await tools.schemas()) || []).map((s: any) => String(s.name)).filter(Boolean)
+      } catch { hostNames = [] }
+      const mcp = hostNames.filter((name) => name.startsWith('mcp__'))
+      const known = new Set<string>(hostNames)
+      const presetId = currentPresetId(agentCtx)
+      if (presetId !== null) for (const name of await presetToolNames(presetId)) known.add(name)
+      return decideToolFilter(persona, presetId, { names: known, mcp })
     }
 
     /**
@@ -2403,7 +2519,7 @@ export default {
       'model-candidates': async () => ({ ok: true, ...(await modelCandidates()) }),
       // 场景档案勾选器数据源 v2：全部 MCP 服务器（含未运行）+ 技能全集 + 人设清单。
       'scene-inventory': async () => {
-        const [rowsR, tools, skills, subs] = await Promise.all([mcpmListView(), toolStates(), skillStates(), subagentService.list()])
+        const [rowsR, tools, skills, subs] = await Promise.all([mcpmListView(), toolStates(), skillRows(), subagentService.list()])
         const disabledRaw = await readDisabledTools()
         const rows: any[] = (rowsR && rowsR.rows) || []
         const mcpServers: any[] = []
@@ -2426,8 +2542,13 @@ export default {
           ok: true,
           mcpServers,
           tools: Object.entries(tools).map(([key, enabled]) => ({ key, enabled })),
-          skills: Object.entries(skills).map(([key, enabled]) => ({ key, enabled })),
-          subagents: subs.map((p) => ({ name: p.name, description: p.description })),
+          // 技能行：技能名与来源名分开给（早先只给 `<来源 key>/<技能名>`，自定义目录的
+          // 来源 key 是 `custom-<hash>`，于是导入的技能在场景里显示成一串哈希）。
+          skills,
+          // 人设行要显示"按模式配了什么限制"，所以把按模式名单一起带上；
+          // presets 只给名字与来源（不枚举工具，避免打开档案弹窗就挂载每个预设）。
+          subagents: subs.map((p) => ({ name: p.name, description: p.description, toolsByPreset: p.toolsByPreset ?? null })),
+          presets: await presetNames(),
           // 档案编辑器第 4 段「记忆」的候选：场景 + 每个场景里的记忆条数。
           // 记忆正文不在这里返回（勾选集只存 id，渲染时才读盘）。
           scenes: await memorySceneCandidates(),
@@ -2503,6 +2624,11 @@ export default {
         return agentsMdService.remove(id)
       },
       'agentsmd-import': (args: any) => agentsMdService.importPreset(String((args && args.id) || ''), String((args && args.content) ?? '')),
+      // 提示词预设的回收站：删预设 = 把整个预设目录移入 `hub/trash/agents-md-trash/<id>/`，
+      // 误删可从「提示词」页的回收站里恢复（同 id 已存在时拒绝恢复，绝不覆盖）。
+      'agentsmd-trash-list': () => agentsMdService.trashList(),
+      'agentsmd-trash-restore': (args: any) => agentsMdService.trashRestore(String((args && args.id) || '')),
+      'agentsmd-trash-delete': (args: any) => agentsMdService.trashDelete(String((args && args.id) || '')),
       // History（归档会话管理）ops。只读：history-list / history-retention-get；
       // 写：history-archive / history-unarchive / history-delete / history-retention-set。
       // workspaceRegistry 缺失（补丁未生效）时返回明确错误，不崩页面。
@@ -2675,7 +2801,16 @@ export default {
       // 模型真的看得到吗" —— minimal 这类 persona complete 的预设会压制全部提示词段。
       'preset-reach': async () => {
         try {
-          const report = await assessPresetReach(presetRoster())
+          // 宿主平面的 MCP 工具数：四个官方预设都不在组合里挂 MCP，MCP 由
+          // $DSH_HOME/cordis.patch.yml 这一层挂载，所以它对所有预设一视同仁；
+          // 这一列要回答的只是"现在有没有 MCP 工具可用"。探测失败 → 不传该字段，
+          // 矩阵那一格显示"判断不了"而不是猜。
+          let mcpTools: number | undefined
+          try {
+            const schemas = await tools.schemas()
+            mcpTools = schemas.filter((s: any) => String(s && s.name || '').startsWith('mcp__')).length
+          } catch { mcpTools = undefined }
+          const report = await assessPresetReach(presetRoster(), { mcpTools })
           return { ok: true, ...report }
         } catch (e) { return { ok: false, error: message(e) } }
       },
@@ -3083,7 +3218,9 @@ export default {
       // 与其余 12 个工具同一条注册通道：defineTool 负责编译 parameters（object root + required），
       // 裸 register 会把未编译的参数声明直接发给模型 API。
       tools.register(defineTool(defineSubagentListTool({ list: () => subagentService.list(), sceneLists: subagentSceneLists })))
-      tools.register(defineTool(defineSubagentRunTool({ ...subagentService, sceneLists: subagentSceneLists })))
+      // 工具限制按**当前会话的 Agent 预设**下发：父会话跑在哪个预设，就用那个预设那一行的
+      // 白/黑名单（`decideToolFilter`），名单里已消失的工具名会被丢掉并在结果里如实说明。
+      tools.register(defineTool(defineSubagentRunTool({ ...subagentService, sceneLists: subagentSceneLists, toolFilterFor: subagentToolFilterFor })))
     } catch (e) {
       console.error('[dsh-plugin-tool-management] subagent tool registration failed:', message(e))
     }

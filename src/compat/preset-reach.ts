@@ -23,6 +23,11 @@
  *     (the row that carries `~/.dsh/AGENTS.md` into the prompt)
  *   - `toolSkill`: is `@deepseek-ai/dsh-tool-skill` mounted?
  *     (the row that gives the model the skill catalog)
+ *   - `subagentTool`: is `@deepseek-ai/dsh-tool-subagent` mounted?
+ *     (the official delegation tool; the shipped `minimal` preset has none)
+ *   - `mcpClient`: does the composition mount its own MCP client?
+ *     (the shipped presets mount none, so MCP comes from the host plane and is
+ *     equally available under every preset — see `ReachContext.mcpTools`)
  *
  * The plugin's own 14 model tools need NO probe: they register in the HOST
  * plane (this plugin's loader row in the profile patch), so every preset's
@@ -60,6 +65,10 @@ export interface CompositionFacts {
   readonly personaMounted: boolean
   readonly agentInstructions: ModulePresence
   readonly toolSkill: ModulePresence
+  /** Whether the composition mounts its own official delegation tool. */
+  readonly subagentTool: ModulePresence
+  /** Whether the composition mounts its own MCP client. */
+  readonly mcpClient: ModulePresence
   /** Why the text could not be parsed, when it could not. */
   readonly parseFailure?: string
 }
@@ -80,6 +89,10 @@ export interface PresetReachRow {
   readonly agentsMd: ReachState
   /** The skill catalog the `skill` tool publishes. */
   readonly skillCatalog: ReachState
+  /** The official delegation tool (`subagent`), which `minimal` does not mount. */
+  readonly subagent: ReachState
+  /** MCP tools: this preset's own client, else the host-plane set. */
+  readonly mcp: ReachState
   /** Why the preset cannot compose a session at all, when discovery said so. */
   readonly broken?: string
   /** Why this row's answers are `unknown`, when they are. */
@@ -93,12 +106,35 @@ export interface PresetReachReport {
   readonly generatedAt: number
   readonly summary: string
   readonly blockers: readonly string[]
+  /** Host-plane MCP state, repeated on every row that carries no MCP client. */
+  readonly mcpTools?: number
+}
+
+/** Facts the caller contributes about the host plane (no composition can answer them). */
+export interface ReachContext {
+  /** Live `mcp__*` tool count on the host plane; `undefined` when the probe failed. */
+  readonly mcpTools?: number
 }
 
 /** Module specifiers whose mounting decides reachability. */
 const PERSONA_MODULE = '@deepseek-ai/dsh-persona'
 const AGENT_INSTRUCTIONS_MODULE = '@deepseek-ai/dsh-agent-instructions'
 const TOOL_SKILL_MODULE = '@deepseek-ai/dsh-tool-skill'
+/**
+ * The OFFICIAL delegation tool. Absent in the shipped `minimal` preset, present
+ * in the other three — the one column whose answer really does differ per
+ * preset. (This plugin's own `subagent_list`/`subagent_run` are host-plane and
+ * therefore preset-independent; the page's footer says so.)
+ */
+const SUBAGENT_TOOL_MODULE = '@deepseek-ai/dsh-tool-subagent'
+/**
+ * An MCP client mounted INSIDE a composition. The shipped presets mount none,
+ * so MCP normally comes from the host plane (the `$DSH_HOME/cordis.patch.yml`
+ * layer) and works under every preset; a user-authored preset that mounts its
+ * own client only carries MCP under itself, and this scan is how the page can
+ * tell the two apart.
+ */
+const MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
 
 const NAME_LINE = /^(\s*)name:\s*(['"]?)([^'"\s#]+)\2\s*(?:#.*)?$/
 const ENTRY_LINE = /^(\s*)-\s/
@@ -192,6 +228,8 @@ export function readCompositionFacts(text: string): CompositionFacts {
         personaMounted: false,
         agentInstructions: 'absent',
         toolSkill: 'absent',
+        subagentTool: 'absent',
+        mcpClient: 'absent',
         parseFailure: '组合文件为空',
       }
     }
@@ -219,6 +257,8 @@ export function readCompositionFacts(text: string): CompositionFacts {
       personaMounted,
       agentInstructions: presenceOf(lines, AGENT_INSTRUCTIONS_MODULE),
       toolSkill: presenceOf(lines, TOOL_SKILL_MODULE),
+      subagentTool: presenceOf(lines, SUBAGENT_TOOL_MODULE),
+      mcpClient: presenceOf(lines, MCP_CLIENT_MODULE),
     }
   } catch (error) {
     return {
@@ -226,13 +266,18 @@ export function readCompositionFacts(text: string): CompositionFacts {
       personaMounted: false,
       agentInstructions: 'absent',
       toolSkill: 'absent',
+      subagentTool: 'absent',
+      mcpClient: 'absent',
       parseFailure: String((error as Error)?.message ?? error),
     }
   }
 }
 
-/** Map parsed facts onto the three user-visible capability columns. */
-export function deriveReach(facts: CompositionFacts): Pick<PresetReachRow, 'memory' | 'agentsMd' | 'skillCatalog'> {
+/** Map parsed facts onto the five user-visible capability columns. */
+export function deriveReach(
+  facts: CompositionFacts,
+  ctx?: ReachContext,
+): Pick<PresetReachRow, 'memory' | 'agentsMd' | 'skillCatalog' | 'subagent' | 'mcp'> {
   const suppressed = facts.personaComplete === true
   const personaUnknown = facts.personaComplete === 'unknown'
 
@@ -250,7 +295,23 @@ export function deriveReach(facts: CompositionFacts): Pick<PresetReachRow, 'memo
   else if (facts.toolSkill === 'conditional') skillCatalog = 'unknown'
   else skillCatalog = 'absent'
 
-  return { memory, agentsMd, skillCatalog }
+  // The official delegation tool is a plain mounting fact: it is a model-facing
+  // tool row, so nothing the persona does can hide it.
+  let subagent: ReachState
+  if (facts.subagentTool === 'mounted') subagent = 'ok'
+  else if (facts.subagentTool === 'conditional') subagent = 'unknown'
+  else subagent = 'absent'
+
+  // MCP: a client mounted in THIS composition only serves this preset; otherwise
+  // the answer is the host plane's, which every preset shares. An unknown host
+  // count is reported as `unknown` rather than assumed to be fine.
+  let mcp: ReachState
+  if (facts.mcpClient === 'mounted') mcp = 'ok'
+  else if (facts.mcpClient === 'conditional') mcp = 'unknown'
+  else if (ctx === undefined || ctx.mcpTools === undefined) mcp = 'unknown'
+  else mcp = ctx.mcpTools > 0 ? 'ok' : 'absent'
+
+  return { memory, agentsMd, skillCatalog, subagent, mcp }
 }
 
 /**
@@ -275,7 +336,7 @@ export function presetRosterOf(ctx: { get?: (name: string) => unknown }): Preset
   }
 }
 
-async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown>): Promise<PresetReachRow> {
+async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown>, ctx?: ReachContext): Promise<PresetReachRow> {
   const presetId = String(meta.id ?? '')
   const name = typeof meta.name === 'string' ? meta.name : undefined
   const trust = typeof meta.trust === 'string' ? meta.trust : undefined
@@ -299,6 +360,8 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
       memory: 'unknown',
       agentsMd: 'unknown',
       skillCatalog: 'unknown',
+      subagent: 'unknown',
+      mcp: 'unknown',
       reason: '预设名单未提供 read()：无法读取组合文件',
     }
   }
@@ -316,12 +379,14 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
       memory: 'unknown',
       agentsMd: 'unknown',
       skillCatalog: 'unknown',
+      subagent: 'unknown',
+      mcp: 'unknown',
       reason: `读取组合失败：${String((error as Error)?.message ?? error)}`,
     }
   }
 
   const facts = readCompositionFacts(text)
-  const reach = deriveReach(facts)
+  const reach = deriveReach(facts, ctx)
   return {
     ...base,
     personaComplete: facts.personaComplete,
@@ -339,13 +404,15 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
  * Read-only end to end; a preset whose text cannot be read yields a named
  * `reason` on its own row rather than failing the report.
  */
-export async function assessPresetReach(roster: PresetRosterLike | undefined): Promise<PresetReachReport> {
+export async function assessPresetReach(roster: PresetRosterLike | undefined, ctx?: ReachContext): Promise<PresetReachReport> {
   const generatedAt = Date.now()
+  const mcpField = ctx?.mcpTools === undefined ? {} : { mcpTools: ctx.mcpTools }
   if (roster === undefined || typeof roster.list !== 'function') {
     return {
       rows: [],
       defaultId: null,
       generatedAt,
+      ...mcpField,
       summary: '预设可达性不可用（宿主未挂载 Agent 预设服务）',
       blockers: ['agentPresets 服务未挂载：无法判断各预设下的注入边界'],
     }
@@ -361,6 +428,7 @@ export async function assessPresetReach(roster: PresetRosterLike | undefined): P
       rows: [],
       defaultId: null,
       generatedAt,
+      ...mcpField,
       summary: '预设可达性不可用（读取预设名单失败）',
       blockers: [`读取预设名单失败：${detail}`],
     }
@@ -371,18 +439,19 @@ export async function assessPresetReach(roster: PresetRosterLike | undefined): P
     if (raw === null || typeof raw !== 'object') continue
     const meta = raw as Record<string, unknown>
     if (String(meta.id ?? '') === '') continue
-    rows.push(await composeRow(roster, meta))
+    rows.push(await composeRow(roster, meta, ctx))
   }
 
   const suppressed = rows.filter((row) => row.memory === 'suppressed').length
   const summary = rows.length === 0
     ? '未发现任何 Agent 预设'
-    : `预设 ${rows.length} 个 · 抑制记忆注入 ${suppressed} 个 · 技能目录缺失 ${rows.filter((row) => row.skillCatalog === 'absent').length} 个`
+    : `预设 ${rows.length} 个 · 抑制记忆注入 ${suppressed} 个 · 技能目录缺失 ${rows.filter((row) => row.skillCatalog === 'absent').length} 个 · 无官方子智能体工具 ${rows.filter((row) => row.subagent === 'absent').length} 个`
 
   return {
     rows,
     defaultId: roster.defaultId === undefined ? null : String(roster.defaultId),
     generatedAt,
+    ...mcpField,
     summary,
     blockers: [],
   }
