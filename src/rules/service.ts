@@ -2171,9 +2171,16 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const id = String((args && args.id) || '')
     const parts = parseId(id)
     if (!parts) return fail('error.rules.notFound', `规则不存在：${id}`)
+    // `enabled` 必须显式给。缺省时旧实现回落到"沿用当前值"，却照样刷新
+    // updatedAt 并返回 ok:true —— 调用方按 toggle（翻转）理解时会以为自己改了
+    // 状态，实际什么都没改（界面不受影响：它一直显式传值）。与 rulesSetActive
+    // 同一条口径：参数缺失就明确拒绝，不猜。
+    if (typeof (args && args.enabled) !== 'boolean') {
+      return fail('error.rules.invalidArgs', '缺少参数：enabled 必须是布尔值（toggle 只按传入值写入，不做"翻转"推断）')
+    }
     const index = await readIndex(stateDir)
     const idxEntry = index.rules[id] || {}
-    const enabled = args && args.enabled !== undefined ? args.enabled === true : (idxEntry.enabled ?? true)
+    const enabled = args.enabled === true
     index.rules[id] = { ...idxEntry, enabled, updatedAt: new Date().toISOString() }
     await writeIndex(stateDir, index)
     invalidateSnapshot()

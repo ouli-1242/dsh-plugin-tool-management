@@ -75,3 +75,47 @@ export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): 
   }
   return null
 }
+
+// ── 明文机密 op 的令牌门禁 ────────────────────────────────────────────────────
+//
+// `mcpm-reveal` / `mcpm-export` 会把 env / headers 里的凭据**原文**交出去。它们曾经
+// 与普通读操作同一条路：令牌配了才校验，没配就只靠宿主栅栏（Host/Origin + 浏览器
+// session cookie）。问题是"能打开 GUI"就等于能取走全部密钥 —— 而 token 的描述里写着
+// 它是"最后一道防线"，防线却可以不存在。这里把口径改成：**没有令牌就没有明文**。
+//
+// 为什么不用同源 Origin 顶替：同源只证明"请求来自本机页面"，不证明"读的人被授权"；
+// 明文凭据要的是后者。配了令牌的本地工具（无 Origin）仍然放行，那是显式凭证。
+
+export interface SecretGateState {
+  /** 宿主是否配置了访问令牌（config.token / DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）。 */
+  tokenConfigured: boolean
+  /** 请求带的 x-dsh-token 是否与宿主令牌一致。 */
+  tokenAccepted: boolean
+}
+
+export interface SecretGateRejection {
+  code: string
+  error: string
+}
+
+/**
+ * 判定敏感 op 是否应被拒（返回 null = 放行）。
+ *
+ * 两种情况分开报，因为处置方式不同：没配令牌要去宿主配置里加，配了但没带/带错
+ * 只要在界面里填对即可（界面按 code 决定给不给输入框）。
+ */
+export function secretOpRejection(state: SecretGateState): SecretGateRejection | null {
+  if (!state.tokenConfigured) {
+    return {
+      code: 'error.secret.noToken',
+      error: '明文查看与导出已被禁用：宿主未配置访问令牌。请在本插件配置里加 token（或设环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）后重启 DSH，再在界面上填入同一个令牌。',
+    }
+  }
+  if (!state.tokenAccepted) {
+    return {
+      code: 'error.secret.badToken',
+      error: '访问令牌缺失或不正确：请在界面里填入与宿主配置相同的令牌（随请求以 x-dsh-token 发送）。',
+    }
+  }
+  return null
+}

@@ -24,7 +24,11 @@ import { createSubagentService } from './subagents/service.js'
 import { isApprovalNever } from './approval-policy.js'
 import { EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
 import { assessPresetReach, presetRosterOf, reachNoticeForAgent } from './compat/preset-reach.js'
-import { fenceRejection, type ConnectionSeam } from './http-fence.js'
+import { fenceRejection, secretOpRejection, type ConnectionSeam } from './http-fence.js'
+import {
+  planOverrideCompaction, readToggleEntry, scanBlockRanges,
+  type OverrideBlock,
+} from './mcp/override-blocks.js'
 import { hubPath, hubRoot, relocateEntries } from './hub.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentListTool, defineSubagentRunTool } from './subagents/tools.js'
@@ -221,8 +225,19 @@ interface ManagedRow {
   level?: 'project' | 'global'
   disabled?: boolean
   managed?: boolean
+  /** 该 id 在**同一份**补丁文件里的启停覆盖块总数（不算 insert 行自身）。 */
+  overrideBlocks?: number
+  /** 其中"删掉也不改变生效值"的多余块数（见 planOverrideCompaction）。 */
+  redundantOverrides?: number
   config: Record<string, unknown>
 }
+
+/**
+ * 补丁文件里的顶层条目块（`insert` 导入块 / 顶层 `- id:` + `disabled:` 覆盖块）的
+ * 识别与收敛计划在 ./mcp/override-blocks.js —— 单独成模块是为了能在测试里对着
+ * 真文件直接跑（`test/mcp-override-compaction.test.mjs`）。两者都按 last-wins 生效，
+ * 所以覆盖块可以被反复追加而互不报错 —— 这正是文件会线性膨胀的原因。
+ */
 
 // ---------------------------------------------------------------------------
 // Transcript export helpers — mirror the import parsers (src/imports/parsers.js)
@@ -536,6 +551,7 @@ export default {
       ...archiveService.writeOps,
       ...subagentService.writeOps,
       'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
+      'mcpm-compact',
       'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
       // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
       // token-gated like a write — on a LAN-exposed port the token must be the
@@ -551,7 +567,8 @@ export default {
       'history-archive-batch', 'history-workspace-register',
     ])
 
-    // 会泄露明文凭据 / 完整配置的 op：额外要求请求带同源 Origin 头（见路由内的注释）。
+    // 会泄露明文凭据 / 完整配置的 op：**必须**带对的访问令牌，没配令牌就一律拒绝
+    // （判定在 http-fence.ts 的 secretOpRejection，含两种情况的区分与理由）。
     const SENSITIVE_OPS = new Set<string>(['mcpm-reveal', 'mcpm-export'])
 
     // 兼容体检的日志去重：同一宿主版本只写一条 compat/probe，避免轮询刷屏。
@@ -994,7 +1011,12 @@ export default {
       return entry
     }
 
-    function parseRows(content: string): { rows: ManagedRow[] } {
+    /**
+     * 顶层块扫描 / 启停覆盖块识别与收敛计划见 ./mcp/override-blocks.js ——
+     * 那段逻辑会改写 `~/.dsh/cordis.patch.yml`（写坏了 DSH 起不来），拆出去是为了能
+     * 在测试里对着真文件直接跑（`test/mcp-override-compaction.test.mjs`）。
+     */
+    function parseRows(content: string): { rows: ManagedRow[]; overrides: OverrideBlock[] } {
       const lines = content.split(/\r?\n/)
       const managedIds = new Set<string>()
       for (const line of lines) {
@@ -1004,19 +1026,9 @@ export default {
         if (m) managedIds.add(m[1].trim())
       }
       const rows: ManagedRow[] = []
-      const overrides: Array<{ id: string; disabled?: boolean }> = []
-      const blocks: Array<{ text: string }> = []
-      let current: { text: string } | null = null
-      for (const line of lines) {
-        if (/^- /.test(line)) {
-          current = { text: line }
-          blocks.push(current)
-        } else if (current) {
-          current.text += '\n' + line
-        }
-      }
-      for (const block of blocks) {
-        const head = block.text.split('\n')[0]
+      const overrides: OverrideBlock[] = []
+      for (const block of scanBlockRanges(lines)) {
+        const head = lines[block.start]
         if (/^- insert:/.test(head)) {
           const parts = block.text.split('\n')
           const children: Array<{ lines: string[] }> = []
@@ -1037,14 +1049,24 @@ export default {
           }
         } else {
           const entry = parseEntry(block.text.split('\n'))
-          if (entry && entry.name === '@deepseek-ai/dsh-mcp-client') overrides.push({ id: entry.id!, disabled: entry.disabled })
+          if (entry && entry.name === '@deepseek-ai/dsh-mcp-client' && entry.id) {
+            const toggle = readToggleEntry(lines.slice(block.start, block.end))
+            overrides.push({
+              start: block.start,
+              end: block.end,
+              text: block.text,
+              id: entry.id,
+              disabled: entry.disabled,
+              pure: toggle.pure,
+            })
+          }
         }
       }
       for (const o of overrides) {
         const row = rows.find((r) => r.id === o.id)
         if (row && o.disabled !== undefined) row.disabled = o.disabled
       }
-      return { rows }
+      return { rows, overrides }
     }
 
     // ---------- line-based block editing ----------
@@ -1201,6 +1223,8 @@ export default {
         level,
         disabled: !!r.disabled,
         managed: !!r.managed,
+        overrideBlocks: r.overrideBlocks || 0,
+        redundantOverrides: r.redundantOverrides || 0,
       }
     }
 
@@ -1592,12 +1616,29 @@ export default {
       const p = await ensurePaths()
       const rows: any[] = []
       const errors: string[] = []
+      // 同一 id 的启停覆盖块计数：`duplicate` 说的是"重复的 insert 行"（会让 DSH 起不来），
+      // 而反复追加的覆盖块不会 —— 但它是文件线性膨胀的真实来源，必须单独报出来，
+      // 否则界面上一片"无误"（用户实测：25 条重复行，duplicate 全报 false）。
+      // 先读两份文件：收敛计划要知道**两份文件合起来**的 insert 基准状态（同一个 id 的
+      // insert 行可能不在有覆盖块的那一份里）。
+      const fileContents: Array<{ level: string; abs: string; content: string; rows: ManagedRow[] }> = []
+      const baseRows: Array<{ id: string; disabled?: boolean }> = []
       for (const level of ['project', 'global']) {
         const abs = level === 'project' ? p.projectPatch : p.globalPatch
         let content = ''
         try { content = await readPatch(abs) } catch (e) { errors.push(level + ': ' + message(e)); continue }
-        const { rows: fileRows } = parseRows(content)
-        for (const r of fileRows) rows.push(normalizeRow(r, level, abs))
+        const parsed = parseRows(content).rows
+        fileContents.push({ level, abs, content, rows: parsed })
+        for (const r of parsed) baseRows.push({ id: r.id, disabled: r.disabled })
+      }
+      for (const file of fileContents) {
+        const stats = planOverrideCompaction(file.content, baseRows).ids
+        for (const r of file.rows) {
+          const stat = stats[r.id]
+          r.overrideBlocks = stat ? stat.total : 0
+          r.redundantOverrides = stat ? stat.dropped : 0
+          rows.push(normalizeRow(r, file.level, file.abs))
+        }
       }
       const toolCounts: Record<string, number> = {}
       try {
@@ -1641,6 +1682,16 @@ export default {
       for (const row of rows) row.duplicate = duplicateIds.indexOf(String(row.id)) >= 0
       const warnings: string[] = []
       if (duplicateIds.length) warnings.push('检测到重复的 loader id（会导致 DSH 无法启动，请手动清理补丁文件）：' + duplicateIds.join('、'))
+      // 反复追加的启停覆盖块：不阻断启动（last-wins），但会让补丁文件越用越长 ——
+      // 用户实测从 18 条涨到 25 条，且因为 duplicate 恒为 false，界面上一点提示都没有。
+      const redundant = rows
+        .filter((row) => row.redundantOverrides > 0)
+        .map((row) => String(row.serverName || row.id) + ' ×' + String(row.redundantOverrides))
+      if (redundant.length) {
+        const total = rows.reduce((n, row) => n + (row.redundantOverrides || 0), 0)
+        warnings.push('补丁文件里有 ' + String(total) + ' 个多余的启停覆盖块（同一 id 被反复追加；不影响启动，但文件会越用越长，最终值只能靠 last-wins 推断）：'
+          + redundant.join('、') + '。可用页首的「整理补丁」一键收敛。')
+      }
       return {
         ok: true,
         rows,
@@ -1913,6 +1964,49 @@ export default {
         c = removeEntryAll(c, id)
         await writePatch(abs, c)
         return { ok: true }
+      })
+    }
+
+    /**
+     * 收敛补丁文件里的启停覆盖块（用户显式点「整理补丁」才走这里）。
+     *
+     * 只删"删掉也不改变生效状态"的块（判定见 planOverrideCompaction）：insert 行、
+     * 带 config 的覆盖块、以及决定当前生效值的那一条都原样保留。删除前 writePatch
+     * 会自动备份上一版（保留最近 5 份），所以这一步是可回退的。
+     */
+    async function mcpmCompact(args: any): Promise<any> {
+      const p = await ensurePaths()
+      const only = args && (args.level === 'global' || args.level === 'project') ? String(args.level) : null
+      return withWriteLock(async () => {
+        const removed: Record<string, number> = {}
+        const files: string[] = []
+        let total = 0
+        const absOf = (level: string): string => (level === 'project' ? p.projectPatch : p.globalPatch)
+        // 基准状态取两份文件的并集：收敛判定必须知道某个 id 的 insert 行本来是什么状态，
+        // 而它可能在另一份文件里（否则会误删只在本文件里出现的 disabled:false 覆盖块）。
+        const baseRows: Array<{ id: string; disabled?: boolean }> = []
+        for (const level of ['project', 'global']) {
+          if (only && only !== level) continue
+          try {
+            for (const r of parseRows(await readPatch(absOf(level))).rows) baseRows.push({ id: r.id, disabled: r.disabled })
+          } catch (e) { /* 读不到的等级本来也不会被改 */ }
+        }
+        for (const level of ['project', 'global']) {
+          if (only && only !== level) continue
+          const abs = absOf(level)
+          let content = ''
+          try { content = await readPatch(abs) } catch (e) { continue }
+          const plan = planOverrideCompaction(content, baseRows)
+          if (!plan.ranges.length) continue
+          await writePatch(abs, spliceRanges(splitLines(content), plan.ranges))
+          files.push(abs)
+          for (const [id, stat] of Object.entries(plan.ids)) {
+            if (!stat.dropped) continue
+            removed[id] = (removed[id] || 0) + stat.dropped
+            total += stat.dropped
+          }
+        }
+        return { ok: true, removed: total, ids: removed, files }
       })
     }
 
@@ -2319,6 +2413,7 @@ export default {
       'mcpm-set-all': mcpmSetAll,
       'mcpm-restart': mcpmRestart,
       'mcpm-remove': mcpmRemove,
+      'mcpm-compact': mcpmCompact,
       'mcpm-export': mcpmExport,
       'mcpm-import': mcpmImport,
       // 技能管理 ops（由 ./skills/service.js 提供）：skill-state / skill-detail /
@@ -3190,7 +3285,6 @@ export default {
               res.end(JSON.stringify({ ok: false, error: 'missing plugin gate header' }))
               return
             }
-            const origin = hdr('origin')
             const tokenAccepted = TOKEN !== '' && hdr('x-dsh-token') === TOKEN
             if (!tokenAccepted) {
               const fence = fenceRejection(req, connection)
@@ -3213,12 +3307,16 @@ export default {
                 /* otherwise fall through with {} */
               }
               const op = String(payload.op || '')
-              // 敏感 op（会吐明文密钥与完整配置）额外要求带 Origin 头：即使在宿主栅栏
-              // 缺失的组合里，也不接受"无 Origin 的本机请求"直接取密钥。持有效令牌的
-              // 本地工具不属于此类，直接放行。
-              if (SENSITIVE_OPS.has(op) && !origin && !tokenAccepted) {
-                res.end(JSON.stringify({ ok: false, error: '该操作仅接受同源浏览器请求（缺少 Origin 头）' }))
-                return
+              // 敏感 op（会吐明文密钥与完整配置）：**必须**带对的访问令牌，没配令牌
+              // 就没有明文（判定与理由见 http-fence.ts 的 secretOpRejection）。
+              // 之前这里只查"有没有 Origin 头"，而 token 为空时它形同虚设 —— 任何能
+              // 打开 GUI 的浏览器都拿得到全部密钥原文。
+              if (SENSITIVE_OPS.has(op)) {
+                const gate = secretOpRejection({ tokenConfigured: TOKEN !== '', tokenAccepted })
+                if (gate) {
+                  res.end(JSON.stringify({ ok: false, error: gate.error, code: gate.code }))
+                  return
+                }
               }
               if (TOKEN && WRITE_OPS.has(op) && hdr('x-dsh-token') !== TOKEN) {
                 res.end(JSON.stringify({ ok: false, error: '缺少或错误的访问令牌（x-dsh-token）' }))

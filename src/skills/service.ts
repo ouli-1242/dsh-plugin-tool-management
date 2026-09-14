@@ -383,6 +383,9 @@ export function createSkillsService(ctx: any): SkillsService {
   // 写操作清单：与下方 ops 表同文件同源维护；HTTP 端门禁由 index.ts 从本集合派生，勿在宿主端另抄一份。
   const writeOps: ReadonlySet<string> = new Set([
     'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable',
+    // 移除/恢复来源会改写本地来源状态（listProviderCandidates 随之变化，模型侧的技能目录
+    // 也变），是写操作；漏在这份清单里 = 配了访问令牌也不会被要求带令牌。
+    'skill-source-remove', 'skill-source-restore',
     'skill-prefer', 'skill-unprefer',
     'skill-create', 'skill-import', 'skill-upload', 'skill-delete',
     'skill-trash-restore', 'skill-trash-delete', 'skill-custom-add', 'skill-custom-remove',

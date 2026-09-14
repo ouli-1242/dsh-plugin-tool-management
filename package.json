@@ -40,7 +40,7 @@
     "check:host": "node scripts/host-deps.mjs && node scripts/doctor.mjs",
     "host-deps": "node scripts/host-deps.mjs --fix",
     "doctor": "node scripts/doctor.mjs",
-    "test": "npm run build && npm run check:i18n && node --test test/archive.test.mjs test/import.test.mjs test/approval-policy.test.mjs test/subagent-scene.test.mjs test/subagent-persona.test.mjs test/hub-layout.test.mjs test/skills-state.test.mjs test/skills-delete.test.mjs test/skills-source-remove.test.mjs test/client-exports.test.mjs test/client-render.test.mjs test/compat-probe.test.mjs test/compat-fallback.test.mjs test/preset-reach.test.mjs"
+    "test": "npm run build && npm run check:i18n && node --test test/archive.test.mjs test/import.test.mjs test/approval-policy.test.mjs test/subagent-scene.test.mjs test/subagent-persona.test.mjs test/hub-layout.test.mjs test/skills-state.test.mjs test/skills-delete.test.mjs test/skills-source-remove.test.mjs test/client-exports.test.mjs test/client-render.test.mjs test/compat-probe.test.mjs test/compat-fallback.test.mjs test/preset-reach.test.mjs test/mcp-override-compaction.test.mjs test/rules-toggle-args.test.mjs"
   },
   "keywords": [
     "dsh",

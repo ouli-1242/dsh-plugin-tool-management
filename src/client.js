@@ -35,6 +35,7 @@ window.__ModuleLoader__.load({
 .dsm-tabs{display:flex;gap:4px;border-bottom:1px solid var(--dsw-alias-border-l1);margin-bottom:14px}.dsm-tabs-end{display:flex;align-items:center;gap:4px;margin-left:auto}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:2px 0 36px;container-type:inline-size;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-title-block{min-width:0}.dsm-title-row{display:flex;align-items:center;gap:8px 12px;min-width:0;flex-wrap:wrap}.dsm-feedback-links{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-title{margin:0;font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.4px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:28px;align-items:center;gap:5px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:500;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:22px}.dsm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:0;flex:none}
 .dsm-btn{box-sizing:border-box;display:inline-flex;min-height:34px;align-items:center;justify-content:center;padding:0 13px;border:1px solid transparent;border-radius:8px;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font:inherit;font-size:13px;font-weight:580;white-space:nowrap;cursor:pointer}.dsm-btn:hover:not(:disabled){filter:brightness(1.08)}.dsm-btn:disabled{opacity:.48;cursor:default}.dsm-btn-secondary,.dsm-btn-quiet{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.dsm-btn-quiet{min-height:28px;padding:0 9px;color:var(--dsw-alias-label-secondary);font-size:12px}.dsm-btn-danger{border-color:var(--dsw-alias-state-error-primary);background:transparent;color:var(--dsw-alias-state-error-primary)}.dsm-btn:focus-visible,.dsm-control:focus-visible,.dsm-select-trigger:focus-visible,.dsm-source-head:focus-visible,.dsm-switch:focus-visible,.dsm-upload-link:focus-visible,.dsm-file-remove:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
 .dsm-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dsm-stat{padding:12px 14px;border-right:1px solid var(--dsw-alias-border-l1);font-size:13px;color:var(--dsw-alias-label-secondary)}.dsm-stat:last-child{border-right:0}.dsm-stat strong{margin-right:5px;color:var(--dsw-alias-label-primary);font-size:17px;font-weight:680}.dsm-filters{display:flex;gap:9px}.dsm-search{flex:1}.dsm-source-filter{width:210px;flex:none}
+.dsm-token-panel{display:flex;flex-direction:column;gap:8px}.dsm-token-row{display:flex;gap:8px;align-items:center;min-width:0}.dsm-token-row .dsm-control{flex:1;min-width:0}
 .dsm-control,.dsm-select-trigger{box-sizing:border-box;width:100%;min-height:34px;padding:0 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}.dsm-control::placeholder{color:var(--dsw-alias-label-tertiary)}textarea.dsm-control{min-height:160px;padding-top:9px;resize:vertical;line-height:20px}.dsm-select{position:relative}.dsm-select-trigger{display:flex;align-items:center;justify-content:space-between;text-align:left;cursor:pointer}.dsm-select-menu{position:absolute;z-index:40;top:calc(100% + 5px);right:0;left:0;display:flex;max-height:260px;padding:5px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2)}.dsm-option{padding:8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;text-align:left;cursor:pointer}.dsm-option:hover,.dsm-option[aria-selected=true]{background:var(--dsw-alias-interactive-bg-hover)}
 .dsm-sources{display:flex;flex-direction:column;gap:9px}.dsm-source{overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dsm-source-head{box-sizing:border-box;display:flex;width:100%;min-height:48px;align-items:center;padding:0 13px}.dsm-source-head-main{display:flex;min-width:0;min-height:48px;flex:1;align-items:center;gap:10px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsm-source-head:hover,.dsm-row:hover,.dsm-trash-row:hover,.dsm-hist-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-source-title{font-size:14px;font-weight:650}.dsm-count{color:var(--dsw-alias-label-tertiary);font-size:12px}.dsm-path{min-width:0;margin-left:auto;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.dsm-source-actions{display:flex;align-items:center;gap:9px;margin-left:8px}.dsm-source-body{border-top:1px solid var(--dsw-alias-border-l1)}.dsm-source-note{padding:9px 13px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
 .dsm-table-head,.dsm-row{display:grid;grid-template-columns:minmax(180px,1fr) 120px 90px max-content;align-items:center;column-gap:12px;padding:0 13px}.dsm-table-head{min-height:32px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsm-row{min-height:58px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-row:last-child{border-bottom:0}.dsm-main{min-width:0}.dsm-name{overflow:hidden;font-size:13px;font-weight:570;text-overflow:ellipsis;white-space:nowrap}.dsm-note{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:19px;align-items:center;padding:0 6px;border:1px solid var(--dsw-alias-border-l3);border-radius:4px;color:var(--dsw-alias-label-secondary);font-size:10px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-enabled{color:var(--dsw-alias-state-success-primary);font-size:12px;white-space:nowrap}.dsm-disabled{color:#d49245;font-size:12px;white-space:nowrap}.dsm-shadowed{color:var(--dsw-alias-label-tertiary);font-size:12px;white-space:nowrap}.dsm-row-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px}
@@ -195,6 +196,20 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         window.localStorage.setItem('dsh-plugin-tool-management-token', TOKEN)
       }
     } catch (e) { /* storage unavailable */ }
+
+    /**
+     * 改令牌并落盘。明文机密 op（mcpm-reveal / mcpm-export）在宿主侧**必须**带对令牌，
+     * 没配令牌时一律拒绝 —— 所以界面得有个地方让用户把令牌填进来，否则那功能永远打不开。
+     * 令牌只存本机 localStorage，随请求以 x-dsh-token 发出。
+     */
+    function setAccessToken(value) {
+      TOKEN = String(value || '').trim()
+      try {
+        if (TOKEN) window.localStorage.setItem('dsh-plugin-tool-management-token', TOKEN)
+        else window.localStorage.removeItem('dsh-plugin-tool-management-token')
+      } catch (e) { /* storage unavailable */ }
+      return TOKEN
+    }
 
     function apiCall(op, args) {
       // `x-dsh-plugin` is the cross-site (CSRF) gate header the host half
@@ -559,6 +574,12 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "mcp.field.env": "环境变量（每行 key=value）", "mcp.field.env.hint": "路径按系统路径写法填（Windows 用 \\，macOS/Linux 用 /）。",
         "mcp.field.headers": "请求头（每行 key=value）",
         "mcp.detail.title": "服务详情：", "mcp.detail.config": "配置", "mcp.detail.showSecret": "显示密钥", "mcp.detail.hideSecret": "隐藏密钥",
+        "mcp.token.label": "访问令牌", "mcp.token.placeholder": "与宿主配置的 token 相同", "mcp.token.save": "保存并重试",
+        "mcp.token.hint": "明文密钥必须带对的访问令牌：宿主侧在本插件配置里加 token（或设环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）并重启 DSH，这里填同一个值（只存在本机浏览器里，随请求以 x-dsh-token 发送）。",
+        "mcp.overrides.badge": "启停覆盖 ×{count}", "mcp.overrides.badge.title": "补丁文件里这个 id 有 {total} 个启停覆盖块（按 last-wins 生效），其中 {redundant} 个删掉也不改变生效值",
+        "mcp.btn.compact": "整理补丁", "mcp.btn.compact.title": "删除多余的启停覆盖块（保留决定当前生效值的那一条；insert 行不动，删除前自动备份）",
+        "mcp.compact.title": "整理补丁文件", "mcp.compact.desc": "将删除 {count} 个多余的启停覆盖块：生效值不变（保留最后一个决定值的块），insert 行与带配置的覆盖块都不动，删前自动备份（保留最近 5 份）。",
+        "mcp.compact.confirm": "确认整理",
         "mcp.detail.entryId": "条目 ID", "mcp.detail.status": "运行状态", "mcp.detail.registered": "该服务已登记在 Loader 中。",
         "mcp.detail.note": "备注（仅本机可见）", "mcp.detail.note.placeholder": "例如：A 不可用时改用 B 兜底", "mcp.detail.note.save": "保存备注",
         "mcp.detail.tools": "工具（{count}）",
@@ -775,6 +796,12 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "mcp.field.env": "Environment (one key=value per line)", "mcp.field.env.hint": "Use the platform's own path syntax (backslashes on Windows, / on macOS/Linux).",
         "mcp.field.headers": "Headers (one key=value per line)",
         "mcp.detail.title": "Server details: ", "mcp.detail.config": "Configuration", "mcp.detail.showSecret": "Reveal secrets", "mcp.detail.hideSecret": "Hide secrets",
+        "mcp.token.label": "Access token", "mcp.token.placeholder": "Same value as the host token", "mcp.token.save": "Save and retry",
+        "mcp.token.hint": "Plaintext secrets require the matching access token: set token in this plugin's host config (or the DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN env var), restart DSH, then enter the same value here (kept in this browser only and sent as x-dsh-token).",
+        "mcp.overrides.badge": "toggle blocks ×{count}", "mcp.overrides.badge.title": "This id has {total} enable/disable override blocks in the patch file (last one wins); {redundant} of them can go without changing the effective state",
+        "mcp.btn.compact": "Tidy patch", "mcp.btn.compact.title": "Drop redundant enable/disable override blocks (the one deciding the effective state is kept; insert rows untouched; the file is backed up first)",
+        "mcp.compact.title": "Tidy the patch file", "mcp.compact.desc": "Removes {count} redundant enable/disable override blocks: the effective state is unchanged (the deciding block stays), insert rows and config-bearing overrides are untouched, and the previous file is backed up (last 5 kept).",
+        "mcp.compact.confirm": "Tidy now",
         "mcp.detail.entryId": "Entry id", "mcp.detail.status": "Status", "mcp.detail.registered": "This server is registered in the loader.",
         "mcp.detail.note": "Note (local only)", "mcp.detail.note.placeholder": "e.g. fall back to B when A is unavailable", "mcp.detail.note.save": "Save note",
         "mcp.detail.tools": "Tools ({count})",
@@ -1004,7 +1031,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 
         // MCP 服务页：与 Skills 页共用 dsm-* 设计语言（统计卡 / 筛选 / 分组卡片 / 模态框）。
         function MCPPage() {
-          const [state, setState] = React.useState({ loading: true, error: null, rows: [], paths: null, errors: [], warnings: [] })
+          const [state, setState] = React.useState({ loading: true, error: null, rows: [], paths: null, errors: [], warnings: [], revealError: null })
           const [msg, setMsg] = React.useState(null)
           const [busy, setBusy] = React.useState(null)
           const [query, setQuery] = React.useState('')
@@ -1017,13 +1044,15 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           const [reveal, setReveal] = React.useState(false)
           const [settings, setSettings] = React.useState(null)
           const [noteDraft, setNoteDraft] = React.useState('')
+          const [tokenDraft, setTokenDraft] = React.useState('')
+          const [compactConfirm, setCompactConfirm] = React.useState(false)
           const [, setTick] = React.useState(0)
 
           const refresh = (withReveal, onRows) => {
             const useReveal = withReveal === undefined ? reveal : withReveal === true
-            // 明文视图走独立的 mcpm-reveal op（host 端受 token 保护），
-            // mcpm-list 始终脱敏，无 token 也能渲染页面。
-            apiCall(useReveal ? 'mcpm-reveal' : 'mcpm-list', {}).then((res) => {
+            // 明文视图走独立的 mcpm-reveal op（host 端要求带对的访问令牌），
+            // mcpm-list 始终脱敏、无令牌也能渲染页面。
+            const applyRows = (res, revealError) => {
               const rows = (res && res.rows) || []
               setState({
                 loading: false,
@@ -1032,9 +1061,19 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                 paths: (res && res.paths) || null,
                 errors: (res && res.errors) || [],
                 warnings: (res && res.warnings) || [],
+                revealError: revealError || null,
               })
               if (onRows) onRows(rows)
-            }).catch((e) => setState({ loading: false, error: String((e && e.message) || e), rows: [], paths: null, errors: [], warnings: [] }))
+            }
+            apiCall(useReveal ? 'mcpm-reveal' : 'mcpm-list', {}).then((res) => {
+              // 明文被拒（未配令牌 / 令牌不对）：退回脱敏列表，把原因与令牌入口单独显示。
+              // 直接落进 state.error 会把整页变成错误态 —— "看不了明文"不等于"页面坏了"。
+              if (useReveal && res && res.ok === false) {
+                setReveal(false)
+                return apiCall('mcpm-list', {}).then((masked) => applyRows(masked, { code: res.code, text: res.error }))
+              }
+              applyRows(res, null)
+            }).catch((e) => setState({ loading: false, error: String((e && e.message) || e), rows: [], paths: null, errors: [], warnings: [], revealError: null }))
           }
           // The polling tick must always call the newest refresh closure, while
           // the interval itself only changes when the saved settings change.
@@ -1139,6 +1178,17 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
               if (fresh) setDetail(Object.assign({}, detail, { row: fresh }))
             })
           }
+          // 明文被拒后的令牌入口：填对令牌 → 存 localStorage（随每个请求以 x-dsh-token 发出）
+          // → 重试明文。宿主没配令牌时这一步不会成功，面板里的提示写了该怎么配。
+          const applyToken = () => {
+            if (!setAccessToken(tokenDraft)) return
+            setReveal(true)
+            refresh(true, (rows) => {
+              if (!detail) return
+              const fresh = rows.find((item) => item.id === detail.row.id && item.level === detail.row.level)
+              if (fresh) setDetail(Object.assign({}, detail, { row: fresh }))
+            })
+          }
           const saveNote = () => {
             const row = detail && detail.row
             if (!row) return
@@ -1155,6 +1205,10 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             const row = confirmRow
             setConfirmRow(null)
             if (row) run('mcpm-remove', { id: row.id, level: row.level }, row.id + ':remove')
+          }
+          const doCompact = () => {
+            setCompactConfirm(false)
+            run('mcpm-compact', {}, 'compact')
           }
           const openDetail = (row) => {
             setNoteDraft(row.notes || '')
@@ -1194,6 +1248,8 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             tools: rows.reduce((sum, row) => sum + (typeof row.toolCount === 'number' ? row.toolCount : 0), 0),
           }
           const profilePath = state.paths && state.paths.profile ? 'profile: ' + state.paths.profile : null
+          // 可收敛的启停覆盖块总数（宿主按"删掉不改变生效值"算出来的），决定「整理补丁」是否可用。
+          const redundantTotal = rows.reduce((sum, row) => sum + (row.redundantOverrides || 0), 0)
           const groups = levelFilter === 'loader'
             ? [{ key: 'live', title: mt('mcp.level.loader'), path: profilePath, match: isRunning }]
             : [
@@ -1228,7 +1284,13 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
               React.createElement('div', { className: 'dsm-tags' },
                 (levelFilter === 'loader' && row.level && row.level !== 'loader') ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.level.' + row.level)) : null,
                 (typeof row.toolCount === 'number' && row.toolCount > 0) ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.count', { count: row.toolCount })) : null,
-                row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null),
+                row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null,
+                // 启停覆盖块：`duplicate` 只说"重复的 insert 行"（会起不来），反复追加的
+                // 覆盖块不影响启动，却是补丁文件膨胀的真实来源 —— 单独标出来。
+                row.overrideBlocks > 0 ? React.createElement('span', {
+                  className: 'dsm-tag' + (row.redundantOverrides > 0 ? ' dsm-tag-off' : ''),
+                  title: mt('mcp.overrides.badge.title', { total: row.overrideBlocks, redundant: row.redundantOverrides || 0 }),
+                }, mt('mcp.overrides.badge', { count: row.overrideBlocks })) : null),
               React.createElement('div', { className: 'dsm-status ' + status.cls }, status.text),
               React.createElement('div', { className: 'dsm-row-actions' },
                 editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
@@ -1370,6 +1432,17 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
               React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length })),
               toolListNode))
 
+          const compactNode = compactConfirm && React.createElement(Modal, {
+            key: 'mcp-compact',
+            title: mt('mcp.compact.title'),
+            closeLabel: mt('btn.close'),
+            onClose: () => setCompactConfirm(false),
+          },
+            React.createElement('p', { className: 'dsm-desc' }, mt('mcp.compact.desc', { count: redundantTotal })),
+            React.createElement('div', { className: 'dsm-modal-actions' },
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: () => setCompactConfirm(false) }, mt('btn.cancel')),
+              React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null, onClick: doCompact }, mt('mcp.compact.confirm'))))
+
           const confirmNode = confirmRow && React.createElement(Modal, {
             key: 'mcp-remove',
             title: mt('mcp.remove.title'),
@@ -1391,7 +1464,8 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }, mt('btn.refresh')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openAdd }, mt('mcp.btn.new')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: true }, 'setall') }, mt('mcp.btn.enableAll')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: false }, 'setall') }, mt('mcp.btn.disableAll')))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: false }, 'setall') }, mt('mcp.btn.disableAll')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading || redundantTotal === 0, title: mt('mcp.btn.compact.title'), onClick: () => setCompactConfirm(true) }, mt('mcp.btn.compact')))),
             React.createElement('div', { className: 'dsm-summary dsm-summary-3' },
               [[summary.total, mt('mcp.stat.total')], [summary.enabled, mt('mcp.stat.enabled')], [summary.tools, mt('mcp.stat.tools')]].map((item) =>
                 React.createElement('div', { key: item[1], className: 'dsm-stat' },
@@ -1405,9 +1479,22 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             React.createElement(Notice, { kind: 'err', text: state.error }),
             React.createElement(Notice, { kind: 'warn', text: (state.errors && state.errors.length > 0) ? mt('mcp.err.warnings') + state.errors.join('；') : null }),
             React.createElement(Notice, { kind: 'warn', text: (state.warnings && state.warnings.length > 0) ? state.warnings.join('；') : null }),
+            state.revealError ? React.createElement('div', { className: 'dsm-token-panel' },
+              React.createElement(Notice, { kind: 'err', text: state.revealError.text }),
+              // 令牌不对 → 给输入框；宿主根本没配令牌 → 输入框也没用，只给"该怎么配"的说明，
+              // 免得摆一个按了必然失败的按钮。
+              state.revealError.code === 'error.secret.badToken' ? React.createElement('div', { className: 'dsm-token-row' },
+                React.createElement('input', {
+                  className: 'dsm-control', type: 'password', value: tokenDraft,
+                  placeholder: mt('mcp.token.placeholder'), 'aria-label': mt('mcp.token.label'),
+                  onChange: (ev) => setTokenDraft(ev.target.value),
+                }),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: !tokenDraft.trim(), onClick: applyToken }, mt('mcp.token.save'))) : null,
+              React.createElement('p', { className: 'dsm-help' }, mt('mcp.token.hint'))) : null,
             groupsNode,
             formModalNode,
             detailNode,
+            compactNode,
             confirmNode)
         }
 
@@ -1682,6 +1769,9 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
     var OP_BY_PATH = { "/state": "skill-state", "/enable": "skill-enable", "/disable": "skill-disable",
   "/prefer": "skill-prefer", "/unprefer": "skill-unprefer",
   "/source-enable": "skill-source-enable", "/source-disable": "skill-source-disable",
+  // 「移除来源 / 恢复读取」两个按钮曾经打的是这两个路径，但映射表里没有它们 ——
+  // callApi 直接 reject("unknown action")，弹窗又 catch 掉了，按钮点下去毫无反应。
+  "/source-remove": "skill-source-remove", "/source-restore": "skill-source-restore",
   "/delete": "skill-delete", "/trash-restore": "skill-trash-restore", "/trash-delete": "skill-trash-delete",
   "/detail": "skill-detail", "/create": "skill-create", "/import": "skill-import",
   "/upload": "skill-upload", "/browse": "skill-browse" };
