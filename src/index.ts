@@ -25,6 +25,7 @@ import { isApprovalNever } from './approval-policy.js'
 import { EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
 import { assessPresetReach, presetRosterOf, reachNoticeForAgent } from './compat/preset-reach.js'
 import { fenceRejection, secretOpRejection, type ConnectionSeam } from './http-fence.js'
+import { planOverrideCompaction } from './mcp/override-blocks.js'
 import { hubPath, hubRoot, relocateEntries } from './hub.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentListTool, defineSubagentRunTool } from './subagents/tools.js'
@@ -536,6 +537,7 @@ export default {
       ...archiveService.writeOps,
       ...subagentService.writeOps,
       'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
+      'mcpm-compact',
       'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
       // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
       // token-gated like a write — on a LAN-exposed port the token must be the
@@ -1917,6 +1919,48 @@ export default {
       })
     }
 
+    /**
+     * 收敛补丁文件里的启停覆盖块（用户显式点「整理补丁」才走这里）。
+     *
+     * 只删"删掉也不改变生效状态"的块（判定见 planOverrideCompaction）：insert 行、
+     * 带 config 的覆盖块、以及决定当前生效值的那一条都原样保留。删除前 writePatch
+     * 会自动备份上一版（保留最近 5 份），所以这一步是可回退的。
+     *
+     * 基准状态由 planOverrideCompaction 自己从 insert 行读（另一份文件的内容只用来补
+     * "insert 行不在本文件里"的情况）。这里**不要**喂 parseRows() 的 rows —— 那是合并
+     * 覆盖块之后的生效值，会让每个 decider 都被判成多余：第一版就是这么把 6 台 MCP
+     * 全部启用的。同理，界面不显示任何"多余块数"（那个数字也来自同一条错误口径）。
+     */
+    async function mcpmCompact(): Promise<any> {
+      const p = await ensurePaths()
+      return withWriteLock(async () => {
+        const levels = ['project', 'global'] as const
+        const absOf = (level: string): string => (level === 'project' ? p.projectPatch : p.globalPatch)
+        const contents: Record<string, string> = {}
+        for (const level of levels) {
+          try { contents[level] = await readPatch(absOf(level)) } catch (e) { contents[level] = '' }
+        }
+        const removed: Record<string, number> = {}
+        const files: string[] = []
+        let total = 0
+        for (const level of levels) {
+          const content = contents[level]
+          if (!content) continue
+          const others = levels.filter((other) => other !== level).map((other) => contents[other]).filter(Boolean)
+          const plan = planOverrideCompaction(content, others)
+          if (!plan.ranges.length) continue
+          await writePatch(absOf(level), spliceRanges(splitLines(content), plan.ranges))
+          files.push(absOf(level))
+          for (const [id, stat] of Object.entries(plan.ids)) {
+            if (!stat.dropped) continue
+            removed[id] = (removed[id] || 0) + stat.dropped
+            total += stat.dropped
+          }
+        }
+        return { ok: true, removed: total, ids: removed, files }
+      })
+    }
+
     async function mcpmExport(): Promise<any> {
       const p = await ensurePaths()
       const list = await mcpmList()
@@ -2320,6 +2364,7 @@ export default {
       'mcpm-set-all': mcpmSetAll,
       'mcpm-restart': mcpmRestart,
       'mcpm-remove': mcpmRemove,
+      'mcpm-compact': mcpmCompact,
       'mcpm-export': mcpmExport,
       'mcpm-import': mcpmImport,
       // 技能管理 ops（由 ./skills/service.js 提供）：skill-state / skill-detail /
