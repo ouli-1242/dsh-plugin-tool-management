@@ -210,6 +210,9 @@ export function customRootsFromState(stateValue) {
         typeof item.label === "string" && item.label.trim()
           ? item.label.trim().slice(0, 64)
           : "自定义目录",
+      // 用户加进来的来源（相对「按约定发现」的 dsh / hub / agents / codex / claude）：
+      // 界面据此决定要不要给「永久删除」——只有自定义来源能真正从插件里删掉记录。
+      custom: true,
       mutable: false,
       toggleable: true,
       native: false,
@@ -309,6 +312,12 @@ export async function removeCustomRoot(key, log) {
   delete current.state.sources[clean];
   delete current.state.disabledSkills[clean];
   delete current.state.enabledSkills[clean];
+  // 已移除记录一起清掉：否则「永久删除」之后状态文件里还留着一条指向不存在来源的脏键
+  // （读取时的 normalize 会丢弃它，但没理由写进去）。
+  if (Array.isArray(current.state.removedSources))
+    current.state.removedSources = current.state.removedSources.filter(
+      (key) => key !== clean,
+    );
   await writeManagerState(current.state);
   if (log) log("custom-remove", `移除自定义技能目录 ${target.path} (${clean})`);
   return { key: clean, path: target.path };
@@ -3259,6 +3268,8 @@ export async function state(options = {}) {
         mutable: root.mutable,
         deletable: root.deletable === true,
         removable: !isDefaultSkillSource(root) && root.scope !== "project",
+        // 自定义来源（用户手加的目录）：只有它能「永久删除」——按约定发现的来源删不掉。
+        custom: root.custom === true,
         // 默认来源（dsh / hub）：界面据此隐藏来源开关、只显示「可管理」标记。
         defaultSource: isDefaultSkillSource(root),
         toggleable: root.toggleable,
@@ -3339,6 +3350,8 @@ export async function state(options = {}) {
       truncated: truncated === true,
       // 界面用：能否从管理器「移除」（不再读取）。dsh / hub / 项目级不可移除。
       removable: !isDefaultSkillSource(root) && root.scope !== "project",
+      // 自定义来源（用户手加的目录）：只有它能「永久删除」——按约定发现的来源删不掉。
+      custom: root.custom === true,
       // 默认来源（dsh / hub）：界面据此隐藏来源开关（它们不能停用），换成「可管理」标记。
       defaultSource: isDefaultSkillSource(root),
       removed: false,
