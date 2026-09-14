@@ -5,8 +5,8 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-- Quick overview → [update.md](./update.md)
-- User guide → [README](../README.md) / [README_EN](../README_EN.md)
+- Quick overview → [update.md](docs/update.md)
+- User guide → [README](README.md) / [README_EN](README_EN.md)
 - Engineering details (root-cause analysis, test data, design decisions) live in git history, not here.
 
 ---

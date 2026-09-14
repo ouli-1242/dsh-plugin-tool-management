@@ -1,6 +1,6 @@
 # 版本更新概要
 
-每个版本大致改了什么——想知道「升上去会变什么」看这里就够了。逐条细节见 [Changelog](./Changelog.md)，功能说明见 [README](../README.md) / [README_EN](../README_EN.md)。
+每个版本大致改了什么——想知道「升上去会变什么」看这里就够了。逐条细节见 [Changelog](../CHANGELOG.md)，功能说明见 [README](../README.md) / [README_EN](../README_EN.md)。
 
 | 版本 | 发布 | 主题 |
 |---|---|---|
