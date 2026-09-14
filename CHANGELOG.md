@@ -1,45 +1,44 @@
-# Changelog
+# 变更日志
 
-All notable changes to this project are documented in this file.
+本文件记录本项目的所有重要变更。
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-- Quick overview → [update.md](docs/update.md)
-- User guide → [README](README.md) / [README_EN](README_EN.md)
-- Engineering details (root-cause analysis, test data, design decisions) live in git history, not here.
+- 只想看「大致改了什么」→ [版本更新概要](docs/update.md)
+- 功能说明与用法 → [README](README.md) / [README_EN](README_EN.md)
+- 工程细节（根因分析、实测数据、设计取舍）在 git 历史里，不在这里。
 
 ---
 
 ## [0.7.0] - 2026-09-15
 
-### Added
+### 新增
 
 - 回收站扩到子智能体 / 场景 / 提示词预设三处：删除都进回收站，可恢复或永久删除（恢复绝不覆盖）。
 - 子智能体工具限制改为按 Agent 预设：每个预设一份白/黑名单（互相排斥），运行期按当前预设生效。
 - 兼容页「预设注入边界」改版：五列标签（记忆 / 提示词 / 技能 / MCP / 子智能体），绿/红/灰框一眼看出哪个域被预设关掉。
 
-### Security
-
-- 明文密钥改为一律要令牌：「显示密钥」与配置导出没配 `token` 时一律拒绝，不再只靠宿主栅栏。
-
-### Changed
+### 变更
 
 - 已移除的来源并入回收站（分目录/技能两部分，目录支持永久删除）。
 - 五处回收站排版统一（固定高度容器、行内边距收紧）。
 - MCP「整理补丁」重新上线：删多余启停覆盖块（生效状态不变），界面只留一个按钮。
 
-### Fixed
+### 修复
 
 - 技能页「移除来源 / 恢复读取」死按钮：补客户端 op 映射 + 补进 writeOps 门禁清单。
 - `rules-toggle` 不传 `enabled` 时静默 no-op 却返回成功：改为缺参明确拒绝、不写盘。
 - 场景档案「技能集」把来源 key 当技能名显示：改为技能名与来源名分开回传，不再显示 `custom-<hash>`。
 
+### 安全
+
+- 明文密钥改为一律要令牌：「显示密钥」与配置导出没配 `token` 时一律拒绝，不再只靠宿主栅栏。
+
 ---
 
 ## [0.6.0] - 2026-09-14
 
-### Added
+### 新增
 
 - 「工具 → 兼容」页（第 8 个页签，只读）：宿主版本、能力可用数、每个动作走原生/适配/不可用、降级项与原因。
 - `node scripts/doctor.mjs`：命令行版兼容体检。
@@ -51,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 正在生效的提示词预设不能删除。
 - 场景启用改单选（同时只启用一个，新场景默认不启动）。
 
-### Changed
+### 变更
 
 - 兼容判定换底座：源码文本比对 → 模块实体 + 能力探测；拒绝永远在写入之前。
 - 技能来源权限语义修正：默认来源必须读取但技能可删；外部目录可停用/移除但技能只读。
@@ -64,12 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `history-retention-set` 拒绝小数；`rules-set-active` 必须显式传参；`mcpm-set-enabled` 停用幂等。
 - 写操作门禁：先过宿主栅栏，`token` 作为脚本/局域网逃生门。
 
-### Security
-
-- `mcpm-reveal` / `mcpm-export` 额外要求带 `Origin` 头。
-- `history-workspace-register` 补入 WRITE_OPS（此前漏了 token 门禁）。
-
-### Fixed
+### 修复
 
 - 进出场景模式会静默改写技能策略（数据污染）：快照只取生效项，已处于目标状态的不再写。
 - 导入技能删进回收站拿不回来：按作用域分岔，用户级来源按 key 重新解析路径。
@@ -80,15 +74,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 英文界面下兼容页结论条仍是中文：改为客户端按当前语言拼。
 - 两处过时文案（AGENTS.md 应用说明、创建技能确认卡落点）。
 
+### 安全
+
+- `mcpm-reveal` / `mcpm-export` 额外要求带 `Origin` 头。
+- `history-workspace-register` 补入 WRITE_OPS（此前漏了 token 门禁）。
+
 ---
 
 ## [0.5.1] - 2026-09-13
 
-### Added
+### 新增
 
 - 场景档案弹窗新加段默认一项都不勾：记忆段只预勾本场景已启用的，其余三段是空集。
 
-### Changed
+### 变更
 
 - 档案弹窗「记忆」段只列被编辑场景自己的记忆。
 - 场景页排版重做：卡片只留名字+描述+动作，数量收进页首「当前模式」条。
@@ -98,20 +97,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2026-09-13
 
-### Added
+### 新增
 
 - 插件自有技能来源「导入技能」（新建/导入落点，优先级高于 `~/.dsh/skills/`）。
 - 「移除来源」= 连目录都不再扫描（文件零改动，可恢复）。
 - 场景档案编辑器新增第 4 段「记忆」。
 - 人设模型与工具限制收进「高级选项」折叠区。
 
-### Changed
+### 变更
 
 - **破坏性**：插件产生的文件全部收进 `~/.dsh/tool-management/`（旧位置自动搬入）。
 - 场景升级为显式记录（带描述与顺序）；空场景合法；根层裸 `.md` 不再注入。
 - 斜杠命令全部下线。
 
-### Fixed
+### 修复
 
 - 工具页整页白屏（`sceneLabel` 闭包作用域错）。
 - 导出静默丢失（导出写在 `apply` 体内）。
@@ -121,7 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-09-12
 
-### Added
+### 新增
 
 - 五个域合并进一个「工具」设置面板：MCP / Skills / AGENTS.md 预设 / History。
 - MCP：工具级独立启停、重启只重连不改启停、密钥默认打码、改写补丁前自动 `.bak`（保留 5 份）。
@@ -129,4 +128,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AGENTS.md 预设库：多套全局基线，一键应用。
 - History：归档会话按项目分组、批量恢复 / 删除、保留期清理；从 Claude Code / Cursor / Codex / 任意文本导入；导出 Markdown / JSONL。
 
-> No separate records exist for 0.1.1 / 0.1.2 / 0.1.3 (git tags only); their differences are not documented here.
+> 0.1.1 / 0.1.2 / 0.1.3 没有独立记录（只有 git tag），此处不拆分它们的差异。
