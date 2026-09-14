@@ -4,6 +4,11 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# Original copies of the @deepseek-ai packages that scripts/host-deps.mjs replaced
+# with junctions into the host installation. Machine-specific scratch: restore with
+# `node scripts/host-deps.mjs --restore`, never commit.
+.host-deps-backup/
+
 .superpowers/
 *.tgz
 
@@ -17,9 +22,13 @@ lib/
 # `npm run build` / `npm test` run `node scripts/sync-client.mjs`, and tsc never
 # writes lib/client.js on its own — ignoring it breaks a fresh clone's build.
 # `check-i18n.mjs` is also kept: `npm test` runs it to catch zh/en key drift.
+# `host-deps.mjs` / `doctor.mjs` are kept because `npm run check:host` and the
+# upgrade procedure in docs/Changelog.md call them from a fresh clone.
 scripts/*
 !scripts/sync-client.mjs
 !scripts/check-i18n.mjs
+!scripts/host-deps.mjs
+!scripts/doctor.mjs
 
 # Runtime state written into the plugin directory at run time (archived-session
 # ledger, retention setting, seeded AGENTS.md presets). Machine-specific.
