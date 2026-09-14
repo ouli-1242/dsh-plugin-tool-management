@@ -581,10 +581,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "mcp.detail.title": "服务详情：", "mcp.detail.config": "配置", "mcp.detail.showSecret": "显示密钥", "mcp.detail.hideSecret": "隐藏密钥",
         "mcp.token.label": "访问令牌", "mcp.token.placeholder": "与宿主配置的 token 相同", "mcp.token.save": "保存并重试",
         "mcp.token.hint": "明文密钥必须带对的访问令牌：宿主侧在本插件配置里加 token（或设环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）并重启 DSH，这里填同一个值（只存在本机浏览器里，随请求以 x-dsh-token 发送）。",
-        "mcp.overrides.badge": "启停覆盖 ×{count}", "mcp.overrides.badge.title": "补丁文件里这个 id 有 {total} 个启停覆盖块（按 last-wins 生效），其中 {redundant} 个删掉也不改变生效值",
-        "mcp.btn.compact": "整理补丁", "mcp.btn.compact.title": "删除多余的启停覆盖块（保留决定当前生效值的那一条；insert 行不动，删除前自动备份）",
-        "mcp.compact.title": "整理补丁文件", "mcp.compact.desc": "将删除 {count} 个多余的启停覆盖块：生效值不变（保留最后一个决定值的块），insert 行与带配置的覆盖块都不动，删前自动备份（保留最近 5 份）。",
-        "mcp.compact.confirm": "确认整理",
         "mcp.detail.entryId": "条目 ID", "mcp.detail.status": "运行状态", "mcp.detail.registered": "该服务已登记在 Loader 中。",
         "mcp.detail.note": "备注（仅本机可见）", "mcp.detail.note.placeholder": "例如：A 不可用时改用 B 兜底", "mcp.detail.note.save": "保存备注",
         "mcp.detail.tools": "工具（{count}）",
@@ -807,10 +803,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "mcp.detail.title": "Server details: ", "mcp.detail.config": "Configuration", "mcp.detail.showSecret": "Reveal secrets", "mcp.detail.hideSecret": "Hide secrets",
         "mcp.token.label": "Access token", "mcp.token.placeholder": "Same value as the host token", "mcp.token.save": "Save and retry",
         "mcp.token.hint": "Plaintext secrets require the matching access token: set token in this plugin's host config (or the DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN env var), restart DSH, then enter the same value here (kept in this browser only and sent as x-dsh-token).",
-        "mcp.overrides.badge": "toggle blocks ×{count}", "mcp.overrides.badge.title": "This id has {total} enable/disable override blocks in the patch file (last one wins); {redundant} of them can go without changing the effective state",
-        "mcp.btn.compact": "Tidy patch", "mcp.btn.compact.title": "Drop redundant enable/disable override blocks (the one deciding the effective state is kept; insert rows untouched; the file is backed up first)",
-        "mcp.compact.title": "Tidy the patch file", "mcp.compact.desc": "Removes {count} redundant enable/disable override blocks: the effective state is unchanged (the deciding block stays), insert rows and config-bearing overrides are untouched, and the previous file is backed up (last 5 kept).",
-        "mcp.compact.confirm": "Tidy now",
         "mcp.detail.entryId": "Entry id", "mcp.detail.status": "Status", "mcp.detail.registered": "This server is registered in the loader.",
         "mcp.detail.note": "Note (local only)", "mcp.detail.note.placeholder": "e.g. fall back to B when A is unavailable", "mcp.detail.note.save": "Save note",
         "mcp.detail.tools": "Tools ({count})",
@@ -1054,7 +1046,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           const [settings, setSettings] = React.useState(null)
           const [noteDraft, setNoteDraft] = React.useState('')
           const [tokenDraft, setTokenDraft] = React.useState('')
-          const [compactConfirm, setCompactConfirm] = React.useState(false)
           const [, setTick] = React.useState(0)
 
           const refresh = (withReveal, onRows) => {
@@ -1215,10 +1206,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             setConfirmRow(null)
             if (row) run('mcpm-remove', { id: row.id, level: row.level }, row.id + ':remove')
           }
-          const doCompact = () => {
-            setCompactConfirm(false)
-            run('mcpm-compact', {}, 'compact')
-          }
           const openDetail = (row) => {
             setNoteDraft(row.notes || '')
             setDetail({ row, loading: true, error: null, tools: [] })
@@ -1257,8 +1244,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             tools: rows.reduce((sum, row) => sum + (typeof row.toolCount === 'number' ? row.toolCount : 0), 0),
           }
           const profilePath = state.paths && state.paths.profile ? 'profile: ' + state.paths.profile : null
-          // 可收敛的启停覆盖块总数（宿主按"删掉不改变生效值"算出来的），决定「整理补丁」是否可用。
-          const redundantTotal = rows.reduce((sum, row) => sum + (row.redundantOverrides || 0), 0)
           const groups = levelFilter === 'loader'
             ? [{ key: 'live', title: mt('mcp.level.loader'), path: profilePath, match: isRunning }]
             : [
@@ -1293,13 +1278,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
               React.createElement('div', { className: 'dsm-tags' },
                 (levelFilter === 'loader' && row.level && row.level !== 'loader') ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.level.' + row.level)) : null,
                 (typeof row.toolCount === 'number' && row.toolCount > 0) ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.count', { count: row.toolCount })) : null,
-                row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null,
-                // 启停覆盖块：`duplicate` 只说"重复的 insert 行"（会起不来），反复追加的
-                // 覆盖块不影响启动，却是补丁文件膨胀的真实来源 —— 单独标出来。
-                row.overrideBlocks > 0 ? React.createElement('span', {
-                  className: 'dsm-tag' + (row.redundantOverrides > 0 ? ' dsm-tag-off' : ''),
-                  title: mt('mcp.overrides.badge.title', { total: row.overrideBlocks, redundant: row.redundantOverrides || 0 }),
-                }, mt('mcp.overrides.badge', { count: row.overrideBlocks })) : null),
+                row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null),
               React.createElement('div', { className: 'dsm-status ' + status.cls }, status.text),
               React.createElement('div', { className: 'dsm-row-actions' },
                 editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
@@ -1441,17 +1420,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
               React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length })),
               toolListNode))
 
-          const compactNode = compactConfirm && React.createElement(Modal, {
-            key: 'mcp-compact',
-            title: mt('mcp.compact.title'),
-            closeLabel: mt('btn.close'),
-            onClose: () => setCompactConfirm(false),
-          },
-            React.createElement('p', { className: 'dsm-desc' }, mt('mcp.compact.desc', { count: redundantTotal })),
-            React.createElement('div', { className: 'dsm-modal-actions' },
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: () => setCompactConfirm(false) }, mt('btn.cancel')),
-              React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null, onClick: doCompact }, mt('mcp.compact.confirm'))))
-
           const confirmNode = confirmRow && React.createElement(Modal, {
             key: 'mcp-remove',
             title: mt('mcp.remove.title'),
@@ -1473,8 +1441,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }, mt('btn.refresh')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openAdd }, mt('mcp.btn.new')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: true }, 'setall') }, mt('mcp.btn.enableAll')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: false }, 'setall') }, mt('mcp.btn.disableAll')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading || redundantTotal === 0, title: mt('mcp.btn.compact.title'), onClick: () => setCompactConfirm(true) }, mt('mcp.btn.compact')))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading, onClick: () => run('mcpm-set-all', { enabled: false }, 'setall') }, mt('mcp.btn.disableAll')))),
             React.createElement('div', { className: 'dsm-summary dsm-summary-3' },
               [[summary.total, mt('mcp.stat.total')], [summary.enabled, mt('mcp.stat.enabled')], [summary.tools, mt('mcp.stat.tools')]].map((item) =>
                 React.createElement('div', { key: item[1], className: 'dsm-stat' },
@@ -1503,7 +1470,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             groupsNode,
             formModalNode,
             detailNode,
-            compactNode,
             confirmNode)
         }
 
