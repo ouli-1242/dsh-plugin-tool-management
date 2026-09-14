@@ -8,7 +8,16 @@
 
 **简体中文** · [English](README_EN.md) · [Changelog](docs/Changelog.md) · [版本更新概要](docs/update.md)
 
-DeepSeek Harness 的 **MCP、技能、场景记忆、子智能体、提示词与归档会话**管理插件。八个页签：场景 · MCP · 技能 · 子智能体 · 提示词 · 记忆 · 会话 · 兼容。
+DeepSeek Harness 的 **MCP、技能、场景、记忆、子智能体、提示词与归档会话**管理插件。八个页签：
+
+- 场景
+- MCP
+- 技能
+- 子智能体
+- 提示词
+- 记忆
+- 会话
+- 兼容
 
 ```sh
 dsh plugin --profile web add dsh-plugin-tool-management@latest
