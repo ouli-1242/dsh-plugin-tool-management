@@ -10,14 +10,14 @@
 
 DeepSeek Harness 的 **MCP、技能、场景、记忆、子智能体、提示词与归档会话**管理插件。八个页签：
 
-- 场景
-- MCP
-- 技能
-- 子智能体
-- 提示词
-- 记忆
-- 会话
-- 兼容
+- **场景**
+- **MCP**
+- **技能**
+- **子智能体**
+- **提示词**
+- **记忆**
+- **会话**
+- **兼容**
 
 ```sh
 dsh plugin --profile web add dsh-plugin-tool-management@latest

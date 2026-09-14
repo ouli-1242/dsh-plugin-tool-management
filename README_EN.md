@@ -10,14 +10,14 @@
 
 An **MCP, skills, scenes, memories, subagents, prompts & archived sessions** manager for DeepSeek Harness. Eight tabs:
 
-- Scenes
-- MCP
-- Skills
-- Subagents
-- Prompts
-- Memories
-- Sessions
-- Host
+- **Scenes**
+- **MCP**
+- **Skills**
+- **Subagents**
+- **Prompts**
+- **Memories**
+- **Sessions**
+- **Host**
 
 ```sh
 dsh plugin --profile web add dsh-plugin-tool-management@latest
