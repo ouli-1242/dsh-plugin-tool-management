@@ -3,7 +3,7 @@
 // DSH 全局指令基线只有一个文件 ~/.dsh/AGENTS.md（USER_GLOBAL_FILE 固定），
 // 没有内置的「多份全局 AGENTS.md 切换」机制。本服务在 hub 内维护一个
 // 预设库（每套一个子目录 + AGENTS.md），「应用」= 把选中预设内容写入
-// ~/.dsh/AGENTS.md，新会话生效（当前会话不变，DSH 本身如此）。
+// ~/.dsh/AGENTS.md，下一轮对话生效（宿主每个 agent/pre-step 都会 stat 并重读该文件）。
 //
 // id 即目录名：字符集口径见 `./preset-id.ts`（用户裁定「什么都能写」，只留
 // 文件系统安全约束）；`__last-applied__` 是备份槽，不算用户预设。
@@ -16,6 +16,8 @@ import { isValidPresetId, LAST_APPLIED_PRESET_ID, normalizePresetId } from './pr
 import { listTrashEntries, moveOutOfTrash, moveToTrash, purgeTrashEntry, readTrashEntry, type TrashEntry } from '../hub.js'
 
 const FILENAME = 'AGENTS.md'
+/** 描述侧车：与 AGENTS.md 同目录，避免把「只给使用者看」的文字注入提示词。 */
+const META_FILE = 'meta.json'
 const LAST_APPLIED_ID = LAST_APPLIED_PRESET_ID
 /** 新建预设的初始正文（空模板）；用户也可以直接粘贴自己的内容。 */
 const BLANK_TEMPLATE = '# AGENTS.md\n\n（DSH 全局指令基线预设，待编辑）\n'
@@ -32,17 +34,20 @@ export interface AgentsMdDeps {
 export interface AgentsMdPresetRow {
   id: string
   active: boolean
+  /** 「只给使用者看」的一句话说明。存 `<id>/meta.json`，**绝不写进 AGENTS.md**（正文会被原样注入）。 */
+  description?: string
 }
 
 export interface AgentsMdService {
   list(): Promise<{ ok: true; presets: AgentsMdPresetRow[] } | { ok: false; error: string }>
   read(id: string): Promise<{ ok: true; content: string } | { ok: false; error: string }>
-  create(id: string, options?: { from?: string; content?: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }>
+  create(id: string, options?: { from?: string; content?: string; description?: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }>
   /**
    * 保存预设：正文必写；`nextId` 与 `id` 不同时**改名（= 目录改名）**。
+   * `description` 省略 = 不动描述（区分「清空」与「不改」，见 writeDescription）。
    * @returns 改名时带回 `renamedFrom`，调用方据此把场景绑定一起改名。
    */
-  update(id: string, content: string, nextId?: string): Promise<{ ok: true; id: string; renamedFrom?: string } | { ok: false; error: string }>
+  update(id: string, content: string, nextId?: string, description?: string): Promise<{ ok: true; id: string; renamedFrom?: string } | { ok: false; error: string }>
   apply(id: string): Promise<{ ok: true; id: string; backedUp: boolean } | { ok: false; error: string }>
   /** 按原文写回全局基线（备份纪律同 apply）；用于场景关闭时恢复进场景前的内容。 */
   restore(content: string): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }>
@@ -52,7 +57,7 @@ export interface AgentsMdService {
   trashList(): Promise<{ ok: true; trash: TrashEntry[] }>
   trashRestore(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
   trashDelete(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
-  importPreset(id: string, content: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
+  importPreset(id: string, content: string, description?: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
 }
 
 export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): AgentsMdService {
@@ -71,6 +76,35 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     } catch {
       return null
     }
+  }
+
+  // ── 描述（「只给使用者看」）────────────────────────────────────────────────
+  // 存在预设目录的 `meta.json` 里，**不写进 AGENTS.md**：那个文件的正文会被原样注入
+  // 系统提示词，把「这份预设是干什么的」写进去等于凭空给模型加了一段说明。
+  // 读写都 best-effort：描述坏掉/写不进去不该让「保存预设」失败（正文才是本体）。
+
+  async function readDescription(id: string): Promise<string> {
+    try {
+      const raw = await readFile(join(deps.presetsDir, id, META_FILE), 'utf8')
+      const parsed = JSON.parse(raw) as { description?: unknown }
+      return typeof parsed.description === 'string' ? parsed.description : ''
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * 写描述。`undefined` = 不动（老调用方 / 只想改正文时不该顺手把描述抹掉），
+   * 空串 = 明确清空（连文件一起删，避免留一个空壳 meta.json）。
+   */
+  async function writeDescription(id: string, description: string | undefined): Promise<void> {
+    if (description === undefined) return
+    const text = String(description).trim()
+    const file = join(deps.presetsDir, id, META_FILE)
+    try {
+      if (text === '') { await rm(file, { force: true }); return }
+      await writeFile(file, JSON.stringify({ description: text }, null, 2) + '\n', 'utf8')
+    } catch { /* 描述写不进去不该让保存失败 */ }
   }
 
   // 幂等初始化：仅当库完全无预设且全局 AGENTS.md 存在时，拷贝全局为 default
@@ -112,6 +146,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
           return {
             id,
             active: globalHash !== null && contentHash !== null && globalHash === contentHash,
+            description: await readDescription(id),
           }
         }),
       )
@@ -135,7 +170,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
   }
 
   /** 新建预设：`content` 优先（用户在新建弹窗里直接写的内容），否则用 `from` 复制，否则空模板。 */
-  async function create(id: string, options?: { from?: string; content?: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  async function create(id: string, options?: { from?: string; content?: string; description?: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
     const bad = idError(id)
     if (bad) return { ok: false, error: '非法 id：' + bad }
     const safeId = String(id ?? '').trim()
@@ -158,6 +193,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     }
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, FILENAME), content, 'utf8')
+    await writeDescription(safeId, options?.description)
     return { ok: true, id: safeId }
   }
 
@@ -165,7 +201,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
    * 保存预设：正文写入 + 可选**改名**（目录改名，内容随目录一起走）。
    * 改名冲突（目标已存在）直接拒绝，不合并、不覆盖。
    */
-  async function update(id: string, content: string, nextId?: string): Promise<{ ok: true; id: string; renamedFrom?: string } | { ok: false; error: string }> {
+  async function update(id: string, content: string, nextId?: string, description?: string): Promise<{ ok: true; id: string; renamedFrom?: string } | { ok: false; error: string }> {
     const bad = idError(id)
     if (bad) return { ok: false, error: '非法 id：' + bad }
     const safeId = String(id ?? '').trim()
@@ -181,6 +217,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
       try { await rename(dir, nextDir) } catch (e) { return { ok: false, error: '改名失败：' + message(e) } }
     }
     await writeFile(join(deps.presetsDir, targetId, FILENAME), String(content ?? ''), 'utf8')
+    await writeDescription(targetId, description)
     return { ok: true, id: targetId, ...(targetId === safeId ? {} : { renamedFrom: safeId }) }
   }
 
@@ -309,7 +346,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
   }
 
   // 从外部文本内容（如导入的 .md 文件）建预设：id 校验 + 重复检查 + 写 AGENTS.md。
-  async function importPreset(id: string, content: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  async function importPreset(id: string, content: string, description?: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
     const bad = idError(id)
     if (bad) return { ok: false, error: '非法 id：' + bad }
     const safeId = String(id ?? '').trim()
@@ -317,6 +354,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     try { await stat(dir); return { ok: false, error: 'id 已存在：' + safeId } } catch { /* 不存在，继续 */ }
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, FILENAME), String(content ?? ''), 'utf8')
+    await writeDescription(safeId, description)
     return { ok: true, id: safeId }
   }
 

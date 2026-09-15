@@ -5,7 +5,7 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * `rules/provider.ts` registers a per-agent `systemPrompt` section, and the
+ * `prompt-sections.ts` registers a per-agent `systemPrompt` section, and the
  * registration SUCCEEDS under every preset. But `@deepseek-ai/dsh-persona`
  * with `complete: true` makes the prompt registry restore its prefix as the
  * ONLY section at assembly time, so the section never reaches the model — and

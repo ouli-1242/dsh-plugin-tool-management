@@ -48,6 +48,15 @@ export const IDENTITY_PACKAGES = [
 export const EXPECTED_PEER_RANGE = '>=0.1.5-rc.2 <0.2.0-0'
 /** The release this plugin's adapters were last verified against. */
 export const VERIFIED_HOST_VERSION = '0.1.5-rc.2'
+/**
+ * peer range 的下界 —— 界面展示用。
+ *
+ * 上界 `<0.2.0-0` 是 semver「不跨下一个 minor」的**约定写法**，不是被支持的版本；
+ * 把它当作「要求范围」展示会让人以为插件支持一批尚不存在的版本。
+ * 从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
+ */
+export const EXPECTED_MIN_HOST_VERSION =
+  EXPECTED_PEER_RANGE.match(/^>=\s*([^\s]+)/)?.[1] ?? VERIFIED_HOST_VERSION
 
 export type CapabilityState = 'ok' | 'missing-member' | 'shape-mismatch' | 'not-available'
 

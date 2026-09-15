@@ -8,14 +8,21 @@ export function text(v: string) {
   return [{ type: 'text' as const, text: v }]
 }
 
-/** 场景绑定校验（设计 §3.3）：启用场景的 subagents 并集；空并集 = 全部可用。 */
+/**
+ * 可见性过滤（两道闸，按序）：
+ *   ① 人设开关（全局）：停用的绝不进上下文 —— 即便它被场景绑定（场景启动时会自动把
+ *      绑定的人设启用，见 archive-engine 的 applySubagentSwitches）。
+ *   ② 场景绑定校验（设计 §3.3）：启用场景的 subagents 并集；空并集 = 全部可用。
+ * 之前只有②：全局默认所有子智能体都进上下文，没有开关可言。
+ */
 export async function filterBySceneBinding(
   docs: PersonaDoc[],
   enabledSceneLists: string[][],
 ): Promise<{ allowed: PersonaDoc[]; reason: string | null }> {
+  const live = docs.filter((d) => d.enabled !== false)
   const bound = new Set(enabledSceneLists.flat())
-  if (!bound.size) return { allowed: docs, reason: null }
-  const allowed = docs.filter((d) => bound.has(d.name))
+  if (!bound.size) return { allowed: live, reason: null }
+  const allowed = live.filter((d) => bound.has(d.name))
   return { allowed, reason: allowed.length ? null : `当前启用场景的子智能体绑定: ${[...bound].join('、')}` }
 }
 

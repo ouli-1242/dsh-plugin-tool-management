@@ -63,6 +63,12 @@ export interface PersonaDoc {
   toolsByPreset?: Record<string, PresetToolRule>
   body: string
   path: string
+  /**
+   * 子智能体开关（list() 时由启用集合计算后附加）：`false` = 停用 —— 不注入目录段、
+   * subagent_list / subagent_run 不可见；文件本体一个字节不动。
+   * 缺省/`true` = 启用。原始解析（parsePersona）不产生这个字段。
+   */
+  enabled?: boolean
 }
 
 /** 一个 Agent 预设下的工具限制：白名单（只留列出的）或黑名单（移除列出的）。 */
@@ -91,6 +97,16 @@ export interface SubagentService {
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生）。 */
   writeOps: ReadonlySet<string>
+  /**
+   * 场景档案引擎专用（非 op，无 HTTP 门禁面）：人设启用集合的读/写通道。
+   * 进入模式时启用档案勾选的人设、退出时按快照停回，都走这里。
+   */
+  enabledStore: {
+    /** 指定名单里当前被停用的（进入模式拍快照用：只记将被启用的行）。 */
+    disabledAmong(names: string[]): Promise<string[]>
+    /** 批量启停；只碰给出的名字，人设已不存在的跳过。 */
+    setEnabled(names: string[], enabled: boolean): Promise<void>
+  }
 }
 
 /** 逗号/顿号分隔的名字清单（空串 → undefined）。 */
@@ -167,26 +183,86 @@ export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
 
 const RESULT_MAX = 16 * 1024
 
-export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }): SubagentService {
+export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; stateDir?: string }): SubagentService {
   const dir = opts?.subagentsDir || defaultPersonasDir()
+  const stateDir = opts?.stateDir && opts.stateDir.trim() !== '' ? opts.stateDir : join(resolveDshHome(), 'tool-management')
+  const stateFile = join(stateDir, 'agents-index.json')
   const req = createRequire(import.meta.url)
 
   let cache: { at: number; value: PersonaDoc[] } | null = null
-  async function list(): Promise<PersonaDoc[]> {
-    if (cache && Date.now() - cache.at < 1000) return cache.value
-    // 旧目录搬家放在首次扫描前（幂等；失败不阻断，旧目录仍会被下面的读取兜底看到）。
-    await relocateLegacyPersonas(dir).catch(() => undefined)
-    const docs: PersonaDoc[] = []
+
+  // ── 人设启用集合（子智能体开关）────────────────────────────────────────
+  // agents-index.json：{ version: 1, enabled: string[] }（与 rules-index.json 同目录约定）。
+  //   - 文件缺失/损坏 = **全部启用**（老用户升级零感知，行为与开关上线前一致）；
+  //   - 文件一旦写出即为权威：之后新建/导入/回收站恢复的人设**自动启用**（刚建就想用是常理）；
+  //   - 停用只影响注入与 subagent_* 工具的可见性，人设文件一个字节不动。
+  // 缓存约定：undefined = 还没读过盘；null = 文件缺失（全部启用）；数组 = 权威集合。
+  let enabledCache: string[] | null | undefined = undefined
+  async function readEnabled(): Promise<string[] | null> {
+    if (enabledCache !== undefined) return enabledCache
+    // 用局部变量过渡：await 之后 TS 对闭包级缓存变量的收窄会失效，直接返回会报 undefined。
+    let next: string[] | null
     try {
-      const entries = await readdir(dir)
-      for (const fileName of entries.filter((e) => e.endsWith('.md')).sort()) {
-        const raw = await readFile(join(dir, fileName), 'utf8').catch(() => '')
-        if (!raw.trim()) continue
-        docs.push({ ...parsePersona(raw, fileName.slice(0, -3)), path: join(dir, fileName) })
-      }
-    } catch { /* 目录缺失 = 无人设 */ }
-    cache = { at: Date.now(), value: docs }
-    return docs
+      const raw = JSON.parse(await readFile(stateFile, 'utf8'))
+      next = Array.isArray(raw && raw.enabled) ? raw.enabled.map((x: unknown) => String(x)) : []
+    } catch { next = null }
+    enabledCache = next
+    return next
+  }
+  async function writeEnabled(list: string[]): Promise<void> {
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(stateFile, JSON.stringify({ version: 1, enabled: list }, null, 2), 'utf8')
+    enabledCache = list
+  }
+  /** 新建/导入/恢复的人设默认启用；文件缺失（本来就全启用）时无需写。 */
+  async function enablePersonaNames(names: string[]): Promise<void> {
+    const set = await readEnabled()
+    if (set === null) return
+    let dirty = false
+    for (const n of names) if (set.indexOf(n) < 0) { set.push(n); dirty = true }
+    if (dirty) await writeEnabled(set)
+  }
+  /** 改名跟随：旧名在集合里就改新名；不在（停用中）保持停用。 */
+  async function renamePersonaInEnabled(from: string, to: string): Promise<void> {
+    const set = await readEnabled()
+    if (set === null) return
+    const i = set.indexOf(from)
+    if (i < 0) return
+    set[i] = to
+    await writeEnabled(set)
+  }
+  /** 删除后从集合摘掉，别留悬空名（列表时无害，但会让集合越攒越脏）。 */
+  async function removePersonaFromEnabled(name: string): Promise<void> {
+    const set = await readEnabled()
+    if (set === null || set.indexOf(name) < 0) return
+    await writeEnabled(set.filter((n) => n !== name))
+  }
+  /** list() 输出统一附上 enabled：文件缺失 → 全 true；否则按集合。 */
+  function withEnabled(docs: PersonaDoc[], set: string[] | null): PersonaDoc[] {
+    if (set === null) return docs.map((d) => ({ ...d, enabled: true }))
+    return docs.map((d) => ({ ...d, enabled: set.indexOf(d.name) >= 0 }))
+  }
+
+  async function list(): Promise<PersonaDoc[]> {
+    let docs: PersonaDoc[]
+    if (cache && Date.now() - cache.at < 1000) {
+      docs = cache.value
+    } else {
+      // 旧目录搬家放在首次扫描前（幂等；失败不阻断，旧目录仍会被下面的读取兜底看到）。
+      await relocateLegacyPersonas(dir).catch(() => undefined)
+      const fresh: PersonaDoc[] = []
+      try {
+        const entries = await readdir(dir)
+        for (const fileName of entries.filter((e) => e.endsWith('.md')).sort()) {
+          const raw = await readFile(join(dir, fileName), 'utf8').catch(() => '')
+          if (!raw.trim()) continue
+          fresh.push({ ...parsePersona(raw, fileName.slice(0, -3)), path: join(dir, fileName) })
+        }
+      } catch { /* 目录缺失 = 无人设 */ }
+      cache = { at: Date.now(), value: fresh }
+      docs = fresh
+    }
+    return withEnabled(docs, await readEnabled())
   }
 
   // spawn provider 在场性（设计 §3.2，落地方式见 cordis.patch.yml 的取舍注释）：
@@ -284,7 +360,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       const docs = await list()
       return {
         ok: true,
-        subagents: docs.map((p) => ({ name: p.name, description: p.description, provider: p.provider ?? null, model: p.model ?? null, tools: p.tools ?? null, toolsDeny: p.toolsDeny ?? null, toolsByPreset: p.toolsByPreset ?? null })),
+        subagents: docs.map((p) => ({ name: p.name, enabled: p.enabled !== false, description: p.description, provider: p.provider ?? null, model: p.model ?? null, tools: p.tools ?? null, toolsDeny: p.toolsDeny ?? null, toolsByPreset: p.toolsByPreset ?? null })),
       }
     },
     'subagent-get': async (args: any) => {
@@ -308,18 +384,45 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
         return { ok: false, error: `创建人设目录失败: ${dir}（${message(e)}）` }
       }
       await writeFile(target, serializePersona(args), 'utf8')
+      // 新建即启用（文件缺失 = 本来全启用，无需写）；缓存失效让下次 list 带上新成员。
+      await enablePersonaNames([name]).catch(() => undefined)
       cache = null
       return { ok: true, name }
     },
+    /**
+     * 保存人设，**可选改名**（nextName）。
+     * 人设名就是文件名（`agents/<名>.md`），所以改名 = 重命名文件；
+     * 目标名已存在直接拒绝，绝不覆盖别人的文件。
+     * 返回 `renamedFrom` 供调用方把场景档案里的绑定一起改掉（档案存的是人设名）。
+     */
     'subagent-update': async (args: any) => {
       const name = String((args && args.name) || '').trim()
       if (!validPersonaName(name)) return { ok: false, error: `人设名不合法: ${name || '(空)'}` }
       const target = join(dir, name + '.md')
       const exists = await readFile(target, 'utf8').then(() => true).catch(() => false)
       if (!exists) return { ok: false, error: `人设不存在: ${name}` }
-      await writeFile(target, serializePersona(args), 'utf8')
+      let finalName = name
+      let renamedFrom: string | undefined
+      const nextRaw = args && args.nextName !== undefined ? String(args.nextName).trim() : ''
+      if (nextRaw !== '' && nextRaw !== name) {
+        if (!validPersonaName(nextRaw)) {
+          return { ok: false, error: `新人设名不合法: ${nextRaw}（非空、≤64 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）` }
+        }
+        const nextTarget = join(dir, nextRaw + '.md')
+        const taken = await readFile(nextTarget, 'utf8').then(() => true).catch(() => false)
+        if (taken) return { ok: false, error: `人设已存在: ${nextRaw}` }
+        try {
+          await rename(target, nextTarget)
+        } catch (e) {
+          return { ok: false, error: `人设改名失败: ${message(e)}` }
+        }
+        finalName = nextRaw
+        renamedFrom = name
+      }
+      await writeFile(join(dir, finalName + '.md'), serializePersona({ ...args, name: finalName }), 'utf8')
+      if (renamedFrom) await renamePersonaInEnabled(renamedFrom, finalName).catch(() => undefined)
       cache = null
-      return { ok: true, name }
+      return { ok: true, name: finalName, ...(renamedFrom ? { renamedFrom } : {}) }
     },
     /**
      * 删除人设 = **移入回收站**（`hub/trash/agents-trash/<id>/persona.md`）。
@@ -334,6 +437,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
       if (!exists) return { ok: false, error: `人设不存在: ${name}` }
       const moved = await moveToTrash('agents', name, [{ from: target, dest: 'persona.md' }])
       if (moved.ok === false) return { ok: false, error: `移入回收站失败: ${moved.error}` }
+      await removePersonaFromEnabled(name).catch(() => undefined)
       cache = null
       return { ok: true, name, trashId: moved.id }
     },
@@ -354,6 +458,8 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
         return { ok: false, error: `恢复失败: ${message(e)}` }
       }
       await purgeTrashEntry('agents', id)
+      // 恢复 = 拿回来用：自动启用（文件缺失本来就全启用，无需写）。
+      await enablePersonaNames([entry.name]).catch(() => undefined)
       cache = null
       return { ok: true, name: entry.name }
     },
@@ -391,11 +497,65 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string }
         }
         imported.push(target.name)
       }
-      if (imported.length) cache = null
+      if (imported.length) {
+        await enablePersonaNames(imported).catch(() => undefined)
+        cache = null
+      }
       return { ok: true, imported, skipped }
     },
+    /**
+     * 子智能体开关（v0.8）：停用 = 不注入目录段、subagent_list/run 不可见；文件本体不动。
+     * `enabled` 必须显式给布尔值 —— 与 rules-toggle 同一条口径：不按"翻转"推断，
+     * 免得参数丢了时界面以为改了、实际什么都没动。
+     */
+    'subagent-toggle': async (args: any) => {
+      const name = String((args && args.name) || '').trim()
+      if (!validPersonaName(name)) return { ok: false, error: `人设名不合法: ${name || '(空)'}` }
+      if (typeof (args && args.enabled) !== 'boolean') {
+        return { ok: false, error: '缺少参数：enabled 必须是布尔值（只按传入值写入，不做"翻转"推断）' }
+      }
+      const docs = await list()
+      if (!docs.some((d) => d.name === name)) return { ok: false, error: `人设不存在: ${name}` }
+      const set = await readEnabled()
+      // 文件缺失 = 当前全启用：首次开关时把现状物化成显式集合（否则"部分停用"无处落笔）。
+      const base = (set === null ? docs.map((d) => d.name) : set.slice()).filter((n) => docs.some((d) => d.name === n))
+      const i = base.indexOf(name)
+      if (args.enabled === true) {
+        if (i < 0) base.push(name)
+      } else if (i >= 0) {
+        base.splice(i, 1)
+      }
+      await writeEnabled(base)
+      cache = null
+      return { ok: true, name, enabled: args.enabled === true }
+    },
   }
-  return { list, runSerial, ops, writeOps: new Set(['subagent-create', 'subagent-update', 'subagent-delete', 'subagent-import', 'subagent-trash-restore', 'subagent-trash-delete']) }
+  const enabledStore = {
+    /** 指定名单里当前被停用的（进入模式拍快照用：只记将被启用的行，退出时精确停回）。 */
+    async disabledAmong(names: string[]): Promise<string[]> {
+      const docs = await list()
+      const state = new Map(docs.map((d) => [d.name, d.enabled !== false]))
+      return names.filter((n) => state.get(n) === false)
+    },
+    /** 批量启停；只碰给出的名字，人设已不存在的跳过（别把悬空名写进集合）。 */
+    async setEnabled(names: string[], enabled: boolean): Promise<void> {
+      const docs = await list()
+      const set = await readEnabled()
+      const base = (set === null ? docs.map((d) => d.name) : set.slice()).filter((n) => docs.some((d) => d.name === n))
+      let dirty = false
+      for (const n of names) {
+        if (!docs.some((d) => d.name === n)) continue
+        const i = base.indexOf(n)
+        if (enabled && i < 0) { base.push(n); dirty = true }
+        if (!enabled && i >= 0) { base.splice(i, 1); dirty = true }
+      }
+      if (dirty) {
+        await writeEnabled(base)
+        cache = null
+      }
+    },
+  }
+  return { list, runSerial, ops, enabledStore, writeOps: new Set(['subagent-create', 'subagent-update', 'subagent-delete', 'subagent-import', 'subagent-toggle', 'subagent-trash-restore', 'subagent-trash-delete']) }
 }
 
 function validPersonaName(name: string): boolean {

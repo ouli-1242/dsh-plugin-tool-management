@@ -135,6 +135,9 @@ test('记忆写入：必须落到已存在的场景；留空 = 保留场景 glob
   const g = await service.ops['rules-create']({ group: '', name: '总则', body: '全局记忆正文' })
   assert.equal(g.ok, true)
   assert.equal(g.rule.id, `${GLOBAL_SCENE}/总则`, '留空场景落到保留场景 global')
+  // P5 契约变更：新建记忆默认**不开启**（开关是单一真相源 `enabled`）。
+  assert.equal(g.rule.enabled, false, '新建记忆默认不开启')
+  await service.ops['rules-toggle']({ id: g.rule.id, enabled: true })
 
   await service.ops['rules-create-scene']({ name: '办公' })
   // 单选模型：新建场景默认不启用，显式启用后才进投影。
@@ -142,6 +145,8 @@ test('记忆写入：必须落到已存在的场景；留空 = 保留场景 glob
   const ok = await service.ops['rules-create']({ group: '办公', name: '周报', body: '办公记忆正文' })
   assert.equal(ok.ok, true)
   assert.equal(ok.rule.id, '办公/周报')
+  assert.equal(ok.rule.enabled, false, '新建记忆默认不开启')
+  await service.ops['rules-toggle']({ id: ok.rule.id, enabled: true })
 
   // 投影：global 恒注入；已启用的办公场景也注入。
   const budget = await service.ops['rules-budget']({})
@@ -149,7 +154,7 @@ test('记忆写入：必须落到已存在的场景；留空 = 保留场景 glob
   assert.match(budget.items.map((i) => i.id).join(','), /办公\/周报/)
 })
 
-test('删除场景：global 不可删；有记忆/不存在都要明确报错；空场景可删并清掉记录', async () => {
+test('删除场景：global 不可删、不存在要明确报错；有记忆时连记忆一起删（可整条恢复）', async () => {
   const { service } = await makeService()
 
   const g = await service.ops['rules-remove-scene']({ name: GLOBAL_SCENE })
@@ -166,14 +171,25 @@ test('删除场景：global 不可删；有记忆/不存在都要明确报错；
 
   await service.ops['rules-create-scene']({ name: '团队' })
   await service.ops['rules-create']({ group: '团队', name: '周报', body: '正文' })
-  const nonEmpty = await service.ops['rules-remove-scene']({ name: '团队' })
-  assert.equal(nonEmpty.ok, false)
-  assert.equal(nonEmpty.code, 'error.rules.sceneNotEmpty', '场景里还有记忆时不可删')
 
-  assert.equal((await service.ops['rules-remove']({ id: '团队/周报' })).ok, true)
-  assert.equal((await service.ops['rules-remove-scene']({ name: '团队' })).ok, true)
+  // 契约变更（用户 2026-09-15）：删除场景 = **连它下面的记忆一起去掉**（含未启用的），
+  // 不再要求先清空。但记忆是被移入回收站的，所以删错了还能整条恢复 —— 下面对两件事都断言。
+  const withMemories = await service.ops['rules-remove-scene']({ name: '团队' })
+  assert.equal(withMemories.ok, true, '有记忆时也可删（记忆一起走）')
+  assert.equal(withMemories.movedFiles, 1, '应带回被一起收走的记忆文件数')
   const r = await service.ops['rules-list']({})
   assert.equal(r.scenes.some((s) => s.name === '团队'), false, '场景记录应随目录一起删除')
+  assert.equal(r.rules.some((x) => x.id === '团队/周报'), false, '记忆也不再出现在列表里')
+
+  const trash = await service.ops['scene-trash-list']({})
+  const entry = trash.trash.find((t) => t.name === '团队')
+  assert.ok(entry, '场景（含记忆）应整条进回收站')
+  const back = await service.ops['scene-trash-restore']({ id: entry.id })
+  assert.equal(back.ok, true)
+  assert.equal(back.restoredFiles, 1, '记忆文件按原相对路径放回')
+  const r2 = await service.ops['rules-list']({})
+  assert.ok(r2.scenes.some((x) => x.name === '团队'), '场景记录恢复')
+  assert.ok(r2.rules.some((x) => x.id === '团队/周报'), '记忆恢复')
 })
 
 test('体检：没有归属场景的记忆（直接放在 memories/ 根层）必须被报出来', async () => {
@@ -229,46 +245,50 @@ test('paths：rules-list 回传真实目录，供 UI 显示（不再由界面硬
   assert.equal((await stat(rulesRoot)).isDirectory(), true)
 })
 
-test('记忆勾选（档案 memories 段）：只注入勾选的记忆，文件不动', async () => {
+test('记忆开关（enabled 单一真相源）：只有开启的记忆进投影，文件不动', async () => {
   const { stateDir, service } = await makeService()
   await service.ops['rules-create-scene']({ name: '办公' })
-  await service.ops['rules-create']({ group: '办公', name: '甲', body: '甲正文' })
-  await service.ops['rules-create']({ group: '办公', name: '乙', body: '乙正文' })
-  // 单选模型：新建场景默认不启用；不启用就没有「没段 = 全部注入」这回事。
+  const jia = await service.ops['rules-create']({ group: '办公', name: '甲', body: '甲正文' })
+  const yi = await service.ops['rules-create']({ group: '办公', name: '乙', body: '乙正文' })
+  // 单选模型：新建场景默认不启用；不启用时任何记忆都不进投影。
   await service.patchIndex({ active: ['办公'] })
 
-  const before = await service.ops['rules-budget']({})
-  // 顺序由渲染顺序决定（场景 order → 记忆 order/名称），locale 相关 → 比较集合而非顺序。
-  assert.deepEqual(before.items.map((i) => i.id).sort(), ['办公/甲', '办公/乙'].sort(), '没有 memories 段时两条都注入')
+  // P5 契约变更：新建记忆默认不开启 → 两条都不注入。
+  assert.deepEqual((await service.ops['rules-budget']({})).items, [], '默认不开启的记忆不进投影')
 
-  // 只勾甲：段已定义 → 乙不进系统提示词。
-  await service.patchIndex({ archives: { 办公: { memories: ['办公/甲'] } } })
-  const after = await service.ops['rules-budget']({})
-  assert.deepEqual(after.items.map((i) => i.id), ['办公/甲'])
+  // 开启甲：只有甲进投影（顺序由渲染顺序决定，单条时无需比较集合）。
+  await service.ops['rules-toggle']({ id: jia.rule.id, enabled: true })
+  assert.deepEqual((await service.ops['rules-budget']({})).items.map((i) => i.id), ['办公/甲'])
 
-  // 勾选只影响投影：两条记忆文件都还在，列表里也都还在。
+  // 开关只影响投影：两条记忆文件都还在，列表里也都还在。
   const listed = await service.ops['rules-list']({})
   assert.deepEqual(listed.rules.map((x) => x.id).sort(), ['办公/甲', '办公/乙'].sort())
   assert.equal(existsSync(join(stateDir, 'memories', '办公', '乙.md')), true)
 
-  // 段清空 = 该场景记忆全部不注入（与其余段「已定义但空 = 全部停用」同构）。
+  // P5：档案里残留的 `memories` 段**被忽略**（不再影响注入）。
   await service.patchIndex({ archives: { 办公: { memories: [] } } })
-  assert.deepEqual((await service.ops['rules-budget']({})).items, [])
+  assert.deepEqual((await service.ops['rules-budget']({})).items.map((i) => i.id), ['办公/甲'], 'memories 段不再影响注入')
 
-  // 移掉段 → 回到「不碰」。
-  await service.patchIndex({ archives: {} })
-  assert.deepEqual((await service.ops['rules-budget']({})).items.map((i) => i.id).sort(), ['办公/甲', '办公/乙'].sort())
+  // 关掉甲 → 一条都不注入。
+  await service.ops['rules-toggle']({ id: jia.rule.id, enabled: false })
+  assert.deepEqual((await service.ops['rules-budget']({})).items, [])
+  assert.equal(yi.ok, true)
 })
 
-test('保留场景 global 的记忆不受其它场景的勾选段影响（global 恒定注入）', async () => {
+test('保留场景 global 的记忆：默认不开启，开启后恒定注入（不受其它场景影响）', async () => {
   const { service } = await makeService()
-  await service.ops['rules-create']({ group: '', name: '总则', body: '总则正文' })
+  const g = await service.ops['rules-create']({ group: '', name: '总则', body: '总则正文' })
   await service.ops['rules-create-scene']({ name: '办公' })
-  await service.ops['rules-create']({ group: '办公', name: '甲', body: '甲正文' })
+  const jia = await service.ops['rules-create']({ group: '办公', name: '甲', body: '甲正文' })
 
-  // 办公场景启用后，它的段把记忆收窄为「一条都不勾」：办公的记忆不注入，global 的仍注入。
-  // （不启用时这条断言会碰巧通过——办公的记忆本就不会注入——所以必须显式启用。）
-  await service.patchIndex({ active: ['办公'], archives: { 办公: { memories: [] } } })
+  // P5 契约变更：global 与普通场景**一视同仁** —— 默认都不开启
+  //（推翻此前「全局记忆默认开启、无法关闭」）。
+  assert.deepEqual((await service.ops['rules-budget']({})).items, [], '默认不开启')
+
+  // 开启 global 的那条后：即使办公场景启用、它的记忆没开，global 的仍恒定注入。
+  await service.ops['rules-toggle']({ id: g.rule.id, enabled: true })
+  await service.patchIndex({ active: ['办公'] })
   const items = (await service.ops['rules-budget']({})).items.map((i) => i.id)
   assert.deepEqual(items, [GLOBAL_SCENE + '/总则'], 'global 是恒定注入的保留场景')
+  assert.equal(jia.ok, true)
 })

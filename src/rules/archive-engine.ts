@@ -5,14 +5,17 @@
 // v2：MCP 段两级（服务器勾选 + '*' / 工具明细），停用表存勾选集的补集，通配由 index.ts 的 guard/restrict 原生支持。
 import {
   computeMcpPlan,
-  computeMemoriesPlan,
   computeSkillsPlan,
   normalizeArchive,
   snapshotRuntime,
   hasSection,
+  type McpPlan,
+  type McpServerState,
   type ModeSnapshot,
   type ModeState,
   type SceneArchive,
+  type SkillSourceState,
+  type SkillsPlan,
 } from './archive.js'
 
 export interface ArchiveIndexSlice {
@@ -35,6 +38,19 @@ export interface ArchiveEngineDeps {
   currentMcpRaw(): Promise<Record<string, string[]>>
   /** 全量重写 MCP 停用表并刷新 restrict（引擎保证串行）。 */
   applyMcpEntries(entries: Record<string, string[]>): Promise<void>
+  /**
+   * 各服务器的**服务器级**启停现状（`disabled` 来自补丁文件）。
+   *
+   * 工具级停用只在「服务器已经加载」时才有意义 —— 服务器没起来，它的工具根本不存在，
+   * 勾选与否毫无区别。所以档案必须能改服务器级，否则就是用户报的「勾了没开」。
+   */
+  mcpServerStates(): Promise<McpServerState[]>
+  /** 改**服务器级**启停（写补丁文件，宿主热生效 ≤5s；引擎保证串行）。 */
+  applyMcpServerSwitches(switches: Array<{ id: string; level: string; enabled: boolean }>): Promise<void>
+  /** 各技能来源的启停现状。来源关闭时技能级的 enable 会被吞掉，所以必须能改来源级。 */
+  skillSourceStates(): Promise<SkillSourceState[]>
+  /** 改**来源级**启停。 */
+  applySkillSourceSwitches(switches: Array<{ root: string; enabled: boolean }>): Promise<void>
   /** 实时发现的技能 key 全集（`<rootKey>/<name>`）。 */
   knownSkillKeys(): Promise<Set<string>>
   /** 当前技能启停全集。 */
@@ -45,6 +61,10 @@ export interface ArchiveEngineDeps {
   sceneExists(name: string): Promise<boolean>
   /** 实时发现的人设名全集（保存档案时校验 subagents 段）。 */
   knownPersonas(): Promise<Set<string>>
+  /** 指定人设名单里当前被停用的（进入模式拍快照用：只记将被启用的行）。 */
+  disabledPersonas(names: string[]): Promise<string[]>
+  /** 改人设启停（子智能体开关；引擎保证串行）。 */
+  applySubagentSwitches(switches: Array<{ name: string; enabled: boolean }>): Promise<void>
   /** 实时发现的记忆 id 全集（保存档案时校验 memories 段）。 */
   knownMemoryIds(): Promise<Set<string>>
 }
@@ -72,9 +92,25 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
    * 技能只写快照列出的键（这是既有批量通道的语义）：模式期间新增的技能保持现状。
    */
   async function restoreSnapshot(snapshot: ModeSnapshot): Promise<void> {
+    // 顺序与进入时**相反**：先恢复服务器级 / 来源级，再恢复工具级 / 技能级 ——
+    // 来源还关着的时候写技能级策略会被吞掉（`skills/core.js` 的 sourceEnabled 判定）。
+    // 老 snapshot 没有这两栏 → `?? []`，按旧行为只恢复下层。
+    const servers = snapshot.mcpServers ?? []
+    if (servers.length) {
+      await deps.applyMcpServerSwitches(servers.map((x) => ({ id: x.id, level: x.level, enabled: !x.disabled })))
+    }
+    const sources = snapshot.skillSources ?? []
+    if (sources.length) {
+      await deps.applySkillSourceSwitches(sources.map((x) => ({ root: x.root, enabled: x.enabled })))
+    }
     const mcp = Object.fromEntries(Object.entries(snapshot.mcp).map(([k, v]) => [k, v.slice()]))
     await deps.applyMcpEntries(mcp)
     await deps.applySkills({ ...snapshot.skills })
+    // 子智能体开关：只停「进入时被这次启用过的」那些（老 snapshot 没有这栏 → []，按旧行为跳过）。
+    const personas = snapshot.subagents ?? []
+    if (personas.length) {
+      await deps.applySubagentSwitches(personas.map((n) => ({ name: n, enabled: false })))
+    }
   }
 
   /**
@@ -134,16 +170,10 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         archive.subagents = archive.subagents.filter((p) => known.has(p))
         if (hadKeys && archive.subagents.length === 0) delete archive.subagents
       }
-      if (archive.memories) {
-        // 记忆段只影响投影（正文是否进 system prompt），不写任何运行时状态；
-        // 这里只把已不存在的记忆 id 剔掉并上报，避免档案里留下指向空气的勾选。
-        const known = await deps.knownMemoryIds()
-        const hadKeys = archive.memories.length > 0
-        const { stale: memStale } = computeMemoriesPlan(archive.memories, known)
-        stale.push(...memStale)
-        archive.memories = archive.memories.filter((id) => known.has(id))
-        if (hadKeys && archive.memories.length === 0) delete archive.memories
-      }
+      // 记忆段（P5 已废弃）：不再写入、不再校验。记忆的开关是 `rules[*].enabled` 单一真相源，
+      // 老档案里残留的 `memories` 字段被忽略（不迁移、不删除，回滚代码时仍可读）。
+      // 保存档案时顺手把残留字段清掉，避免新旧语义并存造成误读。
+      if (archive.memories !== undefined) delete archive.memories
       const slice = await deps.loadSlice()
       if (Object.keys(archive).length === 0) delete slice.archives[scene]
       else slice.archives[scene] = archive
@@ -187,10 +217,53 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // ② 进入目标模式：校验 → 快照 → 先落盘 mode（中途失败也留可退快照）→ 应用已定义段 → 记忆收窄。
       const archive = slice.archives[target]
       if (!(await deps.sceneExists(target))) return { ok: false, error: `场景不存在: ${target}` }
-      if (!archive || (!hasSection(archive, 'mcp') && !hasSection(archive, 'skills'))) {
-        return { ok: false, error: `场景「${target}」的档案没有 MCP / 技能段（仅记忆或仅子智能体的场景不需要进入模式）` }
+      // 无档案段（纯记忆 / 纯人设场景）**也要能进入**：不应用档案、不建快照，但
+      // `mode.scene` 与 `active` 照常写入。原因有二：
+      //   ① 场景开关（P6）是唯一入口，纯记忆场景点开关不能报错；
+      //   ② 顶部「当前模式」横幅的渲染条件是 `mode.scene`，不写就永远不显示 ——
+      //      用户裁定：无档案场景开开关也要显示横幅，副标题走 `scenes.mode.noProfile`。
+      const appliesArchive = !!archive && (hasSection(archive, 'mcp') || hasSection(archive, 'skills') || hasSection(archive, 'subagents'))
+      // 先算计划、再拍快照：快照只记**将被改动**的服务器行 / 来源 / 人设（带改动前的状态），
+      // 退出时按记录精确恢复 —— 不动用户手动设置的其他行。
+      let mcpPlan: McpPlan | null = null
+      let skillsPlan: SkillsPlan | null = null
+      if (appliesArchive && archive) {
+        try {
+          if (archive.mcp) {
+            mcpPlan = computeMcpPlan(archive.mcp, {
+              configuredServers: await deps.configuredServers(),
+              knownTools: await deps.serverKnownTools(),
+              serverStates: await deps.mcpServerStates(),
+            })
+          }
+          if (archive.skills) {
+            skillsPlan = computeSkillsPlan(archive.skills, await deps.knownSkillKeys(), await deps.skillSourceStates())
+          }
+        } catch (e) {
+          return { ok: false, error: `读取运行时状态失败（未改动任何东西）：${msg(e)}` }
+        }
       }
-      const snapshot = snapshotRuntime(await deps.currentMcpRaw(), await deps.currentSkills())
+      // 子智能体段：进入时把档案勾选的人设**启用**（子智能体页同步亮起）。
+      // 快照只记「改动前停用」的那些 —— 退出时按名单停回，不动其他行。
+      const boundPersonas = archive && Array.isArray(archive.subagents) ? archive.subagents : []
+      let personaRestore: string[] = []
+      if (boundPersonas.length) {
+        try {
+          personaRestore = await deps.disabledPersonas(boundPersonas)
+        } catch (e) {
+          return { ok: false, error: `读取人设开关状态失败（未改动任何东西）：${msg(e)}` }
+        }
+      }
+      const snapshot = appliesArchive
+        ? snapshotRuntime(
+            await deps.currentMcpRaw(),
+            await deps.currentSkills(),
+            // 直接用计划带出的 `*Before`（改动前的状态），不在这里反推 —— 反推容易搞反方向。
+            (mcpPlan?.serverSwitches ?? []).map((s) => ({ id: s.id, level: s.level, disabled: s.disabledBefore })),
+            (skillsPlan?.sourceSwitches ?? []).map((s) => ({ root: s.root, enabled: s.enabledBefore })),
+            personaRestore,
+          )
+        : null
       const entered: ArchiveIndexSlice = { ...slice, mode: { scene: target, snapshot }, active: [target] }
       try {
         await deps.saveSlice({ ...slice, mode: entered.mode })
@@ -199,29 +272,49 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       }
       const stale: string[] = []
       try {
-        if (archive.mcp) {
-          const plan = computeMcpPlan(archive.mcp, {
-            configuredServers: await deps.configuredServers(),
-            knownTools: await deps.serverKnownTools(),
-          })
-          stale.push(...plan.stale)
-          await deps.applyMcpEntries(plan.entries)
+        // ① 先切**上层**（服务器级 / 来源级）——下层只有在上层开着时才有意义：
+        //    服务器没起来，它的工具不存在，工具级停用无从谈起；来源关着，技能级 enable 会被吞掉。
+        if (mcpPlan && mcpPlan.serverSwitches.length) {
+          await deps.applyMcpServerSwitches(mcpPlan.serverSwitches.map((s) => ({ id: s.id, level: s.level, enabled: s.enabled })))
         }
-        if (archive.skills) {
-          const plan = computeSkillsPlan(archive.skills, await deps.knownSkillKeys())
-          stale.push(...plan.stale)
-          await deps.applySkills(plan.target)
+        if (skillsPlan && skillsPlan.sourceSwitches.length) {
+          await deps.applySkillSourceSwitches(skillsPlan.sourceSwitches.map((s) => ({ root: s.root, enabled: s.enabled })))
+        }
+        // ② 再写**下层**（工具级停用表 / 技能级策略）。
+        if (mcpPlan) {
+          stale.push(...mcpPlan.stale)
+          await deps.applyMcpEntries(mcpPlan.entries)
+        }
+        if (skillsPlan) {
+          stale.push(...skillsPlan.stale)
+          await deps.applySkills(skillsPlan.target)
+        }
+        // ③ 子智能体开关：把档案勾选的人设启用（子智能体页与目录段同步亮起）。
+        if (boundPersonas.length) {
+          await deps.applySubagentSwitches(boundPersonas.map((n) => ({ name: n, enabled: true })))
         }
       } catch (e) {
-        return await rollback(slice, snapshot, '应用档案', e)
+        // 无档案段时没有运行时改动可回滚（snapshot 为 null）。
+        return snapshot ? await rollback(slice, snapshot, '应用档案', e) : { ok: false, error: `应用档案失败：${String((e as Error)?.message || e)}` }
       }
       // ③ 记忆启用集收窄为 {S}（`_shared` 由 resolveActiveScenes 恒常加入；退出不恢复）。
       try {
         await deps.saveSlice(entered)
       } catch (e) {
-        return await rollback(slice, snapshot, '记忆收窄落盘', e)
+        return snapshot ? await rollback(slice, snapshot, '记忆收窄落盘', e) : { ok: false, error: `记忆收窄落盘失败：${String((e as Error)?.message || e)}` }
       }
-      return { ok: true, mode: entered.mode, applied: { mcp: !!archive.mcp, skills: !!archive.skills }, stale, narrowedTo: [target] }
+      return {
+        ok: true,
+        mode: entered.mode,
+        applied: { mcp: !!(archive && archive.mcp), skills: !!(archive && archive.skills), subagents: !!(archive && archive.subagents) },
+        // 上层实际切换了几个（0 = 本来就已经是目标状态，界面不必提示"已停用 N 台"）。
+        switched: {
+          mcpServers: mcpPlan ? mcpPlan.serverSwitches.length : 0,
+          skillSources: skillsPlan ? skillsPlan.sourceSwitches.length : 0,
+        },
+        stale,
+        narrowedTo: [target],
+      }
     }),
   }
   return { ops, writeOps: new Set(['scene-archive-save', 'scene-mode-set']) }

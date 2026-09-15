@@ -970,7 +970,10 @@ async function writeFileAtomically(path, content) {
   );
   try {
     await fs.writeFile(temp, content, "utf8");
-    await fs.rename(temp, path);
+    // Windows 上目标文件会被杀软/索引器短暂占住（EPERM/EACCES/EBUSY）——
+    // 场景模式进出时这里写的是技能来源/策略状态，rename 被撞 = 运行时已切、
+    // 状态没落盘。与 rules-index.json 同一处理：重试瞬时占用，全失败才抛。
+    await renameWithRetry(temp, path);
   } catch (error) {
     await fs.rm(temp, { force: true }).catch(() => undefined);
     throw error;

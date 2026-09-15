@@ -37,8 +37,9 @@ Hard-refresh the browser (Cmd/Ctrl+Shift-R) afterwards — a **Tools** panel in 
 | Capability | Description |
 |---|---|
 | Scene memory | `.md` bodies in an enabled scene are **injected into the system prompt**, effective on the next request |
-| Scene profile | Every scene freely combines **MCP tools / skills / subagents / memories**; "Enter mode" narrows injection in one click |
+| Scene profile | Every scene freely combines **MCP tools / skills / subagents / memories**; opening a scene applies it, closing restores from the snapshot |
 | Scene prompt | A scene can bind a prompt preset; switching scenes rewrites `~/.dsh/AGENTS.md` (auto-restores on exit) |
+| Scene lock | Locking a scene freezes **all five domains read-only** (bound entries or not); a scene must be running to lock, and a locked scene can't be turned off — unlock first |
 | Per-tool switches | **Individual tools** inside one MCP server can be disabled: invisible to the model, blocked at call time |
 | Restart semantics | Restart only reconnects — it **never flips the enabled state** |
 | Secret safety | Secrets masked by default; "Reveal" & export **require a token** — no `token` configured means no plaintext |
@@ -47,7 +48,9 @@ Hard-refresh the browser (Cmd/Ctrl+Shift-R) afterwards — a **Tools** panel in 
 | AGENTS.md presets | Multiple global baselines, one-click apply, 5-generation backup |
 | Archived sessions | Grouped by project, batch restore / delete, retention cleanup; rebuildable after workspace deletion |
 | Transcript import/export | Take over Claude Code / Cursor / Codex / any text; export Markdown / JSONL |
-| Subagents | One file per persona, run-and-discard, never enters History, inherits scene memories |
+| Import pairs with export | Skills / subagents / prompts / memories all export too: pick items → zip into a directory you choose (read-only on sources) |
+| Subagents | One file per persona, with an **on/off toggle** deciding whether it is injected; run-and-discard, never enters History, inherits scene memories |
+| Context visibility | The persona catalog and "currently usable MCP servers + your notes" enter the system prompt, so the model knows what is available |
 | Prefix-cache friendly | Section text depends only on enabled scenes + file contents, byte-stable |
 | Compatibility check | The **Host** tab shows host capabilities, per-action routing, and degradations at a glance |
 | Model tools | **14** (`skill_mcp_manager_*` / `skill_manager_*` / `agentsmd_*` / `rule_manager_*` / `subagent_*`) |
@@ -83,15 +86,20 @@ The model can manage everything above via 14 tools (see highlights); scripts use
 - **A scene = a group, a memory = a `.md` file**. `memories/<scene>/<name>.md`, the whole body is injected, file names can be non-ASCII.
 - **Single-choice toggle**: only one scene at a time (others greyed out); turning all off = only `global` and `_shared` inject. New scenes start off.
 - **Scene-bound prompt**: switching scenes rewrites `~/.dsh/AGENTS.md` (5-gen backup, auto-restore on exit).
-- **Scene profile**: every scene combines MCP tools / skills / subagents / memories (any mix); "Enter mode" applies and narrows in one click, exit restores verbatim.
+- **Scene profile**: every scene combines MCP tools / skills / subagents / memories (any mix); opening a scene applies and narrows injection, closing restores verbatim (the toggle is the only entry).
 - **Import**: `.md` / `.zip` (dir name = scene, bundles carry attachments), same names skipped never overwritten, over-limit items reported.
+- **Export**: pick memories and zip them, keeping the `scene/name` layout; bundle memories bring their attachments along. Sources are read-only.
 - **Injection budget**: default 64 KiB, oversized memories skipped with a list. Deletes go to recycle bin.
+- **Scene lock**: once locked, MCP / skills / subagents / memories / prompts are read-only — UI disabled plus a server-side guard; a scene must be running to lock, and a locked scene can't be closed until unlocked.
+- **Deleting a scene deletes its memories too**: the scene record, profile and every memory go into one recycle-bin entry, restored as a whole; a running scene refuses deletion. Scene names are renameable (dir and profile follow, memory bodies untouched).
 
 ### Subagents
 
 - **One file per persona**: `agents/<persona>.md`, frontmatter entirely optional.
 - **Tool limits per Agent preset**: each preset gets its own allow/deny list (mutually exclusive), effective at runtime by the current preset — fixes the old "union of all presets" list that broke subagents after a preset switch.
 - **Run and discard**: `subagent_run` runs with the persona, returns only the result, never enters History, inherits scene memories. Scenes can bind which personas are available.
+- **On/off toggles**: a disabled persona is not injected and invisible to the model (file untouched); newly created / imported / restored personas start enabled. Starting a scene auto-enables the personas its profile binds; exit restores precisely from the snapshot.
+- **Persona catalog enters the system prompt**: names + descriptions only, so the model knows what it can delegate to; personas are renameable, scene bindings follow.
 
 ### MCP servers
 
@@ -99,17 +107,19 @@ The model can manage everything above via 14 tools (see highlights); scripts use
 - **Per-tool switches**: disable individual tools (invisible to the model, blocked at call), whole-server batch.
 - **Secret masking**: defaults to `••••••`, "Reveal" needs a token.
 - **Migrate & back up**: cross-project/global migration rolls back on failure; JSON export/import.
+- **Status & notes enter the system prompt**: only currently usable servers are listed, and your notes travel along as decision hints; levels are "global / app", new servers default to global.
 
 ### Skills
 
 - **Sources at a glance**: project / DSH / Agents / Codex / Claude / custom dirs, grouped by source.
 - **Opposite permissions**: default sources must be read but skills can be deleted; external dirs can be disabled/removed but skills are read-only.
 - **Remove ≠ disable**: remove = directory not scanned at all (files untouched, restorable); disable = still listed but not callable.
-- **Same-name picker / custom dirs / ZIP import / recycle bin**.
+- **Same-name picker / custom dirs / ZIP import & export / recycle bin**.
 
 ### Prompt presets
 
-- Multiple `~/.dsh/AGENTS.md` baselines, one-click apply (new sessions only, current unchanged), 5-gen backup.
+- Multiple `~/.dsh/AGENTS.md` baselines, one-click apply (the host re-reads that file every turn, so it takes effect on the next turn), 5-gen backup.
+- **Description**: one line saying what a preset is for — shown in this panel only. It lives in a sibling `meta.json`, never in AGENTS.md, so it is never injected into prompts.
 - Create with body inline, edit can change id (= dir rename, scene bindings follow). Active preset can't be deleted; deletes go to recycle bin.
 
 ### Archived sessions
@@ -135,6 +145,7 @@ The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they mu
 | MCP definitions | `cordis.patch.yml` (auto `.bak` before rewrite) |
 | Skill policy / custom dirs | `~/.dsh/tool-management/state.json` |
 | Skills / memories / personas / presets | `~/.dsh/tool-management/{skills,memories,agents,agents-md}/` |
+| Subagent toggles | `~/.dsh/tool-management/agents-index.json` |
 | Recycle bin | `~/.dsh/tool-management/trash/` |
 | Archive ledger / retention | `~/.dsh/tool-management/history-*.json` |
 | Memory index / scenes / profiles | `~/.dsh/tool-management/rules-index.json` |

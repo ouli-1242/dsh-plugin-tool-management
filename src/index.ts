@@ -18,15 +18,18 @@ import { randomUUID } from 'node:crypto'
 import { ArchiveWorkspaceRegistry as HistoryService, workspaceBaseName, workspacePathKey } from './history/workspace.js'
 import { createSkillsService, pluginLog } from './skills/service.js'
 import { createAgentsMdService } from './agents-md/service.js'
-import { createRulesService } from './rules/service.js'
+import { createRulesService, planMemoryExport } from './rules/service.js'
 import { createArchiveEngine } from './rules/archive-engine.js'
-import { createSubagentService, decideToolFilter } from './subagents/service.js'
+import { createSubagentService, decideToolFilter, defaultPersonasDir } from './subagents/service.js'
 import type { ToolFilterDecision } from './subagents/service.js'
+import { createSubagentCatalog } from './subagents/catalog.js'
+import { SECTION_ORDER, createPromptSectionRegistrar } from './prompt-sections.js'
 import { isApprovalNever } from './approval-policy.js'
-import { EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
+import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
 import { assessPresetReach, presetRosterOf, reachNoticeForAgent } from './compat/preset-reach.js'
 import { fenceRejection, secretOpRejection, type ConnectionSeam } from './http-fence.js'
 import { planOverrideCompaction } from './mcp/override-blocks.js'
+import { createMcpStateCatalog, mcpStateSectionOf } from './mcp/state-section.js'
 import { hubPath, hubRoot, relocateEntries } from './hub.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentListTool, defineSubagentRunTool } from './subagents/tools.js'
@@ -34,7 +37,8 @@ import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, pars
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { zipSync } from 'fflate'
 
 // ---------------------------------------------------------------------------
 // Minimal structural types for the service surfaces this plugin touches.
@@ -322,7 +326,7 @@ export default {
     // ---------- agents-md 预设库 + 切换 ----------
     // DSH 全局指令基线只有 ~/.dsh/AGENTS.md 一个文件，无内置多预设切换；
     // 本服务在 hub 内 agents-md/ 维护预设库，「应用」= 写入 ~/.dsh/AGENTS.md，
-    // 新会话生效（当前会话不变，DSH 本身如此）。
+    // 下一轮对话生效：宿主 dsh-agent-instructions 每个 agent/pre-step 都会 stat 并重读该文件。
     // presetsDir 可由 config 注入（测试用），否则落到 $DSH_HOME/tool-management/agents-md。
     // v0.4：旧位置（插件目录 data/agents-md-presets/）在启动时搬入 hub——
     // 插件目录在 npm 安装下会被覆盖，放用户数据在那里本身就丢数据风险。
@@ -550,12 +554,69 @@ export default {
           if (r && r.ok === false) throw new Error(`技能 ${key} 应用失败: ${r.error}`)
         }
       },
+      // ── 服务器级 / 来源级启停（P5）────────────────────────────────────────────
+      // 为什么档案必须能改**上层**：工具级停用只在「服务器已经加载」时才有意义 ——
+      // 服务器没起来，它的工具根本不存在，勾选与否毫无区别。技能同理：来源关闭时，
+      // 技能级的 enable 会被 core 的 sourceEnabled 判定直接吞掉。
+      // 只报**补丁文件里真实存在**的行（level = project/global）；loader 级条目改不了补丁。
+      mcpServerStates: async () => {
+        const r: any = await mcpmListView()
+        const out: Array<{ id: string; serverName: string; level: string; disabled: boolean }> = []
+        for (const row of ((r && r.rows) || [])) {
+          const level = String((row && row.level) || '')
+          if (level !== 'global' && level !== 'project') continue
+          out.push({
+            id: String(row.id),
+            serverName: String(row.serverName || row.id),
+            level,
+            disabled: !!row.disabled,
+          })
+        }
+        return out
+      },
+      applyMcpServerSwitches: async (switches) => {
+        for (const s of switches) {
+          const r: any = await mcpmSetEnabled({ id: s.id, level: s.level, enabled: s.enabled })
+          if (r && r.ok === false) throw new Error(`MCP 服务器 ${s.id} ${s.enabled ? '启用' : '停用'}失败：${r.error}`)
+        }
+        // 补丁改动由宿主热重载（实测 ≤5s）。这里**不等**，避免进入模式被拖住十几秒；
+        // 界面在应用完成后即可用，工具集合会在数秒内补齐。
+      },
+      skillSourceStates: async () => {
+        const r: any = await skillsService.ops['skill-state']({})
+        const roots = (r && r.data && r.data.roots) || []
+        const out: Array<{ root: string; enabled: boolean }> = []
+        for (const root of roots) {
+          const key = String((root && root.key) || '')
+          if (!key) continue
+          // 默认来源（dsh / hub）不能停用（core 会拒绝）→ 不进切换集，避免无谓报错。
+          if (root.defaultSource === true) continue
+          out.push({ root: key, enabled: root.enabled === true })
+        }
+        return out
+      },
+      applySkillSourceSwitches: async (switches) => {
+        for (const s of switches) {
+          const op = s.enabled ? 'skill-source-enable' : 'skill-source-disable'
+          const r: any = await skillsService.ops[op]({ root: s.root })
+          if (r && r.ok === false) throw new Error(`技能来源 ${s.root} ${s.enabled ? '启用' : '停用'}失败：${r.error}`)
+        }
+      },
       sceneExists: async (name) => {
         const r: any = await rulesService.ops['rules-list']({})
         return !!(r && r.ok !== false && (r.scenes || []).some((s: any) => s.name === name))
       },
       // 人设名全集（保存 subagents 段时校验并报 stale，与 mcp/skills 两段同口径）。
       knownPersonas: async () => new Set((await subagentService.list()).map((p) => p.name)),
+      // 人设开关读/写（进入模式启用档案勾选的人设；退出按快照停回）。
+      disabledPersonas: async (names: string[]) => subagentService.enabledStore.disabledAmong(names),
+      applySubagentSwitches: async (switches: Array<{ name: string; enabled: boolean }>) => {
+        const off = switches.filter((s) => !s.enabled).map((s) => s.name)
+        const on = switches.filter((s) => s.enabled).map((s) => s.name)
+        if (off.length) await subagentService.enabledStore.setEnabled(off, false)
+        if (on.length) await subagentService.enabledStore.setEnabled(on, true)
+        void subagentCatalog.refresh()
+      },
       // 记忆 id 全集（保存 memories 段时校验并报 stale）。
       knownMemoryIds: async () => {
         const r: any = await rulesService.ops['rules-list']({})
@@ -566,7 +627,8 @@ export default {
     // ---------- 轻量子智能体（设计 §3）----------
     // 人设 = $DSH_HOME/tool-management/agents/<name>.md；运行走官方 ctx.subagents.start（spawn provider）。
     // sceneLists 供场景绑定校验：启用场景（rules-list 的 active 行）档案里的 subagents 并集。
-    const subagentService = createSubagentService(ctx, {})
+    // stateDir 与 rules 共用同一个覆盖键（测试注入一致）；子智能体开关存 <stateDir>/agents-index.json。
+    const subagentService = createSubagentService(ctx, { stateDir: String((config as { rulesStateDir?: unknown } | undefined)?.rulesStateDir || '') })
     const subagentSceneLists = async (): Promise<string[][]> => {
       const slice = await rulesService.readArchiveSlice()
       const r: any = await rulesService.ops['rules-list']({})
@@ -574,6 +636,138 @@ export default {
       return (r.scenes || [])
         .filter((s: any) => s.active)
         .map((s: any) => slice.archives[s.name]?.subagents ?? [])
+    }
+
+    // ---------- 注入类段（P1 人设目录 + P2 MCP 状态）----------
+    // 两者是同一类缺陷的两端：**某个域的配置状态没有在场陈述**，模型只能靠用户口头提醒。
+    //   - 人设：本插件自造的概念，宿主没有对应物 → 模型不知道有哪些人设，subagent_run 不会被触发。
+    //   - MCP：启停只改工具 schema，没有任何显式状态陈述 → 模型不知道有哪些 server，
+    //     更拿不到用户写的**备注**（那是写给「未来的模型」的决策提示，工具 schema 永远传达不到）。
+    // 两个段都只列「名字 + 摘要」，正文/工具清单绝不进上下文。
+    // 口径与理由分别见 src/subagents/catalog.ts、src/mcp/state-section.ts 的文件头。
+    const subagentCatalog = createSubagentCatalog({
+      list: () => subagentService.list(),
+      sceneLists: subagentSceneLists,
+    })
+    // ⚠️ 取数必须用 mcpmRowsWithNotes(false)：true 会带上**未打码**的 url/headers/env（含明文密钥）。
+    const mcpStateCatalog = createMcpStateCatalog({
+      rows: () => mcpmRowsWithNotes(false),
+    })
+    try {
+      ctx.effect(() => {
+        const registrar = createPromptSectionRegistrar(ctx, [
+          { name: 'tool-management:subagents', order: SECTION_ORDER.subagents, text: () => subagentCatalog.text() },
+          mcpStateSectionOf(mcpStateCatalog, SECTION_ORDER.mcpState),
+        ])
+        return () => registrar.dispose()
+      }, 'dsh-plugin-tool-management: prompt sections')
+    } catch (e) {
+      console.error('[dsh-plugin-tool-management] prompt section setup failed:', message(e))
+    }
+    // 预热放到下一轮事件循环：此时 apply 的同步初始化（补丁路径、tools 服务…）已全部完成，
+    // 避免在初始化中途就去读 MCP 补丁与工具 schema。
+    setTimeout(() => {
+      void subagentCatalog.warm()
+      void mcpStateCatalog.warm()
+    }, 0)
+    // 人设写操作成功后立即重算目录（SWR：text() 同步返回缓存值，写后主动 refresh）。
+    // 包装在 service 的 ops 上：写入口只有这一处，不需要在界面层逐个补。
+    for (const opName of subagentService.writeOps) {
+      const original = subagentService.ops[opName]
+      if (typeof original !== 'function') continue
+      subagentService.ops[opName] = async (args: any) => {
+        const result = await original(args)
+        if (result && result.ok !== false) void subagentCatalog.refresh()
+        return result
+      }
+    }
+    /**
+     * 人设改名后同步场景绑定：场景档案的 `subagents` 名单存的是**人设名**，
+     * 不跟着改就会留一个悬空引用（界面把它报成 stale，用户看到「人设不存在」却找不到地方改）。
+     * 绑定存在 rules-index.json 里，人设服务看不到它，所以在这一层补一次（同提示词改名的做法）。
+     */
+    async function rebindSubagentInArchives(from: string, to: string): Promise<number> {
+      try {
+        const slice = await rulesService.readArchiveSlice()
+        const archives = { ...(slice.archives || {}) }
+        let changed = 0
+        for (const [scene, archive] of Object.entries(archives)) {
+          const list = (archive as { subagents?: unknown }).subagents
+          if (!Array.isArray(list) || !list.includes(from)) continue
+          archives[scene] = { ...(archive as Record<string, unknown>), subagents: list.map((n) => (n === from ? to : n)) } as typeof archive
+          changed++
+        }
+        if (changed) await rulesService.patchIndex({ archives })
+        return changed
+      } catch {
+        return 0
+      }
+    }
+    const baseSubagentUpdate = subagentService.ops['subagent-update']
+    if (typeof baseSubagentUpdate === 'function') {
+      subagentService.ops['subagent-update'] = async (args: any) => {
+        const res: any = await baseSubagentUpdate(args)
+        if (res && res.ok !== false && res.renamedFrom) void rebindSubagentInArchives(String(res.renamedFrom), String(res.name))
+        return res
+      }
+    }
+    // 模式切换会改人设开关（进入=启用勾选的，退出=按快照停回）——目录段立即重算，
+    // 别等 1s TTL：切完场景紧接着的下一轮请求就该看到新名单。
+    const baseSceneModeSet = archiveService.ops['scene-mode-set']
+    if (typeof baseSceneModeSet === 'function') {
+      archiveService.ops['scene-mode-set'] = async (args: any) => {
+        // 锁定的场景不能关闭（用户裁定）：退出模式（scene=null）和切换到别的场景
+        // 都意味着先退出当前模式 —— 当前模式场景处于锁定状态时一律拒绝。
+        // 目标就是当前场景 = 无操作，放行（引擎自己会 early-return）。
+        try {
+          const slice = await rulesService.readArchiveSlice()
+          const current = slice.mode && slice.mode.scene
+          if (current && args && 'scene' in (args || {})) {
+            const target = args.scene == null ? null : String(args.scene).trim() || null
+            if (target !== current) {
+              const locked = await lockedSceneNames()
+              if (locked.includes(current)) {
+                return { ok: false, error: `场景「${current}」已锁定：先解锁再关闭` }
+              }
+            }
+          }
+        } catch { /* 守卫读状态失败不拦正常流程（引擎自身校验兜底） */ }
+        const res: any = await baseSceneModeSet(args)
+        if (res && res.ok !== false) void subagentCatalog.refresh()
+        return res
+      }
+    }
+    /**
+     * 模式进行中保存当前场景的档案时，联动人设开关：subagents 段新勾进来的名字**立即启用**，
+     * 并追加进快照的「模式期间自动启用」名单（退出时停回）。只启用、不停用 —— 用户手动
+     * 关掉的开关不该被一次档案保存悄悄改回去。
+     */
+    const baseSceneArchiveSave = archiveService.ops['scene-archive-save']
+    if (typeof baseSceneArchiveSave === 'function') {
+      archiveService.ops['scene-archive-save'] = async (args: any) => {
+        const res: any = await baseSceneArchiveSave(args)
+        try {
+          const bound = res && res.ok !== false && res.archive && Array.isArray(res.archive.subagents) ? res.archive.subagents as string[] : []
+          if (bound.length) {
+            const slice = await rulesService.readArchiveSlice()
+            const mode = slice.mode
+            if (mode && mode.scene === res.scene) {
+              const disabled = await subagentService.enabledStore.disabledAmong(bound)
+              if (disabled.length) {
+                await subagentService.enabledStore.setEnabled(disabled, true)
+                void subagentCatalog.refresh()
+                const snapshot = mode.snapshot
+                if (snapshot) {
+                  const merged = Array.isArray(snapshot.subagents) ? snapshot.subagents.slice() : []
+                  for (const n of disabled) if (merged.indexOf(n) < 0) merged.push(n)
+                  await rulesService.patchIndex({ mode: { ...mode, snapshot: { ...snapshot, subagents: merged } } })
+                }
+              }
+            }
+          }
+        } catch { /* 联动失败不阻断档案保存本身；开关会在下次进/退模式时对齐 */ }
+        return res
+      }
     }
 
     // HTTP 写操作门禁清单。skills/rules/档案引擎域由各自 service 导出的 writeOps 派生
@@ -601,6 +795,8 @@ export default {
       // workspace-register 会新增一条宿主工作区登记，同样是写）
       'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
       'history-unarchive-batch', 'history-delete-batch', 'history-import', 'history-export',
+      // 通用导出：往用户指定的目录写文件，按写操作门禁（token）。
+      'bundle-export',
       'history-archive-batch', 'history-workspace-register',
     ])
 
@@ -2589,6 +2785,7 @@ export default {
       'agentsmd-create': (args: any) => agentsMdService.create(String((args && args.id) || ''), {
         ...(args && args.from ? { from: String(args.from) } : {}),
         ...(args && typeof args.content === 'string' ? { content: String(args.content) } : {}),
+        ...(args && typeof args.description === 'string' ? { description: String(args.description) } : {}),
       }),
       // 保存：改正文 + 可选改名（nextId）。改名成功顺带把场景绑定一起改名 ——
       // 绑定存在 rules-index.json 里，预设库自己看不到，不叫这一声就会留悬空绑定。
@@ -2599,6 +2796,8 @@ export default {
           String((args && args.id) || ''),
           String((args && args.content) ?? ''),
           args && args.nextId !== undefined ? String(args.nextId) : undefined,
+          // 描述与正文同一次提交：省略（undefined）= 不动，空串 = 清空。
+          args && typeof args.description === 'string' ? String(args.description) : undefined,
         )
         if (!res || res.ok === false) return res
         let renamed: any = {}
@@ -2623,7 +2822,7 @@ export default {
         }
         return agentsMdService.remove(id)
       },
-      'agentsmd-import': (args: any) => agentsMdService.importPreset(String((args && args.id) || ''), String((args && args.content) ?? '')),
+      'agentsmd-import': (args: any) => agentsMdService.importPreset(String((args && args.id) || ''), String((args && args.content) ?? ''), args && typeof args.description === 'string' ? String(args.description) : undefined),
       // 提示词预设的回收站：删预设 = 把整个预设目录移入 `hub/trash/agents-md-trash/<id>/`，
       // 误删可从「提示词」页的回收站里恢复（同 id 已存在时拒绝恢复，绝不覆盖）。
       'agentsmd-trash-list': () => agentsMdService.trashList(),
@@ -2791,6 +2990,7 @@ export default {
             mayDelete: assessment.mayDelete,
             verifiedVersion: VERIFIED_HOST_VERSION,
             expectedPeerRange: EXPECTED_PEER_RANGE,
+            minHostVersion: EXPECTED_MIN_HOST_VERSION,
             generatedAt: assessment.generatedAt,
             summary,
           }
@@ -2922,6 +3122,99 @@ export default {
       },
       // 把选中的归档会话导出为可再导入的转录文件（Markdown / JSONL），写入指定目录。
       // 每个会话一个文件；读不到正文的冷会话列入 skipped，不中断其余导出。
+      // ---------- 通用导出（D14）----------
+      // 技能 / 子智能体 / 提示词 / 记忆四个域的差异只有「从哪取哪些文件」，其余
+      //（绝对路径校验、建目录、zip 打包、错误回报）完全相同 —— 所以只加**一个** op。
+      // 打包用已在依赖里的 `fflate.zipSync`（此前只用了 unzipSync）。
+      'bundle-export': async (args: any) => {
+        const kind = String((args && args.kind) || '')
+        const KINDS = ['skills', 'subagents', 'presets', 'memories']
+        if (KINDS.indexOf(kind) < 0) return { ok: false, error: `kind 需为 ${KINDS.join(' / ')}` }
+        const rawNames = (args && args.names) || []
+        const names = Array.isArray(rawNames) ? rawNames.map((s: unknown) => String(s).trim()).filter(Boolean) : []
+        if (!names.length) return { ok: false, error: '请至少选择一项' }
+        const outDir = String((args && args.outDir) || '').trim()
+        // 与 history-export 同一条校验：必须绝对路径（相对路径会在宿主进程的 cwd 下落盘，
+        // 用户根本找不到文件）。
+        if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(outDir)) return { ok: false, error: '导出目录需为绝对路径' }
+
+        // ① 收集 (zip 内路径, 绝对路径)。
+        const entries: Array<{ zip: string; abs: string }> = []
+        const missing: string[] = []
+        try {
+          if (kind === 'subagents') {
+            const dir = defaultPersonasDir()
+            for (const name of names) entries.push({ zip: `${name}.md`, abs: join(dir, `${name}.md`) })
+          } else if (kind === 'presets') {
+            for (const id of names) {
+              entries.push({ zip: `${id}/AGENTS.md`, abs: join(agentsMdPresetsDir, id, 'AGENTS.md') })
+              // 描述侧车（「只给使用者看」的那句）随预设一起走：导出再导入不该把它丢掉。
+              const metaAbs = join(agentsMdPresetsDir, id, 'meta.json')
+              try { if ((await stat(metaAbs)).isFile()) entries.push({ zip: `${id}/meta.json`, abs: metaAbs }) } catch { /* 没写描述 */ }
+            }
+          } else if (kind === 'memories') {
+            // 记忆有 flat（`<场景>/<name>.md`）与 bundle（`<场景>/<name>/SKILL.md`）两种形态，
+            // 且场景名本身可含 '/' —— 按 id 拼路径会把 bundle 读成 `<场景>/<name>.md`，读不到
+            // 就静默丢项（详见 planMemoryExport）。所以走索引拿那条规则自己的真实路径。
+            const r: any = await rulesService.ops['rules-list']({})
+            const plan = planMemoryExport(names, (r && r.rules) || [])
+            missing.push(...plan.missing)
+            for (const item of plan.entries) {
+              if (item.kind === 'file') {
+                entries.push({ zip: item.zip, abs: item.abs })
+                continue
+              }
+              // bundle：把目录内的文件全部打包（与技能分支同口径），单个目录读不了只丢它自己。
+              try {
+                for (const e of await readdir(item.abs, { withFileTypes: true })) {
+                  if (e.isFile()) entries.push({ zip: `${item.zip}/${e.name}`, abs: join(item.abs, e.name) })
+                }
+              } catch { missing.push(item.id) }
+            }
+          } else {
+            // 技能：先经 skill-detail 拿源文件路径（bundle 型是目录，单文件型是 .md）。
+            for (const key of names) {
+              const i = key.indexOf('/')
+              if (i <= 0) { missing.push(key); continue }
+              const short = key.slice(i + 1)
+              const r: any = await skillsService.ops['skill-detail']({ root: key.slice(0, i), name: short })
+              const p = r && r.ok !== false && r.data ? String(r.data.path || '') : ''
+              if (!p) { missing.push(key); continue }
+              let isDir = false
+              try { isDir = (await stat(p)).isDirectory() } catch { isDir = false }
+              if (isDir) {
+                for (const e of await readdir(p, { withFileTypes: true })) {
+                  if (e.isFile()) entries.push({ zip: `${short}/${e.name}`, abs: join(p, e.name) })
+                }
+              } else {
+                entries.push({ zip: `${short}/${basename(p)}`, abs: p })
+              }
+            }
+          }
+        } catch (e) {
+          return { ok: false, error: '收集待导出文件失败: ' + message(e) }
+        }
+
+        // ② 读盘 + 打包（读不到的项进 missing，不整体失败 —— 部分成功也有价值）。
+        const bundle: Record<string, Uint8Array> = {}
+        for (const item of entries) {
+          try {
+            bundle[item.zip] = new Uint8Array(await readFile(item.abs))
+          } catch { missing.push(item.zip) }
+        }
+        if (!Object.keys(bundle).length) return { ok: false, error: '没有可导出的文件（选中项都不存在？）' }
+
+        let zipPath = ''
+        try {
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+          zipPath = join(outDir, `dsh-tool-management-${kind}-${stamp}.zip`)
+          await mkdir(outDir, { recursive: true })
+          await writeFile(zipPath, Buffer.from(zipSync(bundle)))
+        } catch (e) {
+          return { ok: false, error: '写入导出文件失败: ' + message(e) }
+        }
+        return { ok: true, written: Object.keys(bundle).length, zipPath, missing }
+      },
       'history-export': async (args: any) => {
         const rawIds = (args && args.sessionIds) || []
         const ids = Array.isArray(rawIds) ? rawIds.map((s: unknown) => String(s).trim()).filter(Boolean) : []
@@ -3004,6 +3297,81 @@ export default {
         await sweepHistory().catch(() => {})
         return { ok: true, retentionDays: days }
       },
+    }
+
+    // MCP 写操作成功后立即重算状态段（SWR：text() 同步返回缓存值，写后主动 refresh）。
+    // 覆盖所有会改变「哪些 server 可用 / 有哪些备注」的写入口 —— 集中在这一处包，
+    // 不需要在界面层逐个补（漏一个就会出现「改了但模型看不到」的静默不一致）。
+    for (const opName of ['mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all',
+      'mcpm-restart', 'mcpm-note', 'mcpm-tool-enabled', 'mcpm-import', 'mcpm-compact']) {
+      const original = handlers[opName]
+      if (typeof original !== 'function') continue
+      handlers[opName] = async (args: any) => {
+        const result = await original(args)
+        if (result && result.ok !== false) void mcpStateCatalog.refresh()
+        return result
+      }
+    }
+
+    // ---------- 场景锁定守卫（v0.8）----------
+    // 任一场景 locked=true = 五个管理域（MCP/技能/子智能体/记忆/提示词）整体冻结：
+    // 下面列出的写 op 一律拒绝；界面按钮同步禁用，这里是兜底（防止绕过界面直接打 op）。
+    // 只包 **handlers** 这一层是有意的：进/退模式的运行时应用走的是内部函数与
+    // service.ops（applyMcpServerSwitches / applySkills / applySubagentSwitches / patchIndex），
+    // 不经过 handlers —— 锁定就是为了让场景能按原样启动，运行时应用不能被自己挡住。
+    // 例外里的例外：scene-archive-save / rules-remove-scene 只对**被锁的那个场景**拒绝。
+    async function lockedSceneNames(): Promise<string[]> {
+      const r: any = await rulesService.ops['rules-list']({})
+      return ((r && r.scenes) || []).filter((s: any) => s.locked === true).map((s: any) => String(s.name))
+    }
+    function guardLockedOps(opNames: string[], what: string): void {
+      for (const opName of opNames) {
+        const original = handlers[opName]
+        if (typeof original !== 'function') continue
+        handlers[opName] = async (args: any) => {
+          const locked = await lockedSceneNames()
+          if (locked.length) return { ok: false, error: `场景已锁定（${locked.join('、')}）：先到场景页解锁再${what}` }
+          return original(args)
+        }
+      }
+    }
+    guardLockedOps([
+      // MCP：改配置 / 服务器启停 / 工具启停 / 导入导出配置 / 备注 / 设置。restart 只重连不改配置，放行。
+      'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-tool-enabled', 'mcpm-import', 'mcpm-compact', 'mcpm-note', 'mcpm-settings',
+      // 技能：启停 / 来源启停与移除恢复 / 首选 / 删除 / 创建导入 / 自定义目录 / 回收站。
+      'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable', 'skill-source-remove', 'skill-source-restore',
+      'skill-prefer', 'skill-unprefer', 'skill-delete', 'skill-create', 'skill-import', 'skill-upload',
+      'skill-custom-add', 'skill-custom-remove', 'skill-trash-restore', 'skill-trash-delete',
+      // 子智能体：开关 / 改名保存 / 删除 / 导入 / 回收站。
+      'subagent-create', 'subagent-update', 'subagent-delete', 'subagent-toggle', 'subagent-import', 'subagent-trash-restore', 'subagent-trash-delete',
+      // 记忆：增删改 / 开关 / 导入 / 回收站 / 绑定。set-active 是场景启停，不在冻结范围。
+      'rules-create', 'rules-update', 'rules-remove', 'rules-toggle', 'rules-import', 'rules-restore', 'rules-trash-remove', 'rules-attach', 'rules-detach', 'rules-set-index',
+      // 提示词：建改删 / 应用（切换生效基线）/ 导入 / 回收站。
+      'agentsmd-create', 'agentsmd-update', 'agentsmd-remove', 'agentsmd-apply', 'agentsmd-import', 'agentsmd-trash-restore', 'agentsmd-trash-delete',
+    ], '修改')
+    // 被锁场景自身的档案与删除：只挡它自己，别的场景照常。
+    for (const [opName, pickScene, what] of [
+      ['scene-archive-save', (args: any) => (args && args.scene) || '', '改档案'],
+      ['rules-remove-scene', (args: any) => (args && args.name) || '', '删除'],
+    ] as const) {
+      const original = handlers[opName]
+      if (typeof original !== 'function') continue
+      handlers[opName] = async (args: any) => {
+        const scene = String(pickScene(args) || '').trim()
+        const locked = await lockedSceneNames()
+        if (scene && locked.includes(scene)) return { ok: false, error: `场景「${scene}」已锁定：先解锁再${what}` }
+        return original(args)
+      }
+    }
+    // 各页列表响应带上 anyLocked：界面据此禁用写控件（读 op，附加字段不影响既有消费方）。
+    async function annotateLocked(res: any): Promise<any> {
+      if (res && res.ok !== false) res.anyLocked = (await lockedSceneNames()).length > 0
+      return res
+    }
+    for (const opName of ['mcpm-list', 'mcpm-reveal', 'skill-state', 'subagent-list', 'agentsmd-list']) {
+      const original = handlers[opName]
+      if (typeof original !== 'function') continue
+      handlers[opName] = async (args: any) => annotateLocked(await original(args))
     }
 
     // ---------- agent-facing tools (standard ctx.tools.register + defineTool) ----------
@@ -3141,12 +3509,12 @@ export default {
         // 同上：AGENTS.md 由 dsh-agent-instructions 行承载，预设没挂这一行（或 persona
         // 是 complete）时文件内容不会进提示词。
         const notice = await reachNoticeForAgent(presetRoster(), exec && exec.agent && exec.agent.ctx)
-        return 'AGENTS.md presets:\n' + (summary.join('\n') || '(none)') + '\n(Applying takes effect on the next session created; the current session is unchanged.)' + notice
+        return 'AGENTS.md presets:\n' + (summary.join('\n') || '(none)') + '\n(DSH re-reads ~/.dsh/AGENTS.md every turn, so applying takes effect on the next turn.)' + notice
       },
     }))
     tools.register(defineTool({
       name: 'agentsmd_apply',
-      description: 'Apply one AGENTS.md preset by writing it to ~/.dsh/AGENTS.md. Takes effect on the next session created; the current session is unchanged.',
+      description: 'Apply one AGENTS.md preset by writing it to ~/.dsh/AGENTS.md. DSH re-reads that file every turn, so it takes effect on the next turn.',
       parameters: {
         id: { type: 'string', required: true, description: 'Preset id (lowercase letters, digits, hyphens).' },
       },

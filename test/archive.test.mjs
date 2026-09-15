@@ -82,6 +82,9 @@ function makeEngine(overrides = {}) {
     },
     mcpRaw: { github: ['locked'] },
     skills: { 'dsh/a': false, 'dsh/b': false },
+    // P5：服务器级 / 来源级启停现状。默认空 = 不产生上层切换（既有用例的行为不变）。
+    mcpServers: [],
+    skillSources: [],
   }
   const clone = (v) => JSON.parse(JSON.stringify(v))
   const deps = {
@@ -91,9 +94,26 @@ function makeEngine(overrides = {}) {
     serverKnownTools: async () => ({ github: ['t1', 't2'], tavily: [] }),
     currentMcpRaw: async () => clone(state.mcpRaw),
     applyMcpEntries: async (entries) => { state.mcpRaw = clone(entries) },
+    mcpServerStates: async () => clone(state.mcpServers),
+    applyMcpServerSwitches: async (switches) => {
+      for (const s of switches) {
+        const row = state.mcpServers.find((x) => x.id === s.id)
+        if (row) row.disabled = !s.enabled
+      }
+    },
+    skillSourceStates: async () => clone(state.skillSources),
+    applySkillSourceSwitches: async (switches) => {
+      for (const s of switches) {
+        const row = state.skillSources.find((x) => x.root === s.root)
+        if (row) row.enabled = s.enabled
+      }
+    },
     knownSkillKeys: async () => new Set(['dsh/a', 'dsh/b']),
     currentSkills: async () => ({ ...state.skills }),
     applySkills: async (target) => { state.skills = { ...target } },
+    // v0.8 子智能体开关：进/退模式时启用/停回档案勾选的人设。
+    disabledPersonas: async (names) => [],
+    applySubagentSwitches: async (switches) => {},
     sceneExists: async (name) => name === 's1' || name === 'memo',
     knownPersonas: async () => new Set(['p1']),
     ...overrides,
@@ -131,13 +151,19 @@ test('引擎 scene-mode-set: 应用补集 + 记忆收窄；退出恢复快照但
   assert.deepEqual(state.slice.active, ['s1'])                    // 记忆启用集不随退出恢复（设计 §2.2）
 })
 
-test('引擎 scene-mode-set: 仅记忆/仅子智能体场景 → 结构化拒绝，不改运行时', async () => {
+test('引擎 scene-mode-set: 仅记忆场景不建快照；仅子智能体场景启用绑定人设并建快照，mode 与 active 一起写', async () => {
+  // P6 契约变更：场景开关成为唯一入口，纯记忆/纯人设场景点开关不能再报错；
+  // 而且 mode.scene 必须写入（顶部「当前模式」横幅的渲染条件就是它）。
+  // v0.8：subagents 段也算「应用」——进入时把绑定的人设启用（快照记录停回名单）。
   const { engine, state } = makeEngine()
   const r = await engine.ops['scene-mode-set']({ scene: 'memo' })
-  assert.equal(r.ok, false)
-  assert.match(r.error, /没有 MCP \/ 技能段/)
-  assert.deepEqual(state.mcpRaw, { github: ['locked'] })
-  assert.equal(state.slice.mode.scene, null)
+  assert.equal(r.ok, true)
+  assert.equal(r.mode.scene, 'memo')
+  assert.deepEqual(r.applied, { mcp: false, skills: false, subagents: true })
+  assert.deepEqual(state.mcpRaw, { github: ['locked'] })     // MCP 运行时原样
+  assert.deepEqual(state.slice.mode.snapshot.subagents, undefined) // 快照无停回名单（本来全启用）
+  assert.equal(state.slice.mode.scene, 'memo')               // mode.scene 照常写入
+  assert.deepEqual(state.slice.active, ['memo'])             // 与 mode 恒等
 })
 
 test('引擎 scene-mode-set: 应用失败 → 运行时回滚 + 模式写回，错误如实标「已回滚」', async () => {

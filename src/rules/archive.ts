@@ -16,8 +16,44 @@ export interface SceneArchive {
   memories?: string[]
 }
 
-export interface ModeSnapshot { mcp: Record<string, string[]>; skills: Record<string, boolean> }
+/**
+ * 进入模式前的运行时快照，用于退出时精确回滚。
+ *
+ * ⚠️ `mcpServers` / `skillSources` 只记**被档案改动过**的行 —— 退出时不能顺手改
+ * 用户手动设置的状态。老 `rules-index.json` 里的 snapshot 没有这两栏，
+ * 读取处必须容忍缺失（`?? []`）。
+ */
+export interface ModeSnapshot {
+  mcp: Record<string, string[]>
+  skills: Record<string, boolean>
+  /**
+   * 档案改过**服务器级**启停的行，记录**改动前**的 `disabled`（退出时按此恢复）。
+   * 只记被改动过的行 —— 退出时不能顺手改用户手动设置的其他服务器。
+   */
+  mcpServers?: Array<{ id: string; level: string; disabled: boolean }>
+  /**
+   * 档案改过**来源级**启停的 root，记录**改动前**的 `enabled`（退出时按此恢复）。
+   * 同样只记被改动过的。
+   */
+  skillSources?: Array<{ root: string; enabled: boolean }>
+  /**
+   * 子智能体开关（v0.8）：进入模式时档案勾选的人设被**自动启用**，这里记的是
+   * 其中「改动前处于停用状态」的名字 —— 退出时按名单停回，不动用户手动开关过的其他行。
+   */
+  subagents?: string[]
+}
 export interface ModeState { scene: string | null; snapshot: ModeSnapshot | null }
+
+/** 一台服务器的**服务器级**启停现状（`disabled` 来自补丁文件）。 */
+export interface McpServerState {
+  /** loader entry id —— 改补丁按它定位。 */
+  id: string
+  /** 展示名；工具名 `mcp__<serverName>__<tool>` 用的就是它。 */
+  serverName: string
+  /** 补丁所在层级（profile / global）。 */
+  level: string
+  disabled: boolean
+}
 
 export interface McpPlan {
   /** 每台服务器的精确停用名单（[] = 全部启用；['*'] = 整台停用）。 */
@@ -25,6 +61,22 @@ export interface McpPlan {
   /** 整台停用的服务器（entries[server] === ['*']）。 */
   wildcards: string[]
   stale: string[]
+  /**
+   * 需要改**服务器级**启停的行：勾选的 → 启用（含把进程拉起来）；未勾的 → 停用（含杀进程）。
+   * **只含「当前状态 ≠ 目标」的行** —— 不动没必要的行，避免无谓改写补丁文件。
+   *
+   * 为什么必须做服务器级：工具级停用只在「服务器已经加载」时才有意义。服务器没起来，
+   * 它的工具根本不存在，勾选与否毫无区别 —— 这正是用户报的「勾了没开」。
+   */
+  serverSwitches: Array<{
+    id: string
+    serverName: string
+    level: string
+    /** 目标状态。 */
+    enabled: boolean
+    /** **改动前**的服务器级停用状态 —— 退出模式时按它恢复。 */
+    disabledBefore: boolean
+  }>
 }
 
 export function normalizeStringList(raw: unknown): string[] {
@@ -71,6 +123,11 @@ export interface McpPlanInput {
   configuredServers: string[]
   /** 每台服务器"已知"的工具名（live schemas ∪ 启停表历史键）；未运行的服务器可能为空。 */
   knownTools: Record<string, string[]>
+  /**
+   * 各服务器的**服务器级**启停现状。传了才会产出 `serverSwitches`（服务器级双向切换）；
+   * 不传 = 只做工具级（保持旧行为，便于单测与降级路径）。
+   */
+  serverStates?: McpServerState[]
 }
 
 /**
@@ -98,21 +155,90 @@ export function computeMcpPlan(mcp: Record<string, '*' | string[]>, input: McpPl
     entries[server] = known.filter((t) => !checked.has(t))
     for (const t of spec) if (known.indexOf(t) < 0) stale.push('mcp/' + server + '/' + t)
   }
-  return { entries, wildcards, stale }
+
+  // 服务器级双向切换：勾选集 = 该场景下的**服务器启停配置**。
+  // 勾了 → 启用；没勾 → 停用。只推入状态需要变化的行。
+  const serverSwitches: McpPlan['serverSwitches'] = []
+  for (const state of input.serverStates || []) {
+    if (!configured.has(state.serverName)) continue
+    const enabled = mcp[state.serverName] !== undefined
+    if (state.disabled === !enabled) continue   // 已经是目标状态
+    serverSwitches.push({ id: state.id, serverName: state.serverName, level: state.level, enabled, disabledBefore: state.disabled })
+  }
+  return { entries, wildcards, stale, serverSwitches }
 }
 
-/** 技能段应用计划：已知技能全集 → 勾选集决定启停。 */
-export function computeSkillsPlan(skills: string[], knownSkillKeys: Set<string>): { target: Record<string, boolean>; stale: string[] } {
+/** 一个技能来源（root）的启停现状。 */
+export interface SkillSourceState { root: string; enabled: boolean }
+
+export interface SkillsPlan {
+  target: Record<string, boolean>
+  stale: string[]
+  /**
+   * 需要改**来源级**启停的 root：该来源下有勾选的技能 → 启用；一条都没勾 → 停用。
+   * 只含状态需要变化的 root。
+   *
+   * 为什么必须做来源级：来源关闭时，技能级的 enable 会被直接吞掉（`skills/core.js` 的
+   * `sourceEnabled` 判定），勾选写进去了也不生效 —— 这正是用户报的「勾了没开」。
+   */
+  sourceSwitches: Array<{
+    root: string
+    /** 目标状态。 */
+    enabled: boolean
+    /** **改动前**的来源启停状态 —— 退出模式时按它恢复。 */
+    enabledBefore: boolean
+  }>
+}
+
+/**
+ * 技能段应用计划：已知技能全集 → 勾选集决定启停。
+ *
+ * `sourceStates` 传了才会产出 `sourceSwitches`（来源级双向切换）；不传 = 只做技能级。
+ */
+export function computeSkillsPlan(
+  skills: string[],
+  knownSkillKeys: Set<string>,
+  sourceStates?: SkillSourceState[],
+): SkillsPlan {
   const target: Record<string, boolean> = {}
   for (const key of knownSkillKeys) target[key] = skills.indexOf(key) >= 0
   const stale = skills.filter((k) => !knownSkillKeys.has(k)).map((k) => 'skills/' + k)
-  return { target, stale }
+
+  const sourceSwitches: SkillsPlan['sourceSwitches'] = []
+  if (sourceStates) {
+    // 该来源下有没有被勾选的技能（只看已知技能，避免 stale 项把来源"点亮"）。
+    const checked = new Set(skills)
+    const onRoots = new Set<string>()
+    for (const key of knownSkillKeys) {
+      if (!checked.has(key)) continue
+      const i = key.indexOf('/')
+      if (i > 0) onRoots.add(key.slice(0, i))
+    }
+    for (const state of sourceStates) {
+      const enabled = onRoots.has(state.root)
+      if (state.enabled === enabled) continue
+      sourceSwitches.push({ root: state.root, enabled, enabledBefore: state.enabled })
+    }
+  }
+  return { target, stale, sourceSwitches }
 }
 
-export function snapshotRuntime(mcpRaw: Record<string, string[]>, skills: Record<string, boolean>): ModeSnapshot {
+export function snapshotRuntime(
+  mcpRaw: Record<string, string[]>,
+  skills: Record<string, boolean>,
+  /** **将被档案改动**的服务器行，带改动前的 `disabled`。 */
+  mcpServers: Array<{ id: string; level: string; disabled: boolean }> = [],
+  /** **将被档案改动**的来源，带改动前的 `enabled`。 */
+  skillSources: Array<{ root: string; enabled: boolean }> = [],
+  /** **将被档案启用**的人设名（改动前停用的子集；退出时按此停回）。 */
+  subagents: string[] = [],
+): ModeSnapshot {
   return {
     mcp: Object.fromEntries(Object.entries(mcpRaw).map(([k, v]) => [k, v.slice()])),
     skills: { ...skills },
+    mcpServers: mcpServers.map((x) => ({ id: x.id, level: x.level, disabled: x.disabled })),
+    skillSources: skillSources.map((x) => ({ root: x.root, enabled: x.enabled })),
+    ...(subagents.length ? { subagents: subagents.slice() } : {}),
   }
 }
 
@@ -122,30 +248,11 @@ export function snapshotRuntime(mcpRaw: Record<string, string[]>, skills: Record
 // 记忆只是**投影**（正文进 system prompt）。所以记忆段不产生"应用计划"、不进模式快照，
 // 而是在渲染时被查询——勾选后下一个请求即生效，退出模式无需回滚任何东西。
 
-/**
- * 记忆是否应当注入（纯函数，供渲染路径同步调用）。
- *
- * 口径与其余段同构：
- *   - 该记忆所属场景**没有** memories 段 → 全部记忆照常注入（老档案 = 未定义 = 不碰）；
- *   - 有段 → 只有列在段里的记忆注入（段已定义但空 = 该场景记忆全部不注入）。
- *
- * 入参 `sceneEnabled` 是索引里的单条启停（`enabled === false` 的条目在上游已被过滤，
- * 这里只为把两种"不注入"的原因分开，便于体检报告区分）。
- */
-export function memoryAllowed(
-  archives: Record<string, SceneArchive> | undefined,
-  scene: string,
-  id: string,
-): boolean {
-  const archive = archives ? archives[scene] : undefined
-  if (!archive || archive.memories === undefined) return true
-  return archive.memories.indexOf(id) >= 0
-}
-
-/**
- * 记忆段的 stale 上报（档案保存时调用）：段里引用了已经不存在的记忆 id。
- * 记忆段不写任何运行时状态，因此除 stale 外没有别的计划产物。
- */
-export function computeMemoriesPlan(memories: string[], knownMemoryIds: Set<string>): { stale: string[] } {
-  return { stale: memories.filter((id) => !knownMemoryIds.has(id)).map((id) => 'memories/' + id) }
-}
+// P5（2026-09-15）已删除 `memoryAllowed` 与 `computeMemoriesPlan`：
+// 记忆的注入条件改为**单一真相源** `rules[*].enabled`，场景档案不再持有 `memories` 段。
+// 原因是「两个开关串联 + 两步操作」——用户必须先建段、再逐条勾，而且记忆页与档案页
+// 各显示一半状态，看起来永远对不上。现在档案弹窗里的记忆勾选直接读写 `enabled`，
+// 与记忆页同一个写入口，天然一致。
+//
+// 老档案兼容：`archives[*].memories` 字段被**忽略**，不做自动迁移。影响可控 ——
+// 段内记忆的 `enabled` 通常本就是 true，忽略后行为不变。

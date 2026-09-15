@@ -30,12 +30,12 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
-import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
+import { parseSkillDoc, renameWithRetry, resolveDshHome, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
-import { createRuleProviderRegistrar } from './provider.js'
+import { SECTION_ORDER, createPromptSectionRegistrar } from '../prompt-sections.js'
 import { normalizePresetId } from '../agents-md/preset-id.js'
-import { normalizeArchive, memoryAllowed, type ModeState, type SceneArchive } from './archive.js'
-import { listTrashEntries, moveToTrash, purgeTrashEntry, readTrashEntry } from '../hub.js'
+import { normalizeArchive, type ModeState, type SceneArchive } from './archive.js'
+import { listTrashEntries, moveOutOfTrash, moveToTrash, purgeTrashEntry, readTrashEntry } from '../hub.js'
 
 // ── 常量 ───────────────────────────────────────────────────────────────────
 
@@ -140,6 +140,47 @@ export interface Rule {
   updatedAt?: string
   /** 同名 bundle 存在时被遮蔽的 flat（UI 标红，不参与投影）。 */
   shadowed?: boolean
+}
+
+/**
+ * 记忆导出的落盘映射（`bundle-export` 的 `kind: 'memories'` 用，见 design-plan D14）。
+ *
+ * 记忆有两种形态（见文件头）：flat = `<场景>/<name>.md`，bundle = `<场景>/<name>/SKILL.md`；
+ * 而且**场景名本身可含 `/`**（多段场景名，见 `isValidGroupPath`）。所以「按 id 的最后一个
+ * `/` 切出场景与名字、再拼 `.md`」是错的：bundle 会被读成 `<场景>/<name>.md` → 读不到 →
+ * 该项目静默丢失（只在 `missing` 里留个名，界面按「导出成功」显示）。
+ *
+ * 这里一律按索引里那条规则自己的 `path` 与 `form` 决定；bundle 只交出目录，由调用方
+ * 把目录内的文件全部打包（与技能分支同口径）。索引里没有、或已被同名 bundle 遮蔽的 id
+ * 进 `missing`——遮蔽的 flat 不会被加载，导出去只会让人以为它能用。
+ *
+ * 纯函数（不碰磁盘），可直接断言。
+ */
+export function planMemoryExport(
+  names: unknown,
+  rules: unknown,
+): { entries: Array<{ id: string; zip: string; abs: string; kind: 'file' | 'dir' }>; missing: string[] } {
+  type Row = { id?: unknown; form?: unknown; path?: unknown; shadowed?: unknown }
+  const list = Array.isArray(names) ? names.map((n) => String(n).trim()).filter(Boolean) : []
+  const byId = new Map<string, Row>()
+  for (const row of (Array.isArray(rules) ? rules : []) as Row[]) {
+    const id = row && typeof row.id === 'string' ? row.id : ''
+    if (id !== '') byId.set(id, row)
+  }
+  const entries: Array<{ id: string; zip: string; abs: string; kind: 'file' | 'dir' }> = []
+  const missing: string[] = []
+  for (const id of list) {
+    const row = byId.get(id)
+    const abs = row && typeof row.path === 'string' ? row.path : ''
+    if (!row || abs === '' || row.shadowed === true) {
+      missing.push(id)
+      continue
+    }
+    entries.push(row.form === 'bundle'
+      ? { id, zip: id, abs: dirname(abs), kind: 'dir' }
+      : { id, zip: `${id}.md`, abs, kind: 'file' })
+  }
+  return { entries, missing }
 }
 
 export interface GroupRow {
@@ -281,6 +322,12 @@ interface SceneIndexEntry {
   prompt?: string
   order?: number
   createdAt?: string
+  /**
+   * 场景锁定（v0.8）：锁定后五个管理域（MCP/技能/子智能体/记忆/提示词）整体只读 ——
+   * 场景页的档案编辑与功能页的启停/编辑都被拒（index.ts 的 handlers 守卫 +
+   * 界面按钮禁用）；场景自身的启停（进/退模式）不受影响。任意一个场景锁定即全局冻结。
+   */
+  locked?: boolean
 }
 
 interface RuleIndexEntry {
@@ -321,24 +368,30 @@ interface SceneBlockCandidate {
 
 // ── 文件工具 ───────────────────────────────────────────────────────────────
 
-/** 同目录临时文件 + rename 原子写（临时名 `.xxx.dsh-rules-<uuid>.tmp`）。 */
+/**
+ * 同目录临时文件 + rename 原子写（临时名 `.xxx.dsh-rules-<uuid>.tmp`）。
+ * rename 走 `renameWithRetry`：Windows 上杀软/索引器会短暂占住目标文件报
+ * EPERM/EACCES/EBUSY（用户实测：进入/退出模式时 rules-index.json 被 rename 撞上，
+ * 运行时已切换但状态落盘失败，界面开关停在旧状态、还得再点一次）。这种占用是
+ * 瞬时的，重试几轮就能过去；全失败才清理临时文件并把错误抛出。
+ */
 async function writeFileAtomically(path: string, content: string): Promise<void> {
   const temp = join(dirname(path), `.${basename(path)}.dsh-rules-${randomUUID()}.tmp`)
   try {
     await writeFile(temp, content, 'utf8')
-    await rename(temp, path)
+    await renameWithRetry(temp, path)
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined)
     throw error
   }
 }
 
-/** 二进制版原子写（附件用）：临时文件 + rename，失败清理临时文件。 */
+/** 二进制版原子写（附件用）：临时文件 + rename（同样带瞬时占用重试），失败清理临时文件。 */
 async function writeFileAtomicBinary(path: string, data: Buffer): Promise<void> {
   const temp = join(dirname(path), `.${basename(path)}.dsh-rules-${randomUUID()}.tmp`)
   try {
     await writeFile(temp, data)
-    await rename(temp, path)
+    await renameWithRetry(temp, path)
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined)
     throw error
@@ -567,6 +620,8 @@ function parseSceneEntry(raw: unknown): SceneIndexEntry | null {
   }
   if (typeof obj.order === 'number' && Number.isFinite(obj.order)) out.order = obj.order
   if (typeof obj.createdAt === 'string' && obj.createdAt !== '') out.createdAt = obj.createdAt
+  // 场景锁定（v0.8）：读盘必须原样保留 —— 这里曾只重建已知字段，锁了也会被剥成未锁。
+  if (obj.locked === true) out.locked = true
   return out
 }
 
@@ -623,9 +678,29 @@ function parseModeState(raw: unknown): ModeState {
       if (list.indexOf(tool) < 0) list.push(tool)
     }
   }
+  // v2 快照的**服务器级 / 来源级**名单与 v0.8 的子智能体名单必须原样透传 ——
+  // 这里曾把它们剥掉，结果退出模式时两张恢复名单全是空的：服务器级 MCP 与技能来源
+  // 永远不回滚（用户报的「MCP 不复原」「技能目录不回退」），只有工具级 / 技能级能还原。
+  const mcpServers = (Array.isArray(snapshotRaw.mcpServers) ? snapshotRaw.mcpServers : [])
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+    .map((x) => ({ id: String(x.id || ''), level: String(x.level || ''), disabled: x.disabled === true }))
+    .filter((x) => x.id !== '' && (x.level === 'global' || x.level === 'project'))
+  const skillSources = (Array.isArray(snapshotRaw.skillSources) ? snapshotRaw.skillSources : [])
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+    .map((x) => ({ root: String(x.root || ''), enabled: x.enabled === true }))
+    .filter((x) => x.root !== '')
+  const subagents = (Array.isArray(snapshotRaw.subagents) ? snapshotRaw.subagents : []).map((x) => String(x)).filter(Boolean)
   return {
     scene,
-    snapshot: scene ? { mcp, skills: toFlagMap(snapshotRaw.skills) } : null,
+    snapshot: scene
+      ? {
+          mcp,
+          skills: toFlagMap(snapshotRaw.skills),
+          ...(mcpServers.length ? { mcpServers } : {}),
+          ...(skillSources.length ? { skillSources } : {}),
+          ...(subagents.length ? { subagents } : {}),
+        }
+      : null,
   }
 }
 
@@ -1108,8 +1183,9 @@ function renderSceneMemory(
   for (const file of files) {
     // 保留场景 global 恒定生效（「全局」= 任何对话都注入）；其余由 index.active 决定。
     if (file.scene !== GLOBAL_SCENE && !active.has(file.scene)) continue
-    // 场景档案的记忆段（v3）：该场景定过 memories 段 → 只有勾选的记忆进段（纯投影，不改文件）。
-    if (!memoryAllowed(index.archives, file.scene, file.id)) continue
+    // ⚠️ 这里**不再**看场景档案的 memories 段：记忆的开关是**单一真相源** `rules[*].enabled`
+    // （见下方 enabled 判定）。档案弹窗里的记忆勾选就是同一个值，所以两边天然一致，
+    // 不存在「记忆页开了、档案页还显示未开」的两套状态。
     const list = buckets.get(file.scene)
     if (list) list.push(file)
     else buckets.set(file.scene, [file])
@@ -1581,6 +1657,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
         prompt: index.scenes?.[name]?.prompt || '',
         // 单选模型下"能不能点开"：已被别的场景占用时，这个开关要置灰。
         selectable: name !== SHARED_GROUP && name !== GLOBAL_SCENE && (enabledScene === null || enabledScene === name),
+        locked: index.scenes?.[name]?.locked === true,
       }))
       .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
   }
@@ -1596,6 +1673,8 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       .sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order || a.name.localeCompare(b.name))
     const groups = groupFilter ? snap.groups.filter((g) => g.name === groupFilter) : snap.groups
     const scenes = sceneRows(snap, index)
+    // 场景锁定状态（v0.8）：任意一个场景锁定 = 五个管理域整体冻结。界面据此禁用各页的写控件。
+    const anyLocked = Object.values(index.scenes || {}).some((s) => s.locked === true)
     const projection = sceneMemory()
     const promptProjection = scenePrompt()
     return {
@@ -1605,6 +1684,8 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       groups: groups.map((g) => ({ ...g, key: g.name })),
       // 场景 = 显式记录（含保留场景 global 与尚无记忆的空场景）；active = 是否参与注入。
       scenes,
+      // 任一场景被锁定 = 五个管理域整体冻结（客户端据此禁用写控件；服务端 handlers 另有守卫）。
+      anyLocked,
       activeMode: normalizeActive(index.active) === null ? 'all' : 'custom',
       // 单选模型：当前启用的那个场景（null = 只留 `_shared` 与 `global`）。
       activeScene: enabledSceneOf(index),
@@ -1803,7 +1884,9 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     // id 恒为 `<场景>/<名>`（与 parseId 同构）；场景记录此时必然已存在。
     const createdId = `${targetGroup}/${name}`
     const index = indexForScene
-    index.rules[createdId] = { order: DEFAULT_ORDER, enabled: true, updatedAt: new Date().toISOString() }
+    // P5：新建记忆默认**不开启** —— 记忆的开关是单一真相源（`enabled`），
+    // 用户裁定「创建的记忆默认不开启，在记忆页开启后对应的场景档案也要显示开启」。
+    index.rules[createdId] = { order: DEFAULT_ORDER, enabled: false, updatedAt: new Date().toISOString() }
     if (!index.groups[targetGroup]) index.groups[targetGroup] = { order: DEFAULT_GROUP_ORDER, label: targetGroup }
     await writeIndex(stateDir, index)
     invalidateSnapshot()
@@ -1884,7 +1967,8 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       }
       // 索引记录：与 rules-create 同口径（order/enabled/updatedAt + 场景分组），用户既有设置不覆盖。
       const entry = index.rules[id]
-      index.rules[id] = { ...(entry || {}), order: entry?.order ?? DEFAULT_ORDER, enabled: entry?.enabled ?? true, updatedAt: new Date().toISOString() }
+      // P5：导入的记忆同样默认**不开启**（与 rules-create 同一口径）；已存在的条目保留原开关。
+      index.rules[id] = { ...(entry || {}), order: entry?.order ?? DEFAULT_ORDER, enabled: entry?.enabled ?? false, updatedAt: new Date().toISOString() }
       if (!index.groups[item.group]) index.groups[item.group] = { order: DEFAULT_GROUP_ORDER, label: item.group }
       // 场景记录补齐（导入进来的目录名此前可能没有记录）。
       if (!index.scenes[item.group]) {
@@ -2289,8 +2373,15 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   }
 
   /**
-   * 更新场景记录（描述 / 显示名 / 顺序 / 绑定的提示词预设）。记忆文件不动。
-   * 这是「场景有描述」的写入口——旧版场景只有目录名，没有可编辑元数据。
+   * 更新场景记录（描述 / 显示名 / 顺序 / 绑定的提示词预设），**可选改名**（nextName）。
+   *
+   * 场景名就是它的一级目录名（`memories/<场景>/…`），所以改名不是改一个字段：
+   *   ① 目录 `memories/<旧>` → `memories/<新>`；
+   *   ② 索引里的四处引用一起改：`scenes` 记录、`archives` 档案、`active` 启用集合、`mode.scene`。
+   * 记忆正文一个字节都不动（只是换了所在目录名）。
+   *
+   * 拒绝的三种情况：保留场景 `global` / `_shared`；目标名已被占用（目录或记录）；
+   * 该场景正在当前模式里——模式快照是按场景名算的，改了名与快照就对不上（同删除的处理）。
    */
   async function rulesUpdateScene(args: any): Promise<any> {
     const name = String((args && args.name) || '').trim()
@@ -2330,12 +2421,94 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       if (!Number.isFinite(order) || order < 0) return fail('error.rules.invalidGroup', `非法排序值：${args.order}`)
       next.order = Math.floor(order)
     }
-    if (name === GLOBAL_SCENE) next.label = GLOBAL_SCENE_LABEL
-    index.scenes[name] = next
+    // ── 改名（可选）：目录 + 索引里的四处引用一起动 ──
+    let finalName = name
+    const nextRaw = args && args.nextName !== undefined ? String(args.nextName).trim() : ''
+    if (nextRaw !== '' && nextRaw !== name) {
+      if (!isValidGroupSegment(nextRaw)) {
+        return fail('error.rules.invalidGroup', `新场景名非法：${nextRaw}（非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）`)
+      }
+      if (name === GLOBAL_SCENE) return fail('error.rules.reservedScene', '「全局」是保留场景，不可改名')
+      if (name === SHARED_GROUP || nextRaw === SHARED_GROUP) return fail('error.rules.invalidGroup', '_shared 是保留场景名，不可改名')
+      if ((index.scenes && index.scenes[nextRaw]) || (await pathExists(join(rulesRoot, nextRaw)))) {
+        return fail('error.rules.nameTaken', `目标场景名已被占用：${nextRaw}`)
+      }
+      if (index.mode && index.mode.scene === name) {
+        return fail('error.rules.sceneInMode', `场景「${name}」正处在当前模式，请先退出模式再改名`)
+      }
+      const fromDir = join(rulesRoot, name)
+      const toDir = join(rulesRoot, nextRaw)
+      let movedDir = false
+      if (await pathExists(fromDir)) {
+        try {
+          await rename(fromDir, toDir)
+          movedDir = true
+        } catch (e) {
+          return fail('error.rules.ioFailed', `场景目录改名失败：${message(e)}`)
+        }
+      }
+      // 目录已经搬过去了：索引这一步失败就必须把目录搬回来，否则目录名与索引各说各话。
+      try {
+        const scenes = index.scenes || {}
+        if (scenes[name]) {
+          scenes[nextRaw] = scenes[name]
+          delete scenes[name]
+        } else {
+          scenes[nextRaw] = { order: DEFAULT_GROUP_ORDER, createdAt: new Date().toISOString() }
+        }
+        index.scenes = scenes
+        if (index.archives && index.archives[name]) {
+          index.archives[nextRaw] = index.archives[name]
+          delete index.archives[name]
+        }
+        const act = normalizeActive(index.active)
+        if (act !== null && act.indexOf(name) >= 0) index.active = act.map((n) => (n === name ? nextRaw : n))
+        if (index.mode && index.mode.scene === name) index.mode = { ...index.mode, scene: nextRaw }
+      } catch (e) {
+        if (movedDir) {
+          try { await rename(toDir, fromDir) } catch { /* 回滚失败：错误信息里如实带上原因 */ }
+        }
+        return fail('error.rules.ioFailed', `场景改名后索引更新失败：${message(e)}`)
+      }
+      finalName = nextRaw
+    }
+
+    if (finalName === GLOBAL_SCENE) next.label = GLOBAL_SCENE_LABEL
+    index.scenes[finalName] = next
     await writeIndex(stateDir, index)
     invalidateSnapshot()
     invalidateProviders()
-    return { ok: true, scene: sceneRecordOf(name, next) }
+    return {
+      ok: true,
+      ...(finalName === name ? {} : { renamedFrom: name }),
+      scene: sceneRecordOf(finalName, next),
+    }
+  }
+
+  /**
+   * 场景锁定（v0.8）：锁定后五个管理域（MCP/技能/子智能体/记忆/提示词）整体只读 ——
+   * 场景页的档案编辑与功能页的启停/编辑都被拒（index.ts 的 handlers 守卫 + 界面禁用），
+   * 场景自身的启停（进/退模式）不受影响。`locked` 必须显式给布尔值（与 rules-toggle 同一口径）。
+   * 保留场景 `global` 不在场景页出现，不可锁。
+   */
+  async function rulesSceneLock(args: any): Promise<any> {
+    const name = String((args && args.scene) || '').trim()
+    if (!isValidGroupPath(name)) return fail('error.rules.invalidGroup', `场景名非法：${name || '(空)'}`)
+    if (name === GLOBAL_SCENE || name === SHARED_GROUP) return fail('error.rules.reservedScene', '「全局 / _shared」是保留场景，不可锁定')
+    if (typeof (args && args.locked) !== 'boolean') {
+      return fail('error.rules.invalidArgs', '缺少参数：locked 必须是布尔值（只按传入值写入，不做"翻转"推断）')
+    }
+    const index = await readIndex(stateDir)
+    if (!index.scenes || !index.scenes[name]) return fail('error.rules.notFound', `场景不存在：${name}`)
+    // 未启动的场景不能上锁（用户裁定）：锁定的意义是冻结**运行中**场景的配置。
+    // 解锁随时允许 —— 否则退出模式后，被锁的场景就没人能解了。
+    if (args.locked === true && (!index.mode || index.mode.scene !== name)) {
+      return fail('error.rules.sceneNotActive', `场景「${name}」未启动：先启动再锁定`)
+    }
+    index.scenes[name] = { ...index.scenes[name], locked: args.locked === true }
+    await writeIndex(stateDir, index)
+    invalidateSnapshot()
+    return { ok: true, scene: name, locked: args.locked === true }
   }
 
   /**
@@ -2353,36 +2526,52 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (!index.scenes?.[name] && !(await pathExists(join(rulesRoot, name)))) {
       return fail('error.rules.notFound', `场景不存在：${name}`)
     }
-    let entries: string[] = []
-    try {
-      entries = await readdir(join(rulesRoot, name))
-    } catch {
-      entries = []   // 目录本来就不存在（只有记录）→ 仍允许删记录
-    }
-    if (entries.filter((n) => !n.startsWith('.')).length > 0) {
-      return fail('error.rules.sceneNotEmpty', `场景「${name}」里还有 ${entries.length} 项，请先删除其中的记忆`)
-    }
     // 当前模式场景不可删：快照只在引擎里可退（rules service 反向注入会成环），
     // 直接删除会让运行时启停永久停在档案态且无恢复路径 → 给出可逆出路（先退出模式）。
     if (index.mode?.scene === name) {
       return fail('error.rules.sceneInMode', `场景「${name}」正处在当前模式，请先退出模式再删除`)
     }
-    // 场景本体（记录 + 档案）**先移入回收站**，再从索引里摘掉——这样「删除场景」
-    // 是可恢复的。记忆目录必须是空的（上面已拦），所以没有正文需要搬。
-    const trashed = await moveToTrash('scenes', name, [], {
+    // 删除场景 = **连它下面的全部记忆一起去掉**（用户裁定）：不管有没有启用、是不是子目录、
+    // 是不是 bundle 附件，统统收走。
+    // 但一律**先移入回收站**（与场景记录、档案装在同一条条目里），所以「删错了」还能整条恢复：
+    // 记忆文件按原来的相对路径放回，场景记录与档案也一起回来。
+    const sceneDir = join(rulesRoot, name)
+    const moves: Array<{ from: string; dest: string }> = []
+    const collect = async (abs: string, rel: string): Promise<void> => {
+      let items: import('node:fs').Dirent[] = []
+      try {
+        items = await readdir(abs, { withFileTypes: true })
+      } catch {
+        return   // 目录不存在（只有记录的场景）或读不了 → 当作没有文件
+      }
+      for (const item of items) {
+        const childAbs = join(abs, item.name)
+        const childRel = rel === '' ? item.name : `${rel}/${item.name}`
+        if (item.isDirectory()) await collect(childAbs, childRel)
+        else moves.push({ from: childAbs, dest: childRel })
+      }
+    }
+    await collect(sceneDir, '')
+    const trashed = await moveToTrash('scenes', name, moves, {
       record: (index.scenes && index.scenes[name]) || null,
       archive: (index.archives && index.archives[name]) || null,
+      memories: moves.map((m) => m.dest),
     })
     if (trashed.ok === false) {
       return fail('error.rules.ioFailed', `移入回收站失败：${trashed.error}`)
     }
     try {
-      // fs.rm 删目录必须 recursive（即使已确认它是空的），否则报 EISDIR。
-      await rm(join(rulesRoot, name), { recursive: true, force: true })
+      // 文件已搬空，剩下的只是空子目录；recursive + force 一并清掉。
+      await rm(sceneDir, { recursive: true, force: true })
     } catch (e) {
+      // 目录没清掉就把记忆放回去：宁可整个操作失败，也不要「文件在回收站、场景还留在列表里」。
+      for (const move of moves) {
+        try { await moveOutOfTrash('scenes', trashed.id, move.dest, move.from) } catch { /* 尽力而为 */ }
+      }
+      try { await purgeTrashEntry('scenes', trashed.id) } catch { /* 同上 */ }
       return fail('error.rules.ioFailed', `删除场景目录失败：${message(e)}`)
     }
-    // 索引清理一次读-改-写：记录 + 启用集合悬空引用 + 该场景档案（否则 archives 留孤儿条目）。
+// 索引清理一次读-改-写：记录 + 启用集合悬空引用 + 该场景档案（否则 archives 留孤儿条目）。
     let dirty = false
     if (index.scenes && index.scenes[name]) {
       delete index.scenes[name]
@@ -2399,7 +2588,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (dirty) await writeIndex(stateDir, index)
     invalidateSnapshot()
     invalidateProviders()
-    return { ok: true, name, trashId: trashed.id }
+    return { ok: true, name, trashId: trashed.id, movedFiles: moves.length }
   }
 
   /** 场景回收站列表（只读）：`<hub>/trash/scenes-trash/<id>/manifest.json`。 */
@@ -2425,11 +2614,22 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (entries.filter((n) => !n.startsWith('.')).length > 0) {
       return fail('error.rules.sceneNotEmpty', `无法恢复，记忆目录「${name}」里已有内容，请先处理`)
     }
-    const data = (entry.data || {}) as { record?: unknown; archive?: unknown }
+    const data = (entry.data || {}) as { record?: unknown; archive?: unknown; memories?: unknown }
     try {
       await mkdir(dir, { recursive: true })
     } catch (e) {
       return fail('error.rules.ioFailed', `重建场景目录失败：${message(e)}`)
+    }
+    // 删除场景时一起收进回收站的记忆文件：按原来的相对路径放回（目录已确认是空的，不会覆盖）。
+    const files = Array.isArray(entry.files) ? entry.files : []
+    const restored: string[] = []
+    for (const rel of files) {
+      try {
+        await moveOutOfTrash('scenes', id, String(rel), join(dir, String(rel)))
+        restored.push(String(rel))
+      } catch (e) {
+        return fail('error.rules.ioFailed', `恢复记忆文件失败（已放回 ${restored.length}/${files.length}）：${message(e)}`)
+      }
     }
     if (data.record && typeof data.record === 'object') index.scenes = { ...(index.scenes || {}), [name]: data.record as SceneIndexEntry }
     if (data.archive && typeof data.archive === 'object') index.archives = { ...(index.archives || {}), [name]: data.archive as SceneArchive }
@@ -2437,7 +2637,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     await purgeTrashEntry('scenes', id)
     invalidateSnapshot()
     invalidateProviders()
-    return { ok: true, name }
+    return { ok: true, name, restoredFiles: restored.length }
   }
 
   /** 永久删除一条场景回收站条目。 */
@@ -2501,9 +2701,17 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
 
   const registerProviders = (): (() => void) => {
     try {
-      const registrar = createRuleProviderRegistrar(ctx, {
-        renderActiveScenes: () => sceneMemory().text,
-      })
+      // 场景绑定的提示词**不再注入**（2026-09-15 用户裁定：「切换场景，对应的提示词直接把
+      // AGENTS.md 修改」）：启用/切换场景、改绑、编辑绑定的预设时，宿主把那份正文写进
+      // `~/.dsh/AGENTS.md`（与「提示词」页的「应用」同一条路，覆盖前多代备份），关掉场景时
+      // 恢复进场景之前的基线。真改文件之后再注入一遍，同一份正文会进上下文两次，而且用户手改
+      // 基线之后还会被重新注入 —— 所以这里只保留场景记忆段。绑定关系的**只读投影**仍由 rules
+      // 服务提供（页面「生效中」标记，以及"文件是否已经同步成它"的判断）。
+      const registrar = createPromptSectionRegistrar(ctx, [{
+        name: 'tool-management:scene-memory',
+        order: SECTION_ORDER.sceneMemory,
+        text: () => sceneMemory().text,
+      }])
       providerInvalidators.add(registrar.invalidate)
       return () => {
         providerInvalidators.delete(registrar.invalidate)
@@ -2529,6 +2737,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   const writeOps: ReadonlySet<string> = new Set([
     'rules-create', 'rules-update', 'rules-remove', 'rules-restore', 'rules-toggle', 'rules-import',
     'rules-set-index', 'rules-set-active', 'rules-create-scene', 'rules-update-scene', 'rules-remove-scene', 'rules-rebind-prompt',
+    'rules-scene-lock',
     'rules-attach', 'rules-detach', 'rules-trash-remove',
     // 场景回收站（与记忆回收站 rules-trash-* 分开：那套管记忆正文，这套管场景记录与档案）
     'scene-trash-restore', 'scene-trash-delete',
@@ -2553,6 +2762,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     'rules-set-active': (args) => runWrite(() => rulesSetActive(args || {})),
     'rules-create-scene': (args) => runWrite(() => rulesCreateScene(args || {})),
     'rules-update-scene': (args) => runWrite(() => rulesUpdateScene(args || {})),
+    'rules-scene-lock': (args) => runWrite(() => rulesSceneLock(args || {})),
     'rules-remove-scene': (args) => runWrite(() => rulesRemoveScene(args || {})),
     'scene-trash-list': () => sceneTrashList(),
     'scene-trash-restore': (args) => runWrite(() => sceneTrashRestore(args || {})),

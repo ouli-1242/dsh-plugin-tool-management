@@ -472,8 +472,13 @@ test('档案弹窗：记忆默认只勾本场景已启用的', () => {
   assert.match(src, /\{ mcp: emptyMcpPreset\(\) \}/, 'MCP 工具集「添加」必须默认不勾选')
   assert.match(src, /\{ skills: \[\] \}/, '技能集「添加」必须默认不勾选')
   assert.match(src, /subagents: \[\] \}/, '子智能体绑定「添加」必须默认不勾选')
-  // 反向守卫：记忆段的「全选」= 本场景全部，不能退化成默认值那一个子集。
-  assert.match(src, /memories: allMemoryIds\(\) \}/, '记忆段「全选」必须勾上本场景全部记忆')
+  // P5 契约变更：记忆段不再是「可选段」—— 勾选状态**就是** `rules[*].enabled`
+  // （与记忆页同一个写入口），所以：
+  //   ① 「全选 / 全不选」走批量写 enabled，而不是往档案里塞一个 memories 数组；
+  //   ② 保存档案的 payload 里不再出现 memories 段。
+  assert.match(src, /function setAllMemories\(on\)/, '记忆段「全选/全不选」必须走批量写 enabled')
+  assert.match(src, /rules-toggle', \{ id: id, enabled: on \}/, '批量写必须逐个调 rules-toggle')
+  assert.doesNotMatch(src, /payload\.memories = /, '档案保存不再写 memories 段（P5 单一真相源）')
 })
 
 test('apply 装配：注册 settings.section（slots 缺失时会静默什么都不注册，这条挡住白屏）', () => {
