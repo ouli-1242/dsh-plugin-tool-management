@@ -34,7 +34,7 @@ export const DEFAULT_MCP_NOTE_MAX_LENGTH = 200
  * （如「忽略以上全部规则」），会被当作系统级指令执行。威胁模型上是**自伤**而非被攻击
  * （内容由用户自己写、仅本机可写），但加固定前缀能降低被读成指令的概率。
  */
-export const MCP_NOTE_PREFIX = '用户备注：'
+export const MCP_NOTE_PREFIX = '备注：'
 
 /** 段里用到的 MCP 行字段（与 `normalizeRow` + `mcpmList` 的产出对应）。 */
 export interface McpStateRow {

@@ -214,13 +214,16 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
     await writeFile(stateFile, JSON.stringify({ version: 1, enabled: list }, null, 2), 'utf8')
     enabledCache = list
   }
-  /** 新建/导入/恢复的人设默认启用；文件缺失（本来就全启用）时无需写。 */
-  async function enablePersonaNames(names: string[]): Promise<void> {
+  /** 新建/导入/恢复的人设默认停用（v0.8.5 用户裁定，与技能 / MCP 同口径）：
+   *  文件缺失（含旧数据）时先把「全部启用」物化成显式全集**并排除新名**——
+   *  否则新名会随"文件缺失=全启用"的兼容语义被误判为启用。已有显式集合时新名
+   *  不在集合里，天然停用，无需写盘。 */
+  async function materializeEnabledExcluding(names: string[]): Promise<void> {
     const set = await readEnabled()
-    if (set === null) return
-    let dirty = false
-    for (const n of names) if (set.indexOf(n) < 0) { set.push(n); dirty = true }
-    if (dirty) await writeEnabled(set)
+    if (set !== null) return
+    const docs = await list()
+    await writeEnabled(docs.map((d) => d.name).filter((n) => names.indexOf(n) < 0))
+    cache = null
   }
   /** 改名跟随：旧名在集合里就改新名；不在（停用中）保持停用。 */
   async function renamePersonaInEnabled(from: string, to: string): Promise<void> {
@@ -384,8 +387,8 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         return { ok: false, error: `创建人设目录失败: ${dir}（${message(e)}）` }
       }
       await writeFile(target, serializePersona(args), 'utf8')
-      // 新建即启用（文件缺失 = 本来全启用，无需写）；缓存失效让下次 list 带上新成员。
-      await enablePersonaNames([name]).catch(() => undefined)
+      // v0.8.5：新建默认不启动——显式集合下新名天然停用；文件缺失时先物化全集并排除新名。
+      await materializeEnabledExcluding([name]).catch(() => undefined)
       cache = null
       return { ok: true, name }
     },
@@ -458,8 +461,8 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         return { ok: false, error: `恢复失败: ${message(e)}` }
       }
       await purgeTrashEntry('agents', id)
-      // 恢复 = 拿回来用：自动启用（文件缺失本来就全启用，无需写）。
-      await enablePersonaNames([entry.name]).catch(() => undefined)
+      // v0.8.5：回收站恢复默认不启动（与新建/导入同口径）。
+      await materializeEnabledExcluding([entry.name]).catch(() => undefined)
       cache = null
       return { ok: true, name: entry.name }
     },
@@ -498,7 +501,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         imported.push(target.name)
       }
       if (imported.length) {
-        await enablePersonaNames(imported).catch(() => undefined)
+        await materializeEnabledExcluding(imported).catch(() => undefined)
         cache = null
       }
       return { ok: true, imported, skipped }

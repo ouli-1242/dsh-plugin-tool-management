@@ -5,6 +5,12 @@
 
 export interface SceneArchive {
   mcp?: Record<string, '*' | string[]>   // serverName → '*' 整台 | 工具名清单；键存在 = 段已定义
+  /**
+   * 场景级 MCP 服务器备注：serverName → 备注文本。
+   * 进入该场景时**覆盖**全局备注（写 notes.json），退出场景时恢复改动前的备注。
+   * 键存在即段已定义（可为空对象 = 清除该场景的全部备注覆盖）。
+   */
+  mcpNotes?: Record<string, string>
   skills?: string[]                      // 勾选的技能选集，key = `<rootKey>/<name>`
   subagents?: string[]                   // 绑定的人设名清单
   /**
@@ -41,6 +47,11 @@ export interface ModeSnapshot {
    * 其中「改动前处于停用状态」的名字 —— 退出时按名单停回，不动用户手动开关过的其他行。
    */
   subagents?: string[]
+  /**
+   * 档案改过**备注**的服务器行，记录**改动前**的备注（`null` = 原本没有备注）。
+   * 退出时按此恢复；只记被改动的行。
+   */
+  mcpNotes?: Array<{ id: string; note: string | null }>
 }
 export interface ModeState { scene: string | null; snapshot: ModeSnapshot | null }
 
@@ -103,18 +114,35 @@ export function normalizeMcpSpec(raw: unknown): Record<string, '*' | string[]> |
   return out
 }
 
+/**
+ * MCP 场景备注规范化：serverName → 非空备注文本；空值/畸形形态丢弃。
+ * 空对象返回 `{}`（段已定义但无覆盖 = 合法，键存在即段已定义）。
+ */
+export function normalizeMcpNotes(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string> = {}
+  for (const [serverRaw, v] of Object.entries(raw as Record<string, unknown>)) {
+    const server = serverRaw.trim()
+    const note = String(v ?? '').trim()
+    if (!server || !note) continue
+    out[server] = note
+  }
+  return out
+}
+
 /** 'mcp'/'skills'/'subagents'/'memories' 键存在且值非 null 才视为"段已定义"——存在性独立于集合空否（null/缺失 = 未定义）。 */
 export function normalizeArchive(raw: unknown): SceneArchive {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const out: SceneArchive = {}
   if (obj.mcp != null) { const mcp = normalizeMcpSpec(obj.mcp); if (mcp) out.mcp = mcp }
+  if (obj.mcpNotes != null) out.mcpNotes = normalizeMcpNotes(obj.mcpNotes)
   if (obj.skills != null) out.skills = normalizeStringList(obj.skills)
   if (obj.subagents != null) out.subagents = normalizeStringList(obj.subagents)
   if (obj.memories != null) out.memories = normalizeStringList(obj.memories)
   return out
 }
 
-export function hasSection(archive: SceneArchive, section: 'mcp' | 'skills' | 'subagents' | 'memories'): boolean {
+export function hasSection(archive: SceneArchive, section: 'mcp' | 'skills' | 'subagents' | 'memories' | 'mcpNotes'): boolean {
   return archive[section] !== undefined
 }
 
@@ -232,6 +260,8 @@ export function snapshotRuntime(
   skillSources: Array<{ root: string; enabled: boolean }> = [],
   /** **将被档案启用**的人设名（改动前停用的子集；退出时按此停回）。 */
   subagents: string[] = [],
+  /** **将被档案改动**的备注行，带改动前的备注（null = 原本没有）。 */
+  mcpNotes: Array<{ id: string; note: string | null }> = [],
 ): ModeSnapshot {
   return {
     mcp: Object.fromEntries(Object.entries(mcpRaw).map(([k, v]) => [k, v.slice()])),
@@ -239,6 +269,7 @@ export function snapshotRuntime(
     mcpServers: mcpServers.map((x) => ({ id: x.id, level: x.level, disabled: x.disabled })),
     skillSources: skillSources.map((x) => ({ root: x.root, enabled: x.enabled })),
     ...(subagents.length ? { subagents: subagents.slice() } : {}),
+    ...(mcpNotes.length ? { mcpNotes: mcpNotes.map((x) => ({ id: x.id, note: x.note })) } : {}),
   }
 }
 

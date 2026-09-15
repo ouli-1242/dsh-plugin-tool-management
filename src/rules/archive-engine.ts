@@ -47,6 +47,12 @@ export interface ArchiveEngineDeps {
   mcpServerStates(): Promise<McpServerState[]>
   /** 改**服务器级**启停（写补丁文件，宿主热生效 ≤5s；引擎保证串行）。 */
   applyMcpServerSwitches(switches: Array<{ id: string; level: string; enabled: boolean }>): Promise<void>
+  /** 当前 MCP 备注（loader entry id → 备注文本）。 */
+  currentMcpNotes(): Promise<Record<string, string>>
+  /** 写/删 MCP 备注：`note` 为 null = 删除该 id 的备注。引擎保证串行。 */
+  applyMcpNotes(entries: Array<{ id: string; note: string | null }>): Promise<void>
+  /** serverName → loader entry id（写备注按 id，场景档案按 serverName 存）。查不到返回 undefined。 */
+  mcpIdOfServer(serverName: string): Promise<string | undefined>
   /** 各技能来源的启停现状。来源关闭时技能级的 enable 会被吞掉，所以必须能改来源级。 */
   skillSourceStates(): Promise<SkillSourceState[]>
   /** 改**来源级**启停。 */
@@ -106,6 +112,11 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
     const mcp = Object.fromEntries(Object.entries(snapshot.mcp).map(([k, v]) => [k, v.slice()]))
     await deps.applyMcpEntries(mcp)
     await deps.applySkills({ ...snapshot.skills })
+    // 备注：按快照原值写回（null = 原本没有，删除）。模式期间的手动备注改动不保留（同 §2.2）。
+    const notes = snapshot.mcpNotes ?? []
+    if (notes.length) {
+      await deps.applyMcpNotes(notes.map((x) => ({ id: x.id, note: x.note })))
+    }
     // 子智能体开关：只停「进入时被这次启用过的」那些（老 snapshot 没有这栏 → []，按旧行为跳过）。
     const personas = snapshot.subagents ?? []
     if (personas.length) {
@@ -155,6 +166,14 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         }
         // 只剔除「全 stale」段：空段是合法值（全不勾 = 全部停用），必须留下来。
         if (hadKeys && Object.keys(archive.mcp).length === 0) delete archive.mcp
+      }
+      if (archive.mcpNotes) {
+        const configured = await deps.configuredServers()
+        for (const server of Object.keys(archive.mcpNotes)) {
+          if (configured.indexOf(server) < 0) { stale.push('mcpNotes/' + server); delete archive.mcpNotes[server] }
+        }
+        // 空段 = 无覆盖（与未定义行为相同：进入场景不覆盖任何备注），删除以免歧义。
+        if (Object.keys(archive.mcpNotes).length === 0) delete archive.mcpNotes
       }
       if (archive.skills) {
         const known = await deps.knownSkillKeys()
@@ -222,7 +241,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       //   ① 场景开关（P6）是唯一入口，纯记忆场景点开关不能报错；
       //   ② 顶部「当前模式」横幅的渲染条件是 `mode.scene`，不写就永远不显示 ——
       //      用户裁定：无档案场景开开关也要显示横幅，副标题走 `scenes.mode.noProfile`。
-      const appliesArchive = !!archive && (hasSection(archive, 'mcp') || hasSection(archive, 'skills') || hasSection(archive, 'subagents'))
+      const appliesArchive = !!archive && (hasSection(archive, 'mcp') || hasSection(archive, 'skills') || hasSection(archive, 'subagents') || hasSection(archive, 'mcpNotes'))
       // 先算计划、再拍快照：快照只记**将被改动**的服务器行 / 来源 / 人设（带改动前的状态），
       // 退出时按记录精确恢复 —— 不动用户手动设置的其他行。
       let mcpPlan: McpPlan | null = null
@@ -254,6 +273,33 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           return { ok: false, error: `读取人设开关状态失败（未改动任何东西）：${msg(e)}` }
         }
       }
+      // 场景备注（v0.8.1）：把 `mcpNotes`（serverName → 场景备注）映射到 loader id，
+      // 记录**改动前**的备注（快照恢复用），应用时写进 notes.json 覆盖全局备注。
+      let noteTargets: Array<{ id: string; note: string }> | null = null
+      let noteBefore: Array<{ id: string; note: string | null }> = []
+      if (archive && archive.mcpNotes) {
+        try {
+          const current = await deps.currentMcpNotes()
+          const targets: Array<{ id: string; note: string }> = []
+          const before: Array<{ id: string; note: string | null }> = []
+          // 只对**mcp 段里实际勾选**的服务器应用场景备注：未勾选的服务器该场景根本不用它，
+          // 覆盖它的全局备注属于误伤（2026-09-16 用户实测「没勾的服务器备注也变了」）。
+          const selectedServers = archive.mcp ? Object.keys(archive.mcp) : []
+          for (const [server, note] of Object.entries(archive.mcpNotes)) {
+            if (selectedServers.indexOf(server) < 0) continue
+            const id = await deps.mcpIdOfServer(server)
+            if (id === undefined) continue // 保存时已 stale 过，这里再兜底
+            targets.push({ id, note })
+            before.push({ id, note: current[id] ?? null })
+          }
+          if (targets.length) {
+            noteTargets = targets
+            noteBefore = before
+          }
+        } catch (e) {
+          return { ok: false, error: `读取备注状态失败（未改动任何东西）：${msg(e)}` }
+        }
+      }
       const snapshot = appliesArchive
         ? snapshotRuntime(
             await deps.currentMcpRaw(),
@@ -262,6 +308,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
             (mcpPlan?.serverSwitches ?? []).map((s) => ({ id: s.id, level: s.level, disabled: s.disabledBefore })),
             (skillsPlan?.sourceSwitches ?? []).map((s) => ({ root: s.root, enabled: s.enabledBefore })),
             personaRestore,
+            noteBefore,
           )
         : null
       const entered: ArchiveIndexSlice = { ...slice, mode: { scene: target, snapshot }, active: [target] }
@@ -293,6 +340,10 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         if (boundPersonas.length) {
           await deps.applySubagentSwitches(boundPersonas.map((n) => ({ name: n, enabled: true })))
         }
+        // ④ 场景备注：覆盖全局备注（notes.json）。恢复走快照的 mcpNotes 原值。
+        if (noteTargets && noteTargets.length) {
+          await deps.applyMcpNotes(noteTargets.map((x) => ({ id: x.id, note: x.note })))
+        }
       } catch (e) {
         // 无档案段时没有运行时改动可回滚（snapshot 为 null）。
         return snapshot ? await rollback(slice, snapshot, '应用档案', e) : { ok: false, error: `应用档案失败：${String((e as Error)?.message || e)}` }
@@ -306,7 +357,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       return {
         ok: true,
         mode: entered.mode,
-        applied: { mcp: !!(archive && archive.mcp), skills: !!(archive && archive.skills), subagents: !!(archive && archive.subagents) },
+        applied: { mcp: !!(archive && archive.mcp), mcpNotes: !!(archive && archive.mcpNotes), skills: !!(archive && archive.skills), subagents: !!(archive && archive.subagents) },
         // 上层实际切换了几个（0 = 本来就已经是目标状态，界面不必提示"已停用 N 台"）。
         switched: {
           mcpServers: mcpPlan ? mcpPlan.serverSwitches.length : 0,

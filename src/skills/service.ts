@@ -13,6 +13,7 @@ import {
   state,
   setSkillEnabled,
   setPreferredSkill,
+  markSkillsDisabled,
   setSourceEnabled,
   setSourceRemoved,
   deleteSkill,
@@ -443,25 +444,42 @@ export function createSkillsService(ctx: any): SkillsService {
         // requestRoot 未命中时回传原始 key，让 core 的 error.root.unknown 带上来源名
         // （否则传了不存在的 root 会收到「技能来源不存在：(空)」这种指错方向的提示）。
         const key = String(args.root || 'hub')
-        return createSkill(
+        const res = await createSkill(
           { name: args.name, description: args.description, body: args.body },
           log,
           { root: (await requestRoot(key)) || key },
         )
+        // v0.8.5：新建技能默认不启动（用户裁定）——与子智能体 / MCP 同口径。
+        if (res && res.ok !== false && res.name) {
+          await markSkillsDisabled([{ root: String(res.root || 'hub'), name: String(res.name) }], log).catch(() => undefined)
+        }
+        return res
       }),
       afterWrite,
     ),
     'skill-import': wrap(
-      (args) => write(() => importSkill(String(args.source || ''), log, {
-        conflict: args.conflict === 'overwrite' ? 'overwrite' : 'skip',
-        dryRun: args.dryRun === true,
-      })),
+      (args) => write(async () => {
+        const res = await importSkill(String(args.source || ''), log, {
+          conflict: args.conflict === 'overwrite' ? 'overwrite' : 'skip',
+          dryRun: args.dryRun === true,
+        })
+        // 导入的技能默认停用；部分成功也对 imported 逐条停用。
+        const names = res && Array.isArray(res.imported) ? res.imported : []
+        if (names.length) await markSkillsDisabled(names.map((n: unknown) => ({ root: 'hub', name: String(n) })), log).catch(() => undefined)
+        return res
+      }),
       afterWrite,
     ),
     'skill-upload': wrap(
-      (args) => write(() => importUploadedSkill({ name: args.name, entries: args.entries, zip: args.zip }, log, {
-        conflict: args.conflict === 'overwrite' ? 'overwrite' : 'skip',
-      })),
+      (args) => write(async () => {
+        const res = await importUploadedSkill({ name: args.name, entries: args.entries, zip: args.zip }, log, {
+          conflict: args.conflict === 'overwrite' ? 'overwrite' : 'skip',
+        })
+        // 上传/导入同口径：默认停用。
+        const names = res && Array.isArray(res.imported) ? res.imported : (res && res.name ? [res.name] : [])
+        if (names.length) await markSkillsDisabled(names.map((n: unknown) => ({ root: 'hub', name: String(n) })), log).catch(() => undefined)
+        return res
+      }),
       afterWrite,
     ),
     'skill-delete': wrap(
@@ -469,7 +487,14 @@ export function createSkillsService(ctx: any): SkillsService {
       afterWrite,
     ),
     'skill-trash-restore': wrap(
-      (args) => write(() => restoreTrash(String(args.id || ''), log, projectOptions())),
+      (args) => write(async () => {
+        const res = await restoreTrash(String(args.id || ''), log, projectOptions())
+        // 恢复的技能默认停用（v0.8.5 用户裁定：新建/导入/恢复一律不启动，手动开启）。
+        if (res && res.ok !== false && res.name) {
+          await markSkillsDisabled([{ root: String(res.root || 'hub'), name: String(res.name) }], log).catch(() => undefined)
+        }
+        return res
+      }),
       afterWrite,
     ),
     'skill-trash-delete': wrap(

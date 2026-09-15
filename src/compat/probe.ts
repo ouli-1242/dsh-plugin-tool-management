@@ -44,15 +44,17 @@ export const IDENTITY_PACKAGES = [
   '@deepseek-ai/dsh-spill-local',
 ] as const
 
-/** Peers this plugin was written and verified against. */
-export const EXPECTED_PEER_RANGE = '>=0.1.5-rc.2 <0.2.0-0'
+/** Peers this plugin was written and verified against（只声明最低版本，无上界）。 */
+export const EXPECTED_PEER_RANGE = '>=0.1.5-rc.2'
 /** The release this plugin's adapters were last verified against. */
 export const VERIFIED_HOST_VERSION = '0.1.5-rc.2'
 /**
  * peer range 的下界 —— 界面展示用。
  *
- * 上界 `<0.2.0-0` 是 semver「不跨下一个 minor」的**约定写法**，不是被支持的版本；
- * 把它当作「要求范围」展示会让人以为插件支持一批尚不存在的版本。
+ * 刻意不带 semver 上界：官方持续发版，硬上界会在宿主跨 minor 升级时直接挡住
+ * 插件安装（pnpm peer 校验失败）。上界改为由**运行时能力探测**兜底 ——
+ * 宿主版本高于已验证范围时，`assessHost` 会逐项探测并把缺失能力降级/禁用，
+ * 而不是在安装期拒绝整包。展示时只应把「最低要求版本」当事实。
  * 从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
  */
 export const EXPECTED_MIN_HOST_VERSION =

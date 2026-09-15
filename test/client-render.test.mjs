@@ -100,7 +100,7 @@ function compatFixture() {
       : [],
     mayDelete: true,
     verifiedVersion: '0.1.5-rc.2',
-    expectedPeerRange: '>=0.1.5-rc.2 <0.2.0-0',
+    expectedPeerRange: '>=0.1.5-rc.2',
     generatedAt: 1757836000000,
     summary: '宿主 0.1.5-rc.2 · 能力 ' + String(findings.length - degraded.length) + '/' + String(findings.length)
       + (degraded.length ? ' · 降级 ' + String(degraded.length) + ' 项' : ' · 全部可用'),

@@ -1821,6 +1821,35 @@ export async function setSkillEnabled(root, name, enabled, log) {
 }
 
 /**
+ * 批量显式停用技能（v0.8.5：新建 / 导入 / 回收站恢复默认不启动 —— 用户裁定）。
+ * 直接写 disabledSkills 名单（与 setSkillEnabled 同一张表），不做 frontmatter 等
+ * 二次校验——调用方传入的必然是刚落盘/刚恢复的条目。
+ * 必须在调用方的写锁（service 的 write()）内执行。
+ * @param {{ root: string, name: string }[]} entries - root = 来源 key。
+ */
+export async function markSkillsDisabled(entries, log) {
+  const list = Array.isArray(entries) ? entries : [];
+  const clean = list
+    .map((e) => ({ root: String((e && e.root) || ""), name: String((e && e.name) || "") }))
+    .filter((e) => e.root !== "" && e.name !== "");
+  if (!clean.length) return { ok: true };
+  const current = await readManagerState();
+  if (current.writable === false) return invalidManagerStateWrite();
+  let dirty = false;
+  for (const e of clean) {
+    const prev = current.state.disabledSkills[e.root] || [];
+    if (prev.indexOf(e.name) >= 0) continue;
+    current.state.disabledSkills[e.root] = [...prev, e.name].sort();
+    dirty = true;
+  }
+  if (dirty) {
+    await writeManagerState(current.state);
+    if (log) log("skill-disable-default", `默认停用 ${clean.map((e) => `${e.root}/${e.name}`).join("、")}`);
+  }
+  return { ok: true };
+}
+
+/**
  * 同名技能「首选来源」：默认同名技能按来源 rank 取优先级最高者生效、其余显示为被覆盖；
  * 这里让用户显式指定哪个同名技能生效（preferred=false 取消，回到 rank 顺序）。
  * 只写本地策略，不改任何源文件。

@@ -65,7 +65,8 @@ export function renderSubagentCatalog(
   const out = [
     '## 子智能体（人设）',
     '',
-    '需要委派独立任务时，用 `subagent_run` 并指定下面的人设名。',
+    '如需要委派独立任务，可从下面的人设中选用合适的（也可先用 `subagent_list` 查看全部人设）。',
+    '用 `subagent_run` 委派时，该人设的完整提示词会成为子代理的系统提示词，子代理在独立上下文中执行，只返回最终结果。',
     '',
     ...lines,
   ]

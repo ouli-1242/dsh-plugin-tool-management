@@ -159,6 +159,8 @@ type HistoryGroupView = {
   registered?: boolean
   /** 目录当前存在，可一键重新登记为工作区（仅 detached 组有意义）。 */
   canRegister?: boolean
+  /** 会话目录已从磁盘删除（detached 组且 canRegister=false）：无法重新登记，提示用户会话仍可恢复/删除。 */
+  dirMissing?: boolean
 }
 
 /** 归档工作区注册表（折叠自 dsh-archive-manager）的最小调用面。 */
@@ -513,8 +515,12 @@ export default {
         const out: Record<string, string[]> = {}
         const raw = await readDisabledTools()
         for (const [server, list] of Object.entries(raw)) out[server] = list.filter((t) => t !== '*')
+        // 「已知工具」缓存：未运行服务器也能按最后见过的名单计算补集。
+        for (const [server, list] of Object.entries(await readKnownMcpTools())) {
+          out[server] = [...new Set([...(out[server] || []), ...list])].sort()
+        }
         let schemas: any[] = []
-        try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅启停表 */ }
+        try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅停用表 + 缓存 */ }
         for (const s of schemas) {
           const p = toolKeyParts(String((s && s.name) || ''))
           if (!p) continue
@@ -581,6 +587,28 @@ export default {
         }
         // 补丁改动由宿主热重载（实测 ≤5s）。这里**不等**，避免进入模式被拖住十几秒；
         // 界面在应用完成后即可用，工具集合会在数秒内补齐。
+      },
+      // 场景备注（v0.8.1）：备注写在 `dsh-plugin-tool-management-notes.json`（按 loader id），
+      // 场景档案按 serverName 存 —— 引擎负责映射与读写，与 mcpm-note 同一条写锁。
+      currentMcpNotes: async () => ({ ...(await readNotes()) }),
+      applyMcpNotes: async (entries) => {
+        await withWriteLock(async () => {
+          const map = Object.assign({}, await readNotes(true))
+          for (const e of entries) {
+            if (e.note) map[e.id] = e.note
+            else delete map[e.id]
+          }
+          const p = await ensurePaths()
+          await writeJsonFile(sidecarPath(p.home, 'dsh-plugin-tool-management-notes.json'), map)
+          notesCache = { at: Date.now(), value: map }
+        })
+      },
+      mcpIdOfServer: async (serverName) => {
+        const r: any = await mcpmListView()
+        for (const row of ((r && r.rows) || [])) {
+          if (String(row.serverName || row.id) === serverName) return String(row.id)
+        }
+        return undefined
       },
       skillSourceStates: async () => {
         const r: any = await skillsService.ops['skill-state']({})
@@ -733,7 +761,12 @@ export default {
           }
         } catch { /* 守卫读状态失败不拦正常流程（引擎自身校验兜底） */ }
         const res: any = await baseSceneModeSet(args)
-        if (res && res.ok !== false) void subagentCatalog.refresh()
+        if (res && res.ok !== false) {
+          // 进/退/切换模式会改 MCP 启停（服务器级）与备注（场景备注覆盖/恢复），
+          // 状态段必须立即重算 —— 场景退出后下一次请求就该看到恢复的全局备注与启停。
+          void subagentCatalog.refresh()
+          void mcpStateCatalog.refresh()
+        }
         return res
       }
     }
@@ -1645,6 +1678,32 @@ export default {
       }
       return out
     }
+    // ---------- 「已知工具」侧车（v0.8.1）-----------------------------------
+    // MCP 工具名只在服务器**运行**时可见（tools.schemas() 里才有）。未运行的服务器在
+    // 场景档案里既显示 0 工具、工具明细也空空如也 —— 用户没法给未运行服务器挑工具。
+    // 每次枚举到 live 工具时按 serverName 记一份「最后见过的工具名」，未运行时用它兜底：
+    // 场景档案能列出/勾选，进入场景后按实际注册的工具生效（restrict 会过滤掉不存在的名字）。
+    const KNOWN_MCP_TOOLS_FILE = 'dsh-plugin-tool-management-mcp-tools.json'
+    let knownMcpToolsCache: { at: number; value: Record<string, string[]> } | null = null
+    async function readKnownMcpTools(force = false): Promise<Record<string, string[]>> {
+      if (knownMcpToolsCache && !force && Date.now() - knownMcpToolsCache.at < SIDECAR_TTL_MS) return knownMcpToolsCache.value
+      const p = await ensurePaths()
+      const raw = await readJsonFile(sidecarPath(p.home, KNOWN_MCP_TOOLS_FILE))
+      const out: Record<string, string[]> = {}
+      if (raw && typeof raw === 'object') {
+        for (const serverName of Object.keys(raw)) {
+          const list = (raw as Record<string, unknown>)[serverName]
+          if (Array.isArray(list)) out[serverName] = list.map((name) => String(name)).filter((name) => /^[A-Za-z0-9_-]{1,128}$/.test(name)).sort()
+        }
+      }
+      knownMcpToolsCache = { at: Date.now(), value: out }
+      return out
+    }
+    async function writeKnownMcpTools(value: Record<string, string[]>): Promise<void> {
+      const p = await ensurePaths()
+      await writeJsonFile(sidecarPath(p.home, KNOWN_MCP_TOOLS_FILE), value)
+      knownMcpToolsCache = { at: Date.now(), value: value }
+    }
     /** 单工具停用判定（含整服务器通配 `*`——场景档案的"MCP 工具集=整台"写的就是它）。 */
     function isToolDisabled(map: Record<string, string[]>, fullName: string): boolean {
       if (!fullName.startsWith('mcp__')) return false
@@ -1835,7 +1894,67 @@ export default {
           toolsList.push({ name, description: '（已停用；描述暂不可用）', enabled: false, parameters: [] })
         }
       }
+      // 「已知工具」缓存兜底：服务器没运行时 schemas() 里没有它任何工具 —— 场景档案里
+      // 想给未运行服务器挑工具就全靠这份最后见过的名单（描述/参数不可用，按名字勾选）。
+      for (const name of (await readKnownMcpTools())[serverName] || []) {
+        if (listed.has(name)) continue
+        toolsList.push({ name, description: '（服务器未运行；描述暂不可用）', enabled: !disabledHere.has(name), parameters: [] })
+        listed.add(name)
+      }
       return { ok: true, tools: toolsList }
+    }
+
+    /**
+     * 临时启动服务器以枚举工具（v0.8.1）：从未运行过的服务器在 schemas() 与「已知工具」
+     * 缓存里都没有工具名，场景档案勾选器对它一无所知。这里**临时**把它启用（写补丁），
+     * 轮询等它的工具注册（npx 冷启动要下载，上限 30s），拿到名单后就**恢复原启停状态**——
+     * 用户环境的服务器开关不受影响。已有已知工具时直接返回现有清单，不做任何改动。
+     */
+    async function mcpmToolsRefresh(args: any): Promise<any> {
+      const serverName = String((args && args.serverName) || '').trim()
+      if (!serverName) return { ok: false, error: 'serverName 不能为空' }
+      const existing = await mcpmTools({ serverName })
+      if (existing && existing.ok === false) return existing
+      if (existing && (existing.tools || []).length) return existing
+      const list = await mcpmListView()
+      const row = ((list && list.rows) || []).find((r: any) => String(r.serverName) === serverName)
+      if (!row) return { ok: false, error: `未找到服务器: ${serverName}` }
+      if (row.level !== 'global' && row.level !== 'project') {
+        return { ok: false, error: `该服务器不驻留在补丁文件（level=${row.level}），无法临时启动；请先在 MCP 页启用它一次以记录工具` }
+      }
+      const wasDisabled = !!row.disabled
+      try {
+        if (wasDisabled) {
+          const r: any = await mcpmSetEnabled({ id: row.id, level: row.level, enabled: true })
+          if (r && r.ok === false) return r
+        }
+        const deadline = Date.now() + 30000
+        for (;;) {
+          const t: any = await mcpmTools({ serverName })
+          if (t && t.ok && (t.tools || []).length) {
+            // 记进「已知工具」缓存：以后未运行时场景档案也能列出。
+            const names = t.tools.map((x: any) => String(x.name)).filter(Boolean)
+            if (names.length) {
+              try {
+                const cache = await readKnownMcpTools()
+                const merged = [...new Set([...(cache[serverName] || []), ...names])].sort()
+                cache[serverName] = merged
+                await writeKnownMcpTools(cache)
+              } catch { /* 缓存写失败不影响本次返回 */ }
+            }
+            return t
+          }
+          if (Date.now() >= deadline) break
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+        return { ok: false, error: `等待超时：${serverName} 在 30 秒内没有注册任何工具（服务器可能启动失败或连接过慢）` }
+      } finally {
+        if (wasDisabled) {
+          const r: any = await mcpmSetEnabled({ id: row.id, level: row.level, enabled: false })
+          if (!r || r.ok === false) console.warn('[dsh-plugin-tool-management] mcpm-tools-refresh: 恢复服务器停用状态失败', serverName)
+        }
+        void mcpStateCatalog.refresh()
+      }
     }
 
     async function mcpmList(): Promise<any> {
@@ -1852,20 +1971,38 @@ export default {
       const toolCounts: Record<string, number> = {}
       try {
         const schemas = await tools.schemas()
+        const knownCache = await readKnownMcpTools()
+        const liveNames: Record<string, string[]> = {}
         const seen = new Set<string>()
         for (const s of schemas) {
           const fullName = String(s && s.name || '')
-          seen.add(fullName)
-          const m = fullName.match(/^mcp__([A-Za-z0-9_-]+)__/)
-          if (m) toolCounts[m[1]] = (toolCounts[m[1]] || 0) + 1
-        }
-        // Restricted tools may be absent from schemas(); they still belong to
-        // the per-server count so the UI does not show a phantom drop.
-        for (const fullName of disabledToolNames(await readDisabledTools())) {
           if (seen.has(fullName)) continue
-          const m = fullName.match(/^mcp__([A-Za-z0-9_-]+)__/)
-          if (m) toolCounts[m[1]] = (toolCounts[m[1]] || 0) + 1
+          seen.add(fullName)
+          const m = fullName.match(/^mcp__([A-Za-z0-9_-]+)__(.+)$/)
+          if (!m) continue
+          const list = liveNames[m[1]] || (liveNames[m[1]] = [])
+          if (list.indexOf(m[2]) < 0) list.push(m[2])
         }
+        // 工具数 = live ∪ 停用表里的单个工具名 ∪ 「已知工具」缓存 —— 未运行的服务器
+        // 也能显示最后一次见过的工具数，而不是永远 0。
+        const union: Record<string, Set<string>> = {}
+        const addTool = (server: string, tool: string) => {
+          if (!server || !tool) return
+          const set = union[server] || (union[server] = new Set())
+          set.add(tool)
+        }
+        for (const [server, list] of Object.entries(liveNames)) for (const t of list) addTool(server, t)
+        for (const [server, list] of Object.entries(await readDisabledTools())) for (const t of list) if (t !== '*') addTool(server, t)
+        for (const [server, list] of Object.entries(knownCache)) for (const t of list) addTool(server, t)
+        for (const [server, set] of Object.entries(union)) toolCounts[server] = set.size
+        // 回写「已知工具」：live 见到的名字并入缓存（有变化才写盘，读路径上的 best-effort）。
+        let cacheChanged = false
+        for (const [server, list] of Object.entries(liveNames)) {
+          const prev = knownCache[server] || []
+          const next = [...new Set([...prev, ...list])].sort()
+          if (next.join('\u0000') !== prev.join('\u0000')) { knownCache[server] = next; cacheChanged = true }
+        }
+        if (cacheChanged) void writeKnownMcpTools(knownCache).catch(() => { /* 侧车写失败不影响列表 */ })
       } catch (e) { /* ignore */ }
       let live: PluginInventoryEntry[] = []
       if (pluginInventory) {
@@ -1931,7 +2068,10 @@ export default {
         try { content = await readPatch(abs) } catch (e) { return { ok: false, error: '读取补丁失败: ' + message(e) } }
         const before = content
         content = appendBlock(content, buildInsertBlock(row))
-        if (args.enabled === false) content = appendBlock(content, buildDisableBlock(id, true))
+        // v0.8.5：新增服务器默认不启动（用户裁定，与技能 / 子智能体同口径）；
+        // 显式传 enabled: true 才创建即启动。
+        const defaultDisabled = args.enabled !== true
+        if (defaultDisabled) content = appendBlock(content, buildDisableBlock(id, true))
         const guard = duplicateGuard(before, content)
         if (guard) return guard
         try {
@@ -1939,7 +2079,7 @@ export default {
         } catch (e) {
           return { ok: false, error: '写入补丁失败: ' + message(e) }
         }
-        return { ok: true, row: { ...row, level, disabled: args.enabled === false } }
+        return { ok: true, row: { ...row, level, disabled: defaultDisabled } }
       })
     }
 
@@ -2409,6 +2549,18 @@ export default {
         }
         const sessionPaths = registry.sessionPaths instanceof Map ? registry.sessionPaths : undefined
         const headers = registry.headers instanceof Map ? registry.headers : undefined
+        // 「目录真实存在」检查缓存：canRegister 从「宿主 sessionPaths 命中」放宽为
+        // 「目录存在」时，同一目录只 stat 一次；结果按归一化键缓存，避免每次刷新重复探盘。
+        const dirExistsCache = new Map<string, boolean>()
+        async function directoryExists(p: string): Promise<boolean> {
+          const k = workspacePathKey(p)
+          const hit = dirExistsCache.get(k)
+          if (hit !== undefined) return hit
+          let ok = false
+          try { ok = (await stat(p)).isDirectory() } catch { ok = false }
+          dirExistsCache.set(k, ok)
+          return ok
+        }
         for (const it of items) {
           const sid = it.sessionId
           let wid = owned.get(sid)
@@ -2434,16 +2586,21 @@ export default {
           const known = snapshot ? snapshot.get(workspacePathKey(path)) : undefined
           const existing = groupsById.get(key)
           if (existing) {
-            // 同目录的多个会话：目录存在（sessionPaths 命中）即可重新登记。
-            if (canonical !== undefined) existing.canRegister = true
+            // 同目录的多个会话：宿主索引命中，或磁盘目录真实存在，即可重新登记。
+            if (canonical !== undefined || (await directoryExists(path))) {
+              existing.canRegister = true
+              existing.dirMissing = false
+            }
             continue
           }
+          const canRegister = canonical !== undefined || (await directoryExists(path))
           const view: HistoryGroupView = {
             id: key,
             title: known?.title || workspaceBaseName(path) || path,
             kind: 'detached',
             registered: known !== undefined,
-            canRegister: canonical !== undefined,
+            canRegister,
+            dirMissing: !canRegister,
             path: known?.path || path,
           }
           groupsById.set(key, view)
@@ -2670,6 +2827,7 @@ export default {
       'mcpm-tool-enabled': mcpmToolEnabled,
       'skill-open': skillOpen,
       'mcpm-tools': mcpmTools,
+      'mcpm-tools-refresh': mcpmToolsRefresh,
       'mcpm-add': mcpmAdd,
       'mcpm-edit': mcpmEdit,
       'mcpm-set-enabled': mcpmSetEnabled,
@@ -2724,14 +2882,19 @@ export default {
           const name = String((row && row.serverName) || '')
           if (!name || seen.has(name)) continue
           seen.add(name)
+          const live = !!(row.live && row.live.enabled)
           mcpServers.push({
             name,
             level: row.level || null,
-            live: !!(row.live && row.live.enabled),
+            live,
             serverDisabled: !!row.disabled,
             // 停用表里的 ['*'] = 整台工具停用（勾选器据此预勾，避免把"全停"读成"全启用"）。
             allToolsDisabled: (disabledRaw[name] || []).indexOf('*') >= 0,
-            toolCount: typeof row.toolCount === 'number' ? row.toolCount : null,
+            // 未运行且没有任何已知工具 ⇒ null（客户端显示「工具数未知」并引导读取），
+            // 不再给出误导性的 0。
+            toolCount: live || Number(row.toolCount) > 0
+              ? (typeof row.toolCount === 'number' ? row.toolCount : null)
+              : null,
           })
         }
         return {
@@ -3303,7 +3466,7 @@ export default {
     // 覆盖所有会改变「哪些 server 可用 / 有哪些备注」的写入口 —— 集中在这一处包，
     // 不需要在界面层逐个补（漏一个就会出现「改了但模型看不到」的静默不一致）。
     for (const opName of ['mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all',
-      'mcpm-restart', 'mcpm-note', 'mcpm-tool-enabled', 'mcpm-import', 'mcpm-compact']) {
+      'mcpm-restart', 'mcpm-note', 'mcpm-tool-enabled', 'mcpm-import', 'mcpm-compact', 'mcpm-tools-refresh']) {
       const original = handlers[opName]
       if (typeof original !== 'function') continue
       handlers[opName] = async (args: any) => {
@@ -3669,9 +3832,14 @@ export default {
     if (typeof ctx.on === 'function') {
       try {
         // MCP servers (de)register their tools as instances come and go; the
-        // visible-set restriction must track that.
+        // visible-set restriction must track that — and so must the MCP state
+        // section: 工具加载完成后若不重算，段会一直停留在「空/旧集合」的缓存值上
+        //（用户切 MCP 后立即看系统提示词就是空段 —— 2026-09-16 实测）。
         ctx.effect(() => {
-          const stop = (ctx.on as (event: string, cb: () => void) => (() => void) | void)('tools/change', () => scheduleToolRestrictions())
+          const stop = (ctx.on as (event: string, cb: () => void) => (() => void) | void)('tools/change', () => {
+            scheduleToolRestrictions()
+            void mcpStateCatalog.refresh()
+          })
           return typeof stop === 'function' ? stop : () => {}
         }, 'dsh-plugin-tool-management: tools/change listener')
       } catch (e) { /* ignore */ }

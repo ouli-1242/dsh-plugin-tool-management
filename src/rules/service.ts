@@ -647,7 +647,7 @@ function parseArchives(raw: unknown): Record<string, SceneArchive> {
   return out
 }
 
-function parseModeState(raw: unknown): ModeState {
+export function parseModeState(raw: unknown): ModeState {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const scene = typeof obj.scene === 'string' && obj.scene.trim() !== '' ? obj.scene : null
   const snapshotRaw = (obj.snapshot && typeof obj.snapshot === 'object' ? obj.snapshot : {}) as Record<string, unknown>
@@ -690,6 +690,12 @@ function parseModeState(raw: unknown): ModeState {
     .map((x) => ({ root: String(x.root || ''), enabled: x.enabled === true }))
     .filter((x) => x.root !== '')
   const subagents = (Array.isArray(snapshotRaw.subagents) ? snapshotRaw.subagents : []).map((x) => String(x)).filter(Boolean)
+  // v0.8.1 的场景备注恢复名单：**必须原样透传**——这里漏掉它，退出模式时备注永不回退
+  //（与历史上 mcpServers / skillSources 被剥掉是同一类 bug）。
+  const mcpNotes = (Array.isArray(snapshotRaw.mcpNotes) ? snapshotRaw.mcpNotes : [])
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+    .map((x) => ({ id: String(x.id || ''), note: typeof x.note === 'string' ? x.note : null }))
+    .filter((x) => x.id !== '')
   return {
     scene,
     snapshot: scene
@@ -699,6 +705,7 @@ function parseModeState(raw: unknown): ModeState {
           ...(mcpServers.length ? { mcpServers } : {}),
           ...(skillSources.length ? { skillSources } : {}),
           ...(subagents.length ? { subagents } : {}),
+          ...(mcpNotes.length ? { mcpNotes } : {}),
         }
       : null,
   }
@@ -1196,7 +1203,7 @@ function renderSceneMemory(
   let seq = 0
   for (const scene of [...buckets.keys()].sort((a, b) => compareSceneBuckets(a, b, index))) {
     const sceneFiles = (buckets.get(scene) || []).slice().sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
-    const header = `${sceneHeading(scene)}\n\n`
+    const header = `${sceneHeading(scene)}\n\n${SCENE_MEMORY_NOTE}\n\n`
     for (const file of sceneFiles) {
       const block = `### ${ruleHeading(file)}\n\n${String(file.body ?? '').trim()}\n`
       candidates.push({
@@ -1329,6 +1336,12 @@ function sceneLabel(scene: string, index?: RulesIndex): string {
 
 /** 场景标题：`''` → 全局；其余用目录名（可追溯）。 */
 const sceneHeading = (scene: string): string => `## 场景记忆：${sceneLabel(scene)}`
+
+/**
+ * 场景标题后的固定引导语（常量，不破坏前缀缓存稳定）：让模型知道这段是当前场景的
+ * 常驻参考知识，而不是对话历史或临时说明 —— 相关就用、无关可忽略。
+ */
+const SCENE_MEMORY_NOTE = '（本场景的常驻参考知识：与当前任务相关时直接采用，无关时忽略）'
 
 /** 单条记忆的标题：显式 description 优先；派生描述与正文重复，改用文件名。 */
 const ruleHeading = (f: SceneMemoryFile): string => (
