@@ -446,15 +446,17 @@ export function managerHomePath() {
 }
 
 export function managerStatePath() {
-  return join(managerHomePath(), "state.json");
+  return join(managerHomePath(), "skills-state.json");
 }
 
+/** 技能回收站：与其余四类同形（`hub/trash/<域>-trash/`）。 */
 export function trashRootPath() {
-  return join(managerHomePath(), "trash");
+  return join(managerHomePath(), "trash", "skills-trash");
 }
 
+/** 插件日志（滚动 `.1`）：收在 hub 内，不再躺在 `$DSH_HOME` 根下。 */
 export function logPath() {
-  return join(resolveDshHome(), "dsh-plugin-tool-management.log");
+  return join(managerHomePath(), "tool-management.log");
 }
 
 /**
@@ -972,7 +974,7 @@ async function writeFileAtomically(path, content) {
     await fs.writeFile(temp, content, "utf8");
     // Windows 上目标文件会被杀软/索引器短暂占住（EPERM/EACCES/EBUSY）——
     // 场景模式进出时这里写的是技能来源/策略状态，rename 被撞 = 运行时已切、
-    // 状态没落盘。与 rules-index.json 同一处理：重试瞬时占用，全失败才抛。
+    // 状态没落盘。与 memories-index.json 同一处理：重试瞬时占用，全失败才抛。
     await renameWithRetry(temp, path);
   } catch (error) {
     await fs.rm(temp, { force: true }).catch(() => undefined);

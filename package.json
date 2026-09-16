@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-tool-management",
-  "version": "0.8.5",
-  "description": "DSH plugin: one settings panel for MCP servers, skills, scenes, memories, subagents, AGENTS.md presets and archived sessions — scene memory injects into the system prompt, scene lock freezes all five domains, deleted workspaces re-register with one click. Settings UI + HTTP API + 14 model tools (skill_mcp_manager_*, skill_manager_*, agentsmd_*, rule_manager_*, subagent_*). Install with one command: dsh plugin --profile web add dsh-plugin-tool-management@latest",
+  "version": "0.9.0",
+  "description": "DSH plugin: one settings panel for MCP servers, skills, scenes, memories, subagents, AGENTS.md presets and archived sessions — scene memory injects into the system prompt, scene lock freezes all five domains, deleted workspaces re-register with one click. Settings UI + HTTP API + 14 model tools (mcp_manager_*, skill_manager_*, prompt_manager_*, memory_manager_*, subagent_*). Install with one command: dsh plugin --profile web add dsh-plugin-tool-management@latest",
   "repository": {
     "type": "git",
     "url": "https://github.com/ouli-1242/dsh-plugin-tool-management"
@@ -41,7 +41,8 @@
     "check:host": "node scripts/host-deps.mjs && node scripts/doctor.mjs",
     "host-deps": "node scripts/host-deps.mjs --fix",
     "doctor": "node scripts/doctor.mjs",
-    "test": "npm run build && npm run check:i18n && node --test test/archive.test.mjs test/import.test.mjs test/approval-policy.test.mjs test/subagent-scene.test.mjs test/subagent-persona.test.mjs test/hub-layout.test.mjs test/skills-state.test.mjs test/skills-delete.test.mjs test/skills-source-remove.test.mjs test/client-exports.test.mjs test/client-render.test.mjs test/compat-probe.test.mjs test/compat-fallback.test.mjs test/preset-reach.test.mjs test/rules-toggle-args.test.mjs"
+    "test": "npm run build && npm run check:i18n && node --test test/client-exports.test.mjs test/client-render.test.mjs",
+    "sync:profile": "node scripts/sync-profile.mjs"
   },
   "keywords": [
     "dsh",
@@ -66,12 +67,14 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2",
-    "@deepseek-ai/dsh-workspace": ">=0.1.5-rc.2",
-    "@deepseek-ai/dsh-spill-local": ">=0.1.5-rc.2",
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": ">=0.1.5-rc.2",
     "@deepseek-ai/dsh-session-projection-cache": ">=0.1.5-rc.2",
+    "@deepseek-ai/dsh-spill-local": ">=0.1.5-rc.2",
     "@deepseek-ai/dsh-storage-domain": ">=0.1.5-rc.2",
     "@deepseek-ai/dsh-subagent-spawn-in-process": ">=0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2",
+    "@deepseek-ai/dsh-workspace": ">=0.1.5-rc.2",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -81,6 +84,8 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-session-projection-cache": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-spill-local": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-storage-domain": "^0.1.5-rc.2",

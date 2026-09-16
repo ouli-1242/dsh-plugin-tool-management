@@ -1,21 +1,23 @@
 // dsh-plugin-tool-management —— 规则/记忆（Rules v0.3，见 CHANGE-REQUEST-01）服务层。
 //
-// 记忆 = $DSH_HOME/tool-management/memories/<场景>/<name>.md（flat）或 <场景>/<name>/SKILL.md（bundle）。
+// 记忆 = $DSH_HOME/tool-management/memories/<场景>/<name>.md（flat）或 <场景>/<name>/<name>.md（bundle）。
+// 历史遗留的 bundle 正文文件名 `SKILL.md` 仍被识别（只读兼容），但新建/更新一律写 `<name>.md`。
 // **场景是显式记录**：$DSH_HOME/tool-management/scenes/<场景>.json（见 SceneRecord），
 // 不再是「memories/ 下恰好有这个名字的目录」这种隐式约定——空场景因此可以存在，
 // 且场景可以有描述。目录名即场景名（任意 Unicode，见 isValidGroupSegment）。
 // 保留场景 `global`（界面显示「全局」）：其记忆注入任何对话；它恒定存在、不可删除。
-// 勾选启用后，该目录树内所有 .md 的正文自动进入系统提示词（provider.ts 注册的
-// per-agent systemPrompt 段），模型无需做任何动作 —— 这就是"不用每次都要解释"。
+// 勾选启用后，该目录树内所有 .md 的正文自动进入模型的上下文（index.ts 注册的注入通道，
+// 每步一条消息；见 src/context-inject.ts），模型无需做任何动作 —— 这就是"不用每次都要解释"。
 //
 // 单投影（原 ADR-4 的"双投影"已被本变更单修订）：
-//   - 活动场景记忆 → systemPrompt 段（自动在场，会话级恒定 → 前缀稳定、缓存可命中）
+//   - 活动场景记忆 → 上下文注入（自动在场，会话级恒定 → 前缀稳定、缓存可命中；
+//     文本没变时不重发 —— 2026-09-16 从 systemPrompt 段改道，理由见 context-inject.ts 文件头）
 //   - `_shared/` 承担"恒常"语义（所有场景共用）；原 per-rule `always` 标志已移除
 //   - 不再写 ~/.dsh/AGENTS.md（原始终层投影下线）
 //
 // 状态分层（两份文件各司其职，互不写回）：
 //   - 规则文件：正文真源。frontmatter 可声明 name/description/whenToUse/globs/metadata。
-//   - rules-index.json：启停/排序/标签/启用场景集合等**索引为准**字段（不写回记忆文件）。
+//   - memories-index.json：启停/排序/标签/启用场景集合等**索引为准**字段（不写回记忆文件）。
 //
 // 发现必须自实现（不复用 readonly-discovery）：可写来源只扫一层会压扁子目录场景，
 // 而规则的目录树天然是多层的；且 readonly-discovery 的 flat 只认顶层。
@@ -32,7 +34,6 @@ import { copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, st
 import { basename, dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, renameWithRetry, resolveDshHome, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
-import { SECTION_ORDER, createPromptSectionRegistrar } from '../prompt-sections.js'
 import { normalizePresetId } from '../agents-md/preset-id.js'
 import { normalizeArchive, type ModeState, type SceneArchive } from './archive.js'
 import { listTrashEntries, moveOutOfTrash, moveToTrash, purgeTrashEntry, readTrashEntry } from '../hub.js'
@@ -50,12 +51,16 @@ const DEFAULT_GROUP_ORDER = 1000     // 新场景默认 order
 const SNAPSHOT_TTL_MS = 1000         // 读路径短 TTL 缓存，吸收 UI 密集轮询
 const DEFAULT_MAX_BYTES = 65536      // 场景记忆段预算上限（字节）
 const TRUNCATION_MARKER = '<!-- truncated -->'
-const DROPPED_HEADING = '## 场景记忆：未注入（超出预算）' // 段尾清单：让模型知道自己漏了什么
+// 段尾清单：让模型知道自己漏了什么。去掉伞标题后这里也不再挂「场景记忆」前缀 ——
+// 它紧跟在场景块之后，`参考信息` 与段首引导语同一说法。
+const DROPPED_HEADING = '## 未注入的参考信息（超出预算）'
 // bundle 附件限制（body 走 HTTP JSON + base64，故比技能上传收紧一档）。
 const MAX_ATTACH_ENTRY_BYTES = 8 << 20 // 单个附件 8 MiB
 const MAX_ATTACH_TOTAL_BYTES = 16 << 20 // 单次总大小 16 MiB
 const MAX_ATTACH_ENTRIES = 32 // 单次最多 32 个
-const BUNDLE_DOC = 'SKILL.md' // bundle 的正文文件（附件列表里排除）
+const LEGACY_BUNDLE_DOC = 'SKILL.md' // 旧版 bundle 的正文文件名；仅在发现/附件排除时作只读兼容，新建一律用 bundleDocName()
+/** bundle 的正文文件名 = `<记忆名>.md`（与目录名一致，不再是固定的 SKILL.md）。 */
+const bundleDocName = (name: string): string => `${name}.md`
 const SHARED_GROUP = '_shared'       // 保留场景名：公共基线（历史语义，仍可使用）
 const INDEX_VERSION = 1
 
@@ -93,13 +98,22 @@ const identity = (p: string): string => (process.platform === 'win32' ? p.toLowe
  * 场景/记忆根目录名（$DSH_HOME 下），集中在 `tool-management/` 一个目录内：
  *   - `scenes/<场景>.json`   场景记录（名称/描述/顺序）
  *   - `memories/<场景>/…`    记忆正文真源
- *   - `..`（即 tool-management 根）侧车：rules-index.json / config.json / trash/
+ *   - `..`（即 tool-management 根）侧车：memories-index.json / skills-state.json / trash/
  *
  * 历史位置 `$DSH_HOME/scene-memory/` 由 `relocateLegacyLayout()` 在首次读写前搬入。
  */
 export const HUB_DIR = 'tool-management'
 export const SCENES_DIR = 'scenes'
 export const MEMORIES_DIR = 'memories'
+/**
+ * 记忆索引文件名 / 记忆回收站目录名（hub 根下）。
+ * 域叫「记忆」（工具 `memory_manager_*`、界面「记忆」页），所以按域命名 ——
+ * 旧名 `rules-index.json` / `rules-trash/` 由 hub 的启动迁移搬过来（见 hub.ts）。
+ */
+export const MEMORIES_INDEX_FILE = 'memories-index.json'
+export const MEMORIES_TRASH_DIR = 'memories-trash'
+/** 提示词预设库目录名（hub 根下；域 = 提示词，工具 `prompt_manager_*`）。 */
+export const PRESETS_DIR = 'prompts'
 
 /** 保留场景名：界面显示「全局」，恒定存在、不可删除，其记忆注入任何对话。 */
 export const GLOBAL_SCENE = 'global'
@@ -125,7 +139,7 @@ export interface Rule {
   name: string
   /** 对外契约用 form（与 §7.1 一致）；内部发现用 DiscoveredEntry.kind。 */
   form: 'flat' | 'bundle'
-  /** 规则文件绝对路径（flat= .md；bundle= SKILL.md）。 */
+  /** 规则文件绝对路径（flat= .md；bundle= <名>.md，旧数据可能是 SKILL.md）。 */
   path: string
   description: string
   descriptionDerived?: boolean
@@ -145,7 +159,7 @@ export interface Rule {
 /**
  * 记忆导出的落盘映射（`bundle-export` 的 `kind: 'memories'` 用，见 design-plan D14）。
  *
- * 记忆有两种形态（见文件头）：flat = `<场景>/<name>.md`，bundle = `<场景>/<name>/SKILL.md`；
+ * 记忆有两种形态（见文件头）：flat = `<场景>/<name>.md`，bundle = `<场景>/<name>/<name>.md`；
  * 而且**场景名本身可含 `/`**（多段场景名，见 `isValidGroupPath`）。所以「按 id 的最后一个
  * `/` 切出场景与名字、再拼 `.md`」是错的：bundle 会被读成 `<场景>/<name>.md` → 读不到 →
  * 该项目静默丢失（只在 `missing` 里留个名，界面按「导出成功」显示）。
@@ -220,7 +234,7 @@ export interface SceneMemoryProjection {
   dropped: Array<{ id: string; scene: string; name: string; bytes: number }>
 }
 
-/** 当前生效的场景提示词投影（供 systemPrompt 段与只读状态展示）。 */
+/** 当前生效的场景提示词投影（供注入兜底与只读状态展示）。 */
 export interface ScenePromptProjection {
   /** 提供这段提示词的场景；`null` = 没有任何场景绑定提示词。 */
   scene: string | null
@@ -241,8 +255,13 @@ export interface RulesService {
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
   writeOps: ReadonlySet<string>
-  /** 注册全局 + agent-scope 的 systemPrompt 段；返回清理函数（配合 ctx.effect）。 */
-  registerProviders: () => () => void
+  /** 场景记忆段文本（注入通道同步取用；见 src/context-inject.ts）。 */
+  memoryText: () => string
+  /**
+   * 全局提示词正文（注入兜底用；官方 agent-instructions 行没挂时才被取用）：
+   * 场景期间 = 当前场景绑定的提示词，否则 = `~/.dsh/AGENTS.md` 正文。
+   */
+  promptText: () => string
   /** 失效快照与场景记忆缓存（写操作后调用）。 */
   refresh: () => Promise<void>
   /** 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内执行，非公开 op，无门禁面）。 */
@@ -305,8 +324,10 @@ export interface SceneRecord {
   /** 一句话说明这个场景是干什么的（界面卡片副标题）。 */
   description?: string
   /**
-   * 绑定的提示词预设 id（`tool-management/agents-md/<id>/AGENTS.md`）。
-   * 启用该场景时，这份预设的正文作为独立 systemPrompt 段注入（**不写** `~/.dsh/AGENTS.md`）。
+   * 绑定的提示词预设 id（`tool-management/prompts/<id>/AGENTS.md`）。
+   * 启用该场景时，宿主把这份正文写进 `~/.dsh/AGENTS.md`（scene-prompt-sync.ts，与「提示词」页
+   * 的「应用」同一条路，关掉场景恢复进场景前的基线）；预设挂不到官方 agent-instructions 行时
+   * （极简），注入通道再拿这份正文兜底（`promptText()` → src/context-inject.ts）。
    * 一个场景至多绑定一个（单值字段即天然单选）；未启用/未绑定 → 不注入。
    */
   prompt?: string
@@ -344,7 +365,7 @@ interface GroupIndexEntry {
   label?: string
 }
 
-/** 同步扫描得到的单条场景记忆（供 systemPrompt 段渲染）。 */
+/** 同步扫描得到的单条场景记忆（供注入文本渲染）。 */
 interface SceneMemoryFile {
   id: string
   /** 一级目录名；`''` = 规则根目录下的全局记忆，`_shared` = 公共基线。 */
@@ -354,6 +375,10 @@ interface SceneMemoryFile {
   descriptionDerived: boolean
   order: number
   body: string
+  /** `bundle` = 目录形态（正文是 `<名>.md`，同目录其余文件是附件）；`flat` = 单个 .md。 */
+  kind: 'flat' | 'bundle'
+  /** bundle 的目录（flat 为 `''`）：只用来把**路径**告诉模型，附件正文一律不注入。 */
+  bundleDir: string
 }
 
 /** 段渲染的候选块：一个「场景标题 + 一条记忆正文」的可选单元。 */
@@ -363,6 +388,8 @@ interface SceneBlockCandidate {
   scene: string
   header: string
   block: string
+  /** 单行压缩形态（`- **名称** — 正文`）：连续两条可直接相邻，其余情况前空一行。 */
+  inline: boolean
   item: { id: string; scene: string; name: string; bytes: number }
 }
 
@@ -371,7 +398,7 @@ interface SceneBlockCandidate {
 /**
  * 同目录临时文件 + rename 原子写（临时名 `.xxx.dsh-rules-<uuid>.tmp`）。
  * rename 走 `renameWithRetry`：Windows 上杀软/索引器会短暂占住目标文件报
- * EPERM/EACCES/EBUSY（用户实测：进入/退出模式时 rules-index.json 被 rename 撞上，
+ * EPERM/EACCES/EBUSY（用户实测：进入/退出模式时 memories-index.json 被 rename 撞上，
  * 运行时已切换但状态落盘失败，界面开关停在旧状态、还得再点一次）。这种占用是
  * 瞬时的，重试几轮就能过去；全失败才清理临时文件并把错误抛出。
  */
@@ -404,8 +431,9 @@ async function writeFileAtomicBinary(path: string, data: Buffer): Promise<void> 
  * BFS 发现（realpath 防环、深度/目录/条目预算），与 readonly-discovery 同构，
  * 但规则的场景是**多层相对路径**（readonly-discovery 的 group 恒为第一层）。
  *
- * 目录语义：目录含 SKILL.md → 它是 bundle 规则（叶子，不再深入），其「父路径」
- * 是场景、目录名是规则名；否则它是场景/子分类，继续遍历其下 .md（flat，任意层级）
+ * 目录语义：目录含 `<目录名>.md` → 它是 bundle 规则（叶子，不再深入），其「父路径」
+ * 是场景、目录名是规则名；找不到时再退回认旧文件名 `SKILL.md`（只读兼容，不再新建）；
+ * 都没有则它是场景/子分类，继续遍历其下 .md（flat，任意层级）
  * 与子目录。同名 flat 与 bundle 冲突时 bundle 优先，flat 记入 shadowed。
  */
 async function discover(rulesRoot: string): Promise<{ entries: Map<string, DiscoveredEntry>; shadowed: DiscoveredEntry[]; groups: Set<string>; scenes: string[]; warnings: string[]; truncated: boolean }> {
@@ -469,21 +497,31 @@ async function discover(rulesRoot: string): Promise<{ entries: Map<string, Disco
       continue // 失效链接或不可读目录不阻断其他来源
     }
 
-    // bundle 检查：当前目录（非根）含 SKILL.md → 它是规则叶子，父路径为场景。
+    // bundle 检查：当前目录含 `<目录名>.md`（或旧版 `SKILL.md`）→ 它是规则叶子，父路径为场景。
+    //
+    // **根下的一级目录恒为场景**（`parentGroup === ''` 时不做 bundle 判断）——与
+    // `probeSceneFilesSync`（注入段）同口径。场景 `1` 里一条叫 `1` 的记忆（`memories/1/1.md`）
+    // 与「根层的 bundle `1`」在磁盘上同形，认成后者会把整个场景目录吃成叶子：同场景其余
+    // 记忆全从列表消失、多出一条「未归属场景」的同名记忆，新建记忆还会被误报「同名 bundle
+    // 遮蔽」（2026-09-16 用户实测）。根层因此没有 bundle，只有 legacy 裸 .md（见 rulesCheck 的 noScene）。
     if (current.group !== '') {
-      const docPath = join(current.path, 'SKILL.md')
-      try {
-        const st = await lstat(docPath)
-        if (st.isFile() && !st.isSymbolicLink()) {
-          const sepIdx = current.group.lastIndexOf('/')
-          const parentGroup = sepIdx >= 0 ? current.group.slice(0, sepIdx) : ''
-          const name = sepIdx >= 0 ? current.group.slice(sepIdx + 1) : current.group
-          const id = parentGroup ? `${parentGroup}/${name}` : name
-          addEntry({ id, group: parentGroup, name, kind: 'bundle', docPath, entryPath: current.path })
-          continue
+      const sepIdx = current.group.lastIndexOf('/')
+      const parentGroup = sepIdx >= 0 ? current.group.slice(0, sepIdx) : ''
+      const name = sepIdx >= 0 ? current.group.slice(sepIdx + 1) : current.group
+      let docPath = ''
+      if (parentGroup !== '') {
+        for (const candidate of [bundleDocName(name), LEGACY_BUNDLE_DOC]) {
+          const p = join(current.path, candidate)
+          try {
+            const st = await lstat(p)
+            if (st.isFile() && !st.isSymbolicLink()) { docPath = p; break }
+          } catch { /* 该候选名不存在 → 试下一个 */ }
         }
-      } catch {
-        /* 无 SKILL.md → 作为场景/子分类继续 */
+      }
+      if (docPath !== '') {
+        const id = parentGroup ? `${parentGroup}/${name}` : name
+        addEntry({ id, group: parentGroup, name, kind: 'bundle', docPath, entryPath: current.path })
+        continue
       }
     }
     if (current.group !== '') {
@@ -690,6 +728,9 @@ export function parseModeState(raw: unknown): ModeState {
     .map((x) => ({ root: String(x.root || ''), enabled: x.enabled === true }))
     .filter((x) => x.root !== '')
   const subagents = (Array.isArray(snapshotRaw.subagents) ? snapshotRaw.subagents : []).map((x) => String(x)).filter(Boolean)
+  // 同 subagents 一组：进入时被档案**关掉**的人设（退出要重新打开）。漏掉它 = 用户实测的
+  // 「进场景关掉了，退出却没开回来」——快照落盘后读回来就只剩「被启用」那一半名单。
+  const subagentsOn = (Array.isArray(snapshotRaw.subagentsOn) ? snapshotRaw.subagentsOn : []).map((x) => String(x)).filter(Boolean)
   // v0.8.1 的场景备注恢复名单：**必须原样透传**——这里漏掉它，退出模式时备注永不回退
   //（与历史上 mcpServers / skillSources 被剥掉是同一类 bug）。
   const mcpNotes = (Array.isArray(snapshotRaw.mcpNotes) ? snapshotRaw.mcpNotes : [])
@@ -705,13 +746,14 @@ export function parseModeState(raw: unknown): ModeState {
           ...(mcpServers.length ? { mcpServers } : {}),
           ...(skillSources.length ? { skillSources } : {}),
           ...(subagents.length ? { subagents } : {}),
+          ...(subagentsOn.length ? { subagentsOn } : {}),
           ...(mcpNotes.length ? { mcpNotes } : {}),
         }
       : null,
   }
 }
 
-/** 解析 rules-index.json 原文；任何异常/版本不符 → 默认索引（容忍缺失，§9.3）。 */
+/** 解析 memories-index.json 原文；任何异常/版本不符 → 默认索引（容忍缺失，§9.3）。 */
 function parseIndex(raw: string): RulesIndex {
   const parsed = JSON.parse(raw) as Partial<RulesIndex>
   if (!parsed || parsed.version !== INDEX_VERSION || typeof parsed.rules !== 'object' || parsed.rules === null) throw new Error('bad index')
@@ -728,15 +770,15 @@ function parseIndex(raw: string): RulesIndex {
 
 async function readIndex(stateDir: string): Promise<RulesIndex> {
   try {
-    return parseIndex(await readFile(join(stateDir, 'rules-index.json'), 'utf8'))
+    return parseIndex(await readFile(join(stateDir, MEMORIES_INDEX_FILE), 'utf8'))
   } catch {
     return defaultIndex()
   }
 }
 
-/** 同步读索引：systemPrompt 段的渲染路径不能 await（见文件内「两相扫描」注释）。 */
+/** 同步读索引：注入文本的渲染路径不能 await（见文件内「两相扫描」注释）。 */
 function readIndexSync(stateDir: string): RulesIndex {
-  const raw = readFileIfExistsSync(join(stateDir, 'rules-index.json'))
+  const raw = readFileIfExistsSync(join(stateDir, MEMORIES_INDEX_FILE))
   if (raw === null) return defaultIndex()
   try {
     return parseIndex(raw)
@@ -747,10 +789,10 @@ function readIndexSync(stateDir: string): RulesIndex {
 
 async function writeIndex(stateDir: string, index: RulesIndex): Promise<void> {
   await mkdir(stateDir, { recursive: true })
-  await writeFileAtomically(join(stateDir, 'rules-index.json'), JSON.stringify(index, null, 2))
+  await writeFileAtomically(join(stateDir, MEMORIES_INDEX_FILE), JSON.stringify(index, null, 2))
 }
 
-// ── 场景记录（索引内，`rules-index.json` 的 scenes 切片）+ 旧布局迁移 ────────
+// ── 场景记录（索引内，`memories-index.json` 的 scenes 切片）+ 旧布局迁移 ────────
 
 /** 索引条目 → 场景记录（供 UI 直接渲染）。 */
 function sceneRecordOf(name: string, entry: SceneIndexEntry | undefined): SceneRecord {
@@ -872,7 +914,7 @@ function normalizeActive(raw: unknown): string[] | null {  if (!Array.isArray(ra
  *     因此"新建即启用"不会发生；存量数据仍按老语义读，避免升级后注入范围突变。
  *   - `_shared` 恒常启用（公共基线），不受开关影响
  *   - 保留场景 `global` 恒常启用：它的记忆对任何对话都成立
- * 缺失 rules-index.json 一律按默认值运行，不抛错（§9.3）。
+ * 缺失 memories-index.json 一律按默认值运行，不抛错（§9.3）。
  * 场景生效与否只由 index.active 决定（场景档案/模式也写这一份）。
  */
 function resolveActiveScenes(index: RulesIndex, knownScenes: string[]): { active: Set<string>; mode: 'all' | 'custom' } {
@@ -984,10 +1026,10 @@ async function buildSnapshot(rulesRoot: string, stateDir: string): Promise<Snaps
 
 // ── 场景记忆段：两相扫描（廉价指纹 → 按需读正文）──────────────────────────
 //
-// 硬约束 1（§5.1）：`systemPrompt.section({ text })` 的 provider 在**每次装配**时
-// 同步求值（`text: string | ((context) => string)`），返回 Promise 会破坏 renderPrompt。
+// 硬约束 1（§5.1）：注入通道每个 step 都要求**同步**取一次文本（`text: () => string`，
+// 见 src/context-inject.ts），返回 Promise 会让这一步的注入直接失败（异常被吞）。
 //
-// 缓存策略（§5.4 S3）：段 provider 必须同步返回 string，但不希望每个模型步骤都
+// 缓存策略（§5.4 S3）：文本出口必须同步返回 string，但不希望每个模型步骤都
 // 读一遍所有记忆正文。因此拆成两相：
 //   ① `probeSceneFilesSync()`：只走目录树 + `statSync`（**不读正文**），产出候选文件
 //      与**指纹**（`id|mtime|size` + 影响渲染的索引字段）。
@@ -999,8 +1041,8 @@ async function buildSnapshot(rulesRoot: string, stateDir: string): Promise<Snaps
 // 一次 stat 遍历（个人记忆树是亚毫秒级），换来"永远最新且永不静默失效"，优先于"零 IO"。
 //
 // 与 discover() 的关系：discover 是异步全量快照（供 CRUD/列表/体检），这里是同步轻量
-// 扫描（供提示词段），两者对"什么是规则"的定义保持一致：
-//   目录含 SKILL.md → bundle 规则（叶子）；否则继续下钻；只认 .md；跳过隐藏项；
+// 扫描（供注入通道），两者对"什么是规则"的定义保持一致：
+//   目录含 `<目录名>.md`（或旧版 `SKILL.md`）→ bundle 规则（叶子）；否则继续下钻；只认 .md；跳过隐藏项；
 //   同名 flat 与 bundle 冲突时 bundle 优先。
 
 function readFileIfExistsSync(path: string): string | null {
@@ -1090,13 +1132,19 @@ function probeSceneFilesSync(
       if (item.isSymbolicLink()) continue // 同步扫描不跟随符号链接（防环）
       if (item.isDirectory()) {
         budget.items++
-        const skillDoc = join(child, 'SKILL.md')
-        const stamp = fileStampSync(skillDoc)
-        if (stamp !== 'missing') {
+        let docPath = ''
+        for (const candidate of [bundleDocName(item.name), LEGACY_BUNDLE_DOC]) {
+          const p = join(child, candidate)
+          if (fileStampSync(p) !== 'missing') { docPath = p; break }
+        }
+        // 指纹带上**目录本身**的 mtime：附件只在段里以「路径 + 文件名」出现，
+        // 增删附件不改正文文件，只靠它的话指纹不变、段不会重算，列表就会停在旧值。
+        if (docPath !== '') {
+          const stamp = `${fileStampSync(docPath)}:${fileStampSync(child)}`
           // bundle 规则（叶子）：父路径为场景，目录名为记忆名。
           const id = scene ? `${scene}/${relChild}` : relChild
           if (index.rules[id]?.enabled === false) continue // 单条停用 → 不进入段
-          add({ id, scene, name: item.name, kind: 'bundle', path: skillDoc, order: index.rules[id]?.order ?? DEFAULT_ORDER, stamp })
+          add({ id, scene, name: item.name, kind: 'bundle', path: docPath, order: index.rules[id]?.order ?? DEFAULT_ORDER, stamp })
           continue
         }
         walk(scene, child, relChild, depth + 1)
@@ -1182,6 +1230,9 @@ function renderSceneMemory(
       descriptionDerived: derived.descriptionDerived,
       order: ref.order,
       body: doc.body,
+      kind: ref.kind,
+      // bundle 的正文是 `<目录>/<名>.md`，附件是**同目录**的其余文件。
+      bundleDir: ref.kind === 'bundle' ? dirname(ref.path) : '',
     })
   }
 
@@ -1203,14 +1254,15 @@ function renderSceneMemory(
   let seq = 0
   for (const scene of [...buckets.keys()].sort((a, b) => compareSceneBuckets(a, b, index))) {
     const sceneFiles = (buckets.get(scene) || []).slice().sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
-    const header = `${sceneHeading(scene)}\n\n${SCENE_MEMORY_NOTE}\n\n`
+    const header = sceneHeader(scene, index)
     for (const file of sceneFiles) {
-      const block = `### ${ruleHeading(file)}\n\n${String(file.body ?? '').trim()}\n`
+      const { text: block, inline } = memoryBlock(file)
       candidates.push({
         seq: seq++,
         scene,
         header,
         block,
+        inline,
         item: { id: file.id, scene: file.scene, name: file.name, bytes: byteLen(block) },
       })
     }
@@ -1219,17 +1271,33 @@ function renderSceneMemory(
     return { text: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [] }
   }
 
-  /** 选中块 → 段正文（同一场景的 `## 场景记忆：x` 只在首次出现时发出一次）。 */
-  const renderBody = (selected: SceneBlockCandidate[]): string => {
+  /**
+   * 选中块 → 段正文（同一场景的 `## 场景：x` 只在首次出现时发出）。
+   * `dropped` 决定引导语用哪一版：真有条目没注入时不再声称「以下就是全部信息」。
+   */
+  const renderBody = (selected: SceneBlockCandidate[], dropped: boolean): string => {
+    if (selected.length === 0) return ''
+    const note = dropped ? SCENE_MEMORY_NOTE_PARTIAL : SCENE_MEMORY_NOTE
     const chunks: string[] = []
     let current: string | null = null
     let buf = ''
+    // 上一条是不是「单行条目」。连续两条单行条目紧挨着（列表的自然形态），
+    // 其余情况都要空一行 —— 多行正文（含其缩进挂载的附件行）与下一条之间没有空行的话，
+    // 读起来会连成一片、看不出条目边界。
+    let prevInline = false
     for (const c of selected) {
       if (c.scene !== current) {
         if (buf !== '') chunks.push(buf)
         current = c.scene
-        buf = c.header
+        // 引导语跟着**场景块**走（场景说明之后、条目之前）：它管的就是下面这些条目，
+        // 放最顶层会飘在场景之外（用户实测反馈「怎么跑到最顶层了」）。场景数有上限
+        // （`global`/`_shared` 恒常启用 + 至多一个启用场景），最多出现 3 次，代价可接受。
+        buf = `${c.header}${note}\n\n`
+        prevInline = false
       }
+      const inline = c.inline
+      if (!(inline && prevInline) && !buf.endsWith('\n\n')) buf += '\n'
+      prevInline = inline
       buf += c.block
     }
     if (buf !== '') chunks.push(buf)
@@ -1265,9 +1333,12 @@ function renderSceneMemory(
   const selected: SceneBlockCandidate[] = []
   const missed: SceneBlockCandidate[] = []
   const takenScenes = new Set<string>()
+  // 场景标题与引导语也是开销，按「每个首次出现的场景」计进预算 —— 否则它们会挤掉
+  // 本该放得下的记忆（引导语的字节见 SCENE_NOTE_BYTES）。
   let used = 0
+  const noteBytes = sceneNoteBytes()
   for (const c of candidates) {
-    const headerCost = takenScenes.has(c.scene) ? 0 : byteLen(c.header)
+    const headerCost = takenScenes.has(c.scene) ? 0 : byteLen(c.header) + noteBytes
     if (used + headerCost + c.item.bytes + markerReserve > maxBytes) {
       missed.push(c)
       continue
@@ -1279,12 +1350,12 @@ function renderSceneMemory(
   missed.sort((a, b) => a.seq - b.seq)
 
   // ── ② 尾注自身也占字节：放不下就把已入选的块从后往前退回，直到回到预算内 ──
-  let body = renderBody(selected)
+  let body = renderBody(selected, probe.truncated || missed.length > 0)
   let tail = renderTail(missed, maxBytes - byteLen(body), probe.truncated || missed.length > 0)
   while (byteLen(body) + byteLen(tail) > maxBytes && selected.length > 0) {
     missed.push(selected.pop() as SceneBlockCandidate)
     missed.sort((a, b) => a.seq - b.seq)
-    body = renderBody(selected)
+    body = renderBody(selected, true)
     tail = renderTail(missed, maxBytes - byteLen(body), true)
   }
 
@@ -1334,18 +1405,153 @@ function sceneLabel(scene: string, index?: RulesIndex): string {
   return label && label !== '' ? label : scene
 }
 
-/** 场景标题：`''` → 全局；其余用目录名（可追溯）。 */
-const sceneHeading = (scene: string): string => `## 场景记忆：${sceneLabel(scene)}`
+/** 单个场景的标题：**场景在最顶层**（`##`，与「子智能体」「MCP 服务器」等段同级）。 */
+const sceneHeading = (scene: string): string => `## 场景：${sceneLabel(scene)}`
 
 /**
- * 场景标题后的固定引导语（常量，不破坏前缀缓存稳定）：让模型知道这段是当前场景的
- * 常驻参考知识，而不是对话历史或临时说明 —— 相关就用、无关可忽略。
+ * 没填描述时的默认「场景说明」（用户裁定 2026-09-16：全局桶一直没有描述，读起来像缺了一块，
+ * 统一成"每个场景块都有场景说明"）。
+ *
+ * 默认句同时承担"这个场景是什么"的答疑（此前只有光秃秃的 `## 场景：X`，模型读不懂 —— 用户实测）：
+ * 两个恒常桶说明生效范围，用户场景说明它是当前启用的那份配置。
  */
-const SCENE_MEMORY_NOTE = '（本场景的常驻参考知识：与当前任务相关时直接采用，无关时忽略）'
+const defaultSceneDescription = (scene: string): string => (
+  scene === GLOBAL_SCENE ? '全局记忆，任何对话都生效'
+    : scene === SHARED_GROUP ? '共享记忆，任何对话都生效'
+      : '用户配置的上下文，当前启用'
+)
 
-/** 单条记忆的标题：显式 description 优先；派生描述与正文重复，改用文件名。 */
-const ruleHeading = (f: SceneMemoryFile): string => (
-  f.descriptionDerived || !f.description ? f.name : f.description
+/**
+ * 单个场景的段头：场景标题 + **恒有**的 `场景说明：<描述>`。
+ *
+ * 场景描述（界面「描述（可选）」，≤60 字符）**此前从未注入过** —— 它正是「这个场景是
+ * 干什么的」的答案，属于模型做判断需要的上下文，而不是只给人看的元数据；界面上的文案
+ * 也从没把它标成「只给使用者看」（对比 AGENTS.md 预设的描述，那里是明确标注的）。
+ * 描述为空时给 `defaultSceneDescription` 的默认句（用户裁定：全局桶没描述时读起来像
+ * 缺了一块，统一成每个场景块都有说明）。
+ */
+function sceneHeader(scene: string, index?: RulesIndex): string {
+  const head = sceneHeading(scene)
+  const described = String(index?.scenes?.[scene]?.description ?? '').replaceAll(/\s+/g, ' ').trim()
+  const description = described === '' ? defaultSceneDescription(scene) : described
+  // 加粗（用户裁定 2026-09-16）：与引导语同款强调，别让"场景说明"读起来像可忽略的普通正文。
+  return `${head}\n\n**场景说明：${description}**\n\n`
+}
+
+/**
+ * 段首的引导语：让模型知道下面是**用户提供的参考信息**，而不是对话历史或临时说明
+ * —— 相关就用、无关可忽略。
+ *
+ * 写法（2026-09-16 用户裁定，基于真实注入结果的三次修正）：
+ *   - **单行、加粗**，不再用括号分两行 —— 括号跨行在真实提示词里读起来像被截断，
+ *     而加粗是 Markdown 里最省字符的强调手段（用户要求「加强模型对此的重视程度」）。
+ *   - **提到段首、整段只出现一次**：原来它挂在每个场景的段头里，多场景时会重复注入。
+ *   - **不点名任何工具**：模型从工具 schema 就知道 `memory_manager_list` 存在，点名反而
+ *     像在提示它去调；用户裁定「没启用的信息就是不想在当前用」，所以工具指引整句删除。
+ *     真正防探测的是**完整性声明**（「以下就是全部信息」），那半句必须留。
+ *   - **完整性声明按截断状态自适应**：真有条目因预算没注入时，段尾会有未注入清单，
+ *     此时不能再声称「全部」，否则和清单自相矛盾 —— 也正因为那时确实有东西没给到，
+ *     模型去查工具是**合理**的，不该再拦。
+ *
+ * 用词：不用「常驻」「注入」这类内部行话（模型没有先验）；用户裁定用「信息」而不是
+ * 「记忆」——「记忆」在系统提示词里指代不明，而这段的实质就是用户写的参考信息。
+ */
+const SCENE_MEMORY_NOTE = '**用户提供的参考信息：与当前任务相关时直接采用，无关时忽略。以下就是全部信息。**'
+/** 有未注入条目时的版本：去掉完整性声明（见上）。 */
+const SCENE_MEMORY_NOTE_PARTIAL = '**用户提供的参考信息：与当前任务相关时直接采用，无关时忽略。**'
+
+/**
+ * 段首固定块。以 `\n` 结尾，与场景块 join 后自然空一行。
+ * 预算按**较长**的那版算（见 renderSceneMemory），保守一点只会浪费几个字节。
+ */
+/**
+ * 引导语所占的字节（含它后面的一个空行）。跟着场景块走，所以按**每个场景**计入段头开销；
+ * 用较长的那版（带完整性声明）算，保守一点只会浪费几个字节。
+ *
+ * 注意：模块级不能直接算 —— `byteLen` 是后面才声明的 const，模块初始化期取它会 TDZ 报错。
+ */
+const sceneNoteBytes = (): number => byteLen(`${SCENE_MEMORY_NOTE}\n\n`)
+
+/** 单行正文的最大长度：超过就退回「标题 + 正文块」，避免出现一条几千字符的列表行。 */
+const INLINE_BODY_MAX = 120
+/** 附件行里最多列几个文件名；多的只报总数（路径已经给了，缺的名字模型自己列目录即可）。 */
+const ATTACHMENT_LIST_MAX = 10
+
+/**
+ * bundle 记忆的附件名（**同步**版 —— 段渲染必须同步返回，`listAttachments` 是异步的）。
+ * 口径与异步版一致：跳过正文本体（`<名>.md`，旧数据可能是 `SKILL.md`），只认普通文件。
+ */
+function attachmentNamesSync(bundleDir: string, name: string): string[] {
+  try {
+    const docNames = new Set([bundleDocName(name), LEGACY_BUNDLE_DOC])
+    return readdirSync(bundleDir, { withFileTypes: true })
+      .filter((e) => e.isFile() && !docNames.has(e.name))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 附件行（只有 bundle 记忆才有）：**给目录与文件名，不给内容**。
+ * 附件可能是图片、二进制、大 md —— 全文注入又贵又会把段预算吃光；给路径，模型需要时自己读。
+ */
+function attachmentLine(file: SceneMemoryFile): string {
+  if (file.kind !== 'bundle') return ''
+  const names = attachmentNamesSync(file.bundleDir, file.name)
+  if (names.length === 0) return ''
+  const shown = names.slice(0, ATTACHMENT_LIST_MAX)
+  const more = names.length - shown.length
+  return `附件目录：${file.bundleDir}（未注入正文，共 ${names.length} 个：${shown.join('、')}${more > 0 ? `，另 ${more} 个` : ''}）`
+}
+
+/**
+ * 单条信息的渲染形态 —— **能一行就一行，但恒为列表项**。
+ *
+ *   单行且不长的正文 → `- **名称**（描述） — 正文`（与 MCP / 子智能体两个段的列表同形；无显式描述时括号不出现）
+ *   多行或过长的正文 → `- **名称**（描述）` + 空行 + 缩进 2 格的正文（挂在条目下）
+ *
+ * 名称恒为标题：它就是这条记忆的身份（工具 id `<场景>/<名称>`、bundle 目录/文件名都以它为准），
+ * 用户说「记忆里的 X」、模型再调 `memory_manager_*` 时都对得上号；显式描述是括号注解，不抢标题。
+ *
+ * 为什么全都做成列表项：早先多行正文走 `### 名称` 标题块，附件行只能退化成与记忆**同级**的
+ * `- 附件目录：…`（没有父列表项可挂）—— 既可能被读成一条独立记忆，某些渲染器里还会把下一个
+ * `###` 标题吞进列表（与上一条粘连）。统一成「一条记忆 = 一个列表项、正文与附件都缩进挂在
+ * 条目下」后，两种记忆外观完全一致，归属也不再靠位置猜测。
+ *
+ * 为什么要分两种：用户常有十几条「一句话事实」（「提交格式：PDF」），每条都占标题 + 空行 +
+ * 正文三行，整段会散成一长串标题；压成一行后十条信息就是十行。多行正文是**用户写的完整
+ * Markdown**（可能自带标题、代码块、嵌套列表），整体缩进 2 格挂到条目下，结构原样保留。
+ *
+ * 返回值带 `inline`：调用方据此决定下一条记忆前要不要空行（单行条目连续排列，其余空行分隔）。
+ */
+function memoryBlock(file: SceneMemoryFile): { text: string; inline: boolean } {
+  const desc = explicitDescriptionOf(file)
+  // 加粗的只有名称：`- **名称**（描述） — 正文`，与 MCP 段 `- **server**（N 个工具） — …` 同形。
+  const title = `**${file.name}**` + (desc === '' ? '' : `（${desc}）`)
+  const text = String(file.body ?? '').trim()
+  const inline = text === '' || (!text.includes('\n') && text.length <= INLINE_BODY_MAX)
+  const head = text === ''
+    ? `- ${title}`
+    : (inline ? `- ${title} — ${text}` : `- ${title}\n\n${indentBody(text)}`)
+  const attach = attachmentLine(file)
+  if (attach === '') return { text: `${head}\n`, inline }
+  // 附件行恒为缩进子项：只用 `- ` 会被解析成与记忆**同级**的列表项（`- A` / `- 附件目录：A的` /
+  // `- B` … 四条平级，归属读不出来）。单行条目紧跟其后保持列表连续；多行条目前面空一行，
+  // 免得被读成用户正文自己的列表项。
+  return { text: inline ? `${head}\n  - ${attach}\n` : `${head}\n\n  - ${attach}\n`, inline }
+}
+
+/** 多行正文整体缩进 2 格（列在条目内容列上），空行保持空行、不加尾随空白。 */
+const indentBody = (text: string): string => text
+  .split('\n')
+  .map((line) => (line === '' ? line : '  ' + line))
+  .join('\n')
+
+/** 括号注解用的显式描述：派生描述与正文重复、不进段（只存在于界面投影）；换行压成单行，避免把「一行一条」的列表项撑断。 */
+const explicitDescriptionOf = (f: SceneMemoryFile): string => (
+  f.descriptionDerived || !f.description ? '' : String(f.description).replaceAll(/\s+/g, ' ').trim()
 )
 
 const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8')
@@ -1412,10 +1618,10 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     return value
   }
 
-  // ── 场景提示词段（绑定预设正文；只读，绝不写 ~/.dsh/AGENTS.md）──────────────
+  // ── 场景提示词（绑定预设正文；读盘、只读；写文件由 scene-prompt-sync.ts 负责）──
   //
   // 语义（用户裁定 2026-09-15）：
-  //   - 场景可绑定**一个**提示词预设（`scenes[].prompt` → `agents-md/<id>/AGENTS.md`）；
+  //   - 场景可绑定**一个**提示词预设（`scenes[].prompt` → `prompts/<id>/AGENTS.md`）；
   //   - 除保留场景 `global` 外**同时只能启用一个场景**，所以同一时刻至多一份提示词在场；
   //   - 没有启用其它场景时才轮到 `global` 自己的绑定（它恒常生效，覆盖"永远在场的提示词"）；
   //   - 预设文件不存在 / 未绑定 → 返回 `''`（renderPrompt 会删掉空段，不产生空标题）。
@@ -1427,7 +1633,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
 
   /** 读一个预设正文（同步、带 stat 指纹缓存）；不存在返回 `''`。 */
   function readPresetTextSync(id: string): string {
-    const file = join(stateDir, 'agents-md', id, 'AGENTS.md')
+    const file = join(stateDir, PRESETS_DIR, id, 'AGENTS.md')
     let key: string
     try {
       const st = statSync(file)
@@ -1448,7 +1654,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   /** 预设文件是否存在（同步；绑定前校验用，避免悬空绑定）。 */
   function presetExistsSync(id: string): boolean {
     try {
-      return statSync(join(stateDir, 'agents-md', id, 'AGENTS.md')).isFile()
+      return statSync(join(stateDir, PRESETS_DIR, id, 'AGENTS.md')).isFile()
     } catch {
       return false
     }
@@ -1478,22 +1684,13 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   }
 
   /**
-   * 当前生效的场景提示词：启用场景的绑定优先，其次 `global` 的绑定；都没有则 `''`。
-   * 绑定内容与 `~/.dsh/AGENTS.md` 相同时标记 `duplicate` 且返回空段 —— 那份正文已经在
-   * 基线里了，再注入一遍只会把同样的内容塞进上下文两次。
+   * 当前生效的场景提示词：启用场景的绑定优先，其次 `global` 的绑定；都没有 → `null`。
+   * 「绑了但预设为空/已删」按没绑处理（不注入空段），继续找下一个。
    */
-  function scenePrompt(): ScenePromptProjection {
+  function resolveScenePreset(): { scene: string; presetId: string; text: string } | null {
     const index = readIndexSync(stateDir)
     const names = Object.keys(index.scenes || {})
     const { active } = resolveActiveScenes(index, names)
-    const globalText = readGlobalAgentsMdSync().trim()
-    /** 绑定 → 投影；与文件一致时是 duplicate（不注入），否则原样注入。 */
-    const project = (scene: string, id: string): ScenePromptProjection => {
-      const text = readPresetTextSync(id)
-      if (text.trim() === '') return { scene, presetId: id, text: '', missing: true }
-      if (globalText !== '' && text.trim() === globalText) return { scene, presetId: id, text: '', missing: false, duplicate: true }
-      return { scene, presetId: id, text, missing: false }
-    }
     // 单选：取唯一一个非保留启用场景（resolveActiveScenes 已保证 ≤1，这里仍做确定性排序兜底）。
     const enabled = names
       .filter((n) => n !== SHARED_GROUP && n !== GLOBAL_SCENE && active.has(n))
@@ -1501,22 +1698,32 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     for (const scene of enabled) {
       const id = index.scenes?.[scene]?.prompt
       if (!id) continue
-      const projected = project(scene, id)
+      const text = readPresetTextSync(id)
       // 绑了但预设为空/已删 → 继续找下一个（不注入空段）。
-      if (projected.missing) continue
-      return projected
+      if (text.trim() === '') continue
+      return { scene, presetId: id, text }
     }
     const globalId = index.scenes?.[GLOBAL_SCENE]?.prompt
-    if (globalId) return project(GLOBAL_SCENE, globalId)
-    return { scene: null, presetId: null, text: '', missing: false }
+    if (globalId) {
+      const text = readPresetTextSync(globalId)
+      if (text.trim() !== '') return { scene: GLOBAL_SCENE, presetId: globalId, text }
+    }
+    return null
   }
 
-  const providerInvalidators = new Set<() => void>()
-  /** 通知已注册的 provider 提示词已变化（best-effort）。 */
-  const invalidateProviders = (): void => {
-    for (const invalidate of providerInvalidators) {
-      try { invalidate() } catch { /* 单个失效失败不影响其余 */ }
+  /**
+   * 当前生效的场景提示词（只读投影，界面用）：绑定内容与 `~/.dsh/AGENTS.md` 相同时标记
+   * `duplicate` 且返回空段 —— 那份正文已经在基线里了，界面据此显示「生效中」。
+   * （注入侧不看这个字段：预设挂不到 AGENTS.md 通道时照样要注入，见 `promptText`。）
+   */
+  function scenePrompt(): ScenePromptProjection {
+    const found = resolveScenePreset()
+    if (!found) return { scene: null, presetId: null, text: '', missing: false }
+    const globalText = readGlobalAgentsMdSync().trim()
+    if (globalText !== '' && found.text.trim() === globalText) {
+      return { scene: found.scene, presetId: found.presetId, text: '', missing: false, duplicate: true }
     }
+    return { scene: found.scene, presetId: found.presetId, text: found.text, missing: false }
   }
 
   // ── 写操作串行队列（避免并发覆盖同一索引/文件）──
@@ -1540,16 +1747,25 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     return { group, name }
   }
 
-  /** 磁盘定位（bundle 优先）。返回规则文件与条目路径。 */
+  /**
+   * 磁盘定位（bundle 优先）。返回规则文件与条目路径。
+   * 根层（`group === ''`）**没有 bundle**：一级目录恒为场景（见 discover 的注释），
+   * 否则 `memories/1/1.md`（场景 1 的 flat 记忆 1）会被这里读成根层 bundle「1」，
+   * 与列表/注入两端不一致（编辑、删除都会落到错误的文件上）。
+   */
   async function locateRule(group: string, name: string): Promise<DiscoveredEntry | null> {
-    const bundleDir = join(rulesRoot, group, name)
-    const bundleDoc = join(bundleDir, 'SKILL.md')
-    try {
-      const st = await lstat(bundleDoc)
-      if (st.isFile() && !st.isSymbolicLink()) {
-        return { id: group ? `${group}/${name}` : name, group, name, kind: 'bundle', docPath: bundleDoc, entryPath: bundleDir }
+    if (group !== '') {
+      const bundleDir = join(rulesRoot, group, name)
+      for (const candidate of [bundleDocName(name), LEGACY_BUNDLE_DOC]) {
+        const bundleDoc = join(bundleDir, candidate)
+        try {
+          const st = await lstat(bundleDoc)
+          if (st.isFile() && !st.isSymbolicLink()) {
+            return { id: group ? `${group}/${name}` : name, group, name, kind: 'bundle', docPath: bundleDoc, entryPath: bundleDir }
+          }
+        } catch { /* 该候选名不存在 → 试下一个 */ }
       }
-    } catch { /* 非 bundle */ }
+    }
     const flatPath = join(rulesRoot, group, name + '.md')
     try {
       const st = await lstat(flatPath)
@@ -1621,7 +1837,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   const refresh = async (): Promise<void> => {
     invalidateSnapshot()
     sceneCache = null
-    invalidateProviders()
   }
 
   /** 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内，保持与其余索引写串行）。 */
@@ -1704,8 +1919,11 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       activeScene: enabledSceneOf(index),
       sceneMemory: { usedBytes: projection.bytes, maxBytes: projection.maxBytes, truncated: projection.truncated, dropped: projection.dropped },
       // 当前生效的场景提示词（绑定的预设正文；与 ~/.dsh/AGENTS.md 一致时不重复注入）。
+      // `label` 是给用户指路用的显示名（「去场景设置里改『全局』的绑定」）——`global`
+      // 这类磁盘名直接甩给用户看没有意义。
       scenePrompt: {
         scene: promptProjection.scene,
+        label: promptProjection.scene ? sceneLabel(promptProjection.scene, index) : null,
         presetId: promptProjection.presetId,
         missing: promptProjection.missing,
         duplicate: promptProjection.duplicate === true,
@@ -1740,7 +1958,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       rule: {
         ...rule,
         body: doc.body,
-        attachments: entry.kind === 'bundle' ? await listAttachments(entry.entryPath) : [],
+        attachments: entry.kind === 'bundle' ? await listAttachments(entry.entryPath, entry.name) : [],
         frontmatter: {
           name: doc.map.name != null ? String(doc.map.name) : undefined,
           description: doc.map.description != null ? String(doc.map.description) : undefined,
@@ -1862,9 +2080,11 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     }
     if (!isValidGroupSegment(name)) return fail('error.rules.invalidName', `记忆名非法：${name}（非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含 / \\ < > : " | ? *、不以 . 开头）`)
     // 目标已存在（bundle 或 flat 皆算）→ 拒绝，避免静默覆盖。
+    // 用 exists 而不是 shadowed：后者说的是「同名 bundle 把 flat 遮蔽了」，用户看到
+    // 「被同名 bundle 遮蔽」会去找一个并不存在的 bundle（2026-09-16 实测）。
     const existing = await locateRule(group, name)
     if (existing) {
-      return fail('error.rules.shadowed', `同名规则已存在（${existing.kind === 'bundle' ? 'bundle' : 'flat'}）：${group}/${name}`)
+      return fail('error.rules.exists', `同名记忆已存在（${existing.kind === 'bundle' ? 'bundle' : 'flat'}）：${existing.id}`)
     }
     const body = String((args && args.body) ?? '')
     if (body.trim() === '') return fail('error.rules.bodyRequired', '规则正文不能为空')
@@ -1888,7 +2108,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const text = serializeRuleFile(fields, body)
     if (form === 'bundle') {
       await mkdir(join(rulesRoot, targetGroup, name), { recursive: true })
-      await writeFileAtomically(join(rulesRoot, targetGroup, name, 'SKILL.md'), text)
+      await writeFileAtomically(join(rulesRoot, targetGroup, name, bundleDocName(name)), text)
     } else {
       await mkdir(join(rulesRoot, targetGroup), { recursive: true })
       await writeFileAtomically(join(rulesRoot, targetGroup, name + '.md'), text)
@@ -1903,7 +2123,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (!index.groups[targetGroup]) index.groups[targetGroup] = { order: DEFAULT_GROUP_ORDER, label: targetGroup }
     await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, rule: await buildProjected(createdId) }
   }
 
@@ -1965,10 +2184,10 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       const id = `${item.group}/${item.name}`
       try {
         if (item.kind === 'bundle') {
-          // 与 rules-create 同落点：bundle = <场景>/<名>/ 目录，正文 SKILL.md，附件平铺同层。
+          // 与 rules-create 同落点：bundle = <场景>/<名>/ 目录，正文 <名>.md，附件平铺同层。
           const bundleDir = join(rulesRoot, item.group, item.name)
           await mkdir(bundleDir, { recursive: true })
-          await writeFileAtomically(join(bundleDir, 'SKILL.md'), item.text)
+          await writeFileAtomically(join(bundleDir, bundleDocName(item.name)), item.text)
           for (const att of item.attachments) await writeFileAtomicBinary(join(bundleDir, att.name), att.data)
         } else {
           await mkdir(join(rulesRoot, item.group), { recursive: true })
@@ -2053,7 +2272,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       await rm(located.entryPath, { recursive: true, force: true })
     } else if (located.kind === 'flat' && newForm === 'bundle') {
       await mkdir(join(rulesRoot, parts.group, newName), { recursive: true })
-      await writeFileAtomically(join(rulesRoot, parts.group, newName, 'SKILL.md'), serialize())
+      await writeFileAtomically(join(rulesRoot, parts.group, newName, bundleDocName(newName)), serialize())
       await rm(join(rulesRoot, parts.group, parts.name + '.md'), { force: true })
     } else if (located.kind === 'flat' && newName !== parts.name) {
       // flat 改名 = 文件改名
@@ -2074,7 +2293,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     }
     await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, rule: await buildProjected(newId) }
   }
 
@@ -2085,7 +2303,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const located = await locateRule(parts.group, parts.name)
     if (!located) return fail('error.rules.notFound', `规则不存在：${id}`)
     const trashId = Date.now().toString(36) + '-' + randomUUID().slice(0, 8)
-    const trashDir = join(stateDir, 'rules-trash', trashId)
+    const trashDir = join(stateDir, MEMORIES_TRASH_DIR, trashId)
     const manifest = { group: parts.group, name: parts.name, form: located.kind, deletedAt: new Date().toISOString() }
     await mkdir(trashDir, { recursive: true })
     if (located.kind === 'bundle') {
@@ -2101,14 +2319,13 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     delete index.rules[id]
     await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, trashId }
   }
 
   async function rulesRestore(args: any): Promise<any> {
     const trashId = String((args && args.trashId) || '')
     if (!isValidTrashId(trashId)) return fail('error.rules.notFound', `回收站条目不存在：${trashId}`)
-    const trashDir = join(stateDir, 'rules-trash', trashId)
+    const trashDir = join(stateDir, MEMORIES_TRASH_DIR, trashId)
     let manifest: { group: string; name: string; form: 'flat' | 'bundle'; deletedAt: string }
     try {
       manifest = JSON.parse(await readFile(join(trashDir, 'manifest.json'), 'utf8')) as typeof manifest
@@ -2121,7 +2338,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     // 恢复目标已存在（期间用户重建了同名规则）→ 拒绝，避免覆盖。
     const conflict = await locateRule(manifest.group, manifest.name)
     if (conflict) {
-      return fail('error.rules.shadowed', `同名规则已存在：${manifest.group}/${manifest.name}，请先移除后再恢复`)
+      return fail('error.rules.exists', `同名记忆已存在：${conflict.id}，请先移除后再恢复`)
     }
     const form = manifest.form === 'bundle' ? 'bundle' : 'flat'
     if (form === 'bundle') {
@@ -2134,7 +2351,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     }
     await rm(trashDir, { recursive: true, force: true })
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, rule: await buildProjected(manifest.group ? `${manifest.group}/${manifest.name}` : manifest.name) }
   }
 
@@ -2144,11 +2360,11 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   }
 
   /**
-   * 记忆回收站列表（只读）：`<stateDir>/rules-trash/<trashId>/`（`rulesRemove` 移入，
+   * 记忆回收站列表（只读）：`<stateDir>/memories-trash/<trashId>/`（`rulesRemove` 移入，
    * `rulesRestore` 恢复）。损坏或内容缺失的条目跳过，不让一个坏条目挡住整份列表。
    */
   async function rulesTrashList(): Promise<any> {
-    const root = join(stateDir, 'rules-trash')
+    const root = join(stateDir, MEMORIES_TRASH_DIR)
     let ids: string[] = []
     try {
       ids = await readdir(root)
@@ -2169,8 +2385,16 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
         const form: 'flat' | 'bundle' = manifest.form === 'bundle' ? 'bundle' : 'flat'
         let bytes = 0
         try {
-          bytes = (await stat(form === 'bundle' ? join(dir, 'bundle', 'SKILL.md') : join(dir, 'rule.md'))).size
-        } catch { /* 内容缺失：仍列出，恢复时由 rulesRestore 兜底报错 */ }
+          const bundleDoc = form === 'bundle'
+            ? join(dir, 'bundle', bundleDocName(manifest.name))
+            : join(dir, 'rule.md')
+          bytes = (await stat(bundleDoc)).size
+        } catch {
+          // 兼容旧回收站条目（正文仍叫 SKILL.md）；仍读不到就按 0 计，恢复时由 rulesRestore 兜底报错。
+          if (form === 'bundle') {
+            try { bytes = (await stat(join(dir, 'bundle', LEGACY_BUNDLE_DOC))).size } catch { /* 内容缺失 */ }
+          }
+        }
         entries.push({ trashId, group, name: manifest.name, form, deletedAt: String(manifest.deletedAt || ''), bytes })
       } catch { /* 损坏条目跳过 */ }
     }
@@ -2182,7 +2406,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   async function rulesTrashRemove(args: any): Promise<any> {
     const trashId = String((args && args.trashId) || '')
     if (!isValidTrashId(trashId)) return fail('error.rules.notFound', `回收站条目不存在：${trashId}`)
-    const dir = join(stateDir, 'rules-trash', trashId)
+    const dir = join(stateDir, MEMORIES_TRASH_DIR, trashId)
     try {
       const st = await lstat(dir)
       if (!st.isDirectory()) return fail('error.rules.notFound', `回收站条目不存在：${trashId}`)
@@ -2193,17 +2417,18 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     return { ok: true }
   }
 
-  /** bundle 目录下的附件（顶层普通文件，排除正文 SKILL.md）；不存在/不可读返回空数组。 */
-  async function listAttachments(bundleDir: string): Promise<Array<{ name: string; size: number }>> {
+  /** bundle 目录下的附件（顶层普通文件，排除正文 `<名>.md`，兼容旧数据 `SKILL.md`）；不存在/不可读返回空数组。 */
+  async function listAttachments(bundleDir: string, name: string): Promise<Array<{ name: string; size: number }>> {
     let entries: import('node:fs').Dirent[]
     try {
       entries = await readdir(bundleDir, { withFileTypes: true })
     } catch {
       return []
     }
+    const docNames = new Set([bundleDocName(name), LEGACY_BUNDLE_DOC])
     const out: Array<{ name: string; size: number }> = []
     for (const entry of entries) {
-      if (entry.name === BUNDLE_DOC) continue
+      if (docNames.has(entry.name)) continue
       if (!entry.isFile()) continue // 子目录 / 符号链接不列出（detach 也只动普通文件）
       try {
         out.push({ name: entry.name, size: (await stat(join(bundleDir, entry.name))).size })
@@ -2230,9 +2455,11 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (files.length > MAX_ATTACH_ENTRIES) return fail('error.rules.tooManyFiles', `一次最多 ${MAX_ATTACH_ENTRIES} 个附件`, { limit: MAX_ATTACH_ENTRIES })
     const pending: Array<{ name: string; data: Buffer }> = []
     let total = 0
+    const docNames = new Set([bundleDocName(located.name), LEGACY_BUNDLE_DOC])
     for (const file of files) {
       const name = String((file && (file.path || file.name)) || '')
       if (!isValidGroupSegment(name)) return fail('error.rules.invalidName', `附件名非法：${name || '(空)'}`)
+      if (docNames.has(name)) return fail('error.rules.invalidName', `附件名不能与正文文件同名：${name}`)
       const data = Buffer.from(String((file && file.data) || ''), 'base64')
       if (data.length === 0) return fail('error.rules.emptyFile', `附件内容为空：${name}`)
       if (data.length > MAX_ATTACH_ENTRY_BYTES) return fail('error.rules.fileTooLarge', `附件过大：${name}（单个上限 ${MAX_ATTACH_ENTRY_BYTES >> 20} MiB）`, { limit: MAX_ATTACH_ENTRY_BYTES >> 20 })
@@ -2241,10 +2468,10 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       pending.push({ name, data })
     }
     for (const file of pending) await writeFileAtomicBinary(join(located.entryPath, file.name), file.data)
-    return { ok: true, attachments: await listAttachments(located.entryPath) }
+    return { ok: true, attachments: await listAttachments(located.entryPath, located.name) }
   }
 
-  /** 删除 bundle 记忆的一个附件；正文 SKILL.md 不可删。 */
+  /** 删除 bundle 记忆的一个附件；正文 `<名>.md`（或旧数据 `SKILL.md`）不可删。 */
   async function rulesDetach(args: any): Promise<any> {
     const id = String((args && args.id) || '')
     const parts = parseId(id)
@@ -2253,7 +2480,9 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (!located) return fail('error.rules.notFound', `规则不存在：${id}`)
     if (located.kind !== 'bundle') return fail('error.rules.notBundle', `「${parts.name}」是 flat（单文件），没有附件`)
     const name = String((args && args.name) || '')
-    if (!isValidGroupSegment(name) || name === BUNDLE_DOC) return fail('error.rules.invalidName', `附件名非法：${name || '(空)'}`)
+    if (!isValidGroupSegment(name) || name === bundleDocName(located.name) || name === LEGACY_BUNDLE_DOC) {
+      return fail('error.rules.invalidName', `附件名非法：${name || '(空)'}`)
+    }
     const target = join(located.entryPath, name)
     try {
       const st = await lstat(target)
@@ -2262,7 +2491,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       return fail('error.rules.notFound', `附件不存在：${name}`)
     }
     await rm(target, { force: true })
-    return { ok: true, attachments: await listAttachments(located.entryPath) }
+    return { ok: true, attachments: await listAttachments(located.entryPath, located.name) }
   }
 
   async function rulesToggle(args: any): Promise<any> {
@@ -2282,7 +2511,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     index.rules[id] = { ...idxEntry, enabled, updatedAt: new Date().toISOString() }
     await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, rule: await buildProjected(id) }
   }
 
@@ -2326,7 +2554,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     index.active = names
     await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     const snap = await snapshot()
     return {
       ok: true,
@@ -2381,7 +2608,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     index.scenes[name] = next
     await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, scene: sceneRecordOf(name, next), ...(collapsed ? { collapsedActive: true } : {}) }
   }
 
@@ -2490,7 +2716,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     index.scenes[finalName] = next
     await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     return {
       ok: true,
       ...(finalName === name ? {} : { renamedFrom: name }),
@@ -2600,7 +2825,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     }
     if (dirty) await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, name, trashId: trashed.id, movedFiles: moves.length }
   }
 
@@ -2649,7 +2873,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     await writeIndex(stateDir, index)
     await purgeTrashEntry('scenes', id)
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, name, restoredFiles: restored.length }
   }
 
@@ -2663,7 +2886,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
 
   /**
    * 提示词预设改名后**同步场景绑定**：把所有 `scenes[].prompt === from` 改成 `to`。
-   * 由 AGENTS.md 预设库的改名路径调用——绑定存在 `rules-index.json` 里，预设库
+   * 由 AGENTS.md 预设库的改名路径调用——绑定存在 `memories-index.json` 里，预设库
    * 自己看不到它，不叫这一声改名就会留下悬空绑定（场景卡片显示「预设不存在」）。
    * @returns 改了几个场景。
    */
@@ -2681,7 +2904,6 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       index.scenes = scenes
       await writeIndex(stateDir, index)
       invalidateSnapshot()
-      invalidateProviders()
     }
     return { ok: true, from, to, changed }
   }
@@ -2706,34 +2928,40 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     index.rules[id] = next
     await writeIndex(stateDir, index)
     invalidateSnapshot()
-    invalidateProviders()
     return { ok: true, rule: await buildProjected(id) }
   }
 
   // ── 组装 ─────────────────────────────────────────────────────────────────
 
-  const registerProviders = (): (() => void) => {
-    try {
-      // 场景绑定的提示词**不再注入**（2026-09-15 用户裁定：「切换场景，对应的提示词直接把
-      // AGENTS.md 修改」）：启用/切换场景、改绑、编辑绑定的预设时，宿主把那份正文写进
-      // `~/.dsh/AGENTS.md`（与「提示词」页的「应用」同一条路，覆盖前多代备份），关掉场景时
-      // 恢复进场景之前的基线。真改文件之后再注入一遍，同一份正文会进上下文两次，而且用户手改
-      // 基线之后还会被重新注入 —— 所以这里只保留场景记忆段。绑定关系的**只读投影**仍由 rules
-      // 服务提供（页面「生效中」标记，以及"文件是否已经同步成它"的判断）。
-      const registrar = createPromptSectionRegistrar(ctx, [{
-        name: 'tool-management:scene-memory',
-        order: SECTION_ORDER.sceneMemory,
-        text: () => sceneMemory().text,
-      }])
-      providerInvalidators.add(registrar.invalidate)
-      return () => {
-        providerInvalidators.delete(registrar.invalidate)
-        registrar.dispose()
-      }
-    } catch (e) {
-      console.error('[dsh-plugin-tool-management] rules provider setup failed:', message(e))
-      return () => {}
-    }
+  // 注入文本出口（2026-09-16 第四版）。
+  //
+  // 历史：本服务先后把场景记忆做成"系统提示词段"（会被 persona complete 压掉）与
+  // "写 AGENTS.md 文件"（预设不挂 dsh-agent-instructions 时到不了模型）。现在两条都交给
+  // 注入通道（src/context-inject.ts）：每个 step 前把文本并进一条注入消息，任何预设都到得了。
+  // 这里只留**同步取文本**的两个出口，注册/生命周期由 index.ts 的注入器统一管。
+  //
+  //   - `memoryText`：场景记忆段（记忆正文；`''` = 没有可注入的内容）。
+  //   - `promptText`：全局提示词正文 = 场景期间用场景提示词、平时用 AGENTS.md 正文。
+  //     **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
+  //     （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
+  const memoryText = (): string => sceneMemory().text
+  /**
+   * `~/.dsh/AGENTS.md` 正文。上限与官方那一行的 `maxBytes` 同量级（64 KiB）：超大文件按字节
+   * 截断并留一行标记，免得一份手写的巨型基线把上下文撑爆。
+   */
+  const AGENTS_MD_MAX_BYTES = 65536
+  const agentsMdText = (): string => {
+    const text = readGlobalAgentsMdSync()
+    if (text.trim() === '') return ''
+    if (Buffer.byteLength(text, 'utf8') <= AGENTS_MD_MAX_BYTES) return text
+    const cut = Buffer.from(text, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8')
+    return cut + `\n\n（…文件超过 ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB，已截断。）`
+  }
+  // 场景提示词与 AGENTS.md 正文在用户眼里就是同一件事（"全局提示词"）：场景期间前者取代后者，
+  // 与官方语义一致（进场景改写文件、退出恢复）。所以一个域、一份文本，取到非空的场景提示词就用它。
+  const promptText = (): string => {
+    const scene = resolveScenePreset()?.text ?? ''
+    return scene.trim() !== '' ? scene : agentsMdText()
   }
 
   /** 写操作：串行队列内执行，成功后触发 refresh（失效缓存，下一请求即生效）。 */
@@ -2786,7 +3014,8 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   const service: RulesService = {
     ops,
     writeOps,
-    registerProviders,
+    memoryText,
+    promptText,
     refresh,
     patchIndex,
     readArchiveSlice,

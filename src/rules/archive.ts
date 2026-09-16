@@ -26,7 +26,7 @@ export interface SceneArchive {
  * 进入模式前的运行时快照，用于退出时精确回滚。
  *
  * ⚠️ `mcpServers` / `skillSources` 只记**被档案改动过**的行 —— 退出时不能顺手改
- * 用户手动设置的状态。老 `rules-index.json` 里的 snapshot 没有这两栏，
+ * 用户手动设置的状态。老 `memories-index.json` 里的 snapshot 没有这两栏，
  * 读取处必须容忍缺失（`?? []`）。
  */
 export interface ModeSnapshot {
@@ -47,6 +47,14 @@ export interface ModeSnapshot {
    * 其中「改动前处于停用状态」的名字 —— 退出时按名单停回，不动用户手动开关过的其他行。
    */
   subagents?: string[]
+  /**
+   * 进入模式时被档案**关掉**的人设（改动前是开着的）—— 退出时按名单重新打开。
+   *
+   * 与上面的 `subagents` 合起来才是完整还原：人设域按「置为与勾选集完全一致」应用
+   * （未勾选 = 关闭，含整段未定义 = 一个都没勾），两个方向都要记。老 snapshot
+   * 没有这一栏 → 读取处一律 `?? []`（按旧行为只恢复被启用的那批）。
+   */
+  subagentsOn?: string[]
   /**
    * 档案改过**备注**的服务器行，记录**改动前**的备注（`null` = 原本没有备注）。
    * 退出时按此恢复；只记被改动的行。
@@ -251,6 +259,40 @@ export function computeSkillsPlan(
   return { target, stale, sourceSwitches }
 }
 
+/**
+ * 把「这次要改的上层行」并进快照 —— **已记录的行保持原值**（先记的才是进场景前的状态）。
+ *
+ * 为什么需要：进入模式时快照只记了**当时将要改动**的行；模式进行中用户改档案（改档案 = 立即生效）
+ * 又可能新改到别的服务器 / 来源级行。退出必须回到「进场景前」，所以这些新改的行也得有记录。
+ * 反之，若某行在进入时就记过，它的 `*Before` 才是进场景前的值 —— 这次的中间态值必须丢弃。
+ */
+export function mergeSnapshotSwitches(
+  snapshot: ModeSnapshot,
+  mcpServers: Array<{ id: string; level: string; disabledBefore: boolean }> = [],
+  skillSources: Array<{ root: string; enabledBefore: boolean }> = [],
+): ModeSnapshot {
+  const servers = (snapshot.mcpServers ?? []).map((x) => ({ ...x }))
+  const seenServer = new Set(servers.map((x) => x.id + '\u0000' + x.level))
+  for (const s of mcpServers) {
+    const key = s.id + '\u0000' + s.level
+    if (seenServer.has(key)) continue
+    seenServer.add(key)
+    servers.push({ id: s.id, level: s.level, disabled: s.disabledBefore })
+  }
+  const sources = (snapshot.skillSources ?? []).map((x) => ({ ...x }))
+  const seenSource = new Set(sources.map((x) => x.root))
+  for (const s of skillSources) {
+    if (seenSource.has(s.root)) continue
+    seenSource.add(s.root)
+    sources.push({ root: s.root, enabled: s.enabledBefore })
+  }
+  return {
+    ...snapshot,
+    ...(servers.length ? { mcpServers: servers } : {}),
+    ...(sources.length ? { skillSources: sources } : {}),
+  }
+}
+
 export function snapshotRuntime(
   mcpRaw: Record<string, string[]>,
   skills: Record<string, boolean>,
@@ -260,6 +302,8 @@ export function snapshotRuntime(
   skillSources: Array<{ root: string; enabled: boolean }> = [],
   /** **将被档案启用**的人设名（改动前停用的子集；退出时按此停回）。 */
   subagents: string[] = [],
+  /** **将被档案停用**的人设名（改动前启用的子集；退出时按此重新打开）。 */
+  subagentsOn: string[] = [],
   /** **将被档案改动**的备注行，带改动前的备注（null = 原本没有）。 */
   mcpNotes: Array<{ id: string; note: string | null }> = [],
 ): ModeSnapshot {
@@ -269,6 +313,7 @@ export function snapshotRuntime(
     mcpServers: mcpServers.map((x) => ({ id: x.id, level: x.level, disabled: x.disabled })),
     skillSources: skillSources.map((x) => ({ root: x.root, enabled: x.enabled })),
     ...(subagents.length ? { subagents: subagents.slice() } : {}),
+    ...(subagentsOn.length ? { subagentsOn: subagentsOn.slice() } : {}),
     ...(mcpNotes.length ? { mcpNotes: mcpNotes.map((x) => ({ id: x.id, note: x.note })) } : {}),
   }
 }

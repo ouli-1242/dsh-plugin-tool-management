@@ -13,13 +13,14 @@ import { expandUploads, planPersonaImport } from '../imports/upload.js'
 
 const message = (e: unknown): string => String((e && (e as Error).message) || e)
 
-/** 人设默认目录：`$DSH_HOME/tool-management/agents/`。 */
+/** 人设默认目录：`$DSH_HOME/tool-management/subagents/`（域 = 子智能体，工具 `subagent_manager_*`）。 */
 export function defaultPersonasDir(): string {
-  return join(resolveDshHome(), 'tool-management', 'agents')
+  return join(resolveDshHome(), 'tool-management', 'subagents')
 }
 
 /**
- * 旧目录 `$DSH_HOME/subagents/` → `tool-management/agents/` 一次性搬移（幂等）。
+ * 旧目录 `$DSH_HOME/subagents/` → `tool-management/subagents/` 一次性搬移（幂等）。
+ * （hub 内 `agents/` → `subagents/` 的改名由 hub.ts 的启动迁移负责。）
  * 只在目标不存在同名文件时搬（绝不覆盖）；源目录保留空壳。每个进程只跑一次。
  */
 let personasRelocated = false
@@ -65,7 +66,7 @@ export interface PersonaDoc {
   path: string
   /**
    * 子智能体开关（list() 时由启用集合计算后附加）：`false` = 停用 —— 不注入目录段、
-   * subagent_list / subagent_run 不可见；文件本体一个字节不动。
+   * subagent_manager_list / subagent_manager_run 不可见；文件本体一个字节不动。
    * 缺省/`true` = 启用。原始解析（parsePersona）不产生这个字段。
    */
   enabled?: boolean
@@ -104,6 +105,10 @@ export interface SubagentService {
   enabledStore: {
     /** 指定名单里当前被停用的（进入模式拍快照用：只记将被启用的行）。 */
     disabledAmong(names: string[]): Promise<string[]>
+    /** 指定名单里当前**开着**的（进入模式把未勾的关掉时，只记将被关闭的行）。 */
+    enabledAmong(names: string[]): Promise<string[]>
+    /** 当前开着的人设全名单（档案页把「开关」落成场景绑定时用）。 */
+    enabledNames(): Promise<string[]>
     /** 批量启停；只碰给出的名字，人设已不存在的跳过。 */
     setEnabled(names: string[], enabled: boolean): Promise<void>
   }
@@ -186,13 +191,13 @@ const RESULT_MAX = 16 * 1024
 export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; stateDir?: string }): SubagentService {
   const dir = opts?.subagentsDir || defaultPersonasDir()
   const stateDir = opts?.stateDir && opts.stateDir.trim() !== '' ? opts.stateDir : join(resolveDshHome(), 'tool-management')
-  const stateFile = join(stateDir, 'agents-index.json')
+  const stateFile = join(stateDir, 'subagents-index.json')
   const req = createRequire(import.meta.url)
 
   let cache: { at: number; value: PersonaDoc[] } | null = null
 
   // ── 人设启用集合（子智能体开关）────────────────────────────────────────
-  // agents-index.json：{ version: 1, enabled: string[] }（与 rules-index.json 同目录约定）。
+  // subagents-index.json：{ version: 1, enabled: string[] }（与 memories-index.json 同目录约定）。
   //   - 文件缺失/损坏 = **全部启用**（老用户升级零感知，行为与开关上线前一致）；
   //   - 文件一旦写出即为权威：之后新建/导入/回收站恢复的人设**自动启用**（刚建就想用是常理）；
   //   - 停用只影响注入与 subagent_* 工具的可见性，人设文件一个字节不动。
@@ -438,16 +443,16 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const target = join(dir, name + '.md')
       const exists = await readFile(target, 'utf8').then(() => true).catch(() => false)
       if (!exists) return { ok: false, error: `人设不存在: ${name}` }
-      const moved = await moveToTrash('agents', name, [{ from: target, dest: 'persona.md' }])
+      const moved = await moveToTrash('subagents', name, [{ from: target, dest: 'persona.md' }])
       if (moved.ok === false) return { ok: false, error: `移入回收站失败: ${moved.error}` }
       await removePersonaFromEnabled(name).catch(() => undefined)
       cache = null
       return { ok: true, name, trashId: moved.id }
     },
-    'subagent-trash-list': async () => ({ ok: true, trash: await listTrashEntries('agents') }),
+    'subagent-trash-list': async () => ({ ok: true, trash: await listTrashEntries('subagents') }),
     'subagent-trash-restore': async (args: any) => {
       const id = String((args && args.id) || '').trim()
-      const entry = await readTrashEntry('agents', id)
+      const entry = await readTrashEntry('subagents', id)
       if (!entry) return { ok: false, error: `回收站条目不存在: ${id}` }
       if (!validPersonaName(entry.name)) return { ok: false, error: `回收站里的人设名不合法: ${entry.name}` }
       const target = join(dir, entry.name + '.md')
@@ -456,11 +461,11 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       if (exists) return { ok: false, error: `无法恢复，同名人设已存在: ${entry.name}` }
       try {
         await mkdir(dir, { recursive: true })
-        await moveOutOfTrash('agents', id, 'persona.md', target)
+        await moveOutOfTrash('subagents', id, 'persona.md', target)
       } catch (e) {
         return { ok: false, error: `恢复失败: ${message(e)}` }
       }
-      await purgeTrashEntry('agents', id)
+      await purgeTrashEntry('subagents', id)
       // v0.8.5：回收站恢复默认不启动（与新建/导入同口径）。
       await materializeEnabledExcluding([entry.name]).catch(() => undefined)
       cache = null
@@ -468,7 +473,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
     },
     'subagent-trash-delete': async (args: any) => {
       const id = String((args && args.id) || '').trim()
-      const gone = await purgeTrashEntry('agents', id)
+      const gone = await purgeTrashEntry('subagents', id)
       if (!gone) return { ok: false, error: `回收站条目不存在: ${id}` }
       return { ok: true, id }
     },
@@ -507,7 +512,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       return { ok: true, imported, skipped }
     },
     /**
-     * 子智能体开关（v0.8）：停用 = 不注入目录段、subagent_list/run 不可见；文件本体不动。
+     * 子智能体开关（v0.8）：停用 = 不注入目录段、subagent_manager_list/run 不可见；文件本体不动。
      * `enabled` 必须显式给布尔值 —— 与 rules-toggle 同一条口径：不按"翻转"推断，
      * 免得参数丢了时界面以为改了、实际什么都没动。
      */
@@ -539,6 +544,18 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const docs = await list()
       const state = new Map(docs.map((d) => [d.name, d.enabled !== false]))
       return names.filter((n) => state.get(n) === false)
+    },
+    /** 指定名单里当前**开着**的（进入模式把未勾的关掉时，只记将被关闭的行）。 */
+    async enabledAmong(names: string[]): Promise<string[]> {
+      const docs = await list()
+      const state = new Map(docs.map((d) => [d.name, d.enabled !== false]))
+      return names.filter((n) => state.get(n) === true)
+    },
+    /** 当前开着的人设全名单（档案页把页面的「开关」落成场景绑定时用）。 */
+    async enabledNames(): Promise<string[]> {
+      const docs = await list()
+      const state = new Map(docs.map((d) => [d.name, d.enabled !== false]))
+      return docs.map((d) => d.name).filter((n) => state.get(n) === true)
     },
     /** 批量启停；只碰给出的名字，人设已不存在的跳过（别把悬空名写进集合）。 */
     async setEnabled(names: string[], enabled: boolean): Promise<void> {

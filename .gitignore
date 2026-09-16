@@ -53,3 +53,6 @@ cr.json
 # Compat-page layout preview written by `scripts/preview-compat.mjs` (its default
 # output; that script's own comment already promised this ignore rule).
 .compat-preview.html
+# Scene-memory notice preview written by `scripts/preview-memory-note.mjs`.
+.memory-note-preview.html
+

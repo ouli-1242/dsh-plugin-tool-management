@@ -5,44 +5,56 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * `prompt-sections.ts` registers a per-agent `systemPrompt` section, and the
- * registration SUCCEEDS under every preset. But `@deepseek-ai/dsh-persona`
- * with `complete: true` makes the prompt registry restore its prefix as the
- * ONLY section at assembly time, so the section never reaches the model — and
- * the plugin had no way to notice. The memories page kept reporting
- * "injected" while the model saw nothing.
+ * The plugin TELLS the model four things (scene memories, the subagent roster,
+ * the MCP server list with the user's notes, and the scene prompt) by injecting
+ * a synthetic message at `agent/pre-step` (see `src/context-inject.ts`). A preset
+ * can still decide it wants none of that: `@deepseek-ai/dsh-persona` with
+ * `complete: true` declares its prompt the only one, and `includeRuntimeContext:
+ * false` switches the official runtime-context snapshot off — the shipped
+ * `minimal` preset sets both. The plugin then injects nothing by default (the
+ * user can force it on the compat page), and no surface may claim otherwise.
+ *
+ * A second, different question is whether the OFFICIAL carriers are mounted at
+ * all: `@deepseek-ai/dsh-agent-instructions` (AGENTS.md) and
+ * `@deepseek-ai/dsh-tool-skill` (the skill catalog) are host rows that the Web
+ * bundle disables in favour of per-preset rows — a preset that mounts neither
+ * gives the model no AGENTS.md text and no skill catalog, whichever persona it
+ * declares.
  *
  * WHAT IS MEASURED, AND HOW
  * -------------------------
  * Answers come from each preset's own composition text, read through the
  * roster's public `read(id)` — evidence, not inference, and no mount:
  *
- *   - `personaComplete`: does the preset mount `@deepseek-ai/dsh-persona`
- *     with `complete: true`? (that flag suppresses EVERY other prompt section)
+ *   - `personaComplete` / `includeRuntimeContext`: does the preset declare
+ *     "nothing but my prompt"? (both suppress plugin-injected text)
  *   - `agentInstructions`: is `@deepseek-ai/dsh-agent-instructions` mounted?
- *     (the row that carries `~/.dsh/AGENTS.md` into the prompt)
+ *     (the row that carries `~/.dsh/AGENTS.md` into the conversation)
  *   - `toolSkill`: is `@deepseek-ai/dsh-tool-skill` mounted?
  *     (the row that gives the model the skill catalog)
- *   - `subagentTool`: is `@deepseek-ai/dsh-tool-subagent` mounted?
- *     (the official delegation tool; the shipped `minimal` preset has none)
  *   - `mcpClient`: does the composition mount its own MCP client?
- *     (the shipped presets mount none, so MCP comes from the host plane and is
- *     equally available under every preset — see `ReachContext.mcpTools`)
+ *     (the shipped presets mount none, so MCP *tools* come from the host plane
+ *     and are callable under every preset — see `ReachContext.mcpTools`)
  *
- * The plugin's own 14 model tools need NO probe: they register in the HOST
- * plane (this plugin's loader row in the profile patch), so every preset's
- * session resolves them. Verified against the shipped `minimal` preset on
- * 2026-09-14: tools callable, skill catalog absent, memory and AGENTS.md
- * injection suppressed.
+ * TOOLS ARE NOT TEXT — the distinction is the whole point:
+ *
+ *   - TOOL plane (host, preset-independent): the plugin's own model tools and
+ *     every `mcp__*` tool register in the HOST plane (this plugin's loader row in
+ *     the profile patch), so every preset's session resolves them.
+ *   - TEXT plane (preset-dependent): the runtime snapshot the plugin injects, the
+ *     AGENTS.md carrier, and the skill catalog. Callable is not the same as
+ *     known: under `minimal` the model can call every `mcp__*` tool while knowing
+ *     nothing about the servers behind them — no names, no tool counts, no
+ *     enablement, and none of the user's notes.
  *
  * Reading never mounts. `list()`/`read(id)` are roster reads, so building the
  * matrix cannot activate a preset early — the same guarantee
  * `compositionInventory()` gives the plugin-listing surfaces.
  *
  * This module is deliberately advisory: it never changes what is injected and
- * never refuses an operation. A preset that suppresses prompt text is doing
- * exactly what its author asked for; the plugin's job is to say so out loud
- * instead of reporting a success the model cannot observe.
+ * never refuses an operation. A preset that asks for no extra text is doing
+ * exactly what its author asked for; the plugin's job is to say so out loud and
+ * point at the switch that overrides it.
  */
 
 /** Whether one composition mounts a given module, and whether it is switched on. */
@@ -61,12 +73,20 @@ export type ReachState = 'ok' | 'suppressed' | 'absent' | 'unknown'
 export interface CompositionFacts {
   /** `true` only when a live `@deepseek-ai/dsh-persona` row declares it. */
   readonly personaComplete: boolean | 'unknown'
+  /**
+   * The persona row's `includeRuntimeContext` (schema default `true`).
+   *
+   * `false` makes `dsh-persona` call `systemPrompt.suppressRuntimeContext()`, which kills the
+   * official runtime-context snapshot (sandbox / approval policy) — and would kill this
+   * plugin's text too if it went through `systemPrompt.context()`. The shipped `minimal`
+   * preset sets it; that is why the plugin's injection lives on the `agent/pre-step` message
+   * channel instead (see src/context-inject.ts).
+   */
+  readonly includeRuntimeContext: boolean | 'unknown'
   /** Whether the preset mounts that persona row at all (global fallback otherwise). */
   readonly personaMounted: boolean
   readonly agentInstructions: ModulePresence
   readonly toolSkill: ModulePresence
-  /** Whether the composition mounts its own official delegation tool. */
-  readonly subagentTool: ModulePresence
   /** Whether the composition mounts its own MCP client. */
   readonly mcpClient: ModulePresence
   /** Why the text could not be parsed, when it could not. */
@@ -93,6 +113,8 @@ export interface PresetReachRow {
   readonly subagent: ReachState
   /** MCP tools: this preset's own client, else the host-plane set. */
   readonly mcp: ReachState
+  /** persona `complete: true` or `includeRuntimeContext: false` — the preset asks for no extra text. */
+  readonly suppressing: boolean
   /** Why the preset cannot compose a session at all, when discovery said so. */
   readonly broken?: string
   /** Why this row's answers are `unknown`, when they are. */
@@ -114,6 +136,45 @@ export interface PresetReachReport {
 export interface ReachContext {
   /** Live `mcp__*` tool count on the host plane; `undefined` when the probe failed. */
   readonly mcpTools?: number
+  /**
+   * The plugin's injection settings, when the caller has them loaded: with
+   * `underSuppressingPresets` on, a suppressing preset no longer hides the plugin's text,
+   * and a domain switched off is honestly `absent` rather than `ok`.
+   */
+  readonly inject?: {
+    readonly underSuppressingPresets: boolean
+    readonly domains: Readonly<Record<string, boolean>>
+  }
+}
+
+/**
+ * The preset facts the injection decision needs (src/context-inject.ts): whether the preset
+ * asks for "nothing but my prompt", and which OFFICIAL carriers it mounts — the plugin's
+ * fallback domains only fire where those carriers are missing (AGENTS.md, the skill catalog),
+ * so the two sides never deliver the same text twice.
+ */
+export interface PresetInjectionFacts {
+  /** persona `complete: true` or `includeRuntimeContext: false` — the preset wants no extra text. */
+  readonly suppressing: boolean
+  /** The composition mounts `@deepseek-ai/dsh-agent-instructions` (the `~/.dsh/AGENTS.md` carrier). */
+  readonly carriesAgentsMd: boolean
+  /** The composition mounts `@deepseek-ai/dsh-tool-skill` (the official skill catalog + loader). */
+  readonly carriesSkillCatalog: boolean
+}
+
+/** Whether a preset declares "no extra text": persona `complete: true` or runtime context off. */
+export function isSuppressingPreset(facts: CompositionFacts): boolean {
+  return facts.personaComplete === true || facts.includeRuntimeContext === false
+}
+
+/** Map composition facts onto the injection decision's facts (parse failure → not suppressing). */
+export function injectionFactsOf(facts: CompositionFacts | undefined): PresetInjectionFacts | undefined {
+  if (facts === undefined) return undefined
+  return {
+    suppressing: isSuppressingPreset(facts),
+    carriesAgentsMd: facts.agentInstructions === 'mounted',
+    carriesSkillCatalog: facts.toolSkill === 'mounted',
+  }
 }
 
 /** Module specifiers whose mounting decides reachability. */
@@ -121,18 +182,13 @@ const PERSONA_MODULE = '@deepseek-ai/dsh-persona'
 const AGENT_INSTRUCTIONS_MODULE = '@deepseek-ai/dsh-agent-instructions'
 const TOOL_SKILL_MODULE = '@deepseek-ai/dsh-tool-skill'
 /**
- * The OFFICIAL delegation tool. Absent in the shipped `minimal` preset, present
- * in the other three — the one column whose answer really does differ per
- * preset. (This plugin's own `subagent_list`/`subagent_run` are host-plane and
- * therefore preset-independent; the page's footer says so.)
- */
-const SUBAGENT_TOOL_MODULE = '@deepseek-ai/dsh-tool-subagent'
-/**
  * An MCP client mounted INSIDE a composition. The shipped presets mount none,
- * so MCP normally comes from the host plane (the `$DSH_HOME/cordis.patch.yml`
- * layer) and works under every preset; a user-authored preset that mounts its
- * own client only carries MCP under itself, and this scan is how the page can
- * tell the two apart.
+ * so MCP tools normally come from the host plane (the `$DSH_HOME/cordis.patch.yml`
+ * layer) and are callable under every preset; a user-authored preset that mounts
+ * its own client only carries those tools under itself, and this scan is how the
+ * page can tell the two apart. Tool reachability is not the column's answer,
+ * though — the server list and the user's notes are a prompt section, which a
+ * complete persona suppresses whichever client serves the tools.
  */
 const MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
 
@@ -140,6 +196,7 @@ const NAME_LINE = /^(\s*)name:\s*(['"]?)([^'"\s#]+)\2\s*(?:#.*)?$/
 const ENTRY_LINE = /^(\s*)-\s/
 const DISABLED_LINE = /^\s*disabled:\s*(.+?)\s*(?:#.*)?$/
 const COMPLETE_LINE = /^\s*complete:\s*(true|false)\s*(?:#.*)?$/
+const RUNTIME_CONTEXT_LINE = /^\s*includeRuntimeContext:\s*(true|false)\s*(?:#.*)?$/
 
 /** Leading whitespace width of a line, used as its nesting level. */
 function indentOf(line: string): number {
@@ -225,16 +282,19 @@ export function readCompositionFacts(text: string): CompositionFacts {
     if (lines.length <= 1 && lines[0] === '') {
       return {
         personaComplete: 'unknown',
+        includeRuntimeContext: 'unknown',
         personaMounted: false,
         agentInstructions: 'absent',
         toolSkill: 'absent',
-        subagentTool: 'absent',
         mcpClient: 'absent',
         parseFailure: '组合文件为空',
       }
     }
 
     let personaComplete: boolean | 'unknown' = false
+    // Schema default is `true`: a mounted persona row that does not state the flag keeps
+    // the official runtime context (only `false` suppresses it).
+    let includeRuntimeContext: boolean | 'unknown' = true
     let personaMounted = false
     for (let i = 0; i < lines.length; i += 1) {
       const named = NAME_LINE.exec(lines[i])
@@ -244,29 +304,28 @@ export function readCompositionFacts(text: string): CompositionFacts {
       personaMounted = true
       for (const line of rowBlockAround(lines, i)) {
         const complete = COMPLETE_LINE.exec(line)
-        if (complete !== null) {
-          personaComplete = complete[1] === 'true'
-          break
-        }
+        if (complete !== null) personaComplete = complete[1] === 'true'
+        const runtime = RUNTIME_CONTEXT_LINE.exec(line)
+        if (runtime !== null) includeRuntimeContext = runtime[1] === 'true'
       }
       break
     }
 
     return {
       personaComplete,
+      includeRuntimeContext,
       personaMounted,
       agentInstructions: presenceOf(lines, AGENT_INSTRUCTIONS_MODULE),
       toolSkill: presenceOf(lines, TOOL_SKILL_MODULE),
-      subagentTool: presenceOf(lines, SUBAGENT_TOOL_MODULE),
       mcpClient: presenceOf(lines, MCP_CLIENT_MODULE),
     }
   } catch (error) {
     return {
       personaComplete: 'unknown',
+      includeRuntimeContext: 'unknown',
       personaMounted: false,
       agentInstructions: 'absent',
       toolSkill: 'absent',
-      subagentTool: 'absent',
       mcpClient: 'absent',
       parseFailure: String((error as Error)?.message ?? error),
     }
@@ -278,39 +337,58 @@ export function deriveReach(
   facts: CompositionFacts,
   ctx?: ReachContext,
 ): Pick<PresetReachRow, 'memory' | 'agentsMd' | 'skillCatalog' | 'subagent' | 'mcp'> {
-  const suppressed = facts.personaComplete === true
+  const suppressed = isSuppressingPreset(facts)
   const personaUnknown = facts.personaComplete === 'unknown'
+  const forceUnderSuppressing = ctx?.inject?.underSuppressingPresets === true
+  const domainOff = (key: string): boolean => ctx?.inject?.domains?.[key] === false
 
-  let memory: ReachState = suppressed ? 'suppressed' : personaUnknown ? 'unknown' : 'ok'
+  /**
+   * 本插件自己的文本（场景和记忆 / MCP 服务器与备注 / 技能目录 / 子智能体目录 / 提示词）
+   * 走 `agent/pre-step` 注入消息（src/context-inject.ts）—— 不再依赖系统提示词段，所以
+   * `persona complete` 压不到它。可达性只看两件事：域开关有没有关、预设压制时有没有开
+   * 「仍然注入」。预设信息读不到（`personaUnknown` 且无压制信号）时按可达处理。
+   */
+  const pluginText = (key: string): ReachState => {
+    if (domainOff(key)) return 'absent'
+    if (suppressed && !forceUnderSuppressing) return 'suppressed'
+    return 'ok'
+  }
+  const memory = pluginText('memory')
+  const mcp = pluginText('mcp')
 
-  let agentsMd: ReachState
-  if (suppressed) agentsMd = 'suppressed'
-  else if (personaUnknown) agentsMd = 'unknown'
-  else if (facts.agentInstructions === 'absent') agentsMd = 'absent'
-  else if (facts.agentInstructions === 'conditional') agentsMd = 'unknown'
-  else agentsMd = 'ok'
+  /**
+   * 官方两条行承载的能力（提示词 / 技能目录）：挂得上就官方送（它也走 pre-step 注入消息，
+   * persona `complete` 压不到），挂不上就由本插件的同名域兜底 —— 所以"这一行没挂"不等于
+   * "模型看不到"，只有兜底域也关掉（或缺省 `跟随预设`）时才是。
+   */
+  const officialOrFallback = (domainKey: string, carrier: ModulePresence): ReachState => {
+    // 官方那条行挂着 = **官方自己送到**，与本插件的域开关无关（开关只管本插件的兜底）：
+    // 用户实测（2026-09-16）—— 把注入域全关掉后，标准 / ptc / 创造三行的技能与提示词
+    // 依然应该是绿的（模型确实拿得到，官方 `dsh-tool-skill` / `dsh-agent-instructions` 送），
+    // 只有极简那行是红的（两条行都没挂 + 兜底也关着）。
+    if (carrier === 'mounted') return 'ok'
+    // 组合文本读不出来时既不能断言官方到得了，也不能断言本插件会兜底
+    // （注入侧对读不到的预设保守跳过兜底域）→ 如实报"判断不了"。
+    if (personaUnknown) return 'unknown'
+    // 官方行"可能挂着"（有条件启用）同样判断不了：注入侧对本插件兜底域的门槛是"官方明确没挂"
+    // （`carrier !== false`），所以这种预设下兜底根本不会发，官方挂不挂只有挂载期才知道。
+    if (carrier === 'conditional') return 'unknown'
+    if (domainOff(domainKey)) return 'absent'
+    if (suppressed && !forceUnderSuppressing) return 'suppressed'
+    return 'ok'
+  }
+  const agentsMd = officialOrFallback('prompt', facts.agentInstructions)
+  const skillCatalog = officialOrFallback('skills', facts.toolSkill)
 
-  let skillCatalog: ReachState
-  if (facts.toolSkill === 'mounted') skillCatalog = 'ok'
-  else if (facts.toolSkill === 'conditional') skillCatalog = 'unknown'
-  else skillCatalog = 'absent'
+  // 子智能体列（用户裁定 2026-09-16 第二版）：与记忆 / MCP 两列**同口径** —— 答"人设目录
+  // 到不到得了模型"。内容由本插件的注入域送达，跑起来用本插件自己的 `subagent_manager_run`
+  // （宿主平面工具，任何预设下都在），所以可达性只看域开关与压制。此前这一列只答"官方
+  // `dsh-tool-subagent` 挂没挂"——于是极简下就算开了「极简模式也注入」也永远红着，而那条官方
+  // 工具只是另一种委派入口（它认的是通用子代理，不认本插件的人设目录），与人设可达无关。
+  const subagent = pluginText('subagents')
 
-  // The official delegation tool is a plain mounting fact: it is a model-facing
-  // tool row, so nothing the persona does can hide it.
-  let subagent: ReachState
-  if (facts.subagentTool === 'mounted') subagent = 'ok'
-  else if (facts.subagentTool === 'conditional') subagent = 'unknown'
-  else subagent = 'absent'
-
-  // MCP: a client mounted in THIS composition only serves this preset; otherwise
-  // the answer is the host plane's, which every preset shares. An unknown host
-  // count is reported as `unknown` rather than assumed to be fine.
-  let mcp: ReachState
-  if (facts.mcpClient === 'mounted') mcp = 'ok'
-  else if (facts.mcpClient === 'conditional') mcp = 'unknown'
-  else if (ctx === undefined || ctx.mcpTools === undefined) mcp = 'unknown'
-  else mcp = ctx.mcpTools > 0 ? 'ok' : 'absent'
-
+  // MCP 列答的是"服务器清单与备注到不到得了"：宿主工具数不再参与 —— 清单为空时注入出去
+  // 也是空段（没什么可看的），"有几台 server"由插件页面回答，不是这一列的事。
   return { memory, agentsMd, skillCatalog, subagent, mcp }
 }
 
@@ -357,6 +435,7 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
       personaMounted: false,
       agentInstructions: 'absent',
       toolSkill: 'absent',
+      suppressing: false,
       memory: 'unknown',
       agentsMd: 'unknown',
       skillCatalog: 'unknown',
@@ -376,6 +455,7 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
       personaMounted: false,
       agentInstructions: 'absent',
       toolSkill: 'absent',
+      suppressing: false,
       memory: 'unknown',
       agentsMd: 'unknown',
       skillCatalog: 'unknown',
@@ -393,6 +473,7 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
     personaMounted: facts.personaMounted,
     agentInstructions: facts.agentInstructions,
     toolSkill: facts.toolSkill,
+    suppressing: isSuppressingPreset(facts),
     ...reach,
     ...(facts.parseFailure === undefined ? {} : { reason: `解析组合失败：${facts.parseFailure}` }),
   }
@@ -445,7 +526,7 @@ export async function assessPresetReach(roster: PresetRosterLike | undefined, ct
   const suppressed = rows.filter((row) => row.memory === 'suppressed').length
   const summary = rows.length === 0
     ? '未发现任何 Agent 预设'
-    : `预设 ${rows.length} 个 · 抑制记忆注入 ${suppressed} 个 · 技能目录缺失 ${rows.filter((row) => row.skillCatalog === 'absent').length} 个 · 无官方子智能体工具 ${rows.filter((row) => row.subagent === 'absent').length} 个`
+    : `预设 ${rows.length} 个 · 压制型预设（本插件默认不注入）${suppressed} 个 · 提示词通道缺失 ${rows.filter((row) => row.agentsMd === 'absent').length} 个 · 技能目录缺失 ${rows.filter((row) => row.skillCatalog === 'absent').length} 个 · 子智能体目录缺失 ${rows.filter((row) => row.subagent === 'absent').length} 个`
 
   return {
     rows,
@@ -462,23 +543,46 @@ export async function assessPresetReach(roster: PresetRosterLike | undefined, ct
  *
  * This is the load-bearing half of the fix: a model that lists memories while
  * running under a suppressing preset would otherwise assume those memories are
- * already in its context. Pure and synchronous so a contract test can pin the
- * wording to the facts.
+ * already in its context. The same reasoning covers MCP and the subagent roster:
+ * none of them reach the model while the preset keeps the plugin's runtime
+ * snapshot out of the conversation, so the notice says which tool to call
+ * instead — and where the user can flip that off.
  *
- * @returns the notice, or `''` when nothing is suppressed.
+ * Pure and synchronous so a contract test can pin the wording to the facts.
+ *
+ * 写法纪律（2026-09-16 第三版）：
+ *   - **不点名任何工具**。这条提示挂在 5 个发现型工具上，点名就必然出现循环
+ *     （`mcp_manager_list` 的结果里写着「用 mcp_manager_list 查询」——
+ *     用户实测发现）。按域名过滤只是把循环换成残缺列表；干脆不枚举：**域 → 工具**的
+ *     映射属于工具描述（常驻层），提示只负责说清「什么不在你上下文里」。
+ *   - 全域一句话说完，不逐域展开；不复述工具 schema 的细节。
+ *   - 第二版把"被 persona complete 压制"当成不可改变的事实；现在本插件改走 pre-step
+ *     注入消息（src/context-inject.ts），压制型预设下**默认不注入但可以打开**，
+ *     提示里如实给出这个开关的位置。
+ *
+ * @returns the notice, or `''` when nothing is out of context.
  */
-export function reachNoticeFor(presetId: string, facts: CompositionFacts): string {
+export function reachNoticeFor(
+  presetId: string,
+  facts: CompositionFacts,
+  inject?: { readonly underSuppressingPresets?: boolean; readonly domains?: Readonly<Record<string, boolean>> },
+): string {
   const parts: string[] = []
-  if (facts.personaComplete === true) {
+  const domainOff = (key: string): boolean => inject?.domains?.[key] === false
+  if (isSuppressingPreset(facts) && inject?.underSuppressingPresets !== true) {
     parts.push(
-      `场景记忆正文与 ~/.dsh/AGENTS.md 都不会自动进入你的上下文：预设「${presetId}」的 persona 是 complete，提示词只保留该 persona 本身。`,
-      '不要假设你已经看到任何记忆正文；需要内容时用 rule_manager_read 逐条读取。',
+      `预设「${presetId}」声明只要它自己的文本（persona complete / 关闭运行时上下文）：` +
+      '本插件注入的 —— 场景和记忆、MCP、技能、子智能体、提示词 —— 默认不注入，' +
+      '需要时用对应的 list / read 工具按需读取；不要假设你已经看到它们。' +
+      '（想让它在这类预设下也注入：插件的「兼容」页 → 注入。）',
     )
-  } else if (facts.agentInstructions === 'absent') {
-    parts.push(`~/.dsh/AGENTS.md 不会自动进入你的上下文：预设「${presetId}」未挂载 @deepseek-ai/dsh-agent-instructions。`)
-  }
-  if (facts.toolSkill === 'absent') {
-    parts.push(`技能目录在该预设下不可见（未挂载 @deepseek-ai/dsh-tool-skill）。`)
+  } else {
+    if (facts.agentInstructions !== 'mounted' && domainOff('prompt')) {
+      parts.push(`提示词（~/.dsh/AGENTS.md）不会自动进入你的上下文：预设「${presetId}」未挂载 @deepseek-ai/dsh-agent-instructions，本插件的注入兜底也关着。`)
+    }
+    if (facts.toolSkill !== 'mounted' && domainOff('skills')) {
+      parts.push('技能目录不在你的上下文里（官方 @deepseek-ai/dsh-tool-skill 行没挂，本插件的注入兜底也关着）。')
+    }
   }
   if (parts.length === 0) return ''
   return '\n\n⚠ 当前预设的注入边界：' + parts.join(' ')
@@ -493,6 +597,7 @@ export function reachNoticeFor(presetId: string, facts: CompositionFacts): strin
 export async function reachNoticeForAgent(
   roster: PresetRosterLike | undefined,
   agentCtx: unknown,
+  inject?: { readonly underSuppressingPresets?: boolean; readonly domains?: Readonly<Record<string, boolean>> },
 ): Promise<string> {
   if (roster === undefined || typeof roster.composedPreset !== 'function' || agentCtx === undefined || agentCtx === null) return ''
   let presetId = ''
@@ -503,7 +608,7 @@ export async function reachNoticeForAgent(
   }
   if (presetId === '' || typeof roster.read !== 'function') return ''
   try {
-    return reachNoticeFor(presetId, readCompositionFacts(String((await roster.read(presetId)) ?? '')))
+    return reachNoticeFor(presetId, readCompositionFacts(String((await roster.read(presetId)) ?? '')), inject)
   } catch {
     return ''
   }

@@ -26,38 +26,33 @@ Hard-refresh the browser (Cmd/Ctrl+Shift-R) afterwards — a **Tools** panel in 
 
 |  |  |
 |:---:|:---:|
-| ![Scenes](docs/images/1场景_en.png) | ![MCP](docs/images/2MCP_en.png) |
+| ![Scenes](docs/images/1-EN.png) | ![MCP](docs/images/2-EN.png) |
 | **Scenes** | **MCP** |
-| ![Skills](docs/images/3技能_en.png) | ![Subagents](docs/images/4子智能体_en.png) |
+| ![Skills](docs/images/3-EN.png) | ![Subagents](docs/images/4-EN.png) |
 | **Skills** | **Subagents** |
-| ![Prompts](docs/images/5提示词_en.png) | ![Memories](docs/images/6记忆_en.png) |
+| ![Prompts](docs/images/5-EN.png) | ![Memories](docs/images/6-EN.png) |
 | **Prompts** | **Memories** |
-| ![Sessions](docs/images/7会话_en.png) | ![Host](docs/images/8兼容_en.png) |
+| ![Sessions](docs/images/7-EN.png) | ![Host](docs/images/8-EN.png) |
 | **Sessions** | **Host** |
 
 ## Highlights
 
-| Capability | Description |
+In one line: **set up a scene for each kind of work — "day job / writing / coding" — and switch the whole stack with one click. Everything the plugin manages, the model can actually see.**
+
+| Highlight | What it means |
 |---|---|
-| Scene memory | `.md` bodies in an enabled scene are **injected into the system prompt**, effective on the next request |
-| Scene profile | Every scene freely combines **MCP tools / skills / subagents / memories**; opening a scene applies it, closing restores from the snapshot |
-| Scene prompt | A scene can bind a prompt preset; switching scenes rewrites `~/.dsh/AGENTS.md` (auto-restores on exit) |
-| Scene lock | Locking a scene freezes **all five domains read-only** (bound entries or not); a scene must be running to lock, and a locked scene can't be turned off — unlock first |
-| Per-tool switches | **Individual tools** inside one MCP server can be disabled: invisible to the model, blocked at call time |
-| Restart semantics | Restart only reconnects — it **never flips the enabled state** |
-| Secret safety | Secrets masked by default; "Reveal" & export **require a token** — no `token` configured means no plaintext |
-| Skill sources | Hooks up `~/.agents` / `~/.codex` / `~/.claude` & custom dirs; default sources must be read but skills can be deleted |
-| Recycle bin | Personas / scenes / prompts / memories / skills all go to recycle bin on delete, restorable |
-| AGENTS.md presets | Multiple global baselines, one-click apply, 5-generation backup |
-| Archived sessions | Grouped by project, batch restore / delete, retention cleanup; rebuildable after workspace deletion |
-| Transcript import/export | Take over Claude Code / Cursor / Codex / any text; export Markdown / JSONL |
-| Import pairs with export | Skills / subagents / prompts / memories all export too: pick items → zip into a directory you choose (read-only on sources) |
-| Subagents | One file per persona, with an **on/off toggle** deciding whether it is injected; run-and-discard, never enters History, inherits scene memories |
-| Context visibility | The persona catalog and "currently usable MCP servers + your notes" enter the system prompt, so the model knows what is available |
-| Prefix-cache friendly | Section text depends only on enabled scenes + file contents, byte-stable |
-| Compatibility check | The **Host** tab shows host capabilities, per-action routing, and degradations at a glance |
-| Model tools | **14** (`skill_mcp_manager_*` / `skill_manager_*` / `agentsmd_*` / `rule_manager_*` / `subagent_*`) |
-| UI | Custom design system, **eight tabs**, bilingual, follows host language |
+| One-click scene switch | Each scene carries its own set: which MCP servers, which skills, which personas, which memories; flip it on and the whole stack follows, turn it off and everything comes back |
+| Memories reach the model on their own | Write a few `.md` files under a scene and they become its knowledge base — injected automatically, no copy-pasting every session |
+| Notes for MCP servers | Write "if A is down, fall back to B" as a note — the model sees it and acts on it |
+| Disable a single tool | Keep a server but mute one tool: invisible and uncallable; "Restart" only reconnects and never flips switches |
+| Skills at a glance | Which copy is in effect, which is shadowed by a same-name skill, which is preferred — all marked in the list |
+| Subagent = one file, one role | Write a role file and delegate; only the result comes back and it never clutters your History; which roles are available can follow the scene |
+| Several prompt presets | Keep multiple AGENTS.md baselines (terse mode, teaching tone, …), switch with one click; a scene can bind its own |
+| Sessions no longer lost | Archive grouped by project, searchable, batch-restorable; import transcripts from Claude Code / Cursor / Codex |
+| The model always sees it | Everything the plugin manages (memories / MCP / skills / subagents / prompts) is announced to the model — one message per domain, republished only on change; under Minimal nothing is injected by default (follows the preset), force any domain on in the Host tab |
+| Lock it and relax | Lock a scene to make all five domains read-only; unlock first to change anything |
+| Deleted is not gone | Deletes land in a recycle bin and can be restored; skills / memories / personas / presets zip out and back in |
+| Safe by default | Secrets masked, plaintext needs a token; only the plugin's own files are written, skill sources stay untouched, and your config survives restarts and upgrades |
 
 ## Quick start
 
@@ -78,7 +73,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 Then remind me to hard-refresh the browser.
 ```
 
-The model can manage everything above via 14 tools (see highlights); scripts use `POST /dsh-plugin-tool-management/api` (`{op, args}` protocol).
+The model can manage everything above via 14 tools (`mcp_manager_*` / `skill_manager_*` / `prompt_manager_*` / `memory_manager_*` / `subagent_*`); scripts use `POST /dsh-plugin-tool-management/api` (`{op, args}` protocol).
 
 ---
 
@@ -89,7 +84,7 @@ The model can manage everything above via 14 tools (see highlights); scripts use
 - **A scene = a group, a memory = a `.md` file**. `memories/<scene>/<name>.md`, the whole body is injected, file names can be non-ASCII.
 - **Single-choice toggle**: only one scene at a time (others greyed out); turning all off = only `global` and `_shared` inject. New scenes start off.
 - **Scene-bound prompt**: switching scenes rewrites `~/.dsh/AGENTS.md` (5-gen backup, auto-restore on exit).
-- **Scene profile**: every scene combines MCP tools / skills / subagents / memories (any mix); opening a scene applies and narrows injection, closing restores verbatim (the toggle is the only entry).
+- **Scene profile**: every scene combines MCP tools / skills / subagents / memories (any mix); opening a scene applies and narrows injection, closing restores verbatim (the toggle is the only entry). Checked means on, unchecked means off, and **a missing section means nothing is checked — so that whole domain is off** (a scene with no MCP section therefore stops every MCP server, and exit starts them again). While a scene is active those switches (MCP, skills, subagents, prompts) are disabled — edit the profile instead; saves take effect immediately.
 - **Import**: `.md` / `.zip` (dir name = scene, bundles carry attachments), same names skipped never overwritten, over-limit items reported.
 - **Export**: pick memories and zip them, keeping the `scene/name` layout; bundle memories bring their attachments along. Sources are read-only.
 - **Injection budget**: default 64 KiB, oversized memories skipped with a list. Deletes go to recycle bin.
@@ -100,30 +95,34 @@ The model can manage everything above via 14 tools (see highlights); scripts use
 
 - **One file per persona**: `agents/<persona>.md`, frontmatter entirely optional.
 - **Tool limits per Agent preset**: each preset gets its own allow/deny list (mutually exclusive), effective at runtime by the current preset — fixes the old "union of all presets" list that broke subagents after a preset switch.
-- **Run and discard**: `subagent_run` runs with the persona, returns only the result, never enters History, inherits scene memories. Scenes can bind which personas are available.
-- **On/off toggles**: a disabled persona is not injected and invisible to the model (file untouched); newly created / imported / restored personas start enabled. Starting a scene auto-enables the personas its profile binds; exit restores precisely from the snapshot.
+- **Run and discard**: `subagent_manager_run` runs with the persona, returns only the result, never enters History, inherits scene memories. Scenes can bind which personas are available.
+- **On/off toggles**: a disabled persona is not injected and invisible to the model (file untouched); newly created / imported / restored personas start enabled. Entering a scene applies the profile's persona list exactly (checked on, everything else off; no section = all off) and exit restores the pre-scene switches. Inside a scene these toggles are disabled — edit the scene profile instead (saves take effect immediately).
 - **Persona catalog enters the system prompt**: names + descriptions only, so the model knows what it can delegate to; personas are renameable, scene bindings follow.
 
 ### MCP servers
 
 - **CRUD + immediate effect**: writes to `cordis.patch.yml`, HMR picks it up.
 - **Per-tool switches**: disable individual tools (invisible to the model, blocked at call), whole-server batch.
+- **Stopped servers still show their tools**: a server that is not running keeps the tool names and descriptions last seen (marked "as of last run"); one that has never run can be probed with "start server to read tools".
 - **Secret masking**: defaults to `••••••`, "Reveal" needs a token.
 - **Migrate & back up**: cross-project/global migration rolls back on failure; JSON export/import.
-- **Status & notes enter the system prompt**: only currently usable servers are listed, and your notes travel along as decision hints; levels are "global / app", new servers default to global.
+- **Status & notes enter the system prompt**: only currently usable servers are listed, and your notes travel along as decision hints; levels are "global / app", new servers default to global. Note: a persona-complete preset such as minimal suppresses that section — there the model reads server names, enablement, tool counts and notes with `mcp_manager_list`.
 
 ### Skills
 
 - **Sources at a glance**: project / DSH / Agents / Codex / Claude / custom dirs, grouped by source.
 - **Opposite permissions**: default sources must be read but skills can be deleted; external dirs can be disabled/removed but skills are read-only.
 - **Remove ≠ disable**: remove = directory not scanned at all (files untouched, restorable); disable = still listed but not callable.
-- **Same-name picker / custom dirs / ZIP import & export / recycle bin**.
+- **Same-name skills: see which copy is in effect**: the winning copy is marked "preferred", shadowed ones name the source that wins, and enabling a shadowed copy says so instead of pretending it worked.
+- **Custom dirs / ZIP import & export / recycle bin**.
 
 ### Prompt presets
 
 - Multiple `~/.dsh/AGENTS.md` baselines, one-click apply (the host re-reads that file every turn, so it takes effect on the next turn), 5-gen backup.
+- **Remembers the preset applied last**: even after you hand-edit `AGENTS.md`, the model can still answer "which preset is this from" (flagged "changed since").
 - **Description**: one line saying what a preset is for — shown in this panel only. It lives in a sibling `meta.json`, never in AGENTS.md, so it is never injected into prompts.
-- Create with body inline, edit can change id (= dir rename, scene bindings follow). Active preset can't be deleted; deletes go to recycle bin.
+- Create with body inline, edit can change id (= dir rename, scene bindings follow). A referenced preset cannot be deleted (bound by a scene, currently in AGENTS.md, or the baseline to restore on scene exit); deletes go to recycle bin.
+- **While a scene drives the baseline, Apply only works for that scene's bound preset** (applying another one would bypass the binding — that is exactly how "shows A, injects B" happened); rebind it on the Scenes page or exit the scene first.
 
 ### Archived sessions
 
@@ -136,8 +135,8 @@ The model can manage everything above via 14 tools (see highlights); scripts use
 The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they must be the same physical modules, or every "adapt to host" decision degrades into guesswork.
 
 - **Host tab**: host version, usable capability count, per-action routing (native/adapter/unavailable), degradations & reasons. Read-only.
-- **Command line**: `node scripts/doctor.mjs` (check), `node scripts/host-deps.mjs --fix` (align deps).
-- Under `minimal` preset, scene memory / AGENTS.md / skill directory don't take effect (by design); the Host tab marks this per column.
+- **Command line**: `node scripts/doctor.mjs` (check), `node scripts/host-deps.mjs --fix` (align deps), `npm run sync:profile` (mirror the build into the profile's local install — a `file:` install is a hard-linked copy, so files ADDED by a build never show up there on their own).
+- Under a **suppressing preset** such as `minimal` (persona `complete` / runtime context off) this plugin's injection is **off by default** (following the preset's intent), and the prompt and the skills are missing because their official rows are not mounted — the Host tab marks this per column, and its "Injection" block can force any domain back on.
 
 ---
 
@@ -145,15 +144,16 @@ The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they mu
 
 | Content | Location |
 |---|---|
-| MCP definitions | `cordis.patch.yml` (auto `.bak` before rewrite) |
-| Skill policy / custom dirs | `~/.dsh/tool-management/state.json` |
-| Skills / memories / personas / presets | `~/.dsh/tool-management/{skills,memories,agents,agents-md}/` |
-| Subagent toggles | `~/.dsh/tool-management/agents-index.json` |
-| Recycle bin | `~/.dsh/tool-management/trash/` |
+| MCP definitions | `~/.dsh/cordis.patch.yml` (written by the plugin; pre-write copies land in the hub's `backups/`) |
+| Skill policy / custom dirs | `~/.dsh/tool-management/skills-state.json` |
+| Skills / memories / personas / presets | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/` |
+| Subagent toggles | `~/.dsh/tool-management/subagents-index.json` |
+| Recycle bin | `~/.dsh/tool-management/trash/{skills,subagents,prompts,scenes}-trash/` |
 | Archive ledger / retention | `~/.dsh/tool-management/history-*.json` |
-| Memory index / scenes / profiles | `~/.dsh/tool-management/rules-index.json` |
-| Page settings | `~/.dsh/dsh-plugin-tool-management-settings.json` |
-| Runtime log | `~/.dsh/dsh-plugin-tool-management.log` |
+| Memory index / scenes / profiles | `~/.dsh/tool-management/memories-index.json` |
+| MCP sidecars (disabled tools / known tools / notes / settings) | `~/.dsh/tool-management/mcp-*.json` |
+| Injection settings (five domain switches / suppressing-preset policy) | `~/.dsh/tool-management/inject-settings.json` |
+| Runtime log / patch backups | `~/.dsh/tool-management/tool-management.log` · `backups/` |
 
 **No user data is stored inside the plugin's install directory** (`dsh plugin update` replaces it wholesale).
 
@@ -177,8 +177,8 @@ The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they mu
 | Broken config, DSH won't boot | Restore the newest `.bak-<timestamp>`. |
 | Action stopped after DSH upgrade | Settings → Tools → **Host** for the reason; `doctor.mjs` → `host-deps.mjs --fix`. |
 | Still asked to confirm in `approval=never`? | No card appears — straight through with a log line; switch back to "workspace write" to get asked again. |
-| `subagent_run` reports spawn unavailable | Host has no spawn provider; mount `@deepseek-ai/dsh-subagent-spawn-in-process` and restart. |
-| Scene binds persona A, but official `subagent` ran something else | Two channels: this plugin only governs `subagent_run`; official `subagent` / `subagent_fork` have no gate and don't know about personas. |
+| `subagent_manager_run` reports spawn unavailable | Host has no spawn provider; mount `@deepseek-ai/dsh-subagent-spawn-in-process` and restart. |
+| Scene binds persona A, but official `subagent` ran something else | Two channels: this plugin only governs `subagent_manager_run`; official `subagent` / `subagent_fork` have no gate and don't know about personas. |
 
 ---
 
@@ -187,7 +187,7 @@ The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they mu
 ```bash
 npm install
 npm run build        # tsc + sync client
-npm test             # build + i18n + semantic-contract tests
+npm test             # build + i18n + smoke tests (mount & render)
 npm run check:i18n   # dictionary self-check
 npm run doctor       # host compatibility check
 ```

@@ -7,8 +7,11 @@
 //
 // id 即目录名：字符集口径见 `./preset-id.ts`（用户裁定「什么都能写」，只留
 // 文件系统安全约束）；`__last-applied__` 是备份槽，不算用户预设。
-// 「当前生效」靠比对 ~/.dsh/AGENTS.md 的 sha256 与各预设 sha256 推断，
-// 无状态文件——用户手改全局文件也能如实反映。
+// 「当前生效」（`active`）靠比对 ~/.dsh/AGENTS.md 的 sha256 与各预设 sha256 推断 ——
+// 用户手改全局文件也能如实反映。但那只能回答「内容一不一样」，回答不了「这份文件是
+// 从哪个预设来的」：手改一次之后 `active` 全为 false，模型侧列表就只剩空（或被迫
+// 全列，白烧上下文）。所以另记一份 `__applied__.json`（只记「最近一次应用的是谁」），
+// 两个事实分开报：`active` = 内容逐字节相同；`lastApplied` = 最近一次应用写入的是它。
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -19,6 +22,11 @@ const FILENAME = 'AGENTS.md'
 /** 描述侧车：与 AGENTS.md 同目录，避免把「只给使用者看」的文字注入提示词。 */
 const META_FILE = 'meta.json'
 const LAST_APPLIED_ID = LAST_APPLIED_PRESET_ID
+/**
+ * 「最近一次应用」的记录侧车。是**文件**不是目录，所以 `list()` / `ensureInit()` 的
+ * `isDirectory()` 过滤天然把它排除在预设之外。
+ */
+const APPLIED_FILE = '__applied__.json'
 /** 新建预设的初始正文（空模板）；用户也可以直接粘贴自己的内容。 */
 const BLANK_TEMPLATE = '# AGENTS.md\n\n（DSH 全局指令基线预设，待编辑）\n'
 /** 全局 AGENTS.md 的备份代际上限：与 mcpm patch 的 KEEP_PATCH_BACKUPS 同纪律。 */
@@ -33,7 +41,13 @@ export interface AgentsMdDeps {
 
 export interface AgentsMdPresetRow {
   id: string
+  /** 内容逐字节等于当前 ~/.dsh/AGENTS.md（真·生效）。 */
   active: boolean
+  /**
+   * 最近一次「应用」写入的是这个预设 —— 但全局文件之后可能被手改过（此时 `active` 为 false）。
+   * 有它，模型侧列表在手改之后仍能给出「这份文件从哪来」，而不必退化成全列。
+   */
+  lastApplied?: boolean
   /** 「只给使用者看」的一句话说明。存 `<id>/meta.json`，**绝不写进 AGENTS.md**（正文会被原样注入）。 */
   description?: string
 }
@@ -137,6 +151,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
         // 库目录不存在视作空（首次运行尚未创建）
       }
       const globalHash = await sha256OfFile(globalPath)
+      const appliedId = await readAppliedId()
       const ids = entries
         .filter((e) => e.isDirectory() && isValidPresetId(e.name) && e.name !== LAST_APPLIED_ID)
         .map((e) => e.name)
@@ -146,6 +161,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
           return {
             id,
             active: globalHash !== null && contentHash !== null && globalHash === contentHash,
+            ...(appliedId === id ? { lastApplied: true } : {}),
             description: await readDescription(id),
           }
         }),
@@ -218,6 +234,11 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     }
     await writeFile(join(deps.presetsDir, targetId, FILENAME), String(content ?? ''), 'utf8')
     await writeDescription(targetId, description)
+    if (targetId !== safeId && await readAppliedId() === safeId) {
+      // 改名的正好是「最近一次应用」的那个预设：记录跟着改，否则它指向一个不存在的 id，
+      // 手改过全局文件的用户就再也看不到「这份文件从哪来」。
+      await writeAppliedId(targetId)
+    }
     return { ok: true, id: targetId, ...(targetId === safeId ? {} : { renamedFrom: safeId }) }
   }
 
@@ -247,6 +268,27 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     try { return await readFile(await deps.getGlobalAgentsMdPath(), 'utf8') } catch { return null }
   }
 
+  /** 「最近一次应用」的预设 id；无记录 / 记录不可读 / id 已不合法 → `null`（一律不猜）。 */
+  async function readAppliedId(): Promise<string | null> {
+    try {
+      const raw = JSON.parse(await readFile(join(deps.presetsDir, APPLIED_FILE), 'utf8'))
+      const id = raw && typeof raw.id === 'string' ? raw.id : null
+      return id !== null && isValidPresetId(id) && id !== LAST_APPLIED_ID ? id : null
+    } catch { return null }
+  }
+
+  /** 记下本次应用。**best-effort**：记录失败绝不能影响「应用」本身。 */
+  async function writeAppliedId(id: string | null): Promise<void> {
+    try {
+      await mkdir(deps.presetsDir, { recursive: true })
+      await writeFile(
+        join(deps.presetsDir, APPLIED_FILE),
+        JSON.stringify({ id, at: new Date().toISOString() }, null, 2) + '\n',
+        'utf8',
+      )
+    } catch { /* ignore */ }
+  }
+
   async function apply(id: string): Promise<{ ok: true; id: string; backedUp: boolean } | { ok: false; error: string }> {
     const bad = idError(id)
     if (bad) return { ok: false, error: '非法 id：' + bad }
@@ -257,6 +299,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     const prev = await readGlobal()
     const backedUp = await backupGlobal(prev)
     await writeFile(await deps.getGlobalAgentsMdPath(), content, 'utf8')
+    await writeAppliedId(safeId)
     return { ok: true, id: safeId, backedUp }
   }
 
@@ -274,6 +317,8 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     } catch (e) {
       return { ok: false, error: '写入全局 AGENTS.md 失败：' + message(e) }
     }
+    // 基线内容可能来自用户手写（场景退出恢复）→ 不绑定任何预设。
+    await writeAppliedId(null)
     return { ok: true, backedUp }
   }
 
@@ -301,7 +346,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
   }
 
   /**
-   * 删除预设 = **移入回收站**（整个 `agents-md/<id>/` 目录搬走）。
+   * 删除预设 = **移入回收站**（整个 `prompts/<id>/` 目录搬走）。
    * 备份槽 `__last-applied__` 不可删；正在生效的预设由调用方先拦（见 index.ts）。
    */
   async function remove(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
@@ -311,18 +356,18 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     if (bad) return { ok: false, error: '非法 id：' + bad }
     const dir = join(deps.presetsDir, safeId)
     try { await stat(dir) } catch { return { ok: false, error: '预设不存在：' + safeId } }
-    const moved = await moveToTrash('agents-md', safeId, [{ from: dir, dest: 'preset' }])
+    const moved = await moveToTrash('prompts', safeId, [{ from: dir, dest: 'preset' }])
     if (moved.ok === false) return { ok: false, error: '移入回收站失败：' + moved.error }
     return { ok: true, id: safeId }
   }
 
   async function trashList(): Promise<{ ok: true; trash: TrashEntry[] }> {
-    return { ok: true, trash: await listTrashEntries('agents-md') }
+    return { ok: true, trash: await listTrashEntries('prompts') }
   }
 
   /** 从回收站恢复预设：同 id 已存在时**拒绝**（绝不覆盖）。 */
   async function trashRestore(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-    const entry = await readTrashEntry('agents-md', String(id ?? '').trim())
+    const entry = await readTrashEntry('prompts', String(id ?? '').trim())
     if (!entry) return { ok: false, error: '回收站条目不存在：' + String(id ?? '').trim() }
     const bad = idError(entry.name)
     if (bad) return { ok: false, error: '回收站里的 id 不合法：' + bad }
@@ -330,17 +375,17 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     try { await stat(target); return { ok: false, error: '无法恢复，同 id 预设已存在：' + entry.name } } catch { /* 可用 */ }
     try {
       await mkdir(deps.presetsDir, { recursive: true })
-      await moveOutOfTrash('agents-md', entry.id, 'preset', target)
+      await moveOutOfTrash('prompts', entry.id, 'preset', target)
     } catch (e) {
       return { ok: false, error: '恢复失败：' + message(e) }
     }
-    await purgeTrashEntry('agents-md', entry.id)
+    await purgeTrashEntry('prompts', entry.id)
     return { ok: true, id: entry.name }
   }
 
   async function trashDelete(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
     const clean = String(id ?? '').trim()
-    const gone = await purgeTrashEntry('agents-md', clean)
+    const gone = await purgeTrashEntry('prompts', clean)
     if (!gone) return { ok: false, error: '回收站条目不存在：' + clean }
     return { ok: true, id: clean }
   }

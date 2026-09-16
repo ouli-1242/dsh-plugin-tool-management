@@ -5,7 +5,7 @@
 //   ① 文件系统安全：不含路径分隔符与 Windows 非法字符、不以点开头/结尾、
 //      不是 `.` / `..`、不是 Windows 保留设备名；
 //   ② 一个保留字：`__last-applied__`（apply 的备份槽，不是用户预设）。
-// 这套口径由 agents-md 服务与场景绑定（`scenes[].prompt`）共用，避免两处漂移。
+// 这套口径由提示词服务（agents-md/ 目录）与场景绑定（`scenes[].prompt`）共用，避免两处漂移。
 // 约定镜像 @deepseek-ai/dsh-agent-presets 的「id 即目录名」，但放宽了字符集。
 
 /** id 长度上限（字符数；目录名过长在 Windows 上还受 MAX_PATH 约束）。 */

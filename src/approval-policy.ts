@@ -19,7 +19,7 @@
 // try/catch 里，异常被吞成 false，于是 never 会话里永远走 ask 分支（2026-09-13
 // 19:52 会话实测到的 bug）。dsh-tools 自己拿这条缝也是 `this.ctx.get("approval")`
 // （dsh-tools/lib/index.js `serviceAsk`），且它的 inject 同样只有 systemPrompt
-// ——可作对照。回归测试见 test/approval-policy.test.mjs。
+// ——可作对照。
 
 /** 审批服务缝的最小结构面（真实实现是 dsh-user-approval 的 ApprovalService）。 */
 export interface ApprovalSeam {

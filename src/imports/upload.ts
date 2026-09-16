@@ -160,7 +160,7 @@ export interface MemoryTarget {
   name: string
   bytes: Uint8Array
   kind: 'flat' | 'bundle'
-  /** 仅 bundle：SKILL.md 的同层附件（名字平铺在 bundle 目录里，与 rules-attach 落点一致）。 */
+  /** 仅 bundle：正文（`<名>.md`）的同层附件（名字平铺在 bundle 目录里，与 rules-attach 落点一致）。 */
   attachments?: MemoryAttachment[]
 }
 
@@ -171,8 +171,9 @@ const MAX_BUNDLE_ATTACH_TOTAL = 16 * 1024 * 1024
 /**
  * 记忆落点：
  * - 裸 `.md` → 落到 defaultScene（空串 = 全局：任何对话都注入）；zip 内带目录 → 目录路径即场景/分组。
- * - zip 内 `<场景路径>/<名>/SKILL.md` → bundle 记忆（目录末段是记忆名，其余前缀是场景）；同层非 `.md`
- *   文件作为附件一并带入（`.md` 不带——bundle 是叶子，塞进去不会被发现，静默降级反而误导）。
+ * - zip 内 `<场景路径>/<名>/<名>.md` → bundle 记忆（目录末段是记忆名，正文文件名与目录名一致，
+ *   其余前缀是场景）；同层非 `.md` 文件作为附件一并带入（`.md` 不带——bundle 是叶子，塞进去不会被发现，
+ *   静默降级反而误导）。旧导出包里正文可能仍叫 `SKILL.md`，也认（只读兼容）。
  * - zip 根层的裸 `SKILL.md` 没有目录名可当记忆名 → 跳过并回报；`SKILL.md` 的大小写变体也跳过
  *   （发现层只认精确 `SKILL.md`，NTFS 大小写不敏感下两者不能共存）。
  */
@@ -187,13 +188,39 @@ export function planMemoryImport(entries: RawEntry[], defaultScene: string): { t
     return { dir: idx >= 0 ? path.slice(0, idx) : '', base: path.slice(idx + 1) }
   }
 
-  // pass 1：认 bundle 目录（精确 SKILL.md；大小写变体只报跳过，不当 bundle 也不当 flat）。
+  // pass 1：认 bundle 目录（`<目录名>.md` 是正文；旧导出包的 `SKILL.md` 也认，只读兼容）。
   const bundleDocs = new Map<string, RawEntry>()
+  const consumed = new Set<string>() // 已被 pass 1 认领（或已回报）的条目路径，pass 3 不再当 flat 处理
   for (const entry of entries) {
     const { dir, base } = split(entry.path)
-    if (base !== 'SKILL.md' && base.toLowerCase() !== 'skill.md') continue
-    if (base !== 'SKILL.md') { problems.push({ name: entry.path, reason: 'SKILL.md 大小写变体不导入（发现层只认精确 SKILL.md，且与 NTFS 大小写不敏感冲突），已跳过' }); continue }
-    if (dir === '') { problems.push({ name: entry.path, reason: 'SKILL.md 在 zip 根层，没有目录名可作记忆名，已跳过' }); continue }
+    const dirName = dir === '' ? '' : dir.slice(dir.lastIndexOf('/') + 1)
+    const isLegacyCaseVariant = base.toLowerCase() === 'skill.md' && base !== 'SKILL.md'
+    if (isLegacyCaseVariant) {
+      problems.push({ name: entry.path, reason: 'SKILL.md 大小写变体不导入（发现层只认精确 SKILL.md，且与 NTFS 大小写不敏感冲突），已跳过' })
+      consumed.add(entry.path)
+      continue
+    }
+    // 一级目录恒为场景（与发现层 `discover`/`probeSceneFilesSync` 同口径）：`1/1.md` 是
+    // 「场景 1 的记忆 1」的 flat 正文，**不是**根层 bundle「1」——bundle 只认目录至少两段
+    // （`<场景>/<名>/<名>.md`）。认错会写出发现层根本读不到、且会把整个场景目录吃成叶子的形态。
+    const isRootSkill = base === 'SKILL.md' && dir === ''
+    if (isRootSkill) {
+      // zip 根层的裸 SKILL.md：没有目录名可作记忆名。
+      problems.push({ name: entry.path, reason: 'SKILL.md 在 zip 根层，没有目录名可作记忆名，已跳过' })
+      consumed.add(entry.path)
+      continue
+    }
+    const isLegacyDoc = base === 'SKILL.md' && dir.includes('/')
+    const isNamedDoc = dir.includes('/') && base === `${dirName}.md`
+    if (!isLegacyDoc && !isNamedDoc) continue
+    consumed.add(entry.path)
+    const existing = bundleDocs.get(dir)
+    if (existing) {
+      // 同一目录里同时出现 `<目录名>.md` 与旧的 `SKILL.md`（少见）：`<目录名>.md` 优先。
+      const { base: existingBase } = split(existing.path)
+      if (isNamedDoc && existingBase !== `${dirName}.md`) bundleDocs.set(dir, entry)
+      continue
+    }
     bundleDocs.set(dir, entry)
   }
 
@@ -204,7 +231,7 @@ export function planMemoryImport(entries: RawEntry[], defaultScene: string): { t
     if (base.toLowerCase().endsWith('.md')) continue
     const bundleDir = bundleDocs.has(dir) ? dir : [...bundleDocs.keys()].find((d) => dir.startsWith(d + '/'))
     if (!bundleDir) continue
-    if (dir !== bundleDir) { problems.push({ name: entry.path, reason: 'bundle 只支持一层附件（SKILL.md 同层），子目录条目已跳过' }); continue }
+    if (dir !== bundleDir) { problems.push({ name: entry.path, reason: 'bundle 只支持一层附件（正文同层），子目录条目已跳过' }); continue }
     if (!entry.bytes.length) { problems.push({ name: entry.path, reason: '附件内容为空，已跳过' }); continue }
     const name = base
     if (!isValidImportName(name)) { problems.push({ name: entry.path, reason: '附件名不合法，已跳过' }); continue }
@@ -216,7 +243,7 @@ export function planMemoryImport(entries: RawEntry[], defaultScene: string): { t
     attachments.set(bundleDir, list)
   }
 
-  // pass 3：先规划 bundle 目标（含 SKILL.md 同层 .md 的明确跳过），再走 flat。
+  // pass 3：先规划 bundle 目标（含正文同层 .md 的明确跳过），再走 flat。
   for (const [dir, doc] of bundleDocs) {
     const segs = dir.split('/')
     const name = segs[segs.length - 1]
@@ -231,10 +258,9 @@ export function planMemoryImport(entries: RawEntry[], defaultScene: string): { t
   for (const entry of entries) {
     const { dir, base } = split(entry.path)
     if (!base.toLowerCase().endsWith('.md')) continue
-    if (base === 'SKILL.md') continue
-    if (base.toLowerCase() === 'skill.md') continue // pass 1 已回报
+    if (consumed.has(entry.path)) continue // pass 1 已认领为 bundle 正文，或已回报为大小写变体/根层裸 SKILL.md
     if ([...bundleDocs.keys()].some((d) => dir === d || dir.startsWith(d + '/'))) {
-      problems.push({ name: entry.path, reason: 'bundle 目录内的非 SKILL.md 的 .md 不导入（bundle 是叶子，放进去不会被发现），已跳过' })
+      problems.push({ name: entry.path, reason: 'bundle 目录内的非正文 .md 不导入（bundle 是叶子，放进去不会被发现），已跳过' })
       continue
     }
     const name = base.slice(0, -3) // 去掉 .md
