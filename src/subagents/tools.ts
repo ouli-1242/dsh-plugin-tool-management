@@ -3,6 +3,9 @@
 // defineTool() 编译后再 register（C4：裸 register 会把未编译的参数声明直接发给模型 API）。
 // 参数与 output schema 用 as const 保留字面量类型，defineTool 才能推断出参数表。
 import type { PersonaDoc, SubagentService, ToolFilterDecision } from './service.js'
+// 深度探针（`subagentDepthOf`）与目录判据（`catalogInjectedAt`）都不再需要：
+// 2026-09-17 方案 A 之后，这两个工具都不再看会话深度 —— 委派由官方决定（默认能嵌套到 3 层），
+// `catalogDepth` 只管常驻目录注入到哪些会话。
 
 export function text(v: string) {
   return [{ type: 'text' as const, text: v }]
@@ -38,7 +41,7 @@ export function defineSubagentManagerListTool(subagents: {
 }) {
   return {
     name: 'subagent_manager_list',
-    description: 'List available personas (pre-configured subagent profiles) with their descriptions. Call before subagent_manager_run.',
+    description: 'List available personas (pre-configured subagent profiles) with their descriptions. The same catalog is injected into your context each turn (the「可委派的子智能体」system-reminder); call this tool before subagent_manager_run for the full, always-current list.',
     parameters: {} as const,
     output: {
       schema: { type: 'string' } as const,
@@ -46,6 +49,10 @@ export function defineSubagentManagerListTool(subagents: {
     },
     async execute(_args: unknown, exec: unknown) {
       const { allowed, reason } = await filterBySceneBinding(await subagents.list(), await subagents.sceneLists())
+      // 这里**不再按深度过滤**（2026-09-17 用户裁定，方案 A）：`catalogDepth` 只决定常驻目录
+      // 注入到哪些会话，与"能不能委派"无关 —— 委派由官方决定（`dsh-tool-subagent` 默认能嵌套
+      // 到 3 层）。此前按深度过滤等于把可用人设藏起来：目录不注入时模型只能靠这个工具查，
+      // 而工具又不列全，结果是"明明能委派却查不到人设"。
       const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(无描述)'))
       let notice = ''
       try {
@@ -69,18 +76,30 @@ export interface RunToolDeps extends SubagentService {
 export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
   return {
     name: 'subagent_manager_run',
-    description: 'Run a named persona as a one-shot subagent: it gets the persona as its own system prompt, works on `task` in a fresh context, and returns only its final output. Stateless — it does not see this conversation. Expensive: starts a fresh model session, so use it only for self-contained work.',
+    // 描述按「是什么 → 两种模式 → 何时用（含与官方两个委派工具的分界）→ 何时改用别的」组织。
+    // 2026-09-17 补了**分界规则**与 `inherit`：此前上下文里虽然注入了人设目录与「用
+    // subagent_manager_run 执行」，但没有任何一句话说明它和官方 `subagent` / `subagent_fork`
+    // 何时该用谁 —— 本机实测（session-ee722e23）模型读完 README 后选了官方 `subagent_fork`
+    // （fork 能继承已读内容、不必复述）。现在人设通道也有 fork（`inherit`），分界只剩
+    // 「要不要后台跑」一件事，所以规则能写成"贴合人设的一律走这里"。
+    //
+    // 「何时不用」那一段保留（2026-09-17，用户采纳的四条里的第 6 条）：参照 Claude Code 的
+    // Agent 工具（`AgentTool/prompt.ts:232-240`），把"不该用"写成**带替代工具**的具体清单
+    // （具体路径→Read；找定义→Grep/Glob），比笼统说"这个很贵"有用得多。
+    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output.\n\nTwo modes: by default the child starts fresh — it cannot see this conversation, so `task` must be self-contained. With `inherit: true` the child is seeded with this conversation\'s finished turns (the same mechanism as the host\'s `subagent_fork`), so `task` only states what is new — use it for follow-ups on work already completed. Only **finished** turns are inherited: a delegation made during the current turn inherits nothing from that turn, so a mid-turn hand-off still needs a self-contained `task`.\n\nWrite `task` as the goal plus the context it needs — do not prescribe method or output format: those belong to the persona.\n\nWhen to use: work that matches one of the personas in the「可委派的子智能体」system-reminder injected into your context (or from subagent_manager_list) — a review, a focused investigation, a piece of writing — where the detail does not belong in your own context. Work that matches a persona belongs here, not in the host\'s `subagent` / `subagent_fork`: those take no persona. Use them only when no persona fits, or when you need a background run (this tool waits for the result).\n\nWhen NOT to use: reading a specific file (use Read), finding a definition (use Grep/Glob), or touching two or three files (use Read directly).',
     parameters: {
       agent: { type: 'string', required: true, description: 'Persona name from subagent_manager_list.' },
-      task: { type: 'string', required: true, description: 'Self-contained task, with all context the subagent needs.' },
+      task: { type: 'string', required: true, description: 'The task for the subagent: the goal plus the context it needs. Self-contained by default; with inherit: true it only needs to state what is new. Leave method and output format to the persona.' },
+      inherit: { type: 'boolean', description: 'Let the subagent inherit this conversation\'s finished turns, like the host\'s subagent_fork (default false = a fresh child that cannot see this conversation). Only finished turns are inherited — a delegation made mid-turn cannot pass the current turn\'s content, so write `task` as if it were self-contained.' },
     } as const,
     output: {
       schema: { type: 'string' } as const,
       render: (_a: unknown, v: unknown) => text(String(v)),
     },
-    async execute(args: { agent: string; task: string }, exec: any) {
+    async execute(args: { agent: string; task: string; inherit?: boolean }, exec: any) {
       const name = String((args && args.agent) || '').trim()
       const task = String((args && args.task) || '').trim()
+      const inherit = args && args.inherit === true
       if (!task) throw new Error('task 不能为空')
       // 官方 SubagentStartRequest.parent 必填：调用方 agent 缺失时给结构化错误，不把 undefined 透传下去。
       if (!exec || !exec.agent) throw new Error('缺少调用方 agent（exec.agent 不可用）：无法创建子代理运行')
@@ -91,12 +110,18 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
         const available = allowed.map((p) => p.name).join('、') || '(无)'
         throw new Error('人设不可用: ' + name + (reason ? '（' + reason + '）' : '（可用: ' + available + '）'))
       }
+      // 这里**刻意没有**"深度不够就拒绝"的检查（2026-09-17 用户裁定，方案 A）。
+      // 它此前基于一个错误假设：以为传 `maxDepth: 1` 会让子会话再委派必然失败。实际上官方
+      // `dsh-tool-subagent` 的默认是 **3**、provider 只在**传了值**时才校验，所以子代理本来
+      // 就能继续嵌套。那个检查的唯一净效果是让**我们的**工具比官方严 —— 同一个子会话里官方
+      // 工具能委派、我们的被自己拦下 —— 而用户真想禁止嵌套也禁止不了（官方工具照样能）。
+      // `catalogDepth` 现在只管"目录注入到哪些会话"，不参与委派可行性判断。
       // 按当前会话的 Agent 预设算工具限制：判断不了当前预设、或名单里的工具已经不存在时，
       // 结论里会带一句实话，跟着结果一起返回——不静默改变限制的强度。
       const decision = typeof subagents.toolFilterFor === 'function'
         ? await subagents.toolFilterFor(persona, exec.agent && exec.agent.ctx)
         : undefined
-      const r = await subagents.runSerial(exec.agent, persona, task, exec.signal, decision === undefined ? undefined : decision.filter)
+      const r = await subagents.runSerial(exec.agent, persona, task, exec.signal, decision === undefined ? undefined : decision.filter, inherit)
       const prefix = r.stopReason && r.stopReason !== 'completed' ? `[stopReason: ${r.stopReason}]\n` : ''
       const note = decision && decision.note ? `⚠ ${decision.note}\n\n` : ''
       return note + prefix + r.text

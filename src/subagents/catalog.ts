@@ -20,6 +20,8 @@
 // 用 stale-while-revalidate：`text()` 同步返回缓存值并在超龄时后台重算，
 // `refresh()` 供写操作后立即重算。
 import type { PersonaDoc } from './service.js'
+import { catalogInjectedAt } from './service.js'
+import { subagentDepthOf } from '../context-inject.js'
 import { filterBySceneBinding } from './tools.js'
 
 /**
@@ -50,6 +52,10 @@ export function catalogDescription(value: unknown, maxLength: number): string {
 /**
  * 渲染人设目录段（纯函数，便于单独推理）。
  *
+ * ⚠️ 传进来的 `allowed` 必须**已经按当前会话的目录注入深度过滤过**（调用方
+ * `createSubagentCatalog.text` 负责，用 `catalogInjectedAt`）。这里刻意不再过滤一遍：
+ * 判据只该有一个来源，本函数只管排版。
+ *
  * 返回 `''` 表示不注入 —— `renderPrompt` 会删除空段，所以不用人设的用户零 token 成本。
  * 名字按字典序排序：即使底层目录枚举顺序变化，段文本也保持逐字节稳定（前缀缓存契约）。
  *
@@ -57,8 +63,10 @@ export function catalogDescription(value: unknown, maxLength: number): string {
  * 「该人设的完整提示词会成为子代理的系统提示词」「子代理在独立上下文中执行」都是宿主内部
  * 机制，模型无法据此行动；而委派的调用语义与成本（自包含任务、只回最终结果、会开新会话）
  * 已经写在 `subagent_manager_run` 的描述里 —— 常驻层再重复一遍等于同一件事付两次 token。
- * 第二版（用户指出"太冗余"）：引导语压成**半行** —— 只留「怎么用」，"下面是名字与摘要"这类
- * 自明的话删掉；域是什么由消息引导语与轨迹行名交代，细节由 `subagent_manager_list` 承担。
+ *
+ * 第三版（2026-09-17 用户指出"还是那句套话"）：**职责彻底切开** —— 本函数只排版清单
+ * （`- **名字** — 描述`），"这是什么 + 该拿它做什么"整句交给注入通道的引导语。于是这里
+ * 既没有标题也没有"可委派给下列子智能体"那句：一处内容只有一个出处。
  */
 export function renderSubagentCatalog(
   allowed: readonly PersonaDoc[],
@@ -70,13 +78,11 @@ export function renderSubagentCatalog(
   const shown = sorted.slice(0, Math.max(0, maxEntries))
   const lines = shown.map((p) => '- **' + p.name + '** — ' + (catalogDescription(p.description, maxDescription) || NO_DESCRIPTION))
   const hidden = sorted.length - shown.length
-  const out = [
-    '## 子智能体',
-    '',
-    '**可委派给下列子智能体（调 `subagent_manager_run`）。**',
-    '',
-    ...lines,
-  ]
+  // 只给清单。"这是什么"与"该拿它做什么"由注入通道的框架交代 —— 2026-09-18 起是
+  // context-inject.ts 的 `DOMAIN_FRAME.subagents`（标题 + 加粗的动作句 + 工具名行）。
+  // 这里原本还有 `## 子智能体` 标题与一句加粗的「可委派给下列子智能体（调 `subagent_manager_run`）。」
+  // —— 加上引导语，同一件事说了三遍（用户 2026-09-17 指出）。正文从此只管排版。
+  const out = [...lines]
   // 查询工具**只在真被 40 条上限截掉时**才出现：常态下不提，省常驻字符，也免得模型为了
   // 「确认一遍」去调它（用户裁定：没列出来的就是当前不想要的）。与 MCP 状态段的
   // `（另有 N 台未列出。）` 同一句式，但这里多给一个出口——不给人设就真的找不回来了。
@@ -90,8 +96,22 @@ export interface SubagentCatalogDeps {
 }
 
 export interface SubagentCatalog {
-  /** 同步返回段文本（可能比磁盘状态滞后一个 TTL，见文件头 SWR 说明）。 */
-  text: () => string
+  /**
+   * 同步返回段文本（可能比磁盘状态滞后一个 TTL，见文件头 SWR 说明）。
+   *
+   * `agent` 决定**按深度过滤**：只列出目录**该注入到**该深度会话的人设（判据
+   * `深度 < 该人设的 catalogDepth`）。不传 agent 时按深度 0 算（顶层），这是绝大多数
+   * 调用点的情形。
+   */
+  text: (agent?: unknown) => string
+  /**
+   * 深度为 `depth` 的会话里，目录**有没有内容可注入**（至少一个当前可用人设的
+   * `catalogDepth` 覆盖到该深度）？
+   *
+   * 同步、只读缓存 —— 域声明的 `applicableTo` 要求同步纯函数（注入通道每个 step 同步取文本）。
+   * 与 `text()` 同源：都用 `catalogInjectedAt`，所以"目录里有内容"与"域该不该注入"不会分叉。
+   */
+  catalogVisibleAt: (depth: number) => boolean
   /** 立即重算（写操作后调用）。 */
   refresh: () => Promise<void>
   /** 预热：插件加载时调一次，避免首个请求落到空值。 */
@@ -122,15 +142,18 @@ export function createSubagentCatalog(
   const ttlMs = opts.ttlMs ?? 1000
   const now = opts.now ?? (() => Date.now())
 
-  let value = ''
+  let allowed: PersonaDoc[] = []
   let loadedAt = Number.NEGATIVE_INFINITY
   let inflight: Promise<void> | null = null
+  // 渲染结果按**深度**缓存：过滤只依赖深度这一个整数，而实际出现的深度就 0/1/2 三档，
+  // 于是"每个 step 同步渲染"退化成一次查表。重算成功时清空。
+  const rendered = new Map<number, string>()
 
   const recompute = async (): Promise<void> => {
     try {
-      const { allowed } = await filterBySceneBinding(await deps.list(), await deps.sceneLists())
-      value = renderSubagentCatalog(allowed, maxEntries, maxDescription)
-    } catch { /* 保留上一次的值；首次失败则维持 '' */ }
+      allowed = (await filterBySceneBinding(await deps.list(), await deps.sceneLists())).allowed
+      rendered.clear()
+    } catch { /* 保留上一次的值；首次失败则维持 [] */ }
     loadedAt = now()
   }
 
@@ -141,10 +164,20 @@ export function createSubagentCatalog(
   }
 
   return {
-    text: () => {
+    text: (agent) => {
       if (now() - loadedAt > ttlMs) void revalidate()
-      return value
+      const depth = subagentDepthOf(agent)
+      const cached = rendered.get(depth)
+      if (cached !== undefined) return cached
+      const out = renderSubagentCatalog(
+        allowed.filter((p) => catalogInjectedAt(p, depth)),
+        maxEntries,
+        maxDescription,
+      )
+      rendered.set(depth, out)
+      return out
     },
+    catalogVisibleAt: (depth) => allowed.some((p) => catalogInjectedAt(p, depth)),
     refresh: () => {
       loadedAt = Number.NEGATIVE_INFINITY
       return revalidate()

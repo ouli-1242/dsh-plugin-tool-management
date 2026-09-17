@@ -69,6 +69,8 @@ function fixtureFor(op) {
       return presetReachFixture()
     case 'inject-settings':
       return injectSettingsFixture()
+    case 'injection-live':
+      return injectionLiveFixture()
     default:
       return { ok: true }
   }
@@ -155,6 +157,30 @@ function injectSettingsFixture() {
       underSuppressingPresets: false,
       domains: { memory: true, mcp: true, subagents: true, prompt: true, skills: true },
     },
+  }
+}
+
+/**
+ * 「注入实况」fixture（形状按 `injection-live` op 的实回，src/context-inject.ts）。
+ *
+ * 存在的理由只有一个：让实况面板**带着数据**渲染一遍。没有它，这个 op 落到默认的
+ * `{ ok: true }`，面板只走"空列表"那条分支 —— 有数据才走到的那几行（采纳统计、状态胶囊）
+ * 就永远没被渲染过。这里只提供数据，不写断言：断言在冒烟测试那一侧统一是"不抛错"。
+ * 覆盖到的状态：in-context（有正文）、child（本会话不适用）、official（官方载体在送）。
+ */
+function injectionLiveFixture() {
+  return {
+    ok: true,
+    hasAgent: true,
+    delivered: { count: 3, lastAt: Date.now(), byDomain: { memory: 1, mcp: 1 } },
+    observed: { toolCalls: 5 },
+    domains: [
+      { key: 'memory', label: '场景和记忆', kind: 'scene-memory-manager-catalog', state: 'in-context', bytes: 120, text: 'MEM-BODY', adoption: { injected: 1, used: 2, adopted: 2 } },
+      { key: 'mcp', label: 'MCP 服务器', kind: 'mcp-manager-catalog', state: 'in-context', bytes: 40, text: 'MCP-BODY', adoption: { injected: 1, used: 0, adopted: 0 } },
+      { key: 'skills', label: '技能目录', kind: 'skill-manager-catalog', state: 'official', bytes: 30, text: 'SKILL-BODY', adoption: { injected: 0, used: 0, adopted: 0 } },
+      { key: 'subagents', label: '子智能体', kind: 'subagent-manager-catalog', state: 'child', bytes: 0, text: '', adoption: { injected: 0, used: 0, adopted: 0 } },
+      { key: 'prompt', label: '提示词', kind: 'prompt-manager-catalog', state: 'off', bytes: 0, text: '', adoption: { injected: 0, used: 0, adopted: 0 } },
+    ],
   }
 }
 

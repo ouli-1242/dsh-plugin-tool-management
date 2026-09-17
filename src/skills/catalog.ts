@@ -11,8 +11,9 @@
 //
 // 与官方目录的两处有意差别：
 //   - 只列**当前启用且可被模型调用**的（官方只过滤可调用性，不管用户在插件页关掉了谁）。
-//   - 结尾多一行：本预设没有官方 `skill` 加载工具（目录与工具是一起挂的），需要正文时得先
-//     `skill_manager_list` 取源文件路径再读那个文件 —— 不写这句，模型会以为有 `skill` 工具可调。
+//   - 「本预设没有官方 `skill` 加载工具，要正文先用 `skill_manager_list` 取源文件路径」那句
+//     2026-09-18 起挪进注入框架的 `how` 行（context-inject.ts 的 DOMAIN_FRAME.skills）——
+//     本段只排版清单，标题与"怎么用"一处一个出处。
 //
 // 同步性：`text()` 必须同步返回（注入通道每个 step 同步取文本），而技能清单是异步读盘 →
 // 与子智能体目录同构的 stale-while-revalidate：`text()` 返回缓存值并在超龄时后台重算，
@@ -84,13 +85,9 @@ export function renderSkillCatalog(
   const sorted = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   const shown = sorted.slice(0, Math.max(0, maxEntries))
   const lines = shown.map((row) => (row.description ? '- `' + row.name + '`: ' + row.description : '- `' + row.name + '`'))
-  const out = [
-    '## 技能',
-    '',
-    '**本预设没有官方 `skill` 加载工具；要技能正文时用 `skill_manager_list` 取源文件路径再读。**',
-    '',
-    ...lines,
-  ]
+  // 只有清单：标题、工具名与"只给摘要、读完再用"的纪律由注入通道的框架承担
+  // （2026-09-18 起，见 context-inject.ts 的 DOMAIN_FRAME 的 `how` 行）—— 一处内容一个出处。
+  const out = [...lines]
   const hidden = sorted.length - shown.length
   if (hidden > 0) out.push('', `（另有 ${hidden} 个未列出，用 \`skill_manager_list\` 查。）`)
   return out.join('\n')

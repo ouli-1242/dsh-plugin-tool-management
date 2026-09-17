@@ -18,6 +18,10 @@ import {
   type SkillsPlan,
 } from './archive.js'
 
+/** 快照里的上层两行（服务器级 / 来源级）的形状：进场景前每一行的原值。 */
+type McpServerRow = { id: string; level: string; disabled: boolean }
+type SkillSourceRow = { root: string; enabled: boolean }
+
 export interface ArchiveIndexSlice {
   archives: Record<string, SceneArchive>
   mode: ModeState
@@ -100,21 +104,59 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
   }
 
   /**
+   * 快照里的上层两行 → 退出时**真正要回写**的那些：现状 ≠ 快照值、且这一行现在还存在。
+   *
+   * 为什么必须过滤而不是逐行无条件回写：
+   *   - 快照是全量记录（进场景前每一行的原值），场景没碰过的行占绝大多数，逐行回写会让
+   *     补丁文件 / 状态文件白写一遍（MCP 那一侧还会连带触发宿主热重载与备份噪音）；
+   *   - 现状已经等于原值的行本来就无需还原。真正要回写的只有「场景期间被改过的行」——
+   *     档案改的，或用户自己在场景页面上改的（未锁定时可用，改动同步进档案）。
+   *     后者正是用户报的「场景里关掉 A 目录，退出后 A 与它下面的技能都没开回来」：
+   *     旧口径只记「进场景时被档案改动过的行」，而 A 在进场景时没被改动（档案里勾着
+   *     A 下面的技能），快照里根本没有 A 这一行。
+   *
+   * 快照里记过、但现在已不存在的行直接跳过：这类行在场景期间被删掉了，没有可还原的状态，
+   * 硬写还会让退出失败（MCP 启停按 id 定位，`未找到条目` 直接报错）。
+   * 读不到现状（列表读取抛错）→ 退回旧行为全量回写：宁可多写几行，不可少还原。
+   */
+  async function mcpServerRowsToRestore(rows: McpServerRow[]): Promise<McpServerRow[]> {
+    if (!rows.length) return []
+    let current: McpServerState[]
+    try { current = await deps.mcpServerStates() } catch { return rows }
+    const byKey = new Map(current.map((s) => [s.id + '\u0000' + s.level, s.disabled]))
+    return rows.filter((x) => {
+      const key = x.id + '\u0000' + x.level
+      return byKey.has(key) && byKey.get(key) !== x.disabled
+    })
+  }
+
+  /** 同 mcpServerRowsToRestore：来源级的还原行。 */
+  async function skillSourceRowsToRestore(rows: SkillSourceRow[]): Promise<SkillSourceRow[]> {
+    if (!rows.length) return []
+    let current: SkillSourceState[]
+    try { current = await deps.skillSourceStates() } catch { return rows }
+    const byRoot = new Map(current.map((s) => [s.root, s.enabled]))
+    return rows.filter((x) => byRoot.has(x.root) && byRoot.get(x.root) !== x.enabled)
+  }
+
+  /**
    * 还原到快照（退出模式与失败回滚共用同一条路径）：
    * MCP 停用表**按快照原文整体回写**——模式自己写进去的键（未勾服务器的 ['*']）必须随之消失，
    * 否则退出后用户环境仍被静默停用（比"多留一个键"严重得多）；模式期间的手动改动按设计 §2.2
    * 不保留（「退出 = 恢复 mode.snapshot」，手动改动只在「保存到场景」时回写）。
    * 技能只写快照列出的键（这是既有批量通道的语义）：模式期间新增的技能保持现状。
+   * 上层两行（服务器级 / 来源级）按**全量**快照还原 —— 只回写与现状不同的行，见
+   * mcpServerRowsToRestore / skillSourceRowsToRestore。
    */
   async function restoreSnapshot(snapshot: ModeSnapshot): Promise<void> {
     // 顺序与进入时**相反**：先恢复服务器级 / 来源级，再恢复工具级 / 技能级 ——
     // 来源还关着的时候写技能级策略会被吞掉（`skills/core.js` 的 sourceEnabled 判定）。
     // 老 snapshot 没有这两栏 → `?? []`，按旧行为只恢复下层。
-    const servers = snapshot.mcpServers ?? []
+    const servers = await mcpServerRowsToRestore(snapshot.mcpServers ?? [])
     if (servers.length) {
       await deps.applyMcpServerSwitches(servers.map((x) => ({ id: x.id, level: x.level, enabled: !x.disabled })))
     }
-    const sources = snapshot.skillSources ?? []
+    const sources = await skillSourceRowsToRestore(snapshot.skillSources ?? [])
     if (sources.length) {
       await deps.applySkillSourceSwitches(sources.map((x) => ({ root: x.root, enabled: x.enabled })))
     }
@@ -358,17 +400,24 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // 备注段是例外：未定义 = 不覆盖任何备注（没有东西"因为未定义而需要关掉"）。
       const mcpSpec: Record<string, '*' | string[]> = (archive && archive.mcp) || {}
       const skillsSpec: string[] = (archive && archive.skills) || []
-      // 先算计划、再拍快照：快照只记**将被改动**的服务器行 / 来源 / 人设（带改动前的状态），
-      // 退出时按记录精确恢复 —— 不动用户手动设置的其他行。
+      // 先读现状、再算计划：现状既喂给计划（算「哪些行需要改」），也**全量**写进快照。
+      // 快照记的是**每一行**服务器 / 来源的进场景前状态，不是只记「本次计划要改的行」——
+      // 场景期间用户可以在页面上改开关（未锁定时可用，改动同步进档案），只记计划行的话
+      // 这些改动就没有原值可回：用户报的「场景里关掉 A 目录，退出后 A 和它下面的技能都没开回来」，
+      // 就是 A 在进场景时没被档案改动（档案里勾着 A 下面的技能）而未进快照。
       let mcpPlan: McpPlan | null = null
       let skillsPlan: SkillsPlan | null = null
+      let mcpServerStates: McpServerState[] = []
+      let skillSources: SkillSourceState[] = []
       try {
+        mcpServerStates = await deps.mcpServerStates()
+        skillSources = await deps.skillSourceStates()
         mcpPlan = computeMcpPlan(mcpSpec, {
           configuredServers: await deps.configuredServers(),
           knownTools: await deps.serverKnownTools(),
-          serverStates: await deps.mcpServerStates(),
+          serverStates: mcpServerStates,
         })
-        skillsPlan = computeSkillsPlan(skillsSpec, await deps.knownSkillKeys(), await deps.skillSourceStates())
+        skillsPlan = computeSkillsPlan(skillsSpec, await deps.knownSkillKeys(), skillSources)
       } catch (e) {
         return { ok: false, error: `读取运行时状态失败（未改动任何东西）：${msg(e)}` }
       }
@@ -401,12 +450,13 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       }
       // 快照**恒拍**：三个域都按「与勾选集完全一致」应用（未定义 = 全关），所以任何场景
       // 进入都可能改动运行时（哪怕只是停掉几台服务器 / 几个技能），退出都得能精确还原。
+      // 上层两行传**现状全量**（上面的 mcpServerStates / skillSources 就是进场景前的值），
+      // 不是计划里那几行 —— 退出按「现状 ≠ 记录值」回写（见 mcpServerRowsToRestore）。
       const snapshot = snapshotRuntime(
         await deps.currentMcpRaw(),
         await deps.currentSkills(),
-        // 直接用计划带出的 `*Before`（改动前的状态），不在这里反推 —— 反推容易搞反方向。
-        mcpPlan.serverSwitches.map((s) => ({ id: s.id, level: s.level, disabled: s.disabledBefore })),
-        skillsPlan.sourceSwitches.map((s) => ({ root: s.root, enabled: s.enabledBefore })),
+        mcpServerStates.map((s) => ({ id: s.id, level: s.level, disabled: s.disabled })),
+        skillSources.map((s) => ({ root: s.root, enabled: s.enabled })),
         personaRestore,
         personaRestoreOn,
         noteBefore,

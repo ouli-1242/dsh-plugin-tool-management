@@ -25,21 +25,28 @@ export interface SceneArchive {
 /**
  * 进入模式前的运行时快照，用于退出时精确回滚。
  *
- * ⚠️ `mcpServers` / `skillSources` 只记**被档案改动过**的行 —— 退出时不能顺手改
- * 用户手动设置的状态。老 `memories-index.json` 里的 snapshot 没有这两栏，
- * 读取处必须容忍缺失（`?? []`）。
+ * ⚠️ 老 `memories-index.json` 里的 snapshot 缺下面各选填栏，读取处必须容忍缺失
+ * （`?? []` / `?? {}`）；`mcpServers` / `skillSources` 在旧快照里还只记了「被档案
+ * 改动过的行」，新快照记**每一行**（见两栏各自的说明）。
  */
 export interface ModeSnapshot {
   mcp: Record<string, string[]>
   skills: Record<string, boolean>
   /**
-   * 档案改过**服务器级**启停的行，记录**改动前**的 `disabled`（退出时按此恢复）。
-   * 只记被改动过的行 —— 退出时不能顺手改用户手动设置的其他服务器。
+   * **每一行**服务器级启停的进场景前 `disabled`（全量，v0.9.5 起）。
+   *
+   * 为什么从「只记被档案改动过的行」升级成全量：场景期间用户能在页面上改开关（未锁定时
+   * 可用，改动同步进档案），只记进场景时那几行的话，用户自己改的行没有原值可回。
+   * 退出只回写与现状不同的行（见 archive-engine 的 mcpServerRowsToRestore）——
+   * 状态本来就一致的行一个都不碰。
    */
   mcpServers?: Array<{ id: string; level: string; disabled: boolean }>
   /**
-   * 档案改过**来源级**启停的 root，记录**改动前**的 `enabled`（退出时按此恢复）。
-   * 同样只记被改动过的。
+   * **每一行**技能来源级启停的进场景前 `enabled`（全量，同上）。
+   *
+   * 漏记一行比 MCP 那侧更严重：来源关着时技能级的 enable 会被 core 直接吞掉
+   * （`skills/core.js` 的 sourceEnabled 判定），于是「A 目录」和它下面的技能一并不回 ——
+   * 用户报的「场景里关掉 A 目录，退出后 A 与其下技能都没开回来」就是漏了这一行。
    */
   skillSources?: Array<{ root: string; enabled: boolean }>
   /**
@@ -273,8 +280,9 @@ export function computeSkillsPlan(
 /**
  * 把「这次要改的上层行」并进快照 —— **已记录的行保持原值**（先记的才是进场景前的状态）。
  *
- * 为什么需要：进入模式时快照只记了**当时将要改动**的行；模式进行中用户改档案（改档案 = 立即生效）
- * 又可能新改到别的服务器 / 来源级行。退出必须回到「进场景前」，所以这些新改的行也得有记录。
+ * 为什么需要：新快照已是**全量**（进入时就记了每一行），这里是兜底 —— 旧快照只记了
+ * 当时将要改动的行，而模式进行中用户改档案（改档案 = 立即生效）又可能新改到别的行；
+ * 退出必须回到「进场景前」，所以这些新改的行也得有记录。
  * 反之，若某行在进入时就记过，它的 `*Before` 才是进场景前的值 —— 这次的中间态值必须丢弃。
  */
 export function mergeSnapshotSwitches(
@@ -307,9 +315,8 @@ export function mergeSnapshotSwitches(
 export function snapshotRuntime(
   mcpRaw: Record<string, string[]>,
   skills: Record<string, boolean>,
-  /** **将被档案改动**的服务器行，带改动前的 `disabled`。 */
+  /** 上层两行：进场景前**每一行**的原值（全量；退出按「现状 ≠ 原值」回写）。 */
   mcpServers: Array<{ id: string; level: string; disabled: boolean }> = [],
-  /** **将被档案改动**的来源，带改动前的 `enabled`。 */
   skillSources: Array<{ root: string; enabled: boolean }> = [],
   /** **将被档案启用**的人设名（改动前停用的子集；退出时按此停回）。 */
   subagents: string[] = [],

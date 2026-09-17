@@ -33,7 +33,42 @@
 //   - 某域曾经注入过、现在没有内容（域被关掉或正文清空）→ 发一条该域的「已清空」，
 //     免得旧目录继续被当成现状。
 //
+// 2026-09-17 第二版加的两件事：
+//   - **按深度抑制人设目录**：宿主平面注册意味着子代理派生的会话也收到五域。而人设目录
+//     要不要出现在某个深度的会话里，由人设的 `catalogDepth`（默认 1 = 只在顶层注入）决定；
+//     判定放在域声明的 `applicableTo` 上，通道只负责问一句 —— "哪个域对哪类会话不成立"
+//     是域的语义，不是通道的机制。
+//     ⚠️ 2026-09-17 方案 A 纠正：这**不是**"子会话不能委派"。官方 `dsh-tool-subagent`
+//     默认 `maxDepth: 3`，provider 只在传了该值时才校验 —— 子代理本来就能继续嵌套
+//     （用户实测确认）。这个抑制只是让常驻目录不进入子会话、减少噪声；委派能力由官方
+//     决定，本插件不干预（我们也不再传 `maxDepth`）。
+//   - **采纳遥测**：注入只解决"到没到"，不解决"用没用"。本模块按域统计
+//     「投递 N 次 / 调用 M 次 / 调用时正文在眼前 K 次」，工具注册处调 `noteToolUse` 记账。
+//     没有这三个数，"模型忽略了注入内容"只是一句感觉，改了措辞也无从验证。
+//
+// 2026-09-17 第三版（两件事）：
+//   - **界面契约对齐**：`source` 上补齐宿主给界面的结构化字段 —— snapshot 形态的 `sections`
+//     一直有；instructions 形态现在带 `changes`（+ 首帧 `baseline`，来源文件由域声明的 `files`
+//     提供），界面从"一坨原文"升级成官方 AGENTS.md 同款「文件 + 已载入/已更新」。这些字段
+//     **只给界面看**：模型侧 content 不受影响，去重比对的也还是 content。
+//   - **instructions 形态不再裸送**：模型侧正文改成与其他四域同款的 `<system-reminder>` 框架
+//     （此前"原样送"的理由是"对齐官方"，与官方实际行为不符 —— 官方那条是包框架的；详见
+//     `renderDomainText` 的第三版说明）。
+//（catalog 形态**有意不带** `entries`：界面的条目渲染会整段替换正文，而我们的目录正文带着
+//  框架句、未运行标记与"N 个未列出"这类补充行，给条目反而显示得更少。）
+//
+// 2026-09-18 第四版（用户：注入仍不能很好提醒模型去主动使用 + 该用 md 排版突出重点信息）：
+//   - **框架改 md 四级结构**：`## 标题`（标签）+ **加粗动作句**（决策点线索）+ 补充动作行
+//     （工具名 / 触发条件）+ 权威声明句（取代哪一份）。写法逐条对照 Claude Code 与 Codex CLI
+//     的官方注入（理由见 `DOMAIN_FRAME`）。
+//   - **正文也进标记**：此前 `<system-reminder>` 只包引导语、正文裸在外面；官方两条注入行
+//     （skill-catalog / agent-instructions）都是整条包住的。正文里混着用户自由文本
+//     （AGENTS.md / 记忆 / 备注），来源标记不能只盖住我们写的那一句。
+//   - **闭合标记转义**：正文里的 `</system-reminder>` 会被拆开（照抄官方
+//     `escapeInstructionFrameBody`），否则用户手写一个闭合标记就能让框架提前结束。
+//
 // 注入永远不能让这一步失败：任何异常都在监听器里吞掉、原样返回 decision。
+// 遥测同理（`noteToolUse` 自己吞异常）：它绝不能影响工具本身。
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { PresetInjectionFacts } from './compat/preset-reach.js'
@@ -62,6 +97,78 @@ export const INJECT_KIND_OF: Record<InjectDomainKey, string> = {
 }
 
 /**
+ * 域 → 该域在模型工具表里的**工具名前缀**（采纳遥测的唯一映射）。
+ *
+ * 为什么要这张表：注入只解决"内容到没到"，不解决"模型用没用"。「注入实况」此前
+ * 只能答前半句 —— 勾了开关、正文也在上下文里，但模型从头到尾没伸手，界面上和
+ * 「用了」长得一模一样。有了映射，就能把「投递 N 次 / 调用 M 次」并排摆出来，
+ * 措辞与形式的调整才有依据（否则改文案就是猜）。
+ *
+ * 前缀而不是精确名：`memory_manager_*` 有 list/read/write/delete 等，任何一个都
+ * 说明模型确实在读这一域。改工具名等于换身份，这五个字符串是稳定契约。
+ */
+export const DOMAIN_TOOL_PREFIX: Record<InjectDomainKey, string> = {
+  memory: 'memory_manager_',
+  mcp: 'mcp_manager_',
+  skills: 'skill_manager_',
+  subagents: 'subagent_manager_',
+  prompt: 'prompt_manager_',
+}
+
+/** 工具名 → 域（`undefined` = 不是本插件的域工具）。纯函数，便于单独推理。 */
+export function domainOfTool(toolName: string): InjectDomainKey | undefined {
+  const name = String(toolName ?? '')
+  for (const key of INJECT_DOMAIN_KEYS) {
+    if (name.startsWith(DOMAIN_TOOL_PREFIX[key])) return key
+  }
+  return undefined
+}
+
+/**
+ * 这个 agent 在委派链上的**深度**（0 = 顶层会话，1 = 子会话，2 = 孙会话…）。
+ *
+ * 为什么需要它：`agent/pre-step` 挂在宿主平面，天然覆盖所有 agent（含子智能体）——
+ * 这是当初选这条通道的代价。而人设目录该不该注入，取决于会话**有多深**（人设的
+ * `catalogDepth` 决定"目录注入到几层"，默认 1 = 只在顶层），那是个关于深度的判断，
+ * 不是一个布尔的身份标签。
+ *
+ * 口径照抄官方 `delegationDepthOf()`（`dsh-subagent/lib/index.js:144`）：持久化头
+ * `session.header.delegationDepth` 与运行期选项 `agent.options.subagentDepth` 取较大者
+ * —— 单看头会让"恢复的子会话"重新变成顶层（官方注释明说这是它要防的事）。
+ * `header.origin === 'subagent'` 是"是子会话"的硬信号，深度至少算 1（头里没记深度时
+ * 不能退回 0）。任一探针取不到或不是有限数都当它缺席：宁可把深度算浅一次（多注入一域），
+ * 也不要把正常会话误判成子会话而静默少一域。
+ */
+export function subagentDepthOf(agent: unknown): number {
+  try {
+    const a = agent as {
+      session?: { header?: { origin?: unknown; delegationDepth?: unknown } }
+      options?: { subagentDepth?: unknown }
+    } | null | undefined
+    const header = a?.session?.header
+    const finite = (value: unknown): number =>
+      typeof value === 'number' && Number.isFinite(value) ? value : 0
+    const persisted = header !== undefined && header !== null ? finite(header.delegationDepth) : 0
+    const runtime = finite(a?.options?.subagentDepth)
+    const floor = header !== undefined && header !== null && header.origin === 'subagent' ? 1 : 0
+    return Math.max(floor, persisted, runtime)
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * 这个 agent 是不是**子会话**（子代理派生的会话）。深度判定的布尔投影。
+ *
+ * ⚠️ 生产代码现在只用 `subagentDepthOf` —— 判据是"目录该不该注入到这么深的会话"，
+ * 需要的是**深度数字**，不是一个布尔身份（2026-09-17 方案 A：委派可行性由官方决定，
+ * 与"是不是子会话"无关）。这个投影留给真正需要布尔判断的场合，以及测试。
+ */
+export function isSubagentSession(agent: unknown): boolean {
+  return subagentDepthOf(agent) >= 1
+}
+
+/**
  * 宿主 `MessageSource.form`（语义轴）：catalog = 本会话可用的条目、随变随重发；
  * snapshot = 当前状态、同源后发取代先发；instructions = 模型应当遵循的指令。
  * 只有 snapshot 形态要求带 `sections`。
@@ -81,6 +188,13 @@ const CARRIER_FACT_OF: Partial<Record<InjectDomainKey, keyof PresetInjectionFact
   skills: 'carriesSkillCatalog',
 }
 
+/** 一个来源文件（instructions 形态的 UI 文件清单条目；digest 只作悬停的身份提示）。 */
+export interface InjectSourceFile {
+  /** 非空路径（UI 的 `changes` 读取是全有全无：路径不合法的条目会让整份清单退回原文渲染）。 */
+  path: string
+  digest?: string
+}
+
 /** 一个域的注入声明。 */
 export interface InjectDomain {
   key: InjectDomainKey
@@ -90,8 +204,34 @@ export interface InjectDomain {
   label: string
   /** 来源 form。 */
   form: InjectForm
-  /** 同步返回域文本；`''` = 该域本次没有内容。 */
-  text: () => string
+  /**
+   * 同步返回域文本；`''` = 该域本次没有内容。
+   *
+   * 可以看 agent（2026-09-17 第二版）：人设目录要按**调用方深度**过滤 —— 深度 1 的会话
+   * 只能看到"预算还够"的人设，否则就是它刚被修掉的那个陷阱（目录写着可委派、真调用必失败）。
+   * 仍然必须同步：注入通道每个 step 同步取文本，域自带 SWR 缓存，这里不能读盘。
+   */
+  text: (agent?: unknown) => string
+  /**
+   * 本域正文的**来源文件**（同步；当前只有 instructions 形态用）。
+   *
+   * 为什么要有它：instructions 形态的界面契约是「文件清单 + 正文」—— 官方
+   * `dsh-agent-instructions` 每条消息都带 `changes: [{path, action, digest?}]`，
+   * 界面据此显示哪份文件被载入/更新；我们不带，界面就退回"一坨原文"，看不出这段内容
+   * 来自哪个文件、是刚载入还是被替换过。
+   *
+   * 与 `text` 不同，**只在真要发消息时**调用（不是每个 step），所以允许一点算力
+   * （提示词域要读一次盘 + sha1）。抛异常 = 本次不带清单，消息照发（清单是锦上添花）。
+   */
+  files?: () => readonly InjectSourceFile[]
+  /**
+   * 该域对这个 agent 是否成立（`false` = 本次不注入）。缺省 = 对任何 agent 都成立。
+   *
+   * 放在域声明上而不是写死在本模块里：这是**域自己的语义**（"人设目录对子会话无意义"），
+   * 与通道机制无关；本模块只负责在注入前问一句。判定必须是同步纯函数 —— 注入通道每个
+   * step 同步取文本，这里不能读盘。
+   */
+  applicableTo?: (agent: unknown) => boolean
 }
 
 /** 注入设置（插件侧车 `inject-settings.json`；界面在兼容页）。 */
@@ -136,11 +276,14 @@ export interface InjectSection {
 }
 
 /**
- * 纯函数：按设置 + 预设事实挑出本次要注入的域。
+ * 纯函数：按设置 + 预设事实 + 目标 agent 挑出本次要注入的域。
  *
- * 规则（设计 2026-09-16）：
+ * 规则（设计 2026-09-16；目录注入深度 2026-09-17）：
  *   - 域开关关掉的、文本为空的，都不进；
  *   - **压制型预设**且没开「仍然注入」→ 一个都不进（跟随预设）；
+ *   - 域声明 `applicableTo` 说不成立的域不进（当前只有人设目录：会话深度超出了人设的
+ *     `catalogDepth`，默认 1 = 只在顶层注入。**这不是"子会话不能委派"** —— 委派由官方
+ *     决定，见 service.ts 里 `catalogDepth` 的注释）；
  *   - 有官方载体的两个域（提示词 / 技能目录）：预设挂得到官方那条行时不进
  *     —— 官方自己会送，再注入一遍只会重复；预设事实读不到（`undefined`）时按"已承载"处理
  *     （宁可与现状一致，也不制造重复）；
@@ -150,6 +293,7 @@ export function selectInjections(
   domains: readonly InjectDomain[],
   settings: InjectSettings,
   facts: PresetInjectionFacts | undefined,
+  agent?: unknown,
 ): InjectSection[] {
   const suppressing = facts !== undefined && facts.suppressing
   if (suppressing && !settings.underSuppressingPresets) return []
@@ -157,11 +301,16 @@ export function selectInjections(
   const seen = new Set<string>()
   for (const domain of domains) {
     if (settings.domains[domain.key] !== true) continue
+    // 域自己不成立就不发（如人设目录的 catalogDepth 没覆盖到本会话的深度）。**这里没有开关，是刻意的**：
+    // 曾经有个 `suppressInSubagentSessions` 想让这一步可选，但它是个空开关 —— 域不成立时
+    // 正文自己也被过滤成空的（见 `subagents/catalog.ts` 的按深度过滤），两道闸条件相同，
+    // 开关只控制得了其中一道。留一个点了没反应的勾选框比没有更糟，所以删掉（2026-09-17）。
+    if (domain.applicableTo !== undefined && !domain.applicableTo(agent)) continue
     const carrier = CARRIER_FACT_OF[domain.key]
     // 官方载体已挂（或读不到预设、只能按已挂算）→ 不重复送；只有明确"没挂"才兜底。
     if (carrier !== undefined && facts?.[carrier] !== false) continue
     let text = ''
-    try { text = String(domain.text() ?? '') } catch { text = '' }
+    try { text = String(domain.text(agent) ?? '') } catch { text = '' }
     if (text.trim() === '') continue
     const fingerprint = text.trim()
     if (seen.has(fingerprint)) continue
@@ -172,27 +321,187 @@ export function selectInjections(
 }
 
 /**
- * 一条注入消息的正文（纯函数）：instructions 域原样送（对齐官方 AGENTS.md 那条行），其余带一行引导语。
+ * 某一步「为什么发 / 为什么不发」。
  *
- * 引导语只有**一句话**（用户裁定 2026-09-16：五个域各发各的以后，原来那四行说明在每条消息里
- * 重复一遍太冗余）：说清"这是什么 + 取代谁"就够 —— 域的名字、怎么查细节（`*_manager_list`
- * 就在模型自己的工具表里）都不必在这里再说一遍。
+ * `child` = 该域对本会话不成立（人设目录：会话深度超出了人设的 `catalogDepth`）；`official` = 官方载体在送；
+ * `off` = 开关关了；`empty` = 本插件负责但没内容；`sent` = 本插件负责且有内容。
+ */
+export type InjectReason = 'off' | 'official' | 'empty' | 'sent' | 'child'
+
+/**
+ * 纯函数：算出某一步每个域的原因（`selectInjections` 的镜像，供「注入实况」解释状态）。
+ *
+ * 与 `selectInjections` 分开写是为了让两边各自可读：一个是"发什么"，一个是"为什么"。
+ * 口径必须一致 —— 否则界面会把"子会话抑制"报成"未投递"，而界面的既有口径是
+ * 「琥珀只留给'该投却没投'」（把用户自己的选择读成故障，正是这条口径要避免的事）。
+ *
+ * ⚠️ 这里**故意不镜像** `selectInjections` 开头那条"压制型预设一个都不进"的提前返回：
+ * 该分支下本函数仍按各域自身的原因作答，于是压制型预设 + 没开「仍然注入」时，
+ * 界面看到的是"未投递"（琥珀）而不是"已关闭"（灰）。这是 0.9.1 的既有行为，本次未改，
+ * 改动它属于另一个话题（"跟随预设"到底该报成故障还是报成选择）。
+ */
+export function explainInjections(
+  domains: readonly InjectDomain[],
+  settings: InjectSettings,
+  facts: PresetInjectionFacts | undefined,
+  agent?: unknown,
+): Partial<Record<InjectDomainKey, InjectReason>> {
+  const reasons: Partial<Record<InjectDomainKey, InjectReason>> = {}
+  for (const domain of domains) {
+    if (settings.domains[domain.key] !== true) { reasons[domain.key] = 'off'; continue }
+    if (domain.applicableTo !== undefined && !domain.applicableTo(agent)) { reasons[domain.key] = 'child'; continue }
+    const carrier = CARRIER_FACT_OF[domain.key]
+    if (carrier !== undefined && facts?.[carrier] !== false) { reasons[domain.key] = 'official'; continue }
+    let text = ''
+    try { text = String(domain.text(agent) ?? '') } catch { text = '' }
+    reasons[domain.key] = text.trim() === '' ? 'empty' : 'sent'
+  }
+  return reasons
+}
+
+/**
+ * 每个域的**框架**：标题 + 加粗的动作句 + 补充动作 + 权威声明。
+ *
+ * 为什么是这四件（2026-09-18 第四版：用户「注入提示词还是不能很好提醒模型去主动使用」+
+ * 「应该通过设计 md 格式突出重点信息」，写法参照 Claude Code 与 Codex CLI 两家官方源码）：
+ *
+ *   1. **动作句单独一行、加粗**。证据是 Claude Code 书里记的一次 eval
+ *      （`claude-code-from-source/book/ch11-memory.md:193`）：同一段正文只换标题，
+ *      「Before recommending from memory」（落在决策点上的动作线索）得 3/3，
+ *      「Trusting what you recall」（抽象主题）得 0/3 —— 引导语的**形式**（决策点的动作）
+ *      比**内容**更决定采纳率。所以标题只当标签用（这条讲的是这台机器的什么），
+ *      动作另起一行、加粗，写"在哪个决策点该想起它"。
+ *   2. **`##` 标题**：md 里最省字符的结构标记；也给工具描述一个能回指的锚点
+ *      （Claude Code 的 AgentTool / SkillTool 描述都写 "listed in <system-reminder>
+ *      messages in the conversation"，把目录的位置说给模型）。
+ *   3. **补充动作用一行给工具名与触发条件**。两家的目录句都把工具名写死在里面
+ *      （Claude Code「available for use with the Skill tool」、官方 skill-catalog
+ *      「call the `skill` tool with the exact skill name before taking task actions」）——
+ *      模型不会凭"应该有个工具"去猜工具名，但会给它一个明确的调用点。
+ *   4. **权威声明单独成句**。原来那句「（取代本次会话中更早的同类内容）」是塞在名词短语里的
+ *      括注，容易整句略过；Codex 的对应写法是完整陈述句
+ *      （`codex-rs/core/src/context/world_state/agents_md.rs:9`："These AGENTS.md instructions
+ *      replace all previously provided AGENTS.md instructions."），官方 skill-catalog 的更新帧
+ *      同理（"This complete catalog replaces every earlier available-skills list in this
+ *      session"）。这句必须留：注入按"内容变了才重发"工作，重发时旧那份还在上下文里，
+ *      模型得知道以哪份为准。
+ *
+ * 各域的 `how` 只写**正文没说过**的事：一处内容一个出处（记忆与提示词两域因此没有 `how`
+ * —— 记忆的授权与判据由正文首行那句加粗的「用户为本机写的参考信息：…」承担）。
+ */
+interface DomainFrame {
+  /** 标题（md H2）：这条讲的是这台机器的什么。 */
+  title: string
+  /** 加粗的动作句：在哪个决策点该想起它。 */
+  cue: string
+  /** 补充动作（工具名 / 触发条件 / 边界）；正文已经说过的不要写。 */
+  how?: string
+  /** 权威声明：「最新一份才是权威」这条得逐域说清取代的是什么。 */
+  supersede: string
+}
+
+const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
+  memory: {
+    title: '本机当前的场景和记忆',
+    cue: '在回答涉及本机的事之前，先核对这里。',
+    supersede: '本份记忆取代本次会话中更早注入的同类记忆。',
+  },
+  mcp: {
+    title: '本机 MCP 服务器的当前状态',
+    cue: '要用某个 MCP 工具前，先在这里确认这台服务器在不在、开没开。',
+    how: '工具名是 `mcp__<服务器>__<工具>`；带「用户提示：」的行是用户写给这台服务器的决策提示，选服务器之前先看一眼。',
+    supersede: '本份状态取代本次会话中更早注入的同类状态。',
+  },
+  skills: {
+    title: '本机技能目录',
+    cue: '需要某项能力时，先在这里找。',
+    how: '本预设没有官方 `skill` 工具：要正文用 `skill_manager_list` 取源文件路径再读；目录只有摘要，读完再照做。',
+    supersede: '本份目录取代本次会话中更早注入的同类目录；只列当前可调用的技能。',
+  },
+  subagents: {
+    title: '可委派的子智能体',
+    cue: '在决定自己做还是委派之前，先在这里选人设。',
+    // 分界规则（2026-09-17 方案 C，本机实测 session-ee722e23 逼出来的）：官方那两个
+    // 委派工具（`subagent` / `subagent_fork`）不带人设，而此前没有任何一句话说明何时该
+    // 用谁 —— 模型在"审查刚读过的 README"时选了 `subagent_fork`（fork 能继承已读内容、
+    // 省一次复述）。现在人设通道也有 `inherit`（同一套 fork 机制），分界只剩"要不要后台跑"。
+    how: '贴合人设的任务一律用 `subagent_manager_run`（要它看到本次会话就开 `inherit`）；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。',
+    supersede: '本份目录取代本次会话中更早注入的同类目录。',
+  },
+  prompt: {
+    title: '本机提示词',
+    cue: '动手之前先按它对齐，与它冲突的默认做法一律让位。',
+    supersede: '本份提示词取代本次会话中更早注入的同类提示词。',
+  },
+}
+
+/** 域声明里没登记的 key（理论上到不了这里）：给一个不出错的通用框架。 */
+const fallbackFrame = (label: string): DomainFrame => ({
+  title: `本机的${label}`,
+  cue: `需要这台机器的${label}时，先核对这里。`,
+  supersede: '本份内容取代本次会话中更早注入的同类内容。',
+})
+
+const domainFrame = (key: InjectDomainKey, label: string): DomainFrame => DOMAIN_FRAME[key] ?? fallbackFrame(label)
+
+/**
+ * 框架的伪 XML 标记。与官方两条注入行同款：`dsh-tool-skill` 与 `dsh-agent-instructions`
+ * 都把**整条正文**包在里面（不是只包引导语）。Claude Code 那边把这对标记叫"可依赖的
+ * 判别符"（`messages.ts:1797` 的 `ensureSystemReminderWrap` 保证任何注入文本都不落在外面）：
+ * 模型据此把这段读成系统给的上下文，而不是用户刚打的字 —— 本插件的正文里混着用户写的
+ * 自由文本（AGENTS.md / 记忆 / 备注），这层来源标记尤其不能少。
+ */
+const FRAME_OPEN = '<system-reminder>'
+const FRAME_CLOSE = '</system-reminder>'
+
+/**
+ * 正文里的 `</system-reminder>` 拆掉闭合形态（写成 `<\/system-reminder>`）。
+ *
+ * 正文含用户自由文本（AGENTS.md、记忆、MCP 备注、技能描述），一句手写的闭合标记就能让框架
+ * 提前结束，其后的内容读起来像用户当场说的话。照抄官方 `escapeInstructionFrameBody` 的实现
+ * （`dsh-agent-instructions/lib/index.js:128`，同样是替换成带反斜杠的形态 —— 模型看到的
+ * 字面量不变，标记不再闭合）。
+ */
+export function escapeFrameBody(body: string): string {
+  return body.replaceAll(FRAME_CLOSE, '<\\/system-reminder>')
+}
+
+/**
+ * 一条注入消息的正文（纯函数）：`<system-reminder>` 里 = 框架（标题 + 动作 + 补充 + 权威
+ * 声明）+ 空行 + 域正文。**五个域一律带框架**，没有例外。
+ *
+ * 历史（每一版都是被具体毛病逼出来的，别把结论当套话读）：
+ *   - 第一版（2026-09-17 前）：五域共用「以下是本机插件的X（取代…）。」——「本机插件」是实现
+ *     细节；通篇没有动作；五条消息句式一模一样，雷同的套话退化成背景噪声。
+ *   - 第二版（2026-09-17）：动作前置（`**{线索}**：以下是{域}（取代…）。{补充}`），但只改了
+ *     用户圈定的两域（记忆 / 子智能体），MCP、技能、提示词继续走老模板。
+ *   - 第三版（2026-09-17）：instructions 形态不再裸送 —— 此前"原样送"的理由是"对齐官方
+ *     AGENTS.md 那条行"，与官方实际行为不符（官方那条是包 `<system-reminder>` 的，含一句
+ *     "这些工作区指令可作参考……"。真正的问题在极简类预设：官方通道被压掉后本插件是唯一
+ *     承载者，裸文本没有任何标记，而提示词会因场景切换而变化、新旧两份效力相同、没有判据。
+ *     只借官方**包框架**的形式，**不抄**它那句把用户规则降成"仅供参考"的措辞。
+ *   - 第四版（2026-09-18，本条）：**动作仍然不够显眼**（用户：「还是不能很好提醒模型去主动
+ *     使用」），且整条消息该按 md 排版突出关键信息。改成四级结构：`##` 标题当标签、
+ *     加粗动作句单独一行、补充动作给工具名、权威声明单独成句（逐条理由见 `DOMAIN_FRAME`）。
+ *     同时把**正文也包进标记里**（此前只有引导语在标记内、正文裸奔）—— 官方两条注入行都是
+ *     整条包住的，正文里的用户自由文本更需要这层来源标记。
  */
 export function renderDomainText(section: InjectSection): string {
-  if (section.form === 'instructions') return section.text
-  return [
-    '<system-reminder>',
-    `以下是本机插件的${section.label}（取代本次会话中更早的同类内容）。`,
-    '</system-reminder>',
-  ].join('\n') + '\n\n' + section.text
+  const frame = domainFrame(section.key, section.label)
+  const lines = [FRAME_OPEN, `## ${frame.title}`, `**${frame.cue}**`]
+  if (frame.how !== undefined) lines.push(frame.how)
+  lines.push(frame.supersede, '', escapeFrameBody(section.text), FRAME_CLOSE)
+  return lines.join('\n')
 }
 
 /** 「已清空」通知正文：某个域曾经注入过、现在没有内容时发一条（纯函数，测试用）。 */
 export function clearedDomainText(key: InjectDomainKey, label: string): string {
+  const frame = domainFrame(key, label)
   return [
-    '<system-reminder>',
-    `dsh-plugin-tool-management：本插件的${label}已清空，本次会话中此前注入的同类内容不再有效。`,
-    '</system-reminder>',
+    FRAME_OPEN,
+    `## ${frame.title}`,
+    '**已清空** —— 本次会话中此前注入的同类内容不再有效。',
+    FRAME_CLOSE,
   ].join('\n')
 }
 
@@ -229,6 +538,28 @@ const PLUGIN_KINDS: ReadonlyMap<string, KindMapping> = new Map(
 const OFFICIAL_KIND_OF: Readonly<Record<string, InjectDomainKey>> = {
   'skill-catalog': 'skills',
   'agent-instructions': 'prompt',
+}
+
+/**
+ * 用户**明确关掉**的域 → 该域对应的官方消息 kind（这些 kind 的消息这一步不放行）。
+ *
+ * 交互事实（用户 2026-09-17 指出）：技能与提示词两域在标准类预设下由官方送（本插件让位），
+ * 于是"取消勾选"只停掉了本插件自己，官方那条照样进上下文 —— 用户看到的是"关了没用"。
+ * 本函数给出需要**连带拦下**的官方 kind：只有"官方自己会送同份内容"的两个域有这一项；
+ * MCP / 记忆 / 人设目录官方不送，没有可拦的对象（它们的开关本来就完全生效）。
+ */
+export function officialKindsToSuppress(settings: InjectSettings): ReadonlySet<string> {
+  const out = new Set<string>()
+  for (const [kind, key] of Object.entries(OFFICIAL_KIND_OF)) {
+    if (settings.domains[key] === false) out.add(kind)
+  }
+  return out
+}
+
+/** 一条消息的来源 kind（读不到 = `undefined`）。 */
+function kindOfMessage(message: unknown): string | undefined {
+  const source = (message as { source?: { kind?: unknown } } | null | undefined)?.source
+  return source && typeof source.kind === 'string' ? source.kind : undefined
 }
 
 /** 实况展示用的 kind 表：本插件的五条 + 官方两条。 */
@@ -281,6 +612,27 @@ export interface ContextInjectorDeps {
   logger?: (message: string) => void
 }
 
+/**
+ * 一个域的**采纳**统计（本进程运行以来，不是会话历史）。
+ *
+ * 为什么要它：「注入实况」此前只能答"内容到没到"，答不了"模型用没用" —— 勾了开关、
+ * 正文也在上下文里，但从头到尾没伸手，界面上和"用了"长得一模一样。有了这三个数，
+ * "注入 20 次 / 调用 0 次"就是一条可行动的结论，而不是感觉。
+ *
+ * 三个数的口径（刻意分开，不要合并成一个比率）：
+ *   - `injected`：本插件为该域投递过几条注入消息（与 `delivered.byDomain` 同源）；
+ *   - `used`：模型调用该域工具的次数 —— **不区分成功失败**。参数写错也算"伸手了"：
+ *     我们要测的是"模型知不知道有这个域、会不会去用"，不是"调用写得对不对"；
+ *   - `adopted`：其中"调用发生时该域正文正在上下文里"的次数。这才是严格意义的采纳 ——
+ *     `used` 高而 `adopted` 低说明模型是凭记忆/猜的，注入没起作用。
+ */
+export interface LiveAdoption {
+  injected: number
+  used: number
+  adopted: number
+  lastUsedAt: number | null
+}
+
 /** 一个域在**最近活跃会话**可见表面上的实况。 */
 export interface LiveInjectionDomain {
   key: InjectDomainKey
@@ -290,11 +642,14 @@ export interface LiveInjectionDomain {
    * in-context = 插件注入的在上下文里；cleared = 已清空；
    * official = 官方载体在送、插件不重复送（提示词 / 技能目录，标准类预设下的常态）；
    * off = 域开关被关掉；empty = 本插件负责但当前没有内容；absent = 该投却没投（含压缩后未补发）；
+   * child = 当前是子会话、该域对子会话不成立（人设目录）；
    * unknown = 没有会话。
    */
-  state: 'in-context' | 'cleared' | 'official' | 'off' | 'empty' | 'absent' | 'unknown'
+  state: 'in-context' | 'cleared' | 'official' | 'off' | 'empty' | 'absent' | 'child' | 'unknown'
   bytes: number
   text: string
+  /** 采纳统计（本进程累计；与 `state` 无关，那个是"现在"，这个是"一直以来"）。 */
+  adoption: LiveAdoption
 }
 
 /** 注入实况快照（`injection-live` 只读 op 的载荷；供兼容页展示"模型现在看到什么"）。 */
@@ -303,6 +658,14 @@ export interface LiveInjectionSnapshot {
   hasAgent: boolean
   /** 本次进程运行以来的投递统计（不是会话历史；重启后归零）。 */
   delivered: { count: number; lastAt: number | null; byDomain: Record<string, number> }
+  /**
+   * 本次进程观测到的本插件工具调用（采纳遥测的观测面）。
+   *
+   * 为什么单列：`adoption[*].used` 全是 0 时，必须能分清"模型真的没用"和"遥测没接上"
+   * —— 前者是结论，后者是故障。`observed` 记的是"观测到多少次工具调用"，
+   * 只要它不为 0，`used = 0` 就是可信的结论。
+   */
+  observed: { toolCalls: number; lastAt: number | null }
   domains: LiveInjectionDomain[]
 }
 
@@ -311,12 +674,22 @@ const bytesOf = (text: string): number => {
 }
 
 /**
- * 注册 `agent/pre-step` 注入监听；返回清理函数。
+ * 注册 `agent/pre-step` 注入监听；返回清理函数与采纳遥测入口。
  *
  * 宿主平面注册即可覆盖所有 agent（含子智能体、含任何预设）——dsh-scope 的
  * `scopeTarget` 过滤对没有 scope 标记的 ctx 直接放行，官方 time-context 就是这么挂的。
+ * "覆盖到子智能体"这件事本身是**特性**（子会话同样需要记忆与提示词），只有人设目录
+ * 那一域对它不成立，由域声明的 `applicableTo` 单独挡掉 —— 通道不替域做决定。
  */
-export function createContextInjector(deps: ContextInjectorDeps): { dispose: () => void; live: () => LiveInjectionSnapshot } {
+export function createContextInjector(deps: ContextInjectorDeps): {
+  dispose: () => void
+  live: () => LiveInjectionSnapshot
+  /**
+   * 记一笔"模型调了本插件某个域的工具"（采纳遥测；由工具注册处调用）。
+   * `toolName` 不是本插件域的 → 静默忽略。任何异常都吞掉：遥测绝不能影响工具本身。
+   */
+  noteToolUse: (toolName: string, agent: unknown) => void
+} {
   const log = (message: string): void => {
     try { (deps.logger ?? ((m: string) => console.error('[dsh-plugin-tool-management] ' + m)))(message) } catch { /* ignore */ }
   }
@@ -324,10 +697,17 @@ export function createContextInjector(deps: ContextInjectorDeps): { dispose: () 
   // 包括"空 turn 提前返回"和"这一步没有内容可发"的分支，页面才能如实说"没投过"。
   let lastAgent: WeakRef<object> | null = null
   const delivered = { count: 0, lastAt: null as number | null, byDomain: {} as Record<string, number> }
-  // 最近一步里"每个域为什么发/不发"（官方载体 / 开关关 / 空 / 本插件负责）。
+  // 采纳遥测：每个域一份计数 + 全局观测面。
+  const adoption = {} as Record<InjectDomainKey, LiveAdoption>
+  for (const key of INJECT_DOMAIN_KEYS) adoption[key] = { injected: 0, used: 0, adopted: 0, lastUsedAt: null }
+  const observed = { toolCalls: 0, lastAt: null as number | null }
+  // 每个 agent 最近一步"在上下文里"的域集合 —— 采纳判定要回答的是"调用发生时正文在不在眼前"。
+  // WeakMap：不阻止会话被回收（与 lastAgent 同一考虑）。
+  const liveDomainsByAgent = new WeakMap<object, Set<InjectDomainKey>>()
+  // 最近一步里"每个域为什么发/不发"（官方载体 / 开关关 / 空 / 子会话不适用 / 本插件负责）。
   // 只在没有可见注入时用来解释状态 —— 标准类预设下技能与提示词由官方在送，
   // 插件的实况若只说"未投递"，读起来像出了问题。
-  let lastReasons: Partial<Record<InjectDomainKey, 'off' | 'official' | 'empty' | 'sent'>> = {}
+  let lastReasons: Partial<Record<InjectDomainKey, InjectReason>> = {}
   const live = (): LiveInjectionSnapshot => {
     let agent: object | undefined
     try { agent = lastAgent ? lastAgent.deref() : undefined } catch { agent = undefined }
@@ -345,18 +725,44 @@ export function createContextInjector(deps: ContextInjectorDeps): { dispose: () 
           // 本插件发过又清空的，报「已清空」。
           ? (entry.official ? 'official' : entry.form === 'notice' ? 'cleared' : 'in-context')
           // 没在上下文里：用最近一步的原因解释；`sent`（该发）却没看到 = 压缩后还没补发。
-          : reason === 'off' ? 'off' : reason === 'official' ? 'official' : reason === 'empty' ? 'empty' : 'absent'
+          : reason === 'off' ? 'off' : reason === 'official' ? 'official' : reason === 'empty' ? 'empty' : reason === 'child' ? 'child' : 'absent'
       const text = (state === 'in-context' || state === 'official') && entry !== undefined ? entry.text : ''
-      return { key, label: labelOf.get(key) ?? key, kind: INJECT_KIND_OF[key], state, bytes: bytesOf(text), text }
+      return {
+        key,
+        label: labelOf.get(key) ?? key,
+        kind: INJECT_KIND_OF[key],
+        state,
+        bytes: bytesOf(text),
+        text,
+        adoption: { ...adoption[key] },
+      }
     })
     return {
       hasAgent: agent !== undefined,
       delivered: { count: delivered.count, lastAt: delivered.lastAt, byDomain: { ...delivered.byDomain } },
+      observed: { toolCalls: observed.toolCalls, lastAt: observed.lastAt },
       domains: rows,
     }
   }
+  const noteToolUse = (toolName: string, agent: unknown): void => {
+    try {
+      const key = domainOfTool(toolName)
+      if (key === undefined) return
+      const at = Date.now()
+      observed.toolCalls += 1
+      observed.lastAt = at
+      const row = adoption[key]
+      row.used += 1
+      row.lastUsedAt = at
+      // 采纳判定：调用发生时该域正文正在这个会话的上下文里。
+      if (typeof agent === 'object' && agent !== null) {
+        const liveKeys = liveDomainsByAgent.get(agent as object)
+        if (liveKeys !== undefined && liveKeys.has(key)) row.adopted += 1
+      }
+    } catch { /* 遥测绝不能影响工具本身 */ }
+  }
   const ctx = deps.ctx
-  if (!ctx || typeof ctx.on !== 'function') return { dispose: () => {}, live }
+  if (!ctx || typeof ctx.on !== 'function') return { dispose: () => {}, live, noteToolUse }
   const stop: unknown = ctx.on('agent/pre-step', async (payload: any, next: () => Promise<any>) => {
     const decision = await next()
     try {
@@ -370,32 +776,46 @@ export function createContextInjector(deps: ContextInjectorDeps): { dispose: () 
       if (Number(payload.step) === 1 && messagesOf(decision).length === 0) return decision
       const domains = deps.domains()
       const settings = deps.settings()
-      const facts = await deps.factsFor(agent)
-      const sections = selectInjections(domains, settings, facts)
-      // 记录每个域这一步"为什么发 / 为什么不发"，供「注入实况」解释状态：
-      // off = 开关关了；official = 官方载体在送（技能 / 提示词，标准类预设下的常态）；
-      // empty = 本插件负责但没内容；sent = 本插件负责且有内容（上下文里看不到时说明还没补发）。
-      const reasons: Partial<Record<InjectDomainKey, 'off' | 'official' | 'empty' | 'sent'>> = {}
-      for (const domain of domains) {
-        if (settings.domains[domain.key] !== true) { reasons[domain.key] = 'off'; continue }
-        const carrier = CARRIER_FACT_OF[domain.key]
-        if (carrier !== undefined && facts?.[carrier] !== false) { reasons[domain.key] = 'official'; continue }
-        let text = ''
-        try { text = String(domain.text() ?? '') } catch { text = '' }
-        reasons[domain.key] = text.trim() === '' ? 'empty' : 'sent'
+      // 被用户关掉的官方载体域：连官方那条消息一起**不放行**（见 officialKindsToSuppress）。
+      // 边界说明：这不是改官方包、也不是改宿主机制 —— pre-step 的 decision 本来就是每个插件
+      // 都能改的那条缝（官方自己就在这里追加消息），我们只把它剔出这一步的批次。代价是官方
+      // 插件每一步都会重新渲染并尝试注入（它的历史读的是会话事件，读不到被拦下的那条），
+      // 模型侧不受影响。位置在本监听器 `next()` 之后：本插件在这条瀑布里位于官方之前
+      // （自己的消息总落在批次末尾，实测），所以官方这一步追加的消息在这里看得见。
+      const suppressedKinds = officialKindsToSuppress(settings)
+      let messages: readonly unknown[] = messagesOf(decision)
+      if (suppressedKinds.size > 0) {
+        const kept = messages.filter((message) => {
+          const kind = kindOfMessage(message)
+          return kind === undefined || !suppressedKinds.has(kind)
+        })
+        if (kept.length !== messages.length) messages = kept
       }
-      lastReasons = reasons
+      const facts = await deps.factsFor(agent)
+      const sections = selectInjections(domains, settings, facts, agent)
+      // 记录每个域这一步"为什么发 / 为什么不发"，供「注入实况」解释状态（口径见 explainInjections）。
+      lastReasons = explainInjections(domains, settings, facts, agent)
       const visible = newestDomainTexts(agent, PLUGIN_KINDS)
       const additions: unknown[] = []
       const appended: InjectDomainKey[] = []
+      // 本步真正投出去的**域正文**（不含下面的「已清空」通知）：采纳统计的 `injected` 只算它，
+      // 「已清空」不是一次"给了模型内容"，算进去会让分母虚高。
+      const injectedKeys = new Set<InjectDomainKey>()
       const published = new Set<InjectDomainKey>()
+      // 域声明按 key 索引：来源文件（`files`）只在真要发消息时取，所以要能从这里回查声明。
+      const domainOf = new Map(domains.map((domain) => [domain.key, domain] as const))
       for (const section of sections) {
         published.add(section.key)
         const text = renderDomainText(section)
         const current = visible.get(section.key)
         if (current !== undefined && current.text === text) continue
-        additions.push(domainMessage(section, text))
+        // `current !== undefined` = 该域在可见表面上已有一条更早的己方消息 → 这次是**替换**，
+        // 界面上的动作标签据此从「已载入」变成「已更新」（见 domainMessage 的 baseline/changes）。
+        let files: readonly InjectSourceFile[] | undefined
+        try { files = domainOf.get(section.key)?.files?.() } catch { files = undefined }
+        additions.push(domainMessage(section, text, files, current !== undefined))
         appended.push(section.key)
+        injectedKeys.add(section.key)
       }
       // 曾经注入过、这一轮没有内容的域 → 一条「已清空」；从没注入过的域什么都不用说。
       const labelOf = new Map(domains.map((domain) => [domain.key, domain.label] as const))
@@ -408,11 +828,27 @@ export function createContextInjector(deps: ContextInjectorDeps): { dispose: () 
         additions.push(clearedMessage(key, label))
         appended.push(key)
       }
-      if (additions.length === 0) return decision
+      // 采纳判定要用的现场：**含官方载体**，并并入本步刚投出去的域正文（它们就在这一步的
+      // 请求里，模型当场看得到）。判断"发不发"只能用本插件自己的 kind —— 官方正文绝不能
+      // 影响去重（见 PLUGIN_KINDS 的注释）；判断"模型眼前有没有这份内容"则必须连官方那份
+      // 一起算，标准类预设下技能与提示词正是官方在送。两遍扫描，两种口径各自正确。
+      // 位置在"提前返回"之前：这一步没东西可发时，现场依然是当前状态，同样要记。
+      try {
+        if (typeof agent === 'object') {
+          const liveKeys = new Set<InjectDomainKey>(newestDomainTexts(agent, LIVE_KINDS).keys())
+          for (const key of injectedKeys) liveKeys.add(key)
+          liveDomainsByAgent.set(agent as object, liveKeys)
+        }
+      } catch { /* 采纳遥测拿不到现场就退化成"只记 used"，绝不影响注入 */ }
+      if (additions.length === 0) {
+        // 没有新增时，只有"拦下了官方消息"才需要返回改动后的 decision；否则原样返回。
+        return messages === messagesOf(decision) ? decision : { ...decision, messages: [...messages] }
+      }
       delivered.count += additions.length
       delivered.lastAt = Date.now()
       for (const key of appended) delivered.byDomain[key] = (delivered.byDomain[key] || 0) + 1
-      return { ...decision, messages: [...messagesOf(decision), ...additions] }
+      for (const key of injectedKeys) adoption[key].injected += 1
+      return { ...decision, messages: [...messages, ...additions] }
     } catch (error) {
       // 注入是尽力而为：任何异常都不能把这一步弄失败。
       log('context injection failed: ' + String((error && (error as Error).message) || error))
@@ -422,6 +858,7 @@ export function createContextInjector(deps: ContextInjectorDeps): { dispose: () 
   return {
     dispose: () => { try { if (typeof stop === 'function') (stop as () => void)() } catch { /* ignore */ } },
     live,
+    noteToolUse,
   }
 }
 
@@ -430,9 +867,33 @@ function messagesOf(decision: any): readonly unknown[] {
   return Array.isArray(messages) ? messages : []
 }
 
-function domainMessage(section: InjectSection, text: string): unknown {
+/**
+ * 一条域消息。`source` 上带的字段是**给界面的结构化数据**（模型侧只看 content，不受影响）：
+ *   - snapshot 形态带 `sections`（界面分节显示，框架句由界面用固定 caption 顶替）；
+ *   - instructions 形态带 `changes`（+ 首帧的 `baseline`）—— 官方 `dsh-agent-instructions`
+ *     的同款契约（`dsh-client-ui-chat` 读 `path` + `action` ∈ set/replace/remove + 可选 digest），
+ *     界面据此把这条渲染成「文件清单 + 正文」而不是一坨原文。
+ *     `action` 由**是否替换**决定：本域此前没有可见消息 = 首帧 → `set` + `baseline: true`
+ *     （界面显示「已载入」）；有 → `replace`（「已更新」）。`baseline` 只在真时写：界面判
+ *     `=== true`，写 false 是噪声。缺 `files`（域没提供、或提供时抛错）→ 两个字段都不写，
+ *     界面退回原文渲染，消息内容不变。
+ */
+function domainMessage(
+  section: InjectSection,
+  text: string,
+  files?: readonly InjectSourceFile[],
+  replacing?: boolean,
+): unknown {
   const source: Record<string, unknown> = { kind: INJECT_KIND_OF[section.key], form: section.form }
   if (section.form === 'snapshot') source.sections = [{ name: section.name, text: section.text }]
+  if (section.form === 'instructions' && files !== undefined && files.length > 0) {
+    if (replacing !== true) source.baseline = true
+    source.changes = files.map((file) => ({
+      action: replacing === true ? 'replace' : 'set',
+      path: file.path,
+      ...(file.digest !== undefined && file.digest !== '' ? { digest: file.digest } : {}),
+    }))
+  }
   return createUserMessage({
     content: [{ type: 'text', text }],
     source,

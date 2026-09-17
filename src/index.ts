@@ -12,7 +12,7 @@
 // artifact — same convention as DSH's own packages, which ship compiled JS).
 
 import type { Context } from '@deepseek-ai/cordis'
-import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { defineTool as hostDefineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { ArchiveWorkspaceRegistry as HistoryService, workspaceBaseName, workspacePathKey } from './history/workspace.js'
@@ -28,6 +28,7 @@ import {
   DEFAULT_INJECT_SETTINGS,
   createContextInjector,
   normalizeInjectSettings,
+  subagentDepthOf,
   type InjectSettings,
   type LiveInjectionSnapshot,
 } from './context-inject.js'
@@ -888,6 +889,9 @@ export default {
     // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的五域文本。
     // 挂在 apply 作用域：`injection-live` op 与注入器不在同一层（effect 内部）。
     let contextInjectorLive: (() => LiveInjectionSnapshot) | null = null
+    // 采纳遥测的入口（同样是 apply 作用域的中转）：工具注册在 effect 之外，
+    // 拿不到 effect 内部的 `injector`；经这个 `let` 中转，热更新重建注入器也能跟上。
+    let contextInjectorNote: ((toolName: string, agent: unknown) => void) | null = null
     try {
       ctx.effect(() => {
         const injector = createContextInjector({
@@ -895,18 +899,43 @@ export default {
           // 顺序即界面勾选与消息顺序（用户裁定 2026-09-16）：场景和记忆 → MCP → 技能 →
           // 子智能体 → 提示词。form 是宿主语义轴：记忆是「当前状态」（snapshot，后发取代先发），
           // 三个目录是 catalog，提示词是 instructions（与官方 AGENTS.md 那条行同一形态）。
+          //
+          // `applicableTo`（2026-09-17 方案 A）：子智能体域按"**目录该不该注入到这么深的
+          // 会话**"（人设的 `catalogDepth`，默认 1 = 只在顶层注入）判断，**不是**"能不能
+          // 委派"。委派可行性由官方决定：`dsh-tool-subagent` 默认 `maxDepth: 3`，provider
+          // 只在传了该值时才校验，所以子代理本来就能继续嵌套（用户实测确认）。此前判据叫
+          // "还有没有委派预算"、语义是"还能不能委派"，那是错的 —— 详见 service.ts 里
+          // `catalogDepth` 字段的注释。目录正文也按同一个判据过滤（`text(agent)`），两处同源
+          // 所以不会分叉。
+          //
+          // 记忆域（2026-09-17 用户裁定）：**只在顶层注入**。记忆是"父会话的现场"，不是子代理
+          // 完成任务所需的事实 —— 而且它带着「一律照办，覆盖你的默认做法」这种强主张，塞进
+          // 一次性子会话只会与角色定义争注意力（实测：子代理跑审查时，上下文里同时躺着人设与
+          // 整份场景记忆）。子代理手里有 `memory_manager_list/read`，需要什么自己取；父代理
+          // 上下文里也有记忆，相关事实应当由它写进 `task`（子代理的上下文 = 角色 + 任务）。
+          // 其余三域对任何深度都成立：提示词是用户规则（本插件的立身之本就是"覆盖到子代理"）、
+          // 技能目录与 MCP 状态是"操作这台机器所需的事实"（子代理手里就有 `skill` / `mcp__*`
+          // 工具，不知道清单就只能瞎调）。
           domains: () => [
-            { key: 'memory', name: 'tool-management:scene-memory', label: '场景和记忆', form: 'snapshot', text: () => rulesService.memoryText() },
+            { key: 'memory', name: 'tool-management:scene-memory', label: '场景和记忆', form: 'snapshot', text: () => rulesService.memoryText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: () => mcpStateCatalog.text() },
             { key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog', text: () => skillCatalog.text() },
-            { key: 'subagents', name: 'tool-management:subagents', label: '子智能体', form: 'catalog', text: () => subagentCatalog.text() },
-            { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: () => rulesService.promptText() },
+            {
+              key: 'subagents',
+              name: 'tool-management:subagents',
+              label: '子智能体',
+              form: 'catalog',
+              text: (agent) => subagentCatalog.text(agent),
+              applicableTo: (agent) => subagentCatalog.catalogVisibleAt(subagentDepthOf(agent)),
+            },
+            { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: () => rulesService.promptText(), files: () => rulesService.promptFiles() },
           ],
           settings: () => injectSettingsSync(),
           factsFor: (agent) => presetFactsForAgent(agent),
         })
         contextInjectorLive = () => injector.live()
-        return () => { contextInjectorLive = null; injector.dispose() }
+        contextInjectorNote = (toolName, agent) => injector.noteToolUse(toolName, agent)
+        return () => { contextInjectorLive = null; contextInjectorNote = null; injector.dispose() }
       }, 'dsh-plugin-tool-management: context injection')
     } catch (e) {
       console.error('[dsh-plugin-tool-management] context injection setup failed:', message(e))
@@ -2230,6 +2259,24 @@ export default {
       }
       const toolCounts: Record<string, number> = {}
       const enabledToolCounts: Record<string, number> = {}
+      // 只来自**真实 schema** 的两个数，以及只来自**「已知工具」缓存**的一个数。
+      //
+      // 为什么必须与上面那两个分开（2026-09-17 用户实测发现）：`toolCounts` 是三处并集
+      // （live ∪ 停用表 ∪ 缓存），把"这台 server 曾经有什么工具"与"它现在有什么工具"混成了
+      // 一个数。界面状态胶囊与注入段此前读的就是它，于是**一台已经连不上的 server 会被报成
+      // 「已运行」并注入上下文**，模型照着去调 `mcp__X__*`，而那个工具根本没注册 —— 白烧一轮。
+      //
+      // 分开之后三个数各有明确含义：
+      //   liveToolCounts        当前真实注册的工具数（0 = 一个都没注册）
+      //   liveEnabledToolCounts 上面这个数里未被停用表扣减的（真正能调到的）
+      //   knownToolCounts       缓存里的工具数 —— 它是**曾经真的连上过**的证据（缓存只在真实
+      //                         schema 里见到工具时才写入），0 = 从未连上过
+      //
+      // 前两个给状态胶囊与注入段用；`toolCounts` / `enabledToolCounts` 语义不变，继续给场景
+      // 档案挑工具、详情页清单用（那里"上次见过哪些工具"正是需要的，且已标 `stale`）。
+      const liveToolCounts: Record<string, number> = {}
+      const liveEnabledToolCounts: Record<string, number> = {}
+      const knownToolCounts: Record<string, number> = {}
       try {
         const schemas = await tools.schemas()
         const knownCache = await readKnownMcpTools()
@@ -2268,6 +2315,16 @@ export default {
           // 否则收窄后模型看到的数字比它能调的工具多，页面与详情页也会互相矛盾。
           enabledToolCounts[server] = countEnabledTools(set, disabledMap[server] || [])
         }
+        // 真实来源的两个数：只数 `liveNames`（schema 里真正注册了的），再按停用表扣减。
+        for (const [server, list] of Object.entries(liveNames)) {
+          const set = new Set(list)
+          liveToolCounts[server] = set.size
+          liveEnabledToolCounts[server] = countEnabledTools(set, disabledMap[server] || [])
+        }
+        // 「曾经连上过」的证据：缓存里这台 server 见过几个工具。注意读的是**回写之前**的
+        // `knownCache` —— 回写会把这次 live 见到的并进去，而这次 live 见到的本来就已经算在
+        // liveToolCounts 里了，不需要它来充当"曾经"。
+        for (const [server, list] of Object.entries(knownCache)) knownToolCounts[server] = list.length
         // 回写「已知工具」：live 见到的名字与描述并入缓存（有变化才写盘，读路径上的 best-effort）。
         // 名字集合变化，或某个已知工具这次拿到了描述而缓存里没有 → 都算变化。
         let cacheChanged = false
@@ -2311,7 +2368,22 @@ export default {
       for (const row of rows) {
         if (row.toolCount === undefined) row.toolCount = toolCounts[row.serverName] || 0
         if (row.enabledToolCount === undefined) row.enabledToolCount = enabledToolCounts[row.serverName] || 0
+        // 这三个**总是**覆盖：它们描述的是"此刻的真实状态"，而缓存合并出来的那两个数
+        // 描述的是"这台 server 有过哪些工具"。两者混淆过一次，代价是注入段谎报可用。
+        row.liveToolCount = liveToolCounts[row.serverName] || 0
+        row.liveEnabledToolCount = liveEnabledToolCounts[row.serverName] || 0
+        row.knownToolCount = knownToolCounts[row.serverName] || 0
       }
+      // 列表顺序（用户要求 2026-09-17）：**全局在前、应用级在后**，各级按服务器名排，
+      // 当前在跑的 loader 行垫底。放在服务端而不是页面里：同一个顺序也是场景档案勾选器
+      // （`scene-inventory`）与模型侧 `mcp_manager_list` 的顺序 —— 三处说同一件事。
+      // 名字比较与技能页同一套（localeCompare），大小写混排时不会把大写全顶到前面。
+      const levelRank: Record<string, number> = { global: 0, project: 1, loader: 2 }
+      const serverNameOf = (row: any) => String(row.serverName || row.id || '')
+      rows.sort((a, b) =>
+        (levelRank[a.level] ?? 3) - (levelRank[b.level] ?? 3) ||
+        serverNameOf(a).localeCompare(serverNameOf(b)) ||
+        String(a.id).localeCompare(String(b.id)))
       // A loader id that appears twice (same id in both patch files, or twice in
       // one) makes the composition fail to boot. Surface it instead of hiding it.
       const idCounts = new Map<string, number>()
@@ -4160,9 +4232,46 @@ export default {
 
     // ---------- agent-facing tools (standard ctx.tools.register + defineTool) ----------
     const text = (value: string) => [{ type: 'text' as const, text: value }]
+    /**
+     * 采纳遥测：把每个工具包一层，模型一调就记一笔"哪个域被伸手了"（见 context-inject 的
+     * `noteToolUse`）。计数在宿主工具对象之外，所以**参数校验失败也算**——我们要测的是
+     * "模型知不知道有这个域、会不会去用"，不是"调用写得对不对"。
+     *
+     * 只统计本插件自己的工具，不走 `tools/result` 这类宿主事件：事件的作用域语义一旦变化，
+     * 遥测会静默变成 0，而 0 恰好会被读成"模型从来不用"——一个假结论比没有结论更糟。
+     * 包自己的工具是确定性的：工具在，观测就在。
+     */
+    const trackAdoption = (def: ToolDefinition): ToolDefinition => {
+      const name = String((def as { name?: unknown }).name ?? '')
+      const run = (def as { execute?: unknown }).execute
+      if (name === '' || typeof run !== 'function') return def
+      return {
+        ...def,
+        async execute(args: unknown, exec: unknown) {
+          try { if (contextInjectorNote !== null) contextInjectorNote(name, exec && (exec as { agent?: unknown }).agent) } catch { /* 遥测绝不能影响工具 */ }
+          return (run as (a: unknown, e: unknown) => unknown)(args, exec)
+        },
+      } as ToolDefinition
+    }
+    /**
+     * 与宿主 `defineTool` **同签名的**本地包装。
+     *
+     * 为什么用同名遮蔽而不是逐个改 14 个注册点：采纳遥测必须覆盖**每一个**域工具，
+     * 漏一个就得到"这个域从来没用过"的假结论。遮蔽 import 让"新加工具自动被统计"成为
+     * 默认，而不是靠后来者记得手动加。
+     *
+     * 类型上刻意**不重写签名**，而是把箭头函数断言成 `typeof hostDefineTool`：宿主签名带
+     * `const S/O` 类型参数，照着写一遍会让 TS 在每个调用点上多展开一层 `InferObject<S, ?>`，
+     * 直接撞 "Excessive stack depth comparing types"（实测）。断言成宿主自己的类型之后，
+     * 14 个调用点的参数表推断与改造前**完全一致** —— 宿主改签名时该报错的地方照旧报错；
+     * 包装体本身只是转发（参数收 `unknown`、原样交给宿主），不参与推断，也就没有可失效的类型。
+     */
+    const hostDefineToolAny = hostDefineTool as unknown as (options: unknown) => ToolDefinition
+    const defineTool = ((options: unknown): ToolDefinition =>
+      trackAdoption(hostDefineToolAny(options))) as unknown as typeof hostDefineTool
     tools.register(defineTool({
       name: 'mcp_manager_list',
-      description: 'List configured MCP servers (level, enabled state, live loader status, tool count excluding switched-off tools, note). Read a server\'s note before choosing it. Defaults to enabled servers; pass all=true for every configured server.',
+      description: 'List configured MCP servers (level, enabled state, live loader status, tool count excluding switched-off tools, note). Read a server\'s note before choosing it. The same list is injected into your context each turn (the「本机 MCP 服务器的当前状态」system-reminder); this tool is the raw view — all=true includes disabled servers. Defaults to enabled servers; pass all=true for every configured server.',
       parameters: {
         all: { type: 'boolean', description: 'Include disabled servers (default false).' },
       },
@@ -4259,7 +4368,7 @@ export default {
     // tools/pre-execute hook below (the model must ask before writing files).
     tools.register(defineTool({
       name: 'skill_manager_list',
-      description: 'List DSH skills with enabled state, effective/shadowed status and source file path. Defaults to enabled skills only; pass all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
+      description: 'List DSH skills with enabled state, effective/shadowed status and source file path. The injected「本机技能目录」system-reminder carries callable skills and summaries only; use this tool to get a source file path (read the file for the full body) and to see entries that are off. Defaults to enabled skills only; pass all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
       parameters: {
         all: { type: 'boolean', description: 'Include disabled and shadowed entries (default false).' },
       },
@@ -4376,7 +4485,7 @@ export default {
     // AGENTS.md 预设库：模型可查/切，不能造/删（避免模型乱删用户预设）。
     tools.register(defineTool({
       name: 'prompt_manager_list',
-      description: 'List AGENTS.md presets (id, active state, file path). Read that file to see a preset body. Defaults to the preset currently in effect; pass all=true for the whole library.',
+      description: 'List AGENTS.md presets (id, active state, file path). Read that file to see a preset body. The preset in effect right now is injected into your context each turn (the「本机提示词」system-reminder, whose「来源：」line names the file). Defaults to the preset currently in effect; pass all=true for the whole library.',
       parameters: {
         all: { type: 'boolean', description: 'Include inactive presets (default false).' },
       },
@@ -4431,7 +4540,7 @@ export default {
     // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
     tools.register(defineTool({
       name: 'memory_manager_list',
-      description: 'List memories under ~/.dsh/tool-management/memories (id, scene, enabled, description). Defaults to the memories that will actually be injected; pass all=true for every entry.',
+      description: 'List memories under ~/.dsh/tool-management/memories (id, scene, enabled, description). The ones actually injected are carried in your context each turn (the「本机当前的场景和记忆」system-reminder); use this tool to find ids/paths or to see entries that are off. Defaults to the memories that will actually be injected; pass all=true for every entry.',
       parameters: {
         group: { type: 'string', description: 'Optional scene filter.' },
         all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
@@ -4572,11 +4681,13 @@ export default {
             .catch(() => ({ kind: 'ask', reason: 'Write a memory under ~/.dsh/tool-management/memories' }))
         }
         // subagent_manager_run：子代理运行花真 token：默认确认（requireConfirmForModelSubagentRun !== false），可关。
+        // `inherit: true` 时子代理会读到本次会话已完成的对话 —— 卡里如实说明（用户批准的是
+        // "把这段对话交给它"，不只是"跑个子代理"）。文案只在与 fork 有关的部分分叉。
+        const inherits = !!(exec && exec.arguments && exec.arguments.inherit)
+        const ask = { kind: 'ask' as const, reason: inherits ? 'Run a subagent on this conversation (it inherits the conversation; consumes tokens)' : 'Run a subagent (consumes tokens)' }
         return readPluginSettings()
-          .then((s) => ((s as any).requireConfirmForModelSubagentRun !== false
-            ? { kind: 'ask', reason: 'Run a subagent (consumes tokens)' }
-            : next()))
-          .catch(() => ({ kind: 'ask', reason: 'Run a subagent (consumes tokens)' }))
+          .then((s) => ((s as any).requireConfirmForModelSubagentRun !== false ? ask : next()))
+          .catch(() => ask)
       })
     }
 

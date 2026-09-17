@@ -28,9 +28,10 @@
 // 错误约定：业务校验失败返回 { ok:false, error: 中文, code, params? }（与 skills core 一致）；
 // ops 成功返回扁平 { ok:true, ... }，不套 { ok:true, data }。
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, renameWithRetry, resolveDshHome, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
@@ -267,6 +268,11 @@ export interface RulesService {
    * 场景期间 = 当前场景绑定的提示词，否则 = `~/.dsh/AGENTS.md` 正文。
    */
   promptText: () => string
+  /**
+   * `promptText()` 的来源文件（同步；注入通道用作 instructions 形态的 `changes`，
+   * 界面据此显示文件清单与「已载入/已更新」）。`[]` = 本次没有提示词正文。
+   */
+  promptFiles: () => Array<{ path: string; digest: string }>
   /** 失效快照与场景记忆缓存（写操作后调用）。 */
   refresh: () => Promise<void>
   /** 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内执行，非公开 op，无门禁面）。 */
@@ -1448,8 +1454,8 @@ function sceneHeader(scene: string, index?: RulesIndex): string {
 }
 
 /**
- * 段首的引导语：让模型知道下面是**用户提供的参考信息**，而不是对话历史或临时说明
- * —— 相关就用、无关可忽略。
+ * 段首的引导语：让模型知道下面是**用户为本机写的参考信息**，并且**以它为准**
+ * —— 涉及本机的事一律照它办，确实无关时才放下。
  *
  * 写法（2026-09-16 用户裁定，基于真实注入结果的三次修正）：
  *   - **单行、加粗**，不再用括号分两行 —— 括号跨行在真实提示词里读起来像被截断，
@@ -1464,10 +1470,37 @@ function sceneHeader(scene: string, index?: RulesIndex): string {
  *
  * 用词：不用「常驻」「注入」这类内部行话（模型没有先验）；用户裁定用「信息」而不是
  * 「记忆」——「记忆」在系统提示词里指代不明，而这段的实质就是用户写的参考信息。
+ *
+ * 2026-09-17 重写（用户：「当前模式会不重视这些提示词」）。上一版的三个毛病都在**授权**
+ * 上，而不在措辞好不好看上：
+ *   1. 「与当前任务相关时直接采用」——**没有给"相关"的判据**。最省力的解读永远是"无关"，
+ *      因为判成无关不需要任何工作；
+ *   2. 通篇没有优先级规则。与本机实际情况冲突时，模型会默默按自己的默认假设走，
+ *      而用户完全不知道发生了什么；
+ *   3. 「无关时忽略」——「忽略」是这句话里**最后一个动词**，也是记得最牢的那个。它把
+ *      一个免打扰出口写成了对内容的态度许可。
+ * 现在：给出**判据**（凡涉及本机路径 / 配置 / 工具 / 习惯）、给出**裁决规则**、把出口降级为
+ * 「不必提及」（关于**要不要声明**，不是关于**要不要采用**）。出口保留是必要的 —— 去掉它
+ * 会让模型对无关条目强行攀附，那是另一种失真。
+ *
+ * 2026-09-17 第二版：**按条目类型分级授权**（用户采纳的四条里的第 1、4 条）。Claude Code
+ * 把两类内容分进两个系统、用**相反**的授权：用户指令（`claudemd.ts:89`）是
+ * "These instructions OVERRIDE any default behavior and you MUST follow them exactly as
+ * written"，而记忆（`memdir/memoryTypes.ts:202`）是
+ * "If a recalled memory conflicts with current information, trust what you observe now"
+ * —— 书里（ch11:25）说记忆是 "working notes, not gospel"。上一版把两类塞进一句授权，
+ * 对**场景说明**（用户写的约定）是对的，对**记忆条目**（可能是几个月前记下的事实）是错的。
+ * 好在这两类在渲染时就分处不同位置：场景说明在 `sceneHeader` 的 `**场景说明：…**` 里，
+ * 记忆条目在 `memoryBlock` 里 —— 所以一句话就能分级，不必改数据结构。
+ *
+ * 冲突阶梯（第 4 条）来自 Codex `base_instructions/default.md:22-27` 与 Claude Code 的
+ * `caller override > agent definition > parent model > default`：把"谁高于谁"写明，
+ * 模型才不会在「用户当场说的 ≠ 本机记录」时悬空。写明它还有一个反直觉的好处 ——
+ * 它让授权更可信：这说明本条不是要让记忆压过用户，只是要压过模型的默认假设。
  */
-const SCENE_MEMORY_NOTE = '**用户提供的参考信息：与当前任务相关时直接采用，无关时忽略。以下就是全部信息。**'
+const SCENE_MEMORY_NOTE = '**用户为本机写的参考信息：「场景说明」是用户的约定，一律照办，覆盖你的默认做法；其余条目是记录，可能已过期 —— 与当前实际情况冲突时以你看到的为准，与用户当场说的冲突时以用户为准。无关时不必提及。以下就是全部信息。**'
 /** 有未注入条目时的版本：去掉完整性声明（见上）。 */
-const SCENE_MEMORY_NOTE_PARTIAL = '**用户提供的参考信息：与当前任务相关时直接采用，无关时忽略。**'
+const SCENE_MEMORY_NOTE_PARTIAL = '**用户为本机写的参考信息：「场景说明」是用户的约定，一律照办，覆盖你的默认做法；其余条目是记录，可能已过期 —— 与当前实际情况冲突时以你看到的为准，与用户当场说的冲突时以用户为准。无关时不必提及。**'
 
 /**
  * 段首固定块。以 `\n` 结尾，与场景块 join 后自然空一行。
@@ -2991,22 +3024,75 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   //     （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
   const memoryText = (): string => sceneMemory().text
   /**
-   * `~/.dsh/AGENTS.md` 正文。上限与官方那一行的 `maxBytes` 同量级（64 KiB）：超大文件按字节
+   * `~/.dsh/AGENTS.md` 正文的上限，与官方那一行的 `maxBytes` 同量级（64 KiB）：超大文件按字节
    * 截断并留一行标记，免得一份手写的巨型基线把上下文撑爆。
    */
   const AGENTS_MD_MAX_BYTES = 65536
-  const agentsMdText = (): string => {
-    const text = readGlobalAgentsMdSync()
-    if (text.trim() === '') return ''
-    if (Buffer.byteLength(text, 'utf8') <= AGENTS_MD_MAX_BYTES) return text
-    const cut = Buffer.from(text, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8')
-    return cut + `\n\n（…文件超过 ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB，已截断。）`
+  /**
+   * DSH home 的**展示形态**，规则与官方 `dsh-home-paths` 的 `dshHomeDisplay()` 一致
+   * （`dsh-home-paths/lib/index.js:93`）：默认位置显示 `~/.dsh`，被 `DSH_HOME` 指到别处时
+   * 才显示 `$DSH_HOME`。只在给**界面**看的字符串里用 —— 读盘一律用真实路径。
+   */
+  const dshHomeDisplay = (): string => {
+    const home = resolveDshHome()
+    return resolve(home) === resolve(join(homedir(), '.dsh')) ? '~/.dsh' : '$DSH_HOME'
   }
-  // 场景提示词与 AGENTS.md 正文在用户眼里就是同一件事（"全局提示词"）：场景期间前者取代后者，
-  // 与官方语义一致（进场景改写文件、退出恢复）。所以一个域、一份文本，取到非空的场景提示词就用它。
-  const promptText = (): string => {
-    const scene = resolveScenePreset()?.text ?? ''
-    return scene.trim() !== '' ? scene : agentsMdText()
+  /**
+   * 当前生效的提示词：**来源文件 + 正文**，一次解析、两处出口共用（模型侧 `promptText`、
+   * 界面清单 `promptFiles`）。`null` = 现在没有提示词。
+   *
+   * 为什么合并成一处：两条出口必须给出**同一个**结论（文件是哪个、正文取哪份），分开写两份
+   * 同样的分支判断迟早分叉 —— 分叉的后果就是界面标错文件、或模型看到与文件不符的正文。
+   * 合并前那里已经有一处小分叉：场景预设在场但正文为空时，文本退回 AGENTS.md、清单却仍报
+   * 预设路径。现在两边同源，这类角落不可能再各说各话。
+   *
+   * `digest` 照抄官方 `instructionContentSha1`（`dsh-agent-instructions/lib/index.js:90`，
+   * sha1 hex）：算的是**文件内容**（AGENTS.md 取截断前的原文），是"文件这一版"的身份，
+   * 不是"这次注入了什么"；界面只拿它当悬停提示，不参与任何判定。
+   *
+   * `text` 是**模型侧**正文，开头一行 `来源：<展示路径>` —— 照抄官方 agent-instructions 的
+   * 写法（`Instructions from: <path>`，`render.js` 的 `sectionText`）。模型据此知道这些规则
+   * 写在哪个文件里：用户说"把这条记下来"时它知道该改哪份文件，而不是只能凭印象回答。
+   */
+  const resolvePrompt = (): { path: string; digest: string; text: string } | null => {
+    // 场景提示词与 AGENTS.md 正文在用户眼里就是同一件事（"全局提示词"）：场景期间前者取代后者，
+    // 与官方语义一致（进场景改写文件、退出恢复）。所以一个域、一份文本，取到非空的场景提示词就用它。
+    const scene = resolveScenePreset()
+    if (scene && scene.text.trim() !== '') {
+      const path = `${dshHomeDisplay()}/${HUB_DIR}/${PRESETS_DIR}/${scene.presetId}/AGENTS.md`
+      return {
+        path,
+        digest: createHash('sha1').update(scene.text).digest('hex'),
+        text: `来源：${path}\n\n${scene.text}`,
+      }
+    }
+    const raw = readGlobalAgentsMdSync()
+    if (raw.trim() === '') return null
+    const path = `${dshHomeDisplay()}/AGENTS.md`
+    const body = Buffer.byteLength(raw, 'utf8') <= AGENTS_MD_MAX_BYTES
+      ? raw
+      : Buffer.from(raw, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8') +
+        `\n\n（…文件超过 ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB，已截断。）`
+    return { path, digest: createHash('sha1').update(raw).digest('hex'), text: `来源：${path}\n\n${body}` }
+  }
+  /**
+   * 模型侧的提示词正文（`''` = 没有可注入的内容）。
+   *
+   * **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
+   * （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
+   */
+  const promptText = (): string => resolvePrompt()?.text ?? ''
+  /**
+   * `promptText()` 的**来源文件**（同步）：注入通道把它当作 instructions 形态的
+   * `changes` 交给界面（文件清单 + 已载入/已更新），见 context-inject.ts 的 `files`。
+   * 与文本同源（都走 `resolvePrompt`），所以两边不会分叉；`[]` = 无正文。
+   *
+   * 路径用**展示形态**（见 `dshHomeDisplay`）：界面里官方 agent-instructions 那条行写的是
+   * `~/.dsh/AGENTS.md`，我们写绝对路径的话，同一个界面上会出现两种风格。
+   */
+  const promptFiles = (): Array<{ path: string; digest: string }> => {
+    const resolved = resolvePrompt()
+    return resolved === null ? [] : [{ path: resolved.path, digest: resolved.digest }]
   }
 
   /** 写操作：串行队列内执行，成功后触发 refresh（失效缓存，下一请求即生效）。 */
@@ -3061,6 +3147,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     writeOps,
     memoryText,
     promptText,
+    promptFiles,
     refresh,
     patchIndex,
     readArchiveSlice,

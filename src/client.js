@@ -47,6 +47,13 @@ window.__ModuleLoader__.load({
 /* 页头动作行：内边距收 2px。批量按钮要按「取消全选」定宽（见 .dsm-btn-bulk），
    收这一点正好把定宽多出来的宽度抵掉，整行仍在一行内。 */
 .dsm-actions .dsm-btn{padding:0 11px}
+/* 窄栏再收一档（容器 ≤600px）：技能页 7 颗按钮最挤，上一档（11px 内边距 + 13px 字号）整行要
+   ~560px，窄栏装不下时最后一颗「全选」会被挤到第二行（用户 2026-09-18 截图实测）。
+   这一档同时收内边距、间距并降一档字号（12px，与 .dsm-btn-quiet 同档）→ 整行降到 ~486px。
+   宽栏不受影响。阈值取 600 而不是贴着 560：不同机器的字体度量略有出入，交界处两档都装得下，
+   不会正好卡在边界上换行；再窄（< ~486px）仍按原来的方式折行，行内按钮由下面 ≤520px
+   那一档均分整行。 */
+@container(max-width:600px){.dsm-actions{gap:6px}.dsm-actions .dsm-btn{padding:0 8px;font-size:12px}}
 /* 「全选 ↔ 取消全选」二合一：两种文案都进 DOM、叠在同一格里，隐身那份只负责占位 →
    按钮宽度恒等于较宽的那个文案，点击不再改行宽、也就不会把整行挤到第二行。
    不写死像素是有意的：中文「取消全选」与英文 Deselect all 宽度差很多，各自自适应。
@@ -240,8 +247,10 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-compat-card-note{color:var(--dsw-alias-label-tertiary);font-size:11px}
 .dsm-compat-section{display:flex;min-width:0;flex-direction:column;gap:7px}
 .dsm-compat-section-head{display:flex;min-width:0;align-items:baseline;gap:8px}
-.dsm-compat-section-title{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:650}
-.dsm-compat-section-hint{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.dsm-compat-section-title{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:650;white-space:nowrap;flex:none}
+/* 说明文字：占满剩余宽度，放不下就换行（标题已 nowrap；此前用省略号截断，用户 2026-09-17
+   指出"注入实况后面那句被截断了" —— 那行是状态信息，截断等于看不全）。 */
+.dsm-compat-section-hint{min-width:0;flex:1 1 auto;color:var(--dsw-alias-label-tertiary);font-size:11px;overflow-wrap:anywhere}
 /* 动作可用性：一行一个动作 + 路径标记，窄容器落成"名称在上、标记在下"。 */
 .dsm-compat-mod-list{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 .dsm-compat-mod-row{display:flex;min-height:38px;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px}
@@ -264,7 +273,20 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-inject-live-toggle{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}
 .dsm-inject-live-toggle:hover{text-decoration:underline}
 .dsm-inject-live-toggle:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
+/* 没有正文可展开的行：用一个看不见的同字符占位，把展开箭头那一格宽度留出来，
+   这样所有行的域名左缘才会在同一条竖线上（用户 2026-09-17 指出参差不齐）。
+   占位与文字放在**同一个** flex 子项里（.dsm-inject-live-static），否则 name 格的
+   gap:0 6px 会在它们之间再插一段间距，比可展开的行多出 6px。 */
+.dsm-inject-live-mark-blank{visibility:hidden}
 .dsm-inject-live-size{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
+/* 实况面板的域名格里有多个行内元素（域名 / 体积 / 采纳统计），行内元素之间没有空白节点，
+   不设间距就会挤成「场景和记忆· 3.2 KB」。
+   刻意**不复用** .dsm-compat-name：那一类在另外五个面板里只放一个文本子节点，改成 flex 会让
+   长标签变成不可收缩的 flex 项 → 窄容器下溢出而不是换行。所以只在实况面板这一处加 gap。 */
+.dsm-inject-live-name{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px}
+/* 采纳一行（注入 N 次 / 调用 M 次 / 采纳 K 次）：刻意用中性灰而不是琥珀 —— 胶囊的琥珀
+   只表示"该投却没投"这一个故障；"投了但模型没伸手"是数据，不是故障，颜色留给数字说话。 */
+.dsm-inject-live-adopt{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
 .dsm-reach-name{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .dsm-reach-chip{display:inline-flex;min-height:22px;align-items:center;padding:0 9px;border:1px solid var(--dsw-alias-border-l3);border-radius:6px;color:var(--dsw-alias-label-secondary);font-size:11px;white-space:nowrap}
 .dsm-reach-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
@@ -579,7 +601,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
               React.createElement('span', { className: 'dsm-seg-group-line' })),
             React.createElement('div', { className: 'dsm-inject-domains' },
               ['memory', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
-                return React.createElement('label', { className: 'dsm-inject-domain', key: 'domain-' + key },
+                // 技能与提示词两域在标准类预设下由宿主送、本插件让位 —— 关掉它们时本插件会连
+                // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
+                // 那两项一句 title，免得用户以为"关了没用"。
+                const carrier = key === 'skills' || key === 'prompt'
+                return React.createElement('label', { className: 'dsm-inject-domain', key: 'domain-' + key, title: carrier ? t('compat.inject.domain.carrier.title') : undefined },
                   React.createElement('input', { type: 'checkbox', checked: domains[key] !== false, onChange: function () {
                     const nextDomains = Object.assign({}, domains)
                     nextDomains[key] = domains[key] === false
@@ -617,7 +643,19 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           if (row.state === 'off') return { cls: '', text: t('compat.live.state.off'), title: '' }
           if (row.state === 'empty') return { cls: '', text: t('compat.live.state.empty'), title: '' }
           if (row.state === 'cleared') return { cls: '', text: t('compat.live.state.cleared'), title: '' }
+          // 子会话不适用：与「已关闭 / 无内容」同档的灰 —— 它是设计选择，不是故障。
+          if (row.state === 'child') return { cls: '', text: t('compat.live.state.child'), title: t('compat.live.state.child.title') }
           return { cls: '', text: t('compat.live.state.unknown'), title: '' }
+        }
+        // 采纳一行：注入 N 次 / 调用 M 次 / 其中"调用时正文就在眼前"K 次。
+        // 只在真的投递过该域时出现 —— 从没投过的域摆一行 0 只是噪声。
+        const adoptText = function (row) {
+          const a = row.adoption || {}
+          const injected = Number(a.injected) || 0
+          if (injected === 0) return ''
+          const used = Number(a.used) || 0
+          if (used === 0) return t('compat.live.adopt.none', { injected: injected })
+          return t('compat.live.adopt', { injected: injected, used: used, adopted: Number(a.adopted) || 0 })
         }
         // 有正文的域就是"模型看到的内容"：本插件注入的与官方注入的（技能 / 提示词）都算。
         const hasText = function (row) { return (row.state === 'in-context' || row.state === 'official') && row.text !== '' }
@@ -641,11 +679,17 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         const deliveredText = delivered.count > 0
           ? t('compat.live.delivered', { count: delivered.count, time: new Date(delivered.lastAt).toTimeString().slice(0, 5) })
           : t('compat.live.never')
+        // 观测面：本进程到底看到过几次本插件的工具调用。必须显示 —— 采纳全是 0 时，
+        // 要能分清"模型真的没用"（结论）和"遥测没接上"（故障）。
+        const observedCalls = Number((live.observed || {}).toolCalls) || 0
+        const observedText = observedCalls > 0
+          ? t('compat.live.observe.some', { count: observedCalls })
+          : t('compat.live.observe.none')
         const canCopy = (live.domains || []).some(hasText)
         push(React.createElement('section', { className: 'dsm-compat-section' },
           React.createElement('div', { className: 'dsm-compat-section-head' },
             React.createElement('h3', { className: 'dsm-compat-section-title' }, t('compat.live.title')),
-            React.createElement('span', { className: 'dsm-compat-section-hint' }, t('compat.live.hint') + ' · ' + deliveredText),
+            React.createElement('span', { className: 'dsm-compat-section-hint' }, t('compat.live.hint') + ' · ' + deliveredText + ' · ' + observedText),
             React.createElement('span', { className: 'dsm-inject-live-actions' },
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !canCopy, onClick: copyAll },
                 liveCopied ? t('compat.live.copied') : t('compat.live.copy')))),
@@ -656,15 +700,30 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                 const st = stateOf(row)
                 const open = liveOpen === row.key
                 const canOpen = hasText(row)
+                const adopt = adoptText(row)
                 return React.createElement('div', { className: 'dsm-compat-mod-row', key: row.key },
-                  React.createElement('span', { className: 'dsm-compat-name' },
+                  // 域名 + 体积 + 采纳统计都在**同一格**里，不要拆成三个网格子项。
+                  // 这行是两列网格（名字 minmax(0,1fr) | 状态胶囊 max-content），第一行只能放两个子项；
+                  // 多塞一个会把胶囊挤到第二行，而第二行落在 1fr 那一列里 → 胶囊被拉成整行宽
+                  // （用户 2026-09-17 看到"在上下文中跑到下面"就是这个）。采纳统计与体积同性质
+                  // （都是关于这个域的统计），跟着名字走；右列只留状态，胶囊右缘才能跨行对齐。
+                  React.createElement('span', { className: 'dsm-compat-name dsm-inject-live-name' },
+                    // 展开箭头只有"有正文可看"的行才有。但**它占的位置必须给没正文的行留着** ——
+                    // 否则那几行的域名会比别行左移一个字宽，整列名字就参差不齐（用户 2026-09-17 指出）。
+                    // 用一个 `visibility:hidden` 的同字符占位，而不是给不可展开的行画一个点了没反应的
+                    // 箭头：宽度逐像素一致，且不假装它可点。
                     canOpen
                       ? React.createElement('button', { type: 'button', className: 'dsm-inject-live-toggle', onClick: function () { setLiveOpen(open ? '' : row.key) } },
                         (open ? '▾ ' : '▸ ') + domainLabel(row.key))
-                      : React.createElement('span', null, domainLabel(row.key)),
+                      : React.createElement('span', { className: 'dsm-inject-live-static' },
+                        React.createElement('span', { className: 'dsm-inject-live-mark-blank', 'aria-hidden': 'true' }, '▸ '),
+                        domainLabel(row.key)),
                     canOpen
                       ? React.createElement('span', { className: 'dsm-inject-live-size' }, '· ' + fmtSize(row.bytes) + ' · ' + t('compat.live.est', { count: estTokens(row.text) }))
-                      : null),
+                      : null,
+                    // 分隔符「· 」**恒定带上**：体积那一段自带一个前导「· 」，采纳这段也得有，
+                    // 否则拿不到体积（状态是"已关闭 / 未投递"）时会挤成「提示词注入 3 次」。
+                    adopt ? React.createElement('span', { className: 'dsm-inject-live-adopt', title: t('compat.live.adopt.title') }, '· ' + adopt) : null),
                   React.createElement('span', { className: 'dsm-compat-pill' + st.cls, title: st.title || undefined }, st.text),
                   open && canOpen ? React.createElement('pre', { className: 'dsm-code dsm-compat-mod-self' }, row.text) : null)
               }))))
@@ -899,8 +958,8 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "mcp.loading": "正在加载 MCP 服务…", "mcp.empty": "暂无 MCP，点「新增 MCP」添加", "mcp.empty.search": "没有匹配的服务。",
         "mcp.servers.count": "{count} 个服务", "mcp.tools.count": "{count} 个工具", "mcp.tools.countPartial": "{enabled}/{total} 个工具", "mcp.duplicate": "重复 id",
         "mcp.table.name": "服务名称与地址", "mcp.table.transport": "传输与工具", "mcp.table.status": "运行状态",
-        "mcp.live.notLoaded": "未加载", "mcp.live.failed": "启动失败", "mcp.live.stopped": "未运行", "mcp.live.loading": "加载中", "mcp.live.noTools": "无工具", "mcp.live.running": "已运行",
-        "mcp.live.failedHint": "启动失败，检查配置后点「重启」重试", "mcp.live.noToolsHint": "已连接但没有工具：服务端可能未就绪",
+        "mcp.live.notLoaded": "未加载", "mcp.live.failed": "启动失败", "mcp.live.stopped": "未运行", "mcp.live.loading": "加载中", "mcp.live.noTools": "无可用工具", "mcp.live.running": "已运行",
+        "mcp.live.failedHint": "启动失败，检查配置后点「重启」重试", "mcp.live.offlineHint": "未连上：一个工具都没注册，但上次连上时它有 {count} 个工具。检查网络、命令或凭据后点「重启」重试", "mcp.live.neverHint": "从未连上过：一个工具都没注册过。检查命令、参数或凭据后点「重启」重试", "mcp.live.allOffHint": "工具全部被停用：当前没有可调用的工具（取消停用即恢复）",
         "mcp.note.prefix": "备注：", "mcp.toggleServer": "启停服务", "mcp.toggleTool": "启停工具",
         "mcp.msg.ok": "操作成功", "mcp.msg.failed": "操作失败", "mcp.msg.loadFailed": "加载失败", "mcp.msg.warn": "操作完成，但加载器有提示：{warning}",
         "mcp.msg.toolOn": "已启用工具：{name}", "mcp.msg.toolOff": "已停用工具：{name}",
@@ -956,11 +1015,19 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "compat.inject.domain.memory": "场景和记忆", "compat.inject.domain.mcp": "MCP",
         "compat.inject.domain.subagents": "子智能体", "compat.inject.domain.prompt": "提示词",
         "compat.inject.domain.skills": "技能",
+        "compat.inject.domain.carrier.title": "关掉后，系统自带的那份也会一并停掉",
         "compat.live.title": "注入实况", "compat.live.hint": "模型当前实际看到的内容（只读）",
         "compat.live.never": "本次运行还没有投递", "compat.live.delivered": "已投递 {count} 条 · 最近 {time}",
         "compat.live.copy": "复制全文", "compat.live.copied": "已复制", "compat.live.noAgent": "还没有会话：发一条消息后再来看",
-        "compat.live.state.inContext": "在上下文中", "compat.live.state.absent": "未投递", "compat.live.state.cleared": "已清空",
+        "compat.live.state.inContext": "已注入", "compat.live.state.absent": "未投递", "compat.live.state.cleared": "已清空",
         "compat.live.state.off": "已关闭", "compat.live.state.unknown": "没有会话",
+        "compat.live.state.child": "不在本会话注入",
+        "compat.live.state.child.title": "本会话的深度超过了人设的目录注入深度（catalogDepth），所以常驻目录不在这里注入。要让目录出现在子会话，把对应人设的「目录注入」调到 2。注意：这不影响委派 —— 子代理始终可以继续委派。",
+        "compat.live.adopt": "注入 {injected} 次 · 调用 {used} 次 · 采纳 {adopted} 次",
+        "compat.live.adopt.none": "注入 {injected} 次 · 从未调用",
+        "compat.live.adopt.title": "本进程运行以来的计数。采纳 = 调用发生时该域正文正在这个会话的上下文里；调用次数不区分成功失败",
+        "compat.live.observe.some": "本进程观测到 {count} 次工具调用",
+        "compat.live.observe.none": "本进程还没有观测到工具调用",
         "compat.live.state.official": "官方注入", "compat.live.state.official.title": "提示词与技能目录在标准类预设下由官方通道送达，本插件不重复注入（极简这类官方没挂的预设才由本插件兜底）",
         "compat.live.state.empty": "无内容", "compat.live.est": "≈{count} token",
         "compat.live.state.absent.title": "本插件负责这个域，但当前不在上下文里（可能刚被压缩，下一步会自动补发）",
@@ -1066,6 +1133,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "subagents.field.name": "人设名",
         "subagents.field.description": "描述", "subagents.field.description.placeholder": "例如 擅长 Java 后端实现与重构",
         "subagents.field.model": "模型", "subagents.field.model.placeholder": "自定义模型 id", "subagents.field.model.hint": "留空继承主会话", "subagents.field.provider": "模型来源", "subagents.field.provider.placeholder": "sensenova", "subagents.field.provider.hint": "「模型来源」与「模型」是一对：只填模型会落在主会话的来源上，跨来源会解析失败。",
+        "subagents.field.catalogDepth": "目录注入", "subagents.field.catalogDepth.onlyTop": "只在顶层", "subagents.field.catalogDepth.toChild": "顶层和子会话", "subagents.field.catalogDepth.toGrand": "顶层和两层子会话", "subagents.field.catalogDepth.hint": "人设目录注入到哪些会话：只在顶层（默认）/顶层和子会话/顶层和两层子会话。它不限制嵌套 —— 子代理始终可以继续委派；子会话看不到常驻目录时，仍可用 subagent_manager_list 查询。",
         "subagents.model.inherit": "继承主会话（不指定）", "subagents.model.customOption": "自定义 / 目录里没有…",
         "subagents.field.modes": "工具限制（按 Agent 预设）",
         "subagents.field.modes.hint": "只有当前模式那一行生效，其他模式用该模式的全部工具。",
@@ -1082,10 +1150,12 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "subagents.legacy.convert": "转换到按模式设置",
         "subagents.legacy.hint": "转换会把旧名单搬进你选的模式；不点它，文件里的旧键原样保留（运行时照旧生效）。",
         "subagents.tools.filter": "筛选工具名", "subagents.tools.remove": "移除",
-        "subagents.adv.title": "高级选项", "subagents.adv.inherit": "继承主会话", "subagents.adv.summary": "模型 {model} · 模式限制 {modes} 项 · 旧格式 白名单 {allow} / 黑名单 {deny}", "subagents.adv.note": "白名单 = 子代理只能用勾选的工具；黑名单 = 除勾选的以外都能用。MCP 工具不在候选里：子代理始终能用当前在跑的 MCP。", "subagents.adv.loadFailed": "读取候选数据失败（模型目录 / 工具清单）；仍可手动填写。",
+        "subagents.adv.title": "高级选项", "subagents.adv.inherit": "继承主会话", "subagents.adv.summary": "模型 {model} · 目录注入 {depth} · 模式限制 {modes} 项 · 旧格式 白名单 {allow} / 黑名单 {deny}", "subagents.adv.note": "白名单 = 子代理只能用勾选的工具；黑名单 = 除勾选的以外都能用。MCP 工具不在候选里：子代理始终能用当前在跑的 MCP。", "subagents.adv.loadFailed": "读取候选数据失败（模型目录 / 工具清单）；仍可手动填写。",
         "preset.name.standard": "标准模式", "preset.name.ptc": "PTC 模式", "preset.name.minimal": "极简模式", "preset.name.cordis": "创造模式",
         "preset.short.standard": "标准", "preset.short.ptc": "PTC", "preset.short.minimal": "极简", "preset.short.cordis": "创造",
         "subagents.field.body": "人设提示词", "subagents.field.body.placeholder": "写下这个人设的身份、职责与工作方式…",
+        "subagents.field.output": "输出要求（硬性）", "subagents.field.output.placeholder": "每行一条硬要求，例如：每条问题一个块：[P0|P1|P2] 文件:行 — 问题 — 后果 — 修复方向",
+        "subagents.field.output.hint": "会作为单独一节写进子代理的系统提示词（在角色定义之后）。提示词写「怎么想」，这里写「产出必须长什么样」—— 可检验的要求才会被真的执行。",
         "subagents.result.saved": "已保存人设：{name}", "subagents.result.deleted": "已删除人设：{name}",
         "subagents.delete.title": "删除人设？", "subagents.delete.desc": "将把「{name}」的人设文件移入回收站（子智能体页的「回收站」里可以恢复）。",
         "subagents.import": "导入子智能体", "subagents.import.title": "导入子智能体", "subagents.toggle": "启用子智能体", "subagents.disabled": "已停用", "subagents.disabled.hint": "停用后不注入上下文，subagent_manager_list / subagent_manager_run 也看不到；文件保留，随时可再打开。",
@@ -1164,8 +1234,8 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "mcp.loading": "Loading MCP servers…", "mcp.empty": "No MCP servers yet — click “New MCP”.", "mcp.empty.search": "No matching server.",
         "mcp.servers.count": "{count} server(s)", "mcp.tools.count": "{count} tool(s)", "mcp.tools.countPartial": "{enabled}/{total} tool(s)", "mcp.duplicate": "duplicate id",
         "mcp.table.name": "Server name and URL", "mcp.table.transport": "Transport and tools", "mcp.table.status": "Status",
-        "mcp.live.notLoaded": "not loaded", "mcp.live.failed": "start failed", "mcp.live.stopped": "stopped", "mcp.live.loading": "loading", "mcp.live.noTools": "no tools", "mcp.live.running": "running",
-        "mcp.live.failedHint": "Start failed — check the configuration and click “Restart” to retry", "mcp.live.noToolsHint": "Connected but with no tools: the server may not be ready yet",
+        "mcp.live.notLoaded": "not loaded", "mcp.live.failed": "start failed", "mcp.live.stopped": "stopped", "mcp.live.loading": "loading", "mcp.live.noTools": "no usable tools", "mcp.live.running": "running",
+        "mcp.live.failedHint": "Start failed — check the configuration and click “Restart” to retry", "mcp.live.offlineHint": "Not connected: no tools are registered, but it had {count} tools when it last connected. Check the network, command or credentials, then click “Restart”", "mcp.live.neverHint": "Never connected: no tools have ever been registered. Check the command, arguments or credentials, then click “Restart”", "mcp.live.allOffHint": "All tools are disabled: nothing is callable right now (re-enable them to restore)",
         "mcp.note.prefix": "Note: ", "mcp.toggleServer": "Toggle server", "mcp.toggleTool": "Toggle tool",
         "mcp.msg.ok": "Done", "mcp.msg.failed": "Operation failed", "mcp.msg.loadFailed": "Load failed", "mcp.msg.warn": "Done, but the loader reported: {warning}",
         "mcp.msg.toolOn": "Enabled tool: {name}", "mcp.msg.toolOff": "Disabled tool: {name}",
@@ -1221,11 +1291,19 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "compat.inject.domain.memory": "Scene + memory", "compat.inject.domain.mcp": "MCP",
         "compat.inject.domain.subagents": "Subagents", "compat.inject.domain.prompt": "Prompt",
         "compat.inject.domain.skills": "Skills",
+        "compat.inject.domain.carrier.title": "Turning this off also stops the copy the system sends by itself",
         "compat.live.title": "Live injection", "compat.live.hint": "What the model actually sees (read-only)",
         "compat.live.never": "nothing delivered yet this run", "compat.live.delivered": "{count} delivered · last {time}",
         "compat.live.copy": "Copy all", "compat.live.copied": "Copied", "compat.live.noAgent": "No session yet — send a message first",
-        "compat.live.state.inContext": "In context", "compat.live.state.absent": "Not delivered", "compat.live.state.cleared": "Cleared",
+        "compat.live.state.inContext": "Injected", "compat.live.state.absent": "Not delivered", "compat.live.state.cleared": "Cleared",
         "compat.live.state.off": "Off", "compat.live.state.unknown": "No session",
+        "compat.live.state.child": "Not injected here",
+        "compat.live.state.child.title": "This session is deeper than the personas' catalog injection depth (catalogDepth), so the standing catalog is not injected here. To let the catalog reach subagent sessions, raise the persona's catalog injection depth to 2. Note: this does not affect delegation — subagents can always delegate further.",
+        "compat.live.adopt": "injected {injected} · called {used} · adopted {adopted}",
+        "compat.live.adopt.none": "injected {injected} · never called",
+        "compat.live.adopt.title": "Counts since this process started. Adopted = the domain text was in context when the call happened; calls are counted whether or not they succeeded",
+        "compat.live.observe.some": "{count} tool calls observed this run",
+        "compat.live.observe.none": "no tool calls observed yet this run",
         "compat.live.state.official": "Official", "compat.live.state.official.title": "The official carrier delivers these under standard presets; the plugin does not duplicate (it only fills in for Minimal-like presets)",
         "compat.live.state.empty": "Nothing to send", "compat.live.est": "≈{count} tokens",
         "compat.live.state.absent.title": "This plugin owns this domain but it is not in context right now (it may have just been compacted; the next step re-sends it)",
@@ -1330,6 +1408,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "subagents.field.name": "Persona name",
         "subagents.field.description": "Description", "subagents.field.description.placeholder": "e.g. Senior Java engineer",
         "subagents.field.model": "Model", "subagents.field.model.placeholder": "Custom model id", "subagents.field.model.hint": "Blank inherits the main session", "subagents.field.provider": "Model provider", "subagents.field.provider.placeholder": "sensenova", "subagents.field.provider.hint": "Provider and model are a pair: a model alone resolves against the main session's provider and fails across providers.",
+        "subagents.field.catalogDepth": "Catalog injection", "subagents.field.catalogDepth.onlyTop": "Top level only", "subagents.field.catalogDepth.toChild": "Top level and subagents", "subagents.field.catalogDepth.toGrand": "Top level and two levels down", "subagents.field.catalogDepth.hint": "Which sessions the persona catalog is injected into: top level only (default) / top level and subagents / top level and two levels down. It does not limit nesting — subagents can always delegate further; when the catalog is not injected, subagent_manager_list still works.",
         "subagents.model.inherit": "Inherit the main session (unspecified)", "subagents.model.customOption": "Custom / not in the catalogue…",
         "subagents.field.modes": "Tool limits (per agent preset)",
         "subagents.field.modes.hint": "Only the row for the current preset applies; other presets keep their full tool set.",
@@ -1346,10 +1425,12 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "subagents.legacy.convert": "Convert into a preset row",
         "subagents.legacy.hint": "Converting moves the old list into the preset you pick; until then the old keys stay untouched in the file (and keep working at run time).",
         "subagents.tools.filter": "Filter tool names", "subagents.tools.remove": "Remove",
-        "subagents.adv.title": "Advanced options", "subagents.adv.inherit": "inherit", "subagents.adv.summary": "model {model} · preset limits {modes} · legacy allow {allow} / deny {deny}", "subagents.adv.note": "Allowlist = the subagent may only use the picked tools; denylist = everything except the picked ones. MCP tools are not listed: a subagent always keeps the MCP servers currently running.", "subagents.adv.loadFailed": "Could not read the candidate data (model catalogue / tool list); you can still fill the fields by hand.",
+        "subagents.adv.title": "Advanced options", "subagents.adv.inherit": "inherit", "subagents.adv.summary": "model {model} · catalog {depth} · preset limits {modes} · legacy allow {allow} / deny {deny}", "subagents.adv.note": "Allowlist = the subagent may only use the picked tools; denylist = everything except the picked ones. MCP tools are not listed: a subagent always keeps the MCP servers currently running.", "subagents.adv.loadFailed": "Could not read the candidate data (model catalogue / tool list); you can still fill the fields by hand.",
         "preset.name.standard": "Standard mode", "preset.name.ptc": "PTC mode", "preset.name.minimal": "Minimal mode", "preset.name.cordis": "Creator mode",
         "preset.short.standard": "Standard", "preset.short.ptc": "PTC", "preset.short.minimal": "Minimal", "preset.short.cordis": "Creator",
         "subagents.field.body": "Persona prompt", "subagents.field.body.placeholder": "Describe the persona's role, responsibilities, and working style…",
+        "subagents.field.output": "Output requirements (hard)", "subagents.field.output.placeholder": "One hard requirement per line, e.g. — one block per finding: [P0|P1|P2] file:line — problem — impact — fix",
+        "subagents.field.output.hint": "Rendered as its own section in the subagent's system prompt (after the persona definition). Use the prompt for how the role thinks, this field for what the output must look like — only checkable requirements actually get followed.",
         "subagents.result.saved": "Persona saved: {name}", "subagents.result.deleted": "Persona deleted: {name}",
         "subagents.delete.title": "Delete persona?", "subagents.delete.desc": "Moves the persona file “{name}” to the trash (restorable from the Trash button on the Subagents page).",
         "subagents.import": "Import subagents", "subagents.import.title": "Import subagents", "subagents.toggle": "Toggle subagent", "subagents.disabled": "Disabled", "subagents.disabled.hint": "Disabled personas are not injected into the context and hidden from subagent_manager_list / subagent_manager_run; the file is kept and can be re-enabled anytime.",
@@ -1668,6 +1749,19 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           }
 
           const rows = state.rows || []
+          // 工具数的三个口径（与 src/mcp/state-section.ts 同源，理由见那里的文件头）：
+          //   liveToolCount        当前真实注册了几个工具（**不含**「已知工具」缓存）
+          //   liveEnabledToolCount 其中未被停用表扣减的（真正能调到的）
+          //   knownToolCount       缓存里的数量 —— >0 表示这台 server **曾经真的连上过**
+          // 拆分的原因：缓存里的工具名在服务器已经连不上时依然存在，把它算进"当前工具数"
+          // 会让一台挂掉的 server 显示成「已运行」并被注入上下文（2026-09-17 实测）。
+          // 旧数据没有前两个字段时逐级退回，行为与拆分之前一致。
+          const liveEnabledOf = (row) => {
+            if (typeof row.liveEnabledToolCount === 'number') return row.liveEnabledToolCount
+            return typeof row.enabledToolCount === 'number' ? row.enabledToolCount : (typeof row.toolCount === 'number' ? row.toolCount : 0)
+          }
+          const liveOf = (row) => typeof row.liveToolCount === 'number' ? row.liveToolCount : liveEnabledOf(row)
+          const knownOf = (row) => typeof row.knownToolCount === 'number' ? row.knownToolCount : 0
           const normalizedQuery = query.trim().toLowerCase()
           // 「已加载」= 当前真正在运行的条目（loader 已启用且 active）。
           const isRunning = (row) => !!(row.live && row.live.enabled && row.live.phase === 'active')
@@ -1678,13 +1772,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             return [row.serverName, row.id, row.url, row.command, row.transport].some((value) => String(value == null ? '' : value).toLowerCase().indexOf(normalizedQuery) >= 0)
           }
           const visibleRows = rows.filter(matchesRow)
-          // 工具数两个口径：total = 已知总数；enabled = 可用数（停用表扣减后，与详情页
-          // 每行的开关一致）。两者不同时显示「可用/总数」，不让全部数量冒充可用数。
+          // 工具数两个口径：total = 当前真实注册数；enabled = 其中可用的（停用表扣减后，
+          // 与详情页每行的开关一致）。两者不同时显示「可用/总数」，不让全部数量冒充可用数。
+          // 只数真实注册的 —— 缓存里那些"上次见过"的名字不能计入页面总数，否则一台挂掉的
+          // server 会让这里的数字虚高，与它自己那行的「无可用工具」自相矛盾。
           const toolTotals = rows.reduce((acc, row) => {
-            const total = typeof row.toolCount === 'number' ? row.toolCount : 0
-            const enabled = typeof row.enabledToolCount === 'number' ? row.enabledToolCount : total
+            const total = liveOf(row)
             acc.total += total
-            acc.enabled += enabled
+            acc.enabled += liveEnabledOf(row)
             return acc
           }, { total: 0, enabled: 0 })
           const summary = {
@@ -1696,9 +1791,13 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           const profilePath = state.paths && state.paths.profile ? 'profile: ' + state.paths.profile : null
           const groups = levelFilter === 'loader'
             ? [{ key: 'live', title: mt('mcp.level.loader'), path: profilePath, match: isRunning }]
+            // 分组顺序（用户要求 2026-09-17）：全局在前、应用级在后 —— 全局那一层跨应用
+            // 生效，是更"外面"的一层；此前应用级在前，与"局部覆盖全局"的读法相反。
+            // 组内顺序直接用行的到达顺序：服务端 `mcpmList` 已按 全局 → 应用级 → loader、
+            // 同级内按服务器名排好（同一个顺序也是场景档案勾选器与模型侧列表的顺序）。
             : [
-                { key: 'project', title: mt('mcp.level.project'), path: state.paths ? state.paths.project : null, match: (row) => row.level === 'project' },
                 { key: 'global', title: mt('mcp.level.global'), path: state.paths ? state.paths.global : null, match: (row) => row.level === 'global' },
+                { key: 'project', title: mt('mcp.level.project'), path: state.paths ? state.paths.project : null, match: (row) => row.level === 'project' },
                 { key: 'loader', title: mt('mcp.level.loader'), path: profilePath, match: (row) => row.level === 'loader' && isRunning(row) },
               ]
 
@@ -1707,26 +1806,41 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             if (row.live.phase === 'failed') return { text: mt('mcp.live.failed'), cls: 'dsm-failed' }
             if (!row.live.enabled) return { text: mt('mcp.live.stopped'), cls: 'dsm-shadowed' }
             if (row.live.phase && row.live.phase !== 'active') return { text: mt('mcp.live.loading'), cls: 'dsm-shadowed' }
-            if (typeof row.toolCount === 'number' && row.toolCount === 0) return { text: mt('mcp.live.noTools'), cls: 'dsm-disabled' }
+            // 判"有没有可用工具"只看**真实注册**的那个数（缓存不算）。
+            if (liveEnabledOf(row) === 0) return { text: mt('mcp.live.noTools'), cls: 'dsm-disabled' }
             return { text: mt('mcp.live.running'), cls: 'dsm-enabled' }
           }
           const liveHint = (row) => {
             if (!row.live) return null
             if (row.live.phase === 'failed') return mt('mcp.live.failedHint')
-            if (row.live.phase === 'active' && typeof row.toolCount === 'number' && row.toolCount === 0) return mt('mcp.live.noToolsHint')
+            if (row.live.phase === 'active' && liveEnabledOf(row) === 0) {
+              if (liveOf(row) === 0) {
+                // 一个工具都没注册。曾经连上过 → 这是"断了"，给可行动的说明；
+                // 从未连上过 → 说清"从来没成功过"，别让用户以为是刚坏的。
+                return knownOf(row) > 0
+                  ? mt('mcp.live.offlineHint', { count: knownOf(row) })
+                  : mt('mcp.live.neverHint')
+              }
+              // 注册了但全被停用：这是用户自己的选择，不是故障。
+              return mt('mcp.live.allOffHint')
+            }
             return null
           }
-          // 状态标签配色：绿=能用、红=坏了、橙=能连但没工具、灰=没在跑 / 还没定。
+          // 状态标签配色：绿=能用、红=坏了、橙=当前没有可用工具（未连上或工具全被停用）、灰=没在跑 / 还没定。
           const pillKind = (cls) => cls === 'dsm-enabled' ? 'ok' : cls === 'dsm-failed' ? 'bad' : cls === 'dsm-disabled' ? 'warn' : 'muted'
 
           // 工具数标签：有被停用的工具时给「可用/总数」（场景档案收窄与手动逐工具开关
           // 写的是同一张停用表），否则就是总数 —— 与详情页每个工具的开关状态一致。
+          //
+          // 只按**真实注册**的数来显示：一个都没注册时不给数字（那台 server 现在没有工具，
+          // 摆一个"13 个工具"就是拿缓存冒充现状；它上次连上时有多少个，由下面那行提示说明）。
           const toolCountTag = (row) => {
-            if (typeof row.toolCount !== 'number' || row.toolCount <= 0) return null
-            const enabled = typeof row.enabledToolCount === 'number' ? row.enabledToolCount : row.toolCount
-            return enabled < row.toolCount
-              ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.countPartial', { enabled: enabled, total: row.toolCount }))
-              : React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.count', { count: row.toolCount }))
+            const total = liveOf(row)
+            if (total <= 0) return null
+            const enabled = liveEnabledOf(row)
+            return enabled < total
+              ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.countPartial', { enabled: enabled, total: total }))
+              : React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.count', { count: total }))
           }
 
           const renderRow = (row) => {
@@ -4784,9 +4898,18 @@ function sceneSyncWarn(t, res) {
             })
           }
           /** 高级选项：默认收起；已经在用模型/工具限制的人设自动展开（否则用户看不见自己配了什么）。 */
+          /** 目录注入深度的选项文案：下拉与折叠摘要共用一处，免得两处说法分叉。 */
+          function catalogDepthLabel(n) {
+            if (n === 1) return t('subagents.field.catalogDepth.onlyTop')
+            if (n === 2) return t('subagents.field.catalogDepth.toChild')
+            return t('subagents.field.catalogDepth.toGrand')
+          }
           function initialAdvanced(p) {
             var modes = p && p.toolsByPreset ? Object.keys(p.toolsByPreset).length : 0
-            return !!((p && (p.model || p.provider)) || (p && ((p.tools || []).length || (p.toolsDeny || []).length || modes)))
+            // 目录注入深度不是默认值（1）时也算"配过"：它决定常驻目录出现在哪些会话，
+            // 藏起来会让"为什么子会话看不到目录"变得无从查起。
+            var budget = !!(p && typeof p.catalogDepth === 'number' && p.catalogDepth !== 1)
+            return !!(budget || (p && (p.model || p.provider)) || (p && ((p.tools || []).length || (p.toolsDeny || []).length || modes)))
           }
           /** 编辑态里按模式分组的名单（深拷贝：取消编辑不留痕）。 */
           function cloneRules(source) {
@@ -4799,7 +4922,7 @@ function sceneSyncWarn(t, res) {
           }
           function openEditor(name) {
             if (!name) {
-              setModal({ type: 'editor', mode: 'create', advanced: false, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: { name: '', description: '', provider: '', model: '', tools: [], toolsDeny: [], toolsByPreset: {}, body: '', error: null } })
+              setModal({ type: 'editor', mode: 'create', advanced: false, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: { name: '', description: '', provider: '', model: '', catalogDepth: 1, tools: [], toolsDeny: [], toolsByPreset: {}, body: '', output: '', error: null } })
               return
             }
             setBusy(true)
@@ -4810,8 +4933,10 @@ function sceneSyncWarn(t, res) {
                 var advanced = initialAdvanced(p)
                 setModal({ type: 'editor', mode: 'edit', originalName: String(p.name || name), advanced: advanced, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: {
                   name: p.name || name, description: p.description || '', provider: p.provider || '', model: p.model || '',
+                  // 服务端回的是**生效值**（没写就是默认 1），所以这里不必再兜默认。
+                  catalogDepth: typeof p.catalogDepth === 'number' ? p.catalogDepth : 1,
                   tools: (p.tools || []).slice(), toolsDeny: (p.toolsDeny || []).slice(),
-                  toolsByPreset: cloneRules(p.toolsByPreset), body: p.body || '', error: null,
+                  toolsByPreset: cloneRules(p.toolsByPreset), body: p.body || '', output: p.output || '', error: null,
                 } })
                 // 已配过限制的人设**一打开就是展开的**（initialAdvanced）→ 候选数据必须在这里也拉，
                 // 否则四行模式先亮"宿主没有回传预设名单"，非得点两次「高级选项」才补上（用户实测）。
@@ -5056,10 +5181,12 @@ function sceneSyncWarn(t, res) {
               ...(renamed ? { nextName: String(modal.form.name || '').trim() } : {}),
               description: modal.form.description,
               provider: modal.form.provider, model: modal.form.model,
+              catalogDepth: modal.form.catalogDepth,
               // 旧格式的全局名单原样回写（旧键不点转换就不动），新模式名单另存一块。
               tools: modal.form.tools || [], toolsDeny: modal.form.toolsDeny || [],
               toolsByPreset: modal.form.toolsByPreset || {},
               body: modal.form.body,
+              output: modal.form.output || '',
             }).then(function (res) {
               setBusy(false)
               if (res && res.ok) { setModal(null); setResult({ ok: true, text: t('subagents.result.saved', { name: modal.form.name }) }); refresh(true) }
@@ -5135,6 +5262,13 @@ function sceneSyncWarn(t, res) {
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.body')),
                   React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: modal.form.body || '', placeholder: t('subagents.field.body.placeholder'), onChange: function (e) { setForm({ body: e.target.value }) } })),
+                // 输出要求（frontmatter `output:`，一条一行）：单独成节写进子代理的系统提示词。
+                // 与正文分开是有意的 —— 正文是"这个角色是什么"（散文），这里放"产出必须长什么样"
+                // （可检验的硬要求）。混在一起时散文会把硬要求稀释成风格提示（用户实测）。
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.output')),
+                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: modal.form.output || '', placeholder: t('subagents.field.output.placeholder'), onChange: function (e) { setForm({ output: e.target.value }) } }),
+                  React.createElement('p', { className: 'dsm-help' }, t('subagents.field.output.hint'))),
                 // ── 高级选项（默认收起）──
                 // 模型 / 工具限制是「少数人才改」的字段，但一旦改错代价高（跨来源模型、工具名打错
                 // 会让子代理直接启动失败）。所以：收起来但**有值就自动展开**，并把候选做成选择器。
@@ -5145,6 +5279,7 @@ function sceneSyncWarn(t, res) {
                     React.createElement('span', { className: 'dsm-adv-note' },
                       modal.advanced ? '' : t('subagents.adv.summary', {
                         model: modal.form.model ? (modal.form.provider ? modal.form.provider + '/' + modal.form.model : modal.form.model) : t('subagents.adv.inherit'),
+                        depth: catalogDepthLabel(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
                         modes: Object.keys(modal.form.toolsByPreset || {}).length,
                         allow: (modal.form.tools || []).length,
                         deny: (modal.form.toolsDeny || []).length,
@@ -5182,6 +5317,26 @@ function sceneSyncWarn(t, res) {
                       React.createElement('span', { className: 'dsm-label' }, t('subagents.field.provider')),
                       React.createElement('input', { className: 'dsm-control', value: modal.form.provider || '', placeholder: t('subagents.field.provider.placeholder'), onChange: function (e) { setForm({ provider: e.target.value }) } }),
                       React.createElement('p', { className: 'dsm-help' }, t('subagents.field.provider.hint'))),
+                    // 目录注入深度：人设目录注入到哪些会话（默认 1 = 只在顶层）。用下拉而不是数字
+                    // 输入：只有 1/2/3 三个有意义的档，手写数字写错要到注入时才暴露。
+                    //
+                    // ⚠️ 它**不是**递归上限。2026-09-17 用户实测后改名（原名 maxDepth /「委派预算」）：
+                    // 官方 `dsh-tool-subagent` 默认 `maxDepth: 3`，子代理本来就能继续嵌套，本插件
+                    // 也不再向官方传 maxDepth。这个字段只决定常驻目录出现在哪些深度的会话里。
+                    React.createElement('label', { className: 'dsm-field' },
+                      React.createElement('span', { className: 'dsm-label' }, t('subagents.field.catalogDepth')),
+                      React.createElement('div', { className: 'dsm-select' },
+                        React.createElement('select', {
+                          className: 'dsm-control',
+                          value: String(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
+                          disabled: busy,
+                          onChange: function (e) { setForm({ catalogDepth: Number(e.target.value) }) },
+                        }, [1, 2, 3].map(function (n) {
+                          // 选项文字不带序号：前面再加一个「2 ·」是同一件事说两遍（用户 2026-09-17
+                          // 指出）。下拉的 value 仍是数字，存的还是 catalogDepth 本身。
+                          return React.createElement('option', { key: n, value: String(n) }, catalogDepthLabel(n))
+                        }))),
+                      React.createElement('p', { className: 'dsm-help' }, t('subagents.field.catalogDepth.hint'))),
                     // 工具限制：按 Agent 预设一行一个模式（默认全折叠、全部未启动，白/黑互斥）。
                     // 旧格式的全局名单（老文件 / 别处导入）在这里只读呈现，点「转换」才搬进某个模式。
                     legacyNotice(),
