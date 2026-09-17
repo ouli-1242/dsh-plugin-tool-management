@@ -154,6 +154,11 @@ export interface Rule {
   updatedAt?: string
   /** 同名 bundle 存在时被遮蔽的 flat（UI 标红，不参与投影）。 */
   shadowed?: boolean
+  /**
+   * bundle 记忆的附件摘要。**只在 `rules-list` 的返回里**补上（发现阶段不扫附件目录）；
+   * flat 记忆没有这个字段。目录读不到时也不会有（界面据此不显示附件标签，而不是谎报 0）。
+   */
+  attach?: { count: number; bytes: number; names: string[] }
 }
 
 /**
@@ -716,9 +721,9 @@ export function parseModeState(raw: unknown): ModeState {
       if (list.indexOf(tool) < 0) list.push(tool)
     }
   }
-  // v2 快照的**服务器级 / 来源级**名单与 v0.8 的子智能体名单必须原样透传 ——
-  // 这里曾把它们剥掉，结果退出模式时两张恢复名单全是空的：服务器级 MCP 与技能来源
-  // 永远不回滚（用户报的「MCP 不复原」「技能目录不回退」），只有工具级 / 技能级能还原。
+  // v2 快照的**服务器级 / 来源级**名单、v0.8 的子智能体名单、v0.9.1 的人设全量映射
+  // 必须原样透传 —— 这里曾把它们剥掉，结果退出模式时两张恢复名单全是空的：服务器级 MCP 与
+  // 技能来源永远不回滚（用户报的「MCP 不复原」「技能目录不回退」），只有工具级 / 技能级能还原。
   const mcpServers = (Array.isArray(snapshotRaw.mcpServers) ? snapshotRaw.mcpServers : [])
     .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
     .map((x) => ({ id: String(x.id || ''), level: String(x.level || ''), disabled: x.disabled === true }))
@@ -731,6 +736,9 @@ export function parseModeState(raw: unknown): ModeState {
   // 同 subagents 一组：进入时被档案**关掉**的人设（退出要重新打开）。漏掉它 = 用户实测的
   // 「进场景关掉了，退出却没开回来」——快照落盘后读回来就只剩「被启用」那一半名单。
   const subagentsOn = (Array.isArray(snapshotRaw.subagentsOn) ? snapshotRaw.subagentsOn : []).map((x) => String(x)).filter(Boolean)
+  // v0.9.1 的人设**全量**开关映射（名字 → 进场景时是否开着）：同样必须原样透传 ——
+  // 剥掉它，退出模式就只能退回上面两个部分名单，「场景里手动开过的人设」不再被还原。
+  const subagentsAll = toFlagMap(snapshotRaw.subagentsAll)
   // v0.8.1 的场景备注恢复名单：**必须原样透传**——这里漏掉它，退出模式时备注永不回退
   //（与历史上 mcpServers / skillSources 被剥掉是同一类 bug）。
   const mcpNotes = (Array.isArray(snapshotRaw.mcpNotes) ? snapshotRaw.mcpNotes : [])
@@ -747,6 +755,7 @@ export function parseModeState(raw: unknown): ModeState {
           ...(skillSources.length ? { skillSources } : {}),
           ...(subagents.length ? { subagents } : {}),
           ...(subagentsOn.length ? { subagentsOn } : {}),
+          ...(Object.keys(subagentsAll).length ? { subagentsAll } : {}),
           ...(mcpNotes.length ? { mcpNotes } : {}),
         }
       : null,
@@ -1494,6 +1503,34 @@ function attachmentNamesSync(bundleDir: string, name: string): string[] {
 }
 
 /**
+ * bundle 记忆的附件**摘要**（列表页用）：数量 / 总体积 / 前几个文件名。
+ *
+ * 口径与 `attachmentNamesSync`（也就是注入给模型的那份清单）逐字一致：跳过正文本体，
+ * 只认普通文件 —— 所以页面上的数字与模型实际看到的一致，不会出现「界面说 3 个、模型只见 2 个」。
+ * `names` 截到 ATTACHMENT_LIST_MAX：tooltip 列不下更多，要全看到编辑弹窗里去看。
+ *
+ * 目录读不到（索引残留了已消失的条目）→ 返回 null，让界面**什么都不显示**，
+ * 而不是谎报「0 个附件」。
+ */
+function attachmentSummarySync(bundleDir: string, name: string): { count: number; bytes: number; names: string[] } | null {
+  let names: string[]
+  try {
+    const docNames = new Set([bundleDocName(name), LEGACY_BUNDLE_DOC])
+    names = readdirSync(bundleDir, { withFileTypes: true })
+      .filter((e) => e.isFile() && !docNames.has(e.name))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b))
+  } catch {
+    return null
+  }
+  let bytes = 0
+  for (const entry of names) {
+    try { bytes += statSync(join(bundleDir, entry)).size } catch { /* 读不到的条目不计体积 */ }
+  }
+  return { count: names.length, bytes, names: names.slice(0, ATTACHMENT_LIST_MAX) }
+}
+
+/**
  * 附件行（只有 bundle 记忆才有）：**给目录与文件名，不给内容**。
  * 附件可能是图片、二进制、大 md —— 全文注入又贵又会把段预算吃光；给路径，模型需要时自己读。
  */
@@ -1899,6 +1936,14 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const rules = snap.rules
       .filter((r) => !groupFilter || r.group === groupFilter)
       .sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order || a.name.localeCompare(b.name))
+      // bundle 记忆附带附件摘要（用户裁定 2026-09-17）：界面要显示「几个附件」。
+      // 每条 bundle 一次 readdirSync + 每个附件一次 statSync —— bundle 记忆通常只有几条，
+      // 这个开销可以忽略；flat 没有目录，直接原样返回（不加字段 = 界面不显示附件标签）。
+      .map((r) => {
+        if (r.form !== 'bundle') return r
+        const attach = attachmentSummarySync(dirname(r.path), r.name)
+        return attach ? { ...r, attach } : r
+      })
     const groups = groupFilter ? snap.groups.filter((g) => g.name === groupFilter) : snap.groups
     const scenes = sceneRows(snap, index)
     // 场景锁定状态（v0.8）：任意一个场景锁定 = 五个管理域整体冻结。界面据此禁用各页的写控件。

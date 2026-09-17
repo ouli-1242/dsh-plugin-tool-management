@@ -9,7 +9,8 @@
 // 六个动作会触发同步（调用方在 op 层包一层 `withSync`）：
 //   ① 启用/切换场景    ② 关掉场景（恢复进场景前的基线）
 //   ③ 改场景绑定的预设  ④ 编辑"正在驱动基线的那份预设"的正文
-//   ⑤ 从回收站恢复预设（绑定重新变活）  ⑥ 应用提示词（场景接管时只放行绑定的那一份）
+//   ⑤ 从回收站恢复预设（绑定重新变活）  ⑥ 应用提示词（**应用别的份 = 换掉当前场景的绑定**，
+//      改完绑定再走一次同步；见 index.ts 的 `applyPresetGuarded`）
 //
 // 「进场景前的基线」快照存在 hub 的 `scene-baseline.json`：进场景时记下当时的
 // AGENTS.md 正文（以及当时匹配到的预设 id），关掉场景时**按原文**写回 ——
@@ -20,7 +21,7 @@
 // 写失败**不改**原操作的成功结论，而是把原因放进 `error` 交给界面显示成警告。
 //
 // 这里同时是**三条状态的事实源**（用户实测反馈「显示 A、实际注入 B、A 还能删 B 不能删」后加的）：
-//   `driver()`     —— 谁在驱动基线（提示词页「应用」的守卫依据：场景接管期间不许应用别的预设）；
+//   `driver()`     —— 谁在驱动基线（提示词页「应用」据此判断：应用别的份 = 换掉该场景的绑定）；
 //   `refs()`       —— 每个预设被谁引用（删除保护的唯一依据：场景绑定 / 基线当前内容 / 退出恢复目标）；
 //   `baseline()`   —— 进场景前的基线快照（退出场景后要恢复的那一份）。
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -97,11 +98,6 @@ export interface ScenePromptSync {
   /** 正在驱动基线的场景（无驱动 / 探测失败 → null）。 */
   driver(): Promise<ScenePromptDriver | null>
   /**
-   * 提示词页「应用」的守卫：返回 null = 放行；否则返回**应当改绑的那个场景**。
-   * 场景接管期间只有它绑定的那一份能应用（重新应用 = 修文件被手改），别的预设一律拒绝。
-   */
-  applyGuard(id: string): Promise<ScenePromptDriver | null>
-  /**
    * 被引用中的预设：id → 引用处（删除保护的唯一依据）。
    * 探测失败返回 null（调用方放行 + warn）——绝不因一次读盘失败把删除堵死。
    */
@@ -160,14 +156,6 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
     const current = await state()
     if (!drives(current)) return null
     return { scene: current.scene, label: current.label || current.scene, presetId: current.presetId }
-  }
-
-  async function applyGuard(id: string): Promise<ScenePromptDriver | null> {
-    const current = await driver()
-    if (!current) return null
-    // 同一份 = 重新应用（把被手改的基线写回场景绑定的内容）→ 放行。
-    if (current.presetId === String(id ?? '').trim()) return null
-    return current
   }
 
   async function refs(): Promise<Map<string, PresetRef[]> | null> {
@@ -245,5 +233,5 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
     return { ...(res as object), agentsMd } as T & { agentsMd?: SyncResult }
   }
 
-  return { sync, withSync, state, driver, applyGuard, refs }
+  return { sync, withSync, state, driver, refs }
 }

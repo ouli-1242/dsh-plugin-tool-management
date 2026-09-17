@@ -29,6 +29,7 @@ import {
   createContextInjector,
   normalizeInjectSettings,
   type InjectSettings,
+  type LiveInjectionSnapshot,
 } from './context-inject.js'
 import { isApprovalNever } from './approval-policy.js'
 import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
@@ -484,16 +485,23 @@ export default {
       states: Record<string, boolean>
       shadowed: Set<string>
       all: Record<string, boolean>
+      /** 结构不完整（缺 frontmatter / 名字非法 / 描述为空）的键：core 一律拒绝启停。 */
+      unloadable: Set<string>
     }> {
       const r: any = await skillsService.ops['skill-state']({})
       const states: Record<string, boolean> = {}
       const all: Record<string, boolean> = {}
       const shadowed = new Set<string>()
+      const unloadable = new Set<string>()
       for (const root of ((r && r.data && r.data.roots) || [])) {
         for (const sk of (root.skills || [])) {
           const name = String(sk.declaredName || sk.name || '')
           if (!name) continue
           const key = String(root.key || '') + '/' + name
+          // 结构不完整的技能在 core 里**一律拒绝启停**（error.skill.notLoadable）：
+          // 档案里若残留这样的键，旧实现会把 `applySkills` 的"应用失败"抛出去，于是
+          // **整个场景进不去**。这里单独收集，与「被覆盖」同口径处理（见 applySkills）。
+          if (sk.loadable === false) unloadable.add(key)
           if (sk.shadowedBy) {
             shadowed.add(key)
             all[key] = false
@@ -504,7 +512,22 @@ export default {
           all[key] = on
         }
       }
-      return { states, shadowed, all }
+      return { states, shadowed, all, unloadable }
+    }
+    /**
+     * 档案里**能写、且写了有意义**的技能键：既不被同名技能覆盖，结构也完整。
+     *
+     * 为什么要单独给一个集合：档案的语义是「勾选集 = 该场景下开着的东西」，而被覆盖的副本
+     * 永远不可能生效（`applySkills` 直接跳过），结构不完整的更是启停都被 core 拒绝 ——
+     * 它们进档案只会造成「档案说开着、运行时说关着」（用户实测：启动目录后档案里多出被覆盖
+     * 的那个技能，而技能页显示它并未启动）。保存档案时按这个集合校验，顺带清理历史残留。
+     */
+    async function selectableSkillKeys(): Promise<Set<string>> {
+      const { shadowed, unloadable } = await skillScan()
+      const all = new Set(Object.keys(await skillStates()))
+      for (const k of shadowed) all.delete(k)
+      for (const k of unloadable) all.delete(k)
+      return all
     }
     async function skillStates(): Promise<Record<string, boolean>> {
       // knownSkillKeys 需要**全量键**（含被覆盖的副本）：场景档案里允许勾选任意一条技能，
@@ -518,6 +541,11 @@ export default {
       name: string
       enabled: boolean
       shadowed: boolean
+      /**
+       * 结构是否完整（缺 frontmatter / 名字非法 / 描述为空 → false）。
+       * false 的技能 core 一律拒绝启停，勾了也不生效，界面据此禁掉勾选。
+       */
+      loadable: boolean
       rootKey: string
       rootLabel: string
       rootLocaleKey?: string
@@ -548,6 +576,7 @@ export default {
               name,
               enabled: sk.enabled === true && !sk.shadowedBy,
               shadowed: !!sk.shadowedBy,
+              loadable: sk.loadable !== false,
               rootKey,
               rootLabel: String((root && root.label) || rootKey),
               ...(root && root.localeKey ? { rootLocaleKey: String(root.localeKey) } : {}),
@@ -599,20 +628,28 @@ export default {
         scheduleToolRestrictions()
       },
       knownSkillKeys: async () => new Set(Object.keys(await skillStates())),
+      // 档案保存校验用：被同名覆盖的副本与结构不完整的技能都不算「可勾选」（见 selectableSkillKeys）。
+      selectableSkillKeys,
       // 快照只取**真实生效**的条目（不含被同名覆盖的副本）——副本不参与模式应用，
       // 退出回放时也不该去动它们，否则会改写用户对副本的显式策略记录。
       currentSkills: async () => (await skillScan()).states,
       applySkills: async (target: Record<string, boolean>) => {
-        // 两道过滤，缺一不可：
+        // 三道过滤，缺一不可：
         //  1. 被同名覆盖的副本直接跳过——它们本来就不生效，写策略只会污染用户的记录。
-        //  2. **已经处于目标状态的技能不再写**。`applySkills` 写的是显式策略记录，而目标
+        //  2. 结构不完整的技能也跳过——core 对它们一律拒绝启停（error.skill.notLoadable），
+        //     不跳过就会抛成"应用失败"，**整个场景进不去**（老档案里的残留键能踩到）。
+        //  3. **已经处于目标状态的技能不再写**。`applySkills` 写的是显式策略记录，而目标
         //     状态是生效状态，两者不等价：对已经生效为「停用」的技能再 disable 一次，
         //     只是把「没有记录」固化成「显式停用」，场景模式进出一次就会改写 state.json。
-        const { states, shadowed } = await skillScan()
+        const { states, shadowed, unloadable } = await skillScan()
         for (const [key, on] of Object.entries(target)) {
           const i = key.indexOf('/')
           if (i <= 0) throw new Error(`技能 key 不合法: ${key}`)
+          // 被同名覆盖的副本跳过（它本来就不生效，写策略只会污染用户的记录）。
           if (shadowed.has(key)) continue
+          // 结构不完整的技能跳过：core 对它们**一律拒绝启停**（error.skill.notLoadable），
+          // 继续往下走会抛成"应用失败"，**整个场景就进不去了**（老档案里的残留键能踩到）。
+          if (unloadable.has(key)) continue
           if (states[key] === on) continue
           const root = key.slice(0, i)
           const name = key.slice(i + 1)
@@ -683,11 +720,37 @@ export default {
         }
         return out
       },
+      /**
+       * 来源级启停（进入 / 退出 / 就地重应用共用）。
+       *
+       * 容错口径（用户 2026-09-17 报「退出模式失败 → 卡在场景里」之后加的）：**结构性**失败
+       * （来源解析不到 / 该来源本来就不允许启停）只记警告并跳过 —— 这一行与本次改动无关，
+       * 拿它中断整个恢复只会把用户困在场景里；**写盘**类失败仍然抛错，那说明确实没还原成功。
+       * 结构性失败的正解在 `skills/service.ts` 的 `requestSwitchRoot`（项目来源按 key 前缀解析）。
+       */
       applySkillSourceSwitches: async (switches) => {
+        const skipped: string[] = []
         for (const s of switches) {
           const op = s.enabled ? 'skill-source-enable' : 'skill-source-disable'
-          const r: any = await skillsService.ops[op]({ root: s.root })
-          if (r && r.ok === false) throw new Error(`技能来源 ${s.root} ${s.enabled ? '启用' : '停用'}失败：${r.error}`)
+          let r: any
+          try {
+            r = await skillsService.ops[op]({ root: s.root })
+          } catch (e) {
+            r = { ok: false, error: message(e), code: '' }
+          }
+          if (r && r.ok === false) {
+            const code = String((r && r.code) || '')
+            const structural = code === 'error.root.readonly' || code === 'error.root.unknown' ||
+              /来源不存在|不允许启用或停用/.test(String(r.error || ''))
+            if (structural) {
+              skipped.push(`${s.root}（${r.error}）`)
+              continue
+            }
+            throw new Error(`技能来源 ${s.root} ${s.enabled ? '启用' : '停用'}失败：${r.error}`)
+          }
+        }
+        if (skipped.length) {
+          ctx.logger?.warn?.(`scene: 跳过无法启停的技能来源 —— ${skipped.join('、')}`)
         }
       },
       sceneExists: async (name) => {
@@ -822,6 +885,9 @@ export default {
       } catch { return undefined }
     }
 
+    // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的五域文本。
+    // 挂在 apply 作用域：`injection-live` op 与注入器不在同一层（effect 内部）。
+    let contextInjectorLive: (() => LiveInjectionSnapshot) | null = null
     try {
       ctx.effect(() => {
         const injector = createContextInjector({
@@ -839,7 +905,8 @@ export default {
           settings: () => injectSettingsSync(),
           factsFor: (agent) => presetFactsForAgent(agent),
         })
-        return () => injector.dispose()
+        contextInjectorLive = () => injector.live()
+        return () => { contextInjectorLive = null; injector.dispose() }
       }, 'dsh-plugin-tool-management: context injection')
     } catch (e) {
       console.error('[dsh-plugin-tool-management] context injection setup failed:', message(e))
@@ -959,7 +1026,10 @@ export default {
             if (toOff.length) await subagentService.enabledStore.setEnabled(toOff, false)
             if (toOn.length || toOff.length) void subagentCatalog.refresh()
             const snapshot = mode.snapshot
-            if (snapshot && (toOn.length || toOff.length)) {
+            // 新快照带**全量映射**（`subagentsAll`，v0.9.1）→ 退出按映射逐个精确还原，这两个
+            // 部分名单不再需要，也不再往新快照里写（老快照没有映射，仍然照旧维护，见
+            // archive-engine 的 restoreSnapshot 兼容分支）。
+            if (snapshot && !snapshot.subagentsAll && (toOn.length || toOff.length)) {
               const backOn = Array.isArray(snapshot.subagents) ? snapshot.subagents.slice() : []
               const offList = Array.isArray(snapshot.subagentsOn) ? snapshot.subagentsOn.slice() : []
               for (const n of toOn) if (backOn.indexOf(n) < 0) backOn.push(n)
@@ -1084,22 +1154,27 @@ export default {
     /**
      * **应用提示词预设的唯一入口**（界面 op 与模型工具共用）。
      *
-     * 场景接管期间（启用场景 / 全局绑定在驱动基线）只允许「重新应用场景绑定的那一份」：
-     * 应用别的预设会绕过场景绑定，于是「场景页显示 A、实际注入 B、A 不可删而 B 可删」
-     * 四套状态各说各话（用户实测）。同一份 = 修复（把被手改的基线写回去），走场景同步
-     * 而不是裸写 —— 同步会在写之前补上「进场景前的基线」快照，退出场景才恢复得回来。
-     * 换提示词的唯一正路在场景设置里改绑定（`rules-update-scene`，成功后同样同步基线）。
+     * 场景接管期间（启用场景 / 全局绑定在驱动基线）：
+     *   - 应用**同一份** = 重新应用（把被手改的基线写回去），走场景同步；
+     *   - 应用**别的份** = 换掉这个场景的绑定（用户裁定 2026-09-17：未锁定时切换要可用，
+     *     并且同步写进场景档案）。绑定改完再走一次场景同步，于是「场景页显示什么 / 实际注入
+     *     什么 / 谁是引用方」三处立刻重新对齐（此前的做法是直接拒绝，用户得先退出场景）。
+     * 锁定仍由 `guardLockedOps` 挡住（agentsmd-apply 在冻结清单里）。
      */
     async function applyPresetGuarded(id: string): Promise<{ ok: true; id: string; backedUp?: boolean; viaScene?: boolean } | { ok: false; error: string; code?: string }> {
-      const blocked = await scenePromptSync.applyGuard(id)
-      if (blocked) {
-        return {
-          ok: false,
-          code: 'error.agentsMd.scenePromptLocked',
-          error: `提示词基线当前由场景「${blocked.label}」绑定的预设「${blocked.presetId}」接管，不能直接应用其他预设：要换提示词，请到场景页修改该场景的绑定，或先退出场景。`,
+      const driver = await scenePromptSync.driver()
+      if (driver) {
+        const target = String(id ?? '').trim()
+        if (driver.presetId !== target) {
+          const rebound: any = await rulesService.ops['rules-update-scene']({ name: driver.scene, prompt: target })
+          if (!rebound || rebound.ok === false) {
+            return {
+              ok: false,
+              code: 'error.agentsMd.sceneRebindFailed',
+              error: `无法把场景「${driver.label}」的提示词绑定改成「${target}」：${(rebound && rebound.error) || '未知原因'}`,
+            }
+          }
         }
-      }
-      if (await scenePromptSync.driver()) {
         const r = await scenePromptSync.sync()
         if (r.error) return { ok: false, error: r.error }
         return { ok: true, id, viaScene: true }
@@ -3422,6 +3497,12 @@ export default {
       },
       // 注入设置（读 / 写）：压制型预设下是否仍然注入 + 各域开关。界面在「兼容」页。
       'inject-settings': (args: any) => injectSettingsOp(args),
+      // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 本次运行的投递统计。
+      // 回答"勾了开关到底送没送到"——界面配置与实际注入不一致时，这里一眼可见。
+      'injection-live': async () => {
+        if (contextInjectorLive === null) return { ok: false, error: '注入通道未装配' }
+        try { return { ok: true, ...contextInjectorLive() } } catch (e) { return { ok: false, error: message(e) } }
+      },
       'history-unarchive': async (args: any) => {
         const registry = getHistoryRegistry()
         if (!registry) return { ok: false, error: '归档服务未挂载' }
@@ -3739,30 +3820,280 @@ export default {
         return r && r.ok && r.activeScene ? String(r.activeScene) : null
       } catch { return null }
     }
-    /** 「场景内开关一律禁用」的拒绝文案（界面 / 模型工具共用；不在场景里返回 null）。 */
-    async function sceneSwitchBlock(): Promise<string | null> {
+    /** 「当前场景已锁定」的拒绝文案（模型工具用；无活动场景 / 未锁定 → null）。 */
+    async function lockedSceneGuard(): Promise<string | null> {
       const scene = await activeSceneName()
       if (!scene) return null
-      return `当前处于场景「${scene}」：开关由场景档案定义，不能在页面上直接改。请到场景页的档案编辑器里改（改完立即生效；退出场景仍按进场景前的状态还原），或先退出场景。`
+      const locked = await lockedSceneNames()
+      return locked.includes(scene) ? `场景「${scene}」已锁定：先到场景页解锁再改。` : null
     }
+
+    // ---------- 场景内改开关 = 同步改档案（v0.9.2）----------
     /**
-     * 场景内「开关」类操作一律禁用（用户裁定 2026-09-16）。
+     * 用户裁定（2026-09-17）：场景**未锁定**时，页面上的开关（MCP / 技能 / 子智能体 / 提示词）
+     * 照常可用，改动**同步写进当前场景的档案**；只有「锁定」才冻结这些开关。
+     * 记忆不在此列 —— 它的开关是 `rules[*].enabled` 单一真相源，本来就不经过场景档案。
      *
-     * 场景里的环境由**档案**定义，页面开关在场景里本来就是"白改"：退出场景时 MCP 停用表、
-     * 技能表按快照整体写回，那些改动会被静默丢弃，而档案又不会跟着变 —— 于是「页面开关 /
-     * 实际生效 / 档案勾选」三处各说各话（用户实测数次）。要改就改档案：那里改完立即生效、
-     * 且档案持久化（下次进这个场景照旧生效）；退出场景时运行时仍按进场景前的快照还原。
-     * 只拦**启停**：新增 / 改名 / 删除 / 备注 / 重启 / 导入导出这些内容操作照旧可用
-     * （要整体冻结用场景「锁定」）。
+     * 为什么必须同步：档案的语义是「勾选集 = 该场景下开着的东西，段未定义 = 全关」（见
+     * archive-engine 的四域同口径）。只改运行时、不改档案，退出场景会被快照整体回滚 ——
+     * 用户看到的「改了」是假的；写进档案才既当下生效、下次进这个场景又照样生效。
+     * 新增 / 改名 / 删除 / 备注 / 导入导出这些**内容**操作不进档案（它们不是场景维度）。
      */
-    function guardSceneSwitches(opNames: string[], what: string): void {
+
+    /**
+     * 技能档案 key 映射：`<来源 key>\u0000<条目名>` → `{ 档案 key, selectable }`。
+     *
+     * `selectable=false` = 被同名技能覆盖的副本，或结构不完整（core 拒绝启停）——
+     * 这两种都**不可能生效**，勾进档案只会让「档案说开着、技能页说没启动」（用户实测）。
+     * `skill-disable` 不受此限：它只是把键从档案里删掉，任何键都可以删。
+     */
+    async function skillArchiveKeys(): Promise<Map<string, { key: string; selectable: boolean }>> {
+      const map = new Map<string, { key: string; selectable: boolean }>()
+      try {
+        const r: any = await skillsService.ops['skill-state']({})
+        for (const root of ((r && r.data && r.data.roots) || [])) {
+          const rootKey = String((root && root.key) || '')
+          if (!rootKey) continue
+          for (const sk of ((root && root.skills) || [])) {
+            const entry = String((sk && sk.name) || '')
+            if (!entry) continue
+            // 与 skillRows / skillScan 同口径：档案里存**声明名**（frontmatter name）。
+            // 用条目名拼 key 会被保存时的 stale 校验当成未知键丢掉。
+            map.set(rootKey + '\u0000' + entry, {
+              key: rootKey + '/' + String(sk.declaredName || entry),
+              selectable: !sk.shadowedBy && sk.loadable !== false,
+            })
+          }
+        }
+      } catch { /* 读不到状态 → 调用方退化为原样拼 key */ }
+      return map
+    }
+
+    /**
+     * 某个来源下的技能档案 key（来源级开关用）：
+     *  - `all`：该来源下**全部**键 —— 停用来源时按它清理（连历史残留一起清掉）；
+     *  - `selectable`：真正**生效得了**的那些 —— 启用来源时只并入这一批。
+     */
+    async function skillArchiveKeysOfRoot(rootKey: string): Promise<{ all: string[]; selectable: string[] }> {
+      const all: string[] = []
+      const selectable: string[] = []
+      try {
+        const r: any = await skillsService.ops['skill-state']({})
+        for (const root of ((r && r.data && r.data.roots) || [])) {
+          if (String((root && root.key) || '') !== rootKey) continue
+          for (const sk of ((root && root.skills) || [])) {
+            const name = String((sk && sk.declaredName) || (sk && sk.name) || '')
+            if (!name) continue
+            const key = rootKey + '/' + name
+            all.push(key)
+            if (!sk.shadowedBy && sk.loadable !== false) selectable.push(key)
+          }
+        }
+      } catch { /* 读不到 → 空列表 */ }
+      return { all, selectable }
+    }
+
+    /** 字符串数组的「勾上 / 取消」（已处于目标状态时原样返回，避免无谓的档案写入）。 */
+    function toggleInList(list: string[], key: string, on: boolean): string[] {
+      if (!key) return list
+      const has = list.indexOf(key) >= 0
+      if (on === has) return list
+      return on ? [...list, key] : list.filter((x) => x !== key)
+    }
+
+    /** loader 条目 id → 服务器名（档案的 mcp 段按 serverName 存）。 */
+    async function serverNameOfId(id: string): Promise<string | null> {
+      try {
+        const r: any = await mcpmListView()
+        for (const row of ((r && r.rows) || [])) {
+          if (String((row && row.id) || '') === id) return String(row.serverName || row.id)
+        }
+      } catch { /* 读不到 → null（这一笔不同步，如实跳过） */ }
+      return null
+    }
+
+    /**
+     * 某台服务器当前**启用**的工具名（把档案里的 `'*'` 具化成具体名单时用）。
+     *
+     * live schema 优先（就是此刻真的存在的工具）；服务器没跑起来时退回「最后见过的工具名单 −
+     * 停用表」——与 `computeMcpPlan` 的 `knownTools` 同源，别把「不知道」当成「一个都没有」。
+     */
+    async function enabledToolNames(server: string): Promise<string[]> {
+      const live = await (async () => {
+        try {
+          const r: any = await mcpmTools({ serverName: server })
+          return ((r && r.tools) || []).filter((t: any) => t.enabled !== false).map((t: any) => String(t.name))
+        } catch { return [] }
+      })()
+      if (live.length) return live
+      try {
+        const known = (await readKnownMcpTools())[server] || []
+        const off = new Set(await readDisabledTools().then((m) => m[server] || []))
+        if (off.has('*')) return []
+        return known.map((item) => String(item.name)).filter((n) => !off.has(n))
+      } catch { return [] }
+    }
+
+    /**
+     * 把一次开关落到当前场景的档案上。
+     * 返回 null = 无需改动（没有活动场景 / 已锁定 / 这一笔不影响档案）；
+     * 返回字符串 = 档案没跟上（运行时已经生效，如实告诉用户，而不是假装成功）。
+     */
+    async function syncSwitchToScene(opName: string, args: any): Promise<string | null> {
+      const scene = await activeSceneName()
+      if (!scene) return null
+      if ((await lockedSceneNames()).includes(scene)) return null
+      // 开关方向。**先按 op 名判定「动词即方向」的那几个**，再看 `args.enabled`：
+      // `skill-enable` / `skill-disable` / `skill-source-enable` / `skill-source-disable`
+      // 的参数里**根本没有 `enabled` 字段**（只有 root / name），早先统一读 `args.enabled`
+      // 会把它们一律读成 false，于是「在场景里打开某个技能」被同步成「关闭」——目标集合
+      // 一次变化都没有 → 直接早退不写盘，用户看到的就是「开关了但档案不跟着变」
+      // （2026-09-17 用真实产物复现）。反向更糟：启用一个来源会被同步成「把该来源下的
+      // 技能全部从档案里删掉」，档案与运行时当场对不上。
+      // 其余 op 仍按宿主逐字对齐：`mcpm-tool-enabled` 的语义是「缺省 = 启用」（`enabled !== false`）。
+      const enabled = opName === 'skill-enable' || opName === 'skill-source-enable'
+        ? true
+        : opName === 'skill-disable' || opName === 'skill-source-disable'
+          ? false
+          : args && typeof args.enabled === 'boolean'
+            ? args.enabled === true
+            : opName === 'mcpm-tool-enabled'
+      let next: any
+      let cur: any = {}
+      try {
+        const slice = await rulesService.readArchiveSlice()
+        cur = (slice.archives && slice.archives[scene]) || {}
+        next = { ...cur }
+        switch (opName) {
+          case 'skill-enable':
+          case 'skill-disable': {
+            const root = String((args && args.root) || 'dsh')
+            const entry = String((args && args.name) || '')
+            const hit = (await skillArchiveKeys()).get(root + '\u0000' + entry)
+            const key = (hit && hit.key) || root + '/' + entry
+            // 勾进来这件事只对**生效得了**的技能做：被同名覆盖的副本、结构不完整的技能
+            // 写进去也永远不生效（运行时那一步本来就跳过了它们），档案就会开始说谎。
+            // 取消勾选（enabled=false）不受限——它只是把键删掉，历史残留正好顺手清掉。
+            if (enabled && hit && !hit.selectable) return null
+            next.skills = toggleInList(Array.isArray(next.skills) ? next.skills.slice() : [], key, enabled)
+            break
+          }
+          case 'skill-set-all': {
+            const items: any[] = Array.isArray(args && args.items) ? args.items : []
+            const map = await skillArchiveKeys()
+            let list: string[] = Array.isArray(next.skills) ? next.skills.slice() : []
+            for (const item of items) {
+              const root = String((item && item.root) || '')
+              const entry = String((item && item.name) || '')
+              if (!root || !entry) continue
+              const hit = map.get(root + '\u0000' + entry)
+              if (enabled && hit && !hit.selectable) continue
+              list = toggleInList(list, (hit && hit.key) || root + '/' + entry, enabled)
+            }
+            next.skills = list
+            break
+          }
+          case 'skill-source-enable':
+          case 'skill-source-disable': {
+            // 来源级没有独立字段：档案靠「来源下有没有被勾的技能」反推（computeSkillsPlan）。
+            // 启用时只并入**生效得了**的技能（被覆盖的副本/结构不完整的整批不进档案）；
+            // 停用时按**全部**键清（连历史残留一起清掉）。
+            const keys = await skillArchiveKeysOfRoot(String((args && args.root) || ''))
+            const pick = enabled ? keys.selectable : keys.all
+            let list: string[] = Array.isArray(next.skills) ? next.skills.slice() : []
+            if (enabled) { for (const k of pick) if (list.indexOf(k) < 0) list.push(k) }
+            else { const drop = new Set(pick); list = list.filter((k) => !drop.has(k)) }
+            next.skills = list
+            break
+          }
+          case 'mcpm-set-enabled': {
+            const server = await serverNameOfId(String((args && args.id) || ''))
+            if (!server) return null
+            next.mcp = { ...(next.mcp || {}) }
+            if (enabled) next.mcp[server] = '*'
+            else delete next.mcp[server]
+            break
+          }
+          case 'mcpm-set-all': {
+            if (!enabled) { next.mcp = {}; break }
+            const all: Record<string, string> = {}
+            try {
+              const r: any = await mcpmListView()
+              for (const row of ((r && r.rows) || [])) {
+                const n = String((row && row.serverName) || '')
+                if (n) all[n] = '*'
+              }
+            } catch { return null }
+            next.mcp = all
+            break
+          }
+          case 'mcpm-tool-enabled': {
+            const server = String((args && args.serverName) || '')
+            const tool = String((args && args.tool) || '')
+            if (!server || !tool) return null
+            const has = next.mcp && Object.prototype.hasOwnProperty.call(next.mcp, server)
+            // 服务器没勾 = 该场景下这台服务器关着，工具级开关在运行时本来就不生效（工具不存在）。
+            if (!has) return null
+            const spec = next.mcp[server]
+            if (spec === '*') {
+              // '*' = 全部工具。只有「关掉某个工具」才需要具化；否则 '*' 已经涵盖了启用这一笔。
+              if (enabled) return null
+              const live = await enabledToolNames(server)
+              next.mcp = { ...next.mcp, [server]: live.filter((t) => t !== tool) }
+            } else {
+              const list = Array.isArray(spec) ? spec.slice() : []
+              next.mcp = {
+                ...next.mcp,
+                [server]: enabled
+                  ? (list.indexOf(tool) < 0 ? [...list, tool] : list)
+                  : list.filter((t) => t !== tool),
+              }
+            }
+            break
+          }
+          case 'subagent-toggle': {
+            const name = String((args && args.name) || '')
+            next.subagents = toggleInList(Array.isArray(next.subagents) ? next.subagents.slice() : [], name, enabled)
+            break
+          }
+          default: return null
+        }
+      } catch (e) {
+        return message(e)
+      }
+      // 空段 = 未定义（「一个都没勾 = 全关」），删掉以免两种语义并存（与 scene-archive-save 同口径）。
+      for (const seg of ['skills', 'subagents']) {
+        const list = next[seg]
+        if (Array.isArray(list) && list.length === 0) delete next[seg]
+      }
+      if (next.mcp && Object.keys(next.mcp).length === 0) delete next.mcp
+      if (JSON.stringify(next) === JSON.stringify(cur)) return null   // 档案本来就是这样 → 不写盘
+      // 与「在档案弹窗里点保存」走同一条路：落盘 + 就地重应用 + 快照并入（退出仍按进场景前还原）。
+      try {
+        const save: any = archiveService.ops['scene-archive-save']
+        const res: any = await save({ scene, archive: next })
+        if (res && res.ok === false) return String(res.error || '场景档案保存失败')
+        if (res && res.applyError) return String(res.applyError)
+      } catch (e) {
+        return message(e)
+      }
+      return null
+    }
+
+    /**
+     * 包一层：开关成功后把改动同步进当前场景档案（见 syncSwitchToScene）。
+     * 失败只挂 `sceneSyncError`，不改写原操作的成功结论 —— 运行时确实改了，档案没跟上要说得清。
+     * 锁定仍由 `guardLockedOps` 挡住（更靠内的那层包装先执行）。
+     */
+    function syncSceneArchiveOnSwitch(opNames: string[]): void {
       for (const opName of opNames) {
         const original = handlers[opName]
         if (typeof original !== 'function') continue
         handlers[opName] = async (args: any) => {
-          const blocked = await sceneSwitchBlock()
-          if (blocked) return { ok: false, code: 'error.sceneSwitchesLocked', error: blocked }
-          return original(args)
+          const res: any = await original(args)
+          if (!res || res.ok === false) return res
+          const err = await syncSwitchToScene(opName, args)
+          return err ? { ...res, sceneSyncError: err } : res
         }
       }
     }
@@ -3780,9 +4111,9 @@ export default {
     guardLockedOps([
       // MCP：改配置 / 服务器启停 / 工具启停 / 导入导出配置 / 备注 / 设置。restart 只重连不改配置，放行。
       'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-tool-enabled', 'mcpm-import', 'mcpm-compact', 'mcpm-note', 'mcpm-settings',
-      // 技能：启停 / 来源启停与移除恢复 / 首选 / 删除 / 创建导入 / 自定义目录 / 回收站。
+      // 技能：启停 / 来源启停与移除恢复 / 首选 / 删除 / 创建导入 / 自定义目录 / 回收站 / 批量启停。
       'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable', 'skill-source-remove', 'skill-source-restore',
-      'skill-prefer', 'skill-unprefer', 'skill-delete', 'skill-create', 'skill-import', 'skill-upload',
+      'skill-prefer', 'skill-unprefer', 'skill-delete', 'skill-create', 'skill-import', 'skill-upload', 'skill-set-all',
       'skill-custom-add', 'skill-custom-remove', 'skill-trash-restore', 'skill-trash-delete',
       // 子智能体：开关 / 改名保存 / 删除 / 导入 / 回收站。
       'subagent-create', 'subagent-update', 'subagent-delete', 'subagent-toggle', 'subagent-import', 'subagent-trash-restore', 'subagent-trash-delete',
@@ -3791,14 +4122,13 @@ export default {
       // 提示词：建改删 / 应用（切换生效基线）/ 导入 / 回收站。
       'agentsmd-create', 'agentsmd-update', 'agentsmd-remove', 'agentsmd-apply', 'agentsmd-import', 'agentsmd-trash-restore', 'agentsmd-trash-delete',
     ], '修改')
-    // 场景内「开关」类操作一律禁用（用户裁定）：改开关请去场景档案编辑器。
-    // 与「锁定」正交：锁定冻结全部写操作，这里只拦启停，内容编辑照旧。
-    guardSceneSwitches([
+    // 场景内「开关」类操作（用户裁定 2026-09-17）：未锁定时**可用**，改动同步进当前场景档案。
+    // 与「锁定」正交：锁定冻结全部写操作，这里只是把页面开关的意图也写进档案。
+    syncSceneArchiveOnSwitch([
       'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-tool-enabled',
-      'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable',
-      'skill-prefer', 'skill-unprefer',
+      'skill-enable', 'skill-disable', 'skill-set-all', 'skill-source-enable', 'skill-source-disable',
       'subagent-toggle',
-    ], '开关')
+    ])
     // 被锁场景自身的档案与删除：只挡它自己，别的场景照常。
     for (const [opName, pickScene, what] of [
       ['scene-archive-save', (args: any) => (args && args.scene) || '', '改档案'],
@@ -3881,11 +4211,14 @@ export default {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
-        const blocked = await sceneSwitchBlock()
+        const blocked = await lockedSceneGuard()
         if (blocked) throw new Error(blocked)
         const r = await mcpmSetEnabled({ id: args.id, level: args.level, enabled: args.enabled })
         if (!r.ok) throw new Error(r.error)
-        return 'OK: ' + args.id + ' now ' + (args.enabled ? 'enabled' : 'disabled')
+        // 场景未锁定时，页面 / 模型改的开关都要落进当前场景的档案（与 handlers 层同一套同步）。
+        const syncErr = await syncSwitchToScene('mcpm-set-enabled', args)
+        return 'OK: ' + args.id + ' now ' + (args.enabled ? 'enabled' : 'disabled') +
+          (syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : '')
       },
     }))
     tools.register(defineTool({
@@ -3993,12 +4326,14 @@ export default {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
-        const blocked = await sceneSwitchBlock()
+        const blocked = await lockedSceneGuard()
         if (blocked) throw new Error(blocked)
         const root = String(args.root || 'dsh')
         const op = args.enabled ? 'skill-enable' : 'skill-disable'
         const r = await skillsService.ops[op]({ name: args.name, root })
         if (!r || r.ok === false) throw new Error((r && r.error) || 'skill toggle failed')
+        // 场景未锁定时同步进当前场景档案（与 handlers 层同一套同步）。
+        const syncErr = await syncSwitchToScene(op, { name: args.name, root, enabled: args.enabled === true })
         // 静默无效是这个工具最容易骗人的地方：同名胜负只由「首选 > 来源优先级」决定，
         // 与启用状态无关。对影子副本操作会返回 OK，但技能依然不可用。如实说一句。
         let shadowedBy = ''
@@ -4015,7 +4350,8 @@ export default {
         const warn = shadowedBy
           ? ' — BUT this copy is shadowed by the same-name skill in "' + shadowedBy + '", so it stays inactive: enable that copy instead, or make this root the preferred copy in the panel'
           : ''
-        return 'OK: ' + args.name + ' now ' + (args.enabled ? 'enabled' : 'disabled') + warn
+        const sceneWarn = syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : ''
+        return 'OK: ' + args.name + ' now ' + (args.enabled ? 'enabled' : 'disabled') + warn + sceneWarn
       },
     }))
     tools.register(defineTool({

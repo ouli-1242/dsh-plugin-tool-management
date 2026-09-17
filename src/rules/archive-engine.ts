@@ -59,6 +59,13 @@ export interface ArchiveEngineDeps {
   applySkillSourceSwitches(switches: Array<{ root: string; enabled: boolean }>): Promise<void>
   /** 实时发现的技能 key 全集（`<rootKey>/<name>`）。 */
   knownSkillKeys(): Promise<Set<string>>
+  /**
+   * 档案里**能写、且写了有意义**的技能键：既不被同名技能覆盖，结构也完整。
+   *
+   * 保存档案时按它校验：被覆盖的副本永远不可能生效（`applySkills` 直接跳过）、结构不完整的
+   * 连启停都被 core 拒绝，写进档案只会造成「档案说开着、运行时说关着」两种说法。
+   */
+  selectableSkillKeys(): Promise<Set<string>>
   /** 当前技能启停全集。 */
   currentSkills(): Promise<Record<string, boolean>>
   /** 技能批量应用（复用既有单条写通道）。 */
@@ -119,18 +126,26 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
     if (notes.length) {
       await deps.applyMcpNotes(notes.map((x) => ({ id: x.id, note: x.note })))
     }
-    // 子智能体开关：先停「进入时被这次关掉的」那些（档案没勾 = 本场景不开），
-    // 再开回「进入时被这次启用过的」那批 —— 与进入时的顺序相反，两个方向都要还原。
-    const personasOff = snapshot.subagents ?? []
-    if (personasOff.length) {
-      await deps.applySubagentSwitches(personasOff.map((n) => ({ name: n, enabled: false })))
-    }
-    const personasOn = snapshot.subagentsOn ?? []
-    if (personasOn.length) {
-      await deps.applySubagentSwitches(personasOn.map((n) => ({ name: n, enabled: true })))
+    // 子智能体开关（v0.9.1）：**全量映射优先**——退出即精确还原「进场景前」的开与关。
+    // 为什么不能只靠下面那两个部分名单：场景内页面开关已开放（未锁定即可改、改动同步进档案），
+    // 「现在开着」不再只来自档案勾选，部分名单答不出「这个人是场景开的还是用户开的」。
+    // 表里**记过的名字**逐个还原；场景中新建的人设不在表里 → 不动它（与技能域同口径）。
+    // 老 snapshot 没有这一栏 → 退回两个方向的部分名单（旧行为：先停被开的，再开回被关的）。
+    const personaStates = snapshot.subagentsAll
+    if (personaStates && typeof personaStates === 'object') {
+      const switches = Object.entries(personaStates).map(([name, on]) => ({ name, enabled: on === true }))
+      if (switches.length) await deps.applySubagentSwitches(switches)
+    } else {
+      const personasOff = snapshot.subagents ?? []
+      if (personasOff.length) {
+        await deps.applySubagentSwitches(personasOff.map((n) => ({ name: n, enabled: false })))
+      }
+      const personasOn = snapshot.subagentsOn ?? []
+      if (personasOn.length) {
+        await deps.applySubagentSwitches(personasOn.map((n) => ({ name: n, enabled: true })))
+      }
     }
   }
-
   /**
    * 失败回滚：运行时还原 + 切片写回；每步失败都记下来，绝不谎报「已回滚」。
    * 返回结构化错误（ok:false），错误文本如实区分「已回滚」与「回滚未完成」。
@@ -228,7 +243,11 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         if (Object.keys(archive.mcpNotes).length === 0) delete archive.mcpNotes
       }
       if (archive.skills) {
-        const known = await deps.knownSkillKeys()
+        // 校验用**可勾选**集合（不是「已知全集」）：被同名技能覆盖的副本与结构不完整的技能
+        // 永远不可能生效，勾了也是假的 —— 留着就是「档案说开着、技能页说没启动」（用户实测：
+        // 启动一个目录后档案里多出被覆盖的那个技能）。这里按同一口径丢弃并如实报告，
+        // 顺带把历史残留清掉。
+        const known = await deps.selectableSkillKeys()
         const hadKeys = archive.skills.length > 0
         stale.push(...archive.skills.filter((k) => !known.has(k)).map((k) => 'skills/' + k))
         archive.skills = archive.skills.filter((k) => known.has(k))
@@ -318,11 +337,16 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       let unboundPersonas: string[] = []
       let personaRestore: string[] = []
       let personaRestoreOn: string[] = []
+      // 全量开关映射（v0.9.1）：退出即精确还原「进场景前」。半个名单做不到这件事 ——
+      // 场景里手动开过的人设，「改动前是关还是开」只在这张全量表里。
+      let personaStates: Record<string, boolean> = {}
       try {
         const known = await deps.knownPersonas()
         unboundPersonas = [...known].filter((n) => boundPersonas.indexOf(n) < 0).sort()
         personaRestore = await deps.disabledPersonas(boundPersonas)
         personaRestoreOn = await deps.enabledPersonas(unboundPersonas)
+        const on = new Set(await deps.enabledPersonas([...known]))
+        personaStates = Object.fromEntries([...known].map((n) => [n, on.has(n)]))
       } catch (e) {
         return { ok: false, error: `读取人设开关状态失败（未改动任何东西）：${msg(e)}` }
       }
@@ -386,6 +410,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         personaRestore,
         personaRestoreOn,
         noteBefore,
+        personaStates,
       )
       const entered: ArchiveIndexSlice = { ...slice, mode: { scene: target, snapshot }, active: [target] }
       try {

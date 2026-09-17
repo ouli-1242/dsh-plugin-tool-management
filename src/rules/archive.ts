@@ -56,6 +56,17 @@ export interface ModeSnapshot {
    */
   subagentsOn?: string[]
   /**
+   * 人设开关的**全量**映射（名字 → 进入模式时的开关状态），v0.9.1 起写入。
+   *
+   * 为什么要从「两个方向的部分名单」升级成全量映射：场景内页面开关已开放（未锁定即
+   * 可改，改动同步进档案），于是「某个人设现在开着」不再只来自档案勾选 —— 部分名单
+   * 答不出「这个人是场景开的，还是用户自己开的」。全量映射没有这个问题：退出时把
+   * **表里记过的名字**逐个还原（场景中新建的人设不在表里 → 不动它，与技能域同口径）。
+   *
+   * 老 snapshot 没有这一栏 → 退回 `subagents` / `subagentsOn` 两个名单（旧行为）。
+   */
+  subagentsAll?: Record<string, boolean>
+  /**
    * 档案改过**备注**的服务器行，记录**改动前**的备注（`null` = 原本没有备注）。
    * 退出时按此恢复；只记被改动的行。
    */
@@ -306,6 +317,11 @@ export function snapshotRuntime(
   subagentsOn: string[] = [],
   /** **将被档案改动**的备注行，带改动前的备注（null = 原本没有）。 */
   mcpNotes: Array<{ id: string; note: string | null }> = [],
+  /**
+   * 进入模式时**全部**人设的开关状态（名字 → 是否开着）。给了就写进 `subagentsAll`：
+   * 退出时按它精确还原（场景里手动开过的人设也会被还原回进场景前的状态）。
+   */
+  subagentStates: Record<string, boolean> | null = null,
 ): ModeSnapshot {
   return {
     mcp: Object.fromEntries(Object.entries(mcpRaw).map(([k, v]) => [k, v.slice()])),
@@ -314,6 +330,7 @@ export function snapshotRuntime(
     skillSources: skillSources.map((x) => ({ root: x.root, enabled: x.enabled })),
     ...(subagents.length ? { subagents: subagents.slice() } : {}),
     ...(subagentsOn.length ? { subagentsOn: subagentsOn.slice() } : {}),
+    ...(subagentStates ? { subagentsAll: { ...subagentStates } } : {}),
     ...(mcpNotes.length ? { mcpNotes: mcpNotes.map((x) => ({ id: x.id, note: x.note })) } : {}),
   }
 }

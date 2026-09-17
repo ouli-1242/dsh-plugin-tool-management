@@ -308,6 +308,33 @@ export function createSkillsService(ctx: any): SkillsService {
     return list.find((root: any) => root.key === key)
   }
 
+  /**
+   * **项目来源**（`project-dsh:<hash>` / `project-agents:<hash>`）能不能被启停，此前取决于
+   * 「它的工作区此刻在不在活动会话里」（`requestRoot` 的第三步）——于是场景快照恢复时工作区
+   * 早已关闭，解析落空 → `setSourceEnabled(undefined)` → 「该技能来源不允许启用或停用」→
+   * 退出模式直接失败、卡在场景里（用户 2026-09-17 报的）。
+   *
+   * key 本身就是自描述的（`<kind>:<路径哈希>`），而启停只写本地状态文件
+   * （`state.sources[key]`），一个字节都不碰源目录 —— 所以按前缀合成一个最小 definition
+   * 交给 core 即可：这个工作区下次被打开时，来源按记录的状态生效。
+   */
+  const PROJECT_SOURCE_KEY_RE = /^project-(dsh|agents):[a-f0-9]{16}$/
+  function projectKeyStub(key: string): any {
+    if (!PROJECT_SOURCE_KEY_RE.test(key)) return undefined
+    return {
+      key,
+      kind: key.slice(0, key.indexOf(':')),
+      scope: 'project',
+      toggleable: true,
+      mutable: false,
+      deletable: false,
+      label: key,
+      path: '',
+    }
+  }
+  /** 启停来源专用的解析：静态 / 自定义 / 活动工作区都命中不了时，按 key 前缀兜底。 */
+  const requestSwitchRoot = async (key: string) => (await requestRoot(key)) || projectKeyStub(key)
+
   const providerInvalidators = new Set<() => void>()
   const invalidateSkills = () => {
     for (const invalidate of providerInvalidators) {
@@ -389,6 +416,8 @@ export function createSkillsService(ctx: any): SkillsService {
     'skill-source-remove', 'skill-source-restore',
     'skill-prefer', 'skill-unprefer',
     'skill-create', 'skill-import', 'skill-upload', 'skill-delete',
+    // 批量启停与单条启停同权：配了访问令牌的宿主必须同样要求带令牌。
+    'skill-set-all',
     'skill-trash-restore', 'skill-trash-delete', 'skill-custom-add', 'skill-custom-remove',
   ])
 
@@ -411,11 +440,11 @@ export function createSkillsService(ctx: any): SkillsService {
       afterWrite,
     ),
     'skill-source-enable': wrap(
-      (args) => write(async () => setSourceEnabled(await requestRoot(String(args.root || '')), true, log)),
+      (args) => write(async () => setSourceEnabled(await requestSwitchRoot(String(args.root || '')), true, log)),
       afterWrite,
     ),
     'skill-source-disable': wrap(
-      (args) => write(async () => setSourceEnabled(await requestRoot(String(args.root || '')), false, log)),
+      (args) => write(async () => setSourceEnabled(await requestSwitchRoot(String(args.root || '')), false, log)),
       afterWrite,
     ),
     // 移除 / 恢复来源（「不再读取这个文件夹」）：只改本地状态，源目录一个字节都不动。
@@ -434,6 +463,31 @@ export function createSkillsService(ctx: any): SkillsService {
     ),
     'skill-unprefer': wrap(
       (args) => write(async () => setPreferredSkill(await requestRoot(String(args.root || 'dsh')), String(args.name || ''), false, log)),
+      afterWrite,
+    ),
+    /**
+     * 批量启停（技能页 / 记忆页那种「全选 / 取消全选」用）。
+     *
+     * 为什么要有它：前端逐条打单条 op 时，每次成功都会清状态缓存 + 重扫技能目录 +
+     * 广播 agent-preset 事件，几十上百条就是几十上百轮全量重扫。这里一次写锁走完、
+     * 只在最后失效一次。逐条仍复用单条写通道（不另写一份策略逻辑）。
+     */
+    'skill-set-all': wrap(
+      (args) => write(async () => {
+        const items: any[] = Array.isArray(args && args.items) ? args.items : []
+        const enabled = (args && args.enabled) === true
+        const failed: Array<{ root: string; name: string; error: string }> = []
+        let changed = 0
+        for (const item of items) {
+          const rootKey = String((item && item.root) || '')
+          const name = String((item && item.name) || '')
+          if (!rootKey || !name) continue
+          const res = await setSkillEnabled(await requestRoot(rootKey), name, enabled, log)
+          if (res && res.ok === false) failed.push({ root: rootKey, name, error: String(res.error || '') })
+          else changed++
+        }
+        return { enabled, changed, failed }
+      }),
       afterWrite,
     ),
     // 创建 / 导入 / 删除 / 回收站

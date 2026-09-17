@@ -43,12 +43,36 @@ window.__ModuleLoader__.load({
       '.dsm-detail-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}' +
       '.dsm-note-user{color:var(--dsw-alias-label-tertiary)}' +
       `
-.dsm-hint{display:flex;min-width:0;align-items:center;gap:5px;margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:18px}.dsm-hint-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-hint-mark{display:inline-flex;width:14px;height:14px;flex:none;align-items:center;justify-content:center;border:1px solid var(--dsw-alias-border-l2);border-radius:50%;font-size:9px;line-height:1;cursor:help}.dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;padding:4px}.dsm-tabs-end{display:flex;align-items:center;gap:4px;margin-left:auto}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:2px 0 36px;container-type:inline-size;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-title-block{min-width:0}.dsm-title-row{display:flex;align-items:center;gap:8px 12px;min-width:0;flex-wrap:wrap}.dsm-feedback-links{display:flex;flex-direction:column;align-items:flex-end;gap:2px}.dsm-title{margin:0;font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.4px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:28px;align-items:center;gap:5px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:500;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:0;flex:none}
+.dsm-hint{display:flex;min-width:0;align-items:center;gap:5px;margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:18px}.dsm-hint-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-hint-mark{display:inline-flex;width:14px;height:14px;flex:none;align-items:center;justify-content:center;border:1px solid var(--dsw-alias-border-l2);border-radius:50%;font-size:9px;line-height:1;cursor:help}.dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;padding:4px}.dsm-tabs-end{display:flex;align-items:center;gap:4px;margin-left:auto}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:2px 0 36px;container-type:inline-size;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-title-block{min-width:0}.dsm-title-row{display:flex;align-items:center;gap:8px 12px;min-width:0;flex-wrap:wrap}.dsm-feedback-links{display:flex;flex-direction:column;align-items:flex-end;gap:2px}.dsm-title{margin:0;font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.4px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:28px;align-items:center;gap:5px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:500;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:7px;margin-left:0;flex:none}
+/* 页头动作行：内边距收 2px。批量按钮要按「取消全选」定宽（见 .dsm-btn-bulk），
+   收这一点正好把定宽多出来的宽度抵掉，整行仍在一行内。 */
+.dsm-actions .dsm-btn{padding:0 11px}
+/* 「全选 ↔ 取消全选」二合一：两种文案都进 DOM、叠在同一格里，隐身那份只负责占位 →
+   按钮宽度恒等于较宽的那个文案，点击不再改行宽、也就不会把整行挤到第二行。
+   不写死像素是有意的：中文「取消全选」与英文 Deselect all 宽度差很多，各自自适应。
+   注意选择器要写两段类名：.dsm-btn 的 display:inline-flex 在本规则之后出现，
+   同权重下会赢，两段类名才是不依赖书写顺序的写法（改 CSS 时别顺手简化成一段）。 */
+.dsm-btn.dsm-btn-bulk{display:inline-grid;align-items:center;justify-items:center}
+.dsm-btn.dsm-btn-bulk>.dsm-bulk-label,.dsm-btn.dsm-btn-bulk>.dsm-bulk-ghost{grid-area:1/1}
+.dsm-btn.dsm-btn-bulk>.dsm-bulk-ghost{visibility:hidden}
+/* 纯图标按钮（如目录卡片上的「移除来源」）：与 quiet 按钮同高、只占一个图标宽。
+   同样要两段类名 —— .dsm-btn / .dsm-btn-quiet 的 padding 在本规则之后出现，同权重会赢。 */
+.dsm-btn.dsm-btn-icon{width:28px;min-width:28px;padding:0}
+/* 目录卡片右侧动作组：间距收窄一档，配合图标化后不再显挤。 */
+/* 卡片头里的标签抬到 11px：左侧「N 个技能」是 12px，10px 的标签在这里显得忽大忽小。 */
+.dsm-source-head .dsm-tag{font-size:11px;min-height:20px;padding:0 7px}
+/* 「N 个附件」标签：和 tag 同形，但它是**能点的**（点了去编辑弹窗的附件区），
+   所以要把 button 的默认外观抹掉，并给一个可点的悬停反馈 —— 光靠颜色区分不出"能不能点"。 */
+button.dsm-tag{background:transparent;font:inherit;font-size:10px;cursor:pointer}
+button.dsm-tag:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+button.dsm-tag:disabled{cursor:default;opacity:.6}
+.dsm-tag-attach{display:inline-flex;align-items:center;gap:4px}
+.dsm-tag-attach-empty{color:var(--dsw-alias-label-tertiary);border-color:var(--dsw-alias-border-l3)}
 .dsm-btn{box-sizing:border-box;display:inline-flex;min-height:34px;align-items:center;justify-content:center;padding:0 13px;border:1px solid transparent;border-radius:8px;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font:inherit;font-size:13px;font-weight:580;white-space:nowrap;cursor:pointer}.dsm-btn:hover:not(:disabled){filter:brightness(1.08)}.dsm-btn:disabled{opacity:.48;cursor:default}.dsm-btn-secondary{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.dsm-btn-quiet{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-secondary);min-height:28px;padding:0 9px;font-size:12px}.dsm-btn-danger{border-color:var(--dsw-alias-state-error-primary);background:transparent;color:var(--dsw-alias-state-error-primary)}.dsm-btn-lock{border-color:#d49245;background:transparent;color:#d49245}.dsm-btn:focus-visible,.dsm-control:focus-visible,.dsm-select-trigger:focus-visible,.dsm-source-head:focus-visible,.dsm-switch:focus-visible,.dsm-upload-link:focus-visible,.dsm-file-remove:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
 .dsm-summary{display:grid;grid-template-columns:repeat(var(--dsm-stat-cols,3),minmax(0,1fr));overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dsm-stat{padding:12px 14px;border-right:1px solid var(--dsw-alias-border-l1);font-size:13px;color:var(--dsw-alias-label-secondary)}.dsm-stat:last-child{border-right:0}.dsm-stat strong,.dsm-stat-num{margin-right:5px;color:var(--dsw-alias-label-primary);font-size:17px;font-weight:680}.dsm-filters{display:flex;gap:9px}.dsm-search{flex:1}.dsm-source-filter{width:210px;flex:none}
 .dsm-token-panel{display:flex;flex-direction:column;gap:8px}.dsm-token-row{display:flex;gap:8px;align-items:center;min-width:0}.dsm-token-row .dsm-control{flex:1;min-width:0}
 .dsm-control,.dsm-select-trigger{box-sizing:border-box;width:100%;min-height:34px;padding:0 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}.dsm-control::placeholder{color:var(--dsw-alias-label-tertiary)}textarea.dsm-control{min-height:160px;padding-top:9px;resize:vertical;line-height:20px}.dsm-select{position:relative}.dsm-select-trigger{display:flex;align-items:center;justify-content:space-between;text-align:left;cursor:pointer}.dsm-select-menu{position:absolute;z-index:40;top:calc(100% + 5px);right:0;left:0;display:flex;max-height:260px;padding:5px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2)}.dsm-option{padding:8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;text-align:left;cursor:pointer}.dsm-option:hover,.dsm-option[aria-selected=true]{background:var(--dsw-alias-interactive-bg-hover)}
-.dsm-sources{display:flex;flex-direction:column;gap:9px}.dsm-source{overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dsm-source-head{box-sizing:border-box;display:flex;width:100%;min-height:48px;align-items:center;padding:0 13px}.dsm-source-head-main{display:flex;min-width:0;min-height:48px;flex:1;align-items:center;gap:10px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsm-source-head:hover,.dsm-row:hover,.dsm-trash-row:hover,.dsm-hist-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-source-title{font-size:14px;font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-count{color:var(--dsw-alias-label-tertiary);font-size:12px;flex:none}.dsm-path{min-width:0;margin-left:auto;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.dsm-source-actions{display:flex;align-items:center;gap:9px;margin-left:8px}.dsm-source-body{border-top:1px solid var(--dsw-alias-border-l1)}.dsm-source-note{padding:9px 13px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
+.dsm-sources{display:flex;flex-direction:column;gap:9px}.dsm-source{overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.dsm-source-head{box-sizing:border-box;display:flex;width:100%;min-height:48px;align-items:center;padding:0 13px}.dsm-source-head-main{display:flex;min-width:0;min-height:48px;flex:1;align-items:center;gap:10px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsm-source-head:hover,.dsm-row:hover,.dsm-trash-row:hover,.dsm-hist-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-source-title{font-size:14px;font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-count{color:var(--dsw-alias-label-tertiary);font-size:12px;flex:none}.dsm-path{min-width:0;margin-left:auto;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.dsm-source-actions{display:flex;align-items:center;gap:6px;margin-left:8px}.dsm-source-body{border-top:1px solid var(--dsw-alias-border-l1)}.dsm-source-note{padding:9px 13px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
 .dsm-table-head,.dsm-row{display:grid;grid-template-columns:minmax(180px,1fr) 120px 90px max-content;align-items:center;column-gap:12px;padding:0 13px}.dsm-table-head{min-height:32px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsm-row{min-height:58px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-row:last-child{border-bottom:0}.dsm-main{min-width:0}.dsm-name{overflow:hidden;font-size:13px;font-weight:570;text-overflow:ellipsis;white-space:nowrap}.dsm-note{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:19px;align-items:center;padding:0 6px;border:1px solid var(--dsw-alias-border-l3);border-radius:4px;color:var(--dsw-alias-label-secondary);font-size:10px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-enabled{color:var(--dsw-alias-state-success-primary);font-size:12px;white-space:nowrap}.dsm-disabled{color:#d49245;font-size:12px;white-space:nowrap}.dsm-shadowed{color:var(--dsw-alias-label-tertiary);font-size:12px;white-space:nowrap}.dsm-row-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px}
 .dsm-switch{position:relative;width:34px;height:20px;flex:none;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-border-l3);cursor:pointer}.dsm-switch:after{position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;content:"";transition:transform 160ms ease}.dsm-switch-on{background:var(--dsw-alias-state-success-primary)}.dsm-switch-on:after{transform:translateX(14px)}.dsm-switch:disabled{opacity:.45;cursor:default}.dsm-trash-row{display:flex;min-height:48px;align-items:center;padding:0 13px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:inherit;font:inherit;font-size:13px;cursor:pointer}.dsm-trash-count{margin-left:auto;padding:2px 7px;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:11px}.dsm-empty{padding:25px 14px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}.dsm-feedback{padding:9px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-secondary);font-size:12px}.dsm-warning{border-color:#d49245;color:#d49245}.dsm-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 .dsm-mask{position:fixed;z-index:1100;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.62)}.dsm-modal{box-sizing:border-box;display:flex;width:min(560px,100%)!important;max-height:min(760px,calc(100vh - 48px));min-width:0;flex-direction:column;gap:16px;padding:22px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}.dsm-modal-sm,.dsm-modal-import{width:min(480px,100%)!important}.dsm-modal-md{width:min(560px,100%)!important}.dsm-modal-lg,.dsm-modal-wide{width:min(720px,100%)!important}.dsm-modal-list{width:min(560px,100%)!important;height:min(640px,calc(100vh - 48px))!important;max-height:none!important;overflow:hidden}.dsm-modal-body{display:flex;min-height:0;flex-direction:column;gap:10px}.dsm-modal-list .dsm-modal-body{flex:1;overflow:auto;overscroll-behavior:contain}.dsm-modal-import{padding:24px}.dsm-modal-head{display:flex;align-items:flex-start;gap:12px}.dsm-modal-title{margin:0;flex:1;font-size:17px;line-height:24px;font-weight:670}.dsm-form,.dsm-field,.dsm-detail-section{display:flex;flex-direction:column}.dsm-form{gap:12px}.dsm-field{gap:6px}.dsm-label,.dsm-detail-title{font-size:12px}.dsm-label{color:var(--dsw-alias-label-secondary)}.dsm-detail-title{font-weight:650}.dsm-help{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:18px}.dsm-modal-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}.dsm-hidden-input{display:none}.dsm-dropzone{box-sizing:border-box;display:flex;width:100%;min-height:170px;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:22px;border:1px dashed var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);transition:border-color 180ms ease,background 180ms ease;cursor:pointer}.dsm-dropzone:hover,.dsm-dropzone-active{border-color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-interactive-bg-hover)}.dsm-dropzone-title{color:var(--dsw-alias-label-primary);font-size:18px;font-weight:700}.dsm-dropzone-copy{font-size:12px;line-height:18px;text-align:center}.dsm-upload-choices{display:flex;align-items:center;gap:7px}.dsm-upload-link,.dsm-file-remove{padding:0;border:0;background:transparent;font:inherit;font-size:12px;cursor:pointer}.dsm-upload-link{color:var(--dsw-alias-label-secondary)}.dsm-upload-link:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}.dsm-upload-link:disabled{opacity:.45;cursor:default}.dsm-upload-divider{color:var(--dsw-alias-label-tertiary);font-size:11px}.dsm-file{display:flex;align-items:center;gap:9px;padding:10px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px}.dsm-file-kind{display:inline-flex;min-width:30px;height:24px;align-items:center;justify-content:center;border-radius:5px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:700}.dsm-file-name{min-width:0;overflow:hidden;flex:1;text-overflow:ellipsis;white-space:nowrap}.dsm-file-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}.dsm-file-remove{width:24px;height:24px;color:var(--dsw-alias-label-secondary);font-size:18px}.dsm-upload-requirements{padding:1px 1px 0}.dsm-upload-requirements ul{display:flex;margin:7px 0 0;padding-left:18px;flex-direction:column;gap:5px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}.dsm-detail-section{gap:7px}.dsm-detail-path,.dsm-code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.dsm-detail-path{padding:8px 10px;border-radius:7px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);word-break:break-all}.dsm-code{max-height:280px;margin:0;padding:12px;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);line-height:18px;white-space:pre-wrap}.dsm-diag{padding:8px 10px;border-left:2px solid #d49245;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:12px}.dsm-trash-group-sub{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
@@ -88,7 +112,13 @@ window.__ModuleLoader__.load({
    「没有滚动条 + 内容缺一截」。列表项的尺寸一律由内容决定，滚动只交给 body 这一层。 */
 .dsm-modal-list .dsm-modal-body>*{flex:none}
 .dsm-fm{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-fm-row{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr);gap:10px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px;line-height:18px}.dsm-fm-row:last-child{border-bottom:0}.dsm-fm-key{color:var(--dsw-alias-label-secondary);word-break:break-word}.dsm-fm-raw{margin-left:5px;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px}.dsm-fm-val{min-width:0;color:var(--dsw-alias-label-primary);word-break:break-word;white-space:pre-wrap}
-@container(max-width:780px){.dsm-table-head{display:none}.dsm-row{grid-template-columns:minmax(0,1fr) max-content;gap:8px;padding:11px 13px}.dsm-row>.dsm-tags,.dsm-row>.dsm-status{grid-column:1}.dsm-row-actions{grid-column:2;grid-row:1 / span 3}.dsm-path{display:none}}@media(max-width:760px){.dsm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.dsm-title-row{flex-wrap:wrap}}@container(max-width:520px){.dsm-head{flex-direction:column}.dsm-actions{width:100%;margin-left:0}.dsm-actions .dsm-btn{flex:1}.dsm-filters{flex-direction:column}.dsm-source-filter{width:100%}.dsm-summary{grid-template-columns:1fr}}
+@container(max-width:780px){.dsm-table-head{display:none}.dsm-row{grid-template-columns:minmax(0,1fr) max-content;gap:8px;padding:11px 13px}.dsm-row>.dsm-tags,.dsm-row>.dsm-status{grid-column:1}.dsm-row-actions{grid-column:2;grid-row:1 / span 3}.dsm-path{display:none}
+/* 一个标签都没有的记忆（flat 且没有场景 / 派生标签）：那一行是空的，高度 0 却仍要付两个
+   8px 的行间距 —— 于是「描述」和「已启用」之间凭空多出 16px（用户实测）。让它不占位，
+   并把右侧动作组的跨度跟着收到两行。**只在这一档布局里做**：宽布局下标签是固定 120px 的
+   一列，抽掉它后面几列会整体左移。 */
+.dsm-row>.dsm-tags:empty{display:none}
+.dsm-row>.dsm-tags:empty~.dsm-row-actions{grid-row:1 / span 2}}@media(max-width:760px){.dsm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.dsm-title-row{flex-wrap:wrap}}@container(max-width:520px){.dsm-head{flex-direction:column}.dsm-actions{width:100%;margin-left:0}.dsm-actions .dsm-btn{flex:1}.dsm-filters{flex-direction:column}.dsm-source-filter{width:100%}.dsm-summary{grid-template-columns:1fr}}
 .dsm-hist-row{display:flex;align-items:center;gap:11px;padding:10px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-hist-row:last-child{border-bottom:0}.dsm-hist-main{min-width:0;flex:1}.dsm-hist-title{overflow:hidden;font-size:13px;font-weight:580;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd-missing{color:var(--dsw-alias-state-error-primary)}.dsm-hist-actions{display:flex;gap:6px;flex:none}.dsm-hist-check,.dsm-hist-group-check{flex:none;width:15px;height:15px;margin:0 4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}.dsm-hist-group-head{gap:10px}.dsm-hist-group-extra{display:flex;align-items:center;gap:8px;flex:none;margin-left:4px}.dsm-hist-group-extra .dsm-tag{flex:none}.dsm-hist-dir-missing{flex:none;color:var(--dsw-alias-state-error-primary);font-size:11px;white-space:nowrap}.dsm-hist-register-path{margin-top:-4px;color:var(--dsw-alias-label-tertiary);font-family:var(--dsw-font-mono,monospace);font-size:11px;word-break:break-all}.dsm-hist-batch{display:flex;align-items:center;gap:8px;margin-left:2px;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l2)}.dsm-hist-batch-count{color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-hist-batch-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none}.dsm-dir-row{display:flex;gap:8px}.dsm-dir-row .dsm-control{flex:1}.dsm-dir-list{display:flex;max-height:220px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-dir-item{display:flex;width:100%;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}.dsm-dir-item:last-child{border-bottom:0}.dsm-dir-item:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-dir-item::before{content:"📁";margin-right:8px;font-size:12px}
 .dsm-rule-shadowed .dsm-name,.dsm-rule-shadowed .dsm-note{color:var(--dsw-alias-state-error-primary)}.dsm-rule-off .dsm-name,.dsm-rule-off .dsm-note{color:var(--dsw-alias-label-tertiary)}.dsm-rule-shadow-hint{margin-top:3px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:17px}.dsm-rule-invalid{border-color:var(--dsw-alias-state-error-primary)!important}.dsm-rule-hint{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:17px}.dsm-rule-budget{display:flex;flex-direction:column;gap:6px}.dsm-budget-meta{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.dsm-budget-meta strong{margin-right:0;font-size:13px;font-weight:680}.dsm-budget-over-text{color:var(--dsw-alias-state-error-primary);font-size:11px}.dsm-budget-bar{height:6px;overflow:hidden;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover)}.dsm-budget-fill{height:100%;border-radius:99px;background:var(--dsw-alias-state-success-primary);transition:width 160ms ease}.dsm-budget-fill.dsm-budget-over{background:var(--dsw-alias-state-error-primary)}.dsm-char-count{color:var(--dsw-alias-label-tertiary);font-size:11px}.dsm-char-over{color:var(--dsw-alias-state-error-primary)}
 .dsm-combo-row{display:flex;gap:8px}.dsm-combo-row .dsm-control{flex:1}
@@ -229,6 +259,12 @@ window.__ModuleLoader__.load({
 .dsm-inject-domains{display:flex;flex-wrap:wrap;gap:7px 18px;padding:0 2px}
 .dsm-inject-domain{display:inline-flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}
 .dsm-inject-domain input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
+/* 注入实况（只读）：与「注入」设置同屏。行 = 域 + 体积 + 状态胶囊，点域名展开正文。 */
+.dsm-inject-live-actions{display:flex;flex:none;align-items:center;gap:6px;margin-left:auto}
+.dsm-inject-live-toggle{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}
+.dsm-inject-live-toggle:hover{text-decoration:underline}
+.dsm-inject-live-toggle:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
+.dsm-inject-live-size{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
 .dsm-reach-name{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .dsm-reach-chip{display:inline-flex;min-height:22px;align-items:center;padding:0 9px;border:1px solid var(--dsw-alias-border-l3);border-radius:6px;color:var(--dsw-alias-label-secondary);font-size:11px;white-space:nowrap}
 .dsm-reach-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
@@ -277,6 +313,58 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
       tag.dataset.pluginCss = id
       tag.textContent = CSS
       document.head.appendChild(tag)
+    }
+
+    /**
+     * 「两种状态文案 + 定宽」的按钮内容：两份文案都渲染、叠在同一格，隐身那份只负责占位
+     * （配合 `.dsm-btn.dsm-btn-bulk` 的两段类名选择器）—— 按钮宽度恒等于较宽的那个文案，
+     * 状态切换时按钮不跳宽、整行也不重排。「全选 ↔ 取消全选」与「刷新 ↔ 刷新中…」共用这一套。
+     * 不写死像素宽度是有意的：中文「取消全选 / 刷新中…」与英文各自自适应，加语言不用改样式。
+     */
+    function fixedLabelPair(label, other) {
+      return [
+        React.createElement('span', { key: 'v', className: 'dsm-bulk-label' }, label),
+        React.createElement('span', { key: 'g', className: 'dsm-bulk-ghost', 'aria-hidden': 'true' }, other),
+      ]
+    }
+
+    /**
+     * 垃圾桶图标：给「移除来源」这类破坏性操作做纯图标按钮用（按钮本身必须带 title /
+     * aria-label —— 图标按钮没有可见文字，说明只能靠它们，别省）。
+     */
+    function TrashIcon(props) {
+      var size = (props && props.size) || 14
+      return React.createElement('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' },
+        React.createElement('path', { fill: 'currentColor', d: 'M6.5 1h3l.5 1h3v1.5H3V2h3zM4 5h8l-.6 9.2a1 1 0 0 1-1 .8H5.6a1 1 0 0 1-1-.8z' }))
+    }
+
+    /**
+     * 回形针图标：bundle 记忆的「N 个附件」标签用（表示"随记忆一起存放的文件"）。
+     * 只有一并带文字时才用它 —— 纯图标按钮的说明必须写在 title / aria-label 里。
+     */
+    function PaperclipIcon(props) {
+      var size = (props && props.size) || 11
+      return React.createElement('svg', { viewBox: '0 0 16 16', width: size, height: size, fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', 'aria-hidden': 'true', focusable: 'false' },
+        React.createElement('path', { d: 'M9.6 4.2 5.1 8.7a1.9 1.9 0 0 0 2.7 2.7l5-5a3.4 3.4 0 0 0-4.8-4.8L3 6.6a4.9 4.9 0 0 0 6.9 6.9l4.1-4.1' }))
+    }
+
+    /**
+     * 刷新按钮（全站八处管理页共用：MCP / 技能 / 提示词 / 会话 / 场景 / 子智能体 / 记忆 / 兼容）。
+     * 宽度同样按两种文案里更宽的那个固定（见 fixedLabelPair），所以点一下「刷新」不会因为
+     * 文案变成「刷新中…」把整行挤走。
+     *
+     * @param tFn  取词函数 —— MCP 页传 `mt`（模块作用域的 t 会被宿主 locale 覆盖），其余页传各自的 t
+     * @param busy 是否正在刷新：决定显示哪份文案（通常也同时决定 disabled）
+     * @param args 透传给 <button> 的其余属性（className / disabled / onClick / title …）
+     */
+    function refreshButton(tFn, busy, args) {
+      var idle = tFn('btn.refresh')
+      var working = tFn('btn.refreshing')
+      // 定宽靠 `.dsm-btn.dsm-btn-bulk`（两段类名，见 CSS 里的注释）—— 由这里统一补上，
+      // 调用方只管自己的样式，不用记这个类。
+      var cls = ((args && args.className) || 'dsm-btn dsm-btn-secondary') + ' dsm-btn-bulk'
+      return React.createElement('button', Object.assign({ type: 'button' }, args, { className: cls }),
+        fixedLabelPair(busy ? working : idle, busy ? idle : working))
     }
 
     // Optional access token for write ops (host config.token or
@@ -364,6 +452,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
       // 注入设置（本插件五个注入域的开关；见 src/context-inject.ts）。它和可达性矩阵是一体两面：
       // 矩阵说"到不到得了"，这里决定"要不要"。读不到时这一节不显示。
       const [inject, setInject] = React.useState(null)
+      // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 本次运行的投递统计。
+      // 与「注入」设置是一体两面：设置说"要送什么"，这里说"实际送到了什么"。
+      const [live, setLive] = React.useState(null)
+      const [liveOpen, setLiveOpen] = React.useState('')
+      const [liveCopied, setLiveCopied] = React.useState(false)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState(null)
       const apply = function (r, alive) {
@@ -387,6 +480,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           .then(function (r) { if (alive !== false && r && r.ok && r.settings) setInject(r.settings) })
           .catch(function () { /* 读不到 → 不渲染这一节 */ })
       }
+      const loadLive = function (alive) {
+        apiCall('injection-live', {})
+          .then(function (r) { if (alive !== false && r && r.ok) setLive(r) })
+          .catch(function () { /* 读不到 → 不渲染这一节 */ })
+      }
       React.useEffect(function () {
         let alive = true
         setBusy(true)
@@ -395,6 +493,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           .catch(function (e) { if (alive) { setError(String((e && e.message) || e)); setBusy(false) } })
         loadReach(alive)
         loadInject(alive)
+        loadLive(alive)
         return function () { alive = false }
       }, [])
       const reload = function () {
@@ -404,6 +503,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           .catch(function (e) { setError(String((e && e.message) || e)); setBusy(false) })
         loadReach(true)
         loadInject(true)
+        loadLive(true)
       }
       // 保存注入设置：先乐观更新界面（点一下就该有反馈），服务端返回值到达后以其为准；
       // 失败则重新拉一次。可达性矩阵跟着刷新 —— 芯片要反映新的开关状态。
@@ -487,6 +587,87 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                   } }),
                   React.createElement('span', null, t('compat.inject.domain.' + key)))
               })))))
+      }
+      // 注入实况：紧挨「注入」设置块下方。数据来自 `injection-live`（宿主读最近活跃会话的
+      // 可见表面），是"回放"不是"重算"—— 界面显示已注入而模型实际没收到时（场景接管、
+      // 压制型预设、开关被关、压缩后还没补发），这里一眼可见。
+      // 排版口径：与可达性矩阵同款（名称 + 状态胶囊），正文默认收起、点域名展开；
+      // 体积与 ≈tokens 只做展示（token 是估算，标「≈」）。
+      if (live) {
+        const domainLabel = function (key) { return t('compat.inject.domain.' + key) }
+        const fmtSize = function (bytes) {
+          var v = Number(bytes) || 0
+          if (v < 1024) return v + ' B'
+          return (Math.round((v / 1024) * 10) / 10) + ' KB'
+        }
+        // 中英混合估算：ASCII 按 4 字符/词、非 ASCII 按 2 字符/词（只影响展示）。
+        const estTokens = function (text) {
+          var ascii = 0
+          var wide = 0
+          for (var i = 0; i < text.length; i += 1) { if (text.charCodeAt(i) < 128) ascii += 1; else wide += 1 }
+          return Math.ceil(ascii / 4 + wide / 2)
+        }
+        // 状态 → 胶囊：绿 = 本插件注入且已在上下文；琥珀只留给"该投却没投"。
+        // 官方载体（技能 / 提示词在标准类预设下由官方送）、已关闭、无内容一律灰的
+        // —— 它们都不是问题，报成琥珀会把用户自己的选择读成故障（用户 2026-09-16 指出）。
+        const stateOf = function (row) {
+          if (row.state === 'in-context') return { cls: ' dsm-compat-pill-ok', text: t('compat.live.state.inContext'), title: '' }
+          if (row.state === 'absent') return { cls: ' dsm-compat-pill-warn', text: t('compat.live.state.absent'), title: t('compat.live.state.absent.title') }
+          if (row.state === 'official') return { cls: '', text: t('compat.live.state.official'), title: t('compat.live.state.official.title') }
+          if (row.state === 'off') return { cls: '', text: t('compat.live.state.off'), title: '' }
+          if (row.state === 'empty') return { cls: '', text: t('compat.live.state.empty'), title: '' }
+          if (row.state === 'cleared') return { cls: '', text: t('compat.live.state.cleared'), title: '' }
+          return { cls: '', text: t('compat.live.state.unknown'), title: '' }
+        }
+        // 有正文的域就是"模型看到的内容"：本插件注入的与官方注入的（技能 / 提示词）都算。
+        const hasText = function (row) { return (row.state === 'in-context' || row.state === 'official') && row.text !== '' }
+        const copyAll = function () {
+          const parts = []
+          ;(live.domains || []).forEach(function (row) {
+            if (hasText(row)) parts.push('## ' + domainLabel(row.key) + '\n' + row.text)
+          })
+          const text = parts.join('\n\n')
+          if (!text) return
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(function () {
+                setLiveCopied(true)
+                setTimeout(function () { setLiveCopied(false) }, 1500)
+              })
+            }
+          } catch (e) { /* 剪贴板不可用就算了：正文仍可手动选中复制 */ }
+        }
+        const delivered = live.delivered || {}
+        const deliveredText = delivered.count > 0
+          ? t('compat.live.delivered', { count: delivered.count, time: new Date(delivered.lastAt).toTimeString().slice(0, 5) })
+          : t('compat.live.never')
+        const canCopy = (live.domains || []).some(hasText)
+        push(React.createElement('section', { className: 'dsm-compat-section' },
+          React.createElement('div', { className: 'dsm-compat-section-head' },
+            React.createElement('h3', { className: 'dsm-compat-section-title' }, t('compat.live.title')),
+            React.createElement('span', { className: 'dsm-compat-section-hint' }, t('compat.live.hint') + ' · ' + deliveredText),
+            React.createElement('span', { className: 'dsm-inject-live-actions' },
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !canCopy, onClick: copyAll },
+                liveCopied ? t('compat.live.copied') : t('compat.live.copy')))),
+          live.hasAgent === false
+            ? React.createElement('div', { className: 'dsm-empty' }, t('compat.live.noAgent'))
+            : React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+              (live.domains || []).map(function (row) {
+                const st = stateOf(row)
+                const open = liveOpen === row.key
+                const canOpen = hasText(row)
+                return React.createElement('div', { className: 'dsm-compat-mod-row', key: row.key },
+                  React.createElement('span', { className: 'dsm-compat-name' },
+                    canOpen
+                      ? React.createElement('button', { type: 'button', className: 'dsm-inject-live-toggle', onClick: function () { setLiveOpen(open ? '' : row.key) } },
+                        (open ? '▾ ' : '▸ ') + domainLabel(row.key))
+                      : React.createElement('span', null, domainLabel(row.key)),
+                    canOpen
+                      ? React.createElement('span', { className: 'dsm-inject-live-size' }, '· ' + fmtSize(row.bytes) + ' · ' + t('compat.live.est', { count: estTokens(row.text) }))
+                      : null),
+                  React.createElement('span', { className: 'dsm-compat-pill' + st.cls, title: st.title || undefined }, st.text),
+                  open && canOpen ? React.createElement('pre', { className: 'dsm-code dsm-compat-mod-self' }, row.text) : null)
+              }))))
       }
       if (error) body.push(React.createElement('div', { className: 'dsm-feedback dsm-error' }, t('compat.failed') + ': ' + error))
       if (!busy && !data && !error) body.push(React.createElement('div', { className: 'dsm-empty' }, t('compat.empty')))
@@ -649,8 +830,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
               React.createElement('h2', { className: 'dsm-title' }, t('compat.title'))),
             React.createElement('p', { className: 'dsm-desc' }, t('compat.desc')))),
         React.createElement('div', { className: 'dsm-actions' },
-          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: reload },
-            busy ? t('btn.refreshing') : t('btn.refresh'))),
+          refreshButton(t, busy, { className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: reload })),
         body)
     }
 
@@ -665,7 +845,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
     const DICT = {
       zh: {
         "title": "技能", "desc": "管理技能：启停、导入、创建、回收站。", "link.project": "GitHub", "link.feedback": "问题反馈",
-        "btn.create": "新增技能", "btn.import": "导入技能", "btn.refresh": "刷新", "btn.refreshing": "刷新中…", "btn.cancel": "取消", "btn.close": "关闭", "export.hint": "导出为 zip，写入你指定的目录；只读源文件，不改动任何数据。", "export.outDir": "导出目录", "export.outDir.placeholder": "例如 D:////backup", "export.pickDir": "选择导出目录", "export.submit": "导出", "export.busy": "导出中…", "export.done": "已导出 {count} 个文件到 {path}", "scenes.lock.lock": "锁定", "scenes.lock.unlock": "解锁", "scenes.lock.tag": "已锁定", "scenes.lock.hint": "锁定后五个管理域（MCP / 技能 / 子智能体 / 记忆 / 提示词）整体只读；场景启停不受影响", "scenes.lock.blockedEdit": "场景已锁定：先解锁再修改", "scenes.lock.notActive": "场景未启动：先启动再锁定", "scenes.lock.blockedExit": "场景已锁定：先解锁再关闭", "lock.banner": "有场景处于锁定状态：MCP / 技能 / 子智能体 / 记忆 / 提示词已整体冻结，先到场景页解锁再修改。", "scene.switch.banner": "当前处于场景「{scene}」：开关由场景档案定义，页面上的开关已停用——到场景页的档案编辑器里改（改完立即生效，档案会存下来、下次进这个场景照旧生效；退出场景仍按进场景前的状态还原），或先退出场景。", "scene.switch.title": "场景「{scene}」中：开关请到场景档案里改", "export.empty": "没有可导出的条目", "export.pickAll": "全选", "export.pickNone": "全不选", "export.group.count": "{count} 项", "export.missing": "；跳过 {count} 项（文件不存在）：{names}", "export.skills": "导出技能", "export.subagents": "导出子智能体", "export.presets": "导出提示词", "export.memories": "导出记忆", "btn.detail": "查看详情", "btn.trash": "移到回收站", "btn.restore": "恢复", "btn.delete.forever": "永久删除", "btn.file.pick": "选择文件", "btn.folder.pick": "选择文件夹", "btn.create.now": "创建技能", "btn.disable": "停用", "btn.enable": "启用", "btn.open.editor": "用系统编辑器打开", "btn.activate": "启用这个", "btn.activate.title": "把当前来源的版本设为同名技能的首选并启用（不改动任何源文件）", "btn.unprefer": "取消首选", "btn.unprefer.title": "取消同名首选，回到按来源优先级自动选择",
+        "btn.create": "新增技能", "btn.import": "导入技能", "btn.refresh": "刷新", "btn.refreshing": "刷新中…", "btn.cancel": "取消", "btn.close": "关闭", "export.hint": "导出为 zip，写入你指定的目录；只读源文件，不改动任何数据。", "export.outDir": "导出目录", "export.outDir.placeholder": "例如 D:////backup", "export.pickDir": "选择导出目录", "export.submit": "导出", "export.busy": "导出中…", "export.done": "已导出 {count} 个文件到 {path}", "scenes.lock.lock": "锁定", "scenes.lock.unlock": "解锁", "scenes.lock.tag": "已锁定", "scenes.lock.hint": "锁定后五个管理域（MCP / 技能 / 子智能体 / 记忆 / 提示词）整体只读；场景启停不受影响", "scenes.lock.blockedEdit": "场景已锁定：先解锁再修改", "scenes.lock.notActive": "场景未启动：先启动再锁定", "scenes.lock.blockedExit": "场景已锁定：先解锁再关闭", "lock.banner": "有场景处于锁定状态：MCP / 技能 / 子智能体 / 记忆 / 提示词已整体冻结，先到场景页解锁再修改。", "scene.switch.banner": "当前处于场景「{scene}」：这里的开关照常可用，改动会同步写进该场景的档案（改完立即生效、下次进这个场景照旧生效；退出场景仍按进场景前的状态还原）。", "scene.sync.failed": "注意：改动已生效，但没能同步写进场景档案（{error}）——本次进场景期间有效，重新进这个场景时会按旧档案应用。", "agm.apply.rebindScene": "场景「{scene}」接管中：应用这一份会把该场景改绑到它（同步写入场景档案）", "export.empty": "没有可导出的条目", "export.pickAll": "全选", "export.pickNone": "取消全选", "export.group.count": "{count} 项", "export.missing": "；跳过 {count} 项（文件不存在）：{names}", "export.skills": "导出技能", "export.subagents": "导出子智能体", "export.presets": "导出提示词", "export.memories": "导出记忆", "btn.detail": "查看详情", "btn.trash": "移到回收站", "btn.restore": "恢复", "btn.delete.forever": "永久删除", "btn.file.pick": "选择文件", "btn.folder.pick": "选择文件夹", "btn.create.now": "创建技能", "btn.disable": "停用", "btn.enable": "启用", "btn.open.editor": "用系统编辑器打开", "btn.activate": "启用这个", "btn.activate.title": "把当前来源的版本设为同名技能的首选并启用（不改动任何源文件）", "btn.unprefer": "取消首选", "btn.unprefer.title": "取消同名首选，回到按来源优先级自动选择",
         "btn.custom.add": "添加目录", "btn.custom.remove": "移除", "btn.openDir": "选择",
         "btn.source.remove": "移除来源", "btn.source.remove.title": "不再读取这个来源（源文件不动，之后可在回收站里恢复）", "btn.source.restore": "恢复", "btn.source.forget": "永久删除",
         "trash.section.dirs": "目录", "trash.section.skills": "技能", "trash.section.dirs.sub": "只是不再读取，磁盘文件一个字节都不动", "trash.section.dirs.empty": "没有被移除的来源", "trash.section.skills.sub": "文件真的被移走了：恢复能还原，永久删除会删掉文件", "trash.section.presets.sub": "预设目录已移走：恢复能还原，永久删除会删掉文件", "trash.section.scenes.sub": "场景记录、档案与它的记忆都在这里：恢复会整条放回", "trash.section.agents.sub": "人设文件已移走：恢复能还原，永久删除会删掉文件",
@@ -776,6 +956,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "compat.inject.domain.memory": "场景和记忆", "compat.inject.domain.mcp": "MCP",
         "compat.inject.domain.subagents": "子智能体", "compat.inject.domain.prompt": "提示词",
         "compat.inject.domain.skills": "技能",
+        "compat.live.title": "注入实况", "compat.live.hint": "模型当前实际看到的内容（只读）",
+        "compat.live.never": "本次运行还没有投递", "compat.live.delivered": "已投递 {count} 条 · 最近 {time}",
+        "compat.live.copy": "复制全文", "compat.live.copied": "已复制", "compat.live.noAgent": "还没有会话：发一条消息后再来看",
+        "compat.live.state.inContext": "在上下文中", "compat.live.state.absent": "未投递", "compat.live.state.cleared": "已清空",
+        "compat.live.state.off": "已关闭", "compat.live.state.unknown": "没有会话",
+        "compat.live.state.official": "官方注入", "compat.live.state.official.title": "提示词与技能目录在标准类预设下由官方通道送达，本插件不重复注入（极简这类官方没挂的预设才由本插件兜底）",
+        "compat.live.state.empty": "无内容", "compat.live.est": "≈{count} token",
+        "compat.live.state.absent.title": "本插件负责这个域，但当前不在上下文里（可能刚被压缩，下一步会自动补发）",
         "compat.reach.mark.memory": "场景和记忆", "compat.reach.mark.agentsMd": "提示词", "compat.reach.mark.skill": "技能", "compat.reach.mark.mcp": "MCP", "compat.reach.mark.subagent": "子智能体",
         "compat.reach.default": "默认",
         "compat.reach.whyUnknown": "判断不了", "compat.reach.broken": "预设损坏",
@@ -792,14 +980,21 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "scenes.field.desc.limit": "最多 {count} 字；超出部分在卡片上省略。",
         "scenes.profile.mcp": "MCP {count} 台", "scenes.profile.skills": "技能 {count} 个", "scenes.profile.subagents": "子智能体 {count} 个", "scenes.profile.memories": "记忆 {count} 条",
         "scenes.mcp.hint": "添加「MCP 工具集」后，勾选要启用的服务器（含未运行的）；「选工具」可细化到具体工具。没勾的、以及整段没建的，进场景时一律停用（含停掉正在运行的进程）。",
-        "scenes.seg.selectAll": "全选", "scenes.seg.clear": "清空", "scenes.seg.checked": "{checked}/{total} 已勾选",
+        "scenes.seg.checked": "{checked}/{total} 已勾选",
+        "bulk.selectAll": "全选", "bulk.unselectAll": "取消全选",
+        "bulk.head.title": "对当前筛选后可见、且可切换的技能批量启停（被同名覆盖的副本不算）",
+        "source.bulk.title": "对这个目录下当前可见、且可切换的技能批量启停（被同名覆盖的副本不算）",
+        "bulk.enabled": "已启用", "bulk.disabled": "已停用",
+        "bulk.done.skills": "{action} {count} 个技能（失败 {failed}）", "bulk.done.memories": "{action} {count} 条记忆（失败 {failed}）", "memory.bulk.partial": "{action} {count} 条记忆后中止：{error}",
         "scenes.archive.sectionOff": "未定义 = 全部停用",
         "scenes.archive.summary": "档案：MCP {mcp} 台 · 技能 {skills} 个 · 子智能体 {subagents} 个",
         "scenes.archive.note": "勾选集语义：勾的启用、没勾的停用；段未定义 = 一个都没勾 = 该域全部停用。MCP 会真的启停服务器进程，技能会启停它所在的来源。退出场景时按进场景前的状态精确还原。",
         "scenes.mcp.noServers": "还没有可选的 MCP 服务器", "scenes.mcp.toolCount": "{count} 个工具", "scenes.skills.empty": "还没有可选的技能",
         "scenes.mcp.allTools": "全部工具", "scenes.mcp.pickedCount": "指定 {count} 个工具", "scenes.mcp.notRunning": "未运行", "scenes.mcp.edit": "编辑", "scenes.mcp.done": "完成", "scenes.mcp.noteLabel": "场景备注", "scenes.mcp.notePlaceholder": "进入该场景时覆盖全局备注；退出后恢复", "scenes.mcp.hasNote": "有备注",
-        "scenes.mcp.toolsOf": "选择工具", "scenes.mcp.probeTools": "启动服务器读取工具", "scenes.mcp.unknownCount": "工具数未知 · 点「编辑」读取", "scenes.mcp.noteHint": "此备注随场景保存；仅在该场景本段**勾选**了这台服务器时，进入场景才会覆盖「MCP」页与系统提示词里的备注，退出后自动恢复。", "scenes.mcp.noTools": "该服务器当前没有可列出的工具（从未运行过，或已配置的工具尚未被记录）", "scenes.mcp.drillHint": "勾选 = 该场景下启用；不勾 = 停用。「全选」= 全部工具。",
-        "scenes.skills.hint": "添加「技能集」后，勾选该场景下启用的技能。没勾的、以及整段没建的，进场景时一律停用（退出按进场景前的开关还原）。", "scenes.subagents.hint": "勾选本场景要打开的人设；没勾的、以及整段没建的，进场景时一律关闭（退出按进场景前的开关还原）。", "scenes.subagents.empty": "还没有人设——到「子智能体」页创建。",
+        "scenes.mcp.toolsOf": "选择工具", "scenes.mcp.probeTools": "启动服务器读取工具", "scenes.mcp.unknownCount": "工具数未知 · 点「编辑」读取", "scenes.mcp.noteHint": "此备注随场景保存；仅在该场景本段**勾选**了这台服务器时，进入场景才会覆盖「MCP」页与系统提示词里的备注，退出后自动恢复。", "scenes.mcp.noTools": "该服务器当前没有可列出的工具（从未运行过，或已配置的工具尚未被记录）", "scenes.mcp.drillHint": "勾选 = 该场景下启用；不勾 = 停用。「全选」= 全部工具（再点一次成「取消全选」= 全部停用）。",
+        "scenes.skills.hint": "添加「技能集」后，勾选该场景下启用的技能。没勾的、以及整段没建的，进场景时一律停用（退出按进场景前的开关还原）。被同名技能覆盖的副本与结构不完整的技能不能勾——它们在这个场景里不可能生效。", "scenes.subagents.hint": "勾选本场景要打开的人设；没勾的、以及整段没建的，进场景时一律关闭（退出按进场景前的开关还原）。", "scenes.subagents.empty": "还没有人设——到「子智能体」页创建。",
+        "scenes.skills.shadowed.hint": "被同名技能覆盖，在这个场景里不可能生效，因此不能勾选。要改用这一份，请到「技能」页点它的「启用这个」。",
+        "scenes.skills.invalid.hint": "技能结构不完整（缺 frontmatter / 名字非法 / 描述为空），无法启停，因此不能勾选。",
         "scenes.filter.skills": "筛选技能/目录名称", "scenes.filter.subagents": "筛选人设（名称或描述）", "scenes.filter.servers": "筛选服务器",
        
         "scenes.mem.title": "记忆", "scenes.mem.search": "在本场景内筛选记忆（名称或描述）",
@@ -809,7 +1004,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "memory.archive.tools": "MCP 工具集", "memory.archive.skills": "技能集", "memory.archive.subagents": "子智能体绑定", "memory.archive.memories": "记忆", "memory.archive.applyFailed": "运行时未能应用：{reason}",
         "memory.archive.removeSection": "移除段", "memory.archive.save": "保存到场景",
         "memory.archive.addTools": "+ 添加 MCP 工具集", "memory.archive.addSkills": "+ 添加技能集", "memory.archive.addSubagents": "+ 添加子智能体绑定",
-        "memory.archive.stale": "失效项（已不存在，已跳过）: {items}",
+        "memory.archive.stale": "已跳过 {items}（已不存在，或被同名技能覆盖 / 结构不完整——本就不生效）",
         "memory.result.archiveSaved": "已保存场景档案：{name}", "memory.result.modeSet": "已进入模式：{name}", "memory.result.modeSwitched": "已切换 {mcp} 台服务器 / {skills} 个来源", "memory.result.modeExited": "已退出模式",
         "memory.desc": "管理记忆：启用的记忆进入系统提示词，可按场景分别启用。",
         "memory.btn.refresh": "刷新", "memory.btn.new": "新增记忆", "memory.btn.create": "创建", "memory.btn.save": "保存",
@@ -843,7 +1038,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "memory.field.body": "正文（Markdown）", "memory.field.body.placeholder": "写下要记住的约定、流程和边界…",
         "memory.field.form": "形态", "memory.field.attach": "附件",
         "memory.attach.add": "添加附件", "memory.attach.empty": "暂无附件", "memory.attach.pending": "待上传", "memory.attach.remove": "移除附件",
-        "memory.attach.hint": "附件随记忆存放，不会进入提示词", "memory.attach.flat": "flat 是单文件，不能带附件", "memory.attach.tooLarge": "附件过大：{name}（上限 {limit} MB）",
+        "memory.attach.hint": "附件随记忆存放，不会进入提示词",
+        "memory.attach.count.one": "{count} 个附件", "memory.attach.count.other": "{count} 个附件",
+        "memory.attach.tip": "点击管理附件：{count} 个 · 共 {size} —— {names}",
+        "memory.attach.tip.empty": "还没有附件——点击添加",
+        "memory.attach.more": "，另 {count} 个", "memory.attach.sep": "、", "memory.attach.flat": "flat 是单文件，不能带附件", "memory.attach.tooLarge": "附件过大：{name}（上限 {limit} MB）",
         "memory.delete.title": "移入回收站？", "memory.delete.desc": "「{name}」将移入回收站，可恢复",
         "memory.result.created": "已创建记忆：{name}", "memory.result.updated": "已保存记忆：{name}", "memory.result.removed": "已移入回收站：{name}", "memory.result.toggled": "已更新记忆状态：{name}", "memory.result.active": "已更新启用场景",
         "memory.result.restored": "已恢复记忆：{name}", "memory.result.trashRemoved": "已永久删除：{name}",
@@ -899,11 +1098,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "import.none": "没有导入任何文件（全部被跳过）", "import.skipped": "已跳过：{items}",
         "error.import.noFiles": "没有选择要导入的文件",
         "nav.title": "工具",
-        "agm.stat.total": "个提示词", "agm.stat.active": "个生效中", "agm.loading": "加载中…", "agm.empty": "暂无提示词，点「新增提示词」创建", "agm.btn.delete.blocked.refs": "不能删除：{refs}。先改掉引用（换绑提示词 / 退出场景 / 应用别的预设）再删除。", "agm.ref.sep": "；", "agm.ref.scene": "场景「{scene}」绑定了它", "agm.ref.sceneActive": "场景「{scene}」（已启用）绑定了它", "agm.ref.file": "AGENTS.md 当前内容就是它", "agm.ref.restore": "退出场景后要恢复的全局提示词", "agm.sceneLock.notice": "场景「{scene}」接管中：当前生效的是它绑定的「{id}」。应用别的预设会绕过场景绑定——要换提示词，请到场景页修改该场景的绑定，或先退出场景。", "agm.apply.blockedScene": "场景「{scene}」接管中：应用别的预设会绕过场景绑定。要换提示词，请到场景页修改该场景的绑定，或先退出场景。", "agm.active": "生效中", "agm.active.hint.scene": "当前生效：场景「{scene}」绑定的提示词预设", "agm.active.hint.file": "当前生效：AGENTS.md 就是这一份", "agm.file.applied": "文件里是它", "agm.file.applied.hint": "AGENTS.md 当前内容是它；启用的场景绑了别的提示词，切换场景时已按场景把文件改成那一份", "agm.apply.hint": "应用后写入 AGENTS.md；宿主每轮重读该文件，下一轮对话生效", "agm.btn.reapply": "重新应用", "agm.btn.apply": "应用", "agm.applyModal.title": "应用预设", "agm.edit.title": "编辑预设", "agm.remove.title": "删除预设", "agm.btn.edit": "编辑", "agm.btn.delete": "删除", "agm.btn.new": "新增提示词", "agm.btn.import": "导入提示词", "agm.result.imported": "已导入 {count} 份预设：{names}", "agm.btn.save": "保存", "agm.btn.create": "创建", "agm.btn.confirmRemove": "确认删除", "agm.btn.confirmApply": "确认应用", "agm.field.id": "id（目录名）", "agm.field.id.hint": "中文、空格、点都可以；不能含斜杠、反斜杠与 : * ? < > 等符号；≤64 字符。改 id 等于目录改名。", "agm.field.id.placeholder": "例如：工作基线", "agm.field.content": "内容", "agm.field.content.placeholder": "直接写这份预设的正文（Markdown）；留空 = 用空白模板", "agm.field.copyFrom": "或从现有预设复制", "agm.field.copyFrom.none": "不复制（空白模板）", "agm.field.desc": "描述（只给使用者看）", "agm.field.desc.placeholder": "这份预设是干什么的、什么时候用它", "agm.result.renamed": "已保存，id 改为「{id}」", "agm.result.rebound": "（同步了 {count} 个场景的绑定）", "agm.remove.suffix": " ？此操作不可恢复。", "agm.apply.prefix": "将把 ", "agm.apply.suffix": " 的内容写入 ~/.dsh/AGENTS.md。", "agm.apply.note": "下一轮对话生效；当前内容已备份到 __last-applied__（保留最近 5 代）", "hist.err.load": "加载失败", "hist.err.unarchive": "恢复失败", "hist.err.delete": "删除失败", "hist.err.retention": "设置失败", "hist.err.import": "导入失败", "hist.err.sessions": "加载会话列表失败", "hist.err.export": "导出失败", "hist.err.archive": "归档失败", "hist.retention.forever": "永久保留", "hist.retention.days": "{count} 天", "hist.arch.all": "全部会话", "hist.arch.archived": "仅已归档", "hist.arch.live": "仅未归档", "hist.arch.missing": "仅目录丢失", "hist.ws.all": "全部工作区", "hist.ungrouped": "未分组", "hist.group.removed": "已移除", "hist.group.removed.hint": "该目录当前在 DSH 里没有工作区登记；分组按会话目录重建，重新登记后会自动并回同一组", "hist.group.dirMissing": "目录已不存在", "hist.group.dirMissing.hint": "工作区目录已从磁盘删除，无法重新登记；组内会话仍可恢复（归入未分组）或永久删除", "hist.btn.registerWs": "重新登记", "hist.btn.registerWs.hint": "重新登记这个目录，并把该目录下已有的会话挂回该组（只写工作区记账，不移动、不删除文件与会话）", "hist.register.title": "重新登记？", "hist.register.body": "将为「{title}」在 DSH 中重新创建一条工作区登记，并把该目录下已有的会话挂回这个工作区（恢复其分组）。只写工作区记账，不移动、不删除任何文件与会话。", "hist.register.confirm": "确认登记", "hist.register.done.title": "已重新登记", "hist.register.done.body": "工作区「{title}」已登记；该目录下的归档会话会在刷新后并入这一组。", "hist.register.done.attached": "已把该目录下 {count} 个已有会话挂回这个工作区。", "hist.register.done.skipped": "{count} 个会话未能挂回：{reason}", "hist.err.register": "登记失败", "scenes.field.prompt": "提示词预设", "scenes.agents.note.applied": "已把「{id}」写入 AGENTS.md", "scenes.agents.note.restored": "已恢复进场景前的 AGENTS.md", "scenes.agents.note.error": "AGENTS.md 未写入：{reason}", "scenes.field.prompt.hint": "启用这个场景时，就用这份预设作为当前的全局指令基线。默认选中当前生效的那份。场景启用期间提示词页的「应用」不可用——要换提示词就在这里改绑定。", "scenes.prompt.activeTag": "生效中", "scenes.prompt.noPresets": "还没有提示词预设；可先去「提示词」页新建一个。", "scenes.prompt.bound": "提示词：{id}", "scenes.prompt.live": "提示词生效中：{id}", "scenes.prompt.missing": "预设不存在：{id}", "scenes.prompt.tag.hint": "这个场景绑定的提示词预设", "scenes.prompt.mismatch.hint": "场景绑定的「{id}」与 AGENTS.md 当前内容不一致（可能被手动改过）；到提示词页对它点「重新应用」写回", "scenes.enable.blocked": "已启用场景「{name}」；先关掉它才能启用别的", "scenes.result.created.collapsed": "场景「{name}」已创建，默认不启动（原先的「全部启用」已收敛为单选）", "scenes.legacyAll": "检测到 {count} 个场景同时处于启用状态（历史「全部启用」遗留）；除「全局」外同时只能启用一个。", "scenes.legacyAll.fix": "收敛为单选", "agm.restore.tag": "退出场景后恢复它", "agm.restore.tag.hint": "它是进场景前的全局提示词，退出场景时会按它恢复——删了就没法恢复了", "agm.file.mismatch": "文件里不是它", "agm.file.mismatch.hint": "AGENTS.md 当前内容与这份预设不一致（可能被手动改过）；点「重新应用」把它写回", "hist.restore.note.registered": "已恢复 {count} 个会话；工作区「{title}」已重新登记，会话已挂回该组。", "hist.restore.note.attached": "已恢复 {count} 个会话，并挂回工作区「{title}」。", "hist.restore.note.skip": "{count} 个会话的工作区归属未能恢复：{reason}", "hist.purge.title": "永久删除？", "hist.purge.one": "永久删除会话「{title}」及其全部记录，不可恢复", "hist.purge.batch": "永久删除所选 {count} 个会话及其全部记录，不可恢复", "hist.btn.restore": "恢复", "hist.btn.purge": "永久删除", "hist.btn.confirmPurge": "确认删除", "hist.selectGroup": "全选组 {title}", "hist.group.count": "{count} 个", "hist.selectAll": "全选", "hist.deselectAll": "取消全选", "hist.btn.import": "导入会话", "hist.btn.export": "导出会话", "hist.selected": "已选 {count} 项", "hist.btn.restoreSelected": "恢复所选 ({count})", "hist.btn.deleteSelected": "删除所选 ({count})", "hist.stat.archived": "个归档", "hist.stat.projects": "个项目", "hist.stat.retention": "天保留", "hist.search.placeholder": "搜索标题 / 会话 ID / 项目路径", "hist.loading": "加载中…", "hist.empty.search": "无匹配的归档会话", "hist.empty.none": "暂无归档会话", "hist.import.cwd": "项目目录（可留空）", "hist.import.cwd.placeholder": "绝对路径，可留空（会话归入未分组）", "hist.import.drop": "选择或拖入对话文件", "hist.import.done": "已创建会话 {id}（{count} 条消息），可在 DSH 会话列表中继续对话。", "hist.export.hint": "导出选中会话为转录文件，可再次导入", "hist.export.dir": "导出目录（绝对路径，自动创建）", "hist.export.browse": "浏览并选择文件夹", "hist.btn.browse": "选择", "hist.export.pickDir": "选择导出目录", "hist.export.format": "格式", "hist.export.scope": "会话范围", "hist.export.workspace": "工作区", "hist.export.sessions": "会话（{count} 个）", "hist.export.loading": "加载会话列表…", "hist.cwd.missing": "⚠ 工作区目录已不存在：", "hist.tag.archived": "已归档", "hist.tag.live": "未归档", "hist.export.empty": "没有符合条件的会话", "hist.result.exported": "已导出 {count} 个会话到 {dir}", "hist.result.skipped": "；跳过 {count} 个（{ids}）", "hist.result.archived": "已归档 {count} 个会话到 History，可到 History 页继续管理", "hist.btn.archiveSelected": "归档所选", "hist.btn.archiveSelected.title": "把选中的会话收进 History，纳入保留期管理", "hist.export.busy": "处理中…", "hist.btn.exportSelected": "导出 {count} 个会话", "hist.error.title": "操作失败", "hist.error.unknown": "未知错误",
+        "agm.stat.total": "个提示词", "agm.stat.active": "个生效中", "agm.loading": "加载中…", "agm.empty": "暂无提示词，点「新增提示词」创建", "agm.btn.delete.blocked.refs": "不能删除：{refs}。先改掉引用（换绑提示词 / 退出场景 / 应用别的预设）再删除。", "agm.ref.sep": "；", "agm.ref.scene": "场景「{scene}」绑定了它", "agm.ref.sceneActive": "场景「{scene}」（已启用）绑定了它", "agm.ref.file": "AGENTS.md 当前内容就是它", "agm.ref.restore": "退出场景后要恢复的全局提示词", "agm.sceneLock.notice": "场景「{scene}」接管中：当前生效的是它绑定的「{id}」。在这里应用别的预设 = 把该场景改绑到那一份（会同步写入场景档案）。", "agm.active": "生效中", "agm.active.hint.scene": "当前生效：场景「{scene}」绑定的提示词预设", "agm.active.hint.file": "当前生效：AGENTS.md 就是这一份", "agm.file.applied": "文件里是它", "agm.file.applied.hint": "AGENTS.md 当前内容是它；启用的场景绑了别的提示词，切换场景时已按场景把文件改成那一份", "agm.apply.hint": "应用后写入 AGENTS.md；宿主每轮重读该文件，下一轮对话生效", "agm.btn.reapply": "重新应用", "agm.btn.apply": "应用", "agm.applyModal.title": "应用预设", "agm.edit.title": "编辑预设", "agm.remove.title": "删除预设", "agm.btn.edit": "编辑", "agm.btn.delete": "删除", "agm.btn.new": "新增提示词", "agm.btn.import": "导入提示词", "agm.result.imported": "已导入 {count} 份预设：{names}", "agm.btn.save": "保存", "agm.btn.create": "创建", "agm.btn.confirmRemove": "确认删除", "agm.btn.confirmApply": "确认应用", "agm.field.id": "id（目录名）", "agm.field.id.hint": "中文、空格、点都可以；不能含斜杠、反斜杠与 : * ? < > 等符号；≤64 字符。改 id 等于目录改名。", "agm.field.id.placeholder": "例如：工作基线", "agm.field.content": "内容", "agm.field.content.placeholder": "直接写这份预设的正文（Markdown）；留空 = 用空白模板", "agm.field.copyFrom": "或从现有预设复制", "agm.field.copyFrom.none": "不复制（空白模板）", "agm.field.desc": "描述（只给使用者看）", "agm.field.desc.placeholder": "这份预设是干什么的、什么时候用它", "agm.result.renamed": "已保存，id 改为「{id}」", "agm.result.rebound": "（同步了 {count} 个场景的绑定）", "agm.remove.suffix": " ？此操作不可恢复。", "agm.apply.prefix": "将把 ", "agm.apply.suffix": " 的内容写入 ~/.dsh/AGENTS.md。", "agm.apply.note": "下一轮对话生效；当前内容已备份到 __last-applied__（保留最近 5 代）", "hist.err.load": "加载失败", "hist.err.unarchive": "恢复失败", "hist.err.delete": "删除失败", "hist.err.retention": "设置失败", "hist.err.import": "导入失败", "hist.err.sessions": "加载会话列表失败", "hist.err.export": "导出失败", "hist.err.archive": "归档失败", "hist.retention.forever": "永久保留", "hist.retention.days": "{count} 天", "hist.arch.all": "全部会话", "hist.arch.archived": "仅已归档", "hist.arch.live": "仅未归档", "hist.arch.missing": "仅目录丢失", "hist.ws.all": "全部工作区", "hist.ungrouped": "未分组", "hist.group.removed": "已移除", "hist.group.removed.hint": "该目录当前在 DSH 里没有工作区登记；分组按会话目录重建，重新登记后会自动并回同一组", "hist.group.dirMissing": "目录已不存在", "hist.group.dirMissing.hint": "工作区目录已从磁盘删除，无法重新登记；组内会话仍可恢复（归入未分组）或永久删除", "hist.btn.registerWs": "重新登记", "hist.btn.registerWs.hint": "重新登记这个目录，并把该目录下已有的会话挂回该组（只写工作区记账，不移动、不删除文件与会话）", "hist.register.title": "重新登记？", "hist.register.body": "将为「{title}」在 DSH 中重新创建一条工作区登记，并把该目录下已有的会话挂回这个工作区（恢复其分组）。只写工作区记账，不移动、不删除任何文件与会话。", "hist.register.confirm": "确认登记", "hist.register.done.title": "已重新登记", "hist.register.done.body": "工作区「{title}」已登记；该目录下的归档会话会在刷新后并入这一组。", "hist.register.done.attached": "已把该目录下 {count} 个已有会话挂回这个工作区。", "hist.register.done.skipped": "{count} 个会话未能挂回：{reason}", "hist.err.register": "登记失败", "scenes.field.prompt": "提示词预设", "scenes.agents.note.applied": "已把「{id}」写入 AGENTS.md", "scenes.agents.note.restored": "已恢复进场景前的 AGENTS.md", "scenes.agents.note.error": "AGENTS.md 未写入：{reason}", "scenes.field.prompt.hint": "启用这个场景时，就用这份预设作为当前的全局指令基线。默认选中当前生效的那份。场景启用期间在提示词页「应用」别的预设 = 把该场景改绑到那一份，绑定会同步写进场景档案。", "scenes.prompt.activeTag": "生效中", "scenes.prompt.noPresets": "还没有提示词预设；可先去「提示词」页新建一个。", "scenes.prompt.bound": "提示词：{id}", "scenes.prompt.live": "提示词生效中：{id}", "scenes.prompt.missing": "预设不存在：{id}", "scenes.prompt.tag.hint": "这个场景绑定的提示词预设", "scenes.prompt.mismatch.hint": "场景绑定的「{id}」与 AGENTS.md 当前内容不一致（可能被手动改过）；到提示词页对它点「重新应用」写回", "scenes.enable.blocked": "已启用场景「{name}」；先关掉它才能启用别的", "scenes.result.created.collapsed": "场景「{name}」已创建，默认不启动（原先的「全部启用」已收敛为单选）", "scenes.legacyAll": "检测到 {count} 个场景同时处于启用状态（历史「全部启用」遗留）；除「全局」外同时只能启用一个。", "scenes.legacyAll.fix": "收敛为单选", "agm.restore.tag": "退出场景后恢复它", "agm.restore.tag.hint": "它是进场景前的全局提示词，退出场景时会按它恢复——删了就没法恢复了", "agm.file.mismatch": "文件里不是它", "agm.file.mismatch.hint": "AGENTS.md 当前内容与这份预设不一致（可能被手动改过）；点「重新应用」把它写回", "hist.restore.note.registered": "已恢复 {count} 个会话；工作区「{title}」已重新登记，会话已挂回该组。", "hist.restore.note.attached": "已恢复 {count} 个会话，并挂回工作区「{title}」。", "hist.restore.note.skip": "{count} 个会话的工作区归属未能恢复：{reason}", "hist.purge.title": "永久删除？", "hist.purge.one": "永久删除会话「{title}」及其全部记录，不可恢复", "hist.purge.batch": "永久删除所选 {count} 个会话及其全部记录，不可恢复", "hist.btn.restore": "恢复", "hist.btn.purge": "永久删除", "hist.btn.confirmPurge": "确认删除", "hist.selectGroup": "全选组 {title}", "hist.group.count": "{count} 个", "hist.selectAll": "全选", "hist.deselectAll": "取消全选", "hist.btn.import": "导入会话", "hist.btn.export": "导出会话", "hist.selected": "已选 {count} 项", "hist.btn.restoreSelected": "恢复所选 ({count})", "hist.btn.deleteSelected": "删除所选 ({count})", "hist.stat.archived": "个归档", "hist.stat.projects": "个项目", "hist.stat.retention": "天保留", "hist.search.placeholder": "搜索标题 / 会话 ID / 项目路径", "hist.loading": "加载中…", "hist.empty.search": "无匹配的归档会话", "hist.empty.none": "暂无归档会话", "hist.import.cwd": "项目目录（可留空）", "hist.import.cwd.placeholder": "绝对路径，可留空（会话归入未分组）", "hist.import.drop": "选择或拖入对话文件", "hist.import.done": "已创建会话 {id}（{count} 条消息），可在 DSH 会话列表中继续对话。", "hist.export.hint": "导出选中会话为转录文件，可再次导入", "hist.export.dir": "导出目录（绝对路径，自动创建）", "hist.export.browse": "浏览并选择文件夹", "hist.btn.browse": "选择", "hist.export.pickDir": "选择导出目录", "hist.export.format": "格式", "hist.export.scope": "会话范围", "hist.export.workspace": "工作区", "hist.export.sessions": "会话（{count} 个）", "hist.export.loading": "加载会话列表…", "hist.cwd.missing": "⚠ 工作区目录已不存在：", "hist.tag.archived": "已归档", "hist.tag.live": "未归档", "hist.export.empty": "没有符合条件的会话", "hist.result.exported": "已导出 {count} 个会话到 {dir}", "hist.result.skipped": "；跳过 {count} 个（{ids}）", "hist.result.archived": "已归档 {count} 个会话到 History，可到 History 页继续管理", "hist.btn.archiveSelected": "归档所选", "hist.btn.archiveSelected.title": "把选中的会话收进 History，纳入保留期管理", "hist.export.busy": "处理中…", "hist.btn.exportSelected": "导出 {count} 个会话", "hist.error.title": "操作失败", "hist.error.unknown": "未知错误",
       },
       en: {
         "title": "Skills", "desc": "Manage skills: enable, import, create, trash.", "link.project": "GitHub", "link.feedback": "Issues",
-        "btn.create": "New skill", "btn.import": "Import skills", "btn.refresh": "Refresh", "btn.refreshing": "Refreshing…", "btn.cancel": "Cancel", "btn.close": "Close", "export.hint": "Exports a zip into the directory you choose; source files are read-only and nothing is modified.", "export.outDir": "Output directory", "export.outDir.placeholder": "e.g. D:////backup", "export.pickDir": "Choose output directory", "export.submit": "Export", "export.busy": "Exporting…", "export.done": "Exported {count} file(s) to {path}", "scenes.lock.lock": "Lock", "scenes.lock.unlock": "Unlock", "scenes.lock.tag": "Locked", "scenes.lock.hint": "Locking makes all five domains (MCP / skills / subagents / memories / prompts) read-only; starting or stopping scenes still works", "scenes.lock.blockedEdit": "Scene is locked — unlock it to make changes", "scenes.lock.notActive": "Scene is not active — start it before locking", "scenes.lock.blockedExit": "Scene is locked — unlock it before turning it off", "lock.banner": "A scene is locked: MCP, skills, subagents, memories and prompts are frozen. Unlock it on the Scenes page to make changes.", "scene.switch.banner": "Scene “{scene}” is active: switches are defined by the scene profile, so the switches on this page are disabled — change them in the profile editor on the Scenes page (the save takes effect immediately and is kept for the next visit; leaving the scene still restores the state from before), or exit the scene first.", "scene.switch.title": "In scene “{scene}”: change switches in the scene profile", "export.empty": "Nothing to export", "export.pickAll": "Select all", "export.pickNone": "Clear", "export.group.count": "{count}", "export.missing": "; skipped {count} (missing on disk): {names}", "export.skills": "Export skills", "export.subagents": "Export subagents", "export.presets": "Export prompts", "export.memories": "Export memories", "btn.detail": "View details", "btn.trash": "Move to trash", "btn.restore": "Restore", "btn.delete.forever": "Delete forever", "btn.file.pick": "Choose file", "btn.folder.pick": "Choose folder", "btn.create.now": "Create skill", "btn.disable": "Disable", "btn.enable": "Enable", "btn.open.editor": "Open in editor", "btn.activate": "Use this one", "btn.activate.title": "Make this source's copy the active one for this shared name and enable it (source files are never touched)", "btn.unprefer": "Auto again", "btn.unprefer.title": "Clear the manual choice and go back to automatic source priority",
+        "btn.create": "New skill", "btn.import": "Import skills", "btn.refresh": "Refresh", "btn.refreshing": "Refreshing…", "btn.cancel": "Cancel", "btn.close": "Close", "export.hint": "Exports a zip into the directory you choose; source files are read-only and nothing is modified.", "export.outDir": "Output directory", "export.outDir.placeholder": "e.g. D:////backup", "export.pickDir": "Choose output directory", "export.submit": "Export", "export.busy": "Exporting…", "export.done": "Exported {count} file(s) to {path}", "scenes.lock.lock": "Lock", "scenes.lock.unlock": "Unlock", "scenes.lock.tag": "Locked", "scenes.lock.hint": "Locking makes all five domains (MCP / skills / subagents / memories / prompts) read-only; starting or stopping scenes still works", "scenes.lock.blockedEdit": "Scene is locked — unlock it to make changes", "scenes.lock.notActive": "Scene is not active — start it before locking", "scenes.lock.blockedExit": "Scene is locked — unlock it before turning it off", "lock.banner": "A scene is locked: MCP, skills, subagents, memories and prompts are frozen. Unlock it on the Scenes page to make changes.", "scene.switch.banner": "Scene “{scene}” is active: switches here work as usual and are written into that scene’s profile too (they take effect immediately and are kept for the next visit; leaving the scene still restores the state from before).", "scene.sync.failed": "Heads-up: the change took effect, but it could not be written into the scene profile ({error}) — it holds for this visit only; re-entering this scene will apply the older profile.", "agm.apply.rebindScene": "Scene “{scene}” is driving the baseline: applying this preset rebinds that scene to it (written into the scene profile as well)", "export.empty": "Nothing to export", "export.pickAll": "Select all", "export.pickNone": "Deselect all", "export.group.count": "{count}", "export.missing": "; skipped {count} (missing on disk): {names}", "export.skills": "Export skills", "export.subagents": "Export subagents", "export.presets": "Export prompts", "export.memories": "Export memories", "btn.detail": "View details", "btn.trash": "Move to trash", "btn.restore": "Restore", "btn.delete.forever": "Delete forever", "btn.file.pick": "Choose file", "btn.folder.pick": "Choose folder", "btn.create.now": "Create skill", "btn.disable": "Disable", "btn.enable": "Enable", "btn.open.editor": "Open in editor", "btn.activate": "Use this one", "btn.activate.title": "Make this source's copy the active one for this shared name and enable it (source files are never touched)", "btn.unprefer": "Auto again", "btn.unprefer.title": "Clear the manual choice and go back to automatic source priority",
         "btn.custom.add": "Add folder",
         "btn.custom.remove": "Remove",
         "btn.source.remove": "Remove source", "btn.source.remove.title": "Stop reading this source (files stay on disk; restore it later from the trash)", "btn.source.restore": "Restore", "btn.source.forget": "Delete forever",
@@ -1022,6 +1221,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "compat.inject.domain.memory": "Scene + memory", "compat.inject.domain.mcp": "MCP",
         "compat.inject.domain.subagents": "Subagents", "compat.inject.domain.prompt": "Prompt",
         "compat.inject.domain.skills": "Skills",
+        "compat.live.title": "Live injection", "compat.live.hint": "What the model actually sees (read-only)",
+        "compat.live.never": "nothing delivered yet this run", "compat.live.delivered": "{count} delivered · last {time}",
+        "compat.live.copy": "Copy all", "compat.live.copied": "Copied", "compat.live.noAgent": "No session yet — send a message first",
+        "compat.live.state.inContext": "In context", "compat.live.state.absent": "Not delivered", "compat.live.state.cleared": "Cleared",
+        "compat.live.state.off": "Off", "compat.live.state.unknown": "No session",
+        "compat.live.state.official": "Official", "compat.live.state.official.title": "The official carrier delivers these under standard presets; the plugin does not duplicate (it only fills in for Minimal-like presets)",
+        "compat.live.state.empty": "Nothing to send", "compat.live.est": "≈{count} tokens",
+        "compat.live.state.absent.title": "This plugin owns this domain but it is not in context right now (it may have just been compacted; the next step re-sends it)",
         "compat.reach.mark.memory": "Scene + memory", "compat.reach.mark.agentsMd": "Prompt", "compat.reach.mark.skill": "Skills", "compat.reach.mark.mcp": "MCP", "compat.reach.mark.subagent": "Subagents",
         "compat.reach.default": "default",
         "compat.reach.whyUnknown": "cannot tell", "compat.reach.broken": "preset broken",
@@ -1038,14 +1245,21 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "scenes.field.desc.limit": "Up to {count} characters; longer text is clipped on the card.",
         "scenes.profile.mcp": "{count} MCP", "scenes.profile.skills": "{count} skill(s)", "scenes.profile.subagents": "{count} subagent(s)", "scenes.profile.memories": "{count} memor(ies)",
         "scenes.mcp.hint": "Add the MCP section first, then check the servers to enable (stopped ones included); use Pick tools to narrow to specific tools. Unchecked servers — and scenes with no section at all — are turned off on entry, running processes included.",
-        "scenes.seg.selectAll": "Select all", "scenes.seg.clear": "Clear", "scenes.seg.checked": "{checked}/{total} selected",
+        "scenes.seg.checked": "{checked}/{total} selected",
+        "bulk.selectAll": "Select all", "bulk.unselectAll": "Deselect all",
+        "bulk.head.title": "Enable or disable every skill that is visible after filtering and can be toggled (copies shadowed by a same-name skill are not counted)",
+        "source.bulk.title": "Enable or disable every visible, toggleable skill in this directory (copies shadowed by a same-name skill are not counted)",
+        "bulk.enabled": "Enabled", "bulk.disabled": "Disabled",
+        "bulk.done.skills": "{action} {count} skill(s) (failed: {failed})", "bulk.done.memories": "{action} {count} memor(ies) (failed: {failed})", "memory.bulk.partial": "{action} {count} memor(ies), then aborted: {error}",
         "scenes.archive.sectionOff": "not defined = all off",
         "scenes.archive.summary": "Profile: {mcp} MCP server(s) · {skills} skill(s) · {subagents} subagent(s)",
         "scenes.archive.note": "Checked means enabled, unchecked means disabled — and an undefined section means nothing is checked, so that whole domain is off. MCP really starts/stops server processes; skills toggle the source they live in. Leaving the scene restores the exact state from before.",
         "scenes.mcp.noServers": "No MCP servers to pick from yet", "scenes.mcp.toolCount": "{count} tool(s)", "scenes.skills.empty": "No skills to pick from yet",
         "scenes.mcp.allTools": "all tools", "scenes.mcp.pickedCount": "{count} tools picked", "scenes.mcp.notRunning": "not running", "scenes.mcp.edit": "Edit", "scenes.mcp.done": "Done", "scenes.mcp.noteLabel": "Scene note", "scenes.mcp.notePlaceholder": "Overrides the global note in this scene; restored on exit", "scenes.mcp.hasNote": "has note",
-        "scenes.mcp.toolsOf": "Pick tools", "scenes.mcp.probeTools": "Start the server to load tools", "scenes.mcp.unknownCount": "unknown tool count — open Edit to load", "scenes.mcp.noteHint": "Saved with the scene. It overrides the note shown on the MCP page and in the system prompt only while this scene is entered — and only for servers checked in this section. Restored on exit.", "scenes.mcp.noTools": "No tools listed for this server (it has never run, or its tools were never recorded)", "scenes.mcp.drillHint": "Checked = enabled in this scene; unchecked = disabled. “All” = every tool.",
-        "scenes.skills.hint": "Add the skills section first, then check the skills enabled in this scene. Unchecked skills — and scenes with no section at all — are disabled on entry, and restored to their previous switch when you exit.", "scenes.subagents.hint": "Check the personas this scene should turn on; anything unchecked (or with no section at all) is turned off when you enter, and restored to its previous switch when you exit.", "scenes.subagents.empty": "No personas yet — create one on the Subagents page.",
+        "scenes.mcp.toolsOf": "Pick tools", "scenes.mcp.probeTools": "Start the server to load tools", "scenes.mcp.unknownCount": "unknown tool count — open Edit to load", "scenes.mcp.noteHint": "Saved with the scene. It overrides the note shown on the MCP page and in the system prompt only while this scene is entered — and only for servers checked in this section. Restored on exit.", "scenes.mcp.noTools": "No tools listed for this server (it has never run, or its tools were never recorded)", "scenes.mcp.drillHint": "Checked = enabled in this scene; unchecked = disabled. “Select all” = every tool (click again for “Deselect all” = none).",
+        "scenes.skills.hint": "Add the skills section first, then check the skills enabled in this scene. Unchecked skills — and scenes with no section at all — are disabled on entry, and restored to their previous switch when you exit. Copies shadowed by a same-name skill and structurally broken skills cannot be checked — they can never take effect in this scene.",
+        "scenes.skills.shadowed.hint": "Shadowed by a same-name skill, so it can never take effect in this scene and cannot be checked. To use this copy instead, click “Use this one” for it on the Skills page.",
+        "scenes.skills.invalid.hint": "Incomplete skill (missing frontmatter / invalid name / empty description): it cannot be enabled or disabled, so it cannot be checked.", "scenes.subagents.hint": "Check the personas this scene should turn on; anything unchecked (or with no section at all) is turned off when you enter, and restored to its previous switch when you exit.", "scenes.subagents.empty": "No personas yet — create one on the Subagents page.",
         "scenes.filter.skills": "Filter skills / directories", "scenes.filter.subagents": "Filter personas (name or description)", "scenes.filter.servers": "Filter servers",
        
         "scenes.mem.title": "Memories", "scenes.mem.search": "Filter memories in this scene (name or description)",
@@ -1055,7 +1269,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "memory.archive.tools": "MCP tools", "memory.archive.skills": "Skills", "memory.archive.subagents": "Subagent binding", "memory.archive.memories": "Memories", "memory.archive.applyFailed": "Could not apply at runtime: {reason}",
         "memory.archive.addTools": "+ Tools", "memory.archive.addSkills": "+ Skills", "memory.archive.addSubagents": "+ Subagents",
         "memory.archive.removeSection": "Remove section", "memory.archive.save": "Save to scene",
-        "memory.archive.emptySection": "Nothing checked = all disabled (a missing section means the same)", "memory.archive.emptySubagents": "Nothing checked = no personas enabled in this scene (a missing section means the same)", "memory.archive.stale": "Stale entries (no longer exist, skipped): {items}",
+        "memory.archive.emptySection": "Nothing checked = all disabled (a missing section means the same)", "memory.archive.emptySubagents": "Nothing checked = no personas enabled in this scene (a missing section means the same)", "memory.archive.stale": "Skipped {items} (missing, shadowed by a same-name skill, or structurally broken — it could never take effect)",
         "memory.result.archiveSaved": "Scene profile saved: {name}", "memory.result.modeSet": "Entered mode: {name}", "memory.result.modeSwitched": "{mcp} server(s) / {skills} source(s) switched", "memory.result.modeExited": "Exited mode",
         "memory.desc": "Manage memories: enabled memories enter the system prompt; enable them per scene.",
         "memory.btn.refresh": "Refresh", "memory.btn.new": "New memory", "memory.btn.create": "Create", "memory.btn.save": "Save",
@@ -1089,7 +1303,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "memory.field.body": "Body (Markdown)", "memory.field.body.placeholder": "Write down the conventions, steps, and boundaries to remember…",
         "memory.field.form": "Form", "memory.field.attach": "Attachments",
         "memory.attach.add": "Add files", "memory.attach.empty": "No attachments yet", "memory.attach.pending": "pending", "memory.attach.remove": "Remove attachment",
-        "memory.attach.hint": "Stored with the memory; never injected into the prompt", "memory.attach.flat": "The flat form is a single file and cannot carry attachments", "memory.attach.tooLarge": "File too large: {name} (max {limit} MB)",
+        "memory.attach.hint": "Stored with the memory; never injected into the prompt",
+        "memory.attach.count.one": "{count} attachment", "memory.attach.count.other": "{count} attachments",
+        "memory.attach.tip": "Click to manage attachments: {count} · {size} total — {names}",
+        "memory.attach.tip.empty": "No files yet — click to add",
+        "memory.attach.more": ", +{count} more", "memory.attach.sep": ", ", "memory.attach.flat": "The flat form is a single file and cannot carry attachments", "memory.attach.tooLarge": "File too large: {name} (max {limit} MB)",
         "memory.delete.title": "Move to trash?", "memory.delete.desc": "“{name}” moves to trash and can be restored",
         "memory.result.created": "Created memory: {name}", "memory.result.updated": "Saved memory: {name}", "memory.result.removed": "Moved to trash: {name}", "memory.result.toggled": "Memory state updated: {name}", "memory.result.active": "Enabled scenes updated",
         "memory.result.restored": "Restored memory: {name}", "memory.result.trashRemoved": "Permanently deleted: {name}",
@@ -1144,7 +1362,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "import.none": "Nothing was imported (all skipped)", "import.skipped": "Skipped: {items}",
         "error.import.noFiles": "No files selected",
         "nav.title": "Tools",
-        "agm.stat.total": " prompts", "agm.stat.active": " active", "agm.loading": "Loading…", "agm.empty": "No prompts yet — click “New prompt” to create one", "agm.btn.delete.blocked.refs": "Cannot delete: {refs}. Change those references first (rebind the prompt, leave the scene, or apply another preset).", "agm.ref.sep": "; ", "agm.ref.scene": "bound by scene “{scene}”", "agm.ref.sceneActive": "bound by scene “{scene}” (enabled)", "agm.ref.file": "this is what AGENTS.md currently holds", "agm.ref.restore": "the global prompt to restore after leaving the scene", "agm.sceneLock.notice": "Scene “{scene}” is driving the baseline: the prompt in effect is its bound “{id}”. Applying another preset would bypass the scene binding — to change the prompt, rebind it on the Scenes page or exit the scene first.", "agm.apply.blockedScene": "Scene “{scene}” is driving the baseline: applying another preset would bypass the scene binding. Rebind it on the Scenes page, or exit the scene first.", "agm.active": "Active", "agm.active.hint.scene": "Currently active: the prompt preset bound to scene “{scene}”", "agm.active.hint.file": "Currently active: AGENTS.md is exactly this preset", "agm.file.applied": "In AGENTS.md", "agm.file.applied.hint": "AGENTS.md currently holds this one; the enabled scene binds a different preset, which now takes effect", "agm.apply.hint": "Writes AGENTS.md; the host re-reads that file every turn, so it takes effect on the next turn", "agm.btn.reapply": "Apply again", "agm.btn.apply": "Apply", "agm.applyModal.title": "Apply preset", "agm.edit.title": "Edit preset", "agm.remove.title": "Delete preset", "agm.btn.edit": "Edit", "agm.btn.delete": "Delete", "agm.btn.new": "New prompt", "agm.btn.import": "Import prompts", "agm.result.imported": "Imported {count} preset(s): {names}", "agm.btn.save": "Save", "agm.btn.create": "Create", "agm.btn.confirmRemove": "Delete", "agm.btn.confirmApply": "Apply", "agm.field.id": "id (directory name)", "agm.field.id.hint": "Letters, spaces and dots are fine; no slashes or : * ? < >; up to 64 chars. Changing it renames the directory.", "agm.field.id.placeholder": "e.g. work-baseline", "agm.field.content": "Content", "agm.field.content.placeholder": "Write the preset body (Markdown) here; leave blank to start from the empty template", "agm.field.copyFrom": "Or copy from an existing preset", "agm.field.copyFrom.none": "Do not copy (empty template)", "agm.field.desc": "Description (for humans only)", "agm.field.desc.placeholder": "What this preset is for and when to use it", "agm.result.renamed": "Saved; id is now “{id}”", "agm.result.rebound": " ({count} scene binding(s) updated)", "agm.remove.suffix": "? This cannot be undone.", "agm.apply.prefix": "Write the contents of ", "agm.apply.suffix": " into ~/.dsh/AGENTS.md.", "agm.apply.note": "Takes effect on the next turn; the current content is backed up to __last-applied__ (last 5 kept)", "hist.err.load": "Load failed", "hist.err.unarchive": "Restore failed", "hist.err.delete": "Delete failed", "hist.err.retention": "Update failed", "hist.err.import": "Import failed", "hist.err.sessions": "Failed to load sessions", "hist.err.export": "Export failed", "hist.err.archive": "Archive failed", "hist.retention.forever": "Keep forever", "hist.retention.days": "{count} days", "hist.arch.all": "All sessions", "hist.arch.archived": "Archived only", "hist.arch.live": "Not archived only", "hist.arch.missing": "Missing directory only", "hist.ws.all": "All workspaces", "hist.ungrouped": "Ungrouped", "hist.group.removed": "Removed", "hist.group.removed.hint": "This directory has no DSH workspace registration right now; the group is rebuilt from session directories and rejoins automatically once registered again", "hist.group.dirMissing": "Directory missing", "hist.group.dirMissing.hint": "The workspace directory was deleted from disk, so it cannot be registered again; sessions in this group can still be restored (they join Ungrouped) or deleted forever", "hist.btn.registerWs": "Register", "hist.btn.registerWs.hint": "Register this directory again and attach its existing sessions back to that group (workspace accounting only — no file or session is moved or deleted)", "hist.register.title": "Register again?", "hist.register.body": "A workspace registration will be created in DSH for “{title}”, and the sessions under this directory will be attached back to it (restoring their grouping). This writes workspace accounting only — no file or session is moved or deleted.", "hist.register.confirm": "Register", "hist.register.done.title": "Registered", "hist.register.done.body": "Workspace “{title}” is registered; archived sessions under this directory join that group after a refresh.", "hist.register.done.attached": "Attached {count} existing session(s) under this directory back to the workspace.", "hist.register.done.skipped": "{count} session(s) could not be attached: {reason}", "hist.err.register": "Registration failed", "scenes.field.prompt": "Prompt preset", "scenes.agents.note.applied": "wrote “{id}” into AGENTS.md", "scenes.agents.note.restored": "restored the AGENTS.md baseline from before the scene", "scenes.agents.note.error": "AGENTS.md was not written: {reason}", "scenes.field.prompt.hint": "While this scene is enabled, its preset is the active global baseline. Defaults to the one currently in effect. While the scene is on, Apply on the Prompts page is disabled — change the prompt here instead.", "scenes.prompt.activeTag": "in effect", "scenes.prompt.noPresets": "No prompt presets yet — create one on the Prompts page.", "scenes.prompt.bound": "Prompt: {id}", "scenes.prompt.live": "Prompt active: {id}", "scenes.prompt.missing": "Preset missing: {id}", "scenes.prompt.tag.hint": "The prompt preset bound to this scene", "scenes.prompt.mismatch.hint": "The scene-bound “{id}” does not match the current contents of AGENTS.md (it may have been edited by hand); click “Apply again” for it on the Prompts page to write it back", "scenes.enable.blocked": "Scene “{name}” is already enabled; turn it off first", "scenes.result.created.collapsed": "Scene “{name}” created and left off (the legacy “all enabled” default collapsed to a single choice)", "scenes.legacyAll": "{count} scenes are enabled at once (a leftover of the legacy “all enabled” default); only one scene besides “Global” may be enabled.", "scenes.legacyAll.fix": "Collapse to one", "agm.restore.tag": "Restored after the scene", "agm.restore.tag.hint": "The global prompt from before the scene; leaving the scene restores it, so deleting it would lose that fallback", "agm.file.mismatch": "Not in AGENTS.md", "agm.file.mismatch.hint": "AGENTS.md does not currently match this preset (it may have been edited by hand); click “Apply again” to write it back", "hist.restore.note.registered": "Restored {count} session(s); workspace “{title}” was registered again and the sessions are back in that group.", "hist.restore.note.attached": "Restored {count} session(s) and attached them to workspace “{title}”.", "hist.restore.note.skip": "Workspace ownership could not be restored for {count} session(s): {reason}", "hist.purge.title": "Delete forever?", "hist.purge.one": "Delete “{title}” and all of its records forever — this cannot be undone", "hist.purge.batch": "Delete the {count} selected sessions and all of their records forever — this cannot be undone", "hist.btn.restore": "Restore", "hist.btn.purge": "Delete forever", "hist.btn.confirmPurge": "Delete", "hist.selectGroup": "Select group {title}", "hist.group.count": "{count}", "hist.selectAll": "Select all", "hist.deselectAll": "Clear selection", "hist.btn.import": "Import sessions", "hist.btn.export": "Export sessions", "hist.selected": "{count} selected", "hist.btn.restoreSelected": "Restore selected ({count})", "hist.btn.deleteSelected": "Delete selected ({count})", "hist.stat.archived": " archived", "hist.stat.projects": " projects", "hist.stat.retention": " days kept", "hist.search.placeholder": "Search title / session id / project path", "hist.loading": "Loading…", "hist.empty.search": "No matching archived sessions", "hist.empty.none": "No archived sessions yet", "hist.import.cwd": "Project directory (optional)", "hist.import.cwd.placeholder": "Absolute path, optional (the session goes to Ungrouped)", "hist.import.drop": "Choose or drop a conversation file", "hist.import.done": "Created session {id} ({count} messages); continue it from the DSH session list.", "hist.export.hint": "Export the selected sessions as transcript files that can be imported again", "hist.export.dir": "Export directory (absolute path, created automatically)", "hist.export.browse": "Browse and choose a folder", "hist.btn.browse": "Choose", "hist.export.pickDir": "Choose export directory", "hist.export.format": "Format", "hist.export.scope": "Session scope", "hist.export.workspace": "Workspace", "hist.export.sessions": "Sessions ({count})", "hist.export.loading": "Loading sessions…", "hist.cwd.missing": "⚠ The workspace directory no longer exists: ", "hist.tag.archived": "Archived", "hist.tag.live": "Not archived", "hist.export.empty": "No matching sessions", "hist.result.exported": "Exported {count} session(s) to {dir}", "hist.result.skipped": "; skipped {count} ({ids})", "hist.result.archived": "Archived {count} session(s) to History; manage them on the History page", "hist.btn.archiveSelected": "Archive selected", "hist.btn.archiveSelected.title": "Move the selected sessions into History so retention applies to them", "hist.export.busy": "Working…", "hist.btn.exportSelected": "Export {count} session(s)", "hist.error.title": "Operation failed", "hist.error.unknown": "Unknown error",
+        "agm.stat.total": " prompts", "agm.stat.active": " active", "agm.loading": "Loading…", "agm.empty": "No prompts yet — click “New prompt” to create one", "agm.btn.delete.blocked.refs": "Cannot delete: {refs}. Change those references first (rebind the prompt, leave the scene, or apply another preset).", "agm.ref.sep": "; ", "agm.ref.scene": "bound by scene “{scene}”", "agm.ref.sceneActive": "bound by scene “{scene}” (enabled)", "agm.ref.file": "this is what AGENTS.md currently holds", "agm.ref.restore": "the global prompt to restore after leaving the scene", "agm.sceneLock.notice": "Scene “{scene}” is driving the baseline: the prompt in effect is its bound “{id}”. Applying another preset here rebinds that scene to it (written into the scene profile as well).", "agm.active": "Active", "agm.active.hint.scene": "Currently active: the prompt preset bound to scene “{scene}”", "agm.active.hint.file": "Currently active: AGENTS.md is exactly this preset", "agm.file.applied": "In AGENTS.md", "agm.file.applied.hint": "AGENTS.md currently holds this one; the enabled scene binds a different preset, which now takes effect", "agm.apply.hint": "Writes AGENTS.md; the host re-reads that file every turn, so it takes effect on the next turn", "agm.btn.reapply": "Apply again", "agm.btn.apply": "Apply", "agm.applyModal.title": "Apply preset", "agm.edit.title": "Edit preset", "agm.remove.title": "Delete preset", "agm.btn.edit": "Edit", "agm.btn.delete": "Delete", "agm.btn.new": "New prompt", "agm.btn.import": "Import prompts", "agm.result.imported": "Imported {count} preset(s): {names}", "agm.btn.save": "Save", "agm.btn.create": "Create", "agm.btn.confirmRemove": "Delete", "agm.btn.confirmApply": "Apply", "agm.field.id": "id (directory name)", "agm.field.id.hint": "Letters, spaces and dots are fine; no slashes or : * ? < >; up to 64 chars. Changing it renames the directory.", "agm.field.id.placeholder": "e.g. work-baseline", "agm.field.content": "Content", "agm.field.content.placeholder": "Write the preset body (Markdown) here; leave blank to start from the empty template", "agm.field.copyFrom": "Or copy from an existing preset", "agm.field.copyFrom.none": "Do not copy (empty template)", "agm.field.desc": "Description (for humans only)", "agm.field.desc.placeholder": "What this preset is for and when to use it", "agm.result.renamed": "Saved; id is now “{id}”", "agm.result.rebound": " ({count} scene binding(s) updated)", "agm.remove.suffix": "? This cannot be undone.", "agm.apply.prefix": "Write the contents of ", "agm.apply.suffix": " into ~/.dsh/AGENTS.md.", "agm.apply.note": "Takes effect on the next turn; the current content is backed up to __last-applied__ (last 5 kept)", "hist.err.load": "Load failed", "hist.err.unarchive": "Restore failed", "hist.err.delete": "Delete failed", "hist.err.retention": "Update failed", "hist.err.import": "Import failed", "hist.err.sessions": "Failed to load sessions", "hist.err.export": "Export failed", "hist.err.archive": "Archive failed", "hist.retention.forever": "Keep forever", "hist.retention.days": "{count} days", "hist.arch.all": "All sessions", "hist.arch.archived": "Archived only", "hist.arch.live": "Not archived only", "hist.arch.missing": "Missing directory only", "hist.ws.all": "All workspaces", "hist.ungrouped": "Ungrouped", "hist.group.removed": "Removed", "hist.group.removed.hint": "This directory has no DSH workspace registration right now; the group is rebuilt from session directories and rejoins automatically once registered again", "hist.group.dirMissing": "Directory missing", "hist.group.dirMissing.hint": "The workspace directory was deleted from disk, so it cannot be registered again; sessions in this group can still be restored (they join Ungrouped) or deleted forever", "hist.btn.registerWs": "Register", "hist.btn.registerWs.hint": "Register this directory again and attach its existing sessions back to that group (workspace accounting only — no file or session is moved or deleted)", "hist.register.title": "Register again?", "hist.register.body": "A workspace registration will be created in DSH for “{title}”, and the sessions under this directory will be attached back to it (restoring their grouping). This writes workspace accounting only — no file or session is moved or deleted.", "hist.register.confirm": "Register", "hist.register.done.title": "Registered", "hist.register.done.body": "Workspace “{title}” is registered; archived sessions under this directory join that group after a refresh.", "hist.register.done.attached": "Attached {count} existing session(s) under this directory back to the workspace.", "hist.register.done.skipped": "{count} session(s) could not be attached: {reason}", "hist.err.register": "Registration failed", "scenes.field.prompt": "Prompt preset", "scenes.agents.note.applied": "wrote “{id}” into AGENTS.md", "scenes.agents.note.restored": "restored the AGENTS.md baseline from before the scene", "scenes.agents.note.error": "AGENTS.md was not written: {reason}", "scenes.field.prompt.hint": "While this scene is enabled, its preset is the active global baseline. Defaults to the one currently in effect. While the scene is on, applying another preset on the Prompts page rebinds this scene to that one, and the binding is written into the scene profile.", "scenes.prompt.activeTag": "in effect", "scenes.prompt.noPresets": "No prompt presets yet — create one on the Prompts page.", "scenes.prompt.bound": "Prompt: {id}", "scenes.prompt.live": "Prompt active: {id}", "scenes.prompt.missing": "Preset missing: {id}", "scenes.prompt.tag.hint": "The prompt preset bound to this scene", "scenes.prompt.mismatch.hint": "The scene-bound “{id}” does not match the current contents of AGENTS.md (it may have been edited by hand); click “Apply again” for it on the Prompts page to write it back", "scenes.enable.blocked": "Scene “{name}” is already enabled; turn it off first", "scenes.result.created.collapsed": "Scene “{name}” created and left off (the legacy “all enabled” default collapsed to a single choice)", "scenes.legacyAll": "{count} scenes are enabled at once (a leftover of the legacy “all enabled” default); only one scene besides “Global” may be enabled.", "scenes.legacyAll.fix": "Collapse to one", "agm.restore.tag": "Restored after the scene", "agm.restore.tag.hint": "The global prompt from before the scene; leaving the scene restores it, so deleting it would lose that fallback", "agm.file.mismatch": "Not in AGENTS.md", "agm.file.mismatch.hint": "AGENTS.md does not currently match this preset (it may have been edited by hand); click “Apply again” to write it back", "hist.restore.note.registered": "Restored {count} session(s); workspace “{title}” was registered again and the sessions are back in that group.", "hist.restore.note.attached": "Restored {count} session(s) and attached them to workspace “{title}”.", "hist.restore.note.skip": "Workspace ownership could not be restored for {count} session(s): {reason}", "hist.purge.title": "Delete forever?", "hist.purge.one": "Delete “{title}” and all of its records forever — this cannot be undone", "hist.purge.batch": "Delete the {count} selected sessions and all of their records forever — this cannot be undone", "hist.btn.restore": "Restore", "hist.btn.purge": "Delete forever", "hist.btn.confirmPurge": "Delete", "hist.selectGroup": "Select group {title}", "hist.group.count": "{count}", "hist.selectAll": "Select all", "hist.deselectAll": "Deselect all", "hist.btn.import": "Import sessions", "hist.btn.export": "Export sessions", "hist.selected": "{count} selected", "hist.btn.restoreSelected": "Restore selected ({count})", "hist.btn.deleteSelected": "Delete selected ({count})", "hist.stat.archived": " archived", "hist.stat.projects": " projects", "hist.stat.retention": " days kept", "hist.search.placeholder": "Search title / session id / project path", "hist.loading": "Loading…", "hist.empty.search": "No matching archived sessions", "hist.empty.none": "No archived sessions yet", "hist.import.cwd": "Project directory (optional)", "hist.import.cwd.placeholder": "Absolute path, optional (the session goes to Ungrouped)", "hist.import.drop": "Choose or drop a conversation file", "hist.import.done": "Created session {id} ({count} messages); continue it from the DSH session list.", "hist.export.hint": "Export the selected sessions as transcript files that can be imported again", "hist.export.dir": "Export directory (absolute path, created automatically)", "hist.export.browse": "Browse and choose a folder", "hist.btn.browse": "Choose", "hist.export.pickDir": "Choose export directory", "hist.export.format": "Format", "hist.export.scope": "Session scope", "hist.export.workspace": "Workspace", "hist.export.sessions": "Sessions ({count})", "hist.export.loading": "Loading sessions…", "hist.cwd.missing": "⚠ The workspace directory no longer exists: ", "hist.tag.archived": "Archived", "hist.tag.live": "Not archived", "hist.export.empty": "No matching sessions", "hist.result.exported": "Exported {count} session(s) to {dir}", "hist.result.skipped": "; skipped {count} ({ids})", "hist.result.archived": "Archived {count} session(s) to History; manage them on the History page", "hist.btn.archiveSelected": "Archive selected", "hist.btn.archiveSelected.title": "Move the selected sessions into History so retention applies to them", "hist.export.busy": "Working…", "hist.btn.exportSelected": "Export {count} session(s)", "hist.error.title": "Operation failed", "hist.error.unknown": "Unknown error",
       }
     };
 
@@ -1248,8 +1466,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           const [compactConfirm, setCompactConfirm] = React.useState(false)
           const [, setTick] = React.useState(0)
 
-          const refresh = (withReveal, onRows) => {
+          const refresh = (withReveal, onRows, silent) => {
             const useReveal = withReveal === undefined ? reveal : withReveal === true
+            // 手动刷新（含首次加载）先把按钮切到「刷新中…」并禁用 —— 点完毫无反馈等于没点。
+            // 轮询不算（定时器传 silent=true）：它每几秒跑一次，切文案会让按钮一直闪。
+            if (!silent) setState((prev) => Object.assign({}, prev, { loading: true }))
             // 明文视图走独立的 mcpm-reveal op（host 端要求带对的访问令牌），
             // mcpm-list 始终脱敏、无令牌也能渲染页面。
             const applyRows = (res, revealError) => {
@@ -1292,7 +1513,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           React.useEffect(() => ctx.interval(() => setTick((t) => t + 1), 1000), [])
           React.useEffect(() => {
             const ms = (settings && settings.pollIntervalMs) || 5000
-            return ctx.interval(() => refreshRef.current(), ms)
+            return ctx.interval(() => refreshRef.current(undefined, null, true), ms)
           }, [settings])
           React.useEffect(() => {
             if (!msg) return undefined
@@ -1304,7 +1525,9 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             setBusy(label)
             apiCall(method, args).then((res) => {
               if (res && res.ok) {
-                setMsg(opMsg(res))
+                // 场景内改开关：档案没跟上的话要说出来，别只报「成功」（详见 sceneSyncWarn）。
+                const warn = sceneSyncWarn(mt, res)
+                setMsg(warn ? { kind: 'warn', text: opMsg(res) + ' ' + warn } : opMsg(res))
                 refresh()
                 if (onOk) onOk()
               } else setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
@@ -1521,7 +1744,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                 row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null),
               React.createElement('div', { className: 'dsm-status ' + status.cls }, status.text),
               React.createElement('div', { className: 'dsm-row-actions' },
-                editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null || state.locked === true || !!state.scene, title: state.scene ? mt('scene.switch.title', { scene: state.scene }) : '', label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
+                editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null || state.locked === true, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: () => openDetail(row) }, mt('mcp.btn.detail')),
                 editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => openEdit(row) }, mt('mcp.btn.edit')) : null,
                 editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => restartRow(row) }, mt('mcp.btn.restart')) : null,
@@ -1566,7 +1789,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                         React.createElement('div', { className: 'dsm-tool-name' }, tool.name),
                         // 描述来自「已知工具」缓存（服务器未运行）→ 标明是旧数据，不假装实时。
                         tool.stale ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.stale')) : null,
-                        React.createElement(Switch, { on: tool.enabled !== false, disabled: busy !== null || state.locked === true || !!state.scene, title: state.scene ? mt('scene.switch.title', { scene: state.scene }) : '', label: mt('mcp.toggleTool') + ' ' + tool.name, onClick: () => toggleTool(detail.row, tool) })),
+                        React.createElement(Switch, { on: tool.enabled !== false, disabled: busy !== null || state.locked === true, label: mt('mcp.toggleTool') + ' ' + tool.name, onClick: () => toggleTool(detail.row, tool) })),
                       tool.description ? React.createElement(ToolDesc, { text: tool.description, expandLabel: mt('mcp.tools.expand'), collapseLabel: mt('mcp.tools.collapse') }) : null,
                       (tool.parameters && tool.parameters.length > 0) ? React.createElement('div', { className: 'dsm-tool-params' }, tool.parameters.map((param) => React.createElement('div', { className: 'dsm-tool-param', key: param.key },
                           React.createElement('span', { className: 'dsm-tool-param-key' }, param.key + (param.required ? ' *' : '')),
@@ -1696,19 +1919,20 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                   React.createElement('h2', { className: 'dsm-title' }, 'MCP')),
                 React.createElement('p', { className: 'dsm-desc' }, mt('mcp.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }, (busy !== null || state.loading) ? mt('btn.refreshing') : mt('btn.refresh')),
+                refreshButton(mt, busy !== null || state.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.locked === true, onClick: openAdd }, mt('mcp.btn.new')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-danger', disabled: busy !== null || state.loading, title: mt('mcp.btn.compact.title'), disabled: busy !== null || state.loading || state.locked === true, onClick: () => setCompactConfirm(true) }, mt('mcp.btn.compact')))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-danger', disabled: busy !== null || state.loading || state.locked === true, title: mt('mcp.btn.compact.title'), onClick: () => setCompactConfirm(true) }, mt('mcp.btn.compact')),
+                // 批量启停与页头其余动作同栏（用户 2026-09-17 裁定）。场景内**照常可用**：
+                // 改动会同步写进当前场景的档案（宿主 syncSwitchToScene），只有场景锁定才冻结。
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading || !summary.total, onClick: () => run('mcpm-set-all', { enabled: summary.enabled < summary.total }, 'setall') }, mt(summary.total > 0 && summary.enabled === summary.total ? 'mcp.btn.disableAll' : 'mcp.btn.enableAll')))),
             state.locked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('lock.banner')) : null,
-            // 场景内的开关由档案定义（页面开关在场景里本来就会被退出时的快照回滚）：
-            // 置灰 + 说明去哪儿改，而不是点了没反应。
+            // 场景未锁定时开关照常可用：说清「改动会同步写进该场景的档案」，别让用户担心白改。
             state.scene ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('scene.switch.banner', { scene: state.scene })) : null,
             React.createElement('div', { className: 'dsm-stat-row' },
               React.createElement('div', { className: 'dsm-summary' },
                 [['total', summary.total, mt('mcp.stat.total')], ['enabled', summary.enabled, mt('mcp.stat.enabled')], ['tools', summary.tools < summary.toolsTotal ? summary.tools + '/' + summary.toolsTotal : summary.tools, mt('mcp.stat.tools')]].map((item) =>
                   React.createElement('div', { key: item[0], className: 'dsm-stat' },
-                    React.createElement('strong', null, item[1]), item[2]))),
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading || !summary.total || !!state.scene, title: state.scene ? mt('scene.switch.title', { scene: state.scene }) : '', onClick: () => run('mcpm-set-all', { enabled: summary.enabled < summary.total }, 'setall') }, mt(summary.total > 0 && summary.enabled === summary.total ? 'mcp.btn.disableAll' : 'mcp.btn.enableAll'))),
+                    React.createElement('strong', null, item[1]), item[2])))),
             React.createElement('div', { className: 'dsm-filters' },
               React.createElement('input', { className: 'dsm-control dsm-search', value: query, 'aria-label': mt('mcp.search'), placeholder: mt('mcp.search.placeholder'), onChange: (ev) => setQuery(ev.target.value) }),
               React.createElement('div', { className: 'dsm-source-filter' },
@@ -1813,7 +2037,10 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             })
           }
 
-          function refresh() {
+          function refresh(silent) {
+            // 手动刷新（含首次加载）要把按钮切到「刷新中…」——点完毫无反馈等于没点。
+            // 页面内部那些「操作完顺手重读」的调用传 silent，免得按钮每次都闪一下。
+            if (!silent) setState(function (s) { return Object.assign({}, s, { loading: true }) })
             apiCall('agentsmd-list', {}).then(function (res) {
               // 刷新即清掉上一次的「拒绝」说明（它解释的是那一次点击，不是常驻状态）。
               setState(function (s) { return { loading: false, error: res && res.ok ? null : ((res && res.error) || mt('mcp.msg.loadFailed')), presets: (res && res.presets) || [], current: s.current, scenePrompt: (res && res.scenePrompt) || null, anyLocked: (res && res.anyLocked) === true, deny: res && res.ok ? null : s.deny } })
@@ -1900,7 +2127,9 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
             }).catch(function () {})
           }
 
-          var body = state.loading
+          // 只有「还没有任何内容」时才让加载占位顶掉列表：手动点刷新时列表不该凭空消失，
+          // 反馈由刷新按钮自己的「刷新中…」承担（与记忆页 / 技能页同一口径）。
+          var body = state.loading && !state.presets.length
             ? React.createElement('div', { className: 'dsm-empty' }, t('agm.loading'))
             : state.error
               ? React.createElement(Notice, { kind: 'err', text: state.error })
@@ -1916,7 +2145,10 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                     // 场景绑的就是它，但 AGENTS.md 里的内容不是它（被手改过？）→ 说清楚，
                     // 并留「重新应用」这条路写回。
                     var fileMismatch = !!sceneDriver && sceneDriver.presetId === p.id && !p.fileApplied
-                    var applyBlocked = !!sceneDriver && sceneDriver.presetId !== p.id
+                    // 场景接管的是**别的**预设时，应用这一份 = 把该场景改绑到它（用户裁定
+                    // 2026-09-17：未锁定时切换要可用，并且同步写进场景档案），所以不再拦截；
+                    // 只在 title 里把后果说出来，用户点了才知道会发生什么。
+                    var applyRebinds = !!sceneDriver && sceneDriver.presetId !== p.id
                     return React.createElement('div', { key: p.id, className: 'dsm-source' },
                       React.createElement('div', { className: 'dsm-source-head' },
                         React.createElement('div', { className: 'dsm-source-head-main' },
@@ -1929,7 +2161,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                           restoreRef ? React.createElement('span', { className: 'dsm-tag', title: t('agm.restore.tag.hint') }, t('agm.restore.tag')) : null),
                         React.createElement('div', { className: 'dsm-source-actions' },
                           React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: state.anyLocked === true, onClick: function () { openEdit(p) } }, t('agm.btn.edit')),
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.anyLocked === true || applyBlocked, onClick: function () { setApplyConfirm({ id: p.id }) }, title: applyBlocked ? t('agm.apply.blockedScene', { scene: sceneDriverLabel }) : t('agm.apply.hint') }, p.fileApplied ? t('agm.btn.reapply') : t('agm.btn.apply')),
+                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.anyLocked === true, onClick: function () { setApplyConfirm({ id: p.id }) }, title: applyRebinds ? t('agm.apply.rebindScene', { scene: sceneDriverLabel }) : t('agm.apply.hint') }, p.fileApplied ? t('agm.btn.reapply') : t('agm.btn.apply')),
                           React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: refTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: refTexts.join(t('agm.ref.sep')) }) : t('scenes.lock.blockedEdit'), onClick: function () {
                             // 被引用的预设**点得动但删不掉**：当面说出「谁在用」，而不是让用户对着
                             // 禁用按钮猜（disabled 的按钮连 title 都不弹）。宿主侧同样拒绝，这里只是先说。
@@ -1945,7 +2177,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
                   React.createElement('h2', { className: 'dsm-title' }, t('tabs.prompts'))),
                 React.createElement('p', { className: 'dsm-desc' }, t('prompts.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.loading, onClick: function () { refresh() } }, state.loading ? t('btn.refreshing') : t('btn.refresh')),
+                refreshButton(t, state.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: state.loading, onClick: function () { refresh() } }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.anyLocked === true, onClick: function () { setCreateModal({ id: '', from: '', content: '', description: '', error: null }) } }, t('agm.btn.new')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.anyLocked === true, onClick: function () { setImportResult(null); setImportOpen(true) } }, t('agm.btn.import')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || !state.presets.length, onClick: function () { setExportState({ busy: false, result: null }) } }, t('export.presets')),
@@ -2157,8 +2389,24 @@ function callApi(path, options) {
   if (options && typeof options.body === "string") { try { args = JSON.parse(options.body) || {}; } catch (e) { args = {}; } }
   return apiCall(op, args).then(function (payload) {
     if (!payload || payload.ok !== true) throw payload || { error: "request failed" };
+    // 场景内改开关时宿主会顺手把改动同步写进当前场景档案；同步没跟上（写盘失败 /
+    // 场景已被删）时它会挂一个 `sceneSyncError`。这里必须把它带出去 —— 否则页面只会
+    // 显示「已更新」，而运行时与档案已经对不上了（v0.9.1 之前正是静默的，用户只能靠肉眼
+    // 去档案里比对才发现）。
+    if (payload.sceneSyncError) {
+      return Object.assign({}, (payload.data && typeof payload.data === "object") ? payload.data : {}, { sceneSyncError: payload.sceneSyncError });
+    }
     return payload.data;
   });
+}
+/**
+ * 「改动已生效，但没能同步写进场景档案」的提示文案（没有就返回空串）。
+ *
+ * 入参可以是原始响应信封，也可以是上面 callApi 贴过字段的 data —— 两种都认。
+ */
+function sceneSyncWarn(t, res) {
+  var err = res && res.sceneSyncError;
+  return err ? t("scene.sync.failed", { error: String(err) }) : "";
 }
     function isSkillEnabled(skill) { if (skill.enabled !== undefined) return skill.enabled === true; return skill.invocationPolicyValid && skill.modelInvocable && skill.userInvocable && skill.managerEnabled !== false; }
     function countKey(key, count) { return key + (Number(count) === 1 ? ".one" : ".other"); }
@@ -2244,22 +2492,35 @@ function callApi(path, options) {
      * 弹窗不跳、也不会出现嵌套滚动条。普通表单/确认类**不传 list**，结构保持原样。
      */
     /**
-     * 工具描述：超过阈值就默认只显示两行，点「展开」看全文。
+     * 工具描述：超过两行才默认只显示两行，点「展开」看全文。
      *
      * 为什么需要：MCP 工具描述动辄几百字（官方 server 的说明普遍很长），全展开会把详情弹窗
      * 撑成一面墙，用户反而找不到工具名。截断 + 展开把「扫一遍有哪些工具」和「细读某一个」
      * 分成两步。纯 CSS 行数裁剪（`-webkit-line-clamp`），不做字符截断 —— 展开时给的是原文，
      * 所以宿主的 `toolDescriptionMaxLength` 设置不影响这里（默认 0 = 不截断）。
+     *
+     * 按钮只按**真实溢出**显示：短的（哪怕字数不少、两行放得下）不给按钮 —— 字符数阈值
+     * 会造出「点了没任何变化」的死按钮。收起态才量（展开后不裁剪，scrollHeight 不再代表
+     * 被裁掉的高度）；没有 DOM（测试里的假 dispatcher）时 ref 为空，静默跳过。
      */
     function ToolDesc(props) {
-      var state = react.useState(false)
-      var open = state[0]
-      var setOpen = state[1]
+      var openState = react.useState(false)
+      var open = openState[0]
+      var setOpen = openState[1]
+      var overState = react.useState(false)
+      var overflow = overState[0]
+      var setOverflow = overState[1]
+      var ref = react.useRef(null)
       var text = String(props.text || '')
-      var collapsible = text.length > 120
+      react.useEffect(function () {
+        if (open) return
+        var el = ref.current
+        if (!el || typeof el.scrollHeight !== "number" || typeof el.clientHeight !== "number") return
+        setOverflow(el.scrollHeight > el.clientHeight + 1)
+      }, [text, open])
       return h("div", { className: "dsm-tool-desc-wrap" },
-        h("div", { className: "dsm-tool-desc" + (collapsible && !open ? " dsm-tool-desc-clamp" : "") }, text),
-        collapsible ? h("button", {
+        h("div", { ref: ref, className: "dsm-tool-desc" + (open ? "" : " dsm-tool-desc-clamp") }, text),
+        overflow ? h("button", {
           type: "button",
           className: "dsm-tool-desc-toggle",
           onClick: function () { setOpen(!open) },
@@ -2370,6 +2631,16 @@ function callApi(path, options) {
         h('span', null, label),
         h('span', { className: 'dsm-seg-group-line' }))
     }
+    /**
+     * 「全选 ↔ 取消全选」二合一按钮的标签对 —— fixedLabelPair 的语义化别名（同一套定宽机制）。
+     *
+     * 两种文案宽度不同（中文「全选」2 字 vs「取消全选」4 字；英文 Select all vs
+     * Deselect all 差得更多），只渲染当前那一份的话，按钮宽度会随点击变来变去 ——
+     * 用户实测「点了『全选』变成『取消全选』，整颗按钮换到第二行」。
+     */
+    function bulkPair(label, other) {
+      return fixedLabelPair(label, other)
+    }
     /** 段头公共动作：全选 / 清空 / 移除段（未定义时改为「添加」）。 */
     /**
      * 段头动作。**批量动作合二为一**（D11）：同一时刻只有一个方向是合理的 ——
@@ -2378,7 +2649,7 @@ function callApi(path, options) {
      */
     function segActions(props) {
       if (!props.defined) return [h('button', { key: 'add', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy, onClick: props.onAdd }, props.addLabel)]
-      var out = [h('button', { key: 'all', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy, onClick: props.allChecked ? props.onClear : props.onAll }, props.allChecked ? props.clearLabel : props.selectAllLabel)]
+      var out = [h('button', { key: 'all', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: props.busy, onClick: props.allChecked ? props.onClear : props.onAll }, bulkPair(props.allChecked ? props.clearLabel : props.selectAllLabel, props.allChecked ? props.selectAllLabel : props.clearLabel))]
       // 常驻段（记忆，P5 单一真相源）没有「段定义」可移除 → 不传 onRemove 即不渲染。
       if (props.onRemove) out.push(h('button', { key: 'rm', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy, onClick: props.onRemove }, props.removeLabel))
       return out
@@ -2503,7 +2774,7 @@ function callApi(path, options) {
           })) : h('div', { className: 'dsm-pick-empty' }, t('export.empty')),
           props.result ? h('div', { className: 'dsm-feedback' + (props.result.ok ? '' : ' dsm-error'), role: 'alert' }, props.result.text) : null),
         h('div', { className: 'dsm-modal-actions' },
-          h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy || !items.length, onClick: function () { setPicked(allPicked ? [] : allKeys.slice()) } }, allPicked ? t('export.pickNone') : t('export.pickAll')),
+          h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: props.busy || !items.length, onClick: function () { setPicked(allPicked ? [] : allKeys.slice()) } }, bulkPair(allPicked ? t('export.pickNone') : t('export.pickAll'), allPicked ? t('export.pickAll') : t('export.pickNone'))),
           h('button', { type: 'button', className: 'dsm-btn', disabled: props.busy || !picked.length || !outDir.trim(), onClick: function () { props.onSubmit(picked, outDir.trim()) } }, props.busy ? t('export.busy') : t('export.submit'))),
         picking ? h(DirPickerModal, { key: 'dir', title: t('export.pickDir'), initial: outDir, closeLabel: t('btn.close'), onClose: function () { setPicking(false) }, onPick: function (p) { setOutDir(p); setPicking(false) } }) : null)
     }
@@ -2577,7 +2848,7 @@ function callApi(path, options) {
       var pickerOpenRef = react.useRef(false);
       function refresh(silent) { if (!silent) setSnapshot({ loading: true, error: null, data: snapshot.data }); return callApi("/state").then(function (data) { setSnapshot({ loading: false, error: null, data: data }); return data; }).catch(function (error) { setSnapshot({ loading: false, error: translateError(t, error), data: snapshot.data }); }); }
       react.useEffect(function () { refresh(false); }, []);
-      function post(path, body, successKey, successParams) { if (inflightRef.current) return Promise.reject({ error: "operation already in progress" }); inflightRef.current = true; setBusy(true); setResult(null); return callApi(path, { body: JSON.stringify(body || {}) }).then(function (data) { setResult({ ok: true, text: successKey ? t(successKey, successParams || data || {}) : t("result.updated") }); return refresh(true).then(function () { return data; }); }).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); throw error; }).finally(function () { inflightRef.current = false; setBusy(false); }); }
+      function post(path, body, successKey, successParams) { if (inflightRef.current) return Promise.reject({ error: "operation already in progress" }); inflightRef.current = true; setBusy(true); setResult(null); return callApi(path, { body: JSON.stringify(body || {}) }).then(function (data) { var warn = sceneSyncWarn(t, data); setResult({ ok: !warn, warning: !!warn, text: (successKey ? t(successKey, successParams || data || {}) : t("result.updated")) + (warn ? " " + warn : "") }); return refresh(true).then(function () { return data; }); }).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); throw error; }).finally(function () { inflightRef.current = false; setBusy(false); }); }
       function openDetail(root, skill) { setBusy(true); setDetail(null); setModal("detail"); callApi("/detail", { body: JSON.stringify({ root: root.key, name: skill.name }) }).then(setDetail).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); setModal(null); }).finally(function () { setBusy(false); }); }
       function openSource() { if (!detail || !detail.path) return; setBusy(true); setResult(null); apiCall("skill-open", { path: detail.path }).then(function (res) { if (res && res.ok) setResult({ ok: true, text: t("result.opened", { path: detail.path }) }); else setResult({ ok: false, text: t("error.action", { error: translateError(t, res) }) }); }).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); }).finally(function () { setBusy(false); }); }
       function updateForm(key, value) { setForm(Object.assign({}, form, { [key]: value })); }
@@ -2692,17 +2963,101 @@ function callApi(path, options) {
       function renderSkill(root, skill) {
         var enabled = isSkillEnabled(skill), key = skill.shadowedBy ? "status.shadowed" : skill.loadable === false ? "status.invalid" : enabled ? "status.enabled" : "status.disabled", cls = skill.shadowedBy ? "dsm-shadowed" : enabled ? "dsm-enabled" : "dsm-disabled";
         var canToggle = root.toggleable !== false && skill.loadable !== false;
-        return h("div", { key: skill.name, className: "dsm-row" }, h("div", { className: "dsm-main" }, h("div", { className: "dsm-name" }, skill.declaredName || skill.name), h("div", { className: "dsm-note" }, skill.description || t("note.missing")), skill.shadowedBy ? h("div", { className: "dsm-rule-hint" }, t("status.shadowed.hint", { name: skill.shadowedBy.name })) : null), h("div", { className: "dsm-tags" }, h("span", { className: "dsm-tag" }, rootDisplayName(t, root)), skill.preferred === true ? h("span", { className: "dsm-tag dsm-tag-on" }, t("status.preferred")) : null, !root.mutable ? h("span", { className: "dsm-tag" }, t("status.readonly")) : null, root.mutable && !root.deletable ? h("span", { className: "dsm-tag", title: t("status.notDeletable.hint") }, t("status.notDeletable")) : null), h("div", { className: "dsm-status " + cls }, t(key)), h("div", { className: "dsm-row-actions" }, canToggle && skill.shadowedBy ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy || !!sceneName, title: sceneName ? t("scene.switch.title", { scene: sceneName }) : t("btn.activate.title"), onClick: function () { activateShadowed(root, skill); } }, t("btn.activate")) : null, canToggle && !skill.shadowedBy ? h(Switch, { on: enabled, disabled: busy || root.enabled === false || anyLocked || !!sceneName, title: sceneName ? t("scene.switch.title", { scene: sceneName }) : "", label: t("skill.toggle") + " " + skill.name, onClick: function () { post(enabled ? "/disable" : "/enable", { root: root.key, name: skill.name }); } }) : null, skill.preferred === true ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy || !!sceneName, title: sceneName ? t("scene.switch.title", { scene: sceneName }) : t("btn.unprefer.title"), onClick: function () { clearPreferred(root, skill); } }, t("btn.unprefer")) : null, h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { openDetail(root, skill); } }, t("btn.detail")), root.deletable === true ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { setModal({ type: "trash-confirm", root: root.key, name: skill.name }); } }, t("btn.trash")) : null));
+        return h("div", { key: skill.name, className: "dsm-row" }, h("div", { className: "dsm-main" }, h("div", { className: "dsm-name" }, skill.declaredName || skill.name), h("div", { className: "dsm-note" }, skill.description || t("note.missing")), skill.shadowedBy ? h("div", { className: "dsm-rule-hint" }, t("status.shadowed.hint", { name: skill.shadowedBy.name })) : null), h("div", { className: "dsm-tags" }, h("span", { className: "dsm-tag" }, rootDisplayName(t, root)), skill.preferred === true ? h("span", { className: "dsm-tag dsm-tag-on" }, t("status.preferred")) : null, !root.mutable ? h("span", { className: "dsm-tag" }, t("status.readonly")) : null, root.mutable && !root.deletable ? h("span", { className: "dsm-tag", title: t("status.notDeletable.hint") }, t("status.notDeletable")) : null), h("div", { className: "dsm-status " + cls }, t(key)), h("div", { className: "dsm-row-actions" }, canToggle && skill.shadowedBy ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy, title: t("btn.activate.title"), onClick: function () { activateShadowed(root, skill); } }, t("btn.activate")) : null, canToggle && !skill.shadowedBy ? h(Switch, { on: enabled, disabled: busy || root.enabled === false || anyLocked, label: t("skill.toggle") + " " + skill.name, onClick: function () { post(enabled ? "/disable" : "/enable", { root: root.key, name: skill.name }); } }) : null, skill.preferred === true ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy, title: t("btn.unprefer.title"), onClick: function () { clearPreferred(root, skill); } }, t("btn.unprefer")) : null, h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { openDetail(root, skill); } }, t("btn.detail")), root.deletable === true ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { setModal({ type: "trash-confirm", root: root.key, name: skill.name }); } }, t("btn.trash")) : null));
       }
       function renderRoot(root) {
         if (activeSource && activeSource !== root.key) return null;
         var displayName = rootDisplayName(t, root), filtered = root.skills.filter(function (skill) { return matchSkillQuery(Object.assign({}, skill, { rootKey: root.key, rootLabel: displayName }), query); }); if (query && !filtered.length) return null; var open = !!expanded[root.key] || !!query;
         var rootCount = root.count == null ? root.skills.length : root.count;
-        return h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !open })); } }, h("span", { className: "dsm-source-title", title: displayName }, displayName), h("span", { className: "dsm-count" }, t(countKey("summary.group", rootCount), { count: rootCount })), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.defaultSource === true ? "" : root.enabled ? "dsm-tag-on" : "dsm-tag-off") }, root.scope === "project" ? t("status.project") : root.defaultSource === true ? t("status.manageable") : t(root.enabled ? "status.source.on" : "status.source.off")), root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), root.scope !== "project" && root.defaultSource !== true && root.toggleable !== false ? h("span", { className: "dsm-source-actions" }, root.removable === true ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy, title: t("btn.source.remove.title"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, t("btn.source.remove")) : null, h(Switch, { on: root.enabled, disabled: busy || anyLocked || !!sceneName, title: sceneName ? t("scene.switch.title", { scene: sceneName }) : "", label: t("source.toggle") + " " + displayName, onClick: function () { post(root.enabled ? "/source-disable" : "/source-enable", { root: root.key }); } })) : null), open ? h("div", { className: "dsm-source-body" }, filtered.length ? h(react.Fragment, null, h("div", { className: "dsm-table-head" }, h("span", null, t("table.skill")), h("span", null, t("filter.source")), h("span", null, t("table.status")), h("span", null, "")), filtered.map(function (skill) { return renderSkill(root, skill); })) : h("div", { className: "dsm-empty" }, query ? t("empty.search") : t("empty.source"))) : null);
+        return h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !open })); } }, h("span", { className: "dsm-source-title", title: displayName }, displayName), h("span", { className: "dsm-count" }, t(countKey("summary.group", rootCount), { count: rootCount })), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.defaultSource === true ? "" : root.enabled ? "dsm-tag-on" : "dsm-tag-off") }, root.scope === "project" ? t("status.project") : root.defaultSource === true ? t("status.manageable") : t(root.enabled ? "status.source.on" : "status.source.off")), root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), (function () {
+          // 目录级「全选 / 取消全选」（用户裁定 2026-09-17）：只作用于**这个目录下当前
+          // 可见且可切换**的技能 —— 与页头那颗同一套目标集逻辑（bulkTargets 传 rootKey），
+          // 同名技能只算生效的那一个（被覆盖的副本跳过）。
+          // 默认来源（可管理 / DSH 技能）没有来源开关，这颗按钮就独占右侧位置。
+          var bulk = bulkState(root.key);
+          var showSwitch = root.scope !== "project" && root.defaultSource !== true && root.toggleable !== false;
+          var acts = [];
+          // 点这颗按钮**顺带把卡片展开**（用户裁定 2026-09-17）：批量开关的结果就在下面这几行里，
+          // 卡片收着的话点完只剩按钮文案从「全选」变成「取消全选」，到底改了哪几个技能看不见。
+          // 只展开、不收起 —— 两个方向（全选 / 取消全选）都要能看见结果，收起是点卡片头的事。
+          if (bulk.targets.length) acts.push(h("button", { key: "all", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-bulk", disabled: busy || anyLocked, title: t("source.bulk.title"), onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: true })); submitBulk(bulk.targets, !bulk.on); } }, bulkPair(bulk.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulk.on ? t("bulk.selectAll") : t("bulk.unselectAll"))));
+          if (showSwitch) {
+            // 「移除来源」只留图标（用户裁定 2026-09-17）：它是低频的破坏性操作，却和「全选」
+            // 并列、还带红框描边 —— 于是整行的视觉重心落在它身上，四字宽度也占地方。
+            // 图标按钮必须自带 title + aria-label（没有可见文字）；点击照旧弹确认弹窗，
+            // 那里仍是带文字的红色「移除来源」，破坏性操作的说明没有丢。
+            if (root.removable === true) acts.push(h("button", { key: "rm", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger dsm-btn-icon", disabled: busy, title: t("btn.source.remove.title"), "aria-label": t("btn.source.remove.title"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, h(TrashIcon, { size: 14 })));
+            // 开关来源时**顺带把卡片展开**（用户裁定 2026-09-17），与旁边那颗「全选」同口径：
+            // 启停的结果就是下面这些技能行（开启 = 整目录可用了，关闭 = 逐行变停用），卡片收着
+            // 的话点完只剩标签从「已停用」变「已启用」，目录里到底有什么、哪些真的可用了看不见。
+            // 只展开、不收起 —— 两个方向都要能看见结果，收起仍然是点卡片头那一行的事。
+            acts.push(h(Switch, { key: "sw", on: root.enabled, disabled: busy || anyLocked, label: t("source.toggle") + " " + displayName, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: true })); post(root.enabled ? "/source-disable" : "/source-enable", { root: root.key }); } }));
+          }
+          return acts.length ? h("span", { className: "dsm-source-actions" }, acts) : null;
+        })()), open ? h("div", { className: "dsm-source-body" }, filtered.length ? h(react.Fragment, null, h("div", { className: "dsm-table-head" }, h("span", null, t("table.skill")), h("span", null, t("filter.source")), h("span", null, t("table.status")), h("span", null, "")), filtered.map(function (skill) { return renderSkill(root, skill); })) : h("div", { className: "dsm-empty" }, query ? t("empty.search") : t("empty.source"))) : null);
       }
 
       var summary = data.summary || { total: 0, enabled: 0, disabled: 0, issues: 0 };
-      var content = [h("style", { key: "css" }, CSS), h("div", { key: "head", className: "dsm-head" }, h("div", { className: "dsm-title-block" }, h("div", { className: "dsm-title-row" }, h("h2", { className: "dsm-title" }, t("title"))), h("p", { className: "dsm-desc" }, t("desc"))), h("div", { className: "dsm-actions" }, h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy || snapshot.loading, onClick: function () { refresh(false); } }, (busy || snapshot.loading) ? t("btn.refreshing") : t("btn.refresh")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: anyLocked, onClick: openCreate }, t("btn.create")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: anyLocked, onClick: function () { setResult(null); setUpload(null); setModal("import"); } }, t("btn.import")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setModal("export"); } }, t("export.skills")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setCustomForm({ path: "", label: "" }); setModal("custom-add"); } }, t("btn.custom.add")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal("trash"); } }, t("trash.btn.open")))), anyLocked ? h("div", { key: "lockbanner", className: "dsm-feedback dsm-warning", role: "status" }, t("lock.banner")) : null,
+      /**
+       * 批量启停的目标集 = 当前**可见**（搜索 + 来源筛选命中）且**可切换**的技能。
+       * 条件与单条 Switch 逐字一致（来源可切换、来源没被停用、技能可加载、不是被覆盖的副本），
+       * 否则会出现「全选说 12 个、实际只改了 9 个」的假回执。
+       *
+       * 不传 rootKey → 页头那颗按钮的作用集（全部可见来源）；传 rootKey → 某个目录卡片上
+       * 那颗按钮的作用集（只看这一个目录）。同名技能只算**生效的那一个**（被覆盖的副本
+       * `shadowedBy` 跳过）——这正是「全选后同名技能只有被启用的那个被勾」的由来。
+       */
+      function bulkTargets(rootKey) {
+        var out = [];
+        for (var i = 0; i < roots.length; i++) {
+          var root = roots[i];
+          if (rootKey && root.key !== rootKey) continue;
+          if (activeSource && activeSource !== root.key) continue;
+          if (root.toggleable === false || root.enabled === false) continue;
+          var list = root.skills || [];
+          var rootLabel = rootDisplayName(t, root);
+          for (var j = 0; j < list.length; j++) {
+            var sk = list[j];
+            if (sk.loadable === false || sk.shadowedBy) continue;
+            if (!matchSkillQuery(Object.assign({}, sk, { rootKey: root.key, rootLabel: rootLabel }), query)) continue;
+            out.push({ root: root.key, name: sk.name, on: isSkillEnabled(sk) });
+          }
+        }
+        return out;
+      }
+      /** 一组批量目标 + 是否已全开（二合一按钮的两个入参）。 */
+      function bulkState(rootKey) {
+        var targets = bulkTargets(rootKey);
+        return { targets: targets, on: targets.length > 0 && targets.every(function (x) { return x.on; }) };
+      }
+      /** 批量启停：主要看「当前是不是全开」，是就发停用，否则发启用（二合一按钮的语义）。 */
+      function submitBulk(items, enabled) {
+        if (!items || !items.length) return;
+        setBusy(true); setResult(null);
+        apiCall("skill-set-all", {
+          items: items.map(function (x) { return { root: x.root, name: x.name }; }),
+          enabled: enabled,
+        }).then(function (res) {
+          if (res && res.ok) {
+            var payload = (res && res.data) || {};
+            var failed = (payload.failed || []).length;
+            // 场景内批量开关同样会同步写档案；没跟上就说出来（详见 sceneSyncWarn）。
+            var syncWarn = sceneSyncWarn(t, res);
+            setResult({
+              ok: failed === 0 && !syncWarn,
+              warning: failed > 0 || !!syncWarn,
+              text: t("bulk.done.skills", {
+                action: t(enabled ? "bulk.enabled" : "bulk.disabled"),
+                count: payload.changed == null ? items.length : payload.changed,
+                failed: failed,
+              }) + (syncWarn ? " " + syncWarn : ""),
+            });
+            refresh(true);
+          } else setResult({ ok: false, text: translateError(t, res) });
+        }).catch(function (e) { setResult({ ok: false, text: String((e && e.message) || e) }); }).finally(function () { setBusy(false); });
+      }
+      var bulkAll = bulkState();
+      var content = [h("style", { key: "css" }, CSS), h("div", { key: "head", className: "dsm-head" }, h("div", { className: "dsm-title-block" }, h("div", { className: "dsm-title-row" }, h("h2", { className: "dsm-title" }, t("title"))), h("p", { className: "dsm-desc" }, t("desc"))), h("div", { className: "dsm-actions" }, refreshButton(t, busy || snapshot.loading, { className: "dsm-btn dsm-btn-secondary", disabled: busy || snapshot.loading, onClick: function () { refresh(false); } }), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: anyLocked, onClick: openCreate }, t("btn.create")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: anyLocked, onClick: function () { setResult(null); setUpload(null); setModal("import"); } }, t("btn.import")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setModal("export"); } }, t("export.skills")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setCustomForm({ path: "", label: "" }); setModal("custom-add"); } }, t("btn.custom.add")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal("trash"); } }, t("trash.btn.open")), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary dsm-btn-bulk", disabled: busy || anyLocked || !bulkAll.targets.length, title: t("bulk.head.title"), onClick: function () { submitBulk(bulkAll.targets, !bulkAll.on) } }, bulkPair(bulkAll.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulkAll.on ? t("bulk.selectAll") : t("bulk.unselectAll"))))), anyLocked ? h("div", { key: "lockbanner", className: "dsm-feedback dsm-warning", role: "status" }, t("lock.banner")) : null,
       sceneName ? h("div", { key: "scenebanner", className: "dsm-feedback dsm-warning", role: "status" }, t("scene.switch.banner", { scene: sceneName })) : null,
       h("div", { key: "summary", className: "dsm-summary" }, [[summary.total, "summary.total"], [summary.enabled, "summary.enabled"], [summary.issues, "summary.issues"]].map(function (item) { return h("div", { key: item[1], className: "dsm-stat" }, h("strong", null, item[0]), t(countKey(item[1], item[0]), { count: item[0] }).replace(String(item[0]), "")); })), h("div", { key: "filters", className: "dsm-filters" }, h("input", { className: "dsm-control dsm-search", value: query, "aria-label": t("search"), placeholder: t("search.placeholder"), onChange: function (e) { setQuery(e.target.value); } }), h("div", { className: "dsm-source-filter" }, h(SourceSelect, { value: activeSource, options: options, onChange: setSource }))), result && modal !== "import" ? h(Notice, { key: "result", kind: result.warning ? "warn" : result.ok ? "ok" : "err", text: result.text }) : null].concat((data.warnings || []).map(function (warning, index) { return h(Notice, { key: "warning-" + index, kind: "warn", text: translateError(t, warning) }); }), [snapshot.error ? h(Notice, { key: "error", kind: "err", text: snapshot.error }) : null, snapshot.loading && !snapshot.data ? h("div", { key: "loading", className: "dsm-empty" }, t("loading")) : h("div", { key: "sources", className: "dsm-sources" }, roots.map(renderRoot))]);
 
@@ -2813,7 +3168,10 @@ function callApi(path, options) {
           var noticeState = React.useState(null)
           var notice = noticeState[0], setNotice = noticeState[1]
 
-          function refresh() {
+          function refresh(silent) {
+            // 手动刷新（含首次加载）要把按钮切到「刷新中…」——点完毫无反馈等于没点。
+            // 页面内部那些「操作完顺手重读」的调用传 silent，免得按钮每次都闪一下。
+            if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
             apiCall('history-list', {}).then(function (r) {
               if (r && r.ok) {
                 var items = r.items || []
@@ -2826,6 +3184,10 @@ function callApi(path, options) {
                   return next
                 })
               } else setData({ loading: false, items: [], workspaces: {}, groups: [], retentionDays: 0, error: (r && r.error) || t('hist.err.load') })
+            }).catch(function (e) {
+              // 请求被拒 / 网络异常：必须把 loading 收回来，否则按钮会永远停在「刷新中…」
+              // 且一直禁用（这一支原来根本没有 —— 失败时页面停在旧数据上，什么都没有说）。
+              setData(function (prev) { return Object.assign({}, prev, { loading: false, error: String((e && e.message) || e) }) })
             })
           }
           React.useEffect(function () { refresh() }, [])
@@ -3207,9 +3569,12 @@ function callApi(path, options) {
                   React.createElement('h2', { className: 'dsm-title' }, t('tabs.sessions'))),
                 React.createElement('p', { className: 'dsm-desc' }, t('sessions.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: data.loading, onClick: function () { refresh() } }, data.loading ? t('btn.refreshing') : t('btn.refresh')),
+                refreshButton(t, data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: data.loading, onClick: function () { refresh() } }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openImportPicker }, t('hist.btn.import')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openExportPicker }, t('hist.btn.export')),
+                // 「全选 / 取消全选」紧挨导出（用户 2026-09-17 裁定）：它是列表级动作，
+                // 与其余页头动作同栏，不再和统计数字挤在一行。
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: !filtered.length, onClick: function () { toggleAllVisible(visibleIds) } }, bulkPair(allVisible ? t('hist.deselectAll') : t('hist.selectAll'), allVisible ? t('hist.selectAll') : t('hist.deselectAll'))),
                 selected.size > 0 ? React.createElement('div', { className: 'dsm-hist-batch' },
                   React.createElement('span', { className: 'dsm-hist-batch-count' }, t('hist.selected', { count: selected.size })),
                   React.createElement('div', { className: 'dsm-hist-batch-actions' },
@@ -3220,8 +3585,7 @@ function callApi(path, options) {
                 [['archived', data.items.length, t('hist.stat.archived')], ['projects', grouped ? groups.length : '—', t('hist.stat.projects')], ['retention', data.retentionDays ? String(data.retentionDays) : '∞', t('hist.stat.retention')]].map(function (item) {
                   return React.createElement('div', { key: item[0], className: 'dsm-stat' },
                     React.createElement('strong', null, item[1]), item[2])
-                })),
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: !filtered.length, onClick: function () { toggleAllVisible(visibleIds) } }, allVisible ? t('hist.deselectAll') : t('hist.selectAll'))),
+                }))),
             React.createElement('div', { className: 'dsm-filters' },
               React.createElement('input', { className: 'dsm-control dsm-search', type: 'text', placeholder: t('hist.search.placeholder'), value: query, onChange: function (e) { setQuery(e.target.value) } }),
               React.createElement('div', { className: 'dsm-source-filter' },
@@ -3230,7 +3594,7 @@ function callApi(path, options) {
                 }))),
             data.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
             notice ? React.createElement(Notice, { kind: notice.kind, text: notice.text }) : null,
-            data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('hist.loading'))
+            data.loading && !data.items.length ? React.createElement('div', { className: 'dsm-empty' }, t('hist.loading'))
               : filtered.length === 0 ? React.createElement('div', { className: 'dsm-empty' }, query ? t('hist.empty.search') : t('hist.empty.none'))
               : React.createElement('div', { className: 'dsm-sources' },
                 grouped ? groups.map(renderGroup) : React.createElement('div', { className: 'dsm-source' }, filtered.map(renderRow))),
@@ -3693,7 +4057,7 @@ function callApi(path, options) {
           function archiveSegActions(defined, addLabel, onAdd, onRemove, onAll, onClear, allChecked) {
             return segActions({
               defined: defined, busy: busy, addLabel: addLabel,
-              selectAllLabel: t('scenes.seg.selectAll'), clearLabel: t('scenes.seg.clear'), removeLabel: t('memory.archive.removeSection'),
+              selectAllLabel: t('bulk.selectAll'), clearLabel: t('bulk.unselectAll'), removeLabel: t('memory.archive.removeSection'),
               onAdd: onAdd, onRemove: onRemove, onAll: onAll, onClear: onClear, allChecked: allChecked,
             })
           }
@@ -3757,7 +4121,7 @@ function callApi(path, options) {
               count: t('scenes.seg.checked', { checked: enabledCount, total: own.length }),
               actions: segActions({
                 defined: true, busy: busy,
-                selectAllLabel: t('scenes.seg.selectAll'), clearLabel: t('scenes.seg.clear'),
+                selectAllLabel: t('bulk.selectAll'), clearLabel: t('bulk.unselectAll'),
                 onAll: function () { setAllMemories(true) },
                 onClear: function () { setAllMemories(false) },
                 allChecked: own.length > 0 && enabledCount === own.length,
@@ -3793,7 +4157,9 @@ function callApi(path, options) {
                 function () { setSections(Object.assign({}, modalSections(), { mcp: emptyMcpPreset() })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.mcp; setSections(s) },
                 mcpSelectAll,
-                function () { setSections(Object.assign({}, modalSections(), { mcp: {} })) }),
+                function () { setSections(Object.assign({}, modalSections(), { mcp: {} })) },
+                // 「全选」按钮的全选态：档案里勾了全部服务器（含没在过滤结果里的）。
+                defined && servers.length > 0 && servers.every(function (x) { return sections.mcp[x.name] !== undefined })),
               body: defined
                 ? React.createElement('div', { className: 'dsm-seg-body' },
                     segFilter(modal.mcpQuery, function (v) { setModal(Object.assign({}, modal, { mcpQuery: v })) }, t('scenes.filter.servers')),
@@ -3841,6 +4207,9 @@ function callApi(path, options) {
             var noteVal = (sections.mcpNotes || {})[server] || ''
             var known = drillTools
             var checkedCount = spec === '*' ? (known || []).length : (Array.isArray(spec) ? spec.length : 0)
+            // 工具级的「全选 / 取消全选」也是二合一：全勾了就该给「取消全选」，
+            // 并列两个按钮必然有一个是废话（与段头同一口径）。
+            var allToolsChecked = checkedCount > 0 && (known || []).length > 0 && checkedCount === (known || []).length
             return React.createElement('div', { className: 'dsm-mask', key: 'mcp-edit' },
               React.createElement('div', { className: 'dsm-modal' },
                 React.createElement('div', { className: 'dsm-modal-head' },
@@ -3855,8 +4224,7 @@ function callApi(path, options) {
                     React.createElement('div', { className: 'dsm-mcp-edit-tools-head' },
                       React.createElement('label', { className: 'dsm-label' }, t('scenes.mcp.toolsOf')),
                       React.createElement('div', { className: 'dsm-mcp-edit-tools-actions' },
-                        React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !known, onClick: function () { mcpDrillSpec('*') } }, t('scenes.seg.selectAll')),
-                        React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { mcpDrillSpec([]) } }, t('scenes.seg.clear')))),
+                        React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: busy || !known, onClick: function () { mcpDrillSpec(allToolsChecked ? [] : '*') } }, bulkPair(allToolsChecked ? t('bulk.unselectAll') : t('bulk.selectAll'), allToolsChecked ? t('bulk.selectAll') : t('bulk.unselectAll'))))),
                     known === null
                       ? React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('memory.loading')))
                       : (known || []).length
@@ -3907,6 +4275,14 @@ function callApi(path, options) {
             var sections = modalSections()
             var defined = !!sections.skills
             var allItems = modal.inventory.skills || []
+            /**
+             * 可勾选集：**被同名技能覆盖的副本**与**结构不完整的技能**都不算。
+             * 它们勾了也不生效（运行时那一步本来就跳过），后端保存时还会按同一口径当失效项丢掉
+             * —— 留着只会造成「档案说开着、技能页说没启动」（用户实测：启动一个目录后档案里
+             * 多出被覆盖的那个技能）。计数、「全选」、行内开关全部按这一份来。
+             */
+            var pickable = function (x) { return !x.shadowed && x.loadable !== false }
+            var pickableItems = allItems.filter(pickable)
             var items = (function () {
               var q = String(modal.skillQuery || '').trim().toLowerCase()
               if (!q) return allItems
@@ -3916,30 +4292,35 @@ function callApi(path, options) {
                 return (d.name + ' ' + d.source + ' ' + d.key).toLowerCase().indexOf(q) >= 0
               })
             })()
+            var pickedCount = pickableItems.filter(function (x) { return sections.skills && sections.skills.indexOf(x.key) >= 0 }).length
             return seg({
               title: t('memory.archive.skills'),
-              count: defined ? t('scenes.seg.checked', { checked: sections.skills.length, total: allItems.length }) : t('scenes.archive.sectionOff'),
+              count: defined ? t('scenes.seg.checked', { checked: pickedCount, total: pickableItems.length }) : t('scenes.archive.sectionOff'),
               actions: archiveSegActions(defined, t('memory.archive.addSkills'),
                 function () { setSections(Object.assign({}, modalSections(), { skills: [] })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.skills; setSections(s) },
-                function () { setSections(Object.assign({}, modalSections(), { skills: allItems.map(function (x) { return x.key }) })) },
-                function () { setSections(Object.assign({}, modalSections(), { skills: [] })) }),
+                function () { setSections(Object.assign({}, modalSections(), { skills: pickableItems.map(function (x) { return x.key }) })) },
+                function () { setSections(Object.assign({}, modalSections(), { skills: [] })) },
+                defined && pickableItems.length > 0 && pickableItems.every(function (x) { return sections.skills.indexOf(x.key) >= 0 })),
               body: defined
                 ? React.createElement('div', { className: 'dsm-seg-body' },
                     segFilter(modal.skillQuery, function (v) { setModal(Object.assign({}, modal, { skillQuery: v })) }, t('scenes.filter.skills')),
                     items.length
                       ? React.createElement('div', null, items.map(function (item) {
                           var d = skillDisplay(item)
+                          var offered = pickable(item)
                           return pickRow({
-                disabled: busy,
+                            disabled: busy || !offered,
                             key: item.key,
-                            checked: sections.skills.indexOf(item.key) >= 0,
+                            checked: offered && sections.skills.indexOf(item.key) >= 0,
                             name: d.name,
                             desc: d.source || null,
                             descTitle: d.key,
                             meta: item.shadowed
-                              ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('status.shadowed'))
-                              : (item.enabled === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null),
+                              ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.skills.shadowed.hint') }, t('status.shadowed'))
+                              : (item.loadable === false
+                                ? React.createElement('span', { className: 'dsm-tag', title: t('scenes.skills.invalid.hint') }, t('status.invalid'))
+                                : (item.enabled === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null)),
                             onChange: function () {
                               var list = sections.skills.slice(); var i = list.indexOf(item.key)
                               if (i >= 0) list.splice(i, 1); else list.push(item.key)
@@ -3949,7 +4330,7 @@ function callApi(path, options) {
                         }))
                       : React.createElement('div', { className: 'dsm-pick-empty' }, modal.skillQuery ? t('scenes.mem.noMatch') : t('scenes.skills.empty')))
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.skills.hint'))),
-              foot: archiveSegFoot(defined, defined ? sections.skills.length : 0),
+              foot: archiveSegFoot(defined, defined ? pickedCount : 0),
             })
           }
           /** 段 3：子智能体绑定。 */
@@ -3999,7 +4380,8 @@ function callApi(path, options) {
                 function () { setSections(Object.assign({}, modalSections(), { subagents: [] })) },
                 function () { var s = Object.assign({}, modalSections()); delete s.subagents; setSections(s) },
                 function () { setSections(Object.assign({}, modalSections(), { subagents: allItems.map(function (x) { return x.name }) })) },
-                function () { setSections(Object.assign({}, modalSections(), { subagents: [] })) }),
+                function () { setSections(Object.assign({}, modalSections(), { subagents: [] })) },
+                defined && allItems.length > 0 && allItems.every(function (x) { return sections.subagents.indexOf(x.name) >= 0 })),
               body: defined
                 ? React.createElement('div', { className: 'dsm-seg-body' },
                     segFilter(modal.subQuery, function (v) { setModal(Object.assign({}, modal, { subQuery: v })) }, t('scenes.filter.subagents')),
@@ -4177,7 +4559,7 @@ function callApi(path, options) {
                   React.createElement('h2', { className: 'dsm-title' }, t('scenes.title'))),
                 React.createElement('p', { className: 'dsm-desc' }, t('scenes.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, (busy || data.loading) ? t('btn.refreshing') : t('btn.refresh')),
+                refreshButton(t, busy || data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { loadTrash(false) } }, t('trash.btn.open')))),
             React.createElement('div', { key: 'stats', className: 'dsm-summary' },
@@ -4204,7 +4586,7 @@ function callApi(path, options) {
               React.createElement('span', null, t('scenes.legacyAll', { count: legacyAllScenes.length })),
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { enterMode(legacyAllScenes[0].name) } }, t('scenes.legacyAll.fix'))) : null,
             data.error ? React.createElement('div', { key: 'gerr', className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
-            data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+            data.loading && !presetScenes.length ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
               : presetScenes.length ? React.createElement('div', { key: 'scenes', className: 'dsm-scenes' }, presetScenes.map(function (scene) {
                 var name = scene.name
                 var label = sceneLabel(data.scenes, name) || name
@@ -4368,8 +4750,12 @@ function callApi(path, options) {
             setBusy(true)
             apiCall('subagent-toggle', { name: p.name, enabled: next }).then(function (r) {
               setBusy(false)
-              if (r && r.ok) refresh(true)
-              else if (r) setResult({ ok: false, text: translateError(t, r) })
+              if (r && r.ok) {
+                // 场景内改开关：人设改了、档案没跟上时说清楚（详见 sceneSyncWarn）。
+                var warn = sceneSyncWarn(t, r)
+                setResult(warn ? { ok: false, warning: true, text: warn } : null)
+                refresh(true)
+              } else if (r) setResult({ ok: false, text: translateError(t, r) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
           }
           /**
@@ -4540,6 +4926,8 @@ function callApi(path, options) {
             var q = String(modal.modeQuery || '').trim().toLowerCase()
             var list = q ? all.filter(function (n) { return n.toLowerCase().indexOf(q) >= 0 }) : all
             var picked = rule.names || []
+            // 与其余「全选」同一口径：全勾了就只给「取消全选」（二合一，不并列）。
+            var allPickedAll = all.length > 0 && all.every(function (n) { return picked.indexOf(n) >= 0 })
             return React.createElement('div', { className: 'dsm-mode-body' },
               picked.length
                 ? React.createElement('div', { className: 'dsm-tools-chips' }, picked.map(function (name) {
@@ -4555,8 +4943,7 @@ function callApi(path, options) {
                   placeholder: t('subagents.tools.filter'),
                   onChange: function (e) { setModal(Object.assign({}, modal, { modeQuery: e.target.value })) },
                 }),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setModeRule(id, { mode: rule.mode, names: all.slice() }) } }, t('scenes.seg.selectAll')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !picked.length, onClick: function () { setModeRule(id, { mode: rule.mode, names: [] }) } }, t('scenes.seg.clear'))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: busy, onClick: function () { setModeRule(id, { mode: rule.mode, names: allPickedAll ? [] : all.slice() }) } }, bulkPair(allPickedAll ? t('bulk.unselectAll') : t('bulk.selectAll'), allPickedAll ? t('bulk.selectAll') : t('bulk.unselectAll')))),
               list.length
                 ? React.createElement('div', { className: 'dsm-tools-grid' }, list.map(function (name) {
                     return pickRow({ key: 'm:' + id + ':' + name, disabled: busy, checked: picked.indexOf(name) >= 0, name: name, onChange: function () { toggleModeTool(id, name) } })
@@ -4709,7 +5096,7 @@ function callApi(path, options) {
                   React.createElement('h2', { className: 'dsm-title' }, t('subagents.title'))),
                 React.createElement('p', { className: 'dsm-desc' }, t('subagents.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, (busy || data.loading) ? t('btn.refreshing') : t('btn.refresh')),
+                refreshButton(t, busy || data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { openEditor(null) } }, t('subagents.new')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setModal({ type: 'import' }) } }, t('subagents.import')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !data.subagents.length, onClick: function () { setResult(null); setModal({ type: 'export' }) } }, t('export.subagents')),
@@ -4722,9 +5109,9 @@ function callApi(path, options) {
                 return React.createElement('div', { key: item[0], className: 'dsm-stat' },
                   React.createElement('strong', null, item[1]), item[2])
               })),
-            React.createElement(Notice, { kind: result && result.ok ? 'ok' : 'err', text: result && result.text }),
+            React.createElement(Notice, { kind: result && result.warning ? 'warn' : result && result.ok ? 'ok' : 'err', text: result && result.text }),
             data.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(data.error)) : null,
-            data.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+            data.loading && !data.subagents.length ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
               : data.subagents.length ? React.createElement('div', { className: 'dsm-sources' }, data.subagents.map(function (p) {
                 return React.createElement('div', { key: p.name, className: 'dsm-source' },
                   React.createElement('div', { className: 'dsm-source-head' },
@@ -4733,7 +5120,7 @@ function callApi(path, options) {
                       React.createElement('span', { className: 'dsm-note' }, p.description || ''),
                       p.enabled === false ? React.createElement('span', { className: 'dsm-tag', title: t('subagents.disabled.hint') }, t('subagents.disabled')) : null),
                     React.createElement('div', { className: 'dsm-source-actions' },
-                      React.createElement(Switch, { on: p.enabled !== false, disabled: busy || anyLocked || !!sceneName, title: sceneName ? t('scene.switch.title', { scene: sceneName }) : '', label: t('subagents.toggle') + ' ' + p.name, onClick: function () { togglePersona(p) } }),
+                      React.createElement(Switch, { on: p.enabled !== false, disabled: busy || anyLocked, label: t('subagents.toggle') + ' ' + p.name, onClick: function () { togglePersona(p) } }),
                       React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || anyLocked, onClick: function () { openEditor(p.name) } }, t('memory.edit')),
                       React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || anyLocked, onClick: function () { setModal({ type: 'delete', name: p.name }) } }, t('memory.delete')))))
               })) : React.createElement('div', { className: 'dsm-empty' }, t('subagents.empty')),
@@ -4879,6 +5266,18 @@ function callApi(path, options) {
           var attachRef = React.useRef(null)
           var ATTACH_MAX_MB = 8
           var ATTACH_MAX_BYTES = ATTACH_MAX_MB << 20
+          // 从「N 个附件」标签进来的那一次，要把附件区滚进视野（否则那颗标签就只是块装饰：
+          // 打开弹窗后还得自己往下找）。用回调 ref 会随每次 render 重跑 → 一打字就把页面拽回去，
+          // 所以走 effect + 一次性标志，滚完立刻把标志清掉。
+          var attachFieldRef = React.useRef(null)
+          React.useEffect(function () {
+            if (!editor || editor.focusAttach !== true) return
+            var node = attachFieldRef.current
+            if (node && typeof node.scrollIntoView === 'function') {
+              try { node.scrollIntoView({ block: 'center' }) } catch (e) { /* 滚不动不影响使用 */ }
+            }
+            setEditor(function (prev) { return prev && prev.focusAttach ? Object.assign({}, prev, { focusAttach: false }) : prev })
+          }, [editor])
 
           /** 场景名 = 分组路径的第一段（`web/frontend` 属于场景 `web`）。 */
           function sceneOf(group) {
@@ -4931,14 +5330,14 @@ function callApi(path, options) {
             setEditor({ mode: 'create', id: '', group: sceneName || '', name: '', description: '', body: '', form: 'flat', path: '', error: null, files: [], attachments: [] })
             setModal({ type: 'editor' })
           }
-          function openEditor(rule) {
+          function openEditor(rule, focusAttach) {
             if (busy) return
             setBusy(true); setResult(null)
             apiCall('rules-read', { id: rule.id }).then(function (res) {
               setBusy(false)
               if (res && res.ok && res.rule) {
                 var rd = res.rule
-                setEditor({ mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [] })
+                setEditor({ mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], focusAttach: focusAttach === true })
                 setModal({ type: 'editor' })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
@@ -5058,6 +5457,47 @@ function callApi(path, options) {
               if (res && res.ok) { setResult({ ok: true, text: t('memory.result.toggled', { name: rule.name }) }); refresh(true) }
               else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: String((e && e.message) || e) }) })
+          }
+
+          /**
+           * 批量写 `rules[*].enabled`（记忆页页头、每个场景卡片共用的「全选 / 取消全选」）。
+           *
+           * 顺序提交而不是 Promise.all：宿主侧每次 toggle 都要重写索引文件，并发提交只是排队，
+           * 徒增失败时的书写顺序；串行还能「失败即停」并如实报出中止位置。
+           */
+          function setMemories(ids, on) {
+            var list = (ids || []).filter(function (id) { return !!id })
+            if (!list.length) return
+            setBusy(true); setResult(null)
+            var done = 0
+            var failed = null
+            var chain = Promise.resolve()
+            list.forEach(function (id) {
+              chain = chain.then(function () {
+                if (failed) return null
+                return apiCall('rules-toggle', { id: id, enabled: on }).then(function (res) {
+                  if (res && res.ok) done += 1
+                  else failed = translateError(t, res)
+                }).catch(function (e) { failed = String((e && e.message) || e) })
+              })
+            })
+            chain.then(function () {
+              setBusy(false)
+              var action = t(on ? 'bulk.enabled' : 'bulk.disabled')
+              setResult(failed
+                ? { ok: false, text: t('memory.bulk.partial', { action: action, count: done, error: failed }) }
+                : { ok: true, text: t('bulk.done.memories', { action: action, count: done, failed: 0 }) })
+              refresh(true)
+            })
+          }
+          /** 可批量切换的记忆 = 非被同名 bundle 覆盖的（与行内 Switch 同一条件）。 */
+          function toggleableIds(rules) {
+            return (rules || []).filter(function (r) { return r.shadowed !== true }).map(function (r) { return String(r.id) })
+          }
+          /** 传进来的一组记忆是否全部开着（决定二合一按钮显示哪一个文案）。 */
+          function allMemoriesOn(rules) {
+            var rows = (rules || []).filter(function (r) { return r.shadowed !== true })
+            return rows.length > 0 && rows.every(function (r) { return r.enabled !== false })
           }
 
           /** 记忆存好后统一收尾：上传附件 → 关弹窗 → 报结果（附件失败不回滚记忆）。 */
@@ -5192,6 +5632,38 @@ function callApi(path, options) {
             return buckets[n].rules.length > 0 || sceneFilter === n
           })
           var hasAnyRule = data.rules.length > 0
+          /** 页头「全选 / 取消全选」的作用集 = 当前筛选后可见的、可切换的记忆。 */
+          var bulkRules = []
+          visibleBuckets.forEach(function (n) { bulkRules = bulkRules.concat(buckets[n].rules) })
+          var bulkIds = toggleableIds(bulkRules)
+          var bulkAllOn = allMemoriesOn(bulkRules)
+
+          /**
+           * bundle 记忆的「N 个附件」标签（用户裁定 2026-09-17）。
+           *
+           * 形态归「bundle」那颗标签，**内容归这一颗** —— 两者语义不同，挤进一个框里中文下会到 7 个字。
+           * 数量是宿主在 rules-list 里补的（`r.attach`，口径与注入给模型的附件清单逐字一致）。
+           * 0 个附件也显示（灰色），这样"哪些 bundle 是空壳"一眼可见；两种状态都能点，
+           * 点了直接开编辑弹窗并**滚到附件区**（不然这颗标签就只是块装饰）。
+           * `r.attach` 缺失 = 宿主没读到这个目录（索引残留）→ 什么都不显示，不谎报 0。
+           */
+          function attachTag(r, shadowed) {
+            if (r.form !== 'bundle' || !r.attach) return null
+            var n = r.attach.count
+            var names = r.attach.names || []
+            var extra = n > names.length ? t('memory.attach.more', { count: n - names.length }) : ''
+            var title = n === 0
+              ? t('memory.attach.tip.empty')
+              : t('memory.attach.tip', { count: n, size: fmtBytes(r.attach.bytes), names: names.join(t('memory.attach.sep')) + extra })
+            return React.createElement('button', {
+              type: 'button',
+              className: 'dsm-tag dsm-tag-attach' + (n === 0 ? ' dsm-tag-attach-empty' : ''),
+              disabled: busy || shadowed || anyLocked,
+              title: title,
+              'aria-label': title,
+              onClick: function () { openEditor(r, true) },
+            }, React.createElement(PaperclipIcon, { size: 11 }), t(countKey('memory.attach.count', n), { count: n }))
+          }
 
           function renderRuleRow(r, sceneActive) {
             var shadowed = r.shadowed === true
@@ -5210,6 +5682,7 @@ function callApi(path, options) {
               React.createElement('div', { className: 'dsm-tags' },
                 r.group && r.group.indexOf('/') >= 0 ? React.createElement('span', { className: 'dsm-tag' }, r.group) : null,
                 r.form === 'bundle' ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.form.bundle')) : null,
+                attachTag(r, shadowed),
                 r.descriptionDerived ? React.createElement('span', { className: 'dsm-tag' }, t('memory.derived')) : null),
               React.createElement('div', { className: 'dsm-status ' + statusCls }, t(statusKey)),
               React.createElement('div', { className: 'dsm-row-actions' },
@@ -5239,6 +5712,9 @@ function callApi(path, options) {
                   meta.active === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null,
                   isOrphan ? null : React.createElement('span', { className: 'dsm-note' }, meta.description || '')),
                 React.createElement('div', { className: 'dsm-source-actions' },
+                  // 每个场景一张卡：卡内的「全选 / 取消全选」只作用于**这张卡里的**记忆
+                  // —— 用户说的「记忆的不同场景都缺少全选清空」。
+                  isOrphan || !bucket.rules.length ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: busy || anyLocked || !toggleableIds(bucket.rules).length, onClick: function () { setMemories(toggleableIds(bucket.rules), !allMemoriesOn(bucket.rules)) } }, bulkPair(allMemoriesOn(bucket.rules) ? t('bulk.unselectAll') : t('bulk.selectAll'), allMemoriesOn(bucket.rules) ? t('bulk.selectAll') : t('bulk.unselectAll'))),
                   isOrphan ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openCreate(name) } }, t('memory.scene.new')))),
               open ? React.createElement('div', { className: 'dsm-source-body' },
                 isOrphan ? React.createElement('div', { className: 'dsm-source-note' }, t('memory.scene.orphan.hint')) : null,
@@ -5283,11 +5759,13 @@ function callApi(path, options) {
                   React.createElement('h2', { className: 'dsm-title' }, t('memory.title'))),
                 React.createElement('p', { className: 'dsm-desc' }, t('memory.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }, (busy || data.loading) ? t('btn.refreshing') : t('btn.refresh')),
+                refreshButton(t, busy || data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { openCreate(sceneFilter || '') } }, t('memory.btn.new')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setImportScene(''); setModal({ type: 'import' }) } }, t('memory.import')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !exportableRules.length, onClick: function () { setResult(null); setExportState({ busy: false, result: null }) } }, t('export.memories')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')))),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
+                // 列表级动作与页头其余动作同栏（用户 2026-09-17 裁定）：作用集 = 当前筛选后的可见记忆。
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy || anyLocked || !bulkIds.length, onClick: function () { setMemories(bulkIds, !bulkAllOn) } }, bulkPair(bulkAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), bulkAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))))),
             React.createElement('div', { className: 'dsm-summary' },
               React.createElement('div', { key: 'total', className: 'dsm-stat' }, React.createElement('strong', null, stats.total || 0), t('memory.stat.total')),
               React.createElement('div', { key: 'scenes', className: 'dsm-stat' }, React.createElement('strong', null, (data.scenes || []).length), t('memory.stat.sceneCount')),
@@ -5367,7 +5845,7 @@ function callApi(path, options) {
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.form')),
                   React.createElement(SourceSelect, { options: RULE_FORM_OPTIONS, value: editor.form || 'flat', onChange: function (v) { setEditor(Object.assign({}, editor, { form: v })) } }),
                   editor.form === 'bundle'
-                    ? React.createElement('div', { className: 'dsm-field' },
+                    ? React.createElement('div', { className: 'dsm-field', ref: attachFieldRef },
                       React.createElement('span', { className: 'dsm-label' }, t('memory.field.attach')),
                       React.createElement('input', { ref: attachRef, type: 'file', multiple: true, className: 'dsm-hidden-input', onChange: onAttachPicked }),
                       (editor.attachments || []).length || (editor.files || []).length

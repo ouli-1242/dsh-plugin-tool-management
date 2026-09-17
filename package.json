@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-tool-management",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "DSH plugin: one settings panel for MCP servers, skills, scenes, memories, subagents, AGENTS.md presets and archived sessions — scene memory injects into the system prompt, scene lock freezes all five domains, deleted workspaces re-register with one click. Settings UI + HTTP API + 14 model tools (mcp_manager_*, skill_manager_*, prompt_manager_*, memory_manager_*, subagent_*). Install with one command: dsh plugin --profile web add dsh-plugin-tool-management@latest",
   "repository": {
     "type": "git",

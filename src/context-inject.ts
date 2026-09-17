@@ -212,21 +212,45 @@ function textOf(message: unknown): string | undefined {
  * → 该域不在 map 里 → 该重发。表面接口整个缺失时退回扫事件流（按"仍可见"处理，
  * 宁可与现状一致，也不制造每步重发）。
  */
-function newestDomainTexts(agent: unknown): Map<InjectDomainKey, string> {
-  const out = new Map<InjectDomainKey, string>()
+/** 消息来源 kind → 本插件域（`official` = 官方载体发的，不是本插件注入的）。 */
+interface KindMapping { key: InjectDomainKey; official: boolean }
+
+/** 本插件自己的五个注入 kind（去重比对只用这一份 —— 绝不能让官方正文影响"发不发"的判断）。 */
+const PLUGIN_KINDS: ReadonlyMap<string, KindMapping> = new Map(
+  INJECT_DOMAIN_KEYS.map((key) => [INJECT_KIND_OF[key], { key, official: false }] as const),
+)
+
+/**
+ * 官方载体消息的 kind → 本插件域：技能目录（`@deepseek-ai/dsh-tool-skill`）与
+ * AGENTS.md（`@deepseek-ai/dsh-agent-instructions`）。仅用于「注入实况」展示 ——
+ * 标准类预设下这两个域由官方在送，它同样是"模型看到的内容"，体积要算官方那份。
+ * 字符串取自官方包，是宿主侧的稳定契约。
+ */
+const OFFICIAL_KIND_OF: Readonly<Record<string, InjectDomainKey>> = {
+  'skill-catalog': 'skills',
+  'agent-instructions': 'prompt',
+}
+
+/** 实况展示用的 kind 表：本插件的五条 + 官方两条。 */
+const LIVE_KINDS: ReadonlyMap<string, KindMapping> = new Map([
+  ...PLUGIN_KINDS,
+  ...Object.entries(OFFICIAL_KIND_OF).map(([kind, key]) => [kind, { key, official: true }] as const),
+])
+
+function newestDomainTexts(agent: unknown, kinds: ReadonlyMap<string, KindMapping>): Map<InjectDomainKey, { text: string; form: string; official: boolean }> {
+  const out = new Map<InjectDomainKey, { text: string; form: string; official: boolean }>()
   const session = (agent as { session?: any } | null | undefined)?.session
   if (!session || typeof session.seq !== 'number' || typeof session.eventAt !== 'function') return out
-  const keyOfKind = new Map<string, InjectDomainKey>(INJECT_DOMAIN_KEYS.map((key) => [INJECT_KIND_OF[key], key] as const))
   const scan = (seq: number): boolean => {
     let event: any
     try { event = session.eventAt(SessionSeq(seq)) } catch { return false }
     if (!event || event.type !== 'user/message') return false
     const source = event.data && event.data.source
-    const key = source && typeof source.kind === 'string' ? keyOfKind.get(source.kind) : undefined
-    if (key === undefined || out.has(key)) return false
+    const mapping = source && typeof source.kind === 'string' ? kinds.get(source.kind) : undefined
+    if (mapping === undefined || out.has(mapping.key)) return false
     const text = textOf(event.data)
     if (text === undefined) return false
-    out.set(key, text)
+    out.set(mapping.key, { text, form: source && typeof source.form === 'string' ? source.form : '', official: mapping.official })
     return out.size === INJECT_DOMAIN_KEYS.length
   }
   const nodes: unknown = session.surface && Array.isArray(session.surface.nodes) ? session.surface.nodes : undefined
@@ -257,38 +281,121 @@ export interface ContextInjectorDeps {
   logger?: (message: string) => void
 }
 
+/** 一个域在**最近活跃会话**可见表面上的实况。 */
+export interface LiveInjectionDomain {
+  key: InjectDomainKey
+  label: string
+  kind: string
+  /**
+   * in-context = 插件注入的在上下文里；cleared = 已清空；
+   * official = 官方载体在送、插件不重复送（提示词 / 技能目录，标准类预设下的常态）；
+   * off = 域开关被关掉；empty = 本插件负责但当前没有内容；absent = 该投却没投（含压缩后未补发）；
+   * unknown = 没有会话。
+   */
+  state: 'in-context' | 'cleared' | 'official' | 'off' | 'empty' | 'absent' | 'unknown'
+  bytes: number
+  text: string
+}
+
+/** 注入实况快照（`injection-live` 只读 op 的载荷；供兼容页展示"模型现在看到什么"）。 */
+export interface LiveInjectionSnapshot {
+  /** 是否记住了最近活跃的会话（WeakRef 被回收或从未收到 pre-step → false）。 */
+  hasAgent: boolean
+  /** 本次进程运行以来的投递统计（不是会话历史；重启后归零）。 */
+  delivered: { count: number; lastAt: number | null; byDomain: Record<string, number> }
+  domains: LiveInjectionDomain[]
+}
+
+const bytesOf = (text: string): number => {
+  try { return Buffer.byteLength(text, 'utf8') } catch { return text.length }
+}
+
 /**
  * 注册 `agent/pre-step` 注入监听；返回清理函数。
  *
  * 宿主平面注册即可覆盖所有 agent（含子智能体、含任何预设）——dsh-scope 的
  * `scopeTarget` 过滤对没有 scope 标记的 ctx 直接放行，官方 time-context 就是这么挂的。
  */
-export function createContextInjector(deps: ContextInjectorDeps): { dispose: () => void } {
+export function createContextInjector(deps: ContextInjectorDeps): { dispose: () => void; live: () => LiveInjectionSnapshot } {
   const log = (message: string): void => {
     try { (deps.logger ?? ((m: string) => console.error('[dsh-plugin-tool-management] ' + m)))(message) } catch { /* ignore */ }
   }
+  // 最近活跃的会话（WeakRef：诊断用，不阻止会话被回收）。每次 pre-step 都刷新 ——
+  // 包括"空 turn 提前返回"和"这一步没有内容可发"的分支，页面才能如实说"没投过"。
+  let lastAgent: WeakRef<object> | null = null
+  const delivered = { count: 0, lastAt: null as number | null, byDomain: {} as Record<string, number> }
+  // 最近一步里"每个域为什么发/不发"（官方载体 / 开关关 / 空 / 本插件负责）。
+  // 只在没有可见注入时用来解释状态 —— 标准类预设下技能与提示词由官方在送，
+  // 插件的实况若只说"未投递"，读起来像出了问题。
+  let lastReasons: Partial<Record<InjectDomainKey, 'off' | 'official' | 'empty' | 'sent'>> = {}
+  const live = (): LiveInjectionSnapshot => {
+    let agent: object | undefined
+    try { agent = lastAgent ? lastAgent.deref() : undefined } catch { agent = undefined }
+    const visible = agent === undefined
+      ? new Map<InjectDomainKey, { text: string; form: string; official: boolean }>()
+      : newestDomainTexts(agent, LIVE_KINDS)
+    const labelOf = new Map<InjectDomainKey, string>(deps.domains().map((domain) => [domain.key, domain.label] as const))
+    const rows: LiveInjectionDomain[] = INJECT_DOMAIN_KEYS.map((key) => {
+      const entry = visible.get(key)
+      const reason = lastReasons[key]
+      const state: LiveInjectionDomain['state'] = agent === undefined
+        ? 'unknown'
+        : entry !== undefined
+          // 官方载体发的那条也算"模型看到的内容"（只是不是本插件送的）；
+          // 本插件发过又清空的，报「已清空」。
+          ? (entry.official ? 'official' : entry.form === 'notice' ? 'cleared' : 'in-context')
+          // 没在上下文里：用最近一步的原因解释；`sent`（该发）却没看到 = 压缩后还没补发。
+          : reason === 'off' ? 'off' : reason === 'official' ? 'official' : reason === 'empty' ? 'empty' : 'absent'
+      const text = (state === 'in-context' || state === 'official') && entry !== undefined ? entry.text : ''
+      return { key, label: labelOf.get(key) ?? key, kind: INJECT_KIND_OF[key], state, bytes: bytesOf(text), text }
+    })
+    return {
+      hasAgent: agent !== undefined,
+      delivered: { count: delivered.count, lastAt: delivered.lastAt, byDomain: { ...delivered.byDomain } },
+      domains: rows,
+    }
+  }
   const ctx = deps.ctx
-  if (!ctx || typeof ctx.on !== 'function') return { dispose: () => {} }
+  if (!ctx || typeof ctx.on !== 'function') return { dispose: () => {}, live }
   const stop: unknown = ctx.on('agent/pre-step', async (payload: any, next: () => Promise<any>) => {
     const decision = await next()
     try {
       if (!decision || decision.kind === 'reject') return decision
       const agent = payload && payload.agent
       if (!agent) return decision
+      if (typeof agent === 'object') { try { lastAgent = new WeakRef(agent as object) } catch { /* 环境没有 WeakRef → 实况显示"没有会话" */ } }
       // 空 turn 不注入（官方 dsh-agent-instructions 同款守卫）：step 1 且一条消息都没有时，
       // 这一步本来就该原地结束（宿主随后把 turn 判为 completed）。此时注入会把空 turn
       // 变成一次真实的模型请求 —— 凭空烧一次调用。
       if (Number(payload.step) === 1 && messagesOf(decision).length === 0) return decision
       const domains = deps.domains()
-      const sections = selectInjections(domains, deps.settings(), await deps.factsFor(agent))
-      const visible = newestDomainTexts(agent)
+      const settings = deps.settings()
+      const facts = await deps.factsFor(agent)
+      const sections = selectInjections(domains, settings, facts)
+      // 记录每个域这一步"为什么发 / 为什么不发"，供「注入实况」解释状态：
+      // off = 开关关了；official = 官方载体在送（技能 / 提示词，标准类预设下的常态）；
+      // empty = 本插件负责但没内容；sent = 本插件负责且有内容（上下文里看不到时说明还没补发）。
+      const reasons: Partial<Record<InjectDomainKey, 'off' | 'official' | 'empty' | 'sent'>> = {}
+      for (const domain of domains) {
+        if (settings.domains[domain.key] !== true) { reasons[domain.key] = 'off'; continue }
+        const carrier = CARRIER_FACT_OF[domain.key]
+        if (carrier !== undefined && facts?.[carrier] !== false) { reasons[domain.key] = 'official'; continue }
+        let text = ''
+        try { text = String(domain.text() ?? '') } catch { text = '' }
+        reasons[domain.key] = text.trim() === '' ? 'empty' : 'sent'
+      }
+      lastReasons = reasons
+      const visible = newestDomainTexts(agent, PLUGIN_KINDS)
       const additions: unknown[] = []
+      const appended: InjectDomainKey[] = []
       const published = new Set<InjectDomainKey>()
       for (const section of sections) {
         published.add(section.key)
         const text = renderDomainText(section)
-        if (visible.get(section.key) === text) continue
+        const current = visible.get(section.key)
+        if (current !== undefined && current.text === text) continue
         additions.push(domainMessage(section, text))
+        appended.push(section.key)
       }
       // 曾经注入过、这一轮没有内容的域 → 一条「已清空」；从没注入过的域什么都不用说。
       const labelOf = new Map(domains.map((domain) => [domain.key, domain.label] as const))
@@ -297,10 +404,14 @@ export function createContextInjector(deps: ContextInjectorDeps): { dispose: () 
         const previous = visible.get(key)
         if (previous === undefined) continue
         const label = labelOf.get(key) ?? key
-        if (previous === clearedDomainText(key, label)) continue
+        if (previous.form === 'notice') continue
         additions.push(clearedMessage(key, label))
+        appended.push(key)
       }
       if (additions.length === 0) return decision
+      delivered.count += additions.length
+      delivered.lastAt = Date.now()
+      for (const key of appended) delivered.byDomain[key] = (delivered.byDomain[key] || 0) + 1
       return { ...decision, messages: [...messagesOf(decision), ...additions] }
     } catch (error) {
       // 注入是尽力而为：任何异常都不能把这一步弄失败。
@@ -310,6 +421,7 @@ export function createContextInjector(deps: ContextInjectorDeps): { dispose: () 
   })
   return {
     dispose: () => { try { if (typeof stop === 'function') (stop as () => void)() } catch { /* ignore */ } },
+    live,
   }
 }
 
