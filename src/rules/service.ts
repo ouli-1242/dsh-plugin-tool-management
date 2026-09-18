@@ -1204,7 +1204,7 @@ function probeSceneFilesSync(
   return { refs, scenes, truncated, signature }
 }
 
-/** 指纹里必须包含一切影响渲染的索引字段（active / enabled / order / groups.order / scenes.order）。 */
+/** 指纹里必须包含一切影响渲染的索引字段（active / enabled / order / groups.order / scenes.order / label / description）。 */
 function signatureOfIndex(index: RulesIndex): string {
   const active = normalizeActive(index.active)
   const rules = Object.keys(index.rules).sort().map((id) => {
@@ -1213,9 +1213,11 @@ function signatureOfIndex(index: RulesIndex): string {
   })
   const groups = Object.keys(index.groups).sort().map((g) => `${g}\u0000${index.groups[g]?.order ?? DEFAULT_GROUP_ORDER}`)
   // 场景顺序决定段内场景的先后 → 必须进指纹，否则改顺序后段文本不会重算。
+  // label 与 description 同理（sceneHeader 的「场景说明」一行直接渲染 description）——
+  // 手改索引文件（带外变更）时只有指纹变化才会触发重算。
   const scenes = Object.keys(index.scenes || {}).sort().map((s) => {
     const e = index.scenes![s]
-    return `${s}\u0000${e.order ?? (s === GLOBAL_SCENE ? 0 : DEFAULT_GROUP_ORDER)}\u0000${e.label ?? ''}`
+    return `${s}\u0000${e.order ?? (s === GLOBAL_SCENE ? 0 : DEFAULT_GROUP_ORDER)}\u0000${e.label ?? ''}\u0000${e.description ?? ''}`
   })
   return `A:${active === null ? '*' : active.join(',')}|R:${rules.join(';')}|G:${groups.join(';')}|S:${scenes.join(';')}`
 }
@@ -1865,11 +1867,18 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
 
   // ── 规则文件序列化 ──────────────────────────────────────────────────────
 
-  /** 值含换行用 `|` 块（保留换行）；否则 `key: value` 原样（parseSkillDoc 按行贪婪解析）。 */
+  /**
+   * 值含换行用 `|` 块（保留换行）；否则 `key: value` 原样（parseSkillDoc 按行贪婪解析）。
+   * 例外：多行值里有去空白后恰为 `---` 的行时改用 JSON 引号标量 —— 块标量把内容行缩进
+   * 两格也躲不开 parseSkillDoc 的 frontmatter 结束扫描（`trim() === '---'`），描述会被
+   * 截断、残片混进正文；引号形式是单物理行，扫描无从误判，decodeYamlScalar 无损还原
+   * （skills 写侧的引号标量正是靠这一点免疫同一断裂）。
+   */
   function yamlField(key: string, value: string | boolean): string[] {
     if (typeof value === 'boolean') return [`${key}: ${value}`]
     const s = String(value)
     if (s.includes('\n')) {
+      if (s.split('\n').some((line) => line.trim() === '---')) return [`${key}: ${JSON.stringify(s)}`]
       return [`${key}: |`, ...s.split('\n').map((line) => `  ${line}`)]
     }
     return [`${key}: ${s}`]
@@ -2154,7 +2163,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const indexForScene = await readIndex(stateDir)
     // 保留场景 global 恒存在（不用先建）；其余场景必须已存在——见上方注释。
     if (targetGroup !== GLOBAL_SCENE && !indexForScene.scenes?.[targetGroup] && !(await pathExists(join(rulesRoot, targetGroup)))) {
-      return fail('error.rules.sceneNotFound', `场景不存在：${targetGroup}（请先在「场景」页创建该场景）`)
+      return fail('error.rules.sceneNotFound', `场景不存在：${targetGroup}（请先在「场景」页创建该场景）`, { group: targetGroup })
     }
     if (!isValidGroupSegment(name)) return fail('error.rules.invalidName', `记忆名非法：${name}（非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含 / \\ < > : " | ? *、不以 . 开头）`)
     // 目标已存在（bundle 或 flat 皆算）→ 拒绝，避免静默覆盖。
@@ -2336,7 +2345,8 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       if (existing !== '') description = existing
       else description = deriveDescription(newBody) || undefined
     }
-    // 形态转换 / 改名：先建新形态文件，再清理旧形态（确保任意失败点不产生半份规则）。
+    // 形态转换 / 改名：先建新形态文件，再把旧形态复制进回收站、最后删原件
+    // （确保任意失败点不产生半份规则；旧形态随时可恢复，README「删除都进回收站」无例外）。
     // description 写回约定：显式传 → string/null（删除）；未传 → undefined（保留原字段）。
     const serialize = (): string => {
       let descArg: string | undefined | null
@@ -2347,14 +2357,17 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     if (located.kind === 'bundle' && newForm === 'flat') {
       await mkdir(join(rulesRoot, parts.group), { recursive: true })
       await writeFileAtomically(join(rulesRoot, parts.group, newName + '.md'), serialize())
+      await copyIntoMemoriesTrash(located, parts.group, parts.name)
       await rm(located.entryPath, { recursive: true, force: true })
     } else if (located.kind === 'flat' && newForm === 'bundle') {
       await mkdir(join(rulesRoot, parts.group, newName), { recursive: true })
       await writeFileAtomically(join(rulesRoot, parts.group, newName, bundleDocName(newName)), serialize())
+      await copyIntoMemoriesTrash(located, parts.group, parts.name)
       await rm(join(rulesRoot, parts.group, parts.name + '.md'), { force: true })
     } else if (located.kind === 'flat' && newName !== parts.name) {
       // flat 改名 = 文件改名
       await writeFileAtomically(join(rulesRoot, parts.group, newName + '.md'), serialize())
+      await copyIntoMemoriesTrash(located, parts.group, parts.name)
       await rm(join(rulesRoot, parts.group, parts.name + '.md'), { force: true })
     } else {
       // bundle 不 rename 目录：只更新 frontmatter/正文
@@ -2374,25 +2387,36 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     return { ok: true, rule: await buildProjected(newId) }
   }
 
+  /**
+   * 把条目原件复制进 memories 回收站并写 manifest，返回 trashId。只复制、不删除：
+   * 原件的 rm 由调用方在复制成功后执行 —— 先有副本才允许删，rm 永远不会销毁唯一数据。
+   * manifest 先于原件删除落盘：中途崩溃最坏留下「原件还在 + 一份完整回收站副本」，
+   * 不会出现「有文件没清单」的损坏条目。
+   */
+  async function copyIntoMemoriesTrash(located: DiscoveredEntry, group: string, name: string): Promise<string> {
+    const trashId = Date.now().toString(36) + '-' + randomUUID().slice(0, 8)
+    const trashDir = join(stateDir, MEMORIES_TRASH_DIR, trashId)
+    const manifest = { group, name, form: located.kind, deletedAt: new Date().toISOString() }
+    await mkdir(trashDir, { recursive: true })
+    if (located.kind === 'bundle') {
+      const { cp } = await import('node:fs/promises')
+      await cp(located.entryPath, join(trashDir, 'bundle'), { recursive: true })
+    } else {
+      await copyFile(located.docPath, join(trashDir, 'rule.md'))
+    }
+    await writeFileAtomically(join(trashDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
+    return trashId
+  }
+
   async function rulesRemove(args: any): Promise<any> {
     const id = String((args && args.id) || '')
     const parts = parseId(id)
     if (!parts) return fail('error.rules.notFound', `规则不存在：${id}`)
     const located = await locateRule(parts.group, parts.name)
     if (!located) return fail('error.rules.notFound', `规则不存在：${id}`)
-    const trashId = Date.now().toString(36) + '-' + randomUUID().slice(0, 8)
-    const trashDir = join(stateDir, MEMORIES_TRASH_DIR, trashId)
-    const manifest = { group: parts.group, name: parts.name, form: located.kind, deletedAt: new Date().toISOString() }
-    await mkdir(trashDir, { recursive: true })
-    if (located.kind === 'bundle') {
-      const { cp } = await import('node:fs/promises')
-      await cp(located.entryPath, join(trashDir, 'bundle'), { recursive: true })
-      await rm(located.entryPath, { recursive: true, force: true })
-    } else {
-      await copyFile(located.docPath, join(trashDir, 'rule.md'))
-      await rm(located.docPath, { force: true })
-    }
-    await writeFileAtomically(join(trashDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
+    const trashId = await copyIntoMemoriesTrash(located, parts.group, parts.name)
+    if (located.kind === 'bundle') await rm(located.entryPath, { recursive: true, force: true })
+    else await rm(located.docPath, { force: true })
     const index = await readIndex(stateDir)
     delete index.rules[id]
     await writeIndex(stateDir, index)
@@ -2609,7 +2633,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       return fail('error.rules.invalidArgs', '缺少参数：需要 scenes:[...]（启用集合，至多一个场景）')
     }
     if (hasAll) {
-      return fail('error.rules.singleSceneOnly', '除「全局」外同时只能启用一个场景：不支持"全部启用"，请改用 scenes:[<场景名>] 或 scenes:[]（全部关闭）')
+      return fail('error.rules.singleSceneOnly', '除「全局」外同时只能启用一个场景：不支持"全部启用"，请改用 scenes:[<场景名>] 或 scenes:[]（全部关闭）', { detail: '：不支持"全部启用"，请改用 scenes:[<场景名>] 或 scenes:[]（全部关闭）' })
     }
     const index = await readIndex(stateDir)
     const raw = Array.isArray(args && args.scenes) ? args.scenes : []
@@ -2627,7 +2651,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       names.push(name)
     }
     if (names.length > 1) {
-      return fail('error.rules.singleSceneOnly', `除「全局」外同时只能启用一个场景（收到 ${names.length} 个：${names.join('、')}）`)
+      return fail('error.rules.singleSceneOnly', `除「全局」外同时只能启用一个场景（收到 ${names.length} 个：${names.join('、')}）`, { detail: `（收到 ${names.length} 个：${names.join('、')}）` })
     }
     index.active = names
     await writeIndex(stateDir, index)
@@ -2745,7 +2769,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
       if (!isValidGroupSegment(nextRaw)) {
         return fail('error.rules.invalidGroup', `新场景名非法：${nextRaw}（非空、≤${MAX_GROUP_SEGMENT_LENGTH} 字符、不含路径分隔符与 < > : " | ? *、不以 . 开头）`)
       }
-      if (name === GLOBAL_SCENE) return fail('error.rules.reservedScene', '「全局」是保留场景，不可改名')
+      if (name === GLOBAL_SCENE) return fail('error.rules.reservedScene', '「全局」是保留场景，不可改名', { name: GLOBAL_SCENE, action: 'rename', reason: '' })
       if (name === SHARED_GROUP || nextRaw === SHARED_GROUP) return fail('error.rules.invalidGroup', '_shared 是保留场景名，不可改名')
       if ((index.scenes && index.scenes[nextRaw]) || (await pathExists(join(rulesRoot, nextRaw)))) {
         return fail('error.rules.nameTaken', `目标场景名已被占用：${nextRaw}`)
@@ -2810,7 +2834,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
   async function rulesSceneLock(args: any): Promise<any> {
     const name = String((args && args.scene) || '').trim()
     if (!isValidGroupPath(name)) return fail('error.rules.invalidGroup', `场景名非法：${name || '(空)'}`)
-    if (name === GLOBAL_SCENE || name === SHARED_GROUP) return fail('error.rules.reservedScene', '「全局 / _shared」是保留场景，不可锁定')
+    if (name === GLOBAL_SCENE || name === SHARED_GROUP) return fail('error.rules.reservedScene', '「全局 / _shared」是保留场景，不可锁定', { name: '全局 / _shared', action: 'lock', reason: '' })
     if (typeof (args && args.locked) !== 'boolean') {
       return fail('error.rules.invalidArgs', '缺少参数：locked 必须是布尔值（只按传入值写入，不做"翻转"推断）')
     }
@@ -2836,7 +2860,7 @@ export function createRulesService(ctx: any, deps: RulesDeps): RulesService {
     const name = String((args && args.name) || '').trim()
     if (!isValidGroupSegment(name)) return fail('error.rules.invalidGroup', `场景名非法：${name || '(空)'}`)
     if (name === SHARED_GROUP) return fail('error.rules.invalidGroup', `_shared 是保留场景名，不可删除`)
-    if (name === GLOBAL_SCENE) return fail('error.rules.reservedScene', `「全局」是保留场景，不可删除（它的记忆对任何对话都生效）`)
+    if (name === GLOBAL_SCENE) return fail('error.rules.reservedScene', `「全局」是保留场景，不可删除（它的记忆对任何对话都生效）`, { name: GLOBAL_SCENE, action: 'delete', reason: '（它的记忆对任何对话都生效）' })
     const index = await readIndex(stateDir)
     // 场景不存在（既无记录也无目录）→ 明确报错，而不是假装删成功。
     if (!index.scenes?.[name] && !(await pathExists(join(rulesRoot, name)))) {

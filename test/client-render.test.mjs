@@ -45,20 +45,27 @@ function fixtureFor(op) {
     case 'rules-budget':
       return { ok: true, usedBytes: 660, maxBytes: 65536, truncated: false, scenes, items: rules.map((r) => ({ id: r.id, bytes: r.bytes, injected: r.enabled, scene: r.group })) }
     case 'subagent-list':
-      return { ok: true, personas: [{ name: 'java-helper', description: 'Java 后端实现与重构', provider: 'sensenova', model: 'sensenova-6.8-flash-lite', tools: ['read_file'], toolsDeny: ['bash'] }] }
+      // 形状对齐 subagents/service.ts 的 subagent-list 实回（客户端读 r.subagents / r.anyLocked）。
+      return { ok: true, subagents: [{ name: 'java-helper', enabled: true, description: 'Java 后端实现与重构', provider: 'sensenova', model: 'sensenova-6.8-flash-lite', tools: ['read_file'], toolsDeny: ['bash'], catalogDepth: 1 }], anyLocked: false }
     case 'agentsmd-list':
-      return { ok: true, presets: [{ id: 'default', name: '默认预设', applied: true, size: 1024 }], current: 'default' }
+      // 形状对齐 index.ts agentsmd-list 实回：active / fileApplied / activeVia / refs
+      // （applied 是早已改掉的字段，带数据渲染对现行分支空转过一段时间）。
+      return { ok: true, presets: [{ id: 'default', name: '默认预设', active: true, fileApplied: true, activeVia: 'file', refs: [], size: 1024 }, { id: 'p-office', name: '办公基线', active: false, fileApplied: false, activeVia: '', refs: [], size: 512 }], current: 'default' }
     case 'history-list':
     case 'history-sessions':
       return { ok: true, items: [], groups: [], total: 0 }
     case 'rules-trash-list':
-      return { ok: true, entries: [{ id: 't1', name: '旧记忆', group: '办公', form: 'flat', bytes: 100, deletedAt: '2026-09-13T10:00:00.000Z' }] }
+      // 恢复/永久删除按钮都用 entry.trashId（client.js），id 是旧字段名。
+      return { ok: true, entries: [{ trashId: 't1', name: '旧记忆', group: '办公', form: 'flat', bytes: 100, deletedAt: '2026-09-13T10:00:00.000Z' }] }
     case 'mcpm-list':
-      return { ok: true, rows: [{ serverName: 'github', transport: 'stdio', level: 'project', enabled: true, tools: ['create_issue'] }], paths: {}, errors: [], warnings: [] }
+      // 形状对齐 index.ts mcpm-list 实回：disabled + live{enabled,phase} + 四个工具计数
+      // （live/known 拆分是 0.9.5 的「连不上不再报可用」修复，夹具必须跟着走）。
+      return { ok: true, rows: [{ serverName: 'github', transport: 'stdio', level: 'project', disabled: false, notes: '', live: { enabled: true, phase: 'ready' }, toolCount: 1, enabledToolCount: 1, liveToolCount: 1, liveEnabledToolCount: 1, knownToolCount: 1 }], paths: {}, errors: [], warnings: [] }
     case 'plugin-version':
       return { ok: true, version: '0.4.0' }
     case 'model-candidates':
-      return { ok: true, candidates: [{ provider: 'sensenova', providerName: 'SenseNova', id: 'sensenova-6.8-flash-lite', name: '6.8 Flash Lite' }] }
+      // 服务端键名是 models（客户端读 mres.models）；candidates 是旧字段名。
+      return { ok: true, models: [{ provider: 'sensenova', providerName: 'SenseNova', id: 'sensenova-6.8-flash-lite', name: '6.8 Flash Lite' }] }
     case 'preset-tools':
       return { ok: true, tools: [{ name: 'read_file', presets: ['default'], current: true }] }
     case 'skill-state':

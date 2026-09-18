@@ -1,8 +1,7 @@
 //#region lib/types/tombstone.js
 /**
  * 通用墓碑簿记：登记一个已删除 id，并按 FIFO 在上限处淘汰最旧项。
- * 工作区注册表（lib/workspace.js）与投影缓存（lib/projcache.js）共用
- * 同一份语义，避免两处拷贝的淘汰策略分叉。
+ * 工作区注册表（lib/history/workspace.js）在用；淘汰策略集中在这里，避免各处拷贝分叉。
  */
 /**
  * 登记已删除 id 并执行上限淘汰。

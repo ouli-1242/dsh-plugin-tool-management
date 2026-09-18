@@ -11,6 +11,13 @@ export { CapabilityRefusalError };
 // presence, shapes, read-only behaviour), never from comparing source text:
 // text equality only ever proved "same release", and it turned every harmless
 // upstream refactor into a total feature outage.
+//
+// 纪律边界（对工作区「官方包与宿主机制只读」一条的解释，2026-09-18 复核确认）：
+// 这里的包装是**运行时实例**上的临时、可恢复、能力门控的适配（仅当宿主自己缺
+// delete/whenIdle 时才装；按原 descriptor 恢复；serial 队列防复活），不修改任何
+// 官方包文件、不持久化改动、不改变宿主机制的对外行为 —— 与「不 patch 官方代码」
+// 禁令针对的对象（包文件与宿主机制的永久改写）不同层。若用户裁定该解释不成立，
+// 撤掉 acquire/releaseCacheGuard 即可整体退回「无删除屏障」的降级形态。
 const cacheGuards = new WeakMap();
 const raw = (value) => value?.[symbols.original] ?? value;
 const sameLifecycle = (a, b) => a && b && a.createdAt === b.createdAt && (a.cwd ?? null) === (b.cwd ?? null);

@@ -304,7 +304,10 @@ function isChinesePersona(name: string, description: string, body: string): bool
  * 正文为空时退化成只给一个名字 —— 空框比没有框更糟。
  */
 export function renderPersonaPrompt(persona: PersonaDoc): string {
-  const name = String(persona.name || '').trim() || '(unnamed)'
+  // 名字与正文/输出过同一道中和：名字原样进框时，宿主对 section 文本的严格插值会把
+  // `{{…}}` 当未注册变量抛错，委派直接硬失败 —— 0.9.5 的中和只盖了正文与输出，漏了名字
+  // （validPersonaName 不挡花括号，手写 frontmatter 造得出这种名字）。
+  const name = neutralizePromptVariables(String(persona.name || '').trim()) || '(unnamed)'
   const raw = String(persona.body ?? '')
   const body = neutralizePromptVariables(raw.trim())
   if (body === '') return name

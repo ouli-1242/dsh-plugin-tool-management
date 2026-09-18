@@ -932,6 +932,21 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "detail.title": "技能详情", "detail.body": "正文", "detail.frontmatter": "元数据", "detail.noFrontmatter": "该技能未提供元数据。", "detail.diagnostics": "诊断", "detail.path": "源文件", "detail.noIssues": "未发现诊断问题。",
         "create.title": "创建技能", "create.target": "创建位置", "create.name": "名称", "create.name.placeholder": "例如 code-review-helper", "create.description": "简介", "create.description.placeholder": "一句话说明什么时候使用", "create.body": "正文（Markdown）", "create.body.placeholder": "写下技能要遵循的指令、步骤和边界…", "create.chat.note": "对话里 skill_manager_create 建的是用户级技能",
         "import.title": "导入技能", "upload.drop.title": "点击或拖入此处", "upload.drop.copy": "支持 .zip、技能文件夹或单个 SKILL.md", "upload.selected.one": "{count} 个文件 · {size}", "upload.selected.other": "{count} 个文件 · {size}", "upload.remove": "移除所选内容", "upload.requirements": "文件要求", "upload.requirement.skill": "压缩包或文件夹需包含 SKILL.md", "upload.requirement.frontmatter": "SKILL.md 需包含 YAML 格式的技能名称和描述", "upload.requirement.copy": "导入时复制完整内容，不修改原始来源", "upload.requirement.persona.1": "支持 .md / .zip（可多选、可拖入）", "upload.requirement.persona.2": "一个 .md = 一个人设，文件名即人设名", "upload.requirement.persona.3": "同名自动跳过，绝不覆盖原有文件", "upload.requirement.memory.1": "支持 .md / .zip（可多选、可拖入）", "upload.requirement.memory.2": "一个 .md = 一条记忆，文件名即记忆名；带 SKILL.md 的目录 = bundle 记忆（附件一起进来）", "upload.requirement.memory.3": "zip 里的目录名即场景；没有目录时用下面「导入到场景」的值（留空 = 全局）", "upload.requirement.prompt.1": "支持 .md（可多选、可拖入）", "upload.requirement.prompt.2": "一个 .md = 一份预设，文件名即 id（目录名）", "upload.requirement.prompt.3": "同名已存在则跳过，绝不覆盖", "upload.requirement.session.1": "支持 .jsonl / .json / .md / .txt（一次一个）", "upload.requirement.session.2": "Claude Code / Cursor / Codex 的转录文件，或任意文本", "upload.requirement.session.3": "项目目录可留空 = 归入未分组；留空不影响导入", "upload.importing": "正在导入…", "status.selected": "已选择", "select.file.invalid": "请选择 .zip 或单个 SKILL.md", "select.folder.invalid": "该文件夹里没有 SKILL.md", "error.browse.absolute": "目录路径必须是绝对路径：{path}", "error.browse.unreadable": "无法读取目录：{path}", "error.browse.notDirectory": "不是目录：{path}",
+        // F-029：服务端错误码补词条（zh 逐字复现服务端文案，命中词条前后中文显示不变；EN 不再回退中文原文）。
+        "error.custom.absolute": "目录路径必须是绝对路径: {path}", "error.custom.notDirectory": "不是目录: {path}", "error.custom.unreadable": "无法读取目录: {path}", "error.custom.overlap": "目录与已有技能来源重叠: {path} ↔ {other}", "error.custom.invalidKey": "非法的自定义来源 key: {key}", "error.custom.notFound": "自定义来源不存在: {key}",
+        "error.secret.noToken": "明文查看与导出已被禁用：宿主未配置访问令牌。请在本插件配置里加 token（或设环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）后重启 DSH，再在界面上填入同一个令牌。", "error.secret.badToken": "访问令牌缺失或不正确：请在界面里填入与宿主配置相同的令牌（随请求以 x-dsh-token 发送）。",
+        "dir.title": "选择文件夹", "dir.currentPath": "当前路径", "dir.pathPlaceholder": "输入目录路径，回车跳转", "dir.jump": "跳转", "dir.loading": "加载中…", "dir.empty": "（当前目录没有子文件夹）", "dir.up": "上级", "dir.pick": "选择此文件夹", "dir.error.unreadable": "无法读取目录",
+        "fm.label.name": "名称", "fm.label.description": "描述", "fm.label.when-to-use": "适用场景", "fm.label.user-invocable": "用户可调用", "fm.label.disable-model-invocation": "禁止模型调用", "fm.label.allowed-tools": "允许的工具", "fm.label.license": "许可协议", "fm.label.version": "版本", "fm.label.author": "作者", "fm.label.category": "分类", "fm.label.tags": "标签", "fm.label.metadata": "附加信息", "fm.label.homepage": "主页", "fm.yes": "是", "fm.no": "否",
+        // F-029 收尾：余下 7 码的服务端动态文案已改为 params 携带（zh 词条逐字复现原句）。
+        // {action} 由 translateError 走 action.* 二次翻译；{reason}/{detail}/{refs}/{origin}
+        // 是服务端动态中文尾巴，EN 界面显示英文框架 + 中文细节（比整句中文可读）。
+        "error.rules.sceneNotFound": "场景不存在：{group}（请先在「场景」页创建该场景）",
+        "error.rules.reservedScene": "「{name}」是保留场景，不可{action}{reason}",
+        "error.rules.singleSceneOnly": "除「全局」外同时只能启用一个场景{detail}",
+        "error.agentsMd.sceneRebindFailed": "无法把场景「{scene}」的提示词绑定改成「{target}」：{reason}",
+        "error.agentsMd.referenced": "「{id}」仍被引用，不能删除：{refs}。先改掉引用（换绑提示词 / 退出场景 / 应用别的预设）再删除。",
+        "error.source.reserved": "{origin}：不能停用或移除（里面的技能可以删除）",
+        "action.rename": "改名", "action.lock": "锁定",
         "trash.title": "回收站", "trash.count.one": "{count} 个待处理技能", "trash.count.other": "{count} 个待处理技能", "trash.empty": "回收站为空", "trash.deletedAt": "删除于 {time}", "trash.source": "来源：{source}",
         "trash.btn.open": "回收站", "trash.items.count": "{count} 项", "trash.purge.confirm": "永久删除？",
         "trash.group.agents": "人设", "trash.group.scenes": "场景", "trash.group.presets": "提示词预设",
@@ -1208,6 +1223,17 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         "detail.title": "Skill details", "detail.body": "Body", "detail.frontmatter": "Metadata", "detail.noFrontmatter": "This skill provides no metadata.", "detail.diagnostics": "Diagnostics", "detail.path": "Source file", "detail.noIssues": "No diagnostic issues found.",
         "create.title": "Create skill", "create.target": "Create in", "create.name": "Name", "create.name.placeholder": "e.g. code-review-helper", "create.description": "Description", "create.description.placeholder": "One sentence describing when to use it", "create.body": "Body (Markdown)", "create.body.placeholder": "Write the instructions, steps, and boundaries…", "create.chat.note": "skill_manager_create in chat creates user-level skills",
         "import.title": "Import skill", "upload.drop.title": "Click or drop here", "upload.drop.copy": "Supported: .zip, a skill folder, or one SKILL.md", "upload.selected.one": "{count} file · {size}", "upload.selected.other": "{count} files · {size}", "upload.remove": "Remove selection", "upload.requirements": "File requirements", "upload.requirement.skill": "Archives and folders must contain SKILL.md", "upload.requirement.frontmatter": "SKILL.md must include a YAML name and description", "upload.requirement.copy": "Import copies all content and never modifies the source", "upload.requirement.persona.1": "Accepts .md / .zip (multi-select or drag in)", "upload.requirement.persona.2": "One .md = one persona; the file name is the persona name", "upload.requirement.persona.3": "Same names are skipped, never overwritten", "upload.requirement.memory.1": "Accepts .md / .zip (multi-select or drag in)", "upload.requirement.memory.2": "One .md = one memory; a folder with SKILL.md becomes a bundle memory (attachments included)", "upload.requirement.memory.3": "Folder names inside the zip are scenes; otherwise the scene field below applies (blank = global)", "upload.requirement.prompt.1": "Accepts .md (multi-select or drag in)", "upload.requirement.prompt.2": "One .md = one preset; the file name is the id", "upload.requirement.prompt.3": "A preset with the same name is skipped, never overwritten", "upload.requirement.session.1": "Accepts .jsonl / .json / .md / .txt (one file at a time)", "upload.requirement.session.2": "Transcripts from Claude Code / Cursor / Codex, or any plain text", "upload.requirement.session.3": "The project directory may be left blank (the session goes to Ungrouped)", "upload.importing": "Importing…", "status.selected": "Selected", "select.file.invalid": "Choose a .zip archive or one SKILL.md.", "select.folder.invalid": "No SKILL.md was found in the selected folder.", "error.browse.absolute": "Folder path must be absolute: {path}", "error.browse.unreadable": "Could not read folder: {path}", "error.browse.notDirectory": "Not a folder: {path}",
+        "error.custom.absolute": "The folder path must be absolute: {path}", "error.custom.notDirectory": "Not a folder: {path}", "error.custom.unreadable": "Could not read the folder: {path}", "error.custom.overlap": "The folder overlaps an existing skill source: {path} ↔ {other}", "error.custom.invalidKey": "Invalid custom source key: {key}", "error.custom.notFound": "Custom source not found: {key}",
+        "error.secret.noToken": "Plain-text reveal and export are disabled: the host has no access token configured. Add token to this plugin's configuration (or set the DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN environment variable), restart DSH, then enter the same token in the panel.", "error.secret.badToken": "The access token is missing or incorrect: enter the same token as the host configuration in the panel (sent as x-dsh-token with every request).",
+        "dir.title": "Choose a folder", "dir.currentPath": "Current path", "dir.pathPlaceholder": "Type a folder path and press Enter to jump", "dir.jump": "Go", "dir.loading": "Loading…", "dir.empty": "(No subfolders in this folder)", "dir.up": "Up one level", "dir.pick": "Choose this folder", "dir.error.unreadable": "Could not read the folder",
+        "fm.label.name": "Name", "fm.label.description": "Description", "fm.label.when-to-use": "When to use", "fm.label.user-invocable": "User invocable", "fm.label.disable-model-invocation": "Model invocation disabled", "fm.label.allowed-tools": "Allowed tools", "fm.label.license": "License", "fm.label.version": "Version", "fm.label.author": "Author", "fm.label.category": "Category", "fm.label.tags": "Tags", "fm.label.metadata": "Metadata", "fm.label.homepage": "Homepage", "fm.yes": "Yes", "fm.no": "No",
+        "error.rules.sceneNotFound": "Scene not found: {group} (create it on the Scenes page first)",
+        "error.rules.reservedScene": "「{name}」 is a reserved scene: {action} is not allowed{reason}",
+        "error.rules.singleSceneOnly": "Only one scene besides 「global」 may be enabled at a time{detail}",
+        "error.agentsMd.sceneRebindFailed": "Cannot change the prompt binding of scene 「{scene}」 to 「{target}」: {reason}",
+        "error.agentsMd.referenced": "「{id}」 is still referenced and cannot be deleted: {refs}. Remove those references first (rebind the prompt / leave the scene / apply another preset).",
+        "error.source.reserved": "{origin}: cannot be disabled or removed (the skills inside can still be deleted)",
+        "action.rename": "rename", "action.lock": "locking",
         "trash.title": "Trash", "trash.count.one": "{count} skill pending", "trash.count.other": "{count} skills pending", "trash.empty": "Trash is empty", "trash.deletedAt": "Deleted {time}", "trash.source": "Source: {source}",
         "trash.btn.open": "Trash", "trash.items.count": "{count} item(s)", "trash.purge.confirm": "Delete forever?",
         "trash.group.agents": "Personas", "trash.group.scenes": "Scenes", "trash.group.presets": "Prompt presets",
@@ -2194,7 +2220,13 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
           }
           function doApply(id) {
             setBusy('apply-' + id)
-            apiCall('agentsmd-apply', { id: id }).then(function () { setBusy(null); setApplyConfirm(null); refresh() }).catch(function () { setBusy(null) })
+            // 应用会写全局基线（接管期间还可能改绑场景），失败必须可见 —— 静默返回会让
+            // 用户以为已写入（按钮恢复可点，文件却没变）。与 doRemove 同一套显示路径。
+            apiCall('agentsmd-apply', { id: id }).then(function (res) {
+              setBusy(null); setApplyConfirm(null)
+              if (res && res.ok === false) setState(function (s) { return Object.assign({}, s, { error: res.error }) })
+              else refresh()
+            }).catch(function (e) { setBusy(null); setApplyConfirm(null); setState(function (s) { return Object.assign({}, s, { error: String((e && e.message) || e) }) }) })
           }
           function doRemove(p) {
             setBusy('rm-' + p.id)
@@ -2449,29 +2481,24 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
         var react = React // 上游组件使用小写 react，别名到本文件的 React
         var h = React.createElement
 
-        // SKILL.md frontmatter 常见键 → 中文标签（未知键原样显示，已知键附原始键名提示）。
-        var FRONTMATTER_LABELS = {
-          name: '名称', description: '描述', 'when-to-use': '适用场景', 'user-invocable': '用户可调用',
-          'disable-model-invocation': '禁止模型调用', 'allowed-tools': '允许的工具', license: '许可协议',
-          version: '版本', author: '作者', category: '分类', tags: '标签', metadata: '附加信息', homepage: '主页',
-        }
-        function frontmatterValue(value) {
+        // SKILL.md frontmatter 已知键的标签走 DICT（fm.label.*，未知键原样显示并附原始键名提示）。
+        function frontmatterValue(t, value) {
           if (Array.isArray(value)) return value.join('、')
-          if (value === true) return '是'
-          if (value === false) return '否'
+          if (value === true) return t('fm.yes')
+          if (value === false) return t('fm.no')
           if (value === null || value === undefined) return ''
           if (typeof value === 'object') return JSON.stringify(value, null, 2)
           return String(value)
         }
-        // 详情页把 frontmatter 渲染成中文键值表（原始 JSON 对使用者几乎不可读）。
+        // 详情页把 frontmatter 渲染成键值表（原始 JSON 对使用者几乎不可读）。
         function renderFrontmatter(t, frontmatter) {
           var keys = frontmatter && typeof frontmatter === 'object' ? Object.keys(frontmatter) : []
           if (!keys.length) return h('div', { className: 'dsm-note' }, t('detail.noFrontmatter'))
           return h('div', { className: 'dsm-fm' }, keys.map(function (key) {
-            var label = FRONTMATTER_LABELS[key] || key
+            var label = translateOrFallback(t, 'fm.label.' + key, key)
             return h('div', { className: 'dsm-fm-row', key: key },
               h('div', { className: 'dsm-fm-key' }, label, label === key ? null : h('span', { className: 'dsm-fm-raw' }, key)),
-              h('div', { className: 'dsm-fm-val' }, frontmatterValue(frontmatter[key])))
+              h('div', { className: 'dsm-fm-val' }, frontmatterValue(t, frontmatter[key])))
           }))
         }
 
@@ -2918,9 +2945,9 @@ function sceneSyncWarn(t, res) {
         setSt({ loading: true, error: null, current: dir || '', parent: null, entries: [] })
         apiCall('dir-list', { dir: dir || '' }).then(function (res) {
           if (res && res.ok) setSt({ loading: false, error: null, current: res.current || '', parent: res.parent || null, entries: res.entries || [] })
-          else setSt({ loading: false, error: (res && res.error) || '无法读取目录', current: dir || '', parent: null, entries: [] })
+          else setSt({ loading: false, error: (res && res.error) || t('dir.error.unreadable'), current: dir || '', parent: null, entries: [] })
         }).catch(function () {
-          setSt({ loading: false, error: '无法读取目录', current: dir || '', parent: null, entries: [] })
+          setSt({ loading: false, error: t('dir.error.unreadable'), current: dir || '', parent: null, entries: [] })
         })
       }
       react.useEffect(function () { load(props.initial || '') }, [])
@@ -2928,21 +2955,21 @@ function sceneSyncWarn(t, res) {
       function goUp() { if (!st.parent) return; setText(st.parent); load(st.parent) }
       function enter(path) { setText(path); load(path) }
       function pick() { var target = String(st.current || '').trim() || String(text || '').trim(); if (target && props.onPick) props.onPick(target) }
-      return h(Modal, { title: props.title || '选择文件夹', closeLabel: props.closeLabel || t('btn.close'), onClose: props.onClose },
+      return h(Modal, { title: props.title || t('dir.title'), closeLabel: props.closeLabel || t('btn.close'), onClose: props.onClose },
         h("div", { className: "dsm-form" },
           h("label", { className: "dsm-field" },
-            h("span", { className: "dsm-label" }, '当前路径'),
+            h("span", { className: "dsm-label" }, t('dir.currentPath')),
             h("div", { className: "dsm-dir-row" },
-              h("input", { className: "dsm-control", value: text, placeholder: '输入目录路径，回车跳转', onChange: function (e) { setText(e.target.value); }, onKeyDown: function (e) { if (e.key === 'Enter') { e.preventDefault(); jump(); } } }),
-              h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: st.loading || !String(text || '').trim(), onClick: jump }, '跳转'))),
+              h("input", { className: "dsm-control", value: text, placeholder: t('dir.pathPlaceholder'), onChange: function (e) { setText(e.target.value); }, onKeyDown: function (e) { if (e.key === 'Enter') { e.preventDefault(); jump(); } } }),
+              h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: st.loading || !String(text || '').trim(), onClick: jump }, t('dir.jump')))),
           st.error ? h("div", { className: "dsm-feedback dsm-error", role: "alert" }, st.error) : null,
           h("div", { className: "dsm-dir-list" },
-            st.loading ? h("div", { className: "dsm-empty" }, '加载中…')
+            st.loading ? h("div", { className: "dsm-empty" }, t('dir.loading'))
               : st.entries.length ? st.entries.map(function (e) { return h("button", { key: e.path, type: "button", className: "dsm-dir-item", title: e.path, onClick: function () { enter(e.path); } }, e.name); })
-              : h("div", { className: "dsm-empty" }, '（当前目录没有子文件夹）')),
+              : h("div", { className: "dsm-empty" }, t('dir.empty'))),
           h("div", { className: "dsm-modal-actions" },
-            h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: st.loading || !st.parent, onClick: goUp }, '上级'),
-            h("button", { type: "button", className: "dsm-btn", disabled: st.loading || !(String(st.current || '').trim() || String(text || '').trim()), onClick: pick }, '选择此文件夹'))))
+            h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: st.loading || !st.parent, onClick: goUp }, t('dir.up')),
+            h("button", { type: "button", className: "dsm-btn", disabled: st.loading || !(String(st.current || '').trim() || String(text || '').trim()), onClick: pick }, t('dir.pick')))))
     }
 
     function SkillManagerSection(props) {

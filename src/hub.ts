@@ -123,7 +123,9 @@ export function migrateHubLayoutSync(home: string = resolveDshHome()): void {
     }
   }
   // ① 更早的 hub 目录名（插件叫 dsh-skill-mcp-manager 的时期）：**先**逐项并入 hub，
-  //    让下面 ② 的改名也覆盖从旧目录搬进来的那些（同名保留 hub 里已有的那份）。
+  //    让下面 ② 的改名也覆盖从旧目录搬进来的那些（同名保留 hub 里已有的那份 ——
+  //    move 对已存在目标跳过且旧份不删：合并是「只进不覆盖」，滞留旧目录的条目
+  //    不丢失但也不可见，清掉旧目录即可整体放弃）。
   for (const legacyHub of ['dsh-plugin-tool-management', 'skill-mcp-manager']) {
     const from = join(home, legacyHub)
     try {

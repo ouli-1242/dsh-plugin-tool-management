@@ -14,9 +14,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool as hostDefineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { ArchiveWorkspaceRegistry as HistoryService, workspaceBaseName, workspacePathKey } from './history/workspace.js'
 import { createSkillsService, pluginLog } from './skills/service.js'
+import { renameWithRetry } from './skills/core.js'
 import { createAgentsMdService } from './agents-md/service.js'
 import { createRulesService, planMemoryExport } from './rules/service.js'
 import { createArchiveEngine } from './rules/archive-engine.js'
@@ -44,7 +45,7 @@ import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './s
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
-import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { zipSync } from 'fflate'
 
@@ -368,6 +369,11 @@ export default {
     // is not an injected service and throws "cannot get property without
     // inject" at boot.
     const TOKEN = String((config as { token?: unknown } | undefined)?.token || process.env.DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN || '').trim()
+    // 令牌比较走「双侧 sha256 → timingSafeEqual」：摘要定长 32 字节，无需长度分支
+    // （直接比较不等长 Buffer 会抛），逐字节的耗时不随匹配前缀长度变化 —— JS 的 ===
+    // 逐字符短路，理论上可被计时侧信道逐位猜测。
+    const tokenMatches = (presented: string): boolean =>
+      timingSafeEqual(createHash('sha256').update(presented).digest(), createHash('sha256').update(TOKEN).digest())
 
     const wait = (ms: number) => ctx.timeout(ms)
     const message = (e: unknown) => String((e && (e as Error).message) || e)
@@ -770,7 +776,7 @@ export default {
         if (on.length) await subagentService.enabledStore.setEnabled(on, true)
         void subagentCatalog.refresh()
       },
-      // 记忆 id 全集（保存 memories 段时校验并报 stale）。
+      // 记忆 id 全集。引擎已不消费（memories 段 P5 起废弃），实现保留以维持接口形状。
       knownMemoryIds: async () => {
         const r: any = await rulesService.ops['rules-list']({})
         return new Set<string>(((r && r.rules) || []).filter((x: any) => !x.shadowed).map((x: any) => String(x.id)))
@@ -992,11 +998,47 @@ export default {
         return 0
       }
     }
+    /**
+     * 人设改名后同步运行时快照（F-025）：退出还原按 `subagentsAll` 逐名走，快照里
+     * 还留着旧名的话，退出会「旧名静默跳过、新名不还原」—— 被改名的人设停留在
+     * 场景期间状态。快照在进入场景时拍、改名发生在进入后，只能在改名时跟着改。
+     */
+    async function renameSubagentInSnapshot(from: string, to: string): Promise<void> {
+      try {
+        const slice: any = await rulesService.readArchiveSlice()
+        const mode: any = slice && slice.mode
+        const snapshot: any = mode && mode.snapshot
+        if (!snapshot) return
+        let changed = false
+        const next: any = { ...snapshot }
+        if (snapshot.subagentsAll && Object.prototype.hasOwnProperty.call(snapshot.subagentsAll, from)) {
+          const all: any = {}
+          for (const [k, v] of Object.entries(snapshot.subagentsAll)) {
+            all[k === from ? to : k] = v
+            if (k === from) changed = true
+          }
+          next.subagentsAll = all
+        }
+        for (const field of ['subagents', 'subagentsOn']) {
+          const list = snapshot[field]
+          if (Array.isArray(list) && list.includes(from)) {
+            next[field] = list.map((n: any) => (n === from ? to : n))
+            changed = true
+          }
+        }
+        if (changed) await rulesService.patchIndex({ mode: { ...mode, snapshot: next } })
+      } catch { /* 快照同步失败不阻断改名本身；残留与修复前一致 */ }
+    }
     const baseSubagentUpdate = subagentService.ops['subagent-update']
     if (typeof baseSubagentUpdate === 'function') {
       subagentService.ops['subagent-update'] = async (args: any) => {
         const res: any = await baseSubagentUpdate(args)
-        if (res && res.ok !== false && res.renamedFrom) void rebindSubagentInArchives(String(res.renamedFrom), String(res.name))
+        if (res && res.ok !== false && res.renamedFrom) {
+          const from = String(res.renamedFrom)
+          const to = String(res.name)
+          void rebindSubagentInArchives(from, to)
+          void renameSubagentInSnapshot(from, to)
+        }
         return res
       }
     }
@@ -1083,6 +1125,10 @@ export default {
       'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
       'mcpm-compact',
       'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
+      // mcpm-tools-refresh 为了拿实时工具表会临时启用目标服务器、结束后恢复原状（两次
+      // writePatch），恢复失败还会停留在启用态 —— 是写不是读，按写门禁（与 mcpm-restart
+      // 已在清单同理；0.6.0/0.7.0 已有两次写 op 漏列前科）。
+      'mcpm-tools-refresh',
       // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
       // token-gated like a write — on a LAN-exposed port the token must be the
       // last line of defense for plaintext credentials too, not just writes.
@@ -1188,9 +1234,10 @@ export default {
      *   - 应用**别的份** = 换掉这个场景的绑定（用户裁定 2026-09-17：未锁定时切换要可用，
      *     并且同步写进场景档案）。绑定改完再走一次场景同步，于是「场景页显示什么 / 实际注入
      *     什么 / 谁是引用方」三处立刻重新对齐（此前的做法是直接拒绝，用户得先退出场景）。
-     * 锁定仍由 `guardLockedOps` 挡住（agentsmd-apply 在冻结清单里）。
+     * 锁定由 `guardLockedOps` 挡住（agentsmd-apply 在冻结清单里）；模型工具
+     * `prompt_manager_apply` 不经过 handlers，execute 里自带 `lockedSceneGuard`（F-001）。
      */
-    async function applyPresetGuarded(id: string): Promise<{ ok: true; id: string; backedUp?: boolean; viaScene?: boolean } | { ok: false; error: string; code?: string }> {
+    async function applyPresetGuarded(id: string): Promise<{ ok: true; id: string; backedUp?: boolean; viaScene?: boolean } | { ok: false; error: string; code?: string; params?: Record<string, string> }> {
       const driver = await scenePromptSync.driver()
       if (driver) {
         const target = String(id ?? '').trim()
@@ -1201,6 +1248,7 @@ export default {
               ok: false,
               code: 'error.agentsMd.sceneRebindFailed',
               error: `无法把场景「${driver.label}」的提示词绑定改成「${target}」：${(rebound && rebound.error) || '未知原因'}`,
+              params: { scene: driver.label, target, reason: String((rebound && rebound.error) || '未知原因') },
             }
           }
         }
@@ -1402,13 +1450,24 @@ export default {
     }
 
     async function writePatch(abs: string, content: string): Promise<void> {
-      const t = await fs.resolve(abs)
       const policy = await sandboxPolicy.resolve({ mode: 'danger-full-access' })
       try {
         const previous = await readPatch(abs)
         if (previous && previous !== content) await backupPatchFile(abs, previous)
       } catch (e) { /* a failed backup must never block the write */ }
-      await fs.writeText(t, content, undefined, undefined, policy)
+      // 同目录临时文件 + rename 原子替换：进程中断/磁盘满最坏留下一个 .tmp 兄弟，
+      // 不会截断补丁本体。官方 app-boot 写这两个补丁文件用的是同一套模式
+      // （`filename + '.tmp'` → rename + 瞬时错误重试，lib/index.js `_writeFile`），
+      // 所以 HMR 对 rename 的容忍不需要额外验证。内容写仍走宿主 fs 服务
+      // （沙箱策略与审批语义不变），rename 只是元数据动作。
+      const temp = abs + '.' + randomUUID().slice(0, 8) + '.dsh-tmp'
+      try {
+        await fs.writeText(await fs.resolve(temp), content, undefined, undefined, policy)
+        await renameWithRetry(temp, abs)
+      } catch (e) {
+        await rm(temp, { force: true }).catch(() => undefined)
+        throw e
+      }
     }
 
     // ---------- duplicate loader-id guard ----------
@@ -1559,7 +1618,6 @@ export default {
         if (m) managedIds.add(m[1].trim())
       }
       const rows: ManagedRow[] = []
-      const overrides: Array<{ id: string; disabled?: boolean }> = []
       const blocks: Array<{ text: string }> = []
       let current: { text: string } | null = null
       for (const line of lines) {
@@ -1591,13 +1649,16 @@ export default {
             }
           }
         } else {
+          // 覆盖块按**文件顺序**生效，不是"收集后统一回填"：官方
+          // `@deepseek-ai/dsh-app-boot` 的 applyEntryPatches 只给此刻已入索引的 id 打补丁
+          // （insert 是插入时立即入索引），命中不到就 warn + skip。所以写在 insert 之前的
+          // 覆盖块在宿主侧是 no-op —— 这里同样丢弃，界面才和生效值一致。
           const entry = parseEntry(block.text.split('\n'))
-          if (entry && entry.name === '@deepseek-ai/dsh-mcp-client') overrides.push({ id: entry.id!, disabled: entry.disabled })
+          if (entry && entry.name === '@deepseek-ai/dsh-mcp-client' && entry.disabled !== undefined) {
+            const row = rows.find((r) => r.id === entry.id)
+            if (row) row.disabled = entry.disabled
+          }
         }
-      }
-      for (const o of overrides) {
-        const row = rows.find((r) => r.id === o.id)
-        if (row && o.disabled !== undefined) row.disabled = o.disabled
       }
       return { rows }
     }
@@ -2178,7 +2239,9 @@ export default {
         toolsList.push({
           name: known.name,
           description: known.description || '（服务器未运行；这个名字来自上次运行记录）',
-          enabled: !disabledHere.has(known.name),
+          // 与上方 live 行同一口径：整台停用（`*`）时 stale 行同样报停用，
+          // 否则同页「live 行停用、stale 行启用」自相矛盾。
+          enabled: wildcardHere ? false : !disabledHere.has(known.name),
           parameters: [],
           stale: true,
         })
@@ -2474,6 +2537,16 @@ export default {
       }
       const oldAbs = cur.level === 'global' ? p.globalPatch : p.projectPatch
       const newAbs = level === 'global' ? p.globalPatch : p.projectPatch
+      // 编辑表单不建模 config 里的全部键：手写补丁可能带 toolCallTimeoutMs 这类字段，
+      // 重建前从旧条目原样带回，否则一次「编辑」就把它静默删掉。只透传 buildInsertBlock
+      // 已有发射路径的键 —— 其余未知键的保真需要值保持式序列化（裸布尔/数字经
+      // unquote/yq 往返会漂成字符串），不在此处理，宁可如实丢弃也不写错类型。
+      try {
+        const curRaw = parseRows(await readPatch(oldAbs)).rows.find((r) => r.id === id)
+        if (curRaw && curRaw.config && curRaw.config.toolCallTimeoutMs != null) {
+          row.toolCallTimeoutMs = curRaw.config.toolCallTimeoutMs
+        }
+      } catch { /* 旧文件读不了时按建模字段重建，与原行为一致 */ }
       const block = buildInsertBlock(row)
       return withWriteLock(async () => {
         // Per-tool disable state is keyed by the serverName namespace: migrate
@@ -2486,6 +2559,18 @@ export default {
             try { await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMap) } catch (e) { /* non-fatal */ }
             disabledToolsCache = { at: Date.now(), value: toolMap }
           }
+          // F-025：运行时快照的 mcp 停用表同样按 serverName 键 —— 改名不跟着改，
+          // 退出场景整体回写时旧键成死键、新名工具的停用状态丢失（回到全启用）。
+          try {
+            const slice: any = await rulesService.readArchiveSlice()
+            const mode: any = slice && slice.mode
+            const mcpMap: any = mode && mode.snapshot && mode.snapshot.mcp
+            if (mcpMap && Object.prototype.hasOwnProperty.call(mcpMap, cur.serverName)) {
+              const next: any = {}
+              for (const [k, v] of Object.entries(mcpMap)) next[k === cur.serverName ? serverName : k] = v
+              await rulesService.patchIndex({ mode: { ...mode, snapshot: { ...mode.snapshot, mcp: next } } })
+            }
+          } catch { /* 快照同步失败不阻断改名本身；残留与修复前一致 */ }
         }
         if (oldAbs !== newAbs) {
           // Level migration: remove from the old file, insert into the new one.
@@ -2640,6 +2725,16 @@ export default {
       // waits deliberately run OUTSIDE the write lock — holding the global
       // write lock for up to ~11s stalled every other write op.
       await withWriteLock(async () => {
+        // 并发护栏：阶段 1 的强制写自身必然把 effective 状态置为停用，所以走到这里时
+        // 若读到「已启用」，只可能是等待窗口内别的写操作重新启用了它 —— 以现状为准并
+        // 警告，绝不按重启前快照把用户的显式选择改回去。其余情形按 wasDisabled 原样恢复。
+        // （已知残留：窗口内被「停用」与阶段 1 的写不可区分，仍按快照恢复 —— 重启语义
+        // 本就是「状态与重启前一致」，方向性无害。）
+        const currentDisabled = await isRowDisabled(id, level)
+        if (!currentDisabled && wasDisabled) {
+          warnings.push('重启等待窗口内该服务被重新启用：已保留启用状态，未按重启前状态恢复')
+          return
+        }
         let c = await readPatch(abs)
         c = removeMarked(c, id, 'disable')
         if (wasDisabled) c = appendBlock(c, buildDisableBlock(id, true))
@@ -2762,28 +2857,43 @@ export default {
           // always skipped, even in overwrite mode.
           if (nameTaken && !idTaken) return { skipped: true, reason: 'serverName 已存在' }
           if (idTaken && !overwrite) return { skipped: true, reason: 'id 已存在' }
+          // Overwrite: purge every trace of the id from BOTH patch files first,
+          // then insert the imported row at its own level. The purge is not
+          // atomic with the insert, so keep the pre-purge content of both files
+          // and restore it when the insert fails — same trade-off as mcpmEdit's
+          // level migration: losing the old entries is worse than a transient dup.
+          const origs: Array<{ abs: string; content: string }> = []
           if (idTaken && overwrite) {
-            // Purge every trace of the id from BOTH patch files first, then
-            // insert the imported row at its own level.
             for (const lvl of ['project', 'global']) {
               const lAbs = lvl === 'global' ? p.globalPatch : p.projectPatch
               let lContent = ''
               try { lContent = await readPatch(lAbs) } catch (e) { continue }
-              lContent = removeEntryAll(lContent, row.id)
+              origs.push({ abs: lAbs, content: lContent })
               try {
-                await writePatch(lAbs, lContent)
+                await writePatch(lAbs, removeEntryAll(lContent, row.id))
               } catch (e) {
-                return { skipped: true, reason: '覆盖旧条目失败: ' + message(e) }
+                // 前面已清掉的文件也要恢复：purge 中途失败同样不能留下「旧条目没了」的状态。
+                for (const o of origs) { try { await writePatch(o.abs, o.content) } catch { /* best effort */ } }
+                return { skipped: true, reason: '覆盖旧条目失败（已回滚）: ' + message(e) }
               }
             }
           }
           const abs = row.level === 'global' ? p.globalPatch : p.projectPatch
-          let c = await readPatch(abs)
-          const before = c
-          c = appendBlock(c, buildInsertBlock(row))
-          if (row.disabled) c = appendBlock(c, buildDisableBlock(row.id, true))
-          if (duplicateGuard(before, c)) return { skipped: true, reason: '会产生重复的 loader id' }
-          await writePatch(abs, c)
+          try {
+            let c = await readPatch(abs)
+            const before = c
+            c = appendBlock(c, buildInsertBlock(row))
+            if (row.disabled) c = appendBlock(c, buildDisableBlock(row.id, true))
+            const guard = duplicateGuard(before, c)
+            if (guard) {
+              for (const o of origs) { try { await writePatch(o.abs, o.content) } catch { /* best effort */ } }
+              return { skipped: true, reason: guard.error }
+            }
+            await writePatch(abs, c)
+          } catch (e) {
+            for (const o of origs) { try { await writePatch(o.abs, o.content) } catch { /* best effort */ } }
+            return { skipped: true, reason: '写入失败（已回滚）: ' + message(e) }
+          }
           return { added: true, wasOverwrite: idTaken && overwrite }
         })
         if (res.added) {
@@ -3360,10 +3470,12 @@ export default {
         if (refs === null) ctx.logger?.warn?.('agents-md: reference probe failed; remove allowed')
         const why = refs ? refs.get(id) || [] : []
         if (why.length) {
+          const refsText = why.map(promptRefReason).join('；')
           return {
             ok: false,
             code: 'error.agentsMd.referenced',
-            error: `「${id}」仍被引用，不能删除：${why.map(promptRefReason).join('；')}。先改掉引用（换绑提示词 / 退出场景 / 应用别的预设）再删除。`,
+            error: `「${id}」仍被引用，不能删除：${refsText}。先改掉引用（换绑提示词 / 退出场景 / 应用别的预设）再删除。`,
+            params: { id, refs: refsText },
           }
         }
         return agentsMdService.remove(id)
@@ -4359,6 +4471,8 @@ export default {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
+        const blocked = await lockedSceneGuard()
+        if (blocked) throw new Error(blocked)
         const r = await mcpmAdd(args)
         if (!r.ok) throw new Error(r.error)
         return 'OK: added ' + r.row.id + ' at ' + r.row.level
@@ -4476,6 +4590,8 @@ export default {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
+        const blocked = await lockedSceneGuard()
+        if (blocked) throw new Error(blocked)
         const r = await skillsService.ops['skill-create']({ name: args.name, description: args.description, body: args.body })
         if (!r || r.ok === false) throw new Error((r && r.error) || 'skill create failed')
         const data: any = r.data || {}
@@ -4529,6 +4645,8 @@ export default {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
+        const blocked = await lockedSceneGuard()
+        if (blocked) throw new Error(blocked)
         const r = await applyPresetGuarded(args.id)
         if (!r.ok) throw new Error(r.error)
         return 'OK: preset ' + args.id + ' applied to ~/.dsh/AGENTS.md (next session; current session unchanged' + (r.backedUp ? '; previous backed up to __last-applied__' : '') + ')'
@@ -4604,6 +4722,8 @@ export default {
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
+        const blocked = await lockedSceneGuard()
+        if (blocked) throw new Error(blocked)
         const r: any = await rulesService.ops['rules-create'](args)
         if (!r || r.ok === false) throw new Error((r && r.error) || '创建规则失败')
         return 'OK: memory ' + r.rule.id + '（场景「' + (r.rule.group || '未归属') + '」启用后自动生效）'
@@ -4787,7 +4907,7 @@ export default {
               res.end(JSON.stringify({ ok: false, error: 'missing plugin gate header' }))
               return
             }
-            const tokenAccepted = TOKEN !== '' && hdr('x-dsh-token') === TOKEN
+            const tokenAccepted = TOKEN !== '' && tokenMatches(hdr('x-dsh-token'))
             if (!tokenAccepted) {
               const fence = fenceRejection(req, connection)
               if (fence) {
@@ -4820,7 +4940,7 @@ export default {
                   return
                 }
               }
-              if (TOKEN && WRITE_OPS.has(op) && hdr('x-dsh-token') !== TOKEN) {
+              if (TOKEN && WRITE_OPS.has(op) && !tokenMatches(hdr('x-dsh-token'))) {
                 res.end(JSON.stringify({ ok: false, error: '缺少或错误的访问令牌（x-dsh-token）' }))
                 return
               }

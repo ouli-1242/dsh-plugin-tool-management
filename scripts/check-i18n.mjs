@@ -38,10 +38,11 @@ function blockOf(name) {
 /**
  * 抽 `"key": "value"`。locale 块里一行会写多个键，
  * 所以匹配「行首缩进 + "k": "v"」或「, "k": "v"」两种出现形态。
+ * `^` 必须带 m 标志才是「行首」——没有它只匹配全文开头，行首键（每段第一条）会整体隐形。
  */
 function entriesOf(body) {
   const out = []
-  const re = /(?:^|,)\s*"([A-Za-z0-9._]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g
+  const re = /(?:^|,)\s*"([A-Za-z0-9._]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/gm
   let m
   while ((m = re.exec(body))) out.push({ key: m[1], value: m[2] })
   return out

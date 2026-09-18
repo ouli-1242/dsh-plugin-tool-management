@@ -643,12 +643,6 @@ export function assessHost(ctx: {
   }
 }
 
-/** True when two paths denote the same file; falls back to string equality. */
-function samePath(a: string, b: string): boolean {
-  const normalize = (value: string): string => value.replace(/\\/g, '/').toLowerCase()
-  return normalize(realPathOf(a) ?? a) === normalize(realPathOf(b) ?? b)
-}
-
 /**
  * The `@deepseek-ai` directory of the DSH installation this plugin is attached
  * to, derived from where a shared package physically lives.

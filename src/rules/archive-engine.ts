@@ -84,7 +84,8 @@ export interface ArchiveEngineDeps {
   enabledPersonas(names: string[]): Promise<string[]>
   /** 改人设启停（子智能体开关；引擎保证串行）。 */
   applySubagentSwitches(switches: Array<{ name: string; enabled: boolean }>): Promise<void>
-  /** 实时发现的记忆 id 全集（保存档案时校验 memories 段）。 */
+  /** 实时发现的记忆 id 全集。**引擎已不再消费**（P5 起档案不写、不校验 memories 段，
+   *  保存时顺手清掉残留字段）—— 依赖保留只为接口稳定，新代码不要引用它。 */
   knownMemoryIds(): Promise<Set<string>>
 }
 

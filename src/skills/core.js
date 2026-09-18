@@ -610,14 +610,15 @@ function notDeletableError(definition) {
  */
 function reservedSourceError(root) {
   const key = root && root.key ? root.key : "";
+  const origin =
+    key === "dsh"
+      ? "DSH 技能目录是默认来源，必须读取"
+      : "导入技能目录是默认来源、插件新建/导入的落点，必须读取";
   return {
     ok: false,
     code: "error.source.reserved",
-    params: { root: key },
-    error:
-      key === "dsh"
-        ? "DSH 技能目录是默认来源，必须读取：不能停用或移除（里面的技能可以删除）"
-        : "导入技能目录是默认来源、插件新建/导入的落点，必须读取：不能停用或移除（里面的技能可以删除）",
+    params: { root: key, origin },
+    error: `${origin}：不能停用或移除（里面的技能可以删除）`,
   };
 }
 

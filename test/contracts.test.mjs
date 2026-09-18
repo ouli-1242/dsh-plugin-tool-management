@@ -24,6 +24,7 @@ import {
   subagentDepthOf,
 } from '../lib/context-inject.js'
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
+import { parseModeState } from '../lib/rules/service.js'
 import { renderMcpStateSection } from '../lib/mcp/state-section.js'
 
 test('域与工具名前缀双向对得上（对不上就有域永远统计不到调用）', () => {
@@ -161,4 +162,30 @@ test('MCP 段不拿缓存冒充现状：连不上的 server 不得被报成可�
   // 真可用 → 正常列出，且数字是**真实可用数**（不是缓存数）。
   const ok = renderMcpStateSection([{ serverName: 'ok', disabled: false, liveToolCount: 5, liveEnabledToolCount: 3, knownToolCount: 5 }])
   assert.ok(ok.includes('- **ok**（3 个工具）'), '列出的数字必须是真实可用数')
+})
+
+test('parseModeState 透传全部快照恢复名单（哪张被剥掉，退出模式就有一类状态永远不复原）', () => {
+  // v0.8.5 的教训是 mcpNotes 被剥掉（备注永不回退）；此前 mcpServers / skillSources /
+  // subagentsAll 也各被剥掉过一次。这类字段的价值全在「原样透传」，所以契约钉在
+  // 「六张名单逐字通过」上，而不是某个具体数值。
+  const parsed = parseModeState({
+    scene: '办公',
+    snapshot: {
+      mcp: { github: ['*'] },
+      mcpServers: [{ id: 'mcp-github', level: 'project', disabled: true }],
+      skillSources: [{ root: 'custom-a', enabled: false }],
+      subagents: ['reviewer'],
+      subagentsOn: ['writer'],
+      subagentsAll: { reviewer: false, writer: true },
+      mcpNotes: [{ id: 'mcp-github', note: 'A 挂了改用 B' }],
+    },
+  })
+  assert.equal(parsed.scene, '办公')
+  assert.deepEqual(parsed.snapshot.mcp, { github: ['*'] }, 'v2 停用表原文透传')
+  assert.deepEqual(parsed.snapshot.mcpServers, [{ id: 'mcp-github', level: 'project', disabled: true }])
+  assert.deepEqual(parsed.snapshot.skillSources, [{ root: 'custom-a', enabled: false }])
+  assert.deepEqual(parsed.snapshot.subagents, ['reviewer'])
+  assert.deepEqual(parsed.snapshot.subagentsOn, ['writer'])
+  assert.deepEqual(parsed.snapshot.subagentsAll, { reviewer: false, writer: true })
+  assert.deepEqual(parsed.snapshot.mcpNotes, [{ id: 'mcp-github', note: 'A 挂了改用 B' }])
 })

@@ -63,9 +63,9 @@ export function scanBlockRanges(lines: string[]): PatchBlockRange[] {
 /**
  * 读一个覆盖块三件事：id、disabled、是不是"纯块"。
  *
- * 只看**顶层/一层缩进**的锚定写法（`- id:`、`name:`、`disabled:`）：生成器写出来的
- * 就是这几行，而 config 里的同名键缩进更深 —— 万一手工把 `disabled` 藏进 config，
- * 这里会判成"非纯块"（保留不删），保守方向是对的。
+ * 只认**精确列位**的写法（顶层 `- id:`，生成器的 2 空格 `name:` / `disabled:`）：
+ * config 里的同名键缩进更深，正则不匹配，于是落入下面的 `pure = false` ——
+ * 手工把 `disabled` 藏进 config 的块会被判成"非纯块"（保留不删），保守方向是对的。
  *
  * 不筛 `name:` —— 补丁是按 **loader id** 生效的，别的模块名写同一个 id 时改的仍是
  * 那个条目；真正决定"能不能删"的是 pure 与 decider 两条规则，不是名字。
@@ -79,8 +79,8 @@ export function readToggleEntry(lines: string[]): { id?: string; disabled?: bool
     if (!line.trim() || line.trimStart().startsWith('#')) continue
     const head = line.match(/^- id:\s*(\S+)\s*$/)
     if (head) { id = head[1]; continue }
-    if (/^\s{2,}name:\s*\S+\s*$/.test(line)) continue
-    const flag = line.match(/^\s{2,}disabled:\s*(true|false)\s*$/)
+    if (/^ {2}name:\s*\S+\s*$/.test(line)) continue
+    const flag = line.match(/^ {2}disabled:\s*(true|false)\s*$/)
     if (flag) { disabled = flag[1] === 'true'; continue }
     pure = false
   }
@@ -110,6 +110,10 @@ export function scanOverrideBlocks(content: string): OverrideBlock[] {
 /**
  * **insert 行自带的** 启停基准（`- insert:` 里每个子条目的 `disabled`，缺失 = 启用）。
  *
+ * 子条目键只认 6 空格列位（生成器 `    - id:` 之下的 `      disabled:`）—— config 内嵌的
+ * 同名键缩进更深，匹配不上，该 id 就按"基准未知"处理（调用方只删被 decider 盖住的块，
+ * 绝不删 decider），少删不会错删。
+ *
  * 这是收敛判定的唯一合法基准来源：绝不能用 `parseRows()` 那种"合并覆盖块之后的生效值"，
  * 因为生效值就等于最后一条覆盖块的值，"覆盖块的值 == 基准"会恒成立，decider 会被全删。
  */
@@ -125,7 +129,7 @@ export function insertBaseRows(content: string): OverrideBaseRow[] {
       const child = line.match(/^ {4}- id:\s*(\S+)\s*$/)
       if (child) { flush(); id = child[1]; disabled = undefined; continue }
       if (!id) continue
-      const flag = line.match(/^\s+disabled:\s*(true|false)\s*$/)
+      const flag = line.match(/^ {6}disabled:\s*(true|false)\s*$/)
       if (flag) disabled = flag[1] === 'true'
     }
     flush()
