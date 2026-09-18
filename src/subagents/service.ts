@@ -89,7 +89,8 @@ export interface PersonaDoc {
    * 现在这个字段只做一件事：决定常驻的人设目录出现在哪些深度的会话里。
    *   - `1`（默认）= 只在顶层注入（子会话收不到目录）；
    *   - `2` = 顶层和子会话都注入；
-   *   - `3` = 到两层子会话。
+   *   - `3` = 到两层子会话；
+   *   - `UNLIMITED_PERSONA_CATALOG_DEPTH`（99）= 不限制嵌套，任何深度的会话都注入。
    * 判据是 `深度 < catalogDepth`。每一跳读**被委派那个人设**的字段，不需要跨会话保存状态。
    *
    * 为什么不把它传给官方：`SubagentStartRequest.maxDepth` 是**真的**递归上限，而我们这个
@@ -339,6 +340,15 @@ export function renderPersonaPrompt(persona: PersonaDoc): string {
 
 /** 一个人设没写 `catalogDepth` 时的目录注入深度：1 —— 只在顶层注入目录。 */
 export const DEFAULT_PERSONA_CATALOG_DEPTH = 1
+
+/**
+ * 「不限制嵌套」的目录注入深度（界面下拉的第四档，前端同值见 client.js 的
+ * `CATALOG_DEPTH_UNLIMITED`）。
+ *
+ * 取值远大于宿主能嵌套到的深度（官方 `dsh-tool-subagent` 默认 `maxDepth: 3`），所以判据
+ * `深度 < catalogDepth` 在任何可达的会话里都成立 —— 判据本身不必为它加特例分支。
+ */
+export const UNLIMITED_PERSONA_CATALOG_DEPTH = 99
 
 /**
  * 这个人设的目录注入深度（非法值一律退回默认，**默认从不放宽**）。

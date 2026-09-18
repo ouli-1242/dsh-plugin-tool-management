@@ -283,6 +283,16 @@ function createDispatcher() {
     if (list[index] === undefined) list[index] = create()
     return list[index]
   }
+  const useEffectImpl = function (effect, deps) {
+    const index = current.__cursor++
+    const slot = slotAt(index, () => ({ deps: undefined, effect: undefined }))
+    const changed = slot.deps === undefined || deps === undefined
+      || deps.length !== slot.deps.length || deps.some((d, i) => !Object.is(d, slot.deps[i]))
+    if (!changed) return
+    slot.deps = deps ? deps.slice() : undefined
+    slot.effect = effect
+    pendingEffects.push({ component: current, effect, cleanup: slot.cleanup })
+  }
   const dispatcher = {
     useState(initial) {
       const slot = slotAt(current.__cursor++, () => ({ value: typeof initial === 'function' ? initial() : initial }))
@@ -292,16 +302,10 @@ function createDispatcher() {
         slot.value = value
       }]
     },
-    useEffect(effect, deps) {
-      const index = current.__cursor++
-      const slot = slotAt(index, () => ({ deps: undefined, effect: undefined }))
-      const changed = slot.deps === undefined || deps === undefined
-        || deps.length !== slot.deps.length || deps.some((d, i) => !Object.is(d, slot.deps[i]))
-      if (!changed) return
-      slot.deps = deps ? deps.slice() : undefined
-      slot.effect = effect
-      pendingEffects.push({ component: current, effect, cleanup: slot.cleanup })
-    },
+    useEffect: useEffectImpl,
+    // 真 React 里 layout effect 在提交后、绘制前执行；这个假 dispatcher 不区分提交阶段，
+    // 用同一实现即可 —— 客户端里的 useFlipReorder 在没有 DOM 的测试环境会直接跳过。
+    useLayoutEffect: useEffectImpl,
     useMemo(factory) { current.__cursor++; return factory() },
     useCallback(factory) { current.__cursor++; return factory },
     useRef(initial) { return slotAt(current.__cursor++, () => ({ current: initial })) },
