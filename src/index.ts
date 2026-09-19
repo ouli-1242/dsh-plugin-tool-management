@@ -221,7 +221,7 @@ export default {
 
     // 访问令牌（2026-09-19 抽到 ./request-gate.ts）：配置里的存量令牌 / 生效令牌 / 比对 /
     // 进程标识。引用点用解构保持原名字，index.ts 的调用处一行未改。
-    const { CONFIG_TOKEN, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID } = createAccessToken({ config })
+    const { CONFIG_TOKEN, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID, acceptedThisBoot, markAccepted } = createAccessToken({ config })
 
     const wait = (ms: number) => ctx.timeout(ms)
     const message = (e: unknown) => String((e && (e as Error).message) || e)
@@ -686,6 +686,12 @@ export default {
           ],
           settings: () => injectSettingsSync(),
           factsFor: (agent) => candidates.presetFactsForAgent(agent),
+          // 令牌门禁（2026-09-19，用户裁定「宿主侧硬拦截」）：令牌**在生效**（`TOKEN !== ''`，
+          // 关掉或没配都是空串）而本次启动还没有人验过 ⇒ 这一步不放行，宿主把 turn 收成
+          // `blocked`。这是"没输入令牌就没法对话"的唯一真正落实 —— 客户端那条输入框锁定在
+          // 本宿主上无路可走（`ctx.conversation.blocks` 不存在，见 ContextInjectorDeps 注释）。
+          // 只读 op 不受影响，所以「工具 → 兼容」页照常能打开、能填令牌 —— 解铃就在那里。
+          tokenGateActive: () => TOKEN !== '' && !acceptedThisBoot(),
         })
         contextInjectorLive = () => injector.live()
         contextInjectorNote = (toolName, agent) => injector.noteToolUse(toolName, agent)
@@ -1683,8 +1689,24 @@ export default {
      * 把一次开关落到当前场景的档案上。
      * 返回 null = 无需改动（没有活动场景 / 已锁定 / 这一笔不影响档案）；
      * 返回字符串 = 档案没跟上（运行时已经生效，如实告诉用户，而不是假装成功）。
+     *
+     * **串行闸门**（2026-09-19 修）：档案是「读 → 改 → 写」三步，而撤销是**并发**发的
+     * （`runUndo` 对每条改动各发一个请求）。5 条并发时每个请求都从同一份「全开」快照出发、
+     * 各自只删掉自己那一台，最后落盘的是"只删掉一台"的结果 —— 表现就是**撤销把状态改成
+     * 了反的**：场景里原本只开 1 台 MCP，全选后点撤销，结果变成 5 台开、1 台关。
+     * 技能页同理（`skill-set-all` 逐条并发）。`scene-archive-save` 自己虽有写队列，
+     * 但读发生在那条队列之外，所以队列救不了这个竞态 —— 必须把整段读改写串起来。
+     * 非场景模式下没有这一步同步，所以只有"开着场景模式"才复现。
      */
-    async function syncSwitchToScene(opName: string, args: any): Promise<string | null> {
+    let sceneSyncTail: Promise<unknown> = Promise.resolve()
+    function syncSwitchToScene(opName: string, args: any): Promise<string | null> {
+      const run = () => syncSwitchToSceneLocked(opName, args)
+      const next = sceneSyncTail.then(run, run)
+      // 尾巴只用于排序，不传播结果/错误（否则一次失败会让后续每一次都跟着拒绝）。
+      sceneSyncTail = next.then(() => undefined, () => undefined)
+      return next
+    }
+    async function syncSwitchToSceneLocked(opName: string, args: any): Promise<string | null> {
       const scene = await activeSceneName()
       if (!scene) return null
       if ((await lockedSceneNames()).includes(scene)) return null
@@ -2105,6 +2127,9 @@ export default {
             // 「本次带的这串对不对」比的是**存量**令牌：关掉令牌功能之后仍然要凭它才能开回来、
             // 换掉、或看明文（要求 9）。
             const tokenAccepted = CONFIG_TOKEN !== '' && tokenMatches(hdr('x-dsh-token'))
+            // 验过就置闩（本次进程一次即可）。`agent/pre-step` 的令牌门禁读的就是它 ——
+            // 那一边看不到请求头，只能由这里告诉它"这台机器已经有人验过令牌了"。
+            if (tokenAccepted) markAccepted()
             if (!tokenAccepted) {
               const fence = fenceRejection(req, connection)
               if (fence) {
