@@ -43,6 +43,14 @@ export interface AccessToken {
   acceptedThisBoot(): boolean
   /** 记下"本次进程验过一次令牌"（HTTP 入口在带对令牌时调用）。 */
   markAccepted(): void
+  /**
+   * 把闩重新挂上（「清除令牌」调用）：此后 pre-step 门禁恢复拦截，直到再有人验对。
+   *
+   * 不要求凭证 —— 它只会**收紧**（要求重新验令牌），给不了任何人任何权限。没有它，
+   * 解锁一次之后「清除令牌 + 刷新页面」就是个后门：浏览器里已无令牌，闩却挂着，
+   * 对话整个启动期畅通（2026-09-19 用户实测）。
+   */
+  unmarkAccepted(): void
 }
 
 /**
@@ -97,7 +105,8 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
   })()
 
   /**
-   * 「本次启动已经验过令牌」的闩。**只置位、不清零**（同一个进程里第一次验过就一直是验过）。
+   * 「本次启动已经验过令牌」的闩。验过即置位；唯一的手动清零入口是 `unmarkAccepted`
+   * （「清除令牌」走的 `token-unaccept`，见上）。重启自然清零。
    *
    * 用途：`agent/pre-step` 的令牌门禁要回答"这台机器现在是不是还没人验过令牌"，而它看不到
    * 浏览器请求头。HTTP 入口是唯一知道答案的地方（那里才知道 `x-dsh-token` 对不对），
@@ -105,6 +114,11 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
    *
    * 注意它**不是**"当前请求带没带令牌"：带上之后页面刷新、切页、轮询都不该再要求重填，
    * 而这与界面的 bootId 口径一致（同一进程内只需填一次）。
+   *
+   * 已知边界：闩按**进程**记，不区分浏览器 —— 同一启动里任何一个客户端验对过，其它
+   * 客户端的对话也放行。这是"填一次只管本次启动"（裁定 2026-09-18 第 3 条）在 pre-step
+   * 只能看宿主全局状态下的固有代价；外层还有宿主的连接围栏（回环 / 局域网字面量 +
+   * 浏览器会话 cookie）兜着。
    */
   let accepted = false
 
@@ -116,6 +130,7 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
     BOOT_ID,
     acceptedThisBoot: () => accepted,
     markAccepted: () => { accepted = true },
+    unmarkAccepted: () => { accepted = false },
   }
 }
 

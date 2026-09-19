@@ -221,7 +221,7 @@ export default {
 
     // 访问令牌（2026-09-19 抽到 ./request-gate.ts）：配置里的存量令牌 / 生效令牌 / 比对 /
     // 进程标识。引用点用解构保持原名字，index.ts 的调用处一行未改。
-    const { CONFIG_TOKEN, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID, acceptedThisBoot, markAccepted } = createAccessToken({ config })
+    const { CONFIG_TOKEN, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID, acceptedThisBoot, markAccepted, unmarkAccepted } = createAccessToken({ config })
 
     const wait = (ms: number) => ctx.timeout(ms)
     const message = (e: unknown) => String((e && (e as Error).message) || e)
@@ -2208,6 +2208,16 @@ export default {
               // handlers，模型侧没有任何工具能间接关掉它）。
               if (op === 'token-configure') {
                 res.end(JSON.stringify(await tokenConfigure(payload.args || {}, tokenAccepted)))
+                return
+              }
+              // 「清除令牌」的配套：把「本次启动已验过」的闩重新挂上。没有它，解锁一次之后
+              // 清除令牌 + 强刷新，浏览器里已无令牌，闩却挂着 —— pre-step 门禁读闩
+              // （tokenGateActive），整个启动期都放行对话（2026-09-19 用户实测的漏洞）。
+              // 不要求凭证：它只会收紧（要求重新验令牌），给不了任何人任何权限；同样不进
+              // handlers —— 模型不该有能力拨这颗闩。
+              if (op === 'token-unaccept') {
+                unmarkAccepted()
+                res.end(JSON.stringify({ ok: true }))
                 return
               }
               const fn = handlers[op]

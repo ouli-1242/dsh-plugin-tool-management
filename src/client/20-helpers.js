@@ -112,6 +112,17 @@
       } catch (e) { /* storage unavailable */ }
     }
 
+    // 跨标签页联动（storage 事件只在**其它**标签页触发，正好）：A 标签页「清除令牌」之后，
+    // B 标签页内存里那串还揣着 —— 它的轮询请求会一直带着旧令牌的请求头，把宿主侧刚用
+    // token-unaccept 重新挂上的闩又置回去。所以记录一被删，本页内存令牌立即作废；
+    // 这页的输入框锁要等下一次 token-status 判定才会跟上，期间宿主侧门禁兜底。
+    try {
+      window.addEventListener('storage', function (ev) {
+        if (ev.key !== TOKEN_RECORD_KEY || !TOKEN) return
+        if (readStoredToken() === null) { TOKEN = ''; clearTokenGate() }
+      })
+    } catch (e) { /* storage 不可用（极端环境）→ 只是少了跨标签联动 */ }
+
     /** 当前进程的标识；引导之前是空串（此时不会拿它去匹配任何东西）。 */
     let BOOT_ID = ''
 
@@ -419,17 +430,12 @@
       const [tokenState, setTokenState] = React.useState(null)
       const [tokenDraft, setTokenDraft] = React.useState('')
       const [tokenMsg, setTokenMsg] = React.useState(null)
-      // 「设置 / 修改令牌」的小表单：null = 未展开；`{next, repeat}` = 两个输入框的值。
-      // 要求输两遍（用户裁定 2026-09-19）：令牌一旦写进配置，手滑的结果就是"自己也对不上"。
-      const [tokenForm, setTokenForm] = React.useState(null)
-      // 「关闭保护」的就地确认：null = 未展开；`{value}` = 正在输入的当前令牌。
-      // 关掉保护**不认**"已经解锁"（用户裁定 2026-09-19）：必须当场再输一次当前令牌，
-      // 否则解锁之后顺手一点就把防护关了。宿主侧同样只认这次输入的值。
-      const [tokenOffForm, setTokenOffForm] = React.useState(null)
-      // 「删除令牌」的就地确认：null = 未展开；`{value}` = 正在输入的当前令牌。
-      // 与「关闭保护」同一条口径：删除是"减防护 + 销毁凭证"的方向（关闭只是暂时不生效、
-      // 令牌还在；删除是把它从配置里拿掉），所以同样只认当场再输一次的当前令牌。
-      const [tokenClearForm, setTokenClearForm] = React.useState(null)
+      // 令牌管理弹窗：null = 未打开；`{ mode: 'set'|'off'|'clear'|'on', current, next, repeat, value }` = 已打开。
+      // 四种配置操作（设置/修改、关闭保护、删除令牌、开启保护）共用**一个**弹窗 —— 表单
+      // 一律不落在页面上（用户 2026-09-19 三次反馈：页面要"不跳来跳去"，功能要分类清楚），
+      // 弹窗打开时页面纹丝不动，确认后弹窗收起、状态行自己更新。要求输两遍（用户裁定
+      // 2026-09-19）与"再输一次当前令牌"的口径都在弹窗内执行。
+      const [tokenModal, setTokenModal] = React.useState(null)
       // patch 备份：份数 / 占用（只读，给按钮一个准数）+ 清理弹窗。
       // 每份备份都是整份 patch 的副本，里面的凭据是**明文** —— 所以给一个显式出口让人能删。
       const [backups, setBackups] = React.useState(null)
@@ -437,24 +443,34 @@
       // `confirming` = 删除的两步确认已经按下第一步（按钮就地变成「确认永久删除」）。
       const [backupClean, setBackupClean] = React.useState(null)
       const tokenInputRef = React.useRef(null)
-      // 「修改令牌」表单里的「当前令牌」那一格：表单打开时光标直接落这里。
+      // 「设置 / 修改令牌」弹窗里的「当前令牌」那一格：弹窗打开时光标直接落这里（首次设置
+      // 没有这一格，落回弹窗根节点）。
       const tokenCurrentRef = React.useRef(null)
-      // 表单打开时聚焦一次。依赖用"开 / 关"这个布尔而不是整个 tokenForm —— 后者每敲一个字
-      // 都会变，会把焦点从别的格子抢回来（同下面备份弹窗的写法）。
+      // 令牌弹窗的根节点：打开时把焦点交给它，Esc / Tab 的键盘行为才有个落点（同备份弹窗）。
+      // 弹窗是 CompatPage 内联渲染的，拿不到自己的 hooks，所以 ref 与下面的 effect 都在这儿声明。
+      const tokenDialogRef = React.useRef(null)
+      // 弹窗打开时聚焦一次。依赖用"开 / 关"这个布尔而不是整个 tokenModal —— 后者每敲一个字
+      // 都会变，会把焦点从输入框抢回弹窗根节点（同下面备份弹窗的写法）。
       React.useEffect(function () {
-        if (tokenForm && tokenCurrentRef.current) tokenCurrentRef.current.focus()
-      }, [tokenForm === null])
+        if (!tokenModal || !tokenDialogRef.current) return
+        if (tokenModal.mode === 'set' && tokenCurrentRef.current) tokenCurrentRef.current.focus()
+        else tokenDialogRef.current.focus()
+      }, [tokenModal === null])
       // 备份弹窗的根节点：打开时把焦点交给它，Esc / Tab 的键盘行为才有个落点（同 `Modal`）。
       // 弹窗是 CompatPage 内联渲染的，拿不到自己的 hooks，所以 ref 与下面的 effect 都在这儿声明。
       const backupDialogRef = React.useRef(null)
-      /** 被别处要求"填写令牌"时，把光标放进输入框并滚到可见处。 */
+      /** 被别处要求"填写令牌"时，把光标放进输入框并滚到可见处。令牌弹窗开着的话先收掉：
+       *  别处要的是"解锁本次启动"，弹窗（配置操作）不是答案。 */
       const focusTokenInput = function () {
-        const node = tokenInputRef.current
-        if (!node) return
-        try {
-          node.focus()
-          if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'center' })
-        } catch (e) { /* 聚焦失败无所谓，用户自己点一下 */ }
+        setTokenModal(null)
+        setTimeout(function () {
+          const node = tokenInputRef.current
+          if (!node) return
+          try {
+            node.focus()
+            if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'center' })
+          } catch (e) { /* 聚焦失败无所谓，用户自己点一下 */ }
+        }, 0)
       }
       React.useEffect(function () {
         // 两种到达方式都要管：兼容页已经挂着（订阅者立即聚焦），或刚从别的页签切过来
@@ -520,28 +536,33 @@
           .then(function (r) { if (alive !== false && r && r.ok) setBackups({ total: r.total || 0, totalSize: r.totalSize || 0 }) })
           .catch(function () { /* 读不到 → 按钮不带数字 */ })
       }
-      /** 本次进程用：填一次，跟 bootId 绑定（见文件顶部注释）。 */
+      /** 本次进程用：填一次，跟 bootId 绑定（见文件顶部注释）。成功**不弹任何结果框** ——
+       *  胶囊从「待解锁」翻成绿「已解锁」就是回执（面板原位换胶囊，行不消失）；失败时
+       *  表单留在原地，错误显示在面板内部（field:'run'）。 */
       const saveToken = function () {
         const value = String(tokenDraft || '').trim()
-        if (!value) { setTokenMsg({ kind: 'err', text: t('compat.token.empty') }); return }
+        if (!value) { setTokenMsg({ kind: 'err', text: t('compat.token.empty'), field: 'run' }); return }
         setAccessToken(value)
         setTokenDraft('')
         apiCall('token-status', {}).then(function (r) {
           applyTokenState(r, true)
-          if (!r || !r.ok) { setTokenMsg({ kind: 'err', text: t('compat.token.failed') }); return }
-          // 四种结果分开说，因为处置方式不同：
-          //   宿主没配令牌 → 去设置；对上了 → 好了；令牌功能没在生效（关着 / 待重启）
-          //   → 记下了但用不上，别报"不一致"（值可能是对的）；都对不上才是真的不对。
-          if (r.hostConfigured !== true) setTokenMsg({ kind: 'err', text: t('compat.token.noHost') })
-          else if (r.accepted === true) setTokenMsg({ kind: 'ok', text: t('compat.token.saved') })
-          else if (r.active !== true) setTokenMsg({ kind: 'ok', text: t('compat.token.inactive') })
-          else setTokenMsg({ kind: 'err', text: t('compat.token.mismatch') })
-        }).catch(function () { setTokenMsg({ kind: 'err', text: t('compat.token.failed') }) })
+          if (!r || !r.ok) { setTokenMsg({ kind: 'err', text: t('compat.token.failed'), field: 'run' }); return }
+          if (r.hostConfigured !== true) { setTokenMsg({ kind: 'err', text: t('compat.token.noHost'), field: 'run' }); return }
+          // 成功（accepted）→ 一句话都不说：胶囊翻转 + 顶部横幅自动消失已经是回执。
+          // 「没在生效」也不算失败 —— 值可能是对的（关着 / 待重启），状态行自己会说。
+          if (r.accepted !== true && r.active === true) setTokenMsg({ kind: 'err', text: t('compat.token.mismatch'), field: 'run' })
+          else setTokenMsg(null)
+        }).catch(function () { setTokenMsg({ kind: 'err', text: t('compat.token.failed'), field: 'run' }) })
       }
       const clearToken = function () {
         setAccessToken('')
         setTokenDraft('')
-        setTokenMsg({ kind: 'ok', text: t('compat.token.cleared') })
+        setTokenMsg(null)
+        // 同步把宿主侧「本次启动已验过」的闩重新挂上（token-unaccept）：否则解锁一次之后
+        // 清除 + 强刷新，浏览器里没有令牌，pre-step 门禁却因闩还挂着而放行对话
+        // （2026-09-19 实测漏洞）。失败不拦清除本身 —— 本机记录已删，宿主闩重启后
+        // 也会自然清零，只是那之前对话门暂时没收回来。
+        apiCall('token-unaccept', {}).catch(function () { /* 宿主是没这个 op 的旧版：本机照删 */ })
         loadToken(true)
       }
       /**
@@ -556,11 +577,14 @@
        *
        * `value` / `current` 一律由调用方给全（每种模式各有来源），这里不再自己挑 `tokenDraft`
        * —— 关闭与修改的凭证都必须是用户当场输的那串，混进解锁框的值就等于把刚立的要求绕过去了。
+       * `fieldKey` 标记错误归属哪个表单（解锁面板 / 设置表单 / 各确认框）：**错误只出现在
+       * 触发表单内部**，成功则表单收起、状态行自己更新（胶囊 / 待重启横幅），卡片里永远
+       * 不出现游离的结果框。
        */
-      const configureHostToken = function (mode, value, current) {
+      const configureHostToken = function (mode, value, current, fieldKey) {
         const proof = String(value || '').trim()
-        if (mode === 'set' && !proof) { setTokenMsg({ kind: 'err', text: t('compat.token.empty') }); return }
-        if ((mode === 'off' || mode === 'clear') && !proof) { setTokenMsg({ kind: 'err', text: t('compat.token.proofNeed') }); return }
+        if (mode === 'set' && !proof) { setTokenMsg({ kind: 'err', text: t('compat.token.empty'), field: 'next' }); return }
+        if ((mode === 'off' || mode === 'clear') && !proof) { setTokenMsg({ kind: 'err', text: t('compat.token.proofNeed'), field: fieldKey }); return }
         setTokenMsg(null)
         // `current` 只有 set 用：那个值是**新**令牌，证明不了你知道旧值，所以凭证单独一栏
         // （宿主侧同样只认它 —— 请求头里更新过的那份对 set 不作数，见 src/index.ts tokenConfigure）。
@@ -568,46 +592,61 @@
           if (!r || !r.ok) {
             // 令牌不对时，宿主回的还是那个通用错误码（宿主那句提示指向「本次启动」的解锁流程）
             // —— 那条指引在"就地为关闭 / 修改做确认"的场景里是错的，所以这里按本次操作重说
-            // 一遍，而不是把人指到别的地方去。三种模式（含开启保护时填错）共用同一句。
+            // 一遍，而不是把人指到别的地方去。四种模式（含开启保护时填错）共用同一句。
             const wrong = !!(r && r.code === 'error.secret.badToken')
             const text = wrong ? t('compat.token.wrong') : ((r && r.error) || t('compat.token.failed'))
-            // 令牌不对时把**那一格**标红（`field`）：整句提示在下面，但"错在哪个框"得看得出
-            // —— set 的凭证只能是当前令牌那一栏，off / clear 在各自的确认框，on 用「本次启动」里那串。
-            setTokenMsg({ kind: 'err', text: text, field: wrong ? (mode === 'set' ? 'current' : mode === 'off' ? 'off' : mode === 'clear' ? 'clear' : 'run') : null })
+            // 令牌不对时把**那一格**标红（`field`）：整句提示在框内，但"错在哪个框"得看得出
+            // —— set 的凭证是「当前令牌」那一栏，其余错误归属触发它的那个表单。
+            setTokenMsg({ kind: 'err', text: text, field: wrong && mode === 'set' ? 'current' : fieldKey })
             return
           }
-          if (r.restartRequired) {
-            setTokenMsg({ kind: 'ok', text: t(mode === 'set' ? 'compat.token.hostSet' : mode === 'on' ? 'compat.token.hostOn' : mode === 'clear' ? 'compat.token.hostClear' : 'compat.token.hostOff') })
-          } else setTokenMsg({ kind: 'ok', text: r.note || t('compat.token.hostNoChange') })
+          // 成功：把弹窗收起来就是回执。"要重启"这件事由「待重启」横幅说（状态一刷新它
+          // 自然出现），不再另弹一句"已写入配置"—— 两句话叠在一起只会互相稀释。
+          setTokenMsg(null)
           if (mode === 'set') {
             // **不**把本机令牌顺手换成新值：换完之后"当前进程"认的还是旧令牌（配置改动要重启），
             // 换了只会让面板立刻显示「不匹配」—— 看起来像改坏了。保留现值 + 那句"重启后生效"
             // 的横幅，语义才是对的（重启后按第 3 条要求本来也要重填一次）。
             setTokenDraft('')
-            setTokenForm(null)
           }
-          if (mode === 'off') setTokenOffForm(null)
-          if (mode === 'clear') setTokenClearForm(null)
+          setTokenModal(null)
           loadToken(true)
-        }).catch(function (e) { setTokenMsg({ kind: 'err', text: errMsg(e) }) })
+        }).catch(function (e) { setTokenMsg({ kind: 'err', text: errMsg(e), field: fieldKey }) })
       }
-      const openTokenForm = function () { setTokenForm({ current: '', next: '', repeat: '' }); setTokenMsg(null) }
-      const closeTokenForm = function () { setTokenForm(null) }
+      /** 打开令牌管理弹窗（四种模式共用一个弹窗，见 tokenModal 的注释）。 */
+      const openTokenModal = function (mode) {
+        setTokenModal({ mode: mode, current: '', next: '', repeat: '', value: '' })
+        setTokenMsg(null)
+      }
+      const closeTokenModal = function () { setTokenModal(null); setTokenMsg(null) }
       /**
-       * 提交「修改令牌」表单：按钮与回车走**同一条判断**，免得两种入口对"填齐了没有"的要求不一致
+       * 提交弹窗：按钮与回车走**同一条判断**，免得两种入口对"填齐了没有"的要求不一致
        * （按钮那边是 disabled，回车这边只能自己判）。
        */
-      const submitTokenForm = function () {
-        if (!tokenForm || !tokenForm.next.trim() || tokenFormInvalid) return
-        if (tokenHostConfigured && !tokenForm.current.trim()) return
-        configureHostToken('set', tokenForm.next.trim(), tokenForm.current.trim())
+      const submitTokenModal = function () {
+        if (!tokenModal) return
+        if (tokenModal.mode === 'set') {
+          if (!tokenModal.next.trim() || tokenSetInvalid) return
+          if (tokenHostConfigured && !tokenModal.current.trim()) return
+          configureHostToken('set', tokenModal.next.trim(), tokenModal.current.trim(), 'next')
+          return
+        }
+        // off / clear 只认当场输入的当前令牌；on 是反风险方向，宿主还接受请求头里
+        // 已验过的凭证（accepted 时可以不填直接开，见 src/index.ts tokenConfigure）。
+        // clearLocal 是本机操作，宿主不参与：输一次令牌是与其余三行同款的确认手势，
+        // 不校验对错 —— 校验了反而把"清除记错的旧令牌"这条路堵死，非空即可确认。
+        if (tokenModal.mode === 'clearLocal') {
+          if (!tokenModal.value.trim()) return
+          clearToken()
+          setTokenModal(null)
+          return
+        }
+        const allowEmpty = tokenModal.mode === 'on' && !!(tokenState && tokenState.accepted)
+        if (!tokenModal.value.trim() && !allowEmpty) return
+        configureHostToken(tokenModal.mode, tokenModal.value.trim(), '', tokenModal.mode)
       }
-      /** 三个密码框里按回车 = 按「保存新令牌」（三个框都挂同一个，顺序无所谓）。 */
-      const enterToSubmit = function (ev) { if (ev.key === 'Enter') submitTokenForm() }
-      const openTokenOffForm = function () { setTokenOffForm({ value: '' }); setTokenMsg(null) }
-      const closeTokenOffForm = function () { setTokenOffForm(null) }
-      const openTokenClearForm = function () { setTokenClearForm({ value: '' }); setTokenMsg(null) }
-      const closeTokenClearForm = function () { setTokenClearForm(null) }
+      /** 弹窗里的输入框按回车 = 确认（所有框挂同一个，顺序无所谓）。 */
+      const enterToSubmit = function (ev) { if (ev.key === 'Enter') submitTokenModal() }
       const loadInject = function (alive) {
         apiCall('inject-settings', {})
           .then(function (r) { if (alive !== false && r && r.ok && r.settings) setInject(r.settings) })
@@ -714,30 +753,34 @@
       // 访问令牌（用户裁定 2026-09-18：放在「注入」**上面** —— 令牌不过时写操作全被拒，
       // 它是"先解决才能用别的"的一件事，位置就该在设置项之前）。
       //
-      // 排版口径（用户裁定 2026-09-19，同日二次重构）—— **一行一件事，各有名字**，且
-      // **行名说"这一步管到哪儿"、按钮说动词**（此前行名叫 登录 / 修改 / 关闭，都是动词，
-      // 与按钮重复，用户反而看不出每一行各管一段）：
-      //   本次启动 = 这一进程用哪串（只写本机浏览器，DSH 退出即失效）
-      //   宿主配置 = 写进配置文件（重启 DSH 才生效）
-      //   保护开关 = 总开关（令牌本身留在配置里，随时开回来）
+      // 排版口径（2026-09-19 第三次重构；「折叠管理区」首版与「常驻清单」二版之后，
+      // 用户点破关键：「按钮、输入框、提示句的位置、大小、长度要统一，页面不要跳来跳去；
+      // 功能要分类出来，互通的功能合在一起会很混乱，不必受现有结构束缚」）——
+      // 于是按**作用域**拆成两个分区，所有表单搬进弹窗：
       //
-      // 状态收成**一枚胶囊 + 一句实况**（用户 2026-09-19：「状态标签晦涩」）：以前并排两枚
-      // 「宿主配置：已关闭」「本次填写：未填写」，用户不知道自己在哪一步、下一步该点哪个。
-      // 现在胶囊只回答"保护开没开、这一程解锁没有"，长句子一律走它右边那句实况 ——
-      // 大小两种字号分开，一行里不再交错。胶囊说的是**当前进程**的口径，配置与进程不一致
-      // （改了没重启）由下面的「待重启」横幅补一句。
+      //   ① 访问令牌（本机、临时）：一枚胶囊 + 一句实况 + 一个控件槽，永远只有两行。
+      //      待解锁 = 输入框 + 解锁；已解锁 = 原位换绿胶囊（同一个容器，min-height 拉平，
+      //      框高不变）；其余状态不放控件。解锁错误顶替实况那一行显示（红色），高度同样不变。
+      //   ② 令牌管理（配置文件、持久）：四行**静态**清单 —— 令牌（设置/修改）、保护开关、
+      //      删除令牌、清除令牌。行名、说明、按钮三列同形同位同宽，行不随状态增删
+      //      （不可用时禁用、由说明解释）；按钮上带 … 的开**弹窗**（照备份弹窗的手工
+      //      模式拼装），页面上不存在任何会展开收起的东西。
+      //
+      //   反馈模型：页面**永远不出现游离的结果框**。成功 = 弹窗收起 / 胶囊翻绿 + 状态行
+      //      更新（「待重启」横幅是写配置成功的唯一回执）；失败 = 弹窗不关、错误显示在
+      //      弹窗内部（`field` 归属哪个框）。红色只出现在确认按钮上。
+      // 它**有意替换**同日早些时候的全部三条口径（「本次启动 / 宿主配置 / 保护开关」三行
+      // 常驻、就地展开确认、结果框报告成败）：三行把实现模型摆给用户，就地展开与结果框
+      // 是页面跳动的来源。「本次启动」行随之退役。
       const tokenHostConfigured = !!(tokenState && tokenState.hostConfigured)
       // 当前进程里令牌**是否在生效**（宿主回的 `active`：关掉或没配都是 false）。
       const tokenActive = !!(tokenState && tokenState.active)
-      // 「本次启动」那一行能不能填。条件是**宿主侧存在令牌**（在生效，或配置/环境变量里有），
-      // 而不只是"在生效"：保护关着时填对的令牌依然有用 —— 它是**重新开启保护**与
-      // 查看明文的凭证（要求 9）。只看 active 的话，关掉之后就没人能把令牌再填进去，
-      // 开启按钮永远要不到凭证 —— 功能等于被自己锁死。
-      const tokenCanSignIn = tokenActive || tokenHostConfigured
-      // 令牌在**配置里**是关着的（没值 / 写了 tokenDisabled）。只用来定「保护开关」的按钮
-      // 方向：胶囊绝不能用它 —— 靠环境变量提供令牌时文件里没有 token，用它会把"开着"
-      // 说成"已关闭"。
-      const tokenConfigOff = !!(tokenState && (tokenState.configDisabled === true || tokenState.configHasToken !== true))
+      // 「保护当下是否算开着」—— 开关行的方向用它，**不能**只看配置文件：令牌也可能
+      // 来自环境变量（文件里没有 token），只看配置会把"开着"说成"已关闭"，环境变量用户
+      // 就永远找不到关闭入口（好在 TOKEN_DISABLED 是文件侧旗标、对环境变量供的令牌同样
+      // 生效，见 src/request-gate.ts createAccessToken，所以「关闭」对他们真实可用）。
+      const tokenProtectOn = tokenActive
+        || !!(tokenState && tokenState.configHasToken === true && tokenState.configDisabled !== true)
       // 本次进程解锁没有（填过，且宿主认可这串）。
       const tokenUnlocked = !!TOKEN && !!(tokenState && tokenState.accepted)
       // 胶囊四态：未设置 / 已关闭 / 已开启·待解锁 / 已开启·已解锁（状态还没到 → loading）。
@@ -749,221 +792,218 @@
       const tokenPillTone = tokenKind === 'unlocked'
         ? ' dsm-pill-ok'
         : (tokenKind === 'off' || tokenKind === 'locked' ? ' dsm-pill-warn' : ' dsm-pill-muted')
-      const tokenEdit = tokenForm !== null
-      const tokenClearEdit = tokenClearForm !== null
-      const tokenFormInvalid = tokenEdit && tokenForm.next !== tokenForm.repeat
-      // 以前这里有一道 `requireCurrentToken`：改令牌前先要求「本次启动」解锁，凭证取自那一行。
-      // 现在凭证改在表单里当场输一次（宿主侧同样只认 `current` 那一栏），这道前置就多余了
-      // —— 留着会让用户为了改一次令牌先把同一串令牌填两遍（用户裁定 2026-09-19）。
-      /** 一行：左边是这件事的名字，右边是控件，下面一句小字说清这一步的生效范围。 */
-      const tokenField = function (label, control, hint) {
-        return React.createElement('div', { className: 'dsm-token-field' },
-          React.createElement('span', { className: 'dsm-token-field-label' }, label),
-          React.createElement('div', { className: 'dsm-token-field-body' }, control),
-          hint ? React.createElement('span', { className: 'dsm-token-field-hint' }, hint) : null)
+      const tokenModalOpen = tokenModal !== null
+      const tokenSetInvalid = tokenModalOpen && tokenModal.mode === 'set' && tokenModal.next !== tokenModal.repeat
+      // 错误只出现在**触发它的弹窗内部**（`field` 归属：run=状态区实况行（顶替实况）/
+      // current·next=设置弹窗 / off·clear·on=各自弹窗）；成功则弹窗收起、状态行自己更新。
+      const tokenFormError = function (fields) {
+        if (!tokenMsg || !tokenMsg.field || fields.indexOf(tokenMsg.field) < 0) return null
+        return React.createElement('p', { className: 'dsm-token-ferr dsm-feedback dsm-error', role: 'alert' }, tokenMsg.text)
       }
-      // ① 本次启动：填一次，管到 DSH 退出（只写本机浏览器）。解锁后**原位**换成一枚绿胶囊
-      //    「已解锁」+「清除」（用户 2026-09-19 实测）：原先整行塌成一颗「清除」，看着像
-      //    "刚才填的没了"；而这一行的成功提示渲染在下面两行之外，等于没看见。就地给一个
-      //    "成了"的信号，行高也不变（行高由旁边的按钮撑着，胶囊本身只有 20px）。清除后变回
-      //    输入框 + 解锁。
-      const tokenRowRun = tokenUnlocked
-        ? tokenField(t('compat.token.row.run'),
-          [React.createElement('span', { key: 'ok', className: 'dsm-pill dsm-pill-ok' }, t('compat.token.unlocked')),
-          React.createElement('button', {
-            key: 'clear', type: 'button', className: 'dsm-btn dsm-btn-secondary',
-            disabled: !TOKEN, onClick: clearToken,
-          }, t('compat.token.clear'))],
-          t('compat.token.unlockedHint'))
-        : tokenField(t('compat.token.row.run'),
-          [React.createElement('input', {
-            key: 'draft', ref: tokenInputRef,
-            // 令牌填错时把这一格标红（`field: 'run'` —— 开启保护时用的就是这一串）。
+      // ① 状态区：实况句与解锁错误共用一行 —— 错误顶替实况（红色），行高、位置都不变。
+      const tokenStatusLine = !tokenState ? null
+        : (tokenMsg && tokenMsg.field === 'run')
+          ? React.createElement('span', { className: 'dsm-help dsm-token-stat-err' }, tokenMsg.text)
+          : React.createElement('span', { className: 'dsm-help' }, t('compat.token.sentence.' + tokenKind))
+      // 控件槽：只有「待解锁」态才有内容（输入框 + 解锁）。已解锁后状态行本身就是
+      // 绿胶囊 + 实况，控件槽里再摆一枚「已解锁」纯属重复、框也空落落（用户 2026-09-19
+      // 实测反馈）—— 其余状态什么都不放，这一区最省就一行。
+      const tokenControl = tokenKind === 'locked'
+        ? React.createElement('div', { className: 'dsm-token-unlock' },
+          React.createElement('input', {
+            ref: tokenInputRef,
+            // 令牌填错时把这一格标红（`field` 口径见 configureHostToken / saveToken）。
             className: 'dsm-control' + (tokenMsg && tokenMsg.field === 'run' ? ' dsm-rule-invalid' : ''),
             type: 'password', value: tokenDraft,
             placeholder: t('compat.token.placeholder'), 'aria-label': t('compat.token'),
-            disabled: !tokenCanSignIn,
             onChange: function (ev) { setTokenDraft(ev.target.value) },
+            // 回车 = 解锁（与弹窗同一口径：按钮与回车行为一致）。
+            onKeyDown: function (ev) { if (ev.key === 'Enter' && tokenDraft.trim()) saveToken() },
           }),
           React.createElement('button', {
-            key: 'save', type: 'button', className: 'dsm-btn',
-            disabled: !tokenCanSignIn || !tokenDraft.trim(), onClick: saveToken,
-          }, t('compat.token.save')),
-          React.createElement('button', {
-            key: 'clear', type: 'button', className: 'dsm-btn dsm-btn-secondary',
-            disabled: !TOKEN, onClick: clearToken,
-          }, t('compat.token.clear'))],
-          // 这一行只在宿主侧有令牌时出现（没有就别摆一颗禁用的输入框），所以两种提示都
-          // 不必再分"没配"那一支。
-          tokenActive ? t('compat.token.loginHint') : t('compat.token.loginHint.inactive'))
-      // ② 宿主配置：配置里那个令牌的三种操作 —— 设置（还没有时）/ 修改 / 删除。宿主还没配过时
-      //    「设置令牌」就是"第一次要做的第一步"，所以那一态下它是**主按钮**（第一次用的人会
-      //    下意识点上面那行的输入框，而那一步只让本次运行生效、重启依旧要重填，看起来像
-      //    "设置了却不管用"）。「删除令牌」与「关闭保护」是同一条阶梯上的两个销毁方向，都用
-      //    红描边 + 当场再输一次当前令牌：关闭只是暂时不生效（令牌留在配置里），删除是把值从
-      //    配置里拿掉 —— 回到"还没有令牌"那一态（写操作不再要凭证、明文密钥也可直接查看）。
-      //    表单打开时收起「本次启动」那一行：那几个密码框已经在场，再并一行同形的框只会让
-      //    人分不清哪个是"当前的"。
-      const tokenRowHost = tokenClearEdit
-        ? tokenField(t('compat.token.host'),
-          [React.createElement('input', {
-            key: 'proof',
-            // 同关闭确认：凭证不对时把这一格标红（见 configureHostToken 里的 field）。
-            className: 'dsm-control' + (tokenMsg && tokenMsg.field === 'clear' ? ' dsm-rule-invalid' : ''), type: 'password', value: tokenClearForm.value,
-            placeholder: t('compat.token.proofPlaceholder'), 'aria-label': t('compat.token.proofPlaceholder'),
-            onChange: function (ev) { setTokenClearForm({ value: ev.target.value }) },
-            onKeyDown: function (ev) { if (ev.key === 'Enter' && tokenClearForm.value.trim()) configureHostToken('clear', tokenClearForm.value.trim()) },
-          }),
-          React.createElement('button', {
-            key: 'yes', type: 'button', className: 'dsm-btn dsm-btn-danger',
-            disabled: !tokenClearForm.value.trim(),
-            onClick: function () { configureHostToken('clear', tokenClearForm.value.trim()) },
-          }, t('compat.token.clearConfirm.yes')),
-          React.createElement('button', {
-            key: 'cancel', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeTokenClearForm,
-          }, t('compat.token.edit.cancel'))],
-          t('compat.token.clearConfirm.hint'))
-        : tokenEdit
-        ? tokenField(t('compat.token.host'),
-          React.createElement('div', { className: 'dsm-token-form' }, [
-            // 三栏**各占一行**（用户 2026-09-19 裁定）：密码框里全是圆点，看不清填的是哪一格，
-            // 并排放时只能靠位置猜；竖排之后顺序就是唯一的解释，长令牌也有整行宽度。
-            // 当前令牌这一格只在宿主**已经**有令牌时才摆：首次设置没有"当前"可证明（宿主侧
-            // 同样不要求，见 src/index.ts tokenConfigure）。凭证必须当场再输一次 —— 解锁过
-            // 不算（与「关闭保护」同一条口径）：新令牌证明不了你知道旧值。
-            tokenHostConfigured ? React.createElement('input', {
-              key: 'current', ref: tokenCurrentRef,
-              // 宿主判"令牌不对"时把这一格标红（见 configureHostToken 里的 field）——
-              // 提示语在下面，但错在哪一格要看得见。
-              className: 'dsm-control' + (tokenMsg && tokenMsg.field === 'current' ? ' dsm-rule-invalid' : ''), type: 'password', value: tokenForm.current,
-              placeholder: t('compat.token.edit.current'), 'aria-label': t('compat.token.edit.current'),
-              onChange: function (ev) { setTokenForm({ current: ev.target.value, next: tokenForm.next, repeat: tokenForm.repeat }) },
-              onKeyDown: enterToSubmit,
-            }) : null,
-            React.createElement('input', {
-              key: 'next',
-              className: 'dsm-control', type: 'password', value: tokenForm.next,
-              placeholder: t('compat.token.edit.new'), 'aria-label': t('compat.token.edit.new'),
-              onChange: function (ev) { setTokenForm({ current: tokenForm.current, next: ev.target.value, repeat: tokenForm.repeat }) },
-              onKeyDown: enterToSubmit,
-            }),
-            React.createElement('input', {
-              key: 'repeat',
-              className: 'dsm-control' + (tokenFormInvalid ? ' dsm-rule-invalid' : ''), type: 'password', value: tokenForm.repeat,
-              placeholder: t('compat.token.edit.repeat'), 'aria-label': t('compat.token.edit.repeat'),
-              onChange: function (ev) { setTokenForm({ current: tokenForm.current, next: tokenForm.next, repeat: ev.target.value }) },
-              onKeyDown: enterToSubmit,
-            }),
-            // 按钮跟在第三个框下面（不在框的右边）：一眼看得出"填完这三格，按这里"。
-            React.createElement('div', { className: 'dsm-actions', key: 'btn' }, [
-              React.createElement('button', {
-                key: 'save', type: 'button', className: 'dsm-btn',
-                // 三格都齐了才让按：当前令牌是凭证（宿主会验），新令牌要输两遍防手滑。
-                disabled: !tokenForm.next.trim() || tokenFormInvalid || (tokenHostConfigured && !tokenForm.current.trim()),
-                onClick: submitTokenForm,
-              }, t('compat.token.edit.save')),
-              React.createElement('button', {
-                key: 'cancel', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeTokenForm,
-              }, t('compat.token.edit.cancel'))])]),
-          t('compat.token.edit.formHint'))
-        : tokenField(t('compat.token.host'),
-          [React.createElement('button', {
-            key: 'edit', type: 'button',
-            className: tokenHostConfigured ? 'dsm-btn dsm-btn-secondary' : 'dsm-btn',
-            // 不再要求"先解锁"：凭证改在表单里当场输一次（宿主同样只认那一份，请求头里那份
-            // 对 set 不作数）。原先的解锁前置会让用户为了改令牌先把令牌填两遍。
-            onClick: openTokenForm,
-          }, t(tokenHostConfigured ? 'compat.token.edit' : 'compat.token.setHost')),
-          // 删除只在配置里**有**令牌时给：没有东西可删时摆一颗红按钮，等于凭空吓人一跳。
-          tokenHostConfigured ? React.createElement('button', {
-            key: 'clear', type: 'button', className: 'dsm-btn dsm-btn-danger',
-            onClick: openTokenClearForm,
-          }, t('compat.token.clearHost')) : null],
-          tokenHostConfigured ? t('compat.token.editHint') : t('compat.token.hostHint'))
-      // ③ 保护开关：总开关。两个方向都要验当前令牌（要求 9），但**凭证的来源不同**：
-      //    关闭方向：只有这次**当场再输一次**的当前令牌算数（用户裁定 2026-09-19：「就算
-      //      输入过了令牌，关闭保护也应该再次输入令牌才能关闭」）—— 解锁过不算，宿主侧
-      //      同样不认请求头里的凭证（见 src/index.ts tokenConfigure）。所以这里就地展开
-      //      一个确认框，按下「关闭保护」不再直接改配置。
-      //    开启方向：解锁过、或输入框里填着当前令牌就能开（把防护开回来的风险方向相反）。
-      const tokenOffEdit = tokenOffForm !== null
-      const tokenRowToggle = tokenOffEdit
-        ? tokenField(t('compat.token.row.protect'),
-          [React.createElement('input', {
-            key: 'proof',
-            // 同上：令牌不对时这一格标红（关闭方向的凭证只能是这里输入的那串）。
-            className: 'dsm-control' + (tokenMsg && tokenMsg.field === 'off' ? ' dsm-rule-invalid' : ''), type: 'password', value: tokenOffForm.value,
-            placeholder: t('compat.token.proofPlaceholder'), 'aria-label': t('compat.token.proofPlaceholder'),
-            onChange: function (ev) { setTokenOffForm({ value: ev.target.value }) },
-            onKeyDown: function (ev) { if (ev.key === 'Enter' && tokenOffForm.value.trim()) configureHostToken('off', tokenOffForm.value.trim()) },
-          }),
-          React.createElement('button', {
-            key: 'yes', type: 'button', className: 'dsm-btn dsm-btn-danger',
-            disabled: !tokenOffForm.value.trim(),
-            onClick: function () { configureHostToken('off', tokenOffForm.value.trim()) },
-          }, t('compat.token.offConfirm.yes')),
-          React.createElement('button', {
-            key: 'cancel', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeTokenOffForm,
-          }, t('compat.token.edit.cancel'))],
-          t('compat.token.offConfirm.hint'))
-        : tokenField(t('compat.token.row.protect'),
-          React.createElement('button', {
-            type: 'button',
-            className: 'dsm-btn ' + (tokenConfigOff ? 'dsm-btn-secondary' : 'dsm-btn-danger'),
-            onClick: function () {
-              if (!tokenConfigOff) { openTokenOffForm(); return }
-              if (!tokenState.accepted && !tokenDraft.trim()) {
-                setTokenMsg({ kind: 'err', text: t('compat.token.needCurrent') })
-                focusTokenInput()
-                return
-              }
-              configureHostToken('on', tokenDraft.trim())
-            },
-          }, tokenConfigOff ? t('compat.token.onHost') : t('compat.token.offHost')),
-          tokenConfigOff ? t('compat.token.onHint') : t('compat.token.offHint'))
+            type: 'button', className: 'dsm-btn',
+            disabled: !tokenDraft.trim(), onClick: saveToken,
+          }, t('compat.token.save')))
+        : null
+      // ── ② 令牌管理：四行静态清单（配置文件、持久）────────────────────────────────
+      // 行构造：名字 · 一句说明 · 按钮，三列网格 —— 每行同形、同位、同宽。行**永远
+      // 存在**（不随状态增删，不可用时禁用、由说明解释为什么），按钮一律次级样式，
+      // 红色只出现在弹窗里的确认按钮上；点带 … 的按钮开弹窗，页面本身纹丝不动。
+      const tokenRow = function (name, hint, btn) {
+        return React.createElement('div', { className: 'dsm-token-mrow' },
+          React.createElement('span', { className: 'dsm-token-mrow-name' }, name),
+          React.createElement('span', { className: 'dsm-token-mrow-hint' }, hint),
+          btn)
+      }
+      /** 状态会翻转的按钮（修改↔设置 / 关闭↔开启）：fixedLabelPair 用隐形占位把两种
+       *  文案里更宽的那个当宽度，翻转时按钮尺寸不变（见 fixedLabelPair 上的注释）。 */
+      const tokenRowBtn = function (label, otherLabel, disabled, onClick) {
+        return React.createElement('button', {
+          type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk',
+          disabled: disabled, onClick: onClick,
+        }, fixedLabelPair(label, otherLabel))
+      }
+      // 第 1 行：令牌（设置 / 修改）。凭证在弹窗里当场输一次，不要求"先解锁"（原先那道
+      // 前置会让用户把同一串令牌填两遍，用户裁定 2026-09-19 移除）。
+      const tokenRowValue = tokenRow(
+        t(tokenHostConfigured ? 'compat.token.edit' : 'compat.token.setHost'),
+        t(tokenHostConfigured ? 'compat.token.edit.rowHint' : 'compat.token.hostHint'),
+        tokenRowBtn(
+          t(tokenHostConfigured ? 'compat.token.edit.btn' : 'compat.token.setHost.btn'),
+          t(tokenHostConfigured ? 'compat.token.setHost.btn' : 'compat.token.edit.btn'),
+          !tokenState, function () { openTokenModal('set') }))
+      // 第 2 行：保护开关。方向按 tokenProtectOn 判（见其注释）—— 环境变量供的令牌也能
+      // 在这里关掉；还没设置令牌时没有可开关的东西，禁用。
+      const tokenRowProtect = tokenRow(
+        t('compat.token.row.protect'),
+        t(tokenProtectOn ? 'compat.token.offHost.rowHint' : 'compat.token.onHint'),
+        tokenRowBtn(
+          t(tokenProtectOn ? 'compat.token.offHost.btn' : 'compat.token.onHost.btn'),
+          t(tokenProtectOn ? 'compat.token.onHost.btn' : 'compat.token.offHost.btn'),
+          !tokenState, function () { openTokenModal(tokenProtectOn ? 'off' : 'on') }))
+      // 第 3 行：删除令牌。配置文件里没有值可删时禁用 —— 靠环境变量供令牌时是"没有可删
+      // 的值"（说明改口解释），还没设置过令牌是正常的禁用。删除回到"还没有令牌"那一态
+      // （写操作不再要凭证、明文密钥也可直接查看）。
+      const tokenRowDelete = tokenRow(
+        t('compat.token.clearHost'),
+        tokenState && tokenHostConfigured && tokenState.configHasToken !== true
+          ? t('compat.token.clearHost.envHint')
+          : t('compat.token.clearHost.rowHint'),
+        tokenRowBtn(t('compat.token.clearHost.btn'), t('compat.token.clearHost.btn'),
+          !tokenState || tokenState.configHasToken !== true,
+          function () { openTokenModal('clear') }))
+      // 第 4 行：清除令牌。只清浏览器里记住的那串（本机令牌），不动配置；但与其余三行
+      // 同一套交互 —— 弹窗里输一次令牌确认（用户 2026-09-19 要求）。浏览器没记住东西时禁用。
+      const tokenRowClearLocal = tokenRow(
+        t('compat.token.clearLocal'),
+        t('compat.token.clearLocal.rowHint'),
+        tokenRowBtn(t('compat.token.clear'), t('compat.token.clear'),
+          !TOKEN, function () { openTokenModal('clearLocal') }))
       push(section(t('compat.token'), t('compat.token.hint'),
         React.createElement('div', { className: 'dsm-token-block' },
-          // ① 状态：一枚胶囊 + 一句实况（状态还没到的那一帧只画胶囊，句子等它到位）。
+          // 状态行：胶囊 + 实况（或解锁错误）—— 永远只有这一行，位置不变。
           React.createElement('div', { className: 'dsm-stat-row' },
             React.createElement('span', { className: 'dsm-pill' + tokenPillTone },
               tokenState ? t('compat.token.pill.' + tokenKind) : '…'),
-            tokenState
-              ? React.createElement('span', { className: 'dsm-help' }, t('compat.token.sentence.' + tokenKind))
-              : null),
-          // 配置改了但没重启：这句必须显眼，否则用户会以为"设置了却没反应"。
+            tokenStatusLine),
+          // 控件槽：待解锁 = 输入框 + 解锁；已解锁 = 原位绿胶囊；其余状态不渲染。
+          tokenControl,
+          // 配置改了但没重启：这句必须显眼，否则用户会以为"设置了却没反应"。它同时是
+          // 写配置成功的**唯一回执** —— 成功 = 弹窗收起 + 这句横幅出现，不另弹结果框。
           tokenState && tokenState.pendingRestart
             ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('compat.token.pendingRestart'))
             : null,
-          React.createElement('div', { className: 'dsm-token-fields' },
-            // 宿主侧没有令牌时「本次启动」整行不画：一个禁用的输入框只会让人怀疑是不是坏了
-            // （与下面"没有可关的东西就不给关闭行"同一个取舍）。
-            // 表单展开时**只显示正在填的那一行**（用户 2026-09-19 两轮反馈）：
-            //   改令牌 → 收起「本次启动」与「保护开关」；关闭确认 / 删除确认 → 收起「本次启动」
-            //   与另一行（关闭确认时留「宿主配置」之外的那一行反过来也一样）。
-            // 密码框同屏只会让人分不清哪个是"当前的"、哪个是"新的"；三个表单也因此不会同时
-            // 开着（另外两颗按钮那时根本没渲染）。状态胶囊那一行照旧 —— 它说的是现状，
-            // 填凭证时正需要它。
-            (tokenEdit || tokenOffEdit || tokenClearEdit || !tokenCanSignIn) ? null : tokenRowRun,
-            tokenOffEdit ? null : tokenRowHost,
-            // 配置里根本没有令牌时不给"关闭"这一行：没有可关的东西，摆一颗禁用的按钮
-            // 只会让人怀疑是不是坏了。
-            (tokenEdit || tokenClearEdit) ? null : (tokenHostConfigured ? tokenRowToggle : null)),
-          // 两次输入不一致时当场说（而不是等保存被拒）：这一栏的全部意义就是防手滑。
-          tokenFormInvalid
-            ? React.createElement('p', { className: 'dsm-help dsm-rule-hint' }, t('compat.token.edit.mismatch'))
-            : null,
-          tokenMsg ? React.createElement('div', {
-            // ⚠️ 这里**不能**用 `Notice` 组件：它声明在更内层的作用域（apply 里面），
-            // CompatPage 在外层，引用它会抛 ReferenceError —— 而它只在 tokenMsg 有值时才求值，
-            // 于是"首屏正常、一填令牌就整块白屏"（2026-09-18 实测）。用本页既有的写法：
-            // 成功 = 裸 .dsm-feedback，失败 = 加 .dsm-error。
-            className: 'dsm-feedback' + (tokenMsg.kind === 'ok' ? '' : ' dsm-error'),
-            role: tokenMsg.kind === 'ok' ? 'status' : 'alert',
-          }, tokenMsg.text) : null,
+          // loader 行读不到：**所有**写配置的操作都会被宿主拒绝 —— 它是管理区的前置
+          // 事实，作为一行说明放在状态区底部。
           tokenState && tokenState.configFound === false
             ? React.createElement('p', { className: 'dsm-help' }, t('compat.token.notFound'))
             : null),
         true))
+      push(section(t('compat.token.manage.title'), t('compat.token.manage.hint'),
+        React.createElement('div', { className: 'dsm-token-rows' },
+          tokenRowValue, tokenRowProtect, tokenRowDelete, tokenRowClearLocal),
+        true))
+
+      // ── 令牌管理弹窗（手工拼装 —— `Modal` 在 apply 内引用不到，照备份弹窗的模式）──
+      // 遮罩点击关闭 + 头部标题/关闭键 + body + 底部动作行；Esc 关闭 / Tab 焦点陷阱
+      // 复用模块作用域的那三个助手；打开时的聚焦见 tokenDialogRef 上的 effect。
+      // 弹窗内不挂令牌提示（TokenGateNotice 在 apply 内，引它=白屏）：被令牌挡下的操作
+      // 由弹窗自己的错误行如实显示。
+      let tokenModalEl = null
+      if (tokenModal) {
+        const m = tokenModal
+        const title = t(m.mode === 'set'
+          ? (tokenHostConfigured ? 'compat.token.edit' : 'compat.token.setHost')
+          : m.mode === 'off' ? 'compat.token.offHost'
+            : m.mode === 'clear' ? 'compat.token.clearHost'
+              : m.mode === 'clearLocal' ? 'compat.token.clearLocal' : 'compat.token.onHost')
+        let fields
+        if (m.mode === 'set') {
+          // 竖排三格（圆点看不出填的是哪格，竖排靠顺序当说明）：当前令牌（仅宿主已配时 ——
+          // 首次设置没有"当前"可证明，宿主同样不要求）、新令牌、再输一次；三格都齐了
+          // 才让按：当前令牌是凭证（宿主会验），新令牌输两遍防手滑（用户裁定 2026-09-19）。
+          fields = [
+            tokenHostConfigured ? React.createElement('input', {
+              key: 'current', ref: tokenCurrentRef,
+              className: 'dsm-control' + (tokenMsg && tokenMsg.field === 'current' ? ' dsm-rule-invalid' : ''),
+              type: 'password', value: m.current,
+              placeholder: t('compat.token.edit.current'), 'aria-label': t('compat.token.edit.current'),
+              onChange: function (ev) { setTokenModal({ mode: 'set', current: ev.target.value, next: m.next, repeat: m.repeat, value: '' }) },
+              onKeyDown: enterToSubmit,
+            }) : null,
+            React.createElement('input', {
+              key: 'next',
+              className: 'dsm-control' + (tokenMsg && tokenMsg.field === 'next' ? ' dsm-rule-invalid' : ''),
+              type: 'password', value: m.next,
+              placeholder: t('compat.token.edit.new'), 'aria-label': t('compat.token.edit.new'),
+              onChange: function (ev) { setTokenModal({ mode: 'set', current: m.current, next: ev.target.value, repeat: m.repeat, value: '' }) },
+              onKeyDown: enterToSubmit,
+            }),
+            React.createElement('input', {
+              key: 'repeat',
+              className: 'dsm-control' + (tokenSetInvalid ? ' dsm-rule-invalid' : ''), type: 'password', value: m.repeat,
+              placeholder: t('compat.token.edit.repeat'), 'aria-label': t('compat.token.edit.repeat'),
+              onChange: function (ev) { setTokenModal({ mode: 'set', current: m.current, next: m.next, repeat: ev.target.value, value: '' }) },
+              onKeyDown: enterToSubmit,
+            }),
+            tokenSetInvalid ? React.createElement('p', { key: 'mis', className: 'dsm-help dsm-rule-hint' }, t('compat.token.edit.mismatch')) : null,
+            tokenFormError(['current', 'next']),
+          ]
+        } else {
+          // "再输一次当前令牌"确认：关闭 / 删除只认当场输入的值（用户裁定 2026-09-19）；
+          // 开启是反风险方向，accepted 时宿主还认请求头凭证，可以不填直接开。
+          const allowEmpty = m.mode === 'on' && !!(tokenState && tokenState.accepted)
+          fields = [
+            React.createElement('input', {
+              key: 'proof',
+              className: 'dsm-control' + (tokenMsg && tokenMsg.field === m.mode ? ' dsm-rule-invalid' : ''),
+              type: 'password', value: m.value,
+              placeholder: t('compat.token.proofPlaceholder'), 'aria-label': t('compat.token.proofPlaceholder'),
+              onChange: function (ev) { setTokenModal({ mode: m.mode, current: '', next: '', repeat: '', value: ev.target.value }) },
+              onKeyDown: function (ev) { if (ev.key === 'Enter' && (m.value.trim() || allowEmpty)) submitTokenModal() },
+            }),
+            React.createElement('p', { key: 'hint', className: 'dsm-help' },
+              t(m.mode === 'off' ? 'compat.token.offConfirm.hint'
+                : m.mode === 'clear' ? 'compat.token.clearConfirm.hint'
+                  : m.mode === 'clearLocal' ? 'compat.token.clearLocalConfirm.hint' : 'compat.token.onHint')),
+            tokenFormError([m.mode]),
+          ]
+        }
+        const yesLabel = m.mode === 'set' ? t('compat.token.edit.save')
+          : m.mode === 'off' ? t('compat.token.offConfirm.yes')
+            : m.mode === 'clear' ? t('compat.token.clearConfirm.yes')
+              : m.mode === 'clearLocal' ? t('compat.token.clearLocalConfirm.yes') : t('compat.token.onConfirm.yes')
+        const yesDisabled = m.mode === 'set'
+          ? (!m.next.trim() || tokenSetInvalid || (tokenHostConfigured && !m.current.trim()))
+          : (!m.value.trim() && !(m.mode === 'on' && !!(tokenState && tokenState.accepted)))
+        tokenModalEl = React.createElement('div', {
+          key: 'token-modal',
+          className: 'dsm-mask',
+          onMouseDown: function (e) { if (e.target === e.currentTarget) closeTokenModal() },
+        }, React.createElement('div', {
+          ref: tokenDialogRef, tabIndex: -1,
+          className: 'dsm-modal dsm-modal-sm', role: 'dialog', 'aria-modal': 'true',
+          'aria-labelledby': 'dsm-token-modal-title',
+          onKeyDown: function (e) { if (!handleModalEscape(e, closeTokenModal)) trapModalFocus(e.currentTarget, e) },
+        },
+          React.createElement('div', { className: 'dsm-modal-head-wrap' },
+            React.createElement('div', { className: 'dsm-modal-head' },
+              React.createElement('h3', { className: 'dsm-modal-title', id: 'dsm-token-modal-title' }, title),
+              React.createElement('button', {
+                type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeTokenModal,
+              }, t('btn.close')))),
+          React.createElement('div', { className: 'dsm-modal-body' },
+            React.createElement('div', { className: 'dsm-token-form' }, fields),
+            React.createElement('div', { className: 'dsm-modal-actions' }, [
+              React.createElement('button', {
+                key: 'yes', type: 'button',
+                className: 'dsm-btn' + (m.mode === 'off' || m.mode === 'clear' || m.mode === 'clearLocal' ? ' dsm-btn-danger' : ''),
+                disabled: yesDisabled, onClick: submitTokenModal,
+              }, yesLabel),
+              React.createElement('button', {
+                key: 'cancel', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeTokenModal,
+              }, t('compat.token.edit.cancel'))]))))
+      }
 
       // 注入设置块：本插件注入给模型哪些内容的开关。总开关只管
       // "极简这类预设下要不要破例"，五个域勾选在任何预设下都生效。
@@ -1521,7 +1561,8 @@
             onClick: openBackupClean,
           }, backups && backups.total ? t('compat.backups.btnCount', { count: backups.total }) : t('compat.backups.btn'))),
         body,
-        backupModal)
+        backupModal,
+        tokenModalEl)
     }
 
     // 曾经把导出写成 apply 方法体的最后两条语句（`module.exports.DICT = ...` /

@@ -249,22 +249,31 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 /* 域列表（注入实况）自己就带边框与底色，放进带边框的框里时去掉 —— 否则框里套框、
    两层同色，看起来只是多了一圈多余的线（行与行之间本来就有细分隔线）。 */
 .dsm-compat-box .dsm-compat-mod-list{border:0;border-radius:0;background:transparent}
-/* 令牌的三行：登录 / 设置·修改 / 关闭·开启。一行一件事、各有名字 —— 三个动作挤在同一排
-   按钮里时用户不知道该点哪个（用户裁定 2026-09-19：「应该分开」）。
-   两列网格：左列是名字（max-content，各行左对齐成一竖排），右列是控件；小字说明另起一行
-   落在右列，于是它始终与控件左边缘对齐。 */
-.dsm-token-fields{display:flex;flex-direction:column;gap:10px}
-.dsm-token-field{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:3px 10px;align-items:center}
-.dsm-token-field-label{color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}
-.dsm-token-field-body{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
-.dsm-token-field-body .dsm-control{flex:1 1 190px;min-width:0}
-/* 「修改令牌」表单：三个密码框**各占一行**（圆点看不出填的是哪格，竖排靠顺序就够），
-   整块占满这一行的宽度，按钮跟在最后一格下面。 */
-.dsm-token-form{display:flex;min-width:0;flex:1 1 100%;flex-direction:column;gap:8px}
-/* 上一条 flex:1 1 190px 是给**横排**的框用的：竖排里 flex-basis 会当成**高度**算
-   （每格被撑成 190px 高）。这里把它按回 auto，宽度交给 width:100%。 */
+/* 访问令牌（兼容页）2026-09-19 第三次重构：按作用域拆两个分区 ——
+   ① 访问令牌 = 状态行 + 控件槽（本机、临时）；② 令牌管理 = 静态四行清单（配置、持久），
+   所有写配置的表单开在弹窗里，页面上没有任何会展开收起的东西。 */
+/* 状态区的实况行与解锁错误共用：错误顶替实况（红色），行高不变。 */
+.dsm-token-stat-err{color:var(--dsw-alias-state-error-primary)}
+/* 控件槽（仅「待解锁」态渲染）：输入框 + 解锁。浅描边 + 左侧警示竖线（不用警示底色：
+   与「待重启」横幅同用 warn 色，两个大色块叠一张卡只会互相稀释）。已解锁后这一槽
+   不渲染 —— 状态行的绿胶囊就是唯一标识，不再重复。 */
+.dsm-token-unlock{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--dsw-alias-border-l2);border-left:2px solid var(--dsm-warn);border-radius:8px}
+.dsm-token-unlock .dsm-control{flex:1 1 190px;min-width:0}
+/* 管理清单的行：名字 · 一句说明 · 按钮，三列同形同位 —— 行不随状态增删。 */
+.dsm-token-rows{display:flex;flex-direction:column;gap:8px}
+.dsm-token-mrow{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;gap:2px 10px;align-items:center}
+.dsm-token-mrow-name{color:var(--dsw-alias-label-primary);font-size:12px;white-space:nowrap}
+.dsm-token-mrow-hint{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow-wrap:anywhere}
+/* 行按钮统一宽度（fixedLabelPair 负责文案翻转不挤宽），四行按钮的右缘对齐成一列；
+   min-width 按"四个汉字 + 内边距"留足余量，不让文案贴边截断。 */
+.dsm-token-mrow .dsm-btn{min-width:92px}
+/* 弹窗里的表单：密码框**各占一行**（圆点看不出填的是哪格，竖排靠顺序就够）。 */
+.dsm-token-form{display:flex;flex-direction:column;gap:8px}
+/* 横排 .dsm-control 的 flex-basis 在竖排里会被当成高度（每格被撑成 190px 高），
+   这里按回 auto、宽度交给 width:100%。 */
 .dsm-token-form .dsm-control{flex:0 0 auto;width:100%}
-.dsm-token-field-hint{grid-column:2;color:var(--dsw-alias-label-tertiary);font-size:11px;overflow-wrap:anywhere}
+/* 弹窗内部的错误行：跟框走（错误永远不出现在弹窗外面），贴紧上方的控件。 */
+.dsm-token-ferr{margin:0}
 .dsm-compat-section-head{display:flex;min-width:0;align-items:baseline;gap:8px}
 .dsm-compat-section-title{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:650;white-space:nowrap;flex:none}
 /* 说明文字：占满剩余宽度，放不下就换行（标题已 nowrap；此前用省略号截断，用户 2026-09-17
@@ -343,8 +352,8 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-modal-trash-split .dsm-trash-group{margin-bottom:0;min-height:0}
 .dsm-modal-trash-split .dsm-trash-pane-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 13px}
 
-/* 访问令牌（兼容页）：状态胶囊 + 一句实况 + 三行动作。胶囊用 .dsm-pill 的既有语义色
-   （绿=就绪、告警=要注意、灰=没配），不新增颜色。 */
+/* 访问令牌（兼容页）：状态胶囊 + 一句实况 + 主行动区 + 折叠管理区。胶囊用 .dsm-pill 的
+   既有语义色（绿=就绪、告警=要注意、灰=没配），不新增颜色。 */
 .dsm-token-block{display:flex;flex-direction:column;gap:9px}
 /* 提示行右侧挂按钮（令牌没过的提醒）：文案占满剩余宽度，按钮不换行、不压缩。 */
 .dsm-feedback-row{display:flex;align-items:center;gap:10px}
@@ -359,8 +368,16 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-btn-picked{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 /* 令牌未验证时的页面级横幅（见 40-apply-head.js 的 syncTokenBanner）。
    它是**唯一**能说清"为什么发不出消息"的东西：宿主侧拒绝那一轮（agent/pre-step → reject）
-   在界面上没有任何呈现，而且会丢掉那条消息。所以位置固定在顶部居中、z-index 压过所有面板，
-   且 pointer-events:none —— 它只负责说明，不该挡住任何可点的东西。 */
-.dsm-token-banner{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483000;max-width:min(620px,92vw);padding:9px 13px;border:1px solid var(--dsm-warn);border-radius:10px;background:var(--dsm-warn-bg);color:var(--dsm-warn);font-size:12.5px;line-height:1.55;box-shadow:0 6px 22px rgba(0,0,0,.16);pointer-events:none;backdrop-filter:blur(6px)}
+   在界面上没有任何呈现，而且会丢掉那条消息。位置固定在顶部居中、pointer-events:none ——
+   它只负责说明，不该挡住任何可点的东西。
+   层级 999：高于普通页面内容，低于插件自己的弹窗（.dsm-mask 1100）与宿主的设置窗口 ——
+   之前 2147483000 会把宿主设置窗口的标题区都盖住（用户实测）；锁态的解释在设置窗口里
+   由兼容页与面板内提示兜底，横幅还带关闭键（见下），挡路时可手动关掉。 */
+.dsm-token-banner{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:999;display:flex;align-items:flex-start;gap:10px;max-width:min(620px,92vw);padding:9px 13px;border:1px solid var(--dsm-warn);border-radius:10px;background:var(--dsm-warn-bg);color:var(--dsm-warn);font-size:12.5px;line-height:1.55;box-shadow:0 6px 22px rgba(0,0,0,.16);pointer-events:none;backdrop-filter:blur(6px)}
+.dsm-token-banner-text{flex:1;min-width:0}
+/* 关闭键：横幅整体 pointer-events:none，唯独它可点。关掉后本次锁态期间不再出现
+   （解锁后再锁会重置，见 syncTokenBanner）。 */
+.dsm-token-banner-close{pointer-events:auto;flex:none;width:20px;height:20px;padding:0;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:14px;line-height:20px;cursor:pointer;opacity:.7}
+.dsm-token-banner-close:hover{opacity:1}
 
 `
