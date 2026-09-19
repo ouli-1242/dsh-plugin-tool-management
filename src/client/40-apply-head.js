@@ -1,9 +1,14 @@
 
     module.exports = {
       name: 'dsh-plugin-tool-management-client',
-      // 显式注入 locale：兄弟插件提供的服务不会可靠地通过未声明的 ctx.get() 暴露；
-      // 不声明时本页会退回中文兜底，导致宿主已切到 English 但「工具」和七个页签仍是中文。
-      inject: ['timer', 'locale'],
+      // 显式注入 locale / sessions：兄弟插件提供的服务不会可靠地通过未声明的 ctx.get()
+      // 暴露 —— 不声明 locale 时本页会退回中文兜底（宿主已切到 English 但「工具」与七个
+      // 页签仍是中文）；不声明 sessions 时拿不到当前会话 id，令牌未填时的输入框锁定会
+      // **静默失效**（用户 2026-09-19 报的就是这个）。宿主自己的插件 —— ui-reference /
+      // ui-commands / ui-workspace / ui-model-selection —— 也都把 sessions 写进 inject。
+      // 两者都是 web 客户端的常驻服务（api-session-controller / client-locale），
+      // 缺席就等于整个会话 UI 不成立，所以这里当硬依赖是安全的。
+      inject: ['timer', 'locale', 'sessions'],
       // 词典也导出：让 Node 契约测试能断言「bundle 里每个 t('键') 在两份词典里都存在」。
       // 浏览器 UI 的交互验收仍要真浏览器；这一条挡的是「界面直接显示原始键名」这类缺陷。
       dict: DICT,
@@ -65,23 +70,49 @@
         const serviceOf = function (name) {
           try { return ctx.get(name) } catch (e) { return undefined }
         }
+        // 诊断：锁"该生效却没生效"必须留下线索 —— 否则表现只是"锁没生效"，没有任何可查的
+        // 东西（用户 2026-09-19 报的就是这个）。同一条原因只报一次，避免轮询刷屏。
+        let lockDiag = ''
+        const diagLock = function (reason) {
+          if (lockDiag === reason) return
+          lockDiag = reason
+          try { console.warn('[dsh-plugin-tool-management] 输入框锁定未生效：' + reason) } catch (e) { /* ignore */ }
+        }
+        /**
+         * 当前会话 id。
+         *
+         * 两个来源都试：`list.current` 是列表快照里的当前项（正常路径）；
+         * `selection.sessionId` 是持久化的"上次打开的会话"，列表还没 projection 完时它已经有了。
+         * 宿主自己的插件都用前者，多这一条兜底是因为我们可能在会话刚建立、列表尚未刷新时挂锁。
+         */
         const currentSessionId = function () {
           try {
             const sessions = serviceOf('sessions')
-            const snap = sessions && sessions.list && sessions.list.getSnapshot()
-            const id = snap && snap.current
-            return typeof id === 'string' && id ? id : undefined
+            if (!sessions) return undefined
+            const snap = sessions.list && sessions.list.getSnapshot()
+            const fromList = snap && snap.current
+            if (typeof fromList === 'string' && fromList) return fromList
+            const sel = sessions.selection && sessions.selection.getSnapshot()
+            const fromSel = sel && sel.sessionId
+            return typeof fromSel === 'string' && fromSel ? fromSel : undefined
           } catch (e) { return undefined }
         }
-        /** 给一个会话挂 / 撤锁；宿主服务不在场时返回 false（静默跳过）。 */
+        /** 给一个会话挂 / 撤锁；宿主服务不在场时返回 false，并留下诊断。 */
         const setComposerBlock = function (id, locked) {
+          const conversation = serviceOf('conversation')
+          const blocks = conversation && conversation.blocks
+          if (!blocks || typeof blocks.set !== 'function') { diagLock('宿主 conversation.blocks 不可用'); return false }
           try {
-            const conversation = serviceOf('conversation')
-            const blocks = conversation && conversation.blocks
-            if (!blocks || typeof blocks.set !== 'function') return false
             blocks.set(id, locked ? { reason: t('compat.token.lock.composer') } : undefined)
-            return true
-          } catch (e) { return false }
+          } catch (e) { diagLock('写入抛错：' + errMsg(e)); return false }
+          // 读回验证：宿主 registry 的 set 在 reason 相同时会直接 return（不写），也可能因
+          // 内部状态没就绪而静默失败。读回一次能区分"真挂上了"与"调了但没生效"。
+          if (locked === true && typeof blocks.storeFor === 'function') {
+            const back = blocks.storeFor(id).getSnapshot()
+            if (!back || !back.reason) { diagLock('宿主未接受本次写入（读回为空）'); return false }
+          }
+          lockDiag = ''
+          return true
         }
         // 挂过锁的会话 id。解除时要把它们**全部**撤掉 —— 锁是按会话存的，切走时那一份还留着，
         // 只撤当前会话就会留下"切回去还锁着"的残留。
@@ -90,7 +121,8 @@
         const applyComposerLock = function (locked) {
           const id = currentSessionId()
           if (locked === true) {
-            if (id === undefined || lockedIds.has(id)) return
+            if (id === undefined) { diagLock('拿不到当前会话 id（sessions 服务未就绪）'); return }
+            if (lockedIds.has(id)) return
             if (setComposerBlock(id, true)) lockedIds.add(id)
             return
           }
@@ -123,10 +155,7 @@
           } catch (e) { /* 落到下面的重试 */ }
           // 服务晚就绪：20 × 500ms ≈ 10s 内重试，之后放弃**并留痕** —— 锁是锦上添花、不该
           // 拖累插件本身，但"订阅不上"必须能查（否则表现只是"锁没生效"，没有任何线索）。
-          if (attempt >= 20) {
-            try { console.warn('[dsh-plugin-tool-management] sessions 服务不可用：令牌未填时不会自动锁住输入框') } catch (e) { /* ignore */ }
-            return
-          }
+          if (attempt >= 20) { diagLock('sessions 服务 10s 内没等到'); return }
           const timer = serviceOf('timer')
           if (timer && typeof timer.timeout === 'function') timer.timeout(function () { subscribeSessions(attempt + 1) }, 500)
         }
@@ -146,9 +175,20 @@
         // 初始判定：走 apiCall，会先完成令牌引导（那时才知道本次 bootId、以及本地存的那串
         // 还算不算数），再带着令牌问一次 —— 只有这样才能拿到可信的 `accepted`。
         // 失败一律**不锁**：判不出来时不该挡着用户干活。
-        apiCall('token-status', {}).then(function (r) {
-          if (r && r.ok) setTokenLock(r.active === true && r.accepted !== true)
-        }).catch(function () { /* 判不出来 → 不锁 */ })
+        // 失败**重试几次**再放弃：apply 跑得很早，插件自己的路由可能还没就绪；一次失败
+        // 就永久不锁是"静默失效"，而这正是用户 2026-09-19 报的现象。
+        const probeTokenLock = function (attempt) {
+          const again = function () {
+            if (attempt >= 5) { diagLock('token-status 连续失败，无法判定是否该锁'); return }
+            const timer = serviceOf('timer')
+            if (timer && typeof timer.timeout === 'function') timer.timeout(function () { probeTokenLock(attempt + 1) }, 1000)
+          }
+          apiCall('token-status', {}).then(function (r) {
+            if (r && r.ok) setTokenLock(r.active === true && r.accepted !== true)
+            else again()
+          }).catch(again)
+        }
+        probeTokenLock(0)
 
         const slots = ctx.get('slots')
         if (slots === undefined) return
