@@ -5,8 +5,9 @@
 // v0.4 目录变更：人设由 `$DSH_HOME/subagents/` 搬到 `$DSH_HOME/tool-management/agents/`
 // （插件产生的文件统一收在 tool-management/ 下）。旧目录在首次扫描时搬入，见 relocateLegacyPersonas。
 import { createRequire } from 'node:module'
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { isValidSegment } from '../paths.js'
 import { resolveDshHome } from '../skills/core.js'
 // 深度探针与注入通道共用一份实现（口径分叉就会出现"目录说不能、工具却能"的错配）。
 // 方向是 service → context-inject，单向：context-inject 不 import 本模块。
@@ -457,28 +458,81 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
 
   let cache: { at: number; value: PersonaDoc[] } | null = null
 
+  // ── 写操作串行队列 ──────────────────────────────────────────────────────
+  // 状态文件的「读-改-写」必须整体串行：两个并发开关各自读到同一份快照、各自写回，
+  // 后写的会把先写的改动抹掉（用户关掉的人设会自己回来）。人设文件的建/改/删也走这里，
+  // 否则「查重 → 写入」之间的空窗会让两次同名导入互相覆盖。
+  // 与 rules / skills 两域同一实现（`then(task, task)` 让前一个失败后队列照样继续）。
+  let mutationQueue: Promise<unknown> = Promise.resolve()
+  const enqueueMutation = <T>(task: () => Promise<T>): Promise<T> => {
+    const queued = mutationQueue.then(task, task)
+    mutationQueue = queued.catch(() => undefined)
+    return queued
+  }
+
   // ── 人设启用集合（子智能体开关）────────────────────────────────────────
   // subagents-index.json：{ version: 1, enabled: string[] }（与 memories-index.json 同目录约定）。
-  //   - 文件缺失/损坏 = **全部启用**（老用户升级零感知，行为与开关上线前一致）；
+  //   - 文件**缺失** = **全部启用**（老用户升级零感知，行为与开关上线前一致）；
+  //   - 文件**存在但解析失败** = **全部停用** + 告警一次（fail-closed：损坏不该把用户停用的
+  //     人设一次性重新暴露给模型，且用户看不到任何提示；与 rules 域索引隔离同口径）；
   //   - 文件一旦写出即为权威：之后新建/导入/回收站恢复的人设**自动启用**（刚建就想用是常理）；
   //   - 停用只影响注入与 subagent_* 工具的可见性，人设文件一个字节不动。
   // 缓存约定：undefined = 还没读过盘；null = 文件缺失（全部启用）；数组 = 权威集合。
   let enabledCache: string[] | null | undefined = undefined
+  // 与缓存配对的文件指纹（mtimeMs；文件不存在时 null）。**必须比对指纹**：这个文件可能被
+  // 另一个 DSH 实例（多 profile 共享 state 目录）或手工编辑改动，只在自身写入时失效缓存
+  // 会让插件一直返回旧集合 —— 用户停用的人设悄悄回来。一次 stat 比重新读 + 解析便宜，
+  // 而且立刻跟上外部改动，不引入新的 TTL 窗口。
+  let enabledStamp: number | null = null
+  // 解析失败只告警一次：readEnabled 每次读都会走到那段，不设标志会刷屏。
+  let warnedBrokenState = false
+  /** 文件 mtimeMs；不存在或读不到时 null（与「文件缺失」同一判定）。 */
+  const fileStamp = async (path: string): Promise<number | null> => {
+    try {
+      return (await stat(path)).mtimeMs
+    } catch {
+      return null
+    }
+  }
   async function readEnabled(): Promise<string[] | null> {
-    if (enabledCache !== undefined) return enabledCache
+    const stamp = await fileStamp(stateFile)
+    if (enabledCache !== undefined && stamp === enabledStamp) return enabledCache
     // 用局部变量过渡：await 之后 TS 对闭包级缓存变量的收窄会失效，直接返回会报 undefined。
     let next: string[] | null
+    let text: string | null
     try {
-      const raw = JSON.parse(await readFile(stateFile, 'utf8'))
-      next = Array.isArray(raw && raw.enabled) ? raw.enabled.map((x: unknown) => String(x)) : []
-    } catch { next = null }
+      text = await readFile(stateFile, 'utf8')
+    } catch {
+      text = null
+    }
+    if (text === null) {
+      // 文件不存在 → 全部启用（升级零感知，见上方约定）。
+      next = null
+    } else {
+      try {
+        const raw = JSON.parse(text)
+        next = Array.isArray(raw && raw.enabled) ? raw.enabled.map((x: unknown) => String(x)) : []
+      } catch (e) {
+        // 文件**存在**却解析失败 → fail-closed 成「谁都不启用」。沿用「全部启用」会把用户
+        // 停用的人设一次性全部重新暴露给模型，而用户看不到任何提示；空集合至少可见、可恢复
+        // （重新开启即可）。文件本身一个字节不动，修好后重启即恢复。
+        if (!warnedBrokenState) {
+          warnedBrokenState = true
+          ctx.logger?.warn?.(`[dsh-plugin-tool-management] 人设索引解析失败（${message(e)}）；已按「全部停用」处理，请检查 ${stateFile}`)
+        }
+        next = []
+      }
+    }
     enabledCache = next
+    enabledStamp = stamp
     return next
   }
   async function writeEnabled(list: string[]): Promise<void> {
     await mkdir(stateDir, { recursive: true })
     await writeFile(stateFile, JSON.stringify({ version: 1, enabled: list }, null, 2), 'utf8')
     enabledCache = list
+    // 写入后重取指纹，让下一次 readEnabled 直接命中缓存（否则会白读一次）。
+    enabledStamp = await fileStamp(stateFile)
   }
   /** 新建/导入/恢复的人设默认停用（v0.8.5 用户裁定，与技能 / MCP 同口径）：
    *  文件缺失（含旧数据）时先把「全部启用」物化成显式全集**并排除新名**——
@@ -505,6 +559,24 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
     const set = await readEnabled()
     if (set === null || set.indexOf(name) < 0) return
     await writeEnabled(set.filter((n) => n !== name))
+  }
+  /**
+   * 启用集合的「跟随写」失败**不能吞**。原先这五处一律 `.catch(() => undefined)`，
+   * 而写盘失败时后果是静默改变开关状态：新建/导入/恢复的人设会停在**启用**态（下一轮就进
+   * 模型上下文），改名的人设会停在**停用**态 —— 用户看到的却都是成功。
+   *
+   * 沿用 `sceneSyncError` 的形状：只给**原因原文**，句子由界面按当前语言拼。
+   */
+  async function withEnabledNote(res: any, task: () => Promise<void>): Promise<any> {
+    try {
+      await task()
+      return res
+    } catch (e) {
+      const reason = message(e)
+      return res && res.ok === false
+        ? { ...res, error: `${res.error}；另外，启停状态没能同步（${reason}）` }
+        : { ...res, stateSyncError: reason }
+    }
   }
   /** list() 输出统一附上 enabled：文件缺失 → 全 true；否则按集合。 */
   function withEnabled(docs: PersonaDoc[], set: string[] | null): PersonaDoc[] {
@@ -659,7 +731,12 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
     return queued
   }
 
-  const ops = {
+  /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生）。 */
+  const writeOps = new Set([
+    'subagent-create', 'subagent-update', 'subagent-delete', 'subagent-import',
+    'subagent-toggle', 'subagent-trash-restore', 'subagent-trash-delete',
+  ])
+  const ops: Record<string, (args: any) => Promise<any>> = {
     'subagent-list': async () => {
       const docs = await list()
       return {
@@ -690,9 +767,8 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       }
       await writeFile(target, serializePersona(args), 'utf8')
       // v0.8.5：新建默认不启动——显式集合下新名天然停用；文件缺失时先物化全集并排除新名。
-      await materializeEnabledExcluding([name]).catch(() => undefined)
       cache = null
-      return { ok: true, name }
+      return withEnabledNote({ ok: true, name }, () => materializeEnabledExcluding([name]))
     },
     /**
      * 保存人设，**可选改名**（nextName）。
@@ -716,18 +792,28 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         const nextTarget = join(dir, nextRaw + '.md')
         const taken = await readFile(nextTarget, 'utf8').then(() => true).catch(() => false)
         if (taken) return { ok: false, error: `人设已存在: ${nextRaw}` }
-        try {
-          await rename(target, nextTarget)
-        } catch (e) {
-          return { ok: false, error: `人设改名失败: ${message(e)}` }
-        }
         finalName = nextRaw
         renamedFrom = name
       }
-      await writeFile(join(dir, finalName + '.md'), serializePersona({ ...args, name: finalName }), 'utf8')
-      if (renamedFrom) await renamePersonaInEnabled(renamedFrom, finalName).catch(() => undefined)
+      // 先把新内容写进临时文件、再一次性改名到位。原先的顺序是「先 rename 旧文件 → 再
+      // writeFile 新文件」，writeFile 一旦失败就留下「新名字 + 旧内容」的半态 —— 用户看到
+      // 改名成功、内容却还是旧的。临时名以 `.` 开头且不以 `.md` 结尾，扫描时天然被忽略。
+      const finalTarget = join(dir, finalName + '.md')
+      const tmp = join(dir, `.${finalName}.tmp-${process.pid}-${Date.now()}`)
+      try {
+        await writeFile(tmp, serializePersona({ ...args, name: finalName }), 'utf8')
+        await rename(tmp, finalTarget)
+      } catch (e) {
+        await rm(tmp, { force: true }).catch(() => undefined)
+        return { ok: false, error: `保存人设失败: ${message(e)}` }
+      }
+      // 改名时旧文件等新文件就位后再清：清失败只多一份副本，不丢数据。
+      if (renamedFrom) await rm(join(dir, renamedFrom + '.md'), { force: true }).catch(() => undefined)
       cache = null
-      return { ok: true, name: finalName, ...(renamedFrom ? { renamedFrom } : {}) }
+      return withEnabledNote(
+        { ok: true, name: finalName, ...(renamedFrom ? { renamedFrom } : {}) },
+        async () => { if (renamedFrom) await renamePersonaInEnabled(renamedFrom, finalName) },
+      )
     },
     /**
      * 删除人设 = **移入回收站**（`hub/trash/agents-trash/<id>/persona.md`）。
@@ -742,9 +828,8 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       if (!exists) return { ok: false, error: `人设不存在: ${name}` }
       const moved = await moveToTrash('subagents', name, [{ from: target, dest: 'persona.md' }])
       if (moved.ok === false) return { ok: false, error: `移入回收站失败: ${moved.error}` }
-      await removePersonaFromEnabled(name).catch(() => undefined)
       cache = null
-      return { ok: true, name, trashId: moved.id }
+      return withEnabledNote({ ok: true, name, trashId: moved.id }, () => removePersonaFromEnabled(name))
     },
     'subagent-trash-list': async () => ({ ok: true, trash: await listTrashEntries('subagents') }),
     'subagent-trash-restore': async (args: any) => {
@@ -764,9 +849,8 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       }
       await purgeTrashEntry('subagents', id)
       // v0.8.5：回收站恢复默认不启动（与新建/导入同口径）。
-      await materializeEnabledExcluding([entry.name]).catch(() => undefined)
       cache = null
-      return { ok: true, name: entry.name }
+      return withEnabledNote({ ok: true, name: entry.name }, () => materializeEnabledExcluding([entry.name]))
     },
     'subagent-trash-delete': async (args: any) => {
       const id = String((args && args.id) || '').trim()
@@ -802,11 +886,11 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         }
         imported.push(target.name)
       }
-      if (imported.length) {
-        await materializeEnabledExcluding(imported).catch(() => undefined)
-        cache = null
-      }
-      return { ok: true, imported, skipped }
+      if (imported.length) cache = null
+      return withEnabledNote(
+        { ok: true, imported, skipped },
+        async () => { if (imported.length) await materializeEnabledExcluding(imported) },
+      )
     },
     /**
      * 子智能体开关（v0.8）：停用 = 不注入目录段、subagent_manager_list/run 不可见；文件本体不动。
@@ -835,6 +919,12 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       return { ok: true, name, enabled: args.enabled === true }
     },
   }
+  // 写 op 统一进串行队列（理由见上方 mutationQueue 的说明）。放在这里统一包、而不是逐个手写：
+  // 以后新增写 op 只改 writeOps 一处，不会漏掉。
+  for (const name of writeOps) {
+    const fn = ops[name]
+    if (typeof fn === 'function') ops[name] = (args: any) => enqueueMutation(() => fn(args))
+  }
   const enabledStore = {
     /** 指定名单里当前被停用的（进入模式拍快照用：只记将被启用的行，退出时精确停回）。 */
     async disabledAmong(names: string[]): Promise<string[]> {
@@ -854,29 +944,60 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const state = new Map(docs.map((d) => [d.name, d.enabled !== false]))
       return docs.map((d) => d.name).filter((n) => state.get(n) === true)
     },
-    /** 批量启停；只碰给出的名字，人设已不存在的跳过（别把悬空名写进集合）。 */
+    /** 批量启停；只碰给出的名字，人设已不存在的跳过（别把悬空名写进集合）。
+     *  同样走写队列：它由场景档案引擎直接调用（不经 op 表），不排队就会与开关 op 互相覆盖。 */
     async setEnabled(names: string[], enabled: boolean): Promise<void> {
-      const docs = await list()
-      const set = await readEnabled()
-      const base = (set === null ? docs.map((d) => d.name) : set.slice()).filter((n) => docs.some((d) => d.name === n))
-      let dirty = false
-      for (const n of names) {
-        if (!docs.some((d) => d.name === n)) continue
-        const i = base.indexOf(n)
-        if (enabled && i < 0) { base.push(n); dirty = true }
-        if (!enabled && i >= 0) { base.splice(i, 1); dirty = true }
-      }
-      if (dirty) {
-        await writeEnabled(base)
-        cache = null
-      }
+      await enqueueMutation(async () => {
+        const docs = await list()
+        const set = await readEnabled()
+        const base = (set === null ? docs.map((d) => d.name) : set.slice()).filter((n) => docs.some((d) => d.name === n))
+        let dirty = false
+        for (const n of names) {
+          if (!docs.some((d) => d.name === n)) continue
+          const i = base.indexOf(n)
+          if (enabled && i < 0) { base.push(n); dirty = true }
+          if (!enabled && i >= 0) { base.splice(i, 1); dirty = true }
+        }
+        if (dirty) {
+          await writeEnabled(base)
+          cache = null
+        }
+      })
     },
   }
-  return { list, runSerial, ops, enabledStore, writeOps: new Set(['subagent-create', 'subagent-update', 'subagent-delete', 'subagent-import', 'subagent-toggle', 'subagent-trash-restore', 'subagent-trash-delete']) }
+  return { list, runSerial, ops, enabledStore, writeOps }
 }
 
-function validPersonaName(name: string): boolean {
-  return name.length > 0 && name.length <= 64 && !name.startsWith('.') && !/[\\/<>:"|?*]/.test(name)
+/** 人设名长度上限（字符）。 */
+const PERSONA_NAME_MAX = 64
+
+/**
+ * 官方 `tools.restrict()` 的**保留名**：名单里出现它时，官方不是"当它不存在"，而是**直接抛错**
+ * （`dsh-tools/lib/index.js:2800`：cannot name reserved PTC mode presentation transport），
+ * 子代理当场起不来。
+ *
+ * 为什么必须在这里显式剔除：`run_code` 在宿主面上是**合法可见**的工具名（非 native 模式下
+ * 由官方补进可见集合），所以"按当前存在的工具名过滤未知项"剔不掉它 —— 过滤留下的正好是
+ * 会让官方抛错的那个。用户的直观预期是"写了就生效（或至少被忽略）"，实际却是整个委派失败。
+ */
+const RESERVED_TOOL_NAMES = new Set(['run_code'])
+
+/** 把保留名从名单里剔掉，并说明剔了什么（不静默）。 */
+function stripReserved(names: string[]): { kept: string[]; dropped: string[] } {
+  const kept: string[] = []
+  const dropped: string[] = []
+  for (const name of names) (RESERVED_TOOL_NAMES.has(name) ? dropped : kept).push(name)
+  return { kept, dropped }
+}
+
+/**
+ * 人设名合法性：谓词收敛到 `../paths.ts`（此前这里与 rules / imports / skills 各写一套，
+ * 缺了 Windows 保留设备名与控制字符检查 —— 设备名在 Windows 上创建即失败）。
+ * 注意：**不挡花括号**，手写 frontmatter 仍造得出 `{{…}}` 名字，渲染侧照旧做中和
+ * （见 renderPersonaPrompt）。
+ */
+export function validPersonaName(name: string): boolean {
+  return isValidSegment(name, PERSONA_NAME_MAX)
 }
 
 /** 字符串数组规范化（非数组/空项都丢掉）。 */
@@ -945,15 +1066,26 @@ export function serializePersona(args: any): string {
  * 按**当前会话的 Agent 预设**决定这次委派下发什么工具限制。
  *
  * 为什么必须按预设分：子代理跑在父会话的预设里（官方 `composeFrom(childCtx, parent.ctx)`），
- * 而各预设的工具集合差别极大（极简模式只有持久 shell），官方 `tools.restrict()` 遇到
- * 名单里不存在的工具名会直接抛错、子代理根本起不来。所以：
+ * 而各预设的工具集合差别极大（极简模式只有持久 shell）。官方 `tools.restrict()` 实有
+ * **四个**抛错点（`dsh-tools/lib/index.js:2790-2803`），抛了子代理就起不来：
  *
+ *   ① 非 scoped context 调用（宿主 `childCtx` 已满足，无风险）；
+ *   ② `allow` 与 `deny` 同时缺省 ⇒ `restrict({})` 抛 —— 本函数用 `filter: null`（不下发）
+ *      表达"不加限制"，**从不**调用 `restrict({})`；
+ *   ③ **名单含保留名 `run_code` 即抛** —— 而它在宿主面上是合法可见名，"按现有工具名过滤"
+ *      剔不掉它，所以这里**显式剔除**并写进 note（见 `stripReserved`）；
+ *   ④ 未知名 ⇒ 抛（唯一此前被记录的那条）。
+ *
+ * 所以：
  *   - 当前预设配了名单（且名单非空）→ 用它；白名单额外并入**当时真实在跑的 MCP 工具**
  *     （官方 allow 是"清单之外全砍"，不并进来会把 MCP 一起砍掉；用户裁定：子代理要能
  *     用当前启动的 MCP）；
  *   - 当前预设没配 → 回落旧的全局 `tools` / `toolsDeny`（老文件行为不变）；
- *   - 名单里有已经消失的工具名 → **丢掉并在 note 里如实说明**（不接受静默失效）；
+ *   - 名单里有已经消失的工具名、或写了保留名 → **丢掉并在 note 里如实说明**（不接受静默失效）；
  *   - 判断不了当前预设（老宿主 / 异常）→ 不按模式施加，并在 note 里说明。
+ *
+ * ⚠ 两种失败方向都要记账（它们互斥，且都不是"没生效"这么简单）：名单全落空时本函数返回
+ * `filter: null` = **放宽到不限制**（fail-open）；保留名没剔干净时官方抛错 = **收紧到起不来**。
  *
  * 三态返回：`filter: null` = 明确不加限制；`filter: {...}` = 下发该限制。
  */
@@ -964,18 +1096,29 @@ export function decideToolFilter(
 ): ToolFilterDecision {
   const rule = presetId === null ? undefined : persona.toolsByPreset?.[presetId]
   if (rule && rule.names.length) {
-    const usable = rule.names.filter((name) => known.names.has(name))
+    const knownNames = rule.names.filter((name) => known.names.has(name))
+    const reserved = stripReserved(knownNames)
+    const usable = reserved.kept
     const dropped = rule.names.filter((name) => !known.names.has(name))
-    const droppedNote = dropped.length ? `名单里这些工具当前不存在，已忽略：${dropped.join('、')}` : undefined
-    if (!usable.length) {
-      return { filter: null, note: `「${presetId}」的${rule.mode === 'allow' ? '白' : '黑'}名单里没有当前存在的工具，本次不施加工具限制` }
+    const notes: string[] = []
+    if (dropped.length) notes.push(`名单里这些工具当前不存在，已忽略：${dropped.join('、')}`)
+    if (reserved.dropped.length) {
+      notes.push(`名单里的 ${reserved.dropped.join('、')} 是官方保留名（写进工具限制会让子代理直接起不来），已忽略`)
     }
+    if (!usable.length) {
+      const note = notes.length ? notes.join('；') : undefined
+      return { filter: null, note: note ?? `「${presetId}」的${rule.mode === 'allow' ? '白' : '黑'}名单里没有当前存在的工具，本次不施加工具限制` }
+    }
+    const droppedNote = notes.length ? notes.join('；') : undefined
     if (rule.mode === 'allow') return { filter: { allow: [...new Set([...usable, ...known.mcp])] }, ...(droppedNote === undefined ? {} : { note: droppedNote }) }
     return { filter: { deny: usable }, ...(droppedNote === undefined ? {} : { note: droppedNote }) }
   }
   // 旧格式（全局名单）：保持老行为，白名单同样并入 MCP。
-  const legacyAllow = (persona.tools || []).filter((name) => known.names.has(name))
-  const legacyDeny = (persona.toolsDeny || []).filter((name) => known.names.has(name))
+  const legacyKnown = [...(persona.tools || []), ...(persona.toolsDeny || [])].filter((name) => known.names.has(name))
+  const legacyReserved = stripReserved(legacyKnown)
+  const legacyKept = new Set(legacyReserved.kept)
+  const legacyAllow = (persona.tools || []).filter((name) => legacyKept.has(name))
+  const legacyDeny = (persona.toolsDeny || []).filter((name) => legacyKept.has(name))
   const legacyDropped = [...(persona.tools || []), ...(persona.toolsDeny || [])].filter((name) => !known.names.has(name))
   const filter: ToolFilter = {
     ...(legacyAllow.length ? { allow: [...new Set([...legacyAllow, ...known.mcp])] } : {}),
@@ -990,6 +1133,9 @@ export function decideToolFilter(
       : '没能判断当前会话的 Agent 预设，按模式配的限制这次不生效')
   }
   if (legacyDropped.length) notes.push(`名单里这些工具当前不存在，已忽略：${legacyDropped.join('、')}`)
+  if (legacyReserved.dropped.length) {
+    notes.push(`名单里的 ${legacyReserved.dropped.join('、')} 是官方保留名（写进工具限制会让子代理直接起不来），已忽略`)
+  }
   if (!Object.keys(filter).length) {
     if (presetId === null && !notes.length) notes.push('没能判断当前会话的 Agent 预设，本次不施加工具限制')
     return { filter: null, ...(notes.length ? { note: notes.join('；') } : {}) }

@@ -3,7 +3,13 @@
 // 场景记忆（~/.dsh/tool-management/memories/<场景>/<名>.md；场景留空 = 保留场景 global）。
 // 约定：只认 .md；zip 内任意层级；隐藏项 / 绝对路径 / `..` 穿越 / 超限条目一律跳过并回报；
 //       重名策略（跳过 or 覆盖）不在这里实现——由调用方按文件系统现状裁决（本项目取「跳过并报告」）。
+//
+// 两条限额的**口径**要分清（2026-09-19 审计 T-09）：`MAX_IMPORT_TOTAL_BYTES` 管的是
+// **上传（编码后）**字节，管不住解压后的体积 —— 一个 8 MiB 条目 × 2000 条 ≈ 16 GiB 会在
+// 单次 `unzipSync` 里被实体化。所以另有 `MAX_IMPORT_UNCOMPRESSED_BYTES` 管**解压后**的
+// 累计量，在 filter 里按档案自报的 `info.originalSize` 累加。
 import { unzipSync } from 'fflate'
+import { isValidSegment } from '../paths.js'
 
 export interface UploadFile { name?: unknown; data?: unknown }
 export interface RawEntry { path: string; bytes: Uint8Array }
@@ -11,9 +17,19 @@ export interface ImportProblem { name: string; reason: string }
 
 export const MAX_IMPORT_FILES = 200
 export const MAX_IMPORT_ENTRY_BYTES = 8 * 1024 * 1024
+/** 上传（编码后）总量：与传输层的 88 MiB 体限是同一层口径，防止一次请求塞进几百 MiB。 */
 export const MAX_IMPORT_TOTAL_BYTES = 32 * 1024 * 1024
 export const MAX_IMPORT_ENTRIES = 2000
 export const MAX_IMPORT_NAME_LENGTH = 64
+/**
+ * 解压后累计上限（与技能上传器 `MAX_UPLOAD_TOTAL_BYTES = 64 MiB` 同层口径）。
+ *
+ * 为什么必须单列：单条目 8 MiB × 2000 条 ≈ 16 GiB 会在一次 `unzipSync` 里全部展开进内存 ——
+ * 传输层与 `MAX_IMPORT_TOTAL_BYTES` 都只数**压缩后**的字节，一个数不到。
+ * 已知前提：信任档案自报的 `info.originalSize`（fflate 不独立约束输出长度）；谎报只能让
+ * 解压产物比申报的大，**不会**绕过这个上限之前的条目数门禁。
+ */
+export const MAX_IMPORT_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 
 const message = (e: unknown): string => String((e && (e as Error).message) || e)
 
@@ -61,6 +77,8 @@ export function expandUploads(files: unknown): { entries: RawEntry[]; problems: 
     problems.push({ name: `(其余 ${all.length - MAX_IMPORT_FILES} 个文件)`, reason: `一次最多导入 ${MAX_IMPORT_FILES} 个文件` })
   }
   let total = 0
+  /** 解压后超限只报一次（与"超条目数"同口径，避免几千条问题刷屏）。 */
+  let uncompressedReported = false
   for (const raw of list) {
     const file = (raw || {}) as UploadFile
     const name = String(file.name || '').trim() || '(未命名)'
@@ -77,6 +95,7 @@ export function expandUploads(files: unknown): { entries: RawEntry[]; problems: 
     }
     if (isZipBytes(bytes)) {
       let unzipped: Record<string, Uint8Array>
+      let uncompressed = 0
       try {
         let count = 0
         unzipped = unzipSync(bytes, {
@@ -96,6 +115,18 @@ export function expandUploads(files: unknown): { entries: RawEntry[]; problems: 
               problems.push({ name: info.name, reason: `zip 内单条目超过 ${MAX_IMPORT_ENTRY_BYTES >> 20} MiB，已跳过` })
               return false
             }
+            // 解压后累计：单条目与条目数都挡不住「2000 × 8 MiB」这种组合，只有累计量挡得住。
+            // 目录条目不占解压预算（originalSize 为 0 且不产出内容）。
+            if (!info.name.endsWith('/')) {
+              uncompressed += info.originalSize
+              if (uncompressed > MAX_IMPORT_UNCOMPRESSED_BYTES) {
+                if (!uncompressedReported) {
+                  uncompressedReported = true
+                  problems.push({ name: info.name, reason: `zip 解压后合计超过 ${MAX_IMPORT_UNCOMPRESSED_BYTES >> 20} MiB，该条目及其后条目已忽略` })
+                }
+                return false
+              }
+            }
             return true
           },
         })
@@ -113,15 +144,20 @@ export function expandUploads(files: unknown): { entries: RawEntry[]; problems: 
       continue
     }
     if (!name.toLowerCase().endsWith('.md')) { problems.push({ name, reason: '只支持 .md 或 .zip' }); continue }
-    entries.push({ path: name, bytes })
+    // 非 zip 分支同样要走 `normalizeEntryPath`：客户端给的文件名是**外部输入**，
+    // `"../../x.md"` / `".hidden/x.md"` 直接进 `RawEntry[]` 就把"隐藏项/穿越一律跳过"
+    // 这条承诺交给下游 planner 兜着 —— 本模块的文件头正是这么承诺的（审计 T-10）。
+    // 不变量该由承诺方强制：新增的第三个消费者不该靠"运气好下游也查了"才安全。
+    const normalized = normalizeEntryPath(name)
+    if (!normalized) { problems.push({ name, reason: '路径非法或隐藏项，已跳过' }); continue }
+    entries.push({ path: normalized, bytes })
   }
   return { entries, problems }
 }
 
-/** 单个名字段（人设名 / 记忆名 / 场景路径的一段）合法性：与宿主侧校验同口径。 */
+/** 单个名字段（人设名 / 记忆名 / 场景路径的一段）合法性：谓词收敛到 `../paths.ts`。 */
 export function isValidImportName(name: string): boolean {
-  const s = String(name || '')
-  return s.length > 0 && s.length <= MAX_IMPORT_NAME_LENGTH && s === s.trim() && !s.startsWith('.') && !/[\\/<>:"|?*]/.test(s)
+  return isValidSegment(String(name || ''), MAX_IMPORT_NAME_LENGTH)
 }
 
 /** 场景/分组路径合法性：逐段校验（空串 = 根/全局，合法）。 */

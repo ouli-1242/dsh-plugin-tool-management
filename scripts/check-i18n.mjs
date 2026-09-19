@@ -1,13 +1,13 @@
 // i18n 键对齐检查（开发期自检，不随包发布）。
 //
-// 客户端把中英两套文案写在 src/client.js 里的同一个结构（`zh: {…}` / `en: {…}`）。
+// 客户端把中英两套文案写在 src/client/*.js 里（拼接产物 lib/client.js）的同一个结构（`zh: {…}` / `en: {…}`）。
 // 这里按块切出两个 locale 对象，比较键集合的差集、重复键，以及**占位符集合**是否一致
 // （`{name}` 之类少写一个就会在界面上显示成字面量，是实际会发生的低级缺陷）。
 //
-// 用法：node scripts/check-i18n.mjs [src/client.js]
+// 用法：node scripts/check-i18n.mjs [lib/client.js]
 import { readFileSync } from 'node:fs'
 
-const file = process.argv[2] || 'src/client.js'
+const file = process.argv[2] || 'lib/client.js'
 const src = readFileSync(file, 'utf8')
 
 /** 从 `zh: {` 起按花括号配平切出该 locale 块的正文（不依赖缩进宽度）。 */
@@ -72,7 +72,7 @@ const badArgs = [...zhMap.keys()]
 // 显示给用户（例如把 `mcp.detail.entryId` 写成 `mcp.field.entryId`）。
 // 动态键（`t(item.code)` / `t('root.' + key)`）不是字面量，天然不在此列。
 const referenced = new Set(
-  [...src.matchAll(/\b(?:mt|t)\(\s*'([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9_-]+)+)'/g)].map((m) => m[1]),
+  [...src.matchAll(/\b(?:mt|t)\(\s*(['"])([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_-]+)*)\1/g)].map((m) => m[2]),
 )
 const missingKeys = [...referenced].filter((k) => !zhMap.has(k)).sort()
 

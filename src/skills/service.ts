@@ -9,6 +9,7 @@ import { Worker } from 'node:worker_threads'
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { isInsideRootResolved } from '../paths.js'
 import {
   state,
   setSkillEnabled,
@@ -64,17 +65,37 @@ function makeLog(): (event: string, detail?: unknown) => Promise<void> {
 
 // ── 系统回收站（永久删除的最后一道保险） ──────────────────────────────────
 
+/**
+ * 外部进程（PowerShell / gio）的超时上限。这些调用在技能的**写队列**里被 await
+ * （skill-trash-delete），进程一旦挂起，该域全部写操作会永久停摆且无任何提示 ——
+ * 回收站 API 在文件被占用、系统弹窗等情况下确实会挂住。超时后杀掉进程并返回 false，
+ * 让调用方按既有的「回收站失败 → 硬删除」兜底走下去，队列得以继续。
+ */
+const EXTERNAL_CMD_TIMEOUT_MS = 30_000
+
 function runQuietly(command: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const finish = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      if (timer) { clearTimeout(timer); timer = null }
+      resolve(ok)
+    }
     let child: any
     try {
       child = spawn(command, args, { stdio: 'ignore', windowsHide: true })
     } catch {
-      resolve(false)
+      finish(false)
       return
     }
-    child.on('error', () => resolve(false))
-    child.on('close', (code: number) => resolve(code === 0))
+    timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* 进程可能已自行退出 */ }
+      finish(false)
+    }, EXTERNAL_CMD_TIMEOUT_MS)
+    child.on('error', () => finish(false))
+    child.on('close', (code: number) => finish(code === 0))
   })
 }
 
@@ -127,7 +148,7 @@ async function permanentlyDeleteTrashSafely(
 
 /**
  * 监听目录，200ms 防抖后回调：在编辑器或其他工具里新增/修改/删除文件后，无需手动
- * 刷新即可看到变化。技能来源与规则根目录共用（见 src/rules/service.ts 的场景记忆段缓存）。
+ * 刷新即可看到变化。技能来源与规则根目录共用（见 src/memories/service.ts 的场景记忆段缓存）。
  *
  * 为什么用 worker_threads：Windows 上 fs.watch(recursive) 的句柄在「被监听
  * 目录被删除」时会静默卡死事件循环（不触发 error、unref 也无效）——宿主
@@ -282,6 +303,11 @@ export interface SkillsService {
   writeOps: ReadonlySet<string>
   /** 注册全局层与 agent-scope provider；返回清理函数（配合 ctx.effect）。 */
   registerProviders: () => () => void
+  /**
+   * 该绝对路径是否落在「本插件认识的技能来源」内（静态根 + 自定义根 + 项目来源）。
+   * `skill-open` 用它把该 op 限制在技能文件上，避免成为「任意绝对路径 → 系统编辑器」的入口。
+   */
+  isInsideKnownSkillRoot: (abs: string) => Promise<boolean>
 }
 
 /** 全插件共用的审计日志：单一串行写队列，避免多处写同一文件交叉。 */
@@ -421,6 +447,33 @@ export function createSkillsService(ctx: any): SkillsService {
     'skill-trash-restore', 'skill-trash-delete', 'skill-custom-add', 'skill-custom-remove',
   ])
 
+  /**
+   * 新建 / 导入 / 恢复技能后统一「默认停用」。**失败不能吞。**
+   *
+   * 这里原先写作 `.catch(() => undefined)`，两处都漏：一是抛出的写失败被吞，二是
+   * `markSkillsDisabled` 在状态文件不可读时**不抛**、而是返回 `{ ok: false }` —— 那个
+   * 返回值此前根本没被看过。两种情况下技能都停在启用态、下一轮就进模型上下文，而用户
+   * 看到的是「创建成功」。
+   *
+   * 沿用 `sceneSyncError` 的形状：这里只给**原因原文**，句子由界面按当前语言拼
+   * （服务端拼中文会让英文界面露出中文）。
+   */
+  async function disableNewSkills(targets: Array<{ root: string; name: string }>, res: any): Promise<any> {
+    if (!targets.length) return res
+    let reason: string | null = null
+    try {
+      const out: any = await markSkillsDisabled(targets, log)
+      if (out && out.ok === false) reason = String(out.error || '状态文件不可读')
+    } catch (e) {
+      reason = message(e)
+    }
+    if (reason === null) return res
+    // 本来就已经失败的回执：把原因并进 error，不要用 warning 把失败说成「成功但有提示」。
+    return res && res.ok === false
+      ? { ...res, error: `${res.error}；另外，「默认停用」也没能写入（${reason}）` }
+      : { ...res, stateSyncError: reason }
+  }
+
   const ops: Record<string, (args: any) => Promise<any>> = {
     // 读操作（state 走短 TTL 缓存，见上方 readState）
     'skill-state': wrap(() => readState()),
@@ -505,7 +558,7 @@ export function createSkillsService(ctx: any): SkillsService {
         )
         // v0.8.5：新建技能默认不启动（用户裁定）——与子智能体 / MCP 同口径。
         if (res && res.ok !== false && res.name) {
-          await markSkillsDisabled([{ root: String(res.root || 'hub'), name: String(res.name) }], log).catch(() => undefined)
+          return disableNewSkills([{ root: String(res.root || 'hub'), name: String(res.name) }], res)
         }
         return res
       }),
@@ -519,8 +572,7 @@ export function createSkillsService(ctx: any): SkillsService {
         })
         // 导入的技能默认停用；部分成功也对 imported 逐条停用。
         const names = res && Array.isArray(res.imported) ? res.imported : []
-        if (names.length) await markSkillsDisabled(names.map((n: unknown) => ({ root: 'hub', name: String(n) })), log).catch(() => undefined)
-        return res
+        return disableNewSkills(names.map((n: unknown) => ({ root: 'hub', name: String(n) })), res)
       }),
       afterWrite,
     ),
@@ -531,8 +583,7 @@ export function createSkillsService(ctx: any): SkillsService {
         })
         // 上传/导入同口径：默认停用。
         const names = res && Array.isArray(res.imported) ? res.imported : (res && res.name ? [res.name] : [])
-        if (names.length) await markSkillsDisabled(names.map((n: unknown) => ({ root: 'hub', name: String(n) })), log).catch(() => undefined)
-        return res
+        return disableNewSkills(names.map((n: unknown) => ({ root: 'hub', name: String(n) })), res)
       }),
       afterWrite,
     ),
@@ -545,7 +596,7 @@ export function createSkillsService(ctx: any): SkillsService {
         const res = await restoreTrash(String(args.id || ''), log, projectOptions())
         // 恢复的技能默认停用（v0.8.5 用户裁定：新建/导入/恢复一律不启动，手动开启）。
         if (res && res.ok !== false && res.name) {
-          await markSkillsDisabled([{ root: String(res.root || 'hub'), name: String(res.name) }], log).catch(() => undefined)
+          return disableNewSkills([{ root: String(res.root || 'hub'), name: String(res.name) }], res)
         }
         return res
       }),
@@ -565,5 +616,30 @@ export function createSkillsService(ctx: any): SkillsService {
     ),
   }
 
-  return { ops, writeOps, registerProviders }
+  /**
+   * 该绝对路径是否落在「本插件认识的技能来源」内。
+   *
+   * 为什么需要它：`skill-open` 会把路径交给**系统默认编辑器**，不设边界的话它就是一个
+   * 「任意绝对路径 → 启动外部程序」的入口。三类来源都要收进来，否则会把合法技能误挡在外：
+   * 静态根（`userRoots`）+ 状态文件里的自定义根 + 当前活动工作区的项目来源。
+   */
+  async function isInsideKnownSkillRoot(abs: string): Promise<boolean> {
+    const dirs: string[] = roots.map((r: any) => String((r && r.path) || '')).filter(Boolean)
+    try {
+      for (const r of customRootsFromState((await readManagerState()).state)) {
+        if (r && r.path) dirs.push(String(r.path))
+      }
+    } catch { /* 状态不可读 → 只用静态根 */ }
+    try {
+      for (const r of await projectRoots(projectOptions().projectCwds)) {
+        if (r && r.path) dirs.push(String(r.path))
+      }
+    } catch { /* 项目来源解析失败 → 跳过 */ }
+    for (const dir of dirs) {
+      try { if (await isInsideRootResolved(dir, abs)) return true } catch { /* 单个根失败不影响其他 */ }
+    }
+    return false
+  }
+
+  return { ops, writeOps, registerProviders, isInsideKnownSkillRoot }
 }

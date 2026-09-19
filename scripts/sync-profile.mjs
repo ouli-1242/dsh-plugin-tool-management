@@ -16,6 +16,13 @@
  * the publish surface, so adding/removing a source file stays a one-command
  * operation.
  *
+ * The THIRD time (2026-09-18, new module `paths.ts`) it happened again, and the
+ * lesson was that a separate command is a command people forget. Worse, the
+ * symptom hides: every EXISTING file is hardlinked and therefore current, so the
+ * install looks perfectly healthy right up to the moment the host is restarted.
+ * So this script is now the last step of `npm run build` itself — "the build
+ * passed" and "the profile is installable" are one sentence again.
+ *
  * The SECOND time (2026-09-17) was a different half of the same coin, and it is
  * why this script now LINKS instead of copies: `context-inject.js` was created
  * by the 2026-09-16 run as a plain copy, so it had its own inode — and every
@@ -34,6 +41,7 @@
  * hardlinked half stayed current while the copied half did not.
  *
  * Usage:
+ *   npm run build                     # runs this automatically, as the last step
  *   npm run sync:profile              # profile "web" (default)
  *   node scripts/sync-profile.mjs myprofile
  *

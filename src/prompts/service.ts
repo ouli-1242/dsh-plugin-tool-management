@@ -32,14 +32,14 @@ const BLANK_TEMPLATE = '# AGENTS.md\n\n（DSH 全局指令基线预设，待编�
 /** 全局 AGENTS.md 的备份代际上限：与 mcpm patch 的 KEEP_PATCH_BACKUPS 同纪律。 */
 const KEEP_GLOBAL_BACKUPS = 5
 
-export interface AgentsMdDeps {
+export interface PromptsDeps {
   /** 预设库根目录（已解析的绝对路径）。 */
   presetsDir: string
   /** 解析当前 DSH 全局 AGENTS.md 的绝对路径（~/.dsh/AGENTS.md）。 */
   getGlobalAgentsMdPath: () => Promise<string>
 }
 
-export interface AgentsMdPresetRow {
+export interface PromptPresetRow {
   id: string
   /** 内容逐字节等于当前 ~/.dsh/AGENTS.md（真·生效）。 */
   active: boolean
@@ -52,8 +52,8 @@ export interface AgentsMdPresetRow {
   description?: string
 }
 
-export interface AgentsMdService {
-  list(): Promise<{ ok: true; presets: AgentsMdPresetRow[] } | { ok: false; error: string }>
+export interface PromptsService {
+  list(): Promise<{ ok: true; presets: PromptPresetRow[] } | { ok: false; error: string }>
   read(id: string): Promise<{ ok: true; content: string } | { ok: false; error: string }>
   create(id: string, options?: { from?: string; content?: string; description?: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }>
   /**
@@ -74,7 +74,7 @@ export interface AgentsMdService {
   importPreset(id: string, content: string, description?: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
 }
 
-export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): AgentsMdService {
+export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsService {
   const message = (e: unknown): string => String((e && (e as Error).message) || e)
 
   /** 校验 id 并返回错误文本（合法时返回 `null`）。 */
@@ -140,7 +140,7 @@ export function createAgentsMdService(_ctx: unknown, deps: AgentsMdDeps): Agents
     } catch { /* best effort */ }
   }
 
-  async function list(): Promise<{ ok: true; presets: AgentsMdPresetRow[] } | { ok: false; error: string }> {
+  async function list(): Promise<{ ok: true; presets: PromptPresetRow[] } | { ok: false; error: string }> {
     try {
       await ensureInit()
       const [presetsDir, globalPath] = await Promise.all([deps.presetsDir, deps.getGlobalAgentsMdPath()])

@@ -1,8 +1,60 @@
-import { symbols } from "@deepseek-ai/cordis";
+import { symbols, type Context } from "@deepseek-ai/cordis";
 import { workspaceDomainSpec } from "@deepseek-ai/dsh-workspace";
-import { assessHost, routeFor, refusalsFor, CapabilityRefusalError } from "../compat/probe.js";
+import type { CheckpointIdentity } from "@deepseek-ai/dsh-session-projection-cache";
+import { assessHost, routeFor, refusalsFor, CapabilityRefusalError, type CapabilityRefusal, type HostAssessment, type OperationName, type RouteDecision } from "../compat/probe.js";
 
 export { CapabilityRefusalError };
+
+/**
+ * 工作区注册表在本文件中的使用面。requireState / requireTable / setState /
+ * readSessionHeader / enqueueOperation 及四个索引 Map 在官方声明中均为
+ * private，宿主运行时存在 —— 这里按实际调用形状声明最小结构。
+ */
+export interface RegistryLike {
+  archivedSessionIds: readonly string[];
+  headers: Map<string, unknown>;
+  sessionPaths: Map<string, unknown>;
+  invalidSessionPaths: Map<string, unknown>;
+  entities: Map<string, unknown>;
+  enqueueOperation<T>(fn: () => Promise<T>): Promise<T>;
+  [key: string]: unknown;
+}
+
+/** 宿主投影缓存存储行（KvTable<string, CheckpointRecord> 的最小读写面）。 */
+interface ProjectionCacheTableLike {
+  get(id: string): { identity: CheckpointIdentity } | undefined;
+  delete(id: string): Promise<boolean>;
+}
+
+/**
+ * 宿主投影缓存的写入面。put / requireTable 在官方声明中为 private，
+ * delete / whenIdle 是 rc.2 之后宿主才自带的可选删除屏障 —— 按实际用法声明。
+ */
+interface ProjectionCacheLike {
+  put(id: string, identity: CheckpointIdentity, rows: unknown): Promise<unknown>;
+  write(session: unknown): Promise<unknown>;
+  requireTable(): ProjectionCacheTableLike;
+  delete?(id: string): Promise<unknown>;
+  whenIdle?(): Promise<void>;
+  [key: string]: unknown;
+}
+
+/** 写屏障替换 put/write 时使用的包装器形状（含按名字恢复时的动态索引）。 */
+interface CacheWriteWrappers {
+  put(id: string, identity: CheckpointIdentity, rows: unknown): Promise<unknown>;
+  write(session: unknown): Promise<unknown>;
+  [key: string]: unknown;
+}
+
+/** acquireCacheGuard 装配出的写屏障句柄形状。 */
+interface CacheGuard {
+  users: number;
+  begin(id: string, header: CheckpointIdentity | null | undefined): void;
+  clearTombstone(id: string): void;
+  whenIdle(): Promise<void>;
+  delete(id: string): Promise<unknown>;
+  release(): Promise<void>;
+}
 
 // No Service subclass, no ctx.provide(), no second storage-domain owner.
 // The official API lacks unarchive and a cache deletion barrier, so this file
@@ -18,9 +70,14 @@ export { CapabilityRefusalError };
 // 官方包文件、不持久化改动、不改变宿主机制的对外行为 —— 与「不 patch 官方代码」
 // 禁令针对的对象（包文件与宿主机制的永久改写）不同层。若用户裁定该解释不成立，
 // 撤掉 acquire/releaseCacheGuard 即可整体退回「无删除屏障」的降级形态。
-const cacheGuards = new WeakMap();
-const raw = (value) => value?.[symbols.original] ?? value;
-const sameLifecycle = (a, b) => a && b && a.createdAt === b.createdAt && (a.cwd ?? null) === (b.cwd ?? null);
+const cacheGuards = new WeakMap<object, CacheGuard>();
+const raw = <T>(value: T): T => {
+  // cordis 的 traceable 代理在 [symbols.original] 上挂原始对象；无代理时原样返回
+  const holder = value as { [symbols.original]?: T } | null | undefined;
+  return holder?.[symbols.original] ?? value;
+};
+const sameLifecycle = (a: CheckpointIdentity | null | undefined, b: CheckpointIdentity | null | undefined) =>
+  a && b && a.createdAt === b.createdAt && (a.cwd ?? null) === (b.cwd ?? null);
 
 /**
  * Install the write barrier around the host's projection cache when (and only
@@ -34,7 +91,7 @@ const sameLifecycle = (a, b) => a && b && a.createdAt === b.createdAt && (a.cwd 
  * @returns the barrier handle.
  * @throws {CapabilityRefusalError} when the cache cannot support a safe delete.
  */
-function acquireCacheGuard(cache) {
+function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
   let guard = cacheGuards.get(cache);
   if (guard) { guard.users += 1; return guard; }
   const missing = ["put", "write", "requireTable"].filter((name) => typeof cache[name] !== "function");
@@ -58,20 +115,20 @@ function acquireCacheGuard(cache) {
   const blocked = new Map();
   const pending = new Set();
   const queues = new Map();
-  const isBlocked = (id, identity) => blocked.has(id) && (blocked.get(id) === null || sameLifecycle(blocked.get(id), identity));
-  function track(task) {
+  const isBlocked = (id: string, identity: CheckpointIdentity | null | undefined) => blocked.has(id) && (blocked.get(id) === null || sameLifecycle(blocked.get(id), identity));
+  function track<T>(task: Promise<T>): Promise<T> {
     pending.add(task);
     task.then(() => pending.delete(task), () => pending.delete(task));
     return task;
   }
-  function serial(id, fn) {
+  function serial(id: string, fn: () => unknown): Promise<unknown> {
     const task = (queues.get(id) ?? Promise.resolve()).then(fn);
     const settled = task.then(() => {}, () => {});
     queues.set(id, settled);
     settled.then(() => { if (queues.get(id) === settled) queues.delete(id); });
     return track(task);
   }
-  const wrappers = {
+  const wrappers: CacheWriteWrappers = {
     put(id, identity, rows) {
       // Preserve the upstream snapshot-at-call boundary even while queued.
       if (isBlocked(id, identity)) return Promise.resolve();
@@ -143,20 +200,26 @@ function acquireCacheGuard(cache) {
  * @param hasLiveSession - whether this session is currently live.
  * @returns the capability ids that must be `ok`, in evaluation order.
  */
-export function requiredSessionCapabilities(hasLiveSession) {
+export function requiredSessionCapabilities(hasLiveSession: boolean): string[] {
   return hasLiveSession
     ? ["sessions.detach-live"]
     : ["sessions.cold-announce"];
 }
 
-export function createHistoryBridge(ctx, suppliedRegistry, onArchive) {
+export function createSessionsBridge(
+  ctx: Context,
+  suppliedRegistry: RegistryLike,
+  onArchive: (id: string, at: number | null) => Promise<unknown>,
+) {
   // Cordis returns a fresh traceable method proxy on access. Compare and adapt
   // the original object, not proxies; calls retain the service owner's context.
   const registry = raw(suppliedRegistry);
-  const cache = raw(ctx.get("sessionProjectionCache"));
-  let guard;
-  let stopObserving;
-  let assessment;
+  // 官方声明把 put/requireTable 标为 private（运行时存在，见文件头「纪律边界」），
+  // 因此按本文件实际调用面收窄，不改动宿主对象本身。
+  const cache = raw(ctx.get("sessionProjectionCache")) as unknown as ProjectionCacheLike | undefined;
+  let guard: CacheGuard | undefined;
+  let stopObserving: (() => void) | undefined;
+  let assessment: HostAssessment | undefined;
   let assessmentAt = 0;
   /** Re-probe at most every 5s: probing is cheap but not free on hot paths. */
   const ASSESS_TTL_MS = 5000;
@@ -181,19 +244,21 @@ export function createHistoryBridge(ctx, suppliedRegistry, onArchive) {
     return assessment;
   }
   /** Capability ids not `ok` from the given list. */
-  function unavailable(ids) {
+  function unavailable(ids: readonly string[]): CapabilityRefusal[] {
     const current = hostAssessment();
     if (current === undefined) return ids.map((id) => ({ id, label: id, detail: "宿主能力探测不可用", recovery: "请查看插件日志 dsh-plugin-tool-management.log" }));
     return refusalsFor(current, ids);
   }
   /** Throw when any listed capability is not usable; nothing is written before this runs. */
-  function requireCapabilities(operation, ids) {
+  function requireCapabilities(operation: OperationName, ids: readonly string[]) {
     const refusals = unavailable(ids);
     if (refusals.length > 0) throw new CapabilityRefusalError(operation, refusals);
   }
-  const method = (name, ...args) => {
+  const method = (name: string, ...args: unknown[]) => {
     if (typeof registry[name] !== "function") throw new Error(`宿主缺少归档兼容接口 ${name}，操作已停止`);
-    return registry[name](...args);
+    // 动态成员名：先收窄为可调用类型，再以 registry 为 receiver 调用，
+    // 与 registry[name](...args) 的 this 绑定完全一致。
+    return (registry[name] as (...rest: unknown[]) => unknown).call(registry, ...args);
   };
   /**
    * The adapter route needs the registry's read/write/delegate members. This is
@@ -202,7 +267,7 @@ export function createHistoryBridge(ctx, suppliedRegistry, onArchive) {
    * official prototype, which failed on any upstream refactor and, worse,
    * depended on the plugin loading a second copy of the package.
    */
-  function checkWorkspace(operation = "archive") {
+  function checkWorkspace(operation: OperationName = "archive"): RouteDecision {
     const current = hostAssessment();
     if (current !== undefined) {
       const decision = routeFor(current, operation);
@@ -223,15 +288,17 @@ export function createHistoryBridge(ctx, suppliedRegistry, onArchive) {
     /** Latest assessment, for the compatibility surface and the HTTP status op. */
     capabilities(force = false) { return hostAssessment(force); },
     /** Capability ids an operation still needs, without throwing. */
-    refusalsFor(operation, ids) { return unavailable(ids); },    observe() {
+    refusalsFor(operation: OperationName, ids: readonly string[]) { return unavailable(ids); },    observe() {
       if (stopObserving) return;
       let previous = new Set(registry.archivedSessionIds);
       // Official durable domain notifications also cover archive operations
       // from the official sidebar or an external archive manager. No monkey
       // patch of archiveSession and no competing writer of its ledger.
       stopObserving = ctx.on("domain/changed", (change) => {
-        if (change?.domain !== workspaceDomainSpec.name || change.table !== "" || !Array.isArray(change.value?.archivedSessionIds)) return;
-        const next = new Set(change.value.archivedSessionIds);
+        // 官方事件类型把 value 声明为 unknown（载荷形状由 workspace 域规范决定）。
+        const payload = change.value as { archivedSessionIds?: readonly string[] } | undefined;
+        if (change?.domain !== workspaceDomainSpec.name || change.table !== "" || !Array.isArray(payload?.archivedSessionIds)) return;
+        const next = new Set(payload.archivedSessionIds);
         const at = Date.now();
         for (const id of next) if (!previous.has(id)) void onArchive(id, at).catch((error) => ctx.logger.warn(String(error)));
         for (const id of previous) if (!next.has(id)) void onArchive(id, null).catch((error) => ctx.logger.warn(String(error)));
@@ -240,16 +307,16 @@ export function createHistoryBridge(ctx, suppliedRegistry, onArchive) {
     },
     checkWorkspace,
     checkIndexShape,
-    enqueue(fn) { checkWorkspace("archive"); checkIndexShape(); return registry.enqueueOperation(fn); },
+    enqueue<T>(fn: () => Promise<T>) { checkWorkspace("archive"); checkIndexShape(); return registry.enqueueOperation(fn); },
     state: () => method("requireState"),
     table: () => method("requireTable"),
-    setState: (state) => method("setState", state),
-    readHeader: (id) => method("readSessionHeader", id),
+    setState: (state: unknown) => method("setState", state),
+    readHeader: (id: string) => method("readSessionHeader", id),
     /**
      * Install the cache delete barrier for one session, before anything is
      * flushed or detached. Prefers a host-native barrier when it exists.
      */
-    async beginDelete(id, header) {
+    async beginDelete(id: string, header: CheckpointIdentity | null | undefined) {
       checkWorkspace("delete");
       if (!cache) throw new CapabilityRefusalError("delete", [{
         id: "projection.write",

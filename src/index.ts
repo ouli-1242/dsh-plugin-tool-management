@@ -15,13 +15,17 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool as hostDefineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { ArchiveWorkspaceRegistry as HistoryService, workspaceBaseName, workspacePathKey } from './history/workspace.js'
+import { createHistoryDomain } from './sessions/history.js'
+import type { SessionsRegistry } from './sessions/history.js'
 import { createSkillsService, pluginLog } from './skills/service.js'
 import { renameWithRetry } from './skills/core.js'
-import { createAgentsMdService } from './agents-md/service.js'
-import { createRulesService, planMemoryExport } from './rules/service.js'
-import { createArchiveEngine } from './rules/archive-engine.js'
-import { createSubagentService, decideToolFilter, defaultPersonasDir } from './subagents/service.js'
+import { createPromptsService } from './prompts/service.js'
+import { isValidPresetId } from './prompts/preset-id.js'
+import { isInsideRoot, isInsideRootResolved } from './paths.js'
+import { DEFAULT_PROFILE_NAME, MCP_CLIENT_MODULE, PROFILE_CANDIDATES } from './host-names.js'
+import { createMemoriesService, planMemoryExport } from './memories/service.js'
+import { createArchiveEngine } from './memories/archive-engine.js'
+import { createSubagentService, decideToolFilter, defaultPersonasDir, validPersonaName } from './subagents/service.js'
 import type { ToolFilterDecision } from './subagents/service.js'
 import { createSubagentCatalog } from './subagents/catalog.js'
 import { createSkillCatalog } from './skills/catalog.js'
@@ -36,10 +40,35 @@ import {
 import { isApprovalNever } from './approval-policy.js'
 import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
 import { assessPresetReach, injectionFactsOf, presetRosterOf, readCompositionFacts, reachNoticeForAgent } from './compat/preset-reach.js'
-import { fenceRejection, secretOpRejection, type ConnectionSeam } from './http-fence.js'
+import { TOKEN_CODE_BAD, TOKEN_MSG, fenceRejection, secretOpRejection, type ConnectionSeam } from './http-fence.js'
+import { createMcpManager } from './mcp/manager.js'
+import { createCandidates } from './scenes/candidates.js'
+import type { PluginInventoryService, ToolsService } from './mcp/manager.js'
+
+// 「已知工具」归一化与「当前可用工具数」原本定义在本文件（导出仅为测试接缝），
+// 2026-09-19 随 MCP 域搬进 ./mcp/manager.ts。这里保持原路径可导出，契约不变。
+export { normalizeKnownTools, countEnabledTools } from './mcp/manager.js'
 import { planOverrideCompaction } from './mcp/override-blocks.js'
+import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from './mcp/loader-token.js'
+// cordis.patch.yml 受管行的生成/解析/块编辑（2026-09-19 从本文件 apply 闭包抽出，纯字符串运算）。
+import { appendBlock, buildDisableBlock, buildInsertBlock, parseRows, removeEntryAll, removeMarked, spliceRanges, splitLines, type ManagedRow } from './mcp/patch-yaml.js'
+import { describeMaskedOutcome, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './mcp/secret-guard.js'
 import { DEFAULT_MCP_NOTE_MAX_LENGTH, createMcpStateCatalog, normalizeMcpNote } from './mcp/state-section.js'
 import { hubBackupDir, hubPath, hubRoot, migrateHubLayoutSync, relocateEntries } from './hub.js'
+// 分域的 HTTP ops（2026-09-19 从本文件 handlers 表抽出，依赖显式传参）。
+import { buildCompatOps } from './ops/compat.js'
+import { buildPromptOps } from './ops/prompts.js'
+import { buildSessionOps } from './ops/sessions.js'
+// HTTP 请求准入与 handlers 后处理（2026-09-19 从本文件 apply 闭包抽出，依赖显式传参）。
+import { createAccessToken, createOpWhitelist, createSceneLock, installHandlerGuards } from './request-gate.js'
+import { buildSceneSyncOps } from './ops/scene-sync.js'
+import { buildCandidateOps } from './ops/candidates.js'
+// model 工具（ctx.tools.register）按域分文件；共享的依赖形状见 tools/deps.ts。
+import { buildMcpTools } from './tools/mcp.js'
+import { buildSkillTools } from './tools/skills.js'
+import { buildPromptTools } from './tools/prompt.js'
+import { buildMemoryTools } from './tools/memory.js'
+import { buildSubagentTools } from './tools/subagent.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './subagents/tools.js'
 import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
@@ -87,86 +116,10 @@ interface WebServerService {
   register(route: { kind: 'exact'; path: string; handler(req: HttpReq, res: HttpRes): void }): () => void
 }
 
-interface ToolsService {
-  register(definition: ToolDefinition): () => void
-  schemas(): Array<{ name: string }>
-  /**
-   * Optional (dsh-tools): remove global tool names from every scope's
-   * model-visible schema list. Fails on names that are not currently
-   * registered, so callers must intersect with schemas() first.
-   */
-  restrict?(filter: { deny?: readonly string[] }): () => void
-  /**
-   * Optional (dsh-tools): monotonic execution guard — a returned reason string
-   * denies the call before the tool body runs.
-   */
-  guard?(guard: (execution: { name?: string }) => string | undefined): () => void
-}
 
-interface PluginInventoryEntry {
-  entryId: string
-  moduleName?: string
-  enabled?: boolean
-  fiberPhase?: string
-}
 
-interface PluginInventoryService {
-  list(): Promise<{ entries: PluginInventoryEntry[] }>
-}
 
-/**
- * 「已知工具」侧车里的一个条目：工具名 + **最后一次运行时的描述**。
- *
- * 描述是 v0.9.0 才加进来的（此前只存名字）：未运行的服务器在 `tools.schemas()` 里什么都没有，
- * 详情页只能对每个工具重复一句「描述暂不可用」。而描述在服务器运行时就拿得到，顺手存下来，
- * 未运行时就能显示上次见过的描述（界面标「上次运行时」，不假装是实时数据）。
- * 旧侧车文件是 `string[]`，`normalizeKnownTools` 兼容读取。
- */
-interface KnownMcpTool {
-  name: string
-  description?: string
-}
 
-/**
- * 归一化「已知工具」侧车的一行值。
- *
- * 兼容两种格式：旧版 `string[]`（只存名字，v0.8.5 及以前）与新版 `Array<{name, description?}>`。
- * 非法名字、重复名字一律丢掉并去重后按名字排序 —— 排序保证写盘内容稳定（不会因为枚举顺序
- * 变化而反复重写侧车）。导出仅为测试接缝（与 client 的 `memDefaultPickIds` 同一用意）。
- */
-export function normalizeKnownTools(raw: unknown): KnownMcpTool[] {
-  if (!Array.isArray(raw)) return []
-  const out: KnownMcpTool[] = []
-  const seen = new Set<string>()
-  for (const item of raw) {
-    const name = typeof item === 'string'
-      ? item
-      : String((item as { name?: unknown } | null)?.name ?? '')
-    if (!name || !/^[A-Za-z0-9_-]{1,128}$/.test(name) || seen.has(name)) continue
-    seen.add(name)
-    const description = typeof item === 'object' && item !== null && typeof (item as { description?: unknown }).description === 'string'
-      ? String((item as { description: string }).description)
-      : undefined
-    out.push({ name, ...(description ? { description } : {}) })
-  }
-  return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-}
-
-/**
- * 「当前可用」工具数：已知工具名里未被停用表扣减的个数；`*` = 整台停用 → 0。
- *
- * 场景档案收窄与手动逐工具开关写的是同一张停用表，所以**段、页面、`mcp_manager_list`
- * 三处的「N 个工具」都必须是这个数** —— 用扣减前的总数会让模型看到自己 schema 里
- * 并不存在的工具（数字与能调的工具对不上），页面也会和详情页的开关自相矛盾。
- * 导出仅为测试接缝（与 `normalizeKnownTools` 同一用意）。
- */
-export function countEnabledTools(known: ReadonlySet<string> | readonly string[], disabled: readonly string[]): number {
-  const off = Array.isArray(disabled) ? disabled : []
-  if (off.indexOf('*') >= 0) return 0
-  let n = 0
-  for (const tool of known) if (off.indexOf(tool) < 0) n++
-  return n
-}
 
 // ---------- Skills management types (minimal surface of ctx.skills) ----------
 interface SkillInvocation {
@@ -201,80 +154,6 @@ interface SkillService {
   get(name: string, options?: unknown): Promise<SkillDefinition | undefined>
 }
 
-/** 批量操作目标（与 deleteArchivedSessions 的 target 同构）。 */
-type HistoryBatchTarget = {
-  scope: 'all' | 'ungrouped' | 'sessions' | 'workspace'
-  sessionIds?: string[]
-  workspaceId?: string
-}
-
-/**
- * 归档列表的分组视图。宿主侧算好，客户端只按键归并：
- * `live` = 有活登记（含「路径命中但未记账」）；`detached` = 无活登记、按会话目录重建。
- */
-type HistoryGroupView = {
-  id: string
-  title: string
-  kind: 'live' | 'detached'
-  /** 活登记为登记路径；重建组为会话目录（目录已不在时为 header 里的原始 cwd）。 */
-  path?: string
-  /** 该路径在插件「见过的登记」快照里出现过 —— 区分「曾登记、已被移除」与「从未登记」。 */
-  registered?: boolean
-  /** 目录当前存在，可一键重新登记为工作区（仅 detached 组有意义）。 */
-  canRegister?: boolean
-  /** 会话目录已从磁盘删除（detached 组且 canRegister=false）：无法重新登记，提示用户会话仍可恢复/删除。 */
-  dirMissing?: boolean
-}
-
-/** 归档工作区注册表（折叠自 dsh-archive-manager）的最小调用面。 */
-interface HistoryRegistry {
-  archiveSession(sessionId: string): Promise<void>
-  unarchiveSession(sessionId: string): Promise<{ archivedSessionIds: string[] }>
-  deleteSession(sessionId: string): Promise<{ deleted: true }>
-  deleteArchivedSessions(target: HistoryBatchTarget): Promise<{ requestedSessionIds: string[]; deletedSessionIds: string[]; skippedSessionIds: string[]; failures: Array<{ sessionId: string; message: string }> }>
-  archivedSessionMetadata(): Promise<{ items: Array<{ sessionId: string; createdAt: number }> }>
-  archivedSessionDetails?: () => Promise<{ items: Array<{ sessionId: string; createdAt?: number; cwd?: string; title?: string; archivedAt?: number }> }>
-  archivedAt?(sessionId: string): number | undefined
-  /** 可选：工作区记账表（ArchiveWorkspaceRegistry 提供），history-list 用它反查会话归属与组标题。 */
-  requireTable?(): { get(id: string): { title?: string; path?: string; sessionIds: string[] } | undefined; entries(): Array<[string, { title?: string; path?: string; sessionIds: string[] }]> }
-  /** 可选：注册表状态；workspaceIds 为权威显示顺序。 */
-  requireState?(): { workspaceIds: string[] }
-  /** 可选：会话 → 规范路径索引（宿主启动时对全部存储会话建立）。 */
-  sessionPaths?: Map<string, string>
-  /** 可选：会话 → header（含 cwd）。目录已不在时 cwd 仍是唯一归属线索。 */
-  headers?: Map<string, { cwd?: string }>
-  /** 可选：「见过的登记」快照（标题/路径），供登记被删后仍按目录显示原命名。 */
-  workspaceSnapshot?(): Promise<Map<string, { path: string; title: string; id?: string; at: number }>>
-  /** 可选：把当前活登记记入插件自己的快照（未变化时不写盘）。 */
-  rememberWorkspaces?(records: Array<{ id?: string; path?: string; title?: string }>): Promise<void>
-  /** 可选：为一个已存在目录重新创建宿主工作区登记，并把该目录下已知会话挂回（宿主 resolveByPath / create / attachSession）。 */
-  registerWorkspace?(path: string, title?: string): Promise<{
-    id: string
-    title: string
-    path: string
-    created: boolean
-    attached: string[]
-    attachSkipped: Array<{ sessionId: string; reason: string }>
-  }>
-  /**
-   * 可选：恢复归档后把工作区归属一起恢复（按会话 cwd 找到/重建登记并挂回其 sessionIds）。
-   * 登记被删除后再重建的记录 `sessionIds` 是空的，不挂回的话恢复出来的会话在宿主侧就是「未分组」。
-   */
-  ensureWorkspaceAccounting?(sessionIds: string[]): Promise<{
-    registered: Array<{ path: string; title: string; created: boolean }>
-    attached: string[]
-    skipped: Array<{ sessionId: string; reason: string }>
-  }>
-  /** 可选：批量恢复；缺失时 history-unarchive-batch 返回明确错误。 */
-  unarchiveSessions?(target: HistoryBatchTarget): Promise<{ unarchivedSessionIds: string[]; archivedSessionIds: string[] }>
-  /** 可选：枚举全部持久化会话（含未归档/冷会话）头部，供导出弹窗选择。 */
-  listStoredHeaders?(): Promise<Array<{ id: string; cwd?: string; createdAt?: number }>>
-  /** 可选：宿主能力评估快照（compat-status op 与设置页「兼容」页使用）。 */
-  capabilities?(force?: boolean): import('./compat/probe.js').HostAssessment
-  /** 可选：指定能力 id 中不可用的那些（只读路径降级用，不抛错）。 */
-  capabilityRefusals?(ids: readonly string[]): import('./compat/probe.js').CapabilityRefusal[]
-}
-
 interface DshContext extends Context {
   timer: unknown
   fs: FsService
@@ -283,16 +162,6 @@ interface DshContext extends Context {
   webServer: WebServerService
   skills: SkillService
   timeout(delay: number): Promise<void>
-}
-
-interface ManagedRow {
-  id: string
-  name?: string
-  serverName?: string
-  level?: 'project' | 'global'
-  disabled?: boolean
-  managed?: boolean
-  config: Record<string, unknown>
 }
 
 // ---------------------------------------------------------------------------
@@ -342,9 +211,6 @@ export default {
     } | undefined
     // pluginInventory is optional: probe at use time, degrade to no live info.
     const pluginInventory = ctx.get('pluginInventory') as PluginInventoryService | undefined
-    // Agent 预设名单（@deepseek-ai/dsh-agent-presets）：同样是可选服务，按需取用。
-    // 读它只为了回答"当前预设下本插件注入的东西到不到得了模型"——只读，不挂载任何预设。
-    const presetRoster = () => presetRosterOf(ctx as unknown as { get?: (name: string) => unknown })
 
     // Package version, surfaced in the Settings pages and the HTTP API. Read
     // from the installed package.json so it always matches the release tag.
@@ -353,27 +219,9 @@ export default {
       PKG_VERSION = (createRequire(import.meta.url)('../package.json') as { version?: string }).version || 'unknown'
     } catch (e) { /* keep unknown */ }
 
-    // Optional access token. Enabled by setting `config.token` on this plugin's
-    // loader row (profile cordis.patch.yml override) or the
-    // DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN env var. Two roles now:
-    //   1. escape hatch — a correct token is accepted *in place of* the host's
-    //      browser authentication, so curl/scripts and LAN tooling keep working;
-    //   2. defense in depth — when set, every state-changing op additionally
-    //      requires `x-dsh-token: <token>`.
-    // It is NOT the primary gate anymore: the route calls the host's
-    // connection.requestRejection fence first (Host must be loopback/LAN
-    // IP-literal → defeats DNS rebinding, plus browser-session cookie auth),
-    // so an unset token no longer means "anyone may call writes".
-    // NOTE: the entry config arrives as the SECOND apply argument (Cordis
-    // calls `callback(ctx, config)`) — never read it off `ctx.config`, which
-    // is not an injected service and throws "cannot get property without
-    // inject" at boot.
-    const TOKEN = String((config as { token?: unknown } | undefined)?.token || process.env.DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN || '').trim()
-    // 令牌比较走「双侧 sha256 → timingSafeEqual」：摘要定长 32 字节，无需长度分支
-    // （直接比较不等长 Buffer 会抛），逐字节的耗时不随匹配前缀长度变化 —— JS 的 ===
-    // 逐字符短路，理论上可被计时侧信道逐位猜测。
-    const tokenMatches = (presented: string): boolean =>
-      timingSafeEqual(createHash('sha256').update(presented).digest(), createHash('sha256').update(TOKEN).digest())
+    // 访问令牌（2026-09-19 抽到 ./request-gate.ts）：配置里的存量令牌 / 生效令牌 / 比对 /
+    // 进程标识。引用点用解构保持原名字，index.ts 的调用处一行未改。
+    const { CONFIG_TOKEN, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID } = createAccessToken({ config })
 
     const wait = (ms: number) => ctx.timeout(ms)
     const message = (e: unknown) => String((e && (e as Error).message) || e)
@@ -400,19 +248,28 @@ export default {
     // ---------- 提示词预设库（hub/prompts/）+ 切换 ----------
     // DSH 全局指令基线只有 ~/.dsh/AGENTS.md 一个文件，无内置多预设切换；
     // 本服务在 hub 内 prompts/ 维护预设库，「应用」= 写入 ~/.dsh/AGENTS.md，
-    // 下一轮对话生效：宿主 dsh-agent-instructions 每个 agent/pre-step 都会 stat 并重读该文件。
+    // 下一轮对话生效：宿主 dsh-agent-instructions 每个 agent/pre-step 都会 **stat 比对版本**，
+    // 变了才重读（`dsh-agent-instructions/lib/index.js:992` 每步探测、`:1012-1013` 命中
+    // "path/version/digest 一致"即跳过读取、`:1016` 才是真正的 read）。写文件必改 version
+    // ⇒ 短路失效 ⇒ 下一步重读，所以"下一轮生效"成立。
+    //
+    // 一条**没被任何注释记录**的依赖点：本服务用 node:fs 直写 AGENTS.md，不产生
+    // `touchedPaths`；而官方的增量刷新由 `tools/result` 的文件触碰驱动（白名单只有
+    // read/write/edit），且"有 pending 投影且无 touchedPaths"时整轮不探测、直接返回旧消息
+    // ⇒ 插件的改动**永远走不到增量投影分支**，只能被基线 stat 分支捞回。别指望靠"宿主
+    // 也会自己发现"来兜底。
     // presetsDir 可由 config 注入（测试用），否则落到 $DSH_HOME/tool-management/prompts。
     // v0.4：旧位置（插件目录 data/agents-md-presets/）在启动时搬入 hub——
     // 插件目录在 npm 安装下会被覆盖，放用户数据在那里本身就丢数据风险。
     const PLUGIN_ROOT = (() => {
       try { return dirname(createRequire(import.meta.url).resolve('../package.json')) } catch { return process.cwd() }
     })()
-    const legacyAgentsMdPresetsDir = join(PLUGIN_ROOT, 'data', 'agents-md-presets')
-    const agentsMdPresetsDir = String((config as { presetsDir?: unknown } | undefined)?.presetsDir || hubPath('prompts'))
-    void relocateEntries(legacyAgentsMdPresetsDir, agentsMdPresetsDir, (n) => n !== '__last-applied__')
+    const legacyPromptsDir = join(PLUGIN_ROOT, 'data', 'agents-md-presets')
+    const promptsDir = String((config as { presetsDir?: unknown } | undefined)?.presetsDir || hubPath('prompts'))
+    void relocateEntries(legacyPromptsDir, promptsDir, (n) => n !== '__last-applied__')
       .catch(() => 0)
-    const agentsMdService = createAgentsMdService(ctx, {
-      presetsDir: agentsMdPresetsDir,
+    const promptsService = createPromptsService(ctx, {
+      presetsDir: promptsDir,
       getGlobalAgentsMdPath: async () => {
         const p = await ensurePaths()
         const sep = p.home.indexOf('\\') >= 0 ? '\\' : '/'
@@ -427,21 +284,21 @@ export default {
     // 单投影 = 活动场景记忆 → 上下文注入（自动在场，模型无需调用任何工具；见下方注入通道）。
     // 原"始终层写 ~/.dsh/AGENTS.md"已下线（变更单 01 §4/§10）：公共基线由 _shared/ 承担。
     // 旧的 $DSH_HOME/scene-memory 与 $DSH_HOME/rules 由服务在首次读盘前搬入本目录。
-    // rulesRoot / rulesStateDir / rulesScenesDir 仅测试注入，生产留空由服务按 DSH_HOME 解析。
-    const rulesService = createRulesService(ctx, {
-      rulesRoot: String((config as { rulesRoot?: unknown } | undefined)?.rulesRoot || ''),
-      stateDir: String((config as { rulesStateDir?: unknown } | undefined)?.rulesStateDir || ''),
-      scenesDir: String((config as { rulesScenesDir?: unknown } | undefined)?.rulesScenesDir || ''),
+    // memoriesRoot / memoriesStateDir / memoriesScenesDir 仅测试注入，生产留空由服务按 DSH_HOME 解析。
+    const memoriesService = createMemoriesService(ctx, {
+      memoriesRoot: String((config as { memoriesRoot?: unknown } | undefined)?.memoriesRoot || ''),
+      stateDir: String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || ''),
+      scenesDir: String((config as { memoriesScenesDir?: unknown } | undefined)?.memoriesScenesDir || ''),
       // 场景记忆段预算（字节），默认 65536；仅用于测试与特殊部署调优。
       ...(Number.isFinite(Number((config as { rulesMaxBytes?: unknown } | undefined)?.rulesMaxBytes))
         ? { maxBytes: Number((config as { rulesMaxBytes?: unknown }).rulesMaxBytes) }
         : {}),
     })
-    // 场景记忆段的注册/生命周期由下面的注入通道统一管（rulesService.memoryText / promptText）。
+    // 场景记忆段的注册/生命周期由下面的注入通道统一管（memoriesService.memoryText / promptText）。
 
     // ---------- 场景档案引擎（设计 §2）----------
     // deps 把既有写通道（MCP 单工具启停 / 技能启停）注入引擎；引擎自身串行，
-    // 状态机与纯逻辑在 ./rules/archive*.ts。mcpmToolEnabled / readDisabledTools
+    // 状态机与纯逻辑在 ./memories/archive*.ts。mcpmToolEnabled / readDisabledTools
     // 为函数声明（提升），此处引用安全。
     const toolKeyParts = (toolName: string): { key: string; server: string; tool: string } | null => {
       if (!toolName.startsWith('mcp__')) return null
@@ -451,31 +308,6 @@ export default {
       const server = rest.slice(0, i)
       const tool = rest.slice(i + 2)
       return server && tool ? { key: server + '/' + tool, server, tool } : null
-    }
-    async function toolStates(): Promise<Record<string, boolean>> {
-      const disabled = await readDisabledTools()
-      const states: Record<string, boolean> = {}
-      let schemas: any[] = []
-      try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅启停表 */ }
-      const liveByServer: Record<string, string[]> = {}
-      for (const s of schemas) {
-        const p = toolKeyParts(String((s && s.name) || ''))
-        if (!p) continue
-        const list = liveByServer[p.server] || (liveByServer[p.server] = [])
-        if (list.indexOf(p.tool) < 0) list.push(p.tool)
-      }
-      for (const [server, list] of Object.entries(disabled)) {
-        // 整台停用（['*']）：在 live 工具上展开成具体键，不产出 `server/*` 伪键（那会污染勾选器）。
-        if (list.indexOf('*') >= 0) {
-          for (const t of (liveByServer[server] || [])) states[server + '/' + t] = false
-          continue
-        }
-        for (const t of list) states[server + '/' + t] = false
-      }
-      for (const [server, list] of Object.entries(liveByServer)) {
-        for (const t of list) if (!(server + '/' + t in states)) states[server + '/' + t] = true
-      }
-      return states
     }
     /**
      * 一次扫描同时给出三样东西（避免为了三份视图各扫一遍磁盘）：
@@ -542,64 +374,11 @@ export default {
       return (await skillScan()).all
     }
 
-    /** 场景档案「技能集」用的一行。 */
-    interface SceneSkillRow {
-      key: string
-      name: string
-      enabled: boolean
-      shadowed: boolean
-      /**
-       * 结构是否完整（缺 frontmatter / 名字非法 / 描述为空 → false）。
-       * false 的技能 core 一律拒绝启停，勾了也不生效，界面据此禁掉勾选。
-       */
-      loadable: boolean
-      rootKey: string
-      rootLabel: string
-      rootLocaleKey?: string
-      rootKind?: string
-    }
-
-    /**
-     * 场景档案「技能集」的技能行 —— 技能名与来源名**分开**给出。
-     *
-     * 界面早先直接渲染 `key`（形如 `<来源 key>/<技能名>`），而自定义目录的来源 key 是
-     * `custom-<sha256-16>`，于是导入的技能在场景档案里显示成一串哈希（用户 2026-09-15 报的）。
-     * 这里把来源的 label / localeKey 一并带上，界面就能显示「技能名 · 来源名」。
-     *
-     * 含被覆盖的副本（`shadowed`）：场景允许勾选任意一条技能，用生效集校验会把合法勾选判成 stale。
-     */
-    async function skillRows(): Promise<SceneSkillRow[]> {
-      const rows: SceneSkillRow[] = []
-      try {
-        const r: any = await skillsService.ops['skill-state']({})
-        for (const root of ((r && r.data && r.data.roots) || [])) {
-          const rootKey = String((root && root.key) || '')
-          if (!rootKey) continue
-          for (const sk of ((root && root.skills) || [])) {
-            const name = String((sk && (sk.declaredName || sk.name)) || '')
-            if (!name) continue
-            rows.push({
-              key: rootKey + '/' + name,
-              name,
-              enabled: sk.enabled === true && !sk.shadowedBy,
-              shadowed: !!sk.shadowedBy,
-              loadable: sk.loadable !== false,
-              rootKey,
-              rootLabel: String((root && root.label) || rootKey),
-              ...(root && root.localeKey ? { rootLocaleKey: String(root.localeKey) } : {}),
-              ...(root && root.kind ? { rootKind: String(root.kind) } : {}),
-            })
-          }
-        }
-      } catch { /* 技能状态读不到 → 空列表（界面如实显示"没有可选项"） */ }
-      // 平铺列表按技能名排（同名再按来源），比按来源聚在一起更好找。
-      return rows.sort((a, b) => a.name.localeCompare(b.name) || a.rootKey.localeCompare(b.rootKey))
-    }
     const archiveService = createArchiveEngine({
-      loadSlice: async () => ({ ...(await rulesService.readArchiveSlice()) }),
-      saveSlice: (slice) => rulesService.patchIndex(slice),
+      loadSlice: async () => ({ ...(await memoriesService.readArchiveSlice()) }),
+      saveSlice: (slice) => memoriesService.patchIndex(slice),
       configuredServers: async () => {
-        const r: any = await mcpmListView()
+        const r: any = await mcp.mcpmListView()
         const out: string[] = []
         for (const row of ((r && r.rows) || [])) {
           const n = String((row && row.serverName) || '')
@@ -609,10 +388,10 @@ export default {
       },
       serverKnownTools: async () => {
         const out: Record<string, string[]> = {}
-        const raw = await readDisabledTools()
+        const raw = await mcp.readDisabledTools()
         for (const [server, list] of Object.entries(raw)) out[server] = list.filter((t) => t !== '*')
         // 「已知工具」缓存：未运行服务器也能按最后见过的名单计算补集。
-        for (const [server, list] of Object.entries(await readKnownMcpTools())) {
+        for (const [server, list] of Object.entries(await mcp.readKnownMcpTools())) {
           out[server] = [...new Set([...(out[server] || []), ...list.map((item) => item.name)])].sort()
         }
         let schemas: any[] = []
@@ -625,14 +404,9 @@ export default {
         }
         return out
       },
-      currentMcpRaw: () => readDisabledTools(),
+      currentMcpRaw: () => mcp.readDisabledTools(),
       applyMcpEntries: async (entries: Record<string, string[]>) => {
-        const p = await ensurePaths()
-        await withWriteLock(async () => {
-          await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), entries)
-        })
-        disabledToolsCache = { at: Date.now(), value: entries }
-        scheduleToolRestrictions()
+        await mcp.writeDisabledTools(entries)
       },
       knownSkillKeys: async () => new Set(Object.keys(await skillStates())),
       // 档案保存校验用：被同名覆盖的副本与结构不完整的技能都不算「可勾选」（见 selectableSkillKeys）。
@@ -670,7 +444,7 @@ export default {
       // 技能级的 enable 会被 core 的 sourceEnabled 判定直接吞掉。
       // 只报**补丁文件里真实存在**的行（level = project/global）；loader 级条目改不了补丁。
       mcpServerStates: async () => {
-        const r: any = await mcpmListView()
+        const r: any = await mcp.mcpmListView()
         const out: Array<{ id: string; serverName: string; level: string; disabled: boolean }> = []
         for (const row of ((r && r.rows) || [])) {
           const level = String((row && row.level) || '')
@@ -686,7 +460,7 @@ export default {
       },
       applyMcpServerSwitches: async (switches) => {
         for (const s of switches) {
-          const r: any = await mcpmSetEnabled({ id: s.id, level: s.level, enabled: s.enabled })
+          const r: any = await mcp.ops['mcpm-set-enabled']({ id: s.id, level: s.level, enabled: s.enabled })
           if (r && r.ok === false) throw new Error(`MCP 服务器 ${s.id} ${s.enabled ? '启用' : '停用'}失败：${r.error}`)
         }
         // 补丁改动由宿主热重载（实测 ≤5s）。这里**不等**，避免进入模式被拖住十几秒；
@@ -694,21 +468,19 @@ export default {
       },
       // 场景备注（v0.8.1）：备注写在 hub 内的 `mcp-notes.json`（按 loader id），
       // 场景档案按 serverName 存 —— 引擎负责映射与读写，与 mcpm-note 同一条写锁。
-      currentMcpNotes: async () => ({ ...(await readNotes()) }),
+      currentMcpNotes: async () => ({ ...(await mcp.readNotes()) }),
       applyMcpNotes: async (entries) => {
-        await withWriteLock(async () => {
-          const map = Object.assign({}, await readNotes(true))
+        // 映射规则（按 serverName 存的档案 → 按 loader id 存的备注）留在引擎这一侧，
+        // manager 只负责「在写锁内读-改-写」这一件事。
+        await mcp.updateNotes((map) => {
           for (const e of entries) {
             if (e.note) map[e.id] = e.note
             else delete map[e.id]
           }
-          const p = await ensurePaths()
-          await writeJsonFile(mcpSidecar(MCP_NOTES_FILE), map)
-          notesCache = { at: Date.now(), value: map }
         })
       },
       mcpIdOfServer: async (serverName) => {
-        const r: any = await mcpmListView()
+        const r: any = await mcp.mcpmListView()
         for (const row of ((r && r.rows) || [])) {
           if (String(row.serverName || row.id) === serverName) return String(row.id)
         }
@@ -761,7 +533,7 @@ export default {
         }
       },
       sceneExists: async (name) => {
-        const r: any = await rulesService.ops['rules-list']({})
+        const r: any = await memoriesService.ops['rules-list']({})
         return !!(r && r.ok !== false && (r.scenes || []).some((s: any) => s.name === name))
       },
       // 人设名全集（保存 subagents 段时校验并报 stale，与 mcp/skills 两段同口径）。
@@ -778,7 +550,7 @@ export default {
       },
       // 记忆 id 全集。引擎已不消费（memories 段 P5 起废弃），实现保留以维持接口形状。
       knownMemoryIds: async () => {
-        const r: any = await rulesService.ops['rules-list']({})
+        const r: any = await memoriesService.ops['rules-list']({})
         return new Set<string>(((r && r.rules) || []).filter((x: any) => !x.shadowed).map((x: any) => String(x.id)))
       },
     })
@@ -787,10 +559,10 @@ export default {
     // 人设 = $DSH_HOME/tool-management/subagents/<name>.md；运行走官方 ctx.subagents.start（spawn provider）。
     // sceneLists 供场景绑定校验：启用场景（rules-list 的 active 行）档案里的 subagents 并集。
     // stateDir 与 rules 共用同一个覆盖键（测试注入一致）；子智能体开关存 <stateDir>/subagents-index.json。
-    const subagentService = createSubagentService(ctx, { stateDir: String((config as { rulesStateDir?: unknown } | undefined)?.rulesStateDir || '') })
+    const subagentService = createSubagentService(ctx, { stateDir: String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || '') })
     const subagentSceneLists = async (): Promise<string[][]> => {
-      const slice = await rulesService.readArchiveSlice()
-      const r: any = await rulesService.ops['rules-list']({})
+      const slice = await memoriesService.readArchiveSlice()
+      const r: any = await memoriesService.ops['rules-list']({})
       if (!r || r.ok === false) return []
       return (r.scenes || [])
         .filter((s: any) => s.active)
@@ -813,9 +585,6 @@ export default {
       sceneLists: subagentSceneLists,
     })
     // ⚠️ 取数必须用 mcpmRowsWithNotes(false)：true 会带上**未打码**的 url/headers/env（含明文密钥）。
-    const mcpStateCatalog = createMcpStateCatalog({
-      rows: () => mcpmRowsWithNotes(false),
-    })
     // 技能目录与提示词两个域是**官方载体的兜底**：预设挂得到官方
     // dsh-tool-skill / dsh-agent-instructions 时注入侧会跳过它们（见 context-inject.ts 的
     // CARRIER_FACT_OF），挂不到（极简）时才由这里送 —— 所以极简下也能按开关决定要不要。
@@ -870,27 +639,6 @@ export default {
       })
     }
 
-    // 注入判定要的两条预设事实（压制型？挂得到 AGENTS.md 通道？）。读取走 TTL 缓存：
-    // 组合文件可以随时被编辑（patchReload: live），但每个 step 读一次盘没有必要。
-    const PRESET_FACTS_TTL_MS = 15_000
-    const presetFactsCache = new Map<string, { at: number; value: ReturnType<typeof injectionFactsOf> }>()
-    async function presetFactsForAgent(agent: unknown): Promise<ReturnType<typeof injectionFactsOf>> {
-      const roster = presetRoster()
-      if (!roster || typeof roster.composedPreset !== 'function' || typeof roster.read !== 'function') return undefined
-      let presetId = ''
-      try {
-        presetId = String(roster.composedPreset((agent as { ctx?: unknown } | null | undefined)?.ctx) ?? '')
-      } catch { return undefined }
-      if (presetId === '') return undefined
-      const hit = presetFactsCache.get(presetId)
-      if (hit && Date.now() - hit.at < PRESET_FACTS_TTL_MS) return hit.value
-      try {
-        const text = String((await roster.read(presetId)) ?? '')
-        const value = injectionFactsOf(readCompositionFacts(text))
-        presetFactsCache.set(presetId, { at: Date.now(), value })
-        return value
-      } catch { return undefined }
-    }
 
     // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的五域文本。
     // 挂在 apply 作用域：`injection-live` op 与注入器不在同一层（effect 内部）。
@@ -923,8 +671,8 @@ export default {
           // 技能目录与 MCP 状态是"操作这台机器所需的事实"（子代理手里就有 `skill` / `mcp__*`
           // 工具，不知道清单就只能瞎调）。
           domains: () => [
-            { key: 'memory', name: 'tool-management:scene-memory', label: '场景和记忆', form: 'snapshot', text: () => rulesService.memoryText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: () => mcpStateCatalog.text() },
+            { key: 'memory', name: 'tool-management:scene-memory', label: '场景和记忆', form: 'snapshot', text: () => memoriesService.memoryText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: () => mcp.stateCatalog.text() },
             { key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog', text: () => skillCatalog.text() },
             {
               key: 'subagents',
@@ -934,10 +682,10 @@ export default {
               text: (agent) => subagentCatalog.text(agent),
               applicableTo: (agent) => subagentCatalog.catalogVisibleAt(subagentDepthOf(agent)),
             },
-            { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: () => rulesService.promptText(), files: () => rulesService.promptFiles() },
+            { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: () => memoriesService.promptText(), files: () => memoriesService.promptFiles() },
           ],
           settings: () => injectSettingsSync(),
-          factsFor: (agent) => presetFactsForAgent(agent),
+          factsFor: (agent) => candidates.presetFactsForAgent(agent),
         })
         contextInjectorLive = () => injector.live()
         contextInjectorNote = (toolName, agent) => injector.noteToolUse(toolName, agent)
@@ -950,9 +698,9 @@ export default {
     // 预热放到下一轮事件循环：此时 apply 的同步初始化（补丁路径、tools 服务…）已全部完成，
     // 避免在初始化中途就去读 MCP 补丁与工具 schema。
     setTimeout(() => {
-      void subagentCatalog.warm()
-      void mcpStateCatalog.warm()
-      void skillCatalog.warm()
+      void subagentCatalog.warm().catch(() => { /* 预热失败只影响首屏速度，下次读会重建 */ })
+      void mcp.stateCatalog.warm().catch(() => { /* 同上 */ })
+      void skillCatalog.warm().catch(() => { /* 同上 */ })
     }, 0)
     // 技能写操作成功后立即重算目录（SWR：text() 同步返回缓存值，写后主动 refresh）。
     // 与下面人设目录同一手法：写入口只有 service 的 writeOps，不需要在界面层逐个补。
@@ -961,7 +709,7 @@ export default {
       if (typeof original !== 'function') continue
       skillsService.ops[opName] = async (args: any) => {
         const result = await original(args)
-        if (result && result.ok !== false) void skillCatalog.refresh()
+        if (result && result.ok !== false) void skillCatalog.refresh().catch(() => { /* SWR 主动刷新失败只影响缓存新鲜度，下次读会重建，不该带崩写操作的结果 */ })
         return result
       }
     }
@@ -972,7 +720,7 @@ export default {
       if (typeof original !== 'function') continue
       subagentService.ops[opName] = async (args: any) => {
         const result = await original(args)
-        if (result && result.ok !== false) void subagentCatalog.refresh()
+        if (result && result.ok !== false) void subagentCatalog.refresh().catch(() => { /* 同上：刷新失败不影响本次写操作的结果 */ })
         return result
       }
     }
@@ -983,7 +731,7 @@ export default {
      */
     async function rebindSubagentInArchives(from: string, to: string): Promise<number> {
       try {
-        const slice = await rulesService.readArchiveSlice()
+        const slice = await memoriesService.readArchiveSlice()
         const archives = { ...(slice.archives || {}) }
         let changed = 0
         for (const [scene, archive] of Object.entries(archives)) {
@@ -992,7 +740,7 @@ export default {
           archives[scene] = { ...(archive as Record<string, unknown>), subagents: list.map((n) => (n === from ? to : n)) } as typeof archive
           changed++
         }
-        if (changed) await rulesService.patchIndex({ archives })
+        if (changed) await memoriesService.patchIndex({ archives })
         return changed
       } catch {
         return 0
@@ -1005,7 +753,7 @@ export default {
      */
     async function renameSubagentInSnapshot(from: string, to: string): Promise<void> {
       try {
-        const slice: any = await rulesService.readArchiveSlice()
+        const slice: any = await memoriesService.readArchiveSlice()
         const mode: any = slice && slice.mode
         const snapshot: any = mode && mode.snapshot
         if (!snapshot) return
@@ -1026,7 +774,7 @@ export default {
             changed = true
           }
         }
-        if (changed) await rulesService.patchIndex({ mode: { ...mode, snapshot: next } })
+        if (changed) await memoriesService.patchIndex({ mode: { ...mode, snapshot: next } })
       } catch { /* 快照同步失败不阻断改名本身；残留与修复前一致 */ }
     }
     const baseSubagentUpdate = subagentService.ops['subagent-update']
@@ -1051,7 +799,7 @@ export default {
         // 都意味着先退出当前模式 —— 当前模式场景处于锁定状态时一律拒绝。
         // 目标就是当前场景 = 无操作，放行（引擎自己会 early-return）。
         try {
-          const slice = await rulesService.readArchiveSlice()
+          const slice = await memoriesService.readArchiveSlice()
           const current = slice.mode && slice.mode.scene
           if (current && args && 'scene' in (args || {})) {
             const target = args.scene == null ? null : String(args.scene).trim() || null
@@ -1067,8 +815,8 @@ export default {
         if (res && res.ok !== false) {
           // 进/退/切换模式会改 MCP 启停（服务器级）与备注（场景备注覆盖/恢复），
           // 状态段必须立即重算 —— 场景退出后下一次请求就该看到恢复的全局备注与启停。
-          void subagentCatalog.refresh()
-          void mcpStateCatalog.refresh()
+          void subagentCatalog.refresh().catch(() => { /* 同上 */ })
+          void mcp.stateCatalog.refresh().catch(() => { /* 同上 */ })
         }
         return res
       }
@@ -1086,7 +834,7 @@ export default {
         const res: any = await baseSceneArchiveSave(args)
         try {
           const bound = res && res.ok !== false && res.archive && Array.isArray(res.archive.subagents) ? res.archive.subagents as string[] : []
-          const slice = await rulesService.readArchiveSlice()
+          const slice = await memoriesService.readArchiveSlice()
           const mode = slice.mode
           if (mode && mode.scene === res.scene) {
             const every = (await subagentService.list()).map((p) => p.name)
@@ -1105,7 +853,7 @@ export default {
               const offList = Array.isArray(snapshot.subagentsOn) ? snapshot.subagentsOn.slice() : []
               for (const n of toOn) if (backOn.indexOf(n) < 0) backOn.push(n)
               for (const n of toOff) if (backOn.indexOf(n) < 0 && offList.indexOf(n) < 0) offList.push(n)
-              await rulesService.patchIndex({ mode: { ...mode, snapshot: { ...snapshot, subagents: backOn, subagentsOn: offList } } })
+              await memoriesService.patchIndex({ mode: { ...mode, snapshot: { ...snapshot, subagents: backOn, subagentsOn: offList } } })
             }
           }
         } catch { /* 联动失败不阻断档案保存本身；开关会在下次进/退模式时对齐 */ }
@@ -1113,91 +861,44 @@ export default {
       }
     }
 
-    // HTTP 写操作门禁清单。skills/rules/档案引擎域由各自 service 导出的 writeOps 派生
-    // （与其 ops 表同文件维护，新增写 op 改对应 service 即可）；本文件内联域
-    // （mcpm-* / skill-open / agentsmd-* / history-*）在此列举。
-    // 注意：必须在上述 service 创建之后构造（依赖其 writeOps）。
-    const WRITE_OPS = new Set<string>([
-      ...skillsService.writeOps,
-      ...rulesService.writeOps,
-      ...archiveService.writeOps,
-      ...subagentService.writeOps,
-      'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
-      'mcpm-compact',
-      'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
-      // mcpm-tools-refresh 为了拿实时工具表会临时启用目标服务器、结束后恢复原状（两次
-      // writePatch），恢复失败还会停留在启用态 —— 是写不是读，按写门禁（与 mcpm-restart
-      // 已在清单同理；0.6.0/0.7.0 已有两次写 op 漏列前科）。
-      'mcpm-tools-refresh',
-      // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
-      // token-gated like a write — on a LAN-exposed port the token must be the
-      // last line of defense for plaintext credentials too, not just writes.
-      'mcpm-reveal',
-      'skill-open',
-      // 提示词写操作（create/update/remove 改预设库；apply 写全局 AGENTS.md；import 从外部内容建预设）
-      'agentsmd-create', 'agentsmd-update', 'agentsmd-apply', 'agentsmd-remove', 'agentsmd-import',
-      // 提示词预设的回收站（恢复 / 永久删除都是写）
-      'agentsmd-trash-restore', 'agentsmd-trash-delete',
-      // history 写操作（archive/unarchive 改归档集合；delete 永久删除；retention-set 写保留期；
-      // workspace-register 会新增一条宿主工作区登记，同样是写）
-      'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
-      'history-unarchive-batch', 'history-delete-batch', 'history-import', 'history-export',
-      // 通用导出：往用户指定的目录写文件，按写操作门禁（token）。
-      'bundle-export',
-      'history-archive-batch', 'history-workspace-register',
-      // 注入设置（五个域开关 / 压制型预设口径）写侧车，按写操作门禁。
-      'inject-settings',
-    ])
-
-    // 会泄露明文凭据 / 完整配置的 op：**必须**带对的访问令牌，没配令牌就一律拒绝
-    // （判定在 http-fence.ts 的 secretOpRejection，含两种情况的区分与理由）。
-    const SENSITIVE_OPS = new Set<string>(['mcpm-reveal', 'mcpm-export'])
+    // HTTP 写 / 敏感 op 白名单（2026-09-19 抽到 ./request-gate.ts）：四个 service 自报的
+    // writeOps，加上本文件内联域（mcpm-* / skill-open / agentsmd-* / history-*）。
+    const { WRITE_OPS, SENSITIVE_OPS } = createOpWhitelist({
+      writeOps: {
+        skills: skillsService.writeOps,
+        memories: memoriesService.writeOps,
+        archives: archiveService.writeOps,
+        subagents: subagentService.writeOps,
+      },
+    })
 
     // 兼容体检的日志去重：同一宿主版本只写一条 compat/probe，避免轮询刷屏。
-    let compatLoggedFor: string | undefined
+    // 用对象持有（而不是 let）是因为这份状态要传给 ops/compat.ts —— 它跨调用可变，
+    // 传引用才能让"记到哪一次"两侧都看见。
+    const compatLog: { version?: string } = {}
 
-    // ---------- independent history facade ----------
-    // Keep the active workspaceRegistry/sessionProjectionCache instances intact.
-    // Native archive extensions are delegated by capability, not package name.
-    // Official gaps use a checked adapter (history/bridge.js); no service or
-    // storage-domain replacement. Retention uses the existing sidecar ledger.
-    // 历史侧车三件套（归档时刻账本 / 保留期设置 / 工作区登记快照）统一放 hub 根
-    // （`$DSH_HOME/tool-management/`），**不放插件目录**：npm 安装下插件目录会被
-    // `dsh plugin update` 整体替换，放那里等于"升级即丢账本"——账本一丢，保留期基线
-    // 就从 archivedAt 退回 createdAt，归档会话会被提前清掉（v0.4 把提示词预设
-    // 搬进 hub 是同一条理由，见上方注释；这三个是当时漏掉的）。
-    // 旧位置（插件目录 data/）在启动时一次性搬入：只搬不删、绝不覆盖、失败下次再试。
-    const historyArchivedAtFile = String((config as { archivedAtFile?: unknown } | undefined)?.archivedAtFile || hubPath('history-archived-at.json'))
-    const historyWorkspaceSnapshotFile = String((config as { workspaceSnapshotFile?: unknown } | undefined)?.workspaceSnapshotFile || hubPath('history-workspaces.json'))
-    const historyRetentionPath = String((config as { historyRetentionPath?: unknown } | undefined)?.historyRetentionPath || hubPath('history-retention.json'))
-    const historySidecarFiles = new Set(['history-archived-at.json', 'history-retention.json', 'history-workspaces.json'])
-    const historyStandby = relocateEntries(join(PLUGIN_ROOT, 'data'), hubRoot(), (name) => historySidecarFiles.has(name))
-      .catch(() => 0)
-    const sweepIntervalMs = Number((config as { sweepIntervalMs?: unknown } | undefined)?.sweepIntervalMs || 0) || 6 * 60 * 60 * 1000
-    let history: InstanceType<typeof HistoryService> | undefined
-    ctx.effect(() => {
-      const registry = ctx.get('workspaceRegistry')
-      if (registry && typeof (registry as any).archiveSession === 'function') {
-        history = new HistoryService(ctx, registry, {
-          archivedAtFile: historyArchivedAtFile,
-          workspaceSnapshotFile: historyWorkspaceSnapshotFile,
-          ready: historyStandby,
-        })
-      }
-      return async () => { const current = history; history = undefined; await current?.dispose() }
-    }, 'dsh-plugin-tool-management: independent history')
-    function getHistoryRegistry(): HistoryRegistry | undefined {
-      return history as unknown as HistoryRegistry | undefined
-    }
+    // 注册不上工具时的如实清单（`subagent_manager_*`，见下方 "子智能体工具" 一节）：
+    // 以前只有一行 console.error，模型侧「查无此工具」、界面没有任何痕迹。这里把失败
+    // 记下来，再由 `subagent-list`（页面横幅）与 `preset-tools`（工具列表接口）带出去。
+    const subagentToolFailures: Array<{ name: string; reason: string }> = []
+    // 用对象持有（而不是 let + 数组两件）：注册失败的记录要传给 tools/subagent.ts 去 push，
+    // 而界面（子智能体页黄条）与 preset-tools 的 `unavailable` 读的是同一份数组 —— 传引用
+    // 才能让"记到哪一条"两侧都看见。`logged` 保证控制台只报一次。
+    const subagentFailures = { list: subagentToolFailures, logged: false }
+
+    // 归档会话域（2026-09-19 抽到 ./sessions/history.ts）：侧车账本落点与搬迁、
+    // 保留期设置与到期清扫、批量操作目标校验、归档列表分组视图。构造实例、首次清扫、
+    // 挂周期定时器都在工厂内完成 —— 它们原本就写在 apply() 的同一位置。
+    const history = createHistoryDomain({ ctx, config, pluginRoot: PLUGIN_ROOT, message })
+
     // ── 场景提示词 → 全局基线（AGENTS.md）同步 ────────────────────────────────
     //
     // 用户裁定（2026-09-15）：「切换场景，对应的提示词直接把 AGENTS.md 直接修改」。
     // 实现收在 ./scene-prompt-sync.ts（可在临时目录上端到端验证）：启用/切换场景、
     // 关掉场景、改绑定、编辑"驱动基线的那份预设"四个动作都会同步；关掉场景时按
     // 进场景前的基线快照（`scene-baseline.json`，hub 内）原文写回。
-    const scenePromptSync = createScenePromptSync({
-      agentsMd: agentsMdService,
-      rules: rulesService,
+    const scenePromptSync = createScenePromptSync({      prompts: promptsService,
+      rules: memoriesService,
       baselineFile: hubPath('scene-baseline.json'),
       logger: ctx.logger,
     })
@@ -1210,23 +911,6 @@ export default {
     const withAgentsMdSync = (res: any): Promise<any> => scenePromptSync.withSync(res)
 
     /**
-     * 恢复归档后的**归属恢复**（best-effort，绝不阻断恢复本身）：按会话 cwd 找到或重建
-     * 工作区登记，并把会话挂回该登记的 `sessionIds`。恢复成功但归属恢复失败时返回 undefined，
-     * 由客户端按"会话已恢复、工作区归属未恢复"如实呈现。
-     */
-    async function restoreWorkspaceAccounting(sessionIds: string[]): Promise<{
-      registered: Array<{ path: string; title: string; created: boolean }>
-      attached: string[]
-      skipped: Array<{ sessionId: string; reason: string }>
-    } | undefined> {
-      const registry = getHistoryRegistry()
-      if (!registry || typeof registry.ensureWorkspaceAccounting !== 'function' || !sessionIds.length) return undefined
-      try { return await registry.ensureWorkspaceAccounting(sessionIds) } catch (e) {
-        ctx.logger?.warn?.(`history: workspace accounting after restore failed: ${message(e)}`)
-        return undefined
-      }
-    }
-    /**
      * **应用提示词预设的唯一入口**（界面 op 与模型工具共用）。
      *
      * 场景接管期间（启用场景 / 全局绑定在驱动基线）：
@@ -1237,12 +921,12 @@ export default {
      * 锁定由 `guardLockedOps` 挡住（agentsmd-apply 在冻结清单里）；模型工具
      * `prompt_manager_apply` 不经过 handlers，execute 里自带 `lockedSceneGuard`（F-001）。
      */
-    async function applyPresetGuarded(id: string): Promise<{ ok: true; id: string; backedUp?: boolean; viaScene?: boolean } | { ok: false; error: string; code?: string; params?: Record<string, string> }> {
+    async function applyPresetGuarded(id: string): Promise<{ ok: true; id: string; backedUp?: boolean; viaScene?: boolean; scene?: string } | { ok: false; error: string; code?: string; params?: Record<string, string> }> {
       const driver = await scenePromptSync.driver()
       if (driver) {
         const target = String(id ?? '').trim()
         if (driver.presetId !== target) {
-          const rebound: any = await rulesService.ops['rules-update-scene']({ name: driver.scene, prompt: target })
+          const rebound: any = await memoriesService.ops['rules-update-scene']({ name: driver.scene, prompt: target })
           if (!rebound || rebound.ok === false) {
             return {
               ok: false,
@@ -1254,9 +938,11 @@ export default {
         }
         const r = await scenePromptSync.sync()
         if (r.error) return { ok: false, error: r.error }
-        return { ok: true, id, viaScene: true }
+        // 带上场景名：调用方要能如实告诉用户「改的是哪个场景的绑定」，而不是笼统说
+        // 「已应用到 AGENTS.md」——场景驱动时写进 AGENTS.md 的内容来自场景绑定。
+        return { ok: true, id, viaScene: true, scene: driver.label }
       }
-      return agentsMdService.apply(id)
+      return promptsService.apply(id)
     }
 
     /** 删除拒绝里的引用说明（人话；与界面标签同一套结构化事实）。 */
@@ -1266,93 +952,20 @@ export default {
       return '~/.dsh/AGENTS.md 当前内容就是它'
     }
 
-    async function readHistoryRetention(): Promise<{ retentionDays: number; updatedAt: number }> {
-      try {
-        await historyStandby
-        const raw = await readFile(historyRetentionPath, 'utf8')
-        const obj = JSON.parse(raw)
-        const days = Number((obj && (obj as { retentionDays?: unknown }).retentionDays) ?? 0)
-        const updatedAt = Number((obj && (obj as { updatedAt?: unknown }).updatedAt) ?? 0)
-        return {
-          retentionDays: Number.isFinite(days) && days >= 0 ? days : 0,
-          updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0,
-        }
-      } catch { return { retentionDays: 0, updatedAt: 0 } }
-    }
-    async function writeHistoryRetention(retentionDays: number): Promise<void> {
-      await historyStandby
-      const dir = dirname(historyRetentionPath)
-      await mkdir(dir, { recursive: true })
-      // updatedAt = 修改时刻：每次改保留期，已归档会话的到期基线重置为此时刻。
-      await writeFile(historyRetentionPath, JSON.stringify({ retentionDays, updatedAt: Date.now() }), 'utf8')
-    }
-    /**
-     * 计算到期应删的归档会话。基线 = max(archivedAt（账本）?? createdAt（元数据),
-     * updatedAt（最近一次修改保留期的时刻）)。改保留期即重置倒计时：到期时刻从
-     * 修改时刻起按新天数重新计算；updatedAt 缺失（旧配置）时退回归档时刻语义。
-     * retentionDays <= 0 表示永久不删除，返回空集。纯函数：便于测试。
-     */
-    function expiredArchivedIds(
-      items: Array<{ sessionId: string; createdAt?: number; archivedAt?: number }>,
-      retentionDays: number,
-      now: number,
-      updatedAt = 0,
-    ): string[] {
-      if (!(retentionDays > 0)) return []
-      const cutoff = now - retentionDays * 86400000
-      const out: string[] = []
-      for (const it of items) {
-        const archived = (typeof it.archivedAt === 'number' && Number.isFinite(it.archivedAt))
-          ? it.archivedAt
-          : (typeof it.createdAt === 'number' && Number.isFinite(it.createdAt) ? it.createdAt : undefined)
-        if (archived === undefined) continue
-        const baseline = updatedAt > 0 ? Math.max(archived, updatedAt) : archived
-        if (baseline <= cutoff) out.push(it.sessionId)
-      }
-      return out
-    }
-    async function sweepHistory(): Promise<{ swept: string[] }> {
-      const registry = getHistoryRegistry()
-      if (!registry) return { swept: [] }
-      const { retentionDays, updatedAt } = await readHistoryRetention()
-      if (!(retentionDays > 0)) return { swept: [] }
-      try {
-        const details = (typeof registry.archivedSessionDetails === 'function')
-          ? (await registry.archivedSessionDetails()).items
-          : (await registry.archivedSessionMetadata()).items.map((i) => ({ sessionId: i.sessionId, createdAt: i.createdAt, archivedAt: registry.archivedAt?.(i.sessionId) }))
-        const expired = expiredArchivedIds(details, retentionDays, Date.now(), updatedAt)
-        if (expired.length === 0) return { swept: [] }
-        const res = await registry.deleteArchivedSessions({ scope: 'sessions', sessionIds: expired })
-        return { swept: res.deletedSessionIds || [] }
-      } catch (e) {
-        console.error('[dsh-plugin-tool-management] history sweep failed:', message(e))
-        return { swept: [] }
-      }
-    }
-    // 启动时扫一次，再周期复跑。fake-ctx 测试里 ctx.effect 立即调用并 dispose，
-    // interval 未提供时退化为不挂钟（不阻塞测试）。
-    try {
-      void sweepHistory()
-    } catch { /* 非致命 */ }
-    try {
-      ctx.effect(() => {
-        const timer = ctx as unknown as { interval?: (cb: () => void, ms: number) => () => void; setInterval?: (cb: () => void, ms: number) => () => void }
-        const fn = typeof timer.interval === 'function' ? timer.interval : (typeof timer.setInterval === 'function' ? timer.setInterval : undefined)
-        if (!fn) return () => {}
-        return fn(() => { void sweepHistory() }, sweepIntervalMs)
-      }, 'dsh-plugin-tool-management: history sweep')
-    } catch { /* timer 缺失时静默 */ }
-
     // ---------- path discovery ----------
-    // Known limitation: profile detection probes 'web' then 'headless' by
-    // presence of profiles/<name>/cordis.patch.yml, then falls back to any
-    // profile that has one, and finally to 'web'. A profile whose directory
-    // name matches none of these and has no patch file yet is not detected.
+    // Known limitation: profile detection probes PROFILE_CANDIDATES ('web' then
+    // 'headless', see host-names.ts) by presence of profiles/<name>/cordis.patch.yml,
+    // then falls back to any profile that has one, and finally to
+    // DEFAULT_PROFILE_NAME. A profile whose directory name matches none of these
+    // and has no patch file yet is not detected.
     let cached: { home: string; profileDir: string; profileName: string; projectPatch: string; globalPatch: string } | null = null
     async function ensurePaths() {
       if (cached) return cached
       let home: string | null = null
       try {
+        // 注意：这里的 home 来自宿主文档路径的切片，与 `skills/core.js` 的
+        // `resolveDshHome()`（`$DSH_HOME` ‖ `~/.dsh`）是**两条独立来源**，本插件同时用着两者。
+        // 不合并是有意的：合并会改变所有 profile 补丁的落点，属于行为变更，留给结构性重构那一档。
         const doc = await settings.prepareDocument()
         if (typeof doc === 'string' && doc) {
           const i = Math.max(doc.lastIndexOf('\\'), doc.lastIndexOf('/'))
@@ -1362,8 +975,8 @@ export default {
       if (!home) throw new Error('无法确定 DSH 主目录（settings.prepareDocument 未返回路径）')
       const sep = home.indexOf('\\') >= 0 ? '\\' : '/'
       let profileDir: string | null = null
-      let profileName = 'web'
-      for (const name of ['web', 'headless']) {
+      let profileName = DEFAULT_PROFILE_NAME
+      for (const name of PROFILE_CANDIDATES) {
         if (await exists(home + sep + 'profiles' + sep + name + sep + 'cordis.patch.yml')) {
           profileDir = home + sep + 'profiles' + sep + name
           profileName = name
@@ -1384,7 +997,7 @@ export default {
           }
         } catch (e) { /* ignore */ }
       }
-      if (!profileDir) profileDir = home + sep + 'profiles' + sep + 'web'
+      if (!profileDir) profileDir = home + sep + 'profiles' + sep + DEFAULT_PROFILE_NAME
       cached = {
         home,
         profileDir,
@@ -1449,6 +1062,101 @@ export default {
       } catch (e) { /* pruning is best-effort */ }
     }
 
+    /**
+     * 备份名：`cordis.patch.yml[.<层级标签>].bak-<时间戳>`。
+     *
+     * ⚠ 不能用 `hub.ts` 的 `isPatchBackupName` 来列目录：它只认**没有层级标签**的老名字
+     * （`cordis.patch.yml.bak-<时间戳>`，那是备份还堆在 `$DSH_HOME` 根下的时期的产物），
+     * 而现在 `backupPatchFile` 写出来的名字都带 `.global` / `.profile-<名>` 标签 ——
+     * 用它列目录会得到 0 份。它的用途是启动期搬运旧文件，语义不同，别混。
+     */
+    function isBackupFileName(name: string): boolean {
+      return /^cordis\.patch\.yml(?:\.[A-Za-z0-9._-]+)?\.bak-\d{8}-\d{6}$/.test(basename(String(name || '')))
+    }
+
+    /**
+     * 一份备份属于**哪一份 patch**（备份名里的层级标签）。
+     *
+     * 保留 N 份必须按层级分别算 —— 全局一份、每个 profile 一份，各自独立留 N 份
+     * （这才是 `KEEP_PATCH_BACKUPS` 的真实语义；全局共 N 份会把别的层级的备份挤掉）。
+     * 更早期的备份没有标签，统一归到 `legacy`，同样单独留 N 份。
+     */
+    function backupLevelOf(name: string): string {
+      if (/\.global\.bak-/.test(name)) return 'global'
+      const m = /\.profile-([^.]+)\.bak-/.exec(name)
+      return m ? 'profile:' + m[1] : 'legacy'
+    }
+
+    /** `hub/backups/` 里的 patch 备份清单（只读；新的在前）。 */
+    async function listPatchBackups(): Promise<Array<{ name: string; level: string; mtime: number; size: number }>> {
+      const dir = hubBackupDir()
+      let names: string[]
+      try { names = await readdir(dir) } catch { return [] }
+      const out: Array<{ name: string; level: string; mtime: number; size: number }> = []
+      for (const name of names) {
+        if (!isBackupFileName(name)) continue
+        try {
+          const st = await stat(join(dir, name))
+          if (!st.isFile()) continue
+          out.push({ name, level: backupLevelOf(name), mtime: Number(st.mtimeMs) || 0, size: Number(st.size) || 0 })
+        } catch { /* 单个文件 stat 不了就跳过，不阻断清单 */ }
+      }
+      return out.sort((a, b) => b.mtime - a.mtime)
+    }
+
+    /**
+     * 清理旧备份：**每个层级各删最旧的若干份**（`delByLevel[层级] = 份数`，该层不足就删空它）。
+     *
+     * 为什么需要它：每份备份都是**整份 patch 的副本**，`env` / `headers` 与 `config.token`
+     * 在里面是明文 —— 5 份备份就是 5 份明文副本，而它们常常挤在几分钟内（本机实测 4 分钟），
+     * 对"回滚"几乎没有额外价值，对"密钥扩散"却全是成本。自动剪枝只保证上限，不提供"我现在
+     * 就想把它们清掉"的出口 —— 这个 op 就是那个出口。
+     *
+     * 口径沿革（用户裁定 2026-09-19）：先是"每层留 N 份"，再改成"每层各删 N 份"，最后落到
+     * **每个层级各选一份数** —— 两个层级的份数本来就不等（实测 4 / 5），共用一个 N 时总数
+     * 只能凑出偶数、份数少的那层先被删光就断档（选 5 得到 9），选中的档位与"删了几个"对不上。
+     * 逐层各选就没这个限制，而且"这一份是从哪层删的"一一对应。
+     *
+     * 只删 `hub/backups/` 下的备份文件，**不碰活动配置**。
+     */
+    async function cleanPatchBackups(delByLevel: Record<string, number>): Promise<{ removed: string[]; failed: string[]; kept: number }> {
+      const dir = hubBackupDir()
+      const all = await listPatchBackups()
+      const byLevel = new Map<string, Array<{ name: string }>>()
+      for (const f of all) {
+        const list = byLevel.get(f.level)
+        if (list) list.push(f)
+        else byLevel.set(f.level, [f])
+      }
+      const doomed: string[] = []
+      // 清单新的在前 → 留下前 (份数 - 该层要删的数) 份，删掉剩下的（正是最旧的那几份）。
+      // 层级之间互不牵连：某一层份数少只影响它自己，不再有"共用一个 N"带来的断档。
+      for (const [level, list] of byLevel) {
+        const n = Math.max(0, Math.min(list.length, Math.floor(Number((delByLevel || {})[level]) || 0)))
+        for (const f of list.slice(list.length - n)) doomed.push(f.name)
+      }
+      const removed: string[] = []
+      const failed: string[] = []
+      for (const name of doomed) {
+        try { await unlink(join(dir, name)); removed.push(name) } catch { failed.push(name) }
+      }
+      return { removed, failed, kept: all.length - removed.length }
+    }
+
+    /**
+     * 写**宿主**的补丁文件（全局 + profile 各一份），是插件里唯一改宿主配置的地方。
+     *
+     * 为什么固定用 `danger-full-access`：目标是 `~/.dsh/cordis.patch.yml` 与
+     * `profiles/<名>/cordis.patch.yml`，都在插件自己的数据目录（`hub/`）之外，属于宿主配置；
+     * 写它们必须显式升级沙箱策略，没有更窄的模式可用（本文件只声明了
+     * `resolve({ mode })`，不去猜官方还有哪些模式 —— 要用别的模式得先读官方源码确认）。
+     *
+     * 调用面（19 处，务必保持收敛）：MCP 域的增 / 改 / 删 / 启停 / 全部启停 / 整理补丁 /
+     * 重启 / 导入 / 导出，以及「设置令牌」。技能 / 记忆 / 提示词 / 子智能体 / 场景 /
+     * 历史这些域**一概不经过这里**，它们只写 `hub/` 下自己的文件。
+     * 新增"要改宿主配置"的路径请走这个函数（备份与原子替换都在这里），不要绕过它自己写；
+     * 反过来，不写宿主配置的动作也不该调用它 —— 多用一次就多扩散一次策略升级。
+     */
     async function writePatch(abs: string, content: string): Promise<void> {
       const policy = await sandboxPolicy.resolve({ mode: 'danger-full-access' })
       try {
@@ -1470,401 +1178,161 @@ export default {
       }
     }
 
-    // ---------- duplicate loader-id guard ----------
-    // Two rows with the same loader id make the plugin composition fail to
-    // boot (upstream hit exactly this after renaming an entry), so duplicates
-    // are reported on read and new ones are refused before any write.
-    function duplicateIdsOf(content: string): string[] {
-      const counts = new Map<string, number>()
-      for (const row of parseRows(content).rows) {
-        if (!row.id) continue
-        counts.set(row.id, (counts.get(row.id) || 0) + 1)
-      }
-      return [...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id)
-    }
-    function duplicateGuard(before: string, after: string): { ok: false; error: string } | null {
-      const known = new Set(duplicateIdsOf(before))
-      const introduced = duplicateIdsOf(after).filter((id) => !known.has(id))
-      if (!introduced.length) return null
-      return { ok: false, error: '写入会产生重复的 loader id（重复 id 会导致 DSH 无法启动）：' + introduced.join('、') }
-    }
+    // ---------- 访问令牌：宿主侧配置的读写（兼容页就地开关） ----------
+    // 用户裁定 2026-09-18：① 没配令牌时能在面板里"设置"；② 已配时，填对令牌就能"关闭"；
+    // ③ 填过的令牌只在本次进程内有效，重启要重填。③在客户端实现（见 client.js 的 bootId 绑定），
+    // ①②在这里 —— 它们要改的是**插件自己那条 loader 行**的 config.token。
 
-    // ---------- YAML generation ----------
-    function yq(v: unknown): string { return typeof v === 'string' ? JSON.stringify(v) : String(v) }
-    function yplain(v: string): string { return /^[A-Za-z0-9_.:@%+=/-]+$/.test(v) ? v : yq(v) }
+    /** 某份补丁文件里本插件 loader 行的令牌配置。 */
+    interface LoaderTokenInfo { token: string; disabled: boolean }
 
-    function buildInsertBlock(row: { id: string; serverName: string; transport: string; url?: string; command?: string; args?: string[]; env?: Record<string, string>; headers?: Record<string, string>; toolCallTimeoutMs?: number }): string {
-      const lines = [
-        '# dsh-plugin-tool-management:server:' + row.id,
-        '- insert:',
-        '    - id: ' + yplain(row.id),
-        "      name: '@deepseek-ai/dsh-mcp-client'",
-        '      config:',
-        '        serverName: ' + yq(row.serverName),
-        '        transport: ' + yq(row.transport),
-      ]
-      if (row.transport === 'streamable-http') {
-        lines.push('        url: ' + yq(row.url || ''))
-        const headers = row.headers || {}
-        const hk = Object.keys(headers)
-        if (hk.length) {
-          lines.push('        headers:')
-          for (const k of hk) lines.push('          ' + yq(k) + ': ' + yq(headers[k]))
-        }
-      } else {
-        lines.push('        command: ' + yq(row.command || ''))
-        const args = row.args || []
-        if (args.length) {
-          lines.push('        args:')
-          for (const a of args) lines.push('          - ' + yq(a))
-        }
-        const env = row.env || {}
-        const ek = Object.keys(env)
-        if (ek.length) {
-          lines.push('        env:')
-          for (const k of ek) lines.push('          ' + yq(k) + ': ' + yq(env[k]))
-        }
-      }
-      if (row.toolCallTimeoutMs) lines.push('        toolCallTimeoutMs: ' + Number(row.toolCallTimeoutMs))
-      return lines.join('\n')
-    }
-
-    function buildDisableBlock(id: string, disabled: boolean): string {
-      return [
-        '# dsh-plugin-tool-management:' + (disabled ? 'disable' : 'enable') + ':' + id,
-        '- id: ' + yplain(id),
-        "  name: '@deepseek-ai/dsh-mcp-client'",
-        '  disabled: ' + (disabled ? 'true' : 'false'),
-      ].join('\n')
-    }
-
-    // ---------- YAML parsing (mini parser) ----------
-    // Known limitation: this hand-rolled parser assumes the exact indentation
-    // style that buildInsertBlock emits (config at 6 spaces, children at 8,
-    // nested maps/lists at 10+). Hand-edited patch files using different
-    // indentation may parse incorrectly — DSH itself only cares about the
-    // effective YAML it reads, and this parser exists purely for the UI.
-    function splitKV(text: string): { key: string; value: string } | null {
-      const m = text.match(/^("(?:\\.|[^"])*"|'[^']*'|[^:]+?)\s*:\s*(.*)$/)
-      if (!m) return null
-      return { key: unquote(m[1]), value: m[2] }
-    }
-    function unquote(v: string): any {
-      if (v === undefined || v === null) return v
-      const s = String(v).trim()
-      if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
-        try { return JSON.parse(s) } catch (e) { return s.slice(1, -1) }
-      }
-      if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1).replace(/''/g, "'")
-      if (/^\[.*\]$/.test(s)) return s.slice(1, -1).split(',').map((x) => unquote(x.trim())).filter((x) => x !== '')
-      if (s === 'true') return true
-      if (s === 'false') return false
-      if (/^-?\d+$/.test(s)) return Number(s)
-      return s
-    }
-
-    function parseEntry(lines: string[]): { id?: string; name?: string; disabled?: boolean; config: Record<string, any> } {
-      const entry: { id?: string; name?: string; disabled?: boolean; config: Record<string, any> } = { config: {} }
-      let inConfig = false
-      let configIndent = 0
-      let nested: { key: string; indent: number; type: 'map' | 'list'; current: any } | null = null
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('#')) continue
-        const indent = line.match(/^\s*/)![0].length
-        let t = trimmed
-        if (t.startsWith('- ')) t = t.slice(2).trim()
-        const kv = splitKV(t)
-        if (!kv) {
-          if (inConfig && nested && nested.type === 'list') nested.current.push(unquote(t))
-          continue
-        }
-        if (!inConfig) {
-          if (kv.key === 'config' && kv.value === '') { inConfig = true; configIndent = indent; continue }
-          if (kv.key === 'id') entry.id = unquote(kv.value)
-          else if (kv.key === 'name') entry.name = unquote(kv.value)
-          else if (kv.key === 'disabled') entry.disabled = kv.value === 'true'
-          continue
-        }
-        if (indent <= configIndent) { inConfig = false; nested = null; continue }
-        if (kv.value === '' && (kv.key === 'headers' || kv.key === 'env')) {
-          nested = { key: kv.key, indent, type: 'map', current: {} }
-          entry.config[kv.key] = nested.current
-          continue
-        }
-        if (kv.value === '' && kv.key === 'args') {
-          nested = { key: kv.key, indent, type: 'list', current: [] }
-          entry.config[kv.key] = nested.current
-          continue
-        }
-        if (nested && indent > nested.indent) {
-          if (nested.type === 'map') nested.current[kv.key] = unquote(kv.value)
-          else if (nested.type === 'list') nested.current.push(unquote(kv.value))
-          continue
-        }
-        nested = null
-        entry.config[kv.key] = unquote(kv.value)
-      }
-      return entry
-    }
-
-    function parseRows(content: string): { rows: ManagedRow[] } {
-      const lines = content.split(/\r?\n/)
-      const managedIds = new Set<string>()
-      for (const line of lines) {
-        // Markers written by either this plugin or the template upstream count
-        // as managed (coexistence: both can edit the same patch file).
-        const m = line.match(/^# (?:dsh-plugin-tool-management|dsh-mcp-manager):server:(.+)$/)
-        if (m) managedIds.add(m[1].trim())
-      }
-      const rows: ManagedRow[] = []
-      const blocks: Array<{ text: string }> = []
-      let current: { text: string } | null = null
-      for (const line of lines) {
-        if (/^- /.test(line)) {
-          current = { text: line }
-          blocks.push(current)
-        } else if (current) {
-          current.text += '\n' + line
-        }
-      }
-      for (const block of blocks) {
-        const head = block.text.split('\n')[0]
-        if (/^- insert:/.test(head)) {
-          const parts = block.text.split('\n')
-          const children: Array<{ lines: string[] }> = []
-          let j = 0
-          while (j < parts.length) {
-            if (/^    - /.test(parts[j])) {
-              const child = { lines: [parts[j]] }
-              j++
-              while (j < parts.length && !/^    - /.test(parts[j])) { child.lines.push(parts[j]); j++ }
-              children.push(child)
-            } else j++
-          }
-          for (const child of children) {
-            const entry = parseEntry(child.lines)
-            if (entry && entry.name === '@deepseek-ai/dsh-mcp-client') {
-              rows.push({ id: entry.id!, name: entry.name, disabled: entry.disabled, config: entry.config, managed: managedIds.has(entry.id!) })
-            }
-          }
-        } else {
-          // 覆盖块按**文件顺序**生效，不是"收集后统一回填"：官方
-          // `@deepseek-ai/dsh-app-boot` 的 applyEntryPatches 只给此刻已入索引的 id 打补丁
-          // （insert 是插入时立即入索引），命中不到就 warn + skip。所以写在 insert 之前的
-          // 覆盖块在宿主侧是 no-op —— 这里同样丢弃，界面才和生效值一致。
-          const entry = parseEntry(block.text.split('\n'))
-          if (entry && entry.name === '@deepseek-ai/dsh-mcp-client' && entry.disabled !== undefined) {
-            const row = rows.find((r) => r.id === entry.id)
-            if (row) row.disabled = entry.disabled
-          }
-        }
-      }
-      return { rows }
-    }
-
-    // ---------- line-based block editing ----------
-    function splitLines(content: string): string[] { return content.split(/\r?\n/) }
-    function joinLines(lines: string[]): string {
-      let res = lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').replace(/\n*$/, '\n')
-      if (!res.trim()) {
-        res = '[]\n'
-      } else if (!/^- /m.test(res) && !/^\[\]\s*$/m.test(res)) {
-        // A patch file must stay a top-level YAML array: after removing the last
-        // entry, emit [] so loadOptionalPatches never throws on a comments-only file.
-        res = res.replace(/\n*$/, '\n[]\n')
-      }
-      return res
-    }
-    function escRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
-
-    function markerRanges(lines: string[], id: string, ops: string): Array<[number, number]> {
-      const n = lines.length
-      // Match this plugin's markers AND the template upstream's
-      // (`# dsh-mcp-manager:server|disable|enable:<id>`) so an entry written by
-      // either manager can be located and cleaned up without orphan blocks —
-      // the two plugins are designed to coexist.
-      const re = new RegExp('^# (?:dsh-plugin-tool-management|dsh-mcp-manager):(' + ops + '):' + escRe(id) + '$')
-      const ranges: Array<[number, number]> = []
-      for (let i = 0; i < n; i++) {
-        if (!re.test(lines[i])) continue
-        let j = i + 1
-        while (j < n && !/^- /.test(lines[j])) j++
-        let end = j
-        if (j < n && /^- /.test(lines[j])) {
-          let k = j + 1
-          while (k < n && !/^- /.test(lines[k])) k++
-          end = k
-        }
-        ranges.push([i, end])
-      }
-      return ranges
-    }
-
-    function insertBlockRange(lines: string[], id: string): [number, number] | null {
-      const n = lines.length
-      const entryRe = new RegExp('^\\s*- id: ' + escRe(id) + '\\s*$')
-      for (let i = 0; i < n; i++) {
-        if (!/^- insert:/.test(lines[i])) continue
-        let end = i + 1
-        while (end < n && !/^- /.test(lines[end])) end++
-        if (lines.slice(i, end).some((l) => entryRe.test(l))) return [i, end]
-      }
-      return null
-    }
-
-    function bareOverrideRanges(lines: string[], id: string): Array<[number, number]> {
-      const n = lines.length
-      const re = new RegExp('^- id: ' + escRe(id) + '\\s*$')
-      const ranges: Array<[number, number]> = []
-      for (let i = 0; i < n; i++) {
-        if (!re.test(lines[i])) continue
-        let end = i + 1
-        while (end < n && !/^- /.test(lines[end])) end++
-        ranges.push([i, end])
-      }
-      return ranges
-    }
-
-    function spliceRanges(lines: string[], ranges: Array<[number, number]>): string {
-      const remove = new Set<number>()
-      for (const r of ranges) for (let i = r[0]; i < r[1]; i++) remove.add(i)
-      return joinLines(lines.filter((_, i) => !remove.has(i)))
-    }
-
-    function removeEntryAll(content: string, id: string): string {
-      const lines = splitLines(content)
-      const ranges = markerRanges(lines, id, 'server|disable|enable')
-      const ib = insertBlockRange(lines, id)
-      if (ib) ranges.push(ib)
-      ranges.push(...bareOverrideRanges(lines, id))
-      return spliceRanges(lines, ranges)
-    }
-
-    function removeMarked(content: string, id: string, op: string): string {
-      return spliceRanges(splitLines(content), markerRanges(splitLines(content), id, op))
-    }
-
-    function appendBlock(content: string, block: string): string {
-      let c = content
-      if (/^\[\]\s*$/m.test(c)) c = c.replace(/^\[\]\s*$/m, block + '\n')
-      else c = c.replace(/\s*$/, '\n' + block + '\n')
-      return c
-    }
-
-    // ---------- shared state ----------
-    async function collectAll(): Promise<{ ids: Set<string>; serverNames: Set<string>; rows: Array<{ id: string; serverName: string; level: string; disabled: boolean }> }> {
+    /**
+     * 找到本插件 loader 行所在的补丁文件。返回 0 / 1 / 多份，多份时调用方必须拒绝自动改：
+     * 同一条 loader 行出现在两份补丁里会让宿主起不来（重复 id），与 duplicateGuard 同一口径。
+     */
+    async function loaderTokenFiles(): Promise<{ files: string[]; infoOf: Map<string, LoaderTokenInfo> }> {
       const p = await ensurePaths()
-      const ids = new Set<string>()
-      const serverNames = new Set<string>()
-      const rows: Array<{ id: string; serverName: string; level: string; disabled: boolean }> = []
-      for (const level of ['project', 'global']) {
-        const abs = level === 'project' ? p.projectPatch : p.globalPatch
+      const files: string[] = []
+      const infoOf = new Map<string, LoaderTokenInfo>()
+      for (const abs of [p.projectPatch, p.globalPatch]) {
         let content = ''
-        try { content = await readPatch(abs) } catch (e) { continue }
-        const { rows: fileRows } = parseRows(content)
-        for (const r of fileRows) {
-          ids.add(r.id)
-          const sn = r.config && r.config.serverName ? String(r.config.serverName) : r.id
-          serverNames.add(sn)
-          rows.push({ id: r.id, serverName: sn, level, disabled: !!r.disabled })
-        }
+        try { content = await readPatch(abs) } catch { continue }
+        const read = readLoaderToken(content)
+        if (read.found) { files.push(abs); infoOf.set(abs, { token: read.token, disabled: read.disabled }) }
       }
-      return { ids, serverNames, rows }
+      return { files, infoOf }
     }
 
-    const bareEntryId = (v: string) => { const s = String(v); const i = s.lastIndexOf(':'); return i >= 0 ? s.slice(i + 1) : s }
-
-    async function liveEntry(id: string): Promise<PluginInventoryEntry | null> {
-      if (!pluginInventory) return null
+    /**
+     * 配置**文件里**写了令牌，但当前进程还没生效（或反过来）—— 也就是"改了配置还没重启"。
+     * 界面据此把"重启后生效"说成事实而不是猜测。
+     *
+     * 局限（写下来免得当成 bug）：读不到环境变量，所以靠 `DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN`
+     * 提供令牌时（文件里没有 token），这里会报"待重启"。那是保守方向 —— 环境变量改动同样要重启。
+     */
+    async function tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; pendingRestart: boolean }> {
       try {
-        const res = await pluginInventory.list()
-        return res.entries.find((e) => e.moduleName === '@deepseek-ai/dsh-mcp-client' && bareEntryId(e.entryId) === id) || null
-      } catch (e) { return null }
+        const { files, infoOf } = await loaderTokenFiles()
+        if (files.length !== 1) return { found: false, configHasToken: false, configDisabled: false, pendingRestart: false }
+        const info = infoOf.get(files[0]) || { token: '', disabled: false }
+        const configHasToken = info.token !== ''
+        // 「文件里配的」与「当前进程在用的」是否一致 —— 比的是**生效**状态（有位子但关了 = 没生效）。
+        const fileEffective = configHasToken && !info.disabled
+        return { found: true, configHasToken, configDisabled: info.disabled, pendingRestart: fileEffective !== (TOKEN !== '') }
+      } catch { return { found: false, configHasToken: false, configDisabled: false, pendingRestart: false } }
     }
 
-    async function waitFor(pred: () => Promise<boolean>, timeoutMs: number, stepMs: number): Promise<boolean> {
-      const start = Date.now()
-      for (;;) {
-        const v = await pred()
-        if (v) return true
-        if (Date.now() - start > timeoutMs) return false
-        await wait(stepMs)
+    /**
+     * 改宿主侧的令牌配置：`set` 写入 / 换掉令牌、`off` 关掉令牌功能、`on` 重新打开、
+     * `clear` 把令牌从配置里删掉（回到"还没有令牌"那一态）。
+     *
+     * 关键设计（用户裁定 2026-09-19）：
+     *   - **`off` 不再删除 `token`**，只写一行 `tokenDisabled: true` —— 原令牌保留，随时能开回来，
+     *     不需要重新输一遍（此前的实现把配置删了，用户想再开就得重新想一遍令牌）。
+     *   - **`clear` 才是"删掉"**（用户 2026-09-19 问"令牌没有彻底清除按钮"）：删 `config.token`
+     *     与 `tokenDisabled` 两行，回到从未设置过的样子 —— 写操作不再要凭证、明文密钥随之
+     *     不可见。它是不可逆的那一端（配置里没有副本了），所以与 `off` 共用同一条凭证口径。
+     *   - **`off` / `clear` 只认"当场再输一次"的令牌**（`value` 对得上才算）：请求头里那份已验过
+     *     的凭证不算数 —— 解锁之后顺手一点就能把防护关掉 / 把令牌删掉，等于没把守（用户裁定
+     *     2026-09-19：「就算输入过了令牌，关闭保护也应该再次输入令牌才能关闭」）。界面据此就地在
+     *     「保护开关」/「宿主配置」里展开一个确认框。
+     *   - **`set` 与 `off` / `clear` 同一条口径**：宿主已有令牌时，改令牌也必须当场再输一次当前
+     *     令牌（走 `current` 字段 —— `token` 里是新令牌，证明不了知道旧值；凭证是旧值这件事不能
+     *     靠请求头里那份"本次启动已解锁"顶替）。界面据此在「宿主配置」表单里多摆一栏「当前令牌」，
+     *     并且不再要求用户先解锁再改。
+     *   - **`on` 仍接受请求头里的凭证**（`presented`），或输入框里那个值本身就是当前令牌。
+     *     两个方向都必须验 —— 否则"能打开 GUI 就能关掉保护"，令牌等于白配（要求 9）。
+     *   - `set`：宿主**还没配**令牌时允许（首次设置 —— 否则这个功能永远打不开），那一态没有
+     *     "当前令牌"可证明，所以 `current` 不作要求。
+     *
+     * 不放进 handlers：这样它既不在 HTTP 的普通 op 面上，也**不会**被任何模型工具间接调用 ——
+     * 模型不该有能力关掉访问令牌。
+     */
+    async function tokenConfigure(args: any, presented: boolean): Promise<any> {
+      const raw = String((args && args.mode) || '')
+      const mode: 'set' | 'off' | 'on' | 'clear' = raw === 'off' ? 'off' : raw === 'on' ? 'on' : raw === 'clear' ? 'clear' : 'set'
+      const value = String((args && args.token) || '').trim()
+      const currentRaw = String((args && args.current) || '').trim()
+      // 关闭 / 重新打开时，用户填进输入框的那个值**就是**当前令牌，可以直接当凭证 ——
+      // 省掉"先保存再操作"两步。`set` 不行：那个值是新令牌，不能拿它证明自己知道旧值，
+      // 所以它的凭证单独走 `current`。
+      const proofByValue = mode !== 'set' && value !== '' && CONFIG_TOKEN !== '' && tokenMatches(value)
+      const proofByCurrent = mode === 'set' && currentRaw !== '' && CONFIG_TOKEN !== '' && tokenMatches(currentRaw)
+      // 关闭保护 / 删除令牌 / 修改令牌都是"改凭证 / 减防护"的方向：**不认**请求头里已经验过的
+      // 那份凭证，必须当面再输一次当前令牌（用户裁定 2026-09-19 —— 先判「关闭」，随后同一口径
+      // 推到「修改」，再推到「删除」）。开启保护仍接受请求头里的凭证。
+      if (mode === 'off' && CONFIG_TOKEN !== '' && !proofByValue) {
+        return { ok: false, code: 'error.secret.badToken', error: '关闭保护要再输一次当前令牌。' }
       }
-    }
-
-    async function entryExists(id: string, level: string): Promise<boolean> {
-      const p = await ensurePaths()
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
-      let content = ''
-      try { content = await readPatch(abs) } catch (e) { return false }
-      const { rows } = parseRows(content)
-      if (rows.some((r) => r.id === id)) return true
-      return (await liveEntry(id)) !== null
-    }
-
-    function normalizeRow(r: ManagedRow, level: string, abs: string) {
-      const cfg = r.config || {}
-      return {
-        id: r.id,
-        serverName: cfg.serverName || r.id,
-        transport: cfg.transport || null,
-        url: cfg.url || null,
-        command: cfg.command || null,
-        args: cfg.args || null,
-        env: cfg.env || null,
-        headers: cfg.headers || null,
-        level,
-        disabled: !!r.disabled,
-        managed: !!r.managed,
+      if (mode === 'clear' && CONFIG_TOKEN !== '' && !proofByValue) {
+        return { ok: false, code: 'error.secret.badToken', error: '删除令牌要再输一次当前令牌。' }
       }
-    }
-
-    // ---------- import helpers ----------
-    function toStrMap(v: unknown): Record<string, string> {
-      if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
-      const out: Record<string, string> = {}
-      for (const k of Object.keys(v)) out[k] = String((v as Record<string, unknown>)[k])
-      return out
-    }
-    function normalizeImportItem(item: unknown): { ok: true; row: any } | { ok: false; error: string } {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return { ok: false, error: '条目不是对象' }
-      const it = item as Record<string, unknown>
-      const serverName = String(it.serverName || '').trim()
-      if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) return { ok: false, error: 'serverName 非法: ' + String(it.serverName) }
-      const transport = it.transport === 'stdio' ? 'stdio' : 'streamable-http'
-      const level = it.level === 'global' ? 'global' : 'project'
-      const baseId = 'mcp-' + serverName.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-      const rawId = String(it.id || '').trim()
-      const id = rawId && /^[A-Za-z0-9_.:@%+=/-]+$/.test(rawId) ? rawId : baseId
-      const row: any = { id, serverName, transport, level, disabled: !!it.disabled }
-      if (transport === 'streamable-http') {
-        const url = String(it.url || '').trim()
-        if (!/^https?:\/\//.test(url)) return { ok: false, error: serverName + ': url 非法' }
-        row.url = url
-        row.headers = toStrMap(it.headers)
-      } else {
-        const command = String(it.command || '').trim()
-        if (!command) return { ok: false, error: serverName + ': command 缺失' }
-        row.command = command
-        row.args = Array.isArray(it.args) ? it.args.map(String) : []
-        row.env = toStrMap(it.env)
+      if (mode === 'set' && CONFIG_TOKEN !== '' && !proofByCurrent) {
+        return { ok: false, code: 'error.secret.badToken', error: '修改令牌要先填一次当前令牌。' }
       }
-      return { ok: true, row }
+      if (CONFIG_TOKEN !== '' && !presented && !proofByValue && !proofByCurrent) {
+        return { ok: false, code: 'error.secret.badToken', error: '要改动访问令牌，请先在「本次启动」里填入当前令牌并解锁。' }
+      }
+      if ((mode === 'off' || mode === 'clear') && CONFIG_TOKEN === '') {
+        return { ok: true, changed: false, note: '宿主侧本来就没有配置令牌。', restartRequired: false }
+      }
+      if (mode === 'on' && CONFIG_TOKEN === '') {
+        return { ok: false, error: '配置里没有令牌：请先用「设置令牌」写入一个，再打开令牌保护。' }
+      }
+      if (mode === 'set') {
+        if (!value) return { ok: false, error: '请先填入要设置的令牌' }
+        // 换行会写坏 YAML 标量、NUL 会截断路径 —— 这两类直接拒绝比转义更清楚。
+        if (/[\r\n\u0000]/.test(value)) return { ok: false, error: '令牌不能包含换行或控制字符' }
+        if (value === CONFIG_TOKEN) return { ok: true, changed: false, note: '和当前令牌相同，未改动。', restartRequired: false }
+      }
+      const { files } = await loaderTokenFiles()
+      if (!files.length) {
+        return { ok: false, error: '没找到本插件的 loader 行，无法自动改写配置：请在 profile 的 cordis.patch.yml 里手动设置 config.token（或改用环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）。' }
+      }
+      if (files.length > 1) {
+        return { ok: false, error: '本插件的 loader 行同时出现在两份补丁文件里（会导致 DSH 无法启动）：请先清掉重复那条，再回来设置令牌。' }
+      }
+      const abs = files[0]
+      return withWriteLock(async () => {
+        let content = ''
+        try { content = await readPatch(abs) } catch (e) { return { ok: false, error: '读取补丁失败: ' + message(e) } }
+        // 两步改写共用一份内容：先写令牌（set 写值 / clear 删掉），再写开关（set 与 clear 顺带
+        // 把"已关闭"那行清掉 —— 换了个新令牌却还留着"已关闭"、或者令牌都没了还写着"已关闭"，
+        // 都是说不通的）。
+        let changed = false
+        // `refused`：loader 行里的 config 形状是插件读不了的（flow style / 重复键）。此时
+        // 改写会插入第二个 `config:`，而官方 js-yaml 对重复映射键是 throw —— 后果是 DSH 下次
+        // 起不来。所以拒绝并说明，而不是"尽力写一下"。
+        if (mode === 'set' || mode === 'clear') {
+          const wrote = applyLoaderToken(content, mode === 'clear' ? null : value)
+          if (!wrote.found) return { ok: false, error: '没找到本插件的 loader 行：' + abs }
+          if (wrote.refused) return { ok: false, error: wrote.refused }
+          content = wrote.content
+          changed = changed || wrote.changed
+        }
+        const flag = mode === 'off' ? true : mode === 'clear' ? null : false
+        const toggled = applyLoaderTokenDisabled(content, flag)
+        if (!toggled.found) return { ok: false, error: '没找到本插件的 loader 行：' + abs }
+        if (toggled.refused) return { ok: false, error: toggled.refused }
+        content = toggled.content
+        changed = changed || toggled.changed
+        if (changed) {
+          try {
+            await writePatch(abs, content)
+          } catch (e) {
+            return { ok: false, error: '写入补丁失败: ' + message(e) }
+          }
+        }
+        // 改配置**需要重启 DSH 才生效**：当前进程的 TOKEN 是 apply 时读进来的常量。
+        // 所以这里如实回 restartRequired，界面据此说清"现在还没生效"，而不是让用户以为失败了。
+        return { ok: true, changed, mode, restartRequired: changed, path: abs }
+      })
     }
 
-    // ---------- ops ----------
-    async function pluginVersion(): Promise<any> {
-      return { ok: true, version: PKG_VERSION }
-    }
 
-    // Tool preview for one MCP server: project the model-facing schemas down to
-    // a name + description + parameter-summary list. The registry prefixes every
-    // MCP tool with `mcp__<serverName>__`; we filter on that and strip the prefix
-    // for display. Only the direct `properties` of the parameters object are
-    // summarized — nested object/array children are omitted (one level is enough
-    // for a preview, keeps the dialog readable).
-    // ---------- plugin-owned side-car data (notes / settings / disabled tools) ----------
+    // ---------- 通用侧车 JSON 读写 ----------
+    // 为什么留在 index.ts：注入设置（inject-settings.json）也在用这一对，搬进
+    // ./mcp/manager.ts 就得为一对 6 行函数再加一层 deps 转发。
     async function readJsonFile(abs: string): Promise<any> {
       try { return JSON.parse(await readFile(abs, 'utf8')) } catch (e) { return null }
     }
@@ -1872,1052 +1340,34 @@ export default {
       await writeFile(abs, JSON.stringify(data, null, 2) + '\n', 'utf8')
     }
 
-    // User notes are keyed by loader id: they survive renames of the server
-    // name and are never touched by config rewrites.
+    // ---------- MCP 管理域 ----------
+    // 侧车读写（备注 / 设置 / 停用表）+ 补丁受管行的生成与块编辑 + 16 个 op，实现在
+    // ./mcp/manager.ts（2026-09-19 从本闭包原样抽出，约 1300 行）。
     //
-    // Sidecar caches (notes / settings / disabled tools) are short-TTL: reads
-    // hit the cache, but every WRITE re-reads the file (force=true) and merges
-    // on top of the fresh on-disk state. Without the forced re-read, a manual
-    // edit of the sidecar file would be silently overwritten by a stale cache.
-    //
-    // 落点：**hub 内**（`~/.dsh/tool-management/`），文件名按域取（`mcp-*`）。
-    // 它们曾经躺在 `$DSH_HOME` 根下、还带着插件名前缀（`dsh-plugin-tool-management-notes.json`），
-    // 2026-09-16 用户要求「插件产生的文件全部收进 hub、名字与当前代码一致」——
-    // 旧文件由 hub.ts 的 `migrateHubLayoutSync()` 在启动时搬进来（见 apply()）。
-    const SIDECAR_TTL_MS = 3000
-    const MCP_NOTES_FILE = 'mcp-notes.json'
-    const MCP_SETTINGS_FILE = 'mcp-settings.json'
-    const MCP_DISABLED_TOOLS_FILE = 'mcp-disabled-tools.json'
-    const MCP_KNOWN_TOOLS_FILE = 'mcp-known-tools.json'
-    const MCP_EXPORT_FILE = 'mcp-export.json'
-    /** MCP 侧车绝对路径（都在 hub 内）。 */
-    const mcpSidecar = (name: string): string => hubPath(name)
-    let notesCache: { at: number; value: Record<string, string> } | null = null
-    async function readNotes(force = false): Promise<Record<string, string>> {
-      if (notesCache && !force && Date.now() - notesCache.at < SIDECAR_TTL_MS) return notesCache.value
-      const raw = await readJsonFile(mcpSidecar(MCP_NOTES_FILE))
-      const out: Record<string, string> = {}
-      if (raw && typeof raw === 'object') {
-        for (const key of Object.keys(raw)) {
-          const value = (raw as Record<string, unknown>)[key]
-          if (typeof value === 'string' && value.trim()) out[key] = value
-        }
-      }
-      notesCache = { at: Date.now(), value: out }
-      return out
-    }
-    async function mcpmNote(args: any): Promise<any> {
-      const id = String((args && args.id) || '').trim()
-      if (!id) return { ok: false, error: '缺少 id' }
-      const note = String((args && args.note) == null ? '' : args.note).trim()
-      const p = await ensurePaths()
-      return withWriteLock(async () => {
-        // Force re-read so an externally edited notes file is merged, not clobbered.
-        const map = Object.assign({}, await readNotes(true))
-        if (note) map[id] = note
-        else delete map[id]
-        try {
-          await writeJsonFile(mcpSidecar(MCP_NOTES_FILE), map)
-        } catch (e) {
-          return { ok: false, error: '备注保存失败: ' + message(e) }
-        }
-        notesCache = { at: Date.now(), value: map }
-        return { ok: true, notes: map }
-      })
+    // 为什么经工厂 + 返回对象，而不是把函数留在这里：这一域有**反向依赖** —— 注入通道要
+    // 打码后的列表行、场景档案引擎要读写停用表与备注、工具门禁要读 TTL 缓存判断某工具是否
+    // 被停用、审批策略要读插件设置。以前这些靠闭包隐式共享（谁在用什么看不出来），现在全部
+    // 经返回的 McpManager 显式暴露。
+    const mcp = createMcpManager({
+      readJsonFile,
+      writeJsonFile,
+      ensurePaths,
+      withWriteLock,
+      message,
+      tools,
+      pluginInventory,
+      settings,
+      readPatch,
+      writePatch,
+      memoriesService,
+      wait,
+    })
+
+    // ---------- ops ----------
+    async function pluginVersion(): Promise<any> {
+      return { ok: true, version: PKG_VERSION }
     }
 
-    const SETTINGS_DEFAULTS = { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true, requireConfirmForModelSubagentRun: true }
-    let pluginSettingsCache: { at: number; value: { pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean } } | null = null
-    function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-      // Number(null) is 0 — treat missing/empty input as "use the default".
-      if (value === null || value === undefined || value === '') return fallback
-      const n = Number(value)
-      if (!Number.isFinite(n)) return fallback
-      return Math.min(max, Math.max(min, Math.round(n)))
-    }
-    async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean }> {
-      if (pluginSettingsCache && !force && Date.now() - pluginSettingsCache.at < SIDECAR_TTL_MS) return pluginSettingsCache.value
-      const p = await ensurePaths()
-      const raw = await readJsonFile(mcpSidecar(MCP_SETTINGS_FILE))
-      pluginSettingsCache = {
-        at: Date.now(),
-        value: {
-          pollIntervalMs: clampInt(raw && raw.pollIntervalMs, 2000, 60000, SETTINGS_DEFAULTS.pollIntervalMs),
-          // 0 = keep descriptions in full (the UI default); > 0 truncates.
-          toolDescriptionMaxLength: clampInt(raw && raw.toolDescriptionMaxLength, 0, 2000, SETTINGS_DEFAULTS.toolDescriptionMaxLength),
-          // 模型写规则需确认（D2）：程序化强制，只读设置供 tools/pre-execute 判定。
-          requireConfirmForModelRuleWrite: (raw && typeof raw.requireConfirmForModelRuleWrite === 'boolean')
-            ? raw.requireConfirmForModelRuleWrite
-            : SETTINGS_DEFAULTS.requireConfirmForModelRuleWrite,
-          // 子代理运行花真 token：默认确认，设置可关（设计 §3.2）。
-          requireConfirmForModelSubagentRun: (raw && typeof raw.requireConfirmForModelSubagentRun === 'boolean')
-            ? raw.requireConfirmForModelSubagentRun
-            : SETTINGS_DEFAULTS.requireConfirmForModelSubagentRun,
-        },
-      }
-      return pluginSettingsCache.value
-    }
-    async function mcpmSettings(args: any): Promise<any> {
-      const current = await readPluginSettings()
-      if (!args || args.set !== true) return { ok: true, settings: current }
-      const next = {
-        pollIntervalMs: clampInt(args.pollIntervalMs, 2000, 60000, current.pollIntervalMs),
-        toolDescriptionMaxLength: clampInt(args.toolDescriptionMaxLength, 0, 2000, current.toolDescriptionMaxLength),
-        requireConfirmForModelRuleWrite: (args && typeof args.requireConfirmForModelRuleWrite === 'boolean')
-          ? args.requireConfirmForModelRuleWrite
-          : current.requireConfirmForModelRuleWrite,
-        requireConfirmForModelSubagentRun: (args && typeof args.requireConfirmForModelSubagentRun === 'boolean')
-          ? args.requireConfirmForModelSubagentRun
-          : current.requireConfirmForModelSubagentRun,
-      }
-      const p = await ensurePaths()
-      return withWriteLock(async () => {
-        try {
-          await writeJsonFile(mcpSidecar(MCP_SETTINGS_FILE), next)
-        } catch (e) {
-          return { ok: false, error: '设置保存失败: ' + message(e) }
-        }
-        pluginSettingsCache = { at: Date.now(), value: next }
-        return { ok: true, settings: next }
-      })
-    }
-
-    // ---------- per-tool enable/disable (execution + visibility boundary) ----------
-    // dsh-mcp-client has no per-tool config, but the DSH tool runtime exposes
-    // two official seams: `tools.restrict({ deny })` removes a global tool from
-    // every scope's model-visible schema list, and `tools.guard` denies the call
-    // before the body runs. Disabled tools therefore become invisible AND
-    // uncallable — no patch rewrite, no DSH restart.
-    let disabledToolsCache: { at: number; value: Record<string, string[]> } | null = null
-    async function readDisabledTools(force = false): Promise<Record<string, string[]>> {
-      if (disabledToolsCache && !force && Date.now() - disabledToolsCache.at < SIDECAR_TTL_MS) return disabledToolsCache.value
-      const p = await ensurePaths()
-      const raw = await readJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE))
-      const out: Record<string, string[]> = {}
-      if (raw && typeof raw === 'object') {
-        for (const serverName of Object.keys(raw)) {
-          const list = (raw as Record<string, unknown>)[serverName]
-          if (Array.isArray(list)) {
-            // `*` 必须原样保留：它是「整台服务器停用」的通配（场景档案未勾选的服务器写的就是它），
-            // 被这里过滤掉的话 guard / restrict / 快照三条链路一起失效——整台停用变成空转。
-            const names = list.map((name) => String(name)).filter((name) => name === '*' || /^[A-Za-z0-9_-]{1,128}$/.test(name))
-            if (names.length) out[serverName] = names
-          }
-        }
-      }
-      disabledToolsCache = { at: Date.now(), value: out }
-      return out
-    }
-    /** Fully-qualified model-facing names (`mcp__<serverName>__<tool>`) of every disabled tool. */
-    function disabledToolNames(map: Record<string, string[]>): string[] {
-      const out: string[] = []
-      for (const serverName of Object.keys(map)) {
-        for (const tool of map[serverName]) out.push('mcp__' + serverName + '__' + tool)
-      }
-      return out
-    }
-    // ---------- 「已知工具」侧车（v0.8.1）-----------------------------------
-    // MCP 工具名只在服务器**运行**时可见（tools.schemas() 里才有）。未运行的服务器在
-    // 场景档案里既显示 0 工具、工具明细也空空如也 —— 用户没法给未运行服务器挑工具。
-    // 每次枚举到 live 工具时按 serverName 记一份「最后见过的工具名」，未运行时用它兜底：
-    // 场景档案能列出/勾选，进入场景后按实际注册的工具生效（restrict 会过滤掉不存在的名字）。
-    let knownMcpToolsCache: { at: number; value: Record<string, KnownMcpTool[]> } | null = null
-    async function readKnownMcpTools(force = false): Promise<Record<string, KnownMcpTool[]>> {
-      if (knownMcpToolsCache && !force && Date.now() - knownMcpToolsCache.at < SIDECAR_TTL_MS) return knownMcpToolsCache.value
-      const p = await ensurePaths()
-      const raw = await readJsonFile(mcpSidecar(MCP_KNOWN_TOOLS_FILE))
-      const out: Record<string, KnownMcpTool[]> = {}
-      if (raw && typeof raw === 'object') {
-        for (const serverName of Object.keys(raw)) {
-          const list = normalizeKnownTools((raw as Record<string, unknown>)[serverName])
-          if (list.length) out[serverName] = list
-        }
-      }
-      knownMcpToolsCache = { at: Date.now(), value: out }
-      return out
-    }
-    async function writeKnownMcpTools(value: Record<string, KnownMcpTool[]>): Promise<void> {
-      const p = await ensurePaths()
-      await writeJsonFile(mcpSidecar(MCP_KNOWN_TOOLS_FILE), value)
-      knownMcpToolsCache = { at: Date.now(), value: value }
-    }
-    /** 单工具停用判定（含整服务器通配 `*`——场景档案的"MCP 工具集=整台"写的就是它）。 */
-    function isToolDisabled(map: Record<string, string[]>, fullName: string): boolean {
-      if (!fullName.startsWith('mcp__')) return false
-      const rest = fullName.slice(5)
-      const i = rest.indexOf('__')
-      if (i <= 0) return false
-      const list = map[rest.slice(0, i)]
-      if (!list) return false
-      if (list.indexOf('*') >= 0) return true
-      return list.indexOf(rest.slice(i + 2)) >= 0
-    }
-    async function mcpmToolEnabled(args: any): Promise<any> {
-      const serverName = String((args && args.serverName) || '').trim()
-      const tool = String((args && args.tool) || '').trim()
-      if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) return { ok: false, error: 'serverName 不合法' }
-      if (!/^[A-Za-z0-9_-]{1,128}$/.test(tool)) return { ok: false, error: 'tool 名称不合法' }
-      const enabled = (args && args.enabled) !== false
-      const p = await ensurePaths()
-      return withWriteLock(async () => {
-        // Force re-read so an externally edited disabled-tools file is merged, not clobbered.
-        const map = Object.assign({}, await readDisabledTools(true))
-        const disabled = new Set(map[serverName] || [])
-        if (enabled) disabled.delete(tool)
-        else disabled.add(tool)
-        if (disabled.size) map[serverName] = [...disabled].sort()
-        else delete map[serverName]
-        try {
-          await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), map)
-        } catch (e) {
-          return { ok: false, error: '保存失败: ' + message(e) }
-        }
-        disabledToolsCache = { at: Date.now(), value: map }
-        await applyToolRestrictions()
-        return { ok: true, serverName, disabled: map[serverName] || [] }
-      })
-    }
-
-    // Visibility seam: keep one active restriction, refreshed whenever the tool
-    // set or the disabled set changes. `restrict` fails on unknown names, so the
-    // deny list is always intersected with the currently registered tools.
-    let restrictDisposer: (() => void) | null = null
-    let restrictTimer: ReturnType<typeof setTimeout> | null = null
-    async function applyToolRestrictions(): Promise<void> {
-      if (typeof tools.restrict !== 'function') return
-      // Force re-read: this runs on the tools/change path, which is rare, so a
-      // stale cache must not keep an externally edited deny list hidden.
-      const map = await readDisabledTools(true)
-      // 通配 `*`（整服务器停用）先展开成已注册的全名，再与精确名单合并。
-      const wanted = disabledToolNames(map)
-      let registered: Set<string>
-      try {
-        registered = new Set((await tools.schemas()).map((schema) => String(schema.name)))
-      } catch (e) { return }
-      for (const [serverName, list] of Object.entries(map)) {
-        if (list.indexOf('*') < 0) continue
-        const prefix = 'mcp__' + serverName + '__'
-        for (const fullName of registered) if (fullName.startsWith(prefix)) wanted.push(fullName)
-      }
-      const names = wanted.filter((name) => registered.has(name))
-      if (restrictDisposer) { try { restrictDisposer() } catch (e) { /* ignore */ } restrictDisposer = null }
-      if (!names.length) return
-      try {
-        restrictDisposer = tools.restrict({ deny: names })
-      } catch (e) { /* registry race: the next tools/change event retries */ }
-    }
-    function scheduleToolRestrictions(): void {
-      if (restrictTimer) return
-      restrictTimer = setTimeout(() => {
-        restrictTimer = null
-        applyToolRestrictions().catch(() => { /* best effort */ })
-      }, 300)
-    }
-
-    function truncateText(value: string, limit: number): string {
-      if (!limit || value.length <= limit) return value
-      return value.slice(0, Math.max(1, limit - 1)).replace(/\s+$/, '') + '…'
-    }
-
-    // ---------- secret masking (UI view only) ----------
-    // Only sensitive-looking keys are masked; `$VAR` / `!!js` references are
-    // indirections rather than secrets, so they stay readable. URL query strings
-    // are redacted because MCP credentials often ride there.
-    const SENSITIVE_KEY_RE = /(token|secret|password|passwd|auth|credential|api[_-]?key|access[_-]?key|private[_-]?key|cookie|session|signature|bearer)/i
-    function maskSecretValue(value: unknown): string {
-      const text = String(value == null ? '' : value)
-      if (text === '') return ''
-      if (text.startsWith('$')) return text
-      if (/^!!js\s/.test(text)) return text
-      return '••••••'
-    }
-    function maskValueMap(map: Record<string, string> | null, onlySensitiveKeys: boolean): Record<string, string> | null {
-      if (!map || typeof map !== 'object') return map
-      const out: Record<string, string> = {}
-      for (const key of Object.keys(map)) {
-        out[key] = (!onlySensitiveKeys || SENSITIVE_KEY_RE.test(key)) ? maskSecretValue(map[key]) : String(map[key])
-      }
-      return out
-    }
-    function maskUrlQuery(url: string | null): string | null {
-      if (!url) return url
-      try {
-        const parsed = new URL(url)
-        if (parsed.search) parsed.search = '?<redacted>'
-        return parsed.toString()
-      } catch (e) { return url }
-    }
-    /** Shared UI rows: mcpmList plus notes, secrets masked unless `reveal`. */
-    async function mcpmRowsWithNotes(reveal: boolean): Promise<any> {
-      const result: any = await mcpmList()
-      if (!result || result.ok === false) return result
-      const notes = await readNotes()
-      const rows = (result.rows || []).map((row: any) => {
-        const view: any = Object.assign({}, row, { notes: notes[row.id] || '' })
-        if (!reveal) {
-          view.url = maskUrlQuery(row.url)
-          view.headers = maskValueMap(row.headers, true)
-          view.env = maskValueMap(row.env, true)
-        }
-        return view
-      })
-      return Object.assign({}, result, { rows })
-    }
-    /** Default list view: secrets always masked. */
-    async function mcpmListView(): Promise<any> {
-      return mcpmRowsWithNotes(false)
-    }
-    /**
-     * Plain-text view. Split from mcpm-list into its own op so it can live in
-     * WRITE_OPS: `mcpm-list` stays token-free for rendering, while revealing
-     * env/headers secrets requires `x-dsh-token` when a token is configured —
-     * otherwise a LAN-exposed port would leak credentials read-only.
-     */
-    async function mcpmReveal(): Promise<any> {
-      return mcpmRowsWithNotes(true)
-    }
-
-    async function mcpmTools(args: any): Promise<any> {
-      const serverName = String(args && args.serverName || '').trim()
-      if (!serverName) return { ok: false, error: 'serverName 不能为空' }
-      const prefix = 'mcp__' + serverName + '__'
-      let schemas: any[] = []
-      try {
-        schemas = await tools.schemas()
-      } catch (e) {
-        return { ok: false, error: message(e) }
-      }
-      const descriptionLimit = (await readPluginSettings()).toolDescriptionMaxLength
-      const disabledMapHere = await readDisabledTools()
-      const disabledHere = new Set(disabledMapHere[serverName] || [])
-      const wildcardHere = disabledHere.has('*')
-      const toolsList: any[] = []
-      for (const s of schemas) {
-        const fullName = String(s && s.name || '')
-        if (!fullName.startsWith(prefix)) continue
-        const rawName = fullName.slice(prefix.length)
-        const params: any[] = []
-        const props = s.parameters && typeof s.parameters === 'object' ? s.parameters.properties : null
-        const requiredSet = new Set<string>()
-        if (s.parameters && Array.isArray(s.parameters.required)) {
-          for (const k of s.parameters.required) if (typeof k === 'string') requiredSet.add(k)
-        }
-        if (props && typeof props === 'object') {
-          for (const [key, spec] of Object.entries(props as Record<string, any>)) {
-            const ps = (spec && typeof spec === 'object') ? spec : {}
-            params.push({
-              key,
-              required: requiredSet.has(key),
-              type: typeof ps.type === 'string' ? ps.type : 'any',
-              ...(typeof ps.description === 'string' ? { description: ps.description } : {}),
-            })
-          }
-        }
-        toolsList.push({
-          name: rawName,
-          description: truncateText(typeof s.description === 'string' ? s.description : '', descriptionLimit),
-          enabled: wildcardHere ? false : !disabledHere.has(rawName),
-          parameters: params,
-        })
-      }
-      // Some dsh-tools builds strip restricted tools from schemas(); without
-      // this merge a disabled tool would vanish from the dialog with no way to
-      // re-enable it from the UI. Names come from the sidecar, so they always
-      // stay reachable; the description is unavailable once the schema is gone.
-      const listed = new Set(toolsList.map((t: any) => t.name))
-      for (const name of disabledHere) {
-        if (name === '*') continue // 整服务器通配：已在上方逐工具体现，不再展示占位行
-        if (!listed.has(name)) {
-          toolsList.push({ name, description: '（已停用；描述暂不可用）', enabled: false, parameters: [] })
-        }
-      }
-      // 「已知工具」缓存兜底：服务器没运行时 schemas() 里没有它任何工具 —— 场景档案里
-      // 想给未运行服务器挑工具就全靠这份最后见过的名单。描述也一并带上（v0.9.0 起缓存），
-      // 并标 `stale: true`：界面据此说明「上次运行时」，不假装是实时数据。
-      for (const known of (await readKnownMcpTools())[serverName] || []) {
-        if (listed.has(known.name)) continue
-        toolsList.push({
-          name: known.name,
-          description: known.description || '（服务器未运行；这个名字来自上次运行记录）',
-          // 与上方 live 行同一口径：整台停用（`*`）时 stale 行同样报停用，
-          // 否则同页「live 行停用、stale 行启用」自相矛盾。
-          enabled: wildcardHere ? false : !disabledHere.has(known.name),
-          parameters: [],
-          stale: true,
-        })
-        listed.add(known.name)
-      }
-      return { ok: true, tools: toolsList }
-    }
-
-    /**
-     * 临时启动服务器以枚举工具（v0.8.1）：从未运行过的服务器在 schemas() 与「已知工具」
-     * 缓存里都没有工具名，场景档案勾选器对它一无所知。这里**临时**把它启用（写补丁），
-     * 轮询等它的工具注册（npx 冷启动要下载，上限 30s），拿到名单后就**恢复原启停状态**——
-     * 用户环境的服务器开关不受影响。已有已知工具时直接返回现有清单，不做任何改动。
-     */
-    async function mcpmToolsRefresh(args: any): Promise<any> {
-      const serverName = String((args && args.serverName) || '').trim()
-      if (!serverName) return { ok: false, error: 'serverName 不能为空' }
-      const existing = await mcpmTools({ serverName })
-      if (existing && existing.ok === false) return existing
-      if (existing && (existing.tools || []).length) return existing
-      const list = await mcpmListView()
-      const row = ((list && list.rows) || []).find((r: any) => String(r.serverName) === serverName)
-      if (!row) return { ok: false, error: `未找到服务器: ${serverName}` }
-      if (row.level !== 'global' && row.level !== 'project') {
-        return { ok: false, error: `该服务器不驻留在补丁文件（level=${row.level}），无法临时启动；请先在 MCP 页启用它一次以记录工具` }
-      }
-      const wasDisabled = !!row.disabled
-      try {
-        if (wasDisabled) {
-          const r: any = await mcpmSetEnabled({ id: row.id, level: row.level, enabled: true })
-          if (r && r.ok === false) return r
-        }
-        const deadline = Date.now() + 30000
-        for (;;) {
-          const t: any = await mcpmTools({ serverName })
-          if (t && t.ok && (t.tools || []).length) {
-            // 记进「已知工具」缓存：以后未运行时场景档案也能列出（名字 + 这次的描述）。
-            const known = t.tools
-              .filter((x: any) => String(x && x.name))
-              .map((x: any) => ({ name: String(x.name), ...(typeof x.description === 'string' && x.description ? { description: x.description } : {}) }))
-            if (known.length) {
-              try {
-                const cache = await readKnownMcpTools()
-                const byName = new Map((cache[serverName] || []).map((item) => [item.name, item] as const))
-                for (const item of known) {
-                  const old = byName.get(item.name)
-                  byName.set(item.name, old && old.description && !item.description ? old : { ...old, ...item })
-                }
-                cache[serverName] = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-                await writeKnownMcpTools(cache)
-              } catch { /* 缓存写失败不影响本次返回 */ }
-            }
-            return t
-          }
-          if (Date.now() >= deadline) break
-          await new Promise((resolve) => setTimeout(resolve, 1000))
-        }
-        return { ok: false, error: `等待超时：${serverName} 在 30 秒内没有注册任何工具（服务器可能启动失败或连接过慢）` }
-      } finally {
-        if (wasDisabled) {
-          const r: any = await mcpmSetEnabled({ id: row.id, level: row.level, enabled: false })
-          if (!r || r.ok === false) console.warn('[dsh-plugin-tool-management] mcpm-tools-refresh: 恢复服务器停用状态失败', serverName)
-        }
-        void mcpStateCatalog.refresh()
-      }
-    }
-
-    async function mcpmList(): Promise<any> {
-      const p = await ensurePaths()
-      const rows: any[] = []
-      const errors: string[] = []
-      for (const level of ['project', 'global']) {
-        const abs = level === 'project' ? p.projectPatch : p.globalPatch
-        let content = ''
-        try { content = await readPatch(abs) } catch (e) { errors.push(level + ': ' + message(e)); continue }
-        const { rows: fileRows } = parseRows(content)
-        for (const r of fileRows) rows.push(normalizeRow(r, level, abs))
-      }
-      const toolCounts: Record<string, number> = {}
-      const enabledToolCounts: Record<string, number> = {}
-      // 只来自**真实 schema** 的两个数，以及只来自**「已知工具」缓存**的一个数。
-      //
-      // 为什么必须与上面那两个分开（2026-09-17 用户实测发现）：`toolCounts` 是三处并集
-      // （live ∪ 停用表 ∪ 缓存），把"这台 server 曾经有什么工具"与"它现在有什么工具"混成了
-      // 一个数。界面状态胶囊与注入段此前读的就是它，于是**一台已经连不上的 server 会被报成
-      // 「已运行」并注入上下文**，模型照着去调 `mcp__X__*`，而那个工具根本没注册 —— 白烧一轮。
-      //
-      // 分开之后三个数各有明确含义：
-      //   liveToolCounts        当前真实注册的工具数（0 = 一个都没注册）
-      //   liveEnabledToolCounts 上面这个数里未被停用表扣减的（真正能调到的）
-      //   knownToolCounts       缓存里的工具数 —— 它是**曾经真的连上过**的证据（缓存只在真实
-      //                         schema 里见到工具时才写入），0 = 从未连上过
-      //
-      // 前两个给状态胶囊与注入段用；`toolCounts` / `enabledToolCounts` 语义不变，继续给场景
-      // 档案挑工具、详情页清单用（那里"上次见过哪些工具"正是需要的，且已标 `stale`）。
-      const liveToolCounts: Record<string, number> = {}
-      const liveEnabledToolCounts: Record<string, number> = {}
-      const knownToolCounts: Record<string, number> = {}
-      try {
-        const schemas = await tools.schemas()
-        const knownCache = await readKnownMcpTools()
-        const disabledMap = await readDisabledTools()
-        const liveNames: Record<string, string[]> = {}
-        const liveTools: Record<string, KnownMcpTool[]> = {}
-        const seen = new Set<string>()
-        for (const s of schemas) {
-          const fullName = String(s && s.name || '')
-          if (seen.has(fullName)) continue
-          seen.add(fullName)
-          const m = fullName.match(/^mcp__([A-Za-z0-9_-]+)__(.+)$/)
-          if (!m) continue
-          const list = liveNames[m[1]] || (liveNames[m[1]] = [])
-          if (list.indexOf(m[2]) < 0) list.push(m[2])
-          // 顺手把描述记下来：未运行时详情页就有东西可显示，不必再重复「描述暂不可用」。
-          const bucket = liveTools[m[1]] || (liveTools[m[1]] = [])
-          const desc = typeof s.description === 'string' ? s.description : ''
-          if (!bucket.some((t) => t.name === m[2])) bucket.push({ name: m[2], ...(desc ? { description: desc } : {}) })
-        }
-        // 工具数 = live ∪ 停用表里的单个工具名 ∪ 「已知工具」缓存 —— 未运行的服务器
-        // 也能显示最后一次见过的工具数，而不是永远 0。
-        const union: Record<string, Set<string>> = {}
-        const addTool = (server: string, tool: string) => {
-          if (!server || !tool) return
-          const set = union[server] || (union[server] = new Set())
-          set.add(tool)
-        }
-        for (const [server, list] of Object.entries(liveNames)) for (const t of list) addTool(server, t)
-        for (const [server, list] of Object.entries(disabledMap)) for (const t of list) if (t !== '*') addTool(server, t)
-        for (const [server, list] of Object.entries(knownCache)) for (const t of list) addTool(server, t.name)
-        for (const [server, set] of Object.entries(union)) {
-          toolCounts[server] = set.size
-          // 可用数 = 已知工具里未被停用表扣减的（`*` = 整台停用 → 0）。场景档案收窄与
-          // 手动逐工具开关写的是同一张停用表，段与页面的「N 个工具」都必须按它扣减，
-          // 否则收窄后模型看到的数字比它能调的工具多，页面与详情页也会互相矛盾。
-          enabledToolCounts[server] = countEnabledTools(set, disabledMap[server] || [])
-        }
-        // 真实来源的两个数：只数 `liveNames`（schema 里真正注册了的），再按停用表扣减。
-        for (const [server, list] of Object.entries(liveNames)) {
-          const set = new Set(list)
-          liveToolCounts[server] = set.size
-          liveEnabledToolCounts[server] = countEnabledTools(set, disabledMap[server] || [])
-        }
-        // 「曾经连上过」的证据：缓存里这台 server 见过几个工具。注意读的是**回写之前**的
-        // `knownCache` —— 回写会把这次 live 见到的并进去，而这次 live 见到的本来就已经算在
-        // liveToolCounts 里了，不需要它来充当"曾经"。
-        for (const [server, list] of Object.entries(knownCache)) knownToolCounts[server] = list.length
-        // 回写「已知工具」：live 见到的名字与描述并入缓存（有变化才写盘，读路径上的 best-effort）。
-        // 名字集合变化，或某个已知工具这次拿到了描述而缓存里没有 → 都算变化。
-        let cacheChanged = false
-        for (const [server, list] of Object.entries(liveTools)) {
-          const prev = knownCache[server] || []
-          const byName = new Map(prev.map((t) => [t.name, t] as const))
-          for (const tool of list) {
-            const old = byName.get(tool.name)
-            if (!old) { byName.set(tool.name, tool); cacheChanged = true; continue }
-            if (tool.description && old.description !== tool.description) {
-              byName.set(tool.name, { ...old, description: tool.description })
-              cacheChanged = true
-            }
-          }
-          const next = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-          if (next.length !== prev.length) cacheChanged = true
-          knownCache[server] = next
-        }
-        if (cacheChanged) void writeKnownMcpTools(knownCache).catch(() => { /* 侧车写失败不影响列表 */ })
-      } catch (e) { /* ignore */ }
-      let live: PluginInventoryEntry[] = []
-      if (pluginInventory) {
-        try {
-          const res = await pluginInventory.list()
-          live = res.entries.filter((e) => e.moduleName === '@deepseek-ai/dsh-mcp-client')
-        } catch (e) { /* ignore */ }
-      }
-      for (const e of live) {
-        const bid = bareEntryId(e.entryId)
-        const found = rows.find((r) => r.id === bid)
-        if (found) {
-          // **补丁说停用 → 它不可能在运行。** loader 的清单偶尔停在上一帧（用户实测：退出场景后
-          // 开关已关、进程已停、AI 也调不到，页面却仍显示「已运行」）——同一个响应里两处矛盾时
-          // 以**补丁**为准：开关是真正生效的控制面，显示跟着它走，四者（实际 / 显示 / 开关 / AI）
-          // 才一致。反方向的偏差（刚停用、进程还在收尾的几秒）同样由补丁给出的答案兜住。
-          found.live = found.disabled
-            ? { enabled: false, phase: e.fiberPhase }
-            : { enabled: e.enabled, phase: e.fiberPhase }
-        } else rows.push({ id: e.entryId, serverName: e.entryId, transport: null, url: null, command: null, args: null, env: null, headers: null, level: 'loader', disabled: !e.enabled, managed: false, live: { enabled: e.enabled, phase: e.fiberPhase } })
-      }
-      for (const row of rows) {
-        if (row.toolCount === undefined) row.toolCount = toolCounts[row.serverName] || 0
-        if (row.enabledToolCount === undefined) row.enabledToolCount = enabledToolCounts[row.serverName] || 0
-        // 这三个**总是**覆盖：它们描述的是"此刻的真实状态"，而缓存合并出来的那两个数
-        // 描述的是"这台 server 有过哪些工具"。两者混淆过一次，代价是注入段谎报可用。
-        row.liveToolCount = liveToolCounts[row.serverName] || 0
-        row.liveEnabledToolCount = liveEnabledToolCounts[row.serverName] || 0
-        row.knownToolCount = knownToolCounts[row.serverName] || 0
-      }
-      // 列表顺序（用户要求 2026-09-17）：**全局在前、应用级在后**，各级按服务器名排，
-      // 当前在跑的 loader 行垫底。放在服务端而不是页面里：同一个顺序也是场景档案勾选器
-      // （`scene-inventory`）与模型侧 `mcp_manager_list` 的顺序 —— 三处说同一件事。
-      // 名字比较与技能页同一套（localeCompare），大小写混排时不会把大写全顶到前面。
-      const levelRank: Record<string, number> = { global: 0, project: 1, loader: 2 }
-      const serverNameOf = (row: any) => String(row.serverName || row.id || '')
-      rows.sort((a, b) =>
-        (levelRank[a.level] ?? 3) - (levelRank[b.level] ?? 3) ||
-        serverNameOf(a).localeCompare(serverNameOf(b)) ||
-        String(a.id).localeCompare(String(b.id)))
-      // A loader id that appears twice (same id in both patch files, or twice in
-      // one) makes the composition fail to boot. Surface it instead of hiding it.
-      const idCounts = new Map<string, number>()
-      for (const row of rows) idCounts.set(String(row.id), (idCounts.get(String(row.id)) || 0) + 1)
-      const duplicateIds = [...idCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id)
-      for (const row of rows) row.duplicate = duplicateIds.indexOf(String(row.id)) >= 0
-      const warnings: string[] = []
-      if (duplicateIds.length) warnings.push('检测到重复的 loader id（会导致 DSH 无法启动，请手动清理补丁文件）：' + duplicateIds.join('、'))
-      return {
-        ok: true,
-        rows,
-        paths: { project: p.projectPatch, global: p.globalPatch, home: p.home, profile: p.profileName },
-        errors,
-        warnings,
-      }
-    }
-
-    async function mcpmAdd(args: any): Promise<any> {
-      const p = await ensurePaths()
-      const serverName = String(args.serverName || '').trim()
-      const transport = args.transport === 'stdio' ? 'stdio' : 'streamable-http'
-      const level = args.level === 'global' ? 'global' : 'project'
-      if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) return { ok: false, error: 'serverName 需为 1-32 位 [A-Za-z0-9_-]' }
-      const baseId = 'mcp-' + serverName.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-      const existing = await collectAll()
-      if (existing.serverNames.has(serverName)) return { ok: false, error: 'serverName "' + serverName + '" 已存在' }
-      let id = baseId
-      let n = 2
-      while (existing.ids.has(id)) { id = baseId + '-' + n; n++ }
-      const row: any = { id, serverName, transport }
-      if (transport === 'streamable-http') {
-        const url = String(args.url || '').trim()
-        if (!/^https?:\/\//.test(url)) return { ok: false, error: 'url 需为 http(s):// 开头的地址' }
-        row.url = url
-        row.headers = parseKv(args.headers)
-      } else {
-        const command = String(args.command || '').trim()
-        if (!command) return { ok: false, error: 'command 不能为空' }
-        row.command = command
-        row.args = parseArgs(args.args)
-        row.env = parseKv(args.env)
-      }
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
-      return withWriteLock(async () => {
-        let content = ''
-        try { content = await readPatch(abs) } catch (e) { return { ok: false, error: '读取补丁失败: ' + message(e) } }
-        const before = content
-        content = appendBlock(content, buildInsertBlock(row))
-        // v0.8.5：新增服务器默认不启动（用户裁定，与技能 / 子智能体同口径）；
-        // 显式传 enabled: true 才创建即启动。
-        const defaultDisabled = args.enabled !== true
-        if (defaultDisabled) content = appendBlock(content, buildDisableBlock(id, true))
-        const guard = duplicateGuard(before, content)
-        if (guard) return guard
-        try {
-          await writePatch(abs, content)
-        } catch (e) {
-          return { ok: false, error: '写入补丁失败: ' + message(e) }
-        }
-        return { ok: true, row: { ...row, level, disabled: defaultDisabled } }
-      })
-    }
-
-    async function mcpmEdit(args: any): Promise<any> {
-      const p = await ensurePaths()
-      const id = String(args.id || '')
-      const level = args.level === 'global' ? 'global' : 'project'
-      if (!id) return { ok: false, error: '缺少 id' }
-      const all = await collectAll()
-      const cur = all.rows.find((r) => r.id === id)
-      if (!cur) return { ok: false, error: '未找到条目 ' + id }
-      const serverName = String(args.serverName || '').trim()
-      const transport = args.transport === 'stdio' ? 'stdio' : 'streamable-http'
-      if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) return { ok: false, error: 'serverName 需为 1-32 位 [A-Za-z0-9_-]' }
-      if (serverName !== cur.serverName && all.serverNames.has(serverName)) return { ok: false, error: 'serverName "' + serverName + '" 已被其他服务占用' }
-      const row: any = { id, serverName, transport }
-      if (transport === 'streamable-http') {
-        const url = String(args.url || '').trim()
-        if (!/^https?:\/\//.test(url)) return { ok: false, error: 'url 需为 http(s):// 开头的地址' }
-        row.url = url
-        row.headers = parseKv(args.headers)
-      } else {
-        const command = String(args.command || '').trim()
-        if (!command) return { ok: false, error: 'command 不能为空' }
-        row.command = command
-        row.args = parseArgs(args.args)
-        row.env = parseKv(args.env)
-      }
-      const oldAbs = cur.level === 'global' ? p.globalPatch : p.projectPatch
-      const newAbs = level === 'global' ? p.globalPatch : p.projectPatch
-      // 编辑表单不建模 config 里的全部键：手写补丁可能带 toolCallTimeoutMs 这类字段，
-      // 重建前从旧条目原样带回，否则一次「编辑」就把它静默删掉。只透传 buildInsertBlock
-      // 已有发射路径的键 —— 其余未知键的保真需要值保持式序列化（裸布尔/数字经
-      // unquote/yq 往返会漂成字符串），不在此处理，宁可如实丢弃也不写错类型。
-      try {
-        const curRaw = parseRows(await readPatch(oldAbs)).rows.find((r) => r.id === id)
-        if (curRaw && curRaw.config && curRaw.config.toolCallTimeoutMs != null) {
-          row.toolCallTimeoutMs = curRaw.config.toolCallTimeoutMs
-        }
-      } catch { /* 旧文件读不了时按建模字段重建，与原行为一致 */ }
-      const block = buildInsertBlock(row)
-      return withWriteLock(async () => {
-        // Per-tool disable state is keyed by the serverName namespace: migrate
-        // it when a rename moves the tools to a new prefix.
-        if (serverName !== cur.serverName) {
-          const toolMap = Object.assign({}, await readDisabledTools(true))
-          if (toolMap[cur.serverName]) {
-            toolMap[serverName] = toolMap[cur.serverName]
-            delete toolMap[cur.serverName]
-            try { await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMap) } catch (e) { /* non-fatal */ }
-            disabledToolsCache = { at: Date.now(), value: toolMap }
-          }
-          // F-025：运行时快照的 mcp 停用表同样按 serverName 键 —— 改名不跟着改，
-          // 退出场景整体回写时旧键成死键、新名工具的停用状态丢失（回到全启用）。
-          try {
-            const slice: any = await rulesService.readArchiveSlice()
-            const mode: any = slice && slice.mode
-            const mcpMap: any = mode && mode.snapshot && mode.snapshot.mcp
-            if (mcpMap && Object.prototype.hasOwnProperty.call(mcpMap, cur.serverName)) {
-              const next: any = {}
-              for (const [k, v] of Object.entries(mcpMap)) next[k === cur.serverName ? serverName : k] = v
-              await rulesService.patchIndex({ mode: { ...mode, snapshot: { ...mode.snapshot, mcp: next } } })
-            }
-          } catch { /* 快照同步失败不阻断改名本身；残留与修复前一致 */ }
-        }
-        if (oldAbs !== newAbs) {
-          // Level migration: remove from the old file, insert into the new one.
-          // Not atomic, so keep the old content and restore it if the second
-          // write fails — losing the entry is worse than a transient dup.
-          const origOld = await readPatch(oldAbs)
-          let c = origOld
-          c = removeEntryAll(c, id)
-          try {
-            await writePatch(oldAbs, c)
-          } catch (e) {
-            return { ok: false, error: '写入失败: ' + message(e) }
-          }
-          let c2 = await readPatch(newAbs)
-          const beforeNew = c2
-          c2 = appendBlock(c2, block)
-          if (cur.disabled) c2 = appendBlock(c2, buildDisableBlock(id, true))
-          const migrationGuard = duplicateGuard(beforeNew, c2)
-          if (migrationGuard) {
-            try { await writePatch(oldAbs, origOld) } catch (e2) { /* best effort */ }
-            return migrationGuard
-          }
-          try {
-            await writePatch(newAbs, c2)
-          } catch (e) {
-            try { await writePatch(oldAbs, origOld) } catch (e2) { /* best effort */ }
-            return { ok: false, error: '写入失败（已回滚）: ' + message(e) }
-          }
-        } else {
-          let c = await readPatch(newAbs)
-          const before = c
-          c = removeEntryAll(c, id)
-          c = appendBlock(c, block)
-          if (cur.disabled) c = appendBlock(c, buildDisableBlock(id, true))
-          const guard = duplicateGuard(before, c)
-          if (guard) return guard
-          await writePatch(newAbs, c)
-        }
-        return { ok: true }
-      })
-    }
-
-    async function mcpmSetEnabled(args: any): Promise<any> {
-      const p = await ensurePaths()
-      const { id, level } = args
-      const enabled = !!args.enabled
-      if (!id || (level !== 'global' && level !== 'project')) return { ok: false, error: '缺少 id 或 level' }
-      if (!(await entryExists(id, level))) return { ok: false, error: '未找到条目 ' + id }
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
-      return withWriteLock(async () => {
-        let c = await readPatch(abs)
-        if (enabled) {
-          // Drop every `disabled: true` override for this id. If the insert row
-          // itself still says disabled (e.g. user hand-edited it), append an
-          // explicit `disabled: false` override so the effective state flips.
-          // Enable overrides are intentionally left in place — they are the
-          // mechanism that lets a disabled-by-default row be turned on.
-          c = removeMarked(c, id, 'disable')
-          const { rows } = parseRows(c)
-          const row = rows.find((r) => r.id === id)
-          if (row && row.disabled) c = appendBlock(c, buildDisableBlock(id, false))
-        } else {
-          c = removeMarked(c, id, 'enable')
-          // 幂等：已经生效为「停用」时不再追加 disable 块。无条件 append 会让每次点
-          // 「停用」都往 patch 里塞一条重复条目（历史上 18 条互相矛盾的条目就是这么来的，
-          // 最终生效值只能靠 last-wins 合并顺序猜），且文件会随每次启停线性膨胀。
-          const { rows } = parseRows(c)
-          const row = rows.find((r) => r.id === id)
-          if (!row || !row.disabled) c = appendBlock(c, buildDisableBlock(id, true))
-        }
-        await writePatch(abs, c)
-        return { ok: true }
-      })
-    }
-
-    // Bulk enable/disable for every patch-resident server row. Covers both
-    // levels at once, or a single level via args.level. Loader-only rows
-    // (never written to a patch file) are out of scope. Each file is rewritten
-    // at most once; rows already in the target state are left untouched.
-    async function mcpmSetAll(args: any): Promise<any> {
-      const p = await ensurePaths()
-      const enabled = !!args.enabled
-      const levelFilter = args.level === 'global' ? 'global' : args.level === 'project' ? 'project' : null
-      return withWriteLock(async () => {
-        const changed: string[] = []
-        for (const level of ['project', 'global']) {
-          if (levelFilter && levelFilter !== level) continue
-          const abs = level === 'project' ? p.projectPatch : p.globalPatch
-          let c = ''
-          try { c = await readPatch(abs) } catch (e) { continue }
-          const { rows } = parseRows(c)
-          for (const row of rows) {
-            if (!!row.disabled === !enabled) continue
-            changed.push(row.id)
-            if (enabled) {
-              c = removeMarked(c, row.id, 'disable')
-              const { rows: after } = parseRows(c)
-              const still = after.find((r) => r.id === row.id)
-              if (still && still.disabled) c = appendBlock(c, buildDisableBlock(row.id, false))
-            } else {
-              c = removeMarked(c, row.id, 'enable')
-              c = appendBlock(c, buildDisableBlock(row.id, true))
-            }
-          }
-          await writePatch(abs, c)
-        }
-        return { ok: true, enabled, changed }
-      })
-    }
-
-    /** Effective disabled state of a patch row (insert-row flag merged with override blocks). */
-    async function isRowDisabled(id: string, level: string): Promise<boolean> {
-      const p = await ensurePaths()
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
-      try {
-        const { rows } = parseRows(await readPatch(abs))
-        const row = rows.find((r) => r.id === id)
-        return row ? !!row.disabled : false
-      } catch (e) { return false }
-    }
-
-    async function mcpmRestart(args: any): Promise<any> {
-      const p = await ensurePaths()
-      const { id, level } = args
-      if (!id || (level !== 'global' && level !== 'project')) return { ok: false, error: '缺少 id 或 level' }
-      if (!(await entryExists(id, level))) return { ok: false, error: '未找到条目 ' + id }
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
-      // A restart reconnects the server; it must NOT flip the enabled state.
-      // The recovery write below used to strip every disable override, which
-      // silently re-enabled servers the user had disabled on purpose — so the
-      // pre-restart state is captured and restored.
-      const wasDisabled = await isRowDisabled(id, level)
-      const warnings: string[] = []
-      // Phase 1 write (short lock): force-disable. Stale disable overrides are
-      // cleared first so duplicate blocks never accumulate.
-      await withWriteLock(async () => {
-        let c = await readPatch(abs)
-        c = removeMarked(c, id, 'enable')
-        c = removeMarked(c, id, 'disable')
-        c = appendBlock(c, buildDisableBlock(id, true))
-        await writePatch(abs, c)
-      })
-      if (pluginInventory) {
-        const off = await waitFor(async () => {
-          const e = await liveEntry(id)
-          return e ? e.enabled === false : false
-        }, 5000, 300)
-        if (!off) warnings.push('loader 未在 5 秒内停用该服务')
-      }
-      await wait(1000)
-      // Phase 2 write (short lock): restore the pre-restart state. The polling
-      // waits deliberately run OUTSIDE the write lock — holding the global
-      // write lock for up to ~11s stalled every other write op.
-      await withWriteLock(async () => {
-        // 并发护栏：阶段 1 的强制写自身必然把 effective 状态置为停用，所以走到这里时
-        // 若读到「已启用」，只可能是等待窗口内别的写操作重新启用了它 —— 以现状为准并
-        // 警告，绝不按重启前快照把用户的显式选择改回去。其余情形按 wasDisabled 原样恢复。
-        // （已知残留：窗口内被「停用」与阶段 1 的写不可区分，仍按快照恢复 —— 重启语义
-        // 本就是「状态与重启前一致」，方向性无害。）
-        const currentDisabled = await isRowDisabled(id, level)
-        if (!currentDisabled && wasDisabled) {
-          warnings.push('重启等待窗口内该服务被重新启用：已保留启用状态，未按重启前状态恢复')
-          return
-        }
-        let c = await readPatch(abs)
-        c = removeMarked(c, id, 'disable')
-        if (wasDisabled) c = appendBlock(c, buildDisableBlock(id, true))
-        await writePatch(abs, c)
-      })
-      if (pluginInventory) {
-        if (!wasDisabled) {
-          const on = await waitFor(async () => {
-            const e = await liveEntry(id)
-            return e ? e.enabled === true : false
-          }, 5000, 300)
-          if (!on) warnings.push('loader 未在 5 秒内重新启用该服务')
-        }
-      } else await wait(1500)
-      return warnings.length ? { ok: true, warning: warnings.join('；') } : { ok: true }
-    }
-
-    async function mcpmRemove(args: any): Promise<any> {
-      const p = await ensurePaths()
-      const { id, level } = args
-      if (!id || (level !== 'global' && level !== 'project')) return { ok: false, error: '缺少 id 或 level' }
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
-      return withWriteLock(async () => {
-        let c = await readPatch(abs)
-        c = removeEntryAll(c, id)
-        await writePatch(abs, c)
-        return { ok: true }
-      })
-    }
-
-    /**
-     * 收敛补丁文件里的启停覆盖块（用户显式点「整理补丁」才走这里）。
-     *
-     * 只删"删掉也不改变生效状态"的块（判定见 planOverrideCompaction）：insert 行、
-     * 带 config 的覆盖块、以及决定当前生效值的那一条都原样保留。删除前 writePatch
-     * 会自动备份上一版（保留最近 5 份），所以这一步是可回退的。
-     *
-     * 基准状态由 planOverrideCompaction 自己从 insert 行读（另一份文件的内容只用来补
-     * "insert 行不在本文件里"的情况）。这里**不要**喂 parseRows() 的 rows —— 那是合并
-     * 覆盖块之后的生效值，会让每个 decider 都被判成多余：第一版就是这么把 6 台 MCP
-     * 全部启用的。同理，界面不显示任何"多余块数"（那个数字也来自同一条错误口径）。
-     */
-    async function mcpmCompact(): Promise<any> {
-      const p = await ensurePaths()
-      return withWriteLock(async () => {
-        const levels = ['project', 'global'] as const
-        const absOf = (level: string): string => (level === 'project' ? p.projectPatch : p.globalPatch)
-        const contents: Record<string, string> = {}
-        for (const level of levels) {
-          try { contents[level] = await readPatch(absOf(level)) } catch (e) { contents[level] = '' }
-        }
-        const removed: Record<string, number> = {}
-        const files: string[] = []
-        let total = 0
-        for (const level of levels) {
-          const content = contents[level]
-          if (!content) continue
-          const others = levels.filter((other) => other !== level).map((other) => contents[other]).filter(Boolean)
-          const plan = planOverrideCompaction(content, others)
-          if (!plan.ranges.length) continue
-          await writePatch(absOf(level), spliceRanges(splitLines(content), plan.ranges))
-          files.push(absOf(level))
-          for (const [id, stat] of Object.entries(plan.ids)) {
-            if (!stat.dropped) continue
-            removed[id] = (removed[id] || 0) + stat.dropped
-            total += stat.dropped
-          }
-        }
-        return { ok: true, removed: total, ids: removed, files }
-      })
-    }
-
-    async function mcpmExport(): Promise<any> {
-      const p = await ensurePaths()
-      const list = await mcpmList()
-      const rows = (list.rows || []).filter((r: any) => r.level !== 'loader').map((r: any) => ({
-        id: r.id,
-        serverName: r.serverName,
-        transport: r.transport,
-        url: r.url || undefined,
-        command: r.command || undefined,
-        args: r.args || undefined,
-        env: r.env || undefined,
-        headers: r.headers || undefined,
-        level: r.level,
-        disabled: r.disabled,
-      }))
-      const json = JSON.stringify({ exportedAt: new Date().toISOString(), rows }, null, 2)
-      let savedTo: string | null = null
-      try {
-        const abs = mcpSidecar(MCP_EXPORT_FILE)
-        await writePatch(abs, json)
-        savedTo = abs
-      } catch (e) { /* non-fatal */ }
-      return { ok: true, json, savedTo }
-    }
-
-    async function mcpmImport(args: any): Promise<any> {
-      const p = await ensurePaths()
-      const overwrite = !!(args && args.conflict === 'overwrite')
-      let parsed: any = null
-      try { parsed = JSON.parse(String(args.json || '')) } catch (e) { return { ok: false, error: 'JSON 解析失败: ' + message(e) } }
-      const entries = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.rows) ? parsed.rows : null)
-      if (!entries) return { ok: false, error: '导入内容格式不正确：需要数组或 { rows: [...] }' }
-      const added: string[] = []
-      const overwritten: string[] = []
-      const skipped: Array<{ id: string; reason: string }> = []
-      for (const item of entries) {
-        const norm = normalizeImportItem(item)
-        if (!norm.ok) { skipped.push({ id: (item && (item.id || item.serverName)) || '?', reason: norm.error }); continue }
-        const row = norm.row
-        // Existence checks run INSIDE the write lock so two concurrent imports
-        // (or an import racing an add) cannot both pass the same-id/same-name
-        // check and duplicate rows (TOCTOU).
-        const res = await withWriteLock(async () => {
-          const existing = await collectAll()
-          const idTaken = existing.ids.has(row.id)
-          const nameTaken = existing.serverNames.has(row.serverName)
-          // serverName is globally unique: a DIFFERENT id owning the name is
-          // always skipped, even in overwrite mode.
-          if (nameTaken && !idTaken) return { skipped: true, reason: 'serverName 已存在' }
-          if (idTaken && !overwrite) return { skipped: true, reason: 'id 已存在' }
-          // Overwrite: purge every trace of the id from BOTH patch files first,
-          // then insert the imported row at its own level. The purge is not
-          // atomic with the insert, so keep the pre-purge content of both files
-          // and restore it when the insert fails — same trade-off as mcpmEdit's
-          // level migration: losing the old entries is worse than a transient dup.
-          const origs: Array<{ abs: string; content: string }> = []
-          if (idTaken && overwrite) {
-            for (const lvl of ['project', 'global']) {
-              const lAbs = lvl === 'global' ? p.globalPatch : p.projectPatch
-              let lContent = ''
-              try { lContent = await readPatch(lAbs) } catch (e) { continue }
-              origs.push({ abs: lAbs, content: lContent })
-              try {
-                await writePatch(lAbs, removeEntryAll(lContent, row.id))
-              } catch (e) {
-                // 前面已清掉的文件也要恢复：purge 中途失败同样不能留下「旧条目没了」的状态。
-                for (const o of origs) { try { await writePatch(o.abs, o.content) } catch { /* best effort */ } }
-                return { skipped: true, reason: '覆盖旧条目失败（已回滚）: ' + message(e) }
-              }
-            }
-          }
-          const abs = row.level === 'global' ? p.globalPatch : p.projectPatch
-          try {
-            let c = await readPatch(abs)
-            const before = c
-            c = appendBlock(c, buildInsertBlock(row))
-            if (row.disabled) c = appendBlock(c, buildDisableBlock(row.id, true))
-            const guard = duplicateGuard(before, c)
-            if (guard) {
-              for (const o of origs) { try { await writePatch(o.abs, o.content) } catch { /* best effort */ } }
-              return { skipped: true, reason: guard.error }
-            }
-            await writePatch(abs, c)
-          } catch (e) {
-            for (const o of origs) { try { await writePatch(o.abs, o.content) } catch { /* best effort */ } }
-            return { skipped: true, reason: '写入失败（已回滚）: ' + message(e) }
-          }
-          return { added: true, wasOverwrite: idTaken && overwrite }
-        })
-        if (res.added) {
-          added.push(row.id)
-          if (res.wasOverwrite) overwritten.push(row.id)
-        } else skipped.push({ id: row.id, reason: (res && res.reason) || '写入失败' })
-      }
-      return overwrite ? { ok: true, added, overwritten, skipped } : { ok: true, added, skipped }
-    }
-
-    function parseKv(text: string): Record<string, string> {
-      const out: Record<string, string> = {}
-      String(text || '').split(/\r?\n/).forEach((line) => {
-        const t = line.trim()
-        if (!t || t.startsWith('#')) return
-        const i = t.indexOf('=')
-        if (i <= 0) return
-        out[t.slice(0, i).trim()] = t.slice(i + 1).trim()
-      })
-      return out
-    }
-    function parseArgs(text: string): string[] {
-      return String(text || '').split(/[\s,]+/).map((s) => s.trim()).filter((s) => s !== '')
-    }
 
     // ---------- open a skill source in the OS default editor ----------
     // Fire-and-forget: the launcher detaches, so a hanging editor never blocks
@@ -2938,299 +1388,26 @@ export default {
       const abs = String((args && args.path) || '').trim()
       if (!abs) return { ok: false, error: '缺少 path' }
       if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(abs)) return { ok: false, error: '需要绝对路径' }
-      if (!/\.(md|markdown|txt)$/i.test(abs)) return { ok: false, error: '只支持打开 Markdown 源文件' }
+      // 接受面与报错文案必须一致：这里认 `.md` / `.markdown` / `.txt`，错误文案就得照实说
+      // （此前写"只支持打开 Markdown 源文件"，把 `.txt` 藏在接受面里 —— 用户按文案判断
+      // 哪些文件能开，会与实际对不上）。
+      if (!/\.(md|markdown|txt)$/i.test(abs)) return { ok: false, error: '只支持打开文本源文件（.md / .markdown / .txt）' }
+      // 边界：只允许打开「技能来源」或人设目录里的文件。这个 op 会把路径交给系统默认编辑器，
+      // 不设边界就等于「任意绝对路径 → 启动外部程序」（此前只校验了后缀与存在性）。
+      const inPersonas = await isInsideRootResolved(defaultPersonasDir(), abs).catch(() => false)
+      if (!inPersonas && !(await skillsService.isInsideKnownSkillRoot(abs))) {
+        return { ok: false, error: '只能打开技能来源或人设目录内的文件' }
+      }
       if (!(await exists(abs))) return { ok: false, error: '文件不存在：' + abs }
       if (!openWithSystemEditor(abs)) return { ok: false, error: '无法调用系统默认打开方式' }
       return { ok: true, path: abs }
-    }
-
-    // 批量操作目标校验：scope 白名单；sessions 需非空 sessionIds；workspace 需
-    // workspaceId。与 ArchiveWorkspaceRegistry.archivedBatchTargetSchema 语义一致。
-    function parseHistoryBatchTarget(raw: unknown): { ok: true; target: HistoryBatchTarget } | { ok: false; error: string } {
-      const t = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
-      if (!t) return { ok: false, error: '缺少 target' }
-      const scope = t.scope
-      if (scope !== 'all' && scope !== 'ungrouped' && scope !== 'sessions' && scope !== 'workspace') {
-        return { ok: false, error: 'target.scope 不合法' }
-      }
-      if (scope === 'sessions') {
-        if (!Array.isArray(t.sessionIds) || t.sessionIds.length === 0 ||
-            t.sessionIds.some((id) => typeof id !== 'string' || !String(id).trim())) {
-          return { ok: false, error: 'scope=sessions 需要非空的 sessionIds 数组' }
-        }
-      }
-      if (scope === 'workspace' && !(typeof t.workspaceId === 'string' && String(t.workspaceId).trim())) {
-        return { ok: false, error: 'scope=workspace 需要 workspaceId' }
-      }
-      return {
-        ok: true,
-        target: {
-          scope,
-          ...(scope === 'sessions' ? { sessionIds: (t.sessionIds as string[]).map((s) => String(s).trim()) } : {}),
-          ...(scope === 'workspace' ? { workspaceId: String(t.workspaceId).trim() } : {}),
-        },
-      }
-    }
-
-    /**
-     * 归档会话的归属解析（三级，宿主侧算好再给客户端）：
-     *   1. 活登记的 sessionIds 命中            → 组 = 该登记；
-     *   2. 未命中但规范路径命中某活登记        → 组 = 该登记（会话不在其记账里，属正常）；
-     *   3. 没有任何活登记                      → 按会话目录重建分组（`path:<归一化路径>`），
-     *      目录仍在则可一键重新登记（写回宿主），目录已不在则退到 header 里的原始 cwd。
-     * 宿主删除工作区是硬删、不留墓碑，登记一没，`workspaceId` 就再也查不到；但会话目录
-     * （`registry.sessionPaths` / header.cwd）还在，所以归属可以按目录重建、并在目录回来时
-     * 自动并回同一组。除插件自己 `data/` 下的「见过的登记」快照外，本函数不写任何宿主状态。
-     * 任何一步失败都降级为「不分组」，绝不阻断列表。
-     */
-    async function buildHistoryGroups(
-      registry: HistoryRegistry,
-      items: Array<{ sessionId: string; cwd?: string; workspaceId?: string; groupId?: string }>,
-    ): Promise<{ groups: HistoryGroupView[]; workspaces: Record<string, { title: string; path?: string }> }> {
-      const groups: HistoryGroupView[] = []
-      const workspaces: Record<string, { title: string; path?: string }> = {}
-      try {
-        const groupsById = new Map<string, HistoryGroupView>()
-        const liveByPath = new Map<string, string>()
-        const owned = new Map<string, string>()
-        const liveRecords: Array<{ id: string; path: string; title: string }> = []
-        const table = typeof registry.requireTable === 'function' ? registry.requireTable() : undefined
-        const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
-        if (table) {
-          const ids = state && Array.isArray(state.workspaceIds) && state.workspaceIds.length
-            ? state.workspaceIds
-            : [...table.entries()].map(([id]) => id)
-          for (const wid of ids) {
-            const rec = table.get(wid)
-            if (!rec || !Array.isArray(rec.sessionIds)) continue
-            const path = typeof rec.path === 'string' && rec.path ? rec.path : undefined
-            const title = (rec.title && String(rec.title)) || (path ? workspaceBaseName(path) : String(wid))
-            for (const sid of rec.sessionIds) if (!owned.has(sid)) owned.set(sid, wid)
-            if (path) {
-              liveByPath.set(workspacePathKey(path), wid)
-              liveRecords.push({ id: String(wid), path, title })
-            }
-            const view: HistoryGroupView = { id: 'ws:' + wid, title, kind: 'live', registered: true, ...(path ? { path } : {}) }
-            groupsById.set(view.id, view)
-            groups.push(view)
-            workspaces[wid] = { title, ...(path ? { path } : {}) }
-          }
-        }
-        // 「见过的登记」快照：登记被删后仍能给出原命名，并区分「已移除」与「从未登记」。
-        const snapshot = typeof registry.workspaceSnapshot === 'function' ? await registry.workspaceSnapshot() : undefined
-        if (liveRecords.length && typeof registry.rememberWorkspaces === 'function') {
-          try { await registry.rememberWorkspaces(liveRecords) } catch { /* 快照写失败不影响分组 */ }
-        }
-        const sessionPaths = registry.sessionPaths instanceof Map ? registry.sessionPaths : undefined
-        const headers = registry.headers instanceof Map ? registry.headers : undefined
-        // 「目录真实存在」检查缓存：canRegister 从「宿主 sessionPaths 命中」放宽为
-        // 「目录存在」时，同一目录只 stat 一次；结果按归一化键缓存，避免每次刷新重复探盘。
-        const dirExistsCache = new Map<string, boolean>()
-        async function directoryExists(p: string): Promise<boolean> {
-          const k = workspacePathKey(p)
-          const hit = dirExistsCache.get(k)
-          if (hit !== undefined) return hit
-          let ok = false
-          try { ok = (await stat(p)).isDirectory() } catch { ok = false }
-          dirExistsCache.set(k, ok)
-          return ok
-        }
-        for (const it of items) {
-          const sid = it.sessionId
-          let wid = owned.get(sid)
-          const canonical = sessionPaths ? sessionPaths.get(sid) : undefined
-          if (wid === undefined && typeof canonical === 'string' && canonical) {
-            const byPath = liveByPath.get(workspacePathKey(canonical))
-            if (byPath !== undefined) wid = byPath
-          }
-          if (wid !== undefined) {
-            it.workspaceId = wid
-            it.groupId = 'ws:' + wid
-            continue
-          }
-          let path = typeof canonical === 'string' && canonical ? canonical : undefined
-          if (path === undefined && it.cwd) path = it.cwd
-          if (path === undefined && headers) {
-            const cwd = headers.get(sid)?.cwd
-            if (typeof cwd === 'string' && cwd) path = cwd
-          }
-          if (!path) continue
-          const key = 'path:' + workspacePathKey(path)
-          it.groupId = key
-          const known = snapshot ? snapshot.get(workspacePathKey(path)) : undefined
-          const existing = groupsById.get(key)
-          if (existing) {
-            // 同目录的多个会话：宿主索引命中，或磁盘目录真实存在，即可重新登记。
-            if (canonical !== undefined || (await directoryExists(path))) {
-              existing.canRegister = true
-              existing.dirMissing = false
-            }
-            continue
-          }
-          const canRegister = canonical !== undefined || (await directoryExists(path))
-          const view: HistoryGroupView = {
-            id: key,
-            title: known?.title || workspaceBaseName(path) || path,
-            kind: 'detached',
-            registered: known !== undefined,
-            canRegister,
-            dirMissing: !canRegister,
-            path: known?.path || path,
-          }
-          groupsById.set(key, view)
-          groups.push(view)
-        }
-      } catch { /* 分组是增强：任何异常都退回扁平列表 */ }
-      return { groups, workspaces }
-    }
-
-    /**
-     * 记忆候选（档案编辑器第 4 段「记忆」）：`[{ id, scene, name, description }]`。
-     * 只读、不读正文（勾选集只存 id）；任何异常降级为空列表，不让档案弹窗崩掉。
-     */
-    async function memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; description: string }>> {
-      try {
-        const r: any = await rulesService.ops['rules-list']({})
-        if (!r || r.ok === false) return []
-        return (r.rules || [])
-          .filter((x: any) => !x.shadowed)
-          .map((x: any) => ({
-            id: String(x.id),
-            scene: String(x.group || ''),
-            name: String(x.name || ''),
-            description: String(x.description || ''),
-          }))
-      } catch {
-        return []
-      }
-    }
-
-    /** 场景候选（档案编辑器第 4 段的分组维度）：`[{ name, label, description, count, global }]`。 */
-    async function memorySceneCandidates(): Promise<Array<{ name: string; label: string; description: string; count: number; global: boolean }>> {
-      try {
-        const r: any = await rulesService.ops['rules-list']({})
-        if (!r || r.ok === false) return []
-        return (r.scenes || []).map((s: any) => ({
-          name: String(s.name),
-          label: String(s.label || s.name),
-          description: String(s.description || ''),
-          count: Number(s.count || 0),
-          global: s.global === true,
-        }))
-      } catch {
-        return []
-      }
-    }
-
-    /**
-     * 工具候选（人设的「工具白名单 / 黑名单」选择器）：
-     * 取**全体 Agent 预设工具名的并集**——人设可能在任意预设下被子代理复用，
-     * 只列当前会话的工具会让换预设后的子代理启动失败（官方 `toolFilter` 对未知名直接拒绝）。
-     * 同时标注 `current`：当前会话可见的工具（其余只是「本预设可用，当前会话看不到」）。
-     *
-     * 每次调用都会为尚未挂载的预设建立 standing mount（官方语义：一个预设在本进程内只挂一次，
-     * 正常创建会话时同样会挂），因此结果会按需缓存 60 秒，避免频繁枚举。
-     */
-    let presetToolsCache: { at: number; value: { tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string; trust: string; broken: boolean; tools: string[] }> } } | null = null
-    async function presetToolCandidates(): Promise<{ tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string }> }> {
-      if (presetToolsCache && Date.now() - presetToolsCache.at < 60000) return presetToolsCache.value
-      const byName = new Map<string, { name: string; presets: Set<string>; current: boolean }>()
-      const presets: Array<{ id: string; name: string; trust: string; broken: boolean; tools: string[] }> = []
-      // 当前会话的可见工具（用于标 current）；拿不到就全部按「非当前」处理。
-      const currentNames = new Set<string>()
-      try {
-        const schemas = await tools.schemas()
-        for (const s of schemas || []) currentNames.add(String((s as any).name))
-      } catch { /* 无 live 工具 → current 全 false */ }
-
-      const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
-      if (agentPresets && typeof agentPresets.list === 'function') {
-        try {
-          // roster 顺序 = 官方的展示顺序（preset.yml 的 order：标准 1 / PTC 2 / 极简 3 / 创造 4，
-          // 自建预设排在其后）。人设编辑器的四行照抄这个顺序，**不要**再按 id 排序。
-          const roster = await agentPresets.list()
-          for (const p of roster || []) {
-            const id = String((p && p.id) || '')
-            if (!id) continue
-            // MCP 工具名形如 `mcp__<server>__<tool>`：面向上百个条目，噪声大于价值 → 不进候选。
-            // 子代理照样能用当前在跑的 MCP —— 那份名单在 decideToolFilter 里运行时并进白名单。
-            const names = (await presetToolNames(id)).filter((name) => !name.startsWith('mcp__'))
-            presets.push({
-              id,
-              name: String((p && (p.name || p.id)) || id),
-              trust: String((p && p.trust) || 'user'),
-              broken: typeof (p && p.broken) === 'string',
-              tools: names,
-            })
-            for (const name of names) {
-              const rec = byName.get(name) || { name, presets: new Set<string>(), current: false }
-              rec.presets.add(id)
-              byName.set(name, rec)
-            }
-          }
-        } catch { /* 预设服务不可用 → 退回「仅当前会话工具」 */ }
-      }
-      // 当前会话的工具即便没有任何预设可枚举，也要出现在候选里（否则选择器是空的）。
-      for (const name of currentNames) {
-        if (name.startsWith('mcp__')) continue
-        const rec = byName.get(name) || { name, presets: new Set<string>(), current: false }
-        byName.set(name, rec)
-      }
-      for (const rec of byName.values()) rec.current = currentNames.has(rec.name)
-
-      const value = {
-        tools: [...byName.values()]
-          .map((r) => ({ name: r.name, presets: [...r.presets].sort(), current: r.current }))
-          .sort((a, b) => a.name.localeCompare(b.name)),
-        // 保持 roster 顺序（官方的展示顺序），前端四行直接照用。
-        presets,
-      }
-      presetToolsCache = { at: Date.now(), value }
-      return value
-    }
-
-    /**
-     * 单个预设的工具名（列表里含 MCP 与宿主平面的工具，因为子代理的可见集合是
-     * "宿主平面 ∪ 该预设"的并集）。枚举会为该预设建立 standing mount —— 官方语义：
-     * 一个预设每进程只挂一次，正常创建会话时同样会挂，所以这里按 id 缓存 60 秒；
-     * `subagent_manager_run` 每次委派都要用它校验名单，不能每次都重新枚举。
-     */
-    const presetNamesCache = new Map<string, { at: number; names: string[] }>()
-    async function presetToolNames(id: string): Promise<string[]> {
-      const hit = presetNamesCache.get(id)
-      if (hit && Date.now() - hit.at < 60000) return hit.names
-      const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
-      let scopeKey: unknown
-      try {
-        scopeKey = agentPresets && typeof agentPresets.standingKeyFor === 'function'
-          ? await agentPresets.standingKeyFor(id)
-          : undefined
-      } catch { scopeKey = undefined }
-      let names: string[] = []
-      try {
-        names = ((await tools.schemas(scopeKey as any)) || []).map((s: any) => String(s.name)).filter(Boolean)
-      } catch { names = [] }
-      presetNamesCache.set(id, { at: Date.now(), names })
-      return names
-    }
-
-    /** 预设名单的名字投影（只读 roster，不挂载任何预设）：场景页显示模式名用。 */
-    async function presetNames(): Promise<Array<{ id: string; name: string; trust: string }>> {
-      const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
-      if (!agentPresets || typeof agentPresets.list !== 'function') return []
-      try {
-        const roster = await agentPresets.list()
-        return (roster || [])
-          .map((p: any) => ({ id: String((p && p.id) || ''), name: String((p && (p.name || p.id)) || ''), trust: String((p && p.trust) || 'user') }))
-          .filter((p: { id: string }) => p.id !== '')
-      } catch { return [] }
     }
 
     /** 调用方 agent 跑在哪个 Agent 预设上；判断不了返回 null（绝不猜）。 */
     function currentPresetId(agentCtx: unknown): string | null {
       if (agentCtx === undefined || agentCtx === null) return null
       try {
-        const roster = presetRoster()
+        const roster = candidates.presetRoster()
         if (roster === undefined || typeof roster.composedPreset !== 'function') return null
         const id = String(roster.composedPreset(agentCtx) ?? '')
         return id === '' ? null : id
@@ -3250,726 +1427,131 @@ export default {
       const mcp = hostNames.filter((name) => name.startsWith('mcp__'))
       const known = new Set<string>(hostNames)
       const presetId = currentPresetId(agentCtx)
-      if (presetId !== null) for (const name of await presetToolNames(presetId)) known.add(name)
+      if (presetId !== null) for (const name of await candidates.presetToolNames(presetId)) known.add(name)
       return decideToolFilter(persona, presetId, { names: known, mcp })
     }
 
-    /**
-     * 模型候选（人设的「模型」下拉）：宿主已注册的 provider + 各 provider 能宣告的模型。
-     * 只读宿主 LLM 目录，**不发起网络请求**（`discoverModels` 会打端点，这里不用）；
-     * 拿不到就返回空列表，UI 退回手填（跨来源模型如 sensenova 的手工条目仍需手填兜底）。
-     * 返回扁平列表：DSH 的模型路由是 (provider, model) 一对，两个键必须同时给。
-     */
-    async function modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }> }> {
-      const llm = (typeof ctx.get === 'function' ? ctx.get('llm') : undefined) as any
-      if (!llm || typeof llm.listProviders !== 'function') return { models: [] }
-      let list: any[] = []
-      try {
-        list = llm.listProviders() || []
-      } catch {
-        return { models: [] }
-      }
-      const models: Array<{ provider: string; providerName: string; id: string; name: string }> = []
-      const seen = new Set<string>()
-      for (const p of list) {
-        const provider = String((p && (p.id || p.provider)) || '')
-        if (!provider) continue
-        const providerName = String((p && (p.name || p.displayName)) || provider)
-        let discovered: any[] = []
-        try {
-          // 适配器可选提供 listModels（官方 LlmAdapter 契约）；未提供时该 provider 只报名字。
-          if (typeof llm.listModels === 'function') discovered = (await llm.listModels(provider)) || []
-        } catch { /* 该 provider 的目录读失败 → 只报 provider 本身 */ }
-        for (const m of discovered) {
-          const id = String((m && (m.id || m.model)) || '')
-          if (!id) continue
-          const key = provider + '\u0000' + id
-          if (seen.has(key)) continue
-          seen.add(key)
-          models.push({ provider, providerName, id, name: String((m && m.name) || id) })
-        }
-      }
-      return { models }
-    }
+
+    // ---------- 候选源（场景 / 表单的取数）----------
+    // 实现在 ./scenes/candidates.ts（2026-09-19 从本闭包 10 段抽出，约 260 行）。
+    // 放在这里而不是更早：它要 mcp（读停用表）与 toolKeyParts（416 行的 const），
+    // 而唯一在更早处引用它的地方（注入 deps 的 factsFor）是箭头函数，调用发生在之后。
+    const candidates = createCandidates({
+      get: (name: string) => ctx.get(name),
+      tools,
+      mcp,
+      skillsService,
+      memoriesService,
+      toolKeyParts,
+    })
+
 
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
-      'mcpm-list': mcpmListView,
-      'mcpm-reveal': mcpmReveal,
-      'mcpm-note': mcpmNote,
-      'mcpm-settings': mcpmSettings,
-      'mcpm-tool-enabled': mcpmToolEnabled,
       'skill-open': skillOpen,
-      'mcpm-tools': mcpmTools,
-      'mcpm-tools-refresh': mcpmToolsRefresh,
-      'mcpm-add': mcpmAdd,
-      'mcpm-edit': mcpmEdit,
-      'mcpm-set-enabled': mcpmSetEnabled,
-      'mcpm-set-all': mcpmSetAll,
-      'mcpm-restart': mcpmRestart,
-      'mcpm-remove': mcpmRemove,
-      'mcpm-compact': mcpmCompact,
-      'mcpm-export': mcpmExport,
-      'mcpm-import': mcpmImport,
+      // MCP 域 16 个 op（实现在 ./mcp/manager.ts）
+      ...mcp.ops,
       // 技能管理 ops（由 ./skills/service.js 提供）：skill-state / skill-detail /
       // skill-browse / skill-enable / skill-disable / skill-source-enable /
       // skill-source-disable / skill-create / skill-import / skill-upload /
       // skill-delete / skill-trash-restore / skill-trash-delete
       // 成功返回 {ok:true, data}；core 业务失败原样透传 {ok:false, error, code?, params?}。
       ...skillsService.ops,
-      // rules ops（由 ./rules/service.js 提供）：rules-list / rules-read / rules-budget /
+      // rules ops（由 ./memories/service.js 提供）：rules-list / rules-read / rules-budget /
       // rules-diagnose / rules-create / rules-update / rules-remove / rules-restore /
       // rules-attach / rules-detach / rules-trash-list / rules-trash-remove /
       // rules-toggle / rules-set-index / rules-set-active / rules-create-scene /
       // rules-remove-scene。
       // 成功返回扁平 {ok:true, ...}（不套 data），失败 {ok:false, error, code?}。
-      ...rulesService.ops,
-      // 场景 ↔ 全局基线（AGENTS.md）同步：用户裁定「切换场景，对应的提示词直接把 AGENTS.md
-      // 直接修改」，所以这四个 rules 写 op 走包装 —— 先执行原逻辑，成功后把当前场景绑定的
-      // 提示词写进 `~/.dsh/AGENTS.md`（或关掉场景时恢复进场景前的基线），结果并进响应
-      // 的 `agentsMd` 字段（`applied` / `restored` / `unchanged` / `error`）。
-      // 放在 spread 之后，显式覆盖同名 op。
-      'rules-set-active': async (args: any) => withAgentsMdSync(await rulesService.ops['rules-set-active'](args)),
-      'rules-update-scene': async (args: any) => withAgentsMdSync(await rulesService.ops['rules-update-scene'](args)),
-      'rules-create-scene': async (args: any) => withAgentsMdSync(await rulesService.ops['rules-create-scene'](args)),
-      'rules-remove-scene': async (args: any) => withAgentsMdSync(await rulesService.ops['rules-remove-scene'](args)),
-      // 场景档案 ops（由 ./rules/archive-engine.ts 提供）：scene-mode-get /
+      ...memoriesService.ops,
+      // 场景档案 ops（由 ./memories/archive-engine.ts 提供）：scene-mode-get /
       // scene-archive-save / scene-mode-set。成功返回扁平 {ok:true, ...}，
       // 失败 {ok:false, error}；写 op 已含 archiveService.writeOps 门禁派生。
       ...archiveService.ops,
       // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list/get（只读）
       // + subagent-create/update/delete（写，writeOps 已派生进门禁）。
       ...subagentService.ops,
-      // 人设表单的两个候选源（只读，均为「按需拉取」——不进 scene-inventory，避免每次开档案弹窗都枚举预设）。
-      // preset-tools：全体 Agent 预设工具名并集 + 各工具所属预设 + 当前会话是否可见。
-      'preset-tools': async () => ({ ok: true, ...(await presetToolCandidates()) }),
-      // model-candidates：宿主 LLM 目录里的 (provider, model) 对（不发网络请求）。
-      'model-candidates': async () => ({ ok: true, ...(await modelCandidates()) }),
-      // 场景档案勾选器数据源 v2：全部 MCP 服务器（含未运行）+ 技能全集 + 人设清单。
-      'scene-inventory': async () => {
-        const [rowsR, tools, skills, subs] = await Promise.all([mcpmListView(), toolStates(), skillRows(), subagentService.list()])
-        const disabledRaw = await readDisabledTools()
-        const rows: any[] = (rowsR && rowsR.rows) || []
-        const mcpServers: any[] = []
-        const seen = new Set<string>()
-        for (const row of rows) {
-          const name = String((row && row.serverName) || '')
-          if (!name || seen.has(name)) continue
-          seen.add(name)
-          const live = !!(row.live && row.live.enabled)
-          mcpServers.push({
-            name,
-            level: row.level || null,
-            live,
-            serverDisabled: !!row.disabled,
-            // 停用表里的 ['*'] = 整台工具停用（勾选器据此预勾，避免把"全停"读成"全启用"）。
-            allToolsDisabled: (disabledRaw[name] || []).indexOf('*') >= 0,
-            // 未运行且没有任何已知工具 ⇒ null（客户端显示「工具数未知」并引导读取），
-            // 不再给出误导性的 0。
-            toolCount: live || Number(row.toolCount) > 0
-              ? (typeof row.toolCount === 'number' ? row.toolCount : null)
-              : null,
-          })
-        }
-        return {
-          ok: true,
-          mcpServers,
-          tools: Object.entries(tools).map(([key, enabled]) => ({ key, enabled })),
-          // 技能行：技能名与来源名分开给（早先只给 `<来源 key>/<技能名>`，自定义目录的
-          // 来源 key 是 `custom-<hash>`，于是导入的技能在场景里显示成一串哈希）。
-          skills,
-          // 人设行要显示"按模式配了什么限制"，所以把按模式名单一起带上；
-          // presets 只给名字与来源（不枚举工具，避免打开档案弹窗就挂载每个预设）。
-          subagents: subs.map((p) => ({ name: p.name, description: p.description, toolsByPreset: p.toolsByPreset ?? null })),
-          presets: await presetNames(),
-          // 档案编辑器第 4 段「记忆」的候选：场景 + 每个场景里的记忆条数。
-          // 记忆正文不在这里返回（勾选集只存 id，渲染时才读盘）。
-          scenes: await memorySceneCandidates(),
-          memories: await memoryCandidates(),
-        }
-      },
-      // AGENTS.md 预设库 ops（由 ./agents-md/service.js 提供）：agentsmd-list /
-      // agentsmd-read / agentsmd-create / agentsmd-update / agentsmd-remove /
-      // agentsmd-apply / agentsmd-get-current
-      // 提示词预设库（由 ./agents-md/service.ts 提供）。这里把两件事对齐成用户看到的一份状态：
-      //   - `active`（界面「生效中」）= **当前真正在起作用的基线**：启用的场景绑了预设就是它，
-      //     否则才看文件比对（预设正文 == ~/.dsh/AGENTS.md）。用户裁定：「场景启动了，
-      //     提示词页生效中的应该是场景选择的那个」。
-      //   - `fileApplied` = 文件比对结果（AGENTS.md 里确实是它）。两者同时为真说明
-      //     场景绑的就是已应用的那份，正文一致时宿主不会再注入第二遍（去重）。
-      'agentsmd-list': async () => {
-        const base = await agentsMdService.list()
-        if (!base || base.ok === false) return base
-        let scenePrompt: { scene: string | null; label?: string | null; presetId: string | null; missing: boolean; duplicate?: boolean; bytes: number } | undefined
-        try {
-          const r: any = await rulesService.ops['rules-list']({})
-          if (r && r.ok && r.scenePrompt) scenePrompt = r.scenePrompt
-        } catch { /* 场景服务不可用 → 只回预设库 */ }
-        const sceneId = scenePrompt && !scenePrompt.missing && scenePrompt.scene ? scenePrompt.presetId : null
-        // 场景驱动时**只有场景绑的那份**算生效中（用户裁定）；文件里那份降级为「文件里是它」，
-        // 因为场景的提示词已经接管基线。没有场景驱动时才按文件比对定「生效中」。
-        const sceneDrives = sceneId !== null
-        // 引用清单与删除保护同源（scene-prompt-sync）：界面据此禁用删除并说明「谁在用」，
-        // 不必自己再拼一遍判定（那正是这次四处状态各说各话的根源）。探测失败 = 空清单。
-        const refs = await scenePromptSync.refs()
-        const presets = base.presets.map((p) => {
-          const fileApplied = p.active === true
-          const byScene = sceneDrives && sceneId === p.id
-          const active = sceneDrives ? byScene : fileApplied
-          return {
-            ...p,
-            active,
-            fileApplied,
-            activeVia: byScene ? 'scene' : (active && fileApplied ? 'file' : null),
-            refs: refs ? refs.get(p.id) || [] : [],
-          }
-        })
-        return { ...base, presets, ...(scenePrompt ? { scenePrompt } : {}) }
-      },
-      'agentsmd-read': (args: any) => agentsMdService.read(String((args && args.id) || '')),
-      // content 与 from 都可选：新建弹窗里直接写正文（content），或从现有预设复制（from）。
-      'agentsmd-create': (args: any) => agentsMdService.create(String((args && args.id) || ''), {
-        ...(args && args.from ? { from: String(args.from) } : {}),
-        ...(args && typeof args.content === 'string' ? { content: String(args.content) } : {}),
-        ...(args && typeof args.description === 'string' ? { description: String(args.description) } : {}),
+      // 兼容 / 注入 / 备份域（ops/compat.ts 提供）：compat-status / preset-reach /
+      // inject-settings / backups-list / backups-clean / injection-live。
+      // 依赖显式传参，不再靠闭包隐式捕获。
+      ...buildCompatOps({
+        getSessionsRegistry: history.getSessionsRegistry,
+        tools,
+        readInjectSettings,
+        injectSettingsOp,
+        presetRoster: candidates.presetRoster,
+        listPatchBackups,
+        cleanPatchBackups,
+        getContextInjectorLive: () => contextInjectorLive,
+        message,
+        compatLog,
       }),
-      // 保存：改正文 + 可选改名（nextId）。改名成功顺带把场景绑定一起改名 ——
-      // 绑定存在 memories-index.json 里，预设库自己看不到，不叫这一声就会留悬空绑定。
-      // 保存后同步一次全局基线：若改的正是「正在驱动基线的那份」，正文要跟着写进
-      // `~/.dsh/AGENTS.md`（否则页面标着「生效中」而文件里还是旧内容）。
-      'agentsmd-update': async (args: any) => {
-        const res = await agentsMdService.update(
-          String((args && args.id) || ''),
-          String((args && args.content) ?? ''),
-          args && args.nextId !== undefined ? String(args.nextId) : undefined,
-          // 描述与正文同一次提交：省略（undefined）= 不动，空串 = 清空。
-          args && typeof args.description === 'string' ? String(args.description) : undefined,
-        )
-        if (!res || res.ok === false) return res
-        let renamed: any = {}
-        if (res.renamedFrom) {
-          try {
-            const r: any = await rulesService.ops['rules-rebind-prompt']({ from: res.renamedFrom, to: res.id })
-            renamed = r && r.ok ? { reboundScenes: r.changed } : {}
-          } catch { /* 改名同步失败不影响保存本身 */ }
-        }
-        return withAgentsMdSync({ ...res, ...renamed })
-      },
-      // 应用 = 写全局基线文件；场景接管期间只放行「场景绑定的那一份」（见 applyPresetGuarded）。
-      'agentsmd-apply': (args: any) => applyPresetGuarded(String((args && args.id) || '')),
-      'agentsmd-get-current': () => agentsMdService.getCurrent(),
-      // 删除：**被引用的那份一律拒绝**（用户裁定，2026-09-16 扩到引用清单）。三类引用：
-      // 场景绑定（含恒常的 `_shared` / `global`）、`~/.dsh/AGENTS.md` 的当前内容、
-      // 进场景前保存的基线（退出场景后要恢复的那一份）。拒绝时逐条说明「谁在用」，
-      // 用户知道该先改哪里。引用清单由 scene-prompt-sync 与显示/注入同源算出。
-      // 探测失败（refs() 返回 null）时放行并记 warn：删预设不动 ~/.dsh/AGENTS.md，
-      // 最坏是少一份副本，可重建 —— 不因一次探测故障把删除堵死。
-      'agentsmd-remove': async (args: any) => {
-        const id = String((args && args.id) || '')
-        const refs = await scenePromptSync.refs()
-        if (refs === null) ctx.logger?.warn?.('agents-md: reference probe failed; remove allowed')
-        const why = refs ? refs.get(id) || [] : []
-        if (why.length) {
-          const refsText = why.map(promptRefReason).join('；')
-          return {
-            ok: false,
-            code: 'error.agentsMd.referenced',
-            error: `「${id}」仍被引用，不能删除：${refsText}。先改掉引用（换绑提示词 / 退出场景 / 应用别的预设）再删除。`,
-            params: { id, refs: refsText },
-          }
-        }
-        return agentsMdService.remove(id)
-      },
-      'agentsmd-import': (args: any) => agentsMdService.importPreset(String((args && args.id) || ''), String((args && args.content) ?? ''), args && typeof args.description === 'string' ? String(args.description) : undefined),
-      // 提示词预设的回收站：删预设 = 把整个预设目录移入 `hub/trash/prompts-trash/<id>/`，
-      // 误删可从「提示词」页的回收站里恢复（同 id 已存在时拒绝恢复，绝不覆盖）。
-      'agentsmd-trash-list': () => agentsMdService.trashList(),
-      // 恢复也要同步：把一个「场景绑定着、但曾被删掉」的预设恢复回来 → 绑定重新变活，
-      // 基线要跟着写回它（否则场景页说「生效中：它」而文件里并不是）。
-      'agentsmd-trash-restore': async (args: any) => withAgentsMdSync(await agentsMdService.trashRestore(String((args && args.id) || ''))),
-      'agentsmd-trash-delete': (args: any) => agentsMdService.trashDelete(String((args && args.id) || '')),
-      // History（归档会话管理）ops。只读：history-list / history-retention-get；
-      // 写：history-archive / history-unarchive / history-delete / history-retention-set。
-      // workspaceRegistry 缺失（补丁未生效）时返回明确错误，不崩页面。
-      'history-list': async () => {
-        const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未就绪：请检查宿主 workspaceRegistry 服务。' }
-        try {
-          const items = (typeof registry.archivedSessionDetails === 'function')
-            ? (await registry.archivedSessionDetails()).items
-            : (await registry.archivedSessionMetadata()).items.map((i) => ({ sessionId: i.sessionId, createdAt: i.createdAt, archivedAt: registry.archivedAt?.(i.sessionId) }))
-          const { retentionDays } = await readHistoryRetention()
-          // 归属分组（best-effort）：活登记 → 路径命中 → 按会话目录重建。
-          // 宿主删除工作区后登记消失，靠会话目录把分组补回来（详见 buildHistoryGroups）。
-          const { groups, workspaces } = await buildHistoryGroups(registry, items as Array<{ sessionId: string; cwd?: string }>)
-          return { ok: true, items, groups, workspaces, retentionDays }
-        } catch (e) { return { ok: false, error: message(e) } }
-      },
-      // 枚举全部持久化会话（含未归档/冷会话）供导出弹窗选择；只读，不门控。
-      // 标题经投影缓存 best-effort；任何一步失败只降级为缺字段。
-      'history-sessions': async () => {
-        const registry = getHistoryRegistry()
-        if (!registry || typeof registry.listStoredHeaders !== 'function') {
-          return { ok: false, error: '当前环境不支持枚举全部会话（registry 未实现 listStoredHeaders）' }
-        }
-        try {
-          const headers = await registry.listStoredHeaders()
-          const archivedItems = typeof registry.archivedSessionDetails === 'function'
-            ? (await registry.archivedSessionDetails()).items
-            : (await registry.archivedSessionMetadata()).items
-          const archived = new Set(archivedItems.map((i) => i.sessionId))
-          const cache = ctx.get('sessionProjectionCache') as { cachedSnapshot?(header: unknown, seq: number, fields: string[]): { values?: { title?: string } } } | undefined
-          const items: Array<{ sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; groupId?: string; cwdMissing?: boolean }> = []
-          for (const h of headers) {
-            const sessionId = h && typeof h.id === 'string' ? h.id : undefined
-            if (!sessionId) continue
-            // 过滤子代理派生的会话：不占用用户会话列表，也不应出现在导出选择里。
-            if ((h as { origin?: string }).origin === 'subagent') continue
-            const item: { sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; groupId?: string; cwdMissing?: boolean } = {
-              sessionId,
-              archived: archived.has(sessionId),
-            }
-            if (typeof h.cwd === 'string' && h.cwd) item.cwd = h.cwd
-            if (typeof h.createdAt === 'number' && Number.isFinite(h.createdAt)) item.createdAt = h.createdAt
-            if (cache && typeof cache.cachedSnapshot === 'function') {
-              try {
-                const snap = cache.cachedSnapshot(h, 0, ['title'])
-                if (snap && snap.values && typeof snap.values.title === 'string') item.title = snap.values.title
-              } catch { /* title best-effort */ }
-            }
-            // 工作区目录可能已被删除/移动（孤儿会话）：best-effort 标记，供导出选择时识别。
-            if (item.cwd) {
-              try {
-                const st = await stat(item.cwd)
-                item.cwdMissing = !st.isDirectory()
-              } catch { item.cwdMissing = true }
-            }
-            items.push(item)
-          }
-          // 归属分组（与 history-list 同源）：导出弹窗的工作区筛选按同一套组 id。
-          const { groups } = await buildHistoryGroups(registry, items)
-          return { ok: true, items, groups }
-        } catch (e) { return { ok: false, error: message(e) } }
-      },
-      // 导出默认目录：桌面（存在时）否则用户主目录。只读，不门控。
-      'history-export-defaults': async () => {
-        let dir = homedir()
-        try {
-          const desktop = join(homedir(), 'Desktop')
-          const st = await stat(desktop)
-          if (st.isDirectory()) dir = desktop
-        } catch { /* 桌面路径不可用 → 回退主目录 */ }
-        return { ok: true, defaultDir: dir }
-      },
-      // 列出目录的子目录，供客户端「选择文件夹」弹窗逐级浏览。dir 为空时返回根
-      // 视图（Windows 枚举盘符，其他平台返回 '/'）。只读，不门控。
-      'dir-list': async (args: any) => {
-        const raw = String((args && args.dir) || '').trim()
-        try {
-          if (!raw) {
-            if (process.platform !== 'win32') return { ok: true, current: '/', parent: null, entries: [] }
-            const drives: Array<{ name: string; path: string }> = []
-            for (let c = 65; c <= 90; c++) {
-              const root = String.fromCharCode(c) + ':\\'
-              try { await stat(root); drives.push({ name: root, path: root }) } catch { /* 跳过不存在的盘符 */ }
-            }
-            return { ok: true, current: '', parent: null, entries: drives }
-          }
-          const st = await stat(raw)
-          if (!st.isDirectory()) return { ok: false, error: '该路径不是目录' }
-          const parent = dirname(raw)
-          const names = await readdir(raw, { withFileTypes: true })
-          const entries = names
-            .filter((d) => d.isDirectory())
-            .map((d) => ({ name: d.name, path: join(raw, d.name) }))
-            .sort((a, b) => a.name.localeCompare(b.name))
-          return { ok: true, current: raw, parent: parent === raw ? null : parent, entries }
-        } catch (e) {
-          return { ok: false, error: message(e) }
-        }
-      },
-      'history-archive': async (args: any) => {
-        const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未挂载' }
-        const sessionId = String((args && args.sessionId) || '').trim()
-        if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-        try { await registry.archiveSession(sessionId); return { ok: true, sessionId } } catch (e) { return { ok: false, error: message(e) } }
-      },      // 批量归档（导出弹窗「归档所选」）：把选中的会话收进 History，纳入保留期管理。
-      'history-archive-batch': async (args: any) => {
-        const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未挂载' }
-        const rawIds = (args && args.sessionIds) || []
-        const ids = Array.isArray(rawIds) ? rawIds.map((s: unknown) => String(s).trim()).filter(Boolean) : []
-        if (!ids.length) return { ok: false, error: '请至少选择一个会话' }
-        const archived: string[] = []
-        const failed: Array<{ sessionId: string; error: string }> = []
-        for (const sessionId of ids) {
-          try { await registry.archiveSession(sessionId); archived.push(sessionId) }
-          catch (e) { failed.push({ sessionId, error: message(e) }) }
-        }
-        return { ok: true, archived, failed }
-      },
-      // 兼容体检：把"宿主到底支持哪些操作、哪些降级了、为什么"变成可读状态，
-      // 而不是等用户点删除时才看见报错。只读，不改任何数据。
-      'compat-status': async (args: any) => {
-        const force = Boolean(args && args.refresh)
-        try {
-          const registry = getHistoryRegistry()
-          const assessment = registry && typeof registry.capabilities === 'function'
-            ? registry.capabilities(force)
-            : undefined
-          if (assessment === undefined) {
-            return {
-              ok: true,
-              host: { version: 'unknown' },
-              findings: [],
-              degraded: [],
-              blockers: ['归档服务未挂载：无法探测宿主能力'],
-              summary: '宿主能力探测不可用（归档服务未挂载）',
-            }
-          }
-          const summary = summarize(assessment)
-          // 每次刷新都留一条结构化日志：升级当天就能在日志里看到降级发生。
-          if (force || !compatLoggedFor || compatLoggedFor !== assessment.identity.version) {
-            compatLoggedFor = assessment.identity.version
-            void pluginLog()('compat/probe', {
-              hostVersion: assessment.identity.version,
-              summary,
-              degraded: assessment.degraded.map((item: import('./compat/probe.js').CapabilityFinding) => ({ id: item.id, state: item.state, detail: item.detail })),
-              blockers: assessment.identity.blockers,
-              sameAsHost: assessment.identity.sameAsHost,
-            }).catch(() => {})
-          }
-          return {
-            ok: true,
-            host: { version: assessment.identity.version, modules: assessment.identity.modules },
-            sameAsHost: assessment.identity.sameAsHost,
-            findings: assessment.findings,
-            degraded: assessment.degraded,
-            blockers: assessment.identity.blockers,
-            mayDelete: assessment.mayDelete,
-            verifiedVersion: VERIFIED_HOST_VERSION,
-            expectedPeerRange: EXPECTED_PEER_RANGE,
-            minHostVersion: EXPECTED_MIN_HOST_VERSION,
-            generatedAt: assessment.generatedAt,
-            summary,
-          }
-        } catch (e) { return { ok: false, error: message(e) } }
-      },
-      // 预设可达性矩阵：每个 Agent 预设下，本插件的注入类能力到不到得了模型。
-      // 只读预设组合文本，不挂载任何预设、不改任何数据。回答的是"面板上说注入了，
-      // 模型真的看得到吗" —— 压制型预设（persona complete / includeRuntimeContext:false，
-      // 如极简）默认不注入，可在「注入」设置里改成强制注入。
-      'preset-reach': async () => {
-        try {
-          // 宿主平面的 MCP 工具数：四个官方预设都不在组合里挂 MCP，MCP 由
-          // $DSH_HOME/cordis.patch.yml 这一层挂载，所以它对所有预设一视同仁；
-          // 这一列要回答的只是"现在有没有 MCP 工具可用"。探测失败 → 不传该字段，
-          // 矩阵那一格显示"判断不了"而不是猜。
-          let mcpTools: number | undefined
-          try {
-            const schemas = await tools.schemas()
-            mcpTools = schemas.filter((s: any) => String(s && s.name || '').startsWith('mcp__')).length
-          } catch { mcpTools = undefined }
-          const settings = await readInjectSettings()
-          const report = await assessPresetReach(presetRoster(), {
-            mcpTools,
-            inject: { underSuppressingPresets: settings.underSuppressingPresets, domains: settings.domains },
-          })
-          return { ok: true, ...report }
-        } catch (e) { return { ok: false, error: message(e) } }
-      },
-      // 注入设置（读 / 写）：压制型预设下是否仍然注入 + 各域开关。界面在「兼容」页。
-      'inject-settings': (args: any) => injectSettingsOp(args),
-      // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 本次运行的投递统计。
-      // 回答"勾了开关到底送没送到"——界面配置与实际注入不一致时，这里一眼可见。
-      'injection-live': async () => {
-        if (contextInjectorLive === null) return { ok: false, error: '注入通道未装配' }
-        try { return { ok: true, ...contextInjectorLive() } } catch (e) { return { ok: false, error: message(e) } }
-      },
-      'history-unarchive': async (args: any) => {
-        const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未挂载' }
-        const sessionId = String((args && args.sessionId) || '').trim()
-        if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-        try {
-          const r = await registry.unarchiveSession(sessionId)
-          const workspace = await restoreWorkspaceAccounting([sessionId])
-          return { ok: true, archivedSessionIds: r.archivedSessionIds, ...(workspace ? { workspace } : {}) }
-        } catch (e) { return { ok: false, error: message(e) } }
-      },
-      'history-delete': async (args: any) => {
-        const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未挂载' }
-        const sessionId = String((args && args.sessionId) || '').trim()
-        if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-        try { await registry.deleteSession(sessionId); return { ok: true, sessionId, deleted: true } } catch (e) { return { ok: false, error: message(e) } }
-      },
-      'history-unarchive-batch': async (args: any) => {
-        const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未挂载' }
-        if (typeof registry.unarchiveSessions !== 'function') return { ok: false, error: '当前环境不支持批量恢复（registry 未实现 unarchiveSessions）' }
-        const parsed = parseHistoryBatchTarget(args && args.target)
-        if (!parsed.ok) return parsed
-        try {
-          const r = await registry.unarchiveSessions(parsed.target)
-          const workspace = await restoreWorkspaceAccounting(r.unarchivedSessionIds || [])
-          return { ok: true, unarchivedSessionIds: r.unarchivedSessionIds, archivedSessionIds: r.archivedSessionIds, ...(workspace ? { workspace } : {}) }
-        } catch (e) { return { ok: false, error: message(e) } }
-      },
-      'history-delete-batch': async (args: any) => {
-        const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未挂载' }
-        const parsed = parseHistoryBatchTarget(args && args.target)
-        if (!parsed.ok) return parsed
-        try {
-          const r = await registry.deleteArchivedSessions(parsed.target)
-          return { ok: true, requestedSessionIds: r.requestedSessionIds, deletedSessionIds: r.deletedSessionIds, skippedSessionIds: r.skippedSessionIds, failures: r.failures }
-        } catch (e) { return { ok: false, error: message(e) } }
-      },
-      // 重新登记工作区（写宿主状态）：为「工作区已被删除、目录仍在」的分组补回一条登记。
-      // 只在用户显式确认后调用；宿主 realpath 会拒绝不存在的目录，同路径已登记则幂等返回。
-      // 不移动、不删除任何文件或会话，也不改写 sessionIds 记账。
-      'history-workspace-register': async (args: any) => {
-        const registry = getHistoryRegistry()
-        if (!registry) return { ok: false, error: '归档服务未挂载' }
-        const path = String((args && args.path) || '').trim()
-        if (!path) return { ok: false, error: '缺少工作区目录 path' }
-        if (typeof registry.registerWorkspace !== 'function') {
-          return { ok: false, error: '当前环境不支持重新登记工作区（registry 未实现 registerWorkspace）' }
-        }
-        const title = args && args.title ? String(args.title) : undefined
-        try {
-          const workspace = await registry.registerWorkspace(path, title)
-          return { ok: true, workspace }
-        } catch (e) { return { ok: false, error: message(e) } }
-      },
-      // 从其他 Agent（Claude Code / Cursor JSONL、Codex Markdown、通用文本）导入对话，
-      // 通过 sessions.create 的 seed 机制生成一个可继续对话的全新会话。
-      'history-import': async (args: any) => {
-        const fileName = String((args && args.fileName) || '').trim()
-        const content = String((args && args.content) ?? '')
-        if (!fileName || !content.trim()) return { ok: false, error: '缺少文件内容' }
-        let turns: Array<{ role: 'user' | 'assistant'; text: string }>
-        try {
-          const format = detectFormat(fileName, content)
-          turns = format === 'jsonl' ? parseJsonlTranscript(content)
-            : format === 'markdown' ? parseMarkdownTranscript(content)
-            : parseGenericText(content)
-        } catch (e) {
-          return { ok: false, error: '对话解析失败: ' + message(e) }
-        }
-        if (!turns.length) return { ok: false, error: '未能从该文件中识别出对话内容' }
-        if (!agents || typeof agents.create !== 'function') return { ok: false, error: '当前环境不支持创建会话（agents.create 不可用）' }
-        // 仅接受绝对路径的 cwd；非法或缺失时会话不带目录（归入未分组）。
-        const cwdArg = String((args && args.cwd) || '').trim()
-        const cwd = /^([A-Za-z]:[\\/]|\\\\|\/)/.test(cwdArg) ? cwdArg : undefined
-        // seed 事件信封：seq 从 0 连续、time 为安全整数、surface 事件必须带 surfaceOp:'append'。
-        const base = Date.now()
-        const seed = turns.map((turn, i) => ({
-          type: turn.role === 'user' ? 'user/message' : 'assistant/message',
-          seq: i,
-          time: base + i,
-          data: turn.role === 'user'
-            ? { id: 'msg-' + i, role: 'user', content: [{ type: 'text', text: turn.text }], source: { kind: 'typed' } }
-            : { message: { id: 'msg-' + i, role: 'assistant', content: [{ type: 'text', text: turn.text }], source: { kind: 'model', provider: 'imported', model: 'imported' } }, turn: i, step: 0, stream: [] },
-          surfaceOp: 'append',
-        }))
-        try {
-          // `sessions.create()` 只创建裸 Session；它不经过 DSH agent factory / workspace
-          // / session-log，所以返回的内存 id 不会进入 UI 的会话列表。必须走官方的
-          // `ctx.agents.create()`，它会在同一事务里创建 Agent、发布 Session，并触发宿主
-          // 的持久化与 projection 链路。这里使用 UUID，避免 SessionStore 的裸自增 id 与
-          // 宿主 API 会话 id 空间混用。
-          const id = 'session-' + randomUUID()
-          await agents.create({ sessionId: id, seed, ...(cwd ? { meta: { cwd } } : {}) })
-          const sessions = ctx.get('sessions') as { get?(sessionId: string): unknown } | undefined
-          const live = sessions && typeof sessions.get === 'function' ? sessions.get(id) : undefined
-          if (live === undefined || live === null) {
-            return { ok: false, error: `创建会话失败：宿主未登记该会话（${id}），未导入任何内容` }
-          }
-          return { ok: true, sessionId: id, count: turns.length }
-        } catch (e) {
-          return { ok: false, error: '创建会话失败: ' + message(e) }
-        }
-      },
-      // 把选中的归档会话导出为可再导入的转录文件（Markdown / JSONL），写入指定目录。
-      // 每个会话一个文件；读不到正文的冷会话列入 skipped，不中断其余导出。
-      // ---------- 通用导出（D14）----------
-      // 技能 / 子智能体 / 提示词 / 记忆四个域的差异只有「从哪取哪些文件」，其余
-      //（绝对路径校验、建目录、zip 打包、错误回报）完全相同 —— 所以只加**一个** op。
-      // 打包用已在依赖里的 `fflate.zipSync`（此前只用了 unzipSync）。
-      'bundle-export': async (args: any) => {
-        const kind = String((args && args.kind) || '')
-        const KINDS = ['skills', 'subagents', 'presets', 'memories']
-        if (KINDS.indexOf(kind) < 0) return { ok: false, error: `kind 需为 ${KINDS.join(' / ')}` }
-        const rawNames = (args && args.names) || []
-        const names = Array.isArray(rawNames) ? rawNames.map((s: unknown) => String(s).trim()).filter(Boolean) : []
-        if (!names.length) return { ok: false, error: '请至少选择一项' }
-        const outDir = String((args && args.outDir) || '').trim()
-        // 与 history-export 同一条校验：必须绝对路径（相对路径会在宿主进程的 cwd 下落盘，
-        // 用户根本找不到文件）。
-        if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(outDir)) return { ok: false, error: '导出目录需为绝对路径' }
-
-        // ① 收集 (zip 内路径, 绝对路径)。
-        const entries: Array<{ zip: string; abs: string }> = []
-        const missing: string[] = []
-        try {
-          if (kind === 'subagents') {
-            const dir = defaultPersonasDir()
-            for (const name of names) entries.push({ zip: `${name}.md`, abs: join(dir, `${name}.md`) })
-          } else if (kind === 'presets') {
-            for (const id of names) {
-              entries.push({ zip: `${id}/AGENTS.md`, abs: join(agentsMdPresetsDir, id, 'AGENTS.md') })
-              // 描述侧车（「只给使用者看」的那句）随预设一起走：导出再导入不该把它丢掉。
-              const metaAbs = join(agentsMdPresetsDir, id, 'meta.json')
-              try { if ((await stat(metaAbs)).isFile()) entries.push({ zip: `${id}/meta.json`, abs: metaAbs }) } catch { /* 没写描述 */ }
-            }
-          } else if (kind === 'memories') {
-            // 记忆有 flat（`<场景>/<name>.md`）与 bundle（`<场景>/<name>/<name>.md`）两种形态，
-            // 且场景名本身可含 '/' —— 按 id 拼路径会把 bundle 读成 `<场景>/<name>.md`，读不到
-            // 就静默丢项（详见 planMemoryExport）。所以走索引拿那条规则自己的真实路径。
-            const r: any = await rulesService.ops['rules-list']({})
-            const plan = planMemoryExport(names, (r && r.rules) || [])
-            missing.push(...plan.missing)
-            for (const item of plan.entries) {
-              if (item.kind === 'file') {
-                entries.push({ zip: item.zip, abs: item.abs })
-                continue
-              }
-              // bundle：把目录内的文件全部打包（与技能分支同口径），单个目录读不了只丢它自己。
-              try {
-                for (const e of await readdir(item.abs, { withFileTypes: true })) {
-                  if (e.isFile()) entries.push({ zip: `${item.zip}/${e.name}`, abs: join(item.abs, e.name) })
-                }
-              } catch { missing.push(item.id) }
-            }
-          } else {
-            // 技能：先经 skill-detail 拿源文件路径（bundle 型是目录，单文件型是 .md）。
-            for (const key of names) {
-              const i = key.indexOf('/')
-              if (i <= 0) { missing.push(key); continue }
-              const short = key.slice(i + 1)
-              const r: any = await skillsService.ops['skill-detail']({ root: key.slice(0, i), name: short })
-              const p = r && r.ok !== false && r.data ? String(r.data.path || '') : ''
-              if (!p) { missing.push(key); continue }
-              let isDir = false
-              try { isDir = (await stat(p)).isDirectory() } catch { isDir = false }
-              if (isDir) {
-                for (const e of await readdir(p, { withFileTypes: true })) {
-                  if (e.isFile()) entries.push({ zip: `${short}/${e.name}`, abs: join(p, e.name) })
-                }
-              } else {
-                entries.push({ zip: `${short}/${basename(p)}`, abs: p })
-              }
-            }
-          }
-        } catch (e) {
-          return { ok: false, error: '收集待导出文件失败: ' + message(e) }
-        }
-
-        // ② 读盘 + 打包（读不到的项进 missing，不整体失败 —— 部分成功也有价值）。
-        const bundle: Record<string, Uint8Array> = {}
-        for (const item of entries) {
-          try {
-            bundle[item.zip] = new Uint8Array(await readFile(item.abs))
-          } catch { missing.push(item.zip) }
-        }
-        if (!Object.keys(bundle).length) return { ok: false, error: '没有可导出的文件（选中项都不存在？）' }
-
-        let zipPath = ''
-        try {
-          const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-          zipPath = join(outDir, `dsh-tool-management-${kind}-${stamp}.zip`)
-          await mkdir(outDir, { recursive: true })
-          await writeFile(zipPath, Buffer.from(zipSync(bundle)))
-        } catch (e) {
-          return { ok: false, error: '写入导出文件失败: ' + message(e) }
-        }
-        return { ok: true, written: Object.keys(bundle).length, zipPath, missing }
-      },
-      'history-export': async (args: any) => {
-        const rawIds = (args && args.sessionIds) || []
-        const ids = Array.isArray(rawIds) ? rawIds.map((s: unknown) => String(s).trim()).filter(Boolean) : []
-        if (!ids.length) return { ok: false, error: '请至少选择一个会话' }
-        const format = String((args && args.format) || 'markdown').toLowerCase()
-        if (format !== 'markdown' && format !== 'jsonl') return { ok: false, error: 'format 需为 markdown 或 jsonl' }
-        const outDir = String((args && args.outDir) || '').trim()
-        if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(outDir)) return { ok: false, error: '导出目录需为绝对路径' }
-        const sessions = ctx.get('sessions') as { get?(id: string): unknown } | undefined
-        if (!sessions || typeof sessions.get !== 'function') return { ok: false, error: '当前环境不支持读取会话（sessions.get 不可用）' }
-        // 读会话事件：先取活动 store；冷会话（进程重启后）从持久化后端恢复只读句柄。
-        const readEvents = async (sessionId: string): Promise<unknown[] | undefined> => {
-          const live = sessions.get!(sessionId)
-          if (live && typeof (live as { snapshotEvents?: unknown }).snapshotEvents === 'function') {
-            const ev = (live as { snapshotEvents(): unknown[] }).snapshotEvents()
-            return Array.isArray(ev) ? ev : undefined
-          }
-          const persistence = ctx.get('sessionPersistence') as { prepare?(id: string): Promise<unknown> } | undefined
-          if (persistence && typeof persistence.prepare === 'function') {
-            try {
-              const prep = await persistence.prepare(sessionId)
-              const ps = prep && (prep as { session?: unknown }).session
-              try {
-                if (ps && typeof (ps as { snapshotEvents?: unknown }).snapshotEvents === 'function') {
-                  const ev = (ps as { snapshotEvents(): unknown[] }).snapshotEvents()
-                  return Array.isArray(ev) ? ev : undefined
-                }
-              } finally {
-                const dispose = (prep as { [Symbol.dispose]?: () => void })[Symbol.dispose]
-                if (typeof dispose === 'function') dispose()
-              }
-            } catch { return undefined }
-          }
-          return undefined
-        }
-        try {
-          await mkdir(outDir, { recursive: true })
-        } catch (e) {
-          return { ok: false, error: '创建导出目录失败: ' + message(e) }
-        }
-        const ext = format === 'jsonl' ? '.jsonl' : '.md'
-        const exported: Array<{ sessionId: string; fileName: string; path: string; count: number }> = []
-        const skipped: Array<{ sessionId: string; error: string }> = []
-        for (const sessionId of ids) {
-          const safe = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, '_')
-          const fileName = safe + ext
-          const path = join(outDir, fileName)
-          try {
-            const events = await readEvents(sessionId)
-            const turns = extractTurnsFromEvents(events || [])
-            if (!turns.length) {
-              skipped.push({ sessionId, error: events ? '会话中没有可导出的消息' : '无法读取会话内容（不在活动存储且无持久化句柄）' })
-              continue
-            }
-            await writeFile(path, serializeTurns(turns, format), 'utf8')
-            exported.push({ sessionId, fileName, path, count: turns.length })
-          } catch (e) {
-            skipped.push({ sessionId, error: '导出失败: ' + message(e) })
-          }
-        }
-        return { ok: true, exported, skipped }
-      },
-      'history-retention-get': async () => {
-        const { retentionDays } = await readHistoryRetention()
-        return { ok: true, retentionDays }
-      },
-      'history-retention-set': async (args: any) => {
-        const days = Number((args && args.retentionDays) ?? -1)
-        // 错误文案承诺的是「非负整数」，就按整数校验：1.5 这类小数以前会被静默取整成 1，
-        // 用户看到的回执与输入不符。
-        if (!Number.isSafeInteger(days) || days < 0) {
-          return { ok: false, error: 'retentionDays 需为非负整数（0=永久不删除），收到: ' + String((args && args.retentionDays)) }
-        }
-        try {
-          await writeHistoryRetention(days)
-        } catch (e) {
-          return { ok: false, error: '写入保留期失败: ' + message(e) }
-        }
-        // 设置变更后立即扫一次，UI 反映新策略。
-        await sweepHistory().catch(() => {})
-        return { ok: true, retentionDays: days }
-      },
+      // AGENTS.md / 提示词预设域（ops/prompts.ts 提供）：agentsmd-list / read / create /
+      // update / apply / get-current / remove / import / trash-list / trash-restore /
+      // trash-delete。
+      ...buildPromptOps({
+        promptsService,
+        scenePromptSync,
+        // 显式转发而不是整表传入：这两个 op 名字写死在这里，rules 域哪天改名会立刻红，
+        // 不会静默变成 undefined 调用。
+        rulesOps: {
+          'rules-list': (args: any) => memoriesService.ops['rules-list'](args),
+          'rules-rebind-prompt': (args: any) => memoriesService.ops['rules-rebind-prompt'](args),
+        },
+        applyPresetGuarded,
+        withAgentsMdSync,
+        promptRefReason,
+        warn: (m: string) => { ctx.logger?.warn?.(m) },
+      }),
+      // 归档会话域（ops/history.ts 提供）：history-list / history-sessions /
+      // history-export-defaults / dir-list / history-archive / history-archive-batch /
+      // history-unarchive / history-delete / history-unarchive-batch / history-delete-batch /
+      // history-workspace-register / history-import / bundle-export / history-export /
+      // history-retention-get / history-retention-set。
+      ...buildSessionOps({
+        getSessionsRegistry: history.getSessionsRegistry,
+        message,
+        readHistoryRetention: history.readHistoryRetention,
+        writeHistoryRetention: history.writeHistoryRetention,
+        sweepHistory: history.sweepHistory,
+        buildHistoryGroups: (registry, items) => history.buildHistoryGroups(registry as SessionsRegistry, items),
+        restoreWorkspaceAccounting: history.restoreWorkspaceAccounting,
+        parseHistoryBatchTarget: history.parseHistoryBatchTarget,
+        // 直接把官方入口传进去：宿主没挂 agents 或没有 create 时是 undefined，
+        // history-import 会据此返回「当前环境不支持创建会话」而不是运行时炸。
+        createSession: agents?.create,
+        host: <T>(name: string): T | undefined => ctx.get(name) as T | undefined,
+        promptsDir,
+        rulesList: (args: any) => memoriesService.ops['rules-list'](args),
+        skillDetail: (args: any) => skillsService.ops['skill-detail'](args),
+        extractTurnsFromEvents,
+        serializeTurns,
+      }),
+      // rules 域里要走「场景 ↔ 全局基线同步」包装的四个写 op（ops/scene-sync.ts 提供）。
+      // 必须排在 ...memoriesService.ops 之后 —— 这里是显式覆盖同名 op，不是新增。
+      ...buildSceneSyncOps({
+        withAgentsMdSync,
+        rulesOps: {
+          'rules-set-active': (args: any) => memoriesService.ops['rules-set-active'](args),
+          'rules-update-scene': (args: any) => memoriesService.ops['rules-update-scene'](args),
+          'rules-create-scene': (args: any) => memoriesService.ops['rules-create-scene'](args),
+          'rules-remove-scene': (args: any) => memoriesService.ops['rules-remove-scene'](args),
+        },
+      }),
+      // 场景档案与候选源（ops/scene.ts 提供）：preset-tools / model-candidates / scene-inventory。
+      ...buildCandidateOps({
+        presetToolCandidates: candidates.presetToolCandidates,
+        modelCandidates: candidates.modelCandidates,
+        getToolFailures: () => subagentToolFailures,
+        mcpmListView: mcp.mcpmListView,
+        toolStates: candidates.toolStates,
+        skillRows: candidates.skillRows,
+        subagentList: () => subagentService.list(),
+        readDisabledTools: mcp.readDisabledTools,
+        presetNames: candidates.presetNames,
+        memorySceneCandidates: candidates.memorySceneCandidates,
+        memoryCandidates: candidates.memoryCandidates,
+      }),
     }
 
     // MCP 写操作成功后立即重算状态段（SWR：text() 同步返回缓存值，写后主动 refresh）。
@@ -3981,36 +1563,15 @@ export default {
       if (typeof original !== 'function') continue
       handlers[opName] = async (args: any) => {
         const result = await original(args)
-        if (result && result.ok !== false) void mcpStateCatalog.refresh()
+        if (result && result.ok !== false) void mcp.stateCatalog.refresh()
         return result
       }
     }
 
-    // ---------- 场景锁定守卫（v0.8）----------
-    // 任一场景 locked=true = 五个管理域（MCP/技能/子智能体/记忆/提示词）整体冻结：
-    // 下面列出的写 op 一律拒绝；界面按钮同步禁用，这里是兜底（防止绕过界面直接打 op）。
-    // 只包 **handlers** 这一层是有意的：进/退模式的运行时应用走的是内部函数与
-    // service.ops（applyMcpServerSwitches / applySkills / applySubagentSwitches / patchIndex），
-    // 不经过 handlers —— 锁定就是为了让场景能按原样启动，运行时应用不能被自己挡住。
-    // 例外里的例外：scene-archive-save / rules-remove-scene 只对**被锁的那个场景**拒绝。
-    async function lockedSceneNames(): Promise<string[]> {
-      const r: any = await rulesService.ops['rules-list']({})
-      return ((r && r.scenes) || []).filter((s: any) => s.locked === true).map((s: any) => String(s.name))
-    }
-    /** 当前启用（= 已进入）的那个场景名；没有则 null。 */
-    async function activeSceneName(): Promise<string | null> {
-      try {
-        const r: any = await rulesService.ops['rules-list']({})
-        return r && r.ok && r.activeScene ? String(r.activeScene) : null
-      } catch { return null }
-    }
-    /** 「当前场景已锁定」的拒绝文案（模型工具用；无活动场景 / 未锁定 → null）。 */
-    async function lockedSceneGuard(): Promise<string | null> {
-      const scene = await activeSceneName()
-      if (!scene) return null
-      const locked = await lockedSceneNames()
-      return locked.includes(scene) ? `场景「${scene}」已锁定：先到场景页解锁再改。` : null
-    }
+    // 场景锁定查询（2026-09-19 抽到 ./request-gate.ts）：读 rules-list 得到锁定场景与当前场景。
+    const { lockedSceneNames, activeSceneName, lockedSceneGuard } = createSceneLock({
+      readSceneList: () => memoriesService.ops['rules-list']({}),
+    })
 
     // ---------- 场景内改开关 = 同步改档案（v0.9.2）----------
     /**
@@ -4088,7 +1649,7 @@ export default {
     /** loader 条目 id → 服务器名（档案的 mcp 段按 serverName 存）。 */
     async function serverNameOfId(id: string): Promise<string | null> {
       try {
-        const r: any = await mcpmListView()
+        const r: any = await mcp.mcpmListView()
         for (const row of ((r && r.rows) || [])) {
           if (String((row && row.id) || '') === id) return String(row.serverName || row.id)
         }
@@ -4105,14 +1666,14 @@ export default {
     async function enabledToolNames(server: string): Promise<string[]> {
       const live = await (async () => {
         try {
-          const r: any = await mcpmTools({ serverName: server })
+          const r: any = await mcp.ops['mcpm-tools']({ serverName: server })
           return ((r && r.tools) || []).filter((t: any) => t.enabled !== false).map((t: any) => String(t.name))
         } catch { return [] }
       })()
       if (live.length) return live
       try {
-        const known = (await readKnownMcpTools())[server] || []
-        const off = new Set(await readDisabledTools().then((m) => m[server] || []))
+        const known = (await mcp.readKnownMcpTools())[server] || []
+        const off = new Set(await mcp.readDisabledTools().then((m) => m[server] || []))
         if (off.has('*')) return []
         return known.map((item) => String(item.name)).filter((n) => !off.has(n))
       } catch { return [] }
@@ -4145,7 +1706,7 @@ export default {
       let next: any
       let cur: any = {}
       try {
-        const slice = await rulesService.readArchiveSlice()
+        const slice = await memoriesService.readArchiveSlice()
         cur = (slice.archives && slice.archives[scene]) || {}
         next = { ...cur }
         switch (opName) {
@@ -4202,7 +1763,7 @@ export default {
             if (!enabled) { next.mcp = {}; break }
             const all: Record<string, string> = {}
             try {
-              const r: any = await mcpmListView()
+              const r: any = await mcp.mcpmListView()
               for (const row of ((r && r.rows) || [])) {
                 const n = String((row && row.serverName) || '')
                 if (n) all[n] = '*'
@@ -4264,83 +1825,16 @@ export default {
       return null
     }
 
-    /**
-     * 包一层：开关成功后把改动同步进当前场景档案（见 syncSwitchToScene）。
-     * 失败只挂 `sceneSyncError`，不改写原操作的成功结论 —— 运行时确实改了，档案没跟上要说得清。
-     * 锁定仍由 `guardLockedOps` 挡住（更靠内的那层包装先执行）。
-     */
-    function syncSceneArchiveOnSwitch(opNames: string[]): void {
-      for (const opName of opNames) {
-        const original = handlers[opName]
-        if (typeof original !== 'function') continue
-        handlers[opName] = async (args: any) => {
-          const res: any = await original(args)
-          if (!res || res.ok === false) return res
-          const err = await syncSwitchToScene(opName, args)
-          return err ? { ...res, sceneSyncError: err } : res
-        }
-      }
-    }
-    function guardLockedOps(opNames: string[], what: string): void {
-      for (const opName of opNames) {
-        const original = handlers[opName]
-        if (typeof original !== 'function') continue
-        handlers[opName] = async (args: any) => {
-          const locked = await lockedSceneNames()
-          if (locked.length) return { ok: false, error: `场景已锁定（${locked.join('、')}）：先到场景页解锁再${what}` }
-          return original(args)
-        }
-      }
-    }
-    guardLockedOps([
-      // MCP：改配置 / 服务器启停 / 工具启停 / 导入导出配置 / 备注 / 设置。restart 只重连不改配置，放行。
-      'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-tool-enabled', 'mcpm-import', 'mcpm-compact', 'mcpm-note', 'mcpm-settings',
-      // 技能：启停 / 来源启停与移除恢复 / 首选 / 删除 / 创建导入 / 自定义目录 / 回收站 / 批量启停。
-      'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable', 'skill-source-remove', 'skill-source-restore',
-      'skill-prefer', 'skill-unprefer', 'skill-delete', 'skill-create', 'skill-import', 'skill-upload', 'skill-set-all',
-      'skill-custom-add', 'skill-custom-remove', 'skill-trash-restore', 'skill-trash-delete',
-      // 子智能体：开关 / 改名保存 / 删除 / 导入 / 回收站。
-      'subagent-create', 'subagent-update', 'subagent-delete', 'subagent-toggle', 'subagent-import', 'subagent-trash-restore', 'subagent-trash-delete',
-      // 记忆：增删改 / 开关 / 导入 / 回收站 / 绑定。set-active 是场景启停，不在冻结范围。
-      'rules-create', 'rules-update', 'rules-remove', 'rules-toggle', 'rules-import', 'rules-restore', 'rules-trash-remove', 'rules-attach', 'rules-detach', 'rules-set-index',
-      // 提示词：建改删 / 应用（切换生效基线）/ 导入 / 回收站。
-      'agentsmd-create', 'agentsmd-update', 'agentsmd-remove', 'agentsmd-apply', 'agentsmd-import', 'agentsmd-trash-restore', 'agentsmd-trash-delete',
-    ], '修改')
-    // 场景内「开关」类操作（用户裁定 2026-09-17）：未锁定时**可用**，改动同步进当前场景档案。
-    // 与「锁定」正交：锁定冻结全部写操作，这里只是把页面开关的意图也写进档案。
-    syncSceneArchiveOnSwitch([
-      'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-tool-enabled',
-      'skill-enable', 'skill-disable', 'skill-set-all', 'skill-source-enable', 'skill-source-disable',
-      'subagent-toggle',
-    ])
-    // 被锁场景自身的档案与删除：只挡它自己，别的场景照常。
-    for (const [opName, pickScene, what] of [
-      ['scene-archive-save', (args: any) => (args && args.scene) || '', '改档案'],
-      ['rules-remove-scene', (args: any) => (args && args.name) || '', '删除'],
-    ] as const) {
-      const original = handlers[opName]
-      if (typeof original !== 'function') continue
-      handlers[opName] = async (args: any) => {
-        const scene = String(pickScene(args) || '').trim()
-        const locked = await lockedSceneNames()
-        if (scene && locked.includes(scene)) return { ok: false, error: `场景「${scene}」已锁定：先解锁再${what}` }
-        return original(args)
-      }
-    }
-    // 各页列表响应带上 anyLocked + activeScene：界面据此禁用写控件、并说明
-    // 「当前处于场景 X，开关请到档案里改」（读 op，附加字段不影响既有消费方）。
-    async function annotateLocked(res: any): Promise<any> {
-      if (res && res.ok !== false) {
-        res.anyLocked = (await lockedSceneNames()).length > 0
-        res.activeScene = await activeSceneName()
-      }
-      return res
-    }
-    for (const opName of ['mcpm-list', 'mcpm-reveal', 'skill-state', 'subagent-list', 'agentsmd-list']) {
-      const original = handlers[opName]
-      if (typeof original !== 'function') continue
-      handlers[opName] = async (args: any) => annotateLocked(await original(args))
-    }
+    // handlers 后处理（2026-09-19 抽到 ./request-gate.ts）：场景锁定守卫、开关同步档案、
+    // 读 op 的 anyLocked/activeScene 注解、子智能体失败清单 attach。
+    // 顺序即语义（先装的在内层），整段搬运未改。
+    installHandlerGuards({
+      handlers,
+      lockedSceneNames,
+      activeSceneName,
+      syncSwitchToScene,
+      subagentToolFailures,
+    })
 
     // ---------- agent-facing tools (standard ctx.tools.register + defineTool) ----------
     const text = (value: string) => [{ type: 'text' as const, text: value }]
@@ -4381,376 +1875,36 @@ export default {
     const hostDefineToolAny = hostDefineTool as unknown as (options: unknown) => ToolDefinition
     const defineTool = ((options: unknown): ToolDefinition =>
       trackAdoption(hostDefineToolAny(options))) as unknown as typeof hostDefineTool
-    tools.register(defineTool({
-      name: 'mcp_manager_list',
-      description: 'List configured MCP servers (level, enabled state, live loader status, tool count excluding switched-off tools, note). Read a server\'s note before choosing it. The same list is injected into your context each turn (the「本机 MCP 服务器的当前状态」system-reminder); this tool is the raw view — all=true includes disabled servers. Defaults to enabled servers; pass all=true for every configured server.',
-      parameters: {
-        all: { type: 'boolean', description: 'Include disabled servers (default false).' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args: any, exec: any) {
-        const showAll = Boolean(args && args.all === true)
-        // 必须走 mcpmListView()（= mcpmRowsWithNotes(false)）：备注在这里合入，且未打码的
-        // url/headers/env 已被打码。备注是本插件 MCP 这一项的真正价值（用户写给未来模型的
-        // 决策提示，如「A 挂了改用 B」），而它只走注入通道 —— 压制型预设下不注入时，
-        // 这里就是唯一的读取路径。
-        const r = await mcpmListView()
-        if (!r.ok) throw new Error(r.error)
-        const all: any[] = r.rows || []
-        // 默认只列「已启用」的（用户裁定 2026-09-16，与技能 / 记忆列表同口径）：停用的服务器
-        // 模型调不到，列出来只是噪音。表头给出全量口径，所以不会变成盲区。
-        const shown = showAll ? all : all.filter((x: any) => !x.disabled)
-        const summary = shown.map((x: any) => {
-          const note = normalizeMcpNote(x.notes, DEFAULT_MCP_NOTE_MAX_LENGTH)
-          // 工具数 = 可用数（停用表扣减后）：段里给模型的是同一个口径，模型据此与
-          // 自己 schema 里的 `mcp__*` 工具对得上；被场景收窄 / 手动关掉的工具不算。
-          const usableTools = typeof x.enabledToolCount === 'number' ? x.enabledToolCount : x.toolCount
-          return x.id + ' | ' + x.serverName + ' | ' + x.level + ' | ' + (x.disabled ? 'disabled' : 'enabled') +
-            (x.live ? ' | loader:' + (x.live.enabled ? 'on' : 'off') + (x.live.phase ? ':' + x.live.phase : '') : '') +
-            (typeof usableTools === 'number' ? ' | tools:' + usableTools : '') +
-            (note ? ' | user-hint:' + note : '')
-        })
-        const header = 'MCP servers: ' + (showAll
-          ? all.length + ' configured'
-          : shown.length + ' enabled of ' + all.length + ' configured' +
-            (shown.length === all.length ? '' : ' (pass all=true for every configured server)')) + '\n'
-        // 注入边界：压制型预设（persona complete / 关闭运行时上下文，如极简）下本插件
-        // 默认不注入 —— 模型只有 mcp__* 的工具名与参数，没有服务级信息。不说明的话，
-        // 模型会把「能调用这些工具」当成「已经知道有哪些 server、用户给它们写了什么备注」。
-        // 提示本身不点名任何工具，所以挂在哪个发现型工具上都不会出现循环指引。
-        const notice = await reachNoticeForAgent(presetRoster(), exec && exec.agent && exec.agent.ctx, injectNoticeOptions())
-        return header + (summary.join('\n') || '(none)') + notice
-      },
-    }))
-    tools.register(defineTool({
-      name: 'mcp_manager_set_enabled',
-      description: 'Enable or disable one configured MCP server (writes the patch file; takes effect via HMR).',
-      parameters: {
-        id: { type: 'string', required: true, description: 'Entry id of the MCP server, e.g. mcp-stepfun-web-search.' },
-        level: { type: 'string', required: true, description: 'project or global.' },
-        enabled: { type: 'boolean', required: true, description: 'true to enable, false to disable.' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
-        const blocked = await lockedSceneGuard()
-        if (blocked) throw new Error(blocked)
-        const r = await mcpmSetEnabled({ id: args.id, level: args.level, enabled: args.enabled })
-        if (!r.ok) throw new Error(r.error)
-        // 场景未锁定时，页面 / 模型改的开关都要落进当前场景的档案（与 handlers 层同一套同步）。
-        const syncErr = await syncSwitchToScene('mcpm-set-enabled', args)
-        return 'OK: ' + args.id + ' now ' + (args.enabled ? 'enabled' : 'disabled') +
-          (syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : '')
-      },
-    }))
-    tools.register(defineTool({
-      name: 'mcp_manager_restart',
-      description: 'Restart one configured MCP server (disable + re-enable; reconnect and re-sync tools).',
-      parameters: {
-        id: { type: 'string', required: true, description: 'Entry id of the MCP server, e.g. mcp-stepfun-web-search.' },
-        level: { type: 'string', required: true, description: 'project or global.' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
-        const r = await mcpmRestart({ id: args.id, level: args.level })
-        if (!r.ok) throw new Error(r.error)
-        return 'OK: ' + args.id + ' restarted'
-      },
-    }))
-    tools.register(defineTool({
-      name: 'mcp_manager_add',
-      description: 'Add a new MCP server (streamable-http or stdio) at project or global level.',
-      parameters: {
-        serverName: { type: 'string', required: true, description: 'Unique server name (1-32 chars, [A-Za-z0-9_-]).' },
-        transport: { type: 'string', required: true, description: 'streamable-http or stdio.' },
-        url: { type: 'string', description: 'Server URL (required for streamable-http).' },
-        command: { type: 'string', description: 'Executable (required for stdio).' },
-        args: { type: 'string', description: 'Arguments, space separated (stdio).' },
-        headers: { type: 'string', description: 'Extra headers as key=value lines (streamable-http).' },
-        env: { type: 'string', description: 'Extra env vars as key=value lines (stdio).' },
-        level: { type: 'string', description: 'project or global (default project).' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
-        const blocked = await lockedSceneGuard()
-        if (blocked) throw new Error(blocked)
-        const r = await mcpmAdd(args)
-        if (!r.ok) throw new Error(r.error)
-        return 'OK: added ' + r.row.id + ' at ' + r.row.level
-      },
-    }))
-    // Skill-facing tools: list, toggle, create. create is gated by the
-    // tools/pre-execute hook below (the model must ask before writing files).
-    tools.register(defineTool({
-      name: 'skill_manager_list',
-      description: 'List DSH skills with enabled state, effective/shadowed status and source file path. The injected「本机技能目录」system-reminder carries callable skills and summaries only; use this tool to get a source file path (read the file for the full body) and to see entries that are off. Defaults to enabled skills only; pass all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
-      parameters: {
-        all: { type: 'boolean', description: 'Include disabled and shadowed entries (default false).' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args: any, exec: any) {
-        const showAll = Boolean(args && args.all === true)
-        const r = await skillsService.ops['skill-state']({})
-        if (!r || r.ok === false) throw new Error((r && r.error) || 'skill-state failed')
-        const data: any = r.data || {}
-        // 同名（canonical = declaredName || name）跨根重复时只有**一份**生效，排序规则是
-        // 「同名首选 > 来源优先级 rank」，**与启用状态无关**（core 的 groupLoadableSkillsByName）。
-        // 于是「启用被覆盖的那份」是静默无效的：工具会回 OK，技能却依然不可用 —— 用户实测
-        // 踩到的正是这个坑（同一技能在 dsh/agents/claude/custom 各有一份，启错根等于没启）。
-        // 这里把生效/被覆盖如实标出来，让模型（和人）不必猜。
-        //
-        // 默认只列启用的（2026-09-16 用户裁定）：本机 36 条里只有 1 条启用，全列一次约 4.3k
-        // 字符且永久留在 transcript。表头始终给出全量口径（多少条 / 多少同名组），所以
-        // 「还有没列出来的」不会变成盲区 —— 要看就传 all=true。
-        const rows: Array<{ root: string; text: string; enabled: boolean }> = []
-        const counts = new Map<string, number>()
-        for (const root of data.roots || []) {
-          for (const skill of root.skills || []) {
-            const key = String(skill.declaredName || skill.name || '')
-            counts.set(key, (counts.get(key) || 0) + 1)
-            // `enabled` 只写在「胜出者」上（core 的 markWinners）；影子副本与不可加载的技能
-            // 没有这个字段。原先直接读 skill.enabled，这些技能一律被报成 disabled ——
-            // 这里改用与界面同口径的兜底推导（client 的 isSkillEnabled）。
-            const enabled = skill.enabled !== undefined
-              ? skill.enabled === true
-              : (skill.invocationPolicyValid && skill.modelInvocable && skill.userInvocable && skill.managerEnabled !== false)
-            const marks: string[] = []
-            if (skill.shadowedBy && skill.shadowedBy.root) marks.push('shadowed by ' + skill.shadowedBy.root)
-            if (skill.preferred === true) marks.push('preferred')
-            rows.push({
-              root: String(root.key || ''),
-              enabled,
-              text: (skill.name || skill.declaredName || '') + ' | ' + (root.key || '') + ' | ' + (enabled ? 'enabled' : 'disabled') +
-                (marks.length ? ' | ' + marks.join(' ') : '') +
-                (skill.path ? ' | ' + skill.path : ''),
-            })
-          }
-        }
-        const dupGroups = [...counts.values()].filter((n) => n > 1).length
-        const shown = showAll ? rows : rows.filter((row) => row.enabled)
-        const header = 'Skills: ' + (showAll
-          ? rows.length + ' entries'
-          : shown.length + ' enabled of ' + rows.length + ' entries') +
-          (dupGroups ? ' · ' + dupGroups + ' duplicated names' : '') +
-          (showAll || shown.length === rows.length ? '' : ' (pass all=true to include disabled and shadowed entries)') + '\n'
-        // 注入边界：预设没挂 dsh-tool-skill（如极简）时官方技能目录不在，本插件的
-        // 「技能目录」注入域会在开关打开时兜底（见上面的注入通道）；两者都没有时模型看到的
-        // 只是这份名单 —— 说清边界，别让它以为上下文里已经有技能正文（正文用路径读）。
-        const notice = await reachNoticeForAgent(presetRoster(), exec && exec.agent && exec.agent.ctx, injectNoticeOptions())
-        return header + (shown.map((row) => row.text).join('\n') || '(none)') + notice
-      },
-    }))
-    tools.register(defineTool({
-      name: 'skill_manager_set_enabled',
-      description: 'Enable or disable one DSH skill (manager policy only; source files are never modified). Enabling a shadowed copy has no effect.',
-      parameters: {
-        name: { type: 'string', required: true, description: 'Skill name (kebab-case).' },
-        enabled: { type: 'boolean', required: true, description: 'true to enable, false to disable.' },
-        root: { type: 'string', description: 'Source root key (dsh/agents/codex/claude or a project key); default dsh.' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
-        const blocked = await lockedSceneGuard()
-        if (blocked) throw new Error(blocked)
-        const root = String(args.root || 'dsh')
-        const op = args.enabled ? 'skill-enable' : 'skill-disable'
-        const r = await skillsService.ops[op]({ name: args.name, root })
-        if (!r || r.ok === false) throw new Error((r && r.error) || 'skill toggle failed')
-        // 场景未锁定时同步进当前场景档案（与 handlers 层同一套同步）。
-        const syncErr = await syncSwitchToScene(op, { name: args.name, root, enabled: args.enabled === true })
-        // 静默无效是这个工具最容易骗人的地方：同名胜负只由「首选 > 来源优先级」决定，
-        // 与启用状态无关。对影子副本操作会返回 OK，但技能依然不可用。如实说一句。
-        let shadowedBy = ''
-        try {
-          const state: any = await skillsService.ops['skill-state']({})
-          for (const rt of (state && state.data && state.data.roots) || []) {
-            for (const skill of rt.skills || []) {
-              if (String(skill.declaredName || skill.name || '') !== String(args.name)) continue
-              if (String(rt.key || '') !== root) continue
-              if (skill.shadowedBy && skill.shadowedBy.root) shadowedBy = String(skill.shadowedBy.root)
-            }
-          }
-        } catch { shadowedBy = '' }
-        const warn = shadowedBy
-          ? ' — BUT this copy is shadowed by the same-name skill in "' + shadowedBy + '", so it stays inactive: enable that copy instead, or make this root the preferred copy in the panel'
-          : ''
-        const sceneWarn = syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : ''
-        return 'OK: ' + args.name + ' now ' + (args.enabled ? 'enabled' : 'disabled') + warn + sceneWarn
-      },
-    }))
-    tools.register(defineTool({
-      name: 'skill_manager_create',
-      // 落点必须和 UI「创建技能」一致：两者都走 core 的默认落点（hub 的
-      // tool-management/skills/，hub 缺失时退回 DSH_HOME/skills）。以前这里硬编码
-      // root:'dsh'，于是同一个「新建技能」动作，人点界面和模型调用会落到两个不同的根。
-      description: 'Create a new DSH skill under DSH_HOME/tool-management/skills. Use only when the user explicitly asks to create or save a reusable skill.',
-      parameters: {
-        name: { type: 'string', required: true, description: 'Skill name; normalized to kebab-case.' },
-        description: { type: 'string', required: true, description: 'A concise routing description for when to use the skill.' },
-        body: { type: 'string', required: true, description: 'Markdown instructions that form the skill body.' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
-        const blocked = await lockedSceneGuard()
-        if (blocked) throw new Error(blocked)
-        const r = await skillsService.ops['skill-create']({ name: args.name, description: args.description, body: args.body })
-        if (!r || r.ok === false) throw new Error((r && r.error) || 'skill create failed')
-        const data: any = r.data || {}
-        return 'Created DSH skill ' + (data.name || args.name) + ' at ' + (data.path || '(unknown)')
-      },
-    }))
-    // AGENTS.md 预设库：模型可查/切，不能造/删（避免模型乱删用户预设）。
-    tools.register(defineTool({
-      name: 'prompt_manager_list',
-      description: 'List AGENTS.md presets (id, active state, file path). Read that file to see a preset body. The preset in effect right now is injected into your context each turn (the「本机提示词」system-reminder, whose「来源：」line names the file). Defaults to the preset currently in effect; pass all=true for the whole library.',
-      parameters: {
-        all: { type: 'boolean', description: 'Include inactive presets (default false).' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args: any, exec: any) {
-        const showAll = Boolean(args && args.all === true)
-        const r = await agentsMdService.list()
-        if (!r.ok) throw new Error(r.error)
-        const all = r.presets || []
-        // 默认只列「当前这份 ~/.dsh/AGENTS.md 是从哪个预设来的」（用户裁定 2026-09-16）。
-        // 判定分两级：内容逐字节相同 = 生效；否则看服务层记下的「最近一次应用」——
-        // 用户手改过全局文件时，第二级仍能给出答案，不必退化成全列（那会白烧上下文）。
-        const active = all.filter((p) => p.active === true)
-        const fallback = active.length ? active : all.filter((p) => p.lastApplied === true)
-        const shown = showAll ? all : fallback
-        // 路径这一列是「名单 → 全文」的闭环：预设正文既不进提示词、也没有读取工具，
-        // 给出文件路径让模型用宿主的文件工具读，比再造一个 read 工具省一条常驻 schema。
-        const summary = shown.map((p) => {
-          const mark = p.active ? ' [active]'
-            : p.lastApplied ? ' [last applied — ~/.dsh/AGENTS.md has changed since]'
-            : ''
-          return p.id + mark + ' | ' + join(agentsMdPresetsDir, p.id, 'AGENTS.md')
-        })
-        const header = 'AGENTS.md presets: ' + (showAll
-          ? all.length + ' in the library'
-          : fallback.length
-            ? fallback.length + (active.length ? ' active' : ' last applied') + ' of ' + all.length +
-              (fallback.length === all.length ? '' : ' (pass all=true for the whole library)')
-            : '0 active of ' + all.length + ' (pass all=true for the whole library)') + '\n'
-        // 同上：AGENTS.md 由官方 dsh-agent-instructions 行承载（极简没挂这一行），
-        // 这一行不在时文件内容不会进上下文。
-        const notice = await reachNoticeForAgent(presetRoster(), exec && exec.agent && exec.agent.ctx, injectNoticeOptions())
-        return header + (summary.join('\n') || '(none)') + '\n(DSH re-reads ~/.dsh/AGENTS.md every turn, so applying takes effect on the next turn.)' + notice
-      },
-    }))
-    tools.register(defineTool({
-      name: 'prompt_manager_apply',
-      description: 'Apply one AGENTS.md preset by writing it to ~/.dsh/AGENTS.md; effective on the next turn. Refused while a scene drives the baseline, unless it is that scene\'s bound preset (change the scene binding instead).',
-      parameters: {
-        id: { type: 'string', required: true, description: 'Preset id (lowercase letters, digits, hyphens).' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
-        const blocked = await lockedSceneGuard()
-        if (blocked) throw new Error(blocked)
-        const r = await applyPresetGuarded(args.id)
-        if (!r.ok) throw new Error(r.error)
-        return 'OK: preset ' + args.id + ' applied to ~/.dsh/AGENTS.md (next session; current session unchanged' + (r.backedUp ? '; previous backed up to __last-applied__' : '') + ')'
-      },
-    }))
-    // ---------- rules model tools（v0.4）----------
-    // 活动场景的记忆正文会自动注入上下文（无需调用工具读取）；这里的工具用于
-    // 查询/编辑规则本身。memory_manager_write 受 tools/pre-execute 审批门禁（D2）。
-    // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
-    tools.register(defineTool({
-      name: 'memory_manager_list',
-      description: 'List memories under ~/.dsh/tool-management/memories (id, scene, enabled, description). The ones actually injected are carried in your context each turn (the「本机当前的场景和记忆」system-reminder); use this tool to find ids/paths or to see entries that are off. Defaults to the memories that will actually be injected; pass all=true for every entry.',
-      parameters: {
-        group: { type: 'string', description: 'Optional scene filter.' },
-        all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args: any, exec: any) {
-        const showAll = Boolean(args && args.all === true)
-        const r: any = await rulesService.ops['rules-list'](args)
-        if (!r || r.ok === false) throw new Error((r && r.error) || '读取规则失败')
-        // 「会注入」的判定与记忆段同源（renderSceneMemory）：global 场景恒常注入，其余场景要
-        // 在 index.active 里，再叠加单条 enabled 与同名 bundle 的 shadowed。默认只列这些，
-        // 全列一次会把没启用的条目也算进上下文（用户裁定 2026-09-16，与技能列表同口径）。
-        const sceneOn = (group: string): boolean => group === 'global' ||
-          (group !== '' && (r.activeMode === 'all' || String(r.activeScene || '') === group))
-        const stateOf = (x: any): { injects: boolean; label: string } => {
-          if (x.shadowed === true) return { injects: false, label: '被同名覆盖' }
-          if (x.enabled === false) return { injects: false, label: '已停用' }
-          if (!sceneOn(String(x.group || ''))) return { injects: false, label: '场景未启用' }
-          return { injects: true, label: '已启用' }
-        }
-        const rows: Array<{ x: any; injects: boolean; label: string }> =
-          (r.rules || []).map((x: any) => ({ x, ...stateOf(x) }))
-        const shown = showAll ? rows : rows.filter((row) => row.injects)
-        const lines = shown.map(({ x, label }) => (
-          '- ' + x.id + ' [' + (x.group || '未归属场景') + '] ' + label +
-          (x.description ? ' — ' + x.description : '')
-        ))
-        const scenes = (r.scenes || []).map((s: any) => (s.label || s.name) + (s.active ? '(启用)' : '(未启用)')).join('、')
-        const header = '记忆：' + (showAll
-          ? rows.length + ' 条'
-          : shown.length + ' 条会注入 / 共 ' + rows.length + ' 条' +
-            (shown.length === rows.length ? '' : '（传 all=true 看全部）')) + '\n'
-        // 注入边界：压制型预设（persona complete / 关闭运行时上下文）下本插件默认不注入，
-        // 此时列出的记忆**不在**模型上下文里。必须说出来，否则模型会假设自己已经看到正文。
-        const notice = await reachNoticeForAgent(presetRoster(), exec && exec.agent && exec.agent.ctx, injectNoticeOptions())
-        return header + (lines.join('\n') || '(无记忆)') +
-          '\n场景：' + (scenes || '(无)') + (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）') + notice
-      },
-    }))
-    tools.register(defineTool({
-      name: 'memory_manager_read',
-      description: 'Read the full body of one memory under ~/.dsh/tool-management/memories. Call it only for memories that are not already in your context (disabled, unassigned to a scene, or dropped by the injection budget).',
-      parameters: {
-        id: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
-        const r: any = await rulesService.ops['rules-read'](args)
-        if (!r || r.ok === false) throw new Error((r && r.error) || '读取规则失败')
-        return '# ' + r.rule.id + '\n\n' + (r.rule.body || '')
-      },
-    }))
-    tools.register(defineTool({
-      name: 'memory_manager_write',
-      description: 'Create a new memory as ~/.dsh/tool-management/memories/<scene>/<name>.md. The scene must already exist (use global for the always-on scene).',
-      parameters: {
-        group: { type: 'string', required: true, description: 'Scene name (no path separators or < > : " | ? *); `global` = the always-on scene.' },
-        name: { type: 'string', required: true, description: 'Memory name = .md file name without extension; <=64 chars, no path separators or < > : " | ? *, must not start with a dot.' },
-        description: { type: 'string', required: true, description: 'One-sentence description (<=500 chars).' },
-        body: { type: 'string', required: true, description: 'Markdown body (<=256 KiB).' },
-      },
-      output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute(args) {
-        const blocked = await lockedSceneGuard()
-        if (blocked) throw new Error(blocked)
-        const r: any = await rulesService.ops['rules-create'](args)
-        if (!r || r.ok === false) throw new Error((r && r.error) || '创建规则失败')
-        return 'OK: memory ' + r.rule.id + '（场景「' + (r.rule.group || '未归属') + '」启用后自动生效）'
-      },
-    }))
-    // ---------- 子智能体工具（subagent_manager_list / subagent_manager_run）----------
-    // exec.agent / exec.signal 由工具运行时提供（parent 与取消信号的官方通道）。
-    try {
-      // 与其余 12 个工具同一条注册通道：defineTool 负责编译 parameters（object root + required），
-      // 裸 register 会把未编译的参数声明直接发给模型 API。
-      tools.register(defineTool(defineSubagentManagerListTool({
-        list: () => subagentService.list(),
-        sceneLists: subagentSceneLists,
-        // 与其余发现型工具同口径：压制型预设下不注入时，人设目录不在模型上下文里，
-        // 只有工具可用。挂上边界提示，模型才不会把「看不到人设」当成「没有人设」。
-        noticeFor: (exec) => reachNoticeForAgent(
-          presetRoster(),
-          exec && (exec as { agent?: { ctx?: unknown } }).agent && (exec as { agent?: { ctx?: unknown } }).agent!.ctx,
-          injectNoticeOptions(),
-        ),
-      })))
-      // 工具限制按**当前会话的 Agent 预设**下发：父会话跑在哪个预设，就用那个预设那一行的
-      // 白/黑名单（`decideToolFilter`），名单里已消失的工具名会被丢掉并在结果里如实说明。
-      tools.register(defineTool(defineSubagentManagerRunTool({ ...subagentService, sceneLists: subagentSceneLists, toolFilterFor: subagentToolFilterFor })))
-    } catch (e) {
-      console.error('[dsh-plugin-tool-management] subagent tool registration failed:', message(e))
+
+    // 五个域共用的那一份依赖（形状见 tools/deps.ts）。defineTool 带着遥测一起传下去 ——
+    // 各域必须用它，直接 import 宿主的那个会丢掉采纳统计。
+    const toolDeps = {
+      defineTool,
+      register: (def: ToolDefinition) => { tools.register(def) },
+      lockedSceneGuard,
+      syncSwitchToScene,
+      reachNoticeForAgent,
+      presetRoster: candidates.presetRoster,
+      injectNoticeOptions,
+      message,
     }
+    buildMcpTools({
+      ...toolDeps,
+      mcpmListView: mcp.mcpmListView,
+      mcpmSetEnabled: mcp.ops['mcpm-set-enabled'],
+      mcpmRestart: mcp.ops['mcpm-restart'],
+      mcpmAdd: mcp.ops['mcpm-add'],
+    })
+    buildSkillTools({ ...toolDeps, skillsOps: skillsService.ops })
+    buildPromptTools({ ...toolDeps, promptsService, applyPresetGuarded, promptsDir })
+    buildMemoryTools({ ...toolDeps, rulesOps: memoriesService.ops })
+    buildSubagentTools({
+      ...toolDeps,
+      subagentService,
+      sceneLists: subagentSceneLists,
+      toolFilterFor: subagentToolFilterFor,
+      failures: subagentFailures,
+    })
 
     if (typeof ctx.on === 'function') {
       // 三个确认门的统一前裁决。口径（用户裁定，方案 B）：会话审批策略为 never（「完全权限」预设）
@@ -4763,6 +1917,9 @@ export default {
         skill_manager_create: '「新建技能」',
         memory_manager_write: '「写入记忆」',
         subagent_manager_run: '「运行子代理」',
+        // 模型侧只有这一个工具能塞进任意 command/args（改命令的 mcpm-edit 不对外注册成工具），
+        // 所以门禁加在它这里就覆盖了整个模型可达面。
+        mcp_manager_add: '「新增 MCP 服务器」',
       }
       const bypassedByFullAccess = (exec: any): boolean => {
         if (!isApprovalNever(ctx, exec)) return false
@@ -4791,10 +1948,30 @@ export default {
         if (exec.name === 'skill_manager_create') {
           return Promise.resolve({ kind: 'ask', reason: 'Create a new skill under ~/.dsh/tool-management/skills' })
         }
+        if (exec.name === 'mcp_manager_add') {
+          // 为什么必须问：stdio 服务器是宿主按你给的 command/args **spawn** 出来的进程
+          // （见 http-fence.ts 对 mcpm-add 的说明），且这条目会写进配置长期生效。
+          // 写一个技能文件都要问，注册一条能起进程的配置却直接放行，是门禁倒挂 ——
+          // 危险度与门禁强度必须同向。
+          // 卡里回显将执行的命令行：用户批准的是「跑这条命令」，不是「加一个服务器」。
+          const a = (exec && exec.arguments) || {}
+          const transport = String(a.transport || '')
+          const cmd = [a.command, a.args]
+            .map((x) => String(x ?? '').trim())
+            .filter((x) => x !== '')
+            .join(' ')
+          const detail = transport === 'stdio'
+            ? (cmd ? `stdio command: ${cmd}` : 'stdio command: (empty)')
+            : `${transport || 'streamable-http'} url: ${String(a.url || '(empty)')}`
+          return Promise.resolve({
+            kind: 'ask',
+            reason: `Add MCP server「${String(a.serverName || '')}」— ${detail}. A stdio server is spawned by the host and the entry persists in the config.`,
+          })
+        }
         if (exec.name === 'memory_manager_write') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
           // 不在此处做任何兜底放行。
-          return readPluginSettings()
+          return mcp.readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite
               ? { kind: 'ask', reason: 'Write a memory under ~/.dsh/tool-management/memories' }
               : next()))
@@ -4805,7 +1982,7 @@ export default {
         // "把这段对话交给它"，不只是"跑个子代理"）。文案只在与 fork 有关的部分分叉。
         const inherits = !!(exec && exec.arguments && exec.arguments.inherit)
         const ask = { kind: 'ask' as const, reason: inherits ? 'Run a subagent on this conversation (it inherits the conversation; consumes tokens)' : 'Run a subagent (consumes tokens)' }
-        return readPluginSettings()
+        return mcp.readPluginSettings()
           .then((s) => ((s as any).requireConfirmForModelSubagentRun !== false ? ask : next()))
           .catch(() => ask)
       })
@@ -4813,14 +1990,13 @@ export default {
 
     // ---------- per-tool MCP switches: execution guard + visibility ----------
     try {
-      readDisabledTools().then(() => applyToolRestrictions()).catch(() => { /* side-car unavailable → no restrictions */ })
+      mcp.warmUp().catch(() => { /* side-car unavailable → no restrictions */ })
     } catch (e) { /* ignore */ }
     if (typeof tools.guard === 'function') {
       ctx.effect(() => tools.guard!((exec) => {
         try {
           // Reads the TTL cache without I/O: the guard runs on the hot path.
-          const value = disabledToolsCache ? disabledToolsCache.value : {}
-          if (isToolDisabled(value, String((exec && exec.name) || ''))) {
+          if (mcp.isToolDisabled(String((exec && exec.name) || ''))) {
             return '该工具已在 MCP 管理页停用'
           }
         } catch (e) { /* fallthrough to allow */ }
@@ -4835,16 +2011,15 @@ export default {
         //（用户切 MCP 后立即看上下文注入就是空段 —— 2026-09-16 实测）。
         ctx.effect(() => {
           const stop = (ctx.on as (event: string, cb: () => void) => (() => void) | void)('tools/change', () => {
-            scheduleToolRestrictions()
-            void mcpStateCatalog.refresh()
+            mcp.scheduleToolRestrictions()
+            void mcp.stateCatalog.refresh()
           })
           return typeof stop === 'function' ? stop : () => {}
         }, 'dsh-plugin-tool-management: tools/change listener')
       } catch (e) { /* ignore */ }
     }
     ctx.effect(() => () => {
-      if (restrictTimer) { clearTimeout(restrictTimer); restrictTimer = null }
-      if (restrictDisposer) { try { restrictDisposer() } catch (e) { /* ignore */ } restrictDisposer = null }
+      mcp.dispose()
     }, 'dsh-plugin-tool-management: tool restriction cleanup')
 
     // ---------- HTTP API route (UI half), registered defensively ----------
@@ -4855,8 +2030,22 @@ export default {
       // (or a correct explicit token). `config.maxBodyBytes` overrides the cap
       // (tests use a small value).
       const configuredMaxBody = Number((config as { maxBodyBytes?: unknown } | undefined)?.maxBodyBytes)
-      const MAX_BODY = Number.isFinite(configuredMaxBody) && configuredMaxBody > 0 ? configuredMaxBody : 88 * 1024 * 1024
+      // 默认 88 MiB：够塞下一份带多张大附件（图片 / PDF）的技能或记忆打包体，又不至于让
+      // 一个失控的客户端把进程内存吃光。`config.maxBodyBytes` 可覆盖（测试用小值）。
+      const DEFAULT_MAX_BODY_BYTES = 88 * 1024 * 1024
+      const MAX_BODY = Number.isFinite(configuredMaxBody) && configuredMaxBody > 0 ? configuredMaxBody : DEFAULT_MAX_BODY_BYTES
       const readBody = (req: HttpReq) => new Promise<string>((resolve, reject) => {
+        // 先看 content-length：注定超限的请求在**读第一个字节之前**就拒掉。以前只能边收边数，
+        // 一个 5 GB 的上传会先让我们缓冲满 88 MiB 才回错。读取流照旧 drain（一个字节都不留），
+        // 否则响应写完后服务端会直接拆连接，客户端可能在上传中途拿到网络错误而不是下面这句 JSON。
+        // 错误消息必须含 `body too large` —— 后面的 catch 靠这个子串分流。
+        const declared = Number(req.headers && req.headers['content-length'])
+        if (Number.isFinite(declared) && declared > MAX_BODY) {
+          const drain = (req as { resume?: () => void }).resume
+          if (typeof drain === 'function') drain.call(req)
+          reject(new Error('request body too large'))
+          return
+        }
         // Accumulate Buffers and decode ONCE at the end: decoding each chunk
         // separately corrupts multi-byte UTF-8 characters that straddle a
         // chunk boundary (e.g. long Chinese skill bodies).
@@ -4891,8 +2080,14 @@ export default {
           handler: async (req, res) => {
             // 鉴权顺序：POST-only → 插件门禁头（防误触，不是凭证）→ 宿主栅栏
             // （Host/Origin + browser-session cookie）→ 可选访问令牌。令牌是本地工具与
-            // LAN 部署的逃生门：**令牌正确即视为已授权**，可越过浏览器鉴权；
-            // 未配置令牌时不再有"谁都放行"的缺口。
+            // LAN 部署的逃生门：**令牌正确即视为已授权**，可越过浏览器鉴权。
+            //
+            // 「未配置令牌时」别读成"仍有门禁"：下面的写 op 判据是
+            // `if (TOKEN && WRITE_OPS.has(op))` —— `TOKEN === ''` 时整条短路，79 个写 op
+            // 只剩 `fenceRejection` 一道。而它自身有两种形态：宿主栅栏在场时含 cookie 鉴权；
+            // 栅栏缺席或抛错时退回本地判定，**只查回环 Host 与（若给了）Origin 自比对**，
+            // 没有 cookie 那一层 —— 本机任意进程都能调写 op。所以准确说法是：
+            // 未配置令牌时不再有「**无栅栏**放行」的缺口，但进程级边界只有配了令牌才有。
             const hdr = (name: string): string => {
               const v = req.headers?.[name]
               return Array.isArray(v) ? v[0] ?? '' : v ?? ''
@@ -4907,7 +2102,9 @@ export default {
               res.end(JSON.stringify({ ok: false, error: 'missing plugin gate header' }))
               return
             }
-            const tokenAccepted = TOKEN !== '' && tokenMatches(hdr('x-dsh-token'))
+            // 「本次带的这串对不对」比的是**存量**令牌：关掉令牌功能之后仍然要凭它才能开回来、
+            // 换掉、或看明文（要求 9）。
+            const tokenAccepted = CONFIG_TOKEN !== '' && tokenMatches(hdr('x-dsh-token'))
             if (!tokenAccepted) {
               const fence = fenceRejection(req, connection)
               if (fence) {
@@ -4929,19 +2126,63 @@ export default {
                 /* otherwise fall through with {} */
               }
               const op = String(payload.op || '')
-              // 敏感 op（会吐明文密钥与完整配置）：**必须**带对的访问令牌，没配令牌
-              // 就没有明文（判定与理由见 http-fence.ts 的 secretOpRejection）。
+              // 敏感 op（会吐明文密钥与完整配置）：**配了令牌就必须带对的**，没配令牌则不设防
+              // （判定与理由见 http-fence.ts 的 secretOpRejection —— 用户裁定 2026-09-19：
+              // 没配令牌时那道门没有出路，用户无从填一个不存在的令牌）。
               // 之前这里只查"有没有 Origin 头"，而 token 为空时它形同虚设 —— 任何能
               // 打开 GUI 的浏览器都拿得到全部密钥原文。
               if (SENSITIVE_OPS.has(op)) {
-                const gate = secretOpRejection({ tokenConfigured: TOKEN !== '', tokenAccepted })
+                // 明文门禁看的是**存量**令牌（CONFIG_TOKEN 而不是生效值 TOKEN）：关掉令牌
+                // 功能之后仍然"要凭存量令牌才给明文"—— 那条路是通的（填对就能看），
+                // 与"从来没配过"不同。
+                const gate = secretOpRejection({ tokenConfigured: CONFIG_TOKEN !== '', tokenAccepted })
                 if (gate) {
                   res.end(JSON.stringify({ ok: false, error: gate.error, code: gate.code }))
                   return
                 }
               }
-              if (TOKEN && WRITE_OPS.has(op) && !tokenMatches(hdr('x-dsh-token'))) {
-                res.end(JSON.stringify({ ok: false, error: '缺少或错误的访问令牌（x-dsh-token）' }))
+              // 「读改写」两态 op：不带 `set:true` 时是**纯读**，与写门禁无关。
+              // `inject-settings`（兼容页的「注入」块）与 `mcpm-settings`（MCP 页的轮询设置）
+              // 都用同一个 op 承担读与写，于是整条 op 被列进 WRITE_OPS —— 读侧也一起被拦，
+              // 界面表现是"没填令牌时整块设置消失、填了还要刷新才出现"（2026-09-19 用户报的）。
+              // 判据是**这次调用要不要写**，不是 op 名在不在名单里。
+              const readOnlyCall = (op === 'inject-settings' || op === 'mcpm-settings')
+                && !(payload.args && payload.args.set === true)
+              if (TOKEN && WRITE_OPS.has(op) && !readOnlyCall && !tokenMatches(hdr('x-dsh-token'))) {
+                // 文案与明文门禁同源（http-fence.ts），code 也统一 —— 界面据此在最右侧挂
+                // 「去填令牌」跳转按钮。这条错误会出现在**任意**页面，而入口只有一个。
+                res.end(JSON.stringify({ ok: false, code: TOKEN_CODE_BAD, error: TOKEN_MSG }))
+                return
+              }
+              // 令牌状态（只读，**不需要**令牌本身）：回答"宿主配没配"、"本次带的这串对不对"、
+              // "配置文件里的改动是不是还没重启生效"、"本次进程的标识"。就地回答而不是进 handlers 表：
+              // 前者的答案来自本次请求头与进程状态，而后者的 handlers 只拿得到 args。
+              // 不返回令牌、也不返回它的任何片段 —— 泄给同源页面等于把最后一道门交出去。
+              if (op === 'token-status') {
+                const state = await tokenConfigState()
+                res.end(JSON.stringify({
+                  ok: true,
+                  // 「宿主配置了令牌」= 配置里**有**值（关掉也算有：随时能开回来）。
+                  hostConfigured: CONFIG_TOKEN !== '',
+                  // 当前进程里令牌功能是开还是关（关掉 = 写操作不要求令牌）。
+                  disabled: TOKEN_DISABLED,
+                  // 「当前进程里令牌**在生效**」= 写操作要不要令牌。关掉或没配都是 false。
+                  // 界面据此判断"填令牌"这件事有没有意义（没生效时填了也没人验，还会把
+                  // 一句无处可填的提示挂在屏幕上 —— 用户 2026-09-19 报的就是这个）。
+                  active: TOKEN !== '',
+                  accepted: tokenAccepted,
+                  bootId: BOOT_ID,
+                  configHasToken: state.configHasToken,
+                  configDisabled: state.configDisabled,
+                  configFound: state.found,
+                  pendingRestart: state.pendingRestart,
+                }))
+                return
+              }
+              // 设置 / 关闭令牌：同样就地处理（理由见 tokenConfigure 的注释 —— 也正因为不进
+              // handlers，模型侧没有任何工具能间接关掉它）。
+              if (op === 'token-configure') {
+                res.end(JSON.stringify(await tokenConfigure(payload.args || {}, tokenAccepted)))
                 return
               }
               const fn = handlers[op]
@@ -4961,12 +2202,6 @@ export default {
         console.error('[dsh-plugin-tool-management] webServer route registration failed:', message(e))
       }
     }
-
-    // ---------- 斜杠命令：已下线 ----------
-    // 曾有 /mcp、/skills、/agents-md、/scene-memory 四条（注册到 commands 服务）。
-    // 用户 2026-09-13 判定「斜杠命令没多大用」→ 全部删除：面板里每一项都有等价入口，
-    // 而命令输出是纯文本快照，既不能操作也容易与面板状态不一致。
-    // 保留这段注释是为了让「为什么没有 /mcp」这个问题有答案可查。
   },
 }
 

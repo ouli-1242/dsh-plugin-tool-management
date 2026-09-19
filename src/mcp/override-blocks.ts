@@ -116,6 +116,11 @@ export function scanOverrideBlocks(content: string): OverrideBlock[] {
  *
  * 这是收敛判定的唯一合法基准来源：绝不能用 `parseRows()` 那种"合并覆盖块之后的生效值"，
  * 因为生效值就等于最后一条覆盖块的值，"覆盖块的值 == 基准"会恒成立，decider 会被全删。
+ *
+ * 「无 `disabled` 键」与「有键但值读不出来」是**两件事**（本仓自己的 loader 行就写着
+ * `disabled: !!js "..."`，那个值是启动期算出来的）：前者 = 基准未知（不删 decider），
+ * 后者同样 = 基准未知。把它们都记成 `false` 会让"基准已知"成立，于是 decider 被当 no-op
+ * 删掉 —— 在 `!!js` 那条上就是**按启动期的值做了一次启停翻转判断**（审计 C-15）。
  */
 export function insertBaseRows(content: string): OverrideBaseRow[] {
   const lines = content.split(/\r?\n/)
@@ -176,9 +181,10 @@ export function planOverrideCompaction(
     else byId.set(block.id, [block])
   }
   const baseOf = new Map<string, boolean>()
-  for (const row of insertBaseRows(content)) baseOf.set(row.id, row.disabled === true)
+  // 只有**读得出 true/false** 才算基准已知；`disabled` 缺失或值不可解析（`!!js`）一律不记。
+  for (const row of insertBaseRows(content)) if (row.disabled !== undefined) baseOf.set(row.id, row.disabled)
   for (const other of otherFileContents) {
-    for (const row of insertBaseRows(other)) if (!baseOf.has(row.id)) baseOf.set(row.id, row.disabled === true)
+    for (const row of insertBaseRows(other)) if (!baseOf.has(row.id) && row.disabled !== undefined) baseOf.set(row.id, row.disabled)
   }
   const ranges: Array<[number, number]> = []
   const ids: Record<string, OverrideStat> = {}

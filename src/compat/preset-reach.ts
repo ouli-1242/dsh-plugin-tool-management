@@ -56,6 +56,19 @@
  * exactly what its author asked for; the plugin's job is to say so out loud and
  * point at the switch that overrides it.
  */
+import { MCP_CLIENT_MODULE } from '../host-names.js'
+
+/**
+ * `MCP_CLIENT_MODULE` (from `host-names.ts`) is the client name this module scans
+ * for: an MCP client mounted INSIDE a composition. The shipped presets mount
+ * none, so MCP tools normally come from the host plane
+ * (the `$DSH_HOME/cordis.patch.yml` layer) and are callable under every preset; a
+ * user-authored preset that mounts its own client only carries those tools under
+ * itself, and this scan is how the page can tell the two apart. Tool reachability
+ * is not the column's answer, though — the server list and the user's notes are a
+ * prompt section, which a complete persona suppresses whichever client serves the
+ * tools.
+ */
 
 /** Whether one composition mounts a given module, and whether it is switched on. */
 export type ModulePresence = 'mounted' | 'absent' | 'conditional'
@@ -181,16 +194,6 @@ export function injectionFactsOf(facts: CompositionFacts | undefined): PresetInj
 const PERSONA_MODULE = '@deepseek-ai/dsh-persona'
 const AGENT_INSTRUCTIONS_MODULE = '@deepseek-ai/dsh-agent-instructions'
 const TOOL_SKILL_MODULE = '@deepseek-ai/dsh-tool-skill'
-/**
- * An MCP client mounted INSIDE a composition. The shipped presets mount none,
- * so MCP tools normally come from the host plane (the `$DSH_HOME/cordis.patch.yml`
- * layer) and are callable under every preset; a user-authored preset that mounts
- * its own client only carries those tools under itself, and this scan is how the
- * page can tell the two apart. Tool reachability is not the column's answer,
- * though — the server list and the user's notes are a prompt section, which a
- * complete persona suppresses whichever client serves the tools.
- */
-const MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
 
 const NAME_LINE = /^(\s*)name:\s*(['"]?)([^'"\s#]+)\2\s*(?:#.*)?$/
 const ENTRY_LINE = /^(\s*)-\s/

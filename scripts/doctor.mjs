@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url'
 // Single source of truth: the runtime probe itself. A second hand-written
 // capability list here would drift from what the plugin actually gates on, and
 // the doctor would then certify a host the plugin refuses to use.
-import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE } from '../lib/compat/probe.js'
+import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE, CAPABILITY_STATIC } from '../lib/compat/probe.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const JSON_OUT = process.argv.includes('--json')
@@ -44,20 +44,73 @@ const RUNTIME_PACKAGES = IDENTITY_PACKAGES
  * official class prototypes. This is a *static* view (the runtime probe inspects
  * the live service instances and adds behaviour dry-runs); it exists so the CLI
  * can answer the question without a running host.
+ *
+ * The rows come from the runtime probe's own table — including the capability
+ * ids that only make sense against a live host, which are reported as
+ * `runtime-only` instead of disappearing from the report.
  */
-const CAPABILITY_SOURCES = [
-  { id: 'workspace.read-state', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['requireState'], kind: 'read' },
-  { id: 'workspace.read-table', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['requireTable'], kind: 'read' },
-  { id: 'workspace.read-header', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['readSessionHeader'], kind: 'read' },
-  { id: 'workspace.index-header', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['indexHeader'], kind: 'write' },
-  { id: 'workspace.enqueue', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['enqueueOperation'], kind: 'write' },
-  { id: 'workspace.set-state', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['setState'], kind: 'write' },
-  { id: 'projection.write', pkg: '@deepseek-ai/dsh-session-projection-cache', target: 'SessionProjectionCache', members: ['write', 'put', 'requireTable'], kind: 'write' },
-  // Optional native delegate slots: rc.2 does not ship them, and their absence
-  // selects the plugin's adapter route instead of disabling the feature.
-  { id: 'workspace.archive-native', pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry', members: ['archiveSession'], kind: 'write', optional: true },
-  { id: 'projection.delete-native', pkg: '@deepseek-ai/dsh-session-projection-cache', target: 'SessionProjectionCache', members: ['delete', 'whenIdle'], kind: 'delete', optional: true },
+const CAPABILITY_SOURCES = CAPABILITY_STATIC.map((spec) => ({
+  id: spec.id,
+  label: spec.label,
+  kind: spec.kind,
+  optional: spec.optional,
+  pkg: spec.check?.pkg,
+  target: spec.check?.target,
+  members: spec.check?.members ?? [],
+  runtimeOnly: spec.check === null,
+}))
+
+/**
+ * The official JSONL layout the history adapter hard-codes
+ * (`src/sessions/workspace.ts` → `jsonlSessionDirectory`).
+ *
+ * These are behaviour constants, not cosmetics: if any of them changes, the
+ * adapter can no longer verify that a transcript directory belongs to the
+ * session it is deleting, and deletion degrades to artifact-only — the parent
+ * directory is retained — with nothing but a plugin-side log line to show for
+ * it. That degradation is deliberately non-fatal (the artifact is still removed
+ * and the removal is re-checked through `persistence.stat`), so a static look
+ * at the installed host is the only way to learn about the drift before a user
+ * finds orphaned directories on disk.
+ *
+ * Static and read-only on purpose: constructing the real persistence needs a
+ * live storage domain, and this doctor must never open one.
+ */
+const JSONL_LAYOUT_MARKERS = [
+  { needle: 'session-persistence-jsonl', why: "the adapter's backend-name gate" },
+  { needle: '_no-cwd', why: 'the bucket used when the header has no cwd' },
+  { needle: '251', why: 'the project-segment truncation length' },
+  { needle: 'padStart(4', why: 'the ~XXXX UTF-16 escape encoding' },
 ]
+const JSONL_PACKAGE = '@deepseek-ai/dsh-session-persistence-jsonl'
+
+/**
+ * Check the layout assumption against the host's own copy of the backend.
+ * `n/a` means the host does not ship/use the JSONL backend, which is not a
+ * fault: the adapter simply never claims directory ownership there.
+ * @param hostDir - `.../node_modules/@deepseek-ai` of the host installation.
+ */
+function inspectJsonlLayout(hostDir) {
+  if (hostDir === undefined) return { status: 'unknown', detail: 'host installation not found' }
+  const entry = resolveFromHost(hostDir, JSONL_PACKAGE)
+  if (entry === undefined) {
+    return { status: 'n/a', detail: `${JSONL_PACKAGE} is not resolvable from the host (this host does not use the JSONL backend)` }
+  }
+  let source
+  try {
+    source = readFileSync(entry, 'utf8')
+  } catch (error) {
+    return { status: 'unknown', detail: `cannot read ${entry}: ${String(error)}` }
+  }
+  const missing = JSONL_LAYOUT_MARKERS.filter((marker) => !source.includes(marker.needle))
+  if (missing.length === 0) return { status: 'ok', detail: `layout markers intact (${entry})` }
+  return {
+    status: 'drift',
+    entry,
+    detail: `layout markers missing: ${missing.map((marker) => `"${marker.needle}" (${marker.why})`).join('; ')}`,
+    impact: 'session deletion can no longer claim the session directory: it deletes the transcript artifact only and leaves the directory behind',
+  }
+}
 
 /** Version of a package root, read from its own manifest. */
 function versionOf(entry) {
@@ -144,6 +197,12 @@ function inspectPackages() {
 function inspectCapabilities() {
   const rows = []
   for (const capability of CAPABILITY_SOURCES) {
+    // Instance-field shapes and behaviour dry-runs need a live host; saying so is
+    // the point — silently omitting them used to hide the whole delete route.
+    if (capability.runtimeOnly) {
+      rows.push({ ...capability, status: 'runtime-only', detail: 'checkable only against a live host (instance fields / behaviour dry-run)' })
+      continue
+    }
     let mod
     try {
       mod = require(capability.pkg)
@@ -173,6 +232,7 @@ function inspectCapabilities() {
 function main() {
   const installed = inspectPackages()
   const capabilities = inspectCapabilities()
+  const jsonlLayout = inspectJsonlLayout(installed.host)
 
   const blockers = []
   for (const row of installed.rows) {
@@ -181,6 +241,13 @@ function main() {
   }
   for (const row of capabilities) {
     if (row.status === 'missing') blockers.push(`${row.id}: ${row.detail}`)
+  }
+  // Layout drift is a warning, not a blocker: the delete path still removes the
+  // artifact and re-checks the result, so the outcome is orphaned directories,
+  // not data loss. It must still be loud — the runtime only logs it.
+  const warnings = []
+  if (jsonlLayout.status === 'drift') {
+    warnings.push(`${JSONL_PACKAGE}: ${jsonlLayout.detail} — ${jsonlLayout.impact}`)
   }
 
   if (JSON_OUT) {
@@ -191,7 +258,9 @@ function main() {
       expectedPeerRange: EXPECTED_PEER_RANGE,
       packages: installed.rows,
       capabilities,
+      jsonlLayout,
       blockers,
+      warnings,
     }, null, 2))
     return blockers.length === 0 ? 0 : 1
   }
@@ -208,12 +277,29 @@ function main() {
   console.log('')
   console.log('host capabilities:')
   for (const row of capabilities) {
-    const mark = row.status === 'ok' ? 'ok  ' : row.status === 'absent-optional' ? 'n/a ' : 'FAIL'
+    const mark = row.status === 'ok' ? 'ok  '
+      : row.status === 'runtime-only' ? 'n/a '
+      : row.status === 'absent-optional' ? 'n/a ' : 'FAIL'
     console.log(`  [${mark}] ${row.id.padEnd(26)} ${row.kind.padEnd(5)} ${row.detail}`)
   }
   console.log('')
+  console.log('official JSONL session layout (hard-coded by the history adapter):')
+  {
+    const mark = jsonlLayout.status === 'ok' ? 'ok  ' : jsonlLayout.status === 'drift' ? 'WARN' : 'n/a '
+    console.log(`  [${mark}] ${JSONL_PACKAGE}`)
+    console.log(`         ${jsonlLayout.detail}`)
+    if (jsonlLayout.impact !== undefined) console.log(`         impact: ${jsonlLayout.impact}`)
+  }
+  console.log('')
+  if (warnings.length !== 0) {
+    console.log(`${warnings.length} warning(s):`)
+    for (const warning of warnings) console.log(`  - ${warning}`)
+    console.log('')
+  }
   if (blockers.length === 0) {
-    console.log('OK — the plugin shares the host modules and every required capability is present.')
+    console.log(warnings.length === 0
+      ? 'OK — the plugin shares the host modules and every statically checkable capability is present.'
+      : `OK with ${warnings.length} warning(s) above — no blockers, but the host has drifted from what an adapter assumes.`)
     return 0
   }
   console.log(`${blockers.length} blocker(s):`)

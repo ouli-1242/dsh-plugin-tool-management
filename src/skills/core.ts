@@ -18,9 +18,7 @@ import {
   basename,
   dirname,
   resolve,
-  relative,
   isAbsolute,
-  sep,
 } from "node:path";
 import { promises as fs } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -29,6 +27,7 @@ import {
   discoverReadonlyEntries,
   validDiscoveryName,
 } from "./readonly-discovery.js";
+import { isSameOrDescendant, isValidSegment } from "../paths.js";
 
 const KEBAB_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PROJECT_ROOT_KEY_RE = /^project-(?:dsh|agents):[a-f0-9]{16}$/;
@@ -46,31 +45,495 @@ const MAX_UPLOAD_ENTRIES = 1000;
 const MAX_UPLOAD_PATH_LENGTH = 512;
 const TRANSIENT_RENAME_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
 
+// ── 类型声明 ────────────────────────────────────────────────────────────────
+
+/** 插件日志回调（service 层注入；同步/异步返回都接受）。 */
+type LogFn = (event: string, detail?: unknown) => void;
+
+/** 业务失败结果：core 统一的 `{ ok: false, error, code?, params? }` 形状。 */
+interface FailureResult {
+  ok: false;
+  error: string;
+  code?: string;
+  params?: Record<string, unknown>;
+}
+
+/** 一条警告项（前端按 code + params 渲染，error 为兜底原文）。 */
+interface SkillWarning {
+  code: string;
+  params?: Record<string, unknown>;
+  error?: string;
+}
+
+/** 一条 frontmatter 诊断项。 */
+interface SkillDiagnostic {
+  level: string;
+  code: string;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * 技能来源描述符（用户级 / 自定义 / 项目级共用）。
+ *
+ * 各来源形状不完全一致，故除 key/path/label 与四个公共布尔位外全部可选。
+ * `ok` 是判别位：本类型永不带 ok，与 FailureResult 的 `ok: false` 组成联合，
+ * 让 `definition.ok === false` 能收窄（见 writableRootDefinition 的返回）。
+ */
+interface SkillSource {
+  key: string;
+  path: string;
+  label: string;
+  mutable: boolean;
+  toggleable: boolean;
+  native: boolean;
+  rank: number;
+  deletable?: boolean;
+  localeKey?: string;
+  custom?: boolean;
+  scope?: "user" | "project";
+  kind?: "project-dsh" | "project-agents";
+  projectRoot?: string;
+  projectName?: string;
+  workspaceCwds?: string[];
+  ok?: undefined;
+}
+
+/** 项目级来源的公共字段（kind / key / path 等由各候选补齐）。 */
+interface ProjectSourceCommon {
+  mutable: boolean;
+  deletable: boolean;
+  toggleable: boolean;
+  native: boolean;
+  scope: "project";
+  projectRoot: string;
+  projectName: string;
+  workspaceCwds: string[];
+}
+
+/** 项目级来源描述符（项目根相关字段由 projectRoots 保证存在）。 */
+interface ProjectSource extends SkillSource {
+  scope: "project";
+  kind: "project-dsh" | "project-agents";
+  projectRoot: string;
+  projectName: string;
+  workspaceCwds: string[];
+}
+
+/** 来源入参：key 字符串、来源描述符对象，或解析不到时的空值。 */
+type RootInput = string | SkillSource | null | undefined;
+
+/** 可写来源解析结果（`ok === false` 时是业务失败）。 */
+type WritableRootResult = SkillSource | FailureResult | null;
+
+/** 最近项目根探测结果：找到根 / 宿主不可读 / 未找到（null）。 */
+type ProjectRootProbe =
+  | { root: string; cwd: string; unavailable?: undefined }
+  | { root?: undefined; unavailable: true; cwd: unknown }
+  | null;
+
+/** 解析后的 SKILL.md frontmatter（map 只含顶层标量）。 */
+interface SkillDoc {
+  fields: { key: string; raw: string }[];
+  map: Record<string, string | undefined>;
+  body: string;
+  hasFrontmatter: boolean;
+}
+
+/** 条目定位信息（frontmatter 摘要之外的字段）。 */
+interface EntryLocation {
+  kind: "bundle" | "flat";
+  docPath: string;
+  entryPath: string;
+  realDocPath: string;
+  realEntryPath: string;
+  linked: boolean;
+}
+
+/** 技能条目的 frontmatter 摘要（不含定位信息）。 */
+interface SkillSummary {
+  name: string;
+  declaredName: string;
+  kind: "bundle" | "flat";
+  docPath: string;
+  description: string;
+  modelInvocable: boolean;
+  userInvocable: boolean;
+  invocationPolicyValid: boolean;
+  hasFrontmatter: boolean;
+  loadable: boolean;
+  diagnostics: SkillDiagnostic[];
+}
+
+/** 一条技能条目：摘要 + 定位信息（只读来源递归发现时也带摘要）。 */
+interface SkillEntry extends SkillSummary {
+  entryPath: string;
+  realDocPath: string;
+  realEntryPath: string;
+  linked: boolean;
+  /** 同名去重时补写：来源 rank 与策略别名。 */
+  providerRank?: number;
+  policyAliases?: { rootKey: string; name: string }[];
+}
+
+/** 一次来源扫描的结果。 */
+interface ScanResult {
+  exists: boolean;
+  entries: SkillEntry[];
+  truncated?: boolean;
+}
+
+/** 一次来源扫描的选项。 */
+interface ScanOptions {
+  metadataOnly?: boolean;
+}
+
+/** 自定义来源记录（状态文件里的 `{ key, path, label? }`）。 */
+interface CustomRoot {
+  key: string;
+  path: string;
+  label?: string;
+}
+
+/** 归一化后的 manager 状态。 */
+interface ManagerState {
+  version: number;
+  sources: Record<string, boolean>;
+  disabledSkills: Record<string, string[]>;
+  enabledSkills: Record<string, string[]>;
+  customRoots: CustomRoot[];
+  preferredSkills: Record<string, string>;
+  removedSources: string[];
+}
+
+/** 状态文件原始文档（外部数据，字段形状按读取方式标注，逐字段运行时校验）。 */
+interface ManagerStateDocument {
+  version?: unknown;
+  sources?: Record<string, boolean>;
+  disabledSkills: Record<string, string[]>;
+  enabledSkills: Record<string, string[]>;
+  customRoots?: unknown;
+  preferredSkills?: Record<string, unknown>;
+  removedSources?: unknown;
+}
+
+/** 读状态文件的结果。 */
+interface ManagerStateReadResult {
+  state: ManagerState;
+  warning: SkillWarning | null;
+  writable: boolean;
+}
+
+/** 单个技能的本地策略判定。 */
+interface SkillPolicy {
+  override: boolean | undefined;
+  sourceEnabled: boolean;
+  modelInvocable: boolean;
+  userInvocable: boolean;
+  enabled: boolean;
+}
+
+/** rename 注入点与重试参数（测试可注入假实现）。 */
+interface RenameOptions {
+  rename?: (source: string, destination: string) => Promise<unknown>;
+  maxAttempts?: number;
+  delayMs?: number;
+}
+
+/** 写操作可选参数（service 层透传）。 */
+interface WriteOptions {
+  renameOptions?: RenameOptions;
+  projectCwds?: string[];
+}
+
+/** 导入选项。 */
+interface ImportOptions {
+  conflict?: unknown;
+  dryRun?: unknown;
+  renameOptions?: RenameOptions;
+}
+
+/** 根下既存条目路径。 */
+interface EntryPathTarget {
+  path: string;
+  fileName: string;
+  recursive: boolean;
+}
+
+/** 回收站条目的来源元数据（恢复时据此放回原处）。 */
+interface TrashRootMetadata {
+  key: string;
+  scope: "user" | "project";
+  kind?: string;
+  projectRoot?: string;
+  projectName?: string;
+  label: string;
+}
+
+/** 回收站条目元数据（磁盘 JSON，校验后使用）。 */
+interface TrashMetadata {
+  version?: number;
+  id: string;
+  name: string;
+  deletedAt?: string;
+  entries: string[];
+  root?: TrashRootMetadata;
+}
+
+/** 导入来源分析结果（字段随 kind 不同）。 */
+type SourceAnalysis =
+  | {
+      kind: "none";
+      error: string;
+      code: string;
+      params?: Record<string, unknown>;
+    }
+  | {
+      kind: "single";
+      source: string;
+      rawName: string;
+      kebab: string;
+      isDir: boolean;
+      skillFile: string;
+    }
+  | { kind: "batch"; source: string; rawName: string; isDir: true };
+
+/** 一个待导入候选。 */
+interface ImportCandidate {
+  source: string;
+  kebab: string;
+  rawName: string;
+  isDir: boolean;
+}
+
+/** 预检目标：待导入 / 既存冲突共用 source。 */
+interface ImportSourceRef {
+  source: string;
+}
+
+/** 待导入条目。 */
+interface ImportPending {
+  name: string;
+  source: string;
+  isDir: boolean;
+  dest: string;
+}
+
+/** 与目标同名的既存条目。 */
+interface ImportConflict {
+  name: string;
+  source: string;
+  isDir: boolean;
+  paths: string[];
+}
+
+/** 导入失败明细。 */
+interface ImportFailure {
+  source?: string;
+  error: string;
+  code?: string;
+  params?: unknown;
+}
+
+/** 导入成功明细。 */
+interface ImportImported {
+  name: string;
+  overwritten: boolean;
+  warnings: SkillWarning[];
+}
+
+/** 导入跳过明细。 */
+interface ImportSkipped {
+  name: string;
+  source: string;
+}
+
+/** 上传条目路径解析结果。 */
+interface UploadPath {
+  path: string;
+  directory: boolean;
+}
+
+/** 同名分组的最小条目形状（root + entry）。 */
+interface RootedEntry {
+  root: SkillSource;
+  entry: SkillEntry;
+}
+
+/** 状态快照里的技能行（markWinners 会补写视图字段）。 */
+interface StateSkill {
+  name: string;
+  declaredName: string;
+  kind: string;
+  description: string;
+  modelInvocable: boolean;
+  userInvocable: boolean;
+  invocationPolicyValid: boolean;
+  hasFrontmatter: boolean;
+  loadable: boolean;
+  managerEnabled: boolean;
+  managerOverride: boolean | null;
+  effectiveModelInvocable: boolean;
+  effectiveUserInvocable: boolean;
+  diagnostics: SkillDiagnostic[];
+  path: string;
+  preferred?: boolean;
+  shadowedBy?: { root: string; name: string };
+  winner?: boolean;
+  enabled?: boolean;
+  canonicalName?: string;
+}
+
+/** 状态快照里的来源行。 */
+interface StateRoot {
+  key: string;
+  path: string;
+  label: string;
+  mutable: boolean;
+  deletable: boolean;
+  removable: boolean;
+  custom: boolean;
+  defaultSource: boolean;
+  toggleable: boolean;
+  native: boolean;
+  rank: number;
+  scope: string;
+  kind?: string;
+  localeKey?: string;
+  projectRoot?: string;
+  projectName?: string;
+  workspaceCwds?: string[];
+  exists: boolean;
+  truncated: boolean;
+  removed: boolean;
+  enabled: boolean;
+  skills: StateSkill[];
+}
+
+/** 状态快照里参与同名决胜的条目。 */
+interface StateItem {
+  root: SkillSource;
+  entry: SkillEntry;
+  managerEnabled: boolean;
+  policy: SkillPolicy;
+  view: StateSkill;
+}
+
+/** markWinners 选项。 */
+interface MarkWinnersOptions {
+  preferred?: Record<string, string> | null;
+  markShadowed?: boolean;
+  markWinner?: boolean;
+}
+
+/** 状态快照里的项目分组。 */
+interface StateProject {
+  root?: string;
+  name?: string;
+  workspaceCwds?: string[];
+}
+
+/** 状态快照计数。 */
+interface StateSummary {
+  total: number;
+  enabled: number;
+  disabled: number;
+  issues: number;
+}
+
+/** state() 返回的状态快照。 */
+interface StateResult {
+  roots: StateRoot[];
+  projects: StateProject[];
+  trash: TrashMetadata[];
+  warnings: SkillWarning[];
+  summary?: StateSummary;
+}
+
+/** manager provider 候选。 */
+interface ProviderCandidate {
+  name: string;
+  description: string;
+  invocation: { modelInvocable: boolean; userInvocable: boolean };
+  provider: string;
+  source: string;
+  rank: number;
+  locator: {
+    rootKey: string;
+    entryName: string;
+    path: string;
+    realEntryPath: string;
+    realDocPath: string;
+  };
+  resourceBase: { kind: "directory"; path: string };
+  path: string;
+  metadata: {
+    dshSkillsManager: {
+      root: string;
+      readOnly: boolean;
+      sourceReadOnly: boolean;
+      policyOnly: boolean;
+    };
+  };
+}
+
+/** 技能启停回执（`ok` 恒不出现，与 FailureResult 组成判别联合供调用方收窄）。 */
+interface SkillToggleResult {
+  ok?: true;
+  root: string;
+  name: string;
+  enabled: boolean;
+}
+
+/** 新建技能回执。 */
+interface CreateSkillResult {
+  ok?: true;
+  name: string;
+  path: string;
+  root: string;
+}
+
+/** 回收站恢复回执。 */
+interface TrashRestoreResult {
+  ok?: true;
+  id: string;
+  name: string;
+  root: TrashRootMetadata;
+}
+
 // ── 业务错误码 ────────────────────────────────────────────────────────────────
 
 /** 构造带 code/params 的业务 Error，供导入链路 throw 后透传到失败明细。 */
-function codedError(message, code, params) {
-  const error = new Error(message);
+function codedError(
+  message: string,
+  code: string,
+  params?: Record<string, unknown>,
+): Error & { code: string; params?: Record<string, unknown> } {
+  const error = new Error(message) as Error & {
+    code: string;
+    params?: Record<string, unknown>;
+  };
   error.code = code;
   error.params = params;
   return error;
 }
 
 /** 把业务 Error 的 code/params 附加到失败明细；系统异常（ENOENT 等，非 error.* 前缀）保持原文。 */
-function attachCode(item, error) {
-  if (error && typeof error.code === "string" && /^error\./.test(error.code))
-    item.code = error.code;
-  if (error && error.params) item.params = error.params;
+function attachCode(item: any, error: unknown): any {
+  // 透传并回写任意失败明细对象（形状由各调用点决定），故按 any 处理。
+  const coded = error as { code?: unknown; params?: unknown } | null | undefined;
+  if (coded && typeof coded.code === "string" && /^error\./.test(coded.code))
+    item.code = coded.code;
+  if (coded && coded.params) item.params = coded.params;
   return item;
 }
 
 // ── 路径解析 ────────────────────────────────────────────────────────────────
 
-export function resolveDshHome() {
+export function resolveDshHome(): string {
   return process.env.DSH_HOME || join(homedir(), ".dsh");
 }
 
-export function resolveAgentsHome() {
+export function resolveAgentsHome(): string {
   return process.env.DSH_AGENTS_HOME || join(homedir(), ".agents");
 }
 
@@ -80,7 +543,7 @@ export function resolveAgentsHome() {
  * rank 与官方 filesystem provider 的用户级优先级衔接：DSH=400、Agents=500。
  * manager provider 以 450 接管公共 Agents（仍低于 DSH），Codex/Claude 依次排在其后。
  */
-export function userRoots() {
+export function userRoots(): SkillSource[] {
   return [
     {
       key: "dsh",
@@ -166,13 +629,15 @@ export function userRoots() {
 const DEFAULT_SOURCE_KEYS = Object.freeze(["dsh", "hub"]);
 
 /** 是否为默认来源。接受 root 对象或 key 字符串；`dsh` / `hub` 的所有特判都走这里。 */
-export function isDefaultSkillSource(rootOrKey) {
+export function isDefaultSkillSource(rootOrKey: unknown): boolean {
   const key =
-    rootOrKey && typeof rootOrKey === "object" ? rootOrKey.key : rootOrKey;
-  return DEFAULT_SOURCE_KEYS.includes(key);
+    rootOrKey && typeof rootOrKey === "object"
+      ? (rootOrKey as { key?: unknown }).key
+      : rootOrKey;
+  return DEFAULT_SOURCE_KEYS.includes(key as string);
 }
 
-function projectIdentity(path) {
+function projectIdentity(path: string): string {
   const canonical = pathIdentity(path);
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
@@ -186,17 +651,16 @@ function projectIdentity(path) {
 // 均不改源文件。
 
 /** 由目录路径派生稳定的自定义来源 key。 */
-export function customRootKey(path) {
+export function customRootKey(path: string): string {
   return "custom-" + projectIdentity(path);
 }
 
 /** 从状态值解析自定义来源定义；非法条目静默丢弃，key 与 path 不匹配的不信任。 */
-export function customRootsFromState(stateValue) {
+export function customRootsFromState(stateValue: unknown): SkillSource[] {
+  const state = stateValue as { customRoots?: unknown } | null | undefined;
   const list =
-    stateValue && Array.isArray(stateValue.customRoots)
-      ? stateValue.customRoots
-      : [];
-  const out = [];
+    state && Array.isArray(state.customRoots) ? state.customRoots : [];
+  const out: SkillSource[] = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
     const path = typeof item.path === "string" ? item.path : "";
@@ -227,7 +691,11 @@ export function customRootsFromState(stateValue) {
  * 添加自定义技能目录：要求绝对路径、真实存在的目录、与任何已知来源
  * （用户根 + 现有自定义根）不重叠——重叠来源会绕过停用策略。
  */
-export async function addCustomRoot(inputPath, label, log) {
+export async function addCustomRoot(
+  inputPath: unknown,
+  label: unknown,
+  log: LogFn | undefined,
+) {
   const requested = String(inputPath == null ? "" : inputPath).trim();
   if (!requested || !isAbsolute(requested))
     return {
@@ -271,7 +739,7 @@ export async function addCustomRoot(inputPath, label, log) {
   }
   const key = customRootKey(canonical);
   const cleanLabel = String(label == null ? "" : label).trim().slice(0, 64);
-  const entry = { key, path: canonical };
+  const entry: CustomRoot = { key, path: canonical };
   if (cleanLabel) entry.label = cleanLabel;
   current.state.customRoots = [...existing.map((root) => ({ key: root.key, path: root.path, ...(root.label !== "自定义目录" ? { label: root.label } : {}) })), entry];
   // 新来源默认启用；用户可随后用来源开关停用。
@@ -282,7 +750,7 @@ export async function addCustomRoot(inputPath, label, log) {
 }
 
 /** 移除自定义来源及其全部策略键（技能源文件不受影响）。 */
-export async function removeCustomRoot(key, log) {
+export async function removeCustomRoot(key: unknown, log: LogFn | undefined) {
   const clean = String(key == null ? "" : key).trim();
   if (!CUSTOM_ROOT_KEY_RE.test(clean))
     return {
@@ -323,7 +791,7 @@ export async function removeCustomRoot(key, log) {
   return { key: clean, path: target.path };
 }
 
-async function nearestProjectRoot(cwd) {
+async function nearestProjectRoot(cwd: unknown): Promise<ProjectRootProbe> {
   if (typeof cwd !== "string" || !isAbsolute(cwd)) return null;
   let start;
   try {
@@ -346,7 +814,7 @@ async function nearestProjectRoot(cwd) {
   }
 }
 
-async function projectSourceSafe(definition) {
+async function projectSourceSafe(definition: ProjectSource) {
   // 只读来源允许目录链接，但重叠来源会绕过用户根的停用策略。
   if (definition.kind === "project-agents")
     return !(await overlapsUserSkillRoot(definition.path));
@@ -365,8 +833,11 @@ async function projectSourceSafe(definition) {
  * 从活动 Session cwd 推导项目技能根。只接受宿主上可解析的绝对目录，
  * 同一项目的多个 Session 会折叠到同一组稳定 key，避免跨 workspace 合并同名技能。
  */
-export async function projectRoots(projectCwds = [], diagnostics) {
-  const projects = new Map();
+export async function projectRoots(
+  projectCwds: string[] = [],
+  diagnostics?: SkillWarning[],
+): Promise<ProjectSource[]> {
+  const projects = new Map<string, { root: string; cwds: Set<string> }>();
   for (const cwd of Array.isArray(projectCwds) ? projectCwds : []) {
     const found = await nearestProjectRoot(cwd);
     if (!found || !found.root) {
@@ -388,17 +859,17 @@ export async function projectRoots(projectCwds = [], diagnostics) {
     const identity = pathIdentity(found.root);
     const existing = projects.get(identity) || {
       root: found.root,
-      cwds: new Set(),
+      cwds: new Set<string>(),
     };
     existing.cwds.add(found.cwd);
     projects.set(identity, existing);
   }
-  const roots = [];
+  const roots: ProjectSource[] = [];
   for (const project of [...projects.values()].sort((a, b) =>
     a.root.localeCompare(b.root),
   )) {
     const id = projectIdentity(project.root);
-    const common = {
+    const common: ProjectSourceCommon = {
       mutable: false,
       // 未知/只读来源（外部 Agent 与自定义绝对路径）一律不可删；用户级 dsh / hub
       // 与本仓库的项目级 .dsh/skills 都是可删的（见上方两处 `deletable: true`）。
@@ -410,7 +881,7 @@ export async function projectRoots(projectCwds = [], diagnostics) {
       projectName: basename(project.root) || project.root,
       workspaceCwds: [...project.cwds].sort(),
     };
-    const candidates = [
+    const candidates: ProjectSource[] = [
       {
         ...common,
         key: `project-dsh:${id}`,
@@ -463,7 +934,7 @@ export function logPath() {
  * 为前端内嵌目录选择器列出一个本机目录层级。
  * 不跟随目录符号链接；选择后的导入仍由 importSkill 做完整安全校验。
  */
-export async function browseDirectories(inputPath) {
+export async function browseDirectories(inputPath: unknown) {
   const requested = String(inputPath == null ? "" : inputPath).trim();
   const target = requested === "" ? homedir() : requested;
   if (!isAbsolute(target)) {
@@ -480,7 +951,8 @@ export async function browseDirectories(inputPath) {
   try {
     canonical = await fs.realpath(target);
     directory = await fs.stat(canonical);
-  } catch (error) {
+  } catch (error: any) {
+    // 系统异常按可选 message 读取，保持既有判定分支不变。
     return {
       ok: false,
       error: `无法读取目录: ${target}`,
@@ -523,7 +995,8 @@ export async function browseDirectories(inputPath) {
         hidden: item.name.startsWith("."),
       });
     }
-  } catch (error) {
+  } catch (error: any) {
+    // 系统异常按可选 message 读取，保持既有判定分支不变。
     return {
       ok: false,
       error: `无法读取目录: ${canonical}`,
@@ -556,8 +1029,9 @@ export async function browseDirectories(inputPath) {
   return { path: canonical, home: homedir(), crumbs, entries, truncated };
 }
 
-function dshRootPath() {
-  return userRoots().find((root) => root.key === "dsh").path;
+function dshRootPath(): string {
+  // userRoots() 恒含 dsh 来源（见上方列表），断言只为让类型收敛。
+  return (userRoots().find((root) => root.key === "dsh") as SkillSource).path;
 }
 
 /**
@@ -570,7 +1044,7 @@ function skillCreateRootPath() {
 }
 
 /** 只读来源的拒绝结果；action 为可翻译语义值（toggle/delete）。 */
-function readonlyError(action) {
+function readonlyError(action: string): FailureResult {
   return {
     ok: false,
     code: "error.root.readonly",
@@ -589,7 +1063,9 @@ function readonlyError(action) {
  * 正常路径走不到这里。它守的是「以后新增可写来源时忘了标 deletable」：那种情况下
  * 必须拒绝删除，而不是照搬一个用户目录进回收站。
  */
-function notDeletableError(definition) {
+function notDeletableError(
+  definition: SkillSource | null | undefined,
+): FailureResult {
   return {
     ok: false,
     code: "error.skill.notDeletable",
@@ -608,7 +1084,9 @@ function notDeletableError(definition) {
  * 被拒的只有**来源层**操作 —— 来源**里面的技能**照常可以删除（那是 `deletable`，
  * 与来源的 removable / 停用无关），提示里要写清这一点，否则用户会以为整个来源被锁死。
  */
-function reservedSourceError(root) {
+function reservedSourceError(
+  root: SkillSource | null | undefined,
+): FailureResult {
   const key = root && root.key ? root.key : "";
   const origin =
     key === "dsh"
@@ -622,7 +1100,7 @@ function reservedSourceError(root) {
   };
 }
 
-function rootDefinition(root) {
+function rootDefinition(root: RootInput): SkillSource | null {
   if (root && typeof root === "object" && typeof root.key === "string")
     return root;
   if (typeof root !== "string") return null;
@@ -630,12 +1108,12 @@ function rootDefinition(root) {
   return userRoots().find((item) => resolve(item.path) === resolved) || null;
 }
 
-function rootByKey(key) {
+function rootByKey(key: unknown): SkillSource | null {
   return userRoots().find((item) => item.key === key) || null;
 }
 
 /** 只允许用户 DSH 根 / hub 根，或由活动 Session 推导出的项目 DSH 根参与文件写入。 */
-function writableRootDefinition(root) {
+function writableRootDefinition(root: RootInput): SkillSource | null {
   const definition = rootDefinition(root);
   if (!definition || definition.mutable !== true) return null;
   if (definition.key === "dsh")
@@ -661,7 +1139,9 @@ function writableRootDefinition(root) {
   return definition;
 }
 
-async function checkedWritableRootDefinition(root) {
+async function checkedWritableRootDefinition(
+  root: RootInput,
+): Promise<WritableRootResult> {
   const definition = writableRootDefinition(root);
   if (!definition || definition.scope !== "project") return definition;
   if (await overlapsUserSkillRoot(definition.path)) {
@@ -673,7 +1153,11 @@ async function checkedWritableRootDefinition(root) {
     };
   }
   // 项目仓库内容不可信；拒绝通过 .dsh 或 skills 链接把写入重定向到项目之外。
-  for (const path of [join(definition.projectRoot, ".dsh"), definition.path]) {
+  // definition.scope === "project" 时 projectRoot 必有值（见 ProjectSource），断言只为让类型收敛。
+  for (const path of [
+    join(definition.projectRoot as string, ".dsh"),
+    definition.path,
+  ]) {
     const st = await lstatOrNull(path);
     if (st && (!st.isDirectory() || st.isSymbolicLink())) {
       return {
@@ -687,17 +1171,8 @@ async function checkedWritableRootDefinition(root) {
   return definition;
 }
 
-/** 判断 child 是否与 parent 相同或位于其内部。跨盘符时 relative 会返回绝对路径。 */
-function isSameOrDescendant(parent, child) {
-  const rel = relative(resolve(parent), resolve(child));
-  return (
-    rel === "" ||
-    (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`))
-  );
-}
-
 /** 解析真实路径；中间若有目录链接，按落地目录比较重叠。 */
-async function resolvedPath(path) {
+async function resolvedPath(path: string): Promise<string> {
   try {
     return await fs.realpath(path);
   } catch {
@@ -706,9 +1181,9 @@ async function resolvedPath(path) {
 }
 
 /** 即使末级路径尚不存在，也解析最近既存祖先中的链接，供权限域重叠判断。 */
-async function comparisonPath(path) {
+async function comparisonPath(path: string): Promise<string> {
   let current = resolve(path);
-  const missing = [];
+  const missing: string[] = [];
   for (;;) {
     try {
       return resolve(await fs.realpath(current), ...missing);
@@ -721,7 +1196,7 @@ async function comparisonPath(path) {
   }
 }
 
-async function overlapsUserSkillRoot(path) {
+async function overlapsUserSkillRoot(path: string): Promise<boolean> {
   const candidate = await comparisonPath(path);
   for (const root of userRoots()) {
     const userPath = await comparisonPath(root.path);
@@ -735,23 +1210,26 @@ async function overlapsUserSkillRoot(path) {
 }
 
 /** 两个路径重叠时，覆盖导入可能删除自身来源，必须拒绝。 */
-async function pathsOverlap(a, b) {
+async function pathsOverlap(a: string, b: string): Promise<boolean> {
   const left = await resolvedPath(a);
   const right = await resolvedPath(b);
   return isSameOrDescendant(left, right) || isSameOrDescendant(right, left);
 }
 
 /** 预解析技能根后的根内校验，供逐条目扫描复用同一次 realpath，减少重复 IO。 */
-async function isInsideResolvedRoot(rootReal, path) {
+async function isInsideResolvedRoot(
+  rootReal: string,
+  path: string,
+): Promise<boolean> {
   return isSameOrDescendant(rootReal, await resolvedPath(path));
 }
 
-function pathIdentity(path) {
+function pathIdentity(path: string): string {
   const canonical = resolve(path);
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
-async function lstatOrNull(path) {
+async function lstatOrNull(path: string) {
   try {
     return await fs.lstat(path);
   } catch {
@@ -760,33 +1238,23 @@ async function lstatOrNull(path) {
 }
 
 /** 名称只允许一个普通路径段；不把既有技能名称限制为 kebab-case。 */
-export function entryPath(root, name) {
-  if (
-    typeof name !== "string" ||
-    name === "" ||
-    name === "." ||
-    name === ".." ||
-    name.startsWith(".") ||
-    name.length > MAX_ENTRY_NAME_LENGTH ||
-    /[\\/:*?"<>|\0]/.test(name) ||
-    /[. ]$/.test(name) ||
-    WINDOWS_DEVICE_NAME_RE.test(name) ||
-    basename(name) !== name
-  )
-    return null;
+export function entryPath(root: string, name: string): string | null {
+  // 段名谓词收敛到 paths.js（此前与 rules / subagents / imports 各写一套，口径不一）。
+  // 原实现里 `basename(name) !== name` 那条已被谓词的「不含路径分隔符」覆盖。
+  if (!isValidSegment(name, MAX_ENTRY_NAME_LENGTH)) return null;
   const rootPath = resolve(root);
   const path = resolve(rootPath, name);
   return isSameOrDescendant(rootPath, path) && rootPath !== path ? path : null;
 }
 
-function isDshRoot(root) {
+function isDshRoot(root: unknown): boolean {
   return typeof root === "string" && resolve(root) === resolve(dshRootPath());
 }
 
 // ── 命名规整 ────────────────────────────────────────────────────────────────
 
 /** 尽量把任意名称规整为 kebab-case；无法生成合法名称时返回空串。 */
-export function toKebab(s) {
+export function toKebab(s: unknown): string {
   let t = String(s).trim();
   if (t === "") return "";
   t = t.replace(/([a-z0-9])([A-Z])/g, "$1-$2"); // camelCase 边界
@@ -800,13 +1268,13 @@ export function toKebab(s) {
 // ── frontmatter 解析 / 序列化（宽松 YAML 对象，保留键序）────────────────────
 
 /** 剥离 UTF-8 BOM（Windows 工具常写入，不剥离会导致开头 --- 失配）。 */
-function stripBom(text) {
+function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 /** 解析 SKILL.md 的 frontmatter。返回 { fields, map, body }，map 保留键序。
  *  只识别顶层 key: value；缩进嵌套字段（如 metadata.source）不进入 map。 */
-export function parseSkillDoc(text) {
+export function parseSkillDoc(text: unknown): SkillDoc {
   const src = stripBom(String(text));
   const lines = src.split(/\r?\n/);
   const map = Object.create(null);
@@ -865,7 +1333,7 @@ export function parseSkillDoc(text) {
 }
 
 /** 读取 YAML 标量的显示值；不依赖第三方 YAML 解析器。 */
-function decodeYamlScalar(v) {
+function decodeYamlScalar(v: unknown): string {
   const s = String(v == null ? "" : v).trim();
   if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') {
     try {
@@ -880,7 +1348,7 @@ function decodeYamlScalar(v) {
   return s;
 }
 
-export function unquote(v) {
+export function unquote(v: unknown): string {
   const s = String(v == null ? "" : v).trim();
   if (
     s.length >= 2 &&
@@ -894,21 +1362,27 @@ export function unquote(v) {
 
 /** 同目录临时文件加 rename，避免写入中断时截断原 SKILL.md。 */
 /** Windows 上杀毒软件或索引器可能短暂占用目录；只重试明确可恢复的 rename 错误。 */
-export async function renameWithRetry(source, destination, options = {}) {
+export async function renameWithRetry(
+  source: string,
+  destination: string,
+  options: RenameOptions = {},
+) {
   const rename =
     typeof options.rename === "function" ? options.rename : fs.rename;
+  // Number.isInteger/isFinite 不收窄类型，故断言成 number 以保持既有比较表达式。
   const maxAttempts =
-    Number.isInteger(options.maxAttempts) && options.maxAttempts > 0
-      ? options.maxAttempts
+    Number.isInteger(options.maxAttempts) && (options.maxAttempts as number) > 0
+      ? (options.maxAttempts as number)
       : 6;
   const delayMs =
-    Number.isFinite(options.delayMs) && options.delayMs >= 0
-      ? options.delayMs
+    Number.isFinite(options.delayMs) && (options.delayMs as number) >= 0
+      ? (options.delayMs as number)
       : 40;
   for (let attempt = 1; ; attempt++) {
     try {
       return await rename(source, destination);
-    } catch (error) {
+    } catch (error: any) {
+      // 系统 rename 异常按可选 code 读取，保持既有重试判定。
       if (
         !TRANSIENT_RENAME_CODES.has(error && error.code) ||
         attempt >= maxAttempts
@@ -921,7 +1395,7 @@ export async function renameWithRetry(source, destination, options = {}) {
   }
 }
 
-async function removeMovedPath(path) {
+async function removeMovedPath(path: string): Promise<void> {
   const st = await lstatOrNull(path);
   if (!st) return;
   if (st.isDirectory() && !st.isSymbolicLink())
@@ -930,11 +1404,16 @@ async function removeMovedPath(path) {
 }
 
 /** rename 跨盘返回 EXDEV 时：先完整复制，再在源盘原子隐藏源条目，最后清理隐藏副本。 */
-async function movePathWithFallback(source, destination, options = {}) {
+async function movePathWithFallback(
+  source: string,
+  destination: string,
+  options: RenameOptions = {},
+) {
   try {
     await renameWithRetry(source, destination, options);
     return { copied: false, cleanupError: null };
-  } catch (error) {
+  } catch (error: any) {
+    // 系统异常按可选 code 读取，保持既有 EXDEV 判定。
     if (!error || error.code !== "EXDEV") throw error;
   }
 
@@ -960,13 +1439,17 @@ async function movePathWithFallback(source, destination, options = {}) {
   let cleanupError = null;
   try {
     await removeMovedPath(quarantine);
-  } catch (error) {
+  } catch (error: any) {
+    // 调用方按可选 message 读取该清理异常，保持既有告警文案。
     cleanupError = error;
   }
   return { copied: true, cleanupError, quarantine };
 }
 
-async function writeFileAtomically(path, content) {
+async function writeFileAtomically(
+  path: string,
+  content: string,
+): Promise<void> {
   const temp = join(
     dirname(path),
     `.${basename(path)}.dssm-${randomUUID()}.tmp`,
@@ -984,7 +1467,7 @@ async function writeFileAtomically(path, content) {
 }
 
 /** 解析布尔字段值；合法布尔返回 true/false，非法返回 undefined。 */
-export function parseBoolValue(raw) {
+export function parseBoolValue(raw: unknown): boolean | undefined {
   const v = unquote(raw).trim().toLowerCase();
   if (v === "true" || v === "yes" || v === "on" || v === "1") return true;
   if (v === "false" || v === "no" || v === "off" || v === "0") return false;
@@ -994,7 +1477,10 @@ export function parseBoolValue(raw) {
 // ── 条目定位 / 扫描 ─────────────────────────────────────────────────────────
 
 /** 按名称解析条目（bundle 优先，其次 flat）。找不到返回 null。 */
-export async function resolveEntry(root, name) {
+export async function resolveEntry(
+  root: RootInput,
+  name: string,
+): Promise<EntryLocation | null> {
   const definition = rootDefinition(root);
   if (definition && !definition.mutable) {
     if (!validDiscoveryName(name)) return null;
@@ -1004,7 +1490,8 @@ export async function resolveEntry(root, name) {
       ) || null
     );
   }
-  root = definition ? definition.path : root;
+  // 传入 definition 对象时取它的 path；其余情况按 key 字符串处理。
+  root = definition ? definition.path : (root as string);
   try {
     const bundlePath = entryPath(root, name);
     if (bundlePath === null) return null;
@@ -1064,7 +1551,12 @@ export async function resolveEntry(root, name) {
   }
 }
 
-function entryOf(name, kind, docPath, doc) {
+function entryOf(
+  name: string,
+  kind: "bundle" | "flat",
+  docPath: string,
+  doc: Pick<SkillDoc, "map" | "hasFrontmatter">,
+): SkillSummary {
   const declaredName = doc.map.name !== undefined ? unquote(doc.map.name) : "";
   const description =
     doc.map.description !== undefined ? unquote(doc.map.description) : "";
@@ -1076,7 +1568,7 @@ function entryOf(name, kind, docPath, doc) {
     (doc.map["disable-model-invocation"] === undefined ||
       modelValue !== undefined) &&
     (doc.map["user-invocable"] === undefined || userValue !== undefined);
-  const diagnostics = [];
+  const diagnostics: SkillDiagnostic[] = [];
   if (!doc.hasFrontmatter)
     diagnostics.push({
       level: "error",
@@ -1115,12 +1607,16 @@ function entryOf(name, kind, docPath, doc) {
 }
 
 /** 只读来源递归发现；可写 DSH 根维持顶层扫描及链接写边界。 */
-export async function scanEntries(root, options = {}) {
+export async function scanEntries(
+  root: RootInput,
+  options: ScanOptions = {},
+): Promise<ScanResult> {
   const definition = rootDefinition(root);
   if (definition && !definition.mutable) {
     const discovered = await discoverReadonlyEntries(definition.path);
-    if (options.metadataOnly) return discovered;
-    const entries = [];
+    // metadataOnly 时条目的摘要字段由调用方按需读取（见 visibleEntryForRoot）。
+    if (options.metadataOnly) return discovered as unknown as ScanResult;
+    const entries: SkillEntry[] = [];
     for (const entry of discovered.entries) {
       try {
         entries.push({
@@ -1138,7 +1634,8 @@ export async function scanEntries(root, options = {}) {
     }
     return { ...discovered, entries };
   }
-  root = definition ? definition.path : root;
+  // 传入 definition 对象时取它的 path；其余情况按 key 字符串处理。
+  root = definition ? definition.path : (root as string);
   const rootStat = await lstatOrNull(resolve(root));
   if (!rootStat || !rootStat.isDirectory() || rootStat.isSymbolicLink())
     return { exists: false, entries: [] };
@@ -1148,7 +1645,7 @@ export async function scanEntries(root, options = {}) {
   } catch {
     return { exists: false, entries: [] };
   }
-  const byName = new Map();
+  const byName = new Map<string, SkillEntry>();
   const rootReal = await resolvedPath(root);
   for (const it of items) {
     try {
@@ -1199,19 +1696,27 @@ export async function scanEntries(root, options = {}) {
       /* 跳过不可读条目 */
     }
   }
-  const entries = [...byName.values()].sort((a, b) =>
+  const entries: SkillEntry[] = [...byName.values()].sort((a, b) =>
     a.name.localeCompare(b.name),
   );
   return { exists: true, entries };
 }
 
 /** 同一真实技能优先归属直接 SSOT；同类条目再按来源 rank 决胜。 */
-async function scanDeduplicatedRoots(roots = userRoots(), options = {}) {
+async function scanDeduplicatedRoots(
+  roots: SkillSource[] = userRoots(),
+  options: ScanOptions = {},
+): Promise<Map<string, ScanResult>> {
   const results = await Promise.all(
-    roots.map(async (root) => [root, await scanEntries(root, options)]),
+    roots.map(
+      async (root): Promise<[SkillSource, ScanResult]> => [
+        root,
+        await scanEntries(root, options),
+      ],
+    ),
   );
-  const scans = new Map();
-  const groups = new Map();
+  const scans = new Map<string, ScanResult>();
+  const groups = new Map<string, Array<{ root: SkillSource; entry: SkillEntry }>>();
   for (const [root, scan] of results) {
     scans.set(root.key, scan);
     for (const entry of scan.entries) {
@@ -1223,7 +1728,7 @@ async function scanDeduplicatedRoots(roots = userRoots(), options = {}) {
       groups.set(identity, group);
     }
   }
-  const winners = new Set();
+  const winners = new Set<SkillEntry>();
   for (const group of groups.values()) {
     group.sort(
       (left, right) =>
@@ -1247,7 +1752,10 @@ async function scanDeduplicatedRoots(roots = userRoots(), options = {}) {
 }
 
 /** 详情与列表共享路径去重，扫描定位信息时不读取无关技能正文。 */
-async function visibleEntryForRoot(root, name) {
+async function visibleEntryForRoot(
+  root: SkillSource,
+  name: string,
+): Promise<SkillEntry | null> {
   if (!validDiscoveryName(name)) return null;
   // custom 来源只扫自身（不在 userRoots 里，否则根本找不到条目）。
   const roots =
@@ -1262,7 +1770,7 @@ async function visibleEntryForRoot(root, name) {
 
 // ── Manager 本地策略（外部源只读，启停状态写入 DSH_HOME）────────────────────
 
-function defaultManagerState() {
+function defaultManagerState(): ManagerState {
   const sources = Object.create(null);
   const disabledSkills = Object.create(null);
   const enabledSkills = Object.create(null);
@@ -1288,7 +1796,7 @@ function defaultManagerState() {
   };
 }
 
-function validStateSkillName(name) {
+function validStateSkillName(name: unknown): boolean {
   return validDiscoveryName(name);
 }
 
@@ -1297,7 +1805,7 @@ function validStateSkillName(name) {
  * name.invalid 诊断，但仍可被选择）。这里只做「能当 JSON 键、不像路径」的宽松校验，
  * 避免一个脏键把整份状态文件判为非法（那会让全部技能 fail-closed 停用）。
  */
-function validPreferredSkillName(name) {
+function validPreferredSkillName(name: unknown): boolean {
   return (
     typeof name === "string" &&
     name.length > 0 &&
@@ -1309,13 +1817,13 @@ function validPreferredSkillName(name) {
 }
 
 /** 状态文件已存在但不可用时一律关闭外部来源，避免损坏配置重新暴露技能。 */
-function failClosedManagerState() {
+function failClosedManagerState(): ManagerState {
   const state = defaultManagerState();
   for (const key of Object.keys(state.sources)) state.sources[key] = false;
   return state;
 }
 
-function validPolicyLists(value, allowMissing = false) {
+function validPolicyLists(value: unknown, allowMissing = false): boolean {
   if (value === undefined && allowMissing) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   for (const [key, list] of Object.entries(value)) {
@@ -1330,7 +1838,7 @@ function validPolicyLists(value, allowMissing = false) {
   return true;
 }
 
-function validManagerStateDocument(value) {
+function validManagerStateDocument(value: ManagerStateDocument): boolean {
   if (
     !value ||
     typeof value !== "object" ||
@@ -1380,7 +1888,7 @@ function validManagerStateDocument(value) {
     if (!Array.isArray(list) || list.some((name) => !validStateSkillName(name)))
       return false;
   }
-  const enabledSkills = value.enabledSkills || {};
+  const enabledSkills = value.enabledSkills || ({} as Record<string, string[]>);
   for (const key of new Set([
     ...Object.keys(value.disabledSkills),
     ...Object.keys(enabledSkills),
@@ -1392,7 +1900,7 @@ function validManagerStateDocument(value) {
   return true;
 }
 
-function normalizeManagerState(value) {
+function normalizeManagerState(value: ManagerStateDocument): ManagerState {
   const normalized = defaultManagerState();
   if (!value || typeof value !== "object" || Array.isArray(value))
     return normalized;
@@ -1425,7 +1933,7 @@ function normalizeManagerState(value) {
         normalized.sources[key] = flag;
     }
   }
-  for (const field of ["disabledSkills", "enabledSkills"]) {
+  for (const field of ["disabledSkills", "enabledSkills"] as const) {
     const source = value[field];
     if (source && typeof source === "object" && !Array.isArray(source)) {
       for (const [key, list] of Object.entries(source)) {
@@ -1481,20 +1989,19 @@ function normalizeManagerState(value) {
  *   - 移除（出现在 `removedSources`）：**连目录都不读**，技能不出现在列表里，
  *     也不参与 provider 候选。源文件不动，清掉这个标记即恢复。
  */
-export function activeUserRoots(stateValue) {
+export function activeUserRoots(stateValue: unknown): SkillSource[] {
+  const state = stateValue as { removedSources?: unknown } | null | undefined;
   const removed = new Set(
-    stateValue && Array.isArray(stateValue.removedSources)
-      ? stateValue.removedSources
-      : [],
+    state && Array.isArray(state.removedSources) ? state.removedSources : [],
   );
   return userRoots().filter((root) => !removed.has(root.key));
 }
 
 /** 裁剪自定义来源列表：非法条目丢弃，key/path 绑定校验，label 规整。 */
-function normalizeCustomRoots(value) {
+function normalizeCustomRoots(value: unknown): CustomRoot[] {
   if (!Array.isArray(value)) return [];
-  const out = [];
-  const seen = new Set();
+  const out: CustomRoot[] = [];
+  const seen = new Set<string>();
   for (const item of value) {
     if (!item || typeof item !== "object") continue;
     const path = typeof item.path === "string" ? item.path : "";
@@ -1523,7 +2030,7 @@ function normalizeCustomRoots(value) {
  * 归一化会把缺失的键补成默认值（新来源默认启用），所以「我们后来加过键」与「文件真的坏了」
  * 由此区分开：前者修复后通过，后者（不是对象、version 不是 1、字段类型不对）仍然拒绝。
  */
-export async function readManagerState() {
+export async function readManagerState(): Promise<ManagerStateReadResult> {
   try {
     const raw = await fs.readFile(managerStatePath(), "utf8");
     const parsed = JSON.parse(raw);
@@ -1558,7 +2065,8 @@ export async function readManagerState() {
       warning: null,
       writable: true,
     };
-  } catch (error) {
+  } catch (error: any) {
+    // 系统异常按可选 code 读取，保持既有 ENOENT 判定。
     if (error && error.code === "ENOENT")
       return { state: defaultManagerState(), warning: null, writable: true };
     return {
@@ -1573,7 +2081,7 @@ export async function readManagerState() {
   }
 }
 
-async function writeManagerState(value) {
+async function writeManagerState(value: ManagerState): Promise<void> {
   await fs.mkdir(managerHomePath(), { recursive: true });
   await writeFileAtomically(
     managerStatePath(),
@@ -1581,7 +2089,12 @@ async function writeManagerState(value) {
   );
 }
 
-function managerSkillOverride(policy, rootKey, name, policyAliases = []) {
+function managerSkillOverride(
+  policy: ManagerState,
+  rootKey: string,
+  name: string,
+  policyAliases: { rootKey: string; name: string }[] = [],
+): boolean | undefined {
   if ((policy.enabledSkills[rootKey] || []).includes(name)) return true;
   if ((policy.disabledSkills[rootKey] || []).includes(name)) return false;
   let inheritedEnable = false;
@@ -1596,7 +2109,11 @@ function managerSkillOverride(policy, rootKey, name, policyAliases = []) {
   return undefined;
 }
 
-function effectiveSkillPolicy(policyResult, root, entry) {
+function effectiveSkillPolicy(
+  policyResult: ManagerStateReadResult,
+  root: SkillSource,
+  entry: SkillEntry,
+): SkillPolicy {
   const override = managerSkillOverride(
     policyResult.state,
     root.key,
@@ -1636,7 +2153,7 @@ function effectiveSkillPolicy(policyResult, root, entry) {
   };
 }
 
-function invalidManagerStateWrite() {
+function invalidManagerStateWrite(): FailureResult {
   return {
     ok: false,
     code: "error.state.invalid",
@@ -1651,7 +2168,11 @@ function invalidManagerStateWrite() {
  * 默认来源（dsh / hub）不允许停用 —— 停用等于「不读取」，而它们必须读取。
  * 其余来源（外部 Agent、自定义绝对路径）随来源开关。
  */
-export async function setSourceEnabled(rootOrKey, enabled, log) {
+export async function setSourceEnabled(
+  rootOrKey: RootInput,
+  enabled: boolean,
+  log: LogFn | undefined,
+) {
   // 支持传 key（静态来源）或 definition 对象（自定义来源由 service 层从状态文件生成）。
   const root =
     rootOrKey && typeof rootOrKey === "object" && typeof rootOrKey.key === "string"
@@ -1682,7 +2203,11 @@ export async function setSourceEnabled(rootOrKey, enabled, log) {
  * 移除是"当它不存在"。`dsh`（官方技能目录）与 `hub`（导入技能落点）不允许移除 ——
  * 它们是插件自身的读写根，移除会让创建/导入无处落脚（见 isDefaultSkillSource）。
  */
-export async function setSourceRemoved(rootOrKey, removed, log) {
+export async function setSourceRemoved(
+  rootOrKey: RootInput,
+  removed: boolean,
+  log: LogFn | undefined,
+) {
   const root =
     rootOrKey && typeof rootOrKey === "object" && typeof rootOrKey.key === "string"
       ? rootOrKey
@@ -1707,7 +2232,9 @@ export async function setSourceRemoved(rootOrKey, removed, log) {
   return { root: root.key, removed: removed === true };
 }
 
-async function checkedPolicyRootDefinition(root) {
+async function checkedPolicyRootDefinition(
+  root: RootInput,
+): Promise<WritableRootResult> {
   const definition = rootDefinition(root);
   if (!definition || !definition.toggleable) return null;
   if (definition.scope !== "project") {
@@ -1735,7 +2262,8 @@ async function checkedPolicyRootDefinition(root) {
         ),
       );
   if (!validProjectRoot) return null;
-  if (!(await projectSourceSafe(definition))) {
+  // validProjectRoot 已校验 projectRoot 为字符串，断言只为让类型收敛。
+  if (!(await projectSourceSafe(definition as ProjectSource))) {
     return {
       ok: false,
       error: `项目技能目录不安全，拒绝写入状态: ${definition.path}`,
@@ -1746,7 +2274,12 @@ async function checkedPolicyRootDefinition(root) {
   return definition;
 }
 
-async function setPolicySkillEnabled(root, name, enabled, log) {
+async function setPolicySkillEnabled(
+  root: RootInput,
+  name: string,
+  enabled: boolean,
+  log: LogFn | undefined,
+): Promise<SkillToggleResult | FailureResult> {
   const definition = await checkedPolicyRootDefinition(root);
   if (definition && definition.ok === false) return definition;
   if (!definition) return readonlyError("toggle");
@@ -1819,7 +2352,12 @@ async function setPolicySkillEnabled(root, name, enabled, log) {
 // ── 启用 / 停用（同时控制模型与 / 手动调用，非破坏）──────────────────────────
 
 /** enabled=true 恢复模型与 / 手动调用；false 同时停用两种调用入口。 */
-export async function setSkillEnabled(root, name, enabled, log) {
+export async function setSkillEnabled(
+  root: RootInput,
+  name: string,
+  enabled: boolean,
+  log: LogFn | undefined,
+): Promise<SkillToggleResult | FailureResult> {
   return setPolicySkillEnabled(root, name, enabled, log);
 }
 
@@ -1830,7 +2368,10 @@ export async function setSkillEnabled(root, name, enabled, log) {
  * 必须在调用方的写锁（service 的 write()）内执行。
  * @param {{ root: string, name: string }[]} entries - root = 来源 key。
  */
-export async function markSkillsDisabled(entries, log) {
+export async function markSkillsDisabled(
+  entries: unknown,
+  log: LogFn | undefined,
+) {
   const list = Array.isArray(entries) ? entries : [];
   const clean = list
     .map((e) => ({ root: String((e && e.root) || ""), name: String((e && e.name) || "") }))
@@ -1857,7 +2398,12 @@ export async function markSkillsDisabled(entries, log) {
  * 这里让用户显式指定哪个同名技能生效（preferred=false 取消，回到 rank 顺序）。
  * 只写本地策略，不改任何源文件。
  */
-export async function setPreferredSkill(root, name, preferred, log) {
+export async function setPreferredSkill(
+  root: RootInput,
+  name: string,
+  preferred: boolean,
+  log: LogFn | undefined,
+) {
   const definition = await checkedPolicyRootDefinition(root);
   if (definition && definition.ok === false) return definition;
   if (!definition) return readonlyError("toggle");
@@ -1913,8 +2459,11 @@ export async function setPreferredSkill(root, name, preferred, log) {
   return { name: canonicalName, root: preferred === false ? null : definition.key };
 }
 
-async function safeExistingEntryPaths(root, name) {
-  const paths = [];
+async function safeExistingEntryPaths(
+  root: string,
+  name: string,
+): Promise<EntryPathTarget[]> {
+  const paths: EntryPathTarget[] = [];
   const bundle = entryPath(root, name);
   if (bundle === null) return paths;
   const flat = resolve(root, `${name}.md`);
@@ -1927,7 +2476,7 @@ async function safeExistingEntryPaths(root, name) {
   return paths;
 }
 
-async function readTrashMetadata(id) {
+async function readTrashMetadata(id: string): Promise<TrashMetadata | null> {
   if (entryPath(trashRootPath(), id) === null) return null;
   try {
     const value = JSON.parse(
@@ -1951,11 +2500,17 @@ async function readTrashMetadata(id) {
  * 在短重试窗口后仍返回 EPERM。此时保留 stage 作为唯一可回滚副本，逐项复制到最终目录，
  * 并最后写 metadata：listTrash() 在复制完整前不会暴露半成品。
  */
-async function publishTrashStage(stage, finalPath, metadata, renameOptions) {
+async function publishTrashStage(
+  stage: string,
+  finalPath: string,
+  metadata: TrashMetadata,
+  renameOptions: RenameOptions = {},
+) {
   try {
     await renameWithRetry(stage, finalPath, renameOptions);
     return { fallback: false, cleanupError: null };
-  } catch (error) {
+  } catch (error: any) {
+    // 系统异常按可选 code 读取，保持既有可恢复码判定。
     if (!TRANSIENT_RENAME_CODES.has(error && error.code)) throw error;
   }
 
@@ -1984,7 +2539,8 @@ async function publishTrashStage(stage, finalPath, metadata, renameOptions) {
   let cleanupError = null;
   try {
     await fs.rm(stage, { recursive: true, force: true });
-  } catch (error) {
+  } catch (error: any) {
+    // 调用方按可选 message 读取该清理异常，保持既有告警文案。
     cleanupError = error;
   }
   return { fallback: true, cleanupError };
@@ -1997,7 +2553,7 @@ async function publishTrashStage(stage, finalPath, metadata, renameOptions) {
  * 所以这里必须按 scope 分岔：早先只特判 `dsh`，hub 会被记成项目级、`projectRoot`
  * 为 undefined，恢复时被判「原项目当前不在活动工作区中」—— 删除进去就再也拿不回来。
  */
-function trashRootMetadata(definition) {
+function trashRootMetadata(definition: SkillSource): TrashRootMetadata {
   if (definition.scope !== "project")
     return { key: definition.key, scope: "user", label: definition.label };
   return {
@@ -2010,7 +2566,10 @@ function trashRootMetadata(definition) {
   };
 }
 
-async function restoreRootDefinition(metadata, options = {}) {
+async function restoreRootDefinition(
+  metadata: TrashMetadata,
+  options: WriteOptions = {},
+): Promise<WritableRootResult> {
   // version 1 entries predate scoped Trash and always belong to $DSH_HOME/skills.
   if (!metadata.root) return rootByKey("dsh");
   // 用户级来源按 key 重新解析：路径来自 userRoots()，不信元数据里记住的 path
@@ -2033,7 +2592,7 @@ async function restoreRootDefinition(metadata, options = {}) {
   const normalizedProjectRoot = pathIdentity(metadata.root.projectRoot);
   const root = roots.find(
     (item) =>
-      item.key === metadata.root.key &&
+      item.key === (metadata.root as TrashRootMetadata).key &&
       item.kind === "project-dsh" &&
       pathIdentity(item.projectRoot) === normalizedProjectRoot,
   );
@@ -2049,7 +2608,12 @@ async function restoreRootDefinition(metadata, options = {}) {
 }
 
 /** 把项目级 DSH 根中的单个技能移入 manager-owned 回收站。 */
-export async function deleteSkill(root, name, log, options = {}) {
+export async function deleteSkill(
+  root: RootInput,
+  name: string,
+  log: LogFn | undefined,
+  options: WriteOptions = {},
+) {
   const definition = await checkedWritableRootDefinition(root);
   if (definition && definition.ok === false) return definition;
   if (!definition) return readonlyError("delete");
@@ -2069,7 +2633,7 @@ export async function deleteSkill(root, name, log, options = {}) {
   const trashRoot = trashRootPath();
   const stage = join(trashRoot, `.stage-${randomUUID()}`);
   const finalPath = join(trashRoot, id);
-  const moved = [];
+  const moved: Array<EntryPathTarget & { destination: string }> = [];
   await fs.mkdir(stage, { recursive: true });
   try {
     for (const target of targets) {
@@ -2112,8 +2676,9 @@ export async function deleteSkill(root, name, log, options = {}) {
       );
     if (log) log("trash", `移到回收站 ${name} -> ${finalPath}`);
     return { id, name, deletedAt: metadata.deletedAt, root: metadata.root };
-  } catch (error) {
-    const rollbackFailures = [];
+  } catch (error: any) {
+    // 系统异常按可选 message 读取，保持既有回滚失败明细。
+    const rollbackFailures: { path: string; error: string }[] = [];
     for (const item of moved.reverse()) {
       try {
         await movePathWithFallback(
@@ -2121,7 +2686,8 @@ export async function deleteSkill(root, name, log, options = {}) {
           item.path,
           options.renameOptions,
         );
-      } catch (rollbackError) {
+      } catch (rollbackError: any) {
+        // 系统异常按可选 message 读取，保持既有回滚失败明细。
         rollbackFailures.push({
           path: item.destination,
           error: String(
@@ -2145,14 +2711,14 @@ export async function deleteSkill(root, name, log, options = {}) {
   }
 }
 
-export async function listTrash() {
+export async function listTrash(): Promise<TrashMetadata[]> {
   let items;
   try {
     items = await fs.readdir(trashRootPath(), { withFileTypes: true });
   } catch {
     return [];
   }
-  const result = [];
+  const result: TrashMetadata[] = [];
   for (const item of items) {
     if (!item.isDirectory() || item.name.startsWith(".")) continue;
     const metadata = await readTrashMetadata(item.name);
@@ -2163,7 +2729,11 @@ export async function listTrash() {
   );
 }
 
-export async function restoreTrash(id, log, options = {}) {
+export async function restoreTrash(
+  id: string,
+  log: LogFn | undefined,
+  options: WriteOptions = {},
+): Promise<TrashRestoreResult | FailureResult> {
   const metadata = await readTrashMetadata(id);
   if (!metadata)
     return {
@@ -2186,7 +2756,7 @@ export async function restoreTrash(id, log, options = {}) {
     };
   await fs.mkdir(root, { recursive: true });
   const itemRoot = join(trashRootPath(), id);
-  const moved = [];
+  const moved: { source: string; destination: string }[] = [];
   try {
     for (const fileName of metadata.entries) {
       const source = join(itemRoot, fileName);
@@ -2213,7 +2783,10 @@ export async function restoreTrash(id, log, options = {}) {
   }
 }
 
-export async function permanentlyDeleteTrash(id, log) {
+export async function permanentlyDeleteTrash(
+  id: string,
+  log: LogFn | undefined,
+) {
   const metadata = await readTrashMetadata(id);
   if (!metadata)
     return {
@@ -2230,7 +2803,7 @@ export async function permanentlyDeleteTrash(id, log) {
 // ── 导入 ────────────────────────────────────────────────────────────────────
 
 /** 分析来源：单 skill 目录 / 单 .md 文件 / 批量目录。 */
-async function analyzeSource(source) {
+async function analyzeSource(source: string): Promise<SourceAnalysis> {
   let st;
   try {
     st = await fs.lstat(source);
@@ -2302,9 +2875,9 @@ async function analyzeSource(source) {
   };
 }
 
-async function collectCandidates(dir) {
+async function collectCandidates(dir: string): Promise<ImportCandidate[]> {
   const items = await fs.readdir(dir, { withFileTypes: true });
-  const out = [];
+  const out: ImportCandidate[] = [];
   for (const it of items) {
     if (it.isSymbolicLink())
       throw codedError(
@@ -2347,10 +2920,13 @@ async function collectCandidates(dir) {
 }
 
 /** 导入内容不接受符号链接，避免把目标目录外的内容带入技能目录。 */
-async function assertNoSymbolicLinks(source) {
-  const pending = [{ path: source, depth: 0 }];
+async function assertNoSymbolicLinks(source: string): Promise<void> {
+  const pending: { path: string; depth: number }[] = [
+    { path: source, depth: 0 },
+  ];
   while (pending.length) {
-    const current = pending.pop();
+    // while 条件保证栈非空，断言只为让类型收敛。
+    const current = pending.pop() as { path: string; depth: number };
     if (current.depth > MAX_SOURCE_DEPTH)
       throw codedError(
         `skill 来源目录层级超过 ${MAX_SOURCE_DEPTH} 层: ${source}`,
@@ -2379,7 +2955,7 @@ async function assertNoSymbolicLinks(source) {
   }
 }
 
-function temporaryPath(target, kind) {
+function temporaryPath(target: string, kind: string): string {
   return join(
     dirname(target),
     `.${basename(target)}.dssm-${kind}-${randomUUID()}`,
@@ -2388,13 +2964,18 @@ function temporaryPath(target, kind) {
 
 /** dry-run 预检执行与正式导入相同的符号链接/深度检查，预检失败即结论，不再进入覆盖确认。
  *  预检与实导之间来源被替换的竞态仍由实导阶段的复制后校验兜底。 */
-async function preflightCandidates(pending, conflicts, failed) {
+async function preflightCandidates(
+  pending: ImportSourceRef[],
+  conflicts: ImportSourceRef[],
+  failed: ImportFailure[],
+): Promise<void> {
   for (const group of [pending, conflicts]) {
     for (let i = group.length - 1; i >= 0; i--) {
       const candidate = group[i];
       try {
         await assertNoSymbolicLinks(candidate.source);
-      } catch (error) {
+      } catch (error: any) {
+        // 系统异常按可选 message 读取，保持既有失败明细文案。
         failed.push(
           attachCode(
             {
@@ -2411,7 +2992,11 @@ async function preflightCandidates(pending, conflicts, failed) {
 }
 
 /** 先复制到同目录临时路径，复制失败时不触碰现有技能。 */
-async function copyToTemporary(source, target, isDir) {
+async function copyToTemporary(
+  source: string,
+  target: string,
+  isDir: boolean,
+): Promise<string> {
   const temp = temporaryPath(target, "stage");
   try {
     await assertNoSymbolicLinks(source);
@@ -2427,22 +3012,33 @@ async function copyToTemporary(source, target, isDir) {
 }
 
 /** 临时副本就绪后再替换；替换失败时尽力恢复旧条目。 */
-async function replaceWithCopy(source, dest, isDir, existing = []) {
+async function replaceWithCopy(
+  source: string,
+  dest: string,
+  isDir: boolean,
+  existing: string[] = [],
+): Promise<SkillWarning[]> {
   const stage = await copyToTemporary(source, dest, isDir);
-  const backups = [];
+  const backups: { path: string; backup: string }[] = [];
+  // 三处 rename 一律走 `renameWithRetry`：瞬时占用（Windows 杀软 / 索引器 / 资源管理器）返回的
+  // EACCES / EBUSY / EPERM 正是它重试的那些码。此前只有 `:959` 的回滚用了带重试的版本，
+  // 而**发布与它的补偿回滚用的是裸 rename** —— 发布因瞬时锁抛错时，紧随其后的回滚在同一刻、
+  // 同一目录上大概率撞同一个句柄，于是留下"目标已空、真值还叫 backup"的半态（无自动恢复路径）。
+  // 保护覆盖不均不是取舍，是漏。
   try {
     for (const path of existing) {
       const backup = temporaryPath(path, "backup");
-      await fs.rename(path, backup);
+      await renameWithRetry(path, backup);
       backups.push({ path, backup });
     }
-    await fs.rename(stage, dest);
-  } catch (error) {
+    await renameWithRetry(stage, dest);
+  } catch (error: any) {
+    // 系统异常按可选 message 读取，保持既有回滚失败明细。
     await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
-    const rollbackFailures = [];
+    const rollbackFailures: string[] = [];
     for (const item of backups.reverse()) {
       try {
-        await fs.rename(item.backup, item.path);
+        await renameWithRetry(item.backup, item.path);
       } catch (rollbackError) {
         rollbackFailures.push(item.backup);
       }
@@ -2457,11 +3053,12 @@ async function replaceWithCopy(source, dest, isDir, existing = []) {
     }
     throw error;
   }
-  const warnings = [];
+  const warnings: SkillWarning[] = [];
   for (const item of backups) {
     try {
       await fs.rm(item.backup, { recursive: true, force: true });
-    } catch (error) {
+    } catch (error: any) {
+      // 系统异常按可选 message 读取，保持既有告警文案。
       warnings.push({
         code: "warning.backupUncleaned",
         params: {
@@ -2480,7 +3077,11 @@ async function replaceWithCopy(source, dest, isDir, existing = []) {
  * options: { conflict: 'skip'|'overwrite', dryRun: boolean }
  * 成功返回 { kind, imported, skipped, failed }；失败返回 { ok:false, error }。
  */
-export async function importSkill(source, log, options = {}) {
+export async function importSkill(
+  source: string,
+  log: LogFn | undefined,
+  options: ImportOptions = {},
+) {
   const targetRoot = skillCreateRootPath();
   const conflict = options.conflict === "overwrite" ? "overwrite" : "skip";
   const dryRun = options.dryRun === true;
@@ -2500,7 +3101,7 @@ export async function importSkill(source, log, options = {}) {
       code: "error.import.overlap",
     };
 
-  let candidates = [];
+  let candidates: ImportCandidate[] = [];
   if (analysis.kind === "single") {
     candidates = [
       {
@@ -2513,7 +3114,8 @@ export async function importSkill(source, log, options = {}) {
   } else {
     try {
       candidates = await collectCandidates(source);
-    } catch (error) {
+    } catch (error: any) {
+      // 系统异常按可选 message 读取，保持既有失败明细文案。
       return attachCode(
         {
           ok: false,
@@ -2531,13 +3133,13 @@ export async function importSkill(source, log, options = {}) {
       };
   }
 
-  const pending = [];
-  const conflicts = [];
-  const failed = [];
-  const imported = [];
-  const skipped = [];
+  const pending: ImportPending[] = [];
+  const conflicts: ImportConflict[] = [];
+  const failed: ImportFailure[] = [];
+  const imported: ImportImported[] = [];
+  const skipped: ImportSkipped[] = [];
 
-  const nameCount = new Map();
+  const nameCount = new Map<string, number>();
   for (const candidate of candidates) {
     if (
       candidate.kebab &&
@@ -2574,7 +3176,8 @@ export async function importSkill(source, log, options = {}) {
       });
       continue;
     }
-    if (nameCount.get(c.kebab) > 1) {
+    // 上方计数循环已为该 kebab 记数（合法名称且目标可写），断言只为让类型收敛。
+    if ((nameCount.get(c.kebab) as number) > 1) {
       failed.push({
         source: c.source,
         error: `批量来源中存在多个同名插件: ${c.kebab}`,
@@ -2586,11 +3189,11 @@ export async function importSkill(source, log, options = {}) {
     const dest = c.isDir
       ? join(targetRoot, c.kebab)
       : join(targetRoot, `${c.kebab}.md`);
-    const paths = [
+    const paths: string[] = [
       join(targetRoot, c.kebab),
       join(targetRoot, `${c.kebab}.md`),
     ];
-    const existing = [];
+    const existing: string[] = [];
     for (const path of paths) {
       try {
         await fs.stat(path);
@@ -2630,7 +3233,8 @@ export async function importSkill(source, log, options = {}) {
       const warnings = await replaceWithCopy(p.source, p.dest, p.isDir);
       imported.push({ name: p.name, overwritten: false, warnings });
       if (log) log("import", `导入 ${p.source} -> ${p.dest}`);
-    } catch (e) {
+    } catch (e: any) {
+      // 系统异常按可选 message 读取，保持既有失败明细文案。
       failed.push(
         attachCode(
           { source: p.source, error: String(e && e.message ? e.message : e) },
@@ -2654,7 +3258,8 @@ export async function importSkill(source, log, options = {}) {
         );
         imported.push({ name: c.name, overwritten: true, warnings });
         if (log) log("import-overwrite", `覆盖导入 ${c.source} -> ${dest}`);
-      } catch (e) {
+      } catch (e: any) {
+        // 系统异常按可选 message 读取，保持既有失败明细文案。
         failed.push(
           attachCode(
             { source: c.source, error: String(e && e.message ? e.message : e) },
@@ -2677,7 +3282,7 @@ export async function importSkill(source, log, options = {}) {
  * 校验浏览器或 ZIP 提供的相对路径。上传内容始终写成普通文件，不解释 ZIP 的链接元数据。
  * 这样既不依赖浏览器泄露本机绝对路径，也不会让归档跨出管理器暂存目录。
  */
-function normalizeUploadPath(input) {
+function normalizeUploadPath(input: unknown): UploadPath {
   const raw = String(input == null ? "" : input).replace(/\\/g, "/");
   if (
     !raw ||
@@ -2716,7 +3321,11 @@ function normalizeUploadPath(input) {
   return { path: parts.join("/"), directory };
 }
 
-function decodeUploadBase64(value, maxBytes, code = "error.upload.tooLarge") {
+function decodeUploadBase64(
+  value: unknown,
+  maxBytes: number,
+  code = "error.upload.tooLarge",
+): Buffer {
   const raw = String(value == null ? "" : value);
   const padding = raw.endsWith("==") ? 2 : raw.endsWith("=") ? 1 : 0;
   const dataLength = raw.length - padding;
@@ -2751,17 +3360,22 @@ function decodeUploadBase64(value, maxBytes, code = "error.upload.tooLarge") {
   return bytes;
 }
 
-function uploadError(error) {
+function uploadError(error: unknown) {
+  // 按可选 message 读取抛出值，保持既有兜底文案。
+  const cause = error as { message?: unknown } | null | undefined;
   return attachCode(
     {
       ok: false,
-      error: String(error && error.message ? error.message : error),
+      error: String(cause && cause.message ? cause.message : error),
     },
     error,
   );
 }
 
-async function writeUploadedEntries(contentRoot, entries) {
+async function writeUploadedEntries(
+  contentRoot: string,
+  entries: unknown,
+): Promise<void> {
   if (!Array.isArray(entries) || entries.length === 0)
     throw codedError("上传内容为空", "error.upload.empty");
   if (entries.length > MAX_UPLOAD_ENTRIES)
@@ -2806,7 +3420,7 @@ async function writeUploadedEntries(contentRoot, entries) {
   }
 }
 
-async function writeUploadedZip(contentRoot, encoded) {
+async function writeUploadedZip(contentRoot: string, encoded: unknown): Promise<void> {
   const archive = decodeUploadBase64(
     encoded,
     MAX_UPLOAD_ARCHIVE_BYTES,
@@ -2842,7 +3456,8 @@ async function writeUploadedZip(contentRoot, encoded) {
         return !normalized.directory;
       },
     });
-  } catch (error) {
+  } catch (error: any) {
+    // 业务错误（我们抛的 error.* 前缀）透传；其余按 ZIP 解压失败处理。
     if (error && /^error\./.test(String(error.code || ""))) throw error;
     throw codedError(
       `ZIP 无法解压: ${String(error && error.message ? error.message : error)}`,
@@ -2856,7 +3471,17 @@ async function writeUploadedZip(contentRoot, encoded) {
   await writeUploadedEntries(contentRoot, entries);
 }
 
-async function prepareUploadedSource(sessionRoot, input) {
+/** 浏览器上传来源入参（entries 或 zip 二者取一）。 */
+interface UploadSource {
+  name?: unknown;
+  entries?: unknown;
+  zip?: unknown;
+}
+
+async function prepareUploadedSource(
+  sessionRoot: string,
+  input: UploadSource,
+): Promise<string> {
   const contentRoot = join(sessionRoot, "content");
   await fs.mkdir(contentRoot, { recursive: true });
   if (input && input.zip !== undefined)
@@ -2886,7 +3511,7 @@ async function prepareUploadedSource(sessionRoot, input) {
   const batchRoot = join(sessionRoot, "batch");
   const wrappedRoot = join(batchRoot, skillName);
   await fs.mkdir(batchRoot, { recursive: true });
-  await fs.rename(contentRoot, wrappedRoot);
+  await renameWithRetry(contentRoot, wrappedRoot);
   return batchRoot;
 }
 
@@ -2894,12 +3519,19 @@ async function prepareUploadedSource(sessionRoot, input) {
  * 接收浏览器读取后的内容，在 manager 私有目录暂存并复用现有原子导入链路。
  * input: { name, entries:[{path,data(base64)}] } 或 { name, zip:base64 }。
  */
-export async function importUploadedSkill(input, log, options = {}) {
+export async function importUploadedSkill(
+  input: unknown,
+  log: LogFn | undefined,
+  options: ImportOptions = {},
+) {
   const uploadHome = join(managerHomePath(), "uploads");
   const sessionRoot = join(uploadHome, `.upload-${randomUUID()}`);
   try {
     await fs.mkdir(sessionRoot, { recursive: true });
-    const source = await prepareUploadedSource(sessionRoot, input || {});
+    const source = await prepareUploadedSource(
+      sessionRoot,
+      (input as UploadSource | null | undefined) || {},
+    );
     return await importSkill(source, log, options);
   } catch (error) {
     return uploadError(error);
@@ -2912,11 +3544,28 @@ export async function importUploadedSkill(input, log, options = {}) {
 
 // ── 创建 / 详情 / Provider ─────────────────────────────────────────────────
 
-function yamlString(value) {
+function yamlString(value: unknown): string {
   return JSON.stringify(String(value));
 }
 
-export async function createSkill(input, log, options = {}) {
+/** 新建技能入参。 */
+interface CreateSkillInput {
+  name: unknown;
+  description?: unknown;
+  body?: unknown;
+  form?: unknown;
+}
+
+/** 新建技能选项。 */
+interface CreateSkillOptions {
+  root?: RootInput;
+}
+
+export async function createSkill(
+  input: CreateSkillInput,
+  log: LogFn | undefined,
+  options: CreateSkillOptions = {},
+): Promise<CreateSkillResult | FailureResult> {
   // v0.4：默认落点由「DSH 技能目录」改为 hub 内的 `tool-management/skills/`；
   // 调用方显式传 options.root（如项目根）时仍以调用方为准。
   const requestedRoot = Object.prototype.hasOwnProperty.call(options, "root")
@@ -2982,12 +3631,13 @@ export async function createSkill(input, log, options = {}) {
     if (log) log("create", `创建 ${flatPath}`);
     return { name, path: flatPath, root: definition.key };
   }
-  const target = entryPath(root, name);
+  // 上方 entryPath(root, name) === null 的守卫已保证目标非空，断言只为让类型收敛。
+  const target = entryPath(root, name) as string;
   const stage = temporaryPath(target, "create");
   try {
     await fs.mkdir(stage);
     await fs.writeFile(join(stage, "SKILL.md"), content, "utf8");
-    await fs.rename(stage, target);
+    await renameWithRetry(stage, target);
   } catch (error) {
     await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
     throw error;
@@ -2996,7 +3646,11 @@ export async function createSkill(input, log, options = {}) {
   return { name, path: join(target, "SKILL.md"), root: definition.key };
 }
 
-export async function skillDetail(keyOrRoot, name, options = {}) {
+export async function skillDetail(
+  keyOrRoot: RootInput,
+  name: string,
+  options: { projectCwds?: string[] } = {},
+) {
   const scopedRoots = await projectRoots(options.projectCwds);
   // 支持传 key 或 definition（自定义来源由 service 层解析后传入）。
   const root =
@@ -3051,9 +3705,11 @@ export async function skillDetail(keyOrRoot, name, options = {}) {
 }
 
 /** 生成 manager provider 候选：保留禁用候选以阻止低优先级重名副本意外激活。 */
-export async function listProviderCandidates(options = {}) {
+export async function listProviderCandidates(
+  options: { cwd?: string } = {},
+): Promise<ProviderCandidate[]> {
   const policyResult = await readManagerState();
-  const candidates = [];
+  const candidates: ProviderCandidate[] = [];
   const user = activeUserRoots(policyResult.state).concat(
     customRootsFromState(policyResult.state).filter(
       (root) => !policyResult.state.removedSources.includes(root.key),
@@ -3061,14 +3717,19 @@ export async function listProviderCandidates(options = {}) {
   );
   const userScans = await scanDeduplicatedRoots(user);
   const items = user.flatMap((root) =>
-    userScans.get(root.key).entries.map((entry) => ({ root, entry })),
+    (userScans.get(root.key) as ScanResult).entries.map((entry) => ({
+      root,
+      entry,
+    })),
   );
   const cwd =
     options && typeof options.cwd === "string" ? options.cwd : undefined;
   if (cwd) {
     const roots = await projectRoots([cwd]);
     for (const root of roots) {
-      const scanned = (await scanDeduplicatedRoots([root])).get(root.key);
+      const scanned = (await scanDeduplicatedRoots([root])).get(
+        root.key,
+      ) as ScanResult;
       for (const entry of scanned.entries) items.push({ root, entry });
     }
   }
@@ -3095,7 +3756,7 @@ export async function listProviderCandidates(options = {}) {
       },
       provider: "dsh-plugin-tool-management-external",
       source: project
-        ? root.kind
+        ? (root.kind as string)
         : root.key === "dsh"
           ? "user-dsh"
           : CUSTOM_ROOT_KEY_RE.test(root.key)
@@ -3131,7 +3792,10 @@ export async function listProviderCandidates(options = {}) {
   return candidates;
 }
 
-export async function getProviderSkill(candidate, options = {}) {
+export async function getProviderSkill(
+  candidate: ProviderCandidate | null | undefined,
+  options: { cwd?: string } = {},
+) {
   const locator = candidate && candidate.locator;
   if (
     !locator ||
@@ -3141,7 +3805,7 @@ export async function getProviderSkill(candidate, options = {}) {
     typeof locator.realDocPath !== "string"
   )
     return undefined;
-  let root = rootByKey(locator.rootKey);
+  let root: SkillSource | null | undefined = rootByKey(locator.rootKey);
   if (
     !root &&
     PROJECT_ROOT_KEY_RE.test(locator.rootKey) &&
@@ -3186,7 +3850,7 @@ export async function getProviderSkill(candidate, options = {}) {
 
 // ── 状态快照 ────────────────────────────────────────────────────────────────
 
-function canonicalSkillName(item) {
+function canonicalSkillName(item: RootedEntry): string {
   return item.entry.declaredName || item.entry.name;
 }
 
@@ -3196,8 +3860,11 @@ function canonicalSkillName(item) {
  * `preferred`（技能名 → 来源 key）是用户对同名技能的显式选择：命中的来源排到同名前，
  * 其余仍按来源 rank 排序；未命中（或键已失效）时退化为纯 rank 顺序。
  */
-export function groupLoadableSkillsByName(items, preferred) {
-  const preferredFor = (item) => {
+export function groupLoadableSkillsByName<T extends RootedEntry>(
+  items: T[],
+  preferred?: Record<string, string> | null,
+): Map<string, T[]> {
+  const preferredFor = (item: RootedEntry) => {
     if (!preferred) return null;
     const key = preferred[canonicalSkillName(item)];
     return typeof key === "string" ? key : null;
@@ -3208,7 +3875,7 @@ export function groupLoadableSkillsByName(items, preferred) {
     if (rankA !== rankB) return rankA - rankB;
     return a.root.rank - b.root.rank;
   });
-  const groups = new Map();
+  const groups = new Map<string, T[]>();
   for (const item of ordered) {
     if (!item.entry.loadable) continue;
     const name = canonicalSkillName(item);
@@ -3219,8 +3886,11 @@ export function groupLoadableSkillsByName(items, preferred) {
   return groups;
 }
 
-function markWinners(items, options = {}) {
-  const winners = new Map();
+function markWinners(
+  items: StateItem[],
+  options: MarkWinnersOptions = {},
+): Map<string, StateItem> {
+  const winners = new Map<string, StateItem>();
   const preferred = options.preferred;
   for (const [
     canonicalName,
@@ -3245,9 +3915,11 @@ function markWinners(items, options = {}) {
 }
 
 /** DSH、常见 Agent、自定义目录与活动 Session 项目根的技能快照。 */
-export async function state(options = {}) {
+export async function state(
+  options: { projectCwds?: string[] } = {},
+): Promise<StateResult> {
   const policyResult = await readManagerState();
-  const removedKeys = new Set(
+  const removedKeys = new Set<string>(
     Array.isArray(policyResult.state.removedSources)
       ? policyResult.state.removedSources
       : [],
@@ -3259,10 +3931,10 @@ export async function state(options = {}) {
   const user = [...userRoots(), ...customRootsFromState(policyResult.state)];
   const scannable = user.filter((root) => !removedKeys.has(root.key));
   const userScans = await scanDeduplicatedRoots(scannable);
-  const projectWarnings = [];
+  const projectWarnings: SkillWarning[] = [];
   const scoped = await projectRoots(options.projectCwds, projectWarnings);
   const trash = await listTrash();
-  const result = {
+  const result: StateResult = {
     roots: [],
     projects: [],
     trash,
@@ -3284,14 +3956,14 @@ export async function state(options = {}) {
       params: { count: staleTrashCount, days: TRASH_STALE_DAYS },
       error: `回收站中有 ${staleTrashCount} 个条目已超过 ${TRASH_STALE_DAYS} 天，建议到 Skills 管理页清理`,
     });
-  const all = [];
+  const all: StateItem[] = [];
   for (const root of [...scoped, ...user]) {
     const isRemoved = removedKeys.has(root.key);
     const { exists, entries, truncated } = isRemoved
       ? { exists: false, entries: [], truncated: false }
       : root.scope === "project"
-        ? (await scanDeduplicatedRoots([root])).get(root.key)
-        : userScans.get(root.key);
+        ? ((await scanDeduplicatedRoots([root])).get(root.key) as ScanResult)
+        : (userScans.get(root.key) as ScanResult);
     if (isRemoved) {
       // 已移除：登记一行（供界面显示与恢复），但没有任何技能。
       result.roots.push({
@@ -3328,7 +4000,7 @@ export async function state(options = {}) {
         params: { path: root.path },
         error: `技能扫描达到遍历上限，部分技能未显示: ${root.path}`,
       });
-    const skills = [];
+    const skills: StateSkill[] = [];
     for (const e of entries) {
       const policy = effectiveSkillPolicy(policyResult, root, e);
       const managerEnabled =

@@ -1,15 +1,34 @@
 // 只读技能目录发现：允许目录链接，按发现路径过滤隐藏目录，用真实祖先路径终止循环。
 import { promises as fs } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { resolve, join, relative, sep } from "node:path";
 
 const MAX_DEPTH = 6;
 const MAX_DIRECTORIES = 2000;
 const MAX_ENTRIES = 20000;
-const identity = (path) =>
+const identity = (path: string): string =>
   process.platform === "win32" ? path.toLowerCase() : path;
 
+/** 一条只读技能条目的定位信息（不读正文）。 */
+export interface ReadonlyDiscoveredEntry {
+  name: string;
+  kind: "bundle" | "flat";
+  docPath: string;
+  entryPath: string;
+  realDocPath: string;
+  realEntryPath: string;
+  linked: boolean;
+}
+
+/** 一次只读发现的结果：根是否存在、排序后的条目、是否被预算截断。 */
+export interface ReadonlyDiscoveryResult {
+  exists: boolean;
+  entries: ReadonlyDiscoveredEntry[];
+  truncated: boolean;
+}
+
 /** 只读条目使用根下相对路径；点号表示根本身的 SKILL.md，不接受路径穿越。 */
-export function validDiscoveryName(name) {
+export function validDiscoveryName(name: unknown): boolean {
   return (
     typeof name === "string" &&
     (name === "." ||
@@ -29,10 +48,12 @@ export function validDiscoveryName(name) {
 }
 
 /** 只返回文件定位信息，不读取正文，供列表、详情及策略复用同一发现与去重规则。 */
-export async function discoverReadonlyEntries(root) {
+export async function discoverReadonlyEntries(root: string): Promise<ReadonlyDiscoveryResult> {
   const rootPath = resolve(root);
-  const queue = [{ path: rootPath, depth: 0, ancestors: new Set() }];
-  const byName = new Map();
+  const queue: { path: string; depth: number; ancestors: Set<string> }[] = [
+    { path: rootPath, depth: 0, ancestors: new Set<string>() },
+  ];
+  const byName = new Map<string, ReadonlyDiscoveredEntry>();
   let directories = 0;
   let entries = 0;
   let exists = false;
@@ -43,8 +64,8 @@ export async function discoverReadonlyEntries(root) {
       break;
     }
     const current = queue[cursor];
-    let realDirectory;
-    const items = [];
+    let realDirectory: string;
+    const items: Dirent[] = [];
     try {
       realDirectory = await fs.realpath(current.path);
       const key = identity(realDirectory);
@@ -53,11 +74,12 @@ export async function discoverReadonlyEntries(root) {
       // 根自身的 SKILL.md 可与其他技能并存，因此根目录继续发现。
       if (current.depth > 0) {
         const docPath = join(current.path, "SKILL.md");
-        let docStat;
+        let docStat: Stats | undefined;
         try {
           docStat = await fs.lstat(docPath);
         } catch (error) {
-          if (error.code !== "ENOENT") throw error;
+          // fs 抛出的错误按 Node 错误形状读取 code（此处只关心 ENOENT）
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
         if (docStat?.isFile() && !docStat.isSymbolicLink()) {
           const name = relative(rootPath, current.path).split(sep).join("/");

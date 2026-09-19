@@ -10,29 +10,38 @@ const BOLD_PREFIX_RE = /^\*\*(User|Human|Assistant|AI|Bot):?\*\*\s*:?\s*(.*)$/i
 /** Generic prefixed lines (`User: …` / `Assistant: …` / `用户：…`). */
 const GENERIC_PREFIX_RE = /^(User|Human|用户|Assistant|AI|Bot|助手)\s*[:：]\s*(.*)$/i
 
+/** 一轮对话：说话人角色 + 累积的正文文本。 */
+export interface TranscriptTurn {
+  role: 'user' | 'assistant'
+  text: string
+}
+
 /** Flatten a message content value (string, text-block array, or nested object) to text. */
-export function extractText(content) {
+export function extractText(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     let out = ''
     for (const part of content) {
       if (typeof part === 'string') out += part
       else if (part && typeof part === 'object') {
-        if (typeof part.text === 'string') out += part.text
-        else if (typeof part.content === 'string') out += part.content
+        // JSON 块的实际形状由下方 typeof 运行时比较决定，这里按记录形状读取字段
+        const record = part as Record<string, unknown>
+        if (typeof record.text === 'string') out += record.text
+        else if (typeof record.content === 'string') out += record.content
       }
     }
     return out
   }
   if (content && typeof content === 'object') {
-    if (typeof content.text === 'string') return content.text
-    if (typeof content.content === 'string') return content.content
+    const record = content as Record<string, unknown>
+    if (typeof record.text === 'string') return record.text
+    if (typeof record.content === 'string') return record.content
   }
   return ''
 }
 
 /** Push a finished turn, trimming empty bodies. */
-function flushTurn(current, turns) {
+function flushTurn(current: TranscriptTurn | null, turns: TranscriptTurn[]): void {
   if (!current) return
   const text = String(current.text || '').trim()
   if (text) turns.push({ role: current.role, text })
@@ -43,7 +52,7 @@ function flushTurn(current, turns) {
  * when the name carries no recognized extension.
  * @returns {'jsonl' | 'markdown' | 'generic'}
  */
-export function detectFormat(fileName, content) {
+export function detectFormat(fileName: unknown, content: unknown): 'jsonl' | 'markdown' | 'generic' {
   const name = String(fileName || '').toLowerCase()
   if (/\.jsonl$/.test(name)) return 'jsonl'
   if (/\.(md|markdown)$/.test(name)) return 'markdown'
@@ -51,7 +60,8 @@ export function detectFormat(fileName, content) {
   const first = String(content || '').split(/\r?\n/).map((s) => s.trim()).find((s) => s) || ''
   if (first.startsWith('{')) {
     try {
-      const obj = JSON.parse(first)
+      // JSON 值实际形状未知；若为对象，type/role 字段由下方运行时比较判定
+      const obj = JSON.parse(first) as { type?: unknown; role?: unknown } | null
       if (obj && typeof obj === 'object' && (obj.type === 'user' || obj.type === 'assistant' || obj.role === 'user' || obj.role === 'assistant')) return 'jsonl'
     } catch (e) { /* not JSONL after all */ }
   }
@@ -66,20 +76,21 @@ export function detectFormat(fileName, content) {
  * turns with the same role are merged.
  * @returns {Array<{role:'user'|'assistant', text:string}>}
  */
-export function parseJsonlTranscript(text) {
-  const turns = []
-  let lastRole = null
+export function parseJsonlTranscript(text: unknown): TranscriptTurn[] {
+  const turns: TranscriptTurn[] = []
+  let lastRole: 'user' | 'assistant' | null = null
   let lastText = ''
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.trim()
     if (!line) continue
-    let obj
+    // JSONL 每行的实际形状未知；字段有效性由下方运行时比较判定
+    let obj: { type?: unknown; role?: unknown; message?: unknown; content?: unknown } | null
     try { obj = JSON.parse(line) } catch (e) { continue }
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue
-    let role = null
-    let content
+    let role: 'user' | 'assistant' | null = null
+    let content: unknown
     if (obj.type === 'user' || obj.type === 'assistant') {
-      const message = obj.message && typeof obj.message === 'object' && !Array.isArray(obj.message) ? obj.message : null
+      const message = (obj.message && typeof obj.message === 'object' && !Array.isArray(obj.message) ? obj.message : null) as { role?: unknown; content?: unknown } | null
       role = message && (message.role === 'user' || message.role === 'assistant') ? message.role : (obj.type === 'user' ? 'user' : 'assistant')
       content = message ? message.content : undefined
     } else if (obj.role === 'user' || obj.role === 'assistant') {
@@ -92,12 +103,13 @@ export function parseJsonlTranscript(text) {
     if (role === lastRole) {
       lastText += '\n' + piece
     } else {
-      if (lastText) turns.push({ role: lastRole, text: lastText })
+      // lastText 非空 ⇒ lastRole 已随 lastText 同步赋值（非 null），类型层无法表达该不变式
+      if (lastText) turns.push({ role: lastRole!, text: lastText })
       lastRole = role
       lastText = piece
     }
   }
-  if (lastText) turns.push({ role: lastRole, text: lastText })
+  if (lastText) turns.push({ role: lastRole!, text: lastText })
   return turns
 }
 
@@ -106,9 +118,9 @@ export function parseJsonlTranscript(text) {
  * (`## User`, `### Assistant`, `**User:**`, …). Content lines accumulate under
  * the current turn until the next marker.
  */
-export function parseMarkdownTranscript(text) {
-  const turns = []
-  let current = null
+export function parseMarkdownTranscript(text: unknown): TranscriptTurn[] {
+  const turns: TranscriptTurn[] = []
+  let current: TranscriptTurn | null = null
   for (const line of String(text || '').split(/\r?\n/)) {
     const heading = line.match(HEADING_RE)
     if (heading) {
@@ -133,14 +145,14 @@ export function parseMarkdownTranscript(text) {
  * `用户：` / `助手：` begin a new turn; everything else appends to the current
  * one. When no marker is present the whole text becomes one user turn.
  */
-export function parseGenericText(text) {
+export function parseGenericText(text: unknown): TranscriptTurn[] {
   const lines = String(text || '').split(/\r?\n/)
   if (!lines.some((line) => GENERIC_PREFIX_RE.test(line.trim()))) {
     const whole = String(text || '').trim()
     return whole ? [{ role: 'user', text: whole }] : []
   }
-  const turns = []
-  let current = null
+  const turns: TranscriptTurn[] = []
+  let current: TranscriptTurn | null = null
   for (const line of lines) {
     const m = line.match(GENERIC_PREFIX_RE)
     if (m) {
@@ -155,6 +167,6 @@ export function parseGenericText(text) {
 }
 
 /** Map a speaker label to the assistant role (AI / Bot / Assistant / 助手). */
-function isAssistantLabel(label) {
+function isAssistantLabel(label: string): boolean {
   return /^(assistant|ai|bot|助手)$/i.test(label)
 }

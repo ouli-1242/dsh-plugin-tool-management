@@ -24,7 +24,13 @@
 //   ├─ mcp-disabled-tools.json | mcp-known-tools.json | mcp-notes.json | mcp-settings.json | mcp-export.json
 //   ├─ tool-management.log                               插件日志（滚动 .1）
 //   ├─ backups/cordis.patch.yml.bak-<时间戳>             改宿主 patch 前的备份
-//   └─ trash/{skills,subagents,prompts,scenes,memories}-trash/<id>/
+//   ├─ trash/{skills,subagents,prompts,scenes}-trash/<id>/  回收站（除记忆外的四类）
+//   └─ memories-trash/<id>/                              记忆回收站（**hub 根下独立目录**）
+//
+// 记忆回收站**不在 `trash/` 下**（本机实测 `trash/` 只有 4 个 `-trash` 目录）：它走
+// `memories/service.ts` 自己的路径（`join(stateDir, 'memories-trash', id)`，stateDir = hub 根），
+// 不经本模块的 `moveToTrash`。此前这行把它画进 `trash/{…}` 里，按它写备份/迁移脚本会既漏搬
+// 又误判（那是一类真实存在、条目数最多的用户数据）。
 //
 // 留在 `$DSH_HOME` 根下的两个文件**不是**插件的：`AGENTS.md`（宿主每轮读取的全局基线，
 // 插件只是按场景/预设写它）与 `cordis.patch.yml`（宿主加载插件的配置入口）。
@@ -225,10 +231,12 @@ export async function relocateEntries(
 
 // ── 回收站 ───────────────────────────────────────────────────────────────────
 //
-// 五类内容共用这一套：**技能**、**子智能体人设**、**场景**、**提示词预设**、**记忆**。
+// 五类内容：**技能**、**子智能体人设**、**场景**、**提示词预设**、**记忆**。
 // 落点 `hub/trash/<域>-trash/<id>/`：`manifest.json` + 随条目搬走的负载。
-// 技能回收站在 `hub/trash/skills-trash/`（核心层，v0.9.0 前直接躺在 `trash/` 下），
-// 记忆回收站在 `hub/memories-trash/`（记忆正文那条线），其余三类在本模块。
+// 但**只有四类走本模块**（`TrashKind` 就是这三类 ＋ 核心层的 skills）：
+// 技能在 `hub/trash/skills-trash/`（核心层，v0.9.0 前直接躺在 `trash/` 下），
+// 记忆在 `hub/memories-trash/` —— **hub 根下的独立目录，不在 `trash/` 里**，由
+// `memories/service.ts` 自己实现（不经本模块的 `moveToTrash`）。
 //
 // 三条纪律：**移入 = 移动**（原位置立刻消失，不是复制）、**绝不覆盖**（恢复时目标
 // 已存在就报错让用户自己处理）、**失败要回滚**（搬了一半失败就把已搬的搬回去）。
@@ -402,12 +410,29 @@ export async function readTrashEntry(kind: TrashKind, id: string): Promise<Trash
 }
 
 /**
+ * 条目里的一个负载名是不是"就在这个条目目录里"。
+ *
+ * 为什么 id 与场景名都有谓词、这里还得多一道：`manifest.json` 的 `files[]` 是**磁盘上的数据**，
+ * 它跟 id 不一样 —— id 只由本模块生成（`isValidTrashId` 严格白名单），而 files 可能来自
+ * 用户手改、别的进程、或一份被塞进来的恶意档案包。不校验就 `join(dir, dest)` 等于给了
+ * "任意相对路径读源 + 任意绝对目录建目标"的能力（`mkdir(dirname(to))` 会顺手把目录建出来）。
+ */
+export function isValidTrashPayloadName(dest: string): boolean {
+  const text = String(dest ?? '')
+  if (!text || text.startsWith('.') || text.includes('\0')) return false
+  if (/[\\/]/.test(text)) return false
+  if (text === 'manifest.json') return false
+  return true
+}
+
+/**
  * 把条目里的一个负载搬回 `to`。**不覆盖**：调用方必须先确认 `to` 不存在。
- * @throws 条目或负载缺失时抛错（调用方翻成人话）。
+ * @throws 条目、负载名或负载缺失时抛错（调用方翻成人话）。
  */
 export async function moveOutOfTrash(kind: TrashKind, id: string, dest: string, to: string): Promise<void> {
   const dir = trashEntryPath(kind, id)
   if (dir === null) throw new Error(`回收站条目 id 非法：${id}`)
+  if (!isValidTrashPayloadName(dest)) throw new Error(`回收站负载名非法：${dest}`)
   const from = join(dir, dest)
   await mkdir(dirname(to), { recursive: true })
   try {

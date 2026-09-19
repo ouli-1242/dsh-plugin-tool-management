@@ -70,7 +70,7 @@ export interface SyncResult {
 }
 
 export interface ScenePromptSyncDeps {
-  agentsMd: {
+  prompts: {
     apply(id: string): Promise<{ ok: true; id: string; backedUp: boolean } | { ok: false; error: string }>
     restore(content: string): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }>
     getCurrent(): Promise<{ ok: true; content: string; presetId: string | null; exists: boolean } | { ok: false; error: string }>
@@ -185,7 +185,7 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
       }
     } catch (e) { complete = false; warn(`scene-prompt: refs probe (scenes) failed: ${String(e)}`) }
     try {
-      const cur: any = await deps.agentsMd.getCurrent()
+      const cur: any = await deps.prompts.getCurrent()
       if (!cur || cur.ok !== true) complete = false
       else if (cur.presetId) add(String(cur.presetId), { kind: 'file' })
     } catch (e) { complete = false; warn(`scene-prompt: refs probe (baseline file) failed: ${String(e)}`) }
@@ -205,7 +205,7 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
       // 基线始终是"进场景之前"那一份）。
       const saved = await readBaseline()
       if (!saved || saved.content === null) {
-        const cur: any = await deps.agentsMd.getCurrent()
+        const cur: any = await deps.prompts.getCurrent()
         await writeBaseline({
           v: 1,
           at: Date.now(),
@@ -213,14 +213,14 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
           content: cur && cur.ok && cur.exists ? String(cur.content) : null,
         })
       }
-      const res: any = await deps.agentsMd.apply(current.presetId)
+      const res: any = await deps.prompts.apply(current.presetId)
       if (res && res.ok === false) return { error: String(res.error || '写入 AGENTS.md 失败') }
       return { applied: current.presetId }
     }
     // 没有场景驱动 → 如果刚从驱动态退出，把进场景前的基线写回去。
     const saved = await readBaseline()
     if (!saved || saved.content === null) return { unchanged: true }
-    const res: any = await deps.agentsMd.restore(saved.content)
+    const res: any = await deps.prompts.restore(saved.content)
     if (res && res.ok === false) return { error: String(res.error || '恢复 AGENTS.md 失败') }
     await writeBaseline({ v: 1, at: Date.now(), presetId: null, content: null })
     return { restored: true }

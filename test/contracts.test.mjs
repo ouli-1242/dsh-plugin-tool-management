@@ -13,6 +13,7 @@
 // 那些交给 `npm run build` 与真实使用。
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   DEFAULT_INJECT_SETTINGS,
   DOMAIN_TOOL_PREFIX,
@@ -24,8 +25,13 @@ import {
   subagentDepthOf,
 } from '../lib/context-inject.js'
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
-import { parseModeState } from '../lib/rules/service.js'
+import { parseModeState } from '../lib/memories/service.js'
+import { TOKEN_MSG } from '../lib/http-fence.js'
+import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
+import { MASK_PLACEHOLDER, describeMaskedOutcome, isMaskedValue, maskedKeysIn, resolveMaskedKv } from '../lib/mcp/secret-guard.js'
 import { renderMcpStateSection } from '../lib/mcp/state-section.js'
+import { assessHost } from '../lib/compat/probe.js'
+import { SessionStore } from '@deepseek-ai/dsh-session'
 
 test('域与工具名前缀双向对得上（对不上就有域永远统计不到调用）', () => {
   for (const key of INJECT_DOMAIN_KEYS) {
@@ -188,4 +194,282 @@ test('parseModeState 透传全部快照恢复名单（哪张被剥掉，退出�
   assert.deepEqual(parsed.snapshot.subagentsOn, ['writer'])
   assert.deepEqual(parsed.snapshot.subagentsAll, { reviewer: false, writer: true })
   assert.deepEqual(parsed.snapshot.mcpNotes, [{ id: 'mcp-github', note: 'A 挂了改用 B' }])
+})
+
+test('打码值不得入库：有旧真值就顶替，没有就丢弃（破了就是真密钥被占位符覆盖，找不回来）', () => {
+  // 2026-09-18 本机真实事故：MCP 列表默认打码，而编辑弹窗预填的就是打码值，于是
+  // 「打开编辑 → 改个别的字段 → 保存」把 `TAVILY_API_KEY` 写成了 `••••••`，真值丢失。
+  // 这三条分支就是防它的全部逻辑，方向一致：往旧值收。
+  const keep = resolveMaskedKv({ TAVILY_API_KEY: MASK_PLACEHOLDER, OTHER: 'x' }, { TAVILY_API_KEY: 'tvly-real' })
+  assert.equal(keep.value.TAVILY_API_KEY, 'tvly-real', '有旧真值时必须顶替，而不是把打码值写下去')
+  assert.equal(keep.value.OTHER, 'x', '没打码的键原样通过')
+  assert.deepEqual(keep.restored, ['TAVILY_API_KEY'])
+  assert.notEqual(describeMaskedOutcome(keep), '', '顶替过就要给一句说明，不能静默')
+
+  const drop = resolveMaskedKv({ NEW_KEY: MASK_PLACEHOLDER }, null)
+  assert.equal('NEW_KEY' in drop.value, false, '没有旧值可顶替时必须丢弃这个键')
+  assert.deepEqual(drop.dropped, ['NEW_KEY'])
+  assert.deepEqual(drop.alreadyBroken, [], '旧值不存在 ≠ 旧值已损坏，两者措辞与处置不同')
+
+  const broken = resolveMaskedKv({ TAVILY_API_KEY: MASK_PLACEHOLDER }, { TAVILY_API_KEY: MASK_PLACEHOLDER })
+  assert.deepEqual(broken.alreadyBroken, ['TAVILY_API_KEY'], '旧值本身就是打码值 → 要单独报，让用户重填')
+  assert.notEqual(describeMaskedOutcome(broken), '')
+
+  // 用户重填真值 → 修好了，不该再报「已丢失」。
+  const fixed = resolveMaskedKv({ TAVILY_API_KEY: 'tvly-new' }, { TAVILY_API_KEY: MASK_PLACEHOLDER })
+  assert.equal(fixed.value.TAVILY_API_KEY, 'tvly-new')
+  assert.deepEqual(fixed.alreadyBroken, [])
+
+  // 一切正常时不该冒出任何噪音。
+  const clean = resolveMaskedKv({ A: '1' }, { A: '0' })
+  assert.equal(describeMaskedOutcome(clean), '')
+})
+
+test('打码判据只认「整串圆点」—— 判错的方向是丢真密钥，所以宁可窄', () => {
+  for (const real of ['sk-abc****', '****', 'tvly-dev-1234567890', 'Bearer x', 12345, '', null, undefined]) {
+    assert.equal(isMaskedValue(real), false, String(real) + ' 不该被当成打码值')
+  }
+  assert.equal(isMaskedValue(MASK_PLACEHOLDER), true)
+  assert.equal(isMaskedValue('  ' + MASK_PLACEHOLDER + ' '), true, '两侧空白不该影响判定')
+  assert.deepEqual(maskedKeysIn({ A: MASK_PLACEHOLDER, B: 'real' }), ['A'])
+  assert.deepEqual(maskedKeysIn(null), [], 'loader 级行的 env/headers 是 null')
+})
+
+test('令牌提示的文案宿主与界面必须逐字相同（不同则「填写令牌」按钮不出现，且同一件事又变两种说法）；一句话只说缺什么，不念按钮名、不折行', () => {
+  // 界面靠**文本相等**识别"令牌没过"（见 client.js 的 isTokenGateText），
+  // 文案在宿主（http-fence.ts）与界面词典（client.js）各存一份 —— 改一处忘另一处，
+  // 按钮会静默消失、同一件事又变成两种说法。这条把两份钉在一起。
+  const client = readFileSync('lib/client.js', 'utf8')
+  const clientMsg = (key) => {
+    const m = new RegExp('"' + key.replace(/\./g, '\\.') + '":\\s*"((?:[^"\\\\]|\\\\.)*)"').exec(client)
+    return m ? m[1].replace(/\\"/g, '"') : null
+  }
+  // 三种 key 现在说的是同一句话（2026-09-19 用户裁定：不再区分"没配"与"带错"）。
+  for (const key of ['error.token.required', 'error.secret.noToken', 'error.secret.badToken']) {
+    assert.equal(clientMsg(key), TOKEN_MSG, key + ' 必须与宿主 TOKEN_MSG 一字不差')
+  }
+  // 这一句只说"缺什么 / 错在哪"，动作交给右侧那颗「填写令牌」按钮：把按钮名念一遍等于同一件事
+  // 在一行里说两遍，还把提示条挤成两行（用户 2026-09-19 截图：好几个地方都折行）。两条钉住口径 ——
+  // 短到一行放得下（13 字 + 按钮在常见面板宽度里绰绰有余），且不再出现按钮名。
+  assert.ok(!TOKEN_MSG.includes('填写令牌'), '提示里不要再念按钮名（按钮就在右边）：' + TOKEN_MSG)
+  assert.ok(TOKEN_MSG.length <= 16, '提示要短到一行放得下（一句话只说缺什么）：' + TOKEN_MSG)
+})
+
+test('loader 行的 config.token：写得进去、改得对、删得干净，别的一行不碰', () => {
+  // 形状取自本机真实文件（含注释头、!!js 守卫、以及后面别的 insert 块）。
+  const file = [
+    '# Your patch layer for this dsh profile, applied after every bundle layer:',
+    '',
+    '- insert:',
+    '    - id: dsh-plugin-tool-management',
+    "      name: 'dsh-plugin-tool-management'",
+    "      disabled: !!js \"[...ctx.loader.entries()].some((e) => e.options.name === 'x')\"",
+    '- insert:',
+    '    - id: mcp-github',
+    "      name: '@deepseek-ai/dsh-mcp-client'",
+    '      config:',
+    '        serverName: github',
+    '        env:',
+    '          GITHUB_TOKEN: "ghp_x"',
+    '',
+  ].join('\n')
+  assert.deepEqual(readLoaderToken(file), { found: true, token: '', disabled: false }, '没写 token 时应当是空串、开关是关着的')
+
+  // ① 没有 config → 插进一条，紧跟 id 行；别的块一个字不动。
+  const added = applyLoaderToken(file, 'ouli-1')
+  assert.equal(added.changed, true)
+  assert.equal(readLoaderToken(added.content).token, 'ouli-1')
+  assert.ok(added.content.includes('      config:\n        token: "ouli-1"'), '应当是 6/8 空格缩进的 config.token')
+  assert.ok(added.content.includes("    - id: mcp-github"), 'github 那条还在')
+  assert.ok(added.content.includes('          GITHUB_TOKEN: "ghp_x"'), 'github 的 env 一个字不能动')
+  assert.ok(added.content.includes('!!js'), '守卫表达式必须原样保留')
+
+  // ② 改值 → 只换那一行。
+  const changed = applyLoaderToken(added.content, 'ouli-2')
+  assert.equal(readLoaderToken(changed.content).token, 'ouli-2')
+  assert.equal(changed.content.split('\n').length, added.content.split('\n').length, '改值不该增删行')
+
+  // ③ 同值 → changed:false（调用方据此不写盘、不产生无意义备份）。
+  assert.equal(applyLoaderToken(added.content, 'ouli-1').changed, false)
+
+  // ④ config 里还有别的键时，删 token 要**留下** config（不能连 maxBodyBytes 一起端走）。
+  const withBoth = applyLoaderToken(added.content, 'o')
+  const both = withBoth.content.replace('        token: "o"', '        token: "o"\n        maxBodyBytes: 1048576')
+  const removedOne = applyLoaderToken(both, null)
+  assert.equal(readLoaderToken(removedOne.content).token, '')
+  assert.ok(removedOne.content.includes('      config:'), 'config 还有别的键，不能删')
+  assert.ok(removedOne.content.includes('maxBodyBytes: 1048576'), '别的键必须留着')
+
+  // ⑤ only-token 的 config → 删 token 时连 config 一起删（不留空 config: = null）。
+  // 注意：不能拿"整份文件里还有没有 config:"当断言 —— 别的 insert 块本来就有自己的 config。
+  const removedAll = applyLoaderToken(changed.content, null)
+  assert.equal(removedAll.changed, true)
+  assert.equal(removedAll.content.includes('        token:'), false, '8 空格那条 token 行必须消失')
+  assert.ok(removedAll.content.includes('    - id: dsh-plugin-tool-management\n      name: '),
+    '本插件那条行应当直接接 name:（config 整块被删掉，不留空 config:）')
+  assert.equal(readLoaderToken(removedAll.content).token, '')
+  assert.ok(removedAll.content.includes('    - id: mcp-github'), '之后的内容必须完整')
+
+  // ⑥ 文件里没有本插件那条行 → 如实报 found:false，绝不新建一条。
+  const missing = applyLoaderToken('- insert:\n    - id: other\n', 'x')
+  assert.deepEqual(missing, { found: false })
+  assert.deepEqual(readLoaderToken('- insert:\n    - id: other\n'), { found: false, token: '', disabled: false })
+})
+
+test('loader 行的 config.tokenDisabled：关闭令牌功能**不动令牌本身**，随时能开回来', () => {
+  // 用户裁定 2026-09-19：关闭 = 写一行开关，原令牌留在配置里 —— 此前的实现把 token 删了，
+  // 想再开就得重新想一遍令牌。这条把"关掉 / 开回来 / 互不干扰"钉住。
+  const file = [
+    '- insert:',
+    '    - id: dsh-plugin-tool-management',
+    "      name: 'dsh-plugin-tool-management'",
+    '      config:',
+    '        token: "ouli-1"',
+    '',
+  ].join('\n')
+
+  // ① 关掉 → 只加一行 tokenDisabled: true，token 原样还在。
+  const off = applyLoaderTokenDisabled(file, true)
+  assert.equal(off.changed, true)
+  assert.ok(off.content.includes('        tokenDisabled: true'), '应当写 8 空格缩进的 tokenDisabled')
+  assert.equal(readLoaderToken(off.content).token, 'ouli-1', '令牌必须保留（这正是这条需求）')
+  assert.equal(readLoaderToken(off.content).disabled, true)
+  assert.equal(off.content.split('\n').length, file.split('\n').length + 1, '只多一行')
+
+  // ② 再关一次 → changed:false（调用方据此不写盘、不产生无意义备份）。
+  const offAgain = applyLoaderTokenDisabled(off.content, true)
+  assert.equal(offAgain.changed, false)
+  assert.equal(offAgain.content, off.content)
+
+  // ③ 开回来 → 开关那一行删掉，令牌**还是**原来那个（不需要重新输一遍）。
+  const on = applyLoaderTokenDisabled(off.content, false)
+  assert.equal(on.changed, true)
+  assert.equal(on.content, file, '开回来应当回到"只有 token"的原状')
+  assert.equal(readLoaderToken(on.content).token, 'ouli-1')
+  assert.equal(readLoaderToken(on.content).disabled, false)
+
+  // ④ 令牌与开关互不干扰：换令牌时开关那一行留着（换值只换一行）。
+  const rekeyed = applyLoaderToken(off.content, 'ouli-2')
+  assert.equal(readLoaderToken(rekeyed.content).token, 'ouli-2')
+  assert.equal(readLoaderToken(rekeyed.content).disabled, true, '换令牌不该顺手把开关也改掉')
+  assert.equal(rekeyed.content.split('\n').length, off.content.split('\n').length, '改值不该增删行')
+
+  // ⑤ 只有 tokenDisabled 的 config → 关掉开关时连 config 一起删（不留空 config:）。
+  const onlyFlag = applyLoaderToken(file, null)
+  const flagged = applyLoaderTokenDisabled(onlyFlag.content, true)
+  const cleared = applyLoaderTokenDisabled(flagged.content, false)
+  assert.equal(cleared.content.includes('config:'), false, '空 config: 是 null，不能留')
+  assert.equal(readLoaderToken(cleared.content).disabled, false)
+
+  // ⑥ 读的时候两个键不能相互误判：tokenDisabled 的行不该被当成 token。
+  assert.equal(readLoaderToken('    - id: dsh-plugin-tool-management\n      config:\n        tokenDisabled: true\n').token, '')
+  assert.equal(readLoaderToken('    - id: dsh-plugin-tool-management\n      config:\n        token: "abc"\n').disabled, false)
+})
+
+// ── 分层行为探针（07 审查五档问题 2：15 个能力此前只有 3 个带 probe）──────────
+// 契约口径：真调哨兵分类 + 删除类文本漂移收紧。断言红了只有两种含义 ——
+// 探针把好宿主误判成坏（用户删除被无端拒绝），或把漂移/坏宿主放行（裸调破坏数据）。
+// 这两个方向都属于「一旦破了会静默出错」，正是本文件第②类测试。
+
+test('分层行为探针：真 SessionStore 方法（好宿主）→ sessions 两能力 ok，哨兵真调零副作用', () => {
+  const good = Object.create(SessionStore.prototype)
+  good.store = new Map() // detachEntered 对未知 id 走早退分支，需要 this.store 是 Map
+  const byId = new Map(assessHost({ sessions: good }).findings.map((f) => [f.id, f]))
+  assert.equal(byId.get('sessions.detach-live')?.state, 'ok', '官方原方法：文本比对恒真 + 哨兵真调（liveEntryFor/flush 受控抛错、detachEntered 早退）必须通过')
+  assert.equal(byId.get('sessions.cold-announce')?.state, 'ok', 'announce 哨兵真调必须通过；enter 不真调（官方实现对任意输入都写 store）')
+})
+
+test('分层行为探针：同名不同文的私有方法（漂移宿主）→ 删除类一律 shape-mismatch', () => {
+  const drifted = Object.create(SessionStore.prototype)
+  drifted.store = new Map()
+  drifted.liveEntryFor = function liveEntryFor(session) { return null } // 同名、行为也能跑，但实现文本已漂移
+  drifted.announce = function announce(session) { /* no-op */ }
+  const byId = new Map(assessHost({ sessions: drifted }).findings.map((f) => [f.id, f]))
+  const detach = byId.get('sessions.detach-live')
+  const cold = byId.get('sessions.cold-announce')
+  assert.equal(detach?.state, 'shape-mismatch', '文本漂移的删除类能力不得按「成员齐备」放行 —— 这正是「路由盲信方法存在」要修的洞')
+  assert.equal(detach?.textMatch, false, '漂移必须被 textMatch 记录在案')
+  assert.equal(cold?.state, 'shape-mismatch', 'cold-announce 同为删除类，口径必须一致')
+})
+
+test('分层行为探针：哨兵真调抛 TypeError（坏宿主）→ shape-mismatch；受控 Error 不是失败', () => {
+  const broken = Object.create(SessionStore.prototype)
+  broken.store = new Map()
+  broken.liveEntryFor = function liveEntryFor(session) { throw new TypeError('signature drifted') }
+  const byId = new Map(assessHost({ sessions: broken }).findings.map((f) => [f.id, f]))
+  assert.match(String(byId.get('sessions.detach-live')?.detail), /TypeError/, '同步 TypeError 是「实现坏了/签名漂了」的信号，必须进失败详情')
+  // 对照：真实现的 liveEntryFor 对哨兵抛的是受控 Error（session not live），不是 TypeError ——
+  // 上面第一个测试通过即是这条的反向证明。
+})
+
+test('分层行为探针：workspace 原生删除入口 —— 异步受控拒绝 ok，同步 TypeError 拦下', async () => {
+  const controlled = { deleteSession: async (id) => { throw new Error(`unknown session ${id}`) } }
+  const okFindings = new Map(assessHost({ get: (name) => (name === 'workspaceRegistry' ? controlled : undefined) }).findings.map((f) => [f.id, f]))
+  assert.equal(okFindings.get('workspace.delete-native')?.state, 'ok', '返回 rejected Promise 属受控拒绝，同步段无 TypeError 即可调用')
+  await new Promise((resolve) => setImmediate(resolve)) // 让哨兵 Promise 结算：探针必须已挂 .catch，不许留 unhandled rejection
+
+  const broken = { deleteSession(id) { return null.never } }
+  const badFindings = new Map(assessHost({ get: (name) => (name === 'workspaceRegistry' ? broken : undefined) }).findings.map((f) => [f.id, f]))
+  assert.equal(badFindings.get('workspace.delete-native')?.state, 'shape-mismatch', '同步 TypeError = 不得走 native 路由')
+})
+
+// ── patch-yaml golden 回环（07 审查五档问题 3：YAML 生成/解析从 index.ts 抽出）─────
+// 生成器与解析器互为镜像：一旦回环不恒等，界面显示的「生效值」就开始撒谎
+//（改 YAML 写入口径却读不回来 = 用户看到的与宿主跑的不是同一份）。属第②类
+//「一旦破了会静默出错」。
+
+import { appendBlock, buildDisableBlock, buildInsertBlock, parseRows, removeEntryAll, removeMarked } from '../lib/mcp/patch-yaml.js'
+
+test('patch-yaml golden：buildInsertBlock → parseRows 往返恒等（stdio / http / 特殊字符）', () => {
+  const cases = [
+    { id: 'stdio-full', serverName: 's-stdio', transport: 'stdio', command: 'npx', args: ['-y', 'pkg@1.2'], env: { K: 'v 1', EMPTY: '' }, toolCallTimeoutMs: 3000 },
+    { id: 'http-hdr', serverName: 's-http', transport: 'streamable-http', url: 'https://x/y?z=1', headers: { 'X-Token': 'a b"c' } },
+    { id: 'plain-id.only', serverName: '中文服务名', transport: 'stdio', command: 'cmd' },
+  ]
+  let content = '[]\n'
+  for (const row of cases) content = appendBlock(content, buildInsertBlock(row))
+  const parsed = parseRows(content).rows
+  assert.equal(parsed.length, 3, '三条 insert 行都要被读回（name 都命中本插件 loader）')
+  for (let i = 0; i < cases.length; i += 1) {
+    const src = cases[i], got = parsed[i]
+    assert.equal(got.id, src.id)
+    assert.equal(String(got.config.serverName), src.serverName, 'serverName 往返不变')
+    assert.equal(String(got.config.transport), src.transport, 'transport 往返不变')
+    if (src.args) assert.deepEqual(got.config.args, src.args, 'args 列表往返不变')
+    if (src.env) assert.deepEqual(got.config.env, src.env, 'env 映射往返不变（含空串值）')
+    if (src.url) assert.equal(String(got.config.url), src.url, 'url 往返不变（含查询串）')
+    if (src.headers) assert.deepEqual(got.config.headers, src.headers, 'headers 往返不变（含引号与空格）')
+    if (src.toolCallTimeoutMs) assert.equal(got.config.toolCallTimeoutMs, src.toolCallTimeoutMs, '数字往返不变')
+    assert.equal(got.managed, true, '带 server 标记注释的行 managed = true')
+    assert.equal(got.disabled, undefined, '新 insert 行不带 disabled')
+  }
+})
+
+test('patch-yaml golden：disable/enable 覆盖块能改写行状态，removeEntryAll 清理干净', () => {
+  let content = '[]\n'
+  content = appendBlock(content, buildInsertBlock({ id: 'victim', serverName: 'srv', transport: 'stdio', command: 'c' }))
+  content = appendBlock(content, buildInsertBlock({ id: 'bystander', serverName: 'srv2', transport: 'stdio', command: 'c2' }))
+  // 追加 disable 覆盖块 → victim.disabled = true，bystander 不受影响
+  content = appendBlock(content, buildDisableBlock('victim', true))
+  let rows = parseRows(content).rows
+  assert.equal(rows.find((r) => r.id === 'victim').disabled, true, 'disable 覆盖块按文件顺序回填 disabled')
+  assert.equal(rows.find((r) => r.id === 'bystander').disabled, undefined)
+  // removeMarked 只删标记块（disable 那份），insert 留下、disabled 复位为未定义
+  const afterRemoveMarked = removeMarked(content, 'victim', 'disable')
+  rows = parseRows(afterRemoveMarked).rows
+  assert.equal(rows.find((r) => r.id === 'victim').disabled, undefined, '删掉 disable 标记块后 disabled 复位')
+  assert.equal(rows.length, 2)
+  // removeEntryAll 清掉 insert + 全部标记 + 裸覆盖块，只剩 bystander；再删最后一个 → 空文件保持 [] 合法形状
+  const afterRemove = removeEntryAll(removeMarked(content, 'victim', 'disable'), 'victim')
+  rows = parseRows(afterRemove).rows
+  assert.deepEqual(rows.map((r) => r.id), ['bystander'], 'victim 的 insert 块也被清掉')
+  const emptied = removeEntryAll(afterRemove, 'bystander')
+  assert.ok(/^\[\]\s*$/m.test(emptied), '删光后文件必须仍是合法的顶层 YAML 数组（[]），宿主 loadOptionalPatches 不抛')
+})
+
+test('patch-yaml golden：仓库自带 cordis.patch.yml 不抛错且只认出本插件 loader 行', () => {
+  const real = readFileSync('cordis.patch.yml', 'utf8')
+  const { rows } = parseRows(real)
+  assert.ok(Array.isArray(rows))
+  assert.ok(rows.every((r) => r.id === 'dsh-plugin-tool-management' || typeof r.id === 'string'), '真实补丁文件按本插件 loader 名过滤，行形状完整')
 })
