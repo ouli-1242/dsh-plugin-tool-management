@@ -930,7 +930,11 @@
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { loadTrash(false) } }, t('trash.btn.open')))),
             state.anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             // 场景接管时把「为什么应用按钮点不动」直接写出来，而不是让用户对着置灰的按钮猜。
-            sceneDriver ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('agm.sceneLock.notice', { scene: sceneDriverLabel, id: sceneDriver.presetId })) : null,
+            // **锁定期间不显示**：那时「应用别的预设会改绑场景」是句空话（按钮全灰），与上面
+            // 那条锁定横幅并排还会互相矛盾 —— MCP / 技能 / 子智能体 / 记忆四页都是
+            // 「锁定时只显示锁定横幅」，提示词页此前漏了这层互斥，于是同一件事说了两遍
+            // （用户 2026-09-19 截图：提示词页两条黄条，其他管理页只有一条）。
+            (state.anyLocked !== true && sceneDriver) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('agm.sceneLock.notice', { scene: sceneDriverLabel, id: sceneDriver.presetId })) : null,
             // 一次性拒绝说明（被引用的预设删不掉）：不替换列表，只加一条横幅。
             state.deny ? React.createElement(Notice, { kind: 'warn', text: state.deny }) : null,
             React.createElement('div', { className: 'dsm-summary', style: { '--dsm-stat-cols': '2' } },
