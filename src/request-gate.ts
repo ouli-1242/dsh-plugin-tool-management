@@ -34,6 +34,15 @@ export interface AccessToken {
   tokenMatches(presented: string): boolean
   /** 本次**进程**的标识（界面把"填过的令牌"与它绑定，重启即失效）。 */
   BOOT_ID: string
+  /**
+   * 本次进程里**有没有人拿对过令牌**（见 `markAccepted`）。
+   *
+   * 与 `BOOT_ID` 同一生命周期：重启即清零。客户端把"填过的令牌"与 bootId 绑在一起，
+   * 所以重启后它手里那串不再作数 —— 于是"验过没有"这件事天然按启动算。
+   */
+  acceptedThisBoot(): boolean
+  /** 记下"本次进程验过一次令牌"（HTTP 入口在带对令牌时调用）。 */
+  markAccepted(): void
 }
 
 /**
@@ -87,7 +96,27 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
     try { return process.pid + '-' + Math.round(Date.now() - process.uptime() * 1000) } catch { return 'unknown' }
   })()
 
-  return { CONFIG_TOKEN, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID }
+  /**
+   * 「本次启动已经验过令牌」的闩。**只置位、不清零**（同一个进程里第一次验过就一直是验过）。
+   *
+   * 用途：`agent/pre-step` 的令牌门禁要回答"这台机器现在是不是还没人验过令牌"，而它看不到
+   * 浏览器请求头。HTTP 入口是唯一知道答案的地方（那里才知道 `x-dsh-token` 对不对），
+   * 所以由入口在验过时置位，门禁读这一个布尔 —— 两边不共享别的东西。
+   *
+   * 注意它**不是**"当前请求带没带令牌"：带上之后页面刷新、切页、轮询都不该再要求重填，
+   * 而这与界面的 bootId 口径一致（同一进程内只需填一次）。
+   */
+  let accepted = false
+
+  return {
+    CONFIG_TOKEN,
+    TOKEN_DISABLED,
+    TOKEN,
+    tokenMatches,
+    BOOT_ID,
+    acceptedThisBoot: () => accepted,
+    markAccepted: () => { accepted = true },
+  }
 }
 
 // ── 2. 写 / 敏感 op 白名单 ───────────────────────────────────────────────────

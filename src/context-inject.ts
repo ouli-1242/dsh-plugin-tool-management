@@ -608,6 +608,18 @@ export interface ContextInjectorDeps {
   settings: () => InjectSettings
   /** 该 agent 所在预设的两条事实；`undefined` = 读不到（按未压制 / 已承载处理）。 */
   factsFor: (agent: unknown) => Promise<PresetInjectionFacts | undefined> | PresetInjectionFacts | undefined
+  /**
+   * 令牌门禁：返回真 = 这一步**不放行**（令牌在生效、而本次启动还没有人验过）。
+   *
+   * 为什么拦在这里：客户端那条「锁输入框」的路子在这台宿主上根本不存在 ——
+   * `ctx.conversation.blocks` 是官方留的口子，但客户端服务注册表里没有 `conversation`
+   * （2026-09-19 真机实测：37 项服务、严格/非严格读都拿不到，宿主自己的
+   * ui-model-selection 也拿不到），所以令牌开了也锁不住输入框。`agent/pre-step` 是**宿主
+   * 平面**，与客户端无关，返回 `{kind:'reject'}` 会让这一轮直接判 `blocked` —— 这才是
+   * "没验令牌就没法对话"的真正落实（宿主原文也承认 composer block 只是 affordance）。
+   * 未配置令牌时该回调恒为 false，行为与从前完全一致。
+   */
+  tokenGateActive?: () => boolean
   /** 诊断用（默认 console.error）。 */
   logger?: (message: string) => void
 }
@@ -764,6 +776,16 @@ export function createContextInjector(deps: ContextInjectorDeps): {
   const ctx = deps.ctx
   if (!ctx || typeof ctx.on !== 'function') return { dispose: () => {}, live, noteToolUse }
   const stop: unknown = ctx.on('agent/pre-step', async (payload: any, next: () => Promise<any>) => {
+    // 令牌门禁在**最前面**：没验过令牌时这一轮整个不放行，`next()` 都不必跑（后面那些注入
+    // 本来就是给模型看的，模型这一步根本不会被调用）。宿主据此把 turn 收成 `blocked`。
+    // 代价（宿主文档写明）：被认领的那条用户消息会被丢弃 —— 这是"拦住"的固有代价，界面侧
+    // 的可见提示由兼容页那条「去填令牌」横幅承担。
+    try {
+      if (deps.tokenGateActive && deps.tokenGateActive()) {
+        log('令牌未验证：本轮对话被拒绝（在「工具 → 兼容」页填入访问令牌后恢复）')
+        return { kind: 'reject' }
+      }
+    } catch { /* 门禁判定失败不能反过来卡住对话：当作放行 */ }
     const decision = await next()
     try {
       if (!decision || decision.kind === 'reject') return decision

@@ -27,6 +27,7 @@ import {
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
 import { parseModeState } from '../lib/memories/service.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
+import { createAccessToken } from '../lib/request-gate.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
 import { MASK_PLACEHOLDER, describeMaskedOutcome, isMaskedValue, maskedKeysIn, resolveMaskedKv } from '../lib/mcp/secret-guard.js'
 import { renderMcpStateSection } from '../lib/mcp/state-section.js'
@@ -472,4 +473,57 @@ test('patch-yaml golden：仓库自带 cordis.patch.yml 不抛错且只认出本
   const { rows } = parseRows(real)
   assert.ok(Array.isArray(rows))
   assert.ok(rows.every((r) => r.id === 'dsh-plugin-tool-management' || typeof r.id === 'string'), '真实补丁文件按本插件 loader 名过滤，行形状完整')
+})
+
+test('令牌门禁：本次启动没验过令牌时 pre-step 直接拒绝，验过即放行', async () => {
+  // 这条钉的是"没输入令牌就没法对话"的**唯一**落实点。客户端的输入框锁定在本宿主上
+  // 无路可走（`ctx.conversation.blocks` 不在客户端服务注册表里，2026-09-19 真机实测），
+  // 所以门禁一旦在这里失效，整条保护就只剩"写了配置但没人执行"。
+  let listener = null
+  const ctx = { on: (name, fn) => { listener = fn; return () => {} } }
+  const gate = { active: false }
+  createContextInjector({
+    ctx,
+    domains: () => [],
+    settings: () => DEFAULT_INJECT_SETTINGS,
+    factsFor: async () => undefined,
+    tokenGateActive: () => gate.active,
+  })
+  assert.equal(typeof listener, 'function', 'pre-step 监听必须注册上')
+  const payload = { agent: {}, step: 1 }
+  let called = 0
+  const next = async () => { called += 1; return { kind: 'enter', messages: [] } }
+  assert.equal((await listener(payload, next)).kind, 'enter', '未配置令牌时照旧放行')
+  assert.equal(called, 1)
+  gate.active = true
+  assert.equal((await listener(payload, next)).kind, 'reject', '未验证时拒绝这一轮')
+  assert.equal(called, 1, '拒绝时不该再往下走（后面的注入是给模型的，模型这步不会被调用）')
+  gate.active = false
+  assert.equal((await listener(payload, next)).kind, 'enter', '验证后立即恢复')
+  // 门禁判定本身抛错不能反过来卡住对话（宁可放行）。
+  const broken = createContextInjector({
+    ctx: { on: (name, fn) => { listener = fn; return () => {} } },
+    domains: () => [],
+    settings: () => DEFAULT_INJECT_SETTINGS,
+    factsFor: async () => undefined,
+    tokenGateActive: () => { throw new Error('boom') },
+  })
+  assert.ok(broken)
+  assert.equal((await listener(payload, next)).kind, 'enter')
+})
+
+test('令牌的"本次启动验过"闩：只置位、不清零，门禁口径 = 生效且未验过', () => {
+  const on = createAccessToken({ config: { token: 'secret-value' } })
+  assert.equal(on.TOKEN, 'secret-value')
+  assert.equal(on.TOKEN !== '' && !on.acceptedThisBoot(), true, '配了令牌且没人验过 ⇒ 门禁开着')
+  on.markAccepted()
+  assert.equal(on.acceptedThisBoot(), true)
+  assert.equal(on.TOKEN !== '' && !on.acceptedThisBoot(), false, '验过一次即放开，本次进程内不再要求重填')
+  // 关掉令牌功能 = 没生效 ⇒ 门禁恒关（与写门禁同一口径）。
+  const off = createAccessToken({ config: { token: 'secret-value', tokenDisabled: true } })
+  assert.equal(off.TOKEN, '')
+  assert.equal(off.TOKEN !== '' && !off.acceptedThisBoot(), false)
+  // 没配令牌同理。
+  const none = createAccessToken({ config: {} })
+  assert.equal(none.TOKEN !== '' && !none.acceptedThisBoot(), false)
 })

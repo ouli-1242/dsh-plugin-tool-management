@@ -70,6 +70,20 @@
         const serviceOf = function (name) {
           try { return ctx.get(name) } catch (e) { return undefined }
         }
+        /**
+         * `conversation` 服务的两次读：先严格读，再**非严格**读。
+         *
+         * cordis 的 `ctx.get(name, strict = true)` 在「服务已注册、但提供方 fiber 还没进
+         * active」时返回空 —— 而本插件比 `dsh-client-ui-conversation` 晚加载，首次探测
+         * 恰好撞在这个窗口里就会一直拿不到（2026-09-19 真机实测：控制台反复报
+         * 「宿主 conversation.blocks 不可用」，而 `ctx.get('sessions')` 同时是好的）。
+         * 非严格读不判 fiber 状态，注册了就给 —— 它只是个注册表，写入不需要提供方 active。
+         */
+        const conversationService = function () {
+          const strict = serviceOf('conversation')
+          if (strict) return strict
+          try { return ctx.get('conversation', false) } catch (e) { return undefined }
+        }
         // 诊断：锁"该生效却没生效"必须留下线索 —— 否则表现只是"锁没生效"，没有任何可查的
         // 东西（用户 2026-09-19 报的就是这个）。同一条原因只报一次，避免轮询刷屏。
         let lockDiag = ''
@@ -97,11 +111,59 @@
             return typeof fromSel === 'string' && fromSel ? fromSel : undefined
           } catch (e) { return undefined }
         }
+        /**
+         * 一次性「服务点名」：锁挂不上时把几个关键服务在**本插件上下文里**的可见性一起写出来。
+         * 只报「拿不到 conversation」查不出原因 —— 到底是所有服务都看不见（跨 cordis 实例），
+         * 还是只有它看不见（提供方 fiber 没起来），这两种要修的地方完全不同。
+         */
+        let censusDone = false
+        const serviceCensus = function () {
+          if (censusDone) return ''
+          censusDone = true
+          const names = ['conversation', 'sessions', 'slots', 'locale', 'timer']
+          const out = []
+          for (const n of names) {
+            let strict = 'err'
+            let loose = 'err'
+            try { strict = typeof ctx.get(n) } catch (e) { strict = 'throw' }
+            try { loose = typeof ctx.get(n, false) } catch (e) { loose = 'throw' }
+            out.push(n + '=' + strict + '/' + loose)
+          }
+          // 注册表点名：`ctx.reflect.store` 是所有服务实况，能一次看清「有没有 conversation」
+          // 以及它注册在哪个 fiber 上（key 是 isolate 标签，不同 key = 不同隔离域）。
+          let store = ''
+          try {
+            const s = ctx.reflect && ctx.reflect.store
+            // 服务是按 **Symbol(isolate 标签)** 存的，`Object.keys` 一律返回空 —— 必须走
+            // `getOwnPropertySymbols`，否则会得出"注册表是空的"这个假结论（第一版诊断就栽在这）。
+            const syms = s ? Object.getOwnPropertySymbols(s) : []
+            const all = syms.map(function (k) { return (s[k] && s[k].name) || '?' })
+            store = '；服务注册表共 ' + all.length + ' 项，含 conversation：' + (all.indexOf('conversation') >= 0 ? '是' : '否')
+          } catch (e) { store = '；注册表读不到：' + errMsg(e) }
+          return '；服务点名（严格/非严格）' + out.join('，') + store
+        }
+        /**
+         * 说清 `conversation` 到底怎么了。只写「不可用」查不出原因 —— 而"锁没生效"这件事
+         * 恰恰最需要线索（用户以为保护开着）。所以把服务在不在、能看见哪些属性一起写出来。
+         */
+        const describeConversation = function (conversation) {
+          if (conversation === undefined || conversation === null) return 'ctx.get 拿不到 conversation 服务' + serviceCensus()
+          let keys = []
+          try { keys = Object.keys(conversation) } catch (e) { /* 代理不给枚举 */ }
+          return '服务在但 blocks 缺失（可见属性：' + (keys.length ? keys.join(' / ') : '无') + '）'
+        }
         /** 给一个会话挂 / 撤锁；宿主服务不在场时返回 false，并留下诊断。 */
         const setComposerBlock = function (id, locked) {
-          const conversation = serviceOf('conversation')
+          const conversation = conversationService()
           const blocks = conversation && conversation.blocks
-          if (!blocks || typeof blocks.set !== 'function') { diagLock('宿主 conversation.blocks 不可用'); return false }
+          if (!blocks || typeof blocks.set !== 'function') {
+            // **只在"挂"的方向报警**。撤锁是"尽力清掉残留"：清不掉没有任何用户可见后果，
+            // 而每次加载都会走一遍撤锁（`applyComposerLock(false)` 会把当前会话一起带上），
+            // 于是"令牌根本没开"的常态也刷一条「锁定未生效」—— 假故障把真故障淹没
+            // （2026-09-19 实测：这一条一度让人以为锁在令牌关闭时也在失败）。
+            if (locked === true) diagLock('宿主 conversation.blocks 不可用：' + describeConversation(conversation))
+            return false
+          }
           try {
             blocks.set(id, locked ? { reason: t('compat.token.lock.composer') } : undefined)
           } catch (e) { diagLock('写入抛错：' + errMsg(e)); return false }
@@ -117,21 +179,81 @@
         // 挂过锁的会话 id。解除时要把它们**全部**撤掉 —— 锁是按会话存的，切走时那一份还留着，
         // 只撤当前会话就会留下"切回去还锁着"的残留。
         const lockedIds = new Set()
+        /**
+         * 挂不上就**持续重试**，而不是试一次就认命。
+         *
+         * 两种会自己好起来的失败：① 提供方 fiber 还没 active（见 `conversationService`）；
+         * ② 本插件比 ui-conversation 先应用。原先只探一次，撞上这两种就永久失效，而表现只是
+         * "锁没生效"—— 用户以为保护开着，实际没有（2026-09-19 真机实测）。
+         * 每秒一次；真挂上（或锁被撤）就自己停，不留常驻定时器。
+         */
+        let lockRetryStop = null
+        const stopLockRetry = function () {
+          if (!lockRetryStop) return
+          try { lockRetryStop() } catch (e) { /* 停不掉不影响判定 */ }
+          lockRetryStop = null
+        }
+        const startLockRetry = function () {
+          if (lockRetryStop) return
+          try {
+            lockRetryStop = ctx.interval(function () {
+              if (tokenLocked !== true) { stopLockRetry(); return }
+              const id = currentSessionId()
+              if (id !== undefined && lockedIds.has(id)) { stopLockRetry(); return }
+              applyComposerLock(true)
+            }, 1000)
+          } catch (e) { diagLock('定时器不可用，无法重试：' + errMsg(e)) }
+        }
         /** 把锁态应用到会话（`locked` 为假 = 撤掉所有挂过的）。 */
         const applyComposerLock = function (locked) {
           const id = currentSessionId()
           if (locked === true) {
-            if (id === undefined) { diagLock('拿不到当前会话 id（sessions 服务未就绪）'); return }
+            if (id === undefined) { diagLock('拿不到当前会话 id（sessions 服务未就绪）'); startLockRetry(); return }
             if (lockedIds.has(id)) return
             if (setComposerBlock(id, true)) lockedIds.add(id)
+            else startLockRetry()
             return
           }
+          stopLockRetry()
           const stale = Array.from(lockedIds)
           if (id !== undefined) stale.push(id)
           lockedIds.clear()
           for (const each of stale) setComposerBlock(each, false)
         }
-        onTokenLockChange(applyComposerLock)
+        /**
+         * 令牌没验过时的**页面级横幅**（唯一能说清"为什么发不出消息"的东西）。
+         *
+         * 宿主侧的落实是 `agent/pre-step` 直接 reject（见 context-inject.ts 的 tokenGateActive），
+         * 而宿主的 blocked 态**在界面上没有任何呈现**，被认领的那条消息还会被丢弃（宿主文档
+         * 原文："the pre-step rejection that produced it discarded the claimed messages"）。
+         * 没有这条横幅，用户看到的就是"消息没了，也没有任何解释"。
+         *
+         * 出口写在文案里：解铃在「设置 → 工具 → 兼容」的访问令牌框 —— 那条路全是只读 op，
+         * 令牌没验过照样打得开（见 request-gate.ts 的白名单）。
+         */
+        let tokenBanner = null
+        const syncTokenBanner = function (locked) {
+          try {
+            if (typeof document === 'undefined' || !document.body) return
+            if (locked !== true) {
+              if (tokenBanner) tokenBanner.style.display = 'none'
+              return
+            }
+            if (!tokenBanner) {
+              tokenBanner = document.createElement('div')
+              tokenBanner.className = 'dsm-token-banner'
+              tokenBanner.setAttribute('role', 'status')
+              document.body.appendChild(tokenBanner)
+            }
+            // 语言切换后文案要跟着变（锁态没变、setTokenLock 不会通知，见下面的 locale 订阅）。
+            tokenBanner.textContent = t('compat.token.banner')
+            tokenBanner.style.display = ''
+          } catch (e) { /* DOM 不可用 → 只是少一条说明，不影响门禁本身 */ }
+        }
+        onTokenLockChange(function (locked) {
+          applyComposerLock(locked)
+          syncTokenBanner(locked)
+        })
         // 切会话（新建 / 打开历史会话 / 会话被删）→ 给新会话补挂。`current` 没变就不动，
         // 免得每次列表刷新都重挂一遍。
         let lockedSessionId = currentSessionId()
@@ -165,6 +287,8 @@
         try {
           if (locale && typeof locale.subscribe === 'function') {
             locale.subscribe(function () {
+              // 横幅文案与占位文案都要跟着换语言；锁态没变时 `setTokenLock` 不会通知。
+              syncTokenBanner(tokenLocked)
               if (tokenLocked !== true) return
               const id = currentSessionId()
               if (id === undefined || !lockedIds.has(id)) return

@@ -357,5 +357,10 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    选中与否只差一点文字色，几乎看不出来；用既有语义色（绿=已选）表达，
    与 .dsm-pill-ok / .dsm-tab-active 同色。 */
 .dsm-btn-picked{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+/* 令牌未验证时的页面级横幅（见 40-apply-head.js 的 syncTokenBanner）。
+   它是**唯一**能说清"为什么发不出消息"的东西：宿主侧拒绝那一轮（agent/pre-step → reject）
+   在界面上没有任何呈现，而且会丢掉那条消息。所以位置固定在顶部居中、z-index 压过所有面板，
+   且 pointer-events:none —— 它只负责说明，不该挡住任何可点的东西。 */
+.dsm-token-banner{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483000;max-width:min(620px,92vw);padding:9px 13px;border:1px solid var(--dsm-warn);border-radius:10px;background:var(--dsm-warn-bg);color:var(--dsm-warn);font-size:12.5px;line-height:1.55;box-shadow:0 6px 22px rgba(0,0,0,.16);pointer-events:none;backdrop-filter:blur(6px)}
 
 `
