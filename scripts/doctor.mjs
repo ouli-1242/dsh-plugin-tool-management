@@ -85,6 +85,69 @@ const JSONL_LAYOUT_MARKERS = [
 const JSONL_PACKAGE = '@deepseek-ai/dsh-session-persistence-jsonl'
 
 /**
+ * 插件在运行时按**裸模块名** require 的宿主包（B3）：官方改名/删除其中一个，对应功能会
+ * 静默降级（MCP 客户端、人设、AGENTS.md 注入、技能目录）。它们不在 peerDependencies 里
+ * （不是硬依赖），所以也不在 IDENTITY_PACKAGES 里 —— 单独列出来，从**宿主**锚点解析，
+ * 只报可见性（缺了不阻塞安装，但要看得见）。
+ */
+const BARE_HOST_MODULES = [
+  '@deepseek-ai/dsh-mcp-client',
+  '@deepseek-ai/dsh-persona',
+  '@deepseek-ai/dsh-agent-instructions',
+  '@deepseek-ai/dsh-tool-skill',
+]
+
+/** 从宿主锚点解析这批裸模块名，逐条给状态（B3：宿主是否仍暴露）。 */
+function inspectBareHostModules(hostDir) {
+  if (hostDir === undefined) return { status: 'unknown', detail: 'host installation not found', rows: [] }
+  const rows = BARE_HOST_MODULES.map((name) => {
+    const entry = resolveFromHost(hostDir, name)
+    return { package: name, resolved: entry ?? null }
+  })
+  const missing = rows.filter((row) => row.resolved === null)
+  return {
+    status: missing.length === 0 ? 'ok' : 'absent',
+    detail: missing.length === 0
+      ? `all ${rows.length} runtime-required host modules resolvable from the host`
+      : `not resolvable from the host: ${missing.map((row) => row.package).join(', ')}`,
+    rows,
+  }
+}
+
+const MOUNT_HEARTBEAT_FILE = join(process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh'), 'tool-management', 'mount.json')
+
+/**
+ * 插件的挂载心跳（B3）：apply 成功时由插件写 `hub/mount.json`。
+ *
+ * 为什么需要它：官方改名 `inject` 里的任何一个服务名时，插件**根本不会 apply**，而且 cordis
+ * 对未解析的 inject 不抛错、不打日志（2026-09-20 实测）—— 那种情形下界面上连插件都不见了，
+ * 没有任何信号。心跳是唯一的线索：**如果刚重启过 DSH 而这个时间没更新，就说明这一轮插件
+ * 没挂上**，下面那份 inject 名单就是要核对的清单。
+ */
+function inspectMount() {
+  let raw
+  try {
+    raw = readFileSync(MOUNT_HEARTBEAT_FILE, 'utf8')
+  } catch (error) {
+    return { status: 'never', detail: `no mount heartbeat at ${MOUNT_HEARTBEAT_FILE} (the plugin has never mounted on this machine)`, file: MOUNT_HEARTBEAT_FILE }
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    return {
+      status: 'ok',
+      at: parsed.at,
+      iso: parsed.iso,
+      version: parsed.version,
+      injects: Array.isArray(parsed.injects) ? parsed.injects : [],
+      file: MOUNT_HEARTBEAT_FILE,
+      detail: `last mounted ${parsed.iso ?? '?'} (plugin ${parsed.version ?? '?'}); if DSH was restarted after that and the panel is missing, the plugin did not mount`,
+    }
+  } catch (error) {
+    return { status: 'unreadable', detail: `mount heartbeat is not valid JSON: ${String(error)}`, file: MOUNT_HEARTBEAT_FILE }
+  }
+}
+
+/**
  * Check the layout assumption against the host's own copy of the backend.
  * `n/a` means the host does not ship/use the JSONL backend, which is not a
  * fault: the adapter simply never claims directory ownership there.
@@ -233,6 +296,8 @@ function main() {
   const installed = inspectPackages()
   const capabilities = inspectCapabilities()
   const jsonlLayout = inspectJsonlLayout(installed.host)
+  const bareModules = inspectBareHostModules(installed.host)
+  const mount = inspectMount()
 
   const blockers = []
   for (const row of installed.rows) {
@@ -249,6 +314,15 @@ function main() {
   if (jsonlLayout.status === 'drift') {
     warnings.push(`${JSONL_PACKAGE}: ${jsonlLayout.detail} — ${jsonlLayout.impact}`)
   }
+  // 宿主不再暴露某个运行时裸模块：功能静默降级（不是安装阻塞项），但必须看得见（B3）。
+  if (bareModules.status === 'absent') {
+    warnings.push(`${bareModules.detail} — the matching feature degrades silently at runtime`)
+  }
+  // 宿主版本栅栏（B3）：实际版本高于验证过的版本时显式说明「差异未知、按实际探测走」。
+  const hostVersion = versionOf('dsh')
+  if (hostVersion !== undefined && hostVersion !== VERIFIED_HOST_VERSION) {
+    warnings.push(`host DSH ${hostVersion} differs from the verified ${VERIFIED_HOST_VERSION} — capabilities below are probed against what is actually installed; treat the degraded list as authoritative`)
+  }
 
   if (JSON_OUT) {
     console.log(JSON.stringify({
@@ -259,6 +333,8 @@ function main() {
       packages: installed.rows,
       capabilities,
       jsonlLayout,
+      bareModules,
+      mount,
       blockers,
       warnings,
     }, null, 2))
@@ -281,6 +357,18 @@ function main() {
       : row.status === 'runtime-only' ? 'n/a '
       : row.status === 'absent-optional' ? 'n/a ' : 'FAIL'
     console.log(`  [${mark}] ${row.id.padEnd(26)} ${row.kind.padEnd(5)} ${row.detail}`)
+  }
+  console.log('')
+  console.log('runtime-required host modules (bare names the plugin resolves at runtime):')
+  for (const row of bareModules.rows) {
+    console.log(`  [${row.resolved === null ? 'WARN' : 'ok  '}] ${row.package.padEnd(46)} ${row.resolved ?? 'not resolvable from the host'}`)
+  }
+  console.log('')
+  console.log('plugin mount heartbeat:')
+  console.log(`  [${mount.status === 'ok' ? 'ok  ' : mount.status === 'never' ? 'n/a ' : 'WARN'}] ${MOUNT_HEARTBEAT_FILE}`)
+  console.log(`         ${mount.detail}`)
+  if (Array.isArray(mount.injects) && mount.injects.length !== 0) {
+    console.log(`         declared inject services: ${mount.injects.join(', ')}`)
   }
   console.log('')
   console.log('official JSONL session layout (hard-coded by the history adapter):')

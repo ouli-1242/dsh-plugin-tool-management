@@ -6,9 +6,18 @@
 # Double-mount guard: inspect raw options only. Entry.disabled is a computed
 # getter and reading it from another disabled expression can recurse at boot.
 #
+# Why the IIFE + try/catch: this expression is evaluated by the host at EVERY
+# boot (`cordis-plugin-loader` Entry.disabledOf → evaluate → new Function+eval),
+# and that call chain has no protection of its own. It reads host-internal
+# shapes (ctx.loader.entries(), e.options.{id,name,disabled}), while the peer
+# range on cordis carries no upper bound — so an upstream shape change would
+# otherwise throw on the boot path, where the only outcomes are "DSH does not
+# start" or "this row never mounts". An error therefore means `false` (not
+# disabled → stay mounted), never a throw.
+#
 # The optional subagent spawn provider is resolved at runtime by the subagent
 # service; an unavailable optional package must not prevent the host from booting.
 - insert:
     - id: dsh-plugin-tool-management
       name: 'dsh-plugin-tool-management'
-      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.id !== 'dsh-plugin-tool-management' && e.options.name === 'dsh-plugin-tool-management' && e.options.disabled !== true && typeof e.options.disabled !== 'object')"
+      disabled: !!js "(function () { try { return [...ctx.loader.entries()].some((e) => e.options.id !== 'dsh-plugin-tool-management' && e.options.name === 'dsh-plugin-tool-management' && e.options.disabled !== true && typeof e.options.disabled !== 'object') } catch (err) { return false } })()"

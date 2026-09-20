@@ -365,6 +365,10 @@
         try { fn() } catch (e) { /* 单个订阅者出错不影响其它 */ }
       }
     }
+    /** 兼容页「功能总览」的行内跳转：跳到该功能所在的页签（注册表在 ToolsSection 里，见上）。 */
+    function jumpToTab(tab) {
+      try { if (navigateToTab) navigateToTab(tab) } catch (e) { /* 跳转失败不影响本页 */ }
+    }
     function consumeTokenFocus() {
       const pending = tokenFocusPending
       tokenFocusPending = false
@@ -402,9 +406,14 @@
       routes.archive = ok('workspace.archive-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
       routes.unarchive = ok('workspace.unarchive-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
       routes.batch = ok('workspace.batch-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
+      // 与服务端 OPERATION_ROUTES 同源（src/compat/probe.ts）：
+      //   · delete 不要求 `projection.delete-native` —— 宿主自带删除屏障是可选槽位，
+      //     要求它会把 rc.2 上的删除显示成不可用（服务端有意不要求）；
+      //   · 但要求 `projection.table-delete` —— 那是运行时的硬前提（表不可删就没法安全删行）。
       routes.delete = ok('workspace.delete-native') ? 'native'
         : (ok('workspace.enqueue') && ok('workspace.set-state') && ok('workspace.index-header')
-          && ok('sessions.detach-live') && ok('sessions.cold-announce') && ok('projection.delete-native') ? 'adapter' : 'none')
+          && ok('sessions.detach-live') && ok('sessions.cold-announce') && ok('projection.write')
+          && ok('projection.table-delete') ? 'adapter' : 'none')
       return routes
     }
 
@@ -420,6 +429,8 @@
       const [live, setLive] = React.useState(null)
       const [liveOpen, setLiveOpen] = React.useState('')
       const [liveCopied, setLiveCopied] = React.useState(false)
+      // 功能总览（B6）：按功能点看"现在到底能不能用"。数据来自 feature-overview（只读聚合）。
+      const [features, setFeatures] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState(null)
       // 访问令牌（用户裁定 2026-09-18：入口放兼容页）。它不属于"宿主体检"，但**必须有一个
@@ -657,6 +668,13 @@
           .then(function (r) { if (alive !== false && r && r.ok) setLive(r) })
           .catch(function () { /* 读不到 → 不渲染这一节 */ })
       }
+      // 功能总览（B6）：服务端按功能点聚合（装配层 + 宿主能力层 + 用户配置层）。
+      // 它是只读的派生视图，取不到就不渲染这一节，绝不影响上面那条结论。
+      const loadFeatures = function (alive) {
+        apiCall('feature-overview', {})
+          .then(function (r) { if (alive !== false && r && r.ok) setFeatures(r) })
+          .catch(function () { /* 同上 */ })
+      }
       React.useEffect(function () {
         let alive = true
         setBusy(true)
@@ -666,6 +684,7 @@
         loadReach(alive)
         loadInject(alive)
         loadLive(alive)
+        loadFeatures(alive)
         loadToken(alive)
         loadBackups(alive)
         return function () { alive = false }
@@ -678,6 +697,7 @@
         loadReach(true)
         loadInject(true)
         loadLive(true)
+        loadFeatures(true)
         loadToken(true)
         loadBackups(true)
       }
@@ -1194,6 +1214,41 @@
               : (usableCount === findings.length ? t('compat.caps.all') : t('compat.caps.substituted')),
             blockedCount > 0)))
 
+        // 版本栅栏（B3）：实际宿主与本插件验证过的版本不同时说出来 —— 否则"照旧版本的印象
+        // 判断"会让人把探测结果当成 bug。只提示、不拦（peer 保持无上界是既定决策）。
+        const hostVersion = (data.host && data.host.version) || ''
+        if (hostVersion && data.verifiedVersion && hostVersion !== data.verifiedVersion) {
+          push(React.createElement('p', { className: 'dsm-help' },
+            t('compat.host.mismatch')
+              .replace('{host}', String(hostVersion))
+              .replace('{verified}', String(data.verifiedVersion))))
+        }
+
+        // 功能总览（B6）：一行一个功能点，状态 = 装配层 + 宿主能力层 + 用户配置层 的合成
+        // （服务端聚合，见 feature-overview）。行可点，跳到该功能所在的页签。
+        if (features && Array.isArray(features.rows) && features.rows.length) {
+          push(section(t('compat.features'), t('compat.features.hint'),
+            React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+              features.rows.map(function (row) {
+                const cls = row.state === 'ok' ? 'dsm-compat-pill-ok'
+                  : (row.state === 'disabled' || row.state === 'locked') ? ''
+                    : 'dsm-compat-pill-warn'
+                return React.createElement('div', {
+                  className: 'dsm-compat-mod-row' + (row.tab ? ' dsm-compat-row-link' : ''),
+                  key: row.key,
+                  role: row.tab ? 'button' : undefined,
+                  tabIndex: row.tab ? 0 : undefined,
+                  onClick: row.tab ? function () { jumpToTab(row.tab) } : undefined,
+                },
+                  React.createElement('span', { className: 'dsm-compat-name' }, row.label),
+                  React.createElement('span', { className: 'dsm-compat-pill ' + cls },
+                    t('compat.feature.state.' + String(row.state || 'unknown'))),
+                  React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
+                    React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')),
+                    row.detail))
+              }))))
+        }
+
         // 阻塞项放最前：这是唯一"必须动手"的东西。
         if (blockers.length) {
           push(section(t('compat.blockers'), null,
@@ -1230,6 +1285,7 @@
                   React.createElement('span', { className: 'dsm-compat-pill dsm-compat-pill-warn' },
                     item.fallback === 'native-entry' ? t('compat.fallback.native')
                       : item.fallback === 'refuse-operation' ? t('compat.fallback.refuse')
+                      : item.fallback === 'inform-only' ? t('compat.fallback.inform')
                       : t('compat.fallback.blocked')),
                   React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
                     React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')),

@@ -31,7 +31,7 @@
  */
 
 import { createRequire } from 'node:module'
-import { readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** Packages whose physical module identity matters to this plugin. */
@@ -69,13 +69,18 @@ export interface CapabilityFinding {
   readonly label: string
   readonly kind: 'read' | 'write' | 'delete'
   /** Which host service the capability lives on. */
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence'
+  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'plugin'
   readonly state: CapabilityState
   /** What can be done without this capability. */
   readonly fallback:
     | 'native-entry'      // an official entry point covers it
     | 'refuse-operation'  // routeFor() returns `none`: the operation is refused, not degraded
     | 'disable-destructive' // the button is disabled with an explanation
+    /**
+     * 只上报、不拦路：功能照常，少的是一道保险（如补丁写入的解析校验不可用）。
+     * 界面据此显示「不影响写入」，而不是「相关按钮已禁用」——后者是一句假话。
+     */
+    | 'inform-only'
   /** One line a user can act on. */
   readonly detail: string
   /** Members that were absent, when state is missing-member. */
@@ -301,7 +306,10 @@ interface CapabilitySpec {
   readonly id: string
   readonly label: string
   readonly kind: 'read' | 'write' | 'delete'
-  readonly owner: CapabilityFinding['owner']
+  // 这里不写 `CapabilityFinding['owner']`：那张表的 owner 还允许 `'plugin'`（运行时上报的行，
+  // 如补丁写入校验不可用），而宿主能力表只可能挂在宿主对象上 —— 写宽了会让下面的
+  // `targets: Record<CapabilitySpec['owner'], …>` 强制多出一个不存在的宿主对象。
+  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence'
   readonly fallback: CapabilityFinding['fallback']
   /** Required function members on the owning object's prototype. */
   readonly methods?: readonly string[]
@@ -490,6 +498,25 @@ const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     methods: ['write', 'put', 'requireTable'],
   },
   {
+    // B2：此前它只是 bridge 运行时那句拒绝里的**临时 id**（`acquireCacheGuard` 里现场拼的），
+    // 于是客户端压根不知道它 —— 宿主表不可删时，"路由说可用、点下去必拒"（V13）。提升为
+    // 能力表的正式条目后，路由判定与运行时前提同一份依据。
+    id: 'projection.table-delete',
+    label: '投影缓存行删除',
+    kind: 'delete',
+    owner: 'projectionCache',
+    fallback: 'disable-destructive',
+    // 探测内容就是运行时那句硬前提：`requireTable().delete` 在不在。
+    probe: (target) => {
+      if (typeof target?.requireTable !== 'function') return '宿主投影缓存缺少 requireTable'
+      let table: { delete?: unknown } | undefined
+      try { table = (target.requireTable as () => { delete?: unknown })() }
+      catch (error) { return `宿主投影缓存 requireTable() 抛错：${String(error)}` }
+      if (typeof table?.delete !== 'function') return '宿主投影缓存存储不支持安全删除（table.delete 缺失）'
+      return undefined
+    },
+  },
+  {
     id: 'projection.delete-native',
     label: '投影缓存删除屏障',
     kind: 'delete',
@@ -539,6 +566,10 @@ export const OPERATION_ROUTES = {
     adapter: [
       'workspace.enqueue', 'workspace.set-state', 'workspace.index-header',
       'sessions.detach-live', 'sessions.cold-announce', 'projection.write',
+      // B2：运行时硬前提（`table.delete`）也算一条路由要求 —— 不算进来的话，宿主表不可删时
+      // 路由说可用、点下去必拒。batch 的 adapter 路由**有意**保持只有 enqueue/set-state：
+      // 它的逐条失败会在结果里按 sessionId 报出来，此处不放宽也不收紧。
+      'projection.table-delete',
     ],
   },
   list: { native: [], adapter: ['workspace.read-state', 'workspace.read-table', 'workspace.index-shape'] },
@@ -814,16 +845,26 @@ export function assessHost(ctx: {
  * 调用方：从锚点解析不到的包会被判成 `same = null`，见 assessHost 里的 `unverified`。
  */
 function hostPackageRoot(): string | null {
+  // 与 doctor 的 `findHost` **同一套策略**（先看 `$DSH_HOME/profiles/node_modules/@deepseek-ai`，
+  // 再从插件自身位置逐级上溯，并确认那一层里真有 `dsh/package.json`）。此前运行时只按"插件
+  // 自己解析到的包"上溯，dev 布局下会把仓库里的副本当成宿主锚点、比出假的 `true` —— 于是
+  // 界面说 ok、doctor 说 SEPARATE COPY（V8）。两处口径分裂本身就是缺陷。
+  const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh')
+  const candidates: string[] = []
+  if (home !== '') candidates.push(join(home, 'profiles', 'node_modules', '@deepseek-ai'))
   for (const anchor of IDENTITY_PACKAGES) {
     const resolved = realPathOf(safeResolve(anchor))
     if (resolved === null) continue
     let dir = dirname(resolved)
-    for (let i = 0; i < 3; i += 1) {
-      if (dir.endsWith(join('node_modules', '@deepseek-ai'))) return dir
+    for (let i = 0; i < 4; i += 1) {
+      if (dir.endsWith(join('node_modules', '@deepseek-ai'))) { candidates.push(dir); break }
       const parent = dirname(dir)
       if (parent === dir) break
       dir = parent
     }
+  }
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
   }
   return null
 }

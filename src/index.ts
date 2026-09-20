@@ -12,6 +12,7 @@
 // artifact — same convention as DSH's own packages, which ship compiled JS).
 
 import type { Context } from '@deepseek-ai/cordis'
+import { symbols } from '@deepseek-ai/cordis'
 import { defineTool as hostDefineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -39,6 +40,8 @@ import {
 } from './context-inject.js'
 import { isApprovalNever } from './approval-policy.js'
 import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
+import { checkPatchWrite, takePatchGuardWarnings } from './compat/patch-dialect.js'
+import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 import { assessPresetReach, injectionFactsOf, presetRosterOf, readCompositionFacts, reachNoticeForAgent } from './compat/preset-reach.js'
 import { TOKEN_CODE_BAD, TOKEN_MSG, fenceRejection, secretOpRejection, type ConnectionSeam } from './http-fence.js'
 import { createMcpManager } from './mcp/manager.js'
@@ -193,9 +196,23 @@ function serializeTurns(turns: Array<{ role: 'user' | 'assistant'; text: string 
   return turns.map((t) => (t.role === 'user' ? '## User\n' : '### Assistant\n') + t.text).join('\n\n')
 }
 
+/**
+ * `inject` 的服务名清单（单一来源）：既声明给宿主，也是「挂载心跳」与 doctor 核对的内容。
+ *
+ * 为什么值得单列：任何一个名字被官方改名，本插件**根本不会 apply** —— 实测（2026-09-20，本仓库
+ * cordis）cordis 对未解析的 inject 既不抛错、不打日志、不发 warning，只把该 Fiber 停在非活动态。
+ * 那种情形下探测表 / 上报通道 / 兼容页**全都不存在**（失败域里一个信号都没有），本插件两次
+ * "宿主起不来"的历史事故也属于这一类。心跳文件是事后唯一的线索：doctor 读它 + 这份名单，
+ * 才能说清"插件这一轮没挂上，去核对这几个服务名"。
+ */
+export const INJECT_SERVICES = [
+  'timer', 'fs', 'settings', 'sandboxPolicy', 'webServer', 'tools', 'skills', 'sessions',
+  'agents', 'workspaceRegistry', 'sessionProjectionCache', 'sessionPersistence',
+] as const
+
 export default {
   name: 'dsh-plugin-tool-management-host',
-  inject: ['timer', 'fs', 'settings', 'sandboxPolicy', 'webServer', 'tools', 'skills', 'sessions', 'agents', 'workspaceRegistry', 'sessionProjectionCache', 'sessionPersistence'],
+  inject: [...INJECT_SERVICES],
   apply(ctx: DshContext, config?: Record<string, unknown>) {
     // 布局迁移必须**先于任何读盘**：hub 内的旧名（`agents-md/` → `prompts/` 等）与
     // `$DSH_HOME` 根下的插件侧车 / 日志 / patch 备份，都要在服务读它们之前搬到位。
@@ -243,6 +260,14 @@ export default {
       ctx.effect(() => skillsService.registerProviders(), 'dsh-plugin-tool-management: skills providers')
     } catch (e) {
       console.error('[dsh-plugin-tool-management] skills provider setup failed:', message(e))
+      // B3：技能 provider 没挂上 → 技能页与 agent 技能目录静默失效。此前只落 console。
+      noteRuntime({
+        id: 'skills-provider',
+        label: '技能 provider 装配',
+        kind: 'read',
+        fallback: 'inform-only',
+        detail: '技能 provider 装配失败（' + message(e) + '）：技能启用/停用与 agent 技能目录这一轮不生效。',
+      })
     }
 
     // ---------- 提示词预设库（hub/prompts/）+ 切换 ----------
@@ -699,8 +724,41 @@ export default {
       }, 'dsh-plugin-tool-management: context injection')
     } catch (e) {
       console.error('[dsh-plugin-tool-management] context injection setup failed:', message(e))
+      // B3：装配失败此前只落 console —— 用户界面上"注入块看起来正常、实际什么都没注入"。
+      noteRuntime({
+        id: 'context-injection',
+        label: '上下文注入通道',
+        kind: 'read',
+        fallback: 'inform-only',
+        detail: '注入通道装配失败（' + message(e) + '）：五个注入域的内容这一轮不会被送进模型。',
+      })
     }
     void readInjectSettings().catch(() => {})
+    // B3 挂载心跳：apply 真跑到了这里，就记一笔「本插件在这一刻挂上了、声明的是这 12 个服务名」。
+    // 官方改名 inject 服务名时插件**不会 apply**，界面上「连插件都不见了」—— 那时唯一的线索
+    // 就是这份心跳没更新。doctor 读 hub/mount.json 并打印，配合官方日志即可定论（实测见
+    // INJECT_SERVICES 的注释）。失败只记日志，绝不因为它挡住启动。
+    void writeJsonFile(hubPath('mount.json'), {
+      at: Date.now(),
+      iso: new Date().toISOString(),
+      version: PKG_VERSION,
+      injects: [...INJECT_SERVICES],
+    }).catch((e) => { ctx.logger?.warn?.('mount heartbeat write failed: ' + message(e)) })
+    // B3 符号断言：probe.ts 的 unwrap 用硬编码的 `Symbol.for('cordis.original')`，与 cordis
+    // 导出的 `symbols.original` 必须是同一个符号。不是的话，探针会把代理当原始对象、身份判定失真。
+    try {
+      if (Symbol.for('cordis.original') === (symbols as { original?: symbol }).original) {
+        clearRuntimeNote('cordis-original-symbol')
+      } else {
+        noteRuntime({
+          id: 'cordis-original-symbol',
+          label: 'cordis 原始对象符号',
+          kind: 'read',
+          fallback: 'inform-only',
+          detail: 'cordis 导出的 symbols.original 与 Symbol.for("cordis.original") 不是同一个符号：能力探测可能把代理当原始对象，身份判定会失真。',
+        })
+      }
+    } catch (e) { /* 拿不到 symbols 就跳过（探针自己也有一条退路） */ }
     // 预热放到下一轮事件循环：此时 apply 的同步初始化（补丁路径、tools 服务…）已全部完成，
     // 避免在初始化中途就去读 MCP 补丁与工具 schema。
     setTimeout(() => {
@@ -1165,8 +1223,13 @@ export default {
      */
     async function writePatch(abs: string, content: string): Promise<void> {
       const policy = await sandboxPolicy.resolve({ mode: 'danger-full-access' })
+      let previous = ''
+      try { previous = await readPatch(abs) } catch (e) { /* 读不到就没有基线，校验按「没有基线」判 */ }
+      // 写前校验（非对称策略，理由与三条分支见 compat/patch-dialect.ts 的文件头）：
+      // 只有「我们这次把产物改成了官方解析不了的样子」才拦；复刻过期 / 依赖缺失一律放行 + 上报。
+      const verdict = await checkPatchWrite(previous, content)
+      if (!verdict.allow) throw new Error(verdict.error)
       try {
-        const previous = await readPatch(abs)
         if (previous && previous !== content) await backupPatchFile(abs, previous)
       } catch (e) { /* a failed backup must never block the write */ }
       // 同目录临时文件 + rename 原子替换：进程中断/磁盘满最坏留下一个 .tmp 兄弟，
@@ -1182,6 +1245,20 @@ export default {
         await rm(temp, { force: true }).catch(() => undefined)
         throw e
       }
+    }
+
+    /**
+     * 写入回执的 warning 附着点：把本次请求里「补丁校验没做成」的结论挂在结果上。
+     *
+     * 口径与既有回执一致 —— `warning` 是**一个字符串**（MCP 域已有同款字段，界面按
+     * `mcp.msg.warn` 渲染）。原有 warning 保留，本插件的追加在后面，用「；」分隔。
+     */
+    function withPatchWarnings(result: any): any {
+      const warnings = takePatchGuardWarnings()
+      if (warnings.length === 0 || !result || typeof result !== 'object') return result
+      const extra = warnings.join('；')
+      if (typeof result.warning === 'string' && result.warning !== '') return { ...result, warning: result.warning + '；' + extra }
+      return { ...result, warning: extra }
     }
 
     // ---------- 访问令牌：宿主侧配置的读写（兼容页就地开关） ----------
@@ -1489,6 +1566,11 @@ export default {
         listPatchBackups,
         cleanPatchBackups,
         getContextInjectorLive: () => contextInjectorLive,
+        // 功能总览（B6）的三层合成：令牌实况与兼容页「访问令牌」同源；场景锁定与写门禁同源；
+        // 停用工具数读 mcp 的 TTL 缓存（无 I/O）。
+        readTokenState: async () => ({ active: TOKEN !== '', accepted: TOKEN !== '' && acceptedThisBoot() }),
+        lockedSceneNames: () => lockedSceneNames(),
+        disabledToolCount: () => mcp.disabledToolCount(),
         message,
         compatLog,
       }),
@@ -2014,6 +2096,29 @@ export default {
     try {
       mcp.warmUp().catch(() => { /* side-car unavailable → no restrictions */ })
     } catch (e) { /* ignore */ }
+    // 可见性半边（B1）：官方 `tools.restrict()` 要求 **agent scope**，所以停用的工具要
+    // 逐个 agent 应用 —— 与技能侧同一套生命周期写法（`agent/created` / `agent/disposed`
+    // + 启动期扫一遍 `agents.list()`，见 skills/service.ts）。
+    if (typeof ctx.on === 'function') {
+      try {
+        ctx.effect(() => {
+          const stop = (ctx.on as (event: string, cb: (payload: any) => void) => (() => void) | void)('agent/created', (payload) => {
+            mcp.attachAgent(payload && payload.agent)
+          })
+          return typeof stop === 'function' ? stop : () => { /* noop */ }
+        }, 'dsh-plugin-tool-management: mcp visibility (agent created)')
+        ctx.effect(() => {
+          const stop = (ctx.on as (event: string, cb: (payload: any) => void) => (() => void) | void)('agent/disposed', (payload) => {
+            mcp.detachAgent(payload && payload.agent)
+          })
+          return typeof stop === 'function' ? stop : () => { /* noop */ }
+        }, 'dsh-plugin-tool-management: mcp visibility (agent disposed)')
+        const agents = typeof ctx.get === 'function' ? ctx.get('agents') as { list?: () => unknown[] } | undefined : undefined
+        if (agents && typeof agents.list === 'function') {
+          for (const agent of agents.list()) mcp.attachAgent(agent)
+        }
+      } catch (e) { /* agents 服务不可用 → 仅靠事件（与技能侧同一退路） */ }
+    }
     if (typeof tools.guard === 'function') {
       ctx.effect(() => tools.guard!((exec) => {
         try {
@@ -2207,7 +2312,7 @@ export default {
               // 设置 / 关闭令牌：同样就地处理（理由见 tokenConfigure 的注释 —— 也正因为不进
               // handlers，模型侧没有任何工具能间接关掉它）。
               if (op === 'token-configure') {
-                res.end(JSON.stringify(await tokenConfigure(payload.args || {}, tokenAccepted)))
+                res.end(JSON.stringify(withPatchWarnings(await tokenConfigure(payload.args || {}, tokenAccepted))))
                 return
               }
               // 「清除令牌」的配套：把「本次启动已验过」的闩重新挂上。没有它，解锁一次之后
@@ -2226,7 +2331,7 @@ export default {
                 return
               }
               const result = await fn(payload.args || {})
-              res.end(JSON.stringify(result === undefined ? { ok: true } : result))
+              res.end(JSON.stringify(withPatchWarnings(result === undefined ? { ok: true } : result)))
             } catch (e) {
               res.end(JSON.stringify({ ok: false, error: message(e) }))
             }

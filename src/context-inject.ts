@@ -72,6 +72,7 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { PresetInjectionFacts } from './compat/preset-reach.js'
+import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 
 /** 可注入的域（界面上的五个勾选，顺序即界面与消息顺序）。 */
 export type InjectDomainKey = 'memory' | 'mcp' | 'skills' | 'subagents' | 'prompt'
@@ -562,6 +563,39 @@ function kindOfMessage(message: unknown): string | undefined {
   return source && typeof source.kind === 'string' ? source.kind : undefined
 }
 
+// B4：关域拦截的**顺序自检**。官方那两条注入行与本插件同挂在这条瀑布上，拦截成立的剩余前提是
+// "本插件排在它们上游"（本插件用 `{ prepend: true }` 把自己钉在钩子表最前，所以真正还依赖的
+// 只剩一条：官方那两条仍用**默认 push** 方式注册）。这仍是非契约事实（见 pre-step 监听器里的
+// 注释）。官方哪天改成 prepend 抢到更前面，症状就是「关了域、模型还是收到内容」，且**完全没有
+// 报错**。这里做最轻的自检：关域生效期间连续 N 个真实 turn 一条都没剔到，就上报一次；
+// 剔到过就收掉那条上报。如实写清两种可能（顺序变了 / 官方这一轮本来没内容），
+// 不把它说成一定是事故。
+const SUPPRESSION_SUSPECT_TURNS = 5
+
+function suppressionVerdict(active: boolean, dropped: number, counter: { turns: number; drops: number }): void {
+  if (!active) {
+    counter.turns = 0
+    counter.drops = 0
+    clearRuntimeNote('official-suppression')
+    return
+  }
+  counter.turns += 1
+  counter.drops += dropped
+  if (counter.drops > 0) {
+    counter.turns = 0
+    clearRuntimeNote('official-suppression')
+    return
+  }
+  if (counter.turns < SUPPRESSION_SUSPECT_TURNS) return
+  noteRuntime({
+    id: 'official-suppression',
+    label: '官方注入的关域拦截',
+    kind: 'read',
+    fallback: 'inform-only',
+    detail: `关掉的注入域已连续 ${counter.turns} 轮没有拦到任何官方消息（自检）：可能是瀑布注册顺序变了导致拦截失效，也可能是官方那两条注入行这几轮本来就没有内容。可到「注入实况」对照模型实际收到的内容。`,
+  })
+}
+
 /** 实况展示用的 kind 表：本插件的五条 + 官方两条。 */
 const LIVE_KINDS: ReadonlyMap<string, KindMapping> = new Map([
   ...PLUGIN_KINDS,
@@ -775,6 +809,18 @@ export function createContextInjector(deps: ContextInjectorDeps): {
   }
   const ctx = deps.ctx
   if (!ctx || typeof ctx.on !== 'function') return { dispose: () => {}, live, noteToolUse }
+  /** B4 自检计数（每个注入器实例各自一份，随实例销毁而消失）。 */
+  const suppressionCounter = { turns: 0, drops: 0 }
+  // `{ prepend: true }` —— 位置**必须**钉在钩子表最前，理由见 `next()` 之后那段注释
+  // （关域拦截只在上游成立）。这里不靠"谁先注册"：cordis 的 Loader 是**并发**挂载条目的
+  // （`await Promise.allSettled(config.map((options) => this.create(options)))`，
+  // cordis-plugin-loader/lib/index.js），每个官方包 apply 的完成先后由模块导入与 IO 决定，
+  // 逐次启动都可能不同；本插件的条目又是补丁层 `insert` 推到条目列表**末尾**的
+  // （dsh-app-boot/lib/index.js：顶层 insert 走 `data.push(...insert)`）。
+  // 2026-09-20 实测到那次翻转：关掉技能 / 提示词域后，官方注入照旧进上下文。
+  // `prepend` 由 cordis `EventsService.register()` 实现（`hooks[options.prepend ? 'unshift' : 'push']`），
+  // 于是不论挂载先后，本插件都排在官方那两条**默认 push** 注册的注入行之前 ——
+  // 顺序从"竞态"变成"约定"。
   const stop: unknown = ctx.on('agent/pre-step', async (payload: any, next: () => Promise<any>) => {
     // 令牌门禁在**最前面**：没验过令牌时这一轮整个不放行，`next()` 都不必跑（后面那些注入
     // 本来就是给模型看的，模型这一步根本不会被调用）。宿主据此把 turn 收成 `blocked`。
@@ -802,16 +848,26 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // 边界说明：这不是改官方包、也不是改宿主机制 —— pre-step 的 decision 本来就是每个插件
       // 都能改的那条缝（官方自己就在这里追加消息），我们只把它剔出这一步的批次。代价是官方
       // 插件每一步都会重新渲染并尝试注入（它的历史读的是会话事件，读不到被拦下的那条），
-      // 模型侧不受影响。位置在本监听器 `next()` 之后：本插件在这条瀑布里位于官方之前
-      // （自己的消息总落在批次末尾，实测），所以官方这一步追加的消息在这里看得见。
+      // 模型侧不受影响。
+      // **为什么 `prepend` 是必需的**：官方那两条注入行都在 `await next()` **之后**才往
+      // `decision.messages` 里追加（dsh-tool-skill 末尾 `[...decision.messages, catalog]`；
+      // dsh-agent-instructions `toSpliced(lastClaimedIndex + 1, 0, desired)`），而瀑布的
+      // `next()` 只做"取钩子表的下一个"。所以只有排在他们**上游**的监听器，其 `next()`
+      // 返回时才看得见这些追加 —— 本插件的过滤在 `next()` 之后，位置必须在上游。
       const suppressedKinds = officialKindsToSuppress(settings)
       let messages: readonly unknown[] = messagesOf(decision)
       if (suppressedKinds.size > 0) {
+        let dropped = 0
         const kept = messages.filter((message) => {
           const kind = kindOfMessage(message)
-          return kind === undefined || !suppressedKinds.has(kind)
+          if (kind !== undefined && suppressedKinds.has(kind)) { dropped += 1; return false }
+          return true
         })
         if (kept.length !== messages.length) messages = kept
+        // B4 自检：只有"这一步真的在拦"时才有意义（令牌门禁 reject、空 turn 早退都在上面）。
+        suppressionVerdict(true, dropped, suppressionCounter)
+      } else {
+        suppressionVerdict(false, 0, suppressionCounter)
       }
       const facts = await deps.factsFor(agent)
       const sections = selectInjections(domains, settings, facts, agent)
@@ -876,9 +932,13 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       log('context injection failed: ' + String((error && (error as Error).message) || error))
       return decision
     }
-  })
+  }, { prepend: true })
   return {
-    dispose: () => { try { if (typeof stop === 'function') (stop as () => void)() } catch { /* ignore */ } },
+    dispose: () => {
+      try { if (typeof stop === 'function') (stop as () => void)() } catch { /* ignore */ }
+      // 注入通道没了，自检结论也失效（B4）——留着会让兼容页报一件不存在的事。
+      clearRuntimeNote('official-suppression')
+    },
     live,
     noteToolUse,
   }

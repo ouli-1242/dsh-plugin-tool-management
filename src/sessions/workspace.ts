@@ -5,8 +5,27 @@ import { hubPath } from "../hub.js";
 import { sessionDir } from "@deepseek-ai/dsh-spill-local";
 import { trackTombstone } from "./tombstone.js";
 import type { CapabilityRefusal } from "../compat/probe.js";
+import { noteRuntime } from "../compat/runtime-notes.js";
 import type { SessionHeader } from "@deepseek-ai/dsh-session";
 import type { Context } from "@deepseek-ai/cordis";
+
+/**
+ * A3-1：宿主补上了原生删除入口时上报一次（**不切换**，理由见 deleteSessionCore）。
+ *
+ * 上报本身就够用：它说明「本插件适配的那个缺口已经被官方补上了」，人工核对过原生语义
+ * （级联 / spill / 记账 / 缓存行是否都覆盖）之后才谈切换。
+ *
+ * @param entry - 实际看到的是哪个原生入口（单删 / 批删），写进详情便于判断。
+ */
+function reportNativeDeleteAvailable(entry: "deleteSession" | "deleteArchivedSessions"): void {
+	noteRuntime({
+		id: "workspace.delete-native",
+		label: "宿主原生删除入口",
+		kind: "delete",
+		fallback: "inform-only",
+		detail: `宿主已提供原生 ${entry}：本插件仍走自有完整序列（级联子会话 + spill + 记账 + 缓存行），尚未切换到原生入口。`,
+	});
+}
 
 /** 会话头部里本文件按运行时守卫读取的字段。 */
 interface HeaderLike {
@@ -1142,22 +1161,10 @@ var ArchiveWorkspaceRegistry = class {
 	 * 后续目标并把成功、并发消失和失败分别返回给客户端。
 	 */
 	async deleteArchivedSessions(target: ArchivedBatchTarget) {
-		if (typeof this.registry.deleteArchivedSessions === "function") {
-			const result = await this.registry.deleteArchivedSessions(target);
-			await this.reconcileArchiveLedger();
-			return result;
-		}
+		// 与单删同一条纪律（A3-1）：宿主补上原生批量入口也**先不切换** —— 只上报。
+		if (typeof this.registry.deleteArchivedSessions === "function") reportNativeDeleteAvailable("deleteArchivedSessions");
 		// 适配路径（无宿主原生批量入口）：在任何会话被删除之前确认整条链路可用。
 		this.bridge.checkWorkspace("delete");
-		if (typeof this.registry.deleteSession === "function") {
-			const requestedSessionIds = this.archivedSessionIdsForTarget(target);
-			const result: ArchivedDeleteBatchResult = { requestedSessionIds, deletedSessionIds: [], skippedSessionIds: [], failures: [] };
-			for (const id of requestedSessionIds) {
-				try { await this.deleteSession(id); result.deletedSessionIds.push(id); }
-				catch (error) { result.failures.push({ sessionId: id, message: String(error) }); }
-			}
-			return result;
-		}
 		return this.enqueueOperation(async () => {
 			const requestedSessionIds = this.archivedSessionIdsForTarget(target);
 			// 批首取一次权威快照：批内每一条删除都要一次全库 `listStoredHeaders()`（含逐会话
@@ -1260,17 +1267,17 @@ var ArchiveWorkspaceRegistry = class {
 	 * @throws {@link ArchiveUnknownSessionError} 会话未知时抛出。
 	 */
 	async deleteSession(sessionId: string) {
-		if (typeof this.registry.deleteSession === "function") {
-			const result = await this.registry.deleteSession(sessionId);
-			await this.reconcileArchiveLedger();
-			return result;
-		}
+		if (typeof this.registry.deleteSession === "function") reportNativeDeleteAvailable("deleteSession");
 		return this.enqueueOperation(() => this.deleteSessionCore(sessionId));
 	}
 	/** 串行化后的删除主体（级联路径复用：它已持有操作链，绝不能再入队）。
 	 * @param storedIndex - 可选的批首 `id → header` 快照，见 {@link storedHeaderIndex}。 */
 	async deleteSessionCore(sessionId: string, storedIndex?: Map<string, SessionHeader>) {
-		if (typeof this.registry.deleteSession === "function") return this.registry.deleteSession(sessionId);
+		// A3-1（第 3 版改向）：宿主补上原生 `deleteSession` 时**先不切换** —— 原生分支跳过本插件
+		// 的级联删子会话 / spill 清理 / 记账清理，等于行为静默缩水；而"切过去的代码"今天不可达，
+		// 写成即等于它会在官方补上入口的那次升级上首次运行，且无从事前验证。保持自有完整序列
+		//（＝今天的能力），只上报一次「宿主已提供原生入口」，切换留到人工核对过原生语义之后。
+		if (typeof this.registry.deleteSession === "function") reportNativeDeleteAvailable("deleteSession");
 		if (this.deleting?.has(sessionId)) throw new Error(`cyclic subagent lineage at "${sessionId}"`);
 		this.deleting ??= new Set();
 		this.deleting.add(sessionId);
@@ -1300,6 +1307,15 @@ var ArchiveWorkspaceRegistry = class {
 		// 冷分支需要 enter/announce。缺失即在此停止，失败点不会落到链路中段。
 		const sessionRefusals = this.bridge.refusalsFor("delete", requiredSessionCapabilities(live !== void 0));
 		if (sessionRefusals.length > 0) throw new CapabilityRefusalError("delete", sessionRefusals);
+		// A3-2：转录清理（`removeTranscriptDirectory`）还要 `readSessionHeader` 与
+		// `persistence.locate()`，而它们排在「装屏障 → flush → detach → 清缓存行」**之后**。
+		// 缺任何一个，失败点都落在中段，留下"转录还在、记账已清"的半删态 —— 与上面
+		// `sessions.get` 同一条纪律：破坏性步骤之前先把实现检查完。
+		const headerRefusals = this.bridge.refusalsFor("delete", ["workspace.read-header"]);
+		if (headerRefusals.length > 0) throw new CapabilityRefusalError("delete", headerRefusals);
+		const persistence = this.ctx.get("sessionPersistence") as { locate?: unknown } | undefined;
+		if (persistence === void 0 || typeof persistence.locate !== "function")
+			throw new Error("宿主持久化后端未暴露 locate()（官方接口已变动）；操作在改动任何数据前停止，请更新本插件");
 		// 先记录被删生命周期的日志身份：目录删除后头部不可再读，
 		// 冷复用探针（sessionKnown 墓碑分支）靠它区分同 id 的新生命周期。
 		const deletedHeader = this.headers.get(sessionId) ?? live?.header;
@@ -1559,7 +1575,21 @@ var ArchiveWorkspaceRegistry = class {
 			}));
 			// 实体快照的形状由宿主 `WorkspaceEntity` 决定（`record` 是私有字段，运行时存在）。
 			const entity = this.entities.get(workspaceId) as { record?: unknown } | undefined;
-			if (entity !== void 0) entity.record = next;
+			if (entity === void 0) continue;
+			// A3-3：官方把 `record` 改名或改成只读访问器时，这一行会**静默无效** —— 界面读到旧
+			// 快照（会话计数不动），看起来却"什么都没发生"。写完立刻读回，没写进去就上报；
+			// 仍然照写（不因为探测而少做一次更新）。
+			let applied = false;
+			try { entity.record = next; applied = entity.record === next; } catch { applied = false; }
+			if (!applied) {
+				noteRuntime({
+					id: "workspace.entity-record",
+					label: "工作区实体快照更新",
+					kind: "write",
+					fallback: "inform-only",
+					detail: "工作区实体的 record 字段写不进去（宿主 WorkspaceEntity 形状可能已变）：实体快照可能停留在旧值，界面上的会话计数可能不刷新。",
+				});
+			}
 		}
 	}
 	/** 尽力而为的级联删除：删除 `sessionId` 的 SUBAGENT 子会话。

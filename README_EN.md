@@ -220,7 +220,9 @@ npm run check:i18n   # dictionary self-check
 npm run doctor       # host compatibility check
 ```
 
-`lib/` is not tracked — run `npm run build` after cloning. Changes need `dsh web` restarted. Runtime dep is only `fflate`; `@deepseek-ai/*` all come from the host.
+`lib/` is not tracked — run `npm run build` after cloning. Changes need `dsh web` restarted. Runtime deps: `fflate` (export bundling) and `js-yaml` (parse check before writing host patches, loaded lazily); `@deepseek-ai/*` all come from the host.
+
+> **Deployment note**: the profile mirror produced by `npm run build` does **not** include `node_modules`, so a runtime dependency added locally (e.g. `js-yaml`) must either be installed on the profile side or accepted as "patch-write check skipped and reported" — the missing checker only disables that one safety net, it never blocks writes. Regular `npm install` deployments are unaffected (dependencies are installed with the package).
 
 ## License
 

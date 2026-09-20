@@ -2,6 +2,7 @@ import { symbols, type Context } from "@deepseek-ai/cordis";
 import { workspaceDomainSpec } from "@deepseek-ai/dsh-workspace";
 import type { CheckpointIdentity } from "@deepseek-ai/dsh-session-projection-cache";
 import { assessHost, routeFor, refusalsFor, CapabilityRefusalError, type CapabilityRefusal, type HostAssessment, type OperationName, type RouteDecision } from "../compat/probe.js";
+import { noteRuntime } from "../compat/runtime-notes.js";
 
 export { CapabilityRefusalError };
 
@@ -49,6 +50,8 @@ interface CacheWriteWrappers {
 /** acquireCacheGuard 装配出的写屏障句柄形状。 */
 interface CacheGuard {
   users: number;
+  /** 包装器现在确实还装在这份宿主缓存上吗（第三方接管过就变 false）。 */
+  installed(): boolean;
   begin(id: string, header: CheckpointIdentity | null | undefined): void;
   clearTombstone(id: string): void;
   whenIdle(): Promise<void>;
@@ -92,8 +95,11 @@ const sameLifecycle = (a: CheckpointIdentity | null | undefined, b: CheckpointId
  * @throws {CapabilityRefusalError} when the cache cannot support a safe delete.
  */
 function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
-  let guard = cacheGuards.get(cache);
-  if (guard) { guard.users += 1; return guard; }
+  const existing = cacheGuards.get(cache);
+  // 复用前先验「装着的确实是我们的包装器」：release 时被第三方接管过的那条路会留下一个
+  // 「在册但没装」的 guard，复用它等于墓碑拦截静默失效（缓存行可能复活）。
+  if (existing && existing.users > 0 && existing.installed()) { existing.users += 1; return existing; }
+  if (existing) cacheGuards.delete(cache);
   const missing = ["put", "write", "requireTable"].filter((name) => typeof cache[name] !== "function");
   if (missing.length > 0) {
     throw new CapabilityRefusalError("delete", refusalsFor(
@@ -101,7 +107,25 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
       ["projection.write"],
     ));
   }
-  const table = cache.requireTable();
+  let table: ProjectionCacheTableLike;
+  try {
+    table = cache.requireTable();
+  } catch (error) {
+    // 安装期就抛：此刻还没动 put/write（不可能有半状态），但必须上报 —— 删除屏障没在岗。
+    noteRuntime({
+      id: "projection-cache-adapter",
+      label: "投影缓存删除屏障",
+      kind: "delete",
+      fallback: "inform-only",
+      detail: `投影缓存适配未完成（requireTable 抛错）：${String((error as Error)?.message ?? error)}；宿主对象未被改动。`,
+    });
+    throw new CapabilityRefusalError("delete", [{
+      id: "projection.table-delete",
+      label: "投影缓存行删除",
+      detail: `宿主投影缓存的 requireTable() 抛错：${String((error as Error)?.message ?? error)}`,
+      recovery: "请更新本插件到与本机 DSH 匹配的版本（先运行 node scripts/doctor.mjs 查看差异）。",
+    }]);
+  }
   if (typeof table?.delete !== "function") {
     throw new CapabilityRefusalError("delete", [{
       id: "projection.table-delete",
@@ -139,24 +163,39 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
       // Serialize puts with deletion; never erase a new lifecycle reusing id.
       return serial(id, async () => {
         if (isBlocked(id, expected)) return;
-        await originals.put.call(cache, id, expected, detached);
-        if (isBlocked(id, expected)) {
-          const stored = table.get(id);
-          if (stored && sameLifecycle(stored.identity, expected)) await table.delete(id);
+        try {
+          await originals.put.call(cache, id, expected, detached);
+          if (isBlocked(id, expected)) {
+            const stored = table.get(id);
+            if (stored && sameLifecycle(stored.identity, expected)) await table.delete(id);
+          }
+        } catch (error) {
+          // 形状变了才会是 TypeError（与本仓库探针同一条口径：受控 Error 不算适配失败）。
+          // 撤掉包装、绝不让宿主留在"半个包装器"状态下，并上报 —— 下一次删除会重装。
+          if (error instanceof TypeError) retire("failed");
+          throw error;
         }
       });
     },
     write(session) {
       // Track the flush await before put as well as put itself. Otherwise a
       // delayed write could outlive disposal and bypass the restored method.
-      try { return track(Promise.resolve(originals.write.call(cache, session))); }
-      catch (error) { return Promise.reject(error); }
+      let task: Promise<unknown>;
+      try { task = track(Promise.resolve(originals.write.call(cache, session))); }
+      catch (error) {
+        if (error instanceof TypeError) retire("failed");
+        return Promise.reject(error);
+      }
+      return task.catch((error) => { if (error instanceof TypeError) retire("failed"); throw error; });
     },
   };
   cache.put = wrappers.put;
   cache.write = wrappers.write;
-  guard = {
+  const self: CacheGuard = {
     users: 1,
+    // 两个都得是我们的才算"在岗"：只装着一个就等于另一半的写入不受墓碑约束（缓存行会复活）。
+    // 半个的情形由 acquire 的重建路径处理（覆盖掉那半个外来包装），并在退役时已上报过。
+    installed: () => cache.put === wrappers.put && cache.write === wrappers.write,
     begin(id, header) { blocked.set(id, header ?? null); },
     clearTombstone(id) { blocked.delete(id); },
     async whenIdle() { while (pending.size) await Promise.allSettled([...pending]); },
@@ -172,18 +211,47 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
       if (--this.users > 0) return;
       await this.whenIdle();
       if (this.users > 0) return;
-      let restored = true;
-      for (const name of ["put", "write"]) {
-        // Never overwrite a later third-party wrapper.
-        if (cache[name] !== wrappers[name]) { restored = false; continue; }
-        if (descriptors[name]) Object.defineProperty(cache, name, descriptors[name]);
-        else delete cache[name];
-      }
-      if (restored) { blocked.clear(); cacheGuards.delete(cache); }
+      const clean = restoreWrappers();
+      retire(clean ? "idle" : "taken-over");
     },
   };
-  cacheGuards.set(cache, guard);
-  return guard;
+  let retired = false;
+  /** 撤包装：第三方装了的话**不动它**（返回 false 表示没撤干净）。 */
+  function restoreWrappers(): boolean {
+    let clean = true;
+    for (const name of ["put", "write"]) {
+      // Never overwrite a later third-party wrapper.
+      if (cache[name] !== wrappers[name]) { clean = false; continue; }
+      if (descriptors[name]) Object.defineProperty(cache, name, descriptors[name]);
+      else delete cache[name];
+    }
+    return clean;
+  }
+  /**
+   * 退役这个 guard：摘出 WeakMap（之后 acquire 会重建）、撤包装、清墓碑；非正常退役要上报。
+   *
+   * 三种退役理由对应三条真实路径：`idle` = 引用归零的正常释放（不上报）；
+   * `taken-over` = 第三方在我们的包装器之上又包了一层（release 撤不干净，下次删除重建）；
+   * `failed` = 首次使用抛 TypeError（宿主形状变了，已恢复原方法）。
+   */
+  function retire(reason: "idle" | "taken-over" | "failed"): void {
+    if (retired) return;
+    retired = true;
+    if (cacheGuards.get(cache) === self) cacheGuards.delete(cache);
+    blocked.clear();
+    if (reason === "idle") return;
+    noteRuntime({
+      id: "projection-cache-adapter",
+      label: "投影缓存删除屏障",
+      kind: "delete",
+      fallback: "inform-only",
+      detail: reason === "taken-over"
+        ? "宿主缓存的 put/write 已被第三方包装接管：本插件的删除屏障这一轮已退役（缓存行删除少了墓碑拦截），下一次删除会重新安装。"
+        : "投影缓存适配在首次使用时抛错（宿主形状可能变了）：已恢复宿主原方法，下一次删除会重新安装并再探一次。",
+    });
+  }
+  cacheGuards.set(cache, self);
+  return self;
 }
 
 /**
@@ -325,7 +393,14 @@ export function createSessionsBridge(
         recovery: "请确认 DSH 版本并更新本插件到匹配版本。",
       }]);
       if (typeof cache.delete === "function" && typeof cache.whenIdle === "function") return;
-      guard ??= acquireCacheGuard(cache);
+      // 本地这份 guard 可能已经退役（第三方接管 / 首次使用抛错）：退役时已从 WeakMap 摘掉自己，
+      // 这里也得换掉它 —— 拿一个不在岗的屏障去挡墓碑，正是"缓存行静默复活"那条路。
+      const next = acquireCacheGuard(cache);
+      if (next !== guard) {
+        const previous = guard;
+        guard = next;
+        if (previous) await previous.release().catch(() => undefined);
+      }
       guard.begin(id, header);
     },
     cache() { return guard ?? cache; },

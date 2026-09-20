@@ -18,6 +18,8 @@
 // 其余 14 项（ensurePaths / withWriteLock / readPatch / pluginInventory / memoriesService 等）
 // 由 deps 显式传入。
 
+import { clearRuntimeNote, noteRuntime } from '../compat/runtime-notes.js'
+
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { MCP_CLIENT_MODULE } from '../host-names.js'
@@ -81,11 +83,19 @@ export interface McpManager {
   readPluginSettings(force?: boolean): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean }>
   /** 某工具全名是否在停用表里（读 TTL 缓存，无 I/O —— 工具门禁在热路径上）。 */
   isToolDisabled(name: string): boolean
+  /** 停用表里的工具条数（读 TTL 缓存；功能总览用）。 */
+  disabledToolCount(): number
   /** 启动预热：读一次停用表并应用工具可见性限制。 */
   warmUp(): Promise<void>
   /** 重排工具可见性（tools/change 后调用）。 */
   scheduleToolRestrictions(): void
-  /** 卸载清理：清掉重排定时器与 disposer。 */
+  /**
+   * 可见性半边要落在 agent scope 上（官方 `restrict()` 要求 scoped ctx）：
+   * agent 上线时登记并应用当前名单，下线时撤掉。
+   */
+  attachAgent(agent: unknown): void
+  detachAgent(agent: unknown): void
+  /** 卸载清理：清掉重排定时器与每个 agent 上的限制。 */
   dispose(): void
 }
 
@@ -518,11 +528,79 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
   }
 
-  // Visibility seam: keep one active restriction, refreshed whenever the tool
-  // set or the disabled set changes. `restrict` fails on unknown names, so the
-  // deny list is always intersected with the currently registered tools.
-  let restrictDisposer: (() => void) | null = null
+  // Visibility seam: keep one active restriction per **agent scope**, refreshed whenever
+  // the tool set or the disabled set changes. Three facts decide this design（都读过官方源码
+  // dsh-tools 0.1.5-rc.2）：
+  //   · `restrict()` **要求 scoped context** —— 插件级 ctx 调用必抛 "requires a scoped
+  //     context"，这正是「停用工具从模型可见 schema 消失」这半边此前从未生效的原因（V1）；
+  //   · 每次 layer 变化（restriction 就是一次 layer effect）官方都会 emit `tools/change`
+  //     （`layers = new ScopedLayers(…, () => this.ctx.emit("tools/change"))`），而重放正挂在
+  //     `tools/change` 上 —— 名单没变还重放就是自激；
+  //   · 表要取自**不受限**的插件级视图：在 agent scope 里取 `schemas()`，第一次限制生效后
+  //     表里就没有被停用的工具了，第二次重放会把它从 deny 名单里筛掉 —— 停用静默复活。
   let restrictTimer: ReturnType<typeof setTimeout> | null = null
+  /** 已应用名单的键；相同即返回（防自激，也让每次 tools/change 变成一次廉价判等）。 */
+  let appliedNamesKey: string | null = null
+  /** 当前期望的 deny 名单（agent 晚到 / 重放时用它）。 */
+  let desiredNames: string[] = []
+  /** agent → 撤掉这层限制的 disposer。 */
+  const agentRestrictions = new Map<unknown, () => void>()
+  /** 见过的 agent（重放时逐个重新应用；disposed 时移除）。 */
+  const seenAgents = new Set<unknown>()
+
+  function scopedToolsOf(agent: any): { restrict?: (filter: { deny?: readonly string[] }) => unknown } | undefined {
+    const scoped = agent && agent.ctx && agent.ctx.tools
+    return scoped && typeof scoped === 'object' ? scoped : undefined
+  }
+
+  /** 把当前名单装到某个 agent scope 上（空名单 = 没有要摘的工具，不碰它）。 */
+  function restrictAgent(agent: any): void {
+    if (desiredNames.length === 0) return
+    const scoped = scopedToolsOf(agent)
+    if (!scoped || typeof scoped.restrict !== 'function') {
+      // agent scope 上没有 tools 面（或它没有 restrict）：这半边做不成，如实说 ——
+      // 静默跳过会让人以为"停用工具从模型工具表里消失"已经生效。
+      noteRuntime({
+        id: 'mcp-tool-visibility',
+        label: '停用工具的可见性',
+        kind: 'write',
+        fallback: 'inform-only',
+        detail: 'agent scope 上没有可用的 tools.restrict（官方接口变了或该 scope 未暴露 tools）：停用的 MCP 工具仍会出现在模型可见的工具表里，执行侧拦截仍然生效。',
+      })
+      return
+    }
+    try {
+      const dispose = scoped.restrict({ deny: desiredNames })
+      agentRestrictions.set(agent, typeof dispose === 'function' ? dispose as () => void : () => {})
+      clearRuntimeNote('mcp-tool-visibility')
+    } catch (e) {
+      // 这个名字在这个 scope 里认不出 / scope 已经收了：可见性半边没生效。执行侧的 guard
+      // 仍然拦住调用，所以功能不缺 —— 但必须如实上报，不能假装成功（此前正是静默吞掉）。
+      noteRuntime({
+        id: 'mcp-tool-visibility',
+        label: '停用工具的可见性',
+        kind: 'write',
+        fallback: 'inform-only',
+        detail: '停用的 MCP 工具没能从模型可见的工具表里摘掉（' + message(e) + '）：执行侧拦截仍然生效，模型仍能看到该工具的名字。',
+      })
+    }
+  }
+
+  /** agent 上线（`agent/created` 或启动期的 agent 列表）：登记并立刻应用当前名单。 */
+  function attachAgent(agent: any): void {
+    if (!agent || (typeof agent !== 'object' && typeof agent !== 'function')) return
+    seenAgents.add(agent)
+    restrictAgent(agent)
+  }
+
+  /** agent 下线（`agent/disposed`）：先撤限制再销登记（撤限制会把 disposer 摘掉）。 */
+  function detachAgent(agent: any): void {
+    seenAgents.delete(agent)
+    const dispose = agentRestrictions.get(agent)
+    agentRestrictions.delete(agent)
+    if (dispose) { try { dispose() } catch (e) { /* ignore */ } }
+  }
+
   async function applyToolRestrictions(): Promise<void> {
     if (typeof tools.restrict !== 'function') return
     // Force re-read: this runs on the tools/change path, which is rare, so a
@@ -540,11 +618,17 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       for (const fullName of registered) if (fullName.startsWith(prefix)) wanted.push(fullName)
     }
     const names = wanted.filter((name) => registered.has(name))
-    if (restrictDisposer) { try { restrictDisposer() } catch (e) { /* ignore */ } restrictDisposer = null }
+    const key = names.join('\u0000')
+    if (key === appliedNamesKey) return
+    appliedNamesKey = key
+    desiredNames = names
+    // 每次重放先撤旧限制：名单变短（重新启用某个工具）时，只有撤掉这层限制它才会重新可见。
+    for (const [agent, dispose] of agentRestrictions) {
+      agentRestrictions.delete(agent)
+      try { dispose() } catch (e) { /* ignore */ }
+    }
     if (!names.length) return
-    try {
-      restrictDisposer = tools.restrict({ deny: names })
-    } catch (e) { /* registry race: the next tools/change event retries */ }
+    for (const agent of seenAgents) restrictAgent(agent)
   }
   function scheduleToolRestrictions(): void {
     if (restrictTimer) return
@@ -1518,7 +1602,10 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   /** 卸载清理（原 index.ts 的 cleanup effect 正文）。 */
   function dispose(): void {
     if (restrictTimer) { clearTimeout(restrictTimer); restrictTimer = null }
-    if (restrictDisposer) { try { restrictDisposer() } catch (e) { /* ignore */ } restrictDisposer = null }
+    // 插件卸载时把挂在每个 agent scope 上的限制都撤掉（否则那些 scope 会继续背着一层名单）。
+    for (const [, release] of agentRestrictions) { try { release() } catch (e) { /* ignore */ } }
+    agentRestrictions.clear()
+    seenAgents.clear()
   }
 
 
@@ -1551,8 +1638,17 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     mcpmRowsWithNotes,
     readPluginSettings,
     isToolDisabled: (name: string) => isToolDisabledIn(disabledToolsCache ? disabledToolsCache.value : {}, name),
+    /** 停用表里的工具条数（读 TTL 缓存；功能总览用）。 */
+    disabledToolCount: () => {
+      const map = disabledToolsCache ? disabledToolsCache.value : {}
+      let n = 0
+      for (const list of Object.values(map)) n += Array.isArray(list) ? list.length : 0
+      return n
+    },
     warmUp,
     scheduleToolRestrictions,
+    attachAgent,
+    detachAgent,
     dispose,
   }
 }

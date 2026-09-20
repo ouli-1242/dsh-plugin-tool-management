@@ -29,6 +29,8 @@ import { parseModeState } from '../lib/memories/service.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { createAccessToken } from '../lib/request-gate.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
+import { checkPatchWrite, decidePatchWrite, judgePatchText } from '../lib/compat/patch-dialect.js'
+import * as yaml from 'js-yaml'
 import { MASK_PLACEHOLDER, describeMaskedOutcome, isMaskedValue, maskedKeysIn, resolveMaskedKv } from '../lib/mcp/secret-guard.js'
 import { renderMcpStateSection } from '../lib/mcp/state-section.js'
 import { assessHost } from '../lib/compat/probe.js'
@@ -526,4 +528,82 @@ test('令牌的"本次启动验过"闩：只置位、不清零，门禁口径 = 
   // 没配令牌同理。
   const none = createAccessToken({ config: {} })
   assert.equal(none.TOKEN !== '' && !none.acceptedThisBoot(), false)
+})
+
+// A1：补丁写入前的解析校验。这里钉的是**判据**（官方那份方言判得动吗）与**非对称策略**
+// （只有"我们改坏的"才拦；复刻过期 / 依赖缺失一律放行 + 上报）—— 两者的实现细节都可以改，
+// 这三条口径不能改：改了就等于拿能力换保守，或者把"写坏 DSH 起不来"放过去。
+test('补丁方言判据：官方 schema 认得的就是认得，认不得的一律判「解析不过」', () => {
+  const ok = [
+    '[{"id": "mcp-a", "config": {"command": "npx"}}]',
+    '- id: mcp-a\n  disabled: !!js "ctx.loader !== undefined"\n',
+    '[]',
+  ]
+  for (const text of ok) assert.equal(judgePatchText(yaml, text).status, 'ok', text)
+  const bad = [
+    '- id: a\n  config:\n    command: npx\n    command: npx2\n',   // 重复键（官方解析器抛错 → DSH 起不来）
+    '- id: a\n  config: !Foo bar\n',                              // 未知 tag
+    '',                                                            // 空文件（官方：present 但不是数组 → 抛错）
+    'id: a\n',                                                     // 顶层不是数组
+    '- foo\n',                                                     // 项不是映射
+  ]
+  for (const text of bad) assert.equal(judgePatchText(yaml, text).status, 'unparseable', JSON.stringify(text))
+})
+
+test('补丁写入策略是非对称的：只拦「我们改坏的」，复刻过期 / 依赖缺失一律放行', () => {
+  const ok = { status: 'ok' }
+  const broken = { status: 'unparseable', detail: 'duplicated mapping key' }
+  const noDep = { status: 'no-dep', detail: 'cannot find module js-yaml' }
+  // 改前是好的、改后坏了 ⇒ 拦（这是我们引入的坏内容）。
+  const blocked = decidePatchWrite(ok, broken)
+  assert.equal(blocked.allow, false)
+  assert.ok(blocked.error && blocked.error.length > 0, '拒绝必须带一句能看懂的说明')
+  // 没有基线（文件不存在）也拦：写下去就是把 DSH 写坏。
+  assert.equal(decidePatchWrite(null, broken).allow, false)
+  // 改前本来就解析不过 ⇒ 复刻过期，放行 + 上报（绝不因为校验器过期而让写路径停摆）。
+  const outdated = decidePatchWrite(broken, broken)
+  assert.equal(outdated.allow, true)
+  assert.equal(outdated.report.kind, 'replica-outdated')
+  // 依赖缺失 ⇒ 放行 + 上报。
+  const missing = decidePatchWrite(ok, noDep)
+  assert.equal(missing.allow, true)
+  assert.equal(missing.report.kind, 'no-dep')
+  // 校验通过 ⇒ 放行、不上报（页面那一行也随之收掉）。
+  const fine = decidePatchWrite(ok, ok)
+  assert.equal(fine.allow, true)
+  assert.equal(fine.report, null)
+})
+
+test('checkPatchWrite 端到端：合法写入放行、把文件改成坏结构时拒绝', async () => {
+  const good = await checkPatchWrite('', '[{"id": "mcp-a"}]\n')
+  assert.equal(good.allow, true)
+  // 改前是好文件、改后是重复键 ⇒ 拒绝（正是「把 DSH 写坏」的那一次）。
+  const refuse = await checkPatchWrite('[{"id": "mcp-a"}]\n', '- id: a\n  config:\n    x: 1\n    x: 2\n')
+  assert.equal(refuse.allow, false)
+})
+
+// A4：发行物里那段 `!!js` 表达式**每次启动**都被宿主求值（cordis-plugin-loader
+// Entry.disabledOf → evaluate），那条调用链没有保护。这条测试钉的只有一件事：
+// 换任何形状的 ctx 它都返回布尔、绝不抛 —— 抛了就是"DSH 起不来"。
+test('发行物 cordis.patch.yml 的双挂载表达式：任何 ctx 下都返回布尔、绝不抛', () => {
+  const expr = /^ {6}disabled: !!js "(.*)"$/m.exec(readFileSync('cordis.patch.yml', 'utf8'))?.[1]
+  assert.ok(expr, '发行物里应当有那段 !!js 表达式')
+  // 与官方 evaluate 同形的求值器（new Function + with(ctx) + eval）。
+  const evaluate = new Function('ctx', 'expr', 'with (ctx) {\n  return eval(expr)\n}')
+  const cases = [
+    [{ loader: { entries: () => [] } }, false],
+    [{ loader: { entries: () => [{ options: { id: 'dsh-plugin-tool-management', name: 'dsh-plugin-tool-management' } }] } }, false],
+    [{ loader: { entries: () => [
+      { options: { id: 'dsh-plugin-tool-management', name: 'dsh-plugin-tool-management' } },
+      { options: { id: 'other-id', name: 'dsh-plugin-tool-management', disabled: false } },
+    ] } }, true],
+    [{ loader: undefined }, false],
+    [{}, false],
+    [{ loader: { entries: () => { throw new Error('shape changed upstream') } } }, false],
+  ]
+  for (const [ctx, expected] of cases) {
+    let got
+    assert.doesNotThrow(() => { got = evaluate(ctx, expr) }, JSON.stringify(ctx))
+    assert.equal(got, expected, JSON.stringify(ctx))
+  }
 })

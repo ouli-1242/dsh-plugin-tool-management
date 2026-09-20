@@ -220,7 +220,9 @@ npm run check:i18n   # 词典自检
 npm run doctor       # 宿主兼容体检
 ```
 
-`lib/` 不入版本库，克隆后先 `npm run build`。改完重启 `dsh web` 才生效。运行时依赖仅 `fflate`；`@deepseek-ai/*` 一律用宿主那份。
+`lib/` 不入版本库，克隆后先 `npm run build`。改完重启 `dsh web` 才生效。运行时依赖：`fflate`（导出打包）、`js-yaml`（写宿主补丁前的解析校验，惰性加载）；`@deepseek-ai/*` 一律用宿主那份。
+
+> **部署注意**：`npm run build` 的 profile 镜像清单**不含 `node_modules`**，所以本地联调时新增的运行时依赖（如 `js-yaml`）要么在 profile 侧装一份，要么接受「补丁写入校验跳过并上报」的降级 —— 校验器装不上只影响这一道保险，不阻断写入。`npm install` 装到 profile 的正式安装不受影响（依赖会随包安装）。
 
 ## 许可证
 
