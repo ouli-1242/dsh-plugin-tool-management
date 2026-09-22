@@ -57,7 +57,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
   }))
   register(defineTool({
     name: 'mcp_manager_set_enabled',
-    description: 'Enable or disable one configured MCP server (writes the patch file; takes effect via HMR).',
+    description: 'Enable or disable one configured MCP server (writes the patch file; hot-reloaded). Only when the user asks or approves.',
     parameters: {
       id: { type: 'string', required: true, description: 'Entry id of the MCP server, e.g. mcp-stepfun-web-search.' },
       level: { type: 'string', required: true, description: 'project or global.' },
@@ -77,7 +77,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
   }))
   register(defineTool({
     name: 'mcp_manager_restart',
-    description: 'Restart one configured MCP server (disable + re-enable; reconnect and re-sync tools).',
+    description: 'Restart one configured MCP server (disable + re-enable; reconnects and re-syncs tools). Only when the user asks or approves.',
     parameters: {
       id: { type: 'string', required: true, description: 'Entry id of the MCP server, e.g. mcp-stepfun-web-search.' },
       level: { type: 'string', required: true, description: 'project or global.' },
@@ -91,7 +91,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
   }))
   register(defineTool({
     name: 'mcp_manager_add',
-    description: 'Add a new MCP server (streamable-http or stdio) at project or global level.',
+    description: 'Add a new MCP server (streamable-http or stdio) at project or global level. Only on the user\'s explicit request.',
     parameters: {
       serverName: { type: 'string', required: true, description: 'Unique server name (1-32 chars, [A-Za-z0-9_-]).' },
       transport: { type: 'string', required: true, description: 'streamable-http or stdio.' },

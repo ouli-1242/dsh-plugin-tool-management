@@ -41,7 +41,7 @@ export function defineSubagentManagerListTool(subagents: {
 }) {
   return {
     name: 'subagent_manager_list',
-    description: 'List available personas (pre-configured subagent profiles) with their descriptions. The same catalog is injected into your context each turn (the「可委派的子智能体」system-reminder); call this tool before subagent_manager_run for the full, always-current list.',
+    description: 'List personas (pre-configured subagent profiles) with their descriptions. The「可委派的子智能体」reminder carries the same catalog; call this for the always-current full list before subagent_manager_run.',
     parameters: {} as const,
     output: {
       schema: { type: 'string' } as const,
@@ -86,7 +86,14 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
     // 「何时不用」那一段保留（2026-09-17，用户采纳的四条里的第 6 条）：参照 Claude Code 的
     // Agent 工具（`AgentTool/prompt.ts:232-240`），把"不该用"写成**带替代工具**的具体清单
     // （具体路径→Read；找定义→Grep/Glob），比笼统说"这个很贵"有用得多。
-    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output.\n\nTwo modes: by default the child starts fresh — it cannot see this conversation, so `task` must be self-contained. With `inherit: true` the child is seeded with this conversation\'s finished turns (the same mechanism as the host\'s `subagent_fork`), so `task` only states what is new — use it for follow-ups on work already completed. Only **finished** turns are inherited: a delegation made during the current turn inherits nothing from that turn, so a mid-turn hand-off still needs a self-contained `task`.\n\nWrite `task` as the goal plus the context it needs — do not prescribe method or output format: those belong to the persona.\n\nWhen to use: work that matches one of the personas in the「可委派的子智能体」system-reminder injected into your context (or from subagent_manager_list) — a review, a focused investigation, a piece of writing — where the detail does not belong in your own context. Work that matches a persona belongs here, not in the host\'s `subagent` / `subagent_fork`: those take no persona. Use them only when no persona fits, or when you need a background run (this tool waits for the result).\n\nWhen NOT to use: reading a specific file (use Read), finding a definition (use Grep/Glob), or touching two or three files (use Read directly).',
+    //
+    // 2026-09-23（用户裁定）：与官方两个委派工具的**分界规则**从描述里删掉 —— 注入通道的
+    // `how` 行（context-inject.ts 的 `DOMAIN_FRAME.subagents`）已经逐字说过一遍，而两份都在
+    // 每轮上下文里 = 同一件事付两次 token。留注入那份（它出现在"正在选工具"的那一刻）。
+    // 代价如实记下：子智能体域被关掉、或走压制型预设时上下文里没有那条 how 行，模型只剩本
+    // 描述与 `agent` 参数说明（"Persona name from subagent_manager_list"）—— 够它认出这条是
+    // 带人设的委派通道，但"没有人设贴合时才用官方那两个"这层分界就没人说了。
+    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the「可委派的子智能体」reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
     parameters: {
       agent: { type: 'string', required: true, description: 'Persona name from subagent_manager_list.' },
       task: { type: 'string', required: true, description: 'The task for the subagent: the goal plus the context it needs. Self-contained by default; with inherit: true it only needs to state what is new. Leave method and output format to the persona.' },

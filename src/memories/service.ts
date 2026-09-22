@@ -134,6 +134,11 @@ export interface Rule {
   pinned: boolean
   note: string
   updatedAt?: string
+  /**
+   * 正文文件在磁盘上的字节数（记忆是**直接吃注入预算**的那一域，128 KiB 上限按场景段算，
+   * 界面上此前却看不出哪条大）。读不到文件时不带这个字段 —— 0 与"不知道"必须能分开。
+   */
+  bytes?: number
   /** 同名 bundle 存在时被遮蔽的 flat（UI 标红，不参与投影）。 */
   shadowed?: boolean
   /**

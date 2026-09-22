@@ -34,7 +34,7 @@ import { filterBySceneBinding } from './tools.js'
  */
 export const DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH = 500
 /** 段里最多列几个人设；超出部分只报数量，让模型自己去调 subagent_manager_list。 */
-export const DEFAULT_CATALOG_MAX_ENTRIES = 60
+export const DEFAULT_CATALOG_MAX_ENTRIES = 50
 
 /** 无描述时的占位，与 `subagent_manager_list` 工具的输出保持同一口径。 */
 const NO_DESCRIPTION = '(无描述)'
@@ -72,6 +72,7 @@ export function renderSubagentCatalog(
   allowed: readonly PersonaDoc[],
   maxEntries: number = DEFAULT_CATALOG_MAX_ENTRIES,
   maxDescription: number = DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH,
+  listToolVisible: boolean = true,
 ): string {
   if (!allowed.length) return ''
   const sorted = [...allowed].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
@@ -86,13 +87,20 @@ export function renderSubagentCatalog(
   // 查询工具**只在真被 40 条上限截掉时**才出现：常态下不提，省常驻字符，也免得模型为了
   // 「确认一遍」去调它（用户裁定：没列出来的就是当前不想要的）。与 MCP 状态段的
   // `（另有 N 台未列出。）` 同一句式，但这里多给一个出口——不给人设就真的找不回来了。
-  if (hidden > 0) out.push('', `（另有 ${hidden} 个未列出，用 \`subagent_manager_list\` 查。）`)
+  if (hidden > 0) {
+    // 与技能目录同一条纪律：点名一个被关掉的工具只会让模型去猜名字。数量照报。
+    out.push('', listToolVisible
+      ? `（另有 ${hidden} 个未列出，用 \`subagent_manager_list\` 查。）`
+      : `（另有 ${hidden} 个未列出。）`)
+  }
   return out.join('\n')
 }
 
 export interface SubagentCatalogDeps {
   list(): Promise<PersonaDoc[]>
   sceneLists(): Promise<string[][]>
+  /** `subagent_manager_list` 还在模型工具表里吗（截断提示里那句话的前提）。默认在。 */
+  listToolVisible?: () => boolean
 }
 
 export interface SubagentCatalog {
@@ -173,6 +181,7 @@ export function createSubagentCatalog(
         allowed.filter((p) => catalogInjectedAt(p, depth)),
         maxEntries,
         maxDescription,
+        deps.listToolVisible ? deps.listToolVisible() : true,
       )
       rendered.set(depth, out)
       return out

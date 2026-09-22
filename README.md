@@ -74,7 +74,13 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 装完提醒我硬刷新浏览器。
 ```
 
-模型可用 14 个工具管理上述功能（`mcp_manager_*` / `skill_manager_*` / `prompt_manager_*` / `memory_manager_*` / `subagent_manager_*`）；脚本走 `POST /dsh-plugin-tool-management/api`（`{op, args}` 协议）。其中 `subagent_manager_list` / `subagent_manager_run` 依赖宿主已挂载 `dsh-subagent-*` provider 包，缺席时**不注册**（此时是 12 个，插件只写一条日志，界面不提示）。
+模型可用 20 个工具管理上述功能（`mcp_manager_*` / `skill_manager_*` / `prompt_manager_*` / `memory_manager_*` / `subagent_manager_*`）；脚本走 `POST /dsh-plugin-tool-management/api`（`{op, args}` 协议）。
+
+这 20 个工具的说明合计约 3,450 token，而工具表**每一轮请求都随工具发一遍**。用不上的可以在「兼容」页的**「模型工具表」**块里逐个关掉（也能按域全关）——关掉的整份不进请求，这是唯一真省 token 的办法。关掉之后模型调不到它，**面板不受影响**（114 个 op 与工具表互不相干）。默认一个都不关。
+
+另外有一个工具会**自动让位**：会话里已经挂了官方 `skill` 工具（标准类预设都挂）时，我们那个「按名字读技能正文」的 `skill_manager_read` 不再下发 —— 两份干的是同一件事。极简模式没有官方那件，我们的照旧留着。
+
+其中 `subagent_manager_run` 依赖宿主已挂载 `dsh-subagent-*` provider 包 —— 但**注册不依赖**它：provider 缺席时工具照样注册，是**调用那一刻**报「子代理服务未挂载（ctx.subagents 缺失）」（`src/subagents/service.ts` 的 `ensureProvider`）。另外四个（`_list` / `_set_enabled` / `_create` / `_update`）动的只是 hub 里的人设文件与启停名单，与 provider 无关，任何时候都该可用。真正的注册失败（宿主 API 变更等）会被逐个记下，随子智能体页的横幅与 `preset-tools` 的 `unavailable` 一起显示出来。
 
 ---
 
@@ -89,7 +95,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 - **「进/出模式」与「启用场景」是两个独立状态轴**：界面开关是唯一入口（两轴齐动）。绕过界面直接调 HTTP API 时要注意：`scene-mode-set{scene:null}` 只退运行时快照，**不清空启用集** —— 记忆与提示词仍按该场景注入；要彻底退出还需 `rules-set-active{scenes:[]}`。
 - **导入**：`.md` / `.zip`（目录名 = 场景，bundle 带附件），同名跳过绝不覆盖，超限逐条回报。
 - **导出**：勾选记忆打包成 zip，保留「场景/名称」层级；bundle 型连目录里的附件一起打进去。只读源文件。
-- **注入预算**：默认 256 KiB，放不下的跳过并列出清单。删除进回收站。
+- **注入预算**：默认 128 KiB，放不下的跳过并列出清单。删除进回收站。
 - **子代理会话不注入记忆**：记忆只在**顶层会话**注入 —— 它是"父会话的现场"，不是子代理完成任务所需的事实；子代理的上下文只留「角色 + 任务」，要记忆可用 `memory_manager_list/read` 自己取，相关事实应由父代理写进 `task`。其余域不受影响（MCP / 技能 / 提示词照常注入，人设目录按各自的 `catalogDepth`）。
 - **场景锁定**：锁定后 MCP / 技能 / 子智能体 / 记忆 / 提示词五个域的**增删改**整体只读，界面禁用 + 服务端守卫双侧拦截；未启动不能上锁，锁定中不能关闭，先解锁再改。**冻结的是"内容"，不是"场景本身"** —— 场景的新建 / 删除 / 改名 / 提示词绑定 / 启用切换 / 回收站的恢复与永久删除、MCP 重启、导出、注入设置与令牌设置都不在冻结清单内（它们不是"场景档案里的内容"）。其中「启用切换」在锁定场景正在生效时会被拒绝 —— 清空启用集合会让模型侧的写门禁失去判据（运行时却还是那个场景的档案态）。
 - **删除场景 = 连记忆一起删**：场景记录、档案与全部记忆进同一条回收站条目，恢复按原路径整条放回；使用中的场景拒绝删除。场景名可改（连带目录与档案，记忆正文不动）。
@@ -144,7 +150,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 插件运行期用宿主同一批 `@deepseek-ai/*` 库——必须是同一份物理模块，否则判断退化成猜。
 
-- **「兼容」页**：宿主版本、能力可用数、每个动作走原生/适配/不可用、降级项与原因。体检本身只读，但这一页有两个明确的写入口：**访问令牌**（写 profile 的 `cordis.patch.yml`，重启生效）与**注入设置**（写 `inject-settings.json`，即时生效）。
+- **「兼容」页**：宿主版本、能力可用数、每个动作走原生/适配/不可用、降级项与原因。体检本身只读，但这一页有三个明确的写入口：**访问令牌**（写 profile 的 `cordis.patch.yml`，重启生效）、**注入设置**（写 `inject-settings.json`，即时生效）与**模型工具表**（写 `tool-table.json`，即时生效）。
 - **命令行**：`node scripts/doctor.mjs`（体检）、`node scripts/host-deps.mjs --fix`（依赖对齐）、`npm run sync:profile`（把构建产物镜像到 profile 里那份本地安装 —— `file:` 装的是硬链接拷贝，构建新增的文件不会自动过去）。
 - `minimal` 这类**压制型预设**（persona `complete` / 关闭运行时上下文）下，本插件的注入**默认停用**（跟随预设的设计意图），提示词与技能也因官方那两行没挂而缺席 —— 兼容页逐列标出，同一页的「注入」块可以按域强制打开。
 - **关掉「技能」「提示词」的勾选 = 真的不再注入**：这两项在标准类预设下由宿主自己送（插件让位），所以取消勾选会**连宿主那份一起停掉**（`skill-catalog` / `agent-instructions` 的消息在这一步不再放行）。其余三项（记忆 / MCP / 子智能体）宿主本来就不送，勾选完全生效。
@@ -166,6 +172,8 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 记忆索引 / 场景 / 档案                      | `~/.dsh/tool-management/memories-index.json`                                       |
 | MCP 侧车（停用表 / 已知工具 / 备注 / 设置） | `~/.dsh/tool-management/mcp-*.json`                                                |
 | 注入设置（五个域开关 / 压制型预设口径）     | `~/.dsh/tool-management/inject-settings.json`                                      |
+| 模型工具表（不发给模型的工具）              | `~/.dsh/tool-management/tool-table.json`                                           |
+| 场景页界面设置（进场景前弹不弹预览卡）      | `~/.dsh/tool-management/scene-settings.json`                                       |
 | 运行日志 / patch 备份                       | `~/.dsh/tool-management/tool-management.log` · `backups/`                          |
 
 **插件安装目录里不存用户数据**（`dsh plugin update` 会整体替换该目录）。

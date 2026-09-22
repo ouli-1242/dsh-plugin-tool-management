@@ -476,6 +476,10 @@
                 React.createElement('div', { className: 'dsm-note' }, r.description || ''),
                 shadowed ? React.createElement('div', { className: 'dsm-rule-shadow-hint' }, t('memory.shadowed.hint')) : null),
               React.createElement('div', { className: 'dsm-tags' },
+                // 体积：记忆是唯一**直接吃注入预算**的域（场景段 128 KiB），此前页面上却
+                // 看不出哪条大 —— 一列字节数就是那一域的成本读数。宿主读不到文件时不带
+                // `bytes`，这里也就什么都不显示（而不是显示 0 B，那是个假数字）。
+                typeof r.bytes === 'number' ? React.createElement('span', { className: 'dsm-tag', title: t('memory.size.tip', { size: fmtBytes(r.bytes) }) }, fmtBytes(r.bytes)) : null,
                 r.group && r.group.indexOf('/') >= 0 ? React.createElement('span', { className: 'dsm-tag' }, r.group) : null,
                 r.form === 'bundle' ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.form.bundle')) : null,
                 attachTag(r, shadowed),
@@ -653,9 +657,12 @@
                   React.createElement('input', { className: 'dsm-control' + (editorNameInvalid ? ' dsm-rule-invalid' : ''), value: editor.name || '', placeholder: t('memory.field.name.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { name: e.target.value })) } }),
                   editorNameInvalid ? React.createElement('p', { className: 'dsm-rule-hint' }, t('memory.name.invalid')) : null),
                 React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.description')),
-                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: editor.description || '', placeholder: t('memory.field.description.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { description: e.target.value })) } }),
-                  React.createElement('div', { className: 'dsm-char-count' + (editorDescLen > 500 ? ' dsm-char-over' : '') }, editorDescLen + ' / 500')),
+                  // 字数计数与「描述」同一行、贴右缘（与 MCP 备注 / 人设与技能简介同款排版）——
+                  // 以前它单起一行落在输入框下面，看着像是另一个字段。
+                  React.createElement('div', { className: 'dsm-budget-meta' },
+                    React.createElement('span', { className: 'dsm-label' }, t('memory.field.description')),
+                    React.createElement('span', { className: 'dsm-char-count' + (editorDescLen > 500 ? ' dsm-char-over' : '') }, editorDescLen + ' / 500')),
+                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: editor.description || '', placeholder: t('memory.field.description.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { description: e.target.value })) } })),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.body')),
                   React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: editor.body || '', placeholder: t('memory.field.body.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { body: e.target.value })) } })),

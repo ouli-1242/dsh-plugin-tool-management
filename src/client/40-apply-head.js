@@ -348,7 +348,7 @@
             ? { kind: 'warn', text: mt('mcp.msg.warn', { warning: res.warning }) }
             : { kind: 'ok', text: mt('mcp.msg.ok') }
         )
-        const emptyForm = () => ({ serverName: '', transport: 'streamable-http', url: '', command: '', args: '', headers: '', env: '', level: 'global' })
+        const emptyForm = () => ({ serverName: '', transport: 'streamable-http', url: '', command: '', args: '', headers: '', env: '', level: 'global', note: '' })
         const kvToLines = (obj) => (obj ? Object.keys(obj).map((k) => k + '=' + obj[k]).join('\n') : '')
         // 级别筛选选项：必须在**渲染时**取词。原来写成模块级常量，apply() 早于 locale
         // 注册，导致英文界面下这四项永远显示中文（且再也翻不过来）。

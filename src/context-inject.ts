@@ -396,7 +396,7 @@ interface DomainFrame {
   /** 加粗的动作句：在哪个决策点该想起它。 */
   cue: string
   /** 补充动作（工具名 / 触发条件 / 边界）；正文已经说过的不要写。 */
-  how?: string
+  how?: string | ((toolHidden: (name: string) => boolean) => string | undefined)
   /** 权威声明：「最新一份才是权威」这条得逐域说清取代的是什么。 */
   supersede: string
 }
@@ -416,7 +416,11 @@ const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   skills: {
     title: '本机技能目录',
     cue: '需要某项能力时，先在这里找。',
-    how: '本预设没有官方 `skill` 工具：要正文用 `skill_manager_list` 取源文件路径再读；目录只有摘要，读完再照做。',
+    // 两句都只在预设没挂官方 `skill` 工具时出现，差别只在点名不点名那个取正文的工具
+    // （工具被用户在兼容页关掉时不点名 —— 点名一个模型手里没有的工具只会让它去猜名字）。
+    how: (toolHidden) => toolHidden('skill_manager_read')
+      ? '本预设没有官方 `skill` 工具：目录只有摘要，读完再照做。'
+      : '本预设没有官方 `skill` 工具：要正文用 `skill_manager_read`（按名字直接给正文与路径）；目录只有摘要，读完再照做。',
     supersede: '本份目录取代本次会话中更早注入的同类目录；只列当前可调用的技能。',
   },
   subagents: {
@@ -426,7 +430,11 @@ const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     // 委派工具（`subagent` / `subagent_fork`）不带人设，而此前没有任何一句话说明何时该
     // 用谁 —— 模型在"审查刚读过的 README"时选了 `subagent_fork`（fork 能继承已读内容、
     // 省一次复述）。现在人设通道也有 `inherit`（同一套 fork 机制），分界只剩"要不要后台跑"。
-    how: '贴合人设的任务一律用 `subagent_manager_run`（要它看到本次会话就开 `inherit`）；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。',
+    // 带人设的委派工具被关掉时改说"本会话没有这条通道"：不说的话，模型看到有人设目录却
+    // 找不到对应的工具，会去拿官方那两个凑（它们不接受人设，等于白跑一趟）。
+    how: (toolHidden) => toolHidden('subagent_manager_run')
+      ? '本会话没有带人设的委派工具；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。'
+      : '贴合人设的任务一律用 `subagent_manager_run`（要它看到本次会话就开 `inherit`）；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。',
     supersede: '本份目录取代本次会话中更早注入的同类目录。',
   },
   prompt: {
@@ -487,10 +495,11 @@ export function escapeFrameBody(body: string): string {
  *     同时把**正文也包进标记里**（此前只有引导语在标记内、正文裸奔）—— 官方两条注入行都是
  *     整条包住的，正文里的用户自由文本更需要这层来源标记。
  */
-export function renderDomainText(section: InjectSection): string {
+export function renderDomainText(section: InjectSection, toolHidden: (name: string) => boolean = () => false): string {
   const frame = domainFrame(section.key, section.label)
   const lines = [FRAME_OPEN, `## ${frame.title}`, `**${frame.cue}**`]
-  if (frame.how !== undefined) lines.push(frame.how)
+  const how = typeof frame.how === 'function' ? frame.how(toolHidden) : frame.how
+  if (how !== undefined) lines.push(how)
   lines.push(frame.supersede, '', escapeFrameBody(section.text), FRAME_CLOSE)
   return lines.join('\n')
 }
@@ -654,12 +663,20 @@ export interface ContextInjectorDeps {
    * 未配置令牌时该回调恒为 false，行为与从前完全一致。
    */
   tokenGateActive?: () => boolean
+  /**
+   * 兼容页「模型工具表」关掉的工具名（同步快照，读 TTL 缓存）。
+   *
+   * 只为一件事：`how` 行里点名工具的那几句在工具被关掉后就是假的（"用 `skill_manager_read`
+   * 拿正文"—— 模型手里没有这个工具）。关掉的不点名，其余照旧。框架文本变了会当成"内容变了"
+   * 重发一次，这是正确行为（模型上下文里那份确实已经不准确了）。
+   */
+  hiddenTools?: () => ReadonlySet<string>
   /** 诊断用（默认 console.error）。 */
   logger?: (message: string) => void
 }
 
 /**
- * 一个域的**采纳**统计（本进程运行以来，不是会话历史）。
+ * 一个域的**采纳**统计（**这一段对话**的，不是进程累计，也不是会话历史）。
  *
  * 为什么要它：「注入实况」此前只能答"内容到没到"，答不了"模型用没用" —— 勾了开关、
  * 正文也在上下文里，但从头到尾没伸手，界面上和"用了"长得一模一样。有了这三个数，
@@ -694,7 +711,7 @@ export interface LiveInjectionDomain {
   state: 'in-context' | 'cleared' | 'official' | 'off' | 'empty' | 'absent' | 'child' | 'unknown'
   bytes: number
   text: string
-  /** 采纳统计（本进程累计；与 `state` 无关，那个是"现在"，这个是"一直以来"）。 */
+  /** 采纳统计（这一段对话的；与 `state` 无关，那个是"现在"，这个是"这段对话以来"）。 */
   adoption: LiveAdoption
 }
 
@@ -702,16 +719,35 @@ export interface LiveInjectionDomain {
 export interface LiveInjectionSnapshot {
   /** 是否记住了最近活跃的会话（WeakRef 被回收或从未收到 pre-step → false）。 */
   hasAgent: boolean
-  /** 本次进程运行以来的投递统计（不是会话历史；重启后归零）。 */
+  /** **最近那一段对话**的投递统计（换会话即换一份；重启后归零）。 */
   delivered: { count: number; lastAt: number | null; byDomain: Record<string, number> }
   /**
-   * 本次进程观测到的本插件工具调用（采纳遥测的观测面）。
+   * **最近那一段对话**里观测到的本插件工具调用（采纳遥测的观测面）。
    *
    * 为什么单列：`adoption[*].used` 全是 0 时，必须能分清"模型真的没用"和"遥测没接上"
    * —— 前者是结论，后者是故障。`observed` 记的是"观测到多少次工具调用"，
    * 只要它不为 0，`used = 0` 就是可信的结论。
    */
   observed: { toolCalls: number; lastAt: number | null }
+  /**
+   * 成本视图（**最近那一段对话**的累计；换会话或重启都归零）。
+   *
+   * 为什么要它：每域的字节与投递次数此前**分开**报，谁也答不出"钱花在哪"——
+   * 一域 200 KB × 投 30 次，与一域 8 KB × 投 30 次，在界面上长得一模一样。
+   *
+   * 口径是**近似**：`injectedBytes` 拿「该域当前正文 × 该域投递次数」估，中途改过内容的话，
+   * 历史那几次投的不是现在这个体积。它答的是"哪个域在吃预算"，不是一张账单。
+   */
+  cost: {
+    /** 当前在上下文里的那几域正文合起来的字节（＝一份的体量）。 */
+    liveBytes: number
+    /** 这段对话累计投进上下文的字节（近似，见上）。 */
+    injectedBytes: number
+    /** 累计里占比最大的域；一次都没投过为 `null`。 */
+    topDomain: { key: InjectDomainKey; label: string; bytes: number } | null
+    /** 投递次数最多的域（"重发最多"）；没投过为 `null`。 */
+    mostDelivered: { key: InjectDomainKey; label: string; count: number } | null
+  }
   domains: LiveInjectionDomain[]
 }
 
@@ -742,11 +778,35 @@ export function createContextInjector(deps: ContextInjectorDeps): {
   // 最近活跃的会话（WeakRef：诊断用，不阻止会话被回收）。每次 pre-step 都刷新 ——
   // 包括"空 turn 提前返回"和"这一步没有内容可发"的分支，页面才能如实说"没投过"。
   let lastAgent: WeakRef<object> | null = null
-  const delivered = { count: 0, lastAt: null as number | null, byDomain: {} as Record<string, number> }
-  // 采纳遥测：每个域一份计数 + 全局观测面。
-  const adoption = {} as Record<InjectDomainKey, LiveAdoption>
-  for (const key of INJECT_DOMAIN_KEYS) adoption[key] = { injected: 0, used: 0, adopted: 0, lastUsedAt: null }
-  const observed = { toolCalls: 0, lastAt: null as number | null }
+  /**
+   * 一次对话的注入账本（投递 / 采纳 / 观测三组计数）。
+   *
+   * 为什么按**会话**记而不是按进程累加（2026-09-22 用户裁定）：进程级的那份把今天所有
+   * 对话混在一个数字里 —— 「注入 8 次 · 从未调用」说的其实是"这台机器开机以来"，
+   * 而用户看这块面板时问的是"我眼前这一段对话里模型用没用"。两个问题差得很远，
+   * 前者几乎永远读不出可行动的结论。会话身份本来就有（下面的 `liveDomainsByAgent`
+   * 就是按 agent 记的），改的只是把计数也挂上去。
+   */
+  interface ConversationLedger {
+    delivered: { count: number; lastAt: number | null; byDomain: Record<string, number> }
+    adoption: Record<InjectDomainKey, LiveAdoption>
+    observed: { toolCalls: number; lastAt: number | null }
+  }
+  const emptyLedger = (): ConversationLedger => {
+    const adoption = {} as Record<InjectDomainKey, LiveAdoption>
+    for (const key of INJECT_DOMAIN_KEYS) adoption[key] = { injected: 0, used: 0, adopted: 0, lastUsedAt: null }
+    return { delivered: { count: 0, lastAt: null, byDomain: {} }, adoption, observed: { toolCalls: 0, lastAt: null } }
+  }
+  const ledgers = new WeakMap<object, ConversationLedger>()
+  /** 取（或新建）这个会话的账本。pre-step 与工具调用两条路都从这里过。 */
+  const ledgerFor = (agent: object): ConversationLedger => {
+    let ledger = ledgers.get(agent)
+    if (ledger === undefined) {
+      ledger = emptyLedger()
+      ledgers.set(agent, ledger)
+    }
+    return ledger
+  }
   // 每个 agent 最近一步"在上下文里"的域集合 —— 采纳判定要回答的是"调用发生时正文在不在眼前"。
   // WeakMap：不阻止会话被回收（与 lastAgent 同一考虑）。
   const liveDomainsByAgent = new WeakMap<object, Set<InjectDomainKey>>()
@@ -757,6 +817,8 @@ export function createContextInjector(deps: ContextInjectorDeps): {
   const live = (): LiveInjectionSnapshot => {
     let agent: object | undefined
     try { agent = lastAgent ? lastAgent.deref() : undefined } catch { agent = undefined }
+    // 面板读的是**这一段对话**的账本；会话已经被回收了就没有账本可读，全零 + `hasAgent:false`。
+    const ledger = agent === undefined ? emptyLedger() : ledgerFor(agent)
     const visible = agent === undefined
       ? new Map<InjectDomainKey, { text: string; form: string; official: boolean }>()
       : newestDomainTexts(agent, LIVE_KINDS)
@@ -780,13 +842,27 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         state,
         bytes: bytesOf(text),
         text,
-        adoption: { ...adoption[key] },
+        adoption: { ...ledger.adoption[key] },
       }
     })
+    // 成本汇总：只做算术，不碰投递语义（这条视图的存在不改任何发送文本，因此不会触发重发）。
+    let liveBytes = 0
+    let injectedBytes = 0
+    let topDomain: LiveInjectionSnapshot['cost']['topDomain'] = null
+    let mostDelivered: LiveInjectionSnapshot['cost']['mostDelivered'] = null
+    for (const row of rows) {
+      liveBytes += row.bytes
+      const sends = ledger.delivered.byDomain[row.key] ?? 0
+      const spent = row.bytes * sends
+      injectedBytes += spent
+      if (spent > 0 && (topDomain === null || spent > topDomain.bytes)) topDomain = { key: row.key, label: row.label, bytes: spent }
+      if (sends > 0 && (mostDelivered === null || sends > mostDelivered.count)) mostDelivered = { key: row.key, label: row.label, count: sends }
+    }
     return {
       hasAgent: agent !== undefined,
-      delivered: { count: delivered.count, lastAt: delivered.lastAt, byDomain: { ...delivered.byDomain } },
-      observed: { toolCalls: observed.toolCalls, lastAt: observed.lastAt },
+      delivered: { count: ledger.delivered.count, lastAt: ledger.delivered.lastAt, byDomain: { ...ledger.delivered.byDomain } },
+      observed: { toolCalls: ledger.observed.toolCalls, lastAt: ledger.observed.lastAt },
+      cost: { liveBytes, injectedBytes, topDomain, mostDelivered },
       domains: rows,
     }
   }
@@ -795,16 +871,21 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       const key = domainOfTool(toolName)
       if (key === undefined) return
       const at = Date.now()
-      observed.toolCalls += 1
-      observed.lastAt = at
-      const row = adoption[key]
+      // 记在**发起这次调用的那个会话**的账上。`exec.agent` 与 pre-step 的 `payload.agent`
+      // 是同一个对象（dsh-scope 的不变量要求，见 review/后续方向.md §2 末），所以这里
+      // 落账的会话与上面 `liveDomainsByAgent` 记现场的会话必然一致。
+      let owner = typeof agent === 'object' && agent !== null ? (agent as object) : undefined
+      if (owner === undefined) { try { owner = lastAgent ? lastAgent.deref() : undefined } catch { owner = undefined } }
+      if (owner === undefined) return
+      const ledger = ledgerFor(owner)
+      ledger.observed.toolCalls += 1
+      ledger.observed.lastAt = at
+      const row = ledger.adoption[key]
       row.used += 1
       row.lastUsedAt = at
       // 采纳判定：调用发生时该域正文正在这个会话的上下文里。
-      if (typeof agent === 'object' && agent !== null) {
-        const liveKeys = liveDomainsByAgent.get(agent as object)
-        if (liveKeys !== undefined && liveKeys.has(key)) row.adopted += 1
-      }
+      const liveKeys = liveDomainsByAgent.get(owner)
+      if (liveKeys !== undefined && liveKeys.has(key)) row.adopted += 1
     } catch { /* 遥测绝不能影响工具本身 */ }
   }
   const ctx = deps.ctx
@@ -837,7 +918,12 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       if (!decision || decision.kind === 'reject') return decision
       const agent = payload && payload.agent
       if (!agent) return decision
-      if (typeof agent === 'object') { try { lastAgent = new WeakRef(agent as object) } catch { /* 环境没有 WeakRef → 实况显示"没有会话" */ } }
+      if (typeof agent === 'object') {
+        // 账本先建好：下面任何一条提前返回（空 turn / 没内容可发）都要能在实况里读到
+        // "这一段对话投了 0 次"，而不是读到上一段对话的数字。
+        ledgerFor(agent as object)
+        try { lastAgent = new WeakRef(agent as object) } catch { /* 环境没有 WeakRef → 实况显示"没有会话" */ }
+      }
       // 空 turn 不注入（官方 dsh-agent-instructions 同款守卫）：step 1 且一条消息都没有时，
       // 这一步本来就该原地结束（宿主随后把 turn 判为 completed）。此时注入会把空 turn
       // 变成一次真实的模型请求 —— 凭空烧一次调用。
@@ -882,9 +968,12 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       const published = new Set<InjectDomainKey>()
       // 域声明按 key 索引：来源文件（`files`）只在真要发消息时取，所以要能从这里回查声明。
       const domainOf = new Map(domains.map((domain) => [domain.key, domain] as const))
+      // 工具表开关本步读一次（同步快照）：`how` 行里点名工具的那几句据此换话术。
+      const hiddenNow = deps.hiddenTools !== undefined ? deps.hiddenTools() : null
+      const toolHidden = hiddenNow === null ? () => false : (name: string) => hiddenNow.has(name)
       for (const section of sections) {
         published.add(section.key)
-        const text = renderDomainText(section)
+        const text = renderDomainText(section, toolHidden)
         const current = visible.get(section.key)
         if (current !== undefined && current.text === text) continue
         // `current !== undefined` = 该域在可见表面上已有一条更早的己方消息 → 这次是**替换**，
@@ -897,6 +986,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       }
       // 曾经注入过、这一轮没有内容的域 → 一条「已清空」；从没注入过的域什么都不用说。
       const labelOf = new Map(domains.map((domain) => [domain.key, domain.label] as const))
+      const clearedKeys = new Set<InjectDomainKey>()
       for (const key of INJECT_DOMAIN_KEYS) {
         if (published.has(key)) continue
         const previous = visible.get(key)
@@ -905,16 +995,25 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         if (previous.form === 'notice') continue
         additions.push(clearedMessage(key, label))
         appended.push(key)
+        clearedKeys.add(key)
       }
       // 采纳判定要用的现场：**含官方载体**，并并入本步刚投出去的域正文（它们就在这一步的
       // 请求里，模型当场看得到）。判断"发不发"只能用本插件自己的 kind —— 官方正文绝不能
       // 影响去重（见 PLUGIN_KINDS 的注释）；判断"模型眼前有没有这份内容"则必须连官方那份
       // 一起算，标准类预设下技能与提示词正是官方在送。两遍扫描，两种口径各自正确。
+      // **「已清空」通知要从现场里剔掉**：那条消息也带域标记、也占 `newestDomainTexts` 的键，
+      // 但它不是正文。连着它一起算，"用户早把这个域关了、模型凭工具描述去调"的那次调用会被
+      // 记成采纳 —— 于是 `adopted` 实际在说"这个域本会话说过话"，界面文案里那句"正文正在上下文
+      // 里"就成了假话。剔除之后 `used - adopted` 才第一次有意义：调了、但正文不在眼前。
+      // `clearedKeys` 那一步是同一个判据的另一半：通知这会儿还没落到会话表面上，光靠扫表面
+      // 会漏掉"就是这一步刚被清空"的那个域。
       // 位置在"提前返回"之前：这一步没东西可发时，现场依然是当前状态，同样要记。
       try {
         if (typeof agent === 'object') {
-          const liveKeys = new Set<InjectDomainKey>(newestDomainTexts(agent, LIVE_KINDS).keys())
+          const liveKeys = new Set<InjectDomainKey>()
+          for (const [key, entry] of newestDomainTexts(agent, LIVE_KINDS)) if (entry.form !== 'notice') liveKeys.add(key)
           for (const key of injectedKeys) liveKeys.add(key)
+          for (const key of clearedKeys) liveKeys.delete(key)
           liveDomainsByAgent.set(agent as object, liveKeys)
         }
       } catch { /* 采纳遥测拿不到现场就退化成"只记 used"，绝不影响注入 */ }
@@ -922,10 +1021,11 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         // 没有新增时，只有"拦下了官方消息"才需要返回改动后的 decision；否则原样返回。
         return messages === messagesOf(decision) ? decision : { ...decision, messages: [...messages] }
       }
-      delivered.count += additions.length
-      delivered.lastAt = Date.now()
-      for (const key of appended) delivered.byDomain[key] = (delivered.byDomain[key] || 0) + 1
-      for (const key of injectedKeys) adoption[key].injected += 1
+      const ledger = ledgerFor(agent as object)
+      ledger.delivered.count += additions.length
+      ledger.delivered.lastAt = Date.now()
+      for (const key of appended) ledger.delivered.byDomain[key] = (ledger.delivered.byDomain[key] || 0) + 1
+      for (const key of injectedKeys) ledger.adoption[key].injected += 1
       return { ...decision, messages: [...messages, ...additions] }
     } catch (error) {
       // 注入是尽力而为：任何异常都不能把这一步弄失败。

@@ -261,6 +261,188 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       return { ok: true, archives: slice.archives, mode: slice.mode, active: slice.active }
     },
 
+    // 读：把「进入场景会改什么」先算一遍给人看，**一个字节都不写**。
+    //
+    // 为什么单独一个 op 而不是让界面自己估：进入场景真正的改动来自 `scene-mode-set` 里那三步
+    // （服务器级/来源级切换 → 工具级/技能级 → 人设 + 备注），计划由 `computeMcpPlan` /
+    // `computeSkillsPlan` 两个**纯函数**算出来。本 op 走同一批纯函数、读同一批现状，
+    // 只是把后面的 `apply*` 与 `saveSlice` 全部去掉 —— 于是预览与实际执行不可能各说各话
+    // （界面自己数勾出来的数字才会：档案段未定义 = 全关这条语义它并不知道）。
+    // 副作用清单：只有读。`loadSlice` / `current*` / `*States` / `known*` 全是读盘或读内存。
+    'scene-mode-preview': async (args: any) => {
+      const hasKey = args && 'scene' in (args || {})
+      if (!hasKey) return { ok: false, error: '缺少 scene（null = 退出模式）' }
+      const raw = (args && args.scene) ?? null
+      const target = raw == null ? null : String(raw).trim() || null
+
+      const slice = await deps.loadSlice()
+      const current: string | null = slice.mode && slice.mode.scene ? slice.mode.scene : null
+      const cap = 60
+      let truncated = false
+      const clip = (list: string[]): string[] => {
+        if (list.length <= cap) return list
+        truncated = true
+        return list.slice(0, cap)
+      }
+
+      // ── 退出模式：说的是「快照会回写什么」，不是「关掉场景后剩下什么」 ──────────
+      if (target === null) {
+        if (!current) {
+          return { ok: true, current: null, target: null, noChange: true, exit: null, memory: null, mcp: null, skills: null, subagents: null, stale: [], truncated: false }
+        }
+        const snap = slice.mode.snapshot
+        if (!snap) {
+          // 当前在场景内但快照丢了：退出只能落盘模式位，运行时回不来 —— 这句必须说出来。
+          return { ok: true, current, target: null, noChange: false, exit: { snapshotMissing: true }, memory: null, mcp: null, skills: null, subagents: null, stale: [], truncated: false }
+        }
+        const personaStates = snap.subagentsAll
+        return {
+          ok: true,
+          current,
+          target: null,
+          noChange: false,
+          exit: {
+            scene: current,
+            mcpServers: Object.keys(snap.mcp || {}).length,
+            skills: Object.keys(snap.skills || {}).length,
+            subagents: personaStates ? Object.keys(personaStates).length : (snap.subagents ?? []).length + (snap.subagentsOn ?? []).length,
+            mcpNotes: (snap.mcpNotes ?? []).length,
+          },
+          // 记忆启用集**不随退出恢复**（设计 §2.2）：退出后仍是这个场景，界面别把它写成"会还原"。
+          memory: { from: slice.active, to: slice.active, narrowed: false },
+          mcp: null, skills: null, subagents: null, stale: [], truncated: false,
+        }
+      }
+
+      if (!(await deps.sceneExists(target))) return { ok: false, error: `场景不存在: ${target}` }
+      if (target === current) {
+        return { ok: true, current, target, noChange: true, exit: null, memory: null, mcp: null, skills: null, subagents: null, stale: [], truncated: false }
+      }
+
+      const archive = slice.archives[target]
+      // 与进入时逐字同口径：mcp / skills / subagents 三段**未定义 = 一个都没勾 = 全部停用**，
+      // 备注段是唯一例外（未定义 = 不覆盖）。所以这里不给 `compute*Plan` 兜空对象的分支。
+      let mcpPlan: McpPlan
+      let skillsPlan: SkillsPlan
+      let serverStates: McpServerState[]
+      let sourceStates: SkillSourceState[]
+      let configured: string[] = []
+      try {
+        serverStates = await deps.mcpServerStates()
+        sourceStates = await deps.skillSourceStates()
+        configured = await deps.configuredServers()
+        mcpPlan = computeMcpPlan((archive && archive.mcp) || {}, {
+          configuredServers: configured,
+          knownTools: await deps.serverKnownTools(),
+          serverStates,
+        })
+        skillsPlan = computeSkillsPlan((archive && archive.skills) || [], await deps.knownSkillKeys(), sourceStates)
+      } catch (e) {
+        return { ok: false, error: `读取运行时状态失败：${msg(e)}` }
+      }
+      let personas: { on: string[]; off: string[] } | null = null
+      try {
+        const bound = archive && Array.isArray(archive.subagents) ? archive.subagents : []
+        const known = await deps.knownPersonas()
+        const unbound = [...known].filter((n) => bound.indexOf(n) < 0).sort()
+        personas = { on: await deps.disabledPersonas(bound), off: await deps.enabledPersonas(unbound) }
+      } catch (e) {
+        return { ok: false, error: `读取人设开关状态失败：${msg(e)}` }
+      }
+
+      // 服务器级：计划里已只含「需要变化」的行，按目标状态分两个方向。
+      const serversOn: string[] = []
+      const serversOff: string[] = []
+      for (const s of mcpPlan.serverSwitches) (s.enabled ? serversOn : serversOff).push(s.serverName)
+      // 工具级停用表：与现状逐台比对（['*'] 是"整台停用"这个原子状态，不当工具名处理）。
+      //
+      // ⚠️ 只报**前后都在跑**的服务器（`offServers`）。服务器没在跑的时候，它的工具停用表只是
+      // 记账：把一台本来就没启用的（或这次正要停用的）服务器记成「整台停用」没有任何可见效果，
+      // 报成「停用 N 个 MCP 工具」是假话 —— 用户实测就是这么看到「停用 6 个 MCP 工具：
+      // context7/*、fastgraph/* …」，而那 6 台从来没启用过（2026-09-23）。服务器级的改动
+      // 由 `serverSwitches` 那一行如实说（它只含真的会变的），工具级留给逐工具开关真正起作用的
+      // 情形。
+      const offServers = new Set<string>()
+      for (const state of serverStates) if (state.disabled) offServers.add(state.serverName)
+      for (const sw of mcpPlan.serverSwitches) if (!sw.enabled) offServers.add(sw.serverName)
+      const toolsOn: string[] = []
+      const toolsOff: string[] = []
+      try {
+        const now = await deps.currentMcpRaw()
+        for (const [server, want] of Object.entries(mcpPlan.entries)) {
+          if (offServers.has(server)) continue
+          const before = now[server] || []
+          const wildcard = (list: string[]) => list.length === 1 && list[0] === '*'
+          if (wildcard(want)) {
+            if (!wildcard(before)) toolsOff.push(`${server}/*`)
+            continue
+          }
+          if (wildcard(before)) { toolsOn.push(`${server}/*`); continue }
+          const wantSet = new Set(want)
+          const beforeSet = new Set(before)
+          for (const tool of want) if (!beforeSet.has(tool)) toolsOff.push(`${server}/${tool}`)
+          for (const tool of before) if (!wantSet.has(tool)) toolsOn.push(`${server}/${tool}`)
+        }
+      } catch (e) {
+        return { ok: false, error: `读取 MCP 停用表现状失败：${msg(e)}` }
+      }
+      // 技能级：计划产出的是**已知全集**的目标状态，与现状比对才得到"这次真的会改几个"。
+      const skillsOn: string[] = []
+      const skillsOff: string[] = []
+      try {
+        const now = await deps.currentSkills()
+        for (const [key, want] of Object.entries(skillsPlan.target)) {
+          const before = now[key]
+          if (before === undefined) continue   // 现状里没有这一行 → 这次不算改动
+          if (want && !before) skillsOn.push(key)
+          else if (!want && before) skillsOff.push(key)
+        }
+      } catch (e) {
+        return { ok: false, error: `读取技能启停现状失败：${msg(e)}` }
+      }
+      const sourcesOn: string[] = []
+      const sourcesOff: string[] = []
+      for (const s of skillsPlan.sourceSwitches) (s.enabled ? sourcesOn : sourcesOff).push(s.root)
+
+      const stale = [...mcpPlan.stale, ...skillsPlan.stale]
+      const notesDefined = !!(archive && archive.mcpNotes)
+      const noteCount = notesDefined
+        ? Object.keys(archive!.mcpNotes!).filter((server) => archive!.mcp && server in archive!.mcp).length
+        : 0
+      // 「进入后处于启用」的服务器（场景勾着的那几台 ∩ 配置里真实存在的）。它是**状态**不是改动，
+      // 与上面几行的"会改什么"互补：什么都没变时 MCP 那一段整段消失，读起来像缺了信息（用户
+      // 2026-09-23 实测）。工具级不列（服务器没在跑时它的工具数无从得知，报了就是猜）。
+      const enterServers = Object.keys((archive && archive.mcp) || {})
+        .filter((name) => configured.indexOf(name) >= 0)
+        .sort()
+
+      return {
+        ok: true,
+        current,
+        target,
+        noChange: false,
+        // 目标场景**没存过档案**：进入不是"按档案配"，而是四域一律全关（未定义 = 全关）。
+        // 这是最容易被当成"点了个没配置的场景，应该什么都不改"的一种，界面必须单独说。
+        hasArchive: !!archive,
+        exit: current ? { scene: current, snapshotMissing: !slice.mode.snapshot } : null,
+        memory: { from: slice.active, to: [target], narrowed: true },
+        mcp: {
+          serversOn: clip(serversOn), serversOff: clip(serversOff),
+          toolsOn: clip(toolsOn), toolsOff: clip(toolsOff),
+          notes: noteCount, notesDefined,
+        },
+        // 进入后**处于启用**的服务器（结果口径；界面上是"进入后启用 N 台…"那一行）。
+        enter: { servers: clip(enterServers) },
+        skills: {
+          on: clip(skillsOn), off: clip(skillsOff),
+          sourcesOn: clip(sourcesOn), sourcesOff: clip(sourcesOff),
+        },
+        subagents: { on: clip(personas.on), off: clip(personas.off) },
+        stale: clip(stale),
+        truncated,
+      }
+    },
+
     // 写：保存某场景档案（三段整体替换；键对实时发现全集校验，未知键丢弃并报告）
     'scene-archive-save': (args: any) => serial(async () => {
       const scene = String((args && args.scene) || '').trim()

@@ -26,7 +26,6 @@
 
 
 
-    function translateOrFallback(t, key, fallback, params) { var value = t(key, params); return typeof value === "string" && value !== key ? value : fallback; }
     /**
      * 字段下的多行说明 → 条目清单（与导入弹窗的「文件要求」同款样式，见 dsm-help-list）。
      * 词典值按 `\n` 分段，一段一条：一整句话里塞三件事时，条目比句子好扫。
@@ -243,6 +242,15 @@ function enabledMemoryCount(rules) {
     /** 已移除的来源（不在主列表里，但要让用户看得到并恢复）。 */
     function removedSkillRoots(roots) { return (roots || []).filter(function (root) { return root.removed === true; }); }
     var MAX_UPLOAD_ARCHIVE_BYTES = 32 << 20, MAX_UPLOAD_ENTRY_BYTES = 32 << 20, MAX_UPLOAD_TOTAL_BYTES = 64 << 20, MAX_UPLOAD_ENTRIES = 1000;
+    /**
+     * 注入段里"模型实际能看到多长"的两个截断长度，同时当输入框的 `maxLength` 与字数计数的分母
+     * —— 写多少就能被看到多少，不会出现"界面让你写 500 字、模型只读到前 300"。
+     *
+     * ⚠️ 宿主侧各有一份真相：`src/mcp/state-section.ts` 的 `DEFAULT_MCP_NOTE_MAX_LENGTH`、
+     * `src/skills/catalog.ts` 与 `src/subagents/catalog.ts` 的 `..._DESCRIPTION_MAX_LENGTH`。
+     * 两边没有编译期约束（计划文档 A3 说的"同一事实两处写"），改一处必须改另一处。
+     */
+    var MCP_NOTE_MAX = 300, CATALOG_DESC_MAX = 500;
     function uploadFilePath(file) { return String(file && (file._dssmPath || file.webkitRelativePath || file.name) || "").replace(/\\/g, "/"); }
     function inspectUploadSelection(files) {
       var list = Array.prototype.slice.call(files || []); if (!list.length) return null;

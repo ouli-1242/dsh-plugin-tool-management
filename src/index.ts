@@ -26,6 +26,8 @@ import { isInsideRoot, isInsideRootResolved } from './paths.js'
 import { DEFAULT_PROFILE_NAME, MCP_CLIENT_MODULE, PROFILE_CANDIDATES } from './host-names.js'
 import { createMemoriesService, planMemoryExport } from './memories/service.js'
 import { createArchiveEngine } from './memories/archive-engine.js'
+import { readIndexSync } from './memories/index-io.js'
+import { runStateDoctor } from './ops/state-doctor.js'
 import { createSubagentService, decideToolFilter, defaultPersonasDir, validPersonaName } from './subagents/service.js'
 import type { ToolFilterDecision } from './subagents/service.js'
 import { createSubagentCatalog } from './subagents/catalog.js'
@@ -39,6 +41,14 @@ import {
   type LiveInjectionSnapshot,
 } from './context-inject.js'
 import { isApprovalNever } from './approval-policy.js'
+import {
+  buildToolTableReport,
+  normalizeToolTableSettings,
+  type ToolTableReport,
+  type ToolTableRow,
+  type ToolTableSettings,
+} from './tools/table.js'
+import { normalizeSceneSettings, type SceneSettings } from './scene-settings.js'
 import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
 import { checkPatchWrite, takePatchGuardWarnings } from './compat/patch-dialect.js'
 import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
@@ -64,6 +74,7 @@ import { buildPromptOps } from './ops/prompts.js'
 import { buildSessionOps } from './ops/sessions.js'
 // HTTP 请求准入与 handlers 后处理（2026-09-19 从本文件 apply 闭包抽出，依赖显式传参）。
 import { createAccessToken, createOpWhitelist, createSceneLock, installHandlerGuards } from './request-gate.js'
+import { auditOpRegistry, auditProblems } from './op-registry.js'
 import { buildSceneSyncOps } from './ops/scene-sync.js'
 import { buildCandidateOps } from './ops/candidates.js'
 // model 工具（ctx.tools.register）按域分文件；共享的依赖形状见 tools/deps.ts。
@@ -209,6 +220,9 @@ export const INJECT_SERVICES = [
   'timer', 'fs', 'settings', 'sandboxPolicy', 'webServer', 'tools', 'skills', 'sessions',
   'agents', 'workspaceRegistry', 'sessionProjectionCache', 'sessionPersistence',
 ] as const
+
+/** 工具表设置预热完成前的答案：一个都不关（见 apply 里 toolTableHidden 的注释）。 */
+const EMPTY_TOOL_SET: ReadonlySet<string> = new Set()
 
 export default {
   name: 'dsh-plugin-tool-management-host',
@@ -594,6 +608,114 @@ export default {
         .map((s: any) => slice.archives[s.name]?.subagents ?? [])
     }
 
+        // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
+    // 工具表按**每个请求**付钱：20 个工具的整份定义合计 ≈3,500 tok 每轮都在。关掉某几个，
+    // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。
+    //
+    // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话
+    // 就是假的），所以它们的构造依赖在这块之后 —— 不做前向引用，顺序就是依赖顺序。
+    const TOOL_TABLE_FILE = 'tool-table.json'
+    const TOOL_TABLE_TTL_MS = 3000
+    /** 注册时量到的工具体积（只记真进了表的那些；量的是 register 收到的整份定义）。 */
+    const toolTableSizes = new Map<string, number>()
+    function recordToolSize(def: ToolDefinition): void {
+      try {
+        const name = String((def as { name?: unknown }).name ?? '')
+        if (name === '') return
+        // 与宿主同一口径（dsh-token-meter 的 estimateToolsTokens 就是把 tools 整份
+        // JSON.stringify 后除以 4），所以这里量整份定义，不只量 description。
+        toolTableSizes.set(name, JSON.stringify(def).length)
+      } catch { /* 量不出来就不记：它只影响界面上的估算数字 */ }
+    }
+    let toolTableCache: { at: number; value: ToolTableSettings; off: ReadonlySet<string> } | null = null
+    async function readToolTableSettings(force = false): Promise<ToolTableSettings> {
+      if (toolTableCache && !force && Date.now() - toolTableCache.at < TOOL_TABLE_TTL_MS) return toolTableCache.value
+      await ensurePaths()
+      const raw = await readJsonFile(hubPath(TOOL_TABLE_FILE))
+      const value = normalizeToolTableSettings(raw)
+      const changed = toolTableCache === null || toolTableCache.value.hidden.join('\u0000') !== value.hidden.join('\u0000')
+      toolTableCache = { at: Date.now(), value, off: new Set(value.hidden) }
+      // 首读 / 文件被外部改过 ⇒ 可见性要跟着重排。同步快照的调用方（门禁、注入通道）不会
+      // 自己重排，它们只是"下次问的时候读到新值"；把限制摘掉/装上这一步必须有人做。
+      // （`mcp` 在 apply 里是同步赋值、本函数只可能在自己的 await 之后回到这里，所以到得了。）
+      if (changed) { try { mcp.scheduleToolRestrictions() } catch { /* 兜底：拿不到 manager 就等下一次 tools/change */ } }
+      return value
+    }
+    /**
+     * 同步快照（热路径用：工具门禁每次调用、注入通道每个 step 都要问一句）。还没加载时先给
+     * 默认值并异步预热 —— 默认是"什么都没关"，预热前的这一瞬与用户的选择可能不一致，但
+     * 方向是安全的那一侧（不隐藏任何东西，绝不因为读盘慢而让工具凭空消失）。
+     */
+    function toolTableHidden(): ReadonlySet<string> {
+      if (toolTableCache === null) {
+        void readToolTableSettings().catch(() => {})
+        return EMPTY_TOOL_SET
+      }
+      return toolTableCache.off
+    }
+    const toolTableRows = (): ToolTableRow[] => [...toolTableSizes].map(([name, bytes]) => ({ name, bytes }))
+    const toolTableReport = (hidden: readonly string[] = [...toolTableHidden()]): ToolTableReport =>
+      buildToolTableReport(toolTableRows(), hidden)
+    async function toolTableOp(args: any): Promise<any> {
+      const current = await readToolTableSettings()
+      if (!args || args.set !== true) return { ok: true, hidden: current.hidden, report: toolTableReport(current.hidden) }
+      const next = normalizeToolTableSettings({ hidden: args.hidden })
+      // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错
+      // （"names unknown global tool"）。注册失败的工具本来也不在表里。
+      const hidden = next.hidden.filter((name) => toolTableSizes.has(name))
+      await ensurePaths()
+      // 落盘在写锁里，落完**出了锁**再刷新（`withWriteLock` 是一条不可重入的链：锁里再调
+      // 一次会等自己，直接卡死）。刷新是两处目录读，本来也不必占着写锁。
+      const saved = await withWriteLock(async () => {
+        try {
+          await writeJsonFile(hubPath(TOOL_TABLE_FILE), { hidden })
+        } catch (e) {
+          return { ok: false as const, error: '设置保存失败: ' + message(e) }
+        }
+        toolTableCache = { at: Date.now(), value: { hidden }, off: new Set(hidden) }
+        return { ok: true as const }
+      })
+      if (!saved.ok) return saved
+      // 三处跟着变：可见性（restrict 名单重排）、两个目录（截断提示里点名的工具可能没了）。
+      // 目录的 refresh 会把新的一句话注入出去 —— 内容变了才重发，这是正确行为。
+      mcp.scheduleToolRestrictions()
+      await Promise.all([
+        skillCatalog.refresh().catch(() => { /* 目录刷新失败不该让保存失败 */ }),
+        subagentCatalog.refresh().catch(() => { /* 同上 */ }),
+      ])
+      return { ok: true, hidden, report: toolTableReport(hidden) }
+    }
+
+    // ---------- 「有官方等价物 ⇒ 我们让位」----------
+    // 官方 `skill` 工具（`@deepseek-ai/dsh-tool-skill`）与我们的 `skill_manager_read` 是同一
+    // 件事：按名字给正文。标准类预设下它在场，第二份就是白付的 174 tok/轮。
+    //
+    // 判据抄官方自己的写法（`dsh-tool-skill/lib/index.js:207`：`ctx.tools.get(skillTool.name,
+    // agent) === skillTool`）—— 拿 agent 当 scope 问"这个 agent 解析得到 `skill` 吗"。比读
+    // 预设组合文件更准：它观察的是**这个 agent 实际能看见什么**（限定到该 scope 的同名 shadow
+    // 也算数），而组合文件只能说"配了"。判不出来时返回空 = 不让位：少一条拿正文的路，比多花
+    // 174 tok 糟。
+    //
+    // 与注入侧的关系：那边（`CARRIER_FACT_OF`）按组合事实决定"官方目录在场就不注入我们的
+    // 目录"，这边按解析结果决定"官方加载器在场就不下发我们的加载器"。两者只在一种情形下
+    // 不一致 —— 组合里挂了、但这个 agent 的 scope 里解析不到（被别的限制摘掉）：那时注入侧
+    // 跳过我们的目录，这里仍然保留我们的工具，方向是对的（模型手里还有 list + read）。
+    /** `[官方工具名, 我们该让位的工具]` —— 只有技能这一对（官方没有 MCP 管理 / 记忆 / AGENTS 编辑工具）。 */
+    const CARRIER_DUPLICATES: ReadonlyArray<readonly [string, string]> = [['skill', 'skill_manager_read']]
+    const carrierHiddenToolsFor = async (agent: unknown): Promise<string[]> => {
+      // 拿不到 agent 就什么都不让位：`get(name, undefined)` 问的是**全局视图**，而官方那些
+      // 工具是按预设挂进 agent 那一层的 —— 问错对象会得出相反的结论。
+      if (agent === null || (typeof agent !== 'object' && typeof agent !== 'function')) return []
+      const scope = agent as object
+      const out: string[] = []
+      for (const [carrier, ours] of CARRIER_DUPLICATES) {
+        try {
+          if (tools.get(carrier, scope) !== undefined) out.push(ours)
+        } catch { /* 读不到 = 不让位 */ }
+      }
+      return out
+    }
+
     // ---------- 注入通道（场景和记忆 / MCP / 技能 / 子智能体 / 提示词，各一条消息）----------
     // 这些文本以前是 systemPrompt 段（persona complete 会整段压掉）。现在改走官方的
     // 「每步注入一条合成消息」通道（skill-catalog / AGENTS.md / 时间上下文同款）：
@@ -608,6 +730,8 @@ export default {
     const subagentCatalog = createSubagentCatalog({
       list: () => subagentService.list(),
       sceneLists: subagentSceneLists,
+      // 人在「兼容」页把 `subagent_manager_list` 关掉后，截断提示里那句「用 X 查」就是假的。
+      listToolVisible: () => !toolTableHidden().has('subagent_manager_list'),
     })
     // ⚠️ 取数必须用 mcpmRowsWithNotes(false)：true 会带上**未打码**的 url/headers/env（含明文密钥）。
     // 技能目录与提示词两个域是**官方载体的兜底**：预设挂得到官方
@@ -615,6 +739,7 @@ export default {
     // CARRIER_FACT_OF），挂不到（极简）时才由这里送 —— 所以极简下也能按开关决定要不要。
     const skillCatalog = createSkillCatalog({
       state: () => skillsService.ops['skill-state']({}),
+      listToolVisible: () => !toolTableHidden().has('skill_manager_list'),
     })
 
     // 注入设置（侧车 `inject-settings.json`，界面在「兼容」页）：
@@ -660,6 +785,38 @@ export default {
           return { ok: false, error: '设置保存失败: ' + message(e) }
         }
         injectSettingsCache = { at: Date.now(), value: next }
+        return { ok: true, settings: next }
+      })
+    }
+
+    // 场景页的界面设置（侧车 `scene-settings.json`）：目前只有一项 —— 进入场景前要不要先弹
+    // 那张「会改什么」的卡。它纯粹是界面提示，所以**不进场景冻结**（锁着场景的人在场景页
+    // 照样能关掉提醒，那与五个管理域的只读无关）。
+    const SCENE_SETTINGS_FILE = 'scene-settings.json'
+    const SCENE_SETTINGS_TTL_MS = 3000
+    let sceneSettingsCache: { at: number; value: SceneSettings } | null = null
+    async function readSceneSettings(force = false): Promise<SceneSettings> {
+      if (sceneSettingsCache && !force && Date.now() - sceneSettingsCache.at < SCENE_SETTINGS_TTL_MS) return sceneSettingsCache.value
+      await ensurePaths()
+      const raw = await readJsonFile(hubPath(SCENE_SETTINGS_FILE))
+      const value = normalizeSceneSettings(raw)
+      sceneSettingsCache = { at: Date.now(), value }
+      return value
+    }
+    async function sceneSettingsOp(args: any): Promise<any> {
+      const current = await readSceneSettings()
+      if (!args || args.set !== true) return { ok: true, settings: current }
+      const next = normalizeSceneSettings({
+        enterPreview: typeof args.enterPreview === 'boolean' ? args.enterPreview : current.enterPreview,
+      })
+      await ensurePaths()
+      return withWriteLock(async () => {
+        try {
+          await writeJsonFile(hubPath(SCENE_SETTINGS_FILE), next)
+        } catch (e) {
+          return { ok: false, error: '设置保存失败: ' + message(e) }
+        }
+        sceneSettingsCache = { at: Date.now(), value: next }
         return { ok: true, settings: next }
       })
     }
@@ -710,6 +867,8 @@ export default {
             { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: () => memoriesService.promptText(), files: () => memoriesService.promptFiles() },
           ],
           settings: () => injectSettingsSync(),
+          // 工具表开关：`how` 行里点名工具的那几句要跟着它换话术（关掉的不点名）。
+          hiddenTools: toolTableHidden,
           factsFor: (agent) => candidates.presetFactsForAgent(agent),
           // 令牌门禁（2026-09-19，用户裁定「宿主侧硬拦截」）：令牌**在生效**（`TOKEN !== ''`，
           // 关掉或没配都是空串）而本次启动还没有人验过 ⇒ 这一步不放行，宿主把 turn 收成
@@ -1444,6 +1603,12 @@ export default {
       writePatch,
       memoriesService,
       wait,
+      // 兼容页「模型工具表」关掉的工具与 MCP 停用工具**合并成一次 restrict**：官方
+      // `tools.restrict()` 是"每个 scope 一层限制"，两边各调一次会互相覆盖（后一层赢）。
+      // 名单的合法性（只含已注册工具）由 manager 那边与 schemas() 求交后保证。
+      pluginHiddenTools: () => [...toolTableHidden()],
+      // 有官方等价物时逐 agent 让位（见上面 CARRIER_DUPLICATES 的注释）。
+      carrierHiddenTools: carrierHiddenToolsFor,
     })
 
     // ---------- ops ----------
@@ -1562,6 +1727,8 @@ export default {
         tools,
         readInjectSettings,
         injectSettingsOp,
+        toolTableOp,
+        toolTableReport: () => toolTableReport(),
         presetRoster: candidates.presetRoster,
         listPatchBackups,
         cleanPatchBackups,
@@ -1640,6 +1807,44 @@ export default {
         memorySceneCandidates: candidates.memorySceneCandidates,
         memoryCandidates: candidates.memoryCandidates,
       }),
+      // 场景页的界面设置（读 / 写）：进入场景前要不要弹预览卡。按写操作门禁（它写侧车），
+      // 但**不进场景冻结** —— 它是界面提示，与五个管理域的只读无关（见 scene-settings.ts）。
+      'scene-settings': (args: any) => sceneSettingsOp(args),
+      // state-doctor：跨域**悬空引用**体检（只读，实现与理由见 src/ops/state-doctor.ts）。
+      // 这里只做"把权威集合取来"这一件事 —— 某一域读失败就传 null，体检会把它记进
+      // `skipped` 而不是当成"该域没有悬空项"（读不到 ≠ 不存在，报成后者就是骗人）。
+      'state-doctor': async () => {
+        const stateDir = String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || '')
+        const safe = async <T>(read: () => Promise<T>): Promise<T | null> => {
+          try { return await read() } catch { return null }
+        }
+        const report = await runStateDoctor({
+          index: () => readIndexSync(stateDir),
+          presetIds: async () => {
+            const r = await safe(async () => promptsService.list())
+            return r && r.ok ? r.presets.map((p) => p.id) : null
+          },
+          serverNames: async () => {
+            const r = await safe(mcp.mcpmListView)
+            if (!r) return null
+            const out: string[] = []
+            for (const row of ((r as any).rows || [])) {
+              const n = String((row && row.serverName) || '')
+              if (n && out.indexOf(n) < 0) out.push(n)
+            }
+            return out
+          },
+          skillKeys: async () => {
+            const r = await safe(skillStates)
+            return r === null ? null : new Set(Object.keys(r))
+          },
+          personaNames: async () => {
+            const r = await safe(() => subagentService.list())
+            return r === null ? null : new Set(r.map((p) => p.name))
+          },
+        })
+        return { ok: true, ...report }
+      },
     }
 
     // MCP 写操作成功后立即重算状态段（SWR：text() 同步返回缓存值，写后主动 refresh）。
@@ -1940,6 +2145,33 @@ export default {
       subagentToolFailures,
     })
 
+    // A1 的"机器那一边"：拿**真实** op 表与 `./op-registry.ts` 对账，四个方向都查（未归类 /
+    // 幽灵条目 / serviceWrite 与 service 自报分叉 / 只读与写自相矛盾）。
+    // 为什么值得在启动期花这一次遍历：门禁失守的症状从来不是报错，而是"没配令牌也能写"或
+    // "锁定的场景能被改"（0.6.0 / 0.7.0 / 0.10.0 已失守四次）。少一个 op 没登记，这里当场
+    // 在兼容页挂一条降级，而不是等到出事再倒查。
+    {
+      const problems = auditProblems(auditOpRegistry(Object.keys(handlers), [
+        ...skillsService.writeOps,
+        ...memoriesService.writeOps,
+        ...archiveService.writeOps,
+        ...subagentService.writeOps,
+      ]))
+      if (problems.length) {
+        ctx.logger?.warn?.(`op 登记表与实际 op 表对不上（${problems.length} 处）：${problems.join('；')}`)
+        noteRuntime({
+          id: 'op-registry',
+          label: 'op 门禁登记表对账',
+          kind: 'read',
+          fallback: 'inform-only',
+          detail: `${problems.length} 处对不上：${problems.slice(0, 6).join('；')}${problems.length > 6 ? ' 等' : ''}`
+            + ' —— 未归类的 op 不受写门禁与场景冻结约束。修法：在 src/op-registry.ts 补登记那一条。',
+        })
+      } else {
+        clearRuntimeNote('op-registry')
+      }
+    }
+
     // ---------- agent-facing tools (standard ctx.tools.register + defineTool) ----------
     const text = (value: string) => [{ type: 'text' as const, text: value }]
     /**
@@ -1984,7 +2216,9 @@ export default {
     // 各域必须用它，直接 import 宿主的那个会丢掉采纳统计。
     const toolDeps = {
       defineTool,
-      register: (def: ToolDefinition) => { tools.register(def) },
+      // 量体积只认**注册成功**的那些（注册失败的域工具本来就不在模型工具表里）——
+      // 兼容页「模型工具表」块的分组与 ≈token 都取自这里，那是这份设置唯一的数字来源。
+      register: (def: ToolDefinition) => { recordToolSize(def); tools.register(def) },
       lockedSceneGuard,
       syncSwitchToScene,
       reachNoticeForAgent,
@@ -2020,7 +2254,10 @@ export default {
       const CONFIRM_LABELS: Record<string, string> = {
         skill_manager_create: '「新建技能」',
         memory_manager_write: '「写入记忆」',
+        memory_manager_update: '「修改记忆」',
         subagent_manager_run: '「运行子代理」',
+        subagent_manager_create: '「新建人设」',
+        subagent_manager_update: '「修改人设」',
         // 模型侧只有这一个工具能塞进任意 command/args（改命令的 mcpm-edit 不对外注册成工具），
         // 所以门禁加在它这里就覆盖了整个模型可达面。
         mcp_manager_add: '「新增 MCP 服务器」',
@@ -2031,10 +2268,10 @@ export default {
         pluginLog()('confirm-bypass', `完全权限（approval=never）：跳过${CONFIRM_LABELS[String(exec && exec.name)]}的确认，直接放行`).catch(() => {})
         return true
       }
-      // subagent_manager_run 的目标人设是否真实存在。确认门是「问用户要不要做」，如果这个请求
-      // 本来就做不成（人设不存在），弹卡 / 写 bypass 日志只会产生一次无效审批：
-      // 用户批准之后模型收到的是「人设不可用」。所以先校验，再决定要不要问。
-      // 校验本身不可用时返回 true（保持原行为，绝不因为探测失败而少问一次）。
+      // 确认门是「问用户要不要做」，如果这个请求本来就做不成，弹卡 / 写 bypass 日志只会产生
+      // 一次无效审批：用户批准之后模型收到的是「人设不可用」/「人设不存在」/「人设已存在」。
+      // 所以先校验，再决定要不要问。校验本身不可用时返回 true（保持原行为，
+      // 绝不因为探测失败而少问一次）。
       const subagentManagerRunTargetExists = async (exec: any): Promise<boolean> => {
         try {
           const name = String((exec && exec.arguments && exec.arguments.agent) || '').trim()
@@ -2045,9 +2282,28 @@ export default {
           return true
         }
       }
+      /** `subagent_manager_update` 要改名已存在、`_create` 要目标未被占用。 */
+      const subagentWriteWouldApply = async (exec: any): Promise<boolean> => {
+        try {
+          const a = (exec && exec.arguments) || {}
+          const name = String(a.name || '').trim()
+          if (!name) return false
+          const list = await subagentService.list()
+          const has = (n: string) => list.some((p) => p.name === n)
+          if (exec.name === 'subagent_manager_update') {
+            const next = String(a.nextName || '').trim()
+            return has(name) && (next === '' || next === name || !has(next))
+          }
+          return !has(name)
+        } catch (e) {
+          return true
+        }
+      }
       ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', async (exec, next) => {
         if (!exec || !CONFIRM_LABELS[String(exec.name)]) return next()
         if (exec.name === 'subagent_manager_run' && !(await subagentManagerRunTargetExists(exec))) return next()
+        if ((exec.name === 'subagent_manager_create' || exec.name === 'subagent_manager_update')
+          && !(await subagentWriteWouldApply(exec))) return next()
         if (bypassedByFullAccess(exec)) return next()
         if (exec.name === 'skill_manager_create') {
           return Promise.resolve({ kind: 'ask', reason: 'Create a new skill under ~/.dsh/tool-management/skills' })
@@ -2072,14 +2328,29 @@ export default {
             reason: `Add MCP server「${String(a.serverName || '')}」— ${detail}. A stdio server is spawned by the host and the entry persists in the config.`,
           })
         }
-        if (exec.name === 'memory_manager_write') {
+        if (exec.name === 'memory_manager_write' || exec.name === 'memory_manager_update') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
           // 不在此处做任何兜底放行。
+          // `memory_manager_update` 走**同一个开关**：改一条记忆和建一条记忆动的是同一批文件，
+          // 而改的破坏性更大（覆盖已有内容）—— 给它另设一档只会造出一个"改不用问、建要问"的倒挂。
+          const what = exec.name === 'memory_manager_write'
+            ? 'Write a memory under ~/.dsh/tool-management/memories'
+            : 'Update an existing memory under ~/.dsh/tool-management/memories'
           return mcp.readPluginSettings()
-            .then((s) => (s.requireConfirmForModelRuleWrite
-              ? { kind: 'ask', reason: 'Write a memory under ~/.dsh/tool-management/memories' }
-              : next()))
-            .catch(() => ({ kind: 'ask', reason: 'Write a memory under ~/.dsh/tool-management/memories' }))
+            .then((s) => (s.requireConfirmForModelRuleWrite ? { kind: 'ask', reason: what } : next()))
+            .catch(() => ({ kind: 'ask', reason: what }))
+        }
+        if (exec.name === 'subagent_manager_create' || exec.name === 'subagent_manager_update') {
+          // 与 `skill_manager_create` 完全对称：往 hub 里落一份新文件 / 整份重写一份现有文件。
+          // 无条件问（不设开关）—— 人设是"以后每次委派都按它来"的长期资产，改错了影响的是
+          // 后续所有子代理的行为，而不是一次输出。
+          // update 尤其：`subagent-update` 走 serializePersona 整份重写，改名还会连带改
+          // 场景档案里的绑定 —— 那是一次会影响环境配置的操作，不是一句文案修改。
+          const a = (exec && exec.arguments) || {}
+          const what = exec.name === 'subagent_manager_create'
+            ? `Create persona「${String(a.name || '')}」under ~/.dsh/tool-management/subagents`
+            : `Rewrite persona「${String(a.name || '')}」${a.nextName ? ` and rename it to「${String(a.nextName)}」(scene-profile bindings follow the rename)` : ''}`
+          return Promise.resolve({ kind: 'ask', reason: what })
         }
         // subagent_manager_run：子代理运行花真 token：默认确认（requireConfirmForModelSubagentRun !== false），可关。
         // `inherit: true` 时子代理会读到本次会话已完成的对话 —— 卡里如实说明（用户批准的是
@@ -2125,6 +2396,11 @@ export default {
           // Reads the TTL cache without I/O: the guard runs on the hot path.
           if (mcp.isToolDisabled(String((exec && exec.name) || ''))) {
             return '该工具已在 MCP 管理页停用'
+          }
+          // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
+          // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。
+          if (toolTableHidden().has(String((exec && exec.name) || ''))) {
+            return '该工具已在「兼容」页的模型工具表里关掉（要它先在那里打开）'
           }
         } catch (e) { /* fallthrough to allow */ }
         return undefined
@@ -2272,11 +2548,12 @@ export default {
                 }
               }
               // 「读改写」两态 op：不带 `set:true` 时是**纯读**，与写门禁无关。
-              // `inject-settings`（兼容页的「注入」块）与 `mcpm-settings`（MCP 页的轮询设置）
+              // `inject-settings`（兼容页的「注入」块）、`tool-table`（同页的「模型工具表」）、
+              // `scene-settings`（场景页的提醒开关）与 `mcpm-settings`（MCP 页的轮询设置）
               // 都用同一个 op 承担读与写，于是整条 op 被列进 WRITE_OPS —— 读侧也一起被拦，
               // 界面表现是"没填令牌时整块设置消失、填了还要刷新才出现"（2026-09-19 用户报的）。
               // 判据是**这次调用要不要写**，不是 op 名在不在名单里。
-              const readOnlyCall = (op === 'inject-settings' || op === 'mcpm-settings')
+              const readOnlyCall = (op === 'inject-settings' || op === 'tool-table' || op === 'scene-settings' || op === 'mcpm-settings')
                 && !(payload.args && payload.args.set === true)
               if (TOKEN && WRITE_OPS.has(op) && !readOnlyCall && !tokenMatches(hdr('x-dsh-token'))) {
                 // 文案与明文门禁同源（http-fence.ts），code 也统一 —— 界面据此在最右侧挂

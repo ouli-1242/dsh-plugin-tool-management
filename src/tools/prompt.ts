@@ -19,7 +19,7 @@ export function buildPromptTools(deps: PromptToolDeps): void {
   const { defineTool, register } = deps
   register(defineTool({
     name: 'prompt_manager_list',
-    description: 'List AGENTS.md presets (id, active state, file path). Read that file to see a preset body. The preset in effect right now is injected into your context each turn (the「本机提示词」system-reminder, whose「来源：」line names the file). Defaults to the preset currently in effect; pass all=true for the whole library.',
+    description: 'List AGENTS.md presets (id, active state, file path); read that file for a preset body. The one in effect is in the「本机提示词」reminder, whose「来源：」line names the file. Defaults to the one in effect; all=true for the whole library.',
     parameters: {
       all: { type: 'boolean', description: 'Include inactive presets (default false).' },
     },
@@ -57,7 +57,7 @@ export function buildPromptTools(deps: PromptToolDeps): void {
   }))
   register(defineTool({
     name: 'prompt_manager_apply',
-    description: 'Apply one AGENTS.md preset by id; effective on the next turn. If a scene currently drives the baseline, this does NOT refuse: it rebinds that scene\'s prompt binding to the preset and re-syncs the scene, so ~/.dsh/AGENTS.md ends up holding the scene\'s (new) binding — tell the user which scene was rebound. Otherwise the preset is written to ~/.dsh/AGENTS.md directly. A locked scene blocks the call.',
+    description: 'Apply one AGENTS.md preset by id; effective next turn. If a scene drives the baseline this does NOT refuse — it rebinds that scene to the preset and re-syncs it, so tell the user which scene was rebound. A locked scene blocks the call. Only on the user\'s instruction.',
     parameters: {
       id: { type: 'string', required: true, description: 'Preset id (lowercase letters, digits, hyphens).' },
     },

@@ -22,7 +22,7 @@
 /** 描述截断长度（与官方目录的 `catalogDescriptionMaxLength` 默认值一致）。 */
 export const SKILL_CATALOG_DESCRIPTION_MAX_LENGTH = 500
 /** 目录最多列几条；超出只报数量（让模型去调 `skill_manager_list`）。 */
-export const SKILL_CATALOG_MAX_ENTRIES = 60
+export const SKILL_CATALOG_MAX_ENTRIES = 50
 
 /** 技能清单里的一行（`skill-state` 的 `roots[].skills[]` 子集）。 */
 export interface SkillCatalogRow {
@@ -60,6 +60,7 @@ export function renderSkillCatalog(
   data: unknown,
   maxEntries: number = SKILL_CATALOG_MAX_ENTRIES,
   maxDescription: number = SKILL_CATALOG_DESCRIPTION_MAX_LENGTH,
+  listToolVisible: boolean = true,
 ): string {
   const roots = (data && typeof data === 'object' ? (data as { roots?: unknown }).roots : undefined) ?? []
   const byName = new Map<string, { name: string; description: string }>()
@@ -89,13 +90,21 @@ export function renderSkillCatalog(
   // （2026-09-18 起，见 context-inject.ts 的 DOMAIN_FRAME 的 `how` 行）—— 一处内容一个出处。
   const out = [...lines]
   const hidden = sorted.length - shown.length
-  if (hidden > 0) out.push('', `（另有 ${hidden} 个未列出，用 \`skill_manager_list\` 查。）`)
+  // 查询工具被关掉（兼容页的模型工具表）时只说"还有几个"：点名一个模型手里没有的工具，
+  // 它只会去猜名字。数量照报 —— 那是实话，与有没有出口无关。
+  if (hidden > 0) {
+    out.push('', listToolVisible
+      ? `（另有 ${hidden} 个未列出，用 \`skill_manager_list\` 查。）`
+      : `（另有 ${hidden} 个未列出。）`)
+  }
   return out.join('\n')
 }
 
 export interface SkillCatalogDeps {
   /** 取技能清单（插件技能服务的 `skill-state` op）。 */
   state: () => Promise<any>
+  /** `skill_manager_list` 还在模型工具表里吗（截断提示里那句话的前提）。默认在。 */
+  listToolVisible?: () => boolean
 }
 
 export interface SkillCatalog {
@@ -130,7 +139,7 @@ export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOpt
     try {
       const result = await deps.state()
       if (result && result.ok !== false) {
-        value = renderSkillCatalog(result.data ?? result, opts.maxEntries, opts.maxDescription)
+        value = renderSkillCatalog(result.data ?? result, opts.maxEntries, opts.maxDescription, deps.listToolVisible ? deps.listToolVisible() : true)
       }
     } catch { /* 保留上一次的值；首次失败则维持 '' */ }
     loadedAt = now()

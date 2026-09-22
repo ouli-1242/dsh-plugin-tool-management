@@ -513,8 +513,12 @@
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.name')),
                   React.createElement('input', { className: 'dsm-control', value: modal.form.name || '', placeholder: 'code-review', onChange: function (e) { setForm({ name: e.target.value }) } })),
                 React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('subagents.field.description')),
-                  React.createElement('input', { className: 'dsm-control', value: modal.form.description || '', placeholder: t('subagents.field.description.placeholder'), onChange: function (e) { setForm({ description: e.target.value }) } })),
+                  // 描述会整段进「可委派的子智能体」目录，上限就是注入侧的截断长度（`CATALOG_DESC_MAX`）；
+                  // 存量人设的超长描述标红（服务端不校验这个长度，只有注入时截）。
+                  React.createElement('div', { className: 'dsm-budget-meta' },
+                    React.createElement('span', { className: 'dsm-label' }, t('subagents.field.description')),
+                    React.createElement('span', { className: 'dsm-char-count' + (String(modal.form.description || '').length > CATALOG_DESC_MAX ? ' dsm-char-over' : '') }, String(modal.form.description || '').length + ' / ' + CATALOG_DESC_MAX)),
+                  React.createElement('input', { className: 'dsm-control', value: modal.form.description || '', maxLength: CATALOG_DESC_MAX, placeholder: t('subagents.field.description.placeholder'), onChange: function (e) { setForm({ description: e.target.value }) } })),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.body')),
                   React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: modal.form.body || '', placeholder: t('subagents.field.body.placeholder'), onChange: function (e) { setForm({ body: e.target.value }) } })),

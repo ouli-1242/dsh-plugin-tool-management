@@ -1,5 +1,5 @@
 // 技能域的 model 工具（2026-09-19 从 index.ts 的注册区抽出）：
-// skill_manager_list / skill_manager_set_enabled / skill_manager_create。
+// skill_manager_list / skill_manager_read / skill_manager_set_enabled / skill_manager_create。
 
 import { text, type ToolDomainDeps } from './deps.js'
 
@@ -14,7 +14,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
   // tools/pre-execute hook below (the model must ask before writing files).
   register(defineTool({
     name: 'skill_manager_list',
-    description: 'List DSH skills with enabled state, effective/shadowed status and source file path. The injected「本机技能目录」system-reminder carries callable skills and summaries only; use this tool to get a source file path (read the file for the full body) and to see entries that are off. Defaults to enabled skills only; pass all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
+    description: 'List skills with enabled state, effective/shadowed status and source file path. The「本机技能目录」reminder carries callable skills and summaries only; use this for entries that are off and to see which source wins a name collision, and skill_manager_read for a body. Defaults to enabled only; all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled and shadowed entries (default false).' },
     },
@@ -71,9 +71,80 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       return header + (shown.map((row) => row.text).join('\n') || '(none)') + notice
     },
   }))
+  // 一次拿到技能正文。此前读正文要两步：`skill_manager_list` 拿路径 → 自己再去读那个文件。
+  // 少的那一步不只是省一次调用 —— 目录里只有名字没有路径，而**同名技能常几份并存**（dsh /
+  // agents / claude / 自定义目录各一份），模型自己挑路径时很容易读到被覆盖的那份影子副本：
+  // 读完以为在用这个技能，其实生效的是另一份。这里先走 `skill-state`（core 的 markWinners
+  // 已在上面标出胜出者），再走 `skill-detail` 读那一份 —— 读到的永远是目录列出来的那一份。
+  register(defineTool({
+    name: 'skill_manager_read',
+    description: 'Read one skill\'s full SKILL.md body by name — what the「本机技能目录」reminder deliberately leaves out (it has names and summaries only). Resolves name collisions the same way, so you get the copy actually in effect; pass root only to inspect a specific (e.g. shadowed) source. Read-only.',
+    parameters: {
+      name: { type: 'string', required: true, description: 'Skill name, exactly as it appears in the catalog (kebab-case).' },
+      root: { type: 'string', description: 'Source root key (dsh/hub/agents/codex/claude, a project key, or a custom one). Default: the winning copy of this name.' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+    async execute(args: any, exec: any) {
+      const wanted = String((args && args.name) || '').trim()
+      if (!wanted) throw new Error('name is required')
+      const rootWanted = String((args && args.root) || '').trim()
+      const state = await deps.skillsOps['skill-state']({})
+      if (!state || state.ok === false) throw new Error((state && state.error) || 'skill-state failed')
+      const data: any = state.data || {}
+      type Hit = { rootKey: string; entryName: string; path: string; shadowedBy: string; preferred: boolean; enabled: boolean }
+      const hits: Hit[] = []
+      for (const root of data.roots || []) {
+        for (const skill of root.skills || []) {
+          if (String(skill.declaredName || skill.name || '') !== wanted && String(skill.name || '') !== wanted) continue
+          if (rootWanted && String(root.key || '') !== rootWanted) continue
+          hits.push({
+            rootKey: String(root.key || ''),
+            // `skill-detail` 按**目录名**认条目（core 的 visibleEntryForRoot 比的是 entry.name），
+            // 而目录名与 frontmatter 的 name 可以不同 —— 传错一个就读不到。
+            entryName: String(skill.name || wanted),
+            path: String(skill.path || ''),
+            shadowedBy: skill.shadowedBy && skill.shadowedBy.root ? String(skill.shadowedBy.root) : '',
+            preferred: skill.preferred === true,
+            // 与 skill_manager_list 同一套启停推导（影子副本没有 enabled 字段）。
+            enabled: skill.enabled !== undefined
+              ? skill.enabled === true
+              : (skill.invocationPolicyValid && skill.modelInvocable && skill.userInvocable && skill.managerEnabled !== false),
+          })
+        }
+      }
+      if (!hits.length) {
+        throw new Error(rootWanted
+          ? `no skill named "${wanted}" in source "${rootWanted}" — call skill_manager_list (pass all=true) to see what is installed`
+          : `no skill named "${wanted}" — call skill_manager_list (pass all=true) to see what is installed`)
+      }
+      // 胜出者优先：同名的影子副本读得到，但那不是生效的一份，所以默认不选它。
+      const picked = hits.find((hit) => !hit.shadowedBy && hit.enabled)
+        || hits.find((hit) => !hit.shadowedBy)
+        || hits[0]
+      const res = await deps.skillsOps['skill-detail']({ root: picked.rootKey, name: picked.entryName })
+      if (!res || res.ok === false) throw new Error((res && res.error) || 'skill-detail failed')
+      const detail: any = res.data || res
+      const marks: string[] = []
+      if (picked.shadowedBy) marks.push('shadowed by "' + picked.shadowedBy + '" — the copy actually in effect is a different one')
+      if (picked.preferred) marks.push('preferred copy')
+      if (!picked.enabled) marks.push('disabled')
+      const dup = hits.filter((hit) => !hit.shadowedBy).length > 1
+        ? hits.filter((hit) => !hit.shadowedBy).map((hit) => hit.rootKey).filter((k) => k !== picked.rootKey)
+        : []
+      const header = 'Skill ' + wanted + ' · source ' + picked.rootKey + (marks.length ? ' (' + marks.join('; ') + ')' : '') + '\n' +
+        'Path: ' + (detail.path || picked.path || '(unknown)') + '\n' +
+        'Description: ' + String(detail.description || '(none)').replace(/\s+/g, ' ').trim() + '\n' +
+        (dup.length ? 'Other callable copies with the same name: ' + dup.join(', ') + ' (this one wins; read them only to compare)\n' : '') +
+        '--- SKILL.md body ---\n'
+      // 注入边界：正文读进来就永久留在这一轮的 transcript 里，压制型预设下目录也可能不在 ——
+      // 与 skill_manager_list 同一句说明，别让模型以为"读过就等于技能开着"。
+      const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
+      return header + String(detail.body || '').trim() + notice
+    },
+  }))
   register(defineTool({
     name: 'skill_manager_set_enabled',
-    description: 'Enable or disable one DSH skill (manager policy only; source files are never modified). Enabling a shadowed copy has no effect.',
+    description: 'Enable or disable one DSH skill (manager policy only; source files are never modified). Enabling a shadowed copy has no effect. Only when the user asks or approves.',
     parameters: {
       name: { type: 'string', required: true, description: 'Skill name (kebab-case).' },
       enabled: { type: 'boolean', required: true, description: 'true to enable, false to disable.' },

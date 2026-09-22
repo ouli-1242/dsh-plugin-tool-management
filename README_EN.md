@@ -74,7 +74,11 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 Then remind me to hard-refresh the browser.
 ```
 
-The model can manage everything above via 14 tools (`mcp_manager_*` / `skill_manager_*` / `prompt_manager_*` / `memory_manager_*` / `subagent_manager_*`); scripts use `POST /dsh-plugin-tool-management/api` (`{op, args}` protocol).
+The model can manage everything above via 20 tools (`mcp_manager_*` / `skill_manager_*` / `prompt_manager_*` / `memory_manager_*` / `subagent_manager_*`); scripts use `POST /dsh-plugin-tool-management/api` (`{op, args}` protocol).
+
+Those 20 tool definitions total roughly 3,450 tokens, and the tool table is **sent with every single request**. Switch off the ones you never use in the **"Model tool table"** block on the **Host tab** (one by one, or a whole domain at once) — a switched-off tool is not sent at all, which is the only thing that genuinely saves tokens. The model then cannot call it, but **the panel is unaffected** (the 114 ops and the tool table are independent). Nothing is switched off by default.
+
+One tool also **yields automatically**: when the official `skill` tool is mounted in that conversation (every standard-class preset mounts it), our `skill_manager_read` ("load a skill body by name") is not sent — the two do the same job. The minimal preset has no official one, so ours stays.
 
 ---
 
@@ -89,7 +93,7 @@ The model can manage everything above via 14 tools (`mcp_manager_*` / `skill_man
 - **"Entering/leaving the mode" and "enabling a scene" are two independent state axes**: the UI toggle is the only entry point (it moves both axes at once). If you bypass the UI and call the HTTP API directly, note that `scene-mode-set{scene:null}` only drops the runtime snapshot and does **not clear the enabled set** — memories and the prompt keep being injected for that scene; a full exit also needs `rules-set-active{scenes:[]}`.
 - **Import**: `.md` / `.zip` (dir name = scene, bundles carry attachments), same names skipped never overwritten, over-limit items reported.
 - **Export**: pick memories and zip them, keeping the `scene/name` layout; bundle memories bring their attachments along. Sources are read-only.
-- **Injection budget**: default 256 KiB, oversized memories skipped with a list. Deletes go to recycle bin.
+- **Injection budget**: default 128 KiB, oversized memories skipped with a list. Deletes go to recycle bin.
 - **Subagent sessions do not receive memories**: memories are injected into the **top-level session only** — they are the parent's situation, not the facts a child needs; a child's context stays "persona + task", it can read memories on demand with `memory_manager_list/read`, and relevant facts belong in the `task`. Other domains are unaffected (MCP / skills / prompts still inject; the persona catalog follows each persona's `catalogDepth`).
 - **Scene lock**: once locked, create/update/delete across MCP / skills / subagents / memories / prompts is read-only — UI disabled plus a server-side guard; a scene must be running to lock, and a locked scene can't be closed until unlocked. **What freezes is the content, not the scene itself**: creating/deleting/renaming a scene, rebinding its prompt, switching the active set, recycle-bin restore and purge, MCP restart, export, injection settings and token settings are all outside the frozen list (they are not "content of the scene profile"). Switching the active set *is* refused while a locked scene is in effect — clearing it would leave the model-side write guard with nothing to check while the runtime still runs that scene's profile.
 - **Deleting a scene deletes its memories too**: the scene record, profile and every memory go into one recycle-bin entry, restored as a whole; a running scene refuses deletion. Scene names are renameable (dir and profile follow, memory bodies untouched).
@@ -145,7 +149,7 @@ The model can manage everything above via 14 tools (`mcp_manager_*` / `skill_man
 
 The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they must be the same physical modules, or every "adapt to host" decision degrades into guesswork.
 
-- **Host tab**: host version, usable capability count, per-action routing (native/adapter/unavailable), degradations & reasons. The check-up itself is read-only, but the page has two explicit write entries: **access token** (writes the profile's `cordis.patch.yml`, takes effect after restart) and **injection settings** (writes `inject-settings.json`, takes effect immediately).
+- **Host tab**: host version, usable capability count, per-action routing (native/adapter/unavailable), degradations & reasons. The check-up itself is read-only, but the page has three explicit write entries: **access token** (writes the profile's `cordis.patch.yml`, takes effect after restart), **injection settings** (writes `inject-settings.json`, takes effect immediately) and **model tool table** (writes `tool-table.json`, takes effect immediately).
 - **Command line**: `node scripts/doctor.mjs` (check), `node scripts/host-deps.mjs --fix` (align deps), `npm run sync:profile` (mirror the build into the profile's local install — a `file:` install is a hard-linked copy, so files ADDED by a build never show up there on their own).
 - Under a **suppressing preset** such as `minimal` (persona `complete` / runtime context off) this plugin's injection is **off by default** (following the preset's intent), and the prompt and the skills are missing because their official rows are not mounted — the Host tab marks this per column, and its "Injection" block can force any domain back on.
 - **Unchecking "Skills" or "Prompt" really stops them**: under standard presets the host delivers those two itself (the plugin steps aside), so unchecking now also stops the host's copy — the `skill-catalog` / `agent-instructions` messages are no longer let through on that step. The other three domains (memory / MCP / subagents) are only ever sent by this plugin, so their toggles were already complete.
@@ -167,6 +171,8 @@ The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they mu
 | Memory index / scenes / profiles                                      | `~/.dsh/tool-management/memories-index.json`                                                     |
 | MCP sidecars (disabled tools / known tools / notes / settings)        | `~/.dsh/tool-management/mcp-*.json`                                                              |
 | Injection settings (five domain switches / suppressing-preset policy) | `~/.dsh/tool-management/inject-settings.json`                                                    |
+| Model tool table (tools not sent to the model)                        | `~/.dsh/tool-management/tool-table.json`                                                         |
+| Scenes-page preference (preview card before entering a scene)         | `~/.dsh/tool-management/scene-settings.json`                                                     |
 | Runtime log / patch backups                                           | `~/.dsh/tool-management/tool-management.log` · `backups/`                                        |
 
 **No user data is stored inside the plugin's install directory** (`dsh plugin update` replaces it wholesale).

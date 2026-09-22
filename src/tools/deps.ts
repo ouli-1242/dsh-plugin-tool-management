@@ -17,7 +17,7 @@ export interface ToolDomainDeps {
    * 与宿主 defineTool **同签名的本地包装**（已包了采纳遥测，见 index.ts 的 trackAdoption）。
    *
    * 类型刻意用宿主自己的签名：重写成 `(options: unknown) => ToolDefinition` 会让每个调用点
-   * 的 parameters / output 推断退化成 unknown —— 参数表写错也不再报错，等于把 14 个工具的
+   * 的 parameters / output 推断退化成 unknown —— 参数表写错也不再报错，等于把 20 个工具的
    * 声明校验一次性丢掉。宿主改签名时该红的地方照旧红，这才是要保住的东西。
    */
   defineTool: typeof hostDefineTool

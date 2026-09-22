@@ -424,7 +424,12 @@
       // 注入设置（本插件五个注入域的开关；见 src/context-inject.ts）。它和可达性矩阵是一体两面：
       // 矩阵说"到不到得了"，这里决定"要不要"。读不到时这一节不显示。
       const [inject, setInject] = React.useState(null)
-      // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 本次运行的投递统计。
+      // 模型工具表（哪些工具整份不发给模型；见 src/tools/table.ts）。与「注入」是两种省法：
+      // 注入关掉省的是正文，这里关掉省的是工具 schema（工具表按每个请求付钱）。
+      const [toolTable, setToolTable] = React.useState(null)
+      // 保存往返期间把整块置灰（见 saveToolTable 的注释：不做乐观更新）。
+      const [toolTableBusy, setToolTableBusy] = React.useState(false)
+      // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 那一段对话的投递统计。
       // 与「注入」设置是一体两面：设置说"要送什么"，这里说"实际送到了什么"。
       const [live, setLive] = React.useState(null)
       const [liveOpen, setLiveOpen] = React.useState('')
@@ -663,6 +668,53 @@
           .then(function (r) { if (alive !== false && r && r.ok && r.settings) setInject(r.settings) })
           .catch(function () { /* 读不到 → 不渲染这一节 */ })
       }
+      // 工具表实况（注册时量到的体积 + 关掉了哪些）。服务端返回的 `report` 自带分组与
+      // ≈token 合计 —— 界面不自己算，也不缓存第二份数字。
+      const applyToolTable = function (r, alive) {
+        if (alive === false) return
+        if (r && r.ok && r.report) setToolTable({ hidden: r.hidden || [], report: r.report })
+      }
+      const loadToolTable = function (alive) {
+        apiCall('tool-table', {})
+          .then(function (r) { applyToolTable(r, alive) })
+          .catch(function () { /* 读不到 → 不渲染这一节 */ })
+      }
+      /**
+       * 保存工具表开关。
+       *
+       * 刻意**不做乐观更新**（与上面的注入设置不同）：勾选框状态与"关掉后每轮少发多少"
+       * 这两个数字必须来自同一份服务端数据（注册时量到的体积），本地先改一个就会在
+       * 往返的这几毫秒里出现"框已经勾了、合计还没变"的两种真相。这里是本机 HTTP，
+       * 往返可以忽略，所以选择在等待期间把整块变灰。
+       */
+      const saveToolTable = function (names) {
+        if (!toolTable || toolTableBusy) return
+        setToolTableBusy(true)
+        apiCall('tool-table', { set: true, hidden: names.slice() })
+          .then(function (r) {
+            if (r && r.ok && r.report) setToolTable({ hidden: r.hidden || names, report: r.report })
+            else loadToolTable(true)
+            // 功能总览那一行写着"一轮发出去多少"，它得跟着变。
+            loadFeatures(true)
+          })
+          .catch(function () { loadToolTable(true) })
+          .then(function () { setToolTableBusy(false) })
+      }
+      /** 单个工具的勾选：在 hidden 名单里加 / 删一个名字。 */
+      const toggleToolTableTool = function (name, on) {
+        if (!toolTable) return
+        const hid = (toolTable.hidden || []).filter(function (n) { return n !== name })
+        if (!on) hid.push(name)
+        saveToolTable(hid)
+      }
+      /** 整个域一起开 / 关（分组勾选框）。 */
+      const toggleToolTableGroup = function (group, on) {
+        if (!toolTable) return
+        const names = group.tools.map(function (tool) { return tool.name })
+        const hid = (toolTable.hidden || []).filter(function (n) { return names.indexOf(n) < 0 })
+        if (!on) Array.prototype.push.apply(hid, names)
+        saveToolTable(hid)
+      }
       const loadLive = function (alive) {
         apiCall('injection-live', {})
           .then(function (r) { if (alive !== false && r && r.ok) setLive(r) })
@@ -683,6 +735,7 @@
           .catch(function (e) { if (alive) { setError(errMsg(e)); setBusy(false) } })
         loadReach(alive)
         loadInject(alive)
+        loadToolTable(alive)
         loadLive(alive)
         loadFeatures(alive)
         loadToken(alive)
@@ -696,6 +749,7 @@
           .catch(function (e) { setError(errMsg(e)); setBusy(false) })
         loadReach(true)
         loadInject(true)
+        loadToolTable(true)
         loadLive(true)
         loadFeatures(true)
         loadToken(true)
@@ -1057,6 +1111,57 @@
                   React.createElement('span', null, t('compat.inject.domain.' + key)))
               })))))
       }
+      // 模型工具表：与「注入」并列的第二种省法 —— 那边省正文，这边省工具 schema。
+      // 工具表**每个请求都发一遍**（哪怕这一轮用不上），所以关掉的工具是整份不进请求，
+      // 这是本插件省 token 最实在的一处；代价是模型调不到它（面板不受影响）。
+      // 排版（用户 2026-09-23 指出太乱）：**一行一个工具**、四列固定宽度 —— 勾选框 / 名字 /
+      // ≈tok / 一句话介绍。挤成一排的小块每行宽度都不一样，竖着扫不出任何一列。
+      // 文字两档：行内那句是"干什么用的"（统一动词开头），悬停给稍详细的一句（含边界与代价）。
+      // 两档都按工具名去词典取，取不到就让那一格空着（`translateOrFallback`），
+      // 绝不把 `compat.tools.about.x` 这种键名当文案显示出来。
+      if (toolTable) {
+        const report = toolTable.report
+        const hidden = toolTable.hidden || []
+        const groups = report.groups || []
+        const groupLabel = function (key) { return key === 'other' ? t('compat.tools.other') : t('compat.inject.domain.' + key) }
+        const rows = []
+        groups.forEach(function (group) {
+          const onCount = group.tools.filter(function (tool) { return !tool.hidden }).length
+          rows.push(React.createElement('div', { className: 'dsm-tooltable-group', key: 'g-' + group.key },
+            React.createElement('label', { className: 'dsm-tooltable-ghead' },
+              React.createElement('input', {
+                type: 'checkbox',
+                checked: onCount === group.tools.length,
+                // 半开半关时显示成"未全选"，点一下 = 全开（与其余全选控件同款：勾选框只表达
+                // 两种意思，第三种状态靠计数说清）。
+                onChange: function () { toggleToolTableGroup(group, onCount !== group.tools.length) },
+              }),
+              React.createElement('span', { className: 'dsm-tooltable-gname' }, groupLabel(group.key)),
+              React.createElement('span', { className: 'dsm-tooltable-gcount' }, t('compat.tools.groupCount', { on: onCount, total: group.tools.length, tok: group.tok }))),
+            React.createElement('div', { className: 'dsm-tooltable-tools' },
+              group.tools.map(function (tool) {
+                const about = translateOrFallback(t, 'compat.tools.about.' + tool.name, '')
+                // 悬停 = 稍详细那句 + 空行 + 当前状态。取不到详细那句时退回行内那句，
+                // 于是"悬停什么也没有"不会发生。
+                const hover = translateOrFallback(t, 'compat.tools.hover.' + tool.name, about)
+                return React.createElement('label', {
+                  className: 'dsm-tooltable-tool',
+                  key: tool.name,
+                  title: (hover ? hover + '\n\n' : '') + (tool.hidden ? t('compat.tools.offTitle') : t('compat.tools.onTitle')),
+                },
+                  React.createElement('input', { type: 'checkbox', checked: !tool.hidden, onChange: function () { toggleToolTableTool(tool.name, !!tool.hidden) } }),
+                  React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
+                  React.createElement('span', { className: 'dsm-tooltable-tok' }, '≈' + tool.tok),
+                  React.createElement('span', { className: 'dsm-tooltable-about' }, about))
+              }))))
+        })
+        push(section(t('compat.tools'), t('compat.tools.hint'),
+          React.createElement('div', { className: 'dsm-tooltable' + (toolTableBusy ? ' dsm-tooltable-busy' : '') },
+            React.createElement('div', { className: 'dsm-tooltable-summary' }, hidden.length === 0
+              ? t('compat.tools.summaryAll', { total: report.totalCount, tok: report.totalTok })
+              : t('compat.tools.summary', { on: report.visibleCount, total: report.totalCount, tok: report.visibleTok, saved: report.hiddenTok })),
+            rows)))
+      }
       // 注入实况：紧挨「注入」设置块下方。数据来自 `injection-live`（宿主读最近活跃会话的
       // 可见表面），是"回放"不是"重算"—— 界面显示已注入而模型实际没收到时（场景接管、
       // 压制型预设、开关被关、压缩后还没补发），这里一眼可见。
@@ -1122,17 +1227,30 @@
         const deliveredText = delivered.count > 0
           ? t('compat.live.delivered', { count: delivered.count, time: new Date(delivered.lastAt).toTimeString().slice(0, 5) })
           : t('compat.live.never')
-        // 观测面：本进程到底看到过几次本插件的工具调用。必须显示 —— 采纳全是 0 时，
+        // 观测面：这段对话里到底看到过几次本插件的工具调用。必须显示 —— 采纳全是 0 时，
         // 要能分清"模型真的没用"（结论）和"遥测没接上"（故障）。
         const observedCalls = Number((live.observed || {}).toolCalls) || 0
         const observedText = observedCalls > 0
           ? t('compat.live.observe.some', { count: observedCalls })
           : t('compat.live.observe.none')
+        // 成本一行：总量 / 最费的域 / 重发最多的域。只在**真投过东西**时出现 ——
+        // 全 0 时摆一行「累计约 0 B」是噪声（与上面 adoptText 的取向一致：没投过的域不报统计）。
+        // 字节数是「当前正文 × 投递次数」的近似（服务端已注明），所以句子带「约」。
+        const cost = live.cost || {}
+        const costName = function (entry) { return entry ? (domainLabel(entry.key) || String(entry.label || '')) : '' }
+        const costBytes = Number(cost.injectedBytes) || 0
+        const costText = costBytes > 0 && cost.topDomain
+          ? t('compat.live.cost', {
+              size: fmtSize(costBytes),
+              domain: costName(cost.topDomain),
+              resent: costName(cost.mostDelivered),
+            })
+          : ''
         const canCopy = (live.domains || []).some(hasText)
         push(React.createElement('section', { className: 'dsm-compat-section' },
           React.createElement('div', { className: 'dsm-compat-section-head' },
             React.createElement('h3', { className: 'dsm-compat-section-title' }, t('compat.live.title')),
-            React.createElement('span', { className: 'dsm-compat-section-hint' }, t('compat.live.hint') + ' · ' + deliveredText + ' · ' + observedText),
+            React.createElement('span', { className: 'dsm-compat-section-hint' }, t('compat.live.hint') + ' · ' + deliveredText + ' · ' + observedText + (costText ? ' · ' + costText : '')),
             React.createElement('span', { className: 'dsm-inject-live-actions' },
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !canCopy, onClick: copyAll },
                 liveCopied ? t('compat.live.copied') : t('compat.live.copy')))),

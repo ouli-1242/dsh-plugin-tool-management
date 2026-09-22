@@ -23,6 +23,7 @@ import { assessPresetReach, type PresetRosterLike } from '../compat/preset-reach
 import { runtimeNotes } from '../compat/runtime-notes.js'
 import { pluginLog } from '../skills/service.js'
 import type { InjectSettings, LiveInjectionSnapshot } from '../context-inject.js'
+import type { ToolTableReport } from '../tools/table.js'
 
 /** patch 备份清单里的一项：名字 / 层级 / 时间 / 大小（不带文件内容）。 */
 export interface PatchBackupInfo {
@@ -47,6 +48,10 @@ export interface CompatOpsDeps {
   tools: { schemas(): unknown }
   readInjectSettings(force?: boolean): Promise<InjectSettings>
   injectSettingsOp(args: any): Promise<any>
+  /** 模型工具表设置（读写侧车 `tool-table.json`；界面在「兼容」页同一块）。 */
+  toolTableOp(args: any): Promise<any>
+  /** 当前工具表实况（注册时量到的体积 + 关掉了哪些），功能总览那一行用。 */
+  toolTableReport(): ToolTableReport
   presetRoster(): PresetRosterLike | undefined
   listPatchBackups(): Promise<PatchBackupInfo[]>
   cleanPatchBackups(delByLevel: Record<string, number>): Promise<{ removed: string[]; failed: string[]; kept: number }>
@@ -159,6 +164,10 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
     },
     // 注入设置（读 / 写）：压制型预设下是否仍然注入 + 各域开关。界面在「兼容」页。
     'inject-settings': (args: any) => deps.injectSettingsOp(args),
+    // 模型工具表（读 / 写）：哪些工具**根本不发**给模型。工具表按每个请求付钱，关掉的
+    // 整份不进请求（与 MCP 停用那半边的区别：那些是宿主工具、关掉仍留在表里；这些是
+    // 我们自己的工具，关掉两边一起生效）。返回里带分组体积，界面据此显示 ≈token。
+    'tool-table': (args: any) => deps.toolTableOp(args),
     // 功能总览（B6）：**按功能点**回答"现在每一项到底能不能用"，三层合成 ——
     //   ① 装配层（listener / provider / 适配是否真的挂上，来自运行时上报通道）
     //   ② 宿主能力层（compat 探测的路由判定）
@@ -193,7 +202,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           ['official-suppression', '官方注入的关域拦截', 'compat'],
           ['skills-provider', '技能 provider 装配', 'skills'],
           ['projection-cache-adapter', '投影缓存删除屏障', 'sessions'],
-          ['mcp-tool-visibility', '停用工具的可见性', 'mcp'],
+          ['mcp-tool-visibility', '工具表可见性（停用 / 关掉的工具不下发）', 'mcp'],
         ]
         for (const [noteId, label, tab] of assemblyRows) {
           const note = notes.get(noteId)
@@ -229,6 +238,17 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         push('mcp-tools', 'MCP 工具停用', 'mcp',
           disabledTools === 0 ? 'ok' : 'partial',
           disabledTools === 0 ? '没有停用的工具' : `${disabledTools} 个工具处于停用态（执行拦截 + 可见性摘除）`)
+        // 工具表按每个请求付钱：这一行回答"这一轮实际发出去多少"。关掉的工具整份不进请求，
+        // 但代价是模型调不到它们（本插件的面板不受影响）——所以是 partial，不是 ok。
+        // 末尾那句是**逐会话**的差额：官方 `skill` 工具在场的会话里我们那份加载器会再让位
+        // 一个（见 index.ts 的 CARRIER_DUPLICATES），本表的数字是全局口径、不含它。
+        const table = deps.toolTableReport()
+        const carrierNote = '；官方 `skill` 工具在场的会话，`skill_manager_read` 还会自动让位一份'
+        push('tool-table', '模型工具表', 'compat',
+          table.hiddenCount === 0 ? 'ok' : 'partial',
+          (table.hiddenCount === 0
+            ? `${table.totalCount} 个工具全部下发（≈${table.totalTok} tok/轮）`
+            : `关掉 ${table.hiddenCount}/${table.totalCount} 个：一轮少发 ≈${table.hiddenTok} tok（现在 ≈${table.visibleTok} tok/轮，面板不受影响）`) + carrierNote)
         push('native-delete', '宿主原生删除入口', 'compat',
           notes.has('workspace.delete-native') ? 'partial' : 'ok',
           notes.get('workspace.delete-native')?.detail ?? '宿主未提供原生删除入口（本插件自有完整序列）')
@@ -274,7 +294,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         ...(r.failed.length ? { failedCount: r.failed.length, failedNames: r.failed } : {}),
       }
     },
-    // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 本次运行的投递统计。
+    // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 那一段对话的投递统计。
     // 回答"勾了开关到底送没送到"——界面配置与实际注入不一致时，这里一眼可见。
     'injection-live': async () => {
       const live = deps.getContextInjectorLive()

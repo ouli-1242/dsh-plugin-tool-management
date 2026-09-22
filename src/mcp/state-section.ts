@@ -41,9 +41,12 @@
 // 与子智能体目录同构的 stale-while-revalidate（见 src/subagents/catalog.ts）。
 
 /** 段里最多列几台 server；超出部分只报数量。 */
-export const DEFAULT_MCP_MAX_ENTRIES = 60
-/** 备注截断长度。备注是自由文本，界面侧另有 maxLength(500) 兜底，段侧再截一刀。 */
-export const DEFAULT_MCP_NOTE_MAX_LENGTH = 200
+export const DEFAULT_MCP_MAX_ENTRIES = 50
+/**
+ * 备注截断长度。界面上那两枚输入框（MCP 页与场景档案）用同一个数当字数上限，
+ * 客户端镜像在 `42-shared-ui.js` 的 `MCP_NOTE_MAX` —— 改这里要一起改它。
+ */
+export const DEFAULT_MCP_NOTE_MAX_LENGTH = 300
 /**
  * 备注的固定前缀（模型侧口径，用户裁定 2026-09-16：字段与段统一叫 user-hint / 用户提示）。
  *

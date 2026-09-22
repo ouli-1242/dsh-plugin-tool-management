@@ -3,6 +3,7 @@
 // 这一域管「谁能改、改哪些、什么时候不许改」：
 //   * 访问令牌（可选）—— 两条用途：宿主浏览器鉴权的逃生口，以及写操作的纵深防御；
 //   * 写 / 敏感 op 白名单 —— 哪些 op 要凭令牌（含"只读但会泄露明文"与"只读但会改宿主状态"）；
+//     清单本身在 `./op-registry.ts`，本文件只拼装（`opsWith` / `frozenOps`）。
 //   * 场景锁定 —— 任一场景 locked=true 时五个管理域整体冻结；
 //   * handlers 后处理 —— 把上面三条装到 op 表上（包装顺序即语义，见 installHandlerGuards）。
 //
@@ -15,6 +16,7 @@
 // 五个读 op 上。整段照搬、顺序未变。
 
 import { createHash, timingSafeEqual } from 'node:crypto'
+import { frozenOps, opsWith } from './op-registry.js'
 
 // ── 1. 访问令牌 ──────────────────────────────────────────────────────────────
 
@@ -155,57 +157,19 @@ export interface OpWhitelist {
 
 /** 建白名单。必须在四个 service 创建之后构造（依赖其 writeOps）。 */
 export function createOpWhitelist(deps: OpWhitelistDeps): OpWhitelist {
-  // HTTP 写操作门禁清单。skills/rules/档案引擎域由各自 service 导出的 writeOps 派生
-  // （与其 ops 表同文件维护，新增写 op 改对应 service 即可）；本文件内联域
-  // （mcpm-* / skill-open / agentsmd-* / history-*）在此列举。
-  // 注意：必须在上述 service 创建之后构造（依赖其 writeOps）。
+  // 清单本身在 `./op-registry.ts` 里逐条登记（判据、口径、为什么）。这里只做拼装：
+  // 写 = 四个 service 自报的 writeOps ∪ 登记表里标了 write 的内联域；敏感 = 登记表标 sensitive。
   const WRITE_OPS = new Set<string>([
     ...deps.writeOps.skills,
     ...deps.writeOps.memories,
     ...deps.writeOps.archives,
     ...deps.writeOps.subagents,
-    'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-restart',
-    'mcpm-compact',
-    'mcpm-export', 'mcpm-import', 'mcpm-note', 'mcpm-settings', 'mcpm-tool-enabled',
-    // mcpm-tools-refresh 为了拿实时工具表会临时启用目标服务器、结束后恢复原状（两次
-    // writePatch），恢复失败还会停留在启用态 —— 是写不是读，按写门禁（与 mcpm-restart
-    // 已在清单同理；0.6.0/0.7.0 已有两次写 op 漏列前科）。
-    'mcpm-tools-refresh',
-    // mcpm-reveal returns UNMASKED secrets; even though it is a read, it is
-    // token-gated like a write — on a LAN-exposed port the token must be the
-    // last line of defense for plaintext credentials too, not just writes.
-    'mcpm-reveal',
-    'skill-open',
-    // preset-tools 是只读枚举，但枚举会为预设建立 standing mount（官方语义：每进程只挂一次）。
-    // 未授权调用者不该触发挂载 —— 按写门禁。
-    //
-    // 这条规则的范围写清楚，别当成"凡会写盘就入门禁"：`history-list` / `history-sessions`
-    // 每次都会写工作区快照、`rules-list` / `rules-read` / `rules-diagnose` 会整份覆盖写
-    // `memories-index.json`、`mcpm-list` / `mcpm-tools` 回写 `mcp-known-tools.json` ——
-    // 五个都是读 op 且**不在本清单**。判据是"会不会改**宿主或外部系统**的状态"：
-    // standing mount 改的是宿主进程，而上面那些写的是插件自己的侧车（丢了可重建）。
-    // 想要它们也带令牌就显式加进来，别靠"读操作带副作用"这句话推。
-    'preset-tools',
-    // 提示词写操作（create/update/remove 改预设库；apply 写全局 AGENTS.md；import 从外部内容建预设）
-    'agentsmd-create', 'agentsmd-update', 'agentsmd-apply', 'agentsmd-remove', 'agentsmd-import',
-    // 提示词预设的回收站（恢复 / 永久删除都是写）
-    'agentsmd-trash-restore', 'agentsmd-trash-delete',
-    // history 写操作（archive/unarchive 改归档集合；delete 永久删除；retention-set 写保留期；
-    // workspace-register 会新增一条宿主工作区登记，同样是写）
-    'history-archive', 'history-unarchive', 'history-delete', 'history-retention-set',
-    'history-unarchive-batch', 'history-delete-batch', 'history-import', 'history-export',
-    // 通用导出：往用户指定的目录写文件，按写操作门禁（token）。
-    'bundle-export',
-    'history-archive-batch', 'history-workspace-register',
-    // 注入设置（五个域开关 / 压制型预设口径）写侧车，按写操作门禁。
-    'inject-settings',
-    // 清理 patch 备份：删磁盘文件（含明文凭据副本），按写操作门禁。
-    'backups-clean',
+    ...opsWith('write'),
   ])
 
   // 会泄露明文凭据 / 完整配置的 op：**必须**带对的访问令牌，没配令牌就一律拒绝
   // （判定在 http-fence.ts 的 secretOpRejection，含两种情况的区分与理由）。
-  const SENSITIVE_OPS = new Set<string>(['mcpm-reveal', 'mcpm-export'])
+  const SENSITIVE_OPS = new Set<string>(opsWith('sensitive'))
 
   return { WRITE_OPS, SENSITIVE_OPS }
 }
@@ -299,37 +263,16 @@ export function installHandlerGuards(deps: HandlerGuardsDeps): void {
       }
     }
   }
-  guardLockedOps([
-    // MCP：改配置 / 服务器启停 / 工具启停 / 导入导出配置 / 备注 / 设置。
-    // restart 仍放行（它是"重连"这条恢复路径），但它**不是只读**：实现会两次 `writePatch`
-    //（先强制停用、轮询、再按重启前状态恢复）。所以它不改的是**用户选的启停值**，
-    // 不是"不碰补丁文件" —— 锁定期间它是唯一能落盘改补丁的入口，进程中断会把服务器
-    // 留在停用态。别按"只重连"去理解它。
-    'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-tool-enabled', 'mcpm-import', 'mcpm-compact', 'mcpm-note', 'mcpm-settings',
-    // 技能：启停 / 来源启停与移除恢复 / 首选 / 删除 / 创建导入 / 自定义目录 / 回收站 / 批量启停。
-    'skill-enable', 'skill-disable', 'skill-source-enable', 'skill-source-disable', 'skill-source-remove', 'skill-source-restore',
-    'skill-prefer', 'skill-unprefer', 'skill-delete', 'skill-create', 'skill-import', 'skill-upload', 'skill-set-all',
-    'skill-custom-add', 'skill-custom-remove', 'skill-trash-restore', 'skill-trash-delete',
-    // 子智能体：开关 / 改名保存 / 删除 / 导入 / 回收站。
-    'subagent-create', 'subagent-update', 'subagent-delete', 'subagent-toggle', 'subagent-import', 'subagent-trash-restore', 'subagent-trash-delete',
-    // 记忆：增删改 / 开关 / 导入 / 回收站 / 绑定。set-active 是场景启停，不在冻结范围。
-    'rules-create', 'rules-update', 'rules-remove', 'rules-toggle', 'rules-import', 'rules-restore', 'rules-trash-remove', 'rules-attach', 'rules-detach', 'rules-set-index',
-    // 提示词：建改删 / 应用（切换生效基线）/ 导入 / 回收站。
-    'agentsmd-create', 'agentsmd-update', 'agentsmd-remove', 'agentsmd-apply', 'agentsmd-import', 'agentsmd-trash-restore', 'agentsmd-trash-delete',
-  ], '修改')
+  // 冻结清单与档案同步清单都来自 `./op-registry.ts`：加 op 时在那里登记一条，这里不再抄。
+  guardLockedOps(frozenOps('all'), '修改')
   // 场景内「开关」类操作（用户裁定 2026-09-17）：未锁定时**可用**，改动同步进当前场景档案。
   // 与「锁定」正交：锁定冻结全部写操作，这里只是把页面开关的意图也写进档案。
-  syncSceneArchiveOnSwitch([
-    'mcpm-set-enabled', 'mcpm-set-all', 'mcpm-tool-enabled',
-    'skill-enable', 'skill-disable', 'skill-set-all', 'skill-source-enable', 'skill-source-disable',
-    'subagent-toggle',
-  ])
-  // `rules-set-active` 不在 `guardLockedOps` 里（场景启停本身要可用），但它能把**当前
-  // 场景清空** —— 而「当前场景已锁定」是模型侧 `lockedSceneGuard` 唯一的判据，场景一空
-  // 它就返回 null，四个写工具全部放开，运行时却仍是那个场景的档案态（2026-09-19 审计
-  // T-32）。所以这里单独挡一刀：锁着的场景正在生效时，不许改启用集合（先解锁再说）。
-  // 没有锁定场景在生效时（全局态 / 场景未锁）照旧可用 —— 那本来就是允许的。
-  for (const [opName, what] of [['rules-set-active', '切换场景']] as const) {
+  syncSceneArchiveOnSwitch(opsWith('syncsArchive'))
+  // 口径 `frozenScope: 'active-scene'` 的那几条（判据与理由登记在 op-registry.ts 的
+  // `rules-set-active` 条目上）。没有锁定场景在生效时（全局态 / 场景未锁）照旧可用。
+  const ACTIVE_SCENE_LABEL: Record<string, string> = { 'rules-set-active': '切换场景' }
+  for (const opName of frozenOps('active-scene')) {
+    const what = ACTIVE_SCENE_LABEL[opName] ?? '改它'
     const original = handlers[opName]
     if (typeof original !== 'function') continue
     handlers[opName] = async (args: any) => {
@@ -350,15 +293,15 @@ export function installHandlerGuards(deps: HandlerGuardsDeps): void {
       return original(args)
     }
   }
-  // 被锁场景自身的档案与删除：只挡它自己，别的场景照常。
-  for (const [opName, pickScene, what] of [
-    ['scene-archive-save', (args: any) => (args && args.scene) || '', '改档案'],
-    ['rules-remove-scene', (args: any) => (args && args.name) || '', '删除'],
-  ] as const) {
+  // 被锁场景自身的档案与删除：只挡它自己，别的场景照常（口径 `frozenScope: 'self-scene'`）。
+  // 目标场景一律从 `args.scene` / `args.name` 里取 —— 这两个键名就是本插件 op 的惯例。
+  const SELF_SCENE_LABEL: Record<string, string> = { 'scene-archive-save': '改档案', 'rules-remove-scene': '删除' }
+  for (const opName of frozenOps('self-scene')) {
+    const what = SELF_SCENE_LABEL[opName] ?? '改它'
     const original = handlers[opName]
     if (typeof original !== 'function') continue
     handlers[opName] = async (args: any) => {
-      const scene = String(pickScene(args) || '').trim()
+      const scene = String((args && (args.scene || args.name)) || '').trim()
       const locked = await lockedSceneNames()
       if (scene && locked.includes(scene)) return { ok: false, error: `场景「${scene}」已锁定：先解锁再${what}` }
       return original(args)
@@ -382,7 +325,7 @@ export function installHandlerGuards(deps: HandlerGuardsDeps): void {
     }
     return res
   }
-  for (const opName of ['mcpm-list', 'mcpm-reveal', 'skill-state', 'subagent-list', 'agentsmd-list']) {
+  for (const opName of opsWith('annotatesLock')) {
     const original = handlers[opName]
     if (typeof original !== 'function') continue
     handlers[opName] = async (args: any) => annotateLocked(await original(args))

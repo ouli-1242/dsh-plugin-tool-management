@@ -201,6 +201,8 @@
               env: payload.env,
             }
             if (payload.mode === 'edit') args.id = payload.id
+            // 备注只在新增时带：服务端在写补丁的同一次锁里落进侧车（见 mcpmAdd）。
+            else args.note = payload.note
             run(payload.mode === 'edit' ? 'mcpm-edit' : 'mcpm-add', args, 'form', closeForm)
           }
 
@@ -532,7 +534,15 @@
                 ? React.createElement('label', { className: 'dsm-field' },
                     React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.headers')),
                     React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.headers, placeholder: 'Authorization=Bearer xxx', onChange: setFormField('headers') }))
-                : null),
+                : null,
+              // 备注放在表单**最下面**：它是可选项，说的又是"这台怎么用"，不该插在必填的连接参数中间。
+              // 默认不填 = 侧车里不产生条目；只在新增时出现（`mcpm-edit` 不碰侧车，改备注走详情里那枚
+              // 输入框）。上限就是注入段的截断长度 `MCP_NOTE_MAX` —— 写多少模型就能读到多少。
+              formModal.mode === 'edit' ? null : React.createElement('label', { className: 'dsm-field' },
+                React.createElement('div', { className: 'dsm-budget-meta' },
+                  React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.note')),
+                  React.createElement('span', { className: 'dsm-char-count' }, String(formModal.note || '').length + ' / ' + MCP_NOTE_MAX)),
+                React.createElement('input', { className: 'dsm-control', value: formModal.note || '', maxLength: MCP_NOTE_MAX, placeholder: mt('mcp.field.note.placeholder'), onChange: setFormField('note') }))),
             React.createElement('div', { className: 'dsm-modal-actions' },
               React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy === 'form' || !formModal.serverName.trim(), onClick: submitForm }, formModal.mode === 'edit' ? mt('mcp.btn.save') : mt('mcp.btn.add'))))
 
@@ -574,8 +584,13 @@
               React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.status')),
               React.createElement('div', { className: 'dsm-feedback' + (detailStatus.cls === 'dsm-failed' ? ' dsm-error' : ' dsm-warning') }, detailHint)) : null,
             React.createElement('div', { className: 'dsm-detail-section' },
-              React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.note')),
-              React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: noteDraft, maxLength: 200, placeholder: mt('mcp.detail.note.placeholder'), onChange: (ev) => setNoteDraft(ev.target.value) }),
+              // 字数计数摆在小标题同一行右侧：备注的上限就是注入段的截断长度（`MCP_NOTE_MAX`）。
+              // 超限标红沿用记忆页描述那套（`dsm-char-over`）—— 服务端不校验备注长度，
+              // 这条之前存的长备注会整条存着、注入时被截掉，得让人看得见超了多少。
+              React.createElement('div', { className: 'dsm-budget-meta' },
+                React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.note')),
+                React.createElement('span', { className: 'dsm-char-count' + (String(noteDraft || '').length > MCP_NOTE_MAX ? ' dsm-char-over' : '') }, String(noteDraft || '').length + ' / ' + MCP_NOTE_MAX)),
+              React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: noteDraft, maxLength: MCP_NOTE_MAX, placeholder: mt('mcp.detail.note.placeholder'), onChange: (ev) => setNoteDraft(ev.target.value) }),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save')))),
             React.createElement('div', { className: 'dsm-detail-section' },
@@ -1093,10 +1108,44 @@
             var el = document.getElementById('dsm-tab-' + TABS[next][0])
             if (el && el.focus) el.focus()
           }
+          // 键盘导航第一步：`/` 聚焦当前页的搜索框、Esc 清空它 —— 只做这两个键。
+          //
+          // 为什么挂在 `section` 上而不是 `window`：本插件只是宿主设置面板里的一个块，
+          // 全局监听会抢走宿主自己的键。挂在根上则只覆盖我们自己的 UI（焦点落在哪一页
+          // 就筛哪一页），也不需要在 effect 里管监听器的增删。
+          var onSectionKeyDown = function (e) {
+            var el = e.target
+            if (!el || typeof el.closest !== 'function') return
+            // 弹窗开着时整个放行：Esc 关窗与 Tab 焦点陷阱由 Modal 自己处理（见 trapModalFocus）。
+            if (el.closest('.dsm-modal')) return
+            if (e.key === '/') {
+              // 焦点已在任意文本控件里 → `/` 是用户要打的字符，不是快捷键。
+              if (el.closest('input, textarea, select, [contenteditable]')) return
+              var boxes = sectionRef.current ? sectionRef.current.querySelectorAll('input.dsm-search') : []
+              for (var i = 0; i < boxes.length; i += 1) {
+                // 只挑真正可见的那个：MCP 页的弹窗里还藏着一枚搜索框，聚焦到
+                // `display:none` 的子树里等于把焦点弄丢（用户只会觉得"按了没反应"）。
+                var box = /** @type {HTMLInputElement} */ (boxes[i])
+                if (box.offsetParent !== null) { e.preventDefault(); box.focus(); return }
+              }
+              return
+            }
+            if (e.key !== 'Escape') return
+            var search = /** @type {HTMLInputElement} */ (el.closest('input.dsm-search'))
+            // 已经是空的就不拦：让这次 Esc 继续往宿主冒（关设置窗口），别让快捷键吃掉别的行为。
+            if (!search || !search.value) return
+            // 清空要走原生 setter 再复演一次 input 事件：直接改 `search.value` 不触发 React 的
+            // onChange，界面上看着清了、过滤条件还留着（列表仍是筛过的）。
+            var desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+            if (!desc || !desc.set) return
+            e.preventDefault()
+            desc.set.call(search, '')
+            search.dispatchEvent(new Event('input', { bubbles: true }))
+          }
           // 子节点用**带 key 的数组**给（而不是并列的三个实参）：并列实参会退化成按位置
           // 认子节点，令牌提示一出现/消失就把 `page` 换一个位置 → React 把整页卸载重挂
           // （页面状态与列表全丢，看起来像"页面自己刷新了"）。带 key 之后位置永远稳定。
-          return React.createElement('section', { ref: sectionRef, className: 'dsm-section' }, [
+          return React.createElement('section', { ref: sectionRef, className: 'dsm-section', onKeyDown: onSectionKeyDown }, [
             React.createElement('div', { key: 'tabs', className: 'dsm-tabs-shell' },
               React.createElement('div', { className: 'dsm-tabs', role: 'tablist', 'aria-label': t('nav.title'), onKeyDown: onTabKeyDown },
                 TABS.map(function (entry) {

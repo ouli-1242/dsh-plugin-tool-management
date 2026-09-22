@@ -3815,6 +3815,19 @@ export async function getProviderSkill(
       (item) => item.key === locator.rootKey,
     );
   }
+  // 自定义技能目录不住在 `userRoots()` 里，它住在状态文件的 `customRoots` 里，所以
+  // `rootByKey()` 恒取不到。少了这一支就是「列得出、调不动」：`state()` 扫的是
+  // `userRoots() + customRootsFromState()`，官方 catalog 因此把目录里的技能列给模型，
+  // 而模型真去 `skill` 工具取正文时这里返回 undefined —— 症状是
+  // `skill "brainstorming" is unknown or no longer available`（用户 2026-09-22 报的）。
+  if (
+    !root &&
+    CUSTOM_ROOT_KEY_RE.test(locator.rootKey)
+  ) {
+    root = customRootsFromState((await readManagerState()).state).find(
+      (item) => item.key === locator.rootKey,
+    );
+  }
   if (!root) return undefined;
   try {
     const entry = await resolveEntry(root, String(locator.entryName || ""));

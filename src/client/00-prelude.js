@@ -20,3 +20,14 @@ window.__ModuleLoader__.load({
 
     // 本插件自己的设计变量（宿主那套是 `--dsw-*`）。告警色此前在 12 条规则里各写一遍
     // 十六进制字面量，换主题要改 12 次 —— 收敛成 `--dsm-warn`，字面量只留下面那一处。
+
+    /**
+     * 取词三件套里的兜底那一件：动态键（按名字拼出来的键）缺失时返回 `fallback`，
+     * 而不是把键名当文案显示出来（`t` 缺键时原样返回键名）。
+     *
+     * 定义放在**文件头这一片**（2026-09-23 从那几页的共用区搬来）：它要服务的是**早于它**
+     * 出现的分片（兼容页在 20 片，按名字拼 `compat.tools.about.<工具名>`），而分片共用一个
+     * factory 作用域 —— 声明在后面时早于它的调用点取不到这个名字（`npm run typecheck:client`
+     * 当场会红）。与 DICT 无依赖，`t` 是传进来的，所以放这儿不影响求值顺序。
+     */
+    function translateOrFallback(t, key, fallback, params) { var value = t(key, params); return typeof value === "string" && value !== key ? value : fallback; }

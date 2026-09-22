@@ -254,12 +254,17 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
 
 /** 合并索引字段（enabled/order 等以索引为准；无记录走默认投影）。 */
 export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxEntry: RuleIndexEntry | undefined): Rule {
+  // 体积按**正文文件**算（bundle 的附件不计：附件不进注入正文）。一次 stat 一条记忆，
+  // 结果随快照的 1s TTL 缓存一起复用；读不到就不带这个字段，别把"不知道"报成 0 B。
+  let size: number | undefined
+  try { size = statSync(entry.docPath).size } catch { size = undefined }
   const rule: Rule = {
     id: entry.id,
     group: entry.group,
     name: derived.name,
     form: entry.kind,
     path: entry.docPath,
+    ...(size !== undefined ? { bytes: size } : {}),
     description: derived.description,
     ...(derived.descriptionDerived ? { descriptionDerived: true } : {}),
     ...(derived.whenToUse !== undefined ? { whenToUse: derived.whenToUse } : {}),
