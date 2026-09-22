@@ -41,7 +41,7 @@
 // 与子智能体目录同构的 stale-while-revalidate（见 src/subagents/catalog.ts）。
 
 /** 段里最多列几台 server；超出部分只报数量。 */
-export const DEFAULT_MCP_MAX_ENTRIES = 50
+export const DEFAULT_MCP_MAX_ENTRIES = 60
 /** 备注截断长度。备注是自由文本，界面侧另有 maxLength(500) 兜底，段侧再截一刀。 */
 export const DEFAULT_MCP_NOTE_MAX_LENGTH = 200
 /**

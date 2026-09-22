@@ -22,7 +22,7 @@
 /** 描述截断长度（与官方目录的 `catalogDescriptionMaxLength` 默认值一致）。 */
 export const SKILL_CATALOG_DESCRIPTION_MAX_LENGTH = 500
 /** 目录最多列几条；超出只报数量（让模型去调 `skill_manager_list`）。 */
-export const SKILL_CATALOG_MAX_ENTRIES = 50
+export const SKILL_CATALOG_MAX_ENTRIES = 60
 
 /** 技能清单里的一行（`skill-state` 的 `roots[].skills[]` 子集）。 */
 export interface SkillCatalogRow {

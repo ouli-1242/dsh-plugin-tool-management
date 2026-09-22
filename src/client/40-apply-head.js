@@ -232,6 +232,9 @@
          * 令牌没验过照样打得开（见 request-gate.ts 的白名单）。
          */
         let tokenBanner = null
+        // 文本节点单独用闭包变量持有，不挂在 DOM 节点上（`tokenBanner._text` 是把节点当
+        // 储物格，客户端唯一的类型检查会报 TS2339）。横幅只创建一次、从不复位，两者同生命周期。
+        let tokenBannerText = null
         // 手动关闭标记：横幅固定在视口顶部，会盖在宿主设置窗口的标题区上 —— 给一个出口，
         // 关掉后本次锁态期间不再出现；解锁（locked 变 false）即重置，下次再锁照常出现。
         // 输入框上的锁与行内说明不受影响，信息不丢。
@@ -250,10 +253,9 @@
               tokenBanner.setAttribute('role', 'status')
               // 文案与关闭键分开挂：下面语言切换是往文本节点整体覆写，textContent 写在
               // 根节点上会把关闭键抹掉。
-              const bannerText = document.createElement('span')
-              bannerText.className = 'dsm-token-banner-text'
-              tokenBanner.appendChild(bannerText)
-              tokenBanner._text = bannerText
+              tokenBannerText = document.createElement('span')
+              tokenBannerText.className = 'dsm-token-banner-text'
+              tokenBanner.appendChild(tokenBannerText)
               const bannerClose = document.createElement('button')
               bannerClose.type = 'button'
               bannerClose.className = 'dsm-token-banner-close'
@@ -267,7 +269,7 @@
               document.body.appendChild(tokenBanner)
             }
             // 语言切换后文案要跟着变（锁态没变、setTokenLock 不会通知，见下面的 locale 订阅）。
-            tokenBanner._text.textContent = t('compat.token.banner')
+            tokenBannerText.textContent = t('compat.token.banner')
             tokenBanner.style.display = tokenBannerDismissed ? 'none' : ''
           } catch (e) { /* DOM 不可用 → 只是少一条说明，不影响门禁本身 */ }
         }

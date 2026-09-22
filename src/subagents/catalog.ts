@@ -34,7 +34,7 @@ import { filterBySceneBinding } from './tools.js'
  */
 export const DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH = 500
 /** 段里最多列几个人设；超出部分只报数量，让模型自己去调 subagent_manager_list。 */
-export const DEFAULT_CATALOG_MAX_ENTRIES = 40
+export const DEFAULT_CATALOG_MAX_ENTRIES = 60
 
 /** 无描述时的占位，与 `subagent_manager_list` 工具的输出保持同一口径。 */
 const NO_DESCRIPTION = '(无描述)'

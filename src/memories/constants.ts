@@ -20,7 +20,7 @@ export const MAX_RULE_BYTES = 1 << 18       // 正文上限 256 KiB
 export const DEFAULT_ORDER = 1000           // 默认投影 order（索引无记录时）
 export const DEFAULT_GROUP_ORDER = 1000     // 新场景默认 order
 export const SNAPSHOT_TTL_MS = 1000         // 读路径短 TTL 缓存，吸收 UI 密集轮询
-export const DEFAULT_MAX_BYTES = 65536      // 场景记忆段预算上限（字节）
+export const DEFAULT_MAX_BYTES = 1 << 18    // 场景记忆段预算上限（字节）
 
 // ── 保留场景名 ─────────────────────────────────────────────────────────────
 

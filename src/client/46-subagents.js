@@ -496,10 +496,12 @@
                   : React.createElement('div', { className: 'dsm-sources', ref: flipRef }, orderedSubagents.map(function (p) {
                 return React.createElement('div', { key: p.name, className: 'dsm-source', 'data-flip-key': p.name, 'data-flip-on': p.enabled !== false ? '1' : '0' },
                   React.createElement('div', { className: 'dsm-source-head' },
-                    React.createElement('div', { className: 'dsm-source-head-main' },
-                      React.createElement('span', { className: 'dsm-source-title', title: p.name }, p.name),
-                      React.createElement('span', { className: 'dsm-note' }, p.description || ''),
-                      p.enabled === false ? React.createElement('span', { className: 'dsm-tag', title: t('subagents.disabled.hint') }, t('subagents.disabled')) : null),
+                    React.createElement('div', { className: 'dsm-source-head-main dsm-persona-main' },
+                      React.createElement('div', { className: 'dsm-persona-name-row' },
+                        React.createElement('span', { className: 'dsm-source-title', title: p.name }, p.name),
+                        p.enabled === false ? React.createElement('span', { className: 'dsm-tag', title: t('subagents.disabled.hint') }, t('subagents.disabled')) : null),
+                      // 没有描述就不渲染这一行：空 div 仍占一行行高，行会变成一条无内容的空隙。
+                      p.description ? React.createElement('div', { className: 'dsm-persona-desc', title: p.description }, p.description) : null),
                     React.createElement('div', { className: 'dsm-source-actions' },
                       React.createElement(Switch, { on: p.enabled !== false, disabled: busy || anyLocked, label: t('subagents.toggle') + ' ' + p.name, onClick: function () { togglePersona(p) } }),
                       React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || anyLocked, onClick: function () { openEditor(p.name) } }, t('memory.edit')),
