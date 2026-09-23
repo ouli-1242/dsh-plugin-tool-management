@@ -429,6 +429,19 @@
       const [toolTable, setToolTable] = React.useState(null)
       // 保存往返期间把整块置灰（见 saveToolTable 的注释：不做乐观更新）。
       const [toolTableBusy, setToolTableBusy] = React.useState(false)
+      // 「方案」弹窗：null = 未打开。`mode:'save'` 给当前这套勾选起名存下来；
+      // `mode:'apply'` 列出已存的方案 + 那条不可删的出厂默认，点一行就应用。
+      const [toolPreset, setToolPreset] = React.useState(null)
+      const toolPresetDialogRef = React.useRef(null)
+      const toolPresetInputRef = React.useRef(null)
+      // 与备份弹窗同一条依赖口径：用"开 / 关"这个布尔，不是整个 state —— 后者每改一次
+      // （输入名字、busy）都会变，会把用户刚聚焦的输入框抢回弹窗根节点。
+      React.useEffect(function () {
+        if (!toolPreset || !toolPresetDialogRef.current) return
+        toolPresetDialogRef.current.focus()
+        // 存方案那条路用户是来打字的，光标直接放进输入框，省一次点击。
+        if (toolPreset.mode === 'save' && toolPresetInputRef.current) toolPresetInputRef.current.focus()
+      }, [!!toolPreset])
       // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 那一段对话的投递统计。
       // 与「注入」设置是一体两面：设置说"要送什么"，这里说"实际送到了什么"。
       const [live, setLive] = React.useState(null)
@@ -672,7 +685,14 @@
       // ≈token 合计 —— 界面不自己算，也不缓存第二份数字。
       const applyToolTable = function (r, alive) {
         if (alive === false) return
-        if (r && r.ok && r.report) setToolTable({ hidden: r.hidden || [], report: r.report })
+        if (r && r.ok && r.report) setToolTable(toolTableFrom(r))
+      }
+      /** 服务端回包 → 界面那一份状态（三条路径共用：读、改勾选、存/删方案）。 */
+      const toolTableFrom = function (r, hiddenFallback) {
+        return {
+          hidden: r.hidden || hiddenFallback || [], presets: r.presets || [],
+          defaultHidden: r.defaultHidden || [], report: r.report,
+        }
       }
       const loadToolTable = function (alive) {
         apiCall('tool-table', {})
@@ -692,7 +712,7 @@
         setToolTableBusy(true)
         apiCall('tool-table', { set: true, hidden: names.slice() })
           .then(function (r) {
-            if (r && r.ok && r.report) setToolTable({ hidden: r.hidden || names, report: r.report })
+            if (r && r.ok && r.report) setToolTable(toolTableFrom(r, names))
             else loadToolTable(true)
             // 功能总览那一行写着"一轮发出去多少"，它得跟着变。
             loadFeatures(true)
@@ -714,6 +734,69 @@
         const hid = (toolTable.hidden || []).filter(function (n) { return names.indexOf(n) < 0 })
         if (!on) Array.prototype.push.apply(hid, names)
         saveToolTable(hid)
+      }
+      // ---------- 「方案」：把一组勾选存成名字，之后一键换回来 ----------
+      // 为什么要它（用户 2026-09-23）：这一块的开关是**成批**用的 —— "这次要让模型自己配
+      // 服务器"与"平时只让它查"是两套选择，挨个点二十个框没人愿意重复第二遍。
+      // 三条口径：① 方案存的是**关掉的名单**（与 `hidden` 同口径），不是"开着的"，否则
+      // 新注册一条工具会让所有旧方案静默地少管一条；② 应用 = 走 `saveToolTable` 那条既有
+      // 落盘路径（可见性重排与两处目录刷新都在那边，不开第二条真相）；③ 出厂默认**不在文件里**
+      // （它是代码里的 `DEFAULT_HIDDEN_TOOLS`），所以删不掉，界面把它排在第一行。
+      /** 工具名 → ≈tok：方案行上那句"开着 X 个 · ≈Y tok/轮"要用，数字仍全部来自服务端报告。 */
+      const toolTokByName = function () {
+        const map = {}
+        const groups = (toolTable && toolTable.report && toolTable.report.groups) || []
+        groups.forEach(function (g) {
+          (g.tools || []).forEach(function (tool) { map[tool.name] = tool.tok })
+        })
+        return map
+      }
+      /** 弹窗里的错误行：服务端回 `code` 时按当前语言出话；回 `error`（落盘失败）只能原样。
+       *  认不出的 code 退回通用那句 —— 拼出来的键名如果落空，`t` 会把键本身吐到界面上。 */
+      const presetErrorText = function (r) {
+        const code = r && r.code
+        if (code === 'nameEmpty' || code === 'nameTaken' || code === 'limit' || code === 'notFound') {
+          return t('compat.tools.preset.err.' + code, { max: r.limit || 0 })
+        }
+        return (r && r.error) || t('compat.tools.preset.err.net')
+      }
+      /** 名字归一化与服务端 `presetNameOf` 同形（折叠空白 + 去首尾），否则本地查重会漏。 */
+      const presetNameNorm = function (value) { return String(value || '').replace(/\s+/g, ' ').trim() }
+      /** 存方案：空名与撞名在本地先挡住（服务端也会挡，但那是白跑一趟）。 */
+      const submitToolPreset = function () {
+        if (!toolPreset || toolPreset.busy) return
+        const name = presetNameNorm(toolPreset.name)
+        if (!name) {
+          setToolPreset(Object.assign({}, toolPreset, { error: t('compat.tools.preset.err.nameEmpty') }))
+          return
+        }
+        if (((toolTable && toolTable.presets) || []).some(function (p) { return p.name === name })) {
+          setToolPreset(Object.assign({}, toolPreset, { name: name, error: t('compat.tools.preset.err.nameTaken', { name: name }) }))
+          return
+        }
+        setToolPreset(Object.assign({}, toolPreset, { busy: true, error: '' }))
+        apiCall('tool-table', { presetSave: name })
+          .then(function (r) {
+            if (r && r.ok) { setToolTable(toolTableFrom(r)); setToolPreset(null) }
+            else setToolPreset({ mode: 'save', name: name, error: presetErrorText(r) })
+          })
+          .catch(function () { setToolPreset({ mode: 'save', name: name, error: presetErrorText(null) }) })
+      }
+      /** 删方案：留在弹窗里（用户多半还要接着挑），只把清单换成服务端那份。 */
+      const deleteToolPreset = function (name) {
+        if (toolPreset && toolPreset.busy) return
+        setToolPreset({ mode: 'apply', busy: true })
+        apiCall('tool-table', { presetDelete: name })
+          .then(function (r) {
+            if (r && r.ok) { setToolTable(toolTableFrom(r)); setToolPreset({ mode: 'apply' }) }
+            else setToolPreset({ mode: 'apply', error: presetErrorText(r) })
+          })
+          .catch(function () { setToolPreset({ mode: 'apply', error: presetErrorText(null) }) })
+      }
+      /** 应用一份方案 = 用它那组名单走既有的保存路径。 */
+      const applyToolPreset = function (hidden) {
+        setToolPreset(null)
+        saveToolTable((hidden || []).slice())
       }
       const loadLive = function (alive) {
         apiCall('injection-live', {})
@@ -1147,7 +1230,9 @@
                 return React.createElement('label', {
                   className: 'dsm-tooltable-tool',
                   key: tool.name,
-                  title: (hover ? hover + '\n\n' : '') + (tool.hidden ? t('compat.tools.offTitle') : t('compat.tools.onTitle')),
+                  title: (hover ? hover + '\n\n' : '') + (tool.hidden
+                    ? (tool.defaultHidden ? t('compat.tools.defaultOffTitle') : t('compat.tools.offTitle'))
+                    : t('compat.tools.onTitle')),
                 },
                   React.createElement('input', { type: 'checkbox', checked: !tool.hidden, onChange: function () { toggleToolTableTool(tool.name, !!tool.hidden) } }),
                   React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
@@ -1155,11 +1240,30 @@
                   React.createElement('span', { className: 'dsm-tooltable-about' }, about))
               }))))
         })
+        const presetCount = (toolTable.presets || []).length
         push(section(t('compat.tools'), t('compat.tools.hint'),
           React.createElement('div', { className: 'dsm-tooltable' + (toolTableBusy ? ' dsm-tooltable-busy' : '') },
-            React.createElement('div', { className: 'dsm-tooltable-summary' }, hidden.length === 0
-              ? t('compat.tools.summaryAll', { total: report.totalCount, tok: report.totalTok })
-              : t('compat.tools.summary', { on: report.visibleCount, total: report.totalCount, tok: report.visibleTok, saved: report.hiddenTok })),
+            React.createElement('div', { className: 'dsm-tooltable-summary' },
+              React.createElement('span', null, hidden.length === 0
+                ? t('compat.tools.summaryAll', { total: report.totalCount, tok: report.totalTok })
+                : t('compat.tools.summary', { on: report.visibleCount, total: report.totalCount, tok: report.visibleTok, saved: report.hiddenTok })),
+              // 两颗按钮钉在合计那一行的最右（用户 2026-09-23 指定位置）：方案管的是**整块**
+              // 勾选，不属于任何一个域，所以既不放分组头也不放表尾。
+              React.createElement('span', { className: 'dsm-tooltable-preset-actions' },
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: toolTableBusy,
+                  title: t('compat.tools.preset.save.tip'),
+                  onClick: function () { setToolPreset({ mode: 'save', name: '', error: '' }) },
+                }, t('compat.tools.preset.save')),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: toolTableBusy,
+                  title: presetCount ? t('compat.tools.preset.apply.tip') : t('compat.tools.preset.apply.tipEmpty'),
+                  onClick: function () { setToolPreset({ mode: 'apply' }) },
+                }, t('compat.tools.preset.apply')))),
+            // 合计里拆一句"出厂关的"：不然第一句那个"省下 ≈2,679"会被读成用户自己关出来的。
+            report.defaultHiddenCount > 0
+              ? React.createElement('div', { className: 'dsm-tooltable-sub' }, t('compat.tools.summaryDefault', { n: report.defaultHiddenCount, tok: report.defaultHiddenTok }))
+              : null,
             rows)))
       }
       // 注入实况：紧挨「注入」设置块下方。数据来自 `injection-live`（宿主读最近活跃会话的
@@ -1716,6 +1820,105 @@
           React.createElement('div', { className: 'dsm-modal-body' }, rows)))
       }
 
+      // 「方案」弹窗（保存与恢复共用一颗入口、两种 mode）：结构与令牌 / 备份清理弹窗同款 ——
+      // 遮罩点击关闭 + 头部标题与关闭键 + body + 底部动作行，Esc 与焦点陷阱复用模块作用域助手。
+      // 为什么恢复要能删：方案是试出来的一旦攒多了就没人在清单里认得出哪个是哪个，
+      // 不给出口就只能到磁盘上改文件（用户 2026-09-23 明确要"在恢复弹窗里也能删"）。
+      let toolPresetModal = null
+      if (toolPreset) {
+        const closePreset = function () { setToolPreset(null) }
+        const presetBusy = !!toolPreset.busy || toolTableBusy
+        const presetRows = []
+        if (toolPreset.mode === 'save') {
+          const report0 = (toolTable && toolTable.report) || {}
+          const nameDraft = String(toolPreset.name || '')
+          presetRows.push(React.createElement('p', { className: 'dsm-help', key: 'hint' },
+            t('compat.tools.preset.saveHint', {
+              on: report0.visibleCount || 0, total: report0.totalCount || 0, tok: report0.visibleTok || 0,
+            })))
+          presetRows.push(React.createElement('label', { className: 'dsm-field', key: 'name' },
+            React.createElement('span', { className: 'dsm-label' }, t('compat.tools.preset.name')),
+            React.createElement('input', {
+              ref: toolPresetInputRef, className: 'dsm-control', type: 'text',
+              maxLength: 40, value: nameDraft, placeholder: t('compat.tools.preset.namePlaceholder'),
+              onChange: function (e) { setToolPreset(Object.assign({}, toolPreset, { name: e.target.value, error: '' })) },
+              onKeyDown: function (e) { if (e.key === 'Enter') submitToolPreset() },
+            })))
+          if (toolPreset.error) {
+            presetRows.push(React.createElement('p', { className: 'dsm-feedback dsm-warning', role: 'alert', key: 'err' }, toolPreset.error))
+          }
+          presetRows.push(React.createElement('div', { className: 'dsm-modal-actions', key: 'act' },
+            React.createElement('button', {
+              type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: presetBusy, onClick: closePreset,
+            }, t('btn.cancel')),
+            React.createElement('button', {
+              type: 'button', className: 'dsm-btn', disabled: presetBusy || !nameDraft.trim(), onClick: submitToolPreset,
+            }, t('compat.tools.preset.saveYes'))))
+        } else {
+          const tokOf = toolTokByName()
+          const rep = (toolTable && toolTable.report) || {}
+          const total = rep.totalCount || 0
+          const totalTok = rep.totalTok || 0
+          const entries = [{
+            key: '', name: t('compat.tools.preset.default'), builtin: true,
+            hidden: (toolTable && toolTable.defaultHidden) || [],
+          }]
+          const storedPresets = (toolTable && toolTable.presets) || []
+          storedPresets.forEach(function (p) {
+            entries.push({ key: p.name, name: p.name, hidden: p.hidden || [] })
+          })
+          presetRows.push(React.createElement('p', { className: 'dsm-help', key: 'hint' }, t('compat.tools.preset.applyHint')))
+          presetRows.push(React.createElement('div', { className: 'dsm-preset-list', key: 'list' },
+            entries.map(function (e) {
+              // 只数**注册表里真有的**名字：方案可能存自更早的版本（那条工具已经不叫这个了），
+              // 把陌生名字算进"关着的"会让这一行报出一个假的合计。应用时服务端本来也会把这些
+              // 名字滤掉（`tool-table` 的 set 路径），所以这里显示的与真会生效的是同一份。
+              const known = e.hidden.filter(function (n) { return tokOf[n] !== undefined })
+              let offTok = 0
+              known.forEach(function (n) { offTok += tokOf[n] })
+              return React.createElement('div', { className: 'dsm-preset-row', key: e.key },
+                React.createElement('span', { className: 'dsm-preset-name' },
+                  e.name,
+                  e.builtin ? React.createElement('span', { className: 'dsm-preset-tag' }, t('compat.tools.preset.builtin')) : null),
+                React.createElement('span', { className: 'dsm-preset-meta' }, t('compat.tools.preset.count', {
+                  on: total - known.length, total: total, tok: totalTok - offTok,
+                })),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: presetBusy,
+                  onClick: function () { applyToolPreset(e.hidden) },
+                }, t('compat.tools.preset.use')),
+                // 出厂默认不在文件里（它是代码里那份名单），所以没有删除键 —— 删它没有意义，
+                // 下次读盘它还会回来；能删的只有用户自己存的那几份。
+                e.builtin ? null : React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: presetBusy,
+                  title: t('compat.tools.preset.removeTitle', { name: e.name }),
+                  onClick: function () { deleteToolPreset(e.name) },
+                }, t('btn.custom.remove')))
+            })))
+          if (toolPreset.error) {
+            presetRows.push(React.createElement('p', { className: 'dsm-feedback dsm-warning', role: 'alert', key: 'err' }, toolPreset.error))
+          }
+        }
+        toolPresetModal = React.createElement('div', {
+          key: 'preset-modal',
+          className: 'dsm-mask',
+          onMouseDown: function (e) { if (e.target === e.currentTarget) closePreset() },
+        }, React.createElement('div', {
+          ref: toolPresetDialogRef, tabIndex: -1,
+          className: 'dsm-modal dsm-modal-sm', role: 'dialog', 'aria-modal': 'true',
+          'aria-labelledby': 'dsm-preset-title',
+          onKeyDown: function (e) { if (!handleModalEscape(e, closePreset)) trapModalFocus(e.currentTarget, e) },
+        },
+          React.createElement('div', { className: 'dsm-modal-head-wrap' },
+            React.createElement('div', { className: 'dsm-modal-head' },
+              React.createElement('h3', { className: 'dsm-modal-title', id: 'dsm-preset-title' },
+                t(toolPreset.mode === 'save' ? 'compat.tools.preset.saveTitle' : 'compat.tools.preset.applyTitle')),
+              React.createElement('button', {
+                type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closePreset,
+              }, t('btn.close')))),
+          React.createElement('div', { className: 'dsm-modal-body' }, presetRows)))
+      }
+
       return React.createElement('div', { className: 'dsm-compat' },
         React.createElement('div', { className: 'dsm-head' },
           React.createElement('div', { className: 'dsm-title-block' },
@@ -1737,7 +1940,8 @@
           }, backups && backups.total ? t('compat.backups.btnCount', { count: backups.total }) : t('compat.backups.btn'))),
         body,
         backupModal,
-        tokenModalEl)
+        tokenModalEl,
+        toolPresetModal)
     }
 
     // 曾经把导出写成 apply 方法体的最后两条语句（`module.exports.DICT = ...` /

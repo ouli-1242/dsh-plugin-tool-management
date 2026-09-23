@@ -36,11 +36,14 @@ export interface McpToolDeps extends ToolDomainDeps {
   mcpmNote(args: { id: string; note: string }): Promise<any>
 }
 
+/** 「去看清单」那句：`mcp_manager_list` 被关掉时不能点名它（调用方按 `toolVisible` 决定给不给）。 */
+const MCP_LIST_HINT = '（用 mcp_manager_list 看清单，all=true 连停用的也列）'
+
 /** 按 serverName 定位条目；同名（project + global 各一台）时要求 level 明确指定。 */
-function locate(rows: any[], server: string, level?: string): any {
+function locate(rows: any[], server: string, level?: string, listHint: string = MCP_LIST_HINT): any {
   const hits = (rows || []).filter((r) => String(r.serverName) === server)
   if (!hits.length) {
-    throw new Error('没有这台服务器：' + server + '（用 mcp_manager_list 看清单，all=true 连停用的也列）')
+    throw new Error('没有这台服务器：' + server + listHint)
   }
   if (level) {
     const picked = hits.filter((r) => r.level === level)
@@ -73,9 +76,15 @@ function argsToText(value: any): string {
 
 export function buildMcpTools(deps: McpToolDeps): void {
   const { defineTool, register } = deps
+  /** 那句"去看清单"要不要给：`mcp_manager_list` 在出厂默认里就是关着的，点名一条模型没有的工具
+   *  只会让它白跑一趟（执行侧拦住它，而它看不出为什么）。 */
+  const listHint = () => (deps.toolVisible('mcp_manager_list') ? MCP_LIST_HINT : '')
   register(defineTool({
     name: 'mcp_manager_list',
-    description: 'List configured MCP servers (level, enabled state, live loader status, tool count excluding switched-off tools, note). Read a server\'s note before choosing it. The same list is injected into your context each turn (the「本机 MCP 服务器的当前状态」system-reminder); this tool is the raw view — all=true includes disabled servers. Defaults to enabled servers; pass all=true for every configured server.',
+    // 注入段与本工具的关系要**如实说成筛过的视图**（而非"同一份清单"）：注入段只列可用 +
+    // 曾连上现掉线的服务器（停用的不进），也不带 level / loader / 工具数。把这个盲区写出来
+    // 是行动依据 —— 模型要知道"停用的那台去哪查"就得靠这句（all=true）。
+    description: 'List configured MCP servers (level, enabled state, live loader status, tool count excluding switched-off tools, note). Read a server\'s note before choosing it. The「本机 MCP 服务器的当前状态」reminder carries a filtered view (usable servers, ones that were reachable before but are down now, and their notes; disabled servers are omitted); this tool is the raw view — defaults to enabled servers, all=true for every configured one.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled servers (default false).' },
       tools: { type: 'boolean', description: 'Also list each server\'s tool names, marking the switched-off ones (default false).' },
@@ -160,7 +169,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
       const list = await deps.mcpmListView()
       if (!list || list.ok === false) throw new Error((list && list.error) || '读取 MCP 配置失败')
       const level = args && args.level !== undefined ? String(args.level) : undefined
-      const row = locate(list.rows || [], server, level)
+      const row = locate(list.rows || [], server, level, listHint())
       const enabled = action === 'on'
 
       if (tool !== '') {
@@ -253,7 +262,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
       }
 
       // ── 改：省略 = 保持，且必须**显式填回**（见文件头那条 parseKv 的坑）────────
-      const cur = locate(hits, server, levelArg)
+      const cur = locate(hits, server, levelArg, listHint())
       const transport = args && args.transport !== undefined ? String(args.transport) : String(cur.transport)
       if (transport !== 'stdio' && transport !== 'streamable-http') {
         throw new Error('transport 只能是 stdio 或 streamable-http（这台现在是：' + String(cur.transport) + '）')

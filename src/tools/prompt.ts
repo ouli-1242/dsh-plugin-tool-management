@@ -87,7 +87,10 @@ export function buildPromptTools(deps: PromptToolDeps): void {
       if (r.viaScene) {
         return 'OK: preset ' + args.id + ' is now the prompt binding of scene 「' + (r.scene || '') + '」 and the scene was re-synced (effective next turn; ~/.dsh/AGENTS.md now carries that scene\'s binding).'
       }
-      return 'OK: preset ' + args.id + ' applied to ~/.dsh/AGENTS.md (next session; current session unchanged' + (r.backedUp ? '; previous backed up to __last-applied__' : '') + ')'
+      // 生效时机与宿主行为对齐（index.ts 提示词服务一节考证过）：dsh-agent-instructions
+      // 每个 pre-step 都 stat 比对版本，写文件即下一轮重读 —— 不是"下个会话"。说错了
+      // 模型会劝用户重开会话，而其实下一句话就已经在新基线下跑。
+      return 'OK: preset ' + args.id + ' applied to ~/.dsh/AGENTS.md — effective next turn' + (r.backedUp ? ' (previous backed up to __last-applied__)' : '')
     },
   }))
 }

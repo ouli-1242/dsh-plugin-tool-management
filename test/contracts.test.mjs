@@ -28,7 +28,7 @@ import {
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
 import { parseModeState } from '../lib/memories/service.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
-import { LEGACY_TOOL_NAME_MAP, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
+import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
 import { createAccessToken } from '../lib/request-gate.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
 import { checkPatchWrite, decidePatchWrite, judgePatchText } from '../lib/compat/patch-dialect.js'
@@ -70,7 +70,7 @@ test('注入域里场景排在记忆之前（先给框架再给内容）', () =>
   assert.ok(keys.indexOf('scene') < keys.indexOf('memory'), '场景要排在记忆前面')
 })
 
-test('0.14.0 旧工具名迁移：用户「关掉了某条」的意图不能在改名后静默失效', () => {
+test('旧工具名迁移：用户「关掉了某条」的意图不能在改名后静默失效', () => {
   // 破了这一条的后果同样是静默的：`tool-table.json` 里存的是用户点名关掉的工具，旧名在新表里
   // 不存在 —— 不迁移的话那条工具照旧每轮发出去，而界面上看不出任何异常。
   const migrated = migrateLegacyToolNames(normalizeToolTableSettings({
@@ -86,6 +86,15 @@ test('0.14.0 旧工具名迁移：用户「关掉了某条」的意图不能在�
   assert.deepEqual(
     migrateLegacyToolNames(normalizeToolTableSettings({ hidden: ['memory_manager_write', 'memory_manager_update'] })).settings.hidden,
     ['memory_manager_save'],
+  )
+  // 0.14.x：「拨一个开关」六域同形 —— `_set_enabled` → `_switch`（**一对一**，参数没动，
+  // 所以不涉及语义合并）。漏了这三条的后果与上面完全一样，且更容易漏 ——
+  // 改名的人往往会记得改 `src/tools/*.ts`，却忘了这份表。
+  assert.deepEqual(
+    migrateLegacyToolNames(normalizeToolTableSettings({
+      hidden: ['memory_manager_set_enabled', 'skill_manager_set_enabled', 'subagent_manager_set_enabled'],
+    })).settings.hidden,
+    ['memory_manager_switch', 'skill_manager_switch', 'subagent_manager_switch'],
   )
   // 不认识的名字原样保留：分不清"用户的旧名"与"别的插件的工具名"，误删比留着一条死名更糟。
   assert.equal(LEGACY_TOOL_NAME_MAP.other_plugin_tool, undefined)
@@ -680,7 +689,8 @@ test('工具描述里引用的注入板块名必须真实存在（跨模块引�
   )
   const files = [
     'src/tools/mcp.ts', 'src/tools/memory.ts', 'src/tools/prompt.ts',
-    'src/tools/skills.ts', 'src/tools/subagent.ts', 'src/subagents/tools.ts',
+    'src/tools/skills.ts', 'src/tools/subagent.ts', 'src/tools/scene.ts',
+    'src/subagents/tools.ts',
   ]
   const seen = []
   for (const rel of files) {
@@ -694,4 +704,37 @@ test('工具描述里引用的注入板块名必须真实存在（跨模块引�
       `${rel} 引用了不存在的注入板块「${name}」；实际存在：${[...titles].join(' / ')}`,
     )
   }
+})
+
+test('静态工具描述不得点名出厂默认关闭的工具', () => {
+  // ③ 自洽性，与上一条（板块名引用）同一族：破了也是**静默**的 —— 编译、类型检查、
+  // i18n 检查都不报。description 是静态文本，没法像运行时提示那样按 toolVisible 改写；
+  // 点名一条被关掉的工具，模型会照着去调，执行侧拦住它，白跑一趟还看不出原因
+  // （部分启用时真会发生：用户开 save 不开 switch）。
+  //
+  // 判据只扫 `description:` 字面量：运行时那些**过了 toolVisible 门控**的点名
+  // （mcp/skill 的 listHint、scene/subagent 的回执分叉）不算 —— 它们只在工具可见时
+  // 才出现，正是本条要鼓励的写法。静态文本要指路就用中性说法（"the list" /
+  // "the scene listing"），要点名就挪到运行时按可见性分叉。
+  const files = [
+    'src/tools/mcp.ts', 'src/tools/memory.ts', 'src/tools/prompt.ts',
+    'src/tools/skills.ts', 'src/tools/subagent.ts', 'src/tools/scene.ts',
+    'src/subagents/tools.ts',
+  ]
+  let scanned = 0
+  for (const rel of files) {
+    const src = readFileSync(new URL('../' + rel, import.meta.url), 'utf8')
+    for (const line of src.split('\n')) {
+      for (const m of line.matchAll(/description:\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+        scanned += 1
+        for (const name of DEFAULT_HIDDEN_TOOLS) {
+          assert.ok(
+            !m[2].includes(name),
+            `${rel} 的 description 点名了出厂默认关闭的工具 ${name}：「${m[2].slice(0, 80)}…」—— 静态描述改用中性说法，或挪到运行时按 toolVisible 分叉`,
+          )
+        }
+      }
+    }
+  }
+  assert.ok(scanned > 20, '一个 description 都没扫到 —— 判据或文件清单写错了')
 })

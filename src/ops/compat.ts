@@ -240,15 +240,23 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           disabledTools === 0 ? '没有停用的工具' : `${disabledTools} 个工具处于停用态（执行拦截 + 可见性摘除）`)
         // 工具表按每个请求付钱：这一行回答"这一轮实际发出去多少"。关掉的工具整份不进请求，
         // 但代价是模型调不到它们（本插件的面板不受影响）——所以是 partial，不是 ok。
+        // **出厂默认关掉的那几条不算**：那是插件替用户做的一个可逆选择，不是用户关出了
+        // 一个缺口。把默认态报成 partial 违背本页口径（琥珀只留给"该做却没做"），也永远
+        // 无法消掉 —— 用户打开它们反而会被罚一个 ok。
         // 末尾那句是**逐会话**的差额：官方 `skill` 工具在场的会话里我们那份加载器会再让位
         // 一个（见 index.ts 的 CARRIER_DUPLICATES），本表的数字是全局口径、不含它。
         const table = deps.toolTableReport()
         const carrierNote = '；官方 `skill` 工具在场的会话，`skill_manager_read` 还会自动让位一份'
+        const userOff = table.hiddenCount - table.defaultHiddenCount
+        const offPart = table.hiddenCount === 0
+          ? `${table.totalCount} 个工具全部下发（≈${table.totalTok} tok/轮）`
+          : (userOff === 0
+            ? `出厂默认关掉 ${table.defaultHiddenCount}/${table.totalCount} 个`
+            : `关掉 ${table.hiddenCount}/${table.totalCount} 个（含出厂默认 ${table.defaultHiddenCount} 个）`)
+            + `：一轮少发 ≈${table.hiddenTok} tok（现在 ≈${table.visibleTok} tok/轮，到「兼容」页的「模型工具表」可逐条打开；面板不受影响）`
         push('tool-table', '模型工具表', 'compat',
-          table.hiddenCount === 0 ? 'ok' : 'partial',
-          (table.hiddenCount === 0
-            ? `${table.totalCount} 个工具全部下发（≈${table.totalTok} tok/轮）`
-            : `关掉 ${table.hiddenCount}/${table.totalCount} 个：一轮少发 ≈${table.hiddenTok} tok（现在 ≈${table.visibleTok} tok/轮，面板不受影响）`) + carrierNote)
+          userOff === 0 ? 'ok' : 'partial',
+          offPart + carrierNote)
         push('native-delete', '宿主原生删除入口', 'compat',
           notes.has('workspace.delete-native') ? 'partial' : 'ok',
           notes.get('workspace.delete-native')?.detail ?? '宿主未提供原生删除入口（本插件自有完整序列）')

@@ -210,7 +210,11 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-adv{border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1)}
 .dsm-adv-head{display:flex;width:100%;min-height:40px;align-items:center;gap:8px;padding:0 11px;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}
 .dsm-adv-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.dsm-adv-caret{color:var(--dsw-alias-label-tertiary);font-size:10px}
+.dsm-adv-caret{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10px}
+/* 「高级选项」永不折行：它在收起时与两行摘要并排，被挤成两字一行就不再像个标题了。 */
+.dsm-adv-title{flex:none;white-space:nowrap}
+/* 折叠摘要固定两行（模型/思考强度/目录注入 + 工具名单），靠 align-items:center 与标题垂直居中。 */
+.dsm-adv-sum{display:flex;min-width:0;flex-direction:column;gap:1px}
 .dsm-adv-body{display:flex;flex-direction:column;gap:12px;padding:11px;border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-adv-note{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
 /* ── 工具限制四行（人设表单：一行一个 Agent 预设，白/黑名单互斥、默认折叠）──────── */
@@ -311,11 +315,26 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-inject-domain input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 /* 模型工具表：与「注入」同屏的第二种开关。**一行一个工具、四列固定宽度**（勾选框 / 名字 /
    ≈tok / 一句话介绍）—— 列宽不固定就竖着扫不出任何一列（用户 2026-09-23 指出挤成一排很难看）。
-   名字用等宽、数字用 tabular-nums 右对齐；介绍超长省略，完整那句在悬停里。 */
+   名字用等宽、数字用 tabular-nums 右对齐；介绍超长省略，完整那句在悬停里。
+   出厂默认关着哪几条**不在行上标**（用户 2026-09-23 要求去掉「默认关」小标）：合计下面那句
+   "其中 ≈X 是出厂默认关掉的 N 条"是唯一的出处，加上悬停那一行会说"出厂默认就是关着的"。 */
 .dsm-tooltable{display:flex;flex-direction:column;gap:10px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 /* 保存往返期间：整块不吃点击、略灰 —— 这一块刻意没有乐观更新（见 saveToolTable 注释）。 */
 .dsm-tooltable-busy{pointer-events:none;opacity:.55}
-.dsm-tooltable-summary{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.dsm-tooltable-summary{display:flex;align-items:center;gap:10px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+/* 「保存方案 / 恢复方案」钉在合计那一行的最右（用户 2026-09-23 指定位置）。
+   按钮压到与 18px 行高齐平：宿主默认的 .dsm-btn 比这行字高，直接放会把整行顶开。 */
+.dsm-tooltable-preset-actions{display:flex;flex:none;align-items:center;gap:6px;margin-left:auto}
+.dsm-tooltable-preset-actions .dsm-btn{padding:0 9px;font-size:11px;line-height:22px}
+/* 方案清单（恢复弹窗）：一行一份，名字吃剩余宽度，数字与两颗按钮靠右。 */
+.dsm-preset-list{display:flex;flex-direction:column;gap:6px}
+.dsm-preset-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1)}
+.dsm-preset-name{min-width:0;overflow:hidden;flex:1;color:var(--dsw-alias-label-primary);font-size:12px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
+.dsm-preset-meta{flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums}
+.dsm-preset-row .dsm-btn{padding:0 9px;font-size:11px;line-height:22px}
+.dsm-preset-tag{margin-left:6px;padding:0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:400}
+/* 合计的第二句：把"省下的"拆出出厂默认那一截。比第一句弱一档，它是解释不是结论。 */
+.dsm-tooltable-sub{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
 .dsm-tooltable-group{display:flex;flex-direction:column;gap:3px}
 .dsm-tooltable-ghead{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;cursor:pointer}
 .dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}

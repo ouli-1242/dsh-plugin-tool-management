@@ -1,5 +1,5 @@
 // 记忆（rules）域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 改名合并、
-// 同日把场景能力分出去）：memory_manager_list / _read / _set_enabled / _save。
+// 同日把场景能力分出去）：memory_manager_list / _read / _switch / _save。
 //
 // 为什么族名在 0.14.0 里绕了一圈回到 `memory_manager_`：中途改成 `scene_memory_manager_`
 // 是为了跟注入段名（`scene-memory-manager-catalog`）对齐，但那个名字描述的是**域**，
@@ -8,6 +8,9 @@
 // `memory` 时是记忆描述、给 `scene` 时是场景描述），门禁也得按参数分叉（记忆写入有开关
 // 可放行，场景写入是改运行时环境、不该有那条路）。所以拆成两族：这里管记忆内容，
 // `scene_manager_*`（tools/scene.ts）管场景本身。
+//
+// 场景清单也不挂在这条 list 的尾巴上（同日第四轮裁定：「记忆就管记忆，场景就管场景」）——
+// 它在 `scene_manager_list`，理由记在 tools/scene.ts 头部，别当"少写了一段"再加回来。
 //
 // 为什么 write + update 并成 save：两者的判定（同名 = 改、无同名 = 建）本来就只有
 // `rules-create` 知道 —— 它对同名是**拒绝**的，op 层不会替你 upsert。分开两条工具时，
@@ -28,7 +31,9 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   const { defineTool, register } = deps
   register(defineTool({
     name: 'memory_manager_list',
-    description: 'List memories (id, scene, enabled, description). What is injected each turn is in the「本机当前的记忆」reminder; use this for ids/paths and for entries that are off. Defaults to the ones that would be injected; all=true for every entry.',
+    // 末尾**不点名** `scene_manager_list`：场景一族在出厂默认里就是关着的，指向一条模型没有的
+    // 工具只会让它去猜名字（用户 2026-09-23 把默认名单扩到十五条时去掉的这句）。
+    description: 'List memories (id, scene, enabled, description) plus the scene injection currently follows. What is injected each turn is in the「本机当前的记忆」reminder; use this for ids and for entries that are off. all=true lists everything.',
     parameters: {
       group: { type: 'string', description: 'Optional scene filter.' },
       all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
@@ -56,16 +61,21 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         '- ' + x.id + ' [' + (x.group || '未归属场景') + '] ' + label +
         (x.description ? ' — ' + x.description : '')
       ))
-      const scenes = (r.scenes || []).map((s: any) => (s.label || s.name) + (s.active ? '(启用)' : '(未启用)')).join('、')
+      // 注入按哪个场景走 —— 上面那句「场景未启用」只有配上它才可解读：少了这一行，
+      // 模型看到一片"未启用"会以为是条目自己的问题。（场景本身的清单在 `scene_manager_list`，
+      // 2026-09-23 拆过去了；这里只留"记忆按哪一集注入"，因为那是记忆域自己的现状。）
+      const scope = r.activeMode === 'all'
+        ? '全部场景（历史默认，未收窄）'
+        : (r.activeScene ? '「' + String(r.activeScene) + '」' : '未启用任何场景')
       const header = '记忆：' + (showAll
         ? rows.length + ' 条'
         : shown.length + ' 条会注入 / 共 ' + rows.length + ' 条' +
-          (shown.length === rows.length ? '' : '（传 all=true 看全部）')) + '\n'
+          (shown.length === rows.length ? '' : '（传 all=true 看全部）')) +
+        '\n注入范围：' + scope + ' + global（global 恒常注入）\n'
       // 注入边界：压制型预设（persona complete / 关闭运行时上下文）下本插件默认不注入，
       // 此时列出的记忆**不在**模型上下文里。必须说出来，否则模型会假设自己已经看到正文。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
-      return header + (lines.join('\n') || '(无记忆)') +
-        '\n场景：' + (scenes || '(无)') + (r.activeMode === 'all' ? '（默认全部启用）' : '（已收窄）') + notice
+      return header + (lines.join('\n') || '(无记忆)') + notice
     },
   }))
   register(defineTool({
@@ -83,7 +93,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     },
   }))
   register(defineTool({
-    name: 'memory_manager_set_enabled',
+    name: 'memory_manager_switch',
+    // 为什么叫 `_switch` 而不是 `_set_enabled`（2026-09-23 用户裁定）：六个域里"拨一个开关"
+    // 是同一件事，名字该同形 —— `mcp_manager_switch` 早就是这个名字，`_set_enabled` 只剩
+    // 记忆 / 技能 / 人设三族在叫。**参数保留 `enabled` 布尔**：这里没有 `restart` 那第三个
+    // 动词，`action: 'on' | 'off'` 只会在 `true`/`false` 之上多一层映射、多付一段 schema。
+    // 旧名不注册别名（同 0.14.0 的口径：注册就进工具表、就要付 token）；用户的旧设置由
+    // `tools/table.ts` 的 `LEGACY_TOOL_NAME_MAP` 翻译。
+    //
     // 为什么单独一个工具：注入实况里「这个域注入了几次 / 模型调了几次」都看得到，但模型此前
     // 看得到一份记忆却开关不了它 —— 只能回一句"请你去界面上点"。启停是它替用户调整环境时
     // 最常碰的一格，而 `rules-toggle` 这个 op 早就带齐了门禁（写令牌 + 场景冻结）。
@@ -107,7 +124,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       if (!r || r.ok === false) throw new Error((r && r.error) || '切换记忆启停失败')
       const rule = r.rule || {}
       // 「启用了一条不在启用场景里的记忆」是一次静默无效：单条开关拨上去了，注入集里却没有它。
-      // 这一句不说，模型会以为已经生效 —— 与 skill_manager_set_enabled 说清影子副本同一条理由。
+      // 这一句不说，模型会以为已经生效 —— 与 skill_manager_switch 说清影子副本同一条理由。
       let sceneNote = ''
       try {
         const all: any = await deps.rulesOps['rules-list']({})

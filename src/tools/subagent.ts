@@ -1,5 +1,5 @@
 // 子智能体域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 合并）：
-// subagent_manager_list / subagent_manager_run / _set_enabled / _save。
+// subagent_manager_list / subagent_manager_run / _switch / _save。
 //
 // exec.agent / exec.signal 由工具运行时提供（parent 与取消信号的官方通道）。
 //
@@ -65,7 +65,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
   const ops = () => deps.subagentService.ops as Record<string, (args: any) => Promise<any>>
   try {
     register(deps.defineTool({
-      name: 'subagent_manager_set_enabled',
+      name: 'subagent_manager_switch',
       description: 'Enable or disable one persona. Only enabled personas appear in the「可委派的子智能体」catalog and can be given work. Reversible, and the file is untouched. Only when the user asks or approves.',
       parameters: {
         name: { type: 'string', required: true, description: 'Persona name.' },
@@ -86,7 +86,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
       },
     }))
   } catch (e) {
-    recordFailure('subagent_manager_set_enabled', e)
+    recordFailure('subagent_manager_switch', e)
   }
   try {
     register(deps.defineTool({
@@ -125,8 +125,13 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
           const r: any = await ops()['subagent-create']({ name, description: args.description, body: args.body, output: args.output })
           if (!r || r.ok === false) throw new Error((r && r.error) || '创建人设失败')
           // 新建的人设默认停用（与 MCP / 技能同口径）。这句必须留：不说的话模型会直接去委派，
-          // 然后收到"人设不可用"，而它并不知道自己少拨了一个开关。
-          return 'OK: persona ' + String(r.name || name) + ' created（默认未启用,要委派它先 subagent_manager_set_enabled）'
+          // 然后收到"人设不可用"，而它并不知道自己少拨了一个开关。点名的 subagent_manager_switch
+          // 在出厂默认名单里就是关着的 —— 关着就改说"用户启用后才能委派"，别指一条模型没有的
+          // 工具（与 mcp/skill 的 listHint 同一条纪律）。
+          const enableHint = deps.toolVisible('subagent_manager_switch')
+            ? '（默认未启用，要委派它先 subagent_manager_switch）'
+            : '（默认未启用，用户启用后才能委派）'
+          return 'OK: persona ' + String(r.name || name) + ' created' + enableHint
         }
         const keep = current.persona || {}
         const touched: string[] = []

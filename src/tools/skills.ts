@@ -1,5 +1,5 @@
 // 技能域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 合并）：
-// skill_manager_list / skill_manager_read / skill_manager_set_enabled / skill_manager_save。
+// skill_manager_list / skill_manager_read / skill_manager_switch / skill_manager_save。
 //
 // create → save：`skill-create` 对同名是**拒绝**的，所以"建还是改"的判定只能在工具这一侧
 // （先读一次 `skill-state`）。改的分支走新加的 `skill-update` op，它只认 hub 里的胜出者。
@@ -18,7 +18,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
   // tools/pre-execute hook below (the model must ask before writing files).
   register(defineTool({
     name: 'skill_manager_list',
-    description: 'List skills with enabled state, effective/shadowed status and source file path. The「本机技能目录」reminder carries callable skills and summaries only; use this for entries that are off, for the body, and to see which source wins a name collision. Defaults to enabled only; all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
+    description: 'List skills with enabled state, effective/shadowed status and source file path. The「本机技能目录」reminder carries callable skills and summaries only; use this for entries that are off, for each entry\'s source-file path, and to see which source wins a name collision. Defaults to enabled only; all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled and shadowed entries (default false).' },
     },
@@ -117,9 +117,12 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         }
       }
       if (!hits.length) {
-        throw new Error(rootWanted
-          ? `no skill named "${wanted}" in source "${rootWanted}" — call skill_manager_list (pass all=true) to see what is installed`
-          : `no skill named "${wanted}" — call skill_manager_list (pass all=true) to see what is installed`)
+        // 「去调 skill_manager_list」那句：那条工具在出厂默认里就是关着的，点名一条模型没有的
+        // 工具只会让它白跑一趟（执行侧拦住，而它看不出为什么）。
+        const listHint = deps.toolVisible('skill_manager_list')
+          ? ' — call skill_manager_list (pass all=true) to see what is installed'
+          : ''
+        throw new Error('no skill named "' + wanted + '"' + (rootWanted ? ' in source "' + rootWanted + '"' : '') + listHint)
       }
       // 胜出者优先：同名的影子副本读得到，但那不是生效的一份，所以默认不选它。
       const picked = hits.find((hit) => !hit.shadowedBy && hit.enabled)
@@ -147,7 +150,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
     },
   }))
   register(defineTool({
-    name: 'skill_manager_set_enabled',
+    name: 'skill_manager_switch',
     description: 'Enable or disable one DSH skill (policy only; source files are never modified), or a whole source folder via `source`. Enabling a shadowed copy has no effect. Only when the user asks or approves.',
     parameters: {
       name: { type: 'string', description: 'Skill name (kebab-case).' },

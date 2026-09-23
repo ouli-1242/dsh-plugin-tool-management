@@ -641,19 +641,23 @@
                 React.createElement('div', { className: 'dsm-adv' },
                   React.createElement('button', { type: 'button', className: 'dsm-adv-head', 'aria-expanded': modal.advanced === true, onClick: toggleAdvanced },
                     React.createElement('span', { className: 'dsm-adv-caret' }, modal.advanced ? '▼' : '▶'),
-                    React.createElement('span', null, t('subagents.adv.title')),
-                    React.createElement('span', { className: 'dsm-adv-note' },
-                      modal.advanced ? '' : t('subagents.adv.summary', {
+                    React.createElement('span', { className: 'dsm-adv-title' }, t('subagents.adv.title')),
+                    modal.advanced ? null : React.createElement('span', { className: 'dsm-adv-note dsm-adv-sum' },
+                      // 摘要固定两行：六项挤在一行会整句折行，把「高级选项」顶得七零八落。
+                      // 第一行是"下一次委派会怎么跑"，第二行是工具名单的存量。
+                      React.createElement('span', null, t('subagents.adv.summary', {
                         model: modal.form.model ? (modal.form.provider ? modal.form.provider + '/' + modal.form.model : modal.form.model) : t('subagents.adv.inherit'),
                         depth: catalogDepthLabel(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
                         // 思考强度收起来也要看得见：它是"下一次委派会怎么跑"的一部分。
                         // 没配时报「默认」而**不是**「继承」—— 官方语义里换模型会把继承来的那一档
                         // 删掉（`dsh-subagent/lib/index.js:482`），报「继承」是句假话。
                         effort: modal.form.reasoningEffort ? String(modal.form.reasoningEffort) : t('subagents.effort.none'),
+                      })),
+                      React.createElement('span', null, t('subagents.adv.summary2', {
                         modes: Object.keys(modal.form.toolsByPreset || {}).length,
                         allow: (modal.form.tools || []).length,
                         deny: (modal.form.toolsDeny || []).length,
-                      }))),
+                      })))),
                   modal.advanced ? React.createElement('div', { className: 'dsm-adv-body' },
                     // 模型 + 思考强度并排（`.dsm-field-row`）：它们是同一件事的两半 —— 档位清单是
                     // **按模型**给的（adapter 的能力声明），换模型必须同时看这一格。

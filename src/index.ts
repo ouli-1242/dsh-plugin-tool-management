@@ -42,9 +42,15 @@ import {
 } from './context-inject.js'
 import { isApprovalNever } from './approval-policy.js'
 import {
+  addPreset,
   buildToolTableReport,
+  DEFAULT_HIDDEN_TOOLS,
+  dropPreset,
   migrateLegacyToolNames,
   normalizeToolTableSettings,
+  PRESET_MAX_COUNT,
+  PRESET_NAME_MAX_LENGTH,
+  toolTableSettingsFrom,
   type ToolTableReport,
   type ToolTableRow,
   type ToolTableSettings,
@@ -332,7 +338,7 @@ export default {
       memoriesRoot: String((config as { memoriesRoot?: unknown } | undefined)?.memoriesRoot || ''),
       stateDir: String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || ''),
       scenesDir: String((config as { memoriesScenesDir?: unknown } | undefined)?.memoriesScenesDir || ''),
-      // 场景记忆段预算（字节），默认 65536；仅用于测试与特殊部署调优。
+      // 场景记忆段预算（字节），默认 131072（= DEFAULT_MAX_BYTES，128 KiB）；仅用于测试与特殊部署调优。
       ...(Number.isFinite(Number((config as { rulesMaxBytes?: unknown } | undefined)?.rulesMaxBytes))
         ? { maxBytes: Number((config as { rulesMaxBytes?: unknown }).rulesMaxBytes) }
         : {}),
@@ -613,8 +619,10 @@ export default {
     }
 
         // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
-    // 工具表按**每个请求**付钱：18 个工具的整份定义合计 ≈3,439 tok 每轮都在。关掉某几个，
-    // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。
+    // 工具表按**每个请求**付钱：20 个工具的整份定义合计 ≈3,769 tok 每轮都在。关掉某几个，
+    // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十五条**
+    // （20 条里实发只剩 5 条）—— 名单、判据与代价在 `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过
+    // 选择时铺（见下面的 `toolTableSettingsFrom`）。
     //
     // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话
     // 就是假的），所以它们的构造依赖在这块之后 —— 不做前向引用，顺序就是依赖顺序。
@@ -639,7 +647,10 @@ export default {
       // 0.14.0 旧工具名迁移：读侧翻译一次并**回写盘**（幂等）。不迁移的话，用户"关掉了某条"
       // 的意图会在新名字上静默失效 —— 那条工具照旧每轮发出去，而界面上看不出来。
       // 写失败不回滚本次读取：内存里已经是迁移后的值，下次读会再试一次。
-      const migrated = migrateLegacyToolNames(normalizeToolTableSettings(raw))
+      // 侧车不存在（`readJsonFile` 给 null）= 用户从没记过选择 ⇒ 用**出厂默认**（十五条不发，
+      // 实发 5 条；判据与代价见 tools/table.ts 的 DEFAULT_HIDDEN_TOOLS）。存过盘的
+      // 一律照盘上那份，包括显式的 `hidden: []` —— 那是"我全都要"，不能被默认值盖掉。
+      const migrated = migrateLegacyToolNames(toolTableSettingsFrom(raw))
       const value = migrated.settings
       if (migrated.changed) {
         try { await writeJsonFile(hubPath(TOOL_TABLE_FILE), value) } catch { /* 回写失败：本次仍按迁移后的值生效 */ }
@@ -654,8 +665,9 @@ export default {
     }
     /**
      * 同步快照（热路径用：工具门禁每次调用、注入通道每个 step 都要问一句）。还没加载时先给
-     * 默认值并异步预热 —— 默认是"什么都没关"，预热前的这一瞬与用户的选择可能不一致，但
-     * 方向是安全的那一侧（不隐藏任何东西，绝不因为读盘慢而让工具凭空消失）。
+     * **空集**并异步预热 —— 空集不是出厂默认（出厂关着五条），是刻意的：预热前的这一瞬与
+     * 用户的选择可能不一致，但方向必须是安全的那一侧（不隐藏任何东西，绝不因为读盘慢而让
+     * 工具凭空消失）。
      */
     function toolTableHidden(): ReadonlySet<string> {
       if (toolTableCache === null) {
@@ -667,25 +679,69 @@ export default {
     const toolTableRows = (): ToolTableRow[] => [...toolTableSizes].map(([name, bytes]) => ({ name, bytes }))
     const toolTableReport = (hidden: readonly string[] = [...toolTableHidden()]): ToolTableReport =>
       buildToolTableReport(toolTableRows(), hidden)
-    async function toolTableOp(args: any): Promise<any> {
-      const current = await readToolTableSettings()
-      if (!args || args.set !== true) return { ok: true, hidden: current.hidden, report: toolTableReport(current.hidden) }
-      const next = normalizeToolTableSettings({ hidden: args.hidden })
-      // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错
-      // （"names unknown global tool"）。注册失败的工具本来也不在表里。
-      const hidden = next.hidden.filter((name) => toolTableSizes.has(name))
+    /** 落盘 + 同步内存缓存（三条写路径共用：改勾选 / 存方案 / 删方案）。 */
+    async function writeToolTableSettings(next: ToolTableSettings): Promise<{ ok: true } | { ok: false; error: string }> {
       await ensurePaths()
       // 落盘在写锁里，落完**出了锁**再刷新（`withWriteLock` 是一条不可重入的链：锁里再调
       // 一次会等自己，直接卡死）。刷新是两处目录读，本来也不必占着写锁。
-      const saved = await withWriteLock(async () => {
+      return withWriteLock(async () => {
         try {
-          await writeJsonFile(hubPath(TOOL_TABLE_FILE), { hidden })
+          await writeJsonFile(hubPath(TOOL_TABLE_FILE), next)
         } catch (e) {
           return { ok: false as const, error: '设置保存失败: ' + message(e) }
         }
-        toolTableCache = { at: Date.now(), value: { hidden }, off: new Set(hidden) }
+        toolTableCache = { at: Date.now(), value: next, off: new Set(next.hidden) }
         return { ok: true as const }
       })
+    }
+    /**
+     * 回给界面的同一份形状：当前名单 + 已存方案 + 出厂默认名单 + 体积报告。
+     *
+     * `defaultHidden` 单独回一份而不是塞进 `presets`：那条**不存在文件里**（它是代码里的
+     * `DEFAULT_HIDDEN_TOOLS`），写进文件就会出现"用户删不掉的一条数据"。界面把它排在最前、
+     * 不给删除键，词典出它的名字。
+     */
+    const toolTablePayload = (value: ToolTableSettings) => ({
+      ok: true, hidden: value.hidden, presets: value.presets,
+      defaultHidden: [...DEFAULT_HIDDEN_TOOLS], report: toolTableReport(value.hidden),
+    })
+    /** 方案名：折叠空白 + 截到上限。空名由调用方报错（这里不猜"用户想叫什么"）。 */
+    const presetNameOf = (raw: unknown): string =>
+      String(raw ?? '').replaceAll(/\s+/g, ' ').trim().slice(0, PRESET_NAME_MAX_LENGTH)
+    async function toolTableOp(args: any): Promise<any> {
+      const current = await readToolTableSettings()
+      if (!args || args.set !== true) {
+        // 存 / 删方案都不动 `hidden`，所以这两条路**不**重排可见性、也不刷目录（那是 `set`
+        // 那一条才有的三处联动）。失败原因回 `code` 不回中文串 —— 英文界面会原样露出中文。
+        if (args && args.presetSave !== undefined) {
+          const name = presetNameOf(args.presetSave)
+          if (name === '') return { ok: false, code: 'nameEmpty' }
+          const added = addPreset(current, name, current.hidden)
+          // 同名不覆盖（用户裁定）：撞名要用户换个名字，而不是悄悄改掉已有那份。
+          if (added.exists) return { ok: false, code: 'nameTaken', name }
+          if (current.presets.length >= PRESET_MAX_COUNT) {
+            return { ok: false, code: 'limit', limit: PRESET_MAX_COUNT }
+          }
+          const saved = await writeToolTableSettings(added.settings)
+          if (!saved.ok) return saved
+          return toolTablePayload(added.settings)
+        }
+        if (args && args.presetDelete !== undefined) {
+          const name = presetNameOf(args.presetDelete)
+          const dropped = dropPreset(current, name)
+          if (!dropped.changed) return { ok: false, code: 'notFound', name }
+          const saved = await writeToolTableSettings(dropped.settings)
+          if (!saved.ok) return saved
+          return toolTablePayload(dropped.settings)
+        }
+        return toolTablePayload(current)
+      }
+      // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错
+      // （"names unknown global tool"）。注册失败的工具本来也不在表里。
+      const hidden = normalizeToolTableSettings({ hidden: args.hidden }).hidden
+        .filter((name) => toolTableSizes.has(name))
+      const next: ToolTableSettings = { hidden, presets: current.presets }
+      const saved = await writeToolTableSettings(next)
       if (!saved.ok) return saved
       // 三处跟着变：可见性（restrict 名单重排）、两个目录（截断提示里点名的工具可能没了）。
       // 目录的 refresh 会把新的一句话注入出去 —— 内容变了才重发，这是正确行为。
@@ -694,7 +750,7 @@ export default {
         skillCatalog.refresh().catch(() => { /* 目录刷新失败不该让保存失败 */ }),
         subagentCatalog.refresh().catch(() => { /* 同上 */ }),
       ])
-      return { ok: true, hidden, report: toolTableReport(hidden) }
+      return toolTablePayload(next)
     }
 
     // ---------- 「有官方等价物 ⇒ 我们让位」----------
@@ -2244,6 +2300,8 @@ export default {
       register: (def: ToolDefinition) => { recordToolSize(def); tools.register(def) },
       lockedSceneGuard,
       syncSwitchToScene,
+      // 错误句里点名工具前要先问一句（判据与两个目录的 `listToolVisible` 同一份缓存）。
+      toolVisible: (name: string) => !toolTableHidden().has(name),
       reachNoticeForAgent,
       presetRoster: candidates.presetRoster,
       injectNoticeOptions,
@@ -2269,11 +2327,21 @@ export default {
     // 的那份才算），直调服务会得到文件比对口径 —— 场景驱动时工具会报一个与界面不同的答案。
     buildPromptTools({ ...toolDeps, promptOps, applyPresetGuarded, promptsDir })
     buildMemoryTools({ ...toolDeps, rulesOps: memoriesService.ops })
-    // 场景族（tools/scene.ts）：建场景 / 写档案 / 绑提示词。**只做定义层** —— 启用与进入
-    // 留在界面「场景」页（那是改运行时环境的动作，该页进入前还会弹一张「会改什么」的预览卡）。
-    // 传**包装后**的 `archiveService.ops`：`scene-archive-save` 在本文件被包了一层，
-    // 保存的正是当前模式的那个场景时会联动人设开关（与界面同一行为）。
-    buildSceneTools({ ...toolDeps, rulesOps: memoriesService.ops, archiveOps: archiveService.ops })
+    // 场景族（tools/scene.ts）：列场景与档案（`_list`）+ 建场景 / 写档案 / 绑提示词（`_save`）
+    // + 进入与退出（`_switch`）。
+    // 传**包装后**的 `archiveService.ops`：`scene-archive-save` 与 `scene-mode-set` 都在本文件
+    // 被包了一层（前者联动人设开关、后者带锁定守卫与目录重算），工具走同一条路才有同一套行为。
+    //
+    // `sceneActivate` 传的是 **handlers 表里那份**（`buildSceneSyncOps` 覆盖过的）：AGENTS.md
+    // 同步在包装里，直调 `memoriesService.ops['rules-set-active']` 会静默漏掉"把场景绑定的
+    // 预设正文写进 `~/.dsh/AGENTS.md`、退出时恢复基线"这一步。传 handlers 里那份而不是在这里
+    // 再包一次，是为了让工具与 HTTP API 共用同一个实现（不会各自漂移）。
+    buildSceneTools({
+      ...toolDeps,
+      rulesOps: memoriesService.ops,
+      archiveOps: archiveService.ops,
+      sceneActivate: (args: any) => handlers['rules-set-active'](args),
+    })
     buildSubagentTools({
       ...toolDeps,
       subagentService,
@@ -2300,6 +2368,10 @@ export default {
         // mcp / 技能 / 人设"，改错了影响的是用户切场景之后的**整个运行时环境**，而不是一次
         // 输出。与 skill / subagent 的 save 同一档（都是"以后每次都按它来"的长期资产）。
         scene_manager_save: '「保存场景」',
+        // 0.14.0 的边界是"启用与进入留在界面"，0.14.x 补上这条工具后它成为**改运行时**的那一条：
+        // 六处开关一起动 + 收窄注入 + 改写 AGENTS.md。危险度高于 `_save`（那个只写剧本），
+        // 所以门禁同档、不降。
+        scene_manager_switch: '「切换场景」',
         subagent_manager_run: '「运行子代理」',
         // 0.14.0 起 create 与 update 并成 save（标签取中性的「保存人设」：改一份已有文件时
         // "新建"是句假话）。危险度不变 —— 两者都往 hub 里落/整份重写一份文件。
@@ -2410,6 +2482,21 @@ export default {
             kind: 'ask',
             reason: `Save scene「${scene}」— ${detail}. Entering it switches on exactly what this scene lists and turns everything else off.`,
           })
+        }
+        if (exec.name === 'scene_manager_switch') {
+          // 与 `scene_manager_save` 同一档（都无条件问），但**问的是另一件事**：
+          // save 改的是"以后进这个场景会怎样"（一份剧本），switch 改的是**现在** ——
+          // 六处开关一起动（MCP 服务器级/工具级、技能来源级/技能级、人设、备注覆盖），
+          // 注入范围随之收窄，并且**改写 `~/.dsh/AGENTS.md`**（本插件唯一会动那个文件的
+          // 动作，覆盖前 5 代备份）。危险度只高不低，所以门禁强度不降。
+          // 卡里回显动作与目标场景：用户批准的是"现在就切到 X"，不是"改一下 X 的配置"。
+          const a = (exec && exec.arguments) || {}
+          const action = String(a.action || '')
+          const scene = String(a.scene || '')
+          const what = action === 'exit'
+            ? 'Leave the current scene — restore the runtime switches and the AGENTS.md baseline saved on entry'
+            : `Enter scene「${scene}」— apply its archive (everything it does not list goes off), narrow injection to its memories, and apply its bound prompt preset to AGENTS.md`
+          return Promise.resolve({ kind: 'ask', reason: what })
         }
         if (exec.name === 'subagent_manager_save') {
           // 与 `skill_manager_save` 完全对称：往 hub 里落一份新文件 / 整份重写一份现有文件。
