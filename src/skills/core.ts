@@ -3646,6 +3646,108 @@ export async function createSkill(
   return { name, path: join(target, "SKILL.md"), root: definition.key };
 }
 
+/** 更新技能入参。与 `CreateSkillInput` 的差别就在"可选"：省略 = 保持原样。 */
+interface UpdateSkillInput {
+  name: unknown;
+  description?: unknown;
+  body?: unknown;
+}
+
+/**
+ * 改写一份**已存在**的技能（bundle 的 `SKILL.md` 或 flat 的 `<name>.md`）。
+ *
+ * 为什么是独立函数、而不是给 `createSkill` 加一个 `allowOverwriteInOwnRoot` 开关：
+ * 「静默覆盖」这件事不该出现在同一个入口的签名里 —— 调用方读到的函数名必须已经说明了
+ * 它是破坏性的，否则一次参数写错就从"新建"变成"覆盖别人的技能"。
+ *
+ * 写入复用同一套原子写（stage 文件 + `renameWithRetry`）。bundle 形态**只换 SKILL.md**，
+ * 目录里其余文件（附件、脚本、参考文档）原样留着 —— 整目录替换会把它们全删掉。
+ *
+ * 边界：只在 `options.root`（默认 hub = `$DSH_HOME/tool-management/skills`）**里面已经
+ * 存在**的那一份上写。文件不在那里就是"不存在"，**绝不新建**（新建是 `createSkill` 的事，
+ * 它的冲突检查会拒掉同名）。
+ *
+ * 「胜出者必须是 hub 这一份」这层判定不在这里：它要读来源排序与首选设置，属于状态层
+ * （见 service.ts 的 `skill-update` op）。本函数只保证"不越出给定根"。
+ */
+export async function updateSkill(
+  input: UpdateSkillInput,
+  log: LogFn | undefined,
+  options: CreateSkillOptions = {},
+): Promise<CreateSkillResult | FailureResult> {
+  const requestedRoot = Object.prototype.hasOwnProperty.call(options, "root")
+    ? options.root
+    : rootByKey("hub") || rootByKey("dsh");
+  const definition = await checkedWritableRootDefinition(requestedRoot);
+  if (definition && definition.ok === false) return definition;
+  if (!definition) {
+    if (!rootDefinition(requestedRoot)) {
+      return {
+        ok: false,
+        code: "error.root.unknown",
+        params: { root: String(requestedRoot == null ? "" : requestedRoot) },
+        error: `技能来源不存在：${requestedRoot == null || requestedRoot === "" ? "(空)" : requestedRoot}`,
+      };
+    }
+    return readonlyError("update");
+  }
+  const root = definition.path;
+  const requestedName = String((input && input.name) || "").trim();
+  const name = toKebab(requestedName);
+  if (!name || !KEBAB_RE.test(name) || entryPath(root, name) === null)
+    return {
+      ok: false,
+      error: `无法生成合法 kebab-case 名称（原始名: ${requestedName}）`,
+      code: "error.import.invalidName",
+      params: { name: requestedName },
+    };
+  // 形态判定与 `resolveEntry` 同口径：bundle 目录优先，其次 flat 单文件。
+  const bundleDir = entryPath(root, name) as string;
+  const bundleDoc = join(bundleDir, "SKILL.md");
+  const flatDoc = resolve(root, `${name}.md`);
+  const exists = async (p: string): Promise<boolean> =>
+    await fs.stat(p).then(() => true).catch(() => false);
+  const existingDoc = (await exists(bundleDoc)) ? bundleDoc : (await exists(flatDoc)) ? flatDoc : null;
+  if (!existingDoc)
+    return {
+      ok: false,
+      code: "error.update.notFound",
+      error: `技能不存在（本插件落点里没有 ${name}）：本工具只改本插件自己写的技能，不新建、也不动官方根里的`,
+      params: { name },
+    };
+  const current = parseSkillDoc(await fs.readFile(existingDoc, "utf8"));
+  const curDescription = unquote(String(current.map.description ?? "")).trim();
+  const curBody = String(current.body ?? "").trim();
+  // 省略 = 保持。注意区分"未给"与"给了空串"：空串是显式意图，会被下面的必填校验挡下并
+  // 说明缺哪个 —— 静默保留会让模型以为清掉了。
+  const description = input && input.description !== undefined
+    ? String(input.description).trim()
+    : curDescription;
+  const body = input && input.body !== undefined ? String(input.body).trim() : curBody;
+  if (!description)
+    return { ok: false, error: "技能简介不能为空", code: "error.create.descriptionRequired" };
+  if (!body)
+    return { ok: false, error: "技能正文不能为空", code: "error.create.bodyRequired" };
+  if (description.length > 500 || body.length > 1 << 18)
+    return { ok: false, error: "技能内容过长", code: "error.create.tooLarge" };
+  const content = `---\nname: ${name}\ndescription: ${yamlString(description)}\n---\n\n${body}\n`;
+  if (existingDoc === flatDoc) {
+    await writeFileAtomically(flatDoc, content);
+    if (log) log("update", `更新 ${flatDoc}`);
+    return { name, path: flatDoc, root: definition.key };
+  }
+  const stage = temporaryPath(existingDoc, "update");
+  try {
+    await fs.writeFile(stage, content, "utf8");
+    await renameWithRetry(stage, existingDoc);
+  } catch (error) {
+    await fs.rm(stage, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  if (log) log("update", `更新 ${existingDoc}`);
+  return { name, path: existingDoc, root: definition.key };
+}
+
 export async function skillDetail(
   keyOrRoot: RootInput,
   name: string,

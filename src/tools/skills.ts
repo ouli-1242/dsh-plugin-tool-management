@@ -1,10 +1,14 @@
-// 技能域的 model 工具（2026-09-19 从 index.ts 的注册区抽出）：
-// skill_manager_list / skill_manager_read / skill_manager_set_enabled / skill_manager_create。
+// 技能域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 合并）：
+// skill_manager_list / skill_manager_read / skill_manager_set_enabled / skill_manager_save。
+//
+// create → save：`skill-create` 对同名是**拒绝**的，所以"建还是改"的判定只能在工具这一侧
+// （先读一次 `skill-state`）。改的分支走新加的 `skill-update` op，它只认 hub 里的胜出者。
 
+import { toKebab } from '../skills/core.js'
 import { text, type ToolDomainDeps } from './deps.js'
 
 export interface SkillToolDeps extends ToolDomainDeps {
-  /** skills service 的 ops 表：skill-state / skill-enable / skill-disable / skill-create。 */
+  /** skills service 的 ops 表：skill-state / skill-enable / skill-disable / skill-create / skill-update。 */
   skillsOps: Record<string, (args: any) => Promise<any>>
 }
 
@@ -144,16 +148,33 @@ export function buildSkillTools(deps: SkillToolDeps): void {
   }))
   register(defineTool({
     name: 'skill_manager_set_enabled',
-    description: 'Enable or disable one DSH skill (manager policy only; source files are never modified). Enabling a shadowed copy has no effect. Only when the user asks or approves.',
+    description: 'Enable or disable one DSH skill (policy only; source files are never modified), or a whole source folder via `source`. Enabling a shadowed copy has no effect. Only when the user asks or approves.',
     parameters: {
-      name: { type: 'string', required: true, description: 'Skill name (kebab-case).' },
+      name: { type: 'string', description: 'Skill name (kebab-case).' },
       enabled: { type: 'boolean', required: true, description: 'true to enable, false to disable.' },
-      root: { type: 'string', description: 'Source root key (dsh/agents/codex/claude or a project key); default dsh.' },
+      source: { type: 'string', description: 'A source root key to switch as a whole (dsh/hub/agents/codex/claude or a project key).' },
+      root: { type: 'string', description: 'Source root key the skill lives in (with `name`); default dsh.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args) {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
+      const name = String((args && args.name) || '').trim()
+      const source = String((args && args.source) || '').trim()
+      if (name && source) throw new Error('name 与 source 只能给一个：name 是单个技能，source 是整个来源目录')
+      if (!name && !source) throw new Error('缺少参数：name（单个技能）或 source（整个来源目录）')
+      if (source) {
+        // 来源级启停：登记表里 `skill-source-enable` / `skill-source-disable` 都是
+        // `{ serviceWrite, frozen, syncsArchive }`，所以守卫已过、档案也要同步
+        // —— 同步的入参是 `{ root }`（来源级没有独立字段，档案靠"来源下有没有被勾的技能"反推）。
+        if (args.root !== undefined) throw new Error('source 已经是来源级的键，不要再给 root')
+        const op = args.enabled ? 'skill-source-enable' : 'skill-source-disable'
+        const r = await deps.skillsOps[op]({ root: source })
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'skill source toggle failed')
+        const syncErr = await deps.syncSwitchToScene(op, { root: source, enabled: args.enabled === true })
+        return 'OK: source ' + source + ' now ' + (args.enabled ? 'enabled' : 'disabled') +
+          (syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : '')
+      }
       const root = String(args.root || 'dsh')
       const op = args.enabled ? 'skill-enable' : 'skill-disable'
       const r = await deps.skillsOps[op]({ name: args.name, root })
@@ -181,24 +202,63 @@ export function buildSkillTools(deps: SkillToolDeps): void {
     },
   }))
   register(defineTool({
-    name: 'skill_manager_create',
+    name: 'skill_manager_save',
     // 落点必须和 UI「创建技能」一致：两者都走 core 的默认落点（hub 的
     // tool-management/skills/，hub 缺失时退回 DSH_HOME/skills）。以前这里硬编码
     // root:'dsh'，于是同一个「新建技能」动作，人点界面和模型调用会落到两个不同的根。
-    description: 'Create a new DSH skill under DSH_HOME/tool-management/skills. Use only when the user explicitly asks to create or save a reusable skill.',
+    // 改的分支**只认 hub 里的胜出者**：同名技能在 dsh/agents/claude 各有一份时只有一份
+    // 生效，改错那一份会返回 OK 而技能毫无变化 —— 那层判定在 `skill-update` op 里。
+    description: 'Create a DSH skill under DSH_HOME/tool-management/skills, or update the one that already has this name — the receipt says which. Only skills this plugin wrote can be updated. Use only when the user asks to save a reusable skill.',
     parameters: {
       name: { type: 'string', required: true, description: 'Skill name; normalized to kebab-case.' },
-      description: { type: 'string', required: true, description: 'A concise routing description for when to use the skill.' },
-      body: { type: 'string', required: true, description: 'Markdown instructions that form the skill body.' },
+      description: { type: 'string', description: 'A concise routing description. Required when creating; omit = keep.' },
+      body: { type: 'string', description: 'Markdown instructions. Required when creating; omit = keep.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args) {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
-      const r = await deps.skillsOps['skill-create']({ name: args.name, description: args.description, body: args.body })
-      if (!r || r.ok === false) throw new Error((r && r.error) || 'skill create failed')
+      const wanted = String((args && args.name) || '').trim()
+      if (!wanted) throw new Error('缺少参数：name')
+      const kebab = toKebab(wanted)
+      if (!kebab) throw new Error('无法生成合法 kebab-case 名称（原始名: ' + wanted + '）')
+      // 建还是改：先看这个（规范化后的）名字在不在。`skill-create` 对同名是**拒绝**的，
+      // 所以这条判定只能在这里做 —— 不能指望 op 层兜，也不能让模型自己先查一次
+      // （它手里的清单可能已经过期）。
+      const state: any = await deps.skillsOps['skill-state']({})
+      if (!state || state.ok === false) throw new Error((state && state.error) || 'skill-state failed')
+      let exists = false
+      for (const root of ((state.data && state.data.roots) || [])) {
+        for (const skill of root.skills || []) {
+          // 与 list / read 同一套名字口径：`declaredName || name`，再比目录名。
+          if (String(skill.declaredName || skill.name || '') === kebab || String(skill.name || '') === kebab) exists = true
+        }
+      }
+      if (!exists) {
+        // 建的分支：正文与简介都必填。core 自己会拒（error.create.descriptionRequired /
+        // bodyRequired），但那是给用户看的 op 错；模型需要的是"这条工具要什么"。
+        const description = String((args && args.description) || '').trim()
+        const body = String((args && args.body) || '').trim()
+        const missing = [
+          description === '' ? 'description' : '',
+          body === '' ? 'body' : '',
+        ].filter((x) => x !== '')
+        if (missing.length) throw new Error('新建技能必须给 ' + missing.join(' 与 ') + '（' + kebab + ' 还不存在）')
+        const r: any = await deps.skillsOps['skill-create']({ name: wanted, description: args.description, body: args.body })
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'skill create failed')
+        const data: any = r.data || {}
+        return 'Created DSH skill ' + (data.name || kebab) + ' at ' + (data.path || '(unknown)')
+      }
+      // 改的分支：省略 = 保持。两个可改字段一个都没给就拒 —— op 会按"保持原样"重写一次文件
+      // 并刷新时间戳，模型以为改了点什么，其实只是把同一份内容又写了一遍。
+      const touched: string[] = []
+      if (args.description !== undefined) touched.push('description')
+      if (args.body !== undefined) touched.push('body')
+      if (!touched.length) throw new Error('没有要改的东西：description / body 至少给一个')
+      const r: any = await deps.skillsOps['skill-update']({ name: wanted, description: args.description, body: args.body })
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'skill update failed')
       const data: any = r.data || {}
-      return 'Created DSH skill ' + (data.name || args.name) + ' at ' + (data.path || '(unknown)')
+      return 'Updated DSH skill ' + (data.name || kebab) + ' at ' + (data.path || '(unknown)') + '（改了 ' + touched.join('、') + '）'
     },
   }))
 }

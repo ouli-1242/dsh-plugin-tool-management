@@ -72,7 +72,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'mcpm-tools-refresh': { write: true },
   'mcpm-tools': { readonly: true },
 
-  // ── 技能域（21，含内联的 skill-open）───────────────────────────────────────
+  // ── 技能域（22，含内联的 skill-open）───────────────────────────────────────
   'skill-state': { annotatesLock: true },
   'skill-detail': { readonly: true },
   'skill-browse': { readonly: true },
@@ -87,6 +87,9 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'skill-prefer': { serviceWrite: true, frozen: true },
   'skill-unprefer': { serviceWrite: true, frozen: true },
   'skill-create': { serviceWrite: true, frozen: true },
+  // 改写 hub 里已存在的那一份技能（`skill_manager_save` 的改分支）。与 create 同规格：
+  // 都是往 hub 落文件。它**不动**官方根里的技能 —— 那层边界在 service 的胜出者判定里。
+  'skill-update': { serviceWrite: true, frozen: true },
   'skill-import': { serviceWrite: true, frozen: true },
   'skill-upload': { serviceWrite: true, frozen: true },
   'skill-delete': { serviceWrite: true, frozen: true },

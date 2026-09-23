@@ -2262,7 +2262,9 @@ export default {
       // 在完全权限下的行为一致；探测实现与回归测试见 approval-policy.ts（必须 ctx.get('approval')，
       // 不能用 ctx.approval——inject 未声明该服务时 cordis 代理会抛 "cannot get property without inject"）。
       const CONFIRM_LABELS: Record<string, string> = {
-        skill_manager_create: '「新建技能」',
+        // 0.14.0 起 create 与 update 并成 save（标签取中性的「保存」：改一份已有技能时
+        // "新建"是句假话）。危险度不变 —— 两者都往 hub 落文件。
+        skill_manager_save: '「保存技能」',
         // 0.14.0 起 write/update 并成一条 upsert，标签取中性的「保存记忆」：「写入」在改一条
         // 已有记忆时是句假话（与同一轮修 `prompt_manager_list` 的「生效中」同一个口径）。
         scene_memory_manager_save: '「保存记忆」',
@@ -2317,8 +2319,10 @@ export default {
         if ((exec.name === 'subagent_manager_create' || exec.name === 'subagent_manager_update')
           && !(await subagentWriteWouldApply(exec))) return next()
         if (bypassedByFullAccess(exec)) return next()
-        if (exec.name === 'skill_manager_create') {
-          return Promise.resolve({ kind: 'ask', reason: 'Create a new skill under ~/.dsh/tool-management/skills' })
+        if (exec.name === 'skill_manager_save') {
+          // 卡是**执行前**弹的：此时工具还没读 `skill-state`，走建还是改还没判出来，
+          // 所以 reason 只能取并集。0.14.0 起 create 与 update 并成一条 upsert。
+          return Promise.resolve({ kind: 'ask', reason: 'Create or overwrite a skill under ~/.dsh/tool-management/skills' })
         }
         if (exec.name === 'mcp_manager_save') {
           // 为什么必须问：stdio 服务器是宿主按你给的 command/args **spawn** 出来的进程
@@ -2375,7 +2379,7 @@ export default {
             .catch(() => ({ kind: 'ask', reason: what }))
         }
         if (exec.name === 'subagent_manager_create' || exec.name === 'subagent_manager_update') {
-          // 与 `skill_manager_create` 完全对称：往 hub 里落一份新文件 / 整份重写一份现有文件。
+          // 与 `skill_manager_save` 完全对称：往 hub 里落一份新文件 / 整份重写一份现有文件。
           // 无条件问（不设开关）—— 人设是"以后每次委派都按它来"的长期资产，改错了影响的是
           // 后续所有子代理的行为，而不是一次输出。
           // update 尤其：`subagent-update` 走 serializePersona 整份重写，改名还会连带改

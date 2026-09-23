@@ -24,6 +24,7 @@ import {
   importUploadedSkill,
   browseDirectories,
   createSkill,
+  updateSkill,
   skillDetail,
   listProviderCandidates,
   getProviderSkill,
@@ -441,7 +442,7 @@ export function createSkillsService(ctx: any): SkillsService {
     // 也变），是写操作；漏在这份清单里 = 配了访问令牌也不会被要求带令牌。
     'skill-source-remove', 'skill-source-restore',
     'skill-prefer', 'skill-unprefer',
-    'skill-create', 'skill-import', 'skill-upload', 'skill-delete',
+    'skill-create', 'skill-update', 'skill-import', 'skill-upload', 'skill-delete',
     // 批量启停与单条启停同权：配了访问令牌的宿主必须同样要求带令牌。
     'skill-set-all',
     'skill-trash-restore', 'skill-trash-delete', 'skill-custom-add', 'skill-custom-remove',
@@ -561,6 +562,44 @@ export function createSkillsService(ctx: any): SkillsService {
           return disableNewSkills([{ root: String(res.root || 'hub'), name: String(res.name) }], res)
         }
         return res
+      }),
+      afterWrite,
+    ),
+    // 改写**本插件自己写的那一份**技能。只认 hub 里的胜出者：同名技能在 dsh / agents /
+    // claude / 自定义根各有一份时只有一份生效，改错那一份会返回 OK 而技能毫无变化
+    // （用户实测踩过：同一技能四份并存，启错根等于没启）。胜出者判定要读来源排序与首选
+    // 设置，属于状态层，所以在这里做；core 的 `updateSkill` 只保证不越出给定根。
+    'skill-update': wrap(
+      (args) => write(async () => {
+        const wanted = String(args.name || '').trim()
+        const s: any = await readState()
+        const hits: Array<{ rootKey: string; shadowedBy: string }> = []
+        for (const root of (s && s.roots) || []) {
+          for (const skill of root.skills || []) {
+            if (String(skill.declaredName || skill.name || '') !== wanted) continue
+            hits.push({
+              rootKey: String(root.key || ''),
+              shadowedBy: skill.shadowedBy && skill.shadowedBy.root ? String(skill.shadowedBy.root) : '',
+            })
+          }
+        }
+        if (!hits.length) {
+          return { ok: false, code: 'error.update.notFound', params: { name: wanted }, error: `技能不存在：${wanted}` }
+        }
+        const winner = hits.find((h) => !h.shadowedBy) || hits[0]
+        if (winner.rootKey !== 'hub') {
+          return {
+            ok: false,
+            code: 'error.update.notOwnRoot',
+            params: { name: wanted, root: winner.rootKey },
+            error: `技能 ${wanted} 的生效副本在来源「${winner.rootKey}」，不在本插件落点（hub = $DSH_HOME/tool-management/skills）：本插件不修改官方根里的技能`,
+          }
+        }
+        return updateSkill(
+          { name: args.name, description: args.description, body: args.body },
+          log,
+          { root: (await requestRoot('hub')) || 'hub' },
+        )
       }),
       afterWrite,
     ),
