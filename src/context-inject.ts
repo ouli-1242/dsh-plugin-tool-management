@@ -892,7 +892,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       if (key === undefined) return
       const at = Date.now()
       // 记在**发起这次调用的那个会话**的账上。`exec.agent` 与 pre-step 的 `payload.agent`
-      // 是同一个对象（dsh-scope 的不变量要求，见 review/后续方向.md §2 末），所以这里
+      // 是同一个对象（`dsh-scope` 的不变量要求），所以这里
       // 落账的会话与上面 `liveDomainsByAgent` 记现场的会话必然一致。
       let owner = typeof agent === 'object' && agent !== null ? (agent as object) : undefined
       if (owner === undefined) { try { owner = lastAgent ? lastAgent.deref() : undefined } catch { owner = undefined } }
