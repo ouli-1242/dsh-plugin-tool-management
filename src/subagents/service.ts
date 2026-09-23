@@ -60,6 +60,25 @@ export interface PersonaDoc {
   /** 模型路由的 provider 半边（与 model 配对；缺省 = 继承主会话）。 */
   provider?: string
   model?: string
+  /**
+   * **思考强度档位**（frontmatter `reasoningEffort`；值 = 该模型暴露的某个档位 id；缺省 = 不在这里指定）。
+   *
+   * 官方契约（都读过源码，见 2026-09-23 的核对）：
+   *   · `AgentOptions.reasoningEffort?: ReasoningEffortId` —— `@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts:21-30`；
+   *   · 档位清单由 **adapter** 给出（`llm.resolveModelInfo(provider, model)` →
+   *     `reasoning.efforts[]` / `defaultEffort`，`dsh-llm/lib/types/types.d.ts:295-312`），
+   *     所以它跟 provider/model 走，**不是一个全局枚举**；那个调用是异步的、官方注释写明
+   *     adapter-owned asynchronous lookup（可能联网）；
+   *   · 不支持的值会在 provider I/O **之前**被拒 —— `resolveCallConfig` 注释：
+   *     `Unsupported explicit efforts reject before provider I/O; no clamping or aliasing is performed`。
+   *     所以我们**不**在这里校验档位合法性（清单可能拉不到），只做字符串归一，让官方那一步去拒。
+   *
+   * ⚠️ 留空的语义有个坑（`dsh-subagent/lib/index.js:471-483`）：子会话先继承主会话的
+   * provider / model / reasoningEffort，再用我们的值覆盖；**但若这次改了 provider 或 model 而
+   * 没给 reasoningEffort，继承来的那一档会被删掉**、回落到该模型自己的默认。界面上的 hint
+   * 必须按这条写，不能笼统说"留空继承主会话"。
+   */
+  reasoningEffort?: string
   /** 工具白名单：只保留列出的工具（与 toolsDeny 组合，deny 优先）。**旧格式**：对所有预设生效。 */
   tools?: string[]
   /** 工具黑名单：从子代理可见集合里移除（优先级高于白名单）。**旧格式**：对所有预设生效。 */
@@ -193,6 +212,18 @@ export function parsePresetToolRules(frontmatter: string): Record<string, Preset
 }
 
 /** 行式 frontmatter 解析：只认 description / provider / model / tools / toolsDeny / toolsByPreset / catalogDepth / output。 */
+/**
+ * 思考强度档位 id 的归一：单行、去空白、限长。**不校验它是不是合法档位** —— 清单要问 adapter
+ * 才拿得到（可能拿不到），而官方本来就会在 provider I/O 之前拒掉不支持的显式值。
+ *
+ * 为什么必须去换行：frontmatter 是**逐行**解析的（`parsePersona`），值里带换行会把后面半截
+ * 变成一行无主文本。限长是防脏值（正常档位 id 都很短）。
+ */
+export const REASONING_EFFORT_MAX_LENGTH = 64
+export function normalizeReasoningEffort(value: unknown): string {
+  return String(value ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, REASONING_EFFORT_MAX_LENGTH)
+}
+
 export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw)
   const data: Record<string, string> = {}
@@ -225,6 +256,8 @@ export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
     description: data.description || firstLine,
     provider: data.provider || undefined,
     model: data.model || undefined,
+    // frontmatter 键统一小写后是 `reasoningeffort`（写出去的是 camelCase）。
+    reasoningEffort: normalizeReasoningEffort(data.reasoningeffort) || undefined,
     tools,
     toolsDeny,
     ...(toolsByPreset === undefined ? {} : { toolsByPreset }),
@@ -699,8 +732,22 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       // provider 与 model 是模型路由的两半：DSH 的 resolveModel(provider, model) 不做
       // `provider/model` 字符串拆分，只改 model 会落在**主会话的 provider** 上——跨来源
       // 指定模型（如 sensenova 的 sensenova-6.8-flash-lite）必须两个键一起给。
-      ...(p.provider || p.model
-        ? { agentOptions: { ...(p.provider ? { provider: p.provider } : {}), ...(p.model ? { model: p.model } : {}) } }
+      // 2026-09-23 加 `reasoningEffort`：条件是"三个键任一有值"—— 只设强度（不改模型）也得
+      // 把这个对象发出去，否则那一格永远不生效。官方合并语义（`dsh-subagent/lib/index.js:471-483`）
+      // 是"先继承主会话的三项、再用这里的覆盖"，所以只给 reasoningEffort 时 provider/model
+      // 照旧继承；反过来，改了 provider/model 而没给 reasoningEffort 时，**继承来的那一档会被
+      // 删掉**（回落到该模型自己的默认）—— 那不是 bug，是官方的显式语义。
+      ...(p.provider || p.model || p.reasoningEffort
+        ? {
+            agentOptions: {
+              ...(p.provider ? { provider: p.provider } : {}),
+              ...(p.model ? { model: p.model } : {}),
+              // 类型是官方的品牌串 `ReasoningEffortId`；我们的值本来就是 adapter 自己给的
+              // opaque id（界面从 `resolveModelInfo` 的清单里选出来的），所以这里只做归一、
+              // 不重新校验 —— 不支持的档位由官方在 provider I/O 之前拒。
+              ...(p.reasoningEffort ? { reasoningEffort: p.reasoningEffort as never } : {}),
+            },
+          }
         : {}),
     })
     try {
@@ -742,7 +789,8 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       return {
         ok: true,
         // catalogDepth 报**生效值**（没写就是默认 1），界面与模型都不必各自知道默认是多少。
-        subagents: docs.map((p) => ({ name: p.name, enabled: p.enabled !== false, description: p.description, provider: p.provider ?? null, model: p.model ?? null, tools: p.tools ?? null, toolsDeny: p.toolsDeny ?? null, toolsByPreset: p.toolsByPreset ?? null, catalogDepth: catalogDepthOf(p), output: p.output ?? null })),
+        // 手写 map：新增字段必须**两处都加**（list 与 get），少一处就是界面读不到。
+        subagents: docs.map((p) => ({ name: p.name, enabled: p.enabled !== false, description: p.description, provider: p.provider ?? null, model: p.model ?? null, reasoningEffort: p.reasoningEffort ?? null, tools: p.tools ?? null, toolsDeny: p.toolsDeny ?? null, toolsByPreset: p.toolsByPreset ?? null, catalogDepth: catalogDepthOf(p), output: p.output ?? null })),
       }
     },
     'subagent-get': async (args: any) => {
@@ -750,7 +798,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const docs = await list()
       const p = docs.find((d) => d.name === name)
       if (!p) return { ok: false, error: `人设不存在: ${name}` }
-      return { ok: true, persona: { name: p.name, description: p.description, provider: p.provider ?? '', model: p.model ?? '', tools: p.tools ?? [], toolsDeny: p.toolsDeny ?? [], toolsByPreset: p.toolsByPreset ?? {}, catalogDepth: catalogDepthOf(p), output: p.output ?? '', body: p.body } }
+      return { ok: true, persona: { name: p.name, description: p.description, provider: p.provider ?? '', model: p.model ?? '', reasoningEffort: p.reasoningEffort ?? '', tools: p.tools ?? [], toolsDeny: p.toolsDeny ?? [], toolsByPreset: p.toolsByPreset ?? {}, catalogDepth: catalogDepthOf(p), output: p.output ?? '', body: p.body } }
     },
     'subagent-create': async (args: any) => {
       const name = String((args && args.name) || '').trim()
@@ -1029,6 +1077,9 @@ export function serializePersona(args: any): string {
   const description = String((args && args.description) || '').replace(/\r?\n/g, ' ').trim()
   const provider = String((args && args.provider) || '').trim()
   const model = String((args && args.model) || '').trim()
+  // 思考强度：空值**不落盘**（与 `catalogDepth` 默认值同规矩）—— 免得每个新建的人设都多一行
+  // 说明"它和默认一样"，也保证老的人设文件回写后逐字节不变。
+  const reasoningEffort = normalizeReasoningEffort(args?.reasoningEffort)
   const tools = toStringList(args?.tools)
   // 黑名单字段兼容两种入参名：toolsDeny（UI/camel）与 tools_deny（snake）。
   const toolsDeny = toStringList(args?.toolsDeny ?? args?.tools_deny)
@@ -1050,6 +1101,7 @@ export function serializePersona(args: any): string {
   if (description) lines.push('description: ' + description)
   if (provider) lines.push('provider: ' + provider)
   if (model) lines.push('model: ' + model)
+  if (reasoningEffort) lines.push('reasoningEffort: ' + reasoningEffort)
   if (hasCatalogDepth) lines.push('catalogDepth: ' + String(catalogDepth))
   for (const line of outputLines) lines.push('output: ' + line)
   if (tools.length) lines.push('tools: ' + tools.join(', '))

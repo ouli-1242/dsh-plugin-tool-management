@@ -9,6 +9,11 @@ export interface CandidateOpsDeps {
   /** 宿主 LLM 目录里的 (provider, model) 对（不发网络请求）。 */
   modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }> }>
   /**
+   * 某个 (provider, model) 的思考强度档位。与上面那个**代价不同**：要问 adapter，官方注释写明
+   * 是 `adapter-owned asynchronous lookup`（可能联网），所以单独一个 op、按需拉取。
+   */
+  modelReasoning(provider: string, model: string): Promise<{ ok: boolean; efforts?: Array<{ id: string; name: string; description?: string }>; defaultEffort?: string | null; error?: string }>
+  /**
    * 本插件自己没注册上的工具清单（如 `subagent_manager_*`）。用 getter 是因为它是可变的：
    * 注册失败是在 apply 过程中逐个记进去的，op 每次调用都要读最新那份。
    */
@@ -39,6 +44,16 @@ export function buildCandidateOps(deps: CandidateOpsDeps): Record<string, (args:
     }),
     // model-candidates：宿主 LLM 目录里的 (provider, model) 对（不发网络请求）。
     'model-candidates': async () => ({ ok: true, ...(await deps.modelCandidates()) }),
+    // model-reasoning：某个 (provider, model) 支持的思考强度档位（人设表单的「思考强度」下拉）。
+    // 为什么单独一个 op：档位清单要问 adapter（`llm.resolveModelInfo`，异步、可能联网），而
+    // model-candidates 是"不发网络请求"的本地目录 —— 捆在一次调用里会让"打开人设表单"这件事
+    // 忽然变成可能联网的操作。这里只做参数归一与转发，判定留给调用方（界面按 ok 分两态显示）。
+    'model-reasoning': async (args: any) => {
+      const provider = String((args && args.provider) || '').trim()
+      const model = String((args && args.model) || '').trim()
+      if (!provider || !model) return { ok: false, error: 'provider 与 model 都要给（档位跟模型走）' }
+      return deps.modelReasoning(provider, model)
+    },
     // 场景档案勾选器数据源 v2：全部 MCP 服务器（含未运行）+ 技能全集 + 人设清单。
     'scene-inventory': async () => {
       const [rowsR, tools, skills, subs] = await Promise.all([deps.mcpmListView(), deps.toolStates(), deps.skillRows(), deps.subagentList()])

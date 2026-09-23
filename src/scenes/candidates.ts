@@ -54,11 +54,44 @@ export interface Candidates {
   presetNames(): Promise<Array<{ id: string; name: string; trust: string }>>
   /** 人设表单的模型候选（只读宿主 LLM 目录，不发网络请求）。 */
   modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }> }>
+  /**
+   * 某个 (provider, model) 支持的思考强度档位（人设表单的「思考强度」下拉）。
+   *
+   * 与 `modelCandidates` **代价差一个数量级**：那个读本地目录、不发请求；这个要问 adapter，
+   * 官方注释写明是 `adapter-owned asynchronous lookup`（可能联网），所以它是**单独的 op**、
+   * 按需拉取，不捆进 model-candidates。
+   *
+   * 失败原样上报，**不回落**到"猜几个常见档位"：官方对不支持的显式 effort 是在 provider I/O
+   * **之前**直接拒（不夹紧、不别名），猜错一次就是子代理起不来。
+   */
+  modelReasoning(provider: string, model: string): Promise<ModelReasoningResult>
   /** 档案编辑器第 4 段的记忆候选。 */
   memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; description: string }>>
   /** 档案编辑器第 4 段的分组维度（场景 + 记忆条数）。 */
   memorySceneCandidates(): Promise<Array<{ name: string; label: string; description: string; count: number; global: boolean }>>
 }
+
+/**
+ * `modelReasoning` 的结果。`ok:false` 时 `error` 是给人看的原因（adapter 拉不到就是拉不到）。
+ * `efforts` 为空 = 这个模型没有暴露可选档位（不是失败）。
+ */
+export interface ModelReasoningResult {
+  ok: boolean
+  efforts?: Array<{ id: string; name: string; description?: string }>
+  /** adapter 配置的默认档位；缺省（null）= 由 provider 自己的默认决定。 */
+  defaultEffort?: string | null
+  error?: string
+}
+
+/**
+ * 问 adapter 的等待上限。官方签名 `resolveModelInfo(provider, model, signal?)` 的 signal 是
+ * "optional cancellation for adapter-owned asynchronous lookup"，所以给一个上限 —— 界面那一格
+ * 是懒加载 + loading 态，挂住不返回会让它一直转。
+ *
+ * ⚠️ 10s 是**防御性**取值，没有实测依据：本机拿不到活着的 adapter，量不出真实耗时。
+ * 真机上若发现常见 provider 只要几十毫秒，可以调小；若某个 provider 稳定超过它，就该调大。
+ */
+const MODEL_REASONING_TIMEOUT_MS = 10_000
 
 export function createCandidates(deps: CandidateDeps): Candidates {
   // 外部能力一次解构成局部名：块内代码逐字搬来，保持原样最不容易出错。
@@ -353,6 +386,50 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     }
     return { models }
   }
+
+  /**
+   * 某个 (provider, model) 的思考强度档位。见 `Candidates.modelReasoning` 的注释。
+   *
+   * `llm` 与 `modelCandidates` 同一路径取（**不在 inject 声明里**，所以必须 `ctx.get('llm')`
+   * 而不是 `ctx.llm` —— 后者在未声明该服务时 cordis 代理会抛
+   * "cannot get property without inject"）。
+   */
+  async function modelReasoning(provider: string, model: string): Promise<ModelReasoningResult> {
+    const llm = (typeof ctx.get === 'function' ? ctx.get('llm') : undefined) as any
+    if (!llm || typeof llm.resolveModelInfo !== 'function') {
+      return { ok: false, error: '宿主没有提供 llm.resolveModelInfo（拿不到档位清单）' }
+    }
+    const ac = typeof AbortController === 'function' ? new AbortController() : null
+    const timer = ac ? setTimeout(() => ac.abort(), MODEL_REASONING_TIMEOUT_MS) : null
+    try {
+      const info: any = await llm.resolveModelInfo(provider, model, ac ? ac.signal : undefined)
+      const reasoning = info && info.reasoning
+      const raw: any[] = reasoning && Array.isArray(reasoning.efforts) ? reasoning.efforts : []
+      const efforts: Array<{ id: string; name: string; description?: string }> = []
+      for (const e of raw) {
+        const id = String((e && e.id) || '')
+        if (!id) continue
+        // 官方结构：`{ id, name, description? }`（`dsh-llm/lib/types/types.d.ts:295-302`）。
+        // name 是给人看的档位名，id 才是要传回去的值 —— 两者都要留着，界面按 name 显示、按 id 提交。
+        efforts.push({
+          id,
+          name: String((e && e.name) || id),
+          ...(e && typeof e.description === 'string' && e.description ? { description: e.description } : {}),
+        })
+      }
+      return {
+        ok: true,
+        efforts,
+        // 缺省（null）= 由 provider 自己的默认决定（官方注释：Absence preserves the provider's own default）。
+        defaultEffort: reasoning && reasoning.defaultEffort ? String(reasoning.defaultEffort) : null,
+      }
+    } catch (e) {
+      return { ok: false, error: (e && (e as any).message) ? String((e as any).message) : String(e) }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   return {
     presetRoster,
     presetFactsForAgent,
@@ -362,6 +439,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     presetToolNames,
     presetNames,
     modelCandidates,
+    modelReasoning,
     memoryCandidates,
     memorySceneCandidates,
   }

@@ -1,4 +1,20 @@
         // ---------- 子智能体页：人设文件（~/.dsh/subagents/*.md）管理 ----------
+        /**
+         * 「思考强度」档位的按 (provider, model) 缓存。
+         *
+         * 为什么放在**组件外**：放进组件里每次渲染都会重建，等于没有缓存，而档位清单要问
+         * adapter（`llm.resolveModelInfo`，异步、可能联网）—— 编辑人设时来回切模型不该每次都问。
+         * TTL 5 分钟：档位是模型能力声明，短时间内不会变；换模型时才重新问。
+         */
+        var EFFORT_CACHE_TTL_MS = 5 * 60 * 1000
+        var effortCacheByRoute = {}
+        function readEffortCache(key) {
+          var hit = effortCacheByRoute[key]
+          if (!hit) return null
+          if (Date.now() - hit.at > EFFORT_CACHE_TTL_MS) { delete effortCacheByRoute[key]; return null }
+          return hit.value
+        }
+        function writeEffortCache(key, value) { effortCacheByRoute[key] = { at: Date.now(), value: value } }
         function SubagentsPage() {
           var state = React.useState({ loading: true, error: null, subagents: [] })
           var data = state[0], setData = state[1]
@@ -8,6 +24,16 @@
           var result = rs[0], setResult = rs[1]
           var ms = React.useState(null)
           var modal = ms[0], setModal = ms[1]
+          /**
+           * 「思考强度」的加载状态。key = 已拉取/正在拉取的 `provider\0model`（空串 = 还没选模型）。
+           * 与 `cands` 分开两个 state：档位是**按模型**懒加载的，而候选目录是一次性拉的，
+           * 混在一起会让"切换模型"误触发整份候选重拉。
+           */
+          var es = React.useState({ key: '', loading: false, error: null, efforts: [], defaultEffort: null })
+          var eff = es[0], setEff = es[1]
+          /** 换模型导致已存档位被清掉时的一次性提示（下次换模型或关弹窗即消失）。 */
+          var ens = React.useState(null)
+          var effNotice = ens[0], setEffNotice = ens[1]
           // 搜索词独立一处：`data` 在 refresh 时被整对象替换，寄在它里面会被刷新清空。
           // 过滤用防抖值，输入框仍绑原值（与提示词页同一写法）。
           var qs = React.useState('')
@@ -101,6 +127,76 @@
               setCand({ loaded: true, loading: false, error: errMsg(e), models: [], tools: [], presets: [] })
             })
           }
+          /**
+           * 拉取某个 (provider, model) 的思考强度档位。**只有真正展开了高级选项、且选了模型**才会
+           * 被调到（三个调用点：展开高级选项、模型下拉变更、自定义模型输入失焦）。
+           *
+           * 两个语义要点（都来自官方源码，见 src/subagents/service.ts 的 `reasoningEffort` 注释）：
+           *   · 档位跟模型走 —— 换模型必须重拉，旧清单对新模型无效；
+           *   · **拉取失败一律不动已存的值**：只有"成功且当前值不在清单里"才清档。否则一次网络
+           *     抖动就把用户设置抹了，而失败本身已经有提示。
+           */
+          function loadEfforts(provider, model) {
+            setEffNotice(null)
+            var pv = String(provider || ''), md = String(model || '')
+            if (!pv || !md) { setEff({ key: '', loading: false, error: null, efforts: [], defaultEffort: null }); return }
+            var key = pv + '\u0000' + md
+            var cached = readEffortCache(key)
+            if (cached) {
+              setEff({ key: key, loading: false, error: cached.ok ? null : cached.error, efforts: cached.efforts || [], defaultEffort: cached.defaultEffort || null })
+              if (cached.ok) dropEffortIfGone(cached.efforts || [])
+              return
+            }
+            setEff({ key: key, loading: true, error: null, efforts: [], defaultEffort: null })
+            apiCall('model-reasoning', { provider: pv, model: md }).then(function (res) {
+              var value = res && res.ok !== false
+                ? { ok: true, efforts: res.efforts || [], defaultEffort: res.defaultEffort || null }
+                : { ok: false, error: (res && res.error) || t('subagents.effort.unavailable'), efforts: [], defaultEffort: null }
+              writeEffortCache(key, value)
+              setEff({ key: key, loading: false, error: value.ok ? null : value.error, efforts: value.efforts, defaultEffort: value.defaultEffort })
+              if (value.ok) dropEffortIfGone(value.efforts)
+            }).catch(function (e) {
+              var value = { ok: false, error: errMsg(e), efforts: [], defaultEffort: null }
+              writeEffortCache(key, value)
+              setEff({ key: key, loading: false, error: value.error, efforts: [], defaultEffort: null })
+            })
+          }
+          /**
+           * 自动清档：清单里没有当前存的那一档 → 清掉并给一次性提示。
+           *
+           * 为什么必须清：官方对**不支持**的显式档位是在 provider I/O 之前直接拒（不夹紧、不别名），
+           * 留着它 = 下一次委派直接起不来，而错误要到那时才看得见。
+           * 为什么只在"拉取成功"时判断：失败时清单是空的，拿空清单当"没有这一档"会把设置误清。
+           */
+          function dropEffortIfGone(list) {
+            if (!modal || modal.type !== 'editor') return
+            var cur = String(modal.form.reasoningEffort || '')
+            if (!cur) return
+            var has = (list || []).some(function (e) { return String(e && e.id) === cur })
+            if (has) return
+            setEffNotice(t('subagents.effort.dropped', { effort: cur }))
+            setForm({ reasoningEffort: '' })
+          }
+          /** 当前表单的 (provider, model) 路由键 —— 用来与 `eff.key` 比，确认清单属于当前模型。 */
+          function currentRouteKey() {
+            return String((modal && modal.form.provider) || '') + '\u0000' + String((modal && modal.form.model) || '')
+          }
+          /**
+           * 当前模型**已就绪**的档位。未就绪一律返回空数组：切换模型后 `eff` 里还留着上一个模型的
+           * 清单（新请求还没回来），照它渲染会让用户选中一个不属于这个模型的档位 —— 而官方对不支持的
+           * 档位是直接拒，等于埋一次"委派起不来"。
+           */
+          function currentEfforts() {
+            if (!modal || !modal.form.model || eff.loading || eff.error) return []
+            return eff.key === currentRouteKey() ? (eff.efforts || []) : []
+          }
+          /** 空档（不指定）那一行的悬停说明：把 adapter 给的默认档位名字显示出来（拿不到就不显示）。 */
+          function defaultEffortTitle() {
+            var id = eff.defaultEffort
+            if (!id || eff.key !== currentRouteKey()) return undefined
+            var hit = (eff.efforts || []).filter(function (e) { return String(e && e.id) === String(id) })[0]
+            return hit ? String(hit.name || hit.id) : String(id)
+          }
           /** 高级选项：默认收起；已经在用模型/工具限制的人设自动展开（否则用户看不见自己配了什么）。 */
           /** 「不限制嵌套」的取值（与 src/subagents/service.ts 的 UNLIMITED_PERSONA_CATALOG_DEPTH 同值）。 */
           var CATALOG_DEPTH_UNLIMITED = 99
@@ -116,7 +212,9 @@
             // 目录注入深度不是默认值（1）时也算"配过"：它决定常驻目录出现在哪些会话，
             // 藏起来会让"为什么子会话看不到目录"变得无从查起。
             var budget = !!(p && typeof p.catalogDepth === 'number' && p.catalogDepth !== 1)
-            return !!(budget || (p && (p.model || p.provider)) || (p && ((p.tools || []).length || (p.toolsDeny || []).length || modes)))
+            // 思考强度同理：配过就得让人看得见 —— 它是"下一次委派会怎么跑"的一部分，
+            // 藏在收起的高级选项里等于用户改过又忘了自己改过。
+            return !!(budget || (p && (p.model || p.provider || p.reasoningEffort)) || (p && ((p.tools || []).length || (p.toolsDeny || []).length || modes)))
           }
           /** 编辑态里按模式分组的名单（深拷贝：取消编辑不留痕）。 */
           function cloneRules(source) {
@@ -129,7 +227,7 @@
           }
           function openEditor(name) {
             if (!name) {
-              setModal({ type: 'editor', mode: 'create', advanced: false, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: { name: '', description: '', provider: '', model: '', catalogDepth: 1, tools: [], toolsDeny: [], toolsByPreset: {}, body: '', output: '', error: null } })
+              setModal({ type: 'editor', mode: 'create', advanced: false, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: { name: '', description: '', provider: '', model: '', reasoningEffort: '', catalogDepth: 1, tools: [], toolsDeny: [], toolsByPreset: {}, body: '', output: '', error: null } })
               return
             }
             setBusy(true)
@@ -140,6 +238,8 @@
                 var advanced = initialAdvanced(p)
                 setModal({ type: 'editor', mode: 'edit', originalName: String(p.name || name), advanced: advanced, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: {
                   name: p.name || name, description: p.description || '', provider: p.provider || '', model: p.model || '',
+                  // 思考强度：服务端回空串 = 这份人设没指定（不是"没有档位"）。空值不落盘，见 serializePersona。
+                  reasoningEffort: p.reasoningEffort || '',
                   // 服务端回的是**生效值**（没写就是默认 1），所以这里不必再兜默认。
                   catalogDepth: typeof p.catalogDepth === 'number' ? p.catalogDepth : 1,
                   tools: (p.tools || []).slice(), toolsDeny: (p.toolsDeny || []).slice(),
@@ -147,7 +247,8 @@
                 } })
                 // 已配过限制的人设**一打开就是展开的**（initialAdvanced）→ 候选数据必须在这里也拉，
                 // 否则四行模式先亮"宿主没有回传预设名单"，非得点两次「高级选项」才补上（用户实测）。
-                if (advanced) loadCandidates()
+                // 思考强度同理：展开着就要有档位清单（它按模型懒加载，所以这里显式带上 model）。
+                if (advanced) { loadCandidates(); loadEfforts(p.provider, p.model) }
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
@@ -386,7 +487,12 @@
             if (!modal || modal.type !== 'editor') return
             var next = !modal.advanced
             setModal(Object.assign({}, modal, { advanced: next }))
-            if (next) loadCandidates()
+            if (next) {
+              loadCandidates()
+              // 档位清单与候选目录**分开拉**：候选是本地目录（一次性），档位要问 adapter
+              // （按模型、可能联网），所以这里用表单里当前的模型去拉；没选模型就什么都不发。
+              loadEfforts(modal.form.provider, modal.form.model)
+            }
           }
           function submitEditor() {
             if (!modal || modal.type !== 'editor') return
@@ -540,38 +646,80 @@
                       modal.advanced ? '' : t('subagents.adv.summary', {
                         model: modal.form.model ? (modal.form.provider ? modal.form.provider + '/' + modal.form.model : modal.form.model) : t('subagents.adv.inherit'),
                         depth: catalogDepthLabel(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
+                        // 思考强度收起来也要看得见：它是"下一次委派会怎么跑"的一部分。
+                        // 没配时报「默认」而**不是**「继承」—— 官方语义里换模型会把继承来的那一档
+                        // 删掉（`dsh-subagent/lib/index.js:482`），报「继承」是句假话。
+                        effort: modal.form.reasoningEffort ? String(modal.form.reasoningEffort) : t('subagents.effort.none'),
                         modes: Object.keys(modal.form.toolsByPreset || {}).length,
                         allow: (modal.form.tools || []).length,
                         deny: (modal.form.toolsDeny || []).length,
                       }))),
                   modal.advanced ? React.createElement('div', { className: 'dsm-adv-body' },
-                    // 模型：宿主 LLM 目录里的 (provider, model) 对 + 自定义兜底。
-                    React.createElement('div', { className: 'dsm-field' },
-                      React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
-                      React.createElement('div', { className: 'dsm-combo-row' },
+                    // 模型 + 思考强度并排（`.dsm-field-row`）：它们是同一件事的两半 —— 档位清单是
+                    // **按模型**给的（adapter 的能力声明），换模型必须同时看这一格。
+                    // 不复用 `.dsm-combo-row`：那个的语义是"一个控件 + 它的自定义输入"，
+                    // 它的 `.dsm-control{flex:1}` 会把两个控件都拉满。
+                    React.createElement('div', { className: 'dsm-field-row' },
+                      // 模型：宿主 LLM 目录里的 (provider, model) 对 + 自定义兜底。
+                      React.createElement('div', { className: 'dsm-field' },
+                        React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
+                        React.createElement('div', { className: 'dsm-combo-row' },
+                          React.createElement('div', { className: 'dsm-select' },
+                            React.createElement('select', {
+                              className: 'dsm-control',
+                              value: modelSelectValue(),
+                              disabled: busy || cand.loading,
+                              onChange: function (e) {
+                                var v = e.target.value
+                                if (v === '') { setForm({ provider: '', model: '' }); loadEfforts('', '') }
+                                else if (v !== '__custom__') {
+                                  var parts = v.split('\u0000')
+                                  setForm({ provider: parts[0], model: parts[1] })
+                                  // 档位跟模型走：换模型必须重拉（缓存命中时是同步的，不会闪）。
+                                  loadEfforts(parts[0], parts[1])
+                                } else { setForm({ model: modal.form.model || '' }); loadEfforts(modal.form.provider || '', modal.form.model || '') }
+                              },
+                            },
+                              React.createElement('option', { value: '' }, t('subagents.model.inherit')),
+                              (cand.models || []).map(function (m) {
+                                return React.createElement('option', { key: m.provider + '/' + m.id, value: m.provider + '\u0000' + m.id }, m.provider + ' · ' + m.name)
+                              }),
+                              React.createElement('option', { value: '__custom__' }, t('subagents.model.customOption')))),
+                          modelSelectValue() === '__custom__'
+                            ? React.createElement('input', {
+                                className: 'dsm-control',
+                                value: modal.form.model || '',
+                                placeholder: t('subagents.field.model.placeholder'),
+                                onChange: function (e) { setForm({ model: e.target.value }) },
+                                // 手填模型 id 时**不按键触发**拉取（一次一个字符 = 一串请求），
+                                // 失焦时再问一次；没变的话缓存会直接命中。
+                                onBlur: function () { loadEfforts(modal.form.provider || '', modal.form.model || '') },
+                              })
+                            : null),
+                        React.createElement('p', { className: 'dsm-help' }, cand.loading ? t('memory.loading') : t('subagents.field.model.hint'))),
+                      // 思考强度：值就是 adapter 给的档位 id（不校验合法性，官方在 provider I/O 前会拒）。
+                      React.createElement('div', { className: 'dsm-field' },
+                        React.createElement('span', { className: 'dsm-label' }, t('subagents.field.effort')),
                         React.createElement('div', { className: 'dsm-select' },
                           React.createElement('select', {
                             className: 'dsm-control',
-                            value: modelSelectValue(),
-                            disabled: busy || cand.loading,
-                            onChange: function (e) {
-                              var v = e.target.value
-                              if (v === '') setForm({ provider: '', model: '' })
-                              else if (v !== '__custom__') {
-                                var parts = v.split('\u0000')
-                                setForm({ provider: parts[0], model: parts[1] })
-                              } else setForm({ model: modal.form.model || '' })
-                            },
+                            value: String(modal.form.reasoningEffort || ''),
+                            disabled: busy || eff.loading || !modal.form.model,
+                            onChange: function (e) { setEffNotice(null); setForm({ reasoningEffort: e.target.value }) },
                           },
-                            React.createElement('option', { value: '' }, t('subagents.model.inherit')),
-                            (cand.models || []).map(function (m) {
-                              return React.createElement('option', { key: m.provider + '/' + m.id, value: m.provider + '\u0000' + m.id }, m.provider + ' · ' + m.name)
-                            }),
-                            React.createElement('option', { value: '__custom__' }, t('subagents.model.customOption')))),
-                        modelSelectValue() === '__custom__'
-                          ? React.createElement('input', { className: 'dsm-control', value: modal.form.model || '', placeholder: t('subagents.field.model.placeholder'), onChange: function (e) { setForm({ model: e.target.value }) } })
-                          : null),
-                      React.createElement('p', { className: 'dsm-help' }, cand.loading ? t('memory.loading') : t('subagents.field.model.hint'))),
+                            React.createElement('option', { value: '', title: defaultEffortTitle() }, t('subagents.effort.default')),
+                            currentEfforts().map(function (x) {
+                              return React.createElement('option', { key: x.id, value: x.id, title: x.description || undefined }, x.name)
+                            }))),
+                        React.createElement('p', { className: 'dsm-help' },
+                          !modal.form.model
+                            ? t('subagents.effort.needModel')
+                            : eff.loading
+                              ? t('subagents.effort.loading')
+                              : eff.error
+                                ? String(eff.error)
+                                : currentEfforts().length ? t('subagents.effort.hint') : t('subagents.effort.unavailable')),
+                        effNotice ? React.createElement('p', { className: 'dsm-feedback dsm-warning' }, effNotice) : null)),
                     // provider 独立成一项：跨来源模型（如 sensenova）需要 provider+model 两个键同时给。
                     React.createElement('label', { className: 'dsm-field' },
                       React.createElement('span', { className: 'dsm-label' }, t('subagents.field.provider')),

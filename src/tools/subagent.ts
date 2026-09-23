@@ -143,6 +143,10 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
           output: args.output !== undefined ? String(args.output) : (Array.isArray(keep.output) ? keep.output.join('\n') : String(keep.output ?? '')),
           provider: keep.provider ?? '',
           model: keep.model ?? '',
+          // ⚠️ 必须带回来：`subagent-update` 走 `serializePersona` **整份重写**，少带一个字段
+          // 就是静默清掉它。`reasoningEffort` 是 0.14.0 新增的，最容易在这里被漏掉 ——
+          // 模型只改一句 body，用户配好的思考强度就没了，而且没有任何提示。
+          reasoningEffort: keep.reasoningEffort ?? '',
           tools: keep.tools ?? [],
           toolsDeny: keep.toolsDeny ?? [],
           toolsByPreset: keep.toolsByPreset ?? {},

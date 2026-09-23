@@ -1804,6 +1804,7 @@ export default {
       ...buildCandidateOps({
         presetToolCandidates: candidates.presetToolCandidates,
         modelCandidates: candidates.modelCandidates,
+        modelReasoning: candidates.modelReasoning,
         getToolFailures: () => subagentToolFailures,
         mcpmListView: mcp.mcpmListView,
         toolStates: candidates.toolStates,

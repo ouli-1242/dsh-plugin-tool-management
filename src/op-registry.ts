@@ -206,8 +206,11 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 清理 patch 备份：删磁盘文件（备份里含明文凭据副本），按写操作门禁。
   'backups-clean': { write: true },
 
-  // ── 场景候选源（3）与内联（1）──────────────────────────────────────────────
+  // ── 场景候选源（4）与内联（1）──────────────────────────────────────────────
   'model-candidates': { readonly: true },
+  // 思考强度档位：要问 adapter（`llm.resolveModelInfo`，异步、可能联网），但只读不写任何状态
+  // —— 与 model-candidates 同一档。它不进 scene-inventory，是**按需**拉取的。
+  'model-reasoning': { readonly: true },
   'scene-inventory': { readonly: true },
   // 跨域悬空引用体检：只读对账（索引走 readIndexSync，权威集合各读一次）。
   'state-doctor': { readonly: true },
