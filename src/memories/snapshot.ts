@@ -775,9 +775,11 @@ export function renderSceneMemory(
  * **记录**（可能过期）—— 两者性质不同，而原来的实现靠一句话同时管两者。拆开后用户能
  * **单独关掉记忆段**（省字节）而保留场景说明。
  *
- * "场景是什么"这层说明现在由**框架线索**给（`DOMAIN_FRAME.scene` 的 cue）—— 用户 2026-09-23
- * 第二次裁定：上一版把场景说明写成"一律照办"的约定，而它的实例是「写代码」这种**标签**，
- * 让模型"照办一个标签"正是它读不懂这一段的原因。授权语已删，本段只给"当前启用的是哪个"。
+ * 本段**没有任何引导语**：授权语在 2026-09-23 第二次裁定里删掉（上一版把场景说明写成
+ * "一律照办"的约定，而它的实例是「写代码」这种**标签**，让模型"照办一个标签"正是它读不懂
+ * 这一段的原因）；替它补的那句"场景是什么"线索当天也被删了（第三次裁定，连同六个域的动作句
+ * 一起，理由见 `DomainFrame`）。现在本段只有 `sceneLine` 一行 —— 用户的原则是「上下文注入
+ * 就是当前的情况，不需要模型知道没用的信息」。
  *
  * 与记忆段的分工：这里给"框架"，记忆段给"内容"（各场景下的条目）。**场景说明只在这里出现**
  * —— 记忆段的场景块只留标题（`sceneHeading`），否则同一句话会在上下文里出现两遍。代价是
@@ -812,23 +814,17 @@ export function renderSceneCatalog(
   if (wanted.length === 0) {
     return { text: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [] }
   }
-  // ── 因果句：**只有真话才说**，且必须放在场景名之后（否则「它」没有指代）────────────
-  // 场景**启用**（`active`）与场景**进入**（`mode.scene`）是**两份状态、两个 op**
-  // （`rules-set-active` / `scene-mode-set`），可以只启用而不进入：
-  //   - 记忆按 **启用** 筛 —— 场景段列的是什么，记忆段就按什么分组；
-  //   - MCP / 技能 / 人设按 **进入** 后的档案切 —— 没进入就没切，那三段还是全局配置。
-  // 本机当前两者都是「代码」，看起来是一回事；但写死一句"都已按它筛过"在**只启用没进入**
-  // 时是句假话。所以按 `mode.scene` 分叉，两种状态各说各自的事实。
-  const entered = String(index.mode?.scene ?? '')
-  const causal = wanted.includes(entered)
-    ? '下面的记忆、MCP、技能与人设都已按它筛过。'
-    : '下面的记忆已按它筛过；MCP / 技能 / 人设要进入这个场景后才按档案切换。'
-  // `sceneLine` 自带 `\n\n` 结尾，所以这里不再补前导换行 —— 补了就是两个空行。
-  const causalBlock = `${causal}\n`
-
+  // 这一段**只给当前情况**：启用了哪些非保留场景、各自是什么（`sceneLine`）。
+  //
+  // 曾经在这里加过一句因果（"下面的记忆、MCP、技能与人设都已按它筛过"），已删（用户
+  // 2026-09-23 裁定）：「上下文注入就是当前的情况，目的是让 agent 知道现在的情况，不需要它
+  // 知道没用的信息，反推更是浪费 token」。那句话解释的是**另外四段是怎么产生的**（机制），
+  // 不是当前情况本身。留着它的两个额外代价也一并消失：① 场景**启用**（`active`）与场景
+  // **进入**（`mode.scene`）是两份状态、两个 op，只启用没进入时那句是假话，得按 mode 分叉
+  // 才能不说错；② 它排在场景名之前时「它」没有指代。
   const marker = `\n${TRUNCATION_MARKER}\n`
   const kept: string[] = []
-  let used = byteLen(causalBlock)
+  let used = 0
   let dropped = false
   for (const scene of wanted) {
     const block = sceneLine(scene, index)
@@ -838,7 +834,7 @@ export function renderSceneCatalog(
     kept.push(scene)
     used += byteLen(block)
   }
-  let text = kept.map((scene) => sceneLine(scene, index)).join('') + causalBlock
+  let text = kept.map((scene) => sceneLine(scene, index)).join('')
   if (dropped) text += marker
   text = text.replace(/^\n+/, '')
   return {

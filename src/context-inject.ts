@@ -406,10 +406,18 @@ export function explainInjections(
  * —— 记忆的授权与判据由正文首行那句加粗的「用户为本机写的参考信息：…」承担）。
  */
 interface DomainFrame {
-  /** 标题（md H2）：这条讲的是这台机器的什么。 */
+  /** 标题（md 一级）：这条讲的是这台机器的什么。 */
   title: string
-  /** 加粗的动作句：在哪个决策点该想起它。 */
-  cue: string
+  /**
+   * ⚠️ 这里曾经有过一个 `cue` 字段（加粗的"在哪个决策点该想起它"的动作句，2026-09-18 加的），
+   * 2026-09-23 六个域**全部删掉**并移除字段本身。原因记在这里，免得被当成"少写了一句"再加回来：
+   *
+   * 用户看到实际渲染后给的原则是「**上下文注入就是当前的情况，目的是让 agent 知道现在的情况，
+   * 不需要它知道没用的信息，反推更是浪费 token**」。那些动作句（"先核对这里" / "先确认服务器
+   * 在不在" / "先在这里找" / "先在这里选人设" / "先按它对齐"）本质是**指令**，不是当前情况；
+   * 而它们要提醒的事，正文与板块标题已经说了 —— 模型读注入时本来就在读"这台机器现在是什么样"。
+   * 六句合计约 105 tok/轮，删掉后六个板块**只剩：标题 / 补充说明（how）/ 权威声明 / 正文**。
+   */
   /** 补充动作（工具名 / 触发条件 / 边界）；正文已经说过的不要写。 */
   how?: string | ((toolHidden: (name: string) => boolean) => string | undefined)
   /** 权威声明：「最新一份才是权威」这条得逐域说清取代的是什么。 */
@@ -431,38 +439,36 @@ const SUPERSEDE_NOTE = '本份取代本次会话中更早注入的同类内容�
 
 const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   scene: {
-    // 场景段此前是四个板块里**唯一没有动作句**的 —— 首句只说"场景是什么"，模型读完不知道
-    // 该拿它做什么（用户 2026-09-23 看到实际注入后："感觉不对劲，但说不上来"）。
+    // 场景段只有标题 + 正文 + 权威声明（**没有 cue 是六个域的共同决定**，理由见 `DomainFrame`）。
     //
-    // 根因是**场景的语义被窄化了**：它其实是"切换六处开关的运行时模式"（`scene-mode-set`
-    // 的三步：服务器级/来源级 → 工具级/技能级 → 人设 + 备注），而注入里只呈现了它作为
-    // "记忆分组标签"的那一面 —— 四个板块并列，看不出场景是"因"、其余四段是"果"。
+    // 这一段的演进值得记下来，因为每一次都是被实际注入推着改的：
+    //   ① 最早它把「场景说明」当**约定**授权（"一律照办，覆盖你的默认做法"）—— 而它的实例
+    //      是「写代码」这种**标签**，让模型"照办一个标签"，这正是它读不懂这段的原因；
+    //   ② 去掉授权后换成一句定义（"场景是用户给这台机器配的工作模式"）—— 定义不是动作，
+    //      模型读完还是不知道该拿它做什么；
+    //   ③ 再加一句因果（"下面四段都已按它筛过"）—— 用户 2026-09-23 看到渲染效果后给了
+    //      **原则**：「上下文注入就是当前的情况，目的是让 agent 知道现在的情况，不需要它
+    //      知道没用的信息，反推更是浪费 token」。于是三句全删。
     //
-    // cue 是动作句（与另三段同形）。模型对场景本身**没有动作可做**（启用与进入在界面上，
-    // `scene_manager_save` 只做定义层），所以 cue 指向"它会改变你看到的东西"，而不是
-    // "你去操作它"。
-    //
-    // 因果句（"下面四段都是按它筛过的"）**不放在这里**：① 启用（`active`）与进入
-    // （`mode.scene`）是两份状态，只启用没进入时那句就是假话；② 它排在场景名之前，
-    // 「它」会没有指代。已挪进 `renderSceneCatalog` 的正文（场景名之后，按 mode 分叉）。
+    // 现在这一段只回答一个问题：**当前处在哪个场景、它是什么**（`**「代码」—— 写代码**`）。
+    // 它还比别的段少一层：因果句也删了 —— 它解释的是"另外四段是怎么产生的"（机制），
+    // 不是当前情况本身，而且"清单里没有 ≠ 本机没有"这层反推被用户明确判为浪费。
     title: '本机当前的场景',
-    cue: '在按默认方式做事之前，先确认当前是这个场景。',
     supersede: SUPERSEDE_NOTE,
   },
   memory: {
     title: '本机当前的记忆',
-    cue: '在回答涉及本机的事之前，先核对这里。',
     supersede: SUPERSEDE_NOTE,
   },
   mcp: {
     title: '本机 MCP 服务器的当前状态',
-    cue: '要用某个 MCP 工具前，先在这里确认这台服务器在不在、开没开。',
-    how: '工具名是 `mcp__<服务器>__<工具>`；带「用户提示：」的行是用户写给这台服务器的决策提示，选服务器之前先看一眼。',
+    // how 只剩"怎么用备注"这半句：前半个分句「工具名是 `mcp__<服务器>__<工具>`」删掉了
+    // —— 模型自己的工具表里就是这个命名（`mcp__context7__xxx`），告诉它格式是零信息量。
+    how: '带「用户提示：」的行是用户写给这台服务器的决策提示，选服务器之前先看一眼。',
     supersede: SUPERSEDE_NOTE,
   },
   skills: {
     title: '本机技能目录',
-    cue: '需要某项能力时，先在这里找。',
     // 两句都只在预设没挂官方 `skill` 工具时出现，差别只在点名不点名那个取正文的工具
     // （工具被用户在兼容页关掉时不点名 —— 点名一个模型手里没有的工具只会让它去猜名字）。
     how: (toolHidden) => toolHidden('skill_manager_read')
@@ -472,7 +478,6 @@ const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   },
   subagents: {
     title: '可委派的子智能体',
-    cue: '在决定自己做还是委派之前，先在这里选人设。',
     // 分界规则（2026-09-17 方案 C，本机实测 session-ee722e23 逼出来的）：官方那两个
     // 委派工具（`subagent` / `subagent_fork`）不带人设，而此前没有任何一句话说明何时该
     // 用谁 —— 模型在"审查刚读过的 README"时选了 `subagent_fork`（fork 能继承已读内容、
@@ -486,16 +491,14 @@ const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   },
   prompt: {
     title: '本机提示词',
-    cue: '动手之前先按它对齐，与它冲突的默认做法一律让位。',
-    supersede: '本份提示词取代本次会话中更早注入的同类提示词。',
+    supersede: SUPERSEDE_NOTE,
   },
 }
 
 /** 域声明里没登记的 key（理论上到不了这里）：给一个不出错的通用框架。 */
 const fallbackFrame = (label: string): DomainFrame => ({
   title: `本机的${label}`,
-  cue: `需要这台机器的${label}时，先核对这里。`,
-  supersede: '本份内容取代本次会话中更早注入的同类内容。',
+  supersede: SUPERSEDE_NOTE,
 })
 
 const domainFrame = (key: InjectDomainKey, label: string): DomainFrame => DOMAIN_FRAME[key] ?? fallbackFrame(label)
@@ -552,7 +555,8 @@ export function renderDomainText(section: InjectSection, toolHidden: (name: stri
   // 开标签后**必须空一行**：markdown 里 `#` 紧跟在一行文字后面只是**段落续行**，不会被渲染成
   // 标题 —— 用户截图里 `## 本机当前的场景` 就是这么被吞掉的（和 `<system-reminder>` 挤成一段）。
   // 收尾同理：正文末尾先归一成单个空行，免得 `</system-reminder>` 粘在最后一行上。
-  const lines = [FRAME_OPEN, '', `# ${frame.title}`, `**${frame.cue}**`]
+  // 结构：标题 → 补充说明（有才发）→ 权威声明 → 正文。没有 cue 那一行（见 `DomainFrame` 的注释）。
+  const lines = [FRAME_OPEN, '', `# ${frame.title}`]
   const how = typeof frame.how === 'function' ? frame.how(toolHidden) : frame.how
   if (how !== undefined) lines.push(how)
   lines.push(frame.supersede, '', escapeFrameBody(section.text).replace(/\n+$/, ''), '', FRAME_CLOSE)
