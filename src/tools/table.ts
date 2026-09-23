@@ -1,8 +1,8 @@
 // 「模型工具表」开关（2026-09-23）。
 //
-// 为什么要有它：工具表是按**每个请求**付钱的 —— 本插件 20 个工具的 schema 合计 ≈3,453 tok，
+// 为什么要有它：工具表是按**每个请求**付钱的 —— 本插件 17 个工具的 schema 合计 ≈3,093 tok，
 // 每一轮都随请求发出，哪怕这一轮根本用不上（实测口径见 review/后续方向.md）。关掉某几个工具，
-// 它们整份不进请求（不是"把描述写短点"那种省）；面板（116 个 op）与注入通道完全不受影响。
+// 它们整份不进请求（不是"把描述写短点"那种省）；面板（118 个 op）与注入通道完全不受影响。
 //
 // 本文件只放纯逻辑（normalize / 分域分组 / 体积汇总）。落盘与 TTL 缓存在 index.ts，与
 // 注入设置（`inject-settings.json`）走同一套写法。
@@ -37,6 +37,48 @@ export function normalizeToolTableSettings(raw: unknown): ToolTableSettings {
     if (name !== '' && hidden.indexOf(name) < 0) hidden.push(name)
   }
   return { hidden }
+}
+
+/**
+ * 0.14.0 的旧工具名 → 新工具名迁移表。
+ *
+ * 为什么必须有它：`tool-table.json` 存的是**用户点名关掉的那些工具**。0.14.0 把五族并成 17 条
+ * 之后，旧名在新表里根本不存在 —— 不迁移的话，用户"关掉了某条"的意图会在新名字上**静默失效**
+ * （那条工具照旧每轮发出去，而他以为早就关了）。
+ *
+ * 映射规则不是字符串替换而是**语义合并**：两条旧工具并成一条 `save` 时，只要原来关掉了其中
+ * 任意一条，就应当关掉新的那条 —— 用户当时的意图是"别让模型碰这件事"。
+ *
+ * 只翻译**认识的名字**，其余原样保留：我们无法区分"用户的旧名"与"别的插件的工具名"，
+ * 误删别人的条目比留着一条死名更糟。
+ */
+export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
+  memory_manager_list: 'scene_memory_manager_list',
+  memory_manager_read: 'scene_memory_manager_read',
+  memory_manager_set_enabled: 'scene_memory_manager_set_enabled',
+  memory_manager_write: 'scene_memory_manager_save',
+  memory_manager_update: 'scene_memory_manager_save',
+  mcp_manager_set_enabled: 'mcp_manager_switch',
+  mcp_manager_restart: 'mcp_manager_switch',
+  mcp_manager_add: 'mcp_manager_save',
+  skill_manager_create: 'skill_manager_save',
+  subagent_manager_create: 'subagent_manager_save',
+  subagent_manager_update: 'subagent_manager_save',
+})
+
+/**
+ * 把一份设置里的旧工具名翻译成新名（**幂等**：已经全是新名时 `changed` 为 false、原样返回）。
+ * 翻译后按新名去重（两条旧名并成同一条 save 时只留一份）。
+ */
+export function migrateLegacyToolNames(settings: ToolTableSettings): { settings: ToolTableSettings; changed: boolean } {
+  let changed = false
+  const hidden: string[] = []
+  for (const raw of settings.hidden) {
+    const name = LEGACY_TOOL_NAME_MAP[raw] ?? raw
+    if (name !== raw) changed = true
+    if (hidden.indexOf(name) < 0) hidden.push(name)
+  }
+  return changed ? { settings: { hidden }, changed: true } : { settings, changed: false }
 }
 
 /** 注册时量到的工具体积（`JSON.stringify(definition).length`，见 index.ts 的 register 包装）。 */

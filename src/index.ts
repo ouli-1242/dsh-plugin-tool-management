@@ -43,6 +43,7 @@ import {
 import { isApprovalNever } from './approval-policy.js'
 import {
   buildToolTableReport,
+  migrateLegacyToolNames,
   normalizeToolTableSettings,
   type ToolTableReport,
   type ToolTableRow,
@@ -611,7 +612,7 @@ export default {
     }
 
         // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
-    // 工具表按**每个请求**付钱：20 个工具的整份定义合计 ≈3,500 tok 每轮都在。关掉某几个，
+    // 工具表按**每个请求**付钱：17 个工具的整份定义合计 ≈3,090 tok 每轮都在。关掉某几个，
     // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。
     //
     // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话
@@ -634,7 +635,14 @@ export default {
       if (toolTableCache && !force && Date.now() - toolTableCache.at < TOOL_TABLE_TTL_MS) return toolTableCache.value
       await ensurePaths()
       const raw = await readJsonFile(hubPath(TOOL_TABLE_FILE))
-      const value = normalizeToolTableSettings(raw)
+      // 0.14.0 旧工具名迁移：读侧翻译一次并**回写盘**（幂等）。不迁移的话，用户"关掉了某条"
+      // 的意图会在新名字上静默失效 —— 那条工具照旧每轮发出去，而界面上看不出来。
+      // 写失败不回滚本次读取：内存里已经是迁移后的值，下次读会再试一次。
+      const migrated = migrateLegacyToolNames(normalizeToolTableSettings(raw))
+      const value = migrated.settings
+      if (migrated.changed) {
+        try { await writeJsonFile(hubPath(TOOL_TABLE_FILE), value) } catch { /* 回写失败：本次仍按迁移后的值生效 */ }
+      }
       const changed = toolTableCache === null || toolTableCache.value.hidden.join('\u0000') !== value.hidden.join('\u0000')
       toolTableCache = { at: Date.now(), value, off: new Set(value.hidden) }
       // 首读 / 文件被外部改过 ⇒ 可见性要跟着重排。同步快照的调用方（门禁、注入通道）不会
@@ -1122,7 +1130,8 @@ export default {
     // 实现收在 ./scene-prompt-sync.ts（可在临时目录上端到端验证）：启用/切换场景、
     // 关掉场景、改绑定、编辑"驱动基线的那份预设"四个动作都会同步；关掉场景时按
     // 进场景前的基线快照（`scene-baseline.json`，hub 内）原文写回。
-    const scenePromptSync = createScenePromptSync({      prompts: promptsService,
+    const scenePromptSync = createScenePromptSync({
+      prompts: promptsService,
       rules: memoriesService,
       baselineFile: hubPath('scene-baseline.json'),
       logger: ctx.logger,

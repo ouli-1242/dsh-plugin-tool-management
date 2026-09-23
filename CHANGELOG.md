@@ -10,6 +10,46 @@
 
 ---
 
+## [0.14.0] - 2026-09-23
+
+### 破坏性
+
+- **五族工具改名并合并，20 → 17 条**（用户 2026-09-23 裁定）。旧名**不注册别名**：注册就进工具表、就要付 token，8 个旧名合计 ≈1,100–1,300 tok/轮，**比整轮省下的还多**，等于让这次改名白做。旧名去向：
+  - `memory_manager_*` → **`scene_memory_manager_*`**（族名升上来，与注入段名 `scene-memory-manager-catalog`、界面组标题「场景和记忆」同名）；`_write` + `_update` → **`_save`**
+  - `mcp_manager_set_enabled` + `mcp_manager_restart` → **`mcp_manager_switch(server, action, level?, tool?)`**；`mcp_manager_add` → **`mcp_manager_save`**
+  - `skill_manager_create` → **`skill_manager_save`**；`subagent_manager_create` + `subagent_manager_update` → **`subagent_manager_save`**
+  - 名字未变：`mcp_manager_list`（加 `tools` 参数）、`skill_manager_list` / `_read` / `_set_enabled`（加 `source`）、`subagent_manager_list` / `_run` / `_set_enabled`、`prompt_manager_list` / `_apply`
+- **`tool-table.json` 里的旧工具名自动迁移**：那份侧车存的是用户**点名关掉**的工具，而旧名在新表里根本不存在 —— 不迁移的话"关掉了某条"的意图会在新名字上**静默失效**（工具照旧每轮发出去，界面上看不出异常）。读侧翻译一次并回写盘（幂等）；两条旧名并成一条 `save` 时按"关掉任意一条就关掉新的"合并；**不认识的名字原样保留**（分不清它和别的插件的工具名，误删比留着一条死名更糟）。映射表 `LEGACY_TOOL_NAME_MAP` 在 `src/tools/table.ts`，有契约测试钉住。
+- **四个 `*_save` 都是「有则改、无则建」**，回执必须说清走了哪条。判定放在工具侧：`*_create` 对同名是**拒绝**的、`*_update` 对不存在的名字报错，而模型手里的清单可能已经过期 —— 让它自己先查一次再选工具，等于把判定责任推给最没有现场信息的一方。改分支一律 read-modify-write（省略 = 保持）。
+- **`mcp_manager_save` 的确认门**：改一台已配置服务器（含 URL / 命令）与新增一台危险度同级（stdio 都是宿主按 command 起进程），所以门禁从 `mcp_manager_add` 迁到 `save`，卡里回显「current — … ; new — …」（旧 URL 来自打码视图，新 URL 走 `maskUrlQuery`）。**`mcpm-reveal` 刻意不接给工具**：改分支用 `mcpmListView()` 的打码视图填回省略字段，由 `mcpm-edit` 的守卫（`resolveMaskedKv` / `resolveMaskedUrl`）还原真值 —— 那条路本来就是给"表单里出现打码值"设计的（界面编辑框预填的就是打码值），而"让模型驱动的工具在进程内读明文凭据"是另一条没人设计过、也没有测试覆盖的路径。
+- **`subagent_manager_run` 的描述瘦身**：`task` 参数说明与描述里的 Modes 段**逐字重复**，`inherit`（实测 86 tok，全表最贵的单个参数）也与它重复。只删重复、不删约束："轮中委派拿不到当前轮、task 仍要自包含"留着 —— 那是这条参数唯一会让人写错的地方。实测 407 → 338 tok。
+
+### 新增
+
+- **人设有了「思考强度」**，走官方 `agentOptions.reasoningEffort`。档位清单来自 **adapter**（`llm.resolveModelInfo(provider, model)` → `reasoning.efforts[]` / `defaultEffort`），所以它跟 provider/model 走、不是一个全局枚举。新只读 op `model-reasoning` 单独一条而不是塞进 `model-candidates`：后者是"不发网络请求"的本地目录，前者是官方注释写明的 adapter-owned asynchronous lookup（**可能联网**），代价差一个数量级。带 10s 超时 + `AbortSignal`；**失败就是失败**，不回落成"猜几个常见档位"—— 官方对不支持的显式档位是在 provider I/O **之前**直接拒（不夹紧、不别名），猜错一次就是子代理起不来。界面上按 (provider, model) 懒加载、缓存 5 分钟，只在展开了高级选项且选了模型时才拉；**自动清档只在拉取成功时判断**（失败一律不动已存值），因为留着不在清单里的档位等于埋一次"委派起不来"。
+- **`mcp_manager_list` 加 `tools` 参数**：列出每台服务器的工具名、被单独关掉的标 `(off)`。不加一条 `read` 工具：启用服务器的工具名与描述本来就在模型自己的工具表里（`mcp__<server>__<tool>`），加 read 是重抄一遍再付一次钱。刻意**不**调 `mcpm-tools-refresh` —— 那个会临时起进程，是界面动作。
+- **`skill_manager_set_enabled` 加 `source`**：整目录启停（走已存在的 `skill-source-enable/disable`，并同步场景档案）。此前模型只能逐个技能关，关不了一个来源目录。
+- **`mcp_manager_switch` 能只动一个工具**：`tool` 给了就只切它（`mcpm-tool-enabled`）。此前模型只能整台启停，单工具开关只在界面上有。
+- **`mcp_manager_save` 能改一台已配置的服务器**（含 URL / 命令 / headers / env），并顺手写备注（`note`）。改的时候**没传的字段保持原样**，所以改一个 URL 不必重述整条配置、密钥也不会因此丢。
+- **新 op `skill-update`**（登记表 116 → 118，另一个是 `model-reasoning`）：改写 hub 里已存在的那一份技能。core 里是独立的 `updateSkill` 而不是给 `createSkill` 加一个覆盖开关 ——「静默覆盖」不该出现在同一个入口的签名里，函数名必须先说明它是破坏性的。bundle 形态**只换 SKILL.md**，目录里的附件与脚本原样留着。
+- **提示词清单行补描述**（`prompt_manager_list`）：模型要在预设之间做选择，而 id 本身不说明用途。描述从此是**常驻成本**，所以同时给了预算 `DEFAULT_PRESET_DESC_MAX_LENGTH = 300`（用户 2026-09-23 裁定），在消费侧压行截断，客户端 `PRESET_DESC_MAX` 是它的镜像。对应的两枚输入框补上 `maxLength` 与字数计数（0.13.0 那批「当前/总字数」的漏网一处）。
+
+### 修复
+
+- **`prompt_manager_list` 在场景驱动时报错的「生效中」**：它以前直调 `promptsService.list()`，拿到的是**文件比对**口径（预设正文 == ~/.dsh/AGENTS.md），而界面走 `agentsmd-list`，那里才有「启用的场景绑了预设时**只有那份**算生效中」这层判定。同一件事两个答案，模型说的和界面上看到的不一致。改走 op 之后判定只剩一份，并把 `activeVia` 打进清单行（`[active via scene]` / `[active via file]`），以及**第三种真实状态** —— 文件里确实是它、但基线由场景绑定驱动（此前这一格会被错报成 `[active]`）。
+- **`mcp_manager_save` 的改分支不会静默清空凭据**：`mcpm-edit` 里那句 `if (row[field] === undefined) return` 只在字段**有值**时生效，而 `parseKv(undefined)` 返回的是 `{}` 而不是 `undefined` —— 所以"省略 headers/env"会把整份键值对**清空且零 warning**（已用脚本复现）。工具侧因此显式填回每个省略的字段。同一类缺陷还有一处：`subagent_manager_save` 改分支的 `merged` 里没有 `reasoningEffort`，而 `subagent-update` 走 `serializePersona` **整份重写** —— 模型只改一句 body 就会静默清掉用户配好的思考强度。
+- **`subagent_manager_save` 的注册失败记录跟着改名**：否则界面上那条"注册失败"横幅会报一个不存在的工具名。
+- **两处「说大话」的界面文案**：MCP 与技能族的悬停此前写着"可带 provider、模型与工具限制"，而 `subagent_manager_create/update` 的签名里根本没有这些字段（刻意只给 name/description/body/output —— 填错的后果不对称，一个错误的 `toolsDeny` 会静默改变子代理能做什么，而模型看不到自己改对了没有）。本轮之后 MCP「或只停它其中一个工具」与技能「按来源目录启停」变成真的，留着不删。
+- **注释里四处"只给使用者看"**：提示词预设描述从这一版起会进模型清单，那句话不再成立（`41-mcp.js`、`prompts/service.ts`、`memories/projection.ts`、`ops/sessions.ts` 各一处）。
+
+### 变更
+
+- **`mcp_manager_switch` 的冻结口径跟着 op 登记表走，不是整条工具一刀切**：`mcpm-set-enabled` 与 `mcpm-tool-enabled` 在登记表里是 `frozen: true`，而 `mcpm-restart` 明确**不冻结** —— 锁定期间它是唯一还能落盘改补丁的入口，是"卡住了重连一下"这条恢复路径。所以只有 `action=on|off` 过 `lockedSceneGuard()`，`restart` 不过，与面板侧 `guardLockedOps(frozenOps('all'))` 逐字一致。**（说明书的 §1 第 4 条把"restart 缺冻结守卫"当成一处要修的假话 —— 那条判断与登记表相反，照它改会让工具比面板更严、并掐掉锁定期的恢复入口。）**
+- **`maskUrlQuery` 从 `mcp/manager.ts` 挪进 `mcp/secret-guard.ts`**：确认卡要回显"新 URL"的打码形态，而那份文件是两条打码形态的唯一口径，不能出现第二份实现。
+- **描述与参数说明里的自指工具名删掉**（`skill_manager_list` / `subagent_manager_set_enabled` / `subagent_manager_list` / `subagent_manager_run` 的 `agent` 参数）。判据：删掉的那句是不是"模型看输出就知道"的。**留在错误与回执里的自指不删** —— 它们不在每轮成本里，而且出现的那一刻正是模型需要"下一步该调谁"的时候。实测整表再省 25 tok。
+- **实测体积（离线复算，口径同 `recordToolSize`）**：整表 **3,453 → 3,093 tok**，工具数 **20 → 17**。各族：场景和记忆 843 → 638、MCP 627 → **704（升）**、技能 620 → 679、子智能体 1,127 → 858、提示词 236 → 239。**MCP 那一族是变贵的**：`save` 要装 9 个参数，光参数结构就 ≈135 tok，不可能低于它取代的 `add` 的 235 —— 说明书 §2 给它定的 520 在算术上达不到（地板是 605）。这 +77 买的是"模型能改一台已配置服务器"，是本次唯一一处花钱买能力的地方。
+- **`table.ts` 文件头的两个数**：`20 个工具 / ≈3,100 tok / 114 个 op` → 实测值。原 ≈3,100 是估的、低报 353 tok；`114` 这个计数在改之前就已经漂了 2（登记表实测 116）。
+
 ## [0.13.0] - 2026-09-23
 
 ### 新增

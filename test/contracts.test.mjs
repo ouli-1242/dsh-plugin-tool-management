@@ -27,6 +27,7 @@ import {
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
 import { parseModeState } from '../lib/memories/service.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
+import { LEGACY_TOOL_NAME_MAP, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
 import { createAccessToken } from '../lib/request-gate.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
 import { checkPatchWrite, decidePatchWrite, judgePatchText } from '../lib/compat/patch-dialect.js'
@@ -49,6 +50,27 @@ test('记忆族 0.14.0 改名后仍归 memory 域，旧名不再被认领', () =
   assert.equal(domainOfTool('scene_memory_manager_save'), 'memory')
   assert.equal(domainOfTool('scene_memory_manager_list'), 'memory')
   assert.equal(domainOfTool('memory_manager_save'), undefined, '旧名不是别名，注册了就要付 token')
+})
+
+test('0.14.0 旧工具名迁移：用户「关掉了某条」的意图不能在改名后静默失效', () => {
+  // 破了这一条的后果同样是静默的：`tool-table.json` 里存的是用户点名关掉的工具，旧名在新表里
+  // 不存在 —— 不迁移的话那条工具照旧每轮发出去，而界面上看不出任何异常。
+  const migrated = migrateLegacyToolNames(normalizeToolTableSettings({
+    hidden: ['memory_manager_write', 'mcp_manager_restart', 'skill_manager_create', 'other_plugin_tool'],
+  }))
+  assert.equal(migrated.changed, true)
+  assert.deepEqual(migrated.settings.hidden, [
+    'scene_memory_manager_save', 'mcp_manager_switch', 'skill_manager_save', 'other_plugin_tool',
+  ])
+  // 幂等：已经全是新名时必须报"没改"，否则每次读盘都会白回写一次。
+  assert.equal(migrateLegacyToolNames(migrated.settings).changed, false)
+  // 两条旧工具并成同一条 save 时只留一份（去重，不是简单替换）。
+  assert.deepEqual(
+    migrateLegacyToolNames(normalizeToolTableSettings({ hidden: ['memory_manager_write', 'memory_manager_update'] })).settings.hidden,
+    ['scene_memory_manager_save'],
+  )
+  // 不认识的名字原样保留：分不清"用户的旧名"与"别的插件的工具名"，误删比留着一条死名更糟。
+  assert.equal(LEGACY_TOOL_NAME_MAP.other_plugin_tool, undefined)
 })
 
 test('深度探针读的是官方那几个字段，取最大者', () => {
