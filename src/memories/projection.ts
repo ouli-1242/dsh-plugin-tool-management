@@ -135,8 +135,18 @@ export function sceneLabel(scene: string, index?: RulesIndex): string {
   return label && label !== '' ? label : scene
 }
 
-/** 单个场景的标题：**场景在最顶层**（`##`，与「子智能体」「MCP 服务器」等段同级）。 */
-export const sceneHeading = (scene: string): string => `## 场景：${sceneLabel(scene)}`
+/**
+ * 记忆段里的场景**分组**标题。
+ *
+ * `global` 是恒常生效的保留桶，不是"一个场景" —— 叫它 `## 场景：全局` 会让模型以为"全局"
+ * 是当前场景的另一种取值（用户 2026-09-23：「全局不需要写成场景」）。所以它单独成一种标题：
+ * `## 常驻信息`。其余场景仍是 `## 场景：X`。
+ *
+ * `_shared`（历史保留名）保持 `## 场景：_shared` 不动 —— 它只在旧数据里出现，且没有
+ * "全局"这种"它不是场景"的语义歧义（它确实曾是一个共享场景）。
+ */
+export const sceneHeading = (scene: string): string =>
+  scene === GLOBAL_SCENE ? '## 常驻信息' : `## 场景：${sceneLabel(scene)}`
 
 /**
  * 场景段（`scene-manager-catalog`）里的一行：`**「<场景名>」—— 用户描述：<场景说明>**`。
