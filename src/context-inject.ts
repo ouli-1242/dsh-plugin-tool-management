@@ -520,20 +520,32 @@ export function escapeFrameBody(body: string): string {
  */
 export function renderDomainText(section: InjectSection, toolHidden: (name: string) => boolean = () => false): string {
   const frame = domainFrame(section.key, section.label)
-  const lines = [FRAME_OPEN, `## ${frame.title}`, `**${frame.cue}**`]
+  // 层级（2026-09-23 用户看到实际注入后指出「记忆内的场景怎么都是 ## 标题」）：**`#` 一级给板块**
+  // （场景 / 记忆 / MCP / 技能 / 子智能体 / 提示词），域正文里的 `##` 才是它的下一层
+  // （记忆段的 `## 场景：X`、超预算时的 `## 未注入的参考信息`）。此前标题也是 `##`，两者平级，
+  // 模型读不出主次 —— 而"哪些内容归在哪个板块/场景下"正是它做判断时要用的结构。
+  //
+  // 开标签后**必须空一行**：markdown 里 `#` 紧跟在一行文字后面只是**段落续行**，不会被渲染成
+  // 标题 —— 用户截图里 `## 本机当前的场景` 就是这么被吞掉的（和 `<system-reminder>` 挤成一段）。
+  // 收尾同理：正文末尾先归一成单个空行，免得 `</system-reminder>` 粘在最后一行上。
+  const lines = [FRAME_OPEN, '', `# ${frame.title}`, `**${frame.cue}**`]
   const how = typeof frame.how === 'function' ? frame.how(toolHidden) : frame.how
   if (how !== undefined) lines.push(how)
-  lines.push(frame.supersede, '', escapeFrameBody(section.text), FRAME_CLOSE)
+  lines.push(frame.supersede, '', escapeFrameBody(section.text).replace(/\n+$/, ''), '', FRAME_CLOSE)
   return lines.join('\n')
 }
 
 /** 「已清空」通知正文：某个域曾经注入过、现在没有内容时发一条（纯函数，测试用）。 */
 export function clearedDomainText(key: InjectDomainKey, label: string): string {
   const frame = domainFrame(key, label)
+  // 形状与 `renderDomainText` 一致（开标签后空行、板块 `#`、收尾空行）—— 这两条都是同一个
+  // 通道发出去的消息，层级与留白不该有两套。
   return [
     FRAME_OPEN,
-    `## ${frame.title}`,
+    '',
+    `# ${frame.title}`,
     '**已清空** —— 本次会话中此前注入的同类内容不再有效。',
+    '',
     FRAME_CLOSE,
   ].join('\n')
 }
