@@ -169,7 +169,7 @@ export function renderMcpStateSection(
     ...shownOffline.map((r) => lineOf(r, knownOf(r), true)),
   ]
 
-  // 只有清单：标题（`## 本机 MCP 服务器的当前状态`）与"该拿它做什么"由注入通道的框架承担
+  // 只有清单：标题（`# 本机 MCP 服务器的当前状态`）由注入通道的框架承担
   // （2026-09-18 起，见 context-inject.ts 的 DOMAIN_FRAME）—— 同一件事只有一个出处，
   // 框架已经写了标题，正文再写一遍就是每步多付一行 token。
   const out = [...lines]

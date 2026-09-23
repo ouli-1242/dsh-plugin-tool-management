@@ -21,6 +21,7 @@ import {
   createContextInjector,
   domainOfTool,
   isSubagentSession,
+  renderDomainText,
   selectInjections,
   subagentDepthOf,
 } from '../lib/context-inject.js'
@@ -659,5 +660,38 @@ test('发行物 cordis.patch.yml 的双挂载表达式：任何 ctx 下都返回
     let got
     assert.doesNotThrow(() => { got = evaluate(ctx, expr) }, JSON.stringify(ctx))
     assert.equal(got, expected, JSON.stringify(ctx))
+  }
+})
+
+test('工具描述里引用的注入板块名必须真实存在（跨模块引用不悬空）', () => {
+  // ③ 自洽性。破了这一条的后果是**静默**的：工具描述把模型指向一个不存在的板块名，
+  // 模型照着去找那个 reminder 会找不到 —— 编译、构建、类型检查、i18n 检查都不报。
+  // 2026-09-23 出过一次：注入层把「场景和记忆」拆成「场景」+「记忆」两段、改了板块标题，
+  // 而 `memory_manager_list` 的描述里还写着「本机当前的场景和记忆」。
+  //
+  // 判据只认**以「本机」或「可委派」开头**的「…」—— 那是板块名的形态；别的「…」
+  // （如「来源：」）是行内标记，不是板块引用，不参与校验。
+  const titles = new Set(
+    INJECT_DOMAIN_KEYS.map((key) => {
+      const text = renderDomainText({ key, label: key, form: 'snapshot', name: 'x', text: '' })
+      const line = text.split('\n').find((l) => l.startsWith('# '))
+      return line === undefined ? '' : line.slice(2)
+    }),
+  )
+  const files = [
+    'src/tools/mcp.ts', 'src/tools/memory.ts', 'src/tools/prompt.ts',
+    'src/tools/skills.ts', 'src/tools/subagent.ts', 'src/subagents/tools.ts',
+  ]
+  const seen = []
+  for (const rel of files) {
+    const src = readFileSync(new URL('../' + rel, import.meta.url), 'utf8')
+    for (const m of src.matchAll(/「(本机[^」]*|可委派[^」]*)」/g)) seen.push([rel, m[1]])
+  }
+  assert.ok(seen.length > 0, '一个板块引用都没扫到 —— 判据或文件清单写错了')
+  for (const [rel, name] of seen) {
+    assert.ok(
+      titles.has(name),
+      `${rel} 引用了不存在的注入板块「${name}」；实际存在：${[...titles].join(' / ')}`,
+    )
   }
 })

@@ -28,7 +28,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   const { defineTool, register } = deps
   register(defineTool({
     name: 'memory_manager_list',
-    description: 'List memories (id, scene, enabled, description). What is injected each turn is in the「本机当前的场景和记忆」reminder; use this for ids/paths and for entries that are off. Defaults to the ones that would be injected; all=true for every entry.',
+    description: 'List memories (id, scene, enabled, description). What is injected each turn is in the「本机当前的记忆」reminder; use this for ids/paths and for entries that are off. Defaults to the ones that would be injected; all=true for every entry.',
     parameters: {
       group: { type: 'string', description: 'Optional scene filter.' },
       all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },

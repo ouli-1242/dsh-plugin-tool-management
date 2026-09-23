@@ -42,6 +42,7 @@
 
 ### 修复
 
+- **工具描述引用的注入板块名悬空**：`memory_manager_list` 的描述里写着「本机当前的场景和记忆」reminder，而注入层把记忆拆成「场景」+「记忆」两段时改了板块标题 —— 模型照着这个名字去找那个 reminder 会**找不到**。这类悬空**编译、构建、类型检查、i18n 检查全都不报**，所以补了一条契约测试钉住：扫 `src/tools/*.ts` 与 `src/subagents/tools.ts` 里**以「本机」或「可委派」开头**的「…」（那是板块名的形态，`「来源：」`这类行内标记不参与），逐个断言它是真实存在的板块标题。**反向验证过**：把名字改回旧的，测试立刻变红并点名文件与实际存在的六个板块名。
 - **`prompt_manager_list` 在场景驱动时报错的「生效中」**：它以前直调 `promptsService.list()`，拿到的是**文件比对**口径（预设正文 == ~/.dsh/AGENTS.md），而界面走 `agentsmd-list`，那里才有「启用的场景绑了预设时**只有那份**算生效中」这层判定。同一件事两个答案，模型说的和界面上看到的不一致。改走 op 之后判定只剩一份，并把 `activeVia` 打进清单行（`[active via scene]` / `[active via file]`），以及**第三种真实状态** —— 文件里确实是它、但基线由场景绑定驱动（此前这一格会被错报成 `[active]`）。
 - **`mcp_manager_save` 的改分支不会静默清空凭据**：`mcpm-edit` 里那句 `if (row[field] === undefined) return` 只在字段**有值**时生效，而 `parseKv(undefined)` 返回的是 `{}` 而不是 `undefined` —— 所以"省略 headers/env"会把整份键值对**清空且零 warning**（已用脚本复现）。工具侧因此显式填回每个省略的字段。同一类缺陷还有一处：`subagent_manager_save` 改分支的 `merged` 里没有 `reasoningEffort`，而 `subagent-update` 走 `serializePersona` **整份重写** —— 模型只改一句 body 就会静默清掉用户配好的思考强度。
 - **`subagent_manager_save` 的注册失败记录跟着改名**：否则界面上那条"注册失败"横幅会报一个不存在的工具名。
