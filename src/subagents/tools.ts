@@ -93,11 +93,18 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
     // 代价如实记下：子智能体域被关掉、或走压制型预设时上下文里没有那条 how 行，模型只剩本
     // 描述与 `agent` 参数说明（"Persona name from subagent_manager_list"）—— 够它认出这条是
     // 带人设的委派通道，但"没有人设贴合时才用官方那两个"这层分界就没人说了。
+    //
+    // 2026-09-23（用户裁定）：本工具的 `task` / `inherit` 两个参数说明与上面的 Modes 段
+    // **逐字重复**，而工具表每轮都发 —— 同一件事付两次 token。实测 `subagent_manager_run`
+    // 整份 407 tok（参数段：`inherit` 86 / `task` 57 / `agent` 19），其中 `inherit` 是全表
+    // 最贵的单个参数。收完两处重复后目标 ≈325 tok。判据是"删掉的那句在描述里已经有了吗"：
+    // Modes 段留着（它是模型的入口），参数说明只留"这一段独有的信息"。
+    // `inherit` 那句"轮中委派拿不到当前轮"必须留 —— 它是这条参数唯一会让人写错 task 的地方。
     description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the「可委派的子智能体」reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
     parameters: {
       agent: { type: 'string', required: true, description: 'Persona name from subagent_manager_list.' },
-      task: { type: 'string', required: true, description: 'The task for the subagent: the goal plus the context it needs. Self-contained by default; with inherit: true it only needs to state what is new. Leave method and output format to the persona.' },
-      inherit: { type: 'boolean', description: 'Let the subagent inherit this conversation\'s finished turns, like the host\'s subagent_fork (default false = a fresh child that cannot see this conversation). Only finished turns are inherited — a delegation made mid-turn cannot pass the current turn\'s content, so write `task` as if it were self-contained.' },
+      task: { type: 'string', required: true, description: 'The task for the subagent. Self-contained by default; with inherit: true only state what is new.' },
+      inherit: { type: 'boolean', description: 'Let the subagent see this conversation\'s finished turns (the current turn is never included). Default false = a fresh child.' },
     } as const,
     output: {
       schema: { type: 'string' } as const,

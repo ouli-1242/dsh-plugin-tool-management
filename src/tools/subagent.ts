@@ -1,5 +1,5 @@
-// 子智能体域的 model 工具（2026-09-19 从 index.ts 的注册区抽出）：
-// subagent_manager_list / subagent_manager_run / _set_enabled / _create / _update。
+// 子智能体域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 合并）：
+// subagent_manager_list / subagent_manager_run / _set_enabled / _save。
 //
 // exec.agent / exec.signal 由工具运行时提供（parent 与取消信号的官方通道）。
 //
@@ -90,40 +90,21 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
   }
   try {
     register(deps.defineTool({
-      name: 'subagent_manager_create',
-      description: 'Create a persona at ~/.dsh/tool-management/subagents/<name>.md. Only on the user\'s explicit request. Write `body` as who this is and how it judges its own work — not the steps or paths, those belong to the task; put hard output requirements in `output` (one per line), not buried in prose. New personas start disabled: enable with subagent_manager_set_enabled before delegating.',
+      name: 'subagent_manager_save',
+      // 为什么不是直通 `subagent-update`：那个 op 走 serializePersona **整份重写**文件，
+      // 缺席的字段一律按空处理。界面每次都带全量表单所以没事，模型只改一句 description
+      // 却直通过去，就会把人设正文与工具限制一起冲掉。这里先读现状再合并 —— 合并发生在
+      // 工具这一侧，op 的语义不动。
+      //
+      // 0.14.0：create 与 update 并成一条 upsert。判定也只能在这里做 —— `subagent-create`
+      // 对同名是拒绝的、`subagent-update` 对不存在的名字报错，而模型手里的目录可能已经过期。
+      description: 'Create a persona at ~/.dsh/tool-management/subagents/<name>.md, or update the one that already has this name — the receipt says which. Omitted fields keep their current values. Write `body` as who this is and how it judges its own work — not the steps or paths, those belong to the task; put hard output requirements in `output` (one per line), not buried in prose. Only on the user\'s explicit request.',
       parameters: {
-        name: { type: 'string', required: true, description: 'Persona name (= file name); ≤64 chars, no path separators or < > : " | ? *, must not start with a dot.' },
-        description: { type: 'string', required: true, description: 'One-line routing description: what it is for and when to pick it. This is what shows up in the delegation catalog.' },
-        body: { type: 'string', required: true, description: 'Markdown role definition.' },
-        output: { type: 'string', description: 'Output contract, one requirement per line (rendered to the persona as its own 「输出要求」 section). Omit for no hard requirements.' },
-      },
-      output: { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => text(String(v)) },
-      async execute(args: any) {
-        const blocked = await deps.lockedSceneGuard()
-        if (blocked) throw new Error(blocked)
-        const r: any = await ops()['subagent-create'](args)
-        if (!r || r.ok === false) throw new Error((r && r.error) || '创建人设失败')
-        return 'OK: persona ' + String(r.name || args.name) + ' created（默认未启用,要委派它先 subagent_manager_set_enabled）'
-      },
-    }))
-  } catch (e) {
-    recordFailure('subagent_manager_create', e)
-  }
-  try {
-    register(deps.defineTool({
-      name: 'subagent_manager_update',
-      // 为什么不是直通 `subagent-update`：那个 op 走 serializePersona **整份重写**文件,
-      // 缺席的字段一律按空处理。界面每次都带全量表单所以没事,模型只改一句 description
-      // 却直通过去,就会把人设正文与工具限制一起冲掉。这里先读现状再合并 —— 合并发生在
-      // 工具这一侧,op 的语义不动。
-      description: 'Update a persona: body, description, output contract, or name (renaming re-points scene-profile bindings). Omit a field to keep it — this merges, so you can change one part without restating the role. Only on the user\'s instruction.',
-      parameters: {
-        name: { type: 'string', required: true, description: 'Current persona name.' },
-        nextName: { type: 'string', description: 'New name (rename). Omit to keep it. Refused if a persona already has that name — nothing is overwritten.' },
-        description: { type: 'string', description: 'New one-line routing description. Omit to keep it.' },
-        body: { type: 'string', description: 'New Markdown role definition. Omit to keep it.' },
-        output: { type: 'string', description: 'New output contract, one requirement per line. Empty string clears it. Omit to keep it.' },
+        name: { type: 'string', required: true, description: 'Persona name (= file name); ≤64 chars, no path separators or < > : " | ? *.' },
+        description: { type: 'string', description: 'One-line routing description — this is what shows up in the delegation catalog. Required when creating; omit = keep.' },
+        body: { type: 'string', description: 'Markdown role definition. Required when creating; omit = keep.' },
+        output: { type: 'string', description: 'Output contract, one requirement per line. Empty string clears it; omit = keep.' },
+        nextName: { type: 'string', description: 'New name (rename); re-points scene-profile bindings. Omit = keep. Refused if a persona already has that name.' },
       },
       output: { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => text(String(v)) },
       async execute(args: any) {
@@ -131,9 +112,28 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
         if (blocked) throw new Error(blocked)
         const name = String((args && args.name) || '').trim()
         const current: any = await ops()['subagent-get']({ name })
-        if (!current || current.ok === false) throw new Error((current && current.error) || '人设不存在: ' + name)
+        if (!current || current.ok === false) {
+          // 建的分支：description 与 body 都必填。`subagent-create` 自己会拒（人设名不合法 /
+          // 已存在），但那两条是给用户看的 op 错；模型需要的是"这条工具要什么"。
+          const description = String((args && args.description) || '').trim()
+          const body = String((args && args.body) || '').trim()
+          const missing = [
+            description === '' ? 'description' : '',
+            body === '' ? 'body' : '',
+          ].filter((x) => x !== '')
+          if (missing.length) throw new Error('新建人设必须给 ' + missing.join(' 与 ') + '（' + name + ' 还不存在）')
+          const r: any = await ops()['subagent-create']({ name, description: args.description, body: args.body, output: args.output })
+          if (!r || r.ok === false) throw new Error((r && r.error) || '创建人设失败')
+          // 新建的人设默认停用（与 MCP / 技能同口径）。这句必须留：不说的话模型会直接去委派，
+          // 然后收到"人设不可用"，而它并不知道自己少拨了一个开关。
+          return 'OK: persona ' + String(r.name || name) + ' created（默认未启用,要委派它先 subagent_manager_set_enabled）'
+        }
         const keep = current.persona || {}
-        const touched = ['nextName', 'description', 'body', 'output'].filter((k) => args && args[k] !== undefined)
+        const touched: string[] = []
+        if (args.nextName !== undefined) touched.push('nextName')
+        if (args.description !== undefined) touched.push('description')
+        if (args.body !== undefined) touched.push('body')
+        if (args.output !== undefined) touched.push('output')
         if (!touched.length) throw new Error('没有要改的东西：nextName / description / body / output 至少给一个')
         const merged = {
           name,
@@ -155,6 +155,6 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
       },
     }))
   } catch (e) {
-    recordFailure('subagent_manager_update', e)
+    recordFailure('subagent_manager_save', e)
   }
 }

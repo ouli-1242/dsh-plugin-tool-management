@@ -2269,8 +2269,9 @@ export default {
         // 已有记忆时是句假话（与同一轮修 `prompt_manager_list` 的「生效中」同一个口径）。
         scene_memory_manager_save: '「保存记忆」',
         subagent_manager_run: '「运行子代理」',
-        subagent_manager_create: '「新建人设」',
-        subagent_manager_update: '「修改人设」',
+        // 0.14.0 起 create 与 update 并成 save（标签取中性的「保存人设」：改一份已有文件时
+        // "新建"是句假话）。危险度不变 —— 两者都往 hub 里落/整份重写一份文件。
+        subagent_manager_save: '「保存人设」',
         // 0.14.0 起 add 与 edit 并成 save，模型侧能塞进任意 command/args 的仍只有这一个工具
         // —— 门禁挂在它上面即覆盖整个模型可达面。标签取中性的「保存」：改一台已有服务器
         // （含改 URL / 命令）与新增一台是同一档危险度，但"新增"在改分支上是句假话。
@@ -2296,28 +2297,12 @@ export default {
           return true
         }
       }
-      /** `subagent_manager_update` 要改名已存在、`_create` 要目标未被占用。 */
-      const subagentWriteWouldApply = async (exec: any): Promise<boolean> => {
-        try {
-          const a = (exec && exec.arguments) || {}
-          const name = String(a.name || '').trim()
-          if (!name) return false
-          const list = await subagentService.list()
-          const has = (n: string) => list.some((p) => p.name === n)
-          if (exec.name === 'subagent_manager_update') {
-            const next = String(a.nextName || '').trim()
-            return has(name) && (next === '' || next === name || !has(next))
-          }
-          return !has(name)
-        } catch (e) {
-          return true
-        }
-      }
+      // 0.14.0 删掉了 `subagentWriteWouldApply`：它是为"create 要目标未被占用 / update 要
+      // 改名已存在"这套两工具分工写的裁决。合并成一条 upsert 之后它恒为"会应用"（判定只剩
+      // "存在就改、不存在就建"，没有第三种情况），留着就是一个永远返回 true 的函数。
       ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', async (exec, next) => {
         if (!exec || !CONFIRM_LABELS[String(exec.name)]) return next()
         if (exec.name === 'subagent_manager_run' && !(await subagentManagerRunTargetExists(exec))) return next()
-        if ((exec.name === 'subagent_manager_create' || exec.name === 'subagent_manager_update')
-          && !(await subagentWriteWouldApply(exec))) return next()
         if (bypassedByFullAccess(exec)) return next()
         if (exec.name === 'skill_manager_save') {
           // 卡是**执行前**弹的：此时工具还没读 `skill-state`，走建还是改还没判出来，
@@ -2378,16 +2363,24 @@ export default {
             .then((s) => (s.requireConfirmForModelRuleWrite ? { kind: 'ask', reason: what } : next()))
             .catch(() => ({ kind: 'ask', reason: what }))
         }
-        if (exec.name === 'subagent_manager_create' || exec.name === 'subagent_manager_update') {
+        if (exec.name === 'subagent_manager_save') {
           // 与 `skill_manager_save` 完全对称：往 hub 里落一份新文件 / 整份重写一份现有文件。
           // 无条件问（不设开关）—— 人设是"以后每次委派都按它来"的长期资产，改错了影响的是
           // 后续所有子代理的行为，而不是一次输出。
-          // update 尤其：`subagent-update` 走 serializePersona 整份重写，改名还会连带改
+          // 改分支尤其：`subagent-update` 走 serializePersona 整份重写，改名还会连带改
           // 场景档案里的绑定 —— 那是一次会影响环境配置的操作，不是一句文案修改。
+          // 建还是改要读一次现状才知道（工具侧也是执行时才读），所以这里查一下名单：
+          // 只报"新建"会让一次整份重写看起来像加了个文件，反过来也一样。
           const a = (exec && exec.arguments) || {}
-          const what = exec.name === 'subagent_manager_create'
-            ? `Create persona「${String(a.name || '')}」under ~/.dsh/tool-management/subagents`
-            : `Rewrite persona「${String(a.name || '')}」${a.nextName ? ` and rename it to「${String(a.nextName)}」(scene-profile bindings follow the rename)` : ''}`
+          const name = String(a.name || '')
+          let exists = false
+          try {
+            const docs: any[] = await subagentService.list()
+            exists = docs.some((p) => String(p && p.name) === name)
+          } catch { /* 读不到现状就按"新建"的口径报：宁可少说一句，也不因此拦住操作 */ }
+          const what = exists
+            ? `Rewrite persona「${name}」${a.nextName ? ` and rename it to「${String(a.nextName)}」(scene-profile bindings follow the rename)` : ''}`
+            : `Create persona「${name}」under ~/.dsh/tool-management/subagents`
           return Promise.resolve({ kind: 'ask', reason: what })
         }
         // subagent_manager_run：子代理运行花真 token：默认确认（requireConfirmForModelSubagentRun !== false），可关。
