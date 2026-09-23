@@ -812,9 +812,23 @@ export function renderSceneCatalog(
   if (wanted.length === 0) {
     return { text: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [] }
   }
+  // ── 因果句：**只有真话才说**，且必须放在场景名之后（否则「它」没有指代）────────────
+  // 场景**启用**（`active`）与场景**进入**（`mode.scene`）是**两份状态、两个 op**
+  // （`rules-set-active` / `scene-mode-set`），可以只启用而不进入：
+  //   - 记忆按 **启用** 筛 —— 场景段列的是什么，记忆段就按什么分组；
+  //   - MCP / 技能 / 人设按 **进入** 后的档案切 —— 没进入就没切，那三段还是全局配置。
+  // 本机当前两者都是「代码」，看起来是一回事；但写死一句"都已按它筛过"在**只启用没进入**
+  // 时是句假话。所以按 `mode.scene` 分叉，两种状态各说各自的事实。
+  const entered = String(index.mode?.scene ?? '')
+  const causal = wanted.includes(entered)
+    ? '下面的记忆、MCP、技能与人设都已按它筛过。'
+    : '下面的记忆已按它筛过；MCP / 技能 / 人设要进入这个场景后才按档案切换。'
+  // `sceneLine` 自带 `\n\n` 结尾，所以这里不再补前导换行 —— 补了就是两个空行。
+  const causalBlock = `${causal}\n`
+
   const marker = `\n${TRUNCATION_MARKER}\n`
   const kept: string[] = []
-  let used = 0
+  let used = byteLen(causalBlock)
   let dropped = false
   for (const scene of wanted) {
     const block = sceneLine(scene, index)
@@ -824,7 +838,7 @@ export function renderSceneCatalog(
     kept.push(scene)
     used += byteLen(block)
   }
-  let text = kept.map((scene) => sceneLine(scene, index)).join('')
+  let text = kept.map((scene) => sceneLine(scene, index)).join('') + causalBlock
   if (dropped) text += marker
   text = text.replace(/^\n+/, '')
   return {
