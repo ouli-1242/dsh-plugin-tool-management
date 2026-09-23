@@ -171,7 +171,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 归档账本 / 保留期                           | `~/.dsh/tool-management/history-*.json`                                            |
 | 记忆索引 / 场景 / 档案                      | `~/.dsh/tool-management/memories-index.json`                                       |
 | MCP 侧车（停用表 / 已知工具 / 备注 / 设置） | `~/.dsh/tool-management/mcp-*.json`                                                |
-| 注入设置（五个域开关 / 压制型预设口径）     | `~/.dsh/tool-management/inject-settings.json`                                      |
+| 注入设置（六个域开关 / 压制型预设口径）     | `~/.dsh/tool-management/inject-settings.json`                                      |
 | 模型工具表（不发给模型的工具）              | `~/.dsh/tool-management/tool-table.json`                                           |
 | 场景页界面设置（进场景前弹不弹预览卡）      | `~/.dsh/tool-management/scene-settings.json`                                       |
 | 运行日志 / patch 备份                       | `~/.dsh/tool-management/tool-management.log` · `backups/`                          |

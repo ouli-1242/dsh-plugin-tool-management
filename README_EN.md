@@ -170,7 +170,7 @@ The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they mu
 | Archive ledger / retention                                            | `~/.dsh/tool-management/history-*.json`                                                          |
 | Memory index / scenes / profiles                                      | `~/.dsh/tool-management/memories-index.json`                                                     |
 | MCP sidecars (disabled tools / known tools / notes / settings)        | `~/.dsh/tool-management/mcp-*.json`                                                              |
-| Injection settings (five domain switches / suppressing-preset policy) | `~/.dsh/tool-management/inject-settings.json`                                                    |
+| Injection settings (six domain switches / suppressing-preset policy) | `~/.dsh/tool-management/inject-settings.json`                                                    |
 | Model tool table (tools not sent to the model)                        | `~/.dsh/tool-management/tool-table.json`                                                         |
 | Scenes-page preference (preview card before entering a scene)         | `~/.dsh/tool-management/scene-settings.json`                                                     |
 | Runtime log / patch backups                                           | `~/.dsh/tool-management/tool-management.log` · `backups/`                                        |

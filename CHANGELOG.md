@@ -14,8 +14,9 @@
 
 ### 破坏性
 
-- **五族工具改名并合并，20 → 17 条**（用户 2026-09-23 裁定）。旧名**不注册别名**：注册就进工具表、就要付 token，8 个旧名合计 ≈1,100–1,300 tok/轮，**比整轮省下的还多**，等于让这次改名白做。旧名去向：
-  - `memory_manager_*` → **`scene_memory_manager_*`**（族名升上来，与注入段名 `scene-memory-manager-catalog`、界面组标题「场景和记忆」同名）；`_write` + `_update` → **`_save`**
+- **五族工具改名并合并（20 → 17 条），随后场景从记忆里分家（17 → 18 条）**（用户 2026-09-23 两轮裁定）。旧名**不注册别名**：注册就进工具表、就要付 token，旧名合计 ≈1,100–1,300 tok/轮，**比整轮省下的还多**，等于让这次改名白做。旧名去向：
+  - `memory_manager_*` **保持原名**；`_write` + `_update` → **`_save`**。中途曾整族改叫 `scene_memory_manager_*`，但那个名字**从未发布** —— 它是为了跟注入段名对齐而改的，而那个名字描述的是**域**、这个族操作的全是记忆。加场景能力时这个错配就现形了：硬塞进 `save` 会让 `description` 变成双义参数（给 `memory` 时是记忆描述、给 `scene` 时是场景描述），门禁也得按参数分叉（记忆写入有开关可放行，场景写入是改运行时环境、不该有那条路）。所以**拆成两族**而不是合并。
+  - **新增 `scene_manager_save(scene, label?, description?, prompt?, mcp?, skills?, subagents?)`**：建场景 / 写档案 / 绑提示词。**只做定义层** —— 启用与进入仍由界面「场景」页负责（那是改运行时环境的动作，六处开关一起动；该页进入前还会弹一张「会改什么」的预览卡）。走 `rules-create-scene` 的**幂等 upsert**（所以不需要 `action` 参数）；档案三段 **read-modify-write** —— `scene-archive-save` 是整份替换，省略的段不填回就会被静默清掉。回执如实报三件事：历史「全部启用」被收窄成单选、当前环境不存在的键被丢弃、存盘成功但应用运行时失败。
   - `mcp_manager_set_enabled` + `mcp_manager_restart` → **`mcp_manager_switch(server, action, level?, tool?)`**；`mcp_manager_add` → **`mcp_manager_save`**
   - `skill_manager_create` → **`skill_manager_save`**；`subagent_manager_create` + `subagent_manager_update` → **`subagent_manager_save`**
   - 名字未变：`mcp_manager_list`（加 `tools` 参数）、`skill_manager_list` / `_read` / `_set_enabled`（加 `source`）、`subagent_manager_list` / `_run` / `_set_enabled`、`prompt_manager_list` / `_apply`
@@ -26,6 +27,10 @@
 
 ### 新增
 
+- **注入层也分家：`scene-memory-manager-catalog` → `scene-manager-catalog` + `memory-manager-catalog`**（用户 2026-09-23 裁定）。原来那**一个段是语义单元** —— 它的引导语跨"场景说明"和"记忆条目"做分级授权（场景说明是**约定**、一律照办；条目是**记录**、可能过期），靠的正是"两类内容渲染时分处不同位置"。拆开后两段各带自己的授权语，于是用户能**单独关掉记忆段**（省字节）而保留场景约定 —— 原来关掉 `memory` 域是两者一起消失。**场景说明只在场景段出现**（记忆段的场景块只留标题），两段各自完整自洽；引导语总量反而比拆分前更少。两条口径是用户当场裁定的：
+  - 场景段的引导语**说清当前处于哪个场景**（`当前处于「web」场景。…`），而不是一句泛泛的"以下是约定…" —— 场景名本身就是这句话要传达的事实；
+  - **保留场景 `global` / `_shared` 不列**：它们恒常生效，说"当前处于全局"是废话，默认状态不该占上下文。**一个具体场景都没启用时整段不注入**（返回空串，通道连这条消息都不发）。
+  ⚠️ `memory` 的注入 kind 改名，**升级后每个会话会重发一次**这两段（旧消息认不出来），一次性代价。
 - **人设有了「思考强度」**，走官方 `agentOptions.reasoningEffort`。档位清单来自 **adapter**（`llm.resolveModelInfo(provider, model)` → `reasoning.efforts[]` / `defaultEffort`），所以它跟 provider/model 走、不是一个全局枚举。新只读 op `model-reasoning` 单独一条而不是塞进 `model-candidates`：后者是"不发网络请求"的本地目录，前者是官方注释写明的 adapter-owned asynchronous lookup（**可能联网**），代价差一个数量级。带 10s 超时 + `AbortSignal`；**失败就是失败**，不回落成"猜几个常见档位"—— 官方对不支持的显式档位是在 provider I/O **之前**直接拒（不夹紧、不别名），猜错一次就是子代理起不来。界面上按 (provider, model) 懒加载、缓存 5 分钟，只在展开了高级选项且选了模型时才拉；**自动清档只在拉取成功时判断**（失败一律不动已存值），因为留着不在清单里的档位等于埋一次"委派起不来"。
 - **`mcp_manager_list` 加 `tools` 参数**：列出每台服务器的工具名、被单独关掉的标 `(off)`。不加一条 `read` 工具：启用服务器的工具名与描述本来就在模型自己的工具表里（`mcp__<server>__<tool>`），加 read 是重抄一遍再付一次钱。刻意**不**调 `mcpm-tools-refresh` —— 那个会临时起进程，是界面动作。
 - **`skill_manager_set_enabled` 加 `source`**：整目录启停（走已存在的 `skill-source-enable/disable`，并同步场景档案）。此前模型只能逐个技能关，关不了一个来源目录。
@@ -47,7 +52,10 @@
 - **`mcp_manager_switch` 的冻结口径跟着 op 登记表走，不是整条工具一刀切**：`mcpm-set-enabled` 与 `mcpm-tool-enabled` 在登记表里是 `frozen: true`，而 `mcpm-restart` 明确**不冻结** —— 锁定期间它是唯一还能落盘改补丁的入口，是"卡住了重连一下"这条恢复路径。所以只有 `action=on|off` 过 `lockedSceneGuard()`，`restart` 不过，与面板侧 `guardLockedOps(frozenOps('all'))` 逐字一致。**（说明书的 §1 第 4 条把"restart 缺冻结守卫"当成一处要修的假话 —— 那条判断与登记表相反，照它改会让工具比面板更严、并掐掉锁定期的恢复入口。）**
 - **`maskUrlQuery` 从 `mcp/manager.ts` 挪进 `mcp/secret-guard.ts`**：确认卡要回显"新 URL"的打码形态，而那份文件是两条打码形态的唯一口径，不能出现第二份实现。
 - **描述与参数说明里的自指工具名删掉**（`skill_manager_list` / `subagent_manager_set_enabled` / `subagent_manager_list` / `subagent_manager_run` 的 `agent` 参数）。判据：删掉的那句是不是"模型看输出就知道"的。**留在错误与回执里的自指不删** —— 它们不在每轮成本里，而且出现的那一刻正是模型需要"下一步该调谁"的时候。实测整表再省 25 tok。
-- **实测体积（离线复算，口径同 `recordToolSize`）**：整表 **3,453 → 3,093 tok**，工具数 **20 → 17**。各族：场景和记忆 843 → 638、MCP 627 → **704（升）**、技能 620 → 679、子智能体 1,127 → 858、提示词 236 → 239。**MCP 那一族是变贵的**：`save` 要装 9 个参数，光参数结构就 ≈135 tok，不可能低于它取代的 `add` 的 235 —— 说明书 §2 给它定的 520 在算术上达不到（地板是 605）。这 +77 买的是"模型能改一台已配置服务器"，是本次唯一一处花钱买能力的地方。
+- **实测体积（离线复算，口径同 `recordToolSize`）**：整表 **3,453 → 3,439 tok**，工具数 **20 → 18**。各族：**场景 353（全新）**、记忆 631（原「场景和记忆」843 → 638 → 631，族名变短省 7）、MCP 627 → **704（升）**、技能 620 → 679、子智能体 1,127 → 858、提示词 236 → 239。两处**变贵**，都摆在这里：
+  - **MCP +77**：`save` 要装 9 个参数，光参数结构就 ≈135 tok，不可能低于它取代的 `add` 的 235 —— 说明书 §2 给它定的 520 在算术上达不到（地板是 605）。买的是"模型能改一台已配置服务器"。
+  - **场景 +353**：全新能力（模型此前完全不能建场景、不能配档案、不能绑提示词）。已压过一轮措辞（初版 406 → 353）。
+  净账：整表**基本回到 0.13.0 的水平**（3,453 → 3,439，−0.4%），换来的是工具族职责清晰 + 场景可被模型配置。
 - **`table.ts` 文件头的两个数**：`20 个工具 / ≈3,100 tok / 114 个 op` → 实测值。原 ≈3,100 是估的、低报 353 tok；`114` 这个计数在改之前就已经漂了 2（登记表实测 116）。
 
 ## [0.13.0] - 2026-09-23

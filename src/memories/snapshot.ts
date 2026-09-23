@@ -12,7 +12,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_CATALOG_NOTE, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, sceneCatalogNote, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneHeader, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileIfExistsSync } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -777,6 +777,10 @@ export function renderSceneMemory(
  * 为了手工建的目录 / 手工删过记录的目录也能如实列出。**空场景也列** —— "这个场景存在但还
  * 没有内容"本身就是框架信息（记忆段只列有记忆的场景，两者不是同一份清单）。
  *
+ * **只列启用的非保留场景**（排除 `global` / `_shared`）：那两个桶恒常生效，说"当前处于全局"
+ * 是废话 —— 默认状态不该占上下文（用户 2026-09-23 裁定）。一个具体场景都没启用时整段返回
+ * 空串（通道不发这条消息），而不是发一句"当前处于全局"。
+ *
  * **场景是单选的**：除保留场景（`global` / `_shared`）外至多一个处于启用状态。这条约束由
  * `rules-set-active`（界面单选）+ `rules-create-scene` 的 `collapseActiveForNewScene`（把
  * 历史「全部启用」收敛成单选）保证，本函数**只读**、不替用户收敛。历史遗留的"同时启用多个"
@@ -791,9 +795,14 @@ export function renderSceneCatalog(
   const { active } = resolveActiveScenes(index, probe.scenes)
   const names = new Set<string>([...probe.scenes, ...Object.keys(index.scenes || {})])
   const wanted = [...names]
-    .filter((scene) => scene !== '' && active.has(scene))
+    .filter((scene) => scene !== '' && scene !== GLOBAL_SCENE && scene !== SHARED_GROUP && active.has(scene))
     .sort((a, b) => compareSceneBuckets(a, b, index))
-  const note = `${SCENE_CATALOG_NOTE}\n\n`
+  // 默认状态（只有保留桶生效）：整段不注入。返回空串而不是"当前处于全局"——后者是废话，
+  // 而且会让通道每轮都发一条没有信息量的消息。
+  if (wanted.length === 0) {
+    return { text: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [] }
+  }
+  const note = `${sceneCatalogNote(wanted.map((scene) => sceneLabel(scene)))}\n\n`
   const marker = `\n${TRUNCATION_MARKER}\n`
   const kept: string[] = []
   let used = byteLen(note)
