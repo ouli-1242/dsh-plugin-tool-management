@@ -139,7 +139,7 @@ export function sceneLabel(scene: string, index?: RulesIndex): string {
 export const sceneHeading = (scene: string): string => `## 场景：${sceneLabel(scene)}`
 
 /**
- * 场景段（`scene-manager-catalog`）里的一行：`**「<场景名>」—— <场景说明>**`。
+ * 场景段（`scene-manager-catalog`）里的一行：`**「<场景名>」—— 用户描述：<场景说明>**`。
  *
  * 2026-09-23 用户裁定，替换了原来的两行式（`## 场景：X` + `**场景说明：X**`）。三条理由都是
  * 用户看到**实际注入**之后提的：
@@ -151,12 +151,17 @@ export const sceneHeading = (scene: string): string => `## 场景：${sceneLabel
  *   - **没填说明就不带后缀**。上一版会补 `defaultSceneDescription` 的默认句，而
  *     "用户配置的上下文，当前启用"贴在名字后面，读起来像一句真的说明。
  *
+ * `用户描述：` 这个前缀是同日追加的（用户：「防止模型误解这是场景名或者其它」）：破折号后面
+ * 那截的形态本来有歧义 —— `**「代码」—— 写代码**` 读起来像"名字 —— 别名"，而它其实是
+ * **用户写的一句说明**。加四个字把来源点明，模型就不会把它当成场景的另一个名字或某种标识符。
+ * 前缀只在真有描述时出现（没填描述时整截不出现，不存在"用户描述："后面空着）。
+ *
  * 为什么不再用 `##` 标题：这一段只讲"当前启用的是哪个 + 它是什么"，一行说完就够。
  * 场景**分组**标题仍在记忆段里用（`sceneHeading`），两段各自承担自己的职责。
  */
 export const sceneLine = (scene: string, index?: RulesIndex): string => {
   const described = String(index?.scenes?.[scene]?.description ?? '').replaceAll(/\s+/g, ' ').trim()
-  return `**「${sceneLabel(scene)}」${described === '' ? '' : `—— ${described}`}**\n\n`
+  return `**「${sceneLabel(scene)}」${described === '' ? '' : `—— 用户描述：${described}`}**\n\n`
 }
 
 /** 场景渲染顺序：全局 `global` 最先（它的记忆对任何对话都成立，先讲总则），

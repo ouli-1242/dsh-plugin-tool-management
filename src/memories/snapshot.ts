@@ -12,7 +12,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileIfExistsSync } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -646,11 +646,14 @@ export function renderSceneMemory(
 
   /**
    * 选中块 → 段正文（同一场景的 `## 场景：x` 只在首次出现时发出）。
-   * `dropped` 决定引导语用哪一版：真有条目没注入时不再声称「以下就是全部信息」。
+   *
+   * 授权语**只有一版**：2026-09-23 第四次裁定删掉了完整性声明（「以下就是全部信息」），
+   * 于是"按截断状态选长短两版"的自适应失去意义（两版会完全相同），`dropped` 参数一并移除。
+   * 详见 `SCENE_MEMORY_NOTE` 的注释 —— 代价是这一段不再有防探测手段。
    */
-  const renderBody = (selected: SceneBlockCandidate[], dropped: boolean): string => {
+  const renderBody = (selected: SceneBlockCandidate[]): string => {
     if (selected.length === 0) return ''
-    const note = dropped ? SCENE_MEMORY_NOTE_PARTIAL : SCENE_MEMORY_NOTE
+    const note = SCENE_MEMORY_NOTE
     const chunks: string[] = []
     let current: string | null = null
     let buf = ''
@@ -675,8 +678,8 @@ export function renderSceneMemory(
     //
     // 为什么挪上来（用户 2026-09-23 看到实际注入后要求）：此前它跟着**每个场景块**各来一遍
     // —— 2 个场景就是 272 B ≈68 tok/轮，占记忆段整段的 22%；而且它夹在 `## 场景：X` 与条目
-    // 之间，把"分组"和"内容"隔开了。它管的本来就是整段（「以下就是全部信息」说的是全段，
-    // 不是某个场景），放在最前面才对得上。
+    // 之间，把"分组"和"内容"隔开了。它管的本来就是整段（授权语讲的是这一整段条目的效力，
+    // 不是某个场景的），放在最前面才对得上。
     //
     // 2026-09-23 更早那条「放最顶层会飘在场景之外（用户实测）」的约束**已不成立**：那次是
     // 板块标题还是 `##`、与场景分组平级，放顶层确实分不清它管谁；现在板块升成 `#` 一级、
@@ -730,12 +733,12 @@ export function renderSceneMemory(
   missed.sort((a, b) => a.seq - b.seq)
 
   // ── ② 尾注自身也占字节：放不下就把已入选的块从后往前退回，直到回到预算内 ──
-  let body = renderBody(selected, probe.truncated || missed.length > 0)
+  let body = renderBody(selected)
   let tail = renderTail(missed, maxBytes - byteLen(body), probe.truncated || missed.length > 0)
   while (byteLen(body) + byteLen(tail) > maxBytes && selected.length > 0) {
     missed.push(selected.pop() as SceneBlockCandidate)
     missed.sort((a, b) => a.seq - b.seq)
-    body = renderBody(selected, true)
+    body = renderBody(selected)
     tail = renderTail(missed, maxBytes - byteLen(body), true)
   }
 
@@ -758,12 +761,8 @@ export function renderSceneMemory(
 }
 
 /**
- * 段首固定块。以 `\n` 结尾，与场景块 join 后自然空一行。
- * 预算按**较长**的那版算（见 renderSceneMemory），保守一点只会浪费几个字节。
- */
-/**
  * 引导语所占的字节（含它后面的一个空行）。**整段只算一次** —— 它放在板块层（见 renderBody），
- * 不再跟着场景块重复；用较长的那版（带完整性声明）算，保守一点只会浪费几个字节。
+ * 不再跟着场景块重复。
  *
  * 注意：模块级不能直接算 —— `byteLen` 是后面才声明的 const，模块初始化期取它会 TDZ 报错。
  */
@@ -772,8 +771,8 @@ export function renderSceneMemory(
  * （`**「场景名」—— 场景说明**`，见 `sceneLine`）。
  *
  * 为什么从记忆段里拆出来（2026-09-23 用户裁定）：场景说明是"这个场景是干什么的"，记忆条目是
- * **记录**（可能过期）—— 两者性质不同，而原来的实现靠一句话同时管两者。拆开后用户能
- * **单独关掉记忆段**（省字节）而保留场景说明。
+ * **记录**（权威等级低于用户当场说的）—— 两者性质不同，而原来的实现靠一句话同时管两者。拆开后
+ * 用户能**单独关掉记忆段**（省字节）而保留场景说明。
  *
  * 本段**没有任何引导语**：授权语在 2026-09-23 第二次裁定里删掉（上一版把场景说明写成
  * "一律照办"的约定，而它的实例是「写代码」这种**标签**，让模型"照办一个标签"正是它读不懂
