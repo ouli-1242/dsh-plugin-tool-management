@@ -16,7 +16,8 @@
 // 与官方 skill-catalog 同款：各自的来源 kind（轨迹里各自一行、各显各的名字）、各自的
 // form、各自的去重。好处是"只改了一个域就只重发那一条"；代价是进场景这类多域同时变的
 // 时刻会一次发几条（每条带一句自己的引导语）。五个域与轨迹行名：
-//   memory    → scene-memory-manager-catalog（场景和记忆）
+//   scene     → scene-manager-catalog（场景：启用的场景 + 场景说明，约定）
+//   memory    → memory-manager-catalog（记忆：各场景下的条目，记录）
 //   mcp       → mcp-manager-catalog
 //   skills    → skill-manager-catalog（不叫 skill-catalog：那是官方那条行的名字）
 //   subagents → subagent-manager-catalog
@@ -74,23 +75,29 @@ import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { PresetInjectionFacts } from './compat/preset-reach.js'
 import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 
-/** 可注入的域（界面上的五个勾选，顺序即界面与消息顺序）。 */
-export type InjectDomainKey = 'memory' | 'mcp' | 'skills' | 'subagents' | 'prompt'
+/** 可注入的域（界面上的六个勾选，顺序即界面与消息顺序）。 */
+export type InjectDomainKey = 'scene' | 'memory' | 'mcp' | 'skills' | 'subagents' | 'prompt'
 
 /**
  * 权威域顺序（界面勾选、注入消息先后都按它）。
- * 场景和记忆排第一：它是"当前模式"的框架，先给框架再给内容。
+ * 场景排第一、记忆紧跟：场景是"当前模式"的**框架**（有哪些场景、各自是什么约定），
+ * 记忆是各场景下的**内容** —— 先给框架再给内容。
  */
-export const INJECT_DOMAIN_KEYS = ['memory', 'mcp', 'skills', 'subagents', 'prompt'] as const
+export const INJECT_DOMAIN_KEYS = ['scene', 'memory', 'mcp', 'skills', 'subagents', 'prompt'] as const
 
 /**
  * 域 → 消息来源 kind（轨迹行标签，也是去重时的身份）。
  *
  * 命名对齐官方 `*-catalog` 风格与本插件的工具族（`*_manager_*`）；改名等于换身份，
  * 旧消息会被当成"不在上下文里"而重发一次，所以这几个字符串是稳定契约。
+ *
+ * ⚠️ 0.14.0 把 `memory` 的 kind 从 `scene-memory-manager-catalog` 改成
+ * `memory-manager-catalog`，并把场景拆成独立的 `scene` 域 —— 升级后每个会话**会重发一次**
+ * 这两段（旧消息认不出来）。一次性代价，换来的是两段能各自开关、各自去重。
  */
 export const INJECT_KIND_OF: Record<InjectDomainKey, string> = {
-  memory: 'scene-memory-manager-catalog',
+  scene: 'scene-manager-catalog',
+  memory: 'memory-manager-catalog',
   mcp: 'mcp-manager-catalog',
   skills: 'skill-manager-catalog',
   subagents: 'subagent-manager-catalog',
@@ -108,13 +115,14 @@ export const INJECT_KIND_OF: Record<InjectDomainKey, string> = {
  * 前缀而不是精确名：`memory_manager_*` 有 list/read/set_enabled/save 等，任何一个
  * 都说明模型确实在读这一域。改工具名等于换身份，这几个字符串是稳定契约。
  *
- * 一个域可以挂**多个前缀**：场景和记忆是同一个域（注入段 `scene-memory-manager-catalog`、
- * 界面组标题「场景和记忆」），但工具层分成两个族 —— `memory_manager_*` 管记忆内容，
- * `scene_manager_*` 管场景本身（创建、档案、绑提示词）。遥测按域汇总，两个族都算进来。
- * 顺序不影响判定：两个前缀互不为对方的前缀（`startsWith` 比的是整串）。
+ * 为什么值是**数组**：工具族与注入域不是一一对应的概念 —— 域是"给模型看的信息分组"
+ * （界面上的勾选），族是"操作哪类对象"。0.14.0 里场景与记忆就一度同域两族
+ * （`memory_manager_*` + `scene_manager_*`），拆开后现在每个域各一个前缀。留着数组是
+ * 为了让"一个域挂多个族"在类型上成立，将来加族不必改类型。顺序不影响判定。
  */
 export const DOMAIN_TOOL_PREFIX: Record<InjectDomainKey, readonly string[]> = {
-  memory: ['memory_manager_', 'scene_manager_'],
+  scene: ['scene_manager_'],
+  memory: ['memory_manager_'],
   mcp: ['mcp_manager_'],
   skills: ['skill_manager_'],
   subagents: ['subagent_manager_'],
@@ -255,7 +263,7 @@ export interface InjectSettings {
 
 export const DEFAULT_INJECT_SETTINGS: InjectSettings = {
   underSuppressingPresets: false,
-  domains: { memory: true, mcp: true, skills: true, subagents: true, prompt: true },
+  domains: { scene: true, memory: true, mcp: true, skills: true, subagents: true, prompt: true },
 }
 
 /** 把任意输入夹成合法设置（缺项/类型不对一律退回默认；默认从不阻止注入）。 */
@@ -409,8 +417,13 @@ interface DomainFrame {
 }
 
 const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
+  scene: {
+    title: '本机当前的场景',
+    cue: '在回答涉及本机的事之前，先看这里确认现在处在哪个场景。',
+    supersede: '本份场景取代本次会话中更早注入的同类场景。',
+  },
   memory: {
-    title: '本机当前的场景和记忆',
+    title: '本机当前的记忆',
     cue: '在回答涉及本机的事之前，先核对这里。',
     supersede: '本份记忆取代本次会话中更早注入的同类记忆。',
   },

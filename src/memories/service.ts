@@ -54,7 +54,7 @@ import {
   DROPPED_HEADING, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, INDEX_VERSION, INLINE_BODY_MAX, LEGACY_BUNDLE_DOC,
   MAX_ATTACH_ENTRIES, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_DESCRIPTION_LENGTH,
   MAX_DIRECTORIES, MAX_ENTRIES, MAX_GROUP_SEGMENT_LENGTH, MAX_RULE_BYTES, MAX_SOURCE_DEPTH,
-  SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, SEGMENT_RULE_HINT, SHARED_GROUP, SNAPSHOT_TTL_MS,
+  SCENE_CATALOG_MAX_BYTES, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, SEGMENT_RULE_HINT, SHARED_GROUP, SNAPSHOT_TTL_MS,
   TRUNCATION_MARKER, isValidGroupPath, isValidGroupSegment, message, MEMORIES_TRASH_DIR, fail,
 } from './constants.js'
 // 对外契约保持在原路径：本文件此前直接 export 这两个，index.ts 等已按此 import。
@@ -72,7 +72,7 @@ import {
 // 索引 IO 组与发现/快照组（2026-09-19 抽出）。
 import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, sceneRecordOf, normalizeScenePromptId, pathExists } from './index-io.js'
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
-import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneMemory } from './snapshot.js'
+import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
 import type { ParsedSkillDoc, DiscoveredEntry, Snapshot } from './snapshot.js'
 
 // ── 目录常量与失败约定 ─────────────────────────────────────────────────────
@@ -247,8 +247,13 @@ export interface MemoriesService {
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
   writeOps: ReadonlySet<string>
-  /** 场景记忆段文本（注入通道同步取用；见 src/context-inject.ts）。 */
+  /** 记忆段文本（`memory-manager-catalog`；注入通道同步取用，见 src/context-inject.ts）。 */
   memoryText: () => string
+  /**
+   * 场景段文本（`scene-manager-catalog`）：**启用的场景 + 场景说明**（约定）。
+   * 与记忆段是两个独立注入段，各自去重、各自可被关掉（见 snapshot.ts 的 renderSceneCatalog）。
+   */
+  sceneCatalogText: () => string
   /**
    * 全局提示词正文（注入兜底用；官方 agent-instructions 行没挂时才被取用）：
    * 场景期间 = 当前场景绑定的提示词，否则 = `~/.dsh/AGENTS.md` 正文。
@@ -376,6 +381,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   // 见文件顶部「两相扫描」注释里为什么不选 fs.watch 方案。
 
   let sceneCache: { signature: string; value: SceneMemoryProjection } | null = null
+  let sceneCatalogCache: { signature: string; value: SceneMemoryProjection } | null = null
 
   function sceneMemory(): SceneMemoryProjection {
     const index = readIndexSync(stateDir)
@@ -735,6 +741,18 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   //     **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
   //     （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
   const memoryText = (): string => sceneMemory().text
+  // 场景段。与记忆段是**两次探测**：`probeSceneFilesSync` 没有内部缓存（signature 本身就是
+  // 扫描的结果，缓存不了），代价是有界的一次目录树 stat（**不读正文**），换来两段各自渲染、
+  // 各自去重 —— 只改场景描述时不会连带重发整段记忆正文。
+  const sceneCatalog = (): SceneMemoryProjection => {
+    const index = readIndexSync(stateDir)
+    const probe = probeSceneFilesSync(memoriesRoot, index, isIndexQuarantined(stateDir))
+    if (sceneCatalogCache && sceneCatalogCache.signature === probe.signature) return sceneCatalogCache.value
+    const value = renderSceneCatalog(probe, index, SCENE_CATALOG_MAX_BYTES)
+    sceneCatalogCache = { signature: probe.signature, value }
+    return value
+  }
+  const sceneCatalogText = (): string => sceneCatalog().text
   /**
    * `~/.dsh/AGENTS.md` 正文的上限，与官方那一行的 `maxBytes` 同量级（64 KiB）：超大文件按字节
    * 截断并留一行标记，免得一份手写的巨型基线把上下文撑爆。
@@ -875,6 +893,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     ops,
     writeOps,
     memoryText,
+    sceneCatalogText,
     promptText,
     promptFiles,
     refresh,

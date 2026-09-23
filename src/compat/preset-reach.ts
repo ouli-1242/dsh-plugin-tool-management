@@ -116,7 +116,9 @@ export interface PresetReachRow {
   readonly personaMounted: boolean
   readonly agentInstructions: ModulePresence
   readonly toolSkill: ModulePresence
-  /** Scene memories registered by this plugin. */
+  /** The scene catalog this plugin injects (enabled scenes + their descriptions). */
+  readonly scene: ReachState
+  /** Memory entries this plugin injects (under each scene). */
   readonly memory: ReachState
   /** `~/.dsh/AGENTS.md`, carried by `dsh-agent-instructions`. */
   readonly agentsMd: ReachState
@@ -339,14 +341,14 @@ export function readCompositionFacts(text: string): CompositionFacts {
 export function deriveReach(
   facts: CompositionFacts,
   ctx?: ReachContext,
-): Pick<PresetReachRow, 'memory' | 'agentsMd' | 'skillCatalog' | 'subagent' | 'mcp'> {
+): Pick<PresetReachRow, 'scene' | 'memory' | 'agentsMd' | 'skillCatalog' | 'subagent' | 'mcp'> {
   const suppressed = isSuppressingPreset(facts)
   const personaUnknown = facts.personaComplete === 'unknown'
   const forceUnderSuppressing = ctx?.inject?.underSuppressingPresets === true
   const domainOff = (key: string): boolean => ctx?.inject?.domains?.[key] === false
 
   /**
-   * 本插件自己的文本（场景和记忆 / MCP 服务器与备注 / 技能目录 / 子智能体目录 / 提示词）
+   * 本插件自己的文本（场景 / 记忆 / MCP 服务器与备注 / 技能目录 / 子智能体目录 / 提示词）
    * 走 `agent/pre-step` 注入消息（src/context-inject.ts）—— 不再依赖系统提示词段，所以
    * `persona complete` 压不到它。可达性只看两件事：域开关有没有关、预设压制时有没有开
    * 「仍然注入」。预设信息读不到（`personaUnknown` 且无压制信号）时按可达处理。
@@ -356,6 +358,7 @@ export function deriveReach(
     if (suppressed && !forceUnderSuppressing) return 'suppressed'
     return 'ok'
   }
+  const scene = pluginText('scene')
   const memory = pluginText('memory')
   const mcp = pluginText('mcp')
 
@@ -392,7 +395,7 @@ export function deriveReach(
 
   // MCP 列答的是"服务器清单与备注到不到得了"：宿主工具数不再参与 —— 清单为空时注入出去
   // 也是空段（没什么可看的），"有几台 server"由插件页面回答，不是这一列的事。
-  return { memory, agentsMd, skillCatalog, subagent, mcp }
+  return { scene, memory, agentsMd, skillCatalog, subagent, mcp }
 }
 
 /**
@@ -439,6 +442,7 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
       agentInstructions: 'absent',
       toolSkill: 'absent',
       suppressing: false,
+      scene: 'unknown',
       memory: 'unknown',
       agentsMd: 'unknown',
       skillCatalog: 'unknown',
@@ -459,6 +463,7 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
       agentInstructions: 'absent',
       toolSkill: 'absent',
       suppressing: false,
+      scene: 'unknown',
       memory: 'unknown',
       agentsMd: 'unknown',
       skillCatalog: 'unknown',
@@ -575,7 +580,7 @@ export function reachNoticeFor(
   if (isSuppressingPreset(facts) && inject?.underSuppressingPresets !== true) {
     parts.push(
       `预设「${presetId}」声明只要它自己的文本（persona complete / 关闭运行时上下文）：` +
-      '本插件注入的 —— 场景和记忆、MCP、技能、子智能体、提示词 —— 默认不注入，' +
+      '本插件注入的 —— 场景、记忆、MCP、技能、子智能体、提示词 —— 默认不注入，' +
       '需要时用对应的 list / read 工具按需读取；不要假设你已经看到它们。' +
       '（想让它在这类预设下也注入：插件的「兼容」页 → 注入。）',
     )

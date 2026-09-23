@@ -20,7 +20,15 @@ export const MAX_RULE_BYTES = 1 << 18       // 正文上限 256 KiB
 export const DEFAULT_ORDER = 1000           // 默认投影 order（索引无记录时）
 export const DEFAULT_GROUP_ORDER = 1000     // 新场景默认 order
 export const SNAPSHOT_TTL_MS = 1000         // 读路径短 TTL 缓存，吸收 UI 密集轮询
-export const DEFAULT_MAX_BYTES = 1 << 17    // 场景记忆段预算上限（字节，=128 KiB）
+export const DEFAULT_MAX_BYTES = 1 << 17    // 记忆段预算上限（字节，=128 KiB）
+/**
+ * 场景段（`scene-manager-catalog`）的预算上限（字节，= 4 KiB）。
+ *
+ * 比记忆段小两个数量级是**有意的**：场景段只列"启用的场景 + 场景说明"，而场景是**单选**的
+ * —— 除保留场景（`global` / `_shared`）外至多一个启用，正常不到 1 KiB。给它一个大预算等于
+ * 给一份永远用不到的保险；真有场景描述被写爆的那天，截断标记会说清（`renderSceneCatalog`）。
+ */
+export const SCENE_CATALOG_MAX_BYTES = 1 << 12
 
 // ── 保留场景名 ─────────────────────────────────────────────────────────────
 
@@ -79,17 +87,25 @@ export const ATTACHMENT_LIST_MAX = 10
  * "If a recalled memory conflicts with current information, trust what you observe now"
  * —— 书里（ch11:25）说记忆是 "working notes, not gospel"。上一版把两类塞进一句授权，
  * 对**场景说明**（用户写的约定）是对的，对**记忆条目**（可能是几个月前记下的事实）是错的。
- * 好在这两类在渲染时就分处不同位置：场景说明在 `sceneHeader` 的 `**场景说明：…**` 里，
- * 记忆条目在 `memoryBlock` 里 —— 所以一句话就能分级，不必改数据结构。
+ *
+ * 2026-09-23：两类内容**拆成两个注入段**（用户裁定），分级授权从"一句话同时管两者"变成
+ * "两段各带一句"：
+ *   - `scene-manager-catalog`（场景段）用 `SCENE_CATALOG_NOTE` —— 场景说明是**约定**；
+ *   - `memory-manager-catalog`（记忆段）用 `SCENE_MEMORY_NOTE` —— 条目是**记录**。
+ * 拆段的收益：用户能单独关掉记忆段（省字节）而保留场景约定，且两段各自完整自洽。代价是
+ * 场景名在两段各出现一次（**说明只在场景段**，见 `renderSceneCatalog` 的注释）。
  *
  * 冲突阶梯（第 4 条）来自 Codex `base_instructions/default.md:22-27` 与 Claude Code 的
  * `caller override > agent definition > parent model > default`：把"谁高于谁"写明，
  * 模型才不会在「用户当场说的 ≠ 本机记录」时悬空。写明它还有一个反直觉的好处 ——
  * 它让授权更可信：这说明本条不是要让记忆压过用户，只是要压过模型的默认假设。
  */
-export const SCENE_MEMORY_NOTE = '**用户为本机写的参考信息：「场景说明」是用户的约定，一律照办，覆盖你的默认做法；其余条目是记录，可能已过期 —— 与当前实际情况冲突时以你看到的为准，与用户当场说的冲突时以用户为准。无关时不必提及。以下就是全部信息。**'
+/** 场景段（`scene-manager-catalog`）的授权语：场景说明是**约定**。放段首，管下面所有场景块。 */
+export const SCENE_CATALOG_NOTE = '**以下是用户为本机写的约定（「场景说明」），一律照办，覆盖你的默认做法。**'
+/** 记忆段（`memory-manager-catalog`）的授权语：条目是**记录**。跟着场景块走（见 renderBody）。 */
+export const SCENE_MEMORY_NOTE = '**以下是用户为本机写的记录，可能已过期 —— 与当前实际情况冲突时以你看到的为准，与用户当场说的冲突时以用户为准。无关时不必提及。以下就是全部信息。**'
 /** 有未注入条目时的版本：去掉完整性声明（见上）。 */
-export const SCENE_MEMORY_NOTE_PARTIAL = '**用户为本机写的参考信息：「场景说明」是用户的约定，一律照办，覆盖你的默认做法；其余条目是记录，可能已过期 —— 与当前实际情况冲突时以你看到的为准，与用户当场说的冲突时以用户为准。无关时不必提及。**'
+export const SCENE_MEMORY_NOTE_PARTIAL = '**以下是用户为本机写的记录，可能已过期 —— 与当前实际情况冲突时以你看到的为准，与用户当场说的冲突时以用户为准。无关时不必提及。**'
 
 // ── bundle 与索引 ──────────────────────────────────────────────────────────
 

@@ -727,7 +727,7 @@ export default {
       return out
     }
 
-    // ---------- 注入通道（场景和记忆 / MCP / 技能 / 子智能体 / 提示词，各一条消息）----------
+    // ---------- 注入通道（场景 / 记忆 / MCP / 技能 / 子智能体 / 提示词，各一条消息）----------
     // 这些文本以前是 systemPrompt 段（persona complete 会整段压掉）。现在改走官方的
     // 「每步注入一条合成消息」通道（skill-catalog / AGENTS.md / 时间上下文同款）：
     // 任何预设都到得了，内容没变不重发。**每个域一条自己的消息**（来源 kind 各不同，
@@ -855,16 +855,22 @@ export default {
           // `catalogDepth` 字段的注释。目录正文也按同一个判据过滤（`text(agent)`），两处同源
           // 所以不会分叉。
           //
-          // 记忆域（2026-09-17 用户裁定）：**只在顶层注入**。记忆是"父会话的现场"，不是子代理
-          // 完成任务所需的事实 —— 而且它带着「一律照办，覆盖你的默认做法」这种强主张，塞进
-          // 一次性子会话只会与角色定义争注意力（实测：子代理跑审查时，上下文里同时躺着人设与
-          // 整份场景记忆）。子代理手里有 `memory_manager_list/read`，需要什么自己取；父代理
-          // 上下文里也有记忆，相关事实应当由它写进 `task`（子代理的上下文 = 角色 + 任务）。
+          // 场景与记忆（2026-09-17 用户裁定；2026-09-23 拆成两个域）：**都只在顶层注入**。
+          // 记忆是"父会话的现场"，不是子代理完成任务所需的事实 —— 而且它带着「一律照办，
+          // 覆盖你的默认做法」这种强主张，塞进一次性子会话只会与角色定义争注意力（实测：
+          // 子代理跑审查时，上下文里同时躺着人设与整份记忆）。场景段同理：它说的是"父会话
+          // 现在处在哪个模式"，而子代理根本没有"模式"可言。
+          // 子代理手里有 `memory_manager_list/read` 与 `scene_manager_save`，需要什么自己取；
+          // 父代理上下文里也有，相关事实应当由它写进 `task`（子代理的上下文 = 角色 + 任务）。
           // 其余三域对任何深度都成立：提示词是用户规则（本插件的立身之本就是"覆盖到子代理"）、
           // 技能目录与 MCP 状态是"操作这台机器所需的事实"（子代理手里就有 `skill` / `mcp__*`
           // 工具，不知道清单就只能瞎调）。
           domains: () => [
-            { key: 'memory', name: 'tool-management:scene-memory', label: '场景和记忆', form: 'snapshot', text: () => memoriesService.memoryText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            // 场景（**框架**）：启用的场景 + 场景说明（用户的约定）。排第一 —— 先让模型知道
+            // "现在在哪个场景、这个场景的约定是什么"，再读下面的记忆条目。
+            { key: 'scene', name: 'tool-management:scene', label: '场景', form: 'snapshot', text: () => memoriesService.sceneCatalogText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            // 记忆（**内容**）：各场景下的条目。与场景段同源、同一条 `applicableTo`。
+            { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: () => memoriesService.memoryText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: () => mcp.stateCatalog.text() },
             { key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog', text: () => skillCatalog.text() },
             {

@@ -48,17 +48,25 @@ test('域与工具名前缀双向对得上（对不上就有域永远统计不�
   assert.equal(domainOfTool('read_file'), undefined, '不是本插件的工具不该被认领')
 })
 
-test('记忆族与场景族同域，中途用过的名字不是别名', () => {
+test('记忆族与场景族各归自己的域，中途用过的名字不是别名', () => {
   // 破了这一条的后果是**静默**的：漏配 DOMAIN_TOOL_PREFIX 时编译不报错，症状只是
-  // 兼容页那一组工具掉进「其它」桶、注入实况里「场景和记忆」的调用数永远是 0。
+  // 兼容页那一组工具掉进「其它」桶、注入实况里该域的调用数永远是 0。
   assert.equal(domainOfTool('memory_manager_save'), 'memory')
   assert.equal(domainOfTool('memory_manager_list'), 'memory')
-  // 0.14.0 把场景从记忆族分出去单开一族（`scene_manager_*`），但两族属于**同一个域**
-  // —— 注入段与界面组标题都是「场景和记忆」。漏配这条前缀，场景工具的调用就统计不到。
-  assert.equal(domainOfTool('scene_manager_save'), 'memory')
+  // 0.14.0 把场景从记忆里分出来：注入段、界面勾选、遥测都是**两个域**了
+  // （`scene-manager-catalog` / `memory-manager-catalog`），工具族跟着分开。
+  assert.equal(domainOfTool('scene_manager_save'), 'scene')
   // `scene_memory_manager_*` 是 0.14.0 开发中途用过的名字，**从未发布** —— 不注册别名
   // （注册了就是每轮白付 token）。
   assert.equal(domainOfTool('scene_memory_manager_save'), undefined)
+})
+
+test('注入域里场景排在记忆之前（先给框架再给内容）', () => {
+  // 顺序就是界面勾选顺序与消息顺序。场景是"当前模式的框架"，记忆是它下面的内容 ——
+  // 反过来的话模型先读到一堆条目，才知道自己在哪个场景。
+  const keys = [...INJECT_DOMAIN_KEYS]
+  assert.ok(keys.indexOf('scene') >= 0, '场景必须是独立域')
+  assert.ok(keys.indexOf('scene') < keys.indexOf('memory'), '场景要排在记忆前面')
 })
 
 test('0.14.0 旧工具名迁移：用户「关掉了某条」的意图不能在改名后静默失效', () => {

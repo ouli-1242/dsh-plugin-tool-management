@@ -340,7 +340,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-inject-live-mark-blank{visibility:hidden}
 .dsm-inject-live-size{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
 /* 实况面板的域名格里有多个行内元素（域名 / 体积 / 采纳统计），行内元素之间没有空白节点，
-   不设间距就会挤成「场景和记忆· 3.2 KB」。
+   不设间距就会挤成「场景· 3.2 KB」。
    刻意**不复用** .dsm-compat-name：那一类在另外五个面板里只放一个文本子节点，改成 flex 会让
    长标签变成不可收缩的 flex 项 → 窄容器下溢出而不是换行。所以只在实况面板这一处加 gap。 */
 .dsm-inject-live-name{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px}

@@ -1097,7 +1097,7 @@
               React.createElement('span', null, t('compat.inject.domains')),
               React.createElement('span', { className: 'dsm-seg-group-line' })),
             React.createElement('div', { className: 'dsm-inject-domains' },
-              ['memory', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
+              ['scene', 'memory', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
                 // 技能与提示词两域在标准类预设下由宿主送、本插件让位 —— 关掉它们时本插件会连
                 // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
                 // 那两项一句 title，免得用户以为"关了没用"。
@@ -1480,9 +1480,10 @@
                 React.createElement('span', { className: 'dsm-compat-name dsm-reach-name' },
                   React.createElement('span', null, (row.name || row.presetId) + (row.isDefault ? ' · ' + t('compat.reach.default') : '')),
                   tags.length ? React.createElement('span', { className: 'dsm-tags' }, tags) : null),
-                // 芯片顺序与「注入」块的勾选顺序一致（用户裁定 2026-09-16）：
-                // 场景和记忆 → MCP → 技能 → 子智能体 → 提示词。
+                // 芯片顺序与「注入」块的勾选顺序一致（用户裁定 2026-09-16；2026-09-23 起
+                // 场景与记忆是两个域，各占一枚）：场景 → 记忆 → MCP → 技能 → 子智能体 → 提示词。
                 React.createElement('span', { className: 'dsm-compat-reach-marks' },
+                  chip(t('compat.reach.mark.scene'), row.scene),
                   chip(t('compat.reach.mark.memory'), row.memory),
                   chip(t('compat.reach.mark.mcp'), row.mcp),
                   chip(t('compat.reach.mark.skill'), row.skillCatalog),
