@@ -243,11 +243,31 @@ export function attachmentLine(file: SceneMemoryFile): string {
 
 // ── 单条记忆的渲染 ─────────────────────────────────────────────────────────
 
-/** 多行正文整体缩进 2 格（列在条目内容列上），空行保持空行、不加尾随空白。 */
-export const indentBody = (text: string): string => text
-  .split('\n')
-  .map((line) => (line === '' ? line : '  ' + line))
-  .join('\n')
+/**
+ * 多行正文的渲染形态：**围栏代码块**，整体缩进 2 格挂在条目下（2026-09-23 用户裁定）。
+ *
+ * 为什么不是"缩进 2 格就完事"（这是上一版的实现，被实测推翻）：markdown 里缩进 ≤3 格的 `#`
+ * **仍然算标题**，所以正文里一句手写的 `# 代码/需求` 会渲染成 H1，**盖过容器自己的
+ * `## 场景：X`** —— 用户看到的就是这个：内容看起来"逃出了条目"，与场景标题平级甚至更高。
+ * 缩到 4 格能压住标题（块级标记都要求 ≤3 格缩进），但正文里的列表/引用只是被"压平"，
+ * 视觉上仍与条目正文同级，达不到"明显从属"。
+ *
+ * 围栏块一次解决两件事（用户 2026-09-23 明确要这两条）：
+ *   - **不能逃出**：块内一切都是字面量，正文的 `#` / `>` / `---` / ``` 再也无法参与外围结构；
+ *   - **明显从属**：`<pre>` 的缩进在渲染视图里可见、复制出来也不丢，正文明确挂在条目下。
+ *
+ * 代价如实记：块内的行内 markdown（`**粗体**`、链接）按字面显示、不再被渲染。记忆正文的定位
+ * 是"记录"（可能过期、以实际情况为准），按字面呈现比让它参与排版更贴合这个定位。
+ *
+ * 围栏用**反引号**且长度取"正文里最长反引号串 + 1"（最少 3 个）：正文自带 ``` 时不会把块
+ * 提前闭合（闭合需要**至少**与开栏等长的反引号串）。
+ */
+export const bodyBlock = (text: string): string => {
+  const longest = (text.match(/`+/g) ?? []).reduce((n, run) => Math.max(n, run.length), 0)
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  const lines = text.split('\n').map((line) => (line === '' ? line : '  ' + line))
+  return ['  ' + fence, ...lines, '  ' + fence].join('\n')
+}
 
 /** 括号注解用的显式描述：派生描述与正文重复、不进段（只存在于界面投影）；换行压成单行，避免把「一行一条」的列表项撑断。 */
 export const explicitDescriptionOf = (f: SceneMemoryFile): string => (
@@ -258,7 +278,7 @@ export const explicitDescriptionOf = (f: SceneMemoryFile): string => (
  * 单条信息的渲染形态 —— **能一行就一行，但恒为列表项**。
  *
  *   单行且不长的正文 → `- **名称**（描述） — 正文`（与 MCP / 子智能体两个段的列表同形；无显式描述时括号不出现）
- *   多行或过长的正文 → `- **名称**（描述）` + 空行 + 缩进 2 格的正文（挂在条目下）
+ *   多行或过长的正文 → `- **名称**（描述）` + 空行 + **围栏代码块里的正文**（挂在条目下；理由见 `bodyBlock`）
  *
  * 名称恒为标题：它就是这条记忆的身份（工具 id `<场景>/<名称>`、bundle 目录/文件名都以它为准），
  * 用户说「记忆里的 X」、模型再调 `memory_manager_*` 时都对得上号；显式描述是括号注解，不抢标题。
@@ -270,7 +290,8 @@ export const explicitDescriptionOf = (f: SceneMemoryFile): string => (
  *
  * 为什么要分两种：用户常有十几条「一句话事实」（「提交格式：PDF」），每条都占标题 + 空行 +
  * 正文三行，整段会散成一长串标题；压成一行后十条信息就是十行。多行正文是**用户写的完整
- * Markdown**（可能自带标题、代码块、嵌套列表），整体缩进 2 格挂到条目下，结构原样保留。
+ * Markdown**（可能自带标题、代码块、嵌套列表），放进围栏块挂到条目下 —— 上一版让它以普通
+ * 段落参与外围排版，结果正文里的 `#` 会盖过 `## 场景：X`（见 `bodyBlock` 的说明）。
  *
  * 返回值带 `inline`：调用方据此决定下一条记忆前要不要空行（单行条目连续排列，其余空行分隔）。
  */
@@ -282,7 +303,7 @@ export function memoryBlock(file: SceneMemoryFile): { text: string; inline: bool
   const inline = text === '' || (!text.includes('\n') && text.length <= INLINE_BODY_MAX)
   const head = text === ''
     ? `- ${title}`
-    : (inline ? `- ${title} — ${text}` : `- ${title}\n\n${indentBody(text)}`)
+    : (inline ? `- ${title} — ${text}` : `- ${title}\n\n${bodyBlock(text)}`)
   const attach = attachmentLine(file)
   if (attach === '') return { text: `${head}\n`, inline }
   // 附件行恒为缩进子项：只用 `- ` 会被解析成与记忆**同级**的列表项（`- A` / `- 附件目录：A的` /

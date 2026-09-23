@@ -66,7 +66,7 @@ export { parseModeState } from './index-io.js'
 import {
   attachmentLine, attachmentNamesSync, attachmentSummarySync, collapseActiveForNewScene,
   compareSceneBuckets, defaultSceneDescription, enabledSceneOf, ensureSceneRecords, explicitDescriptionOf,
-  indentBody, memoryBlock, normalizeActive, resolveActiveScenes, sceneHeader, sceneHeading, sceneLabel,
+  bodyBlock, memoryBlock, normalizeActive, resolveActiveScenes, sceneHeader, sceneHeading, sceneLabel,
   sceneOf, sceneOrderOf, signatureOfIndex,
 } from './projection.js'
 // 索引 IO 组与发现/快照组（2026-09-19 抽出）。
