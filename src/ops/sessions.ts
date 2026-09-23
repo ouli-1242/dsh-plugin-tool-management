@@ -353,7 +353,7 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
             const docAbs = join(deps.promptsDir, id, 'AGENTS.md')
             if (!isInsideRoot(deps.promptsDir, docAbs)) { missing.push(id); continue }
             entries.push({ zip: `${id}/AGENTS.md`, abs: docAbs })
-            // 描述侧车（「只给使用者看」的那句）随预设一起走：导出再导入不该把它丢掉。
+            // 描述侧车（预设那句说明）随预设一起走：导出再导入不该把它丢掉。
             const metaAbs = join(deps.promptsDir, id, 'meta.json')
             try { if ((await stat(metaAbs)).isFile()) entries.push({ zip: `${id}/meta.json`, abs: metaAbs }) } catch { /* 没写描述 */ }
           }

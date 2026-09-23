@@ -1696,6 +1696,26 @@ export default {
     })
 
 
+    // 提示词预设域的 op 表。单独提出来是为了让**模型工具**能复用同一份判定：
+    // `prompt_manager_list` 以前直调 `promptsService.list()`，于是它报的「生效中」是
+    // **文件比对**口径（预设正文 == ~/.dsh/AGENTS.md），而界面报的是 `agentsmd-list` 的口径
+    // （启用的场景绑了预设时，**只有那份**算生效中）—— 同一件事两个答案，场景驱动时工具就在
+    // 说假话。工具改走 op 之后两边只有一份判定。
+    const promptOps = buildPromptOps({
+      promptsService,
+      scenePromptSync,
+      // 显式转发而不是整表传入：这两个 op 名字写死在这里，rules 域哪天改名会立刻红，
+      // 不会静默变成 undefined 调用。
+      rulesOps: {
+        'rules-list': (args: any) => memoriesService.ops['rules-list'](args),
+        'rules-rebind-prompt': (args: any) => memoriesService.ops['rules-rebind-prompt'](args),
+      },
+      applyPresetGuarded,
+      withAgentsMdSync,
+      promptRefReason,
+      warn: (m: string) => { ctx.logger?.warn?.(m) },
+    })
+
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
       'skill-open': skillOpen,
@@ -1743,23 +1763,8 @@ export default {
         message,
         compatLog,
       }),
-      // AGENTS.md / 提示词预设域（ops/prompts.ts 提供）：agentsmd-list / read / create /
-      // update / apply / get-current / remove / import / trash-list / trash-restore /
-      // trash-delete。
-      ...buildPromptOps({
-        promptsService,
-        scenePromptSync,
-        // 显式转发而不是整表传入：这两个 op 名字写死在这里，rules 域哪天改名会立刻红，
-        // 不会静默变成 undefined 调用。
-        rulesOps: {
-          'rules-list': (args: any) => memoriesService.ops['rules-list'](args),
-          'rules-rebind-prompt': (args: any) => memoriesService.ops['rules-rebind-prompt'](args),
-        },
-        applyPresetGuarded,
-        withAgentsMdSync,
-        promptRefReason,
-        warn: (m: string) => { ctx.logger?.warn?.(m) },
-      }),
+      // AGENTS.md / 提示词预设域（ops/prompts.ts 提供，见上方 promptOps）。
+      ...promptOps,
       // 归档会话域（ops/history.ts 提供）：history-list / history-sessions /
       // history-export-defaults / dir-list / history-archive / history-archive-batch /
       // history-unarchive / history-delete / history-unarchive-batch / history-delete-batch /
@@ -2244,7 +2249,9 @@ export default {
       // 让模型驱动的工具在进程内读明文凭据，是另一条没人设计过、也没有测试覆盖的路径。
     })
     buildSkillTools({ ...toolDeps, skillsOps: skillsService.ops })
-    buildPromptTools({ ...toolDeps, promptsService, applyPresetGuarded, promptsDir })
+    // 传 op 表而不是 promptsService：「生效中」的判定只有 `agentsmd-list` 里有（场景绑定
+    // 的那份才算），直调服务会得到文件比对口径 —— 场景驱动时工具会报一个与界面不同的答案。
+    buildPromptTools({ ...toolDeps, promptOps, applyPresetGuarded, promptsDir })
     buildSceneMemoryTools({ ...toolDeps, rulesOps: memoriesService.ops })
     buildSubagentTools({
       ...toolDeps,

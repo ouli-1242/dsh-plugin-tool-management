@@ -844,7 +844,9 @@
               id: id,
               ...(content ? { content: content } : {}),
               ...(from ? { from: from } : {}),
-              // 描述只给使用者看（存 meta.json，不进 AGENTS.md）。
+              // 描述存 meta.json，**不写进 AGENTS.md**（那个文件的正文会被原样注入）。
+              // 0.14.0 起模型也在 `prompt_manager_list` 的清单里看得到它，所以有了字数上限
+              // （输入框那枚 maxLength / 计数就是它）。
               description: String(description == null ? '' : description),
             }).then(function (res) {
               setBusy(null)
@@ -1001,8 +1003,14 @@
                 React.createElement('input', { className: 'dsm-control', value: editModal.nextId || '', onChange: function (e) { setEditModal(Object.assign({}, editModal, { nextId: e.target.value, error: null })) } }),
                 React.createElement('p', { className: 'dsm-help' }, t('agm.field.id.hint'))),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, t('agm.field.desc')),
-                React.createElement('input', { className: 'dsm-control', placeholder: t('agm.field.desc.placeholder'), value: editModal.description || '', onChange: function (e) { setEditModal(Object.assign({}, editModal, { description: e.target.value })) } })),
+                // 上限与宿主侧 `src/prompts/service.ts` 的 `DEFAULT_PRESET_DESC_MAX_LENGTH`
+                // 同数（客户端镜像 `PRESET_DESC_MAX`）：描述从 0.14.0 起会进模型清单
+                // （`prompt_manager_list` 要打出来，模型才能在预设之间做选择），所以它有了
+                // 预算 —— 写多少模型就能读到多少，与 MCP 备注那条同一条口径。
+                React.createElement('div', { className: 'dsm-budget-meta' },
+                  React.createElement('label', { className: 'dsm-label' }, t('agm.field.desc')),
+                  React.createElement('span', { className: 'dsm-char-count' + (String(editModal.description || '').length > PRESET_DESC_MAX ? ' dsm-char-over' : '') }, String(editModal.description || '').length + ' / ' + PRESET_DESC_MAX)),
+                React.createElement('input', { className: 'dsm-control', maxLength: PRESET_DESC_MAX, placeholder: t('agm.field.desc.placeholder'), value: editModal.description || '', onChange: function (e) { setEditModal(Object.assign({}, editModal, { description: e.target.value })) } })),
               React.createElement('div', { className: 'dsm-field' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', value: editModal.content, onChange: function (e) { setEditModal(Object.assign({}, editModal, { content: e.target.value })) } })),
@@ -1017,8 +1025,10 @@
                 React.createElement('input', { className: 'dsm-control', placeholder: t('agm.field.id.placeholder'), value: createModal.id, onChange: function (e) { setCreateModal(Object.assign({}, createModal, { id: e.target.value, error: null })) } }),
                 React.createElement('p', { className: 'dsm-help' }, t('agm.field.id.hint'))),
               React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, t('agm.field.desc')),
-                React.createElement('input', { className: 'dsm-control', placeholder: t('agm.field.desc.placeholder'), value: createModal.description || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { description: e.target.value })) } })),
+                React.createElement('div', { className: 'dsm-budget-meta' },
+                  React.createElement('label', { className: 'dsm-label' }, t('agm.field.desc')),
+                  React.createElement('span', { className: 'dsm-char-count' + (String(createModal.description || '').length > PRESET_DESC_MAX ? ' dsm-char-over' : '') }, String(createModal.description || '').length + ' / ' + PRESET_DESC_MAX)),
+                React.createElement('input', { className: 'dsm-control', maxLength: PRESET_DESC_MAX, placeholder: t('agm.field.desc.placeholder'), value: createModal.description || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { description: e.target.value })) } })),
               (state.presets || []).length ? React.createElement('div', { className: 'dsm-field' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.copyFrom')),
                 React.createElement(SourceSelect, {

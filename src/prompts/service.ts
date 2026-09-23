@@ -19,8 +19,29 @@ import { isValidPresetId, LAST_APPLIED_PRESET_ID, normalizePresetId } from './pr
 import { listTrashEntries, moveOutOfTrash, moveToTrash, purgeTrashEntry, readTrashEntry, type TrashEntry } from '../hub.js'
 
 const FILENAME = 'AGENTS.md'
-/** 描述侧车：与 AGENTS.md 同目录，避免把「只给使用者看」的文字注入提示词。 */
+/** 描述侧车：与 AGENTS.md 同目录，避免描述的文字被当成提示词正文注入。 */
 const META_FILE = 'meta.json'
+/**
+ * 预设描述的字数上限。界面上那两枚输入框（提示词页的新建 / 编辑弹窗）用同一个数当
+ * `maxLength` 与字数计数的分母，客户端镜像在 `42-shared-ui.js` 的 `PRESET_DESC_MAX`
+ * —— 改这里要一起改它。
+ *
+ * 为什么需要它（0.14.0）：描述此前是"只给使用者看"的，一个字都不进模型上下文，所以没有
+ * 上限也说得过去。现在 `prompt_manager_list` 会把它打给模型（否则模型无法在预设之间做
+ * 选择），它就成了**常驻成本**，必须有个预算。300 与 MCP 备注同数（那一条也是"给模型看的
+ * 一句用户提示"），但那是两个各自独立的预算，别当成同一个常量共用。
+ */
+export const DEFAULT_PRESET_DESC_MAX_LENGTH = 300
+
+/**
+ * 压成一行并按上限截断。与 `normalizeMcpNote`（`../mcp/state-section.ts`）同形：两处都是
+ * "给模型看的一句用户文字"，口径必须一致，否则同一句在界面、段、工具里会是三个样子。
+ */
+export function normalizePresetDescription(value: unknown, maxLength = DEFAULT_PRESET_DESC_MAX_LENGTH): string {
+  const flat = String(value ?? '').replaceAll(/\s+/g, ' ').trim()
+  if (!flat) return ''
+  return flat.length <= maxLength ? flat : `${flat.slice(0, maxLength - 3)}...`
+}
 const LAST_APPLIED_ID = LAST_APPLIED_PRESET_ID
 /**
  * 「最近一次应用」的记录侧车。是**文件**不是目录，所以 `list()` / `ensureInit()` 的
@@ -48,7 +69,13 @@ export interface PromptPresetRow {
    * 有它，模型侧列表在手改之后仍能给出「这份文件从哪来」，而不必退化成全列。
    */
   lastApplied?: boolean
-  /** 「只给使用者看」的一句话说明。存 `<id>/meta.json`，**绝不写进 AGENTS.md**（正文会被原样注入）。 */
+  /**
+   * 一句话说明。存 `<id>/meta.json`，**绝不写进 AGENTS.md**（正文会被原样注入）。
+   *
+   * 0.14.0 起**模型也看得到**：`prompt_manager_list` 会把它打出来（否则模型无法在预设之间
+   * 做选择）。原先这里写的是「只给使用者看」，那句话从这一刻起不成立了 —— 所以它同时有了
+   * 字数上限（见 `DEFAULT_PRESET_DESC_MAX_LENGTH`）。
+   */
   description?: string
 }
 
@@ -92,9 +119,11 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
     }
   }
 
-  // ── 描述（「只给使用者看」）────────────────────────────────────────────────
+  // ── 描述（给人看，也进模型清单）────────────────────────────────────────────
   // 存在预设目录的 `meta.json` 里，**不写进 AGENTS.md**：那个文件的正文会被原样注入
   // 系统提示词，把「这份预设是干什么的」写进去等于凭空给模型加了一段说明。
+  // 0.14.0 起另有一条通道会把它带给模型 —— `prompt_manager_list` 的清单行（模型要在预设
+  // 之间做选择，而 id 本身不说明用途），所以它有了 `DEFAULT_PRESET_DESC_MAX_LENGTH` 这条预算。
   // 读写都 best-effort：描述坏掉/写不进去不该让「保存预设」失败（正文才是本体）。
 
   async function readDescription(id: string): Promise<string> {

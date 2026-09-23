@@ -243,14 +243,16 @@ function enabledMemoryCount(rules) {
     function removedSkillRoots(roots) { return (roots || []).filter(function (root) { return root.removed === true; }); }
     var MAX_UPLOAD_ARCHIVE_BYTES = 32 << 20, MAX_UPLOAD_ENTRY_BYTES = 32 << 20, MAX_UPLOAD_TOTAL_BYTES = 64 << 20, MAX_UPLOAD_ENTRIES = 1000;
     /**
-     * 注入段里"模型实际能看到多长"的两个截断长度，同时当输入框的 `maxLength` 与字数计数的分母
+     * 注入段里"模型实际能看到多长"的截断长度，同时当输入框的 `maxLength` 与字数计数的分母
      * —— 写多少就能被看到多少，不会出现"界面让你写 500 字、模型只读到前 300"。
      *
      * ⚠️ 宿主侧各有一份真相：`src/mcp/state-section.ts` 的 `DEFAULT_MCP_NOTE_MAX_LENGTH`、
-     * `src/skills/catalog.ts` 与 `src/subagents/catalog.ts` 的 `..._DESCRIPTION_MAX_LENGTH`。
+     * `src/skills/catalog.ts` 与 `src/subagents/catalog.ts` 的 `..._DESCRIPTION_MAX_LENGTH`、
+     * `src/prompts/service.ts` 的 `DEFAULT_PRESET_DESC_MAX_LENGTH`（提示词预设描述 —— 0.14.0
+     * 起它会进模型清单，所以有了预算）。
      * 两边没有编译期约束（计划文档 A3 说的"同一事实两处写"），改一处必须改另一处。
      */
-    var MCP_NOTE_MAX = 300, CATALOG_DESC_MAX = 500;
+    var MCP_NOTE_MAX = 300, CATALOG_DESC_MAX = 500, PRESET_DESC_MAX = 300;
     function uploadFilePath(file) { return String(file && (file._dssmPath || file.webkitRelativePath || file.name) || "").replace(/\\/g, "/"); }
     function inspectUploadSelection(files) {
       var list = Array.prototype.slice.call(files || []); if (!list.length) return null;
