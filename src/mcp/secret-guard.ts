@@ -71,6 +71,25 @@ export function isMaskedUrl(value: unknown): boolean {
   }
 }
 
+/**
+ * 把 URL 的查询串换成 `<redacted>` 哨兵 —— 打码的**产出**侧，与上面的 `isMaskedUrl` 配对。
+ *
+ * 放在这里而不是 manager.ts 里：本模块是这两条打码形态的唯一口径，而使用方已经有两个
+ * ——MCP 列表视图（`mcpmRowsWithNotes`），以及模型调 `mcp_manager_save` 时的确认卡
+ * （卡里要回显"新 URL"，但用户批准的是「跑这个地址」，查询串里的凭据不该明文进卡片）。
+ * 两处各写一份的话，改了一处就会漂成两种打码形态，而 `isMaskedUrl` 只认其中一种。
+ */
+export function maskUrlQuery(url: string | null): string | null {
+  if (!url) return url
+  try {
+    const parsed = new URL(url)
+    if (parsed.search) parsed.search = '?' + URL_REDACTED_QUERY
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
 export interface MaskedUrlOutcome {
   /** 可以直接写盘的 URL。 */
   value: string

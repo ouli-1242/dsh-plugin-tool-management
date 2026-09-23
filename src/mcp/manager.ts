@@ -30,7 +30,7 @@ import {
   appendBlock, buildDisableBlock, buildInsertBlock, parseRows, removeEntryAll, removeMarked,
   spliceRanges, splitLines, type ManagedRow,
 } from './patch-yaml.js'
-import { describeMaskedOutcome, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './secret-guard.js'
+import { describeMaskedOutcome, maskUrlQuery, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './secret-guard.js'
 
 /** 本文件需要的外部能力（全部显式传入，不再靠闭包捕获）。 */
 export interface McpManagerDeps {
@@ -723,14 +723,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     }
     return out
   }
-  function maskUrlQuery(url: string | null): string | null {
-    if (!url) return url
-    try {
-      const parsed = new URL(url)
-      if (parsed.search) parsed.search = '?<redacted>'
-      return parsed.toString()
-    } catch (e) { return url }
-  }
+  // `maskUrlQuery` 已挪到 ./secret-guard.js：那里是两条打码形态的唯一口径，而使用方
+  // 现在有两个（本文件的列表视图 + index.ts 的确认卡）。
   /** Shared UI rows: mcpmList plus notes, secrets masked unless `reveal`. */
   async function mcpmRowsWithNotes(reveal: boolean): Promise<any> {
     const result: any = await mcpmList()

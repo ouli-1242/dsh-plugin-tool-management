@@ -55,6 +55,8 @@ import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 import { assessPresetReach, injectionFactsOf, presetRosterOf, readCompositionFacts, reachNoticeForAgent } from './compat/preset-reach.js'
 import { TOKEN_CODE_BAD, TOKEN_MSG, fenceRejection, secretOpRejection, type ConnectionSeam } from './http-fence.js'
 import { createMcpManager } from './mcp/manager.js'
+// 确认卡回显"新 URL"时要打码（查询串里的凭据不该明文进卡片），口径与列表视图同一份实现。
+import { maskUrlQuery } from './mcp/secret-guard.js'
 import { createCandidates } from './scenes/candidates.js'
 import type { PluginInventoryService, ToolsService } from './mcp/manager.js'
 
@@ -2229,9 +2231,17 @@ export default {
     buildMcpTools({
       ...toolDeps,
       mcpmListView: mcp.mcpmListView,
+      mcpmTools: mcp.ops['mcpm-tools'],
       mcpmSetEnabled: mcp.ops['mcpm-set-enabled'],
       mcpmRestart: mcp.ops['mcpm-restart'],
+      mcpmToolEnabled: mcp.ops['mcpm-tool-enabled'],
       mcpmAdd: mcp.ops['mcpm-add'],
+      mcpmEdit: mcp.ops['mcpm-edit'],
+      mcpmNote: mcp.ops['mcpm-note'],
+      // **故意不接 `mcpm-reveal`**：`mcp_manager_save` 的改分支用 `mcpmListView()` 的
+      // 打码视图填回省略字段，由 `mcpm-edit` 的 `resolveMaskedKv` / `resolveMaskedUrl`
+      // 还原真值 —— 那条路本来就是给"表单里出现打码值"设计的（界面编辑框预填的就是它）。
+      // 让模型驱动的工具在进程内读明文凭据，是另一条没人设计过、也没有测试覆盖的路径。
     })
     buildSkillTools({ ...toolDeps, skillsOps: skillsService.ops })
     buildPromptTools({ ...toolDeps, promptsService, applyPresetGuarded, promptsDir })
@@ -2259,9 +2269,10 @@ export default {
         subagent_manager_run: '「运行子代理」',
         subagent_manager_create: '「新建人设」',
         subagent_manager_update: '「修改人设」',
-        // 模型侧只有这一个工具能塞进任意 command/args（改命令的 mcpm-edit 不对外注册成工具），
-        // 所以门禁加在它这里就覆盖了整个模型可达面。
-        mcp_manager_add: '「新增 MCP 服务器」',
+        // 0.14.0 起 add 与 edit 并成 save，模型侧能塞进任意 command/args 的仍只有这一个工具
+        // —— 门禁挂在它上面即覆盖整个模型可达面。标签取中性的「保存」：改一台已有服务器
+        // （含改 URL / 命令）与新增一台是同一档危险度，但"新增"在改分支上是句假话。
+        mcp_manager_save: '「保存 MCP 服务器」',
       }
       const bypassedByFullAccess = (exec: any): boolean => {
         if (!isApprovalNever(ctx, exec)) return false
@@ -2309,24 +2320,46 @@ export default {
         if (exec.name === 'skill_manager_create') {
           return Promise.resolve({ kind: 'ask', reason: 'Create a new skill under ~/.dsh/tool-management/skills' })
         }
-        if (exec.name === 'mcp_manager_add') {
+        if (exec.name === 'mcp_manager_save') {
           // 为什么必须问：stdio 服务器是宿主按你给的 command/args **spawn** 出来的进程
           // （见 http-fence.ts 对 mcpm-add 的说明），且这条目会写进配置长期生效。
           // 写一个技能文件都要问，注册一条能起进程的配置却直接放行，是门禁倒挂 ——
           // 危险度与门禁强度必须同向。
           // 卡里回显将执行的命令行：用户批准的是「跑这条命令」，不是「加一个服务器」。
+          // 0.14.0 起 save 也覆盖"改一台已存在的服务器"，此时把**旧命令**一并摆出来：
+          // 「把 `npx A` 改成 `npx B`」与「新增一台跑 `npx B` 的」是两件不同的事，
+          // 只报新那句会让一次改命令看起来像新建。
           const a = (exec && exec.arguments) || {}
+          const server = String(a.server || '')
           const transport = String(a.transport || '')
           const cmd = [a.command, a.args]
             .map((x) => String(x ?? '').trim())
             .filter((x) => x !== '')
             .join(' ')
-          const detail = transport === 'stdio'
+          // 新 URL 走打码形态：查询串里的凭据不该明文进确认卡（与列表视图同一份实现）。
+          // 旧 URL 已经是打码的 —— 它来自列表视图。
+          const nextLine = transport === 'stdio'
             ? (cmd ? `stdio command: ${cmd}` : 'stdio command: (empty)')
-            : `${transport || 'streamable-http'} url: ${String(a.url || '(empty)')}`
+            : `${transport || 'streamable-http'} url: ${String(maskUrlQuery(String(a.url || '')) || '(empty)')}`
+          let cur: any = null
+          try {
+            const r: any = await mcp.mcpmListView()
+            cur = ((r && r.rows) || []).find((x: any) => String(x.serverName) === server) || null
+          } catch { /* 拿不到现状就按"新增"的口径报：宁可少说一句，也不因此拦住操作 */ }
+          let detail = nextLine
+          if (cur) {
+            const curCmd = [cur.command, Array.isArray(cur.args) ? cur.args.join(' ') : cur.args]
+              .map((x) => String(x ?? '').trim())
+              .filter((x) => x !== '')
+              .join(' ')
+            const curLine = String(cur.transport) === 'stdio'
+              ? `stdio command: ${curCmd || '(empty)'}`
+              : `${String(cur.transport || 'streamable-http')} url: ${String(cur.url || '(empty)')}`
+            detail = `current — ${curLine}; new — ${nextLine}`
+          }
           return Promise.resolve({
             kind: 'ask',
-            reason: `Add MCP server「${String(a.serverName || '')}」— ${detail}. A stdio server is spawned by the host and the entry persists in the config.`,
+            reason: `${cur ? 'Update' : 'Add'} MCP server「${server}」— ${detail}. A stdio server is spawned by the host and the entry persists in the config.`,
           })
         }
         if (exec.name === 'scene_memory_manager_save') {
