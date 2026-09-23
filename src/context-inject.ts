@@ -416,25 +416,46 @@ interface DomainFrame {
   supersede: string
 }
 
+/**
+ * 权威声明的统一句（用户 2026-09-23 看到实际注入后要求精简）。
+ *
+ * 此前五个域各写一份 —— `本份场景取代…同类场景` / `本份记忆取代…同类记忆` /
+ * `本份状态…` / `本份目录…` —— 说的是**同一条规则**却用了四种措辞，模型读到四条不同的句子
+ * 还得自己判断它们是不是一条。统一成一句：被取代的是"同类内容"，与域无关。
+ *
+ * 为什么不能并进 `cue`（那能省下整整一行 ≈16 tok/段）：用户 2026-09-18 定过"权威声明单独
+ * 成句" —— 它和动作句是两种东西（一句说"什么时候用它"，一句说"以哪份为准"），合并后容易
+ * 被一眼带过。所以这里的收益只有约 6 tok/轮，**主要收益是消除四种措辞**，不是省字节。
+ */
+const SUPERSEDE_NOTE = '本份取代本次会话中更早注入的同类内容。'
+
 const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   scene: {
-    // 线索这一句是"场景是什么"的**唯一**出处（用户 2026-09-23 裁定）：正文只给"当前启用的是
-    // 哪个 + 它是什么"（`sceneLine`），授权语已删 —— 场景说明是**标签**（「写代码」），不是
-    // 要照办的约定。上一版把它写成"一律照办、覆盖你的默认做法"，模型被要求"照办一个标签"。
+    // 场景段此前是四个板块里**唯一没有动作句**的 —— 首句只说"场景是什么"，模型读完不知道
+    // 该拿它做什么（用户 2026-09-23 看到实际注入后："感觉不对劲，但说不上来"）。
+    //
+    // 根因是**场景的语义被窄化了**：它其实是"切换六处开关的运行时模式"（`scene-mode-set`
+    // 的三步：服务器级/来源级 → 工具级/技能级 → 人设 + 备注），而注入里只呈现了它作为
+    // "记忆分组标签"的那一面 —— 四个板块并列，看不出场景是"因"、其余四段是"果"。
+    //
+    // 现在两句各担一半：cue 是动作句（与另三段同形），how 是因果句（把四个板块串起来）。
+    // 模型对场景本身**没有动作可做**（启用与进入在界面上，`scene_manager_save` 只做定义层），
+    // 所以 cue 指向"它会改变你看到的东西"，而不是"你去操作它"。
     title: '本机当前的场景',
-    cue: '场景是用户给这台机器配的工作模式；下面是当前启用的那个。',
-    supersede: '本份场景取代本次会话中更早注入的同类场景。',
+    cue: '在按默认方式做事之前，先确认当前是这个场景。',
+    how: '下面的记忆 / MCP / 技能 / 人设都已经按它筛过。',
+    supersede: SUPERSEDE_NOTE,
   },
   memory: {
     title: '本机当前的记忆',
     cue: '在回答涉及本机的事之前，先核对这里。',
-    supersede: '本份记忆取代本次会话中更早注入的同类记忆。',
+    supersede: SUPERSEDE_NOTE,
   },
   mcp: {
     title: '本机 MCP 服务器的当前状态',
     cue: '要用某个 MCP 工具前，先在这里确认这台服务器在不在、开没开。',
     how: '工具名是 `mcp__<服务器>__<工具>`；带「用户提示：」的行是用户写给这台服务器的决策提示，选服务器之前先看一眼。',
-    supersede: '本份状态取代本次会话中更早注入的同类状态。',
+    supersede: SUPERSEDE_NOTE,
   },
   skills: {
     title: '本机技能目录',
@@ -444,7 +465,7 @@ const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     how: (toolHidden) => toolHidden('skill_manager_read')
       ? '本预设没有官方 `skill` 工具：目录只有摘要，读完再照做。'
       : '本预设没有官方 `skill` 工具：要正文用 `skill_manager_read`（按名字直接给正文与路径）；目录只有摘要，读完再照做。',
-    supersede: '本份目录取代本次会话中更早注入的同类目录；只列当前可调用的技能。',
+    supersede: `${SUPERSEDE_NOTE.slice(0, -1)}；只列当前可调用的技能。`,
   },
   subagents: {
     title: '可委派的子智能体',
@@ -458,7 +479,7 @@ const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     how: (toolHidden) => toolHidden('subagent_manager_run')
       ? '本会话没有带人设的委派工具；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。'
       : '贴合人设的任务一律用 `subagent_manager_run`（要它看到本次会话就开 `inherit`）；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。',
-    supersede: '本份目录取代本次会话中更早注入的同类目录。',
+    supersede: SUPERSEDE_NOTE,
   },
   prompt: {
     title: '本机提示词',

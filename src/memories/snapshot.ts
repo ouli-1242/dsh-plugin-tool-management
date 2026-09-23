@@ -662,10 +662,7 @@ export function renderSceneMemory(
       if (c.scene !== current) {
         if (buf !== '') chunks.push(buf)
         current = c.scene
-        // 引导语跟着**场景块**走（场景说明之后、条目之前）：它管的就是下面这些条目，
-        // 放最顶层会飘在场景之外（用户实测反馈「怎么跑到最顶层了」）。场景数有上限
-        // （`global`/`_shared` 恒常启用 + 至多一个启用场景），最多出现 3 次，代价可接受。
-        buf = `${c.header}${note}\n\n`
+        buf = c.header
         prevInline = false
       }
       const inline = c.inline
@@ -674,7 +671,17 @@ export function renderSceneMemory(
       buf += c.block
     }
     if (buf !== '') chunks.push(buf)
-    return chunks.join('\n')
+    // 引导语只出现**一次**，放在板块层（第一个场景块之前）。
+    //
+    // 为什么挪上来（用户 2026-09-23 看到实际注入后要求）：此前它跟着**每个场景块**各来一遍
+    // —— 2 个场景就是 272 B ≈68 tok/轮，占记忆段整段的 22%；而且它夹在 `## 场景：X` 与条目
+    // 之间，把"分组"和"内容"隔开了。它管的本来就是整段（「以下就是全部信息」说的是全段，
+    // 不是某个场景），放在最前面才对得上。
+    //
+    // 2026-09-23 更早那条「放最顶层会飘在场景之外（用户实测）」的约束**已不成立**：那次是
+    // 板块标题还是 `##`、与场景分组平级，放顶层确实分不清它管谁；现在板块升成 `#` 一级、
+    // 场景分组是 `##` 二级，放在两者之间就是明确的"板块级说明"。
+    return `${note}\n\n${chunks.join('\n')}`
   }
 
   const sceneLabelOf = (scene: string): string => sceneLabel(scene)
@@ -707,11 +714,11 @@ export function renderSceneMemory(
   const missed: SceneBlockCandidate[] = []
   const takenScenes = new Set<string>()
   // 场景标题与引导语也是开销，按「每个首次出现的场景」计进预算 —— 否则它们会挤掉
-  // 本该放得下的记忆（引导语的字节见 SCENE_NOTE_BYTES）。
-  let used = 0
-  const noteBytes = sceneNoteBytes()
+  // 本该放得下的记忆（引导语的字节见 SCENE_NOTE_BYTES）。引导语现在**整段只算一次**
+  // （放在板块层，见 renderBody），所以直接进初始用量，不再按场景累加。
+  let used = sceneNoteBytes()
   for (const c of candidates) {
-    const headerCost = takenScenes.has(c.scene) ? 0 : byteLen(c.header) + noteBytes
+    const headerCost = takenScenes.has(c.scene) ? 0 : byteLen(c.header)
     if (used + headerCost + c.item.bytes + markerReserve > maxBytes) {
       missed.push(c)
       continue
@@ -755,8 +762,8 @@ export function renderSceneMemory(
  * 预算按**较长**的那版算（见 renderSceneMemory），保守一点只会浪费几个字节。
  */
 /**
- * 引导语所占的字节（含它后面的一个空行）。跟着场景块走，所以按**每个场景**计入段头开销；
- * 用较长的那版（带完整性声明）算，保守一点只会浪费几个字节。
+ * 引导语所占的字节（含它后面的一个空行）。**整段只算一次** —— 它放在板块层（见 renderBody），
+ * 不再跟着场景块重复；用较长的那版（带完整性声明）算，保守一点只会浪费几个字节。
  *
  * 注意：模块级不能直接算 —— `byteLen` 是后面才声明的 const，模块初始化期取它会 TDZ 报错。
  */

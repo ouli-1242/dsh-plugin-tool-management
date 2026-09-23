@@ -203,9 +203,13 @@ test('MCP 段不拿缓存冒充现状：连不上的 server 不得被报成可�
     knownToolCount: 26,                        // 但曾经连上过
   }
   const out = renderMcpStateSection([offline])
-  assert.ok(!/- \*\*github\*\*（\d+ 个工具）/.test(out), '不得以「N 个工具」的可用形态出现')
+  // 可用档现在是**裸名**（不带括号），所以"被报成可用"的形态就是 `- **github**` 单独一行。
+  assert.ok(!/^- \*\*github\*\*$/m.test(out), '不得以无状态标记的形态出现（那会被读成可用）')
   assert.ok(out.includes('当前未连上'), '必须标出它现在不可用')
-  assert.ok(out.includes('26'), '上次连上时的工具数要留着 —— 那是"曾经成功过"的证据')
+  assert.ok(out.includes('github'), '曾经连上过的仍要列出来 —— 那是"曾经成功过"的证据')
+  // 原来这里还断言「上次连上时的 26 个工具要留着」；2026-09-23 起工具数不再注入
+  // （模型不能凭一个数字列举工具名，而 17 B/台 × 每轮是白付的），所以改成上一条。
+  // 分档判据**没变**，仍然是 `liveEnabledToolCount`（见 state-section.ts）。
 
   // 从未连上过（缓存也空）→ 不列：一直没成功过，不该反复打扰。
   const never = { serverName: 'never', disabled: false, liveToolCount: 0, liveEnabledToolCount: 0, knownToolCount: 0, toolCount: 0, enabledToolCount: 0 }
@@ -215,9 +219,12 @@ test('MCP 段不拿缓存冒充现状：连不上的 server 不得被报成可�
   assert.equal(renderMcpStateSection([{ serverName: 'off', disabled: true, liveToolCount: 0, liveEnabledToolCount: 0, knownToolCount: 9 }]), '')
   assert.equal(renderMcpStateSection([{ serverName: 'alloff', disabled: false, liveToolCount: 5, liveEnabledToolCount: 0, knownToolCount: 5 }]), '')
 
-  // 真可用 → 正常列出，且数字是**真实可用数**（不是缓存数）。
+  // 真可用 → 正常列出，且**不带任何状态标记**（能进段的都是可用的，标状态是废话）。
+  // 判据依然是 `liveEnabledToolCount > 0`：上一条里 `alloff` 那台（live 5 / enabled 0）
+  // 被排除在外，就是这条不变量在起作用 —— 数字不显示了，分档仍然只认真值。
   const ok = renderMcpStateSection([{ serverName: 'ok', disabled: false, liveToolCount: 5, liveEnabledToolCount: 3, knownToolCount: 5 }])
-  assert.ok(ok.includes('- **ok**（3 个工具）'), '列出的数字必须是真实可用数')
+  assert.ok(ok.includes('- **ok**'), '真可用的要列出来')
+  assert.ok(!ok.includes('未连上'), '真可用的不得标成不可用')
 })
 
 test('parseModeState 透传全部快照恢复名单（哪张被剥掉，退出模式就有一类状态永远不复原）', () => {

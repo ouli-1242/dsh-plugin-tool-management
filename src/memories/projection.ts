@@ -221,6 +221,13 @@ export function attachmentSummarySync(bundleDir: string, name: string): { count:
 /**
  * 附件行（只有 bundle 记忆才有）：**给目录与文件名，不给内容**。
  * 附件可能是图片、二进制、大 md —— 全文注入又贵又会把段预算吃光；给路径，模型需要时自己读。
+ *
+ * 2026-09-23 精简（用户看到实际注入后要求）：去掉「未注入正文」这半句解释与「共 N 个」里的
+ * 计数词 —— 目录 + 文件名已经把"内容不在这里、要读就照路径去读"说清楚了，而这两处纯修饰
+ * 每轮都在付钱（实测两行 289 B ≈73 tok/轮，占记忆段的 23%）。总数只在**列不全**时才需要
+ * （否则数一下文件名就知道有几个）。
+ *
+ * **路径必须绝对**：模型拿到它要去 `Read`，相对路径等于没给。所以前缀省不掉。
  */
 export function attachmentLine(file: SceneMemoryFile): string {
   if (file.kind !== 'bundle') return ''
@@ -228,7 +235,7 @@ export function attachmentLine(file: SceneMemoryFile): string {
   if (names.length === 0) return ''
   const shown = names.slice(0, ATTACHMENT_LIST_MAX)
   const more = names.length - shown.length
-  return `附件目录：${file.bundleDir}（未注入正文，共 ${names.length} 个：${shown.join('、')}${more > 0 ? `，另 ${more} 个` : ''}）`
+  return `附件：${file.bundleDir}（${shown.join('、')}${more > 0 ? ` 等 ${names.length} 个` : ''}）`
 }
 
 // ── 单条记忆的渲染 ─────────────────────────────────────────────────────────
