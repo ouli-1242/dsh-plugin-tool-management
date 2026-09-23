@@ -12,8 +12,8 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, sceneCatalogNote, byteLen, message, isValidGroupSegment } from './constants.js'
-import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneHeader, compareSceneBuckets, memoryBlock } from './projection.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
+import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileIfExistsSync } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
 import type { Rule, GroupRow, SceneMemoryProjection, RulesIndex, SceneMemoryFile } from './service.js'
@@ -625,8 +625,8 @@ export function renderSceneMemory(
     const sceneFiles = (buckets.get(scene) || []).slice().sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
     // 场景块只留标题：**场景说明归场景段**（`renderSceneCatalog`），否则同一句话会在
     // 上下文里出现两遍。记忆段要的是"这些条目属于哪个场景"这个分组标签。
-    // `sceneHeading` 只给标题（不像 `sceneHeader` 自带结尾空行），这里补上 —— 否则
-    // 标题会与紧跟的引导语/条目贴成一行（`## 场景：全局**以下是…**`）。
+    // `sceneHeading` 只给标题、不自带结尾空行（场景段的 `sceneLine` 才自带），这里补上 ——
+    // 否则标题会与紧跟的引导语/条目贴成一行（`## 场景：全局**以下是…**`）。
     const header = sceneHeading(scene) + '\n\n'
     for (const file of sceneFiles) {
       const { text: block, inline } = memoryBlock(file)
@@ -761,17 +761,20 @@ export function renderSceneMemory(
  * 注意：模块级不能直接算 —— `byteLen` 是后面才声明的 const，模块初始化期取它会 TDZ 报错。
  */
 /**
- * 场景段（`scene-manager-catalog`）：列出**当前启用**的场景及其「场景说明」。
+ * 场景段（`scene-manager-catalog`）：列出**当前启用**的场景，一行一个
+ * （`**「场景名」—— 场景说明**`，见 `sceneLine`）。
  *
- * 为什么从记忆段里拆出来（2026-09-23 用户裁定）：场景说明是**约定**（一律照办），记忆条目
- * 是**记录**（可能过期）—— 两者权威等级不同，而原来的实现靠一句话同时管两者。拆开后两段
- * 各带自己的授权语（`SCENE_CATALOG_NOTE` / `SCENE_MEMORY_NOTE`），用户也能**单独关掉记忆段**
- * （省字节）而保留场景约定。
+ * 为什么从记忆段里拆出来（2026-09-23 用户裁定）：场景说明是"这个场景是干什么的"，记忆条目是
+ * **记录**（可能过期）—— 两者性质不同，而原来的实现靠一句话同时管两者。拆开后用户能
+ * **单独关掉记忆段**（省字节）而保留场景说明。
  *
- * 与记忆段的分工：这里给"框架"（有哪些场景、各自是什么约定），记忆段给"内容"（各场景下的
- * 条目）。**场景说明只在这里出现** —— 记忆段的场景块只留标题（`sceneHeading`），否则同一句
- * 话会在上下文里出现两遍。代价是关掉本段后记忆段少了"这个场景是什么"的语境，但那正是用户
- * 关掉它的意思。
+ * "场景是什么"这层说明现在由**框架线索**给（`DOMAIN_FRAME.scene` 的 cue）—— 用户 2026-09-23
+ * 第二次裁定：上一版把场景说明写成"一律照办"的约定，而它的实例是「写代码」这种**标签**，
+ * 让模型"照办一个标签"正是它读不懂这一段的原因。授权语已删，本段只给"当前启用的是哪个"。
+ *
+ * 与记忆段的分工：这里给"框架"，记忆段给"内容"（各场景下的条目）。**场景说明只在这里出现**
+ * —— 记忆段的场景块只留标题（`sceneHeading`），否则同一句话会在上下文里出现两遍。代价是
+ * 关掉本段后记忆段少了"这个场景是什么"的语境，但那正是用户关掉它的意思。
  *
  * 场景清单取**磁盘目录 ∪ 索引记录**：两者通常一致（建场景时同时落目录与记录），取并集是
  * 为了手工建的目录 / 手工删过记录的目录也能如实列出。**空场景也列** —— "这个场景存在但还
@@ -802,20 +805,19 @@ export function renderSceneCatalog(
   if (wanted.length === 0) {
     return { text: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [] }
   }
-  const note = `${sceneCatalogNote(wanted.map((scene) => sceneLabel(scene)))}\n\n`
   const marker = `\n${TRUNCATION_MARKER}\n`
   const kept: string[] = []
-  let used = byteLen(note)
+  let used = 0
   let dropped = false
   for (const scene of wanted) {
-    const block = sceneHeader(scene, index)
+    const block = sceneLine(scene, index)
     // 场景是单选的（至多一个 + 两个保留场景），正常永远碰不到预算 —— 这一层只是不让
     // "预算被配得极小"变成一段没有边界说明的静默截断。
     if (used + byteLen(block) + marker.length > maxBytes) { dropped = true; continue }
     kept.push(scene)
     used += byteLen(block)
   }
-  let text = `${note}${kept.map((scene) => sceneHeader(scene, index)).join('')}`
+  let text = kept.map((scene) => sceneLine(scene, index)).join('')
   if (dropped) text += marker
   text = text.replace(/^\n+/, '')
   return {

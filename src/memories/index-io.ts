@@ -277,7 +277,7 @@ export async function readIndex(stateDir: string): Promise<RulesIndex> {
  *
  * ⚠️ 返回的可能是**缓存实例**，调用方只许读；写索引一律走异步 `readIndex`（它每次重新解析，
  * 拿到新对象）。当前两个调用方（`sceneMemory` / `resolveScenePreset`）及其下游
- * （`signatureOfIndex` / `resolveActiveScenes` / `sceneHeader` / `compareSceneBuckets` /
+ * （`signatureOfIndex` / `resolveActiveScenes` / `sceneLine` / `compareSceneBuckets` /
  * `sceneOrderOf`）都已确认只读 —— 新增调用方请保持这条。
  */
 export const indexSyncCache = new Map<string, { key: string; value: RulesIndex }>()

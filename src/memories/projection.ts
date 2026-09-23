@@ -109,7 +109,7 @@ export function signatureOfIndex(index: RulesIndex): string {
   })
   const groups = Object.keys(index.groups).sort().map((g) => `${g}\u0000${index.groups[g]?.order ?? DEFAULT_GROUP_ORDER}`)
   // 场景顺序决定段内场景的先后 → 必须进指纹，否则改顺序后段文本不会重算。
-  // label 与 description 同理（sceneHeader 的「场景说明」一行直接渲染 description）——
+  // label 与 description 同理（`sceneLine` 把 label 与 description 都渲染进正文）——
   // 手改索引文件（带外变更）时只有指纹变化才会触发重算。
   const scenes = Object.keys(index.scenes || {}).sort().map((s) => {
     const e = index.scenes![s]
@@ -139,34 +139,24 @@ export function sceneLabel(scene: string, index?: RulesIndex): string {
 export const sceneHeading = (scene: string): string => `## 场景：${sceneLabel(scene)}`
 
 /**
- * 没填描述时的默认「场景说明」（用户裁定 2026-09-16：全局桶一直没有描述，读起来像缺了一块，
- * 统一成"每个场景块都有场景说明"）。
+ * 场景段（`scene-manager-catalog`）里的一行：`**「<场景名>」—— <场景说明>**`。
  *
- * 默认句同时承担"这个场景是什么"的答疑（此前只有光秃秃的 `## 场景：X`，模型读不懂 —— 用户实测）：
- * 两个恒常桶说明生效范围，用户场景说明它是当前启用的那份配置。
- */
-export const defaultSceneDescription = (scene: string): string => (
-  scene === GLOBAL_SCENE ? '全局记忆，任何对话都生效'
-    : scene === SHARED_GROUP ? '共享记忆，任何对话都生效'
-      : '用户配置的上下文，当前启用'
-)
-
-/**
- * 单个场景的段头：场景标题 + **恒有**的 `场景说明：<描述>`。
+ * 2026-09-23 用户裁定，替换了原来的两行式（`## 场景：X` + `**场景说明：X**`）。三条理由都是
+ * 用户看到**实际注入**之后提的：
+ *   - **场景名只出现一次**。上一版里它出现三次（框架线索"现在处在哪个场景"、引导语里的
+ *     「代码」、标题里的 `## 场景：代码`），而说明行只是把同一件事换个标签再说一遍。
+ *   - **场景说明是「标签」，不是「约定」**。它答的是"这个场景是干什么的"，用户的实例就是
+ *     「写代码」「前端相关」。上一版把它写成"一律照办、覆盖你的默认做法"，等于要求模型
+ *     "照办一个标签" —— 那正是它读不懂这一段的根源。授权语已删，说明只作注解跟在名字后面。
+ *   - **没填说明就不带后缀**。上一版会补 `defaultSceneDescription` 的默认句，而
+ *     "用户配置的上下文，当前启用"贴在名字后面，读起来像一句真的说明。
  *
- * 场景描述（界面「描述（可选）」，≤60 字符）**此前从未注入过** —— 它正是「这个场景是
- * 干什么的」的答案，属于模型做判断需要的上下文，而不是只给人看的元数据；界面上的文案
- * 也从没把它标成「只给使用者看」。（当年拿来对比的 AGENTS.md 预设描述也已在 0.14.0 进了
- * 模型清单 —— 现在两边都是"给人看也给模型看"，这个对比不再成立。）
- * 描述为空时给 `defaultSceneDescription` 的默认句（用户裁定：全局桶没描述时读起来像
- * 缺了一块，统一成每个场景块都有说明）。
+ * 为什么不再用 `##` 标题：这一段只讲"当前启用的是哪个 + 它是什么"，一行说完就够。
+ * 场景**分组**标题仍在记忆段里用（`sceneHeading`），两段各自承担自己的职责。
  */
-export function sceneHeader(scene: string, index?: RulesIndex): string {
-  const head = sceneHeading(scene)
+export const sceneLine = (scene: string, index?: RulesIndex): string => {
   const described = String(index?.scenes?.[scene]?.description ?? '').replaceAll(/\s+/g, ' ').trim()
-  const description = described === '' ? defaultSceneDescription(scene) : described
-  // 加粗（用户裁定 2026-09-16）：与引导语同款强调，别让"场景说明"读起来像可忽略的普通正文。
-  return `${head}\n\n**场景说明：${description}**\n\n`
+  return `**「${sceneLabel(scene)}」${described === '' ? '' : `—— ${described}`}**\n\n`
 }
 
 /** 场景渲染顺序：全局 `global` 最先（它的记忆对任何对话都成立，先讲总则），

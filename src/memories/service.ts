@@ -65,8 +65,8 @@ export { parseModeState } from './index-io.js'
 // 投影 / 渲染纯函数（2026-09-19 抽到 ./projection.ts）：索引 → 界面与注入看到的那份文本。
 import {
   attachmentLine, attachmentNamesSync, attachmentSummarySync, collapseActiveForNewScene,
-  compareSceneBuckets, defaultSceneDescription, enabledSceneOf, ensureSceneRecords, explicitDescriptionOf,
-  bodyBlock, memoryBlock, normalizeActive, resolveActiveScenes, sceneHeader, sceneHeading, sceneLabel,
+  compareSceneBuckets, enabledSceneOf, ensureSceneRecords, explicitDescriptionOf,
+  bodyBlock, memoryBlock, normalizeActive, resolveActiveScenes, sceneHeading, sceneLabel,
   sceneOf, sceneOrderOf, signatureOfIndex,
 } from './projection.js'
 // 索引 IO 组与发现/快照组（2026-09-19 抽出）。
