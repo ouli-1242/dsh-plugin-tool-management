@@ -39,17 +39,26 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 
 test('域与工具名前缀双向对得上（对不上就有域永远统计不到调用）', () => {
   for (const key of INJECT_DOMAIN_KEYS) {
-    assert.equal(domainOfTool(DOMAIN_TOOL_PREFIX[key] + 'list'), key, key + ' 的前缀映射不成环')
+    // 一个域可以挂多个前缀（场景与记忆同域两族），所以逐个前缀都要成环。
+    assert.ok(DOMAIN_TOOL_PREFIX[key].length > 0, key + ' 至少要有一个前缀')
+    for (const prefix of DOMAIN_TOOL_PREFIX[key]) {
+      assert.equal(domainOfTool(prefix + 'list'), key, key + ' 的前缀 ' + prefix + ' 映射不成环')
+    }
   }
   assert.equal(domainOfTool('read_file'), undefined, '不是本插件的工具不该被认领')
 })
 
-test('记忆族 0.14.0 改名后仍归 memory 域，旧名不再被认领', () => {
-  // 破了这一条的后果是**静默**的：漏改 DOMAIN_TOOL_PREFIX 时编译不报错，症状只是
+test('记忆族与场景族同域，中途用过的名字不是别名', () => {
+  // 破了这一条的后果是**静默**的：漏配 DOMAIN_TOOL_PREFIX 时编译不报错，症状只是
   // 兼容页那一组工具掉进「其它」桶、注入实况里「场景和记忆」的调用数永远是 0。
-  assert.equal(domainOfTool('scene_memory_manager_save'), 'memory')
-  assert.equal(domainOfTool('scene_memory_manager_list'), 'memory')
-  assert.equal(domainOfTool('memory_manager_save'), undefined, '旧名不是别名，注册了就要付 token')
+  assert.equal(domainOfTool('memory_manager_save'), 'memory')
+  assert.equal(domainOfTool('memory_manager_list'), 'memory')
+  // 0.14.0 把场景从记忆族分出去单开一族（`scene_manager_*`），但两族属于**同一个域**
+  // —— 注入段与界面组标题都是「场景和记忆」。漏配这条前缀，场景工具的调用就统计不到。
+  assert.equal(domainOfTool('scene_manager_save'), 'memory')
+  // `scene_memory_manager_*` 是 0.14.0 开发中途用过的名字，**从未发布** —— 不注册别名
+  // （注册了就是每轮白付 token）。
+  assert.equal(domainOfTool('scene_memory_manager_save'), undefined)
 })
 
 test('0.14.0 旧工具名迁移：用户「关掉了某条」的意图不能在改名后静默失效', () => {
@@ -60,14 +69,14 @@ test('0.14.0 旧工具名迁移：用户「关掉了某条」的意图不能在�
   }))
   assert.equal(migrated.changed, true)
   assert.deepEqual(migrated.settings.hidden, [
-    'scene_memory_manager_save', 'mcp_manager_switch', 'skill_manager_save', 'other_plugin_tool',
+    'memory_manager_save', 'mcp_manager_switch', 'skill_manager_save', 'other_plugin_tool',
   ])
   // 幂等：已经全是新名时必须报"没改"，否则每次读盘都会白回写一次。
   assert.equal(migrateLegacyToolNames(migrated.settings).changed, false)
   // 两条旧工具并成同一条 save 时只留一份（去重，不是简单替换）。
   assert.deepEqual(
     migrateLegacyToolNames(normalizeToolTableSettings({ hidden: ['memory_manager_write', 'memory_manager_update'] })).settings.hidden,
-    ['scene_memory_manager_save'],
+    ['memory_manager_save'],
   )
   // 不认识的名字原样保留：分不清"用户的旧名"与"别的插件的工具名"，误删比留着一条死名更糟。
   assert.equal(LEGACY_TOOL_NAME_MAP.other_plugin_tool, undefined)
@@ -128,7 +137,7 @@ test('遥测不反噬：任何输入都不抛（它绝不能影响工具调用�
     settings: () => DEFAULT_INJECT_SETTINGS,
     factsFor: async () => undefined,
   })
-  assert.doesNotThrow(() => injector.noteToolUse('scene_memory_manager_list', undefined))
+  assert.doesNotThrow(() => injector.noteToolUse('memory_manager_list', undefined))
   assert.doesNotThrow(() => injector.noteToolUse(undefined, {}))
   assert.doesNotThrow(() => injector.live())
   assert.doesNotThrow(() => injector.dispose())

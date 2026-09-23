@@ -1,29 +1,33 @@
-// 场景和记忆（rules）域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 改名合并）：
-// scene_memory_manager_list / _read / _set_enabled / _save。
+// 记忆（rules）域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 改名合并、
+// 同日把场景能力分出去）：memory_manager_list / _read / _set_enabled / _save。
 //
-// 为什么族名从 `memory_` 升成 `scene_memory_`：注入段名本来就是
-// `scene-memory-manager-catalog`、界面组标题是「场景和记忆」、清单里同时给场景与记忆 ——
-// 三处口径同名之后，「这个域叫什么」才只有一个答案（0.14.0 用户裁定）。
+// 为什么族名在 0.14.0 里绕了一圈回到 `memory_manager_`：中途改成 `scene_memory_manager_`
+// 是为了跟注入段名（`scene-memory-manager-catalog`）对齐，但那个名字描述的是**域**，
+// 而这个族操作的全是记忆。加场景能力时这个错配就现形了 —— 场景是另一个对象（容器，
+// 进入时切换 mcp / 技能 / 人设），硬塞进 `save` 会让 `description` 变成双义参数（给
+// `memory` 时是记忆描述、给 `scene` 时是场景描述），门禁也得按参数分叉（记忆写入有开关
+// 可放行，场景写入是改运行时环境、不该有那条路）。所以拆成两族：这里管记忆内容，
+// `scene_manager_*`（tools/scene.ts）管场景本身。
 //
 // 为什么 write + update 并成 save：两者的判定（同名 = 改、无同名 = 建）本来就只有
 // `rules-create` 知道 —— 它对同名是**拒绝**的，op 层不会替你 upsert。分开两条工具时，
 // 模型必须自己先查一次再决定调哪条，而它手里的清单可能已经过期。合并后由工具侧兜住。
 //
 // 活动场景的记忆正文会自动注入上下文（无需调用工具读取）；这里的工具用于查询/编辑规则
-// 本身。scene_memory_manager_save 受 tools/pre-execute 审批门禁（D2）。
+// 本身。memory_manager_save 受 tools/pre-execute 审批门禁（D2）。
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
 import { text, type ToolDomainDeps } from './deps.js'
 
-export interface SceneMemoryToolDeps extends ToolDomainDeps {
+export interface MemoryToolDeps extends ToolDomainDeps {
   /** rules service 的 ops 表：rules-list / rules-read / rules-create / rules-update / rules-toggle。 */
   rulesOps: Record<string, (args: any) => Promise<any>>
 }
 
-export function buildSceneMemoryTools(deps: SceneMemoryToolDeps): void {
+export function buildMemoryTools(deps: MemoryToolDeps): void {
   const { defineTool, register } = deps
   register(defineTool({
-    name: 'scene_memory_manager_list',
+    name: 'memory_manager_list',
     description: 'List memories (id, scene, enabled, description). What is injected each turn is in the「本机当前的场景和记忆」reminder; use this for ids/paths and for entries that are off. Defaults to the ones that would be injected; all=true for every entry.',
     parameters: {
       group: { type: 'string', description: 'Optional scene filter.' },
@@ -65,7 +69,7 @@ export function buildSceneMemoryTools(deps: SceneMemoryToolDeps): void {
     },
   }))
   register(defineTool({
-    name: 'scene_memory_manager_read',
+    name: 'memory_manager_read',
     description: 'Read the full body of one memory. Only for ones not already in your context (disabled, scene not active, or dropped by the byte budget).',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
@@ -79,7 +83,7 @@ export function buildSceneMemoryTools(deps: SceneMemoryToolDeps): void {
     },
   }))
   register(defineTool({
-    name: 'scene_memory_manager_set_enabled',
+    name: 'memory_manager_set_enabled',
     // 为什么单独一个工具：注入实况里「这个域注入了几次 / 模型调了几次」都看得到，但模型此前
     // 看得到一份记忆却开关不了它 —— 只能回一句"请你去界面上点"。启停是它替用户调整环境时
     // 最常碰的一格，而 `rules-toggle` 这个 op 早就带齐了门禁（写令牌 + 场景冻结）。
@@ -117,7 +121,7 @@ export function buildSceneMemoryTools(deps: SceneMemoryToolDeps): void {
     },
   }))
   register(defineTool({
-    name: 'scene_memory_manager_save',
+    name: 'memory_manager_save',
     // 「能推导的别记」「先查重」这两句是 0.13.0 加的：记忆是唯一直接吃注入预算的域
     // （场景段 128 KiB），而模型很乐意把「这个项目用 pnpm」记一条 —— 那看一眼 `package.json`
     // 就知道，记下来却永久占着每一轮请求。合并 write/update 后这两句更要留：upsert 降低了

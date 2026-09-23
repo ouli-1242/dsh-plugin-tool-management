@@ -1,6 +1,6 @@
 // 「模型工具表」开关（2026-09-23）。
 //
-// 为什么要有它：工具表是按**每个请求**付钱的 —— 本插件 17 个工具的 schema 合计 ≈3,093 tok，
+// 为什么要有它：工具表是按**每个请求**付钱的 —— 本插件 18 个工具的 schema 合计 ≈3,439 tok，
 // 每一轮都随请求发出，哪怕这一轮根本用不上（实测口径见 review/后续方向.md）。关掉某几个工具，
 // 它们整份不进请求（不是"把描述写短点"那种省）；面板（118 个 op）与注入通道完全不受影响。
 //
@@ -53,11 +53,11 @@ export function normalizeToolTableSettings(raw: unknown): ToolTableSettings {
  * 误删别人的条目比留着一条死名更糟。
  */
 export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
-  memory_manager_list: 'scene_memory_manager_list',
-  memory_manager_read: 'scene_memory_manager_read',
-  memory_manager_set_enabled: 'scene_memory_manager_set_enabled',
-  memory_manager_write: 'scene_memory_manager_save',
-  memory_manager_update: 'scene_memory_manager_save',
+  // 记忆族：0.14.0 只把 write + update 并成一条 `save`，名字本身没动 —— 所以只有这两条要迁移。
+  // （0.14.0 开发中途曾把整族改叫 `scene_memory_manager_*`，但那个名字**从未发布**，用户侧
+  // 不可能有它，因此不存在需要从它迁回来的数据。）
+  memory_manager_write: 'memory_manager_save',
+  memory_manager_update: 'memory_manager_save',
   mcp_manager_set_enabled: 'mcp_manager_switch',
   mcp_manager_restart: 'mcp_manager_switch',
   mcp_manager_add: 'mcp_manager_save',

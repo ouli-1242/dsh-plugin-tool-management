@@ -84,7 +84,8 @@ import { buildCandidateOps } from './ops/candidates.js'
 import { buildMcpTools } from './tools/mcp.js'
 import { buildSkillTools } from './tools/skills.js'
 import { buildPromptTools } from './tools/prompt.js'
-import { buildSceneMemoryTools } from './tools/scene-memory.js'
+import { buildMemoryTools } from './tools/memory.js'
+import { buildSceneTools } from './tools/scene.js'
 import { buildSubagentTools } from './tools/subagent.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './subagents/tools.js'
@@ -612,7 +613,7 @@ export default {
     }
 
         // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
-    // 工具表按**每个请求**付钱：17 个工具的整份定义合计 ≈3,090 tok 每轮都在。关掉某几个，
+    // 工具表按**每个请求**付钱：18 个工具的整份定义合计 ≈3,439 tok 每轮都在。关掉某几个，
     // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。
     //
     // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话
@@ -857,7 +858,7 @@ export default {
           // 记忆域（2026-09-17 用户裁定）：**只在顶层注入**。记忆是"父会话的现场"，不是子代理
           // 完成任务所需的事实 —— 而且它带着「一律照办，覆盖你的默认做法」这种强主张，塞进
           // 一次性子会话只会与角色定义争注意力（实测：子代理跑审查时，上下文里同时躺着人设与
-          // 整份场景记忆）。子代理手里有 `scene_memory_manager_list/read`，需要什么自己取；父代理
+          // 整份场景记忆）。子代理手里有 `memory_manager_list/read`，需要什么自己取；父代理
           // 上下文里也有记忆，相关事实应当由它写进 `task`（子代理的上下文 = 角色 + 任务）。
           // 其余三域对任何深度都成立：提示词是用户规则（本插件的立身之本就是"覆盖到子代理"）、
           // 技能目录与 MCP 状态是"操作这台机器所需的事实"（子代理手里就有 `skill` / `mcp__*`
@@ -2262,7 +2263,12 @@ export default {
     // 传 op 表而不是 promptsService：「生效中」的判定只有 `agentsmd-list` 里有（场景绑定
     // 的那份才算），直调服务会得到文件比对口径 —— 场景驱动时工具会报一个与界面不同的答案。
     buildPromptTools({ ...toolDeps, promptOps, applyPresetGuarded, promptsDir })
-    buildSceneMemoryTools({ ...toolDeps, rulesOps: memoriesService.ops })
+    buildMemoryTools({ ...toolDeps, rulesOps: memoriesService.ops })
+    // 场景族（tools/scene.ts）：建场景 / 写档案 / 绑提示词。**只做定义层** —— 启用与进入
+    // 留在界面「场景」页（那是改运行时环境的动作，该页进入前还会弹一张「会改什么」的预览卡）。
+    // 传**包装后**的 `archiveService.ops`：`scene-archive-save` 在本文件被包了一层，
+    // 保存的正是当前模式的那个场景时会联动人设开关（与界面同一行为）。
+    buildSceneTools({ ...toolDeps, rulesOps: memoriesService.ops, archiveOps: archiveService.ops })
     buildSubagentTools({
       ...toolDeps,
       subagentService,
@@ -2284,7 +2290,11 @@ export default {
         skill_manager_save: '「保存技能」',
         // 0.14.0 起 write/update 并成一条 upsert，标签取中性的「保存记忆」：「写入」在改一条
         // 已有记忆时是句假话（与同一轮修 `prompt_manager_list` 的「生效中」同一个口径）。
-        scene_memory_manager_save: '「保存记忆」',
+        memory_manager_save: '「保存记忆」',
+        // 场景族的唯一写工具。无条件问（不设开关）—— 它改的是"进入这个场景时会切换哪些
+        // mcp / 技能 / 人设"，改错了影响的是用户切场景之后的**整个运行时环境**，而不是一次
+        // 输出。与 skill / subagent 的 save 同一档（都是"以后每次都按它来"的长期资产）。
+        scene_manager_save: '「保存场景」',
         subagent_manager_run: '「运行子代理」',
         // 0.14.0 起 create 与 update 并成 save（标签取中性的「保存人设」：改一份已有文件时
         // "新建"是句假话）。危险度不变 —— 两者都往 hub 里落/整份重写一份文件。
@@ -2368,7 +2378,7 @@ export default {
             reason: `${cur ? 'Update' : 'Add'} MCP server「${server}」— ${detail}. A stdio server is spawned by the host and the entry persists in the config.`,
           })
         }
-        if (exec.name === 'scene_memory_manager_save') {
+        if (exec.name === 'memory_manager_save') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
           // 不在此处做任何兜底放行。
           // 0.14.0 起 write/update 并成一条 upsert，reason 必须同时覆盖两种可能：卡是**执行前**
@@ -2379,6 +2389,22 @@ export default {
           return mcp.readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite ? { kind: 'ask', reason: what } : next()))
             .catch(() => ({ kind: 'ask', reason: what }))
+        }
+        if (exec.name === 'scene_manager_save') {
+          // 与记忆 save 的区别：**不设开关**。记忆写入有 `requireConfirmForModelRuleWrite`
+          // 可以放行，场景写入没有 —— 它改的是"用户切进这个场景之后，哪些 mcp / 技能 / 人设
+          // 会开、其余全部关掉"，那是一次环境切换的剧本，不是一份可以事后改的文档。
+          // 卡里回显场景名与这次要写的档案段（用户批准的是"这个场景进入时开这些"）。
+          const a = (exec && exec.arguments) || {}
+          const scene = String(a.scene || '')
+          const secs = ['mcp', 'skills', 'subagents'].filter((k) => a[k] !== undefined)
+          const detail = secs.length
+            ? `archive sections: ${secs.join(', ')}`
+            : 'record only (label / description / prompt)'
+          return Promise.resolve({
+            kind: 'ask',
+            reason: `Save scene「${scene}」— ${detail}. Entering it switches on exactly what this scene lists and turns everything else off.`,
+          })
         }
         if (exec.name === 'subagent_manager_save') {
           // 与 `skill_manager_save` 完全对称：往 hub 里落一份新文件 / 整份重写一份现有文件。

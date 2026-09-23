@@ -50,7 +50,7 @@ export const ATTACHMENT_LIST_MAX = 10
  *   - **单行、加粗**，不再用括号分两行 —— 括号跨行在真实提示词里读起来像被截断，
  *     而加粗是 Markdown 里最省字符的强调手段（用户要求「加强模型对此的重视程度」）。
  *   - **提到段首、整段只出现一次**：原来它挂在每个场景的段头里，多场景时会重复注入。
- *   - **不点名任何工具**：模型从工具 schema 就知道 `scene_memory_manager_list` 存在，点名反而
+ *   - **不点名任何工具**：模型从工具 schema 就知道 `memory_manager_list` 存在，点名反而
  *     像在提示它去调；用户裁定「没启用的信息就是不想在当前用」，所以工具指引整句删除。
  *     真正防探测的是**完整性声明**（「以下就是全部信息」），那半句必须留。
  *   - **完整性声明按截断状态自适应**：真有条目因预算没注入时，段尾会有未注入清单，
@@ -142,7 +142,7 @@ export const fail = (code: string, error: string, params?: Record<string, string
 
 /**
  * 记忆索引文件名 / 记忆回收站目录名（hub 根下）。
- * 域叫「记忆」（工具 `scene_memory_manager_*`、界面「记忆」页），所以按域命名 ——
+ * 域叫「记忆」（工具 `memory_manager_*`、界面「记忆」页），所以按域命名 ——
  * 旧名 `rules-index.json` / `rules-trash/` 由 hub 的启动迁移搬过来（见 hub.ts）。
  */
 export const MEMORIES_INDEX_FILE = 'memories-index.json'
