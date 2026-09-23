@@ -18,7 +18,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
   // tools/pre-execute hook below (the model must ask before writing files).
   register(defineTool({
     name: 'skill_manager_list',
-    description: 'List skills with enabled state, effective/shadowed status and source file path. The「本机技能目录」reminder carries callable skills and summaries only; use this for entries that are off and to see which source wins a name collision, and skill_manager_read for a body. Defaults to enabled only; all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
+    description: 'List skills with enabled state, effective/shadowed status and source file path. The「本机技能目录」reminder carries callable skills and summaries only; use this for entries that are off, for the body, and to see which source wins a name collision. Defaults to enabled only; all=true for every entry. A copy marked "shadowed by <root>" stays inactive even if enabled.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled and shadowed entries (default false).' },
     },

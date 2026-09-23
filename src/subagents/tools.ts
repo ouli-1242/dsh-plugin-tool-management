@@ -41,7 +41,7 @@ export function defineSubagentManagerListTool(subagents: {
 }) {
   return {
     name: 'subagent_manager_list',
-    description: 'List personas (pre-configured subagent profiles) with their descriptions. The「可委派的子智能体」reminder carries the same catalog; call this for the always-current full list before subagent_manager_run.',
+    description: 'List personas (pre-configured subagent profiles) with their descriptions. The「可委派的子智能体」reminder carries the same catalog; call this for the always-current full list.',
     parameters: {} as const,
     output: {
       schema: { type: 'string' } as const,
@@ -102,7 +102,7 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
     // `inherit` 那句"轮中委派拿不到当前轮"必须留 —— 它是这条参数唯一会让人写错 task 的地方。
     description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the「可委派的子智能体」reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
     parameters: {
-      agent: { type: 'string', required: true, description: 'Persona name from subagent_manager_list.' },
+      agent: { type: 'string', required: true, description: 'Persona name.' },
       task: { type: 'string', required: true, description: 'The task for the subagent. Self-contained by default; with inherit: true only state what is new.' },
       inherit: { type: 'boolean', description: 'Let the subagent see this conversation\'s finished turns (the current turn is never included). Default false = a fresh child.' },
     } as const,

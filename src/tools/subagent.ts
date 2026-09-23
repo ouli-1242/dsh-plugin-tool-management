@@ -66,7 +66,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
   try {
     register(deps.defineTool({
       name: 'subagent_manager_set_enabled',
-      description: 'Enable or disable one persona. Only enabled personas appear in the「可委派的子智能体」catalog and can be given work by subagent_manager_run. Reversible, and the file is untouched. Only when the user asks or approves.',
+      description: 'Enable or disable one persona. Only enabled personas appear in the「可委派的子智能体」catalog and can be given work. Reversible, and the file is untouched. Only when the user asks or approves.',
       parameters: {
         name: { type: 'string', required: true, description: 'Persona name.' },
         enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable; omission is refused.' },
