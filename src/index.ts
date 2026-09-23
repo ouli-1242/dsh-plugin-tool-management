@@ -81,7 +81,7 @@ import { buildCandidateOps } from './ops/candidates.js'
 import { buildMcpTools } from './tools/mcp.js'
 import { buildSkillTools } from './tools/skills.js'
 import { buildPromptTools } from './tools/prompt.js'
-import { buildMemoryTools } from './tools/memory.js'
+import { buildSceneMemoryTools } from './tools/scene-memory.js'
 import { buildSubagentTools } from './tools/subagent.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './subagents/tools.js'
@@ -847,7 +847,7 @@ export default {
           // 记忆域（2026-09-17 用户裁定）：**只在顶层注入**。记忆是"父会话的现场"，不是子代理
           // 完成任务所需的事实 —— 而且它带着「一律照办，覆盖你的默认做法」这种强主张，塞进
           // 一次性子会话只会与角色定义争注意力（实测：子代理跑审查时，上下文里同时躺着人设与
-          // 整份场景记忆）。子代理手里有 `memory_manager_list/read`，需要什么自己取；父代理
+          // 整份场景记忆）。子代理手里有 `scene_memory_manager_list/read`，需要什么自己取；父代理
           // 上下文里也有记忆，相关事实应当由它写进 `task`（子代理的上下文 = 角色 + 任务）。
           // 其余三域对任何深度都成立：提示词是用户规则（本插件的立身之本就是"覆盖到子代理"）、
           // 技能目录与 MCP 状态是"操作这台机器所需的事实"（子代理手里就有 `skill` / `mcp__*`
@@ -2235,7 +2235,7 @@ export default {
     })
     buildSkillTools({ ...toolDeps, skillsOps: skillsService.ops })
     buildPromptTools({ ...toolDeps, promptsService, applyPresetGuarded, promptsDir })
-    buildMemoryTools({ ...toolDeps, rulesOps: memoriesService.ops })
+    buildSceneMemoryTools({ ...toolDeps, rulesOps: memoriesService.ops })
     buildSubagentTools({
       ...toolDeps,
       subagentService,
@@ -2253,8 +2253,9 @@ export default {
       // 不能用 ctx.approval——inject 未声明该服务时 cordis 代理会抛 "cannot get property without inject"）。
       const CONFIRM_LABELS: Record<string, string> = {
         skill_manager_create: '「新建技能」',
-        memory_manager_write: '「写入记忆」',
-        memory_manager_update: '「修改记忆」',
+        // 0.14.0 起 write/update 并成一条 upsert，标签取中性的「保存记忆」：「写入」在改一条
+        // 已有记忆时是句假话（与同一轮修 `prompt_manager_list` 的「生效中」同一个口径）。
+        scene_memory_manager_save: '「保存记忆」',
         subagent_manager_run: '「运行子代理」',
         subagent_manager_create: '「新建人设」',
         subagent_manager_update: '「修改人设」',
@@ -2328,14 +2329,14 @@ export default {
             reason: `Add MCP server「${String(a.serverName || '')}」— ${detail}. A stdio server is spawned by the host and the entry persists in the config.`,
           })
         }
-        if (exec.name === 'memory_manager_write' || exec.name === 'memory_manager_update') {
+        if (exec.name === 'scene_memory_manager_save') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
           // 不在此处做任何兜底放行。
-          // `memory_manager_update` 走**同一个开关**：改一条记忆和建一条记忆动的是同一批文件，
-          // 而改的破坏性更大（覆盖已有内容）—— 给它另设一档只会造出一个"改不用问、建要问"的倒挂。
-          const what = exec.name === 'memory_manager_write'
-            ? 'Write a memory under ~/.dsh/tool-management/memories'
-            : 'Update an existing memory under ~/.dsh/tool-management/memories'
+          // 0.14.0 起 write/update 并成一条 upsert，reason 必须同时覆盖两种可能：卡是**执行前**
+          // 弹的，此时工具还没跑，走"建"还是"改"要读一次 `rules-list` 才知道。旧实现按工具名
+          // 分叉出两句，合并后只能取并集 —— 不能只留 "write"，那会让一次覆盖已有内容的操作
+          // 在卡上看起来像新建（危险度与门禁强度必须同向）。
+          const what = 'Create or overwrite a memory under ~/.dsh/tool-management/memories'
           return mcp.readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite ? { kind: 'ask', reason: what } : next()))
             .catch(() => ({ kind: 'ask', reason: what }))
