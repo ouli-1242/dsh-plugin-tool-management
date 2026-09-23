@@ -105,11 +105,11 @@ export const INJECT_KIND_OF: Record<InjectDomainKey, string> = {
  * 「用了」长得一模一样。有了映射，就能把「投递 N 次 / 调用 M 次」并排摆出来，
  * 措辞与形式的调整才有依据（否则改文案就是猜）。
  *
- * 前缀而不是精确名：`memory_manager_*` 有 list/read/write/delete 等，任何一个都
- * 说明模型确实在读这一域。改工具名等于换身份，这五个字符串是稳定契约。
+ * 前缀而不是精确名：`scene_memory_manager_*` 有 list/read/set_enabled/save 等，任何一个
+ * 都说明模型确实在读这一域。改工具名等于换身份，这五个字符串是稳定契约。
  */
 export const DOMAIN_TOOL_PREFIX: Record<InjectDomainKey, string> = {
-  memory: 'memory_manager_',
+  memory: 'scene_memory_manager_',
   mcp: 'mcp_manager_',
   skills: 'skill_manager_',
   subagents: 'subagent_manager_',

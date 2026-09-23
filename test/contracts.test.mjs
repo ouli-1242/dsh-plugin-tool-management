@@ -43,6 +43,14 @@ test('域与工具名前缀双向对得上（对不上就有域永远统计不�
   assert.equal(domainOfTool('read_file'), undefined, '不是本插件的工具不该被认领')
 })
 
+test('记忆族 0.14.0 改名后仍归 memory 域，旧名不再被认领', () => {
+  // 破了这一条的后果是**静默**的：漏改 DOMAIN_TOOL_PREFIX 时编译不报错，症状只是
+  // 兼容页那一组工具掉进「其它」桶、注入实况里「场景和记忆」的调用数永远是 0。
+  assert.equal(domainOfTool('scene_memory_manager_save'), 'memory')
+  assert.equal(domainOfTool('scene_memory_manager_list'), 'memory')
+  assert.equal(domainOfTool('memory_manager_save'), undefined, '旧名不是别名，注册了就要付 token')
+})
+
 test('深度探针读的是官方那几个字段，取最大者', () => {
   assert.equal(subagentDepthOf({ session: { header: {} } }), 0)
   assert.equal(subagentDepthOf({ session: { header: { origin: 'subagent' } } }), 1, 'origin 是硬信号，至少算 1 层')
@@ -98,7 +106,7 @@ test('遥测不反噬：任何输入都不抛（它绝不能影响工具调用�
     settings: () => DEFAULT_INJECT_SETTINGS,
     factsFor: async () => undefined,
   })
-  assert.doesNotThrow(() => injector.noteToolUse('memory_manager_list', undefined))
+  assert.doesNotThrow(() => injector.noteToolUse('scene_memory_manager_list', undefined))
   assert.doesNotThrow(() => injector.noteToolUse(undefined, {}))
   assert.doesNotThrow(() => injector.live())
   assert.doesNotThrow(() => injector.dispose())
