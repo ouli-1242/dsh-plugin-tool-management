@@ -1865,7 +1865,9 @@
           }]
           const storedPresets = (toolTable && toolTable.presets) || []
           storedPresets.forEach(function (p) {
-            entries.push({ key: p.name, name: p.name, hidden: p.hidden || [] })
+            // `builtin` 必须显式给 false：数组类型由首元素（出厂默认，builtin: true）推断，
+            // 漏了它 typecheck:client 会红；运行时 `e.builtin ? 删除键 : null` 依赖这个假值。
+            entries.push({ key: p.name, name: p.name, builtin: false, hidden: p.hidden || [] })
           })
           presetRows.push(React.createElement('p', { className: 'dsm-help', key: 'hint' }, t('compat.tools.preset.applyHint')))
           presetRows.push(React.createElement('div', { className: 'dsm-preset-list', key: 'list' },
