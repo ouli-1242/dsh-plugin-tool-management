@@ -118,6 +118,8 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
       kind: "delete",
       fallback: "inform-only",
       detail: `投影缓存适配未完成（requireTable 抛错）：${String((error as Error)?.message ?? error)}；宿主对象未被改动。`,
+      detailKey: "projection-cache-adapter.setup",
+      params: { reason: String((error as Error)?.message ?? error) },
     });
     throw new CapabilityRefusalError("delete", [{
       id: "projection.table-delete",
@@ -248,6 +250,9 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
       detail: reason === "taken-over"
         ? "宿主缓存的 put/write 已被第三方包装接管：本插件的删除屏障这一轮已退役（缓存行删除少了墓碑拦截），下一次删除会重新安装。"
         : "投影缓存适配在首次使用时抛错（宿主形状可能变了）：已恢复宿主原方法，下一次删除会重新安装并再探一次。",
+      detailKey: reason === "taken-over"
+        ? "projection-cache-adapter.taken-over"
+        : "projection-cache-adapter.first-use",
     });
   }
   cacheGuards.set(cache, self);

@@ -176,6 +176,11 @@ export function parseModeState(raw: unknown): ModeState {
     .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
     .map((x) => ({ id: String(x.id || ''), note: typeof x.note === 'string' ? x.note : null }))
     .filter((x) => x.id !== '')
+  // v0.15 的模型工具表原值名单：**同样必须原样透传**（剥掉它 = 退出场景后工具表停在方案那份，
+  // 与历史上 mcpServers / mcpNotes 被剥掉是同一类 bug）。老快照没有这一栏 → null = 不还原。
+  const toolTableHidden = Array.isArray(snapshotRaw.toolTableHidden)
+    ? snapshotRaw.toolTableHidden.map((x) => String(x))
+    : null
   return {
     scene,
     snapshot: scene
@@ -188,6 +193,7 @@ export function parseModeState(raw: unknown): ModeState {
           ...(subagentsOn.length ? { subagentsOn } : {}),
           ...(Object.keys(subagentsAll).length ? { subagentsAll } : {}),
           ...(mcpNotes.length ? { mcpNotes } : {}),
+          ...(toolTableHidden ? { toolTableHidden } : {}),
         }
       : null,
   }

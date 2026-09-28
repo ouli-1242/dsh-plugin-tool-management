@@ -31,7 +31,7 @@
  */
 
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** Packages whose physical module identity matters to this plugin. */
@@ -44,10 +44,15 @@ export const IDENTITY_PACKAGES = [
   '@deepseek-ai/dsh-spill-local',
 ] as const
 
-/** Peers this plugin was written and verified against（只声明最低版本，无上界）。 */
-export const EXPECTED_PEER_RANGE = '>=0.1.5-rc.2'
+/**
+ * peer range 的下界与已验证版本。官方全程走 prerelease 渠道（x.y.z-rc.N），semver 的
+ * 预发布规则（prerelease 版本只匹配同 [major,minor,patch] 元组的比较器）意味着**每一代
+ * rc 都要显式列进范围**：`>=0.1.5-rc.2` 匹配不了 `0.1.7-rc.2`（实测），所以范围是逐代
+ * 枚举的并集。上界依旧不设：宿主跨代升级由运行时能力探测兜底（见下）。
+ */
+export const EXPECTED_PEER_RANGE = '^0.1.5-rc.2 || ^0.1.7-rc.2'
 /** The release this plugin's adapters were last verified against. */
-export const VERIFIED_HOST_VERSION = '0.1.5-rc.2'
+export const VERIFIED_HOST_VERSION = '0.1.7-rc.2'
 /**
  * peer range 的下界 —— 界面展示用。
  *
@@ -58,7 +63,7 @@ export const VERIFIED_HOST_VERSION = '0.1.5-rc.2'
  * 从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
  */
 export const EXPECTED_MIN_HOST_VERSION =
-  EXPECTED_PEER_RANGE.match(/^>=\s*([^\s]+)/)?.[1] ?? VERIFIED_HOST_VERSION
+  EXPECTED_PEER_RANGE.match(/(\d+\.\d+\.\d+(?:-rc\.\d+)?)/)?.[1] ?? VERIFIED_HOST_VERSION
 
 export type CapabilityState = 'ok' | 'missing-member' | 'shape-mismatch' | 'not-available'
 
@@ -69,7 +74,7 @@ export interface CapabilityFinding {
   readonly label: string
   readonly kind: 'read' | 'write' | 'delete'
   /** Which host service the capability lives on. */
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'plugin'
+  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'plugin'
   readonly state: CapabilityState
   /** What can be done without this capability. */
   readonly fallback:
@@ -233,10 +238,17 @@ const PROJECTION_CLASS = { pkg: '@deepseek-ai/dsh-session-projection-cache', tar
 // `announce` live. Without this entry the doctor could not see the two
 // capabilities the delete route depends on.
 const SESSIONS_CLASS = { pkg: '@deepseek-ai/dsh-session', target: 'SessionStore' } as const
+// 0.15.0 新增的两块契约面 —— 恰是 0.1.7 升级咬人的两处（prepareDocument 返回语义变了、
+// read 改名 readDocument），此前不在表里，故障只能靠用户实测发现。类名按官方安装源码核对
+// （dsh-settings 导出 SettingsForms；dsh-agent-preset-registry 导出 AgentPresetRegistry）。
+const SETTINGS_CLASS = { pkg: '@deepseek-ai/dsh-settings', target: 'SettingsForms' } as const
+const ROSTER_CLASS = { pkg: '@deepseek-ai/dsh-agent-preset-registry', target: 'AgentPresetRegistry' } as const
 const OWNER_CLASSES: Partial<Record<CapabilityFinding['owner'], { readonly pkg: string; readonly target: string }>> = {
   workspace: WORKSPACE_CLASS,
   projectionCache: PROJECTION_CLASS,
   sessions: SESSIONS_CLASS,
+  settings: SETTINGS_CLASS,
+  presetRoster: ROSTER_CLASS,
 }
 
 /** The named export's prototype, or undefined when the package is absent/trimmed. */
@@ -289,8 +301,14 @@ function callableWithSentinel(target: Target, name: string, ...args: unknown[]):
 }
 
 /** Official prototypes this plugin's adapters mirror, when importable. */
-function referencePrototypes(): { workspace?: Record<string, unknown>; cache?: Record<string, unknown>; sessions?: Record<string, unknown> } {
-  const out: { workspace?: Record<string, unknown>; cache?: Record<string, unknown>; sessions?: Record<string, unknown> } = {}
+function referencePrototypes(): {
+  workspace?: Record<string, unknown>
+  cache?: Record<string, unknown>
+  sessions?: Record<string, unknown>
+  settings?: Record<string, unknown>
+  roster?: Record<string, unknown>
+} {
+  const out: NonNullable<ReturnType<typeof referencePrototypes>> = {}
   const workspace = classPrototypeOf(WORKSPACE_CLASS)
   if (workspace !== undefined) out.workspace = workspace
   const cache = classPrototypeOf(PROJECTION_CLASS)
@@ -299,6 +317,12 @@ function referencePrototypes(): { workspace?: Record<string, unknown>; cache?: R
   // 同包同版本），与 workspace/cache 同机制接入文本比对 —— 此前该域只有存在性检查。
   const sessions = classPrototypeOf(SESSIONS_CLASS)
   if (sessions !== undefined) out.sessions = sessions
+  // 两块新契约面的参考副本：包不在 devDeps/宿主锚点里时优雅缺省（textMatch 记 undefined），
+  // 存在性探测不依赖它们。
+  const settings = classPrototypeOf(SETTINGS_CLASS)
+  if (settings !== undefined) out.settings = settings
+  const roster = classPrototypeOf(ROSTER_CLASS)
+  if (roster !== undefined) out.roster = roster
   return out
 }
 
@@ -309,7 +333,7 @@ interface CapabilitySpec {
   // 这里不写 `CapabilityFinding['owner']`：那张表的 owner 还允许 `'plugin'`（运行时上报的行，
   // 如补丁写入校验不可用），而宿主能力表只可能挂在宿主对象上 —— 写宽了会让下面的
   // `targets: Record<CapabilitySpec['owner'], …>` 强制多出一个不存在的宿主对象。
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence'
+  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster'
   readonly fallback: CapabilityFinding['fallback']
   /** Required function members on the owning object's prototype. */
   readonly methods?: readonly string[]
@@ -317,6 +341,13 @@ interface CapabilitySpec {
   readonly fields?: readonly { readonly name: string; readonly instanceOf?: 'Map' | 'Array' | 'Set' }[]
   /** Extra live behaviour check; returns a failure detail or undefined. */
   readonly probe?: (target: Target) => string | undefined
+  /**
+   * Optional extra text appended to the ok detail — how a spec shows what it
+   * OBSERVED on the live host (e.g. the settings document path). 返回 undefined
+   * 就不加后缀。健康行也带观测值：官方下一次改返回语义，页面上那行字一眼见底，
+   * 而不必等到哪个功能静默失明（0.15.0 的教训）。
+   */
+  readonly describe?: (target: Target) => string | undefined
   /** Members that must be callable when the capability applies. */
   readonly when?: (target: Target) => boolean
   /** Absence is a routing fact, not a failure — see {@link CapabilityFinding.optional}. */
@@ -540,6 +571,61 @@ const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
       return undefined
     },
   },
+  // ---- settings document path（0.1.7 的两处适配面之一）----------------------
+  // `prepareDocument()` 在 0.1.7 把返回值从「主目录下的设置文档路径」改成「profile 补丁
+  // 路径」（`configEditor.documentPath`）—— 方法一直在、语义变了，方法存在性探测抓不住
+  // （0.15.0 的 MCP 页事故就是这么静默发生的）。这一条能拦的是「方法消失 / 签名漂移到
+  // 同步抛 TypeError」；**返回值形状**是异步结果，同步探针看不到，那一半由 ensurePaths
+  // 的 await 后自检负责（src/index.ts：认 profile 形状上溯 + 主目录不变量检查，异常走
+  // noteRuntime）。两半合起来才是这个契约的完整探测。
+  {
+    id: 'settings.document-path',
+    label: '设置文档路径（主目录推导源）',
+    kind: 'read',
+    owner: 'settings',
+    fallback: 'refuse-operation',
+    methods: ['prepareDocument'],
+    // 零副作用真调：官方实现就是 `Promise.resolve(this.documentPath)`，纯读。拿不到
+    // 异步结果没关系 —— 同步 TypeError（签名漂移）才是这一层要拦的。
+    probe: (t) => callableWithSentinel(t, 'prepareDocument'),
+    // 健康行也常显观测路径（官方 SettingsForms 有同步的 `documentPath` getter，
+    // prepareDocument 就是它的 Promise 包装）：语义再变，页面上这行字一眼见底。
+    describe: (t) => {
+      try {
+        const p = (t as { documentPath?: unknown }).documentPath
+        return typeof p === 'string' && p !== '' ? `观测路径：${p}` : undefined
+      } catch { return undefined }
+    },
+  },
+  // ---- agent preset roster（0.1.7 的两处适配面之二）-------------------------
+  // 0.1.7 把 `read(id)`（直返组合文本）改名成 `readDocument(id)`（返回文档对象，组合
+  // YAML 在 `.content`）。读取口是「read 优先、readDocument 兜底」双入口
+  // （preset-reach.ts 的 readCompositionText），两个名字**任一在场即可** —— 这正是
+  // methods 列表表达不了的 either-or，用 probe 写。list / composedPreset 缺一个，
+  // 注入边界矩阵与边界提示就瞎一半，同为必需。
+  {
+    id: 'preset.roster-surface',
+    label: '预设名册读取面',
+    kind: 'read',
+    owner: 'presetRoster',
+    fallback: 'inform-only',
+    probe: (t) => {
+      const o = t as Record<string, unknown>
+      const hasRead = isFn(o.read)
+      const hasDoc = isFn(o.readDocument)
+      if (!hasRead && !hasDoc) return 'read 与 readDocument 都缺失：组合文本读不到，注入边界矩阵与极简兜底注入失明'
+      const missing = ['list', 'composedPreset'].filter((name) => !isFn(o[name]))
+      if (missing.length > 0) return `名册缺少 ${missing.join(', ')}：注入边界矩阵不完整`
+      return undefined
+    },
+    // 健康行附注实际走的读取路。0.1.7 起 `read` 改名 `readDocument`，兜底成功是**正常形态**
+    // 而非降级 —— 这句话只出现在绿色行上（运行时上报会渲染成问题行，那里不放）。
+    describe: (t) => {
+      const o = t as Record<string, unknown>
+      if (!isFn(o.read) && isFn(o.readDocument)) return '读取走 readDocument（宿主 0.1.7 起的形态）'
+      return undefined
+    },
+  },
 ]
 
 /**
@@ -650,10 +736,19 @@ function inspectCapability(spec: CapabilitySpec, target: Target, reference: Reco
       textMatch,
     }
   }
+  // describe 是健康行也带的观测值（如 settings 的 documentPath）；只挂 ok 路径，
+  // 摸宿主属性一律 try/catch —— 观测失败就少一句后缀，不把好端端的能力报成问题。
+  let described = ''
+  if (spec.describe !== undefined) {
+    try {
+      const extra = spec.describe(target)
+      if (typeof extra === 'string' && extra !== '') described = `；${extra}`
+    } catch { /* 观测值拿不到就算了 */ }
+  }
   return {
     ...base,
     state: 'ok',
-    detail: textMatch === false ? '成员齐备（实现文本与本插件适配的版本不同，按能力使用）' : '成员齐备',
+    detail: (textMatch === false ? '成员齐备（实现文本与本插件适配的版本不同，按能力使用）' : '成员齐备') + described,
     missing: [],
     ...(textMatch === undefined ? {} : { textMatch }),
   }
@@ -730,6 +825,7 @@ export function assessHost(ctx: {
   get?: (name: string) => unknown
   sessions?: unknown
   sessionPersistence?: unknown
+  settings?: unknown
 }): HostAssessment {
   const get = (name: string): unknown => {
     try {
@@ -755,6 +851,10 @@ export function assessHost(ctx: {
   const registry = unwrap(get('workspaceRegistry')) as Target
   const cache = unwrap(get('sessionProjectionCache')) as Target
   const sessions = unwrap(ctx.sessions !== undefined ? ctx.sessions : get('sessions')) as Target
+  // settings 走 ctx 属性优先（插件 inject 清单里的正式服务），roster 走服务名查找
+  // （'agentPresets' 与 preset-reach.ts 的 presetRosterOf 同名 —— 注入矩阵实际用的就是它）。
+  const settings = unwrap(ctx.settings !== undefined ? ctx.settings : get('settings')) as Target
+  const roster = unwrap(get('agentPresets')) as Target
 
   const references = referencePrototypes()
   const targets: Record<CapabilitySpec['owner'], { target: Target; reference?: Record<string, unknown> }> = {
@@ -762,6 +862,8 @@ export function assessHost(ctx: {
     projectionCache: { target: cache, reference: references.cache },
     sessions: { target: sessions, reference: references.sessions },
     persistence: { target: unwrap(get('sessionPersistence')) as Target, reference: undefined },
+    settings: { target: settings, reference: references.settings },
+    presetRoster: { target: roster, reference: references.roster },
   }
 
   const findings = CAPABILITY_SPECS.map((spec) => {
@@ -846,7 +948,7 @@ export function assessHost(ctx: {
  */
 function hostPackageRoot(): string | null {
   // 与 doctor 的 `findHost` **同一套策略**（先看 `$DSH_HOME/profiles/node_modules/@deepseek-ai`，
-  // 再从插件自身位置逐级上溯，并确认那一层里真有 `dsh/package.json`）。此前运行时只按"插件
+  // 再从插件自身位置逐级上溯，最后扫 npx 缓存，并确认那一层里真有 `dsh/package.json`）。此前运行时只按"插件
   // 自己解析到的包"上溯，dev 布局下会把仓库里的副本当成宿主锚点、比出假的 `true` —— 于是
   // 界面说 ok、doctor 说 SEPARATE COPY（V8）。两处口径分裂本身就是缺陷。
   const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh')
@@ -863,10 +965,43 @@ function hostPackageRoot(): string | null {
       dir = parent
     }
   }
+  // 0.1.7 起宿主不再维护 `profiles/node_modules` 那棵 junction 树（link-backend 已移除），
+  // `dsh web` 经 npx 跑在 `<npm 缓存>/_npx/<hash>/node_modules` 里 —— 缓存扫描是 dev 场景
+  // （上溯只找到 checkout 自己的副本）下最后的宿主发现手段。多命中时取最新（npx 升级会
+  // 换 hash 目录、删旧目录）。
+  candidates.push(...npxCacheHostRoots())
   for (const candidate of candidates) {
     if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
   }
   return null
+}
+
+/**
+ * npx 缓存里的宿主 `@deepseek-ai` 目录，按目录 mtime 新到旧排。npm 缓存位置依次看
+ * `npm_config_cache`、`~/.npmrc` 的 `cache=`、`%LOCALAPPDATA%\npm-cache` —— probe 全程同步，
+ * 不起子进程，读不到就当没有这批候选。
+ */
+function npxCacheHostRoots(): string[] {
+  const home = process.env.USERPROFILE || process.env.HOME || ''
+  let cache = process.env.npm_config_cache || ''
+  if (!cache && home) {
+    try {
+      const rc = readFileSync(join(home, '.npmrc'), 'utf8')
+      cache = rc.match(/^\s*cache\s*=\s*(.+?)\s*$/m)?.[1] ?? ''
+    } catch { /* no .npmrc — defaults below */ }
+  }
+  if (!cache && process.env.LOCALAPPDATA) cache = join(process.env.LOCALAPPDATA, 'npm-cache')
+  if (!cache) return []
+  const roots: Array<{ dir: string; mtime: number }> = []
+  const npxRoot = join(cache, '_npx')
+  let entries: string[] = []
+  try { entries = readdirSync(npxRoot) } catch { return [] }
+  for (const entry of entries) {
+    const dir = join(npxRoot, entry, 'node_modules', '@deepseek-ai')
+    if (!existsSync(join(dir, 'dsh', 'package.json'))) continue
+    try { roots.push({ dir, mtime: statSync(dir).mtimeMs }) } catch { /* raced — skip */ }
+  }
+  return roots.sort((left, right) => right.mtime - left.mtime).map((root) => root.dir)
 }
 
 /** Human-readable summary line for logs and the settings page header. */

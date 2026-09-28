@@ -26,6 +26,14 @@ export interface RuntimeNote {
   readonly fallback: 'native-entry' | 'refuse-operation' | 'disable-destructive' | 'inform-only'
   /** 一句话说清"现在是怎样、少的是什么"。 */
   readonly detail: string
+  /**
+   * 详情的**结构化键**（可选）：能拆出固定模板 + 参数的上报点填它，客户端词典按它
+   * 出对应语言的句子（`detail` 仍是原文兜底）。键是本插件自定的稳定 id，取值集见
+   * 客户端 `ovDetail` 的 switch —— 两边增删要同步。
+   */
+  readonly detailKey?: string
+  /** `detailKey` 模板的参数（可选，值为字符串 / 数字，客户端原样代入）。 */
+  readonly params?: Record<string, string | number>
   /** 上报时刻（毫秒）。 */
   readonly at: number
 }

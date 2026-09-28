@@ -1,6 +1,6 @@
 // model 工具（ctx.tools.register + defineTool）各域共用的依赖与 helper。
 //
-// 为什么单独一个文件：五个域的工具都要同一批依赖（defineTool 包装、注册出口、场景锁定
+// 为什么单独一个文件：各注入域的工具都要同一批依赖（defineTool 包装、注册出口、场景锁定
 // 守卫、注入边界提示），各写一份会漂移。
 
 import { defineTool as hostDefineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'

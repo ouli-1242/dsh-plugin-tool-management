@@ -24,6 +24,8 @@ function reportNativeDeleteAvailable(entry: "deleteSession" | "deleteArchivedSes
 		kind: "delete",
 		fallback: "inform-only",
 		detail: `宿主已提供原生 ${entry}：本插件仍走自有完整序列（级联子会话 + spill + 记账 + 缓存行），尚未切换到原生入口。`,
+		detailKey: "workspace.delete-native",
+		params: { entry },
 	});
 }
 
@@ -892,8 +894,8 @@ var ArchiveWorkspaceRegistry = class {
 	}
 	/**
 	 * 列出已归档会话的展示元数据：sessionId / createdAt / cwd / title / archivedAt。
-	 * title 经投影缓存 best-effort 读取（未播种会话用 inheritedEventCount=0）；
-	 * 任何一步失败只降级为缺字段，不阻断列表。
+	 * title 经投影缓存 best-effort 读取（cachedSnapshot 的标题行，旧格式记录退
+	 * cachedPredecessorTitle）；任何一步失败只降级为缺字段，不阻断列表。
 	 */
 	async archivedSessionDetails(): Promise<{ items: ArchivedSessionDetail[] }> {
 		await this.reconcileArchiveLedger();
@@ -911,9 +913,17 @@ var ArchiveWorkspaceRegistry = class {
 				if (typeof header?.cwd === "string" && header.cwd) entry.cwd = header.cwd;
 				const cache = this.ctx.get("sessionProjectionCache");
 				if (cache !== undefined && typeof cache.cachedSnapshot === "function") {
-					const snap = cache.cachedSnapshot(header, 0, ["title"]);
+					// 官方契约是 cachedSnapshot(meta, keys?) 两参；keys 传数字会在
+					// viewCheckpoint 的 new Set 里抛错，被外层 best-effort 吞成"永远没标题"。
+					const snap = cache.cachedSnapshot(header, ["title"]);
 					const title = snap?.values?.title;
 					if (typeof title === "string") entry.title = title;
+					else if (typeof cache.cachedPredecessorTitle === "function") {
+						// 旧格式代际的缓存记录过不了上面的身份校验，官方另有只认标题的提示面。
+						const legacy = cache.cachedPredecessorTitle(header);
+						const legacyTitle = legacy?.values?.title;
+						if (typeof legacyTitle === "string") entry.title = legacyTitle;
+					}
 				}
 			} catch (error) {
 				this.ctx.logger?.warn?.(
@@ -976,7 +986,8 @@ var ArchiveWorkspaceRegistry = class {
 			return false;
 		try {
 			// 未播种会话的继承事件数恒为零，先查缓存可避免读取完整会话原文。
-			if (!header.isSeeded && cache.cachedSnapshot(header, 0) !== void 0)
+			// keys 缺省 = 任一 wire 行可用即算已有缓存（官方两参契约，勿再传数字）。
+			if (!header.isSeeded && cache.cachedSnapshot(header) !== void 0)
 				return false;
 			const stored = await this.readStoredProjectionSource(persistence, header.id);
 			const meta = stored.meta ?? header;
@@ -993,7 +1004,7 @@ var ArchiveWorkspaceRegistry = class {
 				);
 				return false;
 			}
-			if (cache.cachedSnapshot(meta, inheritedEventCount) !== void 0) return false;
+			if (cache.cachedSnapshot(meta) !== void 0) return false;
 			const restored = projections.restore(
 				{},
 				stored.events,

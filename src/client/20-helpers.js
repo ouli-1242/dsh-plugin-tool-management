@@ -141,7 +141,7 @@
     //
     // 为什么这件事得由客户端做：对话走 DSH 自己的 agent / session 通路，而插件的令牌门禁
     // 挂在 `/dsh-plugin-tool-management/api` 上 —— 两条路互不相干，令牌配了、没填，对话
-    // 照样通、五域注入照样进上下文。宿主在客户端留了官方口子：`ctx.conversation.blocks`
+    // 照样通、各域注入照样进上下文。宿主在客户端留了官方口子：`ctx.conversation.blocks`
     // （ComposerBlocks 的注释原文是 "the one way another plugin stops a session's input"），
     // 挂上去的 `reason` 直接当输入框占位文案。
     //
@@ -395,6 +395,103 @@
       list: 'compat.op.list', archive: 'compat.op.archive', unarchive: 'compat.op.unarchive',
       batch: 'compat.op.batch', delete: 'compat.op.delete',
     }
+    /**
+     * 「最近改动」流水里 op 的人类名（0.15.0 B2）。
+     *
+     * 为什么不直接显示 op 名：`mcpm-set-enabled` 这种内部标识符对用户是一串噪声，而这一栏
+     * 回答的问题是「谁做了什么」。表里没有的 op 退回原样显示（少一条不等于报错，
+     * 猜一个中文反倒可能说错）。
+     */
+    // 预设注入边界的行名（2026-09-28 用户裁定）：宿主四个内置预设的 id 换成模式名显示，
+    // 复用子智能体 / 场景页同一套词典键（preset.name.*，一个真相源）；不在这张表里的
+    // 预设（宿主以后新增的、自建的）仍显示原名。
+    var PRESET_MODE_NAME_KEYS = {
+      standard: 'preset.name.standard',
+      ptc: 'preset.name.ptc',
+      minimal: 'preset.name.minimal',
+      cordis: 'preset.name.cordis',
+    }
+    var AUDIT_OP_LABELS = {
+      'mcpm-set-enabled': 'compat.audit.op.mcpSwitch',
+      'mcpm-set-all': 'compat.audit.op.mcpSwitchAll',
+      'mcpm-tool-enabled': 'compat.audit.op.mcpToolSwitch',
+      'mcpm-add': 'compat.audit.op.mcpAdd',
+      'mcpm-edit': 'compat.audit.op.mcpEdit',
+      'mcpm-remove': 'compat.audit.op.mcpRemove',
+      'mcpm-import': 'compat.audit.op.mcpImport',
+      'mcpm-compact': 'compat.audit.op.mcpCompact',
+      'mcpm-note': 'compat.audit.op.mcpNote',
+      'mcpm-settings': 'compat.audit.op.mcpSettings',
+      'mcpm-restart': 'compat.audit.op.mcpRestart',
+      'skill-enable': 'compat.audit.op.skillSwitch',
+      'skill-disable': 'compat.audit.op.skillSwitch',
+      'skill-set-all': 'compat.audit.op.skillSwitchAll',
+      'skill-source-enable': 'compat.audit.op.skillSourceSwitch',
+      'skill-source-disable': 'compat.audit.op.skillSourceSwitch',
+      'skill-source-remove': 'compat.audit.op.skillSourceRemove',
+      'skill-source-restore': 'compat.audit.op.skillSourceRestore',
+      'skill-create': 'compat.audit.op.skillSave',
+      'skill-update': 'compat.audit.op.skillSave',
+      'skill-import': 'compat.audit.op.skillImport',
+      'skill-upload': 'compat.audit.op.skillImport',
+      'skill-delete': 'compat.audit.op.skillDelete',
+      'skill-prefer': 'compat.audit.op.skillPrefer',
+      'skill-unprefer': 'compat.audit.op.skillPrefer',
+      'skill-trash-restore': 'compat.audit.op.trashRestore',
+      'skill-trash-delete': 'compat.audit.op.trashDelete',
+      'skill-custom-add': 'compat.audit.op.skillDirAdd',
+      'skill-custom-remove': 'compat.audit.op.skillDirRemove',
+      'rules-create': 'compat.audit.op.ruleSave',
+      'rules-update': 'compat.audit.op.ruleSave',
+      'rules-remove': 'compat.audit.op.ruleDelete',
+      'rules-restore': 'compat.audit.op.trashRestore',
+      'rules-toggle': 'compat.audit.op.ruleSwitch',
+      'rules-import': 'compat.audit.op.ruleImport',
+      'rules-attach': 'compat.audit.op.ruleAttach',
+      'rules-detach': 'compat.audit.op.ruleAttach',
+      'rules-trash-remove': 'compat.audit.op.trashDelete',
+      'rules-set-index': 'compat.audit.op.ruleIndex',
+      'rules-set-active': 'compat.audit.op.memorySwitch',
+      'rules-create-scene': 'compat.audit.op.sceneSave',
+      'rules-update-scene': 'compat.audit.op.sceneSave',
+      'rules-remove-scene': 'compat.audit.op.sceneDelete',
+      'rules-rebind-prompt': 'compat.audit.op.sceneRebind',
+      'rules-scene-lock': 'compat.audit.op.sceneLock',
+      'scene-archive-save': 'compat.audit.op.sceneSave',
+      'scene-mode-set': 'compat.audit.op.sceneEnter',
+      'scene-trash-restore': 'compat.audit.op.trashRestore',
+      'scene-trash-delete': 'compat.audit.op.trashDelete',
+      'scene-apply': 'compat.audit.op.engineApply',
+      'scene-restore': 'compat.audit.op.engineRestore',
+      'subagent-create': 'compat.audit.op.personaSave',
+      'subagent-update': 'compat.audit.op.personaSave',
+      'subagent-delete': 'compat.audit.op.personaDelete',
+      'subagent-import': 'compat.audit.op.personaImport',
+      'subagent-toggle': 'compat.audit.op.personaSwitch',
+      'subagent-trash-restore': 'compat.audit.op.trashRestore',
+      'subagent-trash-delete': 'compat.audit.op.trashDelete',
+      'agentsmd-create': 'compat.audit.op.presetSave',
+      'agentsmd-update': 'compat.audit.op.presetSave',
+      'agentsmd-remove': 'compat.audit.op.presetDelete',
+      'agentsmd-import': 'compat.audit.op.presetImport',
+      'agentsmd-apply': 'compat.audit.op.presetApply',
+      'agentsmd-trash-restore': 'compat.audit.op.trashRestore',
+      'agentsmd-trash-delete': 'compat.audit.op.trashDelete',
+      'tool-table': 'compat.audit.op.toolTable',
+      'inject-settings': 'compat.audit.op.injectSettings',
+      'scene-settings': 'compat.audit.op.sceneSettings',
+      'backups-clean': 'compat.audit.op.backupsClean',
+      'history-archive': 'compat.audit.op.sessionArchive',
+      'history-unarchive': 'compat.audit.op.sessionUnarchive',
+      'history-delete': 'compat.audit.op.sessionDelete',
+      'history-archive-batch': 'compat.audit.op.sessionArchive',
+      'history-unarchive-batch': 'compat.audit.op.sessionUnarchive',
+      'history-delete-batch': 'compat.audit.op.sessionDelete',
+      'history-retention-set': 'compat.audit.op.sessionRetention',
+      'history-import': 'compat.audit.op.sessionImport',
+      'history-export': 'compat.audit.op.sessionExport',
+      'history-workspace-register': 'compat.audit.op.sessionRegister',
+    }
     /** 每个操作走哪条路线：仅当有"原生委托"能力可用时才算原生。 */
     function operationRoutes(data) {
       const findings = (data && data.findings) || []
@@ -421,7 +518,7 @@
       const t = props.t
       const [data, setData] = React.useState(null)
       const [presetReach, setPresetReach] = React.useState(null)
-      // 注入设置（本插件五个注入域的开关；见 src/context-inject.ts）。它和可达性矩阵是一体两面：
+      // 注入设置（本插件各注入域的开关，清单见 context-inject 的 INJECT_DOMAIN_KEYS）。它和可达性矩阵是一体两面：
       // 矩阵说"到不到得了"，这里决定"要不要"。读不到时这一节不显示。
       const [inject, setInject] = React.useState(null)
       // 模型工具表（哪些工具整份不发给模型；见 src/tools/table.ts）。与「注入」是两种省法：
@@ -442,7 +539,7 @@
         // 存方案那条路用户是来打字的，光标直接放进输入框，省一次点击。
         if (toolPreset.mode === 'save' && toolPresetInputRef.current) toolPresetInputRef.current.focus()
       }, [!!toolPreset])
-      // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 那一段对话的投递统计。
+      // 注入实况（只读）：最近活跃会话里模型**真正看到**的各域文本 + 那一段对话的投递统计。
       // 与「注入」设置是一体两面：设置说"要送什么"，这里说"实际送到了什么"。
       const [live, setLive] = React.useState(null)
       const [liveOpen, setLiveOpen] = React.useState('')
@@ -471,6 +568,109 @@
       // null = 未打开；`{ files, keep, loading, error, confirming, removed, kept, failedCount, failedNames, busy }` = 已打开。
       // `confirming` = 删除的两步确认已经按下第一步（按钮就地变成「确认永久删除」）。
       const [backupClean, setBackupClean] = React.useState(null)
+      // 「最近改动」流水（0.15.0 B2）：null = 还没读过；`{entries, loading, error, domain}`。
+      // 读的是服务端 hub 里的 `audit.jsonl`（写类 op 成功后的追加式流水），这一栏只读不写。
+      const [audit, setAudit] = React.useState(null)
+      // 「清除记录」的两步确认（与「清理旧备份」同一口径：不可逆的动作不是一按就删）。
+      const [auditConfirm, setAuditConfirm] = React.useState(false)
+      const [auditClearing, setAuditClearing] = React.useState(false)
+      const loadAudit = function (domain) {
+        const want = domain || ''
+        setAudit({ entries: [], loading: true, error: null, domain: want })
+        apiCall('audit-list', { limit: 100, domain: want })
+          .then(function (r) {
+            setAudit({
+              entries: (r && r.entries) || [],
+              loading: false,
+              error: (r && r.ok === false) ? ((r && r.error) || t('compat.audit.failed')) : null,
+              domain: want,
+            })
+          })
+          .catch(function (e) { setAudit({ entries: [], loading: false, error: errMsg(e), domain: want }) })
+      }
+      // 进页面读一次：它是「刚才那次改动算没算进去」的核对栏，不该要求用户再点一下。
+      React.useEffect(function () { loadAudit('') }, [])
+      // 整机迁移（0.15.0 C2）：导出 = 一个目录带走全部；导入 = 先预览、勾选域、再执行。
+      const [snap, setSnap] = React.useState({ outDir: '', includeSecrets: false, busy: false, result: null })
+      const [snapIn, setSnapIn] = React.useState({ dir: '', preview: null, loading: false, picked: {}, conflict: 'skip', busy: false, result: null, error: null })
+      /**
+       * 「浏览」用的目录状态（0.15.0）：`target` 记住这次是给导出选目录还是给导入选快照位置。
+       * 走宿主 `dir-list` 逐级列目录 —— 标准浏览器拿不到所选文件夹的绝对路径
+       * （`File.path` 只有 Electron 有），所以不能靠 `<input type=file webkitdirectory>` 糊过去。
+       */
+      const [browse, setBrowse] = React.useState(null)
+      const browseLoad = function (dir, target) {
+        const want = String(dir || '')
+        const keep = target || (browse && browse.target) || 'export'
+        setBrowse({ target: keep, path: want, current: '', parent: null, entries: [], loading: true, error: null })
+        apiCall('dir-list', { dir: want })
+          .then(function (r) {
+            if (!r || !r.ok) { setBrowse({ target: keep, path: want, current: '', parent: null, entries: [], loading: false, error: (r && r.error) || t('dir.error.unreadable') }); return }
+            setBrowse({ target: keep, path: r.current || want, current: r.current || want, parent: r.parent || null, entries: r.entries || [], loading: false, error: null })
+          })
+          .catch(function (e) { setBrowse({ target: keep, path: want, current: '', parent: null, entries: [], loading: false, error: errMsg(e) }) })
+      }
+      const browseOpen = function (target, initial) { browseLoad(initial || '', target) }
+      const browsePick = function () {
+        if (!browse || !browse.current) return
+        if (browse.target === 'export') setSnap(Object.assign({}, snap, { outDir: browse.current }))
+        else setSnapIn(Object.assign({}, snapIn, { dir: browse.current, preview: null, result: null }))
+        setBrowse(null)
+      }
+      /** 清空流水。清完会重载 —— 新流水里会留下一条「清空了改动记录」，这是有意的（见 audit-log.ts）。 */
+      const doAuditClear = function () {
+        setAuditClearing(true)
+        apiCall('audit-clear', {})
+          .then(function (r) {
+            setAuditClearing(false)
+            setAuditConfirm(false)
+            if (!r || !r.ok) { setAudit(Object.assign({}, audit, { error: (r && r.error) || t('compat.audit.clearFailed') })); return }
+            loadAudit((audit && audit.domain) || '')
+          })
+          .catch(function (e) { setAuditClearing(false); setAudit(Object.assign({}, audit, { error: errMsg(e) })) })
+      }
+      const doSnapshotExport = function () {        setSnap(Object.assign({}, snap, { busy: true, result: null }))
+        apiCall('snapshot-export', { outDir: snap.outDir, includeSecrets: snap.includeSecrets === true })
+          .then(function (r) {
+            setSnap(Object.assign({}, snap, { busy: false, result: (r && r.ok)
+              ? { ok: true, text: t('snapshot.export.done', { dir: r.dir }), counts: domainCountsText((r.manifest && r.manifest.domains) || {}), notes: ((r.manifest && r.manifest.notes) || []).join('；') }
+              : { ok: false, text: (r && r.error) || t('snapshot.export.failed') } }))
+          })
+          .catch(function (e) { setSnap(Object.assign({}, snap, { busy: false, result: { ok: false, text: errMsg(e) } })) })
+      }
+      const doSnapshotPreview = function () {
+        setSnapIn(Object.assign({}, snapIn, { loading: true, error: null, preview: null, result: null }))
+        // 顺带问一次场景锁：导入会逐个调各域的 import op，那些 op 在锁定期间被门禁挡着 ——
+        // 让用户在执行之前就知道要被拒，而不是点完才看到一屏失败原因。
+        Promise.all([apiCall('snapshot-preview', { dir: snapIn.dir }), apiCall('rules-list', {}).catch(function () { return null })])
+          .then(function (rs) {
+            const r = rs[0], rulesRes = rs[1]
+            const scenes = (rulesRes && (rulesRes.scenes || (rulesRes.data && rulesRes.data.scenes))) || []
+            const locked = scenes.filter(function (s) { return s && s.locked === true }).map(function (s) { return String(s.name || s.scene || '') }).filter(Boolean)
+            if (!r || !r.ok) { setSnapIn(Object.assign({}, snapIn, { loading: false, error: (r && r.error) || t('snapshot.preview.failed'), lockedScenes: locked })); return }
+            const picked = {}
+            ;(r.domains || []).forEach(function (d) { picked[d.domain] = true })
+            setSnapIn(Object.assign({}, snapIn, { loading: false, preview: r, picked: picked, lockedScenes: locked }))
+          })
+          .catch(function (e) { setSnapIn(Object.assign({}, snapIn, { loading: false, error: errMsg(e) })) })
+      }
+      const doSnapshotImport = function () {
+        const picked = snapIn.picked || {}
+        const domains = Object.keys(picked).filter(function (k) { return picked[k] === true })
+        if (!domains.length) { setSnapIn(Object.assign({}, snapIn, { result: { ok: false, text: t('snapshot.import.none') } })); return }
+        setSnapIn(Object.assign({}, snapIn, { busy: true, result: null }))
+        apiCall('snapshot-import', { dir: snapIn.dir, domains: domains, conflict: snapIn.conflict === 'overwrite' ? 'overwrite' : 'skip' })
+          .then(function (r) {
+            setSnapIn(Object.assign({}, snapIn, { busy: false, result: (r && r.ok)
+              ? { ok: true, text: t('snapshot.import.done'), report: r.report || [] }
+              : { ok: false, text: (r && r.error) || t('snapshot.import.failed') } }))
+          })
+          .catch(function (e) { setSnapIn(Object.assign({}, snapIn, { busy: false, result: { ok: false, text: errMsg(e) } })) })
+      }
+      /** 域名的本地化 + 条数（导出结果与导入预览共用一句人话）。 */
+      const domainCountsText = function (domains) {
+        return Object.keys(domains).map(function (d) { return t('snapshot.domain.' + d) + ' ' + domains[d] }).join(' · ')
+      }
       const tokenInputRef = React.useRef(null)
       // 「设置 / 修改令牌」弹窗里的「当前令牌」那一格：弹窗打开时光标直接落这里（首次设置
       // 没有这一格，落回弹窗根节点）。
@@ -878,6 +1078,139 @@
       const routeText = function (via) {
         return via === 'none' ? t('compat.op.unavailable') : via === 'native' ? t('compat.op.native') : t('compat.op.adapter')
       }
+      // ── 功能总览的本地化（2026-09-28：英文界面总览半页中文的整改）────────────────
+      // 文案归客户端、数值归服务端：feature-overview 行带 key/state/结构化字段，
+      // 这里的解析器按键出对应语言的句子；任何一处对不上（服务端加了新键、词典漏了）
+      // 都回退服务端中文原文 —— 宁可退回中文，不显示原始键名。
+      /** 路由缺失能力（refusal）的标签：键集对齐服务端 probe 的 spec id 与 operation 兜底 id。 */
+      const capLabel = function (id, fallback) {
+        switch (id) {
+          case 'workspace.read-state': return t('compat.cap.workspaceReadState')
+          case 'workspace.read-table': return t('compat.cap.workspaceReadTable')
+          case 'workspace.index-shape': return t('compat.cap.workspaceIndexShape')
+          case 'workspace.read-header': return t('compat.cap.workspaceReadHeader')
+          case 'workspace.enqueue': return t('compat.cap.workspaceEnqueue')
+          case 'workspace.set-state': return t('compat.cap.workspaceSetState')
+          case 'workspace.index-header': return t('compat.cap.workspaceIndexHeader')
+          case 'workspace.archive-native': return t('compat.cap.workspaceArchiveNative')
+          case 'workspace.unarchive-native': return t('compat.cap.workspaceUnarchiveNative')
+          case 'workspace.batch-native': return t('compat.cap.workspaceBatchNative')
+          case 'workspace.delete-native': return t('compat.cap.workspaceDeleteNative')
+          case 'sessions.detach-live': return t('compat.cap.sessionsDetachLive')
+          case 'sessions.cold-announce': return t('compat.cap.sessionsColdAnnounce')
+          case 'projection.write': return t('compat.cap.projectionWrite')
+          case 'projection.table-delete': return t('compat.cap.projectionTableDelete')
+          case 'archive': return t('compat.cap.opArchive')
+          case 'unarchive': return t('compat.cap.opUnarchive')
+          case 'batch': return t('compat.cap.opBatch')
+          case 'delete': return t('compat.cap.opDelete')
+          case 'list': return t('compat.cap.opList')
+          default: return fallback || id
+        }
+      }
+      /** 行标签：键集对齐服务端 feature-overview 的 row.key；未知键回退服务端原文。 */
+      const ovLabel = function (key) {
+        switch (key) {
+          case 'mount': return t('compat.ov.mount')
+          case 'patch-write-guard': return t('compat.ov.patchWriteGuard')
+          case 'context-injection': return t('compat.ov.contextInjection')
+          case 'official-suppression': return t('compat.ov.officialSuppression')
+          case 'skills-provider': return t('compat.ov.skillsProvider')
+          case 'projection-cache-adapter': return t('compat.ov.projectionCacheAdapter')
+          case 'mcp-tool-visibility': return t('compat.ov.mcpToolVisibility')
+          case 'session-delete': return t('compat.ov.sessionDelete')
+          case 'session-archive': return t('compat.ov.sessionArchive')
+          case 'session-unarchive': return t('compat.ov.sessionUnarchive')
+          case 'session-batch': return t('compat.ov.sessionBatch')
+          case 'session-list': return t('compat.ov.sessionList')
+          case 'injection-domains': return t('compat.ov.injectionDomains')
+          case 'token': return t('compat.ov.token')
+          case 'scene-lock': return t('compat.ov.sceneLock')
+          case 'mcp-tools': return t('compat.ov.mcpTools')
+          case 'tool-table': return t('compat.ov.toolTable')
+          case 'native-delete': return t('compat.ov.nativeDelete')
+          case 'host-identity': return t('compat.ov.hostIdentity')
+          case 'memory': return t('compat.ov.memory')
+          case 'prompts': return t('compat.ov.prompts')
+          case 'subagents': return t('compat.ov.subagents')
+          case 'scenes': return t('compat.ov.scenes')
+          default: return null
+        }
+      }
+      /** 行详情：detailKey（note 降级）与 key+state（固定模板）出本地化句子，其余回退原文。 */
+      const ovDetail = function (row) {
+        const params = row.params || {}
+        const list = function (items) { return (items || []).join(t('compat.sep')) }
+        if (row.detailKey) {
+          switch (row.detailKey) {
+            case 'skills-provider': return t('compat.note.skillsProvider', params)
+            case 'context-injection': return t('compat.note.contextInjection', params)
+            case 'cordis-original-symbol': return t('compat.note.cordisOriginalSymbol')
+            case 'patch-write-guard.no-dep': return t('compat.note.patchWriteGuard.noDep', params)
+            case 'patch-write-guard.stale': return t('compat.note.patchWriteGuard.stale', params)
+            case 'official-suppression': return t('compat.note.officialSuppression', params)
+            case 'projection-cache-adapter.setup': return t('compat.note.projectionCacheAdapter.setup', params)
+            case 'projection-cache-adapter.taken-over': return t('compat.note.projectionCacheAdapter.takenOver')
+            case 'projection-cache-adapter.first-use': return t('compat.note.projectionCacheAdapter.firstUse')
+            case 'mcp-tool-visibility.no-restrict': return t('compat.note.mcpToolVisibility.noRestrict')
+            case 'mcp-tool-visibility.partial': return t('compat.note.mcpToolVisibility.partial', params)
+            case 'workspace.delete-native': return t('compat.note.workspaceDeleteNative', params)
+          }
+        }
+        if (row.key === 'mount' && row.state === 'ok') return t('compat.ov.mount.ok', params)
+        if (row.state === 'ok' && (row.key === 'patch-write-guard' || row.key === 'context-injection' || row.key === 'official-suppression' ||
+          row.key === 'skills-provider' || row.key === 'projection-cache-adapter' || row.key === 'mcp-tool-visibility')) {
+          return t('compat.ov.assembly.ok')
+        }
+        if (row.key === 'session-delete' || row.key === 'session-archive' || row.key === 'session-unarchive' ||
+          row.key === 'session-batch' || row.key === 'session-list') {
+          if (row.state === 'unknown') return t('compat.ov.route.unknown')
+          if (row.state === 'unavailable') {
+            return t('compat.ov.route.none', { list: list((row.refusals || []).map(function (r) { return capLabel(r.id, r.label) })) })
+          }
+          return t('compat.ov.route.ok', { via: routeText(row.via) })
+        }
+        if (row.key === 'injection-domains') {
+          return row.state === 'disabled'
+            ? t('compat.ov.injectionDomains.off', { total: row.total })
+            : t('compat.ov.injectionDomains.on', { count: row.count, total: row.total, list: list(row.domains) })
+        }
+        if (row.key === 'token') {
+          return row.state === 'disabled' ? t('compat.ov.token.disabled')
+            : row.state === 'locked' ? t('compat.ov.token.locked')
+              : t('compat.ov.token.ok')
+        }
+        if (row.key === 'scene-lock') {
+          return row.state === 'ok' ? t('compat.ov.sceneLock.ok')
+            : t('compat.ov.sceneLock.locked', { list: list(row.scenes) })
+        }
+        if (row.key === 'mcp-tools') {
+          const servers = Number(row.servers || 0)
+          const tools = Number(row.tools || 0)
+          const body = servers > 0 && tools > 0 ? t('compat.ov.mcpTools.both', { servers: servers, tools: tools })
+            : servers > 0 ? t('compat.ov.mcpTools.servers', { servers: servers })
+              : tools > 0 ? t('compat.ov.mcpTools.tools', { tools: tools })
+                : t('compat.ov.mcpTools.none')
+          return body + (servers + tools > 0 ? t('compat.ov.mcpTools.guard') : '')
+        }
+        if (row.key === 'tool-table') {
+          const hidden = Number(row.hidden || 0)
+          if (hidden === 0) return t('compat.ov.toolTable.all', { total: row.total })
+          return hidden === Number(row.defaults || 0)
+            ? t('compat.ov.toolTable.factory', { hidden: hidden, total: row.total })
+            : t('compat.ov.toolTable.mixed', { hidden: hidden, total: row.total, defaults: row.defaults })
+        }
+        if (row.key === 'native-delete' && row.state === 'ok') return t('compat.ov.nativeDelete.ok')
+        if (row.key === 'host-identity') {
+          if (row.state === 'unknown') return t('compat.ov.route.unknown')
+          if (row.state === 'degraded') return t('compat.ov.hostIdentity.degraded', { list: list(row.blockers) })
+          return t('compat.ov.hostIdentity.ok', { version: row.version })
+        }
+        if (row.state === 'ok' && (row.key === 'memory' || row.key === 'prompts' || row.key === 'subagents' || row.key === 'scenes')) {
+          return t('compat.ov.plain.ok')
+        }
+        return row.detail
+      }
       const card = function (label, value, note, bad) {
         return React.createElement('div', { className: 'dsm-compat-card' + (bad ? ' dsm-compat-card-bad' : '') },
           React.createElement('span', { className: 'dsm-compat-card-label' }, label),
@@ -900,6 +1233,44 @@
             React.createElement('h3', { className: 'dsm-compat-section-title' }, title),
             hint ? React.createElement('span', { className: 'dsm-compat-section-hint' }, hint) : null),
           boxed ? React.createElement('div', { className: 'dsm-compat-box' }, body) : body)
+      }
+
+      // 「最近改动」「整机迁移」「注入实况」三块收进顶部按钮，点开才看（用户裁定 2026-09-28）：
+      // 这三块都是"要看的时候才看"的东西，常驻在长页里把体检结论与设置项挤得更远。
+      // 三块的内容各自算成变量（auditContent / snapshotContent / liveContent），这里只给外壳。
+      const [compatDialogOpen, setCompatDialog] = React.useState('')
+      let auditContent = null
+      let snapshotContent = null
+      let liveContent = null
+      /**
+       * 兼容页自己的弹窗外壳。**必须手写 DOM** —— CompatPage 在 `apply` 之外，引用 apply 内的
+       * `Modal` 就是渲染期 ReferenceError、整块面板白屏（2026-09-19 真踩过一次）。
+       * 与「清理旧备份」「访问令牌」两处同一套行为：点遮罩空白关、Esc 关、Tab 圈在框内。
+       *
+       * @param fixed 固定高度。只给「最近改动」这种**内容长短会变、但希望框不跳**的列表；
+       *   表单类（整机迁移）与条数固定的（注入实况）用自适应高度，否则内容少时框里一片空。
+       */
+      const compatDialog = function (id, title, content, fixed) {
+        const close = function () { setCompatDialog(''); setBrowse(null) }
+        return React.createElement('div', {
+          key: id + '-mask', className: 'dsm-mask',
+          onMouseDown: function (e) { if (e.target === e.currentTarget) close() },
+        }, React.createElement('div', {
+          tabIndex: -1, className: 'dsm-modal dsm-modal-lg' + (fixed ? ' dsm-compat-dialog' : ''), role: 'dialog', 'aria-modal': 'true',
+          'aria-labelledby': 'dsm-compat-dialog-title-' + id,
+          onKeyDown: function (e) { if (!handleModalEscape(e, close)) trapModalFocus(e.currentTarget, e) },
+        },
+          React.createElement('div', { className: 'dsm-modal-head' },
+            React.createElement('h3', { className: 'dsm-modal-title', id: 'dsm-compat-dialog-title-' + id }, title),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: close }, t('btn.close'))),
+          React.createElement('div', { className: 'dsm-modal-body' }, content)))
+      }
+      /** 顶部那一栏的三个入口按钮（与「刷新」「清理旧备份」同排同样式）。 */
+      const compatDialogButton = function (id, label) {
+        return React.createElement('button', {
+          type: 'button', className: 'dsm-btn dsm-btn-secondary',
+          onClick: function () { setCompatDialog(id) },
+        }, label)
       }
 
       const body = []
@@ -958,10 +1329,13 @@
         return React.createElement('p', { className: 'dsm-token-ferr dsm-feedback dsm-error', role: 'alert' }, tokenMsg.text)
       }
       // ① 状态区：实况句与解锁错误共用一行 —— 错误顶替实况（红色），行高、位置都不变。
+      // 「还没有令牌」这一态**不出实况句**（用户裁定 2026-09-28）：那句话讲的是"没令牌会怎样"，
+      // 而这一区已经有灰胶囊 + 「设置令牌」入口，解释反而像吓唬人。其余状态各有一句。
       const tokenStatusLine = !tokenState ? null
         : (tokenMsg && tokenMsg.field === 'run')
           ? React.createElement('span', { className: 'dsm-help dsm-token-stat-err' }, tokenMsg.text)
-          : React.createElement('span', { className: 'dsm-help' }, t('compat.token.sentence.' + tokenKind))
+          : (tokenKind === 'unset' ? null
+            : React.createElement('span', { className: 'dsm-help' }, t('compat.token.sentence.' + tokenKind)))
       // 控件槽：只有「待解锁」态才有内容（输入框 + 解锁）。已解锁后状态行本身就是
       // 绿胶囊 + 实况，控件槽里再摆一枚「已解锁」纯属重复、框也空落落（用户 2026-09-19
       // 实测反馈）—— 其余状态什么都不放，这一区最省就一行。
@@ -1163,7 +1537,7 @@
       }
 
       // 注入设置块：本插件注入给模型哪些内容的开关。总开关只管
-      // "极简这类预设下要不要破例"，五个域勾选在任何预设下都生效。
+      // "极简这类预设下要不要破例"，各域勾选在任何预设下都生效。
       //
       // 排版口径（用户裁定 2026-09-16）：勾选**横排**（短标签一行放得下，不再一人一行竖着排），
       // 文案只说到"有这个内容"为止 —— 用户是普通使用者，不解释 persona/载体/路径这些内部机制。
@@ -1351,9 +1725,9 @@
             })
           : ''
         const canCopy = (live.domains || []).some(hasText)
-        push(React.createElement('section', { className: 'dsm-compat-section' },
+        liveContent = React.createElement('section', { className: 'dsm-compat-section' },
           React.createElement('div', { className: 'dsm-compat-section-head' },
-            React.createElement('h3', { className: 'dsm-compat-section-title' }, t('compat.live.title')),
+            // 标题交给弹窗头部，这一行只留实况句与「复制」
             React.createElement('span', { className: 'dsm-compat-section-hint' }, t('compat.live.hint') + ' · ' + deliveredText + ' · ' + observedText + (costText ? ' · ' + costText : '')),
             React.createElement('span', { className: 'dsm-inject-live-actions' },
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !canCopy, onClick: copyAll },
@@ -1393,7 +1767,7 @@
                     adopt ? React.createElement('span', { className: 'dsm-inject-live-adopt', title: t('compat.live.adopt.title') }, '· ' + adopt) : null),
                   React.createElement('span', { className: 'dsm-compat-pill' + st.cls, title: st.title || undefined }, st.text),
                   open && canOpen ? React.createElement('pre', { className: 'dsm-code dsm-compat-mod-self' }, row.text) : null)
-              })))))
+              }))))
       }
       if (error) body.push(React.createElement('div', {
         // CompatPage 在 apply **之外**，用不了 apply 内的 `Notice`（那会白屏），所以这里
@@ -1453,7 +1827,7 @@
             React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
               features.rows.map(function (row) {
                 const cls = row.state === 'ok' ? 'dsm-compat-pill-ok'
-                  : (row.state === 'disabled' || row.state === 'locked') ? ''
+                  : (row.state === 'disabled' || row.state === 'locked' || row.state === 'locked-scene') ? ''
                     : 'dsm-compat-pill-warn'
                 return React.createElement('div', {
                   className: 'dsm-compat-mod-row' + (row.tab ? ' dsm-compat-row-link' : ''),
@@ -1462,12 +1836,12 @@
                   tabIndex: row.tab ? 0 : undefined,
                   onClick: row.tab ? function () { jumpToTab(row.tab) } : undefined,
                 },
-                  React.createElement('span', { className: 'dsm-compat-name' }, row.label),
+                  React.createElement('span', { className: 'dsm-compat-name' }, ovLabel(row.key) || row.label),
                   React.createElement('span', { className: 'dsm-compat-pill ' + cls },
                     t('compat.feature.state.' + String(row.state || 'unknown'))),
                   React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
                     React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')),
-                    row.detail))
+                    ovDetail(row)))
               }))))
         }
 
@@ -1582,7 +1956,7 @@
               else if (row.reason) tags.push(React.createElement('span', { className: 'dsm-tag', key: 'reason' }, t('compat.reach.whyUnknown')))
               return React.createElement('div', { className: 'dsm-compat-mod-row', key: row.presetId },
                 React.createElement('span', { className: 'dsm-compat-name dsm-reach-name' },
-                  React.createElement('span', null, (row.name || row.presetId) + (row.isDefault ? ' · ' + t('compat.reach.default') : '')),
+                  React.createElement('span', null, (PRESET_MODE_NAME_KEYS[row.presetId] ? t(PRESET_MODE_NAME_KEYS[row.presetId]) : (row.name || row.presetId)) + (row.isDefault ? ' · ' + t('compat.reach.default') : '')),
                   tags.length ? React.createElement('span', { className: 'dsm-tags' }, tags) : null),
                 // 芯片顺序与「注入」块的勾选顺序一致（用户裁定 2026-09-16；2026-09-23 起
                 // 场景与记忆是两个域，各占一枚）：场景 → 记忆 → MCP → 技能 → 子智能体 → 提示词。
@@ -1604,6 +1978,159 @@
               return React.createElement('li', { key: n }, t('compat.reach.tools.' + n))
             }))))
       }
+
+      // ── 最近改动（0.15.0 B2）─────────────────────────────────────────────────
+      // 倒序列表 + 按域过滤 + 「同秒同来源」合并。落盘不去重（保真），合并只发生在展示层：
+      // 进一次场景会连写几条，逐条铺开会把「一次动作」读成「很多次改动」。
+      // [op 前缀, i18n 键尾]：键名不用前缀原文，`tool-table` 这类带短横线的名字进不了词典键的
+      // 正则（check:i18n 只认 [A-Za-z0-9._]），漏过去就是"英文界面显示原始键名"。
+      const AUDIT_DOMAINS = [['', 'all'], ['mcpm', 'mcpm'], ['skill', 'skill'], ['rules', 'rules'], ['scene', 'scene'], ['subagent', 'subagent'], ['agentsmd', 'agentsmd'], ['history', 'history'], ['tool-table', 'toolTable'], ['inject-settings', 'injectSettings'], ['backups', 'backups']]
+      // 时间列恒显示「月-日 时:分」：流水一屏跨好几天是常态，"今天只给时分"会让人
+      // 分不清 22:04 是今晚还是昨晚（用户 2026-09-28）。
+      const auditTimeText = function (sec) {
+        const d = new Date(sec * 1000)
+        return ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) + ' ' +
+          ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2)
+      }
+      const auditGroups = function (entries) {
+        const out = []
+        for (const e of (entries || [])) {
+          const sec = Math.floor(Number(e.ts) / 1000)
+          const last = out.length ? out[out.length - 1] : null
+          // 列表已经是倒序，所以「同一组」必然相邻；不排序也就不破坏服务端给的时序。
+          if (last && last.sec === sec && last.source === e.source) { last.items.push(e); continue }
+          out.push({ sec: sec, source: e.source, items: [e] })
+        }
+        return out
+      }
+      auditContent = React.createElement('div', { className: 'dsm-audit' },
+          React.createElement('div', { className: 'dsm-audit-bar' },
+            React.createElement('select', {
+              className: 'dsm-control dsm-audit-filter', 'aria-label': t('compat.audit.domain'),
+              value: (audit && audit.domain) || '', disabled: !audit || audit.loading === true,
+              onChange: function (e) { loadAudit(e.target.value) },
+            }, AUDIT_DOMAINS.map(function (d) {
+              return React.createElement('option', { key: d[1], value: d[0] }, t('compat.audit.domain.' + d[1]))
+            })),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !audit || audit.loading === true, onClick: function () { loadAudit((audit && audit.domain) || '') } }, t('compat.audit.reload')),
+            // 清除是两步：按钮先变成「确认清除」+「取消」，不做"一按就没了"（与清理旧备份同口径）。
+            auditConfirm === true
+              ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: auditClearing === true, onClick: doAuditClear }, t('compat.audit.clear.confirm'))
+              : React.createElement('button', {
+                type: 'button', className: 'dsm-btn dsm-btn-quiet', title: t('compat.audit.clear.title'),
+                disabled: !audit || audit.loading === true || auditClearing === true || !(audit.entries || []).length,
+                onClick: function () { setAuditConfirm(true) },
+              }, t('compat.audit.clear')),
+            auditConfirm === true ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: auditClearing === true, onClick: function () { setAuditConfirm(false) } }, t('btn.cancel')) : null),
+          (!audit || audit.loading) ? React.createElement('div', { className: 'dsm-empty' }, t('compat.audit.loading')) : null,
+          audit && audit.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, audit.error) : null,
+          audit && !audit.loading && !audit.error && !audit.entries.length ? React.createElement('div', { className: 'dsm-empty' }, t('compat.audit.empty')) : null,
+          audit && !audit.loading && audit.entries.length ? React.createElement('div', { className: 'dsm-audit-list' },
+            React.createElement('div', { className: 'dsm-compat-table-head dsm-audit-head' },
+              React.createElement('span', null, t('compat.audit.col.time')),
+              React.createElement('span', null, t('compat.audit.col.action'))),
+            auditGroups(audit.entries).map(function (g, i) {
+              return React.createElement('div', { className: 'dsm-audit-row', key: g.sec + '-' + g.source + '-' + i },
+                React.createElement('span', { className: 'dsm-audit-time' }, auditTimeText(g.sec)),
+                React.createElement('span', { className: 'dsm-audit-main' },
+                  g.items.map(function (e, j) {
+                    return React.createElement('span', { className: 'dsm-audit-item', key: j },
+                      AUDIT_OP_LABELS[e.op] ? t(AUDIT_OP_LABELS[e.op]) : e.op,
+                      e.target && e.target !== '@config' ? React.createElement('span', { className: 'dsm-audit-target' }, '「' + e.target + '」') : null)
+                  }),
+                  g.items.length > 1 ? React.createElement('span', { className: 'dsm-audit-more' }, t('compat.audit.group.more', { count: g.items.length })) : null,
+                  React.createElement('span', { className: 'dsm-pill' }, t('compat.audit.source.' + g.source))))
+            })) : null)
+
+      // ── 整机迁移（0.15.0 C2）──────────────────────────────────────────────────
+      // 导出 = 一个目录带走全部；导入 = 先读清单预览、勾选域、选冲突策略，再执行。
+      // 两步是硬要求：一次写六个域的失败面太大，用户必须先看到"哪域有多少、几个重名"。
+      /** 内联的目录浏览面板（挂在对应输入框下面，不再套一层弹窗）。 */
+      const snapBrowsePanel = function (target) {
+        if (!browse || browse.target !== target) return null
+        return React.createElement('div', { className: 'dsm-snap-browse' },
+          React.createElement('div', { className: 'dsm-dir-row' },
+            React.createElement('input', {
+              className: 'dsm-control', value: browse.path, placeholder: t('dir.pathPlaceholder'),
+              onChange: function (e) { setBrowse(Object.assign({}, browse, { path: e.target.value })) },
+              onKeyDown: function (e) { if (e.key === 'Enter') { e.preventDefault(); browseLoad(e.target.value, target) } },
+            }),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { browseLoad(browse.path, target) } }, t('dir.jump')),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !browse.parent, onClick: function () { browseLoad(browse.parent, target) } }, t('dir.up'))),
+          browse.loading ? React.createElement('div', { className: 'dsm-empty' }, t('dir.loading'))
+            : browse.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, browse.error)
+              : React.createElement('div', { className: 'dsm-dir-list' }, (browse.entries || []).length
+                ? browse.entries.map(function (e) {
+                  return React.createElement('button', { key: e.path, type: 'button', className: 'dsm-dir-item', title: e.path, onClick: function () { browseLoad(e.path, target) } }, e.name)
+                })
+                : React.createElement('div', { className: 'dsm-empty' }, t('dir.empty'))),
+          React.createElement('div', { className: 'dsm-snap-browse-foot' },
+            React.createElement('span', { className: 'dsm-help' }, browse.current || ''),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: !browse.current, onClick: browsePick }, t('dir.pick'))))
+      }
+      snapshotContent = React.createElement('div', { className: 'dsm-snap' },
+        React.createElement('div', { className: 'dsm-field' },
+          React.createElement('span', { className: 'dsm-label' }, t('snapshot.export.dir')),
+          React.createElement('div', { className: 'dsm-snap-row' },
+            React.createElement('input', {
+              className: 'dsm-control', value: snap.outDir, placeholder: t('export.outDir.placeholder'),
+              disabled: snap.busy === true, onChange: function (e) { setSnap(Object.assign({}, snap, { outDir: e.target.value })) },
+            }),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: snap.busy === true, onClick: function () { browseOpen('export', snap.outDir) } }, t('snapshot.browse')),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: snap.busy === true || !String(snap.outDir).trim(), onClick: doSnapshotExport }, snap.busy ? t('snapshot.export.busy') : t('snapshot.export.btn'))),
+          snapBrowsePanel('export')),
+        React.createElement('label', { className: 'dsm-snap-pick' },
+          React.createElement('input', { type: 'checkbox', checked: snap.includeSecrets === true, disabled: snap.busy === true, onChange: function (e) { setSnap(Object.assign({}, snap, { includeSecrets: e.target.checked })) } }),
+          t('snapshot.export.secrets')),
+        // 明文警告只在**勾了之后**才出现：默认那一份是打码的，常驻一段吓人的话只会稀释重点。
+        snap.includeSecrets === true ? React.createElement('p', { className: 'dsm-help' }, t('snapshot.export.secrets.warn')) : null,
+        snap.result ? React.createElement('div', { className: 'dsm-feedback' + (snap.result.ok ? '' : ' dsm-error'), role: snap.result.ok ? 'status' : 'alert' },
+          React.createElement('div', null, snap.result.text),
+          snap.result.ok && snap.result.counts ? React.createElement('div', { className: 'dsm-help' }, t('snapshot.counts', { items: snap.result.counts })) : null,
+          snap.result.ok && snap.result.notes ? React.createElement('div', { className: 'dsm-help' }, t('snapshot.notes', { items: snap.result.notes })) : null) : null,
+        React.createElement('div', { className: 'dsm-field' },
+          React.createElement('span', { className: 'dsm-label' }, t('snapshot.import.dir')),
+          React.createElement('div', { className: 'dsm-snap-row' },
+            React.createElement('input', {
+              className: 'dsm-control', value: snapIn.dir, placeholder: t('snapshot.import.dir.placeholder'),
+              disabled: snapIn.busy === true, onChange: function (e) { setSnapIn(Object.assign({}, snapIn, { dir: e.target.value, preview: null, result: null })) },
+            }),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: snapIn.busy === true, onClick: function () { browseOpen('import', snapIn.dir) } }, t('snapshot.browse')),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: snapIn.loading === true || snapIn.busy === true || !String(snapIn.dir).trim(), onClick: doSnapshotPreview }, snapIn.loading ? t('snapshot.import.busy') : t('snapshot.import.preview'))),
+          snapBrowsePanel('import')),
+        snapIn.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, snapIn.error) : null,
+        snapIn.preview ? React.createElement('div', { className: 'dsm-snap-preview' },
+          React.createElement('div', { className: 'dsm-help' },
+            t('snapshot.import.versionNote', { version: snapIn.preview.pluginVersion || '?' })
+            + ' · ' + (snapIn.preview.masked === false ? t('snapshot.import.unmasked') : t('snapshot.import.masked'))
+            + ((snapIn.preview.notes || []).length ? ' · ' + t('snapshot.notes', { items: snapIn.preview.notes.join('；') }) : '')),
+          (snapIn.preview.domains || []).length ? React.createElement('div', { className: 'dsm-snap-picks' }, (snapIn.preview.domains || []).map(function (d) {
+            return React.createElement('label', { key: d.domain, className: 'dsm-snap-pick' },
+              React.createElement('input', {
+                type: 'checkbox', checked: snapIn.picked[d.domain] === true, disabled: snapIn.busy === true,
+                onChange: function (e) { var next = Object.assign({}, snapIn.picked); next[d.domain] = e.target.checked; setSnapIn(Object.assign({}, snapIn, { picked: next })) },
+              }),
+              t('snapshot.import.row', { domain: t('snapshot.domain.' + d.domain), count: d.count, clashes: d.clashes }))
+          })) : React.createElement('div', { className: 'dsm-empty' }, t('snapshot.import.notFound')),
+          React.createElement('div', { className: 'dsm-audit-bar' },
+            React.createElement('label', { className: 'dsm-snap-pick' },
+              React.createElement('input', { type: 'radio', name: 'dsm-snap-conflict', checked: snapIn.conflict === 'skip', onChange: function () { setSnapIn(Object.assign({}, snapIn, { conflict: 'skip' })) } }),
+              t('snapshot.import.conflict.skip')),
+            React.createElement('label', { className: 'dsm-snap-pick' },
+              React.createElement('input', { type: 'radio', name: 'dsm-snap-conflict', checked: snapIn.conflict === 'overwrite', onChange: function () { setSnapIn(Object.assign({}, snapIn, { conflict: 'overwrite' })) } }),
+              t('snapshot.import.conflict.overwrite')),
+            React.createElement('button', {
+              type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: snapIn.busy === true || !(snapIn.preview.domains || []).some(function (d) { return snapIn.picked[d.domain] === true }),
+              onClick: doSnapshotImport,
+            }, snapIn.busy ? t('snapshot.import.busy') : t('snapshot.import.run'))),
+          (snapIn.lockedScenes || []).length ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('snapshot.import.locked', { names: snapIn.lockedScenes.join('、') })) : null) : null,
+        snapIn.result ? React.createElement('div', { className: 'dsm-feedback' + (snapIn.result.ok ? '' : ' dsm-error'), role: snapIn.result.ok ? 'status' : 'alert' },
+          React.createElement('div', null, snapIn.result.text),
+          (snapIn.result.report || []).map(function (row, i) {
+            return React.createElement('div', { key: i, className: 'dsm-help' }, row.error
+              ? t('snapshot.import.reportFailed', { domain: t('snapshot.domain.' + row.domain), error: row.error })
+              : t('snapshot.import.report', { domain: t('snapshot.domain.' + row.domain), imported: row.imported, skipped: row.skipped }))
+          })) : null)
 
       // ── 清理旧备份（兼容页，紧挨「刷新」）──────────────────────────────────────
       // 每份 patch 备份都是**整份配置文件的副本**，env / headers 与令牌在里面是明文。
@@ -1921,6 +2448,31 @@
           React.createElement('div', { className: 'dsm-modal-body' }, presetRows)))
       }
 
+      // 三块内容各自只在**打开时**挂进弹窗；说明句留在框内第一行（原来长在区块小标题右侧，
+      // 进了弹窗就没有"标题右边"这个位置了）。
+      // 按钮**永远点得开**：数据没读到时框里给一句话，而不是摆一枚按了没反应的按钮
+      // （与提示词页「被引用的预设点得动但删不掉」同一条口径 —— 禁用按钮连 title 都不弹）。
+      const dialogFallback = function () {
+        return React.createElement('div', { className: 'dsm-empty' }, t('compat.dialog.empty'))
+      }
+      const auditDialog = compatDialogOpen === 'audit'
+        ? compatDialog('audit', t('compat.audit'), [
+          React.createElement('p', { key: 'hint', className: 'dsm-help' }, t('compat.audit.hint')),
+          auditContent ? React.cloneElement(auditContent, { key: 'body' }) : dialogFallback(),
+        ], true)
+        : null
+      const snapshotDialog = compatDialogOpen === 'snapshot'
+        ? compatDialog('snapshot', t('snapshot.title'), [
+          React.createElement('p', { key: 'hint', className: 'dsm-help' }, t('snapshot.hint')),
+          snapshotContent ? React.cloneElement(snapshotContent, { key: 'body' }) : dialogFallback(),
+        ])
+        : null
+      const liveDialog = compatDialogOpen === 'live'
+        ? compatDialog('live', t('compat.live.title'), liveContent
+          ? React.cloneElement(liveContent, { key: 'body' })
+          : [dialogFallback()])
+        : null
+
       return React.createElement('div', { className: 'dsm-compat' },
         React.createElement('div', { className: 'dsm-head' },
           React.createElement('div', { className: 'dsm-title-block' },
@@ -1929,6 +2481,9 @@
             React.createElement('p', { className: 'dsm-desc' }, t('compat.desc')))),
         React.createElement('div', { className: 'dsm-actions' },
           refreshButton(t, busy, { className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: reload }),
+          compatDialogButton('audit', t('compat.audit')),
+          compatDialogButton('snapshot', t('snapshot.title')),
+          compatDialogButton('live', t('compat.live.title')),
           React.createElement('button', {
             type: 'button',
             className: 'dsm-btn dsm-btn-secondary',
@@ -1943,7 +2498,10 @@
         body,
         backupModal,
         tokenModalEl,
-        toolPresetModal)
+        toolPresetModal,
+        auditDialog,
+        snapshotDialog,
+        liveDialog)
     }
 
     // 曾经把导出写成 apply 方法体的最后两条语句（`module.exports.DICT = ...` /

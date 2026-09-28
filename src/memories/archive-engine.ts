@@ -87,6 +87,20 @@ export interface ArchiveEngineDeps {
   /** 实时发现的记忆 id 全集。**引擎已不再消费**（P5 起档案不写、不校验 memories 段，
    *  保存时顺手清掉残留字段）—— 依赖保留只为接口稳定，新代码不要引用它。 */
   knownMemoryIds(): Promise<Set<string>>
+  /** 模型工具表当前的关停名单（进入场景前取原值写进快照，C1）。 */
+  currentToolTableHidden(): Promise<string[]>
+  /** 方案名 → 那份关停名单；`'factory-default'` = 出厂默认那份；方案不存在返回 null。 */
+  toolTablePresetHidden(name: string): Promise<string[] | null>
+  /**
+   * 整体替换关停名单（不是合并）。必须走兼容页 `tool-table` 写分支那条路径：
+   * 落盘 → 重排工具可见性 → 两个目录重算，顺序有讲究，绕开就会留下"表改了工具还看得见"。
+   */
+  applyToolTableHidden(hidden: string[]): Promise<void>
+  /**
+   * 「最近改动」流水（0.15.0 B2）：引擎整体应用 / 还原档案时各记一条。
+   * 缺席就是什么都不做 —— 流水是附属能力，不该成为引擎的硬依赖。
+   */
+  audit?(op: string, target: string): void
 }
 
 export interface ArchiveEngine {
@@ -188,6 +202,11 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         await deps.applySubagentSwitches(personasOn.map((n) => ({ name: n, enabled: true })))
       }
     }
+    // 模型工具表（C1）：按快照原值整体回写。老快照没有这一栏 → 一个字都不动（与进场景前一致）。
+    if (snapshot.toolTableHidden) {
+      await deps.applyToolTableHidden(snapshot.toolTableHidden)
+    }
+    deps.audit?.('scene-restore', '')
   }
   /**
    * 失败回滚：运行时还原 + 切片写回；每步失败都记下来，绝不谎报「已回滚」。
@@ -251,6 +270,14 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // 不在本次覆盖里的旧场景备注行**不这里删**（退出时会按快照整体回原位）。
       if (entries.length) await deps.applyMcpNotes(entries)
     }
+    // 工具表方案（C1）：改档案 = 立刻生效，这一域也得跟上。快照里的原值**不动** ——
+    // 退出场景仍然回到「进场景前」那份名单，而不是回到上一次档案的方案。
+    const reapplyPreset = (archive && archive.toolTablePreset) || ''
+    if (reapplyPreset) {
+      const target = await deps.toolTablePresetHidden(reapplyPreset)
+      if (target) await deps.applyToolTableHidden(target)
+    }
+    deps.audit?.('scene-apply', '')
     return { mcpServers: mcpPlan.serverSwitches, skillSources: skillsPlan.sourceSwitches }
   }
 
@@ -405,6 +432,16 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       for (const s of skillsPlan.sourceSwitches) (s.enabled ? sourcesOn : sourcesOff).push(s.root)
 
       const stale = [...mcpPlan.stale, ...skillsPlan.stale]
+      // 工具表方案（C1）：绑了就说清「会切成哪一份、关几条」。方案在别处被删掉 / 换机器之后
+      // 查不到时 hiddenCount 给 null，界面那句会改成"方案已不存在，这次不会切换"——
+      // 比让预览卡继续显示一条看不懂的数字诚实。
+      const previewPreset = (archive && archive.toolTablePreset) || ''
+      let toolPreset: { name: string; hiddenCount: number | null } | null = null
+      if (previewPreset) {
+        let list: string[] | null = null
+        try { list = await deps.toolTablePresetHidden(previewPreset) } catch (e) { return { ok: false, error: `读取模型工具表失败：${msg(e)}` } }
+        toolPreset = { name: previewPreset, hiddenCount: list ? list.length : null }
+      }
       const notesDefined = !!(archive && archive.mcpNotes)
       const noteCount = notesDefined
         ? Object.keys(archive!.mcpNotes!).filter((server) => archive!.mcp && server in archive!.mcp).length
@@ -438,6 +475,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           sourcesOn: clip(sourcesOn), sourcesOff: clip(sourcesOff),
         },
         subagents: { on: clip(personas.on), off: clip(personas.off) },
+        toolPreset,
         stale: clip(stale),
         truncated,
       }
@@ -485,11 +523,24 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         archive.subagents = archive.subagents.filter((p) => known.has(p))
         if (hadKeys && archive.subagents.length === 0) delete archive.subagents
       }
+      if (archive.toolTablePreset) {
+        // 方案名查不到（被删了 / 档案是从别的机器带来的）→ 丢弃这一栏并报告：
+        // 绑一个不存在的方案不该在进场景时变成一句"方案不存在"的硬失败。
+        const found = await deps.toolTablePresetHidden(archive.toolTablePreset)
+        if (!found) { stale.push('toolTable/' + archive.toolTablePreset); delete archive.toolTablePreset }
+      }
       // 记忆段（P5 已废弃）：不再写入、不再校验。记忆的开关是 `rules[*].enabled` 单一真相源，
       // 老档案里残留的 `memories` 字段被忽略（不迁移、不删除，回滚代码时仍可读）。
       // 保存档案时顺手把残留字段清掉，避免新旧语义并存造成误读。
       if (archive.memories !== undefined) delete archive.memories
       const slice = await deps.loadSlice()
+      // 工具表方案的绑定入口已改到「修改场景」表单（0.15.0 用户裁定）：档案保存的载荷
+      // 不再携带这一栏，**不带 ≠ 解绑** —— 保留现值（解绑走 rules-update-scene 的空串；
+      // 带上来的值仍走上面的 stale 校验，保留的现值由进出场景时的 stale 处理兜底）。
+      if (archive.toolTablePreset === undefined) {
+        const prev = slice.archives[scene]
+        if (prev && typeof prev.toolTablePreset === 'string' && prev.toolTablePreset) archive.toolTablePreset = prev.toolTablePreset
+      }
       if (Object.keys(archive).length === 0) delete slice.archives[scene]
       else slice.archives[scene] = archive
       await deps.saveSlice(slice)
@@ -631,6 +682,22 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           return { ok: false, error: `读取备注状态失败（未改动任何东西）：${msg(e)}` }
         }
       }
+      // 工具表方案（C1）：**改任何东西之前**先把现状读出来 —— 读失败就等于什么都没动。
+      // 没绑定方案就完全不碰这一域（也不往快照里加栏），老场景行为逐字节不变。
+      const toolTablePreset = (archive && archive.toolTablePreset) || ''
+      let toolTableBefore: string[] | null = null
+      let toolTableTarget: string[] | null = null
+      if (toolTablePreset) {
+        try {
+          toolTableBefore = await deps.currentToolTableHidden()
+          toolTableTarget = await deps.toolTablePresetHidden(toolTablePreset)
+        } catch (e) {
+          return { ok: false, error: `读取模型工具表现状失败（未改动任何东西）：${msg(e)}` }
+        }
+        if (!toolTableTarget) {
+          return { ok: false, error: `场景绑定的工具表方案「${toolTablePreset}」已不存在，未进入场景（先在场景档案里换一份或取消绑定）` }
+        }
+      }
       // 快照**恒拍**：三个域都按「与勾选集完全一致」应用（未定义 = 全关），所以任何场景
       // 进入都可能改动运行时（哪怕只是停掉几台服务器 / 几个技能），退出都得能精确还原。
       // 上层两行传**现状全量**（上面的 mcpServerStates / skillSources 就是进场景前的值），
@@ -644,6 +711,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         personaRestoreOn,
         noteBefore,
         personaStates,
+        toolTableBefore,
       )
       const entered: ArchiveIndexSlice = { ...slice, mode: { scene: target, snapshot }, active: [target] }
       try {
@@ -678,6 +746,9 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         if (noteTargets && noteTargets.length) {
           await deps.applyMcpNotes(noteTargets.map((x) => ({ id: x.id, note: x.note })))
         }
+        // ⑤ 模型工具表：档案绑了方案就把关停名单**整体换成**那份（省下的 token 按轮算，
+        //     所以它是"进入场景"这一动作里唯一直接改每请求内容的域）。
+        if (toolTableTarget) await deps.applyToolTableHidden(toolTableTarget)
       } catch (e) {
         return await rollback(slice, snapshot, '应用档案', e)
       }
@@ -692,7 +763,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         mode: entered.mode,
         // 三个域都是「按勾选集全量应用」（未定义 = 全关），所以都算已应用；
         // 备注段未定义 = 不覆盖任何备注，如实报它是否定义。
-        applied: { mcp: true, skills: true, subagents: true, mcpNotes: !!(archive && archive.mcpNotes) },
+        applied: { mcp: true, skills: true, subagents: true, mcpNotes: !!(archive && archive.mcpNotes), toolTable: !!toolTableTarget },
         // 上层实际切换了几个（0 = 本来就已经是目标状态，界面不必提示"已停用 N 台"）。
         switched: {
           mcpServers: mcpPlan.serverSwitches.length,

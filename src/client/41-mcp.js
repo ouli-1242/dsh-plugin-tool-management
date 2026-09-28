@@ -29,6 +29,14 @@
           const [settings, setSettings] = React.useState(null)
           const [noteDraft, setNoteDraft] = React.useState('')
           const [compactConfirm, setCompactConfirm] = React.useState(false)
+          // A1：粘贴 JSON 导入 / 导出两个弹窗（0.15.0）。
+          const [jsonImportOpen, setJsonImportOpen] = React.useState(false)
+          const [jsonExportOpen, setJsonExportOpen] = React.useState(false)
+          // B1：配置体检结果。键 = `level/id`，值 = 未体检 / {busy:true} / {checks:[…]} / {error}。
+          // 刻意不落盘（服务器数量级小、每次现查），但**配置一改就作废** —— 见下面的 signature effect：
+          // 挂着上一次的绿点说「刚改过的配置没问题」是假承诺。
+          const [inspections, setInspections] = React.useState({})
+          const inspectKeyOf = (row) => String(row.level || '') + '/' + row.id
           const [undo, setUndo, dismissUndo] = useUndoState()
           const flipRef = React.useRef(null)
           useFlipReorder(flipRef)
@@ -275,6 +283,47 @@
               } else setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
             }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
+          /**
+           * 体检一次：`target` 省略 = 全部。服务端每次重读补丁文件，界面只按 `level/id` 存结果。
+           * 单台与全部走同一个 op（服务端支持 id+level 过滤），免得两种口径的检查结果对不上。
+           */
+          const runInspect = (target) => {
+            const all = !target
+            const args = all ? {} : { id: target.id, level: target.level }
+            if (all) {
+              const busyMap = {}
+              ;(state.rows || []).forEach((item) => { busyMap[inspectKeyOf(item)] = { busy: true } })
+              setInspections(busyMap)
+            } else {
+              setInspections(Object.assign({}, inspections, { [inspectKeyOf(target)]: { busy: true } }))
+            }
+            apiCall('mcpm-inspect', args).then((res) => {
+              if (!res || !res.ok) {
+                const text = (res && res.error) || mt('mcp.inspect.failed')
+                setInspections(all ? {} : Object.assign({}, inspections, { [inspectKeyOf(target)]: { error: text } }))
+                if (all) setMsg({ kind: 'err', text })
+                return
+              }
+              const next = {}
+              ;(res.results || []).forEach((item) => { next[inspectKeyOf(item)] = { checks: item.checks || [] } })
+              setInspections((prev) => (all ? next : Object.assign({}, prev, next)))
+              // 补丁文件读不到时体检只覆盖了余下部分 —— 如实说出来，不给「整页都绿」的假结论。
+              if (res.errors && res.errors.length) setMsg({ kind: 'warn', text: mt('mcp.inspect.errors', { errors: res.errors.join('；') }) })
+            }).catch((e) => {
+              const text = errMsg(e)
+              setInspections(all ? {} : Object.assign({}, inspections, { [inspectKeyOf(target)]: { error: text } }))
+              if (all) setMsg({ kind: 'err', text })
+            })
+          }
+          // 配置内容指纹：只有**配置本身**变了才作废旧结果。轮询每 5 秒换一批新对象但不改内容，
+          // 直接依赖 rows 会让体检每 5 秒被清空一遍。
+          const patchSignature = React.useMemo(() => (state.rows || []).map((r) => [
+            r.level, r.id, r.serverName, r.transport, r.command, r.url,
+            (r.args || []).join(','), JSON.stringify(r.env || {}), JSON.stringify(r.headers || {}), r.disabled ? '1' : '0',
+          ].join(':'))
+            .join('|'), [state.rows])
+          React.useEffect(() => { setInspections({}) }, [patchSignature])
+
           const openDetail = (row) => {
             // 请求序号（每次开窗 +1）：两处详情弹窗共用同一份 `detail`，连点两台服务器时
             // 先发的响应可能后到并覆盖后发的那份 —— 序号对不上就丢弃。
@@ -415,21 +464,35 @@
             const hint = liveHint(row)
             // 场景锁定期间整页只读（开关/编辑/删除一并消失，重启也归入冻结）。
             const editable = row.level !== 'loader' && state.locked !== true
+            // 体检状态：未体检=灰（不是"没问题"）、进行中=闪、有 warn=黄、info 级说明不点黄。
+            const insp = inspections[inspectKeyOf(row)]
+            const warnCount = insp && insp.checks ? insp.checks.filter((c) => c.level === 'warn').length : 0
+            const inspTone = insp && insp.busy ? 'busy' : insp && insp.error ? 'warn' : !insp ? 'idle' : warnCount > 0 ? 'warn' : 'ok'
+            const inspTitle = insp && insp.busy ? mt('mcp.inspect.busy')
+              : insp && insp.error ? insp.error
+              : !insp ? mt('mcp.inspect.idle')
+              : warnCount > 0 ? mt('mcp.inspect.warnCount', { count: warnCount })
+              : mt('mcp.inspect.pass')
             return React.createElement('div', { key: row.id, className: 'dsm-row', 'data-flip-key': String(row.level || '') + '/' + row.id, 'data-flip-on': row.disabled ? '0' : '1' },
               React.createElement('div', { className: 'dsm-main' },
                 React.createElement('div', { className: 'dsm-name' }, row.serverName),
                 row.notes ? React.createElement('div', { className: 'dsm-note dsm-note-user', title: row.notes }, mt('mcp.note.prefix') + row.notes) : null),
               React.createElement('div', { className: 'dsm-tags' },
+                React.createElement(InspectDot, { tone: inspTone, title: inspTitle }),
                 (levelFilter === 'loader' && row.level && row.level !== 'loader') ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.level.' + row.level)) : null,
                 toolCountTag(row),
                 row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null),
               React.createElement('div', { className: 'dsm-status ' + status.cls }, status.text),
               React.createElement('div', { className: 'dsm-row-actions' },
                 editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null || state.locked === true, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !!(insp && insp.busy), onClick: () => runInspect(row) }, mt('mcp.inspect.row.btn')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: () => openDetail(row) }, mt('mcp.btn.detail')),
                 editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => openEdit(row) }, mt('mcp.btn.edit')) : null,
                 editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => restartRow(row) }, mt('mcp.btn.restart')) : null,
                 editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null, onClick: () => setConfirmRow(row) }, mt('mcp.btn.remove')) : null),
+              (insp && insp.checks && insp.checks.length > 0)
+                ? React.createElement('div', { className: 'dsm-inspect' }, insp.checks.map((c) => React.createElement('div', { key: c.id, className: 'dsm-inspect-line' + (c.level === 'warn' ? ' dsm-inspect-warn' : '') }, mt('mcp.inspect.check.' + c.id, c.params || {}))))
+                : null,
               hint ? React.createElement('div', { className: 'dsm-row-hint' }, '⚠ ' + hint) : null)
           }
 
@@ -628,6 +691,12 @@
               React.createElement('div', { className: 'dsm-actions' },
                 refreshButton(mt, busy !== null || state.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.locked === true, onClick: openAdd }, mt('mcp.btn.new')),
+                // 「导入」是「一次建好一批」，与新增同一个写路径（`mcpm-import`），所以场景锁定期间同样置灰。
+                // 导出是只读动作，锁定期间照常用（拿配置不该要求先解锁环境）。
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.locked === true, onClick: () => setJsonImportOpen(true) }, mt('mcp.importJson.btn')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.loading, onClick: () => setJsonExportOpen(true) }, mt('mcp.exportJson.btn')),
+                // 体检是只读的静态检查（零副作用），所以锁定期间照点 —— 冻的是改动，不是"看一眼配置对不对"。
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.loading || !summary.total, onClick: () => runInspect(null) }, mt('mcp.inspect.btn')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy !== null || state.loading || state.locked === true, title: mt('mcp.btn.compact.title'), onClick: () => setCompactConfirm(true) }, mt('mcp.btn.compact')),
                 // 批量启停与页头其余动作同栏（用户 2026-09-17 裁定）。场景内**照常可用**：
                 // 改动会同步写进当前场景的档案（宿主 syncSwitchToScene），只有场景锁定才冻结。
@@ -656,7 +725,18 @@
             formModalNode,
             detailNode,
             compactNode,
-            confirmNode)
+            confirmNode,
+            jsonImportOpen ? React.createElement(McpJsonImportModal, {
+              key: 'mcp-import-json',
+              t: mt,
+              // 冲突标记按当前列表判（名字与 id 两张表，与服务端一致）：预览说「将新增」而服务端
+              // 回头报「已存在」是最糟的结果。
+              existingNames: rows.map((r) => r.serverName),
+              existingIds: rows.map((r) => r.id),
+              onClose: () => setJsonImportOpen(false),
+              onDone: () => refresh(),
+            }) : null,
+            jsonExportOpen ? React.createElement(McpJsonExportModal, { key: 'mcp-export-json', t: mt, onClose: () => setJsonExportOpen(false) }) : null)
         }
 
         // ---------- AGENTS.md 预设页：多套全局指令基线，应用=写入 ~/.dsh/AGENTS.md ----------

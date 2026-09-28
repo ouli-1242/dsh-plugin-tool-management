@@ -18,6 +18,9 @@
           var sceneForm = sfs[0], setSceneForm = sfs[1]
           var pos = React.useState([])
           var presetOptions = pos[0], setPresetOptions = pos[1]
+          // 工具表方案下拉的数据源（C1；按用户 2026-09-28 裁定从档案编辑器移进「编辑场景」表单）。
+          var tts = React.useState(null)
+          var ttInfo = tts[0], setTtInfo = tts[1]
           var dts = React.useState(null)
           var drillTools = dts[0], setDrillTools = dts[1]
           // 场景回收站（记录 + 档案）：null = 关闭；{loading, error, entries}
@@ -174,13 +177,15 @@
             setSceneForm(function (f) { return (f && String(f.prompt || '') !== '') ? f : Object.assign({}, f, { prompt: activeId }) })
           }
           // ── 场景建 / 改描述 / 改绑定的提示词 / 删 ──
-          function openCreateScene() { setSceneForm({ name: '', description: '', prompt: '', error: null }); setModal({ type: 'scene-create' }); loadPresetOptions(defaultPromptToActive) }
+          function openCreateScene() { setSceneForm({ name: '', description: '', prompt: '', toolTablePreset: '', error: null }); setModal({ type: 'scene-create' }); loadPresetOptions(defaultPromptToActive); loadToolTablePresets() }
           function openEditScene(scene) {
-            setSceneForm({ name: scene.name, description: scene.description || '', prompt: scene.prompt || '', error: null })
+            var sceneArchive = (data.archives || {})[scene.name] || {}
+            setSceneForm({ name: scene.name, description: scene.description || '', prompt: scene.prompt || '', toolTablePreset: typeof sceneArchive.toolTablePreset === 'string' ? sceneArchive.toolTablePreset : '', error: null })
             setModal({ type: 'scene-edit', name: scene.name })
             // 该场景还没绑定时，默认选中当前生效的那份（用户裁定「默认就是当前启动的」）。
             if (!scene.prompt) loadPresetOptions(defaultPromptToActive)
             else loadPresetOptions()
+            loadToolTablePresets()
           }
           /** 新建与编辑共用一个表单：字段相同，只是分别走 rules-create-scene / rules-update-scene。 */
           function submitSceneForm() {
@@ -192,9 +197,12 @@
             // 编辑时表单里的 name 可能改过：改名走 nextName，服务端按 modal.name（原名）定位、改完再落新名。
             var originalName = isEdit ? String((modal && modal.name) || name) : name
             setBusy(true)
+            // 工具表方案绑定（C1）单独一个参数：空串 = 解绑；服务端写进档案，
+            // 改的是启用中的场景时会立即应用那份方案（见 scene-sync 的包装）。
+            var toolTablePreset = String(sceneForm.toolTablePreset || '')
             var payload = isEdit
-              ? { name: originalName, nextName: name, description: description, prompt: prompt }
-              : { name: name, description: description, prompt: prompt }
+              ? { name: originalName, nextName: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset }
+              : { name: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset }
             apiCall(isEdit ? 'rules-update-scene' : 'rules-create-scene', payload).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
@@ -248,6 +256,35 @@
                   memories: inv.memories || [],
                 } })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          /**
+           * 工具表方案下拉的数据源（C1）：只读调用（不带 `set:true`），
+           * 所以没填令牌也能拿。读不到就当没有（下拉只剩「不绑定」+「出厂默认」）。
+           */
+          function loadToolTablePresets() {
+            apiCall('tool-table', {}).then(function (tt) {
+              setTtInfo({
+                presets: (tt && tt.ok && Array.isArray(tt.presets)) ? tt.presets : [],
+                factoryHiddenCount: (tt && tt.ok && Array.isArray(tt.defaultHidden)) ? tt.defaultHidden.length : 0,
+              })
+            }).catch(function () { setTtInfo({ presets: [], factoryHiddenCount: 0 }) })
+          }
+          /**
+           * 工具表方案下拉的选项（C1）：不绑定（默认）→ 出厂默认 → 用户存过的方案。
+           * 档案里绑的名字若已不在方案清单里（被删了 / 档案是从别的机器带来的），仍把它列出来
+           * 并标「方案已不存在」—— 静默把用户存的值改成「不绑定」是替他做决定。
+           */
+          function toolTablePresetOptions() {
+            var info = ttInfo || { presets: [], factoryHiddenCount: 0 }
+            var current = String((sceneForm && sceneForm.toolTablePreset) || '')
+            var opts = [{ value: '', label: t('scenes.field.toolTable.none') }, { value: 'factory-default', label: t('scenes.field.toolTable.factory', { count: info.factoryHiddenCount || 0 }) }]
+            ;(info.presets || []).forEach(function (p) {
+              opts.push({ value: p.name, label: p.name + ' · ' + t('scenes.field.toolTable.count', { count: (p.hidden || []).length }) })
+            })
+            if (current && current !== 'factory-default' && !opts.some(function (o) { return o.value === current })) {
+              opts.push({ value: current, label: current + ' · ' + t('scenes.field.toolTable.missing') })
+            }
+            return opts
           }
           function modalSections() { return modal && modal.type === 'scene-archive' ? modal.sections : null }
           function setSections(sections) { if (modal && modal.type === 'scene-archive') setModal(Object.assign({}, modal, { sections: sections })) }
@@ -700,10 +737,12 @@
                     skills: modal.sections.skills ? modal.sections.skills.length : 0,
                     subagents: modal.sections.subagents ? modal.sections.subagents.length : 0,
                   }))),
-                mcpSeg(),
-                skillsSeg(),
-                subagentsSeg(),
-                memoriesSeg(),
+                // 2×2 网格（2026-09-28 用户裁定）：四段同屏、每段段体内滚 —— 见 .dsm-archive-grid。
+                React.createElement('div', { className: 'dsm-archive-grid' },
+                  mcpSeg(),
+                  skillsSeg(),
+                  subagentsSeg(),
+                  memoriesSeg()),
                 React.createElement('div', { className: 'dsm-modal-actions' },
                   React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy, onClick: submitArchive }, t('memory.archive.save')))))
             // MCP 服务器编辑弹窗渲染在外层：不能放进列表 Modal 的滚动容器里（会被裁掉）。
@@ -743,6 +782,8 @@
             setBusy(true)
             // P5：档案里**不再写 memories 段** —— 记忆的开关是 `rules[*].enabled` 单一真相源，
             // 在段里勾选时已经即时提交了，这里没有「待保存」的记忆状态。
+            // 工具表方案绑定同样不在载荷里（2026-09-28 起改「修改场景」表单编辑）；
+            // 服务端对「没带这一栏」保留现值，档案保存不会把绑定冲掉。
             apiCall('scene-archive-save', { scene: modal.name, archive: (function () { var payload = {}; if (modal.sections.mcp) payload.mcp = modal.sections.mcp; if (modal.sections.mcpNotes) payload.mcpNotes = modal.sections.mcpNotes; if (modal.sections.skills) payload.skills = modal.sections.skills; if (modal.sections.subagents) payload.subagents = modal.sections.subagents; return payload })() }).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
@@ -844,6 +885,14 @@
             pushRow('scenes.preview.row.skillsOff', sk.off, true)
             pushRow('scenes.preview.row.personasOn', sub.on)
             pushRow('scenes.preview.row.personasOff', sub.off)
+            // 工具表方案（C1）：绑了方案就是一句「会切成哪一份」，没绑不出行。
+            // 方案已经不存在时（hiddenCount 为 null）说"这次不切换"，不报一个看不懂的数字。
+            if (plan.toolPreset) {
+              changed += 1
+              out.push(React.createElement('p', { key: 'tool-preset', className: 'dsm-help' }, t(
+                plan.toolPreset.hiddenCount === null ? 'scenes.preview.row.toolPresetMissing' : 'scenes.preview.row.toolPreset',
+                { name: plan.toolPreset.name, count: plan.toolPreset.hiddenCount })))
+            }
             if (mcp.notes) {
               changed += 1
               out.push(React.createElement('p', { key: 'notes', className: 'dsm-help' }, t('scenes.preview.row.notes', { count: mcp.notes })))
@@ -1113,6 +1162,17 @@
                     ? React.createElement(SourceSelect, { options: presetOptions, value: sceneForm.prompt || '', onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { prompt: v })) } })
                     : React.createElement('p', { className: 'dsm-help' }, t('scenes.prompt.noPresets')),
                   helpBullets(t, 'scenes.field.prompt.hint')),
+                // 工具表方案（C1）：与提示词预设同族的单值绑定字段，按用户 2026-09-28 裁定
+                // 从档案编辑器挪进这张表单 —— 两个「场景绑谁」的字段放在一起，档案编辑器
+                // 只留内容勾选。改的是启用中的场景时，服务端会立即把关停名单换成那份方案。
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('scenes.field.toolTable')),
+                  React.createElement(SourceSelect, {
+                    value: String(sceneForm.toolTablePreset || ''),
+                    options: toolTablePresetOptions(),
+                    onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { toolTablePreset: v })) },
+                  }),
+                  helpBullets(t, 'scenes.field.toolTable.hint')),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitSceneForm }, t(modal.type === 'scene-create' ? 'memory.btn.create' : 'memory.btn.saveScene'))))) : null,
             modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', title: t('memory.deleteScene.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },

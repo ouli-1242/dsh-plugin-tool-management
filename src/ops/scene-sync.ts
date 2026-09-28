@@ -9,6 +9,11 @@ export interface SceneSyncOpsDeps {
    * 写进 `~/.dsh/AGENTS.md`（或关掉场景时恢复进场景前的基线）。
    */
   withAgentsMdSync(res: any): Promise<any>
+  /**
+   * 模型工具表方案绑定落在**当前启用场景**时的即时生效（0.15.0）：
+   * 把关停名单整体换成那份方案。缺席或抛错都不拦保存本身（与 AGENTS.md 同步同口径）。
+   */
+  onToolTablePresetChanged?(scene: string, value: string): Promise<void>
   /** rules service 的四个原 op；写死名字，rules 域改名会立刻红而不是静默 undefined。 */
   rulesOps: {
     'rules-set-active'(args: any): Promise<any>
@@ -26,7 +31,15 @@ export function buildSceneSyncOps(deps: SceneSyncOpsDeps): Record<string, (args:
     // 的 `agentsMd` 字段（`applied` / `restored` / `unchanged` / `error`）。
     // 组装时放在 memoriesService.ops 的 spread **之后**，显式覆盖同名 op。
     'rules-set-active': async (args: any) => deps.withAgentsMdSync(await deps.rulesOps['rules-set-active'](args)),
-    'rules-update-scene': async (args: any) => deps.withAgentsMdSync(await deps.rulesOps['rules-update-scene'](args)),
+    'rules-update-scene': async (args: any) => {
+      const res: any = await deps.rulesOps['rules-update-scene'](args)
+      // 工具表方案绑定改动（0.15.0）：改的是**当前启用场景**且这次真的带了这一参数时即时生效；
+      // 改名在场景处于模式中时会被拦（rulesUpdateScene 的 sceneInMode），所以这里 args.name 就是生效场景的名字。
+      if (res && res.ok !== false && deps.onToolTablePresetChanged && args && args.toolTablePreset !== undefined) {
+        try { await deps.onToolTablePresetChanged(String(args.name || ''), String(args.toolTablePreset)) } catch { /* 即时生效失败不拦保存；下次进/退场景会对齐 */ }
+      }
+      return deps.withAgentsMdSync(res)
+    },
     'rules-create-scene': async (args: any) => deps.withAgentsMdSync(await deps.rulesOps['rules-create-scene'](args)),
     'rules-remove-scene': async (args: any) => deps.withAgentsMdSync(await deps.rulesOps['rules-remove-scene'](args)),
   }

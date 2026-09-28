@@ -47,7 +47,7 @@ export interface OpClass {
 
 export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
 
-  // ── MCP 域（16）────────────────────────────────────────────────────────────
+  // ── MCP 域（17）────────────────────────────────────────────────────────────
   'mcpm-list': { annotatesLock: true },
   // reveal 返回**未打码**的凭据。它是读操作，但按写门禁 —— 局域网暴露的端口上，令牌对
   // 明文凭据必须是最后一道防线，而不只对着写操作。
@@ -71,6 +71,9 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 会停在启用态 —— 是写不是读。（0.6.0 / 0.7.0 各有漏列前科，见文件头。）
   'mcpm-tools-refresh': { write: true },
   'mcpm-tools': { readonly: true },
+  // 配置体检：只读补丁文件 + 一次 PATH 查询（`where`/`which`，不执行配置里的命令）。
+  // 返回的是检查项 id，不回任何字段值 —— 与 `mcpm-list` 同档，不带令牌。
+  'mcpm-inspect': { readonly: true },
 
   // ── 技能域（22，含内联的 skill-open）───────────────────────────────────────
   'skill-state': { annotatesLock: true },
@@ -186,15 +189,26 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 新增一条宿主工作区登记 —— 改的是宿主侧的登记，不是插件自己的侧车。
   'history-workspace-register': { write: true },
 
-  // ── 兼容 / 注入 / 备份域（7）───────────────────────────────────────────────
+  // ── 兼容 / 注入 / 备份 / 流水 / 迁移快照（11）────────────────────────────────
   'compat-status': { readonly: true },
+  // 「最近改动」流水的读侧：只读 hub 里的 `audit.jsonl`（内容只有对象名，见 audit-log.ts 第 ① 条）。
+  'audit-list': { readonly: true },
+  // 清空流水：删的是插件自己的文件，但它是**一次改动**（清完还会留下一条 `audit-clear`），按写门禁。
+  'audit-clear': { write: true },
+  // 整机迁移快照（0.15.0 C2）。export 标 sensitive 与 `mcpm-export` 同档：`includeSecrets` 时
+  // 它交出的就是明文凭据；不配令牌时不设防（判据见 http-fence.ts 的 secretOpRejection）。
+  'snapshot-export': { write: true, sensitive: true },
+  'snapshot-preview': { readonly: true },
+  // 逐域调各域自己的 import op —— 那些 op 本来就被场景冻结挡着，这里不重复标 frozen，
+  // 免得两道锁口径分家（预览与执行都走同一套门禁）。
+  'snapshot-import': { write: true },
   'feature-overview': { readonly: true },
   'preset-reach': { readonly: true },
-  // 五个域当前正文的**全文**都从这里出去。今天不带令牌就能读，是这批只读里披露面最大的一条；
+  // 全部注入域的当前正文**全文**都从这里出去。今天不带令牌就能读，是这批只读里披露面最大的一条；
   // 要不要上门禁是产品决定，登记在这里是为了让它可数。
   'injection-live': { readonly: true },
   'backups-list': { readonly: true },
-  // 注入设置（五域开关 / 压制型预设口径）写侧车。它是"配置"不是"宿主状态"，但改的是
+  // 注入设置（各域开关 / 压制型预设口径）写侧车。它是"配置"不是"宿主状态"，但改的是
   // 投递语义，按写操作门禁。
   'inject-settings': { write: true },
   // 模型工具表（哪些工具根本不发给模型）也写侧车，改的是每轮请求的内容 —— 同上按写门禁。

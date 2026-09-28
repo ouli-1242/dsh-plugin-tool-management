@@ -26,6 +26,8 @@ import { isInsideRoot, isInsideRootResolved } from './paths.js'
 import { DEFAULT_PROFILE_NAME, MCP_CLIENT_MODULE, PROFILE_CANDIDATES } from './host-names.js'
 import { createMemoriesService, planMemoryExport } from './memories/service.js'
 import { createArchiveEngine } from './memories/archive-engine.js'
+import { createSnapshotOps } from './ops/snapshot.js'
+import { AUDIT_TARGET_CONFIG, clearAudit, readAudit, recordAudit, recordOpAudit } from './audit-log.js'
 import { readIndexSync } from './memories/index-io.js'
 import { runStateDoctor } from './ops/state-doctor.js'
 import { createSubagentService, decideToolFilter, defaultPersonasDir, validPersonaName } from './subagents/service.js'
@@ -48,6 +50,7 @@ import {
   dropPreset,
   migrateLegacyToolNames,
   normalizeToolTableSettings,
+  FACTORY_TOOL_TABLE_PRESET,
   PRESET_MAX_COUNT,
   PRESET_NAME_MAX_LENGTH,
   toolTableSettingsFrom,
@@ -71,7 +74,7 @@ import type { PluginInventoryService, ToolsService } from './mcp/manager.js'
 // 2026-09-19 随 MCP 域搬进 ./mcp/manager.ts。这里保持原路径可导出，契约不变。
 export { normalizeKnownTools, countEnabledTools } from './mcp/manager.js'
 import { planOverrideCompaction } from './mcp/override-blocks.js'
-import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from './mcp/loader-token.js'
+import { applyLoaderToken, applyLoaderTokenDisabled, buildLoaderOverrideEntry, readLoaderToken } from './mcp/loader-token.js'
 // cordis.patch.yml 受管行的生成/解析/块编辑（2026-09-19 从本文件 apply 闭包抽出，纯字符串运算）。
 import { appendBlock, buildDisableBlock, buildInsertBlock, parseRows, removeEntryAll, removeMarked, spliceRanges, splitLines, type ManagedRow } from './mcp/patch-yaml.js'
 import { describeMaskedOutcome, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './mcp/secret-guard.js'
@@ -291,6 +294,8 @@ export default {
         kind: 'read',
         fallback: 'inform-only',
         detail: '技能 provider 装配失败（' + message(e) + '）：技能启用/停用与 agent 技能目录这一轮不生效。',
+        detailKey: 'skills-provider',
+        params: { reason: message(e) },
       })
     }
 
@@ -423,7 +428,40 @@ export default {
       return (await skillScan()).all
     }
 
+    // 整体替换关停名单的那一步抽成具名函数：引擎的 apply 依赖与「修改场景」表单的
+    // 即时生效（scene-sync 包装）共用同一条写路径，不能各抄一份。
+    const applyToolTableHiddenNow = async (hidden: string[]) => {
+      // 与 `tool-table` op 写分支同一条路径、同一顺序：落盘 → 重排可见性 → 两个目录重算。
+      // 绕开这套顺序就会留下「名单已经改了、工具下一轮还发给模型」这种最难查的状态。
+      const current = await readToolTableSettings()
+      const next: ToolTableSettings = {
+        hidden: normalizeToolTableSettings({ hidden }).hidden.filter((name) => toolTableSizes.has(name)),
+        presets: current.presets,
+      }
+      const saved = await writeToolTableSettings(next)
+      if (!saved.ok) throw new Error(saved.error)
+      mcp.scheduleToolRestrictions()
+      await Promise.all([
+        skillCatalog.refresh().catch(() => { /* 目录刷新失败不该让工具表写入算失败（与 op 侧同口径） */ }),
+        subagentCatalog.refresh().catch(() => { /* 同上 */ }),
+      ])
+    }
+
     const archiveService = createArchiveEngine({
+      // 引擎每应用/还原一次整套档案记一条流水（source='engine'，见 ./audit-log.ts）。
+      // 记在边界这一层而不是往五个 apply* 里散着写：一条流水说的是「引擎动了整个环境」，
+      // 与同一次进入里面板/模型那条记录天然按秒分组显示。
+      audit: (op: string, target: string) => recordAudit({ ts: Date.now(), op, target: target || AUDIT_TARGET_CONFIG, source: 'engine' }),
+      // ── 模型工具表（0.15.0 C1）：场景可以绑一份方案，进场景整体换成那一份 ──
+      currentToolTableHidden: async () => [...(await readToolTableSettings()).hidden],
+      toolTablePresetHidden: async (name: string) => {
+        const s = await readToolTableSettings()
+        // 用户存的方案**优先**：万一有人把方案起名叫 'factory-default'，他要的是自己那份。
+        const hit = s.presets.filter((p) => p.name === name)[0]
+        if (hit) return [...hit.hidden]
+        return name === FACTORY_TOOL_TABLE_PRESET ? [...DEFAULT_HIDDEN_TOOLS] : null
+      },
+      applyToolTableHidden: applyToolTableHiddenNow,
       loadSlice: async () => ({ ...(await memoriesService.readArchiveSlice()) }),
       saveSlice: (slice) => memoriesService.patchIndex(slice),
       configuredServers: async () => {
@@ -889,7 +927,7 @@ export default {
     }
 
 
-    // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的五域文本。
+    // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的各域文本。
     // 挂在 apply 作用域：`injection-live` op 与注入器不在同一层（effect 内部）。
     let contextInjectorLive: (() => LiveInjectionSnapshot) | null = null
     // 采纳遥测的入口（同样是 apply 作用域的中转）：工具注册在 effect 之外，
@@ -961,7 +999,9 @@ export default {
         label: '上下文注入通道',
         kind: 'read',
         fallback: 'inform-only',
-        detail: '注入通道装配失败（' + message(e) + '）：五个注入域的内容这一轮不会被送进模型。',
+        detail: '注入通道装配失败（' + message(e) + '）：全部注入域的内容这一轮不会被送进模型。',
+        detailKey: 'context-injection',
+        params: { reason: message(e) },
       })
     }
     void readInjectSettings().catch(() => {})
@@ -987,6 +1027,7 @@ export default {
           kind: 'read',
           fallback: 'inform-only',
           detail: 'cordis 导出的 symbols.original 与 Symbol.for("cordis.original") 不是同一个符号：能力探测可能把代理当原始对象，身份判定会失真。',
+          detailKey: 'cordis-original-symbol',
         })
       }
     } catch (e) { /* 拿不到 symbols 就跳过（探针自己也有一条退路） */ }
@@ -1254,25 +1295,86 @@ export default {
     // then falls back to any profile that has one, and finally to
     // DEFAULT_PROFILE_NAME. A profile whose directory name matches none of these
     // and has no patch file yet is not detected.
-    let cached: { home: string; profileDir: string; profileName: string; projectPatch: string; globalPatch: string } | null = null
+    let cached: { home: string; profileDir: string; profileName: string; projectPatch: string; globalPatch: string; bundlePatch: string } | null = null
     async function ensurePaths() {
       if (cached) return cached
       let home: string | null = null
+      let derivedProfileDir: string | null = null
+      let derivedProfileName: string | null = null
+      let docObserved: string | undefined
+      let docError: string | undefined
       try {
         // 注意：这里的 home 来自宿主文档路径的切片，与 `skills/core.js` 的
         // `resolveDshHome()`（`$DSH_HOME` ‖ `~/.dsh`）是**两条独立来源**，本插件同时用着两者。
         // 不合并是有意的：合并会改变所有 profile 补丁的落点，属于行为变更，留给结构性重构那一档。
         const doc = await settings.prepareDocument()
         if (typeof doc === 'string' && doc) {
+          docObserved = doc
           const i = Math.max(doc.lastIndexOf('\\'), doc.lastIndexOf('/'))
-          home = i > 0 ? doc.slice(0, i) : doc
+          const docDir = i > 0 ? doc.slice(0, i) : doc
+          // 0.1.7 起 `prepareDocument()` 返回的是 **profile 补丁**（`configEditor.documentPath`，
+          // 形如 `<home>\profiles\web\cordis.patch.yml`）；0.1.5 返回的才是主目录下的设置文档。
+          // 直接切片会把 profile 目录当成主目录 —— globalPatch 随之指到 profile 补丁，
+          // 全局补丁里那些 MCP 行就全部读不到了（0.15.0 实测）。所以先认这个形状：
+          // 目录以 `profiles\<name>` 结尾 ⇒ 它自己就是 profileDir，主目录上溯两级。
+          const profileShaped = /^(.+)[\\/]profiles[\\/]([^\\/]+)$/.exec(docDir)
+          if (profileShaped) {
+            home = profileShaped[1]
+            derivedProfileDir = docDir
+            derivedProfileName = profileShaped[2]
+          } else {
+            home = docDir
+          }
         }
-      } catch (e) { /* ignore */ }
-      if (!home) throw new Error('无法确定 DSH 主目录（settings.prepareDocument 未返回路径）')
+      } catch (e) {
+        docError = String((e as { message?: string })?.message ?? e)
+      }
+      if (!home) {
+        // 推导失败从「静默抛错」升级为「具名上报 + 抛错」：这条路径正是 0.1.7 升级事故的
+        // 源头（prepareDocument 返回语义一变这里就指错目录，MCP 页与补丁读写全部失明），
+        // 下次契约再变，兼容页必须第一眼看到推导挂了，而不是等某个页面空白再倒查。
+        noteRuntime({
+          id: 'paths.home-derivation',
+          label: '主目录推导',
+          kind: 'read',
+          fallback: 'refuse-operation',
+          detail: docError !== undefined
+            ? `settings.prepareDocument() 抛错：${docError}。主目录推导失败，MCP 页与补丁读写不可用。`
+            : 'settings.prepareDocument() 未返回可用路径（宿主路径契约可能又变了）。主目录推导失败，MCP 页与补丁读写不可用。',
+        })
+        throw new Error('无法确定 DSH 主目录（settings.prepareDocument 未返回路径）')
+      }
       const sep = home.indexOf('\\') >= 0 ? '\\' : '/'
-      let profileDir: string | null = null
-      let profileName = DEFAULT_PROFILE_NAME
-      for (const name of PROFILE_CANDIDATES) {
+      // prepareDocument 给出的就是**现存**的 profile 补丁路径（官方注释如此），所以
+      // 推导出的 profileDir 直接可信；只有它没给出 profile 形状时才走下面的候选探测。
+      const profileShapedPatchExists = derivedProfileDir !== null
+        && (await exists(derivedProfileDir + sep + 'cordis.patch.yml'))
+      // —— 推导自检（0.15.0）：健康时不留 note（运行时上报一律渲染成兼容页的问题行，
+      // 常驻健康行会违反「琥珀只留给故障」的口径），只在推导结果反常时记，恢复时收掉。
+      // 两条不变量照着 0.1.7 事故的形状挑：那次推出的「主目录」其实存在（是 profile 目录），
+      // 存在性检查抓不住，**profiles 子目录**检查才抓得住 —— 主目录下永远有 profiles\
+      //（本插件自己的 profile 就住在里面）。官方再改一次语义，两道检查至少一道当场报警。
+      const derivationNote = (detail: string): void => {
+        noteRuntime({
+          id: 'paths.home-derivation',
+          label: '主目录推导',
+          kind: 'read',
+          fallback: 'refuse-operation',
+          detail,
+        })
+      }
+      if (!(await exists(home))) {
+        derivationNote(`推导出的主目录不存在：${home}（设置文档路径：${docObserved ?? '未知'}）。推导结果不可信，MCP 页与补丁读写会落空。`)
+      } else if (!(await exists(home + sep + 'profiles'))) {
+        derivationNote(`推导出的主目录下没有 profiles 目录：${home}（设置文档路径：${docObserved ?? '未知'}）。主目录很可能指错了 —— 直接切片一个 profile 补丁路径就是这个形状；MCP 页与补丁读写会读错文件。`)
+      } else if (derivedProfileDir !== null && !profileShapedPatchExists) {
+        derivationNote(`设置文档路径呈 profile 目录形状，但其中没有 cordis.patch.yml：${docObserved}。官方承诺返回「现存」的 profile 补丁路径，形状对不上说明契约又变了；已回退候选探测。`)
+      } else {
+        clearRuntimeNote('paths.home-derivation')
+      }
+      let profileDir: string | null = profileShapedPatchExists ? derivedProfileDir : null
+      let profileName = derivedProfileName ?? DEFAULT_PROFILE_NAME
+      for (const name of profileDir === null ? PROFILE_CANDIDATES : []) {
         if (await exists(home + sep + 'profiles' + sep + name + sep + 'cordis.patch.yml')) {
           profileDir = home + sep + 'profiles' + sep + name
           profileName = name
@@ -1300,6 +1402,10 @@ export default {
         profileName,
         projectPatch: profileDir + sep + 'cordis.patch.yml',
         globalPatch: home + sep + 'cordis.patch.yml',
+        // 0.1.7 bundle 层：插件包内自己的 cordis.patch.yml（`dsh.bundle.patch`）定义 loader
+        // 条目。它只是「覆盖目标存在吗」的凭证与读取参照，**绝不是令牌的写点** —— 那份文件
+        // 是仓库镜像（sync 每次构建覆盖），把令牌写进去等于把明文密钥提交进仓库。
+        bundlePatch: profileDir + sep + 'node_modules' + sep + 'dsh-plugin-tool-management' + sep + 'cordis.patch.yml',
       }
       return cached
     }
@@ -1505,7 +1611,7 @@ export default {
      * 找到本插件 loader 行所在的补丁文件。返回 0 / 1 / 多份，多份时调用方必须拒绝自动改：
      * 同一条 loader 行出现在两份补丁里会让宿主起不来（重复 id），与 duplicateGuard 同一口径。
      */
-    async function loaderTokenFiles(): Promise<{ files: string[]; infoOf: Map<string, LoaderTokenInfo> }> {
+    async function loaderTokenFiles(): Promise<{ files: string[]; infoOf: Map<string, LoaderTokenInfo>; bundleBase: boolean }> {
       const p = await ensurePaths()
       const files: string[] = []
       const infoOf = new Map<string, LoaderTokenInfo>()
@@ -1515,7 +1621,14 @@ export default {
         const read = readLoaderToken(content)
         if (read.found) { files.push(abs); infoOf.set(abs, { token: read.token, disabled: read.disabled }) }
       }
-      return { files, infoOf }
+      // 0.1.7 bundle 挂载：loader 条目由插件包内的 cordis.patch.yml（bundle 层）提供，两份
+      // 补丁里都没有可就地改写的行。bundleBase 只回答「覆盖目标存在吗」—— 写点是 profile
+      // 补丁里的覆盖条目（见 tokenConfigure），bundle 文件本身永不落密钥。
+      let bundleBase = false
+      try {
+        bundleBase = readLoaderToken(await readPatch(p.bundlePatch)).found
+      } catch { bundleBase = false }
+      return { files, infoOf, bundleBase }
     }
 
     /**
@@ -1600,12 +1713,32 @@ export default {
         if (/[\r\n\u0000]/.test(value)) return { ok: false, error: '令牌不能包含换行或控制字符' }
         if (value === CONFIG_TOKEN) return { ok: true, changed: false, note: '和当前令牌相同，未改动。', restartRequired: false }
       }
-      const { files } = await loaderTokenFiles()
-      if (!files.length) {
-        return { ok: false, error: '没找到本插件的 loader 行，无法自动改写配置：请在 profile 的 cordis.patch.yml 里手动设置 config.token（或改用环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）。' }
+      const p = await ensurePaths()
+      const { files, bundleBase } = await loaderTokenFiles()
+      if (!files.length && !(mode === 'set' && bundleBase)) {
+        return { ok: false, error: '没找到本插件的 loader 行，也无法确认 bundle 层的挂载条目，无法自动改写配置：请在 profile 的 cordis.patch.yml 里手动加一条覆盖条目（- id: dsh-plugin-tool-management → config: → token: "…"），或改用环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN。' }
       }
       if (files.length > 1) {
         return { ok: false, error: '本插件的 loader 行同时出现在两份补丁文件里（会导致 DSH 无法启动）：请先清掉重复那条，再回来设置令牌。' }
+      }
+      if (!files.length) {
+        // 0.1.7 bundle 挂载：两份补丁里都没有本插件的 loader 行（条目由 bundle 层提供，那份
+        // 文件是仓库镜像、不能落密钥）—— 令牌写进 **profile 补丁的覆盖条目**：宿主在所有
+        // bundle 层之后应用它，整体替换那条 loader 的 config（bundle 条目没有 config，替换
+        // 零丢失）；同 id 的 insert 条目才会重复挂载导致启动失败，覆盖条目是官方支持的改法。
+        // `off` / `clear` / `on` 走不到这里：有 site 时就地改写，没 site 且有令牌 = 令牌来自
+        // 环境变量，那两条路在前面已按各自口径返回。
+        return withWriteLock(async () => {
+          let content = ''
+          try { content = await readPatch(p.projectPatch) } catch (e) { return { ok: false, error: '读取补丁失败: ' + message(e) } }
+          const next = content === '' ? buildLoaderOverrideEntry(value) + '\n' : (content.endsWith('\n') ? content : content + '\n') + '\n' + buildLoaderOverrideEntry(value)
+          try {
+            await writePatch(p.projectPatch, next)
+          } catch (e) {
+            return { ok: false, error: '写入补丁失败: ' + message(e) }
+          }
+          return { ok: true, changed: true, mode, restartRequired: true, path: p.projectPatch }
+        })
       }
       const abs = files[0]
       return withWriteLock(async () => {
@@ -1789,6 +1922,10 @@ export default {
 
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
+      // 「最近改动」流水的读侧（0.15.0 B2）：只读 hub 里的 `audit.jsonl`，倒序、可按域过滤。
+      'audit-list': async (args: any) => ({ ok: true, entries: await readAudit(args || {}) }),
+      // 清空流水。清完这一条 op 自己会被下面的包装层记进新流水（"谁清过"也留痕）。
+      'audit-clear': async () => await clearAudit(),
       'skill-open': skillOpen,
       // MCP 域 16 个 op（实现在 ./mcp/manager.ts）
       ...mcp.ops,
@@ -1827,10 +1964,11 @@ export default {
         cleanPatchBackups,
         getContextInjectorLive: () => contextInjectorLive,
         // 功能总览（B6）的三层合成：令牌实况与兼容页「访问令牌」同源；场景锁定与写门禁同源；
-        // 停用工具数读 mcp 的 TTL 缓存（无 I/O）。
+        // 停用工具的两个口径读 mcp 的 TTL 缓存（无 I/O）。
         readTokenState: async () => ({ active: TOKEN !== '', accepted: TOKEN !== '' && acceptedThisBoot() }),
         lockedSceneNames: () => lockedSceneNames(),
-        disabledToolCount: () => mcp.disabledToolCount(),
+        disabledToolSummary: () => mcp.disabledToolSummary(),
+        injectServiceCount: INJECT_SERVICES.length,
         message,
         compatLog,
       }),
@@ -1864,6 +2002,18 @@ export default {
       // 必须排在 ...memoriesService.ops 之后 —— 这里是显式覆盖同名 op，不是新增。
       ...buildSceneSyncOps({
         withAgentsMdSync,
+        onToolTablePresetChanged: async (scene: string, value: string) => {
+          // 「修改场景」里改绑工具表方案且改的是**当前启用场景** → 立即把关停名单整体换成
+          // 那一份（与「改档案 = 立刻生效」同口径）。解绑（''）按下拉里的承诺 =「保持现状」，
+          // 运行时不动；悬空绑定（方案已删）也不在这里硬失败，交给引擎进出场景时的 stale 处理。
+          const slice = await memoriesService.readArchiveSlice()
+          if (!slice.mode || slice.mode.scene !== scene || !value) return
+          const s = await readToolTableSettings()
+          const hit = s.presets.filter((p) => p.name === value)[0]
+          const hidden = hit ? [...hit.hidden] : (value === FACTORY_TOOL_TABLE_PRESET ? [...DEFAULT_HIDDEN_TOOLS] : null)
+          if (!hidden) return
+          await applyToolTableHiddenNow(hidden)
+        },
         rulesOps: {
           'rules-set-active': (args: any) => memoriesService.ops['rules-set-active'](args),
           'rules-update-scene': (args: any) => memoriesService.ops['rules-update-scene'](args),
@@ -2216,6 +2366,23 @@ export default {
     // handlers 后处理（2026-09-19 抽到 ./request-gate.ts）：场景锁定守卫、开关同步档案、
     // 读 op 的 anyLocked/activeScene 注解、子智能体失败清单 attach。
     // 顺序即语义（先装的在内层），整段搬运未改。
+    //
+    // 整机迁移快照（0.15.0 C2）在门禁装好**之前**并入 handlers：它自己不写任何域的数据，
+    // 而是逐域调 handlers 表里那些 op —— 装好后取到的就是带门禁的那一份，场景锁定期间各域
+    // 自己拒绝，迁移这边不必再判一套锁。
+    const snapshotOps = createSnapshotOps({
+      invokeOp: (name: string, args: any) => {
+        const fn = handlers[name]
+        return fn ? fn(args || {}) : Promise.resolve({ ok: false, error: '未知操作: ' + name })
+      },
+      hubPath,
+      ensurePaths,
+      pluginVersion: () => PKG_VERSION,
+      promptsDir: () => promptsDir,
+      message,
+    })
+    Object.assign(handlers, snapshotOps)
+
     installHandlerGuards({
       handlers,
       lockedSceneNames,
@@ -2291,8 +2458,28 @@ export default {
     const defineTool = ((options: unknown): ToolDefinition =>
       trackAdoption(hostDefineToolAny(options))) as unknown as typeof hostDefineTool
 
-    // 五个域共用的那一份依赖（形状见 tools/deps.ts）。defineTool 带着遥测一起传下去 ——
+    // 各域共用的那一份依赖（形状见 tools/deps.ts）。defineTool 带着遥测一起传下去 ——
     // 各域必须用它，直接 import 宿主的那个会丢掉采纳统计。
+    /**
+     * 「最近改动」流水的模型侧挂点（0.15.0 B2）。
+     *
+     * 为什么包在**交给工具的 op 表**上而不是散进每个 op：op 执行有多条入口路径（HTTP 路由、
+     * 模型工具的 execute、场景引擎），而判断「谁干的」这件事只有调用点知道 —— 在 op 里自己猜
+     * 调用方就是猜。这里给工具看到的表包一层，界面上 handlers 表那份原样不动，两条路各记各的。
+     * 只多记一条流水：不改行为、不改返回值、也不吞异常（写类与成败的判据在 ./audit-log.ts）。
+     */
+    const auditFn = (opName: string, fn: (args: any) => Promise<any>) => async (args: any) => {
+      const result = await fn(args || {})
+      recordOpAudit(opName, args || {}, 'model', result)
+      return result
+    }
+    const auditOps = <T extends Record<string, unknown>>(ops: T): T => {
+      const out: Record<string, unknown> = {}
+      for (const [name, fn] of Object.entries(ops)) {
+        out[name] = typeof fn === 'function' ? auditFn(name, fn as (args: any) => Promise<any>) : fn
+      }
+      return out as T
+    }
     const toolDeps = {
       defineTool,
       // 量体积只认**注册成功**的那些（注册失败的域工具本来就不在模型工具表里）——
@@ -2307,26 +2494,27 @@ export default {
       injectNoticeOptions,
       message,
     }
+    const mcpToolOps = auditOps(mcp.ops)
     buildMcpTools({
       ...toolDeps,
       mcpmListView: mcp.mcpmListView,
       mcpmTools: mcp.ops['mcpm-tools'],
-      mcpmSetEnabled: mcp.ops['mcpm-set-enabled'],
-      mcpmRestart: mcp.ops['mcpm-restart'],
-      mcpmToolEnabled: mcp.ops['mcpm-tool-enabled'],
-      mcpmAdd: mcp.ops['mcpm-add'],
-      mcpmEdit: mcp.ops['mcpm-edit'],
-      mcpmNote: mcp.ops['mcpm-note'],
+      mcpmSetEnabled: mcpToolOps['mcpm-set-enabled'],
+      mcpmRestart: mcpToolOps['mcpm-restart'],
+      mcpmToolEnabled: mcpToolOps['mcpm-tool-enabled'],
+      mcpmAdd: mcpToolOps['mcpm-add'],
+      mcpmEdit: mcpToolOps['mcpm-edit'],
+      mcpmNote: mcpToolOps['mcpm-note'],
       // **故意不接 `mcpm-reveal`**：`mcp_manager_save` 的改分支用 `mcpmListView()` 的
       // 打码视图填回省略字段，由 `mcpm-edit` 的 `resolveMaskedKv` / `resolveMaskedUrl`
       // 还原真值 —— 那条路本来就是给"表单里出现打码值"设计的（界面编辑框预填的就是它）。
       // 让模型驱动的工具在进程内读明文凭据，是另一条没人设计过、也没有测试覆盖的路径。
     })
-    buildSkillTools({ ...toolDeps, skillsOps: skillsService.ops })
+    buildSkillTools({ ...toolDeps, skillsOps: auditOps(skillsService.ops) })
     // 传 op 表而不是 promptsService：「生效中」的判定只有 `agentsmd-list` 里有（场景绑定
     // 的那份才算），直调服务会得到文件比对口径 —— 场景驱动时工具会报一个与界面不同的答案。
-    buildPromptTools({ ...toolDeps, promptOps, applyPresetGuarded, promptsDir })
-    buildMemoryTools({ ...toolDeps, rulesOps: memoriesService.ops })
+    buildPromptTools({ ...toolDeps, promptOps: auditOps(promptOps), applyPresetGuarded, promptsDir })
+    buildMemoryTools({ ...toolDeps, rulesOps: auditOps(memoriesService.ops) })
     // 场景族（tools/scene.ts）：列场景与档案（`_list`）+ 建场景 / 写档案 / 绑提示词（`_save`）
     // + 进入与退出（`_switch`）。
     // 传**包装后**的 `archiveService.ops`：`scene-archive-save` 与 `scene-mode-set` 都在本文件
@@ -2338,13 +2526,14 @@ export default {
     // 再包一次，是为了让工具与 HTTP API 共用同一个实现（不会各自漂移）。
     buildSceneTools({
       ...toolDeps,
-      rulesOps: memoriesService.ops,
-      archiveOps: archiveService.ops,
-      sceneActivate: (args: any) => handlers['rules-set-active'](args),
+      rulesOps: auditOps(memoriesService.ops),
+      archiveOps: auditOps(archiveService.ops),
+      sceneActivate: auditFn('rules-set-active', (args: any) => handlers['rules-set-active'](args)),
     })
     buildSubagentTools({
       ...toolDeps,
-      subagentService,
+      // 只换掉工具看到的 `ops` 那一层（原型链回真实服务，其余读法一字不动）。
+      subagentService: Object.assign(Object.create(subagentService), { ops: auditOps(subagentService.ops) }),
       sceneLists: subagentSceneLists,
       toolFilterFor: subagentToolFilterFor,
       failures: subagentFailures,
@@ -2774,6 +2963,9 @@ export default {
                 return
               }
               const result = await fn(payload.args || {})
+              // 「最近改动」流水：来源 = 面板（这条 HTTP 路由是界面唯一的入口）。
+              // `readOnlyCall` 是上面那四个「读改写两态 op」的纯读分支 —— 它们没改任何状态，不记。
+              if (!readOnlyCall) recordOpAudit(op, payload.args || {}, 'panel', result)
               res.end(JSON.stringify(withPatchWarnings(result === undefined ? { ok: true } : result)))
             } catch (e) {
               res.end(JSON.stringify({ ok: false, error: message(e) }))

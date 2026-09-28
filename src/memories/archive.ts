@@ -20,6 +20,12 @@ export interface SceneArchive {
    * 记忆文件不会被删改，只影响投影（真实数据零风险）。
    */
   memories?: string[]
+  /**
+   * 绑定的**模型工具表方案**（0.15.0 C1）：进入该场景时把「发给模型的工具」关停名单整体换成
+   * 这一份方案（不是合并）。缺省 = 这个域完全不动，老档案没有这一栏，进出行为逐字节不变。
+   * `'factory-default'` 是合法值 = 出厂默认那份关 15 条，不是用户自己存的方案。
+   */
+  toolTablePreset?: string
 }
 
 /**
@@ -78,6 +84,11 @@ export interface ModeSnapshot {
    * 退出时按此恢复；只记被改动的行。
    */
   mcpNotes?: Array<{ id: string; note: string | null }>
+  /**
+   * 进场景前的**模型工具表关停名单**（0.15.0 C1）。老快照没有这一栏 → 退出不动工具表。
+   * 记全量而不是「方案名」：用户在场景里自己去兼容页改了工具表，退出仍要回到进场景前的那份。
+   */
+  toolTableHidden?: string[]
 }
 export interface ModeState { scene: string | null; snapshot: ModeSnapshot | null }
 
@@ -165,6 +176,9 @@ export function normalizeArchive(raw: unknown): SceneArchive {
   if (obj.skills != null) out.skills = normalizeStringList(obj.skills)
   if (obj.subagents != null) out.subagents = normalizeStringList(obj.subagents)
   if (obj.memories != null) out.memories = normalizeStringList(obj.memories)
+  // 工具表方案是**标量**不是集合：空串 / 非字符串一律视为未绑定（段不存在）。
+  const toolTablePreset = typeof obj.toolTablePreset === 'string' ? obj.toolTablePreset.trim() : ''
+  if (toolTablePreset) out.toolTablePreset = toolTablePreset
   return out
 }
 
@@ -329,6 +343,8 @@ export function snapshotRuntime(
    * 退出时按它精确还原（场景里手动开过的人设也会被还原回进场景前的状态）。
    */
   subagentStates: Record<string, boolean> | null = null,
+  /** 进场景前的模型工具表关停名单（null = 这次不进快照，退出也就不动工具表）。 */
+  toolTableHidden: string[] | null = null,
 ): ModeSnapshot {
   return {
     mcp: Object.fromEntries(Object.entries(mcpRaw).map(([k, v]) => [k, v.slice()])),
@@ -339,6 +355,7 @@ export function snapshotRuntime(
     ...(subagentsOn.length ? { subagentsOn: subagentsOn.slice() } : {}),
     ...(subagentStates ? { subagentsAll: { ...subagentStates } } : {}),
     ...(mcpNotes.length ? { mcpNotes: mcpNotes.map((x) => ({ id: x.id, note: x.note })) } : {}),
+    ...(toolTableHidden ? { toolTableHidden: toolTableHidden.slice() } : {}),
   }
 }
 

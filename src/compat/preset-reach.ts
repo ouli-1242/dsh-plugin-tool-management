@@ -47,7 +47,7 @@
  *     nothing about the servers behind them — no names, no tool counts, no
  *     enablement, and none of the user's notes.
  *
- * Reading never mounts. `list()`/`read(id)` are roster reads, so building the
+ * Reading never mounts. `list()`/`read(id)`/`readDocument(id)` are roster reads, so building the
  * matrix cannot activate a preset early — the same guarantee
  * `compositionInventory()` gives the plugin-listing surfaces.
  *
@@ -57,6 +57,7 @@
  * point at the switch that overrides it.
  */
 import { MCP_CLIENT_MODULE } from '../host-names.js'
+import { noteRuntime } from './runtime-notes.js'
 
 /**
  * `MCP_CLIENT_MODULE` (from `host-names.ts`) is the client name this module scans
@@ -400,14 +401,52 @@ export function deriveReach(
 
 /**
  * The roster surface this module reads. Every member is optional so a
- * deployment without `@deepseek-ai/dsh-agent-presets` degrades to a blocker
+ * deployment without the agent-preset service degrades to a blocker
  * line instead of a throw.
+ *
+ * 组合文本有两个官方入口（0.15.0 实测，同宿主两代）：
+ *   - 0.1.5 的 `read(id)`：直接返回组合文本；
+ *   - 0.1.7 的 `readDocument(id)`：返回 `AgentPresetDocument`，组合 YAML 在 `.content`
+ *     字段（`{ agentPreset, content, name?, description? }`）。
+ * 读取顺序固定「read 优先，readDocument 兜底」—— 两代宿主都能读。
  */
 export interface PresetRosterLike {
   list?: () => Promise<unknown>
   read?: (id: string) => Promise<string>
+  readDocument?: (id: string) => Promise<unknown>
   composedPreset?: (agentCtx: unknown) => string | undefined
   defaultId?: string
+}
+
+/**
+ * 读一个预设的组合文本。两代宿主同一个出口：
+ * `read(id)`（0.1.5 直返文本）或 `readDocument(id).content`（0.1.7 文档对象）。
+ * 两者都不可用时抛错，由调用方决定降级口径 —— reason 文案由此保持单一来源。
+ *
+ * 兜底路径的可见性（0.15.0）：兜底成功**不留运行时上报** —— 上报一律渲染成问题行，
+ * 而「read 改名 readDocument 后走兜底」是 0.1.7 的正常形态，不是降级（琥珀只留给故障，
+ * 2026-09-28 用户反馈）。走的哪条路由探测表 `preset.roster-surface` 的健康行说明承担；
+ * 这里只在**真异常**（readDocument 在场但文档缺 `.content`）时留痕。同 id 覆盖，不堆积。
+ */
+export async function readCompositionText(roster: PresetRosterLike, presetId: string): Promise<string> {
+  if (typeof roster.read === 'function') {
+    return String((await roster.read(presetId)) ?? '')
+  }
+  if (typeof roster.readDocument === 'function') {
+    const doc = (await roster.readDocument(presetId)) as { content?: unknown } | null | undefined
+    if (doc === null || typeof doc !== 'object' || doc.content === undefined) {
+      // 文档形状的第二次漂移：readDocument 在、`.content` 不在 —— 当年 read 改名的翻版。
+      noteRuntime({
+        id: 'preset.roster-read-route',
+        label: '预设名册读取',
+        kind: 'read',
+        fallback: 'inform-only',
+        detail: `readDocument(${presetId}) 返回的文档没有 content 字段：组合文本按空处理，注入边界将显示「无法判断」。宿主的名册文档契约可能又变了。`,
+      })
+    }
+    return String(doc?.content ?? '')
+  }
+  throw new Error('预设名单未提供 read()/readDocument()：无法读取组合文件')
 }
 
 /** Narrow the roster off a cordis context without throwing. */
@@ -434,7 +473,7 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
     ...(broken === undefined ? {} : { broken }),
   }
 
-  if (typeof roster.read !== 'function') {
+  if (typeof roster.read !== 'function' && typeof roster.readDocument !== 'function') {
     return {
       ...base,
       personaComplete: 'unknown',
@@ -448,13 +487,13 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
       skillCatalog: 'unknown',
       subagent: 'unknown',
       mcp: 'unknown',
-      reason: '预设名单未提供 read()：无法读取组合文件',
+      reason: '预设名单未提供 read()/readDocument()：无法读取组合文件',
     }
   }
 
   let text: string
   try {
-    text = String((await roster.read(presetId)) ?? '')
+    text = await readCompositionText(roster, presetId)
   } catch (error) {
     return {
       ...base,
@@ -614,9 +653,9 @@ export async function reachNoticeForAgent(
   } catch {
     return ''
   }
-  if (presetId === '' || typeof roster.read !== 'function') return ''
+  if (presetId === '' || (typeof roster.read !== 'function' && typeof roster.readDocument !== 'function')) return ''
   try {
-    return reachNoticeFor(presetId, readCompositionFacts(String((await roster.read(presetId)) ?? '')), inject)
+    return reachNoticeFor(presetId, readCompositionFacts(await readCompositionText(roster, presetId)), inject)
   } catch {
     return ''
   }

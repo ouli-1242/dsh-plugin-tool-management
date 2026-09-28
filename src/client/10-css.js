@@ -161,14 +161,16 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-pick-actions{display:flex;align-items:center;gap:6px;flex:none}
 .dsm-pick-empty{padding:18px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}
 .dsm-archive-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:12px}
-/* 档案弹窗固定高度：加/删段、进出「选工具」子视图都不改变弹窗尺寸。 */
-.dsm-modal-archive{height:min(720px,calc(100vh - 48px))}
-.dsm-modal-archive .dsm-form{min-height:0;gap:10px;overflow:auto}
-/* 段体高度：min-height 给下限、flex-shrink:0 保证下限优先（四项都在时也各占 300px），
-   装不下由 .dsm-form 整体滚动。列表自身 overflow:auto，永远是它出滚动条。
-   注意不要写成 flex:1 平分——那样四项分 720px 每段只剩约 155px，比原来的固定 216px 还矮。 */
-.dsm-modal-archive .dsm-seg{min-height:300px;flex:0 0 auto}
-.dsm-modal-archive .dsm-seg-body{height:auto;flex:1 1 auto}
+/* 档案弹窗固定高度：加/删段、进出「选工具」子视图都不改变弹窗尺寸。
+   2026-09-28 用户裁定改 **2×2 网格**：四段同屏，段体超出各自段内滚 —— 原来四段竖排
+   （min-height 300px × 4 ≈ 1200px），720px 的框装不下，只能整体滚动逐段看。两列后
+   每行分到剩余高度的一半，段体滚动区与旧竖排的 216px 相当；段头/工具栏钉在段顶。
+   （旧注释「不要 flex:1 平分」说的是单列布局 —— 网格两列四段，平分反而刚好。） */
+.dsm-modal-archive{width:min(1080px,100%)!important;height:min(880px,calc(100vh - 48px));max-height:none;overflow:hidden}
+.dsm-modal-archive .dsm-form{min-height:0;gap:10px;overflow:hidden}
+.dsm-archive-grid{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:10px}
+.dsm-archive-grid .dsm-seg{min-height:0}
+.dsm-modal-archive .dsm-seg-body{height:auto;flex:1 1 auto;min-height:0}
 /* ── 段内筛选（场景/记忆等条目多的选段用；条目少时不必显示）────────────────────
    .dsm-seg-filter 段体顶部的搜索行；.dsm-seg-cards 场景卡片列表（比纯勾选行信息量大）。 */
 .dsm-seg-filter{display:flex;align-items:center;gap:8px;padding:6px 6px 8px}
@@ -241,7 +243,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
    状态色只用设计系统里已有的三档：成功 / 告警（--dsm-warn）/ 错误。 */
    /* 注意：整段 CSS 是一个模板字符串，注释里**不能出现反引号** —— 它会提前闭合模板，
       整个 bundle 直接语法错误（客户端白屏）。 */
-.dsm-compat{display:flex;flex-direction:column;gap:14px}
+.dsm-compat{display:flex;flex-direction:column;gap:10px}
 .dsm-compat-bar{display:flex;min-width:0;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--dsw-alias-state-success-primary);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 .dsm-compat-bar-warn{border-color:var(--dsm-warn)}
 .dsm-compat-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
@@ -250,7 +252,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-compat-sum{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 /* 三个指标格：左对齐、等分，窄屏落成单列。 */
 .dsm-compat-grid{display:grid;gap:10px;grid-template-columns:repeat(3,minmax(0,1fr))}
-.dsm-compat-card{display:flex;min-width:0;flex-direction:column;gap:3px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-compat-card{display:flex;min-width:0;flex-direction:column;gap:3px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 .dsm-compat-card-bad{border-color:var(--dsw-alias-state-error-primary)}
 .dsm-compat-card-label{color:var(--dsw-alias-label-tertiary);font-size:11px}
 .dsm-compat-card-value{color:var(--dsw-alias-label-primary);font-size:17px;font-weight:680;line-height:22px;word-break:break-all}
@@ -262,7 +264,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
    页面一致（用户裁定 2026-09-19：「小标题不用在框里」「背景不用设置深灰色，和大背景一样
    就行」—— 上一版标题进框、框内再铺一层深灰底，整页多出一串"盒子里的盒子"）。
    取值与「注入」那一块（.dsm-inject-settings）一致，三块看起来才是同一类东西。 */
-.dsm-compat-box{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-compat-box{display:flex;flex-direction:column;gap:8px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 /* 域列表（注入实况）自己就带边框与底色，放进带边框的框里时去掉 —— 否则框里套框、
    两层同色，看起来只是多了一圈多余的线（行与行之间本来就有细分隔线）。 */
 .dsm-compat-box .dsm-compat-mod-list{border:0;border-radius:0;background:transparent}
@@ -308,7 +310,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-compat-pill-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 .dsm-compat-pill-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
 .dsm-compat-reach-marks{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;min-width:0}
-.dsm-inject-settings{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-inject-settings{display:flex;flex-direction:column;gap:8px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 /* 注入域勾选：横排、窄容器自动换行；标签一律短名（记忆 / MCP / …），不截断也不竖排。 */
 .dsm-inject-domains{display:flex;flex-wrap:wrap;gap:7px 18px;padding:0 2px}
 .dsm-inject-domain{display:inline-flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}
@@ -318,7 +320,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
    名字用等宽、数字用 tabular-nums 右对齐；介绍超长省略，完整那句在悬停里。
    出厂默认关着哪几条**不在行上标**（用户 2026-09-23 要求去掉「默认关」小标）：合计下面那句
    "其中 ≈X 是出厂默认关掉的 N 条"是唯一的出处，加上悬停那一行会说"出厂默认就是关着的"。 */
-.dsm-tooltable{display:flex;flex-direction:column;gap:10px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-tooltable{display:flex;flex-direction:column;gap:10px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 /* 保存往返期间：整块不吃点击、略灰 —— 这一块刻意没有乐观更新（见 saveToolTable 注释）。 */
 .dsm-tooltable-busy{pointer-events:none;opacity:.55}
 .dsm-tooltable-summary{display:flex;align-items:center;gap:10px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
@@ -430,5 +432,74 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    （解锁后再锁会重置，见 syncTokenBanner）。 */
 .dsm-token-banner-close{pointer-events:auto;flex:none;width:20px;height:20px;padding:0;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:14px;line-height:20px;cursor:pointer;opacity:.7}
 .dsm-token-banner-close:hover{opacity:1}
+
+/* MCP JSON 导入预览（0.15.0 A1）：勾选 | 主体 | 状态三列。非法行只把「问题」那一行标红，
+   名字净化 / 字段忽略这类是配置事实，走中性灰 —— 黄色在这里留给不了任何东西（琥珀语义）。 */
+.dsm-imp-head,.dsm-imp-row{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:start;gap:10px}
+.dsm-imp-head{padding:0 2px 4px;color:var(--dsw-alias-label-tertiary);font-size:11px}
+.dsm-imp-list{display:flex;flex-direction:column;gap:6px;max-height:320px;padding:1px 2px 0 0;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l2) transparent}
+.dsm-imp-row{padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1);font-size:12px}
+.dsm-imp-row.dsm-imp-bad{border-color:var(--dsw-alias-state-error-primary)}
+.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:2px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
+.dsm-imp-row input[type=checkbox]:disabled{cursor:not-allowed}
+.dsm-imp-main{display:flex;min-width:0;flex-direction:column;gap:3px}
+.dsm-imp-name{display:flex;align-items:center;flex-wrap:wrap;gap:6px;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600}
+.dsm-imp-endpoint{color:var(--dsw-alias-label-secondary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;line-height:16px;word-break:break-all}
+.dsm-imp-sub,.dsm-imp-note{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+.dsm-imp-err{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}
+.dsm-imp-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.dsm-imp-foot{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.dsm-imp-radio{display:flex;align-items:center;gap:5px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
+.dsm-imp-radio input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-success-primary)}
+.dsm-imp-count{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
+
+/* 体检状态点（0.15.0 B1）与行内检查项。点只有 8px，靠 title 说清含义；
+   检查结果单独一行一行列在行尾，不复用 .dsm-row-hint（那一套固定带 ⚠ 前缀、且语义是"运行状态"）。 */
+.dsm-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:99px;background:var(--dsw-alias-border-l3)}
+.dsm-dot-ok{background:var(--dsw-alias-state-success-primary)}
+.dsm-dot-warn{background:var(--dsm-warn)}
+.dsm-dot-busy{background:var(--dsw-alias-label-tertiary);animation:dsm-dot-pulse 1s ease-in-out infinite}
+@keyframes dsm-dot-pulse{0%,100%{opacity:.25}50%{opacity:1}}
+.dsm-inspect{display:flex;flex-direction:column;gap:2px;margin-top:2px}
+.dsm-inspect-line{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px}
+.dsm-inspect-warn{color:var(--dsm-warn)}
+.dsm-inspect-ok{color:var(--dsw-alias-state-success-primary)}
+
+/* 「最近改动」流水（0.15.0 B2）：时间列固定窄栏，改动列吃剩余宽度，来源徽章贴在行尾。 */
+.dsm-audit{display:flex;flex-direction:column;gap:6px}
+.dsm-audit-bar{display:flex;align-items:center;gap:8px}
+.dsm-audit-filter{flex:none;width:auto;min-width:130px;font-size:12px}
+.dsm-audit-list{display:flex;flex-direction:column;max-height:300px;overflow:auto;padding-right:2px;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l2) transparent}
+.dsm-audit-head{grid-template-columns:92px minmax(0,1fr)}
+.dsm-audit-row{display:grid;grid-template-columns:92px minmax(0,1fr);align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px}
+.dsm-audit-row:last-child{border-bottom:0}
+.dsm-audit-time{color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;white-space:nowrap}
+.dsm-audit-main{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 8px;min-width:0}
+.dsm-audit-item{color:var(--dsw-alias-label-secondary)}
+.dsm-audit-target{color:var(--dsw-alias-label-primary);font-weight:580}
+.dsm-audit-more{color:var(--dsw-alias-label-tertiary);font-size:11px}
+
+/* 整机迁移（0.15.0 C2）：路径 + 动作按钮同一行，勾选清单横向铺开（一域一个标签）。 */
+.dsm-snap{display:flex;flex-direction:column;gap:8px}
+.dsm-snap-row{display:flex;gap:8px}
+.dsm-snap-row .dsm-control{flex:1;min-width:0}
+.dsm-snap-picks{display:flex;flex-wrap:wrap;gap:6px 14px}
+.dsm-snap-pick{display:flex;align-items:center;gap:5px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
+.dsm-snap-pick input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
+.dsm-snap-preview{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1)}
+/* 兼容页三块弹窗：**开合不改尺寸**（列表长短、预览有没有读回来都不该让框跳）。
+   「最近改动」（唯一 fixed 弹窗）的滚动层**只给列表**：正文是纯 flex 容器不滚动，
+   提示语、筛选栏（选择框 / 按钮）固定不动，列表吃剩余高度自己滚，表头在列表内
+   sticky 钉顶 —— 此前是整个正文滚 + sticky 钉筛选栏，提示语会跟着滚出视野
+   （2026-09-28 用户反馈）。表单类与条数固定的弹窗仍是正文自适应、无此规则。 */
+.dsm-compat-dialog{height:min(620px,calc(100vh - 64px));max-height:none;overflow:hidden}
+.dsm-compat-dialog .dsm-modal-body{min-height:0;flex:1;overflow:hidden}
+.dsm-compat-dialog .dsm-audit{flex:1;min-height:0}
+.dsm-compat-dialog .dsm-audit-list{max-height:none;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+.dsm-compat-dialog .dsm-audit-head{position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-layer-2)}
+.dsm-snap-browse{display:flex;flex-direction:column;gap:6px;margin-top:6px;padding:8px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}
+.dsm-snap-browse .dsm-dir-list{max-height:170px}
+.dsm-snap-browse-foot{display:flex;align-items:center;gap:8px}
+.dsm-snap-browse-foot .dsm-help{min-width:0;flex:1;overflow-wrap:anywhere}
 
 `

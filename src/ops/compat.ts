@@ -20,7 +20,7 @@ import {
 } from '../compat/probe.js'
 import { INJECT_DOMAIN_KEYS } from '../context-inject.js'
 import { assessPresetReach, type PresetRosterLike } from '../compat/preset-reach.js'
-import { runtimeNotes } from '../compat/runtime-notes.js'
+import { runtimeNotes, type RuntimeNote } from '../compat/runtime-notes.js'
 import { pluginLog } from '../skills/service.js'
 import type { InjectSettings, LiveInjectionSnapshot } from '../context-inject.js'
 import type { ToolTableReport } from '../tools/table.js'
@@ -64,8 +64,10 @@ export interface CompatOpsDeps {
   readTokenState(): Promise<{ active: boolean; accepted: boolean }>
   /** 当前锁定中的场景名（空数组 = 没锁）。 */
   lockedSceneNames(): Promise<readonly string[]>
-  /** 停用表中的工具条数（读 TTL 缓存，无 I/O）。 */
-  disabledToolCount(): number
+  /** 停用表的两个口径（读 TTL 缓存，无 I/O）：整台停用（`*`）的台数 + 单独停用的工具数。 */
+  disabledToolSummary(): { servers: number; tools: number }
+  /** 本插件声明的 inject 服务数（INJECT_SERVICES.length）：挂载行的依据文案用。 */
+  injectServiceCount: number
   message(e: unknown): string
   /**
    * compat-status 的日志去重状态（记录已打过日志的宿主版本）。跨调用可变 —— 用对象持有，
@@ -183,18 +185,68 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         const domainsOn = INJECT_DOMAIN_KEYS.filter((key) => settings.domains[key] !== false)
         const token = await deps.readTokenState()
         const lockedScenes = await deps.lockedSceneNames()
-        const disabledTools = deps.disabledToolCount()
+        const disabledTools = deps.disabledToolSummary()
         const routeOf = (operation: OperationName): RouteDecision | undefined =>
           assessment === undefined ? undefined : routeFor(assessment, operation)
-        /** 一行一个功能点：状态三层合成，`detail` 写明依据。 */
-        const rows: Array<{ key: string; label: string; tab: string; state: string; detail: string }> = []
-        const push = (key: string, label: string, tab: string, state: string, detail: string) => rows.push({ key, label, tab, state, detail })
-        // 前置项：插件挂载（这一行本身说明 12 个 inject 都解析了 —— 否则 apply 根本不会跑）；
+        /**
+         * 一行一个功能点：状态三层合成，`detail` 写明依据。
+         *
+         * 文案分了两层（2026-09-28 英文界面的总览出现半页中文的整改）：`label` / `detail`
+         * 仍是服务端中文原文（旧客户端与兜底显示用）；结构化字段供客户端词典出对应语言的
+         * 句子 —— **数值归服务端，句子归客户端**：
+         *   · `detailKey` / `params` —— note 降级行：客户端按键出模板句（RuntimeNote 同名字段透传）；
+         *   · `via` / `refusals` —— 会话路由行：客户端按 via 出「可用（路径：…）」、按缺失能力 id 出各语言标签；
+         *   · `domains` / `scenes` / `servers` 等计数与清单 —— 配置行：客户端按 state + 数值选模板。
+         */
+        type OverviewRow = {
+          key: string
+          label: string
+          tab: string
+          state: string
+          detail: string
+          detailKey?: string
+          params?: Record<string, string | number>
+          via?: 'native' | 'adapter'
+          refusals?: Array<{ id: string; label: string }>
+          domains?: readonly string[]
+          count?: number
+          total?: number
+          scenes?: readonly string[]
+          servers?: number
+          tools?: number
+          hidden?: number
+          defaults?: number
+          version?: string
+          blockers?: readonly string[]
+        }
+        const rows: OverviewRow[] = []
+        const push = (row: OverviewRow) => rows.push(row)
+        /** note 降级行的公共字段：透传 note 的 detailKey / params，没有结构化键就只带原文。 */
+        const noteFields = (note: RuntimeNote | undefined): Partial<OverviewRow> =>
+          note === undefined ? {}
+            : { ...(note.detailKey === undefined ? {} : { detailKey: note.detailKey }), ...(note.params === undefined ? {} : { params: note.params }) }
+        /** 路由判定行的公共字段：可用带 via；不可用带缺失能力的 id + 原始标签（客户端出各语言标签）。 */
+        const routeFields = (decision: RouteDecision | undefined): Partial<OverviewRow> => {
+          if (decision === undefined) return {}
+          return decision.via === 'none'
+            ? { refusals: decision.refusals.map((item) => ({ id: item.id, label: item.label })) }
+            : { via: decision.via }
+        }
+        const routeDetail = (decision: RouteDecision | undefined) =>
+          decision === undefined ? '能力探测不可用（归档服务未挂载）'
+            : decision.via === 'none' ? '宿主缺少该路径所需能力：' + decision.refusals.map((item) => item.label).join('、')
+              : `可用（路径：${decision.via}）`
+        // 前置项：插件挂载（这一行本身说明 inject 都解析了 —— 否则 apply 根本不会跑）；
         // 启动期那段 `!!js` 表达式若抛错，插件同样不会挂上（它的 try/catch 就是为了不抛）。
         const mountNote = notes.get('cordis-original-symbol')
-        push('mount', '插件挂载', 'compat',
-          mountNote === undefined ? 'ok' : 'degraded',
-          mountNote === undefined ? '12 个 inject 服务全部解析，插件已挂载（详见 doctor 的挂载心跳）' : mountNote.detail)
+        push({
+          key: 'mount', label: '插件挂载', tab: 'compat',
+          state: mountNote === undefined ? 'ok' : 'degraded',
+          detail: mountNote === undefined
+            ? `${deps.injectServiceCount} 个 inject 服务全部解析，插件已挂载（详见 doctor 的挂载心跳）`
+            : mountNote.detail,
+          ...(mountNote === undefined ? { params: { count: deps.injectServiceCount } } : noteFields(mountNote)),
+        })
         // 装配层：有上报就是降级，附上报里的原因；没有就是正常。
         const assemblyRows: Array<[string, string, string]> = [
           ['patch-write-guard', '宿主配置写入（补丁校验）', 'mcp'],
@@ -206,71 +258,106 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         ]
         for (const [noteId, label, tab] of assemblyRows) {
           const note = notes.get(noteId)
-          push(noteId, label, tab, note === undefined ? 'ok' : 'degraded',
-            note === undefined ? '装配正常，无降级上报' : note.detail)
+          push({
+            key: noteId, label, tab, state: note === undefined ? 'ok' : 'degraded',
+            detail: note === undefined ? '装配正常，无降级上报' : note.detail,
+            ...noteFields(note),
+          })
         }
         // 宿主能力层：删除 / 归档 / 恢复 / 批量各自由路由判定回答（与服务端执行同源）。
         const deleteRoute = routeOf('delete')
-        push('session-delete', '会话删除', 'sessions',
-          deleteRoute === undefined ? 'unknown' : deleteRoute.via === 'none' ? 'unavailable' : 'ok',
-          deleteRoute === undefined ? '能力探测不可用（归档服务未挂载）'
-            : deleteRoute.via === 'none' ? '宿主缺少该路径所需能力：' + deleteRoute.refusals.map((item) => item.label).join('、')
-              : `可用（路径：${deleteRoute.via}）`)
+        push({
+          key: 'session-delete', label: '会话删除', tab: 'sessions',
+          state: deleteRoute === undefined ? 'unknown' : deleteRoute.via === 'none' ? 'unavailable' : 'ok',
+          detail: routeDetail(deleteRoute), ...routeFields(deleteRoute),
+        })
         for (const [operation, label] of [['archive', '归档'], ['unarchive', '恢复'], ['batch', '批量操作'], ['list', '历史列表']] as const) {
           const decision = routeOf(operation)
-          push('session-' + operation, `会话${label}`, 'sessions',
-            decision === undefined ? 'unknown' : decision.via === 'none' ? 'unavailable' : 'ok',
-            decision === undefined ? '能力探测不可用（归档服务未挂载）'
-              : decision.via === 'none' ? '宿主缺少该路径所需能力：' + decision.refusals.map((item) => item.label).join('、')
-                : `可用（路径：${decision.via}）`)
+          push({
+            key: 'session-' + operation, label: `会话${label}`, tab: 'sessions',
+            state: decision === undefined ? 'unknown' : decision.via === 'none' ? 'unavailable' : 'ok',
+            detail: routeDetail(decision), ...routeFields(decision),
+          })
         }
         // 用户配置层：注入域 / 令牌 / 场景锁定 / 停用工具数。
-        push('injection-domains', '注入域开关', 'compat',
-          domainsOn.length === 0 ? 'disabled' : 'ok',
-          domainsOn.length === 0 ? '五个注入域全部关闭（用户设置）' : `${domainsOn.length}/5 个域开启：${domainsOn.join('、')}`)
-        push('token', '访问令牌', 'compat',
-          !token.active ? 'disabled' : token.accepted ? 'ok' : 'locked',
-          !token.active ? '未启用（宿主没配令牌，或令牌功能被关掉）'
-            : token.accepted ? '已生效且本次启动已通过验证' : '已生效，本次启动尚未验证：写操作与对话会被拦住，到本页下方填写令牌')
-        push('scene-lock', '场景锁定', 'scenes',
-          lockedScenes.length === 0 ? 'ok' : 'locked',
-          lockedScenes.length === 0 ? '无锁定场景' : `锁定中：${lockedScenes.join('、')}（写门禁按锁定场景生效）`)
-        push('mcp-tools', 'MCP 工具停用', 'mcp',
-          disabledTools === 0 ? 'ok' : 'partial',
-          disabledTools === 0 ? '没有停用的工具' : `${disabledTools} 个工具处于停用态（执行拦截 + 可见性摘除）`)
-        // 工具表按每个请求付钱：这一行回答"这一轮实际发出去多少"。关掉的工具整份不进请求，
-        // 但代价是模型调不到它们（本插件的面板不受影响）——所以是 partial，不是 ok。
-        // **出厂默认关掉的那几条不算**：那是插件替用户做的一个可逆选择，不是用户关出了
-        // 一个缺口。把默认态报成 partial 违背本页口径（琥珀只留给"该做却没做"），也永远
-        // 无法消掉 —— 用户打开它们反而会被罚一个 ok。
-        // 末尾那句是**逐会话**的差额：官方 `skill` 工具在场的会话里我们那份加载器会再让位
-        // 一个（见 index.ts 的 CARRIER_DUPLICATES），本表的数字是全局口径、不含它。
+        // 分母必须取自 INJECT_DOMAIN_KEYS：0.14.0 场景与记忆分家后域从 5 个变 6 个，
+        // 写死的「/5」把 6/6 报成 6/5（2026-09-28 用户实测）。
+        const domainTotal = INJECT_DOMAIN_KEYS.length
+        push({
+          key: 'injection-domains', label: '注入域开关', tab: 'compat',
+          state: domainsOn.length === 0 ? 'disabled' : 'ok',
+          detail: domainsOn.length === 0 ? `${domainTotal} 个注入域全部关闭（用户设置）` : `${domainsOn.length}/${domainTotal} 个域开启：${domainsOn.join('、')}`,
+          domains: domainsOn, count: domainsOn.length, total: domainTotal,
+        })
+        push({
+          key: 'token', label: '访问令牌', tab: 'compat',
+          state: !token.active ? 'disabled' : token.accepted ? 'ok' : 'locked',
+          detail: !token.active ? '未启用（宿主没配令牌，或令牌功能被关掉）'
+            : token.accepted ? '已生效且本次启动已通过验证' : '已生效，本次启动尚未验证：写操作与对话会被拦住，到本页下方填写令牌',
+        })
+        push({
+          key: 'scene-lock', label: '场景锁定', tab: 'scenes',
+          state: lockedScenes.length === 0 ? 'ok' : 'locked-scene',
+          detail: lockedScenes.length === 0 ? '无锁定场景' : `锁定中：${lockedScenes.join('、')}（写门禁按锁定场景生效）`,
+          scenes: lockedScenes,
+        })
+        // 停用是用户配置或场景收窄的**事实**，不是故障：功能本身的好坏由上面「工具表可见性」
+        // 装配行报（`mcp-tool-visibility` 降级 = 拦截/摘除没装上），这一行只如实陈述停用构成，
+        // 状态恒为 ok —— 否则"只开了几台 MCP"的用户会一直看到琥珀，以为出了问题
+        // （2026-09-28 用户裁定：琥珀只留给功能出问题）。
+        // 「N 个工具」也说不清整台停用：一条 `*` 通配背后是那台服务器的全部工具，
+        // 按条目数报会把 6 台整台停用读成"6 个工具"。两个口径分开说：台数只数 `*`，工具数只数单独停用的条目。
+        const disabledPart = disabledTools.servers > 0 && disabledTools.tools > 0
+          ? `${disabledTools.servers} 台服务器整台停用 + ${disabledTools.tools} 个工具单独停用`
+          : disabledTools.servers > 0
+            ? `${disabledTools.servers} 台服务器整台停用`
+            : disabledTools.tools > 0
+              ? `${disabledTools.tools} 个工具单独停用`
+              : '没有停用的工具'
+        push({
+          key: 'mcp-tools', label: 'MCP 工具停用', tab: 'mcp', state: 'ok',
+          detail: disabledPart + (disabledTools.servers + disabledTools.tools === 0 ? '' : '（执行拦截 + 可见性摘除）'),
+          servers: disabledTools.servers, tools: disabledTools.tools,
+        })
+        // 工具表按每个请求付钱：这一行回答"这一轮实际发出去多少"。关掉（无论出厂默认还是
+        // 用户自己关）都是**配置事实**而非故障 —— 状态恒为 ok，琥珀只留给功能出问题
+        // （口径与 MCP 工具停用一致，2026-09-28 用户裁定）。出厂默认关掉的那几条单说：
+        // 那是插件替用户做的一个可逆选择，与用户自己关的分开计数。
+        // 说明只保留一句关了多少：省多少 tok、去哪开关、面板不受影响、skill_manager_read
+        // 让位这些次级信息都不上功能总览（正常行一行读完，2026-09-28 用户反馈）；
+        // 逐会话的让位差额（index.ts 的 CARRIER_DUPLICATES）在别处自有交代。
         const table = deps.toolTableReport()
-        const carrierNote = '；官方 `skill` 工具在场的会话，`skill_manager_read` 还会自动让位一份'
         const userOff = table.hiddenCount - table.defaultHiddenCount
         const offPart = table.hiddenCount === 0
-          ? `${table.totalCount} 个工具全部下发（≈${table.totalTok} tok/轮）`
+          ? `${table.totalCount} 个工具全部下发`
           : (userOff === 0
             ? `出厂默认关掉 ${table.defaultHiddenCount}/${table.totalCount} 个`
             : `关掉 ${table.hiddenCount}/${table.totalCount} 个（含出厂默认 ${table.defaultHiddenCount} 个）`)
-            + `：一轮少发 ≈${table.hiddenTok} tok（现在 ≈${table.visibleTok} tok/轮，到「兼容」页的「模型工具表」可逐条打开；面板不受影响）`
-        push('tool-table', '模型工具表', 'compat',
-          userOff === 0 ? 'ok' : 'partial',
-          offPart + carrierNote)
-        push('native-delete', '宿主原生删除入口', 'compat',
-          notes.has('workspace.delete-native') ? 'partial' : 'ok',
-          notes.get('workspace.delete-native')?.detail ?? '宿主未提供原生删除入口（本插件自有完整序列）')
+        push({
+          key: 'tool-table', label: '模型工具表', tab: 'compat', state: 'ok', detail: offPart,
+          hidden: table.hiddenCount, total: table.totalCount, defaults: table.defaultHiddenCount,
+        })
+        const nativeNote = notes.get('workspace.delete-native')
+        push({
+          key: 'native-delete', label: '宿主原生删除入口', tab: 'compat',
+          state: nativeNote ? 'partial' : 'ok',
+          detail: nativeNote?.detail ?? '宿主未提供原生删除入口（本插件自有完整序列）',
+          ...noteFields(nativeNote),
+        })
         // 身份 / 版本：与 compat-status 同一份数据。
         const identity = assessment?.identity
         const identityIssue = identity !== undefined && (identity.blockers.length > 0 || Object.values(identity.sameAsHost).some((same) => same === false))
-        push('host-identity', '宿主身份与模块', 'compat',
-          assessment === undefined ? 'unknown' : identityIssue ? 'degraded' : 'ok',
-          assessment === undefined ? '能力探测不可用（归档服务未挂载）'
+        push({
+          key: 'host-identity', label: '宿主身份与模块', tab: 'compat',
+          state: assessment === undefined ? 'unknown' : identityIssue ? 'degraded' : 'ok',
+          detail: assessment === undefined ? '能力探测不可用（归档服务未挂载）'
             : identityIssue ? '存在阻塞项：' + (identity?.blockers ?? []).join('；')
-              : `模块与宿主同源（宿主 DSH ${identity?.version ?? '?'}）`)
+              : `模块与宿主同源（宿主 DSH ${identity?.version ?? '?'}）`,
+          ...(assessment === undefined ? {} : { version: identity?.version ?? '?', blockers: identity?.blockers ?? [] }),
+        })
         // 无独立装配点的域：没有上报就是正常（如实说明依据是"没有降级上报"）。
         for (const [key, label, tab] of [['memory', '记忆', 'memory'], ['prompts', '提示词', 'prompts'], ['subagents', '子智能体', 'subagents'], ['scenes', '场景档案', 'scenes']] as const) {
-          push(key, label, tab, 'ok', '无降级上报（装配失败会出现在这里）')
+          push({ key, label, tab, state: 'ok', detail: '无降级上报（装配失败会出现在这里）' })
         }
         return { ok: true, rows, generatedAt: Date.now() }
       } catch (e) { return { ok: false, error: deps.message(e) } }
@@ -302,7 +389,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         ...(r.failed.length ? { failedCount: r.failed.length, failedNames: r.failed } : {}),
       }
     },
-    // 注入实况（只读）：最近活跃会话里模型**真正看到**的五域文本 + 那一段对话的投递统计。
+    // 注入实况（只读）：最近活跃会话里模型**真正看到**的各域文本 + 那一段对话的投递统计。
     // 回答"勾了开关到底送没送到"——界面配置与实际注入不一致时，这里一眼可见。
     'injection-live': async () => {
       const live = deps.getContextInjectorLive()

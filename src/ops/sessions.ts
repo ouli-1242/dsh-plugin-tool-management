@@ -101,7 +101,25 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
           ? (await registry.archivedSessionDetails()).items
           : (await registry.archivedSessionMetadata()).items
         const archived = new Set(archivedItems.map((i) => i.sessionId))
-        const cache = deps.host<{ cachedSnapshot?(header: unknown, seq: number, fields: string[]): { values?: { title?: string } } }>('sessionProjectionCache')
+        // 官方契约（dsh-session-projection-cache 源码）：cachedSnapshot(meta, keys?) 两参，
+        // keys 缺省 = 全部 wire 键；keys 传非可迭代值会在 viewCheckpoint 里 new Set 抛错。
+        // 旧格式代际的缓存记录过不了 cachedSnapshot 的身份校验，官方另有只认标题的
+        // cachedPredecessorTitle 提示面（api-session-controller 的列表路径正是两者相或）。
+        const cache = deps.host<{
+          cachedSnapshot?(header: unknown, keys?: string[]): { values?: Record<string, unknown> } | undefined
+          cachedPredecessorTitle?(header: unknown): { values?: Record<string, unknown> } | undefined
+        }>('sessionProjectionCache')
+        const titleOf = (header: unknown): string | undefined => {
+          if (!cache) return undefined
+          try {
+            const snap = typeof cache.cachedSnapshot === 'function' ? cache.cachedSnapshot(header, ['title']) : undefined
+            const current = snap && snap.values ? snap.values.title : undefined
+            if (typeof current === 'string') return current
+            const legacy = typeof cache.cachedPredecessorTitle === 'function' ? cache.cachedPredecessorTitle(header) : undefined
+            const legacyTitle = legacy && legacy.values ? legacy.values.title : undefined
+            return typeof legacyTitle === 'string' ? legacyTitle : undefined
+          } catch { return undefined }
+        }
         const items: Array<{ sessionId: string; cwd?: string; createdAt?: number; title?: string; archived: boolean; workspaceId?: string; groupId?: string; cwdMissing?: boolean }> = []
         for (const h of headers) {
           const sessionId = h && typeof h.id === 'string' ? h.id : undefined
@@ -114,12 +132,8 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
           }
           if (typeof h.cwd === 'string' && h.cwd) item.cwd = h.cwd
           if (typeof h.createdAt === 'number' && Number.isFinite(h.createdAt)) item.createdAt = h.createdAt
-          if (cache && typeof cache.cachedSnapshot === 'function') {
-            try {
-              const snap = cache.cachedSnapshot(h, 0, ['title'])
-              if (snap && snap.values && typeof snap.values.title === 'string') item.title = snap.values.title
-            } catch { /* title best-effort */ }
-          }
+          const title = titleOf(h)
+          if (title !== undefined) item.title = title
           // 工作区目录可能已被删除/移动（孤儿会话）：best-effort 标记，供导出选择时识别。
           if (item.cwd) {
             try {

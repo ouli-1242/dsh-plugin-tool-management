@@ -1,4 +1,4 @@
-// MCP 管理域 —— 侧车读写（备注 / 设置 / 停用表）+ 补丁文件行编辑 + 16 个 op 的实现。
+// MCP 管理域 —— 侧车读写（备注 / 设置 / 停用表）+ 补丁文件行编辑 + 17 个 op 的实现。
 //
 // 2026-09-19 从 index.ts 的 apply 闭包原样抽出（块 A 1795-1913 + 块 B 1920-3100）。
 // 为什么单独一个文件：这 1300 行只做一件事 —— 把「MCP 配置」翻译成补丁文件的改动与
@@ -22,6 +22,9 @@ import { clearRuntimeNote, noteRuntime } from '../compat/runtime-notes.js'
 
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+// 配置体检查 PATH 用（见 mcpmInspect）：execFile 不走 shell，参数是数组 —— 体检只查询
+// 命令名，**绝不执行**配置里的命令本身。
+import { execFile } from 'node:child_process'
 import { MCP_CLIENT_MODULE } from '../host-names.js'
 import { hubPath } from '../hub.js'
 import { planOverrideCompaction } from './override-blocks.js'
@@ -102,8 +105,8 @@ export interface McpManager {
   readPluginSettings(force?: boolean): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean }>
   /** 某工具全名是否在停用表里（读 TTL 缓存，无 I/O —— 工具门禁在热路径上）。 */
   isToolDisabled(name: string): boolean
-  /** 停用表里的工具条数（读 TTL 缓存；功能总览用）。 */
-  disabledToolCount(): number
+  /** 停用表的两个口径（读 TTL 缓存；功能总览用）：整台停用的服务器数（`*`）与单独停用的工具数。 */
+  disabledToolSummary(): { servers: number; tools: number }
   /** 启动预热：读一次停用表并应用工具可见性限制。 */
   warmUp(): Promise<void>
   /** 重排工具可见性（tools/change 后调用）。 */
@@ -615,6 +618,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         kind: 'write',
         fallback: 'inform-only',
         detail: 'agent scope 上没有可用的 tools.restrict（官方接口变了或该 scope 未暴露 tools）：停用的 MCP 工具与兼容页关掉的本插件工具仍会出现在模型可见的工具表里，执行侧拦截仍然生效。',
+        detailKey: 'mcp-tool-visibility.no-restrict',
       })
       return
     }
@@ -636,6 +640,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         kind: 'write',
         fallback: 'inform-only',
         detail: '有工具没能从模型可见的工具表里摘掉（' + message(e) + '）：执行侧拦截仍然生效，模型仍能看到该工具的名字。',
+        detailKey: 'mcp-tool-visibility.partial',
+        params: { reason: message(e) },
       })
     }
   }
@@ -1488,6 +1494,105 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
   }
 
+  // ---------- 配置体检（0.15.0 B1）--------------------------------------------------
+  // 只读、零副作用：不拉起子进程、不连网、一个字节都不写盘。唯一的对外调用是 `where` /
+  // `which` 查询 PATH —— 它查的是「这个命令名能不能找到」，绝不执行配置里的命令本身。
+  //
+  // 为什么单独读补丁而不复用 `mcpmList()`：那个函数顺带回写「已知工具」缓存、还要问一次
+  // schema 注册表。体检的承诺是「点了什么都不变」，所以这里只走 readPatch + parseRows。
+  const INSPECT_PATH_TIMEOUT_MS = 3000
+
+  /** 命令是否在 PATH 上：`unknown`（查不了）与 `missing`（确认没有）必须分开 —— 前者不是问题。 */
+  async function probeCommandOnPath(command: string): Promise<'ok' | 'missing' | 'unknown'> {
+    if (!command) return 'unknown'
+    const finder = process.platform === 'win32' ? 'where' : 'which'
+    return await new Promise((resolve) => {
+      execFile(finder, [command], { timeout: INSPECT_PATH_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+        if (!error) { resolve(String(stdout || '').trim() ? 'ok' : 'missing'); return }
+        // ENOENT = 连 where/which 自己都没跑到；killed = 超时。两种都是「无法确认」，
+        // 剩下的（退出码非 0）才是「PATH 上没有这条命令」。
+        const code = (error as { code?: unknown }).code
+        if (code === 'ENOENT' || (error as { killed?: boolean }).killed === true) resolve('unknown')
+        else resolve('missing')
+      })
+    })
+  }
+
+  /** 一行配置 → 检查项。`level: 'warn'` 才点黄；`info` 是「查不了 / 不算问题」那类说明。 */
+  async function inspectChecks(row: any, duplicateIds: number): Promise<Array<{ id: string; level: 'warn' | 'info'; params?: Record<string, unknown> }>> {
+    const checks: Array<{ id: string; level: 'warn' | 'info'; params?: Record<string, unknown> }> = []
+    const declared = String(row.transport || '')
+    const url = String(row.url || '')
+    const command = String(row.command || '')
+    // transport 缺失/不认识时按字段形状推：历史上手工改过补丁文件的行会绕过 normalize，
+    // 直接判「没有 transport」会把一条其实能用的配置说成坏的。
+    const transport = declared === 'stdio' || (!declared && command && !url) ? 'stdio'
+      : declared === 'streamable-http' || (!declared && url) ? 'streamable-http'
+        : declared
+    if (!declared && transport) checks.push({ id: 'transportMissing', level: 'info' })
+    /** 值必须是字符串映射：非对象整片算坏，对象里逐个挑出非字符串的键。 */
+    const badKv = (map: unknown) => {
+      if (map == null) return []
+      if (typeof map !== 'object' || Array.isArray(map)) return ['*']
+      return Object.keys(map as Record<string, unknown>).filter((k) => typeof (map as Record<string, unknown>)[k] !== 'string')
+    }
+    if (transport === 'stdio') {
+      if (!command) checks.push({ id: 'noCommand', level: 'warn' })
+      else {
+        // 唯一一次外部调用。npx / uvx 这类 shim 找不到时界面给的下半句是「shim 属正常可忽略」，
+        // 不让用户以为命令坏了。
+        const found = await probeCommandOnPath(command)
+        if (found === 'missing') checks.push({ id: 'cmdMissing', level: 'warn', params: { command } })
+        else if (found === 'unknown') checks.push({ id: 'cmdUnknown', level: 'info', params: { command } })
+      }
+      if (row.args != null && !Array.isArray(row.args)) checks.push({ id: 'argsNotArray', level: 'warn' })
+      const badEnv = badKv(row.env)
+      if (badEnv.length) checks.push({ id: 'kvNotString', level: 'warn', params: { where: 'env', keys: badEnv.join('、') } })
+    } else if (transport === 'streamable-http') {
+      if (!url) checks.push({ id: 'noUrl', level: 'warn' })
+      else if (!/^https?:\/\//.test(url)) checks.push({ id: 'badUrl', level: 'warn', params: { url } })
+      const badHeaders = badKv(row.headers)
+      if (badHeaders.length) checks.push({ id: 'kvNotString', level: 'warn', params: { where: 'headers', keys: badHeaders.join('、') } })
+    } else if (!command && !url) {
+      checks.push({ id: 'noEndpoint', level: 'warn' })
+    } else {
+      checks.push({ id: 'badTransport', level: 'warn', params: { transport } })
+    }
+    if (duplicateIds > 1) checks.push({ id: 'nameDup', level: 'warn', params: { name: String(row.serverName || ''), count: duplicateIds } })
+    return checks
+  }
+
+  async function mcpmInspect(args: any): Promise<any> {
+    const p = await ensurePaths()
+    const rows: any[] = []
+    const errors: string[] = []
+    for (const level of ['project', 'global']) {
+      const abs = level === 'project' ? p.projectPatch : p.globalPatch
+      let content = ''
+      try { content = await readPatch(abs) } catch (e) { errors.push(level + ': ' + message(e)); continue }
+      const { rows: fileRows } = parseRows(content)
+      for (const r of fileRows) rows.push(normalizeRow(r, level, abs))
+    }
+    // 重名判据：同一个 serverName 挂在**不同 id** 下。同 id 跨层是正常遮蔽（界面已有「重复 id」标签），
+    // 而按名字注册的 `mcp__<serverName>__*` 会撞车 —— 那才是配置问题。
+    const idsByName: Record<string, Set<string>> = {}
+    for (const r of rows) {
+      const n = String(r.serverName || '')
+      if (!idsByName[n]) idsByName[n] = new Set()
+      idsByName[n].add(String(r.id))
+    }
+    const onlyId = args && String(args.id || '') ? String(args.id) : ''
+    const onlyLevel = args && String(args.level || '') ? String(args.level) : ''
+    const results: any[] = []
+    for (const r of rows) {
+      if (onlyId && String(r.id) !== onlyId) continue
+      if (onlyLevel && String(r.level) !== onlyLevel) continue
+      const checks = await inspectChecks(r, (idsByName[String(r.serverName || '')] || new Set()).size)
+      results.push({ id: r.id, serverName: r.serverName, level: r.level, transport: r.transport || null, checks })
+    }
+    return { ok: true, results, errors }
+  }
+
   async function mcpmExport(): Promise<any> {
     const p = await ensurePaths()
     const list = await mcpmList()
@@ -1691,6 +1796,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       'mcpm-compact': mcpmCompact,
       'mcpm-export': mcpmExport,
       'mcpm-import': mcpmImport,
+      'mcpm-inspect': mcpmInspect,
     },
     readDisabledTools,
     readKnownMcpTools,
@@ -1701,12 +1807,17 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     mcpmRowsWithNotes,
     readPluginSettings,
     isToolDisabled: (name: string) => isToolDisabledIn(disabledToolsCache ? disabledToolsCache.value : {}, name),
-    /** 停用表里的工具条数（读 TTL 缓存；功能总览用）。 */
-    disabledToolCount: () => {
+    /** 停用表的两个口径（读 TTL 缓存；功能总览用）：`*` 通配的台数 + 单独停用的工具数。 */
+    disabledToolSummary: () => {
       const map = disabledToolsCache ? disabledToolsCache.value : {}
-      let n = 0
-      for (const list of Object.values(map)) n += Array.isArray(list) ? list.length : 0
-      return n
+      let servers = 0
+      let tools = 0
+      for (const list of Object.values(map)) {
+        if (!Array.isArray(list)) continue
+        if (list.indexOf('*') >= 0) servers += 1
+        tools += list.filter((name) => name !== '*').length
+      }
+      return { servers, tools }
     },
     warmUp,
     scheduleToolRestrictions,

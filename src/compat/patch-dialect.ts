@@ -6,7 +6,7 @@
 // 解析失败 = DSH **下次启动直接起不来**（`CHANGELOG.md` 里记过这次事故）。三条写入路径
 // （`profiles/<名>/cordis.patch.yml`、`~/.dsh/cordis.patch.yml`、bundle 的 `cordis.patch.yml`）
 // 走的是同一份方言（前者 `loadOverlayPatches`、后者 `loadOptionalPatches` → `parsePatchList`；
-// `userPatchesSchema === entryListSchema`，实测于 dsh-app-boot 0.1.5-rc.2）。
+// `userPatchesSchema === entryListSchema`，实测于 dsh-app-boot 0.1.5-rc.2，0.1.7-rc.2 复核未变）。
 //
 // 官方**没有**导出这份 schema（导出清单见同文件 :1575，无 `entryListSchema`），所以只能复刻。
 // 复刻**必然会过期**（官方加方言 / 换 js-yaml 大版本），因此判定策略是**非对称**的：
@@ -188,6 +188,8 @@ function record(report: PatchGuardReport | null): void {
     fallback: 'inform-only',
     detail: (report.kind === 'no-dep' ? '校验依赖不可用' : '复刻可能已过期')
       + `：${report.detail}（写入照常进行，仅少一道「把启动配置写坏」的拦截）`,
+    detailKey: report.kind === 'no-dep' ? 'patch-write-guard.no-dep' : 'patch-write-guard.stale',
+    params: { detail: report.detail },
   })
   pendingWarnings.push(report.kind === 'no-dep'
     ? '补丁写入未做解析校验（依赖不可用）：' + report.detail

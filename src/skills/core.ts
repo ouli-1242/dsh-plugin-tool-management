@@ -128,7 +128,7 @@ type WritableRootResult = SkillSource | FailureResult | null;
 /** 最近项目根探测结果：找到根 / 宿主不可读 / 未找到（null）。 */
 type ProjectRootProbe =
   | { root: string; cwd: string; unavailable?: undefined }
-  | { root?: undefined; unavailable: true; cwd: unknown }
+  | { root?: undefined; unavailable: true; cwd: unknown; code?: string }
   | null;
 
 /** 解析后的 SKILL.md frontmatter（map 只含顶层标量）。 */
@@ -797,8 +797,14 @@ async function nearestProjectRoot(cwd: unknown): Promise<ProjectRootProbe> {
   try {
     start = await fs.realpath(resolve(cwd));
     if (!(await fs.stat(start)).isDirectory()) return null;
-  } catch {
-    return { unavailable: true, cwd };
+  } catch (error) {
+    // 目录不存在（会话还开着、项目已被删）是最常见的一类：带上系统错误码，
+    // 调用方对 ENOENT 静默跳过 —— 报警留给真正读不了的目录。
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : undefined;
+    return { unavailable: true, cwd, ...(code ? { code } : {}) };
   }
   let current = start;
   for (;;) {
@@ -841,6 +847,9 @@ export async function projectRoots(
   for (const cwd of Array.isArray(projectCwds) ? projectCwds : []) {
     const found = await nearestProjectRoot(cwd);
     if (!found || !found.root) {
+      // 目录不存在（ENOENT）= 会话开着、项目已删：这是常态而不是故障，静默跳过。
+      // 报警只留给真实读不了的目录（权限、损坏的链接等）。
+      if (found && found.unavailable && found.code === "ENOENT") continue;
       if (
         found &&
         found.unavailable &&
@@ -851,7 +860,7 @@ export async function projectRoots(
         diagnostics.push({
           code: "warning.project.unavailable",
           params: { path: cwd },
-          error: `无法从宿主读取活动工作区，项目技能未显示: ${cwd}`,
+          error: `活动会话的项目目录不可访问，项目技能未显示: ${cwd}`,
         });
       }
       continue;

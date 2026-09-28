@@ -109,6 +109,17 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     }
     if (name === GLOBAL_SCENE) next.label = GLOBAL_SCENE_LABEL
     index.scenes[name] = next
+    // 模型工具表方案绑定（0.15.0 用户裁定：入口改到「修改场景」表单）：绑定存**档案**，
+    // 只在真的绑了东西时才建档案存根 —— 不绑就保持「没有档案」的原语义
+    //（没有档案与有空档案在进入场景的预览提示上不等价）。
+    const toolTablePreset = args && args.toolTablePreset !== undefined ? String(args.toolTablePreset).trim() : ''
+    if (toolTablePreset.length > 64) {
+      return fail('error.rules.invalidGroup', `工具表方案名过长（≤64 字符）`)
+    }
+    if (toolTablePreset !== '') {
+      if (!index.archives) index.archives = {}
+      index.archives[name] = { ...(index.archives[name] || {}), toolTablePreset }
+    }
     await writeIndex(stateDir, index)
     invalidateSnapshot()
     return { ok: true, scene: sceneRecordOf(name, next), ...(collapsed ? { collapsedActive: true } : {}) }
@@ -152,6 +163,23 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       }
       if (prompt === '') delete next.prompt
       else next.prompt = prompt
+    }
+    if (args && args.toolTablePreset !== undefined) {
+      // 模型工具表方案绑定（0.15.0 用户裁定：入口改到「修改场景」表单）：绑定存**档案**，
+      // 记录与档案同在一份索引 JSON，这一次读-改-写顺带落掉。''= 解绑（删字段；档案因此
+      // 变空时整条删掉，与档案保存「空档案不落条目」的约定一致）；不传这个参数 = 完全不碰
+      // 这一域（旧调用方兼容）。绑了不存在的方案在这里不硬失败 —— 引擎在进出场景时按
+      // stale 丢弃并报告，和档案保存对悬空绑定的处理同口径。
+      const toolTablePreset = String(args.toolTablePreset).trim()
+      if (toolTablePreset.length > 64) {
+        return fail('error.rules.invalidGroup', `工具表方案名过长（≤64 字符）`)
+      }
+      if (!index.archives) index.archives = {}
+      const archive = { ...((index.archives && index.archives[name]) || {}) }
+      if (toolTablePreset === '') delete archive.toolTablePreset
+      else archive.toolTablePreset = toolTablePreset
+      if (Object.keys(archive).length > 0) index.archives[name] = archive
+      else delete index.archives[name]
     }
     if (args && args.label !== undefined && name !== GLOBAL_SCENE) {
       const label = String(args.label).trim()

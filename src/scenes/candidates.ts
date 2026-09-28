@@ -17,7 +17,7 @@
 import type { McpManager } from '../mcp/manager.js'
 import type { ToolsService } from '../mcp/manager.js'
 import { presetRosterOf } from '../compat/preset-reach.js'
-import { injectionFactsOf, readCompositionFacts } from '../compat/preset-reach.js'
+import { injectionFactsOf, readCompositionFacts, readCompositionText } from '../compat/preset-reach.js'
 import { decideToolFilter, type ToolFilterDecision } from '../subagents/service.js'
 
 /** 本文件需要的外部能力。 */
@@ -188,7 +188,8 @@ export function createCandidates(deps: CandidateDeps): Candidates {
   const presetFactsCache = new Map<string, { at: number; value: ReturnType<typeof injectionFactsOf> }>()
   async function presetFactsForAgent(agent: unknown): Promise<ReturnType<typeof injectionFactsOf>> {
     const roster = presetRoster()
-    if (!roster || typeof roster.composedPreset !== 'function' || typeof roster.read !== 'function') return undefined
+    if (!roster || typeof roster.composedPreset !== 'function') return undefined
+    if (typeof roster.read !== 'function' && typeof roster.readDocument !== 'function') return undefined
     let presetId = ''
     try {
       presetId = String(roster.composedPreset((agent as { ctx?: unknown } | null | undefined)?.ctx) ?? '')
@@ -197,7 +198,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     const hit = presetFactsCache.get(presetId)
     if (hit && Date.now() - hit.at < PRESET_FACTS_TTL_MS) return hit.value
     try {
-      const text = String((await roster.read(presetId)) ?? '')
+      const text = await readCompositionText(roster, presetId)
       const value = injectionFactsOf(readCompositionFacts(text))
       presetFactsCache.set(presetId, { at: Date.now(), value })
       return value
@@ -281,7 +282,10 @@ export function createCandidates(deps: CandidateDeps): Candidates {
           presets.push({
             id,
             name: String((p && (p.name || p.id)) || id),
-            trust: String((p && p.trust) || 'user'),
+            // 官方 registry 的预设**没有** trust 字段 —— 缺省必须是 ''（未知）而不是 'user'：
+            // 客户端只对显式 user 隐藏内置模式的词典名，缺省 'user' 会让四个内置模式永远
+            // 显示原始 id（2026-09-28 用户截图）。
+            trust: String((p && p.trust) || ''),
             broken: typeof (p && p.broken) === 'string',
             tools: names,
           })
@@ -344,7 +348,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     try {
       const roster = await agentPresets.list()
       return (roster || [])
-        .map((p: any) => ({ id: String((p && p.id) || ''), name: String((p && (p.name || p.id)) || ''), trust: String((p && p.trust) || 'user') }))
+        .map((p: any) => ({ id: String((p && p.id) || ''), name: String((p && (p.name || p.id)) || ''), trust: String((p && p.trust) || '') }))
         .filter((p: { id: string }) => p.id !== '')
     } catch { return [] }
   }

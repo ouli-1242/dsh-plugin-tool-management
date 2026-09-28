@@ -23,7 +23,7 @@
  *   node scripts/doctor.mjs --json    # machine-readable report
  */
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -196,10 +196,54 @@ function findHost() {
     dir = parent
     candidates.push(join(dir, 'node_modules', '@deepseek-ai'))
   }
+  // 0.1.7 起宿主不再维护 profiles/node_modules（link-backend 移除），`dsh web` 经 npx
+  // 跑在 `<npm 缓存>/_npx/<hash>/node_modules` —— 缓存扫描按目录 mtime 新到旧排，
+  // 最新命中的就是正在运行的安装。
+  candidates.push(...npxCacheHostRoots())
   for (const candidate of candidates) {
     if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
   }
   return undefined
+}
+
+/** npx 缓存里的宿主 `@deepseek-ai` 目录（mtime 新到旧）；找不到 npm 缓存就返回空。 */
+function npxCacheHostRoots() {
+  const home = process.env.USERPROFILE || process.env.HOME || ''
+  let cache = process.env.npm_config_cache || ''
+  if (!cache && home) {
+    try { cache = readFileSync(join(home, '.npmrc'), 'utf8').match(/^\s*cache\s*=\s*(.+?)\s*$/m)?.[1] ?? '' } catch { /* no .npmrc */ }
+  }
+  if (!cache && process.env.LOCALAPPDATA) cache = join(process.env.LOCALAPPDATA, 'npm-cache')
+  if (!cache) return []
+  const npxRoot = join(cache, '_npx')
+  let entries = []
+  try { entries = readdirSync(npxRoot) } catch { return [] }
+  const roots = []
+  for (const entry of entries) {
+    const dir = join(npxRoot, entry, 'node_modules', '@deepseek-ai')
+    if (!existsSync(join(dir, 'dsh', 'package.json'))) continue
+    let mtime = 0
+    try { mtime = statSync(dir).mtimeMs } catch { /* raced — still usable */ }
+    roots.push({ dir, mtime })
+  }
+  return roots.sort((left, right) => right.mtime - left.mtime).map((root) => root.dir)
+}
+
+/**
+ * 0.1.5 时代宿主在 `profiles/node_modules` 投影的 junction 树，0.1.7 起不再维护
+ * （link-backend 已移除）。npx 升级会删掉旧缓存目录，树里的 junction 全部悬空。
+ * 检测：目录在、`dsh/package.json` 却不可达 = 悬空。报告为警告（不影响判定，
+ * 宿主已经从 npx 缓存锚点找到了），提示用户可手动删除。
+ */
+function inspectProfileLinkTree(home) {
+  const tree = join(home || process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh'), 'profiles', 'node_modules', '@deepseek-ai')
+  if (!existsSync(tree)) return { status: 'absent' }
+  if (existsSync(join(tree, 'dsh', 'package.json'))) return { status: 'ok' }
+  return {
+    status: 'dangling',
+    detail: `${tree} 存在，但里面的 junction 已悬空（0.1.5 时代的投影，0.1.7 起宿主不再维护）`,
+    impact: '宿主发现已改走 npx 缓存锚点，不影响插件运行；这棵树可以手动删除',
+  }
 }
 
 /**
@@ -298,6 +342,7 @@ function main() {
   const jsonlLayout = inspectJsonlLayout(installed.host)
   const bareModules = inspectBareHostModules(installed.host)
   const mount = inspectMount()
+  const linkTree = inspectProfileLinkTree()
 
   const blockers = []
   for (const row of installed.rows) {
@@ -323,6 +368,10 @@ function main() {
   if (hostVersion !== undefined && hostVersion !== VERIFIED_HOST_VERSION) {
     warnings.push(`host DSH ${hostVersion} differs from the verified ${VERIFIED_HOST_VERSION} — capabilities below are probed against what is actually installed; treat the degraded list as authoritative`)
   }
+  // 0.1.5 遗留的 junction 树悬空：不影响判定（宿主已从 npx 缓存找到），但要让用户看得见。
+  if (linkTree.status === 'dangling') {
+    warnings.push(`${linkTree.detail} — ${linkTree.impact}`)
+  }
 
   if (JSON_OUT) {
     console.log(JSON.stringify({
@@ -335,6 +384,7 @@ function main() {
       jsonlLayout,
       bareModules,
       mount,
+      linkTree,
       blockers,
       warnings,
     }, null, 2))
@@ -377,6 +427,14 @@ function main() {
     console.log(`  [${mark}] ${JSONL_PACKAGE}`)
     console.log(`         ${jsonlLayout.detail}`)
     if (jsonlLayout.impact !== undefined) console.log(`         impact: ${jsonlLayout.impact}`)
+  }
+  console.log('')
+  console.log('0.1.5-era profile link projection tree ($DSH_HOME/profiles/node_modules):')
+  {
+    const mark = linkTree.status === 'ok' ? 'ok  ' : linkTree.status === 'dangling' ? 'WARN' : 'n/a '
+    console.log(`  [${mark}] ${linkTree.status}`)
+    if (linkTree.detail !== undefined) console.log(`         ${linkTree.detail}`)
+    if (linkTree.impact !== undefined) console.log(`         ${linkTree.impact}`)
   }
   console.log('')
   if (warnings.length !== 0) {

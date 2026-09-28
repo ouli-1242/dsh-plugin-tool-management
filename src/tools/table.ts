@@ -98,7 +98,11 @@ export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFA
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */
 export const PRESET_NAME_MAX_LENGTH = 40
-/** 存得下的方案数上限 —— 侧车是人手能审的文件，不放开。 */
+/**
+ * 场景档案绑定「出厂默认那份」时用的方案名（0.15.0 C1）。
+ * 它不是一个可保存的方案名，只在档案里当哨兵用；解析时用户存的同名方案优先。
+ */
+export const FACTORY_TOOL_TABLE_PRESET = 'factory-default'/** 存得下的方案数上限 —— 侧车是人手能审的文件，不放开。 */
 export const PRESET_MAX_COUNT = 20
 
 const DEFAULT_HIDDEN_SET: ReadonlySet<string> = new Set(DEFAULT_HIDDEN_TOOLS)
@@ -247,7 +251,7 @@ export interface ToolTableTool {
 }
 
 export interface ToolTableGroup {
-  /** 域 key；与五个注入域同源。认不出前缀的工具归到 `other`。 */
+  /** 域 key；与注入域清单（context-inject 的 INJECT_DOMAIN_KEYS）同源。认不出前缀的工具归到 `other`。 */
   key: InjectDomainKey | 'other'
   tools: ToolTableTool[]
   /** 该域全部工具的 ≈token 合计（含关掉的）。 */
