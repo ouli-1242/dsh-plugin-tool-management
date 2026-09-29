@@ -10,6 +10,24 @@
 
 ---
 
+## [0.16.6] - 2026-09-30
+
+官方内置技能管理补全 web 侧：web 宿主照注的沙盒诊断技能接入技能页（可见、可停），Office 三件套按裁定在 web 上一并暴露；并补齐接管后缺失的 LibreOffice Kit 路径段。
+
+### 修复
+
+- **web 宿主注入的沙盒诊断技能现在看得见、关得掉了**（0.16.5 的误判）：0.16.5 按「web 不注入官方技能」把 web 整个挡在官方内置管理之外，但官方宿主的沙盒技能门控是 `process.platform === "win32"`（`dsh-sandbox-local` 源码核对）——只看操作系统，web 照样向每个会话注入 diagnose-windows-sandbox-acl，于是 web 上「页面不显示、会话照注入」。现在 web 也物化官方技能并以 rank 599 接管：来源出现在技能页，停用即不注入。
+- **接管后缺「Installed LibreOffice Kit」段**（0.16.5 桌面上已存在）：官方 provider 在返回 office 技能正文时追加一段 LibreOffice Kit 的 node/cli 绝对路径，SKILL.md 明文要求使用这段路径、且禁止自行搜索；以 rank 599 接管后官方 provider 不再被问到，这段就丢了 —— office 技能里的 LibreOffice 渲染/转换命令实际没有可用路径。现在由插件按官方 `officeRuntime()` 契约逐字复刻补上：桌面 node 取宿主自带的独立 node（`<resources>/runtime/primary-runtime/dependencies/node/bin/`，官方明令 packaged 应用必须独立 node，electron 本体不行；`DSH_PRIMARY_RUNTIME` / `DSH_BUNDLED_PRIMARY_RUNTIME` 环境变量优先，SDK 部署照官方取值），cli 取 `app.asar.unpacked` 里的真实文件（独立 node 读不了 asar 内部）；web node 即宿主 node 进程（官方默认 `process.execPath`），cli 走宿主进程解析链。任一路径不是真实文件时改用官方口径的「LibreOffice Kit is disabled in this deployment」降级文案 —— 绝不给跑不起来的路径。
+
+### 变更
+
+- **官方内置技能按宿主形态各物化一份**：物化目录从各宿主共用 `$DSH_HOME/tool-management/official-skills/` 改为 `official-skills/<desktop|web>/` 各写各的 —— 0.16.5 靠「web 完全不参与」压住竞态（web 重建会把桌面物化好的 4 个清成它解析到的 1 个，实测），分形态目录让 web 也能参与管理而不互踩；0.16.5 共享布局的顶层残留按已知名单自动清理。启停状态按技能名记在来源 `official` 下，两种形态共用一份。
+- **web 技能页也暴露 Office 三件套**（用户裁定）：web 宿主不装配 office 插件、不注入，但 npm 包自带完整 assets —— web 上从宿主进程解析链物化后照常列出、可启停（启用后随技能目录注入会话）。
+
+### 说明
+
+- **实测**：官方源码逐处核对（沙盒技能门控 `dsh-sandbox-local` 只看 win32；office 插件仅桌面装配；`officeRuntime()` 契约与桌面装配的 node/cli 落点），本机桌面安装核实独立 node 与 unpacked cli 真实存在。合成夹具四模式全过：web（4 个技能物化，Kit 段 node=宿主进程、cli=解析链包内 cli）、web 无 libreoffice-kit（官方降级文案）、桌面（Kit 段 node=primary-runtime 独立 node、cli=app.asar.unpacked 真实文件）、桌面目录布局不同（office/沙盒全走解析链兜底物化，Kit 降级文案，正文不含指向不存在布局的路径）。
+
 ## [0.16.5] - 2026-09-30
 
 issue #1 收尾与桌面版第二轮适配：兼容页身份比对改为逐包解析、逐包核对（桌面版不再误报「两份不同拷贝」），「全部可用」与「N 项不可用」不再同屏；桌面版注入会话的 4 个官方内置技能接入技能页管理。

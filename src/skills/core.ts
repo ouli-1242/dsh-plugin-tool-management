@@ -27,6 +27,7 @@ import {
   readdirSync,
   copyFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
@@ -547,25 +548,27 @@ export function resolveAgentsHome(): string {
 
 // ── 官方内置技能来源（随宿主注入会话上下文的内置技能）──────────────────────
 //
-// 桌面版把 4 个官方技能注入每个会话（用户 2026-09-30 实测目录）：office-docx /
-// office-pptx / office-xlsx（dsh-skill-office，桌面宿主把 assetRoot 指到
-// `<resources>/runtime/office-skills`）与 diagnose-windows-sandbox-acl
-// （dsh-sandbox-windows-acl，source 'bundled'，rank 600）。web 宿主一个都不注入
-// （用户裁定：web 用不上这个功能）。它们或住在官方 asar 里、或由官方 provider
-// 复制进临时目录自管，插件直接扫描/接管有两个坑：宿主子进程里对 asar 的 promises
-// 读法与拦截器解析都出现过时灵时不灵（同机两次启动一组 4/1、一组全 0，实测）；
-// 沙盒技能的脚本要交给 PowerShell 子进程，asar 路径读不了。
+// 宿主按形态注入不同的官方技能（官方源码逐一核对，2026-09-30）：
+//   - 桌面版 4 个：office-docx / office-pptx / office-xlsx（dsh-skill-office 只在桌面
+//     宿主装配，assetRoot 指到 `<resources>/runtime/office-skills`）+ diagnose-windows-
+//     sandbox-acl（dsh-sandbox-local 的门控是 `process.platform === "win32"`，rank 600）。
+//   - web 版：沙盒诊断技能由宿主注入（门控只看 win32 —— 用户 2026-09-30 截图实锤，
+//     0.16.5 按「web 不注入」的误判把 web 挡在门外，导致页面不显示、宿主照注）；office
+//     插件 web 宿主不装配、不注入，但用户裁定（2026-09-30）技能页照样把这三个暴露出来
+//     统一管理（npm 包自带完整 assets，接管后可启停）。
 //
-// 因此这里把来源**物化**成插件自有的一份真实目录（`$DSH_HOME/tool-management/
-// official-skills/`）：每次宿主启动从官方源头整目录覆盖拷贝（与官方 provider 的
-// 「私有资源副本」同一做法），扫描、启停、overlay、脚本执行全部落在真实文件上。
+// 它们或住在官方 asar 里、或由官方 provider 复制进临时目录自管，插件直接扫描/接管有两个
+// 坑：宿主子进程里对 asar 的 promises 读法与拦截器解析都出现过时灵时不灵（同机两次启动
+// 一组 4/1、一组全 0，实测）；沙盒技能的脚本要交给 PowerShell 子进程，asar 路径读不了。
 //
-// 两个边界（都出过事）：
-//   - 只有桌面版（有 process.resourcesPath）才允许进来。物化目录在 $DSH_HOME 下
-//     与各宿主**共用**，而 web 宿主进程里的官方模块拦截器能把 @deepseek-ai 裸名
-//     解析到宿主副本 —— web 若也进来重建，会把桌面物化好的整目录清成它解析到的
-//     那几个（2026-09-30 实测：桌面物化好 4 个，web 一启动，两份 UI 同时只剩沙盒
-//     1 个）。所以非桌面在碰目录**之前**就退出，一个技能都不列。
+// 因此这里把来源**物化**成插件自有的一份真实目录，**每种宿主形态各一份**
+// （`$DSH_HOME/tool-management/official-skills/<desktop|web>/`）：每次宿主启动从官方源头
+// 整目录覆盖拷贝（与官方 provider 的「私有资源副本」同一做法），扫描、启停、overlay、
+// 脚本执行全部落在真实文件上。599 压过宿主 provider 的 600，停用即不注入。分形态是竞态
+// 教训：0.16.5 之前共用一份目录，web 启动把它解析到的沙盒技能盖进去，桌面物化好的
+// 4 个只剩 1 个（实测）；改成各写各的子目录，互不清对方的账。共享布局的残留（旧条目
+// 直接躺在 official-skills/ 下）按已知名单清理。
+//
 //   - 预设参考技能（dsh-agent-preset/skills）不注入会话上下文，不列入（用户裁定）。
 //
 // 单个来源、随 DSH 技能之后排列，来源层语义同默认来源（不可移除、无来源开关）。
@@ -627,21 +630,24 @@ function resolvedPackageDir(packageName: string, subpath: string): string | null
 }
 
 /**
- * office 技能源头。office 只在桌面版由宿主挂载（web 的补丁层没有它），所以只在
- * 桌面环境里找：运行时真实目录优先（官方 assetRoot），其次 asar 包内 assets。
- * 非桌面环境一律 null —— 不把没被注入的技能凭空列出来。
+ * office 技能源头。桌面版由宿主挂载：运行时真实目录优先（官方 assetRoot），其次 asar
+ * 包内 assets。web 宿主不装配 office 插件（不注入），但 npm 包自带完整 assets —— 用户
+ * 裁定（2026-09-30）技能页照样暴露这三个技能，走宿主进程解析链取包内一份。解析不到
+ * 一律 null —— 不把拿不到真实文件的技能凭空列出来。
  */
 function officialOfficeSource(): string | null {
   const resources = resourcesDir();
-  if (resources === null) return null;
-  const runtimeDir = join(resources, "runtime", "office-skills");
-  if (existsSync(join(runtimeDir, "office-docx"))) return runtimeDir;
-  const asarDir = desktopPackageDir("@deepseek-ai/dsh-skill-office", "assets");
-  if (asarDir !== null && existsSync(join(asarDir, "office-docx"))) return asarDir;
-  return null;
+  if (resources !== null) {
+    const runtimeDir = join(resources, "runtime", "office-skills");
+    if (existsSync(join(runtimeDir, "office-docx"))) return runtimeDir;
+    const asarDir = desktopPackageDir("@deepseek-ai/dsh-skill-office", "assets");
+    if (asarDir !== null && existsSync(join(asarDir, "office-docx")))
+      return asarDir;
+  }
+  return resolvedPackageDir("@deepseek-ai/dsh-skill-office", "assets");
 }
 
-/** 沙盒诊断技能源头（桌面版 asar 直连优先，其次本机解析链；仅 Windows 注入）。 */
+/** 沙盒诊断技能源头（桌面 asar 直连优先，其次宿主进程解析链；宿主门控仅看 win32，web/桌面皆注入）。 */
 function officialSandboxSource(): string | null {
   if (process.platform !== "win32") return null;
   return (
@@ -654,6 +660,94 @@ function officialSandboxSource(): string | null {
       "assets/diagnose-windows-sandbox-acl",
     )
   );
+}
+
+// ── office 技能的「Installed LibreOffice Kit」段 ────────────────────────────
+//
+// 官方 dsh-office provider 在 get 时给三个 office 技能的正文**追加**一段
+// 「Installed LibreOffice Kit」：SKILL.md 明文要求「使用这段提供的 libreofficeKit.node
+// 与 .cli 绝对路径，禁止自行搜索/猜测」。我们以 599 接管后官方 provider 不再被问到，
+// 这段必须由我们补上 —— 否则模型拿到的 office 技能缺执行 LibreOffice 命令所需的全部
+// 路径（这个缺口 0.16.5 在桌面上就已存在）。文案与 JSON 形状逐字取自官方
+// dsh-skill-office lib/index.js 的 officeRuntime()；node/cli 的落点按宿主形态各自核实：
+//   - 桌面：官方明确要求 packaged 应用必须给**独立 node**（electron 本体不行）。
+//     实测桌面把运行时装在 `<resources>/runtime/primary-runtime/`（DSH_PRIMARY_RUNTIME
+//     指向它，SDK 部署可被同名环境变量改写），node 在其 dependencies/node/bin 下；cli
+//     必须用 `app.asar.unpacked` 里的真实文件 —— 独立 node 读不了 asar 内部。
+//   - web：官方默认 process.execPath（宿主是普通 node 进程），cli 从宿主进程解析链取。
+// 任一路径不是真实文件 → 用官方口径的「已停用」文案（SKILL.md 自有降级分支，模型不会
+// 去猜路径），绝不给一个跑不起来的路径。
+
+const OFFICE_SKILL_NAMES = new Set([
+  "office-docx",
+  "office-pptx",
+  "office-xlsx",
+]);
+
+const OFFICE_RUNTIME_DISABLED =
+  "\n\nLibreOffice Kit is disabled in this deployment.";
+
+let officeRuntimeSectionCache: string | undefined;
+
+/** 官方 provider 在 get 时追加的 LibreOffice Kit 段（每进程算一次，路径不随会话变）。 */
+function officialOfficeRuntimeSection(): string {
+  if (officeRuntimeSectionCache === undefined)
+    officeRuntimeSectionCache = computeOfficeRuntimeSection();
+  return officeRuntimeSectionCache;
+}
+
+function computeOfficeRuntimeSection(): string {
+  const resources = resourcesDir();
+  let node: string;
+  let cli: string | null;
+  const runtimeRoot =
+    process.env.DSH_PRIMARY_RUNTIME || process.env.DSH_BUNDLED_PRIMARY_RUNTIME;
+  if (runtimeRoot) {
+    // SDK / 容器部署：官方配置从运行时根推导（cordis 装配逐字核对）。
+    node = join(
+      resolve(runtimeRoot),
+      "dependencies",
+      "node",
+      "bin",
+      process.platform === "win32" ? "node.exe" : "node",
+    );
+    cli = resolvedPackageDir("@deepseek-ai/libreoffice-kit", "lib/cli.js");
+  } else if (resources !== null) {
+    node = join(
+      resources,
+      "runtime",
+      "primary-runtime",
+      "dependencies",
+      "node",
+      "bin",
+      process.platform === "win32" ? "node.exe" : "node",
+    );
+    // 桌面的 cli 只认 unpacked 真实文件（独立 node 读不了 asar；electron 的 fs 补丁
+    // 会让 existsSync 对 asar 内部也返回真，所以这里不用解析链兜底）。
+    cli = join(
+      resources,
+      "app.asar.unpacked",
+      "dsh",
+      "node_modules",
+      "@deepseek-ai",
+      "libreoffice-kit",
+      "lib",
+      "cli.js",
+    );
+  } else {
+    node = process.execPath;
+    cli = resolvedPackageDir("@deepseek-ai/libreoffice-kit", "lib/cli.js");
+  }
+  const usable = (path: string): boolean => {
+    try {
+      return isAbsolute(path) && statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (!usable(node) || cli === null || !usable(cli))
+    return OFFICE_RUNTIME_DISABLED;
+  return `\n\n## Installed LibreOffice Kit\n\nUse these absolute paths for every LibreOffice Kit command. Pass the CLI entry as the first argument to Node.\n\n${JSON.stringify({ libreofficeKit: { node, cli } }, null, 2)}`;
 }
 
 function copyDirectorySync(from: string, to: string): void {
@@ -672,15 +766,46 @@ function copyDirectorySync(from: string, to: string): void {
  */
 let officialRootCache: SkillSource | null | undefined;
 
+/** 宿主形态子目录名：桌面（有 process.resourcesPath）与 web 等普通 node 进程各物化一份。 */
+function officialFormName(): "desktop" | "web" {
+  return resourcesDir() === null ? "web" : "desktop";
+}
+
+/**
+ * 0.16.5 之前各形态共用一份目录（旧条目直接躺在 official-skills/ 下）；分形态目录后
+ * 这些残留只会变成幽灵条目，按这份已知名单清掉。只清名单内的名字，绝不碰旁边的
+ * `<form>/` 子目录 —— 那是另一种形态物化的现役目录。
+ */
+const LEGACY_OFFICIAL_ENTRY_NAMES = Object.freeze([
+  "office-docx",
+  "office-pptx",
+  "office-xlsx",
+  "scripts",
+  "diagnose-windows-sandbox-acl",
+]);
+
+function cleanupLegacyOfficialLayout(root: string): void {
+  for (const name of LEGACY_OFFICIAL_ENTRY_NAMES) {
+    try {
+      rmSync(join(root, name), { recursive: true, force: true });
+    } catch {
+      /* 残留清理失败不影响物化，下轮启动再试 */
+    }
+  }
+}
+
 function materializeOfficialSkills(): string | null {
-  // 非桌面宿主（web 等普通 node 进程）一个官方技能都不注入，也不许碰共享的物化
-  // 目录 —— 否则 web 启动会把它解析到的那几个盖进目录，桌面版物化好的就没了
-  // （见上方块注释）。必须在任何 fs 访问之前退出。
-  if (resourcesDir() === null) return null;
   const office = officialOfficeSource();
   const sandbox = officialSandboxSource();
   if (office === null && sandbox === null) return null;
-  const root = join(resolveDshHome(), "tool-management", "official-skills");
+  // 每种宿主形态只整目录重建**自己**这份（竞态教训见上方块注释）；对方形态的子目录
+  // 与共享层残留清理互不干涉。
+  const root = join(
+    resolveDshHome(),
+    "tool-management",
+    "official-skills",
+    officialFormName(),
+  );
   try {
     rmSync(root, { recursive: true, force: true });
     // office：整个 assets 根拷进来（office-*/ 与 scripts/ 的相对结构必须保留 ——
@@ -689,6 +814,7 @@ function materializeOfficialSkills(): string | null {
     if (sandbox !== null) {
       copyDirectorySync(sandbox, join(root, basename(sandbox)));
     }
+    cleanupLegacyOfficialLayout(dirname(root));
     return root;
   } catch (error) {
     console.error(
@@ -4150,6 +4276,13 @@ export async function getProviderSkill(
     const summary = entryOf(locator.entryName, entry.kind, entry.docPath, doc);
     if (!summary.loadable || summary.declaredName !== candidate.name)
       return undefined;
+    // 官方 office 技能：补上官方 provider 在 get 时追加的 LibreOffice Kit 段
+    // （SKILL.md 明文引用这段的 node/cli 路径，见上方块注释）。
+    const officeRuntime =
+      locator.rootKey === OFFICIAL_SOURCE_KEY &&
+      OFFICE_SKILL_NAMES.has(locator.entryName)
+        ? officialOfficeRuntimeSection()
+        : "";
     return {
       name: candidate.name,
       description: candidate.description,
@@ -4159,7 +4292,7 @@ export async function getProviderSkill(
       resourceBase: candidate.resourceBase,
       path: candidate.path,
       metadata: candidate.metadata,
-      content: doc.body.trim(),
+      content: doc.body.trim() + officeRuntime,
     };
   } catch {
     return undefined;
