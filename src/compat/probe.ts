@@ -33,6 +33,7 @@
 import { createRequire } from 'node:module'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** Packages whose physical module identity matters to this plugin. */
 export const IDENTITY_PACKAGES = [
@@ -45,22 +46,29 @@ export const IDENTITY_PACKAGES = [
 ] as const
 
 /**
- * peer range 的下界与已验证版本。官方全程走 prerelease 渠道（x.y.z-rc.N），semver 的
+ * peer range 与已验证版本。官方全程走 prerelease 渠道（x.y.z-rc.N），semver 的
  * 预发布规则（prerelease 版本只匹配同 [major,minor,patch] 元组的比较器）意味着**每一代
  * rc 都要显式列进范围**：`>=0.1.5-rc.2` 匹配不了 `0.1.7-rc.2`（实测），所以范围是逐代
  * 枚举的并集。上界依旧不设：宿主跨代升级由运行时能力探测兜底（见下）。
+ *
+ * 0.2.0-rc.2（桌面版首发）已实测通过：`assessHost` 18/18 全通过，宿主版本读得出来，
+ * 归档宿主的身份判定见 `hostPackageRoot` / `isAsarPath`。所以它同时进范围与「已验证」。
  */
-export const EXPECTED_PEER_RANGE = '^0.1.5-rc.2 || ^0.1.7-rc.2'
+export const EXPECTED_PEER_RANGE = '^0.1.5-rc.2 || ^0.1.7-rc.2 || ^0.2.0-rc.2'
 /** The release this plugin's adapters were last verified against. */
-export const VERIFIED_HOST_VERSION = '0.1.7-rc.2'
+export const VERIFIED_HOST_VERSION = '0.2.0-rc.2'
 /**
- * peer range 的下界 —— 界面展示用。
+ * peer range 的下界。
  *
  * 刻意不带 semver 上界：官方持续发版，硬上界会在宿主跨 minor 升级时直接挡住
  * 插件安装（pnpm peer 校验失败）。上界改为由**运行时能力探测**兜底 ——
  * 宿主版本高于已验证范围时，`assessHost` 会逐项探测并把缺失能力降级/禁用，
- * 而不是在安装期拒绝整包。展示时只应把「最低要求版本」当事实。
+ * 而不是在安装期拒绝整包。
  * 从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
+ *
+ * 2026-09-29 起**不再出现在界面上**（用户裁定：删掉「最低要求 ≥ …」那一行 —— 它是安装期
+ * 门槛，摆在"当前宿主"卡片下面会被读成对当前宿主的断言）。保留此导出是因为它进了
+ * `compat-status` 的载荷，doctor 与外部脚本可能仍在读。
  */
 export const EXPECTED_MIN_HOST_VERSION =
   EXPECTED_PEER_RANGE.match(/(\d+\.\d+\.\d+(?:-rc\.\d+)?)/)?.[1] ?? VERIFIED_HOST_VERSION
@@ -122,6 +130,42 @@ export interface HostIdentity {
    * 这是"压根没比成"。界面据此显式说明，不让它退化成看不懂的「无法比对」。
    */
   readonly unverified: readonly string[]
+  /**
+   * 身份校验的**说明**，不是阻塞项：讲清楚为什么这一格是「比不了」而不是「坏了」。
+   *
+   * 目前只有一种来源 —— 桌面版把官方包装进 `resources/app.asar`，宿主与插件物理上
+   * 不可能是同一份文件（归档 vs 磁盘）。这种情况按**版本**判定并把插件的实际来源
+   * 讲出来，绝不进 `blockers`：那里每一条都会把整块身份标红，并附一句让用户去
+   * `host-deps.mjs --fix` 的指令 —— 而在桌面版上，那条指令只会把插件的依赖
+   * junction 到 npx 缓存里另一个版本的宿主上（实测：0.2.0-rc.2 → 0.1.7-rc.2）。
+   */
+  readonly notes: readonly HostIdentityNote[]
+}
+
+/**
+ * 一条身份说明：`kind` 只是给界面/icons 分类用的稳定标签。
+ *
+ * 说明里带**已判定的包清单**（不是"所有比不了的包"）：身份校验里「比不了」有多种
+ * 成因，界面只有拿到这份清单，才不会把归档宿主那几个包又塞进另一句
+ * 「宿主的解析锚点里找不到它」里 —— 那句话对它们不成立（锚点找得到，归档里）。
+ */
+export interface HostIdentityNote {
+  readonly kind: 'asar-host'
+  /** 归档文件名（如 `app.asar`），从宿主锚点里取，界面不硬编码。 */
+  readonly asarName: string
+  readonly hostRoot: string
+  /** 归档宿主的版本；两侧版本相同才认定「同版本、打包方式不同」。 */
+  readonly hostVersion: string | null
+  readonly pluginVersion: string | null
+  /** 已判定的包：`hostPath`/`pluginPath` 两侧都能解析到。 */
+  readonly packages: readonly HostIdentityPackage[]
+}
+
+/** 归档宿主清单里的一项：包名 + 两侧实际解析到的入口。 */
+export interface HostIdentityPackage {
+  readonly name: string
+  readonly hostPath: string
+  readonly pluginPath: string
 }
 
 export interface HostAssessment {
@@ -151,10 +195,17 @@ type Target = Record<string, unknown> | undefined
 
 const isFn = (value: unknown): value is (...args: unknown[]) => unknown => typeof value === 'function'
 
-/** Resolve a package the way this plugin resolves it, without throwing. */
+/**
+ * Resolve a package the way this plugin resolves it, without throwing.
+ *
+ * `import.meta.resolve` 给的是**URL**：目录里带空格的路径（桌面版装在
+ * `D:\DeepSeek Harness\...`）会以 `%20` 形式回来，直接当路径用会得到一个
+ * 永远打不开的名字 —— 版本号读不出来（显示 `unknown`）、asar 路径也匹配不上。
+ * 用 `fileURLToPath` 老实解码（它同时处理盘符与百分号转义）。
+ */
 function safeResolve(specifier: string): string | null {
   try {
-    return import.meta.resolve(specifier).replace(/^file:\/\/\//, '').replace(/\//g, process.platform === 'win32' ? '\\' : '/')
+    return fileURLToPath(import.meta.resolve(specifier))
   } catch {
     try {
       return createRequire(import.meta.url).resolve(specifier)
@@ -162,6 +213,20 @@ function safeResolve(specifier: string): string | null {
       return null
     }
   }
+}
+
+/**
+ * Whether a path lives inside an electron `app.asar` archive.
+ *
+ * 桌面版把整个 DSH 装进 `resources/app.asar`：宿主的 `@deepseek-ai/*` 物理上就在
+ * 归档里，插件（装在 `$DSH_HOME/profiles/<name>/node_modules`）在外面的磁盘上。
+ * 归档里的模块**不可能**与外面的目录是同一个物理文件，`@deepseek-ai/*` 又是
+ * peer（官方包由宿主提供），所以「不同路径」是这种打包方式的必然结果，不是安装
+ * 故障。判据取 `.asar` 这个路径段（`join` 出来的分隔符在 Windows 上是 `\`）。
+ */
+function isAsarPath(value: string | null): boolean {
+  if (value === null) return false
+  return /[\\/][^\\/]+\.asar[\\/]/i.test(value)
 }
 
 /**
@@ -197,6 +262,43 @@ function versionOf(specifier: string): string | undefined {
     dir = parent
   }
   return undefined
+}
+
+/**
+ * Version of the package a resolved entry path belongs to: walk up until a
+ * `package.json` whose `name` matches the package directory we came from.
+ *
+ * 与 `versionOf` 的分工：那个从**说明符**出发（要能解析），这个从**已经拿到的路径**
+ * 出发。归档宿主那种「路径不同但版本相同」的判断只能用后者 —— 前者在 `.asar` 里
+ * 读得动，但两边路径不同时它无法回答「这两个文件各属于哪个版本」。
+ */
+function versionOfPackageAt(entry: string): string | null {
+  const expected = packageNameOfPath(entry)
+  let dir = dirname(entry)
+  for (let i = 0; i < 5; i += 1) {
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: string; version?: string }
+      if (typeof parsed.version === 'string' && (expected === null || parsed.name === expected)) return parsed.version
+    } catch { /* keep walking up */ }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+/** `.../node_modules/@scope/name/lib/index.js` -> `@scope/name` (null when the path has no such segment). */
+function packageNameOfPath(entry: string): string | null {
+  const parts = entry.split(/[\\/]/)
+  const at = parts.lastIndexOf('node_modules')
+  if (at === -1 || at + 1 >= parts.length) return null
+  const first = parts[at + 1]
+  if (first === undefined) return null
+  if (first.startsWith('@')) {
+    const second = parts[at + 2]
+    return second === undefined ? null : `${first}/${second}`
+  }
+  return first
 }
 
 /**
@@ -876,7 +978,13 @@ export function assessHost(ctx: {
   const sameAsHost: Record<string, boolean | null> = {}
   const blockers: string[] = []
   const unverified: string[] = []
+  const notes: HostIdentityNote[] = []
   const hostRoot = hostPackageRoot()
+  const hostIsAsar = isAsarPath(hostRoot)
+  // 桌面版（宿主在 app.asar 里）两组「版本」的容器：插件自己解析到的、宿主锚点解析到的。
+  const asarHostPackages: HostIdentityPackage[] = []
+  let asarHostVersion: string | null = null
+  let asarPluginVersion: string | null = null
   for (const name of IDENTITY_PACKAGES) {
     const resolved = safeResolve(name)
     modules[name] = resolved
@@ -900,11 +1008,36 @@ export function assessHost(ctx: {
       hostResolved = null
     }
     const same = hostResolved === null ? null : realPathOf(hostResolved) === realPathOf(resolved)
+    // 归档宿主：路径必然不同（归档 vs 磁盘），能比的是版本。相同 → 这一格是
+    // 「比不了（同版本、打包方式不同）」，记进说明并从 unverified 里摘出来（那句
+    // 「宿主的解析锚点里找不到它」对它不成立 —— 锚点找得到，在归档里）；不同 →
+    // 真正的版本错配，`same` 保持 false 照旧进 blockers（那是要修的）。
+    if (same === false && hostIsAsar && !isAsarPath(resolved) && hostResolved !== null) {
+      const hostVersion = versionOfPackageAt(hostResolved)
+      const pluginVersion = versionOfPackageAt(resolved)
+      if (hostVersion !== null && hostVersion === pluginVersion) {
+        asarHostPackages.push({ name, hostPath: hostResolved, pluginPath: resolved })
+        asarHostVersion = asarHostVersion ?? hostVersion
+        asarPluginVersion = asarPluginVersion ?? pluginVersion
+        sameAsHost[name] = null
+        continue
+      }
+    }
     sameAsHost[name] = same
     if (same === false) blockers.push(`${name}：插件与宿主加载的是两份不同拷贝（运行 node scripts/host-deps.mjs --fix）`)
     // 解析得到、却比不了：宿主锚点里找不到它。不能静默 —— 否则整块身份校验等于没做，
     // 而页头仍报「全部可用」（pnpm 的 .pnpm 隔离目录就是这种情形，见 hostPackageRoot）。
     if (same === null) unverified.push(name)
+  }
+  if (asarHostPackages.length > 0 && hostRoot !== null) {
+    notes.push({
+      kind: 'asar-host',
+      asarName: hostRoot.split(/[\\/]/).find((segment) => /\.asar$/i.test(segment)) ?? 'app.asar',
+      hostRoot,
+      hostVersion: asarHostVersion,
+      pluginVersion: asarPluginVersion,
+      packages: asarHostPackages,
+    })
   }
 
   // Degraded = something is genuinely unavailable. Optional slots are excluded:
@@ -925,6 +1058,7 @@ export function assessHost(ctx: {
       sameAsHost,
       blockers,
       unverified,
+      notes,
     },
     findings,
     degraded,
@@ -954,6 +1088,11 @@ function hostPackageRoot(): string | null {
   const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh')
   const candidates: string[] = []
   if (home !== '') candidates.push(join(home, 'profiles', 'node_modules', '@deepseek-ai'))
+  // 桌面版：整个 DSH 装进 `resources/app.asar`，宿主的 `@deepseek-ai/*` 就在归档里。
+  // 这一候选必须排在 npx 缓存**之前** —— 否则装过 web 版的机器上会先命中 npx 缓存里
+  // 那个 0.1.7，于是拿「另一个安装」当锚点比出 6 条假的「两份不同拷贝」（实测事故）。
+  const asarHost = asarHostPackageRoot()
+  if (asarHost !== null) candidates.push(asarHost)
   for (const anchor of IDENTITY_PACKAGES) {
     const resolved = realPathOf(safeResolve(anchor))
     if (resolved === null) continue
@@ -974,6 +1113,25 @@ function hostPackageRoot(): string | null {
     if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
   }
   return null
+}
+
+/**
+ * 正在运行的桌面版 DSH 的 `@deepseek-ai` 目录（在 `resources/app.asar` 里），没有则 null。
+ *
+ * 判据是 `process.resourcesPath`（electron 才有）指向的归档里确实躺着 `dsh` —— 不靠
+ * 包名或环境变量猜，因此在 `dsh web`（node 跑）下一律返回 null。归档内路径由 electron
+ * 自己的 fs 修补解析，归档外的普通 node 读不到，所以这一步失败是静默的正常路径。
+ */
+function asarHostPackageRoot(): string | null {
+  const resources = (process as { resourcesPath?: string }).resourcesPath
+  if (typeof resources !== 'string' || resources === '') return null
+  const dir = join(resources, 'app.asar', 'dsh', 'node_modules', '@deepseek-ai')
+  try {
+    if (!existsSync(join(dir, 'dsh', 'package.json'))) return null
+  } catch {
+    return null
+  }
+  return dir
 }
 
 /**

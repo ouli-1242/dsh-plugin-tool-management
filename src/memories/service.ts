@@ -270,6 +270,12 @@ export interface MemoriesService {
   patchIndex: (patch: { mode?: ModeState; archives?: Record<string, SceneArchive>; active?: string[] | null }) => Promise<void>
   /** 场景档案引擎专用：读 mode/archives/active 切片。 */
   readArchiveSlice: () => Promise<{ mode: ModeState; archives: Record<string, SceneArchive>; active: string[] | null }>
+  /**
+   * 各场景的锁定态（场景名 → 是否被锁；只读快照，直接读索引）。
+   * MCP 删除服务要同步清场景档案里的引用：被锁场景的档案是用户显式冻结的，
+   * 那部分键必须保留并如实上报，不能绕开门禁偷偷写（见 mcpmRemove）。
+   */
+  sceneLocks: () => Promise<Record<string, boolean>>
 }
 
 // ── 内部类型 ───────────────────────────────────────────────────────────────
@@ -899,6 +905,14 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     refresh,
     patchIndex,
     readArchiveSlice,
+    sceneLocks: async (): Promise<Record<string, boolean>> => {
+      const index = await readIndex(stateDir)
+      const out: Record<string, boolean> = {}
+      for (const [name, rec] of Object.entries(index.scenes || {})) {
+        if (rec && rec.locked === true) out[name] = true
+      }
+      return out
+    },
   }
   return service
 }

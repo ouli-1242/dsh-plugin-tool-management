@@ -77,8 +77,13 @@ export interface McpManagerDeps {
   readPatch(abs: string): Promise<string>
   /** 写补丁文件（原子替换；写门禁已在 op 层判定）。 */
   writePatch(abs: string, content: string): Promise<void>
-  /** 记忆服务：mcpm-edit 要把停用表写进当前模式的快照。 */
-  memoriesService: { readArchiveSlice(): Promise<any>; patchIndex(slice: any): Promise<any> }
+  /** 记忆服务：mcpm-edit 要把停用表写进当前模式的快照；mcpm-remove 清场景引用时用它避开被锁场景。 */
+  memoriesService: {
+    readArchiveSlice(): Promise<any>
+    patchIndex(slice: any): Promise<any>
+    /** 场景锁定态（场景名 → 是否被锁）；缺席（旧装配）时按"没有场景被锁"处理。 */
+    sceneLocks?(): Promise<Record<string, boolean>>
+  }
 }
 
 /** 本文件对外暴露的出口（12 项）。 */
@@ -1444,12 +1449,101 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     const { id, level } = args
     if (!id || (level !== 'global' && level !== 'project')) return { ok: false, error: '缺少 id 或 level' }
     const abs = level === 'global' ? p.globalPatch : p.projectPatch
-    return withWriteLock(async () => {
+    const removedScenes: string[] = []
+    const skippedLockedScenes: string[] = []
+    await withWriteLock(async () => {
+      // serverName 在锁内取：场景档案（mcp / mcpNotes）与两张工具侧车表都按它键，
+      // 补丁条目 id 是另一套；锁外读会和并发写竞态。
+      const known = (await collectAll()).rows.find((r) => r.id === id)
+      const serverName = known ? known.serverName : ''
       let c = await readPatch(abs)
       c = removeEntryAll(c, id)
       await writePatch(abs, c)
-      return { ok: true }
+      // ── 同步清引用（best-effort，口径与 mcpm-edit 的改名同步一致）─────────────
+      // 只删补丁行的话，引用它的档案/侧车全是死键：场景页会显示一台不存在的服务器，
+      // 进/退场景还会去切换一个空条目；界面上则短暂残留宿主 loader 的 include:* 行。
+      if (serverName) {
+        try {
+          const slice: any = await memoriesService.readArchiveSlice()
+          let mode = slice.mode
+          // 运行时快照的 mcp 同样按 serverName 键：进场景时引擎按它关停/恢复，
+          // 死键会在退场景回写时被无害地跳过 —— 但删了就该摘，与改名的 F-025 同口径。
+          const snapMcp = mode && mode.snapshot && mode.snapshot.mcp
+          if (snapMcp && Object.prototype.hasOwnProperty.call(snapMcp, serverName)) {
+            const rest = Object.assign({}, snapMcp)
+            delete rest[serverName]
+            mode = Object.assign({}, mode, { snapshot: Object.assign({}, mode.snapshot, { mcp: rest }) })
+          }
+          // 场景档案：被**锁定**的场景档案是用户显式冻结的，跳过并如实上报，
+          // 不绕开门禁偷偷写；解锁后重新保存一次档案即可清掉死键。
+          let locks: Record<string, boolean> = {}
+          try {
+            if (typeof memoriesService.sceneLocks === 'function') locks = (await memoriesService.sceneLocks()) || {}
+          } catch { /* 锁态读不到时按未锁处理，与修复前的行为一致 */ }
+          const archives: Record<string, any> = {}
+          let archivesTouched = false
+          for (const [name, archive] of Object.entries(slice.archives || {})) {
+            const a: any = archive || {}
+            const hasMcp = !!(a.mcp && Object.prototype.hasOwnProperty.call(a.mcp, serverName))
+            const hasNote = !!(a.mcpNotes && Object.prototype.hasOwnProperty.call(a.mcpNotes, serverName))
+            if (!hasMcp && !hasNote) { archives[name] = archive; continue }
+            if (locks[name] === true) { skippedLockedScenes.push(name); archives[name] = archive; continue }
+            const copy: any = Object.assign({}, a)
+            if (hasMcp) {
+              const rest = Object.assign({}, a.mcp)
+              delete rest[serverName]
+              copy.mcp = rest
+            }
+            if (hasNote) {
+              const rest = Object.assign({}, a.mcpNotes)
+              delete rest[serverName]
+              // mcpNotes 全空 → null：与档案保存（"全空 = 未定义"）同一口径。
+              copy.mcpNotes = Object.keys(rest).length ? rest : null
+            }
+            archives[name] = copy
+            archivesTouched = true
+            removedScenes.push(name)
+          }
+          if (archivesTouched || mode !== slice.mode) {
+            const patch: any = {}
+            if (archivesTouched) patch.archives = archives
+            if (mode !== slice.mode) patch.mode = mode
+            await memoriesService.patchIndex(patch)
+          }
+        } catch { /* 清理失败不拦删除本身；死键无行为影响，与修复前一致 */ }
+        try {
+          // 停用表与「已知工具」也按 serverName 键：整台没了，键留着只会喂出错的口径
+          // （补集里多出一台永远凑不上的服务器的旧工具名）。
+          const toolMap = Object.assign({}, await readDisabledTools(true))
+          if (Object.prototype.hasOwnProperty.call(toolMap, serverName)) {
+            delete toolMap[serverName]
+            await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMap)
+            disabledToolsCache = { at: Date.now(), value: toolMap }
+            await applyToolRestrictions()
+          }
+          const knownMap = Object.assign({}, await readKnownMcpTools(true))
+          if (Object.prototype.hasOwnProperty.call(knownMap, serverName)) {
+            delete knownMap[serverName]
+            await writeKnownMcpTools(knownMap)
+          }
+        } catch { /* non-fatal */ }
+        try {
+          // 备注按 loader id 键：条目删了备注就该走（writeNoteUnderLock 约定在写锁内调用）。
+          await writeNoteUnderLock(id, '')
+        } catch { /* non-fatal */ }
+      }
     })
+    // 等 loader 把条目摘掉。等待放在**写锁外**（同 mcpm-restart：锁内等待会卡住其他写）。
+    // 宿主清单偶尔停在上一帧，等不到**不算失败** —— 补丁条目确实已经删了，宿主侧收敛有
+    // 自己的节奏；但要说出来，否则用户对着残留的 include:* 行只会以为插件没删干净。
+    const warnings: string[] = []
+    if (pluginInventory) {
+      const gone = await waitFor(async () => (await liveEntry(id)) === null, LOADER_STATE_WAIT_MS, LOADER_STATE_POLL_MS)
+      if (!gone) warnings.push(`宿主 loader 清单未在 ${LOADER_STATE_WAIT_MS / 1000} 秒内摘除该条目，列表可能短暂残留它的行（宿主收敛后自动消失）`)
+    }
+    if (removedScenes.length) warnings.push(`已同步摘掉 ${removedScenes.length} 个场景档案里对它的引用（${removedScenes.join('、')}）`)
+    if (skippedLockedScenes.length) warnings.push(`场景 ${skippedLockedScenes.join('、')} 已锁定，档案里对它的引用保留未动（解锁后重新保存档案即可清掉）`)
+    return warnings.length ? { ok: true, warning: warnings.join('；') } : { ok: true }
   }
 
   /**
@@ -1494,9 +1588,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
   }
 
-  // ---------- 配置体检（0.15.0 B1）--------------------------------------------------
-  // 只读、零副作用：不拉起子进程、不连网、一个字节都不写盘。唯一的对外调用是 `where` /
-  // `which` 查询 PATH —— 它查的是「这个命令名能不能找到」，绝不执行配置里的命令本身。
+  // ---------- 配置体检（0.15.0 B1；0.16.1 起 streamable-http 含端点探测）--------------
+  // 对补丁文件**只读**：不写盘、不拉起子进程。对外调用两处 ——
+  //   · `where` / `which` 查 PATH：只查「这个命令名能不能找到」，绝不执行配置里的命令本身；
+  //   · streamable-http 行对配置地址发一次 GET 连通性探测（带配置的鉴权头、5 秒超时、
+  //     不读响应体 —— 与宿主连接该服务走的是同一地址同一头部，只是更轻）。
   //
   // 为什么单独读补丁而不复用 `mcpmList()`：那个函数顺带回写「已知工具」缓存、还要问一次
   // schema 注册表。体检的承诺是「点了什么都不变」，所以这里只走 readPatch + parseRows。
@@ -1516,6 +1612,46 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         else resolve('missing')
       })
     })
+  }
+
+  /** streamable-http 连通性探测的超时：再长，「全部检查」就会被一台挂掉的服务拖住。 */
+  const INSPECT_PROBE_TIMEOUT_MS = 5000
+
+  /** 探测失败的原因短语（进词典模板的 {reason}）：认得出常见错误码就说人话，认不出给原文截断。 */
+  function describeProbeFailure(e: unknown): string {
+    const err = e as { name?: string; message?: string; cause?: { code?: string; message?: string } } | null
+    if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      return '探测超时（' + Math.round(INSPECT_PROBE_TIMEOUT_MS / 1000) + ' 秒无响应）'
+    }
+    const code = err && err.cause && err.cause.code
+    if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return '域名解析失败（' + code + '）'
+    if (code === 'ECONNREFUSED') return '连接被拒绝（' + code + '）'
+    if (code === 'ETIMEDOUT') return '连接超时（' + code + '）'
+    if (code === 'ECONNRESET') return '连接被重置（' + code + '）'
+    if (typeof code === 'string' && /CERT|SSL|TLS/.test(code)) return 'TLS 证书校验失败（' + code + '）'
+    const text = String((err && err.cause && err.cause.message) || (err && err.message) || e || '')
+    return text.length > 80 ? text.slice(0, 77) + '…' : text
+  }
+
+  /**
+   * streamable-http 的连通性探测：对配置地址 GET 一次，**任何** HTTP 响应（含 404/405）
+   * 都算「可达」—— 探测只回答"这个地址现在连不连得上"，不校验它是不是 MCP 服务。
+   * 不读响应体：streamable-http 对 GET 常回一条 SSE 长连接，拿到状态行就取消。
+   */
+  async function probeHttpEndpoint(url: string, headers: unknown): Promise<{ reachable: true } | { reachable: false; reason: string }> {
+    const extra: Record<string, string> = {}
+    if (headers && typeof headers === 'object' && !Array.isArray(headers)) {
+      for (const [k, v] of Object.entries(headers as Record<string, unknown>)) {
+        if (typeof v === 'string' && v) extra[k] = v
+      }
+    }
+    try {
+      const res = await fetch(url, { method: 'GET', headers: extra, redirect: 'follow', signal: AbortSignal.timeout(INSPECT_PROBE_TIMEOUT_MS) })
+      try { await res.body?.cancel() } catch { /* 取消失败不影响「可达」结论 */ }
+      return { reachable: true }
+    } catch (e) {
+      return { reachable: false, reason: describeProbeFailure(e) }
+    }
   }
 
   /** 一行配置 → 检查项。`level: 'warn'` 才点黄；`info` 是「查不了 / 不算问题」那类说明。 */
@@ -1551,6 +1687,12 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     } else if (transport === 'streamable-http') {
       if (!url) checks.push({ id: 'noUrl', level: 'warn' })
       else if (!/^https?:\/\//.test(url)) checks.push({ id: 'badUrl', level: 'warn', params: { url } })
+      else {
+        // 格式对了再做一次真实探测（0.16.1）：此前的体检止步于格式校验，一条编造的
+        // 地址也能拿绿点 —— 绿点承诺的「没发现问题」其实只覆盖了一半（2026-09-29 实测）。
+        const probe = await probeHttpEndpoint(url, row.headers)
+        if (!probe.reachable) checks.push({ id: 'httpUnreachable', level: 'warn', params: { url, reason: probe.reason } })
+      }
       const badHeaders = badKv(row.headers)
       if (badHeaders.length) checks.push({ id: 'kvNotString', level: 'warn', params: { where: 'headers', keys: badHeaders.join('、') } })
     } else if (!command && !url) {
@@ -1583,13 +1725,16 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     }
     const onlyId = args && String(args.id || '') ? String(args.id) : ''
     const onlyLevel = args && String(args.level || '') ? String(args.level) : ''
-    const results: any[] = []
-    for (const r of rows) {
-      if (onlyId && String(r.id) !== onlyId) continue
-      if (onlyLevel && String(r.level) !== onlyLevel) continue
-      const checks = await inspectChecks(r, (idsByName[String(r.serverName || '')] || new Set()).size)
-      results.push({ id: r.id, serverName: r.serverName, level: r.level, transport: r.transport || null, checks })
-    }
+    // 逐行检查并行跑：体检含 streamable-http 的端点探测（每次至多 5 秒超时），串行会让
+    // 「全部检查」在多台同时连不上时按行数翻倍地慢。Promise.all 保序，与旧实现一致。
+    const targets = rows.filter((r) => (!onlyId || String(r.id) === onlyId) && (!onlyLevel || String(r.level) === onlyLevel))
+    const results = await Promise.all(targets.map(async (r) => ({
+      id: r.id,
+      serverName: r.serverName,
+      level: r.level,
+      transport: r.transport || null,
+      checks: await inspectChecks(r, (idsByName[String(r.serverName || '')] || new Set()).size),
+    })))
     return { ok: true, results, errors }
   }
 

@@ -129,6 +129,9 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           host: { version: assessment.identity.version, modules: assessment.identity.modules },
           sameAsHost: assessment.identity.sameAsHost,
           unverified: assessment.identity.unverified,
+          // 身份校验的说明（目前只有「宿主在 app.asar 里」一种）：不是阻塞项，界面据此
+          // 解释那一排「无法比较」，而不是留给用户一句「两份拷贝，去 --fix」。
+          notes: assessment.identity.notes,
           findings,
           degraded,
           blockers: assessment.identity.blockers,
@@ -347,13 +350,22 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         // 身份 / 版本：与 compat-status 同一份数据。
         const identity = assessment?.identity
         const identityIssue = identity !== undefined && (identity.blockers.length > 0 || Object.values(identity.sameAsHost).some((same) => same === false))
+        // 归档宿主（桌面版）：不是阻塞项，但"模块与宿主同源"这句话对它不成立（同版本、
+        // 不同文件），所以总览那一行要换句话讲，而不是继续报一句善意的假话。
+        const asarHost = identity?.notes.find((note) => note.kind === 'asar-host')
         push({
           key: 'host-identity', label: '宿主身份与模块', tab: 'compat',
           state: assessment === undefined ? 'unknown' : identityIssue ? 'degraded' : 'ok',
           detail: assessment === undefined ? '能力探测不可用（归档服务未挂载）'
             : identityIssue ? '存在阻塞项：' + (identity?.blockers ?? []).join('；')
-              : `模块与宿主同源（宿主 DSH ${identity?.version ?? '?'}）`,
-          ...(assessment === undefined ? {} : { version: identity?.version ?? '?', blockers: identity?.blockers ?? [] }),
+              : asarHost !== undefined
+                ? `官方包与宿主同版本，但宿主跑在 ${asarHost.asarName} 里（插件在归档外）`
+                : `模块与宿主同源（宿主 DSH ${identity?.version ?? '?'}）`,
+          ...(assessment === undefined ? {} : {
+            version: identity?.version ?? '?',
+            blockers: identity?.blockers ?? [],
+            ...(asarHost === undefined ? {} : { asarHost: true, asarName: asarHost.asarName }),
+          }),
         })
         // 无独立装配点的域：没有上报就是正常（如实说明依据是"没有降级上报"）。
         for (const [key, label, tab] of [['memory', '记忆', 'memory'], ['prompts', '提示词', 'prompts'], ['subagents', '子智能体', 'subagents'], ['scenes', '场景档案', 'scenes']] as const) {
