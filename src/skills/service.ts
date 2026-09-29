@@ -407,7 +407,11 @@ export function createSkillsService(ctx: any): SkillsService {
       console.error('[dsh-plugin-tool-management] agent-scoped provider setup failed:', message(e))
     }
     try {
-      const watchPaths = roots.map((root: any) => String((root && root.path) || '')).filter(Boolean)
+      const watchPaths = roots
+        // 官方内置来源是宿主启动时物化的只读副本，不会中途变化，不起 watcher。
+        .filter((root: any) => root.key !== 'official')
+        .map((root: any) => String((root && root.path) || ''))
+        .filter(Boolean)
       disposers.push(watchDirectories(watchPaths, invalidateSkills))
       // 自定义目录在状态文件里，注册时读取一次并一并监听（后添加的目录由
       // provider 首次 list 天然覆盖，等插件重载后才有 watcher）。

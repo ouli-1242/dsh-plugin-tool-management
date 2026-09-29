@@ -1588,7 +1588,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
   }
 
-  // ---------- 配置体检（0.15.0 B1；0.16.1 起 streamable-http 含端点探测）--------------
+  // ---------- 配置体检（0.15.0 B1；0.16.5 起 streamable-http 含端点探测）--------------
   // 对补丁文件**只读**：不写盘、不拉起子进程。对外调用两处 ——
   //   · `where` / `which` 查 PATH：只查「这个命令名能不能找到」，绝不执行配置里的命令本身；
   //   · streamable-http 行对配置地址发一次 GET 连通性探测（带配置的鉴权头、5 秒超时、
@@ -1688,7 +1688,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       if (!url) checks.push({ id: 'noUrl', level: 'warn' })
       else if (!/^https?:\/\//.test(url)) checks.push({ id: 'badUrl', level: 'warn', params: { url } })
       else {
-        // 格式对了再做一次真实探测（0.16.1）：此前的体检止步于格式校验，一条编造的
+        // 格式对了再做一次真实探测（0.16.5）：此前的体检止步于格式校验，一条编造的
         // 地址也能拿绿点 —— 绿点承诺的「没发现问题」其实只覆盖了一半（2026-09-29 实测）。
         const probe = await probeHttpEndpoint(url, row.headers)
         if (!probe.reachable) checks.push({ id: 'httpUnreachable', level: 'warn', params: { url, reason: probe.reason } })

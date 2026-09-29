@@ -1036,8 +1036,6 @@ export function assessHost(ctx: {
   const asarHostPackages: HostIdentityPackage[] = []
   // realpath 失败（路径取不到真实形态）：两侧各算一次就够，与是哪个包无关。
   const realpathFailures: HostIdentityRealpathFailure[] = []
-  let hostRealpath: { path: string } | { reason: string } | null = null
-  let hostRealpathResolved: string | null = null
   let hostRealpathNote: string | null = null
   let pluginRealpathNote: string | null = null
   let asarHostVersion: string | null = null
@@ -1057,18 +1055,16 @@ export function assessHost(ctx: {
     }
     // Resolve the same name from the host installation's own anchor, then
     // compare PHYSICAL files: a junction is the same module, not a copy.
+    //
+    // 逐包解析、逐包取真实形态。realpath 的**机制**确实整轮不变，但上一版曾把
+    // 这句话错写成连**解析结果**一起复用：第一个包（cordis）的宿主侧入口路径被当成
+    // 其余五个包的宿主侧路径，于是五条全部比成「与 cordis 不同」→ 假「两份不同拷贝」
+    // （官方桌面版 0.2.0-rc.2 实测，2026-09-30；解析本就便宜，节点自身还有缓存）。
     let hostResolved: string | null = null
+    let hostRealpath: { path: string } | { reason: string } | null = null
     try {
-      if (hostRealpath === null) {
-        const hostRequire = createRequire(join(dirname(hostRoot), 'package.json'))
-        hostResolved = hostRequire.resolve(name)
-        hostRealpathResolved = hostResolved
-        hostRealpath = realPathWithReason(hostResolved)
-      } else {
-        // 宿主锚点两侧的 realpath 结论整轮复用：同一次进程里不会变，
-        // 逐包重算既慢又可能给出不一致的理由。
-        hostResolved = hostRealpathResolved
-      }
+      hostResolved = createRequire(join(dirname(hostRoot), 'package.json')).resolve(name)
+      hostRealpath = realPathWithReason(hostResolved)
     } catch {
       hostResolved = null
     }
@@ -1077,7 +1073,7 @@ export function assessHost(ctx: {
     if (hostRealpath !== null && 'reason' in hostRealpath) {
       sameAsHost[name] = null
       hostRealpathNote = hostRealpathNote ?? hostRealpath.reason
-      realpathFailures.push({ name, side: 'host', path: hostRealpathResolved ?? '(未解析到)', reason: hostRealpath.reason })
+      realpathFailures.push({ name, side: 'host', path: hostResolved ?? '(未解析到)', reason: hostRealpath.reason })
       continue
     }
     const pluginRealpath = realPathWithReason(resolved)

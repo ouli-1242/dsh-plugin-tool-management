@@ -1790,13 +1790,18 @@
         // 它自带的 summary 是中文，直接渲染会让英文界面露出中文）。
         const findingsN = Array.isArray(data.findings) ? data.findings.length : 0
         const degradedN = Array.isArray(data.degraded) ? data.degraded.length : 0
+        // 摘要三形态：能力降级 / 仅身份待处理 / 全部可用。仅身份待处理时**不能**说
+        // 「全部可用」—— 横幅已转红（有阻塞项），摘要却报一切正常，两句自相矛盾
+        // （2026-09-30 桌面版实测）。
+        const summaryKey = degradedN > 0 ? 'compat.summary.degraded'
+          : blockedCount > 0 ? 'compat.summary.identity' : 'compat.summary.ok'
         const summaryText = findingsN === 0
           ? (data.summary || '')
-          : t(degradedN === 0 ? 'compat.summary.ok' : 'compat.summary.degraded')
+          : t(summaryKey)
             .replace('{version}', String((data.host && data.host.version) || '?'))
             .replace('{ok}', String(findingsN - degradedN))
             .replace('{total}', String(findingsN))
-            .replace('{count}', String(degradedN))
+            .replace('{count}', String(degradedN > 0 ? degradedN : blockedCount))
         push(React.createElement('div', { className: 'dsm-compat-bar' + (blockedCount > 0 ? ' dsm-compat-bar-warn' : '') },
           React.createElement('span', { className: 'dsm-compat-dot' + (blockedCount > 0 ? ' dsm-compat-dot-warn' : '') }),
           React.createElement('strong', null, blockedCount > 0 ? t('compat.state.blocked') : t('compat.state.ok')),
@@ -1808,13 +1813,16 @@
         //     「本插件按此版本验证」—— 前者是安装期门槛，后者是同一件事说两遍）；
         //   * 可用能力：全通过时不再写「全部通过」（分子分母已经说了这件事），只在有降级
         //     或有插件自补时说清楚是哪一种（2026-09-29 用户裁定）。
-        const capsNote = blockedCount > 0
-          ? t('compat.caps.degraded').replace('{count}', String(blockedCount))
+        //   * 注脚与红色只跟**能力**降级走（degraded）：身份阻塞项（两份拷贝 / 待处理）
+        //     不是能力不可用 —— 此前用 blockedCount（能力 + 身份）当注脚数，桌面版上出现
+        //     过「可用能力 18/18」旁边标红「5 项不可用」的自相矛盾（2026-09-30 实测）。
+        const capsNote = degraded.length > 0
+          ? t('compat.caps.degraded').replace('{count}', String(degraded.length))
           : (usableCount === findings.length ? null : t('compat.caps.substituted'))
         push(React.createElement('div', { className: 'dsm-compat-grid' },
           card(t('compat.host'), (data.host && data.host.version) || '?', null, false),
           card(t('compat.verified'), data.verifiedVersion || '?', null, false),
-          card(t('compat.caps'), String(usableCount) + '/' + String(findings.length), capsNote, blockedCount > 0)))
+          card(t('compat.caps'), String(usableCount) + '/' + String(findings.length), capsNote, degraded.length > 0)))
 
         // 版本栅栏（B3）：实际宿主与本插件验证过的版本不同时说出来 —— 否则"照旧版本的印象
         // 判断"会让人把探测结果当成 bug。只提示、不拦（peer 保持无上界是既定决策）。

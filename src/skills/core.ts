@@ -20,7 +20,15 @@ import {
   resolve,
   isAbsolute,
 } from "node:path";
-import { promises as fs } from "node:fs";
+import {
+  promises as fs,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  copyFileSync,
+  rmSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
 import { unzipSync } from "fflate";
 import {
@@ -537,13 +545,193 @@ export function resolveAgentsHome(): string {
   return process.env.DSH_AGENTS_HOME || join(homedir(), ".agents");
 }
 
+// ── 官方内置技能来源（随宿主注入会话上下文的内置技能）──────────────────────
+//
+// 桌面版把 4 个官方技能注入每个会话（用户 2026-09-30 实测目录）：office-docx /
+// office-pptx / office-xlsx（dsh-skill-office，桌面宿主把 assetRoot 指到
+// `<resources>/runtime/office-skills`）与 diagnose-windows-sandbox-acl
+// （dsh-sandbox-windows-acl，source 'bundled'，rank 600）。web 宿主一个都不注入
+// （用户裁定：web 用不上这个功能）。它们或住在官方 asar 里、或由官方 provider
+// 复制进临时目录自管，插件直接扫描/接管有两个坑：宿主子进程里对 asar 的 promises
+// 读法与拦截器解析都出现过时灵时不灵（同机两次启动一组 4/1、一组全 0，实测）；
+// 沙盒技能的脚本要交给 PowerShell 子进程，asar 路径读不了。
+//
+// 因此这里把来源**物化**成插件自有的一份真实目录（`$DSH_HOME/tool-management/
+// official-skills/`）：每次宿主启动从官方源头整目录覆盖拷贝（与官方 provider 的
+// 「私有资源副本」同一做法），扫描、启停、overlay、脚本执行全部落在真实文件上。
+//
+// 两个边界（都出过事）：
+//   - 只有桌面版（有 process.resourcesPath）才允许进来。物化目录在 $DSH_HOME 下
+//     与各宿主**共用**，而 web 宿主进程里的官方模块拦截器能把 @deepseek-ai 裸名
+//     解析到宿主副本 —— web 若也进来重建，会把桌面物化好的整目录清成它解析到的
+//     那几个（2026-09-30 实测：桌面物化好 4 个，web 一启动，两份 UI 同时只剩沙盒
+//     1 个）。所以非桌面在碰目录**之前**就退出，一个技能都不列。
+//   - 预设参考技能（dsh-agent-preset/skills）不注入会话上下文，不列入（用户裁定）。
+//
+// 单个来源、随 DSH 技能之后排列，来源层语义同默认来源（不可移除、无来源开关）。
+
+const OFFICIAL_SOURCE_KEY = "official";
+
+/** electron 的 resources 目录；非桌面宿主（web 等普通 node 进程）没有这个属性。 */
+function resourcesDir(): string | null {
+  const resources = (process as { resourcesPath?: string }).resourcesPath;
+  return typeof resources === "string" && resources !== "" ? resources : null;
+}
+
+/** 桌面版官方 asar 里的包内目录（同步 fs 对 asar 的支持经过实测可靠）。 */
+function desktopPackageDir(packageName: string, subpath: string): string | null {
+  const resources = resourcesDir();
+  if (resources === null) return null;
+  const dir = join(
+    resources,
+    "app.asar",
+    "dsh",
+    "node_modules",
+    ...packageName.split("/"),
+    ...subpath.split("/"),
+  );
+  return existsSync(dir) ? dir : null;
+}
+
+/**
+ * 从插件自身的解析链找官方包内目录（web 等非桌面宿主的途径；宿主进程里的裸名
+ * 解析由官方模块拦截器路由到宿主副本）。包不可解析（旧宿主 / 单测环境）返回 null。
+ */
+function resolvedPackageDir(packageName: string, subpath: string): string | null {
+  try {
+    const require = createRequire(import.meta.url);
+    let manifest: string;
+    try {
+      manifest = require.resolve(`${packageName}/package.json`);
+    } catch {
+      // exports 未暴露 ./package.json 的包：从入口文件向上找同名 manifest。
+      manifest = "";
+      let dir = dirname(require.resolve(packageName));
+      for (let i = 0; i < 6; i += 1) {
+        const candidate = join(dir, "package.json");
+        if (existsSync(candidate)) {
+          manifest = candidate;
+          break;
+        }
+        const parent = dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+      if (manifest === "") return null;
+    }
+    const dir = join(dirname(manifest), ...subpath.split("/"));
+    return existsSync(dir) ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * office 技能源头。office 只在桌面版由宿主挂载（web 的补丁层没有它），所以只在
+ * 桌面环境里找：运行时真实目录优先（官方 assetRoot），其次 asar 包内 assets。
+ * 非桌面环境一律 null —— 不把没被注入的技能凭空列出来。
+ */
+function officialOfficeSource(): string | null {
+  const resources = resourcesDir();
+  if (resources === null) return null;
+  const runtimeDir = join(resources, "runtime", "office-skills");
+  if (existsSync(join(runtimeDir, "office-docx"))) return runtimeDir;
+  const asarDir = desktopPackageDir("@deepseek-ai/dsh-skill-office", "assets");
+  if (asarDir !== null && existsSync(join(asarDir, "office-docx"))) return asarDir;
+  return null;
+}
+
+/** 沙盒诊断技能源头（桌面版 asar 直连优先，其次本机解析链；仅 Windows 注入）。 */
+function officialSandboxSource(): string | null {
+  if (process.platform !== "win32") return null;
+  return (
+    desktopPackageDir(
+      "@deepseek-ai/dsh-sandbox-windows-acl",
+      "assets/diagnose-windows-sandbox-acl",
+    ) ??
+    resolvedPackageDir(
+      "@deepseek-ai/dsh-sandbox-windows-acl",
+      "assets/diagnose-windows-sandbox-acl",
+    )
+  );
+}
+
+function copyDirectorySync(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const source = join(from, entry.name);
+    const target = join(to, entry.name);
+    if (entry.isDirectory()) copyDirectorySync(source, target);
+    else if (entry.isFile()) copyFileSync(source, target);
+  }
+}
+
+/**
+ * 物化官方内置技能到插件自有目录，返回该目录；无可用源头或拷贝失败返回 null。
+ * 每次宿主启动整目录重建（官方包只随宿主更新变化，宿主更新必然重启宿主）。
+ */
+let officialRootCache: SkillSource | null | undefined;
+
+function materializeOfficialSkills(): string | null {
+  // 非桌面宿主（web 等普通 node 进程）一个官方技能都不注入，也不许碰共享的物化
+  // 目录 —— 否则 web 启动会把它解析到的那几个盖进目录，桌面版物化好的就没了
+  // （见上方块注释）。必须在任何 fs 访问之前退出。
+  if (resourcesDir() === null) return null;
+  const office = officialOfficeSource();
+  const sandbox = officialSandboxSource();
+  if (office === null && sandbox === null) return null;
+  const root = join(resolveDshHome(), "tool-management", "official-skills");
+  try {
+    rmSync(root, { recursive: true, force: true });
+    // office：整个 assets 根拷进来（office-*/ 与 scripts/ 的相对结构必须保留 ——
+    // SKILL.md 用 `<skill-directory>/../scripts/check_office.py` 引用检查脚本）。
+    if (office !== null) copyDirectorySync(office, root);
+    if (sandbox !== null) {
+      copyDirectorySync(sandbox, join(root, basename(sandbox)));
+    }
+    return root;
+  } catch (error) {
+    console.error(
+      "[dsh-plugin-tool-management] official skills materialization failed:",
+      String((error && (error as Error).message) || error),
+    );
+    return null;
+  }
+}
+
+function officialSkillRoot(): SkillSource | null {
+  if (officialRootCache !== undefined) return officialRootCache;
+  const dir = materializeOfficialSkills();
+  officialRootCache =
+    dir === null
+      ? null
+      : {
+          key: OFFICIAL_SOURCE_KEY,
+          path: dir,
+          label: "官方内置",
+          localeKey: "official",
+          mutable: false,
+          deletable: false,
+          // 来源层无开关（同默认来源），单个技能可启停；overlay 以 599 压过官方
+          // provider 的 600，脚本从物化副本的真实路径执行。
+          toggleable: true,
+          native: false,
+          scope: "user",
+          rank: 599,
+        };
+  return officialRootCache;
+}
+
 /**
  * DSH 与外部 Agent 的用户级技能目录（4 个来源；外部来源由 manager provider 接入）。
  *
  * rank 与官方 filesystem provider 的用户级优先级衔接：DSH=400、Agents=500。
  * manager provider 以 450 接管公共 Agents（仍低于 DSH），Codex/Claude 依次排在其后。
+ * DSH 之后紧随官方内置来源（随宿主注入会话的内置技能，见 materializeOfficialSkills；
+ * 无可用源头时自然缺席）。
  */
 export function userRoots(): SkillSource[] {
+  const official = officialSkillRoot();
   return [
     {
       key: "dsh",
@@ -558,6 +746,8 @@ export function userRoots(): SkillSource[] {
       native: true,
       rank: 400,
     },
+    // 官方内置紧随 DSH 技能之后（用户裁定）：同为一眼要看的来源，排在导入技能之前。
+    ...(official === null ? [] : [official]),
     {
       // v0.4：插件**新建/导入**的技能落到 hub 内（用户要求：插件产生的文件收在
       // $DSH_HOME/tool-management/）。rank 高于 DSH 技能，同名时 hub 版本遮蔽官方目录里的；
@@ -626,9 +816,9 @@ export function userRoots(): SkillSource[] {
  *
  * 一句话记法：**`mutable` 与 `deletable` 同向，`removable` 与 `mutable` 反向。**
  */
-const DEFAULT_SOURCE_KEYS = Object.freeze(["dsh", "hub"]);
+const DEFAULT_SOURCE_KEYS = Object.freeze(["dsh", "hub", OFFICIAL_SOURCE_KEY]);
 
-/** 是否为默认来源。接受 root 对象或 key 字符串；`dsh` / `hub` 的所有特判都走这里。 */
+/** 是否为默认来源。接受 root 对象或 key 字符串；`dsh` / `hub` / `official` 的所有特判都走这里。 */
 export function isDefaultSkillSource(rootOrKey: unknown): boolean {
   const key =
     rootOrKey && typeof rootOrKey === "object"
@@ -1100,7 +1290,9 @@ function reservedSourceError(
   const origin =
     key === "dsh"
       ? "DSH 技能目录是默认来源，必须读取"
-      : "导入技能目录是默认来源、插件新建/导入的落点，必须读取";
+      : key === "hub"
+        ? "导入技能目录是默认来源、插件新建/导入的落点，必须读取"
+        : "官方内置技能目录随宿主发布，不能移除（移除只会让插件失去管理权）";
   return {
     ok: false,
     code: "error.source.reserved",
@@ -3868,7 +4060,9 @@ export async function listProviderCandidates(
       provider: "dsh-plugin-tool-management-external",
       source: project
         ? (root.kind as string)
-        : root.key === "dsh"
+        : root.key === "official"
+          ? "bundled"
+          : root.key === "dsh"
           ? "user-dsh"
           : CUSTOM_ROOT_KEY_RE.test(root.key)
             ? "custom"

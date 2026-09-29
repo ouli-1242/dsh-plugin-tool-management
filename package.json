@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-tool-management",
-  "version": "0.16.1",
+  "version": "0.16.5",
   "description": "DSH plugin: one settings panel for MCP servers, skills, scenes, memories, subagent personas and AGENTS.md presets — a scene switches the whole environment, and the model can drive it from chat too.",
   "repository": {
     "type": "git",
