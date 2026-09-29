@@ -1204,6 +1204,8 @@
         if (row.key === 'host-identity') {
           if (row.state === 'unknown') return t('compat.ov.route.unknown')
           if (row.state === 'degraded') return t('compat.ov.hostIdentity.degraded', { list: list(row.blockers) })
+          // 归档宿主：同版本但不同文件，不能沿用"同源"那句。
+          if (row.asarHost) return t('compat.ov.hostIdentity.asar', { version: row.version, name: row.asarName || 'app.asar' })
           return t('compat.ov.hostIdentity.ok', { version: row.version })
         }
         if (row.state === 'ok' && (row.key === 'memory' || row.key === 'prompts' || row.key === 'subagents' || row.key === 'scenes')) {
@@ -1801,14 +1803,18 @@
           React.createElement('span', { className: 'dsm-compat-sum' }, summaryText)))
 
         // 指标卡：宿主 / 本插件适配版本 / 可用能力（含插件自补的 optional 槽位）。
+        // 三张卡都只在**有事要说**时带注脚：
+        //   * 宿主、适配版本：一个值就够（2026-09-29 用户裁定：删掉「最低要求 ≥ …」与
+        //     「本插件按此版本验证」—— 前者是安装期门槛，后者是同一件事说两遍）；
+        //   * 可用能力：全通过时不再写「全部通过」（分子分母已经说了这件事），只在有降级
+        //     或有插件自补时说清楚是哪一种（2026-09-29 用户裁定）。
+        const capsNote = blockedCount > 0
+          ? t('compat.caps.degraded').replace('{count}', String(blockedCount))
+          : (usableCount === findings.length ? null : t('compat.caps.substituted'))
         push(React.createElement('div', { className: 'dsm-compat-grid' },
-          card(t('compat.host'), (data.host && data.host.version) || '?', t('compat.peer') + ' ≥ ' + (data.minHostVersion || '-'), false),
-          card(t('compat.verified'), data.verifiedVersion || '?', t('compat.verified.note'), false),
-          card(t('compat.caps'), String(usableCount) + '/' + String(findings.length),
-            blockedCount > 0
-              ? t('compat.caps.degraded').replace('{count}', String(blockedCount))
-              : (usableCount === findings.length ? t('compat.caps.all') : t('compat.caps.substituted')),
-            blockedCount > 0)))
+          card(t('compat.host'), (data.host && data.host.version) || '?', null, false),
+          card(t('compat.verified'), data.verifiedVersion || '?', null, false),
+          card(t('compat.caps'), String(usableCount) + '/' + String(findings.length), capsNote, blockedCount > 0)))
 
         // 版本栅栏（B3）：实际宿主与本插件验证过的版本不同时说出来 —— 否则"照旧版本的印象
         // 判断"会让人把探测结果当成 bug。只提示、不拦（peer 保持无上界是既定决策）。
@@ -1907,18 +1913,45 @@
         }
 
         // 模块实体：一行一个包，右侧是"同一份模块 / 两份拷贝"。
+        // 归档宿主（桌面版）先把清单读出来：那几个包两侧的**版本相同**，只是宿主那份在
+        // app.asar 里 —— 它们不能显示成「无法比较」后就此打住，得说清是哪种比不了。
+        const identityNotes = (data && data.notes) || []
+        const asarNote = identityNotes.filter(function (note) {
+          return note && note.kind === 'asar-host'
+        })[0]
+        const asarPackages = (asarNote && asarNote.packages) || []
+        const asarNames = asarPackages.map(function (item) { return String(item && item.name || '') })
         push(section(t('compat.modules'), t('compat.modules.hint'),
           React.createElement('div', { className: 'dsm-compat-mod-list' },
             Object.keys(sameAsHost).map(function (name) {
               const same = sameAsHost[name]
+              const inAsar = asarNames.indexOf(name) !== -1
               const cls = same === true ? 'dsm-compat-pill-ok' : same === false ? 'dsm-compat-pill-bad' : ''
-              const text = same === true ? t('compat.module.same') : same === false ? t('compat.module.separate') : t('compat.module.unknown')
+              const text = same === true ? t('compat.module.same')
+                : same === false ? t('compat.module.separate')
+                  : inAsar ? t('compat.module.sameVersion') : t('compat.module.unknown')
               return React.createElement('div', { className: 'dsm-compat-mod-row', key: name },
                 React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, name),
                 React.createElement('span', { className: 'dsm-compat-pill ' + cls }, text))
             }))))
 
         // 「无法比对」必须给原因：否则一排未知标记看起来只是噪音，用户会当成正常现象。
+        // 归档宿主的说明排最前 —— 它解释的正是这一排「无法比较」的成因，而且必须讲明白
+        // **不要去跑 host-deps --fix**：那条命令会把插件的依赖指向 npx 缓存里另一个版本。
+        if (asarNote) {
+          const count = asarPackages.length
+          const version = asarNote.hostVersion || '?'
+          push(React.createElement('p', { className: 'dsm-help' },
+            t('compat.modules.asarHost')
+              .replace('{name}', String(asarNote.asarName || 'app.asar'))
+              .replace('{count}', String(count))
+              .replace('{version}', version)))
+          push(React.createElement('p', { className: 'dsm-help' },
+            t('compat.modules.asarHostPackages')
+              .replace('{count}', String(count))
+              .replace('{version}', version)
+              .replace('{names}', asarNames.join('、'))))
+        }
         if (unverified.length) {
           push(React.createElement('p', { className: 'dsm-help' },
             t('compat.modules.unverified')
@@ -2457,7 +2490,7 @@
       }
       const auditDialog = compatDialogOpen === 'audit'
         ? compatDialog('audit', t('compat.audit'), [
-          React.createElement('p', { key: 'hint', className: 'dsm-help' }, t('compat.audit.hint')),
+          React.cloneElement(helpBullets(t, 'compat.audit.hint'), { key: 'hint' }),
           auditContent ? React.cloneElement(auditContent, { key: 'body' }) : dialogFallback(),
         ], true)
         : null

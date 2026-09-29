@@ -605,7 +605,11 @@
                     React.createElement('div', { className: 'dsm-source-head-main dsm-persona-main' },
                       React.createElement('div', { className: 'dsm-persona-name-row' },
                         React.createElement('span', { className: 'dsm-source-title', title: p.name }, p.name),
-                        p.enabled === false ? React.createElement('span', { className: 'dsm-tag', title: t('subagents.disabled.hint') }, t('subagents.disabled')) : null),
+                        // 两个状态都给胶囊：以前只在停用时挂标签，启用的一行什么都不留，
+                        // 用户没法一眼看出「没标签 = 启用」。
+                        p.enabled === false
+                          ? React.createElement(StatusTag, { tone: 'muted', text: t('subagents.disabled'), title: t('subagents.disabled.hint') })
+                          : React.createElement(StatusTag, { tone: 'ok', text: t('subagents.enabled') })),
                       // 没有描述就不渲染这一行：空 div 仍占一行行高，行会变成一条无内容的空隙。
                       p.description ? React.createElement('div', { className: 'dsm-persona-desc', title: p.description }, p.description) : null),
                     React.createElement('div', { className: 'dsm-source-actions' },

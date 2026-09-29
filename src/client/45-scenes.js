@@ -1142,7 +1142,10 @@
                     placeholder: t('memory.scene.field.name.placeholder'),
                     onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { name: e.target.value, error: null })) },
                   }),
-                  React.createElement('p', { className: sceneForm.error ? 'dsm-rule-hint' : 'dsm-help' }, sceneForm.error || (modal.type === 'scene-create' ? t('memory.scene.field.name.hint') : t('memory.scene.field.name.lock')))),
+                  // 校验没过的那句红字是报错，不进条目清单；说明句一律带条目符号（与下面两个字段同款）。
+                  sceneForm.error
+                    ? React.createElement('p', { className: 'dsm-rule-hint' }, sceneForm.error)
+                    : helpBullets(t, modal.type === 'scene-create' ? 'memory.scene.field.name.hint' : 'memory.scene.field.name.lock')),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('div', { className: 'dsm-budget-meta' },
                     React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.desc')),

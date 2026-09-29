@@ -31,3 +31,17 @@ window.__ModuleLoader__.load({
      * 当场会红）。与 DICT 无依赖，`t` 是传进来的，所以放这儿不影响求值顺序。
      */
     function translateOrFallback(t, key, fallback, params) { var value = t(key, params); return typeof value === "string" && value !== key ? value : fallback; }
+
+    /**
+     * 字段下的多行说明 → 条目清单（样式见 dsm-help-list）。词典值按 `\n` 分段，一段一条：
+     * 一整句话里塞三件事时，条目比句子好扫。「修改场景」表单的字段说明一律走这一套，
+     * 只有一件的也照挂 —— 那颗符号是字段的左边界（2026-09-29 用户裁定）。
+     *
+     * 与 `translateOrFallback` 同一个理由放在这一片：调用点有 factory 作用域里的兼容页（20 片），
+     * 也有 `apply` 里的那几页（45 / 46 片）—— 声明在 `apply` 内部时前者取不到这个名字。
+     */
+    function helpBullets(t, key) {
+      return React.createElement('ul', { className: 'dsm-help-list' }, String(t(key)).split('\n').map(function (line, i) {
+        return React.createElement('li', { key: i }, line)
+      }))
+    }

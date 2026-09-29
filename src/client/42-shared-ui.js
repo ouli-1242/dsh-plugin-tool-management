@@ -24,18 +24,6 @@
           }))
         }
 
-
-
-    /**
-     * 字段下的多行说明 → 条目清单（与导入弹窗的「文件要求」同款样式，见 dsm-help-list）。
-     * 词典值按 `\n` 分段，一段一条：一整句话里塞三件事时，条目比句子好扫。
-     * 只有一件事实的说明不要用它 —— 一条的清单比一句话更难读。
-     */
-    function helpBullets(t, key) {
-      return React.createElement('ul', { className: 'dsm-help-list' }, String(t(key)).split('\n').map(function (line, i) {
-        return React.createElement('li', { key: i }, line)
-      }))
-    }
     function translateError(t, payload) {
       // HTTP 层抛的 Error 还带 code/params（见 parseApiResponse），声明里没有这两个字段。
       if (payload instanceof Error && !(/** @type {any} */ (payload)).code) return payload.message;
@@ -95,19 +83,6 @@ function joinWarn() {
   var out = [];
   for (var i = 0; i < arguments.length; i++) if (arguments[i]) out.push(arguments[i]);
   return out.join(" ");
-}
-/**
- * 重启等待秒数。**单独成组件，自带 1 秒定时器。**
- *
- * 原先这个数字靠 MCP 页每秒 `setTick` 强制整页重渲染来"走"起来 —— 而那个 state 本身
- * 从没被读过，渲染时直接算 `Date.now()`。于是整页（含长列表）每秒重渲染一次，只为让
- * 一行文字里的秒数 +1。隔离之后只有这一行每秒重渲染。
- */
-function RestartNotice(props) {
-  var [now, setNow] = React.useState(Date.now());
-  React.useEffect(function () { return props.ctx.interval(function () { setNow(Date.now()); }, 1000); }, []);
-  return React.createElement('div', { className: 'dsm-feedback' },
-    props.t('mcp.restarting', { name: props.info.name, seconds: Math.max(0, Math.floor((now - props.info.startedAt) / 1000)) }));
 }
 /**
  * 批量开关的撤销条状态：`{ text, items, revert }`。四域共用（MCP / 技能 / 记忆）。
@@ -804,6 +779,15 @@ function enabledMemoryCount(rules) {
         'aria-label': props.title,
         title: props.title,
       })
+    }
+
+    /**
+     * 行内状态标签：挂在名字后面的那颗描边胶囊，四个域共用一个出口（配色口径一致）。
+     * tone：ok=能用、bad=坏了、warn=当前不能用但不是故障、muted=没在跑 / 不是问题（灰）。
+     */
+    function StatusTag(props) {
+      var tone = props.tone === 'ok' ? ' dsm-tag-on' : props.tone === 'bad' ? ' dsm-tag-off' : props.tone === 'warn' ? ' dsm-tag-warn' : ''
+      return h('span', { className: 'dsm-tag' + tone, title: props.title }, props.text)
     }
 
     // ---------- MCP JSON 导入 / 导出（0.15.0 A1）------------------------------------

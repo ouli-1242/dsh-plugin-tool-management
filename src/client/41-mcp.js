@@ -11,9 +11,9 @@
           const [msg, setMsg] = React.useState(null)
           const [busy, setBusy] = React.useState(null)
           const [query, setQuery] = React.useState('')
-          // 过滤用防抖值（输入框仍绑 `query`）：本页每 5 秒轮询一次并整页重渲染，
-          // 不防抖就是"每个按键 + 每次轮询"都全量扫一遍列表。轮询改的是 rows 不是 query，
-          // 所以输入期间不会被轮询打断。
+          // 过滤用防抖值（输入框仍绑 `query`）：本页每 5 秒轮询一次（内容没变不重渲染，
+          // 见 applyRows 的指纹去重），不防抖就是"每个按键"都全量扫一遍列表。轮询改的是
+          // rows 不是 query，所以输入期间不会被轮询打断。
           const debouncedQuery = useDebouncedValue(query)
           const [levelFilter, setLevelFilter] = React.useState('')
           const [collapsed, setCollapsed] = React.useState({})
@@ -24,7 +24,6 @@
           // 详情弹窗的请求序号：见 openDetail / closeDetail（晚到响应不得复活弹窗）。
           const detailSeqRef = React.useRef(0)
           const [confirmRow, setConfirmRow] = React.useState(null)
-          const [restartInfo, setRestartInfo] = React.useState(null)
           const [reveal, setReveal] = React.useState(false)
           const [settings, setSettings] = React.useState(null)
           const [noteDraft, setNoteDraft] = React.useState('')
@@ -41,6 +40,12 @@
           const flipRef = React.useRef(null)
           useFlipReorder(flipRef)
 
+          // 上一次列表响应的内容指纹（applyRows 写入）。轮询通常带回一模一样的数据：
+          // 指纹没变就跳过 setState，否则每 5 秒整页换一批新对象，所有 useMemo、React
+          // 协调、开着的弹窗全部跟着空转一遍 —— 自动化点击与用户输入都可能被这阵重渲染
+          // 打断（2026-09-29 GUI 测试实录）。
+          const lastListFingerprint = React.useRef(null)
+
           const refresh = (withReveal, onRows, silent) => {
             const useReveal = withReveal === undefined ? reveal : withReveal === true
             // 手动刷新（含首次加载）先把按钮切到「刷新中…」并禁用 —— 点完毫无反馈等于没点。
@@ -50,7 +55,16 @@
             // mcpm-list 始终脱敏、无令牌也能渲染页面。
             const applyRows = (res) => {
               const rows = (res && res.rows) || []
-              setState((prev) => ({
+              // 指纹必须覆盖 setState 会写进 state 的每个字段（loading / error 除外：
+              // 它们由下面的 updater 单独判定 —— 手动刷新挂起的 loading、上一轮的错误
+              // 提示，即使数据没变也要用这次响应收尾）。
+              const fingerprint = JSON.stringify([
+                res && res.ok, res && res.error, rows, res && res.paths, res && res.errors,
+                res && res.warnings, (res && res.anyLocked) === true, (res && res.activeScene) || null,
+              ])
+              const changed = fingerprint !== lastListFingerprint.current
+              lastListFingerprint.current = fingerprint
+              setState((prev) => (changed || prev.loading || prev.error ? {
                 loading: false,
                 error: res && res.ok ? null : ((res && res.error) || mt('mcp.msg.loadFailed')),
                 rows,
@@ -60,7 +74,7 @@
                 locked: (res && res.anyLocked) === true,
                 // 场景内开关由档案定义：页面上这些开关置灰，并说明去哪儿改。
                 scene: (res && res.activeScene) || null,
-              }))
+              } : prev))
               if (onRows) onRows(rows)
             }
             apiCall(useReveal ? 'mcpm-reveal' : 'mcpm-list', {}).then((res) => {
@@ -112,7 +126,7 @@
                 refresh()
                 if (onOk) onOk()
               } else setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
-            }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => { setBusy(null); setRestartInfo(null) })
+            }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
 
           /**
@@ -259,10 +273,6 @@
             run('mcpm-note', { id: row.id, note: noteDraft }, 'note', () => {
               setDetail(Object.assign({}, detail, { row: Object.assign({}, row, { notes: noteDraft.trim() }) }))
             })
-          }
-          const restartRow = (row) => {
-            setRestartInfo({ id: row.id, name: row.serverName, startedAt: Date.now() })
-            run('mcpm-restart', { id: row.id, level: row.level }, row.id + ':restart')
           }
           const confirmRemove = () => {
             const row = confirmRow
@@ -417,14 +427,15 @@
             [groups, visibleRows],
           )
 
+          // 状态口径：tone 只决定胶囊配色（ok=能用、bad=坏了、warn=当前没工具、muted=没在跑）。
           const liveStatus = (row) => {
-            if (!row.live) return { text: mt('mcp.live.notLoaded'), cls: 'dsm-shadowed' }
-            if (row.live.phase === 'failed') return { text: mt('mcp.live.failed'), cls: 'dsm-failed' }
-            if (!row.live.enabled) return { text: mt('mcp.live.stopped'), cls: 'dsm-shadowed' }
-            if (row.live.phase && row.live.phase !== 'active') return { text: mt('mcp.live.loading'), cls: 'dsm-shadowed' }
+            if (!row.live) return { text: mt('mcp.live.notLoaded'), tone: 'muted' }
+            if (row.live.phase === 'failed') return { text: mt('mcp.live.failed'), tone: 'bad' }
+            if (!row.live.enabled) return { text: mt('mcp.live.stopped'), tone: 'muted' }
+            if (row.live.phase && row.live.phase !== 'active') return { text: mt('mcp.live.loading'), tone: 'muted' }
             // 判"有没有可用工具"只看**真实注册**的那个数（缓存不算）。
-            if (liveEnabledOf(row) === 0) return { text: mt('mcp.live.noTools'), cls: 'dsm-disabled' }
-            return { text: mt('mcp.live.running'), cls: 'dsm-enabled' }
+            if (liveEnabledOf(row) === 0) return { text: mt('mcp.live.noTools'), tone: 'warn' }
+            return { text: mt('mcp.live.running'), tone: 'ok' }
           }
           const liveHint = (row) => {
             if (!row.live) return null
@@ -442,9 +453,6 @@
             }
             return null
           }
-          // 状态标签配色：绿=能用、红=坏了、橙=当前没有可用工具（未连上或工具全被停用）、灰=没在跑 / 还没定。
-          const pillKind = (cls) => cls === 'dsm-enabled' ? 'ok' : cls === 'dsm-failed' ? 'bad' : cls === 'dsm-disabled' ? 'warn' : 'muted'
-
           // 工具数标签：有被停用的工具时给「可用/总数」（场景档案收窄与手动逐工具开关
           // 写的是同一张停用表），否则就是总数 —— 与详情页每个工具的开关状态一致。
           //
@@ -462,7 +470,7 @@
           const renderRow = (row) => {
             const status = liveStatus(row)
             const hint = liveHint(row)
-            // 场景锁定期间整页只读（开关/编辑/删除一并消失，重启也归入冻结）。
+            // 场景锁定期间整页只读（开关 / 编辑 / 删除一并消失）。
             const editable = row.level !== 'loader' && state.locked !== true
             // 体检状态：未体检=灰（不是"没问题"）、进行中=闪、有 warn=黄、info 级说明不点黄。
             const insp = inspections[inspectKeyOf(row)]
@@ -473,22 +481,26 @@
               : !insp ? mt('mcp.inspect.idle')
               : warnCount > 0 ? mt('mcp.inspect.warnCount', { count: warnCount })
               : mt('mcp.inspect.pass')
-            return React.createElement('div', { key: row.id, className: 'dsm-row', 'data-flip-key': String(row.level || '') + '/' + row.id, 'data-flip-on': row.disabled ? '0' : '1' },
-              React.createElement('div', { className: 'dsm-main' },
-                React.createElement('div', { className: 'dsm-name' }, row.serverName),
-                row.notes ? React.createElement('div', { className: 'dsm-note dsm-note-user', title: row.notes }, mt('mcp.note.prefix') + row.notes) : null),
-              React.createElement('div', { className: 'dsm-tags' },
-                React.createElement(InspectDot, { tone: inspTone, title: inspTitle }),
-                (levelFilter === 'loader' && row.level && row.level !== 'loader') ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.level.' + row.level)) : null,
-                toolCountTag(row),
-                row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null),
-              React.createElement('div', { className: 'dsm-status ' + status.cls }, status.text),
+            return React.createElement('div', { key: row.id, className: 'dsm-row dsm-row-compact', 'data-flip-key': String(row.level || '') + '/' + row.id, 'data-flip-on': row.disabled ? '0' : '1' },
+              React.createElement('div', { className: 'dsm-main dsm-dot-indent' },
+                // 体检点与状态都收进名字这一行（用户裁定 2026-09-29）：点要在名字前面才第一眼
+                // 看得到，状态改成胶囊跟着名字走，与子智能体那一页同形。
+                React.createElement('div', { className: 'dsm-name-row' },
+                  React.createElement(InspectDot, { tone: inspTone, title: inspTitle }),
+                  React.createElement('div', { className: 'dsm-name' }, row.serverName),
+                  React.createElement(StatusTag, { tone: status.tone, text: status.text })),
+                // 备注与标签同一行（用户裁定 2026-09-29）：标签以前自己占一行，带备注的行就比
+                // 不带的高出一截，同一页里行高不齐 —— 两行是这行的固定预算。
+                React.createElement('div', { className: 'dsm-meta-row' },
+                  (levelFilter === 'loader' && row.level && row.level !== 'loader') ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.level.' + row.level)) : null,
+                  toolCountTag(row),
+                  row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null,
+                  row.notes ? React.createElement('div', { className: 'dsm-note dsm-note-user', title: row.notes }, mt('mcp.note.prefix') + row.notes) : null)),
               React.createElement('div', { className: 'dsm-row-actions' },
                 editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null || state.locked === true, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !!(insp && insp.busy), onClick: () => runInspect(row) }, mt('mcp.inspect.row.btn')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: () => openDetail(row) }, mt('mcp.btn.detail')),
                 editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => openEdit(row) }, mt('mcp.btn.edit')) : null,
-                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => restartRow(row) }, mt('mcp.btn.restart')) : null,
                 editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null, onClick: () => setConfirmRow(row) }, mt('mcp.btn.remove')) : null),
               (insp && insp.checks && insp.checks.length > 0)
                 ? React.createElement('div', { className: 'dsm-inspect' }, insp.checks.map((c) => React.createElement('div', { key: c.id, className: 'dsm-inspect-line' + (c.level === 'warn' ? ' dsm-inspect-warn' : '') }, mt('mcp.inspect.check.' + c.id, c.params || {}))))
@@ -507,10 +519,8 @@
                   group.path ? React.createElement('span', { className: 'dsm-path', title: group.path }, group.path) : null)),
               open ? React.createElement('div', { className: 'dsm-source-body' },
                 React.createElement(React.Fragment, null,
-                  React.createElement('div', { className: 'dsm-table-head' },
-                    React.createElement('span', null, mt('mcp.table.name')),
-                    React.createElement('span', null, mt('mcp.table.transport')),
-                    React.createElement('span', null, mt('mcp.table.status')),
+                  React.createElement('div', { className: 'dsm-table-head dsm-row-compact' },
+                    React.createElement('span', { className: 'dsm-dot-indent' }, mt('mcp.table.name')),
                     React.createElement('span', null, '')),
                   groupRows.map(renderRow))) : null)
           }
@@ -624,7 +634,7 @@
             // 不该占一整块，也不该跟配置事实（是否登记在 Loader）用冒号拼成一句话。
             title: React.createElement('span', { className: 'dsm-modal-title-row' },
               mt('mcp.detail.title') + detail.row.serverName,
-              React.createElement('span', { className: 'dsm-pill dsm-pill-' + pillKind(detailStatus.cls) }, detailStatus.text)),
+              React.createElement('span', { className: 'dsm-pill dsm-pill-' + detailStatus.tone }, detailStatus.text)),
             closeLabel: mt('btn.close'),
             onClose: closeDetail,
           },
@@ -645,7 +655,7 @@
             // 状态本身已在标题标签里，再复述一遍就是噪音。
             detailHint ? React.createElement('div', { className: 'dsm-detail-section' },
               React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.status')),
-              React.createElement('div', { className: 'dsm-feedback' + (detailStatus.cls === 'dsm-failed' ? ' dsm-error' : ' dsm-warning') }, detailHint)) : null,
+              React.createElement('div', { className: 'dsm-feedback' + (detailStatus.tone === 'bad' ? ' dsm-error' : ' dsm-warning') }, detailHint)) : null,
             React.createElement('div', { className: 'dsm-detail-section' },
               // 字数计数摆在小标题同一行右侧：备注的上限就是注入段的截断长度（`MCP_NOTE_MAX`）。
               // 超限标红沿用记忆页描述那套（`dsm-char-over`）—— 服务端不校验备注长度，
@@ -695,7 +705,8 @@
                 // 导出是只读动作，锁定期间照常用（拿配置不该要求先解锁环境）。
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.locked === true, onClick: () => setJsonImportOpen(true) }, mt('mcp.importJson.btn')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.loading, onClick: () => setJsonExportOpen(true) }, mt('mcp.exportJson.btn')),
-                // 体检是只读的静态检查（零副作用），所以锁定期间照点 —— 冻的是改动，不是"看一眼配置对不对"。
+                // 体检不改本插件的任何状态（补丁只读；streamable-http 行会向配置地址发一次
+                // 连通性探测），所以锁定期间照点 —— 冻的是改动，不是"看一眼配置对不对"。
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.loading || !summary.total, onClick: () => runInspect(null) }, mt('mcp.inspect.btn')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy !== null || state.loading || state.locked === true, title: mt('mcp.btn.compact.title'), onClick: () => setCompactConfirm(true) }, mt('mcp.btn.compact')),
                 // 批量启停与页头其余动作同栏（用户 2026-09-17 裁定）。场景内**照常可用**：
@@ -715,7 +726,6 @@
               React.createElement('input', { className: 'dsm-control dsm-search', value: query, 'aria-label': mt('mcp.search'), placeholder: mt('mcp.search.placeholder'), onChange: (ev) => setQuery(ev.target.value) }),
               React.createElement('div', { className: 'dsm-source-filter' },
                 React.createElement(SourceSelect, { value: levelFilter, options: mcpLevelOptions(), onChange: setLevelFilter }))),
-            restartInfo ? React.createElement(RestartNotice, { key: 'restart', ctx: ctx, info: restartInfo, t: mt }) : null,
             React.createElement(Notice, { kind: msg && msg.kind, text: msg && msg.text }),
             React.createElement(Notice, { kind: 'err', text: state.error }),
             React.createElement(Notice, { kind: 'warn', text: (state.errors && state.errors.length > 0) ? mt('mcp.err.warnings') + state.errors.join('；') : null }),

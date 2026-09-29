@@ -469,10 +469,13 @@
             // 单条停用（索引层开关）优先于场景状态：原来只有 已启用/被覆盖/场景未启用 三个分支，
             // 单条停用的记忆会被误显示为「已启用」。
             var statusKey = shadowed ? 'status.shadowed' : !enabled ? 'memory.status.off' : sceneActive === false ? 'memory.status.sceneOff' : 'status.enabled'
-            var statusCls = shadowed ? 'dsm-shadowed' : (!enabled || sceneActive === false) ? 'dsm-disabled' : 'dsm-enabled'
+            // 灰=不进上下文但不是故障（被遮蔽 / 本条停用 / 场景没启用），绿=这条真的会注入。
+            var statusTone = shadowed || !enabled || sceneActive === false ? 'muted' : 'ok'
             return React.createElement('div', { key: r.id, className: 'dsm-row', 'data-flip-key': r.id, 'data-flip-on': enabled ? '1' : '0' },
               React.createElement('div', { className: 'dsm-main' },
-                React.createElement('div', { className: 'dsm-name' }, r.name),
+                React.createElement('div', { className: 'dsm-name-row' },
+                  React.createElement('div', { className: 'dsm-name' }, r.name),
+                  React.createElement(StatusTag, { tone: statusTone, text: t(statusKey) })),
                 React.createElement('div', { className: 'dsm-note' }, r.description || ''),
                 shadowed ? React.createElement('div', { className: 'dsm-rule-shadow-hint' }, t('memory.shadowed.hint')) : null),
               React.createElement('div', { className: 'dsm-tags' },
@@ -484,7 +487,6 @@
                 r.form === 'bundle' ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.form.bundle')) : null,
                 attachTag(r, shadowed),
                 r.descriptionDerived ? React.createElement('span', { className: 'dsm-tag' }, t('memory.derived')) : null),
-              React.createElement('div', { className: 'dsm-status ' + statusCls }, t(statusKey)),
               React.createElement('div', { className: 'dsm-row-actions' },
                 React.createElement(Switch, { on: enabled, disabled: busy || shadowed || anyLocked, label: t('memory.enable') + ' ' + r.name, onClick: function () { toggleRule(r) } }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || shadowed || anyLocked, onClick: function () { openEditor(r) } }, t('memory.edit')),
@@ -527,7 +529,6 @@
                     React.createElement('div', { className: 'dsm-table-head' },
                       React.createElement('span', null, t('memory.table.name')),
                       React.createElement('span', null, t('memory.table.tags')),
-                      React.createElement('span', null, t('memory.table.status')),
                       React.createElement('span', null, '')),
                     (rowsByBucket[name] || []).map(function (r) { return renderRuleRow(r, meta.active !== false) }))
                   : React.createElement('div', { className: 'dsm-empty' }, t('memory.scene.empty'))) : null)
