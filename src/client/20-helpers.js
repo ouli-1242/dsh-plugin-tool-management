@@ -1921,15 +1921,24 @@
         })[0]
         const asarPackages = (asarNote && asarNote.packages) || []
         const asarNames = asarPackages.map(function (item) { return String(item && item.name || '') })
+        // 真实形态取不到的包：那一格同样「无法比较」，但原因与归档无关，得分开标。
+        const realpathNoteForPill = identityNotes.filter(function (note) {
+          return note && note.kind === 'realpath'
+        })[0]
+        const realpathNames = ((realpathNoteForPill && realpathNoteForPill.failures) || []).map(function (item) {
+          return String(item && item.name || '')
+        })
         push(section(t('compat.modules'), t('compat.modules.hint'),
           React.createElement('div', { className: 'dsm-compat-mod-list' },
             Object.keys(sameAsHost).map(function (name) {
               const same = sameAsHost[name]
+              const inRealpath = realpathNames.indexOf(name) !== -1
               const inAsar = asarNames.indexOf(name) !== -1
               const cls = same === true ? 'dsm-compat-pill-ok' : same === false ? 'dsm-compat-pill-bad' : ''
               const text = same === true ? t('compat.module.same')
                 : same === false ? t('compat.module.separate')
-                  : inAsar ? t('compat.module.sameVersion') : t('compat.module.unknown')
+                  : inRealpath ? t('compat.module.realpath')
+                    : inAsar ? t('compat.module.sameVersion') : t('compat.module.unknown')
               return React.createElement('div', { className: 'dsm-compat-mod-row', key: name },
                 React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, name),
                 React.createElement('span', { className: 'dsm-compat-pill ' + cls }, text))
@@ -1958,10 +1967,34 @@
               .replace('{count}', String(unverified.length))
               .replace('{names}', unverified.join('、'))))
         }
+        // 路径取不到真实形态：这一格是「比不了」，不是「两份拷贝」。必须把原因摆出来 ——
+        // 否则用户只会看到一排「无法比较」，而不知道是路径/权限的问题（issue #1）。
+        const realpathNote = identityNotes.filter(function (note) {
+          return note && note.kind === 'realpath'
+        })[0]
+        if (realpathNote) {
+          const failures = realpathNote.failures || []
+          const names = failures.map(function (item) { return String(item && item.name || '') })
+          const sideText = function (side) {
+            return failures.filter(function (item) { return item && item.side === side })
+              .map(function (item) { return String(item && item.path || '') + '（' + String(item && item.reason || '') + '）' })
+              .join('；')
+          }
+          push(React.createElement('p', { className: 'dsm-help' },
+            t('compat.modules.realpath')
+              .replace('{count}', String(failures.length))
+              .replace('{names}', names.join('、'))))
+          push(React.createElement('p', { className: 'dsm-help' },
+            t('compat.modules.realpathSides')
+              .replace('{host}', sideText('host') || t('compat.modules.realpathNone'))
+              .replace('{plugin}', sideText('plugin') || t('compat.modules.realpathNone'))))
+        }
 
         push(React.createElement('p', { className: 'dsm-help' },
-          t('compat.hint.doctor'),
-          React.createElement('code', { className: 'dsm-compat-code' }, ' node scripts/doctor.mjs')))
+          t(data && data.sourceInstall === true ? 'compat.hint.doctor' : 'compat.hint.doctorRelease'),
+          data && data.sourceInstall === true
+            ? React.createElement('code', { className: 'dsm-compat-code' }, ' node scripts/doctor.mjs')
+            : null))
       }
 
       // 预设注入边界：五类内容（记忆 / 全局提示词 / 技能 / MCP / 子智能体）在**每个 Agent

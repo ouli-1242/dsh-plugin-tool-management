@@ -11,6 +11,7 @@ import {
   EXPECTED_MIN_HOST_VERSION,
   EXPECTED_PEER_RANGE,
   VERIFIED_HOST_VERSION,
+  isSourceInstall,
   routeFor,
   summarize,
   type CapabilityFinding,
@@ -129,9 +130,13 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           host: { version: assessment.identity.version, modules: assessment.identity.modules },
           sameAsHost: assessment.identity.sameAsHost,
           unverified: assessment.identity.unverified,
-          // 身份校验的说明（目前只有「宿主在 app.asar 里」一种）：不是阻塞项，界面据此
-          // 解释那一排「无法比较」，而不是留给用户一句「两份拷贝，去 --fix」。
+          // 身份校验的说明：不是阻塞项，界面据此解释那一排「无法比较」，而不是留给
+          // 用户一句「两份拷贝，去 --fix」。两种来源 —— 宿主在 app.asar 里（桌面版）、
+          // 路径取不到真实形态（realpath 失败，issue #1）。
           notes: assessment.identity.notes,
+          // 修复指引按实际形态给：`scripts/` 不在 `files` 里，npm 安装形态下没有
+          // `scripts/doctor.mjs` 与 `scripts/host-deps.mjs`，指了也跑不了。
+          sourceInstall: isSourceInstall(),
           findings,
           degraded,
           blockers: assessment.identity.blockers,

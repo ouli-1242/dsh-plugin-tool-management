@@ -46,6 +46,20 @@ export const IDENTITY_PACKAGES = [
 ] as const
 
 /**
+ * 本插件是不是从**源码检出**跑起来的（仓库里那份，`scripts/host-deps.mjs` 就躺在旁边）。
+ *
+ * 用来决定「两份拷贝」那条阻塞项给什么修复指引：`scripts/` 不在 `package.json` 的
+ * `files` 里（发布形态本就不该带开发者脚本），所以 npm 装出来的用户照那条指引去跑
+ * 只会拿到 `MODULE_NOT_FOUND` —— 这是 issue #1 的次要问题之一。指引必须按实际形态给。
+ */
+const SOURCE_INSTALL = existsSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'host-deps.mjs'))
+
+/** 供界面决定修复指引：`true` = 源码检出（`scripts/` 就在旁边），`false` = npm 安装形态。 */
+export function isSourceInstall(): boolean {
+  return SOURCE_INSTALL
+}
+
+/**
  * peer range 与已验证版本。官方全程走 prerelease 渠道（x.y.z-rc.N），semver 的
  * 预发布规则（prerelease 版本只匹配同 [major,minor,patch] 元组的比较器）意味着**每一代
  * rc 都要显式列进范围**：`>=0.1.5-rc.2` 匹配不了 `0.1.7-rc.2`（实测），所以范围是逐代
@@ -149,7 +163,10 @@ export interface HostIdentity {
  * 成因，界面只有拿到这份清单，才不会把归档宿主那几个包又塞进另一句
  * 「宿主的解析锚点里找不到它」里 —— 那句话对它们不成立（锚点找得到，归档里）。
  */
-export interface HostIdentityNote {
+export type HostIdentityNote = HostIdentityAsarNote | HostIdentityRealpathNote
+
+/** 归档宿主：两侧版本一致、只是打包方式不同（桌面版）。 */
+export interface HostIdentityAsarNote {
   readonly kind: 'asar-host'
   /** 归档文件名（如 `app.asar`），从宿主锚点里取，界面不硬编码。 */
   readonly asarName: string
@@ -159,6 +176,34 @@ export interface HostIdentityNote {
   readonly pluginVersion: string | null
   /** 已判定的包：`hostPath`/`pluginPath` 两侧都能解析到。 */
   readonly packages: readonly HostIdentityPackage[]
+}
+
+/**
+ * 路径**没能取到真实形态**（realpath 失败）时的说明。
+ *
+ * 这一条来自 issue #1（2026-09-23）：`realPathOf()` 以前 `catch { return value }`
+ * 把「这条路径不可解析」静默降级成「拿输入去比较」，于是路径问题看起来就是
+ * 「插件与宿主加载的是两份不同拷贝」—— 结论是编的，用户照着它去修只会白费功夫。
+ * 现在这类包给 `sameAsHost = null`（比不了），并在这里把原因原样报出来。
+ */
+export interface HostIdentityRealpathNote {
+  readonly kind: 'realpath'
+  /** 真实形态取不到的包，连同它们的解析结果与失败原因。 */
+  readonly failures: readonly HostIdentityRealpathFailure[]
+  /** 宿主侧的失败原因（与该包无关，整轮共用一条，故单独提出来）。 */
+  readonly hostReason?: string
+  /** 插件侧的失败原因。 */
+  readonly pluginReason?: string
+}
+
+/** 一条 realpath 失败记录：包名 + 该侧解析到的入口 + 失败原因。 */
+export interface HostIdentityRealpathFailure {
+  readonly name: string
+  /** `plugin`（本插件解析到的）或 `host`（宿主锚点解析到的）。 */
+  readonly side: 'host' | 'plugin'
+  readonly path: string
+  /** `error.code` 或异常消息，原样带给用户 —— 权限与长度限制的原因长在这里。 */
+  readonly reason: string
 }
 
 /** 归档宿主清单里的一项：包名 + 两侧实际解析到的入口。 */
@@ -235,13 +280,19 @@ function isAsarPath(value: string | null): boolean {
  * realpath to one file ARE the same module — which is exactly the property
  * this plugin depends on, and the reason `@deepseek-ai/*` is junctioned into
  * the host installation instead of being copied.
+ *
+ * 取不到真实形态时**不再拿输入去比**（issue #1 要求）：那会把「路径不可解析」
+ * 伪装成「两份不同拷贝」，给出一个编出来的结论。改由调用方把原因报成说明。
  */
-function realPathOf(value: string | null): string | null {
-  if (value === null) return null
+function realPathWithReason(value: string | null): { path: string } | { reason: string } {
+  if (value === null) return { reason: '路径为空' }
   try {
-    return realpathSync.native !== undefined ? realpathSync.native(value) : realpathSync(value)
-  } catch {
-    return value
+    return { path: realpathSync.native !== undefined ? realpathSync.native(value) : realpathSync(value) }
+  } catch (error) {
+    const detail = error as { code?: unknown; message?: unknown }
+    const code = typeof detail.code === 'string' ? detail.code : ''
+    const message = typeof detail.message === 'string' ? detail.message : String(error)
+    return { reason: code === '' ? message : `${code} ${message}` }
   }
 }
 
@@ -983,6 +1034,12 @@ export function assessHost(ctx: {
   const hostIsAsar = isAsarPath(hostRoot)
   // 桌面版（宿主在 app.asar 里）两组「版本」的容器：插件自己解析到的、宿主锚点解析到的。
   const asarHostPackages: HostIdentityPackage[] = []
+  // realpath 失败（路径取不到真实形态）：两侧各算一次就够，与是哪个包无关。
+  const realpathFailures: HostIdentityRealpathFailure[] = []
+  let hostRealpath: { path: string } | { reason: string } | null = null
+  let hostRealpathResolved: string | null = null
+  let hostRealpathNote: string | null = null
+  let pluginRealpathNote: string | null = null
   let asarHostVersion: string | null = null
   let asarPluginVersion: string | null = null
   for (const name of IDENTITY_PACKAGES) {
@@ -1002,12 +1059,35 @@ export function assessHost(ctx: {
     // compare PHYSICAL files: a junction is the same module, not a copy.
     let hostResolved: string | null = null
     try {
-      const hostRequire = createRequire(join(dirname(hostRoot), 'package.json'))
-      hostResolved = hostRequire.resolve(name)
+      if (hostRealpath === null) {
+        const hostRequire = createRequire(join(dirname(hostRoot), 'package.json'))
+        hostResolved = hostRequire.resolve(name)
+        hostRealpathResolved = hostResolved
+        hostRealpath = realPathWithReason(hostResolved)
+      } else {
+        // 宿主锚点两侧的 realpath 结论整轮复用：同一次进程里不会变，
+        // 逐包重算既慢又可能给出不一致的理由。
+        hostResolved = hostRealpathResolved
+      }
     } catch {
       hostResolved = null
     }
-    const same = hostResolved === null ? null : realPathOf(hostResolved) === realPathOf(resolved)
+    // 真实形态取不到 → 这一格是「比不了」，不是「两份拷贝」。理由如实上报，
+    // 绝不把路径问题说成模块问题（issue #1 的次要问题之二）。
+    if (hostRealpath !== null && 'reason' in hostRealpath) {
+      sameAsHost[name] = null
+      hostRealpathNote = hostRealpathNote ?? hostRealpath.reason
+      realpathFailures.push({ name, side: 'host', path: hostRealpathResolved ?? '(未解析到)', reason: hostRealpath.reason })
+      continue
+    }
+    const pluginRealpath = realPathWithReason(resolved)
+    if ('reason' in pluginRealpath) {
+      sameAsHost[name] = null
+      pluginRealpathNote = pluginRealpathNote ?? pluginRealpath.reason
+      realpathFailures.push({ name, side: 'plugin', path: resolved, reason: pluginRealpath.reason })
+      continue
+    }
+    const same = hostResolved === null ? null : (hostRealpath as { path: string }).path === pluginRealpath.path
     // 归档宿主：路径必然不同（归档 vs 磁盘），能比的是版本。相同 → 这一格是
     // 「比不了（同版本、打包方式不同）」，记进说明并从 unverified 里摘出来（那句
     // 「宿主的解析锚点里找不到它」对它不成立 —— 锚点找得到，在归档里）；不同 →
@@ -1024,10 +1104,27 @@ export function assessHost(ctx: {
       }
     }
     sameAsHost[name] = same
-    if (same === false) blockers.push(`${name}：插件与宿主加载的是两份不同拷贝（运行 node scripts/host-deps.mjs --fix）`)
+    if (same === false) {
+      // 指引按**实际形态**给：`scripts/host-deps.mjs` 只存在于源码检出里
+      // （`files` 不含 `scripts/`，npm 安装形态下没有这个文件），
+      // 发布形态照那条指引去跑必然 `MODULE_NOT_FOUND` —— issue #1 的次要问题之一。
+      blockers.push(
+        SOURCE_INSTALL
+          ? `${name}：插件与宿主加载的是两份不同拷贝（在插件源码目录运行 node scripts/host-deps.mjs --fix）`
+          : `${name}：插件与宿主加载的是两份不同拷贝（升级或重装本插件后仍然如此再报）`,
+      )
+    }
     // 解析得到、却比不了：宿主锚点里找不到它。不能静默 —— 否则整块身份校验等于没做，
     // 而页头仍报「全部可用」（pnpm 的 .pnpm 隔离目录就是这种情形，见 hostPackageRoot）。
     if (same === null) unverified.push(name)
+  }
+  if (realpathFailures.length > 0) {
+    notes.push({
+      kind: 'realpath',
+      failures: realpathFailures,
+      ...(hostRealpathNote === null ? {} : { hostReason: hostRealpathNote }),
+      ...(pluginRealpathNote === null ? {} : { pluginReason: pluginRealpathNote }),
+    })
   }
   if (asarHostPackages.length > 0 && hostRoot !== null) {
     notes.push({
@@ -1094,8 +1191,11 @@ function hostPackageRoot(): string | null {
   const asarHost = asarHostPackageRoot()
   if (asarHost !== null) candidates.push(asarHost)
   for (const anchor of IDENTITY_PACKAGES) {
-    const resolved = realPathOf(safeResolve(anchor))
-    if (resolved === null) continue
+    // 锚点候选只认**真实形态**：取不到就跳过（这里没有可比的对象，如实跳过即可，
+    // 与身份比对不同 —— 那边取不到必须报出来，见 assessHost 的 realpath 说明）。
+    const real = realPathWithReason(safeResolve(anchor))
+    if ('reason' in real) continue
+    const resolved = real.path
     let dir = dirname(resolved)
     for (let i = 0; i < 4; i += 1) {
       if (dir.endsWith(join('node_modules', '@deepseek-ai'))) { candidates.push(dir); break }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-tool-management",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "description": "DSH plugin: one settings panel for MCP servers, skills, scenes, memories, subagent personas and AGENTS.md presets — a scene switches the whole environment, and the model can drive it from chat too.",
   "repository": {
     "type": "git",
@@ -102,6 +102,7 @@
     "@deepseek-ai/dsh-workspace": "^0.2.0-rc.2",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.0.0",
+    "react": "^18.2.0",
     "typescript": "^6.0.0"
   },
   "license": "MIT",

@@ -10,6 +10,24 @@
 
 ---
 
+## [0.16.1] - 2026-09-29
+
+issue #1 的收尾：把那条**跑不了的**修复指引按安装形态给，并让「路径本身有问题」不再冒充「两份拷贝」。
+
+### 修复
+
+- **安装形态下的修复指引不再是跑不了的命令**（issue #1 次要问题 1）：阻塞项原文让人去跑 `node scripts/host-deps.mjs --fix`，而 `package.json` 的 `files` 不含 `scripts/`（开发者脚本本就不该随发布走），npm 装出来的用户照做只会拿到 `MODULE_NOT_FOUND` —— 指引指了一条不存在的路。现在按**实际形态**给：源码检出（插件旁边就有 `scripts/host-deps.mjs`）保留原文，并点明要「在插件源码目录」跑；npm 安装形态改说「升级或重装本插件后仍然如此再报」。兼容页底部那句「可运行 node scripts/doctor.mjs 查看」同理分两键，安装形态下不再指命令。
+- **路径取不到真实形态时不再编一个「两份拷贝」的结论**（issue #1 次要问题 2）：`realPathOf()` 以前 `catch { return value }`，把「这条路径不可解析」静默降级成「拿输入去比较」—— 于是路径/权限问题看起来就是「插件与宿主加载的是两份不同拷贝」，用户照着它去修只会白费功夫。现在取不到真实形态就**如实记原因**（`error.code` 与消息原文），这类包给 `sameAsHost = null`（比不了）并单独出一条说明，带包名、哪一侧（`host` / `plugin`）、解析到的路径与失败原因；界面显示「无法比较（路径取不到真实形态）」并列出两侧。宿主侧的 realpath 结论整轮只算一次（同进程内不变），不再逐包重算。
+
+### 变更
+
+- **源码检出与 npm 安装形态的行为差异，只在指引上一处**：`/dsh-plugin-tool-management` 里有没有 `scripts/host-deps.mjs` 决定给哪句指引（本插件不从 `scripts/` 加载任何东西），其余判定完全一致。
+
+### 说明
+
+- **收尾范围**：issue #1 的主因（`import.meta.resolve` 的 URL 未解码，含空格路径必现；macOS 上开头斜杠被一起删掉）已在 0.16.0 随 `fileURLToPath` 修掉，本次只补次要两条。
+- **实测**：源码检出与安装形态两种位置的 `isSourceInstall()` 分别得 `true` / `false`；注入一个「能解析、realpath 必失败」的目标跑真实代码，产出 `kind:"realpath"`、`side:"plugin"`、原因的 `ENOENT` 原文，且**不再出现在阻塞项里**；悬空 junction 的语义实测为 `existsSync=false`、`import.meta.resolve` → `ERR_MODULE_NOT_FOUND`（因此走「宿主锚点里找不到它」的 `unverified`，同样不会误报成两份拷贝）。
+
 ## [0.16.0] - 2026-09-29
 
 ### 修复
