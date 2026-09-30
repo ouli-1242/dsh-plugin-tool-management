@@ -72,6 +72,12 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
    改成纵向两行：**名字独占一行、仍单行省略**（全名靠 title），描述另起一行、单行省略。
    只作用于本页：.dsm-source-head-main 还被技能 / 记忆 / MCP / 会话四页的分组头共用，
    那些行没有描述，不动。同权重靠书写顺序取胜，所以必须排在上面那条 .dsm-source 规则之后。 */
+/* 提示词页的两张分组卡片：条目本身仍是 .dsm-source 卡，直接套进组卡的卡片体里就成了
+   "卡中卡"（一层边框套一层边框）。这里把它们压平成带分隔线的行 —— 与技能 / MCP 那两页
+   的卡片体同一个观感（用户 2026-10-01 裁定：做成技能那样可以折叠的样式）。 */
+.dsm-source-body .dsm-sources{gap:0}
+.dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsm-source-body .dsm-source:last-child{border-bottom:0}
 .dsm-persona-main{box-sizing:border-box;min-height:48px;padding:6px 0;flex-direction:column;align-items:flex-start;justify-content:center;gap:0}
 .dsm-persona-name-row{display:flex;width:100%;min-width:0;align-items:center;gap:7px}
 .dsm-persona-name-row .dsm-tag{flex:none}
@@ -164,6 +170,12 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-seg-body{display:flex;height:216px;padding:6px;overflow:auto;flex-direction:column}
 /* 滚动容器里的子项不许被压缩：否则内容一多，筛选框会被压到比 input 还矮、与下面的条目叠在一起。 */
 .dsm-seg-body>*{flex:none}
+/* 条目本来就少的那一段（场景表单里的快捷提示词）：跟着内容长，超过 6 行才内滚。
+   固定 216px 的段体放在一张按内容高的表单弹窗里，就是"一个勾 + 一片空白"（用户实测）。 */
+.dsm-seg-fit{height:auto;max-height:172px}
+/* 表单分段标题：把一长串字段切成「基本信息 / 场景绑定」这类模块，右侧一道发丝线跟着撑满。 */
+.dsm-form-section{display:flex;align-items:center;gap:10px;margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:620;letter-spacing:.02em}
+.dsm-form-section::after{content:"";height:1px;flex:1;background:var(--dsw-alias-border-l1)}
 .dsm-seg-foot{display:flex;align-items:center;gap:8px;padding:7px 12px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .dsm-pick{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px}.dsm-mcp-edit-tools-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsm-mcp-edit-tools-actions{display:flex;align-items:center;gap:8px}.dsm-seg-empty-actions{display:flex;justify-content:center;padding:4px 0 12px}.dsm-seg-empty-error{padding:0 10px 10px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;text-align:center}
 .dsm-pick:hover{background:var(--dsw-alias-interactive-bg-hover)}
@@ -400,6 +412,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 /* 动作可用性表：表头列宽与 dsm-compat-mod-row 一致；窄容器下隐藏表头。 */
 .dsm-compat-table-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:10px;padding:6px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px}
 .dsm-compat-cards .dsm-compat-table-head{display:none}
+/* 新增提示词弹窗定高（用户 2026-09-30）：切「全局 / 快捷」时「从现有预设复制」那一行会出现/
+   消失，让整颗框跟着长缩。高的一屏为准，多出来的高度给正文文本框吃掉；窗口太矮时弹窗自己滚。 */
+.dsm-modal-fixed{height:min(760px,calc(100vh - 48px));max-height:none}
+.dsm-modal-fixed .dsm-field-grow{min-height:0;flex:1}
+.dsm-modal-fixed .dsm-field-grow textarea{flex:1}
 /* 导出弹窗（D14）：宽高都固定；只有「条目列表」这一层滚动，动作条常驻底部。 */
 .dsm-export-modal .dsm-modal-body{display:flex;min-height:0;flex-direction:column;gap:14px;overflow:hidden}
 .dsm-export-modal .dsm-export-form{display:flex;min-height:0;flex:1;flex-direction:column;gap:10px}
@@ -449,6 +466,13 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    （解锁后再锁会重置，见 syncTokenBanner）。 */
 .dsm-token-banner-close{pointer-events:auto;flex:none;width:20px;height:20px;padding:0;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:14px;line-height:20px;cursor:pointer;opacity:.7}
 .dsm-token-banner-close:hover{opacity:1}
+
+/* 全局轻提示（斜杠命令的执行反馈）。位置在右下角：对话页的输入框居底居中，顶部那条又是
+   令牌横幅，两处都会被挡。z-index 比横幅低一档 —— 令牌没过时那句解释比"改成功了"更要紧。 */
+.dsm-toast{position:fixed;right:18px;bottom:18px;z-index:998;max-width:min(420px,80vw);padding:9px 13px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-text-primary);font-size:12.5px;line-height:1.55;box-shadow:0 6px 22px rgba(0,0,0,.16);pointer-events:none;backdrop-filter:blur(6px)}
+.dsm-toast-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+.dsm-toast-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
+.dsm-toast-err{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 
 /* MCP JSON 导入预览（0.15.0 A1）：勾选 | 主体 | 状态三列。非法行只把「问题」那一行标红，
    名字净化 / 字段忽略这类是配置事实，走中性灰 —— 黄色在这里留给不了任何东西（琥珀语义）。 */
@@ -500,9 +524,9 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-snap{display:flex;flex-direction:column;gap:8px}
 .dsm-snap-row{display:flex;gap:8px}
 .dsm-snap-row .dsm-control{flex:1;min-width:0}
-.dsm-snap-picks{display:flex;flex-wrap:wrap;gap:6px 14px}
-.dsm-snap-pick{display:flex;align-items:center;gap:5px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
-.dsm-snap-pick input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
+.dsm-snap-picks,.dsm-kind-picks{display:flex;flex-wrap:wrap;gap:6px 14px}
+.dsm-snap-pick,.dsm-kind-pick{display:flex;align-items:center;gap:5px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
+.dsm-snap-pick input,.dsm-kind-pick input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-snap-preview{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1)}
 /* 兼容页三块弹窗：**开合不改尺寸**（列表长短、预览有没有读回来都不该让框跳）。
    「最近改动」（唯一 fixed 弹窗）的滚动层**只给列表**：正文是纯 flex 容器不滚动，

@@ -28,6 +28,8 @@ export interface SnapshotOpsDeps {
   pluginVersion(): string
   /** 提示词域目录（默认就在 hub 里，宿主配置可覆盖 —— 由 index.ts 给权威值）。 */
   promptsDir(): string
+  /** 快捷提示词库目录（`hub/quick-prompts/`），与预设同为"文件域"。 */
+  quickPromptsDir(): string
   message(e: unknown): string
 }
 
@@ -40,10 +42,11 @@ const F_SCENES = 'scenes.json'
 const D_MEMORIES = 'memories'
 const D_SUBAGENTS = 'subagents'
 const D_PROMPTS = 'prompts'
+const D_QUICK = 'quick-prompts'
 const D_SKILLS = 'skills'
-/** 三个"文件域"：整个目录打进一份 zip，键是相对路径。 */
-const FILE_DOMAINS = [D_MEMORIES, D_SUBAGENTS, D_PROMPTS]
-const ALL_DOMAINS = ['mcp', D_MEMORIES, D_SUBAGENTS, D_PROMPTS, D_SKILLS, 'settings', 'scenes']
+/** 四个"文件域"：整个目录打进一份 zip，键是相对路径。 */
+const FILE_DOMAINS = [D_MEMORIES, D_SUBAGENTS, D_PROMPTS, D_QUICK]
+const ALL_DOMAINS = ['mcp', D_MEMORIES, D_SUBAGENTS, D_PROMPTS, D_QUICK, D_SKILLS, 'settings', 'scenes']
 
 function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
@@ -86,7 +89,7 @@ function namesOf(res: any, prefer: string[]): string[] {
   if (!res || res.ok === false) return []
   const bags = [res.data, res].filter(Boolean)
   for (const bag of bags) {
-    for (const key of ['rows', 'personas', 'presets', 'scenes', 'skills', 'list', 'entries', 'items']) {
+    for (const key of ['rows', 'personas', 'presets', 'prompts', 'scenes', 'skills', 'list', 'entries', 'items']) {
       const arr = (bag as Record<string, unknown>)[key]
       if (!Array.isArray(arr)) continue
       const names: string[] = []
@@ -210,11 +213,12 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
     } catch (e) { return { ok: false, error: '写 mcp.json 失败: ' + deps.message(e) } }
     domains.mcp = mcpOut.length
 
-    // ── 文件域：记忆 / 子智能体 / 提示词，各打进一份 zip（键 = 相对路径）──────────
+    // ── 文件域：记忆 / 子智能体 / 提示词 / 快捷提示词，各打进一份 zip（键 = 相对路径）──
     const roots: Record<string, string> = {
       [D_MEMORIES]: deps.hubPath(D_MEMORIES),
       [D_SUBAGENTS]: deps.hubPath(D_SUBAGENTS),
       [D_PROMPTS]: deps.promptsDir(),
+      [D_QUICK]: deps.quickPromptsDir(),
     }
     for (const kind of FILE_DOMAINS) {
       const files = await walk(roots[kind])
@@ -302,6 +306,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       mcp: namesOf(await deps.invokeOp('mcpm-list', {}), ['serverName']),
       [D_SUBAGENTS]: namesOf(await deps.invokeOp('subagent-list', {}), ['name']),
       [D_PROMPTS]: namesOf(await deps.invokeOp('agentsmd-list', {}), ['id']),
+      [D_QUICK]: namesOf(await deps.invokeOp('quickprompt-list', {}), ['id']),
       [D_MEMORIES]: namesOf(await deps.invokeOp('rules-list', {}), ['id']),
       scenes: sceneRecordsOf(await deps.invokeOp('rules-list', {})).map((r) => r.name),
     }
@@ -420,11 +425,12 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       return { imported: (res.imported || []).length, skipped: skipped + (res.skipped || []).length }
     })
 
-    await run(D_PROMPTS, async () => {
-      const zip = files[D_PROMPTS + '.zip']
+    // 两个提示词域同形：`<id>/<正文>` + 可选 `<id>/meta.json`，一次一份地导入。差别只在
+    // 正文文件名与 op 名（快捷域没有独立的 import op，`create` 就是那个形状），所以共用一段。
+    const importPromptLike = (domain: string, docName: string, importOp: string, updateOp: string) => run(domain, async () => {
+      const zip = files[domain + '.zip']
       if (!zip) return { imported: 0, skipped: 0 }
       const entries = unzipSync(new Uint8Array(await readFile(zip)))
-      // 提示词的落点是 `<id>/AGENTS.md`（+ 可选 `<id>/meta.json`），而 `agentsmd-import` 一次一份。
       const bodies: Record<string, string> = {}
       const metas: Record<string, any> = {}
       let skipped = 0
@@ -432,22 +438,25 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
         const parts = rel.split('/')
         if (parts.length !== 2) { skipped += 1; continue }
         const text = Buffer.from(bytes).toString('utf8')
-        if (parts[1] === 'AGENTS.md') bodies[parts[0]] = text
+        if (parts[1] === docName) bodies[parts[0]] = text
         else if (parts[1] === 'meta.json') { try { metas[parts[0]] = JSON.parse(text) } catch { /* 描述丢了不影响正文导入 */ } }
       }
       let imported = 0
       for (const id of Object.keys(bodies)) {
         const desc = String((metas[id] && metas[id].description) || '')
-        const res = await deps.invokeOp('agentsmd-import', { id, content: bodies[id], description: desc })
+        const res = await deps.invokeOp(importOp, { id, content: bodies[id], description: desc })
         if (res && res.ok) { imported += 1; continue }
-        // 同名预设 `agentsmd-import` 一律拒（它不覆盖）。覆盖模式下改走 upsert 那条 update 路径。
+        // 同名一律拒（两个 import 口都不覆盖）。覆盖模式下改走 upsert 那条 update 路径。
         if (!overwrite) { skipped += 1; continue }
-        const upd: any = await deps.invokeOp('agentsmd-update', { id, nextId: id, content: bodies[id], description: desc })
+        const upd: any = await deps.invokeOp(updateOp, { id, nextId: id, content: bodies[id], description: desc })
         if (upd && upd.ok) imported += 1
         else skipped += 1
       }
       return { imported, skipped }
     })
+
+    await importPromptLike(D_PROMPTS, 'AGENTS.md', 'agentsmd-import', 'agentsmd-update')
+    await importPromptLike(D_QUICK, 'PROMPT.md', 'quickprompt-create', 'quickprompt-update')
 
     await run(D_MEMORIES, async () => {
       const zip = files[D_MEMORIES + '.zip']

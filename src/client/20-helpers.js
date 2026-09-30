@@ -375,6 +375,60 @@
       return pending
     }
 
+    /**
+     * 斜杠命令两段的挂载实况（由 48-slash.js 在注册时写入，兼容页那两枚标签读它）。
+     * **按段记**：两段各自是一个源，各自挂没挂上可以不同（只注册了一个、或第二个源重名）。
+     *
+     * 为什么声明放在这里而不是 48 片：消费它的 CompatPage 在 20 片，比 48 片**早** —— 同一个
+     * factory 作用域里函数声明提升没问题，但 `checkJs` 对这条跨片的反向引用会报 TS2304
+     * （`npm run typecheck:client` 实测）。共享状态放在两个使用方的**共同上游**这一档。
+     *
+     * 服务端**不知道**挂没挂上（那是浏览器那半的事），所以这一句只能由客户端说；feature-overview
+     * 那一行报的是开关状态，两者不是一回事，别拿一个冒充另一个（见 ops/compat.ts 同一处注释）。
+     */
+    let slashMountStates = { tools: 'pending', quickPrompts: 'pending' }
+    function slashMountStateOf(key) { return slashMountStates[key] || 'pending' }
+    /** 传 key 只改那一段；不传是"两段一起"（都关掉了、或整批注册失败）。 */
+    function setSlashMount(state, key) {
+      if (key) slashMountStates[key] = state
+      else slashMountStates = { tools: state, quickPrompts: state }
+    }
+
+    /**
+     * 一条全局轻提示（body 级，与页面/弹窗无关）。
+     *
+     * 为什么不是 `Notice`：`Notice` 长在页签里，而斜杠命令是在**对话页**按下的 —— 那时设置页
+     * 根本没挂载，面板内的提示条无处可渲染。它与「令牌没填」那条横幅同源同位（40-apply-head.js
+     * 的 body 级 append），差别只是这条会自动收。
+     *
+     * 同时只留一条：后发的直接覆写前一条（连点两下开关不该叠出两层提示）。
+     */
+    let toastEl = null
+    let toastText = null
+    let toastTimer = null
+    function showPluginToast(text, kind) {
+      try {
+        if (typeof document === 'undefined' || !document.body) return
+        const tone = kind === 'err' ? 'err' : kind === 'warn' ? 'warn' : 'ok'
+        if (!toastEl) {
+          toastEl = document.createElement('div')
+          toastEl.setAttribute('role', 'status')
+          toastText = document.createElement('span')
+          toastEl.appendChild(toastText)
+          document.body.appendChild(toastEl)
+        }
+        toastText.textContent = String(text == null ? '' : text)
+        toastEl.className = 'dsm-toast dsm-toast-' + tone
+        toastEl.style.display = ''
+        if (toastTimer) clearTimeout(toastTimer)
+        // 报错那条留久一点：它常常是"得去设置页填令牌"这类要照着做的话。
+        toastTimer = setTimeout(function () {
+          if (toastEl) toastEl.style.display = 'none'
+          toastTimer = null
+        }, tone === 'err' ? 9000 : 4000)
+      } catch (e) { /* DOM 不可用 → 只是少一条反馈，不影响已经生效的改动 */ }
+    }
+
     // Small version badge shown next to each settings-page title; reads the
     // package version from the host (plugin-version op) so it always matches
     // the installed release.
@@ -477,6 +531,14 @@
       'agentsmd-apply': 'compat.audit.op.presetApply',
       'agentsmd-trash-restore': 'compat.audit.op.trashRestore',
       'agentsmd-trash-delete': 'compat.audit.op.trashDelete',
+      // 快捷提示词：与预设分开两套文案（「保存提示词预设」在流水里等于"改了 AGENTS.md 的来源"，
+      // 而快捷词一个字节都不碰宿主状态，混着记会让流水读起来不像事实）。
+      'quickprompt-create': 'compat.audit.op.quickSave',
+      'quickprompt-update': 'compat.audit.op.quickSave',
+      'quickprompt-toggle': 'compat.audit.op.quickSwitch',
+      'quickprompt-remove': 'compat.audit.op.quickDelete',
+      'quickprompt-trash-restore': 'compat.audit.op.trashRestore',
+      'quickprompt-trash-delete': 'compat.audit.op.trashDelete',
       'tool-table': 'compat.audit.op.toolTable',
       'inject-settings': 'compat.audit.op.injectSettings',
       'scene-settings': 'compat.audit.op.sceneSettings',
@@ -521,6 +583,8 @@
       // 注入设置（本插件各注入域的开关，清单见 context-inject 的 INJECT_DOMAIN_KEYS）。它和可达性矩阵是一体两面：
       // 矩阵说"到不到得了"，这里决定"要不要"。读不到时这一节不显示。
       const [inject, setInject] = React.useState(null)
+      // 斜杠命令入口（`/` 菜单里那个「工具」段）的开关。与 inject 同一类：读不到就不渲染这一节。
+      const [slash, setSlash] = React.useState(null)
       // 模型工具表（哪些工具整份不发给模型；见 src/tools/table.ts）。与「注入」是两种省法：
       // 注入关掉省的是正文，这里关掉省的是工具 schema（工具表按每个请求付钱）。
       const [toolTable, setToolTable] = React.useState(null)
@@ -881,6 +945,11 @@
           .then(function (r) { if (alive !== false && r && r.ok && r.settings) setInject(r.settings) })
           .catch(function () { /* 读不到 → 不渲染这一节 */ })
       }
+      const loadSlash = function (alive) {
+        apiCall('slash-settings', {})
+          .then(function (r) { if (alive !== false && r && r.ok && r.settings) setSlash(r.settings) })
+          .catch(function () { /* 读不到 → 不渲染这一节 */ })
+      }
       // 工具表实况（注册时量到的体积 + 关掉了哪些）。服务端返回的 `report` 自带分组与
       // ≈token 合计 —— 界面不自己算，也不缓存第二份数字。
       const applyToolTable = function (r, alive) {
@@ -1018,6 +1087,7 @@
           .catch(function (e) { if (alive) { setError(errMsg(e)); setBusy(false) } })
         loadReach(alive)
         loadInject(alive)
+        loadSlash(alive)
         loadToolTable(alive)
         loadLive(alive)
         loadFeatures(alive)
@@ -1032,6 +1102,7 @@
           .catch(function (e) { setError(errMsg(e)); setBusy(false) })
         loadReach(true)
         loadInject(true)
+        loadSlash(true)
         loadToolTable(true)
         loadLive(true)
         loadFeatures(true)
@@ -1050,6 +1121,21 @@
             loadReach(true)
           })
           .catch(function () { loadInject(true); loadReach(true) })
+      }
+      /**
+       * 保存斜杠命令入口的两颗开关（「工具」段 / 「快捷提示词」段）。与 saveInject 同一条口径：
+       * 先乐观更新（点一下就该有反馈），服务端返回值到达后以其为准，失败重拉。
+       *
+       * **本次启动不会立刻挂上 / 撤下** —— 源注册是启动期一次性的事，所以说明里写清"重启或
+       * 重开页面后生效"，别让"关掉了但菜单还在"变成一次报障。
+       */
+      const saveSlash = function (patch) {
+        if (!slash) return
+        const next = Object.assign({}, slash, patch)
+        setSlash(next)
+        apiCall('slash-settings', Object.assign({ set: true }, next))
+          .then(function (r) { if (r && r.ok && r.settings) setSlash(r.settings); loadFeatures(true) })
+          .catch(function () { loadSlash(true) })
       }
 
       const findings = (data && data.findings) || []
@@ -1128,6 +1214,7 @@
           case 'scene-lock': return t('compat.ov.sceneLock')
           case 'mcp-tools': return t('compat.ov.mcpTools')
           case 'tool-table': return t('compat.ov.toolTable')
+          case 'slash-commands': return t('compat.ov.slashCommands')
           case 'native-delete': return t('compat.ov.nativeDelete')
           case 'host-identity': return t('compat.ov.hostIdentity')
           case 'memory': return t('compat.ov.memory')
@@ -1205,6 +1292,12 @@
             : t('compat.ov.toolTable.mixed', { hidden: hidden, total: row.total, defaults: row.defaults })
         }
         if (row.key === 'native-delete' && row.state === 'ok') return t('compat.ov.nativeDelete.ok')
+        if (row.key === 'slash-commands') {
+          // 两段各自一颗开关：只开一段时不能沿用"两段都在"那句（服务端把两个布尔一起带回来了）。
+          if (row.state === 'disabled') return t('compat.ov.slashCommands.off')
+          if (row.slashTools && row.slashQuickPrompts) return t('compat.ov.slashCommands.on')
+          return t(row.slashTools ? 'compat.ov.slashCommands.onTools' : 'compat.ov.slashCommands.onQuick')
+        }
         if (row.key === 'host-identity') {
           if (row.state === 'unknown') return t('compat.ov.route.unknown')
           if (row.state === 'degraded') return t('compat.ov.hostIdentity.degraded', { list: list(row.blockers) })
@@ -1542,24 +1635,67 @@
               }, t('compat.token.edit.cancel'))]))))
       }
 
-      // 注入设置块：本插件注入给模型哪些内容的开关。总开关只管
-      // "极简这类预设下要不要破例"，各域勾选在任何预设下都生效。
+      // 注入设置块：本插件注入给模型哪些内容的开关 + 对话输入框的斜杠命令入口（`/` 菜单里的
+      // 「工具」与「快捷提示词」两段）。总开关只管"极简这类预设下要不要破例"，各域勾选在任何
+      // 预设下都生效。
       //
       // 排版口径（用户裁定 2026-09-16）：勾选**横排**（短标签一行放得下，不再一人一行竖着排），
       // 文案只说到"有这个内容"为止 —— 用户是普通使用者，不解释 persona/载体/路径这些内部机制。
+      //
+      // 斜杠命令入口并进这一块（用户 2026-09-30 裁定）：它原先自己成一节，那一节的说明又长又和
+      // 勾选框自己的标签重复。现在只剩一条分组标题 + 两段各自一颗勾选框（「工具」/「快捷提示词」，
+      // 各自就是一个源，所以能各挂各的）+ 一句"重启才生效"。
+      const slashParts = []
+      if (slash) {
+        // 行末那枚标签是"本次启动真挂上了没"：开关值说的是"要不要"，挂没挂上只有浏览器知道
+        // （服务端看不到源注册的结果），两件事不能合成一句 —— 合了必有一句是假的。标签只说
+        // 已生效 / 未生效，**为什么**没生效挂在悬停那句里（重名抢占 / 宿主没这个服务 / 还没就绪，
+        // 三种的处置完全不同）—— 见 48-slash.js 的 setSlashMount。
+        const liveTag = function (key) {
+          const state = slashMountStateOf(key)
+          const on = state === 'registered'
+          return React.createElement('span', { className: 'dsm-pick-meta' },
+            React.createElement('span', {
+              className: 'dsm-tag' + (on ? ' dsm-tag-on' : ''), title: t('compat.slash.mount.' + state),
+            }, t(on ? 'compat.slash.live.on' : 'compat.slash.live.off')))
+        }
+        slashParts.push(
+          React.createElement('div', { key: 'slash-head', className: 'dsm-seg-group' },
+            React.createElement('span', null, t('compat.slash.title')),
+            React.createElement('span', { className: 'dsm-seg-group-line' })),
+          React.createElement('label', { key: 'slash-tools', className: 'dsm-pick' },
+            React.createElement('input', {
+              type: 'checkbox', checked: slash.tools !== false,
+              onChange: function (e) { saveSlash({ tools: e.target.checked === true }) },
+            }),
+            React.createElement('span', { className: 'dsm-pick-main' },
+              React.createElement('span', { className: 'dsm-pick-name' }, t('compat.slash.tools')),
+              React.createElement('span', { className: 'dsm-pick-desc' }, t('compat.slash.tools.desc'))),
+            liveTag('tools')),
+          React.createElement('label', { key: 'slash-quick', className: 'dsm-pick' },
+            React.createElement('input', {
+              type: 'checkbox', checked: slash.quickPrompts !== false,
+              onChange: function (e) { saveSlash({ quickPrompts: e.target.checked === true }) },
+            }),
+            React.createElement('span', { className: 'dsm-pick-main' },
+              React.createElement('span', { className: 'dsm-pick-name' }, t('compat.slash.quick')),
+              React.createElement('span', { className: 'dsm-pick-desc' }, t('compat.slash.quick.desc'))),
+            liveTag('quickPrompts')),
+          React.createElement('p', { key: 'slash-restart', className: 'dsm-help' }, t('compat.slash.restartHint')))
+      }
+      const injectParts = []
       if (inject) {
         const domains = (inject && inject.domains) || {}
-        push(section(t('compat.inject'), t('compat.inject.hint'),
-          React.createElement('div', { className: 'dsm-inject-settings' },
-            React.createElement('label', { className: 'dsm-pick' },
+        injectParts.push(
+            React.createElement('label', { key: 'force', className: 'dsm-pick' },
               React.createElement('input', { type: 'checkbox', checked: inject.underSuppressingPresets === true, onChange: function () { saveInject({ underSuppressingPresets: inject.underSuppressingPresets !== true }) } }),
               React.createElement('span', { className: 'dsm-pick-main' },
                 React.createElement('span', { className: 'dsm-pick-name' }, t('compat.inject.force')),
                 React.createElement('span', { className: 'dsm-pick-desc' }, t('compat.inject.force.desc')))),
-            React.createElement('div', { className: 'dsm-seg-group' },
+            React.createElement('div', { key: 'domains-head', className: 'dsm-seg-group' },
               React.createElement('span', null, t('compat.inject.domains')),
               React.createElement('span', { className: 'dsm-seg-group-line' })),
-            React.createElement('div', { className: 'dsm-inject-domains' },
+            React.createElement('div', { key: 'domains', className: 'dsm-inject-domains' },
               ['scene', 'memory', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
                 // 技能与提示词两域在标准类预设下由宿主送、本插件让位 —— 关掉它们时本插件会连
                 // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
@@ -1572,7 +1708,13 @@
                     saveInject({ domains: nextDomains })
                   } }),
                   React.createElement('span', null, t('compat.inject.domain.' + key)))
-              })))))
+              })))
+      }
+      // 两块数据各自独立加载：inject 读不到时斜杠入口照样要出现，反之也一样，所以整块的条件是
+      // 「任一有值」—— 缺的那半只是不出现，不把另一半一起吞掉。
+      if (inject || slash) {
+        push(section(inject ? t('compat.inject') : t('compat.slash.title'), inject ? t('compat.inject.hint') : null,
+          React.createElement('div', { className: 'dsm-inject-settings' }, injectParts.concat(slashParts))))
       }
       // 模型工具表：与「注入」并列的第二种省法 —— 那边省正文，这边省工具 schema。
       // 工具表**每个请求都发一遍**（哪怕这一轮用不上），所以关掉的工具是整份不进请求，

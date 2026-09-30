@@ -337,6 +337,17 @@
         }
         probeTokenLock(0)
 
+        // ── 斜杠命令「工具」段与「快捷提示词」段（实现与理由见 48-slash.js）───────────
+        // 放在 slots 守卫**之前**：这两段与设置页挂载与否无关，宿主没给 slots 时对话页照样该有它。
+        // 开关读一次就定本次启动的形态（改了开关要重开页面才生效 —— 源注册是启动期一次性的事，
+        // 热挂热撤会让 `/` 菜单在用户眼皮底下变样，比"重启后生效"更难解释）。
+        // 读失败按**开**处理：这两颗开关的默认值就是开，判不出来时不该把一个官方通道上的功能藏掉。
+        apiCall('slash-settings', {}).then(function (res) {
+          mountSlashCommands(ctx, t, !res || res.ok !== true ? {} : res.settings || {})
+        }).catch(function () {
+          mountSlashCommands(ctx, t, {})
+        })
+
         const slots = ctx.get('slots')
         if (slots === undefined) return
 

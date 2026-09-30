@@ -189,6 +189,23 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'agentsmd-trash-restore': { write: true, frozen: true },
   'agentsmd-trash-delete': { write: true, frozen: true },
 
+  // ── 快捷提示词域（8）───────────────────────────────────────────────────────
+  // 只改插件自己的侧车（`hub/quick-prompts/`），不写 AGENTS.md、不进场景、不进注入；
+  // 但"改用户存好的东西"按本文件口径就是写操作（判据不是"会不会写盘"，见文件头）。
+  // frozen 与五个管理域同一条：**锁定期间整体只读**（用户裁定 2026-09-30，不给它开例外，
+  // 免得"锁定"这件事要分两套话术解释）。
+  'quickprompt-list': { readonly: true },
+  'quickprompt-trash-list': { readonly: true },
+  'quickprompt-create': { write: true, frozen: true },
+  'quickprompt-update': { write: true, frozen: true },
+  // 那颗开关改的是"这条在不在对话框 `/` 菜单里出现"，动的仍是用户自己的东西 ——
+  // 与 create/update 同档，不因为它不碰正文就免了令牌。`syncsArchive`：场景绑了快捷词时，
+  // 在场景里手动开关一条要跟着改进那份勾选集（未绑定的场景不跟，见 index.ts 那一支的注释）。
+  'quickprompt-toggle': { write: true, frozen: true, syncsArchive: true },
+  'quickprompt-remove': { write: true, frozen: true },
+  'quickprompt-trash-restore': { write: true, frozen: true },
+  'quickprompt-trash-delete': { write: true, frozen: true },
+
   // ── 历史会话域（16）────────────────────────────────────────────────────────
   'history-list': { readonly: true },
   'history-sessions': { readonly: true },
@@ -242,6 +259,11 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // **刻意不冻结**：它只是界面提示，锁着场景的人在场景页照样该能关掉提醒 —— 冻结的是五个
   // 管理域的改动，不是这个页面的显示偏好（判据见文件头 write/frozen 两段的边界）。
   'scene-settings': { write: true, writeWhen: (a) => a.set === true },
+  // 斜杠命令入口的开关（侧车 `slash-settings.json`）：与 `scene-settings` 同规格 —— 写侧车所以
+  // 按写门禁，但**刻意不冻结**（关掉一个界面入口不属于五个管理域的改动）。读侧不带 `set` 是纯读：
+  // 客户端 boot 时必问一次决定挂不挂 `/` 菜单，那一次不能要令牌，否则没配令牌的宿主上这个功能
+  // 永远出不来。
+  'slash-settings': { write: true, writeWhen: (a) => a.set === true },
   // 清理 patch 备份：删磁盘文件（备份里含明文凭据副本），按写操作门禁。
   'backups-clean': { write: true },
 

@@ -26,6 +26,7 @@
 // 不因为多了一条工具就破例（工具描述本来就是写"什么时候该用它"的地方）。
 
 import { text, toolNameList, type ToolDomainDeps } from './deps.js'
+import { FACTORY_TOOL_TABLE_PRESET } from './table.js'
 
 export interface SceneToolDeps extends ToolDomainDeps {
   /** rules service 的 ops 表：`rules-list`（场景行）/ `rules-create-scene`（幂等 upsert）。 */
@@ -59,6 +60,16 @@ function segmentNames(value: any): string[] {
 }
 
 /**
+ * 档案里绑的工具表方案 → 给人读的那一句。`factory-default` 是个哨兵值而不是本机存过的方案，
+ * 原样打出来模型会去找一份叫这个名字的方案（`_save` 那边也没有这一栏，它改不了）。
+ */
+function toolTableLabel(name: unknown): string {
+  const v = typeof name === 'string' ? name.trim() : ''
+  if (!v) return ''
+  return v === FACTORY_TOOL_TABLE_PRESET ? '出厂默认' : v
+}
+
+/**
  * 一个档案的名单渲染（`_list` 用）。**点名而不是只给数量**：模型要判断"这个场景进入时会不会
  * 关掉它正用的那台服务器"，数量答不了这一句。`mcpNotes` 是档案里的备注覆盖，单独列一项。
  */
@@ -73,6 +84,11 @@ function archiveText(archive: any): string {
   ]
   const notes = keys(archive.mcpNotes)
   if (notes.length) parts.push('备注 ' + toolNameList(notes))
+  // 模型工具表方案（0.15.0 起档案里有这一栏）：进入时换的是**模型自己能用什么**，不报就是
+  // 让它事后发现自己少了工具却说不出原因。只给方案名 —— 关停名单不在档案里，硬算要多读一次
+  // 方案清单，而真正需要条数的时机是切换之后（那条回执有）。没绑就不冒这一格（与备注同口径）。
+  const tt = toolTableLabel(archive.toolTablePreset)
+  if (tt) parts.push('工具表方案「' + tt + '」')
   return parts.join(' ｜ ')
 }
 
@@ -124,7 +140,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 默认的隐藏名单里）：静态文本没法按 toolVisible 改写，点名一条模型没有的工具只会让它
     // 白跑一趟。要说"去哪看"就用中性说法（the scene listing / the「本机当前的场景」reminder
     // —— 后者是常驻源，只要场景域开着就在）。点名只留在**运行时回执**里、按可见性分叉。
-    description: 'List every scene with its archive (what entering it switches on), bound prompt preset, memory count and enabled / entered / locked state. Read the archive here before saving a scene: a section you give later replaces it whole. Read-only; the scene in effect now is also the「本机当前的场景」reminder.',
+    description: 'List every scene with its archive (what entering it switches on: MCP servers, skills, personas, and the bound model tool-table scheme when there is one), bound prompt preset, memory count and enabled / entered / locked state. Read the archive here before saving a scene: a section you give later replaces it whole. Read-only; the scene in effect now is also the「本机当前的场景」reminder.',
     parameters: {},
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute() {
@@ -175,7 +191,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 为什么 `action` 是必填枚举而不是一个布尔：与 `mcp_manager_switch` 同一条理由 ——
     // 让模型在 enter / exit 两个动词里选一个，比让它猜"scene 传 null 是什么意思"省一次往返。
     // 参数里刻意不出现 `null`：那是 op（`scene-mode-set`）的形态，模型照着填只会填错。
-    description: 'Enter a scene, or leave the one currently entered. Entering switches on exactly what its archive lists and everything else off, narrows injection to its memories, and applies its bound prompt preset to AGENTS.md. Leaving restores the runtime snapshot taken on entry. Check the scene\'s archive in the scene listing before entering. Only when the user asks or approves.',
+    description: 'Enter a scene, or leave the one currently entered. Entering switches on exactly what its archive lists and everything else off — MCP servers, skills, personas, and the model tool table when the scene binds a scheme — narrows injection to its memories, and applies its bound prompt preset to AGENTS.md. Leaving restores the runtime snapshot taken on entry. Check the scene\'s archive in the scene listing before entering. Only when the user asks or approves.',
     parameters: {
       action: { type: 'string', required: true, enum: ['enter', 'exit'], description: 'enter = switch to the scene named in `scene`; exit = leave the current one (no scene needed).' },
       scene: { type: 'string', description: 'Scene name (one path segment), required for enter. Use the exact name, not the display label — the scene listing and the「本机当前的场景」reminder both print names.' },
@@ -224,26 +240,39 @@ export function buildSceneTools(deps: SceneToolDeps): void {
         )
       }
 
-      // 回执：说清"从哪到哪 + 实际切了几台 / 几个来源 + 有没有键被丢弃 + AGENTS.md 那一步"。
+      // 回执：说清"从哪到哪 + 实际切了几台 / 几个来源 + 工具表换到哪一份 + 有没有键被丢弃 + AGENTS.md 那一步"。
       // 都是界面会如实报的同一批事实（`memory.result.modeSet` / `modeSwitched` / `archive.stale`），
       // 少报一项，模型就会以为那次切换"完全干净"。
-      const noop = mode.applied === null || mode.applied === undefined
-      const head = noop
-        ? 'OK: already in scene「' + scene + '」'
-        : action === 'enter'
-          ? 'OK: ' + (before === null ? 'entered' : '「' + before + '」→') + ' scene「' + scene + '」'
-          : 'OK: left the scene' + (before === null ? '' : '「' + before + '」')
+      // 「这次到底动没动」两个方向判的不是同一个值：进入看 `applied`（目标就是当前场景时引擎早退，
+      // `applied` 为 null），而**成功退出也回 `applied:null`** —— 拿它当判据会把每一次退出报成
+      // 「already in scene「」」。引擎只在真的退掉一个场景时回 `restored`，退出按它判。
       const sw = (mode && mode.switched) || {}
       const count = (v: any): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+      const noop = action === 'enter'
+        ? (mode.applied === null || mode.applied === undefined)
+        : !mode.restored
+      const head = noop
+        ? (action === 'enter' ? 'OK: already in scene「' + scene + '」' : 'OK: not in any scene (nothing to leave)')
+        : action === 'enter'
+          ? 'OK: ' + (before === null ? 'entered' : '「' + before + '」→') + ' scene「' + scene + '」'
+          : 'OK: left the scene「' + (before || '') + '」'
       const parts: string[] = []
       if (count(sw.mcpServers) || count(sw.skillSources)) {
         parts.push('switched ' + count(sw.mcpServers) + ' MCP server(s) / ' + count(sw.skillSources) + ' skill source(s)')
+      }
+      // 工具表这一档改的就是模型自己能用什么：不报，它只会发现自己少了（或多回）几条工具却说不出
+      // 原因，用户问"刚才改了什么"时拿回去的就是半截话。引擎只在**名单真的换了**时才回方案名。
+      const tt = toolTableLabel(mode && mode.toolTablePreset)
+      if (tt) {
+        parts.push('工具表切到方案「' + tt + '」（关 ' + count(sw.toolTableHidden) + ' 条）')
+      } else if (action === 'exit' && mode.restored && mode.restored.toolTable === true) {
+        parts.push('工具表按进场景前的快照还原')
       }
       if (Array.isArray(mode.stale) && mode.stale.length) {
         parts.push('丢弃了本机不存在的键：' + mode.stale.join('、'))
       }
       return head + (parts.length ? ' · ' + parts.join(' · ') : '') + agentsMdNote(act.agentsMd) +
-        (noop ? '\n（目标就是当前场景，运行时没有改动）' : '')
+        (noop ? '\n（' + (action === 'enter' ? '目标就是当前场景' : '本来就不在任何场景') + '，运行时没有改动）' : '')
     },
   }))
 

@@ -98,6 +98,15 @@ export interface ArchiveEngineDeps {
   enabledPersonas(names: string[]): Promise<string[]>
   /** 改人设启停（子智能体开关；引擎保证串行）。 */
   applySubagentSwitches(switches: Array<{ name: string; enabled: boolean }>): Promise<void>
+  /**
+   * 快捷提示词的 id 全集（保存档案时校验 quickPrompts 段并报 stale；
+   * 进入模式时算「未勾的是哪些」）。
+   */
+  knownQuickPrompts(): Promise<Set<string>>
+  /** 每一条快捷提示词当前的开关（进场景前拍快照、以及算「这次真的会改哪几条」）。 */
+  quickPromptStates(): Promise<Record<string, boolean>>
+  /** 改快捷提示词开关（引擎保证串行；实现侧对已不存在的 id 静默跳过）。 */
+  applyQuickPromptSwitches(switches: Array<{ id: string; enabled: boolean }>): Promise<void>
   /** 实时发现的记忆 id 全集。**引擎已不再消费**（P5 起档案不写、不校验 memories 段，
    *  保存时顺手清掉残留字段）—— 依赖保留只为接口稳定，新代码不要引用它。 */
   knownMemoryIds(): Promise<Set<string>>
@@ -169,6 +178,23 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
   }
 
   /**
+   * 快捷提示词段 → 应用（勾了的启用、未勾的停用），只写**状态需要变化**的那几条。
+   *
+   * 只在档案**定义了**这一段时被调用：未定义 = 这一域完全不碰（与 mcp/skills/subagents 的
+   * 「未定义 = 全关」不同，见 `SceneArchive.quickPrompts` 的注释）。
+   */
+  async function applyQuickPrompts(list: string[]): Promise<void> {
+    const [known, current] = await Promise.all([deps.knownQuickPrompts(), deps.quickPromptStates()])
+    const switches: Array<{ id: string; enabled: boolean }> = []
+    for (const id of known) {
+      const want = list.indexOf(id) >= 0
+      if (current[id] === want) continue
+      switches.push({ id, enabled: want })
+    }
+    if (switches.length) await deps.applyQuickPromptSwitches(switches)
+  }
+
+  /**
    * 还原到快照（退出模式与失败回滚共用同一条路径）：
    * MCP 停用表**按快照原文整体回写**——模式自己写进去的键（未勾服务器的 ['*']）必须随之消失，
    * 否则退出后用户环境仍被静默停用（比"多留一个键"严重得多）；模式期间的手动改动按设计 §2.2
@@ -177,7 +203,20 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
    * 上层两行（服务器级 / 来源级）按**全量**快照还原 —— 只回写与现状不同的行，见
    * mcpServerRowsToRestore / skillSourceRowsToRestore。
    */
-  async function restoreSnapshot(snapshot: ModeSnapshot): Promise<void> {
+  /**
+   * 两份名单是不是同一批名字（顺序无关）。
+   *
+   * 现在只有工具表那一档用它：档案绑的方案与当前现状是同一份关停名单时，进入这一步其实
+   * 什么都没改 —— 回执要不要提「工具表切到方案 X」就取决于这一句。
+   */
+  function sameNameList(a: string[] | null, b: string[] | null): boolean {
+    if (!a || !b) return false
+    if (a.length !== b.length) return false
+    const set = new Set(a)
+    return b.every((x) => set.has(x))
+  }
+
+  async function restoreSnapshot(snapshot: ModeSnapshot): Promise<{ toolTable: boolean }> {
     // 顺序与进入时**相反**：先恢复服务器级 / 来源级，再恢复工具级 / 技能级 ——
     // 来源还关着的时候写技能级策略会被吞掉（`skills/core.js` 的 sourceEnabled 判定）。
     // 老 snapshot 没有这两栏 → `?? []`，按旧行为只恢复下层。
@@ -216,11 +255,37 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         await deps.applySubagentSwitches(personasOn.map((n) => ({ name: n, enabled: true })))
       }
     }
+    // 快捷提示词（0.18.0）：按快照的全量映射还原，但**只回写与现状不同的那几条** ——
+    // 与 mcpServerRowsToRestore 同一条理由：没变过的行不该白写一遍侧车。读不到现状就退回全量
+    // 回写（宁可多写几行，不可少还原）。老快照没有这一栏 → 一个字都不动（进场景时也没碰过）。
+    // 场景期间被删掉的条目由实现侧静默跳过：没有可还原的状态，硬写会把"退出场景"卡成报错。
+    const quickStates = snapshot.quickPromptsAll
+    if (quickStates && typeof quickStates === 'object') {
+      const rows = Object.entries(quickStates)
+      if (rows.length) {
+        let current: Record<string, boolean> | null = null
+        try { current = await deps.quickPromptStates() } catch { current = null }
+        const switches = rows
+          .filter(([id, on]) => current === null || current[id] !== (on === true))
+          .map(([id, on]) => ({ id, enabled: on === true }))
+        if (switches.length) await deps.applyQuickPromptSwitches(switches)
+      }
+    }
     // 模型工具表（C1）：按快照原值整体回写。老快照没有这一栏 → 一个字都不动（与进场景前一致）。
+    // 先与现状比一次：绑的方案与进场景前本来就是同一份名单时，这一步什么都没改 —— 既不该白跑
+    // 一遍"落盘 → 重排可见性 → 两个目录重算"，回执更不该跟着说「工具表按快照还原」（用户问
+    // "刚才改了什么"时凭空多一项）。读不到现状就照旧回写（宁可多写一遍，不可少还原）。
+    let toolTableRestored = false
     if (snapshot.toolTableHidden) {
-      await deps.applyToolTableHidden(snapshot.toolTableHidden)
+      let current: string[] | null = null
+      try { current = await deps.currentToolTableHidden() } catch { current = null }
+      if (current === null || !sameNameList(current, snapshot.toolTableHidden)) {
+        await deps.applyToolTableHidden(snapshot.toolTableHidden)
+        toolTableRestored = true
+      }
     }
     deps.audit?.('scene-restore', '')
+    return { toolTable: toolTableRestored }
   }
   /**
    * 失败回滚：运行时还原 + 切片写回；每步失败都记下来，绝不谎报「已回滚」。
@@ -286,6 +351,9 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // 不在本次覆盖里的旧场景备注行**不这里删**（退出时会按快照整体回原位）。
       if (entries.length) await deps.applyMcpNotes(entries)
     }
+    // 快捷提示词：段定义了才碰（未定义 = 保持现状）。快照里的原值**不动** ——
+    // 退出场景仍回到「进场景前」那批开关，而不是回到上一次档案的勾选。
+    if (archive && Array.isArray(archive.quickPrompts)) await applyQuickPrompts(archive.quickPrompts)
     // 工具表方案（C1）：改档案 = 立刻生效，这一域也得跟上。快照里的原值**不动** ——
     // 退出场景仍然回到「进场景前」那份名单，而不是回到上一次档案的方案。
     const reapplyPreset = (archive && archive.toolTablePreset) || ''
@@ -349,6 +417,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
             mcpServers: Object.keys(snap.mcp || {}).length,
             skills: Object.keys(snap.skills || {}).length,
             subagents: personaStates ? Object.keys(personaStates).length : (snap.subagents ?? []).length + (snap.subagentsOn ?? []).length,
+            quickPrompts: Object.keys(snap.quickPromptsAll || {}).length,
             mcpNotes: (snap.mcpNotes ?? []).length,
           },
           // 记忆启用集**不随退出恢复**（设计 §2.2）：退出后仍是这个场景，界面别把它写成"会还原"。
@@ -391,6 +460,26 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         personas = { on: await deps.disabledPersonas(bound), off: await deps.enabledPersonas(unbound) }
       } catch (e) {
         return { ok: false, error: `读取人设开关状态失败：${msg(e)}` }
+      }
+
+      // 快捷提示词：只有档案**定义了**这一段才报（未定义 = 这一域进都不进，也就没有"会改什么"）。
+      // 与进入时逐字同口径：勾了的启用、未勾的停用，且只数**现状 ≠ 目标**的那几条。
+      let quickPrompts: { on: string[]; off: string[] } | null = null
+      if (archive && Array.isArray(archive.quickPrompts)) {
+        try {
+          const list = archive.quickPrompts
+          const [known, current] = await Promise.all([deps.knownQuickPrompts(), deps.quickPromptStates()])
+          const on: string[] = []
+          const off: string[] = []
+          for (const id of [...known].sort()) {
+            const want = list.indexOf(id) >= 0
+            if (current[id] === want) continue
+            ;(want ? on : off).push(id)
+          }
+          quickPrompts = { on: clip(on), off: clip(off) }
+        } catch (e) {
+          return { ok: false, error: `读取快捷提示词开关状态失败：${msg(e)}` }
+        }
       }
 
       // 服务器级：计划里已只含「需要变化」的行，按目标状态分两个方向。
@@ -491,6 +580,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           sourcesOn: clip(sourcesOn), sourcesOff: clip(sourcesOff),
         },
         subagents: { on: clip(personas.on), off: clip(personas.off) },
+        quickPrompts,
         toolPreset,
         stale: clip(stale),
         truncated,
@@ -539,6 +629,14 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         archive.subagents = archive.subagents.filter((p) => known.has(p))
         if (hadKeys && archive.subagents.length === 0) delete archive.subagents
       }
+      if (archive.quickPrompts) {
+        // 已删掉 / 改名的条目从勾选集里丢掉并报出来（与 subagents 段同一口径）。
+        // 与那三段**不同**的一点：清成空表也**不删这一栏** —— 空表说的是"进入后全部停用"，
+        // 删掉就变成"这一域不碰"，两句是相反的意思（见 SceneArchive.quickPrompts）。
+        const known = await deps.knownQuickPrompts()
+        stale.push(...archive.quickPrompts.filter((id) => !known.has(id)).map((id) => 'quickPrompts/' + id))
+        archive.quickPrompts = archive.quickPrompts.filter((id) => known.has(id))
+      }
       if (archive.toolTablePreset) {
         // 方案名查不到（被删了 / 档案是从别的机器带来的）→ 丢弃这一栏并报告：
         // 绑一个不存在的方案不该在进场景时变成一句"方案不存在"的硬失败。
@@ -556,6 +654,12 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       if (archive.toolTablePreset === undefined) {
         const prev = slice.archives[scene]
         if (prev && typeof prev.toolTablePreset === 'string' && prev.toolTablePreset) archive.toolTablePreset = prev.toolTablePreset
+      }
+      // 快捷提示词同理：勾选入口在「修改场景」表单里，档案编辑器不带这一栏 —— **不带 ≠ 解绑**，
+      // 保留现值（解绑走 rules-update-scene 的空值；这里带上来的值仍走上面的 stale 校验）。
+      if (archive.quickPrompts === undefined) {
+        const prev = slice.archives[scene]
+        if (prev && Array.isArray(prev.quickPrompts)) archive.quickPrompts = prev.quickPrompts.slice()
       }
       // 逐场景增量写（审查 P2-3）：这里只该动 `archives[scene]` 这一条，而 `slice` 是队外
       // 读的 —— 整片回写会把窗口期里别人保存的**别的场景**档案一起抹掉。
@@ -602,9 +706,10 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
 
       // ① 退出当前模式（切换 = 先退后进）：先恢复运行时，再落盘自由模式。
       //    恢复失败即中止且**保持原 mode 不变**——宁可留在「可再退出一次」的状态，也不吞错。
+      let restoredToolTable = false
       if (current.scene && current.snapshot) {
         try {
-          await restoreSnapshot(current.snapshot)
+          restoredToolTable = (await restoreSnapshot(current.snapshot)).toolTable
         } catch (e) {
           return { ok: false, error: `退出模式「${current.scene}」失败，已保持原模式（运行时可能部分残留）：${msg(e)}` }
         }
@@ -621,7 +726,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         slice = exited
         current = exited.mode
       }
-      if (!target) return { ok: true, mode: current, applied: null, stale: [] }
+      if (!target) return { ok: true, mode: current, applied: null, stale: [], restored: { toolTable: restoredToolTable } }
 
       // ② 进入目标模式：校验 → 算计划 → 拍快照 → 先落盘 mode（中途失败也留可退快照）→ 应用 → 记忆收窄。
       //    三个域（MCP / 技能 / 人设）都按「与档案勾选集完全一致」应用，未定义 = 全关；
@@ -721,6 +826,22 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           return { ok: false, error: `场景绑定的工具表方案「${toolTablePreset}」已不存在，未进入场景（先在场景档案里换一份或取消绑定）` }
         }
       }
+      // 这一档"报不报"看的是**名单有没有变**：绑的方案与现状是同一份关停名单时，进入这一步
+      // 什么都没改，回执再说「工具表切到方案 X」就是给"刚才改了什么"凭空添一项。
+      const toolTableSwitched = !!toolTableTarget && !sameNameList(toolTableBefore, toolTableTarget)
+      // 快捷提示词（0.18.0）：档案**定义了**这一段才碰这一域（未定义 = 保持现状，与
+      // mcp/skills/subagents 的「未定义 = 全关」不同 —— 用户 2026-10-01 裁定这一栏的默认是
+      // 「当前启用的快捷提示词」）。读现状同样放在改任何东西之前：读失败就等于什么都没动。
+      const quickList = archive && Array.isArray(archive.quickPrompts) ? archive.quickPrompts : null
+      let quickStates: Record<string, boolean> | null = null
+      if (quickList) {
+        try {
+          const [known, current] = await Promise.all([deps.knownQuickPrompts(), deps.quickPromptStates()])
+          quickStates = Object.fromEntries([...known].map((id) => [id, current[id] === true]))
+        } catch (e) {
+          return { ok: false, error: `读取快捷提示词开关状态失败（未改动任何东西）：${msg(e)}` }
+        }
+      }
       // 快照**恒拍**：三个域都按「与勾选集完全一致」应用（未定义 = 全关），所以任何场景
       // 进入都可能改动运行时（哪怕只是停掉几台服务器 / 几个技能），退出都得能精确还原。
       // 上层两行传**现状全量**（上面的 mcpServerStates / skillSources 就是进场景前的值），
@@ -735,6 +856,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         noteBefore,
         personaStates,
         toolTableBefore,
+        quickStates,
       )
       const entered: ArchiveIndexSlice = { ...slice, mode: { scene: target, snapshot }, active: [target] }
       try {
@@ -774,6 +896,9 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         // ⑤ 模型工具表：档案绑了方案就把关停名单**整体换成**那份（省下的 token 按轮算，
         //     所以它是"进入场景"这一动作里唯一直接改每请求内容的域）。
         if (toolTableTarget) await deps.applyToolTableHidden(toolTableTarget)
+        // ⑥ 快捷提示词：段定义了才动（勾了的启用、未勾的停用）。它不进上下文、不进注入，
+        //    改的只是"这条还在不在对话框的 `/` 菜单里"。
+        if (quickList) await applyQuickPrompts(quickList)
       } catch (e) {
         return await rollback(slice, snapshot, '应用档案', e)
       }
@@ -790,12 +915,16 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         mode: entered.mode,
         // 三个域都是「按勾选集全量应用」（未定义 = 全关），所以都算已应用；
         // 备注段未定义 = 不覆盖任何备注，如实报它是否定义。
-        applied: { mcp: true, skills: true, subagents: true, mcpNotes: !!(archive && archive.mcpNotes), toolTable: !!toolTableTarget },
+        applied: { mcp: true, skills: true, subagents: true, mcpNotes: !!(archive && archive.mcpNotes), toolTable: !!toolTableTarget, quickPrompts: !!quickList },
         // 上层实际切换了几个（0 = 本来就已经是目标状态，界面不必提示"已停用 N 台"）。
         switched: {
           mcpServers: mcpPlan.serverSwitches.length,
           skillSources: skillsPlan.sourceSwitches.length,
+          // 工具表：这次真的换上去的关停条数（0 = 本来就是那份，或压根没绑方案）。
+          toolTableHidden: toolTableSwitched ? (toolTableTarget as string[]).length : 0,
         },
+        // 换上去的那份方案名，供回执点名（与上面同一个判据：没换就回空串）。
+        toolTablePreset: toolTableSwitched ? toolTablePreset : '',
         stale,
         narrowedTo: [target],
       }

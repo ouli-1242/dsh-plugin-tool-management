@@ -21,6 +21,7 @@ import type { SessionsRegistry } from './sessions/history.js'
 import { createSkillsService, pluginLog } from './skills/service.js'
 import { renameWithRetry } from './skills/core.js'
 import { createPromptsService } from './prompts/service.js'
+import { createQuickPromptsService } from './prompts/quick-service.js'
 import { isValidPresetId } from './prompts/preset-id.js'
 import { isInsideRoot, isInsideRootResolved } from './paths.js'
 import { DEFAULT_PROFILE_NAME, MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, PROFILE_CANDIDATES, serverNameCandidates, splitMcpToolName, type McpToolNameParts } from './host-names.js'
@@ -59,6 +60,7 @@ import {
   type ToolTableSettings,
 } from './tools/table.js'
 import { normalizeSceneSettings, type SceneSettings } from './scene-settings.js'
+import { normalizeSlashSettings, type SlashSettings } from './slash-settings.js'
 import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
 import { checkPatchWrite, takePatchGuardWarnings } from './compat/patch-dialect.js'
 import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
@@ -83,6 +85,7 @@ import { hubBackupDir, hubPath, hubRoot, migrateHubLayoutSync, relocateEntries }
 // 分域的 HTTP ops（2026-09-19 从本文件 handlers 表抽出，依赖显式传参）。
 import { buildCompatOps } from './ops/compat.js'
 import { buildPromptOps } from './ops/prompts.js'
+import { buildQuickPromptOps } from './ops/quick-prompts.js'
 import { buildSessionOps } from './ops/sessions.js'
 // HTTP 请求准入与 handlers 后处理（2026-09-19 从本文件 apply 闭包抽出，依赖显式传参）。
 import { createAccessToken, createFrozenGate, createOpWhitelist, createSceneLock, guardModelOp, guardModelOps, installHandlerGuards } from './request-gate.js'
@@ -330,6 +333,14 @@ export default {
         return p.home + sep + 'AGENTS.md'
       },
     })
+
+    // ---------- 快捷提示词（hub/quick-prompts/）----------
+    // 与上面的预设库**两份存储**，不是同一份加个标记位：`list()` 只扫自己目录，所以快捷词
+    // 天然进不了「应用 / 场景绑定 / 注入 / 模型工具」这四条只认 hub/prompts/ 的路径。
+    // 理由见 ./prompts/quick-service.ts 头注。
+    const quickPromptsDir = hubPath('quick-prompts')
+    const quickPromptsService = createQuickPromptsService({ dir: quickPromptsDir })
+    const quickPromptOps = buildQuickPromptOps(quickPromptsService)
 
     // ---------- rules（规则/记忆，v0.4）----------
     // 记忆真源 $DSH_HOME/tool-management/memories/<场景>/<name>.md（仅用户级，D1）。
@@ -656,6 +667,24 @@ export default {
         if (on.length) await subagentService.enabledStore.setEnabled(on, true)
         void subagentCatalog.refresh()
       },
+      // 快捷提示词（0.18.0）：档案定义了 quickPrompts 段时，进入场景 = 把每一条的开关置成
+      // 「在不在这份清单里」，退出按快照还原。读写的就是提示词页那颗开关的同一份存储
+      // （`hub/quick-prompts/<id>/meta.json`），不在别处再算一套状态。
+      knownQuickPrompts: async () => {
+        const r = await quickPromptsService.list()
+        return new Set(r.ok === true ? r.prompts.map((p) => p.id) : [])
+      },
+      quickPromptStates: async () => {
+        const r = await quickPromptsService.list()
+        if (r.ok !== true) throw new Error(r.error)
+        return Object.fromEntries(r.prompts.map((p) => [p.id, p.enabled !== false]))
+      },
+      applyQuickPromptSwitches: async (switches: Array<{ id: string; enabled: boolean }>) => {
+        // 已不存在的 id 由 setEnabled 自己回 ok:false —— 这里**不**把它抛出去：退出场景时
+        // "还原一条已被删掉的快捷词"没有可写的地方，让它报错会把整次退出卡住
+        // （与 mcpServerRowsToRestore「现在已不存在的行直接跳过」同一口径）。
+        for (const s of switches) await quickPromptsService.setEnabled(s.id, s.enabled)
+      },
       // 记忆 id 全集。引擎已不消费（memories 段 P5 起废弃），实现保留以维持接口形状。
       knownMemoryIds: async () => {
         const r: any = await memoriesService.ops['rules-list']({})
@@ -947,6 +976,39 @@ export default {
       })
     }
 
+    // 斜杠命令入口的开关（侧车 `slash-settings.json`）：两段各一颗 —— 「工具」与「快捷提示词」。
+    // 判据与 `scene-settings` 同一条 —— 它是入口开关、不是管理动作，所以不冻结；读侧不带 `set`
+    // 时是纯读（客户端 boot 时必问一次，不能要令牌）。
+    const SLASH_SETTINGS_FILE = 'slash-settings.json'
+    const SLASH_SETTINGS_TTL_MS = 3000
+    let slashSettingsCache: { at: number; value: SlashSettings } | null = null
+    async function readSlashSettings(force = false): Promise<SlashSettings> {
+      if (slashSettingsCache && !force && Date.now() - slashSettingsCache.at < SLASH_SETTINGS_TTL_MS) return slashSettingsCache.value
+      await ensurePaths()
+      const raw = await readJsonFile(hubPath(SLASH_SETTINGS_FILE))
+      const value = normalizeSlashSettings(raw)
+      slashSettingsCache = { at: Date.now(), value }
+      return value
+    }
+    async function slashSettingsOp(args: any): Promise<any> {
+      const current = await readSlashSettings()
+      if (!args || args.set !== true) return { ok: true, settings: current }
+      const next = normalizeSlashSettings({
+        tools: typeof args.tools === 'boolean' ? args.tools : current.tools,
+        quickPrompts: typeof args.quickPrompts === 'boolean' ? args.quickPrompts : current.quickPrompts,
+      })
+      await ensurePaths()
+      return withWriteLock(async () => {
+        try {
+          await writeJsonFile(hubPath(SLASH_SETTINGS_FILE), next)
+        } catch (e) {
+          return { ok: false, error: '设置保存失败: ' + message(e) }
+        }
+        slashSettingsCache = { at: Date.now(), value: next }
+        return { ok: true, settings: next }
+      })
+    }
+
 
     // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的各域文本。
     // 挂在 apply 作用域：`injection-live` op 与注入器不在同一层（effect 内部）。
@@ -1152,6 +1214,32 @@ export default {
           void rebindSubagentInArchives(from, to)
           void renameSubagentInSnapshot(from, to)
         }
+        return res
+      }
+    }
+    /**
+     * 快捷提示词改名后同步场景档案（与人设改名那两条同一件事）：档案里存的还是旧 id 的话，
+     * 下一次进场景它会被当成 stale 丢掉 —— 用户看到的就成了"改了个名字，场景里的勾选悄悄没了"，
+     * 而且那条快捷词还会在进场景时被停用（它不在勾选集里了）。
+     */
+    async function rebindQuickPromptInArchives(from: string, to: string): Promise<void> {
+      try {
+        const slice = await memoriesService.readArchiveSlice()
+        const touched: Array<[string, any]> = []
+        for (const [scene, archive] of Object.entries(slice.archives || {})) {
+          const list = (archive as { quickPrompts?: unknown }).quickPrompts
+          if (!Array.isArray(list) || !list.includes(from)) continue
+          touched.push([scene, { ...(archive as Record<string, unknown>), quickPrompts: list.map((n) => (n === from ? to : n)) }])
+        }
+        // 逐场景增量写（与审查 P2-3 同一条口径）：整表回写会抹掉窗口期里别人存的别的场景。
+        for (const [scene, next] of touched) await memoriesService.saveArchive(scene, next)
+      } catch { /* 同步失败不阻断改名本身；残留由档案保存时的 stale 清理兜住 */ }
+    }
+    const baseQuickPromptUpdate = quickPromptOps['quickprompt-update']
+    if (typeof baseQuickPromptUpdate === 'function') {
+      quickPromptOps['quickprompt-update'] = async (args: any) => {
+        const res: any = await baseQuickPromptUpdate(args)
+        if (res && res.ok !== false && res.renamedFrom) void rebindQuickPromptInArchives(String(res.renamedFrom), String(res.id))
         return res
       }
     }
@@ -2022,6 +2110,7 @@ export default {
         tools,
         readInjectSettings,
         injectSettingsOp,
+        readSlashSettings,
         toolTableOp,
         toolTableReport: () => toolTableReport(),
         presetRoster: candidates.presetRoster,
@@ -2039,6 +2128,9 @@ export default {
       }),
       // AGENTS.md / 提示词预设域（ops/prompts.ts 提供，见上方 promptOps）。
       ...promptOps,
+      // 快捷提示词域（ops/quick-prompts.ts）：quickprompt-list / -create / -update /
+      // -toggle / -remove 与回收站三条。它**不**碰 AGENTS.md、不进场景、不进注入。
+      ...quickPromptOps,
       // 归档会话域（ops/history.ts 提供）：history-list / history-sessions /
       // history-export-defaults / dir-list / history-archive / history-archive-batch /
       // history-unarchive / history-delete / history-unarchive-batch / history-delete-batch /
@@ -2058,6 +2150,7 @@ export default {
         createSession: agents?.create,
         host: <T>(name: string): T | undefined => ctx.get(name) as T | undefined,
         promptsDir,
+        quickPromptsDir,
         rulesList: (args: any) => memoriesService.ops['rules-list'](args),
         skillDetail: (args: any) => skillsService.ops['skill-detail'](args),
         extractTurnsFromEvents,
@@ -2078,6 +2171,16 @@ export default {
           const hidden = hit ? [...hit.hidden] : (value === FACTORY_TOOL_TABLE_PRESET ? [...DEFAULT_HIDDEN_TOOLS] : null)
           if (!hidden) return
           await applyToolTableHiddenNow(hidden)
+        },
+        // 快捷提示词：改的是**当前启用场景**时按新勾选集立刻应用一次 —— 走的就是「保存档案 =
+        // 立刻生效」那条路（`scene-archive-save` 内含 stale 清理、运行时重应用与快照并入），
+        // 不在这里另写一套应用逻辑。解绑（null）不回滚：这一域回到"保持现状"，而进场景前那批
+        // 开关仍在模式快照里，退出照常还原。
+        onQuickPromptsChanged: async (scene: string, value: string[] | null) => {
+          const slice = await memoriesService.readArchiveSlice()
+          if (!slice.mode || slice.mode.scene !== scene || value === null) return
+          const cur = slice.archives[scene] || {}
+          await archiveService.ops['scene-archive-save']({ scene, archive: { ...cur, quickPrompts: value } })
         },
         rulesOps: {
           'rules-set-active': (args: any) => memoriesService.ops['rules-set-active'](args),
@@ -2104,6 +2207,9 @@ export default {
       // 场景页的界面设置（读 / 写）：进入场景前要不要弹预览卡。按写操作门禁（它写侧车），
       // 但**不进场景冻结** —— 它是界面提示，与五个管理域的只读无关（见 scene-settings.ts）。
       'scene-settings': (args: any) => sceneSettingsOp(args),
+      // 斜杠命令入口的开关（读 / 写）：客户端 boot 时读一次决定挂不挂 `/` 菜单里的「工具」段，
+      // 兼容页那两颗开关写一次。同 `scene-settings`：按写门禁但不冻结（见 slash-settings.ts）。
+      'slash-settings': (args: any) => slashSettingsOp(args),
       // state-doctor：跨域**悬空引用**体检（只读，实现与理由见 src/ops/state-doctor.ts）。
       // 这里只做"把权威集合取来"这一件事 —— 某一域读失败就传 null，体检会把它记进
       // `skipped` 而不是当成"该域没有悬空项"（读不到 ≠ 不存在，报成后者就是骗人）。
@@ -2404,6 +2510,16 @@ export default {
             next.subagents = toggleInList(Array.isArray(next.subagents) ? next.subagents.slice() : [], name, enabled)
             break
           }
+          case 'quickprompt-toggle': {
+            // 与上面几段**不同**：这一段未定义说的是"这一域保持现状"，不是"一个都没勾"。
+            // 所以在没绑定的场景里手动勾一条快捷词，不该悄悄把它变成"按场景勾选"——
+            // 那会让下一次进场景的行为整个换掉（用户看到的只是"我开了一个开关"）。
+            if (!Array.isArray(next.quickPrompts)) return null
+            const id = String((args && args.id) || '')
+            if (!id) return null
+            next.quickPrompts = toggleInList(next.quickPrompts.slice(), id, enabled)
+            break
+          }
           default: return null
         }
       } catch (e) {
@@ -2444,6 +2560,7 @@ export default {
       ensurePaths,
       pluginVersion: () => PKG_VERSION,
       promptsDir: () => promptsDir,
+      quickPromptsDir: () => quickPromptsDir,
       message,
     })
     Object.assign(handlers, snapshotOps)

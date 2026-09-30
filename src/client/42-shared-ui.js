@@ -460,15 +460,14 @@ function enabledMemoryCount(rules) {
     /* ── 勾选列表原语（场景档案编辑器 / 人设工具选择器 / 任何「多选一组条目」的地方共用）────
        原先这套排版只在 ScenesPage 内部，人设的工具选择器要么复制一份、要么写成裸 input；
        现在提到模块作用域，页面之间才可能真正长得一样。 */
-    /** 段卡片：标题栏 + 固定高度滚动体 + 脚注（高度不随内容增减变化，弹窗不跳）。 */
+    /** 段卡片：标题栏 + 固定高度滚动体（高度不随内容增减变化，弹窗不跳）。 */
     function seg(props) {
       return h('div', { className: 'dsm-seg' },
         h('div', { className: 'dsm-seg-head' },
           h('span', { className: 'dsm-seg-title' }, props.title),
           h('span', { className: 'dsm-seg-count' }, props.count),
           h('div', { className: 'dsm-seg-actions' }, props.actions)),
-        props.body,
-        props.foot || null)
+        props.body)
     }
     /**
      * 通用回收站弹窗：一行一个条目（名字 + 删除时间），右侧「恢复 / 永久删除」。
@@ -480,7 +479,6 @@ function enabledMemoryCount(rules) {
       const t = props.t
       const c = React.useState(null)
       const confirmId = c[0], setConfirmId = c[1]
-      const entries = props.entries || []
       const row = function (item) {
         const confirming = confirmId === item.id
         const actions = confirming
@@ -501,11 +499,26 @@ function enabledMemoryCount(rules) {
             }))),
           actions)
       }
-      const body = props.loading
-        ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
-        : entries.length === 0
-          ? React.createElement('div', { className: 'dsm-empty' }, t('trash.empty'))
-          : entries.map(row)
+      // 组：默认就是调用方传的那一组（`groupTitle` / `entries`）；给了 `groups` 就按数组列多组
+      // —— 提示词页的回收站要一次看完"全局"与"快捷"两类，让用户先猜被删的东西在哪个域里，
+      // 等于把恢复这条路堵在他自己手里。每组各自有空的说明，不合并成一句"什么都没删"。
+      const groups = props.groups || [{ title: props.groupTitle, sub: props.groupSub, entries: props.entries || [] }]
+      const renderGroup = function (g) {
+        const list = g.entries || []
+        const rows = props.loading
+          ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+          : list.length === 0
+            ? React.createElement('div', { className: 'dsm-empty' }, t('trash.empty'))
+            : list.map(row)
+        return React.createElement('div', { className: 'dsm-trash-group', key: String(g.title) },
+          React.createElement('div', { className: 'dsm-trash-group-head' },
+            React.createElement('div', { className: 'dsm-trash-group-head-row' },
+              React.createElement('span', { className: 'dsm-trash-group-title' }, g.title),
+              React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: list.length }))),
+            // 后果说明进组头（sticky 跟着滚）：这组删的是记录还是文件，一眼可辨。
+            g.sub ? React.createElement('p', { className: 'dsm-trash-group-sub' }, g.sub) : null),
+          React.createElement('div', { className: 'dsm-trash-group-body' }, rows))
+      }
       // 列表类弹窗：宽高都固定（`.dsm-modal-list`），滚动只发生在 Modal 的 body 这一层 ——
       // 条目数变化时弹窗不跳，也不会出现「弹窗滚 + 组内滚」的嵌套滚动条。
       return React.createElement(Modal, {
@@ -517,14 +530,7 @@ function enabledMemoryCount(rules) {
         onClose: props.onClose,
       },
         props.error ? React.createElement(Notice, { kind: 'err', text: props.error }) : null,
-        React.createElement('div', { className: 'dsm-trash-group' },
-          React.createElement('div', { className: 'dsm-trash-group-head' },
-            React.createElement('div', { className: 'dsm-trash-group-head-row' },
-              React.createElement('span', { className: 'dsm-trash-group-title' }, props.groupTitle),
-              React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: entries.length }))),
-            // 后果说明进组头（sticky 跟着滚）：这组删的是记录还是文件，一眼可辨。
-            props.groupSub ? React.createElement('p', { className: 'dsm-trash-group-sub' }, props.groupSub) : null),
-          React.createElement('div', { className: 'dsm-trash-group-body' }, body)))
+        groups.map(renderGroup))
     }
 
     /** 勾选行：复选框 + 名称/说明 + 右侧指标 + 可选行内动作。 */
@@ -550,6 +556,15 @@ function enabledMemoryCount(rules) {
         h('span', { className: 'dsm-seg-group-line' }))
     }
     /**
+     * 表单分段标题（「基本信息 / 场景绑定」这类模块切分）。
+     *
+     * 与 `segGroup` 的差别只在**用在哪**：那个是滚动列表内部的地标（左右各留了内缩），
+     * 这个是表单第一层，必须与下面的字段左边缘对齐，所以不套那圈 padding。
+     */
+    function formSection(label) {
+      return h('div', { className: 'dsm-form-section' }, h('span', null, label))
+    }
+    /**
      * 「全选 ↔ 取消全选」二合一按钮的标签对 —— fixedLabelPair 的语义化别名（同一套定宽机制）。
      *
      * 两种文案宽度不同（中文「全选」2 字 vs「取消全选」4 字；英文 Select all vs
@@ -571,11 +586,6 @@ function enabledMemoryCount(rules) {
       // 常驻段（记忆，P5 单一真相源）没有「段定义」可移除 → 不传 onRemove 即不渲染。
       if (props.onRemove) out.push(h('button', { key: 'rm', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy, onClick: props.onRemove }, props.removeLabel))
       return out
-    }
-    /** 段脚注：段已定义但一项未勾 = 该域全部停用（必须显式提示，否则像没保存上）。 */
-    function segFoot(defined, count, emptyLabel) {
-      if (!defined || count > 0) return null
-      return h('div', { className: 'dsm-seg-foot' }, emptyLabel)
     }
     /** 固定高度滚动体内的条目列表（空态居中提示）。 */
     function segList(nodes, emptyText) {

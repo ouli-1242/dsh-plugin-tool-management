@@ -21,6 +21,9 @@
           // 工具表方案下拉的数据源（C1；按用户 2026-09-28 裁定从档案编辑器移进「编辑场景」表单）。
           var tts = React.useState(null)
           var ttInfo = tts[0], setTtInfo = tts[1]
+          // 快捷提示词候选（同一族：勾选入口在「修改场景」表单里，档案编辑器不带这一栏）。
+          var qps = React.useState([])
+          var quickOptions = qps[0], setQuickOptions = qps[1]
           var dts = React.useState(null)
           var drillTools = dts[0], setDrillTools = dts[1]
           // 场景回收站（记录 + 档案）：null = 关闭；{loading, error, entries}
@@ -181,15 +184,23 @@
             setSceneForm(function (f) { return (f && String(f.prompt || '') !== '') ? f : Object.assign({}, f, { prompt: activeId }) })
           }
           // ── 场景建 / 改描述 / 改绑定的提示词 / 删 ──
-          function openCreateScene() { setSceneForm({ name: '', description: '', prompt: '', toolTablePreset: '', error: null }); setModal({ type: 'scene-create' }); loadPresetOptions(defaultPromptToActive); loadToolTablePresets() }
+          // `quickPrompts` 三态：null = 「当前启用的」（这一域不绑、进出不碰）；数组 = 按场景勾选
+          // （**空数组也是"绑了"**，意思是进入后全部停用）。表单里那颗下拉只给这两个方向。
+          function openCreateScene() { setSceneForm({ name: '', description: '', prompt: '', toolTablePreset: '', quickPrompts: null, error: null }); setModal({ type: 'scene-create' }); loadPresetOptions(defaultPromptToActive); loadToolTablePresets(); loadQuickOptions() }
           function openEditScene(scene) {
             var sceneArchive = (data.archives || {})[scene.name] || {}
-            setSceneForm({ name: scene.name, description: scene.description || '', prompt: scene.prompt || '', toolTablePreset: typeof sceneArchive.toolTablePreset === 'string' ? sceneArchive.toolTablePreset : '', error: null })
+            setSceneForm({
+              name: scene.name, description: scene.description || '', prompt: scene.prompt || '',
+              toolTablePreset: typeof sceneArchive.toolTablePreset === 'string' ? sceneArchive.toolTablePreset : '',
+              quickPrompts: Array.isArray(sceneArchive.quickPrompts) ? sceneArchive.quickPrompts.slice() : null,
+              error: null,
+            })
             setModal({ type: 'scene-edit', name: scene.name })
             // 该场景还没绑定时，默认选中当前生效的那份（用户裁定「默认就是当前启动的」）。
             if (!scene.prompt) loadPresetOptions(defaultPromptToActive)
             else loadPresetOptions()
             loadToolTablePresets()
+            loadQuickOptions()
           }
           /** 新建与编辑共用一个表单：字段相同，只是分别走 rules-create-scene / rules-update-scene。 */
           function submitSceneForm() {
@@ -204,9 +215,13 @@
             // 工具表方案绑定（C1）单独一个参数：空串 = 解绑；服务端写进档案，
             // 改的是启用中的场景时会立即应用那份方案（见 scene-sync 的包装）。
             var toolTablePreset = String(sceneForm.toolTablePreset || '')
+            // 快捷提示词：null = 解绑（回到"保持现状"），数组 = 勾选集（空数组是"一条都不勾"）。
+            // 两个方向都必须**显式送出去**，不能省略 —— 省略在服务端那边是"这一域不碰"。
+            var quickPrompts = sceneForm.quickPrompts === null || sceneForm.quickPrompts === undefined
+              ? null : (sceneForm.quickPrompts || []).slice()
             var payload = isEdit
-              ? { name: originalName, nextName: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset }
-              : { name: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset }
+              ? { name: originalName, nextName: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset, quickPrompts: quickPrompts }
+              : { name: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset, quickPrompts: quickPrompts }
             apiCall(isEdit ? 'rules-update-scene' : 'rules-create-scene', payload).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
@@ -260,6 +275,15 @@
                   memories: inv.memories || [],
                 } })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          /**
+           * 快捷提示词候选（只读 op，没填令牌也拿得到）。读不到就当没有：下拉仍给
+           * 「当前启用的（保持现状）」这一项，只是切到「按场景勾选」时列表是空的。
+           */
+          function loadQuickOptions() {
+            apiCall('quickprompt-list', {}).then(function (res) {
+              setQuickOptions((res && res.ok && Array.isArray(res.prompts)) ? res.prompts : [])
+            }).catch(function () { setQuickOptions([]) })
           }
           /**
            * 工具表方案下拉的数据源（C1）：只读调用（不带 `set:true`），
@@ -317,8 +341,8 @@
            * 取 2026-09-13 前的「预勾当前运行时状态」是错的方向：用户点「添加」只是想开始配，
            * 不是想把自己现有的启用状态抄进档案。代价要讲清楚——勾选集语义是「勾 = 启用」，
            * 空段 = 全部停用（未定义段也是同一个意思，见 archive-engine 的四域同口径），
-           * 所以「添加 MCP 工具集」当下就等价于「该场景下全部 MCP 停用」，
-           * 段脚注（`memory.archive.emptySection`）与弹窗顶部说明会同时把这句话显示出来。
+           * 所以「添加 MCP 工具集」当下就等价于「该场景下全部 MCP 停用」。段脚注原先把这句话
+           * 印在每一段底下，2026-09-30 用户裁定撤掉（四段同屏时同一件事说了四遍）。
            */
           function emptyMcpPreset() { return {} }
           /** 全选：列出全部服务器（含未运行的）并各勾「全部工具」。 */
@@ -340,13 +364,6 @@
               selectAllLabel: t('bulk.selectAll'), clearLabel: t('bulk.unselectAll'), removeLabel: t('memory.archive.removeSection'),
               onAdd: onAdd, onRemove: onRemove, onAll: onAll, onClear: onClear, allChecked: allChecked,
             })
-          }
-          /**
-           * 段脚注：段已定义但一项未勾必须显式提示，否则像「没保存上」。
-           * 各域的后果不同（MCP/技能/记忆 = 全部停用；子智能体 = 不限制），所以文案由调用方给。
-           */
-          function archiveSegFoot(defined, count, emptyLabel) {
-            return segFoot(defined, count, emptyLabel || t('memory.archive.emptySection'))
           }
 
           // ── 段 4：记忆（P5：单一真相源 = `rules[*].enabled`）────────────────────
@@ -499,7 +516,6 @@
                       }))
                     })())
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.mcp.hint'))),
-              foot: archiveSegFoot(defined, defined ? Object.keys(sections.mcp).length : 0),
             })
           }
           /**
@@ -649,7 +665,6 @@
                         }))
                       : React.createElement('div', { className: 'dsm-pick-empty' }, modal.skillQuery ? t('scenes.mem.noMatch') : t('scenes.skills.empty')))
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.skills.hint'))),
-              foot: archiveSegFoot(defined, defined ? pickedCount : 0),
             })
           }
           /** 段 3：子智能体绑定。 */
@@ -724,7 +739,6 @@
                         }))
                       : React.createElement('div', { className: 'dsm-pick-empty' }, modal.subQuery ? t('scenes.mem.noMatch') : t('scenes.subagents.empty')))
                 : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.subagents.hint'))),
-              foot: archiveSegFoot(defined, defined ? sections.subagents.length : 0, t('memory.archive.emptySubagents')),
             })
           }
           /**
@@ -889,6 +903,10 @@
             pushRow('scenes.preview.row.skillsOff', sk.off, true)
             pushRow('scenes.preview.row.personasOn', sub.on)
             pushRow('scenes.preview.row.personasOff', sub.off)
+            // 快捷提示词：只有绑了才出行（没绑 = 这一域进都不进，服务端给的就是 null）。
+            var qp = plan.quickPrompts || {}
+            pushRow('scenes.preview.row.quickOn', qp.on)
+            pushRow('scenes.preview.row.quickOff', qp.off)
             // 工具表方案（C1）：绑了方案就是一句「会切成哪一份」，没绑不出行。
             // 方案已经不存在时（hiddenCount 为 null）说"这次不切换"，不报一个看不懂的数字。
             if (plan.toolPreset) {
@@ -1011,6 +1029,9 @@
             if (archive.mcp) parts.push(t('scenes.profile.mcp', { count: Object.keys(archive.mcp).length }))
             if (Array.isArray(archive.skills)) parts.push(t('scenes.profile.skills', { count: archive.skills.length }))
             if (Array.isArray(archive.subagents)) parts.push(t('scenes.profile.subagents', { count: archive.subagents.length }))
+            // 快捷提示词绑了才报（没绑 = 这一域不碰）。**空表也要报** —— 它说的是"进入后全部停用"，
+            // 与"没绑"是两件事，漏掉就等于把用户的一个真实选择显示成没有这个选择。
+            if (Array.isArray(archive.quickPrompts)) parts.push(t('scenes.profile.quickPrompts', { count: archive.quickPrompts.length }))
             // P5：记忆**不再是档案的一部分**（开关是 `rules[*].enabled` 单一真相源），
             // 所以这里不再统计 memories —— 否则会显示一个已经不存在的段的数量。
             return parts.join(' · ')
@@ -1138,6 +1159,9 @@
               })),
             modal && (modal.type === 'scene-create' || modal.type === 'scene-edit') ? React.createElement(Modal, { key: 'screate', title: modal.type === 'scene-create' ? t('memory.scene.createTitle') : t('memory.scene.editTitle'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('div', { className: 'dsm-form' },
+                // 弹窗里的字段分两模块：改名 / 描述是"这个场景是什么"，下面三条是"进入时改什么"。
+                // 一屏六行同一种字重、同一种间距时，用户读不出哪几条是一回事（用户 2026-10-01 反馈）。
+                formSection(t('scenes.form.section.basic')),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.name')),
                   React.createElement('input', {
@@ -1163,16 +1187,77 @@
                     onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { description: e.target.value, error: null })) },
                   })),
                 // 提示词预设：一个场景**只能绑一个**（单值字段天然单选）；「不绑定」= 解绑。
-                React.createElement('label', { className: 'dsm-field' },
+                formSection(t('scenes.form.section.binding')),
+                // 下面三格都是「下拉 + 说明」这一类复合字段，外层用 `div` 而不是 `label`：
+                // 不带 `for` 的 label 会把**第一个可标注后代**当成自己的控件 —— 点标题文字就等于
+                // 点那颗下拉，而在快捷那一格里，第一个控件是勾选列表里的第一颗复选框
+                // （点段头的空白会把那条勾翻掉）。纯文本输入框那两格保留 label，点标题聚焦输入框
+                // 正是想要的。
+                React.createElement('div', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('scenes.field.prompt')),
                   presetOptions.length > 0
                     ? React.createElement(SourceSelect, { options: presetOptions, value: sceneForm.prompt || '', onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { prompt: v })) } })
                     : React.createElement('p', { className: 'dsm-help' }, t('scenes.prompt.noPresets')),
                   helpBullets(t, 'scenes.field.prompt.hint')),
+                // 快捷提示词（0.18.0）：默认「当前启用的」= 这一域**不绑**，进出不碰它；
+                // 切到「按场景勾选」才给清单 —— 勾进来的进入本场景后启用、没勾的停用，
+                // 退出场景按进场景前那批开关还原（与子智能体那一档同一条机制）。
+                // 空表是"绑了但一条都不勾"（进入后全部停用），与"不绑"是相反的意思，
+                // 所以那颗下拉只给两个方向，不让用户靠"清空"去表达"不绑"。
+                React.createElement('div', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('scenes.field.quickPrompts')),
+                  React.createElement(SourceSelect, {
+                    value: Array.isArray(sceneForm.quickPrompts) ? 'custom' : '',
+                    options: [{ value: '', label: t('scenes.field.quickPrompts.current') }, { value: 'custom', label: t('scenes.field.quickPrompts.custom') }],
+                    onChange: function (v) {
+                      setSceneForm(Object.assign({}, sceneForm, {
+                        quickPrompts: v === 'custom'
+                          // 切过来时从**当前开着的那些**起步（用户裁定：默认就是当前启用的），
+                          // 而不是给一张空表 —— 空表说的是"进入后全部停用"。
+                          ? (quickOptions || []).filter(function (p) { return p.enabled !== false }).map(function (p) { return p.id })
+                          : null,
+                      }))
+                    },
+                  }),
+                  // 勾选清单是一张段卡片（与档案编辑器同一套排版）：段头报"已勾几条 / 共几条"并给
+                  // 全选，段体按内容长（超过 6 行才内滚）。原先这里是一块裸的固定 216px 滚动体，
+                  // 一条也占 216px —— 弹窗中间凭空一片空白（用户 2026-10-01 反馈）。
+                  Array.isArray(sceneForm.quickPrompts)
+                    ? (quickOptions || []).length
+                      ? seg({
+                          title: t('scenes.field.quickPrompts.list'),
+                          count: t('scenes.seg.checked', { checked: (sceneForm.quickPrompts || []).length, total: quickOptions.length }),
+                          actions: segActions({
+                            defined: true, busy: busy,
+                            selectAllLabel: t('bulk.selectAll'), clearLabel: t('bulk.unselectAll'),
+                            onAll: function () {
+                              setSceneForm(Object.assign({}, sceneForm, { quickPrompts: quickOptions.map(function (p) { return p.id }) }))
+                            },
+                            onClear: function () { setSceneForm(Object.assign({}, sceneForm, { quickPrompts: [] })) },
+                            allChecked: quickOptions.length > 0 && (sceneForm.quickPrompts || []).length === quickOptions.length,
+                          }),
+                          body: React.createElement('div', { className: 'dsm-seg-body dsm-seg-fit' }, quickOptions.map(function (p) {
+                            var list = sceneForm.quickPrompts || []
+                            return pickRow({
+                              key: p.id, name: p.id, desc: p.description || '',
+                              checked: list.indexOf(p.id) >= 0,
+                              onChange: function () {
+                                var next = list.slice()
+                                var at = next.indexOf(p.id)
+                                if (at >= 0) next.splice(at, 1)
+                                else next.push(p.id)
+                                setSceneForm(Object.assign({}, sceneForm, { quickPrompts: next }))
+                              },
+                            })
+                          })),
+                        })
+                      : React.createElement('p', { className: 'dsm-help' }, t('scenes.field.quickPrompts.none'))
+                    : null,
+                  helpBullets(t, 'scenes.field.quickPrompts.hint')),
                 // 工具表方案（C1）：与提示词预设同族的单值绑定字段，按用户 2026-09-28 裁定
                 // 从档案编辑器挪进这张表单 —— 两个「场景绑谁」的字段放在一起，档案编辑器
                 // 只留内容勾选。改的是启用中的场景时，服务端会立即把关停名单换成那份方案。
-                React.createElement('label', { className: 'dsm-field' },
+                React.createElement('div', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('scenes.field.toolTable')),
                   React.createElement(SourceSelect, {
                     value: String(sceneForm.toolTablePreset || ''),

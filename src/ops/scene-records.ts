@@ -13,6 +13,19 @@ import { readIndex, writeIndex, sceneRecordOf, normalizeScenePromptId, pathExist
 import type { RuleIndexEntry, SceneIndexEntry } from '../memories/index-io.js'
 import type { MemoriesOpsCtx } from './ctx.js'
 
+/** `quickPrompts` 参数的三种形态：不传 = 完全不碰这一域；null / 非数组 = 解绑（删字段）；
+ *  数组 = 勾选集（去重去空）。**空数组是合法值**（= 进入后全部停用），不能当成"没绑"。 */
+function quickPromptsArg(args: any): string[] | null | undefined {
+  if (!args || args.quickPrompts === undefined) return undefined
+  if (!Array.isArray(args.quickPrompts)) return null
+  const out: string[] = []
+  for (const item of args.quickPrompts as unknown[]) {
+    const id = String(item == null ? '' : item).trim()
+    if (id && out.indexOf(id) < 0) out.push(id)
+  }
+  return out
+}
+
 /** 组装本域 op。rc 由 createMemoriesService 组装，契约见 ./ctx.ts。 */
 export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
   const { ensureLayout, invalidateSnapshot, presetExistsSync, memoriesRoot, refuseOutsideRoot, sceneRows, snapshot, stateDir } = rc
@@ -132,6 +145,13 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       if (!index.archives) index.archives = {}
       index.archives[name] = { ...(index.archives[name] || {}), toolTablePreset }
     }
+    // 快捷提示词勾选集（0.18.0）：同样存进**档案**。空数组也要落 —— 它说的是"进入后全部停用"，
+    // 与"没绑"（不碰这一域）是相反的意思。
+    const quickCreate = quickPromptsArg(args)
+    if (quickCreate) {
+      if (!index.archives) index.archives = {}
+      index.archives[name] = { ...(index.archives[name] || {}), quickPrompts: quickCreate }
+    }
     await writeIndex(stateDir, index)
     invalidateSnapshot()
     return { ok: true, scene: sceneRecordOf(name, next), ...(collapsed ? { collapsedActive: true } : {}) }
@@ -190,6 +210,18 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       const archive = { ...((index.archives && index.archives[name]) || {}) }
       if (toolTablePreset === '') delete archive.toolTablePreset
       else archive.toolTablePreset = toolTablePreset
+      if (Object.keys(archive).length > 0) index.archives[name] = archive
+      else delete index.archives[name]
+    }
+    if (args && args.quickPrompts !== undefined) {
+      // 快捷提示词勾选集（0.18.0，用户裁定入口在「修改场景」表单）：与工具表方案同一族 ——
+      // 绑定存**档案**，这一次读-改-写顺带落掉。`null` = 解绑（这一域回到"保持现状"）；
+      // 空数组 = 绑定了但一条都没勾（进入后全部停用），**不是**解绑。不传这个参数 = 完全不碰。
+      const quick = quickPromptsArg(args)
+      if (!index.archives) index.archives = {}
+      const archive = { ...((index.archives && index.archives[name]) || {}) }
+      if (quick === null) delete archive.quickPrompts
+      else if (quick !== undefined) archive.quickPrompts = quick
       if (Object.keys(archive).length > 0) index.archives[name] = archive
       else delete index.archives[name]
     }

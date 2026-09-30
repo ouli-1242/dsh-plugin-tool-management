@@ -25,6 +25,7 @@ import { assessPresetReach, type PresetRosterLike } from '../compat/preset-reach
 import { runtimeNotes, type RuntimeNote } from '../compat/runtime-notes.js'
 import { pluginLog } from '../skills/service.js'
 import type { InjectSettings, LiveInjectionSnapshot } from '../context-inject.js'
+import type { SlashSettings } from '../slash-settings.js'
 import type { ToolTableReport } from '../tools/table.js'
 
 /** patch 备份清单里的一项：名字 / 层级 / 时间 / 大小（不带文件内容）。 */
@@ -50,6 +51,8 @@ export interface CompatOpsDeps {
   tools: { schemas(): unknown }
   readInjectSettings(force?: boolean): Promise<InjectSettings>
   injectSettingsOp(args: any): Promise<any>
+  /** 斜杠命令入口的开关（侧车 `slash-settings.json`；功能总览那一行用）。 */
+  readSlashSettings(force?: boolean): Promise<SlashSettings>
   /** 模型工具表设置（读写侧车 `tool-table.json`；界面在「兼容」页同一块）。 */
   toolTableOp(args: any): Promise<any>
   /** 当前工具表实况（注册时量到的体积 + 关掉了哪些），功能总览那一行用。 */
@@ -223,6 +226,9 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           scenes?: readonly string[]
           servers?: number
           tools?: number
+          /** 斜杠命令入口的两颗开关（`tools` 这一格已被"模型工具数"占了，所以另起两名）。 */
+          slashTools?: boolean
+          slashQuickPrompts?: boolean
           hidden?: number
           defaults?: number
           version?: string
@@ -348,6 +354,17 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         push({
           key: 'tool-table', label: '模型工具表', tab: 'compat', state: 'ok', detail: offPart,
           hidden: table.hiddenCount, total: table.totalCount, defaults: table.defaultHiddenCount,
+        })
+        // 斜杠命令入口（`/` 菜单里的「工具」与「快捷提示词」两段，各一颗开关）。服务端只知道
+        // **开关开没开**：真正挂没挂上是浏览器那半的事（宿主有没有 `inputTriggers` 服务），那一句
+        // 由兼容页就地报，不冒充服务端探测（见 client 48-slash.js 的挂载状态）。两个布尔一起带上，
+        // "开着哪一段"由界面按语言说。
+        const slash = await deps.readSlashSettings()
+        push({
+          key: 'slash-commands', label: '斜杠命令入口', tab: 'compat',
+          state: slash.tools || slash.quickPrompts ? 'ok' : 'disabled',
+          detail: slash.tools || slash.quickPrompts ? '开关已开（在对话输入框打 / 唤出已打开的那几段）' : '两段都已关闭（本页可重新打开）',
+          slashTools: slash.tools, slashQuickPrompts: slash.quickPrompts,
         })
         const nativeNote = notes.get('workspace.delete-native')
         push({

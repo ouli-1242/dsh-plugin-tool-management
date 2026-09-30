@@ -235,9 +235,9 @@ export async function relocateEntries(
 
 // ── 回收站 ───────────────────────────────────────────────────────────────────
 //
-// 五类内容：**技能**、**子智能体人设**、**场景**、**提示词预设**、**记忆**。
+// 六类内容：**技能**、**子智能体人设**、**场景**、**提示词预设**、**快捷提示词**、**记忆**。
 // 落点 `hub/trash/<域>-trash/<id>/`：`manifest.json` + 随条目搬走的负载。
-// 但**只有四类走本模块**（`TrashKind` 就是这三类 ＋ 核心层的 skills）：
+// 但**只有五类走本模块**（`TrashKind` 就是这四类 ＋ 核心层的 skills）：
 // 技能在 `hub/trash/skills-trash/`（核心层，v0.9.0 前直接躺在 `trash/` 下），
 // 记忆在 `hub/memories-trash/` —— **hub 根下的独立目录，不在 `trash/` 里**，由
 // `memories/service.ts` 自己实现（不经本模块的 `moveToTrash`）。
@@ -246,7 +246,7 @@ export async function relocateEntries(
 // 已存在就报错让用户自己处理）、**失败要回滚**（搬了一半失败就把已搬的搬回去）。
 
 /** 回收站条目的种类（决定子目录名）。 */
-export type TrashKind = 'subagents' | 'scenes' | 'prompts'
+export type TrashKind = 'subagents' | 'scenes' | 'prompts' | 'quick-prompts'
 
 /**
  * 老 manifest 里写着的 kind 值（v0.9.0 按域改名前的）：读盘时一并认，否则升级后
@@ -256,6 +256,8 @@ const LEGACY_TRASH_KINDS: Record<TrashKind, readonly string[]> = {
   prompts: ['agents-md'],
   subagents: ['agents'],
   scenes: [],
+  // 0.18.0 才有的域，没有旧名字要认。
+  'quick-prompts': [],
 }
 
 /** 回收站条目的清单文件。 */

@@ -71,6 +71,8 @@ export interface SessionOpsDeps {
   /** 按名取宿主服务（sessions / sessionPersistence / sessionProjectionCache）。 */
   host<T = unknown>(name: string): T | undefined
   promptsDir: string
+  /** 快捷提示词库（`hub/quick-prompts/`）：`bundle-export` 的 `quick-prompts` 那一档。 */
+  quickPromptsDir: string
   rulesList(args: any): Promise<any>
   skillDetail(args: any): Promise<any>
   extractTurnsFromEvents(events: unknown[]): Array<{ role: 'user' | 'assistant'; text: string }>
@@ -377,13 +379,13 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
     // 打包用已在依赖里的 `fflate.zipSync`（此前只用了 unzipSync）。
     'bundle-export': async (args: any) => {
       const kind = String((args && args.kind) || '')
-      const KINDS = ['skills', 'subagents', 'presets', 'memories']
+      const KINDS = ['skills', 'subagents', 'presets', 'quick-prompts', 'memories']
       if (KINDS.indexOf(kind) < 0) return { ok: false, error: `kind 需为 ${KINDS.join(' / ')}` }
       const rawNames = (args && args.names) || []
       const names = Array.isArray(rawNames) ? rawNames.map((s: unknown) => String(s).trim()).filter(Boolean) : []
       if (!names.length) return { ok: false, error: '请至少选择一项' }
-      // 名字逐项校验：子智能体与提示词这两个域的名字会被拼成绝对路径直接进 readFile，
-      // `..` 或路径分隔符能读到根外（此前只做 trim().filter(Boolean)）。
+      // 名字逐项校验：子智能体、提示词预设与快捷提示词这三个域的名字会被拼成绝对路径直接进
+      // readFile，`..` 或路径分隔符能读到根外（此前只做 trim().filter(Boolean)）。
       // 另外两个域**不套单段谓词**，原因不同：
       //   - 记忆：名字是 `<场景>/<名>` 的 id，只用来查索引拿路径，本身不参与拼接；
       //   - 技能：名字可以是多段相对路径（只读来源的 bundle 用 relative() 拼出名字），
@@ -391,7 +393,7 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
       //     匹配不上就进 missing，套单段谓词反而会把合法的多段技能名误杀。
       const rejected: string[] = []
       const accepted = names.filter((name) => {
-        const ok = kind === 'presets' ? isValidPresetId(name)
+        const ok = kind === 'presets' || kind === 'quick-prompts' ? isValidPresetId(name)
           : kind === 'subagents' ? validPersonaName(name)
             : true
         if (!ok) rejected.push(name)
@@ -417,13 +419,17 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
             if (!isInsideRoot(dir, abs)) { missing.push(name); continue }
             entries.push({ zip: `${name}.md`, abs })
           }
-        } else if (kind === 'presets') {
+        } else if (kind === 'presets' || kind === 'quick-prompts') {
+          // 两个提示词域同形（一 id 一目录、正文 + `meta.json` 描述侧车），差别只在根目录与
+          // 正文文件名 —— 走同一段代码，别让"导出快捷词"变成第二份会漏改的拷贝。
+          const root = kind === 'quick-prompts' ? deps.quickPromptsDir : deps.promptsDir
+          const doc = kind === 'quick-prompts' ? 'PROMPT.md' : 'AGENTS.md'
           for (const id of accepted) {
-            const docAbs = join(deps.promptsDir, id, 'AGENTS.md')
-            if (!isInsideRoot(deps.promptsDir, docAbs)) { missing.push(id); continue }
-            entries.push({ zip: `${id}/AGENTS.md`, abs: docAbs })
+            const docAbs = join(root, id, doc)
+            if (!isInsideRoot(root, docAbs)) { missing.push(id); continue }
+            entries.push({ zip: `${id}/${doc}`, abs: docAbs })
             // 描述侧车（预设那句说明）随预设一起走：导出再导入不该把它丢掉。
-            const metaAbs = join(deps.promptsDir, id, 'meta.json')
+            const metaAbs = join(root, id, 'meta.json')
             try { if ((await stat(metaAbs)).isFile()) entries.push({ zip: `${id}/meta.json`, abs: metaAbs }) } catch { /* 没写描述 */ }
           }
         } else if (kind === 'memories') {

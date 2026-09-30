@@ -14,6 +14,15 @@ export interface SceneArchive {
   skills?: string[]                      // 勾选的技能选集，key = `<rootKey>/<name>`
   subagents?: string[]                   // 绑定的人设名清单
   /**
+   * 勾选的快捷提示词（id）。**段语义与 mcp/skills/subagents 三段相反**，与下面的
+   * `toolTablePreset` 同族：
+   *   · 段**未定义** = 这个域完全不碰（进入场景后仍按每条自己的开关）—— 这是用户 2026-10-01
+   *     裁定的默认形态（「下拉框默认选择是当前启动的快捷提示词」）；
+   *   · 段**已定义**（含空表）= 进入时把每一条的开关置为"在不在这份清单里"，退出按快照还原。
+   * 空表是合法值（= 进入后全部停用），所以它**不能**跟着「空段 = 未定义」那条清理走。
+   */
+  quickPrompts?: string[]
+  /**
    * v3：勾选的记忆（id = `<场景>/<名>`）。
    * 勾选集语义与其余段一致：段已定义 → 未勾的记忆在该场景下**不注入**系统提示词；
    * 段未定义 → 该场景全部记忆照常注入（向后兼容：老档案没有这一段）。
@@ -79,6 +88,13 @@ export interface ModeSnapshot {
    * 老 snapshot 没有这一栏 → 退回 `subagents` / `subagentsOn` 两个名单（旧行为）。
    */
   subagentsAll?: Record<string, boolean>
+  /**
+   * 快捷提示词开关的**全量**映射（id → 进场景前是否开着），形状与 `subagentsAll` 一致。
+   *
+   * 只有档案**定义了** `quickPrompts` 段时才写这一栏：段未定义 = 这一域进出不碰，
+   * 也就不需要还原（老快照没有这一栏 → 退出一个字都不动）。
+   */
+  quickPromptsAll?: Record<string, boolean>
   /**
    * 档案改过**备注**的服务器行，记录**改动前**的备注（`null` = 原本没有备注）。
    * 退出时按此恢复；只记被改动的行。
@@ -175,6 +191,8 @@ export function normalizeArchive(raw: unknown): SceneArchive {
   if (obj.mcpNotes != null) out.mcpNotes = normalizeMcpNotes(obj.mcpNotes)
   if (obj.skills != null) out.skills = normalizeStringList(obj.skills)
   if (obj.subagents != null) out.subagents = normalizeStringList(obj.subagents)
+  // 快捷提示词：`!= null` 才算定义（空表 = 定义了但全不勾 = 进入后全部停用，必须留住）。
+  if (obj.quickPrompts != null) out.quickPrompts = normalizeStringList(obj.quickPrompts)
   if (obj.memories != null) out.memories = normalizeStringList(obj.memories)
   // 工具表方案是**标量**不是集合：空串 / 非字符串一律视为未绑定（段不存在）。
   const toolTablePreset = typeof obj.toolTablePreset === 'string' ? obj.toolTablePreset.trim() : ''
@@ -345,6 +363,11 @@ export function snapshotRuntime(
   subagentStates: Record<string, boolean> | null = null,
   /** 进场景前的模型工具表关停名单（null = 这次不进快照，退出也就不动工具表）。 */
   toolTableHidden: string[] | null = null,
+  /**
+   * 进场景前**每一条**快捷提示词的开关（null = 档案没定义 quickPrompts 段 → 这一域不碰，
+   * 也就不进快照，退出同样一个字不动）。
+   */
+  quickPromptStates: Record<string, boolean> | null = null,
 ): ModeSnapshot {
   return {
     mcp: Object.fromEntries(Object.entries(mcpRaw).map(([k, v]) => [k, v.slice()])),
@@ -356,6 +379,7 @@ export function snapshotRuntime(
     ...(subagentStates ? { subagentsAll: { ...subagentStates } } : {}),
     ...(mcpNotes.length ? { mcpNotes: mcpNotes.map((x) => ({ id: x.id, note: x.note })) } : {}),
     ...(toolTableHidden ? { toolTableHidden: toolTableHidden.slice() } : {}),
+    ...(quickPromptStates ? { quickPromptsAll: { ...quickPromptStates } } : {}),
   }
 }
 

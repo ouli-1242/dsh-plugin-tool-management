@@ -36,6 +36,7 @@ const SLICES = [
   '45-scenes.js',       // ScenesPage
   '46-subagents.js',    // SubagentsPage + memoryView
   '47-memory.js',       // MemoryPage
+  '48-slash.js',        // 斜杠命令「工具」段（宿主 / 菜单；不在设置页里）
   '90-apply-tail.js',   // apply 收尾（注册各页 + 导出 _pages）
 ]
 
