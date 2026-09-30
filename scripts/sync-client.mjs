@@ -26,7 +26,10 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const SLICES = [
   '00-prelude.js',      // 文件头注释 + ModuleLoader 注册头 + React
   '10-css.js',          // CSS：设计变量与全部 dsm-* 规则
-  '20-helpers.js',      // 核心 helper：异常文案 / 样式注入 / 令牌行 / 备份清理 / 通用小工具
+  '20-helpers.js',      // 核心 helper：异常文案 / 样式注入 / 令牌行 / 通用小工具
+  '21-compat-data.js',  // 兼容页的数据表与路由判定（OPERATION_LABELS / AUDIT_OP_LABELS / operationRoutes）
+  '22-compat-page.js',  // CompatPage 一个组件（兼容与体检页的全部渲染）
+  '23-export-hub.js',   // 导出枢纽 _pages（必须落在 factory 作用域）+ 交给 DICT 的那段说明
   '30-dict.js',         // DICT：中英两份词典
   '40-apply-head.js',   // apply 开头：取词服务、slots 守卫、各页共享的 mt / opMsg
   '41-mcp.js',          // FeedbackLinks + MCPPage + PromptsPage + ToolsSection
