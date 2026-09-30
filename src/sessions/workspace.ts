@@ -4,6 +4,18 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { hubPath } from "../hub.js";
 import { sessionDir } from "@deepseek-ai/dsh-spill-local";
 import { trackTombstone } from "./tombstone.js";
+import {
+	archivedBatchTargetSchema,
+	archivedSessionMetadataSchema,
+	archivedSetSchema,
+	archivedWorkspaceBatchSchema,
+	deletedBatchSchema,
+	deletedSchema,
+	sessionIdSchema,
+	unarchivedBatchSchema,
+	workspaceIdSchema,
+} from "./archive-schemas.js";
+import { workspaceBaseName, workspacePathKey } from "./path-key.js";
 import type { CapabilityRefusal } from "../compat/probe.js";
 import { noteRuntime } from "../compat/runtime-notes.js";
 import type { SessionHeader } from "@deepseek-ai/dsh-session";
@@ -53,7 +65,7 @@ interface TranscriptLocationLike {
  * 宿主返回值校验器的输入：未经校验的外部记录。字段判型由各 `parse` 内的运行时检查
  * 完成，通过后原样返回该记录，因此这里按动态记录声明。
  */
-type HostResultRecord = Record<string, any>;
+export type HostResultRecord = Record<string, any>;
 
 /** 批量归档 / 恢复 / 删除的目标作用域（与客户端请求体一致）。 */
 type ArchivedBatchTarget =
@@ -314,162 +326,6 @@ function headerIdentity(header: HeaderLike): { createdAt: unknown; cwd: unknown 
 		cwd: header.cwd ?? null,
 	};
 }
-const sessionIdSchema = {
-	parse(value: unknown): string {
-		if (typeof value !== "string" || value.length === 0)
-			throw new TypeError(
-				`sessionId must be a non-empty string, got ${String(value)}`,
-			);
-		return value;
-	},
-};
-const workspaceIdSchema = {
-	parse(value: unknown): string {
-		if (typeof value !== "string" || value.length === 0)
-			throw new TypeError(
-				`workspaceId must be a non-empty string, got ${String(value)}`,
-			);
-		return value;
-	},
-};
-const archivedSetSchema = {
-	parse(value: HostResultRecord): HostResultRecord {
-		if (typeof value !== "object" || value === null || Array.isArray(value))
-			throw new TypeError("result must be an object");
-		const ids = value.archivedSessionIds;
-		if (!Array.isArray(ids) || ids.some((id: unknown) => typeof id !== "string"))
-			throw new TypeError("archivedSessionIds must be a string array");
-		return value;
-	},
-};
-const deletedSchema = {
-	parse(value: HostResultRecord): HostResultRecord {
-		if (
-			typeof value !== "object" ||
-			value === null ||
-			Array.isArray(value) ||
-			value.deleted !== true
-		)
-			throw new TypeError("deleted must be true");
-		return value;
-	},
-};
-const archivedBatchTargetSchema = {
-	// 校验通过后原样返回记录，调用方按 scope 判别式收窄（宿主返回值校验器，故返回 any）。
-	parse(value: HostResultRecord): any {
-		if (typeof value !== "object" || value === null || Array.isArray(value))
-			throw new TypeError("target must be an object");
-		if (value.scope === "all" || value.scope === "ungrouped") return value;
-		if (
-			value.scope === "workspace" &&
-			typeof value.workspaceId === "string" &&
-			value.workspaceId.length > 0
-		)
-			return value;
-		if (
-			value.scope === "sessions" &&
-			Array.isArray(value.sessionIds) &&
-			value.sessionIds.length > 0 &&
-			value.sessionIds.every((id: unknown) => typeof id === "string" && id.length > 0)
-		)
-			return value;
-		throw new TypeError(
-			"target.scope must be all, ungrouped, workspace with a non-empty workspaceId, or sessions with non-empty sessionIds",
-		);
-	},
-};
-const unarchivedBatchSchema = {
-	parse(value: HostResultRecord): HostResultRecord {
-		if (typeof value !== "object" || value === null || Array.isArray(value))
-			throw new TypeError("result must be an object");
-		if (
-			!Array.isArray(value.archivedSessionIds) ||
-			value.archivedSessionIds.some((id: unknown) => typeof id !== "string")
-		)
-			throw new TypeError("archivedSessionIds must be a string array");
-		if (
-			!Array.isArray(value.unarchivedSessionIds) ||
-			value.unarchivedSessionIds.some((id: unknown) => typeof id !== "string")
-		)
-			throw new TypeError("unarchivedSessionIds must be a string array");
-		return value;
-	},
-};
-const archivedWorkspaceBatchSchema = {
-	parse(value: HostResultRecord): HostResultRecord {
-		if (typeof value !== "object" || value === null || Array.isArray(value))
-			throw new TypeError("result must be an object");
-		if (
-			!Array.isArray(value.archivedSessionIds) ||
-			value.archivedSessionIds.some((id: unknown) => typeof id !== "string")
-		)
-			throw new TypeError("archivedSessionIds must be a string array");
-		if (
-			!Array.isArray(value.archivedSessionIdsAdded) ||
-			value.archivedSessionIdsAdded.some((id: unknown) => typeof id !== "string")
-		)
-			throw new TypeError("archivedSessionIdsAdded must be a string array");
-		return value;
-	},
-};
-const deletedBatchSchema = {
-	parse(value: HostResultRecord): HostResultRecord {
-		if (typeof value !== "object" || value === null || Array.isArray(value))
-			throw new TypeError("result must be an object");
-		for (const key of [
-			"requestedSessionIds",
-			"deletedSessionIds",
-			"skippedSessionIds",
-		]) {
-			if (
-				!Array.isArray(value[key]) ||
-				value[key].some((id: unknown) => typeof id !== "string")
-			)
-				throw new TypeError(`${key} must be a string array`);
-		}
-		if (
-			!Array.isArray(value.failures) ||
-			value.failures.some(
-				(failure: HostResultRecord) =>
-					typeof failure !== "object" ||
-					failure === null ||
-					typeof failure.sessionId !== "string" ||
-					typeof failure.message !== "string",
-			)
-		)
-			throw new TypeError("failures must contain sessionId/message objects");
-		return value;
-	},
-};
-const archivedSessionMetadataSchema = {
-	parse(value: HostResultRecord): HostResultRecord {
-		if (
-			typeof value !== "object" ||
-			value === null ||
-			Array.isArray(value) ||
-			!Array.isArray(value.items)
-		)
-			throw new TypeError("result.items must be an array");
-		if (
-			value.items.some(
-				(item: HostResultRecord) =>
-					typeof item !== "object" ||
-					item === null ||
-					typeof item.sessionId !== "string" ||
-					typeof item.createdAt !== "number" ||
-					!Number.isFinite(item.createdAt),
-			)
-		)
-			throw new TypeError("items must contain sessionId/createdAt objects");
-		if (
-			value.repairedSessionIds !== void 0 &&
-			(!Array.isArray(value.repairedSessionIds) ||
-				value.repairedSessionIds.some((id: unknown) => typeof id !== "string"))
-		)
-			throw new TypeError("repairedSessionIds must be a string array");
-		return value;
-	},
-};
 /**
  * 折叠进 dsh-plugin-tool-management 的归档工作区注册表。
  * 原始实现来自 @michengai/dsh-archive-manager（Apache-2.0），剥离了
@@ -482,43 +338,6 @@ function defaultArchivedAtFile() {
 }
 function defaultWorkspaceSnapshotFile() {
 	return hubPath("history-workspaces.json");
-}
-/**
- * 路径比较键：工作区的唯一性在宿主侧是 realpath 字符串相等（dsh-workspace
- * `realpathNormalize`），Windows 盘符大小写与分隔符拼写却可能不同，因此比较前
- * 先归一化。
- *
- * ⚠ 它不是"只用于分组"：它决定**哪些会话被挂回哪条登记** —— `registerWorkspace` 会调
- * `attachKnownSessions`，后者按这个键挑选会话并写宿主记账（`sessionIds`）；
- * `ensureWorkspaceAccounting` 也拿它当去重键后 `host.create` + 挂回。
- * 而且它比宿主更宽：宿主 `realpathNormalize` 只是 `fs.realpath`（**不做大小写归一**），
- * 本函数在 Windows 上 `toLowerCase()` ⇒ `C:\Proj` 与 `c:\proj` 在插件里同组、在宿主里
- * 可以是两条登记。挂回前应以宿主 `resolveByPath` 实际返回的 id 复核，而不是按归一字符串匹配。
- * @param {string} path - 原始路径。
- * @returns {string} 归一化后的比较键（空路径返回空串）。
- */
-function workspacePathKey(path: unknown): string {
-	const raw = String(path ?? "").trim();
-	if (!raw) return "";
-	const windows = /^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("\\\\");
-	let out = windows ? raw.replace(/\//g, "\\") : raw;
-	while (out.length > 1 && (out.endsWith("\\") || out.endsWith("/"))) out = out.slice(0, -1);
-	return windows ? out.toLowerCase() : out;
-}
-/**
- * 展示用目录名（与宿主 `defaultWorkspaceTitle` 同义：末段，无末段则用根拼写）。
- * @param {string} path - 原始路径。
- * @returns {string} 非空展示名。
- */
-function workspaceBaseName(path: unknown): string {
-	const raw = String(path ?? "").trim();
-	if (!raw) return "";
-	const trimmed = raw.replace(/[\\/]+$/, "");
-	const index = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
-	const segment = index >= 0 ? trimmed.slice(index + 1) : trimmed;
-	if (segment) return segment;
-	const root = trimmed.match(/^(?:[A-Za-z]:[\\/]|[\\/]{1,2})/);
-	return root ? root[0] : trimmed || raw;
 }
 // Standalone facade over the existing registry. Never instantiate/register a
 // second WorkspaceRegistry, and never open another copy of its storage domain.
@@ -1701,4 +1520,6 @@ var ArchiveWorkspaceRegistry = class {
 	}
 };
 //#endregion
-export { ArchiveWorkspaceRegistry, ArchiveWorkspaceRegistry as default, workspaceBaseName, workspacePathKey };
+export { ArchiveWorkspaceRegistry, ArchiveWorkspaceRegistry as default };
+// 路径键拆进 path-key.ts 后照旧从这个入口对外可见（package.json 的 exports 只声明 ./workspace）。
+export { workspaceBaseName, workspacePathKey } from "./path-key.js";
