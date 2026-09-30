@@ -37,9 +37,11 @@ import {
   logPath,
   trashRootPath,
 } from './core.js'
+import { watchDirectories } from './dir-watch.js'
+import { registerAgentSkillProviders, externalSkillProvider } from './provider-registration.js'
+import { moveToSystemTrash, permanentlyDeleteTrashSafely } from './system-trash.js'
 
 const MAX_LOG_BYTES = 1 << 20
-const PROVIDER_NAME = 'dsh-plugin-tool-management-external'
 
 const message = (e: unknown): string => String((e && (e as Error).message) || e)
 
@@ -64,146 +66,6 @@ function makeLog(): (event: string, detail?: unknown) => Promise<void> {
   }
 }
 
-// ── 系统回收站（永久删除的最后一道保险） ──────────────────────────────────
-
-/**
- * 外部进程（PowerShell / gio）的超时上限。这些调用在技能的**写队列**里被 await
- * （skill-trash-delete），进程一旦挂起，该域全部写操作会永久停摆且无任何提示 ——
- * 回收站 API 在文件被占用、系统弹窗等情况下确实会挂住。超时后杀掉进程并返回 false，
- * 让调用方按既有的「回收站失败 → 硬删除」兜底走下去，队列得以继续。
- */
-const EXTERNAL_CMD_TIMEOUT_MS = 30_000
-
-function runQuietly(command: string, args: string[]): Promise<boolean> {
-  return new Promise((resolve) => {
-    let settled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const finish = (ok: boolean): void => {
-      if (settled) return
-      settled = true
-      if (timer) { clearTimeout(timer); timer = null }
-      resolve(ok)
-    }
-    let child: any
-    try {
-      child = spawn(command, args, { stdio: 'ignore', windowsHide: true })
-    } catch {
-      finish(false)
-      return
-    }
-    timer = setTimeout(() => {
-      try { child.kill('SIGKILL') } catch { /* 进程可能已自行退出 */ }
-      finish(false)
-    }, EXTERNAL_CMD_TIMEOUT_MS)
-    child.on('error', () => finish(false))
-    child.on('close', (code: number) => finish(code === 0))
-  })
-}
-
-function psQuote(value: string): string {
-  return "'" + String(value).replace(/'/g, "''") + "'"
-}
-
-/** Win → 回收站；macOS → ~/.Trash；Linux → gio trash。失败返回 false。 */
-async function moveToSystemTrash(abs: string): Promise<boolean> {
-  try {
-    if (process.platform === 'win32') {
-      const script = [
-        'Add-Type -AssemblyName Microsoft.VisualBasic',
-        "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(" + psQuote(abs) + ", 'OnlyErrorDialogs', 'SendToRecycleBin')",
-      ].join('; ')
-      return await runQuietly('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
-    }
-    if (process.platform === 'darwin') {
-      await rename(abs, join(homedir(), '.Trash', basename(abs) + '-' + Date.now()))
-      return true
-    }
-    return await runQuietly('gio', ['trash', abs])
-  } catch {
-    return false
-  }
-}
-
-/**
- * 永久删除回收站条目：先尝试系统回收站（用户仍可在系统里找回），
- * 失败才落到 core 的硬删除 —— 让「永久删除」也不会静默丢数据。
- */
-async function permanentlyDeleteTrashSafely(
-  id: string,
-  log: (event: string, detail?: unknown) => Promise<void>,
-): Promise<any> {
-  const clean = String(id || '').trim()
-  const root = trashRootPath()
-  // 走 `paths.ts` 的单段名校验，而不是自写白名单（审查 F1，0.17.0）：
-  // 原判据 `/^[A-Za-z0-9._-]{1,128}$/` 放行 `.` 与 `..`，而 `root + sep + '..'` 解析后
-  // 正是**回收站根目录**，末尾那句字符串前缀比对拦不住它 —— 于是「删掉某一条」变成
-  // 「把整个 `trash/`（技能/场景/子智能体/提示词四类）送进系统回收站」，且返回 `ok:true`。
-  // 换成 `isValidSegment` 还让两条路同源：能通过这里的 id，必定也能通过
-  // `permanentlyDeleteTrash` 内部的 `entryPath`（同一个谓词），不会一个放行、一个拒绝。
-  const target = isValidSegment(clean) ? join(root, clean) : null
-  if (target && isSameOrDescendant(root, target) && existsSync(target)) {
-    if (await moveToSystemTrash(target)) {
-      await log('trash-delete-system', { id: clean, path: target })
-      return { id: clean, method: 'system-trash' }
-    }
-  }
-  return permanentlyDeleteTrash(clean, log)
-}
-
-// ── 文件监听：外部改动自动失效 ────────────────────────────────────────────
-
-/**
- * 监听目录，200ms 防抖后回调：在编辑器或其他工具里新增/修改/删除文件后，无需手动
- * 刷新即可看到变化。技能来源与规则根目录共用（见 src/memories/service.ts 的场景记忆段缓存）。
- *
- * 为什么用 worker_threads：Windows 上 fs.watch(recursive) 的句柄在「被监听
- * 目录被删除」时会静默卡死事件循环（不触发 error、unref 也无效）——宿主
- * 进程将永远无法退出。把 watcher 放进独立的 worker 线程，主线程对 worker
- * unref()，无论目录发生什么，宿主与测试进程都能正常收尾；worker 内部失败
- * 也不影响主线程。目录不存在或平台不支持递归监听时静默跳过。
- */
-function watchDirectories(paths: string[], invalidate: () => void): () => void {
-  const valid = paths.filter((dir) => dir && existsSync(dir))
-  if (!valid.length) return () => {}
-  let timer: ReturnType<typeof setTimeout> | null = null
-  const fire = () => {
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = null
-      try { invalidate() } catch { /* 失效失败不影响监听 */ }
-    }, 200)
-  }
-  let worker: import('node:worker_threads').Worker | null = null
-  try {
-    // eval 模式内联 worker 代码：无需额外文件与构建步骤。worker 事件循环独立，
-    // 主线程 unref 后完全不参与宿主进程的退出判定。
-    const src = `
-      const { watch } = require('node:fs');
-      const { parentPort, workerData } = require('node:worker_threads');
-      for (const dir of workerData.paths) {
-        try {
-          const w = watch(dir, { recursive: true, persistent: false }, () => {
-            try { parentPort.postMessage('change') } catch { /* worker 正在关闭 */ }
-          });
-          w.on('error', () => { /* 目录被移除等：忽略，不向主线程传播 */ });
-        } catch { /* 不可监听（权限/平台）时跳过该目录 */ }
-      }
-    `
-    worker = new Worker(src, { eval: true, workerData: { paths: valid } })
-    worker.unref()
-    worker.on('message', () => fire())
-    worker.on('error', () => { /* worker 崩溃即失去监听；op 全量重扫天然兜底 */ })
-  } catch { /* worker 不可用时静默跳过，功能退化为依赖 op 全量扫描 */ }
-  return () => {
-    if (timer) { clearTimeout(timer); timer = null }
-    if (worker) {
-      const w = worker
-      worker = null
-      try { w.removeAllListeners(); w.terminate() } catch { /* ignore */ }
-    }
-  }
-}
-
 /** 活动 Session 的宿主 cwd；项目 Skill 只从这些已知 workspace 推导。 */
 export function activeSessionCwds(ctx: any): string[] {
   try {
@@ -222,68 +84,6 @@ export function activeSessionCwds(ctx: any): string[] {
     return cwds
   } catch {
     return []
-  }
-}
-
-/** manager provider：以 core 的候选/正文接口接管四个来源（含启停策略）。 */
-function externalSkillProvider(control: any, invalidators: Set<() => void>): any {
-  if (control && typeof control.invalidate === 'function') invalidators.add(control.invalidate)
-  if (control && control.signal && typeof control.signal.addEventListener === 'function') {
-    control.signal.addEventListener('abort', () => { invalidators.delete(control.invalidate) }, { once: true })
-  }
-  return {
-    name: PROVIDER_NAME,
-    list: async (options: any) => listProviderCandidates(options),
-    get: async (candidate: any, options: any) => getProviderSkill(candidate, options),
-  }
-}
-
-/**
- * 在每个活动 agent 的 scope 内注册同一 provider。
- * 用户级技能由 agent-preset 的 scoped 层解析；只有在 agent 自己的层里注册，
- * 候选 rank 覆盖才能对它们生效（详见上游 registerAgentSkillProviders）。
- */
-function registerAgentSkillProviders(ctx: any, invalidators: Set<() => void>): () => void {
-  const on = ctx && ctx.on
-  if (typeof on !== 'function') return () => {}
-  const registrations = new Map<string, () => void>()
-  const skillsOf = (agent: any) => {
-    const agentCtx = agent && agent.ctx
-    if (!agentCtx) return null
-    const skills = typeof agentCtx.get === 'function' ? agentCtx.get('skills') : agentCtx.skills
-    return skills && typeof skills.registerProvider === 'function' ? skills : null
-  }
-  const install = (agent: any) => {
-    if (!agent || agent.id == null || registrations.has(agent.id)) return
-    const skills = skillsOf(agent)
-    if (!skills) return
-    try {
-      const dispose = skills.registerProvider((control: any) => externalSkillProvider(control, invalidators))
-      registrations.set(agent.id, typeof dispose === 'function' ? dispose : () => {})
-    } catch (e) {
-      console.error('[dsh-plugin-tool-management] agent-scoped skills provider registration failed:', message(e))
-    }
-  }
-  const uninstall = (agent: any) => {
-    const id = agent && agent.id
-    if (id == null) return
-    const dispose = registrations.get(id)
-    registrations.delete(id)
-    if (typeof dispose === 'function') { try { dispose() } catch { /* ignore */ } }
-  }
-  const stopCreated = on('agent/created', (payload: any) => install(payload && payload.agent))
-  const stopDisposed = on('agent/disposed', (payload: any) => uninstall(payload && payload.agent))
-  try {
-    const agents = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
-    if (agents && typeof agents.list === 'function') {
-      for (const agent of agents.list()) install(agent)
-    }
-  } catch { /* agents 服务不可用 → 仅靠事件 */ }
-  return () => {
-    if (typeof stopCreated === 'function') stopCreated()
-    if (typeof stopDisposed === 'function') stopDisposed()
-    for (const dispose of registrations.values()) { try { dispose() } catch { /* ignore */ } }
-    registrations.clear()
   }
 }
 
