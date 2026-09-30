@@ -130,6 +130,30 @@ function locate(content: string, pluginId: string): {
   return { lines, start, end, indent, configAt, configEnd, configUnrecognised, configDuplicated: configCount > 1 }
 }
 
+/**
+ * 文件里**所有**本插件 loader 行的形状（行号 + 是 insert 子条目还是顶层覆盖条目）。
+ *
+ * 为什么需要区分（2026-09-30 审查 P2-12）：`readLoaderToken` 只认**第一条**（`locate` 的行为），
+ * 而「本插件的 loader 行出现在两份补丁里 = 重复挂载 = DSH 起不来」这个判据**只对 insert 条目
+ * 成立** —— 覆盖条目（`- id:` 在第 0 列，官方 `applyEntryPatches` 的 id-targeted override）
+ * 是官方支持的改法，与 insert 并存是**正常**形状（0.1.7 bundle 挂载下，令牌的写点就是它）。
+ * 把覆盖条目也算成"第二份补丁"，会让 bundle 挂载下的令牌操作被**全量拒绝**。
+ *
+ * `- id:` 的缩进就是形状：0 列 = 顶层覆盖条目；> 0 列 = 嵌在 `- insert:` 里的子条目。
+ */
+export function scanLoaderRows(content: string, pluginId: string = PLUGIN_LOADER_ID): { insert: number[]; override: number[] } {
+  const insert: number[] = []
+  const override: number[] = []
+  const lines = String(content == null ? '' : content).split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const m = ROW_ID_RE.exec(lines[i])
+    if (!m || m[2] !== pluginId) continue
+    if (m[1].length === 0) override.push(i)
+    else insert.push(i)
+  }
+  return { insert, override }
+}
+
 /** 读插件 loader 行里的 `config.token` / `config.tokenDisabled`（没写 / 没这条行都返回空值）。 */
 export function readLoaderToken(content: string, pluginId: string = PLUGIN_LOADER_ID): LoaderTokenRead {
   const { lines, start, configAt, configEnd, indent } = locate(content, pluginId)

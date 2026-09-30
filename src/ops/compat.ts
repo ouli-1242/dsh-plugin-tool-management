@@ -20,6 +20,7 @@ import {
   type RouteDecision,
 } from '../compat/probe.js'
 import { INJECT_DOMAIN_KEYS } from '../context-inject.js'
+import { MCP_TOOL_PREFIX } from '../host-names.js'
 import { assessPresetReach, type PresetRosterLike } from '../compat/preset-reach.js'
 import { runtimeNotes, type RuntimeNote } from '../compat/runtime-notes.js'
 import { pluginLog } from '../skills/service.js'
@@ -162,7 +163,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         let mcpTools: number | undefined
         try {
           const schemas = (await deps.tools.schemas()) as Array<{ name?: string }>
-          mcpTools = schemas.filter((s: any) => String(s && s.name || '').startsWith('mcp__')).length
+          mcpTools = schemas.filter((s: any) => String(s && s.name || '').startsWith(MCP_TOOL_PREFIX)).length
         } catch { mcpTools = undefined }
         const settings = await deps.readInjectSettings()
         const report = await assessPresetReach(deps.presetRoster(), {
@@ -265,7 +266,10 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           ['mcp-tool-visibility', '工具表可见性（停用 / 关掉的工具不下发）', 'mcp'],
         ]
         for (const [noteId, label, tab] of assemblyRows) {
-          const note = notes.get(noteId)
+          // 注入通道有**两类**上报：装配失败（`context-injection`）与运行期失败
+          // （`context-injection-runtime`，2026-09-30 P1-8：某域取数抛异常 / 整段注入抛异常）。
+          // 合并到同一行 —— 用户关心的是"这条通道现在好不好"，不是"哪一类失败"。
+          const note = notes.get(noteId) ?? (noteId === 'context-injection' ? notes.get('context-injection-runtime') : undefined)
           push({
             key: noteId, label, tab, state: note === undefined ? 'ok' : 'degraded',
             detail: note === undefined ? '装配正常，无降级上报' : note.detail,

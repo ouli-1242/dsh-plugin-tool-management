@@ -47,26 +47,55 @@ function flushTurn(current: TranscriptTurn | null, turns: TranscriptTurn[]): voi
   if (text) turns.push({ role: current.role, text })
 }
 
+/** 嗅探时最多看几行（见 `sniffFormat`）。 */
+const SNIFF_LINES = 5
+
 /**
- * Detect the transcript format. Extension wins; content sniffing only applies
- * when the name carries no recognized extension.
+ * 按**内容**嗅探转录格式。只看前若干条非空行，不读全篇。
+ *
+ * 为什么不是「只看第一行」：Claude Code 的转录稿常在正文前带 `summary` / `system` 行，
+ * 那些行也是 JSON 但 `type` 不是 user/assistant；只看第一行会把它们判成 generic。
+ * 只扫前 `SNIFF_LINES` 行是为了压低误报 —— 一份 Markdown 正文里偶然粘了一段
+ * `{"role":"user"}` 的 API 载荷，不该让整份稿子按 JSONL 解析。
+ * @returns {'jsonl' | 'markdown' | 'generic'}
+ */
+function sniffFormat(content: unknown): 'jsonl' | 'markdown' | 'generic' {
+  const lines = String(content || '')
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((s) => s)
+  for (const line of lines.slice(0, SNIFF_LINES)) {
+    if (!line.startsWith('{')) continue
+    try {
+      // JSON 值实际形状未知；若为对象，type/role 字段由下方运行时比较判定
+      const obj = JSON.parse(line) as { type?: unknown; role?: unknown } | null
+      if (
+        obj && typeof obj === 'object' && !Array.isArray(obj) &&
+        (obj.type === 'user' || obj.type === 'assistant' || obj.role === 'user' || obj.role === 'assistant')
+      ) return 'jsonl'
+    } catch (e) { /* 这一行不是 JSON，继续往下看 */ }
+  }
+  const first = lines[0] || ''
+  if (HEADING_RE.test(first) || BOLD_PREFIX_RE.test(first)) return 'markdown'
+  return 'generic'
+}
+
+/**
+ * Detect the transcript format. Extension wins; content sniffing applies
+ * when the name carries no recognized extension **or is `.txt`**.
+ *
+ * `.txt` 走嗅探，不是无条件 generic（2026-09-30 审查 F12）：`.txt` 恰恰是**最常被改名**的
+ * 扩展名 —— Claude Code / Cursor 的 JSONL、Markdown 转录稿都可能被存成 `transcript.txt`
+ *（客户端拿不到文件名时自己就默认这个名字）。原来无条件判 generic，于是整份对话被折成
+ * **一条 user 消息**、分轮结构全失、零警告，op 还回 `{ok:true,count:1}`。
+ * `.jsonl` / `.md` 仍按扩展名直判（那两种名字下内容必然是同一种，嗅探没有收益）。
  * @returns {'jsonl' | 'markdown' | 'generic'}
  */
 export function detectFormat(fileName: unknown, content: unknown): 'jsonl' | 'markdown' | 'generic' {
   const name = String(fileName || '').toLowerCase()
   if (/\.jsonl$/.test(name)) return 'jsonl'
   if (/\.(md|markdown)$/.test(name)) return 'markdown'
-  if (/\.txt$/.test(name)) return 'generic'
-  const first = String(content || '').split(/\r?\n/).map((s) => s.trim()).find((s) => s) || ''
-  if (first.startsWith('{')) {
-    try {
-      // JSON 值实际形状未知；若为对象，type/role 字段由下方运行时比较判定
-      const obj = JSON.parse(first) as { type?: unknown; role?: unknown } | null
-      if (obj && typeof obj === 'object' && (obj.type === 'user' || obj.type === 'assistant' || obj.role === 'user' || obj.role === 'assistant')) return 'jsonl'
-    } catch (e) { /* not JSONL after all */ }
-  }
-  if (HEADING_RE.test(first) || BOLD_PREFIX_RE.test(first)) return 'markdown'
-  return 'generic'
+  return sniffFormat(content)
 }
 
 /**

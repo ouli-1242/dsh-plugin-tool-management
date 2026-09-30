@@ -32,8 +32,22 @@ export interface ArchiveIndexSlice {
 export interface ArchiveEngineDeps {
   /** 读 memories-index.json 的 mode/archives/active 切片（rules service 唯一属主）。 */
   loadSlice(): Promise<ArchiveIndexSlice>
-  /** 写回切片（合并进 memories-index.json，rules service 负责原子写与缓存失效）。 */
-  saveSlice(slice: ArchiveIndexSlice): Promise<void>
+  /**
+   * 写回切片（合并进 memories-index.json，rules service 负责原子写与缓存失效）。
+   *
+   * `fields` 是**意图声明**，必须显式列出本次要改哪几项（2026-09-30 审查 P2-3）。
+   * 为什么不能"整片回写"：`loadSlice` 是**队外**读的，而这个写是队内执行的 —— 两者之间的
+   * 窗口里另一个写者（HTTP op / 模型工具 / 另一条引擎路径）改过的字段，会被我们手里这份
+   * 陈旧值整片覆盖掉。`scene-mode-set` 的窗口尤其长（跨整个运行时应用，可能好几秒），
+   * 期间一次"保存别的场景的档案"就会被它抹掉。
+   */
+  saveSlice(slice: ArchiveIndexSlice, fields: ReadonlyArray<'mode' | 'active' | 'archives'>): Promise<void>
+  /**
+   * 只写**一个场景**的档案（队列内逐场景增量）。
+   * `archive === null` = 删掉该场景的档案。与 `saveSlice(..., ['archives'])` 的区别是
+   * 后者写的是**整张表**，会覆盖并发写进来的别的场景（审查 P2-3）。
+   */
+  saveArchive(scene: string, archive: SceneArchive | null): Promise<void>
   /** 配置中真实存在的 MCP 服务器名全集（含未运行的）。 */
   configuredServers(): Promise<string[]>
   /** 每台服务器已知工具名（live schemas ∪ 启停表历史键）。 */
@@ -220,7 +234,9 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       problems.push('运行时还原: ' + msg(e))
     }
     try {
-      await deps.saveSlice(prev)
+      // 回滚只还原引擎自己动过的那两片：mode（模式位 + 快照）与 active（记忆收窄）。
+      // 不能整片回写 `prev` —— 那是队外读的，`archives` 等字段在窗口期可能已被别人改过。
+      await deps.saveSlice(prev, ['mode', 'active'])
     } catch (e) {
       problems.push('模式状态写回: ' + msg(e))
     }
@@ -541,9 +557,12 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         const prev = slice.archives[scene]
         if (prev && typeof prev.toolTablePreset === 'string' && prev.toolTablePreset) archive.toolTablePreset = prev.toolTablePreset
       }
-      if (Object.keys(archive).length === 0) delete slice.archives[scene]
-      else slice.archives[scene] = archive
-      await deps.saveSlice(slice)
+      // 逐场景增量写（审查 P2-3）：这里只该动 `archives[scene]` 这一条，而 `slice` 是队外
+      // 读的 —— 整片回写会把窗口期里别人保存的**别的场景**档案一起抹掉。
+      const archiveNext = Object.keys(archive).length === 0 ? null : archive
+      if (archiveNext === null) delete slice.archives[scene]
+      else slice.archives[scene] = archiveNext
+      await deps.saveArchive(scene, archiveNext)
       // 改的正是**当前模式**的档案 → 就地重新应用（场景内只能改档案，改完必须生效）。
       // 这次新改到的**上层行**（服务器级 / 来源级）并进快照：退出仍按「进场景前」还原，
       // 进场景时改过的行 + 这次新改的行都要有记录（已记过的行保持原值，见 mergeSnapshotSwitches）。
@@ -555,10 +574,12 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           const changed = await reapplyActiveArchive(slice.archives[scene])
           const snapshot = slice.mode.snapshot
           if (snapshot && (changed.mcpServers.length || changed.skillSources.length)) {
-            await deps.saveSlice({
-              ...slice,
-              mode: { ...slice.mode, snapshot: mergeSnapshotSwitches(snapshot, changed.mcpServers, changed.skillSources) },
-            })
+            // 只写 mode：`reapplyActiveArchive` 期间可能有人改了 active 或别的场景的档案，
+            // 整片回写会顺手把它们带回旧值（审查 P2-3）。
+            await deps.saveSlice(
+              { ...slice, mode: { ...slice.mode, snapshot: mergeSnapshotSwitches(snapshot, changed.mcpServers, changed.skillSources) } },
+              ['mode'],
+            )
           }
         } catch (e) {
           applyError = msg(e)
@@ -591,7 +612,9 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       if (current.scene) {
         const exited: ArchiveIndexSlice = { ...slice, mode: { scene: null, snapshot: null } }
         try {
-          await deps.saveSlice(exited)
+          // 只落 mode（审查 P2-3）：退出模式不该顺手改写 active（记忆收窄的语义是"退出不恢复"）
+          // 或 archives —— 而 `slice` 是队外读的，整片回写会把这些带成陈旧值。
+          await deps.saveSlice(exited, ['mode'])
         } catch (e) {
           return { ok: false, error: `退出模式「${current.scene}」已恢复运行时，但模式状态落盘失败：${msg(e)}` }
         }
@@ -715,7 +738,9 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       )
       const entered: ArchiveIndexSlice = { ...slice, mode: { scene: target, snapshot }, active: [target] }
       try {
-        await deps.saveSlice({ ...slice, mode: entered.mode })
+        // 先落 **mode**（留可退快照）；active 留到最后一步再落 —— 中途失败要能按原样退回，
+        // 而"记忆已经收窄、运行时还没应用"是最难看的中间态。只写 mode 不写别的（审查 P2-3）。
+        await deps.saveSlice({ ...slice, mode: entered.mode }, ['mode'])
       } catch (e) {
         return { ok: false, error: '进入模式前落盘快照失败（运行时未改动）：' + msg(e) }
       }
@@ -754,7 +779,9 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       }
       // ③ 记忆启用集收窄为 {S}（`_shared` 由 resolveActiveScenes 恒常加入；退出不恢复）。
       try {
-        await deps.saveSlice(entered)
+        // 落 mode + active（这两片是本次的意图），**不落 archives**（审查 P2-3）：上面那一段
+        // 运行时应用可能耗时数秒，期间一次"保存别的场景的档案"会被陈旧整片回写抹掉。
+        await deps.saveSlice(entered, ['mode', 'active'])
       } catch (e) {
         return await rollback(slice, snapshot, '记忆收窄落盘', e)
       }

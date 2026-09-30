@@ -9,7 +9,7 @@ import { Worker } from 'node:worker_threads'
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { isInsideRootResolved } from '../paths.js'
+import { isInsideRootResolved, isSameOrDescendant, isValidSegment } from '../paths.js'
 import {
   state,
   setSkillEnabled,
@@ -134,9 +134,14 @@ async function permanentlyDeleteTrashSafely(
 ): Promise<any> {
   const clean = String(id || '').trim()
   const root = trashRootPath()
-  const sep = root.indexOf('\\') >= 0 ? '\\' : '/'
-  const target = /^[A-Za-z0-9._-]{1,128}$/.test(clean) ? root + sep + clean : null
-  if (target && target.indexOf(root + sep) === 0 && existsSync(target)) {
+  // 走 `paths.ts` 的单段名校验，而不是自写白名单（审查 F1，0.17.0）：
+  // 原判据 `/^[A-Za-z0-9._-]{1,128}$/` 放行 `.` 与 `..`，而 `root + sep + '..'` 解析后
+  // 正是**回收站根目录**，末尾那句字符串前缀比对拦不住它 —— 于是「删掉某一条」变成
+  // 「把整个 `trash/`（技能/场景/子智能体/提示词四类）送进系统回收站」，且返回 `ok:true`。
+  // 换成 `isValidSegment` 还让两条路同源：能通过这里的 id，必定也能通过
+  // `permanentlyDeleteTrash` 内部的 `entryPath`（同一个谓词），不会一个放行、一个拒绝。
+  const target = isValidSegment(clean) ? join(root, clean) : null
+  if (target && isSameOrDescendant(root, target) && existsSync(target)) {
     if (await moveToSystemTrash(target)) {
       await log('trash-delete-system', { id: clean, path: target })
       return { id: clean, method: 'system-trash' }

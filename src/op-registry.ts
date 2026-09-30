@@ -12,6 +12,8 @@
 //                 而 service 不再自报 → 也红。两边谁改了都必须动另一边。
 //   write         需要访问令牌。判据是"会不会改**宿主或外部系统**的状态" —— 注意这**不是**
 //                 "会不会写盘"：见下方 readonly 那一段。
+//   writeWhen     仅对"两态 op"（一个名字兼读与写）生效：**这次调用**算不算写。判据不成立
+//                 = 纯读，免令牌也不记流水。没带这一项的 op，标了 write 就一律按写处理。
 //   sensitive     会泄露明文凭据 / 完整配置。**必须**带对的令牌，没配令牌就一律拒绝。
 //   frozen        任一场景 locked=true 时整体拒绝（五个管理域冻结）。
 //   frozenScope   frozen 的三种口径，默认 'all'：
@@ -43,6 +45,21 @@ export interface OpClass {
   syncsArchive?: boolean
   annotatesLock?: boolean
   readonly?: boolean
+  /**
+   * **两态 op** 的写判据：同一个 op 名同时承担读与写。标了 `write` 又带这一项的 op，
+   * 只有判据成立才按写门禁（要求令牌、记流水）；不成立 = 这次是纯读，免令牌、不记流水。
+   * 没带这一项的 op，只要标了 `write` 就一律按写处理 —— 即"不知道就别放行"。
+   *
+   * 为什么必须声明在**这里**：这四条 op 的读侧与写侧共用一个名字，于是整条 op 被列进
+   * `WRITE_OPS`，读侧也一起被拦（界面表现是"没填令牌时整块设置消失"）。此前靠 index.ts
+   * 里一句手写的 `readOnlyCall` 打补丁，判据只认 `args.set === true` —— 而 `tool-table`
+   * 的 `presetSave` / `presetDelete` **不写 `hidden`**、绕过 `set`，于是配了令牌的宿主上
+   * 一次免令牌请求就能改侧车（审查 F2，0.17.0 修）。判据搬进登记表后，写侧与读侧的定义
+   * 挨着放，加一个新的写触发键时不会漏在另一个文件里。
+   *
+   * 判据抛错按"写"处理（fail-closed）：见 `isReadCall`。
+   */
+  writeWhen?: (args: Record<string, unknown>) => boolean
 }
 
 export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
@@ -59,7 +76,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'mcpm-import': { write: true, frozen: true },
   'mcpm-compact': { write: true, frozen: true },
   'mcpm-note': { write: true, frozen: true },
-  'mcpm-settings': { write: true, frozen: true },
+  'mcpm-settings': { write: true, frozen: true, writeWhen: (a) => a.set === true },
   'mcpm-set-enabled': { write: true, frozen: true, syncsArchive: true },
   'mcpm-set-all': { write: true, frozen: true, syncsArchive: true },
   'mcpm-tool-enabled': { write: true, frozen: true, syncsArchive: true },
@@ -72,7 +89,10 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'mcpm-tools-refresh': { write: true },
   'mcpm-tools': { readonly: true },
   // 配置体检：只读补丁文件 + 一次 PATH 查询（`where`/`which`，不执行配置里的命令）。
-  // 返回的是检查项 id，不回任何字段值 —— 与 `mcpm-list` 同档，不带令牌。
+  // 回的是检查项 id + 少量**打码后**的字段值（URL 查询串走 `maskUrlQuery`，与 `mcpm-list`
+  // 同口径；`command` 明文，理由同 `mcpm-list`：命令名不是凭据，`args` 两边都不回）。
+  // 与 `mcpm-list` 同档，不带令牌 —— 0.16.6 之前这里回的是 URL 原文，等于让免令牌的请求
+  // 拿到 `?api_key=…`，绕过了 `mcpm-reveal` 那道防线（审查 P0-5，0.17.0 修）。
   'mcpm-inspect': { readonly: true },
 
   // ── 技能域（22，含内联的 skill-open）───────────────────────────────────────
@@ -209,14 +229,19 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'injection-live': { readonly: true },
   'backups-list': { readonly: true },
   // 注入设置（各域开关 / 压制型预设口径）写侧车。它是"配置"不是"宿主状态"，但改的是
-  // 投递语义，按写操作门禁。
-  'inject-settings': { write: true },
+  // 投递语义，按写操作门禁。读侧（不带 `set:true`）只回当前设置，是纯读。
+  'inject-settings': { write: true, writeWhen: (a) => a.set === true },
   // 模型工具表（哪些工具根本不发给模型）也写侧车，改的是每轮请求的内容 —— 同上按写门禁。
-  'tool-table': { write: true },
+  // 三条写触发：`set` 换名单；`presetSave` / `presetDelete` 只动 `presets`、**不动 `hidden`**
+  // —— 后两条不经过 `set`，只认 `set` 的判据会把它们当成读放行（审查 F2）。
+  'tool-table': {
+    write: true,
+    writeWhen: (a) => a.set === true || a.presetSave !== undefined || a.presetDelete !== undefined,
+  },
   // 场景页的界面设置（进入场景前要不要弹「会改什么」的预览卡）：写侧车，按写门禁。
   // **刻意不冻结**：它只是界面提示，锁着场景的人在场景页照样该能关掉提醒 —— 冻结的是五个
   // 管理域的改动，不是这个页面的显示偏好（判据见文件头 write/frozen 两段的边界）。
-  'scene-settings': { write: true },
+  'scene-settings': { write: true, writeWhen: (a) => a.set === true },
   // 清理 patch 备份：删磁盘文件（备份里含明文凭据副本），按写操作门禁。
   'backups-clean': { write: true },
 
@@ -253,6 +278,26 @@ export function frozenOps(scope?: FrozenScope): string[] {
 }
 
 /**
+ * 这次调用是不是「读侧」（免令牌、不记流水）。
+ *
+ * 判据只有一个来源：登记表的 `writeWhen`。**没带 `writeWhen` 的 op 一律返回 false**
+ * —— 即"标了 write 就是写"，不知道就别放行。
+ *
+ * 判据抛错也返回 false（按写处理）：一个会抛的谓词说明这次调用的形状没人设计过，
+ * 那种时候**要求令牌**才是安全的方向 —— 反过来会让"某个畸形 args 恰好免门禁"成为漏洞。
+ */
+export function isReadCall(op: string, args: unknown): boolean {
+  const cls = OP_REGISTRY[op]
+  if (!cls || cls.writeWhen === undefined) return false
+  const bag = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
+  try {
+    return cls.writeWhen(bag) !== true
+  } catch {
+    return false
+  }
+}
+
+/**
  * 对账：真实 op 表里**没在登记表出现**的键。
  *
  * 这就是 A1 要的那台机器 —— 新加一个 op 而忘了归类，这里立刻数得出来。判据是"要么登记过，
@@ -283,10 +328,21 @@ export function serviceWriteMismatch(reported: Iterable<string>): { missing: str
   }
 }
 
-/** 自相矛盾的条目：既声明只读又声明要令牌 / 泄露明文。（登记时手滑的兜底。） */
+/** 自相矛盾的条目：既声明只读又声明要令牌 / 泄露明文 / 带写判据。（登记时手滑的兜底。） */
 export function contradictoryEntries(): string[] {
   return Object.entries(OP_REGISTRY)
-    .filter(([, cls]) => cls.readonly === true && (cls.write === true || cls.sensitive === true))
+    .filter(([, cls]) => cls.readonly === true && (cls.write === true || cls.sensitive === true || cls.writeWhen !== undefined))
+    .map(([op]) => op)
+    .sort()
+}
+
+/**
+ * 标了 `writeWhen` 却没标 `write` 的条目：写判据写了，可这条 op 根本不进写门禁
+ * —— 那份判据永远不会被问一次，等于没写（静默失效，正是 F2 的形状）。
+ */
+export function writeWhenUnwritten(): string[] {
+  return Object.entries(OP_REGISTRY)
+    .filter(([, cls]) => cls.writeWhen !== undefined && cls.write !== true)
     .map(([op]) => op)
     .sort()
 }
@@ -302,6 +358,8 @@ export interface OpRegistryAudit {
   serviceWriteExtra: string[]
   /** readonly 与 write / sensitive 同时出现。 */
   contradictory: string[]
+  /** 带 `writeWhen` 却没标 `write`（写判据永远不会被问到）。 */
+  writeWhenUnwritten: string[]
   /** 真实 op 表的键数（界面与日志报"多少条里出了几处问题"用）。 */
   total: number
 }
@@ -321,6 +379,7 @@ export function auditOpRegistry(opNames: Iterable<string>, serviceWriteOps: Iter
     serviceWriteMissing: mismatch.missing,
     serviceWriteExtra: mismatch.extra,
     contradictory: contradictoryEntries(),
+    writeWhenUnwritten: writeWhenUnwritten(),
     total: names.length,
   }
 }
@@ -333,5 +392,6 @@ export function auditProblems(audit: OpRegistryAudit): string[] {
     ...audit.serviceWriteMissing.map((op) => op + '（service 自报写、登记表未标）'),
     ...audit.serviceWriteExtra.map((op) => op + '（登记表标了写、service 未自报）'),
     ...audit.contradictory.map((op) => op + '（只读与写自相矛盾）'),
+    ...audit.writeWhenUnwritten.map((op) => op + '（有写判据却没标写）'),
   ]
 }

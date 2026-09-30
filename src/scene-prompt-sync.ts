@@ -24,8 +24,11 @@
 //   `driver()`     —— 谁在驱动基线（提示词页「应用」据此判断：应用别的份 = 换掉该场景的绑定）；
 //   `refs()`       —— 每个预设被谁引用（删除保护的唯一依据：场景绑定 / 基线当前内容 / 退出恢复目标）；
 //   `baseline()`   —— 进场景前的基线快照（退出场景后要恢复的那一份）。
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
+// 基线快照走原子写（temp + rename）：它是「退出场景时恢复 AGENTS.md」的**唯一依据**，
+// 裸写中断留下半截 JSON 会让 `readBaseline` 解析失败（审查 P2-16）。
+import { writeFileAtomically } from './memories/index-io.js'
 
 /** 场景侧提示词的只读投影（由 rules 服务的 `rules-list` 提供）。 */
 export interface ScenePromptState {
@@ -67,6 +70,14 @@ export interface SyncResult {
   unchanged?: boolean
   /** 写盘失败的原因（原操作本身仍算成功）。 */
   error?: string
+  /**
+   * 进场景前的**基线快照没能写入**：AGENTS.md 已经切到场景态，但退出场景时恢复不回来。
+   *
+   * 与 `error` 分开，因为两者说的是相反的事：`error` 是「AGENTS.md 没写成」，
+   * 这里是「AGENTS.md 写成了，但没有退路」。合成一个字段会让界面把「已切进场景」
+   * 说成「未写入」（2026-09-30 审查 F14）。
+   */
+  baselineError?: string
 }
 
 export interface ScenePromptSyncDeps {
@@ -121,11 +132,31 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
     } catch { return null }
   }
 
-  async function writeBaseline(next: SceneBaseline): Promise<void> {
+  /** 快照文件是否**存在**（不看内容）。用来把「没有快照」与「快照读不出来」分开。 */
+  async function baselineExists(): Promise<boolean> {
+    try { return (await stat(deps.baselineFile)).isFile() } catch { return false }
+  }
+
+  /**
+   * 写基线快照。**失败必须让调用方看得见**（2026-09-30 审查 F14）。
+   *
+   * 原来这里 catch 后只 `warn` 并返回 void，于是「快照没写成」与「写成了」在调用方眼里
+   * 完全一样 —— 结果就是：AGENTS.md 被切到场景态、而退出场景时恢复不回来，用户看到的是
+   * 「没场景驱动所以什么都没做」。这正是「看起来成功」那类失败。
+   * @returns 失败原因（原样回给调用方拼进提示）；成功返回 null。
+   */
+  async function writeBaseline(next: SceneBaseline): Promise<string | null> {
     try {
       await mkdir(dirname(deps.baselineFile), { recursive: true })
-      await writeFile(deps.baselineFile, JSON.stringify(next), 'utf8')
-    } catch (e) { warn(`scene-prompt: could not persist baseline: ${String(e)}`) }
+      // 原子写（2026-09-30 审查 P2-16）：裸写在中断/断电时会留下半截 JSON → `readBaseline`
+      // 解析失败返回 null → 退出场景**不恢复** AGENTS.md，用户的提示词基线悄悄留在场景态。
+      await writeFileAtomically(deps.baselineFile, JSON.stringify(next))
+      return null
+    } catch (e) {
+      const reason = String(e)
+      warn(`scene-prompt: could not persist baseline: ${reason}`)
+      return reason
+    }
   }
 
   async function state(): Promise<ScenePromptState | null> {
@@ -203,23 +234,38 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
       if (current.duplicate) return { applied: current.presetId, unchanged: true }
       // 进场景的第一笔写入之前，先记下当时的基线（已有快照就不覆盖：连续切场景时
       // 基线始终是"进场景之前"那一份）。
+      let baselineError: string | undefined
       const saved = await readBaseline()
       if (!saved || saved.content === null) {
         const cur: any = await deps.prompts.getCurrent()
-        await writeBaseline({
+        const failed = await writeBaseline({
           v: 1,
           at: Date.now(),
           presetId: cur && cur.ok && cur.presetId ? String(cur.presetId) : null,
           content: cur && cur.ok && cur.exists ? String(cur.content) : null,
         })
+        // 基线写不进去 = 退出场景时恢复不回来。**照旧进场景**（那是用户的要求），
+        // 但必须当场说出来，别让用户以为还能退回去（审查 F14）。
+        if (failed !== null) {
+          baselineError = `进场景前的提示词基线没能写入（${failed}）：AGENTS.md 已切到场景「${current.scene}」绑定的预设，但退出场景时恢复不回原来的内容（${deps.baselineFile}）。`
+        }
       }
       const res: any = await deps.prompts.apply(current.presetId)
-      if (res && res.ok === false) return { error: String(res.error || '写入 AGENTS.md 失败') }
-      return { applied: current.presetId }
+      if (res && res.ok === false) return { error: String(res.error || '写入 AGENTS.md 失败'), ...(baselineError ? { baselineError } : {}) }
+      return { applied: current.presetId, ...(baselineError ? { baselineError } : {}) }
     }
     // 没有场景驱动 → 如果刚从驱动态退出，把进场景前的基线写回去。
     const saved = await readBaseline()
-    if (!saved || saved.content === null) return { unchanged: true }
+    if (!saved || saved.content === null) {
+      // 「没有快照」是常态（没进过场景）；「快照文件在、但读不出来」是**故障** ——
+      // 那意味着恢复目标丢了，AGENTS.md 的提示词基线会悄悄留在场景态。这里曾经一律
+      // 静默 `unchanged`，用户看到的是"没场景驱动所以什么都没做"（审查 P2-16）。
+      if (await baselineExists()) {
+        warn(`scene-prompt: baseline snapshot exists but is unreadable: ${deps.baselineFile}`)
+        return { error: `基线快照读不出来（文件可能损坏），未能恢复 AGENTS.md：${deps.baselineFile}` }
+      }
+      return { unchanged: true }
+    }
     const res: any = await deps.prompts.restore(saved.content)
     if (res && res.ok === false) return { error: String(res.error || '恢复 AGENTS.md 失败') }
     await writeBaseline({ v: 1, at: Date.now(), presetId: null, content: null })

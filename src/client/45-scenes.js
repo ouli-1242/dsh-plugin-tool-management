@@ -112,10 +112,14 @@
           function agentsMdNote(res) {
             var sync = res && res.agentsMd
             if (!sync) return ''
-            if (sync.error) return ' · ' + t('scenes.agents.note.error', { reason: String(sync.error) })
-            if (sync.applied) return ' · ' + t('scenes.agents.note.applied', { id: String(sync.applied) })
-            if (sync.restored) return ' · ' + t('scenes.agents.note.restored')
-            return ''
+            var note = ''
+            if (sync.error) note += ' · ' + t('scenes.agents.note.error', { reason: String(sync.error) })
+            else if (sync.applied) note += ' · ' + t('scenes.agents.note.applied', { id: String(sync.applied) })
+            else if (sync.restored) note += ' · ' + t('scenes.agents.note.restored')
+            // 「基线快照没能写入」与「AGENTS.md 有没有写」是两件事：前者是**切进去了但退不回来**，
+            // 必须单独说，否则用户以为还能退出场景恢复原样（审查 F14）。
+            if (sync.baselineError) note += ' · ' + t('scenes.agents.note.baselineLost', { reason: String(sync.baselineError) })
+            return note
           }
           // ── 场景启用：**除「全局」外同时只能启用一个**（用户裁定）──
           // 空数组 = 全部关闭（只留恒常的 `_shared` 与 `global`）；服务端也会拒绝多个。
@@ -124,7 +128,7 @@
             setBusy(true); setResult(null)
             apiCall('rules-set-active', { scenes: names }).then(function (res) {
               setBusy(false)
-              if (res && res.ok) { setResult({ ok: !(res.agentsMd && res.agentsMd.error), text: t('memory.result.active') + agentsMdNote(res) }); refresh(true) }
+              if (res && res.ok) { setResult({ ok: !(res.agentsMd && (res.agentsMd.error || res.agentsMd.baselineError)), text: t('memory.result.active') + agentsMdNote(res) }); refresh(true) }
               else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }

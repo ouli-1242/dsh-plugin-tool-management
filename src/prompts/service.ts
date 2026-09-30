@@ -17,6 +17,11 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { isValidPresetId, LAST_APPLIED_PRESET_ID, normalizePresetId } from './preset-id.js'
 import { listTrashEntries, moveOutOfTrash, moveToTrash, purgeTrashEntry, readTrashEntry, type TrashEntry } from '../hub.js'
+// 全局 AGENTS.md 的落盘走**原子写**（temp + rename，见 `memories/index-io.ts`）。
+// 为什么非它不可（2026-09-30 审查 P2-2）：这个文件是宿主**每个 agent/pre-step 都会 stat 并
+// 重读**的，裸 `writeFile` 在中断/断电时会留下**半截内容** —— 而半截的提示词会原样进模型
+// 上下文（截断点还可能在代码块中间）。原子写保证读到的是「要么旧、要么新」的完整内容。
+import { writeFileAtomically } from '../memories/index-io.js'
 
 const FILENAME = 'AGENTS.md'
 /** 描述侧车：与 AGENTS.md 同目录，避免描述的文字被当成提示词正文注入。 */
@@ -327,7 +332,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
     catch { return { ok: false, error: '预设不存在：' + safeId } }
     const prev = await readGlobal()
     const backedUp = await backupGlobal(prev)
-    await writeFile(await deps.getGlobalAgentsMdPath(), content, 'utf8')
+    await writeFileAtomically(await deps.getGlobalAgentsMdPath(), content)
     await writeAppliedId(safeId)
     return { ok: true, id: safeId, backedUp }
   }
@@ -342,7 +347,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
     const prev = await readGlobal()
     const backedUp = await backupGlobal(prev)
     try {
-      await writeFile(await deps.getGlobalAgentsMdPath(), text, 'utf8')
+      await writeFileAtomically(await deps.getGlobalAgentsMdPath(), text)
     } catch (e) {
       return { ok: false, error: '写入全局 AGENTS.md 失败：' + message(e) }
     }

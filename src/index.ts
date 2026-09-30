@@ -23,7 +23,7 @@ import { renameWithRetry } from './skills/core.js'
 import { createPromptsService } from './prompts/service.js'
 import { isValidPresetId } from './prompts/preset-id.js'
 import { isInsideRoot, isInsideRootResolved } from './paths.js'
-import { DEFAULT_PROFILE_NAME, MCP_CLIENT_MODULE, PROFILE_CANDIDATES } from './host-names.js'
+import { DEFAULT_PROFILE_NAME, MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, PROFILE_CANDIDATES, serverNameCandidates, splitMcpToolName, type McpToolNameParts } from './host-names.js'
 import { createMemoriesService, planMemoryExport } from './memories/service.js'
 import { createArchiveEngine } from './memories/archive-engine.js'
 import { createSnapshotOps } from './ops/snapshot.js'
@@ -74,7 +74,7 @@ import type { PluginInventoryService, ToolsService } from './mcp/manager.js'
 // 2026-09-19 随 MCP 域搬进 ./mcp/manager.ts。这里保持原路径可导出，契约不变。
 export { normalizeKnownTools, countEnabledTools } from './mcp/manager.js'
 import { planOverrideCompaction } from './mcp/override-blocks.js'
-import { applyLoaderToken, applyLoaderTokenDisabled, buildLoaderOverrideEntry, readLoaderToken } from './mcp/loader-token.js'
+import { applyLoaderToken, applyLoaderTokenDisabled, buildLoaderOverrideEntry, readLoaderToken, scanLoaderRows } from './mcp/loader-token.js'
 // cordis.patch.yml 受管行的生成/解析/块编辑（2026-09-19 从本文件 apply 闭包抽出，纯字符串运算）。
 import { appendBlock, buildDisableBlock, buildInsertBlock, parseRows, removeEntryAll, removeMarked, spliceRanges, splitLines, type ManagedRow } from './mcp/patch-yaml.js'
 import { describeMaskedOutcome, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './mcp/secret-guard.js'
@@ -85,8 +85,8 @@ import { buildCompatOps } from './ops/compat.js'
 import { buildPromptOps } from './ops/prompts.js'
 import { buildSessionOps } from './ops/sessions.js'
 // HTTP 请求准入与 handlers 后处理（2026-09-19 从本文件 apply 闭包抽出，依赖显式传参）。
-import { createAccessToken, createOpWhitelist, createSceneLock, installHandlerGuards } from './request-gate.js'
-import { auditOpRegistry, auditProblems } from './op-registry.js'
+import { createAccessToken, createFrozenGate, createOpWhitelist, createSceneLock, guardModelOp, guardModelOps, installHandlerGuards } from './request-gate.js'
+import { auditOpRegistry, auditProblems, isReadCall } from './op-registry.js'
 import { buildSceneSyncOps } from './ops/scene-sync.js'
 import { buildCandidateOps } from './ops/candidates.js'
 // model 工具（ctx.tools.register）按域分文件；共享的依赖形状见 tools/deps.ts。
@@ -347,6 +347,21 @@ export default {
       ...(Number.isFinite(Number((config as { rulesMaxBytes?: unknown } | undefined)?.rulesMaxBytes))
         ? { maxBytes: Number((config as { rulesMaxBytes?: unknown }).rulesMaxBytes) }
         : {}),
+      // 全局 AGENTS.md 的**宿主实际读的那一份**（profile home 下，与上面 `getGlobalAgentsMdPath`
+      // 同源）。`readGlobalAgentsMdSync` 的去重/兜底必须读它 —— `resolveDshHome()` 是另一条
+      // 独立来源（见 `ensurePaths` 的注释「不合并是有意的」），两边不同时会取到另一个文件、
+      // 去重永远不相等 → 同一份预设正文注入两遍（审查 P2-19）。
+      // 惰性求值：`cached` 在下面的 path discovery 段才声明（`let`），而本箭头函数只在 op
+      // 被调用时才求值 —— 那时 `ensurePaths()` 早已跑过。外面这层 `try` 是防**将来**有人在
+      // apply 中途同步调用 memories op 那种时序（`let` 的 TDZ 会抛 ReferenceError）。
+      globalAgentsMdPath: () => {
+        try {
+          const p = cached
+          if (!p) return null
+          const sep = p.home.indexOf('\\') >= 0 ? '\\' : '/'
+          return p.home + sep + 'AGENTS.md'
+        } catch { return null }
+      },
     })
     // 场景记忆段的注册/生命周期由下面的注入通道统一管（memoriesService.memoryText / promptText）。
 
@@ -354,15 +369,15 @@ export default {
     // deps 把既有写通道（MCP 单工具启停 / 技能启停）注入引擎；引擎自身串行，
     // 状态机与纯逻辑在 ./memories/archive*.ts。mcpmToolEnabled / readDisabledTools
     // 为函数声明（提升），此处引用安全。
-    const toolKeyParts = (toolName: string): { key: string; server: string; tool: string } | null => {
-      if (!toolName.startsWith('mcp__')) return null
-      const rest = toolName.slice(5)
-      const i = rest.indexOf('__')
-      if (i <= 0) return null
-      const server = rest.slice(0, i)
-      const tool = rest.slice(i + 2)
-      return server && tool ? { key: server + '/' + tool, server, tool } : null
-    }
+    // MCP 工具全名 → `{ server, tool }`。**切分规则只有一套**：`splitMcpToolName`
+    // （`host-names.ts`），与执行侧守卫 `mcp.isToolDisabled` 走的是同一个函数（2026-09-30 审查 N1）。
+    // 这里只负责把**候选 serverName 集合**传进去 —— 集合不同是切分结论不同的另一个来源，
+    // 所以集合也用同一个 builder（`serverNameCandidates`）从**同一批表**（停用表 ∪ 已知工具缓存）
+    // 取并集，不在这里手写 `Object.keys`。
+    const toolKeyParts = (
+      toolName: string,
+      serverNames: Iterable<string>,
+    ): McpToolNameParts | null => splitMcpToolName(toolName, serverNames)
     /**
      * 一次扫描同时给出三样东西（避免为了三份视图各扫一遍磁盘）：
      *  - `states`：**真实生效**的技能 `<rootKey>/<name>` → boolean；
@@ -463,28 +478,34 @@ export default {
       },
       applyToolTableHidden: applyToolTableHiddenNow,
       loadSlice: async () => ({ ...(await memoriesService.readArchiveSlice()) }),
-      saveSlice: (slice) => memoriesService.patchIndex(slice),
-      configuredServers: async () => {
-        const r: any = await mcp.mcpmListView()
-        const out: string[] = []
-        for (const row of ((r && r.rows) || [])) {
-          const n = String((row && row.serverName) || '')
-          if (n && out.indexOf(n) < 0) out.push(n)
-        }
-        return out
-      },
+      // `fields` 必须原样透传：它决定"本次只写哪几片"，是审查 P2-3 里防丢更新的关键。
+      saveSlice: (slice, fields) => memoriesService.patchIndex(slice, fields),
+      saveArchive: (scene, archive) => memoriesService.saveArchive(scene, archive),
+      // 与 `serverKnownTools` 用同一个出口：都是「补丁里配了哪些 serverName」。
+      // 早先这里走 `mcpmListView()` —— 那份会顺带枚举工具 schema 并回写「已知工具」缓存，
+      // 而档案引擎只要名字（2026-09-30 审查 N1 顺带收窄）。
+      configuredServers: () => mcp.configuredServerNames(),
       serverKnownTools: async () => {
         const out: Record<string, string[]> = {}
         const raw = await mcp.readDisabledTools()
         for (const [server, list] of Object.entries(raw)) out[server] = list.filter((t) => t !== '*')
         // 「已知工具」缓存：未运行服务器也能按最后见过的名单计算补集。
-        for (const [server, list] of Object.entries(await mcp.readKnownMcpTools())) {
+        const known = await mcp.readKnownMcpTools()
+        for (const [server, list] of Object.entries(known)) {
           out[server] = [...new Set([...(out[server] || []), ...list.map((item) => item.name)])].sort()
         }
+        // 候选集合必须在**往 out 里补 live 工具之前**取：补进去的键是从 schema 名切出来的，
+        // 拿它当候选就成了循环论证（切错了也照样"命中"）。
+        //
+        // 三个来源里，补丁那份（`configuredServerNames`）是唯一与切分结果无关的 —— 停用表的键
+        // 来自界面勾选、缓存键来自上一次切分，单靠它们会锁死错误结论（审查 N1 / R3）。
+        let configured: string[] = []
+        try { configured = await mcp.configuredServerNames() } catch { /* 补丁读不到 → 退化为另两份 */ }
+        const serverNames = serverNameCandidates(configured, raw, known)
         let schemas: any[] = []
         try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅停用表 + 缓存 */ }
         for (const s of schemas) {
-          const p = toolKeyParts(String((s && s.name) || ''))
+          const p = toolKeyParts(String((s && s.name) || ''), serverNames)
           if (!p) continue
           const list = out[p.server] || (out[p.server] = [])
           if (list.indexOf(p.tool) < 0) list.push(p.tool)
@@ -1014,6 +1035,14 @@ export default {
       iso: new Date().toISOString(),
       version: PKG_VERSION,
       injects: [...INJECT_SERVICES],
+      // 宿主**进程身份**（2026-09-30 审查 §5 F1）：插件与宿主同进程，所以 `pid` 就是宿主的 pid，
+      // 而 `hostStartedAt` 是本进程的启动时刻（`Date.now() - uptime`）。有了这两个值，doctor
+      // 才能把「这份心跳是不是**这一轮**宿主写的」变成一条可计算的结论：
+      //   pid 已经不存在 → 宿主自那以后重启过（或那次运行已结束）；
+      //   pid 还在      → 心跳来自当前正在跑的宿主进程，插件这一轮**确实挂上了**。
+      // 此前只有时间戳，用户必须自己记得"我什么时候重启的"才能解读它。
+      pid: process.pid,
+      hostStartedAt: Date.now() - Math.round(process.uptime() * 1000),
     }).catch((e) => { ctx.logger?.warn?.('mount heartbeat write failed: ' + message(e)) })
     // B3 符号断言：probe.ts 的 unwrap 用硬编码的 `Symbol.for('cordis.original')`，与 cordis
     // 导出的 `symbols.original` 必须是同一个符号。不是的话，探针会把代理当原始对象、身份判定失真。
@@ -1068,16 +1097,16 @@ export default {
     async function rebindSubagentInArchives(from: string, to: string): Promise<number> {
       try {
         const slice = await memoriesService.readArchiveSlice()
-        const archives = { ...(slice.archives || {}) }
-        let changed = 0
-        for (const [scene, archive] of Object.entries(archives)) {
+        const touched: Record<string, any> = {}
+        for (const [scene, archive] of Object.entries(slice.archives || {})) {
           const list = (archive as { subagents?: unknown }).subagents
           if (!Array.isArray(list) || !list.includes(from)) continue
-          archives[scene] = { ...(archive as Record<string, unknown>), subagents: list.map((n) => (n === from ? to : n)) } as typeof archive
-          changed++
+          touched[scene] = { ...(archive as Record<string, unknown>), subagents: list.map((n) => (n === from ? to : n)) } as typeof archive
         }
-        if (changed) await memoriesService.patchIndex({ archives })
-        return changed
+        const names = Object.keys(touched)
+        // 逐场景增量（审查 P2-3）：此前整表回写，会把窗口期里别人保存的**别的场景**档案抹掉。
+        for (const scene of names) await memoriesService.saveArchive(scene, touched[scene])
+        return names.length
       } catch {
         return 0
       }
@@ -1435,10 +1464,22 @@ export default {
     // learned this the hard way: a bad edit to cordis.patch.yml can stop DSH
     // from booting, so the pre-write file must stay recoverable without git.
     const KEEP_PATCH_BACKUPS = 5
+    /**
+     * 备份名里的时间戳：**到毫秒 + 进程内序号**（定宽）。
+     *
+     * 为什么不能只到秒（2026-09-30 审查 P2-5）：同一次操作里常常连写两遍补丁（`mcpm-set-enabled`
+     * 的强制写 + 恢复写、整理补丁的批量写），两次落在同一秒时**后一份备份会覆盖前一份** ——
+     * `KEEP_PATCH_BACKUPS=5` 于是不是"留 5 个历史状态"而是"留 5 个秒"，最坏情况下唯一能回滚的
+     * 中间副本被挤掉。序号保证同一毫秒内也不撞名。
+     *
+     * 两段都是**定宽**，所以按名字排序仍然等于按时间排序（`listPatchBackups` 的剪枝依赖这一点）。
+     */
+    let backupSeq = 0
     function backupStamp(): string {
       const d = new Date()
-      const p = (n: number) => String(n).padStart(2, '0')
-      return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds())
+      const p = (n: number, w = 2) => String(n).padStart(w, '0')
+      backupSeq = (backupSeq + 1) % 1000
+      return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + p(d.getMilliseconds(), 3) + p(backupSeq, 3)
     }
     // 改 patch 前的自动备份：写在 `hub/backups/`（不再堆在 `$DSH_HOME` 根下）。
     // 两个 patch 都叫 `cordis.patch.yml`（全局 + `profiles/<名字>/`），所以备份名里带上层级，
@@ -1473,7 +1514,10 @@ export default {
      * 用它列目录会得到 0 份。它的用途是启动期搬运旧文件，语义不同，别混。
      */
     function isBackupFileName(name: string): boolean {
-      return /^cordis\.patch\.yml(?:\.[A-Za-z0-9._-]+)?\.bak-\d{8}-\d{6}$/.test(basename(String(name || '')))
+      // 两代时间戳都认：老名字到秒（`\d{6}`），0.17.0 起加了毫秒与序号（共 `\d{12}`）。
+      // 只认新格式会让**存量备份**在清单与自动剪枝里集体消失 —— 它们既不再被剪掉，
+      // 也不再出现在「清理旧备份」里，等于把明文密钥副本永久留在盘上。
+      return /^cordis\.patch\.yml(?:\.[A-Za-z0-9._-]+)?\.bak-\d{8}-\d{6}(?:\d{6})?$/.test(basename(String(name || '')))
     }
 
     /**
@@ -1608,18 +1652,32 @@ export default {
     interface LoaderTokenInfo { token: string; disabled: boolean }
 
     /**
-     * 找到本插件 loader 行所在的补丁文件。返回 0 / 1 / 多份，多份时调用方必须拒绝自动改：
-     * 同一条 loader 行出现在两份补丁里会让宿主起不来（重复 id），与 duplicateGuard 同一口径。
+     * 找到本插件 loader 行所在的补丁文件，并**按形状分类**。
+     *
+     * 冲突只认 **insert** 条目：同 id 的两条 insert 才会重复挂载、让 DSH 起不来（与
+     * duplicateGuard 同一口径）。顶层**覆盖条目**（`- id:` 在第 0 列）是官方支持的改法，
+     * 与 insert 并存是正常形状 —— 把它也算成"第二份补丁"会让 0.1.7 bundle 挂载下的令牌
+     * 操作被全量拒绝（2026-09-30 审查 P2-12）。
+     *
+     * `files` 的**顺序即写点优先级**：覆盖条目在前。理由：官方 `applyEntryPatches` 在所有
+     * bundle 层**之后**应用覆盖条目、且是整体替换那条 loader 的 `config` —— 所以两种形状
+     * 并存时，令牌写进 insert 行会被覆盖条目盖掉（改了不生效，两边还都看不出分歧）。
      */
-    async function loaderTokenFiles(): Promise<{ files: string[]; infoOf: Map<string, LoaderTokenInfo>; bundleBase: boolean }> {
+    async function loaderTokenFiles(): Promise<{ files: string[]; insertFiles: string[]; infoOf: Map<string, LoaderTokenInfo>; bundleBase: boolean }> {
       const p = await ensurePaths()
-      const files: string[] = []
+      const insertFiles: string[] = []
+      const overrideFiles: string[] = []
       const infoOf = new Map<string, LoaderTokenInfo>()
       for (const abs of [p.projectPatch, p.globalPatch]) {
         let content = ''
         try { content = await readPatch(abs) } catch { continue }
+        const rows = scanLoaderRows(content)
+        if (!rows.insert.length && !rows.override.length) continue
         const read = readLoaderToken(content)
-        if (read.found) { files.push(abs); infoOf.set(abs, { token: read.token, disabled: read.disabled }) }
+        if (!read.found) continue
+        infoOf.set(abs, { token: read.token, disabled: read.disabled })
+        if (rows.insert.length) insertFiles.push(abs)
+        else overrideFiles.push(abs)
       }
       // 0.1.7 bundle 挂载：loader 条目由插件包内的 cordis.patch.yml（bundle 层）提供，两份
       // 补丁里都没有可就地改写的行。bundleBase 只回答「覆盖目标存在吗」—— 写点是 profile
@@ -1628,7 +1686,7 @@ export default {
       try {
         bundleBase = readLoaderToken(await readPatch(p.bundlePatch)).found
       } catch { bundleBase = false }
-      return { files, infoOf, bundleBase }
+      return { files: [...overrideFiles, ...insertFiles], insertFiles, infoOf, bundleBase }
     }
 
     /**
@@ -1714,12 +1772,19 @@ export default {
         if (value === CONFIG_TOKEN) return { ok: true, changed: false, note: '和当前令牌相同，未改动。', restartRequired: false }
       }
       const p = await ensurePaths()
-      const { files, bundleBase } = await loaderTokenFiles()
+      const { files, insertFiles, bundleBase } = await loaderTokenFiles()
       if (!files.length && !(mode === 'set' && bundleBase)) {
         return { ok: false, error: '没找到本插件的 loader 行，也无法确认 bundle 层的挂载条目，无法自动改写配置：请在 profile 的 cordis.patch.yml 里手动加一条覆盖条目（- id: dsh-plugin-tool-management → config: → token: "…"），或改用环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN。' }
       }
+      // 只有**两条 insert 条目**才是"重复挂载、DSH 起不来"（审查 P2-12：覆盖条目与 insert
+      // 并存是 0.1.7 的正常形状，把它也算进来会让令牌操作被全量拒绝）。
+      if (insertFiles.length > 1) {
+        return { ok: false, error: '本插件的 loader 行作为 insert 条目同时出现在两份补丁文件里（重复挂载会导致 DSH 无法启动）：请先清掉重复那条，再回来设置令牌。' }
+      }
+      // 覆盖条目多于一份则写点不唯一：官方按文件顺序 last-wins，我们无法确定该改哪一份 ——
+      // 与其赌一份，不如让用户先合并。
       if (files.length > 1) {
-        return { ok: false, error: '本插件的 loader 行同时出现在两份补丁文件里（会导致 DSH 无法启动）：请先清掉重复那条，再回来设置令牌。' }
+        return { ok: false, error: '本插件的 loader 行在多处出现且都不是唯一的 insert 条目（多半是多条覆盖条目）：无法确定该改哪一处，请先手工合并成一条再设置令牌。' }
       }
       if (!files.length) {
         // 0.1.7 bundle 挂载：两份补丁里都没有本插件的 loader 行（条目由 bundle 层提供，那份
@@ -1878,7 +1943,7 @@ export default {
       try {
         hostNames = ((await tools.schemas()) || []).map((s: any) => String(s.name)).filter(Boolean)
       } catch { hostNames = [] }
-      const mcp = hostNames.filter((name) => name.startsWith('mcp__'))
+      const mcp = hostNames.filter((name) => name.startsWith(MCP_TOOL_PREFIX))
       const known = new Set<string>(hostNames)
       const presetId = currentPresetId(agentCtx)
       if (presetId !== null) for (const name of await candidates.presetToolNames(presetId)) known.add(name)
@@ -2468,18 +2533,24 @@ export default {
      * 调用方就是猜。这里给工具看到的表包一层，界面上 handlers 表那份原样不动，两条路各记各的。
      * 只多记一条流水：不改行为、不改返回值、也不吞异常（写类与成败的判据在 ./audit-log.ts）。
      */
-    const auditFn = (opName: string, fn: (args: any) => Promise<any>) => async (args: any) => {
-      const result = await fn(args || {})
-      recordOpAudit(opName, args || {}, 'model', result)
-      return result
-    }
-    const auditOps = <T extends Record<string, unknown>>(ops: T): T => {
-      const out: Record<string, unknown> = {}
-      for (const [name, fn] of Object.entries(ops)) {
-        out[name] = typeof fn === 'function' ? auditFn(name, fn as (args: any) => Promise<any>) : fn
-      }
-      return out as T
-    }
+    /**
+     * **模型侧的冻结闸**（审查 F3，0.17.0）：与 HTTP handlers 用同一个判据函数。
+     *
+     * 此前冻结只装在 `handlers` 上，而模型工具拿的是 `service.ops` 的副本 —— 于是「锁一个
+     * **非活动**场景」在 HTTP 上被拒、在模型侧五个域（技能/记忆/MCP/子智能体/场景档案）
+     * 全放行：`lockedSceneGuard()` 只看**当前**场景，锁的是别的场景时它返回 null。
+     * 一个界面禁用、模型可写的门禁，等于没有门禁。
+     *
+     * 装在这里而不是 service.ops 上：进/退场景的运行时应用直调 `service.ops`
+     * （`applySkills` / `applyMcpServerSwitches` / …），装在那一层会把场景自己锁死（见
+     * `createFrozenGate` 的注释）。`auditOps` 返回的是**新表**，原表不受影响。
+     */
+    const frozenGate = createFrozenGate({ lockedSceneNames, activeSceneName })
+    // 被拒时不记流水：什么都没改，记下来只会把真变更淹没（与只读 op 同一口径）。
+    const modelAudit = (opName: string, args: any, result: any) => recordOpAudit(opName, args, 'model', result)
+    const auditOps = <T extends Record<string, unknown>>(ops: T): T => guardModelOps(ops, frozenGate, modelAudit)
+    const auditFn = (opName: string, fn: (args: any) => Promise<any>) =>
+      guardModelOp(opName, fn, frozenGate, modelAudit)
     const toolDeps = {
       defineTool,
       // 量体积只认**注册成功**的那些（注册失败的域工具本来就不在模型工具表里）——
@@ -2513,7 +2584,16 @@ export default {
     buildSkillTools({ ...toolDeps, skillsOps: auditOps(skillsService.ops) })
     // 传 op 表而不是 promptsService：「生效中」的判定只有 `agentsmd-list` 里有（场景绑定
     // 的那份才算），直调服务会得到文件比对口径 —— 场景驱动时工具会报一个与界面不同的答案。
-    buildPromptTools({ ...toolDeps, promptOps: auditOps(promptOps), applyPresetGuarded, promptsDir })
+    //
+    // `applyPresetGuarded` 是模型侧**唯一**不经 op 表的写路径（`prompt_manager_apply` 直接调它，
+    // 见上面 `frozenGate` 的注释），所以冻结闸要在这里显式套一层 —— 它对应的 HTTP op 是
+    // `agentsmd-apply`（冻结清单里那条）。少了这一层，"锁着**别的**场景"时模型仍能换掉当前
+    // 场景的提示词绑定（审查 F3 的另一半）。
+    const applyPresetForModel = async (id: string) => {
+      const denied = await frozenGate('agentsmd-apply', { id })
+      return denied ? { ok: false as const, error: denied } : applyPresetGuarded(id)
+    }
+    buildPromptTools({ ...toolDeps, promptOps: auditOps(promptOps), applyPresetGuarded: applyPresetForModel, promptsDir })
     buildMemoryTools({ ...toolDeps, rulesOps: auditOps(memoriesService.ops) })
     // 场景族（tools/scene.ts）：列场景与档案（`_list`）+ 建场景 / 写档案 / 绑提示词（`_save`）
     // + 进入与退出（`_switch`）。
@@ -2902,14 +2982,14 @@ export default {
                   return
                 }
               }
-              // 「读改写」两态 op：不带 `set:true` 时是**纯读**，与写门禁无关。
-              // `inject-settings`（兼容页的「注入」块）、`tool-table`（同页的「模型工具表」）、
-              // `scene-settings`（场景页的提醒开关）与 `mcpm-settings`（MCP 页的轮询设置）
-              // 都用同一个 op 承担读与写，于是整条 op 被列进 WRITE_OPS —— 读侧也一起被拦，
-              // 界面表现是"没填令牌时整块设置消失、填了还要刷新才出现"（2026-09-19 用户报的）。
-              // 判据是**这次调用要不要写**，不是 op 名在不在名单里。
-              const readOnlyCall = (op === 'inject-settings' || op === 'tool-table' || op === 'scene-settings' || op === 'mcpm-settings')
-                && !(payload.args && payload.args.set === true)
+              // 「读改写」两态 op（`inject-settings` / `tool-table` / `scene-settings` /
+              // `mcpm-settings`）：同一个名字既读又写，于是整条 op 被列进 WRITE_OPS —— 读侧也
+              // 一起被拦，界面表现是"没填令牌时整块设置消失、填了还要刷新才出现"（2026-09-19
+              // 用户报的）。判据是**这次调用要不要写**，不是 op 名在不在名单里。
+              // 判据本身在登记表（`writeWhen`），这里不再手写一份 —— 手写那份只认 `set:true`，
+              // 于是 `tool-table` 的 `presetSave` / `presetDelete` 被当成读放行，配了令牌也能
+              // 只凭宿主栅栏改侧车（审查 F2，0.17.0 修）。
+              const readOnlyCall = isReadCall(op, payload.args)
               if (TOKEN && WRITE_OPS.has(op) && !readOnlyCall && !tokenMatches(hdr('x-dsh-token'))) {
                 // 文案与明文门禁同源（http-fence.ts），code 也统一 —— 界面据此在最右侧挂
                 // 「去填令牌」跳转按钮。这条错误会出现在**任意**页面，而入口只有一个。
@@ -2964,8 +3044,9 @@ export default {
               }
               const result = await fn(payload.args || {})
               // 「最近改动」流水：来源 = 面板（这条 HTTP 路由是界面唯一的入口）。
-              // `readOnlyCall` 是上面那四个「读改写两态 op」的纯读分支 —— 它们没改任何状态，不记。
-              if (!readOnlyCall) recordOpAudit(op, payload.args || {}, 'panel', result)
+              // 「这次算不算写」的判据在 recordOpAudit 里（与写门禁同源：登记表的 `writeWhen`）
+              // —— 不在这里再传一次 `readOnlyCall`，两处各判一次迟早会分家。
+              recordOpAudit(op, payload.args || {}, 'panel', result)
               res.end(JSON.stringify(withPatchWarnings(result === undefined ? { ok: true } : result)))
             } catch (e) {
               res.end(JSON.stringify({ ok: false, error: message(e) }))
@@ -2975,6 +3056,19 @@ export default {
       } catch (e) {
         // A registration failure must never take down the whole entry: log and continue.
         console.error('[dsh-plugin-tool-management] webServer route registration failed:', message(e))
+        // 结构性弱点（2026-09-30 审查 §5 F4）：compat-status **本身就走这条路由**，所以路由没注册上
+        // 时兼容页也拿不到这条降级行 —— 面板是**整页失联**，不是"少一行"。这里至少把它写进运行期
+        // 上报通道（日志里必然有一条，进程内可查），并在 README 里写明"面板空白先看宿主日志"。
+        // 之所以不是"必然可见"的告警：可见的通道就是这条路由，它自己挂了就没得显示。
+        noteRuntime({
+          id: 'web-server-route',
+          label: 'HTTP 路由注册',
+          kind: 'write',
+          fallback: 'inform-only',
+          detail: '向宿主 webServer 注册 API 路由失败（' + message(e) + '）：插件面板与全部 HTTP op 不可用（兼容页也走这条路由，所以它也打不开）。宿主日志里有同一条记录；模型工具不受影响。',
+          detailKey: 'web-server-route.register-failed',
+          params: { reason: message(e) },
+        })
       }
     }
   },

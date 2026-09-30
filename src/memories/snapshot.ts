@@ -14,7 +14,7 @@ import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
 import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
-import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileIfExistsSync } from './index-io.js'
+import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
 import type { Rule, GroupRow, SceneMemoryProjection, RulesIndex, SceneMemoryFile } from './service.js'
 
@@ -446,12 +446,21 @@ export interface SceneFileRef {
   stamp: string
 }
 
+/**
+ * `mtime:size` 指纹；**不存在**返回 `'missing'`，其余 IO 失败**抛异常**。
+ *
+ * 为什么抛（2026-09-30 审查 F7）：探测阶段这个值同时用来判「bundle 的正文文件在不在」。
+ * 把 EACCES/EBUSY 一并吞成 `'missing'`，等于把"读不动"读成"没有这条记忆" —— 段里少一条，
+ * 而注入通道只看到"内容变了/变空了"，最坏时发出一条假的「已清空」。抛出去之后，注入侧
+ * 报 `error` 并**保留上一轮内容**，界面侧退回上一轮投影（见 service.ts 的同名注释）。
+ */
 export function fileStampSync(path: string): string {
   try {
     const st = statSync(path)
     return `${st.mtimeMs}:${st.size}`
-  } catch {
-    return 'missing'
+  } catch (e) {
+    if (isAbsentError(e)) return 'missing'
+    throw e
   }
 }
 
@@ -462,6 +471,11 @@ export function fileStampSync(path: string): string {
  * 根层的裸 .md **不再是记忆**（旧的「全局」桶已迁入 `global/`，见 relocateLegacyLayout），
  * 因此这里不再扫描根层文件——把文件丢在 memories/ 根下不会静默生效，也不会被投影。
  * `signature` 不变 ⇒ 上次渲染结果可原样复用（零正文 IO、零重排）。
+ *
+ * **读失败抛异常、不存在才算空**（2026-09-30 审查 F7）：根目录与子目录的 `readdirSync` 只在
+ * `ENOENT`（目录不存在 = 全新用户 / 刚删掉）时退化成空段；其余 IO 错误（Windows 上杀软 /
+ * 索引器 / 备份软件占住会报 EACCES/EBUSY）一律抛给调用方 —— 把"读不动"当成"没有记忆"会让
+ * 注入通道发出假的「已清空」。
  */
 export function probeSceneFilesSync(
   memoriesRoot: string,
@@ -479,8 +493,10 @@ export function probeSceneFilesSync(
   let rootEntries: import('node:fs').Dirent[]
   try {
     rootEntries = readdirSync(memoriesRoot, { withFileTypes: true })
-  } catch {
-    // 目录不存在/不可读 → 空段（不报错）。签名含固定前缀，便于与"空树"区分。
+  } catch (e) {
+    // 目录不存在（全新用户 / 刚删掉）→ 空段。签名含固定前缀，便于与"空树"区分。
+    // 其余 IO 错误必须抛：见函数头注释（F7）。
+    if (!isAbsentError(e)) throw e
     return { refs: [], scenes: [], truncated: false, signature: `∅|${signatureOfIndex(index)}` }
   }
 
@@ -499,8 +515,10 @@ export function probeSceneFilesSync(
     let entries: import('node:fs').Dirent[]
     try {
       entries = readdirSync(dir, { withFileTypes: true })
-    } catch {
-      return
+    } catch (e) {
+      // 子目录在遍历中途被删 → 跳过（正常竞态）；其余 IO 失败照函数头的口径抛出（F7）。
+      if (isAbsentError(e)) return
+      throw e
     }
     budget.dirs++
     entries.sort((a, b) => a.name.localeCompare(b.name))
@@ -584,8 +602,10 @@ export function renderSceneMemory(
 ): SceneMemoryProjection {
   const files: SceneMemoryFile[] = []
   for (const ref of probe.refs) {
-    const text = readFileIfExistsSync(ref.path)
-    if (text === null) continue // 探测与读取之间被删：跳过（下次指纹变化会再校正）
+    const text = readFileOrThrowSync(ref.path)
+    // 探测与读取之间被删 → 跳过（下次指纹变化会再校正）。读不动**不**走这条：那会静默
+    // 少一条记忆，最坏时让注入通道发假的「已清空」（F7）—— 抛出去由调用方决定处置。
+    if (text === null) continue
     const doc = parseSkillDoc(text) as ParsedSkillDoc
     const derived = deriveFromDoc(
       { id: ref.id, group: ref.scene, name: ref.name, kind: ref.kind, docPath: ref.path, entryPath: ref.path },

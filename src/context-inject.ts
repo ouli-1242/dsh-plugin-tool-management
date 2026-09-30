@@ -304,12 +304,23 @@ export interface InjectSection {
  *     —— 官方自己会送，再注入一遍只会重复；预设事实读不到（`undefined`）时按"已承载"处理
  *     （宁可与现状一致，也不制造重复）；
  *   - 同一段文本出现两次只保留前一个（跨域保险）。
+ *
+ * `onError`（2026-09-30 审查 P1-8）：某个域的 `text()` **取数失败**时回调一次，并跳过该域。
+ * 为什么不能像原来那样静默吞成空串：调用方据此判定"该域这一轮没内容"，而下游还有一条
+ * 「上一轮可见、这一轮没内容 → 发一条『已清空』」的通知 —— 于是一次取数失败会让模型收到
+ * **假的"已清空"**，据此认为那份内容已失效，下一轮内容恢复后又重发一次。
+ *
+ * ⚠️ 这条通道**只认抛异常**，所以域的 `text()` 实现必须把"读失败"与"真的空"分开：
+ * 返回空串一律被当成后者（2026-09-30 审查 F7 —— 修复第一版只覆盖了抛异常那一半，
+ * 而真实世界里 IO 失败走的是 `catch → return ''` 那条路）。`src/memories/service.ts`
+ * 的 `requireSceneMemory` / `sceneCatalog` / `readPresetTextSync` 已按此改。
  */
 export function selectInjections(
   domains: readonly InjectDomain[],
   settings: InjectSettings,
   facts: PresetInjectionFacts | undefined,
   agent?: unknown,
+  onError?: (key: InjectDomainKey, error: unknown) => void,
 ): InjectSection[] {
   const suppressing = facts !== undefined && facts.suppressing
   if (suppressing && !settings.underSuppressingPresets) return []
@@ -326,7 +337,11 @@ export function selectInjections(
     // 官方载体已挂（或读不到预设、只能按已挂算）→ 不重复送；只有明确"没挂"才兜底。
     if (carrier !== undefined && facts?.[carrier] !== false) continue
     let text = ''
-    try { text = String(domain.text(agent) ?? '') } catch { text = '' }
+    try { text = String(domain.text(agent) ?? '') } catch (error) {
+      // 取数失败 ≠ 没有内容：交给调用方（上报 + 这一轮不发"已清空"），本域这一轮不发。
+      try { onError?.(domain.key, error) } catch { /* 上报本身绝不能影响注入 */ }
+      continue
+    }
     if (text.trim() === '') continue
     const fingerprint = text.trim()
     if (seen.has(fingerprint)) continue
@@ -340,9 +355,10 @@ export function selectInjections(
  * 某一步「为什么发 / 为什么不发」。
  *
  * `child` = 该域对本会话不成立（人设目录：会话深度超出了人设的 `catalogDepth`）；`official` = 官方载体在送；
- * `off` = 开关关了；`empty` = 本插件负责但没内容；`sent` = 本插件负责且有内容。
+ * `off` = 开关关了；`empty` = 本插件负责但没内容；`sent` = 本插件负责且有内容；
+ * `error` = 本插件负责、但这一轮**取数失败**（故障，不是"没内容"）。
  */
-export type InjectReason = 'off' | 'official' | 'empty' | 'sent' | 'child'
+export type InjectReason = 'off' | 'official' | 'empty' | 'sent' | 'child' | 'error'
 
 /**
  * 纯函数：算出某一步每个域的原因（`selectInjections` 的镜像，供「注入实况」解释状态）。
@@ -361,6 +377,7 @@ export function explainInjections(
   settings: InjectSettings,
   facts: PresetInjectionFacts | undefined,
   agent?: unknown,
+  failed?: ReadonlySet<InjectDomainKey>,
 ): Partial<Record<InjectDomainKey, InjectReason>> {
   const reasons: Partial<Record<InjectDomainKey, InjectReason>> = {}
   for (const domain of domains) {
@@ -368,6 +385,10 @@ export function explainInjections(
     if (domain.applicableTo !== undefined && !domain.applicableTo(agent)) { reasons[domain.key] = 'child'; continue }
     const carrier = CARRIER_FACT_OF[domain.key]
     if (carrier !== undefined && facts?.[carrier] !== false) { reasons[domain.key] = 'official'; continue }
+    // 取数失败过 → 报 `error` 而不是 `empty`：两者在界面上的含义完全不同（一个是故障、
+    // 一个是"本来就没内容"），而原来这条路上永远只能看到后者（审查 P1-8）。`failed` 由调用方
+    // 从 `selectInjections` 的 `onError` 收集；**只认抛异常**，返回空串仍算 `empty`（F7）。
+    if (failed?.has(domain.key)) { reasons[domain.key] = 'error'; continue }
     let text = ''
     try { text = String(domain.text(agent) ?? '') } catch { text = '' }
     reasons[domain.key] = text.trim() === '' ? 'empty' : 'sent'
@@ -771,9 +792,10 @@ export interface LiveInjectionDomain {
    * official = 官方载体在送、插件不重复送（提示词 / 技能目录，标准类预设下的常态）；
    * off = 域开关被关掉；empty = 本插件负责但当前没有内容；absent = 该投却没投（含压缩后未补发）；
    * child = 当前是子会话、该域对子会话不成立（人设目录）；
+   * error = 该域这一轮**取数抛异常**（内容仍在，但这一步取不到 —— 是故障，不是"没内容"）；
    * unknown = 没有会话。
    */
-  state: 'in-context' | 'cleared' | 'official' | 'off' | 'empty' | 'absent' | 'child' | 'unknown'
+  state: 'in-context' | 'cleared' | 'official' | 'off' | 'empty' | 'absent' | 'child' | 'error' | 'unknown'
   bytes: number
   text: string
   /** 采纳统计（这一段对话的；与 `state` 无关，那个是"现在"，这个是"这段对话以来"）。 */
@@ -898,7 +920,8 @@ export function createContextInjector(deps: ContextInjectorDeps): {
           // 本插件发过又清空的，报「已清空」。
           ? (entry.official ? 'official' : entry.form === 'notice' ? 'cleared' : 'in-context')
           // 没在上下文里：用最近一步的原因解释；`sent`（该发）却没看到 = 压缩后还没补发。
-          : reason === 'off' ? 'off' : reason === 'official' ? 'official' : reason === 'empty' ? 'empty' : reason === 'child' ? 'child' : 'absent'
+          // `error`（取数抛异常）单列 —— 它和「未投递」不是同一件事，混在一起会把故障读成延迟。
+          : reason === 'off' ? 'off' : reason === 'official' ? 'official' : reason === 'empty' ? 'empty' : reason === 'child' ? 'child' : reason === 'error' ? 'error' : 'absent'
       const text = (state === 'in-context' || state === 'official') && entry !== undefined ? entry.text : ''
       return {
         key,
@@ -979,6 +1002,11 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       }
     } catch { /* 门禁判定失败不能反过来卡住对话：当作放行 */ }
     const decision = await next()
+    // 本步的失败痕迹（2026-09-30，审查 P1-8）：域取数抛异常 / 整段注入抛异常。
+    // 两者都必须是**用户看得见**的降级（兼容页 + 「注入实况」），不能只剩控制台一行日志 ——
+    // 这条通道整段停掉时，此前唯一的痕迹就是 `console.error`（脆弱性地图 F2）。
+    let injectionFailed = false
+    let failedKeys: Set<InjectDomainKey> = new Set()
     try {
       if (!decision || decision.kind === 'reject') return decision
       const agent = payload && payload.agent
@@ -1021,9 +1049,23 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         suppressionVerdict(false, 0, suppressionCounter)
       }
       const facts = await deps.factsFor(agent)
-      const sections = selectInjections(domains, settings, facts, agent)
+      // 域取数抛异常 → 记下来（本步不发它的「已清空」，实况报 error，兼容页留一条降级）。
+      failedKeys = new Set()
+      const sections = selectInjections(domains, settings, facts, agent, (key, error) => {
+        failedKeys.add(key)
+        const label = domains.find((domain) => domain.key === key)?.label ?? key
+        noteRuntime({
+          id: 'context-injection-runtime',
+          label: '上下文注入通道',
+          kind: 'read',
+          fallback: 'inform-only',
+          detail: `注入域「${label}」这一轮取数失败（${String((error as Error)?.message || error)}）：该域本轮没有发送任何内容，也不会误发一条「已清空」（保留上一轮内容不动），下一步会自动重试。`,
+          detailKey: 'context-injection-runtime.domain',
+          params: { domain: label },
+        })
+      })
       // 记录每个域这一步"为什么发 / 为什么不发"，供「注入实况」解释状态（口径见 explainInjections）。
-      lastReasons = explainInjections(domains, settings, facts, agent)
+      lastReasons = explainInjections(domains, settings, facts, agent, failedKeys)
       const visible = newestDomainTexts(agent, PLUGIN_KINDS)
       const additions: unknown[] = []
       const appended: InjectDomainKey[] = []
@@ -1050,10 +1092,13 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         injectedKeys.add(section.key)
       }
       // 曾经注入过、这一轮没有内容的域 → 一条「已清空」；从没注入过的域什么都不用说。
+      // **取数失败的域不发「已清空」**：那条通知的字面意思是"这份内容已失效"，而真实情况是
+      // "我们这一轮没取到" —— 发出去等于向模型谎报（审查 P1-8）。保留上一轮内容不动更安全。
       const labelOf = new Map(domains.map((domain) => [domain.key, domain.label] as const))
       const clearedKeys = new Set<InjectDomainKey>()
       for (const key of INJECT_DOMAIN_KEYS) {
         if (published.has(key)) continue
+        if (failedKeys.has(key)) continue
         const previous = visible.get(key)
         if (previous === undefined) continue
         const label = labelOf.get(key) ?? key
@@ -1094,8 +1139,24 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       return { ...decision, messages: [...messages, ...additions] }
     } catch (error) {
       // 注入是尽力而为：任何异常都不能把这一步弄失败。
+      injectionFailed = true
       log('context injection failed: ' + String((error && (error as Error).message) || error))
+      // 但"尽力而为"不等于"无声无息"：这一步整段抛异常时，模型**一个域的内容都没收到**，
+      // 而此前唯一的痕迹是上面那行 console.error（审查 P1-8 / 脆弱性地图 F2）。
+      // 兼容页据此至少能看到一条降级 —— 否则用户只会觉得"模型怎么不知道我的配置"。
+      noteRuntime({
+        id: 'context-injection-runtime',
+        label: '上下文注入通道',
+        kind: 'read',
+        fallback: 'inform-only',
+        detail: `本步注入抛异常，这一轮全部注入域的内容都没有送进模型（${String((error && (error as Error).message) || error)}）。通道仍在，下一步会自动重试。`,
+        detailKey: 'context-injection-runtime.throw',
+      })
       return decision
+    } finally {
+      // 正常走完（含"没东西可发"的早退）→ 收掉上一次的上报，别让已经恢复的故障挂在兼容页上。
+      // 只在两个条件都成立时收：本步没抛异常、且本步没有取数失败的域。
+      if (!injectionFailed && failedKeys.size === 0) clearRuntimeNote('context-injection-runtime')
     }
   }, { prepend: true })
   return {
@@ -1103,6 +1164,8 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       try { if (typeof stop === 'function') (stop as () => void)() } catch { /* ignore */ }
       // 注入通道没了，自检结论也失效（B4）——留着会让兼容页报一件不存在的事。
       clearRuntimeNote('official-suppression')
+      // 运行期上报同理：通道都不在了，"这一轮注入抛异常"没有意义（且不会再被刷新）。
+      clearRuntimeNote('context-injection-runtime')
     },
     live,
     noteToolUse,

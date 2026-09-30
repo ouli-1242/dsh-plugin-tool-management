@@ -4,19 +4,20 @@
 //   * 访问令牌（可选）—— 两条用途：宿主浏览器鉴权的逃生口，以及写操作的纵深防御；
 //   * 写 / 敏感 op 白名单 —— 哪些 op 要凭令牌（含"只读但会泄露明文"与"只读但会改宿主状态"）；
 //     清单本身在 `./op-registry.ts`，本文件只拼装（`opsWith` / `frozenOps`）。
-//   * 场景锁定 —— 任一场景 locked=true 时五个管理域整体冻结；
+//   * 场景锁定 —— 任一场景 locked=true 时五个管理域整体冻结。判据是 `createFrozenGate`，
+//     HTTP handlers 与**模型侧 op 表**各装一次，用的是同一份函数；
 //   * handlers 后处理 —— 把上面三条装到 op 表上（包装顺序即语义，见 installHandlerGuards）。
 //
 // 为什么抽出来：四段分散在 apply() 的 220 / 902 / 1650 / 1928，靠闭包共享 handlers 与
 // memoriesService。抽成工厂后依赖改为显式入参，index.ts 只剩四行装配 —— 而引用点用解构
 // 保持原名字，一行没动（改名才是这类搬迁最容易出静默错误的地方）。
 //
-// **一处必须守住的不变量**：handlers 的后处理顺序。`guardLockedOps` / `syncSceneArchiveOnSwitch`
+// **一处必须守住的不变量**：handlers 的后处理顺序。冻结包装 / `syncSceneArchiveOnSwitch`
 // 都是「读原函数 → 换包装」的原地改写，先装的在内层、后装的在外层；`annotateLocked` 只挂在
 // 五个读 op 上。整段照搬、顺序未变。
 
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { frozenOps, opsWith } from './op-registry.js'
+import { OP_REGISTRY, frozenOps, opsWith } from './op-registry.js'
 
 // ── 1. 访问令牌 ──────────────────────────────────────────────────────────────
 
@@ -192,10 +193,13 @@ export interface SceneLock {
 
 // ---------- 场景锁定守卫（v0.8）----------
 // 任一场景 locked=true = 五个管理域（MCP/技能/子智能体/记忆/提示词）整体冻结：
-// 下面列出的写 op 一律拒绝；界面按钮同步禁用，这里是兜底（防止绕过界面直接打 op）。
-// 只包 **handlers** 这一层是有意的：进/退模式的运行时应用走的是内部函数与
-// service.ops（applyMcpServerSwitches / applySkills / applySubagentSwitches / patchIndex），
-// 不经过 handlers —— 锁定就是为了让场景能按原样启动，运行时应用不能被自己挡住。
+// 冻结清单里的写 op 一律拒绝；界面按钮同步禁用，这里是兜底（防止绕过界面直接打 op）。
+//
+// 装在**哪一层**：HTTP handlers 一层 + 模型侧 op 表一层（index.ts 的 `auditOps`），
+// 两层用同一个判据（`createFrozenGate`）。**不装在 service.ops 上**是有意的：进/退模式的
+// 运行时应用走的是内部函数与 service.ops（applyMcpServerSwitches / applySkills /
+// applySubagentSwitches / patchIndex），不经过 handlers —— 锁定就是为了让场景能按原样启动，
+// 运行时应用不能被自己挡住。
 // 例外里的例外：scene-archive-save / rules-remove-scene 只对**被锁的那个场景**拒绝。
 export function createSceneLock(deps: SceneLockDeps): SceneLock {
   async function lockedSceneNames(): Promise<string[]> {
@@ -219,8 +223,112 @@ export function createSceneLock(deps: SceneLockDeps): SceneLock {
   return { lockedSceneNames, activeSceneName, lockedSceneGuard }
 }
 
-// ── 4. handlers 后处理 ───────────────────────────────────────────────────────
+// ── 3.5 场景冻结判据（HTTP handlers 与模型侧 op 表**共用这一份**）──────────────
 
+export interface FrozenGateDeps {
+  lockedSceneNames(): Promise<string[]>
+  activeSceneName(): Promise<string | null>
+}
+
+/** 「改它」的兜底动词（登记表里没有专门文案时用）。 */
+const FROZEN_DEFAULT_VERB = '修改'
+const ACTIVE_SCENE_LABEL: Record<string, string> = { 'rules-set-active': '切换场景' }
+const SELF_SCENE_LABEL: Record<string, string> = { 'scene-archive-save': '改档案', 'rules-remove-scene': '删除' }
+
+/**
+ * 场景冻结的**唯一判据**：`op` + `args` → 拒绝文案（null = 放行）。
+ *
+ * 三种口径的语义登记在 `./op-registry.ts` 的 `frozenScope` 上，这里只实现：
+ *   all          —— 只要有场景锁着就拒（不看 args）。
+ *   active-scene —— 只在"锁着的场景正在生效"且这次提交**改了启用集合**时拒
+ *                   （同集合的重复提交放行：它没改变任何东西，不该被"冻结"挡下来）。
+ *   self-scene   —— 只挡被锁的那个场景自己（目标从 `args.scene` / `args.name` 取）。
+ *
+ * 为什么抽成一个函数：HTTP handlers 与**模型侧 op 表**（index.ts 的 `auditOps`）必须用
+ * 同一份判据。此前只包 handlers —— 模型工具拿的是 `service.ops`，于是"锁一个**非活动**
+ * 场景"在 HTTP 上被拒、在模型侧五个域全放行（审查 F3，0.17.0 修）。判据只写一遍，
+ * 两侧就不可能再分家。
+ *
+ * 判据只读 `args`、不落盘，所以对同一次调用可以安全地判两次（handlers 与模型侧各一次）。
+ */
+export function createFrozenGate(deps: FrozenGateDeps): (op: string, args: any) => Promise<string | null> {
+  const { lockedSceneNames, activeSceneName } = deps
+  return async function frozenRejection(op: string, args: any): Promise<string | null> {
+    const cls = OP_REGISTRY[op]
+    if (!cls || cls.frozen !== true) return null
+    const scope = cls.frozenScope ?? 'all'
+    if (scope === 'active-scene') {
+      const scene = await activeSceneName()
+      if (!scene || !(await lockedSceneNames()).includes(scene)) return null
+      const current = new Set<string>([scene])
+      const next = new Set<string>(
+        (Array.isArray(args && args.scenes) ? args.scenes : [])
+          .map((n: unknown) => String(n == null ? '' : n).trim())
+          .filter((n: string) => n !== ''),
+      )
+      const same = current.size === next.size && [...current].every((n) => next.has(n))
+      if (same) return null
+      const what = ACTIVE_SCENE_LABEL[op] ?? '改它'
+      return `场景「${scene}」已锁定：先到场景页解锁再${what}（锁定期间改启用集合会让模型侧的写门禁失效）`
+    }
+    if (scope === 'self-scene') {
+      const scene = String((args && (args.scene || args.name)) || '').trim()
+      if (!scene) return null
+      if (!(await lockedSceneNames()).includes(scene)) return null
+      return `场景「${scene}」已锁定：先解锁再${SELF_SCENE_LABEL[op] ?? '改它'}`
+    }
+    const locked = await lockedSceneNames()
+    return locked.length ? `场景已锁定（${locked.join('、')}）：先到场景页解锁再${FROZEN_DEFAULT_VERB}` : null
+  }
+}
+
+// ── 3.6 模型侧 op 表的冻结闸（与 handlers 同一份判据）────────────────────────
+
+/**
+ * 给**模型侧**的 op 表装冻结闸（审查 F3，0.17.0）。
+ *
+ * 为什么抽成一个函数、而不是在 index.ts 里手写 for 循环：模型侧与 HTTP 侧必须用**同一个**
+ * `frozen` 判据对象。写成两个循环、各自去 `createFrozenGate`，就给了"两边又分家"的机会 ——
+ * 而 F3 的成因正是两侧判据不同。抽出来之后，契约测试可以直接拿真实的 `createFrozenGate`
+ * 与真实的 `installHandlerGuards` 对同一个 op 比对两侧结论。
+ *
+ * **不改动传入的表**：返回新表。场景引擎直调的是原表（`applySkills` → `service.ops`），
+ * 装在原表上会把场景自己锁死。
+ *
+ * @param ops    原始 op 表
+ * @param frozen `createFrozenGate(...)` 的返回值
+ * @param after  成功后的回调（挂流水用）。被拒时**不调用** —— 什么都没改。
+ */
+export function guardModelOps<T extends Record<string, unknown>>(
+  ops: T,
+  frozen: (op: string, args: any) => Promise<string | null>,
+  after?: (op: string, args: any, result: any) => void,
+): T {
+  const out: Record<string, unknown> = {}
+  for (const [opName, fn] of Object.entries(ops)) {
+    if (typeof fn !== 'function') { out[opName] = fn; continue }
+    out[opName] = async (args: any) => {
+      const denied = await frozen(opName, args || {})
+      if (denied) return { ok: false, error: denied }
+      const result = await (fn as (a: any) => Promise<any>)(args || {})
+      if (after) after(opName, args || {}, result)
+      return result
+    }
+  }
+  return out as T
+}
+
+/** 单个 op 版本（`guardModelOps` 的一元特例）：给不经 op 表的调用点用。 */
+export function guardModelOp<F extends (args: any) => Promise<any>>(
+  opName: string,
+  fn: F,
+  frozen: (op: string, args: any) => Promise<string | null>,
+  after?: (op: string, args: any, result: any) => void,
+): F {
+  return guardModelOps({ [opName]: fn }, frozen, after)[opName] as F
+}
+
+// ── 4. handlers 后处理 ───────────────────────────────────────────────────────
 export interface HandlerGuardsDeps {
   /** op 表。原地改写：包装会被写回**同一个对象**，所以传引用，不能传副本。 */
   handlers: Record<string, (args: any) => Promise<any>>
@@ -238,7 +346,7 @@ export function installHandlerGuards(deps: HandlerGuardsDeps): void {
   /**
    * 包一层：开关成功后把改动同步进当前场景档案（见 syncSwitchToScene）。
    * 失败只挂 `sceneSyncError`，不改写原操作的成功结论 —— 运行时确实改了，档案没跟上要说得清。
-   * 锁定仍由 `guardLockedOps` 挡住（更靠内的那层包装先执行）。
+   * 锁定由更靠内的冻结包装挡住（先装的在内层，它返回 `ok:false` 时这里不会去同步档案）。
    */
   function syncSceneArchiveOnSwitch(opNames: string[]): void {
     for (const opName of opNames) {
@@ -252,61 +360,26 @@ export function installHandlerGuards(deps: HandlerGuardsDeps): void {
       }
     }
   }
-  function guardLockedOps(opNames: string[], what: string): void {
-    for (const opName of opNames) {
+  // 冻结清单与档案同步清单都来自 `./op-registry.ts`：加 op 时在那里登记一条，这里不再抄。
+  // 三种口径（all / active-scene / self-scene）现在合成**一个**判据函数（`createFrozenGate`），
+  // 由 `frozenOps()`（不带 scope = 全部冻结 op）一次装完。原先它们分散成三段手写包装，
+  // 而模型侧 op 表压根没装 —— 这正是 F3 的成因（见 `createFrozenGate` 的注释）。
+  // 包装顺序不变：冻结仍在**内层**，`syncSceneArchiveOnSwitch` 在外层（前者返回 ok:false 时
+  // 后者不会去同步档案）。
+  {
+    const frozen = createFrozenGate({ lockedSceneNames, activeSceneName })
+    for (const opName of frozenOps()) {
       const original = handlers[opName]
       if (typeof original !== 'function') continue
       handlers[opName] = async (args: any) => {
-        const locked = await lockedSceneNames()
-        if (locked.length) return { ok: false, error: `场景已锁定（${locked.join('、')}）：先到场景页解锁再${what}` }
-        return original(args)
+        const denied = await frozen(opName, args)
+        return denied ? { ok: false, error: denied } : original(args)
       }
     }
   }
-  // 冻结清单与档案同步清单都来自 `./op-registry.ts`：加 op 时在那里登记一条，这里不再抄。
-  guardLockedOps(frozenOps('all'), '修改')
   // 场景内「开关」类操作（用户裁定 2026-09-17）：未锁定时**可用**，改动同步进当前场景档案。
   // 与「锁定」正交：锁定冻结全部写操作，这里只是把页面开关的意图也写进档案。
   syncSceneArchiveOnSwitch(opsWith('syncsArchive'))
-  // 口径 `frozenScope: 'active-scene'` 的那几条（判据与理由登记在 op-registry.ts 的
-  // `rules-set-active` 条目上）。没有锁定场景在生效时（全局态 / 场景未锁）照旧可用。
-  const ACTIVE_SCENE_LABEL: Record<string, string> = { 'rules-set-active': '切换场景' }
-  for (const opName of frozenOps('active-scene')) {
-    const what = ACTIVE_SCENE_LABEL[opName] ?? '改它'
-    const original = handlers[opName]
-    if (typeof original !== 'function') continue
-    handlers[opName] = async (args: any) => {
-      const scene = await activeSceneName()
-      if (scene && (await lockedSceneNames()).includes(scene)) {
-        // 同集合的重复提交放行：它没有改变任何东西，不该被"冻结"挡下来。
-        const current = new Set<string>([scene])
-        const next = new Set<string>(
-          (Array.isArray(args && args.scenes) ? args.scenes : [])
-            .map((n: unknown) => String(n == null ? '' : n).trim())
-            .filter((n: string) => n !== ''),
-        )
-        const same = current.size === next.size && [...current].every((n) => next.has(n))
-        if (!same) {
-          return { ok: false, error: `场景「${scene}」已锁定：先到场景页解锁再${what}（锁定期间改启用集合会让模型侧的写门禁失效）` }
-        }
-      }
-      return original(args)
-    }
-  }
-  // 被锁场景自身的档案与删除：只挡它自己，别的场景照常（口径 `frozenScope: 'self-scene'`）。
-  // 目标场景一律从 `args.scene` / `args.name` 里取 —— 这两个键名就是本插件 op 的惯例。
-  const SELF_SCENE_LABEL: Record<string, string> = { 'scene-archive-save': '改档案', 'rules-remove-scene': '删除' }
-  for (const opName of frozenOps('self-scene')) {
-    const what = SELF_SCENE_LABEL[opName] ?? '改它'
-    const original = handlers[opName]
-    if (typeof original !== 'function') continue
-    handlers[opName] = async (args: any) => {
-      const scene = String((args && (args.scene || args.name)) || '').trim()
-      const locked = await lockedSceneNames()
-      if (scene && locked.includes(scene)) return { ok: false, error: `场景「${scene}」已锁定：先解锁再${what}` }
-      return original(args)
-    }
-  }
   // 各页列表响应带上 anyLocked + activeScene：界面据此禁用写控件、并说明
   // 「当前处于场景 X，开关请到档案里改」（读 op，附加字段不影响既有消费方）。
   async function annotateLocked(res: any): Promise<any> {

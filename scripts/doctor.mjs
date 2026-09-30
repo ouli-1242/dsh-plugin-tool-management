@@ -23,14 +23,14 @@
  *   node scripts/doctor.mjs --json    # machine-readable report
  */
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // Single source of truth: the runtime probe itself. A second hand-written
 // capability list here would drift from what the plugin actually gates on, and
 // the doctor would then certify a host the plugin refuses to use.
-import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE, CAPABILITY_STATIC } from '../lib/compat/probe.js'
+import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE, CAPABILITY_STATIC, hostRootCandidates } from '../lib/compat/probe.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const JSON_OUT = process.argv.includes('--json')
@@ -123,6 +123,13 @@ const MOUNT_HEARTBEAT_FILE = join(process.env.DSH_HOME || join(process.env.USERP
  * 对未解析的 inject 不抛错、不打日志（2026-09-20 实测）—— 那种情形下界面上连插件都不见了，
  * 没有任何信号。心跳是唯一的线索：**如果刚重启过 DSH 而这个时间没更新，就说明这一轮插件
  * 没挂上**，下面那份 inject 名单就是要核对的清单。
+ *
+ * 2026-09-30 审查 §5 F1：把「这一轮挂上没」从"要用户自己记得何时重启"升级成**可计算的结论** ——
+ * 插件与宿主同进程，所以心跳里的 `pid` 就是宿主的进程号。于是：
+ *   - pid 已不存在 → 那份心跳来自**已经结束**的进程（宿主自那以后重启过）；
+ *   - pid 仍在    → 心跳来自**当前正在跑**的宿主，插件这一轮确实 apply 过。
+ * 局限如实标注：进程号会被复用，且这里无法取到"该 pid 的启动时刻"（跨平台没有便宜的办法），
+ * 所以 `pid 仍在` 只是一个**很强但不是证明**的证据 —— 刚重启过的机器请以 `hostStartedAt` 为准。
  */
 function inspectMount() {
   let raw
@@ -133,17 +140,42 @@ function inspectMount() {
   }
   try {
     const parsed = JSON.parse(raw)
+    const pid = Number.isFinite(Number(parsed.pid)) ? Number(parsed.pid) : undefined
+    const started = Number.isFinite(Number(parsed.hostStartedAt)) ? Number(parsed.hostStartedAt) : undefined
+    const alive = pid === undefined ? undefined : pidAlive(pid)
+    const verdict = alive === true
+      ? '该心跳来自**当前仍在运行**的宿主进程：插件这一轮已挂载'
+      : alive === false
+        ? '写入该心跳的宿主进程**已经不在了**：宿主自那以后重启过（若你现在开着 DSH 而面板不见，说明这一轮插件没挂上）'
+        : '心跳里没有进程号（旧版本写的），无法判断它是否来自当前这一轮宿主'
+    const startedText = started === undefined ? '' : `，宿主进程启动于 ${new Date(started).toISOString()}`
     return {
       status: 'ok',
       at: parsed.at,
       iso: parsed.iso,
       version: parsed.version,
       injects: Array.isArray(parsed.injects) ? parsed.injects : [],
+      pid,
+      hostStartedAt: started,
+      alive,
       file: MOUNT_HEARTBEAT_FILE,
-      detail: `last mounted ${parsed.iso ?? '?'} (plugin ${parsed.version ?? '?'}); if DSH was restarted after that and the panel is missing, the plugin did not mount`,
+      detail: `last mounted ${parsed.iso ?? '?'} (plugin ${parsed.version ?? '?'})${startedText}${pid === undefined ? '' : `, pid ${pid}`} — ${verdict}`,
     }
   } catch (error) {
     return { status: 'unreadable', detail: `mount heartbeat is not valid JSON: ${String(error)}`, file: MOUNT_HEARTBEAT_FILE }
+  }
+}
+
+/**
+ * 进程号是否仍然存活。`process.kill(pid, 0)` 只做存在性/权限检查、**不发信号**
+ * （信号 0 是约定俗成的探测值）。EPERM 说明进程在但属于别的用户 → 仍算存活。
+ */
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return String(error && error.code) === 'EPERM'
   }
 }
 
@@ -185,48 +217,79 @@ function versionOf(entry) {
   }
 }
 
-/** The host installation the plugin is currently attached to. */
+/**
+ * The host installation the plugin is currently attached to.
+ *
+ * 候选序列直接取 `lib/compat/probe.js` 的 `hostRootCandidates()` —— 与运行时**同一份**
+ * （2026-09-30 审查 §5 F10）。此前这里自己写了一份，而且少了桌面版（`resources/app.asar`）
+ * 那一条：桌面宿主上会报 "host installation not found"，或拿 npx 缓存里**另一代宿主**当
+ * 锚点比出假 SEPARATE COPY。那份逻辑运行时早就修过，doctor 没跟上。
+ */
 function findHost() {
-  const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh')
-  const candidates = [join(home, 'profiles', 'node_modules', '@deepseek-ai')]
-  let dir = ROOT
-  for (let i = 0; i < 4; i += 1) {
-    const parent = dirname(dir)
-    if (parent === dir) break
-    dir = parent
-    candidates.push(join(dir, 'node_modules', '@deepseek-ai'))
-  }
-  // 0.1.7 起宿主不再维护 profiles/node_modules（link-backend 移除），`dsh web` 经 npx
-  // 跑在 `<npm 缓存>/_npx/<hash>/node_modules` —— 缓存扫描按目录 mtime 新到旧排，
-  // 最新命中的就是正在运行的安装。
-  candidates.push(...npxCacheHostRoots())
-  for (const candidate of candidates) {
+  for (const candidate of hostRootCandidates()) {
     if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
   }
   return undefined
 }
 
-/** npx 缓存里的宿主 `@deepseek-ai` 目录（mtime 新到旧）；找不到 npm 缓存就返回空。 */
-function npxCacheHostRoots() {
-  const home = process.env.USERPROFILE || process.env.HOME || ''
-  let cache = process.env.npm_config_cache || ''
-  if (!cache && home) {
-    try { cache = readFileSync(join(home, '.npmrc'), 'utf8').match(/^\s*cache\s*=\s*(.+?)\s*$/m)?.[1] ?? '' } catch { /* no .npmrc */ }
+/**
+ * 找不到宿主时的提示。桌面版宿主**装不到 doctor 能看见的地方**（`process.resourcesPath`
+ * 只有 electron 进程才有，而这个 CLI 是普通 node），所以这一句要把它说清 —— 否则用户看到
+ * 的是一句无从下手的 "host installation not found"。
+ */
+function hostNotFoundHint() {
+  return [
+    'no DSH host installation found — 已按以下顺序找过：',
+    '  ① 桌面版归档（仅 electron 进程可见，CLI 下查不到）',
+    '  ② $DSH_HOME/profiles/node_modules/@deepseek-ai（或 ~/.dsh/...）',
+    '  ③ 本插件自身位置逐级上溯的 node_modules/@deepseek-ai',
+    '  ④ npx 缓存 <npm cache>/_npx/*/node_modules/@deepseek-ai',
+    '若你用的是**桌面版 DSH**：这是预期结果（归档路径 CLI 读不到），请改在宿主内看「兼容」页的能力探测；',
+    '若你用的是 `dsh web`：确认 DSH_HOME 指向正确的档案目录（当前 DSH_HOME=' + (process.env.DSH_HOME || '(未设置)') + '）。',
+  ].join('\n')
+}
+
+/**
+ * `~/.dsh/AGENTS.md` 的**增量刷新**契约（审查 §5 F3）—— 本插件"应用提示词预设"依赖它。
+ *
+ * 插件把预设正文写进全局 `AGENTS.md`，然后靠官方 `dsh-agent-instructions` **每一步**重新
+ * 读盘（对比 stat 的 version 与内容 SHA-1）来决定要不要把新正文送进模型。所以官方一旦改成
+ * 事件驱动、加 touchedPaths 白名单、或改 digest 口径，"应用预设"就会**静默失效**（旧正文
+ * 继续注入），零报错。
+ *
+ * 这些 needle 是**drift canary，不是证明**：它们取自官方安装源码里承担该契约的几个标识符
+ * （`lib/index.js` 实测存在）。官方把它们改名/拆函数，就是"该人工复核这一条契约"的信号；
+ * 反过来，needle 还在也不等于语义没变。包解析不到时如实报 `n/a`（可选依赖）。
+ */
+const AGENTS_MD_REFRESH_MARKERS = [
+  { needle: 'agentInstructionsHook', why: '每步重读全局 AGENTS.md 的钩子入口' },
+  { needle: 'trimmedInstructionDigest', why: '内容同一性 = 去掉首尾空白后的 SHA-1' },
+  { needle: 'instructionContentSha1', why: 'SHA-1 摘要口径' },
+  { needle: 'sameInstructionChange', why: '按 {action, scope, path, digest} 判「有没有变化」' },
+]
+const AGENTS_MD_PACKAGE = '@deepseek-ai/dsh-agent-instructions'
+
+/** 见 AGENTS_MD_REFRESH_MARKERS。只读：从宿主锚点解析官方源码并做字符串包含检查。 */
+function inspectAgentsMdRefresh(hostDir) {
+  if (hostDir === undefined) return { status: 'unknown', detail: 'host installation not found' }
+  const entry = resolveFromHost(hostDir, AGENTS_MD_PACKAGE)
+  if (entry === undefined) {
+    return { status: 'n/a', detail: `${AGENTS_MD_PACKAGE} is not resolvable from the host (optional: 该宿主不注入工作区指令)` }
   }
-  if (!cache && process.env.LOCALAPPDATA) cache = join(process.env.LOCALAPPDATA, 'npm-cache')
-  if (!cache) return []
-  const npxRoot = join(cache, '_npx')
-  let entries = []
-  try { entries = readdirSync(npxRoot) } catch { return [] }
-  const roots = []
-  for (const entry of entries) {
-    const dir = join(npxRoot, entry, 'node_modules', '@deepseek-ai')
-    if (!existsSync(join(dir, 'dsh', 'package.json'))) continue
-    let mtime = 0
-    try { mtime = statSync(dir).mtimeMs } catch { /* raced — still usable */ }
-    roots.push({ dir, mtime })
+  let source
+  try {
+    source = readFileSync(entry, 'utf8')
+  } catch (error) {
+    return { status: 'unknown', detail: `cannot read ${entry}: ${String(error)}` }
   }
-  return roots.sort((left, right) => right.mtime - left.mtime).map((root) => root.dir)
+  const missing = AGENTS_MD_REFRESH_MARKERS.filter((marker) => !source.includes(marker.needle))
+  if (missing.length === 0) return { status: 'ok', detail: `refresh markers intact (${entry})` }
+  return {
+    status: 'drift',
+    entry,
+    detail: `refresh markers missing: ${missing.map((marker) => `"${marker.needle}" (${marker.why})`).join('; ')}`,
+    impact: '「应用提示词预设」可能静默失效：写入全局 AGENTS.md 后官方不再每步重读，旧正文会继续注入模型上下文。请人工复核该包的指令刷新路径。',
+  }
 }
 
 /**
@@ -340,6 +403,7 @@ function main() {
   const installed = inspectPackages()
   const capabilities = inspectCapabilities()
   const jsonlLayout = inspectJsonlLayout(installed.host)
+  const agentsMdRefresh = inspectAgentsMdRefresh(installed.host)
   const bareModules = inspectBareHostModules(installed.host)
   const mount = inspectMount()
   const linkTree = inspectProfileLinkTree()
@@ -382,6 +446,7 @@ function main() {
       packages: installed.rows,
       capabilities,
       jsonlLayout,
+      agentsMdRefresh,
       bareModules,
       mount,
       linkTree,
@@ -392,7 +457,12 @@ function main() {
   }
 
   console.log('dsh-plugin-tool-management — host compatibility doctor')
-  console.log(`host packages   : ${installed.host ?? '(not found)'}`)
+  if (installed.host === null) {
+    console.log('host packages   : (not found)')
+    for (const line of hostNotFoundHint().split('\n')) console.log(`                  ${line}`)
+  } else {
+    console.log(`host packages   : ${installed.host}`)
+  }
   console.log(`verified against: DSH ${VERIFIED_HOST_VERSION} (peer range ${EXPECTED_PEER_RANGE})`)
   console.log('')
   console.log('module identity (plugin vs host):')
@@ -427,6 +497,14 @@ function main() {
     console.log(`  [${mark}] ${JSONL_PACKAGE}`)
     console.log(`         ${jsonlLayout.detail}`)
     if (jsonlLayout.impact !== undefined) console.log(`         impact: ${jsonlLayout.impact}`)
+  }
+  console.log('')
+  console.log('official AGENTS.md incremental-refresh contract ("apply preset" depends on it):')
+  {
+    const mark = agentsMdRefresh.status === 'ok' ? 'ok  ' : agentsMdRefresh.status === 'drift' ? 'WARN' : 'n/a '
+    console.log(`  [${mark}] ${AGENTS_MD_PACKAGE}`)
+    console.log(`         ${agentsMdRefresh.detail}`)
+    if (agentsMdRefresh.impact !== undefined) console.log(`         impact: ${agentsMdRefresh.impact}`)
   }
   console.log('')
   console.log('0.1.5-era profile link projection tree ($DSH_HOME/profiles/node_modules):')

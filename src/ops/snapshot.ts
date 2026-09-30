@@ -16,8 +16,9 @@
 
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { unzipSync, zipSync } from 'fflate'
+import { maskSecretValue, maskUrlQuery } from '../mcp/secret-guard.js'
 
 export interface SnapshotOpsDeps {
   /** handlers 表调用口：走 op 而不是走服务，门禁与写锁才与界面 / 模型是同一套。 */
@@ -43,8 +44,6 @@ const D_SKILLS = 'skills'
 /** 三个"文件域"：整个目录打进一份 zip，键是相对路径。 */
 const FILE_DOMAINS = [D_MEMORIES, D_SUBAGENTS, D_PROMPTS]
 const ALL_DOMAINS = ['mcp', D_MEMORIES, D_SUBAGENTS, D_PROMPTS, D_SKILLS, 'settings', 'scenes']
-
-const MASKED = '••••••'
 
 function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
@@ -104,6 +103,38 @@ function namesOf(res: any, prefer: string[]): string[] {
   return []
 }
 
+/**
+ * 从 `skill-state` 的返回里取「<来源>/<技能名>」清单。
+ *
+ * 为什么不能复用 `namesOf`（2026-09-30 审查 P1-6）：`skill-state` 的形状是
+ * `{ ok, data: { roots: [{ key, skills: [{ name, declaredName, … }] }] } }` —— 顶层键是
+ * `roots`，而 `namesOf` 只找 `rows / personas / presets / scenes / skills / list / entries /
+ * items` 这些**数组**键，一个都对不上 → 恒返回 `[]` → 技能域**永远导出 0 项**，而界面显示的
+ * 是"迁移完成"。key 用**声明名**（frontmatter `name`），口径与 `index.ts` 的
+ * `skillArchiveKeysOfRoot` 一致（档案里存的就是声明名，用条目名拼会在 stale 校验里被丢掉）。
+ */
+function skillKeysOf(res: any): string[] {
+  if (!res || res.ok === false) return []
+  for (const bag of [res.data, res].filter(Boolean)) {
+    const roots = (bag as Record<string, unknown>).roots
+    if (!Array.isArray(roots)) continue
+    const out: string[] = []
+    for (const root of roots) {
+      const rootKey = String((root as Record<string, unknown> | null)?.key || '')
+      if (!rootKey) continue
+      const skills = (root as Record<string, unknown>).skills
+      if (!Array.isArray(skills)) continue
+      for (const sk of skills) {
+        const s = sk as Record<string, unknown> | null
+        const name = String((s && (s.declaredName || s.name)) || '')
+        if (name) out.push(rootKey + '/' + name)
+      }
+    }
+    if (out.length) return out
+  }
+  return []
+}
+
 /** 场景清单（带 label / description / 提示词绑定）：`rules-list` 的 scenes 那一栏，读不到就是空。 */
 function sceneRecordsOf(res: any): Array<{ name: string, label?: string, description?: string, prompt?: string }> {
   const bags = [res && res.data, res].filter(Boolean)
@@ -123,10 +154,17 @@ function sceneRecordsOf(res: any): Array<{ name: string, label?: string, descrip
   return []
 }
 
+/**
+ * 键值对打码：**走 `secret-guard` 的唯一口径**（`$VAR` / `!!js` 这类间接引用原样保留）。
+ *
+ * 这里曾经自己写了一份「所有键一律打成 `••••••`」的版本 —— 与 MCP 列表视图的口径不一致，
+ * 结果是配置里的间接引用被当成密钥导出、导回来时 `resolveMaskedKv` 顶替不出真值只能丢键。
+ * 打码形态只允许有一处定义（审查 P0-4）。
+ */
 function maskKv(map: unknown): Record<string, string> {
   const out: Record<string, string> = {}
   if (map && typeof map === 'object' && !Array.isArray(map)) {
-    for (const k of Object.keys(map as Record<string, unknown>)) out[k] = MASKED
+    for (const k of Object.keys(map as Record<string, unknown>)) out[k] = maskSecretValue((map as Record<string, unknown>)[k])
   }
   return out
 }
@@ -158,7 +196,13 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       const copy = Object.assign({}, row)
       if (copy.env) copy.env = maskKv(copy.env)
       if (copy.headers) copy.headers = maskKv(copy.headers)
-      if (typeof copy.url === 'string') copy.url = copy.url.replace(/([?&](?:key|token|secret|password)=)[^&]*/gi, '$1' + MASKED)
+      // URL 查询串走 `secret-guard.maskUrlQuery`（与 MCP 列表视图同一口径）。这里原先是**自写的
+      // 一条窄正则** `([?&](?:key|token|secret|password)=)`，只认四个固定参数名 ——
+      // `?api_key=` / `?access_token=` / `?sig=` / `?client_secret=` 这类 MCP 托管服务最常见的
+      // 形态全部漏掉，而这正是「凭据挂在 URL 上」的主流写法。后果不是界面显示问题：默认
+      // （`includeSecrets` 缺省 false）导出的 `mcp.json` 里就是**明文凭据**，而这份目录的用途
+      // 就是拷去 U 盘 / 网盘 / 另一台机器（审查 P0-4）。
+      if (typeof copy.url === 'string') copy.url = maskUrlQuery(copy.url)
       return copy
     })
     try {
@@ -188,7 +232,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
 
     // ── 技能：源目录在外部（不在 hub），交给既有的 `bundle-export` 走它自己的收集路径 ──
     const skillState = await deps.invokeOp('skill-state', {})
-    const skillKeys = namesOf(skillState, ['key']).filter((k) => k.indexOf('/') > 0)
+    const skillKeys = skillKeysOf(skillState)
     if (!skillKeys.length) notes.push('技能这次没导出：没从 skill-state 读到「<来源>/<名字>」形态的清单')
     if (skillKeys.length) {
       const bundled = await deps.invokeOp('bundle-export', { kind: 'skills', names: skillKeys, outDir: join(dir, D_SKILLS) })
@@ -323,14 +367,24 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
     const read = await snapshotRead(dir)
     if ('error' in read) return { ok: false, error: read.error }
     const { files } = read
-    const report: Array<{ domain: string, imported: number, skipped: number, error?: string }> = []
+    const report: Array<{ domain: string, imported: number, skipped: number, error?: string, warnings?: string[] }> = []
 
-    /** 一个域失败只记在这一行上：迁移的意义正是「哪域没过来」看得清，不是整批回滚。 */
-    async function run(domain: string, task: () => Promise<{ imported: number, skipped: number }>): Promise<void> {
+    /**
+     * 一个域失败只记在这一行上：迁移的意义正是「哪域没过来」看得清，不是整批回滚。
+     *
+     * `warning` 也要透传（2026-09-30 审查 P2-9）：各域的 import op 会用它报"带过来了但有
+     * 东西被跳过"（`mcpm-import` 的「这些密钥已是打码占位符，请在编辑里重新填写」就是其中
+     * 最重要的一条）。此前只取 imported/skipped，于是"迁移成功"的界面下藏着一份**需要用户
+     * 动手补的密钥清单**，用户在另一台机器上等到调用工具时才发现。
+     */
+    async function run(domain: string, task: () => Promise<{ imported: number, skipped: number, warning?: string }>): Promise<void> {
       if (domains.indexOf(domain) < 0) return
       try {
         const r = await task()
-        report.push({ domain, imported: r.imported, skipped: r.skipped })
+        report.push({
+          domain, imported: r.imported, skipped: r.skipped,
+          ...(r.warning ? { warnings: [r.warning] } : {}),
+        })
       } catch (e) {
         report.push({ domain, imported: 0, skipped: 0, error: deps.message(e) })
       }
@@ -341,7 +395,12 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       const raw = await readFile(files[F_MCP], 'utf8')
       const res = await deps.invokeOp('mcpm-import', overwrite ? { json: raw, conflict: 'overwrite' } : { json: raw })
       if (!res || res.ok === false) throw new Error(String((res && res.error) || 'mcpm-import 失败'))
-      return { imported: (res.added || []).length + (res.overwritten || []).length, skipped: (res.skipped || []).length }
+      return {
+        imported: (res.added || []).length + (res.overwritten || []).length,
+        skipped: (res.skipped || []).length,
+        // 「打码占位符被跳过」这类结论必须跟着走：它是用户要动手补的清单，不是内部细节。
+        ...(typeof res.warning === 'string' && res.warning ? { warning: res.warning } : {}),
+      }
     })
 
     await run(D_SUBAGENTS, async () => {
@@ -407,14 +466,24 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
         ;(byScene[scene] || (byScene[scene] = [])).push({ name, data: Buffer.from(bytes).toString('base64') })
       }
       let imported = 0
+      const reasons: string[] = []
       for (const scene of Object.keys(byScene)) {
         const res = await deps.invokeOp('rules-import', { scene, files: byScene[scene] })
         if (!res || res.ok === false) { skipped += byScene[scene].length; continue }
         const data = res.data || res
         imported += (data.imported || []).length
-        skipped += (data.skipped || []).length
+        const skippedRows = Array.isArray(data.skipped) ? data.skipped : []
+        skipped += skippedRows.length
+        // `rules-import` 的 skipped 是 `{name, reason}` —— 只数个数会把「为什么没过来」
+        // 丢掉，而那正是用户要照着修的东西（名字不合法 / 正文超限 / 附件重名）。
+        // 上限 5 条：这是提示不是日志，界面上一行放不下更多（审查 P2-9 同一条口径）。
+        for (const row of skippedRows.slice(0, 5)) {
+          const name = String((row && row.name) || '')
+          const reason = String((row && row.reason) || '')
+          if (reason) reasons.push(`${name ? name + '：' : ''}${reason}`)
+        }
       }
-      return { imported, skipped }
+      return { imported, skipped, ...(reasons.length ? { warning: reasons.join('；') } : {}) }
     })
 
     await run('scenes', async () => {
@@ -468,8 +537,22 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       let imported = 0
       let skipped = 0
       for (const zip of zips) {
-        const res = await deps.invokeOp('skill-import', overwrite ? { source: zip, conflict: 'overwrite' } : { source: zip })
-        if (!res || res.ok === false) throw new Error(String((res && res.error) || 'skill-import 失败'))
+        // 走 `skill-upload`（把 zip 读成 base64）而**不是** `skill-import`（2026-09-30 审查 P1-6）：
+        // 导出侧产出的是 `bundle-export` 打的**一个 zip**（内含 `<技能名>/<文件>`），而
+        // `skill-import` 的 `analyzeSource` 用 `lstat` + `endsWith('.md')` 判定来源，**完全不认识
+        // `.zip`** —— 喂过去必然 `error.source.unrecognized`，该域整行报错。zip 的解包只存在于
+        // `skill-upload` 这条链（`importUploadedSkill` → `prepareUploadedSource` → `writeUploadedZip`）；
+        // 已实测它能正确吃下这种形态（`<技能名>/SKILL.md` → 落 `hub/skills/<技能名>/`）。
+        let b64: string
+        try { b64 = (await readFile(zip)).toString('base64') } catch (e) {
+          throw new Error(`读取技能包失败：${deps.message(e)}`)
+        }
+        const res = await deps.invokeOp('skill-upload', {
+          name: basename(zip).replace(/\.zip$/i, ''),
+          zip: b64,
+          ...(overwrite ? { conflict: 'overwrite' } : {}),
+        })
+        if (!res || res.ok === false) throw new Error(String((res && res.error) || 'skill-upload 失败'))
         const data = res.data || {}
         imported += (data.imported || []).length
         skipped += (data.skipped || []).length + (data.failed || []).length

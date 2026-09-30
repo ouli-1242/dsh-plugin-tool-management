@@ -13,7 +13,7 @@
 
 import { appendFile, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { hubPath } from './hub.js'
-import { OP_REGISTRY } from './op-registry.js'
+import { OP_REGISTRY, isReadCall } from './op-registry.js'
 
 const AUDIT_FILE = 'audit.jsonl'
 /** 轮转阈值：超过 512KB 保留最近 500 条。这页的本意是「最近改动」，不是无限期审计。 */
@@ -74,9 +74,13 @@ export function recordAudit(entry: AuditEntry): void {
 /**
  * 一次 op 结果要不要记：写类 + 本次成功（`ok !== false`，与服务端「成功返回扁平 {ok:true,…}」
  * 的口径一致；不返回 ok 的按成功处理）。
+ *
+ * 「两态 op」（`inject-settings` / `tool-table` / `scene-settings` / `mcpm-settings`）的读侧
+ * 不记：`isWriteClassOp` 只看 op 名，而那几个名字既读又写 —— 光打开一次兼容页就会被记成
+ * 一次改动，把真变更淹没。判据与写门禁同源（登记表的 `writeWhen`），不在这里另写一份。
  */
 export function recordOpAudit(op: string, args: unknown, source: AuditSource, result: unknown): void {
-  if (!isWriteClassOp(op) || AUDIT_SKIP.has(op)) return
+  if (!isWriteClassOp(op) || AUDIT_SKIP.has(op) || isReadCall(op, args)) return
   if (result && typeof result === 'object' && (result as { ok?: unknown }).ok === false) return
   recordAudit({ ts: Date.now(), op, target: auditTargetOf(op, args), source })
 }

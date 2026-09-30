@@ -1273,8 +1273,11 @@ var ArchiveWorkspaceRegistry = class {
 	/**
 	 * 永久删除一个会话及其全部痕迹（转录目录、工作区记账、归档标记、
 	 * 投影缓存行）。
+	 *
+	 * 级联只删**已归档**的子代理会话（审查 F10）；被保留的未归档子会话 id 通过
+	 * `keptUnarchivedDescendants` 回给调用方，界面据此如实呈现，不假装整支都没了。
 	 * @param sessionId - 要删除的会话。
-	 * @returns 持久化完成后的 `{ deleted: true }`。
+	 * @returns `{ deleted: true }`，有被保留的未归档子会话时附带其 id。
 	 * @throws {@link ArchiveUnknownSessionError} 会话未知时抛出。
 	 */
 	async deleteSession(sessionId: string) {
@@ -1352,7 +1355,9 @@ var ArchiveWorkspaceRegistry = class {
 		// 否则该行会在删除之后被写回（复活）。
 		await projCache?.whenIdle?.();
 		if (projCache !== void 0) await projCache.delete(sessionId);
-		await this.deleteDescendants(sessionId, storedIndex);
+		// 级联只吃已归档的子会话；被保留（未归档）的 id 一路带回 op 层，让界面/模型
+		// 知道「父会话已删，但这一支没有全没」（审查 F10）。
+		const keptDescendants = await this.deleteDescendants(sessionId, storedIndex);
 		await this.cleanSpill(sessionId);
 		await this.removeTranscriptDirectory(sessionId);
 		// 只有物理工件删除成功后才能提交记账清理；否则批量目标会因归档标记
@@ -1373,7 +1378,12 @@ var ArchiveWorkspaceRegistry = class {
 		if (deletedHeader !== void 0)
 			this.deletedIdentities.set(sessionId, headerIdentity(deletedHeader));
 		this.publishDeletedSession(sessionId);
-		return { deleted: true };
+		return {
+			deleted: true as const,
+			...(keptDescendants.length === 0
+				? {}
+				: { keptUnarchivedDescendants: keptDescendants }),
+		};
 	}
 	/** 删除完成后通知全部客户端；新版不再通过伪造冷会话生命周期触发通知。 */
 	publishDeletedSession(sessionId: string) {
@@ -1606,8 +1616,21 @@ var ArchiveWorkspaceRegistry = class {
 	/** 尽力而为的级联删除：删除 `sessionId` 的 SUBAGENT 子会话。
 	 * 仅头部标记 `origin: "subagent"` 的会话参与：单凭 `parentSession` 有歧义
 	 *（fork 分支也携带它），而 fork 分支是独立的用户会话，绝不能被级联删除。
-	 * @param storedIndex - 可选的批首 `id → header` 快照，见 {@link storedHeaderIndex}。 */
-	async deleteDescendants(sessionId: string, storedIndex?: Map<string, SessionHeader>) {
+	 *
+	 * **只级联「已归档」的子会话**（2026-09-30 审查 F10）。此前这里只按
+	 * `parentSession + origin: subagent` 收集就逐个 `deleteSessionCore`，**完全不查归档集合**，
+	 * 于是「只能删已归档」在**注册表层不成立** —— 删一个已归档父会话，会把它**未归档**的子代理
+	 * 会话一起永久删掉。op 入口那层的收敛（`history-delete` / `deleteArchivedSessions`）拦不住
+	 * 这条路：级联发生在删除主体内部，不经过任何 op 门禁。现在把不变量落到这里，而不是只写在
+	 * 注释里 —— 未归档的一律**保留**（之后可单独归档再删），并记一条日志说明保留了哪些。
+	 *
+	 * 归档集合取 `requireState().archivedSessionIds`（权威），不取 `archivedSessionMetadata()`
+	 * 那份有损投影；`requireState()` 抛错时**一个都不删**（fail-closed：宁可不级联，也不凭未知
+	 * 状态做不可逆操作）。
+	 * @param storedIndex - 可选的批首 `id → header` 快照，见 {@link storedHeaderIndex}。
+	 * @returns 被保留（未归档）的子会话 id（含后代递归上来的），全部删净时为空数组。 */
+	async deleteDescendants(sessionId: string, storedIndex?: Map<string, SessionHeader>): Promise<string[]> {
+		const kept: string[] = [];
 		try {
 			const descendants: string[] = [];
 			const sessions = this.ctx.get("sessions");
@@ -1630,10 +1653,19 @@ var ArchiveWorkspaceRegistry = class {
 				)
 					descendants.push(header.id);
 			}
+			// 先取归档集合再动手：它抛错时一个子会话都不会被删（fail-closed）。
+			const archived = new Set(this.requireState().archivedSessionIds);
 			for (const childId of descendants) {
+				if (!archived.has(childId)) {
+					kept.push(childId);
+					continue;
+				}
 				try {
 					if (!(await this.sessionKnown(childId, storedIndex))) continue;
-					await this.deleteSessionCore(childId, storedIndex);
+					const result = await this.deleteSessionCore(childId, storedIndex);
+					// 孙辈里被保留的同样要往上带，否则界面只看到最外一层。
+					if (Array.isArray(result?.keptUnarchivedDescendants))
+						kept.push(...result.keptUnarchivedDescendants);
 				} catch (error) {
 					if (error instanceof ArchiveUnknownSessionError) continue;
 					this.ctx.logger.warn(
@@ -1641,11 +1673,16 @@ var ArchiveWorkspaceRegistry = class {
 					);
 				}
 			}
+			if (kept.length)
+				this.ctx.logger.warn(
+					`archive-manager: cascade delete of "${sessionId}" kept ${kept.length} unarchived subagent session(s) — only archived sessions may be deleted: ${kept.join(", ")}`,
+				);
 		} catch (error) {
 			this.ctx.logger.warn(
 				`archive-manager: descendant enumeration for deleted session "${sessionId}" failed: ${String(error)}`,
 			);
 		}
+		return kept;
 	}
 	/** 尽力而为的 spill 清理：移除该会话作用域的 spill 目录。 */
 	async cleanSpill(sessionId: string) {

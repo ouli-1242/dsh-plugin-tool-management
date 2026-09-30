@@ -37,9 +37,12 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, statSync, symlinkSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, symlinkSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// 宿主发现序列与运行时 / doctor 共用同一份（审查 §5 F10）：三处各写一份的代价是
+// 桌面宿主上找不到宿主、或拿 npx 缓存里另一代宿主当锚点比出假差异。
+import { hostRootCandidates } from '../lib/compat/probe.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LOCAL_DIR = join(ROOT, 'node_modules', '@deepseek-ai')
@@ -83,55 +86,9 @@ function pkgMeta(dir) {
   }
 }
 
-/**
- * Candidate `node_modules` roots that hold the HOST's `@deepseek-ai` packages,
- * most authoritative first:
- *   1. the profile fallback directory the running DSH maintains
- *      ($DSH_HOME/profiles/node_modules) — its entries are junctions into the
- *      installation that is actually running; 0.1.7 no longer maintains this
- *      tree (the link backend was removed), so a dangling tree simply fails the
- *      `dsh/package.json` check below and the scan moves on;
- *   2. a sibling installation reachable from this checkout (dev layouts);
- *   3. the npx cache (`<npm cache>/_npx/<hash>/node_modules/@deepseek-ai`),
- *      newest first — how `dsh web` actually runs since 0.1.7. Multiple cache
- *      entries may hold a `dsh`; npx upgrades swap the hash directory, so the
- *      most recently touched one is the running installation.
- */
-function npxCacheHostRoots() {
-  const home = process.env.USERPROFILE || process.env.HOME || ''
-  let cache = process.env.npm_config_cache || ''
-  if (!cache && home) {
-    try { cache = readFileSync(join(home, '.npmrc'), 'utf8').match(/^\s*cache\s*=\s*(.+?)\s*$/m)?.[1] ?? '' } catch { /* no .npmrc */ }
-  }
-  if (!cache && process.env.LOCALAPPDATA) cache = join(process.env.LOCALAPPDATA, 'npm-cache')
-  if (!cache) return []
-  const roots = []
-  const npxRoot = join(cache, '_npx')
-  let entries = []
-  try { entries = readdirSync(npxRoot) } catch { return [] }
-  for (const entry of entries) {
-    const dir = join(npxRoot, entry, 'node_modules', '@deepseek-ai')
-    if (!existsSync(join(dir, 'dsh', 'package.json'))) continue
-    let mtime = 0
-    try { mtime = statSync(dir).mtimeMs } catch { /* raced — still usable */ }
-    roots.push({ dir, mtime })
-  }
-  return roots.sort((left, right) => right.mtime - left.mtime).map((root) => root.dir)
-}
-
 function hostCandidates() {
-  const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh')
-  const candidates = [join(home, 'profiles', 'node_modules', '@deepseek-ai')]
-  // Dev layout: <somewhere>/node_modules/@deepseek-ai/dsh-plugin-* beside us.
-  let dir = ROOT
-  for (let i = 0; i < 4; i += 1) {
-    const parent = dirname(dir)
-    if (parent === dir) break
-    dir = parent
-    candidates.push(join(dir, 'node_modules', '@deepseek-ai'))
-  }
-  candidates.push(...npxCacheHostRoots())
-  return candidates
+  // 共用 `lib/compat/probe.js` 的候选序列（桌面归档 → $DSH_HOME → 自身锚点上溯 → npx 缓存）。
+  return hostRootCandidates()
 }
 
 /** Pick the first candidate that looks like an installation (has @deepseek-ai/dsh). */

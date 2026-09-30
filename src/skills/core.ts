@@ -386,7 +386,14 @@ interface StateSkill {
   diagnostics: SkillDiagnostic[];
   path: string;
   preferred?: boolean;
-  shadowedBy?: { root: string; name: string };
+  /**
+   * 被同名赢家覆盖。
+   *
+   * `enabled` 是**赢家**的启用状态（不是本条目的）：赢家被停用时，本条同样不会生效 ——
+   * 停用不参与选赢家、停用赢家仍要挡住低优先级副本（见 `listProviderCandidates` 的注释），
+   * 所以「被覆盖」不等于「另一份在跑」。界面据此选文案（2026-09-30 审查 F8）。
+   */
+  shadowedBy?: { root: string; name: string; enabled: boolean };
   winner?: boolean;
   enabled?: boolean;
   canonicalName?: string;
@@ -840,6 +847,13 @@ function officialSkillRoot(): SkillSource | null {
           deletable: false,
           // 来源层无开关（同默认来源），单个技能可启停；overlay 以 599 压过官方
           // provider 的 600，脚本从物化副本的真实路径执行。
+          //
+          // 残余风险（2026-09-30 审查 §5 F12，如实标注、不修）：`599` 是个**数字契约** ——
+          // 它只在"官方那个 provider 的 rank 恰好是 600"时成立。官方调档位（把内置技能提到
+          // 599 以上、或降到 599 以下）会让接管失效：要么官方内置技能重新注入、与 599 层并存
+          // （同名两份），要么本插件反向遮蔽掉本不该遮蔽的东西。rank 是纯数字、没有能力探测
+          // 能提前发现，doctor 也查不了（要枚举官方 provider 的注册参数）。所以记为**已知
+          // 假设**，列进 CHANGELOG 的宿主适配矩阵，官方更新时人工核对这一处。
           toggleable: true,
           native: false,
           scope: "user",
@@ -2783,7 +2797,28 @@ export async function setPreferredSkill(
         ? `取消同名首选 ${canonicalName}`
         : `同名首选 ${canonicalName} → ${definition.key}`,
     );
-  return { name: canonicalName, root: preferred === false ? null : definition.key };
+  // 首选**可以**指向停用来源：这个写操作只记录一次选择，不启停任何东西，所以照旧写成功。
+  // 但「记录成功」不等于「已经生效」—— 停用不参与选赢家、且停用赢家仍要挡住低优先级副本
+  // （见 listProviderCandidates），于是首选来源自己停用时，同名两份**都不生效**。
+  // 这里如实回话：调用方（含模型，`skill-prefer` 是模型可调的）不能以为「已改为生效」。
+  // 不返回 ok:false —— 那会让界面的「启用这个」（prefer 之后紧跟 enable）在 enable 之前就中断。
+  const effective = effectiveSkillPolicy(current, definition, {
+    ...summary,
+    ...resolved,
+  });
+  const base = {
+    name: canonicalName,
+    root: preferred === false ? null : definition.key,
+  };
+  if (preferred === false || effective.enabled) return base;
+  return {
+    ...base,
+    effective: false,
+    warning:
+      `已记录同名首选，但它不会生效：${canonicalName}（${definition.label || definition.key}）` +
+      `当前处于停用状态，而它仍然挡住同名的其他副本 —— 两份都不生效。` +
+      `启用其中一份即可（启用这份，或改用另一份）。`,
+  };
 }
 
 async function safeExistingEntryPaths(
@@ -3606,6 +3641,28 @@ export async function importSkill(
 // ── 浏览器上传导入 ──────────────────────────────────────────────────────────
 
 /**
+ * 一个上传路径段会不会被文件系统**改写**成别的东西。
+ *
+ * 为什么必须单判这一条（2026-09-30 审查 P2-17，实为路径逃逸而非口径分叉）：
+ * 下面的 `part === ".."` 只挡**恰好**是 `..` 的段，而 Windows 的路径归一化会把段尾的
+ * **点与空格**静默裁掉 —— `.. `（`..` 加一个空格）在 `CreateFileW` / `CreateDirectoryW`
+ * 眼里就是 `..`。于是 `join(contentRoot, ".. ", "x")` 看着在根内（`isSameOrDescendant`
+ * 也判在根内：它按字符串比，`".. "` 不等于 `".."`，`relative` 得到的 `".. /x"` 也不以
+ * `"../"` 开头），实际会写到**暂存目录之外**。同一条判据顺带覆盖 `...` / `. ` /
+ * `foo.`（最后一个不逃逸，但会让磁盘上的名字与界面显示的名字不一致 —— `paths.ts` 的
+ * `trailing-dot-or-space` 就是为这个存在的）。
+ *
+ * 只挡"会被改写"的形态，**不挡** `.gitignore` / `.DS_Store` 这类正常点文件：技能包带它们
+ * 是常态（macOS 解压出来的包必带 `.DS_Store`），一律拒绝会让正常技能导不进来。
+ * 注意 `../imports/upload.ts` 的 `normalizeEntryPath` 走的是更宽的一条（拒绝**所有**
+ * 点开头的段）—— 那里是历史口径，方向更保守，两边都安全，不必强行统一。
+ */
+function pathSegmentRewritten(part: string): boolean {
+  if (/[\u0000-\u001f\u007f]/.test(part)) return true;
+  return part !== part.replace(/[.\s]+$/, "");
+}
+
+/**
  * 校验浏览器或 ZIP 提供的相对路径。上传内容始终写成普通文件，不解释 ZIP 的链接元数据。
  * 这样既不依赖浏览器泄露本机绝对路径，也不会让归档跨出管理器暂存目录。
  */
@@ -3637,6 +3694,7 @@ function normalizeUploadPath(input: unknown): UploadPath {
         !part ||
         part === "." ||
         part === ".." ||
+        pathSegmentRewritten(part) ||
         part.length > MAX_ENTRY_NAME_LENGTH ||
         WINDOWS_DEVICE_NAME_RE.test(part),
     )
@@ -4133,7 +4191,17 @@ export async function skillDetail(
   };
 }
 
-/** 生成 manager provider 候选：保留禁用候选以阻止低优先级重名副本意外激活。 */
+/**
+ * 生成 manager provider 候选：保留禁用候选以阻止低优先级重名副本意外激活。
+ *
+ * **同名首选必须传进分组**（2026-09-30 审查 F8）。此前这里调
+ * `groupLoadableSkillsByName(items)` 时没带 `preferred`，而管理页（`markWinners`）带了 ——
+ * 于是「同名首选」只在界面上生效：用户把 A 设为首选，界面把 A 标成「同名首选」、把 B 标成
+ * 「被覆盖」，模型侧却仍按 rank 拿到 B。**界面说的和模型用的不是同一份**，且没有任何一处报错。
+ *
+ * 分组函数本身是共用的（同一份排序规则），缺的只是这个参数；传进去两侧即同源。
+ * 未命中（键已失效 / 来源被移除）时分组函数自己退化为纯 rank 顺序，与界面一致。
+ */
 export async function listProviderCandidates(
   options: { cwd?: string } = {},
 ): Promise<ProviderCandidate[]> {
@@ -4162,7 +4230,9 @@ export async function listProviderCandidates(
       for (const entry of scanned.entries) items.push({ root, entry });
     }
   }
-  for (const group of groupLoadableSkillsByName(items).values()) {
+  // 与管理页 markWinners 同一个 preferred 表、同一个分组函数 —— 界面与模型必须挑同一个赢家。
+  const preferredSkills = policyResult.state.preferredSkills || null;
+  for (const group of groupLoadableSkillsByName(items, preferredSkills).values()) {
     const { root, entry } = group[0];
     const project = root.scope === "project";
     const policyOnly = root.mutable;
@@ -4348,14 +4418,21 @@ function markWinners(
     [winner, ...shadowed],
   ] of groupLoadableSkillsByName(items, preferred)) {
     winners.set(canonicalName, winner);
-    // 只有「首选命中且确实赢了」才算首选；来源被停用/移除时不谎报。
+    // `preferred` = 「这份显式选择**记录在案**且它确实赢了同名之争」，**不等于它正在生效**：
+    // 首选来源自己停用时它照样赢（停用不参与选赢家），此时 `view.enabled === false`，
+    // 而其余副本拿到 `shadowedBy.enabled === false` —— 界面据此说「两份都不生效」。
+    // 这里仍要打上 preferred，否则界面拿不到「取消首选」那颗按钮，用户就没法撤销这次选择。
     if (preferred && preferred[canonicalName] === winner.root.key)
       winner.view.preferred = true;
     if (options.markShadowed !== false) {
+      // `enabled` 传赢家的启用状态：界面靠它区分「另一份在跑」与「两份都不生效」。
+      // 少了这个字段，被覆盖的一行只能说「同名技能 X 正在生效」—— 而 X 停用时那是假话。
+      const winnerEnabled = winner.policy.enabled === true;
       for (const item of shadowed)
         item.view.shadowedBy = {
           root: winner.root.key,
           name: winner.entry.name,
+          enabled: winnerEnabled,
         };
     }
     if (options.markWinner !== false) winner.view.winner = true;

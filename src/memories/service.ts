@@ -70,7 +70,7 @@ import {
   sceneOf, sceneOrderOf, signatureOfIndex,
 } from './projection.js'
 // 索引 IO 组与发现/快照组（2026-09-19 抽出）。
-import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, sceneRecordOf, normalizeScenePromptId, pathExists } from './index-io.js'
+import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, sceneRecordOf, normalizeScenePromptId, pathExists, isAbsentError } from './index-io.js'
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
 import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
 import type { ParsedSkillDoc, DiscoveredEntry, Snapshot } from './snapshot.js'
@@ -111,6 +111,16 @@ export interface MemoriesDeps {
   stateDir: string
   /** 场景记录目录（绝对路径；空串/未提供时按 <stateDir>/scenes 解析）。 */
   scenesDir?: string
+  /**
+   * 全局 `AGENTS.md` 的**宿主实际读的那一份**（同步返回；拿不到返回 null）。
+   *
+   * 为什么必须由外部注入而不是自己 `join(resolveDshHome(), 'AGENTS.md')`（2026-09-30 审查
+   * P2-19）：全局指令的路径在本插件里有**两条独立来源** —— 写侧用宿主文档切片出的 profile
+   * home（`ensurePaths()`，见 `index.ts` 的注释「不合并是有意的」），而 `resolveDshHome()`
+   * 是 `$DSH_HOME` ‖ `~/.dsh`。两者不同时，去重会拿**另一个文件**去比 → 比对永远不相等 →
+   * 同一份预设正文被注入两遍（常驻上下文成本）。所以让调用方把正确路径喂进来，本文件不猜。
+   */
+  globalAgentsMdPath?: () => string | null
   /** 场景记忆段预算上限（字节），默认 65536。 */
   maxBytes?: number
 }
@@ -247,27 +257,42 @@ export interface MemoriesService {
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
   writeOps: ReadonlySet<string>
-  /** 记忆段文本（`memory-manager-catalog`；注入通道同步取用，见 src/context-inject.ts）。 */
+  /**
+   * 记忆段文本（`memory-manager-catalog`；注入通道同步取用，见 src/context-inject.ts）。
+   * **读失败抛异常**（2026-09-30 审查 F7）：注入通道据此报 `error` 而不是把"读不动"当成
+   * "用户清空了记忆"，从而不发那条假的「已清空」。界面投影走内部的 `sceneMemory()`（不抛）。
+   */
   memoryText: () => string
   /**
    * 场景段文本（`scene-manager-catalog`）：**启用的场景 + 场景说明**（约定）。
    * 与记忆段是两个独立注入段，各自去重、各自可被关掉（见 snapshot.ts 的 renderSceneCatalog）。
+   * 与 `memoryText` 同口径：读失败抛异常。
    */
   sceneCatalogText: () => string
   /**
    * 全局提示词正文（注入兜底用；官方 agent-instructions 行没挂时才被取用）：
    * 场景期间 = 当前场景绑定的提示词，否则 = `~/.dsh/AGENTS.md` 正文。
+   * **读失败抛异常**（同 `memoryText`）：预设/基线文件读不动时不能报成"没有提示词"。
    */
   promptText: () => string
   /**
    * `promptText()` 的来源文件（同步；注入通道用作 instructions 形态的 `changes`，
    * 界面据此显示文件清单与「已载入/已更新」）。`[]` = 本次没有提示词正文。
+   * 与 `promptText()` 同源，因此同样可能抛 —— 注入通道已在自己的 `files()` 调用处接住。
    */
   promptFiles: () => Array<{ path: string; digest: string }>
   /** 失效快照与场景记忆缓存（写操作后调用）。 */
   refresh: () => Promise<void>
-  /** 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内执行，非公开 op，无门禁面）。 */
-  patchIndex: (patch: { mode?: ModeState; archives?: Record<string, SceneArchive>; active?: string[] | null }) => Promise<void>
+  /**
+   * 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内执行，非公开 op，无门禁面）。
+   * `fields` = 意图声明，只写列出的那几项；不传按 `patch` 里出现的字段全写（见实现处注释）。
+   */
+  patchIndex: (
+    patch: { mode?: ModeState; archives?: Record<string, SceneArchive>; active?: string[] | null },
+    fields?: ReadonlyArray<'mode' | 'active' | 'archives'>,
+  ) => Promise<void>
+  /** 场景档案引擎专用：只写一个场景的档案（队列内逐场景增量，不覆盖并发写的别的场景）。 */
+  saveArchive: (scene: string, archive: SceneArchive | null) => Promise<void>
   /** 场景档案引擎专用：读 mode/archives/active 切片。 */
   readArchiveSlice: () => Promise<{ mode: ModeState; archives: Record<string, SceneArchive>; active: string[] | null }>
   /**
@@ -389,12 +414,61 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   let sceneCache: { signature: string; value: SceneMemoryProjection } | null = null
   let sceneCatalogCache: { signature: string; value: SceneMemoryProjection } | null = null
 
-  function sceneMemory(): SceneMemoryProjection {
+  // ── 注入侧取数：读失败必须出声（2026-09-30 审查 F7）────────────────────────
+  //
+  // 注入通道把 `text()` 返回的空串读成"这一轮没有内容"；若该域此前发布过，它会据此发一条
+  // 「已清空 —— 此前注入的同类内容不再有效」。但空串有两个来源：**真的没内容**与**读失败**。
+  // 后者发「已清空」就是对模型说谎（第一性目的是"让模型看见现在是什么"），而且这条谎在界面上
+  // 被报成正常的 `empty`（琥珀只留给"该投却没投"），唯一痕迹是模型行为异常。
+  //
+  // 所以下面 `require*` 那几个出口在 **非 ENOENT** 的 IO 失败上抛异常 —— 注入通道据此报
+  // `error`、跳过该域、**不发「已清空」**，上一轮内容原样留着，恢复可读后自动重发。
+  // `ENOENT`（文件 / 目录不存在 = 全新用户或刚删掉）仍按正常空处理，不误报。
+  //
+  // 判据只有一份（`isAbsentError` 与 `readIndexSync` 的不可信标记），差别只在**处置**：
+  // 界面投影（`rulesList` 的内存占用条、`scenePrompt`）走下面**不抛**的包装 —— 一次读失败
+  // 不该把整个记忆列表页弄崩，那种处置由注入实况的琥珀来承担。
+  //
+  // 边界（写清楚免得后来者以为漏改）：技能 / MCP / 子智能体三个域**结构上不会**出现这种假
+  // 「已清空」—— 它们是 SWR 缓存，计算失败时保留上一次的值，因此只可能"没能更新"，
+  // 不可能从"有内容"变成"空串"；`''` 只在真的渲染不出东西时出现。
+  const emptySceneMemory = (): SceneMemoryProjection =>
+    ({ text: '', bytes: 0, truncated: false, maxBytes, scenes: [], items: [], dropped: [] })
+
+  /** 索引读不到 / 解析不了 → 注入侧必须报「取数失败」，而不是把"全部未启用"当成"用户清空了记忆"。 */
+  const assertIndexReadable = (): void => {
+    if (isIndexQuarantined(stateDir)) throw new Error('记忆索引当前读不到，无法确定哪些记忆处于启用状态')
+  }
+
+  /** 记忆段：注入侧口径（索引不可信或目录读不动 → 抛）。 */
+  function requireSceneMemory(): SceneMemoryProjection {
     const index = readIndexSync(stateDir)
-    const probe = probeSceneFilesSync(memoriesRoot, index, isIndexQuarantined(stateDir))
+    assertIndexReadable() // 抛在这里 ⇒ 下面必然处于「索引可信」状态，无需再传 forceDisabled
+    const probe = probeSceneFilesSync(memoriesRoot, index, false)
     if (sceneCache && sceneCache.signature === probe.signature) return sceneCache.value
     const value = renderSceneMemory(probe, index, maxBytes)
     sceneCache = { signature: probe.signature, value }
+    return value
+  }
+
+  /**
+   * 记忆段（界面 / CRUD 口径）：读失败**不抛**，退回上一轮算出来的那份（没有才退空投影）。
+   *
+   * 为什么退上一轮而不是空投影：界面上的内存占用条突然归零会让用户以为记忆没了；上一轮那个数
+   * 是**已知的最后一份真相**，与注入侧"保留上一轮内容"同一取向。故障本身由注入实况报 `error`。
+   */
+  function sceneMemory(): SceneMemoryProjection {
+    try { return requireSceneMemory() } catch { return sceneCache?.value ?? emptySceneMemory() }
+  }
+
+  /** 场景段：只有注入侧一个消费者，直接按注入口径（读失败抛）。 */
+  function sceneCatalog(): SceneMemoryProjection {
+    const index = readIndexSync(stateDir)
+    assertIndexReadable()
+    const probe = probeSceneFilesSync(memoriesRoot, index, false)
+    if (sceneCatalogCache && sceneCatalogCache.signature === probe.signature) return sceneCatalogCache.value
+    const value = renderSceneCatalog(probe, index, SCENE_CATALOG_MAX_BYTES)
+    sceneCatalogCache = { signature: probe.signature, value }
     return value
   }
 
@@ -404,29 +478,46 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   //   - 场景可绑定**一个**提示词预设（`scenes[].prompt` → `prompts/<id>/AGENTS.md`）；
   //   - 除保留场景 `global` 外**同时只能启用一个场景**，所以同一时刻至多一份提示词在场；
   //   - 没有启用其它场景时才轮到 `global` 自己的绑定（它恒常生效，覆盖"永远在场的提示词"）；
-  //   - 预设文件不存在 / 未绑定 → 返回 `''`（renderPrompt 会删掉空段，不产生空标题）。
+  //   - 预设文件不存在 / 未绑定 → 返回 `''`（renderPrompt 会删掉空段，不产生空标题）；
+  //     **文件在但读不动** → 抛异常（见上面「注入侧取数」那一节，F7）。
   //
   // 为什么不用 fs.watch 也不用每请求读盘：段契约要求**同步返回**且逐字节稳定，
   // 因此按 `mtimeMs + size` 做一次 stat 缓存 —— 命中时零读盘，外部编辑器改了预设
   // 也会在下一个请求自动刷新（与记忆段的"两相扫描"同一哲学）。
   const promptFileCache = new Map<string, { key: string; text: string }>()
 
-  /** 读一个预设正文（同步、带 stat 指纹缓存）；不存在返回 `''`。 */
+  /**
+   * 读一个预设正文（同步、带 stat 指纹缓存）；**不存在**返回 `''`，读失败**抛异常**。
+   *
+   * 抛的理由见上面「注入侧取数：读失败必须出声」那一节：调用方（`resolveScenePreset` →
+   * `resolvePrompt` → 提示词域）必须能把"预设读不动"与"预设为空/已删"分开，否则前者会
+   * 变成一条假的「已清空」。界面侧由 `scenePrompt()` 自己接住（它本来就把失败当"没绑"）。
+   */
   function readPresetTextSync(id: string): string {
     const file = join(stateDir, PRESETS_DIR, id, 'AGENTS.md')
     let key: string
+    let isFile = false
     try {
       const st = statSync(file)
-      if (!st.isFile()) return ''
+      isFile = st.isFile()
       key = `${st.mtimeMs}:${st.size}`
-    } catch {
+    } catch (e) {
       promptFileCache.delete(id)
+      if (!isAbsentError(e)) throw e
       return ''
     }
+    // 路径上**有东西但不是普通文件**（目录 / 设备）→ 也是故障，不能当成"预设不存在"：
+    // 后者会让提示词域静默退回基线、或在该域此前发布过时发一条假的「已清空」（F7）。
+    if (!isFile) throw new Error(`预设正文不是一个文件：${file}`)
     const cached = promptFileCache.get(id)
     if (cached && cached.key === key) return cached.text
-    let text = ''
-    try { text = readFileSync(file, 'utf8') } catch { return '' }
+    let text: string
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch (e) {
+      if (!isAbsentError(e)) throw e
+      return ''
+    }
     promptFileCache.set(id, { key, text })
     return text
   }
@@ -443,32 +534,51 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   /**
    * 读当前 `~/.dsh/AGENTS.md`（同步、带 stat 指纹缓存）。
    * 用途只有一个：**去重**——绑定的预设与文件内容逐字节相同时不再注入第二遍正文。
+   *
+   * 读失败**抛异常**（同 `readPresetTextSync`）：注入侧必须能把"基线文件读不动"与"基线为空"
+   * 分开 —— 后者是正常的（用户没写过 AGENTS.md），前者会让提示词域发出一句假的「已清空」。
    */
   let globalAgentsCache: { key: string; text: string } | null = null
   function readGlobalAgentsMdSync(): string {
-    const file = join(resolveDshHome(), 'AGENTS.md')
+    // 优先用宿主实际读的那一份（`deps.globalAgentsMdPath`，与写侧同源）；拿不到时退回
+    // `resolveDshHome()`（`$DSH_HOME` ‖ `~/.dsh`）—— 那是**另一条独立来源**，两边不同时
+    // 会取到另一个文件（2026-09-30 审查 P2-19：去重读错文件 → 正文注入两遍）。
+    const file = deps.globalAgentsMdPath?.() || join(resolveDshHome(), 'AGENTS.md')
     let key: string
+    let isFile = false
     try {
       const st = statSync(file)
-      if (!st.isFile()) return ''
+      isFile = st.isFile()
       key = `${st.mtimeMs}:${st.size}`
-    } catch {
+    } catch (e) {
       globalAgentsCache = null
+      if (!isAbsentError(e)) throw e
       return ''
     }
+    // 有东西但不是普通文件 → 故障（同 `readPresetTextSync`）：当成"基线为空"会让提示词域
+    // 在该域此前发布过时发一条假的「已清空」。
+    if (!isFile) throw new Error(`AGENTS.md 不是一个文件：${file}`)
     if (globalAgentsCache && globalAgentsCache.key === key) return globalAgentsCache.text
-    let text = ''
-    try { text = readFileSync(file, 'utf8') } catch { return '' }
+    let text: string
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch (e) {
+      if (!isAbsentError(e)) throw e
+      return ''
+    }
     globalAgentsCache = { key, text }
     return text
   }
 
   /**
    * 当前生效的场景提示词：启用场景的绑定优先，其次 `global` 的绑定；都没有 → `null`。
-   * 「绑了但预设为空/已删」按没绑处理（不注入空段），继续找下一个。
+   * 「绑了但预设为空/已删」按没绑处理（不注入空段），继续找下一个；
+   * 「绑了但预设**读不动**」抛异常 —— 注入侧要的是"故障"而不是"没绑"（见上面 F7 那一节）。
    */
   function resolveScenePreset(): { scene: string; presetId: string; text: string } | null {
     const index = readIndexSync(stateDir)
+    // 索引读不到 → 连"哪个场景绑了哪个预设"都无从得知，这必须报故障而不是报"没有提示词"（F7）。
+    assertIndexReadable()
     const names = Object.keys(index.scenes || {})
     const { active } = resolveActiveScenes(index, names)
     // 单选：取唯一一个非保留启用场景（resolveActiveScenes 已保证 ≤1，这里仍做确定性排序兜底）。
@@ -495,15 +605,24 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 当前生效的场景提示词（只读投影，界面用）：绑定内容与 `~/.dsh/AGENTS.md` 相同时标记
    * `duplicate` 且返回空段 —— 那份正文已经在基线里了，界面据此显示「生效中」。
    * （注入侧不看这个字段：预设挂不到 AGENTS.md 通道时照样要注入，见 `promptText`。）
+   *
+   * **界面口径：读失败不抛**（接住 `resolveScenePreset` / `readGlobalAgentsMdSync` 的异常）。
+   * 退回「没有生效的场景提示词」正是这次读失败下界面此前给出的答案（那两个读函数曾把失败吞成
+   * 空串），所以这里没有行为变化；**故障由注入侧如实报出**（提示词域报 `error` 并发琥珀）。
+   * 反过来，让这里抛会把 `rules-list` 整个读 op 带崩 —— 一次读不到预设不该让记忆页打不开。
    */
   function scenePrompt(): ScenePromptProjection {
-    const found = resolveScenePreset()
-    if (!found) return { scene: null, presetId: null, text: '', missing: false }
-    const globalText = readGlobalAgentsMdSync().trim()
-    if (globalText !== '' && found.text.trim() === globalText) {
-      return { scene: found.scene, presetId: found.presetId, text: '', missing: false, duplicate: true }
+    try {
+      const found = resolveScenePreset()
+      if (!found) return { scene: null, presetId: null, text: '', missing: false }
+      const globalText = readGlobalAgentsMdSync().trim()
+      if (globalText !== '' && found.text.trim() === globalText) {
+        return { scene: found.scene, presetId: found.presetId, text: '', missing: false, duplicate: true }
+      }
+      return { scene: found.scene, presetId: found.presetId, text: found.text, missing: false }
+    } catch {
+      return { scene: null, presetId: null, text: '', missing: false }
     }
-    return { scene: found.scene, presetId: found.presetId, text: found.text, missing: false }
   }
 
   // ── 写操作串行队列（避免并发覆盖同一索引/文件）──
@@ -640,14 +759,44 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     sceneCache = null
   }
 
-  /** 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内，保持与其余索引写串行）。 */
-  const patchIndex = (patch: { mode?: ModeState; archives?: Record<string, SceneArchive>; active?: string[] | null }): Promise<void> =>
+  /**
+   * 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内，保持与其余索引写串行）。
+   *
+   * `fields` 是**意图声明**（2026-09-30 审查 P2-3）：不传 = 老行为（按 `patch` 里出现的字段
+   * 全写）。传了就只写列出的那几项 —— 引擎的每条路径各自动的是哪一片是明确的（"只落 mode"
+   * 与"落 mode + active"是两件事），而"我没打算改的字段"必须留给**队列内刚读出来**的值，
+   * 否则一次陈旧的整片回写会把窗口期里别人改的东西抹掉。
+   */
+  const patchIndex = (
+    patch: { mode?: ModeState; archives?: Record<string, SceneArchive>; active?: string[] | null },
+    fields?: ReadonlyArray<'mode' | 'active' | 'archives'>,
+  ): Promise<void> =>
     enqueueMutation(async () => {
       const index = await readIndex(stateDir)
-      if (patch.mode !== undefined) index.mode = patch.mode
-      if (patch.archives !== undefined) index.archives = patch.archives
+      const want = (f: 'mode' | 'active' | 'archives'): boolean => (fields ? fields.indexOf(f) >= 0 : patch[f] !== undefined)
+      if (want('mode') && patch.mode !== undefined) index.mode = patch.mode
+      if (want('archives') && patch.archives !== undefined) index.archives = patch.archives
       // active 复用「记忆启用集」语义（null = 全部启用）；进入模式时引擎收窄为 [S]。
-      if (patch.active !== undefined) index.active = patch.active
+      if (want('active') && patch.active !== undefined) index.active = patch.active
+      await writeIndex(stateDir, index)
+      await refresh()
+    })
+
+  /**
+   * 场景档案引擎专用：只写**一个场景**的档案（队列内按**逐场景增量**落盘）。
+   *
+   * 为什么不能走 `patchIndex({ archives })`（2026-09-30 审查 P2-3）：那个接口拿到的是
+   * 一份**整表**，而整表是在队外读出来的 —— 引擎保存场景 A 的档案期间，另一个写者（HTTP op /
+   * 模型工具 / 另一条引擎路径）保存了场景 B 的档案，前者落盘时会把 B 的整份覆盖掉。
+   * 逐场景增量只动自己那一条，其余键保留队列内读到的值。
+   */
+  const saveArchive = (scene: string, archive: SceneArchive | null): Promise<void> =>
+    enqueueMutation(async () => {
+      const index = await readIndex(stateDir)
+      const archives = index.archives ?? {}
+      if (archive === null) delete archives[scene]
+      else archives[scene] = archive
+      index.archives = archives
       await writeIndex(stateDir, index)
       await refresh()
     })
@@ -742,22 +891,17 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   // 注入通道（src/context-inject.ts）：每个 step 前把文本并进一条注入消息，任何预设都到得了。
   // 这里只留**同步取文本**的两个出口，注册/生命周期由 index.ts 的注入器统一管。
   //
-  //   - `memoryText`：场景记忆段（记忆正文；`''` = 没有可注入的内容）。
+  //   - `memoryText`：场景记忆段（记忆正文；`''` = 没有可注入的内容）。走**注入侧口径**
+  //     （`requireSceneMemory`）：读失败抛异常，由注入通道报 `error` 并保留上一轮内容（F7）。
+  //     界面投影用的是 `sceneMemory()`（不抛、退回上一轮），两者共用同一个 `requireSceneMemory`。
   //   - `promptText`：全局提示词正文 = 场景期间用场景提示词、平时用 AGENTS.md 正文。
   //     **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
   //     （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
-  const memoryText = (): string => sceneMemory().text
+  const memoryText = (): string => requireSceneMemory().text
   // 场景段。与记忆段是**两次探测**：`probeSceneFilesSync` 没有内部缓存（signature 本身就是
   // 扫描的结果，缓存不了），代价是有界的一次目录树 stat（**不读正文**），换来两段各自渲染、
   // 各自去重 —— 只改场景描述时不会连带重发整段记忆正文。
-  const sceneCatalog = (): SceneMemoryProjection => {
-    const index = readIndexSync(stateDir)
-    const probe = probeSceneFilesSync(memoriesRoot, index, isIndexQuarantined(stateDir))
-    if (sceneCatalogCache && sceneCatalogCache.signature === probe.signature) return sceneCatalogCache.value
-    const value = renderSceneCatalog(probe, index, SCENE_CATALOG_MAX_BYTES)
-    sceneCatalogCache = { signature: probe.signature, value }
-    return value
-  }
+  // 渲染本身在 `sceneCatalog()`（见上面「注入侧取数」那一节，读失败抛）。
   const sceneCatalogText = (): string => sceneCatalog().text
   /**
    * `~/.dsh/AGENTS.md` 正文的上限，与官方那一行的 `maxBytes` 同量级（64 KiB）：超大文件按字节
@@ -796,10 +940,18 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     const scene = resolveScenePreset()
     if (scene && scene.text.trim() !== '') {
       const path = `${dshHomeDisplay()}/${HUB_DIR}/${PRESETS_DIR}/${scene.presetId}/AGENTS.md`
+      // 与下面的 AGENTS.md 分支**同一套截断**（2026-09-30 审查 P2-1）：场景绑定的预设正文
+      // 此前**没有任何上限**，一份超大预设会把 system-reminder 挤爆（AGENTS.md 那条路一直有
+      // 64 KiB 的闸）。两条出口在用户眼里就是同一件事（"全局提示词"），预算必须一致 ——
+      // 否则"把预设绑到场景上"就成了绕过预算的口子。`digest` 仍算**原文**（与另一分支同口径）。
+      const body = Buffer.byteLength(scene.text, 'utf8') <= AGENTS_MD_MAX_BYTES
+        ? scene.text
+        : Buffer.from(scene.text, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8') +
+          `\n\n（…预设正文超过 ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB，已截断。）`
       return {
         path,
         digest: createHash('sha1').update(scene.text).digest('hex'),
-        text: `来源：${path}\n\n${scene.text}`,
+        text: `来源：${path}\n\n${body}`,
       }
     }
     const raw = readGlobalAgentsMdSync()
@@ -904,6 +1056,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     promptFiles,
     refresh,
     patchIndex,
+    saveArchive,
     readArchiveSlice,
     sceneLocks: async (): Promise<Record<string, boolean>> => {
       const index = await readIndex(stateDir)

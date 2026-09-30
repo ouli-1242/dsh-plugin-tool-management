@@ -28,10 +28,18 @@ interface SessionsRegistryLike {
   archivedSessionMetadata(): Promise<{ items: Array<{ sessionId: string; createdAt: number }> }>
   archivedSessionDetails?(): Promise<{ items: Array<{ sessionId: string; createdAt?: number; cwd?: string; title?: string; archivedAt?: number }> }>
   archivedAt?(sessionId: string): number | undefined
+  /**
+   * 注册表状态：`archivedSessionIds` 是**权威归档集合**（`workspaceIds` 为权威显示顺序）。
+   *
+   * `archivedSessionMetadata().items` 只是它的**有损投影**（读不到头部的会被跳过），
+   * 判「能不能删」必须用这里（2026-09-30 审查 F9）。宿主契约由 `compat/probe.ts` 的
+   * `workspace-registry-state` 探针核对（两个字段都必须是数组）。
+   */
+  requireState?(): { workspaceIds: string[]; archivedSessionIds: string[] }
   listStoredHeaders?(): Promise<Array<{ id?: string; cwd?: string; createdAt?: number; origin?: string }>>
   archiveSession(sessionId: string): Promise<void>
   unarchiveSession(sessionId: string): Promise<{ archivedSessionIds: string[] }>
-  deleteSession(sessionId: string): Promise<{ deleted: true }>
+  deleteSession(sessionId: string): Promise<{ deleted: true; keptUnarchivedDescendants?: string[] }>
   unarchiveSessions?(target: SessionsBatchTarget): Promise<{ unarchivedSessionIds: string[]; archivedSessionIds: string[] }>
   deleteArchivedSessions(target: SessionsBatchTarget): Promise<{
     requestedSessionIds: string[]
@@ -223,7 +231,46 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
       if (!registry) return { ok: false, error: '归档服务未挂载' }
       const sessionId = String((args && args.sessionId) || '').trim()
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-      try { await registry.deleteSession(sessionId); return { ok: true, sessionId, deleted: true } } catch (e) { return { ok: false, error: deps.message(e) } }
+      // 范围收敛（2026-09-30 审查 P1-7）：单删也只允许删**已归档**的会话 —— 与批量路径
+      // （`deleteArchivedSessions` → `archivedSessionIdsForTarget` 的四种 scope 全部与
+      // `archivedSessionIds` 求交）同一口径，也与界面对齐（`history-list` 只回已归档会话，
+      // 删除按钮只出现在那份列表里）。原先这里直接 `registry.deleteSession(sessionId)`，而
+      // `deleteLocalSession` 只问「这个 id 在持久化里存在吗」—— 于是一个客户端 bug 或一次
+      // 手工请求就能**永久删除任意已持久化会话**，包括未归档的和当前正开着的。
+      // 判据必须是**权威归档集合**，不是摘要投影（2026-09-30 审查 F9）。
+      // `archivedSessionMetadata()` 是**有损**的：逐条 try，读不到 header 或 `createdAt`
+      // 非有限就 `continue` 且不抛（`workspace.ts` 的 `archivedSessionMetadata`）。拿它的
+      // `items` 拼门禁集合，就会把「确实已归档、只是头部暂时读不到」的会话判成未归档 →
+      // 回一句「只能删除已归档的会话：请先归档，再删除」——**诊断是错的**（真因是读失败）。
+      // 而批量路径（`deleteArchivedSessions` → `archivedSessionIdsForTarget`）用的是
+      // `requireState().archivedSessionIds`，同一份数据两条路给出相反结论。
+      // 这里改成与批量路径同源；`requireState` 缺失（旧宿主）才退回投影 —— 投影只会**更小**，
+      // 方向仍是 fail-closed（宁可这次删不掉，也不要凭未知状态做不可逆操作）。
+      let archived: Set<string>
+      try {
+        const authoritative = typeof registry.requireState === 'function' ? registry.requireState() : undefined
+        if (authoritative && Array.isArray(authoritative.archivedSessionIds)) {
+          archived = new Set(authoritative.archivedSessionIds.map((id) => String(id)))
+        } else {
+          const meta = await registry.archivedSessionMetadata()
+          const items = meta && Array.isArray(meta.items) ? meta.items : []
+          archived = new Set(items.map((i) => String(i && i.sessionId)))
+        }
+      } catch (e) {
+        // 查不到归档状态 → **拒绝删除**（fail-closed）：宁可这次删不掉，也不要凭一个未知状态
+        // 去执行不可逆操作。
+        return { ok: false, error: '无法确认会话的归档状态，已拒绝删除：' + deps.message(e) }
+      }
+      if (!archived.has(sessionId)) {
+        return { ok: false, error: '只能删除已归档的会话：请先归档，再删除' }
+      }
+      try {
+        const r = await registry.deleteSession(sessionId)
+        // 级联只吃已归档的子会话（见 `deleteDescendants`）：未归档的会被**保留**，
+        // 这里如实带出去，界面/模型才不会以为「这一支已经全没了」。
+        const kept = (r && Array.isArray(r.keptUnarchivedDescendants)) ? r.keptUnarchivedDescendants : []
+        return { ok: true, sessionId, deleted: true, ...(kept.length ? { keptUnarchivedDescendants: kept } : {}) }
+      } catch (e) { return { ok: false, error: deps.message(e) } }
     },
     'history-unarchive-batch': async (args: any) => {
       const registry = deps.getSessionsRegistry()
@@ -274,8 +321,9 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
       const content = String((args && args.content) ?? '')
       if (!fileName || !content.trim()) return { ok: false, error: '缺少文件内容' }
       let turns: Array<{ role: 'user' | 'assistant'; text: string }>
+      let format: 'jsonl' | 'markdown' | 'generic'
       try {
-        const format = detectFormat(fileName, content)
+        format = detectFormat(fileName, content)
         turns = format === 'jsonl' ? parseJsonlTranscript(content)
           : format === 'markdown' ? parseMarkdownTranscript(content)
             : parseGenericText(content)
@@ -283,6 +331,13 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         return { ok: false, error: '对话解析失败: ' + deps.message(e) }
       }
       if (!turns.length) return { ok: false, error: '未能从该文件中识别出对话内容' }
+      // 「折成一条 user 消息」这件事本身要出声（2026-09-30 审查 F12）。
+      // 嗅探（`detectFormat`）已经能救回「JSONL / Markdown 被改名成 .txt」那一种，但**真的**
+      // 没有说话人标记的文本仍会走 generic：多行内容全塞进 1 条 user turn、结构全失，
+      // 而 op 此前回的是 `{ok:true,count:1}` —— 零警告。这里把它标出来（`lossy` 给界面出
+      // 本地化文案，`warning` 给模型看原因原文）。
+      const lossy = format === 'generic' && turns.length === 1
+        && content.split(/\r?\n/).filter((line) => line.trim()).length >= 5
       if (typeof deps.createSession !== 'function') return { ok: false, error: '当前环境不支持创建会话（agents.create 不可用）' }
       // 仅接受绝对路径的 cwd；非法或缺失时会话不带目录（归入未分组）。
       const cwdArg = String((args && args.cwd) || '').trim()
@@ -311,7 +366,7 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         if (live === undefined || live === null) {
           return { ok: false, error: `创建会话失败：宿主未登记该会话（${id}），未导入任何内容` }
         }
-        return { ok: true, sessionId: id, count: turns.length }
+        return { ok: true, sessionId: id, count: turns.length, ...(lossy ? { format, lossy: true, warning: '整份文本没有识别出任何说话人标记（如 User: / Assistant:），已折成一条用户消息：原对话的分轮结构可能已丢失。若源文件是 JSONL 或 Markdown 转录稿，请按原扩展名（.jsonl / .md）重新导入。' } : {}) }
       } catch (e) {
         return { ok: false, error: '创建会话失败: ' + deps.message(e) }
       }

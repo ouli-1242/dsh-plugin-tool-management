@@ -50,15 +50,18 @@ export type SessionsGroupView = {
 export interface SessionsRegistry {
   archiveSession(sessionId: string): Promise<void>
   unarchiveSession(sessionId: string): Promise<{ archivedSessionIds: string[] }>
-  deleteSession(sessionId: string): Promise<{ deleted: true }>
+  deleteSession(sessionId: string): Promise<{ deleted: true; keptUnarchivedDescendants?: string[] }>
   deleteArchivedSessions(target: SessionsBatchTarget): Promise<{ requestedSessionIds: string[]; deletedSessionIds: string[]; skippedSessionIds: string[]; failures: Array<{ sessionId: string; message: string }> }>
   archivedSessionMetadata(): Promise<{ items: Array<{ sessionId: string; createdAt: number }> }>
   archivedSessionDetails?: () => Promise<{ items: Array<{ sessionId: string; createdAt?: number; cwd?: string; title?: string; archivedAt?: number }> }>
   archivedAt?(sessionId: string): number | undefined
   /** 可选：工作区记账表（ArchiveWorkspaceRegistry 提供），history-list 用它反查会话归属与组标题。 */
   requireTable?(): { get(id: string): { title?: string; path?: string; sessionIds: string[] } | undefined; entries(): Array<[string, { title?: string; path?: string; sessionIds: string[] }]> }
-  /** 可选：注册表状态；workspaceIds 为权威显示顺序。 */
-  requireState?(): { workspaceIds: string[] }
+  /**
+   * 可选：注册表状态；`workspaceIds` 为权威显示顺序，`archivedSessionIds` 为**权威归档集合**
+   *（`archivedSessionMetadata().items` 只是它的有损投影 —— 判「能不能删」必须用这里，审查 F9）。
+   */
+  requireState?(): { workspaceIds: string[]; archivedSessionIds: string[] }
   /** 可选：会话 → 规范路径索引（宿主启动时对全部存储会话建立）。 */
   sessionPaths?: Map<string, string>
   /** 可选：会话 → header（含 cwd）。目录已不在时 cwd 仍是唯一归属线索。 */

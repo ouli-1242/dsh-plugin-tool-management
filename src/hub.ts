@@ -46,6 +46,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from '
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { resolveDshHome } from './skills/core.js'
+import { isSameOrDescendant } from './paths.js'
 
 /** hub 根目录名（`$DSH_HOME` 下）。 */
 export const HUB_DIR = 'tool-management'
@@ -100,7 +101,10 @@ const ROOT_FILE_MOVES: ReadonlyArray<readonly [string, string]> = [
 
 /** 宿主 patch 的备份名（`cordis.patch.yml.bak-<时间戳>`）。 */
 export function isPatchBackupName(name: string): boolean {
-  return /^cordis\.patch\.yml\.bak-\d{8}-\d{6}$/.test(basename(name))
+  // 两代时间戳都认（0.17.0 起加了毫秒与进程内序号，见 index.ts 的 backupStamp）。
+  // 这里只用于「把散落在 $DSH_HOME / profiles 下的旧备份搬进 hub/backups」—— 新格式备份
+  // 本来就直写 hub/backups，但两处谓词保持同一口径，免得将来手工搬进来一份就漏掉。
+  return /^cordis\.patch\.yml\.bak-\d{8}-\d{6}(?:\d{6})?$/.test(basename(name))
 }
 
 /**
@@ -338,10 +342,20 @@ export async function moveToTrash(
   const id = newTrashId()
   const dir = join(trashKindDir(kind), id)
   const done: Array<{ from: string; to: string }> = []
+  // 入口先过一遍谓词（原先只有恢复侧 `moveOutOfTrash` 校验，删除侧不看）：`dest` 最终会写进
+  // manifest 的 `files[]`，恢复时按它搬回来 —— 入口放一个非法名进去，等于把失败推给
+  // "将来某一天点恢复"（场景回收站那条链就是这么坏掉的）。现在当场拒绝、什么都不搬，
+  // 由调用方如实报错（审查 P0-2 / P2-14）。
+  for (const move of moves) {
+    if (!isValidTrashPayloadPath(move.dest)) return { ok: false, error: `负载名非法，未搬动任何文件：${move.dest}` }
+  }
   try {
     await mkdir(dir, { recursive: true })
     for (const move of moves) {
       const to = join(dir, move.dest)
+      // 嵌套负载（`bundle1/bundle1.md`）的父目录不存在时 `rename` 必然失败 —— 那本来不是错，
+      // 但接着靠 `cp` 的隐式建父目录兜底是不可依赖的跨平台行为。显式建出来。
+      await mkdir(dirname(to), { recursive: true })
       try {
         await rename(move.from, to)
       } catch {
@@ -349,6 +363,8 @@ export async function moveToTrash(
         await cp(move.from, to, { recursive: true })
         await rm(move.from, { recursive: true, force: true })
       }
+      // 后置断言（与恢复侧同一道）：谓词已挡掉 `..`，这里防的是"条目目录里恰好有个链接"。
+      if (!isSameOrDescendant(dir, to)) throw new Error(`负载越出条目目录：${move.dest}`)
       done.push({ from: move.from, to })
     }
     const manifest: TrashManifest = {
@@ -410,18 +426,36 @@ export async function readTrashEntry(kind: TrashKind, id: string): Promise<Trash
 }
 
 /**
- * 条目里的一个负载名是不是"就在这个条目目录里"。
+ * 条目里的一个负载名是不是"一条**安全的相对路径**"（可以含 `/`）。
  *
- * 为什么 id 与场景名都有谓词、这里还得多一道：`manifest.json` 的 `files[]` 是**磁盘上的数据**，
- * 它跟 id 不一样 —— id 只由本模块生成（`isValidTrashId` 严格白名单），而 files 可能来自
- * 用户手改、别的进程、或一份被塞进来的恶意档案包。不校验就 `join(dir, dest)` 等于给了
- * "任意相对路径读源 + 任意绝对目录建目标"的能力（`mkdir(dirname(to))` 会顺手把目录建出来）。
+ * 为什么允许 `/`（2026-09-30，审查 P0-2）：场景回收站的负载**天然是目录树** —— 一个场景目录
+ * 里的记忆可能是 `<场景>/<名>.md`，也可能是 bundle 形态 `<场景>/<名>/<名>.md` 或任意子目录。
+ * 原来这里对任何含 `/` 的名字一律返回 false，于是「含嵌套记忆的场景」删除能成功（`moveToTrash`
+ * 侧靠 `cp` 兜底）、恢复**必然失败**，且失败后场景目录已非空 → 再也恢复不了。
+ *
+ * 判据（与 `paths.ts` 的单段校验同源，只是放宽到多段）：
+ *   - 只认 `/` 作分隔符（反斜杠在 Windows 上等价，留着只会让判据分叉）；
+ *   - 拒绝对路径（前导 `/` `\` 或盘符）与 `..` / `.` / 空段 —— 这是**路径穿越**那一类；
+ *   - 每段拒绝控制字符、Windows 非法字符 `<>:"|?*`、首尾空白与尾点（Windows 会静默规整它们，
+ *     于是"写进去的名字"与"读出来的名字"不再是同一个）；
+ *   - 条目根下的 `manifest.json` 是清单，不许当负载。
+ *
+ * 仍然拒绝 `.` 开头的段吗？**不**（旧谓词拒绝）。理由：`..` 与 `.` 这两个才是穿越，靠精确判据
+ * 挡住即可；而 `.DS_Store` 这类隐藏文件可能真的躺在用户的场景目录里，一刀切会让「删除这个场景」
+ * 从"能用但恢复不了"变成"直接删不掉" —— 那是把问题换个地方，不是修好它。
  */
-export function isValidTrashPayloadName(dest: string): boolean {
+export function isValidTrashPayloadPath(dest: string): boolean {
   const text = String(dest ?? '')
-  if (!text || text.startsWith('.') || text.includes('\0')) return false
-  if (/[\\/]/.test(text)) return false
-  if (text === 'manifest.json') return false
+  if (!text || text.includes('\0')) return false
+  if (text.startsWith('/') || text.startsWith('\\') || /^[A-Za-z]:/.test(text)) return false
+  if (text.includes('\\')) return false
+  const parts = text.split('/')
+  for (const part of parts) {
+    if (part === '' || part === '.' || part === '..') return false
+    if (/[<>:"|?*\u0000-\u001f]/.test(part)) return false
+    if (part.endsWith(' ') || part.endsWith('.')) return false
+  }
+  if (parts.length === 1 && parts[0] === 'manifest.json') return false
   return true
 }
 
@@ -432,8 +466,35 @@ export function isValidTrashPayloadName(dest: string): boolean {
 export async function moveOutOfTrash(kind: TrashKind, id: string, dest: string, to: string): Promise<void> {
   const dir = trashEntryPath(kind, id)
   if (dir === null) throw new Error(`回收站条目 id 非法：${id}`)
-  if (!isValidTrashPayloadName(dest)) throw new Error(`回收站负载名非法：${dest}`)
+  if (!isValidTrashPayloadPath(dest)) throw new Error(`回收站负载名非法：${dest}`)
   const from = join(dir, dest)
+  // 后置断言：谓词已经挡掉了 `..`，这一条挡的是「条目目录里恰好有个指向别处的链接」——
+  // 那种情况下 `join` 看着在条目内，实际会从条目外取源。
+  if (!isSameOrDescendant(dir, from)) throw new Error(`回收站负载越出条目目录：${dest}`)
+  await mkdir(dirname(to), { recursive: true })
+  try {
+    await rename(from, to)
+  } catch {
+    await cp(from, to, { recursive: true })
+    await rm(from, { recursive: true, force: true })
+  }
+}
+
+/**
+ * 把一个文件/目录搬**进已存在的条目**（`moveOutOfTrash` 的反向补充，专给回滚用）。
+ *
+ * 为什么需要它：恢复是逐个负载搬的，中途失败时必须把**已经搬出去的那几个**放回条目里，
+ * 否则它们留在目标目录里 —— 而恢复的下一次尝试会撞「目标目录已有内容」的检查，
+ * 这个条目就再也恢复不了了（场景回收站那条链正是这么坏掉的，审查 P0-2）。
+ * 谓词与后置断言与 `moveOutOfTrash` 完全一致（同一道闸，两个方向）。
+ * @throws 条目 id 或负载名非法时抛错（调用方按"回滚失败"处理）。
+ */
+export async function moveIntoTrash(kind: TrashKind, id: string, from: string, dest: string): Promise<void> {
+  const dir = trashEntryPath(kind, id)
+  if (dir === null) throw new Error(`回收站条目 id 非法：${id}`)
+  if (!isValidTrashPayloadPath(dest)) throw new Error(`回收站负载名非法：${dest}`)
+  const to = join(dir, dest)
+  if (!isSameOrDescendant(dir, to)) throw new Error(`回收站负载越出条目目录：${dest}`)
   await mkdir(dirname(to), { recursive: true })
   try {
     await rename(from, to)

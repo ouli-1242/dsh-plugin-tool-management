@@ -99,13 +99,27 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
     // 场景绑定（含恒常的 `_shared` / `global`）、`~/.dsh/AGENTS.md` 的当前内容、
     // 进场景前保存的基线（退出场景后要恢复的那一份）。拒绝时逐条说明「谁在用」，
     // 用户知道该先改哪里。引用清单由 scene-prompt-sync 与显示/注入同源算出。
-    // 探测失败（refs() 返回 null）时放行并记 warn：删预设不动 ~/.dsh/AGENTS.md，
-    // 最坏是少一份副本，可重建 —— 不因一次探测故障把删除堵死。
+    //
+    // 探测**失败**时改为拒绝（2026-09-30 审查 F13）。原来的取舍是「放行并记 warn：删预设不动
+    // ~/.dsh/AGENTS.md，最坏是少一份副本，可重建」—— 这对「副本」成立，对**场景态**不成立：
+    // 删掉场景绑定的那一份，场景驱动会因为找不到预设而静默失效（`driver()` 返回 null），
+    // 而 AGENTS.md 停在场景态，用户看到的是「没场景驱动所以什么都没做」。
+    // `refs()` 返回 null 只代表**三类探测里至少一类读盘失败**（全新环境没有场景时它返回的是
+    // **空表**而不是 null），所以拒绝不会堵住正常路径。文案必须说清是「探测失败」而不是
+    // 「有引用」—— 否则用户会去改一堆并不存在的引用。
     'agentsmd-remove': async (args: any) => {
       const id = String((args && args.id) || '')
       const refs = await deps.scenePromptSync.refs()
-      if (refs === null) deps.warn('prompts: reference probe failed; remove allowed')
-      const why = refs ? refs.get(id) || [] : []
+      if (refs === null) {
+        deps.warn('prompts: reference probe failed; remove refused')
+        return {
+          ok: false,
+          code: 'error.agentsMd.refProbeFailed',
+          error: `无法确认「${id}」是否被引用，已拒绝删除：引用探测失败（场景绑定 / AGENTS.md 当前内容 / 进场景前的基线，这三类里至少有一类没读到）。请稍后重试。`,
+          params: { id },
+        }
+      }
+      const why = refs.get(id) || []
       if (why.length) {
         const refsText = why.map(deps.promptRefReason).join('；')
         return {

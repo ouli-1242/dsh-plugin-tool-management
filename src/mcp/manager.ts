@@ -25,15 +25,15 @@ import { join } from 'node:path'
 // 配置体检查 PATH 用（见 mcpmInspect）：execFile 不走 shell，参数是数组 —— 体检只查询
 // 命令名，**绝不执行**配置里的命令本身。
 import { execFile } from 'node:child_process'
-import { MCP_CLIENT_MODULE } from '../host-names.js'
+import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpPrefixDrift, serverNameCandidates, splitMcpToolName } from '../host-names.js'
 import { hubPath } from '../hub.js'
 import { planOverrideCompaction } from './override-blocks.js'
 import { createMcpStateCatalog, type McpStateCatalog } from './state-section.js'
 import {
-  appendBlock, buildDisableBlock, buildInsertBlock, parseRows, removeEntryAll, removeMarked,
+  appendBlock, buildDisableBlock, buildInsertBlock, insertEntryIds, parseRows, removeEntryAll, removeMarked,
   spliceRanges, splitLines, type ManagedRow,
 } from './patch-yaml.js'
-import { describeMaskedOutcome, maskUrlQuery, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './secret-guard.js'
+import { describeMaskedOutcome, maskSecretValue, maskUrlQuery, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './secret-guard.js'
 
 /** 本文件需要的外部能力（全部显式传入，不再靠闭包捕获）。 */
 export interface McpManagerDeps {
@@ -104,6 +104,16 @@ export interface McpManager {
   updateNotes(mutate: (map: Record<string, string>) => void): Promise<void>
   /** MCP 服务器列表视图（已打码）。 */
   mcpmListView(): Promise<any>
+  /**
+   * 已配置的 serverName 名单（补丁文件里的**真实**名字；只读补丁，不枚举工具 schema）。
+   *
+   * 存在的理由（2026-09-30 审查 N1 / R3）：切分 `mcp__<server>__<tool>` 需要一个候选
+   * serverName 集合，而另外两个来源都是**插件自己写出来的** —— 停用表的键来自界面勾选、
+   * 已知工具缓存的键来自上一次切分。拿它们当候选是循环论证：一旦切错，错键进集合，下次照旧
+   * 切错，**且不自愈**。补丁里的 `serverName` 是宿主真正用来拼 `mcp__${publicName}__${name}`
+   * 的那一份，是唯一与切分结果无关的来源。
+   */
+  configuredServerNames(): Promise<string[]>
   /** 列表行（mask=false 时**含明文凭据**，只有注入侧该用 false 那份）。 */
   mcpmRowsWithNotes(mask: boolean): Promise<any[]>
   /** 插件设置（轮询间隔 / 描述长度上限 / 两个确认开关）。 */
@@ -212,6 +222,39 @@ export function countEnabledTools(known: ReadonlySet<string> | readonly string[]
 }
 
 
+/**
+ * 单工具停用判定（含整服务器通配 `*`——场景档案的"MCP 工具集=整台"写的就是它）。
+ *
+ * 切分走 `splitMcpToolName`（`host-names.ts`）—— **全插件唯一的一套切分规则**（2026-09-30 审查 N1）。
+ *
+ * 改之前的两代口径（免得下次又退回老路）：
+ *   * 0.16.6 及以前用 `indexOf('__')`（取**第一个**）：serverName 含 `__` 时被截成 `a` → 查表
+ *     未命中 → **返回 false（不拦）** → 被停用的工具仍可调用。这是**执行侧**守卫失效，不只是
+ *     显示问题：调用链是 `tools.guard`（`index.ts`）→ `mcp.isToolDisabled`（本文件的出口，
+ *     喂的就是本函数），而文件头承诺 disabled = invisible AND uncallable。
+ *   * 0.16.7 改成「最长已知 serverName 前缀匹配」（候选 = 停用表的键），守卫这一侧修对了；但
+ *     显示侧（`index.ts` 的 `toolKeyParts`）当时改成了「取最后一个 `__`」——**两套规则并存**，
+ *     于是「工具名含 `__`」时守卫与界面键仍会给出不同的 `(server, tool)`。
+ *   * 现在两侧共用 `splitMcpToolName`（最长候选命中，一个都不命中才退回最后一个 `__`）。
+ *
+ * 候选集合取**停用表的键**，不是「全部已配置服务器」—— 理由见 `splitMcpToolName` 的文档：
+ * 设 `a` 的 `b__c` 被停用、而 `a__b` 只是配置了、没停用任何工具，全名 `mcp__a__b__c` 在放宽后
+ * 最长匹配取 `a__b`（tool 只剩 `c`）→ 查 `a__b` 未命中 → **放行一个真的被停用的工具**
+ * （fail-open）。候选只有 `{a}` 时切出 `a`/`b__c` → 命中 → 拦住。
+ * 歧义时偏向「停用表里有的那个服务器」才是守卫该有的方向。
+ *
+ * 本函数是**纯函数**（不读闭包状态），因此提到模块作用域并导出：既是"两侧同源"的可测接缝，
+ * 也让 `createMcpManager` 不再需要为它保留一个闭包内定义。
+ */
+export function isToolDisabledIn(map: Record<string, string[]>, fullName: string): boolean {
+  const parts = splitMcpToolName(fullName, Object.keys(map))
+  if (parts === null) return false
+  const list = map[parts.server]
+  if (!list) return false
+  if (list.indexOf('*') >= 0) return true
+  return list.indexOf(parts.tool) >= 0
+}
+
 export function createMcpManager(deps: McpManagerDeps): McpManager {
   // 外部能力一次解构成局部名：块内代码是逐字搬来的，保持原样最不容易出错。
   const {
@@ -231,10 +274,12 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   // are reported on read and new ones are refused before any write.
   function duplicateIdsOf(content: string): string[] {
     const counts = new Map<string, number>()
-    for (const row of parseRows(content).rows) {
-      if (!row.id) continue
-      counts.set(row.id, (counts.get(row.id) || 0) + 1)
-    }
+    // 扫**全部** insert 子条目的 id，不只 MCP 行（2026-09-30 审查 P1-5）。原实现走
+    // `parseRows`，而它只收 `name === MCP_CLIENT_MODULE` 的行 —— 于是导入一条非 MCP 的
+    // loader（例如 `{"id":"dsh-plugin-tool-management", ...}`）能撞出第二条同 id 条目，
+    // 守卫看不见、直接 `appendBlock` 落盘。而按本仓一贯记载（`:229-231`），同 id 的两条
+    // insert 会让插件组装失败、**DSH 下次起不来**。这个约束对任何 loader 都成立。
+    for (const id of insertEntryIds(content)) counts.set(id, (counts.get(id) || 0) + 1)
     return [...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id)
   }
   function duplicateGuard(before: string, after: string): { ok: false; error: string } | null {
@@ -245,11 +290,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
 
   // ---------- shared state ----------
-  async function collectAll(): Promise<{ ids: Set<string>; serverNames: Set<string>; rows: Array<{ id: string; serverName: string; level: string; disabled: boolean }> }> {
+  async function collectAll(): Promise<{ ids: Set<string>; serverNames: Set<string>; rows: Array<{ id: string; serverName: string; level: string; disabled: boolean; config: Record<string, unknown> }> }> {
     const p = await ensurePaths()
     const ids = new Set<string>()
     const serverNames = new Set<string>()
-    const rows: Array<{ id: string; serverName: string; level: string; disabled: boolean }> = []
+    const rows: Array<{ id: string; serverName: string; level: string; disabled: boolean; config: Record<string, unknown> }> = []
     for (const level of ['project', 'global']) {
       const abs = level === 'project' ? p.projectPatch : p.globalPatch
       let content = ''
@@ -259,7 +304,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         ids.add(r.id)
         const sn = r.config && r.config.serverName ? String(r.config.serverName) : r.id
         serverNames.add(sn)
-        rows.push({ id: r.id, serverName: sn, level, disabled: !!r.disabled })
+        // `config` 一并带出（2026-09-30 审查 F4）：`mcpm-import` 的覆盖模式要靠它拿**旧真值**
+        // 顶替表单里的打码值（URL 的 userinfo/查询串/片段、env/headers 的整串 `•`）。
+        // 此前这里只带 id/serverName/level/disabled，于是 `prevRow.url` 恒为 `undefined` ——
+        // 覆盖模式也走"没有原值"分支，把打码值丢弃并报一句"没有原值可保留"（诊断也是错的）。
+        rows.push({ id: r.id, serverName: sn, level, disabled: !!r.disabled, config: (r.config || {}) as Record<string, unknown> })
       }
     }
     return { ids, serverNames, rows }
@@ -493,7 +542,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   function disabledToolNames(map: Record<string, string[]>): string[] {
     const out: string[] = []
     for (const serverName of Object.keys(map)) {
-      for (const tool of map[serverName]) out.push('mcp__' + serverName + '__' + tool)
+      for (const tool of map[serverName]) out.push(MCP_TOOL_PREFIX + serverName + '__' + tool)
     }
     return out
   }
@@ -522,16 +571,51 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     await writeJsonFile(mcpSidecar(MCP_KNOWN_TOOLS_FILE), value)
     knownMcpToolsCache = { at: Date.now(), value: value }
   }
-  /** 单工具停用判定（含整服务器通配 `*`——场景档案的"MCP 工具集=整台"写的就是它）。 */
-  function isToolDisabledIn(map: Record<string, string[]>, fullName: string): boolean {
-    if (!fullName.startsWith('mcp__')) return false
-    const rest = fullName.slice(5)
-    const i = rest.indexOf('__')
-    if (i <= 0) return false
-    const list = map[rest.slice(0, i)]
-    if (!list) return false
-    if (list.indexOf('*') >= 0) return true
-    return list.indexOf(rest.slice(i + 2)) >= 0
+  /**
+   * 「已知工具」侧车的**读-改-写**，整段在写锁内。
+   *
+   * 为什么不能「先 readKnownMcpTools() 再 writeKnownMcpTools()」（2026-09-30 审查 P2-15）：
+   * 这个侧车有两个并发写者 —— 列表轮询（`mcpmListView`，每次发现新工具就回写）与
+   * 临时启动（`mcpmTools` 等到工具注册后回写）。两步之间是队外窗口，两个写者各读到同一份
+   * 旧表、各并进自己那一台服务器的工具，后写的把先写的整份覆盖掉 —— 先那台的"曾经见过"
+   * 记录消失，未运行时场景档案里又变成 0 工具。
+   *
+   * `mutate` 收到的是**锁内刚读出来**的表（`force` 绕 TTL，否则拿到的还是锁外那份缓存）；
+   * 返回 `true` 表示有变化、需要落盘。
+   * 注意：`withWriteLock` **不可重入** —— 调用方不得已经持有写锁。
+   */
+  async function mutateKnownMcpTools(mutate: (known: Record<string, KnownMcpTool[]>) => boolean): Promise<void> {
+    return withWriteLock(async () => {
+      const known = await readKnownMcpTools(true)
+      if (!mutate(known)) return
+      await writeKnownMcpTools(known)
+    })
+  }
+  /**
+   * 把「这次 live 见到的工具」并进一份已知工具表；返回是否有变化。
+   *
+   * 抽出来是为了让"要不要写盘"的判断与"锁内真正合并"用**同一个**函数：调用方先在锁外
+   * 对本地缓存跑一遍拿到 `changed`（决定要不要进锁），进锁后再对新鲜表跑一遍（那次的结果
+   * 才决定落盘）—— 两边口径不一致的话，要么白写要么漏写。
+   */
+  function mergeLiveToolsInto(known: Record<string, KnownMcpTool[]>, live: Record<string, KnownMcpTool[]>): boolean {
+    let changed = false
+    for (const [server, list] of Object.entries(live)) {
+      const prev = known[server] || []
+      const byName = new Map(prev.map((t) => [t.name, t] as const))
+      for (const tool of list) {
+        const old = byName.get(tool.name)
+        if (!old) { byName.set(tool.name, tool); changed = true; continue }
+        if (tool.description && old.description !== tool.description) {
+          byName.set(tool.name, { ...old, description: tool.description })
+          changed = true
+        }
+      }
+      const next = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      if (next.length !== prev.length) changed = true
+      known[server] = next
+    }
+    return changed
   }
   async function mcpmToolEnabled(args: any): Promise<any> {
     const serverName = String((args && args.serverName) || '').trim()
@@ -665,7 +749,21 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
 
   async function applyToolRestrictions(): Promise<void> {
-    if (typeof tools.restrict !== 'function') return
+    // 全局 tools 面上没有 restrict → 可见性半边整条做不成，如实上报（2026-09-30 审查 P2-8）。
+    // 此前这里是**裸 return**：停用工具仍留在模型可见的工具表里，而兼容页因为没有上报仍报
+    // 一行"ok"，用户看到的是"停用了但工具还在"。与 `restrictAgent` 里那条 noteRuntime 同文案、
+    // 同 id（noteRuntime 按 id 覆盖，两处不会互相刷屏）。
+    if (typeof tools.restrict !== 'function') {
+      noteRuntime({
+        id: 'mcp-tool-visibility',
+        label: '停用工具的可见性',
+        kind: 'write',
+        fallback: 'inform-only',
+        detail: '全局 tools 服务上没有可用的 tools.restrict（官方接口变了）：停用的 MCP 工具与兼容页关掉的本插件工具仍会出现在模型可见的工具表里，执行侧拦截仍然生效。',
+        detailKey: 'mcp-tool-visibility.no-restrict',
+      })
+      return
+    }
     // Force re-read: this runs on the tools/change path, which is rare, so a
     // stale cache must not keep an externally edited deny list hidden.
     const map = await readDisabledTools(true)
@@ -677,7 +775,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     } catch (e) { return }
     for (const [serverName, list] of Object.entries(map)) {
       if (list.indexOf('*') < 0) continue
-      const prefix = 'mcp__' + serverName + '__'
+      const prefix = MCP_TOOL_PREFIX + serverName + '__'
       for (const fullName of registered) if (fullName.startsWith(prefix)) wanted.push(fullName)
     }
     // 兼容页「模型工具表」关掉的本插件工具并进同一份名单（理由见 deps.pluginHiddenTools）。
@@ -719,13 +817,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   // indirections rather than secrets, so they stay readable. URL query strings
   // are redacted because MCP credentials often ride there.
   const SENSITIVE_KEY_RE = /(token|secret|password|passwd|auth|credential|api[_-]?key|access[_-]?key|private[_-]?key|cookie|session|signature|bearer)/i
-  function maskSecretValue(value: unknown): string {
-    const text = String(value == null ? '' : value)
-    if (text === '') return ''
-    if (text.startsWith('$')) return text
-    if (/^!!js\s/.test(text)) return text
-    return '••••••'
-  }
+  // 单值打码（`maskSecretValue`）与 URL 打码（`maskUrlQuery`）都挪到 ./secret-guard.js ——
+  // 那里是这两条形态的唯一口径，使用方现在有三个（本文件的列表视图 + index.ts 的确认卡
+  // + ops/snapshot.ts 的整机迁移导出）。此处不再自建一份。
   function maskValueMap(map: Record<string, string> | null, onlySensitiveKeys: boolean): Record<string, string> | null {
     if (!map || typeof map !== 'object') return map
     const out: Record<string, string> = {}
@@ -735,7 +829,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return out
   }
   // `maskUrlQuery` 已挪到 ./secret-guard.js：那里是两条打码形态的唯一口径，而使用方
-  // 现在有两个（本文件的列表视图 + index.ts 的确认卡）。
+  // 现在有三个（本文件的列表视图 + index.ts 的确认卡 + ops/snapshot.ts 的整机迁移导出）。
   /** Shared UI rows: mcpmList plus notes, secrets masked unless `reveal`. */
   async function mcpmRowsWithNotes(reveal: boolean): Promise<any> {
     const result: any = await mcpmList()
@@ -775,7 +869,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   async function mcpmTools(args: any): Promise<any> {
     const serverName = String(args && args.serverName || '').trim()
     if (!serverName) return { ok: false, error: 'serverName 不能为空' }
-    const prefix = 'mcp__' + serverName + '__'
+    const prefix = MCP_TOOL_PREFIX + serverName + '__'
     let schemas: any[] = []
     try {
       schemas = await tools.schemas()
@@ -896,14 +990,17 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
               .map((x: any) => ({ name: String(x.name), ...(typeof x.description === 'string' && x.description ? { description: x.description } : {}) }))
             if (known.length) {
               try {
-                const cache = await readKnownMcpTools()
-                const byName = new Map((cache[serverName] || []).map((item) => [item.name, item] as const))
-                for (const item of known) {
-                  const old = byName.get(item.name)
-                  byName.set(item.name, old && old.description && !item.description ? old : { ...old, ...item })
-                }
-                cache[serverName] = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-                await writeKnownMcpTools(cache)
+                // 读-改-写整段在写锁内（审查 P2-15）：轮询路径也在回写同一份侧车，
+                // 锁外两步会互相覆盖。合并规则（保留旧的描述、新的描述优先）与轮询路径同源。
+                await mutateKnownMcpTools((cache) => {
+                  const byName = new Map((cache[serverName] || []).map((item) => [item.name, item] as const))
+                  for (const item of known) {
+                    const old = byName.get(item.name)
+                    byName.set(item.name, old && old.description && !item.description ? old : { ...old, ...item })
+                  }
+                  cache[serverName] = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+                  return true
+                })
               } catch { /* 缓存写失败不影响本次返回 */ }
             }
             result = t
@@ -932,6 +1029,29 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       else result = { ...result, warning: note }
     }
     return result
+  }
+
+  /**
+   * 已配置的 serverName 名单 —— 只读补丁 + `parseRows`，**不枚举工具 schema、不回写任何缓存**。
+   *
+   * 与 `configuredServers`（index.ts 的档案引擎依赖）取的是同一份东西，但那个走
+   * `mcpmListView()` → `mcpmList()`，会顺带枚举 schema 并回写「已知工具」缓存；切分的候选集合
+   * 只需要名字，不该付那份代价与副作用。顺序与 `mcpmList` 一致（project → global）。
+   */
+  async function configuredServerNames(): Promise<string[]> {
+    const p = await ensurePaths()
+    const out: string[] = []
+    for (const level of ['project', 'global']) {
+      const abs = level === 'project' ? p.projectPatch : p.globalPatch
+      let content = ''
+      // 读不到某个层级就当它没有条目（与 `mcpmList` 的处理一致：记进 errors 但不影响另一层）。
+      try { content = await readPatch(abs) } catch (e) { continue }
+      for (const r of parseRows(content).rows) {
+        const n = String(normalizeRow(r, level, abs).serverName || '')
+        if (n && out.indexOf(n) < 0) out.push(n)
+      }
+    }
+    return out
   }
 
   async function mcpmList(): Promise<any> {
@@ -972,18 +1092,95 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       const liveNames: Record<string, string[]> = {}
       const liveTools: Record<string, KnownMcpTool[]> = {}
       const seen = new Set<string>()
+      // 切分走 `splitMcpToolName` —— 与执行侧守卫、界面勾选键**同一套规则**（2026-09-30 审查 N1）。
+      //
+      // 这里以前是贪婪正则 `^mcp__([A-Za-z0-9_-]+)__(.+)$`（等价于"取最后一个 `__`"）。它不只是
+      // 第三套规则：它算出的键就是 `mcp-known-tools.json` 的键，而那个缓存又会被显示侧当候选集合
+      // 读回去 —— 规则不一致会**自证**（切错的键进候选，越切越错），所以必须一起换掉。
+      //
+      // 候选集合取补丁里的真实 serverName ∪ 停用表键 ∪ 已知缓存键：`rows` 来自补丁，是唯一与切分
+      // 结果无关的来源；另两份是插件自己写出来的（见 `configuredServerNames` 的文档）。
+      const splitCandidates = serverNameCandidates(
+        rows.map((r: any) => String((r && r.serverName) || '')).filter(Boolean),
+        disabledMap,
+        knownCache,
+      )
+      // 前缀漂移的线索（审查 §5 F6）：判据与理由见 `host-names.ts` 的
+      // `looksLikeMcpPrefixDrift` —— 关键是**排除 `mcp_` 开头的那一族**（本插件自己的
+      // `mcp_manager_*` 就在里面，不排除的话这条上报每台机器都会误报）。
+      const mcpStemOther: string[] = []
       for (const s of schemas) {
         const fullName = String(s && s.name || '')
         if (seen.has(fullName)) continue
         seen.add(fullName)
-        const m = fullName.match(/^mcp__([A-Za-z0-9_-]+)__(.+)$/)
-        if (!m) continue
-        const list = liveNames[m[1]] || (liveNames[m[1]] = [])
-        if (list.indexOf(m[2]) < 0) list.push(m[2])
+        if (looksLikeMcpPrefixDrift(fullName) && mcpStemOther.length < 3) mcpStemOther.push(fullName)
+        const parts = splitMcpToolName(fullName, splitCandidates)
+        // serverName 的合法形态与 `mcpm-set-tool-enabled` / `mcpm-edit` 的校验同口径：不合法的一律
+        // 不进表（旧正则的 `[A-Za-z0-9_-]+` 就是这个意思，这里保留，免得凭空多出服务器行）。
+        if (!parts || !/^[A-Za-z0-9_-]{1,32}$/.test(parts.server)) continue
+        const list = liveNames[parts.server] || (liveNames[parts.server] = [])
+        if (list.indexOf(parts.tool) < 0) list.push(parts.tool)
         // 顺手把描述记下来：未运行时详情页就有东西可显示，不必再重复「描述暂不可用」。
-        const bucket = liveTools[m[1]] || (liveTools[m[1]] = [])
+        const bucket = liveTools[parts.server] || (liveTools[parts.server] = [])
         const desc = typeof s.description === 'string' ? s.description : ''
-        if (!bucket.some((t) => t.name === m[2])) bucket.push({ name: m[2], ...(desc ? { description: desc } : {}) })
+        if (!bucket.some((t) => t.name === parts.tool)) bucket.push({ name: parts.tool, ...(desc ? { description: desc } : {}) })
+      }
+      // 前缀契约的 inform-only 上报（审查 §5 F6）：宿主面上出现了词根后换了分隔符的 `mcp*` 工具名，
+      // 同时按本插件认的前缀一条都筛不出来 —— 大概率官方改了 MCP 工具的命名前缀。这时停用表 /
+      // 执行侧门禁 / 工具计数会**一起静默失明**（守卫认为"这工具不在我的表里"，于是放行），
+      // 而这是纯字符串契约、没有能力探测能提前发现。
+      // 证据门槛刻意收紧（见上）：`mcp_` 开头的一族不算证据，且要**至少两个**同名根的工具
+      // （改前缀会重命名全部 MCP 工具，孤零零一个像模像样的名字不足为凭）。条件不成立就清掉，
+      // 避免陈旧告警。
+      if (mcpStemOther.length >= 2 && Object.keys(liveNames).length === 0) {
+        noteRuntime({
+          id: 'mcp-tool-prefix',
+          label: 'MCP 工具命名前缀',
+          kind: 'read',
+          fallback: 'inform-only',
+          detail: `宿主工具表里有多个以 mcp 开头、但用的不是 \`${MCP_TOOL_PREFIX}\` 的工具名（如 ${mcpStemOther.join('、')}），而按本插件认的前缀一条都筛不出来：官方可能改了 MCP 工具的命名前缀。此时停用表、执行侧门禁与工具计数都会失明（守卫会放行它以为"不在表里"的工具）。`,
+          detailKey: 'mcp-tool-prefix.mismatch',
+          params: { prefix: MCP_TOOL_PREFIX, samples: mcpStemOther.join('、') },
+        })
+      } else {
+        clearRuntimeNote('mcp-tool-prefix')
+      }
+      // 命名歧义的 inform-only 上报（2026-09-30 审查 N2）：`mcp__<server>__<tool>` 这个契约
+      // 对 `__` 本身有歧义，而 `serverName` 的校验（`/^[A-Za-z0-9_-]{1,32}$/`）**允许含 `__`**。
+      // 两种形状会让切分变成"猜"：① 某个 serverName 自己含 `__`；② 两个 serverName 互为 `__`
+      // 前缀（`a` 与 `a__b`）—— 全名 `mcp__a__b__c` 两种归属都讲得通。
+      //
+      // **只上报、不改行为**：改校验会把存量服务器从"能管"变成"管不了"（计划 §4 未决 1 的
+      // 裁定），而这里要的只是"切不准时出声"。判据本身保证没有这两种形状时一条都不报
+      // （`ambiguousServerNames`），条件不成立就清掉，避免陈旧告警 —— 与上面那条同一条纪律。
+      // 两条互斥、取**更具体**的那条，永远只出一行：
+      // 「互为前缀」必然蕴含「含 `__`」（长的那半就是 `短名 + '__' + 余下`），两条一起报
+      // 就是同一件事说两遍。而「互为前缀」更具体 —— 它直接点名了是哪两个名字撞在一起。
+      // 反过来「含 `__`」能覆盖"一个前缀对都凑不成"的单名字情形。两边都不成立就都清掉。
+      const ambiguous = ambiguousServerNames(splitCandidates)
+      const prefixPairs = ambiguous.prefixPairs.map(([a, b]) => `${a} / ${b}`).join('、')
+      if (ambiguous.prefixPairs.length) {
+        noteRuntime({
+          id: 'mcp-server-name-ambiguous',
+          label: 'MCP 服务器名互为 `__` 前缀',
+          kind: 'read',
+          fallback: 'inform-only',
+          detail: `这些 MCP 服务器名互为 \`__\` 前缀关系（${prefixPairs}）：例如 \`mcp__a__b__c\` 既可以读成 \`a\` 的 \`b__c\`，也可以读成 \`a__b\` 的 \`c\`，界面上的勾选可能落不到停用表里那条键上（工具本身照常可用）。改名可消除；不改也能用。`,
+          detailKey: 'mcp-server-name-ambiguous.prefix',
+          params: { pairs: prefixPairs },
+        })
+      } else if (ambiguous.withSeparator.length) {
+        noteRuntime({
+          id: 'mcp-server-name-ambiguous',
+          label: 'MCP 服务器名含 `__`',
+          kind: 'read',
+          fallback: 'inform-only',
+          detail: `这些 MCP 服务器名里含 \`__\`（${ambiguous.withSeparator.join('、')}）：工具全名 \`mcp__<server>__<tool>\` 因此切不唯一，界面上的勾选可能落不到停用表里那条键上（工具本身照常可用）。改名可消除；不改也能用。`,
+          detailKey: 'mcp-server-name-ambiguous.separator',
+          params: { names: ambiguous.withSeparator.join('、') },
+        })
+      } else {
+        clearRuntimeNote('mcp-server-name-ambiguous')
       }
       // 工具数 = live ∪ 停用表里的单个工具名 ∪ 「已知工具」缓存 —— 未运行的服务器
       // 也能显示最后一次见过的工具数，而不是永远 0。
@@ -1015,23 +1212,10 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       for (const [server, list] of Object.entries(knownCache)) knownToolCounts[server] = list.length
       // 回写「已知工具」：live 见到的名字与描述并入缓存（有变化才写盘，读路径上的 best-effort）。
       // 名字集合变化，或某个已知工具这次拿到了描述而缓存里没有 → 都算变化。
-      let cacheChanged = false
-      for (const [server, list] of Object.entries(liveTools)) {
-        const prev = knownCache[server] || []
-        const byName = new Map(prev.map((t) => [t.name, t] as const))
-        for (const tool of list) {
-          const old = byName.get(tool.name)
-          if (!old) { byName.set(tool.name, tool); cacheChanged = true; continue }
-          if (tool.description && old.description !== tool.description) {
-            byName.set(tool.name, { ...old, description: tool.description })
-            cacheChanged = true
-          }
-        }
-        const next = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-        if (next.length !== prev.length) cacheChanged = true
-        knownCache[server] = next
-      }
-      if (cacheChanged) void writeKnownMcpTools(knownCache).catch(() => { /* 侧车写失败不影响列表 */ })
+      // 先在本地这份上跑一遍只为**判断要不要写盘**；真正落盘的那次合并发生在锁内、对象是
+      // 刚读出来的新鲜表（审查 P2-15：临时启动路径也在写同一份侧车，锁外两步会互相覆盖）。
+      const cacheChanged = mergeLiveToolsInto(knownCache, liveTools)
+      if (cacheChanged) void mutateKnownMcpTools((fresh) => mergeLiveToolsInto(fresh, liveTools)).catch(() => { /* 侧车写失败不影响列表 */ })
     } catch (e) { /* ignore */ }
     let live: PluginInventoryEntry[] = []
     if (pluginInventory) {
@@ -1122,7 +1306,14 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     if (transport === 'streamable-http') {
       const url = String(args.url || '').trim()
       if (!/^https?:\/\//.test(url)) return { ok: false, error: 'url 需为 http(s):// 开头的地址' }
-      row.url = url
+      // 新增条目**没有旧值可顶替** —— 打码 URL 一律拒绝，让用户重填完整地址（判据见
+      // ./mcp/secret-guard.js）。原来这里直接 `row.url = url`，于是「把列表里那条打码 URL
+      // 复制到新增表单」就会把凭据永久写成 `%3Credacted%3E`，界面还显示成功（审查 F4）。
+      const urlGuard = resolveMaskedUrl(url, null)
+      if (urlGuard.unrecoverable) {
+        return { ok: false, error: 'URL 里的 userinfo / 查询串 / 片段是打码占位符（新增条目没有原值可恢复）：请重新填写完整 URL 后再保存。' }
+      }
+      row.url = urlGuard.value
       row.headers = sanitize(parseKv(args.headers))
     } else {
       const command = String(args.command || '').trim()
@@ -1360,14 +1551,18 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
   }
 
+  /** 一份补丁内容里某个 id 的**生效**启停值（insert 行自带的 flag 与顶层覆盖块合并后）。 */
+  function effectiveDisabledIn(content: string, id: string): boolean {
+    const row = parseRows(content).rows.find((r) => r.id === id)
+    return row ? !!row.disabled : false
+  }
+
   /** Effective disabled state of a patch row (insert-row flag merged with override blocks). */
   async function isRowDisabled(id: string, level: string): Promise<boolean> {
     const p = await ensurePaths()
     const abs = level === 'global' ? p.globalPatch : p.projectPatch
     try {
-      const { rows } = parseRows(await readPatch(abs))
-      const row = rows.find((r) => r.id === id)
-      return row ? !!row.disabled : false
+      return effectiveDisabledIn(await readPatch(abs), id)
     } catch (e) { return false }
   }
 
@@ -1426,7 +1621,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         }
         let c = await readPatch(abs)
         c = removeMarked(c, id, 'disable')
-        if (wasDisabled) c = appendBlock(c, buildDisableBlock(id, true))
+        c = removeMarked(c, id, 'enable')
+        // 覆盖块全删掉之后，生效值**回落**到 insert 行自带的 `disabled:`，而它与「重启前的
+        // 生效状态」不一定相同 —— insert 行写着 `disabled: true`、靠一条 enable 覆盖块启用，
+        // 就是这种形状。此前只在 `wasDisabled` 为真时补一条 disable，于是这种形状下重启会把
+        // 服务器**留在停用态**（2026-09-30 审查 P2-11）。所以这里比一次：不等就按 `wasDisabled`
+        // 显式补一条覆盖；相等就不补 —— 补了会让每次重启都往补丁里多留一个块，没必要。
+        if (effectiveDisabledIn(c, id) !== wasDisabled) c = appendBlock(c, buildDisableBlock(id, wasDisabled))
         await writePatch(abs, c)
       }).catch((e) => {
         warnings.push('恢复重启前状态失败（该服务可能停留在停用态）：' + message(e))
@@ -1677,6 +1878,10 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       else {
         // 唯一一次外部调用。npx / uvx 这类 shim 找不到时界面给的下半句是「shim 属正常可忽略」，
         // 不让用户以为命令坏了。
+        //
+        // `params.command` 原样回给客户端：这与 `mcpm-list`（同样是**免令牌**的只读 op）一致
+        // —— 列表视图里的 `command` 一直是明文，命令名本身不是凭据（真正装凭据的 `args`
+        // 两边都不回）。若哪天要收紧，两处必须一起收，否则只是把同一份值换个 op 暴露。
         const found = await probeCommandOnPath(command)
         if (found === 'missing') checks.push({ id: 'cmdMissing', level: 'warn', params: { command } })
         else if (found === 'unknown') checks.push({ id: 'cmdUnknown', level: 'info', params: { command } })
@@ -1686,12 +1891,16 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       if (badEnv.length) checks.push({ id: 'kvNotString', level: 'warn', params: { where: 'env', keys: badEnv.join('、') } })
     } else if (transport === 'streamable-http') {
       if (!url) checks.push({ id: 'noUrl', level: 'warn' })
-      else if (!/^https?:\/\//.test(url)) checks.push({ id: 'badUrl', level: 'warn', params: { url } })
+      // URL 一律**打码后**回给客户端（`maskUrlQuery`，与列表视图同一口径）。本 op 在登记表里
+      // 是 `readonly: true` 的免令牌 op，原先这里回的是补丁文件里的 URL 原文 —— 于是一个
+      // 无需令牌的请求就能拿到 `?api_key=…` 的明文，绕过了 `mcpm-reveal` 那道
+      // 「令牌是明文凭据最后一道防线」的设计（审查 P0-5）。路径与主机保留，定位不受影响。
+      else if (!/^https?:\/\//.test(url)) checks.push({ id: 'badUrl', level: 'warn', params: { url: maskUrlQuery(url) } })
       else {
         // 格式对了再做一次真实探测（0.16.5）：此前的体检止步于格式校验，一条编造的
         // 地址也能拿绿点 —— 绿点承诺的「没发现问题」其实只覆盖了一半（2026-09-29 实测）。
         const probe = await probeHttpEndpoint(url, row.headers)
-        if (!probe.reachable) checks.push({ id: 'httpUnreachable', level: 'warn', params: { url, reason: probe.reason } })
+        if (!probe.reachable) checks.push({ id: 'httpUnreachable', level: 'warn', params: { url: maskUrlQuery(url), reason: probe.reason } })
       }
       const badHeaders = badKv(row.headers)
       if (badHeaders.length) checks.push({ id: 'kvNotString', level: 'warn', params: { where: 'headers', keys: badHeaders.join('、') } })
@@ -1753,11 +1962,19 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       level: r.level,
       disabled: r.disabled,
     }))
-    const json = JSON.stringify({ exportedAt: new Date().toISOString(), rows }, null, 2)
+    const payload = { exportedAt: new Date().toISOString(), rows }
+    const json = JSON.stringify(payload, null, 2)
     let savedTo: string | null = null
     try {
       const abs = mcpSidecar(MCP_EXPORT_FILE)
-      await writePatch(abs, json)
+      // 用 `writeJsonFile`（直写 hub 侧车）而**不是** `writePatch`（2026-09-30 审查 P1-3）：
+      // `writePatch` 是宿主**补丁文件**的写口，写前会跑 `checkPatchWrite` 的官方方言校验
+      // （顶层必须是 YAML 数组），而这里写的是 hub 里一份 JSON **对象** —— 校验必然失败、
+      // 异常被下面的 catch 吞掉，于是 `savedTo` 恒为 null，界面显示"没能落盘（hub 目录写入
+      // 失败）"，**诊断是错的**（真实原因是方言校验器拒收 JSON 对象）。而且 `writePatch`
+      // 自己的调用面纪律（`index.ts`：「不写宿主配置的动作也不该调用它」）本就排除了它 ——
+      // 本处是唯一一个传 hub 路径的调用点。顺带省掉一次 `danger-full-access` 策略升级。
+      await writeJsonFile(abs, payload)
       savedTo = abs
     } catch (e) { /* non-fatal */ }
     return { ok: true, json, savedTo }
@@ -1794,10 +2011,15 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         const nameTaken = byName.has(row.serverName)
         // 打码值不能入库（判据见 ./mcp/secret-guard.js）：覆盖模式下拿被覆盖条目在补丁里的
         // 旧真值顶替；非覆盖模式没有旧值可比，走"丢弃"分支。
+        //
+        // `prevConfig` 同时认两种形状：`collectAll()` 出来的行把配置挂在 `config` 下，
+        // 而同一个批次里**先前刚导入**的行（`byId.set(row.id, row)`）是 `mcpmAdd` 那种扁平形状。
+        // 少认一种，同批里重复 id 的那条就拿不到旧值、被静默丢弃。
         const prevRow: any = idTaken ? byId.get(row.id) : null
+        const prevConfig: any = prevRow ? (prevRow.config || prevRow) : {}
         for (const field of ['env', 'headers'] as const) {
           if (row[field] === undefined) continue
-          const outcome = resolveMaskedKv(row[field], prevRow ? prevRow[field] : null)
+          const outcome = resolveMaskedKv(row[field], prevConfig[field])
           row[field] = outcome.value
           const note = describeMaskedOutcome(outcome)
           if (note) importNotes.push(row.serverName + '：' + note)
@@ -1806,6 +2028,20 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         // always skipped, even in overwrite mode.
         if (nameTaken && !idTaken) { skipped.push({ id: row.id, reason: 'serverName 已存在' }); continue }
         if (idTaken && !overwrite) { skipped.push({ id: row.id, reason: 'id 已存在' }); continue }
+        // URL 与 env / headers 同一条纪律（判据见 ./mcp/secret-guard.js）：打码值绝不入库。
+        // 覆盖模式下拿被覆盖条目的旧真值顶替；没有旧真值可顶替时**跳过这一条**并给出理由 ——
+        // URL 不是可丢的键值对，写一个"能连上但鉴权失败"的地址比不导入更糟。
+        // 这条原先不存在，于是 `snapshot-export`（默认 `includeSecrets=false` 会把 URL 打码）
+        // 导到目标机后，补丁里落进 `%3Credacted%3E` 而**没有任何 warning**（审查 F4）。
+        if (row.transport === 'streamable-http') {
+          const urlGuard = resolveMaskedUrl(row.url, prevConfig.url)
+          if (urlGuard.unrecoverable) {
+            skipped.push({ id: row.id, reason: 'URL 里的 userinfo / 查询串 / 片段是打码占位符，且没有原值可恢复：请重填完整 URL 后再导入' })
+            continue
+          }
+          row.url = urlGuard.value
+          if (urlGuard.restored) importNotes.push(row.serverName + '：URL 未改动，已保留原值')
+        }
         // Overwrite: purge every trace of the id from BOTH patch files first,
         // then insert the imported row at its own level. The purge is not
         // atomic with the insert, so keep the pre-purge content of both files
@@ -1949,6 +2185,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     writeDisabledTools,
     updateNotes,
     mcpmListView,
+    configuredServerNames,
     mcpmRowsWithNotes,
     readPluginSettings,
     isToolDisabled: (name: string) => isToolDisabledIn(disabledToolsCache ? disabledToolsCache.value : {}, name),

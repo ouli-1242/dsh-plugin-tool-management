@@ -226,9 +226,47 @@ export function parseIndex(raw: string): RulesIndex {
 //   - 读侧降级 —— 注入路径（readIndexSync）不能抛，返回默认索引，界面表现为「记忆都没了」，
 //     是可见症状而不是静默改写；
 //   - 写侧 fail-closed —— 拒绝落盘并把原因回给界面，用户的数据一个字节不动。
+//
+// 2026-09-30（审查 P0-1）补的那一刀：上面第一段说的「三者合并」其实**只修掉了一条**——
+// 隔离只由 parse 失败触发，读失败仍被并进「文件不存在」这条路。于是「文件在、这一次读不到」
+// 依然能走完整条静默覆盖链。现在**读失败（非 ENOENT）也判不可信**：它和「解析不出来」是
+// 同一件事的两面 —— 我们都不知道里面是什么，都不许拿一份空索引去覆盖它。
+//
+// 但两条路的**处置**必须分开（2026-09-30 自查，避免修 A 挖 B）：
+//   - parse 失败 → `quarantineIndex`：改名留存 + 标记。同一份内容每次 parse 都失败，文件
+//     确实坏了，改名是恰当的处置。
+//   - 读失败   → `markIndexUntrusted`：**只标记，不动文件**。读失败常常是瞬时的（见该函数注释）。
+// Map 的值 = 改名后的留存路径；`''` = 文件未被改动（仍在原位），供 `writeIndex` 换措辞。
 export const corruptIndexes = new Map<string, string>()
 
-/** 把损坏的索引改名留存并记录该 stateDir 已损坏（幂等，只记一次）。 */
+/** 一个 fs 错误的 `code`（取不到就返回空串）。 */
+function errnoCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code
+  return typeof code === 'string' ? code : ''
+}
+
+/** `code` 或消息，拼进日志用。 */
+function errnoText(error: unknown): string {
+  return errnoCode(error) || String((error as Error | null | undefined)?.message || error)
+}
+
+/**
+ * 该错误是不是「目标**不存在**」（`ENOENT`）。
+ *
+ * 这是本仓「全新用户」与「这一次读失败」的**唯一分界**：整个 0.16.x 的数据丢失事故
+ * （见 `readIndex` 的长注释）就源于把两者合并。凡是要把 IO 失败与"本来就没有"分开的读路径
+ * 都应当用这一条判据，而不要各写一套。
+ */
+export function isAbsentError(error: unknown): boolean {
+  return errnoCode(error) === 'ENOENT'
+}
+
+/**
+ * 把**解析失败**的索引改名留存并记录该 stateDir 已损坏（幂等，只记一次）。
+ *
+ * 只给 `parseOrQuarantine` 用（解析失败）。**读失败不要用它** —— 那条路要的是
+ * `markIndexUntrusted`：读失败可能是瞬时的，改名会把"重试即可恢复"升级成"记忆全没了"。
+ */
 export function quarantineIndex(stateDir: string): void {
   const key = resolve(stateDir)
   if (corruptIndexes.has(key)) return
@@ -247,7 +285,31 @@ export function quarantineIndex(stateDir: string): void {
   )
 }
 
-/** 该 stateDir 的索引是否已判定损坏（写侧拒绝落盘，读侧按「全部未启用」处理）。 */
+/**
+ * 标记该 stateDir 的索引**不可信** → 写侧拒写、读侧按「全部未启用」投影。**不动文件**。
+ *
+ * 为什么读失败不能走 `quarantineIndex`（2026-09-30 自查 P0-1 的次生风险）：那条路会
+ * `renameSync` 把文件改名成 `.corrupt-*`。但「读失败」与「解析失败」的**确定性**不同 ——
+ * parse 失败对同一份内容可复现（文件确实坏了，改名留存是对的）；而读失败常常是**瞬时**的
+ * （Windows 上杀软 / 索引器 / 备份软件占住会报 EACCES/EBUSY），内容很可能完好。对一次瞬时
+ * 故障执行改名，等于把「重试即可恢复」升级成「记忆全没了（数据在 `.corrupt-*` 里，需人工
+ * 恢复）」。所以这里只标记：数据留在原位，当前进程拒写（不会被空索引覆盖），故障过去后
+ * 自动恢复 —— `parseOrQuarantine` 成功时会解除标记。
+ */
+export function markIndexUntrusted(stateDir: string, reason: string): void {
+  const key = resolve(stateDir)
+  const first = !corruptIndexes.has(key)
+  // 值 `''` = 文件未被改动（仍在原位）—— `writeIndex` 的错误消息据此换措辞。
+  corruptIndexes.set(key, '')
+  if (!first) return // 幂等：重复的失败不再刷日志
+  console.warn(
+    `[dsh-plugin-tool-management] ${reason}，已停止写入以免覆盖你的数据。`
+    + `原文件未被改动（仍在 ${join(stateDir, MEMORIES_INDEX_FILE)}）—— 若它其实完好，`
+    + `下次读取成功会自动恢复；也可检查后重启 DSH。`,
+  )
+}
+
+/** 该 stateDir 的索引是否已判定不可信（写侧拒绝落盘，读侧按「全部未启用」处理）。 */
 export function isIndexQuarantined(stateDir: string): boolean {
   return corruptIndexes.has(resolve(stateDir))
 }
@@ -255,7 +317,12 @@ export function isIndexQuarantined(stateDir: string): boolean {
 /** 解析索引；失败即隔离该文件并返回默认索引（写侧由 writeIndex 拦截）。 */
 export function parseOrQuarantine(stateDir: string, raw: string): RulesIndex {
   try {
-    return parseIndex(raw)
+    const index = parseIndex(raw)
+    // 读到了能解析的内容 → 之前那次「不可信」判定已过期，解除。
+    // 只对 `markIndexUntrusted` 那类（文件仍在原位）有意义：parse 失败时文件已被改名，
+    // 后续读到的是 ENOENT，走不到这里 —— 所以这一行不会削弱 parse 失败的 fail-closed。
+    corruptIndexes.delete(resolve(stateDir))
+    return index
   } catch {
     quarantineIndex(stateDir)
     return defaultIndex()
@@ -266,8 +333,16 @@ export async function readIndex(stateDir: string): Promise<RulesIndex> {
   let raw: string
   try {
     raw = await readFile(join(stateDir, MEMORIES_INDEX_FILE), 'utf8')
-  } catch {
-    // 文件不存在 = 全新用户；其余 IO 错误也按「没有索引」处理（与既有语义一致）。
+  } catch (e) {
+    // 只有 **ENOENT**（文件不存在）= 全新用户。其余 IO 错误必须与它分开 —— 这里曾经把两者
+    // 合并成「返回默认索引」，于是这一次读失败之后的任何一次写都会「读空 → 改一处 → 整份写」，
+    // 把用户全部配置（场景记录 / 档案 / 启用集合 / 每条记忆的 enabled/order/tags/pinned/note /
+    // 模式快照）换成空索引；更糟的是**纯读 op 也会落盘**（`rules-list` 是界面 5s 轮询的读 op，
+    // 而 buildSnapshot 补 `global` 记录后会 writeIndex），也就是打开面板就可能触发覆盖。
+    // 现在按 fail-closed 处理：标记该 stateDir 不可信（写侧随即拒写），读侧退默认索引（可见症状）。
+    // 用 `markIndexUntrusted` 而不是 `quarantineIndex`：读失败可能是瞬时的，**不改名**用户的文件。
+    if (errnoCode(e) === 'ENOENT') return defaultIndex()
+    markIndexUntrusted(stateDir, `记忆索引读失败（${errnoText(e)}）`)
     return defaultIndex()
   }
   return parseOrQuarantine(stateDir, raw)
@@ -285,6 +360,11 @@ export async function readIndex(stateDir: string): Promise<RulesIndex> {
  * 拿到新对象）。当前两个调用方（`sceneMemory` / `resolveScenePreset`）及其下游
  * （`signatureOfIndex` / `resolveActiveScenes` / `sceneLine` / `compareSceneBuckets` /
  * `sceneOrderOf`）都已确认只读 —— 新增调用方请保持这条。
+ *
+ * 2026-09-30（审查 P0-1）：**读失败**（非 ENOENT）同样走隔离分支，不再只是「退默认索引」。
+ * 退默认索引在注入侧等于 `enabled ?? true` → 用户显式停用的记忆会**重新注入**；隔离之后
+ * `isIndexQuarantined()` 为真，调用方按 `forceDisabled` 投影成「全部未启用」（宁可少注入，
+ * 也不注入用户关掉的东西）。写侧同时也被保护（见 writeIndex）。
  */
 export const indexSyncCache = new Map<string, { key: string; value: RulesIndex }>()
 
@@ -294,26 +374,42 @@ export function readIndexSync(stateDir: string): RulesIndex {
   try {
     const st = statSync(file)
     key = `${st.mtimeMs}:${st.size}`
-  } catch {
-    // 文件不存在 = 全新用户；其余 IO 错误也按「没有索引」处理（与 readIndex 一致）。
+  } catch (e) {
     indexSyncCache.delete(stateDir)
+    // 文件不存在 = 全新用户；其余 IO 错误（被占住/权限）→ 标记不可信（写侧拒写 + 读侧 forceDisabled）。
+    // 同样**不改名**文件（瞬时故障要能自愈，见 `markIndexUntrusted`）。
+    if (errnoCode(e) !== 'ENOENT') markIndexUntrusted(stateDir, `记忆索引读失败（${errnoText(e)}）`)
     return defaultIndex()
   }
   const cached = indexSyncCache.get(stateDir)
   if (cached && cached.key === key) return cached.value
-  const raw = readFileIfExistsSync(file)
-  const value = raw === null ? defaultIndex() : parseOrQuarantine(stateDir, raw)
+  let raw: string
+  try {
+    raw = readFileSync(file, 'utf8')
+  } catch (e) {
+    // stat 与 read 之间文件可能被换掉（写侧是 temp + rename），ENOENT 属正常竞态 → 只丢缓存；
+    // 其余错误与上面同口径：隔离，别把「读失败」当成「全部启用」。
+    indexSyncCache.delete(stateDir)
+    if (errnoCode(e) !== 'ENOENT') markIndexUntrusted(stateDir, `记忆索引读失败（${errnoText(e)}）`)
+    return defaultIndex()
+  }
+  const value = parseOrQuarantine(stateDir, raw)
   indexSyncCache.set(stateDir, { key, value })
   return value
 }
 
 export async function writeIndex(stateDir: string, index: RulesIndex): Promise<void> {
-  // 索引损坏时拒绝写入：这一次写会把空索引落盘，等于用一次解析失败换掉用户全部配置。
+  // 索引不可信时拒绝写入：这一次写会把空索引落盘，等于用一次解析失败换掉用户全部配置。
+  // 值分两种：非空 = parse 失败后改名的留存路径；`''` = 读失败、文件未被改动（仍在原位）。
   const kept = corruptIndexes.get(resolve(stateDir))
   if (kept !== undefined) {
     throw new Error(
-      `记忆索引文件损坏，已拒绝写入以免覆盖你的数据（原文件留存为 ${kept}）。`
-      + `请检查或删除该损坏文件后重启 DSH，再重试本次操作。`,
+      kept
+        ? `记忆索引文件损坏，已拒绝写入以免覆盖你的数据（原文件留存为 ${kept}）。`
+          + `请检查或删除该损坏文件后重启 DSH，再重试本次操作。`
+        : `记忆索引当前读不到，已拒绝写入以免覆盖你的数据。原文件未被改动`
+          + `（仍在 ${join(stateDir, MEMORIES_INDEX_FILE)}）—— 多半是被别的进程暂时占住，`
+          + `稍后重试即可；若持续如此，请检查该文件后重启 DSH。`,
     )
   }
   await mkdir(stateDir, { recursive: true })
@@ -360,5 +456,22 @@ export function readFileIfExistsSync(path: string): string | null {
     return readFileSync(path, 'utf8')
   } catch {
     return null
+  }
+}
+
+/**
+ * 同步读文件：**不存在**返回 `null`，其余 IO 失败**抛异常**。
+ *
+ * 与 `readFileIfExistsSync` 只差这一条，而它正是注入通道要的：那个函数把「不存在」与
+ * 「读失败」一起吞成 `null`，调用方据此把后者读成「这一轮没内容」，进而在该域此前发布过时
+ * 发出一条假的「已清空 —— 此前注入的同类内容不再有效」（2026-09-30 审查 F7）。
+ * 凡是"读失败必须出声"的读路径都用这个；界面投影那类"失败退化成空"的路径仍用上面那个。
+ */
+export function readFileOrThrowSync(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch (e) {
+    if (isAbsentError(e)) return null
+    throw e
   }
 }

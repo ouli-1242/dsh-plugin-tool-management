@@ -1145,6 +1145,8 @@
           switch (row.detailKey) {
             case 'skills-provider': return t('compat.note.skillsProvider', params)
             case 'context-injection': return t('compat.note.contextInjection', params)
+            case 'context-injection-runtime.domain': return t('compat.note.contextInjectionRuntime.domain', params)
+            case 'context-injection-runtime.throw': return t('compat.note.contextInjectionRuntime.throw')
             case 'cordis-original-symbol': return t('compat.note.cordisOriginalSymbol')
             case 'patch-write-guard.no-dep': return t('compat.note.patchWriteGuard.noDep', params)
             case 'patch-write-guard.stale': return t('compat.note.patchWriteGuard.stale', params)
@@ -1155,6 +1157,8 @@
             case 'mcp-tool-visibility.no-restrict': return t('compat.note.mcpToolVisibility.noRestrict')
             case 'mcp-tool-visibility.partial': return t('compat.note.mcpToolVisibility.partial', params)
             case 'workspace.delete-native': return t('compat.note.workspaceDeleteNative', params)
+            case 'mcp-server-name-ambiguous.separator': return t('compat.note.mcpServerNameAmbiguous.separator', params)
+            case 'mcp-server-name-ambiguous.prefix': return t('compat.note.mcpServerNameAmbiguous.prefix', params)
           }
         }
         if (row.key === 'mount' && row.state === 'ok') return t('compat.ov.mount.ok', params)
@@ -1673,6 +1677,9 @@
           if (row.state === 'cleared') return { cls: '', text: t('compat.live.state.cleared'), title: '' }
           // 子会话不适用：与「已关闭 / 无内容」同档的灰 —— 它是设计选择，不是故障。
           if (row.state === 'child') return { cls: '', text: t('compat.live.state.child'), title: t('compat.live.state.child.title') }
+          // 取数抛异常：这是**故障**（该域内容还在，但这一步取不到），所以给琥珀 ——
+          // 与「未投递」（压缩后待补发）不同档，混在一起会把故障读成延迟（2026-09-30 P1-8）。
+          if (row.state === 'error') return { cls: ' dsm-compat-pill-warn', text: t('compat.live.state.error'), title: t('compat.live.state.error.title') }
           return { cls: '', text: t('compat.live.state.unknown'), title: '' }
         }
         // 采纳一行：注入 N 次 / 调用 M 次 / 其中"调用时正文就在眼前"K 次。
@@ -2201,9 +2208,10 @@
         snapIn.result ? React.createElement('div', { className: 'dsm-feedback' + (snapIn.result.ok ? '' : ' dsm-error'), role: snapIn.result.ok ? 'status' : 'alert' },
           React.createElement('div', null, snapIn.result.text),
           (snapIn.result.report || []).map(function (row, i) {
-            return React.createElement('div', { key: i, className: 'dsm-help' }, row.error
+            var warn = (row.warnings || []).length ? ' ' + t('snapshot.import.reportWarning', { warnings: row.warnings.join('；') }) : ''
+            return React.createElement('div', { key: i, className: 'dsm-help' + (warn ? ' dsm-warning' : '') }, (row.error
               ? t('snapshot.import.reportFailed', { domain: t('snapshot.domain.' + row.domain), error: row.error })
-              : t('snapshot.import.report', { domain: t('snapshot.domain.' + row.domain), imported: row.imported, skipped: row.skipped }))
+              : t('snapshot.import.report', { domain: t('snapshot.domain.' + row.domain), imported: row.imported, skipped: row.skipped })) + warn)
           })) : null)
 
       // ── 清理旧备份（兼容页，紧挨「刷新」）──────────────────────────────────────

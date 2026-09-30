@@ -627,7 +627,12 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const fresh: PersonaDoc[] = []
       try {
         const entries = await readdir(dir)
-        for (const fileName of entries.filter((e) => e.endsWith('.md')).sort()) {
+        // 只列**能管得动**的人设（2026-09-30 审查 P2-18）：`validPersonaName` 走
+        // `paths.ts` 的 `isValidSegment`，隐藏名（`.foo`）被判 `hidden` —— 于是此前列表里
+        // 会出现一个「看得见、改不了、删不掉」的人设（任何 op 都拒它）。同一条谓词在这里
+        // 收口；大小写也按 `relocateLegacyPersonas` 的 `toLowerCase()` 口径统一（`A.MD` 在
+        // 那边算人设、在这边不算，是同一个分叉的另一半）。
+        for (const fileName of entries.filter((e) => !e.startsWith('.') && e.toLowerCase().endsWith('.md')).sort()) {
           const raw = await readFile(join(dir, fileName), 'utf8').catch(() => '')
           if (!raw.trim()) continue
           fresh.push({ ...parsePersona(raw, fileName.slice(0, -3)), path: join(dir, fileName) })

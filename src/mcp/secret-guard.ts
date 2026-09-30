@@ -7,10 +7,16 @@
 // （本机 `TAVILY_API_KEY` 就是这样变成 `••••••` 的）。
 //
 // URL 是**第二种形态**，别把它漏掉（2026-09-19 审计 T-23）：`maskUrlQuery` 不产出 `••••••`，
-// 而是把整个查询串换成 `<redacted>`（经 URL 序列化后是 `?<redacted>` 的百分号编码）。
+// 而是把承载凭据的那几段换成 `<redacted>` 哨兵（经 URL 序列化后是 `%3Credacted%3E`）。
 // 打码值判据只认整串 `•` 时它永远命中不了，于是 `mcpmEdit` 会把 `?<redacted>` 当成真 URL
 // 写回补丁 —— 一次普通「编辑保存」即把 URL 里的凭据**永久**改成占位串。所以本模块同时
 // 提供 `isMaskedUrl` / `resolveMaskedUrl`，与下面的 env / headers 判据并列。
+//
+// 「那几段」= **userinfo / 查询串 / 片段**三处（2026-09-30 审查 F5）：`new URL()` 把 userinfo
+// 与 fragment 存在 `username/password` 与 `hash` 里，`toString()` 原样带出。只换 `search`
+// 的话，`https://user:pass@host/mcp`（Basic-Auth 形态）与 `https://host/mcp#access_token=…`
+// 会整条原样返回 —— 而这两条路正是免令牌出口（`mcpm-list` / `mcpm-inspect` / 模型工具 /
+// 快照导出）。路径与主机**不动**：它们是该服务的身份，算进来会把真 URL 误判成打码值。
 //
 // 判据为什么可以这么硬：打码值只可能表示"用户没改这一项"，绝不可能表示"用户想把它设成这个"。
 // 所以三道闸的方向都是「往旧值收」：
@@ -48,45 +54,136 @@ export function maskedKeysIn(map: Record<string, string> | null | undefined): st
   return Object.keys(map).filter((key) => isMaskedValue(map[key]))
 }
 
-/** `maskUrlQuery` 写进查询串的哨兵（去掉 `?` 之后那一段）。 */
+/**
+ * 单个值的打码形态（env / headers 那一类键值对）。
+ *
+ * 为什么提到本模块（2026-09-30，审查 P0-4）：这个函数原先私有在 `mcp/manager.ts`，而整机迁移
+ * 的导出侧（`ops/snapshot.ts`）自己另写了一份「所有键一律打成 `••••••`」的版本 —— 同一件事
+ * 两套口径，于是 `$VAR` / `!!js` 这类**间接引用**在两条出口上的命运不同。本模块是两条打码
+ * 形态（占位符 / URL）的唯一口径，键值对这条也归这里。
+ *
+ * `$VAR` 与 `!!js` 是**间接引用**而不是密钥，原样保留：把它们打成 `••••••` 再导回来，目标机
+ * 既顶替不出真值（它没有这一项）、也没有原值可回退，`resolveMaskedKv` 只能把这个键丢掉 ——
+ * 一次普通迁移就毁掉了配置里的间接引用。
+ */
+export function maskSecretValue(value: unknown): string {
+  const text = String(value == null ? '' : value)
+  if (text === '') return ''
+  if (text.startsWith('$')) return text
+  if (/^!!js\s/.test(text)) return text
+  return MASK_PLACEHOLDER
+}
+
+/** `maskUrlQuery` 写进 URL 各段的哨兵（userinfo / 查询串 / 片段共用同一个字面值）。 */
 const URL_REDACTED_QUERY = '<redacted>'
 
 /**
- * 一个 URL 的查询串是不是被 `maskUrlQuery` 打过码。
+ * 一段（userinfo / 查询串 / 片段）是不是哨兵。
  *
- * 只判**查询串**：路径与主机是该服务的身份，打码不会碰它们，把它们算进来会把真 URL 误判成
- * 打码值（判错的方向是丢掉真配置）。经 `new URL()` 一过，`<` `>` 会被百分号编码，
- * 所以比较前先解码 —— 手写补丁里直接写了 `?<redacted>` 也能认出来。
+ * `<` `>` 会被 URL 序列化百分号编码（`%3Credacted%3E`），所以比较前先解码 ——
+ * 手写补丁里直接写 `<redacted>` 也要认出来。`decodeURIComponent` 对残缺的 `%` 会抛，
+ * 那种输入不是哨兵。
  */
-export function isMaskedUrl(value: unknown): boolean {
-  const text = String(value == null ? '' : value).trim()
-  if (!text) return false
+function isRedactedPart(part: string): boolean {
+  if (part === URL_REDACTED_QUERY) return true
   try {
-    const parsed = new URL(text)
-    if (!parsed.search) return false
-    const query = parsed.search.replace(/^\?/, '')
-    return query === URL_REDACTED_QUERY || decodeURIComponent(query) === URL_REDACTED_QUERY
+    return decodeURIComponent(part) === URL_REDACTED_QUERY
   } catch {
     return false
   }
 }
 
 /**
- * 把 URL 的查询串换成 `<redacted>` 哨兵 —— 打码的**产出**侧，与上面的 `isMaskedUrl` 配对。
+ * 一个 URL 的**任一凭据段**是不是被 `maskUrlQuery` 打过码。
  *
- * 放在这里而不是 manager.ts 里：本模块是这两条打码形态的唯一口径，而使用方已经有两个
- * ——MCP 列表视图（`mcpmRowsWithNotes`），以及模型调 `mcp_manager_save` 时的确认卡
- * （卡里要回显"新 URL"，但用户批准的是「跑这个地址」，查询串里的凭据不该明文进卡片）。
- * 两处各写一份的话，改了一处就会漂成两种打码形态，而 `isMaskedUrl` 只认其中一种。
+ * 判据只覆盖 userinfo / 查询串 / 片段这三处：路径与主机是该服务的身份，打码不会碰它们，
+ * 把它们算进来会把真 URL 误判成打码值（判错的方向是丢掉真配置）。
+ *
+ * 为什么三处各自独立判、命中一处即算（2026-09-30 审查 F5）：`resolveMaskedUrl` 的语义是
+ * "这条 URL 是打码形态 ⇒ 不能写回盘"。只判查询串的话，`https://user:pass@host/mcp`
+ * （userinfo 承载 Basic 凭据，MCP 托管服务真实存在的形态）与 `...#access_token=…`
+ * 都会被判成真值原样落盘 —— 一次普通「编辑保存」即把凭据永久换成占位串。
+ */
+export function isMaskedUrl(value: unknown): boolean {
+  const text = String(value == null ? '' : value).trim()
+  if (!text) return false
+  try {
+    const parsed = new URL(text)
+    if (isRedactedPart(parsed.username) || isRedactedPart(parsed.password)) return true
+    if (parsed.search && isRedactedPart(parsed.search.replace(/^\?/, ''))) return true
+    if (parsed.hash && isRedactedPart(parsed.hash.replace(/^#/, ''))) return true
+    return false
+  } catch {
+    // 非绝对 URL（`new URL` 抛错）走字符串判据，与下面 `maskUrlQuery` 的兜底分支配对 ——
+    // 少了这一半，兜底打码出来的相对 URL 在回写时认不出是打码值，会被当成用户新填的地址写回补丁。
+    const userinfo = /^(?:[a-zA-Z][\w+.-]*:)?\/\/([^/?#]*)@/.exec(text)
+    if (userinfo && isRedactedPart(userinfo[1])) return true
+    const at = text.indexOf('?')
+    if (at >= 0) {
+      const hashAt = text.indexOf('#', at)
+      if (isRedactedPart(text.slice(at + 1, hashAt < 0 ? undefined : hashAt))) return true
+    }
+    const hashAt = text.indexOf('#')
+    if (hashAt >= 0 && isRedactedPart(text.slice(hashAt + 1))) return true
+    return false
+  }
+}
+
+/**
+ * 字符串级兜底打码（`new URL` 认不下的相对地址 / 协议相对地址）：
+ * 按 `[scheme:][//userinfo@host]/path[?query][#fragment]` 的形状，把 userinfo / 查询串 /
+ * 片段三处各换成哨兵，路径与主机原样保留（它们是该服务的身份）。
+ */
+function maskUrlPartsByString(url: string): string {
+  // ① userinfo：`scheme://` 或 `//` 之后、第一个 `/ ? #` 之前若有 `@`，把 `@` 之前那段换掉。
+  //    正则里的 `[^/?#]*` 越不过路径分隔符，所以路径里的 `@`（`/user@example.com`）不会误伤。
+  let out = url.replace(/^((?:[a-zA-Z][\w+.-]*:)?\/\/)([^/?#]*@)/, `$1${URL_REDACTED_QUERY}@`)
+  // ② 查询串：第一个 `?` 到 `#` 之前整段换哨兵。
+  const at = out.indexOf('?')
+  if (at >= 0) {
+    const hashAt = out.indexOf('#', at)
+    out = out.slice(0, at + 1) + URL_REDACTED_QUERY + (hashAt < 0 ? '' : out.slice(hashAt))
+  }
+  // ③ 片段：第一个 `#` 之后整段换哨兵。
+  const hashAt = out.indexOf('#')
+  if (hashAt >= 0) out = out.slice(0, hashAt + 1) + URL_REDACTED_QUERY
+  return out
+}
+
+/**
+ * 把 URL 里承载凭据的三段（userinfo / 查询串 / 片段）换成 `<redacted>` 哨兵
+ * —— 打码的**产出**侧，与上面的 `isMaskedUrl` 配对。
+ *
+ * 放在这里而不是 manager.ts 里：本模块是这两条打码形态的唯一口径，而使用方已经有三个
+ * ——MCP 列表视图（`mcpmRowsWithNotes`）、模型调 `mcp_manager_save` 时的确认卡
+ * （卡里要回显"新 URL"，但用户批准的是「跑这个地址」，查询串里的凭据不该明文进卡片）、
+ * 以及整机迁移的导出（`ops/snapshot.ts`，那份目录是要拷去 U 盘 / 另一台机器的）。
+ * 各处各写一份的话，改了一处就会漂成几种打码形态，而 `isMaskedUrl` 只认其中一种。
+ *
+ * 为什么是**三段**而不是只有查询串（2026-09-30 审查 F5）：`new URL()` 把 userinfo 与
+ * fragment 存在 `username/password` 与 `hash` 里，`toString()` 会原样带出 ——
+ * 只替换 `search` 的话，`https://user:pass@host/mcp` 与 `https://host/mcp#access_token=…`
+ * 会**整条原样返回**（后者连 `?` 都没有），而这两条路正是免令牌出口
+ * （`mcpm-list` / `mcpm-inspect` / 模型工具 / 快照导出）。Basic-Auth 形态的凭据就此明文可见。
  */
 export function maskUrlQuery(url: string | null): string | null {
   if (!url) return url
   try {
     const parsed = new URL(url)
     if (parsed.search) parsed.search = '?' + URL_REDACTED_QUERY
+    // userinfo 与片段分别置哨兵。`password = ''` 是为了不留下 `user:<redacted>@` 这种半截形态
+    // —— 有 userinfo 时两段一起换，读回去就是一个整体。
+    if (parsed.username || parsed.password) {
+      parsed.username = URL_REDACTED_QUERY
+      parsed.password = ''
+    }
+    if (parsed.hash) parsed.hash = '#' + URL_REDACTED_QUERY
     return parsed.toString()
   } catch {
-    return url
+    // 不是绝对 URL（`new URL` 抛错）—— 原来这里是 `return url`，即**完全不打码**。
+    // 但凭据照样可以挂在这种地址上（`/api?token=…`、`//host/mcp?api_key=…`），而这条函数的
+    // 调用方里有「要拷去另一台机器」的导出侧：原样返回等于承诺打码却留明文。
+    return maskUrlPartsByString(url)
   }
 }
 

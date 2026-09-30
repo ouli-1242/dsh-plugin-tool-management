@@ -415,7 +415,7 @@
               accept: '.jsonl,.json,.md,.markdown,.txt',
               busy: imp.busy === true,
               requirements: [t('upload.requirement.session.1'), t('upload.requirement.session.2'), t('upload.requirement.session.3')],
-              result: imp.error ? { ok: false, text: String(imp.error) } : (imp.result ? { ok: true, text: t('hist.import.done', { id: imp.result.sessionId, count: imp.result.count }) } : null),
+              result: imp.error ? { ok: false, text: String(imp.error) } : (imp.result ? { ok: true, warning: imp.result.lossy === true, text: t('hist.import.done', { id: imp.result.sessionId, count: imp.result.count }) + (imp.result.lossy === true ? ' ' + t('hist.import.lossy') : '') } : null),
               extra: React.createElement('div', null,
                 React.createElement('div', { className: 'dsm-field' },
                   React.createElement('label', { className: 'dsm-label' }, t('hist.import.cwd')),

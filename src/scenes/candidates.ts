@@ -16,6 +16,8 @@
 
 import type { McpManager } from '../mcp/manager.js'
 import type { ToolsService } from '../mcp/manager.js'
+import { MCP_TOOL_PREFIX } from '../host-names.js'
+import { serverNameCandidates, type McpToolNameParts } from '../host-names.js'
 import { presetRosterOf } from '../compat/preset-reach.js'
 import { injectionFactsOf, readCompositionFacts, readCompositionText } from '../compat/preset-reach.js'
 import { decideToolFilter, type ToolFilterDecision } from '../subagents/service.js'
@@ -32,8 +34,10 @@ export interface CandidateDeps {
   skillsService: { ops: Record<string, (args: any) => Promise<any>> }
   /** 记忆服务（`rules-list` op）。 */
   memoriesService: { ops: Record<string, (args: any) => Promise<any>> }
-  /** 工具全名 → { server, tool }；场景档案引擎也用，故留在 index.ts。 */
-  toolKeyParts(toolName: string): { key: string; server: string; tool: string } | null
+  /** 工具全名 → `{ server, tool }`（切分规则见 `host-names.ts` 的 `splitMcpToolName`）。
+   *  `serverNames` 是切分的候选 serverName 集合 —— **必填**，因为光看全名无法消解
+   *  `serverName` 含 `__` 的歧义（审查 N1）。 */
+  toolKeyParts(toolName: string, serverNames: Iterable<string>): McpToolNameParts | null
 }
 
 /** 本文件对外暴露的出口（9 项）。 */
@@ -107,9 +111,19 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     const states: Record<string, boolean> = {}
     let schemas: any[] = []
     try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅启停表 */ }
+    // 切分的候选 serverName 集合必须与 `serverKnownTools`（index.ts）同源 —— 同一批来源、
+    // 同一个 builder，否则「服务器名含 `__`」时两处会把同一个全名切成不同的 (server, tool)
+    // （2026-09-30 审查 N1）。三个来源里补丁那份是唯一与切分结果无关的（另两份是插件自己
+    // 写出来的：停用表键来自界面勾选、缓存键来自上一次切分），缺它会在首次遇到含 `__` 的名字时
+    // 切错并锁死。任一份读不到就退化为其余两份（少候选 = 少命中，不会多命中）。
+    let known: Record<string, unknown> = {}
+    try { known = await mcp.readKnownMcpTools() } catch { /* 缓存不可读 → 仅停用表 */ }
+    let configured: string[] = []
+    try { configured = await mcp.configuredServerNames() } catch { /* 补丁读不到 → 仅另两份 */ }
+    const serverNames = serverNameCandidates(configured, disabled, known)
     const liveByServer: Record<string, string[]> = {}
     for (const s of schemas) {
-      const p = toolKeyParts(String((s && s.name) || ''))
+      const p = toolKeyParts(String((s && s.name) || ''), serverNames)
       if (!p) continue
       const list = liveByServer[p.server] || (liveByServer[p.server] = [])
       if (list.indexOf(p.tool) < 0) list.push(p.tool)
@@ -278,7 +292,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
           if (!id) continue
           // MCP 工具名形如 `mcp__<server>__<tool>`：面向上百个条目，噪声大于价值 → 不进候选。
           // 子代理照样能用当前在跑的 MCP —— 那份名单在 decideToolFilter 里运行时并进白名单。
-          const names = (await presetToolNames(id)).filter((name) => !name.startsWith('mcp__'))
+          const names = (await presetToolNames(id)).filter((name) => !name.startsWith(MCP_TOOL_PREFIX))
           presets.push({
             id,
             name: String((p && (p.name || p.id)) || id),
@@ -299,7 +313,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     }
     // 当前会话的工具即便没有任何预设可枚举，也要出现在候选里（否则选择器是空的）。
     for (const name of currentNames) {
-      if (name.startsWith('mcp__')) continue
+      if (name.startsWith(MCP_TOOL_PREFIX)) continue
       const rec = byName.get(name) || { name, presets: new Set<string>(), current: false }
       byName.set(name, rec)
     }

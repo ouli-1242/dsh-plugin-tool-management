@@ -60,15 +60,32 @@ export function isSourceInstall(): boolean {
 }
 
 /**
- * peer range 与已验证版本。官方全程走 prerelease 渠道（x.y.z-rc.N），semver 的
- * 预发布规则（prerelease 版本只匹配同 [major,minor,patch] 元组的比较器）意味着**每一代
- * rc 都要显式列进范围**：`>=0.1.5-rc.2` 匹配不了 `0.1.7-rc.2`（实测），所以范围是逐代
- * 枚举的并集。上界依旧不设：宿主跨代升级由运行时能力探测兜底（见下）。
+ * peer range 与已验证版本。
  *
- * 0.2.0-rc.2（桌面版首发）已实测通过：`assessHost` 18/18 全通过，宿主版本读得出来，
+ * 官方全程走 prerelease 渠道（x.y.z-rc.N），而 semver 有一条硬规则：**带 prerelease 标签的
+ * 版本，只有在"同 [major,minor,patch] 元组"的比较器也带 prerelease 标签时才能匹配**。所以
+ * `>=0.1.5-rc.2` 匹配不了 `0.1.7-rc.2`，`^0.2.0-rc.2` 也匹配不了 `0.2.1-rc.1`（实测：
+ * `0.1.8-rc.1` / `0.2.1-rc.1` / `0.3.0-rc.1` 全部 false）—— 范围只能**逐代枚举并集**，
+ * 每适配一代新 rc 就补一段（见 README 的升级清单）。
+ *
+ * 上界刻意不设：宿主跨代升级由**运行时能力探测**兜底（`assessHost` 逐项探测并降级），
+ * 而不是在安装期拒绝整包。所以这里用不带上界的 `>=`，**不用** `^`（`^0.2.0` 的隐含上界
+ * `<0.3.0` 会在宿主发稳定版 0.3.0 时把插件挡在门外 —— 与"不设上界"自相矛盾）。
+ *
+ * 2026-09-30 审查 §5 F9 + §5.4：这一段此前与 `package.json` 的 peerDependencies **漂移**成
+ * 两种写法（这里是 `^` 三段、那里是 `>=` 两段，且下界不同）。现在两处是**同一个字符串**，
+ * 并由 `test/contracts.test.mjs` 的一条断言钉住 —— 漂移会让"界面/doctor 报的范围"与
+ * "安装期实际校验的范围"各说各话，而两者都自称是插件的兼容范围。
+ *
+ * 已知且**无法**用 range 消除的缺口（如实标注）：尚未枚举的新 rc 元组（如 0.2.1-rc.1）
+ * 在 npm7+ 下会触发 ERESOLVE 告警。这不是写法问题 —— semver 规则决定了不存在能匹配
+ * "任意未来 prerelease"的 range。缓解方式：README 写明宿主升级时同步这段范围，
+ * 以及 `--legacy-peer-deps` 这条逃生门。
+ *
+ * 0.2.0-rc.2（桌面版首发）已实测通过：`assessHost` 全通过，宿主版本读得出来，
  * 归档宿主的身份判定见 `hostPackageRoot` / `isAsarPath`。所以它同时进范围与「已验证」。
  */
-export const EXPECTED_PEER_RANGE = '^0.1.5-rc.2 || ^0.1.7-rc.2 || ^0.2.0-rc.2'
+export const EXPECTED_PEER_RANGE = '>=0.1.7-rc.2 || >=0.2.0-rc.1'
 /** The release this plugin's adapters were last verified against. */
 export const VERIFIED_HOST_VERSION = '0.2.0-rc.2'
 /**
@@ -96,7 +113,7 @@ export interface CapabilityFinding {
   readonly label: string
   readonly kind: 'read' | 'write' | 'delete'
   /** Which host service the capability lives on. */
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'plugin'
+  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs' | 'plugin'
   readonly state: CapabilityState
   /** What can be done without this capability. */
   readonly fallback:
@@ -486,7 +503,7 @@ interface CapabilitySpec {
   // 这里不写 `CapabilityFinding['owner']`：那张表的 owner 还允许 `'plugin'`（运行时上报的行，
   // 如补丁写入校验不可用），而宿主能力表只可能挂在宿主对象上 —— 写宽了会让下面的
   // `targets: Record<CapabilitySpec['owner'], …>` 强制多出一个不存在的宿主对象。
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster'
+  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs'
   readonly fallback: CapabilityFinding['fallback']
   /** Required function members on the owning object's prototype. */
   readonly methods?: readonly string[]
@@ -750,6 +767,27 @@ const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
       } catch { return undefined }
     },
   },
+  // ---- ctx.fs：MCP 域补丁写路径的唯一出口（审查 §5 F5）----------------------
+  // 为什么值得单列：补丁文件在插件自己的数据目录**之外**（`~/.dsh/cordis.patch.yml` 与
+  // `profiles/<名>/cordis.patch.yml`），读写都得经 `ctx.fs` 显式升级沙箱策略。五个方法里
+  // 任何一个改名，19 处补丁写路径会**一起**报错 —— 报错是可见的（不是静默），但要等到用户
+  // 点下去才发现；钉在兼容页上就能在升级后第一眼看见。
+  //
+  // 能探到 / 探不到（如实标注）：成员存在性可探；`writeText` 的**实参个数**可观测（健康行
+  // 附注）。「五个位置参数的语义变了」**探不到** —— 真调它会写文件（有副作用），而本探针
+  // 的纪律是零副作用（见 callableWithSentinel 的副作用口径）。那半条只能靠宿主升级清单人工核对。
+  {
+    id: 'fs.patch-io',
+    label: '宿主文件读写（补丁文件出口）',
+    kind: 'write',
+    owner: 'fs',
+    fallback: 'refuse-operation',
+    methods: ['resolve', 'stat', 'readText', 'writeText', 'listDir'],
+    describe: (t) => {
+      const w = (t as { writeText?: unknown }).writeText
+      return typeof w === 'function' ? `观测 writeText 实参个数=${w.length}` : undefined
+    },
+  },
   // ---- agent preset roster（0.1.7 的两处适配面之二）-------------------------
   // 0.1.7 把 `read(id)`（直返组合文本）改名成 `readDocument(id)`（返回文档对象，组合
   // YAML 在 `.content`）。读取口是「read 优先、readDocument 兜底」双入口
@@ -979,6 +1017,7 @@ export function assessHost(ctx: {
   sessions?: unknown
   sessionPersistence?: unknown
   settings?: unknown
+  fs?: unknown
 }): HostAssessment {
   const get = (name: string): unknown => {
     try {
@@ -1008,6 +1047,8 @@ export function assessHost(ctx: {
   // （'agentPresets' 与 preset-reach.ts 的 presetRosterOf 同名 —— 注入矩阵实际用的就是它）。
   const settings = unwrap(ctx.settings !== undefined ? ctx.settings : get('settings')) as Target
   const roster = unwrap(get('agentPresets')) as Target
+  // fs 走 ctx 属性优先（它在插件 inject 清单里），与 settings 同一条取法。
+  const fsService = unwrap(ctx.fs !== undefined ? ctx.fs : get('fs')) as Target
 
   const references = referencePrototypes()
   const targets: Record<CapabilitySpec['owner'], { target: Target; reference?: Record<string, unknown> }> = {
@@ -1017,6 +1058,7 @@ export function assessHost(ctx: {
     persistence: { target: unwrap(get('sessionPersistence')) as Target, reference: undefined },
     settings: { target: settings, reference: references.settings },
     presetRoster: { target: roster, reference: references.roster },
+    fs: { target: fsService, reference: undefined },
   }
 
   const findings = CAPABILITY_SPECS.map((spec) => {
@@ -1174,18 +1216,36 @@ export function assessHost(ctx: {
  * 调用方：从锚点解析不到的包会被判成 `same = null`，见 assessHost 里的 `unverified`。
  */
 function hostPackageRoot(): string | null {
-  // 与 doctor 的 `findHost` **同一套策略**（先看 `$DSH_HOME/profiles/node_modules/@deepseek-ai`，
-  // 再从插件自身位置逐级上溯，最后扫 npx 缓存，并确认那一层里真有 `dsh/package.json`）。此前运行时只按"插件
-  // 自己解析到的包"上溯，dev 布局下会把仓库里的副本当成宿主锚点、比出假的 `true` —— 于是
-  // 界面说 ok、doctor 说 SEPARATE COPY（V8）。两处口径分裂本身就是缺陷。
+  for (const candidate of hostRootCandidates()) {
+    if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
+  }
+  return null
+}
+
+/**
+ * 宿主 `@deepseek-ai` 目录的**候选序列**（按优先级）—— 全仓"宿主在哪"的唯一口径。
+ *
+ * 为什么单独导出（2026-09-30 审查 §5 F10）：运行时（本文件）与 `scripts/doctor.mjs` /
+ * `scripts/host-deps.mjs` 此前**各写一份**，而且顺序不一样 —— doctor 少了桌面版那一条，
+ * 于是在桌面宿主上要么报 "host installation not found"，要么拿 npx 缓存里**另一代宿主**
+ * 当锚点比出假 SEPARATE COPY。那正是本文件注释里记过的实测事故，只修了运行时。
+ *
+ * 顺序是有讲究的：
+ *   ① 桌面版归档（`resources/app.asar`）—— 必须排在 npx 缓存**之前**，否则装过 web 版的
+ *      机器上会先命中缓存里那个 0.1.7；
+ *   ② `$DSH_HOME/profiles/node_modules/@deepseek-ai`（web 版旧布局的 junction 树）；
+ *   ③ 从本插件自身解析到的锚点逐级上溯（dev 布局：仓库/安装目录自己的 node_modules）；
+ *   ④ npx 缓存（`dsh web` 经 npx 跑时的落点；多命中取最新）。
+ *
+ * 只列候选、不判存在性：调用方各有自己的"像不像一份安装"的判据（运行时要求
+ * `dsh/package.json`，host-deps 还要读出版本号）。
+ */
+export function hostRootCandidates(): string[] {
   const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh')
   const candidates: string[] = []
-  if (home !== '') candidates.push(join(home, 'profiles', 'node_modules', '@deepseek-ai'))
-  // 桌面版：整个 DSH 装进 `resources/app.asar`，宿主的 `@deepseek-ai/*` 就在归档里。
-  // 这一候选必须排在 npx 缓存**之前** —— 否则装过 web 版的机器上会先命中 npx 缓存里
-  // 那个 0.1.7，于是拿「另一个安装」当锚点比出 6 条假的「两份不同拷贝」（实测事故）。
   const asarHost = asarHostPackageRoot()
   if (asarHost !== null) candidates.push(asarHost)
+  if (home !== '') candidates.push(join(home, 'profiles', 'node_modules', '@deepseek-ai'))
   for (const anchor of IDENTITY_PACKAGES) {
     // 锚点候选只认**真实形态**：取不到就跳过（这里没有可比的对象，如实跳过即可，
     // 与身份比对不同 —— 那边取不到必须报出来，见 assessHost 的 realpath 说明）。
@@ -1200,15 +1260,8 @@ function hostPackageRoot(): string | null {
       dir = parent
     }
   }
-  // 0.1.7 起宿主不再维护 `profiles/node_modules` 那棵 junction 树（link-backend 已移除），
-  // `dsh web` 经 npx 跑在 `<npm 缓存>/_npx/<hash>/node_modules` 里 —— 缓存扫描是 dev 场景
-  // （上溯只找到 checkout 自己的副本）下最后的宿主发现手段。多命中时取最新（npx 升级会
-  // 换 hash 目录、删旧目录）。
   candidates.push(...npxCacheHostRoots())
-  for (const candidate of candidates) {
-    if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
-  }
-  return null
+  return candidates
 }
 
 /**

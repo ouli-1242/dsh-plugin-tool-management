@@ -43,7 +43,16 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     } catch {
       return fail('error.rules.notFound', `回收站条目不存在：${trashId}`)
     }
-    if (!manifest || typeof manifest.name !== 'string' || typeof manifest.group !== 'string' || !isValidGroupSegment(manifest.name)) {
+    if (
+      !manifest || typeof manifest.name !== 'string' || typeof manifest.group !== 'string'
+      || !isValidGroupSegment(manifest.name)
+      // `group` 是**磁盘数据**（manifest.json 可能被手改 / 别的进程写 / 随一份恶意档案包进来），
+      // 而它是拼进 `join(memoriesRoot, group)` 的那一段 —— 只判类型的话 `../..` 就能把正文写到
+      // 记忆根之外（`mkdir({recursive:true})` 还会顺手把目录建出来）。同文件 `rulesTrashList`
+      // 一直是有这道判据的（`if (group !== '' && !isValidGroupPath(group)) continue`），
+      // 两条路径口径必须一致（审查 P0-3）。
+      || (manifest.group !== '' && !isValidGroupPath(manifest.group))
+    ) {
       return fail('error.rules.notFound', `回收站条目损坏：${trashId}`)
     }
     // 恢复目标已存在（期间用户重建了同名规则）→ 拒绝，避免覆盖。
@@ -52,13 +61,37 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
       return fail('error.rules.exists', `同名记忆已存在：${conflict.id}，请先移除后再恢复`)
     }
     const form = manifest.form === 'bundle' ? 'bundle' : 'flat'
-    if (form === 'bundle') {
-      await mkdir(join(memoriesRoot, manifest.group), { recursive: true })
-      const { cp } = await import('node:fs/promises')
-      await cp(join(trashDir, 'bundle'), join(memoriesRoot, manifest.group, manifest.name), { recursive: true })
-    } else {
-      await mkdir(join(memoriesRoot, manifest.group), { recursive: true })
-      await copyFile(join(trashDir, 'rule.md'), join(memoriesRoot, manifest.group, manifest.name + '.md'))
+    // 落点根内断言（realpath 口径）：`isValidGroupPath` 只挡 `..` 与分隔符，挡不住
+    // 「中间目录是指向根外的链接」。与 `rulesRemove` 的删除前断言同一道闸。
+    const groupDir = join(memoriesRoot, manifest.group)
+    const denied = await refuseOutsideRoot(groupDir)
+    if (denied) return denied
+    // 恢复 = 先复制、后删回收站条目。**复制中途失败必须回滚**（2026-09-30 审查 F11）：
+    // 原来这里 `cp` / `copyFile` 都没有 try/catch，失败时目标留下半份内容、回收站条目仍在，
+    // 于是下一次点恢复会撞上面那条「同名记忆已存在」—— 这条记忆**永远恢复不了**，只能人工
+    // 去删目录。场景回收站（`sceneTrashRestore`）早有这条回滚（`moveIntoTrash` 反向搬回），
+    // 记忆回收站这条缺了。这里方向相反：源还在回收站，所以回滚是**删掉没放完整的副本**。
+    const target = form === 'bundle'
+      ? join(groupDir, manifest.name)
+      : join(groupDir, manifest.name + '.md')
+    try {
+      await mkdir(groupDir, { recursive: true })
+      if (form === 'bundle') await cp(join(trashDir, 'bundle'), target, { recursive: true })
+      else await copyFile(join(trashDir, 'rule.md'), target)
+    } catch (e) {
+      let cleaned = true
+      try { await rm(target, { recursive: true, force: true }) }
+      catch (cleanupError) {
+        // 落点**本来就没建成**时（父路径不是目录 → ENOTDIR；`force` 已吞掉 ENOENT），
+        // 没有残留要清，别把它报成「清理失败」——那会让用户去手工删一个不存在的路径。
+        const code = (cleanupError as NodeJS.ErrnoException)?.code
+        cleaned = code === 'ENOENT' || code === 'ENOTDIR'
+      }
+      // 清理失败也如实说清楚，别让用户以为还能原样重试。
+      const tail = cleaned
+        ? '（未放回完整的落点已清理，回收站条目仍在，可直接重试）'
+        : `（未放回完整的落点没能清理：${target}，请先手工删除再重试）`
+      return fail('error.rules.ioFailed', `恢复记忆失败：${String((e as Error)?.message ?? e)}${tail}`)
     }
     await rm(trashDir, { recursive: true, force: true })
     invalidateSnapshot()
