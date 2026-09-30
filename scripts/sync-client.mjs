@@ -34,10 +34,12 @@ const SLICES = [
   '40-apply-head.js',   // apply 开头：取词服务、slots 守卫、各页共享的 mt / opMsg
   '41-mcp.js',          // FeedbackLinks + MCPPage + PromptsPage + ToolsSection
   '42-shared-ui.js',    // 通用 helper 与弹窗：callApi / Modal / Trash / Import / Export / DirPicker
+  '42b-mcp-json.js',    // MCP JSON 导入/导出：结构识别与名字净化 + 两个弹窗（属于 MCP 域，原先寄在这里）
   '43-skills.js',       // SkillManagerSection + historyView
   '44-sessions.js',     // SessionsPage + 场景纯函数（sceneLabel / clipText / …）
   '45-scenes.js',       // ScenesPage
-  '46-subagents.js',    // SubagentsPage + memoryView
+  '46-subagents.js',    // SubagentsPage（含 effort 缓存）
+  '46b-memory-view.js', // memoryView：把记忆数据整理成场景分组的纯渲染函数
   '47-memory.js',       // MemoryPage
   '48-slash.js',        // 斜杠命令「工具」段（宿主 / 菜单；不在设置页里）
   '90-apply-tail.js',   // apply 收尾（注册各页 + 导出 _pages）
