@@ -12,11 +12,11 @@
 // 分片之间不写 import/export：它们共享同一个 factory 作用域。拼接顺序即 SLICES 的顺序，
 // 顺序错了会在求值时炸（const 的 TDZ / 未定义名），不会静默 —— 这是刻意保留的失败方式。
 //
-// src/client.js 已删除（它原本就是这 13 个分片的拼接结果），本脚本是 lib/client.js 唯一的
+// src/client.js 已删除（它原本就是这些分片的拼接结果），本脚本是 lib/client.js 唯一的
 // 生成者。没有这一步 tsc 也不会写它（src/client.js 被 tsconfig.json 排除，是浏览器 JS
 // 不是宿主 TS），于是改完源码却发着旧产物 —— 正是当初产生「开关没反应」（旧 lib/client.js
 // 引用了已不存在的符号）的那个失效模式。
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -39,6 +39,16 @@ const SLICES = [
   '48-slash.js',        // 斜杠命令「工具」段（宿主 / 菜单；不在设置页里）
   '90-apply-tail.js',   // apply 收尾（注册各页 + 导出 _pages）
 ]
+
+// SLICES 是显式数组、没有 glob，所以「新增分片却忘了登记」不会报错，只会继续发旧代码 ——
+// 就是上面那个失效模式换了个入口。目录内容与清单必须严格相等：多出的是漏登记，缺失的是幽灵条目。
+const onDisk = readdirSync(join(root, 'src', 'client')).filter((name) => name.endsWith('.js')).sort()
+const listed = [...SLICES].sort()
+if (onDisk.join('\u0000') !== listed.join('\u0000')) {
+  throw new Error(
+    `[sync-client] src/client 目录与 SLICES 清单不一致。\n  目录：${onDisk.join(', ')}\n  清单：${listed.join(', ')}`,
+  )
+}
 
 const parts = SLICES.map((name) => readFileSync(join(root, 'src', 'client', name), 'utf8'))
 // 分片末尾不带换行（切分时按行 join），所以片间必须补一个 —— 否则上一片末行与下一片首行
