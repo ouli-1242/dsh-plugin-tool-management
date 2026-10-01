@@ -57,6 +57,8 @@ import {
   type ToolTableSettings,
 } from './tools/table.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
+// 改名 / 进场景 / 存档案的联动（op 重包，2026-10-01 从本文件 apply 闭包整段抽出）。
+import { installSceneLinkage } from './scene-linkage.js'
 // 访问令牌的宿主侧配置读写（2026-10-01 从本文件 apply 闭包整段抽出，依赖显式传参）。
 import { createTokenConfig } from './token-config.js'
 import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
@@ -1044,168 +1046,18 @@ export default {
         return result
       }
     }
-    /**
-     * 人设改名后同步场景绑定：场景档案的 `subagents` 名单存的是**人设名**，
-     * 不跟着改就会留一个悬空引用（界面把它报成 stale，用户看到「人设不存在」却找不到地方改）。
-     * 绑定存在 memories-index.json 里，人设服务看不到它，所以在这一层补一次（同提示词改名的做法）。
-     */
-    async function rebindSubagentInArchives(from: string, to: string): Promise<number> {
-      try {
-        const slice = await memoriesService.readArchiveSlice()
-        const touched: Record<string, any> = {}
-        for (const [scene, archive] of Object.entries(slice.archives || {})) {
-          const list = (archive as { subagents?: unknown }).subagents
-          if (!Array.isArray(list) || !list.includes(from)) continue
-          touched[scene] = { ...(archive as Record<string, unknown>), subagents: list.map((n) => (n === from ? to : n)) } as typeof archive
-        }
-        const names = Object.keys(touched)
-        // 逐场景增量（审查 P2-3）：此前整表回写，会把窗口期里别人保存的**别的场景**档案抹掉。
-        for (const scene of names) await memoriesService.saveArchive(scene, touched[scene])
-        return names.length
-      } catch {
-        return 0
-      }
-    }
-    /**
-     * 人设改名后同步运行时快照（F-025）：退出还原按 `subagentsAll` 逐名走，快照里
-     * 还留着旧名的话，退出会「旧名静默跳过、新名不还原」—— 被改名的人设停留在
-     * 场景期间状态。快照在进入场景时拍、改名发生在进入后，只能在改名时跟着改。
-     */
-    async function renameSubagentInSnapshot(from: string, to: string): Promise<void> {
-      try {
-        const slice: any = await memoriesService.readArchiveSlice()
-        const mode: any = slice && slice.mode
-        const snapshot: any = mode && mode.snapshot
-        if (!snapshot) return
-        let changed = false
-        const next: any = { ...snapshot }
-        if (snapshot.subagentsAll && Object.prototype.hasOwnProperty.call(snapshot.subagentsAll, from)) {
-          const all: any = {}
-          for (const [k, v] of Object.entries(snapshot.subagentsAll)) {
-            all[k === from ? to : k] = v
-            if (k === from) changed = true
-          }
-          next.subagentsAll = all
-        }
-        for (const field of ['subagents', 'subagentsOn']) {
-          const list = snapshot[field]
-          if (Array.isArray(list) && list.includes(from)) {
-            next[field] = list.map((n: any) => (n === from ? to : n))
-            changed = true
-          }
-        }
-        if (changed) await memoriesService.patchIndex({ mode: { ...mode, snapshot: next } })
-      } catch { /* 快照同步失败不阻断改名本身；残留与修复前一致 */ }
-    }
-    const baseSubagentUpdate = subagentService.ops['subagent-update']
-    if (typeof baseSubagentUpdate === 'function') {
-      subagentService.ops['subagent-update'] = async (args: any) => {
-        const res: any = await baseSubagentUpdate(args)
-        if (res && res.ok !== false && res.renamedFrom) {
-          const from = String(res.renamedFrom)
-          const to = String(res.name)
-          void rebindSubagentInArchives(from, to)
-          void renameSubagentInSnapshot(from, to)
-        }
-        return res
-      }
-    }
-    /**
-     * 快捷提示词改名后同步场景档案（与人设改名那两条同一件事）：档案里存的还是旧 id 的话，
-     * 下一次进场景它会被当成 stale 丢掉 —— 用户看到的就成了"改了个名字，场景里的勾选悄悄没了"，
-     * 而且那条快捷词还会在进场景时被停用（它不在勾选集里了）。
-     */
-    async function rebindQuickPromptInArchives(from: string, to: string): Promise<void> {
-      try {
-        const slice = await memoriesService.readArchiveSlice()
-        const touched: Array<[string, any]> = []
-        for (const [scene, archive] of Object.entries(slice.archives || {})) {
-          const list = (archive as { quickPrompts?: unknown }).quickPrompts
-          if (!Array.isArray(list) || !list.includes(from)) continue
-          touched.push([scene, { ...(archive as Record<string, unknown>), quickPrompts: list.map((n) => (n === from ? to : n)) }])
-        }
-        // 逐场景增量写（与审查 P2-3 同一条口径）：整表回写会抹掉窗口期里别人存的别的场景。
-        for (const [scene, next] of touched) await memoriesService.saveArchive(scene, next)
-      } catch { /* 同步失败不阻断改名本身；残留由档案保存时的 stale 清理兜住 */ }
-    }
-    const baseQuickPromptUpdate = quickPromptOps['quickprompt-update']
-    if (typeof baseQuickPromptUpdate === 'function') {
-      quickPromptOps['quickprompt-update'] = async (args: any) => {
-        const res: any = await baseQuickPromptUpdate(args)
-        if (res && res.ok !== false && res.renamedFrom) void rebindQuickPromptInArchives(String(res.renamedFrom), String(res.id))
-        return res
-      }
-    }
-    // 模式切换会改人设开关（进入=启用勾选的，退出=按快照停回）——目录段立即重算，
-    // 别等 1s TTL：切完场景紧接着的下一轮请求就该看到新名单。
-    const baseSceneModeSet = archiveService.ops['scene-mode-set']
-    if (typeof baseSceneModeSet === 'function') {
-      archiveService.ops['scene-mode-set'] = async (args: any) => {
-        // 锁定的场景不能关闭（用户裁定）：退出模式（scene=null）和切换到别的场景
-        // 都意味着先退出当前模式 —— 当前模式场景处于锁定状态时一律拒绝。
-        // 目标就是当前场景 = 无操作，放行（引擎自己会 early-return）。
-        try {
-          const slice = await memoriesService.readArchiveSlice()
-          const current = slice.mode && slice.mode.scene
-          if (current && args && 'scene' in (args || {})) {
-            const target = args.scene == null ? null : String(args.scene).trim() || null
-            if (target !== current) {
-              const locked = await lockedSceneNames()
-              if (locked.includes(current)) {
-                return { ok: false, error: `场景「${current}」已锁定：先解锁再关闭` }
-              }
-            }
-          }
-        } catch { /* 守卫读状态失败不拦正常流程（引擎自身校验兜底） */ }
-        const res: any = await baseSceneModeSet(args)
-        if (res && res.ok !== false) {
-          // 进/退/切换模式会改 MCP 启停（服务器级）与备注（场景备注覆盖/恢复），
-          // 状态段必须立即重算 —— 场景退出后下一次请求就该看到恢复的全局备注与启停。
-          void subagentCatalog.refresh().catch(() => { /* 同上 */ })
-          void mcp.stateCatalog.refresh().catch(() => { /* 同上 */ })
-        }
-        return res
-      }
-    }
-    /**
-     * 模式进行中保存当前场景的档案时，联动人设开关：**档案 = 这个场景开着的人设**
-     * （与进入场景时同一口径，见 archive-engine）——
-     *   新勾进来的立即启用，并追加进快照的「退出时停回」名单；
-     *   取消勾选的立即停用；其中「进场景前就开着」的那些追加进快照的「退出时开回」名单
-     *   （在停回名单里的说明是本次进场景才打开的，退出本来就该关，不进开回名单）。
-     */
-    const baseSceneArchiveSave = archiveService.ops['scene-archive-save']
-    if (typeof baseSceneArchiveSave === 'function') {
-      archiveService.ops['scene-archive-save'] = async (args: any) => {
-        const res: any = await baseSceneArchiveSave(args)
-        try {
-          const bound = res && res.ok !== false && res.archive && Array.isArray(res.archive.subagents) ? res.archive.subagents as string[] : []
-          const slice = await memoriesService.readArchiveSlice()
-          const mode = slice.mode
-          if (mode && mode.scene === res.scene) {
-            const every = (await subagentService.list()).map((p) => p.name)
-            const unbound = every.filter((n) => bound.indexOf(n) < 0)
-            const toOn = await subagentService.enabledStore.disabledAmong(bound)
-            const toOff = await subagentService.enabledStore.enabledAmong(unbound)
-            if (toOn.length) await subagentService.enabledStore.setEnabled(toOn, true)
-            if (toOff.length) await subagentService.enabledStore.setEnabled(toOff, false)
-            if (toOn.length || toOff.length) void subagentCatalog.refresh()
-            const snapshot = mode.snapshot
-            // 新快照带**全量映射**（`subagentsAll`，v0.9.1）→ 退出按映射逐个精确还原，这两个
-            // 部分名单不再需要，也不再往新快照里写（老快照没有映射，仍然照旧维护，见
-            // archive-engine 的 restoreSnapshot 兼容分支）。
-            if (snapshot && !snapshot.subagentsAll && (toOn.length || toOff.length)) {
-              const backOn = Array.isArray(snapshot.subagents) ? snapshot.subagents.slice() : []
-              const offList = Array.isArray(snapshot.subagentsOn) ? snapshot.subagentsOn.slice() : []
-              for (const n of toOn) if (backOn.indexOf(n) < 0) backOn.push(n)
-              for (const n of toOff) if (backOn.indexOf(n) < 0 && offList.indexOf(n) < 0) offList.push(n)
-              await memoriesService.patchIndex({ mode: { ...mode, snapshot: { ...snapshot, subagents: backOn, subagentsOn: offList } } })
-            }
-          }
-        } catch { /* 联动失败不阻断档案保存本身；开关会在下次进/退模式时对齐 */ }
-        return res
-      }
-    }
+    // ---------- 改名 / 进场景 / 存档案的联动（op 重包） ----------
+    // 正文 2026-10-01 整段搬到 ./scene-linkage.ts（一字未改，只把七个 apply 作用域名字改走
+    // deps）。调用点位置原样不动 —— 重包的是那四个 service 对象上的 ops 表，而下游（handlers
+    // 表、工具依赖表）取的是**当时那份函数**：包晚了，联动对它们就不存在。
+    // 两个**定义在本调用之后**的名字用 getter 传：`mcp` 在 MCP 管理域那一段才建、
+    // `lockedSceneNames` 在场景锁那一层才解构 —— 直接放进对象字面量会当场踩 TDZ，
+    // 而取用它们的时机是请求期，那时两个 const 都已初始化完。
+    installSceneLinkage({
+      memoriesService, subagentService, archiveService, quickPromptOps, subagentCatalog,
+      get mcp() { return mcp },
+      get lockedSceneNames() { return lockedSceneNames },
+    })
 
     // HTTP 写 / 敏感 op 白名单（2026-09-19 抽到 ./request-gate.ts）：四个 service 自报的
     // writeOps，加上本文件内联域（mcpm-* / skill-open / agentsmd-* / history-*）。
