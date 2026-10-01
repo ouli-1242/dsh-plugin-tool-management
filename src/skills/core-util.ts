@@ -99,4 +99,4 @@ export function temporaryPath(target: string, kind: string): string {
     dirname(target),
     `.${basename(target)}.dssm-${kind}-${randomUUID()}`,
   );
-}
+}

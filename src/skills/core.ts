@@ -109,6 +109,15 @@ export { resolveAgentsHome, resolveDshHome } from "./homes.js";
 // 引 core —— 那是运行时环。搬到这里，两侧都只向下引这一层。公开面照旧：entryPath 与
 // renameWithRetry 仍有外部引方（index.ts 按 ./skills/core.js 引 renameWithRetry）。
 export { entryPath, renameWithRetry } from "./core-util.js";
+// 导入预检链路（来源读成候选 / 拒符号链 / 临时件拷贝 / 原子替换）2026-10-01 剥到
+// ./import-pipeline.js。那一层只向下引 core-util.js、不回引本文件，所以这一侧引它是单向的。
+import {
+  analyzeSource,
+  collectCandidates,
+  MAX_SOURCE_DEPTH,
+  preflightCandidates,
+  replaceWithCopy,
+} from "./import-pipeline.js";
 import {
   attachCode,
   codedError,
@@ -127,7 +136,6 @@ const CUSTOM_ROOT_KEY_RE = /^custom-[a-f0-9]{16}$/;
 const USER_DSH_POLICY_RANK = 399;
 const WINDOWS_DEVICE_NAME_RE =
   /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
-const MAX_SOURCE_DEPTH = 64;
 const MAX_BROWSE_ENTRIES = 500;
 const MAX_UPLOAD_ARCHIVE_BYTES = 32 << 20;
 const MAX_UPLOAD_ENTRY_BYTES = 32 << 20;
@@ -2271,267 +2279,15 @@ export async function permanentlyDeleteTrash(
 // ── 导入 ────────────────────────────────────────────────────────────────────
 
 /** 分析来源：单 skill 目录 / 单 .md 文件 / 批量目录。 */
-async function analyzeSource(source: string): Promise<SourceAnalysis> {
-  let st;
-  try {
-    st = await fs.lstat(source);
-  } catch {
-    return {
-      kind: "none",
-      error: `路径不存在: ${source}`,
-      code: "error.source.notFound",
-      params: { path: source },
-    };
-  }
-  if (st.isSymbolicLink())
-    return {
-      kind: "none",
-      error: `不支持包含符号链接的 skill 来源: ${source}`,
-      code: "error.source.symlink",
-      params: { path: source },
-    };
-  if (st.isDirectory()) {
-    const sk = join(source, "SKILL.md");
-    const skSt = await lstatOrNull(sk);
-    // 预检与实际导入口径一致：SKILL.md 本身是链接时直接拒绝，避免 dry-run 通过、正式导入才失败。
-    if (skSt && skSt.isSymbolicLink())
-      return {
-        kind: "none",
-        error: `不支持包含符号链接的 skill 来源: ${sk}`,
-        code: "error.source.symlink",
-        params: { path: sk },
-      };
-    if (skSt && skSt.isFile()) {
-      return {
-        kind: "single",
-        rawName: basename(source),
-        kebab: toKebab(basename(source)),
-        source,
-        isDir: true,
-        skillFile: sk,
-      };
-    }
-    return { kind: "batch", rawName: basename(source), source, isDir: true };
-  }
-  if (st.isFile() && source.toLowerCase().endsWith(".md")) {
-    if (basename(source).toLowerCase() === "skill.md") {
-      const parent = dirname(source);
-      return {
-        kind: "single",
-        rawName: basename(parent),
-        kebab: toKebab(basename(parent)),
-        source: parent,
-        isDir: true,
-        skillFile: source,
-      };
-    }
-    const rawName = basename(source).slice(0, -3);
-    return {
-      kind: "single",
-      rawName,
-      kebab: toKebab(rawName),
-      source,
-      isDir: false,
-      skillFile: source,
-    };
-  }
-  return {
-    kind: "none",
-    error: `无法识别的 skill 来源: ${source}`,
-    code: "error.source.unrecognized",
-    params: { path: source },
-  };
-}
-
-async function collectCandidates(dir: string): Promise<ImportCandidate[]> {
-  const items = await fs.readdir(dir, { withFileTypes: true });
-  const out: ImportCandidate[] = [];
-  for (const it of items) {
-    if (it.isSymbolicLink())
-      throw codedError(
-        `不支持包含符号链接的 skill 来源: ${join(dir, it.name)}`,
-        "error.source.symlink",
-        { path: join(dir, it.name) },
-      );
-    if (it.isDirectory()) {
-      const sk = join(dir, it.name, "SKILL.md");
-      // lstatOrNull 吞掉 IO 异常（返回 null 即跳过）；symlink 必须抛出，不能被“跳过”逻辑掩盖。
-      const st = await lstatOrNull(sk);
-      if (st && st.isSymbolicLink())
-        throw codedError(
-          `不支持包含符号链接的 skill 来源: ${sk}`,
-          "error.source.symlink",
-          { path: sk },
-        );
-      if (st && st.isFile()) {
-        out.push({
-          source: join(dir, it.name),
-          kebab: toKebab(it.name),
-          rawName: it.name,
-          isDir: true,
-        });
-      }
-    } else if (
-      it.isFile() &&
-      it.name.toLowerCase().endsWith(".md") &&
-      it.name.toLowerCase() !== "skill.md"
-    ) {
-      out.push({
-        source: join(dir, it.name),
-        kebab: toKebab(it.name.slice(0, -3)),
-        rawName: it.name.slice(0, -3),
-        isDir: false,
-      });
-    }
-  }
-  return out;
-}
 
 /** 导入内容不接受符号链接，避免把目标目录外的内容带入技能目录。 */
-async function assertNoSymbolicLinks(source: string): Promise<void> {
-  const pending: { path: string; depth: number }[] = [
-    { path: source, depth: 0 },
-  ];
-  while (pending.length) {
-    // while 条件保证栈非空，断言只为让类型收敛。
-    const current = pending.pop() as { path: string; depth: number };
-    if (current.depth > MAX_SOURCE_DEPTH)
-      throw codedError(
-        `skill 来源目录层级超过 ${MAX_SOURCE_DEPTH} 层: ${source}`,
-        "error.source.tooDeep",
-        { depth: MAX_SOURCE_DEPTH, path: source },
-      );
-    const st = await fs.lstat(current.path);
-    if (st.isSymbolicLink())
-      throw codedError(
-        `不支持包含符号链接的 skill 来源: ${current.path}`,
-        "error.source.symlink",
-        { path: current.path },
-      );
-    if (!st.isDirectory()) continue;
-    const items = await fs.readdir(current.path, { withFileTypes: true });
-    for (const item of items) {
-      const path = join(current.path, item.name);
-      if (item.isSymbolicLink())
-        throw codedError(
-          `不支持包含符号链接的 skill 来源: ${path}`,
-          "error.source.symlink",
-          { path },
-        );
-      if (item.isDirectory()) pending.push({ path, depth: current.depth + 1 });
-    }
-  }
-}
 
 /** dry-run 预检执行与正式导入相同的符号链接/深度检查，预检失败即结论，不再进入覆盖确认。
  *  预检与实导之间来源被替换的竞态仍由实导阶段的复制后校验兜底。 */
-async function preflightCandidates(
-  pending: ImportSourceRef[],
-  conflicts: ImportSourceRef[],
-  failed: ImportFailure[],
-): Promise<void> {
-  for (const group of [pending, conflicts]) {
-    for (let i = group.length - 1; i >= 0; i--) {
-      const candidate = group[i];
-      try {
-        await assertNoSymbolicLinks(candidate.source);
-      } catch (error: any) {
-        // 系统异常按可选 message 读取，保持既有失败明细文案。
-        failed.push(
-          attachCode(
-            {
-              source: candidate.source,
-              error: String(error && error.message ? error.message : error),
-            },
-            error,
-          ),
-        );
-        group.splice(i, 1);
-      }
-    }
-  }
-}
 
 /** 先复制到同目录临时路径，复制失败时不触碰现有技能。 */
-async function copyToTemporary(
-  source: string,
-  target: string,
-  isDir: boolean,
-): Promise<string> {
-  const temp = temporaryPath(target, "stage");
-  try {
-    await assertNoSymbolicLinks(source);
-    if (isDir)
-      await fs.cp(source, temp, { recursive: true, dereference: false });
-    else await fs.copyFile(source, temp);
-    await assertNoSymbolicLinks(temp);
-    return temp;
-  } catch (error) {
-    await fs.rm(temp, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
-  }
-}
 
 /** 临时副本就绪后再替换；替换失败时尽力恢复旧条目。 */
-async function replaceWithCopy(
-  source: string,
-  dest: string,
-  isDir: boolean,
-  existing: string[] = [],
-): Promise<SkillWarning[]> {
-  const stage = await copyToTemporary(source, dest, isDir);
-  const backups: { path: string; backup: string }[] = [];
-  // 三处 rename 一律走 `renameWithRetry`：瞬时占用（Windows 杀软 / 索引器 / 资源管理器）返回的
-  // EACCES / EBUSY / EPERM 正是它重试的那些码。此前只有 `:959` 的回滚用了带重试的版本，
-  // 而**发布与它的补偿回滚用的是裸 rename** —— 发布因瞬时锁抛错时，紧随其后的回滚在同一刻、
-  // 同一目录上大概率撞同一个句柄，于是留下"目标已空、真值还叫 backup"的半态（无自动恢复路径）。
-  // 保护覆盖不均不是取舍，是漏。
-  try {
-    for (const path of existing) {
-      const backup = temporaryPath(path, "backup");
-      await renameWithRetry(path, backup);
-      backups.push({ path, backup });
-    }
-    await renameWithRetry(stage, dest);
-  } catch (error: any) {
-    // 系统异常按可选 message 读取，保持既有回滚失败明细。
-    await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
-    const rollbackFailures: string[] = [];
-    for (const item of backups.reverse()) {
-      try {
-        await renameWithRetry(item.backup, item.path);
-      } catch (rollbackError) {
-        rollbackFailures.push(item.backup);
-      }
-    }
-    if (rollbackFailures.length) {
-      const causeText = String(error && error.message ? error.message : error);
-      throw codedError(
-        `${causeText}；覆盖导入回滚失败，备份保留在: ${rollbackFailures.join("、")}`,
-        "error.import.rollbackFailed",
-        { path: rollbackFailures.join("; "), error: causeText },
-      );
-    }
-    throw error;
-  }
-  const warnings: SkillWarning[] = [];
-  for (const item of backups) {
-    try {
-      await fs.rm(item.backup, { recursive: true, force: true });
-    } catch (error: any) {
-      // 系统异常按可选 message 读取，保持既有告警文案。
-      warnings.push({
-        code: "warning.backupUncleaned",
-        params: {
-          path: item.backup,
-          error: String(error && error.message ? error.message : error),
-        },
-        error: `旧版本备份未清理: ${item.backup}（${String(error && error.message ? error.message : error)}）`,
-      });
-    }
-  }
-  return warnings;
-}
 
 /**
  * 导入技能到目标根。
