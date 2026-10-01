@@ -126,6 +126,16 @@ export {
 // ./upload-pipeline.js；它向下引 core-util / import-pipeline / skill-roots 三层，不回引本文件。
 // service.ts 按 ./core.js 引这两件，公开面照旧再出口一次。
 export { importSkill, importUploadedSkill } from "./upload-pipeline.js";
+// 技能回收站（可写根判定 / 移进移出 / 清单读写）2026-10-01 剥到 ./skill-trash.js。
+// 四件本来在 core.js 的出口上（外部按 ./core.js 引），照旧再出口一次。
+export { listTrash, permanentlyDeleteTrash, readTrashMetadata, restoreTrash } from "./skill-trash.js";
+import {
+  checkedWritableRootDefinition,
+  listTrash,
+  movePathWithFallback,
+  safeExistingEntryPaths,
+  trashRootMetadata,
+} from "./skill-trash.js";
 import {
   importSkill,
   importUploadedSkill,
@@ -514,63 +524,6 @@ function reservedSourceError(
 }
 
 /** 只允许用户 DSH 根 / hub 根，或由活动 Session 推导出的项目 DSH 根参与文件写入。 */
-function writableRootDefinition(root: RootInput): SkillSource | null {
-  const definition = rootDefinition(root);
-  if (!definition || definition.mutable !== true) return null;
-  if (definition.key === "dsh")
-    return resolve(definition.path) === resolve(dshRootPath())
-      ? rootByKey("dsh")
-      : null;
-  // v0.4：hub 内技能目录同为用户级可写根（插件新建/导入的落点）。
-  if (definition.key === "hub")
-    return resolve(definition.path) === resolve(skillCreateRootPath())
-      ? rootByKey("hub")
-      : null;
-  if (
-    definition.scope !== "project" ||
-    definition.kind !== "project-dsh" ||
-    typeof definition.projectRoot !== "string" ||
-    !isAbsolute(definition.projectRoot) ||
-    definition.key !==
-      `project-dsh:${projectIdentity(definition.projectRoot)}` ||
-    resolve(definition.path) !==
-      resolve(join(definition.projectRoot, ".dsh", "skills"))
-  )
-    return null;
-  return definition;
-}
-
-async function checkedWritableRootDefinition(
-  root: RootInput,
-): Promise<WritableRootResult> {
-  const definition = writableRootDefinition(root);
-  if (!definition || definition.scope !== "project") return definition;
-  if (await overlapsUserSkillRoot(definition.path)) {
-    return {
-      ok: false,
-      error: `项目技能目录与用户技能目录重叠，拒绝写入: ${definition.path}`,
-      code: "error.root.unsafe",
-      params: { path: definition.path },
-    };
-  }
-  // 项目仓库内容不可信；拒绝通过 .dsh 或 skills 链接把写入重定向到项目之外。
-  // definition.scope === "project" 时 projectRoot 必有值（见 ProjectSource），断言只为让类型收敛。
-  for (const path of [
-    join(definition.projectRoot as string, ".dsh"),
-    definition.path,
-  ]) {
-    const st = await lstatOrNull(path);
-    if (st && (!st.isDirectory() || st.isSymbolicLink())) {
-      return {
-        ok: false,
-        error: `项目技能目录不安全，拒绝写入: ${path}`,
-        code: "error.root.unsafe",
-        params: { path },
-      };
-    }
-  }
-  return definition;
-}
 
 /** 解析真实路径；中间若有目录链接，按落地目录比较重叠。 */
 
@@ -590,56 +543,7 @@ function isDshRoot(root: unknown): boolean {
   return typeof root === "string" && resolve(root) === resolve(dshRootPath());
 }
 
-async function removeMovedPath(path: string): Promise<void> {
-  const st = await lstatOrNull(path);
-  if (!st) return;
-  if (st.isDirectory() && !st.isSymbolicLink())
-    await fs.rm(path, { recursive: true, force: false });
-  else await fs.unlink(path);
-}
-
 /** rename 跨盘返回 EXDEV 时：先完整复制，再在源盘原子隐藏源条目，最后清理隐藏副本。 */
-async function movePathWithFallback(
-  source: string,
-  destination: string,
-  options: RenameOptions = {},
-) {
-  try {
-    await renameWithRetry(source, destination, options);
-    return { copied: false, cleanupError: null };
-  } catch (error: any) {
-    // 系统异常按可选 code 读取，保持既有 EXDEV 判定。
-    if (!error || error.code !== "EXDEV") throw error;
-  }
-
-  const quarantine = join(
-    dirname(source),
-    `.${basename(source)}.dssm-move-${randomUUID()}`,
-  );
-  try {
-    await fs.cp(source, destination, {
-      recursive: true,
-      dereference: false,
-      errorOnExist: true,
-      force: false,
-      verbatimSymlinks: true,
-    });
-    // 源与 quarantine 位于同一目录；成功后原技能名立即消失，避免递归删除留下半份可见条目。
-    await renameWithRetry(source, quarantine, options);
-  } catch (error) {
-    await removeMovedPath(destination).catch(() => undefined);
-    throw error;
-  }
-
-  let cleanupError = null;
-  try {
-    await removeMovedPath(quarantine);
-  } catch (error: any) {
-    // 调用方按可选 message 读取该清理异常，保持既有告警文案。
-    cleanupError = error;
-  }
-  return { copied: true, cleanupError, quarantine };
-}
 
 async function writeFileAtomically(
   path: string,
@@ -1675,42 +1579,6 @@ export async function setPreferredSkill(
   };
 }
 
-async function safeExistingEntryPaths(
-  root: string,
-  name: string,
-): Promise<EntryPathTarget[]> {
-  const paths: EntryPathTarget[] = [];
-  const bundle = entryPath(root, name);
-  if (bundle === null) return paths;
-  const flat = resolve(root, `${name}.md`);
-  const bundleStat = await lstatOrNull(bundle);
-  if (bundleStat && (bundleStat.isDirectory() || bundleStat.isSymbolicLink()))
-    paths.push({ path: bundle, fileName: name, recursive: true });
-  const flatStat = await lstatOrNull(flat);
-  if (flatStat && (flatStat.isFile() || flatStat.isSymbolicLink()))
-    paths.push({ path: flat, fileName: `${name}.md`, recursive: false });
-  return paths;
-}
-
-async function readTrashMetadata(id: string): Promise<TrashMetadata | null> {
-  if (entryPath(trashRootPath(), id) === null) return null;
-  try {
-    const value = JSON.parse(
-      await fs.readFile(join(trashRootPath(), id, "metadata.json"), "utf8"),
-    );
-    if (
-      !value ||
-      value.id !== id ||
-      typeof value.name !== "string" ||
-      !Array.isArray(value.entries)
-    )
-      return null;
-    return value;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Windows Defender / 索引器可能持续占用刚写入的 stage 目录，导致容器目录 rename
  * 在短重试窗口后仍返回 EPERM。此时保留 stage 作为唯一可回滚副本，逐项复制到最终目录，
@@ -1769,59 +1637,6 @@ async function publishTrashStage(
  * 所以这里必须按 scope 分岔：早先只特判 `dsh`，hub 会被记成项目级、`projectRoot`
  * 为 undefined，恢复时被判「原项目当前不在活动工作区中」—— 删除进去就再也拿不回来。
  */
-function trashRootMetadata(definition: SkillSource): TrashRootMetadata {
-  if (definition.scope !== "project")
-    return { key: definition.key, scope: "user", label: definition.label };
-  return {
-    key: definition.key,
-    scope: "project",
-    kind: "project-dsh",
-    projectRoot: definition.projectRoot,
-    projectName: definition.projectName,
-    label: definition.label,
-  };
-}
-
-async function restoreRootDefinition(
-  metadata: TrashMetadata,
-  options: WriteOptions = {},
-): Promise<WritableRootResult> {
-  // version 1 entries predate scoped Trash and always belong to $DSH_HOME/skills.
-  if (!metadata.root) return rootByKey("dsh");
-  // 用户级来源按 key 重新解析：路径来自 userRoots()，不信元数据里记住的 path
-  // （DSH_HOME 换过之后，旧路径可能已经不在读取范围内了）。
-  if (metadata.root.scope === "user") return rootByKey(metadata.root.key);
-  if (
-    metadata.root.scope !== "project" ||
-    metadata.root.kind !== "project-dsh" ||
-    typeof metadata.root.key !== "string" ||
-    typeof metadata.root.projectRoot !== "string" ||
-    !isAbsolute(metadata.root.projectRoot)
-  )
-    return {
-      ok: false,
-      error: `回收站条目来源非法: ${metadata.id}`,
-      code: "error.trash.invalid",
-      params: { id: metadata.id },
-    };
-  const roots = await projectRoots(options.projectCwds);
-  const normalizedProjectRoot = pathIdentity(metadata.root.projectRoot);
-  const root = roots.find(
-    (item) =>
-      item.key === (metadata.root as TrashRootMetadata).key &&
-      item.kind === "project-dsh" &&
-      pathIdentity(item.projectRoot) === normalizedProjectRoot,
-  );
-  if (!root) {
-    return {
-      ok: false,
-      error: `原项目当前不在活动工作区中，无法恢复: ${metadata.root.projectRoot}`,
-      code: "error.trash.projectUnavailable",
-      params: { path: metadata.root.projectRoot },
-    };
-  }
-  return checkedWritableRootDefinition(root);
-}
 
 /** 把项目级 DSH 根中的单个技能移入 manager-owned 回收站。 */
 export async function deleteSkill(
@@ -1925,95 +1740,6 @@ export async function deleteSkill(
     await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
-}
-
-export async function listTrash(): Promise<TrashMetadata[]> {
-  let items;
-  try {
-    items = await fs.readdir(trashRootPath(), { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const result: TrashMetadata[] = [];
-  for (const item of items) {
-    if (!item.isDirectory() || item.name.startsWith(".")) continue;
-    const metadata = await readTrashMetadata(item.name);
-    if (metadata) result.push(metadata);
-  }
-  return result.sort((a, b) =>
-    String(b.deletedAt).localeCompare(String(a.deletedAt)),
-  );
-}
-
-export async function restoreTrash(
-  id: string,
-  log: LogFn | undefined,
-  options: WriteOptions = {},
-): Promise<TrashRestoreResult | FailureResult> {
-  const metadata = await readTrashMetadata(id);
-  if (!metadata)
-    return {
-      ok: false,
-      error: `回收站条目不存在: ${id}`,
-      code: "error.trash.notFound",
-      params: { id },
-    };
-  const definition = await restoreRootDefinition(metadata, options);
-  if (!definition || definition.ok === false)
-    return definition || readonlyError("restore");
-  const root = definition.path;
-  const conflicts = await safeExistingEntryPaths(root, metadata.name);
-  if (conflicts.length)
-    return {
-      ok: false,
-      error: `无法恢复，同名技能已存在: ${metadata.name}`,
-      code: "error.trash.conflict",
-      params: { name: metadata.name },
-    };
-  await fs.mkdir(root, { recursive: true });
-  const itemRoot = join(trashRootPath(), id);
-  const moved: { source: string; destination: string }[] = [];
-  try {
-    for (const fileName of metadata.entries) {
-      const source = join(itemRoot, fileName);
-      const destination = join(root, fileName);
-      if (
-        !isSameOrDescendant(itemRoot, source) ||
-        !isSameOrDescendant(root, destination)
-      )
-        throw codedError("回收站条目路径非法", "error.trash.invalid", { id });
-      await movePathWithFallback(source, destination, options.renameOptions);
-      moved.push({ source, destination });
-    }
-    await fs.rm(itemRoot, { recursive: true, force: true });
-    if (log) log("restore", `从回收站恢复 ${metadata.name} -> ${root}`);
-    return { id, name: metadata.name, root: trashRootMetadata(definition) };
-  } catch (error) {
-    for (const item of moved.reverse())
-      await movePathWithFallback(
-        item.destination,
-        item.source,
-        options.renameOptions,
-      ).catch(() => undefined);
-    throw error;
-  }
-}
-
-export async function permanentlyDeleteTrash(
-  id: string,
-  log: LogFn | undefined,
-) {
-  const metadata = await readTrashMetadata(id);
-  if (!metadata)
-    return {
-      ok: false,
-      error: `回收站条目不存在: ${id}`,
-      code: "error.trash.notFound",
-      params: { id },
-    };
-  await fs.rm(join(trashRootPath(), id), { recursive: true, force: true });
-  if (log) log("trash-delete", `永久删除回收站条目 ${metadata.name} (${id})`);
-  return { id, name: metadata.name };
 }
 
 // ── 导入 ────────────────────────────────────────────────────────────────────
