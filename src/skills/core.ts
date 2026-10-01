@@ -104,6 +104,23 @@ export { parseSkillDoc, toKebab, unquote } from "./frontmatter.js";
 // （hub.ts、memories/*、subagents/service.ts 都按 ../skills/core.js 引 resolveDshHome）。
 export { resolveAgentsHome, resolveDshHome } from "./homes.js";
 
+// 业务错误码 / 条目路径谓词 / 可恢复 rename 的重试这一层 2026-10-01 剥到 ./core-util.js：
+// 这几件被导入链路与技能读写**两侧同时**用到，留在本文件里就意味着任何搬出去的段都要反过来
+// 引 core —— 那是运行时环。搬到这里，两侧都只向下引这一层。公开面照旧：entryPath 与
+// renameWithRetry 仍有外部引方（index.ts 按 ./skills/core.js 引 renameWithRetry）。
+export { entryPath, renameWithRetry } from "./core-util.js";
+import {
+  attachCode,
+  codedError,
+  entryPath,
+  lstatOrNull,
+  renameWithRetry,
+  MAX_ENTRY_NAME_LENGTH,
+  pathIdentity,
+  temporaryPath,
+  TRANSIENT_RENAME_CODES,
+} from "./core-util.js";
+
 const KEBAB_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PROJECT_ROOT_KEY_RE = /^project-(?:dsh|agents):[a-f0-9]{16}$/;
 const CUSTOM_ROOT_KEY_RE = /^custom-[a-f0-9]{16}$/;
@@ -111,41 +128,12 @@ const USER_DSH_POLICY_RANK = 399;
 const WINDOWS_DEVICE_NAME_RE =
   /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const MAX_SOURCE_DEPTH = 64;
-const MAX_ENTRY_NAME_LENGTH = 128;
 const MAX_BROWSE_ENTRIES = 500;
 const MAX_UPLOAD_ARCHIVE_BYTES = 32 << 20;
 const MAX_UPLOAD_ENTRY_BYTES = 32 << 20;
 const MAX_UPLOAD_TOTAL_BYTES = 64 << 20;
 const MAX_UPLOAD_ENTRIES = 1000;
 const MAX_UPLOAD_PATH_LENGTH = 512;
-const TRANSIENT_RENAME_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
-
-// ── 业务错误码 ────────────────────────────────────────────────────────────────
-
-/** 构造带 code/params 的业务 Error，供导入链路 throw 后透传到失败明细。 */
-function codedError(
-  message: string,
-  code: string,
-  params?: Record<string, unknown>,
-): Error & { code: string; params?: Record<string, unknown> } {
-  const error = new Error(message) as Error & {
-    code: string;
-    params?: Record<string, unknown>;
-  };
-  error.code = code;
-  error.params = params;
-  return error;
-}
-
-/** 把业务 Error 的 code/params 附加到失败明细；系统异常（ENOENT 等，非 error.* 前缀）保持原文。 */
-function attachCode(item: any, error: unknown): any {
-  // 透传并回写任意失败明细对象（形状由各调用点决定），故按 any 处理。
-  const coded = error as { code?: unknown; params?: unknown } | null | undefined;
-  if (coded && typeof coded.code === "string" && /^error\./.test(coded.code))
-    item.code = coded.code;
-  if (coded && coded.params) item.params = coded.params;
-  return item;
-}
 
 /**
  * DSH 与外部 Agent 的用户级技能目录（4 个来源；外部来源由 manager provider 接入）。
@@ -850,66 +838,8 @@ async function isInsideResolvedRoot(
   return isSameOrDescendant(rootReal, await resolvedPath(path));
 }
 
-function pathIdentity(path: string): string {
-  const canonical = resolve(path);
-  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
-}
-
-async function lstatOrNull(path: string) {
-  try {
-    return await fs.lstat(path);
-  } catch {
-    return null;
-  }
-}
-
-/** 名称只允许一个普通路径段；不把既有技能名称限制为 kebab-case。 */
-export function entryPath(root: string, name: string): string | null {
-  // 段名谓词收敛到 paths.js（此前与 rules / subagents / imports 各写一套，口径不一）。
-  // 原实现里 `basename(name) !== name` 那条已被谓词的「不含路径分隔符」覆盖。
-  if (!isValidSegment(name, MAX_ENTRY_NAME_LENGTH)) return null;
-  const rootPath = resolve(root);
-  const path = resolve(rootPath, name);
-  return isSameOrDescendant(rootPath, path) && rootPath !== path ? path : null;
-}
-
 function isDshRoot(root: unknown): boolean {
   return typeof root === "string" && resolve(root) === resolve(dshRootPath());
-}
-
-/** 同目录临时文件加 rename，避免写入中断时截断原 SKILL.md。 */
-/** Windows 上杀毒软件或索引器可能短暂占用目录；只重试明确可恢复的 rename 错误。 */
-export async function renameWithRetry(
-  source: string,
-  destination: string,
-  options: RenameOptions = {},
-) {
-  const rename =
-    typeof options.rename === "function" ? options.rename : fs.rename;
-  // Number.isInteger/isFinite 不收窄类型，故断言成 number 以保持既有比较表达式。
-  const maxAttempts =
-    Number.isInteger(options.maxAttempts) && (options.maxAttempts as number) > 0
-      ? (options.maxAttempts as number)
-      : 6;
-  const delayMs =
-    Number.isFinite(options.delayMs) && (options.delayMs as number) >= 0
-      ? (options.delayMs as number)
-      : 40;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await rename(source, destination);
-    } catch (error: any) {
-      // 系统 rename 异常按可选 code 读取，保持既有重试判定。
-      if (
-        !TRANSIENT_RENAME_CODES.has(error && error.code) ||
-        attempt >= maxAttempts
-      )
-        throw error;
-      await new Promise((resolvePromise) =>
-        setTimeout(resolvePromise, delayMs * attempt),
-      );
-    }
-  }
 }
 
 async function removeMovedPath(path: string): Promise<void> {
@@ -2491,13 +2421,6 @@ async function assertNoSymbolicLinks(source: string): Promise<void> {
       if (item.isDirectory()) pending.push({ path, depth: current.depth + 1 });
     }
   }
-}
-
-function temporaryPath(target: string, kind: string): string {
-  return join(
-    dirname(target),
-    `.${basename(target)}.dssm-${kind}-${randomUUID()}`,
-  );
 }
 
 /** dry-run 预检执行与正式导入相同的符号链接/深度检查，预检失败即结论，不再进入覆盖确认。
