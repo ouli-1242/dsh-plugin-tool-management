@@ -53,7 +53,8 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { buildSessionOps } from '../lib/ops/sessions.js'
 import { ArchiveWorkspaceRegistry } from '../lib/sessions/workspace.js'
 import { buildTrashOps } from '../lib/ops/trash.js'
-import { bundleDocName, LEGACY_BUNDLE_DOC, MEMORIES_TRASH_DIR } from '../lib/memories/constants.js'
+import { bundleDocName, GLOBAL_SCENE, LEGACY_BUNDLE_DOC, MEMORIES_TRASH_DIR, SHARED_GROUP } from '../lib/memories/constants.js'
+import { buildSceneSyncOps } from '../lib/ops/scene-sync.js'
 import { detectFormat } from '../lib/imports/parsers.js'
 import { buildPromptOps } from '../lib/ops/prompts.js'
 import { createScenePromptSync } from '../lib/scene-prompt-sync.js'
@@ -1875,3 +1876,69 @@ test('切不准的时候要出声：命名歧义判据必须零误报（N2）', 
   // 去重：同一个名字出现多次不影响结论
   assert.deepEqual(ambiguousServerNames(['a', 'a', 'a__b', 'a__b']), { withSeparator: ['a__b'], prefixPairs: [['a', 'a__b']] })
 })
+
+// ── 0.18.0：场景「启用集合 ↔ 当前模式」两轴恒等（服务端兜）────────────────────
+//
+// 为什么值得钉：破的时候是**静默**的 —— 面板开关亮了、`/` 里勾上了，档案里的 MCP / 技能
+// 却没应用（用户 2026-10-01 实测：进不去也退不出，两个方向各坏一次）。这条不变量原本靠
+// 每个调用方各开两枪维持，漏一个入口就坏一个入口，现在收到 `rules-set-active` 的包装层里，
+// 所以钉包装层，不钉界面。
+test('写启用集合必须先把运行时切到位；引擎拒绝时启用集合一个字都不写', async () => {
+  const harness = ({ modeScene = null, engine = { ok: true, stale: [] }, base = { ok: true, activeMode: 'custom', scenes: [] } }) => {
+    const calls = { mode: [], base: [], sync: 0 }
+    const ops = buildSceneSyncOps({
+      withAgentsMdSync: async (res) => { calls.sync += 1; return res },
+      currentModeScene: async () => modeScene,
+      sceneModeSet: async (args) => { calls.mode.push(args.scene); return engine },
+      rulesOps: {
+        'rules-set-active': async (args) => { calls.base.push(args); return base },
+        'rules-update-scene': async () => ({ ok: true }),
+        'rules-create-scene': async () => ({ ok: true }),
+        'rules-remove-scene': async () => ({ ok: true }),
+      },
+    })
+    return { op: ops['rules-set-active'], calls }
+  }
+
+  // 进入：先切运行时，再写启用集合。
+  const enter = harness({ modeScene: null })
+  assert.equal((await enter.op({ scenes: ['代码'] })).ok, true)
+  assert.deepEqual(enter.calls.mode, ['代码'])
+  assert.equal(enter.calls.base.length, 1)
+
+  // 恒等时不重复切：面板与模型工具各开两枪，第二枪必须是空操作（否则一次点击应用两遍档案）。
+  const same = harness({ modeScene: '代码' })
+  await same.op({ scenes: ['代码'] })
+  assert.deepEqual(same.calls.mode, [])
+  assert.equal(same.calls.base.length, 1)
+
+  // 退出：空集合 = 运行时回自由模式（引擎只落 mode，启用集合由这一步补齐）。
+  const exit = harness({ modeScene: '代码' })
+  await exit.op({ scenes: [] })
+  assert.deepEqual(exit.calls.mode, [null])
+
+  // 引擎拒绝（当前模式被锁 / 场景不存在 / 绑的工具表方案已删）→ 启用集合与 AGENTS.md 都不许动。
+  // 这一条是本文件存在的理由：反过来（先写启用集合）留下的就是"开关过去了、运行时没切"。
+  const denied = harness({ modeScene: '代码', engine: { ok: false, error: '场景「代码」已锁定：先解锁再关闭' } })
+  assert.equal((await denied.op({ scenes: [] })).ok, false)
+  assert.deepEqual(denied.calls.base, [])
+  assert.equal(denied.calls.sync, 0)
+
+  // 参数形态不归这层管：多场景 / `all` / 缺参一律不动运行时，交给原 op 校验并报错。
+  for (const args of [{ scenes: ['A', 'B'] }, { all: true }, {}, { scenes: 'A' }]) {
+    const h = harness({ modeScene: null })
+    await h.op(args)
+    assert.deepEqual(h.calls.mode, [], JSON.stringify(args))
+    assert.equal(h.calls.base.length, 1, JSON.stringify(args))
+  }
+
+  // 保留名恒常生效：只勾「全局」与原 op 一样读成"清空"（同一份常量，不是各抄一套）。
+  const reserved = harness({ modeScene: '代码' })
+  await reserved.op({ scenes: [GLOBAL_SCENE, SHARED_GROUP] })
+  assert.deepEqual(reserved.calls.mode, [null])
+
+  // 引擎跳过的档案键要随回执出去，否则"进了，但没全进"是静默的。
+  const stale = harness({ modeScene: null, engine: { ok: true, stale: ['已删的服务器'] } })
+  assert.deepEqual((await stale.op({ scenes: ['代码'] })).modeStale, ['已删的服务器'])
+})
+

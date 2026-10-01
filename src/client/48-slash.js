@@ -96,6 +96,8 @@
                   id: s.name, key: s.name, label: s.name, on: s.name === active, note: s.description,
                   // 单选，但**关得掉**：再点当前这一项 = 退出场景（`scenes:[]` 是服务端明确支持的
                   // 写法，含义是"只注入全局与公共基线"），跟面板上那颗开关同一个出口。
+                  // 运行时（档案里的 MCP / 技能 / 人设 / 工具表）由服务端在这一次调用里跟着切
+                  // —— 见 `ops/scene-sync.ts` 的「两轴恒等」，这里**不需要**再补一枪 `scene-mode-set`。
                   run: function (next) { return apiCall('rules-set-active', { scenes: next ? [s.name] : [] }) },
                   done: function (next) { return t(next ? 'slash.did.scene' : 'slash.did.sceneOff', { name: s.name }) },
                 }
@@ -277,6 +279,12 @@
           },
         },
       ]
+    }
+
+    /** 进入场景时被引擎跳过的档案键（服务端 `rules-set-active` 把 `scene-mode-set` 的 stale 并进来）。 */
+    function slashModeStaleWarn(t, res) {
+      const stale = res && res.modeStale
+      return Array.isArray(stale) && stale.length ? t('memory.archive.stale', { items: stale.join('、') }) : ''
     }
 
     /**
@@ -665,7 +673,7 @@
                 // 在返回前已经把自己那份快照失效掉了，重读拿到的就是新状态）。
                 state.flush()
                 refreshAfterWrite(sessionId)
-                const warn = stateSyncWarn(t, res) || sceneSyncWarn(t, res)
+                const warn = joinWarn(stateSyncWarn(t, res) || sceneSyncWarn(t, res), slashModeStaleWarn(t, res))
                 showPluginToast(warn ? joinWarn(item.done(next), warn) : item.done(next), warn ? 'warn' : 'ok')
               })
             }).catch(function (e) {

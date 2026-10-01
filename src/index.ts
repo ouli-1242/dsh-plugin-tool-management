@@ -1590,6 +1590,14 @@ export default {
       // 必须排在 ...memoriesService.ops 之后 —— 这里是显式覆盖同名 op，不是新增。
       ...buildSceneSyncOps({
         withAgentsMdSync,
+        // 「两轴恒等」（ops/scene-sync.ts 文件头）：`rules-set-active` 要能把运行时跟着
+        // 启用集合一起切。`scene-mode-set` 取**包过一层的那份**（锁定守卫 + 目录重算），
+        // 且按调用时取（这里是组装期，联动在 931 行就已装好）。
+        currentModeScene: async () => {
+          const slice = await memoriesService.readArchiveSlice()
+          return slice.mode && slice.mode.scene ? slice.mode.scene : null
+        },
+        sceneModeSet: (args: any) => archiveService.ops['scene-mode-set'](args),
         onToolTablePresetChanged: async (scene: string, value: string) => {
           // 「修改场景」里改绑工具表方案且改的是**当前启用场景** → 立即把关停名单整体换成
           // 那一份（与「改档案 = 立刻生效」同口径）。解绑（''）按下拉里的承诺 =「保持现状」，
