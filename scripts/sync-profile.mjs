@@ -42,12 +42,18 @@
  *
  * Usage:
  *   npm run build                     # runs this automatically, as the last step
- *   npm run sync:profile              # profile "web" (default)
+ *   npm run sync:profile              # every profile on this machine that has it installed
  *   node scripts/sync-profile.mjs myprofile
  *
  * The target is `$DSH_HOME/profiles/<profile>/node_modules/dsh-plugin-tool-management`
- * ($DSH_HOME defaults to ~/.dsh). A missing target is not an error: it just
- * means this machine installs the plugin from npm instead of a checkout.
+ * ($DSH_HOME defaults to ~/.dsh). With no argument, EVERY profile holding this
+ * plugin is synced — and that is not a nicety. On 2026-10-01 a fix was built and
+ * verified twice while the desktop app kept running the old code, because this
+ * script defaulted to `web` and the machine also had `profiles/desktop` (installed
+ * from the same checkout, frozen at the previous day's build). "The build passed"
+ * was true of a copy of the plugin nobody was running. A profile that is not
+ * installed is still not an error: it just means this machine takes the plugin
+ * from npm instead of from a checkout.
  * Files already shared by inode are left alone; locked files are reported
  * instead of throwing (a running DSH holds its `lib/` open).
  */
@@ -59,18 +65,26 @@ import { join } from 'node:path'
 const ENTRIES = ['lib', 'docs', 'cordis.patch.yml', 'README.md', 'README_EN.md', 'CHANGELOG.md', 'LICENSE', 'screenshots.json', 'package.json']
 
 const PLUGIN_DIR = 'dsh-plugin-tool-management'
-const profile = process.argv[2] || 'web'
 const home = process.env.DSH_HOME || join(homedir(), '.dsh')
-const target = join(home, 'profiles', profile, 'node_modules', PLUGIN_DIR)
+const targetOf = (profile) => join(home, 'profiles', profile, 'node_modules', PLUGIN_DIR)
 
-if (!existsSync(target)) {
-  console.log(`[sync-profile] 未安装到 profile "${profile}"，跳过：${target}`)
+/** 这台机器上装了本插件的所有 profile（显式传参时只同步那一个）。 */
+function installedProfiles() {
+  const root = join(home, 'profiles')
+  let names = []
+  try { names = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) } catch { /* 没有 profiles 目录 = 一台都不装 */ }
+  return names.map(targetOf).filter(existsSync)
+}
+
+const targets = process.argv[2] ? [targetOf(process.argv[2])] : installedProfiles()
+if (!targets.length) {
+  console.log(`[sync-profile] 没有 profile 装着本插件（${join(home, 'profiles', '*', 'node_modules', PLUGIN_DIR)}），跳过`)
   process.exit(0)
 }
 
-const stats = { copied: 0, linked: 0, same: 0, pruned: 0 }
-const failures = []
-const rel = (path) => path.slice(target.length + 1)
+let stats = null
+let failures = null
+const rel = (path) => path.slice(stats.target.length + 1)
 
 /**
  * Mirror one file, preferring a HARDLINK over a copy (see the header: a copy is
@@ -129,21 +143,32 @@ function mirror(from, to) {
   }
 }
 
-for (const entry of ENTRIES) {
-  if (!existsSync(entry)) continue
-  if (statSync(entry).isDirectory()) mirror(entry, join(target, entry))
-  else mirrorFile(entry, join(target, entry))
+/** 把一个 profile 镜像成当前交付物，返回这一份的失败清单。 */
+function syncTo(target) {
+  stats = { target, copied: 0, linked: 0, same: 0, pruned: 0 }
+  failures = []
+  for (const entry of ENTRIES) {
+    if (!existsSync(entry)) continue
+    if (statSync(entry).isDirectory()) mirror(entry, join(target, entry))
+    else mirrorFile(entry, join(target, entry))
+  }
+  const parts = [`${stats.same} 个已是同一份`, `${stats.linked} 个已建立硬链接`]
+  if (stats.copied) parts.push(`${stats.copied} 个只能复制`)
+  if (stats.pruned) parts.push(`清掉 ${stats.pruned} 个陈旧文件`)
+  console.log(`[sync-profile] ${target}\n  ${parts.join(' · ')}`)
+  if (stats.copied) {
+    console.warn(`[sync-profile] 有 ${stats.copied} 个文件是复制过去的（跨卷或不支持硬链接）：`
+      + '它们不会跟着 `npm run build` 更新，改完源码要重跑一次本命令。')
+  }
+  return failures.slice()
 }
 
-const parts = [`${stats.same} 个已是同一份`, `${stats.linked} 个已建立硬链接`]
-if (stats.copied) parts.push(`${stats.copied} 个只能复制`)
-if (stats.pruned) parts.push(`清掉 ${stats.pruned} 个陈旧文件`)
-console.log(`[sync-profile] ${target}\n  ${parts.join(' · ')}`)
-if (stats.copied) {
-  console.warn(`[sync-profile] 有 ${stats.copied} 个文件是复制过去的（跨卷或不支持硬链接）：`
-    + '它们不会跟着 `npm run build` 更新，改完源码要重跑一次本命令。')
-}
-if (failures.length) {
-  console.error(`[sync-profile] ${failures.length} 项失败（DSH 正在运行会锁住 lib/：关掉它再跑一次）:\n  ` + failures.join('\n  '))
+const found = targets.filter(existsSync)
+const skipped = targets.filter((target) => !existsSync(target))
+const allFailures = []
+for (const target of found) allFailures.push(...syncTo(target))
+if (skipped.length) console.log(`[sync-profile] 未安装到这些 profile，跳过：${skipped.join('、')}`)
+if (allFailures.length) {
+  console.error(`[sync-profile] ${allFailures.length} 项失败（DSH 正在运行会锁住 lib/：关掉它再跑一次）:\n  ` + allFailures.join('\n  '))
   process.exit(1)
 }
