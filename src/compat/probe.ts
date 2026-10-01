@@ -60,6 +60,26 @@ import type {
   HostIdentityRealpathNote,
 } from './probe-types.js'
 
+// 宿主安装根的发现与「该走哪条恢复路」的判定 2026-10-01 整段搬到 ./host-roots.js，正文一字
+// 未改（moved-verify 逐字对拍）。probe.js 的公开面照旧：搬走的那 12 件全部从这里再出口 ——
+// index.ts / ops/compat.ts / sessions/bridge.ts 都按 ./compat/probe.js 引它们，少一件 equiv
+// 对拍就报「导出面丢失」。
+export {
+  asarHostPackageRoot,
+  findingsById,
+  hostRootCandidates,
+  IDENTITY_PACKAGES,
+  npxCacheHostRoots,
+  OPERATION_ROUTES,
+  recoveryFor,
+  refusalsFor,
+  routeFor,
+  VERIFIED_HOST_VERSION,
+} from './host-roots.js'
+export type { OperationName, RouteDecision } from './host-roots.js'
+import { hostRootCandidates, IDENTITY_PACKAGES, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
+import type { OperationName, RouteDecision } from './host-roots.js'
+
 // 类型面照旧从 lib/compat/probe.js 对外可见（`ops/compat.ts` 等按这个路径引它们）。
 export type {
   CapabilityFinding,
@@ -75,14 +95,6 @@ export type {
 } from './probe-types.js'
 
 /** Packages whose physical module identity matters to this plugin. */
-export const IDENTITY_PACKAGES = [
-  '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-tools',
-  '@deepseek-ai/dsh-workspace',
-  '@deepseek-ai/dsh-session-projection-cache',
-  '@deepseek-ai/dsh-storage-domain',
-  '@deepseek-ai/dsh-spill-local',
-] as const
 
 /**
  * 本插件是不是从**源码检出**跑起来的（仓库里那份，`scripts/host-deps.mjs` 就躺在旁边）。
@@ -126,7 +138,6 @@ export function isSourceInstall(): boolean {
  */
 export const EXPECTED_PEER_RANGE = '>=0.1.7-rc.2 || >=0.2.0-rc.1'
 /** The release this plugin's adapters were last verified against. */
-export const VERIFIED_HOST_VERSION = '0.2.0-rc.2'
 /**
  * peer range 的下界。
  *
@@ -152,36 +163,8 @@ export const EXPECTED_MIN_HOST_VERSION =
  * - `adapter`: the checked compatibility adapter (the only route that touches
  *   private members), used when the host has no native entry.
  */
-export const OPERATION_ROUTES = {
-  archive: { native: ['workspace.archive-native'], adapter: ['workspace.enqueue', 'workspace.set-state'] },
-  unarchive: { native: ['workspace.unarchive-native'], adapter: ['workspace.enqueue', 'workspace.set-state'] },
-  batch: { native: ['workspace.batch-native'], adapter: ['workspace.enqueue', 'workspace.set-state'] },
-  delete: {
-    native: ['workspace.delete-native'],
-    // NOTE: `projection.delete-native` is deliberately NOT a route requirement.
-    // A host cache without its own delete barrier is expected on rc.2; the
-    // bridge wraps it (`workspace.js` / `sessions/bridge.ts`) and reports a
-    // refusal itself when even that is impossible. Requiring the native barrier
-    // here would disable deletion on exactly the host this plugin was verified
-    // against.
-    adapter: [
-      'workspace.enqueue', 'workspace.set-state', 'workspace.index-header',
-      'sessions.detach-live', 'sessions.cold-announce', 'projection.write',
-      // B2：运行时硬前提（`table.delete`）也算一条路由要求 —— 不算进来的话，宿主表不可删时
-      // 路由说可用、点下去必拒。batch 的 adapter 路由**有意**保持只有 enqueue/set-state：
-      // 它的逐条失败会在结果里按 sessionId 报出来，此处不放宽也不收紧。
-      'projection.table-delete',
-    ],
-  },
-  list: { native: [], adapter: ['workspace.read-state', 'workspace.read-table', 'workspace.index-shape'] },
-} as const satisfies Record<string, { native: readonly string[]; adapter: readonly string[] }>
-
-export type OperationName = keyof typeof OPERATION_ROUTES
 
 /** Texts a user can act on, per capability, when it is the reason for a refusal. */
-function recoveryFor(_finding: CapabilityFinding): string {
-  return `宿主 ${VERIFIED_HOST_VERSION} 的该项能力未通过探测；请更新本插件到与本机 DSH 匹配的版本，或改用宿主原生入口（先运行 node scripts/doctor.mjs 查看差异）。`
-}
 
 /**
  * One capability's result. `target` is the live host object; `reference` is
@@ -564,29 +547,6 @@ function hostPackageRoot(): string | null {
  * 只列候选、不判存在性：调用方各有自己的"像不像一份安装"的判据（运行时要求
  * `dsh/package.json`，host-deps 还要读出版本号）。
  */
-export function hostRootCandidates(): string[] {
-  const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh')
-  const candidates: string[] = []
-  const asarHost = asarHostPackageRoot()
-  if (asarHost !== null) candidates.push(asarHost)
-  if (home !== '') candidates.push(join(home, 'profiles', 'node_modules', '@deepseek-ai'))
-  for (const anchor of IDENTITY_PACKAGES) {
-    // 锚点候选只认**真实形态**：取不到就跳过（这里没有可比的对象，如实跳过即可，
-    // 与身份比对不同 —— 那边取不到必须报出来，见 assessHost 的 realpath 说明）。
-    const real = realPathWithReason(safeResolve(anchor))
-    if ('reason' in real) continue
-    const resolved = real.path
-    let dir = dirname(resolved)
-    for (let i = 0; i < 4; i += 1) {
-      if (dir.endsWith(join('node_modules', '@deepseek-ai'))) { candidates.push(dir); break }
-      const parent = dirname(dir)
-      if (parent === dir) break
-      dir = parent
-    }
-  }
-  candidates.push(...npxCacheHostRoots())
-  return candidates
-}
 
 /**
  * 正在运行的桌面版 DSH 的 `@deepseek-ai` 目录（在 `resources/app.asar` 里），没有则 null。
@@ -595,45 +555,12 @@ export function hostRootCandidates(): string[] {
  * 包名或环境变量猜，因此在 `dsh web`（node 跑）下一律返回 null。归档内路径由 electron
  * 自己的 fs 修补解析，归档外的普通 node 读不到，所以这一步失败是静默的正常路径。
  */
-function asarHostPackageRoot(): string | null {
-  const resources = (process as { resourcesPath?: string }).resourcesPath
-  if (typeof resources !== 'string' || resources === '') return null
-  const dir = join(resources, 'app.asar', 'dsh', 'node_modules', '@deepseek-ai')
-  try {
-    if (!existsSync(join(dir, 'dsh', 'package.json'))) return null
-  } catch {
-    return null
-  }
-  return dir
-}
 
 /**
  * npx 缓存里的宿主 `@deepseek-ai` 目录，按目录 mtime 新到旧排。npm 缓存位置依次看
  * `npm_config_cache`、`~/.npmrc` 的 `cache=`、`%LOCALAPPDATA%\npm-cache` —— probe 全程同步，
  * 不起子进程，读不到就当没有这批候选。
  */
-function npxCacheHostRoots(): string[] {
-  const home = process.env.USERPROFILE || process.env.HOME || ''
-  let cache = process.env.npm_config_cache || ''
-  if (!cache && home) {
-    try {
-      const rc = readFileSync(join(home, '.npmrc'), 'utf8')
-      cache = rc.match(/^\s*cache\s*=\s*(.+?)\s*$/m)?.[1] ?? ''
-    } catch { /* no .npmrc — defaults below */ }
-  }
-  if (!cache && process.env.LOCALAPPDATA) cache = join(process.env.LOCALAPPDATA, 'npm-cache')
-  if (!cache) return []
-  const roots: Array<{ dir: string; mtime: number }> = []
-  const npxRoot = join(cache, '_npx')
-  let entries: string[] = []
-  try { entries = readdirSync(npxRoot) } catch { return [] }
-  for (const entry of entries) {
-    const dir = join(npxRoot, entry, 'node_modules', '@deepseek-ai')
-    if (!existsSync(join(dir, 'dsh', 'package.json'))) continue
-    try { roots.push({ dir, mtime: statSync(dir).mtimeMs }) } catch { /* raced — skip */ }
-  }
-  return roots.sort((left, right) => right.mtime - left.mtime).map((root) => root.dir)
-}
 
 /** Human-readable summary line for logs and the settings page header. */
 export function summarize(assessment: HostAssessment): string {
@@ -644,27 +571,8 @@ export function summarize(assessment: HostAssessment): string {
 }
 
 /** Findings by id, for route decisions. */
-export function findingsById(assessment: Pick<HostAssessment, 'findings'>): Map<string, CapabilityFinding> {
-  return new Map(assessment.findings.map((finding) => [finding.id, finding]))
-}
 
 /** Refusals for every degraded capability in the list, in list order. */
-export function refusalsFor(assessment: Pick<HostAssessment, 'findings'>, ids: readonly string[]): CapabilityRefusal[] {
-  const index = findingsById(assessment)
-  const out: CapabilityRefusal[] = []
-  for (const id of ids) {
-    const finding = index.get(id)
-    if (finding === undefined || finding.state === 'ok') continue
-    out.push({ id: finding.id, label: finding.label, detail: finding.detail, recovery: recoveryFor(finding) })
-  }
-  return out
-}
-
-export interface RouteDecision {
-  /** `native` prefers official entry points; `adapter` is the checked adapter. */
-  readonly via: 'native' | 'adapter' | 'none'
-  readonly refusals: readonly CapabilityRefusal[]
-}
 
 /**
  * Choose how one operation should reach the host.
@@ -676,31 +584,6 @@ export interface RouteDecision {
  * @param operation - operation name from {@link OPERATION_ROUTES}.
  * @returns the route to take plus, when `none`, what is missing and why.
  */
-export function routeFor(assessment: Pick<HostAssessment, 'findings'>, operation: OperationName): RouteDecision {
-  const routes = OPERATION_ROUTES[operation]
-  const index = findingsById(assessment)
-  const allOk = (ids: readonly string[]): boolean =>
-    ids.every((id) => {
-      const finding = index.get(id)
-      // A capability that the host does not expose at all cannot block a route
-      // it is not part of; absent ids are treated as satisfied.
-      return finding === undefined || finding.state === 'ok'
-    })
-  if (routes.native.length > 0 && allOk(routes.native)) return { via: 'native', refusals: [] }
-  if (allOk(routes.adapter)) return { via: 'adapter', refusals: [] }
-  const needed = routes.native.length > 0 ? [...new Set([...routes.native, ...routes.adapter])] : routes.adapter
-  const refusals = refusalsFor(assessment, needed)
-  if (refusals.length > 0) return { via: 'none', refusals }
-  return {
-    via: 'none',
-    refusals: [{
-      id: operation,
-      label: operation,
-      detail: '宿主未提供该操作的任何可用路径',
-      recovery: recoveryFor({ id: operation } as CapabilityFinding),
-    }],
-  }
-}
 
 /**
  * The error a refused operation throws. Kept as a distinct class so callers can
