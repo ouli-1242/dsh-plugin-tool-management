@@ -94,7 +94,7 @@ import { buildSceneTools } from './tools/scene.js'
 import { buildSubagentTools } from './tools/subagent.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './subagents/tools.js'
-import { detectFormat, extractText, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from './imports/parsers.js'
+import { extractExportTurns, serializeTranscript } from './exports/transcript.js'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
@@ -175,33 +175,8 @@ interface DshContext extends Context {
 }
 
 // ---------------------------------------------------------------------------
-// Transcript export helpers — mirror the import parsers (src/imports/parsers.js)
-// so an exported file can be imported back losslessly. Pure Node, no ctx.
+// Transcript export lives in src/exports/transcript.ts (0.18.5).
 // ---------------------------------------------------------------------------
-
-/** 从会话事件数组提取用户/助手纯文本轮次（与导入解析器对称）。 */
-function extractTurnsFromEvents(events: unknown[]): Array<{ role: 'user' | 'assistant'; text: string }> {
-  const turns: Array<{ role: 'user' | 'assistant'; text: string }> = []
-  for (const ev of events || []) {
-    if (!ev || typeof ev !== 'object') continue
-    const e = ev as { type?: string; data?: { content?: unknown; message?: { content?: unknown } } }
-    let content: unknown
-    if (e.type === 'user/message') content = e.data && e.data.content
-    else if (e.type === 'assistant/message') content = e.data && e.data.message && e.data.message.content
-    else continue
-    const text = extractText(content).trim()
-    if (text) turns.push({ role: e.type === 'user/message' ? 'user' : 'assistant', text })
-  }
-  return turns
-}
-
-/** 序列化为可再导入的转录文本：Codex 风格 Markdown 或 Claude Code 风格 JSONL。 */
-function serializeTurns(turns: Array<{ role: 'user' | 'assistant'; text: string }>, format: 'markdown' | 'jsonl'): string {
-  if (format === 'jsonl') {
-    return turns.map((t) => JSON.stringify({ type: t.role, message: { role: t.role, content: t.text } })).join('\n')
-  }
-  return turns.map((t) => (t.role === 'user' ? '## User\n' : '### Assistant\n') + t.text).join('\n\n')
-}
 
 /**
  * `inject` 的服务名清单（单一来源）：既声明给宿主，也是「挂载心跳」与 doctor 核对的内容。
@@ -1583,8 +1558,8 @@ export default {
         quickPromptsDir,
         rulesList: (args: any) => memoriesService.ops['rules-list'](args),
         skillDetail: (args: any) => skillsService.ops['skill-detail'](args),
-        extractTurnsFromEvents,
-        serializeTurns,
+        extractTurnsFromEvents: extractExportTurns,
+        serializeTurns: serializeTranscript,
       }),
       // rules 域里要走「场景 ↔ 全局基线同步」包装的四个写 op（ops/scene-sync.ts 提供）。
       // 必须排在 ...memoriesService.ops 之后 —— 这里是显式覆盖同名 op，不是新增。

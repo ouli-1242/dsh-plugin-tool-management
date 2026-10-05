@@ -207,7 +207,12 @@ interface HostWorkspaceRegistry extends RegistryLike {
 	archivedAt?(sessionId: string): number | undefined;
 	archivedSessionDetails?(): Promise<{ items: Array<{ sessionId: string; archivedAt?: number }> }>;
 	archiveWorkspaceSessions?(workspaceId: string): Promise<{ archivedSessionIds: string[]; archivedSessionIdsAdded: string[] }>;
-	unarchiveSession?(sessionId: string): Promise<{ archivedSessionIds: string[] }>;
+	/**
+	 * 官方契约是 `Promise<void>`（dsh-workspace lib/index.js:551-560、types/index.d.ts:224）：
+	 * `enqueueOperation` 的回调无论走早退还是写入分支都不返回值。这里按真实形状声明，
+	 * 免得有人以为能拿它回传的归档集合 —— 0.18.5 之前正是这个误会让用户点「恢复」必报失败。
+	 */
+	unarchiveSession?(sessionId: string): Promise<void>;
 	unarchiveSessions?(target: ArchivedBatchTarget): Promise<{ archivedSessionIds: string[]; unarchivedSessionIds: string[] }>;
 	deleteArchivedSessions?(target: ArchivedBatchTarget): Promise<ArchivedDeleteBatchResult>;
 	deleteSession?(sessionId: string): Promise<{ deleted: true }>;
@@ -446,6 +451,23 @@ var ArchiveWorkspaceRegistry = class {
 			}
 		}
 		if (changed) await this.saveArchivedAt();
+	}
+	/**
+	 * 以宿主权威归档集合构造恢复回执。
+	 *
+	 * 官方 `unarchiveSession` 只回 `Promise<void>`，**宿主给什么一律不认**，委托与自持两条
+	 * 分支共用这一个形状。读公开 getter 而不是 `requireState()`：后者经 `bridge.state()`
+	 * 落到 `method("requireState")`，宿主缺这个私有成员时会直接抛（bridge.ts:331）——
+	 * 恢复已经成功了，不该被一份回执拖成失败。
+	 */
+	archivedSetResult(): { archivedSessionIds: string[] } {
+		const raw = this.archivedSessionIds as unknown;
+		if (!Array.isArray(raw)) {
+			this.ctx.logger.warn("archive-manager: registry.archivedSessionIds is not an array; reporting an empty archive set");
+			return { archivedSessionIds: [] };
+		}
+		// 集合由我们自己拼，schema 在这里是后置断言：真触发说明 getter 的声明与运行时不符。
+		return archivedSetSchema.parse({ archivedSessionIds: [...new Set(raw.map((id) => String(id)))] }) as { archivedSessionIds: string[] };
 	}
 	async ensureArchivedAtLoaded() {
 		await this.ready;
@@ -880,12 +902,13 @@ var ArchiveWorkspaceRegistry = class {
 	 * @param sessionId - 要取消归档的会话。
 	 * @returns 更新后的完整归档集合。
 	 */
-	async unarchiveSession(sessionId: string) {
+	async unarchiveSession(sessionId: string): Promise<{ archivedSessionIds: string[] }> {
 		this.bridge.checkWorkspace("unarchive");
 		if (typeof this.registry.unarchiveSession === "function") {
-			const result = await this.registry.unarchiveSession(sessionId);
+			await this.registry.unarchiveSession(sessionId);
 			await this.reconcileArchiveLedger();
-			return result;
+			// 官方只回 Promise<void>，返回值不认；回执按权威集合自造（见 archivedSetResult）。
+			return this.archivedSetResult();
 		}
 		return this.enqueueOperation(async () => {
 			if (!(await this.sessionKnown(sessionId)))
@@ -954,6 +977,9 @@ var ArchiveWorkspaceRegistry = class {
 	 * 目标全部来自已归档集合，因此即使日志已被外部移除，也会清掉陈旧归档标记。
 	 */
 	async unarchiveSessions(target: ArchivedBatchTarget) {
+		// ⚠️ 这一支今天**跑不到**：宿主没有 `unarchiveSessions`（dsh-workspace 全库零命中），
+		// 所以无从测试。它保留了「直接认宿主返回值」这个和 unarchiveSession 同型的过度信任 ——
+		// 官方哪天补上这个方法时，先照 unarchiveSession 的做法改成自造回执，别照抄这一行。
 		if (typeof this.registry.unarchiveSessions === "function") {
 			const result = await this.registry.unarchiveSessions(target);
 			await this.reconcileArchiveLedger();
@@ -962,7 +988,7 @@ var ArchiveWorkspaceRegistry = class {
 		if (typeof this.registry.unarchiveSession === "function") {
 			const ids = this.archivedSessionIdsForTarget(target);
 			for (const id of ids) await this.unarchiveSession(id);
-			return { unarchivedSessionIds: ids, archivedSessionIds: [...this.registry.archivedSessionIds] };
+			return { unarchivedSessionIds: ids, ...this.archivedSetResult() };
 		}
 		return this.enqueueOperation(async () => {
 			const unarchivedSessionIds = this.archivedSessionIdsForTarget(target);

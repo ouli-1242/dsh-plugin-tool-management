@@ -19,6 +19,7 @@ import { isValidPresetId } from '../prompts/preset-id.js'
 import { defaultPersonasDir, validPersonaName } from '../subagents/service.js'
 import { isInsideRoot } from '../paths.js'
 import { planMemoryExport } from '../memories/service.js'
+import type { ExportDetail, ExportTurn } from '../exports/transcript.js'
 
 /** 批量目标的形状由 parseHistoryBatchTarget 产出、registry 消费，本文件不关心其内部结构。 */
 type SessionsBatchTarget = unknown
@@ -75,8 +76,8 @@ export interface SessionOpsDeps {
   quickPromptsDir: string
   rulesList(args: any): Promise<any>
   skillDetail(args: any): Promise<any>
-  extractTurnsFromEvents(events: unknown[]): Array<{ role: 'user' | 'assistant'; text: string }>
-  serializeTurns(turns: Array<{ role: 'user' | 'assistant'; text: string }>, format: 'markdown' | 'jsonl'): string
+  extractTurnsFromEvents(events: unknown[], detail: ExportDetail): ExportTurn[]
+  serializeTurns(turns: ExportTurn[], format: 'markdown' | 'jsonl'): string
 }
 
 export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any) => Promise<any>> {
@@ -223,9 +224,13 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
       const sessionId = String((args && args.sessionId) || '').trim()
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       try {
-        const r = await registry.unarchiveSession(sessionId)
+        // 不接 registry 的返回值：官方 `unarchiveSession` 是 `Promise<void>`，而界面只要
+        // ok / error / workspace —— 每次单条恢复都把整个归档集合回传一遍纯属浪费。
+        // 0.18.5 之前这里读 `r.archivedSessionIds`，于是宿主恢复**成功之后**构造回执时抛
+        // TypeError，界面弹「操作失败」，用户以为没恢复、其实已经恢复了。
+        await registry.unarchiveSession(sessionId)
         const workspace = await deps.restoreWorkspaceAccounting([sessionId])
-        return { ok: true, archivedSessionIds: r.archivedSessionIds, ...(workspace ? { workspace } : {}) }
+        return { ok: true, sessionId, ...(workspace ? { workspace } : {}) }
       } catch (e) { return { ok: false, error: deps.message(e) } }
     },
     'history-delete': async (args: any) => {
@@ -283,7 +288,8 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
       try {
         const r = await registry.unarchiveSessions(parsed.target)
         const workspace = await deps.restoreWorkspaceAccounting(r.unarchivedSessionIds || [])
-        return { ok: true, unarchivedSessionIds: r.unarchivedSessionIds, archivedSessionIds: r.archivedSessionIds, ...(workspace ? { workspace } : {}) }
+        // 只报「这次恢复了哪些」，不把整个归档集合快照发回界面（同上，界面不读它）。
+        return { ok: true, unarchivedSessionIds: r.unarchivedSessionIds, ...(workspace ? { workspace } : {}) }
       } catch (e) { return { ok: false, error: deps.message(e) } }
     },
     'history-delete-batch': async (args: any) => {
@@ -512,12 +518,18 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
     },
     // 把选中的归档会话导出为可再导入的转录文件（Markdown / JSONL），写入指定目录。
     // 每个会话一个文件；读不到正文的冷会话列入 skipped，不中断其余导出。
+    // `detail` 三档**累进**：`simple`（默认）只有正文；`tools` 另加工具调用与结果、附件名；
+    // `full` 再加思考。
     'history-export': async (args: any) => {
       const rawIds = (args && args.sessionIds) || []
       const ids = Array.isArray(rawIds) ? rawIds.map((s: unknown) => String(s).trim()).filter(Boolean) : []
       if (!ids.length) return { ok: false, error: '请至少选择一个会话' }
       const format = String((args && args.format) || 'markdown').toLowerCase()
       if (format !== 'markdown' && format !== 'jsonl') return { ok: false, error: 'format 需为 markdown 或 jsonl' }
+      // 收到不认识的档位就出声：静默降级会让用户以为导出的是带工具的版本，而它其实只有正文。
+      const rawDetail = String((args && args.detail) || 'simple').toLowerCase()
+      if (rawDetail !== 'simple' && rawDetail !== 'tools' && rawDetail !== 'full') return { ok: false, error: 'detail 需为 simple / tools / full' }
+      const detail = rawDetail as ExportDetail
       const outDir = String((args && args.outDir) || '').trim()
       if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(outDir)) return { ok: false, error: '导出目录需为绝对路径' }
       const sessions = deps.host<{ get?(id: string): unknown }>('sessions')
@@ -565,9 +577,13 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         const path = join(outDir, fileName)
         try {
           const events = await readEvents(sessionId)
-          const turns = deps.extractTurnsFromEvents(events || [])
+          const turns = deps.extractTurnsFromEvents(events || [], detail)
           if (!turns.length) {
-            skipped.push({ sessionId, error: events ? '会话中没有可导出的消息' : '无法读取会话内容（不在活动存储且无持久化句柄）' })
+            // 简洁档现在**不含思考与工具**（0.18.5 之前思考被混在正文里），所以"只有思考没正文"
+            // 的会话会第一次变成导不出来 —— 得说清楚是档位问题，不是内容丢了。
+            skipped.push({ sessionId, error: !events ? '无法读取会话内容（不在活动存储且无持久化句柄）'
+              : detail !== 'full' ? '会话中没有可导出的正文（思考与工具调用不计入本档 —— 换更高一档可以导出它们）'
+                : '会话中没有可导出的消息' })
             continue
           }
           // `'wx'`：绝不覆盖已存在的同名文件 —— 覆盖是静默的，用户会以为导出成功

@@ -339,6 +339,11 @@ function enabledMemoryCount(rules) {
     }
     // 场景输入（combobox）：既能从已有场景里挑，也能直接手输一个新场景名——
     // 宿主 rules-create 用 mkdir(recursive) 落盘，所以「自定义场景」无需先建目录。
+    //
+    // `onPickFolder` 是可选的第二颗按钮（0.18.5，会话导入选工作区）：选项来自登记列表，但用户
+    // 也可能要挑一个从没登记过的目录，那就得走目录浏览器。它渲染在 .dsm-combo-row **里面**
+    // 而不是外面 —— .dsm-field 是列向 flex，放外面会掉到下拉框下方；而 .dsm-select-menu 相对
+    // .dsm-select 绝对定位，另起一行就没有对齐的锚点了。两颗都是 .dsm-btn-secondary，同高。
     function SceneCombo(props) {
       var state = react.useState(false), open = state[0], setOpen = state[1], ref = react.useRef(null);
       react.useEffect(function () { if (!open) return undefined; function close(event) { if (!ref.current || !ref.current.contains(event.target)) setOpen(false); } document.addEventListener("pointerdown", close); return function () { document.removeEventListener("pointerdown", close); }; }, [open]);
@@ -346,7 +351,9 @@ function enabledMemoryCount(rules) {
       return h("div", { className: "dsm-select", ref: ref },
         h("div", { className: "dsm-combo-row" },
           h("input", { className: "dsm-control" + (props.invalid ? " dsm-rule-invalid" : ""), type: "text", value: props.value || "", placeholder: props.placeholder, "aria-label": props.label, onChange: function (e) { props.onChange(e.target.value); } }),
-          h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", "aria-haspopup": "listbox", "aria-expanded": open, disabled: props.disabled || !options.length, onClick: function () { setOpen(!open); } }, props.browseLabel)),
+          h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", "aria-haspopup": "listbox", "aria-expanded": open, disabled: props.disabled || !options.length, onClick: function () { setOpen(!open); } }, props.browseLabel),
+          // 开目录浏览器前先收菜单：这颗按钮在 ref 里面，document 上那个 pointerdown 关闭器不会替我关。
+          props.onPickFolder ? h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", title: props.pickFolderTitle, disabled: props.disabled === true, onClick: function () { setOpen(false); props.onPickFolder(); } }, props.pickFolderLabel) : null),
         open && options.length ? h("div", { className: "dsm-select-menu", role: "listbox" }, options.map(function (o) { return h("button", { key: o.value, type: "button", role: "option", className: "dsm-option", "aria-selected": o.value === props.value, onClick: function () { props.onChange(o.value); setOpen(false); } }, o.label); })) : null);
     }
     function Switch(props) { return h("button", { type: "button", className: "dsm-switch" + (props.on ? " dsm-switch-on" : ""), role: "switch", "aria-checked": props.on, "aria-label": props.label, title: props.title, disabled: props.disabled, onClick: props.onClick }); }

@@ -12,10 +12,10 @@
           // 多选集合：勾选的 sessionId。最小 React 支持函数式初值（Set 惰性创建）。
           var selState = React.useState(function () { return new Set() })
           var selected = selState[0], setSelected = selState[1]
-          // 导入对话弹窗：null = 关闭；{ busy, error, result, cwd } = 打开。
+          // 导入对话弹窗：null = 关闭；{ busy, error, result, cwd, pickingDir } = 打开。
           var impState = React.useState(null)
           var imp = impState[0], setImp = impState[1]
-          // 导出对话弹窗：null = 关闭；{ busy, error, result, outDir, format, wsFilter, selectedIds } = 打开。
+          // 导出对话弹窗：null = 关闭；{ busy, error, result, outDir, format, detail, wsFilter, selectedIds } = 打开。
           var expState = React.useState(null)
           var exp = expState[0], setExp = expState[1]
           // 分组卡片折叠状态：key → true（收起）。默认全部展开。
@@ -184,11 +184,11 @@
             reader.readAsText(file)
           }
           function openImportPicker() {
-            setImp({ busy: false, error: null, result: null, cwd: '' })
+            setImp({ busy: false, error: null, result: null, cwd: '', pickingDir: false })
           }
           // ---------- 导出对话：弹窗内选范围/工作区 → 勾选会话 → 写入指定目录 ----------
           function openExportPicker() {
-            setExp({ busy: false, error: null, result: null, outDir: '', format: 'markdown', wsFilter: '', archFilter: 'all', items: [], loading: true, selectedIds: new Set() })
+            setExp({ busy: false, error: null, result: null, outDir: '', format: 'markdown', detail: 'simple', wsFilter: '', archFilter: 'all', items: [], loading: true, selectedIds: new Set() })
             // 拉取全部持久化会话（含未归档/冷会话），供选择导出。
             apiCall('history-sessions', {}).then(function (res) {
               setExp(function (prev) {
@@ -229,7 +229,7 @@
             var ids = Array.from(exp.selectedIds)
             if (!ids.length || !String(exp.outDir || '').trim()) return
             setExp(Object.assign({}, exp, { busy: true, error: null, result: null }))
-            apiCall('history-export', { sessionIds: ids, format: exp.format, outDir: String(exp.outDir).trim() }).then(function (res) {
+            apiCall('history-export', { sessionIds: ids, format: exp.format, detail: exp.detail, outDir: String(exp.outDir).trim() }).then(function (res) {
               if (res && res.ok) setExp(Object.assign({}, exp, { busy: false, result: res }))
               else setExp(Object.assign({}, exp, { busy: false, error: (res && res.error) || t('hist.err.export') }))
             }).catch(function () {
@@ -271,6 +271,11 @@
             { value: 'markdown', label: 'Markdown' },
             { value: 'jsonl', label: 'JSONL' },
           ]
+          var EXPORT_DETAIL_OPTS = [
+            { value: 'simple', label: t('hist.export.detail.simple') },
+            { value: 'tools', label: t('hist.export.detail.tools') },
+            { value: 'full', label: t('hist.export.detail.full') },
+          ]
           var EXPORT_ARCH_OPTS = [
             { value: 'all', label: t('hist.arch.all') },
             { value: 'archived', label: t('hist.arch.archived') },
@@ -289,6 +294,24 @@
             })
             exportWsOptions.push({ value: 'ungrouped', label: t('hist.ungrouped') })
           }
+          // 导入弹窗的工作区候选：只列**活登记**的组，值用目录路径（history-import 吃的就是路径）。
+          // 「已移除」的游离组不进来 —— 它按定义就是没登记，让它冒充「选一个工作区」会静默造出
+          // 本页标着「已移除」的那种状态；真要用那个目录还有「浏览」，手输也一直留着。
+          var importWsOptions = []
+          ;(function () {
+            var seen = {}
+            function pushOption(title, path) {
+              var p = String(path || '')
+              if (!p || seen[p]) return
+              seen[p] = true
+              importWsOptions.push({ value: p, label: (title ? title + ' — ' : '') + p })
+            }
+            ;(data.groups || []).forEach(function (g) { if (g && g.kind === 'live') pushOption(g.title, g.path) })
+            if (!importWsOptions.length) {
+              var ws = data.workspaces || {}
+              Object.keys(ws).forEach(function (wid) { pushOption(ws[wid] && ws[wid].title, ws[wid] && ws[wid].path) })
+            }
+          })()
           var exportItems = []
           if (exp) {
             var useGroups = !!(data.groups && data.groups.length)
@@ -419,28 +442,49 @@
               extra: React.createElement('div', null,
                 React.createElement('div', { className: 'dsm-field' },
                   React.createElement('label', { className: 'dsm-label' }, t('hist.import.cwd')),
-                  React.createElement('input', { className: 'dsm-control', type: 'text', placeholder: t('hist.import.cwd.placeholder'), value: imp.cwd || '', onChange: function (e) { setImp(Object.assign({}, imp, { cwd: e.target.value })) } }))),
+                  // 三条路并存：从已登记的工作区挑、浏览一个文件夹、直接粘路径。
+                  // 标签是 combo 的**兄弟**而不是祖先 —— 嵌套 label 会把点击转给清单里第一项。
+                  React.createElement(SceneCombo, {
+                    options: importWsOptions, value: imp.cwd || '',
+                    placeholder: t('hist.import.cwd.placeholder'), label: t('hist.import.cwd'),
+                    browseLabel: t('hist.import.workspace'),
+                    pickFolderLabel: t('hist.import.browse'), pickFolderTitle: t('hist.export.browse'),
+                    disabled: imp.busy === true,
+                    onChange: function (v) { setImp(Object.assign({}, imp, { cwd: v })) },
+                    onPickFolder: function () { setImp(Object.assign({}, imp, { pickingDir: true })) },
+                  }),
+                  imp.pickingDir ? React.createElement(DirPickerModal, { key: 'imp-dir-picker', title: t('dir.title'), initial: String(imp.cwd || ''), closeLabel: t('btn.close'), onClose: function () { setImp(Object.assign({}, imp, { pickingDir: false })) }, onPick: function (path) { setImp(Object.assign({}, imp, { cwd: path, pickingDir: false })) } }) : null,
+                  importWsOptions.length ? null : React.createElement('p', { className: 'dsm-help' }, t('hist.import.workspace.none')))),
               onClose: function () { setImp(null) },
               onSubmit: function (entries, files) { doImportFile(files[0]) },
             }) : null,
-            exp ? React.createElement(Modal, { key: 'exp', className: 'dsm-modal-list dsm-export-modal', list: true, title: t('hist.btn.export'), closeLabel: t('btn.close'), onClose: function () { setExp(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('hist.export.hint')),
-              React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, t('hist.export.dir')),
-                React.createElement('div', { className: 'dsm-dir-row' },
-                  React.createElement('input', { className: 'dsm-control', type: 'text', placeholder: 'D:\\backups\\dsh\\exports', value: exp.outDir || '', onChange: function (e) { setExp(Object.assign({}, exp, { outDir: e.target.value })) } }),
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: exp.busy, onClick: openExportDir, title: t('hist.export.browse') }, t('hist.btn.browse'))),
-                exp.pickingDir ? React.createElement(DirPickerModal, { key: 'exp-dir-picker', title: t('hist.export.pickDir'), initial: String(exp.outDir || ''), closeLabel: t('btn.close'), onClose: function () { setExp(Object.assign({}, exp, { pickingDir: false })) }, onPick: function (path) { setExp(Object.assign({}, exp, { outDir: path, pickingDir: false })) } }) : null),
-              React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, t('hist.export.format')),
-                React.createElement(SourceSelect, { options: EXPORT_FORMAT_OPTS, value: exp.format, onChange: function (v) { setExp(Object.assign({}, exp, { format: v })) } })),
-              React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, t('hist.export.scope')),
-                React.createElement(SourceSelect, { options: EXPORT_ARCH_OPTS, value: exp.archFilter, onChange: function (v) { setExp(Object.assign({}, exp, { archFilter: v, selectedIds: new Set() })) } })),
-              React.createElement('div', { className: 'dsm-field' },
-                React.createElement('label', { className: 'dsm-label' }, t('hist.export.workspace')),
-                React.createElement(SourceSelect, { options: exportWsOptions, value: exp.wsFilter, onChange: function (v) { setExp(Object.assign({}, exp, { wsFilter: v, selectedIds: new Set() })) } })),
-              React.createElement('div', { className: 'dsm-field dsm-export-body' },
+            // 导出弹窗（0.18.5）：字段从五行压成三行（格式｜导出内容 一行、会话范围｜工作区
+            // 一行），整块包进 .dsm-export-form 让列表吃掉剩下的高度。范围和工作是两个正交
+            // 条件，不做成笛卡尔积的单个下拉 —— 合成一行只是省位置，语义没合。
+            exp ? React.createElement(Modal, { key: 'exp', className: 'dsm-modal-list dsm-modal-export-lg dsm-export-modal', list: true, title: t('hist.btn.export'), closeLabel: t('btn.close'), onClose: function () { setExp(null) } },
+              React.createElement('div', { className: 'dsm-form dsm-export-form' },
+                React.createElement('p', { className: 'dsm-help' }, t('hist.export.hint')),
+                React.createElement('div', { className: 'dsm-field' },
+                  React.createElement('label', { className: 'dsm-label' }, t('hist.export.dir')),
+                  React.createElement('div', { className: 'dsm-dir-row' },
+                    React.createElement('input', { className: 'dsm-control', type: 'text', placeholder: 'D:\\backups\\dsh\\exports', value: exp.outDir || '', onChange: function (e) { setExp(Object.assign({}, exp, { outDir: e.target.value })) } }),
+                    React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: exp.busy, onClick: openExportDir, title: t('hist.export.browse') }, t('hist.btn.browse'))),
+                  exp.pickingDir ? React.createElement(DirPickerModal, { key: 'exp-dir-picker', title: t('hist.export.pickDir'), initial: String(exp.outDir || ''), closeLabel: t('btn.close'), onClose: function () { setExp(Object.assign({}, exp, { pickingDir: false })) }, onPick: function (path) { setExp(Object.assign({}, exp, { outDir: path, pickingDir: false })) } }) : null),
+                React.createElement('div', { className: 'dsm-field-row' },
+                  React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('label', { className: 'dsm-label' }, t('hist.export.format')),
+                    React.createElement(SourceSelect, { options: EXPORT_FORMAT_OPTS, value: exp.format, onChange: function (v) { setExp(Object.assign({}, exp, { format: v })) } })),
+                  React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('label', { className: 'dsm-label' }, t('hist.export.detail')),
+                    React.createElement(SourceSelect, { options: EXPORT_DETAIL_OPTS, value: exp.detail, onChange: function (v) { setExp(Object.assign({}, exp, { detail: v })) } }))),
+                React.createElement('div', { className: 'dsm-field-row' },
+                  React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('label', { className: 'dsm-label' }, t('hist.export.scope')),
+                    React.createElement(SourceSelect, { options: EXPORT_ARCH_OPTS, value: exp.archFilter, onChange: function (v) { setExp(Object.assign({}, exp, { archFilter: v, selectedIds: new Set() })) } })),
+                  React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('label', { className: 'dsm-label' }, t('hist.export.workspace')),
+                    React.createElement(SourceSelect, { options: exportWsOptions, value: exp.wsFilter, onChange: function (v) { setExp(Object.assign({}, exp, { wsFilter: v, selectedIds: new Set() })) } }))),
+                React.createElement('div', { className: 'dsm-field dsm-export-body' },
                 React.createElement('div', { className: 'dsm-label' }, t('hist.export.sessions', { count: exportItems.length })),
                 React.createElement('div', { className: 'dsm-source dsm-pick-list' },
                   exp.loading ? React.createElement('div', { className: 'dsm-empty' }, t('hist.export.loading'))
@@ -470,7 +514,8 @@
                                   React.createElement('span', { className: 'dsm-tag' + (it.archived ? '' : ' dsm-tag-on') }, it.archived ? t('hist.tag.archived') : t('hist.tag.live'))))
                             }) : null)
                         })
-                      })() : React.createElement('div', { className: 'dsm-empty' }, t('hist.export.empty')))),
+                      })() : React.createElement('div', { className: 'dsm-empty' }, t('hist.export.empty'))))),
+              // ↑ 最后那个括号收掉 .dsm-export-form：结果条与动作行留在表单外面，才能常驻不动。
               exp.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(exp.error)) : null,
               exp.result ? React.createElement('div', { className: 'dsm-feedback' },
                 exp.result.exported

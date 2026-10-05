@@ -55,7 +55,8 @@ import { ArchiveWorkspaceRegistry } from '../lib/sessions/workspace.js'
 import { buildTrashOps } from '../lib/ops/trash.js'
 import { bundleDocName, GLOBAL_SCENE, LEGACY_BUNDLE_DOC, MEMORIES_TRASH_DIR, SHARED_GROUP } from '../lib/memories/constants.js'
 import { buildSceneSyncOps } from '../lib/ops/scene-sync.js'
-import { detectFormat } from '../lib/imports/parsers.js'
+import { detectFormat, parseMarkdownTranscript } from '../lib/imports/parsers.js'
+import { extractExportTurns, serializeTranscript } from '../lib/exports/transcript.js'
 import { buildPromptOps } from '../lib/ops/prompts.js'
 import { createScenePromptSync } from '../lib/scene-prompt-sync.js'
 
@@ -1643,6 +1644,114 @@ test('级联删除只吃已归档的子会话，未归档的一律保留（F10�
   })
   await fork.run('p')
   assert.deepEqual(fork.deleted, [], 'fork 分支是独立用户会话，绝不能被级联删除')
+})
+
+// ── 0.18.5：恢复回执的形状 + 转录导出的两档 ──────────────────────────────────
+//
+// 这两组都属于「破了会静默出错」那一类：
+//   · 恢复：官方 `unarchiveSession` 是 `Promise<void>`，门面把 undefined 原样透传、op 层
+//     再去读它的字段就抛 TypeError —— 而宿主**已经恢复成功**了，用户看到的是「操作失败」。
+//   · 导出：`extractText` 只判「有没有 text 字段」，而 `ReasoningBlock` 恰好是
+//     `{type:'reasoning', text}`，于是思考一直混在助手正文里导出去（0.16.x 已在子智能体
+//     侧修过同一类缺陷，导出侧是它的第二个出口）。
+
+/** 驱动门面 `unarchiveSession`：只替换它真正碰到的那几个面。
+ *  `hostReturns` 是宿主方法的返回值 —— 官方契约是 undefined，测试要的就是能传 undefined。 */
+const unarchiveHarness = ({ archiveSet, hostPresent = true, hostReturns = undefined }) => {
+  const proto = ArchiveWorkspaceRegistry.prototype
+  const fake = Object.create(proto)
+  const registry = { archivedSessionIds: [...archiveSet] }
+  if (hostPresent) registry.unarchiveSession = async () => hostReturns
+  fake.registry = registry
+  fake.ctx = { logger: { warn: () => {} } }
+  fake.bridge = { checkWorkspace: () => {} }
+  fake.reconcileArchiveLedger = async () => {}
+  fake.enqueueOperation = (fn) => fn()
+  fake.sessionKnown = async () => true
+  fake.requireState = () => ({ workspaceIds: [], archivedSessionIds: [...registry.archivedSessionIds] })
+  fake.setState = async (next) => { registry.archivedSessionIds = [...next.archivedSessionIds] }
+  fake.ensureArchivedAtLoaded = async () => {}
+  fake.archivedAtMap = new Map([['s1', 1]])
+  fake.saveArchivedAt = async () => {}
+  return { fake, registry, run: () => proto.unarchiveSession.call(fake, 's1') }
+}
+const isArchiveSetResult = (r) => Array.isArray(r && r.archivedSessionIds) && r.archivedSessionIds.every((x) => typeof x === 'string')
+
+test('恢复归档：门面不认宿主的返回值，两条分支同一个形状', async () => {
+  // ① 官方契约 Promise<void>（宿主返回 undefined）—— 此前正是这里透传出去把 op 层炸掉的
+  const native = unarchiveHarness({ archiveSet: ['s1', 's2'] })
+  assert.ok(isArchiveSetResult(await native.run()), '宿主什么都不回时也要给出归档集合')
+
+  // ② 宿主没有原生入口 → 自持分支。形状必须一模一样：两条分支给出不同形状就是崩溃来源
+  const own = unarchiveHarness({ archiveSet: ['s1', 's2'], hostPresent: false })
+  assert.ok(isArchiveSetResult(await own.run()))
+  assert.deepEqual(own.registry.archivedSessionIds, ['s2'], '自持分支要真的把这条移出去')
+
+  // ③ 权威集合读成非数组 → 宁可报空集也不能抛（恢复已经成功了）
+  const broken = unarchiveHarness({ archiveSet: ['s1'] })
+  broken.registry.archivedSessionIds = undefined
+  assert.deepEqual(await broken.run(), { archivedSessionIds: [] })
+})
+
+test('history-unarchive 不得依赖注册表的返回值', async () => {
+  const res = await buildSessionOps(archiveOpsDeps({ unarchiveSession: async () => undefined }))['history-unarchive']({ sessionId: 's1' })
+  assert.equal(res.ok, true, '注册表什么都不回时，恢复成功必须报成成功')
+  assert.equal(res.sessionId, 's1', '回执要带目标 id（审计流水按它记）')
+  assert.equal(res.archivedSessionIds, undefined, '不把整个归档集合快照发给界面（界面根本不读）')
+})
+
+/** 一份带思考 + 工具调用 + 工具结果的事件序列。工具内容里埋了会劈开轮次的行首标记。 */
+const transcriptEvents = (toolOut = '1  export function f() {}') => [
+  { type: 'user/message', data: { content: [{ type: 'text', text: '看下 a.ts' }] } },
+  { type: 'assistant/message', data: { message: { content: [
+    { type: 'reasoning', text: '思考内容：先读文件' },
+    { type: 'tool-call', id: 'c1', name: 'fs_read', arguments: '{"path":"a.ts"}' },
+    { type: 'text', text: '第 3 行少了括号' },
+  ] } } },
+  // 同一个调用的 log-only 事件：两处都收、按 call id 去重，只认一边会在某种宿主形状下丢光工具调用
+  { type: 'tool/call', data: { callId: 'c1', name: 'fs_read', arguments: '{"path":"a.ts"}' } },
+  { type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text: toolOut }] } } },
+]
+
+test('导出的正文只取 text 块，思考不混进来', () => {
+  for (const mode of ['simple', 'tools', 'full']) {
+    const assistant = extractExportTurns(transcriptEvents(), mode).find((t) => t.role === 'assistant')
+    assert.equal(assistant.text, '第 3 行少了括号', `${mode} 档的正文不得含思考`)
+  }
+  assert.equal(extractExportTurns(transcriptEvents(), 'simple')[0].details.length, 0, '简洁档没有附加段')
+  const details = extractExportTurns(transcriptEvents(), 'full').flatMap((t) => t.details)
+  assert.ok(details.some((d) => d.text.includes('思考内容')), '最高档要带上思考')
+  assert.equal(details.filter((d) => d.text.includes('{"path":"a.ts"}')).length, 1, '同一个调用不得既从块又从事件重复成段')
+})
+
+test('三档累进：中间档有工具、没有思考', () => {
+  const details = extractExportTurns(transcriptEvents(), 'tools').flatMap((t) => t.details)
+  assert.ok(details.some((d) => d.text.includes('{"path":"a.ts"}')), '中间档要带上工具调用')
+  assert.ok(!details.some((d) => d.text.includes('思考内容')), '中间档不得含思考 —— 这一档存在的唯一理由')
+  // 累进性：每一档的附加段都得是上一档的超集。破了就不是"多一档"，是三份互不包含的产物。
+  const tiers = ['simple', 'tools', 'full'].map((m) => extractExportTurns(transcriptEvents(), m).flatMap((t) => t.details).map((d) => d.text))
+  assert.ok(tiers[0].every((x) => tiers[1].includes(x)), 'simple ⊆ tools')
+  assert.ok(tiers[1].every((x) => tiers[2].includes(x)), 'tools ⊆ full')
+})
+
+test('详细档的附加段不会伪装成说话人边界（markdown 回流）', () => {
+  // 工具结果里埋 ## User 与 **Assistant:** —— 不缩进就会在再导入时把一轮劈成几轮。
+  const events = transcriptEvents('1  line\n## User\n**Assistant:** 都想冒充一次\n')
+  const simple = parseMarkdownTranscript(serializeTranscript(extractExportTurns(events, 'simple'), 'markdown'))
+  assert.equal(simple.length, 2, '前置条件：这份事件序列是两轮')
+  for (const mode of ['tools', 'full']) {
+    const back = parseMarkdownTranscript(serializeTranscript(extractExportTurns(events, mode), 'markdown'))
+    assert.deepEqual(back.map((t) => t.role), simple.map((t) => t.role), `${mode} 档回流的轮次角色必须与简洁档一致`)
+    assert.equal(back.length, simple.length, `${mode} 档的附加段不得新增轮次`)
+  }
+})
+
+test('工具结果按上限截断，并如实报出原文总长', () => {
+  const huge = 'X'.repeat(50000)
+  const out = extractExportTurns(transcriptEvents(huge), 'full').flatMap((t) => t.details).find((d) => d.text.startsWith('XXXX'))
+  assert.ok(out, '这条工具结果要在')
+  assert.ok(out.text.length < 2500, `输出必须被压到上限附近，实收 ${out.text.length}`)
+  assert.match(out.text, /50000/, '且要说清原文到底多长')
 })
 
 // ── 0.17.0 第七批：P2 四条（F11–F14）─────────────────────────────────────────

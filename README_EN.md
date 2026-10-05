@@ -139,7 +139,7 @@ Then remind me to hard-refresh the browser.
 ### Archived sessions
 
 - Grouped by project, searchable, batch restore / delete, retention auto-cleanup; a workspace whose registration was deleted is rebuilt from the session directories and can be re-registered in one click.
-- Import Claude Code / Cursor / Codex / any text; export Markdown / JSONL. **An export is a readable transcript, not a full backup**: only user/assistant text blocks survive — tool calls, images, reasoning and token stats are dropped. Use archiving when you need the full record.
+- Import Claude Code / Cursor / Codex / any text — pick a registered workspace, browse to a folder, or give a path directly; export Markdown / JSONL in three cumulative modes: text only → plus tool calls and results and attachment names → plus reasoning. **An export is still a readable transcript, not a full backup**: the added blocks are capped and say so, and token stats are not included. Use archiving when you need the full record.
 
 ### Host compatibility
 

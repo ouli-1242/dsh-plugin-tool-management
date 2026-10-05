@@ -422,6 +422,15 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-export-modal .dsm-export-form{display:flex;min-height:0;flex:1;flex-direction:column;gap:10px}
 .dsm-export-modal .dsm-pick-list{flex:1;min-height:0;max-height:none;overflow:auto}
 .dsm-export-modal .dsm-export-body{display:flex;min-height:0;flex:1;flex-direction:column;gap:6px}
+/* 会话导出弹窗（0.18.5）：字段压成三行之后，560×640 里会话列表只剩几行（用户反馈）。
+   处方照 .dsm-modal-archive / .dsm-modal-fixed：固定高、只有列表内滚。宽度取 720 —— 与
+   .dsm-modal-lg / .dsm-modal-wide 同一档，两列字段各约 340px 刚好放得下（880 试过，标题行
+   右边空成一片，用户说太宽）。高度取 760 而不是视口百分比 —— 760 既是 .dsm-modal 自己的
+   max-height 也是 .dsm-modal-fixed 那个数，窗口矮时 calc(100vh - 48px) 照常接管。
+   写成两段类名（.dsm-modal.dsm-modal-export-lg）是为了**不靠书写顺序**压过 .dsm-modal-list
+   的 !important（.dsm-modal-lg 排在 .dsm-modal-list 前面，直接借用会被它盖掉）。只加在这一颗
+   弹窗上：.dsm-modal-list 还被四个页面的导出弹窗和回收站共用，动它就是它们一起变大。 */
+.dsm-modal.dsm-modal-export-lg{width:min(720px,100%)!important;height:min(760px,calc(100vh - 48px))!important;max-height:none!important}
 .dsm-pick-group{display:flex;flex-direction:column}
 .dsm-pick-group-head{box-sizing:border-box;display:flex;width:100%;min-width:0;align-items:center;gap:7px;padding:7px 2px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600;text-align:left;cursor:pointer}
 .dsm-pick-group-head:hover{color:var(--dsw-alias-label-primary)}

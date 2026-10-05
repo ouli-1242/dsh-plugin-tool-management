@@ -138,7 +138,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 ### 历史会话
 
 - 按项目分组、搜索、批量恢复 / 永久删除、保留期自动清理；工作区登记被删后可一键重新登记。
-- 导入 Claude Code / Cursor / Codex / 任意文本；导出 Markdown / JSONL。**导出是可读转录，不是完整备份**：只保留 user / assistant 的文本块，工具调用、图片、思考过程与 token 统计都不在里面。要留全量请用「归档」。
+- 导入 Claude Code / Cursor / Codex / 任意文本，工作区可以从已登记的里挑、浏览文件夹或直接给路径；导出 Markdown / JSONL，分三档**累进**：仅正文 → 正文 + 工具 → 正文 + 工具 + 思考。**导出仍是可读转录，不是完整备份**：附加段每块有上限并明说截断，token 统计不在里面。要留全量请用「归档」。
 
 ### 宿主兼容
 
