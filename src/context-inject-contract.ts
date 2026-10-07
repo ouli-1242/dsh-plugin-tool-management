@@ -187,7 +187,15 @@ export interface InjectSettings {
    * 默认 `false` = 跟随预设（尊重"这个预设只要它自己的内容"）。
    */
   underSuppressingPresets: boolean
-  /** 各域开关（任何预设下都生效；默认全开）。 */
+  /**
+   * 各域开关（任何预设下都生效；默认全开）。
+   *
+   * 一张表管所有会话，但**深度判据逐域写在域声明上**（`InjectDomain.applicableTo`）：场景与记忆
+   * 只在顶层注入，子智能体目录按人设的 `catalogDepth` 注入，其余三域不分深度。此前另有一张
+   * `subagentDomains` 给子代理会话单独开路，已删除：它需要按会话分流，而分流所需的人设身份
+   * 在官方机制里取不到（descriptor 字段是白名单、冷恢复只还原 provider/model/effort），
+   * 只能靠一份 childId → 人设名的持久映射，代价远超收益。
+   */
   domains: Record<InjectDomainKey, boolean>
 }
 

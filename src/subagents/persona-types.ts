@@ -67,6 +67,28 @@ export interface PersonaDoc {
    * 禁止嵌套也禁止不了 —— 官方工具照样能。所以现在**不传**，让 provider 用它自己的默认。
    */
   catalogDepth?: number
+  /**
+   * **允许追问**（frontmatter `continuable: true`；缺省 = 一次性）。
+   *
+   * 一次性（默认）：`ctx.subagents.start()` 跑一轮就结算，产出作为**工具返回值**回到父代理，
+   * 子会话随即 `dispose()` —— 父代理此后再也找不到它。
+   * 可继续：`ctx.subagents.startContinuable()` 建一个**持久子会话**，在**收件箱受理时**即兑现
+   * （不是跑完），返回稳定 `childId`，子代理在后台继续跑。父代理之后用宿主自带的全局
+   * `send_message` / `interrupt_agent`（`@deepseek-ai/dsh-tool-subagent-control` 注册，与创建它的
+   * 工具无关）追问或中止 —— 所以本插件**不新增追问工具**。
+   *
+   * ⚠️ 两条官方语义决定了这条通道的结果是**异步**的（`dsh-subagent/lib/index.js:599-654`）：
+   *   · 子代理启动时会被追加一句返回指引，要求它**自己**用 `send_message` 把结果发给父代理
+   *     —— 父代理不会自动收到它的转录、工具输出或思考；
+   *   · 结算时父代理还会收到一条 `subagent-settled` 通知（含收尾正文）。
+   * 于是 `subagent_manager_run` 对这类人设只回执一个 id，不再是最终产出。
+   *
+   * 前置条件（缺任一，官方在启动时抛错，见 `index.js:1986-1997` / `3161`）：
+   *   · 宿主加载了 session persistence 与 session query（`CONTINUATION_UNAVAILABLE` / `PERSISTENCE_UNAVAILABLE`）；
+   *   · provider 具备 `prepareContinuable`（两个进程内 provider 都有）；
+   *   · 未超过容量上限 `maxActiveSubagents`（宿主 `dsh-subagent` 配置，默认 8）。
+   */
+  continuable?: boolean
   body: string
   path: string
   /**
@@ -98,8 +120,13 @@ export interface ToolFilterDecision {
 
 export interface SubagentService {
   list(): Promise<PersonaDoc[]>
-  /** 场景绑定校验 + 串行运行一个子代理（结果文本截断 ≤16 KiB）。`inherit` = 用 fork 通道（见 runOnce）。 */
-  runSerial(parentAgent: any, persona: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean): Promise<{ text: string; runId: string; stopReason: string }>
+  /**
+   * 场景绑定校验 + 串行运行一个子代理（结果文本截断 ≤16 KiB）。`inherit` = 用 fork 通道（见 runOnce）。
+   *
+   * `continuable: true` = 这次走的是**允许追问通道**：没有产出文本，`runId` 是持久子会话 id，
+   * `stopReason` 固定为 `'started'`，产出稍后由子代理自己 `send_message` 回来（见 PersonaDoc.continuable）。
+   */
+  runSerial(parentAgent: any, persona: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean): Promise<{ text: string; runId: string; stopReason: string; continuable?: true }>
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生）。 */
   writeOps: ReadonlySet<string>
@@ -117,4 +144,4 @@ export interface SubagentService {
     /** 批量启停；只碰给出的名字，人设已不存在的跳过。 */
     setEnabled(names: string[], enabled: boolean): Promise<void>
   }
-}
+}

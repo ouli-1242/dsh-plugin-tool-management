@@ -3,7 +3,7 @@
 // 从 subagents/service.ts 整段搬来，一行未改。只写用户填过的键这条纪律留在函数自己的
 // 注释里；名字谓词仍收敛到 ../paths.ts，这里不另写一份。
 import { isValidSegment } from '../paths.js'
-import { DEFAULT_PERSONA_CATALOG_DEPTH, normalizeReasoningEffort } from './persona-parse.js'
+import { DEFAULT_PERSONA_CATALOG_DEPTH, normalizeReasoningEffort, truthyFlag } from './persona-parse.js'
 import type { PresetToolRule } from './persona-types.js'
 
 /** 人设名长度上限（字符）。 */
@@ -45,6 +45,10 @@ export function serializePersona(args: any): string {
     : Number(String(catalogDepthRaw).trim())
   const hasCatalogDepth = catalogDepth !== undefined && Number.isSafeInteger(catalogDepth) && catalogDepth >= 0 && catalogDepth !== DEFAULT_PERSONA_CATALOG_DEPTH
   const body = String((args && args.body) ?? '').trim()
+  // 允许追问：**只在真值时才写这一行**（与 `catalogDepth` 默认值同规矩）—— 免得每个人设都多一行
+  // 说明"它和默认一样"，也保证老的人设文件回写后逐字节不变。入参兼容布尔与字符串两种形态
+  // （界面传布尔，手写/导入的 frontmatter 走解析侧已归一成布尔）。
+  const continuable = args?.continuable === true || truthyFlag(String(args?.continuable ?? ''))
   // `output` 可传字符串（按行拆）或数组（界面直接给数组）：一条要求写成一行重复键。
   const outputLines = (Array.isArray(args?.output) ? args.output.map((v: unknown) => String(v)) : String(args?.output ?? '').split(/\r?\n/))
     .map((line: string) => line.trim())
@@ -55,6 +59,7 @@ export function serializePersona(args: any): string {
   if (model) lines.push('model: ' + model)
   if (reasoningEffort) lines.push('reasoningEffort: ' + reasoningEffort)
   if (hasCatalogDepth) lines.push('catalogDepth: ' + String(catalogDepth))
+  if (continuable) lines.push('continuable: true')
   for (const line of outputLines) lines.push('output: ' + line)
   if (tools.length) lines.push('tools: ' + tools.join(', '))
   if (toolsDeny.length) lines.push('toolsDeny: ' + toolsDeny.join(', '))
@@ -82,4 +87,4 @@ export function presetRulesOf(value: unknown): Array<[string, PresetToolRule]> {
     out.push([id, { mode: String(rec.mode) === 'deny' ? 'deny' : 'allow', names }])
   }
   return out
-}
+}

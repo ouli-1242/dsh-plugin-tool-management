@@ -101,7 +101,7 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     return runtime
   }
 
-  async function runOnce(parentAgent: any, p: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean): Promise<{ text: string; runId: string; stopReason: string }> {
+  async function runOnce(parentAgent: any, p: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean): Promise<{ text: string; runId: string; stopReason: string; continuable?: true }> {
     // 这里**刻意没有**"预算用尽就拒绝"的前置检查（2026-09-17 用户实测后拆掉）。
     // 它此前基于一个错误假设：以为传 `maxDepth: 1` 会让子会话再委派必然失败。实际上官方
     // `dsh-tool-subagent` 的默认是 **3**、provider 只在**传了值**时才校验（`resolveChildDepth`），
@@ -124,6 +124,57 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
       ? { ...(p.tools?.length ? { allow: p.tools } : {}), ...(p.toolsDeny?.length ? { deny: p.toolsDeny } : {}) }
       : null
     const resolved = toolFilter === undefined ? legacyFilter : toolFilter
+    // provider 与 model 是模型路由的两半：DSH 的 resolveModel(provider, model) 不做
+    // `provider/model` 字符串拆分，只改 model 会落在**主会话的 provider** 上——跨来源
+    // 指定模型（如 sensenova 的 sensenova-6.8-flash-lite）必须两个键一起给。
+    // 2026-09-23 加 `reasoningEffort`：条件是"三个键任一有值"—— 只设强度（不改模型）也得
+    // 把这个对象发出去，否则那一格永远不生效。官方合并语义（`dsh-subagent/lib/index.js:471-483`）
+    // 是"先继承主会话的三项、再用这里的覆盖"，所以只给 reasoningEffort 时 provider/model
+    // 照旧继承；反过来，改了 provider/model 而没给 reasoningEffort 时，**继承来的那一档会被
+    // 删掉**（回落到该模型自己的默认）—— 那不是 bug，是官方的显式语义。
+    // 两条通道（一次性 / 可继续）共用这一段，所以提出来只写一次。
+    const routeOptions = (p.provider || p.model || p.reasoningEffort)
+      ? {
+          agentOptions: {
+            ...(p.provider ? { provider: p.provider } : {}),
+            ...(p.model ? { model: p.model } : {}),
+            // 类型是官方的品牌串 `ReasoningEffortId`；我们的值本来就是 adapter 自己给的
+            // opaque id（界面从 `resolveModelInfo` 的清单里选出来的），所以这里只做归一、
+            // 不重新校验 —— 不支持的档位由官方在 provider I/O 之前拒。
+            ...(p.reasoningEffort ? { reasoningEffort: p.reasoningEffort as never } : {}),
+          },
+        }
+      : {}
+
+    // ── 允许追问通道（人设 `continuable: true`，0.19.0）────────────────────────────
+    // 与一次性走的是**两条官方通道**：`startContinuable` 建持久子会话，在**收件箱受理时**
+    // 即兑现（不是跑完），返回稳定 `childId`，子代理在后台继续跑。追问不需要本插件再出工具
+    // —— 宿主自带全局 `send_message` / `interrupt_agent`（`dsh-tool-subagent-control`），
+    // 它们对任何可继续子级都生效，与创建它的工具无关。这里只负责"把它建起来"。
+    //
+    // 两条官方语义（`dsh-subagent/lib/index.js:599-654`）决定了回执只能写成"已启动 + id"：
+    //   · 子代理启动时被追加一句返回指引，要求它**自己**用 send_message 把结果发给父代理
+    //     —— 父代理不会自动收到它的转录、工具输出或思考；
+    //   · 结算时父代理还会收到一条 `subagent-settled` 通知（含收尾正文）。
+    // 所以这条通道的产出是**异步**到达的，不是本函数的返回值。
+    if (p.continuable === true) {
+      const started: any = await runtime.startContinuable({
+        provider: kind,
+        label: p.name,
+        // `ContinuableStartSpec.request` 是 `Omit<SubagentStartRequest,'label'|'signal'|'outputSchema'>`：
+        // label 提到 spec 顶层、signal 由 spec 自己带（官方接管准备期的取消），两者都不进 request。
+        request: {
+          parent: parentAgent,
+          prompt: [{ type: 'text', text: task }],
+          persona: renderPersonaPrompt(p),
+          ...(resolved === null ? {} : { toolFilter: resolved }),
+          ...routeOptions,
+        },
+        signal: signal ?? new AbortController().signal,
+      })
+      return { text: '', runId: String(started?.childId ?? ''), stopReason: 'started', continuable: true }
+    }
+
     // 官方签名：start(name, request) —— name = ctx.subagents 上的 provider 注册名。
     const run = await runtime.start(kind, {
       label: p.name,
@@ -143,26 +194,8 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
       // "目录出现在哪"。传了它会让我们的工具比官方严（1 vs 3），且会要求 provider 具备
       // `depthLimit` capability（不传就没这个依赖）。让 provider 用它自己的默认，与官方
       // 工具的能力保持一致。
-      // provider 与 model 是模型路由的两半：DSH 的 resolveModel(provider, model) 不做
-      // `provider/model` 字符串拆分，只改 model 会落在**主会话的 provider** 上——跨来源
-      // 指定模型（如 sensenova 的 sensenova-6.8-flash-lite）必须两个键一起给。
-      // 2026-09-23 加 `reasoningEffort`：条件是"三个键任一有值"—— 只设强度（不改模型）也得
-      // 把这个对象发出去，否则那一格永远不生效。官方合并语义（`dsh-subagent/lib/index.js:471-483`）
-      // 是"先继承主会话的三项、再用这里的覆盖"，所以只给 reasoningEffort 时 provider/model
-      // 照旧继承；反过来，改了 provider/model 而没给 reasoningEffort 时，**继承来的那一档会被
-      // 删掉**（回落到该模型自己的默认）—— 那不是 bug，是官方的显式语义。
-      ...(p.provider || p.model || p.reasoningEffort
-        ? {
-            agentOptions: {
-              ...(p.provider ? { provider: p.provider } : {}),
-              ...(p.model ? { model: p.model } : {}),
-              // 类型是官方的品牌串 `ReasoningEffortId`；我们的值本来就是 adapter 自己给的
-              // opaque id（界面从 `resolveModelInfo` 的清单里选出来的），所以这里只做归一、
-              // 不重新校验 —— 不支持的档位由官方在 provider I/O 之前拒。
-              ...(p.reasoningEffort ? { reasoningEffort: p.reasoningEffort as never } : {}),
-            },
-          }
-        : {}),
+      // provider / model / reasoningEffort 的合并语义见上方 `routeOptions` 的注释。
+      ...routeOptions,
     })
     try {
       const result = await run.result   // 官方契约：child 级失败不 reject（stopReason 体现）
@@ -183,7 +216,10 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     }
   }
 
-  // v1 串行：同一时刻至多一个子代理运行（设计 §3.2）。
+  // v1 串行：同一时刻至多一次**启动**在途（设计 §3.2）。
+  // ⚠️ 0.19.0 起这条不再等于"至多一个子代理在跑"：允许追问（`continuable`）的子代理在
+  // `startContinuable` 返回后仍在后台运行，而这里只串行化"启动"这一步。这是官方通道的
+  // 固有语义（后台子级本来就允许并存），不是本插件放宽了限制。
   let chain: Promise<unknown> = Promise.resolve()
   const runSerial = (parentAgent: any, p: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean) => {
     const start = () => runOnce(parentAgent, p, task, signal, toolFilter, inherit)

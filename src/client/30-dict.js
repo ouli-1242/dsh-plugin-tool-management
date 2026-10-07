@@ -467,7 +467,7 @@
         "compat.live.state.child": "不在本会话注入",
         "compat.live.state.error": "取数失败",
         "compat.live.state.error.title": "这个域这一轮取数抛了异常（内容还在，是这一步没取到）—— 兼容页「上下文注入通道」有一行降级写着原因。它不会误发「已清空」，下一步会自动重试。",
-        "compat.live.state.child.title": "本会话的深度超过了人设的目录注入深度（catalogDepth），所以常驻目录不在这里注入。要让目录出现在子会话，把对应人设的「目录注入」调大（或选「不限制嵌套」）。注意：这不影响委派 —— 子代理始终可以继续委派。",
+        "compat.live.state.child.title": "本会话是子代理会话，这个域对子会话不成立 —— 两种情形：① **场景与记忆**只在顶层注入（它们说的是父会话的处境，子代理要什么由父代理写进委派说明）；② **人设目录**的注入深度不够（本会话深度超过该人设的 `catalogDepth`，默认 1 = 只在顶层），这一种可以把人设的「目录注入」调大或选「不限制嵌套」。两种都不影响委派 —— 子代理始终可以继续委派。",
         "compat.live.adopt": "注入 {injected} 次 · 调用 {used} 次 · 采纳 {adopted} 次",
         "compat.live.adopt.none": "注入 {injected} 次 · 从未调用",
         "compat.live.adopt.title": "只数**最近这一段对话**（换一段重新数，重启归零）。采纳 = 调用发生时该域正文正在这个会话的上下文里；调用次数不区分成功失败",
@@ -578,15 +578,32 @@
         "subagents.create": "新建人设", "subagents.edit": "编辑人设",
         "subagents.field.name": "人设名",
         "subagents.field.description": "描述", "subagents.field.description.placeholder": "例如 擅长 Java 后端实现与重构",
-        "subagents.field.model": "模型", "subagents.field.model.placeholder": "自定义模型 id", "subagents.field.model.hint": "留空继承主会话", "subagents.field.provider": "模型来源", "subagents.field.provider.placeholder": "deepseek", "subagents.field.provider.hint": "「模型来源」与「模型」是一对：只填模型会落在主会话的来源上，跨来源会解析失败。",
-        "subagents.field.catalogDepth": "目录注入", "subagents.field.catalogDepth.onlyTop": "只在顶层", "subagents.field.catalogDepth.toChild": "顶层和子会话", "subagents.field.catalogDepth.toGrand": "顶层和两层子会话", "subagents.field.catalogDepth.unlimited": "不限制嵌套", "subagents.field.catalogDepth.hint": "决定人设目录注入到哪几层会话。\n只影响目录注入，不影响委派 —— 子代理始终可以继续委派。\n子会话看不到目录时，可用 subagent_manager_list 查询。",
-        // 思考强度（0.14.0）。界面上只留"这一格现在能选什么"，不解释机制 ——
-        // 官方语义（改 provider/model 会丢掉继承值、不支持的档位直接拒）记在 CHANGELOG / update.md，
-        // 不搬进表单。
-        "subagents.field.effort": "思考强度", "subagents.effort.default": "默认（模型的默认强度）", "subagents.effort.none": "默认", "subagents.effort.needModel": "当前默认主会话思考强度", "subagents.effort.loading": "正在问该模型支持哪些档位…", "subagents.effort.unavailable": "该模型没有暴露可选档位，默认思考强度", "subagents.effort.hint": "当前可选择多种思考强度", "subagents.effort.dropped": "换模型后「{effort}」不在新模型的档位里，已清空。",
-        "subagents.model.inherit": "继承主会话（不指定）", "subagents.model.customOption": "自定义 / 目录里没有…",
-        "subagents.field.modes": "工具限制（按 Agent 预设）",
-        "subagents.field.modes.hint": "只有当前模式那一行生效，其他模式用该模式的全部工具。",
+        // 模型来源 / 模型 / 目录注入三格的静态说明（provider.hint、catalogDepth.hint）随 0.19.0
+        // 重排移出表单：来源与模型并排成一组，谁跟谁是一对由位置表达；目录注入那条只说了半句
+        // "不影响委派"，半句不解释"那影响什么"，留着比不留更费解。
+        "subagents.field.model": "模型", "subagents.field.provider": "模型来源",
+        "subagents.field.offCatalog": "{id} · 目录里没有",
+        "subagents.field.catalogDepth": "目录注入", "subagents.field.catalogDepth.onlyTop": "只在顶层", "subagents.field.catalogDepth.toChild": "顶层和子会话", "subagents.field.catalogDepth.toGrand": "顶层和两层子会话", "subagents.field.catalogDepth.unlimited": "不限制嵌套",
+        // 允许追问（0.19.0）。界面只留复选框副标题那一行 —— 机制（官方 startContinuable / 结算通知 /
+        // 返回指引）与代价（占用可继续子代理名额、需要持久化与 session query）留在 CHANGELOG 与
+        // README（2026-10-07 用户裁定：高级选项里的提示句太密，长说明一律不进表单）。
+        "subagents.field.continuable": "允许追问（后台运行）", "subagents.field.continuable.short": "回执一个 id，之后还能继续对话",
+        // 收起态摘要用的两个「尾巴」。分隔号写在值里（而不是在代码里 join '；'）：英文侧要用
+        // "; "，中文用「；」，写进词典才不用为语言改代码。空串 = 这一项没值，整段不出现。
+        "subagents.adv.continuable": "；允许追问（后台运行）",
+        "subagents.adv.legacy": "；旧格式：白名单 {allow} / 黑名单 {deny}",
+        // 思考强度（0.14.0）。界面上只留"这一格现在能选什么"与**状态**（未选模型 / 拉取中 / 拉不到），
+        // 不解释机制 —— 官方语义（改 provider/model 会丢掉继承值、不支持的档位直接拒）记在
+        // CHANGELOG / update.md，不搬进表单。needModel 保留但压到最短：它解释的是"这一格为什么灰着"。
+        "subagents.field.effort": "思考强度", "subagents.effort.default": "默认（模型的默认强度）", "subagents.effort.none": "默认", "subagents.effort.needModel": "先选模型", "subagents.effort.loading": "正在问该模型支持哪些档位…", "subagents.effort.unavailable": "该模型没有暴露可选档位，默认思考强度", "subagents.effort.dropped": "换模型后「{effort}」不在新模型的档位里，已清空。",
+        // 来源下拉的空选项。措辞刻意与模型那条不同（"继承主会话"）：两者含义一致，但并排两个
+        // 下拉出现同一句话会让人以为点错了格。这一句同时接住被撤掉的那条静态说明
+        // （provider.hint「只填模型会落在主会话的来源上」）要说的事。
+        "subagents.provider.inherit": "不指定（用主会话的来源）",
+        "subagents.model.inherit": "继承主会话（不指定）",
+        // 标题改由高级选项的分组头承担（subagents.adv.group.tools），字段自己的 label 撤掉 ——
+        // 同一句话在 10px 内说两遍（"工具限制" + "工具限制（按 Agent 预设）"）。
+        "subagents.field.modes.hint": "只有当前模式那一行生效；MCP 工具不在候选里，始终可用",
         "subagents.mode.startAllow": "启动白名单", "subagents.mode.startDeny": "启动黑名单", "subagents.mode.stopAllow": "关闭白名单", "subagents.mode.stopDeny": "关闭黑名单",
         "subagents.mode.off": "未限制", "subagents.mode.empty": "已启动但没勾选（= 不限制）",
         "subagents.mode.allowOn": "白名单 {count} 个", "subagents.mode.denyOn": "黑名单 {count} 个",
@@ -599,8 +616,10 @@
         "subagents.legacy.note": "这个文件里还有一份旧写法的工具限制（白名单 {allow} 个 / 黑名单 {deny} 个），它对所有模式都生效。",
         "subagents.legacy.convert": "转换到按模式设置",
         "subagents.legacy.hint": "转换会把旧名单搬进你选的模式；不点它，文件里的旧键原样保留（运行时照旧生效）。",
-        "subagents.tools.filter": "筛选工具名", "subagents.tools.remove": "移除", "subagents.toolFailed": "子代理工具没注册上：{names}（{reason}）。这几个工具在子智能体流程里用不了；重启 DSH 后仍如此请核对宿主版本。",
-        "subagents.adv.title": "高级选项", "subagents.adv.inherit": "继承主会话", "subagents.adv.summary": "模型：{model}；思考强度：{effort}；目录注入：{depth}", "subagents.adv.summary2": "模式限制：{modes} 项；旧格式：白名单 {allow} / 黑名单 {deny}", "subagents.adv.note": "白名单 = 子代理只能用勾选的工具。\n黑名单 = 除勾选的以外都能用。\nMCP 工具不在候选里：子代理始终能用当前在跑的 MCP。", "subagents.adv.loadFailed": "读取候选数据失败（模型目录 / 工具清单）；仍可手动填写。",
+        "subagents.tools.filter": "筛选工具名", "subagents.tools.remove": "移除", "subagents.tools.group.plugin": "插件工具", "subagents.tools.group.official": "官方工具", "subagents.tools.group.other": "其他工具", "subagents.toolFailed": "子代理工具没注册上：{names}（{reason}）。这几个工具在子智能体流程里用不了；重启 DSH 后仍如此请核对宿主版本。",
+        // 收起态摘要最多两行、只报有值的项：第一行模型 / 思考强度（+ 允许追问），第二行工具限制。
+        // 目录注入不进摘要 —— 它只决定目录出现在哪些会话，不影响委派本身。
+        "subagents.adv.title": "高级选项", "subagents.adv.inherit": "继承主会话", "subagents.adv.summary": "模型：{model}；思考强度：{effort}{tail}", "subagents.adv.summary2": "模式限制：{modes} 项{tail}", "subagents.adv.loadFailed": "读取候选数据失败（模型目录 / 工具清单）；仍可手动填写。", "subagents.adv.group.model": "模型", "subagents.adv.group.runtime": "运行方式", "subagents.adv.group.tools": "工具限制",
         "preset.name.standard": "标准模式", "preset.name.ptc": "PTC模式", "preset.name.minimal": "极简模式", "preset.name.cordis": "创造模式",
         "preset.short.standard": "标准", "preset.short.ptc": "PTC", "preset.short.minimal": "极简", "preset.short.cordis": "创造",
         "subagents.field.body": "人设提示词", "subagents.field.body.placeholder": "写下这个人设的身份、职责与工作方式…",
@@ -1086,7 +1105,7 @@
         "compat.live.state.child": "Not injected here",
         "compat.live.state.error": "Failed to load",
         "compat.live.state.error.title": "This domain threw while producing its text this round (the content exists; this step just could not read it). The Compat page's \"Context injection channel\" row carries a degraded note with the reason. No false \"cleared\" notice is sent, and the next step retries automatically.",
-        "compat.live.state.child.title": "This session is deeper than the personas' catalog injection depth (catalogDepth), so the standing catalog is not injected here. To let the catalog reach subagent sessions, raise the persona's catalog injection depth (or pick “No nesting limit”). Note: this does not affect delegation — subagents can always delegate further.",
+        "compat.live.state.child.title": "This session is a subagent session and this domain does not apply to it — two cases: (1) **scene and memory** are injected at the top level only (they describe the parent session's situation; what a subagent needs belongs in the delegation brief); (2) the **persona catalog**'s injection depth is too shallow (this session is deeper than that persona's `catalogDepth`, default 1 = top level only) — raise that persona's catalog injection depth or pick “No nesting limit”. Neither affects delegation — subagents can always delegate further.",
         "compat.live.adopt": "injected {injected} · called {used} · adopted {adopted}",
         "compat.live.adopt.none": "injected {injected} · never called",
         "compat.live.adopt.title": "Counts the most recent conversation only (it restarts when you switch, and on every launch). Adopted = the domain text was in context when the call happened; calls are counted whether or not they succeeded",
@@ -1197,15 +1216,37 @@
         "subagents.create": "New persona", "subagents.edit": "Edit persona",
         "subagents.field.name": "Persona name",
         "subagents.field.description": "Description", "subagents.field.description.placeholder": "e.g. Senior Java engineer",
-        "subagents.field.model": "Model", "subagents.field.model.placeholder": "Custom model id", "subagents.field.model.hint": "Blank inherits the main session", "subagents.field.provider": "Model provider", "subagents.field.provider.placeholder": "deepseek", "subagents.field.provider.hint": "Provider and model are a pair: a model alone resolves against the main session's provider and fails across providers.",
-        "subagents.field.catalogDepth": "Catalog injection", "subagents.field.catalogDepth.onlyTop": "Top level only", "subagents.field.catalogDepth.toChild": "Top level and subagents", "subagents.field.catalogDepth.toGrand": "Top level and two levels down", "subagents.field.catalogDepth.unlimited": "No nesting limit", "subagents.field.catalogDepth.hint": "Which levels of sessions get the persona catalog.\nIt affects the catalog only — subagents can always delegate further.\nWhen the catalog is not injected, subagent_manager_list still works.",
-        // Reasoning effort (0.14.0). The form only says what this field offers right now; the
-        // official semantics (the host drops the inherited level when provider/model change, and an
-        // unsupported level is rejected rather than clamped) live in CHANGELOG / update.md, not here.
-        "subagents.field.effort": "Reasoning effort", "subagents.effort.default": "Default (the model's default)", "subagents.effort.none": "default", "subagents.effort.needModel": "Currently the main session's default reasoning effort.", "subagents.effort.loading": "Asking the model which levels it supports…", "subagents.effort.unavailable": "This model exposes no selectable levels — default reasoning effort.", "subagents.effort.hint": "Several reasoning-effort levels are available.", "subagents.effort.dropped": "“{effort}” is not among the new model's levels, so it was cleared.",
-        "subagents.model.inherit": "Inherit the main session (unspecified)", "subagents.model.customOption": "Custom / not in the catalogue…",
-        "subagents.field.modes": "Tool limits (per agent preset)",
-        "subagents.field.modes.hint": "Only the row for the current preset applies; other presets keep their full tool set.",
+        // The static help lines for provider / model / catalog depth left the form with the 0.19.0
+        // re-layout: provider and model now sit side by side as one group, so the pairing is carried
+        // by position; the catalog-depth line only stated half a fact ("affects the catalog only")
+        // without saying what it does affect, which is more confusing than saying nothing.
+        "subagents.field.model": "Model", "subagents.field.provider": "Model provider",
+        "subagents.field.offCatalog": "{id} · not in the catalogue",
+        "subagents.field.catalogDepth": "Catalog injection", "subagents.field.catalogDepth.onlyTop": "Top level only", "subagents.field.catalogDepth.toChild": "Top level and subagents", "subagents.field.catalogDepth.toGrand": "Top level and two levels down", "subagents.field.catalogDepth.unlimited": "No nesting limit",
+        // Continuable (0.19.0). The form keeps only the checkbox subtitle; the mechanism (the
+        // official startContinuable, the settlement notice, the return guidance) and the cost
+        // (capacity slot, persistence + session query) live in CHANGELOG and README, not here
+        // (user ruling 2026-10-07: the advanced section carried far too many help sentences).
+        "subagents.field.continuable": "Continuable (runs in the background)", "subagents.field.continuable.short": "Returns an id you can keep talking to",
+        // The two "tails" of the collapsed summary. The separator lives inside the value (not a
+        // hard-coded join in code): English needs "; " where Chinese needs "；". Empty = no value,
+        // so the whole clause disappears.
+        "subagents.adv.continuable": "; continuable (runs in the background)",
+        "subagents.adv.legacy": "; legacy allow: {allow} / deny: {deny}",
+        // Reasoning effort (0.14.0). The form keeps only what this field offers right now plus the
+        // transient states (no model picked / loading / none available); the official semantics (the
+        // host drops the inherited level when provider/model change, and an unsupported level is
+        // rejected rather than clamped) live in CHANGELOG / update.md, not here.
+        "subagents.field.effort": "Reasoning effort", "subagents.effort.default": "Default (the model's default)", "subagents.effort.none": "default", "subagents.effort.needModel": "Pick a model first", "subagents.effort.loading": "Asking the model which levels it supports…", "subagents.effort.unavailable": "This model exposes no selectable levels — default reasoning effort.", "subagents.effort.dropped": "“{effort}” is not among the new model's levels, so it was cleared.",
+        // The blank entry of the provider dropdown. Deliberately worded differently from the model
+        // one ("Inherit the main session"): same meaning, but the same sentence in two adjacent
+        // dropdowns reads like a mis-click. This line also carries what the removed static hint
+        // (provider.hint) used to say.
+        "subagents.provider.inherit": "Unspecified (main session's provider)",
+        "subagents.model.inherit": "Inherit the main session (unspecified)",
+        // The heading moved to the advanced section's group head (subagents.adv.group.tools) and the
+        // field's own label was dropped — the same phrase twice within 10px otherwise.
+        "subagents.field.modes.hint": "Only the current preset's row applies; MCP tools are not listed and always stay available",
         "subagents.mode.startAllow": "Enable allowlist", "subagents.mode.startDeny": "Enable denylist", "subagents.mode.stopAllow": "Disable allowlist", "subagents.mode.stopDeny": "Disable denylist",
         "subagents.mode.off": "no restriction", "subagents.mode.empty": "enabled with nothing picked (= no restriction)",
         "subagents.mode.allowOn": "allowlist {count}", "subagents.mode.denyOn": "denylist {count}",
@@ -1218,8 +1259,11 @@
         "subagents.legacy.note": "This file still carries the old-style tool limits (allowlist {allow} / denylist {deny}); they apply to every preset.",
         "subagents.legacy.convert": "Convert into a preset row",
         "subagents.legacy.hint": "Converting moves the old list into the preset you pick; until then the old keys stay untouched in the file (and keep working at run time).",
-        "subagents.tools.filter": "Filter tool names", "subagents.tools.remove": "Remove", "subagents.toolFailed": "Subagent tools failed to register: {names} ({reason}). They cannot be used in the subagent flow; if this persists after a DSH restart, check the host version.",
-        "subagents.adv.title": "Advanced options", "subagents.adv.inherit": "inherit", "subagents.adv.summary": "model: {model}; effort: {effort}; catalog: {depth}", "subagents.adv.summary2": "preset limits: {modes}; legacy allow: {allow} / deny: {deny}", "subagents.adv.note": "Allowlist = the subagent may only use the picked tools.\nDenylist = everything except the picked ones.\nMCP tools are not listed: a subagent always keeps the MCP servers currently running.", "subagents.adv.loadFailed": "Could not read the candidate data (model catalogue / tool list); you can still fill the fields by hand.",
+        "subagents.tools.filter": "Filter tool names", "subagents.tools.remove": "Remove", "subagents.tools.group.plugin": "Plugin tools", "subagents.tools.group.official": "Official tools", "subagents.tools.group.other": "Other tools", "subagents.toolFailed": "Subagent tools failed to register: {names} ({reason}). They cannot be used in the subagent flow; if this persists after a DSH restart, check the host version.",
+        // The collapsed summary is at most two lines and reports only what has a value: line 1 is
+        // model / effort (+ continuable), line 2 is the tool limits. Catalog injection is left out —
+        // it only decides which sessions see the catalogue, not how a delegation runs.
+        "subagents.adv.title": "Advanced options", "subagents.adv.inherit": "inherit", "subagents.adv.summary": "model: {model}; effort: {effort}{tail}", "subagents.adv.summary2": "preset limits: {modes}{tail}", "subagents.adv.loadFailed": "Could not read the candidate data (model catalogue / tool list); you can still fill the fields by hand.", "subagents.adv.group.model": "Model", "subagents.adv.group.runtime": "Runtime", "subagents.adv.group.tools": "Tool limits",
         "preset.name.standard": "Standard mode", "preset.name.ptc": "PTC mode", "preset.name.minimal": "Minimal mode", "preset.name.cordis": "Creator mode",
         "preset.short.standard": "Standard", "preset.short.ptc": "PTC", "preset.short.minimal": "Minimal", "preset.short.cordis": "Creator",
         "subagents.field.body": "Persona prompt", "subagents.field.body.placeholder": "Describe the persona's role, responsibilities, and working style…",

@@ -37,7 +37,8 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
   // 注入设置（侧车 `inject-settings.json`，界面在「兼容」页）：
   //   - underSuppressingPresets：压制型预设（persona complete / 关运行时上下文，如极简）
   //     下是否仍然注入。默认 false = 跟随预设。
-  //   - domains：各域开关（任何预设下都生效；界面五个勾选）。
+  //   - domains：各域开关（任何预设下都生效；界面六个勾选。深度判据不在这里 —— 见
+  //     `InjectDomain.applicableTo`：场景与记忆只在顶层，子智能体目录按人设 catalogDepth）。
   // 注入器每个 step 都要同步读一次设置 → 走 TTL 缓存；未加载时先给默认值并异步预热。
   const INJECT_SETTINGS_FILE = 'inject-settings.json'
   const INJECT_SETTINGS_TTL_MS = 3000

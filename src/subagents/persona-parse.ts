@@ -14,6 +14,17 @@ export function listOf(value: unknown): string[] | undefined {
 }
 
 /**
+ * frontmatter 里真值标志的写法（`continuable: true` / `yes` / `on` / `1`）。
+ *
+ * 只认这几种、且**只认真值**：写错的代价是不对称的 —— 少认一个词只是静默保持一次性
+ * （与今天的行为一致），而反过来（把 `false` 之类误判成真）会让这个角色突然改成异步回执，
+ * 模型拿到一个 id 却以为拿到了结果。所以判据取窄。
+ */
+export function truthyFlag(value: string | undefined): boolean {
+  return value !== undefined && /^(true|yes|on|1)$/i.test(String(value).trim())
+}
+
+/**
  * 解析 `toolsByPreset:` 块 —— 每个 Agent 预设一行：
  *
  * ```yaml
@@ -46,7 +57,7 @@ export function parsePresetToolRules(frontmatter: string): Record<string, Preset
   return Object.keys(rules).length ? rules : undefined
 }
 
-/** 行式 frontmatter 解析：只认 description / provider / model / tools / toolsDeny / toolsByPreset / catalogDepth / output。 */
+/** 行式 frontmatter 解析：只认 description / provider / model / reasoningEffort / tools / toolsDeny / toolsByPreset / catalogDepth / output / continuable。 */
 /**
  * 思考强度档位 id 的归一：单行、去空白、限长。**不校验它是不是合法档位** —— 清单要问 adapter
  * 才拿得到（可能拿不到），而官方本来就会在 provider I/O 之前拒掉不支持的显式值。
@@ -97,6 +108,8 @@ export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
     toolsDeny,
     ...(toolsByPreset === undefined ? {} : { toolsByPreset }),
     ...(catalogDepth === undefined ? {} : { catalogDepth }),
+    // 允许追问：只有真值才落这个字段（缺省 = 一次性，与今天的行为一致）。
+    ...(truthyFlag(data.continuable) ? { continuable: true } : {}),
     ...(outputLines.length ? { output: outputLines.join('\n') } : {}),
     body: body.trim(),
     path: '',
@@ -183,9 +196,18 @@ export function renderPersonaPrompt(persona: PersonaDoc): string {
   if (body === '') return name
   const rawDescription = String(persona.description ?? '').trim()
   const output = neutralizePromptVariables(String(persona.output ?? '').trim())
+  // 身份定位句（0.19.0）：此前只有"你正在以「X」的身份执行本次委派任务"一句，它说的是
+  // **角色**，没说**身份**。而子会话是整份 join 父会话预设的（官方 `composeFrom`，无分项
+  // 开关），于是 `~/.dsh/AGENTS.md` 那份"写给主代理的操作手册"也进了它的上下文 —— 通篇是
+  // "最新用户消息""向用户确认""开分支""等 review"。子代理据此认定自己是主代理。
+  // 官方的 `SUBAGENT_DELEGATION_CONTEXT` 只讲**权限范围**（"your permission scope was
+  // fixed…"），不讲身份，所以补这句不是重复。
+  // 位置放最前：先定"你是谁"，后面那段角色定义才是"你怎么做"。
   const lines = isChinesePersona(name, rawDescription, raw)
     ? [
         `# 角色：${name}`,
+        '',
+        `你是被委派的子代理，不是主代理：只做调用方交给你的这一件事，产出交回调用方，不要向用户提问。`,
         '',
         `你正在以「${name}」的身份执行本次委派任务。以下角色定义由调用方指定，是你本次运行的固定行为准则：与你的默认倾向冲突时，以它为准；任务说要什么，怎么做以它为准。它决定你如何工作，不改变你的权限范围。`,
         '',
@@ -196,6 +218,8 @@ export function renderPersonaPrompt(persona: PersonaDoc): string {
       ]
     : [
         `# Persona: ${name}`,
+        '',
+        `You are a delegated subagent, not the primary agent: do only the one thing the caller gave you, return the output to the caller, and do not ask the user anything.`,
         '',
         `You are running this delegated task as "${name}". The persona below was specified by the caller and is your fixed operating guideline for this run: where it conflicts with your default inclinations, it wins; the task states what to achieve, and this persona governs how. It governs how you work, not what you are permitted to do.`,
         '',
@@ -209,6 +233,19 @@ export function renderPersonaPrompt(persona: PersonaDoc): string {
 
 /** 一个人设没写 `catalogDepth` 时的目录注入深度：1 —— 只在顶层注入目录。 */
 export const DEFAULT_PERSONA_CATALOG_DEPTH = 1
+
+/**
+ * 允许追问人设的标记（0.19.0），由人设目录与 `subagent_manager_list` 两处共用。
+ *
+ * 为什么标在目录行上：`continuable` 改变的是**委派的返回值形态**（回执一个 id 而不是产出），
+ * 模型必须在这一刻就知道 —— 否则它会按"等下会拿到结果"来安排后续动作，然后拿到一个 id
+ * 不知如何处理。标在这里的成本是**按需**的（没有人设开它就不出现），而写进工具描述是每轮
+ * 都付一遍。
+ *
+ * 放在本模块（叶子）而不是 `catalog.ts`：`tools.ts` 也要用它，而 `catalog.ts` 反向依赖
+ * `tools.ts` 的 `filterBySceneBinding` —— 放那边会形成 tools ↔ catalog 的循环。
+ */
+export const CONTINUABLE_MARK = '（允许追问）'
 
 /**
  * 「不限制嵌套」的目录注入深度（界面下拉的第四档，前端同值见 client.js 的
@@ -316,4 +353,4 @@ export function emptyResultNote(output: unknown, stopReason?: string): string {
     default:
       return `(${head}，但没有写出结论；可以拆小任务重新委派，或你自己接着做。)`
   }
-}
+}

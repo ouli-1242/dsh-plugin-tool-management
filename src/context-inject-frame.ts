@@ -125,6 +125,20 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   },
 }
 
+/**
+ * `how` 行里**点名过的工具**（六个域里只有 skills / subagents 两个会点名）。
+ *
+ * 为什么要有这份名单：一条 `how` 行是否成立，取决于它点名的工具在**这个 agent 手里**还在不在。
+ * 名单放在这里而不是调用方 —— 与上面那两条 `how` 相邻，改一处不会漏另一处。
+ *
+ * "不在手里"有两条路，都要算：
+ *   ① 兼容页「模型工具表」把它关掉（用户全局开关，名单在 index.ts 的 `hiddenTools` 里）；
+ *   ② **人设的工具限制**把它砍掉（`decideToolFilter` → 官方 `tools.restrict`，只作用于那份
+ *      人设启动的子代理）。②此前没人管：目录照注、`how` 行照样点名一个模型手里没有的工具，
+ *      等于诱导它去调一个不存在的名字（2026-10-07 修）。
+ */
+export const HOW_NAMED_TOOLS: readonly string[] = ['skill_manager_read', 'subagent_manager_run']
+
 /** 域声明里没登记的 key（理论上到不了这里）：给一个不出错的通用框架。 */
 export const fallbackFrame = (label: string): DomainFrame => ({
   title: `本机的${label}`,

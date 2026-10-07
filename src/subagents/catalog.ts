@@ -20,7 +20,7 @@
 // 用 stale-while-revalidate：`text()` 同步返回缓存值并在超龄时后台重算，
 // `refresh()` 供写操作后立即重算。
 import type { PersonaDoc } from './service.js'
-import { catalogInjectedAt } from './service.js'
+import { catalogInjectedAt, CONTINUABLE_MARK } from './service.js'
 import { subagentDepthOf } from '../context-inject.js'
 import { filterBySceneBinding } from './tools.js'
 
@@ -77,7 +77,7 @@ export function renderSubagentCatalog(
   if (!allowed.length) return ''
   const sorted = [...allowed].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   const shown = sorted.slice(0, Math.max(0, maxEntries))
-  const lines = shown.map((p) => '- **' + p.name + '** — ' + (catalogDescription(p.description, maxDescription) || NO_DESCRIPTION))
+  const lines = shown.map((p) => '- **' + p.name + '** — ' + (catalogDescription(p.description, maxDescription) || NO_DESCRIPTION) + (p.continuable === true ? CONTINUABLE_MARK : ''))
   const hidden = sorted.length - shown.length
   // 只给清单。"这是什么"与"该拿它做什么"由注入通道的框架交代 —— 2026-09-18 起是
   // context-inject.ts 的 `DOMAIN_FRAME.subagents`（标题 + 加粗的动作句 + 工具名行）。

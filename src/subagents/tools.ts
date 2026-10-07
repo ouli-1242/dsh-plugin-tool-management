@@ -2,6 +2,7 @@
 // 本文件返回的是 **author 侧 tool 定义**（parameters 是 property-spec 形态），装配处必须经
 // defineTool() 编译后再 register（C4：裸 register 会把未编译的参数声明直接发给模型 API）。
 // 参数与 output schema 用 as const 保留字面量类型，defineTool 才能推断出参数表。
+import { CONTINUABLE_MARK } from './service.js'
 import type { PersonaDoc, SubagentService, ToolFilterDecision } from './service.js'
 // 深度探针（`subagentDepthOf`）与目录判据（`catalogInjectedAt`）都不再需要：
 // 2026-09-17 方案 A 之后，这两个工具都不再看会话深度 —— 委派由官方决定（默认能嵌套到 3 层），
@@ -53,7 +54,7 @@ export function defineSubagentManagerListTool(subagents: {
       // 注入到哪些会话，与"能不能委派"无关 —— 委派由官方决定（`dsh-tool-subagent` 默认能嵌套
       // 到 3 层）。此前按深度过滤等于把可用人设藏起来：目录不注入时模型只能靠这个工具查，
       // 而工具又不列全，结果是"明明能委派却查不到人设"。
-      const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(无描述)'))
+      const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(无描述)') + (p.continuable === true ? CONTINUABLE_MARK : ''))
       let notice = ''
       try {
         notice = typeof subagents.noticeFor === 'function' ? await subagents.noticeFor(exec) : ''
@@ -100,7 +101,7 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
     // 最贵的单个参数。收完两处重复后目标 ≈325 tok。判据是"删掉的那句在描述里已经有了吗"：
     // Modes 段留着（它是模型的入口），参数说明只留"这一段独有的信息"。
     // `inherit` 那句"轮中委派拿不到当前轮"必须留 —— 它是这条参数唯一会让人写错 task 的地方。
-    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the「可委派的子智能体」reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
+    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output. A persona marked「允许追问」instead returns an agent id and runs in the background — continue it with `send_message`.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the「可委派的子智能体」reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
     parameters: {
       agent: { type: 'string', required: true, description: 'Persona name.' },
       task: { type: 'string', required: true, description: 'The task for the subagent. Self-contained by default; with inherit: true only state what is new.' },
@@ -138,6 +139,16 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
       const r = await subagents.runSerial(exec.agent, persona, task, exec.signal, decision === undefined ? undefined : decision.filter, inherit)
       const prefix = r.stopReason && r.stopReason !== 'completed' ? `[stopReason: ${r.stopReason}]\n` : ''
       const note = decision && decision.note ? `⚠ ${decision.note}\n\n` : ''
+      // 允许追问通道（人设 `continuable: true`）：产出是**异步**到达的，这里只拿到子会话 id。
+      // 回执必须把"id + 怎么追问 + 怎么中止"三件事写全 —— 少写一句，模型就会把"没拿到结果"
+      // 读成"委派失败"而重试一次（那会再起一个后台子代理，白白翻倍）。
+      if (r.continuable === true) {
+        return note + '已启动允许追问的子代理「' + name + '」（后台运行）\n'
+          + 'agent_id: ' + r.runId + '\n\n'
+          + '它的产出稍后自己发到这里，届时你会收到一条通知。要追问就 '
+          + 'send_message({ agent_id: "' + r.runId + '", message: "..." })，'
+          + '要中止就 interrupt_agent({ agent_id: "' + r.runId + '" })。'
+      }
       return note + prefix + r.text
     },
   }

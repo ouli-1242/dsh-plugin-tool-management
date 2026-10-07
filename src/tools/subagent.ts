@@ -50,7 +50,18 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
   try {
     // 工具限制按**当前会话的 Agent 预设**下发：父会话跑在哪个预设，就用那个预设那一行的
     // 白/黑名单（`decideToolFilter`），名单里已消失的工具名会被丢掉并在结果里如实说明。
-    register(defineTool(defineSubagentManagerRunTool({ ...deps.subagentService, sceneLists: deps.sceneLists, toolFilterFor: deps.toolFilterFor })))
+    // ⚠️ 必须 `Object.create`，**不能**用对象展开 —— 这是 0.15.0 起就存在的实际故障：
+    // `deps.subagentService` 是 index.ts 用 `Object.assign(Object.create(真实服务), { ops })`
+    // 造的**包装层**，只有 `ops` 落在自有属性上，`list` / `runSerial` 都挂在原型链上。对象展开
+    // 只复制**自有可枚举**属性，展开后只剩 `{ ops }` —— 于是 `subagent_manager_run` 每次一进
+    // execute 就在 `subagents.list()` 上抛 `subagents.list is not a function`（人设查不到就
+    // 谈不上委派；0.19.0 测「允许追问」时才被暴露出来，因为那条通道同样要过这一步）。
+    // `Object.create` 保持同一条原型链：`ops` 仍是审计过的那份，`list` / `runSerial` 回真实服务。
+    // 与 index.ts 造这个包装层时用的是同一个写法（那边注释写的是「原型链回真实服务，其余读法一字不动」）。
+    register(defineTool(defineSubagentManagerRunTool(Object.assign(
+      Object.create(deps.subagentService),
+      { sceneLists: deps.sceneLists, toolFilterFor: deps.toolFilterFor },
+    ))))
   } catch (e) {
     recordFailure('subagent_manager_run', e)
   }
@@ -152,6 +163,10 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
           // 就是静默清掉它。`reasoningEffort` 是 0.14.0 新增的，最容易在这里被漏掉 ——
           // 模型只改一句 body，用户配好的思考强度就没了，而且没有任何提示。
           reasoningEffort: keep.reasoningEffort ?? '',
+          // 0.19.0 同理：`continuable` 不在本工具的参数表里（与工具限制、provider/model 同一档 ——
+          // 它在面板上配），所以这里**只负责别把它冲掉**。漏了它的后果是：模型改一次描述，
+          // 用户设好的"允许追问"就静默变回一次性，而回执照样说成功。
+          continuable: keep.continuable === true,
           tools: keep.tools ?? [],
           toolsDeny: keep.toolsDeny ?? [],
           toolsByPreset: keep.toolsByPreset ?? {},

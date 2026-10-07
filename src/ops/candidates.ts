@@ -3,11 +3,13 @@
 // 三个 op 都是**只读候选源**：preset-tools（人设表单的工具候选）、model-candidates
 // （宿主 LLM 目录）、scene-inventory（场景档案勾选器的数据源 v2）。
 
+import type { PresetToolCandidates } from '../scenes/candidates.js'
+
 export interface CandidateOpsDeps {
-  /** 全体 Agent 预设工具名并集 + 各工具所属预设 + 当前会话是否可见。 */
-  presetToolCandidates(): Promise<{ tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string }> }>
-  /** 宿主 LLM 目录里的 (provider, model) 对（不发网络请求）。 */
-  modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }> }>
+  /** 一行一个 Agent 预设，各带自己的工具清单与归属组。 */
+  presetToolCandidates(): Promise<PresetToolCandidates>
+  /** 宿主 LLM 目录里的 (provider, model) 对 + 去重后的来源清单（不发网络请求）。 */
+  modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }>; providers: Array<{ id: string; name: string }> }>
   /**
    * 某个 (provider, model) 的思考强度档位。与上面那个**代价不同**：要问 adapter，官方注释写明
    * 是 `adapter-owned asynchronous lookup`（可能联网），所以单独一个 op、按需拉取。
@@ -34,7 +36,7 @@ export function buildCandidateOps(deps: CandidateOpsDeps): Record<string, (args:
   return {
     // 人设表单的两个候选源之一（只读，均为「按需拉取」——不进 scene-inventory，避免每次开
     // 档案弹窗都枚举预设）。
-    // preset-tools：全体 Agent 预设工具名并集 + 各工具所属预设 + 当前会话是否可见。
+    // preset-tools：一行一个 Agent 预设，各带自己的工具清单与归属组（0.19.0 起不再返回全体并集）。
     // `unavailable` = 本插件自己没注册上的工具：工具列表接口是唯一按名字枚举工具的地方，
     // 注册失败只能在这里被如实回答。
     'preset-tools': async () => ({

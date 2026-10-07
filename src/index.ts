@@ -37,6 +37,7 @@ import { createSubagentCatalog } from './subagents/catalog.js'
 import { createSkillCatalog } from './skills/catalog.js'
 import {
   createContextInjector,
+  HOW_NAMED_TOOLS,
   subagentDepthOf,
   type LiveInjectionSnapshot,
 } from './context-inject.js'
@@ -709,6 +710,32 @@ export default {
       return out
     }
 
+    /**
+     * `how` 行点名过的工具里，**这个 agent 手里没有**的那些（注入器每步同步问一次）。
+     *
+     * 两条路并起来，缺一条框架文本就会说谎：
+     *   ① `toolTableHidden()` —— 兼容页「模型工具表」的全局开关。**必须留着**：它读的是设置
+     *      本身，与"限制层装没装上"无关（可见性的重放有 300ms 去抖，只问可见性会有一个窗口漏报）。
+     *   ② `tools.get(name, agent)` —— 拿 agent 当 scope 问"它解析得到这个名字吗"，与
+     *      `carrierHiddenToolsFor` 同一套官方写法。这一条覆盖**人设的工具限制**：
+     *      `decideToolFilter` 算出的 allow/deny 由官方在子代理启动时 `tools.restrict` 装到那个
+     *      scope 上（`dsh-subagent/lib/index.js:522`），全局开关表里看不到它 —— 于是人设砍掉
+     *      `skill_manager_read` 之后，技能目录照注、`how` 行照样点名一个模型手里没有的工具。
+     *      拿不到 agent 时跳过：`get(name, undefined)` 问的是**全局视图**，会得出相反结论。
+     */
+    const howHiddenToolsFor = (agent: unknown): ReadonlySet<string> => {
+      const hidden = new Set<string>(toolTableHidden())
+      if (agent === null || (typeof agent !== 'object' && typeof agent !== 'function')) return hidden
+      const scope = agent as object
+      for (const name of HOW_NAMED_TOOLS) {
+        if (hidden.has(name)) continue
+        try {
+          if (tools.get(name, scope) === undefined) hidden.add(name)
+        } catch { /* 读不到 = 按还在手里算 */ }
+      }
+      return hidden
+    }
+
     // ---------- 注入通道（场景 / 记忆 / MCP / 技能 / 子智能体 / 提示词，各一条消息）----------
     // 这些文本以前是 systemPrompt 段（persona complete 会整段压掉）。现在改走官方的
     // 「每步注入一条合成消息」通道（skill-catalog / AGENTS.md / 时间上下文同款）：
@@ -769,23 +796,23 @@ export default {
           // 子智能体 → 提示词。form 是宿主语义轴：记忆是「当前状态」（snapshot，后发取代先发），
           // 三个目录是 catalog，提示词是 instructions（与官方 AGENTS.md 那条行同一形态）。
           //
-          // `applicableTo`（2026-09-17 方案 A）：子智能体域按"**目录该不该注入到这么深的
-          // 会话**"（人设的 `catalogDepth`，默认 1 = 只在顶层注入）判断，**不是**"能不能
-          // 委派"。委派可行性由官方决定：`dsh-tool-subagent` 默认 `maxDepth: 3`，provider
-          // 只在传了该值时才校验，所以子代理本来就能继续嵌套（用户实测确认）。此前判据叫
-          // "还有没有委派预算"、语义是"还能不能委派"，那是错的 —— 详见 service.ts 里
-          // `catalogDepth` 字段的注释。目录正文也按同一个判据过滤（`text(agent)`），两处同源
-          // 所以不会分叉。
+          // 深度判据（`applicableTo`）**逐域写在域声明上**，三个域各一条，语义都**不是**"能不能
+          // 委派"。委派可行性由官方决定：`dsh-tool-subagent` 默认 `maxDepth: 3`，provider 只在
+          // 传了该值时才校验，所以子代理本来就能继续嵌套（用户实测确认）。此前判据叫"还有没有
+          // 委派预算"、语义是"还能不能委派"，那是错的 —— 详见 service.ts 里 `catalogDepth` 的注释。
+          //   · 场景与记忆：**恒为"只在顶层"**。这两段说的是**父会话的处境**（此刻在哪个场景、
+          //     这个场景下攒了什么），子代理要什么由父代理写进委派说明；记忆本体又是几 KB 的
+          //     常驻文本，子代理真有需要可以自己用 `memory_manager_*` 取。放它们进子会话，
+          //     子代理的上下文就不再收敛为「角色 + 任务」。（0.19.0 中途有一版把这两条放开到
+          //     所有深度，已回退。）
+          //   · 子智能体目录：人设的 `catalogDepth`（默认 1 = 只在顶层）—— 它问的是"**目录该不该
+          //     注入到这么深的会话**"，与"这个域要不要注入"是两件事。目录正文也按同一判据过滤
+          //     （`text(agent)`），两处同源所以不会分叉。
+          //   · MCP / 技能 / 提示词：不分深度。
           //
-          // 场景与记忆（2026-09-17 用户裁定；2026-09-23 拆成两个域）：**都只在顶层注入**。
-          // 记忆是"父会话的现场"，不是子代理完成任务所需的事实 —— 塞进一次性子会话只会与
-          // 角色定义争注意力（实测：子代理跑审查时，上下文里同时躺着人设与整份记忆）。
-          // 场景段同理：它说的是"父会话现在处在哪个模式"，而子代理根本没有"模式"可言。
-          // 子代理手里有 `memory_manager_list/read` 与 `scene_manager_save`，需要什么自己取；
-          // 父代理上下文里也有，相关事实应当由它写进 `task`（子代理的上下文 = 角色 + 任务）。
-          // 其余三域对任何深度都成立：提示词是用户规则（本插件的立身之本就是"覆盖到子代理"）、
-          // 技能目录与 MCP 状态是"操作这台机器所需的事实"（子代理手里就有 `skill` / `mcp__*`
-          // 工具，不知道清单就只能瞎调）。
+          // 同一张 `domains` 表管着六个域的开关，没有按会话分流的第二张表 —— 那张
+          // `subagentDomains` 已删：人设身份在官方机制里取不到（descriptor 是字段白名单、
+          // 冷恢复只还原 provider/model/effort）。
           domains: () => [
             // 场景（**框架**）：启用的场景 + 场景说明（用户的约定）。排第一 —— 先让模型知道
             // "现在在哪个场景、这个场景的约定是什么"，再读下面的记忆条目。
@@ -806,7 +833,7 @@ export default {
           ],
           settings: () => injectSettingsSync(),
           // 工具表开关：`how` 行里点名工具的那几句要跟着它换话术（关掉的不点名）。
-          hiddenTools: toolTableHidden,
+          hiddenTools: howHiddenToolsFor,
           factsFor: (agent) => candidates.presetFactsForAgent(agent),
           // 令牌门禁（2026-09-19，用户裁定「宿主侧硬拦截」）：令牌**在生效**（`TOKEN !== ''`，
           // 关掉或没配都是空串）而本次启动还没有人验过 ⇒ 这一步不放行，宿主把 turn 收成
@@ -1448,6 +1475,11 @@ export default {
     // 实现在 ./scenes/candidates.ts（2026-09-19 从本闭包 10 段抽出，约 260 行）。
     // 放在这里而不是更早：它要 mcp（读停用表）与 toolKeyParts（416 行的 const），
     // 而唯一在更早处引用它的地方（注入 deps 的 factsFor）是箭头函数，调用发生在之后。
+    // 本插件注册过的工具名。**唯一**可靠的"插件工具"判据：官方没有工具级归属接口
+    // （`ToolSchema` 无归属字段、`ToolRuntime` 公开面无来源、`tools/change` 无载荷），
+    // 但自己注册了什么自己当然知道。登记点在下面 `toolDeps.register`（2115 行那个漏斗，
+    // 六个域的构建器全部经它），所以不可能漂移 —— 新增工具自动进集合，不用维护前缀表。
+    const selfToolNames = new Set<string>()
     const candidates = createCandidates({
       get: (name: string) => ctx.get(name),
       tools,
@@ -1455,6 +1487,9 @@ export default {
       skillsService,
       memoriesService,
       toolKeyParts,
+      // 传 getter 而不是快照：登记发生在 apply 过程中（本行之后 600 余行），
+      // 而这个工厂现在就要构造完。
+      selfToolNames: () => selfToolNames,
     })
 
 
@@ -2085,7 +2120,11 @@ export default {
       defineTool,
       // 量体积只认**注册成功**的那些（注册失败的域工具本来就不在模型工具表里）——
       // 兼容页「模型工具表」块的分组与 ≈token 都取自这里，那是这份设置唯一的数字来源。
-      register: (def: ToolDefinition) => { recordToolSize(def); tools.register(def) },
+      //
+      // 同一行里登记 `selfToolNames`：六个域的构建器全部经这个漏斗，所以它就是"本插件注册了
+      // 哪些工具"的权威清单。`tools.register` 抛（重名 / 保留名）时不登记 —— 那份不在表里，
+      // 也不该出现在「工具限制」的候选里。
+      register: (def: ToolDefinition) => { recordToolSize(def); tools.register(def); selfToolNames.add(String(def.name)) },
       lockedSceneGuard,
       syncSwitchToScene,
       // 错误句里点名工具前要先问一句（判据与两个目录的 `listToolVisible` 同一份缓存）。

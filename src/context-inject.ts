@@ -123,7 +123,7 @@ export {
   type InjectReason,
   type InjectSection,
 } from './context-inject-select.js'
-export { clearedDomainText, escapeFrameBody, renderDomainText } from './context-inject-frame.js'
+export { clearedDomainText, escapeFrameBody, HOW_NAMED_TOOLS, renderDomainText } from './context-inject-frame.js'
 export { officialKindsToSuppress } from './context-inject-surface.js'
 
 // B4：关域拦截的**顺序自检**。官方那两条注入行与本插件同挂在这条瀑布上，拦截成立的剩余前提是
@@ -183,13 +183,18 @@ export interface ContextInjectorDeps {
    */
   tokenGateActive?: () => boolean
   /**
-   * 兼容页「模型工具表」关掉的工具名（同步快照，读 TTL 缓存）。
+   * `how` 行里点名过的工具中，**这个 agent 手里没有**的那些（同步快照）。
    *
-   * 只为一件事：`how` 行里点名工具的那几句在工具被关掉后就是假的（"用 `skill_manager_read`
-   * 拿正文"—— 模型手里没有这个工具）。关掉的不点名，其余照旧。框架文本变了会当成"内容变了"
+   * 只为一件事：`how` 行里点名工具的那几句在工具不在手里时就是假的（"用 `skill_manager_read`
+   * 拿正文"—— 模型手里没有这个工具）。不在手里的不点名，其余照旧。框架文本变了会当成"内容变了"
    * 重发一次，这是正确行为（模型上下文里那份确实已经不准确了）。
+   *
+   * ⚠️ **必须带 agent**：两条路都会让工具不在手里 —— 兼容页的全局开关（同一份名单给所有
+   * agent），以及**人设的工具限制**（`tools.restrict`，逐 agent 不同）。此前只读全局那份，
+   * 于是人设砍掉 `skill_manager_read` 之后，目录照注、`how` 行照样点名它。
+   * 名单内容由 `HOW_NAMED_TOOLS` 界定（框架层登记，与 `how` 定义相邻）。
    */
-  hiddenTools?: () => ReadonlySet<string>
+  hiddenTools?: (agent: unknown) => ReadonlySet<string>
   /** 诊断用（默认 console.error）。 */
   logger?: (message: string) => void
 }
@@ -224,7 +229,7 @@ export interface LiveInjectionDomain {
    * in-context = 插件注入的在上下文里；cleared = 已清空；
    * official = 官方载体在送、插件不重复送（提示词 / 技能目录，标准类预设下的常态）；
    * off = 域开关被关掉；empty = 本插件负责但当前没有内容；absent = 该投却没投（含压缩后未补发）；
-   * child = 当前是子会话、该域对子会话不成立（人设目录）；
+   * child = 当前是子会话、该域对子会话不成立（场景与记忆只在顶层注入；人设目录看 catalogDepth）；
    * error = 该域这一轮**取数抛异常**（内容仍在，但这一步取不到 —— 是故障，不是"没内容"）；
    * unknown = 没有会话。
    */
@@ -508,8 +513,9 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       const published = new Set<InjectDomainKey>()
       // 域声明按 key 索引：来源文件（`files`）只在真要发消息时取，所以要能从这里回查声明。
       const domainOf = new Map(domains.map((domain) => [domain.key, domain] as const))
-      // 工具表开关本步读一次（同步快照）：`how` 行里点名工具的那几句据此换话术。
-      const hiddenNow = deps.hiddenTools !== undefined ? deps.hiddenTools() : null
+      // `how` 行点名工具的那几句据本步的快照换话术。按 agent 取：全局开关之外，
+      // 人设的工具限制也会让工具不在手里，而那份名单逐 agent 不同。
+      const hiddenNow = deps.hiddenTools !== undefined ? deps.hiddenTools(agent) : null
       const toolHidden = hiddenNow === null ? () => false : (name: string) => hiddenNow.has(name)
       for (const section of sections) {
         published.add(section.key)

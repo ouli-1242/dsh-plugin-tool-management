@@ -39,21 +39,21 @@ Hard-refresh the browser (Cmd/Ctrl+Shift+R) afterwards — a **Tools** panel in 
 
 In one line: **configure "work / writing / coding" each as a scene and switch the whole stack with one click — and the model always sees whatever this plugin manages.**
 
-| Highlight                     | What it means                                                                                                                                                             |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| One-click scene switch        | Each scene carries its own MCP / skills / personas / memories (plus a bound set of quick prompts, if you set one); entering applies them, leaving restores. The model can switch them for you too                             |
-| Manage without leaving chat   | Type `/` in the composer for a “Tools” section: enter a scene, toggle skills / MCP / subagents / prompts / memories — one click, done                                               |
-| Memories reach the model      | A few `.md` files under a scene become its knowledge base — injected automatically, no copy-pasting                                                                       |
-| Notes for MCP servers         | Write "if A is down, fall back to B" as a note; the model sees it every turn and acts on it                                                                               |
-| Disable a single tool         | Keep a server but mute one tool: invisible and uncallable. "Restart" only reconnects and never flips your switches                                                        |
-| Skills at a glance            | The copy in effect is marked *preferred*; shadowed ones name the source that wins                                                                                         |
-| Subagent = one file, one role | Write a role file and delegate to it; only the result comes back, and it never clutters your History                                                                      |
-| Several prompt presets        | Keep multiple `AGENTS.md` baselines and switch with one click; each scene can bind its own                                                                                |
-| Sessions no longer lost       | Archives grouped by project, searchable, batch-restorable; imports Claude Code / Cursor / Codex transcripts                                                               |
-| The model always sees it      | One context message per domain, republished only when the content changes. Under suppressing presets nothing is injected by default — force any domain on in the Host tab |
-| Lock it and relax             | Locking a scene makes create/update/delete across the five domains read-only until you unlock                                                                             |
-| Deleted is not gone           | Skills / memories / personas / presets / scenes land in a recycle bin and can be restored (permanent session deletion is the exception)                                   |
-| Safe by default               | Secrets masked, plaintext needs a token, only the plugin's own files are written. Masking is display-only — see Configuration & security                                  |
+| Highlight                     | What it means                                                                                                    |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| One-click scene switch        | Each scene carries its own MCP / skills / personas / memories; entering applies them, leaving restores. The model can switch for you too |
+| Manage without leaving chat   | Type `/` for a "Tools" section and toggle any domain's items — one click, done                                    |
+| Memories reach the model      | A few `.md` files under a scene become its knowledge base, injected automatically                                 |
+| Notes for MCP servers         | A note you write is seen by the model every turn and acted on                                                     |
+| Disable a single tool         | Mute one tool on a server: invisible to the model and uncallable                                                  |
+| Skills at a glance            | The copy in effect is marked "preferred"; shadowed ones name the winning source                                   |
+| Subagent = one file, one role | Write a role file and delegate to it; only the result comes back, never in History                                |
+| Several prompt presets        | Keep multiple `AGENTS.md` baselines and switch with one click; each scene can bind its own                        |
+| Sessions no longer lost       | Archives grouped by project, searchable, batch-restorable; imports Claude Code / Cursor / Codex transcripts       |
+| The model always sees it      | One context message per domain, republished only when the content changes                                         |
+| Lock it and relax             | Locking a scene makes create/update/delete across the five domains read-only                                      |
+| Deleted is not gone           | Skills / memories / personas / presets / scenes land in a recycle bin (permanent session deletion excepted)       |
+| Safe by default               | Only the plugin's own files are written; secrets masked, plaintext needs a token                                  |
 
 ## Quick start
 
@@ -78,42 +78,43 @@ Then remind me to hard-refresh the browser.
 
 ### Slash commands (manage from the chat box)
 
-- **Type `/` to get a “Tools” section**: six rows — scenes / skills / MCP servers / subagents / prompts / memories. Click a row to drop into that domain's items in place (the breadcrumb's “Tools” step goes back), click an item to apply it. **The menu stays open after a click** — keep toggling the next one; batch toggling is the main use.
-- **State is visible**: enabled items carry a green check in the icon slot, disabled ones an empty box, and the grey text on the right is the item's own note (scene description / skill description / MCP note / persona description / preset description / memory description, clipped to 40 chars; rows without one fall back to “Enabled / Not enabled”). Each domain row shows a summary (`now: Work`, `3 on / 1 off`), so you know where you stand without opening it. The check flips the moment you click (optimistic); a failed write flips back and says why.
-- **Long lists stay usable**: every domain lists all of its items and the panel scrolls; skills group by source directory, memories by scene, enabled rows first inside each group. Each external skill directory also gets one "directory name · directory" row pinned at the top of its group — clicking it toggles the entire source (it is listed while enabled too, so you can switch it off here; its skills collapse with it and come straight back when it is enabled again). The two always-on reserved scenes ("Global" and the shared baseline) don't appear under scenes, but the memories domain includes the global ones by default and pins that group at the top: they aren't in the current scene yet they hold in every conversation.
-- **Only reversible actions**: entering a scene and the various toggles. Clicking the scene that's already active leaves it (only global and shared keep injecting); the one thing that can't be switched off is the global prompt — there is no "apply nothing" state for a baseline, so clicking the preset already in effect just says it is the current one. Create / delete / edit / import / export stay on their own pages.
-- **Built on the host's official channel**: registered through DSH's input-trigger interface (the same one the official skills menu uses) — no patching of official packages. If the host lacks that service the entry simply never appears and the compatibility page says so. Each section gets its own checkbox (“Tools” / “Quick prompts”) inside the “Slash command entry” group under “Compatibility → Injection”, and the tag at the end of each row says whether it really mounted this startup. The two sections register independently, so switching one off leaves the other alone; turning both off restores the stock `/` menu (restart DSH for the slash-command change to take effect).
-- **“Tools › Prompts” holds both kinds of prompt, and every row there is a switch**: the global group is which baseline is written into `AGENTS.md` (single choice), the quick group is whether that snippet is on at all — the same action and the same state as the pill switch on the Prompts page. Quick prompts that are switched off stay listed here: the place you manage things from should not hide an item the moment you manage it.
-- **A separate “Quick prompts” section is for reuse**: only the enabled ones appear, and one click replaces the typed token with the saved text in the composer — **nothing is sent for you**; the send key stays yours. Those rows carry no check mark on purpose: clicking one inserts text, it doesn't toggle state.
+- **Type `/` for a "Tools" section**: six rows — scenes / skills / MCP servers / subagents / prompts / memories. Click a row to enter that domain, click an item to apply it; the menu stays open.
+- **State is visible**: enabled items carry a green check, disabled ones an empty box, the grey text on the right is the item's note, and each domain row shows a summary.
+- **Long lists stay usable**: every domain lists all of its items and the panel scrolls; skills group by source directory, memories by scene, enabled rows first. Each external skill directory gets one row that toggles the whole source.
+- **Only reversible actions**: entering a scene and the various toggles; create / delete / edit / import / export stay on their own pages.
+- **Built on the host's official channel**: registered through DSH's input-trigger interface, no patching of official packages; two checkboxes under "Compatibility → Injection".
+- **"Tools › Prompts" holds both kinds**: the global group picks which baseline goes into `AGENTS.md` (single choice), the quick group is on/off.
+- **A separate "Quick prompts" section is for reuse**: only the enabled ones appear; one click inserts the saved text and sends nothing.
 
 ### Scenes & memories
 
 - **A scene = a group, a memory = a `.md` file**: `memories/<scene>/<name>.md`, the whole body is injected; file names may be non-ASCII.
-- **"Enabled" and "entered" are two axes.** Enabled decides which scene the injection follows (single-select; none enabled = only `global` and `_shared` inject). Entering applies the scene's whole MCP / skills / personas set and writes its bound prompt into `~/.dsh/AGENTS.md` (5 generations of backups, restored on exit). **They stay identical, and the server is what holds that invariant**: `rules-set-active` brings the runtime in line before it writes the enabled set — and writes nothing at all if the runtime refuses — so every entry point (the UI toggle, the `/` menu, the model tool) needs a single call.
-- **Scene profile**: each scene combines MCP tools / skills / subagents / memories. The rule is *ticked = on, unchecked = off*, and a section that was never created means that whole domain is off. Leaving restores the pre-scene state verbatim. While a scene is active, the switches in those three domains still work and are written back into its profile; only locking freezes them.
-- **Scene lock**: once locked, create/update/delete across MCP / skills / subagents / memories / prompts is read-only (UI disabled plus a server-side guard). Creating, renaming, binding a prompt, activating or entering a scene, the recycle bin, MCP restart and exports stay outside the frozen list. A scene must be running to lock, and a locked scene cannot be turned off until you unlock it.
-- **Deleting a scene deletes its memories too**: record, profile and every memory land in one recycle-bin entry and come back as a whole. A running scene refuses deletion; renaming follows through to the directory and profiles.
-- **Import / export**: `.md` / `.zip` (directory name = scene, bundles carry attachments); same names are skipped, never overwritten, and over-limit items are reported. Export packs the memories you tick and only reads source files.
-- **Injection budget**: 128 KiB by default; oversized memories are skipped with a list. Deletes go to the recycle bin.
-- **Subagent sessions do not receive memories**: memories are the parent's situation, not the facts a child needs. A child's context stays "persona + task" — put what it needs into the task. Other domains are unaffected (MCP / skills / prompts still inject; the persona catalog follows each persona's `catalogDepth`).
+- **"Enabled" and "entered" are two axes**: enabled decides which scene the injection follows (single-select; none enabled = only `global` and `_shared`); entering applies the scene's whole MCP / skills / personas set and writes its bound prompt into `AGENTS.md`.
+- **Scene profile**: each scene combines MCP tools / skills / subagents / memories; ticked = on, unchecked = off, a section never created means that domain is off, and leaving restores the pre-scene state.
+- **Scene lock**: create/update/delete across MCP / skills / subagents / memories / prompts becomes read-only.
+- **Deleting a scene deletes its memories too**: record, profile and every memory land in one recycle-bin entry and come back as a whole; a running scene refuses deletion.
+- **Import / export**: `.md` / `.zip` (directory name = scene, bundles carry attachments); same names are skipped, never overwritten.
+- **Injection budget**: 128 KiB by default; oversized memories are skipped with a list.
+- **Subagent sessions have no separate switches**: which domains inject is decided by the same table, but scene and memory are top-level only.
 
 ### Subagents
 
-- **One file per persona**: `subagents/<persona>.md`, frontmatter entirely optional. `output:` takes one requirement per line — a checkable output contract (format, severities, bans) gets followed where one abstract sentence does not.
-- **The persona reaches the child inside a role frame**: the body is used verbatim under a `# Persona: <name>` heading with an authorization line and a boundary line (it governs *how* it works, not *what* it may do). The persona file itself needs no change.
-- **Delegation**: `subagent_manager_run` runs with the persona, returns only its final result, and never enters History. By default the child starts fresh (so the task must be self-contained); with `inherit: true` it is seeded with this conversation's **finished** turns — not the current one, so a delegation made mid-turn still needs the full story.
-- **On/off and catalog**: a disabled persona is neither injected nor visible to the model (file untouched); new / imported / restored personas start **disabled**. The catalog lists names and descriptions only, so the model knows what it can delegate to; personas are renameable and scene bindings follow.
-- **Catalog injection depth (`catalogDepth`)**: default `1` = top-level sessions only; `2` also reaches subagent sessions; the UI's "No nesting limit" writes `99`. **It does not limit nesting** — how deep delegation may go is the host's decision, and this plugin never passes `maxDepth`.
-- **Tool limits per agent preset**: one allow or deny list per preset (mutually exclusive). Two behaviours worth knowing: **an allow list is merged back with every currently running `mcp__*` tool**, so ticking only `read` will not stop an MCP server that exposes a shell; and **if none of the listed names exists right now, the result is "no restriction"** (fail-open). Naming the reserved `run_code` is stripped from the list with a note, because the host would throw and the subagent would never start.
-- **Reasoning effort** sits next to *model* in the advanced options, and the available levels are declared by the selected model. After a model change, a level no longer offered is cleared and you are told. Leaving it empty while a model is set falls back to that model's own default — not the main session's level.
+- **One file per persona**: `subagents/<persona>.md`, frontmatter entirely optional; `output:` takes one requirement per line.
+- **The persona reaches the child inside a role frame**: the body is used verbatim under a `# Persona: <name>` heading with an authorization line and a boundary line.
+- **Delegation**: `subagent_manager_run` runs with the persona, returns only its final result, and never enters History; by default the child starts fresh, with `inherit: true` it is seeded with this conversation's finished turns.
+- **On/off and catalog**: a disabled persona is neither injected nor visible to the model (file untouched); new / imported / restored personas start disabled. The catalog lists names and descriptions only.
+- **Catalog injection depth (`catalogDepth`)**: default `1` = top-level sessions only, `99` = any depth; it does not limit nesting.
+- **Tool limits per agent preset**: one allow or deny list per preset (mutually exclusive); the candidates are only that preset's own tools, grouped as "plugin tools / official tools / other tools", and an allow list is merged back with every currently running `mcp__*` tool (ticking only `read` will not stop an MCP shell). The reserved name `run_code` is stripped with a note.
+- **Model and provider** are both picked from the host LLM catalogue (choosing a provider narrows the model list to it); empty means inherit the main session.
+- **Reasoning effort**: the available levels are declared by the selected model; leaving it empty while a model is set falls back to that model's default.
 
 ### MCP servers
 
-- **CRUD with immediate effect**: written into `cordis.patch.yml`, backed up before every change. Levels are global / project, and new servers default to global.
+- **CRUD with immediate effect**: written into `cordis.patch.yml`, backed up before every change; levels are global / project.
 - **Per-tool switches**: disable individual tools (invisible to the model and blocked at call); whole servers support bulk.
-- **Stopped servers still show their tools**: one that is not running keeps the names and descriptions last seen (marked "as of last run"); one that never ran can be probed with "start server to read tools".
-- **Status and notes enter the context**: currently usable servers are listed, and **one that connected before but cannot right now is listed and labelled too** — so the model says "it is not connected, check it" instead of reading "configured but unreachable" as "not configured" and suggesting you install one. Servers that never connected are omitted; your notes travel along as decision hints.
-- **Secret masking**: a credential is replaced **as a whole** by `••••••`, and only for keys that look sensitive; `$VAR` and `!!js` are indirections and stay readable, and a URL's query string, its `user:pass@` userinfo and its `#fragment` are all masked. "Reveal" needs a token. A masked value is never written back into the patch file — on save the plugin restores the stored value for any field you left alone, and refuses the whole save when a URL has nothing to restore from (a silently stripped query string would leave an address that connects but fails authentication).
+- **Stopped servers still show their tools**: one that is not running keeps the names and descriptions last seen; one that never ran can be probed.
+- **Status and notes enter the context**: a server that connected before but cannot right now is listed and labelled; your notes travel along as decision hints.
+- **Secret masking**: a credential is replaced as a whole, and "Reveal" needs a token; a masked value is never written back into the patch file.
 - **Migrate & back up**: cross-level migration rolls back on failure; JSON export/import.
 
 ### Skills
@@ -121,35 +122,33 @@ Then remind me to hard-refresh the browser.
 - **Sources at a glance**: project / DSH / Agents / Codex / Claude / custom directories, grouped by source.
 - **Opposite permissions**: default sources are readable and their skills deletable; external directories can be disabled or removed but their files stay read-only.
 - **Remove ≠ disable**: removing stops scanning the directory at all (nothing is written, restorable); disabling keeps it listed but uncallable.
-- **Who wins a shared name**: the winning copy is marked "preferred", shadowed ones name the source that wins, and enabling a shadowed copy says plainly that it will not take effect.
+- **Who wins a shared name**: the winning copy is marked "preferred", shadowed ones name the source that wins.
 - **Custom directories / ZIP import & export / recycle bin.**
 
 ### Prompt presets
 
-- Multiple `~/.dsh/AGENTS.md` baselines, applied with one click (the host re-reads that file each turn, so it lands next turn), with 5 generations of backups.
-- **It remembers the last applied preset**: even after you hand-edit `AGENTS.md`, the origin is still reported (flagged "the file changed since").
+- Multiple `~/.dsh/AGENTS.md` baselines, applied with one click (next turn), with 5 generations of backups.
+- **It remembers the last applied preset**: even after you hand-edit `AGENTS.md`, the origin is still reported.
 - Each preset can carry a one-line description that lives in a sibling `meta.json` — shown in this panel, never injected.
-- **A referenced preset cannot be deleted** (scene binding / current `AGENTS.md` content / the copy to restore on scene exit); deletes go to the recycle bin.
-- **The switch on the left of a card is the answer to “is this one in effect”**: flip it on and that preset is written into `AGENTS.md`; clicking the one that is already on writes it again (undoing hand edits). There is no "apply nothing" state for a baseline, so this switch cannot be turned off — light up a different one instead (single choice).
-- **While a scene drives the baseline, flipping another one rebinds that scene** to the chosen preset (written into the scene profile, realigned immediately); it is refused only while the scene is locked. The global baseline is restored from the snapshot on exit.
-- **Quick prompts** (the second section on the same page): save a piece of text you keep typing, then hit `/` in the composer and click it — it lands verbatim in the input, ready to edit and send. It is **never injected**; its switch controls exactly one thing — whether the row still shows up in the `/` “Quick prompts” section (text and note survive when it's off; the same switch is reachable under “Tools › Prompts”). Stored apart from the baselines, deletable to the recycle bin, exportable and included in the migration snapshot.
-- **A scene can bind a set of quick prompts**: a new dropdown under “Prompt preset” in “Edit scene”. The default, “The enabled ones (keep as is)”, means the scene does not touch this domain at all; switch it to “Pick per scene” and entering that scene enables exactly the checked ones and disables the rest, **leaving the scene restores the switches as they were before entering**. Checking nothing is "disable all inside this scene", which is the opposite of "not bound".
-- **Both groups are collapsible cards** (click the header to fold, and a search query forces them open). The quick group's header carries a “Select all / Deselect all” button that applies to the currently visible rows only; the global group has none — that one is single choice, so "apply every baseline" has no meaning.
+- **A referenced preset cannot be deleted** (scene binding / current `AGENTS.md` content); deletes go to the recycle bin.
+- **The switch on the left of a card is the answer to "is this one in effect"**: flip it on and that preset is written into `AGENTS.md`; a baseline has no "apply nothing" state, so light up a different one instead (single choice).
+- **While a scene drives the baseline, flipping another one rebinds that scene** to the chosen preset; it is refused only while the scene is locked.
+- **Quick prompts** (the second section on the same page): save a piece of text you keep typing, then hit `/` and click it — it lands verbatim in the input. It is never injected; its switch only controls whether the row still shows up in the `/` "Quick prompts" section.
+- **A scene can bind a set of quick prompts**: entering that scene enables exactly the checked ones and disables the rest, and leaving restores the switches as they were before entering.
+- **Both groups are collapsible cards** (click the header to fold); the quick group's header carries a "Select all / Deselect all" button, the global group has none — that one is single choice.
 
 ### Archived sessions
 
-- Grouped by project, searchable, batch restore / delete, retention auto-cleanup; a workspace whose registration was deleted is rebuilt from the session directories and can be re-registered in one click.
-- Import Claude Code / Cursor / Codex / any text — pick a registered workspace, browse to a folder, or give a path directly; export Markdown / JSONL in three cumulative modes: text only → plus tool calls and results and attachment names → plus reasoning. **An export is still a readable transcript, not a full backup**: the added blocks are capped and say so, and token stats are not included. Use archiving when you need the full record.
+- Grouped by project, searchable, batch restore / delete, retention auto-cleanup; a workspace whose registration was deleted can be re-registered in one click.
+- Import Claude Code / Cursor / Codex / any text (pick a registered workspace, browse to a folder, or give a path directly); export Markdown / JSONL in three cumulative modes: text only → plus tool calls → plus reasoning. **An export is a transcript, not a backup** — use archiving when you need the full record.
 
 ### Host compatibility
 
-The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they must be the same physical modules, or every "adapt to the host" decision degrades into guesswork.
-
-- **Host tab**: host version, usable capability count, per-action routing (native / adapter / unavailable), degradations and reasons. The page has three write entries: **access token** (needs a restart), **injection settings**, **model tool table**.
-- **Command line**: `node scripts/doctor.mjs` (health check), `node scripts/host-deps.mjs --fix` (align dependencies), `npm run sync:profile` (mirror the build into the profile's local install — a `file:` install is a hard-linked copy, so files a build *adds* never show up there on their own).
-- Under a **suppressing preset** such as `minimal`, this plugin's injection is **off by default** (following the preset's intent) and the prompt and skills are absent because their official rows are not mounted — the Host tab marks this per column, and its Injection block can force any domain back on.
-- **Unchecking "Skills" or "Prompt" really stops them** — under standard presets the host delivers those two itself, so unchecking also stops the host's copy. The other three domains are only ever sent by this plugin, so their toggles work as written.
-- **What an injection looks like**: one `<system-reminder>` per domain — a `#` section title, then the body (MCP and subagents add one line each). The frame carries **only what is now**: no "when to recall me" instructions, no explanation of the other sections. Any `</system-reminder>` inside your content is escaped, and each message closes with "this copy replaces earlier copies of the same kind in this session" — injections are re-sent only when the content changes, so the model must be told which copy to trust.
+- **Host tab**: host version, usable capability count, per-action routing (native / adapter / unavailable), degradations and reasons; three write entries: access token, injection settings, model tool table.
+- **Command line**: `node scripts/doctor.mjs` (health check), `node scripts/host-deps.mjs --fix` (align dependencies).
+- Under a **suppressing preset** such as `minimal`, this plugin's injection is off by default; the Host tab can force any domain back on.
+- **Unchecking "Skills" or "Prompt" really stops them** — under standard presets the host delivers those two itself; the other three domains are only ever sent by this plugin, so their toggles work as written.
+- **What an injection looks like**: one `<system-reminder>` per domain — a `#` section title, then the body. Any `</system-reminder>` inside your content is escaped.
 
 ---
 
@@ -171,24 +170,24 @@ The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they mu
 | Scene page preference (preview card before entering a scene)   | `~/.dsh/tool-management/scene-settings.json`                                                     |
 | Runtime log / patch backups                                    | `~/.dsh/tool-management/tool-management.log` · `backups/`                                        |
 
-**No user data is stored inside the plugin's install directory** (`dsh plugin update` replaces it wholesale). `backups/` keeps **5 copies per patch file** — the global patch and each profile patch count separately — so one bulk action can consume all five slots of a layer.
+**No user data is stored inside the plugin's install directory** (`dsh plugin update` replaces it wholesale). `backups/` keeps **5 copies per patch file** — the global patch and each profile patch count separately.
 
 ## Configuration & security
 
 | Field           | What it does                                                                                                                                                                                                                                                    |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `token`         | Access token. Once set, **every write and every plaintext credential** requires `x-dsh-token`; with no token the plaintext endpoints are closed entirely. Prefer not to keep it in the config? Use the `DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN` environment variable. |
-| `tokenDisabled` | `true` = the token stays in the config but is not enforced (this is the line written by "Turn protection off"). Writes no longer need it; revealing plaintext still does. Turning it back on needs no retype.                                                   |
+| `tokenDisabled` | `true` = the token stays in the config but is not enforced (this is the line written by "Turn protection off"). Writes no longer need it; revealing plaintext still does.                                                                                        |
 | `maxBodyBytes`  | Request body cap, 88 MiB by default.                                                                                                                                                                                                                            |
 
-**Plaintext on disk (read this)**: masking is **display-only**. MCP `env` / `headers` and the plugin's own `token` stay in cleartext inside `~/.dsh/cordis.patch.yml` (and each profile copy), and every config change copies the **whole file** into `~/.dsh/tool-management/backups/` — unencrypted, never rotated, not even reclaimed on uninstall. One secret can therefore exist as `5 × (patch files holding it) + 1` plaintext copies. The token gate decides *who may read plaintext over HTTP*; it does nothing about *reading the files*, where the only real defence is your filesystem permissions. **To clean up: Settings → Tools → Host → "Clean old backups"** — pick how many to delete per layer and confirm once more in the dialog; only backup files are touched. You can also delete them by hand.
+**Plaintext on disk (read this)**: masking is **display-only**; MCP `env` / `headers` and the plugin's own `token` stay in cleartext inside `cordis.patch.yml` (and each profile copy), and every config change copies the whole file into `~/.dsh/tool-management/backups/` — unencrypted, never rotated, not reclaimed on uninstall. One secret can therefore exist as `5 × (patch files holding it) + 1` plaintext copies. The token gate decides *who may read plaintext over HTTP*; it does nothing about *reading the files*, where the only defence is your filesystem permissions. **To clean up: Settings → Tools → Host → "Clean old backups"**.
 
 - **Browser**: reads and writes go through cookies, no token needed; **plaintext credentials** (reveal / export) do. The token is managed in the **Access token** block on the Host tab — filling it once unlocks the current run, writing it into the config needs a restart.
-- **Every destructive direction asks for the current token again** (turn protection off / change / delete). Being unlocked this run does not count — otherwise anyone who can open the GUI could drop the guard.
+- **Every destructive direction asks for the current token again** (turn protection off / change / delete). Being unlocked this run does not count.
 - **curl / scripts**: send `x-dsh-token`, or carry the browser cookie.
 - **HTTP status convention**: except for the fence's 401 / 403, a missing token or a business failure is **HTTP 200 + `{ ok: false, error }`** — branch on `body.ok`, not on the status code.
 - **Port forwarding**: when the host has no `connection` service the fence falls back to "loopback Host + same origin", which any local process can imitate with `Host: localhost`. If you forward the port to a LAN or the public internet, **configure a token** — a stranger injecting MCP commands is remote code execution. The `dir-list` call behind the folder picker lists any absolute path (read-only) under the same precondition.
-- **`__` in a server name (naming advice)**: a tool's full name is `mcp__<server>__<tool>`, so an extra `__` inside a server name makes it **ambiguous** — `mcp__a__b__c` can be server `a`'s tool `b__c` or server `a__b`'s tool `c`; the same goes for two server names that are `__`-prefix related (`a` and `a__b`). This release deliberately **does not tighten validation** (the 5 places that accept `__` today would turn existing servers from "manageable" into "unmanageable" while the servers themselves keep running); instead the Host tab shows an informational note. The tools keep working — only a checkbox in the UI may fail to land on the key used in the disabled-tools table. **Avoid `__` when naming and none of this applies.**
+- **Avoid `__` in a server name (naming advice)**: a tool's full name is `mcp__<server>__<tool>`, so an extra `__` inside a server name makes it ambiguous and a checkbox in the UI may fail to land on the key used in the disabled-tools table. This release does not tighten validation; the Host tab shows an informational note instead.
 
 ## FAQ
 
@@ -201,7 +200,7 @@ The plugin uses the host's own `@deepseek-ai/*` libraries at runtime — they mu
 | The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab — 15 tools ship switched off. The panel and scripts are unaffected either way.                                                                                                            |
 | Still asked to confirm with `approval=never`?                         | No card appears — straight through with a log line. Switch back to "workspace write" to get the questions again.                                                                                                                         |
 | `subagent_manager_run` reports provider unavailable                   | The provider is not registered: `spawn` (default) / `fork` (`inherit`) come from `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` — mount and restart.                                                                  |
-| Scene binds persona A, but the official `subagent` ran something else | Those two are host tools and this plugin cannot hide them; it writes the boundary into the context instead — work matching a persona goes to `subagent_manager_run`, host tools only when no persona fits or a background job is needed. |
+| Scene binds persona A, but the official `subagent` ran something else | Those two are host tools and this plugin cannot hide them; work matching a persona goes to `subagent_manager_run`, host tools only when no persona fits or a background job is needed.                                                    |
 
 ---
 
@@ -217,7 +216,7 @@ npm run doctor       # host compatibility check
 
 `lib/` is not tracked — run `npm run build` after cloning. Changes need `dsh web` restarted. Runtime deps: `fflate` (export bundling) and `js-yaml` (parse check before writing host patches, loaded lazily); `@deepseek-ai/*` all come from the host.
 
-> **Deployment note**: the profile mirror produced by `npm run build` does **not** include `node_modules`, so a runtime dependency added locally (e.g. `js-yaml`) must either be installed on the profile side or accepted as "patch-write check skipped and reported" — the missing checker only disables that one safety net and never blocks writes. Regular `npm install` deployments are unaffected.
+> **Deployment note**: the profile mirror produced by `npm run build` does **not** include `node_modules`, so a runtime dependency added locally (e.g. `js-yaml`) must either be installed on the profile side or accepted as "patch-write check skipped and reported". Regular `npm install` deployments are unaffected.
 
 ## License
 

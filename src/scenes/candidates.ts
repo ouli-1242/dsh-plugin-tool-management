@@ -7,8 +7,8 @@
 // 三组候选，各自的失效模式不同：
 //   * **技能 / 记忆 / 场景**（skillRows / memoryCandidates / memorySceneCandidates）——
 //     直接读各自 service 的 op，无缓存；
-//   * **预设工具**（presetToolCandidates / presetToolNames）—— 枚举会为预设建立 standing
-//     mount（官方语义：每进程一次），所以按 PRESET_ENUM_CACHE_MS 缓存，不能每次重枚举；
+//   * **预设工具**（presetToolCandidates / presetToolNames）—— 每次枚举要为每个预设取一次
+//     官方 `acquireScope` 租约 + 读一次 `tools.schemas()`，所以按 PRESET_ENUM_CACHE_MS 缓存；
 //   * **模型**（modelCandidates）—— 只读宿主 LLM 目录，**不发网络请求**。
 //
 // 依赖全部经 deps 显式传入。注意 \`toolKeyParts\` 留在 index.ts：场景档案引擎也在用它，
@@ -38,6 +38,49 @@ export interface CandidateDeps {
    *  `serverNames` 是切分的候选 serverName 集合 —— **必填**，因为光看全名无法消解
    *  `serverName` 含 `__` 的歧义（审查 N1）。 */
   toolKeyParts(toolName: string, serverNames: Iterable<string>): McpToolNameParts | null
+  /**
+   * 本插件自己注册过的工具名（在 `index.ts` 的注册漏斗里逐个登记）。
+   *
+   * 这是「插件工具」这一组**唯一**可靠的判据：官方没有工具级归属接口（见
+   * `presetToolView` 的注释），但本插件注册了什么自己当然知道。用 getter 而不是快照，
+   * 因为登记发生在 apply 过程中，而本工厂构造在更早处。
+   */
+  selfToolNames(): ReadonlySet<string>
+}
+
+/**
+ * 一个工具在「工具限制」选择器里的归属组。
+ *
+ * `plugin` = 本插件；`official` = **该预设自带的**（出厂四预设即官方工具包）；
+ * `other` = 剩下的（宿主平面上的其余插件，以及认不出来的）。
+ */
+export type ToolOrigin = 'plugin' | 'official' | 'other'
+
+/** 一个预设自己的工具视图：名字清单 + 每个名字的归属。 */
+export interface PresetToolView {
+  /** 该预设可见的工具名（= 宿主平面 ∪ 该预设自己挂的包）。 */
+  names: string[]
+  /** 名字 → 归属。**`names` 里每个名字都有一项**（认不出就是 `other`，绝不丢）。 */
+  origins: Record<string, ToolOrigin>
+}
+
+/**
+ * 「工具限制」的候选载荷：一行一个 Agent 预设（roster 顺序），各带自己的工具清单与归属组。
+ *
+ * 0.19.0 前这里还有一份 `tools`（全体并集 + `presets` / `current`）—— 整条链上零读取点，
+ * 且是同一份数据的第二个真相，已删。
+ */
+export interface PresetToolCandidates {
+  presets: Array<{
+    id: string
+    name: string
+    trust: string
+    broken: boolean
+    /** 该预设自己的工具名（旧字段名，语义从 0.19.0 起才真的是"该预设自己的"）。 */
+    tools: string[]
+    /** 名字 → 归属组；与 `tools` 一一对应。缺项按 `other` 处理。 */
+    toolGroups: Record<string, ToolOrigin>
+  }>
 }
 
 /** 本文件对外暴露的出口（9 项）。 */
@@ -50,14 +93,14 @@ export interface Candidates {
   toolStates(): Promise<Record<string, boolean>>
   /** 场景档案「技能集」的行。 */
   skillRows(): Promise<unknown>
-  /** 全体 Agent 预设工具名的并集 + 各工具所属预设 + 当前会话是否可见。 */
-  presetToolCandidates(): Promise<{ tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string }> }>
-  /** 单个预设的工具名。 */
+  /** 一行一个 Agent 预设（roster 顺序），各带自己的工具清单与归属组。 */
+  presetToolCandidates(): Promise<PresetToolCandidates>
+  /** 单个预设的工具名（`subagent_manager_run` 的名单校验用；只取名字，不带归属）。 */
   presetToolNames(id: string): Promise<string[]>
   /** 预设名单（名字投影）。 */
   presetNames(): Promise<Array<{ id: string; name: string; trust: string }>>
-  /** 人设表单的模型候选（只读宿主 LLM 目录，不发网络请求）。 */
-  modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }> }>
+  /** 人设表单的模型候选：模型对 + 来源清单（只读宿主 LLM 目录，不发网络请求）。 */
+  modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }>; providers: Array<{ id: string; name: string }> }>
   /**
    * 某个 (provider, model) 支持的思考强度档位（人设表单的「思考强度」下拉）。
    *
@@ -99,7 +142,7 @@ const MODEL_REASONING_TIMEOUT_MS = 10_000
 
 export function createCandidates(deps: CandidateDeps): Candidates {
   // 外部能力一次解构成局部名：块内代码逐字搬来，保持原样最不容易出错。
-  const { get, tools, mcp, skillsService, memoriesService, toolKeyParts } = deps
+  const { get, tools, mcp, skillsService, memoriesService, toolKeyParts, selfToolNames } = deps
   const ctx = { get }
 
   // Agent 预设名单（@deepseek-ai/dsh-agent-presets）：同样是可选服务，按需取用。
@@ -258,29 +301,24 @@ export function createCandidates(deps: CandidateDeps): Candidates {
   }
 
   /**
-   * 工具候选（人设的「工具白名单 / 黑名单」选择器）：
-   * 取**全体 Agent 预设工具名的并集**——人设可能在任意预设下被子代理复用，
-   * 只列当前会话的工具会让换预设后的子代理启动失败（官方 `toolFilter` 对未知名直接拒绝）。
-   * 同时标注 `current`：当前会话可见的工具（其余只是「本预设可用，当前会话看不到」）。
+   * 工具候选（人设的「工具白名单 / 黑名单」选择器）：一行一个 Agent 预设，各带**它自己的**
+   * 工具清单与归属组。
    *
-   * 每次调用都会为尚未挂载的预设建立 standing mount（官方语义：一个预设在本进程内只挂一次，
-   * 正常创建会话时同样会挂），因此结果会按需缓存 PRESET_ENUM_CACHE_MS，避免频繁枚举。
+   * 为什么按预设切而不是给一份并集：人设可能在任意预设下被子代理复用，而界面一行只对那个
+   * 预设生效，所以勾出来的名字必须属于那一行。见 `presetToolView`（判据与 0.19.0 修掉的
+   * 那条断链）。
+   *
+   * 0.19.0 删掉了原来那份「全体并集」（`tools`，含 `presets` / `current` 两个字段）：整条链
+   * 上零读取点（客户端只读 `presets`），而它是同一份数据的第二个真相 —— 从 `presets[].tools`
+   * 直接推得出来，每次调用白背 ≈2KB 载荷。
    */
-  // 两个预设枚举缓存（全体候选 / 单个预设）共用这个 TTL：枚举的代价是"给预设建立
-  // standing mount"，与内容变化无关，所以只要别刷得太勤就行。
+  // 两个预设枚举缓存（全体候选 / 单个预设）共用这个 TTL：枚举要一次 acquireScope 租约 +
+  // 一次 schemas()，与内容变化无关，所以只要别刷得太勤就行。
   const PRESET_ENUM_CACHE_MS = 60_000
-  let presetToolsCache: { at: number; value: { tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string; trust: string; broken: boolean; tools: string[] }> } } | null = null
-  async function presetToolCandidates(): Promise<{ tools: Array<{ name: string; presets: string[]; current: boolean }>; presets: Array<{ id: string; name: string }> }> {
+  let presetToolsCache: { at: number; value: PresetToolCandidates } | null = null
+  async function presetToolCandidates(): Promise<PresetToolCandidates> {
     if (presetToolsCache && Date.now() - presetToolsCache.at < PRESET_ENUM_CACHE_MS) return presetToolsCache.value
-    const byName = new Map<string, { name: string; presets: Set<string>; current: boolean }>()
-    const presets: Array<{ id: string; name: string; trust: string; broken: boolean; tools: string[] }> = []
-    // 当前会话的可见工具（用于标 current）；拿不到就全部按「非当前」处理。
-    const currentNames = new Set<string>()
-    try {
-      const schemas = await tools.schemas()
-      for (const s of schemas || []) currentNames.add(String((s as any).name))
-    } catch { /* 无 live 工具 → current 全 false */ }
-
+    const presets: PresetToolCandidates['presets'] = []
     const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
     if (agentPresets && typeof agentPresets.list === 'function') {
       try {
@@ -290,9 +328,10 @@ export function createCandidates(deps: CandidateDeps): Candidates {
         for (const p of roster || []) {
           const id = String((p && p.id) || '')
           if (!id) continue
+          const view = await presetToolView(id)
           // MCP 工具名形如 `mcp__<server>__<tool>`：面向上百个条目，噪声大于价值 → 不进候选。
           // 子代理照样能用当前在跑的 MCP —— 那份名单在 decideToolFilter 里运行时并进白名单。
-          const names = (await presetToolNames(id)).filter((name) => !name.startsWith(MCP_TOOL_PREFIX))
+          const names = view.names.filter((name) => !name.startsWith(MCP_TOOL_PREFIX))
           presets.push({
             id,
             name: String((p && (p.name || p.id)) || id),
@@ -302,57 +341,135 @@ export function createCandidates(deps: CandidateDeps): Candidates {
             trust: String((p && p.trust) || ''),
             broken: typeof (p && p.broken) === 'string',
             tools: names,
+            // 与 tools 同序裁剪：被 MCP 前缀筛掉的名字不留在归属表里（这张表只描述列出来的那些）。
+            toolGroups: names.reduce<Record<string, ToolOrigin>>((acc, name) => {
+              acc[name] = view.origins[name] ?? 'other'
+              return acc
+            }, {}),
           })
-          for (const name of names) {
-            const rec = byName.get(name) || { name, presets: new Set<string>(), current: false }
-            rec.presets.add(id)
-            byName.set(name, rec)
-          }
         }
-      } catch { /* 预设服务不可用 → 退回「仅当前会话工具」 */ }
+      } catch { /* 预设服务不可用 → 一行都不给（界面显示读不到，不假装空） */ }
     }
-    // 当前会话的工具即便没有任何预设可枚举，也要出现在候选里（否则选择器是空的）。
-    for (const name of currentNames) {
-      if (name.startsWith(MCP_TOOL_PREFIX)) continue
-      const rec = byName.get(name) || { name, presets: new Set<string>(), current: false }
-      byName.set(name, rec)
-    }
-    for (const rec of byName.values()) rec.current = currentNames.has(rec.name)
-
-    const value = {
-      tools: [...byName.values()]
-        .map((r) => ({ name: r.name, presets: [...r.presets].sort(), current: r.current }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-      // 保持 roster 顺序（官方的展示顺序），前端四行直接照用。
-      presets,
-    }
+    const value: PresetToolCandidates = { presets }
     presetToolsCache = { at: Date.now(), value }
     return value
   }
 
+  /** 官方包的作用域前缀。只用来判「这个预设的行是不是全部来自官方」，不做任何工具名匹配。 */
+  const OFFICIAL_PACKAGE_PREFIX = '@deepseek-ai/'
+
   /**
-   * 单个预设的工具名（列表里含 MCP 与宿主平面的工具，因为子代理的可见集合是
-   * "宿主平面 ∪ 该预设"的并集）。枚举会为该预设建立 standing mount —— 官方语义：
-   * 一个预设每进程只挂一次，正常创建会话时同样会挂，所以这里按 id 缓存 PRESET_ENUM_CACHE_MS；
-   * `subagent_manager_run` 每次委派都要用它校验名单，不能每次都重新枚举。
+   * 一个预设自己的工具视图 + 三组归属。
+   *
+   * 归属只能做到「层」粒度，这是**官方的限制而不是设计选择**：`ToolSchema` 只有
+   * `{ name, description, parameters, deferLoading? }`，没有归属字段；`ToolRuntime` 的公开面
+   * （`register` / `restrict` / `guard` / `get` / `schemas` / `presentAs`）里也没有「这个工具是谁
+   * 注册的」（`view` 是 private）；`tools/change` 是**无载荷** emit，只报"变了"；宿主侧的
+   * `dsh-host-plugin-inventory` 自述 "No layer attribution"，且 Remote-only、进程内 `ctx.get`
+   * 拿不到。所以判据全部是集合运算，不出现任何工具名或包名的字面量：
+   *
+   *   G = tools.schemas()                       宿主平面（global 层）
+   *   P = tools.schemas(acquireScope(id).key)   该预设视图 = G ∪ 该预设自己挂的包
+   *   Δ = P − G                                 该预设自带的工具
+   *   O = 本插件注册漏斗登记的名字               插件工具 = O ∩ P
+   *
+   * 「官方」在这里是**该预设自带的**，不是「DeepSeek 出的」：宿主平面上的官方工具（如
+   * `load_workspace_dependencies`）会落在「其他」。这是刻意的 —— 宁可说「不知道」，不假装是
+   * 官方；要认出来只能靠一份名字对照表，那会同时丢掉「零硬编码」与「随官方更新而更新」。
+   * 预设里混挂了第三方行时 Δ 无法再拆（包粒度已知、工具粒度未知），此时整份落「其他」。
    */
-  const presetNamesCache = new Map<string, { at: number; names: string[] }>()
-  async function presetToolNames(id: string): Promise<string[]> {
-    const hit = presetNamesCache.get(id)
-    if (hit && Date.now() - hit.at < PRESET_ENUM_CACHE_MS) return hit.names
+  const presetViewCache = new Map<string, { at: number; view: PresetToolView }>()
+  async function presetToolView(id: string): Promise<PresetToolView> {
+    const hit = presetViewCache.get(id)
+    if (hit && Date.now() - hit.at < PRESET_ENUM_CACHE_MS) return hit.view
+
+    // 宿主平面：一次读、所有预设共用。读不到 → 空集，于是 Δ = P，全部落「其他」而不是误判成官方。
+    const hostNames = new Set<string>()
+    try {
+      for (const s of (await tools.schemas()) || []) {
+        const name = String((s as any)?.name || '')
+        if (name) hostNames.add(name)
+      }
+    } catch { /* 读不到宿主平面 → Δ 退化成 P，全部落「其他」 */ }
+
     const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
-    let scopeKey: unknown
-    try {
-      scopeKey = agentPresets && typeof agentPresets.standingKeyFor === 'function'
-        ? await agentPresets.standingKeyFor(id)
-        : undefined
-    } catch { scopeKey = undefined }
+    // 官方预设服务的公开面里，取"某个预设的 standing scope key"的只有 `acquireScope(id)`：
+    // 返回 `{ key: ScopeKey } & AsyncDisposable`，契约是**读完就 dispose**（内部 `retain()` 会
+    // `generation.users++`，不还这份 generation 永远回收不掉）。它**不挂载**预设：`retain` 对
+    // 未激活/损坏的预设直接抛 `RemoteError` —— 于是"读不到"与"没有工具"被分开了，后者不会
+    // 再冒充前者。此前的 `standingKeyFor` 在官方包里根本不存在（`@deepseek-ai` 全树 0 命中），
+    // 那条 `typeof` 守卫恒为假，等于一直在读全局视图。
+    const canScope = !!(agentPresets && typeof agentPresets.acquireScope === 'function')
     let names: string[] = []
+    if (canScope) {
+      let lease: any
+      try {
+        lease = await agentPresets.acquireScope(id)
+        names = ((await tools.schemas(lease && lease.key)) || [])
+          .map((s: any) => String(s?.name || ''))
+          .filter(Boolean)
+      } catch { names = [] } finally {
+        // 还租约。dispose 自己幂等且吞异常，这里再包一层只为不让"还租约"失败盖掉真正的读失败。
+        try { if (lease && typeof lease[Symbol.asyncDispose] === 'function') await lease[Symbol.asyncDispose]() } catch { /* 已经还过 */ }
+      }
+    } else {
+      // 老宿主没有 `acquireScope`：退回宿主平面（= 0.19.0 之前的可见行为），并且**什么都不认成
+      // 官方**。这比列一份空的强（用户至少还看得见、还能勾），也比拿全局清单冒充"该预设自己的"诚实。
+      names = [...hostNames]
+    }
+
+    // 本插件自报的名字。读不到 → 空集，于是本插件的工具落「其他」而不是凭空消失。
+    const self = new Set<string>()
+    try { for (const name of selfToolNames()) self.add(String(name)) } catch { /* 读不到自报名单 */ }
+
+    const shipped = canScope ? await presetIsShipped(id) : false
+    const origins: Record<string, ToolOrigin> = {}
+    for (const name of names) {
+      if (self.has(name)) origins[name] = 'plugin'
+      // 只有该预设的行**全部**来自官方包时才敢把差集叫「官方」；混挂第三方行时整份落「其他」。
+      else if (shipped && !hostNames.has(name)) origins[name] = 'official'
+      else origins[name] = 'other'
+    }
+
+    const view: PresetToolView = { names, origins }
+    presetViewCache.set(id, { at: Date.now(), view })
+    return view
+  }
+
+  /**
+   * 该预设的行是不是**全部**来自 `@deepseek-ai/`（出厂四预设都是）。
+   *
+   * 读 `compositionInventory()`（官方公开方法，"Read plugin rows without creating an Agent"）。
+   * 它是**包**粒度、不是工具粒度 —— 这正是本节开头那段限制的具体形状：拿得到"这个预设挂了
+   * 哪些包"，拿不到"哪个包贡献了哪个工具"。所以只能整份判，判不了就整份落「其他」。
+   *
+   * 任何一步失败都返回 `false`（= 不认成官方），不抛。
+   */
+  const presetShippedCache = new Map<string, { at: number; shipped: boolean }>()
+  async function presetIsShipped(id: string): Promise<boolean> {
+    const hit = presetShippedCache.get(id)
+    if (hit && Date.now() - hit.at < PRESET_ENUM_CACHE_MS) return hit.shipped
+    let shipped = false
     try {
-      names = ((await tools.schemas(scopeKey as any)) || []).map((s: any) => String(s.name)).filter(Boolean)
-    } catch { names = [] }
-    presetNamesCache.set(id, { at: Date.now(), names })
-    return names
+      const agentPresets = (typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined) as any
+      if (agentPresets && typeof agentPresets.compositionInventory === 'function') {
+        const list = await agentPresets.compositionInventory()
+        const row = (list || []).filter((p: any) => p && String(p.id) === id)[0]
+        const rows = row && Array.isArray(row.rows) ? row.rows : []
+        shipped = rows.length > 0 && rows.every((r: any) => String((r && r.moduleName) || '').startsWith(OFFICIAL_PACKAGE_PREFIX))
+      }
+    } catch { shipped = false }
+    presetShippedCache.set(id, { at: Date.now(), shipped })
+    return shipped
+  }
+
+  /**
+   * 单个预设的工具名（含 MCP 与宿主平面的工具，因为子代理的可见集合是
+   * "宿主平面 ∪ 该预设"的并集）。`subagent_manager_run` 每次委派都要用它校验名单，所以
+   * 按 id 缓存 PRESET_ENUM_CACHE_MS。只取名字 —— 归属那份走 `presetToolView`。
+   */
+  async function presetToolNames(id: string): Promise<string[]> {
+    return (await presetToolView(id)).names
   }
 
   /** 预设名单的名字投影（只读 roster，不挂载任何预设）：场景页显示模式名用。 */
@@ -368,29 +485,42 @@ export function createCandidates(deps: CandidateDeps): Candidates {
   }
 
   /**
-   * 模型候选（人设的「模型」下拉）：宿主已注册的 provider + 各 provider 能宣告的模型。
-   * 只读宿主 LLM 目录，**不发起网络请求**（`discoverModels` 会打端点，这里不用）；
+   * 模型候选（人设的「模型」与「模型来源」两个下拉）：宿主已注册的 provider + 各 provider
+   * 能宣告的模型。只读宿主 LLM 目录，**不发起网络请求**（`discoverModels` 会打端点，这里不用）；
    * 拿不到就返回空列表，UI 退回手填（跨来源模型如 sensenova 的手工条目仍需手填兜底）。
-   * 返回扁平列表：DSH 的模型路由是 (provider, model) 一对，两个键必须同时给。
+   *
+   * 两份投影、用途不同：
+   *   · `models` 是扁平列表 —— DSH 的模型路由是 (provider, model) 一对，两个键必须同时给；
+   *   · `providers` 是去重后的来源清单 —— 「模型来源」下拉要用它。
+   *
+   * `providers` 不能由 `models` 去重反推：适配器不提供 `listModels` 时该 provider 一个模型
+   * 都报不出来（官方 LlmAdapter 里它是可选项），而"来源有、目录里没模型"恰恰是最需要手填
+   * 模型 id 的场景 —— 由 models 反推会让这类 provider 在来源下拉里整个消失。
    */
-  async function modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }> }> {
+  async function modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }>; providers: Array<{ id: string; name: string }> }> {
     const llm = (typeof ctx.get === 'function' ? ctx.get('llm') : undefined) as any
-    if (!llm || typeof llm.listProviders !== 'function') return { models: [] }
+    if (!llm || typeof llm.listProviders !== 'function') return { models: [], providers: [] }
     let list: any[] = []
     try {
       list = llm.listProviders() || []
     } catch {
-      return { models: [] }
+      return { models: [], providers: [] }
     }
     const models: Array<{ provider: string; providerName: string; id: string; name: string }> = []
+    const providers: Array<{ id: string; name: string }> = []
     const seen = new Set<string>()
+    const seenProvider = new Set<string>()
     for (const p of list) {
       const provider = String((p && (p.id || p.provider)) || '')
       if (!provider) continue
       const providerName = String((p && (p.name || p.displayName)) || provider)
+      if (!seenProvider.has(provider)) {
+        seenProvider.add(provider)
+        providers.push({ id: provider, name: providerName })
+      }
       let discovered: any[] = []
       try {
-        // 适配器可选提供 listModels（官方 LlmAdapter 契约）；未提供时该 provider 只报名字。
+        // 适配器可选提供 listModels（官方 LlmAdapter 契约）；未提供时该 provider 只有来源那一项。
         if (typeof llm.listModels === 'function') discovered = (await llm.listModels(provider)) || []
       } catch { /* 该 provider 的目录读失败 → 只报 provider 本身 */ }
       for (const m of discovered) {
@@ -402,7 +532,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
         models.push({ provider, providerName, id, name: String((m && m.name) || id) })
       }
     }
-    return { models }
+    return { models, providers }
   }
 
   /**

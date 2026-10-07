@@ -33,6 +33,7 @@ import type { PersonaDoc, SubagentService, ToolFilter } from './persona-types.js
 export {
   catalogInjectedAt,
   catalogDepthOf,
+  CONTINUABLE_MARK,
   DEFAULT_PERSONA_CATALOG_DEPTH,
   emptyResultNote,
   neutralizePromptVariables,
@@ -272,7 +273,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         ok: true,
         // catalogDepth 报**生效值**（没写就是默认 1），界面与模型都不必各自知道默认是多少。
         // 手写 map：新增字段必须**两处都加**（list 与 get），少一处就是界面读不到。
-        subagents: docs.map((p) => ({ name: p.name, enabled: p.enabled !== false, description: p.description, provider: p.provider ?? null, model: p.model ?? null, reasoningEffort: p.reasoningEffort ?? null, tools: p.tools ?? null, toolsDeny: p.toolsDeny ?? null, toolsByPreset: p.toolsByPreset ?? null, catalogDepth: catalogDepthOf(p), output: p.output ?? null })),
+        subagents: docs.map((p) => ({ name: p.name, enabled: p.enabled !== false, description: p.description, provider: p.provider ?? null, model: p.model ?? null, reasoningEffort: p.reasoningEffort ?? null, continuable: p.continuable === true, tools: p.tools ?? null, toolsDeny: p.toolsDeny ?? null, toolsByPreset: p.toolsByPreset ?? null, catalogDepth: catalogDepthOf(p), output: p.output ?? null })),
       }
     },
     'subagent-get': async (args: any) => {
@@ -280,7 +281,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const docs = await list()
       const p = docs.find((d) => d.name === name)
       if (!p) return { ok: false, error: `人设不存在: ${name}` }
-      return { ok: true, persona: { name: p.name, description: p.description, provider: p.provider ?? '', model: p.model ?? '', reasoningEffort: p.reasoningEffort ?? '', tools: p.tools ?? [], toolsDeny: p.toolsDeny ?? [], toolsByPreset: p.toolsByPreset ?? {}, catalogDepth: catalogDepthOf(p), output: p.output ?? '', body: p.body } }
+      return { ok: true, persona: { name: p.name, description: p.description, provider: p.provider ?? '', model: p.model ?? '', reasoningEffort: p.reasoningEffort ?? '', continuable: p.continuable === true, tools: p.tools ?? [], toolsDeny: p.toolsDeny ?? [], toolsByPreset: p.toolsByPreset ?? {}, catalogDepth: catalogDepthOf(p), output: p.output ?? '', body: p.body } }
     },
     'subagent-create': async (args: any) => {
       const name = String((args && args.name) || '').trim()

@@ -106,7 +106,7 @@
            * 人设表单的候选数据（模型目录 / 全体预设工具并集）只在**首次展开高级选项**时拉取：
            * 宿主枚举预设需要为尚未挂载的预设建立 standing mount，不该在打开弹窗时就付这个代价。
            */
-          var cands = React.useState({ loaded: false, loading: false, error: null, models: [], tools: [], presets: [] })
+          var cands = React.useState({ loaded: false, loading: false, error: null, models: [], providers: [], tools: [], presets: [] })
           var cand = cands[0], setCand = cands[1]
           function loadCandidates() {
             if (cand.loaded || cand.loading) return
@@ -118,13 +118,17 @@
                 loaded: true, loading: false,
                 error: failed ? t('subagents.adv.loadFailed') : null,
                 models: (mres && mres.models) || [],
+                // providers 是去重后的来源清单，**不能**由 models 去重反推：适配器不提供
+                // listModels 时该来源一个模型都报不出来，而"来源有、目录里没模型"正是最需要
+                // 手填模型 id 的场景 —— 反推会让这类来源在「模型来源」下拉里整个消失。
+                providers: (mres && mres.providers) || [],
                 tools: (tres && tres.tools) || [],
                 // presets 必须原样带过来：四行模式的名字、顺序、每行的工具清单全靠它，
                 // 早先这里只留 models/tools，于是分组标题退回裸 id（中文界面里显示英文）。
                 presets: (tres && tres.presets) || [],
               })
             }).catch(function (e) {
-              setCand({ loaded: true, loading: false, error: errMsg(e), models: [], tools: [], presets: [] })
+              setCand({ loaded: true, loading: false, error: errMsg(e), models: [], providers: [], tools: [], presets: [] })
             })
           }
           /**
@@ -212,9 +216,12 @@
             // 目录注入深度不是默认值（1）时也算"配过"：它决定常驻目录出现在哪些会话，
             // 藏起来会让"为什么子会话看不到目录"变得无从查起。
             var budget = !!(p && typeof p.catalogDepth === 'number' && p.catalogDepth !== 1)
+            // 允许追问同理：它改变的是"下一次委派会怎么跑"（回执一个 id 而不是产出），
+            // 藏在收起的高级选项里等于用户改过又忘了自己改过。
+            var continuable = !!(p && p.continuable === true)
             // 思考强度同理：配过就得让人看得见 —— 它是"下一次委派会怎么跑"的一部分，
             // 藏在收起的高级选项里等于用户改过又忘了自己改过。
-            return !!(budget || (p && (p.model || p.provider || p.reasoningEffort)) || (p && ((p.tools || []).length || (p.toolsDeny || []).length || modes)))
+            return !!(budget || continuable || (p && (p.model || p.provider || p.reasoningEffort)) || (p && ((p.tools || []).length || (p.toolsDeny || []).length || modes)))
           }
           /** 编辑态里按模式分组的名单（深拷贝：取消编辑不留痕）。 */
           function cloneRules(source) {
@@ -227,7 +234,7 @@
           }
           function openEditor(name) {
             if (!name) {
-              setModal({ type: 'editor', mode: 'create', advanced: false, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: { name: '', description: '', provider: '', model: '', reasoningEffort: '', catalogDepth: 1, tools: [], toolsDeny: [], toolsByPreset: {}, body: '', output: '', error: null } })
+              setModal({ type: 'editor', mode: 'create', advanced: false, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: { name: '', description: '', provider: '', model: '', reasoningEffort: '', catalogDepth: 1, continuable: false, tools: [], toolsDeny: [], toolsByPreset: {}, body: '', output: '', error: null } })
               return
             }
             setBusy(true)
@@ -242,6 +249,8 @@
                   reasoningEffort: p.reasoningEffort || '',
                   // 服务端回的是**生效值**（没写就是默认 1），所以这里不必再兜默认。
                   catalogDepth: typeof p.catalogDepth === 'number' ? p.catalogDepth : 1,
+                  // 服务端回布尔；老服务端不带这个字段时按 false（一次性）算。
+                  continuable: p.continuable === true,
                   tools: (p.tools || []).slice(), toolsDeny: (p.toolsDeny || []).slice(),
                   toolsByPreset: cloneRules(p.toolsByPreset), body: p.body || '', output: p.output || '', error: null,
                 } })
@@ -261,16 +270,99 @@
             return next
           }
           /**
-           * 模型下拉的当前值。
-           * 宿主目录里有这对 (provider, model) → 用它；只有 model 没有 provider（跨来源手工填的）
-           * 或目录里没有 → 走「自定义」，同时把输入框露出来，避免把用户已配好的值悄悄改掉。
+           * 模型下拉的当前值：`provider\0model` 复合键（与每个选项的 value 同构）。
+           *
+           * 目录里查不到这对 (来源, 模型) 时也**照原样给**，靠 `offCatalogModel()` 那条额外选项
+           * 显示出来。0.19.0 之前这里会退回一个「自定义 / 目录里没有…」菜单项并把输入框露出来，
+           * 2026-10-07 用户裁定删掉整条手填通道：来源与模型都只从宿主目录里选。
            */
           function modelSelectValue() {
             if (!modal || modal.type !== 'editor') return ''
             var f = modal.form
             if (!f.model) return ''
-            var hit = (cand.models || []).filter(function (m) { return m.provider === f.provider && m.id === f.model })[0]
-            return hit ? (f.provider + '\u0000' + f.model) : '__custom__'
+            return String(f.provider || '') + '\u0000' + String(f.model)
+          }
+          /**
+           * 存的 (来源, 模型) **不在**宿主目录里时，返回 `modelSelectValue()` 的那个值（多列一条
+           * 只读选项用）；在目录里、或模型为空时返回 ''。
+           *
+           * 为什么必须有这一条：0.19.0 之前这两个字段是纯文本框，现存人设里就有目录外的值；
+           * 下拉里找不到对应项时浏览器会显示第一项（「继承主会话」）—— **表单在说谎**，而保存时
+           * 又把那个看不见的值写回去。多列一条带标记的选项，值就永远看得见。
+           */
+          function offCatalogModel() {
+            if (!modal || modal.type !== 'editor') return ''
+            var f = modal.form
+            if (!f.model) return ''
+            var provider = String(f.provider || '')
+            var hit = (cand.models || []).filter(function (m) { return m.provider === provider && m.id === f.model })[0]
+            return hit ? '' : modelSelectValue()
+          }
+          /** 「模型来源」下拉的当前值 —— 就是存的来源本身（目录外的靠 `offCatalogProvider()` 显示）。 */
+          function providerSelectValue() {
+            if (!modal || modal.type !== 'editor') return ''
+            return String(modal.form.provider || '')
+          }
+          /** 存的来源不在宿主目录里时返回它（多列一条只读选项用）；在目录里或为空返回 ''。 */
+          function offCatalogProvider() {
+            if (!modal || modal.type !== 'editor') return ''
+            var v = String(modal.form.provider || '')
+            if (!v) return ''
+            var hit = (cand.providers || []).filter(function (p) { return p.id === v })[0]
+            return hit ? '' : v
+          }
+          /**
+           * 目录这次**真的读到了**吗。
+           *
+           * 「目录里没有」是一句断言，只有读成功才配说：读失败（`cand.error`）时清单是空的，
+           * 照断言会把"没读到"说成"不存在"。读不到时那条额外选项仍然渲染，只是不带标记。
+           */
+          function catalogReady() {
+            return !!(cand.loaded && !cand.loading && !cand.error)
+          }
+          /**
+           * 来源下拉的选项文字：显示名与 id 不同时两个都给（`DeepSeek · deepseek`）——
+           * 显示名给人看，id 是真正写进 frontmatter 的那个键，只给一个都算缺信息。
+           */
+          function providerLabel(p) {
+            var id = String((p && p.id) || '')
+            var name = String((p && p.name) || '')
+            return name && name !== id ? name + ' · ' + id : id
+          }
+          /**
+           * 模型下拉要列哪些模型：**来源选定后只列该来源的**（用户 2026-10-07）。
+           * 不按来源收窄时，一份几十条的扁平列表里选错来源是常态，而错配的 (来源, 模型) 要到
+           * 子代理真正启动时才由官方报错 —— 那时人已经在别的页面了。
+           * 来源留空则列全部：此时挑中哪一条，就把它的来源一并填上（见 onChange）。
+           */
+          function modelOptions() {
+            if (!modal || modal.type !== 'editor') return []
+            var all = cand.models || []
+            var p = modal.form.provider || ''
+            if (!p) return all
+            return all.filter(function (m) { return m.provider === p })
+          }
+          /** 模型选项文字：已按来源收窄时不再重复来源前缀（左边那一格就是来源）。 */
+          function modelOptionLabel(m) {
+            var narrowed = !!(modal && modal.type === 'editor' && modal.form.provider)
+            return narrowed ? String((m && (m.name || m.id)) || '') : m.provider + ' · ' + m.name
+          }
+          /**
+           * 「高级选项」收起态**第二行**的内容；返回 null = 这一行整个不出现。
+           * 只有真配了工具限制才报：收起态挂一句「模式限制：0 项；旧格式：白名单 0 / 黑名单 0」
+           * 是用一行废话占位置（用户 2026-10-07 指出）。
+           */
+          function advLimitLine() {
+            if (!modal || modal.type !== 'editor') return null
+            var modes = Object.keys(modal.form.toolsByPreset || {}).length
+            var allow = (modal.form.tools || []).length
+            var deny = (modal.form.toolsDeny || []).length
+            if (!modes && !allow && !deny) return null
+            return t('subagents.adv.summary2', {
+              modes: modes,
+              // 旧格式只在有值时报；分隔号写在词典值里（见 adv.summary 的 tail）。
+              tail: (allow || deny) ? t('subagents.adv.legacy', { allow: allow, deny: deny }) : '',
+            })
           }
           /**
            * 官方四个预设的中英名走插件词典（官方 preset.yml 里只有中文名，直接用会让英文界面
@@ -284,11 +376,20 @@
             if (SHIPPED_PRESET_IDS[id] === 1 && String(p.trust || 'system') !== 'user') return t('preset.name.' + id)
             return String(p.name || id)
           }
-          /** 该模式下可勾选的工具名；`null` = 宿主没给出该模式的清单（读不到，不能假装是空）。 */
+          /**
+           * 该模式下可勾选的工具名 + 每个名字的归属组。
+           * `null` = 宿主没给出该模式的清单（读不到，不能假装是空）。
+           *
+           * `groups` 缺项（老服务端没这个字段）时按 `other` 处理 —— 落错组只是位置不对，
+           * 丢掉就是"界面上勾不到"，那是静默降级。
+           */
           function modeTools(id) {
             var hit = (cand.presets || []).filter(function (p) { return p.id === id })[0]
-            return hit && Array.isArray(hit.tools) ? hit.tools : null
+            if (!hit || !Array.isArray(hit.tools)) return null
+            return { names: hit.tools, groups: hit.toolGroups || {} }
           }
+          /** 三组的固定顺序：本插件 → 官方 → 其他。顺序即语义，别按字典序排。 */
+          var TOOL_ORIGINS = ['plugin', 'official', 'other']
           function modeRule(id) { return (modal.form.toolsByPreset || {})[id] }
           function setModeRule(id, rule) {
             var next = Object.assign({}, modal.form.toolsByPreset || {})
@@ -343,15 +444,24 @@
             setModeRule(id, { mode: rule.mode, names: toggled(rule.names || [], name) })
           }
           /**
-           * 展开后的勾选区：只列**该模式自己的**工具。这样勾出来的名字天然都属于这个预设，
+           * 展开后的勾选区：只列**该模式自己的**工具，并按归属分三段
+           * （插件工具 / 官方工具 / 其他工具）。这样勾出来的名字天然都属于这个预设，
            * 不会出现"在标准模式勾了只属于 PTC 的工具 → 换模式跑就启动失败"。
            * MCP 工具不在这里（用户裁定）：子代理照旧能用当前在跑的 MCP，那份名单在运行时并入。
+           *
+           * 分组只是地标，**不改变勾选语义**：三段共用一个 `picked`，「全选 / 取消全选」仍跨组
+           * 对整份清单生效；空组不渲染，筛选后为空的组也不渲染。地标复用 `segGroup`（左内缩与
+           * `.dsm-pick` 同为 8px，天然对齐，所以不新增样式）。
+           *
+           * ⚠️ 分组买的是「一眼看出这是谁的东西」，不是「更快找到某个工具」—— 后者是上面那个
+           * 筛选框的活，分组不减少滚动量。
            */
           function modeEditor(p) {
             var id = p.id
             var rule = modeRule(id)
             if (!rule) return null
-            var all = modeTools(id)
+            var view = modeTools(id)
+            var all = view ? view.names : null
             if (all === null || all.length === 0) {
               return React.createElement('div', { className: 'dsm-mode-body' },
                 React.createElement('div', { className: 'dsm-pick-empty' }, p.broken ? t('subagents.mode.broken') : t('subagents.mode.noTools')))
@@ -361,6 +471,22 @@
             var picked = rule.names || []
             // 与其余「全选」同一口径：全勾了就只给「取消全选」（二合一，不并列）。
             var allPickedAll = all.length > 0 && all.every(function (n) { return picked.indexOf(n) >= 0 })
+            // 按归属切段。认不出的归属（服务端没给这一项，或给了个没见过的值）一律落「其他」——
+            // 落错组只是位置不对，丢掉就是"界面上勾不到"。
+            var byOrigin = { plugin: [], official: [], other: [] }
+            list.forEach(function (name) {
+              var origin = view.groups[name]
+              byOrigin[origin === 'plugin' || origin === 'official' ? origin : 'other'].push(name)
+            })
+            var grid = []
+            TOOL_ORIGINS.forEach(function (origin) {
+              var names = byOrigin[origin]
+              if (!names.length) return
+              grid.push(segGroup(t('subagents.tools.group.' + origin)))
+              names.forEach(function (name) {
+                grid.push(pickRow({ key: 'm:' + id + ':' + name, disabled: busy, checked: picked.indexOf(name) >= 0, name: name, onChange: function () { toggleModeTool(id, name) } }))
+              })
+            })
             return React.createElement('div', { className: 'dsm-mode-body' },
               picked.length
                 ? React.createElement('div', { className: 'dsm-tools-chips' }, picked.map(function (name) {
@@ -378,35 +504,23 @@
                 }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy, onClick: function () { setModeRule(id, { mode: rule.mode, names: allPickedAll ? [] : all.slice() }) } }, bulkPair(allPickedAll ? t('bulk.unselectAll') : t('bulk.selectAll'), allPickedAll ? t('bulk.selectAll') : t('bulk.unselectAll')))),
               list.length
-                ? React.createElement('div', { className: 'dsm-tools-grid' }, list.map(function (name) {
-                    return pickRow({ key: 'm:' + id + ':' + name, disabled: busy, checked: picked.indexOf(name) >= 0, name: name, onChange: function () { toggleModeTool(id, name) } })
-                  }))
+                ? React.createElement('div', { className: 'dsm-tools-grid' }, grid)
                 : React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.mem.noMatch')))
-          }
-          /**
-           * 工具限制的两段说明：先「哪一行生效」，再白/黑名单语义。
-           * 两段是同一件事的两半，紧贴成一块 —— 分开渲染时中间隔着 12px 空行（用户 2026-09-18 指出）；
-           * 后一段按条目清单渲染（一条一行，见 helpBullets）。
-           */
-          function modeNotes() {
-            return React.createElement('div', null,
-              React.createElement('p', { className: 'dsm-help' }, t('subagents.field.modes.hint')),
-              helpBullets(t, 'subagents.adv.note'))
           }
           /**
            * 一行一个 Agent 预设（roster 顺序：标准 / PTC / 极简 / 创造 / 自建预设）。
            * 默认全部折叠、全部未启动；右侧两个按钮「启动 白名单」「启动 黑名单」互斥。
+           *
+           * 不再自带标题与说明（0.19.0 重排）：标题由所在分组头承担（`subagents.adv.group.tools`），
+           * 白/黑名单语义与「MCP 工具不在候选里」那一行移到分组头正下方。这两句原先挂在字段尾巴上，
+           * 叠上另外几处提示后，展开态读起来是一堵墙（用户 2026-10-07 指出）。
            */
           function modeRows() {
             var presets = (cand.presets || []).slice()
             if (!presets.length) {
-              return React.createElement('div', { className: 'dsm-field' },
-                React.createElement('span', { className: 'dsm-label' }, t('subagents.field.modes')),
-                React.createElement('div', { className: 'dsm-pick-empty' }, cand.loading ? t('memory.loading') : t('subagents.mode.noPresets')),
-                modeNotes())
+              return React.createElement('div', { className: 'dsm-pick-empty' }, cand.loading ? t('memory.loading') : t('subagents.mode.noPresets'))
             }
-            return React.createElement('div', { className: 'dsm-field' },
-              React.createElement('span', { className: 'dsm-label' }, t('subagents.field.modes')),
+            return React.createElement('div', null,
               React.createElement('div', { className: 'dsm-modes' }, presets.map(function (p) {
                 var id = p.id
                 var rule = modeRule(id)
@@ -446,8 +560,7 @@
                       startButton('allow', false),
                       startButton('deny', true))),
                   open ? modeEditor(p) : null)
-              })),
-              modeNotes())
+              })))
           }
           /**
            * 旧格式（全局 `tools:` / `toolsDeny:`）的只读小结 + 转换入口。
@@ -506,6 +619,7 @@
               description: modal.form.description,
               provider: modal.form.provider, model: modal.form.model,
               catalogDepth: modal.form.catalogDepth,
+              continuable: modal.form.continuable === true,
               // 旧格式的全局名单原样回写（旧键不点转换就不动），新模式名单另存一块。
               tools: modal.form.tools || [], toolsDeny: modal.form.toolsDeny || [],
               toolsByPreset: modal.form.toolsByPreset || {},
@@ -647,66 +761,96 @@
                     React.createElement('span', { className: 'dsm-adv-caret' }, modal.advanced ? '▼' : '▶'),
                     React.createElement('span', { className: 'dsm-adv-title' }, t('subagents.adv.title')),
                     modal.advanced ? null : React.createElement('span', { className: 'dsm-adv-note dsm-adv-sum' },
-                      // 摘要固定两行：六项挤在一行会整句折行，把「高级选项」顶得七零八落。
-                      // 第一行是"下一次委派会怎么跑"，第二行是工具名单的存量。
+                      // 摘要**最多两行，且只报有值的那几项**（用户 2026-10-07 定稿）：
+                      // 第一行是"下一次委派会怎么跑"（模型 / 思考强度 / 允许追问），
+                      // 第二行是工具限制的存量 —— 一项都没有时整行不渲染，不拿「0 项」占位置。
+                      // 目录注入不进摘要：它只决定目录出现在哪些会话，不影响委派本身。
                       React.createElement('span', null, t('subagents.adv.summary', {
                         model: modal.form.model ? (modal.form.provider ? modal.form.provider + '/' + modal.form.model : modal.form.model) : t('subagents.adv.inherit'),
-                        depth: catalogDepthLabel(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
                         // 思考强度收起来也要看得见：它是"下一次委派会怎么跑"的一部分。
                         // 没配时报「默认」而**不是**「继承」—— 官方语义里换模型会把继承来的那一档
                         // 删掉（`dsh-subagent/lib/index.js:482`），报「继承」是句假话。
                         effort: modal.form.reasoningEffort ? String(modal.form.reasoningEffort) : t('subagents.effort.none'),
+                        // 允许追问接在同一行尾巴上：它同样是"会怎么跑"，而且是**最容易忘**的一项
+                        // （结果变成异步回执）。分隔号写在词典值里，英文侧才不用跟着改代码。
+                        tail: modal.form.continuable === true ? t('subagents.adv.continuable') : '',
                       })),
-                      React.createElement('span', null, t('subagents.adv.summary2', {
-                        modes: Object.keys(modal.form.toolsByPreset || {}).length,
-                        allow: (modal.form.tools || []).length,
-                        deny: (modal.form.toolsDeny || []).length,
-                      })))),
+                      advLimitLine() ? React.createElement('span', null, advLimitLine()) : null)),
                   modal.advanced ? React.createElement('div', { className: 'dsm-adv-body' },
-                    // 模型 + 思考强度并排（`.dsm-field-row`）：它们是同一件事的两半 —— 档位清单是
-                    // **按模型**给的（adapter 的能力声明），换模型必须同时看这一格。
-                    // 不复用 `.dsm-combo-row`：那个的语义是"一个控件 + 它的自定义输入"，
-                    // 它的 `.dsm-control{flex:1}` 会把两个控件都拉满。
-                    React.createElement('div', { className: 'dsm-field-row' },
-                      // 模型：宿主 LLM 目录里的 (provider, model) 对 + 自定义兜底。
-                      React.createElement('div', { className: 'dsm-field' },
-                        React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
-                        React.createElement('div', { className: 'dsm-combo-row' },
-                          React.createElement('div', { className: 'dsm-select' },
-                            React.createElement('select', {
-                              className: 'dsm-control',
-                              value: modelSelectValue(),
-                              disabled: busy || cand.loading,
-                              onChange: function (e) {
-                                var v = e.target.value
-                                if (v === '') { setForm({ provider: '', model: '' }); loadEfforts('', '') }
-                                else if (v !== '__custom__') {
-                                  var parts = v.split('\u0000')
-                                  setForm({ provider: parts[0], model: parts[1] })
-                                  // 档位跟模型走：换模型必须重拉（缓存命中时是同步的，不会闪）。
-                                  loadEfforts(parts[0], parts[1])
-                                } else { setForm({ model: modal.form.model || '' }); loadEfforts(modal.form.provider || '', modal.form.model || '') }
-                              },
-                            },
-                              React.createElement('option', { value: '' }, t('subagents.model.inherit')),
-                              (cand.models || []).map(function (m) {
-                                return React.createElement('option', { key: m.provider + '/' + m.id, value: m.provider + '\u0000' + m.id }, m.provider + ' · ' + m.name)
-                              }),
-                              React.createElement('option', { value: '__custom__' }, t('subagents.model.customOption')))),
-                          modelSelectValue() === '__custom__'
-                            ? React.createElement('input', {
+                    // 三组：模型 / 运行方式 / 工具限制（0.19.0 重排）。重排前是五个字段平铺、
+                    // 九处提示文字混用三种形态（单行 dsm-help / 项目符号 / 选择器副标题），
+                    // 展开态读起来是一堵墙（用户 2026-10-07 裁定）。现在：分组头 + 一条细线划开；
+                    // 静态说明一律不进表单，只留**状态类**提示（拉取中 / 未选模型 / 拉不到 / 报错）。
+                    React.createElement('div', { className: 'dsm-adv-group' },
+                      React.createElement('div', { className: 'dsm-adv-group-head' }, t('subagents.adv.group.model')),
+                      // 模型来源与模型并排：官方把 (provider, model) 当一对解析，跨来源（如 sensenova）
+                      // 必须两个键同时给。顺序按解析顺序 —— 先来源，后模型。
+                      // 两个字段并排用 `.dsm-field-row`；`.dsm-combo-row` 是**字段内部**的
+                      // "下拉 + 它旁边的东西"（这里只剩下拉，`.dsm-combo-row .dsm-select{flex:1}`
+                      // 让它填满整格 —— 缺这条时下拉宽度由选项文字撑出，换来源后标签变短、框跟着缩）。
+                      React.createElement('div', { className: 'dsm-field-row' },
+                        // 模型来源：去重后的来源清单，只从宿主目录里选（手填通道 2026-10-07 删除）。
+                        // 换来源要重拉档位 —— 档位清单是按 (provider, model) 给的。
+                        // 换来源**不清模型**：清掉是"悄悄改掉用户已配好的值"，而留着会立刻显形 ——
+                        // 模型下拉找不到这对 (来源, 模型) 就多列一条带「目录里没有」标记的选项。
+                        React.createElement('div', { className: 'dsm-field' },
+                          React.createElement('span', { className: 'dsm-label' }, t('subagents.field.provider')),
+                          React.createElement('div', { className: 'dsm-combo-row' },
+                            React.createElement('div', { className: 'dsm-select' },
+                              React.createElement('select', {
                                 className: 'dsm-control',
-                                value: modal.form.model || '',
-                                placeholder: t('subagents.field.model.placeholder'),
-                                onChange: function (e) { setForm({ model: e.target.value }) },
-                                // 手填模型 id 时**不按键触发**拉取（一次一个字符 = 一串请求），
-                                // 失焦时再问一次；没变的话缓存会直接命中。
-                                onBlur: function () { loadEfforts(modal.form.provider || '', modal.form.model || '') },
-                              })
-                            : null),
-                        React.createElement('p', { className: 'dsm-help' }, cand.loading ? t('memory.loading') : t('subagents.field.model.hint'))),
+                                value: providerSelectValue(),
+                                disabled: busy || cand.loading,
+                                onChange: function (e) {
+                                  var v = e.target.value
+                                  setForm({ provider: v })
+                                  loadEfforts(v, modal.form.model || '')
+                                },
+                              },
+                                React.createElement('option', { value: '' }, t('subagents.provider.inherit')),
+                                (cand.providers || []).map(function (p) {
+                                  return React.createElement('option', { key: p.id, value: p.id }, providerLabel(p))
+                                }),
+                                // 目录外的旧值：列一条只读选项，值看得见、要改只能重选目录里的。
+                                offCatalogProvider()
+                                  ? React.createElement('option', { value: offCatalogProvider() },
+                                      catalogReady() ? t('subagents.field.offCatalog', { id: offCatalogProvider() }) : offCatalogProvider())
+                                  : null)))),
+                        // 模型：宿主 LLM 目录里的 (provider, model) 对，只从目录里选。
+                        React.createElement('div', { className: 'dsm-field' },
+                          React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
+                          React.createElement('div', { className: 'dsm-combo-row' },
+                            React.createElement('div', { className: 'dsm-select' },
+                              React.createElement('select', {
+                                className: 'dsm-control',
+                                value: modelSelectValue(),
+                                disabled: busy || cand.loading,
+                                onChange: function (e) {
+                                  var v = e.target.value
+                                  if (v === '') { setForm({ provider: '', model: '' }); loadEfforts('', '') }
+                                  else {
+                                    var parts = v.split('\u0000')
+                                    setForm({ provider: parts[0], model: parts[1] })
+                                    // 档位跟模型走：换模型必须重拉（缓存命中时是同步的，不会闪）。
+                                    loadEfforts(parts[0], parts[1])
+                                  }
+                                },
+                              },
+                                React.createElement('option', { value: '' }, t('subagents.model.inherit')),
+                                modelOptions().map(function (m) {
+                                  return React.createElement('option', { key: m.provider + '/' + m.id, value: m.provider + '\u0000' + m.id }, modelOptionLabel(m))
+                                }),
+                                // 目录外的旧值：同来源那条，列一条只读选项。
+                                offCatalogModel()
+                                  ? React.createElement('option', { value: offCatalogModel() },
+                                      catalogReady() ? t('subagents.field.offCatalog', { id: modal.form.model }) : modal.form.model)
+                                  : null))),
+                          // 目录还在读时给一行状态；读完了不占行 —— 这里原来放的是"留空继承主会话"
+                          // 那句静态说明，已随 0.19.0 重排移出表单。
+                          cand.loading ? React.createElement('p', { className: 'dsm-help' }, t('memory.loading')) : null)),
                       // 思考强度：值就是 adapter 给的档位 id（不校验合法性，官方在 provider I/O 前会拒）。
-                      React.createElement('div', { className: 'dsm-field' },
+                      // 单独占左半列（`.dsm-adv-half`），与上一行的列边界对齐。
+                      React.createElement('div', { className: 'dsm-field dsm-adv-half' },
                         React.createElement('span', { className: 'dsm-label' }, t('subagents.field.effort')),
                         React.createElement('div', { className: 'dsm-select' },
                           React.createElement('select', {
@@ -719,44 +863,62 @@
                             currentEfforts().map(function (x) {
                               return React.createElement('option', { key: x.id, value: x.id, title: x.description || undefined }, x.name)
                             }))),
-                        React.createElement('p', { className: 'dsm-help' },
-                          !modal.form.model
-                            ? t('subagents.effort.needModel')
-                            : eff.loading
-                              ? t('subagents.effort.loading')
-                              : eff.error
-                                ? String(eff.error)
-                                : currentEfforts().length ? t('subagents.effort.hint') : t('subagents.effort.unavailable')),
+                        // 状态行只在"这一格为什么用不了 / 没有档位"的四种情况下出现；有档位可选时
+                        // 这一行不存在 —— 原来这里常驻的是"当前可选择多种思考强度"那句同义反复。
+                        !modal.form.model || eff.loading || eff.error || !currentEfforts().length
+                          ? React.createElement('p', { className: 'dsm-help' },
+                              !modal.form.model
+                                ? t('subagents.effort.needModel')
+                                : eff.loading
+                                  ? t('subagents.effort.loading')
+                                  : eff.error
+                                    ? String(eff.error)
+                                    : t('subagents.effort.unavailable'))
+                          : null,
                         effNotice ? React.createElement('p', { className: 'dsm-feedback dsm-warning' }, effNotice) : null)),
-                    // provider 独立成一项：跨来源模型（如 sensenova）需要 provider+model 两个键同时给。
-                    React.createElement('label', { className: 'dsm-field' },
-                      React.createElement('span', { className: 'dsm-label' }, t('subagents.field.provider')),
-                      React.createElement('input', { className: 'dsm-control', value: modal.form.provider || '', placeholder: t('subagents.field.provider.placeholder'), onChange: function (e) { setForm({ provider: e.target.value }) } }),
-                      React.createElement('p', { className: 'dsm-help' }, t('subagents.field.provider.hint'))),
-                    // 目录注入深度：人设目录注入到哪些会话（默认 1 = 只在顶层）。用下拉而不是数字
-                    // 输入：只有 1/2/3 三个有意义的档，手写数字写错要到注入时才暴露。
-                    //
-                    // ⚠️ 它**不是**递归上限。2026-09-17 用户实测后改名（原名 maxDepth /「委派预算」）：
-                    // 官方 `dsh-tool-subagent` 默认 `maxDepth: 3`，子代理本来就能继续嵌套，本插件
-                    // 也不再向官方传 maxDepth。这个字段只决定常驻目录出现在哪些深度的会话里。
-                    React.createElement('label', { className: 'dsm-field' },
-                      React.createElement('span', { className: 'dsm-label' }, t('subagents.field.catalogDepth')),
-                      React.createElement('div', { className: 'dsm-select' },
-                        React.createElement('select', {
-                          className: 'dsm-control',
-                          value: String(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
-                          disabled: busy,
-                          onChange: function (e) { setForm({ catalogDepth: Number(e.target.value) }) },
-                        }, [1, 2, 3, CATALOG_DEPTH_UNLIMITED].map(function (n) {
-                          // 选项文字不带序号：前面再加一个「2 ·」是同一件事说两遍（用户 2026-09-17
-                          // 指出）。下拉的 value 仍是数字，存的还是 catalogDepth 本身。
-                          return React.createElement('option', { key: n, value: String(n) }, catalogDepthLabel(n))
-                        }))),
-                      helpBullets(t, 'subagents.field.catalogDepth.hint')),
-                    // 工具限制：按 Agent 预设一行一个模式（默认全折叠、全部未启动，白/黑互斥）。
+                    // ── 运行方式：这份人设"什么时候跑、跑在哪些会话里" ──
+                    React.createElement('div', { className: 'dsm-adv-group' },
+                      React.createElement('div', { className: 'dsm-adv-group-head' }, t('subagents.adv.group.runtime')),
+                      // 目录注入深度：人设目录注入到哪些会话（默认 1 = 只在顶层）。用下拉而不是数字
+                      // 输入：只有 1/2/3 三个有意义的档，手写数字写错要到注入时才暴露。
+                      //
+                      // ⚠️ 它**不是**递归上限。2026-09-17 用户实测后改名（原名 maxDepth /「委派预算」）：
+                      // 官方 `dsh-tool-subagent` 默认 `maxDepth: 3`，子代理本来就能继续嵌套，本插件
+                      // 也不再向官方传 maxDepth。这个字段只决定常驻目录出现在哪些深度的会话里。
+                      React.createElement('label', { className: 'dsm-field dsm-adv-half' },
+                        React.createElement('span', { className: 'dsm-label' }, t('subagents.field.catalogDepth')),
+                        React.createElement('div', { className: 'dsm-select' },
+                          React.createElement('select', {
+                            className: 'dsm-control',
+                            value: String(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
+                            disabled: busy,
+                            onChange: function (e) { setForm({ catalogDepth: Number(e.target.value) }) },
+                          }, [1, 2, 3, CATALOG_DEPTH_UNLIMITED].map(function (n) {
+                            // 选项文字不带序号：前面再加一个「2 ·」是同一件事说两遍（用户 2026-09-17
+                            // 指出）。下拉的 value 仍是数字，存的还是 catalogDepth 本身。
+                            return React.createElement('option', { key: n, value: String(n) }, catalogDepthLabel(n))
+                          })))),
+                      // 允许追问（frontmatter `continuable: true`）：这条通道的**产出是异步的** ——
+                      // 委派只回执一个 agent id，子代理在后台跑、完成后自己把结果发回来，
+                      // 之后可以用宿主自带的 `send_message` 追问、`interrupt_agent` 中止。
+                      // 默认关：它占用宿主"可继续子代理"的名额（`maxActiveSubagents`，默认 8），
+                      // 且要求宿主加载了持久化与 session query 两个服务。
+                      // 机制与代价的完整说明记在 CHANGELOG / README，不进表单（0.19.0 重排）。
+                      React.createElement('label', { className: 'dsm-pick' },
+                        React.createElement('input', { type: 'checkbox', checked: modal.form.continuable === true, disabled: busy, onChange: function (e) { setForm({ continuable: e.target.checked === true }) } }),
+                        React.createElement('span', { className: 'dsm-pick-main' },
+                          React.createElement('span', { className: 'dsm-pick-name' }, t('subagents.field.continuable')),
+                          React.createElement('span', { className: 'dsm-pick-desc' }, t('subagents.field.continuable.short'))))),
+                    // ── 工具限制：按 Agent 预设一行一个模式（默认全折叠、全部未启动，白/黑互斥）。
                     // 旧格式的全局名单（老文件 / 别处导入）在这里只读呈现，点「转换」才搬进某个模式。
-                    legacyNotice(),
-                    modeRows(),
+                    React.createElement('div', { className: 'dsm-adv-group' },
+                      React.createElement('div', { className: 'dsm-adv-group-head' }, t('subagents.adv.group.tools')),
+                      // 这是整块里唯一留下的静态说明，两条理由：它回答"这一屏会不会生效"，
+                      // 而且藏着一条反直觉的事实（MCP 工具不在候选里）—— 删掉会让人以为能限制 MCP。
+                      // 白/黑名单语义那三句已移出表单（词面自解释，按钮与模式摘要里都在用）。
+                      React.createElement('p', { className: 'dsm-help' }, t('subagents.field.modes.hint')),
+                      legacyNotice(),
+                      modeRows()),
                     cand.error ? React.createElement('div', { className: 'dsm-feedback dsm-warning' }, String(cand.error)) : null)
                     : null),
                 modal.form.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(modal.form.error)) : null),

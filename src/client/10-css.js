@@ -244,12 +244,29 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-adv-caret{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10px}
 /* 「高级选项」永不折行：它在收起时与两行摘要并排，被挤成两字一行就不再像个标题了。 */
 .dsm-adv-title{flex:none;white-space:nowrap}
-/* 折叠摘要固定两行（模型/思考强度/目录注入 + 工具名单），靠 align-items:center 与标题垂直居中。 */
+/* 折叠摘要最多两行（第一行模型 / 思考强度 / 允许追问，第二行工具限制；没有值的那一行不出现），
+   靠 align-items:center 与标题垂直居中。 */
 .dsm-adv-sum{display:flex;min-width:0;flex-direction:column;gap:1px}
-.dsm-adv-body{display:flex;flex-direction:column;gap:12px;padding:11px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-adv-body{display:flex;flex-direction:column;gap:16px;padding:11px;border-top:1px solid var(--dsw-alias-border-l1)}
+/* 分组（0.19.0 重排）：组标题 + 一条横贯的细线，组间距靠 .dsm-adv-body 的 16px。
+   重排前是五组平铺、只靠 12px gap 分隔，视觉上连成一片 —— 分组是这次清理的主手段。 */
+.dsm-adv-group{display:flex;flex-direction:column;gap:10px}
+.dsm-adv-group-head{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-primary);font-size:12px;font-weight:570}
+.dsm-adv-group-head::after{content:'';height:1px;flex:1;background:var(--dsw-alias-border-l1)}
+/* 半宽字段：与 .dsm-field-row 的列宽同源（calc(50% - 6px) = 12px gap 的一半），
+   所以单独一个半宽字段和并排两个的列边界对齐。 */
+.dsm-adv-half{width:calc(50% - 6px)}
+/* 下拉在 .dsm-combo-row 里必须自己撑满整格。缺这条时 .dsm-select 是 flex:0 1 auto、宽度
+   由**选项文字**撑出：收窄来源后标签变短（去掉了「来源 · 」前缀、候选只剩几条），下拉当场
+   跟着缩 —— 用户 2026-10-07 截图「模型来源选择后，模型框变短了」。实测（headless Chrome，
+   字段宽 251）：标签带前缀 251 / 去前缀 251 / 只剩 id 162 / 只有一个模型 135，加了这条全部 251。
+   min-width:0 是配套的：flex 项默认 min-width:auto = min-content，不放宽就压不到整格以下。 */
+.dsm-combo-row .dsm-select{flex:1;min-width:0}
 .dsm-adv-note{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
 /* ── 工具限制四行（人设表单：一行一个 Agent 预设，白/黑名单互斥、默认折叠）──────── */
-.dsm-modes{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+/* 无 margin-top：这个名单原先紧跟在自己的字段 label 后面，靠 6px 拉开；0.19.0 重排后
+   label 撤掉、由分组头承担，间距交给 .dsm-adv-group 的 gap。 */
+.dsm-modes{display:flex;flex-direction:column;gap:6px}
 .dsm-mode-row{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}
 .dsm-mode-row.dsm-mode-on{border-color:var(--dsw-alias-border-l3)}
 .dsm-mode-head{display:flex;min-height:38px;align-items:center;gap:9px;padding:0 10px}
