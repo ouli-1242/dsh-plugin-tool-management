@@ -30,7 +30,7 @@ Hard-refresh the browser (Cmd/Ctrl+Shift+R) afterwards — a **Tools** panel in 
 
 <video controls src="https://github.com/user-attachments/assets/91b9673d-d201-462a-83de-8bc663c7629d"></video>
 
-Every interface shown is a real screenshot of the running product — no redrawn UI, no fabricated controls. The full-quality master (1080×1080 · 88.4s · 17 MB) is at [`videos/promo-en.mp4`](./videos/promo-en.mp4).
+Every interface shown is a real screenshot of the running product — no redrawn UI, no fabricated controls.
 
 Music: Kevin MacLeod「Limit 70」, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
