@@ -28,9 +28,9 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ## 演示视频
 
-<a href="./videos/promo-cn.mp4"><img src="./docs/images/promo-cover.png" width="720" alt="dsh-plugin-tool-management 演示视频封面：八个页签收成一个面板"></a>
+<video controls src="https://github.com/user-attachments/assets/3bed27b0-2d73-4e89-b1dd-f2b1cbd6eaca"></video>
 
-画面里每一个界面都是真机截图，没有重画的 UI，也没有伪造控件。
+画面里每一个界面都是真机截图，没有重画的 UI，也没有伪造控件。原片（1080×1080 · 88.4s · 17 MB）在 [`videos/promo-cn.mp4`](./videos/promo-cn.mp4)。
 
 背景音乐：Kevin MacLeod「Limit 70」，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。
 
