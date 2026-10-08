@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/logo.png" width="120" height="120" alt="dsh-plugin-tool-management">
+</p>
+
 # dsh-plugin-tool-management
 
 [![npm version](https://img.shields.io/npm/v/dsh-plugin-tool-management?logo=npm&color=cb3837)](https://www.npmjs.com/package/dsh-plugin-tool-management)
@@ -22,6 +26,16 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ---
 
+## 演示视频
+
+<a href="./videos/promo-cn.mp4"><img src="./docs/images/promo-cover.png" width="720" alt="dsh-plugin-tool-management 演示视频封面：八个页签收成一个面板"></a>
+
+画面里每一个界面都是真机截图，没有重画的 UI，也没有伪造控件。
+
+背景音乐：Kevin MacLeod「Limit 70」，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。
+
+---
+
 ## 截图
 
 |                              |                                |
@@ -42,7 +56,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 亮点                        | 说明                                                                                      |
 | --------------------------- | ----------------------------------------------------------------------------------------- |
 | 一键换场景                  | 每个场景各配一套 MCP / 技能 / 人设 / 记忆，进入时整套切换、退出时还原；模型也能按你说的切 |
-| 不离开对话就能管            | 对话里打 `/` 出「工具」段，启停各域条目，点一下就生效                                      |
+| 不离开对话就能管            | 对话里打 `/` 出「工具」段，启停各域条目，点一下就生效                                     |
 | 记忆自动送到模型眼前        | 每个场景下写几段 `.md` 就是它的资料库，正文自动进上下文                                   |
 | 给 MCP 服务器写备注         | 写进备注的话模型每轮都看得到，会照做                                                      |
 | 单个工具也能关              | 一台服务器里可以只停某个工具，模型看不见也调不到                                          |
@@ -191,16 +205,16 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ## 常见问题
 
-| 现象                                        | 解决                                                                                                                                                  |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 装完没有页面                                | 硬刷新；不行重启 DSH。                                                                                                                                |
-| 重复 MCP 页签                               | 删 `cordis.patch.yml` 里的旧 loader 行后重启。                                                                                                        |
-| 改坏配置 DSH 起不来                         | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.<层级>.bak-<时间戳>` 覆盖回去（每份 patch 各留 5 份）。                               |
-| 升级 DSH 后动作不可用                       | 设置 → 工具 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                                 |
-| 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（出厂默认关着 15 条）；面板和脚本不受影响。                                                                |
-| `approval=never` 还要确认吗                 | 不弹卡，直接放行并记日志；想问回来切回「工作区内修改」。                                                                                              |
-| `subagent_manager_run` 报 provider 不可用   | 对应 provider 没注册：`spawn`（默认）/ `fork`（`inherit`）分别挂 `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` 后重启。           |
-| 场景绑了 A 人设，官方 `subagent` 还在跑别的 | 官方那两个是宿主的工具，本插件管不到；贴合人设的走 `subagent_manager_run`，官方只在没有人设贴合或要后台跑时用。                                     |
+| 现象                                        | 解决                                                                                                                                        |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| 装完没有页面                                | 硬刷新；不行重启 DSH。                                                                                                                      |
+| 重复 MCP 页签                               | 删 `cordis.patch.yml` 里的旧 loader 行后重启。                                                                                              |
+| 改坏配置 DSH 起不来                         | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.<层级>.bak-<时间戳>` 覆盖回去（每份 patch 各留 5 份）。                     |
+| 升级 DSH 后动作不可用                       | 设置 → 工具 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                       |
+| 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（出厂默认关着 15 条）；面板和脚本不受影响。                                                      |
+| `approval=never` 还要确认吗                 | 不弹卡，直接放行并记日志；想问回来切回「工作区内修改」。                                                                                    |
+| `subagent_manager_run` 报 provider 不可用   | 对应 provider 没注册：`spawn`（默认）/ `fork`（`inherit`）分别挂 `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` 后重启。 |
+| 场景绑了 A 人设，官方 `subagent` 还在跑别的 | 官方那两个是宿主的工具，本插件管不到；贴合人设的走 `subagent_manager_run`，官方只在没有人设贴合或要后台跑时用。                             |
 
 ---
 

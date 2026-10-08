@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/logo.png" width="120" height="120" alt="dsh-plugin-tool-management">
+</p>
+
 # dsh-plugin-tool-management
 
 [![npm version](https://img.shields.io/npm/v/dsh-plugin-tool-management?logo=npm&color=cb3837)](https://www.npmjs.com/package/dsh-plugin-tool-management)
@@ -22,6 +26,16 @@ Hard-refresh the browser (Cmd/Ctrl+Shift+R) afterwards — a **Tools** panel in 
 
 ---
 
+## Demo
+
+<a href="./videos/promo-en.mp4"><img src="./docs/images/promo-cover-EN.png" width="720" alt="dsh-plugin-tool-management demo cover: eight tabs, one settings panel"></a>
+
+Every interface shown is a real screenshot of the running product — no redrawn UI, no fabricated controls.
+
+Music: Kevin MacLeod「Limit 70」, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+---
+
 ## Screenshots
 
 |                                   |                                    |
@@ -39,21 +53,21 @@ Hard-refresh the browser (Cmd/Ctrl+Shift+R) afterwards — a **Tools** panel in 
 
 In one line: **configure "work / writing / coding" each as a scene and switch the whole stack with one click — and the model always sees whatever this plugin manages.**
 
-| Highlight                     | What it means                                                                                                    |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Highlight                     | What it means                                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | One-click scene switch        | Each scene carries its own MCP / skills / personas / memories; entering applies them, leaving restores. The model can switch for you too |
-| Manage without leaving chat   | Type `/` for a "Tools" section and toggle any domain's items — one click, done                                    |
-| Memories reach the model      | A few `.md` files under a scene become its knowledge base, injected automatically                                 |
-| Notes for MCP servers         | A note you write is seen by the model every turn and acted on                                                     |
-| Disable a single tool         | Mute one tool on a server: invisible to the model and uncallable                                                  |
-| Skills at a glance            | The copy in effect is marked "preferred"; shadowed ones name the winning source                                   |
-| Subagent = one file, one role | Write a role file and delegate to it; only the result comes back, never in History                                |
-| Several prompt presets        | Keep multiple `AGENTS.md` baselines and switch with one click; each scene can bind its own                        |
-| Sessions no longer lost       | Archives grouped by project, searchable, batch-restorable; imports Claude Code / Cursor / Codex transcripts       |
-| The model always sees it      | One context message per domain, republished only when the content changes                                         |
-| Lock it and relax             | Locking a scene makes create/update/delete across the five domains read-only                                      |
-| Deleted is not gone           | Skills / memories / personas / presets / scenes land in a recycle bin (permanent session deletion excepted)       |
-| Safe by default               | Only the plugin's own files are written; secrets masked, plaintext needs a token                                  |
+| Manage without leaving chat   | Type `/` for a "Tools" section and toggle any domain's items — one click, done                                                           |
+| Memories reach the model      | A few `.md` files under a scene become its knowledge base, injected automatically                                                        |
+| Notes for MCP servers         | A note you write is seen by the model every turn and acted on                                                                            |
+| Disable a single tool         | Mute one tool on a server: invisible to the model and uncallable                                                                         |
+| Skills at a glance            | The copy in effect is marked "preferred"; shadowed ones name the winning source                                                          |
+| Subagent = one file, one role | Write a role file and delegate to it; only the result comes back, never in History                                                       |
+| Several prompt presets        | Keep multiple `AGENTS.md` baselines and switch with one click; each scene can bind its own                                               |
+| Sessions no longer lost       | Archives grouped by project, searchable, batch-restorable; imports Claude Code / Cursor / Codex transcripts                              |
+| The model always sees it      | One context message per domain, republished only when the content changes                                                                |
+| Lock it and relax             | Locking a scene makes create/update/delete across the five domains read-only                                                             |
+| Deleted is not gone           | Skills / memories / personas / presets / scenes land in a recycle bin (permanent session deletion excepted)                              |
+| Safe by default               | Only the plugin's own files are written; secrets masked, plaintext needs a token                                                         |
 
 ## Quick start
 
@@ -177,7 +191,7 @@ Then remind me to hard-refresh the browser.
 | Field           | What it does                                                                                                                                                                                                                                                    |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `token`         | Access token. Once set, **every write and every plaintext credential** requires `x-dsh-token`; with no token the plaintext endpoints are closed entirely. Prefer not to keep it in the config? Use the `DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN` environment variable. |
-| `tokenDisabled` | `true` = the token stays in the config but is not enforced (this is the line written by "Turn protection off"). Writes no longer need it; revealing plaintext still does.                                                                                        |
+| `tokenDisabled` | `true` = the token stays in the config but is not enforced (this is the line written by "Turn protection off"). Writes no longer need it; revealing plaintext still does.                                                                                       |
 | `maxBodyBytes`  | Request body cap, 88 MiB by default.                                                                                                                                                                                                                            |
 
 **Plaintext on disk (read this)**: masking is **display-only**; MCP `env` / `headers` and the plugin's own `token` stay in cleartext inside `cordis.patch.yml` (and each profile copy), and every config change copies the whole file into `~/.dsh/tool-management/backups/` — unencrypted, never rotated, not reclaimed on uninstall. One secret can therefore exist as `5 × (patch files holding it) + 1` plaintext copies. The token gate decides *who may read plaintext over HTTP*; it does nothing about *reading the files*, where the only defence is your filesystem permissions. **To clean up: Settings → Tools → Host → "Clean old backups"**.
@@ -191,16 +205,16 @@ Then remind me to hard-refresh the browser.
 
 ## FAQ
 
-| Symptom                                                               | Fix                                                                                                                                                                                                                                      |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pages missing after install                                           | Hard refresh; restart DSH if that fails.                                                                                                                                                                                                 |
-| Duplicate MCP tabs                                                    | Remove the stale loader row from `cordis.patch.yml`, restart.                                                                                                                                                                            |
-| Broken config, DSH won't boot                                         | Restore the newest `cordis.patch.yml.<level>.bak-<timestamp>` from `~/.dsh/tool-management/backups/` (5 per patch file).                                                                                                                 |
-| Action stopped working after a DSH upgrade                            | Settings → Tools → **Host** for the reason; `doctor.mjs` → `host-deps.mjs --fix`.                                                                                                                                                        |
-| The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab — 15 tools ship switched off. The panel and scripts are unaffected either way.                                                                                                            |
-| Still asked to confirm with `approval=never`?                         | No card appears — straight through with a log line. Switch back to "workspace write" to get the questions again.                                                                                                                         |
-| `subagent_manager_run` reports provider unavailable                   | The provider is not registered: `spawn` (default) / `fork` (`inherit`) come from `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` — mount and restart.                                                                  |
-| Scene binds persona A, but the official `subagent` ran something else | Those two are host tools and this plugin cannot hide them; work matching a persona goes to `subagent_manager_run`, host tools only when no persona fits or a background job is needed.                                                    |
+| Symptom                                                               | Fix                                                                                                                                                                                    |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pages missing after install                                           | Hard refresh; restart DSH if that fails.                                                                                                                                               |
+| Duplicate MCP tabs                                                    | Remove the stale loader row from `cordis.patch.yml`, restart.                                                                                                                          |
+| Broken config, DSH won't boot                                         | Restore the newest `cordis.patch.yml.<level>.bak-<timestamp>` from `~/.dsh/tool-management/backups/` (5 per patch file).                                                               |
+| Action stopped working after a DSH upgrade                            | Settings → Tools → **Host** for the reason; `doctor.mjs` → `host-deps.mjs --fix`.                                                                                                      |
+| The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab — 15 tools ship switched off. The panel and scripts are unaffected either way.                                                          |
+| Still asked to confirm with `approval=never`?                         | No card appears — straight through with a log line. Switch back to "workspace write" to get the questions again.                                                                       |
+| `subagent_manager_run` reports provider unavailable                   | The provider is not registered: `spawn` (default) / `fork` (`inherit`) come from `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` — mount and restart.                |
+| Scene binds persona A, but the official `subagent` ran something else | Those two are host tools and this plugin cannot hide them; work matching a persona goes to `subagent_manager_run`, host tools only when no persona fits or a background job is needed. |
 
 ---
 
