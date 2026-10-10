@@ -434,26 +434,19 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-modal-fixed{height:min(760px,calc(100vh - 48px));max-height:none}
 .dsm-modal-fixed .dsm-field-grow{min-height:0;flex:1 0 auto}
 .dsm-modal-fixed .dsm-field-grow textarea{flex:1}
-/* 定高弹窗（新增提示词 / 编辑）里的正文框。三条约束纠缠在一起，一起说清楚：
+/* 定高弹窗里的正文框（2026-10-10）：保住「余高给正文框」的撑满，只压下限、摘掉手柄。
 
-   ① 高度下限：dsm-textarea-lg 那条 min-height:300px 是给「普通弹窗里那块长文本框」定的，
-      而定高弹窗这一格的空间由 flex 分配（实测余 302px）。两者同时生效时框高 300 撑破 302
-      的格子，多出来的部分直接画到下面那条动作栏上（用户 2026-10-10 截图）。这里把下限摘掉。
-   ② 可拖拽：普通 textarea 本来就带 resize:vertical（见 textarea.dsm-control 那条），用户
-      要求这一格「和其他一样支持下拉扩长」（2026-10-10）。恢复手柄。
-   ③ 拖了要动：高度若由 flex 分配（flex:1 == flex-basis:0），浏览器拖拽写下的 inline height
-      会被 flex 无视 —— 手柄等于摆设。所以改成「不参与 flex 分配 + 一个下限」：flex:0 1 auto
-      让 inline height（拖拽写的、宿主自适应写的）直接决定高度，min-height:240px 既是初值，
-      也顶住宿主那遍自适应（实测它会把同类框压到内容高度，109px 那种）。
-      下限付的代价是初值比原来的撑满（实测 274）矮一点，换来的是拖拽真的生效、且不受外部改写。
+   ① 下限：dsm-textarea-lg 那条 min-height:300px 在定高弹窗里会撑破格子 —— 余高不足 300
+      时框越过格子直接画到动作栏上（用户 2026-10-10 截图）。这里把下限压到 240；240 同时
+      顶住宿主那遍「把同类框压到内容高度」的自适应（实测 109px 那种）。
+   ② 撑满由 flex:1 负责（定高结构的初衷就是余高给正文框）；容器那条 flex:1 0 auto 让格子
+      不再被压得比内容小，窗口装不下时弹窗整体出滚动条 —— 与「新建场景」等普通弹窗的
+      兜底一致，正文框碰不到动作栏。
+   ③ resize:none：flex:1（basis 0）会无视拖拽写下的 inline height，手柄是摆设；用户确认
+      不需要拖拽，摘掉免得误导。
 
-   选择器提到 dsm-modal.dsm-modal-fixed … textarea.dsm-control 是为了压过上面那条 min-height
-   与 .dsm-modal-fixed .dsm-field-grow textarea{flex:1}（权重 4 类 + 1 元素），不靠 !important。 */
-.dsm-modal.dsm-modal-fixed .dsm-field-grow textarea.dsm-control {
-  flex: 0 1 auto;
-  min-height: 240px;
-  resize: vertical;
-}
+   选择器权重 4 类 + 1 元素，压过上面那条 min-height:300px，不靠 !important。 */
+.dsm-modal.dsm-modal-fixed .dsm-field-grow textarea.dsm-control{min-height:240px;resize:none}
 /* 导出弹窗（D14）：宽高都固定；只有「条目列表」这一层滚动，动作条常驻底部。 */
 .dsm-export-modal .dsm-modal-body{display:flex;min-height:0;flex-direction:column;gap:14px;overflow:hidden}
 .dsm-export-modal .dsm-export-form{display:flex;min-height:0;flex:1;flex-direction:column;gap:10px}
