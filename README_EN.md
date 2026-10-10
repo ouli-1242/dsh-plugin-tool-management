@@ -63,11 +63,11 @@ In one line: **configure "work / writing / coding" each as a scene and switch th
 | Disable a single tool         | Mute one tool on a server: invisible to the model and uncallable                                                                         |
 | Skills at a glance            | The copy in effect is marked "preferred"; shadowed ones name the winning source                                                          |
 | Subagent = one file, one role | Write a role file and delegate to it; only the result comes back, never in History                                                       |
-| Several prompt presets        | Keep multiple `AGENTS.md` baselines and switch with one click; each scene can bind its own                                               |
+| Several prompt presets        | Keep multiple `AGENTS.md` baselines and switch with one click; each scene can bind its own, or none                                      |
 | Sessions no longer lost       | Archives grouped by project, searchable, batch-restorable; imports Claude Code / Cursor / Codex transcripts                              |
 | The model always sees it      | One context message per domain, republished only when the content changes                                                                |
 | Lock it and relax             | Locking a scene makes create/update/delete across the five domains read-only                                                             |
-| Deleted is not gone           | Skills / memories / personas / presets / scenes land in a recycle bin (permanent session deletion excepted)                              |
+| Deleted is not gone           | Skills / memories / personas / presets / scenes land in a recycle bin (permanent session deletion excepted); tick items to delete in bulk, or set a retention period so it cleans itself (keep-forever by default) |
 | Safe by default               | Only the plugin's own files are written; secrets masked, plaintext needs a token                                                         |
 
 ## Quick start
@@ -97,77 +97,58 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 
 ### Slash commands (manage from the chat box)
 
-- **Type `/` for a "Tools" section**: six rows — scenes / skills / MCP servers / subagents / prompts / memories. Click a row to enter that domain, click an item to apply it; the menu stays open.
-- **State is visible**: enabled items carry a green check, disabled ones an empty box, the grey text on the right is the item's note, and each domain row shows a summary.
-- **Long lists stay usable**: every domain lists all of its items and the panel scrolls; skills group by source directory, memories by scene, enabled rows first. Each external skill directory gets one row that toggles the whole source.
+- **Type `/` for a "Tools" section**: scenes / skills / MCP servers / subagents / prompts / memories. Click a row to enter that domain, click an item to apply it; the menu stays open.
+- **State is visible** (green check / empty box / note in grey), and long lists scroll on their own; each external skill directory gets one row that toggles the whole source.
 - **Only reversible actions**: entering a scene and the various toggles; create / delete / edit / import / export stay on their own pages.
-- **Built on the host's official channel**: registered through DSH's input-trigger interface, no patching of official packages; two checkboxes under "Compatibility → Injection".
-- **"Tools › Prompts" holds both kinds**: the global group picks which baseline goes into `AGENTS.md` (single choice), the quick group is on/off.
-- **A separate "Quick prompts" section is for reuse**: only the enabled ones appear; one click inserts the saved text and sends nothing.
 
 ### Scenes & memories
 
-- **A scene = a group, a memory = a `.md` file**: `memories/<scene>/<name>.md`, the whole body is injected; file names may be non-ASCII.
+- **A scene = a group, a memory = a `.md` file**: `memories/<scene>/<name>.md`, the whole body is injected.
 - **"Enabled" and "entered" are two axes**: enabled decides which scene the injection follows (single-select; none enabled = only `global` and `_shared`); entering applies the scene's whole MCP / skills / personas set and writes its bound prompt into `AGENTS.md`.
-- **Scene profile**: each scene combines MCP tools / skills / subagents / memories; ticked = on, unchecked = off, a section never created means that domain is off, and leaving restores the pre-scene state.
-- **Scene lock**: create/update/delete across MCP / skills / subagents / memories / prompts becomes read-only.
-- **Deleting a scene deletes its memories too**: record, profile and every memory land in one recycle-bin entry and come back as a whole; a running scene refuses deletion.
-- **Import / export**: `.md` / `.zip` (directory name = scene, bundles carry attachments); same names are skipped, never overwritten.
-- **Injection budget**: 128 KiB by default; oversized memories are skipped with a list.
-- **Subagent sessions have no separate switches**: which domains inject is decided by the same table, but scene and memory are top-level only.
+- **Scene profile**: ticked = on, unchecked = off, a section never created means that domain is off; leaving restores the pre-scene state.
+- **Every domain offers "None"**: for MCP / skills / personas / memories / global prompt it means the scene leaves that domain alone; for quick prompts it means none are enabled while the scene is on, and it is the default for a new scene.
+- **Scene lock** makes those five domains read-only; deleting a scene takes its memories with it into one recycle-bin entry. Import / export `.md` / `.zip`, same names skipped.
 
 ### Subagents
 
-- **One file per persona**: `subagents/<persona>.md`, frontmatter entirely optional; `output:` takes one requirement per line.
-- **The persona reaches the child inside a role frame**: the body is used verbatim under a `# Persona: <name>` heading with an authorization line and a boundary line.
-- **Delegation**: `subagent_manager_run` runs with the persona, returns only its final result, and never enters History; by default the child starts fresh, with `inherit: true` it is seeded with this conversation's finished turns.
-- **On/off and catalog**: a disabled persona is neither injected nor visible to the model (file untouched); new / imported / restored personas start disabled. The catalog lists names and descriptions only.
-- **Catalog injection depth (`catalogDepth`)**: default `1` = top-level sessions only, `99` = any depth; it does not limit nesting.
-- **Tool limits per agent preset**: one allow or deny list per preset (mutually exclusive); the candidates are only that preset's own tools, grouped as "plugin tools / official tools / other tools", and an allow list is merged back with every currently running `mcp__*` tool (ticking only `read` will not stop an MCP shell). The reserved name `run_code` is stripped with a note.
-- **Model and provider** are both picked from the host LLM catalogue (choosing a provider narrows the model list to it); empty means inherit the main session.
-- **Reasoning effort**: the available levels are declared by the selected model; leaving it empty while a model is set falls back to that model's default.
+- **One file per persona**: `subagents/<persona>.md`, frontmatter entirely optional.
+- **Delegation**: `subagent_manager_run` runs with the persona, returns only its final result, and never enters History; `inherit: true` seeds the child with this conversation's finished turns.
+- **On/off**: a disabled persona is neither injected nor visible to the model; new / imported / restored personas start disabled.
+- **Tool limits per agent preset**: one allow or deny list per preset (mutually exclusive). Model and provider are picked from the host LLM catalogue; empty means inherit the main session.
 
 ### MCP servers
 
-- **CRUD with immediate effect**: written into `cordis.patch.yml`, backed up before every change; levels are global / project.
-- **Per-tool switches**: disable individual tools (invisible to the model and blocked at call); whole servers support bulk.
-- **Stopped servers still show their tools**: one that is not running keeps the names and descriptions last seen; one that never ran can be probed.
-- **Status and notes enter the context**: a server that connected before but cannot right now is listed and labelled; your notes travel along as decision hints.
-- **Secret masking**: a credential is replaced as a whole, and "Reveal" needs a token; a masked value is never written back into the patch file.
-- **Migrate & back up**: cross-level migration rolls back on failure; JSON export/import.
+- **CRUD with immediate effect**: written into `cordis.patch.yml`, backed up before every change.
+- **Per-tool switches**: disable individual tools, or a whole server; a stopped server still shows the tools last seen.
+- **Secret masking**: a credential is replaced as a whole, and "Reveal" needs a token; a masked value is never written back.
+- A per-server note travels along as a decision hint; migration rolls back on failure, with JSON export/import.
 
 ### Skills
 
 - **Sources at a glance**: project / DSH / Agents / Codex / Claude / custom directories, grouped by source.
 - **Opposite permissions**: default sources are readable and their skills deletable; external directories can be disabled or removed but their files stay read-only.
 - **Remove ≠ disable**: removing stops scanning the directory at all (nothing is written, restorable); disabling keeps it listed but uncallable.
-- **Who wins a shared name**: the winning copy is marked "preferred", shadowed ones name the source that wins.
-- **Custom directories / ZIP import & export / recycle bin.**
+- The winning copy of a shared name is marked "preferred"; custom directories, ZIP import/export and the recycle bin are all here.
 
 ### Prompt presets
 
-- Multiple `~/.dsh/AGENTS.md` baselines, applied with one click (next turn), with 5 generations of backups.
-- **It remembers the last applied preset**: even after you hand-edit `AGENTS.md`, the origin is still reported.
-- Each preset can carry a one-line description that lives in a sibling `meta.json` — shown in this panel, never injected.
-- **A referenced preset cannot be deleted** (scene binding / current `AGENTS.md` content); deletes go to the recycle bin.
-- **The switch on the left of a card is the answer to "is this one in effect"**: flip it on and that preset is written into `AGENTS.md`; a baseline has no "apply nothing" state, so light up a different one instead (single choice).
-- **While a scene drives the baseline, flipping another one rebinds that scene** to the chosen preset; it is refused only while the scene is locked.
-- **Quick prompts** (the second section on the same page): save a piece of text you keep typing, then hit `/` and click it — it lands verbatim in the input. It is never injected; its switch only controls whether the row still shows up in the `/` "Quick prompts" section.
-- **A scene can bind a set of quick prompts**: entering that scene enables exactly the checked ones and disables the rest, and leaving restores the switches as they were before entering.
-- **Both groups are collapsible cards** (click the header to fold); the quick group's header carries a "Select all / Deselect all" button, the global group has none — that one is single choice.
+- Multiple `~/.dsh/AGENTS.md` baselines, applied with one click (next turn), with 5 generations of backups; each preset can carry a one-line description that is never injected.
+- **The switch on the left of a card is the answer to "is this one in effect"**: flip it on and that preset is written into `AGENTS.md`; flip it off to **un-apply**, which restores the state from before you started applying (and deletes the file if there was none back then). The confirmation says which one it will be, and a receipt afterwards states what happened.
+- **Two kinds cannot be deleted directly**: a scene-bound preset, and the one currently applied. The copy auto-created on first open can be deleted. Deletes always go to the recycle bin.
+- **Quick prompts** (the second section on the same page): save a piece of text you keep typing, then hit `/` and click it; a scene can bind a set of them.
+- **This page's recycle bin is split in two by domain**, each half scrolling on its own with its own batch bar.
 
 ### Archived sessions
 
 - Grouped by project, searchable, batch restore / delete, retention auto-cleanup; a workspace whose registration was deleted can be re-registered in one click.
-- Import Claude Code / Cursor / Codex / any text (pick a registered workspace, browse to a folder, or give a path directly); export Markdown / JSONL in three cumulative modes: text only → plus tool calls → plus reasoning. **An export is a transcript, not a backup** — use archiving when you need the full record.
+- Import Claude Code / Cursor / Codex / any text; export Markdown / JSONL in three cumulative modes: text only → plus tool calls → plus reasoning. **An export is a transcript, not a backup**.
 
 ### Host compatibility
 
 - **Host tab**: host version, usable capability count, per-action routing (native / adapter / unavailable), degradations and reasons; three write entries: access token, injection settings, model tool table.
 - **Command line**: `node scripts/doctor.mjs` (health check), `node scripts/host-deps.mjs --fix` (align dependencies).
 - Under a **suppressing preset** such as `minimal`, this plugin's injection is off by default; the Host tab can force any domain back on.
-- **Unchecking "Skills" or "Prompt" really stops them** — under standard presets the host delivers those two itself; the other three domains are only ever sent by this plugin, so their toggles work as written.
-- **What an injection looks like**: one `<system-reminder>` per domain — a `#` section title, then the body. Any `</system-reminder>` inside your content is escaped.
+- Unchecking "Skills" or "Prompt" really stops them — under standard presets the host delivers those two itself.
 
 ---
 
@@ -182,6 +163,7 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 | Recycle bin (skills / personas / presets / scenes)             | `~/.dsh/tool-management/trash/{skills,subagents,prompts,scenes}-trash/`                          |
 | Memory recycle bin                                             | `~/.dsh/tool-management/memories-trash/` (a directory at the hub root, not under `trash/`)       |
 | Archive ledger / retention                                     | `~/.dsh/tool-management/history-*.json`                                                          |
+| Recycle-bin retention                                          | `~/.dsh/tool-management/trash-retention.json` (`0` = keep forever)                               |
 | Memory index / scenes / profiles                               | `~/.dsh/tool-management/memories-index.json`                                                     |
 | MCP sidecars (disabled tools / known tools / notes / settings) | `~/.dsh/tool-management/mcp-*.json`                                                              |
 | Injection settings (six domain switches)                       | `~/.dsh/tool-management/inject-settings.json`                                                    |
@@ -201,12 +183,11 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 
 **Plaintext on disk (read this)**: masking is **display-only**; MCP `env` / `headers` and the plugin's own `token` stay in cleartext inside `cordis.patch.yml` (and each profile copy), and every config change copies the whole file into `~/.dsh/tool-management/backups/` — unencrypted, never rotated, not reclaimed on uninstall. One secret can therefore exist as `5 × (patch files holding it) + 1` plaintext copies. The token gate decides *who may read plaintext over HTTP*; it does nothing about *reading the files*, where the only defence is your filesystem permissions. **To clean up: Settings → Tools → Host → "Clean old backups"**.
 
-- **Browser**: reads and writes go through cookies, no token needed; **plaintext credentials** (reveal / export) do. The token is managed in the **Access token** block on the Host tab — filling it once unlocks the current run, writing it into the config needs a restart.
+- **Browser**: reads and writes go through cookies, no token needed; **plaintext credentials** (reveal / export) do. The token is managed in the **Access token** block on the Host tab.
 - **Every destructive direction asks for the current token again** (turn protection off / change / delete). Being unlocked this run does not count.
-- **curl / scripts**: send `x-dsh-token`, or carry the browser cookie.
-- **HTTP status convention**: except for the fence's 401 / 403, a missing token or a business failure is **HTTP 200 + `{ ok: false, error }`** — branch on `body.ok`, not on the status code.
-- **Port forwarding**: when the host has no `connection` service the fence falls back to "loopback Host + same origin", which any local process can imitate with `Host: localhost`. If you forward the port to a LAN or the public internet, **configure a token** — a stranger injecting MCP commands is remote code execution. The `dir-list` call behind the folder picker lists any absolute path (read-only) under the same precondition.
-- **Avoid `__` in a server name (naming advice)**: a tool's full name is `mcp__<server>__<tool>`, so an extra `__` inside a server name makes it ambiguous and a checkbox in the UI may fail to land on the key used in the disabled-tools table. This release does not tighten validation; the Host tab shows an informational note instead.
+- **curl / scripts**: send `x-dsh-token`, or carry the browser cookie. Except for the fence's 401 / 403, failures come back as **HTTP 200 + `{ ok: false, error }`** — branch on `body.ok`.
+- **Port forwarding**: when the host has no `connection` service the fence falls back to "loopback Host + same origin", which any local process can imitate. If you forward the port to a LAN or the public internet, **configure a token**.
+- **Avoid `__` in a server name**: a tool's full name is `mcp__<server>__<tool>`, so an extra `__` inside a server name makes it ambiguous; the Host tab shows an informational note.
 
 ## FAQ
 

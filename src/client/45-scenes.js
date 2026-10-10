@@ -69,6 +69,31 @@
               else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
             }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
           }
+          /** 批量永久删除：逐条调单条 op，串行（理由见 42-shared-ui.js 的 TrashModal 注释）。 */
+          function purgeSceneMany(items) {
+            if (!items.length) return
+            setTrashBusy(true)
+            var done = 0, failed = 0, firstErr = null
+            var step = function (i) {
+              if (i >= items.length) {
+                setTrashBusy(false)
+                setResult({
+                  ok: failed === 0,
+                  text: failed === 0
+                    ? t('trash.purgeMany.result', { count: done })
+                    : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' }),
+                })
+                loadTrash(true)
+                return
+              }
+              apiCall('scene-trash-delete', { id: items[i].id }).then(function (res) {
+                if (res && res.ok) done += 1
+                else { failed += 1; if (!firstErr) firstErr = (res && res.error) || t('mcp.msg.failed') }
+                step(i + 1)
+              }).catch(function (e) { failed += 1; if (!firstErr) firstErr = errMsg(e); step(i + 1) })
+            }
+            step(0)
+          }
           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
@@ -169,7 +194,8 @@
           function loadPresetOptions(onLoaded) {
             apiCall('agentsmd-list', {}).then(function (res) {
               var list = (res && res.presets) || []
-              // 不再提供「不绑定」：候选就是预设本身，默认选中当前生效的那份。
+              // 这里只放预设本身；表单里那颗下拉会在最前面补一条「无（不绑定提示词）」。
+              // 默认选中当前生效的那份（用户裁定「默认就是当前启动的」）。
               var opts = []
               list.forEach(function (p) { opts.push({ value: p.id, label: p.active ? (p.id + ' · ' + t('scenes.prompt.activeTag')) : p.id }) })
               setPresetOptions(opts)
@@ -184,14 +210,29 @@
             setSceneForm(function (f) { return (f && String(f.prompt || '') !== '') ? f : Object.assign({}, f, { prompt: activeId }) })
           }
           // ── 场景建 / 改描述 / 改绑定的提示词 / 删 ──
-          // `quickPrompts` 三态：null = 「当前启用的」（这一域不绑、进出不碰）；数组 = 按场景勾选
-          // （**空数组也是"绑了"**，意思是进入后全部停用）。表单里那颗下拉只给这两个方向。
-          function openCreateScene() { setSceneForm({ name: '', description: '', prompt: '', toolTablePreset: '', quickPrompts: null, error: null }); setModal({ type: 'scene-create' }); loadPresetOptions(defaultPromptToActive); loadToolTablePresets(); loadQuickOptions() }
+          // 快捷提示词在表单里是**三选一**，落盘时映射成 `quickPrompts` 的三种取值：
+          //   'current' → null（这一域不绑、进出不碰）／'none' → []（绑空表：进入后全部停用）
+          //   ／'custom' → 勾选数组（**空数组也算 custom**）。
+          //
+          // 为什么表单要单独存一个 `quickMode`，而不是像原来那样从数组反推下拉值：
+          // 「无」现在**不显示**「本场景启用」那张勾选卡（用户 2026-10-10），于是"数组为空"
+          // 必须能分出两种来 —— 用户主动选了「无」，和用户选了「自定义」但一条都还没勾。
+          // 反推的话后者会立刻翻成「无」、卡片当场消失，连勾第二条的机会都没有。
+          //
+          // 新建场景默认 'none'（用户 2026-10-10：「无应该是第一条，新建场景默认选择」）。
+          // 口径与场景档案里另外三域一致：MCP / 技能 / 人设本来就是「一段都没建 = 该域全部停用」，
+          // 新场景起手就是"一个都不启用"，快捷提示词跟着走才不别扭；而 `null`（进出都不碰）
+          // 留给 0.18.0 之前建的老场景，编辑时按档案原样回填。
+          function openCreateScene() { setSceneForm({ name: '', description: '', prompt: '', toolTablePreset: '', quickMode: 'none', quickPrompts: [], error: null }); setModal({ type: 'scene-create' }); loadPresetOptions(defaultPromptToActive); loadToolTablePresets(); loadQuickOptions() }
           function openEditScene(scene) {
             var sceneArchive = (data.archives || {})[scene.name] || {}
             setSceneForm({
               name: scene.name, description: scene.description || '', prompt: scene.prompt || '',
               toolTablePreset: typeof sceneArchive.toolTablePreset === 'string' ? sceneArchive.toolTablePreset : '',
+              // 档案里没有 quickPrompts 段 = 0.18.0 之前的老场景 = 'current'（进出不碰）；
+              // 空数组 = 'none'；非空 = 'custom'。落盘的值与这里一一对应。
+              quickMode: !Array.isArray(sceneArchive.quickPrompts)
+                ? 'current' : (sceneArchive.quickPrompts.length ? 'custom' : 'none'),
               quickPrompts: Array.isArray(sceneArchive.quickPrompts) ? sceneArchive.quickPrompts.slice() : null,
               error: null,
             })
@@ -217,8 +258,11 @@
             var toolTablePreset = String(sceneForm.toolTablePreset || '')
             // 快捷提示词：null = 解绑（回到"保持现状"），数组 = 勾选集（空数组是"一条都不勾"）。
             // 两个方向都必须**显式送出去**，不能省略 —— 省略在服务端那边是"这一域不碰"。
-            var quickPrompts = sceneForm.quickPrompts === null || sceneForm.quickPrompts === undefined
-              ? null : (sceneForm.quickPrompts || []).slice()
+            // 以 `quickMode` 为准而不是从数组反推：'custom' 且一条都没勾时数组是空的，
+            // 那要落成 `[]`（= 进入后全部停用）—— 与「无」落盘的值一样。两者在磁盘上本就
+            // 不可区分（都是"一条都不启用"），区分只在表单里：要不要显示那张勾选卡。
+            var quickPrompts = sceneForm.quickMode === 'current' ? null
+              : (sceneForm.quickMode === 'custom' ? (sceneForm.quickPrompts || []).slice() : [])
             var payload = isEdit
               ? { name: originalName, nextName: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset, quickPrompts: quickPrompts }
               : { name: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset, quickPrompts: quickPrompts }
@@ -1196,33 +1240,60 @@
                 React.createElement('div', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('scenes.field.prompt')),
                   presetOptions.length > 0
-                    ? React.createElement(SourceSelect, { options: presetOptions, value: sceneForm.prompt || '', onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { prompt: v })) } })
+                    // 「无」排在第一位，是**不绑定**这一态在表单里唯一的入口（用户 2026-10-10 要求）。
+                    // 此前这里只有预设本身，于是「选了某份预设之后想改回不绑」在表单里无路可走。
+                    // 语义上是安全的：`prompt` 为空时 `resolveScenePreset()` 直接跳过这个场景，
+                    // 而 `sync()` 在没有场景驱动时会把进场景前的基线写回去 —— 从「绑了」切到
+                    // 「无」不会把上一份预设留在 AGENTS.md 里。
+                    // 候选用 `presetOptions` 而不是「无 + presetOptions」判空：一份预设都没有时
+                    // 该说的是「先去建一份」，而不是给一颗只有「无」的下拉（默认本来就是无）。
+                    ? React.createElement(SourceSelect, {
+                        options: [{ value: '', label: t('scenes.field.prompt.none') }].concat(presetOptions),
+                        value: sceneForm.prompt || '',
+                        onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { prompt: v })) },
+                      })
                     : React.createElement('p', { className: 'dsm-help' }, t('scenes.prompt.noPresets')),
                   helpBullets(t, 'scenes.field.prompt.hint')),
                 // 快捷提示词（0.18.0）：默认「当前启用的」= 这一域**不绑**，进出不碰它；
-                // 切到「按场景勾选」才给清单 —— 勾进来的进入本场景后启用、没勾的停用，
+                // 切到「自定义」才给清单 —— 勾进来的进入本场景后启用、没勾的停用，
                 // 退出场景按进场景前那批开关还原（与子智能体那一档同一条机制）。
                 // 空表是"绑了但一条都不勾"（进入后全部停用），与"不绑"是相反的意思，
-                // 所以那颗下拉只给两个方向，不让用户靠"清空"去表达"不绑"。
+                // 所以这里是**三态**而不是两态：第三条「无」正是那个空表（用户 2026-10-10 要求）。
+                // 下拉显示的就是 `quickMode` 本身（不从数组反推，理由见 openCreateScene 上面）。
                 React.createElement('div', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('scenes.field.quickPrompts')),
                   React.createElement(SourceSelect, {
-                    value: Array.isArray(sceneForm.quickPrompts) ? 'custom' : '',
-                    options: [{ value: '', label: t('scenes.field.quickPrompts.current') }, { value: 'custom', label: t('scenes.field.quickPrompts.custom') }],
+                    value: sceneForm.quickMode || 'current',
+                    // 「无」排第一（用户 2026-10-10：「无应该是第一条」）—— 与全局提示词那一格
+                    // 同一条排法，把"新建场景会看到的那个"放在最上面。
+                    options: [
+                      { value: 'none', label: t('scenes.field.quickPrompts.noneOption') },
+                      { value: 'current', label: t('scenes.field.quickPrompts.current') },
+                      { value: 'custom', label: t('scenes.field.quickPrompts.custom') },
+                    ],
                     onChange: function (v) {
                       setSceneForm(Object.assign({}, sceneForm, {
-                        quickPrompts: v === 'custom'
-                          // 切过来时从**当前开着的那些**起步（用户裁定：默认就是当前启用的），
-                          // 而不是给一张空表 —— 空表说的是"进入后全部停用"。
-                          ? (quickOptions || []).filter(function (p) { return p.enabled !== false }).map(function (p) { return p.id })
-                          : null,
+                        quickMode: v,
+                        quickPrompts: v === 'none'
+                          // 「无」= 绑一张空表：进入后这一域全部停用，退出时按进场景前的开关还原。
+                          ? []
+                          : v === 'custom'
+                            // 切过来时从**当前开着的那些**起步（用户裁定：默认就是当前启用的），
+                            // 而不是给一张空表 —— 空表说的是"进入后全部停用"。一条都没开时起步
+                            // 就是空表，但模式仍是 'custom'，卡片照常显示、勾得上。
+                            ? (quickOptions || []).filter(function (p) { return p.enabled !== false }).map(function (p) { return p.id })
+                            : null,
                       }))
                     },
                   }),
                   // 勾选清单是一张段卡片（与档案编辑器同一套排版）：段头报"已勾几条 / 共几条"并给
                   // 全选，段体按内容长（超过 6 行才内滚）。原先这里是一块裸的固定 216px 滚动体，
                   // 一条也占 216px —— 弹窗中间凭空一片空白（用户 2026-10-01 反馈）。
-                  Array.isArray(sceneForm.quickPrompts)
+                  //
+                  // 只在「自定义」时出现（用户 2026-10-10：「快捷提示词是无时，本场景启用不要显示」）：
+                  // 「无」说的是"这个场景不设置快捷提示词"，底下再挂一张全空的勾选卡是自相矛盾；
+                  // 「当前启用的（保持现状）」本来就一个字节都不碰，更没有可勾的。
+                  sceneForm.quickMode === 'custom'
                     ? (quickOptions || []).length
                       ? seg({
                           title: t('scenes.field.quickPrompts.list'),
@@ -1301,6 +1372,8 @@
               onClose: function () { setTrash(null) },
               onRestore: restoreScene,
               onPurge: purgeScene,
+              onPurgeMany: purgeSceneMany,
+              onReload: function () { loadTrash(true) },
             }) : null,
           )
         }

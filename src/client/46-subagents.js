@@ -73,6 +73,31 @@
               else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
             }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
           }
+          /** 批量永久删除：逐条调单条 op，串行（理由见 42-shared-ui.js 的 TrashModal 注释）。 */
+          function purgePersonaMany(items) {
+            if (!items.length) return
+            setTrashBusy(true)
+            var done = 0, failed = 0, firstErr = null
+            var step = function (i) {
+              if (i >= items.length) {
+                setTrashBusy(false)
+                setResult({
+                  ok: failed === 0,
+                  text: failed === 0
+                    ? t('trash.purgeMany.result', { count: done })
+                    : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' }),
+                })
+                loadTrash(true)
+                return
+              }
+              apiCall('subagent-trash-delete', { id: items[i].id }).then(function (res) {
+                if (res && res.ok) done += 1
+                else { failed += 1; if (!firstErr) firstErr = (res && res.error) || t('mcp.msg.failed') }
+                step(i + 1)
+              }).catch(function (e) { failed += 1; if (!firstErr) firstErr = errMsg(e); step(i + 1) })
+            }
+            step(0)
+          }
           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
@@ -956,6 +981,8 @@
               onClose: function () { setTrash(null) },
               onRestore: restorePersona,
               onPurge: purgePersona,
+              onPurgeMany: purgePersonaMany,
+              onReload: function () { loadTrash(true) },
             }) : null)
         }
 

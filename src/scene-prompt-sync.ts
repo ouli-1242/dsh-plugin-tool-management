@@ -53,12 +53,24 @@ export interface ScenePromptDriver {
 /**
  * 一条「谁在引用这个提示词预设」的记录（删除保护与界面标记共用）。
  *   - `scene`   场景绑定（含恒常的 `_shared` / `global`；`active` = 该场景当前启用）
- *   - `file`    `~/.dsh/AGENTS.md` 的**当前内容**就是它（实际被注入的那一份）
+ *   - `file`    `~/.dsh/AGENTS.md` 的**当前内容**就是它（实际被注入的那一份）；
+ *               `applied` 另标「是由「应用」写进去的」还是「内容碰巧相同」（播种出来的副本）
  *   - `restore` 进场景前保存的基线 = 退出场景后要恢复的那一份
  */
 export type PresetRef =
   | { kind: 'scene'; scene: string; label: string; active: boolean }
-  | { kind: 'file' }
+  /**
+   * `~/.dsh/AGENTS.md` 的当前内容就是它。
+   *
+   * `applied` = 这份内容**是由「应用」写进去的**（`__applied__.json` 指向它），而不是
+   * "内容碰巧相同"。两者在首次打开提示词页时自动播种出来的 `default` 上分道扬镳：它内容与
+   * AGENTS.md 相同、界面上也标「文件里是它」，却从未发生过写入。
+   *
+   * 删除保护要的是 `applied`（用户主动做过这个选择，所以拦住并要求先取消应用）；
+   * 播种态那份副本必须放行 —— 拦它没有任何出路（取消应用也关不掉），就是死路
+   * （2026-10-10 用户反馈「当前应用的提示词应该不能删除」，同一次改动里把这条边界钉住）。
+   */
+  | { kind: 'file'; applied?: boolean }
   | { kind: 'restore' }
 
 export interface SyncResult {
@@ -218,7 +230,7 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
     try {
       const cur: any = await deps.prompts.getCurrent()
       if (!cur || cur.ok !== true) complete = false
-      else if (cur.presetId) add(String(cur.presetId), { kind: 'file' })
+      else if (cur.presetId) add(String(cur.presetId), { kind: 'file', applied: cur.lastApplied === cur.presetId })
     } catch (e) { complete = false; warn(`scene-prompt: refs probe (baseline file) failed: ${String(e)}`) }
     try {
       const saved = await readBaseline()

@@ -175,7 +175,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'subagent-trash-restore': { serviceWrite: true, frozen: true },
   'subagent-trash-delete': { serviceWrite: true, frozen: true },
 
-  // ── 提示词域（11）──────────────────────────────────────────────────────────
+  // ── 提示词域（12）──────────────────────────────────────────────────────────
   'agentsmd-list': { annotatesLock: true },
   'agentsmd-read': { readonly: true },
   'agentsmd-get-current': { readonly: true },
@@ -184,6 +184,8 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'agentsmd-update': { write: true, frozen: true },
   // apply 写全局 AGENTS.md = 换掉生效基线。
   'agentsmd-apply': { write: true, frozen: true },
+  // unapply 同样写全局 AGENTS.md（把它恢复成链起点，即开始应用之前的那份内容）→ 与 apply 同档。
+  'agentsmd-unapply': { write: true, frozen: true },
   'agentsmd-remove': { write: true, frozen: true },
   'agentsmd-import': { write: true, frozen: true },
   'agentsmd-trash-restore': { write: true, frozen: true },
@@ -225,6 +227,20 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'bundle-export': { write: true },
   // 新增一条宿主工作区登记 —— 改的是宿主侧的登记，不是插件自己的侧车。
   'history-workspace-register': { write: true },
+
+  // ── 回收站保留期（2）──────────────────────────────────────────────────────
+  // 与 History 页的保留期（上面那两条）是同一个功能出现在两个页面：同一份侧车形状
+  // （`{retentionDays, updatedAt}`）、同一条到期判据、同一个「改设置即重置倒计时」语义。
+  // 读侧是纯读（客户端 boot 时必问一次拿当前值），与 `history-retention-get` 同档。
+  'trash-retention-get': { readonly: true },
+  // 写侧**比 `history-retention-set` 多一层冻结**，这是一处刻意的不同：
+  //   · 历史页那条只影响「已归档会话」—— 归档是用户主动收进去的，删了就是删了；
+  //   · 这一条成功后立即扫一次，**能永久删掉六类回收站条目里的任意一条**，而六条手工
+  //     删除 op（`skill-trash-delete` / `agentsmd-trash-delete` / `subagent-trash-delete` /
+  //     `quickprompt-trash-delete` / `rules-trash-remove`）全都是冻结的。
+  //   一个能删掉所有回收站条目的 op 却比单条删除更宽松，等于给冻结开了后门。
+  //   （`scene-trash-delete` 是唯一没标冻结的那条，属既有不一致，不在本次范围。）
+  'trash-retention-set': { write: true, frozen: true },
 
   // ── 兼容 / 注入 / 备份 / 流水 / 迁移快照（11）────────────────────────────────
   'compat-status': { readonly: true },

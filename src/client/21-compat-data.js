@@ -109,6 +109,9 @@
       'history-import': 'compat.audit.op.sessionImport',
       'history-export': 'compat.audit.op.sessionExport',
       'history-workspace-register': 'compat.audit.op.sessionRegister',
+      // 回收站保留期：与历史页的保留期分开两条文案 —— 一条管归档会话，一条管回收站，
+      // 混着记会让流水读不出「改的到底是哪个页面的保留期」。
+      'trash-retention-set': 'compat.audit.op.trashRetention',
     }
     /** 每个操作走哪条路线：仅当有"原生委托"能力可用时才算原生。 */
     function operationRoutes(data) {

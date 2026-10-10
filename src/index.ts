@@ -80,6 +80,9 @@ import { buildCompatOps } from './ops/compat.js'
 import { buildPromptOps } from './ops/prompts.js'
 import { buildQuickPromptOps } from './ops/quick-prompts.js'
 import { buildSessionOps } from './ops/sessions.js'
+import { buildTrashRetentionOps } from './ops/trash-retention.js'
+// 回收站保留期（0.19.1）：侧车 `hub/trash-retention.json` + 六类回收站的到期清扫。
+import { createTrashRetentionDomain } from './trash-retention.js'
 // HTTP 请求准入与 handlers 后处理（2026-09-19 从本文件 apply 闭包抽出，依赖显式传参）。
 import { createAccessToken, createFrozenGate, createOpWhitelist, createSceneLock, guardModelOp, guardModelOps, installHandlerGuards } from './request-gate.js'
 // `isReadCall` 随 HTTP 路由一起搬走了（写门禁与审计流水都读同一份登记表判据）。
@@ -966,6 +969,34 @@ export default {
     // 挂周期定时器都在工厂内完成 —— 它们原本就写在 apply() 的同一位置。
     const history = createHistoryDomain({ ctx, config, pluginRoot: PLUGIN_ROOT, message })
 
+    // 回收站保留期域（0.19.1）：与上面的 history 同形 —— 构造、首次清扫、周期定时器都在
+    // 工厂内完成。默认保留期是 `0`（永久保留），所以对没打开过这个开关的宿主来说，
+    // 启动那次清扫读完侧车就返回了，一次磁盘遍历都不做。
+    //
+    // 记忆回收站那两条**走 memories 域的 op**，不在这里重抄路径与 manifest 形状：它在
+    // `hub/memories-trash/`（hub 根下的独立目录，不在 `trash/` 里），形状由 memories 域
+    // 自己定 —— 重抄一遍只会得到第二份会漂移的真相（hub.ts 顶部那张目录图专门写过这件事）。
+    const trashRetention = createTrashRetentionDomain({
+      ctx,
+      config,
+      memories: {
+        list: async () => {
+          const res: any = await memoriesService.ops['rules-trash-list']({})
+          const entries: any[] = res && Array.isArray(res.entries) ? res.entries : []
+          return entries
+            .map((e) => ({
+              id: String((e && e.trashId) || ''),
+              name: String((e && e.name) || ''),
+              deletedAt: String((e && e.deletedAt) || ''),
+            }))
+            // 没有 id 的条目删不掉，也不能记流水 —— 在这里挡掉，免得把一条坏数据一路带到
+            // 「永久删除」那一步才失败。
+            .filter((e) => e.id !== '')
+        },
+        purge: (id) => memoriesService.ops['rules-trash-remove']({ trashId: id }),
+      },
+    })
+
     // ── 场景提示词 → 全局基线（AGENTS.md）同步 ────────────────────────────────
     //
     // 用户裁定（2026-09-15）：「切换场景，对应的提示词直接把 AGENTS.md 直接修改」。
@@ -1022,9 +1053,10 @@ export default {
     }
 
     /** 删除拒绝里的引用说明（人话；与界面标签同一套结构化事实）。 */
-    const promptRefReason = (ref: { kind?: string; label?: string; active?: boolean }): string => {
+    const promptRefReason = (ref: { kind?: string; label?: string; active?: boolean; applied?: boolean }): string => {
       if (ref && ref.kind === 'scene') return `场景「${ref.label || ''}」${ref.active ? '（已启用）' : ''}绑定了它`
       if (ref && ref.kind === 'restore') return '它就是退出场景后要恢复的全局提示词'
+      if (ref && ref.applied === true) return '它正被「应用」在 ~/.dsh/AGENTS.md 里'
       return '~/.dsh/AGENTS.md 当前内容就是它'
     }
 
@@ -1595,6 +1627,14 @@ export default {
         skillDetail: (args: any) => skillsService.ops['skill-detail'](args),
         extractTurnsFromEvents: extractExportTurns,
         serializeTurns: serializeTranscript,
+      }),
+      // 回收站保留期（ops/trash-retention.ts）：trash-retention-get（只读）/
+      // trash-retention-set（写 + 冻结；成功后立即扫一次，见该文件文件头）。
+      // 清扫本身**不在这里**——它是引擎的后台动作，由 trashRetention 域自己挂启动与周期。
+      ...buildTrashRetentionOps({
+        read: trashRetention.read,
+        write: trashRetention.write,
+        sweep: trashRetention.sweep,
       }),
       // rules 域里要走「场景 ↔ 全局基线同步」包装的四个写 op（ops/scene-sync.ts 提供）。
       // 必须排在 ...memoriesService.ops 之后 —— 这里是显式覆盖同名 op，不是新增。

@@ -700,6 +700,10 @@
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : submitUpdate }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
             // 场景建/删/档案弹窗已移至「场景」页（ScenesPage）。
             modal && modal.type === 'trash' ? React.createElement(Modal, { key: 'trash', wide: true, title: t('memory.trash.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              // 保留期选择器（0.19.1）：记忆回收站是本机条目最多的一处（实测 120 条），
+              // 没有保留期就只能一条条点永久删除。放在 loading 判断**之前** ——
+              // 它有自己的加载状态，不该跟着列表一起消失。
+              React.createElement(RetentionSelect, { key: 'retention', t: t, onReload: loadTrash }),
               trash.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
                 : React.createElement(React.Fragment, null,
                   trash.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(trash.error)) : null,

@@ -94,10 +94,44 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
     },
     // 应用 = 写全局基线文件；场景接管期间只放行「场景绑定的那一份」（见 applyPresetGuarded）。
     'agentsmd-apply': (args: any) => deps.applyPresetGuarded(String((args && args.id) || '')),
+    // 取消应用 = **回到链起点**（这一串应用/取消往复开始之前的状态）：起点有内容就把
+    // `__last-applied__/AGENTS.md` 写回去，起点文件不存在就把文件删掉（`removed: true`）。
+    // 连续应用过 A、B 时是**一步回到起点**，不是只退一步 —— 与场景基线同一条口径
+    // （见 `service.ts` 的 `backupGlobal`）。
+    // 它是「生效中」那颗开关的**关**方向 —— 此前只有「应用」没有反向动作，于是「只有一份预设
+    // 且它生效中」时开关关不掉、删除又被引用拦着（2026-10-10 实测反馈）。
+    //
+    // 用户 2026-10-10 第二次反馈「取消应用，AGENTS.md 还是存在」暴露了另一半：`backupGlobal()`
+    // 原先在文件不存在时**什么都不写**，"起点不存在"因此不可恢复，取消应用恒判 noBackup，
+    // 而这里给出的出路「删除这份预设」不成立（remove 不碰 AGENTS.md）。现在那个事实由
+    // `__last-applied__/absent.json` 记着，删文件这一支才走得通。
+    // 第三次反馈（同一天）「新建 a、b 两份提示词，启动 a，再启动 b，不启动 a 也不启动 b，
+    // AGENTS.md 没有消失」则是这个标记**被后续写入抹掉**：`backupGlobal` 原先每笔都覆盖链
+    // 起点槽位，第 ③ 步「应用 b」就把"起点不存在"刷成了 a 的内容。改成链起点只写一次。
+    //
+    // 场景驱动时**拒绝**：那时基线归场景管（生效中的是场景绑定的那一份），在这里撤销只会被
+    // 下一次场景同步写回去，而且「取消应用」对场景绑定也不成立 —— 要解除得去场景页改绑定。
+    'agentsmd-unapply': async () => {
+      const driver = await deps.scenePromptSync.driver()
+      if (driver) {
+        return {
+          ok: false,
+          code: 'error.agentsMd.unapplyWhileScene',
+          error: `场景「${driver.label}」正在驱动全局基线，不能在这里取消应用：先退出场景，或到场景页改掉它的提示词绑定。`,
+          params: { scene: driver.label },
+        }
+      }
+      const res = await deps.promptsService.unapply()
+      if (res && res.ok === false) {
+        // 「没有链起点」是一种**确定的**状态（不是故障）：AGENTS.md 的当前内容不是由
+        // 「应用」写进去的（首次打开时播种的 default 就是这样）。单给一个 code，界面才能
+        // 把出路说清楚（应用别的预设 / 直接编辑 AGENTS.md），而不是丢一句写盘失败。
+        return res.noBackup ? { ok: false, code: 'error.agentsMd.noUnapplyBackup', error: res.error } : res
+      }
+      return res
+    },
     'agentsmd-get-current': () => deps.promptsService.getCurrent(),
-    // 删除：**被引用的那份一律拒绝**（用户裁定，2026-09-16 扩到引用清单）。三类引用：
-    // 场景绑定（含恒常的 `_shared` / `global`）、`~/.dsh/AGENTS.md` 的当前内容、
-    // 进场景前保存的基线（退出场景后要恢复的那一份）。拒绝时逐条说明「谁在用」，
+    // 删除：**场景绑定**与**当前应用的那份**拦得住（判据见下方注释）。拒绝时逐条说明「谁在用」，
     // 用户知道该先改哪里。引用清单由 scene-prompt-sync 与显示/注入同源算出。
     //
     // 探测**失败**时改为拒绝（2026-09-30 审查 F13）。原来的取舍是「放行并记 warn：删预设不动
@@ -119,13 +153,37 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
           params: { id },
         }
       }
-      const why = refs.get(id) || []
-      if (why.length) {
-        const refsText = why.map(deps.promptRefReason).join('；')
+      // 删除保护认两类**真依赖**（判据是「删掉它会不会让别处静默坏掉」或「会不会留下一个
+      // 用户无法理解的中间态」）：
+      //   ① 场景绑定 → 会静默坏掉：场景驱动靠 `presetId` 去读预设正文，读不到 `driver()`
+      //      就返回 null，场景静默失效（AGENTS.md 停在场景态，用户看到的是"什么都没做"）。
+      //   ② **当前应用的**那份（`file` + `applied`，见下）→ 会留下中间态：删掉之后
+      //      `~/.dsh/AGENTS.md` 内容一字不变、**照旧生效**，但界面上再没有任何预设对应它。
+      //      用户看到的是「我把它删了，怎么全局提示词还在？」（2026-10-10 用户反馈：
+      //      「当前应用的提示词如果直接删除，AGENTS.md 还存在，当前应用的提示词应该不能删除」）。
+      //      拦住并引导先「取消应用」，这一步会把文件恢复成链起点（开始应用之前的状态），
+      //      之后就能删了。
+      //
+      // **不拦**的两类（各自都有明确的理由，别顺手加回来）：
+      //   - `file` 但没有 `applied`（首次打开提示词页时自动播种出来的 default）：它内容与
+      //     AGENTS.md 相同、界面标「文件里是它」，却从未发生过写入。删掉它完全合理（那只是
+      //     一份副本），而**拦它就是死路** —— 那份没有链起点可回，取消应用关不掉。
+      //   - `restore`（退出场景要恢复的那一份）：恢复走的是 `scene-baseline.json` 里存下的
+      //     **正文**（scene-prompt-sync 的 `restore(saved.content)`），不读预设目录。
+      // 2026-09-16 的裁定是三类一律拦，那条规则在「只有一份预设且它生效中」时构成**死锁**：
+      // 开关关不掉（基线没有"全部不应用"这一态）、引用又解不开。现在开关能关了（取消应用），
+      // 拦 ② 才有出路 —— 取消应用会把 `__applied__.json` 清成 null，`applied` 随之变 false。
+      const blocking = (refs.get(id) || []).filter((r) =>
+        r.kind === 'scene' || (r.kind === 'file' && r.applied === true))
+      if (blocking.length) {
+        const refsText = blocking.map(deps.promptRefReason).join('；')
+        const hasScene = blocking.some((r) => r.kind === 'scene')
+        const hasFile = blocking.some((r) => r.kind === 'file')
+        const escape = [hasScene ? '到场景页换绑提示词、或退出场景' : '', hasFile ? '先点左边那颗开关「取消应用」' : ''].filter(Boolean).join('；')
         return {
           ok: false,
           code: 'error.agentsMd.referenced',
-          error: `「${id}」仍被引用，不能删除：${refsText}。先改掉引用（换绑提示词 / 退出场景 / 应用别的预设）再删除。`,
+          error: `「${id}」不能删除：${refsText}。先解除引用再删 —— ${escape}。`,
           params: { id, refs: refsText },
         }
       }

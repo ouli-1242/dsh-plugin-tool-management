@@ -827,6 +827,42 @@
               else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
             }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
           }
+          /**
+           * 批量永久删除（回收站弹窗工具栏那一颗「永久删除 (N)」，先「全选」再删即等于清空）。
+           *
+           * 逐条调**已有的单条 op**（`agentsmd-trash-delete` / `quickprompt-trash-delete`）：
+           * 服务端不另造批量版 —— 那两条各自带着存在性校验，再造一份等于把判据抄两遍，
+           * 而新 op 还要重新过一遍令牌与冻结登记（见 TrashModal 的注释）。
+           *
+           * 串行而不是并发：条目数天然有限（用户手删出来的），串行才给得出
+           * 「删了几个、为什么没删掉」，并发只会让失败原因混成一团。
+           */
+          function purgePresetMany(items) {
+            if (!items.length) return
+            setTrashBusy(true)
+            var done = 0, failed = 0, firstErr = null
+            var step = function (i) {
+              if (i >= items.length) {
+                setTrashBusy(false)
+                var text = failed === 0
+                  ? t('trash.purgeMany.result', { count: done })
+                  : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' })
+                setState(function (s) { return Object.assign({}, s, { notice: { kind: failed === 0 ? 'ok' : 'err', text: text } }) })
+                loadTrash(true)
+                return
+              }
+              apiCall(trashOp(items[i], 'delete'), { id: items[i].id }).then(function (res) {
+                if (res && res.ok) done += 1
+                else { failed += 1; if (!firstErr) firstErr = (res && res.error) || t('mcp.msg.failed') }
+                step(i + 1)
+              }).catch(function (e) {
+                failed += 1
+                if (!firstErr) firstErr = errMsg(e)
+                step(i + 1)
+              })
+            }
+            step(0)
+          }
           // 导入：与技能页同一个 ImportModal（拖拽区 + 文件要求清单 + 结果反馈）。
           // 一次可选多份 .md，逐个读取正文导入；同名/失败逐条回报，不因一个失败中断其余的。
           // 两个提示词域共用这一颗按钮，类型在弹窗顶部选（`extra` 槽）—— 选完导入的是哪一档
@@ -922,13 +958,40 @@
           // （把被手改的 AGENTS.md 写回场景绑定的内容）→ 仍放行。
           var sceneDriver = state.scenePrompt && state.scenePrompt.scene && state.scenePrompt.presetId && state.scenePrompt.missing !== true ? state.scenePrompt : null
           var sceneDriverLabel = sceneDriver ? (sceneDriver.label || sceneDriver.scene) : ''
+          // 「取消应用」可不可用 = 宿主那边 `__last-applied__` 里有没有「链起点」
+          // （`agentsmd-get-current` 回的 `unapplyAvailable`）。**播种出来的 default 没有记录**
+          // —— 它内容与 AGENTS.md 相同、显示「生效中」，却从未发生过写入，所以关不掉；
+          // 那种情况点开关只给一条说明，并把出路（应用别的预设 / 直接编辑 AGENTS.md）说清楚。
+          var unapplyReady = !!(state.current && state.current.unapplyAvailable === true)
+          // 取消应用会**删掉文件**（开始应用之前 AGENTS.md 根本不存在）—— 这是个不可逆感很强的动作，
+          // 确认弹窗与开关悬停都必须提前说清，不能点下去才知道（用户 2026-10-10 反馈
+          // 「取消应用，AGENTS.md 还是存在」，那次的成因是删文件这一支压根走不通）。
+          var unapplyRemoves = unapplyReady && state.current.unapplyRemoves === true
           /** 引用说明：判定在宿主（scene-prompt-sync），这里只负责把它说成人话。 */
           function refText(r) {
             if (r.kind === 'scene') return t(r.active ? 'agm.ref.sceneActive' : 'agm.ref.scene', { scene: r.label || r.scene })
             if (r.kind === 'restore') return t('agm.ref.restore')
-            return t('agm.ref.file')
+            // 两处 `t(...)` 分开写，**不要合成 `t(cond ? 'a' : 'b')`**：check-i18n 只认
+            // `t('字面量')`，写成三元之后两个键都不再被统计，改名或打错字就没人拦得住了。
+            return r.applied === true ? t('agm.ref.fileApplied') : t('agm.ref.file')
           }
-          function refsOf(p) { return (p.refs || []).map(refText) }
+          /**
+           * **拦得住删除的**引用说明（其余引用由行上的标签承担）。
+           *
+           * 判据与宿主逐字一致（`ops/prompts.ts` 的 `agentsmd-remove`），两边必须同源 ——
+           * 不同源就会出现「按钮点得动、点了却被拒」或反过来「按钮灰着、其实删得掉」。
+           *   ① 场景绑定 → 删了场景静默失效。
+           *   ② **当前应用的**那份（`file` + `applied`）→ 删了会留下一个用户看不懂的中间态：
+           *      AGENTS.md 内容一字不变、**照旧生效**，但界面上再没有预设对应它。用户看到的是
+           *      「我把它删了，怎么全局提示词还在？」（2026-10-10 反馈），所以拦住并引导先取消应用。
+           *
+           * **`applied === false` 的 `file` 必须放行**：那是首次打开时自动播种出来的副本（内容与
+           * AGENTS.md 相同、却从未被「应用」过），拦它没有任何出路 —— 它没有链起点可回，
+           * 取消应用也关不掉，就是死路。
+           */
+          function blockingRefsOf(p) {
+            return (p.refs || []).filter(function (r) { return r.kind === 'scene' || (r.kind === 'file' && r.applied === true) }).map(refText)
+          }
           // 结果提示的存续时长：**成功**短暂显示（与场景页的结果条同一节奏），
           // **失败常驻**到下一次操作为止 —— 这正是 Notice 的既定语义（「警告 / 错误需要
           // 用户处理，常驻到下一次操作」）。此前不分种类一律 4 秒消失，等于把唯一的线索
@@ -973,11 +1036,38 @@
               else refresh()
             }).catch(function (e) { setBusy(null); setApplyConfirm(null); actionFailed(e) })
           }
+          /**
+           * 取消应用：把全局基线恢复成**链起点**（宿主按 `__last-applied__` 里的记录办）——
+           * 起点有内容就把那份写回去，起点文件不存在就把 AGENTS.md 删掉。**中途应用过别的预设
+           * 也一并撤销**（一步回到起点，不是只退一步；见 `service.ts` 的 `backupGlobal`）。
+           * 这是那颗「生效中」开关的**关**方向 —— 此前只有「应用」没有反向动作，于是
+           * 「只有一份预设且它生效中」时开关关不掉、删除又被引用拦着（2026-10-10 实测反馈）。
+           * 显示路径与 doApply 完全相同：失败走一次性横幅（不顶掉列表），成功重读页面。
+           *
+           * 成功时给一条**回执**（0.19.1，用户 2026-10-10 反馈「取消应用，AGENTS.md 还是存在」）：
+           * 原来只 `refresh()`，界面上唯一的变化是那颗开关灭了 —— 而"文件被删掉了"和"文件还在、
+           * 只是内容换回去了"在界面上长得一模一样，用户只能自己去翻磁盘。回执按宿主回的
+           * `removed` 分两种说法，把"到底发生了什么"直接写在页面上。
+           */
+          function doUnapply() {
+            beginAction()
+            setBusy('unapply')
+            apiCall('agentsmd-unapply', {}).then(function (res) {
+              setBusy(null); setApplyConfirm(null)
+              if (res && res.ok === false) { actionFailed(res); return }
+              setState(function (s) {
+                // 同样分开写（见 refText 的说明）：check-i18n 只统计字面量调用。
+                return Object.assign({}, s, { notice: { kind: 'ok', text: (res && res.removed) ? t('agm.result.unappliedRemove') : t('agm.result.unapplied') } })
+              })
+              refresh()
+            }).catch(function (e) { setBusy(null); setApplyConfirm(null); actionFailed(e) })
+          }
           function doRemove(p) {
             beginAction()
             setBusy('rm-' + p.id)
-            // 宿主会拒绝删除「正在生效」的预设（按钮已禁用，这里兜住旧页面/竞态），
-            // 因此必须把响应里的错误显示出来，不能静默什么都不发生。
+            // 删除只有**场景绑定**拦得住（宿主侧 agentsmd-remove 同一判据）。被场景绑定的那份
+            // 按钮点得动但删不掉（点了当面列出「谁在用」），所以响应里的错误必须显示出来，
+            // 不能静默什么都不发生。
             apiCall('agentsmd-remove', { id: p.id }).then(function (res) {
               setBusy(null); setApplyConfirm(null)
               if (res && res.ok === false) actionFailed(res)
@@ -1196,7 +1286,8 @@
                     var viaScene = p.activeVia === 'scene'
                     var refs = p.refs || []
                     var restoreRef = refs.some(function (r) { return r.kind === 'restore' })
-                    var refTexts = refsOf(p)
+                    // 场景绑定与「当前应用的」那份拦得住删除（判据见 blockingRefsOf 的说明）。
+                    var blockingTexts = blockingRefsOf(p)
                     // 场景绑的就是它，但 AGENTS.md 里的内容不是它（被手改过？）→ 说清楚，
                     // 并留"再点一次那颗开关"这条路写回。
                     var fileMismatch = !!sceneDriver && sceneDriver.presetId === p.id && !p.fileApplied
@@ -1219,24 +1310,40 @@
                             restoreRef ? React.createElement('span', { className: 'dsm-tag', title: t('agm.restore.tag.hint') }, t('agm.restore.tag')) : null),
                           p.description ? React.createElement('div', { className: 'dsm-persona-desc', title: p.description }, p.description) : null),
                         React.createElement('div', { className: 'dsm-source-actions' },
-                          // 「应用 / 重新应用」换成与子智能体同一颗药丸开关（用户 2026-09-30 裁定）：
-                          // 那一档是单选，屏幕上永远只有一份生效中 —— 开关说的正是这件事，而两颗文字
-                          // 按钮把"当前是哪份"留给标签去猜。关不掉是**语义**不是缺功能：基线没有
-                          // "全部不应用"这一态，所以点已亮着的那颗 = 重新写回（把被手改的 AGENTS.md
-                          // 拉回来），与旧「重新应用」同一个出口，确认弹窗也照旧。
+                          // 「应用 / 取消应用」同一颗药丸开关（0.19.1 起有两个方向）：
+                          //   关 → 点 = 应用（把这份内容写进 AGENTS.md）；
+                          //   开（AGENTS.md 里就是它）→ 点 = **取消应用**（把 AGENTS.md 恢复成
+                          //     **开始应用提示词之前**的那一份 —— 中途应用过别的预设也一并撤销，
+                          //     不是只退一步；见 `service.ts` 的 `backupGlobal`）。此前这颗开关只有
+                          //     「应用」一个方向，用户实测「开启后无法关闭，也不能删除」—— 那是开关
+                          //     与删除保护一起构成的死锁。
+                          //   开但由**场景**驱动（`activeVia === 'scene'`）→ 点 = 应用（重新写回 /
+                          //     换绑场景）；撤销归场景页管，本页不该把场景的绑定偷偷撤掉。
+                          // 没有链起点可回时（播种出来的 default 就是这样）不开弹窗，
+                          // 只给一条说明，并把出路（应用别的预设 / 直接编辑 AGENTS.md）说清楚。
                           React.createElement(Switch, {
                             on: p.active === true,
                             disabled: busy !== null || state.anyLocked === true,
                             label: t('agm.apply.switch') + ' ' + p.id,
                             title: applyRebinds ? t('agm.apply.rebindScene', { scene: sceneDriverLabel })
-                              : p.active ? t('agm.apply.switch.on') : t('agm.apply.hint'),
-                            onClick: function () { setApplyConfirm({ id: p.id }) } }),
+                              : p.active
+                                ? (viaScene ? t('agm.apply.switch.on')
+                                  : (unapplyReady ? (unapplyRemoves ? t('agm.unapply.switch.onRemove') : t('agm.unapply.switch.on')) : t('agm.unapply.switch.blocked')))
+                                : t('agm.apply.hint'),
+                            onClick: function () {
+                              if (!p.active || viaScene) { setApplyConfirm({ id: p.id }); return }
+                              if (!unapplyReady) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.unapply.unavailable') }) }); return }
+                              setApplyConfirm({ id: p.id, unapply: true })
+                            } }),
                           React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: state.anyLocked === true, onClick: function () { openEdit(p) } }, t('agm.btn.edit')),
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: refTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: refTexts.join(t('agm.ref.sep')) }) : t('scenes.lock.blockedEdit'), onClick: function () {
-                            // 被引用的预设**点得动但删不掉**：当面说出「谁在用」，而不是让用户对着
-                            // 禁用按钮猜（disabled 的按钮连 title 都不弹）。宿主侧同样拒绝，这里只是先说。
-                            if (refTexts.length > 0) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.btn.delete.blocked.refs', { refs: refTexts.join(t('agm.ref.sep')) }) }) }); return }
-                            setApplyConfirm({ id: p.id, remove: true })
+                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: blockingTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) : t('scenes.lock.blockedEdit'), onClick: function () {
+                            // 被引用中的预设**点得动但删不掉**：当面说出「谁在用 / 该怎么解除」，
+                            // 而不是让用户对着禁用按钮猜（disabled 的按钮连 title 都不弹）。
+                            // 宿主侧同一判据同样拒绝，这里只是先说。
+                            // 拦的是两类：场景绑定、以及**当前应用的**那份（后者删了 AGENTS.md
+                            // 照旧生效，会留下一个看不懂的中间态）。播种出来的副本不在其列。
+                            if (blockingTexts.length > 0) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) }) }); return }
+                            setApplyConfirm({ id: p.id, remove: true, removeFileApplied: p.fileApplied === true })
                           } }, t('agm.btn.delete')))))
                   }))
 
@@ -1320,6 +1427,11 @@
                 { title: t('trash.group.presets'), sub: t('trash.section.presets.sub'), entries: trash.presets || [] },
                 { title: t('trash.group.quick'), sub: t('trash.section.quick.sub'), entries: trash.quick || [] },
               ],
+              // 上下两块各占一半、各自滚动、**每块自带一条**「已选 N 项 + 全选 + 永久删除 (N)」
+              // （用户 2026-10-10：「提示词的回收站也要像技能回收站一样分成两部分」）。
+              // 原先两块排在一条长列表里：35 条预设把 1 条快捷提示词压在滚不到底的下面，
+              // 而顶部那一颗全局「永久删除」跨两块删 —— 勾完之后看不出会删掉哪几个。
+              split: true,
               locked: state.anyLocked === true,
               loading: trash.loading,
               error: trash.error,
@@ -1327,6 +1439,9 @@
               onClose: function () { setTrash(null) },
               onRestore: restorePreset,
               onPurge: purgePreset,
+              // 批量删除 + 保留期改完后的重读（见 42-shared-ui.js 的 TrashModal / RetentionSelect）。
+              onPurgeMany: purgePresetMany,
+              onReload: function () { loadTrash(true) },
             }) : null,
             // 编辑：id 与内容都可改（改 id = 目录改名，场景绑定由宿主一起改名）。
             editModal ? React.createElement(Modal, { title: t('agm.edit.title') + ' · ' + editModal.id, closeLabel: t('btn.close'), onClose: function () { setEditModal(null) } },
@@ -1372,14 +1487,26 @@
               createModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, createModal.error) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(createModal.id || '').trim(), onClick: function () { doCreate(createModal.id, createModal.content, createModal.description) } }, t('agm.btn.create')))) : null,
-            applyConfirm ? React.createElement(Modal, { title: applyConfirm.remove ? (t('agm.remove.title') + ' · ' + applyConfirm.id) : (t('agm.applyModal.title') + ' · ' + applyConfirm.id), closeLabel: t('btn.close'), onClose: function () { setApplyConfirm(null) } },
+            // 三种确认共用一个弹窗：删除 / 取消应用 / 应用（`applyConfirm` 上的标记位区分）。
+            applyConfirm ? React.createElement(Modal, { title: applyConfirm.remove ? (t('agm.remove.title') + ' · ' + applyConfirm.id) : ((applyConfirm.unapply ? t('agm.unapply.title') : t('agm.applyModal.title')) + ' · ' + applyConfirm.id), closeLabel: t('btn.close'), onClose: function () { setApplyConfirm(null) } },
               applyConfirm.remove
-                ? React.createElement('p', { className: 'dsm-help' }, t('agm.remove.title') + ' ' + applyConfirm.id + t('agm.remove.suffix'))
-                : React.createElement('div', null,
-                    React.createElement('p', { className: 'dsm-help' }, t('agm.apply.prefix') + applyConfirm.id + t('agm.apply.suffix')),
-                    React.createElement('div', { className: 'dsm-feedback dsm-warning' }, t('agm.apply.note'))),
+                ? React.createElement('div', null,
+                    React.createElement('p', { className: 'dsm-help' }, t('agm.remove.title') + ' ' + applyConfirm.id + t('agm.remove.suffix')),
+                    // 删的正是「AGENTS.md 里就是它」的那一份 → 必须说清**文件不会被改动、
+                    // 全局提示词照旧生效**，否则用户会以为删除把全局提示词一起清掉了。
+                    // 注意这条只可能落在**播种出来的副本**上：真正「当前应用的」那份已经在
+                    // blockingRefsOf 里被拦住，根本走不到这个弹窗（用户 2026-10-10 的要求）。
+                    applyConfirm.removeFileApplied ? React.createElement('div', { className: 'dsm-feedback dsm-warning' }, t('agm.remove.fileNote')) : null)
+                : applyConfirm.unapply
+                  ? React.createElement('div', null,
+                      // 删文件那一支必须换文案：说"恢复成开始应用之前的那份内容"会让用户以为文件还在。
+                      React.createElement('p', { className: 'dsm-help' }, unapplyRemoves ? t('agm.unapply.bodyRemove', { id: applyConfirm.id }) : t('agm.unapply.body', { id: applyConfirm.id })),
+                      React.createElement('div', { className: 'dsm-feedback dsm-warning' }, unapplyRemoves ? t('agm.unapply.noteRemove') : t('agm.unapply.note')))
+                  : React.createElement('div', null,
+                      React.createElement('p', { className: 'dsm-help' }, t('agm.apply.prefix') + applyConfirm.id + t('agm.apply.suffix')),
+                      React.createElement('div', { className: 'dsm-feedback dsm-warning' }, t('agm.apply.note'))),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn ' + (applyConfirm.remove ? 'dsm-btn-danger' : ''), disabled: busy !== null, onClick: function () { if (applyConfirm.remove) doRemove({ id: applyConfirm.id }); else doApply(applyConfirm.id) } }, applyConfirm.remove ? t('agm.btn.confirmRemove') : t('agm.btn.confirmApply')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn ' + (applyConfirm.remove || (applyConfirm.unapply && unapplyRemoves) ? 'dsm-btn-danger' : ''), disabled: busy !== null, onClick: function () { if (applyConfirm.remove) doRemove({ id: applyConfirm.id }); else if (applyConfirm.unapply) doUnapply(); else doApply(applyConfirm.id) } }, applyConfirm.remove ? t('agm.btn.confirmRemove') : (applyConfirm.unapply ? (unapplyRemoves ? t('agm.btn.confirmUnapplyRemove') : t('agm.btn.confirmUnapply')) : t('agm.btn.confirmApply'))))) : null,
             importOpen ? React.createElement(ImportModal, {
               key: 'imp', t: t, title: t('agm.btn.import'), accept: '.md',
               busy: importBusy, result: importResult,

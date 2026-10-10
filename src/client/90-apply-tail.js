@@ -22,6 +22,12 @@
         // 常量用函数包一层：测试会把 _pages 的每个值当组件渲染一遍，数字会被 React 当成非法元素类型报警告。
         _pages.sceneDescMax = function () { return SCENE_DESC_MAX }
         _pages.memDescMax = function () { return MEM_DESC_MAX }
+        // 回收站弹窗与保留期选择器（0.19.1）：它们不是页面，但**四个页面共用**
+        // （提示词 / 场景 / 子智能体走 TrashModal，技能页与记忆页各挂一个 RetentionSelect）。
+        // 导出是为了能脱离宿主单独渲染一次 —— 这类"工具栏 + 固定高度列表"的排版
+        // 只有真渲染才看得出挤不挤（同 `_pages.VersionBadge` 那条理由）。
+        _pages.TrashModal = TrashModal
+        _pages.RetentionSelect = RetentionSelect
       },
     }
     return module.exports

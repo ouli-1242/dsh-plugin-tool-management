@@ -477,17 +477,224 @@ function enabledMemoryCount(rules) {
         props.body)
     }
     /**
-     * 通用回收站弹窗：一行一个条目（名字 + 删除时间），右侧「恢复 / 永久删除」。
+     * 回收站保留期选择器（0.19.1）。
+     *
+     * 自己拉、自己写：它是一个**全局设置**（`hub/trash-retention.json`），而回收站的界面
+     * 散在五个页面（提示词 / 场景 / 子智能体 / 技能 / 记忆）。把状态放在每个页面的父组件里，
+     * 等于同一段读-写-回执逻辑抄五遍，任何一遍漂了都会表现成「这页设了、那页没生效」。
+     *
+     * 回执写在选择器右边而不是弹窗顶部：用户改完这一格马上要看的是「这次清掉了什么」，
+     * 而不是去别处找消息（清扫是异步发生的，没有回执就等于"改了个数字，什么也没看见"）。
+     *
+     * 副作用面：`trash-retention-set` 成功后服务端会**立即扫一次**，可能真的永久删掉条目。
+     * 所以调用方要传 `onReload` —— 否则弹窗里还列着已经不存在的条目，点恢复会报"条目不存在"。
+     */
+    function RetentionSelect(props) {
+      var t = props.t
+      var st = React.useState({ loading: true, days: null, busy: false, note: null, error: null })
+      var s = st[0], set = st[1]
+      React.useEffect(function () {
+        var alive = true
+        apiCall('trash-retention-get', {}).then(function (res) {
+          if (!alive) return
+          if (res && res.ok) set({ loading: false, days: Number(res.retentionDays) || 0, busy: false, note: null, error: null })
+          else set({ loading: false, days: null, busy: false, note: null, error: (res && res.error) || t('trash.retention.loadFailed') })
+        }).catch(function (e) {
+          if (alive) set({ loading: false, days: null, busy: false, note: null, error: errMsg(e) })
+        })
+        return function () { alive = false }
+      }, [])
+      function choose(value) {
+        var days = Number(value) || 0
+        set(function (prev) { return Object.assign({}, prev, { busy: true, note: null, error: null }) })
+        apiCall('trash-retention-set', { retentionDays: days }).then(function (res) {
+          if (res && res.ok) {
+            var swept = Number(res.swept) || 0
+            var failed = Number(res.failed) || 0
+            set({
+              loading: false, days: Number(res.retentionDays) || 0, busy: false, error: null,
+              // 只在**真的发生了事**的时候出回执：一条都没清掉时写「已保存；本次清理 0 项」
+              // 是纯噪音（下拉框本身的值就是"已保存"的回执）。删除失败要如实说 ——
+              // `failed > 0` 说明有条目删不掉（IO 错误），只报清掉几项会让用户以为回收站干净了。
+              note: failed > 0
+                ? t('trash.retention.savedFailed', { count: swept, failed: failed })
+                : swept > 0 ? t('trash.retention.saved', { count: swept }) : null,
+            })
+            // 只在本轮真的删了东西时重读列表：没删东西还重读一次会让弹窗闪一下。
+            if (swept > 0 && props.onReload) props.onReload()
+          } else {
+            set(function (prev) { return Object.assign({}, prev, { busy: false, error: translateError(t, res) }) })
+          }
+        }).catch(function (e) {
+          set(function (prev) { return Object.assign({}, prev, { busy: false, error: errMsg(e) }) })
+        })
+      }
+      // 选项与 History 页那套同形（永久保留 / 7 / 30 天），外加 90 天 —— 回收站里的东西
+      // 比归档会话更常需要"留久一点再看"。`0` 是默认值，也是唯一不删任何东西的那一档。
+      var PRESETS = [0, 7, 30, 90]
+      var days = s.days
+      // 侧车里的值可能是手改的、或来自更早的版本（例如 15）—— 不在预设里时把它补成一项，
+      // 否则下拉框会显示成空白，用户会以为"根本没设置过"而重设一遍。
+      var values = days !== null && PRESETS.indexOf(days) < 0 ? [days].concat(PRESETS) : PRESETS
+      return React.createElement('div', { className: 'dsm-trash-retention' },
+        React.createElement('span', { className: 'dsm-label' }, t('trash.retention.label')),
+        React.createElement('select', {
+          className: 'dsm-control',
+          value: days === null ? '' : String(days),
+          disabled: s.loading || s.busy || days === null,
+          'aria-label': t('trash.retention.label'),
+          onChange: function (e) { choose(e.target.value) },
+        },
+          days === null ? React.createElement('option', { value: '' }, t('trash.retention.loading')) : null,
+          values.map(function (v) {
+            return React.createElement('option', { key: v, value: String(v) },
+              v === 0 ? t('trash.retention.forever') : t('trash.retention.days', { count: v }))
+          })),
+        s.error ? React.createElement('span', { className: 'dsm-trash-hint dsm-trash-retention-err' }, s.error) : null,
+        s.note ? React.createElement('span', { className: 'dsm-trash-hint' }, s.note) : null,
+        // 说明只在**真的开了保留期**时出现：选着「永久保留」还写「超期自动删除」是自相矛盾的。
+        // 文案本身压到 6 个字（用户 2026-10-10：「保留期一行就够了」），全文进 title ——
+        // 这一行恒为一行，长句放不下的问题从源头消掉，而不是靠折行兜着。
+        days !== null && days > 0
+          ? React.createElement('span', { className: 'dsm-trash-hint', title: t('trash.retention.hintFull') }, t('trash.retention.hint'))
+          : null)
+    }
+
+    /**
+     * 通用回收站弹窗：一行一个条目（勾选框 + 名字 + 删除时间），右侧「恢复 / 永久删除」。
      *
      * 子智能体 / 场景 / 提示词预设三处共用；永久删除就在本弹窗里就地二次确认，
      * 不再叠一层弹窗。恢复失败的原因显示在弹窗顶部 —— 不静默（同名已存在时必须说清）。
+     *
+     * 0.19.1 加的两件事：
+     *   · **保留期选择器**（`RetentionSelect`）：回收站此前只有"进来"没有"出去"。
+     *   · **批量永久删除**：条目多的时候（本机实测场景回收站 68 条、记忆 120 条）
+     *     一条条点等于没法用。勾选 + 「全选」+「永久删除 (N)」。
+     *
+     * 批量控件**只有一颗删除键**，与「全选」同处工具栏那一行、靠最右（用户 2026-10-10 裁定）：
+     * 原先并列「永久删除所选」与「清空回收站」两颗，两者是同一件事的两种范围，
+     * 并列必然有一颗是废话 —— 要清空就先「全选」再删，两步。
+     * 同理，勾选是**跨组**的（提示词页一次列两组），所以「全选」也必须是全局那一颗：
+     * 每组各留一颗「全选」就等于每组也要各配一颗删除键，又变回多颗。
+     *
+     * 批量为什么走**前端循环调已有的单条删除 op**（`onPurgeMany` 由调用方实现）：
+     * 服务端那六条 `*-trash-delete` 各自带着自己的存在性校验与回滚，再写一条"批量版"
+     * 就等于把六份判据复制一遍 —— 而且新 op 还要重新过一遍令牌/冻结登记。
+     * 条数天然有限（用户手删出来的），循环没有性能问题。
+     *
+     * `split: true` = **分栏模式**（用户 2026-10-10：「提示词的回收站也要像技能回收站一样分成两部分」）：
+     * 两块上下各占一半、各自滚动、**每块自带一条**「已选 N 项 + 全选 + 永久删除 (N)」，
+     * 大弹窗自己不滚。为什么不沿用顶部那一颗全局删除键：两块的后果不同（提示词页是
+     * 「提示词预设目录」与「快捷提示词目录」），全局「全选 + 永久删除」要跨两块删 ——
+     * 勾完之后根本看不出那一键会删掉哪几个。与技能回收站（43-skills.js 的 `trashPane`）
+     * 同一套结构与类名，只是那份是手写的，这份做成了 `TrashModal` 的一个模式。
      */
+    // 非分栏时那条唯一的批量条用这个哨兵当"确认中"的标记（分栏时用的是那一块的组标题）。
+    // 用对象而不是字符串：组标题是用户可见文案，理论上可能撞上任何字符串字面量。
+    const TRASH_BULK_ALL = { all: true }
     function TrashModal(props) {
       const t = props.t
+      // 分栏模式：上下两块各占一半、各自滚动、**每块自带一条**批量条（见函数头注）。
+      const split = props.split === true
       const c = React.useState(null)
       const confirmId = c[0], setConfirmId = c[1]
-      const row = function (item) {
-        const confirming = confirmId === item.id
+      // 勾选集合。key = `<组标题>|<条目 id>`，**不能只按 id 记**：提示词页一次列两组
+      // （全局预设 + 快捷提示词），两组的 id 来自同一条生成器，只按 id 记会让两组互相勾中。
+      const sel = React.useState({})
+      const selected = sel[0], setSelected = sel[1]
+      // 批量二次确认。存的不是布尔而是"哪一条批量条在确认"：分栏时上下两块**各有一条**，
+      // 共用一颗布尔会让下面那块也跟着翻成确认态 —— 它的按钮并不是刚点的那颗。
+      // 非分栏时用 `TRASH_BULK_ALL` 这个哨兵（整份列表只有一条批量条）。
+      const bc = React.useState(null)
+      const bulkConfirm = bc[0], setBulkConfirm = bc[1]
+      // 组：默认就是调用方传的那一组（`groupTitle` / `entries`）；给了 `groups` 就按数组列多组
+      // —— 提示词页的回收站要一次看完"全局"与"快捷"两类，让用户先猜被删的东西在哪个域里，
+      // 等于把恢复这条路堵在他自己手里。每组各自有空的说明，不合并成一句"什么都没删"。
+      const groups = props.groups || [{ title: props.groupTitle, sub: props.groupSub, entries: props.entries || [] }]
+      const rowKey = function (g, item) { return String(g.title) + '|' + String(item.id) }
+      // 平铺一份：非分栏时「全选」与「永久删除」按**整份列表**算，不能只看某一组。
+      const flat = []
+      groups.forEach(function (g) {
+        (g.entries || []).forEach(function (item) { flat.push({ group: g, item: item, key: rowKey(g, item) }) })
+      })
+      const allKeys = flat.map(function (x) { return x.key })
+      // 场景锁定时批量删除一并禁用：单条「永久删除」已经禁用，批量是同一件事，
+      // 只禁单条等于留了一个绕过锁定一次删光的口子。
+      const batchDisabled = props.busy === true || props.locked === true
+      // 没传 onPurgeMany 的调用方（目前没有，但 props 是可选的）不渲染批量控件，
+      // 而不是渲染出按不动的按钮。
+      const batchEnabled = typeof props.onPurgeMany === 'function' && flat.length > 0
+      const toggle = function (key) {
+        setSelected(function (prev) {
+          var next = Object.assign({}, prev)
+          if (next[key] === true) delete next[key]
+          else next[key] = true
+          return next
+        })
+      }
+      const pickedOf = function (keys) { return keys.filter(function (k) { return selected[k] === true }) }
+      const toggleAll = function (keys, on) {
+        setSelected(function (prev) {
+          var next = Object.assign({}, prev)
+          keys.forEach(function (k) { if (on) next[k] = true; else delete next[k] })
+          return next
+        })
+      }
+      /**
+       * 跑一条批量删除。`keys` 是这条批量条管的范围（非分栏 = 整份列表；分栏 = 那一块）。
+       * 按**范围**过滤而不是直接拿整份勾选：分栏时上面那块点确认，不该把下面那块的勾选也删掉。
+       * 删完也只清这一批的勾 —— 条目删掉之后 key 就失效了，留着会变成一串永远勾不中的残留；
+       * 而另一块的勾选是用户还没处理的选择，不该替他清掉。
+       */
+      const runBulk = function (keys) {
+        var inScope = {}
+        keys.forEach(function (k) { inScope[k] = true })
+        var items = flat.filter(function (x) { return inScope[x.key] === true && selected[x.key] === true }).map(function (x) { return x.item })
+        setBulkConfirm(null)
+        setSelected(function (prev) {
+          var next = Object.assign({}, prev)
+          keys.forEach(function (k) { delete next[k] })
+          return next
+        })
+        if (items.length) props.onPurgeMany(items)
+      }
+      /**
+       * 一条批量条：「已选 N 项 + 全选 + 永久删除 (N)」；二次确认就地替换这一行
+       * （避免"确认了但按钮还在原位"的错觉）。非分栏与分栏共用，只是 `keys` 的范围不同。
+       */
+      const bulkRow = function (keys, confirmKey) {
+        var pickedHere = pickedOf(keys)
+        var allHere = keys.length > 0 && pickedHere.length === keys.length
+        if (bulkConfirm === confirmKey) {
+          return React.createElement('div', { className: 'dsm-trash-bulk dsm-trash-bulk-confirm' },
+            React.createElement('span', { className: 'dsm-note' }, t('trash.purgeSelected.confirm', { count: pickedHere.length })),
+            React.createElement('button', {
+              type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy,
+              onClick: function () { runBulk(keys) },
+            }, t('trash.btn.confirmPurgeMany', { count: pickedHere.length })),
+            React.createElement('button', {
+              type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy,
+              onClick: function () { setBulkConfirm(null) },
+            }, t('btn.cancel')))
+        }
+        return React.createElement('div', { className: 'dsm-trash-bulk' },
+          React.createElement('span', { className: 'dsm-note' }, t('trash.selected', { count: pickedHere.length })),
+          // 「全选 ↔ 全不选」二合一（`bulkPair` 定宽，避免两种文案宽度不同把按钮推来推去）。
+          React.createElement('button', {
+            type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk',
+            disabled: batchDisabled,
+            onClick: function () { toggleAll(keys, !allHere) },
+          }, bulkPair(allHere ? t('trash.deselectAll') : t('trash.selectAll'), allHere ? t('trash.selectAll') : t('trash.deselectAll'))),
+          React.createElement('button', {
+            type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger',
+            disabled: batchDisabled || pickedHere.length === 0,
+            onClick: function () { setBulkConfirm(confirmKey) },
+          }, t('trash.btn.purgeSelected', { count: pickedHere.length })))
+      }
+      const row = function (g, item) {
+        const key = rowKey(g, item)
+        const confirming = confirmId === key
+        const isPicked = selected[key] === true
         const actions = confirming
           ? [
               React.createElement('span', { className: 'dsm-note', key: 'ask' }, t('trash.purge.confirm')),
@@ -496,9 +703,21 @@ function enabledMemoryCount(rules) {
             ]
           : [
               React.createElement('button', { key: 'restore', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy || props.locked === true, onClick: function () { props.onRestore(item) } }, t('btn.restore')),
-              React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy || props.locked === true, onClick: function () { setConfirmId(item.id) } }, t('btn.delete.forever')),
+              React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy || props.locked === true, onClick: function () { setConfirmId(key) } }, t('btn.delete.forever')),
             ]
-        return React.createElement('div', { className: 'dsm-trash-item', key: item.id },
+        return React.createElement('div', { className: 'dsm-trash-item' + (isPicked ? ' dsm-trash-item-picked' : ''), key: item.id },
+          // 勾选框只在能批量删的时候出现：没有 onPurgeMany 的调用方（见上面的 batchEnabled）
+          // 渲染一颗永远禁用的勾选框，只会让人以为"这里本来能勾、只是现在不行"。
+          batchEnabled
+            ? React.createElement('label', { className: 'dsm-trash-pick', title: t('trash.pick.title') },
+                React.createElement('input', {
+                  type: 'checkbox',
+                  checked: isPicked,
+                  disabled: batchDisabled,
+                  'aria-label': t('trash.pick.title') + ' ' + String(item.name || ''),
+                  onChange: function () { toggle(key) },
+                }))
+            : null,
           React.createElement('div', { className: 'dsm-trash-main' },
             React.createElement('div', { className: 'dsm-name' }, item.name),
             React.createElement('div', { className: 'dsm-note' }, t('trash.deletedAt', {
@@ -506,38 +725,79 @@ function enabledMemoryCount(rules) {
             }))),
           actions)
       }
-      // 组：默认就是调用方传的那一组（`groupTitle` / `entries`）；给了 `groups` 就按数组列多组
-      // —— 提示词页的回收站要一次看完"全局"与"快捷"两类，让用户先猜被删的东西在哪个域里，
-      // 等于把恢复这条路堵在他自己手里。每组各自有空的说明，不合并成一句"什么都没删"。
-      const groups = props.groups || [{ title: props.groupTitle, sub: props.groupSub, entries: props.entries || [] }]
+      /**
+       * 组头（标题 + 计数 + 后果说明）。分栏与非分栏共用同一套排版。
+       *
+       * 组头**不放按钮**：非分栏时勾选与删除都是跨组的（提示词页一次列两组），组头各放一颗
+       * 「全选」就得各配一颗删除键 —— 那正是被砍掉的多颗形态；分栏时两颗动作下到每块自己的
+       * 批量条里（`.dsm-trash-pane-batch`），组头仍然只是标题。
+       */
+      const groupHead = function (g) {
+        const list = g.entries || []
+        return React.createElement('div', { className: 'dsm-trash-group-head' },
+          React.createElement('div', { className: 'dsm-trash-group-head-row' },
+            React.createElement('span', { className: 'dsm-trash-group-title' }, g.title),
+            React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: list.length }))),
+          // 后果说明进组头（sticky 跟着滚）：这组删的是记录还是文件，一眼可辨。
+          g.sub ? React.createElement('p', { className: 'dsm-trash-group-sub' }, g.sub) : null)
+      }
+      /**
+       * 分栏模式的一块（组头 + 批量条 + 列表区），与技能回收站（43-skills.js 的 `trashPane`）
+       * 同一套结构与类名。批量条挂在**每块里**：两块的后果不同（预设目录 / 快捷提示词目录），
+       * 一颗共用的「全选 + 永久删除」会让人勾完之后不知道那一键要删哪个。
+       */
+      const renderPane = function (g) {
+        const list = g.entries || []
+        const keys = (g.entries || []).map(function (item) { return rowKey(g, item) })
+        const rows = props.loading
+          ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+          : list.length === 0
+            ? React.createElement('div', { className: 'dsm-empty' }, t('trash.empty'))
+            : list.map(function (item) { return row(g, item) })
+        return React.createElement('div', { className: 'dsm-trash-group', key: String(g.title) },
+          groupHead(g),
+          // 批量条只在**这一块真有可删的东西**时出现：空块上挂一条「已选 0 项 + 全选 + 永久删除 (0)」
+          // 是纯噪音，两块各占一半高度，那条还白吃掉一行的列表空间（技能页同一条判据）。
+          batchEnabled && keys.length
+            ? React.createElement('div', { className: 'dsm-trash-pane-batch' }, bulkRow(keys, String(g.title)))
+            : null,
+          React.createElement('div', { className: 'dsm-trash-pane-body' }, rows))
+      }
       const renderGroup = function (g) {
         const list = g.entries || []
         const rows = props.loading
           ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
           : list.length === 0
             ? React.createElement('div', { className: 'dsm-empty' }, t('trash.empty'))
-            : list.map(row)
+            : list.map(function (item) { return row(g, item) })
         return React.createElement('div', { className: 'dsm-trash-group', key: String(g.title) },
-          React.createElement('div', { className: 'dsm-trash-group-head' },
-            React.createElement('div', { className: 'dsm-trash-group-head-row' },
-              React.createElement('span', { className: 'dsm-trash-group-title' }, g.title),
-              React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: list.length }))),
-            // 后果说明进组头（sticky 跟着滚）：这组删的是记录还是文件，一眼可辨。
-            g.sub ? React.createElement('p', { className: 'dsm-trash-group-sub' }, g.sub) : null),
+          groupHead(g),
           React.createElement('div', { className: 'dsm-trash-group-body' }, rows))
       }
-      // 列表类弹窗：宽高都固定（`.dsm-modal-list`），滚动只发生在 Modal 的 body 这一层 ——
-      // 条目数变化时弹窗不跳，也不会出现「弹窗滚 + 组内滚」的嵌套滚动条。
+      // 批量那一行：「已选 N 项」占左侧，**「全选」与唯一的「永久删除」并排靠最右**
+      // （用户 2026-10-10 裁定：删除键一个就够，与全选同一行、放最右边）。
+      // 分栏时这一行只剩保留期 —— 批量条已经下到两块里，与技能回收站同形。
+      const toolbar = split
+        ? React.createElement(RetentionSelect, { key: 'retention', t: t, onReload: props.onReload })
+        : React.createElement('div', { className: 'dsm-trash-toolbar', key: 'toolbar' },
+            React.createElement(RetentionSelect, { t: t, onReload: props.onReload }),
+            batchEnabled ? bulkRow(allKeys, TRASH_BULK_ALL) : null)
+      // 列表类弹窗：宽高都固定（`.dsm-modal-list` + `.dsm-modal-trash`），滚动只发生在
+      // Modal 的 body 这一层 —— 条目数变化时弹窗不跳，也不会出现「弹窗滚 + 组内滚」的嵌套滚动条。
+      // 分栏时反过来：body 不滚，滚动下到每块的列表区里（`.dsm-modal-trash-split`）。
       return React.createElement(Modal, {
         key: 'trash-modal',
         title: props.title,
         closeLabel: t('btn.close'),
         list: true,
-        className: 'dsm-modal-list',
+        className: 'dsm-modal-list dsm-modal-trash' + (split ? ' dsm-modal-trash-split' : ''),
         onClose: props.onClose,
       },
         props.error ? React.createElement(Notice, { kind: 'err', text: props.error }) : null,
-        groups.map(renderGroup))
+        toolbar,
+        split
+          ? React.createElement('div', { className: 'dsm-trash-split' }, groups.map(renderPane))
+          : groups.map(renderGroup))
     }
 
     /** 勾选行：复选框 + 名称/说明 + 右侧指标 + 可选行内动作。 */

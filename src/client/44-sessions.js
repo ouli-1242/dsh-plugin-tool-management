@@ -266,7 +266,15 @@
             { value: 0, label: t('hist.retention.forever') },
             { value: 7, label: t('hist.retention.days', { count: 7 }) },
             { value: 30, label: t('hist.retention.days', { count: 30 }) },
+            { value: 90, label: t('hist.retention.days', { count: 90 }) },
           ]
+          // 侧车里的值不在预设里时把它补成一项。`SourceSelect` 取不到就 `|| options[0]` 回退，
+          // 于是「实际设的是 15 天」会显示成「永久保留」—— 是**静默误报**（用户以为不会自动删，
+          // 其实会）。与回收站那套 RetentionSelect 同形；90 天之外用户仍可能从旧版本或手改带来别的值。
+          var retentionDays = Number(data.retentionDays) || 0
+          var retentionOpts = RETENTION_OPTS.some(function (o) { return o.value === retentionDays })
+            ? RETENTION_OPTS
+            : [{ value: retentionDays, label: t('hist.retention.days', { count: retentionDays }) }].concat(RETENTION_OPTS)
           var EXPORT_FORMAT_OPTS = [
             { value: 'markdown', label: 'Markdown' },
             { value: 'jsonl', label: 'JSONL' },
@@ -399,7 +407,7 @@
               React.createElement('input', { className: 'dsm-control dsm-search', type: 'text', placeholder: t('hist.search.placeholder'), value: query, onChange: function (e) { setQuery(e.target.value) } }),
               React.createElement('div', { className: 'dsm-source-filter' },
                 React.createElement(SourceSelect, {
-                  options: RETENTION_OPTS, value: data.retentionDays, onChange: function (v) { setRetention(Number(v)) },
+                  options: retentionOpts, value: data.retentionDays, onChange: function (v) { setRetention(Number(v)) },
                 }))),
             // 走 Notice 而不是裸 div：令牌没过的提醒会在右侧自动多出一颗「填写令牌」按钮。
             data.error ? React.createElement(Notice, { kind: 'err', text: String(data.error) }) : null,

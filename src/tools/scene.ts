@@ -286,7 +286,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       scene: { type: 'string', required: true, description: 'Scene name (one path segment, no slashes). Created if absent.' },
       label: { type: 'string', description: 'Display name shown in the UI. Omit = keep.' },
       description: { type: 'string', description: 'What this scene is for; shown beside the scene name in the「本机当前的场景」reminder while the scene is on — write an instruction, not a note. Omit = keep.' },
-      prompt: { type: 'string', description: 'Prompt preset id to bind; while this scene is on it is the global baseline. Omit = keep.' },
+      // 与下面 `mcp` / `skills` / `subagents` 同一句式（"Omit = keep; X = 一个都不"）：
+      // 界面 2026-10-10 补了「无」这个选项，工具侧的空串语义要跟着说清，否则模型只知道
+      // 「省略 = 保持」，不知道还有一条「解绑」的路。
+      prompt: { type: 'string', description: 'Prompt preset id to bind; while this scene is on it is the global baseline. Omit = keep; \'\' = bind none (this scene leaves AGENTS.md alone).' },
       mcp: {
         type: 'object',
         // 官方要求对象类型**显式声明开放性**（`additionalProperties` 是必需字段，且只能是

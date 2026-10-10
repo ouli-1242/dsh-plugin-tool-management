@@ -58,6 +58,7 @@ import { buildSceneSyncOps } from '../lib/ops/scene-sync.js'
 import { detectFormat, parseMarkdownTranscript } from '../lib/imports/parsers.js'
 import { extractExportTurns, serializeTranscript } from '../lib/exports/transcript.js'
 import { buildPromptOps } from '../lib/ops/prompts.js'
+import { createPromptsService } from '../lib/prompts/service.js'
 import { createScenePromptSync } from '../lib/scene-prompt-sync.js'
 
 test('域与工具名前缀双向对得上（对不上就有域永远统计不到调用）', () => {
@@ -1892,6 +1893,163 @@ test('提示词引用探测失败 → 拒绝删除，且文案指向「探测失
   const clean = build(new Map())
   assert.equal((await clean.ops['agentsmd-remove']({ id: 'p1' })).ok, true)
   assert.deepEqual(clean.removed, ['p1'])
+})
+
+test('删除保护：场景绑定与「当前应用的」拦得住，播种出来的副本必须放行', async () => {
+  // 用户 2026-10-10：「当前应用的提示词如果直接删除，~/.dsh/AGENTS.md 还存在，当前应用的
+  // 提示词应该不能删除」。删掉之后文件内容一字不变、**照旧生效**，但界面上再没有预设对应它 ——
+  // 用户看到的是「我删了，怎么全局提示词还在？」。所以拦住，并引导先「取消应用」。
+  //
+  // 同时钉住**另一头**：播种出来的副本（内容与 AGENTS.md 相同、却从未被「应用」过）必须放行。
+  // 拦它就是死路 —— 那份没有「应用前的状态」可撤销，取消应用也关不掉，出路文案会变成空头支票。
+  const build = (refsValue) => {
+    const removed = []
+    const deps = {
+      promptsService: {
+        remove: async (id) => { removed.push(id); return { ok: true, id } },
+        getCurrent: async () => ({ ok: true, content: '', presetId: null, exists: false }),
+        apply: async (id) => ({ ok: true, id, backedUp: true }),
+        restore: async () => ({ ok: true, backedUp: true }),
+        importPreset: async () => ({ ok: true }), trashList: async () => ({ ok: true, entries: [] }),
+        trashRestore: async () => ({ ok: true }), trashDelete: async () => ({ ok: true }),
+      },
+      scenePromptSync: { refs: async () => refsValue, withSync: async (r) => r, state: async () => null, driver: async () => null, sync: async () => ({}) },
+      rulesOps: { 'rules-list': async () => ({ ok: true }), 'rules-rebind-prompt': async () => ({ ok: true }) },
+      applyPresetGuarded: async () => ({ ok: true }),
+      withAgentsMdSync: async (r) => r,
+      promptRefReason: (ref) => (ref.kind === 'scene' ? `场景「${ref.label || ''}」绑定了它` : (ref.applied === true ? '它正被「应用」在 ~/.dsh/AGENTS.md 里' : '~/.dsh/AGENTS.md 当前内容就是它')),
+      warn: () => {},
+    }
+    return { removed, ops: buildPromptOps(deps) }
+  }
+
+  // ① 当前应用的（file + applied）→ 拦，且文案必须给出真的能用的出路
+  const applied = build(new Map([['p1', [{ kind: 'file', applied: true }]]]))
+  const refused = await applied.ops['agentsmd-remove']({ id: 'p1' })
+  assert.equal(refused.ok, false, '当前应用的那份不能直接删')
+  assert.equal(refused.code, 'error.agentsMd.referenced')
+  assert.match(refused.error, /取消应用/, '出路要写出来 —— 它真的能解除（见 ② 的反向）')
+  assert.deepEqual(applied.removed, [], '拒绝时绝不能真的删')
+
+  // ② 播种出来的副本（file 但没有 applied）→ 必须放行
+  const seeded = build(new Map([['p1', [{ kind: 'file', applied: false }]]]))
+  assert.equal((await seeded.ops['agentsmd-remove']({ id: 'p1' })).ok, true, '播种副本必须删得掉（拦它无出路）')
+  assert.deepEqual(seeded.removed, ['p1'])
+
+  // ③ 反向：`restore` 照旧不拦（退出场景的恢复走快照里的正文，不读预设目录）
+  const restoreOnly = build(new Map([['p1', [{ kind: 'restore' }]]]))
+  assert.equal((await restoreOnly.ops['agentsmd-remove']({ id: 'p1' })).ok, true)
+
+  // ④ 两类同时命中时，两条出路都要给出来
+  const both = build(new Map([['p1', [{ kind: 'scene', scene: 's', label: 's', active: true }, { kind: 'file', applied: true }]]]))
+  const two = await both.ops['agentsmd-remove']({ id: 'p1' })
+  assert.equal(two.ok, false)
+  assert.match(two.error, /退出场景/, '场景那条出路')
+  assert.match(two.error, /取消应用/, '当前应用那条出路')
+})
+
+test('「应用前没有 AGENTS.md」必须被记下来，否则取消应用是条死路', async () => {
+  // 破了会**静默出错**：`backupGlobal()` 一旦在文件不存在时什么都不写，"应用前没有这个文件"
+  // 就不可恢复 —— 取消应用恒判 noBackup、永远关不掉；而界面给出的出路「删除这份预设」并不
+  // 成立（`remove()` 只把预设目录移进回收站，一个字节都不碰 AGENTS.md）。用户按提示操作完，
+  // 文件连内容都没变（2026-10-10 实测反馈：「取消应用，AGENTS.md 还是存在」）。
+  //
+  // 这里只钉两条语义边界，不钉文案、不钉备份文件名：
+  //   ① 应用前不存在 → 取消应用**删掉文件**（= 真逆操作）；界面能提前知道（unapplyRemoves）。
+  //   ② 应用前是**空文件**（0 字节）→ 只写回内容，**文件不删** ——「空文件」与「没有文件」是两件事。
+  //   ③ 从没「应用」过 → 仍然拒绝，且理由是可分辨的 noBackup（不是一句写盘失败）。
+  const root = mkdtempSync(join(tmpdir(), 'dsh-unapply-'))
+  try {
+    const globalPath = join(root, 'AGENTS.md')
+    const svc = createPromptsService({}, { presetsDir: join(root, 'tool-management', 'prompts'), getGlobalAgentsMdPath: async () => globalPath })
+    const read = () => { try { return readFileSync(globalPath, 'utf8') } catch { return null } }
+
+    // ① 应用前文件不存在
+    assert.equal(read(), null, '起点没有 AGENTS.md')
+    await svc.create('甲', { content: '# 甲\n' })
+    await svc.apply('甲')
+    assert.equal(read(), '# 甲\n', '应用后写入预设正文')
+    assert.equal((await svc.getCurrent()).unapplyRemoves, true, '界面必须能提前知道这一步会删文件')
+    const removed = await svc.unapply()
+    assert.equal(removed.ok, true, '取消应用必须走得通（此前恒判 noBackup）')
+    assert.equal(removed.removed, true, '结果要如实说是删文件那一支')
+    assert.equal(read(), null, '文件被删掉 —— 这才是"应用前的状态"')
+
+    // ② 应用前是空文件：走写回内容那一支，文件不能消失
+    writeFileSync(globalPath, '', 'utf8')
+    await svc.apply('甲')
+    assert.equal((await svc.getCurrent()).unapplyRemoves, false, '文件存在（哪怕 0 字节）→ 不是删文件那一支')
+    const restored = await svc.unapply()
+    assert.equal(restored.removed, undefined, '不删文件')
+    assert.equal(read(), '', '内容写回空的，文件仍在')
+
+    // ③ 从没应用过：拒绝，且文件一个字节都不动
+    writeFileSync(globalPath, '# 手写\n', 'utf8')
+    const never = createPromptsService({}, { presetsDir: join(root, 'never-applied'), getGlobalAgentsMdPath: async () => globalPath })
+    const refused = await never.unapply()
+    assert.equal(refused.ok, false)
+    assert.equal(refused.noBackup, true, '没有应用记录时给 noBackup，界面才能说清出路')
+    assert.equal(read(), '# 手写\n', '拒绝时文件不动')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('「取消应用」回到的是链起点而不是上一步：应用 a 再应用 b 之后仍能回到「没有文件」', async () => {
+  // 破了会**静默出错**：`backupGlobal()` 若每写一笔都刷新起点槽位，第 ③ 步「应用 b」就会把
+  // 第 ② 步记下的"起点不存在"刷成 a 的内容 —— 于是 ④「取消应用」把 a 的内容写进文件、a 的
+  // 开关自己亮起来，两颗开关互相点亮、AGENTS.md 永远在，**回不到"没有文件"**。
+  // 用户 2026-10-10 实测：「原本没有 AGENTS.md，新建 a 提示词和 b 提示词，启动 a，然后启动 b；
+  // 不启动 a 也不启动 b，~/.dsh/AGENTS.md 没有消失」。
+  //
+  // 钉的是语义（一步回到起点 / 链结束后开关灭），不是文案与备份文件名：
+  //   ① 起点没有文件 → a → b → 取消 = **删掉文件**（不是写回 a 的内容）；
+  //   ② 链结束后没有起点可回（`unapplyAvailable === false`），再点一次被拒；
+  //   ③ 起点有手写内容 → a → b → 取消 = 回到那份手写内容（不是"上一步" a 的内容）；
+  //   ④ 链结束后的下一次应用 = 开一条**新链**，起点是当时的文件状态。
+  const root = mkdtempSync(join(tmpdir(), 'dsh-chain-'))
+  try {
+    const globalPath = join(root, 'AGENTS.md')
+    const svc = createPromptsService({}, { presetsDir: join(root, 'tool-management', 'prompts'), getGlobalAgentsMdPath: async () => globalPath })
+    const read = () => { try { return readFileSync(globalPath, 'utf8') } catch { return null } }
+
+    await svc.create('a', { content: '# a\n' })
+    await svc.create('b', { content: '# b\n' })
+
+    // ① 起点没有文件
+    assert.equal(read(), null, '起点没有 AGENTS.md')
+    await svc.apply('a')
+    await svc.apply('b')
+    assert.equal(read(), '# b\n', '应用 b 之后文件里是 b')
+    assert.equal((await svc.getCurrent()).unapplyRemoves, true, '「起点不存在」必须一路留到链尾，不能被中间那笔覆盖')
+    const back = await svc.unapply()
+    assert.equal(back.ok, true)
+    assert.equal(back.removed, true, '取消应用要删掉文件（起点不存在），而不是写回 a 的内容')
+    assert.equal(read(), null, '一步回到「没有文件」—— 用户报的就是这条')
+
+    // ② 链已结束
+    const after = await svc.getCurrent()
+    assert.equal(after.unapplyAvailable, false, '链结束后没有起点可回 → 开关该灭')
+    assert.equal(after.lastApplied, null, '链结束后不再指向任何预设')
+    const again = await svc.unapply()
+    assert.equal(again.ok, false)
+    assert.equal(again.noBackup, true, '再点一次要被拒，不能凭空回退')
+
+    // ③ 起点有手写内容
+    writeFileSync(globalPath, '# 手写\n', 'utf8')
+    await svc.apply('a')
+    await svc.apply('b')
+    const back2 = await svc.unapply()
+    assert.equal(back2.removed, undefined, '起点有内容 → 不删文件')
+    assert.equal(read(), '# 手写\n', '回到链起点，而不是"上一步" a 的内容')
+
+    // ④ 链结束后再应用 = 新链
+    await svc.apply('a')
+    await svc.unapply()
+    assert.equal(read(), '# 手写\n', '新链的起点是上一次取消之后的文件状态')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('场景基线写失败必须上报，且与「AGENTS.md 未写入」分开（F14）', async () => {

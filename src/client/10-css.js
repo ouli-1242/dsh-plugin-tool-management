@@ -457,7 +457,25 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-pick-group .dsm-pick{margin-left:16px}
 .dsm-pick-group .dsm-pick+.dsm-pick{margin-top:2px}
 
-/* 技能回收站：上下两块各占一半（目录 / 技能），滚动条在每块列表区里面，大弹窗自己不滚。
+/* 回收站比其它列表弹窗高一档（用户 2026-10-10：「回收站高度加长」）：640 → 760。
+   .dsm-modal-list 那个 640 是给「导出会话」那类"看一眼就走"的列表定的；回收站是"翻找 + 勾选 +
+   批量删"，本机实测提示词回收站 35 条、技能 7 条 —— 640 时一屏只看得见 8 条。
+   760 不是新拍的数：它既是 .dsm-modal 自己的 max-height，也是 .dsm-modal-fixed（新增提示词）
+   那个数，本插件"最高的普通弹窗"一直就是它。上一版试过 880，用户 2026-10-10 反馈
+   「回收站高度不要超过下面一层的高度」—— 回收站是叠在宿主的设置弹窗上弹出来的，宿主那颗比
+   880 矮，880 会从它上面探出去；760 稳稳落在它里面。
+   视口那一项取 100vh - 112px 而不是 -48px：宿主设置弹窗自己就留了上下各约 48px 的边，
+   窗口矮的时候跟着它一起缩，才不会又探出去。
+   分栏那两块是「1fr 1fr」吃掉剩余高度，所以弹窗一长高，「目录」和「技能」两块跟着一起长
+   （用户同一条要求：「技能的回收站内部的目录和技能也能加高」）。
+   写成两段类名（.dsm-modal.dsm-modal-trash）是为了**不靠书写顺序**压过 .dsm-modal-list 的
+   !important（与 .dsm-modal-export-lg 同一手法）。加在回收站那几颗弹窗上 —— 共享 TrashModal
+   （提示词 / 场景 / 子智能体 / MCP）与技能页自己那颗：.dsm-modal-list 还被四个页面的导出弹窗
+   共用，动它就是它们一起变大。 */
+.dsm-modal.dsm-modal-trash{height:min(760px,calc(100vh - 112px))!important;max-height:none!important}
+
+/* 回收站分栏：上下两块各占一半（技能页是 目录 / 技能，提示词页是 提示词预设 / 快捷提示词），
+   滚动条在每块列表区里面，大弹窗自己不滚。
    必须放在最后：盖过上面的 .dsm-modal-list .dsm-modal-body>*{flex:none}，
    否则外层不撑满、两块就各按内容长，50/50 失效。宽度沿用 .dsm-modal-list 的 560px。 */
 .dsm-modal-trash-split .dsm-modal-body{overflow:hidden}
@@ -568,5 +586,46 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-snap-browse .dsm-dir-list{max-height:170px}
 .dsm-snap-browse-foot{display:flex;align-items:center;gap:8px}
 .dsm-snap-browse-foot .dsm-help{min-width:0;flex:1;overflow-wrap:anywhere}
+
+/* 回收站保留期 + 批量删除（0.19.1）。
+   工具栏排在条目上方（Modal 的 body 在滚动，工具条跟着滚走的话，条目一多就够不着
+   那一颗「永久删除 (N)」—— 而那正是条目多的时候才需要的按钮）。
+   保留期与批量条**同一行**（用户 2026-10-10：「这应该是同一行，现在两行浪费空间」）：
+   工具栏是行向 flex，保留期那一组不参与收缩，批量条那一组吃掉剩余宽度并把两颗按钮顶到最右。
+   真放不下时**整组折到下一行** —— 比把「已选 N 项」或说明挤成省略号好：那等于把信息删掉。 */
+.dsm-trash-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-trash-toolbar .dsm-trash-retention{flex:0 0 auto}
+.dsm-trash-toolbar .dsm-trash-bulk{flex:1 1 auto;min-width:0;flex-wrap:nowrap}
+/* 「已选 N 项」既要撑开（把两颗按钮顶到最右）又不能被压缩：flex:1 0 auto 正是这个意思。 */
+.dsm-trash-toolbar .dsm-trash-bulk .dsm-note{flex:1 0 auto}
+.dsm-trash-toolbar .dsm-trash-bulk>button{flex:0 0 auto}
+/* 二次确认恒占整行：它是一句问句 + 两颗键，挤在保留期旁边既难看也读不清。 */
+.dsm-trash-toolbar .dsm-trash-bulk-confirm{flex:1 1 100%;flex-wrap:wrap}
+.dsm-trash-retention{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.dsm-trash-retention .dsm-label{flex:none;font-weight:580}
+/* .dsm-control 是 width:100% 的表单控件；塞进这一行要退回内容宽度，否则它会把整行撑满、
+   把右边的说明挤到下一行。（这段样式整体在模板字符串里，注释里不能出现反引号。） */
+.dsm-trash-retention .dsm-control{width:auto;min-width:112px;flex:none}
+/* 保留期这一行**恒为一行**（用户 2026-10-10：「保留期一行就够了」）。
+   所以说明必须短（trash.retention.hint = 「超期自动删除」），全文走 title 悬停；
+   nowrap + 省略号只是兜底：万一窄到放不下，宁可截掉尾部也不折行把下拉框顶上去。 */
+.dsm-trash-hint{min-width:0;flex:0 1 auto;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 出错时反过来：允许换行、不截断 —— 失败原因截成半句等于没说。 */
+.dsm-trash-retention-err{flex:1 1 auto;white-space:normal;overflow-wrap:anywhere;color:var(--dsw-alias-state-error-primary)}
+.dsm-trash-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* 「已选 N 项」占满左侧剩余空间 → 把「全选」与唯一的「永久删除」一起顶到最右。 */
+.dsm-trash-bulk .dsm-note{min-width:0;flex:1}
+.dsm-trash-bulk-confirm{padding:6px 8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover)}
+.dsm-trash-bulk-confirm .dsm-note{font-weight:570;color:var(--dsw-alias-state-error-primary);white-space:normal}
+/* 技能回收站：两个 pane **各有一套**「全选 + 永久删除」（用户 2026-10-10：「全选要拆成两部分」）。
+   上面删的是一条记账、下面删的是真文件，合成一颗键就成了「勾了两条、不知道该删哪个」。
+   批量条挂在 pane 里、在列表区之上，不跟着列表滚（列表滚走了也要够得着）。 */
+.dsm-trash-pane-batch{flex:none;padding:7px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsm-trash-notice{flex:none}
+.dsm-trash-pick{display:inline-flex;flex:none;align-items:center;padding:4px 1px;cursor:pointer}
+.dsm-trash-pick input{width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-error-primary)}
+.dsm-trash-pick input:disabled{cursor:default}
+/* 勾选过的那条给一层底色：勾了十几条之后要一眼看出勾的是哪几条。 */
+.dsm-trash-item-picked{background:var(--dsw-alias-interactive-bg-hover);border-radius:8px}
 
 `
