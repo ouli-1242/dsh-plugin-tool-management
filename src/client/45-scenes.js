@@ -1201,11 +1201,12 @@
                       React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditScene(scene) } }, t('memory.scene.edit')),
                       locked ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : '', onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')))))
               })),
-            modal && (modal.type === 'scene-create' || modal.type === 'scene-edit') ? React.createElement(Modal, { key: 'screate', title: modal.type === 'scene-create' ? t('memory.scene.createTitle') : t('memory.scene.editTitle'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            modal && (modal.type === 'scene-create' || modal.type === 'scene-edit') ? React.createElement(Modal, { key: 'screate', wide: true, title: modal.type === 'scene-create' ? t('memory.scene.createTitle') : t('memory.scene.editTitle'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('div', { className: 'dsm-form' },
                 // 弹窗里的字段分两模块：改名 / 描述是"这个场景是什么"，下面三条是"进入时改什么"。
                 // 一屏六行同一种字重、同一种间距时，用户读不出哪几条是一回事（用户 2026-10-01 反馈）。
                 formSection(t('scenes.form.section.basic')),
+                React.createElement('div', { className: 'dsm-field-row' },
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.name')),
                   React.createElement('input', {
@@ -1229,7 +1230,7 @@
                     maxLength: SCENE_DESC_MAX,
                     placeholder: t('memory.scene.field.desc.placeholder'),
                     onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { description: e.target.value, error: null })) },
-                  })),
+                  }))),
                 // 提示词预设：一个场景**只能绑一个**（单值字段天然单选）；「不绑定」= 解绑。
                 formSection(t('scenes.form.section.binding')),
                 // 下面三格都是「下拉 + 说明」这一类复合字段，外层用 `div` 而不是 `label`：
