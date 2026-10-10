@@ -1,24 +1,18 @@
-<p align="center">  
-  <img src="docs/images/logo.png" width="120" height="120" alt="dsh-plugin-tool-management">  
+<p align="center">
+  <img src="docs/images/logo.png" width="120" height="120" alt="dsh-plugin-tool-management">
 </p>
 
 # dsh-plugin-tool-management
 
-![npm version](https://img.shields.io/npm/v/dsh-plugin-tool-management?logo=npm\&color=cb3837)
+[![npm version](https://img.shields.io/npm/v/dsh-plugin-tool-management?logo=npm&color=cb3837)](https://www.npmjs.com/package/dsh-plugin-tool-management)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js)](package.json)
+[![GitHub](https://img.shields.io/badge/GitHub-ouli--1242%2Fdsh--plugin--tool--management-181717?logo=github)](https://github.com/ouli-1242/dsh-plugin-tool-management)
 
-![License](https://img.shields.io/badge/license-MIT-blue)
-
-![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js)
-
-![GitHub](https://img.shields.io/badge/GitHub-ouli--1242%2Fdsh--plugin--tool--management-181717?logo=github)
-
-![DSH Market](https://raw.githubusercontent.com/2BingLing/dsh-market/master/assets/readme/badge-listed-zh.svg)
-
-![awesome-dsh-plugin](https://img.shields.io/badge/awesome--dsh--plugin-%E5%B7%B2%E6%94%B6%E5%BD%95-3fb950)
-
-![dshfind](https://dshfind.com/api/badge/ouli-1242/dsh-plugin-tool-management?lang=zh)
-
-![0xsline](https://img.shields.io/badge/0xsline-%E5%B7%B2%E6%94%B6%E5%BD%95-3fb950)
+[![DSH Market](https://raw.githubusercontent.com/2BingLing/dsh-market/master/assets/readme/badge-listed-zh.svg)](https://dsh.market/)
+[![awesome-dsh-plugin](https://img.shields.io/badge/awesome--dsh--plugin-%E5%B7%B2%E6%94%B6%E5%BD%95-3fb950)](https://awesome-dsh-plugin.com)
+[![dshfind](https://dshfind.com/api/badge/ouli-1242/dsh-plugin-tool-management?lang=zh)](https://dshfind.com/zh/plugins/ouli-1242/dsh-plugin-tool-management)
+[![0xsline](https://img.shields.io/badge/0xsline-%E5%B7%B2%E6%94%B6%E5%BD%95-3fb950)](https://github.com/0xsline/awesome-deepseek-harness)
 
 **简体中文** · [English](README_EN.md) · [Changelog](CHANGELOG.md) · [版本更新概要](docs/update.md)
 
@@ -45,36 +39,36 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 
 ## 截图
 
-|         |          |
-| :-----: | :------: |
-|    场景   |    MCP   |
-|  **场景** |  **MCP** |
-|    技能   |   子智能体   |
-|  **技能** | **子智能体** |
-|   提示词   |    记忆    |
-| **提示词** |  **记忆**  |
-|    会话   |    兼容    |
-|  **会话** |  **兼容**  |
+|                              |                                |
+|:----------------------------:|:------------------------------:|
+| ![场景](docs/images/1.png)   | ![MCP](docs/images/2.png)      |
+| **场景**                     | **MCP**                        |
+| ![技能](docs/images/3.png)   | ![子智能体](docs/images/4.png) |
+| **技能**                     | **子智能体**                   |
+| ![提示词](docs/images/5.png) | ![记忆](docs/images/6.png)     |
+| **提示词**                   | **记忆**                       |
+| ![会话](docs/images/7.png)   | ![兼容](docs/images/8.png)     |
+| **会话**                     | **兼容**                       |
 
 ## 核心亮点
 
 一句话：**把「工作 / 写作 / 编程」各配成一套场景，点一下整套切换；插件管的东西，模型都看得见。**
 
-| 亮点              | 说明                                                                      |
-| --------------- | ----------------------------------------------------------------------- |
-| 一键换场景           | 每个场景各配一套 MCP / 技能 / 人设 / 记忆，进入时整套切换、退出时还原；模型也能按你说的切                     |
-| 不离开对话就能管        | 对话里打 `/` 出「工具」段，启停各域条目，点一下就生效                                           |
-| 记忆自动送到模型眼前      | 每个场景下写几段 `.md` 就是它的资料库，正文自动进上下文                                         |
-| 给 MCP 服务器写备注    | 写进备注的话模型每轮都看得到，会照做                                                      |
-| 单个工具也能关         | 一台服务器里可以只停某个工具，模型看不见也调不到                                                |
-| 技能状况一眼看穿        | 哪份在生效标「首选」，被同名覆盖的标出来源                                                   |
-| 子智能体 = 一个文件一个角色 | 写一份角色说明就能派活；跑完只回结果、不占你的会话记录                                             |
-| 提示词备好几套         | `AGENTS.md` 可以存多份、一键切换；场景可以各自绑一份，也可以选「无」（不绑）                            |
-| 会话不再丢           | 归档按项目分组、能搜、能批量恢复；Claude Code / Cursor / Codex 的记录能导进来                   |
-| 模型一定看得见         | 六个域各注入一条上下文，内容没变不重发                                                     |
-| 锁住就不怕手滑         | 场景可以上锁：五个域的增删改整体只读                                                      |
-| 删了能找回           | 技能 / 记忆 / 人设 / 提示词 / 场景的删除都进回收站（会话永久删除除外）；可勾选批量永久删除，也可设保留期让它自动清（默认永久保留） |
-| 安全、不添乱          | 只写自己的文件；密钥默认打码、看明文要令牌                                                   |
+| 亮点                        | 说明                                                                                                                               |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 一键换场景                  | 每个场景各配一套 MCP / 技能 / 人设 / 记忆，进入时整套切换、退出时还原；模型也能按你说的切                                          |
+| 不离开对话就能管            | 对话里打 `/` 出「工具」段，启停各域条目，点一下就生效                                                                              |
+| 记忆自动送到模型眼前        | 每个场景下写几段 `.md` 就是它的资料库，正文自动进上下文                                                                            |
+| 给 MCP 服务器写备注         | 写进备注的话模型每轮都看得到，会照做                                                                                               |
+| 单个工具也能关              | 一台服务器里可以只停某个工具，模型看不见也调不到                                                                                   |
+| 技能状况一眼看穿            | 哪份在生效标「首选」，被同名覆盖的标出来源                                                                                         |
+| 子智能体 = 一个文件一个角色 | 写一份角色说明就能派活；跑完只回结果、不占你的会话记录                                                                             |
+| 提示词备好几套              | `AGENTS.md` 可以存多份、一键切换；场景可以各自绑一份，也可以选「无」（不绑）                                                       |
+| 会话不再丢                  | 归档按项目分组、能搜、能批量恢复；Claude Code / Cursor / Codex 的记录能导进来                                                      |
+| 模型一定看得见              | 六个域各注入一条上下文，内容没变不重发                                                                                             |
+| 锁住就不怕手滑              | 场景可以上锁：五个域的增删改整体只读                                                                                               |
+| 删了能找回                  | 技能 / 记忆 / 人设 / 提示词 / 场景的删除都进回收站（会话永久删除除外）；可勾选批量永久删除，也可设保留期让它自动清（默认永久保留） |
+| 安全、不添乱                | 只写自己的文件；密钥默认打码、看明文要令牌                                                                                         |
 
 ## 快速开始
 
@@ -183,33 +177,32 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ## 数据落点
 
-| 内容                           | 位置                                                                      |
-| ---------------------------- | ----------------------------------------------------------------------- |
-| MCP 定义                       | `~/.dsh/cordis.patch.yml`（插件只写它；改前自动备份到 hub 的 `backups/`）               |
-| 技能策略 / 自定义目录                 | `~/.dsh/tool-management/skills-state.json`                              |
-| 技能 / 记忆 / 人设 / 预设            | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/`           |
-| 子智能体启停                       | `~/.dsh/tool-management/subagents-index.json`                           |
-| 回收站（技能 / 人设 / 预设 / 场景）       | `~/.dsh/tool-management/trash/{skills,subagents,prompts,scenes}-trash/` |
-| 记忆回收站                        | `~/.dsh/tool-management/memories-trash/`（在 hub 根下，不在 `trash/` 里）        |
-| 归档账本 / 保留期                   | `~/.dsh/tool-management/history-*.json`                                 |
-| 回收站保留期                       | `~/.dsh/tool-management/trash-retention.json`（`0` = 永久保留）               |
-| 记忆索引 / 场景 / 档案               | `~/.dsh/tool-management/memories-index.json`                            |
-| MCP 侧车（停用表 / 已知工具 / 备注 / 设置） | `~/.dsh/tool-management/mcp-*.json`                                     |
-| 注入设置（六个域开关）                  | `~/.dsh/tool-management/inject-settings.json`                           |
-| 模型工具表（关掉的工具 + 存下的方案）         | `~/.dsh/tool-management/tool-table.json`                                |
-| 场景页界面设置（进场景前弹不弹预览卡）          | `~/.dsh/tool-management/scene-settings.json`                            |
-| 运行日志 / patch 备份              | `~/.dsh/tool-management/tool-management.log` · `backups/`               |
-
+| 内容                                        | 位置                                                                      |
+| ------------------------------------------- | ------------------------------------------------------------------------- |
+| MCP 定义                                    | `~/.dsh/cordis.patch.yml`（插件只写它；改前自动备份到 hub 的 `backups/`） |
+| 技能策略 / 自定义目录                       | `~/.dsh/tool-management/skills-state.json`                                |
+| 技能 / 记忆 / 人设 / 预设                   | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/`             |
+| 子智能体启停                                | `~/.dsh/tool-management/subagents-index.json`                             |
+| 回收站（技能 / 人设 / 预设 / 场景）         | `~/.dsh/tool-management/trash/{skills,subagents,prompts,scenes}-trash/`   |
+| 记忆回收站                                  | `~/.dsh/tool-management/memories-trash/`（在 hub 根下，不在 `trash/` 里） |
+| 归档账本 / 保留期                           | `~/.dsh/tool-management/history-*.json`                                   |
+| 回收站保留期                                | `~/.dsh/tool-management/trash-retention.json`（`0` = 永久保留）           |
+| 记忆索引 / 场景 / 档案                      | `~/.dsh/tool-management/memories-index.json`                              |
+| MCP 侧车（停用表 / 已知工具 / 备注 / 设置） | `~/.dsh/tool-management/mcp-*.json`                                       |
+| 注入设置（六个域开关）                      | `~/.dsh/tool-management/inject-settings.json`                             |
+| 模型工具表（关掉的工具 + 存下的方案）       | `~/.dsh/tool-management/tool-table.json`                                  |
+| 场景页界面设置（进场景前弹不弹预览卡）      | `~/.dsh/tool-management/scene-settings.json`                              |
+| 运行日志 / patch 备份                       | `~/.dsh/tool-management/tool-management.log` · `backups/`                 |
 
 **插件安装目录里不存用户数据**（`dsh plugin update` 会整体替换该目录）。备份按**每份 patch 文件各留 5 份**（全局与每个 profile 各自计），一次批量操作就可能把某层的 5 个槽位吃掉。
 
 ## 配置与安全
 
-| 字段              | 说明                                                                                                  |
-| --------------- | --------------------------------------------------------------------------------------------------- |
+| 字段            | 说明                                                                                                                                           |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `token`         | 访问令牌。设了之后**所有写操作 + 明文密钥**都要求 `x-dsh-token`；不设时明文接口一律关闭。也可改用环境变量 `DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN`。 |
-| `tokenDisabled` | `true` = 令牌保留在配置里但当前不生效（兼容页「关闭保护」写的就是这一行）。写操作不再要求令牌，明文查看仍然要。                                        |
-| `maxBodyBytes`  | 请求体上限，默认 88 MiB。                                                                                    |
+| `tokenDisabled` | `true` = 令牌保留在配置里但当前不生效（兼容页「关闭保护」写的就是这一行）。写操作不再要求令牌，明文查看仍然要。                                |
+| `maxBodyBytes`  | 请求体上限，默认 88 MiB。                                                                                                                      |
 
 **磁盘上的明文（必读）**：打码**只发生在界面展示**；MCP 的 `env` / `headers` 与插件自己的 `token` 在 `cordis.patch.yml`（及各 profile 副本）里始终明文，改配置前整份文件会备份进 `~/.dsh/tool-management/backups/`（不加密、不轮转、卸载也不回收）—— 一份密钥最多有 `5 ×（含它的 patch 文件数）+ 1` 份明文副本。令牌门禁**管不到磁盘读取**，防线是操作系统的文件权限。清理入口：**设置 → 工具 → 兼容 → 「清理旧备份」**。
 
@@ -222,16 +215,16 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ## 常见问题
 
-| 现象                                    | 解决                                                                                                                       |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 装完没有页面                                | 硬刷新；不行重启 DSH。                                                                                                            |
-| 重复 MCP 页签                             | 删 `cordis.patch.yml` 里的旧 loader 行后重启。                                                                                    |
-| 改坏配置 DSH 起不来                          | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.<层级>.bak-<时间戳>` 覆盖回去（每份 patch 各留 5 份）。                        |
-| 升级 DSH 后动作不可用                         | 设置 → 工具 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                               |
-| 模型调不到某条工具                             | 「兼容」页的**模型工具表**看它是不是被关了（出厂默认关着 15 条）；面板和脚本不受影响。                                                                          |
-| `approval=never` 还要确认吗                | 不弹卡，直接放行并记日志；想问回来切回「工作区内修改」。                                                                                             |
-| `subagent_manager_run` 报 provider 不可用 | 对应 provider 没注册：`spawn`（默认）/ `fork`（`inherit`）分别挂 `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` 后重启。 |
-| 场景绑了 A 人设，官方 `subagent` 还在跑别的         | 官方那两个是宿主的工具，本插件管不到；贴合人设的走 `subagent_manager_run`，官方只在没有人设贴合或要后台跑时用。                                                      |
+| 现象                                        | 解决                                                                                                                                        |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| 装完没有页面                                | 硬刷新；不行重启 DSH。                                                                                                                      |
+| 重复 MCP 页签                               | 删 `cordis.patch.yml` 里的旧 loader 行后重启。                                                                                              |
+| 改坏配置 DSH 起不来                         | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.<层级>.bak-<时间戳>` 覆盖回去（每份 patch 各留 5 份）。                     |
+| 升级 DSH 后动作不可用                       | 设置 → 工具 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                       |
+| 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（出厂默认关着 15 条）；面板和脚本不受影响。                                                      |
+| `approval=never` 还要确认吗                 | 不弹卡，直接放行并记日志；想问回来切回「工作区内修改」。                                                                                    |
+| `subagent_manager_run` 报 provider 不可用   | 对应 provider 没注册：`spawn`（默认）/ `fork`（`inherit`）分别挂 `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` 后重启。 |
+| 场景绑了 A 人设，官方 `subagent` 还在跑别的 | 官方那两个是宿主的工具，本插件管不到；贴合人设的走 `subagent_manager_run`，官方只在没有人设贴合或要后台跑时用。                             |
 
 ---
 

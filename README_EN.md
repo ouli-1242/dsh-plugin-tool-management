@@ -54,21 +54,21 @@ Music: Kevin MacLeod「Limit 70」, [CC BY 4.0](https://creativecommons.org/lice
 
 In one line: **configure "work / writing / coding" each as a scene and switch the whole stack with one click — and the model always sees whatever this plugin manages.**
 
-| Highlight                     | What it means                                                                                                                            |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| One-click scene switch        | Each scene carries its own MCP / skills / personas / memories; entering applies them, leaving restores. The model can switch for you too |
-| Manage without leaving chat   | Type `/` for a "Tools" section and toggle any domain's items — one click, done                                                           |
-| Memories reach the model      | A few `.md` files under a scene become its knowledge base, injected automatically                                                        |
-| Notes for MCP servers         | A note you write is seen by the model every turn and acted on                                                                            |
-| Disable a single tool         | Mute one tool on a server: invisible to the model and uncallable                                                                         |
-| Skills at a glance            | The copy in effect is marked "preferred"; shadowed ones name the winning source                                                          |
-| Subagent = one file, one role | Write a role file and delegate to it; only the result comes back, never in History                                                       |
-| Several prompt presets        | Keep multiple `AGENTS.md` baselines and switch with one click; each scene can bind its own, or none                                      |
-| Sessions no longer lost       | Archives grouped by project, searchable, batch-restorable; imports Claude Code / Cursor / Codex transcripts                              |
-| The model always sees it      | One context message per domain, republished only when the content changes                                                                |
-| Lock it and relax             | Locking a scene makes create/update/delete across the five domains read-only                                                             |
+| Highlight                     | What it means                                                                                                                                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| One-click scene switch        | Each scene carries its own MCP / skills / personas / memories; entering applies them, leaving restores. The model can switch for you too                                                                           |
+| Manage without leaving chat   | Type `/` for a "Tools" section and toggle any domain's items — one click, done                                                                                                                                     |
+| Memories reach the model      | A few `.md` files under a scene become its knowledge base, injected automatically                                                                                                                                  |
+| Notes for MCP servers         | A note you write is seen by the model every turn and acted on                                                                                                                                                      |
+| Disable a single tool         | Mute one tool on a server: invisible to the model and uncallable                                                                                                                                                   |
+| Skills at a glance            | The copy in effect is marked "preferred"; shadowed ones name the winning source                                                                                                                                    |
+| Subagent = one file, one role | Write a role file and delegate to it; only the result comes back, never in History                                                                                                                                 |
+| Several prompt presets        | Keep multiple `AGENTS.md` baselines and switch with one click; each scene can bind its own, or none                                                                                                                |
+| Sessions no longer lost       | Archives grouped by project, searchable, batch-restorable; imports Claude Code / Cursor / Codex transcripts                                                                                                        |
+| The model always sees it      | One context message per domain, republished only when the content changes                                                                                                                                          |
+| Lock it and relax             | Locking a scene makes create/update/delete across the five domains read-only                                                                                                                                       |
 | Deleted is not gone           | Skills / memories / personas / presets / scenes land in a recycle bin (permanent session deletion excepted); tick items to delete in bulk, or set a retention period so it cleans itself (keep-forever by default) |
-| Safe by default               | Only the plugin's own files are written; secrets masked, plaintext needs a token                                                         |
+| Safe by default               | Only the plugin's own files are written; secrets masked, plaintext needs a token                                                                                                                                   |
 
 ## Quick start
 
