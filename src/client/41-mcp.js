@@ -1483,7 +1483,8 @@
               // 直接写在下面那格里，抄一份再改是编辑页的事。
               React.createElement('div', { className: 'dsm-field dsm-field-grow' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
-                React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', placeholder: t(createModal.kind === 'quick' ? 'quickprompt.field.content.placeholder' : 'agm.field.content.placeholder'), value: createModal.content || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { content: e.target.value })) } })),
+                React.createElement('div', { className: 'dsm-body-grow' },
+                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', placeholder: t(createModal.kind === 'quick' ? 'quickprompt.field.content.placeholder' : 'agm.field.content.placeholder'), value: createModal.content || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { content: e.target.value })) } }))),
               createModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, createModal.error) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(createModal.id || '').trim(), onClick: function () { doCreate(createModal.id, createModal.content, createModal.description) } }, t('agm.btn.create')))) : null,
