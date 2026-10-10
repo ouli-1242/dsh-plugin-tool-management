@@ -437,17 +437,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    消失，让整颗框跟着长缩。高的一屏为准，多出来的高度给正文文本框吃掉；窗口太矮时弹窗自己滚。 */
 .dsm-modal-fixed{height:min(760px,calc(100vh - 48px));max-height:none}
 .dsm-modal-fixed .dsm-field-grow{min-height:0;flex:1 0 auto}
-/* 正文框套一层「伸缩壳」再吃余高，textarea 不直接当 flex 项：flex-basis 0 会无视拖拽写下
-   的 inline height，手柄等于摆设（2026-10-10 用户实测）。壳负责撑满（flex:1 0 auto，装不下
-   时格子不再被压小、弹窗整体出滚动条 —— 与「新建场景」等普通弹窗的兜底一致，正文框碰不到
-   动作栏）；textarea 在壳里 height:100% 吃满，拖拽写下 inline height 时自然压过它。拖拽是
-   「只往下生效」：格子的余高本来就全给正文框，往小拖只会留下一截没人用的空隙，往上拖由
-   41-mcp 的 attachGrowOnlyResize 弹回撑满。min-height:240 接替 300px 那条旧下限（余高不足
-   300 时它曾撑破格子、把动作栏压在框下，用户 2026-10-10 截图），也顶住宿主那遍「把同类框
-   压到内容高度」的自适应（109px 那种）。
+/* 定高弹窗的正文框：与「新建人设 / 新建记忆」的文本框同一套机制 —— 静止高度 = min-height，
+   往上没有可拖的空间（浏览器原生夹住，用户 2026-10-10 要求对齐这两处），往下拖写下的
+   inline height 由 flex-basis auto 接住（flex:0 1 auto；flex:1 的 basis 0 会无视 inline height，
+   手柄等于摆设）。240 接替 300px 那条旧下限 —— 余高不足 300 时它曾撑破格子、把动作栏压在
+   框下（用户 2026-10-10 截图），也顶住宿主那遍「把同类框压到内容高度」的自适应（109px 那种）。
+   余高超出 min 的部分留在框和动作栏之间（#4 原案同款代价）。
    选择器权重 4 类 + 1 元素，压过上面那条 min-height:300px，不靠 !important。 */
-.dsm-modal-fixed .dsm-field-grow .dsm-body-grow{min-height:0;flex:1 0 auto}
-.dsm-modal.dsm-modal-fixed .dsm-field-grow .dsm-body-grow textarea.dsm-control{display:block;width:100%;height:100%;min-height:240px;resize:vertical}
+.dsm-modal.dsm-modal-fixed .dsm-field-grow textarea.dsm-control{flex:0 1 auto;min-height:240px;resize:vertical}
 /* 导出弹窗（D14）：宽高都固定；只有「条目列表」这一层滚动，动作条常驻底部。 */
 .dsm-export-modal .dsm-modal-body{display:flex;min-height:0;flex-direction:column;gap:14px;overflow:hidden}
 .dsm-export-modal .dsm-export-form{display:flex;min-height:0;flex:1;flex-direction:column;gap:10px}
