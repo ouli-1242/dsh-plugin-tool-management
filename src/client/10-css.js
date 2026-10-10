@@ -20,6 +20,10 @@
       '.dsm-modal textarea.dsm-control.dsm-textarea-sm{min-height:88px}' +
       '.dsm-modal textarea.dsm-control.dsm-textarea-md{min-height:200px}' +
       '.dsm-modal textarea.dsm-control.dsm-textarea-lg{min-height:300px}' +
+      /* 新建/编辑人设弹窗（dsm-modal-compact，2026-10-10）：两块 textarea-md 的 200px 下限把
+         「保存」挤出 760 顶格的一屏（内容约 810px）。压到 150 —— 下限只决定初始高度，框照常
+         能拖高；权重 4 类 + 1 元素，压过上面那条 200px，不靠 !important。 */
+      '.dsm-modal.dsm-modal-compact textarea.dsm-control.dsm-textarea-md{min-height:150px}' +
       '.dsm-detail-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}' +
       '.dsm-note-user{color:var(--dsw-alias-label-tertiary)}' +
       `
