@@ -433,28 +433,16 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 /* 动作可用性表：表头列宽与 dsm-compat-mod-row 一致；窄容器下隐藏表头。 */
 .dsm-compat-table-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:10px;padding:6px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px}
 .dsm-compat-cards .dsm-compat-table-head{display:none}
-/* 新增提示词弹窗定高（用户 2026-09-30）：切「全局 / 快捷」时「从现有预设复制」那一行会出现/
-   消失，让整颗框跟着长缩。高的一屏为准，多出来的高度给正文文本框吃掉；窗口太矮时弹窗自己滚。 */
-.dsm-modal-fixed{height:min(760px,calc(100vh - 48px));max-height:none}
-.dsm-modal-fixed .dsm-field-grow{min-height:0;flex:1 0 auto}
-/* 定高弹窗的正文框：与「新建人设 / 新建记忆」的文本框同一套机制 —— 静止高度 = min-height，
-   往上没有可拖的空间（浏览器原生夹住，用户 2026-10-10 要求对齐这两处），往下拖写下的
-   inline height 由 flex-basis auto 接住（flex:0 1 auto；flex:1 的 basis 0 会无视 inline height，
-   手柄等于摆设）。240 接替 300px 那条旧下限 —— 余高不足 300 时它曾撑破格子、把动作栏压在
-   框下（用户 2026-10-10 截图），也顶住宿主那遍「把同类框压到内容高度」的自适应（109px 那种）。
-   余高超出 min 的部分留在框和动作栏之间（#4 原案同款代价）。
-   选择器权重 4 类 + 1 元素，压过上面那条 min-height:300px，不靠 !important。 */
-.dsm-modal.dsm-modal-fixed .dsm-field-grow textarea.dsm-control{flex:0 1 auto;min-height:240px;resize:vertical}
 /* 导出弹窗（D14）：宽高都固定；只有「条目列表」这一层滚动，动作条常驻底部。 */
 .dsm-export-modal .dsm-modal-body{display:flex;min-height:0;flex-direction:column;gap:14px;overflow:hidden}
 .dsm-export-modal .dsm-export-form{display:flex;min-height:0;flex:1;flex-direction:column;gap:10px}
 .dsm-export-modal .dsm-pick-list{flex:1;min-height:0;max-height:none;overflow:auto}
 .dsm-export-modal .dsm-export-body{display:flex;min-height:0;flex:1;flex-direction:column;gap:6px}
 /* 会话导出弹窗（0.18.5）：字段压成三行之后，560×640 里会话列表只剩几行（用户反馈）。
-   处方照 .dsm-modal-archive / .dsm-modal-fixed：固定高、只有列表内滚。宽度取 720 —— 与
+   处方照 .dsm-modal-archive：固定高、只有列表内滚。宽度取 720 —— 与
    .dsm-modal-lg / .dsm-modal-wide 同一档，两列字段各约 340px 刚好放得下（880 试过，标题行
-   右边空成一片，用户说太宽）。高度取 760 而不是视口百分比 —— 760 既是 .dsm-modal 自己的
-   max-height 也是 .dsm-modal-fixed 那个数，窗口矮时 calc(100vh - 48px) 照常接管。
+   右边空成一片，用户说太宽）。高度取 760 而不是视口百分比 —— 760 是 .dsm-modal 自己的
+   max-height，窗口矮时 calc(100vh - 48px) 照常接管。
    写成两段类名（.dsm-modal.dsm-modal-export-lg）是为了**不靠书写顺序**压过 .dsm-modal-list
    的 !important（.dsm-modal-lg 排在 .dsm-modal-list 前面，直接借用会被它盖掉）。只加在这一颗
    弹窗上：.dsm-modal-list 还被四个页面的导出弹窗和回收站共用，动它就是它们一起变大。 */
@@ -471,8 +459,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 /* 回收站比其它列表弹窗高一档（用户 2026-10-10：「回收站高度加长」）：640 → 760。
    .dsm-modal-list 那个 640 是给「导出会话」那类"看一眼就走"的列表定的；回收站是"翻找 + 勾选 +
    批量删"，本机实测提示词回收站 35 条、技能 7 条 —— 640 时一屏只看得见 8 条。
-   760 不是新拍的数：它既是 .dsm-modal 自己的 max-height，也是 .dsm-modal-fixed（新增提示词）
-   那个数，本插件"最高的普通弹窗"一直就是它。上一版试过 880，用户 2026-10-10 反馈
+   760 不是新拍的数：它是 .dsm-modal 自己的 max-height，本插件"最高的普通弹窗"一直就是它。上一版试过 880，用户 2026-10-10 反馈
    「回收站高度不要超过下面一层的高度」—— 回收站是叠在宿主的设置弹窗上弹出来的，宿主那颗比
    880 矮，880 会从它上面探出去；760 稳稳落在它里面。
    视口那一项取 100vh - 112px 而不是 -48px：宿主设置弹窗自己就留了上下各约 48px 的边，

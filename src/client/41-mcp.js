@@ -1466,9 +1466,11 @@
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(editModal.nextId || '').trim(), onClick: doUpdate }, t('agm.btn.save')))) : null,
             // 新建：id + 描述 + **正文文本框**（用户直接写内容）。原先还有一格「或从现有预设复制」，
             // 用户 2026-09-30 要求删掉 —— 抄一份再改是编辑页的事，新建时只想直接写。
-            // 弹窗定高（`dsm-modal-fixed`）：切类型时说明那一句长短不同，框不该跟着跳（手正停在
-            // 下一格上），多出来的高度给正文文本框吃掉。
-            createModal ? React.createElement(Modal, { title: t('agm.btn.new'), closeLabel: t('btn.close'), className: 'dsm-modal-fixed', onClose: function () { setCreateModal(null) } },
+            // 弹窗高度跟着内容走（2026-10-10 拆掉 `dsm-modal-fixed` 定高）：当初定高是怕切类型时
+            // 「从现有预设复制」那行出现/消失让框跳，那格删掉后内容不再随类型变化，定高失去
+            // 理由；余下高度留在正文框和动作栏之间，成了一截空白（用户截图）。普通弹窗装不下
+            // 自己滚，正文框静止在 dsm-textarea-lg 的下限上、只能往下拖（与新建人设同款手感）。
+            createModal ? React.createElement(Modal, { title: t('agm.btn.new'), closeLabel: t('btn.close'), onClose: function () { setCreateModal(null) } },
               kindPicker(createModal.kind, function (v) { setCreateModal(Object.assign({}, createModal, { kind: v, error: null })) }),
               React.createElement('div', { className: 'dsm-field' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.id')),
@@ -1481,7 +1483,7 @@
                 React.createElement('input', { className: 'dsm-control', maxLength: PRESET_DESC_MAX, placeholder: t('agm.field.desc.placeholder'), value: createModal.description || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { description: e.target.value })) } })),
               // 原先这里有一格「或从现有预设复制」—— 用户 2026-09-30 要求删掉：新建时想要的正文
               // 直接写在下面那格里，抄一份再改是编辑页的事。
-              React.createElement('div', { className: 'dsm-field dsm-field-grow' },
+              React.createElement('div', { className: 'dsm-field' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', placeholder: t(createModal.kind === 'quick' ? 'quickprompt.field.content.placeholder' : 'agm.field.content.placeholder'), value: createModal.content || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { content: e.target.value })) } })),
               createModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, createModal.error) : null,
