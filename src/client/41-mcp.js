@@ -754,6 +754,20 @@
         }
 
         // ---------- AGENTS.md 预设页：多套全局指令基线，应用=写入 ~/.dsh/AGENTS.md ----------
+        // 定高弹窗的正文框：往下拖（变大）生效，往上拖（变小）弹回撑满。格子的余高本来就
+        // 全给正文框，往小拖只会留下一截没人用的空隙 —— 普通弹窗内容决定高度、缩小自然
+        // 合拢，定高弹窗不成立。ResizeObserver 里比对拖拽写下的 inline height 和壳的实高：
+        // 比壳小 → 在撑满区往上拖，清掉回到 height:100%；不比壳小 → 已在滚动区（壳随内容
+        // 长出去了），保留。写在 41-mcp 是全仓库只有这一格是定高正文框。
+        function attachGrowOnlyResize(el) {
+          if (!el) return
+          var ro = new ResizeObserver(function () {
+            if (!el.style.height) return
+            if (parseFloat(el.style.height) < el.parentElement.clientHeight - 1) el.style.height = ''
+          })
+          ro.observe(el)
+        }
+
         function PromptsPage() {
           // deny = 一次性「拒绝」说明（如：被引用的预设不能删）。它**不替换列表**——
           // 复用 error 会让整页列表消失，用户删不动之后连列表都看不到了。
@@ -1484,7 +1498,7 @@
               React.createElement('div', { className: 'dsm-field dsm-field-grow' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
                 React.createElement('div', { className: 'dsm-body-grow' },
-                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', placeholder: t(createModal.kind === 'quick' ? 'quickprompt.field.content.placeholder' : 'agm.field.content.placeholder'), value: createModal.content || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { content: e.target.value })) } }))),
+                  React.createElement('textarea', { ref: attachGrowOnlyResize, className: 'dsm-control dsm-textarea-lg', placeholder: t(createModal.kind === 'quick' ? 'quickprompt.field.content.placeholder' : 'agm.field.content.placeholder'), value: createModal.content || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { content: e.target.value })) } }))),
               createModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, createModal.error) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(createModal.id || '').trim(), onClick: function () { doCreate(createModal.id, createModal.content, createModal.description) } }, t('agm.btn.create')))) : null,

@@ -440,9 +440,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 /* 正文框套一层「伸缩壳」再吃余高，textarea 不直接当 flex 项：flex-basis 0 会无视拖拽写下
    的 inline height，手柄等于摆设（2026-10-10 用户实测）。壳负责撑满（flex:1 0 auto，装不下
    时格子不再被压小、弹窗整体出滚动条 —— 与「新建场景」等普通弹窗的兜底一致，正文框碰不到
-   动作栏）；textarea 在壳里 height:100% 吃满，拖拽写下 inline height 时自然压过它，拖到多少
-   算多少。min-height:240 接替 300px 那条旧下限（余高不足 300 时它曾撑破格子、把动作栏压在
-   框下，用户 2026-10-10 截图），也顶住宿主那遍「把同类框压到内容高度」的自适应（109px 那种）。
+   动作栏）；textarea 在壳里 height:100% 吃满，拖拽写下 inline height 时自然压过它。拖拽是
+   「只往下生效」：格子的余高本来就全给正文框，往小拖只会留下一截没人用的空隙，往上拖由
+   41-mcp 的 attachGrowOnlyResize 弹回撑满。min-height:240 接替 300px 那条旧下限（余高不足
+   300 时它曾撑破格子、把动作栏压在框下，用户 2026-10-10 截图），也顶住宿主那遍「把同类框
+   压到内容高度」的自适应（109px 那种）。
    选择器权重 4 类 + 1 元素，压过上面那条 min-height:300px，不靠 !important。 */
 .dsm-modal-fixed .dsm-field-grow .dsm-body-grow{min-height:0;flex:1 0 auto}
 .dsm-modal.dsm-modal-fixed .dsm-field-grow .dsm-body-grow textarea.dsm-control{display:block;width:100%;height:100%;min-height:240px;resize:vertical}
