@@ -19,10 +19,11 @@
 An **MCP, skills, scenes, memories, subagents, prompts & archived sessions** manager for DeepSeek Harness. Eight tabs: Scenes / MCP / Skills / Subagents / Prompts / Memories / Sessions / Host.
 
 ```sh
-dsh plugin --profile web add dsh-plugin-tool-management@latest
+dsh plugin --profile web add dsh-plugin-tool-management@latest      # web
+dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # desktop
 ```
 
-Hard-refresh the browser (Cmd/Ctrl+Shift+R) afterwards — a **Tools** panel in Settings means it worked. The plugin only writes its own files, never touches skill sources, and your configuration survives restarts and upgrades.
+Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart the desktop app after installing for desktop — a **Tools** panel in Settings means it worked. The plugin only writes its own files, never touches skill sources, and your configuration survives restarts and upgrades.
 
 ---
 
@@ -71,14 +72,16 @@ In one line: **configure "work / writing / coding" each as a scene and switch th
 
 ## Quick start
 
-Prerequisites: DSH installed (`dsh web` runs), Node.js ≥ 18.
+Prerequisites: DSH installed (`dsh web` runs), Node.js ≥ 18. Pick the profile matching your client: `--profile web` for the browser app, `--profile desktop` for the desktop app. The desktop profile is initialized by DSH Desktop itself — open the app once, then quit it completely before running the command.
 
 ```sh
-dsh plugin --profile web add dsh-plugin-tool-management@latest   # install / update
-dsh plugin --profile web remove dsh-plugin-tool-management        # uninstall
+dsh plugin --profile web add dsh-plugin-tool-management@latest         # web · install / update
+dsh plugin --profile web remove dsh-plugin-tool-management             # web · uninstall
+dsh plugin --profile desktop add dsh-plugin-tool-management@latest     # desktop · install / update
+dsh plugin --profile desktop remove dsh-plugin-tool-management         # desktop · uninstall
 ```
 
-Hard-refresh the browser — a **Tools** panel with eight tabs means it worked. Client changes hot-reload; host-side changes need `dsh web` restarted.
+Hard-refresh the browser (web) or restart the desktop app, then a **Tools** panel with eight tabs means it worked. Client changes hot-reload; host-side changes need the client restarted (`dsh web` / the desktop app).
 
 You can also ask the model:
 
@@ -87,6 +90,8 @@ Install the dsh-plugin-tool-management plugin:
 dsh plugin --profile web add dsh-plugin-tool-management@latest
 Then remind me to hard-refresh the browser.
 ```
+
+For the desktop app, swap `web` for `desktop` and end with "remind me to restart the desktop app" instead.
 
 ## Features
 

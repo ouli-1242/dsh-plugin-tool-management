@@ -19,10 +19,11 @@
 DeepSeek Harness 的 **MCP、技能、场景、记忆、子智能体、提示词与归档会话**管理插件。八个页签：场景 / MCP / 技能 / 子智能体 / 提示词 / 记忆 / 会话 / 兼容。
 
 ```sh
-dsh plugin --profile web add dsh-plugin-tool-management@latest
+dsh plugin --profile web add dsh-plugin-tool-management@latest      # web 版
+dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 ```
 
-装完硬刷新浏览器（Cmd/Ctrl+Shift+R），设置 → **工具**。插件只写自己的文件，不改技能源文件；重启与升级后配置都在。
+装完 web 版硬刷新浏览器（Cmd/Ctrl+Shift+R），桌面版重启应用，设置 → **工具**。插件只写自己的文件，不改技能源文件；重启与升级后配置都在。
 
 ---
 
@@ -71,14 +72,16 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ## 快速开始
 
-前置：DSH 已安装（`dsh web` 可运行），Node.js ≥ 18。
+前置：DSH 已安装（`dsh web` 可运行），Node.js ≥ 18。命令按端选：`--profile web` 装 web 版，`--profile desktop` 装桌面版。桌面版的 profile 由 DSH Desktop 自己初始化 —— 先打开过一次应用，执行命令前把它完全退出。
 
 ```sh
-dsh plugin --profile web add dsh-plugin-tool-management@latest   # 安装 / 更新
-dsh plugin --profile web remove dsh-plugin-tool-management        # 卸载
+dsh plugin --profile web add dsh-plugin-tool-management@latest         # web 版 · 安装 / 更新
+dsh plugin --profile web remove dsh-plugin-tool-management             # web 版 · 卸载
+dsh plugin --profile desktop add dsh-plugin-tool-management@latest     # 桌面版 · 安装 / 更新
+dsh plugin --profile desktop remove dsh-plugin-tool-management         # 桌面版 · 卸载
 ```
 
-装完硬刷新浏览器，设置 → **工具** 出现八栏即成功。界面改动即时生效，宿主侧改动需重启 `dsh web`。
+装完 web 版硬刷新浏览器、桌面版重启应用，设置 → **工具** 出现八栏即成功。界面改动即时生效，宿主侧改动需重启（web 重启 `dsh web`，桌面重启桌面应用）。
 
 也可以让模型代劳：
 
@@ -87,6 +90,8 @@ dsh plugin --profile web remove dsh-plugin-tool-management        # 卸载
 dsh plugin --profile web add dsh-plugin-tool-management@latest
 装完提醒我硬刷新浏览器。
 ```
+
+桌面版把 `web` 换成 `desktop`，最后一句改成「装完提醒我重启桌面应用」。
 
 ## 功能
 
