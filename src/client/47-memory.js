@@ -635,6 +635,7 @@
             }) : null,
             editor && modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'editor', className: 'dsm-modal-wide', title: editor.mode === 'create' ? t('memory.create.title') : t('memory.edit.title'), closeLabel: t('btn.close'), onClose: closeEditor },
               React.createElement('div', { className: 'dsm-form' },
+                React.createElement('div', { className: 'dsm-field-row' },
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
                   editor.mode === 'create'
@@ -656,7 +657,7 @@
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.name')),
                   React.createElement('input', { className: 'dsm-control' + (editorNameInvalid ? ' dsm-rule-invalid' : ''), value: editor.name || '', placeholder: t('memory.field.name.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { name: e.target.value })) } }),
-                  editorNameInvalid ? React.createElement('p', { className: 'dsm-rule-hint' }, t('memory.name.invalid')) : null),
+                  editorNameInvalid ? React.createElement('p', { className: 'dsm-rule-hint' }, t('memory.name.invalid')) : null)),
                 React.createElement('label', { className: 'dsm-field' },
                   // 字数计数与「描述」同一行、贴右缘（与 MCP 备注 / 人设与技能简介同款排版）——
                   // 以前它单起一行落在输入框下面，看着像是另一个字段。
