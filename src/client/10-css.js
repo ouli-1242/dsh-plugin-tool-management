@@ -625,5 +625,61 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-trash-pick input:disabled{cursor:default}
 /* 勾选过的那条给一层底色：勾了十几条之后要一眼看出勾的是哪几条。 */
 .dsm-trash-item-picked{background:var(--dsw-alias-interactive-bg-hover);border-radius:8px}
+/* 视觉层收拢（基于 #6，作者 wake1999）：放在模板末尾，同权重后者胜真正成立。
+   相比原 PR：修掉 content: ; 与半径变量下划线/连字符错位两颗雷（半径、发丝线直接
+   用字面量）；去掉 main 里不存在的标记（mainpage / market / segmented /
+   detail-head / composer-chips，属于 #7）与半残的 tabs / switch 组。 */
+.dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-inject-domain input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:2px 0 0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-imp-radio input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-snap-pick input,.dsm-kind-pick input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-select-menu button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px;}
+.dsm-btn-lock:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover);}
+.dsm-btn-quiet:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
+.dsm-btn-danger:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover-danger);}
+.dsm-bulk-ghost{border: 0; background: none; padding: 0 2px; font: inherit; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); cursor: pointer;}
+.dsm-link:hover{color: var(--dsw-alias-label-primary);}
+.dsm-file-remove:hover{background: var(--dsw-alias-interactive-bg-hover-danger);}
+.dsm-select-trigger > span{min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.dsm-select-trigger::after{content:"" flex: none; box-sizing: border-box; width: 7px; height: 7px; margin-top: -3px; border-right: 1.5px solid var(--dsw-alias-label-tertiary); border-bottom: 1.5px solid var(--dsw-alias-label-tertiary); transform: rotate(45deg);}
+.dsm-select-trigger:empty::before{color: var(--dsw-alias-label-dimmed);}
+.dsm-select-trigger:focus-visible{outline: none; border-color: var(--dsw-alias-state-business-primary);}
+.dsm-select-trigger:disabled{color: var(--dsw-alias-label-tertiary); cursor: default;}
+.dsm-control[aria-invalid= true ]{border-color: var(--dsw-alias-state-error-primary);}
+.dsm-select-menu [role= option ]{min-height: 34px; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-primary); text-align: left;}
+.dsm-select-menu [aria-selected= true ]{background: var(--dsw-alias-interactive-bg-hover);}
+.dsm-modal-head-wrap .dsm-modal-title{margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; color: var(--dsw-alias-label-primary);}
+.dsm-dir-item + .dsm-dir-item{border-top: 0.5px solid var(--dsw-alias-border-l2);}
+button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
+.dsm-filters .dsm-chip-picked{color: var(--dsw-alias-label-primary); background: var(--dsw-alias-button-ghost-active-fill); box-shadow: inset 0 0 0 1px var(--dsw-alias-button-ghost-active-border);}
+.dsm-feedback.dsm-ok{color: var(--dsw-alias-state-success-primary); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);}
+.dsm-feedback.dsm-warning{color: var(--dsw-alias-state-warn-primary); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);}
+.dsm-feedback.dsm-error{padding: 10px 12px; border-radius: 8px;}
+.dsm-tab:hover{color: var(--dsw-alias-label-primary);}
+.dsm-tab[aria-selected= true ]{color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-label-primary); font-weight: 500;}
+.dsm-imp-radio:hover{background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
+.dsm-modal-actions .dsm-btn{min-height: 36px; padding: 0 14px; font-size: 14px; line-height: 22px; border-radius: 8px;}
+.dsm-seg-filter .dsm-btn{min-height: 34px; padding: 0 12px; font-size: 13px; line-height: 20px;}
+.dsm-name-row .dsm-btn{min-height: 28px; padding: 0 10px; font-size: 12px; line-height: 18px; border-radius: 6px;}
+.dsm-actions .dsm-bulk-ghost{min-height: 28px; display: inline-flex; align-items: center;}
+.dsm-btn.dsm-btn-bulk > .dsm-bulk-ghost{line-height: 18px;}
+.dsm-backup-actions .dsm-btn.dsm-btn-icon{width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary);}
+.dsm-btn.dsm-btn-icon > svg{width: 14px; height: 14px; flex: none;}
+.dsm-btn.dsm-btn-icon.dsm-btn-lock{border: 0; background: transparent; color: var(--dsw-alias-label-tertiary);}
+.dsm-btn.dsm-btn-icon.dsm-btn-lock:hover:not(:disabled){color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger);}
+.dsm-btn.dsm-btn-icon:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px;}
+.dsm-preset-row > [role= switch ]{margin-right: 2px;}
+.dsm-row-hint .dsm-hint-act{margin-left: 8px; height: 20px; min-height: 20px; padding: 0 8px; font-size: 12px; line-height: 18px;}
+.dsm-source-caret{flex: none; display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--dsw-alias-label-secondary);}
+.dsm-detail-section .dsm-code{max-height: 340px; overflow: auto; overscroll-behavior: contain;}
+.dsm-modal .dsm-field + .dsm-field{border-top: 0;}
+.dsm-modal .dsm-form{gap: 16px;}
+.dsm-modal .dsm-field{gap: 8px;}
+.dsm-modal .dsm-label{color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 500; line-height: 20px;}
+.dsm-modal .dsm-help{margin-top: -2px; font-size: 12px; line-height: 17px;}
+[class*="dsm-"] input[type="radio"]{accent-color: var(--dsw-alias-button-primary-fill);}
+
 
 `
