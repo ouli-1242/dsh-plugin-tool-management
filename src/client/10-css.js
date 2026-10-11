@@ -975,4 +975,104 @@ button.dsm-rowselect-box:disabled{cursor:default;opacity:.45}
 .dsm-mode-caret,.dsm-pick-caret{width:12px;height:12px;flex:none;color:var(--dsw-alias-label-tertiary)}
 /* 快照导入预览：行选择纵向堆叠（原为横向勾选 chips，切片五换 RowSelect）。 */
 .dsm-snap-picks{display:flex;flex-direction:column;gap:2px}
+
+
+
+  /* ── 本功能自己的样式 ─────────────────────────────────────────────
+     这些类名由本分支的新代码使用，基线 CSS 里没有对应规则；
+     规则取自被关闭的 #6（feat/modal-visual-layer），按其选择器抽出。 */
+/* 新功能自己的样式：从被关闭的 #6（feat/modal-visual-layer）里按选择器抽出。
+   这些类名由本分支的新代码使用，基线 CSS 里没有对应规则。 */
+.dsm-section,
+.dsm-modal,
+.dsm-mask,
+.dsm-composer-chips {
+  --dsm-radius-control: var(--dsw-radius-md, 8px);
+  --dsm-radius-small: var(--dsw-radius-sm, 6px);
+  --dsm-radius-surface: var(--dsw-radius-lg, 12px);
+  --dsm-radius-dialog: var(--dsw-radius-panel, 14px);
+  --dsm-hairline: 0.5px;
+  --dsm-ring: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+}
+.dsm-composer-chips {
+  box-sizing: border-box;
+  width: calc(100% - var(--dsh-composer-side-clearance, 0px) - var(--dsh-composer-side-clearance, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px));
+  max-width: var(--dsh-composer-card-max-width, 100%);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 8px;
+}
+.dsm-composer-chips-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.dsm-composer-chips-row::-webkit-scrollbar {
+  display: none;
+}
+.dsm-composer-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.dsm-composer-chip:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-composer-chip-glyph {
+  display: inline-flex;
+  flex: none;
+  opacity: .62;
+}
+.dsm-composer-chip:hover .dsm-composer-chip-glyph {
+  opacity: .9;
+}
+.dsm-composer-chips-more {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dsm-composer-chips-more:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-composer-chip-guide {
+  border-style: dashed;
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+}
+.dsm-composer-chip-guide:hover {
+  color: var(--dsw-alias-label-primary);
+}
 `

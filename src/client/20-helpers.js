@@ -485,6 +485,22 @@
     }
 
     /**
+     * 快捷提示词变动的订阅点。
+     *
+     * 同一页里有两处 UI 都画这批词：设置页的「工具 › 提示词」与聊天栏上那排胶囊
+     * （`conversation.input.dock`）。两处之间没有别的通信渠道，而"在设置里改完、
+     * 回到会话里那排还是旧的"用户 2026-10-10 实测踩到了 —— 所以改成在 `apiCall`
+     * 里按 op 名广播：任何一处成功改动快捷提示词，胶囊立刻重读一次。
+     * 只广播写操作（`…-list` 是读，广播它会让胶囊自己把自己再触发一遍）。
+     */
+    const quickWatchers = new Set()
+    function publishQuickChange() {
+      quickWatchers.forEach(function (fn) {
+        try { fn() } catch (error) { /* 一个订阅点坏了不该连累另一个 */ }
+      })
+    }
+
+    /**
      * 发一个请求。
      *
      * @param op   宿主 op 名。
@@ -510,7 +526,12 @@
           return payload
         }).catch((e) => ({ ok: false, error: errMsg(e) }))
       }
-      return skipBootstrap ? send() : ensureTokenBootstrapped().then(send)
+      const result = skipBootstrap ? send() : ensureTokenBootstrapped().then(send)
+      const opName = String(op)
+      if (opName.indexOf('quickprompt-') === 0 && opName.slice(-4) !== 'list') {
+        return result.then(function (payload) { publishQuickChange(); return payload })
+      }
+      return result
     }
 
     // ── 「令牌没过」的识别与跳转（用户裁定 2026-09-18）─────────────────────────
