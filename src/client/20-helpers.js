@@ -1,29 +1,5 @@
 
     /** 统一的异常文案：Error 取 message，其余（字符串/对象/null）原样 String。此前 63 处各写一遍。 */
-
-      // ── 上游 0.19.1 的 CSS：上游独有规则与「我方没动过」的改动（同选择器后者胜）──
-      '.dsm-modal.dsm-modal-trash{height:min(760px,calc(100vh - 112px))!important;max-height:none!important}' +
-      '.dsm-trash-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}' +
-      '.dsm-trash-toolbar .dsm-trash-retention{flex:0 0 auto}' +
-      '.dsm-trash-toolbar .dsm-trash-bulk{flex:1 1 auto;min-width:0;flex-wrap:nowrap}' +
-      '.dsm-trash-toolbar .dsm-trash-bulk .dsm-note{flex:1 0 auto}' +
-      '.dsm-trash-toolbar .dsm-trash-bulk>button{flex:0 0 auto}' +
-      '.dsm-trash-toolbar .dsm-trash-bulk-confirm{flex:1 1 100%;flex-wrap:wrap}' +
-      '.dsm-trash-retention{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}' +
-      '.dsm-trash-retention .dsm-label{flex:none;font-weight:580}' +
-      '.dsm-trash-retention .dsm-control{width:auto;min-width:112px;flex:none}' +
-      '.dsm-trash-hint{min-width:0;flex:0 1 auto;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-      '.dsm-trash-retention-err{flex:1 1 auto;white-space:normal;overflow-wrap:anywhere;color:var(--dsw-alias-state-error-primary)}' +
-      '.dsm-trash-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap}' +
-      '.dsm-trash-bulk .dsm-note{min-width:0;flex:1}' +
-      '.dsm-trash-bulk-confirm{padding:6px 8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover)}' +
-      '.dsm-trash-bulk-confirm .dsm-note{font-weight:570;color:var(--dsw-alias-state-error-primary);white-space:normal}' +
-      '.dsm-trash-pane-batch{flex:none;padding:7px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}' +
-      '.dsm-trash-notice{flex:none}' +
-      '.dsm-trash-pick{display:inline-flex;flex:none;align-items:center;padding:4px 1px;cursor:pointer}' +
-      '.dsm-trash-pick input{width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-error-primary)}' +
-      '.dsm-trash-pick input:disabled{cursor:default}' +
-      '.dsm-trash-item-picked{background:var(--dsw-alias-interactive-bg-hover);border-radius:8px}' + ''
     function errMsg(e) { return e && e.message ? String(e.message) : String(e) }
 
     function ensureCss() {
