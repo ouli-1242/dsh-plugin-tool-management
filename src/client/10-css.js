@@ -682,4 +682,12 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
       [class*="dsm-"] input[type="checkbox"],[class*="dsm-"] input[type="radio"]{accent-color:var(--dsw-alias-state-success-primary)}
 
 
+/* 记忆「形态」二选一：分段按钮（flat / bundle 互斥）。两个值摊开、点击即切，不依赖下拉 ——
+   下拉在弹窗底部会被滚动容器裁掉（用户 2026-10-10 截图）。 */
+.dsm-form-seg{display:inline-flex;gap:3px;padding:3px;border:0;border-radius:9px;background:var(--dsw-alias-border-l3)}
+.dsm-form-seg button{min-height:28px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}
+.dsm-form-seg button:hover{color:var(--dsw-alias-label-primary)}
+.dsm-form-seg button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:500;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+/* SourceSelect 往上弹：下方装不下菜单时挂 .dsm-select-up，菜单改开在触发器上方。 */
+.dsm-select.dsm-select-up .dsm-select-menu{top:auto;bottom:calc(100% + 5px)}
 `

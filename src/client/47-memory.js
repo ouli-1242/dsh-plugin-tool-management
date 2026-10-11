@@ -633,7 +633,7 @@
               onClose: function () { setExportState(null) },
               onSubmit: submitExport,
             }) : null,
-            editor && modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'editor', className: 'dsm-modal-wide', title: editor.mode === 'create' ? t('memory.create.title') : t('memory.edit.title'), closeLabel: t('btn.close'), onClose: closeEditor },
+            editor && modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'editor', className: 'dsm-modal-wide dsm-modal-compact', title: editor.mode === 'create' ? t('memory.create.title') : t('memory.edit.title'), closeLabel: t('btn.close'), onClose: closeEditor },
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
@@ -663,16 +663,22 @@
                   React.createElement('div', { className: 'dsm-budget-meta' },
                     React.createElement('span', { className: 'dsm-label' }, t('memory.field.description')),
                     React.createElement('span', { className: 'dsm-char-count' + (editorDescLen > 500 ? ' dsm-char-over' : '') }, editorDescLen + ' / 500')),
-                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: editor.description || '', placeholder: t('memory.field.description.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { description: e.target.value })) } })),
+                  React.createElement('input', { className: 'dsm-control', value: editor.description || '', placeholder: t('memory.field.description.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { description: e.target.value })) } })),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.body')),
                   React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: editor.body || '', placeholder: t('memory.field.body.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { body: e.target.value })) } })),
                 React.createElement('div', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.form')),
-                  React.createElement(SourceSelect, { options: RULE_FORM_OPTIONS, value: editor.form || 'flat', onChange: function (v) { setEditor(Object.assign({}, editor, { form: v })) } }),
+                  // flat / bundle 就两个值：分段按钮摊开、点击即切，不再依赖下拉（弹窗底部会被裁）。
+                  React.createElement('div', { className: 'dsm-form-seg', role: 'group' },
+                    RULE_FORM_OPTIONS.map(function (o) {
+                      return React.createElement('button', { key: o.value, type: 'button', 'aria-pressed': (editor.form || 'flat') === o.value, onClick: function () { setEditor(Object.assign({}, editor, { form: o.value })) } }, o.label);
+                    })),
                   editor.form === 'bundle'
                     ? React.createElement('div', { className: 'dsm-field', ref: attachFieldRef },
-                      React.createElement('span', { className: 'dsm-label' }, t('memory.field.attach')),
+                      React.createElement('div', { className: 'dsm-budget-meta' },
+                        React.createElement('span', { className: 'dsm-label' }, t('memory.field.attach')),
+                        React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: pickAttach }, t('memory.attach.add'))),
                       React.createElement('input', { ref: attachRef, type: 'file', multiple: true, className: 'dsm-hidden-input', onChange: onAttachPicked }),
                       (editor.attachments || []).length || (editor.files || []).length
                         ? React.createElement('div', { className: 'dsm-attach-list' },
@@ -691,9 +697,7 @@
                               React.createElement('button', { type: 'button', className: 'dsm-file-remove', disabled: busy, 'aria-label': t('memory.attach.remove') + ' ' + f.name, onClick: function () { dropPending(i) } }, '×'))
                           }))
                         : React.createElement('p', { className: 'dsm-help' }, t('memory.attach.empty')),
-                      React.createElement('div', { className: 'dsm-attach-actions' },
-                        React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: pickAttach }, t('memory.attach.add')),
-                        React.createElement('span', { className: 'dsm-help' }, t('memory.attach.hint'))))
+                      React.createElement('span', { className: 'dsm-help' }, t('memory.attach.hint')))
                     : null),
                 editor.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(editor.error)) : null),
               React.createElement('div', { className: 'dsm-modal-actions' },

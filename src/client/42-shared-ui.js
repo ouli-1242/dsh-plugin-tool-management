@@ -334,8 +334,21 @@ function enabledMemoryCount(rules) {
 
     function SourceSelect(props) {
       var state = react.useState(false), open = state[0], setOpen = state[1], selected = props.options.find(function (o) { return o.value === props.value; }) || props.options[0], ref = react.useRef(null);
-      react.useEffect(function () { if (!open) return undefined; function close(event) { if (!ref.current || !ref.current.contains(event.target)) setOpen(false); } document.addEventListener("pointerdown", close); return function () { document.removeEventListener("pointerdown", close); }; }, [open]);
-      return h("div", { className: "dsm-select", ref: ref }, h("button", { type: "button", className: "dsm-select-trigger", "aria-haspopup": "listbox", "aria-expanded": open, onClick: function () { setOpen(!open); } }, h("span", null, selected.label)), open ? h("div", { className: "dsm-select-menu", role: "listbox" }, props.options.map(function (o) { return h("button", { key: o.value || "all", type: "button", role: "option", className: "dsm-option", "aria-selected": o.value === props.value, onClick: function () { props.onChange(o.value); setOpen(false); } }, o.label); })) : null);
+      var upState = react.useState(false), up = upState[0], setUp = upState[1];
+      react.useEffect(function () { if (!open) return undefined;
+        // 弹窗正文是滚动容器，往下弹的菜单会被底边裁掉（记忆「形态」在最后一格，用户 2026-10-10 截图）。
+        // 打开时量一下：触发器到视口 / 滚动容器底边的空间装不下菜单，就改成往上弹。
+        var el = ref.current;
+        if (el) {
+          var box = el.getBoundingClientRect();
+          var need = props.options.length * 34 + 14;
+          var avail = window.innerHeight - box.bottom;
+          var host = el.closest(".dsm-modal-body") || el.closest(".dsm-modal");
+          if (host) avail = Math.min(avail, host.getBoundingClientRect().bottom - box.bottom);
+          setUp(avail < need);
+        }
+        function close(event) { if (!ref.current || !ref.current.contains(event.target)) setOpen(false); } document.addEventListener("pointerdown", close); return function () { document.removeEventListener("pointerdown", close); }; }, [open]);
+      return h("div", { className: "dsm-select" + (up ? " dsm-select-up" : ""), ref: ref }, h("button", { type: "button", className: "dsm-select-trigger", "aria-haspopup": "listbox", "aria-expanded": open, onClick: function () { setOpen(!open); } }, h("span", null, selected.label)), open ? h("div", { className: "dsm-select-menu", role: "listbox" }, props.options.map(function (o) { return h("button", { key: o.value || "all", type: "button", role: "option", className: "dsm-option", "aria-selected": o.value === props.value, onClick: function () { props.onChange(o.value); setOpen(false); } }, o.label); })) : null);
     }
     // 场景输入（combobox）：既能从已有场景里挑，也能直接手输一个新场景名——
     // 宿主 rules-create 用 mkdir(recursive) 落盘，所以「自定义场景」无需先建目录。
