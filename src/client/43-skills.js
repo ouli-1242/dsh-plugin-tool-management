@@ -425,8 +425,25 @@
          */
         function runPaneBatch(pane, keys) {
           if (!keys.length) return
-          var path = pane === "dirs" ? "/source-forget" : "/trash-delete"
           var resultKey = pane === "dirs" ? "trash.forgetMany" : "trash.purgeMany"
+          /**
+           * 单条删除：**按 op 名直接调**，与列表里那颗按钮走同一个 op、同一个参数名。
+           *
+           * 曾经这里对 dirs 写成 `callApi("/source-forget")`，而 `OP_BY_PATH` 里没有这条路径 ——
+           * `callApi` 直接 reject("unknown action")，于是整批全灭、界面报「6 条失败：unknown
+           * action: /source-forget」（用户 2026-10-10 截图）。路径式调用只认映射表，多绕一层就
+           * 多一处能漏配的地方；何况参数名也对不上（dirs 的 op 收 `key`，这里原先传的是 `root`）。
+           * 这类漏配已经是第二次（`/source-remove` / `/source-restore` 也漏过），所以契约测试里
+           * 补了一条静态对账：客户端出现过的路径字面量必须都在映射表里。
+           */
+          var runOne = pane === "dirs"
+            ? function (key) {
+                return apiCall("skill-custom-remove", { key: key }).then(function (res) {
+                  if (!res || res.ok !== true) throw res || { error: "request failed" }
+                  return res
+                })
+              }
+            : function (key) { return callApi("/trash-delete", { body: JSON.stringify({ id: key }) }) }
           setTrashBusy(true)
           setTrashConfirm(null)
           setTrashNotice(null)
@@ -444,8 +461,7 @@
               refresh(true)
               return
             }
-            var body = pane === "dirs" ? { root: keys[i] } : { id: keys[i] }
-            callApi(path, { body: JSON.stringify(body) }).then(function () {
+            runOne(keys[i]).then(function () {
               done += 1
               step(i + 1)
             }).catch(function (e) {

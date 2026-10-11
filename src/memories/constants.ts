@@ -211,5 +211,12 @@ export const fail = (code: string, error: string, params?: Record<string, string
  */
 export const MEMORIES_INDEX_FILE = 'memories-index.json'
 
-/** 记忆回收站目录名（hub 根下）。ops 分域后 trash 域要用，故与索引文件名一起放在这一层。 */
-export const MEMORIES_TRASH_DIR = 'memories-trash'
+/**
+ * 记忆回收站目录（**hub 内相对路径**，故带 `trash/` 段）。
+ *
+ * 2026-10-10 起与其余五类同处一处：`hub/trash/memories-trash/`。此前它是 hub 根下的
+ * `memories-trash/`，独立于 `trash/` —— 界面上六类早就统一成一个「回收站」了，落点却分两处，
+ * 按 `trash/` 写备份 / 迁移脚本会漏掉这一类（条目数最多的那类）。
+ * 老位置由 hub 的启动迁移搬过来（见 `hub.ts` 的 `HUB_RENAMES`），只搬不删。
+ */
+export const MEMORIES_TRASH_DIR = 'trash/memories-trash'

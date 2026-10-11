@@ -110,7 +110,7 @@ import type { ParsedSkillDoc, DiscoveredEntry, Snapshot } from './snapshot.js'
  * 场景/记忆根目录名（$DSH_HOME 下），集中在 `tool-management/` 一个目录内：
  *   - `memories/<场景>/…`    记忆正文真源
  *   - `..`（即 tool-management 根）侧车：memories-index.json（内含 `scenes` 切片 = 场景记录
- *     的**真源**）/ skills-state.json / trash/ / memories-trash/
+ *     的**真源**）/ skills-state.json / trash/（六类回收站，含 `trash/memories-trash/`）
  *
  * `scenes/`（`SCENES_DIR`）是 v0.3 遗留的**空壳**：只创建、只回显路径，没有任何读写。
  * 别把场景记录的位置写成它。

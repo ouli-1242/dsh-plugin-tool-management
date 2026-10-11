@@ -974,8 +974,8 @@ export default {
     // 启动那次清扫读完侧车就返回了，一次磁盘遍历都不做。
     //
     // 记忆回收站那两条**走 memories 域的 op**，不在这里重抄路径与 manifest 形状：它在
-    // `hub/memories-trash/`（hub 根下的独立目录，不在 `trash/` 里），形状由 memories 域
-    // 自己定 —— 重抄一遍只会得到第二份会漂移的真相（hub.ts 顶部那张目录图专门写过这件事）。
+    // `hub/trash/memories-trash/`（2026-10-10 起与其余五类同处一处，之前是 hub 根下的独立
+    // 目录），形状由 memories 域自己定 —— 重抄一遍只会得到第二份会漂移的真相。
     const trashRetention = createTrashRetentionDomain({
       ctx,
       config,

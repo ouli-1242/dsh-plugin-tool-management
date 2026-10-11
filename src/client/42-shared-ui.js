@@ -624,7 +624,14 @@ function enabledMemoryCount(rules) {
       // —— 提示词页的回收站要一次看完"全局"与"快捷"两类，让用户先猜被删的东西在哪个域里，
       // 等于把恢复这条路堵在他自己手里。每组各自有空的说明，不合并成一句"什么都没删"。
       const groups = props.groups || [{ title: props.groupTitle, sub: props.groupSub, entries: props.entries || [] }]
-      const rowKey = function (g, item) { return String(g.title) + '|' + String(item.id) }
+      // 条目 id / 备注行的取法。默认是回收站条目的通用形状（`id` + 「删除于 …」），
+      // 记忆页要另给：它的条目字段叫 `trashId`，备注还带场景 / 形态 / 字节数。
+      // 两个都是可选的，不传就退回默认 —— 已有三个调用方（提示词 / 场景 / 子智能体）不受影响。
+      const idOf = typeof props.idOf === 'function' ? props.idOf : function (item) { return item.id }
+      const noteOf = typeof props.noteOf === 'function'
+        ? props.noteOf
+        : function (item) { return t('trash.deletedAt', { time: item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '—' }) }
+      const rowKey = function (g, item) { return String(g.title) + '|' + String(idOf(item)) }
       // 平铺一份：非分栏时「全选」与「永久删除」按**整份列表**算，不能只看某一组。
       const flat = []
       groups.forEach(function (g) {
@@ -718,7 +725,7 @@ function enabledMemoryCount(rules) {
               React.createElement('button', { key: 'restore', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy || props.locked === true, onClick: function () { props.onRestore(item) } }, t('btn.restore')),
               React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy || props.locked === true, onClick: function () { setConfirmId(key) } }, t('btn.delete.forever')),
             ]
-        return React.createElement('div', { className: 'dsm-trash-item' + (isPicked ? ' dsm-trash-item-picked' : ''), key: item.id },
+        return React.createElement('div', { className: 'dsm-trash-item' + (isPicked ? ' dsm-trash-item-picked' : ''), key: idOf(item) },
           // 勾选框只在能批量删的时候出现：没有 onPurgeMany 的调用方（见上面的 batchEnabled）
           // 渲染一颗永远禁用的勾选框，只会让人以为"这里本来能勾、只是现在不行"。
           batchEnabled
@@ -733,9 +740,7 @@ function enabledMemoryCount(rules) {
             : null,
           React.createElement('div', { className: 'dsm-trash-main' },
             React.createElement('div', { className: 'dsm-name' }, item.name),
-            React.createElement('div', { className: 'dsm-note' }, t('trash.deletedAt', {
-              time: item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '—',
-            }))),
+            React.createElement('div', { className: 'dsm-note' }, noteOf(item))),
           actions)
       }
       /**

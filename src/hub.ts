@@ -24,13 +24,14 @@
 //   ├─ mcp-disabled-tools.json | mcp-known-tools.json | mcp-notes.json | mcp-settings.json | mcp-export.json
 //   ├─ tool-management.log                               插件日志（滚动 .1）
 //   ├─ backups/cordis.patch.yml.bak-<时间戳>             改宿主 patch 前的备份
-//   ├─ trash/{skills,subagents,prompts,scenes}-trash/<id>/  回收站（除记忆外的四类）
-//   └─ memories-trash/<id>/                              记忆回收站（**hub 根下独立目录**）
+//   ├─ trash/{skills,subagents,prompts,scenes,memories}-trash/<id>/  回收站（六类）
 //
-// 记忆回收站**不在 `trash/` 下**（本机实测 `trash/` 只有 4 个 `-trash` 目录）：它走
-// `memories/service.ts` 自己的路径（`join(stateDir, 'memories-trash', id)`，stateDir = hub 根），
-// 不经本模块的 `moveToTrash`。此前这行把它画进 `trash/{…}` 里，按它写备份/迁移脚本会既漏搬
-// 又误判（那是一类真实存在、条目数最多的用户数据）。
+// 六类回收站的落点已统一在 `trash/` 下（2026-10-10 起；记忆此前在 hub 根的 `memories-trash/`，
+// 由启动迁移并入 —— 见 `HUB_RENAMES`）。
+// 但**记忆那一类仍不经本模块的 `moveToTrash`**：它走 `memories/service.ts` 自己的路径
+// （`join(stateDir, 'trash/memories-trash', id)`，stateDir = hub 根），manifest 形状也由记忆域
+// 自己定。本模块只保证**目录位置**与其余几类一致；把它的读写抄到这里来只会得到第二份会漂移的
+// 真相（本条注释的前身就是这么写错的：它把记忆画进 `trash/{…}` 里，而当时那里根本没有它）。
 //
 // 留在 `$DSH_HOME` 根下的两个文件**不是**插件的：`AGENTS.md`（宿主每轮读取的全局基线，
 // 插件只是按场景/预设写它）与 `cordis.patch.yml`（宿主加载插件的配置入口）。
@@ -75,6 +76,11 @@ const HUB_RENAMES: ReadonlyArray<readonly [string, string]> = [
   ['agents-md', 'prompts'],
   ['rules-index.json', 'memories-index.json'],
   ['rules-trash', 'memories-trash'],
+  // 记忆回收站并入 `trash/`，与其余五类同处一处（2026-10-10）。
+  // **必须排在上一行之后**：极老的 `rules-trash/` 要先改名成 `memories-trash/`，这一行才能
+  // 把它一并搬进 `trash/`。顺序颠倒的话，老用户那份会留在 hub 根下不动 —— 而它恰恰是条目数
+  // 最多的一类数据。
+  ['memories-trash', 'trash/memories-trash'],
   ['agents', 'subagents'],
   ['agents-index.json', 'subagents-index.json'],
   ['state.json', 'skills-state.json'],
@@ -239,8 +245,8 @@ export async function relocateEntries(
 // 落点 `hub/trash/<域>-trash/<id>/`：`manifest.json` + 随条目搬走的负载。
 // 但**只有五类走本模块**（`TrashKind` 就是这四类 ＋ 核心层的 skills）：
 // 技能在 `hub/trash/skills-trash/`（核心层，v0.9.0 前直接躺在 `trash/` 下），
-// 记忆在 `hub/memories-trash/` —— **hub 根下的独立目录，不在 `trash/` 里**，由
-// `memories/service.ts` 自己实现（不经本模块的 `moveToTrash`）。
+// 记忆在 `hub/trash/memories-trash/` —— 位置与其余几类一致，但**读写不走本模块**，由
+// `memories/service.ts` 自己实现（不经本模块的 `moveToTrash`，manifest 形状也自己定）。
 //
 // 三条纪律：**移入 = 移动**（原位置立刻消失，不是复制）、**绝不覆盖**（恢复时目标
 // 已存在就报错让用户自己处理）、**失败要回滚**（搬了一半失败就把已搬的搬回去）。

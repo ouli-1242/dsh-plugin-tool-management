@@ -99,7 +99,7 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
   }
 
   /**
-   * 记忆回收站列表（只读）：`<stateDir>/memories-trash/<trashId>/`（`rulesRemove` 移入，
+   * 记忆回收站列表（只读）：`<stateDir>/trash/memories-trash/<trashId>/`（`rulesRemove` 移入，
    * `rulesRestore` 恢复）。损坏或内容缺失的条目跳过，不让一个坏条目挡住整份列表。
    */
   async function rulesTrashList(): Promise<any> {

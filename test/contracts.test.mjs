@@ -2209,3 +2209,50 @@ test('写启用集合必须先把运行时切到位；引擎拒绝时启用集�
   assert.deepEqual((await stale.op({ scenes: ['代码'] })).modeStale, ['已删的服务器'])
 })
 
+
+// ── 0.19.1：客户端接口路径的静态对账（漏配 = 按钮点下去毫无反应）──────────────────
+//
+// 这一类漏配已经出现三次：`/source-remove` / `/source-restore` 漏过（42-shared-ui.js 里
+// 留着前科注释），2026-10-10 又漏了 `/source-forget` —— 技能回收站「目录」那一块的批量
+// 永久删除整批全灭，界面报「已删除 0 条来源记录，6 条失败：unknown action: /source-forget」。
+//
+// 症状之所以难查：`callApi` 对未知路径直接 `Promise.reject({ error: 'unknown action: …' })`，
+// 而调用点大多 `.catch(swallowPostError)`，于是**没有类型错误、没有构建报错、没有日志**，
+// 只有用户点下去的那一刻才知道。所以做成静态对账：用过的路径字面量集合 ⊆ 映射表键集合。
+test('客户端用到的接口路径必须都在 OP_BY_PATH 里，否则调用点静默 reject', () => {
+  const client = readFileSync('lib/client.js', 'utf8')
+  // 注释里会引用这些路径（解释前科用），先剥掉注释再扫，否则说明文字会被当成调用点。
+  const code = client.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const mapBlock = /var OP_BY_PATH = \{([\s\S]*?)\}/.exec(code)
+  assert.ok(mapBlock, 'OP_BY_PATH 必须还在（定义在 42-shared-ui.js）')
+  const mapped = new Set([...mapBlock[1].matchAll(/"(\/[^"]*)":/g)].map((m) => m[1]))
+  assert.ok(mapped.size > 5, '映射表没解析出来，只认出 ' + mapped.size + ' 条')
+  // 调用点只认**字面量路径**（`callApi("/x"` / `post("/x"`）。写成变量（`callApi(path, …)`）
+  // 会绕开这条检查 —— 所以新代码请写字面量路径，别把路径藏进变量。
+  const used = new Set()
+  for (const m of code.matchAll(/(?:callApi|post)\(\s*"(\/[^"]*)"/g)) used.add(m[1])
+  assert.ok(used.size >= 8, '没扫到调用点，判据失效（只认出 ' + used.size + ' 条）')
+  const missing = [...used].filter((p) => !mapped.has(p)).sort()
+  assert.deepEqual(missing, [], '这些路径没进 OP_BY_PATH，点下去只会 reject("unknown action")：' + missing.join(', '))
+})
+
+// ── 0.19.1：记忆回收站必须与其它回收站同一套（用户 2026-10-10）────────────────────
+//
+// 用户报的两条：「记忆回收站没有全选」「样式和别的回收站不一样，应该统一」。此前记忆页
+// 自己手写了一份回收站弹窗，于是它缺批量条、用的还是 `.dsm-trash-box` 那套旧结构。
+// 这条钉住"它走共享 TrashModal"这个事实：破了就说明又有人把手写版搬回来了。
+test('记忆回收站走共享 TrashModal（带批量删除），不再是一份手写弹窗', () => {
+  const raw = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '47-memory.js'), 'utf8')
+  // 剥掉注释再断言：注释里正解释着"以前用的是 .dsm-trash-box"，不该被当成代码。
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  // 共享组件 + 批量回调 + 两个自定义取法（记忆条目的主键是 trashId，备注带场景 / 形态 / 字节数）。
+  assert.match(src, /React\.createElement\(TrashModal, \{/, '记忆回收站必须用共享 TrashModal')
+  assert.match(src, /onPurgeMany: purgeTrashMany/, '必须挂批量永久删除（全选之后要删得掉）')
+  assert.match(src, /idOf: function \(entry\) \{ return entry\.trashId \}/, '条目主键是 trashId，要靠 idOf 告诉共享组件')
+  assert.match(src, /onRestore: submitRestore/, '恢复仍走本页自己的 op（rules-restore）')
+  // 反向：手写那套结构不得复活 —— 它有旧类名与"点一下开一个二次确认弹窗"的老路径。
+  assert.ok(!src.includes('dsm-trash-box'), '不要再用旧的 .dsm-trash-box 手写列表')
+  assert.ok(!src.includes("type: 'trash-delete'"), '二次确认已由共享组件行内处理，不要再挂独立弹窗')
+  // 批量删除必须逐条调**已有的单条 op**，且参数名与单条一致（trashId）。
+  assert.match(src, /apiCall\('rules-trash-remove', \{ trashId: items\[i\]\.trashId \}\)/, '批量走单条 op，参数名 trashId')
+})

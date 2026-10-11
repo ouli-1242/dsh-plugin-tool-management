@@ -214,11 +214,13 @@
             apiCall('rules-restore', { trashId: entry.trashId }).then(function (res) {
               setBusy(false)
               if (res && res.ok) {
-                setModal(null)
+                // 弹窗**不关**：与提示词 / 场景 / 子智能体三个回收站同一条口径 —— 恢复一条之后
+                // 接着恢复下一条是常态，关掉弹窗等于逼用户再点一次「回收站」。
                 setResult({ ok: true, text: t('memory.result.restored', { name: entry.name }) })
                 refresh(true)
-              } else setTrash(Object.assign({}, trash, { error: translateError(t, res) }))
-            }).catch(function (e) { setBusy(false); setTrash(Object.assign({}, trash, { error: errMsg(e) })) })
+                loadTrash()
+              } else setTrash(function (cur) { return Object.assign({}, cur, { error: translateError(t, res) }) })
+            }).catch(function (e) { setBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
           }
           function submitTrashDelete(entry) {
             if (busy) return
@@ -227,10 +229,44 @@
               setBusy(false)
               if (res && res.ok) {
                 setResult({ ok: true, text: t('memory.result.trashRemoved', { name: entry.name }) })
-                setModal({ type: 'trash' })
                 loadTrash()
-              } else setTrash(Object.assign({}, trash, { error: translateError(t, res) }))
-            }).catch(function (e) { setBusy(false); setTrash(Object.assign({}, trash, { error: errMsg(e) })) })
+              } else setTrash(function (cur) { return Object.assign({}, cur, { error: translateError(t, res) }) })
+            }).catch(function (e) { setBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
+          }
+          /**
+           * 批量永久删除（回收站那条「已选 N 项 + 全选 + 永久删除 (N)」）。
+           *
+           * 逐条调**已有的单条 op**（`rules-trash-remove`），服务端不另造批量版 —— 那条自带
+           * 存在性校验，再造一份等于把判据抄两遍（理由同 42-shared-ui.js 的 TrashModal）。
+           * 串行而不是并发：条目数天然有限，串行才给得出「删了几个、为什么没删掉」。
+           */
+          function purgeTrashMany(items) {
+            if (!items.length) return
+            setBusy(true)
+            var done = 0, failed = 0, firstErr = null
+            var step = function (i) {
+              if (i >= items.length) {
+                setBusy(false)
+                setResult({
+                  ok: failed === 0,
+                  text: failed === 0
+                    ? t('trash.purgeMany.result', { count: done })
+                    : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' }),
+                })
+                loadTrash()
+                return
+              }
+              apiCall('rules-trash-remove', { trashId: items[i].trashId }).then(function (res) {
+                if (res && res.ok) done += 1
+                else { failed += 1; if (!firstErr) firstErr = translateError(t, res) }
+                step(i + 1)
+              }).catch(function (e) {
+                failed += 1
+                if (!firstErr) firstErr = errMsg(e)
+                step(i + 1)
+              })
+            }
+            step(0)
           }
           // ── 单条记忆启停（索引层开关，不改文件；停用的记忆仍留在磁盘上）──
           function toggleRule(rule) {
@@ -703,30 +739,36 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : submitUpdate }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
             // 场景建/删/档案弹窗已移至「场景」页（ScenesPage）。
-            modal && modal.type === 'trash' ? React.createElement(Modal, { key: 'trash', wide: true, title: t('memory.trash.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              // 保留期选择器（0.19.1）：记忆回收站是本机条目最多的一处（实测 120 条），
-              // 没有保留期就只能一条条点永久删除。放在 loading 判断**之前** ——
-              // 它有自己的加载状态，不该跟着列表一起消失。
-              React.createElement(RetentionSelect, { key: 'retention', t: t, onReload: loadTrash }),
-              trash.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
-                : React.createElement(React.Fragment, null,
-                  trash.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(trash.error)) : null,
-                  trash.entries.length
-                    ? React.createElement(React.Fragment, null,
-                      React.createElement('div', { className: 'dsm-count' }, t('memory.trash.count', { count: trash.entries.length })),
-                      React.createElement('div', { className: 'dsm-trash-box' }, trash.entries.map(function (entry) {
-                        return React.createElement('div', { key: entry.trashId, className: 'dsm-trash-item' },
-                          React.createElement('div', { className: 'dsm-trash-main' },
-                            React.createElement('div', { className: 'dsm-name' }, entry.name),
-                            React.createElement('div', { className: 'dsm-note' },
-                              sceneLabel(data.scenes, entry.group) + ' · ' + t('memory.form.' + (entry.form === 'bundle' ? 'bundle' : 'flat')) + ' · ' + entry.bytes + ' B · '
-                              + t('memory.trash.deletedAt', { time: entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : '' }))),
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { submitRestore(entry) } }, t('memory.trash.restore')),
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'trash-delete', entry: entry }) } }, t('memory.trash.purge')))
-                      })))
-                    : React.createElement('div', { className: 'dsm-empty' }, t('memory.trash.empty')))) : null,
-            modal && modal.type === 'trash-delete' ? React.createElement(Modal, { key: 'trash-delete', title: t('memory.trash.confirmTitle'), closeLabel: t('btn.close'), onClose: function () { setModal({ type: 'trash' }) } },
-              React.createElement('p', { className: 'dsm-help' }, t('memory.trash.confirmDesc', { name: modal.entry.name })),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitTrashDelete(modal.entry) } }, t('memory.trash.purge')))) : null)
+            // 记忆回收站：与提示词 / 场景 / 子智能体共用同一个 `TrashModal`（0.20.0）。
+            // 此前这里是一份手写的弹窗，于是它**没有「全选」**、样式（`.dsm-trash-box` 那个
+            // 圆角框）也和别处的回收站不一样（用户 2026-10-10 反馈「记忆回收站没有全选」
+            // 「样式和别的回收站不一样，应该统一」）。换共享组件之后，批量条、行内二次确认、
+            // 空态、保留期选择器全部与其它页同一套结构与类名。
+            // 两处自定义：条目主键是 `trashId`（不是通用的 `id`），备注要带场景 / 形态 / 字节数
+            // —— 分别走 `idOf` / `noteOf` 两个可选 prop，其它三个调用方不受影响。
+            modal && modal.type === 'trash' ? React.createElement(TrashModal, {
+              key: 'trash',
+              t: t,
+              title: t('memory.trash.title'),
+              groupTitle: t('trash.group.memories'),
+              groupSub: t('trash.section.memories.sub'),
+              entries: trash.entries || [],
+              loading: trash.loading,
+              error: trash.error,
+              busy: busy,
+              // 场景锁定时批量删除一并禁用（与单条「永久删除」同一件事，只禁单条等于留个口子）。
+              locked: anyLocked,
+              idOf: function (entry) { return entry.trashId },
+              noteOf: function (entry) {
+                return sceneLabel(data.scenes, entry.group) + ' · '
+                  + t('memory.form.' + (entry.form === 'bundle' ? 'bundle' : 'flat')) + ' · '
+                  + entry.bytes + ' B · '
+                  + t('memory.trash.deletedAt', { time: entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : '' })
+              },
+              onClose: function () { setModal(null) },
+              onRestore: submitRestore,
+              onPurge: submitTrashDelete,
+              onPurgeMany: purgeTrashMany,
+              onReload: loadTrash,
+            }) : null)
         }

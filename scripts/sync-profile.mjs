@@ -56,13 +56,42 @@
  * from npm instead of from a checkout.
  * Files already shared by inode are left alone; locked files are reported
  * instead of throwing (a running DSH holds its `lib/` open).
+ *
+ * A THIRD hazard showed up on 2026-10-10, and it is not about staleness but about
+ * DIRECTION: a hardlink is two-way. The profile's `README.md` *is* the checkout's
+ * `README.md`, so an editor holding the profile path and saving it rewrites the
+ * repository — the build looked healthy, "the file did not change", and the badges
+ * plus all eight screenshots had quietly been replaced by a stale buffer.
+ *
+ * The rule is therefore: **link only what the build rewrites in place** (`lib/`),
+ * and **copy everything else**. A stale copy is cosmetic; a stale link is data
+ * loss. See `LINKED` / `COPIED` below.
  */
-import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-/** Publish surface (package.json `files`) plus the loader patch every install needs. */
-const ENTRIES = ['lib', 'docs', 'cordis.patch.yml', 'README.md', 'README_EN.md', 'CHANGELOG.md', 'LICENSE', 'screenshots.json', 'package.json']
+/**
+ * 用**硬链接**镜像的条目：构建产物。
+ *
+ * 判据只有一条 —— **`npm run build` 会不会原地重写它？** 会，才值得链接。
+ * 链接的意义是「profile 那份就是仓库这份」：`tsc` / `sync-client` 原地截断重写后，profile
+ * 不写一个字就跟上了，DSH 运行时占着的句柄也不会让同步失败 —— 这就是本脚本存在的理由。
+ * 目前只有 `lib/`。
+ */
+const LINKED = ['lib']
+
+/**
+ * 用**复制**镜像的条目：文档与静态清单（= 发布面 `package.json#files` 减去 `lib`）。
+ *
+ * 这里绝不能用链接。链接是双向的：编辑器打开 profile 里的 `README.md` 一保存，写穿的是
+ * 仓库这份 —— 2026-10-10 就这么丢过一次改动（界面上「改了没生效」，实际是 profile 里那份
+ * 旧缓冲把仓库文件覆盖回去了，连徽章和 8 张截图一起带走）。复制最坏只是快照过期（重跑一次
+ * 本命令即可），链接会直接改掉 checkout。
+ *
+ * 加新条目时先问：**构建会不会原地重写它？** 不会 → 放这里。
+ */
+const COPIED = ['docs', 'cordis.patch.yml', 'README.md', 'README_EN.md', 'CHANGELOG.md', 'LICENSE', 'screenshots.json', 'package.json']
 
 const PLUGIN_DIR = 'dsh-plugin-tool-management'
 const home = process.env.DSH_HOME || join(homedir(), '.dsh')
@@ -87,39 +116,62 @@ let failures = null
 const rel = (path) => path.slice(stats.target.length + 1)
 
 /**
- * Mirror one file, preferring a HARDLINK over a copy (see the header: a copy is
- * a snapshot that `npm run build` can never reach again).
+ * Mirror one file.
  *
- * Falls back to a copy when linking is impossible — a different volume (EXDEV)
- * or a filesystem without hard links. A copy that can go stale still beats a
- * missing file; the counter in the summary says which happened.
+ * `link = true`（构建产物）：优先硬链接 —— profile 那份与仓库同一 inode，`tsc` 原地重写后
+ * 不必往 profile 写一个字，DSH 占着的句柄也就不会让同步失败。链接建不起来（跨卷 EXDEV、
+ * 文件系统不支持）时退回复制，计数进 `fallback`，summary 会提示。
+ *
+ * `link = false`（文档 / 静态清单）：**只复制**。链接是双向的 —— 编辑器打开 profile 里那份
+ * 一保存，写穿的是仓库这份。复制最坏只是过期，链接会直接改掉 checkout。
  */
-function mirrorFile(from, to) {
+function mirrorFile(from, to, link) {
   const src = statSync(from)
   const dst = statSync(to, { throwIfNoEntry: false })
-  if (dst !== undefined && dst.isFile() && src.ino !== 0 && src.ino === dst.ino && src.dev === dst.dev) {
+  const exists = dst !== undefined && dst.isFile()
+  // 目标与源同一个 inode = 两边根本是同一个文件（旧脚本建的那种链接）。
+  const sameFile = exists && src.ino !== 0 && src.ino === dst.ino && src.dev === dst.dev
+
+  if (link) {
+    if (sameFile) {
+      stats.same += 1
+      return
+    }
+    try {
+      // linkSync refuses an existing destination, so drop the stale file (or the
+      // copy whose inode we want to replace) first. The target is a mirror:
+      // nothing there is worth keeping.
+      if (dst !== undefined) rmSync(to, { force: true, recursive: dst.isDirectory() })
+      linkSync(from, to)
+      stats.linked += 1
+      return
+    } catch {
+      // 跨卷 / 不支持硬链接 → 落到下面的复制
+    }
+  } else if (exists && dst.nlink <= 1 && src.size === dst.size && readFileSync(from).equals(readFileSync(to))) {
+    // 复制模式：内容一致、**且这一份独占 inode** → 不用动。
+    // `nlink <= 1` 这一条不能省：目标若还与别处共享 inode，就地复制会写穿那份。
     stats.same += 1
     return
   }
+
   try {
-    // linkSync refuses an existing destination, so drop the stale file (or the
-    // copy whose inode we want to replace) first. The target is a mirror:
-    // nothing there is worth keeping.
-    if (dst !== undefined) rmSync(to, { force: true, recursive: dst.isDirectory() })
-    linkSync(from, to)
-    stats.linked += 1
-  } catch {
-    try {
-      copyFileSync(from, to)
-      stats.copied += 1
-    } catch (error) {
-      failures.push(`${rel(to)}: ${String((error && error.message) || error)}`)
+    // 复制模式必须让目标独占自己的 inode：共享 inode 时先 unlink 再写，否则 copyFileSync
+    // 会原地写穿，连带改掉另一个链接（旧脚本留下的硬链接、或两个 profile 互链）。
+    // 独占 inode 的就地覆盖更温和，不打断正打开它的进程。
+    if (!link && dst !== undefined && (dst.nlink > 1 || !dst.isFile())) {
+      rmSync(to, { force: true, recursive: dst.isDirectory() })
     }
+    copyFileSync(from, to)
+    if (link) stats.fallback += 1
+    else stats.copied += 1
+  } catch (error) {
+    failures.push(`${rel(to)}: ${String((error && error.message) || error)}`)
   }
 }
 
 /** Mirror one source tree into the target: copy what exists, drop what does not. */
-function mirror(from, to) {
+function mirror(from, to, link) {
   mkdirSync(to, { recursive: true })
   const names = new Set()
   for (const entry of readdirSync(from, { withFileTypes: true })) {
@@ -127,10 +179,10 @@ function mirror(from, to) {
     const src = join(from, entry.name)
     const dst = join(to, entry.name)
     if (entry.isDirectory()) {
-      mirror(src, dst)
+      mirror(src, dst, link)
       continue
     }
-    mirrorFile(src, dst)
+    mirrorFile(src, dst, link)
   }
   for (const entry of readdirSync(to, { withFileTypes: true })) {
     if (names.has(entry.name)) continue
@@ -145,20 +197,21 @@ function mirror(from, to) {
 
 /** 把一个 profile 镜像成当前交付物，返回这一份的失败清单。 */
 function syncTo(target) {
-  stats = { target, copied: 0, linked: 0, same: 0, pruned: 0 }
+  stats = { target, copied: 0, linked: 0, fallback: 0, same: 0, pruned: 0 }
   failures = []
-  for (const entry of ENTRIES) {
-    if (!existsSync(entry)) continue
-    if (statSync(entry).isDirectory()) mirror(entry, join(target, entry))
-    else mirrorFile(entry, join(target, entry))
+  for (const [entries, link] of [[LINKED, true], [COPIED, false]]) {
+    for (const entry of entries) {
+      if (!existsSync(entry)) continue
+      if (statSync(entry).isDirectory()) mirror(entry, join(target, entry), link)
+      else mirrorFile(entry, join(target, entry), link)
+    }
   }
-  const parts = [`${stats.same} 个已是同一份`, `${stats.linked} 个已建立硬链接`]
-  if (stats.copied) parts.push(`${stats.copied} 个只能复制`)
+  const parts = [`${stats.same} 个已一致`, `${stats.linked} 个硬链接`, `${stats.copied} 个复制`]
   if (stats.pruned) parts.push(`清掉 ${stats.pruned} 个陈旧文件`)
   console.log(`[sync-profile] ${target}\n  ${parts.join(' · ')}`)
-  if (stats.copied) {
-    console.warn(`[sync-profile] 有 ${stats.copied} 个文件是复制过去的（跨卷或不支持硬链接）：`
-      + '它们不会跟着 `npm run build` 更新，改完源码要重跑一次本命令。')
+  if (stats.fallback) {
+    console.warn(`[sync-profile] 有 ${stats.fallback} 个构建产物只能复制（跨卷或不支持硬链接）：`
+      + '它们不会跟着 `npm run build` 原地更新，改完源码要重跑一次本命令。')
   }
   return failures.slice()
 }

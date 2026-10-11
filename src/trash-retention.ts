@@ -6,9 +6,9 @@
 // 这里**刻意同形**：同一个 `{retentionDays, updatedAt}` 侧车形状、同一条到期判据、同一个
 // 「改设置即重置倒计时」语义。两处口径一旦分家，用户在两个页面看到的就是两套话术。
 //
-// 覆盖六类：hub 四类（`trash/<域>-trash/<id>/manifest.json`）+ 技能（`trash/skills-trash/`，
-// 元数据文件叫 `metadata.json`，是 core 层自己写的那套）+ 记忆（`memories-trash/`，
-// **hub 根下的独立目录**，不在 `trash/` 里 —— 见 hub.ts 顶部那张目录图）。
+// 覆盖六类：hub 五类（`trash/<域>-trash/<id>/manifest.json`，含记忆 —— 它的落点自
+// 2026-10-10 起也在这里，读写仍走 memories 域自己的实现）+ 技能（`trash/skills-trash/`，
+// 元数据文件叫 `metadata.json`，是 core 层自己写的那套）。
 //
 // 三条口径（改这个文件前先读）：
 //   ① `retentionDays <= 0` = **永久保留**，清扫是纯 no-op。这是默认值，也是本文件存在的

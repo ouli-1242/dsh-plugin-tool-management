@@ -98,57 +98,67 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 ### Slash commands (manage from the chat box)
 
 - **Type `/` for a "Tools" section**: scenes / skills / MCP servers / subagents / prompts / memories. Click a row to enter that domain, click an item to apply it; the menu stays open.
-- **State is visible** (green check / empty box / note in grey), and long lists scroll on their own; each external skill directory gets one row that toggles the whole source.
+- **State is visible**: green check / empty box / note in grey, plus a status summary on the domain row.
+- **Long lists stay out of the way**: every domain lists in full and scrolls on its own; skills group by source directory, memories by scene, enabled ones first.
+- **Both kinds of prompts are here**: the global group picks which one is written into `AGENTS.md` (single-select); the quick group is on/off, and clicking one pastes the saved text into the input box without sending it.
 - **Only reversible actions**: entering a scene and the various toggles; create / delete / edit / import / export stay on their own pages.
+- **Registered through the host's own channel**: DSH's input-trigger interface, no patching of official packages.
 
 ### Scenes & memories
 
-- **A scene = a group, a memory = a `.md` file**: `memories/<scene>/<name>.md`, the whole body is injected.
+- **A scene = a group, a memory = a `.md` file**: `memories/<scene>/<name>.md`, the whole body is injected, file names may be Chinese.
 - **"Enabled" and "entered" are two axes**: enabled decides which scene the injection follows (single-select; none enabled = only `global` and `_shared`); entering applies the scene's whole MCP / skills / personas set and writes its bound prompt into `AGENTS.md`.
-- **Scene profile**: ticked = on, unchecked = off, a section never created means that domain is off; leaving restores the pre-scene state.
-- **Every domain offers "None"**: for MCP / skills / personas / memories / global prompt it means the scene leaves that domain alone; for quick prompts it means none are enabled while the scene is on, and it is the default for a new scene.
-- **Scene lock** makes those five domains read-only; deleting a scene takes its memories with it into one recycle-bin entry. Import / export `.md` / `.zip`, same names skipped.
+- **Scene profile**: each scene pairs a set of MCP tools / skills / subagents / memories; ticked = on, unchecked = off, a section never created means that domain is off; leaving restores the pre-scene state.
+- **Every domain also offers "None"**: this scene leaves that domain alone (the prompt cell = leave `AGENTS.md` as-is; quick prompts = none enabled). It differs from "keep current" — that one really changes nothing.
+- **Scene lock** makes those five domains read-only.
+- **Deleting a scene takes its memories with it**: the record, the profile and every memory go into one recycle-bin entry and come back together; a scene in use refuses to be deleted.
+- **Import / export** `.md` / `.zip` (directory name = scene, bundles carry attachments), same names skipped and never overwritten; the injection budget defaults to 128 KiB, and anything that does not fit is skipped and listed.
 
 ### Subagents
 
-- **One file per persona**: `subagents/<persona>.md`, frontmatter entirely optional.
-- **Delegation**: `subagent_manager_run` runs with the persona, returns only its final result, and never enters History; `inherit: true` seeds the child with this conversation's finished turns.
-- **On/off**: a disabled persona is neither injected nor visible to the model; new / imported / restored personas start disabled.
-- **Tool limits per agent preset**: one allow or deny list per preset (mutually exclusive). Model and provider are picked from the host LLM catalogue; empty means inherit the main session.
+- **One file per persona**: `subagents/<persona>.md`, frontmatter entirely optional; `output:` gives one line per requirement for what the result must look like. The body is used verbatim under a `# Persona: <name>` heading, and the file itself needs no changes.
+- **Delegation**: `subagent_manager_run` runs with the persona, returns only its final result, and never enters History; it starts a fresh session by default, and `inherit: true` seeds it with this conversation's finished turns.
+- **On/off and catalogue**: a disabled persona is neither injected nor visible to the model (the file stays put); new / imported / restored personas start disabled. The catalogue lists name + description only.
+- **Tool limits per agent preset**: one allow or deny list per preset (mutually exclusive); candidates list only that preset's own tools, split into "plugin tools / official tools / other tools".
+- **Model and provider**: both are picked from the host LLM catalogue (choosing a provider narrows the model list); empty means inherit the main session, and the reasoning-effort level comes from the chosen model.
 
 ### MCP servers
 
-- **CRUD with immediate effect**: written into `cordis.patch.yml`, backed up before every change.
-- **Per-tool switches**: disable individual tools, or a whole server; a stopped server still shows the tools last seen.
-- **Secret masking**: a credential is replaced as a whole, and "Reveal" needs a token; a masked value is never written back.
-- A per-server note travels along as a decision hint; migration rolls back on failure, with JSON export/import.
+- **CRUD with immediate effect**: written into `cordis.patch.yml`, backed up before every change; scope is "global / app-level", and new entries default to global.
+- **Per-tool switches**: disable individual tools (invisible and uncallable to the model), or a whole server in one go.
+- **A stopped server still shows its list**: tools last seen are listed with their descriptions (marked "as of last run"); one that never ran can be started to read them.
+- **Notes and secrets**: a per-server note for the model travels along with the status section; credentials are masked as a whole (`$VAR`, `!!js` and similar indirect references are left alone), and "Reveal" needs a token.
+- **Migration and backups**: a cross-scope migration rolls back on failure; JSON export/import is supported.
 
 ### Skills
 
 - **Sources at a glance**: project / DSH / Agents / Codex / Claude / custom directories, grouped by source.
 - **Opposite permissions**: default sources are readable and their skills deletable; external directories can be disabled or removed but their files stay read-only.
 - **Remove ≠ disable**: removing stops scanning the directory at all (nothing is written, restorable); disabling keeps it listed but uncallable.
-- The winning copy of a shared name is marked "preferred"; custom directories, ZIP import/export and the recycle bin are all here.
+- **The winning copy of a shared name** is marked "preferred", and the ones it shadows are marked with their source.
+- **Custom directories / ZIP import-export / recycle bin.**
 
 ### Prompt presets
 
-- Multiple `~/.dsh/AGENTS.md` baselines, applied with one click (next turn), with 5 generations of backups; each preset can carry a one-line description that is never injected.
-- **The switch on the left of a card is the answer to "is this one in effect"**: flip it on and that preset is written into `AGENTS.md`; flip it off to **un-apply**, which restores the state from before you started applying (and deletes the file if there was none back then). The confirmation says which one it will be, and a receipt afterwards states what happened.
-- **Two kinds cannot be deleted directly**: a scene-bound preset, and the one currently applied. The copy auto-created on first open can be deleted. Deletes always go to the recycle bin.
-- **Quick prompts** (the second section on the same page): save a piece of text you keep typing, then hit `/` and click it; a scene can bind a set of them.
-- **This page's recycle bin is split in two by domain**, each half scrolling on its own with its own batch bar.
+- **Multiple `~/.dsh/AGENTS.md` baselines**, applied with one click (next turn), with 5 generations of backups; each preset can carry a one-line description that lives only on the plugin side; the last applied preset is always identifiable, even after you edit `AGENTS.md` by hand.
+- **The switch on the left of a card is the answer to "is this one in effect"**: flip it on and that preset is written into `AGENTS.md`; flip it off to **un-apply**. The confirmation says which one it will be (the button turns red when the file is going to be deleted), and a receipt follows.
+- **"Un-apply" goes back to the start of the chain, not one step**: it restores whatever was there before this run of apply / un-apply began (deleting the file if there was none); every intermediate version stays in `__last-applied__/AGENTS.md.bak-*` (5 generations), so it can be applied again.
+- **Two kinds cannot be deleted directly**: a scene-bound preset, and the one currently applied (un-apply it first). The copy auto-created on first open was never applied and can be deleted. Deletes always go to the recycle bin.
+- **Quick prompts** (the second section on the same page): save a piece of text you keep typing, then hit `/` and click it to paste it in; a scene can bind a set of them (only the ticked ones are on while the scene is entered, restored on exit, or pick "None").
 
 ### Archived sessions
 
 - Grouped by project, searchable, batch restore / delete, retention auto-cleanup; a workspace whose registration was deleted can be re-registered in one click.
-- Import Claude Code / Cursor / Codex / any text; export Markdown / JSONL in three cumulative modes: text only → plus tool calls → plus reasoning. **An export is a transcript, not a backup**.
+- Import Claude Code / Cursor / Codex / any text (pick a workspace, browse for one, or type a path).
+- Export Markdown / JSONL in three cumulative modes: text only → plus tool calls → plus reasoning. **An export is a transcript, not a backup** — use "archive" to keep everything.
 
 ### Host compatibility
 
 - **Host tab**: host version, usable capability count, per-action routing (native / adapter / unavailable), degradations and reasons; three write entries: access token, injection settings, model tool table.
 - **Command line**: `node scripts/doctor.mjs` (health check), `node scripts/host-deps.mjs --fix` (align dependencies).
 - Under a **suppressing preset** such as `minimal`, this plugin's injection is off by default; the Host tab can force any domain back on.
-- Unchecking "Skills" or "Prompt" really stops them — under standard presets the host delivers those two itself.
+- Unchecking "Skills" or "Prompt" really stops them — under standard presets the host delivers those two itself; the other three domains follow the checkbox exactly.
+- **What the injection looks like**: one `<system-reminder>` per domain — `# heading` + body + a "this one wins" line; a `</system-reminder>` inside the body is escaped.
 
 ---
 
@@ -160,8 +170,7 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 | Skill policy / custom dirs                                     | `~/.dsh/tool-management/skills-state.json`                                                       |
 | Skills / memories / personas / presets                         | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/`                                    |
 | Subagent toggles                                               | `~/.dsh/tool-management/subagents-index.json`                                                    |
-| Recycle bin (skills / personas / presets / scenes)             | `~/.dsh/tool-management/trash/{skills,subagents,prompts,scenes}-trash/`                          |
-| Memory recycle bin                                             | `~/.dsh/tool-management/memories-trash/` (a directory at the hub root, not under `trash/`)       |
+| Recycle bin (skills / memories / personas / presets / scenes)  | `~/.dsh/tool-management/trash/<domain>-trash/` (one directory per kind)                          |
 | Archive ledger / retention                                     | `~/.dsh/tool-management/history-*.json`                                                          |
 | Recycle-bin retention                                          | `~/.dsh/tool-management/trash-retention.json` (`0` = keep forever)                               |
 | Memory index / scenes / profiles                               | `~/.dsh/tool-management/memories-index.json`                                                     |
@@ -172,6 +181,8 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 | Runtime log / patch backups                                    | `~/.dsh/tool-management/tool-management.log` · `backups/`                                        |
 
 **No user data is stored inside the plugin's install directory** (`dsh plugin update` replaces it wholesale). `backups/` keeps **5 copies per patch file** — the global patch and each profile patch count separately.
+
+The six recycle bins each own one directory under `trash/`: `{skills,memories,subagents,prompts,scenes,quick-prompts}-trash/`. The memories one moved in from the hub root on 2026-10-10; existing data is carried over by the startup migration.
 
 ## Configuration & security
 
