@@ -223,6 +223,183 @@
           h('button', { type: 'button', className: 'dsm-btn', disabled: busy || !chosen.length, onClick: submit }, busy ? t('mcp.importJson.busy') : t('mcp.importJson.submit', { count: chosen.length }))))
     }
 
+    /**
+     * MCP 市场卡片（用户 2026-10-10：新增要跟 MCP 连接器一样有「导入 JSON / 手动配置 / 市场卡片」三档）。
+     *
+     * 目录取自 **MCP 连接器自己的 HTTP 面**（`POST /mcp-connector/api`，同源 + loopback 才放行）——
+     * 那是唯一有上架条目的地方（实测 113 条，字段含 id/name/vendor/category/icon/summary/tags/authMode）。
+     * 这里只做「浏览 + 交给连接器安装」：条目**不携带连接规格**（真正的 url/command 由连接器在授权后
+     * 生成，凭据也归它管），所以本页不伪造一个装不成的「一键安装」按钮 —— 点卡片即打开连接器的页面
+     * 完成安装（授权码 / API Key 都在那边），装好后回本页刷新即可见。
+     */
+    /**
+     * 自带市场目录（用户 2026-10-10：市场必须属于本插件 —— MCP 连接器一删，跳转就断）。
+     *
+     * 数据来源（2026-10-10 逐条核对，不靠记忆）：
+     *   · 包名 / 版本 / bin / 描述 ← npm registry 元数据
+     *   · command / args / env   ← 各包 README 里官方给的 mcpServers 片段
+     * 六条候选（server-sqlite / time / sentry / git / fetch / memory-bank）在 npm 上不存在，未收录。
+     *
+     * `{...}` 是**必须替换**的占位符：安装只把表单填好，路径与凭据由用户自己确认与填写，
+     * 本插件不经手、也不上传任何密钥。
+     */
+    var MCP_MARKET_ENTRIES = [
+      {
+        id: 'filesystem', name: '文件系统', vendor: 'ModelContextProtocol 官方', category: '文件与数据',
+        summary: '在指定目录内读写文件；列出的目录就是它的边界。',
+        pkg: '@modelcontextprotocol/server-filesystem', version: '2026.8.31',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-filesystem\n{目录}', env: '',
+        requires: '目录（可多个）', needsCred: false, tags: ['本地文件', '官方'],
+        note: '只允许访问 args 里列出的目录',
+      },
+      {
+        id: 'memory', name: '记忆知识图谱', vendor: 'ModelContextProtocol 官方', category: '文件与数据',
+        summary: '把事实与关系存成知识图谱，跨会话记住。',
+        pkg: '@modelcontextprotocol/server-memory', version: '2026.8.31',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-memory', env: '# MEMORY_FILE_PATH=/path/to/memory.jsonl',
+        requires: '无需（可选存储路径）', needsCred: false, tags: ['记忆', '官方'],
+        note: '',
+      },
+      {
+        id: 'postgres', name: 'PostgreSQL 只读查询', vendor: 'ModelContextProtocol 官方', category: '文件与数据',
+        summary: '对 PostgreSQL 做只读查询与表结构浏览。',
+        pkg: '@modelcontextprotocol/server-postgres', version: '0.6.2',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-postgres\n{postgresql://user:pass@host/db}', env: '',
+        requires: '连接串（含密码）', needsCred: true, tags: ['数据库', '官方'],
+        note: '连接串里含数据库口令，注意别把库权限开大',
+      },
+      {
+        id: 'redis', name: 'Redis', vendor: 'ModelContextProtocol 官方', category: '文件与数据',
+        summary: '读写 Redis 键值，用于缓存与队列排查。',
+        pkg: '@modelcontextprotocol/server-redis', version: '2025.4.25',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-redis\n{redis://host:6379}', env: '',
+        requires: 'Redis 地址', needsCred: false, tags: ['缓存', '官方'],
+        note: '',
+      },
+      {
+        id: 'github', name: 'GitHub', vendor: 'ModelContextProtocol 官方', category: '开发与代码',
+        summary: '查仓库、Issue、PR 与文件内容。',
+        pkg: '@modelcontextprotocol/server-github', version: '2025.4.8',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-github', env: 'GITHUB_PERSONAL_ACCESS_TOKEN={token}',
+        requires: 'GitHub 个人访问令牌', needsCred: true, tags: ['代码托管', '官方'],
+        note: '令牌建议只勾 repo 读权限',
+      },
+      {
+        id: 'gitlab', name: 'GitLab', vendor: 'ModelContextProtocol 官方', category: '开发与代码',
+        summary: '查 GitLab 项目、Issue 与合并请求。',
+        pkg: '@modelcontextprotocol/server-gitlab', version: '2025.4.25',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-gitlab', env: 'GITLAB_PERSONAL_ACCESS_TOKEN={token}\n# GITLAB_API_URL=https://gitlab.com/api/v4',
+        requires: 'GitLab 访问令牌', needsCred: true, tags: ['代码托管', '官方'],
+        note: '',
+      },
+      {
+        id: 'sequential-thinking', name: '顺序思考', vendor: 'ModelContextProtocol 官方', category: '开发与代码',
+        summary: '把复杂问题拆成可回溯的思考步骤；纯本地、不联网。',
+        pkg: '@modelcontextprotocol/server-sequential-thinking', version: '2026.8.31',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-sequential-thinking', env: '',
+        requires: '无需', needsCred: false, tags: ['推理', '官方'],
+        note: '',
+      },
+      {
+        id: 'puppeteer', name: '浏览器自动化', vendor: 'ModelContextProtocol 官方', category: '开发与代码',
+        summary: '用 Puppeteer 打开页面、截图、点击与取内容。',
+        pkg: '@modelcontextprotocol/server-puppeteer', version: '2025.5.12',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-puppeteer', env: '# PUPPETEER_LAUNCH_OPTIONS={"headless": true}',
+        requires: '无需（可选浏览器参数）', needsCred: false, tags: ['浏览器', '官方'],
+        note: '首次运行会下载 Chromium，可能较慢',
+      },
+      {
+        id: 'slack', name: 'Slack', vendor: 'ModelContextProtocol 官方', category: '协作与云',
+        summary: '读频道消息、发消息。',
+        pkg: '@modelcontextprotocol/server-slack', version: '2025.4.25',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-slack', env: 'SLACK_BOT_TOKEN={xoxb-...}\nSLACK_TEAM_ID={T01234567}\n# SLACK_CHANNEL_IDS=C01234567',
+        requires: 'Bot Token、Team ID', needsCred: true, tags: ['团队协作', '官方'],
+        note: '',
+      },
+      {
+        id: 'gdrive', name: 'Google Drive', vendor: 'ModelContextProtocol 官方', category: '协作与云',
+        summary: '搜索与读取 Drive 文件。',
+        pkg: '@modelcontextprotocol/server-gdrive', version: '2025.1.14',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-gdrive', env: '# GDRIVE_CREDENTIALS_PATH=/path/credentials.json\n# GDRIVE_OAUTH_PATH=/path/gcp-oauth.keys.json',
+        requires: 'OAuth 凭据文件（需先授权）', needsCred: true, tags: ['云盘', '官方'],
+        note: '要先按官方说明完成一次 OAuth 授权，并把凭据路径填进 env',
+      },
+      {
+        id: 'google-maps', name: 'Google Maps', vendor: 'ModelContextProtocol 官方', category: '协作与云',
+        summary: '地理编码、周边搜索与路线。',
+        pkg: '@modelcontextprotocol/server-google-maps', version: '0.6.2',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-google-maps', env: 'GOOGLE_MAPS_API_KEY={key}',
+        requires: 'Maps API Key', needsCred: true, tags: ['地图', '官方'],
+        note: '',
+      },
+      {
+        id: 'aws-kb-retrieval', name: 'AWS 知识库检索', vendor: 'ModelContextProtocol 官方', category: '协作与云',
+        summary: '检索 AWS Bedrock 知识库。',
+        pkg: '@modelcontextprotocol/server-aws-kb-retrieval', version: '0.6.2',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-aws-kb-retrieval', env: 'AWS_ACCESS_KEY_ID={...}\nAWS_SECRET_ACCESS_KEY={...}\nAWS_REGION={ap-northeast-1}',
+        requires: 'AWS 访问密钥与区域', needsCred: true, tags: ['云', '官方'],
+        note: '',
+      },
+      {
+        id: 'brave-search', name: 'Brave 搜索', vendor: 'ModelContextProtocol 官方', category: '搜索与诊断',
+        summary: '用 Brave Search API 做网页与新闻检索。',
+        pkg: '@modelcontextprotocol/server-brave-search', version: '0.6.2',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-brave-search', env: 'BRAVE_API_KEY={key}',
+        requires: 'Brave API Key', needsCred: true, tags: ['搜索', '官方'],
+        note: '',
+      },
+      {
+        id: 'everything', name: '协议自检', vendor: 'ModelContextProtocol 官方', category: '搜索与诊断',
+        summary: '官方示例服务：把所有协议特性都跑一遍，用来验证链路是否通。',
+        pkg: '@modelcontextprotocol/server-everything', version: '2026.8.31',
+        command: 'npx', args: '-y\n@modelcontextprotocol/server-everything', env: '',
+        requires: '无需', needsCred: false, tags: ['自检', '官方'],
+        note: '接进来只是验证链路；确认无误后可以删掉',
+      },
+    ]
+
+    function McpMarketPanel(props) {
+      var t = props.t
+      var qs = react.useState(''), query = qs[0], setQuery = qs[1]
+      var cs = react.useState(''), cat = cs[0], setCat = cs[1]
+      var items = MCP_MARKET_ENTRIES
+      var catCount = {}
+      items.forEach(function (it) { catCount[it.category] = (catCount[it.category] || 0) + 1 })
+      var cats = Object.keys(catCount).sort(function (a, b) { return catCount[b] - catCount[a] || a.localeCompare(b) })
+      var needle = query.trim().toLowerCase()
+      var shown = items.filter(function (it) {
+        if (cat && it.category !== cat) return false
+        if (!needle) return true
+        var hay = [it.name, it.vendor, it.category, it.summary, it.id, it.pkg].concat(it.tags || []).join(' ').toLowerCase()
+        return hay.indexOf(needle) >= 0
+      })
+      return h('div', { className: 'dsm-market' },
+        h('div', { className: 'dsm-market-bar' },
+          h('input', { className: 'dsm-control', value: query, placeholder: t('mcp.market.search'), 'aria-label': t('mcp.market.search'), onChange: function (e) { setQuery(e.target.value) } }),
+          h('span', { className: 'dsm-market-count' }, t('mcp.market.count', { count: shown.length }))),
+        h('div', { className: 'dsm-market-cats', role: 'group', 'aria-label': t('mcp.market.all') },
+          [''].concat(cats).map(function (name) {
+            var label = name ? name + ' ' + catCount[name] : t('mcp.market.all') + ' ' + items.length
+            return h('button', { key: name || '_all', type: 'button', className: 'dsm-market-cat' + (name === cat ? ' dsm-market-cat-on' : ''), 'aria-pressed': name === cat, onClick: function () { setCat(name) } }, label)
+          })),
+        h('div', { className: 'dsm-market-list' }, shown.map(function (it) {
+          var needReplace = it.args.indexOf('{') >= 0 || it.env.indexOf('{') >= 0
+          return h('button', { key: it.id, type: 'button', className: 'dsm-market-card', title: it.summary + (it.note ? ' — ' + it.note : ''), onClick: function () { props.onInstall(it) } },
+            h('span', { className: 'dsm-market-main' },
+              h('span', { className: 'dsm-market-name' }, it.name),
+              h('span', { className: 'dsm-market-meta' }, it.vendor + ' · ' + it.category + ' · ' + it.pkg + ' v' + it.version),
+              h('span', { className: 'dsm-market-summary' }, it.summary),
+              h('span', { className: 'dsm-market-tags' },
+                h('span', { className: 'dsm-market-tag' + (needReplace ? ' dsm-market-tag-warn' : '') }, t('mcp.market.requires', { what: it.requires })),
+                (it.tags || []).map(function (tag, ti) { return h('span', { key: 'tg' + ti, className: 'dsm-market-tag' }, tag) }))),
+            h('span', { className: 'dsm-market-badges' },
+              h('span', { className: 'dsm-market-badge dsm-market-badge-featured' }, t('mcp.market.official')),
+              h('span', { className: 'dsm-market-badge ' + (it.needsCred ? 'dsm-market-badge-warn' : 'dsm-market-badge-ok') }, it.needsCred ? t('mcp.market.cred') : t('mcp.market.noCred'))),
+            h('span', { className: 'dsm-market-cta' }, t('mcp.market.install')))
+        })),
+        h('p', { className: 'dsm-help' }, t('mcp.market.note')))
+    }
+
     function McpJsonExportModal(props) {
       var t = props.t
       var ls = react.useState(true); var loading = ls[0], setLoading = ls[1]

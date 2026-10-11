@@ -89,10 +89,16 @@
      * 垃圾桶图标：给「移除来源」这类破坏性操作做纯图标按钮用（按钮本身必须带 title /
      * aria-label —— 图标按钮没有可见文字，说明只能靠它们，别省）。
      */
+    /**
+     * 图形由用户 2026-10-10 指定（1024 视图的实心垃圾桶）。换图标时 viewBox 必须
+     * 一起换：1024 的路径塞进 16 的视图里只会剩左上一小块（那时按钮里就是"小米粒"）。
+     * 默认 14px 与行内其它图标同档；这枚路径近乎满幅（约 90%），14px 时视觉比旧图标
+     * 略重一档，若某处显得挤，调用点传 size 降 1px 即可。
+     */
     function TrashIcon(props) {
       var size = (props && props.size) || 14
-      return React.createElement('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' },
-        React.createElement('path', { fill: 'currentColor', d: 'M6.5 1h3l.5 1h3v1.5H3V2h3zM4 5h8l-.6 9.2a1 1 0 0 1-1 .8H5.6a1 1 0 0 1-1-.8z' }))
+      return React.createElement('svg', { viewBox: '0 0 1024 1024', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' },
+        React.createElement('path', { fill: 'currentColor', d: 'M836.6 193.8h100.2c18.8 0 33.9-16.2 33.9-36.3s-15.1-35.2-33.9-35.2H724.9V85.9C724.9 40 690 2 646.6 2H377.9c-42.8 0-78.3 37.5-78.3 83.9v36.3H87.2c-18.8 0-33.9 16.2-33.9 36.3s15.1 36.3 33.9 36.3h100.2l649.2-1zM804.6 253.7l-585.2 1c-20.5 0-37.2 17.6-37.2 39.2V890c0 72.6 56.3 132 125.1 132h409.4c68.8 0 125.1-59.4 125.1-132V293c0-21.7-16.7-39.3-37.2-39.3z' }))
     }
 
     /**

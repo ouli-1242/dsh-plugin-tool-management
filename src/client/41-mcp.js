@@ -17,6 +17,8 @@
           const debouncedQuery = useDebouncedValue(query)
           const [levelFilter, setLevelFilter] = React.useState('')
           const [collapsed, setCollapsed] = React.useState({})
+          // 新增弹窗的三档：手动配置 / 导入 JSON / 市场卡片（编辑不用，保持单档表单）。
+          const [addMode, setAddMode] = React.useState('manual')
           const [formModal, setFormModal] = React.useState(null)
           // 表单的本地校验结果（不塞进 formModal：那对象是发给服务端的 payload 形状）。
           const [formError, setFormError] = React.useState(null)
@@ -176,7 +178,7 @@
             })
           }
 
-            const openAdd = () => { setFormError(null); setFormModal(Object.assign({ mode: 'add', id: null }, emptyForm())) }
+            const openAdd = () => { setFormError(null); setAddMode('manual'); setFormModal(Object.assign({ mode: 'add', id: null }, emptyForm())) }
               const openEdit = (row) => {
                 setFormError(null)
                 setFormModal({
@@ -193,6 +195,26 @@
                 })
               }
             const closeForm = () => { setFormError(null); setFormModal(null) }
+          /**
+           * 「市场卡片」点一张卡片 → 把自带目录里的官方用法填进**手动配置**表单。
+           *
+           * 只填表单、不直接提交：目录里的 `{...}` 是必须由用户替换的占位符（目录 / 连接串 /
+           * 凭据），凭据只该由用户自己敲进表单 —— 本插件不经手、也不上传任何密钥。
+           * 切到手动档而不是留在市场档，是为了让用户看得见填了什么、能改、能核对。
+           */
+          const installFromMarket = (entry) => {
+            setFormError(null)
+            setFormModal(Object.assign({ mode: 'add', id: null }, emptyForm(), {
+              serverName: entry.id,
+              transport: 'stdio',
+              command: entry.command,
+              args: entry.args,
+              env: entry.env || '',
+              note: entry.note || '',
+            }))
+            setAddMode('manual')
+            setMsg({ kind: 'warn', text: mt('mcp.market.installHint') })
+          }
             const setFormField = (key) => (ev) => { setFormError(null); setFormModal(Object.assign({}, formModal, { [key]: ev.target.value })) }
             const setFormValue = (key, value) => { setFormError(null); setFormModal(Object.assign({}, formModal, { [key]: value })) }
             /**
@@ -570,7 +592,25 @@
             closeLabel: mt('btn.close'),
             onClose: closeForm,
           },
-              React.createElement('div', { className: 'dsm-form' },
+              formModal.mode === 'add'
+                ? React.createElement('div', { className: 'dsm-segmented', role: 'tablist', 'aria-label': mt('mcp.form.addTitle') },
+                    [['manual', 'mcp.addMode.manual'], ['json', 'mcp.addMode.json'], ['market', 'mcp.addMode.market']].map((pair) => React.createElement('button', {
+                      key: pair[0],
+                      type: 'button',
+                      role: 'tab',
+                      'aria-selected': addMode === pair[0],
+                      className: 'dsm-segmented-item' + (addMode === pair[0] ? ' dsm-segmented-on' : ''),
+                      // 「导入 JSON」不在这里重画一份：交接到既有的导入面板（它带预览、改名提示、
+                      // 跳过原因与文件选择，重画一遍必然两套规则漂移）。
+                      onClick: () => {
+                        if (pair[0] === 'json') { setAddMode('json'); closeForm(); setJsonImportOpen(true); return }
+                        setAddMode(pair[0])
+                      },
+                    }, mt(pair[1]))))
+                : null,
+              formModal.mode === 'add' && addMode === 'market'
+                ? React.createElement(McpMarketPanel, { t: mt, onInstall: installFromMarket })
+                : React.createElement('div', { className: 'dsm-form' },
                 maskedInForm ? React.createElement(Notice, { kind: 'warn', text: mt('mcp.form.maskedHint') }) : null,
                 formError ? React.createElement(Notice, { kind: 'error', text: formError }) : null,
               React.createElement('label', { className: 'dsm-field' },
@@ -619,7 +659,9 @@
                   React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.note')),
                   React.createElement('span', { className: 'dsm-char-count' }, String(formModal.note || '').length + ' / ' + MCP_NOTE_MAX)),
                 React.createElement('input', { className: 'dsm-control', value: formModal.note || '', maxLength: MCP_NOTE_MAX, placeholder: mt('mcp.field.note.placeholder'), onChange: setFormField('note') }))),
-            React.createElement('div', { className: 'dsm-modal-actions' },
+            formModal.mode === 'add' && addMode === 'market'
+              ? null
+              : React.createElement('div', { className: 'dsm-modal-actions' },
               React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy === 'form' || !formModal.serverName.trim(), onClick: submitForm }, formModal.mode === 'edit' ? mt('mcp.btn.save') : mt('mcp.btn.add'))))
 
           const detailStatus = detail ? liveStatus(detail.row) : null

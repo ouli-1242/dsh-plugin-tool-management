@@ -1,3 +1,58 @@
+        /* ── 主栏页（用户 2026-10-10：参考 mcp连接器 / 插件管理，本插件也要有主栏页）──
+           席位是宿主的 `main`（契约里的 "registered main key"）：插件管理用 `plugins`、
+           市场用自己的键；侧栏行按"同名词"匹配到本键后**直接选中这一页**，既没有设置弹窗、
+           也没有定位于视口的浮层（上一版走 shell.overlay，用户 2026-10-10 裁定要原生主栏页）。
+           键取 `dsm-tools`：与设置分区 id 同一个词根（tools），侧栏那侧按 id 找页面时能配上；
+           内容直接复用设置分区那套组件（ToolsSection：8 个页签 + 全部业务），两处天然同源。 */
+        function ToolsPage() {
+          const layout = ctx.get('layout')
+          return React.createElement('div', { className: 'dsm-mainpage', role: 'region', 'aria-label': t('nav.title') },
+            React.createElement('div', { className: 'dsm-mainpage-shell' },
+              React.createElement('header', { className: 'dsm-mainpage-head' },
+                React.createElement('h1', { className: 'dsm-mainpage-title' }, t('nav.title')),
+                React.createElement('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn-icon dsm-mainpage-close',
+                  'aria-label': t('btn.close'),
+                  title: t('btn.close'),
+                  // 宿主契约：selectPanel(null) = 回到会话。
+                  onClick: function () {
+                    if (layout !== undefined && typeof layout.selectPanel === 'function') layout.selectPanel(null)
+                  }
+                }, React.createElement('svg', { viewBox: '0 0 16 16', width: 16, height: 16, 'aria-hidden': 'true', focusable: 'false' },
+                  React.createElement('path', { d: 'M4 4l8 8M12 4l-8 8', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' })))),
+              React.createElement('div', { className: 'dsm-mainpage-body' }, React.createElement(ToolsSection))))
+        }
+
+        slots.inject('main', () => slots.register(
+          { name: 'main', key: 'dsm-tools', locale: NS },
+          ToolsPage
+        ))
+
+        /* ── 自带侧栏行（用户 2026-10-10：工具是自带主栏页的功能，侧栏行该由它自己出）──
+           席位 `sidebar.panellist`：契约上 list id 就是主栏面板键，按钮、选中态与标签由侧栏
+           自己画，这里只交图标。注册了这一条之后，"侧栏设置"那个插件按**同名标签**自动让开、
+           不再代管这一行（它的 isShown 把自带行排在用户偏好之前），所以它的开关再也关不掉
+           工具 —— 谁的页面谁出入口。
+           order 116 = 侧栏插件的 ROW_BASE_ORDER(100) + 本插件设置分区的 order(16)，
+           正好是它此前代管时所在的位置（MCP连接器 与 插件市场 之间）。 */
+        function ToolsNavIcon(props) {
+          const size = (props && props.size) || 16
+          /* 用户 2026-10-10 指定的图标（四方块）。原件是 1024 视图、fill #323333 的实心路径：
+             这里保留 1024 视图，但把填充换成 currentColor —— 侧栏行图标必须跟着
+             选中/悬停/主题变色，写死深灰在深色主题下就是一块看不见的深灰。 */
+          return React.createElement('svg', {
+            viewBox: '0 0 1024 1024', width: size, height: size,
+            'aria-hidden': 'true', focusable: 'false'
+          },
+            React.createElement('path', { fill: 'currentColor', d: 'M406.409701 486.995257h-332.769427a63.994121 63.994121 0 0 1-63.99412-67.193826V86.392063a63.994121 63.994121 0 0 1 63.99412-63.994121h332.769427a63.994121 63.994121 0 0 1 67.193827 63.994121v333.409368a63.994121 63.994121 0 0 1-67.193827 67.193826z m0-400.603194H76.83998l3.839648 330.209662h325.730073z m0 330.209662zM767.976482 503.633729a63.994121 63.994121 0 0 1-46.715708-19.198237L536.317766 299.492484a63.994121 63.994121 0 0 1 0-92.791475L720.620833 21.758001a63.994121 63.994121 0 0 1 92.791475 0l184.303067 184.943008a63.994121 63.994121 0 0 1 0 92.791475l-184.303067 184.943008a63.994121 63.994121 0 0 1-45.435826 19.198237zM589.432886 255.976482L767.976482 431.320372 945.240196 255.976482 767.976482 74.873121zM406.409701 1023.905929h-332.769427a63.994121 63.994121 0 0 1-63.99412-67.193827V620.742969a63.994121 63.994121 0 0 1 63.99412-63.99412h332.769427a63.994121 63.994121 0 0 1 67.193827 63.99412v333.409368A63.994121 63.994121 0 0 1 406.409701 1023.905929z m0-400.603195l-329.569721 3.199706 3.839648 330.209662 325.730073-3.199706z m0 330.209662zM933.721254 1023.905929H600.311886a63.994121 63.994121 0 0 1-63.99412-67.193827V620.742969a63.994121 63.994121 0 0 1 63.99412-63.99412h333.409368a63.994121 63.994121 0 0 1 63.994121 63.99412v333.409368a63.994121 63.994121 0 0 1-63.994121 69.753592z m-3.839647-403.16296l-329.569721 3.199706 3.839648 330.209662 325.730073-3.199706z m3.839647 330.209662z' }))
+        }
+
+        slots.inject('sidebar.panellist', () => slots.register(
+          { name: 'sidebar.panellist', id: 'dsm-tools', order: 116, label: function () { return t('nav.title') }, locale: NS },
+          ToolsNavIcon
+        ))
+
 
         // ---------- Skills 页（移植自 dsh-skills-manager，Apache-2.0；类名前缀 dsm-） ----------
         // `react` / `h` 别名原在这里声明；2026-10-11 切片五上移到 20 片（工厂作用域）——

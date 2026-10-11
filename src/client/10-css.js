@@ -975,4 +975,252 @@ button.dsm-rowselect-box:disabled{cursor:default;opacity:.45}
 .dsm-mode-caret,.dsm-pick-caret{width:12px;height:12px;flex:none;color:var(--dsw-alias-label-tertiary)}
 /* 快照导入预览：行选择纵向堆叠（原为横向勾选 chips，切片五换 RowSelect）。 */
 .dsm-snap-picks{display:flex;flex-direction:column;gap:2px}
+  /* ── 本功能自己的样式 ─────────────────────────────────────────────
+     这些类名由本分支的新代码使用，基线 CSS 里没有对应规则；
+     规则取自被关闭的 #6（feat/modal-visual-layer），按其选择器抽出。 */
+.dsm-mainpage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100%;
+  background: var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1));
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-mainpage-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  padding: 0 24px 16px;
+}
+.dsm-mainpage-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 14px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  margin-bottom: 14px;
+}
+.dsm-mainpage-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-mainpage .dsm-feedback-links {
+  display: none;
+}
+.dsm-mainpage-close {
+  margin-left: auto;
+  flex: none;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dsm-radius-small);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+.dsm-mainpage-close:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-mainpage-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+   
+  scrollbar-gutter: stable;
+}
+.dsm-mainpage-shell {
+    padding: 0 14px 12px;
+  }
+.dsm-row-hint .dsm-hint-act {
+  margin-left: 8px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
+.dsm-segmented {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+   
+  border: 0;
+  border-radius: 10px;
+   
+  background: var(--dsw-alias-border-l3);
+}
+.dsm-segmented-item {
+  flex: 1;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dsm-segmented-item:hover {
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-segmented-on,
+.dsm-segmented-on:hover {
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+  box-shadow: var(--dsw-shadow-lv1, 0 1px 3px rgba(0, 0, 0, .12));
+}
+.dsm-market {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+.dsm-market-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dsm-market-count {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.dsm-market-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dsm-market-cat {
+  padding: 2px 9px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.dsm-market-cat:hover {
+  border-color: var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-market-cat-on {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+.dsm-market-badges {
+  display: flex;
+  max-width: 42%;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+.dsm-market-badge {
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.dsm-market-badge-featured {
+  border-color: var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-market-badge-ok {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+.dsm-market-badge-warn {
+  border-color: var(--dsw-alias-state-warn-primary);
+  color: var(--dsw-alias-state-warn-primary);
+}
+.dsm-market-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.dsm-market-tag {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}
+.dsm-market-tag-warn {
+  color: var(--dsw-alias-state-warn-primary);
+}
+.dsm-market-list {
+  display: flex;
+  max-height: 320px;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dsm-market-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  text-align: left;
+  cursor: pointer;
+}
+.dsm-market-card:hover {
+  border-color: var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-2);
+}
+.dsm-market-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+.dsm-market-name {
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+.dsm-market-meta {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+.dsm-market-summary {
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsm-market-cta {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
 `
