@@ -20,8 +20,128 @@
       '.dsm-modal textarea.dsm-control.dsm-textarea-sm{min-height:88px}' +
       '.dsm-modal textarea.dsm-control.dsm-textarea-md{min-height:200px}' +
       '.dsm-modal textarea.dsm-control.dsm-textarea-lg{min-height:300px}' +
+      /* 新建/编辑人设弹窗（dsm-modal-compact，2026-10-10）：两块 textarea-md 的 200px 下限把
+         「保存」挤出 760 顶格的一屏（内容约 810px）。压到 150 —— 下限只决定初始高度，框照常
+         能拖高；权重 4 类 + 1 元素，压过上面那条 200px，不靠 !important。 */
+      '.dsm-modal.dsm-modal-compact textarea.dsm-control.dsm-textarea-md{min-height:150px}' +
       '.dsm-detail-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}' +
       '.dsm-note-user{color:var(--dsw-alias-label-tertiary)}' +
+
+      // ── 视觉层收拢（本 PR 追加；同选择器后者胜，不靠 !important）──
+      '.dsm-hist-check,.dsm-hist-group-check{flex:none;width:15px;height:15px;margin:0 4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}' +
+      '.dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}' +
+      '.dsm-inject-domain input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}' +
+      '.dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}' +
+      '.dsm-tooltable-tool input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}' +
+      '.dsm-modal-fixed .dsm-field-grow textarea{flex:1}' +
+      '.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:2px 0 0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}' +
+      '.dsm-imp-radio input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-button-primary-fill)}' +
+      '.dsm-snap-pick input,.dsm-kind-pick input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}' +
+      '.dsm-composer-chips{--dsm-radius-control: var(--dsw-radius-md, 8px); --dsm-radius-small: var(--dsw-radius-sm, 6px); --dsm-radius-surface: var(--dsw-radius-lg, 12px); --dsm-radius-dialog: var(--dsw-radius-panel, 14px); --dsm-hairline: 0.5px; --dsm-ring: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));}' +
+      '.dsm-select-menu button:focus-visible{outline: var(--dsm-ring); outline-offset: 1px;}' +
+      '.dsm-btn-lock:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover);}' +
+      '.dsm-btn-quiet:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}' +
+      '.dsm-btn-danger:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover-danger);}' +
+      '.dsm-bulk-ghost{border: 0; background: none; padding: 0 2px; font: inherit; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); cursor: pointer;}' +
+      '.dsm-link:hover{color: var(--dsw-alias-label-primary);}' +
+      '.dsm-file-remove:hover{background: var(--dsw-alias-interactive-bg-hover-danger);}' +
+      '.dsm-select-trigger > span{min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}' +
+      '.dsm-select-trigger::after{content: ; flex: none; box-sizing: border-box; width: 7px; height: 7px; margin-top: -3px; border-right: 1.5px solid var(--dsw-alias-label-tertiary); border-bottom: 1.5px solid var(--dsw-alias-label-tertiary); transform: rotate(45deg);}' +
+      '.dsm-select-trigger:empty::before{color: var(--dsw-alias-label-dimmed);}' +
+      '.dsm-select-trigger:focus-visible{outline: none; border-color: var(--dsw-alias-state-business-primary);}' +
+      '.dsm-select-trigger:disabled{color: var(--dsw-alias-label-tertiary); cursor: default;}' +
+      '.dsm-control[aria-invalid= true ]{border-color: var(--dsw-alias-state-error-primary);}' +
+      '.dsm-select-menu [role= option ]{min-height: 34px; padding: 6px 8px; border: 0; border-radius: var(--dsm-radius-control); background: transparent; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-primary); text-align: left;}' +
+      '.dsm-select-menu [aria-selected= true ]{background: var(--dsw-alias-interactive-bg-hover);}' +
+      '.dsm-modal-head-wrap .dsm-modal-title{margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; color: var(--dsw-alias-label-primary);}' +
+      '.dsm-dir-item + .dsm-dir-item{border-top: var(--dsm-hairline) solid var(--dsw-alias-border-l2);}' +
+      '.dsm-spec-tag{display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; font-size: 11px; font-weight: 500; line-height: 17px; white-space: nowrap;}' +
+      '.dsm-chip-interactive{min-height: 24px; padding: 0 8px; border: 0; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; cursor: pointer;}' +
+      'button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}' +
+      '.dsm-filters .dsm-chip-picked{color: var(--dsw-alias-label-primary); background: var(--dsw-alias-button-ghost-active-fill); box-shadow: inset 0 0 0 1px var(--dsw-alias-button-ghost-active-border);}' +
+      '.dsm-feedback.dsm-ok{color: var(--dsw-alias-state-success-primary); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);}' +
+      '.dsm-feedback.dsm-warning{color: var(--dsw-alias-state-warn-primary); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);}' +
+      '.dsm-switch.dsm-switch-on{background: var(--dsw-alias-brand-primary);}' +
+      '.dsm-switch::after{content: ; display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--dsw-alias-switch-thumb); transition: transform 120ms ease;}' +
+      '.dsm-switch.dsm-switch-on::after{background: var(--dsw-alias-label-primary-foreground); transform: translateX(16px);}' +
+      '.dsm-loading{display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 48px; font-size: 13px; color: var(--dsw-alias-label-secondary);}' +
+      '.dsm-feedback.dsm-error{padding: 10px 12px; border-radius: var(--dsm-radius-control);}' +
+      '.dsm-tabs::-webkit-scrollbar{display: none;}' +
+      '.dsm-tabs .dsm-tab{flex: 0 0 auto; width: auto; min-width: 0; padding: 7px 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; font: inherit; font-size: 13px; line-height: 1.5; color: var(--dsw-alias-label-secondary); cursor: pointer; white-space: nowrap;}' +
+      '.dsm-tab:hover{color: var(--dsw-alias-label-primary);}' +
+      '.dsm-tab[aria-selected= true ]{color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-label-primary); font-weight: 500;}' +
+      '.dsm-imp-radio:hover{background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}' +
+      '.dsm-composer-chips-row{flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; overflow-x: auto; scrollbar-width: none;}' +
+      '.dsm-composer-chips-row::-webkit-scrollbar{display: none;}' +
+      '.dsm-composer-chip{flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; max-width: 220px; min-height: 28px; padding: 0 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 999px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 12.5px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; transition: background .12s ease, color .12s ease;}' +
+      '.dsm-composer-chip:hover{background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}' +
+      '.dsm-composer-chip-glyph{display: inline-flex; flex: none; opacity: .62;}' +
+      '.dsm-composer-chip:hover .dsm-composer-chip-glyph{opacity: .9;}' +
+      '.dsm-composer-chips-more{flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 999px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-tertiary); font-size: 14px; line-height: 1; cursor: pointer;}' +
+      '.dsm-composer-chips-more:hover{background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}' +
+      '.dsm-composer-chip-guide{border-style: dashed; color: var(--dsw-alias-label-tertiary); font-weight: 400;}' +
+      '.dsm-composer-chip-guide:hover{color: var(--dsw-alias-label-primary);}' +
+      '.dsm-modal-actions .dsm-btn{min-height: 36px; padding: 0 14px; font-size: 14px; line-height: 22px; border-radius: var(--dsm-radius-control);}' +
+      '.dsm-seg-filter .dsm-btn{min-height: 34px; padding: 0 12px; font-size: 13px; line-height: 20px;}' +
+      '.dsm-name-row .dsm-btn{min-height: 28px; padding: 0 10px; font-size: 12px; line-height: 18px; border-radius: var(--dsm-radius-small);}' +
+      '.dsm-actions .dsm-bulk-ghost{min-height: 28px; display: inline-flex; align-items: center;}' +
+      '.dsm-persona-name-row .dsm-switch{margin-left: auto;}' +
+      '.dsm-btn.dsm-btn-bulk > .dsm-bulk-ghost{line-height: 18px;}' +
+      '.dsm-backup-actions .dsm-btn.dsm-btn-icon{width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; border-radius: var(--dsm-radius-small); background: transparent; color: var(--dsw-alias-label-tertiary);}' +
+      '.dsm-btn.dsm-btn-icon > svg{width: 14px; height: 14px; flex: none;}' +
+      '.dsm-btn.dsm-btn-icon.dsm-btn-lock{border: 0; background: transparent; color: var(--dsw-alias-label-tertiary);}' +
+      '.dsm-btn.dsm-btn-icon.dsm-btn-lock:hover:not(:disabled){color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger);}' +
+      '.dsm-btn.dsm-btn-icon:focus-visible{outline: var(--dsm-ring); outline-offset: 1px;}' +
+      '.dsm-preset-row > [role= switch ]{margin-right: 2px;}' +
+      '.dsm-mainpage{display: flex; flex: 1; min-height: 0; flex-direction: column; box-sizing: border-box; height: 100%; background: var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1)); color: var(--dsw-alias-label-primary);}' +
+      '.dsm-mainpage-shell{display: flex; flex: 1; min-height: 0; flex-direction: column; box-sizing: border-box; width: min(1120px, 100%); margin: 0 auto; padding: 0 24px 16px;}' +
+      '.dsm-mainpage-head{display: flex; align-items: center; gap: 10px; padding: 10px 0 14px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); margin-bottom: 14px;}' +
+      '.dsm-mainpage-title{margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; color: var(--dsw-alias-label-primary);}' +
+      '.dsm-mainpage .dsm-feedback-links{display: none;}' +
+      '.dsm-mainpage-close{margin-left: auto; flex: none; width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; border-radius: var(--dsm-radius-small); background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer;}' +
+      '.dsm-mainpage-close:hover{background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}' +
+      '.dsm-mainpage-body{flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;}' +
+      '.dsm-row-hint .dsm-hint-act{margin-left: 8px; height: 20px; min-height: 20px; padding: 0 8px; font-size: 12px; line-height: 18px;}' +
+      '.dsm-source-caret{flex: none; display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--dsw-alias-label-secondary);}' +
+      '.dsm-modal.dsm-modal-wide{width: min(720px, 100%) !important;}' +
+      '.dsm-detail-head{display: flex; align-items: center; gap: 10px; min-width: 0;}' +
+      '.dsm-detail-head .dsm-detail-path{flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}' +
+      '.dsm-detail-section .dsm-code{max-height: 340px; overflow: auto; overscroll-behavior: contain;}' +
+      '.dsm-modal .dsm-field + .dsm-field{border-top: 0;}' +
+      '.dsm-modal .dsm-form{gap: 16px;}' +
+      '.dsm-modal .dsm-field{gap: 8px;}' +
+      '.dsm-modal .dsm-label{color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 500; line-height: 20px;}' +
+      '.dsm-modal .dsm-help{margin-top: -2px; font-size: 12px; line-height: 17px;}' +
+      '[class*="dsm-"] input[type="radio"]{accent-color: var(--dsw-alias-button-primary-fill);}' +
+      '.dsm-head .dsm-actions{margin-left: auto;}' +
+      '.dsm-segmented{display: flex; gap: 4px; padding: 3px; border: 0; border-radius: 10px; background: var(--dsw-alias-border-l3);}' +
+      '.dsm-segmented-item{flex: 1; min-height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; cursor: pointer;}' +
+      '.dsm-segmented-item:hover{color: var(--dsw-alias-label-primary);}' +
+      '.dsm-segmented-on:hover{background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-weight: 500; box-shadow: var(--dsw-shadow-lv1, 0 1px 3px rgba(0, 0, 0, .12));}' +
+      '.dsm-market{display: flex; min-height: 0; flex-direction: column; gap: 10px;}' +
+      '.dsm-market-bar{display: flex; align-items: center; gap: 10px;}' +
+      '.dsm-market-count{flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; white-space: nowrap;}' +
+      '.dsm-market-cats{display: flex; flex-wrap: wrap; gap: 6px;}' +
+      '.dsm-market-cat{padding: 2px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; cursor: pointer;}' +
+      '.dsm-market-cat:hover{border-color: var(--dsw-alias-border-l3); color: var(--dsw-alias-label-primary);}' +
+      '.dsm-market-cat-on{border-color: var(--dsw-alias-state-business-primary); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-weight: 500;}' +
+      '.dsm-market-badges{display: flex; max-width: 42%; flex: none; flex-direction: column; align-items: flex-end; gap: 3px;}' +
+      '.dsm-market-badge{padding: 0 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px; white-space: nowrap;}' +
+      '.dsm-market-badge-featured{border-color: var(--dsw-alias-border-l3); color: var(--dsw-alias-label-primary);}' +
+      '.dsm-market-badge-ok{border-color: var(--dsw-alias-state-success-primary); color: var(--dsw-alias-state-success-primary);}' +
+      '.dsm-market-badge-warn{border-color: var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-state-warn-primary);}' +
+      '.dsm-market-tags{display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px;}' +
+      '.dsm-market-tag{color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px;}' +
+      '.dsm-market-tag-warn{color: var(--dsw-alias-state-warn-primary);}' +
+      '.dsm-market-list{display: flex; max-height: 320px; flex-direction: column; gap: 8px; overflow: auto; overscroll-behavior: contain;}' +
+      '.dsm-market-card{display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); text-align: left; cursor: pointer;}' +
+      '.dsm-market-card:hover{border-color: var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-2);}' +
+      '.dsm-market-icon{width: 28px; height: 28px; flex: none; border-radius: 7px; background: var(--dsw-alias-bg-layer-2); object-fit: contain;}' +
+      '.dsm-market-main{display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px;}' +
+      '.dsm-market-name{color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 500;}' +
+      '.dsm-market-meta{color: var(--dsw-alias-label-tertiary); font-size: 11px;}' +
+      '.dsm-market-summary{overflow: hidden; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 17px; text-overflow: ellipsis; white-space: nowrap;}' +
+      '.dsm-market-cta{flex: none; color: var(--dsw-alias-label-secondary); font-size: 12px; white-space: nowrap;}' +
       `
 .dsm-hint{display:flex;min-width:0;align-items:center;gap:5px;margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:18px}.dsm-hint-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-hint-mark{display:inline-flex;width:14px;height:14px;flex:none;align-items:center;justify-content:center;border:1px solid var(--dsw-alias-border-l2);border-radius:50%;font-size:9px;line-height:1;cursor:help}.dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;padding:4px}.dsm-tabs-end{display:flex;align-items:center;gap:4px;margin-left:auto}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:2px 0 36px;container-type:inline-size;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-title-block{min-width:0}.dsm-title-row{display:flex;align-items:center;gap:8px 12px;min-width:0;flex-wrap:wrap}.dsm-feedback-links{display:flex;flex-direction:column;align-items:flex-end;gap:2px}.dsm-title{margin:0;font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.4px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:28px;align-items:center;gap:5px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:500;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:7px;margin-left:0;flex:none}
 /* 页头动作行：内边距收 2px。批量按钮要按「取消全选」定宽（见 .dsm-btn-bulk），
@@ -152,7 +272,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
    一列，抽掉它后面几列会整体左移。 */
 .dsm-row>.dsm-tags:empty{display:none}
 .dsm-row>.dsm-tags:empty~.dsm-row-actions{grid-row:1 / span 2}}@media(max-width:760px){.dsm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.dsm-title-row{flex-wrap:wrap}}@container(max-width:520px){.dsm-head{flex-direction:column}.dsm-actions{width:100%;margin-left:0}.dsm-actions .dsm-btn{flex:1}.dsm-filters{flex-direction:column}.dsm-source-filter{width:100%}.dsm-summary{grid-template-columns:1fr}}
-.dsm-hist-row{display:flex;align-items:center;gap:11px;padding:10px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-hist-row:last-child{border-bottom:0}.dsm-hist-main{min-width:0;flex:1}.dsm-hist-title{overflow:hidden;font-size:13px;font-weight:580;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd-missing{color:var(--dsw-alias-state-error-primary)}.dsm-hist-actions{display:flex;gap:6px;flex:none}.dsm-hist-check,.dsm-hist-group-check{flex:none;width:15px;height:15px;margin:0 4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}.dsm-hist-group-head{gap:10px}.dsm-hist-group-extra{display:flex;align-items:center;gap:8px;flex:none;margin-left:4px}.dsm-hist-group-extra .dsm-tag{flex:none}.dsm-hist-dir-missing{flex:none;color:var(--dsw-alias-state-error-primary);font-size:11px;white-space:nowrap}.dsm-hist-register-path{margin-top:-4px;color:var(--dsw-alias-label-tertiary);font-family:var(--dsw-font-mono,monospace);font-size:11px;word-break:break-all}.dsm-hist-batch{display:flex;align-items:center;gap:8px;margin-left:2px;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l2)}.dsm-hist-batch-count{color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-hist-batch-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none}.dsm-dir-row{display:flex;gap:8px}.dsm-dir-row .dsm-control{flex:1}.dsm-dir-list{display:flex;max-height:220px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-dir-item{display:flex;width:100%;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}.dsm-dir-item:last-child{border-bottom:0}.dsm-dir-item:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-dir-item::before{content:"📁";margin-right:8px;font-size:12px}
+.dsm-hist-row{display:flex;align-items:center;gap:11px;padding:10px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-hist-row:last-child{border-bottom:0}.dsm-hist-main{min-width:0;flex:1}.dsm-hist-title{overflow:hidden;font-size:13px;font-weight:580;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd{overflow:hidden;margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-hist-cwd-missing{color:var(--dsw-alias-state-error-primary)}.dsm-hist-actions{display:flex;gap:6px;flex:none}.dsm-hist-check,.dsm-hist-group-check{flex:none;width:15px;height:15px;margin:0 4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}.dsm-hist-group-head{gap:10px}.dsm-hist-group-extra{display:flex;align-items:center;gap:8px;flex:none;margin-left:4px}.dsm-hist-group-extra .dsm-tag{flex:none}.dsm-hist-dir-missing{flex:none;color:var(--dsw-alias-state-error-primary);font-size:11px;white-space:nowrap}.dsm-hist-register-path{margin-top:-4px;color:var(--dsw-alias-label-tertiary);font-family:var(--dsw-font-mono,monospace);font-size:11px;word-break:break-all}.dsm-hist-batch{display:flex;align-items:center;gap:8px;margin-left:2px;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l2)}.dsm-hist-batch-count{color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-hist-batch-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none}.dsm-dir-row{display:flex;gap:8px}.dsm-dir-row .dsm-control{flex:1}.dsm-dir-list{display:flex;max-height:220px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}.dsm-dir-item{display:flex;width:100%;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}.dsm-dir-item:last-child{border-bottom:0}.dsm-dir-item:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-dir-item::before{content:"📁";margin-right:8px;font-size:12px}
 .dsm-rule-shadowed .dsm-name,.dsm-rule-shadowed .dsm-note{color:var(--dsw-alias-state-error-primary)}.dsm-rule-off .dsm-name,.dsm-rule-off .dsm-note{color:var(--dsw-alias-label-tertiary)}.dsm-rule-shadow-hint{margin-top:3px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:17px}.dsm-rule-invalid{border-color:var(--dsw-alias-state-error-primary)!important}.dsm-rule-hint{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:17px}.dsm-rule-budget{display:flex;flex-direction:column;gap:6px}.dsm-budget-meta{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.dsm-budget-meta strong{margin-right:0;font-size:13px;font-weight:680}.dsm-budget-over-text{color:var(--dsw-alias-state-error-primary);font-size:11px}.dsm-budget-bar{height:6px;overflow:hidden;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover)}.dsm-budget-fill{height:100%;border-radius:99px;background:var(--dsw-alias-state-success-primary);transition:width 160ms ease}.dsm-budget-fill.dsm-budget-over{background:var(--dsw-alias-state-error-primary)}.dsm-char-count{color:var(--dsw-alias-label-tertiary);font-size:11px}.dsm-char-over{color:var(--dsw-alias-state-error-primary)}.dsm-field-row{display:flex;gap:12px;align-items:flex-start}.dsm-field-row>.dsm-field{flex:1;min-width:0}
 .dsm-combo-row{display:flex;gap:8px}.dsm-combo-row .dsm-control{flex:1}
 .dsm-attach-list{display:flex;flex-direction:column;gap:6px}.dsm-attach-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
@@ -179,7 +299,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-seg-foot{display:flex;align-items:center;gap:8px;padding:7px 12px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .dsm-pick{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px}.dsm-mcp-edit-tools-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsm-mcp-edit-tools-actions{display:flex;align-items:center;gap:8px}.dsm-seg-empty-actions{display:flex;justify-content:center;padding:4px 0 12px}.dsm-seg-empty-error{padding:0 10px 10px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;text-align:center}
 .dsm-pick:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 /* .dsm-pick-main 必须是**纵向 flex**：它原本只是个行内 span，名称与说明会在同一行里内联排布，
    而 text-overflow:ellipsis 对行内元素无效 → 长描述直接横向溢出段边框（实测溢出 353px）。
    改成列向 flex 后两行各自成为块级子项，各自单行省略。 */
@@ -360,7 +480,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 /* 注入域勾选：横排、窄容器自动换行；标签一律短名（记忆 / MCP / …），不截断也不竖排。 */
 .dsm-inject-domains{display:flex;flex-wrap:wrap;gap:7px 18px;padding:0 2px}
 .dsm-inject-domain{display:inline-flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}
-.dsm-inject-domain input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-inject-domain input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 /* 模型工具表：与「注入」同屏的第二种开关。**一行一个工具、四列固定宽度**（勾选框 / 名字 /
    ≈tok / 一句话介绍）—— 列宽不固定就竖着扫不出任何一列（用户 2026-09-23 指出挤成一排很难看）。
    名字用等宽、数字用 tabular-nums 右对齐；介绍超长省略，完整那句在悬停里。
@@ -385,13 +505,13 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-tooltable-sub{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
 .dsm-tooltable-group{display:flex;flex-direction:column;gap:3px}
 .dsm-tooltable-ghead{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;cursor:pointer}
-.dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-tooltable-gname{font-weight:600}
 .dsm-tooltable-gcount{color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums}
 .dsm-tooltable-tools{display:flex;flex-direction:column;padding-left:22px}
 .dsm-tooltable-tool{display:grid;grid-template-columns:15px 186px 48px minmax(0,1fr);align-items:center;gap:0 8px;padding:2px 4px;border-radius:5px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:18px;cursor:pointer}
 .dsm-tooltable-tool:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.dsm-tooltable-tool input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-tooltable-tool input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-tooltable-name{overflow:hidden;color:var(--dsw-alias-label-primary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}
 .dsm-tooltable-tok{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dsm-tooltable-about{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -433,7 +553,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    消失，让整颗框跟着长缩。高的一屏为准，多出来的高度给正文文本框吃掉；窗口太矮时弹窗自己滚。 */
 .dsm-modal-fixed{height:min(760px,calc(100vh - 48px));max-height:none}
 .dsm-modal-fixed .dsm-field-grow{min-height:0;flex:1 0 auto}
-.dsm-modal-fixed .dsm-field-grow textarea{flex:1}
+/* 定高弹窗的正文框：与「新建人设 / 新建记忆」的文本框同一套机制 —— 静止高度 = min-height，
+   往上没有可拖的空间（浏览器原生夹住，用户 2026-10-10 要求对齐这两处），往下拖写下的
+   inline height 由 flex-basis auto 接住（flex:0 1 auto；flex:1 的 basis 0 会无视 inline height，
+   手柄等于摆设）。240 接替 300px 那条旧下限 —— 余高不足 300 时它曾撑破格子、把动作栏压在
+   框下（用户 2026-10-10 截图），也顶住宿主那遍「把同类框压到内容高度」的自适应（109px 那种）。
+   余高超出 min 的部分留在框和动作栏之间（#4 原案同款代价）。
+   选择器权重 4 类 + 1 元素，压过上面那条 min-height:300px，不靠 !important。 */
+.dsm-modal.dsm-modal-fixed .dsm-field-grow textarea.dsm-control{flex:0 1 auto;min-height:240px;resize:vertical}
 /* 导出弹窗（D14）：宽高都固定；只有「条目列表」这一层滚动，动作条常驻底部。 */
 .dsm-export-modal .dsm-modal-body{display:flex;min-height:0;flex-direction:column;gap:14px;overflow:hidden}
 .dsm-export-modal .dsm-export-form{display:flex;min-height:0;flex:1;flex-direction:column;gap:10px}
@@ -457,7 +584,25 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-pick-group .dsm-pick{margin-left:16px}
 .dsm-pick-group .dsm-pick+.dsm-pick{margin-top:2px}
 
-/* 技能回收站：上下两块各占一半（目录 / 技能），滚动条在每块列表区里面，大弹窗自己不滚。
+/* 回收站比其它列表弹窗高一档（用户 2026-10-10：「回收站高度加长」）：640 → 760。
+   .dsm-modal-list 那个 640 是给「导出会话」那类"看一眼就走"的列表定的；回收站是"翻找 + 勾选 +
+   批量删"，本机实测提示词回收站 35 条、技能 7 条 —— 640 时一屏只看得见 8 条。
+   760 不是新拍的数：它既是 .dsm-modal 自己的 max-height，也是 .dsm-modal-fixed（新增提示词）
+   那个数，本插件"最高的普通弹窗"一直就是它。上一版试过 880，用户 2026-10-10 反馈
+   「回收站高度不要超过下面一层的高度」—— 回收站是叠在宿主的设置弹窗上弹出来的，宿主那颗比
+   880 矮，880 会从它上面探出去；760 稳稳落在它里面。
+   视口那一项取 100vh - 112px 而不是 -48px：宿主设置弹窗自己就留了上下各约 48px 的边，
+   窗口矮的时候跟着它一起缩，才不会又探出去。
+   分栏那两块是「1fr 1fr」吃掉剩余高度，所以弹窗一长高，「目录」和「技能」两块跟着一起长
+   （用户同一条要求：「技能的回收站内部的目录和技能也能加高」）。
+   写成两段类名（.dsm-modal.dsm-modal-trash）是为了**不靠书写顺序**压过 .dsm-modal-list 的
+   !important（与 .dsm-modal-export-lg 同一手法）。加在回收站那几颗弹窗上 —— 共享 TrashModal
+   （提示词 / 场景 / 子智能体 / MCP）与技能页自己那颗：.dsm-modal-list 还被四个页面的导出弹窗
+   共用，动它就是它们一起变大。 */
+.dsm-modal.dsm-modal-trash{height:min(760px,calc(100vh - 112px))!important;max-height:none!important}
+
+/* 回收站分栏：上下两块各占一半（技能页是 目录 / 技能，提示词页是 提示词预设 / 快捷提示词），
+   滚动条在每块列表区里面，大弹窗自己不滚。
    必须放在最后：盖过上面的 .dsm-modal-list .dsm-modal-body>*{flex:none}，
    否则外层不撑满、两块就各按内容长，50/50 失效。宽度沿用 .dsm-modal-list 的 560px。 */
 .dsm-modal-trash-split .dsm-modal-body{overflow:hidden}
@@ -507,7 +652,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-imp-list{display:flex;flex-direction:column;gap:6px;max-height:320px;padding:1px 2px 0 0;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l2) transparent}
 .dsm-imp-row{padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1);font-size:12px}
 .dsm-imp-row.dsm-imp-bad{border-color:var(--dsw-alias-state-error-primary)}
-.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:2px 0 0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:2px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-imp-row input[type=checkbox]:disabled{cursor:not-allowed}
 .dsm-imp-main{display:flex;min-width:0;flex-direction:column;gap:3px}
 .dsm-imp-name{display:flex;align-items:center;flex-wrap:wrap;gap:6px;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600}
@@ -517,7 +662,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-imp-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .dsm-imp-foot{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
 .dsm-imp-radio{display:flex;align-items:center;gap:5px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
-.dsm-imp-radio input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-imp-radio input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-imp-count{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
 
 /* 体检状态点（0.15.0 B1）与行内检查项。点只有 8px，靠 title 说清含义；
@@ -552,7 +697,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-snap-row .dsm-control{flex:1;min-width:0}
 .dsm-snap-picks,.dsm-kind-picks{display:flex;flex-wrap:wrap;gap:6px 14px}
 .dsm-snap-pick,.dsm-kind-pick{display:flex;align-items:center;gap:5px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
-.dsm-snap-pick input,.dsm-kind-pick input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-snap-pick input,.dsm-kind-pick input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-snap-preview{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1)}
 /* 兼容页三块弹窗：**开合不改尺寸**（列表长短、预览有没有读回来都不该让框跳）。
    「最近改动」（唯一 fixed 弹窗）的滚动层**只给列表**：正文是纯 flex 容器不滚动，
@@ -569,1410 +714,45 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-snap-browse-foot{display:flex;align-items:center;gap:8px}
 .dsm-snap-browse-foot .dsm-help{min-width:0;flex:1;overflow-wrap:anywhere}
 
+/* 回收站保留期 + 批量删除（0.19.1）。
+   工具栏排在条目上方（Modal 的 body 在滚动，工具条跟着滚走的话，条目一多就够不着
+   那一颗「永久删除 (N)」—— 而那正是条目多的时候才需要的按钮）。
+   保留期与批量条**同一行**（用户 2026-10-10：「这应该是同一行，现在两行浪费空间」）：
+   工具栏是行向 flex，保留期那一组不参与收缩，批量条那一组吃掉剩余宽度并把两颗按钮顶到最右。
+   真放不下时**整组折到下一行** —— 比把「已选 N 项」或说明挤成省略号好：那等于把信息删掉。 */
+.dsm-trash-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dsm-trash-toolbar .dsm-trash-retention{flex:0 0 auto}
+.dsm-trash-toolbar .dsm-trash-bulk{flex:1 1 auto;min-width:0;flex-wrap:nowrap}
+/* 「已选 N 项」既要撑开（把两颗按钮顶到最右）又不能被压缩：flex:1 0 auto 正是这个意思。 */
+.dsm-trash-toolbar .dsm-trash-bulk .dsm-note{flex:1 0 auto}
+.dsm-trash-toolbar .dsm-trash-bulk>button{flex:0 0 auto}
+/* 二次确认恒占整行：它是一句问句 + 两颗键，挤在保留期旁边既难看也读不清。 */
+.dsm-trash-toolbar .dsm-trash-bulk-confirm{flex:1 1 100%;flex-wrap:wrap}
+.dsm-trash-retention{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.dsm-trash-retention .dsm-label{flex:none;font-weight:580}
+/* .dsm-control 是 width:100% 的表单控件；塞进这一行要退回内容宽度，否则它会把整行撑满、
+   把右边的说明挤到下一行。（这段样式整体在模板字符串里，注释里不能出现反引号。） */
+.dsm-trash-retention .dsm-control{width:auto;min-width:112px;flex:none}
+/* 保留期这一行**恒为一行**（用户 2026-10-10：「保留期一行就够了」）。
+   所以说明必须短（trash.retention.hint = 「超期自动删除」），全文走 title 悬停；
+   nowrap + 省略号只是兜底：万一窄到放不下，宁可截掉尾部也不折行把下拉框顶上去。 */
+.dsm-trash-hint{min-width:0;flex:0 1 auto;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 出错时反过来：允许换行、不截断 —— 失败原因截成半句等于没说。 */
+.dsm-trash-retention-err{flex:1 1 auto;white-space:normal;overflow-wrap:anywhere;color:var(--dsw-alias-state-error-primary)}
+.dsm-trash-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* 「已选 N 项」占满左侧剩余空间 → 把「全选」与唯一的「永久删除」一起顶到最右。 */
+.dsm-trash-bulk .dsm-note{min-width:0;flex:1}
+.dsm-trash-bulk-confirm{padding:6px 8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover)}
+.dsm-trash-bulk-confirm .dsm-note{font-weight:570;color:var(--dsw-alias-state-error-primary);white-space:normal}
+/* 技能回收站：两个 pane **各有一套**「全选 + 永久删除」（用户 2026-10-10：「全选要拆成两部分」）。
+   上面删的是一条记账、下面删的是真文件，合成一颗键就成了「勾了两条、不知道该删哪个」。
+   批量条挂在 pane 里、在列表区之上，不跟着列表滚（列表滚走了也要够得着）。 */
+.dsm-trash-pane-batch{flex:none;padding:7px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsm-trash-notice{flex:none}
+.dsm-trash-pick{display:inline-flex;flex:none;align-items:center;padding:4px 1px;cursor:pointer}
+.dsm-trash-pick input{width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-error-primary)}
+.dsm-trash-pick input:disabled{cursor:default}
+/* 勾选过的那条给一层底色：勾了十几条之后要一眼看出勾的是哪几条。 */
+.dsm-trash-item-picked{background:var(--dsw-alias-interactive-bg-hover);border-radius:8px}
 
-/* ═════════════════════════════════════════════════════════════════════════════
-   MedHealthBuddy · 视觉重构层（对齐 dsh-market / 宿主 primitives）
-   -----------------------------------------------------------------------------
-   用户 2026-10-10 裁定：只改外观，不动业务、布局、字段与交互。本层整块覆盖在
-   插件原有样式之后（同权重后者胜），把"视觉词汇"统一到市场插件所用的那套宿主
-   组件规格上 —— 规格值逐条取自 @deepseek-ai/dsh-client-ui-primitives 的
-   Button / Input / fields / SettingsForm / Modal / Tag / Pill / Switch /
-   Menu / Toast 各 module.css，以及 dshmarket 自己的 .card / .tabs。
-
-   对照表（左=本层，右=来源规格）
-     按钮圆角     8px            → --dsw-radius-md        (Button.module.css)
-     按钮高度     34 / 28px      → 36 / 28px              (Button .md / .sm)
-     按钮内边距   0 13 / 0 9px   → 0 14 / 0 10px          (Button .md / .sm)
-     按钮字号     13 / 12px      → 14 / 12px              (Button .md / .sm)
-     次按钮描边   1px l2         → 0.5px --alias-border-l3(Button .outline)
-     主按钮 hover brightness     → --alias-button-primary-hover
-     禁用态       opacity .48    → opacity .4             (Button :disabled)
-     焦点环       2px 绿         → --dsw-focus-ring-width / -color
-     输入框       34px 1px l2    → 34px 0.5px l4 + layer-3(fields .input)
-     下拉面板     1px l2 / lv2   → 菜单材质 + elevation-prominent (Menu)
-     弹窗         1px l2 14px    → 无描边 + --dsw-radius-panel + prominent
-     卡片         1px l2         → 1px l2 + 12px 圆角 + 12/14 内边距 (market .card)
-     标签         8px 圆角       → 999px 胶囊 + 11px/17px 500 (Tag)
-     开关         自绘           → 36x20 / 16px 滑块 / 120ms (Switch)
-     空态         自绘           → 13px secondary / 32px 内边距 (market .empty)
-   ────────────────────────────────────────────────────────────────────────── */
-
-/* ── 0. 本插件的作用域变量：只做"取值别名"，颜色仍全部来自宿主主题 ─────────── */
-.dsm-section,
-.dsm-modal,
-.dsm-mask,
-.dsm-composer-chips {
-  --dsm-radius-control: var(--dsw-radius-md, 8px);
-  --dsm-radius-small: var(--dsw-radius-sm, 6px);
-  --dsm-radius-surface: var(--dsw-radius-lg, 12px);
-  --dsm-radius-dialog: var(--dsw-radius-panel, 14px);
-  --dsm-hairline: 0.5px;
-  --dsm-ring: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
-}
-
-/* ── 1. 焦点环：全插件统一成宿主那一圈 ─────────────────────────────────── */
-.dsm-btn:focus-visible,
-.dsm-control:focus-visible,
-.dsm-select-trigger:focus-visible,
-.dsm-source-head:focus-visible,
-.dsm-switch:focus-visible,
-.dsm-upload-link:focus-visible,
-.dsm-file-remove:focus-visible,
-.dsm-dropzone:focus-visible,
-.dsm-tab:focus-visible,
-.dsm-chip:focus-visible,
-.dsm-pill:focus-visible,
-.dsm-select-menu button:focus-visible {
-  outline: var(--dsm-ring);
-  outline-offset: 1px;
-}
-
-/* ── 2. 按钮：一套几何，五档语义（主 / 次 / 文本 / 危险 / 图标）───────────── */
-/* 档位里带上尺寸（用户 2026-10-10 之前定过：同一行必须同高）：
-   .dsm-btn 36px 主操作 · .dsm-btn-secondary 36px 常规 · .dsm-btn-quiet 28px 次要。 */
-.dsm-btn {
-  box-sizing: border-box;
-  display: inline-flex;
-  min-height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 0 14px;
-  border: 1px solid transparent;
-  border-radius: var(--dsm-radius-control);
-  background: var(--dsw-alias-button-primary-fill);
-  color: var(--dsw-alias-label-primary-foreground);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 22px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-/* 悬停/按下都走宿主那对交互色，不再用 filter 提亮（filter 会把图标一起染亮）。 */
-.dsm-btn:hover:not(:disabled) {
-  background: var(--dsw-alias-button-primary-hover);
-}
-
-.dsm-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.dsm-btn-secondary,
-.dsm-btn-lock {
-  border-width: var(--dsm-hairline);
-  border-color: var(--dsw-alias-border-l3);
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-btn-secondary:hover:not(:disabled),
-.dsm-btn-lock:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.dsm-btn-quiet {
-  min-height: 28px;
-  padding: 0 10px;
-  border-width: var(--dsm-hairline);
-  border-color: var(--dsw-alias-border-l3);
-  border-radius: var(--dsm-radius-small);
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.dsm-btn-quiet:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-btn-danger {
-  border-width: var(--dsm-hairline);
-  border-color: var(--dsw-alias-state-error-primary);
-  background: transparent;
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.dsm-btn-danger:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover-danger);
-}
-
-/* 纯图标按钮：与 quiet 同档，方形、圆角小一档，hover 只染色不描边。 */
-.dsm-btn.dsm-btn-icon {
-  width: 28px;
-  min-width: 28px;
-  padding: 0;
-  border-radius: var(--dsm-radius-small);
-}
-
-/* 批量二合一按钮：宽度仍由两份文案定（原有排版机制，一个字没动）。 */
-.dsm-btn.dsm-btn-bulk {
-  display: inline-grid;
-  align-items: center;
-  justify-items: center;
-}
-
-/* 文本型动作（链接/移除/更多/刷新）：无底无边，12-13px，hover 抬一级文字色。 */
-.dsm-upload-link,
-.dsm-file-remove,
-.dsm-audit-more,
-.dsm-feedback-link,
-.dsm-link,
-.dsm-bulk-ghost {
-  border: 0;
-  background: none;
-  padding: 0 2px;
-  font: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-}
-
-.dsm-upload-link:hover,
-.dsm-audit-more:hover,
-.dsm-feedback-link:hover,
-.dsm-link:hover {
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-file-remove {
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.dsm-file-remove:hover {
-  background: var(--dsw-alias-interactive-bg-hover-danger);
-}
-
-/* ── 3. 输入、下拉、文本域：0.5px 发丝描边 + layer-3 底 ─────────────────── */
-.dsm-control,
-.dsm-select-trigger {
-  box-sizing: border-box;
-  min-height: 34px;
-  padding: 0 12px;
-  border: var(--dsm-hairline) solid var(--dsw-alias-border-l4);
-  border-radius: var(--dsm-radius-control);
-  background: var(--dsw-alias-bg-layer-3);
-  color: var(--dsw-alias-label-primary);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-/* 下拉箭头（用户 2026-10-10：参考宿主那枚 v）。触发器原来只有一个 <span> 文字，
-   看不出是下拉 —— 补一枚 ::after 画的尖角，贴右、取比标签浅一档的灰。
-   两处细节都是必需的：
-   ① display:flex + justify-content:space-between —— 触发器是按钮（inline-block），
-      inline-block 下 ::after 只会紧跟在文字后面，不会靠右；
-   ② 内部那唯一一个 span 允许收缩并省略 —— 换成 flex 之后长标签（工作区路径这类）
-      才会被截断，而不是把箭头挤出框外。 */
-.dsm-select-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  text-align: left;
-}
-
-.dsm-select-trigger > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dsm-select-trigger::after {
-  content: '';
-  flex: none;
-  box-sizing: border-box;
-  width: 7px;
-  height: 7px;
-  margin-top: -3px;
-  border-right: 1.5px solid var(--dsw-alias-label-tertiary);
-  border-bottom: 1.5px solid var(--dsw-alias-label-tertiary);
-  transform: rotate(45deg);
-}
-
-.dsm-control::placeholder,
-.dsm-select-trigger:empty::before {
-  color: var(--dsw-alias-label-dimmed);
-}
-
-/* 焦点：不画外环，只把描边换成主题色（宿主 fields .input:focus-visible 的做法）。 */
-.dsm-control:focus,
-.dsm-control:focus-visible,
-.dsm-select-trigger:focus,
-.dsm-select-trigger:focus-visible {
-  outline: none;
-  border-color: var(--dsw-alias-state-business-primary);
-}
-
-.dsm-control:disabled,
-.dsm-select-trigger:disabled {
-  color: var(--dsw-alias-label-tertiary);
-  cursor: default;
-}
-
-.dsm-control[aria-invalid='true'] {
-  border-color: var(--dsw-alias-state-error-primary);
-}
-
-textarea.dsm-control {
-  padding: 8px 12px;
-  line-height: 20px;
-}
-
-.dsm-select-menu {
-  padding: 4px;
-  border: 0;
-  border-radius: var(--dsm-radius-surface);
-  background: var(--dsw-menu-surface-fill, var(--dsw-alias-bg-layer-3));
-  backdrop-filter: var(--dsw-menu-backdrop-filter);
-  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
-  box-shadow: var(--dsw-elevation-prominent, var(--dsw-shadow-lv2));
-}
-
-.dsm-select-menu button,
-.dsm-select-menu [role='option'] {
-  min-height: 34px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: var(--dsm-radius-control);
-  background: transparent;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-primary);
-  text-align: left;
-}
-
-.dsm-select-menu button:hover,
-.dsm-select-menu [role='option']:hover,
-.dsm-select-menu [aria-selected='true'] {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-/* ── 4. 弹窗与遮罩：无描边 + 面板圆角 + prominent 阴影 ──────────────────── */
-.dsm-mask {
-  background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, .4));
-  backdrop-filter: var(--dsw-mask-blur);
-}
-
-.dsm-modal {
-  box-sizing: border-box;
-  display: flex;
-  width: min(560px, 100%) !important;
-  max-height: min(760px, calc(100vh - 48px));
-  min-width: 0;
-  flex-direction: column;
-  gap: 20px;
-  padding: 24px;
-  overflow: auto;
-  border: 0;
-  border-radius: var(--dsm-radius-dialog);
-  background: var(--dsw-alias-bg-layer-2);
-  box-shadow: var(--dsw-elevation-prominent, var(--dsw-shadow-lv3));
-}
-
-.dsm-modal-title,
-.dsm-modal-head-wrap .dsm-modal-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 24px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-modal-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-/* ── 5. 卡片与列表行：市场插件的 .card 配方（12px 圆角 / l2 描边 / 12-14 内边距） */
-.dsm-tool,
-.dsm-compat-card,
-.dsm-compat-box,
-.dsm-inject-settings,
-.dsm-form-section,
-.dsm-detail-section,
-.dsm-stat-row .dsm-summary {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsm-radius-surface);
-  background: var(--dsw-alias-bg-layer-1);
-}
-
-/* 行分隔线一律 0.5px l2（原先 1px，比宿主的发丝线重一档）。 */
-.dsm-field + .dsm-field,
-.dsm-fm-row + .dsm-fm-row,
-.dsm-audit-row + .dsm-audit-row,
-.dsm-hist-row + .dsm-hist-row,
-.dsm-imp-row + .dsm-imp-row,
-.dsm-preset-row + .dsm-preset-row,
-.dsm-dir-item + .dsm-dir-item {
-  border-top: var(--dsm-hairline) solid var(--dsw-alias-border-l2);
-}
-
-/* ── 6. 标签 / 胶囊 / 筛选片 ────────────────────────────────────────────── */
-.dsm-chip,
-.dsm-pill,
-.dsm-preset-tag,
-.dsm-compat-pill,
-.dsm-spec-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 17px;
-  white-space: nowrap;
-}
-
-.dsm-chip,
-.dsm-pill,
-.dsm-preset-tag {
-  padding: 1px 8px;
-  border: var(--dsm-hairline) solid var(--dsw-alias-border-l4);
-  color: var(--dsw-alias-label-tertiary);
-  background: transparent;
-}
-
-/* 可点筛选片：默认中性底，悬停抬一级，选中 = 宿主 Pill 的 active 配方。 */
-button.dsm-chip,
-.dsm-chip-interactive {
-  min-height: 24px;
-  padding: 0 8px;
-  border: 0;
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-  line-height: 18px;
-  cursor: pointer;
-}
-
-button.dsm-chip:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.dsm-btn-picked,
-.dsm-chip-active,
-.dsm-chip[aria-pressed='true'],
-.dsm-filters .dsm-chip-picked {
-  color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-button-ghost-active-fill);
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-button-ghost-active-border);
-}
-
-/* 语义色调：与宿主 Tag 同一条 color-mix 配方（10%，告警 12%）。 */
-.dsm-pill-ok,
-.dsm-compat-pill-ok,
-.dsm-feedback.dsm-ok {
-  color: var(--dsw-alias-state-success-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
-}
-
-.dsm-pill-warn,
-.dsm-compat-pill-warn,
-.dsm-feedback.dsm-warning {
-  color: var(--dsw-alias-state-warn-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
-}
-
-.dsm-compat-pill-bad,
-.dsm-feedback.dsm-error,
-.dsm-error {
-  color: var(--dsw-alias-state-error-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
-}
-
-.dsm-pill-muted {
-  color: var(--dsw-alias-label-tertiary);
-  background: var(--dsw-alias-bg-module-platform);
-}
-
-/* ── 7. 开关：宿主 Switch 的几何（36x20 / 滑块 16 / 120ms）──────────────── */
-.dsm-switch {
-  position: relative;
-  box-sizing: border-box;
-  width: 36px;
-  height: 20px;
-  padding: 2px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--dsw-alias-border-l3);
-  cursor: pointer;
-  transition: background 120ms ease;
-}
-
-.dsm-switch[aria-checked='true'],
-.dsm-switch.dsm-switch-on {
-  background: var(--dsw-alias-brand-primary);
-}
-
-.dsm-switch::after {
-  content: '';
-  display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--dsw-alias-switch-thumb);
-  transition: transform 120ms ease;
-}
-
-.dsm-switch[aria-checked='true']::after,
-.dsm-switch.dsm-switch-on::after {
-  background: var(--dsw-alias-label-primary-foreground);
-  transform: translateX(16px);
-}
-
-.dsm-switch:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* ── 8. 进度条（预算/上下文占用）───────────────────────────────────────── */
-.dsm-budget-bar {
-  border-radius: 999px;
-  background: var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-3));
-  overflow: hidden;
-}
-
-.dsm-budget-fill {
-  border-radius: 999px;
-  background: var(--dsw-alias-brand-primary);
-}
-
-.dsm-budget-over .dsm-budget-fill,
-.dsm-budget-over-text {
-  background: var(--dsw-alias-state-warn-primary);
-  color: var(--dsw-alias-state-warn-primary);
-}
-
-/* ── 9. 文字层级：标题 16/24 · 说明 13 · 提示 12（与 fields/SettingsForm 对齐） */
-.dsm-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 24px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-section-title,
-.dsm-compat-section-title,
-.dsm-detail-title {
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-desc,
-.dsm-desc-plain,
-.dsm-compat-section-hint {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.dsm-help,
-.dsm-help-list,
-.dsm-hint,
-.dsm-note,
-.dsm-note-user,
-.dsm-row-hint {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.dsm-row-hint {
-  color: var(--dsw-alias-state-warn-primary);
-}
-
-.dsm-label,
-.dsm-name,
-.dsm-tool-name,
-.dsm-compat-name {
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-char-count,
-.dsm-count,
-.dsm-mode-sub,
-.dsm-audit-time {
-  font-size: 11px;
-  line-height: 15px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.dsm-char-over {
-  color: var(--dsw-alias-state-warn-primary);
-}
-
-/* 等宽片段（路径、id、代码）：与宿主 CodeCard 同一档字号与底色。 */
-.dsm-code,
-.dsm-path,
-.dsm-fm-key,
-.dsm-fm-raw,
-.dsm-compat-code,
-.dsm-imp-name {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.dsm-code,
-.dsm-compat-code {
-  padding: 8px 10px;
-  border-radius: var(--dsm-radius-control);
-  background: var(--dsw-alias-bg-layer-3);
-  color: var(--dsw-alias-label-secondary);
-}
-
-/* ── 10. 空态与加载态 ──────────────────────────────────────────────────── */
-.dsm-empty,
-.dsm-pick-empty {
-  padding: 32px;
-  text-align: center;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.dsm-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 48px;
-  font-size: 13px;
-  color: var(--dsw-alias-label-secondary);
-}
-
-/* ── 11. 行内提示条（成功/告警/错误）：12px + 10% 色调底 ───────────────── */
-.dsm-feedback {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: var(--dsm-radius-control);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-secondary);
-  background: var(--dsw-alias-bg-layer-3);
-}
-
-.dsm-feedback.dsm-ok,
-.dsm-feedback.dsm-warning,
-.dsm-feedback.dsm-error {
-  padding: 10px 12px;
-  border-radius: var(--dsm-radius-control);
-}
-
-/* ── 12. 页头动作行：间距统一 8px ───────────────────────────────────────── */
-.dsm-actions,
-.dsm-modal-actions,
-.dsm-hist-actions,
-.dsm-mcp-edit-tools-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* ── 13. 分段/页签：跟市场设置页同一条"下划线页签"────────────────────── */
-.dsm-tabs {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
-  /* 本插件有 8 个页签（市场设置页只有两三个），窄栏下宁可横向滚动，
-     也不能把「子智能体」「提示词」挤成省略号。 */
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.dsm-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-/* 两段类名是必要的：插件自己有一条 .dsm-tabs .dsm-tab{flex:1}（页签均分整栏，
-   原本是分段控件的做法）。下划线页签必须按内容宽度排、由容器横向滚动。 */
-.dsm-tabs .dsm-tab {
-  flex: 0 0 auto;
-  width: auto;
-  min-width: 0;
-  padding: 7px 12px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  background: none;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.dsm-tab:hover {
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-tab.dsm-tab-active,
-.dsm-tab[aria-selected='true'] {
-  color: var(--dsw-alias-label-primary);
-  border-bottom-color: var(--dsw-alias-label-primary);
-  font-weight: 500;
-}
-
-/* ── 14. 复选框行（类型选择等）：与 fields 的行节奏一致 ───────────────── */
-.dsm-kind-pick,
-.dsm-imp-radio {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 0 8px;
-  border-radius: var(--dsm-radius-small);
-  font-size: 13px;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-}
-
-.dsm-kind-pick:hover,
-.dsm-imp-radio:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-/* ─────────────────────────────────────────────────────────────────────────────
-   dsm-composer-chips（聊天栏快捷提示词胶囊）——MedHealthBuddy patch 2026-10-10
-   宿主 conversation.input.dock 那一格：新会话时在输入卡片上方整行排开一排
-   快捷提示词，点一枚就把正文插进输入框。宽度与宿主自己那条 dock（目标条）同一条
-   公式：左右各减去 composer 的 side clearance 与 dock inset，居中、不越过卡片。
-   ────────────────────────────────────────────────────────────────────────── */
-.dsm-composer-chips {
-  box-sizing: border-box;
-  width: calc(100% - var(--dsh-composer-side-clearance, 0px) - var(--dsh-composer-side-clearance, 0px) - var(--dsh-composer-dock-inset, 0px) - var(--dsh-composer-dock-inset, 0px));
-  max-width: var(--dsh-composer-card-max-width, 100%);
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 2px 8px;
-}
-
-.dsm-composer-chips-row {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.dsm-composer-chips-row::-webkit-scrollbar {
-  display: none;
-}
-
-.dsm-composer-chip {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  min-height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 999px;
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12.5px;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  transition: background .12s ease, color .12s ease;
-}
-
-.dsm-composer-chip:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-composer-chip-glyph {
-  display: inline-flex;
-  flex: none;
-  opacity: .62;
-}
-
-.dsm-composer-chip:hover .dsm-composer-chip-glyph {
-  opacity: .9;
-}
-
-.dsm-composer-chips-more {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 999px;
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.dsm-composer-chips-more:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-/* 空库时那枚引导胶囊：虚线下边框 + 三级文字色，一眼看出"这是个入口"而不是一条真词。 */
-.dsm-composer-chip-guide {
-  border-style: dashed;
-  color: var(--dsw-alias-label-tertiary);
-  font-weight: 400;
-}
-
-.dsm-composer-chip-guide:hover {
-  color: var(--dsw-alias-label-primary);
-}
-
-/* ═════════════════════════════════════════════════════════════════════════════
-   尺寸分档补丁（消除"按钮是歪的"）——用户 2026-10-10
-   -----------------------------------------------------------------------------
-   根因：全插件只有一档按钮高度（36px），但按钮住在四种语境里 ——
-     ① 弹窗脚（主 CTA）　② 与输入框同排　③ 页头动作行（最多 7 颗）
-     ④ 列表/卡片行
-   同一语境里出现两种高度、或按钮与旁边的输入框差 2px，肉眼看就是"歪"。
-   本块按语境锁死高度：同一行内所有按钮（含 quiet/danger/icon/bulk）必同高。
-   分档仍全部落在宿主两档（36 / 28）与输入框高度（34）上，不发明新尺寸。
-   ────────────────────────────────────────────────────────────────────────── */
-
-/* ① 弹窗脚：36px 主档（对话框 CTA 用大按钮） */
-.dsm-modal-actions .dsm-btn {
-  min-height: 36px;
-  padding: 0 14px;
-  font-size: 14px;
-  line-height: 22px;
-  border-radius: var(--dsm-radius-control);
-}
-
-/* ② 与输入框同排：34px，与 .dsm-control 严丝合缝 */
-.dsm-combo-row .dsm-btn,
-.dsm-snap-row .dsm-btn,
-.dsm-dir-row .dsm-btn,
-.dsm-token-unlock .dsm-btn,
-.dsm-field-row .dsm-btn,
-.dsm-seg-filter .dsm-btn {
-  min-height: 34px;
-  padding: 0 12px;
-  font-size: 13px;
-  line-height: 20px;
-}
-
-/* ③ 页头动作行 / 列表行 / 卡片行：28px 次档（Button .sm）。
-   注意要盖过容器窄档里的 0 8px —— 统一 0 10px，7 颗按钮也站得稳。 */
-.dsm-actions .dsm-btn,
-.dsm-tool .dsm-btn,
-.dsm-audit-row .dsm-btn,
-.dsm-audit-bar .dsm-btn,
-.dsm-hist-row .dsm-btn,
-.dsm-hist-batch-actions .dsm-btn,
-.dsm-preset-row .dsm-btn,
-.dsm-persona-name-row .dsm-btn,
-.dsm-mode-bar .dsm-btn,
-.dsm-mode-actions .dsm-btn,
-.dsm-source-head .dsm-btn,
-.dsm-inject-live-actions .dsm-btn,
-.dsm-attach-actions .dsm-btn,
-.dsm-backup-actions .dsm-btn,
-.dsm-head .dsm-btn,
-.dsm-name-row .dsm-btn {
-  min-height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-  line-height: 18px;
-  border-radius: var(--dsm-radius-small);
-}
-
-/* 图标按钮永远方形、随所在档位；28px 档里正好是 28x28。 */
-.dsm-btn.dsm-btn-icon {
-  height: 28px;
-  min-height: 28px;
-  width: 28px;
-  min-width: 28px;
-}
-
-/* ③ 的行内同类元素（文本型动作）与按钮同高，基线不漂。 */
-.dsm-actions .dsm-upload-link,
-.dsm-actions .dsm-file-remove,
-.dsm-actions .dsm-audit-more,
-.dsm-actions .dsm-bulk-ghost {
-  min-height: 28px;
-  display: inline-flex;
-  align-items: center;
-}
-
-/* 开关与其右侧/左侧按钮同轴：开关高 20，行内用 min-height 对齐中轴即可。 */
-.dsm-tool .dsm-switch,
-.dsm-audit-row .dsm-switch,
-.dsm-preset-row .dsm-switch,
-.dsm-persona-name-row .dsm-switch {
-  margin-left: auto;
-}
-
-/* 弹窗里"主 CTA 靠右、次操作靠左"的既有排布保持不变，这里只锁高度一致性。 */
-.dsm-modal-actions-split {
-  justify-content: space-between;
-}
-/* 双标签定宽按钮：两层文字行高锁 18px，不然字体度量把盒子顶到 29px（实测）。 */
-.dsm-btn.dsm-btn-bulk > .dsm-bulk-label,
-.dsm-btn.dsm-btn-bulk > .dsm-bulk-ghost {
-  line-height: 18px;
-}
-
-/* ═════════════════════════════════════════════════════════════════════════════
-   行内图标按钮（删除 / 移除来源 / 行内工具）——用户 2026-10-10 截图裁定重做
-   -----------------------------------------------------------------------------
-   原状：28px 盒子里套着行档的 padding:0 10px → 内容宽只剩 8px，14px 图标被压成
-   7px；再叠一层透明底 + 红描边，视觉上就是个"红色空框里一颗小米粒"。
-   改成 dsh-market 的 .iconBtn 一套：方盒、无描边、常态中性图标，
-   悬停才给底色；破坏性动作悬停染红（与宿主 Menu 的 .danger 行同一套色）。
-   ────────────────────────────────────────────────────────────────────────── */
-.dsm-actions .dsm-btn.dsm-btn-icon,
-.dsm-tool .dsm-btn.dsm-btn-icon,
-.dsm-tool-name-row .dsm-btn.dsm-btn-icon,
-.dsm-audit-row .dsm-btn.dsm-btn-icon,
-.dsm-audit-bar .dsm-btn.dsm-btn-icon,
-.dsm-hist-row .dsm-btn.dsm-btn-icon,
-.dsm-hist-batch-actions .dsm-btn.dsm-btn-icon,
-.dsm-preset-row .dsm-btn.dsm-btn-icon,
-.dsm-persona-name-row .dsm-btn.dsm-btn-icon,
-.dsm-mode-bar .dsm-btn.dsm-btn-icon,
-.dsm-mode-actions .dsm-btn.dsm-btn-icon,
-.dsm-source-head .dsm-btn.dsm-btn-icon,
-.dsm-inject-live-actions .dsm-btn.dsm-btn-icon,
-.dsm-attach-actions .dsm-btn.dsm-btn-icon,
-.dsm-backup-actions .dsm-btn.dsm-btn-icon {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--dsm-radius-small);
-  background: transparent;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-/* 图标本身不许被压：14px 正方形、不参与 flex 收缩。 */
-.dsm-btn.dsm-btn-icon > svg {
-  width: 14px;
-  height: 14px;
-  flex: none;
-}
-
-/* 破坏性图标按钮：常态中性（红色只在悬停时出现），无边框。 */
-.dsm-btn.dsm-btn-icon.dsm-btn-danger,
-.dsm-btn.dsm-btn-icon.dsm-btn-lock {
-  border: 0;
-  background: transparent;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.dsm-btn.dsm-btn-icon.dsm-btn-danger:hover:not(:disabled),
-.dsm-btn.dsm-btn-icon.dsm-btn-lock:hover:not(:disabled) {
-  color: var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-interactive-bg-hover-danger);
-}
-
-.dsm-btn.dsm-btn-icon:focus-visible {
-  outline: var(--dsm-ring);
-  outline-offset: 1px;
-}
-
-/* 行内"删除 + 开关"这类并排操作的间距统一 8px，别再挤在一起。 */
-.dsm-tool-name-row,
-.dsm-persona-name-row,
-.dsm-preset-row,
-.dsm-hist-row,
-.dsm-audit-row {
-  gap: 8px;
-}
-
-/* 开关右侧不再紧贴行缘（视觉上给它一点呼吸，和 market 的行操作一致）。 */
-.dsm-tool-name-row > [role='switch'],
-.dsm-persona-name-row > [role='switch'],
-.dsm-preset-row > [role='switch'] {
-  margin-right: 2px;
-}
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   主栏页（原生 main 席位）——用户 2026-10-10
-   席位是宿主的 layout 面板（插件管理 = plugins、市场 = 自己的键），宿主已给出面板列：
-   根元素满高（右栏宽、标题栏之下）+ 自带的 body/滚动层。所以这里**不再定位于视口**，
-   只把自己撑满那一列：头部常驻、内容区自己滚（旧版的 --dsm-page-left / z-index 浮层
-   位移逻辑随 shell.overlay 席位一并去掉）。
-   ────────────────────────────────────────────────────────────────────────── */
-.dsm-mainpage {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-  box-sizing: border-box;
-  height: 100%;
-  background: var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1));
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-mainpage-shell {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-  box-sizing: border-box;
-  width: min(1120px, 100%);
-  margin: 0 auto;
-  padding: 0 24px 16px;
-}
-
-.dsm-mainpage-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 0 14px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
-  margin-bottom: 14px;
-}
-
-.dsm-mainpage-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 24px;
-  color: var(--dsw-alias-label-primary);
-}
-
-/* 头部只留标题与关闭：自述文字全在页签内容里，出处（GitHub/版本）在设置那一页 —— 
-   同一个 ToolsSection 的页签行右端就有，主栏页不必再来一份（用户 2026-10-10）。 */
-.dsm-mainpage .dsm-feedback-links {
-  display: none;
-}
-
-/* 关闭按钮：裸图标按钮（不能走 .dsm-btn 的实心底，否则是个黑方块）。 */
-.dsm-mainpage-close {
-  margin-left: auto;
-  flex: none;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--dsm-radius-small);
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-}
-
-.dsm-mainpage-close:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-mainpage-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  /* 滚动条按宿主的浮层约定，内容区自己滚。 */
-  scrollbar-gutter: stable;
-}
-
-/* 窄栏时收边距，内容优先。 */
-@media (max-width: 720px) {
-  .dsm-mainpage-shell {
-    padding: 0 14px 12px;
-  }
-}
-
-/* 提示行里的动作（MCP 页「启动失败…重试」旁边那枚「重启」）：贴着提示文字、
-   不把这一行撑高，所以比正文里那套按钮矮一档。 */
-.dsm-row-hint .dsm-hint-act {
-  margin-left: 8px;
-  height: 20px;
-  min-height: 20px;
-  padding: 0 8px;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-/* 技能页来源卡片的展开/折叠箭头（用户 2026-10-10，第二版）：卡片头本来就能点、
-   aria-expanded 也一直在报状态，但没有任何可见提示 —— 整页看着就是一堆"收着的卡片"。
-   一开始用了 10px 的 ▾/▸ 文字符号，实测太小（用户反馈），改成 16px 的真 chevron：
-   收起指向右、展开用 transform 转 90° 朝下，颜色取 secondary（比 tertiary 清楚一档）。 */
-.dsm-source-caret {
-  flex: none;
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
-  color: var(--dsw-alias-label-secondary);
-}
-
-/* ── 技能详情弹窗版式（用户 2026-10-10：「详情页 ui 和布局都存在问题」）──────────
-   ① 它注册的是 wide(720)，但被后面那条 .dsm-modal{width:min(560px)!important} 压掉了
-      —— 两条同权重、后者在后，于是详情弹窗一直只有 560 宽（表格与正文挤）。这里按
-      本文件里 .dsm-modal.dsm-modal-export-lg 同一套路，用两段类名提权。
-   ② 路径与「用系统编辑器打开」原本各占一行，中间留出 20px 空白；合成一行后是标准的
-      "文件路径 + 打开"表头（路径可省略、鼠标悬停看全）。
-   ③ 分区卡片一直是 0 内边距（文字贴着描边），正文也没有自己的滚动 —— 760 高时正文被
-      截断在弹窗底部，读正文就看不见上面的元数据。 */
-.dsm-modal.dsm-modal-wide {
-  width: min(720px, 100%) !important;
-}
-
-.dsm-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.dsm-detail-head .dsm-detail-path {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dsm-detail-section {
-  padding: 12px 14px;
-}
-
-.dsm-detail-section .dsm-code {
-  max-height: 340px;
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-
-/* ── 弹窗表单版式（用户 2026-10-10：「编辑弹窗很丑」）────────────────────────
-   ① 原先相邻字段之间有一条**满宽发丝线**（全局那条 .dsm-field + .dsm-field）——
-      它在表格里是分隔线，在表单里读起来像一张被切开的表。弹窗内取消，改用留白分组。
-   ② 字段间距 12 → 16、标签到控件 6 → 8：挤在一起是"丑"的另一半。
-   ③ 标签与值原来同色同重（都是 label-primary 那档），层级只有字号 1px 之差；现在标签
-      提为 13px/500，说明文字 12px 三级色，一眼能分出"标题 / 输入 / 注解"三层。 */
-.dsm-modal .dsm-field + .dsm-field {
-  border-top: 0;
-}
-
-.dsm-modal .dsm-form {
-  gap: 16px;
-}
-
-.dsm-modal .dsm-field {
-  gap: 8px;
-}
-
-.dsm-modal .dsm-label {
-  color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 20px;
-}
-
-.dsm-modal .dsm-help {
-  margin-top: -2px;
-  font-size: 12px;
-  line-height: 17px;
-}
-
-/* ── 勾选框的激活色（用户 2026-10-10：「勾选变成绿色很丑」）────────────────────
-   原来 8 处零散写死 accent-color 且都是 state-success（绿）—— 勾选是"选中了"，不是
-   "成功"，语义与观感都不对；而漏写的那些（例如「极简模式也注入」）直接落回浏览器
-   默认的白底灰框，同一页里两种勾。现在：已写死的统一换成与主按钮 / 开关同一档的
-   激活色（button-primary-fill，跟随主题），没写的用下面这条兜住 —— 凡是本插件
-   （dsm- 前缀）容器里的勾选与单选，一律同一套。
-   放在 CSS 末尾是因为与前面那些同权重规则相比只能靠顺序取胜。 */
-[class*="dsm-"] input[type="checkbox"],
-[class*="dsm-"] input[type="radio"] {
-  accent-color: var(--dsw-alias-button-primary-fill);
-}
-
-/* ── 页头只剩动作栏 + 分标题统一（用户 2026-10-10）────────────────────────────
-   ① 每页的「标题 + 描述」整块删掉了：页签上已经写着「场景」「MCP」「技能」…，正文里再
-      复述一遍标题和一句描述是纯噪音。删掉后 .dsm-head 只剩动作栏一个孩子，而它原本是
-      space-between（标题在左、动作在右），所以补一条 margin-left:auto 把动作推回右侧。
-   ② 分标题（分区小标题）统一定为 13px/600：原来 detail-title 12px、section-title 13px
-      混着用，同一页里两种小标题看不出是同一层。 */
-.dsm-head .dsm-actions {
-  margin-left: auto;
-}
-
-
-.dsm-section-title,
-.dsm-compat-section-title,
-.dsm-detail-title,
-.dsm-adv-group-head {
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 21px;
-}
-
-/* ── MCP 新增的三档切换 + 市场卡片（用户 2026-10-10）────────────────────────
-   分段控件照宿主那套：外框一颗胶囊、选中项浮起为白底（.dsm-segmented-on）。
-   市场卡片只做浏览：图标 + 名称 + 厂商·分类 + 一句简介 + 右侧去向。 */
-.dsm-segmented {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  /* 无描边：灰底自己就是边界，再画一圈会显得很重（与开关同口径）。 */
-  border: 0;
-  border-radius: 10px;
-  /* 原写 bg-layer-3 —— 实测本主题里 layer-1/2/3 **全是 #fff**，于是"轨道"与选中项同色，
-     切了也看不出来（用户 2026-10-10：外面的框应该稍微灰一点）。改成开关关闭态用的那档：
-     border-l3 = 12% 黑 ≈ #e3e3e3，是全站唯一的"灰填充"口径 —— 选中项的白底这才立起来。 */
-  background: var(--dsw-alias-border-l3);
-}
-
-.dsm-segmented-item {
-  flex: 1;
-  min-height: 30px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.dsm-segmented-item:hover {
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-segmented-on,
-.dsm-segmented-on:hover {
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-  font-weight: 500;
-  box-shadow: var(--dsw-shadow-lv1, 0 1px 3px rgba(0, 0, 0, .12));
-}
-
-.dsm-market {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.dsm-market-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.dsm-market-count {
-  flex: none;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-/* 市场：分类 chips + 卡片上的认证/连接/健康标记（目录字段直接映射过来） */
-.dsm-market-cats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.dsm-market-cat {
-  padding: 2px 9px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-  line-height: 18px;
-  cursor: pointer;
-}
-
-.dsm-market-cat:hover {
-  border-color: var(--dsw-alias-border-l3);
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-market-cat-on {
-  border-color: var(--dsw-alias-state-business-primary);
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-  font-weight: 500;
-}
-
-.dsm-market-badges {
-  display: flex;
-  max-width: 42%;
-  flex: none;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
-}
-
-.dsm-market-badge {
-  padding: 0 6px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 11px;
-  line-height: 16px;
-  white-space: nowrap;
-}
-
-.dsm-market-badge-featured {
-  border-color: var(--dsw-alias-border-l3);
-  color: var(--dsw-alias-label-primary);
-}
-
-.dsm-market-badge-ok {
-  border-color: var(--dsw-alias-state-success-primary);
-  color: var(--dsw-alias-state-success-primary);
-}
-
-.dsm-market-badge-warn {
-  border-color: var(--dsw-alias-state-warn-primary);
-  color: var(--dsw-alias-state-warn-primary);
-}
-
-.dsm-market-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 2px;
-}
-
-.dsm-market-tag {
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.dsm-market-tag-warn {
-  color: var(--dsw-alias-state-warn-primary);
-}
-
-.dsm-market-list {
-  display: flex;
-  max-height: 320px;
-  flex-direction: column;
-  gap: 8px;
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-
-.dsm-market-card {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
-  background: var(--dsw-alias-bg-layer-1);
-  text-align: left;
-  cursor: pointer;
-}
-
-.dsm-market-card:hover {
-  border-color: var(--dsw-alias-border-l3);
-  background: var(--dsw-alias-bg-layer-2);
-}
-
-.dsm-market-icon {
-  width: 28px;
-  height: 28px;
-  flex: none;
-  border-radius: 7px;
-  background: var(--dsw-alias-bg-layer-2);
-  object-fit: contain;
-}
-
-.dsm-market-main {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.dsm-market-name {
-  color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.dsm-market-meta {
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
-}
-
-.dsm-market-summary {
-  overflow: hidden;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-  line-height: 17px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dsm-market-cta {
-  flex: none;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-  white-space: nowrap;
-}
 `
-
-    /** 统一的异常文案：Error 取 message，其余（字符串/对象/null）原样 String。此前 63 处各写一遍。 */
-
-      // ── 上游 0.19.1 的 CSS：上游独有规则与「我方没动过」的改动（同选择器后者胜）──
-      '.dsm-modal.dsm-modal-trash{height:min(760px,calc(100vh - 112px))!important;max-height:none!important}' +
-      '.dsm-trash-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}' +
-      '.dsm-trash-toolbar .dsm-trash-retention{flex:0 0 auto}' +
-      '.dsm-trash-toolbar .dsm-trash-bulk{flex:1 1 auto;min-width:0;flex-wrap:nowrap}' +
-      '.dsm-trash-toolbar .dsm-trash-bulk .dsm-note{flex:1 0 auto}' +
-      '.dsm-trash-toolbar .dsm-trash-bulk>button{flex:0 0 auto}' +
-      '.dsm-trash-toolbar .dsm-trash-bulk-confirm{flex:1 1 100%;flex-wrap:wrap}' +
-      '.dsm-trash-retention{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}' +
-      '.dsm-trash-retention .dsm-label{flex:none;font-weight:580}' +
-      '.dsm-trash-retention .dsm-control{width:auto;min-width:112px;flex:none}' +
-      '.dsm-trash-hint{min-width:0;flex:0 1 auto;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-      '.dsm-trash-retention-err{flex:1 1 auto;white-space:normal;overflow-wrap:anywhere;color:var(--dsw-alias-state-error-primary)}' +
-      '.dsm-trash-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap}' +
-      '.dsm-trash-bulk .dsm-note{min-width:0;flex:1}' +
-      '.dsm-trash-bulk-confirm{padding:6px 8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover)}' +
-      '.dsm-trash-bulk-confirm .dsm-note{font-weight:570;color:var(--dsw-alias-state-error-primary);white-space:normal}' +
-      '.dsm-trash-pane-batch{flex:none;padding:7px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}' +
-      '.dsm-trash-notice{flex:none}' +
-      '.dsm-trash-pick{display:inline-flex;flex:none;align-items:center;padding:4px 1px;cursor:pointer}' +
-      '.dsm-trash-pick input{width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-error-primary)}' +
-      '.dsm-trash-pick input:disabled{cursor:default}' +
-      '.dsm-trash-item-picked{background:var(--dsw-alias-interactive-bg-hover);border-radius:8px}' + ''
