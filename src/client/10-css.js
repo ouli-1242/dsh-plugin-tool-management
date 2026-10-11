@@ -643,7 +643,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-link:hover{color: var(--dsw-alias-label-primary);}
 .dsm-file-remove:hover{background: var(--dsw-alias-interactive-bg-hover-danger);}
 .dsm-select-trigger > span{min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
-.dsm-select-trigger::after{content:"" flex: none; box-sizing: border-box; width: 7px; height: 7px; margin-top: -3px; border-right: 1.5px solid var(--dsw-alias-label-tertiary); border-bottom: 1.5px solid var(--dsw-alias-label-tertiary); transform: rotate(45deg);}
+.dsm-select-trigger::after{content:""; flex: none; box-sizing: border-box; width: 7px; height: 7px; margin-top: -3px; border-right: 1.5px solid var(--dsw-alias-label-tertiary); border-bottom: 1.5px solid var(--dsw-alias-label-tertiary); transform: rotate(45deg);}
 .dsm-select-trigger:empty::before{color: var(--dsw-alias-label-dimmed);}
 .dsm-select-trigger:focus-visible{outline: none; border-color: var(--dsw-alias-state-business-primary);}
 .dsm-select-trigger:disabled{color: var(--dsw-alias-label-tertiary); cursor: default;}
