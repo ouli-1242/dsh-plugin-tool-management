@@ -1090,7 +1090,6 @@
                   React.createElement('h2', { className: 'dsm-title' }, t('scenes.title'))),
                 React.createElement('p', { className: 'dsm-desc' }, t('scenes.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                refreshButton(t, busy || data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')),
                 // 进入场景前的提醒开关（用户 2026-09-23 裁定放在「回收站」左边）。按钮文字是
                 // **动作**：现在会弹 → 写「关闭提醒」；已经关掉 → 写「开启提醒」。

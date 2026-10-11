@@ -385,7 +385,6 @@
                   React.createElement('h2', { className: 'dsm-title' }, t('tabs.sessions'))),
                 React.createElement('p', { className: 'dsm-desc' }, t('sessions.desc'))),
               React.createElement('div', { className: 'dsm-actions' },
-                refreshButton(t, data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: data.loading, onClick: function () { refresh() } }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openImportPicker }, t('hist.btn.import')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openExportPicker }, t('hist.btn.export')),
                 // 「全选 / 取消全选」紧挨导出（用户 2026-09-17 裁定）：它是列表级动作，

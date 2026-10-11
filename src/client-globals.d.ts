@@ -6,3 +6,7 @@ interface Window {
     load(spec: { id: string, factory: (require: (id: string) => unknown) => void }): void
   }
 }
+
+// 宿主通过 ModuleLoader 注入的 UI 基础组件（Switch 等）。本仓库不直接依赖它的类型包，
+// 这里做最小声明：只用形状里的 Switch，且保持 any —— 宿主组件的行为由宿主保证。
+declare module '@deepseek-ai/dsh-client-ui-primitives';

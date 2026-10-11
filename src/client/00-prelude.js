@@ -18,6 +18,24 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
     const React = require('react')
 
+
+    /**
+     * 宿主的 Switch 组件（@deepseek-ai/dsh-client-ui-primitives）。
+     *
+     * 用户 2026-10-10 裁定：启用/停用开关**直接复用** dsh-market 用的那个组件，
+     * 不再自绘 —— 自绘版与宿主在滑块尺寸、内缩、过渡曲线、聚焦环上总有细微出入，
+     * "看着像"不等于"是同一个"。取不到这个包时下面的 Switch() 退回自绘按钮：
+     * 缺一个 UI 包不该让整个客户端加载失败（sandbox 里 require 会抛）。
+     */
+    let HostSwitch = null
+    try {
+      const primitives = require('@deepseek-ai/dsh-client-ui-primitives')
+      HostSwitch = primitives && primitives.Switch ? primitives.Switch : null
+    } catch (error) {
+      HostSwitch = null
+    }
+
+
     // 本插件自己的设计变量（宿主那套是 `--dsw-*`）。告警色此前在 12 条规则里各写一遍
     // 十六进制字面量，换主题要改 12 次 —— 收敛成 `--dsm-warn`，字面量只留下面那一处。
 

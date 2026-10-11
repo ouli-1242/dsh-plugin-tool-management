@@ -1970,7 +1970,7 @@
         }
         // 手工拼弹窗（不能用 `Modal`：它在 apply 内，详见上方注释）。结构与 `Modal` 一致 ——
         // 遮罩点击关闭 + 头部标题/关闭键 + body + 底部动作行 —— 键盘行为（Esc 关闭 / Tab 焦点
-        // 陷阱）复用模块作用域的那三个函数（见 refreshButton 上方），打开时把焦点交给弹窗自己。
+        // 陷阱）复用模块作用域的那三个函数（见 modalFocusable 上方），打开时把焦点交给弹窗自己。
         // 这里**不**挂令牌提示（`TokenGateNotice` 在 apply 内，引它=白屏）：删除被令牌挡下时
         // 弹窗自己的错误行会如实显示那句话。
         backupModal = React.createElement('div', {
@@ -2121,12 +2121,8 @@
 
       return React.createElement('div', { className: 'dsm-compat' },
         React.createElement('div', { className: 'dsm-head' },
-          React.createElement('div', { className: 'dsm-title-block' },
-            React.createElement('div', { className: 'dsm-title-row' },
-              React.createElement('h2', { className: 'dsm-title' }, t('compat.title'))),
-            React.createElement('p', { className: 'dsm-desc' }, t('compat.desc')))),
+          ),
         React.createElement('div', { className: 'dsm-actions' },
-          refreshButton(t, busy, { className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: reload }),
           compatDialogButton('audit', t('compat.audit')),
           compatDialogButton('snapshot', t('snapshot.title')),
           compatDialogButton('live', t('compat.live.title')),

@@ -1,5 +1,29 @@
 
     /** 统一的异常文案：Error 取 message，其余（字符串/对象/null）原样 String。此前 63 处各写一遍。 */
+
+      // ── 上游 0.19.1 的 CSS：上游独有规则与「我方没动过」的改动（同选择器后者胜）──
+      '.dsm-modal.dsm-modal-trash{height:min(760px,calc(100vh - 112px))!important;max-height:none!important}' +
+      '.dsm-trash-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}' +
+      '.dsm-trash-toolbar .dsm-trash-retention{flex:0 0 auto}' +
+      '.dsm-trash-toolbar .dsm-trash-bulk{flex:1 1 auto;min-width:0;flex-wrap:nowrap}' +
+      '.dsm-trash-toolbar .dsm-trash-bulk .dsm-note{flex:1 0 auto}' +
+      '.dsm-trash-toolbar .dsm-trash-bulk>button{flex:0 0 auto}' +
+      '.dsm-trash-toolbar .dsm-trash-bulk-confirm{flex:1 1 100%;flex-wrap:wrap}' +
+      '.dsm-trash-retention{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}' +
+      '.dsm-trash-retention .dsm-label{flex:none;font-weight:580}' +
+      '.dsm-trash-retention .dsm-control{width:auto;min-width:112px;flex:none}' +
+      '.dsm-trash-hint{min-width:0;flex:0 1 auto;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+      '.dsm-trash-retention-err{flex:1 1 auto;white-space:normal;overflow-wrap:anywhere;color:var(--dsw-alias-state-error-primary)}' +
+      '.dsm-trash-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap}' +
+      '.dsm-trash-bulk .dsm-note{min-width:0;flex:1}' +
+      '.dsm-trash-bulk-confirm{padding:6px 8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover)}' +
+      '.dsm-trash-bulk-confirm .dsm-note{font-weight:570;color:var(--dsw-alias-state-error-primary);white-space:normal}' +
+      '.dsm-trash-pane-batch{flex:none;padding:7px 13px;border-bottom:1px solid var(--dsw-alias-border-l1)}' +
+      '.dsm-trash-notice{flex:none}' +
+      '.dsm-trash-pick{display:inline-flex;flex:none;align-items:center;padding:4px 1px;cursor:pointer}' +
+      '.dsm-trash-pick input{width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-error-primary)}' +
+      '.dsm-trash-pick input:disabled{cursor:default}' +
+      '.dsm-trash-item-picked{background:var(--dsw-alias-interactive-bg-hover);border-radius:8px}' + ''
     function errMsg(e) { return e && e.message ? String(e.message) : String(e) }
 
     function ensureCss() {
@@ -30,10 +54,16 @@
      * 垃圾桶图标：给「移除来源」这类破坏性操作做纯图标按钮用（按钮本身必须带 title /
      * aria-label —— 图标按钮没有可见文字，说明只能靠它们，别省）。
      */
+    /**
+     * 图形由用户 2026-10-10 指定（1024 视图的实心垃圾桶）。换图标时 viewBox 必须
+     * 一起换：1024 的路径塞进 16 的视图里只会剩左上一小块（那时按钮里就是"小米粒"）。
+     * 默认 14px 与行内其它图标同档；这枚路径近乎满幅（约 90%），14px 时视觉比旧图标
+     * 略重一档，若某处显得挤，调用点传 size 降 1px 即可。
+     */
     function TrashIcon(props) {
       var size = (props && props.size) || 14
-      return React.createElement('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' },
-        React.createElement('path', { fill: 'currentColor', d: 'M6.5 1h3l.5 1h3v1.5H3V2h3zM4 5h8l-.6 9.2a1 1 0 0 1-1 .8H5.6a1 1 0 0 1-1-.8z' }))
+      return React.createElement('svg', { viewBox: '0 0 1024 1024', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' },
+        React.createElement('path', { fill: 'currentColor', d: 'M836.6 193.8h100.2c18.8 0 33.9-16.2 33.9-36.3s-15.1-35.2-33.9-35.2H724.9V85.9C724.9 40 690 2 646.6 2H377.9c-42.8 0-78.3 37.5-78.3 83.9v36.3H87.2c-18.8 0-33.9 16.2-33.9 36.3s15.1 36.3 33.9 36.3h100.2l649.2-1zM804.6 253.7l-585.2 1c-20.5 0-37.2 17.6-37.2 39.2V890c0 72.6 56.3 132 125.1 132h409.4c68.8 0 125.1-59.4 125.1-132V293c0-21.7-16.7-39.3-37.2-39.3z' }))
     }
 
     /**
@@ -54,25 +84,6 @@
     function modalFocusable(modal) { return Array.prototype.slice.call(modal.querySelectorAll("button:not(:disabled), [href], input:not([type=hidden]):not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex=\"-1\"])") || []); }
     function trapModalFocus(modal, event) { if (event.key !== "Tab") return; var focusable = modalFocusable(modal); if (!focusable.length) return; var active = document.activeElement; if (!modal.contains(active) || (event.shiftKey ? active === focusable[0] : active === focusable[focusable.length - 1])) { event.preventDefault(); (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus(); } }
     function handleModalEscape(event, onClose) { if (event.key !== "Escape") return false; event.preventDefault(); event.stopPropagation(); if (event.nativeEvent && typeof event.nativeEvent.stopImmediatePropagation === "function") event.nativeEvent.stopImmediatePropagation(); onClose(); return true; }
-
-    /**
-     * 刷新按钮（全站八处管理页共用：MCP / 技能 / 提示词 / 会话 / 场景 / 子智能体 / 记忆 / 兼容）。
-     * 宽度同样按两种文案里更宽的那个固定（见 fixedLabelPair），所以点一下「刷新」不会因为
-     * 文案变成「刷新中…」把整行挤走。
-     *
-     * @param tFn  取词函数 —— MCP 页传 `mt`（模块作用域的 t 会被宿主 locale 覆盖），其余页传各自的 t
-     * @param busy 是否正在刷新：决定显示哪份文案（通常也同时决定 disabled）
-     * @param args 透传给 <button> 的其余属性（className / disabled / onClick / title …）
-     */
-    function refreshButton(tFn, busy, args) {
-      var idle = tFn('btn.refresh')
-      var working = tFn('btn.refreshing')
-      // 定宽靠 `.dsm-btn.dsm-btn-bulk`（两段类名，见 CSS 里的注释）—— 由这里统一补上，
-      // 调用方只管自己的样式，不用记这个类。
-      var cls = ((args && args.className) || 'dsm-btn dsm-btn-secondary') + ' dsm-btn-bulk'
-      return React.createElement('button', Object.assign({ type: 'button' }, args, { className: cls }),
-        fixedLabelPair(busy ? working : idle, busy ? idle : working))
-    }
 
     // ── 访问令牌（用户裁定 2026-09-18）────────────────────────────────────────────
     // 三条要求：① 宿主没配时能在面板里设置；② 已配时，填对令牌就能关掉整个令牌功能；
@@ -193,6 +204,22 @@
     }
 
     /**
+     * 快捷提示词变动的订阅点。
+     *
+     * 同一页里有两处 UI 都画这批词：设置页的「工具 › 提示词」与聊天栏上那排胶囊
+     * （`conversation.input.dock`）。两处之间没有别的通信渠道，而"在设置里改完、
+     * 回到会话里那排还是旧的"用户 2026-10-10 实测踩到了 —— 所以改成在 `apiCall`
+     * 里按 op 名广播：任何一处成功改动快捷提示词，胶囊立刻重读一次。
+     * 只广播写操作（`…-list` 是读，广播它会让胶囊自己把自己再触发一遍）。
+     */
+    const quickWatchers = new Set()
+    function publishQuickChange() {
+      quickWatchers.forEach(function (fn) {
+        try { fn() } catch (error) { /* 一个订阅点坏了不该连累另一个 */ }
+      })
+    }
+
+    /**
      * 发一个请求。
      *
      * @param op   宿主 op 名。
@@ -218,7 +245,12 @@
           return payload
         }).catch((e) => ({ ok: false, error: errMsg(e) }))
       }
-      return skipBootstrap ? send() : ensureTokenBootstrapped().then(send)
+      const result = skipBootstrap ? send() : ensureTokenBootstrapped().then(send)
+      const opName = String(op)
+      if (opName.indexOf('quickprompt-') === 0 && opName.slice(-4) !== 'list') {
+        return result.then(function (payload) { publishQuickChange(); return payload })
+      }
+      return result
     }
 
     // ── 「令牌没过」的识别与跳转（用户裁定 2026-09-18）─────────────────────────

@@ -351,6 +351,108 @@
         const slots = ctx.get('slots')
         if (slots === undefined) return
 
+        /**
+         * 聊天栏上方的「快捷提示词」胶囊（用户 2026-10-10 要求）。
+         *
+         * 位置：宿主 `conversation.input.dock` —— 契约原文是 "Full-width entries above
+         * the composer card"，正是对话框上方那整行（与截图里那排技能 chips 同一格）。
+         * 只在**新会话**出现（`session.blank`）：空白页里输入框是空的，这一刻才需要
+         * "点一下就有一句话可用"；已经聊起来的会话里顶部每轮都占一行会更吵。
+         *
+         * 插入走宿主给会话作用域条目的标准 props：`inputActions.insertText(文本, 光标)`。
+         * 与语音输入插件同一条路 —— 按当前光标位置插入、一步可撤销、**不自动发送**
+         * （与 `/` 菜单里点快捷词的行为逐字一致）。首个参数是"捕获时光标 + 草稿版本"，
+         * 期间草稿被别人改过会返回 false，这时重新捕获一次再插，而不是把文字丢掉。
+         *
+         * 数据仍然是本插件自己的 `quickprompt-list`（同 `quickCache` 那条只读 op），
+         * 只列 `enabled !== false` 的那些：胶囊与 `/` 菜单里能点到的是同一批，
+         * 关掉一条就不会两处都冒出来。挂载时读一次，窗口重新获得焦点时再读一次
+         * （用户在「工具 › 提示词」里改完切回来立刻是最新的）。
+         */
+        function QuickPromptChips(props) {
+          const inputActions = props.inputActions
+          const session = props.session
+          const rowsState = React.useState(null)
+          const rows = rowsState[0]
+          const setRows = rowsState[1]
+          const rowRef = React.useRef(null)
+          React.useEffect(function () {
+            let alive = true
+            const read = function () {
+              apiCall('quickprompt-list', {}).then(function (res) {
+                if (!alive) return
+                const list = (res && res.ok === true && Array.isArray(res.prompts)) ? res.prompts : []
+                setRows(list.filter(function (p) { return p.enabled !== false }))
+              }, function () { if (alive) setRows([]) })
+            }
+            read()
+            window.addEventListener('focus', read)
+            // 设置页里改完（新建 / 改名 / 删除 / 启停）立刻跟着变，不必等窗口失焦再回来。
+            quickWatchers.add(read)
+            return function () {
+              alive = false
+              window.removeEventListener('focus', read)
+              quickWatchers.delete(read)
+            }
+          }, [])
+          // 宿主没给这一格的标准输入动作（老版本）时不渲染：宁可没有胶囊，也不要一颗点不动的。
+          if (!inputActions) return null
+          if (!session || session.blank !== true) return null
+          if (rows === null) return null
+          if (rows.length === 0) {
+            // 空库时给一枚引导胶囊（用户 2026-10-10：新会话里"没有胶囊"会以为功能没生效）。
+            // 点它走宿主的 pluginNavigation 打开本插件在插件管理里的页面，从那里进
+            // 「设置 → 工具 → 提示词」新增一条；有一条之后这枚就不出现了。
+            return React.createElement('div', { className: 'dsm-composer-chips' },
+              React.createElement('button', {
+                type: 'button',
+                className: 'dsm-composer-chip dsm-composer-chip-guide',
+                title: t('quickprompt.empty'),
+                onClick: function () {
+                  const nav = ctx.get('pluginNavigation')
+                  if (nav && typeof nav.openBundle === 'function') nav.openBundle('dsh-plugin-tool-management')
+                }
+              },
+                React.createElement('span', { className: 'dsm-composer-chip-glyph', 'aria-hidden': 'true' }, '+'),
+                t('prompts.kind.quick')))
+          }
+          const insert = function (text) {
+            const body = String(text || '')
+            if (body === '') return
+            if (!inputActions.insertText(body, inputActions.captureInsertion())) inputActions.insertText(body, inputActions.captureInsertion())
+          }
+          return React.createElement('div', { className: 'dsm-composer-chips' },
+            React.createElement('div', { className: 'dsm-composer-chips-row', ref: rowRef },
+              rows.map(function (p) {
+                return React.createElement('button', {
+                  key: 'quick:' + p.id,
+                  type: 'button',
+                  className: 'dsm-composer-chip',
+                  title: (p.description ? p.description + t('agm.ref.sep') : '') + t('prompts.kind.quick.hint'),
+                  onClick: function () { insert(p.content) }
+                }, React.createElement('span', { className: 'dsm-composer-chip-glyph', 'aria-hidden': 'true' }, QUICK_CHIP_GLYPH), String(p.id))
+              })),
+            React.createElement('button', {
+              type: 'button',
+              className: 'dsm-composer-chips-more',
+              'aria-label': t('prompts.group.quick'),
+              title: t('prompts.group.quick'),
+              onClick: function () {
+                const row = rowRef.current
+                if (row) row.scrollBy({ left: 260, behavior: 'smooth' })
+              }
+            }, '\u203a')
+          )
+        }
+        /** 胶囊左边那枚小图形（16px 文本块）：纯内联 SVG，不引宿主图标包。 */
+        const QUICK_CHIP_GLYPH = React.createElement('svg', { width: 11, height: 11, viewBox: '0 0 16 16', fill: 'none' },
+          React.createElement('path', { d: 'M3.4 2.6h9.2v10.8H3.4z', stroke: 'currentColor', strokeWidth: 1.3, strokeLinejoin: 'round' }),
+          React.createElement('path', { d: 'M5.6 6h4.8M5.6 8.2h4.8M5.6 10.4h3', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }))
+        slots.inject('conversation.input.dock', () => slots.register(
+          { name: 'conversation.input.dock', id: 'dsm-quick-chips', order: 20, locale: NS },
+          QuickPromptChips
+        ))
+
         /** MCP 页的本地取词：模块作用域的 t 在 apply 里被 locale 覆盖，这里每次取值都用最新的那个。 */
         const mt = (key, params) => t(key, params)
         /** MCP 保存后统一的操作反馈：成功 / 成功但有 loader 告警 / 失败。 */
