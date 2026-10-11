@@ -629,12 +629,12 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    相比原 PR：修掉 content: ; 与半径变量下划线/连字符错位两颗雷（半径、发丝线直接
    用字面量）；去掉 main 里不存在的标记（mainpage / market / segmented /
    detail-head / composer-chips，属于 #7）与半残的 tabs / switch 组。 */
-.dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
-.dsm-inject-domain input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
-.dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
-.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:2px 0 0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
-.dsm-imp-radio input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-button-primary-fill)}
-.dsm-snap-pick input,.dsm-kind-pick input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-button-primary-fill)}
+.dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
+.dsm-inject-domain input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
+.dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
+.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:2px 0 0;cursor:pointer}
+.dsm-imp-radio input{width:14px;height:14px;margin:0}
+.dsm-snap-pick input,.dsm-kind-pick input{width:14px;height:14px;margin:0;cursor:pointer}
 .dsm-select-menu button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px;}
 .dsm-btn-lock:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-btn-quiet:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
@@ -679,7 +679,7 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-modal .dsm-field{gap: 8px;}
 .dsm-modal .dsm-label{color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 500; line-height: 20px;}
 .dsm-modal .dsm-help{margin-top: -2px; font-size: 12px; line-height: 17px;}
-[class*="dsm-"] input[type="radio"]{accent-color: var(--dsw-alias-button-primary-fill);}
+      [class*="dsm-"] input[type="checkbox"],[class*="dsm-"] input[type="radio"]{accent-color:var(--dsw-alias-state-success-primary)}
 
 
 `
