@@ -108,7 +108,7 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 
 - **A scene = a group, a memory = a `.md` file**: `memories/<scene>/<name>.md`, the whole body is injected, file names may be Chinese.
 - **"Enabled" and "entered" are two axes**: enabled decides which scene the injection follows (single-select; none enabled = only `global` and `_shared`); entering applies the scene's whole MCP / skills / personas set and writes its bound prompt into `AGENTS.md`.
-- **Scene profile**: each scene pairs a set of MCP tools / skills / subagents / memories; ticked = on, unchecked = off, a section never created means that domain is off; leaving restores the pre-scene state.
+- **Scene profile**: each scene pairs a set of MCP tools (with scene-level note overrides) / skills / subagents / quick prompts / a model tool-table scheme, plus a bound global prompt preset; ticked = on, unchecked = off, a section never created means that domain is off (quick prompts excepted: unbound = left alone on entry); leaving restores the pre-scene state.
 - **Every domain also offers "None"**: this scene leaves that domain alone (the prompt cell = leave `AGENTS.md` as-is; quick prompts = none enabled). It differs from "keep current" — that one really changes nothing.
 - **Scene lock** makes those five domains read-only.
 - **Deleting a scene takes its memories with it**: the record, the profile and every memory go into one recycle-bin entry and come back together; a scene in use refuses to be deleted.
