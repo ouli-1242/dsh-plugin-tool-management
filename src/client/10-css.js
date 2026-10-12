@@ -879,13 +879,18 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-head-stats{display:flex;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
 .dsm-head-stat{display:flex;flex:1;min-width:0;align-items:baseline;gap:4px;padding:6px 12px;border-right:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:nowrap;overflow:hidden}
 .dsm-head-stat:last-child{border-right:0}
-/* 统计格里的标签（2026-10-12 改成标签在前、值在后）：弱色 12px，可收缩截断；
+/* 统计格里的标签（2026-10-12 改成标签在前、值在后）：深灰 12px，可收缩截断；
    值（.dsm-head-num）恒不收缩 —— 宁可截标签也不能截数字。 */
-.dsm-head-stat-label{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap}
+.dsm-head-stat-label{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap}
 /* 统计格的「超限」态（记忆页把注入预算搬进第三格）：数字与标签一起转错误色。
-   不复用别处的超限类 —— 那些都自带 12px 字号，落进统计格会把 15px 的数字压小。 */
+   不复用别处的超限类 —— 它们各有各的落点与附带样式，统计格要的是整格同转。 */
 .dsm-head-stat.dsm-stat-over,.dsm-head-stat.dsm-stat-over .dsm-head-num{color:var(--dsw-alias-state-error-primary)}
-.dsm-head-num{flex:none;color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+/* 统计格的「值」：与标签同式（2026-10-12 用户裁定，两步）—— 先定「数字不再放大加粗、
+   与汉字同式」，再定「同式就同深灰，不用弱灰」：深灰 12px、正常字重，字号行高随
+   .dsm-head-stat 继承，与 .dsm-head-stat-label 视觉一致。只保留两条差异：
+   flex:none（值恒不收缩，见上）与 tabular-nums（等宽数字，"315/131072 B"
+   这类混排读数才对得齐）。 */
+.dsm-head-num{flex:none;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 /* 页头动作行里的 quiet 按钮：与同排的实底/描边按钮**同高**（30px，铁律「同一组按钮
    必须同高」），只弱化视觉（无底无框、次级字色），不缩小 —— 24px 的 quiet 是列表行
    与弹窗内小件的档位，混排会让页头一行高矮不齐。 */
