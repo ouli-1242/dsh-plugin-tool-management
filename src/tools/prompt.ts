@@ -17,6 +17,13 @@ export interface PromptToolDeps extends ToolDomainDeps {
   promptOps: Record<string, (args: any) => Promise<any>>
   /** 应用预设（场景接管期间只放行场景绑定的那一份）。 */
   applyPresetGuarded(id: string): Promise<{ ok: true; id: string; backedUp?: boolean; viaScene?: boolean; scene?: string } | { ok: false; error: string }>
+  /**
+   * 取消应用（0.20.0）：把 `~/.dsh/AGENTS.md` 恢复到这一串应用/取消开始之前的状态 ——
+   * 起点有内容就写回、起点没有文件就把文件删掉（`removed: true`）。场景正驱动基线时
+   * op 自己拒绝（撤销也会被下一次场景同步写回去），这里只负责把拒绝原因原样抛给模型，
+   * 与界面给用户的出路同一句。
+   */
+  unapplyPreset(): Promise<{ ok: boolean; error?: string; removed?: boolean }>
   promptsDir: string
 }
 
@@ -72,14 +79,25 @@ export function buildPromptTools(deps: PromptToolDeps): void {
   }))
   register(defineTool({
     name: 'prompt_manager_apply',
-    description: 'Apply one AGENTS.md preset by id; effective next turn. If a scene drives the baseline this does NOT refuse — it rebinds that scene to the preset and re-syncs it, so tell the user which scene was rebound. A locked scene blocks the call. Only on the user\'s instruction.',
+    description: 'Apply one AGENTS.md preset by id; effective next turn. If a scene drives the baseline this does NOT refuse — it rebinds that scene to the preset and re-syncs it, so tell the user which scene was rebound. A locked scene blocks the call. Pass apply=false to cancel instead — AGENTS.md goes back to what it was before the run of applies (the file is removed if there was none to begin with); a scene driving the baseline refuses that, rebind the scene instead. Only on the user\'s instruction.',
     parameters: {
-      id: { type: 'string', required: true, description: 'Preset id (lowercase letters, digits, hyphens).' },
+      id: { type: 'string', required: true, description: 'Preset id (lowercase letters, digits, hyphens). Ignored when apply=false.' },
+      apply: { type: 'boolean', description: 'Omit or true = apply the preset in `id`; false = cancel — undo the run of applies.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args) {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
+      if (args.apply === false) {
+        // 取消方向：`agentsmd-unapply` 自带两条护栏（场景驱动时拒绝、没有链起点时给确定
+        // 错误码），原样透传。回执要说清恢复成哪种 —— 起点没有文件时是**删文件**，
+        // 不说的话用户以为 AGENTS.md 还在（0.19.1 界面弹窗报的就是这两种）。
+        const r = await deps.unapplyPreset()
+        if (!r.ok) throw new Error(r.error || '取消应用失败')
+        return r.removed === true
+          ? 'OK: application cancelled — ~/.dsh/AGENTS.md did not exist before the run started, so the file was removed (effective next turn).'
+          : 'OK: application cancelled — ~/.dsh/AGENTS.md is back to what it was before the run started (effective next turn).'
+      }
       const r = await deps.applyPresetGuarded(args.id)
       if (!r.ok) throw new Error(r.error)
       // 场景驱动时写的是「场景绑定」，回执必须说清改的是哪个场景 —— 只说「已应用到

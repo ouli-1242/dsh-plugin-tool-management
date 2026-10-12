@@ -2206,7 +2206,15 @@ export default {
       const denied = await frozenGate('agentsmd-apply', { id })
       return denied ? { ok: false as const, error: denied } : applyPresetGuarded(id)
     }
-    buildPromptTools({ ...toolDeps, promptOps: auditOps(promptOps), applyPresetGuarded: applyPresetForModel, promptsDir })
+    // 取消应用同理：`agentsmd-unapply` 在冻结清单里，模型侧不经 op 表直调就要在这里显式过
+    // 冻结闸（与 apply 同一形状）—— 少了这一层，锁着场景时模型仍能撤掉当前基线。
+    const unapplyPresetForModel = async () => {
+      const denied = await frozenGate('agentsmd-unapply', {})
+      return denied
+        ? { ok: false as const, error: denied }
+        : (promptOps['agentsmd-unapply'] as () => Promise<{ ok: boolean; error?: string; removed?: boolean }>)()
+    }
+    buildPromptTools({ ...toolDeps, promptOps: auditOps(promptOps), applyPresetGuarded: applyPresetForModel, unapplyPreset: unapplyPresetForModel, promptsDir })
     buildMemoryTools({ ...toolDeps, rulesOps: auditOps(memoriesService.ops) })
     // 场景族（tools/scene.ts）：列场景与档案（`_list`）+ 建场景 / 写档案 / 绑提示词（`_save`）
     // + 进入与退出（`_switch`）。
