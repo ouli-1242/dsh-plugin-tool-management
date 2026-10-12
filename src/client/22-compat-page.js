@@ -77,8 +77,11 @@
       // 进页面读一次：它是「刚才那次改动算没算进去」的核对栏，不该要求用户再点一下。
       React.useEffect(function () { loadAudit('') }, [])
       // 整机迁移（0.15.0 C2）：导出 = 一个目录带走全部；导入 = 先预览、勾选域、再执行。
-      const [snap, setSnap] = React.useState({ outDir: '', includeSecrets: false, busy: false, result: null })
-      const [snapIn, setSnapIn] = React.useState({ dir: '', preview: null, loading: false, picked: {}, conflict: 'skip', busy: false, result: null, error: null })
+      // 两个目录初值都取共享的 defaultIoDir()（20 片）—— 导出默认落在那儿，导入也从那儿找
+      // 快照。值是**宿主**报的「桌面 → 主目录」，跟着机器与用户走，不写死任何绝对路径
+      //（用户 2026-10-12 追问过其他用户 / macOS / Linux 的情况，见 20 片的说明）。
+      const [snap, setSnap] = React.useState({ outDir: defaultIoDir(), includeSecrets: false, busy: false, result: null })
+      const [snapIn, setSnapIn] = React.useState({ dir: defaultIoDir(), preview: null, loading: false, picked: {}, conflict: 'skip', busy: false, result: null, error: null })
       /**
        * 「浏览」用的目录状态（0.15.0）：`target` 记住这次是给导出选目录还是给导入选快照位置。
        * 走宿主 `dir-list` 逐级列目录 —— 标准浏览器拿不到所选文件夹的绝对路径
@@ -96,11 +99,17 @@
           })
           .catch(function (e) { setBrowse({ target: keep, path: want, current: '', parent: null, entries: [], loading: false, error: errMsg(e) }) })
       }
-      const browseOpen = function (target, initial) { browseLoad(initial || '', target) }
+      /** 把选中的目录落到「导出」或「导入」那一格 —— 系统框与应用内列表两条路共用。 */
+      const browseApply = function (target, path) {
+        if (target === 'export') setSnap(Object.assign({}, snap, { outDir: path }))
+        else setSnapIn(Object.assign({}, snapIn, { dir: path, preview: null, result: null }))
+      }
+      const browseOpen = function (target, initial) {
+        requestHostDirectory(function (path) { browseApply(target, path) }, function () { browseLoad(initial || '', target) })
+      }
       const browsePick = function () {
         if (!browse || !browse.current) return
-        if (browse.target === 'export') setSnap(Object.assign({}, snap, { outDir: browse.current }))
-        else setSnapIn(Object.assign({}, snapIn, { dir: browse.current, preview: null, result: null }))
+        browseApply(browse.target, browse.current)
         setBrowse(null)
       }
       /** 清空流水。清完会重载 —— 新流水里会留下一条「清空了改动记录」，这是有意的（见 audit-log.ts）。 */
@@ -219,15 +228,10 @@
       // 不让它把整页顶成错误态。
       const applyTokenState = function (r, alive) {
         if (alive === false || !r || !r.ok) return
-        // 收掉那句"去填令牌"的两种情形：
-        //   ① 宿主认可了本机这串 ⇒ 用户已经把它填对了，再挂着只会让人以为还没生效；
-        //   ② 当前进程里令牌**没在生效**（关掉了 / 从来没配）⇒ 那句话已无处可填，留着就是
-        //      在说一件不存在的事（用户 2026-09-19：「未开启令牌功能怎么还有这个提示词」）。
-        //      这一态下面板自己会用状态胶囊说清实际情况。
-        if (r.accepted === true || r.active !== true) clearTokenGate()
-        // 锁态与上面那句提示**同源**：同一个响应里就有答案，不再多发一次 token-status。
-        // 于是"进兼容页看一眼"或"提交一次令牌"都会顺手把输入框的锁校准回来。
-        setTokenLock(r.active === true && r.accepted !== true)
+        // 收掉那句"去填令牌" + 校准输入框锁态：**判据不在这里**，与横幅的填写弹窗共用
+        // `applyTokenStatusSideEffects`（20 片）。抄一份的后果是同一个响应在两边判出不同结论，
+        // 而这两个结论直接决定"用户能不能发消息"。
+        applyTokenStatusSideEffects(r)
         setTokenState({
           hostConfigured: r.hostConfigured === true,
           disabled: r.disabled === true,
@@ -517,20 +521,6 @@
         loadBackups(alive)
         return function () { alive = false }
       }, [])
-      const reload = function () {
-        setBusy(true)
-        apiCall('compat-status', { refresh: true })
-          .then(function (r) { apply(r, true) })
-          .catch(function (e) { setError(errMsg(e)); setBusy(false) })
-        loadReach(true)
-        loadInject(true)
-        loadSlash(true)
-        loadToolTable(true)
-        loadLive(true)
-        loadFeatures(true)
-        loadToken(true)
-        loadBackups(true)
-      }
       // 保存注入设置：先乐观更新界面（点一下就该有反馈），服务端返回值到达后以其为准；
       // 失败则重新拉一次。可达性矩阵跟着刷新 —— 芯片要反映新的开关状态。
       const saveInject = function (patch) {
@@ -783,13 +773,15 @@
         },
           React.createElement('div', { className: 'dsm-modal-head' },
             React.createElement('h3', { className: 'dsm-modal-title', id: 'dsm-compat-dialog-title-' + id }, title),
-            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: close }, t('btn.close'))),
+            // 关闭钮统一走共享的 X 图标钮（REDESIGN §4.2：关闭不是一行文字，是右上角一颗 X）。
+            React.createElement(ModalCloseButton, { label: t('btn.close'), onClick: close })),
           React.createElement('div', { className: 'dsm-modal-body' }, content)))
       }
-      /** 顶部那一栏的三个入口按钮（与「刷新」「清理旧备份」同排同样式）。 */
+      /** 顶部那一栏的三个入口按钮（quiet 弱化，REDESIGN §6 兼容行特例 §9-1：常驻可见）。 */
       const compatDialogButton = function (id, label) {
         return React.createElement('button', {
-          type: 'button', className: 'dsm-btn dsm-btn-secondary',
+          key: id,
+          type: 'button', className: 'dsm-btn dsm-btn-quiet',
           onClick: function () { setCompatDialog(id) },
         }, label)
       }
@@ -878,14 +870,12 @@
           }, t('compat.token.save')))
         : null
       // ── ② 令牌管理：四行静态清单（配置文件、持久）────────────────────────────────
-      // 行构造：名字 · 一句说明 · 按钮，三列网格 —— 每行同形、同位、同宽。行**永远
+      // 行构造：名字 · 一句说明 · 按钮 —— SettingsRow（REDESIGN §5.2，切片五收编）：
+      // 名字与说明在左（说明跟在名字下一行），按钮靠右，行间分隔线分节。行**永远
       // 存在**（不随状态增删，不可用时禁用、由说明解释为什么），按钮一律次级样式，
       // 红色只出现在弹窗里的确认按钮上；点带 … 的按钮开弹窗，页面本身纹丝不动。
       const tokenRow = function (name, hint, btn) {
-        return React.createElement('div', { className: 'dsm-token-mrow' },
-          React.createElement('span', { className: 'dsm-token-mrow-name' }, name),
-          React.createElement('span', { className: 'dsm-token-mrow-hint' }, hint),
-          btn)
+        return React.createElement(SettingsRow, { name: name, desc: hint, control: btn })
       }
       /** 状态会翻转的按钮（修改↔设置 / 关闭↔开启）：fixedLabelPair 用隐形占位把两种
        *  文案里更宽的那个当宽度，翻转时按钮尺寸不变（见 fixedLabelPair 上的注释）。 */
@@ -1041,9 +1031,8 @@
           React.createElement('div', { className: 'dsm-modal-head-wrap' },
             React.createElement('div', { className: 'dsm-modal-head' },
               React.createElement('h3', { className: 'dsm-modal-title', id: 'dsm-token-modal-title' }, title),
-              React.createElement('button', {
-                type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closeTokenModal,
-              }, t('btn.close')))),
+              // 关闭钮统一走共享的 X 图标钮（REDESIGN §4.2）。
+              React.createElement(ModalCloseButton, { label: t('btn.close'), onClick: closeTokenModal }))),
           React.createElement('div', { className: 'dsm-modal-body' },
             React.createElement('div', { className: 'dsm-token-form' }, fields),
             React.createElement('div', { className: 'dsm-modal-actions' }, [
@@ -1076,60 +1065,68 @@
         const liveTag = function (key) {
           const state = slashMountStateOf(key)
           const on = state === 'registered'
-          return React.createElement('span', { className: 'dsm-pick-meta' },
-            React.createElement('span', {
-              className: 'dsm-tag' + (on ? ' dsm-tag-on' : ''), title: t('compat.slash.mount.' + state),
-            }, t(on ? 'compat.slash.live.on' : 'compat.slash.live.off')))
+          return React.createElement('span', {
+            key: 'live-' + key,
+            className: 'dsm-tag' + (on ? ' dsm-tag-on' : ''), title: t('compat.slash.mount.' + state),
+          }, t(on ? 'compat.slash.live.on' : 'compat.slash.live.off'))
         }
         slashParts.push(
           React.createElement('div', { key: 'slash-head', className: 'dsm-seg-group' },
             React.createElement('span', null, t('compat.slash.title')),
             React.createElement('span', { className: 'dsm-seg-group-line' })),
-          React.createElement('label', { key: 'slash-tools', className: 'dsm-pick' },
-            React.createElement('input', {
-              type: 'checkbox', checked: slash.tools !== false,
-              onChange: function (e) { saveSlash({ tools: e.target.checked === true }) },
-            }),
-            React.createElement('span', { className: 'dsm-pick-main' },
-              React.createElement('span', { className: 'dsm-pick-name' }, t('compat.slash.tools')),
-              React.createElement('span', { className: 'dsm-pick-desc' }, t('compat.slash.tools.desc'))),
-            liveTag('tools')),
-          React.createElement('label', { key: 'slash-quick', className: 'dsm-pick' },
-            React.createElement('input', {
-              type: 'checkbox', checked: slash.quickPrompts !== false,
-              onChange: function (e) { saveSlash({ quickPrompts: e.target.checked === true }) },
-            }),
-            React.createElement('span', { className: 'dsm-pick-main' },
-              React.createElement('span', { className: 'dsm-pick-name' }, t('compat.slash.quick')),
-              React.createElement('span', { className: 'dsm-pick-desc' }, t('compat.slash.quick.desc'))),
-            liveTag('quickPrompts')),
-          React.createElement('p', { key: 'slash-restart', className: 'dsm-help' }, t('compat.slash.restartHint')))
+          // 开关行（REDESIGN §5.2 SettingsRow + Switch，切片五换装）：名字+说明在左，
+          // 开关与「本次启动真挂上了没」的标签在右。
+          React.createElement(SettingsRow, { key: 'slash-tools', name: t('compat.slash.tools'), desc: t('compat.slash.tools.desc'),
+            control: [
+              React.createElement(Switch, { key: 'sw', on: slash.tools !== false, label: t('compat.slash.tools'), onClick: function () { saveSlash({ tools: slash.tools === false }) } }),
+              liveTag('tools'),
+            ] }),
+          React.createElement(SettingsRow, { key: 'slash-quick', name: t('compat.slash.quick'), desc: t('compat.slash.quick.desc'),
+            control: [
+              React.createElement(Switch, { key: 'sw', on: slash.quickPrompts !== false, label: t('compat.slash.quick'), onClick: function () { saveSlash({ quickPrompts: slash.quickPrompts === false }) } }),
+              liveTag('quickPrompts'),
+            ] }))
       }
       const injectParts = []
       if (inject) {
         const domains = (inject && inject.domains) || {}
         injectParts.push(
-            React.createElement('label', { key: 'force', className: 'dsm-pick' },
-              React.createElement('input', { type: 'checkbox', checked: inject.underSuppressingPresets === true, onChange: function () { saveInject({ underSuppressingPresets: inject.underSuppressingPresets !== true }) } }),
-              React.createElement('span', { className: 'dsm-pick-main' },
-                React.createElement('span', { className: 'dsm-pick-name' }, t('compat.inject.force')),
-                React.createElement('span', { className: 'dsm-pick-desc' }, t('compat.inject.force.desc')))),
+            // 开关行（REDESIGN §5.2，切片五换装）：总开关一行。
+            React.createElement(SettingsRow, { key: 'force', name: t('compat.inject.force'),
+              control: React.createElement(Switch, { on: inject.underSuppressingPresets === true, label: t('compat.inject.force'), onClick: function () { saveInject({ underSuppressingPresets: inject.underSuppressingPresets !== true }) } }) }),
             React.createElement('div', { key: 'domains-head', className: 'dsm-seg-group' },
               React.createElement('span', null, t('compat.inject.domains')),
               React.createElement('span', { className: 'dsm-seg-group-line' })),
+            // 六域**一行**（用户 2026-10-12：「分六行很占用空间，能不能一行显示，而且还能美观、
+            // 简洁、高级」）：六颗 chip 等分排开，开 = 成功色描边 + 实心点、关 = 默认描边 + 灰点。
+            // 不再用六颗 32px 开关 —— 名字与开关并排要 ~105px，六份就是 630px，一行放不下还得
+            // 靠缩小字号硬塞；chip 把「名字」本身变成控件，一行 6 个在 760px 里还有余量，
+            // 窄栏按 flex-basis 折成两行也不会挤成一团。
+            // a11y：role=switch + aria-checked 挂在 chip 上（它就是一个开关，只是长成了标签的样子），
+            // 键盘可聚焦、Enter/Space 由 button 语义自带。
             React.createElement('div', { key: 'domains', className: 'dsm-inject-domains' },
               ['scene', 'memory', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
                 // 技能与提示词两域在标准类预设下由宿主送、本插件让位 —— 关掉它们时本插件会连
                 // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
                 // 那两项一句 title，免得用户以为"关了没用"。
                 const carrier = key === 'skills' || key === 'prompt'
-                return React.createElement('label', { className: 'dsm-inject-domain', key: 'domain-' + key, title: carrier ? t('compat.inject.domain.carrier.title') : undefined },
-                  React.createElement('input', { type: 'checkbox', checked: domains[key] !== false, onChange: function () {
+                const on = domains[key] !== false
+                return React.createElement('button', {
+                  key: 'domain-' + key,
+                  type: 'button',
+                  role: 'switch',
+                  'aria-checked': on,
+                  className: 'dsm-inject-chip' + (on ? ' dsm-inject-chip-on' : ''),
+                  title: carrier ? t('compat.inject.domain.carrier.title') : undefined,
+                  'aria-label': t('compat.inject.domain.' + key),
+                  onClick: function () {
                     const nextDomains = Object.assign({}, domains)
                     nextDomains[key] = domains[key] === false
                     saveInject({ domains: nextDomains })
-                  } }),
-                  React.createElement('span', null, t('compat.inject.domain.' + key)))
+                  },
+                },
+                  React.createElement('span', { className: 'dsm-inject-chip-dot' }),
+                  React.createElement('span', { className: 'dsm-inject-chip-name' }, t('compat.inject.domain.' + key)))
               })))
       }
       // 两块数据各自独立加载：inject 读不到时斜杠入口照样要出现，反之也一样，所以整块的条件是
@@ -1154,35 +1151,37 @@
         const rows = []
         groups.forEach(function (group) {
           const onCount = group.tools.filter(function (tool) { return !tool.hidden }).length
-          rows.push(React.createElement('div', { className: 'dsm-tooltable-group', key: 'g-' + group.key },
-            React.createElement('label', { className: 'dsm-tooltable-ghead' },
-              React.createElement('input', {
-                type: 'checkbox',
-                checked: onCount === group.tools.length,
-                // 半开半关时显示成"未全选"，点一下 = 全开（与其余全选控件同款：勾选框只表达
-                // 两种意思，第三种状态靠计数说清）。
-                onChange: function () { toggleToolTableGroup(group, onCount !== group.tools.length) },
-              }),
-              React.createElement('span', { className: 'dsm-tooltable-gname' }, groupLabel(group.key)),
-              React.createElement('span', { className: 'dsm-tooltable-gcount' }, t('compat.tools.groupCount', { on: onCount, total: group.tools.length, tok: group.tok }))),
-            React.createElement('div', { className: 'dsm-tooltable-tools' },
-              group.tools.map(function (tool) {
-                const about = translateOrFallback(t, 'compat.tools.about.' + tool.name, '')
-                // 悬停 = 稍详细那句 + 空行 + 当前状态。取不到详细那句时退回行内那句，
-                // 于是"悬停什么也没有"不会发生。
-                const hover = translateOrFallback(t, 'compat.tools.hover.' + tool.name, about)
-                return React.createElement('label', {
-                  className: 'dsm-tooltable-tool',
-                  key: tool.name,
-                  title: (hover ? hover + '\n\n' : '') + (tool.hidden
-                    ? (tool.defaultHidden ? t('compat.tools.defaultOffTitle') : t('compat.tools.offTitle'))
-                    : t('compat.tools.onTitle')),
-                },
-                  React.createElement('input', { type: 'checkbox', checked: !tool.hidden, onChange: function () { toggleToolTableTool(tool.name, !!tool.hidden) } }),
-                  React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
-                  React.createElement('span', { className: 'dsm-tooltable-tok' }, '≈' + tool.tok),
-                  React.createElement('span', { className: 'dsm-tooltable-about' }, about))
-              }))))
+            rows.push(React.createElement('div', { className: 'dsm-tooltable-group', key: 'g-' + group.key },
+              // 组头与工具行：原生勾选框换自绘框 RowCheck（REDESIGN §5.1，切片五）。
+              // label 包裹照旧 —— 点击行内任意文字都翻勾（button 是可标注控件）。
+              React.createElement('label', { className: 'dsm-tooltable-ghead' },
+                React.createElement(RowCheck, {
+                  checked: onCount === group.tools.length,
+                  // 半开半关时显示成"未全选"，点一下 = 全开（与其余全选控件同款：勾选框只表达
+                  // 两种意思，第三种状态靠计数说清）。
+                  onChange: function () { toggleToolTableGroup(group, onCount !== group.tools.length) },
+                  label: groupLabel(group.key),
+                }),
+                React.createElement('span', { className: 'dsm-tooltable-gname' }, groupLabel(group.key)),
+                React.createElement('span', { className: 'dsm-tooltable-gcount' }, t('compat.tools.groupCount', { on: onCount, total: group.tools.length, tok: group.tok }))),
+              React.createElement('div', { className: 'dsm-tooltable-tools' },
+                group.tools.map(function (tool) {
+                  const about = translateOrFallback(t, 'compat.tools.about.' + tool.name, '')
+                  // 悬停 = 稍详细那句 + 空行 + 当前状态。取不到详细那句时退回行内那句，
+                  // 于是"悬停什么也没有"不会发生。
+                  const hover = translateOrFallback(t, 'compat.tools.hover.' + tool.name, about)
+                  return React.createElement('label', {
+                    className: 'dsm-tooltable-tool',
+                    key: tool.name,
+                    title: (hover ? hover + '\n\n' : '') + (tool.hidden
+                      ? (tool.defaultHidden ? t('compat.tools.defaultOffTitle') : t('compat.tools.offTitle'))
+                      : t('compat.tools.onTitle')),
+                  },
+                    React.createElement(RowCheck, { checked: !tool.hidden, label: tool.name, onChange: function () { toggleToolTableTool(tool.name, !!tool.hidden) } }),
+                    React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
+                    React.createElement('span', { className: 'dsm-tooltable-tok' }, '≈' + tool.tok),
+                    React.createElement('span', { className: 'dsm-tooltable-about' }, about))
+                }))))
         })
         const presetCount = (toolTable.presets || []).length
         push(section(t('compat.tools'), t('compat.tools.hint'),
@@ -1204,10 +1203,10 @@
                   title: presetCount ? t('compat.tools.preset.apply.tip') : t('compat.tools.preset.apply.tipEmpty'),
                   onClick: function () { setToolPreset({ mode: 'apply' }) },
                 }, t('compat.tools.preset.apply')))),
-            // 合计里拆一句"出厂关的"：不然第一句那个"省下 ≈2,679"会被读成用户自己关出来的。
-            report.defaultHiddenCount > 0
-              ? React.createElement('div', { className: 'dsm-tooltable-sub' }, t('compat.tools.summaryDefault', { n: report.defaultHiddenCount, tok: report.defaultHiddenTok }))
-              : null,
+            // 合计只留一行。此前下面还有一句"其中 ≈X 是出厂默认关掉的 N 条…"，2026-10-12
+            // 删除（用户裁定）：同一件事在说明行（`compat.tools.hint`，已改成一句
+            // "勾选的工具每轮随请求发送给模型"）与工具悬停提示里都说过了，这里是第三次；
+            // 而且"出厂默认关掉"这件事用户不需要为此做什么 —— 要用就勾上，不用管它。
             rows)))
       }
       // 注入实况：紧挨「注入」设置块下方。数据来自 `injection-live`（宿主读最近活跃会话的
@@ -1650,13 +1649,12 @@
       }
       auditContent = React.createElement('div', { className: 'dsm-audit' },
           React.createElement('div', { className: 'dsm-audit-bar' },
-            React.createElement('select', {
-              className: 'dsm-control dsm-audit-filter', 'aria-label': t('compat.audit.domain'),
+            React.createElement(SourceSelect, {
+              className: 'dsm-audit-filter', ariaLabel: t('compat.audit.domain'),
+              options: AUDIT_DOMAINS.map(function (d) { return { value: d[0], label: t('compat.audit.domain.' + d[1]) } }),
               value: (audit && audit.domain) || '', disabled: !audit || audit.loading === true,
-              onChange: function (e) { loadAudit(e.target.value) },
-            }, AUDIT_DOMAINS.map(function (d) {
-              return React.createElement('option', { key: d[1], value: d[0] }, t('compat.audit.domain.' + d[1]))
-            })),
+              onChange: function (v) { loadAudit(v) },
+            }),
             React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !audit || audit.loading === true, onClick: function () { loadAudit((audit && audit.domain) || '') } }, t('compat.audit.reload')),
             // 清除是两步：按钮先变成「确认清除」+「取消」，不做"一按就没了"（与清理旧备份同口径）。
             auditConfirm === true
@@ -1718,15 +1716,14 @@
           React.createElement('span', { className: 'dsm-label' }, t('snapshot.export.dir')),
           React.createElement('div', { className: 'dsm-snap-row' },
             React.createElement('input', {
-              className: 'dsm-control', value: snap.outDir, placeholder: t('export.outDir.placeholder'),
+              className: 'dsm-control', value: snap.outDir, placeholder: defaultIoDir(),
               disabled: snap.busy === true, onChange: function (e) { setSnap(Object.assign({}, snap, { outDir: e.target.value })) },
             }),
             React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: snap.busy === true, onClick: function () { browseOpen('export', snap.outDir) } }, t('snapshot.browse')),
             React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: snap.busy === true || !String(snap.outDir).trim(), onClick: doSnapshotExport }, snap.busy ? t('snapshot.export.busy') : t('snapshot.export.btn'))),
           snapBrowsePanel('export')),
-        React.createElement('label', { className: 'dsm-snap-pick' },
-          React.createElement('input', { type: 'checkbox', checked: snap.includeSecrets === true, disabled: snap.busy === true, onChange: function (e) { setSnap(Object.assign({}, snap, { includeSecrets: e.target.checked })) } }),
-          t('snapshot.export.secrets')),
+        React.createElement(SettingsRow, { name: t('snapshot.export.secrets'),
+          control: React.createElement(Switch, { on: snap.includeSecrets === true, disabled: snap.busy === true, label: t('snapshot.export.secrets'), onClick: function () { setSnap(Object.assign({}, snap, { includeSecrets: !(snap.includeSecrets === true) })) } }) }),
         // 明文警告只在**勾了之后**才出现：默认那一份是打码的，常驻一段吓人的话只会稀释重点。
         snap.includeSecrets === true ? React.createElement('p', { className: 'dsm-help' }, t('snapshot.export.secrets.warn')) : null,
         snap.result ? React.createElement('div', { className: 'dsm-feedback' + (snap.result.ok ? '' : ' dsm-error'), role: snap.result.ok ? 'status' : 'alert' },
@@ -1737,7 +1734,7 @@
           React.createElement('span', { className: 'dsm-label' }, t('snapshot.import.dir')),
           React.createElement('div', { className: 'dsm-snap-row' },
             React.createElement('input', {
-              className: 'dsm-control', value: snapIn.dir, placeholder: t('snapshot.import.dir.placeholder'),
+              className: 'dsm-control', value: snapIn.dir, placeholder: defaultIoDir(),
               disabled: snapIn.busy === true, onChange: function (e) { setSnapIn(Object.assign({}, snapIn, { dir: e.target.value, preview: null, result: null })) },
             }),
             React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: snapIn.busy === true, onClick: function () { browseOpen('import', snapIn.dir) } }, t('snapshot.browse')),
@@ -1750,20 +1747,21 @@
             + ' · ' + (snapIn.preview.masked === false ? t('snapshot.import.unmasked') : t('snapshot.import.masked'))
             + ((snapIn.preview.notes || []).length ? ' · ' + t('snapshot.notes', { items: snapIn.preview.notes.join('；') }) : '')),
           (snapIn.preview.domains || []).length ? React.createElement('div', { className: 'dsm-snap-picks' }, (snapIn.preview.domains || []).map(function (d) {
-            return React.createElement('label', { key: d.domain, className: 'dsm-snap-pick' },
-              React.createElement('input', {
-                type: 'checkbox', checked: snapIn.picked[d.domain] === true, disabled: snapIn.busy === true,
-                onChange: function (e) { var next = Object.assign({}, snapIn.picked); next[d.domain] = e.target.checked; setSnapIn(Object.assign({}, snapIn, { picked: next })) },
-              }),
-              t('snapshot.import.row', { domain: t('snapshot.domain.' + d.domain), count: d.count, clashes: d.clashes }))
+            // 导入预览 = 行选择（REDESIGN §5.1，切片五）：整行可点勾选，域/条数/冲突数一句话。
+            return React.createElement(RowSelect, {
+              key: d.domain,
+              checked: snapIn.picked[d.domain] === true, disabled: snapIn.busy === true,
+              name: t('snapshot.import.row', { domain: t('snapshot.domain.' + d.domain), count: d.count, clashes: d.clashes }),
+              onChange: function () { var next = Object.assign({}, snapIn.picked); next[d.domain] = snapIn.picked[d.domain] !== true; setSnapIn(Object.assign({}, snapIn, { picked: next })) },
+            })
           })) : React.createElement('div', { className: 'dsm-empty' }, t('snapshot.import.notFound')),
           React.createElement('div', { className: 'dsm-audit-bar' },
-            React.createElement('label', { className: 'dsm-snap-pick' },
-              React.createElement('input', { type: 'radio', name: 'dsm-snap-conflict', checked: snapIn.conflict === 'skip', onChange: function () { setSnapIn(Object.assign({}, snapIn, { conflict: 'skip' })) } }),
-              t('snapshot.import.conflict.skip')),
-            React.createElement('label', { className: 'dsm-snap-pick' },
-              React.createElement('input', { type: 'radio', name: 'dsm-snap-conflict', checked: snapIn.conflict === 'overwrite', onChange: function () { setSnapIn(Object.assign({}, snapIn, { conflict: 'overwrite' })) } }),
-              t('snapshot.import.conflict.overwrite')),
+            // 冲突策略二选一：分段控件（REDESIGN §5.2，切片五换装，原为两颗单选框）。
+            React.createElement('div', { className: 'dsm-form-seg', role: 'group' },
+              React.createElement('button', { type: 'button', 'aria-pressed': snapIn.conflict === 'skip', onClick: function () { setSnapIn(Object.assign({}, snapIn, { conflict: 'skip' })) } },
+                t('snapshot.import.conflict.skip')),
+              React.createElement('button', { type: 'button', 'aria-pressed': snapIn.conflict === 'overwrite', onClick: function () { setSnapIn(Object.assign({}, snapIn, { conflict: 'overwrite' })) } },
+                t('snapshot.import.conflict.overwrite'))),
             React.createElement('button', {
               type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: snapIn.busy === true || !(snapIn.preview.domains || []).some(function (d) { return snapIn.picked[d.domain] === true }),
               onClick: doSnapshotImport,
@@ -1909,12 +1907,11 @@
             for (let n = 1; n <= Math.min(row.count, BACKUP_DELETE_MAX_TIERS); n++) tiers.push(n)
             rows.push(React.createElement('div', { className: 'dsm-field', key: 'del-' + row.level },
               React.createElement('span', { className: 'dsm-label' }, label),
-              React.createElement('div', { className: 'dsm-actions', role: 'group', 'aria-label': label },
+              React.createElement('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': label },
                 tiers.map(function (n) {
                   return React.createElement('button', {
                     key: n, type: 'button', disabled: dialogBusy,
                     'aria-pressed': n === row.doomed,
-                    className: 'dsm-btn dsm-btn-quiet' + (n === row.doomed ? ' dsm-btn-picked' : ''),
                     // 换档位顺手把两步确认收回去：这一按等于"重新考虑过了"。
                     onClick: function () {
                       const next = Object.assign({}, delByLevel)
@@ -1970,7 +1967,7 @@
         }
         // 手工拼弹窗（不能用 `Modal`：它在 apply 内，详见上方注释）。结构与 `Modal` 一致 ——
         // 遮罩点击关闭 + 头部标题/关闭键 + body + 底部动作行 —— 键盘行为（Esc 关闭 / Tab 焦点
-        // 陷阱）复用模块作用域的那三个函数（见 refreshButton 上方），打开时把焦点交给弹窗自己。
+        // 陷阱）复用模块作用域的那三个函数（20-helpers.js 的「弹窗键盘行为」一节），打开时把焦点交给弹窗自己。
         // 这里**不**挂令牌提示（`TokenGateNotice` 在 apply 内，引它=白屏）：删除被令牌挡下时
         // 弹窗自己的错误行会如实显示那句话。
         backupModal = React.createElement('div', {
@@ -1986,10 +1983,8 @@
           React.createElement('div', { className: 'dsm-modal-head-wrap' },
             React.createElement('div', { className: 'dsm-modal-head' },
               React.createElement('h3', { className: 'dsm-modal-title', id: 'dsm-backup-clean-title' }, t('compat.backups.title')),
-              React.createElement('button', {
-                type: 'button', className: 'dsm-btn dsm-btn-secondary',
-                onClick: function () { setBackupClean(null) },
-              }, t('btn.close')))),
+              // 关闭钮统一走共享的 X 图标钮（REDESIGN §4.2）。
+              React.createElement(ModalCloseButton, { label: t('btn.close'), onClick: function () { setBackupClean(null) } }))),
           React.createElement('div', { className: 'dsm-modal-body' }, rows)))
       }
 
@@ -2088,9 +2083,8 @@
             React.createElement('div', { className: 'dsm-modal-head' },
               React.createElement('h3', { className: 'dsm-modal-title', id: 'dsm-preset-title' },
                 t(toolPreset.mode === 'save' ? 'compat.tools.preset.saveTitle' : 'compat.tools.preset.applyTitle')),
-              React.createElement('button', {
-                type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: closePreset,
-              }, t('btn.close')))),
+              // 关闭钮统一走共享的 X 图标钮（REDESIGN §4.2）。
+              React.createElement(ModalCloseButton, { label: t('btn.close'), onClick: closePreset }))),
           React.createElement('div', { className: 'dsm-modal-body' }, presetRows)))
       }
 
@@ -2103,7 +2097,8 @@
       }
       const auditDialog = compatDialogOpen === 'audit'
         ? compatDialog('audit', t('compat.audit'), [
-          React.cloneElement(helpBullets(t, 'compat.audit.hint'), { key: 'hint' }),
+          // 说明 ≤1 行（REDESIGN §7）；512KB 清理机制那句全文进悬浮。
+          React.createElement('p', { key: 'hint', className: 'dsm-help', title: t('compat.audit.hint.full') }, t('compat.audit.hint')),
           auditContent ? React.cloneElement(auditContent, { key: 'body' }) : dialogFallback(),
         ], true)
         : null
@@ -2119,28 +2114,30 @@
           : [dialogFallback()])
         : null
 
-      return React.createElement('div', { className: 'dsm-compat' },
-        React.createElement('div', { className: 'dsm-head' },
-          React.createElement('div', { className: 'dsm-title-block' },
-            React.createElement('div', { className: 'dsm-title-row' },
-              React.createElement('h2', { className: 'dsm-title' }, t('compat.title'))),
-            React.createElement('p', { className: 'dsm-desc' }, t('compat.desc')))),
-        React.createElement('div', { className: 'dsm-actions' },
-          refreshButton(t, busy, { className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: reload }),
-          compatDialogButton('audit', t('compat.audit')),
-          compatDialogButton('snapshot', t('snapshot.title')),
-          compatDialogButton('live', t('compat.live.title')),
-          React.createElement('button', {
-            type: 'button',
-            className: 'dsm-btn dsm-btn-secondary',
-            disabled: busy,
-            // 份数直接写进按钮文字：它是"要不要清理"的决策依据，只藏在 tooltip 里等于没有
-            // （触屏上没有 hover）。体积放不进按钮，留在 title 里补一份。
-            title: backups && backups.total
-              ? t('compat.backups.btnTitle', { count: backups.total, size: backupSizeText(backups.totalSize || 0) })
-              : t('compat.backups.btnHint'),
-            onClick: openBackupClean,
-          }, backups && backups.total ? t('compat.backups.btnCount', { count: backups.total }) : t('compat.backups.btn'))),
+      return React.createElement('div', { className: 'dsm-section dsm-compat' },
+        // 页头一行化（REDESIGN §3 + §6 特例 §9-1）：本页没有统计可内联，描述占统计的位置；
+        // 四个诊断工具钮保持可见、quiet 弱化（§9-1：诊断工具页，使用者为维护者本人）。
+        React.createElement(PageHead, {
+          title: t('compat.title'),
+          desc: t('compat.desc'),
+          actions: [
+            compatDialogButton('audit', t('compat.audit')),
+            compatDialogButton('snapshot', t('snapshot.title')),
+            compatDialogButton('live', t('compat.live.title')),
+            React.createElement('button', {
+              key: 'backups',
+              type: 'button',
+              className: 'dsm-btn dsm-btn-quiet',
+              disabled: busy,
+              // 份数直接写进按钮文字：它是"要不要清理"的决策依据，只藏在 tooltip 里等于没有
+              // （触屏上没有 hover）。体积放不进按钮，留在 title 里补一份。
+              title: backups && backups.total
+                ? t('compat.backups.btnTitle', { count: backups.total, size: backupSizeText(backups.totalSize || 0) })
+                : t('compat.backups.btnHint'),
+              onClick: openBackupClean,
+            }, backups && backups.total ? t('compat.backups.btnCount', { count: backups.total }) : t('compat.backups.btn')),
+          ],
+        }),
         body,
         backupModal,
         tokenModalEl,

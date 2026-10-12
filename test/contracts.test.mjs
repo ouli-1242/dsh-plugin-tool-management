@@ -13,7 +13,7 @@
 // 那些交给 `npm run build` 与真实使用。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -37,7 +37,7 @@ import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../
 import { checkPatchWrite, decidePatchWrite, judgePatchText } from '../lib/compat/patch-dialect.js'
 import * as yaml from 'js-yaml'
 import { MASK_PLACEHOLDER, describeMaskedOutcome, isMaskedUrl, isMaskedValue, maskSecretValue, maskUrlQuery, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from '../lib/mcp/secret-guard.js'
-import { isValidTrashPayloadPath, isPatchBackupName, moveOutOfTrash, moveToTrash } from '../lib/hub.js'
+import { isValidTrashPayloadPath, isPatchBackupName, moveOutOfTrash, moveToTrash, readTrashPayloadFiles } from '../lib/hub.js'
 import { isIndexQuarantined, readIndex, writeFileAtomically, writeIndex } from '../lib/memories/index-io.js'
 import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpPrefixDrift, serverNameCandidates, splitMcpToolName } from '../lib/host-names.js'
 import { isToolDisabledIn } from '../lib/mcp/manager.js'
@@ -46,12 +46,13 @@ import { EXPECTED_PEER_RANGE, assessHost } from '../lib/compat/probe.js'
 import { scanLoaderRows } from '../lib/mcp/loader-token.js'
 import { isValidGroupPath, isValidGroupSegment } from '../lib/memories/constants.js'
 import { createMemoriesService } from '../lib/memories/service.js'
-import { importUploadedSkill, listProviderCandidates, permanentlyDeleteTrash, setPreferredSkill, setSkillEnabled, state, userRoots } from '../lib/skills/core.js'
+import { forgetSource, importUploadedSkill, listProviderCandidates, permanentlyDeleteTrash, setPreferredSkill, setSkillEnabled, setSourceRemoved, state, userRoots } from '../lib/skills/core.js'
 import { isValidSegment } from '../lib/paths.js'
-import { contradictoryEntries, frozenOps, isReadCall, writeWhenUnwritten } from '../lib/op-registry.js'
+import { OP_REGISTRY, contradictoryEntries, frozenOps, isReadCall, writeWhenUnwritten } from '../lib/op-registry.js'
 import { SessionStore } from '@deepseek-ai/dsh-session'
 import { buildSessionOps } from '../lib/ops/sessions.js'
 import { ArchiveWorkspaceRegistry } from '../lib/sessions/workspace.js'
+import { createHistoryDomain } from '../lib/sessions/history.js'
 import { buildTrashOps } from '../lib/ops/trash.js'
 import { bundleDocName, GLOBAL_SCENE, LEGACY_BUNDLE_DOC, MEMORIES_TRASH_DIR, SHARED_GROUP } from '../lib/memories/constants.js'
 import { buildSceneSyncOps } from '../lib/ops/scene-sync.js'
@@ -1261,7 +1262,7 @@ test('前缀漂移的证据判据：本插件自己的工具名不算证据', ()
   // 这条判据存在的唯一理由是**避免误报**：本插件的工具叫 `mcp_manager_list` 之类，
   // 同样「以 mcp 开头但不是 mcp__」—— 不排除它们，兼容页会在每台机器上报一条错的诊断
   // （"官方可能改了前缀"），只要当前没有 MCP 服务器在跑就成立。
-  for (const own of ['mcp_manager_list', 'mcp_manager_save', 'mcp_manager_inspect', 'mcp_anything']) {
+  for (const own of ['mcp_manager_list', 'mcp_manager_save', 'mcp_manager_switch', 'mcp_anything']) {
     assert.equal(looksLikeMcpPrefixDrift(own), false, own + ' 是本插件自己的工具名，不得算证据')
   }
   for (const foreign of ['mcp:github:search', 'mcp-github-search', 'mcpX']) {
@@ -1379,7 +1380,7 @@ test('URL 打码必须覆盖 userinfo / 片段，且打码值在任何写路径�
   //   `new URL()` 把 userinfo 与 fragment 存在 `username/password` 与 `hash` 里，只替换 `search`
   //   的话 `https://user:pass@host/mcp`（Basic-Auth，MCP 托管服务真实存在的形态）与
   //   `https://host/mcp#access_token=…`（连 `?` 都没有）会**整条原样返回** —— 而这两条路正是
-  //   免令牌出口（mcpm-list / mcpm-inspect / 模型工具 / 快照导出）。
+  //   免令牌出口（mcpm-list / 模型工具 / 快照导出）。
   const userinfo = maskUrlQuery('https://user:pass@host/mcp')
   assert.ok(!userinfo.includes('pass'), 'userinfo 里的口令不得留在打码结果里')
   assert.ok(userinfo.startsWith('https://') && userinfo.includes('@host/mcp'), '主机与路径要保留（它是该服务的身份）')
@@ -1699,6 +1700,59 @@ test('history-unarchive 不得依赖注册表的返回值', async () => {
   assert.equal(res.ok, true, '注册表什么都不回时，恢复成功必须报成成功')
   assert.equal(res.sessionId, 's1', '回执要带目标 id（审计流水按它记）')
   assert.equal(res.archivedSessionIds, undefined, '不把整个归档集合快照发给界面（界面根本不读）')
+})
+
+// 用户 2026-10-12 报障：工作区文件夹早删了，界面还在给「重新登记」。
+// 根因是 canRegister 曾经写成「宿主 sessionPaths 命中 || 目录存在」—— 宿主索引里残留
+// 已删目录的 sessionId 时，前半条就把它放行了，界面于是给了一个注定失败的入口
+// （宿主 registerWorkspace 的 realpath 会拒）。这条钉死：canRegister 只能来自「目录真的存在」。
+test('分组：目录已被删除时不得给「重新登记」入口，且两种组都要标出目录已不存在', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-hist-groups-'))
+  try {
+    const liveDir = join(root, 'live')
+    mkdirSync(liveDir, { recursive: true })
+    const deadDir = join(root, 'gone') // 故意不创建：模拟「文件夹已被删」
+    const liveGoneDir = join(root, 'live-gone') // 同上，但它挂着一条活登记
+    const domain = createHistoryDomain({
+      // fake-ctx：effect 立即执行并 dispose（与 trash-retention 那边同一套写法）。
+      ctx: { effect: (fn) => { const d = fn(); if (typeof d === 'function') d() }, get: () => undefined, logger: { warn() {} } },
+      config: {
+        archivedAtFile: join(root, 'a.json'),
+        workspaceSnapshotFile: join(root, 'w.json'),
+        historyRetentionPath: join(root, 'r.json'),
+      },
+      pluginRoot: root,
+      message: (e) => String((e && e.message) || e),
+    })
+    const registry = {
+      requireTable: () => new Map([
+        ['w1', { id: 'w1', title: 'Live', path: liveDir, sessionIds: ['s-live'] }],
+        // 活登记但文件夹已删：登记还在、目录没了，界面同样要出声。
+        ['w2', { id: 'w2', title: 'LiveGone', path: liveGoneDir, sessionIds: ['s-livegone'] }],
+      ]),
+      requireState: () => ({ workspaceIds: ['w1', 'w2'], archivedSessionIds: [] }),
+      workspaceSnapshot: async () => new Map(),
+      // 关键：宿主索引里还挂着已删目录的 sessionId（canonical 命中那条老判据）。
+      sessionPaths: new Map([['s-dead', deadDir]]),
+      headers: new Map(),
+    }
+    const { groups } = await domain.buildHistoryGroups(registry, [
+      { sessionId: 's-live', cwd: liveDir },
+      { sessionId: 's-livegone', cwd: liveGoneDir },
+      { sessionId: 's-dead', cwd: deadDir },
+    ])
+    const detached = groups.find((g) => g.kind === 'detached')
+    assert.ok(detached, '目录已删的会话仍要能分组 —— 不然它在界面上凭空消失')
+    assert.equal(detached.dirMissing, true, '目录已删必须标出来：界面靠这个字段给用户提示')
+    assert.ok(!detached.canRegister, '目录已删不得给「重新登记」入口（宿主 realpath 本来就会拒，点了才报错等于骗人）')
+    const liveGone = groups.find((g) => g.id === 'ws:w2')
+    assert.equal(liveGone?.dirMissing, true, '活登记的文件夹被删也要标出来 —— 登记还在不代表目录还在')
+    const liveOk = groups.find((g) => g.id === 'ws:w1')
+    assert.ok(liveOk && !liveOk.dirMissing, '目录还在的活登记不得被误标')
+    assert.ok(!liveOk.canRegister, '活登记本来就不需要「重新登记」入口')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 /** 一份带思考 + 工具调用 + 工具结果的事件序列。工具内容里埋了会劈开轮次的行首标记。 */
@@ -2242,17 +2296,390 @@ test('客户端用到的接口路径必须都在 OP_BY_PATH 里，否则调用�
 // 自己手写了一份回收站弹窗，于是它缺批量条、用的还是 `.dsm-trash-box` 那套旧结构。
 // 这条钉住"它走共享 TrashModal"这个事实：破了就说明又有人把手写版搬回来了。
 test('记忆回收站走共享 TrashModal（带批量删除），不再是一份手写弹窗', () => {
-  const raw = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '47-memory.js'), 'utf8')
+  const memRaw = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '47-memory.js'), 'utf8')
   // 剥掉注释再断言：注释里正解释着"以前用的是 .dsm-trash-box"，不该被当成代码。
-  const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-  // 共享组件 + 批量回调 + 两个自定义取法（记忆条目的主键是 trashId，备注带场景 / 形态 / 字节数）。
+  const strip = (raw) => raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const src = strip(memRaw)
+  // 宿主页只负责开关弹窗：挂共享 TrashModal 并声明本页的域（domain = memories）。
   assert.match(src, /React\.createElement\(TrashModal, \{/, '记忆回收站必须用共享 TrashModal')
-  assert.match(src, /onPurgeMany: purgeTrashMany/, '必须挂批量永久删除（全选之后要删得掉）')
-  assert.match(src, /idOf: function \(entry\) \{ return entry\.trashId \}/, '条目主键是 trashId，要靠 idOf 告诉共享组件')
-  assert.match(src, /onRestore: submitRestore/, '恢复仍走本页自己的 op（rules-restore）')
+  assert.match(src, /domain: 'memories'/, '记忆回收站必须声明 domain = memories')
   // 反向：手写那套结构不得复活 —— 它有旧类名与"点一下开一个二次确认弹窗"的老路径。
   assert.ok(!src.includes('dsm-trash-box'), '不要再用旧的 .dsm-trash-box 手写列表')
   assert.ok(!src.includes("type: 'trash-delete'"), '二次确认已由共享组件行内处理，不要再挂独立弹窗')
-  // 批量删除必须逐条调**已有的单条 op**，且参数名与单条一致（trashId）。
-  assert.match(src, /apiCall\('rules-trash-remove', \{ trashId: items\[i\]\.trashId \}\)/, '批量走单条 op，参数名 trashId')
+  // 反向：清单 / 恢复 / 永久删除 / 批量都下沉进共享组件，宿主页不该再自己调这几个 op
+  // （2026-10-12 改成域驱动：`onPurgeMany` / `onRestore` / `idOf` 这套回调 prop 已不存在）。
+  assert.ok(!src.includes('rules-trash-list'), '清单读取已下沉进共享组件，宿主页不该再自己拉')
+  assert.ok(!src.includes('rules-trash-remove'), '永久删除（含批量）已下沉进共享组件')
+
+  // 共享组件侧：记忆域必须把两件事说全 —— 主键是 trashId、恢复/永久删除各走本页自己的 op。
+  const shared = strip(readFileSync(join(import.meta.dirname, '..', 'src', 'client', '42-shared-ui.js'), 'utf8'))
+  assert.match(shared, /idOf: function \(it\) \{ return it\.trashId \}/, '条目主键是 trashId，要靠 idOf 告诉共享组件')
+  assert.match(shared, /apiCall\('rules-restore', \{ trashId: it\.trashId \}\)/, '恢复走本页自己的 op（rules-restore）')
+  assert.match(shared, /apiCall\('rules-trash-remove', \{ trashId: it\.trashId \}\)/, '永久删除走单条 op，参数名 trashId（批量由组件逐条循环）')
+})
+
+// 用户 2026-10-12 报障：技能回收站的「恢复 / 永久删除 / 全选」在场景锁定期间照常可点，
+// 点下去才吃一个冻结错误 —— 而同一个弹窗里提示词 / 人设 / 记忆那几组都是灰的。
+// 根因是 `GROUPS[*].frozen` 与 op-registry 的 `frozen` 标记分了家：技能与目录两组写着
+// false，它们背后的四条 op 其实全都标着 frozen。
+// 这条不看文案、只看数据：**每组的 frozen 必须等于它那几条 op 在 registry 里的 frozen**
+//（全冻结 → 组冻结；一条都不冻 → 组不冻）。改一处忘了另一处，这里就红。
+test('回收站各组的冻结标记必须与 op-registry 同源（界面灰不灰 == 服务端拒不拒）', () => {
+  const shared = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '42-shared-ui.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  // GROUPS 就写在 TrashModal 里、缩进八格；用同缩进的闭合括号切出每一组。
+  const blockOf = (name) => {
+    const start = shared.indexOf('\n        ' + name + ': {')
+    assert.ok(start >= 0, name + ' 组必须还在 GROUPS 里（组名是 TRASH_DOMAINS 的引用键）')
+    const end = shared.indexOf('\n        },', start)
+    assert.ok(end > start, name + ' 组的闭合括号找不到 —— 解析器要跟着改')
+    return shared.slice(start, end)
+  }
+  for (const name of ['presets', 'quick', 'skills', 'dirs', 'agents', 'scenes', 'memories']) {
+    const block = blockOf(name)
+    const declared = /frozen:\s*(true|false)/.exec(block)
+    assert.ok(declared, name + ' 组必须显式写 frozen（缺省等于不冻，是踩过的坑）')
+    // 这一组真正会调的写 op：restore / purge 两条（`reload` 是只读的 skill-state，不计）。
+    const ops = [...block.matchAll(/apiCall\('([a-z0-9-]+)'/g)].map((m) => m[1])
+    assert.ok(ops.length > 0, name + ' 组必须至少有一条写 op')
+    const expectFrozen = ops.every((op) => OP_REGISTRY[op] && OP_REGISTRY[op].frozen === true)
+    assert.equal(declared[1] === 'true', expectFrozen,
+      name + ' 组的 frozen 与 op-registry 对不上：'
+      + ops.map((op) => op + '=' + (OP_REGISTRY[op] && OP_REGISTRY[op].frozen === true)).join(' '))
+  }
+})
+
+// ── 回收站「详情」与「永久删除来源记录」（用户 2026-10-12 第四轮）────────────────────────
+//
+// 两件事的共同点是"界面画的与服务端做的必须是同一件事"：
+//   · 详情是**只读**预览，所以它必须在场景锁定时照样可用（锁的是写，不是看）；
+//   · 永久删除要真的删得掉 —— codex / claude 这类来源路径每次启动都会重新推导出来，
+//     只从 removedSources 里摘掉的话下一轮它又回来了，那颗按钮就成了假的。
+
+test('回收站「详情」：只读预览不得受冻结影响，目录组不读盘，详情键永不置灰', () => {
+  const shared = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '42-shared-ui.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  // ① `trash-preview` 必须是只读 op，且不在冻结清单里 —— 否则锁定态下点「详情」会被服务端拒。
+  assert.equal(OP_REGISTRY['trash-preview'] && OP_REGISTRY['trash-preview'].readonly, true,
+    'trash-preview 必须登记为只读（详情是看，不是改）')
+  assert.ok(!frozenOps().includes('trash-preview'), '只读的详情 op 不得进冻结清单')
+  assert.ok(shared.includes("apiCall('trash-preview'"), '负载类条目的详情必须打 trash-preview')
+  // ② 参数名：每条记录的"身份"各域不同，必须走 idOfOf 换算，且 domain 传组 id。
+  assert.match(shared, /apiCall\('trash-preview', \{ domain: g\.id, id: id \}\)/,
+    'trash-preview 的 domain 必须是组 id、id 必须经 idOfOf 换算')
+  // ③ 目录组**不读盘**：这条记录本来就只是「不再读取」，磁盘上什么都没动 ——
+  //    去读那个目录等于把用户的 ~/.codex 整个列到界面上，那是另一个功能。
+  const dirsStart = shared.indexOf('\n        dirs: {')
+  const dirsBlock = shared.slice(dirsStart, shared.indexOf('\n        },', dirsStart))
+  assert.ok(/previewMeta:\s*function/.test(dirsBlock), '目录组必须走 previewMeta（来源信息表），不读盘')
+  assert.ok(!dirsBlock.includes('trash-preview'), '目录组不得去打 trash-preview')
+  // ④ 「详情」键是**看**：锁定态下恢复 / 永久删除都灰了，这一颗必须还亮着。
+  const peek = /React\.createElement\('button', \{ key: 'peek'[^}]*\}/.exec(shared)
+  assert.ok(peek, '「详情」行内键必须还在（用户要求回收站每条信息都有详情）')
+  assert.ok(!/disabled/.test(peek[0]), '「详情」不得写 disabled —— 它是看不是改，锁定态下也要能点')
+})
+
+test('永久删除来源记录：连「已移除」那行都不留，默认来源拒之门外，磁盘一个字节不动', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-forget-'))
+  const prev = {
+    DSH_HOME: process.env.DSH_HOME,
+    DSH_AGENTS_HOME: process.env.DSH_AGENTS_HOME,
+    DSH_CODEX_HOME: process.env.DSH_CODEX_HOME,
+    DSH_CLAUDE_HOME: process.env.DSH_CLAUDE_HOME,
+  }
+  process.env.DSH_HOME = home
+  process.env.DSH_AGENTS_HOME = join(home, '.agents')
+  process.env.DSH_CODEX_HOME = join(home, '.codex')
+  process.env.DSH_CLAUDE_HOME = join(home, '.claude')
+  try {
+    const codex = userRoots().find((r) => r.key === 'codex')
+    assert.ok(codex, 'codex 来源必须还在（这条测试的靶子）')
+    // 目录里放一份技能，用来证明"永久删除之后它真的不再被读取"。
+    mkdirSync(join(codex.path, 'demo'), { recursive: true })
+    writeFileSync(join(codex.path, 'demo', 'SKILL.md'), '---\nname: demo\ndescription: x\n---\n\n正文\n')
+    const onDisk = readFileSync(join(codex.path, 'demo', 'SKILL.md'), 'utf8')
+
+    const keys = async () => (await state({ projectCwds: [] })).roots.map((r) => r.key)
+    assert.ok((await keys()).includes('codex'), '未移除时 codex 必须在来源列表里')
+
+    // ① 先「移除来源」：仍然留一行（供「恢复读取」），但不再扫描。
+    await setSourceRemoved(codex, true, undefined)
+    let snapshot = await state({ projectCwds: [] })
+    const removedRow = snapshot.roots.find((r) => r.key === 'codex')
+    assert.ok(removedRow && removedRow.removed === true, '移除后必须还留一行，否则界面无从提供「恢复读取」')
+    assert.equal(removedRow.removable, true, 'codex 本来就是 removable —— 回收站里那颗「永久删除」的依据')
+    assert.deepEqual(removedRow.skills, [], '已移除的来源不得再扫描出技能')
+
+    // ② 永久删除：连行都不留 —— 这正是用户要的那件事（否则那颗键是假按钮）。
+    const res = await forgetSource('codex', undefined)
+    assert.notEqual(res && res.ok, false, '永久删除一条按约定发现的来源必须成功')
+    assert.ok(!(await keys()).includes('codex'), '永久删除后不得再列出这条来源（连"已移除"那行也不留）')
+    const candidates = await listProviderCandidates({})
+    assert.ok(!candidates.some((c) => c.locator && c.locator.rootKey === 'codex'),
+      '永久删除的来源不得再进 provider 候选（模型侧也不能拿到）')
+
+    // ③ 磁盘一个字节不动：这是"删记录"，不是"删文件"。
+    assert.equal(readFileSync(join(codex.path, 'demo', 'SKILL.md'), 'utf8'), onDisk, '源文件不得被改动')
+
+    // ④ 默认来源必须拒（它们必须读取，从来不在移除候选里）；未知来源同样拒。
+    for (const key of ['dsh', 'hub']) {
+      const bad = await forgetSource(key, undefined)
+      assert.equal(bad && bad.ok, false, key + ' 是默认来源，不得永久删除')
+    }
+    assert.equal((await forgetSource('no-such-root', undefined)).ok, false, '未知来源必须拒')
+
+    // ⑤ 两条 op 在门禁上同权：都是写、都冻结（界面灰不灰 == 服务端拒不拒）。
+    for (const op of ['skill-custom-remove', 'skill-source-forget']) {
+      assert.equal(OP_REGISTRY[op] && OP_REGISTRY[op].serviceWrite, true, op + ' 必须是 serviceWrite')
+      assert.equal(OP_REGISTRY[op] && OP_REGISTRY[op].frozen, true, op + ' 必须冻结')
+    }
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('回收站负载只读预览：清单不进详情、二进制不硬转文本、链接不跟随', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-peek-'))
+  try {
+    writeFileSync(join(dir, 'manifest.json'), '{"内部":"清单，不是用户删掉的那份东西"}')
+    writeFileSync(join(dir, 'body.md'), '# 正文\n')
+    writeFileSync(join(dir, 'blob.bin'), Buffer.from([0x41, 0x00, 0x42]))
+    mkdirSync(join(dir, 'sub'), { recursive: true })
+    writeFileSync(join(dir, 'sub', 'inner.txt'), 'inside')
+    // 指向目录外的链接：详情**不得**跟着它把根外的文件读出来。
+    const outside = join(dir, '..', 'outside-secret.txt')
+    writeFileSync(outside, 'SECRET')
+    let linked = true
+    try { symlinkSync(outside, join(dir, 'link.txt'), 'file') } catch { linked = false }
+
+    const files = await readTrashPayloadFiles(dir)
+    const paths = files.map((f) => f.path)
+    assert.ok(!paths.includes('manifest.json'), '清单文件不进详情')
+    assert.ok(paths.includes('body.md') && paths.includes('sub/inner.txt'), '正文与嵌套负载都要在')
+    const blob = files.find((f) => f.path === 'blob.bin')
+    assert.equal(blob && blob.binary, true, '含 NUL 的文件必须标成二进制')
+    assert.equal(blob && blob.text, undefined, '二进制不得硬转成文本')
+    if (linked) assert.ok(!paths.includes('link.txt'), '符号链接不得被跟随（根外的文件不许读出来）')
+    assert.equal(readFileSync(outside, 'utf8'), 'SECRET', '只读预览不得改动任何文件')
+    rmSync(outside, { force: true })
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('op 登记表里的每一条都必须真被接上（只登记不接线 = 界面撞 unknown action）', () => {
+  // 反例（2026-10-12 实际发生）：`trash-preview` 只写进了 op-registry，memories service 的
+  // ops 表漏了它 —— 于是「回收站 → 详情」点下去撞一个 unknown action，而启动期那条
+  // `auditOpRegistry` 对账只是往兼容页挂一条**降级提示**，不会拦住这次发布。
+  // 这条测试把"登记了就得有人接"钉死在构建期。
+  const root = join(import.meta.dirname, '..', 'src')
+  const files = []
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name)
+      // `src/client` 不算证据：那里是**调用方**，写着 op 名字只说明界面会打这个请求，
+      // 完全可能压根没有 handler（正是这条测试要抓的形状）。
+      if (e.isDirectory()) { if (e.name !== 'client') walk(p) }
+      else if (/\.(ts|js|mjs)$/.test(e.name) && e.name !== 'op-registry.ts') files.push(p)
+    }
+  }
+  walk(root)
+  const corpus = files.map((f) => readFileSync(f, 'utf8')).join('\n')
+  const missing = Object.keys(OP_REGISTRY).filter((op) =>
+    !corpus.includes("'" + op + "'") && !corpus.includes('"' + op + '"'))
+  assert.deepEqual(missing, [],
+    '这些 op 只登记在 op-registry 里、没有任何一处接上（点下去只会 reject）：' + missing.join(', '))
+})
+
+test('回收站详情：技能条目名走「安全路径段」，hub / 记忆条目名走严格白名单', async () => {
+  // 靶心：技能回收站的条目名是 `${Date.now()}-${randomUUID()}`（多段连字符），**不满足**
+  // hub 那套 `^[a-z0-9]+-[a-z0-9]{1,32}$`。统一用白名单判的话，每一条技能条目都会被判成
+  // "不存在" —— 界面上就是「详情」点下去弹一句"回收站条目不存在"，而且只有技能这一域坏。
+  const home = mkdtempSync(join(tmpdir(), 'dsh-peek-id-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try {
+    const stateDir = join(home, 'state')
+    const skillsTrashDir = join(home, 'tool-management', 'trash', 'skills-trash')
+    const ops = buildTrashOps({ stateDir, skillsTrashDir })
+
+    // ① 技能域：真实形状的条目名必须能查到详情，清单文件不进结果。
+    const skillId = '1760000000000-3f2a1b4c-5d6e-4f70-8a91-2b3c4d5e6f70'
+    mkdirSync(join(skillsTrashDir, skillId), { recursive: true })
+    writeFileSync(join(skillsTrashDir, skillId, 'SKILL.md'), '# 技能正文\n')
+    writeFileSync(join(skillsTrashDir, skillId, 'metadata.json'), '{"name":"demo"}')
+    const skill = await ops.trashPreview({ domain: 'skills', id: skillId })
+    assert.equal(skill.ok, true, '技能条目必须能查详情：' + skill.error)
+    assert.deepEqual(skill.files.map((f) => f.path), ['SKILL.md'], '清单（metadata.json）不进详情')
+
+    // ② 穿越名一律拒（临时目录也不放行：`listTrash()` 本来就不列它们）。
+    for (const bad of ['..', '../x', 'a/b', '.stage-abc', '', 'a\b']) {
+      const res = await ops.trashPreview({ domain: 'skills', id: bad })
+      assert.equal(res.ok, false, '技能域的非法 id 必须拒：' + JSON.stringify(bad))
+    }
+
+    // ③ 记忆域：条目名由 `newTrashId()` 生成，严格白名单照旧 —— 两套判据不能互相放松。
+    const memId = 'lz8k3f-a1b2c3d4'
+    const memDir = join(stateDir, MEMORIES_TRASH_DIR, memId)
+    mkdirSync(memDir, { recursive: true })
+    writeFileSync(join(memDir, 'rule.md'), '记忆正文')
+    const mem = await ops.trashPreview({ domain: 'memories', id: memId })
+    assert.equal(mem.ok, true, '记忆条目必须能查详情：' + mem.error)
+    assert.deepEqual(mem.files.map((f) => f.path), ['rule.md'])
+    assert.equal((await ops.trashPreview({ domain: 'memories', id: skillId })).ok, false,
+      '记忆域不认多段连字符的 id（两套判据不得混用）')
+
+    // ④ 目录组没有负载可查：明确拒（界面那边走 previewMeta，本来就不会打过来）。
+    assert.equal((await ops.trashPreview({ domain: 'dirs', id: memId })).ok, false, '目录组不支持详情')
+    // ⑤ 条目目录不存在 = 死链，必须报错而不是回一份空列表。
+    assert.equal((await ops.trashPreview({ domain: 'skills', id: '1760000000000-deadbeef' })).ok, false,
+      '目录不存在必须报「条目不存在」，不能回空 files（那会被界面说成"没有可显示的文件"）')
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ── 令牌横幅「前往」键（2026-10-12）─────────────────────────────────────────────
+//
+// 这一条**只钉可点性，不钉配色**。用户同一次提了两件事：改黄底黄字（视觉，改一句 CSS
+// 就会变，属本文件开头声明"明确不测"的排版类）+ 修两个点击 bug（行为，坏了是静默的）。
+// 前者交给眼睛和用户裁定，后者必须钉住 —— 否则下次重构把 no-drag 抹掉，表现只是
+// "这颗键时灵时不灵"，没有任何报错。
+test('令牌横幅那颗键压在宿主标题栏拖拽区上：两颗键必须自己声明 no-drag', () => {
+  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '10-css.js'), 'utf8')
+  const ruleOf = (selector) => {
+    const i = css.indexOf(selector + '{')
+    assert.ok(i >= 0, '找不到 CSS 规则：' + selector)
+    return css.slice(i, css.indexOf('}', i) + 1)
+  }
+  // 先钉住前提：横幅是 fixed 顶部居中的"穿透"说明条，这正是它落进拖拽区的原因。
+  // 哪天横幅挪到别处了，这条测试的前提就没了 —— 那时应当重判，而不是留着一条
+  // 替不存在的问题站岗的断言。
+  const banner = ruleOf('.dsm-token-banner')
+  assert.match(banner, /position:fixed/, '前提变了：横幅不再是 fixed 的浮层')
+  assert.match(banner, /top:12px/, '前提变了：横幅不再压在窗口顶部，拖拽区那条理由要重判')
+  assert.match(banner, /pointer-events:none/, '前提变了：横幅不再是"只说明、不挡路"的穿透层')
+  // 拖拽区（-webkit-app-region:drag）是按**布局矩形**算的，与谁画在上面无关：宿主把
+  // 标题栏那一横条做成了拖拽区，横幅里两颗键的上半截就落进去 —— 按下去是拖窗口，
+  // 只有露在拖拽区外的下半截真的点到按钮（用户原话："这个按钮只能点击下半部分"）。
+  // 键必须逐颗写 no-drag：横幅其余部分是 pointer-events:none，只在键上声明才不会
+  // 把整条横幅变成"拖不动窗口"的洞。
+  for (const selector of ['.dsm-token-banner-go', '.dsm-token-banner-close']) {
+    const rule = ruleOf(selector)
+    assert.match(rule, /pointer-events:auto/, selector + ' 必须自己拿回 pointer-events（父级是 none）')
+    assert.match(rule, /-webkit-app-region:no-drag/,
+      selector + ' 必须声明 -webkit-app-region:no-drag —— 否则压在标题栏拖拽区上只有下半截能点')
+  }
+})
+
+test('横幅「填写令牌」走自包含弹窗：填对自动关，拿不到 react-dom 时也不得静默', () => {
+  const strip = (file) => readFileSync(join(import.meta.dirname, '..', 'src', 'client', file), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const helpers = strip('20-helpers.js')
+  const applyHead = strip('40-apply-head.js')
+  const shared = strip('42-shared-ui.js')
+  const mcp = strip('41-mcp.js')
+  const compat = strip('22-compat-page.js')
+
+  // ① 横幅那颗键开弹窗，不再跳页。用户 2026-10-12 的裁定：跳页要求设置面板已经挂载
+  //    （`navigateToTab` 只在 ToolsSection 挂载时才有值），而横幅在**任何**页面都会出现 ——
+  //    一个自包含的输入框把整条依赖去掉，不必再去认领宿主的设置导航行。
+  assert.ok(applyHead.includes('openTokenDialog()'), '横幅那颗键必须开填写弹窗')
+  assert.ok(!/addEventListener\('click', function \(\) \{ openTokenPanel\(\) \}\)/.test(applyHead),
+    '横幅不得再走"跳兼容页" —— 从对话页点它时设置面板往往根本没开')
+  assert.ok(applyHead.includes("t('token.jump')"), '键文案 = 「填写令牌」（token.jump）')
+
+  // ② 弹窗本体：输入 → 交给本进程 → 问宿主 → 认可就关。
+  const dlg = /function TokenUnlockDialog\(props\)\s*\{([\s\S]*?)\n    \}/.exec(shared)
+  assert.ok(dlg, 'TokenUnlockDialog 必须还在（横幅那颗键的落点）')
+  const body = dlg[1]
+  assert.ok(body.includes('setAccessToken('), '必须先把握在手里的令牌交给本进程（与兼容页 saveToken 同序）')
+  assert.ok(body.includes("apiCall('token-status'"), '必须问宿主认不认这串')
+  assert.match(body, /if \(r\.accepted === true\) \{ props\.onClose\(\); return \}/,
+    '宿主认可就必须**自动关闭** —— 用户提这个方案时的原话就是"输入正确后自动关闭弹窗"')
+  assert.ok(body.includes('applyTokenStatusSideEffects('),
+    '锁态/提示的口径必须与兼容页同源，不得在这里另判一遍')
+  assert.ok(!/setTokenLock\(/.test(body), '这里不得自己判锁态（判据只有 applyTokenStatusSideEffects 一处）')
+  assert.ok(body.includes("e.key === 'Enter'"), '回车 = 解锁（与兼容页解锁面板同一口径）')
+  assert.ok(body.includes('h(Modal'), '复用共享 Modal：遮罩 / 焦点陷阱 / Esc 不该再手写一份')
+
+  // ③ 建根失败必须退回跳转，不能静默 —— 2026-10-12 那个 bug 的教训就是"点了没反应"。
+  const open = /const openTokenDialog = function \(\)\s*\{([\s\S]*?)\n        \}/.exec(applyHead)
+  assert.ok(open, 'openTokenDialog 必须还在')
+  assert.ok(open[1].includes("require('react-dom/client')"),
+    '用宿主 ModuleLoader 的 react-dom/client 建根（同生态的 dsh-better-sidebar 也是这么做的）')
+  assert.ok(open[1].includes('openTokenPanel()'),
+    '拿不到 react-dom 必须退回跳兼容页 —— 点一下必须有事发生')
+
+  // ④ 判据唯一：兼容页那份也必须调它，而不是自己再抄一遍公式。
+  //    抄两份的后果是同一个响应在两边判出不同结论，而这两个结论直接决定"能不能发消息"。
+  assert.ok(compat.includes('applyTokenStatusSideEffects(r)'),
+    '兼容页的 applyTokenState 必须共用同一份判据')
+  assert.ok(!/setTokenLock\(r\.active === true/.test(compat),
+    '兼容页不得再自己抄一遍锁态公式')
+
+  // ⑤ 跳页那套必须拆干净：留着就是"两套机制并存"，下次改的人不知道该信哪条。
+  for (const dead of ['clickOwnSettingsNav', 'pendingTab', 'setTokenPanelText', 'consumePendingTab']) {
+    assert.ok(!helpers.includes(dead) && !mcp.includes(dead), '跳页方案的残留必须拆干净：' + dead)
+  }
+})
+
+test('场景编辑页：令牌门禁那句话不得当成「场景名」的字段级错误再重复一遍', () => {
+  const scenes = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '45-scenes.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  // 保存失败时 `sceneForm.error` 会被塞进 `translateError(t, res)`，其中"缺少访问令牌，或令牌不对"
+  // 属于门禁、不属于场景名：弹窗头部 TokenGateNotice 已经说了一遍（还带「填写令牌」），
+  // 字段下面再来一次既是重复，又会顺手把名称框标成非法（用户 2026-10-12：「场景名下面的删除」）。
+  assert.match(scenes, /var fieldError = isTokenGateText\(sceneForm\.error\) \? null : sceneForm\.error/,
+    '字段级错误必须把令牌门禁那句滤掉（名称本身的校验错误照旧显示）')
+  assert.ok(!/className: 'dsm-control' \+ \(sceneForm\.error \?/.test(scenes),
+    '名称框的 invalid 态必须跟着 fieldError 走 —— 令牌没过不是"场景名填错了"')
+  assert.ok(!/dsm-rule-hint' \}, sceneForm\.error\)/.test(scenes),
+    '字段下面不得再直接渲染 sceneForm.error（否则那句门禁文案会回来）')
+})
+
+// ── 记忆行的体积标签（2026-10-12）──────────────────────────────────────────────
+test('记忆行：体积标签走 nameAfter 槽（带边框）并挂在名称旁，bundle 形态标签不再显示', () => {
+  const strip = (file) => readFileSync(join(import.meta.dirname, '..', 'src', 'client', file), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const shared = strip('42-shared-ui.js')
+  const memory = strip('47-memory.js')
+  const dict = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '30-dict.js'), 'utf8')
+
+  // ① 共享件要有一个"名称紧邻之后"的槽位，且位置在 name 与 tag 之间。
+  //    不能借 tag 槽：tag 的契约是"至多 1 个需要处理的 tag"（状态类），体积是量值类，
+  //    两者会同时出现（被覆盖 + 有体积），挤一个槽就丢一个。
+  const listrow = /function ListRow\(props\)\s*\{([\s\S]*?)\n    \}/.exec(shared)
+  assert.ok(listrow, 'ListRow 必须还在')
+  assert.match(listrow[1], /props\.nameAfter/,
+    'ListRow 必须有 nameAfter 槽（体积标签要挂在名称旁，不是挤在第二行的描述后面）')
+  const nameRow = /dsm-listrow-name-row'[\s\S]*?props\.tag \|\| null\)/.exec(listrow[1])
+  assert.ok(nameRow, '名称行必须还在')
+  assert.ok(nameRow[0].indexOf('props.nameAfter') > nameRow[0].indexOf('props.name'),
+    'nameAfter 必须排在名称**之后**')
+  assert.ok(nameRow[0].indexOf('props.tag') > nameRow[0].indexOf('props.nameAfter'),
+    'nameAfter 必须排在 tag **之前**（体积贴名称，状态 tag 在后）')
+
+  // ② 记忆行把体积交给这个槽，并且用 .dsm-tag —— 边框就是它给的（"带边框"是用户的明确要求）。
+  const row = /function renderRuleRow\(r, sceneActive\)\s*\{([\s\S]*?)\n          \}/.exec(memory)
+  assert.ok(row, 'renderRuleRow 必须还在')
+  assert.match(row[1], /nameAfter:\s*sizeTag/, '体积必须走 nameAfter 槽')
+  assert.match(row[1], /className:\s*'dsm-tag dsm-tag-size'/,
+    '体积标签必须带 dsm-tag（边框/圆角/12px 都由它给）—— 退回 dsm-listrow-meta-info 就没有边框了')
+
+  // ③ 「bundle」形态标签不再显示；但它**不能**因此被当成死键清掉：42 片回收站 / 导出
+  //    里按 'memory.form.' + … **计算**取词，静态扫描看不见 —— 删掉键的后果是界面上
+  //    直接显示 "memory.form.bundle" 这个原始键名，且没有任何报错。
+  const metaBits = /var metaBits = \[([\s\S]*?)\n            \]/.exec(row[1])
+  assert.ok(metaBits, 'metaBits 必须还在')
+  assert.ok(!metaBits[1].includes('memory.form.bundle'), '记忆行不再显示「bundle」形态标签（用户裁定）')
+  assert.ok(metaBits[1].includes('memory.form.flat') === false, '记忆行也不显示 flat（原本就没显示）')
+  assert.match(shared, /t\('memory\.form\.' \+/, 'memory.form.* 仍在被计算键取词，两个键都必须保留')
+  for (const key of ['memory.form.flat', 'memory.form.bundle']) {
+    assert.ok(dict.includes('"' + key + '"'), '词典里不能少 ' + key + '（42 片按计算键取词，删了会显示原始键名）')
+  }
 })

@@ -292,7 +292,17 @@ export async function addCustomRoot(
   const current = await readManagerState();
   if (current.writable === false) return invalidManagerStateWrite();
   const existing = customRootsFromState(current.state);
+  // 「永久删除」过的来源不再参与重叠判定：用户在回收站里把它彻底删掉之后，要能把同一个
+  // 目录**作为自定义来源重新加回来**（`confirm.source.forget.desc` 那句「需要时只能重新
+  // 添加这个目录」说的就是这条路）。不放过它的话，那句提示就是一句空话 —— 路径仍被
+  // `userRoots()` 认领，添加只会吃一个「目录与已有技能来源重叠」。
+  const forgotten = new Set(
+    Array.isArray(current.state.forgottenSources)
+      ? current.state.forgottenSources
+      : [],
+  );
   for (const known of userRoots()
+    .filter((root) => !forgotten.has(root.key))
     .map((root) => root.path)
     .concat(existing.map((root) => root.path))) {
     if (await pathsOverlap(canonical, known))
@@ -355,6 +365,63 @@ export async function removeCustomRoot(key: unknown, log: LogFn | undefined) {
   await writeManagerState(current.state);
   if (log) log("custom-remove", `移除自定义技能目录 ${target.path} (${clean})`);
   return { key: clean, path: target.path };
+}
+
+/**
+ * 永久删除一条**按约定发现**的来源记录（回收站 → 目录 里那颗「永久删除」）。
+ *
+ * 与 `removeCustomRoot` 的分工：那条管的是"用户手加的自定义目录"，删掉 `customRoots` 里
+ * 的记录就完事；这条管的是 `agents` / `codex` / `claude` 这类**由 `userRoots()` 按约定推导**
+ * 出来的来源 —— 它们不在状态文件的 customRoots 里，路径每次启动都会重新算出来，所以只把 key
+ * 从 `removedSources` 里摘掉的话，下一轮它又原样回来了。
+ *
+ * 于是另记一份 `forgottenSources`：进了这份名单的来源既不读取（`activeUserRoots` 摘掉它）、
+ * 也不列出（`state()` 的 roots 过滤掉它）—— 等于从插件里彻底消失。用户想反悔有两条路：
+ * 清掉状态文件里这个 key，或者把它**作为自定义来源重新添加**（`addCustomRoot` 的重叠判定
+ * 已经跳过已忘记的来源，所以那条路真的走得通）。
+ *
+ * **磁盘上的源文件一个字节都不动** —— 这条函数自始至终只写状态文件。
+ */
+export async function forgetSource(key: unknown, log: LogFn | undefined) {
+  const clean = String(key == null ? "" : key).trim();
+  const root = userRoots().find((item) => item.key === clean);
+  if (!root)
+    return {
+      ok: false,
+      error: `未知的来源: ${clean}`,
+      code: "error.root.unknown",
+      params: { root: clean },
+    };
+  // 默认来源（dsh / hub / 官方）必须读取：它们不在移除候选里，也不该能被永久删除。
+  if (isDefaultSkillSource(clean))
+    return {
+      ok: false,
+      error: `默认来源不能永久删除: ${clean}`,
+      code: "error.root.default",
+      params: { root: clean },
+    };
+  const current = await readManagerState();
+  if (current.writable === false) return invalidManagerStateWrite();
+  const forgotten = new Set(
+    Array.isArray(current.state.forgottenSources)
+      ? current.state.forgottenSources
+      : [],
+  );
+  forgotten.add(clean);
+  current.state.forgottenSources = [...forgotten].sort();
+  // 「已移除」那条记录一起摘掉：留着它只会在状态文件里多一条指向"已经不存在"的脏键，
+  // 而且归一化那一步本来也会把它去掉 —— 没理由写进去（与 removeCustomRoot 同一口径）。
+  if (Array.isArray(current.state.removedSources))
+    current.state.removedSources = current.state.removedSources.filter(
+      (item) => item !== clean,
+    );
+  delete current.state.sources[clean];
+  delete current.state.disabledSkills[clean];
+  delete current.state.enabledSkills[clean];
+  await writeManagerState(current.state);
+  if (log)
+    log("source-forget", `永久删除来源记录 ${clean}: ${root.path}`);
+  return { root: clean, path: root.path };
 }
 
 /**
@@ -648,19 +715,31 @@ async function visibleEntryForRoot(
 /** 状态文件已存在但不可用时一律关闭外部来源，避免损坏配置重新暴露技能。 */
 
 /**
- * 参与扫描的来源 = 全部来源 − 用户已移除的。
+ * 参与扫描的来源 = 全部来源 − 用户已移除的 − 用户已永久删除的。
  *
  * 「移除来源」与「停用来源」是两件事：
  *   - 停用（`sources[key] = false`）：仍然读取并列出技能，只是不可调用；
  *   - 移除（出现在 `removedSources`）：**连目录都不读**，技能不出现在列表里，
  *     也不参与 provider 候选。源文件不动，清掉这个标记即恢复。
+ *
+ * 「永久删除」（`forgottenSources`）是移除的**终点**：这条来源从插件里彻底消失 ——
+ * 不再读取（与移除同）、并且连"已移除"那行记录也不再出现（见 `state()` 的 roots 过滤）。
+ * 两者都**不碰磁盘**。
  */
 export function activeUserRoots(stateValue: unknown): SkillSource[] {
-  const state = stateValue as { removedSources?: unknown } | null | undefined;
+  const state = stateValue as
+    | { removedSources?: unknown; forgottenSources?: unknown }
+    | null
+    | undefined;
   const removed = new Set(
     state && Array.isArray(state.removedSources) ? state.removedSources : [],
   );
-  return userRoots().filter((root) => !removed.has(root.key));
+  const forgotten = new Set(
+    state && Array.isArray(state.forgottenSources) ? state.forgottenSources : [],
+  );
+  return userRoots().filter(
+    (root) => !removed.has(root.key) && !forgotten.has(root.key),
+  );
 }
 
 /** 裁剪自定义来源列表：非法条目丢弃，key/path 绑定校验，label 规整。 */

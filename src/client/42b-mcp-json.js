@@ -179,7 +179,7 @@
               var cf = conflictOf(r)
               var endpoint = r.transport === 'stdio' ? [r.command].concat(r.args).join(' ') : r.url
               return h('div', { key: r.key, className: 'dsm-imp-row' + (r.fatal ? ' dsm-imp-bad' : '') },
-                h('input', { type: 'checkbox', checked: !r.fatal && off[r.key] !== true, disabled: !!r.fatal, onChange: function () { toggle(r.key) } }),
+                h(RowCheck, { checked: !r.fatal && off[r.key] !== true, disabled: !!r.fatal, label: r.serverName, onChange: function () { toggle(r.key) } }),
                 h('div', { className: 'dsm-imp-main' },
                   h('div', { className: 'dsm-imp-name' },
                     r.serverName,
@@ -230,16 +230,37 @@
       var js = react.useState(''); var json = js[0], setJson = js[1]
       var ss = react.useState(null); var savedTo = ss[0], setSavedTo = ss[1]
       var cs = react.useState(false); var copied = cs[0], setCopied = cs[1]
-      // 每次开弹窗现取：列表可能刚被改过，导出的是「此刻的配置」。
+      // 导出目录（用户 2026-10-12：「mcp 的导出缺少选择导出目录」）：此前这一档只能落到
+      // `~/.dsh/tool-management/mcp-export.json`，界面没有任何可改的出口。初值取共享的
+      // defaultIoDir()（20 片），与其余四个导出弹窗同一个默认目录。
+      var ds = react.useState(defaultIoDir()); var dir = ds[0], setDir = ds[1]
+      var bs = react.useState(false); var busy = bs[0], setBusy = bs[1]
+      var ps = react.useState(false); var picking = ps[0], setPicking = ps[1]
+      // 打开时**只取 JSON 做预览**（dryRun），不落盘 —— 落盘由用户点「导出到目录」触发。
+      // 不开弹窗就写文件是副作用，其余四个导出弹窗都是"点了才写"。
       react.useEffect(function () {
         var alive = true
-        apiCall('mcpm-export', {}).then(function (res) {
+        apiCall('mcpm-export', { dryRun: true }).then(function (res) {
           if (!alive) return
-          if (res && res.ok) { setJson(res.json || ''); setSavedTo(res.savedTo || null) }
+          if (res && res.ok) { setJson(res.json || ''); setSavedTo(null) }
           else setError((res && res.error) || t('mcp.exportJson.failed'))
         }).catch(function (e) { if (alive) setError(errMsg(e)) }).then(function () { if (alive) setLoading(false) })
         return function () { alive = false }
       }, [])
+      function doExport() {
+        var target = String(dir || '').trim()
+        if (!target) return
+        setBusy(true); setError(null)
+        apiCall('mcpm-export', { outDir: target }).then(function (res) {
+          setBusy(false)
+          if (!res || !res.ok) { setError((res && res.error) || t('mcp.exportJson.failed')); return }
+          setJson(res.json || '')
+          // 服务端写失败是 non-fatal（不抛），此时 savedTo 为 null —— 要如实说出来，
+          // 否则界面会显示"已导出到 …"，而磁盘上什么都没有。
+          if (res.savedTo) setSavedTo(res.savedTo)
+          else setError(t('mcp.exportJson.writeFailed'))
+        }).catch(function (e) { setBusy(false); setError(errMsg(e)) })
+      }
       function copy() {
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -253,12 +274,19 @@
       return h(Modal, { className: 'dsm-modal-lg', title: t('mcp.exportJson.title'), closeLabel: t('btn.close'), onClose: props.onClose },
         h('div', { className: 'dsm-form' },
           h(Notice, { kind: 'warn', text: t('mcp.exportJson.warn') }),
+          h('div', { className: 'dsm-field' },
+            h('span', { className: 'dsm-label' }, t('export.outDir')),
+            h('div', { className: 'dsm-dir-row' },
+              h('input', { className: 'dsm-control', value: dir, placeholder: defaultIoDir(), disabled: busy, onChange: function (e) { setDir(e.target.value) } }),
+              h('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { requestHostDirectory(setDir, function () { setPicking(true) }) } }, t('btn.openDir')))),
           loading ? h('div', { className: 'dsm-empty' }, t('mcp.exportJson.loading')) : null,
           err ? h('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, err) : null,
-          !loading && !err ? h(react.Fragment, null,
+          !loading && json ? h(react.Fragment, null,
             h('pre', { className: 'dsm-code' }, json),
-            h('div', { className: 'dsm-help' }, savedTo ? t('mcp.exportJson.savedTo', { path: savedTo }) : t('mcp.exportJson.savedTo.none')),
+            savedTo ? h('div', { className: 'dsm-help' }, t('mcp.exportJson.savedTo', { path: savedTo })) : null,
           ) : null),
         h('div', { className: 'dsm-modal-actions' },
-          h('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: loading || !!err || !json, onClick: copy }, copied ? t('mcp.exportJson.copied') : t('mcp.exportJson.copy'))))
+          h('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: loading || busy || !json || !String(dir || '').trim(), onClick: doExport }, busy ? t('mcp.exportJson.exporting') : t('mcp.exportJson.exportBtn')),
+          h('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: loading || !!err || !json, onClick: copy }, copied ? t('mcp.exportJson.copied') : t('mcp.exportJson.copy'))),
+        picking ? h(DirPickerModal, { key: 'mcp-export-dir', title: t('export.pickDir'), initial: String(dir || ''), closeLabel: t('btn.close'), onClose: function () { setPicking(false) }, onPick: function (p) { setDir(p); setPicking(false) } }) : null)
     }

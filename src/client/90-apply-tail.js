@@ -22,9 +22,10 @@
         // 常量用函数包一层：测试会把 _pages 的每个值当组件渲染一遍，数字会被 React 当成非法元素类型报警告。
         _pages.sceneDescMax = function () { return SCENE_DESC_MAX }
         _pages.memDescMax = function () { return MEM_DESC_MAX }
-        // 回收站弹窗与保留期选择器：它们不是页面，但**被所有页面共用**
+        // 回收站弹窗与保留期选择器：它们不是页面，但**被五个功能页共用**
         // （TrashModal 0.19.1 起给提示词 / 场景 / 子智能体，0.20.0 起记忆页也换成它；
-        //  技能页仍是手写的那套，另外挂一个 RetentionSelect）。
+        //  改造后技能页的手写双块弹窗也并了进来。0.21.x 起「一页一个回收站」——
+        //  左栏六类导航删除，MCP 页与会话页不再有回收站入口）。
         // 导出是为了能脱离宿主单独渲染一次 —— 这类"工具栏 + 固定高度列表"的排版
         // 只有真渲染才看得出挤不挤（同 `_pages.VersionBadge` 那条理由）。
         _pages.TrashModal = TrashModal

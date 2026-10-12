@@ -19,7 +19,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createHistoryDomain } from './sessions/history.js'
 import type { SessionsRegistry } from './sessions/history.js'
 import { createSkillsService, pluginLog } from './skills/service.js'
-import { renameWithRetry } from './skills/core.js'
+import { renameWithRetry, trashRootPath } from './skills/core.js'
 import { createPromptsService } from './prompts/service.js'
 import { createQuickPromptsService } from './prompts/quick-service.js'
 import { isValidPresetId } from './prompts/preset-id.js'
@@ -313,6 +313,10 @@ export default {
       memoriesRoot: String((config as { memoriesRoot?: unknown } | undefined)?.memoriesRoot || ''),
       stateDir: String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || ''),
       scenesDir: String((config as { memoriesScenesDir?: unknown } | undefined)?.memoriesScenesDir || ''),
+      // 技能回收站根目录：只给回收站「详情」（`trash-preview`）读技能条目用。路径的唯一定义
+      // 在 skills/skill-roots.ts（`trashRootPath()`），这里原样转手，不在记忆域重算一遍 ——
+      // 重算就是第二个真相源，改一处忘一处时详情会指向一个空目录。
+      skillsTrashDir: trashRootPath(),
       // 场景记忆段预算（字节），默认 131072（= DEFAULT_MAX_BYTES，128 KiB）；仅用于测试与特殊部署调优。
       ...(Number.isFinite(Number((config as { rulesMaxBytes?: unknown } | undefined)?.rulesMaxBytes))
         ? { maxBytes: Number((config as { rulesMaxBytes?: unknown }).rulesMaxBytes) }

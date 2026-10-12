@@ -27,18 +27,23 @@
           const [reveal, setReveal] = React.useState(false)
           const [settings, setSettings] = React.useState(null)
           const [noteDraft, setNoteDraft] = React.useState('')
+          // 备注保存的**就地**回执（用户 2026-10-12：「mcp 备注在锁定情况下这个红色的提示词
+          // 不应该显示在 mcp 页，应该显示在详细页」）。此前 saveNote 走的是共用的 `run()`，
+          // 结果一律 setMsg —— 那是**页面级**提示条，而动作发生在弹窗里：锁定期间点「保存备注」
+          // 被冻结闸拒掉，红字却出现在弹窗**后面**的页面上，关上弹窗才看得见，根本对不上号。
+          // 备注这一个动作的回执只属于这个弹窗，所以单独一个槽（成功 / 失败 / 告警都走它），
+          // 打开与关闭详情时清空，只在备注小节里渲染。
+          const [noteNotice, setNoteNotice] = React.useState(null)
           const [compactConfirm, setCompactConfirm] = React.useState(false)
           // A1：粘贴 JSON 导入 / 导出两个弹窗（0.15.0）。
           const [jsonImportOpen, setJsonImportOpen] = React.useState(false)
           const [jsonExportOpen, setJsonExportOpen] = React.useState(false)
-          // B1：配置体检结果。键 = `level/id`，值 = 未体检 / {busy:true} / {checks:[…]} / {error}。
-          // 刻意不落盘（服务器数量级小、每次现查），但**配置一改就作废** —— 见下面的 signature effect：
-          // 挂着上一次的绿点说「刚改过的配置没问题」是假承诺。
-          const [inspections, setInspections] = React.useState({})
-          const inspectKeyOf = (row) => String(row.level || '') + '/' + row.id
+          // （这里曾经有一颗「回收站」：MCP 本域没有回收站类目，点开的是六类共用的全局视图。
+          //  2026-10-12 裁定「回收站一个功能页就是一个」后删掉 —— 会话页同理。MCP 的删除走
+          //  宿主配置，插件不留快照，所以这一域本来就没有可恢复的东西。）
+          // （B1 的「配置体检」状态与 `inspectKeyOf` 已随体检功能一起删除，见下方 openDetail
+          //  上面那段说明。原先这里还有一颗每行「检查」按钮和它的结果面板。）
           const [undo, setUndo, dismissUndo] = useUndoState()
-          const flipRef = React.useRef(null)
-          useFlipReorder(flipRef)
 
           // 上一次列表响应的内容指纹（applyRows 写入）。轮询通常带回一模一样的数据：
           // 指纹没变就跳过 setState，否则每 5 秒整页换一批新对象，所有 useMemo、React
@@ -267,12 +272,22 @@
               if (fresh) setDetail(Object.assign({}, detail, { row: fresh }))
             })
           }
+          // 备注保存：不走共用的 `run()`（那个把结果写进页面级 `msg`，见 noteNotice 的说明）。
+          // 成功 / 失败都只回写到详情弹窗的备注小节；文案沿用 `opMsg` / `mcp.msg.failed`，
+          // 失败时**原样透出服务端那句**（锁定态就是冻结闸的「场景已锁定（…）：先到场景页解锁
+          // 再修改」）—— 它正是用户要看到的那句话，只是位置从页面挪进了弹窗。
           const saveNote = () => {
             const row = detail && detail.row
             if (!row) return
-            run('mcpm-note', { id: row.id, note: noteDraft }, 'note', () => {
-              setDetail(Object.assign({}, detail, { row: Object.assign({}, row, { notes: noteDraft.trim() }) }))
-            })
+            setNoteNotice(null)
+            setBusy('note')
+            apiCall('mcpm-note', { id: row.id, note: noteDraft }).then((res) => {
+              if (res && res.ok) {
+                setDetail(Object.assign({}, detail, { row: Object.assign({}, row, { notes: noteDraft.trim() }) }))
+                setNoteNotice(opMsg(res))
+                refresh()
+              } else setNoteNotice({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+            }).catch((e) => setNoteNotice({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
           const confirmRemove = () => {
             const row = confirmRow
@@ -294,51 +309,23 @@
             }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
           /**
-           * 体检一次：`target` 省略 = 全部。服务端每次重读补丁文件，界面只按 `level/id` 存结果。
-           * 单台与全部走同一个 op（服务端支持 id+level 过滤），免得两种口径的检查结果对不上。
+           * 体检（`mcpm-inspect`）已整条移除（用户 2026-10-12：「MCP 的检查功能可以移除，
+           * 作用不大」）：页头那颗「全部检查」与每行的「检查」按钮、结果面板、`inspections`
+           * 状态、配置指纹失效这几处一起删。它要发连通性探测、还要把 PATH 查询结果铺成
+           * 一列检查项，而它给出的结论（"命令在不在 PATH 上""端点通不通"）用户在点一次
+           * 「详情」时就看到了，不值得占页头一格 + 每行一颗按钮。
+           * 宿主侧也一并拆掉：op-registry 的登记、manager 的装配与 `mcpm-inspect` 句柄、
+           * `mcp/inspect-probe.ts` 整个模块 —— 界面既然不再有调用方，留着就是一条没人走、
+           * 却仍要维护的免令牌出口。
            */
-          const runInspect = (target) => {
-            const all = !target
-            const args = all ? {} : { id: target.id, level: target.level }
-            if (all) {
-              const busyMap = {}
-              ;(state.rows || []).forEach((item) => { busyMap[inspectKeyOf(item)] = { busy: true } })
-              setInspections(busyMap)
-            } else {
-              setInspections(Object.assign({}, inspections, { [inspectKeyOf(target)]: { busy: true } }))
-            }
-            apiCall('mcpm-inspect', args).then((res) => {
-              if (!res || !res.ok) {
-                const text = (res && res.error) || mt('mcp.inspect.failed')
-                setInspections(all ? {} : Object.assign({}, inspections, { [inspectKeyOf(target)]: { error: text } }))
-                if (all) setMsg({ kind: 'err', text })
-                return
-              }
-              const next = {}
-              ;(res.results || []).forEach((item) => { next[inspectKeyOf(item)] = { checks: item.checks || [] } })
-              setInspections((prev) => (all ? next : Object.assign({}, prev, next)))
-              // 补丁文件读不到时体检只覆盖了余下部分 —— 如实说出来，不给「整页都绿」的假结论。
-              if (res.errors && res.errors.length) setMsg({ kind: 'warn', text: mt('mcp.inspect.errors', { errors: res.errors.join('；') }) })
-            }).catch((e) => {
-              const text = errMsg(e)
-              setInspections(all ? {} : Object.assign({}, inspections, { [inspectKeyOf(target)]: { error: text } }))
-              if (all) setMsg({ kind: 'err', text })
-            })
-          }
-          // 配置内容指纹：只有**配置本身**变了才作废旧结果。轮询每 5 秒换一批新对象但不改内容，
-          // 直接依赖 rows 会让体检每 5 秒被清空一遍。
-          const patchSignature = React.useMemo(() => (state.rows || []).map((r) => [
-            r.level, r.id, r.serverName, r.transport, r.command, r.url,
-            (r.args || []).join(','), JSON.stringify(r.env || {}), JSON.stringify(r.headers || {}), r.disabled ? '1' : '0',
-          ].join(':'))
-            .join('|'), [state.rows])
-          React.useEffect(() => { setInspections({}) }, [patchSignature])
-
           const openDetail = (row) => {
             // 请求序号（每次开窗 +1）：两处详情弹窗共用同一份 `detail`，连点两台服务器时
             // 先发的响应可能后到并覆盖后发的那份 —— 序号对不上就丢弃。
             const seq = ++detailSeqRef.current
             setNoteDraft(row.notes || '')
+            // 换一台服务器 = 换一份备注：上一台的保存回执必须一起清掉，否则新弹窗会顶着
+            // 另一台服务器的红字（成功回执同理）。
+            setNoteNotice(null)
             setDetail({ row, loading: true, error: null, tools: [] })
             apiCall('mcpm-tools', { serverName: row.serverName }).then((res) => {
               if (seq !== detailSeqRef.current) return
@@ -353,6 +340,7 @@
           const closeDetail = () => {
             detailSeqRef.current += 1
             setDetail(null)
+            setNoteNotice(null)
           }
 
           const toggleTool = (row, tool) => {
@@ -362,7 +350,8 @@
             apiCall('mcpm-tool-enabled', { serverName: row.serverName, tool: tool.name, enabled: nextEnabled }).then((res) => {
               if (res && res.ok) {
                 setDetail(Object.assign({}, detail, { tools: (detail.tools || []).map((item) => (item.name === tool.name ? Object.assign({}, item, { enabled: nextEnabled }) : item)) }))
-                setMsg({ kind: 'ok', text: mt(nextEnabled ? 'mcp.msg.toolOn' : 'mcp.msg.toolOff', { name: tool.name }) })
+                // 回执动词表（REDESIGN §12.4）：两个方向各取字面量键，不合成三元。
+                setMsg({ kind: 'ok', text: nextEnabled ? mt('done.enabled', { name: tool.name }) : mt('done.disabled', { name: tool.name }) })
               } else setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
             }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
@@ -421,9 +410,12 @@
                 { key: 'loader', title: mt('mcp.level.loader'), path: profilePath, match: (row) => row.level === 'loader' && isRunning(row) },
               ]), [levelFilter, profilePath])
           // 分组 + 「启用的排前面」一次算完：以前这步在 renderGroup 里，每个组每次渲染各跑一遍
-          // filter 与分区（5 秒轮询换 rows 时整页重渲染也要重跑）。行的 key 与 data-flip-* 未动。
+          // filter 与分区（5 秒轮询换 rows 时整页重渲染也要重跑）。行的 key 未动。
+          // 定序表 `mcpRank`：开关当场**不重排**，只有重新进这一页（组件重挂载）才重新置顶
+          // —— 这一页没有「刷新」按钮（它自己 5 秒轮询），所以也不往 refresh 上挂 resetRank。
+          const mcpRank = useRank()
           const grouped = React.useMemo(
-            () => groups.map((group) => ({ group: group, rows: enabledFirst(visibleRows.filter(group.match), (row) => !row.disabled) })),
+            () => groups.map((group) => ({ group: group, rows: rankedFirst(mcpRank, (row) => row.id, visibleRows.filter(group.match), (row) => !row.disabled) })),
             [groups, visibleRows],
           )
 
@@ -453,59 +445,61 @@
             }
             return null
           }
-          // 工具数标签：有被停用的工具时给「可用/总数」（场景档案收窄与手动逐工具开关
+          // 工具数元信息：有被停用的工具时给「可用/总数」（场景档案收窄与手动逐工具开关
           // 写的是同一张停用表），否则就是总数 —— 与详情页每个工具的开关状态一致。
           //
           // 只按**真实注册**的数来显示：一个都没注册时不给数字（那台 server 现在没有工具，
           // 摆一个"13 个工具"就是拿缓存冒充现状；它上次连上时有多少个，由下面那行提示说明）。
-          const toolCountTag = (row) => {
+          // 列表行改两行制（REDESIGN §3.4）后它从行中标签降为行 2 的元信息文字（tabular-nums）。
+          const toolCountText = (row) => {
             const total = liveOf(row)
             if (total <= 0) return null
             const enabled = liveEnabledOf(row)
             return enabled < total
-              ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.countPartial', { enabled: enabled, total: total }))
-              : React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.count', { count: total }))
+              ? mt('mcp.tools.countPartial', { enabled: enabled, total: total })
+              : mt('mcp.tools.count', { count: total })
           }
 
           const renderRow = (row) => {
             const status = liveStatus(row)
             const hint = liveHint(row)
-            // 场景锁定期间整页只读（开关 / 编辑 / 删除一并消失）。
-            const editable = row.level !== 'loader' && state.locked !== true
-            // 体检状态：未体检=灰（不是"没问题"）、进行中=闪、有 warn=黄、info 级说明不点黄。
-            const insp = inspections[inspectKeyOf(row)]
-            const warnCount = insp && insp.checks ? insp.checks.filter((c) => c.level === 'warn').length : 0
-            const inspTone = insp && insp.busy ? 'busy' : insp && insp.error ? 'warn' : !insp ? 'idle' : warnCount > 0 ? 'warn' : 'ok'
-            const inspTitle = insp && insp.busy ? mt('mcp.inspect.busy')
-              : insp && insp.error ? insp.error
-              : !insp ? mt('mcp.inspect.idle')
-              : warnCount > 0 ? mt('mcp.inspect.warnCount', { count: warnCount })
-              : mt('mcp.inspect.pass')
-            return React.createElement('div', { key: row.id, className: 'dsm-row dsm-row-compact', 'data-flip-key': String(row.level || '') + '/' + row.id, 'data-flip-on': row.disabled ? '0' : '1' },
-              React.createElement('div', { className: 'dsm-main dsm-dot-indent' },
-                // 体检点与状态都收进名字这一行（用户裁定 2026-09-29）：点要在名字前面才第一眼
-                // 看得到，状态改成胶囊跟着名字走，与子智能体那一页同形。
-                React.createElement('div', { className: 'dsm-name-row' },
-                  React.createElement(InspectDot, { tone: inspTone, title: inspTitle }),
-                  React.createElement('div', { className: 'dsm-name' }, row.serverName),
-                  React.createElement(StatusTag, { tone: status.tone, text: status.text })),
-                // 备注与标签同一行（用户裁定 2026-09-29）：标签以前自己占一行，带备注的行就比
-                // 不带的高出一截，同一页里行高不齐 —— 两行是这行的固定预算。
-                React.createElement('div', { className: 'dsm-meta-row' },
-                  (levelFilter === 'loader' && row.level && row.level !== 'loader') ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.level.' + row.level)) : null,
-                  toolCountTag(row),
-                  row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null,
-                  row.notes ? React.createElement('div', { className: 'dsm-note dsm-note-user', title: row.notes }, mt('mcp.note.prefix') + row.notes) : null)),
-              React.createElement('div', { className: 'dsm-row-actions' },
-                editable ? React.createElement(Switch, { on: !row.disabled, disabled: busy !== null || state.locked === true, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !!(insp && insp.busy), onClick: () => runInspect(row) }, mt('mcp.inspect.row.btn')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: () => openDetail(row) }, mt('mcp.btn.detail')),
-                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: () => openEdit(row) }, mt('mcp.btn.edit')) : null,
-                editable ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null, onClick: () => setConfirmRow(row) }, mt('mcp.btn.remove')) : null),
-              (insp && insp.checks && insp.checks.length > 0)
-                ? React.createElement('div', { className: 'dsm-inspect' }, insp.checks.map((c) => React.createElement('div', { key: c.id, className: 'dsm-inspect-line' + (c.level === 'warn' ? ' dsm-inspect-warn' : '') }, mt('mcp.inspect.check.' + c.id, c.params || {}))))
-                : null,
-              hint ? React.createElement('div', { className: 'dsm-row-hint' }, '⚠ ' + hint) : null)
+            // `loader` 行本来就没有可编辑面（配置来自 profile，不是补丁），开关 / 编辑 / 删除
+            // 一律不出现；场景锁定则是"能改但被冻住" —— 控件**照常显示、置灰**，不再凭空消失
+            //（用户 2026-10-12：「锁定情况下的 mcp 应该显示药丸开关、编辑、删除，只是变灰且
+            // 不能删除」，与子智能体页锁定态同一副长相）。消失的控件让人以为"这行本来就不能
+            // 编辑"，灰掉的控件才说得清"现在不能改"。
+            const editable = row.level !== 'loader'
+            const frozen = state.locked === true
+            const actDisabled = frozen || busy !== null
+            // 行 2 元信息：层级（loader 视图）/ 工具数 / 备注 —— 原行中标签列并入（REDESIGN §3.4）。
+            const meta = []
+            if (levelFilter === 'loader' && row.level && row.level !== 'loader') meta.push(React.createElement('span', { key: 'level' }, mt('mcp.level.' + row.level)))
+            const toolCount = toolCountText(row)
+            if (toolCount) meta.push(React.createElement('span', { key: 'tools' }, toolCount))
+            // 备注可能很长：给可收缩的 desc 类（min-width:0 + 省略号），超宽时截断而不是把行撑爆。
+            if (row.notes) meta.push(React.createElement('span', { key: 'note', className: 'dsm-listrow-meta-desc', title: row.notes }, mt('mcp.note.prefix') + row.notes))
+            // 次级动作（REDESIGN §3.4：常驻 quiet 24px 右对齐；删除类 quiet-danger；
+            // 顺序 开关 · 详情 · 编辑 · 删除 —— 原先的「检查」已删，见上面 openDetail 那段说明）。
+            // 「详情」是只读动作，锁定期间照常可用。
+            const actions = [
+              React.createElement('button', { key: 'detail', type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: () => openDetail(row) }, mt('mcp.btn.detail')),
+            ]
+            if (editable) actions.push(React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: actDisabled, onClick: () => openEdit(row) }, mt('mcp.btn.edit')))
+            if (editable) actions.push(React.createElement('button', { key: 'remove', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: actDisabled, onClick: () => setConfirmRow(row) }, mt('mcp.btn.remove')))
+            return React.createElement(ListRow, {
+              key: row.id,
+              // 行首状态点只剩连接态一个（体检态那枚随体检一起删）：它的 title 就是
+              // 「已连接 / 未运行 / 未启用」，正是原来那枚体检点想说的"这台现在什么状态"。
+              dots: [React.createElement(StatusDot, { key: 'live', tone: status.tone === 'muted' ? 'idle' : status.tone, title: status.text })],
+              name: row.serverName,
+              tag: row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null,
+              meta: meta.length ? meta : null,
+              extra: [
+                hint ? React.createElement('div', { key: 'hint', className: 'dsm-row-hint' }, '⚠ ' + hint) : null,
+              ],
+              side: editable ? React.createElement(Switch, { on: !row.disabled, disabled: actDisabled, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
+              actions,
+            })
           }
 
           const renderGroup = (group, groupRows) => {
@@ -522,11 +516,9 @@
                   React.createElement('span', { className: 'dsm-count' }, mt('mcp.servers.count', { count: groupRows.length })),
                   group.path ? React.createElement('span', { className: 'dsm-path', title: group.path }, group.path) : null)),
               open ? React.createElement('div', { className: 'dsm-source-body' },
-                React.createElement(React.Fragment, null,
-                  React.createElement('div', { className: 'dsm-table-head dsm-row-compact' },
-                    React.createElement('span', { className: 'dsm-dot-indent' }, mt('mcp.table.name')),
-                    React.createElement('span', null, '')),
-                  groupRows.map(renderRow))) : null)
+                // 表头已随两行制拆除（REDESIGN §3.4 没有表头行；列对齐改由行内两行承担），
+                // 行直接铺在卡片体里、行间分隔线（切片四）。
+                groupRows.map(renderRow)) : null)
           }
 
           const configRow = (label, value) => React.createElement('div', { className: 'dsm-fm-row', key: label },
@@ -554,11 +546,18 @@
                           React.createElement('span', { className: 'dsm-tool-param-desc' }, param.description || '')))) : null)))))
 
           const anyGroupVisible = grouped.some((entry) => entry.rows.length > 0)
+          // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试）/ 无结果
+          // （EmptyState + 清除筛选）/ 空 / 有数据。失败时页面顶部那条错误横幅照旧 ——
+          // 它同时承担「有缓存数据时的错误」与令牌没过两种渠道，列表区这里不再裸奔空话。
           const groupsNode = (state.loading && rows.length === 0)
-            ? React.createElement('div', { className: 'dsm-empty' }, mt('mcp.loading'))
-            : anyGroupVisible
-              ? React.createElement('div', { className: 'dsm-sources', ref: flipRef }, grouped.map((entry) => renderGroup(entry.group, entry.rows)))
-              : React.createElement('div', { className: 'dsm-empty' }, (normalizedQuery || levelFilter) ? mt('mcp.empty.search') : mt('mcp.empty'))
+            ? React.createElement(ListStates, { key: 'states', t: mt, state: 'loading' })
+            : state.error
+              ? React.createElement(ListStates, { key: 'states', t: mt, state: 'error', text: state.error, onRetry: () => refresh() })
+              : anyGroupVisible
+                ? React.createElement('div', { className: 'dsm-sources' }, grouped.map((entry) => renderGroup(entry.group, entry.rows)))
+                : (normalizedQuery || levelFilter)
+                  ? React.createElement(ListStates, { key: 'states', t: mt, state: 'search', text: mt('mcp.empty.search'), onClearFilter: () => { setQuery(''); setLevelFilter('') } })
+                  : React.createElement(ListStates, { key: 'states', t: mt, state: 'empty', text: mt('mcp.empty') })
 
           // 密钥框里出现打码值时给一句说明：宿主侧会拿旧真值顶替、不会把打码值写进补丁
           // （见 src/mcp/secret-guard.ts），但用户得先知道自己眼前看到的**不是原文** ——
@@ -668,6 +667,11 @@
                 React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.note')),
                 React.createElement('span', { className: 'dsm-char-count' + (String(noteDraft || '').length > MCP_NOTE_MAX ? ' dsm-char-over' : '') }, String(noteDraft || '').length + ' / ' + MCP_NOTE_MAX)),
               React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: noteDraft, maxLength: MCP_NOTE_MAX, placeholder: mt('mcp.detail.note.placeholder'), onChange: (ev) => setNoteDraft(ev.target.value) }),
+              // 备注保存的回执就地渲染（见 noteNotice 的说明）。文案原样来自服务端：
+              // 成功走 Notice 的 ok 档（右下角浮出的 toast，与全站成功提示同一副长相）；
+              // 被冻结闸拒掉是弹窗内的一条红色 feedback —— 这正是用户要看到的那句话，
+              // 只是位置从页面挪进了弹窗。
+              React.createElement(Notice, { kind: noteNotice && noteNotice.kind, text: noteNotice && noteNotice.text }),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save')))),
             React.createElement('div', { className: 'dsm-detail-section' },
@@ -697,36 +701,41 @@
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: confirmRemove }, mt('mcp.btn.remove'))))
 
           return React.createElement('section', { className: 'dsm-section' },
-            React.createElement('div', { className: 'dsm-head' },
-              React.createElement('div', { className: 'dsm-title-block' },
-                React.createElement('div', { className: 'dsm-title-row' },
-                  React.createElement('h2', { className: 'dsm-title' }, 'MCP')),
-                React.createElement('p', { className: 'dsm-desc' }, mt('mcp.desc'))),
-              React.createElement('div', { className: 'dsm-actions' },
-                refreshButton(mt, busy !== null || state.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading, onClick: () => refresh() }),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.locked === true, onClick: openAdd }, mt('mcp.btn.new')),
+            // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 整理补丁 · 全部启用。
+            // 低频两件（整理补丁 / 批量启停）用 quiet 弱化视觉权重（§6 备注），全部常驻可见 ——
+            // 不收 ⋯ 菜单、不做悬停浮现。（原先这里还有一颗「全部检查」，2026-10-12 已移除。）
+            React.createElement(PageHead, {
+              title: 'MCP',
+              desc: mt('mcp.desc'),
+              stats: [
+                // 两格都是「开着的 / 总数」的比例口径（用户 2026-10-12：统计要"有用"）：
+                // 「7 个服务」答不了"有几个真在跑"，「42 个工具」也答不了"挂了多少没挂上"。
+                // 分母服务端一直在给（summary.total / toolsTotal），此前只显示分子等于把答案丢了。
+                [summary.enabled + '/' + summary.total, mt('mcp.stat.total')],
+                [summary.tools + '/' + summary.toolsTotal, mt('mcp.stat.tools')],
+              ],
+              actions: [
+                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: state.locked === true, onClick: openAdd }, mt('mcp.btn.new')),
                 // 「导入」是「一次建好一批」，与新增同一个写路径（`mcpm-import`），所以场景锁定期间同样置灰。
                 // 导出是只读动作，锁定期间照常用（拿配置不该要求先解锁环境）。
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.locked === true, onClick: () => setJsonImportOpen(true) }, mt('mcp.importJson.btn')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.loading, onClick: () => setJsonExportOpen(true) }, mt('mcp.exportJson.btn')),
-                // 体检不改本插件的任何状态（补丁只读；streamable-http 行会向配置地址发一次
-                // 连通性探测），所以锁定期间照点 —— 冻的是改动，不是"看一眼配置对不对"。
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.loading || !summary.total, onClick: () => runInspect(null) }, mt('mcp.inspect.btn')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy !== null || state.loading || state.locked === true, title: mt('mcp.btn.compact.title'), onClick: () => setCompactConfirm(true) }, mt('mcp.btn.compact')),
-                // 批量启停与页头其余动作同栏（用户 2026-09-17 裁定）。场景内**照常可用**：
+                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.locked === true, onClick: () => setJsonImportOpen(true) }, mt('mcp.importJson.btn')),
+                React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.loading, onClick: () => setJsonExportOpen(true) }, mt('mcp.exportJson.btn')),
+                React.createElement('button', { key: 'compact', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading || state.locked === true, title: mt('mcp.btn.compact.title'), onClick: () => setCompactConfirm(true) }, mt('mcp.btn.compact')),
+                // 批量启停与页头其余动作同栏。场景内**照常可用**：
                 // 改动会同步写进当前场景的档案（宿主 syncSwitchToScene），只有场景锁定才冻结。
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.loading || !summary.total, onClick: setAllServers }, mt(summary.total > 0 && summary.enabled === summary.total ? 'mcp.btn.disableAll' : 'mcp.btn.enableAll')))),
+                // 两个方向各取各的字面量键，不合成三元（词典键必须 t('字面量') 直传）。
+                React.createElement('button', { key: 'setall', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading || !summary.total, onClick: setAllServers },
+                  summary.total > 0 && summary.enabled === summary.total ? mt('mcp.btn.disableAll') : mt('mcp.btn.enableAll')),
+              ],
+            }),
             state.locked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('lock.banner')) : null,
             // 场景未锁定时开关照常可用：说清「改动会同步写进该场景的档案」，别让用户担心白改。
             // 锁定期间不显示 —— 那时开关是灰的，"改动会写进档案"是句空话，与上一条锁定横幅
             // 并排还会互相矛盾（用户 2026-09-19）。
             (state.locked !== true && state.scene) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('scene.switch.banner', { scene: state.scene })) : null,
-            React.createElement('div', { className: 'dsm-stat-row' },
-              React.createElement('div', { className: 'dsm-summary' },
-                [['total', summary.total, mt('mcp.stat.total')], ['enabled', summary.enabled, mt('mcp.stat.enabled')], ['tools', summary.tools < summary.toolsTotal ? summary.tools + '/' + summary.toolsTotal : summary.tools, mt('mcp.stat.tools')]].map((item) =>
-                  React.createElement('div', { key: item[0], className: 'dsm-stat' },
-                    React.createElement('strong', null, item[1]), item[2])))),
-            React.createElement('div', { className: 'dsm-filters' },
+            // 列表工具条（REDESIGN §3.3，切片四）：搜索 + 层级筛选住 children；本页无批量动作，
+            // batch 槽留空。
+            React.createElement(Toolbar, { key: 'filters' },
               React.createElement('input', { className: 'dsm-control dsm-search', value: query, 'aria-label': mt('mcp.search'), placeholder: mt('mcp.search.placeholder'), onChange: (ev) => setQuery(ev.target.value) }),
               React.createElement('div', { className: 'dsm-source-filter' },
                 React.createElement(SourceSelect, { value: levelFilter, options: mcpLevelOptions(), onChange: setLevelFilter }))),
@@ -767,13 +776,12 @@
           var em = React.useState(null), editModal = em[0], setEditModal = em[1]
           var cm = React.useState(null), createModal = cm[0], setCreateModal = cm[1]
           var ac = React.useState(null), applyConfirm = ac[0], setApplyConfirm = ac[1]
-          // 回收站：null = 关闭；{loading, error, entries}
-          var ts = React.useState(null), trash = ts[0], setTrash = ts[1]
-          var tb = React.useState(false), trashBusy = tb[0], setTrashBusy = tb[1]
+          // 回收站：true = 打开本页那一个回收站（42-shared-ui.js 的 TrashModal，domain = prompts）。
+          // 提示词域（预设 + 快捷）的清单加载与恢复/永久删除都在组件内部完成，
+          // 本页只在写操作后重读自己的数据。
+          var ts = React.useState(false), trash = ts[0], setTrash = ts[1]
           // D14：导出弹窗（null = 关闭；{busy, result}）。
           var xo = React.useState(null), exportState = xo[0], setExportState = xo[1]
-          var flipRef = React.useRef(null)
-          useFlipReorder(flipRef)
           // ── 快捷提示词（用户存好的现成文字，只在对话框 `/` 菜单里由自己点出来）────
           // 独立一处状态，不塞进上面的 `state`：那边 `refresh()` 是整对象替换，两份数据混在
           // 一次替换里更容易漏；而快捷列表读失败不该把预设列表一起打成错误页。
@@ -789,80 +797,6 @@
               })
               .catch(function (e) { setQuick({ loading: false, error: errMsg(e), prompts: [] }) })
           }
-          /** 打开/刷新回收站（两个提示词域一起列：点一次「回收站」要看全）。 */
-          function loadTrash(keepOpen) {
-            var prev = keepOpen ? trash || {} : {}
-            setTrash(Object.assign({ loading: true, error: null, presets: [], quick: [] }, prev))
-            var read = function (op) {
-              return apiCall(op, {}).catch(function (e) { return { ok: false, error: errMsg(e) } })
-            }
-            Promise.all([read('agentsmd-trash-list'), read('quickprompt-trash-list')]).then(function (both) {
-              var errs = []
-              if (!both[0] || both[0].ok === false) errs.push((both[0] && both[0].error) || t('trash.loadFailed'))
-              if (!both[1] || both[1].ok === false) errs.push((both[1] && both[1].error) || t('trash.loadFailed'))
-              setTrash({
-                loading: false, error: errs.length ? errs.join(t('agm.ref.sep')) : null,
-                presets: ((both[0] && both[0].trash) || []).map(function (e) { return Object.assign({ kind: 'presets' }, e) }),
-                quick: ((both[1] && both[1].trash) || []).map(function (e) { return Object.assign({ kind: 'quick' }, e) }),
-              })
-            })
-          }
-          /** 回收站两个域共用一套按钮：条目自带 `kind`，op 名按它挑（不再各写一份恢复/永久删除）。 */
-          function trashOp(item, action) {
-            return item.kind === 'quick' ? 'quickprompt-trash-' + action : 'agentsmd-trash-' + action
-          }
-          function restorePreset(item) {
-            setTrashBusy(true)
-            apiCall(trashOp(item, 'restore'), { id: item.id }).then(function (res) {
-              setTrashBusy(false)
-              if (res && res.ok) { setState(function (s) { return Object.assign({}, s, { notice: { kind: 'ok', text: t('trash.restored', { name: item.name }) } }) }); refresh(); loadTrash(true) }
-              else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
-            }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
-          }
-          function purgePreset(item) {
-            setTrashBusy(true)
-            apiCall(trashOp(item, 'delete'), { id: item.id }).then(function (res) {
-              setTrashBusy(false)
-              if (res && res.ok) { setState(function (s) { return Object.assign({}, s, { notice: { kind: 'ok', text: t('trash.purged', { name: item.name }) } }) }); loadTrash(true) }
-              else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
-            }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
-          }
-          /**
-           * 批量永久删除（回收站弹窗工具栏那一颗「永久删除 (N)」，先「全选」再删即等于清空）。
-           *
-           * 逐条调**已有的单条 op**（`agentsmd-trash-delete` / `quickprompt-trash-delete`）：
-           * 服务端不另造批量版 —— 那两条各自带着存在性校验，再造一份等于把判据抄两遍，
-           * 而新 op 还要重新过一遍令牌与冻结登记（见 TrashModal 的注释）。
-           *
-           * 串行而不是并发：条目数天然有限（用户手删出来的），串行才给得出
-           * 「删了几个、为什么没删掉」，并发只会让失败原因混成一团。
-           */
-          function purgePresetMany(items) {
-            if (!items.length) return
-            setTrashBusy(true)
-            var done = 0, failed = 0, firstErr = null
-            var step = function (i) {
-              if (i >= items.length) {
-                setTrashBusy(false)
-                var text = failed === 0
-                  ? t('trash.purgeMany.result', { count: done })
-                  : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' })
-                setState(function (s) { return Object.assign({}, s, { notice: { kind: failed === 0 ? 'ok' : 'err', text: text } }) })
-                loadTrash(true)
-                return
-              }
-              apiCall(trashOp(items[i], 'delete'), { id: items[i].id }).then(function (res) {
-                if (res && res.ok) done += 1
-                else { failed += 1; if (!firstErr) firstErr = (res && res.error) || t('mcp.msg.failed') }
-                step(i + 1)
-              }).catch(function (e) {
-                failed += 1
-                if (!firstErr) firstErr = errMsg(e)
-                step(i + 1)
-              })
-            }
-            step(0)
-          }
           // 导入：与技能页同一个 ImportModal（拖拽区 + 文件要求清单 + 结果反馈）。
           // 一次可选多份 .md，逐个读取正文导入；同名/失败逐条回报，不因一个失败中断其余的。
           // 两个提示词域共用这一颗按钮，类型在弹窗顶部选（`extra` 槽）—— 选完导入的是哪一档
@@ -872,25 +806,24 @@
           var impResultState = React.useState(null); var importResult = impResultState[0], setImportResult = impResultState[1]
           var impKindState = React.useState('global'); var importKind = impKindState[0], setImportKind = impKindState[1]
           /**
-           * 「全局提示词 / 快捷提示词」二选一的勾选行（与兼容页同款打勾框）。
+           * 「全局提示词 / 快捷提示词」二选一（REDESIGN §5.2 分段控件，切片五换装）。
            *
            * 为什么放在弹窗里而不是页头：这两类东西的**读法完全不同**（一份会覆盖写全局
            * AGENTS.md、一份只是贴进对话框的文字），把它们混进同一个列表再打标签，用户要先
            * 看懂标签才知道点下去会发生什么。新建与导入都先问一次，问在最贴近动作的地方。
            *
-           * 两颗框恒有一棵勾着（点已勾着的那颗不改状态）—— 没有"都不选"这一态，所以是
-           * 单选的语义、打勾框的样子。
+           * 两项恒有一项按下（点已按下的那颗不改状态）—— 没有"都不选"这一态，所以是
+           * 单选的语义；原先是「单选语义、打勾框的样子」，现在是同语义的正确控件。
            */
           function kindPicker(value, onChange) {
             const pick = function (kind) {
-              return React.createElement('label', { className: 'dsm-kind-pick' },
-                React.createElement('input', { type: 'checkbox', checked: value === kind, onChange: function () { onChange(kind) } }),
+              return React.createElement('button', { key: kind, type: 'button', 'aria-pressed': value === kind, onClick: function () { onChange(kind) } },
                 t('prompts.kind.' + kind))
             }
             return React.createElement('div', { className: 'dsm-field' },
               React.createElement('span', { className: 'dsm-label' }, t('prompts.kind.label')),
-              React.createElement('div', { className: 'dsm-kind-picks' }, pick('global'), pick('quick')),
-              React.createElement('p', { className: 'dsm-help' }, t(value === 'quick' ? 'prompts.kind.quick.hint' : 'prompts.kind.global.hint')))
+              React.createElement('div', { className: 'dsm-form-seg', role: 'group' }, pick('global'), pick('quick')),
+              React.createElement('p', { className: 'dsm-help' }, t('prompts.kind.' + value + '.hint')))
           }
           function importIdOf(name) {
             return String(name || '').replace(/\.(md|markdown|txt)$/i, '').trim().replace(/[\\/<>:"|?*]+/g, '-') || 'imported'
@@ -1169,20 +1102,28 @@
             return state.presets.filter(function (p) { return matchPresetQuery(p, dq) })
           }, [state.presets, dq])
           // 启用的排前面（用户要求）：与过滤分开记忆 —— 分区只跟过滤结果有关，弹窗/提示条之类
-          // 的状态变化不再重跑它（FLIP 的 data-flip-on 仍来自 p.active，未动）。
+          // 的状态变化不再重跑它。
+          // 两张定序表分开：预设 id 与快捷提示词 id 是两个命名空间，共用一张表会互相顶位。
+          var presetRank = useRank()
+          var quickRank = useRank()
           var orderedPresets = React.useMemo(function () {
-            return enabledFirst(visiblePresets, function (p) { return !!p.active; })
+            return rankedFirst(presetRank, function (p) { return p.id }, visiblePresets, function (p) { return !!p.active; })
           }, [visiblePresets])
           var activeCount = React.useMemo(function () {
             return state.presets.filter(function (p) { return p.active }).length
           }, [state.presets])
+          // 快捷提示词里"还开着"的条数（关掉的留在列表里，只是不进 `/` 菜单）。页头统计要用
+          // 「启用 / 总数」，所以除了总数还得有这个分子。
+          var quickEnabledCount = React.useMemo(function () {
+            return quick.prompts.filter(function (p) { return p.enabled !== false }).length
+          }, [quick.prompts])
           var visibleQuick = React.useMemo(function () {
             return quick.prompts.filter(function (p) { return matchPresetQuery(p, dq) })
           }, [quick.prompts, dq])
           // 与上面预设那一档同一条口径：亮着的排前面。关掉的照样列着（那只是"不在 `/` 菜单里出现"，
           // 不是删掉），沉到底部是为了让常用的那几条留在第一眼。
           var orderedQuick = React.useMemo(function () {
-            return enabledFirst(visibleQuick, function (p) { return p.enabled !== false })
+            return rankedFirst(quickRank, function (p) { return p.id }, visibleQuick, function (p) { return p.enabled !== false })
           }, [visibleQuick])
           // ── 两组都是**可折叠卡片**（用户 2026-10-01 裁定：做成技能那样）──────────
           // 默认展开；打了字强制展开 —— 卡片收着的话搜索结果一行都看不见（技能页 / MCP 页同口径）。
@@ -1242,45 +1183,55 @@
             onClick: toggleQuickBulk,
           }, bulkPair(t(quickAllOn ? 'bulk.unselectAll' : 'bulk.selectAll'), t(quickAllOn ? 'bulk.selectAll' : 'bulk.unselectAll')))
           function renderQuick(p) {
-            return React.createElement('div', { key: p.id, className: 'dsm-source', 'data-flip-key': 'q:' + p.id },
-              React.createElement('div', { className: 'dsm-source-head' },
-                // 与子智能体行同一形状：名字一行、备注一行，都在头部里 —— 备注不再单独占一条
-                // 带分隔线的卡片底（用户 2026-09-30 要求少占空间）。
-                // 不挂「生效中」那类标签：快捷提示词不写 AGENTS.md、不进上下文，它唯一的两种状态
-                // （在不在 `/` 菜单里出现）就是左边那颗开关。
-                React.createElement('div', { className: 'dsm-source-head-main dsm-persona-main' },
-                  React.createElement('div', { className: 'dsm-persona-name-row' },
-                    React.createElement('span', { className: 'dsm-source-title', title: p.id }, p.id)),
-                  p.description ? React.createElement('div', { className: 'dsm-persona-desc', title: p.description }, p.description) : null),
-                React.createElement('div', { className: 'dsm-source-actions' },
-                  React.createElement(Switch, {
-                    on: p.enabled !== false,
-                    disabled: busy !== null || state.anyLocked === true,
-                    label: t('quickprompt.toggle') + ' ' + p.id,
-                    title: t('quickprompt.toggle.hint'),
-                    onClick: function () { toggleQuick(p) } }),
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: state.anyLocked === true, onClick: function () { openQuickEdit(p) } }, t('agm.btn.edit')),
-                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: state.anyLocked === true ? t('scenes.lock.blockedEdit') : '', onClick: function () { setQuickConfirm({ id: p.id }) } }, t('agm.btn.delete')))))
+            // 列表行两行制（REDESIGN §3.4，切片四）：行 1 状态点 + id，行 2 描述；
+            // 开关 + 编辑/删除（quiet 24px，删除 quiet-danger）常驻右侧。
+            // 不挂「生效中」那类标签：快捷提示词不写 AGENTS.md、不进上下文，它唯一的两种状态
+            // （在不在 `/` 菜单里出现）就是左边那颗开关，行首点只复述它。
+            return React.createElement(ListRow, {
+              key: p.id,
+              dots: [React.createElement(StatusDot, {
+                key: 'dot',
+                tone: p.enabled !== false ? 'ok' : 'idle',
+                title: p.enabled !== false ? t('status.enabled') : t('status.disabled'),
+              })],
+              name: p.id,
+              meta: p.description || null,
+              side: React.createElement(Switch, {
+                on: p.enabled !== false,
+                disabled: busy !== null || state.anyLocked === true,
+                label: t('quickprompt.toggle') + ' ' + p.id,
+                title: t('quickprompt.toggle.hint'),
+                onClick: function () { toggleQuick(p) },
+              }),
+              actions: [
+                // 「编辑」在锁定态照常可点（用户 2026-10-12：「子智能体、提示词、记忆可以打开
+                // 编辑页面，但是不能保存」）：看内容不该被锁挡住，写盘那一步（弹窗里的保存键）才置灰。
+                React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: function () { openQuickEdit(p) } }, t('agm.btn.edit')),
+                React.createElement('button', { key: 'del', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: state.anyLocked === true ? t('scenes.lock.blockedEdit') : '', onClick: function () { setQuickConfirm({ id: p.id }) } }, t('agm.btn.delete')),
+              ],
+            })
           }
           // 快捷提示词那一组。整段独立于上面的 `body`：它读失败只红自己那一组，
           // 不该把预设列表一起打成错误页（两件事各自有各自的结论）。
+          // 列表四态（切片四）：失败 = EmptyState + 重试（只重读本组清单）。
           var quickSection = groupCard('quick', t('prompts.group.quick'), quick.prompts.length, quickBulkButton,
             quick.error
-              ? React.createElement(Notice, { kind: 'err', text: quick.error })
+              ? React.createElement(ListStates, { t: t, state: 'error', text: quick.error, onRetry: function () { refreshQuick() } })
               : !quick.prompts.length
-                ? React.createElement('div', { className: 'dsm-empty' }, t('quickprompt.empty'))
+                ? React.createElement(ListStates, { t: t, state: 'empty', text: t('quickprompt.empty') })
                 : !visibleQuick.length
-                  ? React.createElement('div', { className: 'dsm-empty' }, t('agm.empty.search'))
-                  : React.createElement('div', { className: 'dsm-sources' }, orderedQuick.map(renderQuick)))
+                  ? React.createElement(ListStates, { t: t, state: 'search', text: t('agm.empty.search'), onClearFilter: function () { setQuery('') } })
+                  : orderedQuick.map(renderQuick))
+          // 列表四态（切片四）：加载 / 失败（EmptyState + 重试）/ 空 / 无结果（+ 清除筛选）/ 有数据。
           var body = state.loading && !state.presets.length
-            ? React.createElement('div', { className: 'dsm-empty' }, t('agm.loading'))
+            ? React.createElement(ListStates, { t: t, state: 'loading' })
             : state.error
-              ? React.createElement(Notice, { kind: 'err', text: state.error })
+              ? React.createElement(ListStates, { t: t, state: 'error', text: state.error, onRetry: function () { refresh() } })
               : !state.presets.length
-                ? React.createElement('div', { className: 'dsm-empty' }, t('agm.empty'))
+                ? React.createElement(ListStates, { t: t, state: 'empty', text: t('agm.empty') })
                 : !visiblePresets.length
-                  ? React.createElement('div', { className: 'dsm-empty' }, t('agm.empty.search'))
-                  : React.createElement('div', { className: 'dsm-sources', ref: flipRef }, orderedPresets.map(function (p) {
+                  ? React.createElement(ListStates, { t: t, state: 'search', text: t('agm.empty.search'), onClearFilter: function () { setQuery('') } })
+                  : React.createElement('div', null, orderedPresets.map(function (p) {
                     // 「生效中」= 当前真正在起作用的基线：启用的场景绑了它，就是它（用户裁定）；
                     // 否则看文件比对。p.fileApplied 单独留着，说明「AGENTS.md 里确实是它」。
                     var viaScene = p.activeVia === 'scene'
@@ -1295,70 +1246,89 @@
                     // 2026-09-17：未锁定时切换要可用，并且同步写进场景档案），所以不再拦截；
                     // 只在 title 里把后果说出来，用户点了才知道会发生什么。
                     var applyRebinds = !!sceneDriver && sceneDriver.presetId !== p.id
-                    return React.createElement('div', { key: p.id, className: 'dsm-source', 'data-flip-key': p.id, 'data-flip-on': p.active ? '1' : '0' },
-                      React.createElement('div', { className: 'dsm-source-head' },
-                        // 与子智能体行同一形状：名字（带标签）一行、备注一行，都在头部里 ——
-                        // 备注不再单独占一条带分隔线的卡片底（用户 2026-09-30 要求少占空间）。
-                        React.createElement('div', { className: 'dsm-source-head-main dsm-persona-main' },
-                          React.createElement('div', { className: 'dsm-persona-name-row' },
-                            React.createElement('span', { className: 'dsm-source-title', title: p.id }, p.id),
-                            p.active ? React.createElement('span', { className: 'dsm-tag dsm-tag-on', title: viaScene ? t('agm.active.hint.scene', { scene: (state.scenePrompt && state.scenePrompt.label) || (state.scenePrompt && state.scenePrompt.scene) || '' }) : t('agm.active.hint.file') }, t('agm.active')) : null,
-                            !p.active && p.fileApplied ? React.createElement('span', { className: 'dsm-tag', title: t('agm.file.applied.hint') }, t('agm.file.applied')) : null,
-                            fileMismatch ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('agm.file.mismatch.hint') }, t('agm.file.mismatch')) : null,
-                            // 场景绑定**不在这里标标签**（用户裁定）：多场景绑同一份时标签会把行挤爆；
-                            // 谁在引用它，点「删除」时会逐条说出来（`agm.btn.delete.blocked.refs`）。
-                            restoreRef ? React.createElement('span', { className: 'dsm-tag', title: t('agm.restore.tag.hint') }, t('agm.restore.tag')) : null),
-                          p.description ? React.createElement('div', { className: 'dsm-persona-desc', title: p.description }, p.description) : null),
-                        React.createElement('div', { className: 'dsm-source-actions' },
-                          // 「应用 / 取消应用」同一颗药丸开关（0.19.1 起有两个方向）：
-                          //   关 → 点 = 应用（把这份内容写进 AGENTS.md）；
-                          //   开（AGENTS.md 里就是它）→ 点 = **取消应用**（把 AGENTS.md 恢复成
-                          //     **开始应用提示词之前**的那一份 —— 中途应用过别的预设也一并撤销，
-                          //     不是只退一步；见 `service.ts` 的 `backupGlobal`）。此前这颗开关只有
-                          //     「应用」一个方向，用户实测「开启后无法关闭，也不能删除」—— 那是开关
-                          //     与删除保护一起构成的死锁。
-                          //   开但由**场景**驱动（`activeVia === 'scene'`）→ 点 = 应用（重新写回 /
-                          //     换绑场景）；撤销归场景页管，本页不该把场景的绑定偷偷撤掉。
-                          // 没有链起点可回时（播种出来的 default 就是这样）不开弹窗，
-                          // 只给一条说明，并把出路（应用别的预设 / 直接编辑 AGENTS.md）说清楚。
-                          React.createElement(Switch, {
-                            on: p.active === true,
-                            disabled: busy !== null || state.anyLocked === true,
-                            label: t('agm.apply.switch') + ' ' + p.id,
-                            title: applyRebinds ? t('agm.apply.rebindScene', { scene: sceneDriverLabel })
-                              : p.active
-                                ? (viaScene ? t('agm.apply.switch.on')
-                                  : (unapplyReady ? (unapplyRemoves ? t('agm.unapply.switch.onRemove') : t('agm.unapply.switch.on')) : t('agm.unapply.switch.blocked')))
-                                : t('agm.apply.hint'),
-                            onClick: function () {
-                              if (!p.active || viaScene) { setApplyConfirm({ id: p.id }); return }
-                              if (!unapplyReady) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.unapply.unavailable') }) }); return }
-                              setApplyConfirm({ id: p.id, unapply: true })
-                            } }),
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: state.anyLocked === true, onClick: function () { openEdit(p) } }, t('agm.btn.edit')),
-                          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: blockingTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) : t('scenes.lock.blockedEdit'), onClick: function () {
-                            // 被引用中的预设**点得动但删不掉**：当面说出「谁在用 / 该怎么解除」，
-                            // 而不是让用户对着禁用按钮猜（disabled 的按钮连 title 都不弹）。
-                            // 宿主侧同一判据同样拒绝，这里只是先说。
-                            // 拦的是两类：场景绑定、以及**当前应用的**那份（后者删了 AGENTS.md
-                            // 照旧生效，会留下一个看不懂的中间态）。播种出来的副本不在其列。
-                            if (blockingTexts.length > 0) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) }) }); return }
-                            setApplyConfirm({ id: p.id, remove: true, removeFileApplied: p.fileApplied === true })
-                          } }, t('agm.btn.delete')))))
+                    // 列表行两行制（REDESIGN §3.4，切片四）：行 1 状态点 + id + 至多 1 个
+                    // 「需要处理」的 tag（内容与 AGENTS.md 不一致）；行 2 描述 + 元信息。
+                    // 「生效中」由行首点承担（含义在悬停里），「AGENTS.md 里是它 / 退出场景
+                    // 后恢复」降为行 2 的弱色元信息；场景绑定不在这里标（谁在引用它，
+                    // 点「删除」时会逐条说出来）。
+                    return React.createElement(ListRow, {
+                      key: p.id,
+                      dots: [React.createElement(StatusDot, {
+                        key: 'dot',
+                        tone: p.active ? 'ok' : 'idle',
+                        title: p.active
+                          ? (viaScene ? t('agm.active.hint.scene', { scene: (state.scenePrompt && state.scenePrompt.label) || (state.scenePrompt && state.scenePrompt.scene) || '' }) : t('agm.active.hint.file'))
+                          : t('agm.inactive'),
+                      })],
+                      name: p.id,
+                      tag: fileMismatch ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('agm.file.mismatch.hint') }, t('agm.file.mismatch')) : null,
+                      meta: [
+                        p.description ? React.createElement('span', { key: 'desc', className: 'dsm-listrow-meta-desc', title: p.description }, p.description) : null,
+                        !p.active && p.fileApplied ? React.createElement('span', { key: 'applied', className: 'dsm-listrow-meta-info', title: t('agm.file.applied.hint') }, t('agm.file.applied')) : null,
+                        restoreRef ? React.createElement('span', { key: 'restore', className: 'dsm-listrow-meta-info', title: t('agm.restore.tag.hint') }, t('agm.restore.tag')) : null,
+                      ],
+                      side: React.createElement(Switch, {
+                        // 「应用 / 取消应用」同一颗药丸开关（0.19.1 起有两个方向）：
+                        //   关 → 点 = 应用（把这份内容写进 AGENTS.md）；
+                        //   开（AGENTS.md 里就是它）→ 点 = **取消应用**（把 AGENTS.md 恢复成
+                        //     **开始应用提示词之前**的那一份 —— 中途应用过别的预设也一并撤销，
+                        //     不是只退一步；见 `service.ts` 的 `backupGlobal`）。此前这颗开关只有
+                        //     「应用」一个方向，用户实测「开启后无法关闭，也不能删除」—— 那是开关
+                        //     与删除保护一起构成的死锁。
+                        //   开但由**场景**驱动（`activeVia === 'scene'`）→ 点 = 应用（重新写回 /
+                        //     换绑场景）；撤销归场景页管，本页不该把场景的绑定偷偷撤掉。
+                        // 没有链起点可回时（播种出来的 default 就是这样）不开弹窗，
+                        // 只给一条说明，并把出路（应用别的预设 / 直接编辑 AGENTS.md）说清楚。
+                        on: p.active === true,
+                        disabled: busy !== null || state.anyLocked === true,
+                        label: t('agm.apply.switch') + ' ' + p.id,
+                        title: applyRebinds ? t('agm.apply.rebindScene', { scene: sceneDriverLabel })
+                          : p.active
+                            ? (viaScene ? t('agm.apply.switch.on')
+                              : (unapplyReady ? (unapplyRemoves ? t('agm.unapply.switch.onRemove') : t('agm.unapply.switch.on')) : t('agm.unapply.switch.blocked')))
+                            : t('agm.apply.hint'),
+                        onClick: function () {
+                          if (!p.active || viaScene) { setApplyConfirm({ id: p.id }); return }
+                          if (!unapplyReady) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.unapply.unavailable') }) }); return }
+                          setApplyConfirm({ id: p.id, unapply: true })
+                        },
+                      }),
+                      actions: [
+                        // 同快捷提示词：锁定态能打开编辑页，保存键在弹窗里置灰。
+                        React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: function () { openEdit(p) } }, t('agm.btn.edit')),
+                        React.createElement('button', { key: 'del', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: blockingTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) : t('scenes.lock.blockedEdit'), onClick: function () {
+                          // 被引用中的预设**点得动但删不掉**：当面说出「谁在用 / 该怎么解除」，
+                          // 而不是让用户对着禁用按钮猜（disabled 的按钮连 title 都不弹）。
+                          // 宿主侧同一判据同样拒绝，这里只是先说。
+                          // 拦的是两类：场景绑定、以及**当前应用的**那份（后者删了 AGENTS.md
+                          // 照旧生效，会留下一个看不懂的中间态）。播种出来的副本不在其列。
+                          if (blockingTexts.length > 0) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) }) }); return }
+                          setApplyConfirm({ id: p.id, remove: true, removeFileApplied: p.fileApplied === true })
+                        } }, t('agm.btn.delete')),
+                      ],
+                    })
                   }))
 
           return React.createElement('section', { className: 'dsm-section' },
-            React.createElement('div', { className: 'dsm-head' },
-              React.createElement('div', { className: 'dsm-title-block' },
-                React.createElement('div', { className: 'dsm-title-row' },
-                  React.createElement('h2', { className: 'dsm-title' }, t('tabs.prompts'))),
-                React.createElement('p', { className: 'dsm-desc' }, t('prompts.desc'))),
-              React.createElement('div', { className: 'dsm-actions' },
-                refreshButton(t, state.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: state.loading, onClick: function () { refresh() } }),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: state.anyLocked === true, onClick: function () { setCreateModal({ kind: 'global', id: '', content: '', description: '', error: null }) } }, t('agm.btn.new')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.anyLocked === true, onClick: function () { setImportResult(null); setImportOpen(true) } }, t('agm.btn.import')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || !(state.presets.length || quick.prompts.length), onClick: function () { setExportState({ busy: false, result: null }) } }, t('export.presets')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { loadTrash(false) } }, t('trash.btn.open')))),
+            // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 回收站；统计内联。
+            React.createElement(PageHead, {
+              title: t('tabs.prompts'),
+              desc: t('prompts.desc'),
+              // 三格：两类各自计数 + 生效中。第一格的文案点明「全局」—— 页面上现在有两类
+              // 提示词，只说「提示词」会让用户以为快捷那几条没被算进来。快捷那格用
+              // 「启用 / 总数」的比例（关掉的照样列着，只是不进 `/` 菜单，所以"总数"要看得见）。
+              stats: [
+                [state.presets.length, t('agm.stat.total')],
+                [activeCount, t('agm.stat.active')],
+                [quickEnabledCount + '/' + quick.prompts.length, t('quickprompt.stat')],
+              ],
+              actions: [
+                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: state.anyLocked === true, onClick: function () { setCreateModal({ kind: 'global', id: '', content: '', description: '', error: null }) } }, t('agm.btn.new')),
+                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.anyLocked === true, onClick: function () { setImportResult(null); setImportOpen(true) } }, t('agm.btn.import')),
+                React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || !(state.presets.length || quick.prompts.length), onClick: function () { setExportState({ busy: false, result: null }) } }, t('export.presets')),
+                React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setTrash(true) } }, t('trash.btn.open')),
+              ],
+            }),
             state.anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             // 场景接管时把「为什么应用按钮点不动」直接写出来，而不是让用户对着置灰的按钮猜。
             // **锁定期间不显示**：那时「应用别的预设会改绑场景」是句空话（按钮全灰），与上面
@@ -1368,17 +1338,11 @@
             (state.anyLocked !== true && sceneDriver) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('agm.sceneLock.notice', { scene: sceneDriverLabel, id: sceneDriver.presetId })) : null,
             // 一次性拒绝说明（被引用的预设删不掉）：不替换列表，只加一条横幅。
             state.deny ? React.createElement(Notice, { kind: 'warn', text: state.deny }) : null,
-            // 三枚指标：两类各自计数 + 生效中。第一枚的文案点明「全局」—— 页面上现在有两类
-            // 提示词，只说「个提示词」会让用户以为快捷那几条没被算进来。
-            React.createElement('div', { className: 'dsm-summary', style: { '--dsm-stat-cols': '3' } },
-              [['total', state.presets.length, t('agm.stat.total')], ['active', activeCount, t('agm.stat.active')],
-                ['quick', quick.prompts.length, t('quickprompt.stat')]].map(function (item) {
-                return React.createElement('div', { key: item[0], className: 'dsm-stat' },
-                  React.createElement('strong', null, item[1]), item[2])
-              })),
-            // 搜索框：统计条之后、列表之前（与 MCP / 技能 / 记忆页同一位置与样式）。
+            // 搜索框：页头之下、列表之前（与 MCP / 技能 / 记忆页同一位置与样式）。
             // 只放一个输入框、没有第二个筛选器，就不套 `dsm-source-filter`（宽度交给 CSS）。
-            React.createElement('div', { className: 'dsm-filters' },
+            // 列表工具条（REDESIGN §3.3，切片四）：搜索住 children；两类共用一颗搜索框，
+            // 全选（快捷组那颗）按 2026-10-01 裁定留在组头，batch 槽留空。
+            React.createElement(Toolbar, null,
               React.createElement('input', {
                 className: 'dsm-control dsm-search', value: query, 'aria-label': t('search'),
                 placeholder: t('agm.search.placeholder'),
@@ -1418,30 +1382,13 @@
                 })
               },
             }) : null,
+            // 本页的回收站（42-shared-ui.js）：两组 —— 提示词预设 + 快捷提示词，
+            // 各带标题与自己的批量条（2026-10-10「提示词的回收站要分成两部分」的裁定不变）。
             trash ? React.createElement(TrashModal, {
               t: t,
-              title: t('trash.title'),
-              // 两组一起列：回收站是"找回被删的东西"的地方，让用户先猜它在哪个域里再切弹窗，
-              // 等于把恢复这条路堵在自己手里。
-              groups: [
-                { title: t('trash.group.presets'), sub: t('trash.section.presets.sub'), entries: trash.presets || [] },
-                { title: t('trash.group.quick'), sub: t('trash.section.quick.sub'), entries: trash.quick || [] },
-              ],
-              // 上下两块各占一半、各自滚动、**每块自带一条**「已选 N 项 + 全选 + 永久删除 (N)」
-              // （用户 2026-10-10：「提示词的回收站也要像技能回收站一样分成两部分」）。
-              // 原先两块排在一条长列表里：35 条预设把 1 条快捷提示词压在滚不到底的下面，
-              // 而顶部那一颗全局「永久删除」跨两块删 —— 勾完之后看不出会删掉哪几个。
-              split: true,
-              locked: state.anyLocked === true,
-              loading: trash.loading,
-              error: trash.error,
-              busy: trashBusy,
-              onClose: function () { setTrash(null) },
-              onRestore: restorePreset,
-              onPurge: purgePreset,
-              // 批量删除 + 保留期改完后的重读（见 42-shared-ui.js 的 TrashModal / RetentionSelect）。
-              onPurgeMany: purgePresetMany,
-              onReload: function () { loadTrash(true) },
+              domain: 'prompts',
+              onClose: function () { setTrash(false) },
+              onReload: function () { refresh(true) },
             }) : null,
             // 编辑：id 与内容都可改（改 id = 目录改名，场景绑定由宿主一起改名）。
             editModal ? React.createElement(Modal, { title: t('agm.edit.title') + ' · ' + editModal.id, closeLabel: t('btn.close'), onClose: function () { setEditModal(null) } },
@@ -1462,15 +1409,20 @@
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', value: editModal.content, onChange: function (e) { setEditModal(Object.assign({}, editModal, { content: e.target.value })) } })),
               editModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, editModal.error) : null,
+              // 锁定态说明「为什么保存键是灰的」：编辑页在锁定期间能打开（用户 2026-10-12），
+              // 但写盘这一步被冻结闸挡住。
+              state.anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scenes.lock.blockedEdit')) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(editModal.nextId || '').trim(), onClick: doUpdate }, t('agm.btn.save')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || state.anyLocked === true || !String(editModal.nextId || '').trim(), onClick: doUpdate }, t('agm.btn.save')))) : null,
             // 新建：id + 描述 + **正文文本框**（用户直接写内容）。原先还有一格「或从现有预设复制」，
             // 用户 2026-09-30 要求删掉 —— 抄一份再改是编辑页的事，新建时只想直接写。
             // 弹窗高度跟着内容走（2026-10-10 拆掉 `dsm-modal-fixed` 定高）：当初定高是怕切类型时
             // 「从现有预设复制」那行出现/消失让框跳，那格删掉后内容不再随类型变化，定高失去
             // 理由；余下高度留在正文框和动作栏之间，成了一截空白（用户截图）。普通弹窗装不下
             // 自己滚，正文框静止在 dsm-textarea-lg 的下限上、只能往下拖（与新建人设同款手感）。
-            createModal ? React.createElement(Modal, { title: t('agm.btn.new'), closeLabel: t('btn.close'), onClose: function () { setCreateModal(null) } },
+            // 标题用 agm.new.title（「新增提示词」）而不是按钮那颗 agm.btn.new（「新增」）：
+            // 弹窗里已经看不到那颗按钮了，标题光写"新增"不知道在新增什么（用户 2026-10-12）。
+            createModal ? React.createElement(Modal, { title: t('agm.new.title'), closeLabel: t('btn.close'), onClose: function () { setCreateModal(null) } },
               kindPicker(createModal.kind, function (v) { setCreateModal(Object.assign({}, createModal, { kind: v, error: null })) }),
               React.createElement('div', { className: 'dsm-field' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.id')),
@@ -1490,7 +1442,7 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(createModal.id || '').trim(), onClick: function () { doCreate(createModal.id, createModal.content, createModal.description) } }, t('agm.btn.create')))) : null,
             // 三种确认共用一个弹窗：删除 / 取消应用 / 应用（`applyConfirm` 上的标记位区分）。
-            applyConfirm ? React.createElement(Modal, { title: applyConfirm.remove ? (t('agm.remove.title') + ' · ' + applyConfirm.id) : ((applyConfirm.unapply ? t('agm.unapply.title') : t('agm.applyModal.title')) + ' · ' + applyConfirm.id), closeLabel: t('btn.close'), onClose: function () { setApplyConfirm(null) } },
+            applyConfirm ? React.createElement(Modal, { className: 'dsm-modal-sm', title: applyConfirm.remove ? (t('agm.remove.title') + ' · ' + applyConfirm.id) : ((applyConfirm.unapply ? t('agm.unapply.title') : t('agm.applyModal.title')) + ' · ' + applyConfirm.id), closeLabel: t('btn.close'), onClose: function () { setApplyConfirm(null) } },
               applyConfirm.remove
                 ? React.createElement('div', null,
                     React.createElement('p', { className: 'dsm-help' }, t('agm.remove.title') + ' ' + applyConfirm.id + t('agm.remove.suffix')),
@@ -1514,7 +1466,8 @@
               busy: importBusy, result: importResult,
               // 类型选择放在弹窗顶部（`extra` 槽）：一次导入只进一类，选完再拖文件。
               extra: kindPicker(importKind, setImportKind),
-              requirements: [t('upload.requirement.prompt.1'), t('upload.requirement.prompt.2'), t('upload.requirement.prompt.3')],
+              requirement: t('upload.req.prompt'),
+              requirementTitle: [t('upload.requirement.prompt.1'), t('upload.requirement.prompt.2'), t('upload.requirement.prompt.3')].join('\n'),
               onClose: function () { setImportOpen(false); setImportResult(null) },
               onSubmit: function (entries, files) { doImportFiles(files) },
             }) : null,
@@ -1534,9 +1487,11 @@
                 React.createElement('label', { className: 'dsm-label' }, t('quickprompt.field.content')),
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', value: quickEdit.content, onChange: function (e) { setQuickEdit(Object.assign({}, quickEdit, { content: e.target.value })) } })),
               quickEdit.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, quickEdit.error) : null,
+              // 同预设编辑：锁定态能打开，保存键置灰并说明原因。
+              state.anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scenes.lock.blockedEdit')) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(quickEdit.nextId || '').trim(), onClick: doQuickUpdate }, t('agm.btn.save')))) : null,
-            quickConfirm ? React.createElement(Modal, { title: t('quickprompt.remove.title') + ' · ' + quickConfirm.id, closeLabel: t('btn.close'), onClose: function () { setQuickConfirm(null) } },
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || state.anyLocked === true || !String(quickEdit.nextId || '').trim(), onClick: doQuickUpdate }, t('agm.btn.save')))) : null,
+            quickConfirm ? React.createElement(Modal, { className: 'dsm-modal-sm', title: t('quickprompt.remove.title') + ' · ' + quickConfirm.id, closeLabel: t('btn.close'), onClose: function () { setQuickConfirm(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('quickprompt.remove.hint')),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: function () { setQuickConfirm(null) } }, t('btn.cancel')),
@@ -1549,6 +1504,8 @@
           var active = tabState[0], setActive = tabState[1]
           // 把切页签的能力登记给模块作用域：任何页面里的「填写令牌」按钮都走这里跳过来
           // （页签状态在本组件里，而那个按钮长在页面内部，注册表是唯一不跨作用域引用的通路）。
+          // 只有**面板内部**那几个调用点走它 —— 横幅那颗键改走自包含弹窗（见 40 片
+          // openTokenDialog），所以这里不再需要消费"寄存的页签请求"。
           React.useEffect(function () {
             navigateToTab = setActive
             return function () { if (navigateToTab === setActive) navigateToTab = null }

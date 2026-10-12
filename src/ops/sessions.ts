@@ -80,6 +80,28 @@ export interface SessionOpsDeps {
   serializeTurns(turns: ExportTurn[], format: 'markdown' | 'jsonl'): string
 }
 
+/**
+ * Linux 的桌面目录：按 XDG 用户目录规范从 `user-dirs.dirs` 里读 `XDG_DESKTOP_DIR`。
+ *
+ * 为什么需要它：中文 / 日文等本地化环境里，桌面目录的**真名**不是 `Desktop`，而是
+ * `桌面` / `デスクトップ` —— 这时 `join(homedir(), 'Desktop')` 探不到，我们会白白退回主目录。
+ * 配置文件里的值形如 `"$HOME/桌面"`（含 `$HOME` 变量与引号），这里做最小解析：
+ * 去引号、把 `$HOME` / 前导 `~` 换成真实主目录。
+ *
+ * 读不到 / 没有这一行 / 值不是绝对路径 → 返回 undefined，调用方继续试下一个候选。
+ * 纯只读，任何异常都吞掉（这只是"默认值填哪儿"的增强，不该影响导出本身）。
+ */
+async function xdgDesktopDir(): Promise<string | undefined> {
+  try {
+    const base = String(process.env.XDG_CONFIG_HOME || '').trim() || join(homedir(), '.config')
+    const text = await readFile(join(base, 'user-dirs.dirs'), 'utf8')
+    const m = /^\s*XDG_DESKTOP_DIR\s*=\s*"([^"]*)"/m.exec(text)
+    if (!m) return undefined
+    const raw = m[1].replace(/^\$HOME(?=[\\/]|$)/, homedir()).replace(/^~(?=[\\/]|$)/, homedir())
+    return raw && (raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)) ? raw : undefined
+  } catch { return undefined }
+}
+
 export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any) => Promise<any>> {
   return {
     // History（归档会话管理）ops。只读：history-list / history-retention-get；
@@ -159,14 +181,30 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         return { ok: true, items, groups }
       } catch (e) { return { ok: false, error: deps.message(e) } }
     },
-    // 导出默认目录：桌面（存在时）否则用户主目录。只读，不门控。
+    // 导入 / 导出的默认目录：桌面（存在时）否则用户主目录。只读，不门控。
+    //
+    // 名字里带 `history` 是历史原因，但它早就是**全插件共用的**默认 IO 目录：整机迁移导出
+    // / 快照位置 / 会话导出 / MCP JSON 导出 / 技能自定义来源目录都取这一份。之所以必须问宿主、
+    // 不能让客户端写死：桌面在哪取决于**跑宿主的那台机器 + 那个用户**——
+    //   Windows  C:\Users\<用户名>\Desktop
+    //   macOS    /Users/<用户名>/Desktop
+    //   Linux    /home/<用户名>/Desktop，且桌面目录**未必存在**（也可能是本地化名字，
+    //            例如中文环境下的 ~/桌面 —— 那种走 XDG 配置，见下）
+    // 全部用 `os.homedir()` 起算，换用户 / 换系统自动跟着走。
     'history-export-defaults': async () => {
       let dir = homedir()
-      try {
-        const desktop = join(homedir(), 'Desktop')
-        const st = await stat(desktop)
-        if (st.isDirectory()) dir = desktop
-      } catch { /* 桌面路径不可用 → 回退主目录 */ }
+      // Linux 的桌面目录名可能被本地化：先按 XDG 用户目录规范问一次，再退回惯用的 Desktop。
+      // 两条都探不到就用主目录 —— 主目录一定存在，且导出的只是子目录，不影响可用性。
+      const candidates: Array<string | undefined> = [join(homedir(), 'Desktop')]
+      if (process.platform === 'linux') {
+        candidates.unshift(await xdgDesktopDir())
+      }
+      for (const candidate of candidates) {
+        if (!candidate) continue
+        try {
+          if ((await stat(candidate)).isDirectory()) { dir = candidate; break }
+        } catch { /* 这个候选不可用 → 试下一个 */ }
+      }
       return { ok: true, defaultDir: dir }
     },
     // 列出目录的子目录，供客户端「选择文件夹」弹窗逐级浏览。dir 为空时返回根
@@ -317,6 +355,13 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         return { ok: false, error: '当前环境不支持重新登记工作区（registry 未实现 registerWorkspace）' }
       }
       const title = args && args.title ? String(args.title) : undefined
+      // 目录已被删除时提前拦下（用户 2026-10-12：工作区文件夹删掉后不该还能「重新登记」）。
+      // 宿主 registerWorkspace 内部的 realpath 本来就会拒绝，但报错文本是底层的；这里给
+      // 一句能直接读懂的提示。界面在 dirMissing 时已不再渲染该按钮，这条是防御性兜底。
+      try {
+        const st = await stat(path)
+        if (!st.isDirectory()) return { ok: false, error: '目录已不存在，无法重新登记：' + path }
+      } catch { return { ok: false, error: '目录已不存在，无法重新登记：' + path } }
       try {
         const workspace = await registry.registerWorkspace(path, title)
         return { ok: true, workspace }

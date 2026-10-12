@@ -164,6 +164,17 @@ export interface ManagerState {
   customRoots: CustomRoot[];
   preferredSkills: Record<string, string>;
   removedSources: string[];
+  /**
+   * 「永久删除」过的来源 key（回收站 → 目录 里那条记录的最终归宿）。
+   *
+   * 与 `removedSources` 的差别：那份只是"暂时不读取"，清掉它就回来了；这份是"从插件里
+   * 彻底消失"——来源列表里不再有它、回收站里也不再有它的记录。
+   *
+   * 为什么非要有这一份：`agents` / `codex` / `claude` 这几个来源**不住在 `customRoots` 里**，
+   * 它们的路径每次启动都由 `userRoots()` 按约定重新推导出来 —— 只把 key 从 `removedSources`
+   * 里删掉的话，下一轮它又原样回来了，「永久删除」就成了假按钮。
+   */
+  forgottenSources: string[];
 }
 
 /** 状态文件原始文档（外部数据，字段形状按读取方式标注，逐字段运行时校验）。 */
@@ -175,6 +186,7 @@ export interface ManagerStateDocument {
   customRoots?: unknown;
   preferredSkills?: Record<string, unknown>;
   removedSources?: unknown;
+  forgottenSources?: unknown;
 }
 
 /** 读状态文件的结果。 */

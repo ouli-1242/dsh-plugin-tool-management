@@ -16,6 +16,13 @@ export interface MemoriesOpsCtx {
   memoriesRoot: string
   scenesRoot: string
   maxBytes: number
+  /**
+   * 技能回收站根目录（`<hub>/trash/skills-trash`）。只有 `trash-preview` 用得到 ——
+   * 回收站「详情」要读的技能条目住在技能域那边，不在记忆域这三条路径下。
+   * 由 index.ts 用 `trashRootPath()` 喂进来（那条路径的唯一定义在 skills/skill-roots.ts，
+   * 这里不重算一遍，否则两处迟早分家）。
+   */
+  skillsTrashDir?: string
 
   // 读模型：快照、场景记忆段、提示词段
   snapshot(): Promise<Snapshot>

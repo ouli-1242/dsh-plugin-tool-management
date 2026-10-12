@@ -43,61 +43,10 @@
           var anyLocked = data.anyLocked === true
           // 场景内开关由档案定义：人设开关置灰（要改就去场景页的档案编辑器里改）。
           var sceneName = data.activeScene || null
-          // 回收站：删除人设 = 移入回收站（宿主侧 subagent-delete），这里列出/恢复/永久删除。
-          var ts = React.useState(null)
+          // 回收站：true = 打开本页那一个回收站（42-shared-ui.js 的 TrashModal）。
+          // 人设域的清单加载与恢复/永久删除都在组件内部完成，本页只在写操作后重读自己的数据。
+          var ts = React.useState(false)
           var trash = ts[0], setTrash = ts[1]
-          var tb = React.useState(false)
-          var trashBusy = tb[0], setTrashBusy = tb[1]
-          var flipRef = React.useRef(null)
-          useFlipReorder(flipRef)
-          function loadTrash(keepOpen) {
-            setTrash(Object.assign({ loading: true, error: null, entries: [] }, keepOpen ? trash || {} : {}))
-            apiCall('subagent-trash-list', {}).then(function (res) {
-              if (res && res.ok) setTrash({ loading: false, error: null, entries: res.trash || [] })
-              else setTrash({ loading: false, error: (res && res.error) || t('trash.loadFailed'), entries: [] })
-            }).catch(function (e) { setTrash({ loading: false, error: errMsg(e), entries: [] }) })
-          }
-          function restorePersona(item) {
-            setTrashBusy(true)
-            apiCall('subagent-trash-restore', { id: item.id }).then(function (res) {
-              setTrashBusy(false)
-              if (res && res.ok) { var sw = stateSyncWarn(t, res); setResult({ ok: !sw, warning: !!sw, text: t('trash.restored', { name: item.name }) + (sw ? ' ' + sw : '') }); refresh(true); loadTrash(true) }
-              else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
-            }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
-          }
-          function purgePersona(item) {
-            setTrashBusy(true)
-            apiCall('subagent-trash-delete', { id: item.id }).then(function (res) {
-              setTrashBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('trash.purged', { name: item.name }) }); loadTrash(true) }
-              else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
-            }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
-          }
-          /** 批量永久删除：逐条调单条 op，串行（理由见 42-shared-ui.js 的 TrashModal 注释）。 */
-          function purgePersonaMany(items) {
-            if (!items.length) return
-            setTrashBusy(true)
-            var done = 0, failed = 0, firstErr = null
-            var step = function (i) {
-              if (i >= items.length) {
-                setTrashBusy(false)
-                setResult({
-                  ok: failed === 0,
-                  text: failed === 0
-                    ? t('trash.purgeMany.result', { count: done })
-                    : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' }),
-                })
-                loadTrash(true)
-                return
-              }
-              apiCall('subagent-trash-delete', { id: items[i].id }).then(function (res) {
-                if (res && res.ok) done += 1
-                else { failed += 1; if (!firstErr) firstErr = (res && res.error) || t('mcp.msg.failed') }
-                step(i + 1)
-              }).catch(function (e) { failed += 1; if (!firstErr) firstErr = errMsg(e); step(i + 1) })
-            }
-            step(0)
-          }
           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
@@ -577,7 +526,7 @@
                         setModal(Object.assign({}, modal, { openMode: open ? null : id, modeQuery: '' }))
                       },
                     },
-                      React.createElement('span', { className: 'dsm-mode-caret', 'aria-hidden': 'true' }, rule ? (open ? '▾' : '▸') : ''),
+                      rule ? React.createElement(CaretIcon, { key: 'mode-caret', open: open, className: 'dsm-mode-caret' }) : null,
                       React.createElement('span', { className: 'dsm-mode-name' }, presetLabel(p)),
                       p.broken ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('compat.reach.broken')) : null,
                       React.createElement('span', { className: 'dsm-mode-sum ' + summary.cls }, summary.text)),
@@ -600,13 +549,12 @@
             return React.createElement('div', { className: 'dsm-legacy' },
               React.createElement('span', { className: 'dsm-adv-note' }, t('subagents.legacy.note', { allow: allow.length, deny: deny.length })),
               React.createElement('div', { className: 'dsm-combo-row' },
-                React.createElement('div', { className: 'dsm-select' },
-                  React.createElement('select', {
-                    className: 'dsm-control',
-                    value: target,
-                    disabled: busy || !presets.length,
-                    onChange: function (e) { setModal(Object.assign({}, modal, { legacyTarget: e.target.value })) },
-                  }, presets.map(function (p) { return React.createElement('option', { key: p.id, value: p.id }, presetLabel(p)) }))),
+                React.createElement(SourceSelect, {
+                  options: presets.map(function (p) { return { value: p.id, label: presetLabel(p) } }),
+                  value: target,
+                  disabled: busy || !presets.length,
+                  onChange: function (v) { setModal(Object.assign({}, modal, { legacyTarget: v })) },
+                }),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || !target || !presets.length, onClick: function () {
                   var rule = { mode: allow.length ? 'allow' : 'deny', names: (allow.length ? allow : deny).slice() }
                   setModal(Object.assign({}, modal, {
@@ -652,7 +600,7 @@
               output: modal.form.output || '',
             }).then(function (res) {
               setBusy(false)
-              if (res && res.ok) { var sw = stateSyncWarn(t, res); setModal(null); setResult({ ok: !sw, warning: !!sw, text: t('subagents.result.saved', { name: modal.form.name }) + (sw ? ' ' + sw : '') }); refresh(true) }
+              if (res && res.ok) { var sw = stateSyncWarn(t, res); setModal(null); setResult({ ok: !sw, warning: !!sw, text: t('done.saved', { name: modal.form.name }) + (sw ? ' ' + sw : '') }); refresh(true) }
               else setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, { error: translateError(t, res) }) }))
             }).catch(function (e) { setBusy(false); setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, { error: errMsg(e) }) })) })
           }
@@ -660,7 +608,7 @@
             setBusy(true)
             apiCall('subagent-delete', { name: name }).then(function (res) {
               setBusy(false); setModal(null)
-              if (res && res.ok) { var sw = stateSyncWarn(t, res); setResult({ ok: !sw, warning: !!sw, text: t('subagents.result.deleted', { name: name }) + (sw ? ' ' + sw : '') }); refresh(true) }
+              if (res && res.ok) { var sw = stateSyncWarn(t, res); setResult({ ok: !sw, warning: !!sw, text: t('result.trashed', { name: name }) + (sw ? ' ' + sw : '') }); refresh(true) }
               else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
@@ -682,42 +630,48 @@
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
           // 过滤只跟数据与（防抖后的）搜索词有关：每次渲染重扫一整份列表没有必要。
-          // FLIP 的 key 仍是 `p.name`（过滤只改变"列表里有哪些"，不改变身份）。
+          // 行的 key 仍是 `p.name`（过滤只改变"列表里有哪些"，不改变身份）。
           var visibleSubagents = React.useMemo(function () {
             return data.subagents.filter(function (p) { return matchPersonaQuery(p, dq) })
           }, [data.subagents, dq])
           // 「启用的排前面」（用户要求）：与过滤分开记忆 —— 只跟过滤结果有关，弹窗 / 结果提示条
-          // 之类的状态变化不再重跑分区。FLIP 的 data-flip-on 仍来自 p.enabled，未动。
+          // 之类的状态变化不再重跑分区。
+          // 定序表：开关当场不重排，重新进这一页（或点刷新）才重新置顶（rankedFirst / resetRank）。
+          var personaRank = useRank()
           var orderedSubagents = React.useMemo(function () {
-            return enabledFirst(visibleSubagents, function (p) { return p.enabled !== false; })
+            return rankedFirst(personaRank, function (p) { return p.name }, visibleSubagents, function (p) { return p.enabled !== false; })
           }, [visibleSubagents])
           var limitedCount = React.useMemo(function () {
             return data.subagents.filter(function (p) { return (p.tools && p.tools.length) || (p.toolsDeny && p.toolsDeny.length) || (p.toolsByPreset && Object.keys(p.toolsByPreset).length) }).length
           }, [data.subagents])
+          // 「启用 / 总数」的分子（`enabled !== false` 是这一页判定开关亮着的口径，与列表行一致）。
+          var enabledCount = React.useMemo(function () {
+            return data.subagents.filter(function (p) { return p.enabled !== false }).length
+          }, [data.subagents])
           return React.createElement('section', { className: 'dsm-section' },
-            React.createElement('div', { className: 'dsm-head' },
-              React.createElement('div', { className: 'dsm-title-block' },
-                React.createElement('div', { className: 'dsm-title-row' },
-                  React.createElement('h2', { className: 'dsm-title' }, t('subagents.title'))),
-                React.createElement('p', { className: 'dsm-desc' }, t('subagents.desc'))),
-              React.createElement('div', { className: 'dsm-actions' },
-                refreshButton(t, busy || data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { openEditor(null) } }, t('subagents.new')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setModal({ type: 'import' }) } }, t('subagents.import')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !data.subagents.length, onClick: function () { setResult(null); setModal({ type: 'export' }) } }, t('export.subagents')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { loadTrash(false) } }, t('trash.btn.open')))),
+            // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 回收站；统计内联。
+            React.createElement(PageHead, {
+              title: t('subagents.title'),
+              desc: t('subagents.desc'),
+              stats: [
+                // 两格都带分母：启用 / 总数（"有几个真在跑"）、工具受限 / 总数
+                //（"有几个动了工具白名单"）。此前只有裸数字，答不了"占比多少"。
+                [enabledCount + '/' + data.subagents.length, t('subagents.stat.total')],
+                [limitedCount + '/' + data.subagents.length, t('subagents.stat.limited')],
+              ],
+              actions: [
+                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: busy || anyLocked, onClick: function () { openEditor(null) } }, t('subagents.new')),
+                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setModal({ type: 'import' }) } }, t('subagents.import')),
+                React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !data.subagents.length, onClick: function () { setResult(null); setModal({ type: 'export' }) } }, t('export.subagents')),
+                React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setTrash(true) } }, t('trash.btn.open')),
+              ],
+            }),
             anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             // 锁定期间不显示场景那条长句：开关全是灰的，"改动会同步写进档案"没有落点，
             // 两条并排还会互相矛盾（用户 2026-09-19）。
             (anyLocked !== true && sceneName) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
-            React.createElement('div', { className: 'dsm-summary', style: { '--dsm-stat-cols': '2' } },
-              [['total', data.subagents.length, t('subagents.stat.total')],
-                ['limited', limitedCount, t('subagents.stat.limited')]].map(function (item) {
-                return React.createElement('div', { key: item[0], className: 'dsm-stat' },
-                  React.createElement('strong', null, item[1]), item[2])
-              })),
-            // 搜索框：统计条之后（与 MCP / 技能 / 记忆 / 提示词页同一位置与样式）。
-            React.createElement('div', { className: 'dsm-filters' },
+            // 列表工具条（REDESIGN §3.3，切片四）：搜索住 children；本页无批量动作。
+            React.createElement(Toolbar, null,
               React.createElement('input', {
                 className: 'dsm-control dsm-search', value: query, 'aria-label': t('search'),
                 placeholder: t('subagents.search.placeholder'),
@@ -735,26 +689,35 @@
                 reason: String(((data.toolFailures || [])[0] || {}).reason || ''),
               }),
             }) : null,
-            data.loading && !data.subagents.length ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
-              : !data.subagents.length ? React.createElement('div', { className: 'dsm-empty' }, t('subagents.empty'))
-                : !visibleSubagents.length ? React.createElement('div', { className: 'dsm-empty' }, t('subagents.empty.search'))
-                  : React.createElement('div', { className: 'dsm-sources', ref: flipRef }, orderedSubagents.map(function (p) {
-                return React.createElement('div', { key: p.name, className: 'dsm-source', 'data-flip-key': p.name, 'data-flip-on': p.enabled !== false ? '1' : '0' },
-                  React.createElement('div', { className: 'dsm-source-head' },
-                    React.createElement('div', { className: 'dsm-source-head-main dsm-persona-main' },
-                      React.createElement('div', { className: 'dsm-persona-name-row' },
-                        React.createElement('span', { className: 'dsm-source-title', title: p.name }, p.name),
-                        // 两个状态都给胶囊：以前只在停用时挂标签，启用的一行什么都不留，
-                        // 用户没法一眼看出「没标签 = 启用」。
-                        p.enabled === false
-                          ? React.createElement(StatusTag, { tone: 'muted', text: t('subagents.disabled'), title: t('subagents.disabled.hint') })
-                          : React.createElement(StatusTag, { tone: 'ok', text: t('subagents.enabled') })),
-                      // 没有描述就不渲染这一行：空 div 仍占一行行高，行会变成一条无内容的空隙。
-                      p.description ? React.createElement('div', { className: 'dsm-persona-desc', title: p.description }, p.description) : null),
-                    React.createElement('div', { className: 'dsm-source-actions' },
-                      React.createElement(Switch, { on: p.enabled !== false, disabled: busy || anyLocked, label: t('subagents.toggle') + ' ' + p.name, onClick: function () { togglePersona(p) } }),
-                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || anyLocked, onClick: function () { openEditor(p.name) } }, t('memory.edit')),
-                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || anyLocked, onClick: function () { setModal({ type: 'delete', name: p.name }) } }, t('memory.delete')))))
+            // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试）/ 空 /
+            // 无结果（+ 清除筛选）/ 有数据。data.error 横幅照旧 —— 它同时承担有缓存数据时的错误。
+            data.loading && !data.subagents.length ? React.createElement(ListStates, { key: 'loading', t: t, state: 'loading' })
+              : data.error && !data.subagents.length ? React.createElement(ListStates, { key: 'errstate', t: t, state: 'error', text: String(data.error), onRetry: function () { refresh() } })
+                : !data.subagents.length ? React.createElement(ListStates, { key: 'empty', t: t, state: 'empty', text: t('subagents.empty') })
+                  : !visibleSubagents.length ? React.createElement(ListStates, { key: 'search', t: t, state: 'search', text: t('subagents.empty.search'), onClearFilter: function () { setQuery('') } })
+                    // 去卡片（REDESIGN §3.4）：一行不再是各自描边的卡 —— 整份列表装进一个
+                    // .dsm-list 容器，行间用 1px 分隔线（切片四）。
+                    : React.createElement('div', { className: 'dsm-list' }, orderedSubagents.map(function (p) {
+                return React.createElement(ListRow, {
+                  key: p.name,
+                  // 行首状态点（REDESIGN §3.4 状态点前移，切片三移交）：以前点跟在名字后面。
+                  dots: [React.createElement(StatusDot, {
+                    key: 'dot',
+                    tone: p.enabled === false ? 'idle' : 'ok',
+                    title: p.enabled === false ? t('subagents.disabled') + '：' + t('subagents.disabled.hint') : t('subagents.enabled'),
+                  })],
+                  name: p.name,
+                  // 没有描述就不渲染行 2：空行会撑出一截无内容的空隙。
+                  meta: p.description || null,
+                  side: React.createElement(Switch, { on: p.enabled !== false, disabled: busy || anyLocked, label: t('subagents.toggle') + ' ' + p.name, onClick: function () { togglePersona(p) } }),
+                  actions: [
+                    // 「编辑」在锁定态照常可点（用户 2026-10-12：「子智能体、提示词、记忆可以打开
+                    // 编辑页面，但是不能保存」）：只读地看一眼人设不该被锁挡住，真正写盘的
+                    // 「保存」才置灰（见下面编辑弹窗）。删除 / 开关仍然锁着。
+                    React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditor(p.name) } }, t('memory.edit')),
+                    React.createElement('button', { key: 'del', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || anyLocked, onClick: function () { setModal({ type: 'delete', name: p.name }) } }, t('memory.delete')),
+                  ],
+                })
               })),
             modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'sedit', wide: true, className: 'dsm-modal-compact', title: modal.mode === 'create' ? t('subagents.create') : t('subagents.edit') + ' · ' + modal.form.name, closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('div', { className: 'dsm-form' },
@@ -821,55 +784,41 @@
                         React.createElement('div', { className: 'dsm-field' },
                           React.createElement('span', { className: 'dsm-label' }, t('subagents.field.provider')),
                           React.createElement('div', { className: 'dsm-combo-row' },
-                            React.createElement('div', { className: 'dsm-select' },
-                              React.createElement('select', {
-                                className: 'dsm-control',
-                                value: providerSelectValue(),
-                                disabled: busy || cand.loading,
-                                onChange: function (e) {
-                                  var v = e.target.value
-                                  setForm({ provider: v })
-                                  loadEfforts(v, modal.form.model || '')
-                                },
+                            React.createElement(SourceSelect, {
+                              options: [{ value: '', label: t('subagents.provider.inherit') }]
+                                .concat((cand.providers || []).map(function (p) { return { value: p.id, label: providerLabel(p) } }))
+                                .concat(offCatalogProvider()
+                                  ? [{ value: offCatalogProvider(), label: catalogReady() ? t('subagents.field.offCatalog', { id: offCatalogProvider() }) : offCatalogProvider() }]
+                                  : []),
+                              value: providerSelectValue(),
+                              disabled: busy || cand.loading,
+                              onChange: function (v) {
+                                setForm({ provider: v })
+                                loadEfforts(v, modal.form.model || '')
                               },
-                                React.createElement('option', { value: '' }, t('subagents.provider.inherit')),
-                                (cand.providers || []).map(function (p) {
-                                  return React.createElement('option', { key: p.id, value: p.id }, providerLabel(p))
-                                }),
-                                // 目录外的旧值：列一条只读选项，值看得见、要改只能重选目录里的。
-                                offCatalogProvider()
-                                  ? React.createElement('option', { value: offCatalogProvider() },
-                                      catalogReady() ? t('subagents.field.offCatalog', { id: offCatalogProvider() }) : offCatalogProvider())
-                                  : null)))),
+                            }))),
                         // 模型：宿主 LLM 目录里的 (provider, model) 对，只从目录里选。
                         React.createElement('div', { className: 'dsm-field' },
                           React.createElement('span', { className: 'dsm-label' }, t('subagents.field.model')),
                           React.createElement('div', { className: 'dsm-combo-row' },
-                            React.createElement('div', { className: 'dsm-select' },
-                              React.createElement('select', {
-                                className: 'dsm-control',
-                                value: modelSelectValue(),
-                                disabled: busy || cand.loading,
-                                onChange: function (e) {
-                                  var v = e.target.value
-                                  if (v === '') { setForm({ provider: '', model: '' }); loadEfforts('', '') }
-                                  else {
-                                    var parts = v.split('\u0000')
-                                    setForm({ provider: parts[0], model: parts[1] })
-                                    // 档位跟模型走：换模型必须重拉（缓存命中时是同步的，不会闪）。
-                                    loadEfforts(parts[0], parts[1])
-                                  }
-                                },
+                            React.createElement(SourceSelect, {
+                              options: [{ value: '', label: t('subagents.model.inherit') }]
+                                .concat(modelOptions().map(function (m) { return { value: m.provider + '\u0000' + m.id, label: modelOptionLabel(m) } }))
+                                .concat(offCatalogModel()
+                                  ? [{ value: offCatalogModel(), label: catalogReady() ? t('subagents.field.offCatalog', { id: modal.form.model }) : modal.form.model }]
+                                  : []),
+                              value: modelSelectValue(),
+                              disabled: busy || cand.loading,
+                              onChange: function (v) {
+                                if (v === '') { setForm({ provider: '', model: '' }); loadEfforts('', '') }
+                                else {
+                                  var parts = v.split('\u0000')
+                                  setForm({ provider: parts[0], model: parts[1] })
+                                  // 档位跟模型走：换模型必须重拉（缓存命中时是同步的，不会闪）。
+                                  loadEfforts(parts[0], parts[1])
+                                }
                               },
-                                React.createElement('option', { value: '' }, t('subagents.model.inherit')),
-                                modelOptions().map(function (m) {
-                                  return React.createElement('option', { key: m.provider + '/' + m.id, value: m.provider + '\u0000' + m.id }, modelOptionLabel(m))
-                                }),
-                                // 目录外的旧值：同来源那条，列一条只读选项。
-                                offCatalogModel()
-                                  ? React.createElement('option', { value: offCatalogModel() },
-                                      catalogReady() ? t('subagents.field.offCatalog', { id: modal.form.model }) : modal.form.model)
-                                  : null))),
+                            })),
                           // 目录还在读时给一行状态；读完了不占行 —— 这里原来放的是"留空继承主会话"
                           // 那句静态说明，已随 0.19.0 重排移出表单。
                           cand.loading ? React.createElement('p', { className: 'dsm-help' }, t('memory.loading')) : null)),
@@ -877,17 +826,13 @@
                       // 单独占左半列（`.dsm-adv-half`），与上一行的列边界对齐。
                       React.createElement('div', { className: 'dsm-field dsm-adv-half' },
                         React.createElement('span', { className: 'dsm-label' }, t('subagents.field.effort')),
-                        React.createElement('div', { className: 'dsm-select' },
-                          React.createElement('select', {
-                            className: 'dsm-control',
-                            value: String(modal.form.reasoningEffort || ''),
-                            disabled: busy || eff.loading || !modal.form.model,
-                            onChange: function (e) { setEffNotice(null); setForm({ reasoningEffort: e.target.value }) },
-                          },
-                            React.createElement('option', { value: '', title: defaultEffortTitle() }, t('subagents.effort.default')),
-                            currentEfforts().map(function (x) {
-                              return React.createElement('option', { key: x.id, value: x.id, title: x.description || undefined }, x.name)
-                            }))),
+                        React.createElement(SourceSelect, {
+                          options: [{ value: '', label: t('subagents.effort.default'), title: defaultEffortTitle() }]
+                            .concat(currentEfforts().map(function (x) { return { value: x.id, label: x.name, title: x.description || undefined } })),
+                          value: String(modal.form.reasoningEffort || ''),
+                          disabled: busy || eff.loading || !modal.form.model,
+                          onChange: function (v) { setEffNotice(null); setForm({ reasoningEffort: v }) },
+                        }),
                         // 状态行只在"这一格为什么用不了 / 没有档位"的四种情况下出现；有档位可选时
                         // 这一行不存在 —— 原来这里常驻的是"当前可选择多种思考强度"那句同义反复。
                         !modal.form.model || eff.loading || eff.error || !currentEfforts().length
@@ -912,28 +857,32 @@
                       // 也不再向官方传 maxDepth。这个字段只决定常驻目录出现在哪些深度的会话里。
                       React.createElement('label', { className: 'dsm-field dsm-adv-half' },
                         React.createElement('span', { className: 'dsm-label' }, t('subagents.field.catalogDepth')),
-                        React.createElement('div', { className: 'dsm-select' },
-                          React.createElement('select', {
-                            className: 'dsm-control',
-                            value: String(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
-                            disabled: busy,
-                            onChange: function (e) { setForm({ catalogDepth: Number(e.target.value) }) },
-                          }, [1, 2, 3, CATALOG_DEPTH_UNLIMITED].map(function (n) {
+                        React.createElement(SourceSelect, {
+                          options: [1, 2, 3, CATALOG_DEPTH_UNLIMITED].map(function (n) {
                             // 选项文字不带序号：前面再加一个「2 ·」是同一件事说两遍（用户 2026-09-17
                             // 指出）。下拉的 value 仍是数字，存的还是 catalogDepth 本身。
-                            return React.createElement('option', { key: n, value: String(n) }, catalogDepthLabel(n))
-                          })))),
+                            return { value: String(n), label: catalogDepthLabel(n) }
+                          }),
+                          value: String(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
+                          disabled: busy,
+                          onChange: function (v) { setForm({ catalogDepth: Number(v) }) },
+                        })),
                       // 允许追问（frontmatter `continuable: true`）：这条通道的**产出是异步的** ——
                       // 委派只回执一个 agent id，子代理在后台跑、完成后自己把结果发回来，
                       // 之后可以用宿主自带的 `send_message` 追问、`interrupt_agent` 中止。
                       // 默认关：它占用宿主"可继续子代理"的名额（`maxActiveSubagents`，默认 8），
                       // 且要求宿主加载了持久化与 session query 两个服务。
                       // 机制与代价的完整说明记在 CHANGELOG / README，不进表单（0.19.0 重排）。
-                      React.createElement('label', { className: 'dsm-pick' },
-                        React.createElement('input', { type: 'checkbox', checked: modal.form.continuable === true, disabled: busy, onChange: function (e) { setForm({ continuable: e.target.checked === true }) } }),
-                        React.createElement('span', { className: 'dsm-pick-main' },
-                          React.createElement('span', { className: 'dsm-pick-name' }, t('subagents.field.continuable')),
-                          React.createElement('span', { className: 'dsm-pick-desc' }, t('subagents.field.continuable.short'))))),
+                      // 切片五：开关行换 SettingsRow + Switch（REDESIGN §5.2），原生勾选框退场。
+                      React.createElement(SettingsRow, {
+                        name: t('subagents.field.continuable'),
+                        desc: t('subagents.field.continuable.short'),
+                        control: React.createElement(Switch, {
+                          on: modal.form.continuable === true, disabled: busy,
+                          label: t('subagents.field.continuable'),
+                          onClick: function () { setForm({ continuable: !(modal.form.continuable === true) }) },
+                        }),
+                      })),
                     // ── 工具限制：按 Agent 预设一行一个模式（默认全折叠、全部未启动，白/黑互斥）。
                     // 旧格式的全局名单（老文件 / 别处导入）在这里只读呈现，点「转换」才搬进某个模式。
                     React.createElement('div', { className: 'dsm-adv-group' },
@@ -947,13 +896,16 @@
                     cand.error ? React.createElement('div', { className: 'dsm-feedback dsm-warning' }, String(cand.error)) : null)
                     : null),
                 modal.form.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(modal.form.error)) : null),
+              // 锁定态说明「为什么保存键是灰的」：编辑页在锁定期间能打开（用户 2026-10-12），
+              // 但写盘这一步被冻结闸挡住 —— 只说结果不说原因，用户会以为界面坏了。
+              anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scenes.lock.blockedEdit')) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || (modal.mode === 'create' && !String(modal.form.name || '').trim()) || !String(modal.form.body || '').trim(), onClick: submitEditor }, t('memory.btn.save')))) : null,
-            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'sdel2', title: t('subagents.delete.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || anyLocked === true || (modal.mode === 'create' && !String(modal.form.name || '').trim()) || !String(modal.form.body || '').trim(), onClick: submitEditor }, t('memory.btn.save')))) : null,
+            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'sdel2', className: 'dsm-modal-sm', title: t('subagents.delete.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('subagents.delete.desc', { name: modal.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.name) } }, t('memory.btn.delete.confirm')))) : null,
-            modal && modal.type === 'import' ? React.createElement(ImportModal, { key: 'simp', t: t, title: t('subagents.import.title'), busy: busy, requirements: [t('upload.requirement.persona.1'), t('upload.requirement.persona.2'), t('upload.requirement.persona.3')], onClose: function () { setModal(null) }, onSubmit: submitImport }) : null,
+            modal && modal.type === 'import' ? React.createElement(ImportModal, { key: 'simp', t: t, title: t('subagents.import.title'), busy: busy, requirement: t('upload.req.mdzip'), requirementTitle: [t('upload.requirement.persona.1'), t('upload.requirement.persona.2'), t('upload.requirement.persona.3')].join('\n'), onClose: function () { setModal(null) }, onSubmit: submitImport }) : null,
             modal && modal.type === 'export' ? React.createElement(ExportModal, {
               key: 'export', t: t, title: t('export.subagents'),
               items: data.subagents.map(function (p) { return { key: p.name, name: p.name, desc: p.description || '' } }),
@@ -968,21 +920,12 @@
                 }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) });
               },
             }) : null,
+            // 本页的回收站（42-shared-ui.js）：人设域的恢复/永久删除在组件内部完成。
             trash ? React.createElement(TrashModal, {
               t: t,
-              title: t('trash.title'),
-              groupTitle: t('trash.group.agents'),
-              groupSub: t('trash.section.agents.sub'),
-              locked: anyLocked,
-              entries: trash.entries,
-              loading: trash.loading,
-              error: trash.error,
-              busy: trashBusy,
-              onClose: function () { setTrash(null) },
-              onRestore: restorePersona,
-              onPurge: purgePersona,
-              onPurgeMany: purgePersonaMany,
-              onReload: function () { loadTrash(true) },
+              domain: 'agents',
+              onClose: function () { setTrash(false) },
+              onReload: function () { refresh(true) },
             }) : null)
         }
 

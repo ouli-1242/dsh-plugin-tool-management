@@ -88,12 +88,6 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 会停在启用态 —— 是写不是读。（0.6.0 / 0.7.0 各有漏列前科，见文件头。）
   'mcpm-tools-refresh': { write: true },
   'mcpm-tools': { readonly: true },
-  // 配置体检：只读补丁文件 + 一次 PATH 查询（`where`/`which`，不执行配置里的命令）。
-  // 回的是检查项 id + 少量**打码后**的字段值（URL 查询串走 `maskUrlQuery`，与 `mcpm-list`
-  // 同口径；`command` 明文，理由同 `mcpm-list`：命令名不是凭据，`args` 两边都不回）。
-  // 与 `mcpm-list` 同档，不带令牌 —— 0.16.6 之前这里回的是 URL 原文，等于让免令牌的请求
-  // 拿到 `?api_key=…`，绕过了 `mcpm-reveal` 那道防线（审查 P0-5，0.17.0 修）。
-  'mcpm-inspect': { readonly: true },
 
   // ── 技能域（22，含内联的 skill-open）───────────────────────────────────────
   'skill-state': { annotatesLock: true },
@@ -120,6 +114,9 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'skill-trash-delete': { serviceWrite: true, frozen: true },
   'skill-custom-add': { serviceWrite: true, frozen: true },
   'skill-custom-remove': { serviceWrite: true, frozen: true },
+  // 永久删除一条**按约定发现**的来源记录（agents / codex / claude）：只写本地状态里的
+  // `forgottenSources`，磁盘源文件一个字节都不动。与 `skill-custom-remove` 同权。
+  'skill-source-forget': { serviceWrite: true, frozen: true },
   // 打开系统编辑器改文件：不改宿主状态，但它是"界面按钮"性质的写入口，按写门禁。
   'skill-open': { write: true },
 
@@ -129,6 +126,9 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'rules-budget': { readonly: true },
   'rules-diagnose': { readonly: true },
   'rules-trash-list': { readonly: true },
+  // 回收站「详情」：跨域只读（五类回收站共用一条，域由 args.domain 区分）。只读 → 不冻，
+  // 锁定的场景里照样能看一眼"删掉的是什么"（看不是改，与「编辑页可打开」同一条口径）。
+  'trash-preview': { readonly: true },
   'rules-create': { serviceWrite: true, frozen: true },
   'rules-update': { serviceWrite: true, frozen: true },
   'rules-remove': { serviceWrite: true, frozen: true },

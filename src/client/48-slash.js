@@ -666,6 +666,14 @@
               return Promise.resolve(item.run(next)).then(function (res) {
                 if (!res || res.ok === false) {
                   state.unmark(touched)
+                  // 撤掉乐观覆盖之后**必须再让菜单重取一次候选**：覆盖表只是"状态"，而这一屏
+                  // 是上一次取候选时按覆盖表渲染出来的快照 —— 不重取的话那个勾就留在屏幕上，
+                  // 直到用户关掉再打开菜单才自己消失。场景锁定时最明显：服务端一律拒绝写，
+                  // 面板却先把勾画上了，用户看到的是"开了、但其实没开"（2026-10-12 用户实测
+                  // 「虽然不会真的开启，但第一次刷新会显示勾选，重新进入其实是没勾选的」）。
+                  // 重取读到的是 `entries` 里那份**改动前**的缓存（失败路径不 flush），
+                  // 覆盖表又已经空了 ⇒ 画出来的正好是真实状态。
+                  refreshAfterWrite(sessionId)
                   showPluginToast(res && res.error ? translateError(t, res) : t('slash.err.failed'), 'err')
                   return
                 }

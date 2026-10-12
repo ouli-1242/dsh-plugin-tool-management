@@ -24,6 +24,9 @@
           // 操作结果提示（成功/警告一句话），与 MCP 等页共用 Notice 组件。
           var noticeState = React.useState(null)
           var notice = noticeState[0], setNotice = noticeState[1]
+          // （这里曾经有一颗「回收站」：会话本域没有回收站类目，点开的是六类共用的全局视图。
+          //  2026-10-12 裁定「回收站一个功能页就是一个」后删掉 —— 这一页的「归档」列表本身就是
+          //  会话的回收站（archive / restore 一对 op），不需要第六个入口。）
 
           function refresh(silent) {
             // 手动刷新（含首次加载）要把按钮切到「刷新中…」——点完毫无反馈等于没点。
@@ -188,7 +191,10 @@
           }
           // ---------- 导出对话：弹窗内选范围/工作区 → 勾选会话 → 写入指定目录 ----------
           function openExportPicker() {
-            setExp({ busy: false, error: null, result: null, outDir: '', format: 'markdown', detail: 'simple', wsFilter: '', archFilter: 'all', items: [], loading: true, selectedIds: new Set() })
+            // 导出目录初值取共享的 defaultIoDir()（20 片）：它是 apply 启动时就问过宿主、
+            // 缓存在本地的那份（桌面 → 主目录，跨平台跨用户），同步取用、不用在这里等一次往返
+            // —— 弹窗一打开输入框里就有值，不是先空着再补。
+            setExp({ busy: false, error: null, result: null, outDir: defaultIoDir(), format: 'markdown', detail: 'simple', wsFilter: '', archFilter: 'all', items: [], loading: true, selectedIds: new Set() })
             // 拉取全部持久化会话（含未归档/冷会话），供选择导出。
             apiCall('history-sessions', {}).then(function (res) {
               setExp(function (prev) {
@@ -202,21 +208,11 @@
             }).catch(function () {
               setExp(function (prev) { return prev ? Object.assign({}, prev, { loading: false, error: t('hist.err.sessions') }) : prev })
             })
-            // 拉取默认导出目录（桌面），仅当用户尚未输入时填充。
-            apiCall('history-export-defaults', {}).then(function (res) {
-              setExp(function (prev) {
-                if (!prev || prev.outDir) return prev
-                if (res && res.ok && typeof res.defaultDir === 'string' && res.defaultDir) {
-                  return Object.assign({}, prev, { outDir: res.defaultDir })
-                }
-                return prev
-              })
-            }).catch(function () { /* 默认导出目录是可选增强：拿不到就保持空，主列表的加载/错误另有通道 */ })
           }
           // 弹出目录选择器：选中后把导出目录回填到输入框。
           function openExportDir() {
             if (exp.busy) return
-            setExp(Object.assign({}, exp, { pickingDir: true }))
+            requestHostDirectory(function (path) { setExp(Object.assign({}, exp, { outDir: path })) }, function () { setExp(Object.assign({}, exp, { pickingDir: true })) })
           }
           function toggleExportSelect(id) {
             setExp(function (prev) {
@@ -339,14 +335,21 @@
           }
 
           function renderRow(it) {
-            return React.createElement('div', { className: 'dsm-hist-row', key: it.sessionId },
-              React.createElement('input', { type: 'checkbox', className: 'dsm-hist-check', checked: selected.has(it.sessionId), onChange: function () { toggleSelect(it.sessionId) } }),
-              React.createElement('div', { className: 'dsm-hist-main' },
-                React.createElement('div', { className: 'dsm-hist-title' }, it.title || ('Session ' + shortId(it.sessionId))),
-                it.cwd ? React.createElement('div', { className: 'dsm-hist-cwd', title: it.cwd }, it.cwd) : null),
-              React.createElement('div', { className: 'dsm-hist-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { doUnarchive(it.sessionId) } }, t('hist.btn.restore')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'delete', sessionId: it.sessionId, title: it.title || ('Session ' + shortId(it.sessionId)) }) } }, t('hist.btn.purge'))))
+            // 列表行两行制（REDESIGN §3.4，切片四）：行 1 标题，行 2 目录（截断 + title）；
+            // 右侧 恢复 / 删除 常驻 quiet 24px，删除 quiet-danger。
+            // 行首勾选是自绘框 RowCheck（REDESIGN §5.1，切片五换装）—— 行主点击留给
+            // 恢复/删除等动作，勾选只认框本身；框内 stopPropagation，不会误开行。
+            return React.createElement(ListRow, {
+              key: it.sessionId,
+              leading: React.createElement(RowCheck, { checked: selected.has(it.sessionId), label: t('hist.select'), onChange: function () { toggleSelect(it.sessionId) } }),
+              name: it.title || ('Session ' + shortId(it.sessionId)),
+              meta: it.cwd || null,
+              metaTitle: it.cwd || undefined,
+              actions: [
+                React.createElement('button', { key: 'restore', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { doUnarchive(it.sessionId) } }, t('hist.btn.restore')),
+                React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'delete', sessionId: it.sessionId, title: it.title || ('Session ' + shortId(it.sessionId)) }) } }, t('hist.btn.purge')),
+              ],
+            })
           }
 
           // 分组卡片：dsm-source 卡片 + 可折叠表头（与 MCP / Skills 页一致的源卡片语言）。
@@ -365,45 +368,68 @@
             var detached = g.kind === 'detached'
             return React.createElement('div', { className: 'dsm-source', key: 'g:' + g.key },
               React.createElement('div', { className: 'dsm-source-head dsm-hist-group-head' },
-                React.createElement('input', { type: 'checkbox', className: 'dsm-hist-group-check', checked: allChecked, onChange: function () { toggleGroup(groupIds) }, 'aria-label': t('hist.selectGroup', { title: g.title }) }),
+                React.createElement(RowCheck, { checked: allChecked, label: t('hist.selectGroup', { title: g.title }), onChange: function () { toggleGroup(groupIds) } }),
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroupCollapse(g.key) } },
                   React.createElement('span', { className: 'dsm-source-title dsm-hist-group-title', title: g.title }, g.title),
                   React.createElement('span', { className: 'dsm-count' }, t('hist.group.count', { count: g.items.length }))),
-                detached ? React.createElement('div', { className: 'dsm-hist-group-extra' },
-                  React.createElement('span', { className: 'dsm-tag', title: t('hist.group.removed.hint') },
-                    t('hist.group.removed')),
-                  g.canRegister ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, title: t('hist.btn.registerWs.hint'), onClick: function () { setModal({ type: 'register', path: g.path, title: g.title }) } }, t('hist.btn.registerWs')) : null,
-                  g.dirMissing ? React.createElement('span', { className: 'dsm-hist-dir-missing', title: t('hist.group.dirMissing.hint') }, '⚠ ' + t('hist.group.dirMissing')) : null) : null,
+                // 目录已被删除（dirMissing）时：既不给「重新登记」入口，也不再并列「已移除」标签 ——
+                // 只留一枚醒目告警，明确告诉用户这个工作区的磁盘文件夹已经不存在了
+                // （用户 2026-10-12：「如果工作区已经被删除应该不能恢复……要怎么及时知道这个工作区
+                // 实际文件夹已经被删除了」）。宿主 registerWorkspace 的 realpath 本来就会拒绝
+                // 不存在的目录，这里把入口提前收掉，避免点了才报错。
+                (detached || g.dirMissing) ? React.createElement('div', { className: 'dsm-hist-group-extra' },
+                  g.dirMissing
+                    // 「原目录不存在」：红色描边标签（用户 2026-10-12：「改成『原目录不存在』
+                    // 也加一个边框，但是不能点击」）。边框是它唯一的视觉标记 —— 原先靠行首的
+                    // ⚠ 符号，混在一堆文字里看不出这是一枚"状态标签"。它是个 span，本来就不可点。
+                    ? React.createElement('span', { className: 'dsm-hist-dir-missing', title: t('hist.group.dirMissing.hint') }, t('hist.group.dirMissing'))
+                    : React.createElement('span', { className: 'dsm-tag', title: t('hist.group.removed.hint') }, t('hist.group.removed')),
+                  detached && !g.dirMissing && g.canRegister ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, title: t('hist.btn.registerWs.hint'), onClick: function () { setModal({ type: 'register', path: g.path, title: g.title }) } }, t('hist.btn.registerWs')) : null) : null,
                 g.path ? React.createElement('span', { className: 'dsm-path', title: g.path }, g.path) : null),
               open ? React.createElement('div', { className: 'dsm-source-body' }, g.items.map(renderRow)) : null)
           }
 
+          // 两颗批量键 2026-10-12 从工具条上移页头，紧挨「全选」（用户：「会话的恢复所选和
+          // 删除所选应该在上面导入、导出、全选旁边」）。选中态与它们强相关：在工具条上时
+          // 「先勾选、再回到上面找按钮」是两段视线；挨着「全选」则选完就地可点。
+          // 没选中时是 null —— 展进 actions 前先 concat 空数组，免得页头渲染出一个空槽。
+          // Toolbar 的 batch 槽随之空出来（不再传），空壳会把搜索框往里挤。
+          var batchActions = selected.size > 0 ? [
+            React.createElement('button', { key: 'restore', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { doUnarchiveBatch() } }, t('hist.btn.restoreSelected', { count: selected.size })),
+            React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'deleteBatch', count: selected.size }) } }, t('hist.btn.deleteSelected', { count: selected.size })),
+          ] : []
+
           return React.createElement('section', { className: 'dsm-section' },
-            React.createElement('div', { className: 'dsm-head' },
-              React.createElement('div', { className: 'dsm-title-block' },
-                React.createElement('div', { className: 'dsm-title-row' },
-                  React.createElement('h2', { className: 'dsm-title' }, t('tabs.sessions'))),
-                React.createElement('p', { className: 'dsm-desc' }, t('sessions.desc'))),
-              React.createElement('div', { className: 'dsm-actions' },
-                refreshButton(t, data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: data.loading, onClick: function () { refresh() } }),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openImportPicker }, t('hist.btn.import')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openExportPicker }, t('hist.btn.export')),
-                // 「全选 / 取消全选」紧挨导出（用户 2026-09-17 裁定）：它是列表级动作，
-                // 与其余页头动作同栏，不再和统计数字挤在一行。
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: !filtered.length, onClick: function () { toggleAllVisible(visibleIds) } }, bulkPair(allVisible ? t('hist.deselectAll') : t('hist.selectAll'), allVisible ? t('hist.selectAll') : t('hist.deselectAll'))),
-                // 「已选 N 项」不另立一栏：两颗按钮各自带着份数（恢复所选 (152) / 删除所选 (152)），
-                // 第三遍数字只会把这一行挤到折行（用户 2026-09-19：把「已选 152 项」删掉就有位置了）。
-                selected.size > 0 ? React.createElement('div', { className: 'dsm-hist-batch' },
-                  React.createElement('div', { className: 'dsm-hist-batch-actions' },
-                    React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { doUnarchiveBatch() } }, t('hist.btn.restoreSelected', { count: selected.size })),
-                    React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'deleteBatch', count: selected.size }) } }, t('hist.btn.deleteSelected', { count: selected.size })))) : null)),
-            React.createElement('div', { className: 'dsm-stat-row' },
-              React.createElement('div', { className: 'dsm-summary' },
-                [['archived', data.items.length, t('hist.stat.archived')], ['projects', grouped ? groups.length : '—', t('hist.stat.projects')], ['retention', data.retentionDays ? String(data.retentionDays) : '∞', t('hist.stat.retention')]].map(function (item) {
-                  return React.createElement('div', { key: item[0], className: 'dsm-stat' },
-                    React.createElement('strong', null, item[1]), item[2])
-                }))),
-            React.createElement('div', { className: 'dsm-filters' },
+            // 页头一行化（REDESIGN §3 + §6）：导入 · 导出 · 全选 —— 会话没有创建语义，
+            // 整行全 ghost（§3.2.1 主操作恰好 0 颗实底）；统计内联。
+            // 「全选」2026-10-12 从工具条上移到页头、紧挨最后一颗页头键（用户：「全选移到
+            // 回收站旁边」，会话页没有回收站，就挨着「导出」）；工具条那一行让位给搜索框。
+            // 同日两颗批量键（恢复所选 / 删除所选）也上移到「全选」右边 —— 勾选与批量操作
+            // 是一件事，原先「先勾选、再回头去工具条找按钮」是两段视线（用户：「应该在上面
+            // 导入、导出、全选旁边」）。没选中时它们不出现，页头仍是原来三颗。
+            React.createElement(PageHead, {
+              title: t('tabs.sessions'),
+              desc: t('sessions.desc'),
+              // 三格（用户 2026-10-12 重设计）：归档条数 · 工作区分组数 · 保留期。
+              // 保留期那格的值自带单位（"30 天" / "∞"），标签只做说明 —— 免得读成"保留 30"
+              // 还要猜单位。前两格是这一页真正要看的两件事：收了多少、分在几个工作区。
+              stats: [
+                [data.items.length, t('hist.stat.archived')],
+                [grouped ? groups.length : '—', t('hist.stat.projects')],
+                [data.retentionDays ? t('hist.retention.days', { count: data.retentionDays }) : '∞', t('hist.stat.retention')],
+              ],
+              actions: [
+                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openImportPicker }, t('hist.btn.import')),
+                React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openExportPicker }, t('hist.btn.export')),
+                React.createElement('button', { key: 'all', type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: !filtered.length, onClick: function () { toggleAllVisible(visibleIds) } }, bulkPair(allVisible ? t('hist.deselectAll') : t('hist.selectAll'), allVisible ? t('hist.selectAll') : t('hist.deselectAll'))),
+              ].concat(batchActions),
+            }),
+            // 工具条（REDESIGN §3.3，切片四换共享 Toolbar）：搜索 + 保留期住 children。
+            // batch 槽已空 —— 两颗批量键上移页头、挨着「全选」（见上），空槽不传，
+            // 免得渲染出一个没有内容的 .dsm-toolbar-batch 把搜索框往里挤。
+            // 「已选 N 项」不另立一栏：两颗按钮各自带着份数（恢复所选 (152) / 删除所选 (152)），
+            // 第三遍数字只会把这一行挤到折行（用户 2026-09-19：把「已选 152 项」删掉就有位置了）。
+            React.createElement(Toolbar, { key: 'filters' },
               React.createElement('input', { className: 'dsm-control dsm-search', type: 'text', placeholder: t('hist.search.placeholder'), value: query, onChange: function (e) { setQuery(e.target.value) } }),
               React.createElement('div', { className: 'dsm-source-filter' },
                 React.createElement(SourceSelect, {
@@ -412,24 +438,29 @@
             // 走 Notice 而不是裸 div：令牌没过的提醒会在右侧自动多出一颗「填写令牌」按钮。
             data.error ? React.createElement(Notice, { kind: 'err', text: String(data.error) }) : null,
             notice ? React.createElement(Notice, { kind: notice.kind, text: notice.text }) : null,
-            data.loading && !data.items.length ? React.createElement('div', { className: 'dsm-empty' }, t('hist.loading'))
-              : filtered.length === 0 ? React.createElement('div', { className: 'dsm-empty' }, dq ? t('hist.empty.search') : t('hist.empty.none'))
-              : React.createElement('div', { className: 'dsm-sources' },
-                grouped ? groups.map(renderGroup) : React.createElement('div', { className: 'dsm-source' }, filtered.map(renderRow))),
-            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', title: t('hist.purge.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试）/ 无结果
+            //（+ 清除筛选）/ 空 / 有数据。data.error 横幅照旧 —— 它同时承担有缓存数据时的错误。
+            data.loading && !data.items.length ? React.createElement(ListStates, { key: 'loading', t: t, state: 'loading' })
+              : data.error && !data.items.length ? React.createElement(ListStates, { key: 'errstate', t: t, state: 'error', text: String(data.error), onRetry: function () { refresh() } })
+                : filtered.length === 0
+                  ? (dq ? React.createElement(ListStates, { key: 'search', t: t, state: 'search', text: t('hist.empty.search'), onClearFilter: function () { setQuery('') } })
+                    : React.createElement(ListStates, { key: 'empty', t: t, state: 'empty', text: t('hist.empty.none') }))
+                  : React.createElement('div', { className: 'dsm-sources' },
+                    grouped ? groups.map(renderGroup) : React.createElement('div', { className: 'dsm-source' }, filtered.map(renderRow))),
+            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', className: 'dsm-modal-sm', title: t('hist.purge.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('hist.purge.one', { title: modal.title })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { doDelete(modal.sessionId) } }, t('hist.btn.confirmPurge')))) : null,
-            modal && modal.type === 'deleteBatch' ? React.createElement(Modal, { key: 'delb', title: t('hist.purge.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            modal && modal.type === 'deleteBatch' ? React.createElement(Modal, { key: 'delb', className: 'dsm-modal-sm', title: t('hist.purge.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('hist.purge.batch', { count: modal.count })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { doDeleteBatch() } }, t('hist.btn.confirmPurge')))) : null,
-            modal && modal.type === 'register' ? React.createElement(Modal, { key: 'reg', title: t('hist.register.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            modal && modal.type === 'register' ? React.createElement(Modal, { key: 'reg', className: 'dsm-modal-sm', title: t('hist.register.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('hist.register.body', { title: modal.title })),
               React.createElement('p', { className: 'dsm-help dsm-hist-register-path' }, String(modal.path || '')),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy, onClick: function () { doRegisterWorkspace(modal.path) } }, t('hist.register.confirm')))) : null,
-            modal && modal.type === 'registered' ? React.createElement(Modal, { key: 'regdone', title: t('hist.register.done.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            modal && modal.type === 'registered' ? React.createElement(Modal, { key: 'regdone', className: 'dsm-modal-sm', title: t('hist.register.done.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('hist.register.done.body', { title: (modal.workspace && modal.workspace.title) || '' })),
               (modal.workspace && modal.workspace.attached && modal.workspace.attached.length)
                 ? React.createElement('p', { className: 'dsm-help' }, t('hist.register.done.attached', { count: modal.workspace.attached.length }))
@@ -445,7 +476,8 @@
               title: t('hist.btn.import'),
               accept: '.jsonl,.json,.md,.markdown,.txt',
               busy: imp.busy === true,
-              requirements: [t('upload.requirement.session.1'), t('upload.requirement.session.2'), t('upload.requirement.session.3')],
+              requirement: t('upload.req.session'),
+              requirementTitle: [t('upload.requirement.session.1'), t('upload.requirement.session.2'), t('upload.requirement.session.3')].join('\n'),
               result: imp.error ? { ok: false, text: String(imp.error) } : (imp.result ? { ok: true, warning: imp.result.lossy === true, text: t('hist.import.done', { id: imp.result.sessionId, count: imp.result.count }) + (imp.result.lossy === true ? ' ' + t('hist.import.lossy') : '') } : null),
               extra: React.createElement('div', null,
                 React.createElement('div', { className: 'dsm-field' },
@@ -459,7 +491,7 @@
                     pickFolderLabel: t('hist.import.browse'), pickFolderTitle: t('hist.export.browse'),
                     disabled: imp.busy === true,
                     onChange: function (v) { setImp(Object.assign({}, imp, { cwd: v })) },
-                    onPickFolder: function () { setImp(Object.assign({}, imp, { pickingDir: true })) },
+                    onPickFolder: function () { requestHostDirectory(function (path) { setImp(Object.assign({}, imp, { cwd: path })) }, function () { setImp(Object.assign({}, imp, { pickingDir: true })) }) },
                   }),
                   imp.pickingDir ? React.createElement(DirPickerModal, { key: 'imp-dir-picker', title: t('dir.title'), initial: String(imp.cwd || ''), closeLabel: t('btn.close'), onClose: function () { setImp(Object.assign({}, imp, { pickingDir: false })) }, onPick: function (path) { setImp(Object.assign({}, imp, { cwd: path, pickingDir: false })) } }) : null,
                   importWsOptions.length ? null : React.createElement('p', { className: 'dsm-help' }, t('hist.import.workspace.none')))),
@@ -469,13 +501,13 @@
             // 导出弹窗（0.18.5）：字段从五行压成三行（格式｜导出内容 一行、会话范围｜工作区
             // 一行），整块包进 .dsm-export-form 让列表吃掉剩下的高度。范围和工作是两个正交
             // 条件，不做成笛卡尔积的单个下拉 —— 合成一行只是省位置，语义没合。
-            exp ? React.createElement(Modal, { key: 'exp', className: 'dsm-modal-list dsm-modal-export-lg dsm-export-modal', list: true, title: t('hist.btn.export'), closeLabel: t('btn.close'), onClose: function () { setExp(null) } },
+            exp ? React.createElement(Modal, { key: 'exp', className: 'dsm-modal-list dsm-export-modal', list: true, title: t('hist.btn.export'), closeLabel: t('btn.close'), onClose: function () { setExp(null) } },
               React.createElement('div', { className: 'dsm-form dsm-export-form' },
                 React.createElement('p', { className: 'dsm-help' }, t('hist.export.hint')),
                 React.createElement('div', { className: 'dsm-field' },
                   React.createElement('label', { className: 'dsm-label' }, t('hist.export.dir')),
                   React.createElement('div', { className: 'dsm-dir-row' },
-                    React.createElement('input', { className: 'dsm-control', type: 'text', placeholder: 'D:\\backups\\dsh\\exports', value: exp.outDir || '', onChange: function (e) { setExp(Object.assign({}, exp, { outDir: e.target.value })) } }),
+                    React.createElement('input', { className: 'dsm-control', type: 'text', placeholder: defaultIoDir(), value: exp.outDir || '', onChange: function (e) { setExp(Object.assign({}, exp, { outDir: e.target.value })) } }),
                     React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: exp.busy, onClick: openExportDir, title: t('hist.export.browse') }, t('hist.btn.browse'))),
                   exp.pickingDir ? React.createElement(DirPickerModal, { key: 'exp-dir-picker', title: t('hist.export.pickDir'), initial: String(exp.outDir || ''), closeLabel: t('btn.close'), onClose: function () { setExp(Object.assign({}, exp, { pickingDir: false })) }, onPick: function (path) { setExp(Object.assign({}, exp, { outDir: path, pickingDir: false })) } }) : null),
                 React.createElement('div', { className: 'dsm-field-row' },
@@ -509,17 +541,21 @@
                           var open = collapsed[key] !== true
                           return React.createElement('div', { key: key, className: 'dsm-pick-group' },
                             React.createElement('button', { type: 'button', className: 'dsm-pick-group-head', 'aria-expanded': open ? 'true' : 'false', onClick: function () { toggleGroupCollapse(key) } },
-                              React.createElement('span', { className: 'dsm-pick-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
+                              React.createElement(CaretIcon, { open: open, className: 'dsm-pick-caret' }),
                               React.createElement('span', { className: 'dsm-pick-group-name', title: g.cwd || t('hist.ungrouped') }, g.cwd || t('hist.ungrouped')),
                               React.createElement('span', { className: 'dsm-pick-group-count' }, t('export.group.count', { count: g.rows.length }))),
                             open ? g.rows.map(function (it) {
-                              return React.createElement('label', { key: it.sessionId, className: 'dsm-hist-row' },
-                                React.createElement('input', { type: 'checkbox', className: 'dsm-hist-check', checked: exp.selectedIds.has(it.sessionId), onChange: function () { toggleExportSelect(it.sessionId) } }),
-                                React.createElement('div', { className: 'dsm-hist-main' },
-                                  React.createElement('div', { className: 'dsm-hist-title' }, it.title || ('Session ' + shortId(it.sessionId))),
-                                  it.cwdMissing ? React.createElement('div', { className: 'dsm-hist-cwd dsm-hist-cwd-missing', title: t('hist.cwd.missing') + it.cwd }, '⚠ ' + it.cwd) : null),
-                                React.createElement('div', { className: 'dsm-hist-actions' },
-                                  React.createElement('span', { className: 'dsm-tag' + (it.archived ? '' : ' dsm-tag-on') }, it.archived ? t('hist.tag.archived') : t('hist.tag.live'))))
+                              // 导出列表整行可点勾选（REDESIGN §5.1，切片五）：RowSelect 本尊，
+                              // 目录走 desc 槽（缺目录的带 ⚠），归档态标签走 meta 槽。
+                              return React.createElement(RowSelect, {
+                                key: it.sessionId,
+                                checked: exp.selectedIds.has(it.sessionId),
+                                name: it.title || ('Session ' + shortId(it.sessionId)),
+                                desc: it.cwd ? (it.cwdMissing ? '⚠ ' + it.cwd : it.cwd) : null,
+                                descTitle: it.cwdMissing ? t('hist.cwd.missing') + it.cwd : undefined,
+                                meta: React.createElement('span', { className: 'dsm-tag' + (it.archived ? '' : ' dsm-tag-on') }, it.archived ? t('hist.tag.archived') : t('hist.tag.live')),
+                                onChange: function () { toggleExportSelect(it.sessionId) },
+                              })
                             }) : null)
                         })
                       })() : React.createElement('div', { className: 'dsm-empty' }, t('hist.export.empty'))))),
@@ -535,7 +571,7 @@
                 React.createElement('span', { className: 'dsm-hist-batch-count' }, t('hist.selected', { count: exp.selectedIds.size })),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: exp.busy || !exp.selectedIds.size, onClick: doArchiveSelected, title: t('hist.btn.archiveSelected.title') }, t('hist.btn.archiveSelected')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: exp.busy || !exp.selectedIds.size || !String(exp.outDir || '').trim(), onClick: doExport }, exp.busy ? t('hist.export.busy') : t('hist.btn.exportSelected', { count: exp.selectedIds.size })))) : null,
-            modal && modal.type === 'error' ? React.createElement(Modal, { key: 'err', title: t('hist.error.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            modal && modal.type === 'error' ? React.createElement(Modal, { key: 'err', className: 'dsm-modal-sm', title: t('hist.error.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, String(modal.message || t('hist.error.unknown')))) : null)
         }
 

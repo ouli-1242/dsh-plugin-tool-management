@@ -15,7 +15,7 @@
 // 「那几段」= **userinfo / 查询串 / 片段**三处（2026-09-30 审查 F5）：`new URL()` 把 userinfo
 // 与 fragment 存在 `username/password` 与 `hash` 里，`toString()` 原样带出。只换 `search`
 // 的话，`https://user:pass@host/mcp`（Basic-Auth 形态）与 `https://host/mcp#access_token=…`
-// 会整条原样返回 —— 而这两条路正是免令牌出口（`mcpm-list` / `mcpm-inspect` / 模型工具 /
+// 会整条原样返回 —— 而这两条路正是免令牌出口（`mcpm-list` / 模型工具 /
 // 快照导出）。路径与主机**不动**：它们是该服务的身份，算进来会把真 URL 误判成打码值。
 //
 // 判据为什么可以这么硬：打码值只可能表示"用户没改这一项"，绝不可能表示"用户想把它设成这个"。
@@ -164,7 +164,7 @@ function maskUrlPartsByString(url: string): string {
  * fragment 存在 `username/password` 与 `hash` 里，`toString()` 会原样带出 ——
  * 只替换 `search` 的话，`https://user:pass@host/mcp` 与 `https://host/mcp#access_token=…`
  * 会**整条原样返回**（后者连 `?` 都没有），而这两条路正是免令牌出口
- * （`mcpm-list` / `mcpm-inspect` / 模型工具 / 快照导出）。Basic-Auth 形态的凭据就此明文可见。
+ * （`mcpm-list` / 模型工具 / 快照导出）。Basic-Auth 形态的凭据就此明文可见。
  */
 export function maskUrlQuery(url: string | null): string | null {
   if (!url) return url

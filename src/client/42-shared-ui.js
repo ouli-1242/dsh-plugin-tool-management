@@ -1,7 +1,7 @@
 
         // ---------- Skills 页（移植自 dsh-skills-manager，Apache-2.0；类名前缀 dsm-） ----------
-        var react = React // 上游组件使用小写 react，别名到本文件的 React
-        var h = React.createElement
+        // `react` / `h` 别名原在这里声明；2026-10-11 切片五上移到 20 片（工厂作用域）——
+        // 兼容页与上移到那边的共用控件（Switch / SourceSelect / RowCheck / SettingsRow）同用一套。
 
         // SKILL.md frontmatter 已知键的标签走 DICT（fm.label.*，未知键原样显示并附原始键名提示）。
         function frontmatterValue(t, value) {
@@ -252,104 +252,44 @@ function enabledMemoryCount(rules) {
     function buildUploadPayload(selection) { return Promise.all(selection.files.map(function (file) { return file.arrayBuffer().then(function (buffer) { return { path: uploadFilePath(file), data: bytesToBase64(buffer) }; }); })).then(function (entries) { return selection.kind === "zip" ? { name: selection.name, zip: entries[0].data } : { name: selection.name, entries: entries }; }); }
     function readDroppedEntry(entry, prefix, output) { if (entry.isFile) return new Promise(function (resolve, reject) { entry.file(function (file) { file._dssmPath = prefix + file.name; output.push(file); resolve(); }, reject); }); if (!entry.isDirectory) return Promise.resolve(); return new Promise(function (resolve, reject) { var reader = entry.createReader(), children = []; function next() { reader.readEntries(function (batch) { if (!batch.length) { Promise.all(children.map(function (child) { return readDroppedEntry(child, prefix + entry.name + "/", output); })).then(resolve, reject); return; } children = children.concat(batch); next(); }, reject); } next(); }); }
     function droppedFiles(dataTransfer) { var items = Array.prototype.slice.call(dataTransfer && dataTransfer.items || []), entries = items.map(function (item) { return item.webkitGetAsEntry && item.webkitGetAsEntry(); }).filter(Boolean); if (!entries.length) return Promise.resolve(Array.prototype.slice.call(dataTransfer && dataTransfer.files || [])); var files = []; return Promise.all(entries.map(function (entry) { return readDroppedEntry(entry, "", files); })).then(function () { return files; }); }
-    // 弹窗的键盘行为（Esc 关闭 / Tab 焦点陷阱）在**模块作用域**，见 refreshButton 上方的
-    // 「弹窗键盘行为」一节 —— 兼容页在 `apply` 之外，它的手工弹窗与 `Modal` 共用这三个函数。
+    // 弹窗的键盘行为（Esc 关闭 / Tab 焦点陷阱）在**模块作用域**（本文件顶部「弹窗键盘行为」
+    // 一节，20-helpers.js）—— 兼容页在 `apply` 之外，它的手工弹窗与 `Modal` 共用这三个函数。
 
     /**
-     * 「启用的排在前面」——on/off 两半各自保持宿主原序（稳定分区，不是排序）。
-     * 不用 sort：用户要求「停用后落回原来的位置」，sort 会打乱半区内的相对次序。
+     * 「亮着的排在前面」，但**序是定好的**（取代原先每渲染重排的 `enabledFirst`）。
+     *
+     * 用户 2026-10-12 两条口径：「当时选择时不用置顶，刷新或者重新打开这个功能页才置顶」。
+     * 原先每渲染一次就照当前状态分区，于是开关一打、行当场跳位 —— 连着勾几条时点不准，
+     * 列表也在晃。这里给每个条目记**第一次被看到时**的序（当时亮着 = 0），之后一律按那个
+     * 序排，同半区内保持原有相对次序（`i` 兜底，等价于原先"稳定分区"的语义）。
+     *
+     * `rank` 由 `useRank()` 给出：**一页一张表，随组件挂载而生**。所以重新定序的时机就是
+     * 重新挂载 —— 浏览器刷新、或从别的页签切回来（各页的刷新都是重新拉数据、不换组件）。
      * 返回新数组：入参多是 React state 里的数组，就地改会让列表在别处一起变。
      */
-    function enabledFirst(items, isOn) {
-      var on = [], off = [];
-      (items || []).forEach(function (item) { (isOn(item) ? on : off).push(item); });
-      return on.concat(off);
+    function rankedFirst(rank, idOf, items, isOn) {
+      var list = items || [];
+      var table = rank.table;
+      return list.map(function (item, i) {
+        var k = String(idOf(item));
+        if (table[k] === undefined) table[k] = isOn(item) ? 0 : 1;
+        return { item: item, rank: table[k], i: i };
+      }).sort(function (a, b) { return a.rank - b.rank || a.i - b.i; }).map(function (x) { return x.item });
+    }
+    /** 一页一张定序表（见 rankedFirst）。组件卸载即丢弃，重挂载 = 重新定序。 */
+    function useRank() {
+      var ref = React.useRef(null);
+      if (!ref.current) ref.current = { table: {} };
+      return ref.current;
     }
 
-    /** 换位过渡时长（毫秒）。与 .dsm-switch:after 的 160ms 同档，观感一致。 */
-    var FLIP_MS = 180;
+    // （FLIP 滑移动画与 `useFlipReorder` / `FLIP_MS` / 行上的 data-flip-* 锚点已整体删除：
+    //  它是为「开关一打、行当场换位」那套重排做的补偿，而 2026-10-12 起列表改成定序
+    //  （rankedFirst：当场不重排，重新挂载才置顶）—— 行不再动，动画就没有触发的时候，
+    //  留着只剩成本。）
 
-    /**
-     * 列表换位的 FLIP 动画：开关一变、行挪了位，就让它滑过去而不是瞬移。
-     * 只在「同一批元素、且启停状态确实变了」的那一帧播放：
-     *   搜索 / 筛选 / 展开收起 / 列表加载 → key 有增删 → 只记录不播；
-     *   MCP 的轮询与计时器只重渲染同一份列表 → 没有启停变化 → 不播。
-     * 用 useLayoutEffect：反向位移必须写在浏览器绘制之前，否则会先闪一帧新布局。
-     * 量 offsetTop/offsetLeft（布局坐标）而不是 getBoundingClientRect：
-     *   自身动画中的 transform 与页面滚动都不会污染基线；多列网格（场景页）的横向位移也覆盖。
-     * 前提：同一容器里的行共用同一个 offsetParent（这些行到卡片链上没有定位元素）。
-     * ref 为空（没渲染 / 测试里的假 dispatcher）时静默跳过。
-     */
-    function useFlipReorder(ref) {
-      var prevRef = React.useRef(null);
-      // 万一宿主换了个没有 useLayoutEffect 的 React：退到 useEffect（会先闪一帧，但别崩）。
-      var useIso = React.useLayoutEffect || React.useEffect;
-      useIso(function () {
-        var host = ref.current;
-        if (!host || typeof host.querySelectorAll !== 'function') return;
-        var nodes = Array.prototype.slice.call(host.querySelectorAll('[data-flip-key]'));
-        var next = new Map();
-        nodes.forEach(function (node) {
-          if (!node.offsetWidth && !node.offsetHeight) return; // 没布局（隐藏 / 收起）→ 不可比
-          next.set(node.getAttribute('data-flip-key'), {
-            left: node.offsetLeft, top: node.offsetTop,
-            on: node.getAttribute('data-flip-on'),
-          });
-        });
-        var prev = prevRef.current;
-        prevRef.current = { host: host, map: next };
-        // 首帧、容器换过（列表卸载重建）、key 有增删、有重复 key → 只记录不播。
-        if (!prev || prev.host !== host || next.size === 0
-          || next.size !== nodes.length || next.size !== prev.map.size) return;
-        var changed = false, sameKeys = true;
-        next.forEach(function (item, key) {
-          var before = prev.map.get(key);
-          if (!before) { sameKeys = false; return; }
-          if (before.on !== item.on) changed = true;
-        });
-        if (!sameKeys || !changed) return;
-        if (typeof window !== 'undefined' && window.matchMedia
-          && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-        nodes.forEach(function (node) {
-          var key = node.getAttribute('data-flip-key'), before = prev.map.get(key);
-          if (!before) return;
-          var item = next.get(key), dx = before.left - item.left, dy = before.top - item.top;
-          if (!dx && !dy) return; // 本来就没挪窝
-          // 上一次没播完就再来一次：只在这时要还原（否则轮询会把动画截断成瞬移）。
-          if (node.__dsmFlip) { clearTimeout(node.__dsmFlip); node.__dsmFlip = 0; }
-          node.style.transition = 'none'; // 先瞬移回原位，否则浏览器把新位置当动画起点
-          node.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-          void node.offsetWidth;          // 结算样式，让上面两句真的落到起点上
-          node.style.transition = 'transform ' + FLIP_MS + 'ms ease';
-          node.style.transform = '';
-          // 收尾清掉内联样式：留着 transform 会改变包含块、且动画后仍叠在相邻行之上。
-          node.__dsmFlip = setTimeout(function () {
-            node.__dsmFlip = 0;
-            node.style.transition = '';
-            node.style.transform = '';
-          }, FLIP_MS + 40);
-        });
-      });
-    }
-
-    function SourceSelect(props) {
-      var state = react.useState(false), open = state[0], setOpen = state[1], selected = props.options.find(function (o) { return o.value === props.value; }) || props.options[0], ref = react.useRef(null);
-      var upState = react.useState(false), up = upState[0], setUp = upState[1];
-      react.useEffect(function () { if (!open) return undefined;
-        // 弹窗正文是滚动容器，往下弹的菜单会被底边裁掉（记忆「形态」在最后一格，用户 2026-10-10 截图）。
-        // 打开时量一下：触发器到视口 / 滚动容器底边的空间装不下菜单，就改成往上弹。
-        var el = ref.current;
-        if (el) {
-          var box = el.getBoundingClientRect();
-          var need = props.options.length * 34 + 14;
-          var avail = window.innerHeight - box.bottom;
-          var host = el.closest(".dsm-modal-body") || el.closest(".dsm-modal");
-          if (host) avail = Math.min(avail, host.getBoundingClientRect().bottom - box.bottom);
-          setUp(avail < need);
-        }
-        function close(event) { if (!ref.current || !ref.current.contains(event.target)) setOpen(false); } document.addEventListener("pointerdown", close); return function () { document.removeEventListener("pointerdown", close); }; }, [open]);
-      return h("div", { className: "dsm-select" + (up ? " dsm-select-up" : ""), ref: ref }, h("button", { type: "button", className: "dsm-select-trigger", "aria-haspopup": "listbox", "aria-expanded": open, onClick: function () { setOpen(!open); } }, h("span", null, selected.label)), open ? h("div", { className: "dsm-select-menu", role: "listbox" }, props.options.map(function (o) { return h("button", { key: o.value || "all", type: "button", role: "option", className: "dsm-option", "aria-selected": o.value === props.value, onClick: function () { props.onChange(o.value); setOpen(false); } }, o.label); })) : null);
-    }
+    // SourceSelect 已上移 20 片（2026-10-11 切片五）：兼容页的下拉也要收编到这里，
+    // 而 apply 作用域的声明对兼容页不可见。
     // 场景输入（combobox）：既能从已有场景里挑，也能直接手输一个新场景名——
     // 宿主 rules-create 用 mkdir(recursive) 落盘，所以「自定义场景」无需先建目录。
     //
@@ -369,7 +309,6 @@ function enabledMemoryCount(rules) {
           props.onPickFolder ? h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", title: props.pickFolderTitle, disabled: props.disabled === true, onClick: function () { setOpen(false); props.onPickFolder(); } }, props.pickFolderLabel) : null),
         open && options.length ? h("div", { className: "dsm-select-menu", role: "listbox" }, options.map(function (o) { return h("button", { key: o.value, type: "button", role: "option", className: "dsm-option", "aria-selected": o.value === props.value, onClick: function () { props.onChange(o.value); setOpen(false); } }, o.label); })) : null);
     }
-    function Switch(props) { return h("button", { type: "button", className: "dsm-switch" + (props.on ? " dsm-switch-on" : ""), role: "switch", "aria-checked": props.on, "aria-label": props.label, title: props.title, disabled: props.disabled, onClick: props.onClick }); }
     function GithubMark16() { return h("svg", { viewBox: "0 0 16 16", width: 16, height: 16, "aria-hidden": true, focusable: "false" }, h("path", { fill: "currentColor", d: "M8 0a8 8 0 0 0-2.53 15.59c.4.074.547-.173.547-.385 0-.19-.007-.693-.01-1.36-2.226.484-2.695-1.073-2.695-1.073-.364-.924-.89-1.17-.89-1.17-.726-.496.055-.486.055-.486.803.056 1.225.824 1.225.824.714 1.223 1.872.87 2.328.665.072-.517.28-.87.508-1.07-1.777-.202-3.645-.888-3.645-3.956 0-.874.31-1.588.823-2.148-.083-.202-.357-1.017.078-2.12 0 0 .672-.215 2.2.82A7.65 7.65 0 0 1 8 4.8c.68.003 1.365.092 2.004.27 1.527-1.035 2.197-.82 2.197-.82.437 1.103.162 1.918.08 2.12.513.56.822 1.274.822 2.148 0 3.076-1.872 3.752-3.654 3.95.288.248.544.735.544 1.482 0 1.07-.01 1.932-.01 2.195 0 .214.144.463.55.384A8.001 8.001 0 0 0 8 0Z" })); }
     /**
      * 弹窗原语。`list: true` 时走「列表类」三段式：固定头 / 滚动体 / 固定底，
@@ -417,9 +356,13 @@ function enabledMemoryCount(rules) {
      *
      * 由 `Modal`（弹窗打开时）或 `ToolsSection`（没有弹窗时）渲染 —— 同时只渲染一份。
      * 见模块顶部 gateText 的说明。
+     *
+     * 用**告警色**而不是错误色（用户 2026-10-12：「改成黄色警告风格」）：它不是"操作失败"，
+     * 而是"还差一步"—— 令牌没验过这件事用户自己能解决，而且顶部那条横幅本来就是琥珀色，
+     * 两处同一件事不该一个红一个黄。错误色留给真正的失败（`.dsm-error`）。
      */
     function tokenGateRow(text) {
-      return h('div', { className: 'dsm-feedback dsm-error dsm-feedback-row', role: 'alert' },
+      return h('div', { className: 'dsm-feedback dsm-warning dsm-feedback-row', role: 'alert' },
         h('span', { className: 'dsm-feedback-text' }, text),
         h('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: openTokenPanel }, t('token.jump')))
     }
@@ -441,6 +384,206 @@ function enabledMemoryCount(rules) {
       if (props && props.pageLevel && gate.modalDepth > 0) return null
       return tokenGateRow(gate.text)
     }
+    /**
+     * 「填写令牌」弹窗（用户 2026-10-12 提案：横幅那颗键点开一个弹窗，填对自动关）。
+     *
+     * 为什么是弹窗而不是"跳到设置 → 工具 → 兼容"：那条路要求设置面板已经挂载
+     * （`navigateToTab` 只在 ToolsSection 挂载时才有值），从对话页点它就得先想办法把宿主的
+     * 设置对话框打开 —— 宿主没有这个服务，只能去 DOM 里认领它自己的设置导航行，又脆又绕。
+     * 一个自包含的输入框把整条依赖都去掉了：不碰宿主 DOM、不需要跳页、也不必知道用户当时
+     * 在哪一页（横幅是在**任何**页面都能出现的）。
+     *
+     * 它做的是**解锁**（本次进程填一次），不是改配置：横幅出现的条件就是"宿主配了令牌、
+     * 本次启动还没验过"。改配置（换 / 关 / 删）仍然留在兼容页那四态弹窗里 —— 那是持久改动，
+     * 带"要重启 DSH 才生效"这类后果，不该塞进一个从横幅弹出来的小框。
+     *
+     * 字段与按钮与兼容页的解锁面板**逐字同源**（`type=password` + `compat.token.placeholder`
+     * + `compat.token.save`「解锁」）：两处填令牌的手感不该有差别。锁态口径也共用
+     * `applyTokenStatusSideEffects`，不在这里另判一遍。
+     *
+     * props：`t` / `onClose`。
+     */
+    function TokenUnlockDialog(props) {
+      var t = props.t
+      var draft = React.useState('')
+      var value = draft[0], setValue = draft[1]
+      var busyState = React.useState(false)
+      var busy = busyState[0], setBusy = busyState[1]
+      var errState = React.useState(null)
+      var err = errState[0], setErr = errState[1]
+      var inputRef = React.useRef(null)
+      // 打开就聚焦：这个框唯一的用途就是"把一串东西粘进去"。
+      React.useEffect(function () { if (inputRef.current) inputRef.current.focus() }, [])
+      var submit = function () {
+        if (busy) return
+        var v = String(value || '').trim()
+        if (!v) { setErr(t('compat.token.empty')); return }
+        setBusy(true)
+        setErr(null)
+        // 先把令牌交给本进程（写内存 + 本机存储，并顺手收掉"去填令牌"那句提示），再问宿主
+        // 认不认 —— 与兼容页 saveToken 同一顺序。
+        setAccessToken(v)
+        apiCall('token-status', {}).then(function (r) {
+          setBusy(false)
+          if (!r || !r.ok) { setErr(t('compat.token.failed')); return }
+          // 锁态与提示的口径只有一处（见 applyTokenStatusSideEffects），与兼容页同源。
+          applyTokenStatusSideEffects(r)
+          // 宿主认可 = 用户要的"输入正确后自动关闭"。锁一解，横幅自己就消失了（同一份锁态）。
+          if (r.accepted === true) { props.onClose(); return }
+          if (r.hostConfigured !== true) { setErr(t('compat.token.noHost')); return }
+          setErr(t('compat.token.mismatch'))
+        }).catch(function (e) { setBusy(false); setErr(errMsg(e)) })
+      }
+      return h(Modal, {
+        className: 'dsm-modal-sm',
+        title: t('token.dialog.title'),
+        closeLabel: t('btn.close'),
+        // 这个框里不挂那条「缺少访问令牌，或令牌不对 + 填写令牌」的提示条（用户 2026-10-12）：
+        // 用户已经站在"填令牌"这件事里面了，再提示一次"还差令牌"、再给一颗同样通向这里的按钮，
+        // 是自指。横幅/页面级那份照旧 —— 它们才是"你还没填"的地方。
+        hideGateNotice: true,
+        onClose: function () { if (!busy) props.onClose() },
+      },
+        h('p', { className: 'dsm-help' }, t('compat.token.hint')),
+        h('input', {
+          ref: inputRef,
+          className: 'dsm-control' + (err ? ' dsm-rule-invalid' : ''),
+          type: 'password',
+          value: value,
+          placeholder: t('compat.token.placeholder'),
+          'aria-label': t('compat.token'),
+          onChange: function (e) { setValue(e.target.value); setErr(null) },
+          // 回车 = 解锁（与兼容页解锁面板同一口径：按钮与回车行为一致）。
+          onKeyDown: function (e) { if (e.key === 'Enter') submit() },
+        }),
+        err ? h('p', { className: 'dsm-rule-hint' }, err) : null,
+        h('div', { className: 'dsm-modal-actions' },
+          h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { props.onClose() } }, t('btn.cancel')),
+          h('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(value || '').trim(), onClick: submit }, t('compat.token.save'))))
+    }
+    /**
+     * 空态组件（REDESIGN §4.4，全站复用）：16px 线性图标（tertiary）+ 一句话（12 tertiary），
+     * 高度 clamp 120~160、垂直居中。禁止「标题 + 巨大空白」；有出路时给一颗 quiet 按钮。
+     * `icon` 缺省用一只中性「空盒」线性图标；传 null 可不带图标。
+     */
+    function EmptyState(props) {
+      var icon = props.icon === null ? null : (props.icon || EmptyState.boxIcon)
+      return h('div', { className: 'dsm-empty-state' },
+        icon ? h('span', { className: 'dsm-empty-state-icon', 'aria-hidden': 'true' }, icon) : null,
+        h('p', { className: 'dsm-empty-state-text' }, props.text),
+        props.action ? h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.action.disabled === true, onClick: props.action.onClick }, props.action.label) : null)
+    }
+    EmptyState.boxIcon = h('svg', { viewBox: '0 0 16 16', width: 16, height: 16, focusable: 'false' },
+      h('path', {
+        d: 'M2.5 6.5V13A1 1 0 0 0 3.5 14H12.5A1 1 0 0 0 13.5 13V6.5M2.5 6.5L4.5 2.5H11.5L13.5 6.5M2.5 6.5H6A2 2 0 0 0 10 6.5H13.5',
+        fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+      }))
+    // RowSelect 已上移 20 片（2026-10-11 切片五）：快照导入预览（兼容页）也要用行选择。
+    /**
+     * 行状态点（REDESIGN §3.4，切片三）：6px 圆点替代「启用 / 未启用 / 已连」这类
+     * 只会复述开关状态的装饰性标签 —— 开关本身就是状态，标签只该留给需要处理的事。
+     * tone：ok=启用/已连（success）、idle=默认/未启（灰）、bad=失败/丢失（error）、
+     * warn=当前不能用但不是故障、busy=进行中（闪）。
+     * 读屏读不到颜色：title 必填（role=img + aria-label 同源，与状态点同一口径）。
+     */
+    function StatusDot(props) {
+      return h('span', {
+        className: 'dsm-dot dsm-dot-' + (props.tone || 'idle'),
+        role: 'img',
+        'aria-label': props.title,
+        title: props.title,
+      })
+    }
+    // PageHead（页头，REDESIGN §3）在 20-helpers（factory 作用域）：兼容页（apply 之外）
+    // 的单行页头也要用它，apply 侧声明对 factory 作用域不可见 —— 与 ModalCloseButton
+    // 同一条边界（2026-10-11 切片五修正：切片三把它落在这里，兼容页一打开就白屏）。
+    /**
+     * 列表工具条（REDESIGN §3.3，2026-10-11 切片四）：页头之下、列表之上的那一层 ——
+     * 搜索 / 筛选住 `children`，全选与批量动作住 `batch`（右侧成组，「出现选中时才有的
+     * 批量按钮」也在这里）。八页共用一个出口，禁止页面私拼同款 DOM（§12.6）。
+     */
+    function Toolbar(props) {
+      return h('div', { className: 'dsm-filters' },
+        props.children,
+        props.batch ? h('div', { className: 'dsm-toolbar-batch' }, props.batch) : null)
+    }
+    /**
+     * 列表行（REDESIGN §3.4，2026-10-11 切片四）：48px 两行制 ——
+     *   行1  状态点 + 名称(13/600) + 至多 1 个「需要处理」的 tag
+     *   行2  元信息(12 弱色，截断 + title)
+     * 右侧：常驻开关（`side` 槽）+ quiet 24px 次级动作组（右对齐，全部常驻可见 ——
+     * 2026-10-11 裁定不做悬停浮现）；删除类一律 quiet-danger。
+     * 去卡片：行本身不描边，行间 1px 分隔线由容器负责（`.dsm-list` 或分组卡的
+     * `.dsm-source-body` 里「.dsm-listrow + .dsm-listrow」），容器才带边框与圆角。
+     * 状态点单独一列（`dots`）：名称与元信息都从同一竖线起步 —— 点挂在名字前会造出
+     * 「名称比描述右移一格」的错位（dsm-dot-indent 当初修的就是它），把点拎出主列后
+     * 两行天然对齐。传空数组 = 保留点槽（同一页里带 tag 的行与带点的行左缘对齐）。
+     *
+     * props：`dots`（状态点，可省=无点列）/ `name` / `nameTitle` / `nameAfter`
+     * （名称**紧邻**之后的一件小东西，如记忆行的体积标签；与 `tag` 分开是因为 `tag` 的契约是
+     * 「至多 1 个需要处理的 tag」——状态类，而这个是量值类，两者可能同时出现）/ `tag` / `meta`
+     * （字符串或节点数组；空不渲染）/ `metaTitle` / `extra`（行2 之下的追加行，如体检
+     * 结果、⚠ 提示）/ `leading`（行首件，会话页勾选框；切片五换 RowSelect）/ `side`
+     * （开关等常驻件）/ `actions`（quiet 24px 按钮数组）。
+     */
+    function ListRow(props) {
+      return h('div', {
+        className: 'dsm-listrow' + (props.className ? ' ' + props.className : ''),
+      },
+        props.leading || null,
+        props.dots !== undefined ? h('div', { className: 'dsm-listrow-dots' }, props.dots) : null,
+        h('div', { className: 'dsm-listrow-main' },
+          h('div', { className: 'dsm-listrow-name-row' },
+            typeof props.name === 'string'
+              ? h('span', { className: 'dsm-listrow-name', title: props.nameTitle || props.name }, props.name)
+              : h('span', { className: 'dsm-listrow-name' }, props.name),
+            props.nameAfter || null,
+            props.tag || null),
+          props.meta ? h('div', { className: 'dsm-listrow-meta', title: props.metaTitle || undefined },
+            // 字符串元信息包一层可收缩 span：flex 容器本身不吃 text-overflow，
+            // 不包的话长描述只会被硬裁、没有省略号。
+            typeof props.meta === 'string' ? h('span', { className: 'dsm-listrow-meta-desc' }, props.meta) : props.meta) : null,
+          props.extra || null),
+        (props.side || props.actions) ? h('div', { className: 'dsm-listrow-side' },
+          props.side || null,
+          props.actions ? h('div', { className: 'dsm-listrow-actions' }, props.actions) : null) : null)
+    }
+    /**
+     * 列表四态（REDESIGN §12.2，2026-10-11 切片四）：加载 / 空 / 无结果 / 失败 / 有数据，
+     * 全站同一套表现 —— 加载 = 一行弱色文字（**不做骨架屏**，§12.8）；空 / 无结果 / 失败 =
+     * EmptyState，有出路时带一颗 quiet 按钮（无结果 → 清除筛选；失败 → 重试 —— 这是
+     * 错误恢复入口，不属于已裁掉的常驻刷新）；有数据 = 原样渲染 children。
+     *
+     * 失败态的令牌口径：加载失败可能是「令牌没过」—— 那句话由页面级 TokenGateNotice
+     * 渲染（带「填写令牌」直达），这里识别出来后只给通用一句 + 重试，同一句红字不在
+     * 两处逐字重复。
+     *
+     * props：`t`（取词）/ `state`（'loading' | 'empty' | 'search' | 'error' | 'data'）/
+     * `text`（empty/search/error 的说明；search/error 缺省走词典）/ `onRetry`（失败态的
+     * 重试回调，缺省不渲染按钮）/ `onClearFilter`（无结果态的清除筛选回调）/ `action`
+     * （空态出路 {label, onClick, disabled}，如「去新增」）/ `busy`（重试进行中置灰）/
+     * `children`（state === 'data' 时的列表本体）。
+     */
+    function ListStates(props) {
+      var t = props.t
+      if (props.state === 'loading') return h('div', { className: 'dsm-empty' }, props.text || (t ? t('list.loading') : '…'))
+      if (props.state === 'error') {
+        var errText = props.text
+        if (typeof errText === 'string' && isTokenGateText(errText)) errText = t ? t('list.error') : ''
+        return h(EmptyState, {
+          text: errText || (t ? t('list.error') : ''),
+          action: props.onRetry ? { label: t('list.retry'), onClick: props.onRetry, disabled: props.busy === true } : undefined,
+        })
+      }
+      if (props.state === 'search') {
+        return h(EmptyState, {
+          text: props.text || (t ? t('list.noMatch') : ''),
+          action: props.onClearFilter ? { label: t('list.clearFilter'), onClick: props.onClearFilter } : undefined,
+        })
+      }
+      if (props.state === 'empty') return h(EmptyState, { text: props.text, action: props.action })
+      return h(react.Fragment, null, props.children)
+    }
     function Modal(props) {
       var ref = react.useRef(null)
       // 弹窗存在期间，令牌提示交给**弹窗自己**渲染：页面级那份会被遮罩压暗、盖在弹窗背后，
@@ -456,11 +599,13 @@ function enabledMemoryCount(rules) {
       // ⚠️ 提示挂在**头部那一层里面**，而不是插在 head 与 body 之间：后者会让 body 的
       // 位置索引从 1 变 2，React 按位置认子节点 —— 提示一出现/消失就把 body 整棵重挂
       // （输入框失焦、下拉状态归零）。放在 head 的尾部则所有位置都稳定。
+      // 关闭钮是 X 图标钮（§4.3）：closeLabel 只进 aria-label / title，不再渲染文字。
+      // props.hideGateNotice = 这个弹窗自己就是"填令牌"的地方，提示条在这里是自指（见 TokenUnlockDialog）。
       var head = h("div", { className: "dsm-modal-head-wrap" },
         h("div", { className: "dsm-modal-head" },
           h("h3", { className: "dsm-modal-title" }, props.title),
-          h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: props.onClose }, props.closeLabel)),
-        h(TokenGateNotice, null))
+          h(ModalCloseButton, { label: props.closeLabel, onClick: props.onClose })),
+        props.hideGateNotice === true ? null : h(TokenGateNotice, null))
       return h("div", { className: "dsm-mask", onMouseDown: function (e) { if (e.target === e.currentTarget) props.onClose(); } }, h("div", { ref: ref, tabIndex: -1, className: "dsm-modal" + (props.wide ? " dsm-modal-wide" : "") + (props.className ? " " + props.className : ""), role: "dialog", "aria-modal": "true", onKeyDown: function (e) { if (!handleModalEscape(e, props.onClose)) trapModalFocus(e.currentTarget, e); } }, head, body));
     }
     /**
@@ -549,19 +694,25 @@ function enabledMemoryCount(rules) {
       // 侧车里的值可能是手改的、或来自更早的版本（例如 15）—— 不在预设里时把它补成一项，
       // 否则下拉框会显示成空白，用户会以为"根本没设置过"而重设一遍。
       var values = days !== null && PRESETS.indexOf(days) < 0 ? [days].concat(PRESETS) : PRESETS
+      // 选项先算好再交给 SourceSelect（它要的是 [{value,label}]）。读不到保留期时只有一项
+      // 「读取中…」，且整颗下拉禁用 —— 与原生件时代同一套语义。
+      var selectOptions = days === null
+        ? [{ value: '', label: t('trash.retention.loading') }]
+        : values.map(function (v) {
+          return { value: String(v), label: v === 0 ? t('trash.retention.forever') : t('trash.retention.days', { count: v }) }
+        })
       return React.createElement('div', { className: 'dsm-trash-retention' },
         React.createElement('span', { className: 'dsm-label' }, t('trash.retention.label')),
-        React.createElement('select', {
-          className: 'dsm-control',
-          value: days === null ? '' : String(days),
-          disabled: s.loading || s.busy || days === null,
-          'aria-label': t('trash.retention.label'),
-          onChange: function (e) { choose(e.target.value) },
-        },
-          days === null ? React.createElement('option', { value: '' }, t('trash.retention.loading')) : null,
-          values.map(function (v) {
-            return React.createElement('option', { key: v, value: String(v) },
-              v === 0 ? t('trash.retention.forever') : t('trash.retention.days', { count: v }))
+        // 原生 `<select>` 换成自绘 SourceSelect（用户 2026-10-12：「回收站的下拉框能不能设计成
+        // <MCP 页那个>」）：原生件在深色主题下由系统画高亮（整条实底蓝），与全站自绘控件是两套
+        // 长相，菜单样式也完全不可控。SourceSelect 是八页 + 兼容页唯一那一种下拉。
+        React.createElement('div', { className: 'dsm-trash-retention-select' },
+          React.createElement(SourceSelect, {
+            options: selectOptions,
+            value: days === null ? '' : String(days),
+            disabled: s.loading || s.busy || days === null,
+            ariaLabel: t('trash.retention.label'),
+            onChange: choose,
           })),
         s.error ? React.createElement('span', { className: 'dsm-trash-hint dsm-trash-retention-err' }, s.error) : null,
         s.note ? React.createElement('span', { className: 'dsm-trash-hint' }, s.note) : null,
@@ -602,49 +753,298 @@ function enabledMemoryCount(rules) {
      * 勾完之后根本看不出那一键会删掉哪几个。与技能回收站（43-skills.js 的 `trashPane`）
      * 同一套结构与类名，只是那份是手写的，这份做成了 `TrashModal` 的一个模式。
      */
-    // 非分栏时那条唯一的批量条用这个哨兵当"确认中"的标记（分栏时用的是那一块的组标题）。
-    // 用对象而不是字符串：组标题是用户可见文案，理论上可能撞上任何字符串字面量。
-    const TRASH_BULK_ALL = { all: true }
+    /**
+     * 串行逐条执行一批单条 op。服务端的六条 `*-trash-*` 各自带着存在性校验与回滚，
+     * 批量 = 前端循环**已有的单条 op**，不另造批量版（0.19.1 起的口径不变）。
+     * 串行而不是并发：条数天然有限（用户手删出来的），串行才给得出
+     * 「成功几条、为什么没删掉」；返回 `{ done, failed, firstErr }`。
+     * `one(item)` 返回服务端信封（`res.ok`）；抛错按失败计。
+     */
+    function runSerial(items, one) {
+      return new Promise(function (resolve) {
+        var out = { done: 0, failed: 0, firstErr: null }
+        var step = function (i) {
+          if (i >= items.length) { resolve(out); return }
+          Promise.resolve().then(function () { return one(items[i]) }).then(function (res) {
+            if (res && res.ok === true) out.done += 1
+            else { out.failed += 1; if (!out.firstErr) out.firstErr = (res && res.error) || res || 'error' }
+            step(i + 1)
+          }, function (e) {
+            out.failed += 1; if (!out.firstErr) out.firstErr = errMsg(e)
+            step(i + 1)
+          })
+        }
+        step(0)
+      })
+    }
+    /**
+     * 每一页的回收站包含哪几组（`TrashModal` 的 `domain`）。
+     * 两组的那两页 —— 技能页（技能 + 已移除的目录）、提示词页（提示词预设 + 快捷提示词）——
+     * 同域但**后果不同**，所以各带标题与自己的批量条。
+     * MCP 页与会话页不在这里：这两域没有回收站（2026-10-12 裁定 —— MCP 删除走宿主配置、
+     * 插件不留快照；会话的「归档」列表本身就是它的回收站），界面上也不再给入口。
+     */
+    const TRASH_DOMAINS = {
+      // `split: true` = 两组**上下平分**弹窗、各带一圈边框隔开（用户 2026-10-12：「技能和
+      // 提示词的回收站是分为两部分，要两部分应该平分回收站的弹窗，两部分应该有边框进行
+      // 隔离区分」）。此前两组是一条长列表一路滚到底，两组的批量条长得一模一样，
+      // 读起来像同一组的两条工具条。单组的三个域（人设 / 场景 / 记忆）不走分栏。
+      skills: { groups: ['skills', 'dirs'], split: true },
+      prompts: { groups: ['presets', 'quick'], split: true },
+      agents: { groups: ['agents'] },
+      scenes: { groups: ['scenes'] },
+      memories: { groups: ['memories'] },
+    }
+    /**
+     * 回收站（2026-10-12 改成「一页一个」）：右栏保留期置顶 + 分组列表 + 每组一条批量条。
+     *
+     * 原先左栏是六类导航，从任何一页打开都能看到全部六类 —— 用户裁定「回收站一个功能页就是
+     * 一个回收站，不需要显示其他的回收站」，于是导航整根拔掉：`domain` 决定这一页有哪几组，
+     * 其余组不读也不画（少四类只读调用）。
+     * 只有两个域是两组的：**技能页**（技能 + 已移除的目录）与**提示词页**（提示词预设 +
+     * 快捷提示词）—— 两组的后果不同，所以各带标题与自己的批量条（2026-10-10 的裁定不变）。
+     *
+     * 数据在组件内部按域拉取：清单 op 都是**全局只读 op**，从哪个页打开都一样；
+     * 写操作逐条调各域已有的单条 op（`runSerial`），成功后重读该域清单并回调
+     * `props.onReload` 让宿主页刷新自己的数据。
+     *
+     * MCP 页与会话页不再有回收站入口：这两域没有回收站类目（MCP 删除走宿主配置、
+     * 插件不留快照；会话的「归档」列表本身就是它的回收站）。
+     *
+     * props：`t` / `onClose` / `onReload`（宿主页写后刷新）/ `domain`（见 `TRASH_DOMAINS`）。
+     */
     function TrashModal(props) {
       const t = props.t
-      // 分栏模式：上下两块各占一半、各自滚动、**每块自带一条**批量条（见函数头注）。
-      const split = props.split === true
-      const c = React.useState(null)
-      const confirmId = c[0], setConfirmId = c[1]
-      // 勾选集合。key = `<组标题>|<条目 id>`，**不能只按 id 记**：提示词页一次列两组
-      // （全局预设 + 快捷提示词），两组的 id 来自同一条生成器，只按 id 记会让两组互相勾中。
-      const sel = React.useState({})
-      const selected = sel[0], setSelected = sel[1]
-      // 批量二次确认。存的不是布尔而是"哪一条批量条在确认"：分栏时上下两块**各有一条**，
-      // 共用一颗布尔会让下面那块也跟着翻成确认态 —— 它的按钮并不是刚点的那颗。
-      // 非分栏时用 `TRASH_BULK_ALL` 这个哨兵（整份列表只有一条批量条）。
-      const bc = React.useState(null)
-      const bulkConfirm = bc[0], setBulkConfirm = bc[1]
-      // 组：默认就是调用方传的那一组（`groupTitle` / `entries`）；给了 `groups` 就按数组列多组
-      // —— 提示词页的回收站要一次看完"全局"与"快捷"两类，让用户先猜被删的东西在哪个域里，
-      // 等于把恢复这条路堵在他自己手里。每组各自有空的说明，不合并成一句"什么都没删"。
-      const groups = props.groups || [{ title: props.groupTitle, sub: props.groupSub, entries: props.entries || [] }]
-      // 条目 id / 备注行的取法。默认是回收站条目的通用形状（`id` + 「删除于 …」），
-      // 记忆页要另给：它的条目字段叫 `trashId`，备注还带场景 / 形态 / 字节数。
-      // 两个都是可选的，不传就退回默认 —— 已有三个调用方（提示词 / 场景 / 子智能体）不受影响。
-      const idOf = typeof props.idOf === 'function' ? props.idOf : function (item) { return item.id }
-      const noteOf = typeof props.noteOf === 'function'
-        ? props.noteOf
-        : function (item) { return t('trash.deletedAt', { time: item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '—' }) }
-      const rowKey = function (g, item) { return String(g.title) + '|' + String(idOf(item)) }
-      // 平铺一份：非分栏时「全选」与「永久删除」按**整份列表**算，不能只看某一组。
-      const flat = []
-      groups.forEach(function (g) {
-        (g.entries || []).forEach(function (item) { flat.push({ group: g, item: item, key: rowKey(g, item) }) })
-      })
-      const allKeys = flat.map(function (x) { return x.key })
-      // 场景锁定时批量删除一并禁用：单条「永久删除」已经禁用，批量是同一件事，
-      // 只禁单条等于留了一个绕过锁定一次删光的口子。
-      const batchDisabled = props.busy === true || props.locked === true
-      // 没传 onPurgeMany 的调用方（目前没有，但 props 是可选的）不渲染批量控件，
-      // 而不是渲染出按不动的按钮。
-      const batchEnabled = typeof props.onPurgeMany === 'function' && flat.length > 0
-      const toggle = function (key) {
+      // 每类的数据槽：{ loading, error, entries }。skills 与 dirs 同源（skill-state 一份快照
+      // 同时喂两类：技能 = trash 数组；目录 = 已移除的来源 roots）。
+      const ds = React.useState(null)
+      const data = ds[0], setData = ds[1]
+      // 这一页的回收站有哪几组（见文件头 `TRASH_DOMAINS`）。打开时定死，中途不换。
+      const domainCfg = TRASH_DOMAINS[props.domain] || TRASH_DOMAINS.skills
+      const groupIds = domainCfg.groups
+      // 分栏档：两块各占一半、各自滚动、各带边框。只有两组时才有意义。
+      const split = domainCfg.split === true && groupIds.length > 1
+      const bsx = React.useState(false)
+      const busy = bsx[0], setBusy = bsx[1]
+      const nsx = React.useState(null)
+      const notice = nsx[0], setNotice = nsx[1]
+      // 勾选集合。key = `<组 id>|<条目 id>` —— 提示词类两组的 id 可能撞（都叫预设 id 生成器），
+      // 只按 id 记会让两组互相勾中（沿用 0.19.1 的组前缀口径）。
+      const ssx = React.useState({})
+      const selected = ssx[0], setSelected = ssx[1]
+      // 行内二次确认。存「哪一组的哪一行在确认」，批量条的 key 为 null。
+      const cfx = React.useState(null)
+      const confirm = cfx[0], setConfirm = cfx[1]
+      // 「详情」只读预览（用户 2026-10-12：「回收站的每条信息应该增加一个详情按键，点开就能看
+      // 这个信息是什么样子，不能更改内容，没有保存按键」）。null = 没开；开了就是一条
+      // `{ group, id, name, meta, loading, error, files }`：
+      //   · `meta` 非 null —— 这条记录没有负载可读（目录组只有"不再读取"这条事实），只显示
+      //     来源信息，不读盘；
+      //   · 否则按 `id` 调 `trash-preview`，把条目目录里的文件只读地读出来。
+      const pvx = React.useState(null)
+      const preview = pvx[0], setPreview = pvx[1]
+      // 场景锁定（五个管理域整体冻结）。rules-list 回传 anyLocked（记忆页同一来源）。
+      // 各组冻不冻**照抄 op-registry 的 `frozen` 标记**（`GROUPS[*].frozen`）：技能 / 目录 /
+      // 人设 / 提示词 / 记忆五组都冻结，只有场景自己的回收站不冻 —— `scene-trash-*` 两条 op
+      // 本来就没标 frozen。界面与判据同源，才不会出现"画得能点、点下去被拒"。
+      const ysx = React.useState(false)
+      const anyLocked = ysx[0], setAnyLocked = ysx[1]
+      const zsx = React.useState([])
+      const sceneList = zsx[0], setSceneList = zsx[1]
+      React.useEffect(function () { load(); return undefined }, [])
+      const dataOf = function (id) { return (data && data[id]) || { loading: true, error: null, entries: [] } }
+      function setSlot(id, slot) {
+        setData(function (prev) { var next = Object.assign({}, prev); next[id] = slot; return next })
+      }
+      function load() {
+        // 只读**本页这几组**（2026-10-12「一页一个」）：原先一次打开拉六类清单，
+        // 为的是左栏那几个计数徽标 —— 导航拔掉后那些数字没有地方要了。
+        groupIds.forEach(function (gid) {
+          var g = GROUPS[gid]
+          if (g.reload) { g.reload(); return }
+          readGroup(gid, g.op, g.pick)
+        })
+        // 锁定态（只读判断，失败不拦 —— 写操作到了服务端还有 frozen 这道闸）；
+        // `sceneList` 只有记忆组用得上（每条要说清属于哪个场景）。
+        var needLock = groupIds.some(function (gid) { return GROUPS[gid].frozen === true || gid === 'memories' })
+        if (!needLock) return
+        apiCall('rules-list', {}).then(function (res) {
+          if (res && res.ok) { setAnyLocked(res.anyLocked === true); setSceneList(res.scenes || []) }
+        }).catch(function () { })
+      }
+      function reloadGroup(id) {
+        var g = GROUPS[id]
+        if (!g) return
+        if (g.reload) { g.reload(); return }
+        readGroup(id, g.op, g.pick)
+      }
+      function readGroup(id, op, pick) {
+        setSlot(id, { loading: true, error: null, entries: dataOf(id).entries })
+        apiCall(op, {}).then(function (res) {
+          setSlot(id, res && res.ok ? { loading: false, error: null, entries: pick(res) || [] } : { loading: false, error: translateError(t, res), entries: [] })
+        }).catch(function (e) { setSlot(id, { loading: false, error: errMsg(e), entries: [] }) })
+      }
+      function reloadAll() {
+        load()
+      }
+      // ── 各组清单（`TRASH_DOMAINS` 按页取用）。每组的 restore / purge 都是**全局单条 op**
+      //    （apiCall 直呼，信封原样返回）。──
+      const noteDefault = function (item) { return t('trash.deletedAt', { time: item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '—' }) }
+      const memoryNote = function (item) {
+        return sceneLabel(sceneList, item.group) + ' · '
+          + t('memory.form.' + (item.form === 'bundle' ? 'bundle' : 'flat')) + ' · '
+          + item.bytes + ' B · '
+          + t('memory.trash.deletedAt', { time: item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '' })
+      }
+      const GROUPS = {
+        presets: {
+          id: 'presets', title: t('trash.group.presets'), note: t('trash.section.presets.sub'), frozen: true,
+          op: 'agentsmd-trash-list', pick: function (res) { return res.trash },
+          nameOf: function (it) { return it.name }, noteOf: noteDefault,
+          restore: function (it) { return apiCall('agentsmd-trash-restore', { id: it.id }) },
+          purge: function (it) { return apiCall('agentsmd-trash-delete', { id: it.id }) },
+          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultPurge: function (it) { return t('trash.purged', { name: it.name }) },
+        },
+        quick: {
+          id: 'quick', title: t('trash.group.quick'), note: t('trash.section.quick.sub'), frozen: true,
+          op: 'quickprompt-trash-list', pick: function (res) { return res.trash },
+          nameOf: function (it) { return it.name }, noteOf: noteDefault,
+          restore: function (it) { return apiCall('quickprompt-trash-restore', { id: it.id }) },
+          purge: function (it) { return apiCall('quickprompt-trash-delete', { id: it.id }) },
+          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultPurge: function (it) { return t('trash.purged', { name: it.name }) },
+        },
+        skills: {
+          // `frozen: true` —— 技能回收站的两条 op（`skill-trash-restore` / `skill-trash-delete`）
+          // 在 op-registry 里都标着 frozen，锁定期间服务端一律拒绝。此前这里写成 false，
+          // 界面于是把「恢复 / 永久删除 / 全选」画成可点，点下去才吃一个冻结错误
+          //（用户 2026-10-12：「技能回收站应该和其他回收站一样灰色的不能选择」）。
+          id: 'skills', title: t('trash.section.skills'), note: t('trash.section.skills.sub'), frozen: true,
+          nameOf: function (it) { return it.name }, noteOf: noteDefault,
+          restore: function (it) { return apiCall('skill-trash-restore', { id: it.id }) },
+          purge: function (it) { return apiCall('skill-trash-delete', { id: it.id }) },
+          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultPurge: function (it) { return t('trash.purged', { name: it.name }) },
+        },
+        dirs: {
+          // 同 skills：`skill-source-restore` / `skill-custom-remove` 两条 op 也是 frozen。
+          id: 'dirs', title: t('trash.section.dirs'), note: t('trash.section.dirs.sub'), frozen: true,
+          // 来源条目没有 `id`，只有 `key`（restore / remove 两条 op 都按 key 定位）。
+          // 漏了这条就会全部落到 `dirs|undefined` 这一个勾选键上 —— 勾中一行等于勾中全部
+          // （用户 2026-10-12 实测「点击一个默认全选了」），行内二次确认同样会串。
+          idOf: function (it) { return it.key },
+          nameOf: function (it) { return rootDisplayName(t, it) }, noteOf: function (it) { return it.path }, noteTitle: true,
+          // 「永久删除」现在对**两类**来源都成立（用户 2026-10-12：「技能的 codex 和 Claude
+          // 改成也是可以移除的目录」）：
+          //   · 自定义目录 —— 删掉 customRoots 里那条记录（`skill-custom-remove`）；
+          //   · 按约定发现的来源（agents / codex / claude）—— 它们不住在 customRoots 里，路径
+          //     每次启动都会重新推导出来，只从 removedSources 里删掉的话下一轮它又回来了，
+          //     所以走 `skill-source-forget`：另记一份「永久忘记」名单，从此既不读取也不列出。
+          // 两条路都**不碰磁盘上的源文件**（一个字节都不动）—— 见 `trash.section.dirs.sub`。
+          // 原先这里只认 `custom === true`，于是 codex / claude 那两行只有「恢复读取」，
+          // 而它们明明 `removable === true`（技能页上就能移除），两处口径不一致。
+          canPurge: function (it) { return it.custom === true || it.removable === true },
+          emptyText: t('trash.section.dirs.empty'),
+          // 目录组没有"被删掉的东西"可看：这条记录本来就只是「不再读取这个来源」，磁盘上
+          // 什么都没动。所以详情改成把来源信息摆出来，**不去读那个目录** —— 读它等于把用户的
+          // ~/.codex、~/.claude 整个列到界面上，那是另一个功能，不是"看这条记录是什么"。
+          previewMeta: function (it) {
+            return [
+              [t('trash.preview.field.scope'), it.scope === 'project' ? t('trash.preview.scope.project') : t('trash.preview.scope.user')],
+              [t('trash.preview.field.origin'), it.custom === true ? t('trash.preview.origin.custom') : it.defaultSource === true ? t('trash.preview.origin.default') : t('trash.preview.origin.discovered')],
+              [t('trash.preview.field.path'), it.path || '—'],
+            ]
+          },
+          restore: function (it) { return apiCall('skill-source-restore', { root: it.key }) },
+          purge: function (it) {
+            return it.custom === true
+              ? apiCall('skill-custom-remove', { key: it.key })
+              : apiCall('skill-source-forget', { root: it.key })
+          },
+          resultRestore: function (it) { return t('result.sourceRestored', { name: rootDisplayName(t, it) }) },
+          resultPurge: function (it) { return t('result.sourceForgotten', { name: rootDisplayName(t, it) }) },
+        },
+        agents: {
+          id: 'agents', title: null, note: t('trash.section.agents.sub'), frozen: true,
+          op: 'subagent-trash-list', pick: function (res) { return res.trash },
+          nameOf: function (it) { return it.name }, noteOf: noteDefault,
+          restore: function (it) { return apiCall('subagent-trash-restore', { id: it.id }) },
+          purge: function (it) { return apiCall('subagent-trash-delete', { id: it.id }) },
+          // 启停状态没能写回（服务端 stateSyncError）必须说出来，不能只报「已恢复」。
+          restoreWarn: true,
+          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultPurge: function (it) { return t('trash.purged', { name: it.name }) },
+        },
+        scenes: {
+          id: 'scenes', title: null, note: t('trash.section.scenes.sub'), frozen: false,
+          op: 'scene-trash-list', pick: function (res) { return res.trash },
+          nameOf: function (it) { return it.name }, noteOf: noteDefault,
+          restore: function (it) { return apiCall('scene-trash-restore', { id: it.id }) },
+          purge: function (it) { return apiCall('scene-trash-delete', { id: it.id }) },
+          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultPurge: function (it) { return t('trash.purged', { name: it.name }) },
+        },
+        memories: {
+          id: 'memories', title: null, note: t('trash.section.memories.sub'), frozen: true,
+          op: 'rules-trash-list', pick: function (res) { return res.entries },
+          idOf: function (it) { return it.trashId },
+          nameOf: function (it) { return it.name }, noteOf: memoryNote,
+          restore: function (it) { return apiCall('rules-restore', { trashId: it.trashId }) },
+          purge: function (it) { return apiCall('rules-trash-remove', { trashId: it.trashId }) },
+          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultPurge: function (it) { return t('memory.result.trashRemoved', { name: it.name }) },
+        },
+      }
+      // skills / dirs 的重读要一起走（同一份 skill-state 快照）。
+      GROUPS.skills.reload = GROUPS.dirs.reload = function () {
+        setSlot('skills', { loading: true, error: null, entries: dataOf('skills').entries })
+        setSlot('dirs', { loading: true, error: null, entries: dataOf('dirs').entries })
+        apiCall('skill-state', {}).then(function (res) {
+          if (res && res.ok) {
+            var d = res.data || {}
+            setSlot('skills', { loading: false, error: null, entries: d.trash || [] })
+            setSlot('dirs', { loading: false, error: null, entries: (d.roots || []).filter(function (r) { return r.removed === true }) })
+          } else {
+            var err = translateError(t, res)
+            setSlot('skills', { loading: false, error: err, entries: [] })
+            setSlot('dirs', { loading: false, error: err, entries: [] })
+          }
+        }).catch(function (e) {
+          var err = errMsg(e)
+          setSlot('skills', { loading: false, error: err, entries: [] })
+          setSlot('dirs', { loading: false, error: err, entries: [] })
+        })
+      }
+      // 这一页有哪几组 = `groupIds`（见文件头 `TRASH_DOMAINS`）；原先的左栏六类导航
+      // 连同 `CATEGORIES` / 计数徽标一起删除（2026-10-12「一页一个回收站」）。
+      const frozenOf = function (g) { return g.frozen === true && anyLocked === true }
+      const idOfOf = function (g) { return g.idOf || function (it) { return it.id } }
+      const selKeyOf = function (g, item) { return g.id + '|' + String(idOfOf(g)(item)) }
+      /**
+       * 打开一条条目的「详情」。**只看不改**，所以既不看锁定态、也不进 `busy` —— 与
+       * 「场景锁定下可以打开编辑页、只是不能保存」同一条口径（用户 2026-10-12 第四轮）。
+       *
+       * 每条记录的"身份"参数各域不同（`it.id` / `it.trashId` / `it.key`），统一走 `idOfOf`；
+       * 回填时按 `group + id` 对一次，避免网络慢时先点 A 再点 B、A 的结果盖掉 B 的窗口。
+       */
+      function openPreview(g, item) {
+        const id = String(idOfOf(g)(item))
+        const meta = g.previewMeta ? g.previewMeta(item) : null
+        setPreview({ group: g.id, id: id, name: g.nameOf(item), meta: meta, loading: meta === null, error: null, files: [] })
+        if (meta !== null) return
+        const patch = function (fields) {
+          setPreview(function (cur) {
+            if (!cur || cur.group !== g.id || cur.id !== id) return cur
+            return Object.assign({}, cur, fields)
+          })
+        }
+        apiCall('trash-preview', { domain: g.id, id: id }).then(function (res) {
+          if (res && res.ok) patch({ loading: false, error: null, files: res.files || [] })
+          else patch({ loading: false, error: translateError(t, res), files: [] })
+        }).catch(function (e) { patch({ loading: false, error: errMsg(e), files: [] }) })
+      }
+      function toggleSel(key) {
         setSelected(function (prev) {
           var next = Object.assign({}, prev)
           if (next[key] === true) delete next[key]
@@ -652,182 +1052,268 @@ function enabledMemoryCount(rules) {
           return next
         })
       }
-      const pickedOf = function (keys) { return keys.filter(function (k) { return selected[k] === true }) }
-      const toggleAll = function (keys, on) {
+      function toggleGroup(g, on) {
         setSelected(function (prev) {
           var next = Object.assign({}, prev)
-          keys.forEach(function (k) { if (on) next[k] = true; else delete next[k] })
+          ;(dataOf(g.id).entries || []).forEach(function (item) {
+            var k = selKeyOf(g, item)
+            if (on) next[k] = true
+            else delete next[k]
+          })
           return next
         })
       }
-      /**
-       * 跑一条批量删除。`keys` 是这条批量条管的范围（非分栏 = 整份列表；分栏 = 那一块）。
-       * 按**范围**过滤而不是直接拿整份勾选：分栏时上面那块点确认，不该把下面那块的勾选也删掉。
-       * 删完也只清这一批的勾 —— 条目删掉之后 key 就失效了，留着会变成一串永远勾不中的残留；
-       * 而另一块的勾选是用户还没处理的选择，不该替他清掉。
-       */
-      const runBulk = function (keys) {
-        var inScope = {}
-        keys.forEach(function (k) { inScope[k] = true })
-        var items = flat.filter(function (x) { return inScope[x.key] === true && selected[x.key] === true }).map(function (x) { return x.item })
-        setBulkConfirm(null)
+      /** 清掉该组的勾选（动作完成后条目已离开列表，残留的 key 永远勾不中）。 */
+      function clearGroupSel(g) {
         setSelected(function (prev) {
-          var next = Object.assign({}, prev)
-          keys.forEach(function (k) { delete next[k] })
+          var next = {}
+          Object.keys(prev).forEach(function (k) { if (k.indexOf(g.id + '|') !== 0) next[k] = prev[k] })
           return next
         })
-        if (items.length) props.onPurgeMany(items)
       }
-      /**
-       * 一条批量条：「已选 N 项 + 全选 + 永久删除 (N)」；二次确认就地替换这一行
-       * （避免"确认了但按钮还在原位"的错觉）。非分栏与分栏共用，只是 `keys` 的范围不同。
-       */
-      const bulkRow = function (keys, confirmKey) {
-        var pickedHere = pickedOf(keys)
-        var allHere = keys.length > 0 && pickedHere.length === keys.length
-        if (bulkConfirm === confirmKey) {
-          return React.createElement('div', { className: 'dsm-trash-bulk dsm-trash-bulk-confirm' },
-            React.createElement('span', { className: 'dsm-note' }, t('trash.purgeSelected.confirm', { count: pickedHere.length })),
-            React.createElement('button', {
-              type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy,
-              onClick: function () { runBulk(keys) },
-            }, t('trash.btn.confirmPurgeMany', { count: pickedHere.length })),
-            React.createElement('button', {
-              type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy,
-              onClick: function () { setBulkConfirm(null) },
-            }, t('btn.cancel')))
-        }
-        return React.createElement('div', { className: 'dsm-trash-bulk' },
-          React.createElement('span', { className: 'dsm-note' }, t('trash.selected', { count: pickedHere.length })),
-          // 「全选 ↔ 全不选」二合一（`bulkPair` 定宽，避免两种文案宽度不同把按钮推来推去）。
-          React.createElement('button', {
-            type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk',
-            disabled: batchDisabled,
-            onClick: function () { toggleAll(keys, !allHere) },
-          }, bulkPair(allHere ? t('trash.deselectAll') : t('trash.selectAll'), allHere ? t('trash.selectAll') : t('trash.deselectAll'))),
-          React.createElement('button', {
-            type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger',
-            disabled: batchDisabled || pickedHere.length === 0,
-            onClick: function () { setBulkConfirm(confirmKey) },
-          }, t('trash.btn.purgeSelected', { count: pickedHere.length })))
+      const pickedItems = function (g) {
+        return (dataOf(g.id).entries || []).filter(function (item) { return selected[selKeyOf(g, item)] === true })
       }
-      const row = function (g, item) {
-        const key = rowKey(g, item)
-        const confirming = confirmId === key
-        const isPicked = selected[key] === true
+      function afterWrite(g, ok, text) {
+        setNotice({ ok: ok, text: text })
+        reloadGroup(g.id)
+        clearGroupSel(g)
+        setConfirm(null)
+        if (props.onReload) props.onReload()
+      }
+      function runRestore(g, items) {
+        setBusy(true)
+        var warns = []
+        runSerial(items, function (item) {
+          return g.restore(item).then(function (res) {
+            if (g.restoreWarn && res) { var w = stateSyncWarn(t, res); if (w) warns.push(w) }
+            return res
+          })
+        }).then(function (out) {
+          setBusy(false)
+          if (out.failed === 0) {
+            var head = items.length === 1 ? g.resultRestore(items[0]) : t('trash.restoreMany.result', { count: out.done })
+            afterWrite(g, warns.length === 0, warns.length ? head + ' ' + warns.join(' ') : head)
+          } else {
+            setBusy(false)
+            setNotice({ ok: false, text: t('trash.restoreMany.partial', { count: out.done, failed: out.failed, reason: out.firstErr ? translateError(t, out.firstErr) : '' }) })
+            reloadGroup(g.id)
+            setConfirm(null)
+          }
+        })
+      }
+      function runPurge(g, items) {
+        setBusy(true)
+        runSerial(items, g.purge).then(function (out) {
+          setBusy(false)
+          var text
+          if (out.failed === 0) {
+            text = items.length === 1 ? g.resultPurge(items[0])
+              : (g.id === 'dirs' ? t('trash.forgetMany.result', { count: out.done }) : t('trash.purgeMany.result', { count: out.done }))
+          } else {
+            text = g.id === 'dirs'
+              ? t('trash.forgetMany.partial', { count: out.done, failed: out.failed, reason: out.firstErr ? translateError(t, out.firstErr) : '' })
+              : t('trash.purgeMany.partial', { count: out.done, failed: out.failed, reason: out.firstErr ? translateError(t, out.firstErr) : '' })
+          }
+          afterWrite(g, out.failed === 0, text)
+        })
+      }
+      /** 一行条目：行选择（整行可点勾选）+ 右侧「恢复 / 永久删除」，删除走行内二次确认。 */
+      const rowNode = function (g, item) {
+        const key = String(idOfOf(g)(item))
+        const gated = busy === true || frozenOf(g) === true
+        const confirming = confirm && confirm.group === g.id && confirm.key === key
         const actions = confirming
           ? [
               React.createElement('span', { className: 'dsm-note', key: 'ask' }, t('trash.purge.confirm')),
-              React.createElement('button', { key: 'yes', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy, onClick: function () { setConfirmId(null); props.onPurge(item) } }, t('btn.delete.forever')),
-              React.createElement('button', { key: 'no', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy, onClick: function () { setConfirmId(null) } }, t('btn.cancel')),
+              React.createElement('button', { key: 'yes', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { runPurge(g, [item]) } }, t('btn.delete.forever')),
+              React.createElement('button', { key: 'no', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setConfirm(null) } }, t('btn.cancel')),
             ]
           : [
-              React.createElement('button', { key: 'restore', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy || props.locked === true, onClick: function () { props.onRestore(item) } }, t('btn.restore')),
-              React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: props.busy || props.locked === true, onClick: function () { setConfirmId(key) } }, t('btn.delete.forever')),
+              // 「详情」永远可点：它是**看**，不是改。锁定态下恢复 / 永久删除都灰了，这一颗
+              // 仍然亮着 —— 用户 2026-10-12 第四轮定的口径就是「可以打开看，只是不能改」。
+              // 所以它**不吃 `gated`**（`gated` 只用来灰那两颗写操作键），放在最左、与它们
+              // 拉开语义距离。
+              React.createElement('button', { key: 'peek', type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { openPreview(g, item) } }, t('trash.preview.open')),
+              React.createElement('button', { key: 'restore', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: gated, onClick: function () { runRestore(g, [item]) } }, t('btn.restore')),
+              // `canPurge` 为假 → **不画**这颗按钮（不是画一颗按不动的）：这一行没有"永久删除"
+              // 这件事可做。现在只剩默认来源会落进这一档（`dsh` / `hub` / 官方）—— 它们必须读取、
+              // 从来不在移除候选里，所以实际也进不了这张列表；留这条判断是防它哪天进来。
+              g.canPurge && !g.canPurge(item) ? null
+                : React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: gated, onClick: function () { setConfirm({ group: g.id, key: key }) } }, t('btn.delete.forever')),
             ]
-        return React.createElement('div', { className: 'dsm-trash-item' + (isPicked ? ' dsm-trash-item-picked' : ''), key: idOf(item) },
-          // 勾选框只在能批量删的时候出现：没有 onPurgeMany 的调用方（见上面的 batchEnabled）
-          // 渲染一颗永远禁用的勾选框，只会让人以为"这里本来能勾、只是现在不行"。
-          batchEnabled
-            ? React.createElement('label', { className: 'dsm-trash-pick', title: t('trash.pick.title') },
-                React.createElement('input', {
-                  type: 'checkbox',
-                  checked: isPicked,
-                  disabled: batchDisabled,
-                  'aria-label': t('trash.pick.title') + ' ' + String(item.name || ''),
-                  onChange: function () { toggle(key) },
-                }))
-            : null,
-          React.createElement('div', { className: 'dsm-trash-main' },
-            React.createElement('div', { className: 'dsm-name' }, item.name),
-            React.createElement('div', { className: 'dsm-note' }, noteOf(item))),
-          actions)
+        return React.createElement(RowSelect, {
+          key: key, checked: selected[selKeyOf(g, item)] === true, disabled: gated,
+          name: g.nameOf(item), desc: g.noteOf(item), descTitle: g.noteTitle ? g.noteOf(item) : undefined,
+          onChange: function () { toggleSel(selKeyOf(g, item)) },
+          actions: actions,
+        })
       }
       /**
-       * 组头（标题 + 计数 + 后果说明）。分栏与非分栏共用同一套排版。
+       * 一条批量条：「已选 N 项 + 全选 + 恢复所选 + 永久删除所选」，二次确认就地替换这一行。
+       * 「恢复所选」是安全的可逆操作，不设确认；「永久删除所选」必确认。
+       */
+      const bulkRow = function (g) {
+        const list = dataOf(g.id).entries || []
+        const picked = pickedItems(g)
+        // 「永久删除」只数**真能删**的那几条：目录组里勾中 3 行、其中 2 行是内置来源时，
+        // 那颗键上写的必须是 1 —— 否则按下去删不掉勾上的东西，比数字难看一百倍。
+        const purgeable = g.canPurge ? picked.filter(g.canPurge) : picked
+        const allHere = list.length > 0 && picked.length === list.length
+        const gated = busy === true || frozenOf(g) === true
+        if (confirm && confirm.group === g.id && confirm.key === null) {
+          return React.createElement('div', { className: 'dsm-trash-bulk dsm-trash-bulk-confirm' },
+            React.createElement('span', { className: 'dsm-note' }, t('trash.purgeSelected.confirm', { count: purgeable.length })),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { runPurge(g, purgeable) } }, t('trash.btn.confirmPurgeMany', { count: purgeable.length })),
+            React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setConfirm(null) } }, t('btn.cancel')))
+        }
+        return React.createElement('div', { className: 'dsm-trash-bulk' },
+          React.createElement('span', { className: 'dsm-note' }, t('trash.selected', { count: picked.length })),
+          React.createElement('button', {
+            type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: gated || !list.length,
+            onClick: function () { toggleGroup(g, !allHere) },
+          }, bulkPair(allHere ? t('trash.deselectAll') : t('trash.selectAll'), allHere ? t('trash.selectAll') : t('trash.deselectAll'))),
+          React.createElement('button', {
+            type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: gated || !picked.length,
+            onClick: function () { runRestore(g, picked) },
+          }, t('trash.btn.restoreSelected', { count: picked.length })),
+          // 一条可删的都没勾中就不出现这颗键（目录组里只勾了内置来源时就是这个情形）——
+          // 与行内同一个判断，界面上不会出现"看得到却永远按不动"的删除键。
+          (!g.canPurge || purgeable.length)
+            ? React.createElement('button', {
+              // `!purgeable.length` 必须一起禁用：这条批量删除键在**没勾中任何可删项**时
+              // 此前是亮的 —— 点下去先弹一句"永久删除所选的 0 项？"，确认后回一句"已永久删除
+              // 0 项"。同一排的「恢复所选 (0)」是灰的，两颗键一个灰一个亮，看着像坏了。
+              type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: gated || !purgeable.length,
+              onClick: function () { setConfirm({ group: g.id, key: null }) },
+            }, t('trash.btn.purgeSelected', { count: purgeable.length }))
+            : null)
+      }
+      /** 一组：可选组头（提示词类两组才有）+ 批量条 + 行选择列表 / 空态。
+       *  `split` 时这一组自己就是一个带边框的分栏块（上半 / 下半），列表在块内滚动。 */
+      const groupNode = function (g, split) {
+        const d = dataOf(g.id)
+        const list = d.entries || []
+        return React.createElement('section', { key: g.id, className: split ? 'dsm-trash-split-pane' : 'dsm-trash-pane-group' },
+          g.title ? React.createElement('div', { className: 'dsm-trash-pane-group-head' },
+            React.createElement('span', { className: 'dsm-trash-pane-group-title', title: g.note }, g.title),
+            React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: list.length }))) : null,
+          d.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, d.error) : null,
+          list.length ? bulkRow(g) : null,
+          d.loading
+            ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+            : list.length
+              ? React.createElement('div', { className: 'dsm-trash-list' }, list.map(function (item) { return rowNode(g, item) }))
+              : React.createElement(EmptyState, { text: g.emptyText || t('trash.empty') }))
+      }
+      /**
+       * 「详情」弹窗（只读预览）。**只有「关闭」，没有保存** —— 用户 2026-10-12 第四轮的原话：
+       * 「点开就能看这个信息是什么样子，不能更改内容，没有保存按键」。
        *
-       * 组头**不放按钮**：非分栏时勾选与删除都是跨组的（提示词页一次列两组），组头各放一颗
-       * 「全选」就得各配一颗删除键 —— 那正是被砍掉的多颗形态；分栏时两颗动作下到每块自己的
-       * 批量条里（`.dsm-trash-pane-batch`），组头仍然只是标题。
+       * 三种形态：
+       *   · 来源记录（目录组）—— `meta` 是一张「字段 → 值」表，不读盘；
+       *   · 负载文件 —— 一份文件一张卡（相对路径 + 大小在头，正文在下面，直接复用 `.dsm-code`）；
+       *   · 读不到 —— 只有一句错误，没有别的。
+       *
+       * 声明在组件**内部**（不是 factory 作用域）：它要用当前的 `t`（语言一换，
+       * 窗口里那几行字也得跟着换）与 `setPreview`。
        */
-      const groupHead = function (g) {
-        const list = g.entries || []
-        return React.createElement('div', { className: 'dsm-trash-group-head' },
-          React.createElement('div', { className: 'dsm-trash-group-head-row' },
-            React.createElement('span', { className: 'dsm-trash-group-title' }, g.title),
-            React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: list.length }))),
-          // 后果说明进组头（sticky 跟着滚）：这组删的是记录还是文件，一眼可辨。
-          g.sub ? React.createElement('p', { className: 'dsm-trash-group-sub' }, g.sub) : null)
+      const previewModalNode = function () {
+        const close = function () { setPreview(null) }
+        let body
+        if (preview.error) {
+          body = React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, preview.error)
+        } else if (preview.meta) {
+          body = React.createElement('div', { className: 'dsm-form' },
+            formSection(t('trash.preview.meta')),
+            React.createElement('div', { className: 'dsm-fm' }, preview.meta.map(function (row) {
+              return React.createElement('div', { key: row[0], className: 'dsm-fm-row' },
+                React.createElement('div', { className: 'dsm-fm-key' }, row[0]),
+                React.createElement('div', { className: 'dsm-fm-val' }, row[1]))
+            })),
+            React.createElement('div', { className: 'dsm-preview-note' }, t('trash.preview.dir.note')))
+        } else if (preview.loading) {
+          body = React.createElement('div', { className: 'dsm-empty' }, t('trash.preview.loading'))
+        } else {
+          const files = preview.files || []
+          body = React.createElement('div', { className: 'dsm-preview' },
+            React.createElement('div', { className: 'dsm-preview-note' },
+              t('trash.preview.readonly') + ' · ' + t('trash.preview.files', { count: files.length })),
+            files.length
+              ? React.createElement('div', { className: 'dsm-preview-files' }, files.map(function (f, i) {
+                return React.createElement('section', { key: f.path || i, className: 'dsm-preview-file' },
+                  React.createElement('div', { className: 'dsm-preview-file-head' },
+                    React.createElement('span', { className: 'dsm-preview-path', title: f.path }, f.path),
+                    React.createElement('span', { className: 'dsm-preview-size' }, fmtBytes(f.size))),
+                  f.text === undefined ? null : React.createElement('pre', { className: 'dsm-code' }, f.text),
+                  // 二进制 / 截断各自如实标一句：不标的话用户会以为"这条记录就这么点内容"。
+                  f.binary === true ? React.createElement('div', { className: 'dsm-preview-flag' }, t('trash.preview.binary')) : null,
+                  f.truncated === true ? React.createElement('div', { className: 'dsm-preview-flag' }, t('trash.preview.truncated')) : null)
+              }))
+              : React.createElement(EmptyState, { text: t('trash.preview.empty') }))
+        }
+        // 只读预览单开一档（见 10-css.js 的 .dsm-modal-preview）：这里装的是代码正文，
+        // S 档 440 一行要折好几次。负载文件那一档再挂 fill（定高 + 代码区吃掉剩余高度）。
+        // ⚠️ 判据用上面那三个分支的**补集**，不能写 `preview.files` —— 那个字段在
+        // openPreview 里就初始化成 `[]` 了，空数组是 truthy，来源记录那档会被误挂 fill。
+        const isFilePreview = !preview.error && !preview.meta && !preview.loading
+        return React.createElement(Modal, {
+          key: 'trash-preview-modal',
+          title: preview.name,
+          closeLabel: t('btn.close'),
+          className: 'dsm-modal-preview' + (isFilePreview ? ' dsm-modal-preview-fill' : ''),
+          onClose: close,
+        },
+          body,
+          React.createElement('div', { className: 'dsm-modal-actions' },
+            React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: close }, t('btn.close'))))
       }
-      /**
-       * 分栏模式的一块（组头 + 批量条 + 列表区），与技能回收站（43-skills.js 的 `trashPane`）
-       * 同一套结构与类名。批量条挂在**每块里**：两块的后果不同（预设目录 / 快捷提示词目录），
-       * 一颗共用的「全选 + 永久删除」会让人勾完之后不知道那一键要删哪个。
-       */
-      const renderPane = function (g) {
-        const list = g.entries || []
-        const keys = (g.entries || []).map(function (item) { return rowKey(g, item) })
-        const rows = props.loading
-          ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
-          : list.length === 0
-            ? React.createElement('div', { className: 'dsm-empty' }, t('trash.empty'))
-            : list.map(function (item) { return row(g, item) })
-        return React.createElement('div', { className: 'dsm-trash-group', key: String(g.title) },
-          groupHead(g),
-          // 批量条只在**这一块真有可删的东西**时出现：空块上挂一条「已选 0 项 + 全选 + 永久删除 (0)」
-          // 是纯噪音，两块各占一半高度，那条还白吃掉一行的列表空间（技能页同一条判据）。
-          batchEnabled && keys.length
-            ? React.createElement('div', { className: 'dsm-trash-pane-batch' }, bulkRow(keys, String(g.title)))
-            : null,
-          React.createElement('div', { className: 'dsm-trash-pane-body' }, rows))
-      }
-      const renderGroup = function (g) {
-        const list = g.entries || []
-        const rows = props.loading
-          ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
-          : list.length === 0
-            ? React.createElement('div', { className: 'dsm-empty' }, t('trash.empty'))
-            : list.map(function (item) { return row(g, item) })
-        return React.createElement('div', { className: 'dsm-trash-group', key: String(g.title) },
-          groupHead(g),
-          React.createElement('div', { className: 'dsm-trash-group-body' }, rows))
-      }
-      // 批量那一行：「已选 N 项」占左侧，**「全选」与唯一的「永久删除」并排靠最右**
-      // （用户 2026-10-10 裁定：删除键一个就够，与全选同一行、放最右边）。
-      // 分栏时这一行只剩保留期 —— 批量条已经下到两块里，与技能回收站同形。
-      const toolbar = split
-        ? React.createElement(RetentionSelect, { key: 'retention', t: t, onReload: props.onReload })
-        : React.createElement('div', { className: 'dsm-trash-toolbar', key: 'toolbar' },
-            React.createElement(RetentionSelect, { t: t, onReload: props.onReload }),
-            batchEnabled ? bulkRow(allKeys, TRASH_BULK_ALL) : null)
-      // 列表类弹窗：宽高都固定（`.dsm-modal-list` + `.dsm-modal-trash`），滚动只发生在
-      // Modal 的 body 这一层 —— 条目数变化时弹窗不跳，也不会出现「弹窗滚 + 组内滚」的嵌套滚动条。
-      // 分栏时反过来：body 不滚，滚动下到每块的列表区里（`.dsm-modal-trash-split`）。
-      return React.createElement(Modal, {
+      // 列表类弹窗（L=720）：头/底恒定，body 不滚，滚动交给右栏那一条列表区。
+      //
+      // 标题旁边那颗总数（用户 2026-10-12「回收站弹窗完善」）：标题原本只有一个「回收站」，
+      // 里面装了多少东西得逐组去看计数徽标。**任一组还在读时不报** —— 一个会往上跳的数字
+      // 比不报更让人怀疑自己看错了。
+      const totalCount = groupIds.reduce(function (n, gid) { return n + (dataOf(gid).entries || []).length }, 0)
+      const totalReady = groupIds.every(function (gid) { return dataOf(gid).loading !== true })
+      const trashNode = React.createElement(Modal, {
         key: 'trash-modal',
-        title: props.title,
+        title: React.createElement('span', { className: 'dsm-modal-title-row' },
+          props.title || t('trash.title'),
+          totalReady ? React.createElement('span', { className: 'dsm-count' }, t('trash.total', { count: totalCount })) : null),
         closeLabel: t('btn.close'),
         list: true,
         className: 'dsm-modal-list dsm-modal-trash' + (split ? ' dsm-modal-trash-split' : ''),
         onClose: props.onClose,
       },
-        props.error ? React.createElement(Notice, { kind: 'err', text: props.error }) : null,
-        toolbar,
-        split
-          ? React.createElement('div', { className: 'dsm-trash-split' }, groups.map(renderPane))
-          : groups.map(renderGroup))
+        notice ? React.createElement('div', { className: 'dsm-feedback dsm-trash-notice ' + (notice.ok ? 'dsm-ok' : 'dsm-error'), role: 'alert' }, notice.text) : null,
+        React.createElement('div', { className: 'dsm-trash-pane' },
+          React.createElement('div', { className: 'dsm-trash-pane-top' },
+            React.createElement(RetentionSelect, { t: t, onReload: reloadAll })),
+          // 分栏档的两块**不是**一条滚动链：各自滚、各自带批量条，所以外面这层不滚
+          // （`overflow` 交给每块里的 `.dsm-trash-list`）。
+          split
+            ? React.createElement('div', { className: 'dsm-trash-split' },
+                groupIds.map(function (gid) { return groupNode(GROUPS[gid], true) }))
+            : React.createElement('div', { className: 'dsm-trash-pane-scroll' },
+                groupIds.map(function (gid) { return groupNode(GROUPS[gid], false) }))))
+      if (!preview) return trashNode
+      // 「详情」弹窗**叠在回收站上面**（`Modal` 自带 gateModalDepth 计数，叠弹窗是既有形态：
+      // 导入套导出、自定义目录套选目录都是这样）。关掉它回到回收站，勾选与滚动位置都不动。
+      return React.createElement(React.Fragment, null, trashNode, previewModalNode())
     }
-
-    /** 勾选行：复选框 + 名称/说明 + 右侧指标 + 可选行内动作。 */
+    /**
+     * 勾选行（2026-10-11 切片五收编）：本质就是行选择 RowSelect —— 导出列表、导入
+     * 预览、模式工具这些「整行可点勾选」的列表行走 RowSelect 本尊，原生勾选框不再
+     * 有第二种画法（REDESIGN §5.1）。保留 `pickRow` 这个名字：两处调用点的参数形状
+     * （key/checked/name/desc/descTitle/meta/actions/disabled/onChange）与 RowSelect
+     * 的 props 完全同形，直接透传。
+     */
     function pickRow(props) {
-      return h('label', { key: props.key, className: 'dsm-pick' },
-        h('input', { type: 'checkbox', checked: props.checked === true, disabled: props.disabled === true, onChange: props.onChange }),
-        h('span', { className: 'dsm-pick-main' },
-          h('span', { className: 'dsm-pick-name' }, props.name),
-          // 行内传进来的 desc 可能已被调用方截断，全文走 descTitle（悬浮可见）。
-          props.desc ? h('span', { className: 'dsm-pick-desc', title: props.descTitle || undefined }, props.desc) : null),
-        props.meta ? h('span', { className: 'dsm-pick-meta' }, props.meta) : null,
-        props.actions ? h('span', { className: 'dsm-pick-actions' }, props.actions) : null)
+      return h(RowSelect, {
+        key: props.key, checked: props.checked === true, disabled: props.disabled === true,
+        name: props.name, desc: props.desc, descTitle: props.descTitle,
+        meta: props.meta, actions: props.actions, onChange: props.onChange,
+      })
     }
     /** 段体顶部的筛选行（条目多的段用；勾选状态不受筛选影响）。 */
     function segFilter(value, onChange, placeholder) {
@@ -921,7 +1407,8 @@ function enabledMemoryCount(rules) {
         setPicked(function (prev) { return prev.filter(function (_, j) { return j !== index }) })
         setEntries(function (prev) { return prev.filter(function (_, j) { return j !== index }) })
       }
-      return h(Modal, { className: "dsm-modal-sm", title: props.title, closeLabel: t("btn.close"), onClose: props.onClose },
+      // 拖拽导入属「单表单」档：默认 M=560（REDESIGN §6.1「技能 / 子智能体 / 会话 导入 | M」）。
+      return h(Modal, { title: props.title, closeLabel: t("btn.close"), onClose: props.onClose },
         h("div", { className: "dsm-form" },
           props.extra || null,
           // 拖拽区用**真按钮**而不是带 onClick 的 div：键盘用户 Tab 得到它、Enter/Space 打开文件
@@ -946,10 +1433,10 @@ function enabledMemoryCount(rules) {
               h("button", { type: "button", className: "dsm-file-remove", disabled: props.busy, "aria-label": t("upload.remove") + " " + f.name, onClick: function () { dropAt(i) } }, "×"))
           })) : null,
           props.result ? h("div", { className: "dsm-feedback" + (props.result.warning ? " dsm-warning" : props.result.ok ? "" : " dsm-error"), role: "alert" }, props.result.text) : null,
-          // 文件要求清单（可选）：调用方按页传，结构上限制「这页需要什么格式」的表达。
-          props.requirements && props.requirements.length ? h("div", { className: "dsm-upload-requirements" },
+          // 文件要求（REDESIGN §7：说明 ≤1 行，机制细节进悬浮）——区内一行正文，全文进 title。
+          props.requirement ? h("div", { className: "dsm-upload-requirements" },
             h("div", { className: "dsm-label" }, t("upload.requirements")),
-            h("ul", null, props.requirements.map(function (r, i) { return h("li", { key: i }, r) }))) : null),
+            h("div", { className: "dsm-upload-req", title: props.requirementTitle || undefined }, props.requirement)) : null),
         h("div", { className: "dsm-modal-actions" },
           picked.length ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: props.busy, onClick: function () { setPicked([]); setEntries([]) } }, t("import.clear")) : null,
           h("button", { type: "button", className: "dsm-btn", disabled: props.busy || !picked.length, onClick: function () { props.onSubmit(entries, picked) } }, props.busy ? t("upload.importing") : t("import.submit"))))
@@ -962,7 +1449,7 @@ function enabledMemoryCount(rules) {
      */
     function ExportModal(props) {
       var t = props.t
-      var ds = react.useState(props.outDir || ''); var outDir = ds[0], setOutDir = ds[1]
+      var ds = react.useState(props.outDir || defaultIoDir()); var outDir = ds[0], setOutDir = ds[1]
       var ps = react.useState(false); var picking = ps[0], setPicking = ps[1]
       var items = props.items || []
       // 默认**不勾选**：导出是"把东西拿出去"，一键全选最容易让人把不该带走的也带走。
@@ -986,8 +1473,8 @@ function enabledMemoryCount(rules) {
           h('div', { className: 'dsm-field' },
             h('span', { className: 'dsm-label' }, t('export.outDir')),
             h('div', { className: 'dsm-dir-row' },
-              h('input', { className: 'dsm-control', type: 'text', value: outDir, placeholder: t('export.outDir.placeholder'), onChange: function (e) { setOutDir(e.target.value) } }),
-              h('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: props.busy, onClick: function () { setPicking(true) } }, t('btn.openDir')))),
+              h('input', { className: 'dsm-control', type: 'text', value: outDir, placeholder: defaultIoDir(), onChange: function (e) { setOutDir(e.target.value) } }),
+              h('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: props.busy, onClick: function () { requestHostDirectory(setOutDir, function () { setPicking(true) }) } }, t('btn.openDir')))),
           // 条目列表：始终渲染（哪怕只有一条）—— 默认不勾选意味着「不列出来就没得勾」。
           items.length ? h('div', { className: 'dsm-pick-list' }, groups.map(function (g) {
             var open = collapsed[g.name] !== true
@@ -996,7 +1483,7 @@ function enabledMemoryCount(rules) {
                 type: 'button', className: 'dsm-pick-group-head', 'aria-expanded': open ? 'true' : 'false',
                 onClick: function () { setCollapsed(function (prev) { var next = Object.assign({}, prev); next[g.name] = open; return next }) },
               },
-                h('span', { className: 'dsm-pick-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
+                h(CaretIcon, { key: 'caret', open: open, className: 'dsm-pick-caret' }),
                 h('span', { className: 'dsm-pick-group-name', title: g.name }, g.name),
                 h('span', { className: 'dsm-pick-group-count' }, t('export.group.count', { count: g.rows.length }))) : null,
               open ? g.rows.map(function (it) {
@@ -1062,19 +1549,8 @@ function enabledMemoryCount(rules) {
             h("button", { type: "button", className: "dsm-btn", disabled: st.loading || !(String(st.current || '').trim() || String(text || '').trim()), onClick: pick }, t('dir.pick')))))
     }
 
-    // ---------- MCP 配置体检（0.15.0 B1）--------------------------------------
-    /**
-     * 体检状态点。配色按琥珀语义分工：绿=体检通过、灰=还没体检（**不是**「没问题」）、
-     * 黄=查出 warn、info 级说明不点黄（它说的是"这项确认不了"，不是"出了问题"）。
-     */
-    function InspectDot(props) {
-      return h('span', {
-        className: 'dsm-dot dsm-dot-' + (props.tone || 'idle'),
-        role: 'img',
-        'aria-label': props.title,
-        title: props.title,
-      })
-    }
+    // （MCP 配置体检的 `InspectDot` 已随体检功能一起删除 —— 用户 2026-10-12 裁定移除，
+    //  见 41-mcp.js 里 openDetail 上方那段说明。行首现在只剩连接态那一枚点。）
 
     /**
      * 行内状态标签：挂在名字后面的那颗描边胶囊，四个域共用一个出口（配色口径一致）。

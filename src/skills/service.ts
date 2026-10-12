@@ -34,6 +34,7 @@ import {
   customRootsFromState,
   addCustomRoot,
   removeCustomRoot,
+  forgetSource,
   logPath,
   trashRootPath,
 } from './core.js'
@@ -255,6 +256,8 @@ export function createSkillsService(ctx: any): SkillsService {
     // 批量启停与单条启停同权：配了访问令牌的宿主必须同样要求带令牌。
     'skill-set-all',
     'skill-trash-restore', 'skill-trash-delete', 'skill-custom-add', 'skill-custom-remove',
+    // 「永久删除来源记录」（回收站 → 目录）：与上面两条同权，是写操作。
+    'skill-source-forget',
   ])
 
   /**
@@ -460,6 +463,13 @@ export function createSkillsService(ctx: any): SkillsService {
     ),
     'skill-custom-remove': wrap(
       (args) => write(() => removeCustomRoot(args && args.key, log)),
+      afterWrite,
+    ),
+    // 永久删除一条**按约定发现**的来源记录（agents / codex / claude）。与 `skill-custom-remove`
+    // 的分工见 core.ts 的 `forgetSource`：那条管用户手加的自定义目录，这条管推导出来的来源
+    // —— 后者不在状态文件的 customRoots 里，必须另记一份"已永久删除"名单才删得掉。
+    'skill-source-forget': wrap(
+      (args) => write(() => forgetSource(args && args.root, log)),
       afterWrite,
     ),
   }

@@ -311,6 +311,87 @@ export function trashEntryPath(kind: TrashKind, id: string): string | null {
   return join(trashKindDir(kind), id)
 }
 
+/** 回收站「详情」里的一份负载文件。 */
+export interface TrashPayloadFile {
+  /** 条目目录内的相对路径（用 `/` 分隔，跨平台同一份写法）。 */
+  readonly path: string
+  readonly size: number
+  /** 文本内容（二进制文件没有这一项）。超上限时是截断后的前 N 字节。 */
+  readonly text?: string
+  /** 内容被截断（只给了前一段）。 */
+  readonly truncated?: boolean
+  /** 看着是二进制（没有 `text`）。 */
+  readonly binary?: boolean
+}
+
+/** 清单类文件名：它们是插件自己的元数据，不是"删掉的那份东西"，不进详情。 */
+const TRASH_META_NAMES = new Set(['manifest.json', 'metadata.json'])
+
+/** 详情上限：单个文件、总字节、文件数、递归深度。超了就如实标 `truncated`，绝不悄悄截。 */
+const PREVIEW_MAX_FILE = 64 * 1024
+const PREVIEW_MAX_TOTAL = 256 * 1024
+const PREVIEW_MAX_FILES = 40
+const PREVIEW_MAX_DEPTH = 4
+
+/** 前 8 KiB 里出现 NUL 就按二进制处理 —— 二进制内容转成字符串只会是一屏乱码。 */
+function looksBinary(buf: Buffer): boolean {
+  const n = Math.min(buf.length, 8192)
+  for (let i = 0; i < n; i += 1) if (buf[i] === 0) return true
+  return false
+}
+
+/**
+ * 把一条回收站条目目录里的负载**只读**地读出来，供界面「详情」显示。
+ *
+ * 为什么放在这里而不是各域各写一遍：三个域的回收站落在三套不同的目录布局里
+ * （hub 的四类 `<kind>-trash`、记忆的 `memories-trash`、技能的 `skills-trash`），
+ * 但"把一个目录里的文件读成能看的文本"这件事完全一样。上限、二进制判据、哪些名字算清单
+ * 只写一遍 —— 否则迟早出现"某一域的详情能读到别的东西"。
+ *
+ * 只读、不落盘、不跟随符号链接（条目里出现链接一律跳过，别把根外的文件读出来给界面看）。
+ * 目录不存在 / 读不动 → 返回空数组，调用方据此报"内容已不可读"，不抛。
+ */
+export async function readTrashPayloadFiles(dir: string, options: { maxDepth?: number } = {}): Promise<TrashPayloadFile[]> {
+  const out: TrashPayloadFile[] = []
+  let total = 0
+  const maxDepth = Number.isFinite(Number(options.maxDepth)) ? Number(options.maxDepth) : PREVIEW_MAX_DEPTH
+  const walk = async (current: string, rel: string, depth: number): Promise<void> => {
+    if (out.length >= PREVIEW_MAX_FILES || depth > maxDepth) return
+    let entries
+    try {
+      entries = await readdir(current, { withFileTypes: true })
+    } catch { return }
+    // 目录在前、文件在后；同层按名字排序 —— 让详情里的顺序稳定（不随文件系统枚举顺序变）。
+    const sorted = [...entries].sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    for (const entry of sorted) {
+      if (out.length >= PREVIEW_MAX_FILES) return
+      const abs = join(current, entry.name)
+      const nextRel = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isSymbolicLink()) continue
+      if (entry.isDirectory()) { await walk(abs, nextRel, depth + 1); continue }
+      if (!entry.isFile() || TRASH_META_NAMES.has(entry.name)) continue
+      let buf: Buffer
+      try { buf = await readFile(abs) } catch { continue }
+      const file: { path: string; size: number; text?: string; truncated?: boolean; binary?: boolean } = { path: nextRel, size: buf.length }
+      if (looksBinary(buf)) {
+        file.binary = true
+      } else {
+        const room = Math.max(0, Math.min(PREVIEW_MAX_FILE, PREVIEW_MAX_TOTAL - total))
+        const slice = buf.subarray(0, room)
+        file.text = slice.toString('utf8')
+        if (slice.length < buf.length) file.truncated = true
+        total += slice.length
+      }
+      out.push(file)
+    }
+  }
+  await walk(dir, '', 0)
+  return out
+}
+
 async function readManifest(kind: TrashKind, id: string): Promise<TrashManifest | null> {
   const dir = trashEntryPath(kind, id)
   if (dir === null) return null

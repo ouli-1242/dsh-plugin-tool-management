@@ -5,9 +5,10 @@
 
 import { copyFile, cp, lstat, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { isValidTrashId } from '../hub.js'
+import { isValidTrashId, readTrashPayloadFiles, trashEntryPath, type TrashKind } from '../hub.js'
 import { LEGACY_BUNDLE_DOC, bundleDocName, isValidGroupSegment, isValidGroupPath, fail, MEMORIES_TRASH_DIR } from '../memories/constants.js'
 import { readIndex, writeIndex } from '../memories/index-io.js'
+import { isValidSegment } from '../paths.js'
 import type { MemoriesOpsCtx } from './ctx.js'
 
 /** 组装本域 op。rc 由 createMemoriesService 组装，契约见 ./ctx.ts。 */
@@ -156,5 +157,57 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     return { ok: true }
   }
 
-  return { rulesRemove, rulesRestore, rulesTrashList, rulesTrashRemove }
+  /**
+   * 回收站「详情」（只读）：把一条条目的内容读出来给界面看一眼"删掉的到底是什么"。
+   *
+   * 用户 2026-10-12：「回收站的每条信息应该增加一个详情按键，点开就能看这个信息是什么样子，
+   * 不能更改内容，没有保存按键」。所以这里**只有读**：不写盘、不改名、不动回收站条目。
+   *
+   * 为什么是一条跨域的 op 而不是五个域各加一条：五个回收站落在**三套不同的目录布局**里 ——
+   *   hub 四类：`<hub>/trash/<kind>-trash/<id>/`（`trashEntryPath`）
+   *   记忆：   `<stateDir>/trash/memories-trash/<trashId>/`
+   *   技能：   `<hub>/trash/skills-trash/<id>/`（skills 域的 `trashRootPath()`，由 index 注入）
+   * 但"读出来给人看"这件事完全一样，交给 `readTrashPayloadFiles` 一个函数做完，
+   * 上限 / 二进制判据 / 哪些名字算清单只写一遍。
+   *
+   * 条目目录不存在 / 不是目录 → 明确报"条目不存在"（与"目录在、但里面没有可显示的文件"
+   * 分开：前者是条死链，后者是一条正常但没内容的记录）。读不动的单个文件由
+   * `readTrashPayloadFiles` 自己跳过，不抛 —— 详情打不开不该影响用户对这条目做恢复 / 永久删除。
+   */
+  async function trashPreview(args: any): Promise<any> {
+    const domain = String((args && args.domain) || '')
+    const id = String((args && args.id) || '').trim()
+    const hubKinds: Record<string, TrashKind> = { presets: 'prompts', quick: 'quick-prompts', agents: 'subagents', scenes: 'scenes' }
+    let dir: string | null = null
+    if (hubKinds[domain] || domain === 'memories') {
+      // hub 四类与记忆回收站的条目名都由 `newTrashId()` 生成（时间戳 base36 + uuid 前 8 位），
+      // 走那一套严格白名单 —— 它同时也是 `rulesRestore` / 硬删除用的同一道闸。
+      if (!isValidTrashId(id)) return fail('error.rules.notFound', `回收站条目不存在：${id}`)
+      dir = hubKinds[domain]
+        ? trashEntryPath(hubKinds[domain], id)
+        : join(stateDir, MEMORIES_TRASH_DIR, id)
+    } else if (domain === 'skills') {
+      // ⚠️ 技能回收站的条目名是 `${Date.now()}-${randomUUID()}`（见 core.ts 的移入回收站那段），
+      // **不满足** `isValidTrashId` 那条白名单（多段连字符 + 大写十六进制）—— 拿它去判会把
+      // 每一条技能条目都判成"不存在"，界面上就是"详情点了没反应"。
+      // 这里换成与 `skill-trash.ts` 的 `entryPath` 同一个口径：能安全当**一个路径段**即可
+      //（不含分隔符 / 不是 `.` `..` / 首尾无空白与点）。以点开头的一律拒 —— `listTrash()`
+      // 本来就把 `.stage-*` 那类临时目录排除在外，界面拿不到它们，这里也不该读得到。
+      if (!isValidSegment(id, 128) || id.startsWith('.'))
+        return fail('error.rules.notFound', `回收站条目不存在：${id}`)
+      dir = rc.skillsTrashDir ? join(rc.skillsTrashDir, id) : null
+    } else return fail('error.rules.notFound', `这个回收站不支持查看详情：${domain || '(空)'}`)
+    if (!dir) return fail('error.rules.notFound', `回收站条目不存在：${id}`)
+    // 条目目录本身必须真实存在（`readTrashPayloadFiles` 对不存在的目录返回空数组，
+    // 那种"空"与"条目不存在"要分开：前者能恢复、后者是条死链）。
+    try {
+      const st = await lstat(dir)
+      if (!st.isDirectory() || st.isSymbolicLink()) return fail('error.rules.notFound', `回收站条目不存在：${id}`)
+    } catch {
+      return fail('error.rules.notFound', `回收站条目不存在：${id}`)
+    }
+    return { ok: true, id, domain, files: await readTrashPayloadFiles(dir) }
+  }
+
+  return { rulesRemove, rulesRestore, rulesTrashList, rulesTrashRemove, trashPreview }
 }

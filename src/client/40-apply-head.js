@@ -17,6 +17,10 @@
       pages: _pages,
       apply(ctx) {
         ensureCss()
+        // 导入 / 导出弹窗的默认目录：问一次宿主（桌面 → 主目录，跨平台跨用户），缓存起来供
+        // 各处输入框取用。放在 apply 开头是因为它**不依赖 ctx**（apiCall 直接走 fetch），
+        // 而用户打开那些弹窗要晚得多 —— 早一点发出去，打开时就已经到位（见 20 片的说明）。
+        loadDefaultIoDir()
         // ---------- 闭包边界纪律（07 审查五档问题：8 页共用一个闭包）----------
         // 单文件 + ModuleLoader 的形态下不再拆文件（用户 2026-09-19 裁定：内部重组、不引
         // 打包器），页面间共享只能走两条显式通道，违反即回退成「隐式闭包共享」：
@@ -69,6 +73,56 @@
         // 会话补挂、把旧的撤掉。
         const serviceOf = function (name) {
           try { return ctx.get(name) } catch (e) { return undefined }
+        }
+        // 「选择目录」接进宿主的官方通道（见 20-helpers.js 的 requestHostDirectory）。
+        // 同样**不写进 inject**、每次调用现取：提供方 `dsh-client-ui-workspace` 可能比本插件
+        // 晚就绪。后端是 browse（远端浏览器）时这个面上没有 pick，调用抛错由上层回落
+        // 插件自己的应用内目录列表 —— 拿不到系统框也不该变成"选不了目录"。
+        setHostPickDirectory(function () {
+          const ws = serviceOf('uiWorkspace')
+          if (!ws || typeof ws.pickDirectory !== 'function') return Promise.reject(new Error('宿主目录选择服务不可用'))
+          return ws.pickDirectory()
+        })
+        // 「填写令牌」弹窗的开合（见下面 openTokenDialog）。同一时刻只允许一个：
+        // 连点两下不该叠出两层遮罩（第二层会把第一层的关闭键盖住，只能按 Esc 退）。
+        let tokenDialogHost = null
+        /**
+         * 开一个自包含的「填写令牌」弹窗（用户 2026-10-12 提案：点开弹窗、填对自动关）。
+         *
+         * 为什么要自己建一个 React 根：本插件**没有常驻的 React 树** —— 页面组件都长在宿主
+         * 设置面板的 slot 里（`slots.inject('settings.section')`），面板不开就不在树上；而横幅
+         * 是挂在 body 上的裸 DOM。宿主的 ModuleLoader 提供 `react-dom/client`（同生态的
+         * dsh-better-sidebar 也这么给自己的浮层建根），所以这里现建一个根、关掉时拆掉，
+         * 不留常驻挂载点。
+         *
+         * 拿不到 react-dom 时**不静默**：退回"跳兼容页"（那条路在设置面板里是通的）。
+         * 用户点一下必须有事发生 —— 这正是 2026-10-12 报的那个 bug 的教训。
+         */
+        const openTokenDialog = function () {
+          if (tokenDialogHost) return
+          try {
+            if (typeof document === 'undefined' || !document.body) throw new Error('DOM 不可用')
+            const mod = require('react-dom/client')
+            const createRoot = mod && (mod.createRoot || (mod.default && mod.default.createRoot))
+            if (typeof createRoot !== 'function') throw new Error('react-dom/client 没有 createRoot')
+            const container = document.createElement('div')
+            container.className = 'dsm-token-dialog-root'
+            document.body.appendChild(container)
+            const root = createRoot(container)
+            const close = function () {
+              tokenDialogHost = null
+              try { root.unmount() } catch (e) { /* 卸载失败也要把容器摘掉，否则遮罩留在页面上 */ }
+              if (container.parentNode) container.parentNode.removeChild(container)
+            }
+            tokenDialogHost = { close: close }
+            root.render(React.createElement(TokenUnlockDialog, { t: t, onClose: close }))
+          } catch (e) {
+            tokenDialogHost = null
+            try {
+              console.warn('[dsh-plugin-tool-management] 填写令牌弹窗不可用，退回跳兼容页：' + (e && e.message ? e.message : e))
+            } catch (err) { /* 控制台不可用 */ }
+            openTokenPanel()
+          }
         }
         /**
          * `conversation` 服务的两次读：先严格读，再**非严格**读。
@@ -235,6 +289,8 @@
         // 文本节点单独用闭包变量持有，不挂在 DOM 节点上（`tokenBanner._text` 是把节点当
         // 储物格，客户端唯一的类型检查会报 TS2339）。横幅只创建一次、从不复位，两者同生命周期。
         let tokenBannerText = null
+        // 「前往」键同样要持有：切语言时它和正文一起换词（按钮文字也是词典里的）。
+        let tokenBannerGo = null
         // 手动关闭标记：横幅固定在视口顶部，会盖在宿主设置窗口的标题区上 —— 给一个出口，
         // 关掉后本次锁态期间不再出现；解锁（locked 变 false）即重置，下次再锁照常出现。
         // 输入框上的锁与行内说明不受影响，信息不丢。
@@ -256,6 +312,16 @@
               tokenBannerText = document.createElement('span')
               tokenBannerText.className = 'dsm-token-banner-text'
               tokenBanner.appendChild(tokenBannerText)
+              // 「填写令牌」：点开一个自包含的弹窗，填对自动关（用户 2026-10-12 提案）。
+              // 此前这颗键是"跳到设置 → 工具 → 兼容"，但横幅是在**任何**页面都可能出现的，
+              // 从对话页点它时设置面板往往根本没开 —— 而宿主没有"打开设置"的公开服务，
+              // 于是那颗键要么没反应、要么得靠认领宿主 DOM 里自己那一行导航（又脆又绕）。
+              // 改成弹窗之后，这条键不再依赖用户当时在哪一页，也不再碰宿主 DOM。
+              tokenBannerGo = document.createElement('button')
+              tokenBannerGo.type = 'button'
+              tokenBannerGo.className = 'dsm-token-banner-go'
+              tokenBannerGo.addEventListener('click', function () { openTokenDialog() })
+              tokenBanner.appendChild(tokenBannerGo)
               const bannerClose = document.createElement('button')
               bannerClose.type = 'button'
               bannerClose.className = 'dsm-token-banner-close'
@@ -270,6 +336,7 @@
             }
             // 语言切换后文案要跟着变（锁态没变、setTokenLock 不会通知，见下面的 locale 订阅）。
             tokenBannerText.textContent = t('compat.token.banner')
+            if (tokenBannerGo) tokenBannerGo.textContent = t('token.jump')
             tokenBanner.style.display = tokenBannerDismissed ? 'none' : ''
           } catch (e) { /* DOM 不可用 → 只是少一条说明，不影响门禁本身 */ }
         }

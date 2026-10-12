@@ -36,15 +36,13 @@
           var imps = React.useState('')
           var importScene = imps[0], setImportScene = imps[1]
           // 新建场景弹窗与场景建/删已移至「场景」页（ScenesPage）。
-          // 记忆回收站：列表在打开弹窗时按需拉取（rules-trash-list）。
-          var trs = React.useState({ loading: false, error: null, entries: [] })
+          // 记忆回收站：true = 打开本页那一个回收站（42-shared-ui.js 的 TrashModal）。
+          var trs = React.useState(false)
           var trash = trs[0], setTrash = trs[1]
           // D14：导出弹窗的状态（busy + 结果）。刻意不复用本页的 `result`：
           // 那个是页面级回执（会自动消失），导出结果只该出现在弹窗里。
           var exs = React.useState(null)
           var exportState = exs[0], setExportState = exs[1]
-          var flipRef = React.useRef(null)
-          useFlipReorder(flipRef)
           // bundle 附件的隐藏文件选择器；上限与服务端 MAX_ATTACH_ENTRY_BYTES 对齐。
           var attachRef = React.useRef(null)
           var ATTACH_MAX_MB = 8
@@ -199,82 +197,17 @@
 
           // （场景建/删也已移至 ScenesPage；场景启停开关同）
           // ── 记忆回收站（rules-remove 移入 / rules-restore 恢复 / rules-trash-remove 永久删除）──
-          // 此前删除后只能看到一句"回收站 ID"，界面上无法恢复；这里把入口补齐。
-          function loadTrash() {
-            setTrash({ loading: true, error: null, entries: [] })
-            apiCall('rules-trash-list', {}).then(function (res) {
-              if (res && res.ok) setTrash({ loading: false, error: null, entries: res.entries || [] })
-              else setTrash({ loading: false, error: translateError(t, res), entries: [] })
-            }).catch(function (e) { setTrash({ loading: false, error: errMsg(e), entries: [] }) })
-          }
-          function openTrash() { setModal({ type: 'trash' }); loadTrash() }
-          function submitRestore(entry) {
-            if (busy) return
-            setBusy(true)
-            apiCall('rules-restore', { trashId: entry.trashId }).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) {
-                // 弹窗**不关**：与提示词 / 场景 / 子智能体三个回收站同一条口径 —— 恢复一条之后
-                // 接着恢复下一条是常态，关掉弹窗等于逼用户再点一次「回收站」。
-                setResult({ ok: true, text: t('memory.result.restored', { name: entry.name }) })
-                refresh(true)
-                loadTrash()
-              } else setTrash(function (cur) { return Object.assign({}, cur, { error: translateError(t, res) }) })
-            }).catch(function (e) { setBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
-          }
-          function submitTrashDelete(entry) {
-            if (busy) return
-            setBusy(true)
-            apiCall('rules-trash-remove', { trashId: entry.trashId }).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) {
-                setResult({ ok: true, text: t('memory.result.trashRemoved', { name: entry.name }) })
-                loadTrash()
-              } else setTrash(function (cur) { return Object.assign({}, cur, { error: translateError(t, res) }) })
-            }).catch(function (e) { setBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
-          }
-          /**
-           * 批量永久删除（回收站那条「已选 N 项 + 全选 + 永久删除 (N)」）。
-           *
-           * 逐条调**已有的单条 op**（`rules-trash-remove`），服务端不另造批量版 —— 那条自带
-           * 存在性校验，再造一份等于把判据抄两遍（理由同 42-shared-ui.js 的 TrashModal）。
-           * 串行而不是并发：条目数天然有限，串行才给得出「删了几个、为什么没删掉」。
-           */
-          function purgeTrashMany(items) {
-            if (!items.length) return
-            setBusy(true)
-            var done = 0, failed = 0, firstErr = null
-            var step = function (i) {
-              if (i >= items.length) {
-                setBusy(false)
-                setResult({
-                  ok: failed === 0,
-                  text: failed === 0
-                    ? t('trash.purgeMany.result', { count: done })
-                    : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' }),
-                })
-                loadTrash()
-                return
-              }
-              apiCall('rules-trash-remove', { trashId: items[i].trashId }).then(function (res) {
-                if (res && res.ok) done += 1
-                else { failed += 1; if (!firstErr) firstErr = translateError(t, res) }
-                step(i + 1)
-              }).catch(function (e) {
-                failed += 1
-                if (!firstErr) firstErr = errMsg(e)
-                step(i + 1)
-              })
-            }
-            step(0)
-          }
+          // 清单加载与恢复/永久删除/批量都在共享 TrashModal（42-shared-ui.js）内部完成；
+          // 本页只管开关弹窗（`trash` = true）与写操作后的数据重读。
+          function openTrash() { setModal({ type: 'trash' }) }
           // ── 单条记忆启停（索引层开关，不改文件；停用的记忆仍留在磁盘上）──
           function toggleRule(rule) {
             if (busy) return
             setBusy(true); setResult(null)
             apiCall('rules-toggle', { id: rule.id, enabled: rule.enabled === false }).then(function (res) {
               setBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('memory.result.toggled', { name: rule.name }) }); refresh(true) }
+              // 回执动词表（REDESIGN §12.4）：两个方向各取字面量键，不合成三元选词。
+              if (res && res.ok) { setResult({ ok: true, text: rule.enabled === false ? t('done.enabled', { name: rule.name }) : t('done.disabled', { name: rule.name }) }); refresh(true) }
               else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
@@ -389,7 +322,7 @@
               }
               var id = (res.rule && res.rule.id) || (payload.group ? payload.group + '/' + payload.name : payload.name)
               var name = (res.rule && (res.rule.id || res.rule.name)) || payload.name
-              return finishEditor(id, name, pending, 'memory.result.created', 'memory.result.createdAttached')
+              return finishEditor(id, name, pending, 'done.created', 'memory.result.createdAttached')
             }).catch(function (e) { setBusy(false); setEditor(Object.assign({}, editor, { error: errMsg(e) })) })
           }
           function submitUpdate() {
@@ -409,7 +342,7 @@
                 return null
               }
               var name = (res.rule && (res.rule.id || res.rule.name)) || payload.name
-              return finishEditor(editor.id, name, pending, 'memory.result.updated', 'memory.result.updatedAttached')
+              return finishEditor(editor.id, name, pending, 'done.saved', 'memory.result.updatedAttached')
             }).catch(function (e) { setBusy(false); setEditor(Object.assign({}, editor, { error: errMsg(e) })) })
           }
           function submitDelete(rule) {
@@ -428,11 +361,12 @@
           var stats = data.stats || EMPTY_STATS
           // 注入预算：宿主 rules-list 一直在返回 sceneMemory，但此前从未渲染 ——
           // 于是"超出预算、部分记忆没进提示词"对用户完全不可见。
+          // 展示位 2026-10-12 搬到页头统计格（原来在工具条右侧，带一条 72px 进度条）；
+          // 进度条随之下线，超限改由整格转错误色 + 标签补「已超限」表达。
           var memInfo = data.sceneMemory || EMPTY_MEMORY
           var memMax = Number(memInfo.maxBytes) || 0
           var memUsed = Number(memInfo.usedBytes) || 0
           var budgetOver = memMax > 0 && memUsed > memMax
-          var budgetPct = memMax > 0 ? Math.min(100, Math.round((memUsed / memMax) * 100)) : 0
           var droppedNames = React.useMemo(function () {
             return (memInfo.dropped || []).map(function (d) { return (d.scene ? d.scene + '/' : '') + d.name })
           }, [memInfo])
@@ -461,11 +395,13 @@
           var bulkAllOn = allMemoriesOn(bulkRules)
           // 卡内行的顺序（「启用的排前面」）：在页面这一层算一次。**不能**放进 renderSceneCard ——
           // 那是个普通函数、按可见场景数被调用，在里面调 Hooks 会破坏 Hooks 调用序。
-          // 行的 key 与 data-flip-* 仍来自规则自己（见 renderRuleRow），未动。
+          // 行的 key 仍来自规则自己（见 renderRuleRow），未动。
+          // 定序表整页一张（key 带上桶名，跨场景不撞）：开关当场不重排，刷新或重进这页才重新置顶。
+          var memoryRank = useRank()
           var rowsByBucket = React.useMemo(function () {
             var map = {}
             visibleBuckets.forEach(function (n) {
-              map[n] = enabledFirst(buckets[n].rules, function (r) { return r.enabled !== false; })
+              map[n] = rankedFirst(memoryRank, function (r) { return n + '|' + String(r.id || r.name) }, buckets[n].rules, function (r) { return r.enabled !== false; })
             })
             return map
           }, [visibleBuckets, buckets])
@@ -507,26 +443,51 @@
             var statusKey = shadowed ? 'status.shadowed' : !enabled ? 'memory.status.off' : sceneActive === false ? 'memory.status.sceneOff' : 'status.enabled'
             // 灰=不进上下文但不是故障（被遮蔽 / 本条停用 / 场景没启用），绿=这条真的会注入。
             var statusTone = shadowed || !enabled || sceneActive === false ? 'muted' : 'ok'
-            return React.createElement('div', { key: r.id, className: 'dsm-row', 'data-flip-key': r.id, 'data-flip-on': enabled ? '1' : '0' },
-              React.createElement('div', { className: 'dsm-main' },
-                React.createElement('div', { className: 'dsm-name-row' },
-                  React.createElement('div', { className: 'dsm-name' }, r.name),
-                  React.createElement(StatusTag, { tone: statusTone, text: t(statusKey) })),
-                React.createElement('div', { className: 'dsm-note' }, r.description || ''),
-                shadowed ? React.createElement('div', { className: 'dsm-rule-shadow-hint' }, t('memory.shadowed.hint')) : null),
-              React.createElement('div', { className: 'dsm-tags' },
-                // 体积：记忆是唯一**直接吃注入预算**的域（场景段 128 KiB），此前页面上却
-                // 看不出哪条大 —— 一列字节数就是那一域的成本读数。宿主读不到文件时不带
-                // `bytes`，这里也就什么都不显示（而不是显示 0 B，那是个假数字）。
-                typeof r.bytes === 'number' ? React.createElement('span', { className: 'dsm-tag', title: t('memory.size.tip', { size: fmtBytes(r.bytes) }) }, fmtBytes(r.bytes)) : null,
-                r.group && r.group.indexOf('/') >= 0 ? React.createElement('span', { className: 'dsm-tag' }, r.group) : null,
-                r.form === 'bundle' ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.form.bundle')) : null,
-                attachTag(r, shadowed),
-                r.descriptionDerived ? React.createElement('span', { className: 'dsm-tag' }, t('memory.derived')) : null),
-              React.createElement('div', { className: 'dsm-row-actions' },
-                React.createElement(Switch, { on: enabled, disabled: busy || shadowed || anyLocked, label: t('memory.enable') + ' ' + r.name, onClick: function () { toggleRule(r) } }),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || shadowed || anyLocked, onClick: function () { openEditor(r) } }, t('memory.edit')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || shadowed || anyLocked, onClick: function () { setModal({ type: 'delete', rule: r }) } }, t('memory.delete'))))
+            // 「需要处理」的两种（被覆盖 / 场景未启用）走行 1 的 tag，启停复述走行首状态点
+            //（REDESIGN §3.4；切片三移交的「状态点前移」）。
+            var attention = statusKey !== 'status.enabled' && statusKey !== 'memory.status.off'
+            // 行 2 元信息（切片三移交的「tags 列清理」）：描述 / 多级分组路径 / 附件 / 派生。
+            // 附件计数保持**可点**（进编辑弹窗并滚到附件区），其余降为弱色文字。
+            //
+            // 体积（`145 B`）2026-10-12 从这一行挪到了行 1 的名称旁（用户：「记忆的 145B 带
+            // 边框然后加在名称旁边」）：它是这一行的"量值"，跟名称一样是**扫读**时先看的；
+            // 挤在描述后面既容易被长描述挤掉，也读不出"多大"。同时删掉「bundle」那颗形态标签
+            // （用户：「"bundle" 不用显示」）—— 形态由附件计数（`📎 N 个附件`）已经说清了，
+            // 再来一个英文单词只是噪音。`memory.form.*` 两个键**仍然在用**（42 片回收站/导出
+            // 里按 `'memory.form.' + …` 计算取词），别顺手删掉。
+            var attachNode = attachTag(r, shadowed)
+            var metaBits = [
+              r.description ? React.createElement('span', { key: 'desc', className: 'dsm-listrow-meta-desc', title: r.description }, r.description) : null,
+              r.group && r.group.indexOf('/') >= 0 ? React.createElement('span', { key: 'group', className: 'dsm-listrow-meta-info dsm-mono' }, r.group) : null,
+              attachNode,
+              r.descriptionDerived ? React.createElement('span', { key: 'derived', className: 'dsm-listrow-meta-info' }, t('memory.derived')) : null,
+            ]
+            // 名称旁那颗体积标签：`.dsm-tag` 就是现成的"带边框"形态（边框 + 圆角 + 12px），
+            // 只补一条等宽数字，免得同一列里 145 B / 1.2 KB / 980 B 宽度跳来跳去。
+            var sizeTag = typeof r.bytes === 'number'
+              ? React.createElement('span', {
+                key: 'size',
+                className: 'dsm-tag dsm-tag-size',
+                title: t('memory.size.tip', { size: fmtBytes(r.bytes) }),
+              }, fmtBytes(r.bytes))
+              : null
+            return React.createElement(ListRow, {
+              key: r.id,
+              dots: attention ? [] : [React.createElement(StatusDot, { key: 'dot', tone: statusKey === 'status.enabled' ? 'ok' : 'idle', title: t(statusKey) })],
+              name: r.name,
+              nameAfter: sizeTag,
+              tag: attention ? React.createElement(StatusTag, { tone: statusTone, text: t(statusKey) }) : null,
+              meta: metaBits,
+              extra: shadowed ? React.createElement('div', { className: 'dsm-rule-shadow-hint' }, t('memory.shadowed.hint')) : null,
+              side: React.createElement(Switch, { on: enabled, disabled: busy || shadowed || anyLocked, label: t('memory.enable') + ' ' + r.name, onClick: function () { toggleRule(r) } }),
+              actions: [
+                // 「编辑」在锁定态**照常可点**（用户 2026-10-12：「场景锁定下改成子智能体、
+                // 提示词、记忆可以打开编辑页面，但是不能保存」）：只读地看一眼内容不该被锁挡住，
+                // 真正写盘的那一步（弹窗里的保存键）才置灰。其余会写盘的行内动作照旧置灰。
+                React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || shadowed, onClick: function () { openEditor(r) } }, t('memory.edit')),
+                React.createElement('button', { key: 'del', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || shadowed || anyLocked, onClick: function () { setModal({ type: 'delete', rule: r }) } }, t('memory.delete')),
+              ],
+            })
           }
 
           function renderSceneCard(name) {
@@ -557,16 +518,14 @@
                   // 每个场景一张卡：卡内的「全选 / 取消全选」只作用于**这张卡里的**记忆
                   // —— 用户说的「记忆的不同场景都缺少全选清空」。
                   isOrphan || !bucket.rules.length ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: busy || anyLocked || !cardToggles.length, onClick: function () { setMemories(cardToggles, !cardAllOn, 's:' + name) } }, bulkPair(cardAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), cardAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
-                  isOrphan ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openCreate(name) } }, t('memory.scene.new')))),
+                  // 卡内的「新建记忆」是写盘动作，锁定态必须置灰（用户 2026-10-12：
+                  // 「场景锁定情况下新建记忆应该也是灰色的，不能点击」）—— 原先这里只看了 busy。
+                  isOrphan ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || anyLocked, onClick: function () { openCreate(name) } }, t('memory.scene.new')))),
               open ? React.createElement('div', { className: 'dsm-source-body' },
                 isOrphan ? React.createElement('div', { className: 'dsm-source-note' }, t('memory.scene.orphan.hint')) : null,
                 bucket.rules.length
-                  ? React.createElement(React.Fragment, null,
-                    React.createElement('div', { className: 'dsm-table-head' },
-                      React.createElement('span', null, t('memory.table.name')),
-                      React.createElement('span', null, t('memory.table.tags')),
-                      React.createElement('span', null, '')),
-                    (rowsByBucket[name] || []).map(function (r) { return renderRuleRow(r, meta.active !== false) }))
+                  // 表头已随列表行两行制拆除（REDESIGN §3.4 没有表头行；tags 列并入行 2 元信息）。
+                  ? (rowsByBucket[name] || []).map(function (r) { return renderRuleRow(r, meta.active !== false) })
                   : React.createElement('div', { className: 'dsm-empty' }, t('memory.scene.empty'))) : null)
             // 这张卡里那颗「全选」的撤销条贴在这张卡上方 —— 它只作用于这张卡里的记忆，而页头
             // 那颗的撤销条在搜索框下面（见 content）。撤销条跟着**触发它的按钮**走。
@@ -601,41 +560,46 @@
           }
 
           return React.createElement('section', { className: 'dsm-section' },
-            React.createElement('div', { className: 'dsm-head' },
-              React.createElement('div', { className: 'dsm-title-block' },
-                React.createElement('div', { className: 'dsm-title-row' },
-                  React.createElement('h2', { className: 'dsm-title' }, t('memory.title'))),
-                React.createElement('p', { className: 'dsm-desc' }, t('memory.desc'))),
-              React.createElement('div', { className: 'dsm-actions' },
-                refreshButton(t, busy || data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { openCreate(sceneFilter || '') } }, t('memory.btn.new')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setImportScene(''); setModal({ type: 'import' }) } }, t('memory.import')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !exportableRules.length, onClick: function () { setResult(null); setExportState({ busy: false, result: null }) } }, t('export.memories')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
-                // 列表级动作与页头其余动作同栏（用户 2026-09-17 裁定）：作用集 = 当前筛选后的可见记忆。
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy || anyLocked || !bulkIds.length, onClick: function () { setMemories(bulkIds, !bulkAllOn, null) } }, bulkPair(bulkAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), bulkAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))))),
+            // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 回收站；统计内联。
+            React.createElement(PageHead, {
+              title: t('memory.title'),
+              desc: t('memory.desc'),
+              stats: [
+                // 三格统一改成「标签 值/总」的比例口径（用户 2026-10-12：「改成记忆：1/4、
+                // 场景：1/3、注入预算：*/131072 B」）：分母才是这一页真正要看的东西 ——
+                // 「4 条记忆」答不了"有几条真在生效"，「3 个场景」也答不了"几个正开着"。
+                // enabled / scenes 两个数服务端 rules-list 一直在给（stats.enabled / stats.scenes），
+                // 之前只用了 total 与 scenes 两个字段，等于把答案丢了。
+                [(stats.enabled || 0) + '/' + (stats.total || 0), t('memory.stat.total')],
+                [(stats.scenes || 0) + '/' + (data.scenes || []).length, t('memory.stat.sceneCount')],
+                // 注入预算本来就是"已用/上限"，与上面两格同形；超限整格转错误色。
+                [memMax > 0 ? t('memory.budget.bytes', { used: memUsed, max: memMax }) : '—', budgetOver ? t('memory.budget.label') + ' · ' + t('memory.budget.over') : t('memory.budget.label'), budgetOver ? 'dsm-stat-over' : ''],
+              ],
+              actions: [
+                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: busy || anyLocked, onClick: function () { openCreate(sceneFilter || '') } }, t('memory.btn.new')),
+                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setImportScene(''); setModal({ type: 'import' }) } }, t('memory.import')),
+                React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !exportableRules.length, onClick: function () { setResult(null); setExportState({ busy: false, result: null }) } }, t('export.memories')),
+                // 「全选」从工具条搬到页头、紧挨回收站左侧（用户 2026-10-12：「全选移到回收站
+                // 旁边」）。它管的是列表，但和「回收站」一样是**整页范围**的动作，跟其余页头键
+                // 同排读起来才成组；留在工具条会把搜索行挤窄，而那一行现在要让给搜索框。
+                React.createElement('button', { key: 'bulk', type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy || anyLocked || !bulkIds.length, onClick: function () { setMemories(bulkIds, !bulkAllOn, null) } }, bulkPair(bulkAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), bulkAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
+                React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
+              ],
+            }),
             // 两条横幅（与 MCP / 技能 / 子智能体页同源、同位置、同顺序）：
             // 锁定时只留锁定那条 —— 冻结期间"改动会同步写进场景档案"是句空话，两条并排
             // 还会互相矛盾（用户 2026-09-19 指出：锁定时长的场景提示没必要出现）。
             anyLocked ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             (!anyLocked && sceneName) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
-            React.createElement('div', { className: 'dsm-summary' },
-              React.createElement('div', { key: 'total', className: 'dsm-stat' }, React.createElement('strong', null, stats.total || 0), t('memory.stat.total')),
-              React.createElement('div', { key: 'scenes', className: 'dsm-stat' }, React.createElement('strong', null, (data.scenes || []).length), t('memory.stat.sceneCount')),
-              React.createElement('div', { key: 'active', className: 'dsm-stat' }, React.createElement('strong', null, stats.scenes || 0), t('memory.stat.scenes'))),
-            memMax > 0 ? React.createElement('div', { className: 'dsm-rule-budget' },
-              React.createElement('div', { className: 'dsm-budget-meta' },
-                React.createElement('span', { className: 'dsm-label' }, t('memory.budget.label')),
-                React.createElement('span', { className: budgetOver ? 'dsm-budget-over-text' : 'dsm-char-count' },
-                  t('memory.budget.bytes', { used: memUsed, max: memMax }) + (budgetOver ? ' · ' + t('memory.budget.over') : ''))),
-              React.createElement('div', { className: 'dsm-budget-bar', role: 'progressbar', 'aria-valuenow': budgetPct, 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-label': t('memory.budget.label') },
-                React.createElement('div', { className: 'dsm-budget-fill' + (budgetOver ? ' dsm-budget-over' : ''), style: { width: budgetPct + '%' } })),
-              memInfo.truncated ? React.createElement('p', { className: 'dsm-rule-hint' }, t('memory.budget.truncated')) : null,
-              droppedNames.length ? React.createElement('p', { className: 'dsm-rule-hint' }, t('memory.budget.dropped', { names: droppedNames.join('、') })) : null) : null,
-            React.createElement('div', { className: 'dsm-filters' },
+            // 工具条（REDESIGN §3.3 + §6 备注，切片四换共享 Toolbar）：搜索 + 场景筛选住 children。
+            // batch 槽已空 —— 「全选」上移页头（挨着回收站），预算上移统计格；空槽不传，
+            // 免得渲染出一个没有内容的 .dsm-toolbar-batch 把搜索框往里挤。
+            React.createElement(Toolbar, { key: 'filters' },
               React.createElement('input', { className: 'dsm-control dsm-search', type: 'text', placeholder: t('memory.search.placeholder'), value: query, onChange: function (e) { setQuery(e.target.value) } }),
               React.createElement('div', { className: 'dsm-source-filter' },
                 React.createElement(SourceSelect, { options: sceneOptions, value: sceneFilter, onChange: setSceneFilter }))),
+            memInfo.truncated ? React.createElement('p', { className: 'dsm-help' }, t('memory.budget.truncated')) : null,
+            droppedNames.length ? React.createElement('p', { className: 'dsm-help' }, t('memory.budget.dropped', { names: droppedNames.join('、') })) : null,
             // 成功 / 失败统一走 Notice（成功浮层 2.6 秒自动消失，见上方 result 清理 effect；
             // 错误留在文档流里不自动消失——错误需要一直看得见）。
             React.createElement(Notice, { key: 'notice', kind: result && result.ok ? 'ok' : 'err', text: result && result.text }),
@@ -646,19 +610,37 @@
             // （见 renderSceneCard）。撤销条跟着**触发它的按钮**走。
             undo && undo.scope == null ? React.createElement(UndoBar, { key: 'undo', undo: undo, busy: busy, t: t, onUndo: undoMemories, onClose: dismissUndo }) : null,
             data.error ? React.createElement(Notice, { key: 'error', kind: 'err', text: String(data.error) }) : null,
-            data.loading && !hasAnyRule ? React.createElement('div', { key: 'loading', className: 'dsm-empty' }, t('memory.loading'))
-              : visibleBuckets.length ? React.createElement('div', { key: 'scenes', className: 'dsm-sources', ref: flipRef }, visibleBuckets.map(renderSceneCard))
-              : React.createElement('div', { key: 'empty', className: 'dsm-empty' }, q || sceneFilter ? t('memory.empty.search') : t('memory.empty')),
-            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', title: t('memory.delete.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试，只在完全没有
+            // 旧数据时顶掉列表）/ 无结果（+ 清除筛选）/ 空 / 有数据（场景卡）。data.error 横幅
+            // 照旧 —— 它同时承担「有缓存数据时的错误」与令牌没过两种渠道。
+            data.loading && !hasAnyRule ? React.createElement(ListStates, { key: 'loading', t: t, state: 'loading' })
+              : data.error && !hasAnyRule ? React.createElement(ListStates, { key: 'errstate', t: t, state: 'error', text: String(data.error), onRetry: function () { refresh() } })
+                : visibleBuckets.length ? React.createElement('div', { key: 'scenes', className: 'dsm-sources' }, visibleBuckets.map(renderSceneCard))
+                  : (q || sceneFilter) ? React.createElement(ListStates, { key: 'search', t: t, state: 'search', text: t('memory.empty.search'), onClearFilter: function () { setQuery(''); setSceneFilter('') } })
+                    : React.createElement(ListStates, { key: 'empty', t: t, state: 'empty', text: t('memory.empty') }),
+            modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', className: 'dsm-modal-sm', title: t('memory.delete.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.delete.desc', { name: modal.rule.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('memory.btn.delete.confirm')))) : null,
             modal && modal.type === 'import' ? React.createElement(ImportModal, {
               key: 'mimp', t: t, title: t('memory.import.title'), busy: busy,
-              requirements: [t('upload.requirement.memory.1'), t('upload.requirement.memory.2'), t('upload.requirement.memory.3'), t('upload.requirement.memory.4')],
+              requirement: t('upload.req.mdzip'),
+              requirementTitle: [t('upload.requirement.memory.1'), t('upload.requirement.memory.2'), t('upload.requirement.memory.3'), t('upload.requirement.memory.4')].join('\n'),
+              // 「导入到场景」与记忆编辑器的「场景」用**同一个**控件（用户 2026-10-12：
+              // 「应该是选择场景的样子，现在只能手动填写」）。SceneCombo 既能从已有场景里挑，
+              // 也保留手输新场景名的能力（宿主 rules-create 用 mkdir(recursive) 落盘，
+              // 自定义场景不必先建目录）—— 换过去是"多一个下拉"，不是"少一种填法"。
               extra: React.createElement('label', { className: 'dsm-field' },
                 React.createElement('span', { className: 'dsm-label' }, t('memory.import.scene')),
-                React.createElement('input', { className: 'dsm-control', value: importScene, placeholder: t('memory.scene.global.hint'), onChange: function (e) { setImportScene(e.target.value) } })),
+                React.createElement(SceneCombo, {
+                  options: sceneChoices,
+                  value: importScene,
+                  placeholder: t('memory.scene.global.hint'),
+                  browseLabel: t('memory.scene.browse'),
+                  label: t('memory.import.scene'),
+                  disabled: busy,
+                  onChange: setImportScene,
+                })),
               onClose: function () { setModal(null) },
               onSubmit: submitImport,
             }) : null,
@@ -669,7 +651,7 @@
               onClose: function () { setExportState(null) },
               onSubmit: submitExport,
             }) : null,
-            editor && modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'editor', className: 'dsm-modal-wide dsm-modal-compact', title: editor.mode === 'create' ? t('memory.create.title') : t('memory.edit.title'), closeLabel: t('btn.close'), onClose: closeEditor },
+            editor && modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'editor', className: 'dsm-modal-compact', title: editor.mode === 'create' ? t('memory.create.title') : t('memory.edit.title'), closeLabel: t('btn.close'), onClose: closeEditor },
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
@@ -736,39 +718,19 @@
                       React.createElement('span', { className: 'dsm-help' }, t('memory.attach.hint')))
                     : null),
                 editor.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(editor.error)) : null),
+              // 锁定态把「为什么保存键是灰的」写在弹窗里：编辑页能打开（看内容是只读的），
+              // 但写盘这一步被冻结闸挡住 —— 只说结果不说原因，用户会以为界面坏了。
+              anyLocked ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scenes.lock.blockedEdit')) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : submitUpdate }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || anyLocked || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : submitUpdate }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
             // 场景建/删/档案弹窗已移至「场景」页（ScenesPage）。
-            // 记忆回收站：与提示词 / 场景 / 子智能体共用同一个 `TrashModal`（0.20.0）。
-            // 此前这里是一份手写的弹窗，于是它**没有「全选」**、样式（`.dsm-trash-box` 那个
-            // 圆角框）也和别处的回收站不一样（用户 2026-10-10 反馈「记忆回收站没有全选」
-            // 「样式和别的回收站不一样，应该统一」）。换共享组件之后，批量条、行内二次确认、
-            // 空态、保留期选择器全部与其它页同一套结构与类名。
-            // 两处自定义：条目主键是 `trashId`（不是通用的 `id`），备注要带场景 / 形态 / 字节数
-            // —— 分别走 `idOf` / `noteOf` 两个可选 prop，其它三个调用方不受影响。
+            // 记忆回收站：本页那一个（42-shared-ui.js 的 TrashModal，domain = memories）。
+            // 记忆域的备注（场景 / 形态 / 字节数 / 删除时间）在组件内部按同一条口径拼装。
             modal && modal.type === 'trash' ? React.createElement(TrashModal, {
               key: 'trash',
               t: t,
-              title: t('memory.trash.title'),
-              groupTitle: t('trash.group.memories'),
-              groupSub: t('trash.section.memories.sub'),
-              entries: trash.entries || [],
-              loading: trash.loading,
-              error: trash.error,
-              busy: busy,
-              // 场景锁定时批量删除一并禁用（与单条「永久删除」同一件事，只禁单条等于留个口子）。
-              locked: anyLocked,
-              idOf: function (entry) { return entry.trashId },
-              noteOf: function (entry) {
-                return sceneLabel(data.scenes, entry.group) + ' · '
-                  + t('memory.form.' + (entry.form === 'bundle' ? 'bundle' : 'flat')) + ' · '
-                  + entry.bytes + ' B · '
-                  + t('memory.trash.deletedAt', { time: entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : '' })
-              },
+              domain: 'memories',
               onClose: function () { setModal(null) },
-              onRestore: submitRestore,
-              onPurge: submitTrashDelete,
-              onPurgeMany: purgeTrashMany,
-              onReload: loadTrash,
+              onReload: function () { refresh(true) },
             }) : null)
         }

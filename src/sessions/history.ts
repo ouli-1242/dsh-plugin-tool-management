@@ -42,7 +42,12 @@ export type SessionsGroupView = {
   registered?: boolean
   /** 目录当前存在，可一键重新登记为工作区（仅 detached 组有意义）。 */
   canRegister?: boolean
-  /** 会话目录已从磁盘删除（detached 组且 canRegister=false）：无法重新登记，提示用户会话仍可恢复/删除。 */
+  /**
+   * 该组对应的磁盘目录已不存在。两种组都会带：
+   * - detached 且目录已删 → 不可能重新登记（`canRegister` 恒为 false）；
+   * - live 但文件夹被删 → 登记还在、目录没了，界面照常提示。
+   * 组内会话仍可恢复（归入未分组）或永久删除。
+   */
   dirMissing?: boolean
 }
 
@@ -317,6 +322,18 @@ export function createHistoryDomain(deps: HistoryDomainDeps): HistoryDomain {
       const liveByPath = new Map<string, string>()
       const owned = new Map<string, string>()
       const liveRecords: Array<{ id: string; path: string; title: string }> = []
+      // 「目录真实存在」检查缓存：活登记与重建组共用同一份探测，同一目录只 stat 一次；
+      // 结果按归一化键缓存，避免每次刷新重复探盘。
+      const dirExistsCache = new Map<string, boolean>()
+      async function directoryExists(p: string): Promise<boolean> {
+        const k = workspacePathKey(p)
+        const hit = dirExistsCache.get(k)
+        if (hit !== undefined) return hit
+        let ok = false
+        try { ok = (await stat(p)).isDirectory() } catch { ok = false }
+        dirExistsCache.set(k, ok)
+        return ok
+      }
       const table = typeof registry.requireTable === 'function' ? registry.requireTable() : undefined
       const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
       if (table) {
@@ -333,7 +350,14 @@ export function createHistoryDomain(deps: HistoryDomainDeps): HistoryDomain {
             liveByPath.set(workspacePathKey(path), wid)
             liveRecords.push({ id: String(wid), path, title })
           }
-          const view: SessionsGroupView = { id: 'ws:' + wid, title, kind: 'live', registered: true, ...(path ? { path } : {}) }
+          // 活登记也要探一次盘：登记还在、但磁盘上的工作区文件夹被删掉时，界面必须能及时
+          // 标出来（用户 2026-10-12：「要怎么及时知道这个工作区实际文件夹已经被删除了」）。
+          const liveDirMissing = path !== undefined && !(await directoryExists(path))
+          const view: SessionsGroupView = {
+            id: 'ws:' + wid, title, kind: 'live', registered: true,
+            ...(path ? { path } : {}),
+            ...(liveDirMissing ? { dirMissing: true } : {}),
+          }
           groupsById.set(view.id, view)
           groups.push(view)
           workspaces[wid] = { title, ...(path ? { path } : {}) }
@@ -346,18 +370,6 @@ export function createHistoryDomain(deps: HistoryDomainDeps): HistoryDomain {
       }
       const sessionPaths = registry.sessionPaths instanceof Map ? registry.sessionPaths : undefined
       const headers = registry.headers instanceof Map ? registry.headers : undefined
-      // 「目录真实存在」检查缓存：canRegister 从「宿主 sessionPaths 命中」放宽为
-      // 「目录存在」时，同一目录只 stat 一次；结果按归一化键缓存，避免每次刷新重复探盘。
-      const dirExistsCache = new Map<string, boolean>()
-      async function directoryExists(p: string): Promise<boolean> {
-        const k = workspacePathKey(p)
-        const hit = dirExistsCache.get(k)
-        if (hit !== undefined) return hit
-        let ok = false
-        try { ok = (await stat(p)).isDirectory() } catch { ok = false }
-        dirExistsCache.set(k, ok)
-        return ok
-      }
       for (const it of items) {
         const sid = it.sessionId
         let wid = owned.get(sid)
@@ -383,14 +395,17 @@ export function createHistoryDomain(deps: HistoryDomainDeps): HistoryDomain {
         const known = snapshot ? snapshot.get(workspacePathKey(path)) : undefined
         const existing = groupsById.get(key)
         if (existing) {
-          // 同目录的多个会话：宿主索引命中，或磁盘目录真实存在，即可重新登记。
-          if (canonical !== undefined || (await directoryExists(path))) {
+          // 同目录的多个会话：只要磁盘目录真实存在，即可重新登记。
+          // 注意：不能只看宿主 sessionPaths 命中——索引里可能残留已被删除目录的 sessionId。
+          if (await directoryExists(path)) {
             existing.canRegister = true
             existing.dirMissing = false
           }
           continue
         }
-        const canRegister = canonical !== undefined || (await directoryExists(path))
+        // canRegister 必须落到「目录真实存在」：仅靠 canonical/sessionPaths 命中会把
+        // 已被删除的工作区目录误判为可登记，界面继续显示「重新登记」。
+        const canRegister = await directoryExists(path)
         const view: SessionsGroupView = {
           id: key,
           title: known?.title || workspaceBaseName(path) || path,

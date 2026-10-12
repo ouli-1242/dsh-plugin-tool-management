@@ -16,6 +16,11 @@ export interface MemoriesDeps {
   /** 场景记录目录（绝对路径；空串/未提供时按 <stateDir>/scenes 解析）。 */
   scenesDir?: string
   /**
+   * 技能回收站根目录（`<hub>/trash/skills-trash`）。只被回收站「详情」（`trash-preview`）用到：
+   * 技能条目住在技能域那边，不在这三条路径下。不提供时那一域的详情如实报"读不到"。
+   */
+  skillsTrashDir?: string
+  /**
    * 全局 `AGENTS.md` 的**宿主实际读的那一份**（同步返回；拿不到返回 null）。
    *
    * 为什么必须由外部注入而不是自己 `join(resolveDshHome(), 'AGENTS.md')`（2026-09-30 审查

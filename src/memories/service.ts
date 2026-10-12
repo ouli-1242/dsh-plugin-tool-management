@@ -764,6 +764,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   // 抽出去的 ops/*.ts 只通过它访问闭包，任何漏挂都会在 tsc 阶段报「Cannot find name」。
   const rc: MemoriesOpsCtx = {
     stateDir, memoriesRoot, scenesRoot, maxBytes,
+    ...(deps.skillsTrashDir ? { skillsTrashDir: deps.skillsTrashDir } : {}),
     snapshot, invalidateSnapshot, sceneMemory, scenePrompt,
     parseId, locateRule, refuseOutsideRoot, buildProjected, sceneRows,
     copyIntoMemoriesTrash, listAttachments, serializeRuleFile, serializeUpdatedFile,
@@ -797,6 +798,10 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     'rules-remove': (args) => runWrite(() => trashOps.rulesRemove(args || {})),
     'rules-restore': (args) => runWrite(() => trashOps.rulesRestore(args || {})),
     'rules-trash-list': () => trashOps.rulesTrashList(),
+    // 回收站「详情」：跨域只读预览（记忆 / 技能 / 提示词 / 人设 / 场景五类的条目都能查）。
+    // 只 lstat + 递归读文件，不写任何东西 ⇒ 不进写队列、也不 refresh 快照。
+    // 登记在 op-registry 的 `readonly` 一档：**锁定期间照样能看**（锁的是写，不是看）。
+    'trash-preview': (args) => trashOps.trashPreview(args || {}),
     'rules-trash-remove': (args) => runWrite(() => trashOps.rulesTrashRemove(args || {})),
     'rules-attach': (args) => runWrite(() => memoryOps.rulesAttach(args || {})),
     'rules-detach': (args) => runWrite(() => memoryOps.rulesDetach(args || {})),

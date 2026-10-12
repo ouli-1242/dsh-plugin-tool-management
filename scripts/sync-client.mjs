@@ -19,6 +19,7 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Script } from 'node:vm'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -59,6 +60,30 @@ const parts = SLICES.map((name) => readFileSync(join(root, 'src', 'client', name
 // 分片末尾不带换行（切分时按行 join），所以片间必须补一个 —— 否则上一片末行与下一片首行
 // 会粘成一行（实测症状是 `…字面量只留下面那一处。    const CSS =`，`node --check` 直接报语法错）。
 const eol = parts[0].includes('\r\n') ? '\r\n' : '\n'
+
+// ── 拼接后自检（2026-10-12 加）──────────────────────────────────────────────
+// 为什么要在**这里**查，而不是靠 `npm run lint` / `typecheck:client`：build 的产物就是这份
+// bundle，而 `tsc` 只编译 src/*.ts、根本不解析客户端 JS —— 于是"构建通过"与"浏览器能加载"
+// 是两件事。今天四次坏 bundle 全是同一处：CSS 分片整体是一个模板字符串，注释里写了一枚反引号
+// 就把串从中间截断。两种后果，只有一种会被语法检查抓到：
+//   · 反引号凑成奇数 → 语法不过（`node --check` 能报）；
+//   · 凑成偶数 → 语法**完全合法**，但 `const CSS = "…" … 100vh - 48 …` 被当成减法，
+//     CSS 变成 NaN —— 只有 tsc 的「Type 'number' is not assignable to 'string'」报得出来。
+// 所以两道：先按分片查反引号数（挡住根因，报的是人话），再解析拼接结果（挡住别的语法问题）。
+const cssTicks = (parts[SLICES.indexOf('10-css.js')].match(/`/g) || []).length
+if (cssTicks !== 2) {
+  throw new Error(
+    `[sync-client] 10-css.js 里有 ${cssTicks} 枚反引号，只允许模板串首尾那 2 枚。\n`
+    + '  CSS 注释里要指代标识符就用普通文字 —— 多出来的一枚会把 CSS 截断（有时语法照过、CSS 变成数字）。',
+  )
+}
+const bundle = parts.join(eol)
+try {
+  new Script(bundle, { filename: 'lib/client.js' })
+} catch (e) {
+  throw new Error(`[sync-client] 拼接产物语法不过（lib/client.js 不会写出）：${e && e.message}`)
+}
+
 mkdirSync(join(root, 'lib'), { recursive: true })
-writeFileSync(join(root, 'lib', 'client.js'), parts.join(eol))
-console.log(`[dsh-plugin-tool-management] 拼接 ${SLICES.length} 个分片 -> lib/client.js`)
+writeFileSync(join(root, 'lib', 'client.js'), bundle)
+console.log(`[dsh-plugin-tool-management] 拼接 ${SLICES.length} 个分片 -> lib/client.js（语法自检通过）`)

@@ -339,6 +339,8 @@ export function defaultManagerState(): ManagerState {
     // 也不参与 provider 候选）。与「停用来源」不同——停用仍列出技能、只是不可调用。
     // 源文件一个字节都不动；清空这个数组即可恢复。
     removedSources: [],
+    // 用户从回收站「永久删除」的来源：连"已移除"这条记录都不再出现（见 core-types 的说明）。
+    forgottenSources: [],
   };
 }
 export function validStateSkillName(name: unknown): boolean {
@@ -400,6 +402,16 @@ export function validManagerStateDocument(value: ManagerStateDocument): boolean 
     if (
       !Array.isArray(value.removedSources) ||
       value.removedSources.some(
+        (key) => typeof key !== "string" || key.length === 0 || key.length > 128,
+      )
+    )
+      return false;
+  }
+  // 永久删除的来源：同上（可选字段、同样的 key 形状）。
+  if (value.forgottenSources !== undefined) {
+    if (
+      !Array.isArray(value.forgottenSources) ||
+      value.forgottenSources.some(
         (key) => typeof key !== "string" || key.length === 0 || key.length > 128,
       )
     )
@@ -511,6 +523,30 @@ export function normalizeManagerState(value: ManagerStateDocument): ManagerState
         ),
       ),
     ].sort();
+  }
+  // 永久删除的来源：同一套口径（已知 key、非默认来源），另外**从 removedSources 里摘掉**
+  // —— 一条来源要么"已移除"、要么"已永久删除"，同时挂在两份名单上只会让两处显示打架。
+  {
+    const raw = Array.isArray(value.forgottenSources) ? value.forgottenSources : [];
+    const known = new Set([
+      ...userRoots().map((root) => root.key),
+      ...customKeys,
+    ]);
+    const forgotten = [
+      ...new Set(
+        raw.filter(
+          (key) =>
+            typeof key === "string" &&
+            known.has(key) &&
+            !isDefaultSkillSource(key),
+        ),
+      ),
+    ].sort();
+    normalized.forgottenSources = forgotten;
+    if (forgotten.length)
+      normalized.removedSources = normalized.removedSources.filter(
+        (key) => !forgotten.includes(key),
+      );
   }
   return normalized;
 }
@@ -723,11 +759,21 @@ export async function state(
       ? policyResult.state.removedSources
       : [],
   );
+  // 「永久删除」过的来源（回收站 → 目录 里那条记录的终点）：连行都不留 —— 界面不该再有
+  // 它的位置，「恢复读取」也无从谈起（用户 2026-10-12 要求 codex / Claude 也能永久删除）。
+  // 注意它同时也在 `activeUserRoots` 里被摘掉，所以下面这层过滤只影响**列表展示**。
+  const forgottenKeys = new Set<string>(
+    Array.isArray(policyResult.state.forgottenSources)
+      ? policyResult.state.forgottenSources
+      : [],
+  );
   // 已移除的来源仍然出现在 roots 里（界面要能显示「已移除」并允许恢复），但**不扫描**：
   // 技能不入列表、不参与重名决胜 —— 这正是用户要的「不读取这个文件夹」。
   // 注意这里必须用**全部**来源 + 自定义来源，不能只用 activeUserRoots()，
   // 否则被移除的来源会连行都不剩，界面就无从提供「恢复读取」。
-  const user = [...userRoots(), ...customRootsFromState(policyResult.state)];
+  const user = [...userRoots(), ...customRootsFromState(policyResult.state)].filter(
+    (root) => !forgottenKeys.has(root.key),
+  );
   const scannable = user.filter((root) => !removedKeys.has(root.key));
   const userScans = await scanDeduplicatedRoots(scannable);
   const projectWarnings: SkillWarning[] = [];

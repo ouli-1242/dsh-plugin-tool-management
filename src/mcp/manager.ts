@@ -20,16 +20,11 @@
 
 import { clearRuntimeNote, noteRuntime } from '../compat/runtime-notes.js'
 
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-// 配置体检查 PATH 用（见 mcpmInspect）：execFile 不走 shell，参数是数组 —— 体检只查询
-// 命令名，**绝不执行**配置里的命令本身。
-import { execFile } from 'node:child_process'
 import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpPrefixDrift, serverNameCandidates, splitMcpToolName } from '../host-names.js'
 import { hubPath } from '../hub.js'
 import { planOverrideCompaction } from './override-blocks.js'
-// 配置体检的探测（PATH 查询 / 端点连通性 / 检查清单 + mcpm-inspect op），2026-10-01 剥出。
-import { createInspectProbe } from './inspect-probe.js'
 import { createMcpStateCatalog, type McpStateCatalog } from './state-section.js'
 import { createToolVisibility } from './tool-visibility.js'
 import {
@@ -1514,16 +1509,19 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
   }
 
-  // ---------- 配置体检的探测（0.15.0 B1；0.16.5 起含端点探测）----------------------
-  // 正文 2026-10-01 整段搬到 ./inspect-probe.js（一字未改，只把闭包作用域的几个名字改走
-  // deps）。那段「对补丁只读、`where`/`which` 只查命令名绝不执行配置里的命令、复用列表结果
-  // 但不回写任何缓存」的口径连同理由一起搬过去了，见那边的文件头。
-  const { mcpmInspect } = createInspectProbe({
-    ensurePaths, readPatch, message, normalizeRow, mcpmList,
-  })
-
   // ---------- 配置的导出 / 导入 ----------
-  async function mcpmExport(): Promise<any> {
+  /**
+   * `args.outDir`（可选）：给了就写到该目录下的 `mcp-export.json`，不给则照旧写 hub 侧车。
+   *
+   * 判据与 `bundle-export` / `snapshot-export` 完全一致（必须绝对路径）：相对路径会落到
+   * 进程 CWD，那是猜。用户 2026-10-12：「mcp 的导出缺少选择导出目录」—— 此前这一档只能
+   * 落到 `~/.dsh/tool-management/mcp-export.json`，界面上没有任何可改的出口。
+   *
+   * `args.dryRun`（可选）：只算 JSON、**不落盘**。界面打开弹窗时先用它取预览，真正落盘
+   * 由用户点「导出到目录」触发 —— 与其余四个导出弹窗同一套交互（不开弹窗就写文件是副作用）。
+   * `snapshot-export` 走的是不带 dryRun 的老路径，行为不变。
+   */
+  async function mcpmExport(args?: any): Promise<any> {
     const p = await ensurePaths()
     const list = await mcpmList()
     const rows = (list.rows || []).filter((r: any) => r.level !== 'loader').map((r: any) => ({
@@ -1540,16 +1538,21 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     }))
     const payload = { exportedAt: new Date().toISOString(), rows }
     const json = JSON.stringify(payload, null, 2)
+    if (args && args.dryRun) return { ok: true, json, savedTo: null }
+    const outDir = String((args && args.outDir) || '').trim()
+    if (outDir && !/^([A-Za-z]:[\\/]|\\\\|\/)/.test(outDir)) return { ok: false, error: '导出目录需为绝对路径' }
     let savedTo: string | null = null
     try {
-      const abs = mcpSidecar(MCP_EXPORT_FILE)
-      // 用 `writeJsonFile`（直写 hub 侧车）而**不是** `writePatch`（2026-09-30 审查 P1-3）：
+      const abs = outDir ? join(outDir, MCP_EXPORT_FILE) : mcpSidecar(MCP_EXPORT_FILE)
+      // 用 `writeJsonFile`（直写 JSON）而**不是** `writePatch`（2026-09-30 审查 P1-3）：
       // `writePatch` 是宿主**补丁文件**的写口，写前会跑 `checkPatchWrite` 的官方方言校验
       // （顶层必须是 YAML 数组），而这里写的是 hub 里一份 JSON **对象** —— 校验必然失败、
       // 异常被下面的 catch 吞掉，于是 `savedTo` 恒为 null，界面显示"没能落盘（hub 目录写入
       // 失败）"，**诊断是错的**（真实原因是方言校验器拒收 JSON 对象）。而且 `writePatch`
       // 自己的调用面纪律（`index.ts`：「不写宿主配置的动作也不该调用它」）本就排除了它 ——
       // 本处是唯一一个传 hub 路径的调用点。顺带省掉一次 `danger-full-access` 策略升级。
+      // `writeJsonFile` 不建父目录（hub 路径总是已存在），所以自定义目录要自己 mkdir。
+      if (outDir) await mkdir(outDir, { recursive: true })
       await writeJsonFile(abs, payload)
       savedTo = abs
     } catch (e) { /* non-fatal */ }
@@ -1748,7 +1751,6 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       'mcpm-compact': mcpmCompact,
       'mcpm-export': mcpmExport,
       'mcpm-import': mcpmImport,
-      'mcpm-inspect': mcpmInspect,
     },
     readDisabledTools,
     readKnownMcpTools,

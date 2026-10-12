@@ -18,19 +18,29 @@
           var sceneForm = sfs[0], setSceneForm = sfs[1]
           var pos = React.useState([])
           var presetOptions = pos[0], setPresetOptions = pos[1]
+          // 当前**生效中**的提示词预设 id（`agentsmd-list` 里 active 的那份）。预览卡要用它把
+          // 「本场景没绑 = 保持现状」写成一句能对照的话 —— 用户 2026-10-12 报障「全局提示词明明
+          // 绑定了还显示未绑定」：事实是全局那份一直在生效，只是**这个场景**没去改它；不把那份的
+          // 名字报出来，"保持现状"和"未绑定"在用户眼里就是同一个意思。
+          var aps = React.useState('')
+          var appliedPreset = aps[0], setAppliedPreset = aps[1]
           // 工具表方案下拉的数据源（C1；按用户 2026-09-28 裁定从档案编辑器移进「编辑场景」表单）。
           var tts = React.useState(null)
           var ttInfo = tts[0], setTtInfo = tts[1]
           // 快捷提示词候选（同一族：勾选入口在「修改场景」表单里，档案编辑器不带这一栏）。
           var qps = React.useState([])
           var quickOptions = qps[0], setQuickOptions = qps[1]
+          // 快捷提示词的勾选弹窗（2026-10-12 用户「能不能设置成弹窗」）：清单不再就地展开成
+          // 一张横跨整行的卡片（它属于顶部第 4 格那颗下拉，却离得很远、又和四组不是同一套卡片），
+          // 改成表单格里一颗按钮点开的独立弹窗。null = 关闭；{ draft } = 草稿（确定才写回表单）。
+          var qks = React.useState(null)
+          var quickPick = qks[0], setQuickPick = qks[1]
           var dts = React.useState(null)
           var drillTools = dts[0], setDrillTools = dts[1]
-          // 场景回收站（记录 + 档案）：null = 关闭；{loading, error, entries}
-          var sts = React.useState(null)
+          // 场景回收站：true = 打开本页那一个回收站（42-shared-ui.js 的 TrashModal）。
+          // 清单加载 / 恢复 / 永久删除 / 批量都在组件内部完成，本页只在写操作后重读自己的数据。
+          var sts = React.useState(false)
           var trash = sts[0], setTrash = sts[1]
-          var stb = React.useState(false)
-          var trashBusy = stb[0], setTrashBusy = stb[1]
           // 「进入场景」前的改动预览卡（null = 关闭；{name, loading, error, plan}）。
           // 只有**进入**这条路走它：退出是按快照回原位，不是新做一次改动，再问一遍纯添摩擦。
           var pvs = React.useState(null)
@@ -44,56 +54,19 @@
           var qs = React.useState('')
           var query = qs[0], setQuery = qs[1]
           var dq = useDebouncedValue(query)
-          var flipRef = React.useRef(null)
-          useFlipReorder(flipRef)
-          function loadTrash(keepOpen) {
-            setTrash(Object.assign({ loading: true, error: null, entries: [] }, keepOpen ? trash || {} : {}))
-            apiCall('scene-trash-list', {}).then(function (res) {
-              if (res && res.ok) setTrash({ loading: false, error: null, entries: res.trash || [] })
-              else setTrash({ loading: false, error: (res && res.error) || t('trash.loadFailed'), entries: [] })
-            }).catch(function (e) { setTrash({ loading: false, error: errMsg(e), entries: [] }) })
+          /**
+           * 「勾选的排前面」的定序快照（用户 2026-10-12：「选择的时候可以不置顶，
+           * 但是创建后打开编辑需要置顶」）：编辑器四组共用一张表，**换一次打开就重建**
+           * （关弹窗时 `modal` 归 null，key 变化 → 清表）。排序本身用全站同一个 rankedFirst。
+           */
+          var editorRankRef = React.useRef(null)
+          var editorKey = modal && modal.type === 'scene-editor' ? 'editor:' + String(modal.name) : ''
+          if (!editorRankRef.current || editorRankRef.current.key !== editorKey) editorRankRef.current = { key: editorKey, table: {} }
+          function checkedFirst(group, list, idOf, isChecked) {
+            return rankedFirst(editorRankRef.current, function (item) { return group + '|' + String(idOf(item)) }, list, isChecked)
           }
-          function restoreScene(item) {
-            setTrashBusy(true)
-            apiCall('scene-trash-restore', { id: item.id }).then(function (res) {
-              setTrashBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('trash.restored', { name: item.name }) }); refresh(true); loadTrash(true) }
-              else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
-            }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
-          }
-          function purgeScene(item) {
-            setTrashBusy(true)
-            apiCall('scene-trash-delete', { id: item.id }).then(function (res) {
-              setTrashBusy(false)
-              if (res && res.ok) { setResult({ ok: true, text: t('trash.purged', { name: item.name }) }); loadTrash(true) }
-              else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
-            }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
-          }
-          /** 批量永久删除：逐条调单条 op，串行（理由见 42-shared-ui.js 的 TrashModal 注释）。 */
-          function purgeSceneMany(items) {
-            if (!items.length) return
-            setTrashBusy(true)
-            var done = 0, failed = 0, firstErr = null
-            var step = function (i) {
-              if (i >= items.length) {
-                setTrashBusy(false)
-                setResult({
-                  ok: failed === 0,
-                  text: failed === 0
-                    ? t('trash.purgeMany.result', { count: done })
-                    : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' }),
-                })
-                loadTrash(true)
-                return
-              }
-              apiCall('scene-trash-delete', { id: items[i].id }).then(function (res) {
-                if (res && res.ok) done += 1
-                else { failed += 1; if (!firstErr) firstErr = (res && res.error) || t('mcp.msg.failed') }
-                step(i + 1)
-              }).catch(function (e) { failed += 1; if (!firstErr) firstErr = errMsg(e); step(i + 1) })
-            }
-            step(0)
-          }
+          // 场景卡片的「启用的排前面」同一口径：开关当场不重排，刷新或重进这页才重新置顶。
+          var sceneRank = useRank()
           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
@@ -122,6 +95,9 @@
             }).catch(function () { /* 读不到 → 保持默认（弹卡） */ })
           }
           React.useEffect(function () { loadSceneSettings() }, [])
+          // 预设候选与"当前生效的那份"在挂载时就取一次：预览卡要用后者（见 appliedPreset），
+          // 而它此前只在打开编辑器时才拉 —— 于是不打开编辑器就永远读不到。
+          React.useEffect(function () { loadPresetOptions() }, [])
           /**
            * 改「进入场景前弹不弹卡」。乐观更新（点一下就该翻转），失败回读一次并弹结果条 ——
            * 这颗按钮的状态必须与侧车一致，否则会出现"以为关了、下次还弹"。
@@ -201,6 +177,7 @@
               setPresetOptions(opts)
               var activeId = ''
               for (var i = 0; i < list.length; i += 1) { if (list[i].active) { activeId = list[i].id; break } }
+              setAppliedPreset(activeId)
               if (typeof onLoaded === 'function') onLoaded(activeId)
             }).catch(function () { /* 候选项加载失败只影响下拉默认值，不值得打断表单 */ })
           }
@@ -209,7 +186,8 @@
             if (!activeId) return
             setSceneForm(function (f) { return (f && String(f.prompt || '') !== '') ? f : Object.assign({}, f, { prompt: activeId }) })
           }
-          // ── 场景建 / 改描述 / 改绑定的提示词 / 删 ──
+          // ── 场景编辑器（REDESIGN §6.2：新建 / 编辑 / 档案 三弹窗融合，「创建即编辑」）──
+          // name=null = 创建态（四组全空、主按钮=创建）；编辑态场景名只读（§6.2）。
           // 快捷提示词在表单里是**三选一**，落盘时映射成 `quickPrompts` 的三种取值：
           //   'current' → null（这一域不绑、进出不碰）／'none' → []（绑空表：进入后全部停用）
           //   ／'custom' → 勾选数组（**空数组也算 custom**）。
@@ -220,61 +198,144 @@
           // 反推的话后者会立刻翻成「无」、卡片当场消失，连勾第二条的机会都没有。
           //
           // 新建场景默认 'none'（用户 2026-10-10：「无应该是第一条，新建场景默认选择」）。
-          // 口径与场景档案里另外三域一致：MCP / 技能 / 人设本来就是「一段都没建 = 该域全部停用」，
+          // 口径与档案里另外三域一致：MCP / 技能 / 人设本来就是「一段都没建 = 该域全部停用」，
           // 新场景起手就是"一个都不启用"，快捷提示词跟着走才不别扭；而 `null`（进出都不碰）
           // 留给 0.18.0 之前建的老场景，编辑时按档案原样回填。
-          function openCreateScene() { setSceneForm({ name: '', description: '', prompt: '', toolTablePreset: '', quickMode: 'none', quickPrompts: [], error: null }); setModal({ type: 'scene-create' }); loadPresetOptions(defaultPromptToActive); loadToolTablePresets(); loadQuickOptions() }
-          function openEditScene(scene) {
-            var sceneArchive = (data.archives || {})[scene.name] || {}
+          function openEditor(scene) {
+            var name = scene ? scene.name : null
+            var sceneArchive = scene ? ((data.archives || {})[name] || {}) : {}
             setSceneForm({
-              name: scene.name, description: scene.description || '', prompt: scene.prompt || '',
+              name: name || '', description: scene ? scene.description || '' : '', prompt: scene ? scene.prompt || '' : '',
               toolTablePreset: typeof sceneArchive.toolTablePreset === 'string' ? sceneArchive.toolTablePreset : '',
-              // 档案里没有 quickPrompts 段 = 0.18.0 之前的老场景 = 'current'（进出不碰）；
-              // 空数组 = 'none'；非空 = 'custom'。落盘的值与这里一一对应。
               quickMode: !Array.isArray(sceneArchive.quickPrompts)
                 ? 'current' : (sceneArchive.quickPrompts.length ? 'custom' : 'none'),
               quickPrompts: Array.isArray(sceneArchive.quickPrompts) ? sceneArchive.quickPrompts.slice() : null,
               error: null,
             })
-            setModal({ type: 'scene-edit', name: scene.name })
-            // 该场景还没绑定时，默认选中当前生效的那份（用户裁定「默认就是当前启动的」）。
-            if (!scene.prompt) loadPresetOptions(defaultPromptToActive)
-            else loadPresetOptions()
+            setModal({
+              type: 'scene-editor', name: name, drill: null, drillError: null, error: null, inventory: null,
+              mcpQuery: '', skillQuery: '', subQuery: '', memQuery: '',
+              sections: {
+                mcp: sceneArchive.mcp ? Object.assign({}, sceneArchive.mcp) : null,
+                mcpNotes: sceneArchive.mcpNotes && Object.keys(sceneArchive.mcpNotes).length ? Object.assign({}, sceneArchive.mcpNotes) : null,
+                skills: Array.isArray(sceneArchive.skills) ? sceneArchive.skills.slice() : null,
+                subagents: Array.isArray(sceneArchive.subagents) ? sceneArchive.subagents.slice() : null,
+              },
+            })
+            // 提示词绑定的候选：**新建**场景默认选当前生效的那份（用户裁定「默认就是当前启动
+            // 的」；那里它是个合理的起手值，也没有"事实"可违背）。
+            //
+            // 已有场景按它**真实**的绑定回填：没绑就是「无」，不再替它选上"当前生效的那份"——
+            // 那会让编辑器显示成"绑了"、而预览卡照实说"没绑"，两边对不上（用户 2026-10-12
+            // 报障「全局提示词明明绑定了还显示未绑定」）；更糟的是用户只改个描述再保存，
+            // 就会把这个从未存在过的绑定真的写进档案。
+            loadPresetOptions(scene ? null : defaultPromptToActive)
             loadToolTablePresets()
             loadQuickOptions()
+            // 四组行选择的数据源（服务器 / 技能 / 人设 / 记忆清单）：打开时与绑定候选一起拉，
+            // 拉不到就不开弹窗（与旧档案弹窗同一处理 —— 空清单会让四组变成"什么都选不了"）。
+            setBusy(true)
+            Promise.all([apiCall('scene-mode-get', {}), apiCall('scene-inventory', {})]).then(function (rs) {
+              setBusy(false)
+              var inv = rs[1]
+              if (!(inv && inv.ok)) { setResult({ ok: false, text: translateError(t, inv) }); setModal(null); return }
+              setModal(function (cur) {
+                if (!cur || cur.type !== 'scene-editor') return cur
+                return Object.assign({}, cur, {
+                  inventory: {
+                    mcpServers: inv.mcpServers || [], skills: inv.skills || [], subagents: inv.subagents || [], tools: inv.tools || [],
+                    presets: inv.presets || [],
+                    memories: inv.memories || [],
+                  },
+                })
+              })
+            }).catch(function (e) { setBusy(false); setModal(null); setResult({ ok: false, text: errMsg(e) }) })
           }
-          /** 新建与编辑共用一个表单：字段相同，只是分别走 rules-create-scene / rules-update-scene。 */
-          function submitSceneForm() {
-            var isEdit = modal && modal.type === 'scene-edit'
+          function openCreateScene() { openEditor(null) }
+          /**
+           * 快捷提示词勾选弹窗：改的是**草稿**，点「确定」才写回表单 —— 弹窗语义上就该是可
+           * 反悔的，取消/关掉都不动表单里那份。
+           */
+          function openQuickPick() { setQuickPick({ draft: (sceneForm.quickPrompts || []).slice() }) }
+          function toggleQuickPick(id) {
+            if (!quickPick) return
+            var next = quickPick.draft.slice()
+            var at = next.indexOf(id)
+            if (at >= 0) next.splice(at, 1)
+            else next.push(id)
+            setQuickPick({ draft: next })
+          }
+          function applyQuickPick() {
+            if (!quickPick) return
+            setSceneForm(Object.assign({}, sceneForm, { quickMode: 'custom', quickPrompts: quickPick.draft.slice() }))
+            setQuickPick(null)
+          }
+          /**
+           * 编辑器唯一的保存动作：场景本体（名字 / 描述 / 三个绑定）+ 档案四组一起落盘。
+           * 创建：rules-create-scene 成功后，若四组里有任何一段已定义，接着 scene-archive-save
+           * 把档案写进新场景 —— 原先「创建时顺手绑好」的语义不变；档案没存上时弹窗**不关**、
+           * 转为编辑态（主按钮变「保存到场景」），错误挂在弹窗顶部可重试。
+           */
+          function submitSceneEditor() {
+            if (!modal || modal.type !== 'scene-editor') return
+            var isEdit = modal.name != null
             var name = String(sceneForm.name || '').trim()
             if (!isValidSceneSegment(name)) { setSceneForm(Object.assign({}, sceneForm, { error: t('error.rules.invalidGroup') })); return }
             var description = String(sceneForm.description || '').trim()
             var prompt = String(sceneForm.prompt || '').trim()
-            // 编辑时表单里的 name 可能改过：改名走 nextName，服务端按 modal.name（原名）定位、改完再落新名。
-            var originalName = isEdit ? String((modal && modal.name) || name) : name
             setBusy(true)
-            // 工具表方案绑定（C1）单独一个参数：空串 = 解绑；服务端写进档案，
-            // 改的是启用中的场景时会立即应用那份方案（见 scene-sync 的包装）。
+            // 工具表方案绑定（C1）：空串 = 解绑；服务端写进档案，改的是启用中的场景时会立即
+            // 应用那份方案（见 scene-sync 的包装）。
             var toolTablePreset = String(sceneForm.toolTablePreset || '')
             // 快捷提示词：null = 解绑（回到"保持现状"），数组 = 勾选集（空数组是"一条都不勾"）。
-            // 两个方向都必须**显式送出去**，不能省略 —— 省略在服务端那边是"这一域不碰"。
-            // 以 `quickMode` 为准而不是从数组反推：'custom' 且一条都没勾时数组是空的，
-            // 那要落成 `[]`（= 进入后全部停用）—— 与「无」落盘的值一样。两者在磁盘上本就
-            // 不可区分（都是"一条都不启用"），区分只在表单里：要不要显示那张勾选卡。
+            // 两个方向都必须**显式送出去**；以 `quickMode` 为准而不是从数组反推（见上方注释）。
             var quickPrompts = sceneForm.quickMode === 'current' ? null
               : (sceneForm.quickMode === 'custom' ? (sceneForm.quickPrompts || []).slice() : [])
+            // 编辑态场景名只读（§6.2）：nextName 与 name 相同 = 不改名，服务端按原名定位。
             var payload = isEdit
-              ? { name: originalName, nextName: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset, quickPrompts: quickPrompts }
+              ? { name: modal.name, nextName: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset, quickPrompts: quickPrompts }
               : { name: name, description: description, prompt: prompt, toolTablePreset: toolTablePreset, quickPrompts: quickPrompts }
+            var archivePayload = {}
+            if (modal.sections.mcp) archivePayload.mcp = modal.sections.mcp
+            if (modal.sections.mcpNotes) archivePayload.mcpNotes = modal.sections.mcpNotes
+            if (modal.sections.skills) archivePayload.skills = modal.sections.skills
+            if (modal.sections.subagents) archivePayload.subagents = modal.sections.subagents
+            var hasArchive = Object.keys(archivePayload).length > 0
             apiCall(isEdit ? 'rules-update-scene' : 'rules-create-scene', payload).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) {
-                setModal(null)
-                // 新建时若把历史默认（全部启用）收敛成单选，如实说一句，别让用户以为场景"自己开了"。
-                setResult({ ok: true, text: res.collapsedActive ? t('scenes.result.created.collapsed', { name: name }) : t(isEdit ? 'memory.result.sceneUpdated' : 'memory.result.sceneCreated', { name: name }) })
-                refresh(true)
-              } else setSceneForm(Object.assign({}, sceneForm, { error: translateError(t, res) }))
+              if (!(res && res.ok)) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: translateError(t, res) })); return }
+              // P5：档案里不再写 memories 段（开关是 rules[*].enabled 单一真相源，勾选即提交）。
+              // 编辑态沿用旧档案弹窗的口径：保存 = 整份档案落盘（四段全删 = 存空档案）；
+              // 创建态只在真的配了组时才写档案，不给新场景凭空落一份空档案。
+              if (isEdit) hasArchive = true
+              if (!hasArchive) { finishSceneEditor(name, isEdit, res, null); return }
+              apiCall('scene-archive-save', { scene: name, archive: archivePayload }).then(function (ares) {
+                if (ares && ares.ok) finishSceneEditor(name, isEdit, res, ares)
+                else {
+                  // 场景已建/已改、档案没存上：留在编辑器里如实报错，主按钮变「保存到场景」可重试。
+                  setBusy(false)
+                  setModal(Object.assign({}, modal, { name: name, error: translateError(t, ares) }))
+                }
+              }).catch(function (e) {
+                setBusy(false)
+                setModal(Object.assign({}, modal, { name: name, error: errMsg(e) }))
+              })
             }).catch(function (e) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: errMsg(e) })) })
+          }
+          function finishSceneEditor(name, isEdit, sceneRes, archiveRes) {
+            setBusy(false)
+            setModal(null)
+            // 新建时若把历史默认（全部启用）收敛成单选，如实说一句，别让用户以为场景"自己开了"。
+            var ok = true
+            var text = sceneRes.collapsedActive && !isEdit
+              ? t('scenes.result.created.collapsed', { name: name })
+              // 回执动词表（REDESIGN §12.4）：两个方向各取字面量键，不合成三元选词。
+              : (isEdit ? t('done.saved', { name: name }) : t('done.created', { name: name }))
+            if (archiveRes) {
+              if (archiveRes.stale && archiveRes.stale.length) text += ' · ' + t('memory.archive.stale', { items: archiveRes.stale.join('、') })
+              if (archiveRes.applyError) { ok = false; text += ' · ' + t('memory.archive.applyFailed', { reason: archiveRes.applyError }) }
+            }
+            setResult({ ok: ok, text: text })
+            refresh(true)
           }
           function submitDeleteScene(name) {
             setBusy(true)
@@ -287,39 +348,13 @@
                   ok: true,
                   text: moved > 0
                     ? t('memory.result.sceneRemoved.withMemories', { name: name, count: moved })
-                    : t('memory.result.sceneRemoved', { name: name }),
+                    : t('done.deleted', { name: name }),
                 })
                 refresh(true)
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
-          // ── 档案（mcp 两级 / skills / subagents 三段自由搭配）──
-          function openArchive(name) {
-            setBusy(true)
-            Promise.all([apiCall('scene-mode-get', {}), apiCall('scene-inventory', {})]).then(function (rs) {
-              setBusy(false)
-              var modeRes = rs[0], inv = rs[1]
-              if (!(inv && inv.ok)) { setResult({ ok: false, text: translateError(t, inv) }); return }
-              var archives = (modeRes && modeRes.ok ? modeRes.archives : null) || data.archives || {}
-              var archive = archives[name] || {}
-              setModal({ type: 'scene-archive', name: name, drill: null, memQuery: '', skillQuery: '', subQuery: '', mcpQuery: '',
-                sections: {
-                  mcp: archive.mcp ? Object.assign({}, archive.mcp) : null,
-                  mcpNotes: archive.mcpNotes && Object.keys(archive.mcpNotes).length ? Object.assign({}, archive.mcpNotes) : null,
-                  skills: Array.isArray(archive.skills) ? archive.skills.slice() : null,
-                  subagents: Array.isArray(archive.subagents) ? archive.subagents.slice() : null,
-                  memories: Array.isArray(archive.memories) ? archive.memories.slice() : null,
-                },
-                inventory: {
-                  mcpServers: inv.mcpServers || [], skills: inv.skills || [], subagents: inv.subagents || [], tools: inv.tools || [],
-                  // 模式名与顺序（标准 → PTC → 极简 → 创造 → 自建）：人设行的限制摘要按这个顺序排。
-                  presets: inv.presets || [],
-                  // 记忆段的数据源（宿主 scene-inventory 回传；老宿主缺失时退化为空列表而不是崩）。
-                  // 只留扁平 memories——记忆段现在按「记忆所属场景」自己筛，不再需要场景清单。
-                  memories: inv.memories || [],
-                } })
-            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
-          }
+          // ── 档案四组（MCP / 技能 / 子智能体 / 记忆）已并入场景编辑器（openEditor）──
           /**
            * 快捷提示词候选（只读 op，没填令牌也拿得到）。读不到就当没有：下拉仍给
            * 「当前启用的（保持现状）」这一项，只是切到「按场景勾选」时列表是空的。
@@ -358,8 +393,8 @@
             }
             return opts
           }
-          function modalSections() { return modal && modal.type === 'scene-archive' ? modal.sections : null }
-          function setSections(sections) { if (modal && modal.type === 'scene-archive') setModal(Object.assign({}, modal, { sections: sections })) }
+          function modalSections() { return modal && modal.type === 'scene-editor' ? modal.sections : null }
+          function setSections(sections) { if (modal && modal.type === 'scene-editor') setModal(Object.assign({}, modal, { sections: sections })) }
           function toggleMcpServer(server) {
             var sections = modalSections(); if (!sections) return
             var mcp = Object.assign({}, sections.mcp || {})
@@ -420,7 +455,8 @@
           // **只列被编辑场景自己的记忆**：保留场景 `global` 恒定注入（任何对话都生效），
           // 不需要在这里配置，列出来只会让人以为「不勾就不注入」。
           function sceneMemories(sceneName) {
-            return sceneMemoriesOf(modal.inventory.memories, sceneName)
+            // inventory 未就位（弹窗刚开、清单在途）时按空清单算，组头动作点下去不会抛错。
+            return sceneMemoriesOf((modal.inventory && modal.inventory.memories) || [], sceneName)
           }
           /** 「全选 / 全不选」作用的 id 集合 = 本场景的全部记忆。 */
           function allMemoryIds() {
@@ -475,15 +511,37 @@
               refresh(true)
             })
           }
-          function memoriesSeg() {
-            var own = sceneMemories(modal.name)
+          /**
+           * 编辑器四组共用的组块（REDESIGN §6.2）：组头（标题 + 计数 + 动作）+ 筛选行 + 滚动体。
+           * 容器用 --dsw-alias-bg-layer-1 底色 + 1px border-l2 圆角块分层
+           * （.dsm-editor-group，描边是 2026-10-12 补的：浅色主题下 layer-1 与弹窗的
+           * layer-2 同为白，单靠底色层次四组会融成一片、失去分块）。
+           *
+           * `hideFilter` = 未建段时不画那一行筛选框：段里一条都没有，筛选框筛不出任何东西，
+           * 但它照旧占 30px + 4px 间距 —— 四组 2×2 就是 136px，正好是清单体从 144 涨到 176
+           * 抠不出来的那部分（2026-10-12 重排）。
+           */
+          function editorGroupNode(opts) {
+            return React.createElement('div', { className: 'dsm-editor-group' },
+              React.createElement('div', { className: 'dsm-editor-group-head' },
+                React.createElement('span', { className: 'dsm-editor-group-title' }, opts.title),
+                React.createElement('span', { className: 'dsm-editor-group-count' }, opts.count),
+                React.createElement('div', { className: 'dsm-editor-group-actions' }, opts.actions || null)),
+              React.createElement('div', { className: 'dsm-editor-group-body' },
+                opts.hideFilter ? null : segFilter(opts.query, opts.onQuery, opts.queryPlaceholder),
+                opts.body))
+          }
+          /** 组 4：记忆集（P5：单一真相源 = `rules[*].enabled`，勾选立即提交、不随「保存」落盘）。 */
+          function memoriesGroup() {
+            var inv = modal.inventory || { memories: [] }
+            var own = sceneMemoriesOf(inv.memories, modal.name || '')
             var q = String(modal.memQuery || '').trim().toLowerCase()
-            var items = q ? own.filter(function (m) {
+            var items = checkedFirst('memories', q ? own.filter(function (m) {
               return String(m.name).toLowerCase().indexOf(q) >= 0
                 || String(m.description || '').toLowerCase().indexOf(q) >= 0
-            }) : own
+            }) : own, function (m) { return String(m.id) }, function (m) { return memoryEnabled(String(m.id)) })
             var enabledCount = own.filter(function (m) { return memoryEnabled(String(m.id)) }).length
-            return seg({
+            return editorGroupNode({
               title: t('memory.archive.memories'),
               count: t('scenes.seg.checked', { checked: enabledCount, total: own.length }),
               actions: segActions({
@@ -493,31 +551,31 @@
                 onClear: function () { setAllMemories(false) },
                 allChecked: own.length > 0 && enabledCount === own.length,
               }),
-              body: React.createElement('div', { className: 'dsm-seg-body' },
-                segFilter(modal.memQuery, function (v) { setModal(Object.assign({}, modal, { memQuery: v })) }, t('scenes.mem.search')),
-                items.length
-                  ? React.createElement('div', null, items.map(function (m) {
-                      return pickRow({
-                        disabled: busy,
-                        key: m.id,
-                        checked: memoryEnabled(String(m.id)),
-                        name: m.name,
-                        // 记忆描述是自由正文的首行，可能很长：截断到 MEM_DESC_MAX，全文放 title。
-                        // CSS 侧还有单行省略兜底（超长不再横向溢出段边框）。
-                        desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
-                        descTitle: m.description || null,
-                        onChange: function () { toggleMemory(String(m.id)) },
-                      })
-                    }))
-                  : React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mem.emptyScene'))),
+              query: modal.memQuery,
+              onQuery: function (v) { setModal(Object.assign({}, modal, { memQuery: v })) },
+              queryPlaceholder: t('scenes.mem.search'),
+              body: items.length
+                ? React.createElement('div', null, items.map(function (m) {
+                    return RowSelect({
+                      disabled: busy,
+                      key: m.id,
+                      checked: memoryEnabled(String(m.id)),
+                      name: m.name,
+                      // 记忆描述是自由正文的首行，可能很长：截断到 MEM_DESC_MAX，全文放 title。
+                      desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
+                      descTitle: m.description || null,
+                      onChange: function () { toggleMemory(String(m.id)) },
+                    })
+                  }))
+                : React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mem.emptyScene')),
             })
           }
-          /** 段 1：MCP 工具集（服务器级勾选 → 行内「编辑」打开固定尺寸弹窗：备注 + 工具勾选）。 */
-          function mcpSeg() {
+          /** 组 1：MCP 工具集（服务器级行选择 → 行内「编辑」打开次级弹窗：备注 + 工具行选择）。 */
+          function mcpGroup() {
             var sections = modalSections()
             var defined = !!sections.mcp
-            var servers = modal.inventory.mcpServers || []
-            return seg({
+            var servers = (modal.inventory && modal.inventory.mcpServers) || []
+            return editorGroupNode({
               title: t('memory.archive.tools'),
               count: defined ? t('scenes.seg.checked', { checked: Object.keys(sections.mcp).length, total: servers.length }) : t('scenes.archive.sectionOff'),
               actions: archiveSegActions(defined, t('memory.archive.addTools'),
@@ -527,39 +585,44 @@
                 function () { setSections(Object.assign({}, modalSections(), { mcp: {} })) },
                 // 「全选」按钮的全选态：档案里勾了全部服务器（含没在过滤结果里的）。
                 defined && servers.length > 0 && servers.every(function (x) { return sections.mcp[x.name] !== undefined })),
-              body: defined
-                ? React.createElement('div', { className: 'dsm-seg-body' },
-                    segFilter(modal.mcpQuery, function (v) { setModal(Object.assign({}, modal, { mcpQuery: v })) }, t('scenes.filter.servers')),
-                    (function () {
-                      var q = String(modal.mcpQuery || '').trim().toLowerCase()
-                      var shown = q ? servers.filter(function (s) { return String(s.name).toLowerCase().indexOf(q) >= 0 }) : servers
-                      if (!shown.length) return React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mcp.noServers'))
-                      return React.createElement('div', null, shown.map(function (server) {
-                        var selected = sections.mcp[server.name] !== undefined
-                        var spec2 = sections.mcp[server.name]
-                        var specText = !selected ? '' : spec2 === '*' ? t('scenes.mcp.allTools') : t('scenes.mcp.pickedCount', { count: spec2.length })
-                        var hasNote = Boolean((sections.mcpNotes || {})[server.name])
-                        // 工具数未知（从未运行过且无记录）：显示引导而不是误导性的 0。
-                        var desc = server.toolCount === null || server.toolCount === undefined
-                          ? (server.live || server.serverDisabled ? null : t('scenes.mcp.unknownCount'))
-                          : t('scenes.mcp.toolCount', { count: server.toolCount })
-                        return pickRow({
-                          disabled: busy,
-                          key: server.name,
-                          checked: selected,
-                          name: server.name,
-                          desc: desc,
-                          meta: [
-                            server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
-                            specText ? React.createElement('span', { key: 'spec' }, specText) : null,
-                            hasNote ? React.createElement('span', { key: 'note', className: 'dsm-tag' }, t('scenes.mcp.hasNote')) : null,
-                          ],
-                          actions: selected ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function (e) { e.preventDefault(); e.stopPropagation(); openDrill(server.name) } }, t('scenes.mcp.edit')) : null,
-                          onChange: function () { toggleMcpServer(server.name) },
-                        })
-                      }))
-                    })())
-                : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.mcp.hint'))),
+              query: modal.mcpQuery,
+              onQuery: function (v) { setModal(Object.assign({}, modal, { mcpQuery: v })) },
+              queryPlaceholder: t('scenes.filter.servers'),
+              hideFilter: !defined,
+              // 未建段：空态只留一行（全文进悬浮，REDESIGN §7）—— 长段在 2×2 的格子里
+              // 一摆出来就把清单区整个顶掉（用户 2026-10-12「四个集挤在一起」）。
+              body: !defined
+                ? React.createElement('div', { className: 'dsm-pick-empty', title: t('scenes.mcp.hint') }, t('scenes.mcp.hint.short'))
+                : (function () {
+                    var q = String(modal.mcpQuery || '').trim().toLowerCase()
+                    var shown = checkedFirst('mcp', q ? servers.filter(function (s) { return String(s.name).toLowerCase().indexOf(q) >= 0 }) : servers,
+                      function (s) { return String(s.name) }, function (s) { return sections.mcp[s.name] !== undefined })
+                    if (!shown.length) return React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mcp.noServers'))
+                    return React.createElement('div', null, shown.map(function (server) {
+                      var selected = sections.mcp[server.name] !== undefined
+                      var spec2 = sections.mcp[server.name]
+                      var specText = !selected ? '' : spec2 === '*' ? t('scenes.mcp.allTools') : t('scenes.mcp.pickedCount', { count: spec2.length })
+                      var hasNote = Boolean((sections.mcpNotes || {})[server.name])
+                      // 工具数未知（从未运行过且无记录）：显示引导而不是误导性的 0。
+                      var desc = server.toolCount === null || server.toolCount === undefined
+                        ? (server.live || server.serverDisabled ? null : t('scenes.mcp.unknownCount'))
+                        : t('scenes.mcp.toolCount', { count: server.toolCount })
+                      return RowSelect({
+                        disabled: busy,
+                        key: server.name,
+                        checked: selected,
+                        name: server.name,
+                        desc: desc,
+                        meta: [
+                          server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
+                          specText ? React.createElement('span', { key: 'spec' }, specText) : null,
+                          hasNote ? React.createElement('span', { key: 'note', className: 'dsm-tag' }, t('scenes.mcp.hasNote')) : null,
+                        ],
+                        actions: selected ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openDrill(server.name) } }, t('scenes.mcp.edit')) : null,
+                        onChange: function () { toggleMcpServer(server.name) },
+                      })
+                    }))
+                  })(),
             })
           }
           /**
@@ -609,7 +672,7 @@
                             modal.drillError ? React.createElement('div', { className: 'dsm-seg-empty-error' }, modal.drillError) : null,
                             segList((known || []).map(function (item) {
                               var on = spec === '*' ? true : (Array.isArray(spec) && spec.indexOf(item.short) >= 0)
-                              return pickRow({
+                              return RowSelect({
                                 disabled: busy,
                                 key: item.key,
                                 checked: on,
@@ -650,10 +713,11 @@
               key: key,
             }
           }
-          function skillsSeg() {
+          /** 组 2：技能集（可勾选集 = 未被覆盖且结构完整的技能，与旧档案弹窗同一口径）。 */
+          function skillsGroup() {
             var sections = modalSections()
             var defined = !!sections.skills
-            var allItems = modal.inventory.skills || []
+            var allItems = (modal.inventory && modal.inventory.skills) || []
             /**
              * 可勾选集：**被同名技能覆盖的副本**与**结构不完整的技能**都不算。
              * 它们勾了也不生效（运行时那一步本来就跳过），后端保存时还会按同一口径当失效项丢掉
@@ -662,7 +726,7 @@
              */
             var pickable = function (x) { return !x.shadowed && x.loadable !== false }
             var pickableItems = allItems.filter(pickable)
-            var items = (function () {
+            var items = checkedFirst('skills', (function () {
               var q = String(modal.skillQuery || '').trim().toLowerCase()
               if (!q) return allItems
               // 搜索同时匹配技能名与来源名（用户按"来源"找技能是常见动作）。
@@ -670,9 +734,10 @@
                 var d = skillDisplay(x)
                 return (d.name + ' ' + d.source + ' ' + d.key).toLowerCase().indexOf(q) >= 0
               })
-            })()
+            })(), function (x) { return String(x.key) },
+              function (x) { return !!sections.skills && sections.skills.indexOf(x.key) >= 0 })
             var pickedCount = pickableItems.filter(function (x) { return sections.skills && sections.skills.indexOf(x.key) >= 0 }).length
-            return seg({
+            return editorGroupNode({
               title: t('memory.archive.skills'),
               count: defined ? t('scenes.seg.checked', { checked: pickedCount, total: pickableItems.length }) : t('scenes.archive.sectionOff'),
               actions: archiveSegActions(defined, t('memory.archive.addSkills'),
@@ -681,34 +746,36 @@
                 function () { setSections(Object.assign({}, modalSections(), { skills: pickableItems.map(function (x) { return x.key }) })) },
                 function () { setSections(Object.assign({}, modalSections(), { skills: [] })) },
                 defined && pickableItems.length > 0 && pickableItems.every(function (x) { return sections.skills.indexOf(x.key) >= 0 })),
-              body: defined
-                ? React.createElement('div', { className: 'dsm-seg-body' },
-                    segFilter(modal.skillQuery, function (v) { setModal(Object.assign({}, modal, { skillQuery: v })) }, t('scenes.filter.skills')),
-                    items.length
-                      ? React.createElement('div', null, items.map(function (item) {
-                          var d = skillDisplay(item)
-                          var offered = pickable(item)
-                          return pickRow({
-                            disabled: busy || !offered,
-                            key: item.key,
-                            checked: offered && sections.skills.indexOf(item.key) >= 0,
-                            name: d.name,
-                            desc: d.source || null,
-                            descTitle: d.key,
-                            meta: item.shadowed
-                              ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.skills.shadowed.hint') }, t('status.shadowed'))
-                              : (item.loadable === false
-                                ? React.createElement('span', { className: 'dsm-tag', title: t('scenes.skills.invalid.hint') }, t('status.invalid'))
-                                : (item.enabled === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null)),
-                            onChange: function () {
-                              var list = sections.skills.slice(); var i = list.indexOf(item.key)
-                              if (i >= 0) list.splice(i, 1); else list.push(item.key)
-                              setSections(Object.assign({}, modalSections(), { skills: list }))
-                            },
-                          })
-                        }))
-                      : React.createElement('div', { className: 'dsm-pick-empty' }, modal.skillQuery ? t('scenes.mem.noMatch') : t('scenes.skills.empty')))
-                : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.skills.hint'))),
+              query: modal.skillQuery,
+              onQuery: function (v) { setModal(Object.assign({}, modal, { skillQuery: v })) },
+              queryPlaceholder: t('scenes.filter.skills'),
+              hideFilter: !defined,
+              body: !defined
+                ? React.createElement('div', { className: 'dsm-pick-empty', title: t('scenes.skills.hint') }, t('scenes.skills.hint.short'))
+                : items.length
+                  ? React.createElement('div', null, items.map(function (item) {
+                      var d = skillDisplay(item)
+                      var offered = pickable(item)
+                      return RowSelect({
+                        disabled: busy || !offered,
+                        key: item.key,
+                        checked: offered && sections.skills.indexOf(item.key) >= 0,
+                        name: d.name,
+                        desc: d.source || null,
+                        descTitle: d.key,
+                        meta: item.shadowed
+                          ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.skills.shadowed.hint') }, t('status.shadowed'))
+                          : (item.loadable === false
+                            ? React.createElement('span', { className: 'dsm-tag', title: t('scenes.skills.invalid.hint') }, t('status.invalid'))
+                            : (item.enabled === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null)),
+                        onChange: function () {
+                          var list = sections.skills.slice(); var i = list.indexOf(item.key)
+                          if (i >= 0) list.splice(i, 1); else list.push(item.key)
+                          setSections(Object.assign({}, modalSections(), { skills: list }))
+                        },
+                      })
+                    }))
+                  : React.createElement('div', { className: 'dsm-pick-empty' }, modal.skillQuery ? t('scenes.mem.noMatch') : t('scenes.skills.empty')),
             })
           }
           /** 段 3：子智能体绑定。 */
@@ -741,17 +808,18 @@
               return scenePresetLabel(id, true) + ' ' + t(rule.mode === 'deny' ? 'subagents.mode.denyOn' : 'subagents.mode.allowOn', { count: count })
             }).join(' · ')
           }
-          function subagentsSeg() {
+          function subagentsGroup() {
             var sections = modalSections()
             var defined = !!sections.subagents
-            var allItems = modal.inventory.subagents || []
-            var items = (function () {
+            var allItems = (modal.inventory && modal.inventory.subagents) || []
+            var items = checkedFirst('subagents', (function () {
               var q = String(modal.subQuery || '').trim().toLowerCase()
               return q ? allItems.filter(function (x) {
                 return String(x.name).toLowerCase().indexOf(q) >= 0 || String(x.description || '').toLowerCase().indexOf(q) >= 0
               }) : allItems
-            })()
-            return seg({
+            })(), function (x) { return String(x.name) },
+              function (x) { return !!sections.subagents && sections.subagents.indexOf(x.name) >= 0 })
+            return editorGroupNode({
               title: t('memory.archive.subagents'),
               count: defined ? t('scenes.seg.checked', { checked: sections.subagents.length, total: allItems.length }) : t('scenes.archive.sectionOff'),
               actions: archiveSegActions(defined, t('memory.archive.addSubagents'),
@@ -760,56 +828,173 @@
                 function () { setSections(Object.assign({}, modalSections(), { subagents: allItems.map(function (x) { return x.name }) })) },
                 function () { setSections(Object.assign({}, modalSections(), { subagents: [] })) },
                 defined && allItems.length > 0 && allItems.every(function (x) { return sections.subagents.indexOf(x.name) >= 0 })),
-              body: defined
-                ? React.createElement('div', { className: 'dsm-seg-body' },
-                    segFilter(modal.subQuery, function (v) { setModal(Object.assign({}, modal, { subQuery: v })) }, t('scenes.filter.subagents')),
-                    items.length
-                      ? React.createElement('div', null, items.map(function (item) {
-                          return pickRow({
-                disabled: busy,
-                            key: item.name,
-                            checked: sections.subagents.indexOf(item.name) >= 0,
-                            name: item.name,
-                            desc: item.description || null,
-                            // 按模式配的工具限制摘要（没配就不显示）：场景改不了会话的模式，
-                            // 但要让用户看得见"这条人设在某些模式下是被限工具的"。
-                            meta: personaRuleSummary(item),
-                            onChange: function () {
-                              var list = sections.subagents.slice(); var i = list.indexOf(item.name)
-                              if (i >= 0) list.splice(i, 1); else list.push(item.name)
-                              setSections(Object.assign({}, modalSections(), { subagents: list }))
-                            },
-                          })
-                        }))
-                      : React.createElement('div', { className: 'dsm-pick-empty' }, modal.subQuery ? t('scenes.mem.noMatch') : t('scenes.subagents.empty')))
-                : React.createElement('div', { className: 'dsm-seg-body' }, React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.subagents.hint'))),
+              query: modal.subQuery,
+              onQuery: function (v) { setModal(Object.assign({}, modal, { subQuery: v })) },
+              queryPlaceholder: t('scenes.filter.subagents'),
+              hideFilter: !defined,
+              body: !defined
+                ? React.createElement('div', { className: 'dsm-pick-empty', title: t('scenes.subagents.hint') }, t('scenes.subagents.hint.short'))
+                : items.length
+                  ? React.createElement('div', null, items.map(function (item) {
+                      return RowSelect({
+                        disabled: busy,
+                        key: item.name,
+                        checked: sections.subagents.indexOf(item.name) >= 0,
+                        name: item.name,
+                        desc: item.description || null,
+                        // 按模式配的工具限制摘要（没配就不显示）：场景改不了会话的模式，
+                        // 但要让用户看得见"这条人设在某些模式下是被限工具的"。
+                        meta: personaRuleSummary(item),
+                        onChange: function () {
+                          var list = sections.subagents.slice(); var i = list.indexOf(item.name)
+                          if (i >= 0) list.splice(i, 1); else list.push(item.name)
+                          setSections(Object.assign({}, modalSections(), { subagents: list }))
+                        },
+                      })
+                    }))
+                  : React.createElement('div', { className: 'dsm-pick-empty' }, modal.subQuery ? t('scenes.mem.noMatch') : t('scenes.subagents.empty')),
             })
           }
           /**
-           * 档案编辑弹窗：顶部一行摘要（MCP/技能/子智能体/记忆各勾了多少）+ 四段 + 底部动作。
-           * 结构固定 —— 加/删段、进出「选工具」/「选记忆」明细都不会改变弹窗尺寸或元素顺序。
+           * 场景编辑器（新建 / 编辑 / 档案三弹窗融合，REDESIGN §6.2）：L=720 列表壳。
+           * 一行两格（场景名 | 描述）→ 绑定行（三下拉并排）→ 摘要行 → 四组 2×2 →
+           * footer [删除场景(仅编辑态,左)] [取消] [保存到场景/创建]。
+           * MCP 服务器编辑弹窗渲染在外层：不能放进列表 Modal 的滚动容器里（会被裁掉）。
            */
-          function archiveNode() {
-            if (!modal || modal.type !== 'scene-archive') return null
-            var main = React.createElement(Modal, { key: 'sarch', wide: true, className: 'dsm-modal-archive', title: t('memory.archive.title') + ' · ' + (modal.name === '' ? t('memory.scene.global') : modal.name), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+          function editorNode() {
+            if (!modal || modal.type !== 'scene-editor') return null
+            var isEdit = modal.name != null
+            var label = isEdit ? (sceneLabel(data.scenes, modal.name) || modal.name) : ''
+            var own = modal.inventory ? sceneMemories(modal.name || '') : []
+            var summary = t('scenes.editor.summary', {
+              mcp: modal.sections.mcp ? Object.keys(modal.sections.mcp).length : 0,
+              skills: modal.sections.skills ? modal.sections.skills.length : 0,
+              subagents: modal.sections.subagents ? modal.sections.subagents.length : 0,
+              memories: own.length,
+            })
+            var descLen = String(sceneForm.description || '').length
+            // 字段级错误只留**真正关于本字段**的（用户 2026-10-12：「场景名下面的删除」）。
+            // 保存失败时这里会被塞进 `translateError(t, res)`，其中"缺少访问令牌，或令牌不对"
+            // 属于门禁、不属于场景名 —— 挂在字段下面既是第二次重复（弹窗头部 TokenGateNotice
+            // 已经说了一遍，还带「填写令牌」），又会顺手把名称框标成非法（`dsm-rule-invalid`）。
+            // 名称本身的校验错误（error.rules.invalidGroup）照旧显示。
+            var fieldError = isTokenGateText(sceneForm.error) ? null : sceneForm.error
+            // 快捷提示词下拉里「自定义」那一项要带计数（用户 2026-10-12：「自定义选项应该是
+            // 自定义(*/*)」）：`picked` 是已经勾了几个，`total` 是可勾的总数。还没切到自定义时
+            // `picked` 取"点下去会被预勾上的那批"（下面 onChange 里预勾的正是"当前启用"的那些）——
+            // 两边口径必须一致，否则点一下数字会从 0 跳到 3。
+            var quickTotal = (quickOptions || []).length
+            var quickPicked = sceneForm.quickMode === 'custom'
+              ? (sceneForm.quickPrompts || []).length
+              : (quickOptions || []).filter(function (p) { return p.enabled !== false }).length
+            // 「删除场景」已从编辑页移除（用户 2026-10-12）：删除是**场景卡片**上那一颗
+            // （行内二次确认弹窗），编辑页的主职责是改内容 —— 左下角再挂一颗红键，和
+            // 「取消 / 保存到场景」并排，误触代价又最大（会带走该场景下的全部记忆）。
+            var main = React.createElement(Modal, { key: 'sedit', list: true, className: 'dsm-modal-list dsm-modal-editor',
+              // 档案摘要挂在**标题旁边**（2026-10-12 重排）：它是一句"现在配了多少"的概览，
+              // 原来单占一行（24px + 12px 间距）把四组往下顶；并入标题后这一行省给清单体。
+              title: React.createElement('span', { className: 'dsm-modal-title-row' },
+                isEdit ? t('scenes.editor.title', { name: label }) : t('memory.scene.createTitle'),
+                React.createElement('span', { className: 'dsm-editor-summary' }, summary)),
+              closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              modal.error ? React.createElement(Notice, { kind: 'err', text: modal.error }) : null,
               React.createElement('div', { className: 'dsm-form' },
-                React.createElement('div', { className: 'dsm-archive-meta' },
-                  React.createElement('span', null, t('scenes.archive.summary', {
-                    mcp: modal.sections.mcp ? Object.keys(modal.sections.mcp).length : 0,
-                    skills: modal.sections.skills ? modal.sections.skills.length : 0,
-                    subagents: modal.sections.subagents ? modal.sections.subagents.length : 0,
-                  }))),
-                // 2×2 网格（2026-09-28 用户裁定）：四段同屏、每段段体内滚 —— 见 .dsm-archive-grid。
-                React.createElement('div', { className: 'dsm-archive-grid' },
-                  mcpSeg(),
-                  skillsSeg(),
-                  subagentsSeg(),
-                  memoriesSeg()),
-                React.createElement('div', { className: 'dsm-modal-actions' },
-                  React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy, onClick: submitArchive }, t('memory.archive.save')))))
-            // MCP 服务器编辑弹窗渲染在外层：不能放进列表 Modal 的滚动容器里（会被裁掉）。
+                React.createElement('div', { className: 'dsm-field-row dsm-editor-basics' },
+                  React.createElement('label', { className: 'dsm-field' },
+                    React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.name')),
+                    isEdit
+                      ? React.createElement('span', { className: 'dsm-editor-name', title: modal.name }, modal.name)
+                      : React.createElement('input', {
+                          className: 'dsm-control' + (fieldError ? ' dsm-rule-invalid' : ''),
+                          value: sceneForm.name || '',
+                          placeholder: t('memory.scene.field.name.placeholder'),
+                          onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { name: e.target.value, error: null })) },
+                        }),
+                    // 编辑态那一行「一级目录名，创建后不可改」已删（用户 2026-10-12）：
+                    // 名字在这里是**只读展示**，改不了这件事界面已经替他做到了，不必再说一遍。
+                    fieldError ? React.createElement('p', { className: 'dsm-rule-hint' }, fieldError) : null),
+                  React.createElement('label', { className: 'dsm-field' },
+                    React.createElement('div', { className: 'dsm-budget-meta' },
+                      React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.desc')),
+                      // 字数计数只在逼近上限时出现（≥80%，REDESIGN §12.3），平时不占视线。
+                      descLen >= SCENE_DESC_MAX * 0.8
+                        ? React.createElement('span', { className: 'dsm-char-count' }, descLen + '/' + SCENE_DESC_MAX)
+                        : null),
+                    React.createElement('input', {
+                      className: 'dsm-control',
+                      value: sceneForm.description || '',
+                      maxLength: SCENE_DESC_MAX,
+                      placeholder: t('memory.scene.field.desc.placeholder'),
+                      onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { description: e.target.value, error: null })) },
+                    })),
+                // 三个绑定与名称/描述**同一行**（2026-10-12 压缩）：原先单独占一行、整行 56px + 12px
+                // 间距，而这一档弹窗的高度是四组清单在用的。不带提示 bullet（§6.2「去杂」；
+                // 机制细节进 placeholder / title）。
+                React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('span', { className: 'dsm-label' }, t('scenes.field.prompt')),
+                    presetOptions.length > 0
+                      ? React.createElement(SourceSelect, {
+                          options: [{ value: '', label: t('scenes.field.prompt.none') }].concat(presetOptions),
+                          value: sceneForm.prompt || '',
+                          onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { prompt: v })) },
+                        })
+                      : React.createElement('p', { className: 'dsm-help' }, t('scenes.prompt.noPresets'))),
+                  React.createElement('div', { className: 'dsm-field' },
+                    // 标签行：标题在左，勾选入口「选择」在右（只在「自定义」时出现）。
+                    // 入口是标签行里的一颗小按钮（用户 2026-10-12：「改成『选择』，放在快捷提示词
+                    // 标题最右边」）—— 早先那颗整宽按钮会把这一格顶高、还和下拉抢位置。
+                    React.createElement('div', { className: 'dsm-label-row' },
+                      React.createElement('span', { className: 'dsm-label' }, t('scenes.field.quickPrompts')),
+                      sceneForm.quickMode === 'custom' && (quickOptions || []).length
+                        ? React.createElement('button', {
+                            type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: openQuickPick,
+                          }, t('scenes.field.quickPrompts.pick'))
+                        : null),
+                    React.createElement(SourceSelect, {
+                      value: sceneForm.quickMode || 'current',
+                      // 「无」排第一（用户 2026-10-10：「无应该是第一条」）—— 与全局提示词那一格
+                      // 同一条排法，把"新建场景会看到的那个"放在最上面。
+                      options: [
+                        { value: 'none', label: t('scenes.field.quickPrompts.noneOption') },
+                        { value: 'current', label: t('scenes.field.quickPrompts.current') },
+                        { value: 'custom', label: t('scenes.field.quickPrompts.customCount', { picked: quickPicked, total: quickTotal }) },
+                      ],
+                      onChange: function (v) {
+                        setSceneForm(Object.assign({}, sceneForm, {
+                          quickMode: v,
+                          quickPrompts: v === 'none'
+                            ? []
+                            : v === 'custom'
+                              ? (quickOptions || []).filter(function (p) { return p.enabled !== false }).map(function (p) { return p.id })
+                              : null,
+                        }))
+                      },
+                    }),
+                    // 一条候选都没有时（「提示词」页还没建过）说清去哪儿建 —— 这时标签行里没有入口。
+                    sceneForm.quickMode === 'custom' && !(quickOptions || []).length
+                      ? React.createElement('p', { className: 'dsm-help' }, t('scenes.field.quickPrompts.none'))
+                      : null),
+                  React.createElement('div', { className: 'dsm-field' },
+                    React.createElement('span', { className: 'dsm-label' }, t('scenes.field.toolTable')),
+                    React.createElement(SourceSelect, {
+                      value: String(sceneForm.toolTablePreset || ''),
+                      options: toolTablePresetOptions(),
+                      onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { toolTablePreset: v })) },
+                    }))),
+                // （原先这里是「自定义」时就地展开的勾选段卡片，2026-10-12 用户「能不能设置成弹窗」
+                // 改为独立弹窗 —— 见下面的 quickPick 与 openQuickPick。）
+                // 四组 2×2（档案四段并入）：行选择 + 组内滚，组容器底色分层不画边框。
+                // 摘要已经并到标题那一行（见上面的 title），这里不再单占一行往下顶。
+                React.createElement('div', { className: 'dsm-editor-grid' },
+                  mcpGroup(),
+                  skillsGroup(),
+                  subagentsGroup(),
+                  memoriesGroup())),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitSceneEditor }, isEdit ? t('memory.archive.save') : t('memory.btn.create'))))
             var edit = modal.drill ? mcpEditNode() : null
-            return edit ? React.createElement(React.Fragment, { key: 'sarch-wrap' }, main, edit) : main
+            return edit ? React.createElement(React.Fragment, { key: 'sedit-wrap' }, main, edit) : main
           }
           function openDrill(server) {
             setModal(Object.assign({}, modal, { drill: server, drillError: null }))
@@ -838,24 +1023,6 @@
             if (i >= 0) cur.splice(i, 1); else cur.push(short)
             mcp[server] = cur
             setSections(Object.assign({}, sections, { mcp: mcp }))
-          }
-          function submitArchive() {
-            if (!modalSections()) return
-            setBusy(true)
-            // P5：档案里**不再写 memories 段** —— 记忆的开关是 `rules[*].enabled` 单一真相源，
-            // 在段里勾选时已经即时提交了，这里没有「待保存」的记忆状态。
-            // 工具表方案绑定同样不在载荷里（2026-09-28 起改「修改场景」表单编辑）；
-            // 服务端对「没带这一栏」保留现值，档案保存不会把绑定冲掉。
-            apiCall('scene-archive-save', { scene: modal.name, archive: (function () { var payload = {}; if (modal.sections.mcp) payload.mcp = modal.sections.mcp; if (modal.sections.mcpNotes) payload.mcpNotes = modal.sections.mcpNotes; if (modal.sections.skills) payload.skills = modal.sections.skills; if (modal.sections.subagents) payload.subagents = modal.sections.subagents; return payload })() }).then(function (res) {
-              setBusy(false)
-              if (res && res.ok) {
-                setModal(null)
-                // 当前模式的档案保存后**就地生效**；运行时没应用成功要如实说（别假装生效了）。
-                var applyNote = res.applyError ? ' · ' + t('memory.archive.applyFailed', { reason: res.applyError }) : ''
-                setResult({ ok: !res.applyError, text: t('memory.result.archiveSaved', { name: modal.name }) + (res.stale && res.stale.length ? ' · ' + t('memory.archive.stale', { items: res.stale.join('、') }) : '') + applyNote })
-                refresh(true)
-              } else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
           /**
            * 「进入场景」先问一次：拉 `scene-mode-preview` 把这次会改的东西列出来。
@@ -897,7 +1064,25 @@
             var shown = names.slice(0, 12).join('、')
             return names.length > 12 ? shown + t('scenes.preview.more') : shown
           }
-          /** 预览卡正文：`scene-mode-preview` 算出的每个方向一行，没有改动的方向不出行。 */
+          /**
+           * 预览卡正文。三段，顺序固定：
+           *
+           *   ① 绑定三行（全局提示词 / 快捷提示词 / 模型工具表）—— 排最前，写成 `标签：值`。
+           *   ② 会改什么 —— 每域一行，没改动的域不出行。
+           *   ③ 进入后是什么 —— MCP 服务器 / 记忆的结果口径。
+           *
+           * 为什么必须补出①、而且非写成 `标签：值` 不可（用户 2026-10-12：「提醒页正文不清楚」）：
+           * 这三个域绑在**场景本体**上（`scene.prompt` / 档案里的 `quickPrompts`、`toolTablePreset`），
+           * 进入时要么切换、要么原样不动。原先把"不动"写成「…不接管（这个场景没绑）」这种整句：
+           *   · 形态上和下面那些 `标签：值` 的行不是一类，一眼扫不出"这三行是绑定的读数"；
+           *   · 更糟的是把"保持现状"说成了"未绑定" —— 用户看到「全局提示词不接管」，理解成
+           *     "我的全局提示词没绑"，而事实相反：全局那份一直在生效，只是**这个场景**没去改它。
+           *     （用户 2026-10-12 报障：「全局提示词明明绑定了还显示未绑定」。）
+           * 所以现在一律把值落在冒号右边，并且"保持现状"必须**带上当前那份的名字**：
+           *   · 会切   → `全局提示词：切到「X」`
+           *   · 不变   → `全局提示词：保持「X」不变（本场景未绑定）`
+           * 拿不到当前那份（一份预设都没有）时才退回不带名字的说法。
+           */
           function previewRows(plan) {
             var out = []
             if (plan.hasArchive !== true) out.push(React.createElement('div', { key: 'noarch', className: 'dsm-feedback dsm-warning' }, t('scenes.preview.noArchive')))
@@ -905,6 +1090,7 @@
             var mcp = plan.mcp || {}
             var sk = plan.skills || {}
             var sub = plan.subagents || {}
+            var qp = plan.quickPrompts || {}
             var changed = 0
             /**
              * 进入 `target` 之后**会注入**的记忆：该场景自己 + 恒常启用的那两个（服务端给
@@ -924,44 +1110,84 @@
               })
             }
             /** 一行改动：`names` 为空就不出行（卡片只报真的会变的方向）。 */
-            function pushRow(key, list, nameOnly) {
+            function pushRow(rows, key, list, nameOnly) {
               var names = list || []
               if (!names.length) return
               changed += 1
-              out.push(React.createElement('p', { key: key, className: 'dsm-help' }, t(key, { count: names.length, names: previewNames(names, nameOnly === true) })))
+              rows.push(React.createElement('p', { key: key, className: 'dsm-help' }, t(key, { count: names.length, names: previewNames(names, nameOnly === true) })))
             }
-            // 按域分组：MCP 改动 → MCP 结果 → 技能 → 人设 → 记忆（改动 + 结果）。
-            pushRow('scenes.preview.row.serversOn', mcp.serversOn)
-            pushRow('scenes.preview.row.serversOff', mcp.serversOff)
-            pushRow('scenes.preview.row.toolsOn', mcp.toolsOn)
-            pushRow('scenes.preview.row.toolsOff', mcp.toolsOff)
-            // 「进入后启用 N 台 MCP 服务器」：**结果**口径，与上面四行的"会改什么"互补 ——
-            // 上面全空时这一段就整段消失，用户读起来像缺了信息（2026-09-23 裁定）。
-            var enterServers = (plan.enter && plan.enter.servers) || []
-            if (enterServers.length && plan.noChange !== true) {
-              out.push(React.createElement('p', { key: 'enter-servers', className: 'dsm-help' }, t('scenes.preview.enter.servers', { count: enterServers.length, names: previewNames(enterServers) })))
+            // ── ① 绑定三行 ─────────────────────────────────────────────────────────────
+            var bind = []
+            function pushBind(key, params) {
+              bind.push(React.createElement('p', { key: key, className: 'dsm-help' }, t(key, params)))
             }
-            pushRow('scenes.preview.row.sourcesOn', sk.sourcesOn)
-            pushRow('scenes.preview.row.sourcesOff', sk.sourcesOff)
-            pushRow('scenes.preview.row.skillsOn', sk.on, true)
-            pushRow('scenes.preview.row.skillsOff', sk.off, true)
-            pushRow('scenes.preview.row.personasOn', sub.on)
-            pushRow('scenes.preview.row.personasOff', sub.off)
-            // 快捷提示词：只有绑了才出行（没绑 = 这一域进都不进，服务端给的就是 null）。
-            var qp = plan.quickPrompts || {}
-            pushRow('scenes.preview.row.quickOn', qp.on)
-            pushRow('scenes.preview.row.quickOff', qp.off)
-            // 工具表方案（C1）：绑了方案就是一句「会切成哪一份」，没绑不出行。
-            // 方案已经不存在时（hiddenCount 为 null）说"这次不切换"，不报一个看不懂的数字。
+            var arcName = String(plan.target || preview.name || '')
+            var arc = (data.archives || {})[arcName] || {}
+            var targetScene = (data.scenes || []).filter(function (s) { return String(s.name) === arcName })[0]
+            var boundPrompt = targetScene && targetScene.prompt ? String(targetScene.prompt) : ''
+            // 当前**驱动**基线的那份预设（有场景在驱动时它就是权威口径）；没有场景驱动时退回
+            // "文件里生效的那份"（`agentsmd-list` 的 active）—— 后者才是用户眼里那个"明明绑定了"
+            // 的全局提示词。两者都没有 = 一份预设都没在生效，才允许说"保持现状"而不带名字。
+            var drivingNow = data.scenePrompt && data.scenePrompt.scene ? String(data.scenePrompt.presetId || '') : ''
+            var livePrompt = drivingNow || String(appliedPreset || '')
+            if (boundPrompt && drivingNow === boundPrompt) pushBind('scenes.preview.bind.promptSame', { name: boundPrompt })
+            else if (boundPrompt) pushBind('scenes.preview.bind.prompt', { name: boundPrompt })
+            else if (livePrompt) pushBind('scenes.preview.bind.promptKeep', { name: livePrompt })
+            else pushBind('scenes.preview.bind.promptKeepNone')
+            // 快捷提示词：改动行与"保持现状"行合到同一行族（它们说的是同一个域），只是措辞不同。
+            var qOn = qp.on || []
+            var qOff = qp.off || []
+            if (qOn.length) { changed += 1; pushBind('scenes.preview.bind.quickOn', { count: qOn.length, names: previewNames(qOn) }) }
+            if (qOff.length) { changed += 1; pushBind('scenes.preview.bind.quickOff', { count: qOff.length, names: previewNames(qOff) }) }
+            if (!qOn.length && !qOff.length) {
+              // 档案没定义这一段 = 这一域进都不进；定义了才分"空表"与"勾了几条"。
+              if (!Array.isArray(arc.quickPrompts)) pushBind('scenes.preview.bind.quickKeep')
+              else if (arc.quickPrompts.length) pushBind('scenes.preview.bind.quickKeepList', { count: arc.quickPrompts.length, names: previewNames(arc.quickPrompts.map(String)) })
+              else pushBind('scenes.preview.bind.quickKeepEmpty')
+            }
+            // 模型工具表：方案已经不存在时（hiddenCount 为 null）说"这次不切换"，不报一个看不懂的数字。
             if (plan.toolPreset) {
               changed += 1
-              out.push(React.createElement('p', { key: 'tool-preset', className: 'dsm-help' }, t(
-                plan.toolPreset.hiddenCount === null ? 'scenes.preview.row.toolPresetMissing' : 'scenes.preview.row.toolPreset',
-                { name: plan.toolPreset.name, count: plan.toolPreset.hiddenCount })))
-            }
+              pushBind(plan.toolPreset.hiddenCount === null ? 'scenes.preview.bind.toolMissing' : 'scenes.preview.bind.tool', { name: plan.toolPreset.name, count: plan.toolPreset.hiddenCount })
+            } else pushBind('scenes.preview.bind.toolKeep')
+            // ── ② 会改什么 ─────────────────────────────────────────────────────────────
+            var rest = []
+            pushRow(rest, 'scenes.preview.row.serversOn', mcp.serversOn)
+            pushRow(rest, 'scenes.preview.row.serversOff', mcp.serversOff)
+            pushRow(rest, 'scenes.preview.row.toolsOn', mcp.toolsOn)
+            pushRow(rest, 'scenes.preview.row.toolsOff', mcp.toolsOff)
+            pushRow(rest, 'scenes.preview.row.sourcesOn', sk.sourcesOn)
+            pushRow(rest, 'scenes.preview.row.sourcesOff', sk.sourcesOff)
+            pushRow(rest, 'scenes.preview.row.skillsOn', sk.on, true)
+            pushRow(rest, 'scenes.preview.row.skillsOff', sk.off, true)
+            pushRow(rest, 'scenes.preview.row.personasOn', sub.on)
+            pushRow(rest, 'scenes.preview.row.personasOff', sub.off)
             if (mcp.notes) {
               changed += 1
-              out.push(React.createElement('p', { key: 'notes', className: 'dsm-help' }, t('scenes.preview.row.notes', { count: mcp.notes })))
+              rest.push(React.createElement('p', { key: 'notes', className: 'dsm-help' }, t('scenes.preview.row.notes', { count: mcp.notes })))
+            }
+            // ── ③ 进入后是什么 ─────────────────────────────────────────────────────────
+            // 「进入后启用 N 台 MCP 服务器」：**结果**口径，与上面四行的"会改什么"互补 ——
+            // 上面全空时这一段就整段消失，用户读起来像缺了信息（2026-09-23 裁定）。
+            // 但上面**已经有**服务器改动行时这一行必须收起来：同一台服务器会在相邻两行里
+            // 各说一遍（「启用 1 台 MCP 服务器：github」紧跟「启用 1 台 MCP：github」）。
+            var enterServers = (plan.enter && plan.enter.servers) || []
+            var serverChanged = (mcp.serversOn || []).length + (mcp.serversOff || []).length
+            if (enterServers.length && plan.noChange !== true && !serverChanged) {
+              rest.push(React.createElement('p', { key: 'enter-servers', className: 'dsm-help' }, t('scenes.preview.enter.servers', { count: enterServers.length, names: previewNames(enterServers) })))
+            }
+            // 「进入后启用 N 个子智能体」：与服务器那一行同一条口径（结果口径 + 上面有改动行时
+            // 收起来）。数据在客户端算：档案的 `subagents` 段不在 `plan.enter` 里，但
+            // `data.archives[场景名]` 本来就有，和快捷提示词那一行同源。
+            // 用户 2026-10-12：「子智能体遗漏了」—— 卡片此前只有 MCP 服务器 / 技能 / 记忆三行，
+            // 少说一个域就等于让用户自己去猜"我的人设会不会被关掉"。
+            var personaChanged = (sub.on || []).length + (sub.off || []).length
+            if (!personaChanged && plan.noChange !== true && Array.isArray(arc.subagents)) {
+              if (arc.subagents.length) {
+                rest.push(React.createElement('p', { key: 'enter-personas', className: 'dsm-help' }, t('scenes.preview.enter.personas', {
+                  count: arc.subagents.length, names: previewNames(arc.subagents.map(String)),
+                })))
+              } else rest.push(React.createElement('p', { key: 'enter-personas-none', className: 'dsm-help' }, t('scenes.preview.enter.personasNone')))
             }
             // 「进入后启用 N 条记忆」：同上，结果口径（含公共基线与全局，它们也在范围里）。
             // 此前这里还有一行"记忆注入范围收窄到「X」（公共基线与全局不受影响）"—— 用户
@@ -970,16 +1196,16 @@
             if (plan.target && plan.noChange !== true) {
               var memScope = memoriesInScopeAfterEnter(plan.target)
               if (memScope.length) {
-                out.push(React.createElement('p', { key: 'enter-memories', className: 'dsm-help' }, t('scenes.preview.enter.memories', {
+                rest.push(React.createElement('p', { key: 'enter-memories', className: 'dsm-help' }, t('scenes.preview.enter.memories', {
                   count: memScope.length,
                   names: previewNames(memScope.map(function (r) { return String(r.name || r.id) })),
                 })))
               }
             }
-            if (plan.truncated) out.push(React.createElement('p', { key: 'more', className: 'dsm-help' }, t('scenes.preview.truncated')))
-            if ((plan.stale || []).length) out.push(React.createElement('p', { key: 'stale', className: 'dsm-help' }, t('scenes.preview.stale', { count: plan.stale.length, items: previewNames(plan.stale) })))
-            if (!changed && !out.length) out.push(React.createElement('p', { key: 'none', className: 'dsm-help' }, t('scenes.preview.nochange')))
-            return out
+            if (plan.truncated) rest.push(React.createElement('p', { key: 'more', className: 'dsm-help' }, t('scenes.preview.truncated')))
+            if ((plan.stale || []).length) rest.push(React.createElement('p', { key: 'stale', className: 'dsm-help' }, t('scenes.preview.stale', { count: plan.stale.length, items: previewNames(plan.stale) })))
+            if (!changed && !rest.length && !out.length) rest.push(React.createElement('p', { key: 'none', className: 'dsm-help' }, t('scenes.preview.nochange')))
+            return out.concat(bind, rest)
           }
           // 「进入某个场景」= 应用它的档案 + 启用它（单选），于是它的记忆与绑定的提示词
           // 一起生效——用户裁定：「进入其中一个场景，提示词就启动成场景的设置的」。
@@ -1020,7 +1246,7 @@
           var modeScene = data.mode && data.mode.scene
           // 遗留检测 + 预设场景过滤 + 三格统计 + 「启用的排前面」：一次算完。这四步只跟
           // `data.scenes` / `data.archives` 有关，弹窗、提示条、忙碌标记之类的状态变化不再重跑。
-          // 卡片 key 与 data-flip-* 仍来自场景名与前两态，未动。
+          // 卡片 key 仍来自场景名，未动。
           var sceneView = React.useMemo(function () {
             // 历史「全部启用」遗留检测：单选模型下同时启用多个场景是歧义状态（见下方收敛条）。
             var legacy = (data.scenes || []).filter(function (s) { return s.active === true && !s.shared && !s.global })
@@ -1035,10 +1261,15 @@
              */
             var presets = (data.scenes || []).filter(function (s) { return s.global !== true })
             // 与 MCP / 技能页同构的三格统计（页面之间「头顶长什么样」保持一致）——同样只数可见的预设场景。
+            // 2026-10-12 改成比例口径（用户：「其他几个也重新设计，显示的内容一定要有用」）：
+            // 「2 个场景 / 0 个已启用 / 1 个有档案」三个孤立数字答不了"几个正开着、几个上着锁"，
+            // 统一给成 `x/总` 之后每一格都自带分母。locked 是新加的 —— 锁定是这一页最需要
+            // 一眼看到的状态（锁定期间整个管理域冻结）。
             var stats = {
               total: presets.length,
               active: presets.filter(function (s) { return s.active === true }).length,
               archives: presets.filter(function (s) { return !!data.archives[s.name] }).length,
+              locked: presets.filter(function (s) { return s.locked === true }).length,
             }
             /**
              * 搜索只过滤列表，不动三格统计 —— 与子智能体页同口径：统计答"这台机器上有几个"，
@@ -1053,7 +1284,7 @@
               presetScenes: presets,
               sceneStats: stats,
               visibleScenes: visible,
-              orderedScenes: enabledFirst(visible, function (scene) { return scene.active === true; }),
+              orderedScenes: rankedFirst(sceneRank, function (scene) { return scene.name }, visible, function (scene) { return scene.active === true; }),
             }
           }, [data.scenes, data.archives, dq])
           var legacyAllScenes = sceneView.legacyAllScenes
@@ -1067,45 +1298,56 @@
            * 它只出现在页首的「当前模式」条上：卡片上不再挂任何数量——那正是「卡片又乱又挤」
            * 的来源。全页只有这一处回答「当前生效的配置是什么」。
            */
-          function archiveSummary(archive) {
-            if (!archive) return ''
+          function archiveSummary(archive, scene) {
             var parts = []
-            if (archive.mcp) parts.push(t('scenes.profile.mcp', { count: Object.keys(archive.mcp).length }))
-            if (Array.isArray(archive.skills)) parts.push(t('scenes.profile.skills', { count: archive.skills.length }))
-            if (Array.isArray(archive.subagents)) parts.push(t('scenes.profile.subagents', { count: archive.subagents.length }))
-            // 快捷提示词绑了才报（没绑 = 这一域不碰）。**空表也要报** —— 它说的是"进入后全部停用"，
-            // 与"没绑"是两件事，漏掉就等于把用户的一个真实选择显示成没有这个选择。
-            if (Array.isArray(archive.quickPrompts)) parts.push(t('scenes.profile.quickPrompts', { count: archive.quickPrompts.length }))
-            // P5：记忆**不再是档案的一部分**（开关是 `rules[*].enabled` 单一真相源），
-            // 所以这里不再统计 memories —— 否则会显示一个已经不存在的段的数量。
+            if (archive) {
+              if (archive.mcp) parts.push(t('scenes.profile.mcp', { count: Object.keys(archive.mcp).length }))
+              if (Array.isArray(archive.skills)) parts.push(t('scenes.profile.skills', { count: archive.skills.length }))
+              if (Array.isArray(archive.subagents)) parts.push(t('scenes.profile.subagents', { count: archive.subagents.length }))
+              // 快捷提示词绑了才报（没绑 = 这一域不碰）。**空表也要报** —— 它说的是"进入后全部停用"，
+              // 与"没绑"是两件事，漏掉就等于把用户的一个真实选择显示成没有这个选择。
+              if (Array.isArray(archive.quickPrompts)) parts.push(t('scenes.profile.quickPrompts', { count: archive.quickPrompts.length }))
+            }
+            // 记忆：**不在档案里**（P5 起开关就是 `rules[*].enabled` 单一真相源），所以数量得从
+            // 当前场景的记忆清单里现算（用户 2026-10-12：「启动场景缺少记忆数量的显示」——
+            // 进入场景后注入的正是这几条，它比档案里任何一段都更该出现在这条横幅上）。
+            // 报「生效/总数」而不是单个数字：这个场景有 5 条但只开了 2 条，才是用户要看的那件事
+            // （与记忆页统计同一口径）。一条都没有的场景不出现这一段。
+            var sceneRules = (data.rules || []).filter(function (r) { return r.group === scene })
+            if (sceneRules.length > 0) {
+              var on = sceneRules.filter(function (r) { return r.enabled !== false }).length
+              parts.push(t('scenes.profile.memories', { count: on + '/' + sceneRules.length }))
+            }
             return parts.join(' · ')
           }
           // 当前模式场景被锁 → 「退出模式」按钮与开关一起禁用（服务端守卫兜底）。
           var modeSceneLocked = !!(modeScene && (data.scenes || []).some(function (s) { return s.name === modeScene && s.locked === true }))
-          var modeSummary = modeScene ? archiveSummary(data.archives[modeScene]) : ''
+          var modeSummary = modeScene ? archiveSummary(data.archives[modeScene], modeScene) : ''
           return React.createElement('section', { className: 'dsm-section' },
-            React.createElement('div', { className: 'dsm-head' },
-              React.createElement('div', { className: 'dsm-title-block' },
-                React.createElement('div', { className: 'dsm-title-row' },
-                  React.createElement('h2', { className: 'dsm-title' }, t('scenes.title'))),
-                React.createElement('p', { className: 'dsm-desc' }, t('scenes.desc'))),
-              React.createElement('div', { className: 'dsm-actions' },
-                refreshButton(t, busy || data.loading, { className: 'dsm-btn dsm-btn-secondary', disabled: busy || data.loading, onClick: function () { refresh() } }),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')),
+            // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 开启提醒 · 回收站；统计内联。
+            React.createElement(PageHead, {
+              key: 'head',
+              title: t('scenes.title'),
+              desc: t('scenes.desc'),
+              stats: [
+                [sceneStats.active + '/' + sceneStats.total, t('scenes.stat.total')],
+                [sceneStats.archives + '/' + sceneStats.total, t('scenes.stat.archives')],
+                [sceneStats.locked + '/' + sceneStats.total, t('scenes.stat.locked')],
+              ],
+              actions: [
+                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: busy, onClick: openCreateScene }, t('memory.btn.newScene')),
                 // 进入场景前的提醒开关（用户 2026-09-23 裁定放在「回收站」左边）。按钮文字是
                 // **动作**：现在会弹 → 写「关闭提醒」；已经关掉 → 写「开启提醒」。
+                // 两个方向各取字面量键，不合成三元选词（词典键必须 t('字面量') 直传）。
                 React.createElement('button', {
-                  type: 'button', className: 'dsm-btn dsm-btn-secondary', title: t('scenes.preview.toggle.title'),
+                  key: 'preview', type: 'button', className: 'dsm-btn dsm-btn-secondary', title: t('scenes.preview.toggle.title'),
                   onClick: function () { saveEnterPreview(!enterPreview) },
-                }, t(enterPreview ? 'scenes.preview.toggle.off' : 'scenes.preview.toggle.on')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { loadTrash(false) } }, t('trash.btn.open')))),
-            React.createElement('div', { key: 'stats', className: 'dsm-summary' },
-              [[sceneStats.total, t('scenes.stat.total')], [sceneStats.active, t('scenes.stat.active')], [sceneStats.archives, t('scenes.stat.archives')]].map(function (item) {
-                return React.createElement('div', { key: item[1], className: 'dsm-stat' },
-                  React.createElement('strong', null, item[0]), item[1])
-              })),
-            // 搜索框：统计条之后（与 MCP / 技能 / 记忆 / 提示词 / 子智能体页同一位置与样式）。
-            React.createElement('div', { key: 'filters', className: 'dsm-filters' },
+                }, enterPreview ? t('scenes.preview.toggle.off') : t('scenes.preview.toggle.on')),
+                React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setTrash(true) } }, t('trash.btn.open')),
+              ],
+            }),
+            // 列表工具条（REDESIGN §3.3，切片四）：搜索住 children；场景页没有批量动作与筛选下拉。
+            React.createElement(Toolbar, { key: 'filters' },
               React.createElement('input', {
                 className: 'dsm-control dsm-search', value: query, 'aria-label': t('search'),
                 placeholder: t('scenes.search.placeholder'),
@@ -1149,10 +1391,13 @@
                 (doctor.skipped || []).length ? React.createElement('div', { key: 'skip', className: 'dsm-help' }, t('scenes.doctor.skipped', { domains: doctor.skipped.join('、') })) : null)
             })(),
             data.error ? React.createElement(Notice, { key: 'gerr', kind: 'err', text: String(data.error) }) : null,
-            data.loading && !presetScenes.length ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
-              : !presetScenes.length ? React.createElement('div', { key: 'empty', className: 'dsm-empty' }, t('scenes.empty'))
-              : !visibleScenes.length ? React.createElement('div', { key: 'emptysearch', className: 'dsm-empty' }, t('scenes.empty.search'))
-              : React.createElement('div', { key: 'scenes', className: 'dsm-scenes', ref: flipRef }, orderedScenes.map(function (scene) {
+            // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试）/ 空 /
+            // 无结果（+ 清除筛选）/ 有数据（场景卡片网格 —— 场景是「档案」不是列表行，保持卡片）。
+            data.loading && !presetScenes.length ? React.createElement(ListStates, { key: 'loading', t: t, state: 'loading' })
+              : data.error && !presetScenes.length ? React.createElement(ListStates, { key: 'errstate', t: t, state: 'error', text: String(data.error), onRetry: function () { refresh() } })
+                : !presetScenes.length ? React.createElement(ListStates, { key: 'empty', t: t, state: 'empty', text: t('scenes.empty') })
+                  : !visibleScenes.length ? React.createElement(ListStates, { key: 'search', t: t, state: 'search', text: t('scenes.empty.search'), onClearFilter: function () { setQuery('') } })
+                    : React.createElement('div', { key: 'scenes', className: 'dsm-scenes' }, orderedScenes.map(function (scene) {
                 var name = scene.name
                 var label = sceneLabel(data.scenes, name) || name
                 var archive = data.archives[name]
@@ -1171,7 +1416,7 @@
                 // 生效中但 AGENTS.md 里不是它（被手动改过？）——「显示必须等于实际注入」，
                 // 不一致就如实标出来，别让用户以为文件里就是它。
                 var promptMismatch = promptLive && !promptMissing && data.scenePrompt.duplicate !== true
-                return React.createElement('article', { key: 's:' + name, className: 'dsm-scene-tile' + (modeScene === name ? ' dsm-scene-tile-mode' : ''), 'data-flip-key': 's:' + name, 'data-flip-on': scene.active === true ? '1' : '0' },
+                return React.createElement('article', { key: 's:' + name, className: 'dsm-scene-tile' + (modeScene === name ? ' dsm-scene-tile-mode' : '') },
                   React.createElement('div', { className: 'dsm-scene-tile-head' },
                     React.createElement('span', { className: 'dsm-scene-tile-name', title: label }, label),
                     // 显示名与磁盘目录名不同时才标出真名，方便对文件核对。
@@ -1195,152 +1440,17 @@
                   // 描述行**只有描述**（数量都收进上面的模式条了）；全文放 title，卡片本身永远一行。
                   React.createElement('p', { className: 'dsm-scene-tile-desc', title: desc || '' }, desc || t('scenes.noDesc')),
                   // P6：「切入此模式」按钮已删除 —— 右上角开关就是唯一入口（开 = 进入，关 = 回全局默认）。
+                  // 行按钮 3 → 2（REDESIGN §6.2）：「档案」与「改描述」退出，编辑 = 打开场景编辑器
+                  //（新建 / 编辑 / 档案三弹窗融合），删除保留行内二次确认弹窗。
                   React.createElement('div', { className: 'dsm-scene-tile-foot' },
                     React.createElement('div', { className: 'dsm-scene-tile-links' },
-                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : '', onClick: function () { openArchive(name) } }, t('memory.archive.edit')),
-                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditScene(scene) } }, t('memory.scene.edit')),
-                      locked ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : '', onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('memory.btn.deleteScene')))))
+                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : '', onClick: function () { openEditor(scene) } }, t('scenes.row.edit')),
+                      locked ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : '', onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('scenes.row.delete')))))
               })),
-            modal && (modal.type === 'scene-create' || modal.type === 'scene-edit') ? React.createElement(Modal, { key: 'screate', title: modal.type === 'scene-create' ? t('memory.scene.createTitle') : t('memory.scene.editTitle'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('div', { className: 'dsm-form' },
-                // 弹窗里的字段分两模块：改名 / 描述是"这个场景是什么"，下面三条是"进入时改什么"。
-                // 一屏六行同一种字重、同一种间距时，用户读不出哪几条是一回事（用户 2026-10-01 反馈）。
-                formSection(t('scenes.form.section.basic')),
-                React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.name')),
-                  React.createElement('input', {
-                    className: 'dsm-control' + (sceneForm.error ? ' dsm-rule-invalid' : ''),
-                    value: sceneForm.name || '',
-                    placeholder: t('memory.scene.field.name.placeholder'),
-                    onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { name: e.target.value, error: null })) },
-                  }),
-                  // 校验没过的那句红字是报错，不进条目清单；说明句一律带条目符号（与下面两个字段同款）。
-                  sceneForm.error
-                    ? React.createElement('p', { className: 'dsm-rule-hint' }, sceneForm.error)
-                    : helpBullets(t, modal.type === 'scene-create' ? 'memory.scene.field.name.hint' : 'memory.scene.field.name.lock')),
-                React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('div', { className: 'dsm-budget-meta' },
-                    React.createElement('span', { className: 'dsm-label' }, t('memory.scene.field.desc')),
-                    // 字数上限 = 存多少（`SCENE_DESC_MAX`）；卡片那一行靠 CSS 省略号截，不靠这个数。
-                    React.createElement('span', { className: 'dsm-char-count' }, String(String(sceneForm.description || '').length) + '/' + SCENE_DESC_MAX)),
-                  React.createElement('input', {
-                    className: 'dsm-control',
-                    value: sceneForm.description || '',
-                    maxLength: SCENE_DESC_MAX,
-                    placeholder: t('memory.scene.field.desc.placeholder'),
-                    onChange: function (e) { setSceneForm(Object.assign({}, sceneForm, { description: e.target.value, error: null })) },
-                  })),
-                // 提示词预设：一个场景**只能绑一个**（单值字段天然单选）；「不绑定」= 解绑。
-                formSection(t('scenes.form.section.binding')),
-                // 下面三格都是「下拉 + 说明」这一类复合字段，外层用 `div` 而不是 `label`：
-                // 不带 `for` 的 label 会把**第一个可标注后代**当成自己的控件 —— 点标题文字就等于
-                // 点那颗下拉，而在快捷那一格里，第一个控件是勾选列表里的第一颗复选框
-                // （点段头的空白会把那条勾翻掉）。纯文本输入框那两格保留 label，点标题聚焦输入框
-                // 正是想要的。
-                React.createElement('div', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('scenes.field.prompt')),
-                  presetOptions.length > 0
-                    // 「无」排在第一位，是**不绑定**这一态在表单里唯一的入口（用户 2026-10-10 要求）。
-                    // 此前这里只有预设本身，于是「选了某份预设之后想改回不绑」在表单里无路可走。
-                    // 语义上是安全的：`prompt` 为空时 `resolveScenePreset()` 直接跳过这个场景，
-                    // 而 `sync()` 在没有场景驱动时会把进场景前的基线写回去 —— 从「绑了」切到
-                    // 「无」不会把上一份预设留在 AGENTS.md 里。
-                    // 候选用 `presetOptions` 而不是「无 + presetOptions」判空：一份预设都没有时
-                    // 该说的是「先去建一份」，而不是给一颗只有「无」的下拉（默认本来就是无）。
-                    ? React.createElement(SourceSelect, {
-                        options: [{ value: '', label: t('scenes.field.prompt.none') }].concat(presetOptions),
-                        value: sceneForm.prompt || '',
-                        onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { prompt: v })) },
-                      })
-                    : React.createElement('p', { className: 'dsm-help' }, t('scenes.prompt.noPresets')),
-                  helpBullets(t, 'scenes.field.prompt.hint')),
-                // 快捷提示词（0.18.0）：默认「当前启用的」= 这一域**不绑**，进出不碰它；
-                // 切到「自定义」才给清单 —— 勾进来的进入本场景后启用、没勾的停用，
-                // 退出场景按进场景前那批开关还原（与子智能体那一档同一条机制）。
-                // 空表是"绑了但一条都不勾"（进入后全部停用），与"不绑"是相反的意思，
-                // 所以这里是**三态**而不是两态：第三条「无」正是那个空表（用户 2026-10-10 要求）。
-                // 下拉显示的就是 `quickMode` 本身（不从数组反推，理由见 openCreateScene 上面）。
-                React.createElement('div', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('scenes.field.quickPrompts')),
-                  React.createElement(SourceSelect, {
-                    value: sceneForm.quickMode || 'current',
-                    // 「无」排第一（用户 2026-10-10：「无应该是第一条」）—— 与全局提示词那一格
-                    // 同一条排法，把"新建场景会看到的那个"放在最上面。
-                    options: [
-                      { value: 'none', label: t('scenes.field.quickPrompts.noneOption') },
-                      { value: 'current', label: t('scenes.field.quickPrompts.current') },
-                      { value: 'custom', label: t('scenes.field.quickPrompts.custom') },
-                    ],
-                    onChange: function (v) {
-                      setSceneForm(Object.assign({}, sceneForm, {
-                        quickMode: v,
-                        quickPrompts: v === 'none'
-                          // 「无」= 绑一张空表：进入后这一域全部停用，退出时按进场景前的开关还原。
-                          ? []
-                          : v === 'custom'
-                            // 切过来时从**当前开着的那些**起步（用户裁定：默认就是当前启用的），
-                            // 而不是给一张空表 —— 空表说的是"进入后全部停用"。一条都没开时起步
-                            // 就是空表，但模式仍是 'custom'，卡片照常显示、勾得上。
-                            ? (quickOptions || []).filter(function (p) { return p.enabled !== false }).map(function (p) { return p.id })
-                            : null,
-                      }))
-                    },
-                  }),
-                  // 勾选清单是一张段卡片（与档案编辑器同一套排版）：段头报"已勾几条 / 共几条"并给
-                  // 全选，段体按内容长（超过 6 行才内滚）。原先这里是一块裸的固定 216px 滚动体，
-                  // 一条也占 216px —— 弹窗中间凭空一片空白（用户 2026-10-01 反馈）。
-                  //
-                  // 只在「自定义」时出现（用户 2026-10-10：「快捷提示词是无时，本场景启用不要显示」）：
-                  // 「无」说的是"这个场景不设置快捷提示词"，底下再挂一张全空的勾选卡是自相矛盾；
-                  // 「当前启用的（保持现状）」本来就一个字节都不碰，更没有可勾的。
-                  sceneForm.quickMode === 'custom'
-                    ? (quickOptions || []).length
-                      ? seg({
-                          title: t('scenes.field.quickPrompts.list'),
-                          count: t('scenes.seg.checked', { checked: (sceneForm.quickPrompts || []).length, total: quickOptions.length }),
-                          actions: segActions({
-                            defined: true, busy: busy,
-                            selectAllLabel: t('bulk.selectAll'), clearLabel: t('bulk.unselectAll'),
-                            onAll: function () {
-                              setSceneForm(Object.assign({}, sceneForm, { quickPrompts: quickOptions.map(function (p) { return p.id }) }))
-                            },
-                            onClear: function () { setSceneForm(Object.assign({}, sceneForm, { quickPrompts: [] })) },
-                            allChecked: quickOptions.length > 0 && (sceneForm.quickPrompts || []).length === quickOptions.length,
-                          }),
-                          body: React.createElement('div', { className: 'dsm-seg-body dsm-seg-fit' }, quickOptions.map(function (p) {
-                            var list = sceneForm.quickPrompts || []
-                            return pickRow({
-                              key: p.id, name: p.id, desc: p.description || '',
-                              checked: list.indexOf(p.id) >= 0,
-                              onChange: function () {
-                                var next = list.slice()
-                                var at = next.indexOf(p.id)
-                                if (at >= 0) next.splice(at, 1)
-                                else next.push(p.id)
-                                setSceneForm(Object.assign({}, sceneForm, { quickPrompts: next }))
-                              },
-                            })
-                          })),
-                        })
-                      : React.createElement('p', { className: 'dsm-help' }, t('scenes.field.quickPrompts.none'))
-                    : null,
-                  helpBullets(t, 'scenes.field.quickPrompts.hint')),
-                // 工具表方案（C1）：与提示词预设同族的单值绑定字段，按用户 2026-09-28 裁定
-                // 从档案编辑器挪进这张表单 —— 两个「场景绑谁」的字段放在一起，档案编辑器
-                // 只留内容勾选。改的是启用中的场景时，服务端会立即把关停名单换成那份方案。
-                React.createElement('div', { className: 'dsm-field' },
-                  React.createElement('span', { className: 'dsm-label' }, t('scenes.field.toolTable')),
-                  React.createElement(SourceSelect, {
-                    value: String(sceneForm.toolTablePreset || ''),
-                    options: toolTablePresetOptions(),
-                    onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { toolTablePreset: v })) },
-                  }),
-                  helpBullets(t, 'scenes.field.toolTable.hint')),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitSceneForm }, t(modal.type === 'scene-create' ? 'memory.btn.create' : 'memory.btn.saveScene'))))) : null,
-            modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', title: t('memory.deleteScene.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', className: 'dsm-modal-sm', title: t('memory.deleteScene.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.deleteScene.desc', { name: modal.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDeleteScene(modal.name) } }, t('memory.btn.deleteScene')))) : null,
             // 「进入场景」的改动预览卡（askEnter）。预览拿不到时不拦进入这条路 ——
             // 这是一张说明卡，不是一道新门禁；把它做成前置条件就等于新增了"进不去场景"。
@@ -1358,22 +1468,46 @@
                   onClick: function () { setPreview(null); saveEnterPreview(false) },
                 }, t('scenes.preview.dismiss')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || preview.loading, onClick: confirmEnter }, t('scenes.preview.enter')))) : null,
-            // 档案编辑器（见 archiveNode）：三段共用「段卡片 + 勾选行」排版。
-            archiveNode(),
+            // 场景编辑器（新建 / 编辑 / 档案三弹窗融合，见 editorNode）。
+            editorNode(),
+            // 快捷提示词勾选弹窗（2026-10-12）：**排在编辑器之后**，两层遮罩同 z-index，
+            // 后渲染的在上面 —— 它是编辑器里那颗按钮开出来的子弹窗。
+            quickPick ? React.createElement(Modal, {
+              key: 'qpick', list: true, className: 'dsm-modal-list dsm-quickpick',
+              // 计数挂在标题旁边（与场景编辑器同一排法）：它是"这次勾了几条"的实时回执。
+              title: React.createElement('span', { className: 'dsm-modal-title-row' },
+                t('scenes.quickPick.title'),
+                React.createElement('span', { className: 'dsm-seg-count' },
+                  t('scenes.seg.checked', { checked: quickPick.draft.length, total: (quickOptions || []).length }))),
+              closeLabel: t('btn.close'), onClose: function () { setQuickPick(null) },
+            },
+              React.createElement('p', { className: 'dsm-help' }, t('scenes.quickPick.hint')),
+              (quickOptions || []).length
+                ? React.createElement('div', { className: 'dsm-pick-list' }, (quickOptions || []).map(function (p) {
+                    return pickRow({
+                      key: p.id, name: p.id, desc: p.description || '',
+                      checked: quickPick.draft.indexOf(p.id) >= 0,
+                      onChange: function () { toggleQuickPick(p.id) },
+                    })
+                  }))
+                : React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.field.quickPrompts.none')),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                segActions({
+                  defined: true, busy: busy,
+                  selectAllLabel: t('bulk.selectAll'), clearLabel: t('bulk.unselectAll'),
+                  allChecked: (quickOptions || []).length > 0 && quickPick.draft.length === (quickOptions || []).length,
+                  onAll: function () { setQuickPick({ draft: (quickOptions || []).map(function (p) { return p.id }) }) },
+                  onClear: function () { setQuickPick({ draft: [] }) },
+                }),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setQuickPick(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy, onClick: applyQuickPick }, t('scenes.quickPick.confirm'))))
+              : null,
+            // 本页的回收站（42-shared-ui.js）：数据与写操作在组件内部，本页只管开关与写后刷新。
             trash ? React.createElement(TrashModal, {
               t: t,
-              title: t('trash.title'),
-              groupTitle: t('trash.group.scenes'),
-              groupSub: t('trash.section.scenes.sub'),
-              entries: trash.entries,
-              loading: trash.loading,
-              error: trash.error,
-              busy: trashBusy,
-              onClose: function () { setTrash(null) },
-              onRestore: restoreScene,
-              onPurge: purgeScene,
-              onPurgeMany: purgeSceneMany,
-              onReload: function () { loadTrash(true) },
+              domain: 'scenes',
+              onClose: function () { setTrash(false) },
+              onReload: function () { refresh(true) },
             }) : null,
           )
         }
