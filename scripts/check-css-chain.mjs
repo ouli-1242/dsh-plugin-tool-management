@@ -17,7 +17,8 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-const CONTINUES = ['+', '=', '(', ',', '[', ':', '?', '&&', '||', '=>', 'return']
+// 上一行以这些结尾 = 表达式还在继续（含 `{`：对象字面量里的带引号键不是裸表达式）
+const CONTINUES = ['+', '=', '(', ',', '[', '{', ':', '?', '&&', '||', '=>', 'return']
 const roots = process.argv.slice(2)
 const targets = roots.length ? roots : ['src/client']
 
