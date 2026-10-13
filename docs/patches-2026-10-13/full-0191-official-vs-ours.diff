@@ -1,0 +1,255 @@
+--- /root/dsh-plugin-backups/moved-out-20261013/dsh-plugin-tool-management.stock-20261013-161821/lib/client.js	2026-10-13 16:16:51.534668237 +0800
++++ /root/.dsh/profiles/web/node_modules/dsh-plugin-tool-management/lib/client.js	2026-10-13 17:20:26.515039153 +0800
+@@ -2008,6 +2008,11 @@
+       '.dsm-trash-pane-batch{padding:9px 14px;background:var(--dsw-alias-bg-layer-1)}' +
+         '.dsm-trash-group{border:1px solid var(--dsw-alias-border-l2)!important;border-left-width:1px!important;box-shadow:none!important}' +
+         '.dsm-trash-group-danger{border-left-color:var(--dsw-alias-border-l2)!important}' +
++        '.dsm-modal.dsm-modal-trash:not(.dsm-modal-trash-split){height:auto!important;min-height:0!important}' +
++        '.dsm-modal.dsm-modal-trash:not(.dsm-modal-trash-split) .dsm-modal-body{height:auto!important;max-height:none!important}' +
++        '.dsm-modal.dsm-modal-trash:not(.dsm-modal-trash-split) .dsm-trash-pane-body{max-height:min(50vh,420px)!important}' +
++        '.dsm-trash-empty{min-height:110px!important}' +
++        '.dsm-trash-pane-body>.dsm-empty{min-height:110px!important}' +
+       '.dsm-trash-bulk .dsm-note{font-size:12px;color:var(--dsw-alias-label-secondary)}' +
+       // 行：卡片化（描边只在勾选时出现）+ 悬停浮起；名字与时间成组，动作固定右列
+       '.dsm-trash-pane-body{display:flex;flex-direction:column;gap:6px;padding:8px 14px 12px}' +
+@@ -2156,6 +2161,14 @@
+       '.dsm-trash-group-sub{font-size:11.5px}' +
+       // 空态：小一圈、虚线略深（白底上的浅虚线几乎看不见 ✗）
+       '.dsm-trash-pane-body>.dsm-empty{margin:2px 0 4px;padding:16px 14px;border-color:var(--dsw-alias-border-l3)}' +
++      '.dsm-empty.dsm-empty-trash{flex-direction:column!important;gap:10px!important;color:var(--dsw-alias-label-tertiary)!important;font-size:12px!important;line-height:18px!important}' +
++      '.dsm-empty-trash svg{opacity:.9}' +
++      '/* 分栏空态垂直居中（用户 2026-10-13）*/' +
++      '.dsm-trash-split-pane>.dsm-trash-pane-body{display:flex!important;flex-direction:column!important}' +
++      '.dsm-trash-split-pane>.dsm-trash-pane-body>.dsm-empty{flex:1!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;border:0!important;background:transparent!important}' +
++      '.dsm-trash-split-pane>.dsm-trash-pane-body>.dsm-empty-trash{flex:1!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;min-height:0!important;gap:10px!important;color:var(--dsw-alias-label-tertiary)!important;font-size:12px!important}' +
++      '.dsm-trash-split-pane .dsm-trash-pane-body{position:relative!important}' +
++      '.dsm-trash-split-pane .dsm-trash-pane-body>.dsm-empty,.dsm-trash-split-pane .dsm-trash-pane-body>.dsm-empty-trash{position:absolute!important;left:0!important;right:0!important;top:0!important;bottom:0!important;height:100%!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0 14px!important}' +
+       ''
+     function errMsg(e) { return e && e.message ? String(e.message) : String(e) }
+     function ensureCss() {
+@@ -2197,6 +2210,14 @@
+       return React.createElement('svg', { viewBox: '0 0 1024 1024', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' },
+         React.createElement('path', { fill: 'currentColor', d: 'M836.6 193.8h100.2c18.8 0 33.9-16.2 33.9-36.3s-15.1-35.2-33.9-35.2H724.9V85.9C724.9 40 690 2 646.6 2H377.9c-42.8 0-78.3 37.5-78.3 83.9v36.3H87.2c-18.8 0-33.9 16.2-33.9 36.3s15.1 36.3 33.9 36.3h100.2l649.2-1zM804.6 253.7l-585.2 1c-20.5 0-37.2 17.6-37.2 39.2V890c0 72.6 56.3 132 125.1 132h409.4c68.8 0 125.1-59.4 125.1-132V293c0-21.7-16.7-39.3-37.2-39.3z' }))
+     }
++    // ── 0.20.0 回收站空态的小方盒图标（用户 2026-10-13：从 0.20.0 的 EmptyState.boxIcon 原样搬来）──
++    function TrashBoxIcon(props) {
++      var size = (props && props.size) || 22
++      return React.createElement('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' },
++        React.createElement('path', {
++          d: 'M2.5 6.5V13A1 1 0 0 0 3.5 14H12.5A1 1 0 0 0 13.5 13V6.5M2.5 6.5L4.5 2.5H11.5L13.5 6.5M2.5 6.5H6A2 2 0 0 0 10 6.5H13.5',
++          fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }))
++    }
+     /**
+      * 回形针图标：bundle 记忆的「N 个附件」标签用（表示"随记忆一起存放的文件"）。
+      * 只有一并带文字时才用它 —— 纯图标按钮的说明必须写在 title / aria-label 里。
+@@ -10010,7 +10031,7 @@
+           ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+           : list.length === 0
+             ? React.createElement('div', { className: 'dsm-trash-empty' },
+-            React.createElement(TrashIcon, { size: 20 }),
++            React.createElement(TrashBoxIcon, { size: 22 }),
+             React.createElement('span', null, t('trash.empty')))
+             : list.map(function (item) { return row(g, item) })
+         return React.createElement('div', { className: 'dsm-trash-group', key: String(g.title) },
+@@ -10028,7 +10049,7 @@
+           ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
+           : list.length === 0
+             ? React.createElement('div', { className: 'dsm-trash-empty' },
+-            React.createElement(TrashIcon, { size: 20 }),
++            React.createElement(TrashBoxIcon, { size: 22 }),
+             React.createElement('span', null, t('trash.empty')))
+             : list.map(function (item) { return row(g, item) })
+         return React.createElement('div', { className: 'dsm-trash-group', key: String(g.title) },
+@@ -10050,8 +10071,7 @@
+         key: 'trash-modal',
+         title: React.createElement('span', { className: 'dsm-modal-title-row' },
+           React.createElement('span', null, props.title),
+-          React.createElement('span', { className: 'dsm-count' }, 'v2'),
+-          React.createElement('span', { className: 'dsm-count' }, t('trash.total', { count: flat.length }))),
++                    React.createElement('span', { className: 'dsm-count' }, t('trash.total', { count: flat.length }))),
+         closeLabel: t('btn.close'),
+         list: true,
+         className: 'dsm-modal-list dsm-modal-trash' + (split ? ' dsm-modal-trash-split' : ''),
+@@ -11345,7 +11365,7 @@
+             // 批量条只在**这一块真有可勾的东西**时出现：空块上挂一条「已选 0 项 + 全选 + 永久删除 (0)」
+             // 是纯噪音，而且两块各占一半高度、那条还白吃掉一行的列表空间。
+             pickKeys.length ? h("div", { className: "dsm-trash-pane-batch" }, batchRow) : null,
+-            h("div", { className: "dsm-trash-pane-body" }, rows.length ? rows : h("div", { className: "dsm-trash-empty" }, h(TrashIcon, { size: 20 }), h("span", null, emptyText))))
++            h("div", { className: "dsm-trash-pane-body" }, rows.length ? rows : h("div", { className: "dsm-trash-empty" }, h(TrashBoxIcon, { size: 22 }), h("span", null, emptyText))))
+         }
+                 return [
+           trashNotice ? h("div", { key: "trash-notice", className: "dsm-feedback dsm-trash-notice" + (trashNotice.ok ? "" : " dsm-error"), role: "alert" }, trashNotice.text) : null,
+@@ -13643,21 +13663,25 @@
+                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || preview.loading, onClick: confirmEnter }, t('scenes.preview.enter')))) : null,
+             // 档案编辑器（见 archiveNode）：三段共用「段卡片 + 勾选行」排版。
+             archiveNode(),
+-            trash ? React.createElement(TrashModal, {
+-              t: t,
+-              title: t('trash.title'),
+-              groupTitle: t('trash.group.scenes'),
+-              groupSub: t('trash.section.scenes.sub'),
+-              entries: trash.entries,
+-              loading: trash.loading,
+-              error: trash.error,
+-              busy: trashBusy,
+-              onClose: function () { setTrash(null) },
+-              onRestore: restoreScene,
+-              onPurge: purgeScene,
+-              onPurgeMany: purgeSceneMany,
+-              onReload: function () { loadTrash(true) },
+-            }) : null,
++            trash ? React.createElement(Modal, { key: 'trash', wide: true, title: t('trash.title'), closeLabel: t('btn.close'), onClose: function () { setTrash(null) } },
++                          // 一比一复刻记忆页回收站弹窗（用户 2026-10-13）：同结构同类名，只换数据源与回调。
++                          React.createElement(RetentionSelect, { key: 'retention', t: t, onReload: function () { loadTrash(true) } }),
++                          trash.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
++                            : React.createElement(React.Fragment, null,
++                              trash.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(trash.error)) : null,
++                              trash.entries.length
++                                ? React.createElement(React.Fragment, null,
++                                  React.createElement('div', { className: 'dsm-count' }, t('trash.items.count', { count: trash.entries.length })),
++                                  React.createElement('div', { className: 'dsm-trash-box' }, trash.entries.map(function (entry) {
++                                    return React.createElement('div', { key: entry.id, className: 'dsm-trash-item' },
++                                      React.createElement('div', { className: 'dsm-trash-main' },
++                                        React.createElement('div', { className: 'dsm-name' }, entry.name),
++                                        React.createElement('div', { className: 'dsm-note' },
++                                          t('trash.deletedAt', { time: entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : '' }))),
++                                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: trashBusy, onClick: function () { restoreScene(entry) } }, t('memory.trash.restore')),
++                                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: trashBusy, onClick: function () { purgeScene(entry) } }, t('memory.trash.purge')))
++                                  })))
++                                : React.createElement('div', { className: 'dsm-empty dsm-empty-trash' }, React.createElement(TrashBoxIcon, { size: 22 }), React.createElement('div', null, t('trash.empty'))))) : null,
+           )
+         }
+         // ---------- 子智能体页：人设文件（~/.dsh/subagents/*.md）管理 ----------
+@@ -13710,6 +13734,8 @@
+           var trash = ts[0], setTrash = ts[1]
+           var tb = React.useState(false)
+           var trashBusy = tb[0], setTrashBusy = tb[1]
++
++
+           var flipRef = React.useRef(null)
+           useFlipReorder(flipRef)
+           function loadTrash(keepOpen) {
+@@ -13735,6 +13761,33 @@
+               else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
+             }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
+           }
++          // ── 修复（用户 2026-10-13）：本页引用了 purgePersonaMany，但它只定义在另一个页面的闭包里 ✗
++          //    ⇒ 一打开回收站就 ReferenceError ⇒ 整页白屏。这里在本页作用域内补上（写法同 purgePersona）。
++          function purgePersonaMany(items) {
++            if (!items.length) return
++            setTrashBusy(true)
++            var done = 0, failed = 0, firstErr = null
++            var step = function (i) {
++              if (i >= items.length) {
++                setTrashBusy(false)
++                var text = failed === 0
++                  ? t('trash.purgeMany.result', { count: done })
++                  : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' })
++                setResult({ ok: failed === 0, warning: failed !== 0, text: text })
++                loadTrash(true)
++                return
++              }
++              apiCall('subagent-trash-delete', { id: items[i].id }).then(function (res) {
++                if (res && res.ok) done += 1
++                else { failed += 1; if (!firstErr) firstErr = (res && res.error) || t('mcp.msg.failed') }
++                step(i + 1)
++              }).catch(function (e) {
++                failed += 1; if (!firstErr) firstErr = errMsg(e)
++                step(i + 1)
++              })
++            }
++            step(0)
++          }
+           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
+           function refresh(silent) {
+             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
+@@ -14337,7 +14390,8 @@
+                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-accent', disabled: busy || anyLocked, onClick: function () { openEditor(null) } }, t('subagents.new')),
+                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setModal({ type: 'import' }) } }, t('subagents.import')),
+                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !data.subagents.length, onClick: function () { setResult(null); setModal({ type: 'export' }) } }, t('export.subagents')),
+-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { loadTrash(false) } }, t('trash.btn.open')))),
++                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { loadTrash(false) } }, t('trash.btn.open')),
++            null)),
+             anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
+             // 锁定期间不显示场景那条长句：开关全是灰的，"改动会同步写进档案"没有落点，
+             // 两条并排还会互相矛盾（用户 2026-09-19）。
+@@ -14602,23 +14656,25 @@
+                 }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) });
+               },
+             }) : null,
+-            trash ? React.createElement(TrashModal, {
+-              t: t,
+-              title: t('trash.title'),
+-              groupTitle: t('trash.group.agents'),
+-              groupSub: t('trash.section.agents.sub'),
+-              locked: anyLocked,
+-              entries: trash.entries,
+-              loading: trash.loading,
+-              error: trash.error,
+-              busy: trashBusy,
+-              onClose: function () { setTrash(null) },
+-              onRestore: restorePersona,
+-              onPurge: purgePersona,
+-        // ── 上游 0.19.1 ──
+-              onPurgeMany: purgePersonaMany,
+-              onReload: function () { loadTrash(true) },
+-            }) : null)
++            trash ? React.createElement(Modal, { key: 'trash', wide: true, title: t('trash.title'), closeLabel: t('btn.close'), onClose: function () { setTrash(null) } },
++                          // 一比一复刻记忆页回收站弹窗（用户 2026-10-13）：同结构同类名，只换数据源与回调。
++                          React.createElement(RetentionSelect, { key: 'retention', t: t, onReload: function () { loadTrash(true) } }),
++                          trash.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
++                            : React.createElement(React.Fragment, null,
++                              trash.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(trash.error)) : null,
++                              trash.entries.length
++                                ? React.createElement(React.Fragment, null,
++                                  React.createElement('div', { className: 'dsm-count' }, t('trash.items.count', { count: trash.entries.length })),
++                                  React.createElement('div', { className: 'dsm-trash-box' }, trash.entries.map(function (entry) {
++                                    return React.createElement('div', { key: entry.id, className: 'dsm-trash-item' },
++                                      React.createElement('div', { className: 'dsm-trash-main' },
++                                        React.createElement('div', { className: 'dsm-name' }, entry.name),
++                                        React.createElement('div', { className: 'dsm-note' },
++                                          t('trash.deletedAt', { time: entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : '' }))),
++                                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: trashBusy, onClick: function () { restorePersona(entry) } }, t('memory.trash.restore')),
++                                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: trashBusy, onClick: function () { purgePersona(entry) } }, t('memory.trash.purge')))
++                                  })))
++                                : React.createElement('div', { className: 'dsm-empty dsm-empty-trash' }, React.createElement(TrashBoxIcon, { size: 22 }), React.createElement('div', null, t('trash.empty'))))) : null)
+         }
+         /**
+          * 记忆页的视图（按场景分桶 + 过滤 + 排序）。
+@@ -15362,16 +15418,26 @@
+             // 场景建/删/档案弹窗已移至「场景」页（ScenesPage）。
+             // 2026-10-13：改用共用回收站组件（与场景/子智能体同一套 UI）。
+             // 记忆条目的主键叫 trashId，这里映射成 id；行内二次确认、保留期、空态都由组件统一给。
+-            modal && modal.type === 'trash' ? React.createElement(TrashModal, {
+-              key: 'trash', t: t, title: t('memory.trash.title'),
+-              entries: (trash.entries || []).map(function (e) { return Object.assign({}, e, { id: e.trashId }) }),
+-              loading: trash.loading, error: trash.error, busy: busy,
+-              onClose: function () { setModal(null) },
+-              // 恢复沿用现成函数；永久删除仍旧走那条「二次确认」老路（样式与大弹窗一致）
+-              onRestore: submitRestore,
+-              onPurge: function (entry) { setModal({ type: 'trash-delete', entry: entry }) },
+-              onReload: loadTrash,
+-            }) : null,
++                        // 统一回收站 UI（用户 2026-10-13）：与场景/子智能体同一段实现；条目主键 trashId 映射成 id，
++                        // 恢复沿用本页 submitRestore，永久删除仍走本页的二次确认弹窗，行为不变。
++                        modal && modal.type === 'trash' ? React.createElement(Modal, { key: 'trash', wide: true, title: t('trash.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
++                          React.createElement(RetentionSelect, { key: 'retention', t: t, onReload: loadTrash }),
++                          trash.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
++                            : React.createElement(React.Fragment, null,
++                              trash.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(trash.error)) : null,
++                              trash.entries.length
++                                ? React.createElement(React.Fragment, null,
++                                  React.createElement('div', { className: 'dsm-count' }, t('trash.items.count', { count: trash.entries.length })),
++                                  React.createElement('div', { className: 'dsm-trash-box' }, trash.entries.map(function (entry) {
++                                    return React.createElement('div', { key: entry.trashId, className: 'dsm-trash-item' },
++                                      React.createElement('div', { className: 'dsm-trash-main' },
++                                        React.createElement('div', { className: 'dsm-name' }, entry.name),
++                                        React.createElement('div', { className: 'dsm-note' },
++                                          t('trash.deletedAt', { time: entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : '' }))),
++                                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { submitRestore(entry) } }, t('memory.trash.restore')),
++                                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'trash-delete', entry: entry }) } }, t('memory.trash.purge')))
++                                  })))
++                                : React.createElement('div', { className: 'dsm-empty dsm-empty-trash' }, React.createElement(TrashBoxIcon, { size: 22 }), React.createElement('div', null, t('trash.empty'))))) : null,
+             modal && modal.type === 'trash-delete' ? React.createElement(Modal, { key: 'trash-delete', title: t('memory.trash.confirmTitle'), closeLabel: t('btn.close'), onClose: function () { setModal({ type: 'trash' }) } },
+               React.createElement('p', { className: 'dsm-help' }, t('memory.trash.confirmDesc', { name: modal.entry.name })),
+               React.createElement('div', { className: 'dsm-modal-actions' },

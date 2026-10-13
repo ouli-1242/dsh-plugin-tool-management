@@ -1,0 +1,28 @@
+@@
+       '.dsm-trash-pane-batch{padding:9px 14px;background:var(--dsw-alias-bg-layer-1)}' +
+         '.dsm-trash-group{border:1px solid var(--dsw-alias-border-l2)!important;border-left-width:1px!important;box-shadow:none!important}' +
+         '.dsm-trash-group-danger{border-left-color:var(--dsw-alias-border-l2)!important}' +
++        '.dsm-modal.dsm-modal-trash:not(.dsm-modal-trash-split){height:auto!important;min-height:0!important}' +
++        '.dsm-modal.dsm-modal-trash:not(.dsm-modal-trash-split) .dsm-modal-body{height:auto!important;max-height:none!important}' +
++        '.dsm-modal.dsm-modal-trash:not(.dsm-modal-trash-split) .dsm-trash-pane-body{max-height:min(50vh,420px)!important}' +
++        '.dsm-trash-empty{min-height:110px!important}' +
++        '.dsm-trash-pane-body>.dsm-empty{min-height:110px!important}' +
+       '.dsm-trash-bulk .dsm-note{font-size:12px;color:var(--dsw-alias-label-secondary)}' +
+       // 行：卡片化（描边只在勾选时出现）+ 悬停浮起；名字与时间成组，动作固定右列
+       '.dsm-trash-pane-body{display:flex;flex-direction:column;gap:6px;padding:8px 14px 12px}' +
+
+@@
+       '.dsm-trash-group-sub{font-size:11.5px}' +
+       // 空态：小一圈、虚线略深（白底上的浅虚线几乎看不见 ✗）
+       '.dsm-trash-pane-body>.dsm-empty{margin:2px 0 4px;padding:16px 14px;border-color:var(--dsw-alias-border-l3)}' +
++      '.dsm-empty.dsm-empty-trash{flex-direction:column!important;gap:10px!important;color:var(--dsw-alias-label-tertiary)!important;font-size:12px!important;line-height:18px!important}' +
++      '.dsm-empty-trash svg{opacity:.9}' +
++      '/* 分栏空态垂直居中（用户 2026-10-13）*/' +
++      '.dsm-trash-split-pane>.dsm-trash-pane-body{display:flex!important;flex-direction:column!important}' +
++      '.dsm-trash-split-pane>.dsm-trash-pane-body>.dsm-empty{flex:1!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;border:0!important;background:transparent!important}' +
++      '.dsm-trash-split-pane>.dsm-trash-pane-body>.dsm-empty-trash{flex:1!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;min-height:0!important;gap:10px!important;color:var(--dsw-alias-label-tertiary)!important;font-size:12px!important}' +
++      '.dsm-trash-split-pane .dsm-trash-pane-body{position:relative!important}' +
++      '.dsm-trash-split-pane .dsm-trash-pane-body>.dsm-empty,.dsm-trash-split-pane .dsm-trash-pane-body>.dsm-empty-trash{position:absolute!important;left:0!important;right:0!important;top:0!important;bottom:0!important;height:100%!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0 14px!important}' +
+       ''
+     function errMsg(e) { return e && e.message ? String(e.message) : String(e) }
+     function ensureCss() {

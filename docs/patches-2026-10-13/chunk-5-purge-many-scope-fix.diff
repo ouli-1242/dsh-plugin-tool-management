@@ -1,0 +1,78 @@
+@@
+               else setTrash(function (cur) { return Object.assign({}, cur, { error: (res && res.error) || t('mcp.msg.failed') }) })
+             }).catch(function (e) { setTrashBusy(false); setTrash(function (cur) { return Object.assign({}, cur, { error: errMsg(e) }) }) })
+           }
++          // ── 修复（用户 2026-10-13）：本页引用了 purgePersonaMany，但它只定义在另一个页面的闭包里 ✗
++          //    ⇒ 一打开回收站就 ReferenceError ⇒ 整页白屏。这里在本页作用域内补上（写法同 purgePersona）。
++          function purgePersonaMany(items) {
++            if (!items.length) return
++            setTrashBusy(true)
++            var done = 0, failed = 0, firstErr = null
++            var step = function (i) {
++              if (i >= items.length) {
++                setTrashBusy(false)
++                var text = failed === 0
++                  ? t('trash.purgeMany.result', { count: done })
++                  : t('trash.purgeMany.partial', { count: done, failed: failed, reason: firstErr || '' })
++                setResult({ ok: failed === 0, warning: failed !== 0, text: text })
++                loadTrash(true)
++                return
++              }
++              apiCall('subagent-trash-delete', { id: items[i].id }).then(function (res) {
++                if (res && res.ok) done += 1
++                else { failed += 1; if (!firstErr) firstErr = (res && res.error) || t('mcp.msg.failed') }
++                step(i + 1)
++              }).catch(function (e) {
++                failed += 1; if (!firstErr) firstErr = errMsg(e)
++                step(i + 1)
++              })
++            }
++            step(0)
++          }
+           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
+           function refresh(silent) {
+             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
+
+@@
+                 }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) });
+               },
+             }) : null,
+-            trash ? React.createElement(TrashModal, {
+-              t: t,
+-              title: t('trash.title'),
+-              groupTitle: t('trash.group.agents'),
+-              groupSub: t('trash.section.agents.sub'),
+-              locked: anyLocked,
+-              entries: trash.entries,
+-              loading: trash.loading,
+-              error: trash.error,
+-              busy: trashBusy,
+-              onClose: function () { setTrash(null) },
+-              onRestore: restorePersona,
+-              onPurge: purgePersona,
+-        // ── 上游 0.19.1 ──
+-              onPurgeMany: purgePersonaMany,
+-              onReload: function () { loadTrash(true) },
+-            }) : null)
++            trash ? React.createElement(Modal, { key: 'trash', wide: true, title: t('trash.title'), closeLabel: t('btn.close'), onClose: function () { setTrash(null) } },
++                          // 一比一复刻记忆页回收站弹窗（用户 2026-10-13）：同结构同类名，只换数据源与回调。
++                          React.createElement(RetentionSelect, { key: 'retention', t: t, onReload: function () { loadTrash(true) } }),
++                          trash.loading ? React.createElement('div', { className: 'dsm-empty' }, t('memory.loading'))
++                            : React.createElement(React.Fragment, null,
++                              trash.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(trash.error)) : null,
++                              trash.entries.length
++                                ? React.createElement(React.Fragment, null,
++                                  React.createElement('div', { className: 'dsm-count' }, t('trash.items.count', { count: trash.entries.length })),
++                                  React.createElement('div', { className: 'dsm-trash-box' }, trash.entries.map(function (entry) {
++                                    return React.createElement('div', { key: entry.id, className: 'dsm-trash-item' },
++                                      React.createElement('div', { className: 'dsm-trash-main' },
++                                        React.createElement('div', { className: 'dsm-name' }, entry.name),
++                                        React.createElement('div', { className: 'dsm-note' },
++                                          t('trash.deletedAt', { time: entry.deletedAt ? new Date(entry.deletedAt).toLocaleString() : '' }))),
++                                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: trashBusy, onClick: function () { restorePersona(entry) } }, t('memory.trash.restore')),
++                                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: trashBusy, onClick: function () { purgePersona(entry) } }, t('memory.trash.purge')))
++                                  })))
++                                : React.createElement('div', { className: 'dsm-empty dsm-empty-trash' }, React.createElement(TrashBoxIcon, { size: 22 }), React.createElement('div', null, t('trash.empty'))))) : null)
+         }
+         /**
+          * 记忆页的视图（按场景分桶 + 过滤 + 排序）。
