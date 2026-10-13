@@ -1275,16 +1275,10 @@ function enabledMemoryCount(rules) {
       // 比不报更让人怀疑自己看错了。
       const totalCount = groupIds.reduce(function (n, gid) { return n + (dataOf(gid).entries || []).length }, 0)
       const totalReady = groupIds.every(function (gid) { return dataOf(gid).loading !== true })
-      const trashNode = React.createElement(Modal, {
-        key: 'trash-modal',
-        title: React.createElement('span', { className: 'dsm-modal-title-row' },
-          props.title || t('trash.title'),
-          totalReady ? React.createElement('span', { className: 'dsm-count' }, t('trash.total', { count: totalCount })) : null),
-        closeLabel: t('btn.close'),
-        list: true,
-        className: 'dsm-modal-list dsm-modal-trash' + (split ? ' dsm-modal-trash-split' : ''),
-        onClose: props.onClose,
-      },
+      // 页内模式（用户裁定 2026-10-13：技能页把回收站做成**第 4 个视图**而不是弹窗）：
+      // `inline` 只画内容、不套 Modal / 遮罩；数据、勾选、批量条、保留期、详情全部同一套，
+      // 不另写一份 —— 免得出现"弹窗修了、页里没修"那种走岔。
+      const trashBody = [
         notice ? React.createElement('div', { className: 'dsm-feedback dsm-trash-notice ' + (notice.ok ? 'dsm-ok' : 'dsm-error'), role: 'alert' }, notice.text) : null,
         React.createElement('div', { className: 'dsm-trash-pane' },
           React.createElement('div', { className: 'dsm-trash-pane-top' },
@@ -1295,7 +1289,20 @@ function enabledMemoryCount(rules) {
             ? React.createElement('div', { className: 'dsm-trash-split' },
                 groupIds.map(function (gid) { return groupNode(GROUPS[gid], true) }))
             : React.createElement('div', { className: 'dsm-trash-pane-scroll' },
-                groupIds.map(function (gid) { return groupNode(GROUPS[gid], false) }))))
+                groupIds.map(function (gid) { return groupNode(GROUPS[gid], false) }))),
+      ]
+      const trashNode = props.inline
+        ? React.createElement('div', { className: 'dsm-trash-inline' }, trashBody)
+        : React.createElement(Modal, {
+            key: 'trash-modal',
+            title: React.createElement('span', { className: 'dsm-modal-title-row' },
+              props.title || t('trash.title'),
+              totalReady ? React.createElement('span', { className: 'dsm-count' }, t('trash.total', { count: totalCount })) : null),
+            closeLabel: t('btn.close'),
+            list: true,
+            className: 'dsm-modal-list dsm-modal-trash' + (split ? ' dsm-modal-trash-split' : ''),
+            onClose: props.onClose,
+          }, trashBody)
       if (!preview) return trashNode
       // 「详情」弹窗**叠在回收站上面**（`Modal` 自带 gateModalDepth 计数，叠弹窗是既有形态：
       // 导入套导出、自定义目录套选目录都是这样）。关掉它回到回收站，勾选与滚动位置都不动。
