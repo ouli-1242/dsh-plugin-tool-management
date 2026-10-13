@@ -975,4 +975,16 @@ button.dsm-rowselect-box:disabled{cursor:default;opacity:.45}
 .dsm-mode-caret,.dsm-pick-caret{width:12px;height:12px;flex:none;color:var(--dsw-alias-label-tertiary)}
 /* 快照导入预览：行选择纵向堆叠（原为横向勾选 chips，切片五换 RowSelect）。 */
 .dsm-snap-picks{display:flex;flex-direction:column;gap:2px}
+/* 技能页视图分段控件 + 页内回收站（用户裁定 2026-10-13：#9「技能页拆 4 视图」那一批，
+   本 PR 先落 3 个视图 —— 技能仓库那第四个等接口位置确认后再补）。
+   与页头 32px 动作行同一档高度；选中态沿用宿主 interactive-bg-active，
+   aria-selected 由标记里给，样式只认它一处。 */
+.dsm-scope{display:flex;align-items:center;gap:6px}
+.dsm-scope .dsm-scope-tab{min-height:32px;padding:0 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}
+.dsm-scope .dsm-scope-tab:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsm-scope .dsm-scope-tab[aria-selected='true']{border-color:var(--dsw-alias-border-l3);background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary);font-weight:600}
+.dsm-scope .dsm-btn-refresh{margin-left:auto}
+/* 页内回收站（TrashModal 的 inline 模式）：把弹窗里的两栏直接画在页面里，
+   高度交给内容，列表自己滚（长度由 .dsm-trash-list 那一层管）。 */
+.dsm-trash-inline{display:flex;flex-direction:column;gap:12px}
 `

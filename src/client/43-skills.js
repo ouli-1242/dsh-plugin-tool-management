@@ -108,7 +108,16 @@
       var data = snapshot.data || { roots: [], trash: [], summary: { total: 0, enabled: 0, disabled: 0, issues: 0 } }, allRoots = data.roots || [];
       // `roots` 的键必须在数据未变时保持不变：下面那份 skillView 以它为依赖（每次渲染新建
       // 一个数组会让 memo 永远失效，等于白做）。
-      var roots = react.useMemo(function () { return visibleSkillRoots(allRoots); }, [allRoots]);
+      // 视图（用户裁定 2026-10-13：#9 里「技能页拆 4 视图」那一批）：
+      // 全局技能 / 项目技能 / 回收站 / 技能仓库 —— 分段控件在页头之上，来源卡片、筛选下拉、
+      // 统计与动作行都跟着这个视图走（切视图不带上一视图的筛选残留）。
+      var vws = react.useState("global"), view = vws[0], setView = vws[1];
+      // 来源按视图收口：全局 = 非项目来源，项目 = 项目来源；回收站与技能仓库不看来源。
+      var roots = react.useMemo(function () {
+        return visibleSkillRoots(allRoots).filter(function (root) {
+          return view === "project" ? root.scope === "project" : root.scope !== "project";
+        });
+      }, [allRoots, view]);
       var removedRoots = removedSkillRoots(allRoots), activeSource = roots.some(function (root) { return root.key === source; }) ? source : "";
       /**
        * 每来源的「搜索过滤结果」与「批量目标集」，一次算好。
@@ -388,21 +397,42 @@
       // 全选移到回收站旁边」）：它和回收站一样是整页范围的动作，同排才成组；留在工具条会把
       // 搜索行挤窄，而那一行现在要让位给搜索框（筛选下拉同时收窄，见 .dsm-source-filter）。
       var content = [h("style", { key: "css" }, CSS),
+      // 视图分段控件（页头之上）：4 等分整宽，与下面 32px 的动作行同一档高度。
+      // 回收站 / 技能仓库视图的页头动作行会被收口掉（见 actions），所以这条右侧补一颗刷新 ——
+      // 那两个视图里它是唯一的整页动作。
+      h("div", { key: "scope", className: "dsm-scope", role: "tablist", "aria-label": t("scope.label") },
+        [["global", t("scope.global")], ["project", t("scope.project")], ["trash", t("scope.trash")]].map(function (entry) {
+          var on = view === entry[0];
+          return h("button", {
+            key: entry[0], type: "button", role: "tab", "aria-selected": on ? "true" : "false",
+            className: "dsm-scope-tab" + (on ? " dsm-scope-tab-on" : ""),
+            onClick: function () { setView(entry[0]); setResult(null); },
+          }, entry[1]);
+        }),
+        view === "trash"
+          ? h("button", { key: "ref", type: "button", className: "dsm-btn dsm-btn-secondary dsm-btn-refresh", disabled: busy, onClick: function () { setResult(null); refresh(); } }, t("btn.refresh"))
+          : null),
+      // 页头（共享组件）：统计格只在全局视图有意义 —— 服务端那份 summary 是全量的，
+      // 拿到项目视图里显示数字会对不上（技能页的旧注释也是这个口径）。
       h(PageHead, { key: "head", title: t("title"), desc: t("desc"),
         // 三格：技能「启用 / 总数」比例 · 来源目录数 · 诊断项数。第一格此前只给总数
         // （"12 个技能"），答不了"有几个是开着的"；分母服务端一直在给（summary.total）。
         // 诊断项 >0 时整格转错误色（dsm-stat-over），让"有没有问题"一眼可见。
-        stats: [[summary.enabled + "/" + summary.total, statLabel("summary.total", summary.total)], [roots.length, statLabel("summary.sources", roots.length)], [summary.issues, statLabel("summary.issues", summary.issues), summary.issues > 0 ? "dsm-stat-over" : ""]],
-        actions: [h("button", { key: "new", type: "button", className: "dsm-btn", disabled: anyLocked, onClick: openCreate }, t("btn.create")), h("button", { key: "import", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: anyLocked, onClick: function () { setResult(null); setUpload(null); setModal("import"); } }, t("btn.import")), h("button", { key: "export", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setModal("export"); } }, t("export.skills")), h("button", { key: "custom", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setCustomForm({ path: "", label: "" }); setModal("custom-add"); } }, t("btn.custom.add")), h("button", { key: "bulk", type: "button", className: "dsm-btn dsm-btn-secondary dsm-btn-bulk", disabled: busy || anyLocked || !bulkAll.targets.length, title: t("bulk.head.title"), onClick: function () { submitBulk(bulkAll.targets, !bulkAll.on, null) } }, bulkPair(bulkAll.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulkAll.on ? t("bulk.selectAll") : t("bulk.unselectAll"))), h("button", { key: "trash", type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal("trash"); } }, t("trash.btn.open"))] }), anyLocked ? h("div", { key: "lockbanner", className: "dsm-feedback dsm-warning", role: "status" }, t("lock.banner")) : null,
+        stats: view === "global" ? [[summary.enabled + "/" + summary.total, statLabel("summary.total", summary.total)], [roots.length, statLabel("summary.sources", roots.length)], [summary.issues, statLabel("summary.issues", summary.issues), summary.issues > 0 ? "dsm-stat-over" : ""]] : [],
+        actions: view === "trash" ? [] : [h("button", { key: "new", type: "button", className: "dsm-btn", disabled: anyLocked, onClick: openCreate }, t("btn.create")), h("button", { key: "import", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: anyLocked, onClick: function () { setResult(null); setUpload(null); setModal("import"); } }, t("btn.import")), h("button", { key: "export", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setModal("export"); } }, t("export.skills")), h("button", { key: "custom", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setCustomForm({ path: "", label: "" }); setModal("custom-add"); } }, t("btn.custom.add")), h("button", { key: "bulk", type: "button", className: "dsm-btn dsm-btn-secondary dsm-btn-bulk", disabled: busy || anyLocked || !bulkAll.targets.length, title: t("bulk.head.title"), onClick: function () { submitBulk(bulkAll.targets, !bulkAll.on, null) } }, bulkPair(bulkAll.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulkAll.on ? t("bulk.selectAll") : t("bulk.unselectAll"))), h("button", { key: "trash", type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal("trash"); } }, t("trash.btn.open"))] }), anyLocked ? h("div", { key: "lockbanner", className: "dsm-feedback dsm-warning", role: "status" }, t("lock.banner")) : null,
       // 锁定期间不显示场景那条长句：开关全是灰的，"改动会同步写进档案"没有落点，
       // 两条并排还会互相矛盾（用户 2026-09-19）。
       (!anyLocked && sceneName) ? h("div", { key: "scenebanner", className: "dsm-feedback dsm-warning", role: "status" }, t("scene.switch.banner", { scene: sceneName })) : null,
       h(Toolbar, { key: "filters" }, h("input", { className: "dsm-control dsm-search", value: query, "aria-label": t("search"), placeholder: t("search.placeholder"), onChange: function (e) { setQuery(e.target.value); } }), h("div", { className: "dsm-source-filter" }, h(SourceSelect, { value: activeSource, options: options, onChange: setSource }))), undo && undo.scope == null ? h(UndoBar, { key: "undo", undo: undo, busy: busy, t: t, onUndo: undoBulk, onClose: dismissUndo }) : null, result && modal !== "import" ? h(Notice, { key: "result", kind: result.warning ? "warn" : result.ok ? "ok" : "err", text: result.text }) : null].concat((data.warnings || []).map(function (warning, index) { return h(Notice, { key: "warning-" + index, kind: "warn", text: translateError(t, warning) }); }), [snapshot.error ? h(Notice, { key: "error", kind: "err", text: snapshot.error }) : null,
       // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试，只在完全没有
       // 旧数据时顶掉列表）/ 有数据。错误横幅照旧挂着 —— 它同时承担「有缓存数据时的错误」。
+      // 回收站视图（用户裁定 2026-10-13）：复用 42-shared-ui 的 TrashModal，但走 `inline` ——
+      // 同一套清单 / 勾选 / 批量条 / 保留期 / 详情，只是不套弹窗，页内直接画。
+      view === "trash" ? h(TrashModal, { key: "trash-view", t: t, inline: true, domain: "skills", onReload: function () { refresh(true); } })
+        : (
       snapshot.loading && !snapshot.data ? h(ListStates, { key: "loading", t: t, state: "loading" })
         : snapshot.error && !snapshot.data ? h(ListStates, { key: "errstate", t: t, state: "error", text: snapshot.error, onRetry: function () { refresh(); } })
-          : h("div", { key: "sources", className: "dsm-sources" }, roots.map(renderRoot))]);
+          : h("div", { key: "sources", className: "dsm-sources" }, roots.map(renderRoot)))]);
 
       if (modal === "create") content.push(h(Modal, { key: "create", title: t("create.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("div", { className: "dsm-form" }, h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("create.target")), h(SourceSelect, { value: form.root, options: createOptions, onChange: function (value) { updateForm("root", value); } })), [["name", "create.name", "create.name.placeholder"], ["description", "create.description", "create.description.placeholder"]].map(function (field) { return h("label", { key: field[0], className: "dsm-field" }, h("div", { className: "dsm-budget-meta" }, h("span", { className: "dsm-label" }, t(field[1])), field[0] === "description" ? h("span", { className: "dsm-char-count" }, String(form.description || "").length + " / " + CATALOG_DESC_MAX) : null), h("input", { className: "dsm-control", value: form[field[0]], placeholder: t(field[2]), maxLength: field[0] === "description" ? CATALOG_DESC_MAX : undefined, onChange: function (e) { updateForm(field[0], e.target.value); } })); }), h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("create.body")), h("textarea", { className: "dsm-control", value: form.body, placeholder: t("create.body.placeholder"), onChange: function (e) { updateForm("body", e.target.value); } })), h("p", { className: "dsm-help" }, t("create.chat.note"))), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn", disabled: busy || !form.name.trim() || !form.description.trim() || !form.body.trim(), onClick: submitCreate }, t("btn.create.now")))));
       // D13：导入弹窗统一用共享 ImportModal（能力取三者并集：拖拽区 + 已选文件行 +
