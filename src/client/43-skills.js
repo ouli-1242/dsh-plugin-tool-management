@@ -317,11 +317,11 @@
             // 的话点完只剩标签从「已停用」变「已启用」，目录里到底有什么、哪些真的可用了看不见。
             // 只展开、不收起 —— 两个方向都要能看见结果，收起仍然是点卡片头那一行的事。
             acts.push(h(Switch, { key: "sw", on: root.enabled, disabled: busy || anyLocked, label: t("source.toggle") + " " + displayName, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: true })); (root.enabled ? post("/source-disable", { root: root.key }, "done.disabled", { name: displayName }) : post("/source-enable", { root: root.key }, "done.enabled", { name: displayName })).then(function () { dropUndoForRoot(root.key, displayName); }); } }));
-            // 「移除来源」带图标 + 文字，放在开关**右侧**（用户裁定 2026-10-15，推翻 2026-09-17
-            // 「只留图标」的裁定）：纯垃圾桶图标会被读成"删除"，与真实语义（停读这个来源，
-            // 源文件不动、之后可在回收站里恢复）不符；破坏性操作从此也不占常用位置。
-            // 点击照旧弹确认弹窗，那里仍是红色「移除来源」，破坏性操作的说明没有丢。
-            if (root.removable === true) acts.push(h("button", { key: "rm", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy || anyLocked, title: t("btn.source.remove.title"), "aria-label": t("btn.source.remove"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, h(TrashIcon, { size: 14 }), t("btn.source.remove")));
+            // 「移除来源」只要文字，放在开关**右侧**（用户裁定 2026-10-15，连续推翻两次：
+            // 2026-09-17 的「只留图标」与当天早些时候的「图标 + 文字」—— 图标在这颗 quiet
+            // 键里只是装饰，「移除来源」四个字已把语义说全；破坏性操作的郑重感由确认弹窗
+            // 承担，点击照旧弹红色「移除来源」确认框，说明没有丢）。
+            if (root.removable === true) acts.push(h("button", { key: "rm", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy || anyLocked, title: t("btn.source.remove.title"), "aria-label": t("btn.source.remove"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, t("btn.source.remove")));
           }
           return acts.length ? h("span", { className: "dsm-source-actions" }, acts) : null;
         })()), open ? h("div", { className: "dsm-source-body" }, filtered.length ? rankedFirst(skillRank, function (skill) { return skill.key || (root.key + "/" + skill.name) }, filtered, function (skill) { return isSkillEnabled(skill); }).map(function (skill) { return renderSkill(root, skill); }) : h("div", { className: "dsm-empty" }, dq ? t("empty.search") : t("empty.source"))) : null);

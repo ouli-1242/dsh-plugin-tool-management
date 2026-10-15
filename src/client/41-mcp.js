@@ -689,8 +689,11 @@
             React.createElement('div', { className: 'dsm-detail-section' },
               React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
                 mt('mcp.detail.config'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', title: mt('mcp.btn.restart.title'), disabled: busy !== null || detail.row.level === 'loader', onClick: () => restartRow(detail.row) }, mt('mcp.btn.restart')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: toggleReveal }, reveal ? mt('mcp.detail.hideSecret') : mt('mcp.detail.showSecret'))),
+                // 两颗动作包成一组（用户 2026-10-15：「重启怎么在中间」）—— space-between
+                // 摊三个子元素时中间那个会被顶到整行正中，标题左、动作组右才对。
+                React.createElement('span', { className: 'dsm-detail-title-acts' },
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', title: mt('mcp.btn.restart.title'), disabled: busy !== null || detail.row.level === 'loader', onClick: () => restartRow(detail.row) }, mt('mcp.btn.restart')),
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: toggleReveal }, reveal ? mt('mcp.detail.hideSecret') : mt('mcp.detail.showSecret')))),
               React.createElement('div', { className: 'dsm-fm' },
                 configRow(mt('mcp.detail.entryId'), detail.row.id),
                 configRow(mt('mcp.field.level'), mt('mcp.level.' + detail.row.level)),
@@ -706,20 +709,23 @@
               React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.status')),
               React.createElement('div', { className: 'dsm-feedback' + (detailStatus.tone === 'bad' ? ' dsm-error' : ' dsm-warning') }, detailHint)) : null,
             React.createElement('div', { className: 'dsm-detail-section' },
-              // 字数计数摆在小标题同一行右侧：备注的上限就是注入段的截断长度（`MCP_NOTE_MAX`）。
+              // 字数计数与「保存备注」都摆在小标题同一行右侧（用户裁定 2026-10-15：「保存
+              // 备注」从备注框下方挪上来 —— 与「配置」的「重启 / 显示密钥」、「工具」的
+              // 「刷新工具」同一副长相：一节一颗动作、全在标题行，不再有孤悬在 input 右下角
+              // 的按钮）。备注的上限就是注入段的截断长度（`MCP_NOTE_MAX`）。
               // 超限标红沿用记忆页描述那套（`dsm-char-over`）—— 服务端不校验备注长度，
               // 这条之前存的长备注会整条存着、注入时被截掉，得让人看得见超了多少。
-              React.createElement('div', { className: 'dsm-budget-meta' },
-                React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.note')),
-                React.createElement('span', { className: 'dsm-char-count' + (String(noteDraft || '').length > MCP_NOTE_MAX ? ' dsm-char-over' : '') }, String(noteDraft || '').length + ' / ' + MCP_NOTE_MAX)),
+              React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
+                mt('mcp.detail.note'),
+                React.createElement('span', { className: 'dsm-detail-title-acts' },
+                  React.createElement('span', { className: 'dsm-char-count' + (String(noteDraft || '').length > MCP_NOTE_MAX ? ' dsm-char-over' : '') }, String(noteDraft || '').length + ' / ' + MCP_NOTE_MAX),
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save')))),
               React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: noteDraft, maxLength: MCP_NOTE_MAX, placeholder: mt('mcp.detail.note.placeholder'), onChange: (ev) => setNoteDraft(ev.target.value) }),
               // 备注保存的回执就地渲染（见 noteNotice 的说明）。文案原样来自服务端：
               // 成功走 Notice 的 ok 档（右下角浮出的 toast，与全站成功提示同一副长相）；
               // 被冻结闸拒掉是弹窗内的一条红色 feedback —— 这正是用户要看到的那句话，
               // 只是位置从页面挪进了弹窗。
-              React.createElement(Notice, { kind: noteNotice && noteNotice.kind, text: noteNotice && noteNotice.text }),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save')))),
+              React.createElement(Notice, { kind: noteNotice && noteNotice.kind, text: noteNotice && noteNotice.text })),
             React.createElement('div', { className: 'dsm-detail-section' },
               React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
                 mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length }),

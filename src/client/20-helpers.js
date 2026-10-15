@@ -149,12 +149,16 @@
      * 行间分隔线分节（`.dsm-setrow + .dsm-setrow`）。label 可带一句 desc（12 弱色，
      * 跟在名字下一行 —— 行随内容长高）；descTitle 给截断的 desc 悬浮全文。
      * 用于兼容页令牌块 / 注入设置 / 子智能体表单开关行这一类「名字 + 一个控件」的行。
-     * props：name / desc / descTitle / control（右侧控件，通常是 Switch）/ title。
+     * props：name / desc / descTitle / control（右侧控件，通常是 Switch）/ title /
+     * tag（名字右边的状态标签，可选 —— 用户裁定 2026-10-15：兼容页斜杠行的「已生效 /
+     * 未生效」从开关旁挪到名字右边，状态跟着名字读，不与开关混排）。
      */
     function SettingsRow(props) {
       return h('div', { className: 'dsm-setrow', title: props.title || undefined },
         h('div', { className: 'dsm-setrow-label' },
-          h('span', { className: 'dsm-setrow-name' }, props.name),
+          h('span', { className: 'dsm-setrow-nameline' },
+            h('span', { className: 'dsm-setrow-name' }, props.name),
+            props.tag || null),
           props.desc ? h('span', { className: 'dsm-setrow-desc', title: props.descTitle || undefined }, props.desc) : null),
         h('div', { className: 'dsm-setrow-control' }, props.control || null))
     }

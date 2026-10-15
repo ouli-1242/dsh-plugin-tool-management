@@ -25,6 +25,10 @@
          能拖高；权重 4 类 + 1 元素，压过上面那条 200px，不靠 !important。 */
       '.dsm-modal.dsm-modal-compact textarea.dsm-control.dsm-textarea-md{min-height:150px}' +
       '.dsm-detail-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}' +
+      /* 标题行右侧的动作组：两个及以上按钮必须包一层 —— space-between 直接摊三个子元素时，
+         中间那个会被顶到整行正中（用户 2026-10-15：「重启怎么在中间」）。标题在左、动作组
+         在右，组内间距 8px 与行间隙一致。 */
+      '.dsm-detail-title-acts{display:flex;align-items:center;gap:8px}' +
       `
 .dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);padding:4px}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:4px 0 24px;container-type:inline-size;flex-direction:column;gap:12px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-feedback-links{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.dsm-title{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.2px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:30px;align-items:center;gap:4px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:400;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:0;flex:none}
 /* 页头动作行：内边距收 2px。批量按钮要按「取消全选」定宽（见 .dsm-btn-bulk），
@@ -965,6 +969,11 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-setrow{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px;padding:4px 0}
 .dsm-setrow+.dsm-setrow{border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-setrow-label{display:flex;min-width:0;flex-direction:column;gap:1px}
+/* 名字行：名字与状态标签（tag）同一行，垂直居中（用户裁定 2026-10-15：兼容页斜杠行的
+   「已生效 / 未生效」从开关旁挪到名字右边 —— 状态跟着名字读；标签是 pill，flex 居中
+   才与 13px 的名字真正上下对齐，基线对齐会偏上一截）。 */
+.dsm-setrow-nameline{display:flex;min-width:0;align-items:center;gap:6px}
+.dsm-setrow-nameline>.dsm-setrow-name{min-width:0}
 .dsm-setrow-name{overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-setrow-desc{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-setrow-control{display:flex;flex:none;align-items:center;gap:8px}
