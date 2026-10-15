@@ -521,8 +521,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-imp-err{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px}
 .dsm-imp-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .dsm-imp-foot{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
-.dsm-imp-radio{display:flex;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
-.dsm-imp-radio input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-success-primary)}
+/* 导入弹窗重名处理行（用户 2026-10-15：从预览底部上移到预览之前，导入前就看得见）；
+   排他二选一用「提示词类型」同款分段控件（dsm-form-seg，aria-pressed 表选中），
+   label 与控件横排一行，不再堆一列 radio。 */
+.dsm-imp-conflict{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}
+.dsm-imp-conflict-label{color:var(--dsw-alias-label-secondary);font-size:12px}
 .dsm-imp-count{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* 体检状态点（0.15.0 B1）与行内检查项。点只有 8px，靠 title 说清含义；
@@ -601,7 +604,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
 .dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
 .dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:4px 0 0;cursor:pointer}
-.dsm-imp-radio input{width:14px;height:14px;margin:0}
 .dsm-select-menu button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px;}
 .dsm-btn-lock:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-btn-quiet:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
@@ -640,7 +642,6 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-feedback.dsm-error{padding: 8px 12px; border-radius: var(--dsm-radius-m);}
 .dsm-tab:hover{color: var(--dsw-alias-label-primary);}
 .dsm-tab[aria-selected= true ]{color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-label-primary); font-weight: 400;}
-.dsm-imp-radio:hover{background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
 .dsm-modal-actions .dsm-btn{min-height: 30px; padding: 0 12px; font-size: 13px; line-height: 20px; border-radius: var(--dsm-radius-m);}
 .dsm-seg-filter .dsm-btn{min-height: 30px; padding: 0 12px; font-size: 13px; line-height: 20px;}
 .dsm-actions .dsm-bulk-ghost{min-height: 24px; display: inline-flex; align-items: center;}

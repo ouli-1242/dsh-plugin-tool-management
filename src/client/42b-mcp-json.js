@@ -220,13 +220,8 @@
                   cf ? h('span', { className: 'dsm-tag' + (cf === 'skip' ? ' dsm-tag-off' : '') }, t('mcp.importJson.will.' + cf)) : null,
                   r.secretCount ? h('span', { className: 'dsm-tag' }, t('mcp.importJson.preview.secret', { count: r.secretCount })) : null))
             })),
+            // 冲突处理上移到预览之前（见 dsm-imp-conflict），页脚只剩计数。
             h('div', { className: 'dsm-imp-foot' },
-              h('label', { className: 'dsm-imp-radio' },
-                h('input', { type: 'radio', name: 'dsm-imp-conflict', checked: conflict === 'skip', onChange: function () { setConflict('skip') } }),
-                t('mcp.importJson.conflict.skip')),
-              h('label', { className: 'dsm-imp-radio' },
-                h('input', { type: 'radio', name: 'dsm-imp-conflict', checked: conflict === 'overwrite', onChange: function () { setConflict('overwrite') } }),
-                t('mcp.importJson.conflict.overwrite')),
               h('span', { className: 'dsm-imp-count' }, t('mcp.importJson.chosen', { count: chosen.length }))))
 
       return h(Modal, { className: 'dsm-modal-lg', title: t('mcp.importJson.title'), closeLabel: t('btn.close'), onClose: props.onClose },
@@ -240,6 +235,14 @@
             h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { if (fileRef.current) fileRef.current.click() } }, t('btn.file.pick')),
             h('span', { className: 'dsm-upload-divider' }, t('mcp.importJson.orPaste')),
             h('input', { ref: fileRef, type: 'file', accept: '.json', className: 'dsm-hidden-input', onChange: function (e) { onPickFile(e.target.files); e.target.value = '' } })),
+          // 重名处理（用户 2026-10-15 两连）：从预览底部上移到预览之前 —— 埋在列表
+          // 脚下的二选一，导入前根本看不见；radio 换成「提示词类型」同款分段控件 ——
+          // 排他二选一的正解控件，恒有一颗按下，没有「都不选」这一态。
+          rows.length ? h('div', { className: 'dsm-imp-conflict' },
+            h('span', { className: 'dsm-imp-conflict-label' }, t('mcp.importJson.conflict.label')),
+            h('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': t('mcp.importJson.conflict.label') },
+              h('button', { key: 'skip', type: 'button', 'aria-pressed': conflict === 'skip' ? 'true' : 'false', onClick: function () { setConflict('skip') } }, t('mcp.importJson.conflict.skip')),
+              h('button', { key: 'ov', type: 'button', 'aria-pressed': conflict === 'overwrite' ? 'true' : 'false', onClick: function () { setConflict('overwrite') } }, t('mcp.importJson.conflict.overwrite')))) : null,
           rows.some(function (r) { return r.secretCount > 0 }) ? h(Notice, { kind: 'warn', text: t('mcp.importJson.secretHint') }) : null,
           preview,
           result ? h('div', { className: 'dsm-feedback' + (result.ok ? (result.warning ? ' dsm-warning' : '') : ' dsm-error'), role: 'status' },
