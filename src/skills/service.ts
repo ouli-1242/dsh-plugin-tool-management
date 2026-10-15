@@ -383,7 +383,7 @@ export function createSkillsService(ctx: any): SkillsService {
         // （否则传了不存在的 root 会收到「技能来源不存在：(空)」这种指错方向的提示）。
         const key = String(args.root || 'dsh')
         const res = await createSkill(
-          { name: args.name, description: args.description, body: args.body },
+          { name: args.name, description: args.description, body: args.body, files: args.files },
           log,
           { root: (await requestRoot(key)) || key },
         )

@@ -16,6 +16,8 @@
           var modal = ms[0], setModal = ms[1]
           var sfs = React.useState({ name: '', error: null })
           var sceneForm = sfs[0], setSceneForm = sfs[1]
+          // 切走这一页 → 场景编辑器关窗时那份暂存作废（见 42-shared-ui.js 的 useFormDraftScope）。
+          useFormDraftScope('scene:')
           var pos = React.useState([])
           var presetOptions = pos[0], setPresetOptions = pos[1]
           // 当前**生效中**的提示词预设 id（`agentsmd-list` 里 active 的那份）。预览卡要用它把
@@ -224,16 +226,18 @@
             var sceneArchive = scene ? ((data.archives || {})[name] || {}) : {}
             // 子弹窗（新建记忆）随编辑器一起重开：留着上一轮的草稿会让人以为"我上次填的还在"。
             setMemNew(null)
-            setSceneForm({
+            var draftKey = name ? 'scene:edit:' + name : 'scene:create'
+            var draft = takeFormDraft(draftKey)
+            setSceneForm(Object.assign({
               name: name || '', description: scene ? scene.description || '' : '', prompt: scene ? scene.prompt || '' : '',
               toolTablePreset: typeof sceneArchive.toolTablePreset === 'string' ? sceneArchive.toolTablePreset : '',
               quickMode: !Array.isArray(sceneArchive.quickPrompts)
                 ? 'current' : (sceneArchive.quickPrompts.length ? 'custom' : 'none'),
               quickPrompts: Array.isArray(sceneArchive.quickPrompts) ? sceneArchive.quickPrompts.slice() : null,
               error: null,
-            })
+            }, draft || {}, { error: null }))
             setModal({
-              type: 'scene-editor', name: name, drill: null, drillError: null, error: null, inventory: null,
+              type: 'scene-editor', name: name, draftKey: draftKey, drill: null, drillError: null, error: null, inventory: null,
               mcpQuery: '', skillQuery: '', subQuery: '', memQuery: '',
               // 创建态里攒下的记忆（见 flushPendingMemories）：`rules-create` 要求目标场景已存在，
               // 所以场景还没落盘时只能先记在这里，等场景建出来再补。编辑态恒为空数组。
@@ -914,8 +918,7 @@
                               React.createElement('span', { className: 'dsm-file-meta' }, fmtBytes(f.size) + ' · ' + t('memory.attach.pending')),
                               React.createElement('button', { type: 'button', className: 'dsm-file-remove', disabled: busy, 'aria-label': t('memory.attach.remove') + ' ' + f.name, onClick: function () { dropMemPending(i) } }, '×'))
                           }))
-                        : React.createElement('p', { className: 'dsm-help' }, t('memory.attach.empty')),
-                      React.createElement('span', { className: 'dsm-help' }, t('memory.attach.hint')))
+                        : null)
                     : null),
                 memNew.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(memNew.error)) : null),
               React.createElement('div', { className: 'dsm-modal-actions' },
@@ -1248,7 +1251,7 @@
               title: React.createElement('span', { className: 'dsm-modal-title-row' },
                 isEdit ? t('scenes.editor.title', { name: label }) : t('memory.scene.createTitle'),
                 React.createElement('span', { className: 'dsm-editor-summary' }, summary)),
-              closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              closeLabel: t('btn.close'), onClose: function () { if (modal.draftKey) stashFormDraft(modal.draftKey, sceneForm); setModal(null) } },
               modal.error ? React.createElement(Notice, { kind: 'err', text: modal.error }) : null,
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('div', { className: 'dsm-field-row dsm-editor-basics' },

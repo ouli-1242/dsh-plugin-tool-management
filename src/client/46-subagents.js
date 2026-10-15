@@ -24,6 +24,8 @@
           var result = rs[0], setResult = rs[1]
           var ms = React.useState(null)
           var modal = ms[0], setModal = ms[1]
+          // 切走这一页 → 编辑弹窗关窗时那份暂存作废（见 42-shared-ui.js 的 useFormDraftScope）。
+          useFormDraftScope('sub:')
           // 「已存在同名人设」确认弹窗（用户 2026-10-14）：`{ name, finalName }` 或 null。
           // 撞名不再静默退号（`写作助手` → `写作助手（1）`），先问一句再建。
           var dups = React.useState(null)
@@ -182,12 +184,12 @@
           /** 高级选项：默认收起；已经在用模型/工具限制的人设自动展开（否则用户看不见自己配了什么）。 */
           /** 「不限制嵌套」的取值（与 src/subagents/service.ts 的 UNLIMITED_PERSONA_CATALOG_DEPTH 同值）。 */
           var CATALOG_DEPTH_UNLIMITED = 99
-          /** 目录注入深度的选项文案：下拉与折叠摘要共用一处，免得两处说法分叉。 */
+          /** 目录注入深度的四档文案（分段按钮的键面）；手写过 4-98 的旧值一律报「3层」。 */
           function catalogDepthLabel(n) {
-            if (n === 1) return t('subagents.field.catalogDepth.onlyTop')
-            if (n === 2) return t('subagents.field.catalogDepth.toChild')
+            if (n === 1) return t('subagents.field.catalogDepth.d1')
+            if (n === 2) return t('subagents.field.catalogDepth.d2')
             if (n >= CATALOG_DEPTH_UNLIMITED) return t('subagents.field.catalogDepth.unlimited')
-            return t('subagents.field.catalogDepth.toGrand')
+            return t('subagents.field.catalogDepth.d3')
           }
           function initialAdvanced(p) {
             var modes = p && p.toolsByPreset ? Object.keys(p.toolsByPreset).length : 0
@@ -210,9 +212,23 @@
             })
             return out
           }
+          /**
+           * 关窗 ≠ 丢掉：打开时按这个键取回刚才那份（30 秒内），关窗时按同一个键存回去。
+           * 键带在 modal 上而不是从 `form.name` 推 —— 名字框是用户正在改的那个字段，拿它当键
+           * 会出现"存进 A 键、取回时读 B 键"。
+           */
+          function applyDraft(base, draft) {
+            if (!draft) return base
+            return Object.assign({}, base, {
+              advanced: draft.advanced === true,
+              form: Object.assign({}, base.form, draft.form, { error: null }),
+            })
+          }
           function openEditor(name) {
+            var draftKey = name ? 'sub:edit:' + name : 'sub:create'
+            var draft = takeFormDraft(draftKey)
             if (!name) {
-              setModal({ type: 'editor', mode: 'create', advanced: false, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: { name: '', description: '', provider: '', model: '', reasoningEffort: '', catalogDepth: 1, continuable: false, tools: [], toolsDeny: [], toolsByPreset: {}, body: '', output: '', error: null } })
+              setModal(applyDraft({ type: 'editor', mode: 'create', draftKey: draftKey, advanced: false, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: { name: '', description: '', provider: '', model: '', reasoningEffort: '', catalogDepth: 1, continuable: false, tools: [], toolsDeny: [], toolsByPreset: {}, body: '', output: '', error: null } }, draft))
               return
             }
             setBusy(true)
@@ -221,7 +237,7 @@
               if (res && res.ok) {
                 var p = res.persona || {}
                 var advanced = initialAdvanced(p)
-                setModal({ type: 'editor', mode: 'edit', originalName: String(p.name || name), advanced: advanced, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: {
+                setModal(applyDraft({ type: 'editor', mode: 'edit', draftKey: draftKey, originalName: String(p.name || name), advanced: advanced, openMode: null, stoppedRules: {}, modeQuery: '', legacyTarget: '', form: {
                   name: p.name || name, description: p.description || '', provider: p.provider || '', model: p.model || '',
                   // 思考强度：服务端回空串 = 这份人设没指定（不是"没有档位"）。空值不落盘，见 serializePersona。
                   reasoningEffort: p.reasoningEffort || '',
@@ -231,13 +247,18 @@
                   continuable: p.continuable === true,
                   tools: (p.tools || []).slice(), toolsDeny: (p.toolsDeny || []).slice(),
                   toolsByPreset: cloneRules(p.toolsByPreset), body: p.body || '', output: p.output || '', error: null,
-                } })
+                } }, draft))
                 // 已配过限制的人设**一打开就是展开的**（initialAdvanced）→ 候选数据必须在这里也拉，
                 // 否则四行模式先亮"宿主没有回传预设名单"，非得点两次「高级选项」才补上（用户实测）。
                 // 思考强度同理：展开着就要有档位清单（它按模型懒加载，所以这里显式带上 model）。
-                if (advanced) { loadCandidates(); loadEfforts(p.provider, p.model) }
+                if (advanced || (draft && draft.advanced === true)) { loadCandidates(); loadEfforts(p.provider, p.model) }
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          /** 关掉编辑弹窗：存下这一份再关（提交成功那条路不走这里，所以不必事后清）。 */
+          function dismissEditor() {
+            if (modal && modal.type === 'editor' && modal.draftKey) stashFormDraft(modal.draftKey, { advanced: modal.advanced, form: modal.form })
+            setModal(null)
           }
           function setForm(patch) { if (modal && modal.type === 'editor') setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, patch) })) }
           /** 列表里增删一项（勾选语义：存在 = 勾上）。 */
@@ -742,7 +763,7 @@
                   ],
                 })
               })),
-            modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'sedit', wide: true, className: 'dsm-modal-compact', title: modal.mode === 'create' ? t('subagents.create') : t('subagents.edit') + ' · ' + modal.form.name, closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+            modal && modal.type === 'editor' ? React.createElement(Modal, { key: 'sedit', wide: true, className: 'dsm-modal-compact dsm-modal-form-tall', title: modal.mode === 'create' ? t('subagents.create') : t('subagents.edit') + ' · ' + modal.form.name, closeLabel: t('btn.close'), onClose: dismissEditor },
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.name')),
@@ -872,40 +893,41 @@
                     // ── 运行方式：这份人设"什么时候跑、跑在哪些会话里" ──
                     React.createElement('div', { className: 'dsm-adv-group' },
                       React.createElement('div', { className: 'dsm-adv-group-head' }, t('subagents.adv.group.runtime')),
-                      // 目录注入深度：人设目录注入到哪些会话（默认 1 = 只在顶层）。用下拉而不是数字
-                      // 输入：只有 1/2/3 三个有意义的档，手写数字写错要到注入时才暴露。
+                      // 目录注入与启动追问并排一行（用户 2026-10-16）：两项都是这一组的一次性
+                      // 选择，各占一行会把「运行方式」拉成三条长行；控件统一用分段按钮（与
+                      // 「创建位置」「提示词类型」同款）—— 档数就 4 个 / 2 个，下拉要点开才看得到全部。
                       //
+                      // 目录注入深度：人设目录注入到哪些会话（默认 1 = 只在顶层）。
                       // ⚠️ 它**不是**递归上限。2026-09-17 用户实测后改名（原名 maxDepth /「委派预算」）：
                       // 官方 `dsh-tool-subagent` 默认 `maxDepth: 3`，子代理本来就能继续嵌套，本插件
                       // 也不再向官方传 maxDepth。这个字段只决定常驻目录出现在哪些深度的会话里。
-                      React.createElement('label', { className: 'dsm-field dsm-adv-half' },
-                        React.createElement('span', { className: 'dsm-label' }, t('subagents.field.catalogDepth')),
-                        React.createElement(SourceSelect, {
-                          options: [1, 2, 3, CATALOG_DEPTH_UNLIMITED].map(function (n) {
-                            // 选项文字不带序号：前面再加一个「2 ·」是同一件事说两遍（用户 2026-09-17
-                            // 指出）。下拉的 value 仍是数字，存的还是 catalogDepth 本身。
-                            return { value: String(n), label: catalogDepthLabel(n) }
-                          }),
-                          value: String(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1),
-                          disabled: busy,
-                          onChange: function (v) { setForm({ catalogDepth: Number(v) }) },
-                        })),
-                      // 允许追问（frontmatter `continuable: true`）：这条通道的**产出是异步的** ——
-                      // 委派只回执一个 agent id，子代理在后台跑、完成后自己把结果发回来，
-                      // 之后可以用宿主自带的 `send_message` 追问、`interrupt_agent` 中止。
-                      // 默认关：它占用宿主"可继续子代理"的名额（`maxActiveSubagents`，默认 8），
-                      // 且要求宿主加载了持久化与 session query 两个服务。
-                      // 机制与代价的完整说明记在 CHANGELOG / README，不进表单（0.19.0 重排）。
-                      // 切片五：开关行换 SettingsRow + Switch（REDESIGN §5.2），原生勾选框退场。
-                      React.createElement(SettingsRow, {
-                        name: t('subagents.field.continuable'),
-                        desc: t('subagents.field.continuable.short'),
-                        control: React.createElement(Switch, {
-                          on: modal.form.continuable === true, disabled: busy,
-                          label: t('subagents.field.continuable'),
-                          onClick: function () { setForm({ continuable: !(modal.form.continuable === true) }) },
-                        }),
-                      })),
+                      React.createElement('div', { className: 'dsm-field-row' },
+                        React.createElement('div', { className: 'dsm-field' },
+                          React.createElement('span', { className: 'dsm-label' }, t('subagents.field.catalogDepth')),
+                          React.createElement('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': t('subagents.field.catalogDepth') },
+                            [1, 2, 3, CATALOG_DEPTH_UNLIMITED].map(function (n) {
+                              return React.createElement('button', {
+                                key: n, type: 'button',
+                                'aria-pressed': String(typeof modal.form.catalogDepth === 'number' ? modal.form.catalogDepth : 1) === String(n) ? 'true' : 'false',
+                                onClick: function () { setForm({ catalogDepth: n }) },
+                              }, catalogDepthLabel(n))
+                            }))),
+                        // 启动追问（frontmatter `continuable: true`）：这条通道的**产出是异步的** ——
+                        // 委派只回执一个 agent id，子代理在后台跑、完成后自己把结果发回来，
+                        // 之后可以用宿主自带的 `send_message` 追问、`interrupt_agent` 中止。
+                        // 默认禁止：它占用宿主"可继续子代理"的名额（`maxActiveSubagents`，默认 8），
+                        // 且要求宿主加载了持久化与 session query 两个服务。
+                        // 机制与代价的完整说明记在 CHANGELOG / README，不进表单（0.19.0 重排）。
+                        React.createElement('div', { className: 'dsm-field' },
+                          React.createElement('span', { className: 'dsm-label' }, t('subagents.field.continuable')),
+                          React.createElement('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': t('subagents.field.continuable') },
+                            [{ key: 'on', value: true }, { key: 'off', value: false }].map(function (choice) {
+                              return React.createElement('button', {
+                                key: choice.key, type: 'button',
+                                'aria-pressed': (modal.form.continuable === true) === choice.value ? 'true' : 'false',
+                                onClick: function () { setForm({ continuable: choice.value }) },
+                              }, t('subagents.field.continuable.' + choice.key))
+                            }))))),
                     // ── 工具限制：按 Agent 预设一行一个模式（默认全折叠、全部未启动，白/黑互斥）。
                     // 旧格式的全局名单（老文件 / 别处导入）在这里只读呈现，点「转换」才搬进某个模式。
                     React.createElement('div', { className: 'dsm-adv-group' },

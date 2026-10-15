@@ -253,6 +253,9 @@ export function isToolDisabledIn(map: Record<string, string[]>, fullName: string
   return list.indexOf(parts.tool) >= 0
 }
 
+/** `mcpm-parse-patch` 的输入上限：粘贴框不是文件上传口，几十 KB 之外基本都是误贴。 */
+const PATCH_PARSE_MAX_CHARS = 200_000
+
 export function createMcpManager(deps: McpManagerDeps): McpManager {
   // 外部能力一次解构成局部名：块内代码是逐字搬来的，保持原样最不容易出错。
   const {
@@ -1678,6 +1681,24 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return overwrite ? { ok: true, added, overwritten, skipped, ...notes } : { ok: true, added, skipped, ...notes }
   }
 
+  /**
+   * 补丁片段解析（0.20.1 导入弹窗）：把用户粘贴的 dsh 补丁文本读成条目 —— 不读盘、不写盘。
+   *
+   * 为什么这件事在宿主侧：客户端那一半跑在浏览器里（`window.__ModuleLoader__`），那里的
+   * `require` 只解析宿主注册过的浏览器模块，`js-yaml` 永远取不到 —— 界面自己解析 YAML 补丁
+   * 是死路。这里走 `parseRows`：纯字符串运算，且正是本插件读真身补丁用的同一份口径（只收
+   * `name === MCP_CLIENT_MODULE` 的 insert 子条目、覆盖块按文件顺序生效）。
+   */
+  async function mcpmParsePatch(args: any): Promise<any> {
+    const text = String((args && args.text) || '')
+    if (!text.trim()) return { ok: false, error: '没有内容' }
+    if (text.length > PATCH_PARSE_MAX_CHARS) {
+      return { ok: false, error: `内容过长（${text.length} 字符，上限 ${PATCH_PARSE_MAX_CHARS}）：请只粘贴要导入的那几块` }
+    }
+    const rows = parseRows(text).rows.map((r) => ({ id: r.id, disabled: r.disabled, config: r.config }))
+    return { ok: true, rows }
+  }
+
   function parseKv(text: string): Record<string, string> {
     const out: Record<string, string> = {}
     String(text || '').split(/\r?\n/).forEach((line) => {
@@ -1751,6 +1772,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       'mcpm-compact': mcpmCompact,
       'mcpm-export': mcpmExport,
       'mcpm-import': mcpmImport,
+      'mcpm-parse-patch': mcpmParsePatch,
     },
     readDisabledTools,
     readKnownMcpTools,

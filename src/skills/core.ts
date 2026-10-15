@@ -173,7 +173,10 @@ import {
   importSkill,
   importUploadedSkill,
   KEBAB_RE,
+  normalizeUploadPath,
   pathsOverlap,
+  uploadError,
+  writeUploadedEntries,
 } from "./upload-pipeline.js";
 import {
   customRootKey,
@@ -1335,6 +1338,8 @@ interface CreateSkillInput {
   description?: unknown;
   body?: unknown;
   form?: unknown;
+  /** 随技能一起落盘的附件（`{ path, data(base64) }[]`），只有 bundle 形态收 —— 见 `createSkill`。 */
+  files?: unknown;
 }
 
 /** 新建技能选项。 */
@@ -1395,6 +1400,30 @@ export async function createSkill(
     };
   if (description.length > 500 || body.length > 1 << 18)
     return { ok: false, error: "技能内容过长", code: "error.create.tooLarge" };
+  // 附件的闸一律复用导入那条链（normalizeUploadPath + writeUploadedEntries 里的 32 MiB /
+  // 64 MiB / 1000 条），不另立规矩：界面上新建的技能与导入的技能带同一份 `references/`
+  // 时，落盘形态必须一致。SKILL.md 是本次要写的正文，不能被附件占用。
+  const files: unknown[] = Array.isArray(input && input.files) ? (input.files as unknown[]) : [];
+  try {
+    for (const item of files) {
+      const rel = normalizeUploadPath((item as { path?: unknown })?.path).path;
+      if (/(^|\/)skill\.md$/i.test(rel))
+        return {
+          ok: false,
+          error: `附件不能占用 SKILL.md（正文由本次创建写入）: ${rel}`,
+          code: "error.create.reservedPath",
+          params: { path: rel },
+        };
+    }
+  } catch (error) {
+    return uploadError(error);
+  }
+  if (files.length && form === "flat")
+    return {
+      ok: false,
+      error: "单文件技能不能带附件：附件需要目录形态",
+      code: "error.create.filesWithFlat",
+    };
   if (
     await safeExistingEntryPaths(root, name).then((items) => items.length > 0)
   )
@@ -1419,9 +1448,15 @@ export async function createSkill(
   try {
     await fs.mkdir(stage);
     await fs.writeFile(join(stage, "SKILL.md"), content, "utf8");
+    // 附件写进**同一个临时目录**再整体改名到位：中途失败时目标路径根本不存在，
+    // 不会留下「有 SKILL.md 没有 references」的半截技能（下方 catch 顺手把 stage 清掉）。
+    if (files.length) await writeUploadedEntries(stage, files);
     await renameWithRetry(stage, target);
   } catch (error) {
     await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
+    // 带附件时把失败收拢成结果对象：路径非法 / 超限这些都是用户输入问题，抛出去只会
+    // 让界面拿到一句英文堆栈。不带附件时照旧抛（与改动前一字不差）。
+    if (files.length) return uploadError(error);
     throw error;
   }
   if (log) log("create", `创建 ${join(target, "SKILL.md")}`);
@@ -1530,6 +1565,58 @@ export async function updateSkill(
   return { name, path: existingDoc, root: definition.key };
 }
 
+/** 详情弹窗列出的 bundle 附件上限：再多就不是给人看的清单了（2026-10-16）。 */
+const MAX_DETAIL_ATTACHMENTS = 200;
+const MAX_DETAIL_ATTACHMENT_DEPTH = 6;
+
+/**
+ * 列出 bundle 目录里除顶层 `SKILL.md` 之外的普通文件（相对路径 + 字节数）。
+ *
+ * 走 lstat 并跳过符号链：这份清单会原样列进详情弹窗、也会打印给模型看，
+ * 里面混一条指向目录树之外的链就是误导。深度与条数都有上限，超了如实标 truncated。
+ */
+async function listBundleAttachments(dir: string): Promise<{
+  files: Array<{ path: string; size: number }>;
+  truncated: boolean;
+}> {
+  const files: Array<{ path: string; size: number }> = [];
+  let truncated = false;
+  async function walk(base: string, prefix: string, depth: number): Promise<void> {
+    let items;
+    try {
+      items = await fs.readdir(base, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const item of items) {
+      const rel = prefix ? `${prefix}/${item.name}` : item.name;
+      if (depth === 0 && item.name.toLowerCase() === "skill.md") continue;
+      const abs = join(base, item.name);
+      let stat;
+      try {
+        stat = await fs.lstat(abs);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        if (depth + 1 >= MAX_DETAIL_ATTACHMENT_DEPTH) continue;
+        await walk(abs, rel, depth + 1);
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      if (files.length >= MAX_DETAIL_ATTACHMENTS) {
+        truncated = true;
+        return;
+      }
+      files.push({ path: rel, size: stat.size });
+    }
+  }
+  await walk(dir, "", 0);
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, truncated };
+}
+
 export async function skillDetail(
   keyOrRoot: RootInput,
   name: string,
@@ -1571,6 +1658,9 @@ export async function skillDetail(
   }
   const doc = parseSkillDoc(raw);
   const summary = entryOf(name, entry.kind, entry.docPath, doc);
+  // bundle 才有附件；flat 是单文件，给 null 让调用方分清"没有目录"与"目录是空的"。
+  const attachments =
+    entry.kind === "bundle" ? await listBundleAttachments(dirname(entry.docPath)) : null;
   return {
     root: root.key,
     name,
@@ -1585,6 +1675,8 @@ export async function skillDetail(
     diagnostics: summary.diagnostics,
     loadable: summary.loadable,
     sourceReadOnly: !root.mutable,
+    attachments: attachments ? attachments.files : null,
+    attachmentsTruncated: attachments ? attachments.truncated : false,
   };
 }
 

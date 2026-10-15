@@ -232,31 +232,6 @@
               setExp(Object.assign({}, exp, { busy: false, error: t('hist.err.export') }))
             })
           }
-          // 把选中的会话批量归档到 History（纳入保留期管理），随后刷新列表与页面。
-          function doArchiveSelected() {
-            var ids = Array.from(exp.selectedIds)
-            if (!ids.length || exp.busy) return
-            setExp(Object.assign({}, exp, { busy: true, error: null, result: null }))
-            apiCall('history-archive-batch', { sessionIds: ids }).then(function (res) {
-              if (res && res.ok) {
-                refresh()
-                return apiCall('history-sessions', {}).then(function (r2) {
-                  setExp(function (prev) {
-                    if (!prev) return prev
-                    return Object.assign({}, prev, {
-                      busy: false,
-                      selectedIds: new Set(),
-                      result: { archived: (res.archived || []).length, failed: (res.failed || []).length },
-                      items: (r2 && r2.ok && Array.isArray(r2.items)) ? r2.items : prev.items,
-                    })
-                  })
-                })
-              }
-              setExp(function (prev) { return prev ? Object.assign({}, prev, { busy: false, error: (res && res.error) || t('hist.err.archive') }) : prev })
-            }).catch(function () {
-              setExp(function (prev) { return prev ? Object.assign({}, prev, { busy: false, error: t('hist.err.archive') }) : prev })
-            })
-          }
 
           var RETENTION_OPTS = [
             { value: 0, label: t('hist.retention.forever') },
@@ -332,6 +307,13 @@
               var wid = exp.wsFilter.slice(3)
               return it.workspaceId === wid && !!data.workspaces[wid]
             })
+          }
+          // 「全选」只看**当前筛出来的**那些（折叠的组也算在里面：折叠不是排除）。
+          var allExportPicked = !!(exp && exportItems.length) && exportItems.every(function (it) { return exp.selectedIds.has(it.sessionId) })
+          function toggleAllExportPicked() {
+            setExp(Object.assign({}, exp, {
+              selectedIds: allExportPicked ? new Set() : new Set(exportItems.map(function (it) { return it.sessionId })),
+            }))
           }
 
           function renderRow(it) {
@@ -562,14 +544,12 @@
               // ↑ 最后那个括号收掉 .dsm-export-form：结果条与动作行留在表单外面，才能常驻不动。
               exp.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(exp.error)) : null,
               exp.result ? React.createElement('div', { className: 'dsm-feedback' },
-                exp.result.exported
-                  ? (t('hist.result.exported', { count: (exp.result.exported || []).length, dir: String(exp.outDir || '').trim() })
-                    + ((exp.result.skipped && exp.result.skipped.length) ? t('hist.result.skipped', { count: exp.result.skipped.length, ids: exp.result.skipped.map(function (s) { return s.sessionId }).join('、') }) : ''))
-                  : (t('hist.result.archived', { count: exp.result.archived })
-                    + (exp.result.failed ? t('hist.result.archiveFailed', { count: exp.result.failed }) : ''))) : null,
+                t('hist.result.exported', { count: (exp.result.exported || []).length, dir: String(exp.outDir || '').trim() })
+                + ((exp.result.skipped && exp.result.skipped.length) ? t('hist.result.skipped', { count: exp.result.skipped.length, ids: exp.result.skipped.map(function (s) { return s.sessionId }).join('、') }) : '')) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('span', { className: 'dsm-hist-batch-count' }, t('hist.selected', { count: exp.selectedIds.size })),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: exp.busy || !exp.selectedIds.size, onClick: doArchiveSelected, title: t('hist.btn.archiveSelected.title') }, t('hist.btn.archiveSelected')),
+                // 「已选 N 项」不占一栏：右边那颗导出键本身就带着份数（导出 N 个会话），
+                // 与本页回收站那条批量条同一口径。「归档所选」换成「全选」（用户 2026-10-16）。
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: exp.busy || !exportItems.length, onClick: toggleAllExportPicked }, bulkPair(allExportPicked ? t('hist.deselectAll') : t('hist.selectAll'), allExportPicked ? t('hist.selectAll') : t('hist.deselectAll'))),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: exp.busy || !exp.selectedIds.size || !String(exp.outDir || '').trim(), onClick: doExport }, exp.busy ? t('hist.export.busy') : t('hist.btn.exportSelected', { count: exp.selectedIds.size })))) : null,
             modal && modal.type === 'error' ? React.createElement(Modal, { key: 'err', className: 'dsm-modal-sm', title: t('hist.error.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, String(modal.message || t('hist.error.unknown')))) : null)

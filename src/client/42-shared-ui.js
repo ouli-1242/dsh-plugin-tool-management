@@ -642,6 +642,32 @@ function enabledMemoryCount(rules) {
           h('button', { type: 'button', className: 'dsm-btn', disabled: props.busy === true, onClick: props.onConfirm }, t(restore ? 'dup.confirm.restore' : 'dup.confirm.create')),
           h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy === true, onClick: props.onCancel }, t('btn.cancel'))))
     }
+    /**
+     * 创建 / 编辑弹窗的「关掉 ≠ 丢掉」（用户 2026-10-16：误点背板就得重头填一遍）。
+     *
+     * 只兜"手滑关掉"这一件事：关窗那一下把表单暂存，30 秒内重开就填回去。三条作废的路都
+     * 是"已经不需要它了"—— 提交成功（成功那条路不走 onClose，所以根本不进这里）、过点时间、
+     * 切走这一页（页面组件卸载）。不落盘、不跨重启，也就不需要「草稿」标记与清空键：
+     * 一分钟内回来就是要它，超过 30 秒它自己没了。
+     */
+    var FORM_DRAFT_TTL_MS = 30000
+    var formDrafts = {}
+    function stashFormDraft(key, value) { formDrafts[key] = { at: Date.now(), value: value } }
+    /** 取回即销账（一次性）：没有或已过期都回 null，调用方照常按空表打开。 */
+    function takeFormDraft(key) {
+      var hit = formDrafts[key]
+      if (!hit) return null
+      delete formDrafts[key]
+      return Date.now() - hit.at < FORM_DRAFT_TTL_MS ? hit.value : null
+    }
+    /** 页面组件挂一次：卸载（= 切到别的功能页）时把这一页的暂存全清掉。 */
+    function useFormDraftScope(prefix) {
+      react.useEffect(function () {
+        return function () {
+          Object.keys(formDrafts).forEach(function (key) { if (key.indexOf(prefix) === 0) delete formDrafts[key] })
+        }
+      }, [])
+    }
     function Modal(props) {
       var ref = react.useRef(null)
       // 弹窗存在期间，令牌提示交给**弹窗自己**渲染：页面级那份会被遮罩压暗、盖在弹窗背后，

@@ -1569,7 +1569,7 @@ export default {
       // 清空流水。清完这一条 op 自己会被下面的包装层记进新流水（"谁清过"也留痕）。
       'audit-clear': async () => await clearAudit(),
       'skill-open': skillOpen,
-      // MCP 域 16 个 op（实现在 ./mcp/manager.ts）
+      // MCP 域 17 个 op（实现在 ./mcp/manager.ts）
       ...mcp.ops,
       // 技能管理 ops（由 ./skills/service.js 提供）：skill-state / skill-detail /
       // skill-browse / skill-enable / skill-disable / skill-source-enable /
@@ -1621,7 +1621,7 @@ export default {
       // -toggle / -remove 与回收站三条。它**不**碰 AGENTS.md、不进场景、不进注入。
       ...quickPromptOps,
       // 归档会话域（ops/history.ts 提供）：history-list / history-sessions /
-      // history-export-defaults / dir-list / history-archive / history-archive-batch /
+      // history-export-defaults / dir-list /
       // history-unarchive / history-delete / history-unarchive-batch / history-delete-batch /
       // history-workspace-register / history-import / bundle-export / history-export /
       // history-retention-get / history-retention-set。

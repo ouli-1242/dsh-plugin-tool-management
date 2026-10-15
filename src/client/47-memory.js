@@ -9,6 +9,8 @@
             warnings: [],
           })
           var data = state[0], setData = state[1]
+          // 切走这一页 → 记忆编辑弹窗关窗时那份暂存作废（见 42-shared-ui.js 的 useFormDraftScope）。
+          useFormDraftScope('mem:')
           var qs = React.useState('')
           // 场景锁定（v0.8）：任一场景锁定 = 五个域整体冻结；本页全部写控件禁用。
           var anyLocked = data.anyLocked === true
@@ -130,22 +132,29 @@
              * 宿主侧两种写法等价（`rules-create` 自己把空 group 映射到 `global`），所以这里
              * 只是把它提前落定，不改变任何落盘结果。
              */
-            setEditor({ mode: 'create', id: '', group: sceneName || GLOBAL_SCENE, name: '', description: '', body: '', form: 'flat', path: '', error: null, files: [], attachments: [] })
+            setEditor(takeFormDraft('mem:create') || { mode: 'create', id: '', group: sceneName || GLOBAL_SCENE, name: '', description: '', body: '', form: 'flat', path: '', error: null, files: [], attachments: [] })
             setModal({ type: 'editor' })
           }
           function openEditor(rule, focusAttach) {
             if (busy) return
             setBusy(true); setResult(null)
+            var draftKey = 'mem:edit:' + rule.id
             apiCall('rules-read', { id: rule.id }).then(function (res) {
               setBusy(false)
               if (res && res.ok && res.rule) {
                 var rd = res.rule
-                setEditor({ mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], focusAttach: focusAttach === true })
+                // 30 秒内重开同一条：把刚才关掉的那份填回来（磁盘那份的内容已经读出来了，
+                // 但用户改过的字段以草稿为准，未改的字段两种路径读到的是一样的）。
+                var draft = takeFormDraft(draftKey)
+                // focusAttach 是"打开就替你把文件框点开"的一次性指令，重放它会凭空弹一次文件选择框。
+                if (draft) draft = Object.assign({}, draft, { focusAttach: false, error: null })
+                setEditor(draft || { mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], focusAttach: focusAttach === true })
                 setModal({ type: 'editor' })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
-          function closeEditor() { setModal(null) }
+          // 关掉 ≠ 丢掉：只有这一条路存草稿（提交成功走 finishEditor，就地 setModal(null)）。
+          function closeEditor() { if (editor) stashFormDraft(editor.mode === 'edit' ? 'mem:edit:' + editor.id : 'mem:create', editor); setModal(null) }
           // ── 导入记忆（.md / .zip；场景留空 = 保留场景「全局」）──
           function submitImport(files) {
             if (!files || !files.length) return
@@ -481,9 +490,12 @@
             var statusKey = shadowed ? 'status.shadowed' : !enabled ? 'memory.status.off' : sceneActive === false ? 'memory.status.sceneOff' : 'status.enabled'
             // 灰=不进上下文但不是故障（被遮蔽 / 本条停用 / 场景没启用），绿=这条真的会注入。
             var statusTone = shadowed || !enabled || sceneActive === false ? 'muted' : 'ok'
-            // 「需要处理」的两种（被覆盖 / 场景未启用）走行 1 的 tag，启停复述走行首状态点
-            //（REDESIGN §3.4；切片三移交的「状态点前移」）。
-            var attention = statusKey !== 'status.enabled' && statusKey !== 'memory.status.off'
+            // 「需要处理」只剩「被覆盖」一种：它看着是开的、实际不注入，必须在行上说出来。
+            // 「场景未启用」不再占行内标签（用户 2026-10-15 两条一起提的）：分组卡头已经写着
+            // 「未启用」，逐行复述是噪音；更要紧的是它原先会把**行首那颗状态点整颗吃掉** ——
+            // 在同一场景里启用一条记忆，点当场消失，看着像这一行坏了。现在点照常画
+            //（灰 = 不进上下文），原因留在 title 上。
+            var attention = shadowed
             // 行 2 元信息（切片三移交的「tags 列清理」）：描述 / 多级分组路径 / 附件 / 派生。
             // 附件计数保持**可点**（进编辑弹窗并滚到附件区），其余降为弱色文字。
             //
@@ -762,8 +774,7 @@
                               React.createElement('span', { className: 'dsm-file-meta' }, fmtBytes(f.size) + ' · ' + t('memory.attach.pending')),
                               React.createElement('button', { type: 'button', className: 'dsm-file-remove', disabled: busy, 'aria-label': t('memory.attach.remove') + ' ' + f.name, onClick: function () { dropPending(i) } }, '×'))
                           }))
-                        : React.createElement('p', { className: 'dsm-help' }, t('memory.attach.empty')),
-                      React.createElement('span', { className: 'dsm-help' }, t('memory.attach.hint')))
+                        : null)
                     : null),
                 editor.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(editor.error)) : null),
               // 锁定态把「为什么保存键是灰的」写在弹窗里：编辑页能打开（看内容是只读的），

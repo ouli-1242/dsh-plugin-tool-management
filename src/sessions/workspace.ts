@@ -724,16 +724,6 @@ var ArchiveWorkspaceRegistry = class {
 		return { attached, attachSkipped };
 	}
 	/**
-	 * 归档委托宿主。官方 UI 不经过本方法，而由 domain/changed 事件
-	 * 同步归档时刻；重复归档不重置保留期。
-	 */
-	async archiveSession(sessionId: string) {
-		// 委托宿主原生入口；宿主没有原生入口时走本门面的适配路径（能力探测决定）。
-		this.bridge.checkWorkspace("archive");
-		await this.registry.archiveSession(sessionId);
-		await this.reconcileArchiveLedger();
-	}
-	/**
 	 * 列出已归档会话的展示元数据：sessionId / createdAt / cwd / title / archivedAt。
 	 * title 经投影缓存 best-effort 读取（cachedSnapshot 的标题行，旧格式记录退
 	 * cachedPredecessorTitle）；任何一步失败只降级为缺字段，不阻断列表。
