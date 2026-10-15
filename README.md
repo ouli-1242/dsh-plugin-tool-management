@@ -31,6 +31,8 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 
 <video controls src="https://github.com/user-attachments/assets/3bed27b0-2d73-4e89-b1dd-f2b1cbd6eaca"></video>
 
+<video controls src="https://github.com/user-attachments/assets/7c72ce98-fad9-4233-88de-2ebf5ca5bf30"></video>
+
 画面里每一个界面都是真机截图，没有重画的 UI，也没有伪造控件。
 
 背景音乐：Kevin MacLeod「Limit 70」，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。

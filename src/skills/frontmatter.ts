@@ -111,4 +111,40 @@ export function unquote(v: unknown): string {
     return s.slice(1, -1);
   }
   return s;
+}
+
+// ── 声明名改写（退号落盘后同步 frontmatter）─────────────────────────────────
+
+/** frontmatter 整块（开栏 / 字段区 / 闭栏三段各自成组，便于逐字回拼）。 */
+const DECLARED_NAME_BLOCK_RE =
+  /^(?<open>(?:\uFEFF)?[^\S\r\n]*---[^\S\r\n]*(?:\r\n|\n))(?<fields>[\s\S]*?)(?<close>^[^\S\r\n]*---[^\S\r\n]*(?:\r\n|\n|$))/m;
+/** 顶格的 `name:` 行；缩进的嵌套字段（块标量的续行等）不匹配。 */
+const DECLARED_NAME_LINE_RE = /^name[^\S\r\n]*:[^\r\n]*/m;
+
+/**
+ * 把 frontmatter 的 `name:` 行改写成新名字，其余逐字节保留（连 CRLF 都不动）；
+ * 认不出形态（没有 frontmatter / 没有 `name:` 行 / 改完不变）时返回 null。
+ *
+ * **调用方保证 `name` 过 KEBAB_RE**（只含 `[a-z0-9-]`，无需转义；本模块不引
+ * upload-pipeline 的 KEBAB_RE —— 那边引了本模块，引回来就成了环）。
+ *
+ * 退号落盘后必须调用（导入撞名、回收站恢复）：`canonicalSkillName` 取的是
+ * 声明名而不是条目名，只改目录会"看着叫 foo-1、其实还是 foo"—— 两份同名
+ * 技能在「同名首选」里被并成一组，而那颗开关挑的是来源，按下去什么都不会变。
+ * 没有 `name:` 行的文档返回 null 是**良性**的：声明名为空时 canonicalSkillName
+ * 回落到条目名，退号后的目录名就是它的名字。
+ */
+export function rewriteDeclaredName(text: string, name: string): string | null {
+  const match = DECLARED_NAME_BLOCK_RE.exec(text);
+  if (!match || !match.groups) return null;
+  const fields = match.groups.fields as string;
+  // 函数式替换：字段区里可能带 `$&` / `$'` 之类字面量，字符串式替换会把它们当占位符展开。
+  const rewritten = fields.replace(DECLARED_NAME_LINE_RE, () => `name: ${name}`);
+  if (rewritten === fields) return null;
+  const open = match.groups.open as string;
+  const close = match.groups.close as string;
+  return text.replace(
+    DECLARED_NAME_BLOCK_RE,
+    () => `${open}${rewritten}${close}`,
+  );
 }

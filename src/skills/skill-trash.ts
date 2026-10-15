@@ -17,6 +17,7 @@ import {
   renameWithRetry,
   temporaryPath,
 } from "./core-util.js";
+import { rewriteDeclaredName } from "./frontmatter.js";
 import {
   dshRootPath,
   overlapsUserSkillRoot,
@@ -269,11 +270,6 @@ async function nextFreeSkillName(root: string, name: string): Promise<string | n
   }
   return null;
 }
-/** frontmatter 整块（开栏 / 字段区 / 闭栏三段各自成组，便于逐字回拼）。 */
-const FRONTMATTER_BLOCK_RE =
-  /^((?:\uFEFF)?[^\S\r\n]*---[^\S\r\n]*(?:\r\n|\n))([\s\S]*?)(^[^\S\r\n]*---[^\S\r\n]*(?:\r\n|\n|$))/m;
-/** 顶格的 `name:` 行；缩进的嵌套字段（块标量的续行等）不匹配。 */
-const DECLARED_NAME_LINE_RE = /^name[^\S\r\n]*:[^\r\n]*/m;
 /**
  * 退号恢复时把技能**声明名**改成新的落盘名（用户 2026-10-14）。
  *
@@ -307,23 +303,13 @@ async function retitleRestoredSkill(
     ? join(root, name, "SKILL.md")
     : resolve(root, `${name}.md`);
   const doc = await fs.readFile(docPath, "utf8");
-  const block = FRONTMATTER_BLOCK_RE.exec(doc);
-  if (!block) return false;
-  const fields = block[2];
+  // 声明名改写走 frontmatter.ts 的共享助手（导入撞名的退号也用它）：只换 `name:`
+  // 一行的值，其余逐字节保留；认不出形态返回 null —— 一个字节都不写。
   // 不加引号：`KEBAB_RE` 已经保证这个名字只含 `[a-z0-9-]`，没有任何需要转义的字符 ——
   // 与插件自己的写手（`createSkill` / `updateSkill` 的 `name: ${name}`）同一形状，
   // 免得"新建出来叫 demo-1、恢复出来叫 \"demo-1\""这种无谓的差别。
-  const rewritten = fields.replace(
-    DECLARED_NAME_LINE_RE,
-    () => `name: ${name}`,
-  );
-  if (rewritten === fields) return false;
-  // 用**函数式**替换回拼：字段区里可能带 `$&` / `$'` 之类的字面量，字符串式替换会把它们当占位符展开。
-  const content = doc.replace(
-    FRONTMATTER_BLOCK_RE,
-    (_all, open: string, _fields: string, close: string) =>
-      `${open}${rewritten}${close}`,
-  );
+  const content = rewriteDeclaredName(doc, name);
+  if (content === null) return false;
   const temp = temporaryPath(docPath, "restore");
   try {
     await fs.writeFile(temp, content, "utf8");

@@ -13,7 +13,7 @@ import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { unzipSync } from "fflate";
 import { isSameOrDescendant } from "../paths.js";
-import { parseSkillDoc, toKebab } from "./frontmatter.js";
+import { parseSkillDoc, rewriteDeclaredName, toKebab } from "./frontmatter.js";
 import {
   attachCode,
   codedError,
@@ -21,6 +21,7 @@ import {
   lstatOrNull,
   MAX_ENTRY_NAME_LENGTH,
   renameWithRetry,
+  temporaryPath,
 } from "./core-util.js";
 import {
   analyzeSource,
@@ -54,6 +55,37 @@ export async function pathsOverlap(a: string, b: string): Promise<boolean> {
   const left = await resolvedPath(a);
   const right = await resolvedPath(b);
   return isSameOrDescendant(left, right) || isSameOrDescendant(right, left);
+}
+/** 目标根下已存在的条目路径：目录 `<name>` 或文件 `<name>.md`，两者都可能占。 */
+async function existingEntryPaths(root: string, name: string): Promise<string[]> {
+  const paths = [join(root, name), join(root, `${name}.md`)];
+  const existing: string[] = [];
+  for (const path of paths) {
+    try {
+      await fs.stat(path);
+      existing.push(path);
+    } catch {}
+  }
+  return existing;
+}
+/**
+ * 退号取名：`foo` → `foo-1` → `foo-2`…（与 skill-trash 的 nextFreeSkillName、
+ * 界面 `uniqueName` 的 'dash' 档同一口径）。占用表 = 磁盘现有条目 + 本批次已定名
+ * （`claimed`：防先退号出来的名字又被同批后续候选占用）。候选本身不合法
+ * （entryPath 为 null，如超长）时直接放弃 —— 再往后试也不会变合法。
+ */
+async function nextFreeImportName(
+  root: string,
+  base: string,
+  claimed: Set<string>,
+): Promise<string | null> {
+  for (let i = 1; i <= 999; i += 1) {
+    const candidate = `${base}-${i}`;
+    if (claimed.has(candidate)) continue;
+    if (entryPath(root, candidate) === null) return null;
+    if ((await existingEntryPaths(root, candidate)).length === 0) return candidate;
+  }
+  return null;
 }
 export async function importSkill(
   source: string,
@@ -126,6 +158,9 @@ export async function importSkill(
     )
       nameCount.set(candidate.kebab, (nameCount.get(candidate.kebab) || 0) + 1);
   }
+  // 本批次已定名的集合（含退号名）：批量内同名由上方的 nameCount 先拒掉，这里防的是
+  // 退号名与后续候选原名的交叉占用（`foo` 退号成 `foo-1`，同批又来个 `foo-1`）。
+  const claimed = new Set<string>();
 
   function failureResult() {
     return {
@@ -164,30 +199,39 @@ export async function importSkill(
       });
       continue;
     }
+    const existing = await existingEntryPaths(targetRoot, c.kebab);
+    let renamedFrom: string | undefined;
+    if (existing.length) {
+      // 上传导入撞名一律退号新增（用户 2026-10-15）：旧行为是静默跳过，结果里只多
+      // 一行"已跳过"，用户想要的那份根本没进来。`skill-import`（目录导入）不带
+      // dedupe，仍是 skip / overwrite 二选一。
+      if (options.dedupe !== true) {
+        conflicts.push({
+          name: c.kebab,
+          source: c.source,
+          isDir: c.isDir,
+          paths: existing,
+        });
+        continue;
+      }
+      const free = await nextFreeImportName(targetRoot, c.kebab, claimed);
+      if (!free) {
+        failed.push({
+          source: c.source,
+          error: `同名条目太多，无法生成退号名称: ${c.kebab}`,
+          code: "error.import.renameExhausted",
+          params: { name: c.kebab },
+        });
+        continue;
+      }
+      renamedFrom = c.kebab;
+      c.kebab = free;
+    }
     const dest = c.isDir
       ? join(targetRoot, c.kebab)
       : join(targetRoot, `${c.kebab}.md`);
-    const paths: string[] = [
-      join(targetRoot, c.kebab),
-      join(targetRoot, `${c.kebab}.md`),
-    ];
-    const existing: string[] = [];
-    for (const path of paths) {
-      try {
-        await fs.stat(path);
-        existing.push(path);
-      } catch {}
-    }
-    if (existing.length) {
-      conflicts.push({
-        name: c.kebab,
-        source: c.source,
-        isDir: c.isDir,
-        paths: existing,
-      });
-      continue;
-    }
-    pending.push({ name: c.kebab, source: c.source, isDir: c.isDir, dest });
+    claimed.add(c.kebab);
+    pending.push({ name: c.kebab, source: c.source, isDir: c.isDir, dest, renamedFrom });
   }
 
   if (pending.length === 0 && conflicts.length === 0) return failureResult();
@@ -209,6 +253,30 @@ export async function importSkill(
   for (const p of pending) {
     try {
       const warnings = await replaceWithCopy(p.source, p.dest, p.isDir);
+      // 退号落盘后把声明名改成新名字：`canonicalSkillName` 取的是 frontmatter 的
+      // `name:`，只改目录会"看着叫 foo-1、其实还是 foo"—— 两份同名技能在「同名
+      // 首选」里被并成一组，而那颗开关挑的是来源，按下去什么都不会变（skill-trash.ts
+      // 的 retitleRestoredSkill 同一理由）。返回 null（没有 `name:` 行）是良性的：
+      // 声明名为空时 canonicalSkillName 回落到条目名，退号目录名就是它的名字。
+      // 写盘失败记一条 warning，不阻断导入 —— 技能已按退号名落盘。
+      if (p.renamedFrom) {
+        try {
+          const docPath = p.isDir ? join(p.dest, "SKILL.md") : p.dest;
+          const doc = await fs.readFile(docPath, "utf8");
+          const content = rewriteDeclaredName(doc, p.name);
+          if (content !== null) {
+            const temp = temporaryPath(docPath, "retitle");
+            await fs.writeFile(temp, content, "utf8");
+            await renameWithRetry(temp, docPath);
+          }
+        } catch (e: any) {
+          warnings.push({
+            code: "warning.retitleFailed",
+            params: { path: p.dest },
+            error: String(e && e.message ? e.message : e),
+          });
+        }
+      }
       imported.push({ name: p.name, overwritten: false, warnings });
       if (log) log("import", `导入 ${p.source} -> ${p.dest}`);
     } catch (e: any) {
@@ -459,7 +527,27 @@ export async function prepareUploadedSource(
 
   const rootSkill = join(contentRoot, "SKILL.md");
   const rootSkillStat = await lstatOrNull(rootSkill);
-  if (!rootSkillStat || !rootSkillStat.isFile()) return contentRoot;
+  if (!rootSkillStat || !rootSkillStat.isFile()) {
+    // 没有根级 SKILL.md：剩下的合法形态只有两种 —— 根级 .md（单文件技能）或子目录
+    // 带 SKILL.md（批量），与 importSkill 的 collectCandidates 收录口径一一对应。
+    // 两者都不占，这个包就打不开：此时说清缺的是 SKILL.md、以及是哪个包（用户
+    // 2026-10-15：老报错是 importSkill 的空来源错误，带着 uuid 临时目录路径、落在
+    // 通用「文件要求」段，认不出是谁、也看不出缺什么）。
+    const items = await fs.readdir(contentRoot, { withFileTypes: true });
+    for (const it of items) {
+      if (it.isFile() && it.name.toLowerCase().endsWith(".md")) return contentRoot;
+      if (it.isDirectory()) {
+        const st = await lstatOrNull(join(contentRoot, it.name, "SKILL.md"));
+        if (st && st.isFile()) return contentRoot;
+      }
+    }
+    const label = String((input && input.name) || "").trim() || "上传内容";
+    throw codedError(
+      `${label} 中未找到 SKILL.md：需放在根目录，或放在某个子目录下`,
+      "error.upload.noSkillMd",
+      { name: label },
+    );
+  }
 
   const doc = parseSkillDoc(await fs.readFile(rootSkill, "utf8"));
   const fallback = String((input && input.name) || "uploaded-skill")

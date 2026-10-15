@@ -18,6 +18,8 @@
           const [levelFilter, setLevelFilter] = React.useState('')
           const [collapsed, setCollapsed] = React.useState({})
           const [formModal, setFormModal] = React.useState(null)
+          // 切走这一页 → 这一页的关窗暂存作废（见 42-shared-ui.js 的 useFormDraftScope）。
+          useFormDraftScope('mcp:')
           // 表单的本地校验结果（不塞进 formModal：那对象是发给服务端的 payload 形状）。
           const [formError, setFormError] = React.useState(null)
           const [detail, setDetail] = React.useState(null)
@@ -176,9 +178,16 @@
             })
           }
 
-            const openAdd = () => { setFormError(null); setFormModal(Object.assign({ mode: 'add', id: null }, emptyForm())) }
+            // 新增与编辑各存一份（编辑按条目 id 分键：改 A 关窗不会串到 B）。
+            const formDraftKey = (modal) => (modal && modal.mode === 'edit' ? 'mcp:edit:' + modal.id : 'mcp:create')
+            const openAdd = () => {
+              setFormError(null)
+              setFormModal(takeFormDraft('mcp:create') || Object.assign({ mode: 'add', id: null }, emptyForm()))
+            }
               const openEdit = (row) => {
                 setFormError(null)
+                const draft = takeFormDraft('mcp:edit:' + row.id)
+                if (draft) { setFormModal(draft); return }
                 setFormModal({
                   mode: 'edit',
                   id: row.id,
@@ -193,6 +202,9 @@
                 })
               }
             const closeForm = () => { setFormError(null); setFormModal(null) }
+            // 只有"关掉"这条路存草稿（提交成功走的是 closeForm 本身，不进这里）——
+            // 所以不需要"成功后清草稿"那一步。
+            const dismissForm = () => { const cur = formModal; closeForm(); if (cur) stashFormDraft(formDraftKey(cur), cur) }
             const setFormField = (key) => (ev) => { setFormError(null); setFormModal(Object.assign({}, formModal, { [key]: ev.target.value })) }
             const setFormValue = (key, value) => { setFormError(null); setFormModal(Object.assign({}, formModal, { [key]: value })) }
             /**
@@ -233,11 +245,36 @@
             run(payload.mode === 'edit' ? 'mcpm-edit' : 'mcpm-add', args, 'form', closeForm)
           }
 
+          // 「启动中」的乐观记账（用户 2026-10-15：呼吸灯要过一会才出现）：翻开开关那一刻宿主
+          // 还没把条目起起来，轮询到的仍是停用前的那份状态，于是灯要等下一次轮询（5 秒）才呼吸。
+          // 点下时先记一笔，相位报回 active 即不再算数；30 秒后自动作废 —— 真起不来的条目不该永远呼吸。
+          const STARTING_TTL_MS = 30000
+          const [startingRows, setStartingRows] = React.useState({})
+          const startingKey = (row) => row.id + '@' + row.level
+          const markStarting = (row) => {
+            setStartingRows((prev) => Object.assign({}, prev, { [startingKey(row)]: Date.now() }))
+          }
+          const clearStarting = (row) => {
+            setStartingRows((prev) => {
+              if (prev[startingKey(row)] === undefined) return prev
+              const next = Object.assign({}, prev)
+              delete next[startingKey(row)]
+              return next
+            })
+          }
+          const isStarting = (row) => {
+            const ts = startingRows[startingKey(row)]
+            return ts !== undefined && Date.now() - ts < STARTING_TTL_MS
+          }
+
           // Toggling updates only the clicked row (scroll position and expanded
           // groups survive); a failed write re-reads the server state instead.
           const toggleRow = (row) => {
             const nextDisabled = !row.disabled
             setMsg(null)
+            // 翻开（nextDisabled=false）= 立刻按「启动中」显示；关掉 = 销账，否则刚停用的那行
+            // 还在呼吸。（2026-10-15 这一条写反过一次：结果是"开了不绿、关了反而绿 30 秒"。）
+            if (nextDisabled) clearStarting(row); else markStarting(row)
             setState((prev) => Object.assign({}, prev, {
               rows: (prev.rows || []).map((item) => (
                 item.id === row.id && item.level === row.level
@@ -248,16 +285,38 @@
             setBusy(row.id + ':toggle')
             apiCall('mcpm-set-enabled', { id: row.id, level: row.level, enabled: row.disabled }).then((res) => {
               if (res && !res.ok) {
+                clearStarting(row)
                 setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
                 refresh()
               } else if (res && res.warning) {
                 setMsg({ kind: 'warn', text: mt('mcp.msg.warn', { warning: res.warning }) })
               }
             }).catch((e) => {
+              clearStarting(row)
               setMsg({ kind: 'err', text: errMsg(e) })
               refresh()
             }).then(() => setBusy(null))
           }
+          /**
+           * 重连一台服务（`mcpm-restart`）：服务端先把它临时停用、等 loader 摘掉、再按重启前的
+           * 状态恢复 —— 最长约 11 秒，所以**不走 `run()`**（那条路只服务"一按就回"的写操作，
+           * 也没有地方放 warnings）。启用状态不变，这正是"重启"与"关掉再打开"的区别。
+           * 只有驻留在补丁文件里的条目可重连：loader 行没有可写的 id/level，调用点据此置灰。
+           */
+          const restartRow = (row) => {
+            setMsg(null)
+            setBusy(row.id + ':restart')
+            apiCall('mcpm-restart', { id: row.id, level: row.level }).then((res) => {
+              if (res && res.ok === false) {
+                setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+              } else if (res && res.warnings && res.warnings.length) {
+                setMsg({ kind: 'warn', text: mt('mcp.msg.restartWarn', { warning: res.warnings.join('；') }) })
+              } else {
+                setMsg({ kind: 'ok', text: mt('mcp.msg.restarted', { name: row.serverName }) })
+              }
+            }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => { setBusy(null); refresh() })
+          }
+
           const toggleReveal = () => {
             const next = !reveal
             setReveal(next)
@@ -356,6 +415,31 @@
             }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
 
+          /**
+           * 详情页里"现在去问一次工具清单"（`mcpm-tools-refresh`）：对还没有缓存的服务器，
+           * 服务端是真的**临时启动一次**去抓工具名，拿到后恢复原启用状态 —— 所以它慢、也可能失败。
+           * 详情那节的「工具：N」平时只读缓存，这是唯一的主动刷新入口；在途响应按打开详情时的
+           * 序号作废（换了一台服务器就不该把旧结果写进去）。
+           */
+          const refreshTools = () => {
+            const row = detail && detail.row
+            if (!row) return
+            const seq = detailSeqRef.current
+            setMsg(null)
+            setBusy('tools:refresh')
+            apiCall('mcpm-tools-refresh', { serverName: row.serverName }).then((res) => {
+              if (seq !== detailSeqRef.current) return
+              if (res && res.ok === false) {
+                setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+                return
+              }
+              const tools = (res && res.tools) || []
+              setDetail((prev) => (prev === null ? prev : Object.assign({}, prev, { loading: false, error: null, tools: tools })))
+              if (res && res.warning) setMsg({ kind: 'warn', text: mt('mcp.msg.warn', { warning: res.warning }) })
+              else setMsg({ kind: 'ok', text: mt('mcp.msg.toolsRefreshed', { count: tools.length }) })
+            }).catch((e) => { if (seq === detailSeqRef.current) setMsg({ kind: 'err', text: errMsg(e) }) }).then(() => setBusy(null))
+          }
+
           const rows = state.rows || []
           // 工具数的三个口径（与 src/mcp/state-section.ts 同源，理由见那里的文件头）：
           //   liveToolCount        当前真实注册了几个工具（**不含**「已知工具」缓存）
@@ -421,10 +505,14 @@
 
           // 状态口径：tone 只决定胶囊配色（ok=能用、bad=坏了、warn=当前没工具、muted=没在跑）。
           const liveStatus = (row) => {
+            // 「刚翻开开关」这一条排在最前（但仍在 failed 之后）：新写进补丁的条目在宿主读到
+            // 之前 `row.live` 干脆是空的，若让它先落到「未加载 / 已停止」，界面就是"点了开关
+            // 先灰几秒才绿" —— 用户 2026-10-15 报的"看不出是不是启动中"正是这几秒。
+            if (row.live && row.live.phase === 'failed') return { text: mt('mcp.live.failed'), tone: 'bad' }
+            if (isStarting(row) && !(row.live && row.live.phase === 'active')) return { text: mt('mcp.live.loading'), tone: 'busy' }
             if (!row.live) return { text: mt('mcp.live.notLoaded'), tone: 'muted' }
-            if (row.live.phase === 'failed') return { text: mt('mcp.live.failed'), tone: 'bad' }
             if (!row.live.enabled) return { text: mt('mcp.live.stopped'), tone: 'muted' }
-            if (row.live.phase && row.live.phase !== 'active') return { text: mt('mcp.live.loading'), tone: 'muted' }
+            if (row.live.phase && row.live.phase !== 'active') return { text: mt('mcp.live.loading'), tone: 'busy' }
             // 判"有没有可用工具"只看**真实注册**的那个数（缓存不算）。
             if (liveEnabledOf(row) === 0) return { text: mt('mcp.live.noTools'), tone: 'warn' }
             return { text: mt('mcp.live.running'), tone: 'ok' }
@@ -566,9 +654,10 @@
           const maskedInForm = !!formModal && /•{3,}/.test(String(formModal.env || '') + String(formModal.headers || ''))
           const formModalNode = formModal && React.createElement(Modal, {
             key: 'mcp-form',
+            className: 'dsm-modal-mcp-form',
             title: formModal.mode === 'edit' ? mt('mcp.form.editTitle') + formModal.id : mt('mcp.form.addTitle'),
             closeLabel: mt('btn.close'),
-            onClose: closeForm,
+            onClose: dismissForm,
           },
               React.createElement('div', { className: 'dsm-form' },
                 maskedInForm ? React.createElement(Notice, { kind: 'warn', text: mt('mcp.form.maskedHint') }) : null,
@@ -577,9 +666,19 @@
                 React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.serverName')),
                 React.createElement('input', { className: 'dsm-control', value: formModal.serverName, placeholder: 'e.g. github', onChange: setFormField('serverName') }),
                 React.createElement('span', { className: 'dsm-help' }, mt('mcp.field.serverName.hint'))),
-              React.createElement('label', { className: 'dsm-field' },
+              // 传输方式用分段控件而不是下拉（用户 2026-10-15）：只有 stdio /
+              // streamable-http 两个互斥值，下拉要多点一下才能看见全部选项，
+              // 且选中态只占一行里的一小条。与「重名处理」「提示词类型」同款。
+              React.createElement('div', { className: 'dsm-field' },
                 React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.transport')),
-                React.createElement(SourceSelect, { value: formModal.transport, options: MCP_TRANSPORT_OPTIONS, onChange: (value) => setFormValue('transport', value) })),
+                React.createElement('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': mt('mcp.field.transport') },
+                  MCP_TRANSPORT_OPTIONS.map(function (o) {
+                    return React.createElement('button', {
+                      key: o.value, type: 'button',
+                      'aria-pressed': formModal.transport === o.value ? 'true' : 'false',
+                      onClick: function () { setFormValue('transport', o.value) },
+                    }, o.label);
+                  }))),
               React.createElement('label', { className: 'dsm-field' },
                 React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.level')),
                 React.createElement(SourceSelect, {
@@ -599,15 +698,16 @@
                     React.createElement('label', { className: 'dsm-field' },
                       React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.command')),
                       React.createElement('input', { className: 'dsm-control', value: formModal.command, placeholder: 'npx -y @modelcontextprotocol/server-github', onChange: setFormField('command') })),
-                    React.createElement('label', { className: 'dsm-field' },
+                    React.createElement('label', { className: 'dsm-field dsm-field-fill' },
                       React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.args')),
                       React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.args, placeholder: '-y\n@modelcontextprotocol/server-github', onChange: setFormField('args') })),
-                    React.createElement('label', { className: 'dsm-field' },
+                    // 环境变量的「路径按系统写法填」那句提示删除（用户 2026-10-15）：它讲的是
+                    // 少数人才会碰的细节，却把这一格顶高一行、也让 stdio 与 http 两档更不齐。
+                    React.createElement('label', { className: 'dsm-field dsm-field-fill' },
                       React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.env')),
-                      React.createElement('span', { className: 'dsm-help' }, mt('mcp.field.env.hint')),
                       React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.env, placeholder: 'GITHUB_TOKEN=xxx', onChange: setFormField('env') }))),
               formModal.transport === 'streamable-http'
-                ? React.createElement('label', { className: 'dsm-field' },
+                ? React.createElement('label', { className: 'dsm-field dsm-field-fill' },
                     React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.headers')),
                     React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.headers, placeholder: 'Authorization=Bearer xxx', onChange: setFormField('headers') }))
                 : null,
@@ -644,7 +744,11 @@
             React.createElement('div', { className: 'dsm-detail-section' },
               React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
                 mt('mcp.detail.config'),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: toggleReveal }, reveal ? mt('mcp.detail.hideSecret') : mt('mcp.detail.showSecret'))),
+                // 两颗动作包成一组（用户 2026-10-15：「重启怎么在中间」）—— space-between
+                // 摊三个子元素时中间那个会被顶到整行正中，标题左、动作组右才对。
+                React.createElement('span', { className: 'dsm-detail-title-acts' },
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', title: mt('mcp.btn.restart.title'), disabled: busy !== null || detail.row.level === 'loader', onClick: () => restartRow(detail.row) }, mt('mcp.btn.restart')),
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: toggleReveal }, reveal ? mt('mcp.detail.hideSecret') : mt('mcp.detail.showSecret')))),
               React.createElement('div', { className: 'dsm-fm' },
                 configRow(mt('mcp.detail.entryId'), detail.row.id),
                 configRow(mt('mcp.field.level'), mt('mcp.level.' + detail.row.level)),
@@ -660,22 +764,30 @@
               React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.status')),
               React.createElement('div', { className: 'dsm-feedback' + (detailStatus.tone === 'bad' ? ' dsm-error' : ' dsm-warning') }, detailHint)) : null,
             React.createElement('div', { className: 'dsm-detail-section' },
-              // 字数计数摆在小标题同一行右侧：备注的上限就是注入段的截断长度（`MCP_NOTE_MAX`）。
+              // 标题行只留标题 + 字数计数：备注的上限就是注入段的截断长度（`MCP_NOTE_MAX`）。
               // 超限标红沿用记忆页描述那套（`dsm-char-over`）—— 服务端不校验备注长度，
               // 这条之前存的长备注会整条存着、注入时被截掉，得让人看得见超了多少。
-              React.createElement('div', { className: 'dsm-budget-meta' },
-                React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.note')),
+              React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
+                mt('mcp.detail.note'),
                 React.createElement('span', { className: 'dsm-char-count' + (String(noteDraft || '').length > MCP_NOTE_MAX ? ' dsm-char-over' : '') }, String(noteDraft || '').length + ' / ' + MCP_NOTE_MAX)),
               React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: noteDraft, maxLength: MCP_NOTE_MAX, placeholder: mt('mcp.detail.note.placeholder'), onChange: (ev) => setNoteDraft(ev.target.value) }),
+              // 「保存备注」贴着自己要提交的输入框下方右对齐，且是全弹窗唯一的实心主按钮
+              // （用户 2026-10-15：上一版把它与「刷新工具」都摆成标题行里的 quiet 键，
+              // 两颗一模一样、还落在相邻两节的同一高度 —— 备注输完下意识就点到「刷新
+              // 工具」。两个信号把两颗分开：位置贴着 textarea，提交动作跟着被提交的
+              // 字段走；权重用实心主色，它才是备注区的提交，「刷新工具」保持 quiet
+              // 的工具区动作）。
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save'))),
               // 备注保存的回执就地渲染（见 noteNotice 的说明）。文案原样来自服务端：
               // 成功走 Notice 的 ok 档（右下角浮出的 toast，与全站成功提示同一副长相）；
               // 被冻结闸拒掉是弹窗内的一条红色 feedback —— 这正是用户要看到的那句话，
               // 只是位置从页面挪进了弹窗。
-              React.createElement(Notice, { kind: noteNotice && noteNotice.kind, text: noteNotice && noteNotice.text }),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save')))),
+              React.createElement(Notice, { kind: noteNotice && noteNotice.kind, text: noteNotice && noteNotice.text })),
             React.createElement('div', { className: 'dsm-detail-section' },
-              React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length })),
+              React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
+                mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length }),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || detail.loading === true, onClick: refreshTools }, mt('mcp.detail.toolsRefresh'))),
               toolListNode))
 
 
@@ -793,6 +905,9 @@
           var quick = qs[0], setQuick = qs[1]
           var qk = React.useState(null), quickEdit = qk[0], setQuickEdit = qk[1]
           var qf = React.useState(null), quickConfirm = qf[0], setQuickConfirm = qf[1]
+          // 三个弹窗（新增预设 / 编辑预设 / 编辑快捷提示词）各自一份关窗暂存（见 42-shared-ui.js：
+          // 关窗存、打开取，成功提交不走这条路，所以没有"成功后要记得清"那一步）。
+          useFormDraftScope('prompt:')
           function refreshQuick() {
             apiCall('quickprompt-list', {})
               .then(function (res) {
@@ -951,6 +1066,9 @@
           }
           function openEdit(p) {
             beginAction()
+            // 30 秒内重开同一份：把刚才关掉的那份编辑内容填回去，不重读磁盘。
+            var draft = takeFormDraft('prompt:edit:' + p.id)
+            if (draft) { setEditModal(draft); return }
             // id 可改：改名 = 目录改名，宿主会把场景绑定一起改名（见 rules-rebind-prompt）。
             apiCall('agentsmd-read', { id: p.id }).then(function (res) {
               if (res && res.ok) setEditModal({ id: p.id, nextId: p.id, content: res.content, description: p.description || '' })
@@ -1088,6 +1206,8 @@
            */
           function openQuickEdit(p) {
             beginAction()
+            var draft = takeFormDraft('prompt:quick:' + p.id)
+            if (draft) { setQuickEdit(draft); return }
             setQuickEdit({ id: p.id, nextId: p.id, content: p.content || '', description: p.description || '' })
           }
           function doQuickUpdate() {
@@ -1353,7 +1473,7 @@
                 [quickEnabledCount + '/' + quick.prompts.length, t('quickprompt.stat')],
               ],
               actions: [
-                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: state.anyLocked === true, onClick: function () { setCreateModal({ kind: 'global', id: '', content: '', description: '', error: null }) } }, t('agm.btn.new')),
+                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: state.anyLocked === true, onClick: function () { setCreateModal(takeFormDraft('prompt:create') || { kind: 'global', id: '', content: '', description: '', error: null }) } }, t('agm.btn.new')),
                 React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.anyLocked === true, onClick: function () { setImportResult(null); setImportOpen(true) } }, t('agm.btn.import')),
                 React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || !(state.presets.length || quick.prompts.length), onClick: function () { setExportState({ busy: false, result: null }) } }, t('export.presets')),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setTrash(true) } }, t('trash.btn.open')),
@@ -1421,7 +1541,7 @@
               onReload: function () { refresh(true) },
             }) : null,
             // 编辑：id 与内容都可改（改 id = 目录改名，场景绑定由宿主一起改名）。
-            editModal ? React.createElement(Modal, { title: t('agm.edit.title') + ' · ' + editModal.id, closeLabel: t('btn.close'), onClose: function () { setEditModal(null) } },
+            editModal ? React.createElement(Modal, { className: 'dsm-modal-form-tall', title: t('agm.edit.title') + ' · ' + editModal.id, closeLabel: t('btn.close'), onClose: function () { stashFormDraft('prompt:edit:' + editModal.id, editModal); setEditModal(null) } },
               React.createElement('div', { className: 'dsm-field' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.id')),
                 React.createElement('input', { className: 'dsm-control', value: editModal.nextId || '', onChange: function (e) { setEditModal(Object.assign({}, editModal, { nextId: e.target.value, error: null })) } }),
@@ -1452,7 +1572,7 @@
             // 自己滚，正文框静止在 dsm-textarea-lg 的下限上、只能往下拖（与新建人设同款手感）。
             // 标题用 agm.new.title（「新增提示词」）而不是按钮那颗 agm.btn.new（「新增」）：
             // 弹窗里已经看不到那颗按钮了，标题光写"新增"不知道在新增什么（用户 2026-10-12）。
-            createModal ? React.createElement(Modal, { title: t('agm.new.title'), closeLabel: t('btn.close'), onClose: function () { setCreateModal(null) } },
+            createModal ? React.createElement(Modal, { className: 'dsm-modal-form-tall', title: t('agm.new.title'), closeLabel: t('btn.close'), onClose: function () { stashFormDraft('prompt:create', createModal); setCreateModal(null) } },
               kindPicker(createModal.kind, function (v) { setCreateModal(Object.assign({}, createModal, { kind: v, error: null })) }),
               React.createElement('div', { className: 'dsm-field' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.id')),
@@ -1492,7 +1612,7 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn ' + (applyConfirm.remove || (applyConfirm.unapply && unapplyRemoves) ? 'dsm-btn-danger' : ''), disabled: busy !== null, onClick: function () { if (applyConfirm.remove) doRemove({ id: applyConfirm.id }); else if (applyConfirm.unapply) doUnapply(); else doApply(applyConfirm.id) } }, applyConfirm.remove ? t('agm.btn.confirmRemove') : (applyConfirm.unapply ? (unapplyRemoves ? t('agm.btn.confirmUnapplyRemove') : t('agm.btn.confirmUnapply')) : t('agm.btn.confirmApply'))))) : null,
             importOpen ? React.createElement(ImportModal, {
-              key: 'imp', t: t, title: t('agm.btn.import'), accept: '.md',
+              key: 'imp', t: t, title: t('agm.btn.import'), accept: '.md', hint: t('upload.drop.prompt'),
               busy: importBusy, result: importResult,
               // 类型选择放在弹窗顶部（`extra` 槽）：一次导入只进一类，选完再拖文件。
               extra: kindPicker(importKind, setImportKind),
@@ -1503,7 +1623,7 @@
             }) : null,
             // 快捷提示词的编辑：正文直接来自列表（`quickprompt-list` 连正文一起回），
             // 不像预设那样还要再发一次 read。
-            quickEdit ? React.createElement(Modal, { title: t('quickprompt.edit.title') + ' · ' + quickEdit.id, closeLabel: t('btn.close'), onClose: function () { setQuickEdit(null) } },
+            quickEdit ? React.createElement(Modal, { title: t('quickprompt.edit.title') + ' · ' + quickEdit.id, closeLabel: t('btn.close'), onClose: function () { stashFormDraft('prompt:quick:' + quickEdit.id, quickEdit); setQuickEdit(null) } },
               React.createElement('div', { className: 'dsm-field' },
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.id')),
                 React.createElement('input', { className: 'dsm-control', value: quickEdit.nextId || '', onChange: function (e) { setQuickEdit(Object.assign({}, quickEdit, { nextId: e.target.value, error: null })) } }),

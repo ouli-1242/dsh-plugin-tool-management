@@ -25,6 +25,10 @@
          能拖高；权重 4 类 + 1 元素，压过上面那条 200px，不靠 !important。 */
       '.dsm-modal.dsm-modal-compact textarea.dsm-control.dsm-textarea-md{min-height:150px}' +
       '.dsm-detail-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}' +
+      /* 标题行右侧的动作组：两个及以上按钮必须包一层 —— space-between 直接摊三个子元素时，
+         中间那个会被顶到整行正中（用户 2026-10-15：「重启怎么在中间」）。标题在左、动作组
+         在右，组内间距 8px 与行间隙一致。 */
+      '.dsm-detail-title-acts{display:flex;align-items:center;gap:8px}' +
       `
 .dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);padding:4px}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:4px 0 24px;container-type:inline-size;flex-direction:column;gap:12px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-feedback-links{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.dsm-title{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.2px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:30px;align-items:center;gap:4px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:400;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:0;flex:none}
 /* 页头动作行：内边距收 2px。批量按钮要按「取消全选」定宽（见 .dsm-btn-bulk），
@@ -132,6 +136,10 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-pill{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:99px;font-size:12px;font-weight:400;white-space:nowrap}
 .dsm-pill-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 .dsm-pill-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
+/* 「启动中」的胶囊此前**没有对应配色**（只有 ok / warn / muted 三档），详情页标题那颗
+   「加载中」于是落在 .dsm-pill 的无色默认上 —— 与"没在跑"看着一样。与状态点同一支绿，
+   压一点亮度表示还没到位。 */
+.dsm-pill-busy{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary);opacity:.78}
 .dsm-pill-muted{color:var(--dsw-alias-label-tertiary)}
 .dsm-tool-desc-wrap{display:flex;align-items:flex-end;gap:8px}
 .dsm-tool-desc-clamp{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2}
@@ -166,6 +174,11 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
    超限转色，不再画进度条。保留 .dsm-budget-meta，它服务的是各表单的「标签 + 字数计数」行。） */.dsm-budget-meta{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.dsm-budget-meta strong{margin-right:0;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}.dsm-char-count{color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums}.dsm-char-over{color:var(--dsw-alias-state-error-primary)}.dsm-field-row{display:flex;gap:12px;align-items:flex-start}.dsm-field-row>.dsm-field{flex:1;min-width:0}
 .dsm-combo-row{display:flex;gap:8px}.dsm-combo-row .dsm-control{flex:1}
 .dsm-attach-list{display:flex;flex-direction:column;gap:4px}
+/* 技能创建弹窗的附件区（2026-10-16）：清单封顶滚动，行收紧一档 —— 附件多的时候
+   弹窗不该被顶到比正文还高，而 .dsm-file 原档的 8px 内边距是给导入拖拽区用的。 */
+.dsm-attach-actions{display:inline-flex;align-items:center;gap:6px}
+.dsm-attach-cap{max-height:126px;overflow:auto;padding-right:2px}
+.dsm-attach-cap .dsm-file{gap:6px;padding:5px 8px}
 .dsm-toast{position:fixed;right:22px;bottom:22px;z-index:1250;box-sizing:border-box;max-width:min(420px,calc(100vw - 44px));padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;animation:dsm-toast-in 160ms ease-out}@keyframes dsm-toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}/* 动效降级：系统开了「减少动态效果」就一律关掉。新增 transition / animation 时记得同步加到这里，
    否则那一个动效就是唯一不尊重用户设置的部分。（列表换位的 FLIP 曾在 JS 侧另判，随动画一起删除。） */
 @media(prefers-reduced-motion:reduce){.dsm-toast{animation:none}.dsm-switch:after{transition:none}.dsm-dropzone{transition:none}}
@@ -501,14 +514,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-toast-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
 .dsm-toast-err{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 
-/* MCP JSON 导入预览（0.15.0 A1）：勾选 | 主体 | 状态三列。非法行只把「问题」那一行标红，
+/* MCP JSON 导入预览（0.15.0 A1）：勾选 | 主体 | 状态三列；表头 label 已删
+   （用户 2026-10-15），勾选框随行内容垂直居中。非法行只把「问题」那一行标红，
    名字净化 / 字段忽略这类是配置事实，走中性灰 —— 黄色在这里留给不了任何东西（琥珀语义）。 */
-.dsm-imp-head,.dsm-imp-row{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:start;gap:8px}
-.dsm-imp-head{padding:0 4px 4px;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dsm-imp-row{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:8px}
 .dsm-imp-list{display:flex;flex-direction:column;gap:4px;max-height:320px;padding:4px 4px 0 0;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l2) transparent}
 .dsm-imp-row{padding:8px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1);font-size:12px}
 .dsm-imp-row.dsm-imp-bad{border-color:var(--dsw-alias-state-error-primary)}
-.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
+.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-imp-row input[type=checkbox]:disabled{cursor:not-allowed}
 .dsm-imp-main{display:flex;min-width:0;flex-direction:column;gap:4px}
 .dsm-imp-name{display:flex;align-items:center;flex-wrap:wrap;gap:4px;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600}
@@ -517,8 +530,10 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-imp-err{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px}
 .dsm-imp-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .dsm-imp-foot{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
-.dsm-imp-radio{display:flex;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
-.dsm-imp-radio input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-success-primary)}
+/* 导入弹窗重名处理行（用户 2026-10-15 两连）：从预览底部上移到预览之前，导入前
+   就看得见；排他二选一用「提示词类型」同款分段控件（dsm-form-seg，aria-pressed
+   表选中），「重名时」文字 label 删除（同类第三例：设置页表头 label 也删）。 */
+.dsm-imp-conflict{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}
 .dsm-imp-count{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* 体检状态点（0.15.0 B1）与行内检查项。点只有 8px，靠 title 说清含义；
@@ -526,8 +541,16 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-border-l3)}
 .dsm-dot-ok{background:var(--dsw-alias-state-success-primary)}
 .dsm-dot-warn{background:var(--dsm-warn)}
-/* （.dsm-dot-busy 与 @keyframes dsm-dot-pulse 已随 MCP 体检功能一起删除，2026-10-12：
-   "闪动的点"只有体检的进行中态用过，状态点现在是静态的。） */
+/* 启动进行中的呼吸点（2026-10-15 用户要求加回：服务启动要数秒，原来只有一个静态灰点，
+   "正在启动"只能靠 title 说出来。2026-10-12 曾以"闪动的点只有体检用"为由删过一次，
+   这次是 MCP 启动相位自己要 —— 全页只有 phase 非 active 时用它，不会到处闪）。
+   配色改绿（用户 2026-10-15）：business 橙在 dsh 的语义里是"占用中/要处理"，而启动中既不是
+   警告也不是故障，跑起来之后它就变成同一支绿 —— 呼吸与常亮因此是同一个颜色的两种节律。 */
+.dsm-dot-busy{background:var(--dsw-alias-state-success-primary);animation:dsm-dot-pulse 1.1s ease-in-out infinite}
+/* 呼吸的最低亮度从 .3 提到 .65，且改成**长一圈**而不是缩一点（用户 2026-10-15：灯在闪，
+   可颜色看着不绿，分不清是不是启动中）。6px 的点压到三成透明度就只剩一层灰；"变亮 + 长大"
+   与跑起来那颗常亮的绿一眼可分。 */
+@keyframes dsm-dot-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.65;transform:scale(1.35)}}
 /* （.dsm-inspect / -line / -warn 三条已随 MCP 体检功能一起删除，2026-10-12。） */
 
 /* 「最近改动」流水（0.15.0 B2）：时间列固定窄栏，改动列吃剩余宽度，来源徽章贴在行尾。 */
@@ -593,8 +616,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    detail-head / composer-chips，属于 #7）与半残的 tabs / switch 组。 */
 .dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
 .dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
-.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:4px 0 0;cursor:pointer}
-.dsm-imp-radio input{width:14px;height:14px;margin:0}
+.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer}
 .dsm-select-menu button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px;}
 .dsm-btn-lock:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-btn-quiet:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
@@ -633,7 +655,6 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-feedback.dsm-error{padding: 8px 12px; border-radius: var(--dsm-radius-m);}
 .dsm-tab:hover{color: var(--dsw-alias-label-primary);}
 .dsm-tab[aria-selected= true ]{color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-label-primary); font-weight: 400;}
-.dsm-imp-radio:hover{background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
 .dsm-modal-actions .dsm-btn{min-height: 30px; padding: 0 12px; font-size: 13px; line-height: 20px; border-radius: var(--dsm-radius-m);}
 .dsm-seg-filter .dsm-btn{min-height: 30px; padding: 0 12px; font-size: 13px; line-height: 20px;}
 .dsm-actions .dsm-bulk-ghost{min-height: 24px; display: inline-flex; align-items: center;}
@@ -658,6 +679,10 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 /* 记忆「形态」二选一：分段按钮（flat / bundle 互斥）。两个值摊开、点击即切，不依赖下拉 ——
    下拉在弹窗底部会被滚动容器裁掉（用户 2026-10-10 截图）。 */
 .dsm-form-seg{display:inline-flex;gap:2px;padding:3px;border:0;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-interactive-bg-hover)}
+/* 字段内的分段控件收回内容宽度（用户 2026-10-15：提示词类型 / 形态两条被
+   .dsm-field 的 align-items:stretch 拉满整行，过长）。flex 子项会被块状化，
+   inline-flex 在列向导里挡不住 stretch —— 显式 align-self + fit-content 才保险。 */
+.dsm-field>.dsm-form-seg{align-self:flex-start;width:fit-content}
 .dsm-form-seg button{min-height:24px;padding:0 12px;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}
 .dsm-form-seg button:hover{color:var(--dsw-alias-label-primary)}
 .dsm-form-seg button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}
@@ -708,8 +733,30 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
    §4.2 的 720 帽对这个弹窗太紧，登记为特例；屏幕不够高时仍然自适应缩，不会顶出视口。
    2026-10-12 用户「新建场景加高加宽」：1000×960 → 1200×1080（四组那一档同步加高，
    见 .dsm-editor-grid 的 grid-auto-rows —— 只抬帽不改内容的话弹窗高度由内容决定，等于没加）。
-   ⚠️ 必须三段类名：上面 .dsm-modal.dsm-modal-list 那条也是 720，而且带 !important。 */
-.dsm-modal.dsm-modal-list.dsm-modal-editor{width:min(1200px,100%)!important;max-height:min(1080px,calc(100vh - 48px))!important}
+   ⚠️ 必须三段类名：上面 .dsm-modal.dsm-modal-list 那条也是 720，而且带 !important。
+   宽度 2026-10-15 第二轮改成 min(1200px, 88vw)（用户：小窗下宽度也要减一点）：原先的 100%
+   只扣掉遮罩那 24px，1000px 宽的窗口里弹窗 952 —— 左右各只剩 24px，看着就是"顶满"。
+   代价：顶部五格的 flex-basis 合计 901px，容器窄过它时按既有兜底退回两行（.dsm-editor-basics
+   的 flex-wrap），所以这一档让出的宽度会让五格变两行、而不是把下拉压扁。 */
+.dsm-modal.dsm-modal-list.dsm-modal-editor{width:min(1200px,88vw)!important;max-height:min(1080px,calc(100vh - 48px))!important}
+/* 新增 / 编辑 MCP 的表单弹窗（用户 2026-10-15：两种传输方式弹窗大小不一样）。
+   stdio 是「启动命令 + 参数 + 环境变量」三格，streamable-http 只有「服务 URL + 请求头」两格 ——
+   高度交给内容决定时，切一下传输方式弹窗就跳一次，而 stdio 那一档自然高 782，正好顶破 720 的帽、
+   默认带滚动条。这一档给确定高度（与新建记忆切「形态」同一手感：格子跟着长，弹窗不跳也不滚），
+   多出来的空间由带 textarea 的那几格吸收（.dsm-field-fill，见 41 片）。
+   ⚠️ 这里不写 min-height:0 —— 屏幕不够高时宁可整窗滚动，也不要让格子被压到内容之下、
+   textarea 溢出到下一格上面（实测 760 视口下会切掉两格）。
+   820 → 770（用户 2026-10-16：「MCP 弹窗各减少一点」）：省下的 50 里，24 来自把这一档的字段间距
+   收回 12（stdio 七格六个间距），其余是给两端各留一点余量；stdio 自然高随之降到 ~758，
+   仍然不滚 —— 减高度不能减出滚动条，那是用户同一批里刚抱怨过的。 */
+.dsm-modal.dsm-modal-mcp-form{height:min(770px,calc(100vh - 48px));max-height:none}
+.dsm-modal-mcp-form .dsm-form{flex:1;gap:12px}
+.dsm-modal-mcp-form .dsm-field-fill{flex:1 1 auto}
+.dsm-modal-mcp-form .dsm-field-fill>textarea{flex:1;min-height:88px}
+/* 新增 / 编辑提示词、新建 / 编辑子智能体（用户 2026-10-15：「默认就会有滑动条」）：
+   正文是 dsm-textarea-lg 与两块 dsm-textarea-md，内容排开比 720 的帽更高 —— 帽抬到 920，
+   让这两类表单按自己的内容站满；屏幕不够高时仍按视口缩，不会顶出窗口。 */
+.dsm-modal.dsm-modal-form-tall{max-height:min(920px,calc(100vh - 48px))}
 /* 列表弹窗（导出 / 回收站）：高度自适应——内容矮时缩到 min-height，超高时帽在 720、
    只让 body 内滚（头/底恒定）。旧的 640/760 定高全部由此替代。 */
 .dsm-modal.dsm-modal-list{width:min(720px,100%)!important;height:auto!important;max-height:min(720px,calc(100vh - 96px))!important;min-height:480px}
@@ -833,7 +880,14 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
    「选择」一出现就把这一格的标签行顶高 4px，下面的下拉被推下去，与其余四格错开。 */
 .dsm-editor-basics .dsm-label,.dsm-editor-basics .dsm-char-count{line-height:18px}
 .dsm-label-row .dsm-btn{min-height:18px;padding:0 6px;font-size:12px;line-height:16px}
-.dsm-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;grid-auto-rows:300px}
+/* 四组的高度：原先恒定 300px（大窗下没问题），小窗下弹窗整个顶出视口 —— 用户 2026-10-15
+   「新建场景在小窗口模式下占大量面积，能不能等比例缩小，但有最小值」。
+   现在按视口缩：除四组之外的固定开销实测 218px（标题行 + 顶部五格 + 动作行 + 内边距与间距），
+   连同 12px 行间距一起从每半个视口里扣掉，就是每行能给到的高度；上限仍是 300（大屏一字不改）。
+   扣掉的 360 比"刚好填满"（286）再多让出 74px —— 用户 2026-10-15 第二轮：小窗下填满整屏
+   还是太大，弹窗该有自己的边距，不是贴满视口才算用得上空间。下限 150：再矮清单就只剩两三行。
+   组内 .dsm-editor-group-body 本来就是 min-height:0 + 内滚，所以行矮下去不会把内容挤出去。 */
+.dsm-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;grid-auto-rows:clamp(150px,calc((100vh - 360px) / 2),300px)}
 /* 分组卡片补一圈 1px 描边（用户 2026-10-12：「浅色模式下四个功能集没有分块，全是白的」）。
    原设计是 §13.1 的"深度靠表面层次、不画边框"：卡片 bg-layer-1 比弹窗 bg-layer-2 高一档。
    但这条只在深色主题成立 —— 浅色下 layer-1 与 layer-2 都是白，卡片整块融进弹窗，
@@ -958,6 +1012,11 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-setrow{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px;padding:4px 0}
 .dsm-setrow+.dsm-setrow{border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-setrow-label{display:flex;min-width:0;flex-direction:column;gap:1px}
+/* 名字行：名字与状态标签（tag）同一行，垂直居中（用户裁定 2026-10-15：兼容页斜杠行的
+   「已生效 / 未生效」从开关旁挪到名字右边 —— 状态跟着名字读；标签是 pill，flex 居中
+   才与 13px 的名字真正上下对齐，基线对齐会偏上一截）。 */
+.dsm-setrow-nameline{display:flex;min-width:0;align-items:center;gap:6px}
+.dsm-setrow-nameline>.dsm-setrow-name{min-width:0}
 .dsm-setrow-name{overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-setrow-desc{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-setrow-control{display:flex;flex:none;align-items:center;gap:8px}

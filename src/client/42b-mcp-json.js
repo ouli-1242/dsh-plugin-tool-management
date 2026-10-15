@@ -1,8 +1,16 @@
-    // ---------- MCP JSON 导入 / 导出（0.15.0 A1）------------------------------------
-    // 服务端 `mcpm-import` / `mcpm-export` 早就实现完整，缺的只是界面与**格式转换**：
-    // 社区流通的块是 `{"mcpServers": {...}}`，而服务端只认数组或 `{rows:[...]}`，
+    // ---------- MCP 导入 / 导出（0.15.0 A1；0.20.x 起收 dsh 补丁片段）------------------
+    // 服务端 `mcpm-import` / `mcpm-export` 早就实现完整，缺的只是界面与**格式转换**。
+    // 导入面（三条路）：
+    //   · 社区流通的 `{"mcpServers": {...}}`
+    //   · 服务端自己的 `{rows: [...]}` / 裸数组
+    //   · **dsh 补丁片段**（用户 2026-10-15 指出这才是真实模板）：`- insert:` 块 +
+    //     `name: '@deepseek-ai/dsh-mcp-client'` + `config:`，也就是 `cordis.patch.yml` 里
+    //     本插件自己写出来的形状（生成侧见 src/mcp/patch-yaml.ts 的 buildInsertBlock）。
     // 且 `transport` 只要不是字面 `'stdio'` 就一律落 streamable-http、`serverName` 不合规矩
     // 就整条丢弃。这些判定必须在提交前做完并让用户看见，否则导入完只剩一串跳过原因。
+
+    /** 本插件写入补丁时用的 loader 名（单一真相源在 src/host-names.ts 的 MCP_CLIENT_MODULE）。 */
+    var MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
 
     function isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v) }
 
@@ -34,6 +42,31 @@
         if (isPlainObject(v) && Object.keys(v).length && Object.keys(v).some(function (k) { return isPlainObject(v[k]) })) return v
       }
       return null
+    }
+
+    // ---------- dsh 补丁片段（YAML）：解析在宿主侧 ------------------------------------
+    // 客户端**不解析 YAML**：这一半跑在浏览器里（`window.__ModuleLoader__`），那里的
+    // `require` 只认宿主注册过的浏览器模块（react / react-dom/client），`js-yaml` 取不到 ——
+    // 把它当"本机大概装了就能用"是 0.20.1 那次改错的根因。补丁片段一律发给
+    // `mcpm-parse-patch`（宿主侧 `parseRows`，纯字符串运算，与本插件读真身补丁同一口径）。
+    /** 文本看着像不像 dsh 补丁片段（只用来在"读通了但没有条目"与"结构不认识"之间挑一句对症的报错）。 */
+    function looksLikePatchText(raw) {
+      return String(raw).indexOf('- insert:') >= 0 || String(raw).indexOf(MCP_CLIENT_MODULE) >= 0
+    }
+    /**
+     * 宿主解析回来的条目 → `[名字, 配置]` 对。`config` 里的 serverName 优先，
+     * 没有就退回 insert 子条目的 id（与宿主写补丁时的取名口径一致）。
+     * 启停在子条目自己身上、或由后面的覆盖块改写，`parseRows` 已按文件顺序合好。
+     */
+    function patchEntriesToPairs(entries) {
+      var list = Array.isArray(entries) ? entries : []
+      return list.map(function (e) {
+        var cfg = isPlainObject(e && e.config) ? Object.assign({}, e.config) : {}
+        if (e && e.id !== undefined && cfg.id === undefined) cfg.id = String(e.id)
+        if (e && e.disabled !== undefined && cfg.disabled === undefined) cfg.disabled = e.disabled
+        var name = cfg.serverName !== undefined && String(cfg.serverName).trim() ? String(cfg.serverName) : String(e && e.id == null ? '' : e.id)
+        return [name, cfg]
+      })
     }
 
     var MCP_CFG_KEYS = ['command', 'args', 'url', 'env', 'headers', 'disabled', 'type', 'transport', 'serverName', 'id', 'level']
@@ -73,25 +106,12 @@
     }
 
     /**
-     * 粘贴的任意 MCP JSON → `{ok, rows}` 或 `{ok:false, code}`。
-     * 识别顺序：`{mcpServers:{…}}` → `{rows:[…]}` → 裸数组 → 裸映射。
+     * `[名字, 配置]` 对 → 预览行。JSON 那条路与宿主补丁解析那条路共用这一份判定
+     * （重名退号 / 传输方式 / 致命项因此不会有两副口径）。
      */
-    function convertMcpJsonToRows(text) {
-      var parsed
-      try { parsed = JSON.parse(String(text == null ? '' : text).trim()) } catch (e) { return { ok: false, code: 'parse', error: errMsg(e) } }
-      if (!isPlainObject(parsed) && !Array.isArray(parsed)) return { ok: false, code: 'shape' }
-      var pairs = []
-      var map = isPlainObject(parsed) ? mcpServerMapOf(parsed) : null
-      if (map) {
-        Object.keys(map).forEach(function (k) { pairs.push([k, map[k]]) })
-      } else if (Array.isArray(parsed) || Array.isArray(parsed.rows)) {
-        var list = Array.isArray(parsed) ? parsed : parsed.rows
-        list.forEach(function (it, i) { pairs.push([it && it.serverName != null ? String(it.serverName) : String(i + 1), it]) })
-      } else if (looksLikeServerMap(parsed)) {
-        Object.keys(parsed).forEach(function (k) { pairs.push([k, parsed[k]]) })
-      } else return { ok: false, code: 'shape' }
+    function mcpRowsFromPairs(pairs) {
       var used = {}
-      var rows = pairs.map(function (pair, i) {
+      return pairs.map(function (pair, i) {
         var row = mcpRowFromConfig(pair[0], pair[1], i)
         // 批次内重名：serverName 全局唯一，第二条起服务端必然「serverName 已存在」。
         // 与其让用户导入一半才发现，不如现在就改名并在预览里标出来。
@@ -112,11 +132,72 @@
         row.id = row.payload.id || mcpImportIdOf(row.serverName)
         return row
       })
-      return { ok: true, rows: rows }
     }
+
+    /**
+     * 粘贴的文本按 **JSON** 试：`{mcpServers:{…}}` → `{rows:[…]}` → 裸数组 → 裸映射。
+     * 返回 `{ok, rows}` / `{ok:false, code}`；**JSON 根本不成立时返回 null** —— 那份文本
+     * 该走补丁片段那条路（宿主侧 `mcpm-parse-patch`，见上）。
+     */
+    function convertMcpJsonToRows(text) {
+      var raw = String(text == null ? '' : text).trim()
+      var parsed = null
+      try { parsed = JSON.parse(raw) } catch (e) { return null }
+      if (!isPlainObject(parsed) && !Array.isArray(parsed)) return { ok: false, code: 'shape' }
+      var pairs = []
+      var map = isPlainObject(parsed) ? mcpServerMapOf(parsed) : null
+      if (map) {
+        Object.keys(map).forEach(function (k) { pairs.push([k, map[k]]) })
+      } else if (Array.isArray(parsed) || Array.isArray(parsed.rows)) {
+        var list = Array.isArray(parsed) ? parsed : parsed.rows
+        list.forEach(function (it, i) { pairs.push([it && it.serverName != null ? String(it.serverName) : String(i + 1), it]) })
+      } else if (looksLikeServerMap(parsed)) {
+        Object.keys(parsed).forEach(function (k) { pairs.push([k, parsed[k]]) })
+      } else return { ok: false, code: 'shape' }
+      return { ok: true, rows: mcpRowsFromPairs(pairs) }
+    }
+
+    /**
+     * 导入框的「dsh 标准模板」。打开弹窗即预填这份，用户直接改；删空后 placeholder
+     * 显示同一份（useState 初值与 placeholder 同源，两条路径永远是这一份）。
+     *
+     * 用**真实**的补丁格式而不是社区的 `{"mcpServers": …}`（用户 2026-10-15：贴出
+     * `cordis.patch.yml` 里的真身，"默认模板不对"）：这正是 `buildInsertBlock`
+     * （src/mcp/patch-yaml.ts）写进补丁的形状，也是宿主真正读的那份 —— 缩进、引号、
+     * `config:` 的层级都按生成器逐字取。两条示例覆盖两种传输方式（stdio 看 command、
+     * http 看 url；判传输不看 `transport` 字段，见 mcpRowFromConfig 注释），
+     * serverName 带 example- 前缀就是让人一眼看出"这是模板，改我"。
+     *
+     * 顶层的 `# dsh-plugin-tool-management:server:<id>` 标记**不写进模板**：那是本插件
+     * 自己落盘时加的，用户手写的片段不需要它（解析时按注释忽略）。
+     */
+    var MCP_IMPORT_TEMPLATE = [
+      '- insert:',
+      '    - id: mcp-example',
+      "      name: '" + MCP_CLIENT_MODULE + "'",
+      '      config:',
+      '        serverName: "example"',
+      '        transport: "stdio"',
+      '        command: "npx"',
+      '        args:',
+      '          - "-y"',
+      '          - "your-package"',
+      '        env:',
+      '          "API_KEY": ""',
+      '- insert:',
+      '    - id: mcp-example-remote',
+      "      name: '" + MCP_CLIENT_MODULE + "'",
+      '      config:',
+      '        serverName: "example-remote"',
+      '        transport: "streamable-http"',
+      '        url: "https://your-server.com/mcp"',
+    ].join('\n')
 
     function McpJsonImportModal(props) {
       var t = props.t
+      // 打开时框子是空的（用户 2026-10-15 回退上一版的"预填模板"：预填让人以为已经填好了，
+      // 而且大多数人是要粘贴自己那份，不是改这份示例）。模板只留在 placeholder 里 ——
+      // 空框显示它，一敲字就没了，两处内容同源（MCP_IMPORT_TEMPLATE）。
       var ts = react.useState(''); var text = ts[0], setText = ts[1]
       // 解析走防抖值：整份 JSON 在每次按键上都重解析没有意义。
       var dq = useDebouncedValue(text)
@@ -125,8 +206,26 @@
       var cs = react.useState('skip'); var conflict = cs[0], setConflict = cs[1]
       var os = react.useState({}); var off = os[0], setOff = os[1]
       var fileRef = react.useRef(null)
-      var converted = react.useMemo(function () {
-        return String(dq || '').trim() ? convertMcpJsonToRows(dq) : null
+      // 预览结果。JSON 那条路在浏览器里同步算完；补丁片段（YAML）得问宿主，所以这份是
+      // effect 的产物 —— 换文本时先落一个 parsing 占位，回来再覆盖（alive 挡旧请求的迟到响应）。
+      var vs = react.useState(null); var converted = vs[0], setConverted = vs[1]
+      react.useEffect(function () {
+        var raw = String(dq || '').trim()
+        if (!raw) { setConverted(null); return }
+        var fromJson = convertMcpJsonToRows(raw)
+        if (fromJson) { setConverted(fromJson); return }
+        var alive = true
+        setConverted({ ok: false, code: 'parsing' })
+        apiCall('mcpm-parse-patch', { text: raw }).then(function (res) {
+          if (!alive) return
+          if (!res || !res.ok) { setConverted({ ok: false, code: 'parse', error: (res && res.error) || '' }); return }
+          var patchRows = mcpRowsFromPairs(patchEntriesToPairs(res.rows))
+          // 读通了却一条 MCP 也没有（整份文件只有别的 loader）→ 交给「没有条目」那一句。
+          if (patchRows.length) setConverted({ ok: true, rows: patchRows })
+          else if (looksLikePatchText(raw)) setConverted({ ok: true, rows: [] })
+          else setConverted({ ok: false, code: 'shape' })
+        }).catch(function (e) { if (alive) setConverted({ ok: false, code: 'parse', error: errMsg(e) }) })
+        return function () { alive = false }
       }, [dq])
       var rows = converted && converted.ok ? converted.rows : []
       var chosen = rows.filter(function (r) { return !r.fatal && off[r.key] !== true })
@@ -166,15 +265,15 @@
       }
 
       var preview = !converted ? null
+        : converted.code === 'parsing' ? h('div', { className: 'dsm-help' }, t('mcp.importJson.parsing'))
         : !converted.ok ? h('div', { className: 'dsm-feedback dsm-error', role: 'alert' },
             converted.code === 'parse' ? t('mcp.importJson.parseError', { error: converted.error }) : t('mcp.importJson.parseError.shape'))
         : !rows.length ? h('div', { className: 'dsm-empty' }, t('mcp.importJson.empty'))
         : h(react.Fragment, null,
             rows.length > 20 ? h('div', { className: 'dsm-help' }, t('mcp.importJson.bigBatch', { count: rows.length })) : null,
-            h('div', { className: 'dsm-imp-head' },
-              h('span', null, ''),
-              h('span', null, t('mcp.importJson.preview.name')),
-              h('span', null, t('mcp.importJson.preview.state'))),
+            // 预览表头整行删除（用户 2026-10-15）：「服务名与连接参数」「状态」两个
+            // 表头 label 是给三列网格看的，删掉后每行自带 transport 标签与端点，
+            // 信息不丢；勾选框随之改为随行内容垂直居中（.dsm-imp-row align-items:center）。
             h('div', { className: 'dsm-imp-list' }, rows.map(function (r) {
               var cf = conflictOf(r)
               var endpoint = r.transport === 'stdio' ? [r.command].concat(r.args).join(' ') : r.url
@@ -193,26 +292,30 @@
                   cf ? h('span', { className: 'dsm-tag' + (cf === 'skip' ? ' dsm-tag-off' : '') }, t('mcp.importJson.will.' + cf)) : null,
                   r.secretCount ? h('span', { className: 'dsm-tag' }, t('mcp.importJson.preview.secret', { count: r.secretCount })) : null))
             })),
+            // 冲突处理上移到预览之前（见 dsm-imp-conflict），页脚只剩计数。
             h('div', { className: 'dsm-imp-foot' },
-              h('label', { className: 'dsm-imp-radio' },
-                h('input', { type: 'radio', name: 'dsm-imp-conflict', checked: conflict === 'skip', onChange: function () { setConflict('skip') } }),
-                t('mcp.importJson.conflict.skip')),
-              h('label', { className: 'dsm-imp-radio' },
-                h('input', { type: 'radio', name: 'dsm-imp-conflict', checked: conflict === 'overwrite', onChange: function () { setConflict('overwrite') } }),
-                t('mcp.importJson.conflict.overwrite')),
               h('span', { className: 'dsm-imp-count' }, t('mcp.importJson.chosen', { count: chosen.length }))))
 
       return h(Modal, { className: 'dsm-modal-lg', title: t('mcp.importJson.title'), closeLabel: t('btn.close'), onClose: props.onClose },
         h('div', { className: 'dsm-form' },
-          h('p', { className: 'dsm-desc' }, t('mcp.importJson.hint')),
+          h('p', { className: 'dsm-help' }, t('mcp.importJson.hint')),
           h('textarea', {
-            className: 'dsm-control dsm-textarea-md', rows: 8, value: text, spellCheck: false,
-            placeholder: t('mcp.importJson.placeholder'), onChange: function (e) { setText(e.target.value) },
+            className: 'dsm-control dsm-textarea-md', rows: 14, value: text, spellCheck: false,
+            placeholder: MCP_IMPORT_TEMPLATE, onChange: function (e) { setText(e.target.value) },
           }),
           h('div', { className: 'dsm-upload-choices' },
             h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { if (fileRef.current) fileRef.current.click() } }, t('btn.file.pick')),
             h('span', { className: 'dsm-upload-divider' }, t('mcp.importJson.orPaste')),
-            h('input', { ref: fileRef, type: 'file', accept: '.json', className: 'dsm-hidden-input', onChange: function (e) { onPickFile(e.target.files); e.target.value = '' } })),
+            h('input', { ref: fileRef, type: 'file', accept: '.json,.yml,.yaml,.txt', className: 'dsm-hidden-input', onChange: function (e) { onPickFile(e.target.files); e.target.value = '' } })),
+          // 重名处理（用户 2026-10-15 两连）：从预览底部上移到预览之前 —— 埋在列表
+          // 脚下的二选一，导入前根本看不见；radio 换成「提示词类型」同款分段控件 ——
+          // 排他二选一的正解控件，恒有一颗按下，没有「都不选」这一态。
+          rows.length ? h('div', { className: 'dsm-imp-conflict' },
+            // 「重名时」文字 label 删除（用户 2026-10-15）：两颗互斥按钮自己说清
+            // 「跳过 / 覆盖」，前置标签是废话；可访问性由 aria-label 承担。
+            h('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': t('mcp.importJson.conflict.label') },
+              h('button', { key: 'skip', type: 'button', 'aria-pressed': conflict === 'skip' ? 'true' : 'false', onClick: function () { setConflict('skip') } }, t('mcp.importJson.conflict.skip')),
+              h('button', { key: 'ov', type: 'button', 'aria-pressed': conflict === 'overwrite' ? 'true' : 'false', onClick: function () { setConflict('overwrite') } }, t('mcp.importJson.conflict.overwrite')))) : null,
           rows.some(function (r) { return r.secretCount > 0 }) ? h(Notice, { kind: 'warn', text: t('mcp.importJson.secretHint') }) : null,
           preview,
           result ? h('div', { className: 'dsm-feedback' + (result.ok ? (result.warning ? ' dsm-warning' : '') : ' dsm-error'), role: 'status' },

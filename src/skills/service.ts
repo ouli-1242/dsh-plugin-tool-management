@@ -383,7 +383,7 @@ export function createSkillsService(ctx: any): SkillsService {
         // （否则传了不存在的 root 会收到「技能来源不存在：(空)」这种指错方向的提示）。
         const key = String(args.root || 'dsh')
         const res = await createSkill(
-          { name: args.name, description: args.description, body: args.body },
+          { name: args.name, description: args.description, body: args.body, files: args.files },
           log,
           { root: (await requestRoot(key)) || key },
         )
@@ -456,6 +456,10 @@ export function createSkillsService(ctx: any): SkillsService {
       (args) => write(async () => {
         const res = await importUploadedSkill({ name: args.name, entries: args.entries, zip: args.zip }, log, {
           conflict: args.conflict === 'overwrite' ? 'overwrite' : 'skip',
+          // 上传导入撞名一律退号新增（用户 2026-10-15）：静默跳过会让用户想要的
+          // 那份根本没进来，结果里只多一行"已跳过"。目录导入（skill-import）
+          // 不带这个开关，仍是 skip / overwrite 二选一。
+          dedupe: true,
         })
         // 上传/导入同口径：默认停用。
         const names = res && Array.isArray(res.imported) ? res.imported : (res && res.name ? [res.name] : [])

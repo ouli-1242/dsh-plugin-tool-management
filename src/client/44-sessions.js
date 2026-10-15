@@ -12,7 +12,7 @@
           // 多选集合：勾选的 sessionId。最小 React 支持函数式初值（Set 惰性创建）。
           var selState = React.useState(function () { return new Set() })
           var selected = selState[0], setSelected = selState[1]
-          // 导入对话弹窗：null = 关闭；{ busy, error, result, cwd, pickingDir } = 打开。
+          // 导入对话弹窗：null = 关闭；{ busy, error, result, cwd } = 打开。
           var impState = React.useState(null)
           var imp = impState[0], setImp = impState[1]
           // 导出对话弹窗：null = 关闭；{ busy, error, result, outDir, format, detail, wsFilter, selectedIds } = 打开。
@@ -187,7 +187,7 @@
             reader.readAsText(file)
           }
           function openImportPicker() {
-            setImp({ busy: false, error: null, result: null, cwd: '', pickingDir: false })
+            setImp({ busy: false, error: null, result: null, cwd: '' })
           }
           // ---------- 导出对话：弹窗内选范围/工作区 → 勾选会话 → 写入指定目录 ----------
           function openExportPicker() {
@@ -230,31 +230,6 @@
               else setExp(Object.assign({}, exp, { busy: false, error: (res && res.error) || t('hist.err.export') }))
             }).catch(function () {
               setExp(Object.assign({}, exp, { busy: false, error: t('hist.err.export') }))
-            })
-          }
-          // 把选中的会话批量归档到 History（纳入保留期管理），随后刷新列表与页面。
-          function doArchiveSelected() {
-            var ids = Array.from(exp.selectedIds)
-            if (!ids.length || exp.busy) return
-            setExp(Object.assign({}, exp, { busy: true, error: null, result: null }))
-            apiCall('history-archive-batch', { sessionIds: ids }).then(function (res) {
-              if (res && res.ok) {
-                refresh()
-                return apiCall('history-sessions', {}).then(function (r2) {
-                  setExp(function (prev) {
-                    if (!prev) return prev
-                    return Object.assign({}, prev, {
-                      busy: false,
-                      selectedIds: new Set(),
-                      result: { archived: (res.archived || []).length, failed: (res.failed || []).length },
-                      items: (r2 && r2.ok && Array.isArray(r2.items)) ? r2.items : prev.items,
-                    })
-                  })
-                })
-              }
-              setExp(function (prev) { return prev ? Object.assign({}, prev, { busy: false, error: (res && res.error) || t('hist.err.archive') }) : prev })
-            }).catch(function () {
-              setExp(function (prev) { return prev ? Object.assign({}, prev, { busy: false, error: t('hist.err.archive') }) : prev })
             })
           }
 
@@ -332,6 +307,13 @@
               var wid = exp.wsFilter.slice(3)
               return it.workspaceId === wid && !!data.workspaces[wid]
             })
+          }
+          // 「全选」只看**当前筛出来的**那些（折叠的组也算在里面：折叠不是排除）。
+          var allExportPicked = !!(exp && exportItems.length) && exportItems.every(function (it) { return exp.selectedIds.has(it.sessionId) })
+          function toggleAllExportPicked() {
+            setExp(Object.assign({}, exp, {
+              selectedIds: allExportPicked ? new Set() : new Set(exportItems.map(function (it) { return it.sessionId })),
+            }))
           }
 
           function renderRow(it) {
@@ -475,6 +457,7 @@
               t: t,
               title: t('hist.btn.import'),
               accept: '.jsonl,.json,.md,.markdown,.txt',
+              hint: t('upload.drop.session'),
               busy: imp.busy === true,
               requirement: t('upload.req.session'),
               requirementTitle: [t('upload.requirement.session.1'), t('upload.requirement.session.2'), t('upload.requirement.session.3')].join('\n'),
@@ -482,18 +465,17 @@
               extra: React.createElement('div', null,
                 React.createElement('div', { className: 'dsm-field' },
                   React.createElement('label', { className: 'dsm-label' }, t('hist.import.cwd')),
-                  // 三条路并存：从已登记的工作区挑、浏览一个文件夹、直接粘路径。
+                  // 两条路：从已登记的工作区挑、直接粘路径（用户 2026-10-15：删掉
+                  // 「浏览文件夹」那颗 —— 它和底下的文件拖拽区在 import 语境里都叫
+                  // "选择"，功能重叠；要选没登记过的目录，粘绝对路径即可）。
                   // 标签是 combo 的**兄弟**而不是祖先 —— 嵌套 label 会把点击转给清单里第一项。
                   React.createElement(SceneCombo, {
                     options: importWsOptions, value: imp.cwd || '',
                     placeholder: t('hist.import.cwd.placeholder'), label: t('hist.import.cwd'),
                     browseLabel: t('hist.import.workspace'),
-                    pickFolderLabel: t('hist.import.browse'), pickFolderTitle: t('hist.export.browse'),
                     disabled: imp.busy === true,
                     onChange: function (v) { setImp(Object.assign({}, imp, { cwd: v })) },
-                    onPickFolder: function () { requestHostDirectory(function (path) { setImp(Object.assign({}, imp, { cwd: path })) }, function () { setImp(Object.assign({}, imp, { pickingDir: true })) }) },
                   }),
-                  imp.pickingDir ? React.createElement(DirPickerModal, { key: 'imp-dir-picker', title: t('dir.title'), initial: String(imp.cwd || ''), closeLabel: t('btn.close'), onClose: function () { setImp(Object.assign({}, imp, { pickingDir: false })) }, onPick: function (path) { setImp(Object.assign({}, imp, { cwd: path, pickingDir: false })) } }) : null,
                   importWsOptions.length ? null : React.createElement('p', { className: 'dsm-help' }, t('hist.import.workspace.none')))),
               onClose: function () { setImp(null) },
               onSubmit: function (entries, files) { doImportFile(files[0]) },
@@ -562,14 +544,12 @@
               // ↑ 最后那个括号收掉 .dsm-export-form：结果条与动作行留在表单外面，才能常驻不动。
               exp.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, String(exp.error)) : null,
               exp.result ? React.createElement('div', { className: 'dsm-feedback' },
-                exp.result.exported
-                  ? (t('hist.result.exported', { count: (exp.result.exported || []).length, dir: String(exp.outDir || '').trim() })
-                    + ((exp.result.skipped && exp.result.skipped.length) ? t('hist.result.skipped', { count: exp.result.skipped.length, ids: exp.result.skipped.map(function (s) { return s.sessionId }).join('、') }) : ''))
-                  : (t('hist.result.archived', { count: exp.result.archived })
-                    + (exp.result.failed ? t('hist.result.archiveFailed', { count: exp.result.failed }) : ''))) : null,
+                t('hist.result.exported', { count: (exp.result.exported || []).length, dir: String(exp.outDir || '').trim() })
+                + ((exp.result.skipped && exp.result.skipped.length) ? t('hist.result.skipped', { count: exp.result.skipped.length, ids: exp.result.skipped.map(function (s) { return s.sessionId }).join('、') }) : '')) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('span', { className: 'dsm-hist-batch-count' }, t('hist.selected', { count: exp.selectedIds.size })),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: exp.busy || !exp.selectedIds.size, onClick: doArchiveSelected, title: t('hist.btn.archiveSelected.title') }, t('hist.btn.archiveSelected')),
+                // 「已选 N 项」不占一栏：右边那颗导出键本身就带着份数（导出 N 个会话），
+                // 与本页回收站那条批量条同一口径。「归档所选」换成「全选」（用户 2026-10-16）。
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: exp.busy || !exportItems.length, onClick: toggleAllExportPicked }, bulkPair(allExportPicked ? t('hist.deselectAll') : t('hist.selectAll'), allExportPicked ? t('hist.selectAll') : t('hist.deselectAll'))),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: exp.busy || !exp.selectedIds.size || !String(exp.outDir || '').trim(), onClick: doExport }, exp.busy ? t('hist.export.busy') : t('hist.btn.exportSelected', { count: exp.selectedIds.size })))) : null,
             modal && modal.type === 'error' ? React.createElement(Modal, { key: 'err', className: 'dsm-modal-sm', title: t('hist.error.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, String(modal.message || t('hist.error.unknown')))) : null)

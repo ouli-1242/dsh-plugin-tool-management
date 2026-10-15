@@ -233,6 +233,8 @@ export interface RestoreOptions extends WriteOptions {
 export interface ImportOptions {
   conflict?: unknown;
   dryRun?: unknown;
+  /** 撞名时退号新增（`foo` → `foo-1`）而非跳过 / 覆盖；上传导入恒定带 true（用户 2026-10-15）。 */
+  dedupe?: unknown;
   renameOptions?: RenameOptions;
 }
 
@@ -300,6 +302,8 @@ export interface ImportPending {
   source: string;
   isDir: boolean;
   dest: string;
+  /** 退号前的原名（撞名自动改名时记，落盘后据此同步 frontmatter 声明名）。 */
+  renamedFrom?: string;
 }
 
 /** 与目标同名的既存条目。 */

@@ -90,7 +90,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
   // 已在上面标出胜出者），再走 `skill-detail` 读那一份 —— 读到的永远是目录列出来的那一份。
   register(defineTool({
     name: 'skill_manager_read',
-    description: 'Read one skill\'s full SKILL.md body by name — what the「当前技能目录」reminder deliberately leaves out (it has names and summaries only). Resolves name collisions the same way, so you get the copy actually in effect; pass root only to inspect a specific (e.g. shadowed) source. Not sent when the official `skill` tool is mounted — use that instead.',
+    description: 'Read one skill\'s full SKILL.md body by name — what the「当前技能目录」reminder deliberately leaves out (it has names and summaries only). Also lists the other files living in that skill folder (references/, scripts/), which the body often points at. Resolves name collisions the same way, so you get the copy actually in effect; pass root only to inspect a specific (e.g. shadowed) source. Not sent when the official `skill` tool is mounted — use that instead.',
     parameters: {
       name: { type: 'string', required: true, description: 'Skill name, exactly as it appears in the catalog (kebab-case).' },
       root: { type: 'string', description: 'Source root key (dsh/hub/agents/codex/claude, a project key, or a custom one). Default: the winning copy of this name.' },
@@ -147,10 +147,24 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       const dup = hits.filter((hit) => !hit.shadowedBy).length > 1
         ? hits.filter((hit) => !hit.shadowedBy).map((hit) => hit.rootKey).filter((k) => k !== picked.rootKey)
         : []
+      // 附件清单（2026-10-16）：技能正文常写着「详见 references/xxx.md」，而这一条工具是模型
+      // 读技能的唯一入口 —— 不列出来，它就会因为"看到的目录里没有那个文件"而凭空猜内容。
+      // 只报名与大小、不报正文：正文要走宿主文件工具，这里塞进 transcript 太重。
+      const attachments = Array.isArray(detail.attachments) ? detail.attachments : []
+      const shown = attachments.slice(0, 20)
+      const attLine = shown.length
+        ? 'Attachments in this skill folder: ' + shown
+          .map((a: any) => String(a.path) + ' (' + Number(a.size || 0) + ' bytes)')
+          .join(', ')
+          + (attachments.length > shown.length ? ' … ' + (attachments.length - shown.length) + ' more' : '')
+          + (detail.attachmentsTruncated ? ' (listing capped at 200)' : '')
+          + ' — read them with a file tool if the body refers to one\n'
+        : ''
       const header = 'Skill ' + wanted + ' · source ' + picked.rootKey + (marks.length ? ' (' + marks.join('; ') + ')' : '') + '\n' +
         'Path: ' + (detail.path || picked.path || '(unknown)') + '\n' +
         'Description: ' + String(detail.description || '(none)').replace(/\s+/g, ' ').trim() + '\n' +
         (dup.length ? 'Other callable copies with the same name: ' + dup.join(', ') + ' (this one wins; read them only to compare)\n' : '') +
+        attLine +
         '--- SKILL.md body ---\n'
       // 注入边界：正文读进来就永久留在这一轮的 transcript 里，压制型预设下目录也可能不在 ——
       // 与 skill_manager_list 同一句说明，别让模型以为"读过就等于技能开着"。

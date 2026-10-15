@@ -1058,10 +1058,12 @@
       // 各自就是一个源，所以能各挂各的）+ 一句"重启才生效"。
       const slashParts = []
       if (slash) {
-        // 行末那枚标签是"本次启动真挂上了没"：开关值说的是"要不要"，挂没挂上只有浏览器知道
+        // 名字右边那枚标签是"本次启动真挂上了没"：开关值说的是"要不要"，挂没挂上只有浏览器知道
         // （服务端看不到源注册的结果），两件事不能合成一句 —— 合了必有一句是假的。标签只说
         // 已生效 / 未生效，**为什么**没生效挂在悬停那句里（重名抢占 / 宿主没这个服务 / 还没就绪，
         // 三种的处置完全不同）—— 见 48-slash.js 的 setSlashMount。
+        // 位置（用户裁定 2026-10-15）：跟在名字右边，不摆开关旁 —— 状态说的是"这一段入口
+        // 挂上没"，跟着名字读；与 switch 并排会被读成"开关自己的状态"，而开关只说要不要。
         const liveTag = function (key) {
           const state = slashMountStateOf(key)
           const on = state === 'registered'
@@ -1075,17 +1077,13 @@
             React.createElement('span', null, t('compat.slash.title')),
             React.createElement('span', { className: 'dsm-seg-group-line' })),
           // 开关行（REDESIGN §5.2 SettingsRow + Switch，切片五换装）：名字+说明在左，
-          // 开关与「本次启动真挂上了没」的标签在右。
+          // 开关在右；「本次启动真挂上了没」的标签在名字右边（tag，见上）。
           React.createElement(SettingsRow, { key: 'slash-tools', name: t('compat.slash.tools'), desc: t('compat.slash.tools.desc'),
-            control: [
-              React.createElement(Switch, { key: 'sw', on: slash.tools !== false, label: t('compat.slash.tools'), onClick: function () { saveSlash({ tools: slash.tools === false }) } }),
-              liveTag('tools'),
-            ] }),
+            tag: liveTag('tools'),
+            control: React.createElement(Switch, { key: 'sw', on: slash.tools !== false, label: t('compat.slash.tools'), onClick: function () { saveSlash({ tools: slash.tools === false }) } }) }),
           React.createElement(SettingsRow, { key: 'slash-quick', name: t('compat.slash.quick'), desc: t('compat.slash.quick.desc'),
-            control: [
-              React.createElement(Switch, { key: 'sw', on: slash.quickPrompts !== false, label: t('compat.slash.quick'), onClick: function () { saveSlash({ quickPrompts: slash.quickPrompts === false }) } }),
-              liveTag('quickPrompts'),
-            ] }))
+            tag: liveTag('quickPrompts'),
+            control: React.createElement(Switch, { key: 'sw', on: slash.quickPrompts !== false, label: t('compat.slash.quick'), onClick: function () { saveSlash({ quickPrompts: slash.quickPrompts === false }) } }) }))
       }
       const injectParts = []
       if (inject) {

@@ -13,10 +13,14 @@ npm-debug.log*
 AGENTS.md
 review/
 
+# 演示视频原片只留本地：README 的内联播放器走 GitHub 附件（见 issue #3），仓库不驮这几十 MB
+docs/videos/
+
 # scripts/ 只跟踪构建与体检用到的脚本，其余是本地工具
 scripts/*
 !scripts/sync-client.mjs
 !scripts/check-i18n.mjs
+!scripts/check-css-chain.mjs
 !scripts/host-deps.mjs
 !scripts/doctor.mjs
 !scripts/sync-profile.mjs

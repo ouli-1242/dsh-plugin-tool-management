@@ -88,6 +88,8 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 会停在启用态 —— 是写不是读。（0.6.0 / 0.7.0 各有漏列前科，见文件头。）
   'mcpm-tools-refresh': { write: true },
   'mcpm-tools': { readonly: true },
+  // 把粘贴的补丁片段读成条目：纯文本运算，不读盘也不写盘（客户端在浏览器里解析不了 YAML）。
+  'mcpm-parse-patch': { readonly: true },
 
   // ── 技能域（22，含内联的 skill-open）───────────────────────────────────────
   'skill-state': { annotatesLock: true },
@@ -210,16 +212,14 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'quickprompt-trash-restore': { write: true, frozen: true },
   'quickprompt-trash-delete': { write: true, frozen: true },
 
-  // ── 历史会话域（16）────────────────────────────────────────────────────────
+  // ── 历史会话域（14）────────────────────────────────────────────────────────
   'history-list': { readonly: true },
   'history-sessions': { readonly: true },
   'history-export-defaults': { readonly: true },
   'history-retention-get': { readonly: true },
   'dir-list': { readonly: true },
-  'history-archive': { write: true },
   'history-unarchive': { write: true },
   'history-delete': { write: true },
-  'history-archive-batch': { write: true },
   'history-unarchive-batch': { write: true },
   'history-delete-batch': { write: true },
   'history-retention-set': { write: true },

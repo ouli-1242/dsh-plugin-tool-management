@@ -4,10 +4,13 @@
 // 整张表上（见 index.ts）。
 //
 // 本域的 op 名：history-list / history-sessions / history-export-defaults / dir-list /
-// history-archive / history-archive-batch / history-unarchive / history-delete /
+// history-unarchive / history-delete /
 // history-unarchive-batch / history-delete-batch / history-workspace-register /
 // history-import / bundle-export / history-export / history-retention-get /
 // history-retention-set。
+//
+// 归档（archive）不在这里：那是宿主的原生入口（官方侧栏），本插件只经 `domain/changed`
+// 事件同步归档时刻（见 src/sessions/bridge.ts），不替用户发起归档。
 
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
@@ -38,7 +41,6 @@ interface SessionsRegistryLike {
    */
   requireState?(): { workspaceIds: string[]; archivedSessionIds: string[] }
   listStoredHeaders?(): Promise<Array<{ id?: string; cwd?: string; createdAt?: number; origin?: string }>>
-  archiveSession(sessionId: string): Promise<void>
   unarchiveSession(sessionId: string): Promise<{ archivedSessionIds: string[] }>
   deleteSession(sessionId: string): Promise<{ deleted: true; keptUnarchivedDescendants?: string[] }>
   unarchiveSessions?(target: SessionsBatchTarget): Promise<{ unarchivedSessionIds: string[]; archivedSessionIds: string[] }>
@@ -105,7 +107,7 @@ async function xdgDesktopDir(): Promise<string | undefined> {
 export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any) => Promise<any>> {
   return {
     // History（归档会话管理）ops。只读：history-list / history-retention-get；
-    // 写：history-archive / history-unarchive / history-delete / history-retention-set。
+    // 写：history-unarchive / history-delete / history-retention-set。
     // workspaceRegistry 缺失（补丁未生效）时返回明确错误，不崩页面。
     'history-list': async () => {
       const registry = deps.getSessionsRegistry()
@@ -233,28 +235,6 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
       } catch (e) {
         return { ok: false, error: deps.message(e) }
       }
-    },
-    'history-archive': async (args: any) => {
-      const registry = deps.getSessionsRegistry()
-      if (!registry) return { ok: false, error: '归档服务未挂载' }
-      const sessionId = String((args && args.sessionId) || '').trim()
-      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-      try { await registry.archiveSession(sessionId); return { ok: true, sessionId } } catch (e) { return { ok: false, error: deps.message(e) } }
-    },
-    // 批量归档（导出弹窗「归档所选」）：把选中的会话收进 History，纳入保留期管理。
-    'history-archive-batch': async (args: any) => {
-      const registry = deps.getSessionsRegistry()
-      if (!registry) return { ok: false, error: '归档服务未挂载' }
-      const rawIds = (args && args.sessionIds) || []
-      const ids = Array.isArray(rawIds) ? rawIds.map((s: unknown) => String(s).trim()).filter(Boolean) : []
-      if (!ids.length) return { ok: false, error: '请至少选择一个会话' }
-      const archived: string[] = []
-      const failed: Array<{ sessionId: string; error: string }> = []
-      for (const sessionId of ids) {
-        try { await registry.archiveSession(sessionId); archived.push(sessionId) }
-        catch (e) { failed.push({ sessionId, error: deps.message(e) }) }
-      }
-      return { ok: true, archived, failed }
     },
     'history-unarchive': async (args: any) => {
       const registry = deps.getSessionsRegistry()
