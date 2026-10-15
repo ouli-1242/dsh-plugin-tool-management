@@ -526,8 +526,11 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-border-l3)}
 .dsm-dot-ok{background:var(--dsw-alias-state-success-primary)}
 .dsm-dot-warn{background:var(--dsm-warn)}
-/* （.dsm-dot-busy 与 @keyframes dsm-dot-pulse 已随 MCP 体检功能一起删除，2026-10-12：
-   "闪动的点"只有体检的进行中态用过，状态点现在是静态的。） */
+/* 启动进行中的呼吸点（2026-10-15 用户要求加回：服务启动要数秒，原来只有一个静态灰点，
+   "正在启动"只能靠 title 说出来。2026-10-12 曾以"闪动的点只有体检用"为由删过一次，
+   这次是 MCP 启动相位自己要 —— 全页只有 phase 非 active 时用它，不会到处闪）。 */
+.dsm-dot-busy{background:var(--dsw-alias-state-business-primary);animation:dsm-dot-pulse 1.1s ease-in-out infinite}
+@keyframes dsm-dot-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.8)}}
 /* （.dsm-inspect / -line / -warn 三条已随 MCP 体检功能一起删除，2026-10-12。） */
 
 /* 「最近改动」流水（0.15.0 B2）：时间列固定窄栏，改动列吃剩余宽度，来源徽章贴在行尾。 */
@@ -658,6 +661,10 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 /* 记忆「形态」二选一：分段按钮（flat / bundle 互斥）。两个值摊开、点击即切，不依赖下拉 ——
    下拉在弹窗底部会被滚动容器裁掉（用户 2026-10-10 截图）。 */
 .dsm-form-seg{display:inline-flex;gap:2px;padding:3px;border:0;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-interactive-bg-hover)}
+/* 字段内的分段控件收回内容宽度（用户 2026-10-15：提示词类型 / 形态两条被
+   .dsm-field 的 align-items:stretch 拉满整行，过长）。flex 子项会被块状化，
+   inline-flex 在列向导里挡不住 stretch —— 显式 align-self + fit-content 才保险。 */
+.dsm-field>.dsm-form-seg{align-self:flex-start;width:fit-content}
 .dsm-form-seg button{min-height:24px;padding:0 12px;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}
 .dsm-form-seg button:hover{color:var(--dsw-alias-label-primary)}
 .dsm-form-seg button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}

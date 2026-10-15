@@ -312,16 +312,16 @@
           // 只展开、不收起 —— 两个方向（全选 / 取消全选）都要能看见结果，收起是点卡片头的事。
           if (bulk.targets.length) acts.push(h("button", { key: "all", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-bulk", disabled: busy || anyLocked, title: t("source.bulk.title"), onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: true })); submitBulk(bulk.targets, !bulk.on, root.key); } }, bulkPair(bulk.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulk.on ? t("bulk.selectAll") : t("bulk.unselectAll"))));
           if (showSwitch) {
-            // 「移除来源」只留图标（用户裁定 2026-09-17）：它是低频的破坏性操作，却和「全选」
-            // 并列、还带红框描边 —— 于是整行的视觉重心落在它身上，四字宽度也占地方。
-            // 图标按钮必须自带 title + aria-label（没有可见文字）；点击照旧弹确认弹窗，
-            // 那里仍是带文字的红色「移除来源」，破坏性操作的说明没有丢。
-            if (root.removable === true) acts.push(h("button", { key: "rm", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger dsm-btn-icon", disabled: busy || anyLocked, title: t("btn.source.remove.title"), "aria-label": t("btn.source.remove.title"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, h(TrashIcon, { size: 14 })));
             // 开关来源时**顺带把卡片展开**（用户裁定 2026-09-17），与旁边那颗「全选」同口径：
             // 启停的结果就是下面这些技能行（开启 = 整目录可用了，关闭 = 逐行变停用），卡片收着
             // 的话点完只剩标签从「已停用」变「已启用」，目录里到底有什么、哪些真的可用了看不见。
             // 只展开、不收起 —— 两个方向都要能看见结果，收起仍然是点卡片头那一行的事。
             acts.push(h(Switch, { key: "sw", on: root.enabled, disabled: busy || anyLocked, label: t("source.toggle") + " " + displayName, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: true })); (root.enabled ? post("/source-disable", { root: root.key }, "done.disabled", { name: displayName }) : post("/source-enable", { root: root.key }, "done.enabled", { name: displayName })).then(function () { dropUndoForRoot(root.key, displayName); }); } }));
+            // 「移除来源」带图标 + 文字，放在开关**右侧**（用户裁定 2026-10-15，推翻 2026-09-17
+            // 「只留图标」的裁定）：纯垃圾桶图标会被读成"删除"，与真实语义（停读这个来源，
+            // 源文件不动、之后可在回收站里恢复）不符；破坏性操作从此也不占常用位置。
+            // 点击照旧弹确认弹窗，那里仍是红色「移除来源」，破坏性操作的说明没有丢。
+            if (root.removable === true) acts.push(h("button", { key: "rm", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy || anyLocked, title: t("btn.source.remove.title"), "aria-label": t("btn.source.remove"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, h(TrashIcon, { size: 14 }), t("btn.source.remove")));
           }
           return acts.length ? h("span", { className: "dsm-source-actions" }, acts) : null;
         })()), open ? h("div", { className: "dsm-source-body" }, filtered.length ? rankedFirst(skillRank, function (skill) { return skill.key || (root.key + "/" + skill.name) }, filtered, function (skill) { return isSkillEnabled(skill); }).map(function (skill) { return renderSkill(root, skill); }) : h("div", { className: "dsm-empty" }, dq ? t("empty.search") : t("empty.source"))) : null);

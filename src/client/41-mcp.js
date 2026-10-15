@@ -258,6 +258,26 @@
               refresh()
             }).then(() => setBusy(null))
           }
+          /**
+           * 重连一台服务（`mcpm-restart`）：服务端先把它临时停用、等 loader 摘掉、再按重启前的
+           * 状态恢复 —— 最长约 11 秒，所以**不走 `run()`**（那条路只服务"一按就回"的写操作，
+           * 也没有地方放 warnings）。启用状态不变，这正是"重启"与"关掉再打开"的区别。
+           * 只有驻留在补丁文件里的条目可重连：loader 行没有可写的 id/level，调用点据此置灰。
+           */
+          const restartRow = (row) => {
+            setMsg(null)
+            setBusy(row.id + ':restart')
+            apiCall('mcpm-restart', { id: row.id, level: row.level }).then((res) => {
+              if (res && res.ok === false) {
+                setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+              } else if (res && res.warnings && res.warnings.length) {
+                setMsg({ kind: 'warn', text: mt('mcp.msg.restartWarn', { warning: res.warnings.join('；') }) })
+              } else {
+                setMsg({ kind: 'ok', text: mt('mcp.msg.restarted', { name: row.serverName }) })
+              }
+            }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => { setBusy(null); refresh() })
+          }
+
           const toggleReveal = () => {
             const next = !reveal
             setReveal(next)
@@ -356,6 +376,31 @@
             }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
 
+          /**
+           * 详情页里"现在去问一次工具清单"（`mcpm-tools-refresh`）：对还没有缓存的服务器，
+           * 服务端是真的**临时启动一次**去抓工具名，拿到后恢复原启用状态 —— 所以它慢、也可能失败。
+           * 详情那节的「工具：N」平时只读缓存，这是唯一的主动刷新入口；在途响应按打开详情时的
+           * 序号作废（换了一台服务器就不该把旧结果写进去）。
+           */
+          const refreshTools = () => {
+            const row = detail && detail.row
+            if (!row) return
+            const seq = detailSeqRef.current
+            setMsg(null)
+            setBusy('tools:refresh')
+            apiCall('mcpm-tools-refresh', { serverName: row.serverName }).then((res) => {
+              if (seq !== detailSeqRef.current) return
+              if (res && res.ok === false) {
+                setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+                return
+              }
+              const tools = (res && res.tools) || []
+              setDetail((prev) => (prev === null ? prev : Object.assign({}, prev, { loading: false, error: null, tools: tools })))
+              if (res && res.warning) setMsg({ kind: 'warn', text: mt('mcp.msg.warn', { warning: res.warning }) })
+              else setMsg({ kind: 'ok', text: mt('mcp.msg.toolsRefreshed', { count: tools.length }) })
+            }).catch((e) => { if (seq === detailSeqRef.current) setMsg({ kind: 'err', text: errMsg(e) }) }).then(() => setBusy(null))
+          }
+
           const rows = state.rows || []
           // 工具数的三个口径（与 src/mcp/state-section.ts 同源，理由见那里的文件头）：
           //   liveToolCount        当前真实注册了几个工具（**不含**「已知工具」缓存）
@@ -424,7 +469,7 @@
             if (!row.live) return { text: mt('mcp.live.notLoaded'), tone: 'muted' }
             if (row.live.phase === 'failed') return { text: mt('mcp.live.failed'), tone: 'bad' }
             if (!row.live.enabled) return { text: mt('mcp.live.stopped'), tone: 'muted' }
-            if (row.live.phase && row.live.phase !== 'active') return { text: mt('mcp.live.loading'), tone: 'muted' }
+            if (row.live.phase && row.live.phase !== 'active') return { text: mt('mcp.live.loading'), tone: 'busy' }
             // 判"有没有可用工具"只看**真实注册**的那个数（缓存不算）。
             if (liveEnabledOf(row) === 0) return { text: mt('mcp.live.noTools'), tone: 'warn' }
             return { text: mt('mcp.live.running'), tone: 'ok' }
@@ -644,6 +689,7 @@
             React.createElement('div', { className: 'dsm-detail-section' },
               React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
                 mt('mcp.detail.config'),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', title: mt('mcp.btn.restart.title'), disabled: busy !== null || detail.row.level === 'loader', onClick: () => restartRow(detail.row) }, mt('mcp.btn.restart')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: toggleReveal }, reveal ? mt('mcp.detail.hideSecret') : mt('mcp.detail.showSecret'))),
               React.createElement('div', { className: 'dsm-fm' },
                 configRow(mt('mcp.detail.entryId'), detail.row.id),
@@ -675,7 +721,9 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save')))),
             React.createElement('div', { className: 'dsm-detail-section' },
-              React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length })),
+              React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
+                mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length }),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || detail.loading === true, onClick: refreshTools }, mt('mcp.detail.toolsRefresh'))),
               toolListNode))
 
 
