@@ -17,6 +17,7 @@ review/
 scripts/*
 !scripts/sync-client.mjs
 !scripts/check-i18n.mjs
+!scripts/check-css-chain.mjs
 !scripts/host-deps.mjs
 !scripts/doctor.mjs
 !scripts/sync-profile.mjs
