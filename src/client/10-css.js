@@ -505,14 +505,14 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-toast-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
 .dsm-toast-err{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 
-/* MCP JSON 导入预览（0.15.0 A1）：勾选 | 主体 | 状态三列。非法行只把「问题」那一行标红，
+/* MCP JSON 导入预览（0.15.0 A1）：勾选 | 主体 | 状态三列；表头 label 已删
+   （用户 2026-10-15），勾选框随行内容垂直居中。非法行只把「问题」那一行标红，
    名字净化 / 字段忽略这类是配置事实，走中性灰 —— 黄色在这里留给不了任何东西（琥珀语义）。 */
-.dsm-imp-head,.dsm-imp-row{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:start;gap:8px}
-.dsm-imp-head{padding:0 4px 4px;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dsm-imp-row{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:8px}
 .dsm-imp-list{display:flex;flex-direction:column;gap:4px;max-height:320px;padding:4px 4px 0 0;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l2) transparent}
 .dsm-imp-row{padding:8px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1);font-size:12px}
 .dsm-imp-row.dsm-imp-bad{border-color:var(--dsw-alias-state-error-primary)}
-.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:4px 0 0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
+.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-imp-row input[type=checkbox]:disabled{cursor:not-allowed}
 .dsm-imp-main{display:flex;min-width:0;flex-direction:column;gap:4px}
 .dsm-imp-name{display:flex;align-items:center;flex-wrap:wrap;gap:4px;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600}
@@ -521,11 +521,10 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-imp-err{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px}
 .dsm-imp-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .dsm-imp-foot{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
-/* 导入弹窗重名处理行（用户 2026-10-15：从预览底部上移到预览之前，导入前就看得见）；
-   排他二选一用「提示词类型」同款分段控件（dsm-form-seg，aria-pressed 表选中），
-   label 与控件横排一行，不再堆一列 radio。 */
+/* 导入弹窗重名处理行（用户 2026-10-15 两连）：从预览底部上移到预览之前，导入前
+   就看得见；排他二选一用「提示词类型」同款分段控件（dsm-form-seg，aria-pressed
+   表选中），「重名时」文字 label 删除（同类第三例：设置页表头 label 也删）。 */
 .dsm-imp-conflict{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}
-.dsm-imp-conflict-label{color:var(--dsw-alias-label-secondary);font-size:12px}
 .dsm-imp-count{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* 体检状态点（0.15.0 B1）与行内检查项。点只有 8px，靠 title 说清含义；
@@ -603,7 +602,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    detail-head / composer-chips，属于 #7）与半残的 tabs / switch 组。 */
 .dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
 .dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
-.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:4px 0 0;cursor:pointer}
+.dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer}
 .dsm-select-menu button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px;}
 .dsm-btn-lock:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-btn-quiet:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
@@ -672,7 +671,11 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-field>.dsm-form-seg{align-self:flex-start;width:fit-content}
 .dsm-form-seg button{min-height:24px;padding:0 12px;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}
 .dsm-form-seg button:hover{color:var(--dsw-alias-label-primary)}
-.dsm-form-seg button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}
+/* 选中态加深（用户 2026-10-15）：从 bg-layer-2 浅底改为 button-primary-fill 实心 +
+   primary-foreground 文字，与主按钮同色同口径 —— 浅色底压在 interactive-bg-hover
+   容器里对比度不足，实心后才看得出「按下去的是这颗」。全局控件，提示词类型/形态、
+   MCP 导入重名三处使用点一并生效。 */
+.dsm-form-seg button[aria-pressed="true"]{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font-weight:600}
 /* （.dsm-select-up 这条已删：菜单 2026-10-12 改成 position:fixed，上下方向与坐标
    全部由 SourceSelect 内联算 —— 原来的 .dsm-select-up 上弹规则已被内联 style 覆盖。） */
 

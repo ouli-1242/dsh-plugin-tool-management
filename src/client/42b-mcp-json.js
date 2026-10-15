@@ -198,10 +198,9 @@
         : !rows.length ? h('div', { className: 'dsm-empty' }, t('mcp.importJson.empty'))
         : h(react.Fragment, null,
             rows.length > 20 ? h('div', { className: 'dsm-help' }, t('mcp.importJson.bigBatch', { count: rows.length })) : null,
-            h('div', { className: 'dsm-imp-head' },
-              h('span', null, ''),
-              h('span', null, t('mcp.importJson.preview.name')),
-              h('span', null, t('mcp.importJson.preview.state'))),
+            // 预览表头整行删除（用户 2026-10-15）：「服务名与连接参数」「状态」两个
+            // 表头 label 是给三列网格看的，删掉后每行自带 transport 标签与端点，
+            // 信息不丢；勾选框随之改为随行内容垂直居中（.dsm-imp-row align-items:center）。
             h('div', { className: 'dsm-imp-list' }, rows.map(function (r) {
               var cf = conflictOf(r)
               var endpoint = r.transport === 'stdio' ? [r.command].concat(r.args).join(' ') : r.url
@@ -226,7 +225,7 @@
 
       return h(Modal, { className: 'dsm-modal-lg', title: t('mcp.importJson.title'), closeLabel: t('btn.close'), onClose: props.onClose },
         h('div', { className: 'dsm-form' },
-          h('p', { className: 'dsm-desc' }, t('mcp.importJson.hint')),
+          h('p', { className: 'dsm-help' }, t('mcp.importJson.hint')),
           h('textarea', {
             className: 'dsm-control dsm-textarea-md', rows: 12, value: text, spellCheck: false,
             placeholder: MCP_IMPORT_TEMPLATE, onChange: function (e) { setText(e.target.value) },
@@ -239,7 +238,8 @@
           // 脚下的二选一，导入前根本看不见；radio 换成「提示词类型」同款分段控件 ——
           // 排他二选一的正解控件，恒有一颗按下，没有「都不选」这一态。
           rows.length ? h('div', { className: 'dsm-imp-conflict' },
-            h('span', { className: 'dsm-imp-conflict-label' }, t('mcp.importJson.conflict.label')),
+            // 「重名时」文字 label 删除（用户 2026-10-15）：两颗互斥按钮自己说清
+            // 「跳过 / 覆盖」，前置标签是废话；可访问性由 aria-label 承担。
             h('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': t('mcp.importJson.conflict.label') },
               h('button', { key: 'skip', type: 'button', 'aria-pressed': conflict === 'skip' ? 'true' : 'false', onClick: function () { setConflict('skip') } }, t('mcp.importJson.conflict.skip')),
               h('button', { key: 'ov', type: 'button', 'aria-pressed': conflict === 'overwrite' ? 'true' : 'false', onClick: function () { setConflict('overwrite') } }, t('mcp.importJson.conflict.overwrite')))) : null,
