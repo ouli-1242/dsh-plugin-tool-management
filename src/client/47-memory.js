@@ -33,7 +33,7 @@
           var editor = es[0], setEditor = es[1]
           var ups = useUndoState()
           var undo = ups[0], setUndo = ups[1], dismissUndo = ups[2]
-          var imps = React.useState('')
+          var imps = React.useState('global')
           var importScene = imps[0], setImportScene = imps[1]
           // 新建场景弹窗与场景建/删已移至「场景」页（ScenesPage）。
           // 记忆回收站：true = 打开本页那一个回收站（42-shared-ui.js 的 TrashModal）。
@@ -615,7 +615,7 @@
               ],
               actions: [
                 React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: busy || anyLocked, onClick: function () { openCreate(sceneFilter || '') } }, t('memory.btn.new')),
-                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setImportScene(''); setModal({ type: 'import' }) } }, t('memory.import')),
+                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setImportScene('global'); setModal({ type: 'import' }) } }, t('memory.import')),
                 React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !exportableRules.length, onClick: function () { setResult(null); setExportState({ busy: false, result: null }) } }, t('export.memories')),
                 // 「全选」从工具条搬到页头、紧挨回收站左侧（用户 2026-10-12：「全选移到回收站
                 // 旁边」）。它管的是列表，但和「回收站」一样是**整页范围**的动作，跟其余页头键
@@ -661,23 +661,22 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('memory.btn.delete.confirm')))) : null,
             modal && modal.type === 'import' ? React.createElement(ImportModal, {
-              key: 'mimp', t: t, title: t('memory.import.title'), busy: busy,
+              key: 'mimp', t: t, title: t('memory.import.title'), busy: busy, hint: t('upload.drop.mzip'),
               requirement: t('upload.req.mdzip'),
               requirementTitle: [t('upload.requirement.memory.1'), t('upload.requirement.memory.2'), t('upload.requirement.memory.3'), t('upload.requirement.memory.4')].join('\n'),
-              // 「导入到场景」仍然用 SceneCombo（用户 2026-10-12：「应该是选择场景的样子，
-              // 现在只能手动填写」）—— **别和记忆编辑器的「场景」混为一谈**：那边 2026-10-14
-              // 改成了只能选（宿主 rules-create 要求场景已存在），这里改不得，因为
-              // `rules-import` 本来就会为引用的目录名补出场景记录（回传 `scenes`，界面用
-              // `memory.import.scenesCreated` 如实告知）。少了这个入口，用户就得先跑一趟
-              // 场景页才能导入一个全新场景的记忆。
-              extra: React.createElement('label', { className: 'dsm-field' },
+              // 「导入到场景」**只能选**（用户 2026-10-15：手输入口去掉；此前用的是可手输的
+              // SceneCombo）。代价说清楚：`rules-import` 本来会为引用的目录名补出场景记录
+              // （回传 `scenes`，界面用 `memory.import.scenesCreated` 如实告知），去掉手输之后
+              // 要导入到一个全新场景，得先去「场景」页把它建出来。
+              // 默认「全局」：`sceneLabel` 已把保留场景 global 映成「全局」，选项里排最前 ——
+              // 也就是原来"留空 = 全局"那条语义，只是现在看得见、点得着。选项剔掉 `''`
+              // （「未归属场景」那个游离桶）：那不是"新记忆该去的地方"（与编辑器同一口径）。
+              extra: React.createElement('div', { className: 'dsm-field' },
                 React.createElement('span', { className: 'dsm-label' }, t('memory.import.scene')),
-                React.createElement(SceneCombo, {
-                  options: sceneChoices,
+                React.createElement(SourceSelect, {
+                  options: sceneChoices.filter(function (o) { return o.value !== '' }),
                   value: importScene,
-                  placeholder: t('memory.scene.global.hint'),
-                  browseLabel: t('memory.scene.browse'),
-                  label: t('memory.import.scene'),
+                  ariaLabel: t('memory.import.scene'),
                   disabled: busy,
                   onChange: setImportScene,
                 })),

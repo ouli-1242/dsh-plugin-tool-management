@@ -622,9 +622,19 @@
                 React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.serverName')),
                 React.createElement('input', { className: 'dsm-control', value: formModal.serverName, placeholder: 'e.g. github', onChange: setFormField('serverName') }),
                 React.createElement('span', { className: 'dsm-help' }, mt('mcp.field.serverName.hint'))),
-              React.createElement('label', { className: 'dsm-field' },
+              // 传输方式用分段控件而不是下拉（用户 2026-10-15）：只有 stdio /
+              // streamable-http 两个互斥值，下拉要多点一下才能看见全部选项，
+              // 且选中态只占一行里的一小条。与「重名处理」「提示词类型」同款。
+              React.createElement('div', { className: 'dsm-field' },
                 React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.transport')),
-                React.createElement(SourceSelect, { value: formModal.transport, options: MCP_TRANSPORT_OPTIONS, onChange: (value) => setFormValue('transport', value) })),
+                React.createElement('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': mt('mcp.field.transport') },
+                  MCP_TRANSPORT_OPTIONS.map(function (o) {
+                    return React.createElement('button', {
+                      key: o.value, type: 'button',
+                      'aria-pressed': formModal.transport === o.value ? 'true' : 'false',
+                      onClick: function () { setFormValue('transport', o.value) },
+                    }, o.label);
+                  }))),
               React.createElement('label', { className: 'dsm-field' },
                 React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.level')),
                 React.createElement(SourceSelect, {
@@ -1549,7 +1559,7 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn ' + (applyConfirm.remove || (applyConfirm.unapply && unapplyRemoves) ? 'dsm-btn-danger' : ''), disabled: busy !== null, onClick: function () { if (applyConfirm.remove) doRemove({ id: applyConfirm.id }); else if (applyConfirm.unapply) doUnapply(); else doApply(applyConfirm.id) } }, applyConfirm.remove ? t('agm.btn.confirmRemove') : (applyConfirm.unapply ? (unapplyRemoves ? t('agm.btn.confirmUnapplyRemove') : t('agm.btn.confirmUnapply')) : t('agm.btn.confirmApply'))))) : null,
             importOpen ? React.createElement(ImportModal, {
-              key: 'imp', t: t, title: t('agm.btn.import'), accept: '.md',
+              key: 'imp', t: t, title: t('agm.btn.import'), accept: '.md', hint: t('upload.drop.prompt'),
               busy: importBusy, result: importResult,
               // 类型选择放在弹窗顶部（`extra` 槽）：一次导入只进一类，选完再拖文件。
               extra: kindPicker(importKind, setImportKind),

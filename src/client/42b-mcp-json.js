@@ -1,8 +1,16 @@
-    // ---------- MCP JSON 导入 / 导出（0.15.0 A1）------------------------------------
-    // 服务端 `mcpm-import` / `mcpm-export` 早就实现完整，缺的只是界面与**格式转换**：
-    // 社区流通的块是 `{"mcpServers": {...}}`，而服务端只认数组或 `{rows:[...]}`，
+    // ---------- MCP 导入 / 导出（0.15.0 A1；0.20.x 起收 dsh 补丁片段）------------------
+    // 服务端 `mcpm-import` / `mcpm-export` 早就实现完整，缺的只是界面与**格式转换**。
+    // 导入面（三条路）：
+    //   · 社区流通的 `{"mcpServers": {...}}`
+    //   · 服务端自己的 `{rows: [...]}` / 裸数组
+    //   · **dsh 补丁片段**（用户 2026-10-15 指出这才是真实模板）：`- insert:` 块 +
+    //     `name: '@deepseek-ai/dsh-mcp-client'` + `config:`，也就是 `cordis.patch.yml` 里
+    //     本插件自己写出来的形状（生成侧见 src/mcp/patch-yaml.ts 的 buildInsertBlock）。
     // 且 `transport` 只要不是字面 `'stdio'` 就一律落 streamable-http、`serverName` 不合规矩
     // 就整条丢弃。这些判定必须在提交前做完并让用户看见，否则导入完只剩一串跳过原因。
+
+    /** 本插件写入补丁时用的 loader 名（单一真相源在 src/host-names.ts 的 MCP_CLIENT_MODULE）。 */
+    var MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
 
     function isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v) }
 
@@ -34,6 +42,108 @@
         if (isPlainObject(v) && Object.keys(v).length && Object.keys(v).some(function (k) { return isPlainObject(v[k]) })) return v
       }
       return null
+    }
+
+    // ---------- dsh 补丁片段（YAML）解析 ----------------------------------------------
+    // 客户端**不自己写 YAML 解析器**：要认的是宿主读的那份方言（`!!js` 表达式标签也算
+    // 合法），而 `js-yaml` 本来就在本插件的依赖里、宿主读补丁用的也是它（见
+    // src/compat/patch-dialect.ts 的说明）。惰性取、拿不到就如实回报 —— require 失败只让
+    // YAML 这一条路不可用，JSON 那条路照旧，页面不会整片挂掉（顶层 require 会）。
+    var mcpYamlState = { tried: false, mod: null, schema: null }
+    function mcpYamlModule() {
+      if (mcpYamlState.tried) return mcpYamlState.mod
+      mcpYamlState.tried = true
+      try {
+        var y = require('js-yaml')
+        if (y && typeof y.load === 'function' && typeof y.Type === 'function' && y.JSON_SCHEMA) mcpYamlState.mod = y
+      } catch (e) { mcpYamlState.mod = null }
+      return mcpYamlState.mod
+    }
+    /**
+     * 宿主那份 schema：`JSON_SCHEMA` + `!!js` 表达式标签（定义与 dsh 官方逐字等价，
+     * 见 src/compat/patch-dialect.ts 的 schemaOf）。**不 eval** —— 表达式在这里只当字符串
+     * 收下（`{__jsExpr: …}`）：我们要的只是"解析得动"，值本身不由客户端解释。
+     */
+    function mcpYamlSchema(y) {
+      if (mcpYamlState.schema) return mcpYamlState.schema
+      try {
+        var exprType = new y.Type('tag:yaml.org,2002:js', {
+          kind: 'scalar',
+          resolve: function (data) { return typeof data === 'string' },
+          construct: function (data) { return { __jsExpr: data } },
+          predicate: function (v) { return !!v && typeof v === 'object' && '__jsExpr' in v },
+          represent: function (v) { return v.__jsExpr },
+        })
+        mcpYamlState.schema = y.JSON_SCHEMA.extend(exprType)
+      } catch (e) { mcpYamlState.schema = null }
+      return mcpYamlState.schema
+    }
+    /** 文本看着像不像 dsh 补丁片段（只用来在两条路都失败时挑一句对症的报错）。 */
+    function looksLikePatchText(raw) {
+      return String(raw).indexOf('- insert:') >= 0 || String(raw).indexOf(MCP_CLIENT_MODULE) >= 0
+    }
+    /** 补丁顶层项：`- insert:` 块。 */
+    function isInsertBlock(item) { return isPlainObject(item) && Array.isArray(item.insert) }
+    /**
+     * 补丁顶层项：覆盖块（`- id: x` + `name: <模块名>` + `disabled:`）。
+     * 行形状（社区 JSON / rows）带的是 serverName / command / url 而不是 `name`，别认错。
+     */
+    function isOverrideBlock(item) {
+      if (!isPlainObject(item) || item.insert !== undefined) return false
+      if (typeof item.name !== 'string' || !item.name) return false
+      return item.serverName === undefined && item.command === undefined && item.url === undefined
+    }
+    /**
+     * 补丁文档判据：顶层数组，每一项都是 insert 块或覆盖块，且**至少有一个 insert**。
+     * （没有 insert 的普通数组交给下面「数组 = 行」那条路，别抢。）
+     */
+    function looksLikePatchDoc(doc) {
+      if (!Array.isArray(doc) || !doc.length) return false
+      var sawInsert = false
+      for (var i = 0; i < doc.length; i += 1) {
+        if (isInsertBlock(doc[i])) { sawInsert = true; continue }
+        if (!isOverrideBlock(doc[i])) return false
+      }
+      return sawInsert
+    }
+    /**
+     * 补丁文档 → 预览行。口径与宿主 `parseRows`（src/mcp/patch-yaml.ts）一致：
+     *   · 只收 `name === MCP_CLIENT_MODULE` 的 insert 子条目（本插件只管 MCP，同一份文件里
+     *     别的 loader 条目原样忽略）；
+     *   · 顶层覆盖块按**文件顺序**改写同 id 的启停 —— 宿主那边"覆盖块写在 insert 之前是
+     *     no-op（此刻还没入索引）"，所以这里也只对**已收集到**的行生效。
+     * 每条拼成 `{serverName, ...config, id}` 交给 mcpRowFromConfig：判定、预览、提交与
+     * JSON 那条路完全共用一套（重名/传输/致命项的处理因此不会两副口径）。
+     */
+    function patchDocToRows(doc) {
+      var entries = []
+      var byId = {}
+      for (var i = 0; i < doc.length; i += 1) {
+        var item = doc[i]
+        if (isInsertBlock(item)) {
+          for (var j = 0; j < item.insert.length; j += 1) {
+            var child = item.insert[j]
+            if (!isPlainObject(child) || child.name !== MCP_CLIENT_MODULE) continue
+            var cfg = isPlainObject(child.config) ? child.config : {}
+            var feed = Object.assign({}, cfg)
+            if (child.id !== undefined) feed.id = String(child.id)
+            // insert 子条目自己的 `disabled` 是 cordis 的启停位：本插件写的是**另起**一个
+            // 覆盖块，但手写文件里两种都见过，等价看待。
+            if (child.disabled !== undefined && feed.disabled === undefined) feed.disabled = child.disabled
+            var name = cfg.serverName !== undefined && String(cfg.serverName).trim() ? String(cfg.serverName) : String(child.id == null ? '' : child.id)
+            var entry = { row: mcpRowFromConfig(name, feed, entries.length) }
+            entries.push(entry)
+            if (child.id !== undefined) byId[String(child.id)] = entry
+          }
+          continue
+        }
+        if (isOverrideBlock(item) && item.id !== undefined && item.disabled !== undefined) {
+          var target = byId[String(item.id)]
+          // 启停要连 payload 一起改：预览读 row.disabled，提交发的是 row.payload。
+          if (target) { target.row.disabled = item.disabled === true; target.row.payload.disabled = item.disabled === true }
+        }
+      }
+      return entries.map(function (e) { return e.row })
     }
 
     var MCP_CFG_KEYS = ['command', 'args', 'url', 'env', 'headers', 'disabled', 'type', 'transport', 'serverName', 'id', 'level']
@@ -73,12 +183,36 @@
     }
 
     /**
-     * 粘贴的任意 MCP JSON → `{ok, rows}` 或 `{ok:false, code}`。
-     * 识别顺序：`{mcpServers:{…}}` → `{rows:[…]}` → 裸数组 → 裸映射。
+     * 粘贴的任意 MCP 文本 → `{ok, rows}` 或 `{ok:false, code, error?}`。
+     * 两条路：先按 JSON 试（`{mcpServers:{…}}` → `{rows:[…]}` → 裸数组 → 裸映射），
+     * JSON 不成立时再按 **dsh 补丁片段** YAML 试。顺序不能反 —— 一份合法 JSON 必然也是
+     * 合法 YAML，反之不成立，先解析 YAML 会把 `{"mcpServers": …}` 读成别的东西。
      */
     function convertMcpJsonToRows(text) {
-      var parsed
-      try { parsed = JSON.parse(String(text == null ? '' : text).trim()) } catch (e) { return { ok: false, code: 'parse', error: errMsg(e) } }
+      var raw = String(text == null ? '' : text).trim()
+      var parsed = null
+      var jsonOk = false
+      var jsonError = null
+      try { parsed = JSON.parse(raw); jsonOk = true } catch (e) { jsonError = e }
+      if (!jsonOk) {
+        var y = mcpYamlModule()
+        if (!y) {
+          // 缺依赖时说清是"读不了 YAML"，而不是抛一句 JSON 的语法错 —— 后者对着
+          // `- insert:` 那种文本完全是误导。
+          return { ok: false, code: looksLikePatchText(raw) ? 'yamlUnavailable' : 'parse', error: errMsg(jsonError) }
+        }
+        var doc
+        try { doc = y.load(raw, { schema: mcpYamlSchema(y) }) } catch (e2) {
+          return { ok: false, code: 'parse', error: errMsg(looksLikePatchText(raw) ? e2 : jsonError) }
+        }
+        if (looksLikePatchDoc(doc)) {
+          var patchRows = patchDocToRows(doc)
+          return patchRows.length ? { ok: true, rows: patchRows } : { ok: false, code: 'shape' }
+        }
+        // 不认成补丁文档就落到下面那几条 JSON 形状上再判一次：YAML 写出来的
+        // `rows` 数组 / `mcpServers` 映射同样该收。
+        parsed = doc
+      }
       if (!isPlainObject(parsed) && !Array.isArray(parsed)) return { ok: false, code: 'shape' }
       var pairs = []
       var map = isPlainObject(parsed) ? mcpServerMapOf(parsed) : null
@@ -116,27 +250,39 @@
     }
 
     /**
-     * 导入框的「dsh 标准模板」（用户 2026-10-15：以前的灰色提示只写「粘贴
-     * {"mcpServers": {…}}…」，光凭省略号看不出一个完整配置长什么样）。
-     * 打开弹窗即预填这份模板，用户直接改；删空后 placeholder 显示同一份
-     * （useState 初值与 placeholder 同源，两条路径永远是这一份）。
-     * 两条示例覆盖两种传输方式：stdio 看有没有 command、http 看 url
-     * （判传输不看 type 字段，见 mcpRowFromConfig 注释）。名字带 example-
-     * 前缀就是让人一眼看出「这是模板，改我」。
+     * 导入框的「dsh 标准模板」。打开弹窗即预填这份，用户直接改；删空后 placeholder
+     * 显示同一份（useState 初值与 placeholder 同源，两条路径永远是这一份）。
+     *
+     * 用**真实**的补丁格式而不是社区的 `{"mcpServers": …}`（用户 2026-10-15：贴出
+     * `cordis.patch.yml` 里的真身，"默认模板不对"）：这正是 `buildInsertBlock`
+     * （src/mcp/patch-yaml.ts）写进补丁的形状，也是宿主真正读的那份 —— 缩进、引号、
+     * `config:` 的层级都按生成器逐字取。两条示例覆盖两种传输方式（stdio 看 command、
+     * http 看 url；判传输不看 `transport` 字段，见 mcpRowFromConfig 注释），
+     * serverName 带 example- 前缀就是让人一眼看出"这是模板，改我"。
+     *
+     * 顶层的 `# dsh-plugin-tool-management:server:<id>` 标记**不写进模板**：那是本插件
+     * 自己落盘时加的，用户手写的片段不需要它（解析时按注释忽略）。
      */
     var MCP_IMPORT_TEMPLATE = [
-      '{',
-      '  "mcpServers": {',
-      '    "example-server": {',
-      '      "command": "npx",',
-      '      "args": ["-y", "your-package"],',
-      '      "env": { "API_KEY": "" }',
-      '    },',
-      '    "example-remote": {',
-      '      "url": "https://your-server.com/mcp"',
-      '    }',
-      '  }',
-      '}',
+      '- insert:',
+      '    - id: mcp-example',
+      "      name: '" + MCP_CLIENT_MODULE + "'",
+      '      config:',
+      '        serverName: "example"',
+      '        transport: "stdio"',
+      '        command: "npx"',
+      '        args:',
+      '          - "-y"',
+      '          - "your-package"',
+      '        env:',
+      '          "API_KEY": ""',
+      '- insert:',
+      '    - id: mcp-example-remote',
+      "      name: '" + MCP_CLIENT_MODULE + "'",
+      '      config:',
+      '        serverName: "example-remote"',
+      '        transport: "streamable-http"',
+      '        url: "https://your-server.com/mcp"',
     ].join('\n')
 
     function McpJsonImportModal(props) {
@@ -194,7 +340,8 @@
 
       var preview = !converted ? null
         : !converted.ok ? h('div', { className: 'dsm-feedback dsm-error', role: 'alert' },
-            converted.code === 'parse' ? t('mcp.importJson.parseError', { error: converted.error }) : t('mcp.importJson.parseError.shape'))
+            converted.code === 'yamlUnavailable' ? t('mcp.importJson.noYaml')
+              : converted.code === 'parse' ? t('mcp.importJson.parseError', { error: converted.error }) : t('mcp.importJson.parseError.shape'))
         : !rows.length ? h('div', { className: 'dsm-empty' }, t('mcp.importJson.empty'))
         : h(react.Fragment, null,
             rows.length > 20 ? h('div', { className: 'dsm-help' }, t('mcp.importJson.bigBatch', { count: rows.length })) : null,
@@ -227,7 +374,7 @@
         h('div', { className: 'dsm-form' },
           h('p', { className: 'dsm-help' }, t('mcp.importJson.hint')),
           h('textarea', {
-            className: 'dsm-control dsm-textarea-md', rows: 12, value: text, spellCheck: false,
+            className: 'dsm-control dsm-textarea-md', rows: 14, value: text, spellCheck: false,
             placeholder: MCP_IMPORT_TEMPLATE, onChange: function (e) { setText(e.target.value) },
           }),
           h('div', { className: 'dsm-upload-choices' },

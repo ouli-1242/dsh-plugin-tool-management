@@ -928,7 +928,7 @@
               React.createElement('p', { className: 'dsm-help' }, t('subagents.delete.desc', { name: modal.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.name) } }, t('memory.btn.delete.confirm')))) : null,
-            modal && modal.type === 'import' ? React.createElement(ImportModal, { key: 'simp', t: t, title: t('subagents.import.title'), busy: busy, requirement: t('upload.req.mdzip'), requirementTitle: [t('upload.requirement.persona.1'), t('upload.requirement.persona.2'), t('upload.requirement.persona.3')].join('\n'), onClose: function () { setModal(null) }, onSubmit: submitImport }) : null,
+            modal && modal.type === 'import' ? React.createElement(ImportModal, { key: 'simp', t: t, title: t('subagents.import.title'), busy: busy, hint: t('upload.drop.mzip'), requirement: t('upload.req.mdzip'), requirementTitle: [t('upload.requirement.persona.1'), t('upload.requirement.persona.2'), t('upload.requirement.persona.3')].join('\n'), onClose: function () { setModal(null) }, onSubmit: submitImport }) : null,
             modal && modal.type === 'export' ? React.createElement(ExportModal, {
               key: 'export', t: t, title: t('export.subagents'),
               items: data.subagents.map(function (p) { return { key: p.name, name: p.name, desc: p.description || '' } }),

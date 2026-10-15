@@ -1548,6 +1548,9 @@ function enabledMemoryCount(rules) {
             onDrop: function (e) { e.preventDefault(); if (e.currentTarget.classList) e.currentTarget.classList.remove("dsm-dropzone-active"); droppedFiles(e.dataTransfer).then(add) },
           },
             h("span", { className: "dsm-dropzone-title" }, t("upload.drop.title")),
+            // 默认文案是**技能页**的（zip / 技能文件夹 / SKILL.md）—— 别的页必须显式传
+            // hint（用户 2026-10-15：子智能体 / 提示词 / 记忆 / 会话四页都漏传过，
+            // 拖拽区挂着 SKILL.md，而它们根本不收技能）。
             h("span", { className: "dsm-dropzone-copy" }, props.hint || t("upload.drop.copy"))),
           h("input", { ref: ref, type: "file", multiple: true, accept: props.accept || ".md,.zip", className: "dsm-hidden-input", onChange: function (e) { add(e.target.files); e.target.value = "" } }),
           // 已选文件：一行一个（名字 + 大小 + 移除），与技能页同一形态。

@@ -12,7 +12,7 @@
           // 多选集合：勾选的 sessionId。最小 React 支持函数式初值（Set 惰性创建）。
           var selState = React.useState(function () { return new Set() })
           var selected = selState[0], setSelected = selState[1]
-          // 导入对话弹窗：null = 关闭；{ busy, error, result, cwd, pickingDir } = 打开。
+          // 导入对话弹窗：null = 关闭；{ busy, error, result, cwd } = 打开。
           var impState = React.useState(null)
           var imp = impState[0], setImp = impState[1]
           // 导出对话弹窗：null = 关闭；{ busy, error, result, outDir, format, detail, wsFilter, selectedIds } = 打开。
@@ -187,7 +187,7 @@
             reader.readAsText(file)
           }
           function openImportPicker() {
-            setImp({ busy: false, error: null, result: null, cwd: '', pickingDir: false })
+            setImp({ busy: false, error: null, result: null, cwd: '' })
           }
           // ---------- 导出对话：弹窗内选范围/工作区 → 勾选会话 → 写入指定目录 ----------
           function openExportPicker() {
@@ -475,6 +475,7 @@
               t: t,
               title: t('hist.btn.import'),
               accept: '.jsonl,.json,.md,.markdown,.txt',
+              hint: t('upload.drop.session'),
               busy: imp.busy === true,
               requirement: t('upload.req.session'),
               requirementTitle: [t('upload.requirement.session.1'), t('upload.requirement.session.2'), t('upload.requirement.session.3')].join('\n'),
@@ -482,18 +483,17 @@
               extra: React.createElement('div', null,
                 React.createElement('div', { className: 'dsm-field' },
                   React.createElement('label', { className: 'dsm-label' }, t('hist.import.cwd')),
-                  // 三条路并存：从已登记的工作区挑、浏览一个文件夹、直接粘路径。
+                  // 两条路：从已登记的工作区挑、直接粘路径（用户 2026-10-15：删掉
+                  // 「浏览文件夹」那颗 —— 它和底下的文件拖拽区在 import 语境里都叫
+                  // "选择"，功能重叠；要选没登记过的目录，粘绝对路径即可）。
                   // 标签是 combo 的**兄弟**而不是祖先 —— 嵌套 label 会把点击转给清单里第一项。
                   React.createElement(SceneCombo, {
                     options: importWsOptions, value: imp.cwd || '',
                     placeholder: t('hist.import.cwd.placeholder'), label: t('hist.import.cwd'),
                     browseLabel: t('hist.import.workspace'),
-                    pickFolderLabel: t('hist.import.browse'), pickFolderTitle: t('hist.export.browse'),
                     disabled: imp.busy === true,
                     onChange: function (v) { setImp(Object.assign({}, imp, { cwd: v })) },
-                    onPickFolder: function () { requestHostDirectory(function (path) { setImp(Object.assign({}, imp, { cwd: path })) }, function () { setImp(Object.assign({}, imp, { pickingDir: true })) }) },
                   }),
-                  imp.pickingDir ? React.createElement(DirPickerModal, { key: 'imp-dir-picker', title: t('dir.title'), initial: String(imp.cwd || ''), closeLabel: t('btn.close'), onClose: function () { setImp(Object.assign({}, imp, { pickingDir: false })) }, onPick: function (path) { setImp(Object.assign({}, imp, { cwd: path, pickingDir: false })) } }) : null,
                   importWsOptions.length ? null : React.createElement('p', { className: 'dsm-help' }, t('hist.import.workspace.none')))),
               onClose: function () { setImp(null) },
               onSubmit: function (entries, files) { doImportFile(files[0]) },
