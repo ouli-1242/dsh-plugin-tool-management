@@ -43,11 +43,13 @@ export function userRoots(): SkillSource[] {
     // 官方内置紧随 DSH 技能之后（用户裁定）：同为一眼要看的来源，排在导入技能之前。
     ...(official === null ? [] : [official]),
     {
-      // v0.4：插件**新建/导入**的技能落到 hub 内（用户要求：插件产生的文件收在
+      // v0.4：插件**导入/上传**的技能落到 hub 内（用户要求：插件产生的文件收在
       // $DSH_HOME/tool-management/）。rank 高于 DSH 技能，同名时 hub 版本遮蔽官方目录里的；
       // 官方 ~/.dsh/skills/ 仍作为可切换来源列出（不搬走、不删）。
       //
-      // 界面名「导入技能」：它是插件导入/新建技能的落点，不是"管理器自己的一类技能"。
+      // 界面名「导入技能」：它是插件**导入/上传**的落点 —— v0.20.0 及以前新建也落这里，
+      // 2026-10-15 用户裁定「新增技能默认 DSH 技能，导入技能功能才用导入技能目录」后，
+      // 新建改走 DSH 技能目录（见 core.ts 的 createSkill 默认值）。
       // 与 dsh 同为默认来源：路径必须读取（不可移除、不可停用），里面的技能可删。
       key: "hub",
       path: join(resolveDshHome(), "tool-management", "skills"),
@@ -151,6 +153,40 @@ export async function projectSourceSafe(definition: ProjectSource) {
   }
   return !(await overlapsUserSkillRoot(definition.path));
 }
+
+/**
+ * 项目来源目录底下有没有至少一条技能条目（只看形状，不读正文）：
+ *   · 可写来源（`.dsh/skills`）—— 至少一个子目录里带 `SKILL.md`（与 scanEntries 的
+ *     mutable 分支同形状：顶层 flat `.md` 只属于只读来源）；
+ *   · 只读来源（`.agents/skills`）—— 顶层有子目录（里面才可能藏 bundle）或 `.md` 文件
+ *     （含根自身的 SKILL.md），与 discoverReadonlyEntries 同一形状。
+ *
+ * 目录缺失 / 是链接 / 读不了，以及点号开头的隐藏条目，一律按「没有」处理 —— 注册一个
+ * 没有技能的来源只有噪音：占一个来源位，还会在场景切换时产生「停用 project-dsh:<路径
+ * 哈希>」这类只有内部键的提示（用户 2026-10-15 报的）。
+ */
+async function hasSkillEntry(path: string, mutable: boolean): Promise<boolean> {
+  const stat = await lstatOrNull(path);
+  if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) return false;
+  let items;
+  try {
+    items = await fs.readdir(path, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const item of items) {
+    if (item.isSymbolicLink() || item.name.startsWith(".")) continue;
+    if (mutable) {
+      if (!item.isDirectory()) continue;
+      const doc = await lstatOrNull(join(path, item.name, "SKILL.md"));
+      if (doc && doc.isFile() && !doc.isSymbolicLink()) return true;
+      continue;
+    }
+    if (item.isDirectory()) return true;
+    if (item.isFile() && item.name.toLowerCase().endsWith(".md")) return true;
+  }
+  return false;
+}
 export async function projectRoots(
   projectCwds: string[] = [],
   diagnostics?: SkillWarning[],
@@ -227,7 +263,15 @@ export async function projectRoots(
       },
     ];
     for (const candidate of candidates) {
-      if (await projectSourceSafe(candidate)) roots.push(candidate);
+      if (!(await projectSourceSafe(candidate))) continue;
+      // 无技能的项目来源不注册（用户 2026-10-15 裁定）：目录不存在、是链接或底下没有
+      // 一条技能条目时，这个来源对用户不可见也不可用 —— 硬注册出来只会平白占一个来源位、
+      // 在场景切换时弹「停用 project-dsh:<路径哈希>」这类只有内部键的提示，而新建技能的
+      // 落点也早已不含项目来源（createRoots 只收用户级）。本仓库就没有 .dsh/skills，
+      // 用户就是在场景预览卡上看到这一条才裁的。
+      if (!(await hasSkillEntry(candidate.path, candidate.mutable === true)))
+        continue;
+      roots.push(candidate);
     }
   }
   return roots;

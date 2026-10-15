@@ -36,7 +36,20 @@ import type { InjectSection } from './context-inject-select.js'
  * —— 记忆的授权与判据由正文首行那句加粗的「用户为本机写的参考信息：…」承担）。
  */
 export interface DomainFrame {
-  /** 标题（md 一级）：这条讲的是这台机器的什么。 */
+  /**
+   * 标题（md 一级）：这条讲的是**此刻生效的哪一类东西**。
+   *
+   * 2026-10-15 统一成模板 `当前<域>`（用户裁定）：此前六个域三种句式
+   * （`本机当前的场景` / `本机技能目录` / `可委派的子智能体`）。改成「当前」而不是「本机」，
+   * 是因为这六个域列的**都不是"这台机器上有什么"，而是"此刻生效的是哪一份/哪一批"** ——
+   * 场景与提示词是单选，记忆按当前场景筛，MCP / 技能 / 人设各自按可用性与深度筛过。
+   * 「本机」暗示全量（列表里没有 ≠ 本机没有），恰恰是这一族一直在防的谎报；
+   * 「当前」与正文口径也对得上（记忆授权语写「当前场景对应的记忆」、技能 `how` 行写
+   * 「只列当前可调用的技能」）。
+   *
+   * ⚠️ 改这六个字串时**必须连带改点名它们的工具描述**（`tools/*.ts` 里「…reminder」那几处，
+   * 模型侧可见）与注释 —— 否则描述会指向一个不存在的块名。
+   */
   title: string
   /**
    * ⚠️ 这里曾经有过一个 `cue` 字段（加粗的"在哪个决策点该想起它"的动作句，2026-09-18 加的），
@@ -83,22 +96,22 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     // 现在这一段只回答一个问题：**当前处在哪个场景、它是什么**（`**「代码」—— 写代码**`）。
     // 它还比别的段少一层：因果句也删了 —— 它解释的是"另外四段是怎么产生的"（机制），
     // 不是当前情况本身，而且"清单里没有 ≠ 本机没有"这层反推被用户明确判为浪费。
-    title: '本机当前的场景',
+    title: '当前场景',
     supersede: SUPERSEDE_NOTE,
   },
   memory: {
-    title: '本机当前的记忆',
+    title: '当前记忆',
     supersede: SUPERSEDE_NOTE,
   },
   mcp: {
-    title: '本机 MCP 服务器的当前状态',
+    title: '当前 MCP 服务器',
     // how 只剩"怎么用备注"这半句：前半个分句「工具名是 `mcp__<服务器>__<工具>`」删掉了
     // —— 模型自己的工具表里就是这个命名（`mcp__context7__xxx`），告诉它格式是零信息量。
     how: '带「用户提示：」的行是用户写给这台服务器的决策提示，选服务器之前先看一眼。',
     supersede: SUPERSEDE_NOTE,
   },
   skills: {
-    title: '本机技能目录',
+    title: '当前技能目录',
     // 两句都只在预设没挂官方 `skill` 工具时出现，差别只在点名不点名那个取正文的工具
     // （工具被用户在兼容页关掉时不点名 —— 点名一个模型手里没有的工具只会让它去猜名字）。
     how: (toolHidden) => toolHidden('skill_manager_read')
@@ -107,20 +120,25 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     supersede: `${SUPERSEDE_NOTE.slice(0, -1)}；只列当前可调用的技能。`,
   },
   subagents: {
-    title: '可委派的子智能体',
+    title: '当前子智能体',
     // 分界规则（2026-09-17 方案 C，本机实测 session-ee722e23 逼出来的）：官方那两个
     // 委派工具（`subagent` / `subagent_fork`）不带人设，而此前没有任何一句话说明何时该
     // 用谁 —— 模型在"审查刚读过的 README"时选了 `subagent_fork`（fork 能继承已读内容、
     // 省一次复述）。现在人设通道也有 `inherit`（同一套 fork 机制），分界只剩"要不要后台跑"。
     // 带人设的委派工具被关掉时改说"本会话没有这条通道"：不说的话，模型看到有人设目录却
     // 找不到对应的工具，会去拿官方那两个凑（它们不接受人设，等于白跑一趟）。
+    //
+    // `inherit` 那半句 2026-10-14 删掉了（用户裁定）：它在 `subagent_manager_run` 的
+    // Modes 段与 `inherit` 参数说明里**各有一份**，三份都在每轮上下文里 = 同一件事付三次
+    // token。留这两份（它们就在"要传这个参数"的那一刻），这里只留 how 行独有的那半句 ——
+    // 与官方两个委派工具的分界规则。
     how: (toolHidden) => toolHidden('subagent_manager_run')
       ? '本会话没有带人设的委派工具；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。'
-      : '贴合人设的任务一律用 `subagent_manager_run`（要它看到本次会话就开 `inherit`）；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。',
+      : '贴合人设的任务一律用 `subagent_manager_run`；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。',
     supersede: SUPERSEDE_NOTE,
   },
   prompt: {
-    title: '本机提示词',
+    title: '当前提示词',
     supersede: SUPERSEDE_NOTE,
   },
 }
@@ -141,7 +159,7 @@ export const HOW_NAMED_TOOLS: readonly string[] = ['skill_manager_read', 'subage
 
 /** 域声明里没登记的 key（理论上到不了这里）：给一个不出错的通用框架。 */
 export const fallbackFrame = (label: string): DomainFrame => ({
-  title: `本机的${label}`,
+  title: `当前的${label}`,
   supersede: SUPERSEDE_NOTE,
 })
 

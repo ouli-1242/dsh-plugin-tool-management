@@ -1,7 +1,14 @@
 // AGENTS.md 预设域的 model 工具（2026-09-19 从 index.ts 的注册区抽出）：
 // prompt_manager_list / prompt_manager_apply。
 //
-// 模型可查、可切，**不能造 / 不能删** —— 避免模型乱删用户预设。
+// 模型可查、可切；**不能造** —— 预设正文是用户自己写的一份长文（`AGENTS.md`），
+// 模型没有创建入口，要新建只能由用户在面板里写。
+//
+// 删除在 `tools/remove.ts` 的 `prompt_manager_remove`（2026-10-15 加）。此前这里写的是
+// 「不能造 / **不能删** —— 避免模型乱删用户预设」，那条理由针对的是**不可恢复**的删除：
+// 预设正文是用户手写的、删了就得重写。回收站把它的前提消掉了 —— 五条 `*_manager_remove`
+// 一律「进回收站、可恢复、需用户指令、过场景冻结守卫」，永久删除仍只留在面板。
+// 换句话说：**能删的是可恢复的那一步，不可逆的那一步照旧不给模型。**
 
 import { join } from 'node:path'
 import { normalizePresetDescription } from '../prompts/service.js'
@@ -31,7 +38,10 @@ export function buildPromptTools(deps: PromptToolDeps): void {
   const { defineTool, register } = deps
   register(defineTool({
     name: 'prompt_manager_list',
-    description: 'List AGENTS.md presets (id, description, active state, file path); read that file for a preset body. The one in effect is in the「本机提示词」reminder, whose「来源：」line names the file. Defaults to the one in effect; all=true for the whole library.',
+    // 那句 `(that reminder is absent when the preset carries the official instructions line)`
+    // 删掉（2026-10-15 注入文本审查）：模型**观测不到**"official instructions line"这个条件，
+    // 拿它做不了任何决定 —— reminder 在不在，它抬头就能看见，不必由描述来预告。
+    description: 'List AGENTS.md presets (id, description, active state, file path); read that file for a preset body. The one in effect is in the「当前提示词」reminder, whose「来源：」line names the file. Defaults to the one in effect; all=true for the whole library.',
     parameters: {
       all: { type: 'boolean', description: 'Include inactive presets (default false).' },
     },
@@ -41,7 +51,7 @@ export function buildPromptTools(deps: PromptToolDeps): void {
       const r: any = await deps.promptOps['agentsmd-list']({})
       if (!r || r.ok === false) throw new Error((r && r.error) || '读取提示词预设失败')
       const all: any[] = r.presets || []
-      // 默认只列「当前这份 ~/.dsh/AGENTS.md 是从哪个预设来的」（用户裁定 2026-09-16）。
+      // 默认只列「这份 AGENTS.md 来自哪个预设」（用户裁定 2026-09-16）。
       // 判定分两级：`active`（场景驱动时 = 场景绑的那份；否则 = 内容逐字节相同）优先，
       // 否则看服务层记下的「最近一次应用」—— 用户手改过全局文件时，第二级仍能给出答案，
       // 不必退化成全列（那会白烧上下文）。
@@ -74,15 +84,19 @@ export function buildPromptTools(deps: PromptToolDeps): void {
       // 同上：AGENTS.md 由官方 dsh-agent-instructions 行承载（极简没挂这一行），
       // 这一行不在时文件内容不会进上下文。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
-      return header + (summary.join('\n') || '(none)') + '\n(DSH re-reads ~/.dsh/AGENTS.md every turn, so applying takes effect on the next turn.)' + notice
+      return header + (summary.join('\n') || '(none)') + notice
     },
   }))
   register(defineTool({
     name: 'prompt_manager_apply',
     description: 'Apply one AGENTS.md preset by id; effective next turn. If a scene drives the baseline this does NOT refuse — it rebinds that scene to the preset and re-syncs it, so tell the user which scene was rebound. A locked scene blocks the call. Pass apply=false to cancel instead — AGENTS.md goes back to what it was before the run of applies (the file is removed if there was none to begin with); a scene driving the baseline refuses that, rebind the scene instead. Only on the user\'s instruction.',
     parameters: {
-      id: { type: 'string', required: true, description: 'Preset id (lowercase letters, digits, hyphens). Ignored when apply=false.' },
-      apply: { type: 'boolean', description: 'Omit or true = apply the preset in `id`; false = cancel — undo the run of applies.' },
+      // `id` 从 required 摘掉（2026-10-15 smoke-test P1-5）：描述一直写着 "Ignored when
+      // apply=false"，schema 却把它标成必填 —— 模型照描述「取消不用给 id」操作，先被 schema
+      // 拒掉（missing required property "id"），只能编一个 dummy id 才过得去。条件必填由
+      // execute 里那句守卫表达，与 `skill_manager_switch` 的 enabled / prefer 同一形状。
+      id: { type: 'string', description: 'Preset id (lowercase letters, digits, hyphens). Required unless apply=false.' },
+      apply: { type: 'boolean', description: 'Omit or true = apply the preset in `id`; false = cancel — undo the run of applies (no `id` needed).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args) {
@@ -98,17 +112,19 @@ export function buildPromptTools(deps: PromptToolDeps): void {
           ? 'OK: application cancelled — ~/.dsh/AGENTS.md did not exist before the run started, so the file was removed (effective next turn).'
           : 'OK: application cancelled — ~/.dsh/AGENTS.md is back to what it was before the run started (effective next turn).'
       }
-      const r = await deps.applyPresetGuarded(args.id)
+      const id = String((args && args.id) || '').trim()
+      if (id === '') throw new Error('缺少参数：id（只有 apply=false 取消时才不用给）')
+      const r = await deps.applyPresetGuarded(id)
       if (!r.ok) throw new Error(r.error)
       // 场景驱动时写的是「场景绑定」，回执必须说清改的是哪个场景 —— 只说「已应用到
       // AGENTS.md」会让模型对用户谎报（用户不知道自己的场景绑定被换掉了）。
       if (r.viaScene) {
-        return 'OK: preset ' + args.id + ' is now the prompt binding of scene 「' + (r.scene || '') + '」 and the scene was re-synced (effective next turn; ~/.dsh/AGENTS.md now carries that scene\'s binding).'
+        return 'OK: preset ' + id + ' is now the prompt binding of scene 「' + (r.scene || '') + '」 and the scene was re-synced (effective next turn; ~/.dsh/AGENTS.md now carries that scene\'s binding).'
       }
       // 生效时机与宿主行为对齐（index.ts 提示词服务一节考证过）：dsh-agent-instructions
       // 每个 pre-step 都 stat 比对版本，写文件即下一轮重读 —— 不是"下个会话"。说错了
       // 模型会劝用户重开会话，而其实下一句话就已经在新基线下跑。
-      return 'OK: preset ' + args.id + ' applied to ~/.dsh/AGENTS.md — effective next turn' + (r.backedUp ? ' (previous backed up to __last-applied__)' : '')
+      return 'OK: preset ' + id + ' applied to ~/.dsh/AGENTS.md — effective next turn' + (r.backedUp ? ' (previous backed up to __last-applied__)' : '')
     },
   }))
 }

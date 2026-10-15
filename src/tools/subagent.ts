@@ -9,6 +9,24 @@
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from '../subagents/tools.js'
 import { text, type ToolDomainDeps } from './deps.js'
 
+/**
+ * 高频高级字段：`subagent_manager_save` 与 op 之间原样透传的那几个（省略 = 不出现 = op 侧保持）。
+ *
+ * 2026-10-15：从"面板专有"里挑出**配置人设时最常改的三类**交给模型 —— `model`（换模型）、
+ * `continuable`（允许追问）、`tools` / `toolsDeny`（工具黑白名单）。此前模型看得见却改不了
+ * （`subagent_manager_save` 只读回它们防止冲掉，旧注释把这条写成"留给面板"）。
+ *
+ * **刻意不加** `provider` / `reasoningEffort` / `catalogDepth`：都是低频（用户裁定
+ * "使用频率高的才需要，太多功能反而冗余、浪费 token"）。`toolsByPreset`（嵌套对象）同理。
+ */
+const ADVANCED_FIELDS = ['model', 'continuable', 'tools', 'toolsDeny'] as const
+
+function advancedArgs(args: any): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of ADVANCED_FIELDS) if (args && args[k] !== undefined) out[k] = args[k]
+  return out
+}
+
 export interface SubagentToolDeps extends ToolDomainDeps {
   // 三个字段的形状由 subagents/tools.ts 的两个 define*Tool 定义，这里只是原样透传；
   // 在 deps 里重声明一遍会与官方签名形成第二份真相，改一处忘一处。
@@ -70,14 +88,16 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
   // 宿主没挂 `dsh-subagent-*` 也照样该能用（恰恰那时更需要：能把人设建好、开关拨对，
   // 等 provider 回来就可用）。所以各自单独 try/catch，不与 `_run` 绑在一起失败。
   //
-  // 参数表刻意只给 name / description / body / output 四个：工具限制（tools / toolsDeny /
-  // toolsByPreset）与 provider/model 留给面板。理由不是"怕模型不会填"，而是填错的后果
-  // 不对称 —— 一个错误的 toolsDeny 会静默改变子代理能做什么，而模型看不到自己改对了没有。
+  // 参数表（2026-10-15 扩）：基础四项（name / description / body / output）之外，把高级字段
+  // 也接上 —— 此前工具限制（tools / toolsDeny）与 provider / model / reasoningEffort /
+  // catalogDepth / continuable 只读回防止冲掉、模型改不了，于是"给这个人设换个便宜模型"
+  // 这类要求模型手里没有出口，描述里也没写"去面板"。现在能设的都在参数里说清，
+  // 只留 `toolsByPreset`（嵌套对象，schema 带不动）给面板。
   const ops = () => deps.subagentService.ops as Record<string, (args: any) => Promise<any>>
   try {
     register(deps.defineTool({
       name: 'subagent_manager_switch',
-      description: 'Enable or disable one persona. Only enabled personas appear in the「可委派的子智能体」catalog and can be given work. Reversible, and the file is untouched. Only when the user asks or approves.',
+      description: 'Enable or disable one persona. Only enabled personas appear in the「当前子智能体」catalog and can be given work. Reversible. Only when the user asks or approves.',
       parameters: {
         name: { type: 'string', required: true, description: 'Persona name.' },
         enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable; omission is refused.' },
@@ -109,19 +129,37 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
       //
       // 0.14.0：create 与 update 并成一条 upsert。判定也只能在这里做 —— `subagent-create`
       // 对同名是拒绝的、`subagent-update` 对不存在的名字报错，而模型手里的目录可能已经过期。
-      description: 'Create a persona at ~/.dsh/tool-management/subagents/<name>.md, or update the one that already has this name — the receipt says which. Omitted fields keep their current values. Write `body` as who this is and how it judges its own work — not the steps or paths, those belong to the task; put hard output requirements in `output` (one per line), not buried in prose. Only on the user\'s explicit request.',
+      //
+      // 落点路径（`at ~/.dsh/tool-management/subagents/<name>.md`）删掉（2026-10-15 注入文本
+      // 审查）：模型不按路径行动，这条工具也没有"给我路径"的用法（要读正文有 `list` +
+      // 宿主的文件工具，而人设正文本来就是给它自己当系统提示词用的）。
+      description: 'Create a persona, or update the one that already has this name — the receipt says which. Omitted fields keep their current values. Write `body` as who this is and how it judges its own work — not the steps or paths, those belong to the task; put hard output requirements in `output` (one per line), not buried in prose. The three settings changed most often are settable here too: `model` (route this persona to another model; \'\' = inherit), `continuable` (allow follow-up), and the tool allow/deny lists `tools`/`toolsDeny` ([] = clear). Other routing/limit fields stay panel-only. Blocked while the active scene is locked. Only on the user\'s instruction.',
       parameters: {
-        name: { type: 'string', required: true, description: 'Persona name (= file name); ≤64 chars, no path separators or < > : " | ? *.' },
+        name: { type: 'string', required: true, description: 'Persona name (= file name); ≤64 chars, one path segment — no / \\ or < > : " | ? *, no leading dot, no reserved device name, no trailing dot or space.' },
         description: { type: 'string', description: 'One-line routing description — this is what shows up in the delegation catalog. Required when creating; omit = keep.' },
         body: { type: 'string', description: 'Markdown role definition. Required when creating; omit = keep.' },
         output: { type: 'string', description: 'Output contract, one requirement per line. Empty string clears it; omit = keep.' },
         nextName: { type: 'string', description: 'New name (rename); re-points scene-profile bindings. Omit = keep. Refused if a persona already has that name.' },
+        model: { type: 'string', description: "Model id for this persona's runs. '' = inherit the main session's model; omit = keep." },
+        continuable: { type: 'boolean', description: 'true = this persona may be followed up (runs in the background and returns an agent id); false = one-shot. Omit = keep.' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Tool allowlist — the subagent keeps only these tools. [] = clear; omit = keep.' },
+        toolsDeny: { type: 'array', items: { type: 'string' }, description: 'Tool denylist — removed from the subagent; wins over the allowlist. [] = clear; omit = keep.' },
       },
       output: { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => text(String(v)) },
       async execute(args: any) {
         const blocked = await deps.lockedSceneGuard()
         if (blocked) throw new Error(blocked)
         const name = String((args && args.name) || '').trim()
+        // 高级字段的形状校验：填错会在 op 侧**静默**（`serializePersona` 对非数组 `tools`
+        // 是"当空处理"，等于把用户原有的名单清掉）。在这里先挡一句。
+        if (args && args.continuable !== undefined && typeof args.continuable !== 'boolean') {
+          throw new Error('continuable 必须是 true 或 false')
+        }
+        for (const k of ['tools', 'toolsDeny']) {
+          if (args && args[k] !== undefined && !Array.isArray(args[k])) {
+            throw new Error(k + ' 必须是字符串数组（[] = 清空）')
+          }
+        }
         const current: any = await ops()['subagent-get']({ name })
         if (!current || current.ok === false) {
           // 建的分支：description 与 body 都必填。`subagent-create` 自己会拒（人设名不合法 /
@@ -133,7 +171,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
             body === '' ? 'body' : '',
           ].filter((x) => x !== '')
           if (missing.length) throw new Error('新建人设必须给 ' + missing.join(' 与 ') + '（' + name + ' 还不存在）')
-          const r: any = await ops()['subagent-create']({ name, description: args.description, body: args.body, output: args.output })
+          const r: any = await ops()['subagent-create']({ name, description: args.description, body: args.body, output: args.output, ...advancedArgs(args) })
           if (!r || r.ok === false) throw new Error((r && r.error) || '创建人设失败')
           // 新建的人设默认停用（与 MCP / 技能同口径）。这句必须留：不说的话模型会直接去委派，
           // 然后收到"人设不可用"，而它并不知道自己少拨了一个开关。点名的 subagent_manager_switch
@@ -145,30 +183,29 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
           return 'OK: persona ' + String(r.name || name) + ' created' + enableHint
         }
         const keep = current.persona || {}
+        // 省略 = 保持（读回现值），给了 = 覆盖。高级字段走同一套 —— 不在工具侧合并，
+        // `subagent-update` 的整份重写就会把没给的那些冲掉。
+        const pick = (k: string, fallback: unknown): unknown => (args && args[k] !== undefined ? args[k] : fallback)
         const touched: string[] = []
-        if (args.nextName !== undefined) touched.push('nextName')
-        if (args.description !== undefined) touched.push('description')
-        if (args.body !== undefined) touched.push('body')
-        if (args.output !== undefined) touched.push('output')
-        if (!touched.length) throw new Error('没有要改的东西：nextName / description / body / output 至少给一个')
+        for (const k of ['nextName', 'description', 'body', 'output', ...ADVANCED_FIELDS]) {
+          if (args && args[k] !== undefined) touched.push(k)
+        }
+        if (!touched.length) throw new Error('没有要改的东西：description / body / output / nextName 或任一高级字段至少给一个')
         const merged = {
           name,
           nextName: args.nextName,
-          description: args.description !== undefined ? String(args.description) : String(keep.description ?? ''),
-          body: args.body !== undefined ? String(args.body) : String(keep.body ?? ''),
-          output: args.output !== undefined ? String(args.output) : (Array.isArray(keep.output) ? keep.output.join('\n') : String(keep.output ?? '')),
-          provider: keep.provider ?? '',
-          model: keep.model ?? '',
-          // ⚠️ 必须带回来：`subagent-update` 走 `serializePersona` **整份重写**，少带一个字段
-          // 就是静默清掉它。`reasoningEffort` 是 0.14.0 新增的，最容易在这里被漏掉 ——
-          // 模型只改一句 body，用户配好的思考强度就没了，而且没有任何提示。
-          reasoningEffort: keep.reasoningEffort ?? '',
-          // 0.19.0 同理：`continuable` 不在本工具的参数表里（与工具限制、provider/model 同一档 ——
-          // 它在面板上配），所以这里**只负责别把它冲掉**。漏了它的后果是：模型改一次描述，
-          // 用户设好的"允许追问"就静默变回一次性，而回执照样说成功。
-          continuable: keep.continuable === true,
-          tools: keep.tools ?? [],
-          toolsDeny: keep.toolsDeny ?? [],
+          description: pick('description', String(keep.description ?? '')),
+          body: pick('body', String(keep.body ?? '')),
+          output: pick('output', Array.isArray(keep.output) ? keep.output.join('\n') : String(keep.output ?? '')),
+          // ⚠️ 不加参数的三项（provider / reasoningEffort / catalogDepth）**只负责别冲掉**：
+          // `subagent-update` 走 `serializePersona` 整份重写，少带一个就是静默清掉它。
+          provider: String(keep.provider ?? ''),
+          reasoningEffort: String(keep.reasoningEffort ?? ''),
+          model: pick('model', String(keep.model ?? '')),
+          continuable: pick('continuable', keep.continuable === true) === true,
+          tools: pick('tools', keep.tools ?? []),
+          toolsDeny: pick('toolsDeny', keep.toolsDeny ?? []),
+          // `toolsByPreset` 也留给面板（嵌套对象，schema 带不动）：这里只负责别把它冲掉。
           toolsByPreset: keep.toolsByPreset ?? {},
           catalogDepth: keep.catalogDepth,
         }

@@ -213,12 +213,19 @@ export function createSceneLock(deps: SceneLockDeps): SceneLock {
       return r && r.ok && r.activeScene ? String(r.activeScene) : null
     } catch { return null }
   }
-  /** 「当前场景已锁定」的拒绝文案（模型工具用；无活动场景 / 未锁定 → null）。 */
+  /**
+   * 「当前场景已锁定」的拒绝文案（模型工具用；无活动场景 / 未锁定 → null）。
+   *
+   * ⚠️ 读者是**模型**，不是面板用户：这句只陈述事实（哪个场景、被拒、可预期的规则），
+   * **不指路 UI**。「到场景页解锁」是给坐在界面前的人看的，模型照着做不了 —— 它只会
+   * 把这句读成"再试一次也许就好了"，于是重试同一次写入。要用户去解锁，由模型转述。
+   * （与 `src/tools/*.ts` 里那批回执同一条纪律；面板侧的中文报错是另一回事，那些读者是人。）
+   */
   async function lockedSceneGuard(): Promise<string | null> {
     const scene = await activeSceneName()
     if (!scene) return null
     const locked = await lockedSceneNames()
-    return locked.includes(scene) ? `场景「${scene}」已锁定：先到场景页解锁再改。` : null
+    return locked.includes(scene) ? `场景「${scene}」已锁定，本次写入被拒：锁定期间该域不可修改，需用户解锁后再试。` : null
   }
   return { lockedSceneNames, activeSceneName, lockedSceneGuard }
 }

@@ -216,6 +216,22 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         : { ...res, stateSyncError: reason }
     }
   }
+  /**
+   * 目标目录里第一个空出来的退号名：`写作助手` → `写作助手（1）` → `写作助手（2）`…
+   * （全角括号，与界面 `uniqueName` 同一写法 —— 人设名就是文件名，不做任何归一化，
+   * `validPersonaName` 也放行全角括号）。
+   *
+   * 候选本身不合法（超长 / 空）时直接放弃：再往后试也不会变合法。
+   */
+  async function nextFreePersonaName(name: string): Promise<string | null> {
+    for (let i = 1; i <= 999; i += 1) {
+      const candidate = `${name}（${i}）`
+      if (!validPersonaName(candidate)) return null
+      const taken = await readFile(join(dir, candidate + '.md'), 'utf8').then(() => true).catch(() => false)
+      if (!taken) return candidate
+    }
+    return null
+  }
   /** list() 输出统一附上 enabled：文件缺失 → 全 true；否则按集合。 */
   function withEnabled(docs: PersonaDoc[], set: string[] | null): PersonaDoc[] {
     if (set === null) return docs.map((d) => ({ ...d, enabled: true }))
@@ -368,10 +384,30 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const entry = await readTrashEntry('subagents', id)
       if (!entry) return { ok: false, error: `回收站条目不存在: ${id}` }
       if (!validPersonaName(entry.name)) return { ok: false, error: `回收站里的人设名不合法: ${entry.name}` }
-      const target = join(dir, entry.name + '.md')
-      const exists = await readFile(target, 'utf8').then(() => true).catch(() => false)
-      // 绝不覆盖：同名人设已经存在时如实拒绝，让人自己决定怎么办。
-      if (exists) return { ok: false, error: `无法恢复，同名人设已存在: ${entry.name}` }
+      /*
+       * 同名先问一句（用户 2026-10-14）：撞名时**默认仍拒绝**（绝不覆盖），但把候选名字一起
+       * 回（`params.next`），界面弹窗才能如实写出"确认后会叫 `写作助手（1）`"；用户确认后带
+       * `dedupe: true` 重来，这一次真的按退号的名字落盘。
+       *
+       * `dedupe` 缺省即旧行为：这条 op 目前只有界面在用，但默认值必须是"拒" —— 一个默认
+       * 静默改名的恢复口，早晚会有人踩。
+       */
+      let name = entry.name
+      const exists = await readFile(join(dir, name + '.md'), 'utf8').then(() => true).catch(() => false)
+      if (exists) {
+        const next = await nextFreePersonaName(name)
+        if (args?.dedupe !== true || !next) {
+          // 专用错误码（四个回收站统一）：界面按它认出"这是撞名"并弹确认窗。
+          return {
+            ok: false,
+            error: `已存在同名人设: ${name}`,
+            code: 'error.dup.conflict',
+            params: { name, ...(next ? { next } : {}) },
+          }
+        }
+        name = next
+      }
+      const target = join(dir, name + '.md')
       try {
         await mkdir(dir, { recursive: true })
         await moveOutOfTrash('subagents', id, 'persona.md', target)
@@ -380,8 +416,9 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       }
       await purgeTrashEntry('subagents', id)
       // v0.8.5：回收站恢复默认不启动（与新建/导入同口径）。
+      // 启停名单必须按**最终落盘的名字**写：退号恢复时它不是回收站里的原名。
       cache = null
-      return withEnabledNote({ ok: true, name: entry.name }, () => materializeEnabledExcluding([entry.name]))
+      return withEnabledNote({ ok: true, name, renamed: name !== entry.name }, () => materializeEnabledExcluding([name]))
     },
     'subagent-trash-delete': async (args: any) => {
       const id = String((args && args.id) || '').trim()

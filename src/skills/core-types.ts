@@ -218,6 +218,17 @@ export interface WriteOptions {
   projectCwds?: string[];
 }
 
+/**
+ * 回收站恢复选项。
+ *
+ * `dedupe: true` = 撞名时**退号恢复**（`foo` → `foo-1`，用户 2026-10-14 裁定），缺省撞名即拒。
+ * 单独一档而不是并进 `WriteOptions`：这个开关只对恢复有意义，混进写选项里，以后别的写入口
+ * 读到它只会以为"撞名可以自动改名"。
+ */
+export interface RestoreOptions extends WriteOptions {
+  dedupe?: boolean;
+}
+
 /** 导入选项。 */
 export interface ImportOptions {
   conflict?: unknown;
@@ -477,5 +488,7 @@ export interface TrashRestoreResult {
   ok?: true;
   id: string;
   name: string;
+  /** 退号恢复（`dedupe: true` 且撞名）时为真 —— `name` 与回收站里的原名不同。 */
+  renamed?: boolean;
   root: TrashRootMetadata;
 }

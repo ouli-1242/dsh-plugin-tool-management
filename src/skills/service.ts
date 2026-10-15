@@ -104,6 +104,22 @@ function notifyChatCatalog(ctx: any, invalidateSkills: () => void): void {
   } catch { /* 斜杠菜单刷新失败不影响已完成的操作 */ }
 }
 
+/**
+ * 本插件**可写**的技能来源集合，共两员：
+ *
+ * - `hub`（`$DSH_HOME/tool-management/skills/`，界面名「导入技能」）—— 导入 / 上传的落点；
+ * - `dsh`（`$DSH_HOME/skills/`，界面名「DSH 技能」）—— **新建**技能的落点（用户裁定
+ *   2026-10-15：「新增技能默认 DSH 技能；导入技能功能才是导入技能目录」）。
+ *
+ * 其余根（官方内置 / agents / codex / claude / 自定义 / 项目）一律不碰。
+ *
+ * 这个集合曾经只有 `hub`：新建默认落点还在 hub 的年代那么判够用。落点改到 dsh 之后，
+ * 只认 hub 会把「新建 → 再存一次」整条回路掐断 —— 新建默认落 dsh，改的分支永远找不到
+ * hub 里的胜出者，每次都回 `error.update.notOwnRoot`。所以它与新建落点是同一条裁定
+ * 的两面，必须一起扩。
+ */
+const PLUGIN_WRITABLE_ROOTS: ReadonlySet<string> = new Set(['hub', 'dsh'])
+
 export interface SkillsService {
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
@@ -357,13 +373,15 @@ export function createSkillsService(ctx: any): SkillsService {
       afterWrite,
     ),
     // 创建 / 导入 / 删除 / 回收站
-    // 创建默认落 hub（`tool-management/skills/`）：UI 不传 root 时走这里；
-    // core.js 的 createSkill 默认值是第二道保险（同口径）。官方 `~/.dsh/skills/` 仍作为来源列出。
+    // 创建默认落 **DSH 技能目录**（用户裁定 2026-10-15）：v0.4 起这里是 hub，现在改回 dsh ——
+    // hub（`tool-management/skills/`）只服务「导入技能」功能。与 UI「创建技能」的
+    // `defaultCreateRoot`、core.js 的 createSkill 默认值同口径；core 里的那份是第二道保险。
+    // 落点变了但有一件事没变：`skill_manager_switch` / `_remove` 侧跨来源解析照旧兜得住（P0-1）。
     'skill-create': wrap(
       (args) => write(async () => {
         // requestRoot 未命中时回传原始 key，让 core 的 error.root.unknown 带上来源名
         // （否则传了不存在的 root 会收到「技能来源不存在：(空)」这种指错方向的提示）。
-        const key = String(args.root || 'hub')
+        const key = String(args.root || 'dsh')
         const res = await createSkill(
           { name: args.name, description: args.description, body: args.body },
           log,
@@ -377,10 +395,15 @@ export function createSkillsService(ctx: any): SkillsService {
       }),
       afterWrite,
     ),
-    // 改写**本插件自己写的那一份**技能。只认 hub 里的胜出者：同名技能在 dsh / agents /
-    // claude / 自定义根各有一份时只有一份生效，改错那一份会返回 OK 而技能毫无变化
-    // （用户实测踩过：同一技能四份并存，启错根等于没启）。胜出者判定要读来源排序与首选
-    // 设置，属于状态层，所以在这里做；core 的 `updateSkill` 只保证不越出给定根。
+    // 改写**本插件自己写的那一份**技能。先跨来源找胜出者，再要求它落在本插件可写的两个根
+    // （hub / dsh，见 PLUGIN_WRITABLE_ROOTS）里：同名技能在 dsh / agents / claude / 自定义根
+    // 各有一份时只有一份生效，改错那一份会返回 OK 而技能毫无变化（用户实测踩过：同一技能
+    // 四份并存，启错根等于没启）。胜出者判定要读来源排序与首选设置，属于状态层，所以在这里
+    // 做；core 的 `updateSkill` 只保证不越出给定根。
+    //
+    // 门禁为什么不能只认 hub：新建默认落点 2026-10-15 改到 dsh 后，模型 `skill_manager_save`
+    // 建出来的技能全在 dsh；只认 hub 时改的分支永远找不到 hub 胜出者，「新建 → 再存一次」
+    // 直接回 error.update.notOwnRoot。可写集合跟着落点一起扩才闭环。
     'skill-update': wrap(
       (args) => write(async () => {
         const wanted = String(args.name || '').trim()
@@ -399,18 +422,20 @@ export function createSkillsService(ctx: any): SkillsService {
           return { ok: false, code: 'error.update.notFound', params: { name: wanted }, error: `技能不存在：${wanted}` }
         }
         const winner = hits.find((h) => !h.shadowedBy) || hits[0]
-        if (winner.rootKey !== 'hub') {
+        if (!PLUGIN_WRITABLE_ROOTS.has(winner.rootKey)) {
           return {
             ok: false,
             code: 'error.update.notOwnRoot',
             params: { name: wanted, root: winner.rootKey },
-            error: `技能 ${wanted} 的生效副本在来源「${winner.rootKey}」，不在本插件落点（hub = $DSH_HOME/tool-management/skills）：本插件不修改官方根里的技能`,
+            error: `技能 ${wanted} 的生效副本在来源「${winner.rootKey}」，不在本插件可写的目录（hub = 导入落点；dsh = $DSH_HOME/skills）：本插件不修改官方根里的技能`,
           }
         }
+        // 写**胜出者所在的那个根**，不能写死 hub：同名两边各有一份时写错那份，
+        // 正是这道判定要防的「返回 OK 而技能毫无变化」。
         return updateSkill(
           { name: args.name, description: args.description, body: args.body },
           log,
-          { root: (await requestRoot('hub')) || 'hub' },
+          { root: (await requestRoot(winner.rootKey)) || winner.rootKey },
         )
       }),
       afterWrite,
@@ -444,8 +469,14 @@ export function createSkillsService(ctx: any): SkillsService {
     ),
     'skill-trash-restore': wrap(
       (args) => write(async () => {
-        const res = await restoreTrash(String(args.id || ''), log, projectOptions())
+        // `dedupe: true` = 界面上"已存在同名技能，是否恢复为 foo-1"确认过之后那一次
+        // （用户 2026-10-14）；不带时撞名照旧拒绝，并把候选名字放在 `params.next` 里回给弹窗。
+        const res = await restoreTrash(String(args.id || ''), log, {
+          ...projectOptions(),
+          dedupe: args.dedupe === true,
+        })
         // 恢复的技能默认停用（v0.8.5 用户裁定：新建/导入/恢复一律不启动，手动开启）。
+        // `res.name` 是**最终落盘的名字**（退号恢复时不是回收站里的原名），启停状态必须按它写。
         if (res && res.ok !== false && res.name) {
           return disableNewSkills([{ root: String(res.root || 'hub'), name: String(res.name) }], res)
         }

@@ -775,6 +775,10 @@
           var busyState = React.useState(null), busy = busyState[0], setBusy = busyState[1]
           var em = React.useState(null), editModal = em[0], setEditModal = em[1]
           var cm = React.useState(null), createModal = cm[0], setCreateModal = cm[1]
+          // 新建撞名确认窗（42-shared-ui.js 的 DupNameDialog）：`{ name, finalName, kind }`。
+          // 提示词是**第五个**用它的域（记忆 / 场景 / 技能 / 子智能体之外）—— 前四个在 2026-10-14
+          // 一起改成了"先问一句"，提示词当时漏在外面，撞名照旧是一句「id 已存在」把人挡回去。
+          var ca = React.useState(null), dupAsk = ca[0], setDupAsk = ca[1]
           var ac = React.useState(null), applyConfirm = ac[0], setApplyConfirm = ac[1]
           // 回收站：true = 打开本页那一个回收站（42-shared-ui.js 的 TrashModal，domain = prompts）。
           // 提示词域（预设 + 快捷）的清单加载与恢复/永久删除都在组件内部完成，
@@ -1007,6 +1011,32 @@
               else refresh()
             }).catch(function (e) { setBusy(null); setApplyConfirm(null); actionFailed(e) })
           }
+          /**
+           * 新建提示词的**入口**：先按目标那一档的现有 id 查重（用户 2026-10-14）。
+           *
+           * 撞名原先只在服务端被拒（`agentsmd-create` / `quickprompt-create` 各回一句
+           * 「id 已存在」），用户看到的是"这条 id 不能用"，而不是"要不要叫 `1（1）`" ——
+           * 与其余四个域（记忆 / 场景 / 技能 / 子智能体）的口径不一致。这里补上同一套：
+           * 撞名先弹 `DupNameDialog`，确认了才带着退号后的 id 落盘。
+           *
+           * 查重只在**同一档内部**做：全局提示词与快捷提示词各占一个目录
+           * （`prompts/<id>/` 与 `quick-prompts/<id>/`），两边的 id 互不影响。
+           *
+           * 本地查重不替代服务端那道闸：期间别人（或模型工具）建了同一条，提交仍会被拒，
+           * 那时照旧如实报错 —— 这里只是把常见情形做顺手，不是替服务端下判断。
+           */
+          function submitCreate(id, content, description) {
+            var typed = String(id || '').trim()
+            var isQuick = createModal && createModal.kind === 'quick'
+            var taken = {}
+            ;(isQuick ? quick.prompts : state.presets).forEach(function (p) { taken[String(p.id)] = true })
+            var finalId = uniqueName(typed, taken)
+            // 正文与描述一并带进确认窗：确认时直接用它们，不再回头读 `createModal` ——
+            // 那样确认动作就依赖"那个弹窗还开着"，而这两件事没有必然关系。
+            if (finalId !== typed) { setDupAsk({ name: typed, finalId: finalId, content: content, description: description }); return }
+            doCreate(typed, content, description)
+          }
+          /** 真正落盘那一步（id 已定）。`id` 来自 `submitCreate` 或确认弹窗。 */
           function doCreate(id, content, description) {
             beginAction()
             setBusy('create')
@@ -1440,7 +1470,7 @@
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', placeholder: t(createModal.kind === 'quick' ? 'quickprompt.field.content.placeholder' : 'agm.field.content.placeholder'), value: createModal.content || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { content: e.target.value })) } })),
               createModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, createModal.error) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(createModal.id || '').trim(), onClick: function () { doCreate(createModal.id, createModal.content, createModal.description) } }, t('agm.btn.create')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(createModal.id || '').trim(), onClick: function () { submitCreate(createModal.id, createModal.content, createModal.description) } }, t('agm.btn.create')))) : null,
             // 三种确认共用一个弹窗：删除 / 取消应用 / 应用（`applyConfirm` 上的标记位区分）。
             applyConfirm ? React.createElement(Modal, { className: 'dsm-modal-sm', title: applyConfirm.remove ? (t('agm.remove.title') + ' · ' + applyConfirm.id) : ((applyConfirm.unapply ? t('agm.unapply.title') : t('agm.applyModal.title')) + ' · ' + applyConfirm.id), closeLabel: t('btn.close'), onClose: function () { setApplyConfirm(null) } },
               applyConfirm.remove
@@ -1495,7 +1525,16 @@
               React.createElement('p', { className: 'dsm-help' }, t('quickprompt.remove.hint')),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: function () { setQuickConfirm(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy !== null, onClick: function () { doQuickRemove(quickConfirm.id) } }, t('agm.btn.confirmRemove')))) : null)
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy !== null, onClick: function () { doQuickRemove(quickConfirm.id) } }, t('agm.btn.confirmRemove')))) : null,
+            // 新建撞名确认窗。放在最后渲染 = 盖在新建弹窗之上（两个弹窗都开着，用户确认/取消
+            // 之后回到那张还填着内容的表单，不用重新输入）。
+            dupAsk ? React.createElement(DupNameDialog, {
+              key: 'dup-name', t: t, kind: t('dup.kind.prompt'),
+              name: dupAsk.name, finalName: dupAsk.finalId, action: 'create',
+              busy: busy !== null,
+              onConfirm: function () { setDupAsk(null); doCreate(dupAsk.finalId, dupAsk.content, dupAsk.description) },
+              onCancel: function () { setDupAsk(null) },
+            }) : null)
         }
 
         // 「工具」设置页：一个侧栏项，内部 tab 切换 场景 / MCP / 技能 / 子智能体 / 提示词 / 记忆 / 会话。

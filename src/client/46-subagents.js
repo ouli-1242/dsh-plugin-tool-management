@@ -24,6 +24,10 @@
           var result = rs[0], setResult = rs[1]
           var ms = React.useState(null)
           var modal = ms[0], setModal = ms[1]
+          // 「已存在同名人设」确认弹窗（用户 2026-10-14）：`{ name, finalName }` 或 null。
+          // 撞名不再静默退号（`写作助手` → `写作助手（1）`），先问一句再建。
+          var dups = React.useState(null)
+          var dupAsk = dups[0], setDupAsk = dups[1]
           /**
            * 「思考强度」的加载状态。key = 已拉取/正在拉取的 `provider\0model`（空串 = 还没选模型）。
            * 与 `cands` 分开两个 state：档位是**按模型**懒加载的，而候选目录是一次性拉的，
@@ -580,15 +584,34 @@
               loadEfforts(modal.form.provider, modal.form.model)
             }
           }
+          /**
+           * 编辑器唯一的保存动作。**新建撞名先问一句**（用户 2026-10-14 第二轮）。
+           *
+           * 判据是当前人设清单（`data.subagents` 的 `name`）—— 人设名就是文件名、
+           * `validPersonaName` 不做任何归一化，所以本地查得到就是真的撞了。编辑态不做这一步：
+           * 改的是自己，而且改名撞上别人由服务端 `subagent-update` 自己拒（`人设已存在`）。
+           */
           function submitEditor() {
+            if (!modal || modal.type !== 'editor') return
+            var typed = String(modal.form.name || '').trim()
+            if (modal.mode === 'create') {
+              var taken = {}
+              ;(data.subagents || []).forEach(function (p) { taken[String(p.name)] = true })
+              var finalName = uniqueName(typed, taken)
+              if (finalName !== typed) { setDupAsk({ name: typed, finalName: finalName }); return }
+            }
+            saveEditor(typed)
+          }
+          /** 真正落盘那一步（名字已定）。`name` 来自 `submitEditor` 或确认弹窗。 */
+          function saveEditor(name) {
             if (!modal || modal.type !== 'editor') return
             setBusy(true)
             var op = modal.mode === 'create' ? 'subagent-create' : 'subagent-update'
             // 编辑时名字可改：nextName 只在真的改过时才传（服务端按原名定位文件）。
-            var renamed = modal.mode === 'edit' && modal.originalName && modal.originalName !== modal.form.name
+            var renamed = modal.mode === 'edit' && modal.originalName && modal.originalName !== name
             apiCall(op, {
-              name: renamed ? String(modal.originalName) : modal.form.name,
-              ...(renamed ? { nextName: String(modal.form.name || '').trim() } : {}),
+              name: renamed ? String(modal.originalName) : name,
+              ...(renamed ? { nextName: name } : {}),
               description: modal.form.description,
               provider: modal.form.provider, model: modal.form.model,
               catalogDepth: modal.form.catalogDepth,
@@ -600,7 +623,7 @@
               output: modal.form.output || '',
             }).then(function (res) {
               setBusy(false)
-              if (res && res.ok) { var sw = stateSyncWarn(t, res); setModal(null); setResult({ ok: !sw, warning: !!sw, text: t('done.saved', { name: modal.form.name }) + (sw ? ' ' + sw : '') }); refresh(true) }
+              if (res && res.ok) { var sw = stateSyncWarn(t, res); setModal(null); setResult({ ok: !sw, warning: !!sw, text: t('done.saved', { name: name }) + (sw ? ' ' + sw : '') }); refresh(true) }
               else setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, { error: translateError(t, res) }) }))
             }).catch(function (e) { setBusy(false); setModal(Object.assign({}, modal, { form: Object.assign({}, modal.form, { error: errMsg(e) }) })) })
           }
@@ -725,7 +748,7 @@
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.name')),
                   React.createElement('input', { className: 'dsm-control', value: modal.form.name || '', placeholder: 'code-review', onChange: function (e) { setForm({ name: e.target.value }) } })),
                 React.createElement('label', { className: 'dsm-field' },
-                  // 描述会整段进「可委派的子智能体」目录，上限就是注入侧的截断长度（`CATALOG_DESC_MAX`）；
+                  // 描述会整段进「当前子智能体」目录，上限就是注入侧的截断长度（`CATALOG_DESC_MAX`）；
                   // 存量人设的超长描述标红（服务端不校验这个长度，只有注入时截）。
                   React.createElement('div', { className: 'dsm-budget-meta' },
                     React.createElement('span', { className: 'dsm-label' }, t('subagents.field.description')),
@@ -926,6 +949,15 @@
               domain: 'agents',
               onClose: function () { setTrash(false) },
               onReload: function () { refresh(true) },
+            }) : null,
+            // 「已存在同名人设」小窗：叠在编辑器之上（`Modal` 自带 gateModalDepth 计数）。
+            // 取消 → 回到编辑器改名字，简介与正文一个字都不动。
+            dupAsk ? React.createElement(DupNameDialog, {
+              key: 'dup-name', t: t, kind: t('dup.kind.subagent'),
+              name: dupAsk.name, finalName: dupAsk.finalName, action: 'create',
+              busy: busy,
+              onCancel: function () { setDupAsk(null) },
+              onConfirm: function () { setDupAsk(null); saveEditor(dupAsk.finalName) },
             }) : null)
         }
 

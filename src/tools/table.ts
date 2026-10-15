@@ -5,7 +5,7 @@
 // 发出，哪怕这一轮根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；
 // 面板（118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着十五条**（20 条里实发只剩 5 条）—— 名单、判据与代价见下面
+// 出厂**默认就关着十四条**（20 条里实发 6 条）—— 名单、判据与代价见下面
 // `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // ⚠️ **那个口径不是 token 数，别拿它跟别的数直接比**（2026-09-23 用真 BPE 词表实测）：
@@ -50,18 +50,28 @@ export interface ToolTableSettings {
 }
 
 /**
- * 出厂默认关掉的十五条（0.14.0）：整张表 20 条 ≈3,769 tok，关掉后**每轮实发 5 条 ≈1,090**（省 ≈2,679）。
+ * 出厂默认关掉的**十九条**：整张表 25 条，关掉后**每轮实发 6 条**。
  *
  * 判据是用户 2026-09-23 的三轮裁定，同一条：**这些信息或动作常态下由注入段与面板承担，
  * 平时也用不到模型自己伸手**。三组：
  *   · **写侧五条** —— 三个 `*_save`（MCP / 技能 / 人设：配置本体在面板上改）+ 提示词两条
- *     （这一族只有两条，而当前生效的那份本来就在「本机提示词」注入段里）。
- *   · **读侧四条** —— 三个 `*_list` + `memory_manager_read`。会话开头注入的那几段目录已经写了
- *     当前有什么，模型不必每轮再带一份查询工具。
+ *     （这一族只有两条，而当前生效的那份本来就在「当前提示词」注入段里）。
+ *   · **读侧三条** —— 两个 `*_list`（MCP / 技能）+ `memory_manager_read`。会话开头注入的那几段
+ *     目录已经写了当前有什么，模型不必每轮再带一份查询工具。
  *   · **场景三条 + 开关三条** —— 场景一族（建 / 勾档案 / 进入退出）与 `skill` / `memory` /
  *     `subagent` 三个 `_switch`（用户：「平时使用也很少」）。启停在面板上都有同款，注入段也
  *     写着当前开着哪些。**`mcp_manager_switch` 刻意留着**：它是"这台先给我关了"这条最常用的
  *     临时动作的唯一入口，也是 MCP 域留下来的一条腿。
+ *
+ * 2026-10-14（对抗性审查 P0-2）：**`subagent_manager_list` 从这份名单里拿了出来**（十四条）。
+ * 判据与上面那条"注入段承担"不同 —— 人设域**没有官方载体兜底**：MCP / 技能 / 记忆三个域的
+ * 目录即便被压制型预设压掉，也各自还有一条常驻发现路径，而人设目录一旦不注入，模型手里就
+ * 只剩 `subagent_manager_run` 一条可见工具、**无从知道任何人设名**（死路：有工具、没输入）。
+ * 它只有 42 tok，买的是把"注入段是唯一发现路径"这个单点消掉。
+ *
+ * 2026-10-15：**删除 / 回收站族五条**（`*_manager_remove`）出厂默认关。判据是"删一条记忆 /
+ * 技能 / 人设"是常问的，但它**低频于"读现状 + 拨开关 + 建改定义"**那批，而且面板每个域都有
+ * 删除入口 —— 默认关、要用时在「兼容」页勾上（与另外十四条同一条纪律，不额外付 token）。
  *
  * ⚠️ 关掉的是**能力**，不是"冗余"，代价如实记在这里（要拿回来就在「兼容」页勾，或整批换：
  * 「恢复方案」）：注入的目录是**筛过的视图**（MCP 段只列可用/曾可用的、人设目录只列本场景
@@ -79,21 +89,25 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'scene_manager_list',
   'scene_manager_switch',
   'scene_manager_save',
+  'scene_manager_remove',
   'memory_manager_read',
   'memory_manager_switch',
+  'memory_manager_remove',
   'mcp_manager_list',
   'mcp_manager_save',
   'skill_manager_list',
   'skill_manager_switch',
   'skill_manager_save',
-  'subagent_manager_list',
+  'skill_manager_remove',
   'subagent_manager_switch',
   'subagent_manager_save',
+  'subagent_manager_remove',
   'prompt_manager_list',
   'prompt_manager_apply',
+  'prompt_manager_remove',
 ])
 
-/** 出厂默认那份设置：十五条不发（名单与理由见上面），方案清单是空的。 */
+/** 出厂默认那份设置：十四条不发（名单与理由见上面），方案清单是空的。 */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */
@@ -264,7 +278,7 @@ export interface ToolTableReport {
   groups: ToolTableGroup[]
   /** 当前会随请求发出的部分。 */
   visibleTok: number
-  /** 当前不发的那部分（关对了就是这个数）。 */
+  /** 当前不发的那部分（关对了就是这个数）。**不含**载体让位那一档。 */
   hiddenTok: number
   totalTok: number
   visibleCount: number
@@ -280,6 +294,17 @@ export interface ToolTableReport {
   defaultHiddenCount: number
   /** 那几条当前省下的 ≈token。 */
   defaultHiddenTok: number
+  /**
+   * 「有官方等价物 ⇒ 我们让位」而当前**不发**的那部分（`skill_manager_read`）。
+   *
+   * 为什么单开一档，不并进 `hiddenTok`：那一档的语义是"用户或出厂关掉的"，界面用
+   * `hiddenCount - defaultHiddenCount` 反推"用户自己关了几条"。载体让位既不是用户关的、
+   * 也不是出厂关的 —— 并进去，兼容页就会报出一个假的"用户关掉了 1 条"。
+   * 而**不计入可见**是必须的：那条工具在标准预设下确实不进请求（`index.ts` 的
+   * `CARRIER_DUPLICATES`），报成"实发"就是虚报（2026-10-14 对抗性审查 P2-1）。
+   */
+  carrierHiddenCount: number
+  carrierHiddenTok: number
 }
 
 /**
@@ -298,13 +323,23 @@ export function estimateTok(bytes: number): number {
 }
 
 /**
- * 纯函数：把注册时量到的体积按域分组，标出哪些被关掉，给出三档合计。
+ * 纯函数：把注册时量到的体积按域分组，标出哪些被关掉，给出四档合计。
  *
  * 顺序：域按 `INJECT_DOMAIN_KEYS`（界面与注入通道同一顺序），域内按**注册顺序**
  * —— 改顺序等于改显示顺序，不额外定义"重要性"，免得出现第二份排序真相。
+ *
+ * `carrierHidden` 是"官方载体在场时我们主动让位"的名字（当前只有 `skill_manager_read`）。
+ * 它是 **per-agent** 的（取决于那个 agent 的 scope 解析得到解析不到官方 `skill`），而报表是
+ * 全局的 —— 所以由调用方给一份口径明确的名单（`tool-table-switch.ts` 传的是"标准预设下会
+ * 让位"的保守估计），本函数只负责把它从**可见**里扣掉、单独计一档。
  */
-export function buildToolTableReport(rows: readonly ToolTableRow[], hidden: readonly string[]): ToolTableReport {
+export function buildToolTableReport(
+  rows: readonly ToolTableRow[],
+  hidden: readonly string[],
+  carrierHidden: readonly string[] = [],
+): ToolTableReport {
   const off = new Set(hidden.map((name) => String(name)))
+  const carried = new Set(carrierHidden.map((name) => String(name)))
   const buckets = new Map<InjectDomainKey | 'other', ToolTableTool[]>()
   for (const key of INJECT_DOMAIN_KEYS) buckets.set(key, [])
   for (const row of rows) {
@@ -324,6 +359,8 @@ export function buildToolTableReport(rows: readonly ToolTableRow[], hidden: read
   let totalCount = 0
   let defaultHiddenCount = 0
   let defaultHiddenTok = 0
+  let carrierHiddenCount = 0
+  let carrierHiddenTok = 0
   for (const [key, tools] of buckets) {
     if (!tools.length) continue
     let tok = 0
@@ -334,14 +371,18 @@ export function buildToolTableReport(rows: readonly ToolTableRow[], hidden: read
       if (tool.hidden) {
         offTok += tool.tok
         if (tool.defaultHidden) { defaultHiddenCount += 1; defaultHiddenTok += tool.tok }
+      } else if (carried.has(tool.name)) {
+        // 让位那一档：**不发，但不是被谁关掉的** —— 单独计，绝不并进 visible。
+        carrierHiddenCount += 1
+        carrierHiddenTok += tool.tok
       } else { visibleTok += tool.tok; visibleCount += 1 }
     }
     hiddenTok += offTok
     groups.push({ key, tools, tok, hiddenTok: offTok })
   }
   return {
-    groups, visibleTok, hiddenTok, totalTok: visibleTok + hiddenTok,
-    visibleCount, hiddenCount: totalCount - visibleCount, totalCount,
-    defaultHiddenCount, defaultHiddenTok,
+    groups, visibleTok, hiddenTok, totalTok: visibleTok + hiddenTok + carrierHiddenTok,
+    visibleCount, hiddenCount: totalCount - visibleCount - carrierHiddenCount, totalCount,
+    defaultHiddenCount, defaultHiddenTok, carrierHiddenCount, carrierHiddenTok,
   }
 }

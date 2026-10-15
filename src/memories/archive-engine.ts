@@ -532,9 +532,10 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       } catch (e) {
         return { ok: false, error: `读取技能启停现状失败：${msg(e)}` }
       }
-      const sourcesOn: string[] = []
-      const sourcesOff: string[] = []
-      for (const s of skillsPlan.sourceSwitches) (s.enabled ? sourcesOn : sourcesOff).push(s.root)
+      // 来源级切换（skillsPlan.sourceSwitches）只做不说：它是技能启停的实现细节 ——
+      // 勾了技能的来源才启用、一条都没勾就停用。项目来源的 key 是路径哈希
+      // （`project-dsh:47d48f408c5edc5e`），目录对用户可能根本不存在、也不是新建技能的
+      // 落点，报上预览卡只会被当成故障（用户 2026-10-15 裁定：提醒不显示技能目录）。
 
       const stale = [...mcpPlan.stale, ...skillsPlan.stale]
       // 工具表方案（C1）：绑了就说清「会切成哪一份、关几条」。方案在别处被删掉 / 换机器之后
@@ -577,7 +578,6 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         enter: { servers: clip(enterServers) },
         skills: {
           on: clip(skillsOn), off: clip(skillsOff),
-          sourcesOn: clip(sourcesOn), sourcesOff: clip(sourcesOff),
         },
         subagents: { on: clip(personas.on), off: clip(personas.off) },
         quickPrompts,

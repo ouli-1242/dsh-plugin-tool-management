@@ -239,28 +239,46 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
     return complete ? out : null
   }
 
+  /**
+   * 进场景的第一笔写入之前，把当时的基线记下来（已有待恢复的基线就不覆盖：连续切场景时
+   * 基线始终是「进场景之前」那一份）。
+   * @returns 需要让用户知道的原因（写不进去 / 记下来是空的）；一切正常返回 undefined。
+   */
+  async function captureBaseline(scene: string): Promise<string | undefined> {
+    const saved = await readBaseline()
+    if (saved && saved.content !== null) return undefined
+    const cur: any = await deps.prompts.getCurrent()
+    const content = cur && cur.ok && cur.exists ? String(cur.content) : null
+    const failed = await writeBaseline({
+      v: 1,
+      at: Date.now(),
+      presetId: cur && cur.ok && cur.presetId ? String(cur.presetId) : null,
+      content,
+    })
+    // 基线写不进去 = 退出场景时恢复不回来。**照旧进场景**（那是用户的要求），
+    // 但必须当场说出来，别让用户以为还能退回去（审查 F14）。
+    if (failed !== null) {
+      return `进场景前的提示词基线没能写入（${failed}）：AGENTS.md 已切到场景「${scene}」绑定的预设，但退出场景时恢复不回原来的内容（${deps.baselineFile}）。`
+    }
+    // 记下来的是**空的**（进场景时 AGENTS.md 就不存在、或读不出来）：退出场景时没有正文
+    // 可写回，AGENTS.md 会留在场景态。与「写失败」是两件事，后果一样，同样当场说
+    // （2026-10-15 smoke-test P0-2：这一种此前要等到退出之后，才被误报成「快照损坏」）。
+    if (content === null) {
+      return `进场景前的 AGENTS.md 没有内容可记（文件不存在或读不出来）：退出场景时恢复不回原来的状态，AGENTS.md 会留在场景「${scene}」绑定的预设上。`
+    }
+    return undefined
+  }
+
   async function sync(): Promise<SyncResult> {
     const current = await state()
     if (!current) return { unchanged: true }
     if (drives(current)) {
-      if (current.duplicate) return { applied: current.presetId, unchanged: true }
-      // 进场景的第一笔写入之前，先记下当时的基线（已有快照就不覆盖：连续切场景时
-      // 基线始终是"进场景之前"那一份）。
-      let baselineError: string | undefined
-      const saved = await readBaseline()
-      if (!saved || saved.content === null) {
-        const cur: any = await deps.prompts.getCurrent()
-        const failed = await writeBaseline({
-          v: 1,
-          at: Date.now(),
-          presetId: cur && cur.ok && cur.presetId ? String(cur.presetId) : null,
-          content: cur && cur.ok && cur.exists ? String(cur.content) : null,
-        })
-        // 基线写不进去 = 退出场景时恢复不回来。**照旧进场景**（那是用户的要求），
-        // 但必须当场说出来，别让用户以为还能退回去（审查 F14）。
-        if (failed !== null) {
-          baselineError = `进场景前的提示词基线没能写入（${failed}）：AGENTS.md 已切到场景「${current.scene}」绑定的预设，但退出场景时恢复不回原来的内容（${deps.baselineFile}）。`
-        }
+      // 基线必须在 `duplicate` 早退**之前**记（2026-10-15 smoke-test P0-2）：早退省的只是
+      // 「AGENTS.md 不用再写一遍」，不是「不用留退路」。原先这一句在早退之后，于是
+      // 「进一个内容已经等于该预设的场景」完全不记基线 —— 退出时恢复不回原内容。
+      const baselineError = await captureBaseline(current.scene)
+      if (current.duplicate) {
+        return { applied: current.presetId, unchanged: true, ...(baselineError ? { baselineError } : {}) }
       }
       const res: any = await deps.prompts.apply(current.presetId)
       if (res && res.ok === false) return { error: String(res.error || '写入 AGENTS.md 失败'), ...(baselineError ? { baselineError } : {}) }
@@ -268,16 +286,23 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
     }
     // 没有场景驱动 → 如果刚从驱动态退出，把进场景前的基线写回去。
     const saved = await readBaseline()
-    if (!saved || saved.content === null) {
-      // 「没有快照」是常态（没进过场景）；「快照文件在、但读不出来」是**故障** ——
-      // 那意味着恢复目标丢了，AGENTS.md 的提示词基线会悄悄留在场景态。这里曾经一律
-      // 静默 `unchanged`，用户看到的是"没场景驱动所以什么都没做"（审查 P2-16）。
+    // 「快照文件在、但读不出来」是**故障** —— 那意味着恢复目标丢了，AGENTS.md 的提示词基线
+    // 会悄悄留在场景态。这里曾经一律静默 `unchanged`，用户看到的是"没场景驱动所以什么都没做"
+    // （审查 P2-16）。但两种"没有正文"必须分开（2026-10-15 smoke-test P0-2）：
+    //   · `saved === null`         → 文件缺失 / 半截 JSON / 解析失败；
+    //   · `saved.content === null` → 下面 `writeBaseline({presetId:null, content:null})` 写下的
+    //     「没有待恢复基线」哨兵，是**正常终态**（每次正常退出场景之后都会留下它）。
+    // 原先两者共用 `!saved || saved.content === null` 一个条件，于是每次正常退出之后，下一次
+    // 无场景驱动的同步都把哨兵判成损坏，报一句假 WARN —— 而假 WARN 长得和真故障一样，
+    // 反过来把"恢复目标真丢了"这条信号淹掉。
+    if (saved === null) {
       if (await baselineExists()) {
         warn(`scene-prompt: baseline snapshot exists but is unreadable: ${deps.baselineFile}`)
         return { error: `基线快照读不出来（文件可能损坏），未能恢复 AGENTS.md：${deps.baselineFile}` }
       }
       return { unchanged: true }
     }
+    if (saved.content === null) return { unchanged: true }
     const res: any = await deps.prompts.restore(saved.content)
     if (res && res.ok === false) return { error: String(res.error || '恢复 AGENTS.md 失败') }
     await writeBaseline({ v: 1, at: Date.now(), presetId: null, content: null })

@@ -103,13 +103,24 @@ export function renderSkillCatalog(
 export interface SkillCatalogDeps {
   /** 取技能清单（插件技能服务的 `skill-state` op）。 */
   state: () => Promise<any>
-  /** `skill_manager_list` 还在模型工具表里吗（截断提示里那句话的前提）。默认在。 */
-  listToolVisible?: () => boolean
+  /**
+   * `skill_manager_list` **在这个 agent 手里**吗（截断提示里那句话的前提）。默认在。
+   *
+   * 为什么收 `agent` 而不是零参（2026-10-14 对抗性审查 P1-8）：只读全局开关时，某个人设用
+   * `toolsDeny` 把这条工具砍掉之后，目录照注、尾句照样说「用 `skill_manager_list` 查」
+   * —— 指向一条它手里没有的工具。判据与注入框架 `how` 行同一份（index.ts 的
+   * `injectHiddenToolsFor`），不再定义第二份。
+   */
+  listToolVisible?: (agent?: unknown) => boolean
 }
 
 export interface SkillCatalog {
-  /** 同步返回段文本（可能比磁盘状态滞后一个 TTL）。 */
-  text: () => string
+  /**
+   * 同步返回段文本（可能比磁盘状态滞后一个 TTL）。
+   *
+   * `agent` 只决定**尾句点不点名那个查询工具**（清单本体与它无关）；不传按"在手里"算。
+   */
+  text: (agent?: unknown) => string
   /** 立即重算（技能写操作后调用）。 */
   refresh: () => Promise<void>
   /** 预热：插件加载时调一次，避免首个请求落到空值。 */
@@ -131,17 +142,22 @@ export interface SkillCatalogOptions {
 export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOptions = {}): SkillCatalog {
   const ttlMs = opts.ttlMs ?? 30_000
   const now = opts.now ?? (() => Date.now())
-  let value = ''
+  // 缓存的是**清单数据**而不是渲染结果：清单本体只依赖磁盘（一次读盘），而尾句要不要点名那个
+  // 查询工具取决于**这个 agent 手里有没有它**。渲染是纯字符串操作，代价可忽略；这个布尔就
+  // 两档，于是"每个 step 同步渲染"退化成一次查表（与人设目录按深度缓存同一手法）。
+  let data: unknown = null
   let loadedAt = Number.NEGATIVE_INFINITY
   let inflight: Promise<void> | null = null
+  let rendered: { visible: boolean; text: string } | null = null
 
   const recompute = async (): Promise<void> => {
     try {
       const result = await deps.state()
       if (result && result.ok !== false) {
-        value = renderSkillCatalog(result.data ?? result, opts.maxEntries, opts.maxDescription, deps.listToolVisible ? deps.listToolVisible() : true)
+        data = result.data ?? result
+        rendered = null
       }
-    } catch { /* 保留上一次的值；首次失败则维持 '' */ }
+    } catch { /* 保留上一次的值；首次失败则维持 null */ }
     loadedAt = now()
   }
 
@@ -152,9 +168,14 @@ export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOpt
   }
 
   return {
-    text: () => {
+    text: (agent?: unknown) => {
       if (now() - loadedAt > ttlMs) void revalidate()
-      return value
+      if (data === null) return ''
+      const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
+      if (rendered && rendered.visible === visible) return rendered.text
+      const out = renderSkillCatalog(data, opts.maxEntries, opts.maxDescription, visible)
+      rendered = { visible, text: out }
+      return out
     },
     refresh: () => {
       loadedAt = Number.NEGATIVE_INFINITY

@@ -94,6 +94,7 @@ import { buildMcpTools } from './tools/mcp.js'
 import { buildSkillTools } from './tools/skills.js'
 import { buildPromptTools } from './tools/prompt.js'
 import { buildMemoryTools } from './tools/memory.js'
+import { buildRemoveTools } from './tools/remove.js'
 import { buildSceneTools } from './tools/scene.js'
 import { buildSubagentTools } from './tools/subagent.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
@@ -718,7 +719,7 @@ export default {
     }
 
     /**
-     * `how` 行点名过的工具里，**这个 agent 手里没有**的那些（注入器每步同步问一次）。
+     * 这条工具**在这个 agent 手里吗** —— 注入侧（`how` 行、两个目录的尾句）与工具回执共用的一份。
      *
      * 两条路并起来，缺一条框架文本就会说谎：
      *   ① `toolTableHidden()` —— 兼容页「模型工具表」的全局开关。**必须留着**：它读的是设置
@@ -729,17 +730,25 @@ export default {
      *      scope 上（`dsh-subagent/lib/index.js:522`），全局开关表里看不到它 —— 于是人设砍掉
      *      `skill_manager_read` 之后，技能目录照注、`how` 行照样点名一个模型手里没有的工具。
      *      拿不到 agent 时跳过：`get(name, undefined)` 问的是**全局视图**，会得出相反结论。
+     *
+     * 为什么要有这一份（2026-10-14 对抗性审查 P0-1/P1-8）：此前只有全局开关一条路，于是
+     * `mcp_manager_switch` 的 `listHint`、技能目录与子智能体目录的尾句都会点名一条**这个模型
+     * 手里没有的**工具。它是这两处的唯一判据 —— 工具侧经 `toolVisibleFor` 依赖拿，注入侧经
+     * `injectHiddenToolsFor` 拿，同一个函数，不定义第二份。
      */
-    const howHiddenToolsFor = (agent: unknown): ReadonlySet<string> => {
+    const toolVisibleFor = (name: string, agent: unknown): boolean => {
+      if (toolTableHidden().has(name)) return false
+      if (agent === null || (typeof agent !== 'object' && typeof agent !== 'function')) return true
+      try { return tools.get(name, agent as object) !== undefined } catch { return true /* 读不到 = 按还在手里算 */ }
+    }
+
+    /**
+     * `how` 行点名过的工具里，**这个 agent 手里没有**的那些（注入器每步同步问一次）。
+     * 判据就是上面那份 `toolVisibleFor`，这里只把它收成一份集合交给注入框架。
+     */
+    const injectHiddenToolsFor = (agent: unknown): ReadonlySet<string> => {
       const hidden = new Set<string>(toolTableHidden())
-      if (agent === null || (typeof agent !== 'object' && typeof agent !== 'function')) return hidden
-      const scope = agent as object
-      for (const name of HOW_NAMED_TOOLS) {
-        if (hidden.has(name)) continue
-        try {
-          if (tools.get(name, scope) === undefined) hidden.add(name)
-        } catch { /* 读不到 = 按还在手里算 */ }
-      }
+      for (const name of HOW_NAMED_TOOLS) if (!toolVisibleFor(name, agent)) hidden.add(name)
       return hidden
     }
 
@@ -757,8 +766,10 @@ export default {
     const subagentCatalog = createSubagentCatalog({
       list: () => subagentService.list(),
       sceneLists: subagentSceneLists,
-      // 人在「兼容」页把 `subagent_manager_list` 关掉后，截断提示里那句「用 X 查」就是假的。
-      listToolVisible: () => !toolTableHidden().has('subagent_manager_list'),
+      // 人在「兼容」页把 `subagent_manager_list` 关掉、或某个人设用 `toolsDeny` 砍掉它之后，
+      // 截断提示里那句「用 X 查」就是假的。判据按 **agent**（2026-10-14 对抗性审查 P1-8）：
+      // 与 `how` 行、MCP 回执同一份 `toolVisibleFor`，不再只看全局开关。
+      listToolVisible: (agent) => toolVisibleFor('subagent_manager_list', agent),
     })
     // ⚠️ 取数必须用 mcpmRowsWithNotes(false)：true 会带上**未打码**的 url/headers/env（含明文密钥）。
     // 技能目录与提示词两个域是**官方载体的兜底**：预设挂得到官方
@@ -766,7 +777,9 @@ export default {
     // CARRIER_FACT_OF），挂不到（极简）时才由这里送 —— 所以极简下也能按开关决定要不要。
     const skillCatalog = createSkillCatalog({
       state: () => skillsService.ops['skill-state']({}),
-      listToolVisible: () => !toolTableHidden().has('skill_manager_list'),
+      // 与子智能体目录同一份判据（2026-10-14 对抗性审查 P1-8）：只看全局开关时，人设用
+      // `toolsDeny` 砍掉 `skill_manager_list` 之后，技能目录尾句照样点名一条它手里没有的工具。
+      listToolVisible: (agent) => toolVisibleFor('skill_manager_list', agent),
     })
 
     // 三份界面设置侧车（inject / scene / slash）拆到 ./settings-sidecars.ts：读走 3 秒 TTL 缓存，
@@ -827,7 +840,7 @@ export default {
             // 记忆（**内容**）：各场景下的条目。与场景段同源、同一条 `applicableTo`。
             { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: () => memoriesService.memoryText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: () => mcp.stateCatalog.text() },
-            { key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog', text: () => skillCatalog.text() },
+            { key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog', text: (agent) => skillCatalog.text(agent) },
             {
               key: 'subagents',
               name: 'tool-management:subagents',
@@ -840,7 +853,7 @@ export default {
           ],
           settings: () => injectSettingsSync(),
           // 工具表开关：`how` 行里点名工具的那几句要跟着它换话术（关掉的不点名）。
-          hiddenTools: howHiddenToolsFor,
+          hiddenTools: injectHiddenToolsFor,
           factsFor: (agent) => candidates.presetFactsForAgent(agent),
           // 令牌门禁（2026-09-19，用户裁定「宿主侧硬拦截」）：令牌**在生效**（`TOKEN !== ''`，
           // 关掉或没配都是空串）而本次启动还没有人验过 ⇒ 这一步不放行，宿主把 turn 收成
@@ -2173,6 +2186,10 @@ export default {
       syncSwitchToScene,
       // 错误句里点名工具前要先问一句（判据与两个目录的 `listToolVisible` 同一份缓存）。
       toolVisible: (name: string) => !toolTableHidden().has(name),
+      // 同上一句，但把**该 agent 的工具限制**也算进去（2026-10-14 对抗性审查 P0-1/P1-8）：
+      // 人设用 `toolsDeny` 砍掉 `mcp_manager_list` 之后，只看全局开关就会让回执点名一条
+      // 这个模型手里没有的工具。与注入侧 `injectHiddenToolsFor` 同一个函数。
+      toolVisibleFor: (name: string, agent: unknown) => toolVisibleFor(name, agent),
       reachNoticeForAgent,
       presetRoster: candidates.presetRoster,
       injectNoticeOptions,
@@ -2238,6 +2255,21 @@ export default {
       sceneLists: subagentSceneLists,
       toolFilterFor: subagentToolFilterFor,
       failures: subagentFailures,
+    })
+    // 删除 / 回收站族（tools/remove.ts，2026-10-15）：五个域各一条 `*_manager_remove`。
+    // 此前模型只能停用、不能删除。删除一律进回收站（可恢复）；**不做永久删除**（低频且
+    // 不可恢复，留给面板）。`sceneRemove` 传 handlers 里那份（`withAgentsMdSync` 包过），
+    // 与 `sceneActivate` 同一条纪律：直调 `memoriesService.ops` 会静默漏掉 AGENTS.md 那一步。
+    buildRemoveTools({
+      ...toolDeps,
+      memoryOps: auditOps(memoriesService.ops),
+      skillOps: auditOps(skillsService.ops),
+      subagentOps: auditOps(subagentService.ops),
+      promptOps: auditOps(promptOps),
+      // 场景回收站（`scene-trash-list` / `scene-trash-restore`）在 **memoriesService** 的 op 表里
+      // （`archiveService` 只有 scene-mode-get / -set / scene-archive-save 三条）。
+      sceneOps: auditOps(memoriesService.ops),
+      sceneRemove: auditFn('rules-remove-scene', (args: any) => handlers['rules-remove-scene'](args)),
     })
 
     if (typeof ctx.on === 'function') {

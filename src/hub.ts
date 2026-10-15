@@ -44,8 +44,8 @@
 
 import { cp, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
+import { newTrashId } from './trash-id.js'
 import { resolveDshHome } from './skills/core.js'
 import { isSameOrDescendant } from './paths.js'
 
@@ -295,10 +295,13 @@ export function trashKindDir(kind: TrashKind): string {
   return hubPath('trash', `${kind}-trash`)
 }
 
-/** 新条目 id（时间戳 base36 + uuid 前 8 位，与记忆回收站同形）。 */
-export function newTrashId(): string {
-  return Date.now().toString(36) + '-' + randomUUID().slice(0, 8)
-}
+/**
+ * 新条目 id（时间戳 base36 + uuid 前 8 位，与记忆回收站同形）。
+ *
+ * 实现挪到 `./trash-id.ts`（2026-10-15）：本模块引了 `skills/core.js`，技能域要共用这个生成器
+ * 就不能再反过来引这里。这里保留同一条导出路径 —— `memories/service.ts` 等既有引方不动。
+ */
+export { newTrashId }
 
 /** id 只由本模块生成：严格白名单，杜绝路径穿越。 */
 export function isValidTrashId(id: string): boolean {

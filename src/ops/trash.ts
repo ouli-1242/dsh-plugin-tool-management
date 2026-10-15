@@ -34,6 +34,20 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     return { ok: true, trashId }
   }
 
+  /**
+   * 同组里第一个空出来的退号名：`测` → `测（1）` → `测（2）`…（全角括号，与界面 `uniqueName`
+   * 同一写法）。超过段名长度上限的候选直接跳过 —— 退号名本身也必须是合法段名，否则
+   * `locateRule` 查不到、恢复时还会写出一个磁盘不接受的名字。
+   */
+  async function nextFreeRuleName(group: string, name: string): Promise<string | null> {
+    for (let i = 1; i <= 999; i += 1) {
+      const candidate = `${name}（${i}）`
+      if (!isValidGroupSegment(candidate)) return null
+      if (!(await locateRule(group, candidate))) return candidate
+    }
+    return null
+  }
+
   async function rulesRestore(args: any): Promise<any> {
     const trashId = String((args && args.trashId) || '')
     if (!isValidTrashId(trashId)) return fail('error.rules.notFound', `回收站条目不存在：${trashId}`)
@@ -56,11 +70,29 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     ) {
       return fail('error.rules.notFound', `回收站条目损坏：${trashId}`)
     }
-    // 恢复目标已存在（期间用户重建了同名规则）→ 拒绝，避免覆盖。
+    // 恢复目标已存在（期间用户重建了同名规则）→ 默认拒绝，避免覆盖。
+    //
+    // 「同名先问一句」（用户 2026-10-14）：界面上不该静默退号、也不该只丢一句错误让人自己
+    // 回去改名。所以拒绝时**连候选名字一起回**（`params.next`）—— 弹窗才能如实写出"确认后
+    // 会叫 `测（1）`"。用户点确认后带 `dedupe: true` 再来一次，这一次真的按退号的名字恢复。
+    //
+    // `dedupe` 是**可选入参、缺省即旧行为**：模型工具（memory_manager_*）走的是同一个 op，
+    // 它们依赖"撞名就拒"来决定新建还是更新，不能因为界面想要退号就改掉这条语义。
     const conflict = await locateRule(manifest.group, manifest.name)
+    let name = manifest.name
     if (conflict) {
-      return fail('error.rules.exists', `同名记忆已存在：${conflict.id}，请先移除后再恢复`)
+      const next = await nextFreeRuleName(manifest.group, manifest.name)
+      if (args?.dedupe !== true || !next) {
+        // 专用错误码（四个回收站统一）：界面按它认出"这是撞名"，据此弹确认窗 —— 而不是靠
+        // 比文案。`error.rules.exists` 留给 `rules-create`，那条是"新建撞名"，语义不同。
+        return fail('error.dup.conflict', `已存在同名记忆：${conflict.id}`, {
+          name: manifest.name,
+          ...(next ? { next } : {}),
+        })
+      }
+      name = next
     }
+    const renamed = name !== manifest.name
     const form = manifest.form === 'bundle' ? 'bundle' : 'flat'
     // 落点根内断言（realpath 口径）：`isValidGroupPath` 只挡 `..` 与分隔符，挡不住
     // 「中间目录是指向根外的链接」。与 `rulesRemove` 的删除前断言同一道闸。
@@ -73,8 +105,8 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     // 去删目录。场景回收站（`sceneTrashRestore`）早有这条回滚（`moveIntoTrash` 反向搬回），
     // 记忆回收站这条缺了。这里方向相反：源还在回收站，所以回滚是**删掉没放完整的副本**。
     const target = form === 'bundle'
-      ? join(groupDir, manifest.name)
-      : join(groupDir, manifest.name + '.md')
+      ? join(groupDir, name)
+      : join(groupDir, name + '.md')
     try {
       await mkdir(groupDir, { recursive: true })
       if (form === 'bundle') await cp(join(trashDir, 'bundle'), target, { recursive: true })
@@ -96,7 +128,14 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     }
     await rm(trashDir, { recursive: true, force: true })
     invalidateSnapshot()
-    return { ok: true, rule: await buildProjected(manifest.group ? `${manifest.group}/${manifest.name}` : manifest.name) }
+    // 回传**最终落盘的名字**：退号恢复时它与回收站里的原名不同，界面要按它来回执
+    // （见 42-shared-ui.js 的 `resultRestore`），否则用户看到的是"已恢复：测"而磁盘上叫「测（1）」。
+    return {
+      ok: true,
+      name,
+      renamed,
+      rule: await buildProjected(manifest.group ? `${manifest.group}/${name}` : name),
+    }
   }
 
   /**

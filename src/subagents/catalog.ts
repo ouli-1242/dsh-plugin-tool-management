@@ -99,8 +99,13 @@ export function renderSubagentCatalog(
 export interface SubagentCatalogDeps {
   list(): Promise<PersonaDoc[]>
   sceneLists(): Promise<string[][]>
-  /** `subagent_manager_list` 还在模型工具表里吗（截断提示里那句话的前提）。默认在。 */
-  listToolVisible?: () => boolean
+  /**
+   * `subagent_manager_list` **在这个 agent 手里**吗（截断提示里那句话的前提）。默认在。
+   *
+   * 收 `agent` 的理由与技能目录同一份（2026-10-14 对抗性审查 P1-8）：只读全局开关时，
+   * 人设用 `toolsDeny` 砍掉这条工具之后，目录尾句照样点名一条它手里没有的工具。
+   */
+  listToolVisible?: (agent?: unknown) => boolean
 }
 
 export interface SubagentCatalog {
@@ -153,9 +158,11 @@ export function createSubagentCatalog(
   let allowed: PersonaDoc[] = []
   let loadedAt = Number.NEGATIVE_INFINITY
   let inflight: Promise<void> | null = null
-  // 渲染结果按**深度**缓存：过滤只依赖深度这一个整数，而实际出现的深度就 0/1/2 三档，
-  // 于是"每个 step 同步渲染"退化成一次查表。重算成功时清空。
-  const rendered = new Map<number, string>()
+  // 渲染结果按**深度 + 尾句前提**缓存：过滤只依赖深度这一个整数（实际出现的深度就 0/1/2 三档），
+  // 而尾句点不点名 `subagent_manager_list` 取决于**这个 agent 手里有没有它**（2026-10-14
+  // 审查 P1-8：此前只按深度缓存，于是尾句用的是第一个来问的 agent 的答案）。
+  // 两维都是小枚举，于是"每个 step 同步渲染"退化成一次查表。重算成功时清空。
+  const rendered = new Map<string, string>()
 
   const recompute = async (): Promise<void> => {
     try {
@@ -175,15 +182,17 @@ export function createSubagentCatalog(
     text: (agent) => {
       if (now() - loadedAt > ttlMs) void revalidate()
       const depth = subagentDepthOf(agent)
-      const cached = rendered.get(depth)
+      const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
+      const key = depth + '|' + (visible ? '1' : '0')
+      const cached = rendered.get(key)
       if (cached !== undefined) return cached
       const out = renderSubagentCatalog(
         allowed.filter((p) => catalogInjectedAt(p, depth)),
         maxEntries,
         maxDescription,
-        deps.listToolVisible ? deps.listToolVisible() : true,
+        visible,
       )
-      rendered.set(depth, out)
+      rendered.set(key, out)
       return out
     },
     catalogVisibleAt: (depth) => allowed.some((p) => catalogInjectedAt(p, depth)),

@@ -6,7 +6,7 @@
 // ops 表里的包装（enqueueMutation / runWrite）**留在 service.ts**：本文件只导出裸 op，
 // 包装归属集中在一处，改门禁时一眼看全。
 
-import { lstat, mkdir, readFile, rm } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseSkillDoc, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
@@ -478,15 +478,44 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       await writeFileAtomically(join(memoriesRoot, parts.group, newName + '.md'), serialize())
       await copyIntoMemoriesTrash(located, parts.group, parts.name)
       await rm(join(memoriesRoot, parts.group, parts.name + '.md'), { force: true })
+    } else if (located.kind === 'bundle' && newName !== parts.name) {
+      // bundle 改名 = **目录连同附件一起改**（2026-10-14 对抗性审查 P0-4）。
+      //
+      // 此前这条落到下面的 else：只把 frontmatter/正文写回**旧**路径，而索引照新名迁移 ——
+      // 实测（临时目录内复现）结果是索引里多一条指向不存在路径的记录（`rules-read` 报
+      // notFound），真实条目反而丢了索引记录，于是它承载的 `enabled` / `order` / `tags`
+      // 一起丢失：**一条停用的 bundle 记忆改个名就被静默重新启用**（重新进入每轮注入）。
+      // 面板的编辑框走同一个 op（`client/47-memory.js` 的 `submitUpdate`），所以两边同一条路。
+      //
+      // 形状与 flat 改名对齐：旧形态先整份进回收站（可恢复），再搬目录，最后把正文改名。
+      const oldDir = located.entryPath
+      const newDir = join(memoriesRoot, parts.group, newName)
+      // 只改大小写时新旧是同一个目录（Windows / macOS 不区分大小写），不能按"已存在"拒。
+      const caseOnly = newName.toLowerCase() === parts.name.toLowerCase()
+      if (!caseOnly && await pathExists(newDir)) {
+        return fail('error.rules.exists', `同名记忆已存在（bundle）：${parts.group}/${newName}`)
+      }
+      // 正文文件名：新建的 bundle 一律 `<名>.md`；旧数据可能是 `SKILL.md`，那份**保持原名不动**
+      // （发现侧两个候选都认，改名时顺手动它只会把兼容数据弄坏）。
+      const keepLegacyDoc = basename(located.docPath) === LEGACY_BUNDLE_DOC
+      await copyIntoMemoriesTrash(located, parts.group, parts.name)
+      await rename(oldDir, newDir)
+      const movedDoc = join(newDir, basename(located.docPath))
+      const targetDoc = join(newDir, keepLegacyDoc ? LEGACY_BUNDLE_DOC : bundleDocName(newName))
+      if (movedDoc !== targetDoc) await rename(movedDoc, targetDoc)
+      await writeFileAtomically(targetDoc, serialize())
     } else {
-      // bundle 不 rename 目录：只更新 frontmatter/正文
+      // bundle 不改名：只更新 frontmatter/正文
       await writeFileAtomically(located.docPath, serialize())
     }
     // 索引：改名则迁移记录（保留 order/tags/enabled 等），否则原地更新。
+    // 判据只看"名字变没变"，不再附加 `index.rules[id]` 存在 —— 磁盘上由外部新增、索引里
+    // 还没有记录的条目（发现侧会认它）改名时，旧判据会走到 else 把记录写回**旧名**，
+    // 于是新名下没有记录、旧名下多一条悬空的（2026-10-14 对抗性审查 P0-4 同族）。
     const index = await readIndex(stateDir)
     const newId = `${parts.group}/${newName}`
-    if (newId !== id && index.rules[id]) {
-      index.rules[newId] = { ...index.rules[id], updatedAt: new Date().toISOString() }
+    if (newId !== id) {
+      index.rules[newId] = { ...(index.rules[id] || {}), updatedAt: new Date().toISOString() }
       delete index.rules[id]
     } else {
       index.rules[id] = { ...(index.rules[id] || {}), updatedAt: new Date().toISOString() }
@@ -507,6 +536,12 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     if (typeof (args && args.enabled) !== 'boolean') {
       return fail('error.rules.invalidArgs', '缺少参数：enabled 必须是布尔值（toggle 只按传入值写入，不做"翻转"推断）')
     }
+    // 不存在的 id 必须拒绝（2026-10-15 smoke-test P1-4）：`parseId` 只校验 `<场景>/<名字>`
+    // 的形状，原先据此直接 `index.rules[id] = {...}` —— 于是一次拼错的 id 会**写进一条幽灵
+    // 索引**（磁盘上没有正文、清单里也列不出来，索引里却多一条 enabled），调用方还收到 ok。
+    // 判据与 `rulesRead` / `rulesUpdate` 同源：`locateRule` 在磁盘上找得到才算存在。
+    const located = await locateRule(parts.group, parts.name)
+    if (!located) return fail('error.rules.notFound', `规则不存在：${id}`)
     const index = await readIndex(stateDir)
     const idxEntry = index.rules[id] || {}
     const enabled = args.enabled === true

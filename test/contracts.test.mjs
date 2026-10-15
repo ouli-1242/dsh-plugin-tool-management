@@ -46,7 +46,12 @@ import { EXPECTED_PEER_RANGE, assessHost } from '../lib/compat/probe.js'
 import { scanLoaderRows } from '../lib/mcp/loader-token.js'
 import { isValidGroupPath, isValidGroupSegment } from '../lib/memories/constants.js'
 import { createMemoriesService } from '../lib/memories/service.js'
-import { forgetSource, importUploadedSkill, listProviderCandidates, permanentlyDeleteTrash, setPreferredSkill, setSkillEnabled, setSourceRemoved, state, userRoots } from '../lib/skills/core.js'
+import { deleteSkill, forgetSource, importUploadedSkill, listProviderCandidates, permanentlyDeleteTrash, restoreTrash, setPreferredSkill, setSkillEnabled, setSourceRemoved, state, userRoots } from '../lib/skills/core.js'
+// 字符串形态的 RootInput 是**路径**不是 key（见 rootDefinition），所以这里按 key 取定义对象。
+import { rootByKey } from '../lib/skills/skill-roots.js'
+// 技能管理器状态：两份策略名单（disabled / enabled）的互斥与自愈。
+import { managerStatePath } from '../lib/skills/skill-roots.js'
+import { readManagerState } from '../lib/skills/manager-state.js'
 import { isValidSegment } from '../lib/paths.js'
 import { OP_REGISTRY, contradictoryEntries, frozenOps, isReadCall, writeWhenUnwritten } from '../lib/op-registry.js'
 import { SessionStore } from '@deepseek-ai/dsh-session'
@@ -795,8 +800,11 @@ test('工具描述里引用的注入板块名必须真实存在（跨模块引�
   // 2026-09-23 出过一次：注入层把「场景和记忆」拆成「场景」+「记忆」两段、改了板块标题，
   // 而 `memory_manager_list` 的描述里还写着「本机当前的场景和记忆」。
   //
-  // 判据只认**以「本机」或「可委派」开头**的「…」—— 那是板块名的形态；别的「…」
-  // （如「来源：」）是行内标记，不是板块引用，不参与校验。
+  // 判据只认**以「当前」开头**的「…」—— 那是板块名的形态（2026-10-15 起六个板块统一成
+  // `当前<域>`，见 context-inject-frame.ts 的 `DomainFrame.title`）；别的「…」（如「来源：」）
+  // 是行内标记，不是板块引用，不参与校验。
+  // ⚠️ 这个前缀**会与散文撞车**（`「当前进入的是哪个」` 这种）：撞了就改散文的引号，
+  // 别放宽判据 —— 放宽会变成静默的假阴性（真有引用漏改也不报）。
   const titles = new Set(
     INJECT_DOMAIN_KEYS.map((key) => {
       const text = renderDomainText({ key, label: key, form: 'snapshot', name: 'x', text: '' })
@@ -812,7 +820,7 @@ test('工具描述里引用的注入板块名必须真实存在（跨模块引�
   const seen = []
   for (const rel of files) {
     const src = readFileSync(new URL('../' + rel, import.meta.url), 'utf8')
-    for (const m of src.matchAll(/「(本机[^」]*|可委派[^」]*)」/g)) seen.push([rel, m[1]])
+    for (const m of src.matchAll(/「(当前[^」]*)」/g)) seen.push([rel, m[1]])
   }
   assert.ok(seen.length > 0, '一个板块引用都没扫到 —— 判据或文件清单写错了')
   for (const [rel, name] of seen) {
@@ -2314,7 +2322,9 @@ test('记忆回收站走共享 TrashModal（带批量删除），不再是一份
   // 共享组件侧：记忆域必须把两件事说全 —— 主键是 trashId、恢复/永久删除各走本页自己的 op。
   const shared = strip(readFileSync(join(import.meta.dirname, '..', 'src', 'client', '42-shared-ui.js'), 'utf8'))
   assert.match(shared, /idOf: function \(it\) \{ return it\.trashId \}/, '条目主键是 trashId，要靠 idOf 告诉共享组件')
-  assert.match(shared, /apiCall\('rules-restore', \{ trashId: it\.trashId \}\)/, '恢复走本页自己的 op（rules-restore）')
+  // 恢复走本页自己的 op，主键参数名 trashId。第二个参数 `dedupe` 是「撞名先问一句」确认过之后
+  // 那一次（用户 2026-10-14）：第一次照旧发，服务端撞名就拒并回候选名字，用户点确认才带上它。
+  assert.match(shared, /apiCall\('rules-restore', \{ trashId: it\.trashId, dedupe: dedupe === true \}\)/, '恢复走本页自己的 op（rules-restore）')
   assert.match(shared, /apiCall\('rules-trash-remove', \{ trashId: it\.trashId \}\)/, '永久删除走单条 op，参数名 trashId（批量由组件逐条循环）')
 })
 
@@ -2681,5 +2691,340 @@ test('记忆行：体积标签走 nameAfter 槽（带边框）并挂在名称旁
   assert.match(shared, /t\('memory\.form\.' \+/, 'memory.form.* 仍在被计算键取词，两个键都必须保留')
   for (const key of ['memory.form.flat', 'memory.form.bundle']) {
     assert.ok(dict.includes('"' + key + '"'), '词典里不能少 ' + key + '（42 片按计算键取词，删了会显示原始键名）')
+  }
+})
+
+// 用户 2026-10-14 第二轮：「先出现一个小弹窗，说明存在同名记忆/场景/……；选择确认后新建带
+// （*）的记忆/场景……」。此前撞名是在提交那一刻**静默退号**（`测` → `测（1）`）—— 用户看着
+// 输入框里写着「测」、磁盘上却叫「测（1）」，没有任何一处说过这件事。
+//
+// 这条钉的是**设计本身**，不是实现细节：撞名必须经过确认窗，退号只发生在用户点过确认之后；
+// 认撞名靠错误码不靠文案；回执报最终名字不报原名。改名字/换写法都不该让它红。
+test('同名一律先问一句：四个域的新建与恢复都要过确认窗，不许静默退号', () => {
+  const clientDir = join(import.meta.dirname, '..', 'src', 'client')
+  // 剥掉注释再断言：这几处注释里正解释着"以前是静默退号"，不该被当成代码。
+  const strip = (raw) => raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const read = (name) => strip(readFileSync(join(clientDir, name), 'utf8'))
+  const shared = read('42-shared-ui.js')
+
+  // ① 共用原语只有一份 —— 八个入口各抄一遍退号逻辑，必然有抄漏的那一个。
+  assert.match(shared, /function uniqueName\(raw, taken, style\)/, '共享退号函数必须还在')
+  assert.match(shared, /function DupNameDialog\(props\)/, '共享同名确认窗必须还在')
+  // 两档写法：技能必须走 `-1`（技能条目名要过 KEBAB_RE，全角括号会被 toKebab 抹成 `-`），
+  // 其余三域走全角括号。**这一条是能力，不是写法** —— 少一档就有某个域写出来一个磁盘不认的名字。
+  assert.match(shared, /name \+ '-' \+ i/, '技能域退号必须用半角连字符（kebab 约束）')
+  assert.match(shared, /name \+ '（' \+ i \+ '）'/, '其余三域退号必须用全角括号')
+  // 占用表按 own property 判：直接取属性会把原型上的 constructor / toString 算成"已占用"，
+  // 用户给记忆起名叫 `constructor` 就会被莫名退号。
+  assert.match(shared, /Object\.prototype\.hasOwnProperty\.call\(taken, n\)/, '占用表必须按 own property 判')
+
+  // ② 五个新建入口（记忆页 / 场景编辑器的记忆草稿 / 场景页 / 技能页 / 子智能体页）都得挂上
+  //    确认窗，否则那一页又回到"名字被悄悄改掉"。不钉函数名与参数形状 —— 只钉"这一页有它"。
+  for (const [file, label] of [
+    ['47-memory.js', '记忆页'],
+    ['45-scenes.js', '场景页（含场景编辑器的记忆草稿）'],
+    ['43-skills.js', '技能页'],
+    ['46-subagents.js', '子智能体页'],
+  ]) {
+    const src = read(file)
+    assert.match(src, /DupNameDialog/, label + ' 必须渲染共享的同名确认窗（撞名不许静默退号）')
+    assert.match(src, /uniqueName\(/, label + ' 退号必须走共享的 uniqueName')
+  }
+
+  // ③ 四个回收站组：恢复要能把"用户确认过了"这件事传下去（确认后的第二次调用），
+  //    回执要报**最终名字**。
+  for (const [group, op] of [
+    ['skills', 'skill-trash-restore'], ['agents', 'subagent-trash-restore'],
+    ['scenes', 'scene-trash-restore'], ['memories', 'rules-restore'],
+  ]) {
+    const at = shared.indexOf("apiCall('" + op + "', {")
+    assert.ok(at >= 0, group + ' 组的恢复必须调本域自己的 op：' + op)
+    assert.ok(shared.slice(at, at + 160).includes('dedupe'),
+      group + ' 组的恢复必须能把 dedupe 传下去（用户点过确认才按退号的名字重发）')
+  }
+  for (const kind of ['skill', 'subagent', 'scene', 'memory']) {
+    assert.ok(shared.includes("dupKind: 'dup.kind." + kind + "'"), '四个域都要声明 dupKind（弹窗里的名词）：' + kind)
+  }
+  assert.match(shared, /res\.renamed === true \? 'done\.restoredAs' : 'done\.restored'/,
+    '退号恢复的回执必须用「已恢复为」，不能报回收站里那个原名')
+  // 认撞名靠**错误码**，不是比文案（文案随语言与措辞变）。
+  assert.match(shared, /res\.code === 'error\.dup\.conflict'/, '撞名判据是错误码 error.dup.conflict')
+  // 批量恢复不弹窗（一次勾八条弹八个窗没人受得了），只有单条才弹。
+  assert.match(shared, /items\.length === 1[^\n]*isDupConflict/, '只有单条恢复撞名才弹确认窗')
+})
+
+// 上一条的宿主侧：四个回收站恢复 op 必须「缺省撞名即拒、带 dedupe 才退号」，且拒的时候
+// 连**候选名字**一起回 —— 少了它，弹窗只能说"有同名"，说不出"确认后会叫什么"，用户点确认
+// 等于闭着眼睛改名字。
+test('四个回收站恢复 op：缺省撞名即拒，带 dedupe 才退号，拒时回候选名字', () => {
+  const srcDir = join(import.meta.dirname, '..', 'src')
+  const read = (p) => readFileSync(join(srcDir, p), 'utf8')
+  for (const [file, label] of [
+    ['ops/trash.ts', '记忆'],
+    ['ops/scene-records.ts', '场景'],
+    ['skills/skill-trash.ts', '技能'],
+    ['subagents/service.ts', '人设'],
+  ]) {
+    const src = read(file)
+    // 四个域统一的错误码：界面按它认撞名。原先各用各的（技能 error.trash.conflict、
+    // 记忆 error.rules.exists、场景借用 error.rules.invalidGroup、人设压根没有码），
+    // 界面根本分不出"撞名"和"名字非法"。
+    assert.match(src, /error\.dup\.conflict/, label + '回收站恢复撞名必须用统一错误码 error.dup.conflict')
+    // 缺省必须是「拒」：`dedupe !== true` 这个判据要显式写出来。一个默认静默改名的恢复口，
+    // 早晚会有人踩。
+    assert.match(src, /dedupe !== true/, label + '回收站恢复缺省必须是「撞名即拒」')
+    // 候选名字（`params.next`）—— 弹窗里那句"确认后会叫 X（1）"就是它。
+    assert.match(src, /next/, label + '回收站恢复撞名必须回候选名字（params.next）')
+  }
+  // 技能域用 `-1` 而不是全角括号：技能条目名必须过 KEBAB_RE。
+  assert.match(read('skills/skill-trash.ts'), /`\$\{name\}-\$\{i\}`/, '技能退号必须用半角连字符（kebab 约束）')
+  // 三个"名字即文件名"的域用全角括号。
+  for (const [file, label] of [['ops/trash.ts', '记忆'], ['ops/scene-records.ts', '场景'], ['subagents/service.ts', '人设']]) {
+    assert.match(read(file), /`\$\{name\}（\$\{i\}）`/, label + '退号必须用全角括号')
+  }
+})
+
+// 反向：**新建**那四条 op 一条都不许认 `dedupe`。模型工具（memory_manager_* / skill_manager_* /
+// 子智能体 / 场景）靠"同名即拒"决定这次是新建还是更新 —— 给它们加一个自动改名开关，等于把
+// 那条语义从根上改掉。界面侧的退号是本地算好名字再传下去的（见上两条测试），不碰 op。
+test('四条新建 op 不许认 dedupe：模型工具靠"同名即拒"判断新建还是更新', () => {
+  const srcDir = join(import.meta.dirname, '..', 'src')
+  const read = (p) => readFileSync(join(srcDir, p), 'utf8')
+  // 三条"撞名即拒"的必须还在。
+  assert.match(read('ops/memory.ts'), /error\.rules\.exists/, '记忆新建撞名仍必须拒绝')
+  assert.match(read('skills/core.ts'), /error\.create\.conflict/, '技能新建撞名仍必须拒绝')
+  assert.match(read('subagents/service.ts'), /人设已存在/, '人设新建撞名仍必须拒绝')
+  // 场景新建是**幂等 upsert**（已存在则更新描述/标签，不报错），模型工具依赖这条 ——
+  // 所以它连撞名判据都不能有，界面那一步才只能自己查 `data.scenes`。
+  const createScene = /async function rulesCreateScene\(args: any\)[\s\S]*?\n  \}/.exec(read('ops/scene-records.ts'))
+  assert.ok(createScene, 'rulesCreateScene 必须还在（解析器要跟着改）')
+  assert.ok(!createScene[0].includes('error.dup.conflict'),
+    '新建场景必须保持幂等 upsert：不许加撞名拒绝，更不许退号')
+  assert.ok(!createScene[0].includes('dedupe'), '新建场景不许认 dedupe')
+})
+
+// ── 退号恢复必须改**声明名**，不能只改文件夹名 ────────────────────────────────
+//
+// 用户 2026-10-14 报的：同名技能退号恢复出 `1-1` 目录，但里面的 SKILL.md 仍写着 `name: 1`。
+//
+// 为什么这是 bug 而不是"显示问题"：技能的同名判定取的是 frontmatter 的 `name:`
+// （`canonicalSkillName` = `declaredName || name`），**不是文件夹名** —— 技能页的同名分组、
+// `preferredSkills` 首选表、喂给宿主的 provider 候选名，全都以它为准。于是恢复出来的那份
+// 会跟原件被判成同名，技能页给它一颗「启用这个」；而那颗按钮写的是"用哪个**来源**"，
+// 两份都在同一个来源目录里，按下去什么都不会变 —— 用户点完看到"已改为生效"，实际没有任何变化。
+//
+// 这条钉的是**不变量**：退号恢复之后，恢复出来的技能与原件不再是同名。
+test('退号恢复技能：目录名与 frontmatter 的声明名必须一起改，且其余字节原样', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-restore-name-'))
+  const prev = {
+    DSH_HOME: process.env.DSH_HOME,
+    DSH_AGENTS_HOME: process.env.DSH_AGENTS_HOME,
+    DSH_CODEX_HOME: process.env.DSH_CODEX_HOME,
+    DSH_CLAUDE_HOME: process.env.DSH_CLAUDE_HOME,
+  }
+  process.env.DSH_HOME = home
+  process.env.DSH_AGENTS_HOME = join(home, '.agents')
+  process.env.DSH_CODEX_HOME = join(home, '.codex')
+  process.env.DSH_CLAUDE_HOME = join(home, '.claude')
+  try {
+    const hub = join(home, 'tool-management', 'skills')
+    const docPath = (name) => join(hub, name, 'SKILL.md')
+    // 文档里故意放三样"改名字不该碰"的东西：块标量、嵌套字段、正文。
+    // 只要实现走的是"按当前模板重写一遍"，这三样里至少一样会被抹掉。
+    const doc = (name) => `---\nname: ${name}\ndescription: |\n  原件简介\n  第二行\ndisable-model-invocation: true\nmetadata:\n  source: local\n---\n\n正文第一行\n正文第二行\n`
+    mkdirSync(join(hub, 'demo'), { recursive: true })
+    writeFileSync(docPath('demo'), doc('demo'))
+
+    // 删进回收站 → 再建一个同名原件占住 `demo` 这个名字 → 恢复时必然撞名。
+    const deleted = await deleteSkill(rootByKey('hub'), 'demo', undefined)
+    assert.ok(deleted.id && deleted.name === 'demo', 'deleteSkill 应返回回收站条目（夹具前提）')
+    assert.ok(!existsSync(docPath('demo')), '删除后目录应已移走')
+    mkdirSync(join(hub, 'demo'), { recursive: true })
+    writeFileSync(docPath('demo'), doc('demo'))
+
+    // 缺省撞名即拒，并回候选名字（界面弹窗靠它写出"确认后会叫 demo-1"）。
+    const rejected = await restoreTrash(deleted.id, undefined)
+    assert.equal(rejected.ok, false, '缺省撞名必须拒绝，不许静默退号')
+    assert.equal(rejected.code, 'error.dup.conflict', '撞名判据是错误码')
+    assert.equal(rejected.params.next, 'demo-1', '拒的时候要把候选名字一起回')
+
+    const restored = await restoreTrash(deleted.id, undefined, { dedupe: true })
+    // 成功形状没有 `ok: true`（`TrashRestoreResult` 的 `ok` 是可选字段）—— 认成功看有没有
+    // `error`，认落盘名看 `name`。
+    assert.equal(restored.error, undefined, '带 dedupe 才退号恢复')
+    assert.equal(restored.name, 'demo-1', '落盘名是退号后的名字')
+    assert.equal(restored.renamed, true, '必须自报退过号（回执要用「已恢复为」）')
+
+    // 核心断言：目录名与声明名一起改，其余字节逐字不变。
+    const after = readFileSync(docPath('demo-1'), 'utf8')
+    assert.match(after, /^name: demo-1$/m, '恢复出来的技能必须声明新名字 —— 否则它仍与原件同名')
+    assert.equal(
+      after.replace('name: demo-1', 'name: demo'),
+      doc('demo'),
+      '除了 name 那一行，块标量 / 嵌套字段 / 正文都必须逐字保留（恢复不是按模板重写）',
+    )
+
+    // 不变量：恢复之后两份不再是同名，谁都不该被标成"被同名覆盖"。
+    const rows = (await state({ projectCwds: [] })).roots.flatMap((r) => r.skills.map((s) => ({ root: r.key, s })))
+    for (const name of ['demo', 'demo-1']) {
+      const row = rows.find((x) => x.root === 'hub' && x.s.name === name)
+      assert.ok(row, '两份都必须在列表里：' + name)
+      assert.equal(row.s.shadowedBy, undefined, name + ' 不该被判成同名覆盖（声明名已经不同了）')
+    }
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ── 「启用这个」只服务于**跨来源**的同名之争 ──────────────────────────────────
+//
+// 用户 2026-10-14 的第二半句：「启动这个应该是不同文件夹的同名技能才有的功能」。
+//
+// `preferredSkills` 表按声明名索引、值是一个**来源 key** —— 它天生只能表达"用哪个来源的
+// 副本"，表达不了"用这个文件夹而不是那个文件夹"。所以同一个来源目录里出现两份声明同名的
+// 技能时（两个文件夹都写着 `name: X`），那颗「启用这个」按下去什么都不会变，却会回一句
+// "已改为生效" —— 技能页把它摆在两份同名之间，用户只能自己发现这是假按钮。
+//
+// 判据必须是**数据里能读出来的**，不能靠界面猜：`shadowedBy.root === 本行来源 key`
+// ⟺ 撞名发生在这个来源目录内部。界面按它收掉按钮；跨来源时照旧给。
+//
+// 「被覆盖」这个标记**不收** —— 同来源里的落选那份确实不会被加载，如实说比不说好。
+test('「启用这个」只给跨来源的同名：同一来源内部的撞名不得提供来源级动作', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-shadow-scope-'))
+  const prev = {
+    DSH_HOME: process.env.DSH_HOME,
+    DSH_AGENTS_HOME: process.env.DSH_AGENTS_HOME,
+    DSH_CODEX_HOME: process.env.DSH_CODEX_HOME,
+    DSH_CLAUDE_HOME: process.env.DSH_CLAUDE_HOME,
+  }
+  process.env.DSH_HOME = home
+  process.env.DSH_AGENTS_HOME = join(home, '.agents')
+  process.env.DSH_CODEX_HOME = join(home, '.codex')
+  process.env.DSH_CLAUDE_HOME = join(home, '.claude')
+  try {
+    const put = (rootDir, folder, declared) => {
+      mkdirSync(join(rootDir, folder), { recursive: true })
+      writeFileSync(join(rootDir, folder, 'SKILL.md'), `---\nname: ${declared}\ndescription: ${folder}\n---\n\n${folder}\n`)
+    }
+    const hub = join(home, 'tool-management', 'skills')
+    const dsh = join(home, 'skills')
+    mkdirSync(hub, { recursive: true })
+    mkdirSync(dsh, { recursive: true })
+    // 同一来源（hub）里两份都声明 `dup`：这是目录自己的数据问题，不是"两份副本挑一份"。
+    put(hub, 'dup', 'dup')
+    put(hub, 'dup-1', 'dup')
+    // 跨来源：hub 与 dsh 各一份声明 `cross`，这才是真正要挑来源的同名之争。
+    put(hub, 'cross', 'cross')
+    put(dsh, 'cross', 'cross')
+
+    const snapshot = await state({ projectCwds: [] })
+    const rows = snapshot.roots.flatMap((r) => r.skills.map((s) => ({ root: r.key, s })))
+    const dupRows = rows.filter((x) => x.s.declaredName === 'dup')
+    assert.equal(dupRows.length, 2, '同一来源里的两份同名都必须列出来')
+    // 落选那份照样标"被覆盖"（它确实不会被加载），但标记必须**指回自己的来源**——
+    // 界面就是靠这一点知道"这份没有别的来源可换"，从而不给那颗假按钮。
+    const dupLoser = dupRows.find((x) => x.s.shadowedBy)
+    assert.ok(dupLoser, '同一来源里的落选那份仍要标出"没被加载"（不许装作它生效了）')
+    assert.equal(
+      dupLoser.s.shadowedBy.root,
+      dupLoser.root,
+      '同来源内部撞名的 shadowedBy.root 必须等于本行来源 key —— 界面按这个判据收掉「启用这个」',
+    )
+
+    const crossRows = rows.filter((x) => x.s.declaredName === 'cross')
+    assert.equal(crossRows.length, 2, '跨来源的两份都要列出')
+    const crossLoser = crossRows.find((x) => x.s.shadowedBy)
+    assert.ok(crossLoser, '跨来源必须有一份被覆盖')
+    assert.notEqual(
+      crossLoser.s.shadowedBy.root,
+      crossLoser.root,
+      '跨来源撞名的 shadowedBy.root 必须指向**另一个**来源 —— 这时「启用这个」才真的能换掉生效的那一份',
+    )
+    assert.equal(crossRows.filter((x) => x.s.winner === true).length, 1, '跨来源必须恰好一份是赢家')
+
+    // 界面侧的同一件事：按钮挂在 `shadowedBy.root !== 本行来源` 上，不是挂在"有没有被覆盖"上。
+    // 这里只钉判据，不钉函数名与 DOM 形状（改排版/改文案不该让它红）。
+    const skills = readFileSync(join(import.meta.dirname, '..', 'src', 'client', '43-skills.js'), 'utf8')
+    assert.match(
+      skills.replace(/\/\*[\s\S]*?\*\//g, ''),
+      /shadowedBy\.root !== root\.key/,
+      '「启用这个」必须按"被覆盖的是不是别的来源"来决定给不给',
+    )
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ── 技能状态：两份名单互斥，坏了要能自愈（用户 2026-10-14 实测被锁死）──────────
+//
+// 出事的那份文件：`disabledSkills.hub` 与 `enabledSkills.hub` **同时**含 `1-1`。
+// 链路是「显式启用 → 删除 → 从回收站恢复」：删除不清策略，恢复又要默认停用，
+// 于是同一个名字落进了两份名单。`validManagerStateDocument` 把这种文档整份判非法 →
+// 插件 fail-closed 停用**所有**技能，而且 `writable` 一并变 false —— 界面上连一个
+// 开关都按不动，用户被锁死在一份自己造不出来的状态里。
+//
+// 这条钉两件事：写入侧必须维护互斥（`markSkillsDisabled`），读取侧必须能自愈
+// （`normalizeManagerState`），自愈方向取保守的一边（保留"关"、摘掉"开"）。
+test('技能策略两份名单互斥：写入不制造冲突，读出能自愈且只往保守方向收敛', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-policy-mutex-'))
+  const prev = {
+    DSH_HOME: process.env.DSH_HOME,
+    DSH_AGENTS_HOME: process.env.DSH_AGENTS_HOME,
+    DSH_CODEX_HOME: process.env.DSH_CODEX_HOME,
+    DSH_CLAUDE_HOME: process.env.DSH_CLAUDE_HOME,
+  }
+  process.env.DSH_HOME = home
+  process.env.DSH_AGENTS_HOME = join(home, '.agents')
+  process.env.DSH_CODEX_HOME = join(home, '.codex')
+  process.env.DSH_CLAUDE_HOME = join(home, '.claude')
+  try {
+    const hub = join(home, 'tool-management', 'skills')
+    mkdirSync(join(hub, 'demo'), { recursive: true })
+    writeFileSync(join(hub, 'demo', 'SKILL.md'), '---\nname: demo\ndescription: "x"\n---\n\nbody\n')
+
+    // ① 写入侧：显式启用过 → 再被「默认停用」过一遍，两份名单不能同时含它。
+    await setSkillEnabled(rootByKey('hub'), 'demo', true, undefined)
+    const { markSkillsDisabled } = await import('../lib/skills/core.js')
+    await markSkillsDisabled([{ root: 'hub', name: 'demo' }], undefined)
+    const afterMark = await readManagerState()
+    assert.equal(afterMark.writable, true, '默认停用之后状态文件必须仍是可读可写的')
+    assert.deepEqual(afterMark.state.disabledSkills.hub, ['demo'], '默认停用应当落到 disabled')
+    assert.deepEqual(
+      afterMark.state.enabledSkills.hub || [],
+      [],
+      '名字进了 disabled 就必须从 enabled 摘掉 —— 两份名单互斥',
+    )
+
+    // ② 读取侧自愈：手写一份"两边都有"的坏文件，读出来必须救得回来，
+    //    且收敛方向是"关着"（不得静默把技能打开并送进模型上下文）。
+    writeFileSync(managerStatePath(home), `${JSON.stringify({
+      version: 1,
+      sources: {},
+      disabledSkills: { hub: ['demo', 'stale'] },
+      enabledSkills: { hub: ['demo'] },
+      customRoots: [],
+      preferredSkills: {},
+      removedSources: [],
+      forgottenSources: [],
+    }, null, 2)}\n`)
+    const healed = await readManagerState()
+    assert.equal(healed.writable, true, '坏文件必须被自愈救回，不能 fail-closed 把所有技能锁死')
+    assert.equal(healed.warning, null, '自愈不该留下"状态文件不可读"的横幅')
+    assert.deepEqual(healed.state.enabledSkills.hub || [], [], '自愈要把冲突的名字从 enabled 摘掉')
+    assert.deepEqual(healed.state.disabledSkills.hub, ['demo', 'stale'], '自愈保留 disabled（保守方向）')
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(home, { recursive: true, force: true })
   }
 })

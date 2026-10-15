@@ -107,8 +107,13 @@ function archiveText(archive: any): string {
   if (tt) parts.push('工具表方案「' + tt + '」')
   // 快捷提示词绑定（0.20.0）：进了这个场景会动到 `/` 菜单里哪些条目，不报就只能靠猜。
   // 空表是"进入后全部停用"，与"没绑"（这一域不碰）是两句相反的话，不能压成一个 "0 条"。
+  //
+  // 印 **id 而不是条数**（2026-10-15）：`scene_manager_save.quickPrompts` 的描述让模型
+  // "copy them from a scene binding in the listing" —— 而此前这里只印「N 条」，清单里根本
+  // 没有 id 可抄，那句是一条**指不到的死路**（模型照做只会白跑一趟，然后去问用户）。
+  // 与 `skills` / `subagents` 两段同款（那两段本来就是 `toolNameList` 印名字）。
   const qp = archive.quickPrompts
-  if (Array.isArray(qp)) parts.push(qp.length ? '快捷提示词 ' + qp.length + ' 条' : '快捷提示词：进入后全部停用')
+  if (Array.isArray(qp)) parts.push(qp.length ? '快捷提示词 ' + toolNameList(qp) : '快捷提示词：进入后全部停用')
   return parts.join(' ｜ ')
 }
 
@@ -158,15 +163,15 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 这种筛选（未启用的场景照样要能被进入，藏着只会让模型以为它不存在）。
     // 描述与参数说明里**不点名同族工具**（scene_manager_list / _switch / _save 三条都在出厂
     // 默认的隐藏名单里）：静态文本没法按 toolVisible 改写，点名一条模型没有的工具只会让它
-    // 白跑一趟。要说"去哪看"就用中性说法（the scene listing / the「本机当前的场景」reminder
+    // 白跑一趟。要说"去哪看"就用中性说法（the scene listing / the「当前场景」reminder
     // —— 后者是常驻源，只要场景域开着就在）。点名只留在**运行时回执**里、按可见性分叉。
-    description: 'List every scene with its archive (what entering it switches on: MCP servers, skills, personas, quick prompts, and the bound model tool-table scheme when there is one), bound prompt preset, memory count and enabled / entered / locked state. Read the archive here before saving a scene: a section you give later replaces it whole. Read-only; the scene in effect now is also the「本机当前的场景」reminder.',
+    description: 'List every scene with its archive (what entering it switches on: MCP servers, skills, personas, quick prompts, and the bound model tool-table scheme when there is one), bound prompt preset, memory count and enabled / entered / locked state. The scene currently entered is also shown in the「当前场景」reminder.',
     parameters: {},
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute() {
       const r: any = await deps.rulesOps['rules-list']({})
       if (!r || r.ok === false) throw new Error((r && r.error) || '读取场景失败')
-      // 档案与「当前进入的是哪个」要额外读一次（纯读盘，`scene-mode-get`）。
+      // 档案与「已进入哪个场景」要额外读一次（纯读盘，`scene-mode-get`）。
       // 读不到**不阻断**清单：场景行退化成只有名字与启用状态，而不是让整条工具失败 ——
       // 一份少了档案的清单仍然有用，一次失败什么都没有。
       // `archives = null` 是"没读到"，与"读到了但某个场景没建档案"是两件事：混成一份会让
@@ -211,10 +216,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 为什么 `action` 是必填枚举而不是一个布尔：与 `mcp_manager_switch` 同一条理由 ——
     // 让模型在 enter / exit 两个动词里选一个，比让它猜"scene 传 null 是什么意思"省一次往返。
     // 参数里刻意不出现 `null`：那是 op（`scene-mode-set`）的形态，模型照着填只会填错。
-    description: 'Enter a scene, or leave the one currently entered. Entering switches on exactly what its archive lists and everything else off — MCP servers, skills, personas, quick prompts, and the model tool table when the scene binds a scheme — narrows injection to its memories, and applies its bound prompt preset to AGENTS.md. Leaving restores the runtime snapshot taken on entry. Check the scene\'s archive in the scene listing before entering. Only when the user asks or approves.',
+    description: 'Enter a scene, or leave the one currently entered. Entering switches on its archive and everything else off, narrows injection to its memories, and applies its bound prompt preset to AGENTS.md. Leaving restores the runtime snapshot taken on entry. Only when the user asks or approves.',
     parameters: {
       action: { type: 'string', required: true, enum: ['enter', 'exit'], description: 'enter = switch to the scene named in `scene`; exit = leave the current one (no scene needed).' },
-      scene: { type: 'string', description: 'Scene name (one path segment), required for enter. Use the exact name, not the display label — the scene listing and the「本机当前的场景」reminder both print names.' },
+      scene: { type: 'string', description: 'Scene name (one path segment), required for enter. Use the exact name, not the display label — the scene listing and the「当前场景」reminder both print names.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any) {
@@ -301,11 +306,11 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 「写入指引」保留（"写成指令而不是备注"—— 这是场景说明质量的杠杆），但不再声称
     // "注入后模型会被要求照办"：2026-09-23 定稿把场景段的授权语删了（注入只陈述现状），
     // 参数说明与注入侧各说各话时，模型信的那份是错的。改为如实说明去向。
-    description: 'Save a scene — a named bundle the user enters: entering it switches on exactly what its archive lists (MCP servers, skills, personas, quick prompts, and the model tool table when a scheme is bound) and everything else off. Creates it if absent, else updates it. An archive section you give replaces that section whole — include what should stay; the receipt reports what got displaced. Saving does not enter it; entering is a separate action. Only on the user\'s instruction.',
+    description: 'Save a scene — a named bundle the user enters: entering it switches on exactly what its archive lists (MCP servers, scene-level MCP note overrides, skills, personas, quick prompts, and the model tool table when a scheme is bound) and everything else off. Creates it if absent, else updates it. An archive section you give replaces that section whole — include what should stay; the receipt reports what got displaced. Saving does not enter it; entering is a separate action. Only on the user\'s instruction.',
     parameters: {
-      scene: { type: 'string', required: true, description: 'Scene name (one path segment, no slashes). Created if absent.' },
-      label: { type: 'string', description: 'Display name shown in the UI. Omit = keep.' },
-      description: { type: 'string', description: 'What this scene is for; shown beside the scene name in the「本机当前的场景」reminder while the scene is on — write an instruction, not a note. Omit = keep.' },
+      scene: { type: 'string', required: true, description: 'Scene name (one path segment, ≤64 chars, no / \\ or < > : " | ? *, not `_shared`). Created if absent.' },
+      label: { type: 'string', description: 'Display name for this scene. Omit = keep.' },
+      description: { type: 'string', description: 'What this scene is for; shown beside the scene name in the「当前场景」reminder while the scene is on — write an instruction, not a note. Omit = keep.' },
       // 与下面 `mcp` / `skills` / `subagents` 同一句式（"Omit = keep; X = 一个都不"）：
       // 界面 2026-10-10 补了「无」这个选项，工具侧的空串语义要跟着说清，否则模型只知道
       // 「省略 = 保持」，不知道还有一条「解绑」的路。
@@ -377,7 +382,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       const setToolTable = args.toolTablePreset !== undefined && String(args.toolTablePreset).trim() !== ''
       const setQuickPrompts = args.quickPrompts !== undefined
       if (setQuickPrompts && !Array.isArray(args.quickPrompts)) {
-        throw new Error('quickPrompts 必须是 id 数组（[] = 进入后全部停用；要解绑请到「场景」页）')
+        throw new Error('quickPrompts 必须是 id 数组（[] = 进入后全部停用；解绑需用户手动操作，本工具不提供）')
       }
       const touched = ARCHIVE_SECTIONS.filter((k) => (args as Record<string, unknown>)[k] !== undefined)
       const mustWriteArchive = touched.length > 0 || setToolTable || setQuickPrompts
@@ -477,10 +482,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       // 与 mcp/skill 的 listHint 同一条纪律。
       const enterHint = deps.toolVisible('scene_manager_switch')
         ? '要让它生效，用 scene_manager_switch 进入。'
-        : '要让它生效，由用户在「场景」页进入。'
+        : '要让它生效，需用户手动进入该场景（本会话未开放 scene_manager_switch）。'
       return 'OK: scene「' + scene + '」' + parts.join('；') + warnTail + clearWarn +
         (collapsed
-          ? '\n注意：此前所有场景都处于启用状态（历史「全部启用」默认），本次已收窄为只启用一个，新建的这个不在其中 —— 让用户到「场景」页确认。'
+          ? '\n注意：此前所有场景都处于启用状态（历史「全部启用」默认），本次已收窄为只启用一个，新建的这个不在其中 —— 需用户确认启用状态。'
           : '') +
         '\n保存不改运行时：' + enterHint
     },

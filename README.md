@@ -209,7 +209,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 重复 MCP 页签                               | 删 `cordis.patch.yml` 里的旧 loader 行后重启。                                                                                              |
 | 改坏配置 DSH 起不来                         | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.<层级>.bak-<时间戳>` 覆盖回去（每份 patch 各留 5 份）。                     |
 | 升级 DSH 后动作不可用                       | 设置 → 工具 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                       |
-| 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（出厂默认关着 15 条）；面板和脚本不受影响。                                                      |
+| 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（出厂默认关着 19 条）；面板和脚本不受影响。                                                      |
 | `approval=never` 还要确认吗                 | 不弹卡，直接放行并记日志；想问回来切回「工作区内修改」。                                                                                    |
 | `subagent_manager_run` 报 provider 不可用   | 对应 provider 没注册：`spawn`（默认）/ `fork`（`inherit`）分别挂 `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` 后重启。 |
 | 场景绑了 A 人设，官方 `subagent` 还在跑别的 | 官方那两个是宿主的工具，本插件管不到；贴合人设的走 `subagent_manager_run`，官方只在没有人设贴合或要后台跑时用。                             |

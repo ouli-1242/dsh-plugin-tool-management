@@ -43,6 +43,10 @@
           // 那个是页面级回执（会自动消失），导出结果只该出现在弹窗里。
           var exs = React.useState(null)
           var exportState = exs[0], setExportState = exs[1]
+          // 「已存在同名记忆」确认弹窗的状态（用户 2026-10-14）：`{ name, finalName }` 或 null。
+          // 撞名不再静默退号，先问一句；确认后才按 `finalName` 提交（见 submitCreate）。
+          var dqs = React.useState(null)
+          var dupAsk = dqs[0], setDupAsk = dqs[1]
           // bundle 附件的隐藏文件选择器；上限与服务端 MAX_ATTACH_ENTRY_BYTES 对齐。
           var attachRef = React.useRef(null)
           var ATTACH_MAX_MB = 8
@@ -114,7 +118,19 @@
 
           // ── 记忆 CRUD ──
           function openCreate(sceneName) {
-            setEditor({ mode: 'create', id: '', group: sceneName || '', name: '', description: '', body: '', form: 'flat', path: '', error: null, files: [], attachments: [] })
+            /**
+             * 默认落点 = 保留场景「全局」（`GLOBAL_SCENE`，与 48-slash.js 那份同名常量同值，
+             * 服务端出处 `src/memories/constants.ts`）。
+             *
+             * 这里必须把"空"落成一个**具体名字**，不能留着 `''`：
+             *   · 界面上 `''` 会被 `SourceSelect` 兜到第一项，看着是「全局」，但那是巧合；
+             *   · `submitCreate` 的本地查重是按 `r.group` **精确比对**的，而全局桶里那些记忆
+             *     的 `group` 是 `'global'` 而不是 `''` —— 留着空值就查不到，撞名要等到服务端
+             *     才被拒（`error.rules.exists`），用户拿到的是报错而不是那颗确认弹窗。
+             * 宿主侧两种写法等价（`rules-create` 自己把空 group 映射到 `global`），所以这里
+             * 只是把它提前落定，不改变任何落盘结果。
+             */
+            setEditor({ mode: 'create', id: '', group: sceneName || GLOBAL_SCENE, name: '', description: '', body: '', form: 'flat', path: '', error: null, files: [], attachments: [] })
             setModal({ type: 'editor' })
           }
           function openEditor(rule, focusAttach) {
@@ -304,10 +320,32 @@
               refresh(true)
             })
           }
+          /**
+           * 记忆页「新增」的提交（用户 2026-10-14 第二轮）：**先问一句，再退号**。
+           *
+           * 服务端 `rules-create` 撞名是直接拒绝的（`error.rules.exists`），原先界面把这句话
+           * 原样摆出来、让用户自己回去改名。现在改成：本地先查一遍**同一组**里的记忆（记忆 id
+           * 是 `<场景>/<名>`，所以判据只看同组，跨场景同名是合法的、不该拦），撞上了就弹一个
+           * 小窗说明"已有同名"，确认后用 `测（1）` 建 —— 名字在这一刻定死，落盘的就是界面上
+           * 写着的那个，不再有"看着叫甲、落盘叫乙"。
+           *
+           * 本地查重不替代服务端那道闸：期间别人（或模型工具）建了一条同名，提交仍会被拒，
+           * 那时照旧如实报错 —— 这里只是把常见情形做顺手，不是替服务端下判断。
+           */
           function submitCreate() {
+            var typed = String(editor.name || '').trim()
+            var group = String(editor.group || '').trim()
+            var taken = {}
+            ;(data.rules || []).forEach(function (r) { if (String(r.group || '') === group) taken[String(r.name)] = true })
+            var finalName = uniqueName(typed, taken)
+            if (finalName !== typed) { setDupAsk({ name: typed, finalName: finalName }); return }
+            createMemory(typed)
+          }
+          /** 真正落盘那一步（名字已定）。`name` 来自 `submitCreate` 或确认弹窗。 */
+          function createMemory(name) {
             var payload = {
               group: String(editor.group || '').trim(),
-              name: String(editor.name || '').trim(),
+              name: name,
               description: String(editor.description || '').trim(),
               body: editor.body || '',
               form: editor.form || 'flat',
@@ -321,8 +359,8 @@
                 return null
               }
               var id = (res.rule && res.rule.id) || (payload.group ? payload.group + '/' + payload.name : payload.name)
-              var name = (res.rule && (res.rule.id || res.rule.name)) || payload.name
-              return finishEditor(id, name, pending, 'done.created', 'memory.result.createdAttached')
+              var doneName = (res.rule && (res.rule.id || res.rule.name)) || payload.name
+              return finishEditor(id, doneName, pending, 'done.created', 'memory.result.createdAttached')
             }).catch(function (e) { setBusy(false); setEditor(Object.assign({}, editor, { error: errMsg(e) })) })
           }
           function submitUpdate() {
@@ -626,10 +664,12 @@
               key: 'mimp', t: t, title: t('memory.import.title'), busy: busy,
               requirement: t('upload.req.mdzip'),
               requirementTitle: [t('upload.requirement.memory.1'), t('upload.requirement.memory.2'), t('upload.requirement.memory.3'), t('upload.requirement.memory.4')].join('\n'),
-              // 「导入到场景」与记忆编辑器的「场景」用**同一个**控件（用户 2026-10-12：
-              // 「应该是选择场景的样子，现在只能手动填写」）。SceneCombo 既能从已有场景里挑，
-              // 也保留手输新场景名的能力（宿主 rules-create 用 mkdir(recursive) 落盘，
-              // 自定义场景不必先建目录）—— 换过去是"多一个下拉"，不是"少一种填法"。
+              // 「导入到场景」仍然用 SceneCombo（用户 2026-10-12：「应该是选择场景的样子，
+              // 现在只能手动填写」）—— **别和记忆编辑器的「场景」混为一谈**：那边 2026-10-14
+              // 改成了只能选（宿主 rules-create 要求场景已存在），这里改不得，因为
+              // `rules-import` 本来就会为引用的目录名补出场景记录（回传 `scenes`，界面用
+              // `memory.import.scenesCreated` 如实告知）。少了这个入口，用户就得先跑一趟
+              // 场景页才能导入一个全新场景的记忆。
               extra: React.createElement('label', { className: 'dsm-field' },
                 React.createElement('span', { className: 'dsm-label' }, t('memory.import.scene')),
                 React.createElement(SceneCombo, {
@@ -655,21 +695,30 @@
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
+                  /**
+                   * 场景**只能选**，不能手输（用户 2026-10-14）。
+                   *
+                   * 除了"手输容易打错"，更硬的理由在宿主那一侧：`rules-create` 对非全局场景
+                   * **要求它已经存在**（`error.rules.sceneNotFound`：「请先在「场景」页创建该场景」），
+                   * 所以手输一个不存在的场景名除了换来一条报错之外没有别的结果。要新场景就去
+                   * 场景页建 —— 那条路径本来就在，而且它还会把提示词绑定、启用集合一起配好。
+                   *
+                   * 「全局」是**选项里的一项**，不是"留空"：宿主把空 group 映射到保留场景
+                   * `global`（`GLOBAL_SCENE`，恒常注入的真实场景）。所以默认值直接就是它，
+                   * 底下那句「留空 = 全局」也一并删掉 —— 字段自己写着「全局」，那句话不再说明什么。
+                   *
+                   * 选项里剔掉 `''`（「未归属场景」那个游离桶）：那是给历史数据做清理用的分组，
+                   * 不是"新记忆该去的地方"（那里的记忆不会被注入上下文）。
+                   */
                   editor.mode === 'create'
-                    ? React.createElement(SceneCombo, {
-                      options: sceneChoices,
+                    ? React.createElement(SourceSelect, {
+                      options: sceneChoices.filter(function (o) { return o.value !== '' }),
                       value: editor.group || '',
-                      placeholder: t('memory.field.group.placeholder'),
-                      browseLabel: t('memory.scene.browse'),
-                      label: t('memory.field.group'),
+                      ariaLabel: t('memory.field.group'),
                       disabled: busy,
-                      invalid: editorGroupInvalid,
                       onChange: function (v) { setEditor(Object.assign({}, editor, { group: v })) },
                     })
                     : React.createElement('input', { className: 'dsm-control', value: editor.group || '', disabled: true, onChange: function () {} }),
-                editor.mode === 'create'
-                  ? React.createElement('p', { className: 'dsm-help' }, t('memory.field.group.hint'))
-                  : null,
                 editorGroupInvalid ? React.createElement('p', { className: 'dsm-rule-hint' }, t('error.rules.invalidGroup')) : null),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.name')),
@@ -732,5 +781,14 @@
               domain: 'memories',
               onClose: function () { setModal(null) },
               onReload: function () { refresh(true) },
+            }) : null,
+            // 「已存在同名记忆」小窗叠在编辑弹窗之上（`Modal` 自带 gateModalDepth 计数，
+            // 叠弹窗是既有形态）。取消 → 回到编辑弹窗改名字，编辑器里的内容一个字都不动。
+            dupAsk ? React.createElement(DupNameDialog, {
+              key: 'dup-name', t: t, kind: t('dup.kind.memory'),
+              name: dupAsk.name, finalName: dupAsk.finalName, action: 'create',
+              busy: busy,
+              onCancel: function () { setDupAsk(null) },
+              onConfirm: function () { setDupAsk(null); createMemory(dupAsk.finalName) },
             }) : null)
         }

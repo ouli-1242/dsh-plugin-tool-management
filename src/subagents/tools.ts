@@ -18,14 +18,22 @@ export function text(v: string) {
  *      绑定的人设启用，见 archive-engine 的 applySubagentSwitches）。
  *   ② 场景绑定校验（设计 §3.3）：启用场景的 subagents 并集；空并集 = 全部可用。
  * 之前只有②：全局默认所有子智能体都进上下文，没有开关可言。
+ *
+ * `includeUnavailable`（2026-10-14 对抗性审查 P1-7）**只给 `subagent_manager_list` 的
+ * `all=true` 用**，两道闸一起放开：停用的人设此前**在任何地方都查不到** —— 注入目录只列可用的，
+ * `subagent_manager_switch` 又默认关着，于是模型既发现不了它、也就无从提示用户去启用。
+ * 另外三个 `*_list`（MCP / 技能 / 记忆）早就有 `all=true` 这个出口，人设是缺的那一个。
+ * 注意放开的只是**可见性**：`subagent_manager_run` 仍然按完整两道闸判"能不能委派"，
+ * 列出来 ≠ 可委派（回执里那句「人设不可用」照旧成立）。
  */
 export async function filterBySceneBinding(
   docs: PersonaDoc[],
   enabledSceneLists: string[][],
+  includeUnavailable = false,
 ): Promise<{ allowed: PersonaDoc[]; reason: string | null }> {
-  const live = docs.filter((d) => d.enabled !== false)
+  const live = includeUnavailable ? docs : docs.filter((d) => d.enabled !== false)
   const bound = new Set(enabledSceneLists.flat())
-  if (!bound.size) return { allowed: live, reason: null }
+  if (includeUnavailable || !bound.size) return { allowed: live, reason: null }
   const allowed = live.filter((d) => bound.has(d.name))
   return { allowed, reason: allowed.length ? null : `当前启用场景的子智能体绑定: ${[...bound].join('、')}` }
 }
@@ -42,24 +50,39 @@ export function defineSubagentManagerListTool(subagents: {
 }) {
   return {
     name: 'subagent_manager_list',
-    description: 'List personas (pre-configured subagent profiles) with their descriptions. The「可委派的子智能体」reminder carries the same catalog; call this for the always-current full list.',
-    parameters: {} as const,
+    // `depth-filtered` 删掉（2026-10-15 注入文本审查）：注入深度是**注入侧**的实现细节，
+    // 模型看到的是"目录里有哪些人设"，`catalogDepth` 那个词对它没有任何可操作性。
+    description: 'List personas (pre-configured subagent profiles) with their descriptions. The「当前子智能体」reminder carries a view of the same catalog; call this for the always-current full list, or pass all=true to include personas that are disabled or outside the active scene.',
+    parameters: {
+      all: { type: 'boolean', description: 'Include disabled personas and ones outside the active scene (default false). Listed ≠ delegable: `run` still refuses those.' },
+    } as const,
     output: {
       schema: { type: 'string' } as const,
       render: (_a: unknown, v: unknown) => text(String(v)),
     },
-    async execute(_args: unknown, exec: unknown) {
-      const { allowed, reason } = await filterBySceneBinding(await subagents.list(), await subagents.sceneLists())
+    async execute(args: unknown, exec: unknown) {
+      const includeUnavailable = Boolean((args as { all?: unknown } | null)?.all === true)
+      const docs = await subagents.list()
+      const { allowed, reason } = await filterBySceneBinding(docs, await subagents.sceneLists(), includeUnavailable)
       // 这里**不再按深度过滤**（2026-09-17 用户裁定，方案 A）：`catalogDepth` 只决定常驻目录
       // 注入到哪些会话，与"能不能委派"无关 —— 委派由官方决定（`dsh-tool-subagent` 默认能嵌套
       // 到 3 层）。此前按深度过滤等于把可用人设藏起来：目录不注入时模型只能靠这个工具查，
       // 而工具又不列全，结果是"明明能委派却查不到人设"。
-      const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(无描述)') + (p.continuable === true ? CONTINUABLE_MARK : ''))
+      // `all=true` 时**标出哪些不可用**：只列名字的话，模型照样分不清哪个能直接委派
+      // （与技能列表标 `shadowed-by:` 同一条理由 —— 列出来不等于能用）。
+      const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(无描述)') +
+        (p.continuable === true ? CONTINUABLE_MARK : '') +
+        (includeUnavailable ? (p.enabled === false ? '（已停用，需先启用）' : '') : ''))
+      // 默认口径下有多少个没列出来（停用的 + 不在启用场景里的）：不报的话，模型看到一份短名单
+      // 会当成"本机只有这些人设"。数量照报，与另外三个 list 的表头同一口径。
+      const hiddenCount = includeUnavailable ? 0 : docs.length - allowed.length
       let notice = ''
       try {
         notice = typeof subagents.noticeFor === 'function' ? await subagents.noticeFor(exec) : ''
       } catch { notice = '' }
-      return '人设子智能体（' + allowed.length + '）：\n' + (lines.join('\n') || '(无)') + (reason ? '\n注意：' + reason : '') + notice
+      const header = '人设子智能体（' + allowed.length + '）' +
+        (hiddenCount > 0 ? '（另有 ' + hiddenCount + ' 个停用或不在当前场景，传 all=true 查看）' : '') + '：\n'
+      return header + (lines.join('\n') || '(无)') + (reason ? '\n注意：' + reason : '') + notice
     },
   }
 }
@@ -92,8 +115,13 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
     // `how` 行（context-inject.ts 的 `DOMAIN_FRAME.subagents`）已经逐字说过一遍，而两份都在
     // 每轮上下文里 = 同一件事付两次 token。留注入那份（它出现在"正在选工具"的那一刻）。
     // 代价如实记下：子智能体域被关掉、或走压制型预设时上下文里没有那条 how 行，模型只剩本
-    // 描述与 `agent` 参数说明（"Persona name from subagent_manager_list"）—— 够它认出这条是
-    // 带人设的委派通道，但"没有人设贴合时才用官方那两个"这层分界就没人说了。
+    // 描述与 `agent` 参数说明 —— 够它认出这条是带人设的委派通道，但"没有人设贴合时才用官方
+    // 那两个"这层分界就没人说了。
+    //
+    // 2026-10-14（对抗性审查 P0-2）：`subagent_manager_list` 已移出出厂默认隐藏名单，所以
+    // `agent` 参数说明可以点名它（此前只能写"Persona name."，因为那条工具默认不在模型手里）。
+    // 注释里那句 "Persona name from subagent_manager_list" 从 2026-09-23 起就与代码逐字不符，
+    // 现在代码终于跟上了。
     //
     // 2026-09-23（用户裁定）：本工具的 `task` / `inherit` 两个参数说明与上面的 Modes 段
     // **逐字重复**，而工具表每轮都发 —— 同一件事付两次 token。实测 `subagent_manager_run`
@@ -101,11 +129,14 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
     // 最贵的单个参数。收完两处重复后目标 ≈325 tok。判据是"删掉的那句在描述里已经有了吗"：
     // Modes 段留着（它是模型的入口），参数说明只留"这一段独有的信息"。
     // `inherit` 那句"轮中委派拿不到当前轮"必须留 —— 它是这条参数唯一会让人写错 task 的地方。
-    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output. A persona marked「允许追问」instead returns an agent id and runs in the background — continue it with `send_message`.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the「可委派的子智能体」reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
+    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output. A persona marked「允许追问」instead returns an agent id and runs in the background — continue it with `send_message`.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the「当前子智能体」reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
     parameters: {
-      agent: { type: 'string', required: true, description: 'Persona name.' },
-      task: { type: 'string', required: true, description: 'The task for the subagent. Self-contained by default; with inherit: true only state what is new.' },
-      inherit: { type: 'boolean', description: 'Let the subagent see this conversation\'s finished turns (the current turn is never included). Default false = a fresh child.' },
+      agent: { type: 'string', required: true, description: 'Persona name — see the「当前子智能体」reminder, or list personas with subagent_manager_list.' },
+      // `task` 的说明只留"这是什么"（2026-10-15 注入文本审查）：上面描述里那句
+      // "leave method and output format to the persona." 此前在这里**逐字重复**了一遍
+      // （57 字符），而模型填这个参数时两处都在手上 —— 同一件事付两次 token。
+      task: { type: 'string', required: true, description: 'The task for the subagent.' },
+      inherit: { type: 'boolean', description: 'Inherit this conversation\'s finished turns (current turn excluded). Default false.' },
     } as const,
     output: {
       schema: { type: 'string' } as const,

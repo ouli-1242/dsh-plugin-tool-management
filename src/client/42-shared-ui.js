@@ -584,6 +584,64 @@ function enabledMemoryCount(rules) {
       if (props.state === 'empty') return h(EmptyState, { text: props.text, action: props.action })
       return h(react.Fragment, null, props.children)
     }
+    /**
+     * 同名退号：`测` → `测（1）` → `测（2）`…（全角括号，用户 2026-10-14 定的写法）。
+     *
+     * `taken` 是「已经被占用的名字」集合 —— 数组按值判、对象按键判，两种写法在各调用点
+     * 手头的数据形状不同（一处是 `list.map(name)`，一处是现拼的字典），这里一并收下。
+     *
+     * `style`：`'paren'`（缺省）= 全角括号，用在**名字即文件名**的三个域（记忆 / 场景 /
+     * 子智能体）；`'dash'` = 半角连字符，只有技能域用 —— 技能名必须过 `KEBAB_RE`
+     * （`^[a-z0-9]+(?:-[a-z0-9]+)*$`），全角括号会被 `toKebab` 抹成 `-`，写出来是
+     * `foo-1` 而不是 `foo（1）`，不如一开始就按 `-1` 退号，省得"看着叫甲、落盘叫乙"。
+     *
+     * 上限 999 只是兜底：真到那里说明有一千条同名，再往后试没有意义。
+     */
+    function uniqueName(raw, taken, style) {
+      var isArray = Array.isArray(taken)
+      // `hasOwnProperty` 而不是 `!!taken[n]`：占用表是各调用点现拼的普通对象，直接取属性会
+      // 把原型上的东西（`constructor` / `toString` / `__proto__`）算成"已被占用" —— 用户给
+      // 记忆起名叫 `constructor` 就会被莫名退号。
+      var has = isArray
+        ? function (n) { return taken.indexOf(n) >= 0 }
+        : function (n) { return !!taken && Object.prototype.hasOwnProperty.call(taken, n) }
+      var name = String(raw == null ? '' : raw).trim()
+      if (!has(name)) return name
+      var dash = style === 'dash'
+      for (var i = 1; i <= 999; i += 1) {
+        var candidate = dash ? name + '-' + i : name + '（' + i + '）'
+        if (!has(candidate)) return candidate
+      }
+      return name
+    }
+    /**
+     * 「已存在同名 X」确认弹窗（用户 2026-10-14）。
+     *
+     * 起因：撞名原先在**提交那一刻静默退号**（`测` → `测（1）`）—— 名字是被自动改掉的，
+     * 用户看着输入框里写着「测」、落盘的却叫「测（1）」。改成先问一句：把撞上的名字与
+     * 将要用的名字都摆出来，确认了才建 / 才恢复。
+     *
+     * 刻意做成**最小的一档**（`dsm-modal-sm`）：这里只有「继续 / 取消」两个答案，没有别的
+     * 字段可填 —— 用大弹窗会让人以为还要再改点什么。四个域 × 新建 / 恢复共八个入口共用它，
+     * 所以文案走 `dup.*` 一组跨域词条，只有名词（记忆 / 场景 / 技能 / 子智能体）由调用方传。
+     *
+     * props：`t` / `kind`（已取过词的名词）/ `name`（撞上的名字）/ `finalName`（确认后实际
+     * 用的名字）/ `action`（`'create'` | `'restore'`）/ `busy` / `onConfirm` / `onCancel`。
+     */
+    function DupNameDialog(props) {
+      var t = props.t
+      var restore = props.action === 'restore'
+      return h(Modal, {
+        key: 'dup-name', className: 'dsm-modal-sm',
+        title: t('dup.title', { kind: props.kind }),
+        closeLabel: t('btn.close'), onClose: props.onCancel,
+      },
+        h('p', { className: 'dsm-desc' }, t('dup.body', { kind: props.kind, name: props.name })),
+        h('p', { className: 'dsm-help' }, t(restore ? 'dup.restore' : 'dup.create', { name: props.finalName })),
+        h('div', { className: 'dsm-modal-actions' },
+          h('button', { type: 'button', className: 'dsm-btn', disabled: props.busy === true, onClick: props.onConfirm }, t(restore ? 'dup.confirm.restore' : 'dup.confirm.create')),
+          h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: props.busy === true, onClick: props.onCancel }, t('btn.cancel'))))
+    }
     function Modal(props) {
       var ref = react.useRef(null)
       // 弹窗存在期间，令牌提示交给**弹窗自己**渲染：页面级那份会被遮罩压暗、盖在弹窗背后，
@@ -762,20 +820,43 @@ function enabledMemoryCount(rules) {
      */
     function runSerial(items, one) {
       return new Promise(function (resolve) {
-        var out = { done: 0, failed: 0, firstErr: null }
+        // `results` 与 `items` **逐位对齐**（失败位是 null）：回收站恢复要用成功那一条回传的
+        // 最终名字来回执（退号恢复时它与回收站里的原名不同），只数成功个数是不够的。
+        var out = { done: 0, failed: 0, firstErr: null, firstFail: null, results: [] }
         var step = function (i) {
           if (i >= items.length) { resolve(out); return }
           Promise.resolve().then(function () { return one(items[i]) }).then(function (res) {
-            if (res && res.ok === true) out.done += 1
-            else { out.failed += 1; if (!out.firstErr) out.firstErr = (res && res.error) || res || 'error' }
+            if (res && res.ok === true) { out.done += 1; out.results.push(res) }
+            else {
+              out.failed += 1
+              // `firstErr` 仍旧只存**错误文案**（部分失败的回执一直用它，换成整份结果会把
+              // 措辞一起换掉 —— 词典里的模板句比 op 原文笼统）；`firstFail` 另存整份失败结果，
+              // 因为只有它带着 `code` / `params`（`error.dup.conflict` 的候选名字就在
+              // `params.next` 里），回收站那条"撞名先问一句"要靠它。
+              if (!out.firstErr) out.firstErr = (res && res.error) || res || 'error'
+              if (!out.firstFail) out.firstFail = res || null
+              out.results.push(null)
+            }
             step(i + 1)
           }, function (e) {
             out.failed += 1; if (!out.firstErr) out.firstErr = errMsg(e)
+            if (!out.firstFail) out.firstFail = null
+            out.results.push(null)
             step(i + 1)
           })
         }
         step(0)
       })
+    }
+    /**
+     * 这条失败结果是不是「撞名」（四个回收站统一的 `error.dup.conflict`）？
+     *
+     * 判据是**错误码**，不是文案 —— 文案会随语言和措辞变，码不会。`params.next` 必须有：
+     * 弹窗要把它当作"确认后会叫什么"如实写出来，没有候选名字就退回普通报错，别弹一个
+     * 说不出结果的确认窗。
+     */
+    function isDupConflict(res) {
+      return !!(res && res.code === 'error.dup.conflict' && res.params && res.params.next)
     }
     /**
      * 每一页的回收站包含哪几组（`TrashModal` 的 `domain`）。
@@ -835,6 +916,10 @@ function enabledMemoryCount(rules) {
       // 行内二次确认。存「哪一组的哪一行在确认」，批量条的 key 为 null。
       const cfx = React.useState(null)
       const confirm = cfx[0], setConfirm = cfx[1]
+      // 「已存在同名 X，是否恢复为 X（1）」确认窗（用户 2026-10-14）。null = 没开；开了就是
+      // 一条 `{ group, items, kind, name, finalName }` —— 点「继续恢复」才带 `dedupe` 重发。
+      const dfx = React.useState(null)
+      const dupAsk = dfx[0], setDupAsk = dfx[1]
       // 「详情」只读预览（用户 2026-10-12：「回收站的每条信息应该增加一个详情按键，点开就能看
       // 这个信息是什么样子，不能更改内容，没有保存按键」）。null = 没开；开了就是一条
       // `{ group, id, name, meta, loading, error, files }`：
@@ -890,6 +975,18 @@ function enabledMemoryCount(rules) {
       // ── 各组清单（`TRASH_DOMAINS` 按页取用）。每组的 restore / purge 都是**全局单条 op**
       //    （apiCall 直呼，信封原样返回）。──
       const noteDefault = function (item) { return t('trash.deletedAt', { time: item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '—' }) }
+      /**
+       * 「已恢复」回执，四个可退号的域共用。
+       *
+       * 回执必须写**最终落盘的名字**：退号恢复（撞名 → `测（1）`）时它与回收站里显示的原名
+       * 不同，写原名就是谎报 —— 用户回到列表里找不到「测」，因为磁盘上那份叫「测（1）」。
+       * 判据用服务端回的 `renamed` 而不是自己比对 `res.name !== it.name`：服务端说没改名就是
+       * 没改名，界面不猜。
+       */
+      const restoredText = function (it, res) {
+        var name = (res && res.name) || it.name
+        return t(res && res.renamed === true ? 'done.restoredAs' : 'done.restored', { name: name })
+      }
       const memoryNote = function (item) {
         return sceneLabel(sceneList, item.group) + ' · '
           + t('memory.form.' + (item.form === 'bundle' ? 'bundle' : 'flat')) + ' · '
@@ -922,9 +1019,10 @@ function enabledMemoryCount(rules) {
           //（用户 2026-10-12：「技能回收站应该和其他回收站一样灰色的不能选择」）。
           id: 'skills', title: t('trash.section.skills'), note: t('trash.section.skills.sub'), frozen: true,
           nameOf: function (it) { return it.name }, noteOf: noteDefault,
-          restore: function (it) { return apiCall('skill-trash-restore', { id: it.id }) },
+          dupKind: 'dup.kind.skill',
+          restore: function (it, dedupe) { return apiCall('skill-trash-restore', { id: it.id, dedupe: dedupe === true }) },
           purge: function (it) { return apiCall('skill-trash-delete', { id: it.id }) },
-          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultRestore: restoredText,
           resultPurge: function (it) { return t('trash.purged', { name: it.name }) },
         },
         dirs: {
@@ -969,20 +1067,22 @@ function enabledMemoryCount(rules) {
           id: 'agents', title: null, note: t('trash.section.agents.sub'), frozen: true,
           op: 'subagent-trash-list', pick: function (res) { return res.trash },
           nameOf: function (it) { return it.name }, noteOf: noteDefault,
-          restore: function (it) { return apiCall('subagent-trash-restore', { id: it.id }) },
+          dupKind: 'dup.kind.subagent',
+          restore: function (it, dedupe) { return apiCall('subagent-trash-restore', { id: it.id, dedupe: dedupe === true }) },
           purge: function (it) { return apiCall('subagent-trash-delete', { id: it.id }) },
           // 启停状态没能写回（服务端 stateSyncError）必须说出来，不能只报「已恢复」。
           restoreWarn: true,
-          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultRestore: restoredText,
           resultPurge: function (it) { return t('trash.purged', { name: it.name }) },
         },
         scenes: {
           id: 'scenes', title: null, note: t('trash.section.scenes.sub'), frozen: false,
           op: 'scene-trash-list', pick: function (res) { return res.trash },
           nameOf: function (it) { return it.name }, noteOf: noteDefault,
-          restore: function (it) { return apiCall('scene-trash-restore', { id: it.id }) },
+          dupKind: 'dup.kind.scene',
+          restore: function (it, dedupe) { return apiCall('scene-trash-restore', { id: it.id, dedupe: dedupe === true }) },
           purge: function (it) { return apiCall('scene-trash-delete', { id: it.id }) },
-          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultRestore: restoredText,
           resultPurge: function (it) { return t('trash.purged', { name: it.name }) },
         },
         memories: {
@@ -990,9 +1090,10 @@ function enabledMemoryCount(rules) {
           op: 'rules-trash-list', pick: function (res) { return res.entries },
           idOf: function (it) { return it.trashId },
           nameOf: function (it) { return it.name }, noteOf: memoryNote,
-          restore: function (it) { return apiCall('rules-restore', { trashId: it.trashId }) },
+          dupKind: 'dup.kind.memory',
+          restore: function (it, dedupe) { return apiCall('rules-restore', { trashId: it.trashId, dedupe: dedupe === true }) },
           purge: function (it) { return apiCall('rules-trash-remove', { trashId: it.trashId }) },
-          resultRestore: function (it) { return t('done.restored', { name: it.name }) },
+          resultRestore: restoredText,
           resultPurge: function (it) { return t('memory.result.trashRemoved', { name: it.name }) },
         },
       }
@@ -1081,18 +1182,34 @@ function enabledMemoryCount(rules) {
         setConfirm(null)
         if (props.onReload) props.onReload()
       }
-      function runRestore(g, items) {
+      /**
+       * 恢复。`dedupe === true` = 用户在"已存在同名 X"确认窗里点过继续，这一次按退号的名字落盘。
+       *
+       * 撞名（用户 2026-10-14）：服务端**先拒**并回 `error.dup.conflict` + `params.next`，
+       * 这里认出它、把确认窗弹出来；用户点继续才带 `dedupe` 重来。批量恢复**不弹** ——
+       * 一次勾了八条、其中三条撞名时弹三个窗没人受得了，那种情形照旧走"部分失败"的回执，
+       * 用户看完自己挑单条重试。
+       */
+      function runRestore(g, items, dedupe) {
         setBusy(true)
         var warns = []
         runSerial(items, function (item) {
-          return g.restore(item).then(function (res) {
+          return g.restore(item, dedupe).then(function (res) {
             if (g.restoreWarn && res) { var w = stateSyncWarn(t, res); if (w) warns.push(w) }
             return res
           })
         }).then(function (out) {
           setBusy(false)
+          if (out.failed === 1 && items.length === 1 && dedupe !== true && isDupConflict(out.firstFail)) {
+            setDupAsk({
+              group: g.id, items: items, kind: g.dupKind,
+              name: String(out.firstFail.params.name || items[0].name || ''),
+              finalName: String(out.firstFail.params.next),
+            })
+            return
+          }
           if (out.failed === 0) {
-            var head = items.length === 1 ? g.resultRestore(items[0]) : t('trash.restoreMany.result', { count: out.done })
+            var head = items.length === 1 ? g.resultRestore(items[0], out.results[0]) : t('trash.restoreMany.result', { count: out.done })
             afterWrite(g, warns.length === 0, warns.length ? head + ' ' + warns.join(' ') : head)
           } else {
             setBusy(false)
@@ -1296,10 +1413,19 @@ function enabledMemoryCount(rules) {
                 groupIds.map(function (gid) { return groupNode(GROUPS[gid], true) }))
             : React.createElement('div', { className: 'dsm-trash-pane-scroll' },
                 groupIds.map(function (gid) { return groupNode(GROUPS[gid], false) }))))
-      if (!preview) return trashNode
+      // 「已存在同名 X」确认窗：叠在回收站之上（`Modal` 自带 gateModalDepth 计数，与「详情」
+      // 同一种叠法）。取消 → 回到回收站，勾选与滚动位置都不动，什么都没发生。
+      const dupNode = dupAsk ? React.createElement(DupNameDialog, {
+        key: 'dup-name', t: t, kind: t(dupAsk.kind),
+        name: dupAsk.name, finalName: dupAsk.finalName, action: 'restore',
+        busy: busy,
+        onCancel: function () { setDupAsk(null) },
+        onConfirm: function () { setDupAsk(null); runRestore(GROUPS[dupAsk.group], dupAsk.items, true) },
+      }) : null
+      if (!preview) return dupNode ? React.createElement(React.Fragment, null, trashNode, dupNode) : trashNode
       // 「详情」弹窗**叠在回收站上面**（`Modal` 自带 gateModalDepth 计数，叠弹窗是既有形态：
       // 导入套导出、自定义目录套选目录都是这样）。关掉它回到回收站，勾选与滚动位置都不动。
-      return React.createElement(React.Fragment, null, trashNode, previewModalNode())
+      return React.createElement(React.Fragment, null, trashNode, previewModalNode(), dupNode)
     }
     /**
      * 勾选行（2026-10-11 切片五收编）：本质就是行选择 RowSelect —— 导出列表、导入

@@ -104,8 +104,10 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'skill-prefer': { serviceWrite: true, frozen: true },
   'skill-unprefer': { serviceWrite: true, frozen: true },
   'skill-create': { serviceWrite: true, frozen: true },
-  // 改写 hub 里已存在的那一份技能（`skill_manager_save` 的改分支）。与 create 同规格：
-  // 都是往 hub 落文件。它**不动**官方根里的技能 —— 那层边界在 service 的胜出者判定里。
+  // 改写本插件自己写过的那一份技能（`skill_manager_save` 的改分支）。与 create 同规格：
+  // 落点只限本插件可写的两个根 —— hub（导入落点）+ dsh（新建默认落点，2026-10-15 裁定，
+  // 见 service.ts 的 PLUGIN_WRITABLE_ROOTS）。它**不动**官方根里的技能 —— 那层边界在
+  // service 的胜出者判定里。
   'skill-update': { serviceWrite: true, frozen: true },
   'skill-import': { serviceWrite: true, frozen: true },
   'skill-upload': { serviceWrite: true, frozen: true },

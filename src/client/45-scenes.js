@@ -37,6 +37,24 @@
           var quickPick = qks[0], setQuickPick = qks[1]
           var dts = React.useState(null)
           var drillTools = dts[0], setDrillTools = dts[1]
+          // 记忆集组头的「创建」（用户 2026-10-14）：套用记忆页的「新建记忆」表单，但**不带场景
+          // 选择器** —— 记忆归属由当前编辑的场景定死，于是这里建出来的条目立刻出现在本组清单里。
+          // null = 关闭；{ name, description, body, form, files, error } = 草稿。
+          var mns = React.useState(null)
+          var memNew = mns[0], setMemNew = mns[1]
+          // 「已存在同名记忆」确认弹窗（用户 2026-10-14 第二轮）：`{ name, finalName }` 或 null。
+          // 撞名不再在提交那一刻静默退号，先问一句；确认后才按 `finalName` 攒成草稿。
+          var mds = React.useState(null)
+          var memDupAsk = mds[0], setMemDupAsk = mds[1]
+          // 场景本身撞名的确认弹窗（同一天同一套设计）：`{ name, finalName }` 或 null。
+          // 场景与记忆共用一颗弹窗组件，但状态分开 —— 两个入口能同时存在（编辑器里开着
+          // 记忆新建窗时再点保存场景），合成一个状态会让其中一个把另一个顶掉。
+          var sds = React.useState(null)
+          var sceneDupAsk = sds[0], setSceneDupAsk = sds[1]
+          var memAttachRef = React.useRef(null)
+          // 附件上限与服务端 MAX_ATTACH_ENTRY_BYTES 对齐（记忆页同一口径）。
+          var MEM_ATTACH_MAX_MB = 8
+          var MEM_ATTACH_MAX_BYTES = MEM_ATTACH_MAX_MB << 20
           // 场景回收站：true = 打开本页那一个回收站（42-shared-ui.js 的 TrashModal）。
           // 清单加载 / 恢复 / 永久删除 / 批量都在组件内部完成，本页只在写操作后重读自己的数据。
           var sts = React.useState(false)
@@ -204,6 +222,8 @@
           function openEditor(scene) {
             var name = scene ? scene.name : null
             var sceneArchive = scene ? ((data.archives || {})[name] || {}) : {}
+            // 子弹窗（新建记忆）随编辑器一起重开：留着上一轮的草稿会让人以为"我上次填的还在"。
+            setMemNew(null)
             setSceneForm({
               name: name || '', description: scene ? scene.description || '' : '', prompt: scene ? scene.prompt || '' : '',
               toolTablePreset: typeof sceneArchive.toolTablePreset === 'string' ? sceneArchive.toolTablePreset : '',
@@ -215,6 +235,9 @@
             setModal({
               type: 'scene-editor', name: name, drill: null, drillError: null, error: null, inventory: null,
               mcpQuery: '', skillQuery: '', subQuery: '', memQuery: '',
+              // 创建态里攒下的记忆（见 flushPendingMemories）：`rules-create` 要求目标场景已存在，
+              // 所以场景还没落盘时只能先记在这里，等场景建出来再补。编辑态恒为空数组。
+              pendingMems: [],
               sections: {
                 mcp: sceneArchive.mcp ? Object.assign({}, sceneArchive.mcp) : null,
                 mcpNotes: sceneArchive.mcpNotes && Object.keys(sceneArchive.mcpNotes).length ? Object.assign({}, sceneArchive.mcpNotes) : null,
@@ -281,6 +304,27 @@
             var isEdit = modal.name != null
             var name = String(sceneForm.name || '').trim()
             if (!isValidSceneSegment(name)) { setSceneForm(Object.assign({}, sceneForm, { error: t('error.rules.invalidGroup') })); return }
+            /*
+             * 新建撞名：**先问一句再退号**（用户 2026-10-14 第二轮）。
+             *
+             * 这一处不能像记忆页那样"交给服务端报错再问" —— `rules-create-scene` 是**幂等
+             * upsert**（已存在则更新描述/标签，不报错），而且模型工具依赖这条语义（见
+             * `scene-records.ts` 的注释）。所以撞名只能由界面自己认出来：场景名就是记录键、
+             * 不经过任何归一化，`data.scenes` 里查得到就是真的撞了。
+             *
+             * 编辑态不做这一步：改的是自己，不存在撞名。
+             */
+            if (!isEdit) {
+              var taken = {}
+              ;(data.scenes || []).forEach(function (s) { taken[String(s.name)] = true })
+              var finalName = uniqueName(name, taken)
+              if (finalName !== name) { setSceneDupAsk({ name: name, finalName: finalName }); return }
+            }
+            saveScene(name, isEdit)
+          }
+          /** 真正落盘那一步（名字已定）。`name` 来自 `submitSceneEditor` 或确认弹窗。 */
+          function saveScene(name, isEdit) {
+            if (!modal || modal.type !== 'scene-editor') return
             var description = String(sceneForm.description || '').trim()
             var prompt = String(sceneForm.prompt || '').trim()
             setBusy(true)
@@ -307,9 +351,10 @@
               // 编辑态沿用旧档案弹窗的口径：保存 = 整份档案落盘（四段全删 = 存空档案）；
               // 创建态只在真的配了组时才写档案，不给新场景凭空落一份空档案。
               if (isEdit) hasArchive = true
-              if (!hasArchive) { finishSceneEditor(name, isEdit, res, null); return }
+              // 场景已落盘 → 才能补建创建态里攒下的记忆（`rules-create` 要求场景已存在）。
+              if (!hasArchive) { flushPendingMemories(name, isEdit, res, null); return }
               apiCall('scene-archive-save', { scene: name, archive: archivePayload }).then(function (ares) {
-                if (ares && ares.ok) finishSceneEditor(name, isEdit, res, ares)
+                if (ares && ares.ok) flushPendingMemories(name, isEdit, res, ares)
                 else {
                   // 场景已建/已改、档案没存上：留在编辑器里如实报错，主按钮变「保存到场景」可重试。
                   setBusy(false)
@@ -321,7 +366,7 @@
               })
             }).catch(function (e) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: errMsg(e) })) })
           }
-          function finishSceneEditor(name, isEdit, sceneRes, archiveRes) {
+          function finishSceneEditor(name, isEdit, sceneRes, archiveRes, memRes) {
             setBusy(false)
             setModal(null)
             // 新建时若把历史默认（全部启用）收敛成单选，如实说一句，别让用户以为场景"自己开了"。
@@ -333,6 +378,13 @@
             if (archiveRes) {
               if (archiveRes.stale && archiveRes.stale.length) text += ' · ' + t('memory.archive.stale', { items: archiveRes.stale.join('、') })
               if (archiveRes.applyError) { ok = false; text += ' · ' + t('memory.archive.applyFailed', { reason: archiveRes.applyError }) }
+            }
+            // 攒下的记忆草稿的落盘结果（flushPendingMemories）。三个数分开报：「建了几条」
+            // 与两种失败（压根没建上 / 建好了但没配全）—— 后者记忆是存在的，混进前者就是谎报。
+            if (memRes) {
+              if (memRes.created) text += ' · ' + t('scenes.mem.created', { count: memRes.created })
+              if (memRes.incomplete.length) { ok = false; text += ' · ' + t('scenes.mem.incomplete', { count: memRes.incomplete.length, items: memRes.incomplete.join('；') }) }
+              if (memRes.failed.length) { ok = false; text += ' · ' + t('scenes.mem.createFailed', { count: memRes.failed.length, items: memRes.failed.join('；') }) }
             }
             setResult({ ok: ok, text: text })
             refresh(true)
@@ -450,7 +502,9 @@
           // 与记忆页同一个写入口（`rules-toggle`）。于是「记忆页开了 → 档案页显示开启」
           // 天然成立，不存在两套状态、也不需要双向同步代码。
           //
-          // 勾选**立即提交**（不等「保存到场景」）：它是全局状态，不属于场景档案。
+          // 已存在记忆的勾选**立即提交**（不等「保存到场景」）：它是全局状态，不属于场景档案。
+          // 本次新配的记忆是**草稿**，走另一条路 —— 存在 `modal.pendingMems` 里，点「创建 /
+          // 保存到场景」时才落盘（见 flushPendingMemories），所以两种时机的行为没有分叉。
           //
           // **只列被编辑场景自己的记忆**：保留场景 `global` 恒定注入（任何对话都生效），
           // 不需要在这里配置，列出来只会让人以为「不勾就不注入」。
@@ -531,7 +585,11 @@
                 opts.hideFilter ? null : segFilter(opts.query, opts.onQuery, opts.queryPlaceholder),
                 opts.body))
           }
-          /** 组 4：记忆集（P5：单一真相源 = `rules[*].enabled`，勾选立即提交、不随「保存」落盘）。 */
+          /**
+           * 组 4：记忆集。两段内容拼在一张清单里：
+           *   · 已存在的记忆 —— 勾选**立即提交**（P5：单一真相源 = `rules[*].enabled`，不随「保存」落盘）；
+           *   · 本次新配的草稿 —— 只存在于编辑器里，随「创建 / 保存到场景」一起落盘（`pendingMems`）。
+           */
           function memoriesGroup() {
             var inv = modal.inventory || { memories: [] }
             var own = sceneMemoriesOf(inv.memories, modal.name || '')
@@ -541,34 +599,327 @@
                 || String(m.description || '').toLowerCase().indexOf(q) >= 0
             }) : own, function (m) { return String(m.id) }, function (m) { return memoryEnabled(String(m.id)) })
             var enabledCount = own.filter(function (m) { return memoryEnabled(String(m.id)) }).length
+            // 草稿**另算一栏**（`· N 条待创建`），不并进 `x/y 已勾选`：那一栏是「全选 / 全不选」
+            // 的作用面（它只认已存在的记忆），并进去就会出现"写着 5/5、全选却只勾了 3 条"。
+            // 两栏各说各的：前者 = 这个场景现在有几条、开着几条；后者 = 我这次还配了几条。
+            var pending = modal.pendingMems || []
+            // 本次编辑里攒下的记忆草稿（还没落盘，两种时机都有）。它们：
+            //   · 勾选框照常可用 —— 勾 = 落盘时直接开启，与下面那些真记忆同一语义（新草稿默认勾上）；
+            //   · 「编辑」回填草稿，「移除」撤掉草稿；
+            //   · 行首标「待创建」，免得跟真的记忆混成一片（标签的 title 补两句非显然的话：
+            //     落点取点「创建」那一刻的场景名、勾选的含义）。
+            // 草稿行**不受筛选框影响**：它是"我这次配了什么"的台账，被搜索词筛掉只会让人以为它没了。
+            var rows = pending.map(function (m, i) {
+              return RowSelect({
+                disabled: busy,
+                key: 'pending:' + i,
+                checked: m.enabled === true,
+                name: m.name,
+                desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
+                descTitle: m.description || null,
+                meta: React.createElement('span', { className: 'dsm-tag', title: t('scenes.mem.pendingTagTitle') }, t('scenes.mem.pendingTag')),
+                actions: [
+                  React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openMemoryEdit(i) } }, t('memory.edit')),
+                  React.createElement('button', { key: 'rm', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { dropPendingMemory(i) } }, t('scenes.mem.removePending')),
+                ],
+                onChange: function () { togglePendingMemory(i) },
+              })
+            }).concat(items.map(function (m) {
+              return RowSelect({
+                disabled: busy,
+                key: m.id,
+                checked: memoryEnabled(String(m.id)),
+                name: m.name,
+                // 记忆描述是自由正文的首行，可能很长：截断到 MEM_DESC_MAX，全文放 title。
+                desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
+                descTitle: m.description || null,
+                onChange: function () { toggleMemory(String(m.id)) },
+              })
+            }))
             return editorGroupNode({
               title: t('memory.archive.memories'),
-              count: t('scenes.seg.checked', { checked: enabledCount, total: own.length }),
-              actions: segActions({
+              count: t('scenes.seg.checked', { checked: enabledCount, total: own.length })
+                + (pending.length ? ' · ' + t('scenes.mem.pending', { count: pending.length }) : ''),
+              // 「创建」排在最前（用户 2026-10-14：在全选左边），点开的是记忆页那个「新建记忆」
+              // 弹窗（少了场景选择器，见 memoryCreateNode）。其余三个组没有这颗 —— 它们的条目
+              // 来自磁盘扫描（服务器 / 技能 / 人设），不在这里现造。
+              actions: [memoryCreateButton()].concat(segActions({
                 defined: true, busy: busy,
                 selectAllLabel: t('bulk.selectAll'), clearLabel: t('bulk.unselectAll'),
                 onAll: function () { setAllMemories(true) },
                 onClear: function () { setAllMemories(false) },
                 allChecked: own.length > 0 && enabledCount === own.length,
-              }),
+              })),
               query: modal.memQuery,
               onQuery: function (v) { setModal(Object.assign({}, modal, { memQuery: v })) },
               queryPlaceholder: t('scenes.mem.search'),
-              body: items.length
-                ? React.createElement('div', null, items.map(function (m) {
-                    return RowSelect({
-                      disabled: busy,
-                      key: m.id,
-                      checked: memoryEnabled(String(m.id)),
-                      name: m.name,
-                      // 记忆描述是自由正文的首行，可能很长：截断到 MEM_DESC_MAX，全文放 title。
-                      desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
-                      descTitle: m.description || null,
-                      onChange: function () { toggleMemory(String(m.id)) },
-                    })
-                  }))
+              body: rows.length
+                ? React.createElement('div', null, rows)
                 : React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mem.emptyScene')),
             })
+          }
+          /*
+           * 记忆集组头的「创建」（用户 2026-10-14）：套用记忆页那个「新建记忆」弹窗，**只少了
+           * 场景选择器** —— 场景由编辑器上下文定死，以只读一行显示。
+           *
+           * 与其余三组同一条模型：**弹窗里建出来的都只是草稿**，存在 `modal.pendingMems` 里，
+           * 点「创建 / 保存到场景」那一刻才真正落盘（`flushPendingMemories`）。创建态如此，
+           * 编辑态也一样（用户 2026-10-14：「已经存在的场景，本次创建记忆应该也能编辑、移除，
+           * 也是未创建的记录」）—— 于是两种时机只有**落点**不同，行为不再分叉：草稿行一律
+           * 可勾选、可编辑、可移除。
+           *
+           * 落盘仍走记忆页那两个宿主 op（`rules-create` + `rules-attach`）。一处刻意的偏离：
+           * 服务端新建记忆默认 `enabled: false`（`ops/memory.ts` 的 P5 口径，记忆页照此），
+           * 而这里的草稿**默认勾选**（用户 2026-10-14 裁定）—— 在这个场景里新建记忆本就是为了
+           * 让它生效，落盘时按勾选补一次 `rules-toggle`；记忆页那条路径不受影响。
+           *
+           * 落点：编辑态 = 场景名；创建态 = 左边**正在填**的场景名（没填或非法就没有落点，
+           * 入口置灰）。草稿**不记场景名** —— 落点统一取点「创建」那一刻的名字，所以中途改名
+           * 不会把早先那条留在旧名字下，也不会各落一半。场景名此刻还只是表单里的一个字串，
+           * 把它抄进草稿只会抄出一个马上过期的副本；代价是草稿行上不能写场景名（写了改名后
+           * 就是假话），这件事由「待创建」标签的 title 说清。
+           */
+          /** 这次新建的记忆落到哪个场景：编辑态是场景名，创建态是表单里正在填的那个名字。 */
+          function memoryCreateTarget() {
+            if (!modal || modal.type !== 'scene-editor') return ''
+            return modal.name != null ? String(modal.name) : String(sceneForm.name || '').trim()
+          }
+          function memoryCreateReady() {
+            if (!modal || modal.type !== 'scene-editor') return false
+            if (modal.name != null) return true
+            return isValidSceneSegment(String(sceneForm.name || '').trim())
+          }
+          function openMemoryCreate() {
+            if (!memoryCreateReady()) return
+            // `editing` = 这一窗改的是第几条草稿；null = 新建一条。
+            setMemNew({ editing: null, name: '', description: '', body: '', form: 'flat', files: [], error: null })
+          }
+          /** 改一条待创建的记忆：草稿回填进弹窗，保存时**替换**原来那条，而不是又添一条。 */
+          function openMemoryEdit(index) {
+            if (!modal || modal.type !== 'scene-editor') return
+            var m = (modal.pendingMems || [])[index]
+            if (!m) return
+            setMemNew({
+              editing: index, name: m.name, description: m.description || '', body: m.body || '',
+              form: m.form || 'flat', files: (m.files || []).slice(), error: null,
+            })
+          }
+          /** 撤掉一条还没落盘的记忆草稿。 */
+          function dropPendingMemory(index) {
+            if (!modal || modal.type !== 'scene-editor') return
+            var next = (modal.pendingMems || []).slice()
+            next.splice(index, 1)
+            setModal(Object.assign({}, modal, { pendingMems: next }))
+          }
+          /**
+           * 勾 / 取消勾一条待创建的记忆。语义与记忆页、本组其余行**完全一致**（勾 = 启用），
+           * 只是生效时刻晚一步：服务端新建记忆默认不开启（`ops/memory.ts`），所以落盘时
+           * create 之后要显式补一次 `rules-toggle`（见 flushPendingMemories）。
+           */
+          function togglePendingMemory(index) {
+            if (!modal || modal.type !== 'scene-editor') return
+            var next = (modal.pendingMems || []).slice()
+            if (!next[index]) return
+            next[index] = Object.assign({}, next[index], { enabled: next[index].enabled !== true })
+            setModal(Object.assign({}, modal, { pendingMems: next }))
+          }
+          function pickMemAttach() { if (memAttachRef.current) memAttachRef.current.click() }
+          function onMemAttachPicked(ev) {
+            var picked = Array.prototype.slice.call((ev.target && ev.target.files) || [])
+            if (ev.target) ev.target.value = '' // 允许连续选中同一个文件
+            if (!picked.length) return
+            Promise.all(picked.map(function (f) {
+              return f.arrayBuffer().then(function (buf) {
+                return { name: String(f.name || ''), size: buf.byteLength, data: bytesToBase64(buf) }
+              })
+            })).then(function (entries) {
+              var tooBig = entries.filter(function (e) { return e.size > MEM_ATTACH_MAX_BYTES })
+              var keep = entries.filter(function (e) { return e.size <= MEM_ATTACH_MAX_BYTES })
+              setMemNew(function (prev) {
+                if (!prev) return prev
+                var next = Object.assign({}, prev, { files: (prev.files || []).concat(keep) })
+                // 超限的当场拦下（服务端还会再拦一次），其余照常加入。
+                if (tooBig.length) next.error = t('memory.attach.tooLarge', { name: tooBig[0].name, limit: MEM_ATTACH_MAX_MB })
+                return next
+              })
+            }).catch(function (e) { setMemNew(function (prev) { return prev ? Object.assign({}, prev, { error: errMsg(e) }) : prev }) })
+          }
+          function dropMemPending(index) {
+            setMemNew(function (prev) {
+              if (!prev) return prev
+              var next = (prev.files || []).slice()
+              next.splice(index, 1)
+              return Object.assign({}, prev, { files: next })
+            })
+          }
+          /**
+           * 名称去重：`测` 已被占用就退成 `测（1）`，再撞就 `测（2）`……
+           *
+           * 判据是**会落盘的那一套名字** = 本场景已有的记忆 + 本次已攒下的其它草稿。
+           * 服务端 `rules-create` 撞名是直接拒绝的（`error.rules.exists`），所以这一步的作用是
+           * 让「配两条同名」能正常落盘，而不是报个错让用户自己回去改名（用户 2026-10-14 要求）。
+           *
+           * `skipIndex` 跳过正在编辑的那条草稿：不跳的话改一次名就会把自己也算成占用者，
+           * 于是每保存一次名字就往后挪一位。
+           *
+           * 退号本身走共享的 `uniqueName`（42-shared-ui.js，八个入口同一套）；这里只负责
+           * 把"占用者"凑出来 —— 各域的判据不同，凑法也就留在各域。
+           */
+          function uniqueMemoryName(raw, skipIndex) {
+            var taken = {}
+            sceneMemories(modal.name).forEach(function (m) { taken[String(m.name)] = true })
+            ;(modal.pendingMems || []).forEach(function (m, i) { if (i !== skipIndex) taken[String(m.name)] = true })
+            return uniqueName(raw, taken)
+          }
+          /**
+           * 弹窗的提交动作：**先问一句再退号**（用户 2026-10-14 第二轮）。
+           *
+           * 原来这里静默退号 —— 输入框里写着「测」，草稿行上却是「测（1）」。现在撞名先弹一个
+           * 小窗说明，确认后才按 `测（1）` 攒草稿。落盘仍然是点「创建 / 保存到场景」那一刻
+           * （见 flushPendingMemories）：这里一个请求都不发。
+           */
+          function submitMemoryCreate() {
+            if (!memNew || !modal || modal.type !== 'scene-editor') return
+            var typed = String(memNew.name || '').trim()
+            var finalName = uniqueMemoryName(typed, memNew.editing != null ? memNew.editing : null)
+            if (finalName !== typed) { setMemDupAsk({ name: typed, finalName: finalName }); return }
+            stageMemoryDraft(typed)
+          }
+          /**
+           * 把草稿写回 `modal.pendingMems`（新增一条，或**替换**被编辑的那条）。`name` 已定。
+           *
+           * 写的是草稿的**拷贝**：弹窗一关 `memNew` 就归 null，不能再引用它。
+           */
+          function stageMemoryDraft(name) {
+            if (!memNew || !modal || modal.type !== 'scene-editor') return
+            var list = (modal.pendingMems || []).slice()
+            var editing = memNew.editing != null && list[memNew.editing] ? memNew.editing : null
+            var draft = {
+              name: name,
+              description: String(memNew.description || '').trim(),
+              body: memNew.body || '',
+              form: memNew.form || 'flat',
+              files: (memNew.files || []).slice(),
+              // 新草稿默认勾选（用户 2026-10-14 裁定：这个场景里新建的记忆就是要它生效）；
+              // 勾选本身住在**行上**（编辑弹窗里没有这一栏，与记忆页的新建弹窗一致），
+              // 所以改草稿时原样保留它，别让一次改名顺手抹掉「建好后开启」的意图。
+              enabled: editing != null ? list[editing].enabled === true : true,
+            }
+            if (editing != null) list[editing] = draft
+            else list.push(draft)
+            setModal(Object.assign({}, modal, { pendingMems: list }))
+            setMemNew(null)
+          }
+          /** 组头那颗「创建」：创建态且场景名还没填/非法时置灰，title 说清差什么。 */
+          function memoryCreateButton() {
+            var ready = memoryCreateReady()
+            return React.createElement('button', {
+              key: 'memnew', type: 'button', className: 'dsm-btn dsm-btn-quiet',
+              disabled: busy || !ready,
+              title: ready ? '' : t('scenes.mem.createNeedScene'),
+              onClick: openMemoryCreate,
+            }, t('memory.btn.create'))
+          }
+          /**
+           * 把攒下的记忆草稿真正落盘 —— 排在场景本体（与档案）之后，因为 `rules-create` 要求
+           * 目标场景**已存在**。两种时机共用这一条：创建态是"场景刚建出来"，编辑态是"场景已改完"。
+           * 某一条失败不回滚场景、也不影响同批其余条目，逐条如实报出名字与原因。
+           */
+          function flushPendingMemories(name, isEdit, sceneRes, archiveRes) {
+            var pending = (modal && modal.pendingMems) || []
+            if (!pending.length) { finishSceneEditor(name, isEdit, sceneRes, archiveRes, null); return }
+            setBusy(true)
+            var created = 0
+            // 两个失败桶分开：`failed` = 这条记忆压根没建出来；`incomplete` = 建出来了，但
+            // 后续两步（开启 / 传附件）有一处没做成。混成一个桶就会谎报 —— 后者文件是存在的。
+            var failed = []
+            var incomplete = []
+            var chain = Promise.resolve()
+            pending.forEach(function (m) {
+              chain = chain.then(function () {
+                return apiCall('rules-create', { group: name, name: m.name, description: m.description, body: m.body, form: m.form }).then(function (res) {
+                  if (!res || !res.ok) { failed.push(m.name + '（' + translateError(t, res) + '）'); return null }
+                  created += 1
+                  var id = (res.rule && res.rule.id) || (name + '/' + m.name)
+                  var post = []
+                  // 勾选 = 建好后直接开启（服务端新建记忆默认不开启）。
+                  if (m.enabled === true) post.push(apiCall('rules-toggle', { id: id, enabled: true }).then(function (tg) {
+                    if (!tg || !tg.ok) incomplete.push(m.name + '（' + translateError(t, tg) + '）')
+                  }, function (e) { incomplete.push(m.name + '（' + errMsg(e) + '）') }))
+                  if ((m.files || []).length) post.push(apiCall('rules-attach', { id: id, files: m.files.map(function (f) { return { path: f.name, data: f.data } }) }).then(function (att) {
+                    if (att && att.ok === false) incomplete.push(m.name + '（' + translateError(t, att) + '）')
+                  }, function (e) { incomplete.push(m.name + '（' + errMsg(e) + '）') }))
+                  // 两个 onRejected 都就地收下错误：漏出去会被外层 catch 记成"没建出来"，
+                  // 而那时记忆其实已经在磁盘上了。
+                  return post.length ? Promise.all(post) : null
+                }).catch(function (e) { failed.push(m.name + '（' + errMsg(e) + '）') })
+              })
+            })
+            chain.then(function () {
+              setBusy(false)
+              finishSceneEditor(name, isEdit, sceneRes, archiveRes, { created: created, failed: failed, incomplete: incomplete })
+            })
+          }
+          /**
+           * 「新建记忆」弹窗本体。字段与记忆页逐项一致（名称 / 描述 / 正文 / 形态 + bundle 附件），
+           * 场景一栏改成只读展示 —— 这正是「套用记忆页的新建，但不需要选择场景」。
+           */
+          function memoryCreateNode() {
+            if (!memNew || !modal || modal.type !== 'scene-editor') return null
+            var nameInvalid = String(memNew.name || '').trim() !== '' && !isValidSceneSegment(String(memNew.name || '').trim())
+            var descLen = String(memNew.description || '').length
+            var target = memoryCreateTarget()
+            // 撞名改由提交时的确认窗处理（`DupNameDialog`）：输入框下面那行"保存会记为「X」"
+            // 是它的**预告版**，用户 2026-10-14 裁定啰嗦，删掉 —— 真撞上了才弹窗问一句。
+            // 改草稿时标题与主按钮换成「编辑 / 保存」那一套（与记忆页同词条）——否则同一个弹窗
+            // 在"新建"和"改一条已存在的东西"两种语义下长得一模一样，用户分不清点下去会加一条还是改一条。
+            var editing = memNew.editing != null
+            return React.createElement(Modal, { key: 'memnew', className: 'dsm-modal-compact', title: editing ? t('memory.edit.title') : t('memory.create.title'), closeLabel: t('btn.close'), onClose: function () { setMemNew(null) } },
+              React.createElement('div', { className: 'dsm-form' },
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
+                  // 只读一行：场景由上下文决定，不给选择器，也不加说明（用户 2026-10-14 裁定
+                  // 撤掉那句「记忆归属于当前编辑的场景」—— 灰掉的框里写着场景名，本身就是答案）。
+                  React.createElement('input', { className: 'dsm-control', value: sceneLabel(data.scenes, target), disabled: true, onChange: function () {} })),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.name')),
+                  React.createElement('input', { className: 'dsm-control' + (nameInvalid ? ' dsm-rule-invalid' : ''), value: memNew.name || '', placeholder: t('memory.field.name.placeholder'), onChange: function (e) { setMemNew(Object.assign({}, memNew, { name: e.target.value })) } }),
+                  nameInvalid ? React.createElement('p', { className: 'dsm-rule-hint' }, t('memory.name.invalid')) : null),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('div', { className: 'dsm-budget-meta' },
+                    React.createElement('span', { className: 'dsm-label' }, t('memory.field.description')),
+                    React.createElement('span', { className: 'dsm-char-count' + (descLen > 500 ? ' dsm-char-over' : '') }, descLen + ' / 500')),
+                  React.createElement('input', { className: 'dsm-control', value: memNew.description || '', placeholder: t('memory.field.description.placeholder'), onChange: function (e) { setMemNew(Object.assign({}, memNew, { description: e.target.value })) } })),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.body')),
+                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: memNew.body || '', placeholder: t('memory.field.body.placeholder'), onChange: function (e) { setMemNew(Object.assign({}, memNew, { body: e.target.value })) } })),
+                React.createElement('div', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.form')),
+                  // flat / bundle 就两个值：分段按钮摊开、点击即切（与记忆页同一控件）。
+                  React.createElement('div', { className: 'dsm-form-seg', role: 'group' },
+                    RULE_FORM_OPTIONS.map(function (o) {
+                      return React.createElement('button', { key: o.value, type: 'button', 'aria-pressed': (memNew.form || 'flat') === o.value, onClick: function () { setMemNew(Object.assign({}, memNew, { form: o.value })) } }, o.label);
+                    })),
+                  memNew.form === 'bundle'
+                    ? React.createElement('div', { className: 'dsm-field' },
+                      React.createElement('div', { className: 'dsm-budget-meta' },
+                        React.createElement('span', { className: 'dsm-label' }, t('memory.field.attach')),
+                        React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: pickMemAttach }, t('memory.attach.add'))),
+                      React.createElement('input', { ref: memAttachRef, type: 'file', multiple: true, className: 'dsm-hidden-input', onChange: onMemAttachPicked }),
+                      (memNew.files || []).length
+                        ? React.createElement('div', { className: 'dsm-attach-list' }, (memNew.files || []).map(function (f, i) {
+                            return React.createElement('div', { key: 'p:' + i + ':' + f.name, className: 'dsm-file', title: f.name },
+                              React.createElement('span', { className: 'dsm-file-kind', 'aria-hidden': 'true' }, 'NEW'),
+                              React.createElement('span', { className: 'dsm-file-name' }, f.name),
+                              React.createElement('span', { className: 'dsm-file-meta' }, fmtBytes(f.size) + ' · ' + t('memory.attach.pending')),
+                              React.createElement('button', { type: 'button', className: 'dsm-file-remove', disabled: busy, 'aria-label': t('memory.attach.remove') + ' ' + f.name, onClick: function () { dropMemPending(i) } }, '×'))
+                          }))
+                        : React.createElement('p', { className: 'dsm-help' }, t('memory.attach.empty')),
+                      React.createElement('span', { className: 'dsm-help' }, t('memory.attach.hint')))
+                    : null),
+                memNew.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(memNew.error)) : null),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || nameInvalid || descLen > 500 || !String(memNew.name || '').trim() || !String(memNew.body || '').trim(), onClick: submitMemoryCreate }, editing ? t('memory.btn.save') : t('memory.btn.create'))))
           }
           /** 组 1：MCP 工具集（服务器级行选择 → 行内「编辑」打开次级弹窗：备注 + 工具行选择）。 */
           function mcpGroup() {
@@ -870,7 +1221,8 @@
               mcp: modal.sections.mcp ? Object.keys(modal.sections.mcp).length : 0,
               skills: modal.sections.skills ? modal.sections.skills.length : 0,
               subagents: modal.sections.subagents ? modal.sections.subagents.length : 0,
-              memories: own.length,
+              // 创建态还没落盘的那批也算进去：它们同样会在「创建」那一刻变成这个场景的记忆。
+              memories: own.length + ((modal.pendingMems || []).length),
             })
             var descLen = String(sceneForm.description || '').length
             // 字段级错误只留**真正关于本字段**的（用户 2026-10-12：「场景名下面的删除」）。
@@ -1052,7 +1404,10 @@
            *
            * `nameOnly`：技能键是 `<来源>/<名字>`，而自定义来源的键是一串机器名
            * （`custom-d38da02b873bdb5c`）—— 铺在卡上没人认得出那是哪个技能。技能只取名字
-           * （最后一段），来源与人设本来就是短名（用户 2026-09-23 裁定）。
+           * （最后一段），人设本来就是短名。**技能目录（来源）不上卡**：来源级切换是技能
+           * 启停的实现细节（勾了技能的来源才启用、一条都没勾就停用），项目来源的 key 还是
+           * 一串路径哈希（`project-dsh:47d48f408c5edc5e`），而那个目录对用户可能根本不存在、
+           * 也不是新建技能的落点 —— 报出来只会被当成故障（用户 2026-10-15 裁定）。
            */
           function previewNames(list, nameOnly) {
             var names = (list || []).map(function (item) {
@@ -1156,8 +1511,6 @@
             pushRow(rest, 'scenes.preview.row.serversOff', mcp.serversOff)
             pushRow(rest, 'scenes.preview.row.toolsOn', mcp.toolsOn)
             pushRow(rest, 'scenes.preview.row.toolsOff', mcp.toolsOff)
-            pushRow(rest, 'scenes.preview.row.sourcesOn', sk.sourcesOn)
-            pushRow(rest, 'scenes.preview.row.sourcesOff', sk.sourcesOff)
             pushRow(rest, 'scenes.preview.row.skillsOn', sk.on, true)
             pushRow(rest, 'scenes.preview.row.skillsOff', sk.off, true)
             pushRow(rest, 'scenes.preview.row.personasOn', sub.on)
@@ -1470,6 +1823,26 @@
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || preview.loading, onClick: confirmEnter }, t('scenes.preview.enter')))) : null,
             // 场景编辑器（新建 / 编辑 / 档案三弹窗融合，见 editorNode）。
             editorNode(),
+            // 「新建记忆」弹窗（记忆集组头那颗「创建」）：同样排在编辑器之后 —— 它是编辑器里
+            // 开出来的子弹窗，后渲染的盖在上面。
+            memoryCreateNode(),
+            // 「已存在同名记忆」小窗：叠在「新建记忆」弹窗之上（三个入口的层级从下往上依次是
+            // 场景编辑器 → 新建记忆 → 同名确认）。取消 → 回到新建记忆弹窗改名字，正文与附件不动。
+            memDupAsk ? React.createElement(DupNameDialog, {
+              key: 'memdup', t: t, kind: t('dup.kind.memory'),
+              name: memDupAsk.name, finalName: memDupAsk.finalName, action: 'create',
+              busy: busy,
+              onCancel: function () { setMemDupAsk(null) },
+              onConfirm: function () { setMemDupAsk(null); stageMemoryDraft(memDupAsk.finalName) },
+            }) : null,
+            // 「已存在同名场景」小窗：叠在场景编辑器之上。取消 → 回到编辑器改名，档案四组不动。
+            sceneDupAsk ? React.createElement(DupNameDialog, {
+              key: 'scenedup', t: t, kind: t('dup.kind.scene'),
+              name: sceneDupAsk.name, finalName: sceneDupAsk.finalName, action: 'create',
+              busy: busy,
+              onCancel: function () { setSceneDupAsk(null) },
+              onConfirm: function () { setSceneDupAsk(null); saveScene(sceneDupAsk.finalName, false) },
+            }) : null,
             // 快捷提示词勾选弹窗（2026-10-12）：**排在编辑器之后**，两层遮罩同 z-index，
             // 后渲染的在上面 —— 它是编辑器里那颗按钮开出来的子弹窗。
             quickPick ? React.createElement(Modal, {

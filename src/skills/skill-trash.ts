@@ -15,6 +15,7 @@ import {
   lstatOrNull,
   pathIdentity,
   renameWithRetry,
+  temporaryPath,
 } from "./core-util.js";
 import {
   dshRootPath,
@@ -27,11 +28,14 @@ import {
   skillCreateRootPath,
   trashRootPath,
 } from "./skill-roots.js";
+// `KEBAB_RE` 的单一真相源在 upload-pipeline（manager-state / core 也都从那里取）。
+import { KEBAB_RE } from "./upload-pipeline.js";
 import type {
   EntryPathTarget,
   FailureResult,
   LogFn,
   RenameOptions,
+  RestoreOptions,
   RootInput,
   SkillSource,
   TrashMetadata,
@@ -48,7 +52,7 @@ export function writableRootDefinition(root: RootInput): SkillSource | null {
     return resolve(definition.path) === resolve(dshRootPath())
       ? rootByKey("dsh")
       : null;
-  // v0.4：hub 内技能目录同为用户级可写根（插件新建/导入的落点）。
+  // v0.4：hub 内技能目录同为用户级可写根（插件导入/上传的落点）。
   if (definition.key === "hub")
     return resolve(definition.path) === resolve(skillCreateRootPath())
       ? rootByKey("hub")
@@ -248,10 +252,92 @@ export async function listTrash(): Promise<TrashMetadata[]> {
     String(b.deletedAt).localeCompare(String(a.deletedAt)),
   );
 }
+/**
+ * 目标根里第一个空出来的退号名：`foo` → `foo-1` → `foo-2`…（与界面 `uniqueName` 的
+ * `'dash'` 档同一写法）。
+ *
+ * 用半角连字符而不是全角括号：技能条目名必须过 `KEBAB_RE`，`foo（1）` 会被 `toKebab` 抹成
+ * `foo-1` —— 写出来本来就是 `foo-1`，不如一开始就按这个写，省得"看着叫甲、落盘叫乙"。
+ *
+ * 候选本身不合法（超长 / 空）时直接放弃：再往后试也不会变合法。
+ */
+async function nextFreeSkillName(root: string, name: string): Promise<string | null> {
+  for (let i = 1; i <= 999; i += 1) {
+    const candidate = `${name}-${i}`;
+    if (entryPath(root, candidate) === null) return null;
+    if ((await safeExistingEntryPaths(root, candidate)).length === 0) return candidate;
+  }
+  return null;
+}
+/** frontmatter 整块（开栏 / 字段区 / 闭栏三段各自成组，便于逐字回拼）。 */
+const FRONTMATTER_BLOCK_RE =
+  /^((?:\uFEFF)?[^\S\r\n]*---[^\S\r\n]*(?:\r\n|\n))([\s\S]*?)(^[^\S\r\n]*---[^\S\r\n]*(?:\r\n|\n|$))/m;
+/** 顶格的 `name:` 行；缩进的嵌套字段（块标量的续行等）不匹配。 */
+const DECLARED_NAME_LINE_RE = /^name[^\S\r\n]*:[^\r\n]*/m;
+/**
+ * 退号恢复时把技能**声明名**改成新的落盘名（用户 2026-10-14）。
+ *
+ * 为什么必须改：`canonicalSkillName()` 取的是 frontmatter 里的 `name:`，**不是文件夹名** ——
+ * 技能页的同名判定、`preferredSkills` 首选表、喂给宿主的 provider 候选名，全都以它为准。
+ * 只把目录改成 `foo-1` 而里面仍写着 `name: foo`，等于恢复出一份"看着叫 foo-1、其实还是 foo"
+ * 的技能：它会跟原件被判成同名，技能页于是给它一颗「启用这个」——而那颗按钮挑的是**来源**，
+ * 两份都在同一个来源目录里，按下去什么都不会变。
+ *
+ * 只重写 `name:` 那一行的值，其余 frontmatter（块标量、`disable-model-invocation` 等）与正文
+ * **逐字节保留**（正则只吃一个行内片段，连 CRLF 都不动）：恢复的语义是"把原件放回去"，
+ * 不是"按当前模板重写一遍"——后者会顺手把用户写在别的键上的东西抹掉。
+ *
+ * 不动内容的情形一律返回 false（调用方只用来记日志）：名字不过 `KEBAB_RE`、形态认不出、
+ * 没有 frontmatter、原本就没有 `name:` 行、声明名本来就对。**认不出就一个字节都不写** ——
+ * 猜错形态会把附件目录里的 SKILL.md 当成技能文档改掉；替用户补一个缺失的 `name:` 也不行，
+ * 那会把一份坏技能伪装成好的。
+ */
+async function retitleRestoredSkill(
+  root: string,
+  name: string,
+  metadata: TrashMetadata,
+): Promise<boolean> {
+  if (!KEBAB_RE.test(name)) return false;
+  // 形态与上面的 `entryNameFor` 同一口径：bundle 收的是 `<原名>`，flat 收的是 `<原名>.md`。
+  const isBundle = metadata.entries.includes(metadata.name);
+  const isFlat = metadata.entries.includes(`${metadata.name}.md`);
+  // 两个都认得出或都认不出 = 形状不明，不猜。
+  if (isBundle === isFlat) return false;
+  const docPath = isBundle
+    ? join(root, name, "SKILL.md")
+    : resolve(root, `${name}.md`);
+  const doc = await fs.readFile(docPath, "utf8");
+  const block = FRONTMATTER_BLOCK_RE.exec(doc);
+  if (!block) return false;
+  const fields = block[2];
+  // 不加引号：`KEBAB_RE` 已经保证这个名字只含 `[a-z0-9-]`，没有任何需要转义的字符 ——
+  // 与插件自己的写手（`createSkill` / `updateSkill` 的 `name: ${name}`）同一形状，
+  // 免得"新建出来叫 demo-1、恢复出来叫 \"demo-1\""这种无谓的差别。
+  const rewritten = fields.replace(
+    DECLARED_NAME_LINE_RE,
+    () => `name: ${name}`,
+  );
+  if (rewritten === fields) return false;
+  // 用**函数式**替换回拼：字段区里可能带 `$&` / `$'` 之类的字面量，字符串式替换会把它们当占位符展开。
+  const content = doc.replace(
+    FRONTMATTER_BLOCK_RE,
+    (_all, open: string, _fields: string, close: string) =>
+      `${open}${rewritten}${close}`,
+  );
+  const temp = temporaryPath(docPath, "restore");
+  try {
+    await fs.writeFile(temp, content, "utf8");
+    await renameWithRetry(temp, docPath);
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return true;
+}
 export async function restoreTrash(
   id: string,
   log: LogFn | undefined,
-  options: WriteOptions = {},
+  options: RestoreOptions = {},
 ): Promise<TrashRestoreResult | FailureResult> {
   const metadata = await readTrashMetadata(id);
   if (!metadata)
@@ -265,21 +351,47 @@ export async function restoreTrash(
   if (!definition || definition.ok === false)
     return definition || readonlyError("restore");
   const root = definition.path;
+  /*
+   * 同名先问一句（用户 2026-10-14）：撞名时**默认仍拒绝**，但把候选名字一起回（`params.next`），
+   * 界面弹窗才能如实写出"确认后会叫 `foo-1`"；用户确认后带 `dedupe: true` 重来，这一次真的
+   * 按退号的名字落盘。
+   *
+   * `dedupe` 缺省即旧行为 —— 这条 op 目前只有界面在用，但保留"缺省拒"这层是为了不给未来的
+   * 调用方埋一个"撞名就悄悄改名"的默认值。
+   */
+  let name = metadata.name;
   const conflicts = await safeExistingEntryPaths(root, metadata.name);
-  if (conflicts.length)
-    return {
-      ok: false,
-      error: `无法恢复，同名技能已存在: ${metadata.name}`,
-      code: "error.trash.conflict",
-      params: { name: metadata.name },
-    };
+  if (conflicts.length) {
+    const candidate = await nextFreeSkillName(root, metadata.name);
+    if (options.dedupe !== true || candidate === null)
+      return {
+        ok: false,
+        error: `已存在同名技能: ${metadata.name}`,
+        // 专用错误码（四个回收站统一）：界面按它认出"这是撞名"并弹确认窗，而不是靠比文案。
+        code: "error.dup.conflict",
+        params: { name: metadata.name, ...(candidate ? { next: candidate } : {}) },
+      };
+    name = candidate;
+  }
+  const renamed = name !== metadata.name;
+  /**
+   * 回收站条目里的**顶层条目名**跟着退号，其余（bundle 目录里的附件 / 脚本）原样 ——
+   * `entries` 装的是当初移进回收站时那批顶层名字：bundle 是 `<名>`，flat 是 `<名>.md`
+   * （见 core.ts 的 deleteSkill）。只有这两个与名字有关，别的名字改了就是改坏内容。
+   */
+  const entryNameFor = (fileName: string): string => {
+    if (!renamed) return fileName;
+    if (fileName === metadata.name) return name;
+    if (fileName === `${metadata.name}.md`) return `${name}.md`;
+    return fileName;
+  };
   await fs.mkdir(root, { recursive: true });
   const itemRoot = join(trashRootPath(), id);
   const moved: { source: string; destination: string }[] = [];
   try {
     for (const fileName of metadata.entries) {
       const source = join(itemRoot, fileName);
-      const destination = join(root, fileName);
+      const destination = join(root, entryNameFor(fileName));
       if (
         !isSameOrDescendant(itemRoot, source) ||
         !isSameOrDescendant(root, destination)
@@ -288,9 +400,13 @@ export async function restoreTrash(
       await movePathWithFallback(source, destination, options.renameOptions);
       moved.push({ source, destination });
     }
+    // 顶层名字改完，文档里声明的名字也要跟上 —— 否则"看着叫 foo-1、其实还是 foo"，
+    // 技能页仍按 foo 判同名。失败即抛：半份的恢复（目录改了、声明没改）正是要修的那个 bug。
+    if (renamed && (await retitleRestoredSkill(root, name, metadata)))
+      if (log) log("restore", `恢复技能时改写声明名 ${metadata.name} -> ${name}`);
     await fs.rm(itemRoot, { recursive: true, force: true });
-    if (log) log("restore", `从回收站恢复 ${metadata.name} -> ${root}`);
-    return { id, name: metadata.name, root: trashRootMetadata(definition) };
+    if (log) log("restore", `从回收站恢复 ${name} -> ${root}`);
+    return { id, name, renamed, root: trashRootMetadata(definition) };
   } catch (error) {
     for (const item of moved.reverse())
       await movePathWithFallback(

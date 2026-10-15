@@ -548,6 +548,28 @@ export function normalizeManagerState(value: ManagerStateDocument): ManagerState
         (key) => !forgotten.includes(key),
       );
   }
+  /*
+   * 自愈：同一个名字不许同时挂在 `disabledSkills` 与 `enabledSkills` 上 —— 那是
+   * `validManagerStateDocument` 判整份文档非法的一种形状。
+   *
+   * 为什么这里**自愈**而不是照旧报错：`readManagerState` 碰到非法文档会 fail-closed 停用
+   * **所有**技能，并且把 `writable` 一起置 false —— 用户在界面上连一个开关都按不动，等于被
+   * 锁死在一份自己造不出来的状态里（用户 2026-10-14 实测踩到，出这条冲突的链是
+   * 「显式启用 → 删除 → 从回收站恢复」，写入侧已在 `markSkillsDisabled` 修掉）。
+   * 而这条不一致本身是无害的：两份名单都只是"用户显式说过什么"，选哪边都能让插件正常工作。
+   * 这与本函数既有的自愈口径一致（指向未知来源的首选、非法的自定义来源条目都是逐条丢掉）。
+   *
+   * 收敛方向取**保守的那一边**：保留 disabled、摘掉 enabled。反向（让 enabled 赢）会静默把
+   * 一个技能打开并送进模型上下文 —— 那才是危险方向；而"关着"用户看得见，翻一下开关就好。
+   * 这也正是 v0.8.5「新建 / 导入 / 恢复默认停用」本来要的落点。
+   */
+  for (const [key, disabled] of Object.entries(normalized.disabledSkills)) {
+    const enabled = normalized.enabledSkills[key];
+    if (!Array.isArray(disabled) || !disabled.length) continue;
+    if (!Array.isArray(enabled) || !enabled.length) continue;
+    const off = new Set(disabled);
+    normalized.enabledSkills[key] = enabled.filter((name) => !off.has(name));
+  }
   return normalized;
 }
 export function normalizeCustomRoots(value: unknown): CustomRoot[] {
@@ -743,6 +765,17 @@ export function markWinners(
           name: winner.entry.name,
           enabled: winnerEnabled,
         };
+      /*
+       * 契约：`shadowedBy.root === item.root.key` ⟺ 撞名发生在**同一个来源目录内部**
+       * （两个文件夹都写着 `name: X`），而不是"同一个技能在两个来源里各有一份"。
+       *
+       * 两者必须分得开，因为界面能采取的动作完全不同：跨来源时那颗「启用这个」写的是
+       * `preferredSkills[名] = 来源 key`（真的能换掉生效的那一份）；同来源内部则怎么写都
+       * 指不出区别 —— 首选表的值就是来源 key，两份都在同一个来源里。用户 2026-10-14 报的
+       * 正是这颗**按下去什么都不会变**的假按钮（技能页把它摆在两份同名之间）。
+       * 界面按这个判据收掉按钮（见 client 的 `renderSkill`），但**保留"被覆盖"这个标记**：
+       * 同来源里的落选那份确实不会被加载，如实说比什么都不说好。
+       */
     }
     if (options.markWinner !== false) winner.view.winner = true;
     winner.view.enabled = winner.policy.enabled;
@@ -836,9 +869,12 @@ export async function state(
       });
       continue;
     }
-    // 即使项目 .dsh/skills 尚不存在，也要把可写根返回给创建表单；只读项目根仍按实际存在性展示。
-    if (root.scope === "project" && !exists && root.kind !== "project-dsh")
-      continue;
+    // 项目来源只在真的有技能条目时才注册（skill-roots.ts 的 projectRoots，用户
+    // 2026-10-15 裁定「无技能的项目来源不注册」）；走到这里还不存在的项目根没有可显示的
+    // 内容，跳过。旧实现曾反过来 —— 「即使 .dsh/skills 不存在也把可写根返给创建表单」，
+    // 而创建落点 2026-10-15 已收敛到用户级目录（createRoots 排除 scope=project），
+    // 那条 carve-out 只剩把空来源泵进场景切换的副作用，故删。
+    if (root.scope === "project" && !exists) continue;
     if (truncated)
       result.warnings.push({
         code: "warning.scan.truncated",

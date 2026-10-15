@@ -37,6 +37,9 @@ import {
   validDiscoveryName,
 } from "./readonly-discovery.js";
 import { isSameOrDescendant, isValidSegment } from "../paths.js";
+// 回收站条目 id（与 hub / 记忆 / 人设 / 场景 / 提示词共用一个生成器）。不能引 `../hub.js` ——
+// 那边引了本文件的 resolveDshHome，引回去就是环；所以生成器放在 `../trash-id.js` 这一叶上。
+import { newTrashId } from "../trash-id.js";
 import type {
   CreateSkillResult,
   CustomRoot,
@@ -985,6 +988,24 @@ export async function markSkillsDisabled(
   if (current.writable === false) return invalidManagerStateWrite();
   let dirty = false;
   for (const e of clean) {
+    /*
+     * 同一张表里的两个名单**互斥**（`disabledSkills` = 显式关、`enabledSkills` = 显式开，
+     * 见 manager-state 的 validManagerStateDocument）。名字进了 disabled 就必须从 enabled 摘掉。
+     *
+     * 少了这一步，「显式启用过 → 删除 → 从回收站恢复」这条链会把同一个名字同时留在两份名单
+     * 上（删除不清策略、恢复又要默认停用），整份状态随即被判非法 —— 插件 fail-closed 停用
+     * **所有**技能，而且 `writable` 一并变 false，用户在界面上连一个开关都按不动，等于被锁死在
+     * 一份自己造不出来的状态上（用户 2026-10-14 实测踩到）。
+     *
+     * 摘除要放在下面那个 `continue` **之前**：名字已经在 disabled 里、却还挂在 enabled 上
+     * （就是被锁死的那份文件的形状）时，`continue` 会把清理一并跳过去。
+     */
+    const explicit = current.state.enabledSkills[e.root] || [];
+    const keptExplicit = explicit.filter((name) => name !== e.name);
+    if (keptExplicit.length !== explicit.length) {
+      current.state.enabledSkills[e.root] = keptExplicit;
+      dirty = true;
+    }
     const prev = current.state.disabledSkills[e.root] || [];
     if (prev.indexOf(e.name) >= 0) continue;
     current.state.disabledSkills[e.root] = [...prev, e.name].sort();
@@ -1165,7 +1186,11 @@ export async function deleteSkill(
       params: { name },
     };
   const targets = await safeExistingEntryPaths(definition.path, name);
-  const id = `${Date.now()}-${randomUUID()}`;
+  // 回收站条目 id 走五个域共用的那个生成器（2026-10-15 smoke-test P1-7）：此前这里另写了一套
+  // `${Date.now()}-${randomUUID()}`，于是同一次操作里记忆/人设/场景/提示词拿到 `mv8faxqe-…`
+  // 这种形状、技能拿到 `1792001296466-62d3d393-…`。模型按 `action=list` 的 id 跨域 restore，
+  // 两种长相只会让它多猜一层。读侧只校验单个合法路径段，旧条目照旧能列、能恢复。
+  const id = newTrashId();
   const trashRoot = trashRootPath();
   const stage = join(trashRoot, `.stage-${randomUUID()}`);
   const finalPath = join(trashRoot, id);
@@ -1322,11 +1347,12 @@ export async function createSkill(
   log: LogFn | undefined,
   options: CreateSkillOptions = {},
 ): Promise<CreateSkillResult | FailureResult> {
-  // v0.4：默认落点由「DSH 技能目录」改为 hub 内的 `tool-management/skills/`；
-  // 调用方显式传 options.root（如项目根）时仍以调用方为准。
+  // 默认落点是「DSH 技能目录」（用户裁定 2026-10-15 改回）：v0.4-v0.20.0 期间这里是 hub。
+  // hub（`tool-management/skills/`）现在只服务「导入技能」功能 —— 那边走
+  // `skillCreateRootPath()`，不经这里。调用方显式传 options.root（如项目根）时仍以调用方为准。
   const requestedRoot = Object.prototype.hasOwnProperty.call(options, "root")
     ? options.root
-    : rootByKey("hub") || rootByKey("dsh");
+    : rootByKey("dsh") || rootByKey("hub");
   const definition = await checkedWritableRootDefinition(requestedRoot);
   if (definition && definition.ok === false) return definition;
   if (!definition) {

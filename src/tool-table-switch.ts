@@ -38,6 +38,15 @@ export interface ToolTableSwitchDeps {
   /** 晚到的邻居：名单变了，两个目录里那句「用 `X` 查」的提示要跟着重算。 */
   skillCatalog: { refresh(): Promise<unknown> }
   subagentCatalog: { refresh(): Promise<unknown> }
+  /**
+   * 「官方载体在场 ⇒ 我们让位」的工具名（当前只有 `skill_manager_read`）。
+   *
+   * 报表要把它从**可见**里扣掉，否则兼容页在标准预设下会多报一条（虚报 ≈174 tok）。
+   * 让位本身是 per-agent 的（取决于那个 scope 解析不解析得到官方 `skill`），而报表是全局的
+   * —— 所以由母文件给一份口径明确的**保守估计**（"标准预设下会让位"），这里只转发。
+   * 缺省（未给）时按不让位算，与从前逐字一致。
+   */
+  carrierHiddenTools?: () => readonly string[]
 }
 
 export interface ToolTableSwitch {
@@ -54,8 +63,8 @@ export interface ToolTableSwitch {
 export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitch {
       // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
   // 工具表按**每个请求**付钱：20 个工具的整份定义合计 ≈3,769 tok 每轮都在。关掉某几个，
-  // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十五条**
-  // （20 条里实发只剩 5 条）—— 名单、判据与代价在 `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过
+  // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十四条**
+  // （20 条里实发 6 条）—— 名单、判据与代价在 `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过
   // 选择时铺（见下面的 `toolTableSettingsFrom`）。
   //
   // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话
@@ -81,8 +90,8 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     // 0.14.0 旧工具名迁移：读侧翻译一次并**回写盘**（幂等）。不迁移的话，用户"关掉了某条"
     // 的意图会在新名字上静默失效 —— 那条工具照旧每轮发出去，而界面上看不出来。
     // 写失败不回滚本次读取：内存里已经是迁移后的值，下次读会再试一次。
-    // 侧车不存在（`readJsonFile` 给 null）= 用户从没记过选择 ⇒ 用**出厂默认**（十五条不发，
-    // 实发 5 条；判据与代价见 tools/table.ts 的 DEFAULT_HIDDEN_TOOLS）。存过盘的
+    // 侧车不存在（`readJsonFile` 给 null）= 用户从没记过选择 ⇒ 用**出厂默认**（十四条不发，
+    // 实发 6 条；判据与代价见 tools/table.ts 的 DEFAULT_HIDDEN_TOOLS）。存过盘的
     // 一律照盘上那份，包括显式的 `hidden: []` —— 那是"我全都要"，不能被默认值盖掉。
     const migrated = migrateLegacyToolNames(toolTableSettingsFrom(raw))
     const value = migrated.settings
@@ -99,7 +108,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   }
   /**
    * 同步快照（热路径用：工具门禁每次调用、注入通道每个 step 都要问一句）。还没加载时先给
-   * **空集**并异步预热 —— 空集不是出厂默认（出厂关着五条），是刻意的：预热前的这一瞬与
+   * **空集**并异步预热 —— 空集不是出厂默认（出厂关着十四条），是刻意的：预热前的这一瞬与
    * 用户的选择可能不一致，但方向必须是安全的那一侧（不隐藏任何东西，绝不因为读盘慢而让
    * 工具凭空消失）。
    */
@@ -112,7 +121,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   }
   const toolTableRows = (): ToolTableRow[] => [...toolTableSizes].map(([name, bytes]) => ({ name, bytes }))
   const toolTableReport = (hidden: readonly string[] = [...toolTableHidden()]): ToolTableReport =>
-    buildToolTableReport(toolTableRows(), hidden)
+    buildToolTableReport(toolTableRows(), hidden, deps.carrierHiddenTools ? deps.carrierHiddenTools() : [])
   /** 落盘 + 同步内存缓存（三条写路径共用：改勾选 / 存方案 / 删方案）。 */
   async function writeToolTableSettings(next: ToolTableSettings): Promise<{ ok: true } | { ok: false; error: string }> {
     await deps.ensurePaths()

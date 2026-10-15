@@ -617,11 +617,14 @@ export function reachNoticeFor(
   const parts: string[] = []
   const domainOff = (key: string): boolean => inject?.domains?.[key] === false
   if (isSuppressingPreset(facts) && inject?.underSuppressingPresets !== true) {
+    // 末尾那句「（想让它在这类预设下也注入：插件的「兼容」页 → 注入。）」已删（2026-10-15 用户裁定）：
+    // 它是**给人看的操作路径**（界面怎么点），而这段文字进的是**工具回执** —— 回执留在 transcript 里，
+    // 比工具 schema 还贵（每次调用都会带一份）。判据与上一轮 P1-5 从场景锁定守卫里清掉
+    // 「去界面解锁」逐字同一条：守卫/提示只**陈述事实**，"怎么改"由模型自己向用户解释。
     parts.push(
       `预设「${presetId}」声明只要它自己的文本（persona complete / 关闭运行时上下文）：` +
       '本插件注入的 —— 场景、记忆、MCP、技能、子智能体、提示词 —— 默认不注入，' +
-      '需要时用对应的 list / read 工具按需读取；不要假设你已经看到它们。' +
-      '（想让它在这类预设下也注入：插件的「兼容」页 → 注入。）',
+      '需要时用对应的 list / read 工具按需读取；不要假设你已经看到它们。',
     )
   } else {
     if (facts.agentInstructions !== 'mounted' && domainOff('prompt')) {

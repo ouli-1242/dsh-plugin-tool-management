@@ -465,8 +465,22 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
   }
 
   /**
+   * 同名的场景里第一个空出来的退号名：`甲` → `甲（1）` → `甲（2）`…（全角括号，与界面
+   * `uniqueName` 同一写法）。超过段名长度上限的候选直接跳过 —— 退号名本身也得是合法段名。
+   */
+  function nextFreeSceneName(index: { scenes?: Record<string, unknown> }, name: string): string | null {
+    for (let i = 1; i <= 999; i += 1) {
+      const candidate = `${name}（${i}）`
+      if (!isValidGroupPath(candidate)) return null
+      if (!index.scenes?.[candidate]) return candidate
+    }
+    return null
+  }
+
+  /**
    * 从回收站恢复一个场景：重建记忆目录 + 写回记录与档案。
-   * 同名场景已存在时**拒绝**（绝不覆盖既有场景）。
+   * 同名场景已存在时默认**拒绝**（绝不覆盖既有场景）；带 `dedupe: true` 时退号恢复
+   * （`甲` → `甲（1）`，用户 2026-10-14 裁定四个域都要能退号）。
    *
    * 场景名按**完整路径**寻址（2026-09-30 审查 P2-4，与删除侧同口径）：回收站里的名字来自
    * 当初删掉的那条记录，多段名同样得能恢复回来 —— 否则删得掉、恢复不了，数据就卡在回收站里。
@@ -475,10 +489,25 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     const id = String((args && args.id) || '').trim()
     const entry = await readTrashEntry('scenes', id)
     if (!entry) return fail('error.rules.notFound', `回收站条目不存在：${id}`)
-    const name = String(entry.name || '').trim()
-    if (!isValidGroupPath(name)) return fail('error.rules.invalidGroup', `回收站里的场景名非法：${name || '(空)'}`)
+    const oldName = String(entry.name || '').trim()
+    if (!isValidGroupPath(oldName)) return fail('error.rules.invalidGroup', `回收站里的场景名非法：${oldName || '(空)'}`)
     const index = await readIndex(stateDir)
-    if (index.scenes?.[name]) return fail('error.rules.invalidGroup', `无法恢复，同名场景已存在：${name}`)
+    let name = oldName
+    if (index.scenes?.[name]) {
+      // 「同名先问一句」（用户 2026-10-14）：拒绝时把候选名字一起回（`params.next`），
+      // 界面弹窗才能如实写出"确认后会叫 `甲（1）`"；用户确认后带 `dedupe: true` 重来。
+      const next = nextFreeSceneName(index, name)
+      if (args?.dedupe !== true || !next) {
+        // 专用错误码（四个回收站统一）：界面按它认出"这是撞名"并弹确认窗。原先这里复用
+        // `error.rules.invalidGroup`，那一条同时还表示"名字非法"，界面分不出来。
+        return fail('error.dup.conflict', `已存在同名场景：${name}`, {
+          name,
+          ...(next ? { next } : {}),
+        })
+      }
+      name = next
+    }
+    const renamed = name !== oldName
     const dir = join(memoriesRoot, name)
     // 恢复是**写入**方向：落点若是指向根外的目录链接，`mkdir` 会顺着链接成功、随后
     // `moveOutOfTrash` 把记忆文件写到**根外**去。与删除侧同一个根因（缺 realpath 根内断言），
@@ -522,16 +551,21 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     // 记忆条目随文件一起回来（删除时存进 `data.rules`，见 `rulesRemoveScene`）——
     // 否则恢复出来的记忆全部按 `enabled ?? true` 重置，用户停用的会复活（审查 P1-1）。
     // **只补不覆盖**：同名键若已存在以现有为准（上面已拒绝同名场景，正常情况下不会撞）。
+    //
+    // 退号恢复时这批记忆的 key 也要**跟着改名**：索引里的 key 是 `<场景>/<名>`，照抄旧 key
+    // 会让它们挂在旧场景名上 —— 文件躺在 `甲（1）/` 里、索引却指向 `甲/`，恢复出来的场景
+    // 一条记忆都看不见。前缀不匹配的（理论上不会有）原样保留，宁可留着也不猜。
     if (data.rules && typeof data.rules === 'object' && !Array.isArray(data.rules)) {
       const rules = index.rules || (index.rules = {})
       for (const [ruleId, ruleEntry] of Object.entries(data.rules as Record<string, RuleIndexEntry>)) {
-        if (rules[ruleId] === undefined) rules[ruleId] = ruleEntry
+        const mapped = renamed && ruleId.startsWith(oldName + '/') ? name + ruleId.slice(oldName.length) : ruleId
+        if (rules[mapped] === undefined) rules[mapped] = ruleEntry
       }
     }
     await writeIndex(stateDir, index)
     await purgeTrashEntry('scenes', id)
     invalidateSnapshot()
-    return { ok: true, name, restoredFiles: restored.length }
+    return { ok: true, name, renamed, restoredFiles: restored.length }
   }
 
   /** 永久删除一条场景回收站条目。 */

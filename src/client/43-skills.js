@@ -11,6 +11,9 @@
       var ms = react.useState(null), modal = ms[0], setModal = ms[1];
       var rs = react.useState(null), result = rs[0], setResult = rs[1];
       var fms = react.useState({ root: "dsh", name: "", description: "", body: "" }), form = fms[0], setForm = fms[1];
+      // 「已存在同名技能」确认弹窗（用户 2026-10-14）：`{ name, finalName }` 或 null。
+      // 撞名不再静默退号（`foo` → `foo-1`），先问一句再建。
+      var dups = react.useState(null), dupAsk = dups[0], setDupAsk = dups[1];
       var us = react.useState(null), upload = us[0], setUpload = us[1];
       var ds = react.useState(null), detail = ds[0], setDetail = ds[1];
       var cs = react.useState({ path: "", label: "" }), customForm = cs[0], setCustomForm = cs[1];
@@ -74,7 +77,47 @@
           setResult({ ok: false, text: (res && res.error) || t("error.action", { error: "unknown" }) });
         }).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); }).finally(function () { setBusy(false); });
       }
-      function submitCreate() { post("/create", form, null).then(function (data) { setModal(null); setForm({ root: "dsh", name: "", description: "", body: "" }); setResult(function (prev) { return Object.assign({ ok: true, warning: false }, prev || {}, { text: t("done.created", { name: data.name }) }); }); }).catch(swallowPostError); }
+      /**
+       * 客户端侧的 `toKebab` 镜像（宿主实现在 `src/skills/frontmatter.ts`）。
+       *
+       * 为什么界面里要再写一份：技能名落盘前会被宿主归一化（`Foo Bar` → `foo-bar`），而
+       * 「新建撞名先问一句」必须在**提交之前**就知道归一化后的名字 —— 否则问出来的
+       * 「`Foo Bar-1`」和真正写下去的「`foo-bar-1`」对不上，等于换了个地方骗人。镜像宿主
+       * 谓词在本项目有先例（隔壁 `isValidSceneSegment`）。宿主改口径这里要一起改；不一致
+       * 的后果只是"提示里的名字和实际不符"，不是写坏数据 —— 服务端那道同名闸仍在。
+       */
+      function kebabName(raw) {
+        var s = String(raw == null ? "" : raw).trim();
+        if (s === "") return "";
+        return s.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()
+          .replace(/[\s_.]+/g, "-").replace(/[^a-z0-9-]/g, "-")
+          .replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+      }
+      /**
+       * 技能页「创建技能」的提交（用户 2026-10-14 第二轮）：**先问一句，再退号**。
+       *
+       * 判据只看**落点那一个来源**里的条目名 —— `skill-create` 的同名检查也是按目标根做的
+       * （`safeExistingEntryPaths(root, name)`），别的来源里有同名是另一回事（那个由"同名
+       * 首选"管，不是冲突）。比的是条目名（文件 / 目录名）而不是 frontmatter 里的展示名，
+       * 与服务端同口径。
+       *
+       * 退号用 `-1`（不是 `（1）`）：技能名必须过 KEBAB_RE，全角括号会被 `toKebab` 抹成 `-`，
+       * 写出来本来就是 `foo-1`，不如一开始就按这个写。
+       */
+      function submitCreate() {
+        var typed = String(form.name || "").trim();
+        var normalized = kebabName(typed);
+        var target = allRoots.filter(function (r) { return String(r.key) === String(form.root); })[0];
+        var taken = {};
+        ((target && target.skills) || []).forEach(function (sk) { taken[String(sk.name)] = true; });
+        var finalName = uniqueName(normalized, taken, "dash");
+        if (finalName !== normalized) { setDupAsk({ name: normalized, finalName: finalName }); return; }
+        createSkill(finalName);
+      }
+      /** 真正落盘那一步（名字已定）。`name` 来自 `submitCreate` 或确认弹窗。 */
+      function createSkill(name) {
+        post("/create", Object.assign({}, form, { name: name }), null).then(function (data) { setModal(null); setForm({ root: "dsh", name: "", description: "", body: "" }); setResult(function (prev) { return Object.assign({ ok: true, warning: false }, prev || {}, { text: t("done.created", { name: data.name }) }); }); }).catch(swallowPostError);
+      }
       function selectUploadFiles(files) { pickerOpenRef.current = false; var selected = inspectUploadSelection(files); if (!selected) return; if (selected.error) { setUpload(null); setResult({ ok: false, text: translateError(t, selected.error) }); return; } setUpload(selected); setResult(null); }
       /** D14：导出条目 = 按**来源文件夹**分组，组内列出该文件夹里的全部技能（含同名被遮蔽的）。 */
       function exportItems() {
@@ -140,13 +183,27 @@
         targets[""] = all;
         return { filtered: filtered, targets: targets };
       }, [roots, dq, activeSource, t]);
-      var createRoots = allRoots.filter(function (root) { return root.mutable === true; }), createOptions = createRoots.map(function (root) { return { value: root.key, label: rootDisplayName(t, root) }; }); if (!createOptions.length) createOptions.push({ value: "hub", label: t("root.hub") });
-      // 新建技能的默认落点：hub（`tool-management/skills/`）。
-      // 用户在技能页筛选了某个来源时，优先用那个来源；两者都不可用时退回 dsh。
+      // 创建位置候选：只要**用户级**可写根（DSH 技能 / 导入技能）。项目级来源
+      // （`project-dsh:<hash>`，标签「项目 DSH · <仓库名>」）排除在外 —— 用户裁定
+      // 2026-10-15「新增技能默认 DSH 技能；导入技能功能才是导入技能目录」，新建落点
+      // 只在用户级目录里选。更硬的理由是闭环：`skill_manager_save` 的改分支
+      // （`skill-update` op）只认 hub + dsh 两个可写根，建在项目目录里的技能模型侧
+      // 「再存一次」会被 error.update.notOwnRoot 拒；模型工具没有 root 参数、永远落
+      // dsh，这个下拉是唯一能把技能建进项目根的入口。项目来源本身不动 —— 来源卡片
+      // 照旧列它（发现 / 启停 / 删除），只是不再作为「创建位置」候选。
+      var createRoots = allRoots.filter(function (root) { return root.mutable === true && root.scope !== "project"; }), createOptions = createRoots.map(function (root) { return { value: root.key, label: rootDisplayName(t, root) }; }); if (!createOptions.length) createOptions.push({ value: "hub", label: t("root.hub") });
+      // 新建技能的默认落点：DSH 技能（`~/.dsh/skills/`，用户裁定 2026-10-15）。
+      // v0.4 起这里默认 hub，现在改回 dsh —— hub（`tool-management/skills/`）只留给「导入技能」
+      // 功能（import / upload 走 `skillCreateRootPath()`，不经这一处）。与 `skill-create` 的
+      // op 默认值、core.js 的 createSkill 默认值同口径：三处必须一致，否则人点界面和模型调用
+      // 会把同一个「新建技能」落到两个不同的根。
+      // 用户在技能页筛选了某个来源时，优先用那个来源；筛选来源与 dsh 都不可用时退回 hub。
+      // 筛到**项目来源**时不算数（项目来源已不在 createRoots 里，见上方）：那时仍落 dsh ——
+      // 新建技能的落点按裁定只在用户级目录里选，不跟着页面筛选拐进项目仓库。
       function defaultCreateRoot() {
         if (createRoots.some(function (root) { return root.key === activeSource; })) return activeSource;
-        if (createRoots.some(function (root) { return root.key === "hub"; })) return "hub";
-        return "dsh";
+        if (createRoots.some(function (root) { return root.key === "dsh"; })) return "dsh";
+        return "hub";
       }
       function openCreate() { setForm(Object.assign({}, form, { root: defaultCreateRoot() })); setModal("create"); }
       // 项目作用域的来源不一定带 projectName / projectRoot（hub「导入技能」就没有），
@@ -208,7 +265,18 @@
         // 锁定期间**只有「详情」还活着**：它是只读动作；其余三颗都会改配置，一律置灰
         //（用户 2026-10-12：「锁定情况下删除键应该变灰且不能点击」—— 与子智能体页锁定态同长相）。
         var actions = [];
-        if (canToggle && skill.shadowedBy) actions.push(h("button", { key: "activate", type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy || anyLocked, title: t("btn.activate.title"), onClick: function () { activateShadowed(root, skill); } }, t("btn.activate")));
+        /**
+         * 「启用这个」写的是「同名技能该用哪个**来源**」的首选表（`/prefer` →
+         * `preferredSkills[名] = 来源 key`，`shadowedBy.root === 本行来源` 即表示撞名发生在
+         * **同一个来源目录内部**（两个文件夹都写着 `name: X`）—— 那种情况下首选表怎么指都
+         * 指不出区别（值就是来源 key，两份在同一个来源里），按下去只会回一句"已改为生效"、
+         * 实际什么都没变（用户 2026-10-14 实测到的那颗假按钮）。
+         *
+         * 「被覆盖」这个标记照旧保留（同来源里的落选那份确实不会被加载，如实说比不说好），
+         * 收掉的只是那颗**做不到它承诺的事**的按钮。判据是来源 key，不是文案。
+         */
+        var canPrefer = !!skill.shadowedBy && skill.shadowedBy.root !== root.key;
+        if (canToggle && canPrefer) actions.push(h("button", { key: "activate", type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy || anyLocked, title: t("btn.activate.title"), onClick: function () { activateShadowed(root, skill); } }, t("btn.activate")));
         if (skill.preferred === true) actions.push(h("button", { key: "unprefer", type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy || anyLocked, title: t("btn.unprefer.title"), onClick: function () { clearPreferred(root, skill); } }, t("btn.unprefer")));
         actions.push(h("button", { key: "detail", type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { openDetail(root, skill); } }, t("btn.detail")));
         if (root.deletable === true) actions.push(h("button", { key: "trash", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy || anyLocked, onClick: function () { setModal({ type: "trash-confirm", root: root.key, name: skill.name }); } }, t("btn.trash")));
@@ -442,6 +510,15 @@
       if (modal === "custom-add") content.push(h(Modal, { key: "custom-add", title: t("custom.add.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("div", { className: "dsm-form" }, h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("custom.add.path")), h("div", { className: "dsm-dir-row" }, h("input", { className: "dsm-control", value: customForm.path, placeholder: defaultIoDir(), onChange: function (e) { setCustomForm(Object.assign({}, customForm, { path: e.target.value })); } }), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: openCustomDir, title: t("custom.add.openDir.title") }, t("btn.openDir")))), h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("custom.add.label")), h("input", { className: "dsm-control", value: customForm.label, placeholder: t("custom.add.label.placeholder"), onChange: function (e) { setCustomForm(Object.assign({}, customForm, { label: e.target.value })); } })), h("p", { className: "dsm-help" }, t("custom.add.help")), result ? h("div", { className: "dsm-feedback" + (result.warning ? " dsm-warning" : result.ok ? "" : " dsm-error"), role: "alert" }, result.text) : null), customForm.picking ? h(DirPickerModal, { key: "custom-dir-picker", title: t("custom.add.picker.title"), initial: String(customForm.path || ""), closeLabel: t("btn.close"), onClose: function () { setCustomForm(Object.assign({}, customForm, { picking: false })); }, onPick: function (path) { setCustomForm(Object.assign({}, customForm, { path: path, picking: false })); } }) : null, h("div", { className: "dsm-modal-actions" }, h("button", { type: "button", className: "dsm-btn", disabled: busy || !String(customForm.path || "").trim(), onClick: submitCustomAdd }, t("custom.add.submit")))));
       if (modal && modal.type === "source-remove-confirm") content.push(h(Modal, { key: "source-remove-confirm", title: t("confirm.source.remove.title"), closeLabel: t("btn.close"), className: "dsm-modal-sm", onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.source.remove.desc", { name: modal.name })), h("p", { className: "dsm-help" }, t("confirm.source.remove.hint")), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { post("/source-remove", { root: modal.key }, "result.sourceRemoved", { name: modal.name }).then(function () { setModal(null); }).catch(swallowPostError); } }, t("btn.source.remove")))));
       if (modal && modal.type === "custom-remove-confirm") content.push(h(Modal, { key: "custom-remove-confirm", title: t("confirm.custom.remove.title"), closeLabel: t("btn.close"), className: "dsm-modal-sm", onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.custom.remove.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { submitCustomRemove(modal.key, modal.name); } }, t("btn.custom.remove")))));
+      // 「已存在同名技能」小窗：叠在「创建技能」弹窗之上（`Modal` 自带 gateModalDepth 计数）。
+      // 取消 → 回到创建弹窗改名字，简介与正文一个字都不动。
+      if (dupAsk) content.push(h(DupNameDialog, {
+        key: "dup-name", t: t, kind: t("dup.kind.skill"),
+        name: dupAsk.name, finalName: dupAsk.finalName, action: "create",
+        busy: busy,
+        onCancel: function () { setDupAsk(null); },
+        onConfirm: function () { setDupAsk(null); createSkill(dupAsk.finalName); },
+      }));
       return h("section", { className: "dsm-section" }, content);
     }
 
