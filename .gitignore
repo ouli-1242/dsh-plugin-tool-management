@@ -20,6 +20,7 @@ scripts/*
 !scripts/host-deps.mjs
 !scripts/doctor.mjs
 !scripts/sync-profile.mjs
+!scripts/check-css-chain.mjs
 
 # 工具产物
 .host-deps-backup/
