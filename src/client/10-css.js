@@ -671,11 +671,7 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-field>.dsm-form-seg{align-self:flex-start;width:fit-content}
 .dsm-form-seg button{min-height:24px;padding:0 12px;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}
 .dsm-form-seg button:hover{color:var(--dsw-alias-label-primary)}
-/* 选中态加深（用户 2026-10-15）：从 bg-layer-2 浅底改为 button-primary-fill 实心 +
-   primary-foreground 文字，与主按钮同色同口径 —— 浅色底压在 interactive-bg-hover
-   容器里对比度不足，实心后才看得出「按下去的是这颗」。全局控件，提示词类型/形态、
-   MCP 导入重名三处使用点一并生效。 */
-.dsm-form-seg button[aria-pressed="true"]{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font-weight:600}
+.dsm-form-seg button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}
 /* （.dsm-select-up 这条已删：菜单 2026-10-12 改成 position:fixed，上下方向与坐标
    全部由 SourceSelect 内联算 —— 原来的 .dsm-select-up 上弹规则已被内联 style 覆盖。） */
 
