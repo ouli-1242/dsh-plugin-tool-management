@@ -115,9 +115,36 @@
       return { ok: true, rows: rows }
     }
 
+    /**
+     * 导入框的「dsh 标准模板」（用户 2026-10-15：以前的灰色提示只写「粘贴
+     * {"mcpServers": {…}}…」，光凭省略号看不出一个完整配置长什么样）。
+     * 打开弹窗即预填这份模板，用户直接改；删空后 placeholder 显示同一份
+     * （useState 初值与 placeholder 同源，两条路径永远是这一份）。
+     * 两条示例覆盖两种传输方式：stdio 看有没有 command、http 看 url
+     * （判传输不看 type 字段，见 mcpRowFromConfig 注释）。名字带 example-
+     * 前缀就是让人一眼看出「这是模板，改我」。
+     */
+    var MCP_IMPORT_TEMPLATE = [
+      '{',
+      '  "mcpServers": {',
+      '    "example-server": {',
+      '      "command": "npx",',
+      '      "args": ["-y", "your-package"],',
+      '      "env": { "API_KEY": "" }',
+      '    },',
+      '    "example-remote": {',
+      '      "url": "https://your-server.com/mcp"',
+      '    }',
+      '  }',
+      '}',
+    ].join('\n')
+
     function McpJsonImportModal(props) {
       var t = props.t
-      var ts = react.useState(''); var text = ts[0], setText = ts[1]
+      // 打开即预填标准模板（用户 2026-10-15），删空后 placeholder 还是它 ——
+      // 初值与 placeholder 同源（MCP_IMPORT_TEMPLATE），不会出现"打开是模板、
+      // 删空变一句话"的两副面孔。
+      var ts = react.useState(MCP_IMPORT_TEMPLATE); var text = ts[0], setText = ts[1]
       // 解析走防抖值：整份 JSON 在每次按键上都重解析没有意义。
       var dq = useDebouncedValue(text)
       var bs = react.useState(false); var busy = bs[0], setBusy = bs[1]
@@ -206,8 +233,8 @@
         h('div', { className: 'dsm-form' },
           h('p', { className: 'dsm-desc' }, t('mcp.importJson.hint')),
           h('textarea', {
-            className: 'dsm-control dsm-textarea-md', rows: 8, value: text, spellCheck: false,
-            placeholder: t('mcp.importJson.placeholder'), onChange: function (e) { setText(e.target.value) },
+            className: 'dsm-control dsm-textarea-md', rows: 12, value: text, spellCheck: false,
+            placeholder: MCP_IMPORT_TEMPLATE, onChange: function (e) { setText(e.target.value) },
           }),
           h('div', { className: 'dsm-upload-choices' },
             h('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { if (fileRef.current) fileRef.current.click() } }, t('btn.file.pick')),
