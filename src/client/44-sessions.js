@@ -112,7 +112,18 @@
               return next
             })
           }
-          function toggleGroup(ids) {
+          /** 勾选是「看不见却生效」的高危动作：组默认收起后（见 renderGroup），在组头或页头
+           *  勾一批会话会选中一堆收着的行，而「删除所选」就挂在页头。勾完把相关组展开，
+           *  让人看清到底选中了哪些。 */
+          function expandGroups(keys) {
+            setCollapsed(function (prev) {
+              var next = Object.assign({}, prev)
+              keys.forEach(function (k) { next[k] = false })
+              return next
+            })
+          }
+          function toggleGroup(key, ids) {
+            expandGroups([key])
             setSelected(function (prev) {
               var next = new Set(prev)
               var all = ids.every(function (id) { return next.has(id) })
@@ -122,6 +133,7 @@
           }
           function toggleAllVisible(ids) {
             if (!ids.length) return
+            expandGroups(groups.map(function (g) { return g.key }))
             setSelected(function (prev) {
               var next = new Set(prev)
               var all = ids.every(function (id) { return next.has(id) })
@@ -317,16 +329,25 @@
           }
 
           function renderRow(it) {
-            // 列表行两行制（REDESIGN §3.4，切片四）：行 1 标题，行 2 目录（截断 + title）；
-            // 右侧 恢复 / 删除 常驻 quiet 24px，删除 quiet-danger。
-            // 行首勾选是自绘框 RowCheck（REDESIGN §5.1，切片五换装）—— 行主点击留给
-            // 恢复/删除等动作，勾选只认框本身；框内 stopPropagation，不会误开行。
+            // 列表行两行制（REDESIGN §3.4，切片四）：行 1 标题，行 2 目录 + 归档时间。
+            // 行尾两颗常驻按钮（用户 2026-10-16 第二轮：「永久删除拿出来」—— 这一页就是来
+            // 删东西的，把删除藏进菜单等于每行多点一次）：恢复 quiet，永久删除 quiet-danger。
+            // 行首勾选是自绘框 RowCheck（REDESIGN §5.1，切片五换装），**整行也可点**
+            //（用户 2026-10-16：「点击其他地方也应该可以勾选，当前只能点击勾选框」）：
+            // 行主区域走 ListRow 的 onToggle，框自己 stopPropagation 所以不会翻两次，
+            // 右侧那两颗按钮整块挡冒泡 —— 点「恢复」不该顺带把这条勾上。
+            var at = it.archivedAt || it.createdAt || 0
+            var metaBits = []
+            if (it.cwd) metaBits.push(React.createElement('span', { key: 'cwd', className: 'dsm-listrow-meta-desc', title: it.cwd }, it.cwd))
+            // 归档时间排在目录**后面且不可收缩**：长目录会被截，但"什么时候收进来的"必须留下
+            //（保留期默认 30 天，它其实就是"还剩几天"）。宿主没给时间就不显示，不拿未知占位。
+            if (at) metaBits.push(React.createElement('span', { key: 'at', className: 'dsm-listrow-meta-info' }, new Date(at).toLocaleDateString()))
             return React.createElement(ListRow, {
               key: it.sessionId,
               leading: React.createElement(RowCheck, { checked: selected.has(it.sessionId), label: t('hist.select'), onChange: function () { toggleSelect(it.sessionId) } }),
+              onToggle: function () { toggleSelect(it.sessionId) },
               name: it.title || ('Session ' + shortId(it.sessionId)),
-              meta: it.cwd || null,
-              metaTitle: it.cwd || undefined,
+              meta: metaBits.length ? metaBits : null,
               actions: [
                 React.createElement('button', { key: 'restore', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { doUnarchive(it.sessionId) } }, t('hist.btn.restore')),
                 React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { setModal({ type: 'delete', sessionId: it.sessionId, title: it.title || ('Session ' + shortId(it.sessionId)) }) } }, t('hist.btn.purge')),
@@ -335,23 +356,30 @@
           }
 
           // 分组卡片：dsm-source 卡片 + 可折叠表头（与 MCP / Skills 页一致的源卡片语言）。
-          function toggleGroupCollapse(key) {
+          function toggleGroupCollapse(key, open) {
             setCollapsed(function (prev) {
               var next = Object.assign({}, prev)
-              next[key] = !next[key]
+              // 存的是**有效状态**（true=收起），不是翻转旧值：默认收起的组旧值是 undefined，
+              // 翻一下算出来还是 true，第一次点击看不出任何变化，得点第二下才展开。
+              next[key] = open
               return next
             })
           }
           function renderGroup(g) {
             var groupIds = g.items.map(function (it) { return it.sessionId })
             var allChecked = groupIds.length > 0 && groupIds.every(function (id) { return selected.has(id) })
-            var open = !collapsed[g.key]
+            // 工作区组默认收起（用户 2026-10-16：「会话应该默认折叠」）：这一页是归档台账，
+            // 一屏摊开每个工作区的全部会话只是噪音，先看哪个工作区、再点开它。
+            // 没手动点过（undefined）才走默认；手动展开过的那组（false）保持展开。
+            var baseOpen = collapsed[g.key] === false
+            // 打了字强制展开（技能 / 提示词页同口径）：组收着的话命中的那几行一行都看不见。
+            var open = baseOpen || !!dq
             // 重建组（宿主里没有对应登记）：标出「曾登记、已被移除」或「从未登记」，目录仍在则给一键重新登记。
             var detached = g.kind === 'detached'
             return React.createElement('div', { className: 'dsm-source', key: 'g:' + g.key },
               React.createElement('div', { className: 'dsm-source-head dsm-hist-group-head' },
-                React.createElement(RowCheck, { checked: allChecked, label: t('hist.selectGroup', { title: g.title }), onChange: function () { toggleGroup(groupIds) } }),
-                React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroupCollapse(g.key) } },
+                React.createElement(RowCheck, { checked: allChecked, label: t('hist.selectGroup', { title: g.title }), onChange: function () { toggleGroup(g.key, groupIds) } }),
+                React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroupCollapse(g.key, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-title dsm-hist-group-title', title: g.title }, g.title),
                   React.createElement('span', { className: 'dsm-count' }, t('hist.group.count', { count: g.items.length }))),
                 // 目录已被删除（dirMissing）时：既不给「重新登记」入口，也不再并列「已移除」标签 ——
@@ -522,7 +550,7 @@
                           var key = 'exp:' + g.cwd
                           var open = collapsed[key] !== true
                           return React.createElement('div', { key: key, className: 'dsm-pick-group' },
-                            React.createElement('button', { type: 'button', className: 'dsm-pick-group-head', 'aria-expanded': open ? 'true' : 'false', onClick: function () { toggleGroupCollapse(key) } },
+                            React.createElement('button', { type: 'button', className: 'dsm-pick-group-head', 'aria-expanded': open ? 'true' : 'false', onClick: function () { toggleGroupCollapse(key, open) } },
                               React.createElement(CaretIcon, { open: open, className: 'dsm-pick-caret' }),
                               React.createElement('span', { className: 'dsm-pick-group-name', title: g.cwd || t('hist.ungrouped') }, g.cwd || t('hist.ungrouped')),
                               React.createElement('span', { className: 'dsm-pick-group-count' }, t('export.group.count', { count: g.rows.length }))),

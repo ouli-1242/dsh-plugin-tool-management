@@ -560,20 +560,27 @@
             const frozen = state.locked === true
             const actDisabled = frozen || busy !== null
             // 行 2 元信息：层级（loader 视图）/ 工具数 / 备注 —— 原行中标签列并入（REDESIGN §3.4）。
+            // 启动命令 / URL **不上行**（用户 2026-10-16：`python -m fastgraph` 那串不需要显示）：
+            // 它是详情弹窗里的字段，摆在列表行只会把行 2 变成一屏等宽噪声。
             const meta = []
             if (levelFilter === 'loader' && row.level && row.level !== 'loader') meta.push(React.createElement('span', { key: 'level' }, mt('mcp.level.' + row.level)))
             const toolCount = toolCountText(row)
-            if (toolCount) meta.push(React.createElement('span', { key: 'tools' }, toolCount))
+            if (toolCount) meta.push(React.createElement('span', { key: 'tools', className: 'dsm-listrow-meta-info' }, toolCount))
             // 备注可能很长：给可收缩的 desc 类（min-width:0 + 省略号），超宽时截断而不是把行撑爆。
             if (row.notes) meta.push(React.createElement('span', { key: 'note', className: 'dsm-listrow-meta-desc', title: row.notes }, mt('mcp.note.prefix') + row.notes))
-            // 次级动作（REDESIGN §3.4：常驻 quiet 24px 右对齐；删除类 quiet-danger；
-            // 顺序 开关 · 详情 · 编辑 · 删除 —— 原先的「检查」已删，见上面 openDetail 那段说明）。
-            // 「详情」是只读动作，锁定期间照常可用。
+            // 行尾：一颗常驻动作 + 一颗 ⋯（用户 2026-10-16：「详情」要留边框）。
+            // 「详情」是只读动作，锁定期间照常可用；编辑 / 删除进菜单，删除在菜单里红字。
             const actions = [
               React.createElement('button', { key: 'detail', type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: () => openDetail(row) }, mt('mcp.btn.detail')),
             ]
-            if (editable) actions.push(React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: actDisabled, onClick: () => openEdit(row) }, mt('mcp.btn.edit')))
-            if (editable) actions.push(React.createElement('button', { key: 'remove', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: actDisabled, onClick: () => setConfirmRow(row) }, mt('mcp.btn.remove')))
+            if (editable) actions.push(React.createElement(RowMenu, {
+              key: 'menu',
+              label: mt('row.menu', { name: row.serverName }),
+              items: [
+                { key: 'edit', label: mt('mcp.btn.edit'), disabled: actDisabled, onClick: () => openEdit(row) },
+                { key: 'remove', label: mt('mcp.btn.remove'), danger: true, disabled: actDisabled, onClick: () => setConfirmRow(row) },
+              ],
+            }))
             return React.createElement(ListRow, {
               key: row.id,
               // 行首状态点只剩连接态一个（体检态那枚随体检一起删）：它的 title 就是
@@ -1279,18 +1286,21 @@
           // 默认展开；打了字强制展开 —— 卡片收着的话搜索结果一行都看不见（技能页 / MCP 页同口径）。
           var cg = React.useState({})
           var groupsCollapsed = cg[0], setGroupsCollapsed = cg[1]
-          function toggleGroup(key) {
-            // 翻的是**收起标记本身**：`groupsCollapsed[key] === true` 才是收着的。
-            // 写成 `!(groupsCollapsed[key] !== true)` 的话，展开态下算出来是 `false`，
-            // 而 `false` 在这张表里的意思正是"没收起" —— 每次点击把同一个值写回去，卡片收不起来。
-            setGroupsCollapsed(function (prev) { return Object.assign({}, prev, { [key]: prev[key] !== true }) })
+          function toggleGroup(key, baseOpen) {
+            // 存的是**有效状态**（true=收起），不是翻转旧值：默认收起的那一组旧值是 undefined，
+            // 翻一下算出来还是 true，第一次点击看不出任何变化，得点第二下才展开（用户 2026-10-16 实测）。
+            setGroupsCollapsed(function (prev) { return Object.assign({}, prev, { [key]: baseOpen }) })
           }
-          /** 一张分组卡片：标题 + 条数（点标题行收起/展开）+ 右侧动作 + 展开时的卡片体。 */
-          function groupCard(key, label, count, actions, bodyNode) {
-            var open = groupsCollapsed[key] !== true || !!dq
+          /** 一张分组卡片：标题 + 条数（点标题行收起/展开）+ 右侧动作 + 展开时的卡片体。
+           *  `defaultOpen` = 没手动点过时要不要展开（记忆页 / 技能页同一口径：这一组里
+           *  一条都没在用的就默认收着，用户 2026-10-16「提示词也是」）。 */
+          function groupCard(key, label, count, actions, bodyNode, defaultOpen) {
+            var openFlag = groupsCollapsed[key]
+            var baseOpen = openFlag === undefined ? defaultOpen !== false : openFlag !== true
+            var open = baseOpen || !!dq
             return React.createElement('section', { key: key, className: 'dsm-source' },
               React.createElement('div', { className: 'dsm-source-head' },
-                React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroup(key) } },
+                React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroup(key, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-title', title: label }, label),
                   React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: count }))),
                 actions ? React.createElement('div', { className: 'dsm-source-actions' }, actions) : null),
@@ -1354,10 +1364,18 @@
                 onClick: function () { toggleQuick(p) },
               }),
               actions: [
+                // 编辑 / 删除**都**收进 ⋯（用户 2026-10-16 第二轮）：这一页的行只有名字与描述，
+                // 行尾留两颗按钮就把两行文字挤没了。删除在菜单里是红字。
                 // 「编辑」在锁定态照常可点（用户 2026-10-12：「子智能体、提示词、记忆可以打开
                 // 编辑页面，但是不能保存」）：看内容不该被锁挡住，写盘那一步（弹窗里的保存键）才置灰。
-                React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: function () { openQuickEdit(p) } }, t('agm.btn.edit')),
-                React.createElement('button', { key: 'del', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: state.anyLocked === true ? t('scenes.lock.blockedEdit') : '', onClick: function () { setQuickConfirm({ id: p.id }) } }, t('agm.btn.delete')),
+                React.createElement(RowMenu, {
+                  key: 'menu',
+                  label: t('row.menu', { name: p.id }),
+                  items: [
+                    { key: 'edit', label: t('agm.btn.edit'), disabled: busy !== null, onClick: function () { openQuickEdit(p) } },
+                    { key: 'delete', label: t('agm.btn.delete'), danger: true, disabled: busy !== null || state.anyLocked === true, title: state.anyLocked === true ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setQuickConfirm({ id: p.id }) } },
+                  ],
+                }),
               ],
             })
           }
@@ -1371,7 +1389,7 @@
                 ? React.createElement(ListStates, { t: t, state: 'empty', text: t('quickprompt.empty') })
                 : !visibleQuick.length
                   ? React.createElement(ListStates, { t: t, state: 'search', text: t('agm.empty.search'), onClearFilter: function () { setQuery('') } })
-                  : orderedQuick.map(renderQuick))
+                  : orderedQuick.map(renderQuick), quickEnabledCount > 0)
           // 列表四态（切片四）：加载 / 失败（EmptyState + 重试）/ 空 / 无结果（+ 清除筛选）/ 有数据。
           var body = state.loading && !state.presets.length
             ? React.createElement(ListStates, { t: t, state: 'loading' })
@@ -1444,17 +1462,28 @@
                         },
                       }),
                       actions: [
-                        // 同快捷提示词：锁定态能打开编辑页，保存键在弹窗里置灰。
-                        React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null, onClick: function () { openEdit(p) } }, t('agm.btn.edit')),
-                        React.createElement('button', { key: 'del', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy !== null || state.anyLocked === true, title: blockingTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) : t('scenes.lock.blockedEdit'), onClick: function () {
-                          // 被引用中的预设**点得动但删不掉**：当面说出「谁在用 / 该怎么解除」，
-                          // 而不是让用户对着禁用按钮猜（disabled 的按钮连 title 都不弹）。
-                          // 宿主侧同一判据同样拒绝，这里只是先说。
-                          // 拦的是两类：场景绑定、以及**当前应用的**那份（后者删了 AGENTS.md
-                          // 照旧生效，会留下一个看不懂的中间态）。播种出来的副本不在其列。
-                          if (blockingTexts.length > 0) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) }) }); return }
-                          setApplyConfirm({ id: p.id, remove: true, removeFileApplied: p.fileApplied === true })
-                        } }, t('agm.btn.delete')),
+                        // 同快捷提示词：编辑与删除都收进 ⋯，锁定态能打开编辑页、保存键在弹窗里置灰。
+                        React.createElement(RowMenu, {
+                          key: 'menu',
+                          label: t('row.menu', { name: p.id }),
+                          items: [
+                            { key: 'edit', label: t('agm.btn.edit'), disabled: busy !== null, onClick: function () { openEdit(p) } },
+                            {
+                              key: 'delete', label: t('agm.btn.delete'), danger: true,
+                              disabled: busy !== null || state.anyLocked === true,
+                              title: blockingTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) : t('scenes.lock.blockedEdit'),
+                              onClick: function () {
+                                // 被引用中的预设**点得动但删不掉**：当面说出「谁在用 / 该怎么解除」，
+                                // 而不是让用户对着禁用按钮猜（disabled 的按钮连 title 都不弹）。
+                                // 宿主侧同一判据同样拒绝，这里只是先说。
+                                // 拦的是两类：场景绑定、以及**当前应用的**那份（后者删了 AGENTS.md
+                                // 照旧生效，会留下一个看不懂的中间态）。播种出来的副本不在其列。
+                                if (blockingTexts.length > 0) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) }) }); return }
+                                setApplyConfirm({ id: p.id, remove: true, removeFileApplied: p.fileApplied === true })
+                              },
+                            },
+                          ],
+                        }),
                       ],
                     })
                   }))
@@ -1499,7 +1528,7 @@
                 onChange: function (e) { setQuery(e.target.value) },
               })),
             // 两段各一张可折叠卡片：卡片头是组名 + 条数（点它收起/展开），卡片体里才是条目。
-            groupCard('global', t('prompts.group.global'), state.presets.length, null, body),
+            groupCard('global', t('prompts.group.global'), state.presets.length, null, body, activeCount > 0),
             quickSection,
             state.notice ? React.createElement(Notice, { kind: state.notice.kind, text: state.notice.text }) : null,
             exportState ? React.createElement(ExportModal, {

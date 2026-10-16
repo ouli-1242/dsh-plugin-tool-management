@@ -227,6 +227,8 @@
             // 子弹窗（新建记忆）随编辑器一起重开：留着上一轮的草稿会让人以为"我上次填的还在"。
             setMemNew(null)
             var draftKey = name ? 'scene:edit:' + name : 'scene:create'
+            // 暂存的是**整份编辑器状态**（基本信息 + 四个工具集的勾选 + 待创建记忆）：
+            // 只存基本信息的话，误关一次就把用户真正在挑的东西全丢了（用户 2026-10-16 报的这条）。
             var draft = takeFormDraft(draftKey)
             setSceneForm(Object.assign({
               name: name || '', description: scene ? scene.description || '' : '', prompt: scene ? scene.prompt || '' : '',
@@ -235,14 +237,14 @@
                 ? 'current' : (sceneArchive.quickPrompts.length ? 'custom' : 'none'),
               quickPrompts: Array.isArray(sceneArchive.quickPrompts) ? sceneArchive.quickPrompts.slice() : null,
               error: null,
-            }, draft || {}, { error: null }))
+            }, (draft && draft.form) || {}, { error: null }))
             setModal({
               type: 'scene-editor', name: name, draftKey: draftKey, drill: null, drillError: null, error: null, inventory: null,
               mcpQuery: '', skillQuery: '', subQuery: '', memQuery: '',
               // 创建态里攒下的记忆（见 flushPendingMemories）：`rules-create` 要求目标场景已存在，
               // 所以场景还没落盘时只能先记在这里，等场景建出来再补。编辑态恒为空数组。
-              pendingMems: [],
-              sections: {
+              pendingMems: draft ? (draft.pendingMems || []) : [],
+              sections: draft && draft.sections ? draft.sections : {
                 mcp: sceneArchive.mcp ? Object.assign({}, sceneArchive.mcp) : null,
                 mcpNotes: sceneArchive.mcpNotes && Object.keys(sceneArchive.mcpNotes).length ? Object.assign({}, sceneArchive.mcpNotes) : null,
                 skills: Array.isArray(sceneArchive.skills) ? sceneArchive.skills.slice() : null,
@@ -594,6 +596,18 @@
            *   · 已存在的记忆 —— 勾选**立即提交**（P5：单一真相源 = `rules[*].enabled`，不随「保存」落盘）；
            *   · 本次新配的草稿 —— 只存在于编辑器里，随「创建 / 保存到场景」一起落盘（`pendingMems`）。
            */
+          /**
+           * 附件标记（回形针 + 个数）。两种来源同一副长相：已落盘的真记忆读宿主在
+           * `rules-list` 里补的 `attach` 摘要，本次新配的草稿读弹窗攒下的 `files` ——
+           * 不标出来，「勾这条会把参考资料一起带进场景」这件事在行上完全看不出来。
+           */
+          function attachMark(count, bytes) {
+            if (!count) return null
+            return React.createElement('span', {
+              className: 'dsm-tag dsm-tag-attach',
+              title: t('scenes.mem.attach.tip', { count: count, size: fmtBytes(bytes || 0) }),
+            }, React.createElement(PaperclipIcon, { size: 11 }), String(count))
+          }
           function memoriesGroup() {
             var inv = modal.inventory || { memories: [] }
             var own = sceneMemoriesOf(inv.memories, modal.name || '')
@@ -621,10 +635,21 @@
                 name: m.name,
                 desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
                 descTitle: m.description || null,
-                meta: React.createElement('span', { className: 'dsm-tag', title: t('scenes.mem.pendingTagTitle') }, t('scenes.mem.pendingTag')),
+                meta: React.createElement(React.Fragment, null,
+                  React.createElement('span', { className: 'dsm-tag', title: t('scenes.mem.pendingTagTitle') }, t('scenes.mem.pendingTag')),
+                  attachMark((m.files || []).length, (m.files || []).reduce(function (sum, f) { return sum + Number(f.size || 0) }, 0))),
                 actions: [
-                  React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openMemoryEdit(i) } }, t('memory.edit')),
-                  React.createElement('button', { key: 'rm', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy, onClick: function () { dropPendingMemory(i) } }, t('scenes.mem.removePending')),
+                  // 编辑与移除都收进 ⋯（用户 2026-10-16 第三轮）：这一列的行本来就是"勾或不勾"，
+                  // 两颗按钮把名称与描述挤没；移除在菜单里是红字。
+                  // 「移除」撤的只是本次编辑里攒下的草稿，不写盘。
+                  React.createElement(RowMenu, {
+                    key: 'menu',
+                    label: t('row.menu', { name: m.name }),
+                    items: [
+                      { key: 'edit', label: t('memory.edit'), disabled: busy, onClick: function () { openMemoryEdit(i) } },
+                      { key: 'rm', label: t('scenes.mem.removePending'), danger: true, disabled: busy, onClick: function () { dropPendingMemory(i) } },
+                    ],
+                  }),
                 ],
                 onChange: function () { togglePendingMemory(i) },
               })
@@ -637,6 +662,8 @@
                 // 记忆描述是自由正文的首行，可能很长：截断到 MEM_DESC_MAX，全文放 title。
                 desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
                 descTitle: m.description || null,
+                // 带附件的 bundle 记忆标一枚回形针 + 个数（见 attachMark）。
+                meta: attachMark(m.attach && m.attach.count, m.attach && m.attach.bytes),
                 onChange: function () { toggleMemory(String(m.id)) },
               })
             }))
@@ -1251,7 +1278,10 @@
               title: React.createElement('span', { className: 'dsm-modal-title-row' },
                 isEdit ? t('scenes.editor.title', { name: label }) : t('memory.scene.createTitle'),
                 React.createElement('span', { className: 'dsm-editor-summary' }, summary)),
-              closeLabel: t('btn.close'), onClose: function () { if (modal.draftKey) stashFormDraft(modal.draftKey, sceneForm); setModal(null) } },
+              closeLabel: t('btn.close'), onClose: function () {
+                if (modal.draftKey) stashFormDraft(modal.draftKey, { form: sceneForm, sections: modal.sections, pendingMems: modal.pendingMems })
+                setModal(null)
+              } },
               modal.error ? React.createElement(Notice, { kind: 'err', text: modal.error }) : null,
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('div', { className: 'dsm-field-row dsm-editor-basics' },
@@ -1792,16 +1822,23 @@
                       className: 'dsm-scene-tile-switch',
                       title: blockedByOther ? t('scenes.enable.blocked', { name: sceneLabel(data.scenes, data.activeScene) || data.activeScene || '' }) : (sceneLocked && scene.active === true ? t('scenes.lock.blockedExit') : ''),
                     }, React.createElement(Switch, { on: scene.active === true, disabled: busy || blockedByOther || (sceneLocked && scene.active === true), label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } })),
-                    locked ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-lock', disabled: busy || scene.active !== true, title: scene.active !== true ? t('scenes.lock.notActive') : t('scenes.lock.hint'), onClick: function () { toggleSceneLock(scene) } }, sceneLocked ? t('scenes.lock.unlock') : t('scenes.lock.lock'))),
+                    locked ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-lock', disabled: busy || scene.active !== true, title: scene.active !== true ? t('scenes.lock.notActive') : t('scenes.lock.hint'), onClick: function () { toggleSceneLock(scene) } }, sceneLocked ? t('scenes.lock.unlock') : t('scenes.lock.lock')),
+                    // 编辑 / 删除收进卡头一颗 ⋯（用户 2026-10-16）：卡片底下那条只有两颗按钮的
+                    // 空 band 白占一截高度，档案没内容时整张卡看着像坏了。
+                    // 锁定态「编辑」照旧置灰（改档案是写盘动作，与记忆 / 子智能体那两页的
+                    // "只读能看"不同，场景编辑器一打开就是那张要保存的表）。
+                    React.createElement(RowMenu, {
+                      key: 'menu',
+                      label: t('row.menu', { name: label }),
+                      items: [
+                        { key: 'edit', label: t('scenes.row.edit'), disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { openEditor(scene) } },
+                      ].concat(locked ? [] : [
+                        { key: 'delete', label: t('scenes.row.delete'), danger: true, disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setModal({ type: 'scene-delete', name: name }) } },
+                      ]),
+                    })),
                   // 描述行**只有描述**（数量都收进上面的模式条了）；全文放 title，卡片本身永远一行。
-                  React.createElement('p', { className: 'dsm-scene-tile-desc', title: desc || '' }, desc || t('scenes.noDesc')),
-                  // P6：「切入此模式」按钮已删除 —— 右上角开关就是唯一入口（开 = 进入，关 = 回全局默认）。
-                  // 行按钮 3 → 2（REDESIGN §6.2）：「档案」与「改描述」退出，编辑 = 打开场景编辑器
-                  //（新建 / 编辑 / 档案三弹窗融合），删除保留行内二次确认弹窗。
-                  React.createElement('div', { className: 'dsm-scene-tile-foot' },
-                    React.createElement('div', { className: 'dsm-scene-tile-links' },
-                      React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : '', onClick: function () { openEditor(scene) } }, t('scenes.row.edit')),
-                      locked ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : '', onClick: function () { setModal({ type: 'scene-delete', name: name }) } }, t('scenes.row.delete')))))
+                  // 它是卡片的最后一行，所以下边距由它承担（原来那条 foot 一并删掉，见上）。
+                  React.createElement('p', { className: 'dsm-scene-tile-desc', title: desc || '' }, desc || t('scenes.noDesc')))
               })),
             modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', className: 'dsm-modal-sm', title: t('memory.deleteScene.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.deleteScene.desc', { name: modal.name })),

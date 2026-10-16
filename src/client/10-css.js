@@ -70,11 +70,33 @@ button.dsm-tag{background:transparent;font:inherit;font-size:12px;cursor:pointer
 button.dsm-tag:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-tag-attach{display:inline-flex;align-items:center;gap:4px}
-.dsm-tag-attach-empty{color:var(--dsw-alias-label-tertiary);border-color:var(--dsw-alias-border-l3)}
-/* 名称旁的体积标签（记忆行，2026-10-12）：形态直接借 .dsm-tag（边框 + 圆角 + 12px），
-   只补等宽数字 —— 否则同一列里 145 B / 1.2 KB / 980 B 的宽度会随字宽跳动，
-   整列名称的右缘跟着抖。它是纯量值、不可点，所以用 span 而不是 button。 */
-.dsm-tag-size{font-variant-numeric:tabular-nums}
+/* 行内量值（记忆行的体积 / 附件数，2026-10-16）：从描边胶囊降成弱色等宽文字 ——
+   一屏六条就是十二个边框，还跟卡头那些状态标签同形，读下来满眼都是"标签"。
+   边框只留给状态。等宽数字仍要留：否则 145 B / 1.2 KB / 980 B 宽度随字宽跳，整列右缘跟着抖。
+   中间点分隔：去掉边框后两枚只靠 6px 间距会糊成一串。 */
+.dsm-qty{display:inline-flex;min-width:0;flex:none;align-items:center;gap:3px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dsm-qty-sep{flex:none;color:var(--dsw-alias-border-l3)}
+/* 附件那枚是能点的（点了去编辑弹窗的附件区）：抹掉按钮默认外观、只留一个悬停变深的反馈。 */
+button.dsm-qty{padding:0;border:0;background:transparent;font:inherit;font-size:12px;cursor:pointer}
+button.dsm-qty:hover:not(:disabled){color:var(--dsw-alias-label-primary)}
+button.dsm-qty:disabled{cursor:default}
+/* ── 行尾「⋯」菜单（RowMenu，42 片）──────────────────────────────────────────────
+   触发器与 quiet 按钮同高、只占一个图标宽；菜单本体复用 .dsm-select-menu 的描边与圆角，
+   定位是内联 fixed（见组件注释）。触发器比旁边那串量值**深一档**：它是编辑/删除唯一的入口，
+   淡到读不出的话，用户只会以为这两颗按钮没了。危险项只有红字、没有红框 —— 边框是"常驻控件"
+   的语言，收在菜单里的动作不配再占一份视觉重量。 */
+.dsm-rowmenu{display:flex;flex:none;align-items:center}
+.dsm-rowmenu-btn{display:inline-flex;width:26px;height:24px;align-items:center;justify-content:center;padding:0;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dsm-rowmenu-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dsm-rowmenu-btn:disabled{opacity:.45;cursor:default}
+/* 菜单里的危险项：红字 + 红色悬停底（用户 2026-10-16：「删除、移除键要是红色的」）。
+   必须带 .dsm-select-menu 前缀 —— 单写 .dsm-option-danger 权重与 .dsm-option 相同，
+   而 .dsm-option 那条 color 排在它**之后**，红字会被顶掉（第一版就是这么失效的）。 */
+.dsm-select-menu .dsm-option-danger{color:var(--dsw-alias-state-error-primary)}
+.dsm-select-menu .dsm-option-danger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger)}
+/* 未启用场景卡里的开关跟着灰（.dsm-rule-off 已把名称与描述压成弱色，原先漏了开关）：
+   整卡置灰却留一颗亮绿，读着像"开着却没用"，两条口径打架。 */
+.dsm-rule-off .dsm-switch-on{background:var(--dsw-alias-border-l3)}
 /* 按钮的"档位"里包含尺寸，别把它当纯修饰色（REDESIGN §5，2026-10-11 切片五定稿）：
    .dsm-btn 实心 30px（本屏主操作）/ .dsm-btn-secondary 描边 30px（常规动作）/
    .dsm-btn-quiet 描边 24px（次要动作；叠 -danger 即 quiet-danger）。
@@ -101,7 +123,16 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
    省下的 60px 全部归搜索框（它 flex:1）。 */
 .dsm-filters{display:flex;gap:8px}.dsm-search{flex:1}.dsm-source-filter{width:150px;flex:none}
 .dsm-control,.dsm-select-trigger{box-sizing:border-box;width:100%;min-height:30px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}.dsm-control::placeholder{color:var(--dsw-alias-label-tertiary)}textarea.dsm-control{min-height:160px;padding-top:8px;resize:vertical;line-height:20px}.dsm-select{position:relative}.dsm-select-trigger{display:flex;align-items:center;justify-content:space-between;text-align:left;cursor:pointer}.dsm-select-menu{z-index:40;display:flex;max-height:260px;padding:4px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2)}.dsm-option{padding:8px;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;text-align:left;cursor:pointer}.dsm-option:hover,.dsm-option[aria-selected=true]{background:var(--dsw-alias-interactive-bg-hover)}
-.dsm-sources{display:flex;flex-direction:column;gap:8px}.dsm-source{overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}.dsm-source-head{box-sizing:border-box;display:flex;width:100%;min-height:48px;align-items:center;padding:0 12px}.dsm-source-head-main{display:flex;min-width:0;min-height:48px;flex:1;align-items:center;gap:8px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsm-source-head:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-source-title{font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-count{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;flex:none}.dsm-path{min-width:0;margin-left:auto;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.dsm-source-actions{display:flex;align-items:center;gap:4px;margin-left:8px}.dsm-source-body{border-top:1px solid var(--dsw-alias-border-l1)}.dsm-source-note{padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}
+.dsm-sources{display:flex;flex-direction:column;gap:8px}.dsm-source{overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}.dsm-source-head{box-sizing:border-box;display:flex;width:100%;min-height:48px;align-items:center;padding:0 12px}.dsm-source-head-main{display:flex;min-width:0;min-height:48px;flex:1;align-items:center;gap:8px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsm-source-head:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-source-title{font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-count{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;flex:none}.dsm-path{min-width:0;margin-left:auto;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.dsm-source-actions{display:flex;align-items:center;gap:4px;margin-left:8px}.dsm-source-body{border-top:1px solid var(--dsw-alias-border-l1)}
+/* 计数已经改成「启用/总数」这种自带括号感的写法，卡头 8px 的间距把它推太远，读起来像
+   另一栏；贴回名称后面（用户 2026-10-16）。 */
+.dsm-count-tight{margin-left:-4px}
+/* 场景备注：紧跟名称下面一行（用户 2026-10-16 两条：「不要挤在一起」→「备注是显示在名称下面，
+   就像图2一样」）。它挂在卡头左侧那一列里、不是整行之下 —— 整行会让右侧按钮把备注和名称隔开，
+   读着像卡片页脚；收着卡片时备注也照读，所以它不能进 .dsm-source-body。 */
+.dsm-source-head-stack{flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;padding:9px 0}
+.dsm-source-head-line{display:flex;width:100%;min-width:0;align-items:center;gap:8px}
+.dsm-source-desc{width:100%;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-source-note{padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}
 /* ── 子智能体行：人设名与描述分行（用户 2026-09-22 报）──────────────────────────
    原来名字与描述同在 .dsm-source-head-main 那一条**横向** flex 里、各自单行省略，
    右侧还压着开关和两颗按钮 —— 名字被挤到只剩几个字符（截图里显示成 "co..."）。
@@ -179,6 +210,8 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-attach-actions{display:inline-flex;align-items:center;gap:6px}
 .dsm-attach-cap{max-height:126px;overflow:auto;padding-right:2px}
 .dsm-attach-cap .dsm-file{gap:6px;padding:5px 8px}
+/* 附件小窗里的拖放区：导入弹窗那一块是给整页用的（170px），这一档 140 —— 再矮就不像能拖东西了。 */
+.dsm-dropzone-sm{min-height:140px;padding:18px}
 .dsm-toast{position:fixed;right:22px;bottom:22px;z-index:1250;box-sizing:border-box;max-width:min(420px,calc(100vw - 44px));padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;animation:dsm-toast-in 160ms ease-out}@keyframes dsm-toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}/* 动效降级：系统开了「减少动态效果」就一律关掉。新增 transition / animation 时记得同步加到这里，
    否则那一个动效就是唯一不尊重用户设置的部分。（列表换位的 FLIP 曾在 JS 侧另判，随动画一起删除。） */
 @media(prefers-reduced-motion:reduce){.dsm-toast{animation:none}.dsm-switch:after{transition:none}.dsm-dropzone{transition:none}}
@@ -229,16 +262,12 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
 .dsm-scene-tile-key{flex:none;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}
 .dsm-scene-tile-head .dsm-tag{flex:none}
 .dsm-scene-tile-switch{margin-left:auto;flex:none}
-.dsm-scene-tile-desc{overflow:hidden;margin:4px 0 0;padding:0 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
-.dsm-scene-tile-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px;padding:8px 12px;border-top:1px solid var(--dsw-alias-border-l1)}
-.dsm-scene-tile-links{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-left:auto}
+/* 描述行是卡片的最后一行（2026-10-16 删掉底部那条 编辑/删除 band，动作进卡头 ⋯），
+   所以卡片下内距由它承担。 */
+.dsm-scene-tile-desc{overflow:hidden;margin:4px 0 0;padding:0 12px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
 @container(max-width:640px){.dsm-scenes{grid-template-columns:1fr}}
 .dsm-tools-grid{display:flex;max-height:180px;padding:4px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}
 .dsm-tools-grid>*{flex:none}
-.dsm-tools-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
-.dsm-chip{display:inline-flex;min-height:24px;align-items:center;gap:4px;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px}
-.dsm-chip-deny{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
-.dsm-chip button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-size:12px;line-height:1;cursor:pointer}
 /* ── 高级选项折叠区（人设表单；默认收起，展开后才拉候选数据）────────────────── */
 .dsm-adv{border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}
 .dsm-adv-head{display:flex;width:100%;min-height:40px;align-items:center;gap:8px;padding:0 12px;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}
@@ -649,7 +678,6 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-select-menu [aria-selected= true ]{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-modal-head-wrap .dsm-modal-title{margin: 0; font-size: 15px; font-weight: 600; line-height: 24px; color: var(--dsw-alias-label-primary);}
 .dsm-dir-item + .dsm-dir-item{border-top: 0.5px solid var(--dsw-alias-border-l2);}
-button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-feedback.dsm-ok{color: var(--dsw-alias-state-success-primary); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);}
 .dsm-feedback.dsm-warning{color: var(--dsw-alias-state-warn-primary); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);}
 .dsm-feedback.dsm-error{padding: 8px 12px; border-radius: var(--dsm-radius-m);}
@@ -972,6 +1000,8 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-listrow{box-sizing:border-box;display:flex;min-height:48px;align-items:center;gap:8px;padding:4px 12px}
 .dsm-listrow + .dsm-listrow{border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-listrow:hover{background:var(--dsw-alias-interactive-bg-hover)}
+/* 整行可点勾选的那一类（会话页）：光标要给到"这一行能点"，不然只有 14px 的框看着能点。 */
+.dsm-listrow-pick{cursor:pointer}
 /* 状态点单独一列：名称与元信息从同一竖线起步。点挂在名字前面会造出「名称比描述
    右移一格」的错位（.dsm-dot-indent 当初修的就是它），拎出主列后两行天然对齐；
    min-width 6px 让带 tag 的行（点槽留空）与带点的行左缘也齐平。 */
@@ -982,6 +1012,11 @@ button.dsm-chip:hover{background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-listrow-name-row .dsm-tag{flex:none}
 /* 行2 元信息：12px 弱色单行省略；数字（工具数 / 体积 / 时间）tabular-nums（§13.4）。 */
 .dsm-listrow-meta{display:flex;min-width:0;align-items:baseline;gap:4px;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;white-space:nowrap;font-variant-numeric:tabular-nums}
+/* 行 2 的几段元信息之间补一个中间点（2026-10-16，六页统一收进"一颗文字动作 + ⋯"之后，
+   行 2 承担的信息变多：MCP 是「命令 · 工具数 · 备注」、会话是「目录 · 归档日期」）。
+   4px 的 flex 间距对**文字**来说不够，两段会连成一句读不出边界；点由后一件的 ::before 提供，
+   所以只有一段时不会多出孤点。 */
+.dsm-listrow-meta>*+*::before{content:"·";margin-right:4px;color:var(--dsw-alias-label-tertiary)}
 .dsm-listrow-meta:empty{display:none}
 .dsm-listrow-meta-desc{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .dsm-listrow-meta-info{flex:none;color:var(--dsw-alias-label-tertiary)}

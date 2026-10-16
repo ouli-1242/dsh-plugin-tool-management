@@ -2652,8 +2652,8 @@ test('场景编辑页：令牌门禁那句话不得当成「场景名」的字�
     '字段下面不得再直接渲染 sceneForm.error（否则那句门禁文案会回来）')
 })
 
-// ── 记忆行的体积标签（2026-10-12）──────────────────────────────────────────────
-test('记忆行：体积标签走 nameAfter 槽（带边框）并挂在名称旁，bundle 形态标签不再显示', () => {
+// ── 记忆行的量值与行内动作（2026-10-12 立，2026-10-16 用户改口径）─────────────────
+test('记忆行：体积与附件走 nameAfter 槽且无边框，编辑/删除收进 ⋯ 菜单', () => {
   const strip = (file) => readFileSync(join(import.meta.dirname, '..', 'src', 'client', file), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   const shared = strip('42-shared-ui.js')
@@ -2674,12 +2674,22 @@ test('记忆行：体积标签走 nameAfter 槽（带边框）并挂在名称旁
   assert.ok(nameRow[0].indexOf('props.tag') > nameRow[0].indexOf('props.nameAfter'),
     'nameAfter 必须排在 tag **之前**（体积贴名称，状态 tag 在后）')
 
-  // ② 记忆行把体积交给这个槽，并且用 .dsm-tag —— 边框就是它给的（"带边框"是用户的明确要求）。
+  // ② 记忆行把体积交给这个槽。2026-10-16 用户第二轮裁定：它**不带边框** —— 一屏六条就是
+  //    十二个描边胶囊、还跟卡头那些状态标签同形，读下来满眼都是"标签"。边框只留给状态。
   const row = /function renderRuleRow\(r, sceneActive\)\s*\{([\s\S]*?)\n          \}/.exec(memory)
   assert.ok(row, 'renderRuleRow 必须还在')
-  assert.match(row[1], /nameAfter:\s*sizeTag/, '体积必须走 nameAfter 槽')
-  assert.match(row[1], /className:\s*'dsm-tag dsm-tag-size'/,
-    '体积标签必须带 dsm-tag（边框/圆角/12px 都由它给）—— 退回 dsm-listrow-meta-info 就没有边框了')
+  assert.match(row[1], /nameAfter:[^\n]*sizeTag/, '体积必须走 nameAfter 槽（旁边再挂一枚附件标记也算，别退回第二行）')
+  assert.match(row[1], /className:\s*'dsm-qty'/,
+    '体积必须是 .dsm-qty（弱色等宽、无边框）—— 换回 .dsm-tag 就把边框加回来了')
+  assert.match(row[1], /nameAfter:\s*qtyBits\(sizeTag,\s*attachNode\)/,
+    '附件标记与体积同属"量值"，必须一起走 qtyBits（缺件时不留孤点）')
+
+  // ②b 行内只留开关这一颗常驻控件（用户 2026-10-16：「记忆看起来很乱」→ 选定收进 ⋯ 菜单）。
+  //     红框删除是这一屏里最抢眼的东西，六行就是六个红框；它现在只是菜单里一行红字。
+  assert.match(row[1], /actions:\s*\[React\.createElement\(RowMenu/, '编辑/删除必须收在 RowMenu 里')
+  assert.ok(!/dsm-btn-danger/.test(row[1]), '记忆行不得再常驻 quiet-danger 按钮')
+  assert.match(shared, /function RowMenu\(props\)/, 'RowMenu 必须是共享件（别的列表页要用同一颗）')
+  assert.match(shared, /role: 'menu'/, '菜单要带 menu / menuitem 语义，不能只是一堆按钮')
 
   // ③ 「bundle」形态标签不再显示；但它**不能**因此被当成死键清掉：42 片回收站 / 导出
   //    里按 'memory.form.' + … **计算**取词，静态扫描看不见 —— 删掉键的后果是界面上

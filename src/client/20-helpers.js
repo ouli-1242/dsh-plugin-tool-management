@@ -105,6 +105,16 @@
         React.createElement('path', { d: 'M9.6 4.2 5.1 8.7a1.9 1.9 0 0 0 2.7 2.7l5-5a3.4 3.4 0 0 0-4.8-4.8L3 6.6a4.9 4.9 0 0 0 6.9 6.9l4.1-4.1' }))
     }
 
+    /**
+     * 「更多」图标（行尾 ⋯ 菜单的触发器，RowMenu 用）：横三点、14px 线性，
+     * 与 CaretIcon / TrashIcon 同规格。纯图标，说明必须写在 title / aria-label 里。
+     */
+    function MoreIcon(props) {
+      var size = (props && props.size) || 14
+      return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': 'true', focusable: 'false', className: props && props.className },
+        h('path', { fill: 'currentColor', d: 'M3 6.6h2v2H3zM7 6.6h2v2H7zM11 6.6h2v2h-2z' }))
+    }
+
     // `react` / `h` 别名（2026-10-11 切片五从 42 片上移）：工厂作用域声明对 apply 内外
     // 都可见 —— 42 片与各页照常用，兼容页与新落在本片的共用控件（RowCheck /
     // SettingsRow / Switch / SourceSelect）也用同一套。`var` 在 factory 作用域提升，

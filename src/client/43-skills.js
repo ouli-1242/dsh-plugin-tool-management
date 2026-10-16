@@ -227,34 +227,69 @@
       }
       /** 关掉 ≠ 丢掉：只有 onClose 这条路存草稿（提交成功是就地 setModal(null)，不进这里）。 */
       function dismissCreate() { stashFormDraft('skill:create', form); setModal(null); }
-      /** 并入清单：SKILL.md 与超限的当场拦下（服务端还会再拦一次），同路径的后者不盖前者。 */
+      /** 并入清单：SKILL.md 与超限的当场拦下（服务端还会再拦一次），同路径的后者不盖前者。
+       *  带回第一条要说的话（'' = 全部收下），由调用方决定挂在弹窗里还是挂在页面上。 */
       function addAttachments(list) {
-        var accepted = [], skippedDup = ""
+        var accepted = [], problem = ""
         var lower = {}
         ;(form.files || []).forEach(function (f) { lower[String(f.path).toLowerCase()] = true })
         list.forEach(function (item) {
-          if (/(^|\/)skill\.md$/i.test(item.path)) { setAttachError(t('skill.attach.reserved', { path: item.path })); return }
-          if (item.size > MAX_UPLOAD_ENTRY_BYTES) { setAttachError(t('skill.attach.tooLarge', { name: item.path, limit: 32 })); return }
+          if (/(^|\/)skill\.md$/i.test(item.path)) { problem = problem || t('skill.attach.reserved', { path: item.path }); return }
+          if (item.size > MAX_UPLOAD_ENTRY_BYTES) { problem = problem || t('skill.attach.tooLarge', { name: item.path, limit: 32 }); return }
           var key = String(item.path).toLowerCase()
-          if (lower[key]) { skippedDup = item.path; return }
+          if (lower[key]) { problem = problem || t('skill.attach.dup', { path: item.path }); return }
           lower[key] = true
           accepted.push(item)
         })
-        if (skippedDup) setAttachError(t('skill.attach.dup', { path: skippedDup }))
-        if (!accepted.length) return
-        setForm(function (prev) { return Object.assign({}, prev, { files: (prev.files || []).concat(accepted) }) })
+        if (accepted.length) setForm(function (prev) { return Object.assign({}, prev, { files: (prev.files || []).concat(accepted) }) })
+        return problem
       }
-      function pickAttachments() { if (attachInputRef.current) attachInputRef.current.click() }
-      function onAttachmentsPicked(ev) {
-        var picked = Array.prototype.slice.call((ev.target && ev.target.files) || [])
-        if (ev.target) ev.target.value = '' // 允许连续选中同一个文件
-        if (!picked.length) return
-        setAttachError(null)
-        Promise.all(picked.map(function (file) {
+      /** 文件夹名归一：反斜杠当分隔、去掉首尾斜杠；`..`/`.` 段当场拦。空 = 落在技能目录根下。 */
+      function attachDir(raw) {
+        var d = String(raw == null ? '' : raw).trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+        return /(^|\/)\.\.?(\/|$)/.test(d) ? null : d
+      }
+      /**
+       * 两框 → 相对路径。文件夹名可空，文件名必填。
+       * 拆开写就是为了不用先理解「路径里的 / 是什么意思」—— 非法片段当场拦，不等服务端。
+       */
+      function attachJoin(dir, name) {
+        var d = attachDir(dir)
+        if (d === null) return { error: t('skill.attach.baddir') }
+        var n = String(name == null ? '' : name).trim().replace(/\\/g, '/').replace(/^\/+/, '')
+        if (!n) return { error: t('skill.attach.nameRequired') }
+        if (n.charAt(n.length - 1) === '/' || /(^|\/)\.\.?(\/|$)/.test(n)) return { error: t('skill.attach.badname') }
+        return { path: d ? d + '/' + n : n, dir: d, name: n }
+      }
+      /** 打开「选择附件」小窗：里面只有文件夹名 + 拖放区，挑完就地并入清单。 */
+      function openPickFiles() { setDraftFile({ mode: "pick", dir: "", error: null }) }
+      /** 读入挑到 / 拖到的文件，按小窗里那格文件夹名落路径。 */
+      function readAttachFiles(picked) {
+        var list = Array.prototype.slice.call(picked || [])
+        if (!list.length) return
+        var dir = attachDir(draftFile && draftFile.dir)
+        if (dir === null) { setDraftFile(Object.assign({}, draftFile, { error: t('skill.attach.baddir') })); return }
+        Promise.all(list.map(function (file) {
           return file.arrayBuffer().then(function (buf) {
-            return { path: uploadFilePath(file), size: buf.byteLength, data: bytesToBase64(buf) }
+            var rel = uploadFilePath(file)
+            return { path: dir ? dir + '/' + rel : rel, size: buf.byteLength, data: bytesToBase64(buf) }
           })
-        })).then(addAttachments).catch(function (error) { setAttachError(translateError(t, error)) })
+        })).then(function (entries) {
+          var problem = addAttachments(entries)
+          setDraftFile(function (prev) { return prev ? Object.assign({}, prev, { error: problem || null }) : prev })
+        }).catch(function (error) {
+          setDraftFile(function (prev) { return prev ? Object.assign({}, prev, { error: translateError(t, error) }) : prev })
+        })
+      }
+      function onAttachmentsPicked(ev) {
+        var files = ev.target && ev.target.files
+        var picked = Array.prototype.slice.call(files || [])
+        if (ev.target) ev.target.value = '' // 允许连续选中同一个文件
+        readAttachFiles(picked)
+      }
+      function onAttachmentsDropped(ev) {
+        ev.preventDefault()
+        droppedFiles(ev.dataTransfer).then(readAttachFiles).catch(function (error) { setAttachError(translateError(t, error)) })
       }
       function dropAttachment(index) {
         setForm(function (prev) {
@@ -268,18 +303,23 @@
       function openNewFile(index) {
         var cur = typeof index === "number" ? (form.files || [])[index] : null
         if (cur && cur.text === undefined) return
-        setDraftFile({ index: typeof index === "number" ? index : null, path: cur ? cur.path : "", content: cur ? String(cur.text || "") : "", error: null })
+        var path = cur ? String(cur.path || '') : ''
+        var cut = path.lastIndexOf('/')
+        setDraftFile({
+          mode: "new", index: typeof index === "number" ? index : null,
+          dir: cut >= 0 ? path.slice(0, cut) : "", name: cut >= 0 ? path.slice(cut + 1) : path,
+          content: cur ? String(cur.text || "") : "", error: null,
+        })
       }
       function submitNewFile() {
-        var path = String(draftFile.path || '').trim().replace(/\\/g, '/')
-        var content = String(draftFile.content || '')
-        if (!path || path.charAt(0) === '/' || path.slice(-1) === '/' || /(^|\/)(\.\.?)($|\/)/.test(path)) {
-          setDraftFile(Object.assign({}, draftFile, { error: t('skill.attach.badpath') })); return
-        }
+        var joined = attachJoin(draftFile.dir, draftFile.name)
+        if (joined.error) { setDraftFile(Object.assign({}, draftFile, { error: joined.error })); return }
+        var path = joined.path
         var clash = (form.files || []).some(function (f, i) {
           return i !== draftFile.index && String(f.path).toLowerCase() === path.toLowerCase()
         })
         if (clash) { setDraftFile(Object.assign({}, draftFile, { error: t('skill.attach.dup', { path: path }) })); return }
+        var content = String(draftFile.content || '')
         var bytes = new TextEncoder().encode(content)
         var entry = { path: path, size: bytes.length, data: bytesToBase64(bytes.buffer), text: content }
         setForm(function (prev) {
@@ -288,8 +328,20 @@
           else list.push(entry)
           return Object.assign({}, prev, { files: list })
         })
-        setDraftFile(null)
+        // 新增：加完清空两个文本框、留着文件夹名（往 references/ 里连写几份是常态）；
+        // 改已有那条：改完就走，停在一个"它已经不是那条"的窗里没有意义。
+        if (typeof draftFile.index === "number") setDraftFile(null)
+        else setDraftFile({ mode: "new", index: null, dir: joined.dir, name: "", content: "", error: null })
         setAttachError(null)
+      }
+      /** 附件清单里的一行（创建弹窗与「选择附件」小窗共用：两处显示的是同一份 form.files）。 */
+      function attachRow(f, i) {
+        return h("div", { key: i + ":" + f.path, className: "dsm-file", title: f.path },
+          h("span", { className: "dsm-file-kind", "aria-hidden": "true" }, f.text === undefined ? "FILE" : "NEW"),
+          h("span", { className: "dsm-file-name" }, f.path),
+          h("span", { className: "dsm-file-meta" }, fmtBytes(f.size)),
+          f.text === undefined ? null : h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { openNewFile(i) } }, t("skill.attach.edit")),
+          h("button", { type: "button", className: "dsm-file-remove", "aria-label": t("skill.attach.remove") + " " + f.path, onClick: function () { dropAttachment(i) } }, "×"))
       }
       /** 附件区：一行「标签 + 两颗动作键」，下面只在有条目时才占高度（清单封顶滚动，空着不占）。 */
       function renderAttachField() {
@@ -299,17 +351,9 @@
             h("span", { className: "dsm-label" }, list.length ? t("skill.attach.label") + " · " + list.length : t("skill.attach.label")),
             h("span", { className: "dsm-attach-actions" },
               h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { openNewFile(null) } }, t("skill.attach.new")),
-              h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: pickAttachments }, t("skill.attach.pick")))),
-          h("input", { ref: attachInputRef, type: "file", multiple: true, className: "dsm-hidden-input", onChange: onAttachmentsPicked }),
+              h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: openPickFiles }, t("skill.attach.pick")))),
           list.length
-            ? h("div", { className: "dsm-attach-list dsm-attach-cap" }, list.map(function (f, i) {
-              return h("div", { key: i + ":" + f.path, className: "dsm-file", title: f.path },
-                h("span", { className: "dsm-file-kind", "aria-hidden": "true" }, f.text === undefined ? "FILE" : "NEW"),
-                h("span", { className: "dsm-file-name" }, f.path),
-                h("span", { className: "dsm-file-meta" }, fmtBytes(f.size)),
-                f.text === undefined ? null : h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { openNewFile(i) } }, t("skill.attach.edit")),
-                h("button", { type: "button", className: "dsm-file-remove", "aria-label": t("skill.attach.remove") + " " + f.path, onClick: function () { dropAttachment(i) } }, "×"))
-            }))
+            ? h("div", { className: "dsm-attach-list dsm-attach-cap" }, list.map(attachRow))
             : null,
           attachError ? h("div", { className: "dsm-feedback dsm-error", role: "alert" }, attachError) : null)
       }
@@ -367,11 +411,12 @@
           //  名字摆在上面 —— 每一行重复一遍没有任何新信息，2026-10-12 删掉。）
           root.mutable && !root.deletable ? h("span", { key: "notDeletable", className: "dsm-listrow-meta-info", title: t("status.notDeletable.hint") }, t("status.notDeletable")) : null,
         ];
-        // 次级动作常驻 quiet 24px 右对齐（REDESIGN §3.4）：启用这个 / 取消首选 / 详情 / 移到回收站
-        //（删除类 quiet-danger）。
-        // 锁定期间**只有「详情」还活着**：它是只读动作；其余三颗都会改配置，一律置灰
+        // 行尾：「详情」与「删除」常驻（用户 2026-10-16 第三、四轮：详情要留边框、删除要拿出来），
+        // 只剩低频的两件（启用这个 / 取消首选）收进一颗 ⋯ —— 没有这两件时那颗 ⋯ 不出现。
+        // 锁定期间**只有「详情」还活着**：其余都会改配置，一律置灰
         //（用户 2026-10-12：「锁定情况下删除键应该变灰且不能点击」—— 与子智能体页锁定态同长相）。
         var actions = [];
+        var menuItems = [];
         /**
          * 「启用这个」写的是「同名技能该用哪个**来源**」的首选表（`/prefer` →
          * `preferredSkills[名] = 来源 key`，`shadowedBy.root === 本行来源` 即表示撞名发生在
@@ -383,10 +428,13 @@
          * 收掉的只是那颗**做不到它承诺的事**的按钮。判据是来源 key，不是文案。
          */
         var canPrefer = !!skill.shadowedBy && skill.shadowedBy.root !== root.key;
-        if (canToggle && canPrefer) actions.push(h("button", { key: "activate", type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy || anyLocked, title: t("btn.activate.title"), onClick: function () { activateShadowed(root, skill); } }, t("btn.activate")));
-        if (skill.preferred === true) actions.push(h("button", { key: "unprefer", type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy || anyLocked, title: t("btn.unprefer.title"), onClick: function () { clearPreferred(root, skill); } }, t("btn.unprefer")));
+        if (canToggle && canPrefer) menuItems.push({ key: "activate", label: t("btn.activate"), title: t("btn.activate.title"), disabled: busy || anyLocked, onClick: function () { activateShadowed(root, skill); } });
+        if (skill.preferred === true) menuItems.push({ key: "unprefer", label: t("btn.unprefer"), title: t("btn.unprefer.title"), disabled: busy || anyLocked, onClick: function () { clearPreferred(root, skill); } });
         actions.push(h("button", { key: "detail", type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { openDetail(root, skill); } }, t("btn.detail")));
+        // 「删除」留在行内（用户 2026-10-16 第四轮：「技能把删除拿出来」，与会话页同一口径）：
+        // 这一页的行本来就靠这颗收尾，藏进 ⋯ 反而要多点一次才找得到。
         if (root.deletable === true) actions.push(h("button", { key: "trash", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy || anyLocked, onClick: function () { setModal({ type: "trash-confirm", root: root.key, name: skill.name }); } }, t("btn.trash")));
+        if (menuItems.length) actions.push(h(RowMenu, { key: "menu", label: t("row.menu", { name: skill.declaredName || skill.name }), items: menuItems }));
         return h(ListRow, {
           key: skill.name,
           dots: attention ? [] : [h(StatusDot, { key: "dot", tone: enabled ? "ok" : "idle", title: t(key) })],
@@ -404,9 +452,15 @@
       }
       function renderRoot(root) {
         if (activeSource && activeSource !== root.key) return null;
-        var displayName = rootDisplayName(t, root), filtered = skillView.filtered[root.key] || []; if (dq && !filtered.length) return null; var open = !!expanded[root.key] || !!dq;
+        var displayName = rootDisplayName(t, root), filtered = skillView.filtered[root.key] || []; if (dq && !filtered.length) return null;
+        // 默认展开与否看**这个来源里有没有开着的技能**（用户 2026-10-16：官方内置 / 导入技能
+        // 一条都没开也默认展开了）—— 来源开关本身不是判据：官方根整体是「可管理」，里面
+        // 四条全关着也照样算"没在用"。手动点过的以手动为准（表里有值），搜索时强制展开。
+        var openFlag = expanded[root.key]
+        var baseOpen = openFlag === undefined ? bulkTargets(root.key).some(function (x) { return x.on }) : !!openFlag;
+        var open = baseOpen || !!dq;
         var rootCount = root.count == null ? root.skills.length : root.count;
-        var section = h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head dsm-source-head-pin" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !open })); } }, h("span", { className: "dsm-source-title", title: displayName }, displayName), h("span", { className: "dsm-count" }, t(countKey("summary.group", rootCount), { count: rootCount })), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.defaultSource === true ? "" : root.enabled ? "dsm-tag-on" : "dsm-tag-off") }, root.scope === "project" ? t("status.project") : root.defaultSource === true ? t("status.manageable") : t(root.enabled ? "status.source.on" : "status.source.off")), root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), (function () {
+        var section = h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head dsm-source-head-pin" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !baseOpen })); } }, h("span", { className: "dsm-source-title", title: displayName }, displayName), h("span", { className: "dsm-count" }, t(countKey("summary.group", rootCount), { count: rootCount })), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.defaultSource === true ? "" : root.enabled ? "dsm-tag-on" : "") }, root.scope === "project" ? t("status.project") : root.defaultSource === true ? t("status.manageable") : t(root.enabled ? "status.source.on" : "status.source.off")), root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), (function () {
           // 目录级「全选 / 取消全选」（用户裁定 2026-09-17）：只作用于**这个目录下当前
           // 可见且可切换**的技能 —— 与页头那颗同一套目标集逻辑（bulkTargets 传 rootKey），
           // 同名技能只算生效的那一个（被覆盖的副本跳过）。
@@ -586,20 +640,43 @@
           h("div", { className: "dsm-form-seg", role: "group", "aria-label": t("create.target") },
             createOptions.map(function (o) { return h("button", { key: o.value, type: "button", "aria-pressed": form.root === o.value ? "true" : "false", onClick: function () { updateForm("root", o.value); } }, o.label); }))),
         [["name", "create.name", "create.name.placeholder"], ["description", "create.description", "create.description.placeholder"]].map(function (field) { return h("label", { key: field[0], className: "dsm-field" }, h("div", { className: "dsm-budget-meta" }, h("span", { className: "dsm-label" }, t(field[1])), field[0] === "description" ? h("span", { className: "dsm-char-count" }, String(form.description || "").length + " / " + CATALOG_DESC_MAX) : null), h("input", { className: "dsm-control", value: form[field[0]], placeholder: t(field[2]), maxLength: field[0] === "description" ? CATALOG_DESC_MAX : undefined, onChange: function (e) { updateForm(field[0], e.target.value); } })); }), h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("create.body")), h("textarea", { className: "dsm-control", value: form.body, placeholder: t("create.body.placeholder"), onChange: function (e) { updateForm("body", e.target.value); } })), renderAttachField()), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn", disabled: busy || !form.name.trim() || !form.description.trim() || !form.body.trim(), onClick: submitCreate }, t("btn.create.now")))));
-      // 「新建附件」小窗叠在创建弹窗之上：路径 + 内容两个框，确定即并入清单（可再点开改）。
-      // 目录不用单独给 —— 路径里写 `references/api.md`，服务端按那段建目录。
+      // 附件小窗（两种模式共用最上面那格文件夹名）：
+      //   new  = 文件名 + 内容，在界面里写一份；
+      //   pick = 一块拖放区，挑进来的文件都挂在那格文件夹下（留空 = 技能目录根）。
       if (draftFile) content.push(h(Modal, {
-        key: "attach-new", title: t("skill.attach.newTitle"), closeLabel: t("btn.close"), className: "dsm-modal-compact",
+        key: "attach-new", title: draftFile.mode === "pick" ? t("skill.attach.pick") : t("skill.attach.new"),
+        closeLabel: t("btn.close"), className: "dsm-modal-compact",
         onClose: function () { setDraftFile(null); },
       }, h("div", { className: "dsm-form" },
-        h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("skill.attach.path")),
-          h("input", { className: "dsm-control", value: draftFile.path, placeholder: t("skill.attach.path.placeholder"), onChange: function (e) { setDraftFile(Object.assign({}, draftFile, { path: e.target.value })) } })),
-        h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("skill.attach.content")),
-          h("textarea", { className: "dsm-control dsm-textarea-md", value: draftFile.content, placeholder: t("skill.attach.content.placeholder"), onChange: function (e) { setDraftFile(Object.assign({}, draftFile, { content: e.target.value })) } })),
+        h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("skill.attach.dir")),
+          h("input", { className: "dsm-control", value: draftFile.dir, placeholder: t("skill.attach.dir.placeholder"), onChange: function (e) { setDraftFile(Object.assign({}, draftFile, { dir: e.target.value, error: null })) } })),
+        draftFile.mode === "pick"
+          ? h("div", { className: "dsm-field" },
+            h("span", { className: "dsm-label" }, t("skill.attach.files")),
+            h("button", {
+              type: "button", className: "dsm-dropzone dsm-dropzone-sm",
+              onClick: function () { if (attachInputRef.current) attachInputRef.current.click() },
+              onDragOver: function (e) { e.preventDefault() }, onDrop: onAttachmentsDropped,
+            },
+              h("span", { className: "dsm-dropzone-title" }, t("upload.drop.title")),
+              h("span", { className: "dsm-dropzone-copy" }, t("skill.attach.drop.copy"))),
+            // 挑完的东西就地列出来：不列的话弹窗把后面那份清单挡住，人只知道"按了没反应"。
+            (form.files || []).length ? h("div", { className: "dsm-attach-list dsm-attach-cap" }, form.files.map(attachRow)) : null)
+          : [
+            h("label", { key: "n", className: "dsm-field" }, h("span", { className: "dsm-label" }, t("skill.attach.name")),
+              h("input", { className: "dsm-control", value: draftFile.name, placeholder: t("skill.attach.name.placeholder"), onChange: function (e) { setDraftFile(Object.assign({}, draftFile, { name: e.target.value, error: null })) } })),
+            h("label", { key: "c", className: "dsm-field" }, h("span", { className: "dsm-label" }, t("skill.attach.content")),
+              h("textarea", { className: "dsm-control dsm-textarea-md", value: draftFile.content, placeholder: t("skill.attach.content.placeholder"), onChange: function (e) { setDraftFile(Object.assign({}, draftFile, { content: e.target.value })) } })),
+          ],
         draftFile.error ? h("div", { className: "dsm-feedback dsm-error", role: "alert" }, draftFile.error) : null),
+        draftFile.mode === "pick" ? h("input", { ref: attachInputRef, type: "file", multiple: true, className: "dsm-hidden-input", onChange: onAttachmentsPicked }) : null,
         h("div", { className: "dsm-modal-actions" },
-          h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setDraftFile(null); } }, t("btn.cancel")),
-          h("button", { type: "button", className: "dsm-btn", disabled: !String(draftFile.path || "").trim(), onClick: submitNewFile }, t("skill.attach.add")))));
+          draftFile.mode === "pick"
+            ? h("button", { type: "button", className: "dsm-btn", onClick: function () { setDraftFile(null); } }, t("skill.attach.done"))
+            : [
+              h("button", { key: "x", type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setDraftFile(null); } }, t("btn.cancel")),
+              h("button", { key: "ok", type: "button", className: "dsm-btn", disabled: !String(draftFile.name || "").trim(), onClick: submitNewFile }, typeof draftFile.index === "number" ? t("memory.btn.save") : t("skill.attach.add")),
+            ])));
       // D13：导入弹窗统一用共享 ImportModal（能力取三者并集：拖拽区 + 已选文件行 +
       // 文件要求清单 + 结果反馈）。技能页只保留自己的校验与提交逻辑。
       if (modal === "import") content.push(h(ImportModal, {

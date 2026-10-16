@@ -468,6 +468,11 @@
             var q = String(modal.modeQuery || '').trim().toLowerCase()
             var list = q ? all.filter(function (n) { return n.toLowerCase().indexOf(q) >= 0 }) : all
             var picked = rule.names || []
+            // 「已选」筛选：胶囊排撤了之后，勾了十几条想回头挑几条改掉就得翻列表 ——
+            // 这一筛把范围收到只剩勾上的那些。一个都没勾时它不该能按（按了就剩空表），
+            // 勾数归零时自动退回全列表，不会把人关在空态里。
+            var pickedOnly = modal.modePickedOnly === true && picked.length > 0
+            if (pickedOnly) list = list.filter(function (n) { return picked.indexOf(n) >= 0 })
             // 与其余「全选」同一口径：全勾了就只给「取消全选」（二合一，不并列）。
             var allPickedAll = all.length > 0 && all.every(function (n) { return picked.indexOf(n) >= 0 })
             // 按归属切段。认不出的归属（服务端没给这一项，或给了个没见过的值）一律落「其他」——
@@ -486,14 +491,10 @@
                 grid.push(pickRow({ key: 'm:' + id + ':' + name, disabled: busy, checked: picked.indexOf(name) >= 0, name: name, onChange: function () { toggleModeTool(id, name) } }))
               })
             })
+            // 已选不再单独摊一排胶囊（用户 2026-10-16：配十几个工具时四五行都浪费在重复列表上）——
+            // 组头那枚「白名单 N 个」是计数，下面列表里勾着的行就是清单，取消勾选即移除。
+            // 「一个都没勾 = 不限制」那句一并删掉：模式与按钮字面已经说了白 / 黑名单。
             return React.createElement('div', { className: 'dsm-mode-body' },
-              picked.length
-                ? React.createElement('div', { className: 'dsm-tools-chips' }, picked.map(function (name) {
-                    return React.createElement('span', { key: 'c:' + name, className: 'dsm-chip' + (rule.mode === 'deny' ? ' dsm-chip-deny' : '') },
-                      name,
-                      React.createElement('button', { type: 'button', title: t('subagents.tools.remove'), onClick: function () { toggleModeTool(id, name) } }, '×'))
-                  }))
-                : React.createElement('span', { className: 'dsm-adv-note' }, t(rule.mode === 'deny' ? 'subagents.mode.denyEmpty' : 'subagents.mode.allowEmpty')),
               React.createElement('div', { className: 'dsm-combo-row' },
                 React.createElement('input', {
                   className: 'dsm-control',
@@ -501,6 +502,7 @@
                   placeholder: t('subagents.tools.filter'),
                   onChange: function (e) { setModal(Object.assign({}, modal, { modeQuery: e.target.value })) },
                 }),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !picked.length, onClick: function () { setModal(Object.assign({}, modal, { modePickedOnly: !(modal.modePickedOnly === true) })) } }, modal.modePickedOnly === true ? t('subagents.tools.showAll') : t('subagents.tools.pickedOnly')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy, onClick: function () { setModeRule(id, { mode: rule.mode, names: allPickedAll ? [] : all.slice() }) } }, bulkPair(allPickedAll ? t('bulk.unselectAll') : t('bulk.selectAll'), allPickedAll ? t('bulk.selectAll') : t('bulk.unselectAll')))),
               list.length
                 ? React.createElement('div', { className: 'dsm-tools-grid' }, grid)
@@ -755,11 +757,19 @@
                   meta: p.description || null,
                   side: React.createElement(Switch, { on: p.enabled !== false, disabled: busy || anyLocked, label: t('subagents.toggle') + ' ' + p.name, onClick: function () { togglePersona(p) } }),
                   actions: [
+                    // 编辑 / 删除**都**收进 ⋯（用户 2026-10-16 第二轮）：这一页行 2 是整句人设描述，
+                    // 行尾摆两颗按钮就把描述挤掉了。删除在菜单里是红字。
                     // 「编辑」在锁定态照常可点（用户 2026-10-12：「子智能体、提示词、记忆可以打开
                     // 编辑页面，但是不能保存」）：只读地看一眼人设不该被锁挡住，真正写盘的
                     // 「保存」才置灰（见下面编辑弹窗）。删除 / 开关仍然锁着。
-                    React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openEditor(p.name) } }, t('memory.edit')),
-                    React.createElement('button', { key: 'del', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || anyLocked, onClick: function () { setModal({ type: 'delete', name: p.name }) } }, t('memory.delete')),
+                    React.createElement(RowMenu, {
+                      key: 'menu',
+                      label: t('row.menu', { name: p.name }),
+                      items: [
+                        { key: 'edit', label: t('memory.edit'), disabled: busy, onClick: function () { openEditor(p.name) } },
+                        { key: 'delete', label: t('memory.delete'), danger: true, disabled: busy || anyLocked, onClick: function () { setModal({ type: 'delete', name: p.name }) } },
+                      ],
+                    }),
                   ],
                 })
               })),

@@ -511,8 +511,10 @@ function enabledMemoryCount(rules) {
      * 列表行（REDESIGN §3.4，2026-10-11 切片四）：48px 两行制 ——
      *   行1  状态点 + 名称(13/600) + 至多 1 个「需要处理」的 tag
      *   行2  元信息(12 弱色，截断 + title)
-     * 右侧：常驻开关（`side` 槽）+ quiet 24px 次级动作组（右对齐，全部常驻可见 ——
-     * 2026-10-11 裁定不做悬停浮现）；删除类一律 quiet-danger。
+     * 右侧：常驻开关（`side` 槽）+ quiet 24px 次级动作组。动作组怎么摆由页面定：
+     * 2026-10-11 裁的是「不做悬停浮现」（划动时行尾乱闪），2026-10-16 记忆页改成收进
+     * 一颗 RowMenu（⋯）—— 一行三颗控件、删除常年红框，一屏只剩边框。两条都不往 `actions`
+     * 里塞 hover 才出现的按钮。删除类一律 quiet-danger。
      * 去卡片：行本身不描边，行间 1px 分隔线由容器负责（`.dsm-list` 或分组卡的
      * `.dsm-source-body` 里「.dsm-listrow + .dsm-listrow」），容器才带边框与圆角。
      * 状态点单独一列（`dots`）：名称与元信息都从同一竖线起步 —— 点挂在名字前会造出
@@ -524,11 +526,24 @@ function enabledMemoryCount(rules) {
      * 「至多 1 个需要处理的 tag」——状态类，而这个是量值类，两者可能同时出现）/ `tag` / `meta`
      * （字符串或节点数组；空不渲染）/ `metaTitle` / `extra`（行2 之下的追加行，如体检
      * 结果、⚠ 提示）/ `leading`（行首件，会话页勾选框；切片五换 RowSelect）/ `side`
-     * （开关等常驻件）/ `actions`（quiet 24px 按钮数组）。
+     * （开关等常驻件）/ `actions`（quiet 24px 按钮数组）/ `onToggle`（整行可点勾选，见上）。
      */
     function ListRow(props) {
+      // `onToggle` = 整行可点勾选（会话页要的"点哪儿都算勾上"）。行的可访问控件仍是行首那颗
+      // RowCheck（role=checkbox），行本身不重复挂 role —— 两个 checkbox 指向同一件事更糟。
+      // 右侧那一栏（开关 / 恢复 / 删除）整块挡掉冒泡：点按钮不该顺带改勾选。
+      var pickable = typeof props.onToggle === 'function'
+      var swallow = function (e) { e.stopPropagation() }
+      var pick = pickable ? function (e) {
+        // 拖选文字不算勾选：这一页的行 2 就是给人复制的目录串，选完松手却多出一个勾，
+        // 比少一个可点区域糟得多。
+        var sel = window.getSelection ? window.getSelection() : null
+        if (sel && String(sel).trim() && e.currentTarget.contains(sel.anchorNode)) return
+        props.onToggle()
+      } : undefined
       return h('div', {
-        className: 'dsm-listrow' + (props.className ? ' ' + props.className : ''),
+        className: 'dsm-listrow' + (props.className ? ' ' + props.className : '') + (pickable ? ' dsm-listrow-pick' : ''),
+        onClick: pick,
       },
         props.leading || null,
         props.dots !== undefined ? h('div', { className: 'dsm-listrow-dots' }, props.dots) : null,
@@ -544,9 +559,102 @@ function enabledMemoryCount(rules) {
             // 不包的话长描述只会被硬裁、没有省略号。
             typeof props.meta === 'string' ? h('span', { className: 'dsm-listrow-meta-desc' }, props.meta) : props.meta) : null,
           props.extra || null),
-        (props.side || props.actions) ? h('div', { className: 'dsm-listrow-side' },
+        (props.side || props.actions) ? h('div', { className: 'dsm-listrow-side', onClick: pickable ? swallow : undefined },
           props.side || null,
           props.actions ? h('div', { className: 'dsm-listrow-actions' }, props.actions) : null) : null)
+    }
+    /**
+     * 行尾「⋯」菜单（用户 2026-10-16：记忆页每行三颗控件、删除常年红框，一屏看下来只剩边框）。
+     * 一行只留**一颗**常驻控件（开关），编辑 / 删除这类次级动作收进这一颗入口。
+     * 定位抄 SourceSelect：`position:fixed` + 打开时量一次 + 滚动/缩放重量 —— 分组卡带
+     * `overflow:hidden`，absolute 会被裁成"点一下闪一下"（2026-10-12 那条）。菜单右缘对齐
+     * 触发器右缘（往左长），因为它总贴在行的最右边。
+     * 键盘：打开即聚焦第一项，↑↓ 在项间走，Esc 关掉并把焦点还给触发器。
+     * props：`label`（触发器的 aria-label / title，带行名）/ `items`
+     * `[{key,label,onClick,danger?,disabled?}]` / `disabled?`（整颗入口禁用）。
+     */
+    function RowMenu(props) {
+      var st = react.useState(false), open = st[0], setOpen = st[1]
+      var ps = react.useState(null), pos = ps[0], setPos = ps[1]
+      var wrapRef = react.useRef(null), menuRef = react.useRef(null), triggerRef = react.useRef(null)
+      var items = props.items || []
+      var MENU_W = 148
+      function measure() {
+        var el = wrapRef.current
+        if (!el) return
+        var box = el.getBoundingClientRect()
+        var need = Math.min(items.length * 34 + 14, MENU_MAX_H)
+        var gap = 4
+        var below = window.innerHeight - box.bottom - gap - 8
+        var above = box.top - gap - 8
+        var nextUp = below < need && above > below
+        var left = Math.max(8, Math.min(box.right - MENU_W, window.innerWidth - MENU_W - 8))
+        var next = {
+          left: left, up: nextUp,
+          top: nextUp ? null : box.bottom + gap,
+          bottom: nextUp ? window.innerHeight - box.top + gap : null,
+          maxHeight: Math.max(96, Math.min(need, nextUp ? above : below)),
+        }
+        setPos(function (prev) {
+          return prev && prev.left === next.left && prev.top === next.top && prev.bottom === next.bottom && prev.maxHeight === next.maxHeight ? prev : next
+        })
+      }
+      react.useEffect(function () {
+        if (!open) return undefined
+        measure()
+        function close(event) { if (!wrapRef.current || !wrapRef.current.contains(event.target)) setOpen(false) }
+        function onKey(event) { if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); if (triggerRef.current) triggerRef.current.focus() } }
+        document.addEventListener('pointerdown', close)
+        window.addEventListener('resize', measure)
+        window.addEventListener('scroll', measure, true)
+        return function () {
+          document.removeEventListener('pointerdown', close)
+          window.removeEventListener('resize', measure)
+          window.removeEventListener('scroll', measure, true)
+        }
+      }, [open])
+      // 打开的那一帧聚焦第一条可用项：菜单是给键盘用户的一条路，不能开完还停在触发器上。
+      react.useEffect(function () {
+        if (!open || !menuRef.current) return
+        var first = menuRef.current.querySelector('[role=menuitem]:not([disabled])')
+        if (first) first.focus()
+      }, [open])
+      function onMenuKeyDown(event) {
+        var key = event.key
+        if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Home' && key !== 'End') return
+        event.preventDefault()
+        var nodes = Array.prototype.slice.call(menuRef.current ? menuRef.current.querySelectorAll('[role=menuitem]') : [])
+        if (!nodes.length) return
+        var at = nodes.indexOf(document.activeElement)
+        var next = key === 'Home' ? 0 : key === 'End' ? nodes.length - 1
+          : key === 'ArrowDown' ? (at < 0 ? 0 : (at + 1) % nodes.length)
+            : (at <= 0 ? nodes.length - 1 : at - 1)
+        nodes[next].focus()
+      }
+      var menuStyle = pos
+        ? {
+          position: 'fixed', left: pos.left + 'px', width: MENU_W + 'px',
+          top: pos.top === null ? 'auto' : pos.top + 'px',
+          bottom: pos.bottom === null ? 'auto' : pos.bottom + 'px',
+          maxHeight: pos.maxHeight + 'px',
+        }
+        : { position: 'fixed', left: '-9999px', top: '-9999px', width: MENU_W + 'px', maxHeight: MENU_MAX_H + 'px' }
+      return h('div', { className: 'dsm-rowmenu', ref: wrapRef },
+        h('button', {
+          type: 'button', className: 'dsm-rowmenu-btn', ref: triggerRef,
+          'aria-haspopup': 'menu', 'aria-expanded': open, 'aria-label': props.label, title: props.label,
+          disabled: props.disabled === true,
+          onClick: function () { if (!open) measure(); setOpen(!open) },
+        }, h(MoreIcon, { size: 14 })),
+        open ? h('div', { className: 'dsm-select-menu', role: 'menu', ref: menuRef, style: menuStyle, onKeyDown: onMenuKeyDown },
+          items.map(function (it) {
+            return h('button', {
+              key: it.key, type: 'button', role: 'menuitem',
+              className: 'dsm-option' + (it.danger ? ' dsm-option-danger' : ''),
+              disabled: it.disabled === true, title: it.title || undefined,
+              onClick: function () { setOpen(false); if (triggerRef.current) triggerRef.current.focus(); it.onClick() },
+            }, it.label)
+          })) : null)
     }
     /**
      * 列表四态（REDESIGN §12.2，2026-10-11 切片四）：加载 / 空 / 无结果 / 失败 / 有数据，
@@ -1261,7 +1369,7 @@ function enabledMemoryCount(rules) {
           afterWrite(g, out.failed === 0, text)
         })
       }
-      /** 一行条目：行选择（整行可点勾选）+ 右侧「恢复 / 永久删除」，删除走行内二次确认。 */
+      /** 一行条目：行选择（整行可点勾选）+ 右侧「详情 / 恢复 / 永久删除」，删除走行内二次确认。 */
       const rowNode = function (g, item) {
         const key = String(idOfOf(g)(item))
         const gated = busy === true || frozenOf(g) === true
@@ -1282,6 +1390,8 @@ function enabledMemoryCount(rules) {
               // `canPurge` 为假 → **不画**这颗按钮（不是画一颗按不动的）：这一行没有"永久删除"
               // 这件事可做。现在只剩默认来源会落进这一档（`dsh` / `hub` / 官方）—— 它们必须读取、
               // 从来不在移除候选里，所以实际也进不了这张列表；留这条判断是防它哪天进来。
+              // 这颗留在行内而不是收进 ⋯（用户 2026-10-16 第三轮：「回收站永久删除拿出来」）：
+              // 这一页存在的意义就是删，藏两级反而更容易误点批量那条。
               g.canPurge && !g.canPurge(item) ? null
                 : React.createElement('button', { key: 'purge', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: gated, onClick: function () { setConfirm({ group: g.id, key: key }) } }, t('btn.delete.forever')),
             ]

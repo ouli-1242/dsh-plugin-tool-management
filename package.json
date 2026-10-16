@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-tool-management",
-  "version": "0.20.1",
+  "version": "0.20.2",
   "description": "一个设置面板，统一管理 MCP、技能、记忆、子智能体、提示词和归档会话；可自定义搭配场景，一个场景即可切换整个环境；Agent也能帮你操作这个插件。",
   "repository": {
     "type": "git",
@@ -22,7 +22,8 @@
     "CHANGELOG.md",
     "LICENSE",
     "screenshots.json",
-    "docs"
+    "docs/images",
+    "docs/update.md"
   ],
   "engines": {
     "node": ">=18"

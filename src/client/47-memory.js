@@ -72,10 +72,12 @@
             var i = s.indexOf('/')
             return i >= 0 ? s.slice(0, i) : s
           }
-          function toggleCollapse(key) {
+          /** 存的是**有效状态**（true=收起），不是翻转旧值：默认收起的卡片旧值是 undefined，
+           *  翻一下算出来还是 true，第一次点击看不出任何变化，要点第二下才展开（用户 2026-10-16 实测）。 */
+          function toggleCollapse(key, open) {
             setCollapsed(function (prev) {
               var next = Object.assign({}, prev)
-              next[key] = !next[key]
+              next[key] = open
               return next
             })
           }
@@ -454,13 +456,14 @@
           }, [visibleBuckets, buckets])
 
           /**
-           * bundle 记忆的「N 个附件」标签（用户裁定 2026-09-17）。
+           * bundle 记忆的附件标记：回形针 + 个数，挂在名称旁那枚体积后面
+           * （用户 2026-10-16：「一个图标加一个数字就行，在 145 B 旁边」，同日又要求
+           * 去边框降噪 —— 所以它是 `.dsm-qty` 弱色文字，不再是描边胶囊）。
            *
-           * 形态归「bundle」那颗标签，**内容归这一颗** —— 两者语义不同，挤进一个框里中文下会到 7 个字。
-           * 数量是宿主在 rules-list 里补的（`r.attach`，口径与注入给模型的附件清单逐字一致）。
-           * 0 个附件也显示（灰色），这样"哪些 bundle 是空壳"一眼可见；两种状态都能点，
-           * 点了直接开编辑弹窗并**滚到附件区**（不然这颗标签就只是块装饰）。
-           * `r.attach` 缺失 = 宿主没读到这个目录（索引残留）→ 什么都不显示，不谎报 0。
+           * 数量是宿主在 rules-list 里补的（`r.attach`，口径与注入给模型的附件清单逐字一致）；
+           * 0 个附件也显示，这样"哪些 bundle 是空壳"一眼可见。两种状态都能点，点了直接开编辑
+           * 弹窗并**滚到附件区**（不然这颗标记就只是块装饰）。`r.attach` 缺失 = 宿主没读到这个
+           * 目录（索引残留）→ 什么都不显示，不谎报 0。
            */
           function attachTag(r, shadowed) {
             if (r.form !== 'bundle' || !r.attach) return null
@@ -472,12 +475,25 @@
               : t('memory.attach.tip', { count: n, size: fmtBytes(r.attach.bytes), names: names.join(t('memory.attach.sep')) + extra })
             return React.createElement('button', {
               type: 'button',
-              className: 'dsm-tag dsm-tag-attach' + (n === 0 ? ' dsm-tag-attach-empty' : ''),
+              className: 'dsm-qty',
               disabled: busy || shadowed || anyLocked,
               title: title,
+              key: 'attach',
               'aria-label': title,
               onClick: function () { openEditor(r, true) },
-            }, React.createElement(PaperclipIcon, { size: 11 }), t(countKey('memory.attach.count', n), { count: n }))
+            }, React.createElement(PaperclipIcon, { size: 11 }), String(n))
+          }
+
+          /** 名称旁那一串量值（体积 · 附件数）：中间点分隔，缺件自动跳过（一件时不留孤点）。 */
+          function qtyBits() {
+            var list = Array.prototype.slice.call(arguments).filter(Boolean)
+            if (!list.length) return null
+            var out = []
+            list.forEach(function (node, i) {
+              if (i) out.push(React.createElement('span', { key: 'sep' + i, className: 'dsm-qty-sep' }, '·'))
+              out.push(node)
+            })
+            return out
           }
 
           function renderRuleRow(r, sceneActive) {
@@ -496,8 +512,8 @@
             // 在同一场景里启用一条记忆，点当场消失，看着像这一行坏了。现在点照常画
             //（灰 = 不进上下文），原因留在 title 上。
             var attention = shadowed
-            // 行 2 元信息（切片三移交的「tags 列清理」）：描述 / 多级分组路径 / 附件 / 派生。
-            // 附件计数保持**可点**（进编辑弹窗并滚到附件区），其余降为弱色文字。
+            // 行 2 元信息（切片三移交的「tags 列清理」）：描述 / 多级分组路径 / 派生标记。
+            // 附件计数不在这一行了 —— 它挪到名称旁与体积并排（见 attachTag）。
             //
             // 体积（`145 B`）2026-10-12 从这一行挪到了行 1 的名称旁（用户：「记忆的 145B 带
             // 边框然后加在名称旁边」）：它是这一行的"量值"，跟名称一样是**扫读**时先看的；
@@ -509,15 +525,13 @@
             var metaBits = [
               r.description ? React.createElement('span', { key: 'desc', className: 'dsm-listrow-meta-desc', title: r.description }, r.description) : null,
               r.group && r.group.indexOf('/') >= 0 ? React.createElement('span', { key: 'group', className: 'dsm-listrow-meta-info dsm-mono' }, r.group) : null,
-              attachNode,
               r.descriptionDerived ? React.createElement('span', { key: 'derived', className: 'dsm-listrow-meta-info' }, t('memory.derived')) : null,
             ]
-            // 名称旁那颗体积标签：`.dsm-tag` 就是现成的"带边框"形态（边框 + 圆角 + 12px），
-            // 只补一条等宽数字，免得同一列里 145 B / 1.2 KB / 980 B 宽度跳来跳去。
+            // 名称旁那颗体积：纯量值、不可点，所以是 span；等宽数字免得整列右缘跟着抖。
             var sizeTag = typeof r.bytes === 'number'
               ? React.createElement('span', {
                 key: 'size',
-                className: 'dsm-tag dsm-tag-size',
+                className: 'dsm-qty',
                 title: t('memory.size.tip', { size: fmtBytes(r.bytes) }),
               }, fmtBytes(r.bytes))
               : null
@@ -525,18 +539,27 @@
               key: r.id,
               dots: attention ? [] : [React.createElement(StatusDot, { key: 'dot', tone: statusKey === 'status.enabled' ? 'ok' : 'idle', title: t(statusKey) })],
               name: r.name,
-              nameAfter: sizeTag,
+              // 名称旁两枚量值：体积 + 附件数（2026-10-16 从描述那一行挪上来，用户：
+              // 「一个图标加一个数字就行，在 145 B 旁边」）。都只报量、细节进 title。
+              nameAfter: qtyBits(sizeTag, attachNode),
               tag: attention ? React.createElement(StatusTag, { tone: statusTone, text: t(statusKey) }) : null,
               meta: metaBits,
               extra: shadowed ? React.createElement('div', { className: 'dsm-rule-shadow-hint' }, t('memory.shadowed.hint')) : null,
               side: React.createElement(Switch, { on: enabled, disabled: busy || shadowed || anyLocked, label: t('memory.enable') + ' ' + r.name, onClick: function () { toggleRule(r) } }),
-              actions: [
-                // 「编辑」在锁定态**照常可点**（用户 2026-10-12：「场景锁定下改成子智能体、
-                // 提示词、记忆可以打开编辑页面，但是不能保存」）：只读地看一眼内容不该被锁挡住，
-                // 真正写盘的那一步（弹窗里的保存键）才置灰。其余会写盘的行内动作照旧置灰。
-                React.createElement('button', { key: 'edit', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || shadowed, onClick: function () { openEditor(r) } }, t('memory.edit')),
-                React.createElement('button', { key: 'del', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-danger', disabled: busy || shadowed || anyLocked, onClick: function () { setModal({ type: 'delete', rule: r }) } }, t('memory.delete')),
-              ],
+              // 行内只留开关这一颗常驻控件（用户 2026-10-16：「记忆看起来很乱」→ 选定
+              // 「编辑 / 删除收进 ⋯ 菜单」）：原先每行三颗、删除常年红描边，一屏六条就是
+              // 六个红框。删除仍在菜单里用红字标出，但不再占行内的视觉重量。
+              actions: [React.createElement(RowMenu, {
+                key: 'menu',
+                label: t('row.menu', { name: r.name }),
+                items: [
+                  // 「编辑」在锁定态**照常可点**（用户 2026-10-12：「场景锁定下改成子智能体、
+                  // 提示词、记忆可以打开编辑页面，但是不能保存」）：只读地看一眼内容不该被锁挡住，
+                  // 真正写盘的那一步（弹窗里的保存键）才置灰。其余会写盘的动作照旧置灰。
+                  { key: 'edit', label: t('memory.edit'), disabled: busy || shadowed, onClick: function () { openEditor(r) } },
+                  { key: 'delete', label: t('memory.delete'), danger: true, disabled: busy || shadowed || anyLocked, onClick: function () { setModal({ type: 'delete', rule: r }) } },
+                ],
+              })],
             })
           }
 
@@ -546,24 +569,35 @@
             var isShared = meta.shared === true
             var isGlobal = meta.global === true || name === 'global'
             var isOrphan = name === '' && !bucket.meta
-            var open = !collapsed['s:' + name]
+            // 默认展开与否跟着「这个场景启没启」走（用户 2026-10-16）：没启用的场景一屏摊开
+            // 只是噪音，启用的那条才要一眼能改。用户手动点过的那一格以手动为准（表里有值），
+            // 没点过（undefined）才按状态给默认 —— 所以切换启用场景时，其余卡片自己收回去。
+            var openFlag = collapsed['s:' + name]
+            var baseOpen = openFlag === undefined ? meta.active === true : openFlag !== true
+            var open = baseOpen || !!q
             // 卡内「全选」的判据只算一次：同一份数组此前在这一行里被扫了五遍（两遍 allMemoriesOn
             // + 三遍 toggleableIds），每次重渲染都重来。
             var cardToggles = toggleableIds(bucket.rules)
             var cardAllOn = allMemoriesOn(bucket.rules)
+            // 卡头的计数：`启用 / 总数`（与页头统计、技能页来源卡同一个读法）。
+            var cardOn = bucket.rules.filter(function (r) { return r.enabled !== false }).length
             // 两种「不进上下文」要分开：游离记忆（没有归属场景）是**真问题**，用错误色；
             // 场景只是没启用是**正常状态**（同时只有一个场景在用），整块灰色置灰即可 ——
             // 此前两者共用一个红类，关着的场景一片红，读起来像出了错。
             var card = React.createElement('div', { key: 's:' + name, className: 'dsm-source' + (isOrphan ? ' dsm-rule-shadowed' : meta.active === false ? ' dsm-rule-off' : '') },
               React.createElement('div', { className: 'dsm-source-head' },
-                React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleCollapse('s:' + name) } },
-                  React.createElement('span', { className: 'dsm-source-title', title: sceneLabel(data.scenes, name) }, sceneLabel(data.scenes, name)),
-                  React.createElement('span', { className: 'dsm-count' }, t('memory.scene.count', { count: bucket.rules.length })),
-                  isShared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
-                  isGlobal ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
-                  isOrphan ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.orphan.tag')) : null,
-                  meta.active === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null,
-                  isOrphan ? null : React.createElement('span', { className: 'dsm-note' }, meta.description || '')),
+                React.createElement('button', { type: 'button', className: 'dsm-source-head-main dsm-source-head-stack', 'aria-expanded': open, onClick: function () { toggleCollapse('s:' + name, baseOpen) } },
+                  React.createElement('span', { className: 'dsm-source-head-line' },
+                    React.createElement('span', { className: 'dsm-source-title', title: sceneLabel(data.scenes, name) }, sceneLabel(data.scenes, name)),
+                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: cardOn, total: bucket.rules.length })),
+                    isShared ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
+                    isGlobal ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.global.tag')) : null,
+                    isOrphan ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, t('memory.scene.orphan.tag')) : null,
+                    meta.active === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null),
+                  // 场景备注紧跟名称下面一行（用户 2026-10-16：「备注是显示在名称下面，就像图2一样」），
+                  // 收着卡片时也照读 —— 它是"这是哪个场景"的一部分，不是展开后才有的细节。
+                  // 挂在卡头左侧那一列里、不是整行之下：整行的话右侧按钮把它和名称隔开，读着像页脚。
+                  isOrphan || !meta.description ? null : React.createElement('span', { className: 'dsm-source-desc' }, meta.description)),
                 React.createElement('div', { className: 'dsm-source-actions' },
                   // 每个场景一张卡：卡内的「全选 / 取消全选」只作用于**这张卡里的**记忆
                   // —— 用户说的「记忆的不同场景都缺少全选清空」。
