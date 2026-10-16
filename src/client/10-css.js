@@ -93,7 +93,7 @@ button.dsm-tag:disabled{cursor:default;opacity:.6}
    铁律：**同一行 / 同一组按钮必须同高** —— 行里有实心或常规动作就整行 30px（弹窗脚、
    页头动作条），整行都是行内小动作才整行 24px（列表行、回收站行、分段组）。
    （CSS 注释里别写反引号：这段整体在 JS 模板字符串里，反引号会把字符串截断。） */
-.dsm-btn{box-sizing:border-box;display:inline-flex;min-height:30px;align-items:center;justify-content:center;padding:0 12px;border:1px solid transparent;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font:inherit;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}.dsm-btn:hover:not(:disabled){opacity:.9}.dsm-btn:disabled{opacity:.48;cursor:default}.dsm-btn-secondary{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.dsm-btn-quiet{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary);min-height:24px;padding:0 8px;font-size:12px;font-weight:400}.dsm-btn-danger{border-color:transparent;background:var(--dsw-alias-state-error-primary);color:#fff}.dsm-btn-lock{background:transparent;color:var(--dsm-warn)}.dsm-btn:focus-visible,.dsm-control:focus-visible,.dsm-select-trigger:focus-visible,.dsm-source-head:focus-visible,.dsm-switch:focus-visible,.dsm-file-remove:focus-visible,.dsm-dropzone:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
+.dsm-btn{box-sizing:border-box;display:inline-flex;min-height:30px;align-items:center;justify-content:center;padding:0 12px;border:1px solid transparent;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font:inherit;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}.dsm-btn:hover:not(:disabled){opacity:.9}.dsm-btn:disabled{opacity:.48;cursor:default}.dsm-btn-secondary{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.dsm-btn-quiet{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary);min-height:24px;padding:0 8px;font-size:12px;font-weight:400}.dsm-btn-danger{border-color:transparent;background:var(--dsw-alias-state-error-primary);color:#fff}.dsm-btn-lock{background:transparent;color:var(--dsm-warn)}.dsm-btn:focus-visible,.dsm-select-trigger:focus-visible,.dsm-source-head:focus-visible,.dsm-switch:focus-visible,.dsm-file-remove:focus-visible,.dsm-dropzone:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
 /* 列表工具条的一行：搜索占满剩余、筛选下拉定宽靠右。
    下拉宽度 210 → 150（用户 2026-10-12：「全部级别缩短，当前太长了，多的内容交给输入框」；
    技能「全部来源」、记忆「全部场景」、会话保留期同一条口径）。触发器内的文本本来就带
@@ -635,8 +635,20 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-select-trigger > span{min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
 .dsm-select-trigger::after{content:""; flex: none; box-sizing: border-box; width: 7px; height: 7px; margin-top: -3px; border-right: 1.5px solid var(--dsw-alias-label-tertiary); border-bottom: 1.5px solid var(--dsw-alias-label-tertiary); transform: rotate(45deg);}
 .dsm-select-trigger:empty::before{color: var(--dsw-alias-label-dimmed);}
-.dsm-select-trigger:focus-visible{outline: none; border-color: var(--dsw-alias-state-business-primary);}
+/* 下拉触发器与上面的输入框是同一类控件，聚焦色跟着走同一档（原先是 business 蓝，
+   与输入框并排时一个蓝一个白，2026-10-16 随输入框一起改）。 */
+.dsm-select-trigger:focus-visible{outline: none; border-color: var(--dsw-static-neutral-bluish-400);}
 .dsm-select-trigger:disabled{color: var(--dsw-alias-label-tertiary); cursor: default;}
+/* 输入框（input / textarea / 原生 select）聚焦：只提亮描边、不画彩色焦点环，口径照宿主
+   「通用设置 → 外观」那三张卡（dsh-client-ui-theme 的 .v01cdW_themeCube / .v01cdW_selected：
+   静止 .5px solid border-l4，选中态把 border-color 提到 --dsw-static-neutral-bluish-400）。
+   截图取色实测过：静止边 #565658（= l4 的 20% 白压在 #2c2c2e 上）、亮边 #adb2b8 —— 后者就是
+   用户说的「白色边框」。**别拿 border-l4 当焦点色**：它正是静止态那一档，改了等于没改
+   （2026-10-16 第一版就钉在这上面，用户回「变成直接没有了」）。
+   neutral-bluish-400 是 static 令牌、深浅两主题同值，白底上也仍然看得见。
+   ⚠️ 必须写在下面 aria-invalid 那条**之前**：两者特异性同为 0-2-0，只靠书写顺序分胜负，
+   顺序反了校验失败的输入框聚焦时会变回白边、红边被吃掉。 */
+.dsm-control:focus-visible{outline:none;border-color:var(--dsw-static-neutral-bluish-400)}
 .dsm-control[aria-invalid= true ]{border-color: var(--dsw-alias-state-error-primary);}
 /* 这一条**不能再写 background**：它与第 99 行的 .dsm-option:hover 特异性打平
    （都是一个类名 + 一个属性/伪类 = 0-2-0），同权重只靠书写顺序分胜负。这里一旦写了
