@@ -94,8 +94,8 @@ export function renderSkillCatalog(
   // 它只会去猜名字。数量照报 —— 那是实话，与有没有出口无关。
   if (hidden > 0) {
     out.push('', listToolVisible
-      ? `（另有 ${hidden} 个未列出，用 \`skill_manager_list\` 查。）`
-      : `（另有 ${hidden} 个未列出。）`)
+      ? `(${hidden} more not listed — see them with \`skill_manager_list\`.)`
+      : `(${hidden} more not listed.)`)
   }
   return out.join('\n')
 }

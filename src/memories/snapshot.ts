@@ -12,7 +12,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -416,7 +416,7 @@ export function renderSceneMemory(
     // 场景块只留标题：**场景说明归场景段**（`renderSceneCatalog`），否则同一句话会在
     // 上下文里出现两遍。记忆段要的是"这些条目属于哪个场景"这个分组标签。
     // `sceneHeading` 只给标题、不自带结尾空行（场景段的 `sceneLine` 才自带），这里补上 ——
-    // 否则标题会与紧跟的引导语/条目贴成一行（`## 场景：全局**以下是…**`）。
+    // 否则标题会与紧跟的引导语/条目贴成一行（`## Always-on memories**Memories for…**`）。
     const header = sceneHeading(scene) + '\n\n'
     for (const file of sceneFiles) {
       const { text: block, inline } = memoryBlock(file)
@@ -435,15 +435,15 @@ export function renderSceneMemory(
   }
 
   /**
-   * 选中块 → 段正文（同一场景的 `## 场景：x` 只在首次出现时发出）。
+   * 选中块 → 段正文（同一场景的 `## Scene: x` 只在首次出现时发出）。
    *
-   * 授权语**只有一版**：2026-09-23 第四次裁定删掉了完整性声明（「以下就是全部信息」），
-   * 于是"按截断状态选长短两版"的自适应失去意义（两版会完全相同），`dropped` 参数一并移除。
-   * 详见 `SCENE_MEMORY_NOTE` 的注释 —— 代价是这一段不再有防探测手段。
+   * 授权语**两版**（2026-10-18 审查恢复分叉，理由见 `SCENE_MEMORY_NOTE_PARTIAL`）：不截断时带
+   * "this is the complete set"，截断时去掉 —— 否则段首的完整性与段尾的 `## Not injected` 直接
+   * 打架。预算仍按全量版预留（`sceneNoteBytes()`），截断态那句更短，不会多占。
    */
-  const renderBody = (selected: SceneBlockCandidate[]): string => {
+  const renderBody = (selected: SceneBlockCandidate[], truncated: boolean): string => {
     if (selected.length === 0) return ''
-    const note = SCENE_MEMORY_NOTE
+    const note = truncated ? SCENE_MEMORY_NOTE_PARTIAL : SCENE_MEMORY_NOTE
     const chunks: string[] = []
     let current: string | null = null
     let buf = ''
@@ -467,7 +467,7 @@ export function renderSceneMemory(
     // 引导语只出现**一次**，放在板块层（第一个场景块之前）。
     //
     // 为什么挪上来（用户 2026-09-23 看到实际注入后要求）：此前它跟着**每个场景块**各来一遍
-    // —— 2 个场景就是 272 B ≈68 tok/轮，占记忆段整段的 22%；而且它夹在 `## 场景：X` 与条目
+    // —— 2 个场景就是 272 B ≈68 tok/轮，占记忆段整段的 22%；而且它夹在 `## Scene: X` 与条目
     // 之间，把"分组"和"内容"隔开了。它管的本来就是整段（授权语讲的是这一整段条目的效力，
     // 不是某个场景的），放在最前面才对得上。
     //
@@ -488,15 +488,21 @@ export function renderSceneMemory(
     const lines: string[] = []
     let used = byteLen(head) + byteLen(marker)
     for (const c of missed) {
-      const line = `- ${sceneLabelOf(c.scene)}/${c.item.name}（${c.item.bytes} B）\n`
+      // 只给 `场景/名称`：字节数对人有用、对模型没有动作价值（2026-10-18 审查）。
+      const line = `- ${sceneLabelOf(c.scene)}/${c.item.name}\n`
       if (used + byteLen(line) > space) break
       lines.push(line)
       used += byteLen(line)
     }
     if (lines.length === 0) return byteLen(marker) <= space ? marker : ''
     const rest = missed.length - lines.length
-    const fold = `- …（其余 ${rest} 条未列出）\n`
-    const tail = `${head}${lines.join('')}${rest > 0 && used + byteLen(fold) <= space ? fold : ''}${marker}`
+    const fold = `- ... (${rest} more not listed)\n`
+    // 清单已经列全时**不再加标记**：`## Not injected` 这个标题本身就说清了"有东西没进来"，
+    // 再补一句 `(Truncated: …)` 只是把同一件事说两遍。标记只在清单**自己也不全**（有没列出的
+    // 条目）时才有信息量 —— 注意判据是 `rest > 0`，不是"折叠行放得下"：折叠行放不下时清单
+    // 同样是残缺的，标记不能跟着一起消失（那会让残缺的清单看起来是全部）。
+    const folded = rest > 0 && used + byteLen(fold) <= space
+    const tail = `${head}${lines.join('')}${folded ? fold : ''}${rest > 0 ? marker : ''}`
     return tail
   }
 
@@ -523,13 +529,17 @@ export function renderSceneMemory(
   missed.sort((a, b) => a.seq - b.seq)
 
   // ── ② 尾注自身也占字节：放不下就把已入选的块从后往前退回，直到回到预算内 ──
-  let body = renderBody(selected)
-  let tail = renderTail(missed, maxBytes - byteLen(body), probe.truncated || missed.length > 0)
+  // 引导语要不要带完整性声明，取决于**最终**有没有截断 —— 所以每轮重算 body（贪心阶段不知道
+  // 结论）。两版字数差在 3 个词以内，预算按全量版预留，不会因此挤掉条目。
+  let truncatedNow = probe.truncated || missed.length > 0
+  let body = renderBody(selected, truncatedNow)
+  let tail = renderTail(missed, maxBytes - byteLen(body), truncatedNow)
   while (byteLen(body) + byteLen(tail) > maxBytes && selected.length > 0) {
     missed.push(selected.pop() as SceneBlockCandidate)
     missed.sort((a, b) => a.seq - b.seq)
-    body = renderBody(selected)
-    tail = renderTail(missed, maxBytes - byteLen(body), true)
+    truncatedNow = true
+    body = renderBody(selected, truncatedNow)
+    tail = renderTail(missed, maxBytes - byteLen(body), truncatedNow)
   }
 
   let text = `${body}${tail}`.replace(/^\n+/, '')
@@ -542,7 +552,7 @@ export function renderSceneMemory(
   return {
     text,
     bytes: byteLen(text),
-    truncated: probe.truncated || missed.length > 0,
+    truncated: truncatedNow,
     maxBytes,
     scenes,
     items: selected.map((c) => c.item),

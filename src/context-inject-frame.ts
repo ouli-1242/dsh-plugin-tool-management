@@ -47,8 +47,12 @@ export interface DomainFrame {
    * 「当前」与正文口径也对得上（记忆授权语写「当前场景对应的记忆」、技能 `how` 行写
    * 「只列当前可调用的技能」）。
    *
-   * ⚠️ 改这六个字串时**必须连带改点名它们的工具描述**（`tools/*.ts` 里「…reminder」那几处，
-   * 模型侧可见）与注释 —— 否则描述会指向一个不存在的块名。
+   * 2026-10-18（同上）：六个标题随模板一起改成英文（`Current scene` / `Current memories` /
+   * `Current MCP servers` / `Current skills` / `Current subagents` / `Current prompt`）。
+   *
+   * ⚠️ 改这六个字串时**必须连带改点名它们的工具描述**（`tools/*.ts` 与 `subagents/tools.ts`
+   * 里 `"…" reminder` 那几处，模型侧可见）与注释 —— 否则描述会指向一个不存在的块名。
+   * `test/contracts.test.mjs` 有一条扫描钉着这件事。
    */
   title: string
   /**
@@ -62,9 +66,33 @@ export interface DomainFrame {
    * 六句合计约 105 tok/轮，删掉后六个板块**只剩：标题 / 补充说明（how）/ 权威声明 / 正文**。
    */
   /** 补充动作（工具名 / 触发条件 / 边界）；正文已经说过的不要写。 */
-  how?: string | ((toolHidden: (name: string) => boolean) => string | undefined)
+  how?: string | ((info: FrameRenderInfo) => string | undefined)
   /** 权威声明：「最新一份才是权威」这条得逐域说清取代的是什么。 */
   supersede: string
+  /**
+   * 与本份内容同生共死的**边界陈述**（不含"取代"语义），与 `supersede` 分开两件事。
+   *
+   * 为什么拆（2026-10-18 审查）：技能域原来把两句拼在 `supersede` 里
+   * （`Supersedes … Only currently callable skills are listed.`），而两句的成立条件不同 ——
+   * 「取代了旧的那份」只在**替换**时成立，「只列了能用的」在这块一出现时就成立。拼在一起
+   * 只能同生同灭：首个块没有旧内容可取代（说了是废话），却连边界也一起丢了（那是防幻觉的）。
+   * 分开之后：`supersede` 只在 `replacing` 时发，`boundary` 每次都发。
+   */
+  boundary?: string
+}
+
+/** `how` 求值时能看到的渲染上下文（2026-10-18 由"只传 toolHidden"扩成对象）。 */
+export interface FrameRenderInfo {
+  /** 这个 agent 手里有没有某条工具（兼容页开关 + 人设工具限制，见 `HOW_NAMED_TOOLS`）。 */
+  toolHidden: (name: string) => boolean
+  /**
+   * 本域正文（未转义的原文）。收它不是为了让 `how` 复述正文，而是为了让**解释只在被解释的
+   * 东西真的出现时**才发 —— MCP 段是最典型的例子：没有备注、也没有离线的服务器时，那句
+   * `user hint:` 说明与 `not connected now` 读法都在解释不存在的东西，纯属每轮白付。
+   */
+  text: string
+  /** 这次是**替换**同一域的旧消息（`true`）还是该域在本会话的**第一份**（`false`）。 */
+  replacing: boolean
 }
 
 /**
@@ -77,12 +105,24 @@ export interface DomainFrame {
  * 为什么不能并进 `cue`（那能省下整整一行 ≈16 tok/段）：用户 2026-09-18 定过"权威声明单独
  * 成句" —— 它和动作句是两种东西（一句说"什么时候用它"，一句说"以哪份为准"），合并后容易
  * 被一眼带过。所以这里的收益只有约 6 tok/轮，**主要收益是消除四种措辞**，不是省字节。
+ *
+ * 2026-10-18（用户裁定）：**模型侧模板一律英文** —— 框架标题、取代声明、`how` 行、清空 /
+ * 截断 / 未列出这些提示。**用户自己写的内容一律原样注入**（场景名与说明、记忆正文、MCP
+ * 备注、技能与人设的描述、`AGENTS.md` 正文、路径），一个字符都不动。理由：官方两条注入行
+ * （`Instructions from:` 与 skill catalog）本来就是英文，混着中文只让模型多付一次对齐成本。
+ *
+ * 同日晚些时候二次收紧（用户：「让 agent 更能注意到信息，信息高效，也不要冗余」）：这一代
+ * 每个句子都按「少一个词不改行为就删」过了一遍 —— 权威声明去掉自我指涉与场合限定
+ * （`This replaces … in this session` → `Supersedes … of the same kind`），六个 `how` 行
+ * 去掉「This preset has no …」这类铺垫、改成先说要做什么。**没有新增任何一行**：2026-09-23
+ * 那条原则（注入只讲当前情况、不写解释与动作句）仍然生效，加字只会稀释指令。
  */
-export const SUPERSEDE_NOTE = '本份取代本次会话中更早注入的同类内容。'
+export const SUPERSEDE_NOTE = 'Supersedes earlier injected content of the same kind.'
 
 export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   scene: {
-    // 场景段只有标题 + 正文 + 权威声明（**没有 cue 是六个域的共同决定**，理由见 `DomainFrame`）。
+    // 场景段此前只有标题 + 正文 + 权威声明（没有 cue 是六个域的共同决定，理由见 `DomainFrame`）；
+    // 2026-10-18 起多了一句 `how`（定义 + 后果），为什么加、加的是哪一句，见本段末尾。
     //
     // 这一段的演进值得记下来，因为每一次都是被实际注入推着改的：
     //   ① 最早它把「场景说明」当**约定**授权（"一律照办，覆盖你的默认做法"）—— 而它的实例
@@ -94,33 +134,94 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     //      知道没用的信息，反推更是浪费 token」。于是三句全删。
     //
     // 现在这一段只回答一个问题：**当前处在哪个场景、它是什么**（`**「代码」—— 写代码**`）。
-    // 它还比别的段少一层：因果句也删了 —— 它解释的是"另外四段是怎么产生的"（机制），
-    // 不是当前情况本身，而且"清单里没有 ≠ 本机没有"这层反推被用户明确判为浪费。
-    title: '当前场景',
+    //
+    // 2026-10-18（用户看到实际注入后问「agent 怎么知道这个场景是做什么的」）：把②那次删掉的
+    // 定义**加回来，但只加一句**，且换掉当时失败的那个写法。
+    //   - 当时失败的是"场景是用户给这台机器配的工作模式"——**只说是什么，不说它带来了什么**，
+    //     模型读完仍无动作可做。这里补上后果：记忆 / 提示词 / 工具 / 人设都已经按它筛过。
+    //   - 与①的区别（那条授权语不能回来）：这里不授权"照办"，只说"你拿到的这些东西为什么长这样"。
+    //     用户自己写的说明仍然只是注解，不是约定。
+    //   - 为什么这句能过"不写机制"那条原则：它解释的不是宿主怎么算的，而是**模型眼前这份上下文
+    //     为什么缺了几样**（`## Scene: 编程` 分组、看不到别的场景的记忆、工具比别处少）。
+    //     这是它做判断时要用的事实，不是反推。
+    //   - 代价 ≈24 tok/轮，只在这一域。
+    title: 'Current scene',
+    how: "A scene is the user's working mode: the memories, prompt, tools and personas you are given are already filtered to this one.",
     supersede: SUPERSEDE_NOTE,
   },
   memory: {
-    title: '当前记忆',
+    title: 'Current memories',
     supersede: SUPERSEDE_NOTE,
   },
   mcp: {
-    title: '当前 MCP 服务器',
+    title: 'Current MCP servers',
     // how 只剩"怎么用备注"这半句：前半个分句「工具名是 `mcp__<服务器>__<工具>`」删掉了
     // —— 模型自己的工具表里就是这个命名（`mcp__context7__xxx`），告诉它格式是零信息量。
-    how: '带「用户提示：」的行是用户写给这台服务器的决策提示，选服务器之前先看一眼。',
+    //
+    // 2026-10-18 补两句（用户同一轮裁定：三个点了工具的域都要有触发条件）：
+    //   ① **什么时候想起这张表** —— 模型看不到 server 的连线状态，缺工具时它只会两种反应：
+    //      说"没有这个工具"，或反复重试。这一域存在的意义就是给它第三种（表里有、只是没连上）。
+    //   ② `not connected now` 那一档的读法 —— 不写清"此刻没有注册任何工具"，这一行会被读成
+    //      "可用但状态存疑"，于是它照旧去调一个必然失败的工具名。
+    //
+    // 同轮二次修正（用户：「mcp 如果用户没写备注不是白写了吗」）：两句**都改成按需发**。
+    // 上一版是常量串，于是"一台上线服务器、没有备注"这种最常见的情形里，整段 = 三行说明
+    // 解释一个不存在的东西 + 一行 `- **github**` —— 说明比内容长，且每轮都付。
+    // 现在：备注句只在真有备注时发，离线句只在真有 `not connected now` 档时发，两者都没有
+    // 就**不发行**（`undefined`）。正文只有名字时，标题加名字本身已经把话说完了。
+    how: ({ text }) => {
+      const parts: string[] = []
+      if (text.includes('user hint: ')) {
+        parts.push("`user hint:` marks the user's own note on that server — read it before choosing one.")
+      }
+      const offline = text.includes('(not connected now)')
+      const muted = text.includes('(no tools enabled here)')
+      // 两个状态标记合起来讲一次：各写一句会把"别当成缺失"重复两遍（2026-10-18 审查收口）。
+      if (offline && muted) {
+        parts.push('Status markers: `not connected now` = no tools registered right now; `no tools enabled here` = up, but every tool is switched off. Neither means the server is missing.')
+      } else if (offline) {
+        parts.push('A server marked `not connected now` registers no tools right now: check this list before telling the user a server is missing or a tool does not exist.')
+      } else if (muted) {
+        parts.push('A server marked `no tools enabled here` is up, but every one of its tools is switched off — do not report it as missing.')
+      }
+      return parts.length > 0 ? parts.join(' ') : undefined
+    },
     supersede: SUPERSEDE_NOTE,
   },
   skills: {
-    title: '当前技能目录',
+    title: 'Current skills',
     // 两句都只在预设没挂官方 `skill` 工具时出现，差别只在点名不点名那个取正文的工具
     // （工具被用户在兼容页关掉时不点名 —— 点名一个模型手里没有的工具只会让它去猜名字）。
-    how: (toolHidden) => toolHidden('skill_manager_read')
-      ? '本预设没有官方 `skill` 工具：目录只有摘要，读完再照做。'
-      : '本预设没有官方 `skill` 工具：要正文用 `skill_manager_read`（按名字直接给正文与路径）；目录只有摘要，读完再照做。',
-    supersede: `${SUPERSEDE_NOTE.slice(0, -1)}；只列当前可调用的技能。`,
+    //
+    // 2026-10-18 补「什么时候动手」这半句（用户对比官方 skill catalog 后提出模板太单薄）：
+    // 上一版只有"读完再用"（**已经决定用之后**的纪律），没有"任务对得上就去读"（**怎么想起它**）。
+    // 官方那条行两者都有（`if … the task clearly matches … call the skill tool … before taking
+    // task actions`），而这一域恰恰只在官方那条行**缺席**时才注入 —— 也就是模型手上既没有
+    // `skill` 工具、也没人告诉过它技能的调用时机，缺的正是这一句。同理补上"描述不是指令"
+    // （官方对应句 `do not infer or follow a skill's instructions until it has been loaded`），
+    // 免得它拿 500 字摘要当正文照做。
+    // 不点名工具那一支改说"没有装载入口"：上一版在那里仍写着"read a skill's body before
+    // following it"，等于让模型去读一份它根本读不到的东西。
+    //
+    // 首句定义（用户 2026-10-18 第二轮裁定"加"）：官方那条行以 `A skill is a reusable set of
+    // task-specific instructions.` 开头 —— 这句不是背景介绍，是后面两半句的**前提**：不懂"skill
+    // 是按需加载的任务指令集"时，"任务对得上就读正文"读不出任何动作，只会被理解成"一个名字 +
+    // 一句简介"。所以这里破例把定义放在动作句之前（正常纪律是先说要做什么，见 `SUPERSEDE_NOTE`
+    // 那段注释）；措辞照抄官方，模型对它有现成先验。**只在官方载体缺席时发**（本域的唯一条件），
+    // 官方在时整段不注入，不存在两份定义。
+    how: ({ toolHidden }) => toolHidden('skill_manager_read')
+      ? 'A skill is a reusable set of task-specific instructions. No official `skill` tool and no skill reader here: names and summaries only, and no way to load a body — treat them as a capability list, not as instructions.'
+      : 'A skill is a reusable set of task-specific instructions. No official `skill` tool here: when a task clearly matches one or the user names one, read its body with `skill_manager_read` before acting. Summaries only — never treat a description as instructions.',
+    // 英文下不能再靠 `slice(0, -1)` 拼句（那会把句末句点削掉，接出
+    // `…in this session Only skills…`）：整句照发，续句自带首字母大写。
+    // 边界陈述 2026-10-18 拆出来并改口：原来写 `Only currently callable skills are listed.`，
+    // 而取正文的工具被关掉时**一条都调不到**，那句话在那个分支里是假的。改成 `enabled`
+    // —— 两支都成立（它们确实都是"启用中"的），也不再依赖工具在不在手里。
+    supersede: SUPERSEDE_NOTE,
+    boundary: 'Only enabled skills are listed.',
   },
   subagents: {
-    title: '当前子智能体',
+    title: 'Current subagents',
     // 分界规则（2026-09-17 方案 C，本机实测 session-ee722e23 逼出来的）：官方那两个
     // 委派工具（`subagent` / `subagent_fork`）不带人设，而此前没有任何一句话说明何时该
     // 用谁 —— 模型在"审查刚读过的 README"时选了 `subagent_fork`（fork 能继承已读内容、
@@ -132,13 +233,24 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     // Modes 段与 `inherit` 参数说明里**各有一份**，三份都在每轮上下文里 = 同一件事付三次
     // token。留这两份（它们就在"要传这个参数"的那一刻），这里只留 how 行独有的那半句 ——
     // 与官方两个委派工具的分界规则。
-    how: (toolHidden) => toolHidden('subagent_manager_run')
-      ? '本会话没有带人设的委派工具；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。'
-      : '贴合人设的任务一律用 `subagent_manager_run`；官方 `subagent` / `subagent_fork` 不带人设，只在没有人设贴合、或要后台跑时用。',
+    // 2026-10-18 补触发条件（同上）：此前只说了"带人设的活走哪条通道"（选哪条），
+    // 没说"什么算带人设的活"（要不要委派）。**例子刻意不写**——`subagent_manager_run` 的描述里
+    // 已经有 "a review, an investigation, a piece of writing 且细节不必占自己的上下文"，两句写在同一份
+    // 上下文里就是同一件事付两次。
+    // 不点名那一支补"只能参考、调不到"：上一版只说官方那两个不带人设，而"目录里有人设 ≠
+    // 能委派"这层没人说 —— 模型会拿官方工具硬塞一个人设名进去。
+    how: ({ toolHidden }) => toolHidden('subagent_manager_run')
+      ? 'No persona-carrying delegation tool here; official `subagent` / `subagent_fork` carry no persona — use them only when none fits or for background work. The personas listed here are reference only, not callable.'
+      : 'Persona work goes through `subagent_manager_run` — when a task matches one of these personas, delegate it there. Official `subagent` / `subagent_fork` carry no persona; use them only when none fits or for background work.',
     supersede: SUPERSEDE_NOTE,
   },
   prompt: {
-    title: '当前提示词',
+    title: 'Current prompt',
+    // 2026-10-18（审查 E）：这一域此前只有 `Instructions from: <path>` 一行文件头，没有一句话
+    // 说明**这些规则是要遵循的**。记忆域有授权语、场景域有定义，唯独效力最强的这一域空着 ——
+    // 而官方那条行给的是**降权**措辞（"可作参考"），我们当初刻意没抄，于是等于什么都没说。
+    // 现在补一句正面的：要遵循，且用户当场说的优先。
+    how: 'These are the instructions in force for this machine; follow them unless the user says otherwise in this conversation.',
     supersede: SUPERSEDE_NOTE,
   },
 }
@@ -159,7 +271,7 @@ export const HOW_NAMED_TOOLS: readonly string[] = ['skill_manager_read', 'subage
 
 /** 域声明里没登记的 key（理论上到不了这里）：给一个不出错的通用框架。 */
 export const fallbackFrame = (label: string): DomainFrame => ({
-  title: `当前的${label}`,
+  title: `Current ${label}`,
   supersede: SUPERSEDE_NOTE,
 })
 
@@ -207,34 +319,58 @@ export function escapeFrameBody(body: string): string {
  *     同时把**正文也包进标记里**（此前只有引导语在标记内、正文裸奔）—— 官方两条注入行都是
  *     整条包住的，正文里的用户自由文本更需要这层来源标记。
  */
-export function renderDomainText(section: InjectSection, toolHidden: (name: string) => boolean = () => false): string {
+export function renderDomainText(
+  section: InjectSection,
+  toolHidden: (name: string) => boolean = () => false,
+  replacing: boolean = true,
+): string {
   const frame = domainFrame(section.key, section.label)
   // 层级（2026-09-23 用户看到实际注入后指出「记忆内的场景怎么都是 ## 标题」）：**`#` 一级给板块**
   // （场景 / 记忆 / MCP / 技能 / 子智能体 / 提示词），域正文里的 `##` 才是它的下一层
-  // （记忆段的 `## 场景：X`、超预算时的 `## 未注入的参考信息`）。此前标题也是 `##`，两者平级，
+  // （记忆段的 `## Scene: X`、超预算时的 `## Not injected (…)`）。此前标题也是 `##`，两者平级，
   // 模型读不出主次 —— 而"哪些内容归在哪个板块/场景下"正是它做判断时要用的结构。
   //
   // 开标签后**必须空一行**：markdown 里 `#` 紧跟在一行文字后面只是**段落续行**，不会被渲染成
   // 标题 —— 用户截图里 `## 本机当前的场景` 就是这么被吞掉的（和 `<system-reminder>` 挤成一段）。
   // 收尾同理：正文末尾先归一成单个空行，免得 `</system-reminder>` 粘在最后一行上。
-  // 结构：标题 → 补充说明（有才发）→ 权威声明 → 正文。没有 cue 那一行（见 `DomainFrame` 的注释）。
+  // 结构：标题 → 补充说明（有才发）→ 权威声明（只在替换时）→ 边界陈述（有才发）→ 正文。
+  // 没有 cue 那一行（见 `DomainFrame` 的注释）。
+  const info: FrameRenderInfo = { toolHidden, text: section.text, replacing }
   const lines = [FRAME_OPEN, '', `# ${frame.title}`]
-  const how = typeof frame.how === 'function' ? frame.how(toolHidden) : frame.how
+  const how = typeof frame.how === 'function' ? frame.how(info) : frame.how
   if (how !== undefined) lines.push(how)
-  lines.push(frame.supersede, '', escapeFrameBody(section.text).replace(/\n+$/, ''), '', FRAME_CLOSE)
+  // 权威声明只在**替换**时发（2026-10-18 审查 D）：本会话的第一份没有旧内容可取代，那句话
+  // 只是占一行。边界陈述反过来 —— 它不依赖"有没有旧的"，第一份就要发。
+  if (replacing) lines.push(frame.supersede)
+  if (frame.boundary !== undefined) lines.push(frame.boundary)
+  lines.push('', escapeFrameBody(section.text).replace(/\n+$/, ''), '', FRAME_CLOSE)
   return lines.join('\n')
 }
 
 /** 「已清空」通知正文：某个域曾经注入过、现在没有内容时发一条（纯函数，测试用）。 */
-export function clearedDomainText(key: InjectDomainKey, label: string): string {
+export function clearedDomainText(key: InjectDomainKey, label: string, reason?: string): string {
   const frame = domainFrame(key, label)
+  // 通知的措辞按**原因**分叉（2026-10-18 审查）。原来只有一句「同一类内容不再有效」，
+  // 而"这一域为什么消失"有四种，其中一种下那句话是**假话**：
+  //   - `official`：官方载体接管了（技能目录由 `dsh-tool-skill` 送、提示词由
+  //     `dsh-agent-instructions` 送）。此时同类内容**仍然有效、而且更强**，只是换了个发送方。
+  //     说"不再有效"会让模型把官方那一份也当成作废 —— 标准预设里这正是最常见的一次切换。
+  //   - `empty`：真的没有内容了（全部删掉 / 场景切走）。原来的话在这里是对的。
+  //   - `off` / `child`：是**故意不送**（用户关掉这一域，或该域不适用于子会话），内容本身
+  //     可能还在，所以只能说"不再展示"，不能说"不存在"。
+  //   - `error` 走不到这里：那条路径刻意不发「已清空」（见调用方注释）。
+  const body = reason === 'official'
+    ? '**Replaced** — the official channel now sends this content; earlier injected content of the same kind is stale.'
+    : reason === 'off' || reason === 'child'
+      ? '**Cleared** — this reminder is not sent here; earlier injected content of the same kind no longer applies.'
+      : '**Cleared** — earlier injected content of the same kind no longer applies.'
   // 形状与 `renderDomainText` 一致（开标签后空行、板块 `#`、收尾空行）—— 这两条都是同一个
   // 通道发出去的消息，层级与留白不该有两套。
   return [
     FRAME_OPEN,
     '',
     `# ${frame.title}`,
-    '**已清空** —— 本次会话中此前注入的同类内容不再有效。',
+    body,
     '',
     FRAME_CLOSE,
   ].join('\n')

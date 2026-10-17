@@ -97,7 +97,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
   try {
     register(deps.defineTool({
       name: 'subagent_manager_switch',
-      description: 'Enable or disable one persona. Only enabled personas appear in the「当前子智能体」catalog and can be given work. Reversible. Only when the user asks or approves.',
+      description: 'Enable or disable one persona. Only enabled personas appear in the "Current subagents" catalog and can be given work. Reversible. Only when the user asks or approves.',
       parameters: {
         name: { type: 'string', required: true, description: 'Persona name.' },
         enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable; omission is refused.' },
@@ -108,12 +108,12 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
         if (blocked) throw new Error(blocked)
         const name = String((args && args.name) || '').trim()
         const r: any = await ops()['subagent-toggle']({ name, enabled: args.enabled === true })
-        if (!r || r.ok === false) throw new Error((r && r.error) || '切换人设启停失败')
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to toggle the persona')
         // 场景内改开关要同步进当前场景档案（与 HTTP 层 syncsArchive 同一口径 —— 模型工具
         // 直接调 service op，绕过了那一层包装，所以这里自己叫一声）。
         const syncErr = await deps.syncSwitchToScene('subagent-toggle', { name, enabled: args.enabled === true })
         return 'OK: persona ' + name + ' ' + (args.enabled === true ? 'enabled' : 'disabled') +
-          (syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : '')
+          (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '')
       },
     }))
   } catch (e) {
@@ -153,11 +153,11 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
         // 高级字段的形状校验：填错会在 op 侧**静默**（`serializePersona` 对非数组 `tools`
         // 是"当空处理"，等于把用户原有的名单清掉）。在这里先挡一句。
         if (args && args.continuable !== undefined && typeof args.continuable !== 'boolean') {
-          throw new Error('continuable 必须是 true 或 false')
+          throw new Error('continuable must be true or false')
         }
         for (const k of ['tools', 'toolsDeny']) {
           if (args && args[k] !== undefined && !Array.isArray(args[k])) {
-            throw new Error(k + ' 必须是字符串数组（[] = 清空）')
+            throw new Error(k + ' must be an array of strings ([] = clear)')
           }
         }
         const current: any = await ops()['subagent-get']({ name })
@@ -170,16 +170,16 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
             description === '' ? 'description' : '',
             body === '' ? 'body' : '',
           ].filter((x) => x !== '')
-          if (missing.length) throw new Error('新建人设必须给 ' + missing.join(' 与 ') + '（' + name + ' 还不存在）')
+          if (missing.length) throw new Error('creating a persona needs ' + missing.join(' and ') + ' (' + name + ' does not exist yet)')
           const r: any = await ops()['subagent-create']({ name, description: args.description, body: args.body, output: args.output, ...advancedArgs(args) })
-          if (!r || r.ok === false) throw new Error((r && r.error) || '创建人设失败')
+          if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to create the persona')
           // 新建的人设默认停用（与 MCP / 技能同口径）。这句必须留：不说的话模型会直接去委派，
           // 然后收到"人设不可用"，而它并不知道自己少拨了一个开关。点名的 subagent_manager_switch
           // 在出厂默认名单里就是关着的 —— 关着就改说"用户启用后才能委派"，别指一条模型没有的
           // 工具（与 mcp/skill 的 listHint 同一条纪律）。
           const enableHint = deps.toolVisible('subagent_manager_switch')
-            ? '（默认未启用，要委派它先 subagent_manager_switch）'
-            : '（默认未启用，用户启用后才能委派）'
+            ? ' (created disabled; use subagent_manager_switch to enable it before delegating)'
+            : ' (created disabled; the user has to enable it before you can delegate)'
           return 'OK: persona ' + String(r.name || name) + ' created' + enableHint
         }
         const keep = current.persona || {}
@@ -190,7 +190,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
         for (const k of ['nextName', 'description', 'body', 'output', ...ADVANCED_FIELDS]) {
           if (args && args[k] !== undefined) touched.push(k)
         }
-        if (!touched.length) throw new Error('没有要改的东西：description / body / output / nextName 或任一高级字段至少给一个')
+        if (!touched.length) throw new Error('nothing to change: pass at least one of description / body / output / nextName or any advanced field')
         const merged = {
           name,
           nextName: args.nextName,
@@ -210,9 +210,9 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
           catalogDepth: keep.catalogDepth,
         }
         const r: any = await ops()['subagent-update'](merged)
-        if (!r || r.ok === false) throw new Error((r && r.error) || '更新人设失败')
-        return 'OK: persona ' + String(r.name || name) + ' updated（改了 ' + touched.join('、') + '）' +
-          (r.renamedFrom ? ' — 原名「' + r.renamedFrom + '」,场景档案里的绑定已一起改名' : '')
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to update the persona')
+        return 'OK: persona ' + String(r.name || name) + ' updated (changed ' + touched.join(', ') + ')' +
+          (r.renamedFrom ? ' — was named "' + r.renamedFrom + '"; the scene-archive binding was renamed too' : '')
       },
     }))
   } catch (e) {

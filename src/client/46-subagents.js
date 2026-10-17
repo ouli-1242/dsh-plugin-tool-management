@@ -909,8 +909,8 @@
                       //
                       // 目录注入深度：人设目录注入到哪些会话（默认 1 = 只在顶层）。
                       // ⚠️ 它**不是**递归上限。2026-09-17 用户实测后改名（原名 maxDepth /「委派预算」）：
-                      // 官方 `dsh-tool-subagent` 默认 `maxDepth: 3`，子代理本来就能继续嵌套，本插件
-                      // 也不再向官方传 maxDepth。这个字段只决定常驻目录出现在哪些深度的会话里。
+                      // 官方按自己的 `maxDepth` 配置决定能不能继续嵌套（0.2.1 默认 1），本插件也不再
+                      // 向官方传 maxDepth。这个字段只决定常驻目录出现在哪些深度的会话里。
                       React.createElement('div', { className: 'dsm-field-row' },
                         React.createElement('div', { className: 'dsm-field' },
                           React.createElement('span', { className: 'dsm-label' }, t('subagents.field.catalogDepth')),

@@ -87,9 +87,10 @@ export function installHttpApi(deps: HttpApiDeps): void {
       req.on('error', reject)
     })
     // 宿主 BrowserAuth 栅栏。宿主的鉴权**只包在它自己注册的路由上**——dsh-host-webserver
-    // 没有全局中间件，既定约定是每个注册方自己调 connection.requestRejection(req)：
+    // 没有全局中间件，既定约定是每个注册方自己调 connection.admit(req)：
     // 它先做 Host/Origin 栅栏（Host 必须是回环或 deployment 派生的 LAN IP 字面量，
-    // 这是 DNS rebinding 唯一伪造不了的头），再叠加 browser-session cookie 鉴权。
+    // 这是 DNS rebinding 唯一伪造不了的头），再叠加 browser-session cookie 鉴权，
+    // 并交回这次请求所代表的 Peer（本路由是 exact 路由，只服务 owner Peer）。
     // 本插件此前只查公开常量 x-dsh-plugin 与自比对（Origin.host === Host）的 "同源"，
     // 两者都挡不住 rebind 后的网页或本机任意进程 —— 等于没鉴权。现在优先走宿主栅栏。
     const connection = ((): ConnectionSeam | undefined => {

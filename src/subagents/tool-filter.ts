@@ -64,15 +64,15 @@ export function decideToolFilter(
     const usable = reserved.kept
     const dropped = rule.names.filter((name) => !known.names.has(name))
     const notes: string[] = []
-    if (dropped.length) notes.push(`名单里这些工具当前不存在，已忽略：${dropped.join('、')}`)
+    if (dropped.length) notes.push(`these tools in the list do not exist right now and were ignored: ${dropped.join(', ')}`)
     if (reserved.dropped.length) {
-      notes.push(`名单里的 ${reserved.dropped.join('、')} 是官方保留名（写进工具限制会让子代理直接起不来），已忽略`)
+      notes.push(`${reserved.dropped.join(', ')} in the list are reserved official names (writing them into the tool restriction would stop the subagent from starting at all) and were ignored`)
     }
     if (!usable.length) {
-      const note = notes.length ? notes.join('；') : undefined
-      return { filter: null, note: note ?? `「${presetId}」的${rule.mode === 'allow' ? '白' : '黑'}名单里没有当前存在的工具，本次不施加工具限制` }
+      const note = notes.length ? notes.join('; ') : undefined
+      return { filter: null, note: note ?? `the ${rule.mode === 'allow' ? 'allow' : 'deny'} list of "${presetId}" contains no tool that exists right now, so no tool restriction is applied this time` }
     }
-    const droppedNote = notes.length ? notes.join('；') : undefined
+    const droppedNote = notes.length ? notes.join('; ') : undefined
     if (rule.mode === 'allow') return { filter: { allow: [...new Set([...usable, ...known.mcp])] }, ...(droppedNote === undefined ? {} : { note: droppedNote }) }
     return { filter: { deny: usable }, ...(droppedNote === undefined ? {} : { note: droppedNote }) }
   }
@@ -92,16 +92,16 @@ export function decideToolFilter(
   if (presetId === null) {
     // 说清这一刻到底靠什么在跑：有旧格式就照旧格式，没有就明说"按模式配的限制这次不生效"。
     notes.push(hasLegacy
-      ? '没能判断当前会话的 Agent 预设，按旧格式的全局名单执行'
-      : '没能判断当前会话的 Agent 预设，按模式配的限制这次不生效')
+      ? 'could not determine the agent preset of this session; running the legacy global list instead'
+      : 'could not determine the agent preset of this session; the mode-scoped restriction does not apply this time')
   }
-  if (legacyDropped.length) notes.push(`名单里这些工具当前不存在，已忽略：${legacyDropped.join('、')}`)
+  if (legacyDropped.length) notes.push(`these tools in the list do not exist right now and were ignored: ${legacyDropped.join(', ')}`)
   if (legacyReserved.dropped.length) {
-    notes.push(`名单里的 ${legacyReserved.dropped.join('、')} 是官方保留名（写进工具限制会让子代理直接起不来），已忽略`)
+    notes.push(`${legacyReserved.dropped.join(', ')} in the list are reserved official names (writing them into the tool restriction would stop the subagent from starting at all) and were ignored`)
   }
   if (!Object.keys(filter).length) {
-    if (presetId === null && !notes.length) notes.push('没能判断当前会话的 Agent 预设，本次不施加工具限制')
-    return { filter: null, ...(notes.length ? { note: notes.join('；') } : {}) }
+    if (presetId === null && !notes.length) notes.push('could not determine the agent preset of this session; no tool restriction is applied this time')
+    return { filter: null, ...(notes.length ? { note: notes.join('; ') } : {}) }
   }
-  return { filter, ...(notes.length ? { note: notes.join('；') } : {}) }
+  return { filter, ...(notes.length ? { note: notes.join('; ') } : {}) }
 }

@@ -13,7 +13,7 @@ export interface CapabilityFinding {
   readonly label: string
   readonly kind: 'read' | 'write' | 'delete'
   /** Which host service the capability lives on. */
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs' | 'plugin'
+  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs' | 'tools' | 'agentContext' | 'connection' | 'plugin'
   readonly state: CapabilityState
   /** What can be done without this capability. */
   readonly fallback:
@@ -142,6 +142,37 @@ export interface HostAssessment {
   /** True when the delete operation has a viable route (native or adapter). */
   readonly mayDelete: boolean
   readonly generatedAt: number
+  /**
+   * 宿主**非 peer** 契约的实况（`compat/host-contracts.ts` 那份清单的运行时探测量）。
+   *
+   * 与 `findings` 的分工：那一张表是"本插件通过 `ctx.get` 拿到的宿主服务"，服务不在场就探测
+   * 不到；这一份是"插件按裸模块名 require 的官方包"，它们在**模块层**而不是服务层，所以服务
+   * 在场与否与它们无关。两者都是"升级后可能悄悄少一块"的来源，界面一起列出来。
+   *
+   * `undefined` = 本轮没量（例如找不到宿主安装锚点）。界面据此显示"判断不了"，而不是"正常"。
+   */
+  readonly contracts?: HostContractStatus
+}
+
+/** 一个"裸模块名"包在宿主侧的实况。 */
+export interface HostContractPackageStatus {
+  /** 官方包名。 */
+  readonly package: string
+  /** 失去它时受影响的功能。 */
+  readonly feature: string
+  /** 从宿主安装锚点解析到的入口；`null` = 宿主不再暴露这个包。 */
+  readonly resolved: string | null
+  /** 入口里缺失的 canary 标识符（空数组 = 都在）。 */
+  readonly missingMarkers: readonly string[]
+}
+
+/** 宿主非 peer 契约的整体实况。 */
+export interface HostContractStatus {
+  readonly packages: readonly HostContractPackageStatus[]
+  /** 宿主不再暴露的包（功能静默降级的来源）。 */
+  readonly missing: readonly string[]
+  /** canary 缺失的包（契约可能已漂移，需人工复核）。 */
+  readonly drifted: ReadonlyArray<{ readonly package: string; readonly missingMarkers: readonly string[] }>
 }
 
 /** A capability the current operation needs but the host cannot provide. */

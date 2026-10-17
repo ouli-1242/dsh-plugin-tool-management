@@ -598,6 +598,10 @@
           case 'sessions.cold-announce': return t('compat.cap.sessionsColdAnnounce')
           case 'projection.write': return t('compat.cap.projectionWrite')
           case 'projection.table-delete': return t('compat.cap.projectionTableDelete')
+          case 'agentPreset.register': return t('compat.cap.agentPresetRegister')
+          case 'tools.restrict-method': return t('compat.cap.toolsRestrictMethod')
+          case 'agent.created-event': return t('compat.cap.agentCreatedEvent')
+          case 'connection.admit': return t('compat.cap.connectionAdmit')
           case 'archive': return t('compat.cap.opArchive')
           case 'unarchive': return t('compat.cap.opUnarchive')
           case 'batch': return t('compat.cap.opBatch')
@@ -633,6 +637,10 @@
           case 'prompts': return t('compat.ov.prompts')
           case 'subagents': return t('compat.ov.subagents')
           case 'scenes': return t('compat.ov.scenes')
+          case 'subagent-persona': return t('compat.ov.subagentPersona')
+          case 'subagent-tool-restrict': return t('compat.ov.subagentToolRestrict')
+          case 'subagent-created-event': return t('compat.ov.subagentCreatedEvent')
+          case 'web-admission': return t('compat.ov.webAdmission')
           default: return null
         }
       }
@@ -717,8 +725,17 @@
           if (row.asarHost) return t('compat.ov.hostIdentity.asar', { version: row.version, name: row.asarName || 'app.asar' })
           return t('compat.ov.hostIdentity.ok', { version: row.version })
         }
+        if (row.key === 'subagent-persona' || row.key === 'subagent-tool-restrict' || row.key === 'subagent-created-event' || row.key === 'web-admission') {
+          // 宿主契约行：可用时说的是"运行时看到的那份实现"（它的 detail 由探针写成"成员齐备"），
+          // 降级时说的是"这条契约没了，对应功能少一半"——两个方向都得按语言说。
+          return row.state === 'unknown' ? t('compat.ov.route.unknown')
+            : row.state === 'ok' ? t('compat.ov.contract.ok')
+              : t('compat.ov.contract.degraded', { detail: row.detail })
+        }
         if (row.state === 'ok' && (row.key === 'memory' || row.key === 'prompts' || row.key === 'subagents' || row.key === 'scenes')) {
-          return t('compat.ov.plain.ok')
+          // 有宿主模块可核的域（提示词 / 子智能体）按实况说；确实没有可核对象的才说"无降级上报"。
+          if (row.key === 'memory' || row.key === 'scenes') return t('compat.ov.plain.ok')
+          return t('compat.ov.domain.contract', { detail: row.detail })
         }
         return row.detail
       }
@@ -1393,7 +1410,8 @@
           card(t('compat.caps'), String(usableCount) + '/' + String(findings.length), capsNote, degraded.length > 0)))
 
         // 版本栅栏（B3）：实际宿主与本插件验证过的版本不同时说出来 —— 否则"照旧版本的印象
-        // 判断"会让人把探测结果当成 bug。只提示、不拦（peer 保持无上界是既定决策）。
+        // 判断"会让人把探测结果当成 bug。只提示、不拦（peer 的上界只管**安装期**收不收，
+        // 这里管的是"已经跑起来了，版本对不上要说一声"：同代的 rc 差异提示一次即可）。
         const hostVersion = (data.host && data.host.version) || ''
         if (hostVersion && data.verifiedVersion && hostVersion !== data.verifiedVersion) {
           push(React.createElement('p', { className: 'dsm-help' },
@@ -1435,6 +1453,24 @@
                 blockers.map(function (item, i) { return React.createElement('li', { key: i }, item) })))))
         }
 
+        // 宿主契约（0.2.1 新增的三处适配面 + Web 连接准入）：这几条在能力表里是**必填项**，
+        // 不是"宿主没有、插件自己顶上"的可选槽。缺了不抛错，只是功能少一半 —— 所以单独一块
+        // 列出来，让"升级后某处悄悄不工作"有一个显眼的位置。
+        const contractFindings = findings.filter(function (item) {
+          return CONTRACT_CAPABILITY_IDS.indexOf(item.id) !== -1 && item.state !== 'ok'
+        })
+        push(section(t('compat.contracts'), t('compat.contracts.hint'),
+          contractFindings.length === 0
+            ? React.createElement('p', { className: 'dsm-help' }, t('compat.contracts.allOk'))
+            : React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+                contractFindings.map(function (item) {
+                  return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.id },
+                    React.createElement('span', { className: 'dsm-compat-name' }, capLabel(item.id, item.label)),
+                    React.createElement('span', { className: 'dsm-compat-pill dsm-compat-pill-warn' }, t('compat.contracts.missing')),
+                    React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
+                      React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')), item.detail))
+                }))))
+
         // 动作可用性：一行一个动作 + 路径标记（不可用的标红）。
         push(section(t('compat.ops'), t('compat.ops.hint'),
           React.createElement('div', { className: 'dsm-compat-mod-list' },
@@ -1474,6 +1510,10 @@
         // 其它非 ok 项：`optional` 表示"宿主没有这个入口，插件自己顶上"——功能完好，
         // 既不算降级，也不能说按钮被禁用（那句只对真降级成立；早先把两者混在一起
         // 会让用户以为删除功能坏了，实际它照常可用）。
+        //
+        // 与上面「宿主契约」那块的区别：这里的条目缺了，插件**自有等价实现**（适配路完整可用）；
+        // 那块的条目缺了，没有替代实现，功能就是少一半。两块都是"非 ok"，但后果不同，
+        // 所以分开显示、各自的胶囊文案也不同。
         const optionalAbsent = findings.filter(function (item) { return item.state !== 'ok' && item.optional === true })
         if (optionalAbsent.length) {
           push(section(t('compat.others'), t('compat.others.hint'),
@@ -1519,6 +1559,31 @@
                 React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, name),
                 React.createElement('span', { className: 'dsm-compat-pill ' + cls }, text))
             }))))
+
+        // 裸模块解析（与上面那一块的分工：上面比的是**同一份物理模块**，这里看的是**包还在不在**）。
+        //
+        // 为什么分开：上面那 6 个包是插件的 peerDependency，「两份不同拷贝」那种故障只可能发生在
+        // 它们身上；而下面这 4 个包是插件按**裸模块名**在运行时 require 的官方包，宿主不要求插件
+        // 依赖它们。官方撤掉其中一个，对应功能静默降级，而身份比对那一栏根本看不见它们 —— 所以
+        // 必须在这里列一行。canary 缺失不是「包坏了」，是「该人工复核这条契约」，显示成提示而非红色。
+        const contractPackages = (data && data.contracts && data.contracts.packages) || []
+        if (contractPackages.length) {
+          push(section(t('compat.bareModules'), t('compat.bareModules.hint'),
+            React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+              contractPackages.map(function (item) {
+                const missing = item.resolved === null
+                const drifted = !missing && (item.missingMarkers || []).length > 0
+                return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.package },
+                  React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, item.package),
+                  React.createElement('span', { className: 'dsm-compat-pill ' + (missing ? 'dsm-compat-pill-bad' : drifted ? 'dsm-compat-pill-warn' : 'dsm-compat-pill-ok') },
+                    missing ? t('compat.bareModules.absent') : drifted ? t('compat.bareModules.drift') : t('compat.bareModules.present')),
+                  React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
+                    React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')),
+                    missing ? t('compat.bareModules.absentWhy', { feature: item.feature })
+                      : drifted ? t('compat.bareModules.driftWhy', { feature: item.feature, markers: (item.missingMarkers || []).join('、') })
+                        : t('compat.bareModules.presentWhy', { feature: item.feature })))
+              }))))
+        }
 
         // 「无法比对」必须给原因：否则一排未知标记看起来只是噪音，用户会当成正常现象。
         // 归档宿主的说明排最前 —— 它解释的正是这一排「无法比较」的成因，而且必须讲明白

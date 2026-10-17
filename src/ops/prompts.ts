@@ -5,6 +5,9 @@
 
 import type { createPromptsService } from '../prompts/service.js'
 import type { createScenePromptSync } from '../scene-prompt-sync.js'
+import { resolveAgentsHome } from '../skills/homes.js'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 type PromptsServiceLike = ReturnType<typeof createPromptsService>
 type ScenePromptSyncLike = ReturnType<typeof createScenePromptSync>
@@ -27,6 +30,22 @@ export interface PromptOpsDeps {
 }
 
 export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) => Promise<any>> {
+  /**
+   * 共享 agents 根的 `AGENTS.md`（`~/.agents/AGENTS.md`）。
+   *
+   * 0.2.1 起这条文件**也在被注入**：官方 `dsh-agent-instructions` 的用户全局链是
+   * `$DSH_HOME/AGENTS.md` → `<agentsHome>/AGENTS.md` 两份并列（内容相同只渲染一次），
+   * 而本插件的提示词页只管得到第一份。于是"我改了什么都没变化"有了第二个成因：
+   * 真正在说话的是第二份。这里只回答**它在不在、路径在哪**，不提供写入入口 ——
+   * 写入会与官方自己的去重/刷新规则互相覆盖，而这份文件的读者还包括别的 agent 工具。
+   */
+  const agentsHomeAgentsMd = (): { path: string; exists: boolean } => {
+    const path = join(resolveAgentsHome(), 'AGENTS.md')
+    let exists = false
+    try { exists = existsSync(path) } catch { /* 读不到 = 当作不在，不阻塞列表 */ }
+    return { path, exists }
+  }
+
   return {
     // 提示词预设库（由 ../prompts/service.ts 提供）。这里把两件事对齐成用户看到的一份状态：
     //   - `active`（界面「生效中」）= **当前真正在起作用的基线**：启用的场景绑了预设就是它，
@@ -61,7 +80,7 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
           refs: refs ? refs.get(p.id) || [] : [],
         }
       })
-      return { ...base, presets, ...(scenePrompt ? { scenePrompt } : {}) }
+      return { ...base, presets, ...(scenePrompt ? { scenePrompt } : {}), agentsHomeAgentsMd: agentsHomeAgentsMd() }
     },
     'agentsmd-read': (args: any) => deps.promptsService.read(String((args && args.id) || '')),
     // content 与 from 都可选：新建弹窗里直接写正文（content），或从现有预设复制（from）。
@@ -130,7 +149,13 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
       }
       return res
     },
-    'agentsmd-get-current': () => deps.promptsService.getCurrent(),
+    // 与 `agentsmd-list` 同一份事实：两处都要展示"共享 agents 根那一份在不在"（列表用来
+    // 提示，当前页用来对照），分成两个实现必然会出现"列表说在、当前页说不在"。
+    'agentsmd-get-current': async () => {
+      const res = await deps.promptsService.getCurrent()
+      if (!res || res.ok === false) return res
+      return { ...res, agentsHomeAgentsMd: agentsHomeAgentsMd() }
+    },
     // 删除：**场景绑定**与**当前应用的那份**拦得住（判据见下方注释）。拒绝时逐条说明「谁在用」，
     // 用户知道该先改哪里。引用清单由 scene-prompt-sync 与显示/注入同源算出。
     //

@@ -37,7 +37,7 @@ export const DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH = 500
 export const DEFAULT_CATALOG_MAX_ENTRIES = 50
 
 /** 无描述时的占位，与 `subagent_manager_list` 工具的输出保持同一口径。 */
-const NO_DESCRIPTION = '(无描述)'
+const NO_DESCRIPTION = '(no description)'
 
 /**
  * 描述归一化 + 截断 —— 逐字对齐官方 `dsh-tool-skill` 的实现：
@@ -86,12 +86,12 @@ export function renderSubagentCatalog(
   const out = [...lines]
   // 查询工具**只在真被 40 条上限截掉时**才出现：常态下不提，省常驻字符，也免得模型为了
   // 「确认一遍」去调它（用户裁定：没列出来的就是当前不想要的）。与 MCP 状态段的
-  // `（另有 N 台未列出。）` 同一句式，但这里多给一个出口——不给人设就真的找不回来了。
+  // `(${N} more not listed.)` 同一句式，但这里多给一个出口——不给人设就真的找不回来了。
   if (hidden > 0) {
     // 与技能目录同一条纪律：点名一个被关掉的工具只会让模型去猜名字。数量照报。
     out.push('', listToolVisible
-      ? `（另有 ${hidden} 个未列出，用 \`subagent_manager_list\` 查。）`
-      : `（另有 ${hidden} 个未列出。）`)
+      ? `(${hidden} more not listed — see them with \`subagent_manager_list\`.)`
+      : `(${hidden} more not listed.)`)
   }
   return out.join('\n')
 }

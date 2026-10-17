@@ -23,7 +23,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
     // （2026-10-15 注入文本审查）：可行动的那半句已经写在 `skill_manager_read` 的描述里
     // （"Not sent when the official `skill` tool is mounted — use that instead."），
     // 这里再预告一遍同一个条件，只是同一件事付两次 token。
-    description: 'List skills with enabled state, effective/shadowed status and source file path. The「当前技能目录」reminder carries callable skills and summaries only; use this for entries that are off, for each entry\'s source-file path, and to see which source wins a name collision. Defaults to enabled only; all=true for every entry. A copy marked "shadowed-by:<root>" stays inactive even if enabled; "preferred" marks the copy that wins a name collision.',
+    description: 'List skills with enabled state, effective/shadowed status and source file path. The "Current skills" reminder carries callable skills and summaries only; use this for entries that are off, for each entry\'s source-file path, and to see which source wins a name collision. Defaults to enabled only; all=true for every entry. A copy marked "shadowed-by:<root>" stays inactive even if enabled; "preferred" marks the copy that wins a name collision.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled and shadowed entries (default false).' },
     },
@@ -90,7 +90,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
   // 已在上面标出胜出者），再走 `skill-detail` 读那一份 —— 读到的永远是目录列出来的那一份。
   register(defineTool({
     name: 'skill_manager_read',
-    description: 'Read one skill\'s full SKILL.md body by name — what the「当前技能目录」reminder deliberately leaves out (it has names and summaries only). Also lists the other files living in that skill folder (references/, scripts/), which the body often points at. Resolves name collisions the same way, so you get the copy actually in effect; pass root only to inspect a specific (e.g. shadowed) source. Not sent when the official `skill` tool is mounted — use that instead.',
+    description: 'Read one skill\'s full SKILL.md body by name — what the "Current skills" reminder deliberately leaves out (it has names and summaries only). Also lists the other files living in that skill folder (references/, scripts/), which the body often points at. Resolves name collisions the same way, so you get the copy actually in effect; pass root only to inspect a specific (e.g. shadowed) source. Not sent when the official `skill` tool is mounted — use that instead.',
     parameters: {
       name: { type: 'string', required: true, description: 'Skill name, exactly as it appears in the catalog (kebab-case).' },
       root: { type: 'string', description: 'Source root key (dsh/hub/agents/codex/claude, a project key, or a custom one). Default: the winning copy of this name.' },
@@ -201,29 +201,29 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       // 恰恰是最容易猜错的一格（要选赢的往往是**非 dsh** 那一份），所以这里不接受默认值。
       const preferGiven = Boolean(args && args.prefer !== undefined)
       const prefer = args && args.prefer === true
-      if (preferGiven && typeof args.prefer !== 'boolean') throw new Error('prefer 必须是 true 或 false')
-      if (name && source) throw new Error('name 与 source 只能给一个：name 是单个技能，source 是整个来源目录')
-      if (preferGiven && source) throw new Error('prefer 只对单个技能有意义：给 name，不要给 source')
-      if (!name && !source) throw new Error('缺少参数：name（单个技能）或 source（整个来源目录）')
-      if (preferGiven && !name) throw new Error('缺少参数：prefer 需要 name')
+      if (preferGiven && typeof args.prefer !== 'boolean') throw new Error('prefer must be true or false')
+      if (name && source) throw new Error('give either name or source, not both: name is one skill, source is a whole source folder')
+      if (preferGiven && source) throw new Error('prefer only makes sense for a single skill: pass name, not source')
+      if (!name && !source) throw new Error('missing argument: name (one skill) or source (a whole source folder)')
+      if (preferGiven && !name) throw new Error('missing argument: prefer needs name')
       if (preferGiven && String((args && args.root) || '').trim() === '') {
-        throw new Error('prefer 需要 root：明确指定哪一份同名副本胜出（dsh / hub / agents / codex / claude 或项目键）')
+        throw new Error('prefer needs root: name the copy that should win this collision (dsh / hub / agents / codex / claude or a project key)')
       }
       // 两个动作一个都没给就拒：`args.enabled ? enable : disable` 会把"忘了给"静默当成"停用"。
       if (args.enabled === undefined && !preferGiven) {
-        throw new Error('缺少参数：enabled 必须是 true 或 false（只想改同名首选就传 prefer）')
+        throw new Error('missing argument: enabled must be true or false (pass prefer if you only want to change which copy wins the collision)')
       }
       if (source) {
         // 来源级启停：登记表里 `skill-source-enable` / `skill-source-disable` 都是
         // `{ serviceWrite, frozen, syncsArchive }`，所以守卫已过、档案也要同步
         // —— 同步的入参是 `{ root }`（来源级没有独立字段，档案靠"来源下有没有被勾的技能"反推）。
-        if (args.root !== undefined) throw new Error('source 已经是来源级的键，不要再给 root')
+        if (args.root !== undefined) throw new Error('source is already a source-level key; do not pass root with it')
         const op = args.enabled ? 'skill-source-enable' : 'skill-source-disable'
         const r = await deps.skillsOps[op]({ root: source })
         if (!r || r.ok === false) throw new Error((r && r.error) || 'skill source toggle failed')
         const syncErr = await deps.syncSwitchToScene(op, { root: source, enabled: args.enabled === true })
         return 'OK: source ' + source + ' now ' + (args.enabled ? 'enabled' : 'disabled') +
-          (syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : '')
+          (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '')
       }
       // 不给 root 就在全部来源里找（2026-10-15 smoke-test P0-1）：`skill_manager_save` 的落点
       // 是 hub（`tool-management/skills/`），而这里的默认值原本是 dsh —— 「建完就启用」这条
@@ -237,7 +237,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         // 探得到、就是没这个技能：当场把"查过哪些来源"说清楚。否则模型收到 op 那句不带
         // 来源信息的「技能不存在」后，只能猜该传哪个 root（smoke-test P1-4-old 同一处）。
         if (found.ok) {
-          throw new Error('技能不存在: ' + name + (found.roots.length ? '（已查 ' + found.roots.join('、') + '）' : ''))
+          throw new Error('no such skill: ' + name + (found.roots.length ? ' (searched ' + found.roots.join(', ') + ')' : ''))
         }
         // 探不到（skill-state 失败）就别在这里编结论：退回旧默认，交给 op 报它自己的错。
         return 'dsh'
@@ -250,7 +250,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       if (preferGiven) {
         const op = prefer ? 'skill-prefer' : 'skill-unprefer'
         const p: any = await deps.skillsOps[op]({ name: args.name, root })
-        if (!p || p.ok === false) throw new Error((p && p.error) || '设置同名首选失败')
+        if (!p || p.ok === false) throw new Error((p && p.error) || 'failed to set the collision winner')
         // `skill-prefer` 会在"记下了但不会生效"时回 ok:true + warning（首选指向**停用**的来源，
         // 而同名首选会挡住其他副本 → 两份都不生效）。原样转出去，否则模型以为已经生效。
         out.push((prefer
@@ -284,7 +284,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         const warn = shadowedBy
           ? ' — BUT this copy is shadowed by the same-name skill in "' + shadowedBy + '", so it stays inactive: enable that copy instead, or make it win with prefer=true and root="' + shadowedBy + '"'
           : ''
-        const sceneWarn = syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : ''
+        const sceneWarn = syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : ''
         out.push('OK: ' + args.name + ' now ' + (args.enabled ? 'enabled' : 'disabled') + warn + sceneWarn)
       }
       return out.join('\n')
@@ -318,9 +318,9 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
       const wanted = String((args && args.name) || '').trim()
-      if (!wanted) throw new Error('缺少参数：name')
+      if (!wanted) throw new Error('missing argument: name')
       const kebab = toKebab(wanted)
-      if (!kebab) throw new Error('无法生成合法 kebab-case 名称（原始名: ' + wanted + '）')
+      if (!kebab) throw new Error('cannot build a valid kebab-case name (raw name: ' + wanted + ')')
       // 建还是改：先看这个（规范化后的）名字在不在。`skill-create` 对同名是**拒绝**的，
       // 所以这条判定只能在这里做 —— 不能指望 op 层兜，也不能让模型自己先查一次
       // （它手里的清单可能已经过期）。
@@ -342,7 +342,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
           description === '' ? 'description' : '',
           body === '' ? 'body' : '',
         ].filter((x) => x !== '')
-        if (missing.length) throw new Error('新建技能必须给 ' + missing.join(' 与 ') + '（' + kebab + ' 还不存在）')
+        if (missing.length) throw new Error('creating a skill needs ' + missing.join(' and ') + ' (' + kebab + ' does not exist yet)')
         const r: any = await deps.skillsOps['skill-create']({ name: wanted, description: args.description, body: args.body })
         if (!r || r.ok === false) throw new Error((r && r.error) || 'skill create failed')
         const data: any = r.data || {}
@@ -351,8 +351,8 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         // 里只有这一条不报启用状态）。点名的 `skill_manager_switch` 在出厂默认名单里就是关着的，
         // 关着就改说"用户启用后才能用"，别指一条模型没有的工具。
         const enableHint = deps.toolVisible('skill_manager_switch')
-          ? '（默认未启用，要启用先 skill_manager_switch）'
-          : '（默认未启用，用户启用后才能用）'
+          ? ' (created disabled; use skill_manager_switch to enable it)'
+          : ' (created disabled; the user has to enable it first)'
         return 'Created DSH skill ' + (data.name || kebab) + ' at ' + (data.path || '(unknown)') + enableHint
       }
       // 改的分支：省略 = 保持。两个可改字段一个都没给就拒 —— op 会按"保持原样"重写一次文件
@@ -360,11 +360,11 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       const touched: string[] = []
       if (args.description !== undefined) touched.push('description')
       if (args.body !== undefined) touched.push('body')
-      if (!touched.length) throw new Error('没有要改的东西：description / body 至少给一个')
+      if (!touched.length) throw new Error('nothing to change: pass description and/or body')
       const r: any = await deps.skillsOps['skill-update']({ name: wanted, description: args.description, body: args.body })
       if (!r || r.ok === false) throw new Error((r && r.error) || 'skill update failed')
       const data: any = r.data || {}
-      return 'Updated DSH skill ' + (data.name || kebab) + ' at ' + (data.path || '(unknown)') + '（改了 ' + touched.join('、') + '）'
+      return 'Updated DSH skill ' + (data.name || kebab) + ' at ' + (data.path || '(unknown)') + ' (changed ' + touched.join(', ') + ')'
     },
   }))
 }

@@ -13,7 +13,7 @@ export function text(value: string): TextPart {
 }
 
 /**
- * 名单渲染：超过 `TOOL_NAME_LIST_CAP` 项就截断，并把总数写在后面（"等 N 项"）。
+ * 名单渲染：超过 `TOOL_NAME_LIST_CAP` 项就截断，并把总数写在后面（"…(N total)"）。
  *
  * 为什么两个地方都要它：`scene_manager_list` 用它列档案，`scene_manager_save` 用它
  * 在回执里回显"这一次替换挤掉了什么"。两处都必须**点名、不能只给数量** —— 只给数量
@@ -22,9 +22,9 @@ export function text(value: string): TextPart {
  */
 export const TOOL_NAME_LIST_CAP = 6
 export function toolNameList(list: readonly string[]): string {
-  if (!list.length) return '空'
-  const head = list.slice(0, TOOL_NAME_LIST_CAP).join('、')
-  return list.length > TOOL_NAME_LIST_CAP ? head + ' 等 ' + list.length + ' 项' : head
+  if (!list.length) return 'none'
+  const head = list.slice(0, TOOL_NAME_LIST_CAP).join(', ')
+  return list.length > TOOL_NAME_LIST_CAP ? head + ' ...(' + list.length + ' total)' : head
 }
 
 /** `locateSkillRoot` 的结论。 */

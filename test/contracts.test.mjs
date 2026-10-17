@@ -254,7 +254,7 @@ test('MCP 段不拿缓存冒充现状：连不上的 server 不得被报成可�
   const out = renderMcpStateSection([offline])
   // 可用档现在是**裸名**（不带括号），所以"被报成可用"的形态就是 `- **github**` 单独一行。
   assert.ok(!/^- \*\*github\*\*$/m.test(out), '不得以无状态标记的形态出现（那会被读成可用）')
-  assert.ok(out.includes('当前未连上'), '必须标出它现在不可用')
+  assert.ok(out.includes('not connected now'), '必须标出它现在不可用')
   assert.ok(out.includes('github'), '曾经连上过的仍要列出来 —— 那是"曾经成功过"的证据')
   // 原来这里还断言「上次连上时的 26 个工具要留着」；2026-09-23 起工具数不再注入
   // （模型不能凭一个数字列举工具名，而 17 B/台 × 每轮是白付的），所以改成上一条。
@@ -800,11 +800,11 @@ test('工具描述里引用的注入板块名必须真实存在（跨模块引�
   // 2026-09-23 出过一次：注入层把「场景和记忆」拆成「场景」+「记忆」两段、改了板块标题，
   // 而 `memory_manager_list` 的描述里还写着「本机当前的场景和记忆」。
   //
-  // 判据只认**以「当前」开头**的「…」—— 那是板块名的形态（2026-10-15 起六个板块统一成
-  // `当前<域>`，见 context-inject-frame.ts 的 `DomainFrame.title`）；别的「…」（如「来源：」）
-  // 是行内标记，不是板块引用，不参与校验。
-  // ⚠️ 这个前缀**会与散文撞车**（`「当前进入的是哪个」` 这种）：撞了就改散文的引号，
-  // 别放宽判据 —— 放宽会变成静默的假阴性（真有引用漏改也不报）。
+  // 判据只认**以 `Current ` 开头**的双引号串 —— 那是板块名的形态（2026-10-18 起六个板块
+  // 统一成英文 `Current <域>`，见 context-inject-frame.ts 的 `DomainFrame.title`）；别的引号
+  // （如 `"shadowed-by:<root>"` / `"Instructions from:"`）是行内标记，不是板块引用，不参与校验。
+  // ⚠️ 这个前缀**会与散文撞车**：撞了就改散文的引号，别放宽判据 —— 放宽会变成静默的
+  // 假阴性（真有引用漏改也不报）。
   const titles = new Set(
     INJECT_DOMAIN_KEYS.map((key) => {
       const text = renderDomainText({ key, label: key, form: 'snapshot', name: 'x', text: '' })
@@ -820,13 +820,13 @@ test('工具描述里引用的注入板块名必须真实存在（跨模块引�
   const seen = []
   for (const rel of files) {
     const src = readFileSync(new URL('../' + rel, import.meta.url), 'utf8')
-    for (const m of src.matchAll(/「(当前[^」]*)」/g)) seen.push([rel, m[1]])
+    for (const m of src.matchAll(/"(Current [^"]*)"/g)) seen.push([rel, m[1]])
   }
   assert.ok(seen.length > 0, '一个板块引用都没扫到 —— 判据或文件清单写错了')
   for (const [rel, name] of seen) {
     assert.ok(
       titles.has(name),
-      `${rel} 引用了不存在的注入板块「${name}」；实际存在：${[...titles].join(' / ')}`,
+      `${rel} 引用了不存在的注入板块 "${name}"；实际存在：${[...titles].join(' / ')}`,
     )
   }
 })

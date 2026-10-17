@@ -71,9 +71,10 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
   //   2. defense in depth — when set, every state-changing op additionally
   //      requires `x-dsh-token: <token>`.
   // It is NOT the primary gate anymore: the route calls the host's
-  // connection.requestRejection fence first (Host must be loopback/LAN
-  // IP-literal → defeats DNS rebinding, plus browser-session cookie auth),
-  // so an unset token no longer means "anyone may call writes".
+  // connection.admit fence first (Host must be loopback/LAN IP-literal →
+  // defeats DNS rebinding, plus browser-session cookie auth, plus the
+  // owner-Principal check an exact route owes), so an unset token no longer
+  // means "anyone may call writes".
   // NOTE: the entry config arrives as the SECOND apply argument (Cordis
   // calls `callback(ctx, config)`) — never read it off `ctx.config`, which
   // is not an injected service and throws "cannot get property without
@@ -225,7 +226,7 @@ export function createSceneLock(deps: SceneLockDeps): SceneLock {
     const scene = await activeSceneName()
     if (!scene) return null
     const locked = await lockedSceneNames()
-    return locked.includes(scene) ? `场景「${scene}」已锁定，本次写入被拒：锁定期间该域不可修改，需用户解锁后再试。` : null
+    return locked.includes(scene) ? `scene "${scene}" is locked, so this write was refused: that domain cannot be modified while the scene is locked; the user has to unlock it first.` : null
   }
   return { lockedSceneNames, activeSceneName, lockedSceneGuard }
 }

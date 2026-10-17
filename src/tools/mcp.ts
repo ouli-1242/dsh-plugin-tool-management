@@ -43,7 +43,7 @@ export interface McpToolDeps extends ToolDomainDeps {
 }
 
 /** 「去看清单」那句：`mcp_manager_list` 不在模型手里时不能点名它（调用方按 `toolVisibleFor` 决定给不给）。 */
-const MCP_LIST_HINT = '（用 mcp_manager_list 看清单，all=true 连停用的也列）'
+const MCP_LIST_HINT = ' (see mcp_manager_list — all=true also lists disabled ones)'
 
 /**
  * 指不到 `mcp_manager_list` 时的**中性出口**：不点名任何工具，两条常驻来源都成立
@@ -53,23 +53,23 @@ const MCP_LIST_HINT = '（用 mcp_manager_list 看清单，all=true 连停用的
  * 的 MCP 工具，猜错 serverName 时若报错里只有「没有这台服务器：X」，模型拿不到任何补救线索
  * —— 它只能猜第二次。出口要么指向工具（那条工具得在它手里），要么指向这两条常驻来源。
  */
-const MCP_NEUTRAL_HINT = '（服务器名照抄你自己 `mcp__<server>__<tool>` 工具名里的那一段，或「当前 MCP 服务器」段里列出的名字）'
+const MCP_NEUTRAL_HINT = ' (copy the server name from your own `mcp__<server>__<tool>` tool names, or take one listed in the "Current MCP servers" reminder)'
 
 /** 按 serverName 定位条目；同名（project + global 各一台）时要求 level 明确指定。 */
 function locate(rows: any[], server: string, level?: string, listHint: string = MCP_LIST_HINT): any {
   const hits = (rows || []).filter((r) => String(r.serverName) === server)
   if (!hits.length) {
-    throw new Error('没有这台服务器：' + server + (listHint || MCP_NEUTRAL_HINT))
+    throw new Error('no such server: ' + server + (listHint || MCP_NEUTRAL_HINT))
   }
   if (level) {
     const picked = hits.filter((r) => r.level === level)
     if (!picked.length) {
-      throw new Error('「' + server + '」没有 level=' + level + ' 的那一台（现有：' + hits.map((r) => r.level).join(' / ') + '）')
+      throw new Error('"' + server + '" has no level=' + level + ' entry (existing: ' + hits.map((r) => r.level).join(' / ') + ')')
     }
     return picked[0]
   }
   if (hits.length > 1) {
-    throw new Error('「' + server + '」在 ' + hits.map((r) => r.level).join(' 与 ') + ' 各有一台，无法确定动哪一台 —— 传 level 指定')
+    throw new Error('"' + server + '" exists at both ' + hits.map((r) => r.level).join(' and ') + ' — pass level to say which one to touch')
   }
   return hits[0]
 }
@@ -108,11 +108,11 @@ export function buildMcpTools(deps: McpToolDeps): void {
     // 是行动依据 —— 模型要知道"停用的那台去哪查"就得靠这句（all=true）。
     //
     // 2026-10-15 注入文本审查：删掉两处白付的 token ——
-    //   ① 括号里那句把「当前 MCP 服务器」reminder 的**内容**逐项列了一遍（可用 / 曾连上 /
+    //   ① 括号里那句把 "Current MCP servers" reminder 的**内容**逐项列了一遍（可用 / 曾连上 /
     //      备注 / 停用不进），而那段 reminder 每轮就在模型上下文里，它自己看得到；
     //   ② `where loader:on:<phase> is the loader's current phase` —— 用自己解释自己
     //      （phase 就是 phase），零信息。字段名本身留在输出里，模型照抄即可。
-    description: 'List configured MCP servers (level project|global; enabled state; live loader status; tool count excluding switched-off tools; user hint). The「当前 MCP 服务器」reminder is a filtered view; this tool is the raw one — defaults to enabled servers, all=true for every configured one. Pass tools=true to list each server\'s tool names.',
+    description: 'List configured MCP servers (level project|global; enabled state; live loader status; tool count excluding switched-off tools; user hint). The "Current MCP servers" reminder is a filtered view; this tool is the raw one — defaults to enabled servers, all=true for every configured one. Pass tools=true to list each server\'s tool names.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled servers (default false).' },
       tools: { type: 'boolean', description: 'Also list each server\'s tool names, marking the switched-off ones (default false).' },
@@ -179,7 +179,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
       // 报错退化成「没有这台服务器：<你猜的>」—— 一个字都不告诉它还能去哪看。
       // 指向模型自己的工具表（`mcp__<server>__<tool>` 就在它的 schema 里）与常驻注入段，
       // 这两条**不需要任何工具可见**就成立。
-      server: { type: 'string', required: true, description: 'Server name, as it appears in your own `mcp__<server>__<tool>` tool names (the「当前 MCP 服务器」reminder lists the usable ones).' },
+      server: { type: 'string', required: true, description: 'Server name, as it appears in your own `mcp__<server>__<tool>` tool names (the "Current MCP servers" reminder lists the usable ones).' },
       action: { type: 'string', required: true, enum: ['on', 'off', 'restart'], description: 'on = enable, off = disable, restart = reconnect and re-sync tools.' },
       level: { type: 'string', description: 'project or global — only to disambiguate same-name servers.' },
       tool: { type: 'string', description: 'One tool name on that server (no mcp__ prefix). Only for on/off.' },
@@ -188,12 +188,12 @@ export function buildMcpTools(deps: McpToolDeps): void {
     async execute(args: any, exec: any) {
       const action = String((args && args.action) || '')
       if (action !== 'on' && action !== 'off' && action !== 'restart') {
-        throw new Error('action 只能是 on / off / restart（收到：' + (action || '(空)') + '）')
+        throw new Error('action must be on / off / restart (got: ' + (action || '(empty)') + ')')
       }
       const server = String((args && args.server) || '').trim()
       const tool = args && args.tool !== undefined ? String(args.tool).trim() : ''
       if (tool !== '' && action === 'restart') {
-        throw new Error('重启是整台服务器的动作（先停用、等断开、再按原状态启用），不能只重启一个工具')
+        throw new Error('restart is a whole-server action (off, wait for it to drop, then back on at its previous state); a single tool cannot be restarted')
       }
       // on|off 会写补丁（`mcpm-set-enabled` / `mcpm-tool-enabled` 在登记表里是 frozen），
       // 所以过场景冻结守卫；restart 不过 —— 它是锁定期间唯一的恢复入口（见文件头）。
@@ -202,36 +202,36 @@ export function buildMcpTools(deps: McpToolDeps): void {
         if (blocked) throw new Error(blocked)
       }
       const list = await deps.mcpmListView()
-      if (!list || list.ok === false) throw new Error((list && list.error) || '读取 MCP 配置失败')
+      if (!list || list.ok === false) throw new Error((list && list.error) || 'failed to read the MCP config')
       const level = args && args.level !== undefined ? String(args.level) : undefined
       const row = locate(list.rows || [], server, level, listHint(exec && exec.agent))
       const enabled = action === 'on'
 
       if (tool !== '') {
         const r: any = await deps.mcpmToolEnabled({ serverName: String(row.serverName), tool, enabled })
-        if (!r || r.ok === false) throw new Error((r && r.error) || '切换工具启停失败')
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to switch this tool')
         // 与面板同一条同步：`mcpm-tool-enabled` 在登记表里带 syncsArchive，漏了就是
         // "页面拨的进档案、模型拨的不进"。
         const syncErr = await deps.syncSwitchToScene('mcpm-tool-enabled', { serverName: String(row.serverName), tool, enabled })
         // 整台停用时，工具级开关在运行时本来就不生效（那个工具压根不存在）—— 不说的话
         // 模型会以为已经生效。与记忆族"启用了一条不在启用场景里的记忆"同一条理由。
-        const offNote = row.disabled ? '（注意：整台服务器当前是停用的，这个工具级开关要等它启用才生效）' : ''
+        const offNote = row.disabled ? ' (note: the whole server is off right now, so this tool-level switch only takes effect once the server is on)' : ''
         return 'OK: ' + String(row.serverName) + ' tool ' + tool + ' now ' + (enabled ? 'enabled' : 'disabled') + offNote +
-          (syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : '')
+          (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '')
       }
 
       if (action === 'restart') {
         const r: any = await deps.mcpmRestart({ id: row.id, level: row.level })
-        if (!r || r.ok === false) throw new Error((r && r.error) || '重启失败')
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'restart failed')
         return 'OK: ' + String(row.serverName) + ' (' + row.level + ') restarted'
       }
 
       const r: any = await deps.mcpmSetEnabled({ id: row.id, level: row.level, enabled })
-      if (!r || r.ok === false) throw new Error((r && r.error) || '切换服务器启停失败')
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to switch this server')
       // 场景未锁定时，页面 / 模型改的开关都要落进当前场景的档案（与 handlers 层同一套同步）。
       const syncErr = await deps.syncSwitchToScene('mcpm-set-enabled', { id: row.id, level: row.level, enabled })
       return 'OK: ' + String(row.serverName) + ' (' + row.level + ') now ' + (enabled ? 'enabled' : 'disabled') +
-        (syncErr ? '\nWARN: 当前场景档案未同步（' + syncErr + '）' : '')
+        (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '')
     },
   }))
   register(defineTool({
@@ -247,7 +247,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
       env: { type: 'string', description: 'Extra env vars, key=value per line (stdio). Omit = keep.' },
       level: { type: 'string', description: 'project or global (project when creating); only needed for same-name servers.' },
       // 名字与注入段对齐（2026-10-14 对抗性审查 P1-2）：注入段与工具输出都写 `user-hint`
-      // （对应中文那句「用户提示：」），参数名跟着叫 `hint`，一份数据三个面一个词。
+      // （对应注入行里那句 `user hint:`），参数名跟着叫 `hint`，一份数据三个面一个词。
       // 「写什么」那半句已经由注入框架的 `how` 行逐字说过（"选服务器之前先看一眼"），
       // 这里只留参数独有的信息：长度上限与截断行为（2026-10-14 审查 P2-4）。
       hint: { type: 'string', description: "Short hint for later (≤300 chars; longer is stored whole but truncated in listings). '' clears the existing hint; omit = keep." },
@@ -257,7 +257,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
       const server = String((args && args.server) || '').trim()
-      if (!server) throw new Error('缺少参数：server（服务器名）')
+      if (!server) throw new Error('missing argument: server (the server name)')
       const levelArg = args && args.level !== undefined ? String(args.level) : undefined
       // `hint` 的三态（2026-10-15 修 P1-5）：省略 = 保持；`''` = **清空**；非空 = 设置。
       // 此前用 `hintText.trim() !== ''` 判"要不要写备注"，把"清空"与"省略"混成一件事 ——
@@ -267,7 +267,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
       const hintText = hintGiven ? String(args.hint) : ''
       const clearsNote = hintGiven && hintText.trim() === ''
       const list: any = await deps.mcpmListView()
-      if (!list || list.ok === false) throw new Error((list && list.error) || '读取 MCP 配置失败')
+      if (!list || list.ok === false) throw new Error((list && list.error) || 'failed to read the MCP config')
       const rows: any[] = list.rows || []
       const hits = rows.filter((r) => String(r.serverName) === server)
 
@@ -275,13 +275,13 @@ export function buildMcpTools(deps: McpToolDeps): void {
       if (!hits.length) {
         const transport = String((args && args.transport) || '').trim()
         if (transport !== 'stdio' && transport !== 'streamable-http') {
-          throw new Error('新建服务器必须给 transport：stdio 或 streamable-http')
+          throw new Error('creating a server needs transport: stdio or streamable-http')
         }
         if (transport === 'stdio' && String((args && args.command) || '').trim() === '') {
-          throw new Error('新建 stdio 服务器必须给 command（宿主会按它 spawn 进程）')
+          throw new Error('a new stdio server needs command (the host spawns that process)')
         }
         if (transport === 'streamable-http' && String((args && args.url) || '').trim() === '') {
-          throw new Error('新建 streamable-http 服务器必须给 url')
+          throw new Error('a new streamable-http server needs url')
         }
         const payload: any = {
           serverName: server,
@@ -294,13 +294,13 @@ export function buildMcpTools(deps: McpToolDeps): void {
         }
         if (levelArg) payload.level = levelArg
         const r: any = await deps.mcpmAdd(payload)
-        if (!r || r.ok === false) throw new Error((r && r.error) || '新增服务器失败')
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to add the server')
         // 备注单独走 `mcpm-note`（`mcpm-add` 不认这个字段）。失败**不回滚**主写入：
         // 服务器已经建好了，"备注没写上"是 warning，不是失败（与 0.13.0 界面同规格）。
         let warn = ''
         if (hintGiven && !clearsNote) {
           const n: any = await deps.mcpmNote({ id: String(r.row.id), note: hintText })
-          if (!n || n.ok === false) warn = '\nWARN: 服务器已建好，但备注没写进去（' + ((n && n.error) || '未知原因') + '）'
+          if (!n || n.ok === false) warn = '\nWARN: the server was created, but the hint was not written (' + ((n && n.error) || 'unknown reason') + ')'
         }
         return 'OK: created ' + r.row.id + ' at ' + r.row.level + warn
       }
@@ -309,7 +309,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
       const cur = locate(hits, server, levelArg, listHint(exec && exec.agent))
       const transport = args && args.transport !== undefined ? String(args.transport) : String(cur.transport)
       if (transport !== 'stdio' && transport !== 'streamable-http') {
-        throw new Error('transport 只能是 stdio 或 streamable-http（这台现在是：' + String(cur.transport) + '）')
+        throw new Error('transport must be stdio or streamable-http (this one is: ' + String(cur.transport) + ')')
       }
       const touched: string[] = []
       const ignored: string[] = []
@@ -338,13 +338,13 @@ export function buildMcpTools(deps: McpToolDeps): void {
       // 只给了备注：不必走 `mcpm-edit` 把整条重建一遍（那是一次无意义的写盘 + 刷新 updatedAt），
       // 直接写备注。这与"三个可改字段一个都没给就拒"是同一条理由的两面。
       if (!touched.length && !levelChanged) {
-        if (!hintGiven) throw new Error('没有要改的东西：transport / url / command / args / headers / env / level / hint 至少给一个')
+        if (!hintGiven) throw new Error('nothing to change: give at least one of transport / url / command / args / headers / env / level / hint')
         const n: any = await deps.mcpmNote({ id: cur.id, note: hintText })
-        if (!n || n.ok === false) throw new Error((n && n.error) || '写备注失败')
-        return 'OK: updated ' + String(cur.serverName) + '（' + (clearsNote ? 'hint 已清空' : '改了 hint') + '）'
+        if (!n || n.ok === false) throw new Error((n && n.error) || 'failed to write the hint')
+        return 'OK: updated ' + String(cur.serverName) + ' (' + (clearsNote ? 'hint cleared' : 'hint changed') + ')'
       }
       const r: any = await deps.mcpmEdit(payload)
-      if (!r || r.ok === false) throw new Error((r && r.error) || '修改服务器失败')
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to update the server')
       // `hint` 进 `changed` 必须**等写成功之后**（2026-10-15 修 P1-6）：此前按意图先算进去，
       // mcpmNote 失败时回执一边说"改了 hint"、一边 WARN"备注没写进去"，模型读不出到底改没改。
       const changed = touched.concat(levelChanged ? ['level'] : [])
@@ -354,13 +354,13 @@ export function buildMcpTools(deps: McpToolDeps): void {
       if (r.warning) warn += '\nNOTE: ' + String(r.warning)
       if (hintGiven) {
         const n: any = await deps.mcpmNote({ id: cur.id, note: hintText })
-        if (!n || n.ok === false) warn += '\nWARN: 服务器已保存，但备注没写进去（' + ((n && n.error) || '未知原因') + '）'
-        else changed.push(clearsNote ? 'hint（已清空）' : 'hint')
+        if (!n || n.ok === false) warn += '\nWARN: the server was saved, but the hint was not written (' + ((n && n.error) || 'unknown reason') + ')'
+        else changed.push(clearsNote ? 'hint (cleared)' : 'hint')
       }
       if (ignored.length) {
-        warn += '\nWARN: ' + ignored.join(' / ') + ' 与当前 transport（' + transport + '）无关，已忽略'
+        warn += '\nWARN: ' + ignored.join(' / ') + ' do not apply to the current transport (' + transport + ') and were ignored'
       }
-      return 'OK: updated ' + String(cur.serverName) + '（改了 ' + changed.join('、') + '）' + warn
+      return 'OK: updated ' + String(cur.serverName) + ' (changed ' + changed.join(', ') + ')' + warn
     },
   }))
 }

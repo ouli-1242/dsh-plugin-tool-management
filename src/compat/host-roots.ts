@@ -46,7 +46,7 @@ export const IDENTITY_PACKAGES = [
   '@deepseek-ai/dsh-storage-domain',
   '@deepseek-ai/dsh-spill-local',
 ] as const
-export const VERIFIED_HOST_VERSION = '0.2.0-rc.2'
+export const VERIFIED_HOST_VERSION = '0.2.1-rc.2'
 export const OPERATION_ROUTES = {
   archive: { native: ['workspace.archive-native'], adapter: ['workspace.enqueue', 'workspace.set-state'] },
   unarchive: { native: ['workspace.unarchive-native'], adapter: ['workspace.enqueue', 'workspace.set-state'] },

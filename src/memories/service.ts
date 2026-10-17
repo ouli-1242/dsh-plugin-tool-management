@@ -696,9 +696,10 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * sha1 hex）：算的是**文件内容**（AGENTS.md 取截断前的原文），是"文件这一版"的身份，
    * 不是"这次注入了什么"；界面只拿它当悬停提示，不参与任何判定。
    *
-   * `text` 是**模型侧**正文，开头一行 `来源：<展示路径>` —— 照抄官方 agent-instructions 的
-   * 写法（`Instructions from: <path>`，`render.js` 的 `sectionText`）。模型据此知道这些规则
-   * 写在哪个文件里：用户说"把这条记下来"时它知道该改哪份文件，而不是只能凭印象回答。
+   * `text` 是**模型侧**正文，开头一行 `Instructions from: <展示路径>` —— 与官方 agent-instructions
+   * 逐字同形（`render.js` 的 `sectionText`；2026-10-18 由 `Source:` 改过来：官方注入本来就用
+   * 这个措辞，模型对它有现成的先验）。模型据此知道这些规则写在哪个文件里：用户说"把这条记下来"
+   * 时它知道该改哪份文件，而不是只能凭印象回答。
    */
   const resolvePrompt = (): { path: string; digest: string; text: string } | null => {
     // 场景提示词与 AGENTS.md 正文在用户眼里就是同一件事（"全局提示词"）：场景期间前者取代后者，
@@ -713,11 +714,11 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
       const body = Buffer.byteLength(scene.text, 'utf8') <= AGENTS_MD_MAX_BYTES
         ? scene.text
         : Buffer.from(scene.text, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8') +
-          `\n\n（…预设正文超过 ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB，已截断。）`
+          `\n\n(Truncated: the preset body is over ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB.)`
       return {
         path,
         digest: createHash('sha1').update(scene.text).digest('hex'),
-        text: `来源：${path}\n\n${body}`,
+        text: `Instructions from: ${path}\n\n${body}`,
       }
     }
     const raw = readGlobalAgentsMdSync()
@@ -726,8 +727,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     const body = Buffer.byteLength(raw, 'utf8') <= AGENTS_MD_MAX_BYTES
       ? raw
       : Buffer.from(raw, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8') +
-        `\n\n（…文件超过 ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB，已截断。）`
-    return { path, digest: createHash('sha1').update(raw).digest('hex'), text: `来源：${path}\n\n${body}` }
+        `\n\n(Truncated: the file is over ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB.)`
+    return { path, digest: createHash('sha1').update(raw).digest('hex'), text: `Instructions from: ${path}\n\n${body}` }
   }
   /**
    * 模型侧的提示词正文（`''` = 没有可注入的内容）。

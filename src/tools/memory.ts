@@ -33,7 +33,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     name: 'memory_manager_list',
     // 末尾**不点名** `scene_manager_list`：场景一族在出厂默认里就是关着的，指向一条模型没有的
     // 工具只会让它去猜名字（用户 2026-09-23 把默认名单扩到十五条时去掉的这句）。
-    description: 'List memories (id, scene, enabled, form flat|bundle, description) plus the scene injection currently follows. What is injected each turn is in the「当前记忆」reminder; use this for ids and for entries that are off. Pass a `scene` to filter by scene; all=true lists everything.',
+    description: 'List memories (id, scene, enabled, form flat|bundle, description) plus the scene injection currently follows. What is injected each turn is in the "Current memories" reminder; use this for ids and for entries that are off. Pass a `scene` to filter by scene; all=true lists everything.',
     parameters: {
       // 参数名与其余五个域同词（2026-10-14 对抗性审查 P1-3）：同一个概念在工具面只该有一个名字，
       // 而 `scene` 是它在 `scene_manager_*`、`<scene>/<name>` 与注入段标题里的叫法。
@@ -49,27 +49,27 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const opArgs: any = {}
       if (args && args.scene !== undefined) opArgs.group = args.scene
       const r: any = await deps.rulesOps['rules-list'](opArgs)
-      if (!r || r.ok === false) throw new Error((r && r.error) || '读取规则失败')
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read memories')
       // 「会注入」的判定与记忆段同源（renderSceneMemory）：global 场景恒常注入，其余场景要
       // 在 index.active 里，再叠加单条 enabled 与同名 bundle 的 shadowed。默认只列这些，
       // 全列一次会把没启用的条目也算进上下文（用户裁定 2026-09-16，与技能列表同口径）。
       const sceneOn = (group: string): boolean => group === 'global' ||
         (group !== '' && (r.activeMode === 'all' || String(r.activeScene || '') === group))
       const stateOf = (x: any): { injects: boolean; label: string } => {
-        if (x.shadowed === true) return { injects: false, label: '被同名覆盖' }
-        if (x.enabled === false) return { injects: false, label: '已停用' }
-        if (!sceneOn(String(x.group || ''))) return { injects: false, label: '场景未启用' }
-        return { injects: true, label: '已启用' }
+        if (x.shadowed === true) return { injects: false, label: 'shadowed' }
+        if (x.enabled === false) return { injects: false, label: 'disabled' }
+        if (!sceneOn(String(x.group || ''))) return { injects: false, label: 'scene off' }
+        return { injects: true, label: 'injects' }
       }
       const rows: Array<{ x: any; injects: boolean; label: string }> =
         (r.rules || []).map((x: any) => ({ x, ...stateOf(x) }))
       const shown = showAll ? rows : rows.filter((row) => row.injects)
       const lines = shown.map(({ x, label }) => (
-        '- ' + x.id + ' [' + (x.group || '未归属场景') + '] ' + label +
+        '- ' + x.id + ' [' + (x.group || 'no scene') + '] ' + label +
         // 形态与附件（2026-10-15）：此前不报，模型分不清哪条是 bundle、更不知道它带了几个附件
         // （`rules-list` 早就把 `form` 与 bundle 的附件摘要给了出来，只是这里没渲染）。
         (x.form === 'bundle'
-          ? ' · bundle' + (x.attach && x.attach.count ? '（' + x.attach.count + ' 个附件）' : '')
+          ? ' · bundle' + (x.attach && x.attach.count ? ' (' + x.attach.count + ' attachment(s))' : '')
           : '') +
         (x.description ? ' — ' + x.description : '')
       ))
@@ -77,17 +77,17 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 模型看到一片"未启用"会以为是条目自己的问题。（场景本身的清单在 `scene_manager_list`，
       // 2026-09-23 拆过去了；这里只留"记忆按哪一集注入"，因为那是记忆域自己的现状。）
       const scope = r.activeMode === 'all'
-        ? '全部场景（历史默认，未收窄）'
-        : (r.activeScene ? '「' + String(r.activeScene) + '」' : '未启用任何场景')
-      const header = '记忆：' + (showAll
-        ? rows.length + ' 条'
-        : shown.length + ' 条会注入 / 共 ' + rows.length + ' 条' +
-          (shown.length === rows.length ? '' : '（传 all=true 看全部）')) +
-        '\n注入范围：' + scope + ' + global（global 恒常注入）\n'
+        ? 'every scene (historical default, not narrowed)'
+        : (r.activeScene ? '"' + String(r.activeScene) + '"' : 'no scene is on')
+      const header = 'memories: ' + (showAll
+        ? rows.length + ' total'
+        : shown.length + ' injecting / ' + rows.length + ' total' +
+          (shown.length === rows.length ? '' : ' (pass all=true for all)')) +
+        '\ninjects from: ' + scope + ' + global (global always injects)\n'
       // 注入边界：压制型预设（persona complete / 关闭运行时上下文）下本插件默认不注入，
       // 此时列出的记忆**不在**模型上下文里。必须说出来，否则模型会假设自己已经看到正文。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
-      return header + (lines.join('\n') || '(无记忆)') + notice
+      return header + (lines.join('\n') || '(none)') + notice
     },
   }))
   register(defineTool({
@@ -103,7 +103,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     async execute(args) {
       // op 的字段名是 `id`，不改 op：这里显式转换（键名对模型是 `<场景>/<名字>`，对 op 是 `id`）。
       const r: any = await deps.rulesOps['rules-read']({ id: String((args && args.memory) || '') })
-      if (!r || r.ok === false) throw new Error((r && r.error) || '读取规则失败')
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read memories')
       const rule: any = r.rule || {}
       // 形态与附件名（2026-10-15）：op 一直把 `attachments` 给了出来，这里此前**整个丢掉**，
       // 于是模型连"这条记忆是 bundle、带了 3 个附件"都看不到。只给名字不给内容 ——
@@ -111,9 +111,9 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const attach: any[] = Array.isArray(rule.attachments) ? rule.attachments : []
       const form = rule.form === 'bundle' ? 'bundle' : 'flat'
       const attLine = attach.length
-        ? '\n附件（' + attach.length + ' 个）：' + attach.map((a: any) => String((a && a.name) || a)).join('、')
+        ? '\nattachments (' + attach.length + '): ' + attach.map((a: any) => String((a && a.name) || a)).join(', ')
         : ''
-      return '# ' + rule.id + '（' + form + '）' + attLine + '\n\n' + (rule.body || '')
+      return '# ' + rule.id + ' (' + form + ')' + attLine + '\n\n' + (rule.body || '')
     },
   }))
   register(defineTool({
@@ -145,9 +145,9 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const memory = String((args && args.memory) || '')
       // `enabled` 必须是布尔：`rules-toggle` 缺了它直接拒（ops/memory.ts），但那是给用户看的
       // 中文 op 错；这里先挡一句说清"这条工具要什么"。
-      if (typeof (args && args.enabled) !== 'boolean') throw new Error('缺少参数：enabled 必须是 true 或 false')
+      if (typeof (args && args.enabled) !== 'boolean') throw new Error('missing argument: enabled must be true or false')
       const r: any = await deps.rulesOps['rules-toggle']({ id: memory, enabled: args.enabled })
-      if (!r || r.ok === false) throw new Error((r && r.error) || '切换记忆启停失败')
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to switch this memory')
       const rule = r.rule || {}
       // 「启用了一条不在启用场景里的记忆」是一次静默无效：单条开关拨上去了，注入集里却没有它。
       // 这一句不说，模型会以为已经生效 —— 与 skill_manager_switch 说清影子副本同一条理由。
@@ -157,7 +157,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         if (all && all.ok !== false) {
           const group = String(rule.group || '')
           const on = group === 'global' || (group !== '' && (all.activeMode === 'all' || String(all.activeScene || '') === group))
-          if (!on) sceneNote = ' — BUT its scene「' + group + '」is not the active one, so it still will not be injected; enable that scene (or move it to global) first'
+          if (!on) sceneNote = ' — BUT its scene "' + group + '" is not the one injecting, so it still will not be injected; turn that scene on (or move it to global) first'
         }
       } catch { sceneNote = '' }
       return 'OK: memory ' + String(rule.id || memory) + ' ' + (rule.enabled === false ? 'disabled' : 'enabled') + sceneNote
@@ -189,14 +189,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 清单里打印的就是 `<场景>/<名字>`，照抄比拼装准（§2 规则一）。
       const slash = memory.indexOf('/')
       if (slash <= 0 || slash === memory.length - 1) {
-        throw new Error('memory 必须是 <场景>/<名字> 两段（照抄清单里那一行；全局场景写 global/<名字>）：' + (memory || '(空)'))
+        throw new Error('memory must be <scene>/<name> (copy that from the listing; the always-on scene is written global/<name>): ' + (memory || '(empty)'))
       }
       const group = memory.slice(0, slash)
       const name = memory.slice(slash + 1)
       // 先取全量：既用来定位（命中 = 改、未命中 = 建），也是查重的数据源。判定必须在工具
       // 这一侧 —— `rules-create` 对同名是**拒绝**的（`error.rules.exists`），op 不会 upsert。
       const all: any = await deps.rulesOps['rules-list']({})
-      if (!all || all.ok === false) throw new Error((all && all.error) || '读取规则失败')
+      if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
       const hit = (all.rules || []).find((x: any) => String(x.id) === memory)
 
       if (hit) {
@@ -204,7 +204,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         // 三个可改字段一个都没给就拒：op 会按"保留现有"落一次盘并刷新 updatedAt，
         // 模型以为改了点什么，其实只是把文件重写了一遍。
         const touched = ['body', 'description', 'nextName'].filter((k) => (args as Record<string, unknown>)[k] !== undefined)
-        if (!touched.length) throw new Error('没有要改的东西：body / description / nextName 至少给一个')
+        if (!touched.length) throw new Error('nothing to change: give at least one of body / description / nextName')
         const payload: any = { id: memory }
         // 只带模型真给过的键：`description` 传空串在 op 里是"删除并重新派生"，与"未给"是两种
         // 意图，都必须原样透传 —— 所以用 `!== undefined` 而不是真值判断。
@@ -212,10 +212,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         if (args.description !== undefined) payload.description = args.description
         if (args.nextName !== undefined) payload.name = args.nextName
         const r: any = await deps.rulesOps['rules-update'](payload)
-        if (!r || r.ok === false) throw new Error((r && r.error) || '更新记忆失败')
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to update the memory')
         const rule = r.rule || {}
-        return 'OK: updated ' + String(rule.id || memory) + '（改了 ' + touched.join('、') + '）' +
-          (rule.id && String(rule.id) !== memory ? ' → 现在是 ' + rule.id : '')
+        return 'OK: updated ' + String(rule.id || memory) + ' (changed ' + touched.join(', ') + ')' +
+          (rule.id && String(rule.id) !== memory ? ' → now ' + rule.id : '')
       }
 
       // 建的分支：正文与描述都必填。`rules-create` 自己会拒空正文与非法名（ops/memory.ts），
@@ -226,7 +226,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         body.trim() === '' ? 'body' : '',
         description.trim() === '' ? 'description' : '',
       ].filter((x) => x !== '')
-      if (missing.length) throw new Error('新建记忆必须给 ' + missing.join(' 与 ') + '（' + memory + ' 还不存在）')
+      if (missing.length) throw new Error('creating a memory needs ' + missing.join(' and ') + ' (' + memory + ' does not exist yet)')
       // 查重只**说出来**，不拒绝 —— 猜错一次就把该记的东西记不下去，比多记一条代价大得多；
       // 而且"像不像同一条"本来就是人判断的事。只在建的分支提示：改的分支没有"再记一条"的风险。
       const norm = (value: unknown): string => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
@@ -244,11 +244,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         .map((x: any) => String(x.id))
         .slice(0, 3)
       const r: any = await deps.rulesOps['rules-create']({ group, name, description, body })
-      if (!r || r.ok === false) throw new Error((r && r.error) || '创建规则失败')
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to create the memory')
       // 刚建好的这条自己会在列表里，从名单里去掉。
       const dup = similar.filter((id) => id !== String(r.rule.id))
       const warn = dup.length
-        ? `\n注意：已有 ${dup.length} 条名字或描述与它很像（${dup.join('、')}）—— 若是同一件事，改那一条而不是留着两条。`
+        ? `\nnote: ${dup.length} existing memories have a similar name or description (${dup.join(', ')}) — if it is the same thing, update that one instead of keeping two.`
         : ''
       // 回执必须同时说清**两个**条件（2026-10-15 smoke-test P1-3）：新建的记忆在 op 层是
       // `enabled: false`（ops/memory.ts 的 rulesCreate），而原先这句只提场景 —— 读起来像
@@ -256,10 +256,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 的 enableHint 同一形状：点名的工具在出厂默认名单里是关着的，关着就改说"用户开启后"。
       const sceneActive = group === 'global' ||
         (group !== '' && (all.activeMode === 'all' || String(all.activeScene || '') === group))
-      const sceneTail = sceneActive ? '' : '，并启用场景「' + group + '」'
+      const sceneTail = sceneActive ? '' : ', and turn scene "' + group + '" on'
       const enableHint = deps.toolVisible('memory_manager_switch')
-        ? '（新建默认停用，要生效先 memory_manager_switch 开它' + sceneTail + '）'
-        : '（新建默认停用，用户开启后才能生效' + sceneTail + '）'
+        ? ' (created disabled — turn it on first with memory_manager_switch' + sceneTail + ')'
+        : ' (created disabled — the user has to turn it on first' + sceneTail + ')'
       return 'OK: created ' + r.rule.id + enableHint + warn
     },
   }))

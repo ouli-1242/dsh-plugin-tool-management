@@ -512,7 +512,12 @@
         // without a CORS preflight that this route never answers.
         const headers = { 'content-type': 'application/json', 'x-dsh-plugin': 'dsh-plugin-tool-management' }
         if (TOKEN) headers['x-dsh-token'] = TOKEN
-        return fetch('/dsh-plugin-tool-management/api', {
+        // **按 document.baseURI 解析**，不写死 '/'：宿主可以被挂在反代 / 静态服务器的
+        // 子路径下（base 存在于 index.html 的 <base> 里），写死 '/' 时浏览器会向宿主
+        // 站点的根本身发请求，面板整页 404 —— 而那时宿主与插件都"装对了"。
+        // baseURI 总是绝对 URL（文档没有 base 时等于 location.href 去掉 query/hash），
+        // 所以这里不需要再判断它是不是绝对路径。
+        return fetch(new URL('dsh-plugin-tool-management/api', document.baseURI).toString(), {
           method: 'POST',
           headers,
           body: JSON.stringify({ op, args: args || {} }),

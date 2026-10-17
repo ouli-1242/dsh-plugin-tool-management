@@ -172,12 +172,18 @@ const SESSIONS_CLASS = { pkg: '@deepseek-ai/dsh-session', target: 'SessionStore'
 // （dsh-settings 导出 SettingsForms；dsh-agent-preset-registry 导出 AgentPresetRegistry）。
 const SETTINGS_CLASS = { pkg: '@deepseek-ai/dsh-settings', target: 'SettingsForms' } as const
 const ROSTER_CLASS = { pkg: '@deepseek-ai/dsh-agent-preset-registry', target: 'AgentPresetRegistry' } as const
+// 0.2.1 的两块契约面（tools.restrict / connection.admit）也都声明在官方类上，所以同样接入
+// 「参考副本 + 文本比对」：官方改了实现，比对的结论从"一致"变成"漂移"，界面上看得见。
+const TOOLS_CLASS = { pkg: '@deepseek-ai/dsh-tools', target: 'ToolRuntime' } as const
+const CONNECTION_CLASS = { pkg: '@deepseek-ai/dsh-client-connection', target: 'HostConnectionService' } as const
 export const OWNER_CLASSES: Partial<Record<CapabilityFinding['owner'], { readonly pkg: string; readonly target: string }>> = {
   workspace: WORKSPACE_CLASS,
   projectionCache: PROJECTION_CLASS,
   sessions: SESSIONS_CLASS,
   settings: SETTINGS_CLASS,
   presetRoster: ROSTER_CLASS,
+  tools: TOOLS_CLASS,
+  connection: CONNECTION_CLASS,
 }
 
 /** The named export's prototype, or undefined when the package is absent/trimmed. */
@@ -236,6 +242,8 @@ export function referencePrototypes(): {
   sessions?: Record<string, unknown>
   settings?: Record<string, unknown>
   roster?: Record<string, unknown>
+  tools?: Record<string, unknown>
+  connection?: Record<string, unknown>
 } {
   const out: NonNullable<ReturnType<typeof referencePrototypes>> = {}
   const workspace = classPrototypeOf(WORKSPACE_CLASS)
@@ -252,5 +260,57 @@ export function referencePrototypes(): {
   if (settings !== undefined) out.settings = settings
   const roster = classPrototypeOf(ROSTER_CLASS)
   if (roster !== undefined) out.roster = roster
+  // 0.2.1 的两块：`dsh-tools` 是本插件的 peerDependency（参考副本拿得到）；
+  // `dsh-client-connection` **不在** peerDependencies 里（宿主不要求插件直接依赖它），
+  // 所以参考副本常态取不到 —— textMatch 记 undefined，那条能力退化成纯存在性检查。
+  // 这是如实的能力边界：能验"admit 在不在"，验不了"实现漂没漂"。
+  const tools = classPrototypeOf(TOOLS_CLASS)
+  if (tools !== undefined) out.tools = tools
+  const connection = classPrototypeOf(CONNECTION_CLASS)
+  if (connection !== undefined) out.connection = connection
   return out
 }
+/**
+ * 从**宿主侧**能不能解析到一个包（不 import，只看解析）。
+ *
+ * 为什么需要它：有一部分官方包**不是**本插件的 peer（宿主不要求插件依赖它们），插件自己的
+ * `node_modules` 里就没有 —— `safeResolve`/`classPrototypeOf` 一律取不到。运行时探测不看
+ * 插件侧（它看的是 ctx 上的活服务），所以只有 doctor 这种"没有活宿主"的静态视图会被误导：
+ * 它从插件锚点解析，解析不到就把一条**运行时确实存在**的能力记成 `missing`
+ * （2026-10-17 `connection.admit` 就这么误报过：`dsh-client-connection` 不在插件依赖图里，
+ * 而它承载的 `admit()` 在 0.2.1 的 Web 组合里一定有）。
+ *
+ * 判据必须是宿主侧：逐个宿主安装锚点试着解析（纯 `require.resolve`，不 import），只要有
+ * **一个**能解析到就算能查。与 `safeResolve` 的分工：那个回答"本插件能不能 import 它"，
+ * 这个回答"宿主装不装它" —— 后者才是静态能力表该用的口径。
+ */
+export function resolvableFromHost(specifier: string): boolean {
+  for (const anchor of hostResolveAnchors()) {
+    try {
+      createRequire(anchor).resolve(specifier)
+      return true
+    } catch {
+      /* try the next anchor */
+    }
+  }
+  return false
+}
+
+/**
+ * 宿主安装的解析锚点（`package.json` 路径，按候选顺序）。
+ *
+ * 与 probe.ts 的 `hostPackageRoot()` 共用同一份 `hostRootCandidates()`，但这里**不要求**
+ * `dsh/package.json` 在场：即使那一层只剩空壳（0.1.5 时代的悬空 junction 树，本机正是如此），
+ * 它下面的 `node_modules/@deepseek-ai/<pkg>` 仍可能解析得到。判据各取所需 —— probe.ts 要
+ * "像不像一份完整安装"，这里只问"这个包从这里能不能解析到"。
+ */
+function hostResolveAnchors(): string[] {
+  return hostRootCandidatesFn().map((dir) => join(dirname(dir), 'package.json'))
+}
+
+// `hostRootCandidates()` 的注入点：由 probe.ts 在模块加载时填进来。不反向 import 是为了
+// 不成环（probe.ts → host-probe.ts → probe.ts），而"宿主在哪"的口径仍然只有一份。
+let hostRootCandidatesFn: () => string[] = () => []
+export function provideHostRootCandidates(fn: () => string[]): void {
+  hostRootCandidatesFn = fn
+}

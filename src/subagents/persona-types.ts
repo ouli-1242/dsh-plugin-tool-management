@@ -47,13 +47,14 @@ export interface PersonaDoc {
   /**
    * **人设目录注入到哪些会话**（frontmatter `catalogDepth`，默认 1）。
    *
-   * ⚠️ 它**不是**递归上限。子代理始终可以继续委派 —— 官方 `dsh-tool-subagent` 工具的
-   * `maxDepth` 默认是 **3**（`lib/index.js:269`），provider 只在**传了该值**时才校验
-   * （`dsh-subagent-in-process-driver/lib/index.js:165` → `resolveChildDepth` →
-   * `SubagentDepthError`）。2026-09-17 用户实测确认了这一点，也推翻了此前"子会话委派
-   * 必然失败"的假设：那个假设只对**本插件自己的**工具成立（因为我们当时传了
-   * `maxDepth: 1`），官方工具不受影响、照常能嵌套。**同一个子会话里官方工具能委派、
-   * 我们的不能**，是那次自相矛盾的根源。
+   * ⚠️ 它**不是**递归上限。子代理能否继续委派由官方配置决定 —— `dsh-subagent` 的
+   * `maxDepth` 默认是 **1**（0.2.1 核对 `dsh-subagent/lib/index.js` 的 `Config`：
+   * `maxDepth: z.number().step(1).min(0).default(1).volatile()`），provider 只在**传了该值**时
+   * 才校验（`resolveChildDepth` → `SubagentDepthError`）；没传就用宿主配置那一档。
+   * 2026-09-17 用户实测推翻了此前"子会话委派必然失败"的假设：那个假设只对**本插件自己的**
+   * 工具成立（因为我们当时传了 `maxDepth: 1`），而官方工具用的是它自己的默认值。**同一个
+   * 子会话里官方工具能委派、我们的不能**，是那次自相矛盾的根源。
+   * 结论不变：这个字段只管"目录出现在哪些会话"，能不能继续委派始终问官方，不在这里判。
    *
    * 现在这个字段只做一件事：决定常驻的人设目录出现在哪些深度的会话里。
    *   - `1`（默认）= 只在顶层注入（子会话收不到目录）；
@@ -64,7 +65,8 @@ export interface PersonaDoc {
    *
    * 为什么不把它传给官方：`SubagentStartRequest.maxDepth` 是**真的**递归上限，而我们这个
    * 字段的意图只是"目录出现在哪"。绑在一起会让我们的工具比官方严（1 vs 3），而且用户想
-   * 禁止嵌套也禁止不了 —— 官方工具照样能。所以现在**不传**，让 provider 用它自己的默认。
+   * 禁止嵌套也禁止不了 —— 官方工具照样能。所以现在**不传**，让 provider 用它自己的配置
+   * （0.2.1 默认 `maxDepth: 1`，即顶层委派一次、子会话本身不能再委派；要放开就在宿主侧调）。
    */
   catalogDepth?: number
   /**
@@ -77,10 +79,14 @@ export interface PersonaDoc {
    * `send_message` / `interrupt_agent`（`@deepseek-ai/dsh-tool-subagent-control` 注册，与创建它的
    * 工具无关）追问或中止 —— 所以本插件**不新增追问工具**。
    *
-   * ⚠️ 两条官方语义决定了这条通道的结果是**异步**的（`dsh-subagent/lib/index.js:599-654`）：
-   *   · 子代理启动时会被追加一句返回指引，要求它**自己**用 `send_message` 把结果发给父代理
+   * ⚠️ 三条官方语义决定了这条通道的结果是**异步**的（0.2.1 核实）：
+   *   · 启动时（`delivery: 'parent'` 且子代理手里有 `send_message`）会被追加一句返回指引
+   *     （`withContinuableReturnGuidance`），要求它**自己**把自包含结果 `send_message` 给父代理
    *     —— 父代理不会自动收到它的转录、工具输出或思考；
-   *   · 结算时父代理还会收到一条 `subagent-settled` 通知（含收尾正文）。
+   *   · 结算时父代理**一定**收到一条 `subagent-settled` 通知（`notifySettlement` →
+   *     `createSettlementMessage`）：收尾一行（按 stopReason 措辞）+ 子代理的收尾正文，
+   *     有结构化结果或诊断时一并带上；`delivery: 'caller'` 的那一次不发；
+   *   · `interrupt_agent` / `send_message` 是全局工具，与创建它的工具无关。
    * 于是 `subagent_manager_run` 对这类人设只回执一个 id，不再是最终产出。
    *
    * 前置条件（缺任一，官方在启动时抛错，见 `index.js:1986-1997` / `3161`）：

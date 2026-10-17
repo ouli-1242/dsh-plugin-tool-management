@@ -10,7 +10,7 @@ import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseSkillDoc, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
-import { MAX_DESCRIPTION_LENGTH, MAX_RULE_BYTES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, TRUNCATION_MARKER, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
+import { MAX_DESCRIPTION_LENGTH, MAX_RULE_BYTES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
 import { normalizeActive, enabledSceneOf, sceneOf, sceneLabel, attachmentSummarySync } from '../memories/projection.js'
 import { writeFileAtomically, writeFileAtomicBinary, readIndex, writeIndex, pathExists } from '../memories/index-io.js'
 import type { RuleIndexEntry } from '../memories/index-io.js'
@@ -198,7 +198,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       issues.push({
         severity: 'warning',
         code: 'sceneMemoryTruncated',
-        message: `场景记忆段超出预算（${projection.bytes} 字节 > ${projection.maxBytes} 字节），已按确定性顺序截断并追加 ${TRUNCATION_MARKER}；请精简记忆或只保留 _shared。`,
+        message: `场景记忆段超出预算（${projection.bytes} 字节 > ${projection.maxBytes} 字节），已按确定性顺序截断，段尾附未注入清单与截断标记；请精简记忆或只保留 _shared。`,
       })
     }
     return {

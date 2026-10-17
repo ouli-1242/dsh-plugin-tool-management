@@ -40,7 +40,8 @@
 //     判定放在域声明的 `applicableTo` 上，通道只负责问一句 —— "哪个域对哪类会话不成立"
 //     是域的语义，不是通道的机制。
 //     ⚠️ 2026-09-17 方案 A 纠正：这**不是**"子会话不能委派"。官方 `dsh-tool-subagent`
-//     默认 `maxDepth: 3`，provider 只在传了该值时才校验 —— 子代理本来就能继续嵌套
+//     默认 `maxDepth: 1`（0.2.1 实测核对：`dsh-subagent/lib/index.js` 的 Config 默认值），
+//     provider 只在传了该值时才校验 —— 子代理本来就能继续嵌套
 //     （用户实测确认）。这个抑制只是让常驻目录不进入子会话、减少噪声；委派能力由官方
 //     决定，本插件不干预（我们也不再传 `maxDepth`）。
 //   - **采纳遥测**：注入只解决"到没到"，不解决"用没用"。本模块按域统计
@@ -519,14 +520,16 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       const toolHidden = hiddenNow === null ? () => false : (name: string) => hiddenNow.has(name)
       for (const section of sections) {
         published.add(section.key)
-        const text = renderDomainText(section, toolHidden)
-        const current = visible.get(section.key)
-        if (current !== undefined && current.text === text) continue
         // `current !== undefined` = 该域在可见表面上已有一条更早的己方消息 → 这次是**替换**，
         // 界面上的动作标签据此从「已载入」变成「已更新」（见 domainMessage 的 baseline/changes）。
+        // 这个判据同时决定框架里那句 `Supersedes …` 发不发（2026-10-18：第一份没有旧内容可取代）。
+        const current = visible.get(section.key)
+        const replacing = current !== undefined
+        const text = renderDomainText(section, toolHidden, replacing)
+        if (replacing && current.text === text) continue
         let files: readonly InjectSourceFile[] | undefined
         try { files = domainOf.get(section.key)?.files?.() } catch { files = undefined }
-        additions.push(domainMessage(section, text, files, current !== undefined))
+        additions.push(domainMessage(section, text, files, replacing))
         appended.push(section.key)
         injectedKeys.add(section.key)
       }
@@ -542,7 +545,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         if (previous === undefined) continue
         const label = labelOf.get(key) ?? key
         if (previous.form === 'notice') continue
-        additions.push(clearedMessage(key, label))
+        additions.push(clearedMessage(key, label, lastReasons[key]))
         appended.push(key)
         clearedKeys.add(key)
       }
@@ -649,9 +652,9 @@ function domainMessage(
   } as any)
 }
 
-function clearedMessage(key: InjectDomainKey, label: string): unknown {
+function clearedMessage(key: InjectDomainKey, label: string, reason?: InjectReason): unknown {
   return createUserMessage({
-    content: [{ type: 'text', text: clearedDomainText(key, label) }],
+    content: [{ type: 'text', text: clearedDomainText(key, label, reason) }],
     source: { kind: INJECT_KIND_OF[key], form: 'notice', summary: `${label}已清空` },
   } as any)
 }

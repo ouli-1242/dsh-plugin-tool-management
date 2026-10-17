@@ -75,6 +75,13 @@ export interface McpManagerDeps {
   readPatch(abs: string): Promise<string>
   /** 写补丁文件（原子替换；写门禁已在 op 层判定）。 */
   writePatch(abs: string, content: string): Promise<void>
+  /**
+   * `mcp_manager_list` **在这个 agent 手里**吗（状态段尾句那句"用 X 查"的前提）。
+   *
+   * 判据由 index.ts 的 `toolVisibleFor` 提供（兼容页开关 + 人设 `toolsDeny`），与技能 / 子智能体
+   * 两个目录同一份 —— 见 `skills/catalog.ts` 里 `listToolVisible` 的注释。缺席时按"在手里"算。
+   */
+  listToolVisible?(agent?: unknown): boolean
   /** 记忆服务：mcpm-edit 要把停用表写进当前模式的快照；mcpm-remove 清场景引用时用它避开被锁场景。 */
   memoriesService: {
     readArchiveSlice(): Promise<any>
@@ -265,7 +272,12 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
 
   // MCP 状态段（注入通道的数据源）由本域自己建：它要的 rows 就是本域的 mcpmRowsWithNotes(false)，
   // 让 index.ts 建再传进来会形成 index ↔ manager 的循环引用。
-  const mcpStateCatalog = createMcpStateCatalog({ rows: () => mcpmRowsWithNotes(false) })
+  // `listToolVisible` 是唯一从外面进来的：它要看**这个 agent** 手里有没有 `mcp_manager_list`
+  // （兼容页开关 + 人设 toolsDeny），判据在 index.ts 的 `toolVisibleFor`，不在这里复制一份。
+  const mcpStateCatalog = createMcpStateCatalog({
+    rows: () => mcpmRowsWithNotes(false),
+    ...(deps.listToolVisible === undefined ? {} : { listToolVisible: deps.listToolVisible }),
+  })
 
 
 

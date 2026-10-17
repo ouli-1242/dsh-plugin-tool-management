@@ -145,6 +145,7 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 - **"Un-apply" goes back to the start of the chain, not one step**: it restores whatever was there before this run of apply / un-apply began (deleting the file if there was none); every intermediate version stays in `__last-applied__/AGENTS.md.bak-*` (5 generations), so it can be applied again.
 - **Two kinds cannot be deleted directly**: a scene-bound preset, and the one currently applied (un-apply it first). The copy auto-created on first open was never applied and can be deleted. Deletes always go to the recycle bin.
 - **Quick prompts** (the second section on the same page): save a piece of text you keep typing, then hit `/` and click it to paste it in; a scene can bind a set of them (only the ticked ones are on while the scene is entered, restored on exit, or pick "None").
+- **The shared global instruction file is visible too**: `~/.agents/AGENTS.md` is shared with other agent tools and is also injected; when it exists the page says so (read-only — edit that file to change it).
 
 ### Archived sessions
 
@@ -155,10 +156,11 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 ### Host compatibility
 
 - **Host tab**: host version, usable capability count, per-action routing (native / adapter / unavailable), degradations and reasons; three write entries: access token, injection settings, model tool table.
+- **Compatibility page overview**: one row per feature point. The four host contracts (subagent persona delegation / tool restriction / creation ordering / Web admission) and the "bare module resolution" block all live there — a feature that silently stops working after a host upgrade shows up at a glance.
 - **Command line**: `node scripts/doctor.mjs` (health check), `node scripts/host-deps.mjs --fix` (align dependencies).
 - Under a **suppressing preset** such as `minimal`, this plugin's injection is off by default; the Host tab can force any domain back on.
 - Unchecking "Skills" or "Prompt" really stops them — under standard presets the host delivers those two itself; the other three domains follow the checkbox exactly.
-- **What the injection looks like**: one `<system-reminder>` per domain — `# heading` + body + a "this one wins" line; a `</system-reminder>` inside the body is escaped.
+- **What the injection looks like**: one `<system-reminder>` per domain — an English frame (`# Current …` headings plus a "this one wins" line) around your own content: names, descriptions, notes and bodies are injected verbatim; a `</system-reminder>` inside the body is escaped.
 
 ---
 
@@ -208,6 +210,7 @@ The six recycle bins each own one directory under `trash/`: `{skills,memories,su
 | Duplicate MCP tabs                                                    | Remove the stale loader row from `cordis.patch.yml`, restart.                                                                                                                          |
 | Broken config, DSH won't boot                                         | Restore the newest `cordis.patch.yml.<level>.bak-<timestamp>` from `~/.dsh/tool-management/backups/` (5 per patch file).                                                               |
 | Action stopped working after a DSH upgrade                            | Settings → Tools → **Host** for the reason; `doctor.mjs` → `host-deps.mjs --fix`.                                                                                                      |
+| Won't install / peer mismatch after a DSH upgrade                    | Each generation has its own upper bound (the current one stops below 0.2.2); a minor upgrade needs a matching plugin release (upgrade the plugin before the host).                        |
 | The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab — 19 tools ship switched off. The panel and scripts are unaffected either way.                                                          |
 | Still asked to confirm with `approval=never`?                         | No card appears — straight through with a log line. Switch back to "workspace write" to get the questions again.                                                                       |
 | `subagent_manager_run` reports provider unavailable                   | The provider is not registered: `spawn` (default) / `fork` (`inherit`) come from `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` — mount and restart.                |

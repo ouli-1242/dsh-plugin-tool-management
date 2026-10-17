@@ -35,7 +35,7 @@ export async function filterBySceneBinding(
   const bound = new Set(enabledSceneLists.flat())
   if (includeUnavailable || !bound.size) return { allowed: live, reason: null }
   const allowed = live.filter((d) => bound.has(d.name))
-  return { allowed, reason: allowed.length ? null : `当前启用场景的子智能体绑定: ${[...bound].join('、')}` }
+  return { allowed, reason: allowed.length ? null : `the enabled scene's subagent bindings: ${[...bound].join(', ')}` }
 }
 
 export function defineSubagentManagerListTool(subagents: {
@@ -52,7 +52,7 @@ export function defineSubagentManagerListTool(subagents: {
     name: 'subagent_manager_list',
     // `depth-filtered` 删掉（2026-10-15 注入文本审查）：注入深度是**注入侧**的实现细节，
     // 模型看到的是"目录里有哪些人设"，`catalogDepth` 那个词对它没有任何可操作性。
-    description: 'List personas (pre-configured subagent profiles) with their descriptions. The「当前子智能体」reminder carries a view of the same catalog; call this for the always-current full list, or pass all=true to include personas that are disabled or outside the active scene.',
+    description: 'List personas (pre-configured subagent profiles) with their descriptions. The "Current subagents" reminder carries a view of the same catalog; call this for the always-current full list, or pass all=true to include personas that are disabled or outside the active scene.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled personas and ones outside the active scene (default false). Listed ≠ delegable: `run` still refuses those.' },
     } as const,
@@ -70,9 +70,9 @@ export function defineSubagentManagerListTool(subagents: {
       // 而工具又不列全，结果是"明明能委派却查不到人设"。
       // `all=true` 时**标出哪些不可用**：只列名字的话，模型照样分不清哪个能直接委派
       // （与技能列表标 `shadowed-by:` 同一条理由 —— 列出来不等于能用）。
-      const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(无描述)') +
+      const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(no description)') +
         (p.continuable === true ? CONTINUABLE_MARK : '') +
-        (includeUnavailable ? (p.enabled === false ? '（已停用，需先启用）' : '') : ''))
+        (includeUnavailable ? (p.enabled === false ? ' (disabled — turn it on first)' : '') : ''))
       // 默认口径下有多少个没列出来（停用的 + 不在启用场景里的）：不报的话，模型看到一份短名单
       // 会当成"本机只有这些人设"。数量照报，与另外三个 list 的表头同一口径。
       const hiddenCount = includeUnavailable ? 0 : docs.length - allowed.length
@@ -80,9 +80,9 @@ export function defineSubagentManagerListTool(subagents: {
       try {
         notice = typeof subagents.noticeFor === 'function' ? await subagents.noticeFor(exec) : ''
       } catch { notice = '' }
-      const header = '人设子智能体（' + allowed.length + '）' +
-        (hiddenCount > 0 ? '（另有 ' + hiddenCount + ' 个停用或不在当前场景，传 all=true 查看）' : '') + '：\n'
-      return header + (lines.join('\n') || '(无)') + (reason ? '\n注意：' + reason : '') + notice
+      const header = 'persona subagents (' + allowed.length + ')' +
+        (hiddenCount > 0 ? ' (' + hiddenCount + ' more are disabled or outside the current scene; pass all=true to see them)' : '') + ':\n'
+      return header + (lines.join('\n') || '(none)') + (reason ? '\nnote: ' + reason : '') + notice
     },
   }
 }
@@ -129,9 +129,9 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
     // 最贵的单个参数。收完两处重复后目标 ≈325 tok。判据是"删掉的那句在描述里已经有了吗"：
     // Modes 段留着（它是模型的入口），参数说明只留"这一段独有的信息"。
     // `inherit` 那句"轮中委派拿不到当前轮"必须留 —— 它是这条参数唯一会让人写错 task 的地方。
-    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output. A persona marked「允许追问」instead returns an agent id and runs in the background — continue it with `send_message`.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the「当前子智能体」reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
+    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output. A persona marked `(continuable)` instead returns an agent id and runs in the background — continue it with `send_message`.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the "Current subagents" reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
     parameters: {
-      agent: { type: 'string', required: true, description: 'Persona name — see the「当前子智能体」reminder, or list personas with subagent_manager_list.' },
+      agent: { type: 'string', required: true, description: 'Persona name — see the "Current subagents" reminder, or list personas with subagent_manager_list.' },
       // `task` 的说明只留"这是什么"（2026-10-15 注入文本审查）：上面描述里那句
       // "leave method and output format to the persona." 此前在这里**逐字重复**了一遍
       // （57 字符），而模型填这个参数时两处都在手上 —— 同一件事付两次 token。
@@ -146,21 +146,22 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
       const name = String((args && args.agent) || '').trim()
       const task = String((args && args.task) || '').trim()
       const inherit = args && args.inherit === true
-      if (!task) throw new Error('task 不能为空')
+      if (!task) throw new Error('task must not be empty')
       // 官方 SubagentStartRequest.parent 必填：调用方 agent 缺失时给结构化错误，不把 undefined 透传下去。
-      if (!exec || !exec.agent) throw new Error('缺少调用方 agent（exec.agent 不可用）：无法创建子代理运行')
+      if (!exec || !exec.agent) throw new Error('no caller agent (exec.agent is unavailable): cannot create a subagent run')
       const docs = await subagents.list()
       const { allowed, reason } = await filterBySceneBinding(docs, await subagents.sceneLists())
       const persona = allowed.find((p) => p.name === name)
       if (!persona) {
-        const available = allowed.map((p) => p.name).join('、') || '(无)'
-        throw new Error('人设不可用: ' + name + (reason ? '（' + reason + '）' : '（可用: ' + available + '）'))
+        const available = allowed.map((p) => p.name).join(', ') || '(none)'
+        throw new Error('persona unavailable: ' + name + (reason ? ' (' + reason + ')' : ' (available: ' + available + ')'))
       }
       // 这里**刻意没有**"深度不够就拒绝"的检查（2026-09-17 用户裁定，方案 A）。
       // 它此前基于一个错误假设：以为传 `maxDepth: 1` 会让子会话再委派必然失败。实际上官方
-      // `dsh-tool-subagent` 的默认是 **3**、provider 只在**传了值**时才校验，所以子代理本来
-      // 就能继续嵌套。那个检查的唯一净效果是让**我们的**工具比官方严 —— 同一个子会话里官方
-      // 工具能委派、我们的被自己拦下 —— 而用户真想禁止嵌套也禁止不了（官方工具照样能）。
+      // 的 `maxDepth` 只用**宿主配置**那一档（0.2.1 默认 1）、provider 只在**传了值**时才校验，
+      // 所以能不能继续委派问官方就行。那个检查的唯一净效果是让**我们的**工具比官方严 ——
+      // 同一个子会话里官方工具能委派、我们的被自己拦下 —— 而用户真想禁止嵌套也禁止不了
+      // （官方工具照样能）。
       // `catalogDepth` 现在只管"目录注入到哪些会话"，不参与委派可行性判断。
       // 按当前会话的 Agent 预设算工具限制：判断不了当前预设、或名单里的工具已经不存在时，
       // 结论里会带一句实话，跟着结果一起返回——不静默改变限制的强度。
@@ -171,14 +172,20 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
       const prefix = r.stopReason && r.stopReason !== 'completed' ? `[stopReason: ${r.stopReason}]\n` : ''
       const note = decision && decision.note ? `⚠ ${decision.note}\n\n` : ''
       // 允许追问通道（人设 `continuable: true`）：产出是**异步**到达的，这里只拿到子会话 id。
-      // 回执必须把"id + 怎么追问 + 怎么中止"三件事写全 —— 少写一句，模型就会把"没拿到结果"
-      // 读成"委派失败"而重试一次（那会再起一个后台子代理，白白翻倍）。
+      // 回执必须把"id + 产出怎么回来 + 怎么追问 + 怎么中止"写全 —— 少写一句，模型就会把
+      // "没拿到结果"读成"委派失败"而重试一次（那会再起一个后台子代理，白白翻倍）。
+      // "产出怎么回来"说的是**宿主的结算通知**（0.2.1 核实 `dsh-subagent/lib/types/manager.js`
+      // 的 `notifySettlement` → `createSettlementMessage`）：子代理结束时父代理会收到一条
+      // `subagent-settled` 通知，含收尾一行说明 + 子代理最终的非空 text 块（+ 结构化结果与
+      // 诊断）。它自己发回来的 `send_message` 是**补充**（`withContinuableReturnGuidance`
+      // 要求它在收尾前把自包含结果发给父代理），不是产出的唯一来路 —— 回执不能只说前者，
+      // 否则子代理没主动发消息时父代理会把"还没收到结果"当成"还在跑"。
       if (r.continuable === true) {
-        return note + '已启动允许追问的子代理「' + name + '」（后台运行）\n'
+        return note + 'started the continuable subagent "' + name + '" (running in the background)\n'
           + 'agent_id: ' + r.runId + '\n\n'
-          + '它的产出稍后自己发到这里，届时你会收到一条通知。要追问就 '
-          + 'send_message({ agent_id: "' + r.runId + '", message: "..." })，'
-          + '要中止就 interrupt_agent({ agent_id: "' + r.runId + '" })。'
+          + 'you will get a notification carrying its final output when it settles. To follow up: '
+          + 'send_message({ agent_id: "' + r.runId + '", message: "..." }), '
+          + 'To stop it: interrupt_agent({ agent_id: "' + r.runId + '" }).'
       }
       return note + prefix + r.text
     },

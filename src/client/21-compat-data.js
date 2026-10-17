@@ -6,6 +6,20 @@
       batch: 'compat.op.batch', delete: 'compat.op.delete',
     }
     /**
+     * 0.2.1 起**新增**的宿主契约能力 id（capability-specs.ts 的那四条）。
+     *
+     * 与上面那排 action 的区别：action 是"这个操作走哪条路"，这些是"某个契约还在不在"。
+     * 它们缺了都不抛错、只是功能少一半，所以单独一块而不是混进 action 表 —— 混进去会让
+     * "删除不可用"和"工具限制失效"看起来一样严重，实际后者不影响你删任何东西。
+     *
+     * 键集必须与服务端 `CONTRACT_CAPABILITY_IDS` 对齐：那里按 feature-overview 的行 key 映射
+     * 到能力 id，这里按能力 id 过滤 findings。两边任一处改名，另一处会在界面上静默失效
+     * （契约行不再出现），所以加了就两处一起加。
+     */
+    var CONTRACT_CAPABILITY_IDS = [
+      'agentPreset.register', 'tools.restrict-method', 'agent.created-event', 'connection.admit',
+    ]
+    /**
      * 「最近改动」流水里 op 的人类名（0.15.0 B2）。
      *
      * 为什么不直接显示 op 名：`mcpm-set-enabled` 这种内部标识符对用户是一串噪声，而这一栏

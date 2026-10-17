@@ -3,13 +3,17 @@
 // 为什么需要它：宿主的 BrowserAuth 栅栏**只包在宿主自己注册的路由上**
 // （dsh-client-connection 的 register()/upgrade、dsh-api-gateway、
 // dsh-host-open-in-app），dsh-host-webserver 本身没有全局中间件。宿主生态的
-// 既定约定是每个注册方自己调 `connection.requestRejection(req)`，它做两件事：
+// 既定约定是每个注册方自己调 `connection.admit(req)`（0.2.1 起的完整版，
+// `requestRejection(req)` 是它只取状态码的那层包装），它做两件事：
 //
 //   1. Host/Origin 栅栏 —— Host 必须是回环地址、deployment 派生的 LAN IP 字面量
 //      或声明的 trustedHosts。Host 是 DNS rebinding 唯一伪造不了的头：攻击者
 //      控制域名 → 浏览器发 `Host: evil.com`，但插件的自比对式 Origin 检查
 //      （origin.host === host）会同时成立，于是被误判为同源。
 //   2. browser-session cookie 鉴权（HttpOnly + SameSite=Strict，Path=/）。
+//
+// `admit()` 还交回这次请求所代表的 **Peer**，而本插件的 exact 路由按官方契约只服务
+// owner Peer（非 owner 一律 403），所以 principal 也要验 —— 只取状态码会漏掉这一层。
 //
 // 只查公开常量 `x-dsh-plugin` 与自比对 Origin 等于没鉴权：本机任意进程都能调写 op，
 // 而写 op 里包含 `mcpm-add`（command/args 无白名单，宿主 stdio 传输会 spawn 它
@@ -26,6 +30,11 @@ export interface FenceRejection {
 
 /** 宿主 connection 服务的最小结构面。 */
 export interface ConnectionSeam {
+  /**
+   * 0.2.1 起宿主把栅栏本身拆分：`admit()` 返回**请求所代表的那个 Peer**（或拒绝码），
+   * 而 `requestRejection()` 只是它只取状态码的那一层包装。我们要的是 Peer —— 见下。
+   */
+  admit?(req: unknown): { peer?: { principal?: { kind?: string } } } | { rejection: 401 | 403 } | undefined
   requestRejection?(req: unknown): number | undefined
 }
 
@@ -49,6 +58,27 @@ const headerValue = (req: FenceRequest, name: string): string => {
  */
 export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): FenceRejection | null {
   try {
+    // 优先 `admit()`（0.2.1 起存在）：它做 Host/Origin 栅栏 + 浏览器 session 鉴权，
+    // 并把"这次请求代表谁"作为 Peer 交出来。`requestRejection()` 只给状态码 —— 状态码
+    // 足以回答"拦不拦"，却不足以回答"这个调用方被授权到什么程度"，而本插件的路由是
+    // **exact 路由**（`kind: 'exact'`，官方契约：只有 owner Peer 才该拿到响应）。
+    // 没有 principal 信息时只能当作非 owner 处理 —— 这正是下面 403 那一支的理由。
+    const admission = connection?.admit?.(req)
+    if (admission !== undefined) {
+      if ('rejection' in admission) {
+        const status = admission.rejection
+        return {
+          status,
+          error: status === 401
+            ? '未通过宿主的浏览器鉴权：请在 DSH Web GUI 内操作，或为本插件配置访问令牌（config.token / DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）'
+            : 'Host/Origin 栅栏拒绝：该请求不是发往本机地址的同源请求',
+        }
+      }
+      if (admission.peer?.principal?.kind !== 'owner') {
+        return { status: 403, error: '拒绝：调用方不是本机所有者身份' }
+      }
+      return null
+    }
     const rejection = connection?.requestRejection?.(req)
     if (typeof rejection === 'number') {
       return {

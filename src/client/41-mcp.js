@@ -1517,6 +1517,13 @@
             // 「锁定时只显示锁定横幅」，提示词页此前漏了这层互斥，于是同一件事说了两遍
             // （用户 2026-09-19 截图：提示词页两条黄条，其他管理页只有一条）。
             (state.anyLocked !== true && sceneDriver) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('agm.sceneLock.notice', { scene: sceneDriverLabel, id: sceneDriver.presetId })) : null,
+            // 共享 agents 根那一份 AGENTS.md（`~/.agents/AGENTS.md`）**只读提示**：0.2.1 起
+            // 官方把用户全局链扩成两份并列（`$DSH_HOME/AGENTS.md` → `<agentsHome>/AGENTS.md`），
+            // 这一页只管得到前一份。所以"改了没生效"有了第二个解释 —— 真正在说话的是后一份。
+            // 只提示、不给写入入口：这不是本插件的预设，写它会与官方的去重/刷新规则互相覆盖。
+            (state.current && state.current.agentsHomeAgentsMd && state.current.agentsHomeAgentsMd.exists)
+              ? React.createElement('div', { className: 'dsm-feedback', role: 'status' }, t('agm.agentsHome.present', { path: state.current.agentsHomeAgentsMd.path }))
+              : null,
             // 一次性拒绝说明（被引用的预设删不掉）：不替换列表，只加一条横幅。
             state.deny ? React.createElement(Notice, { kind: 'warn', text: state.deny }) : null,
             // 搜索框：页头之下、列表之前（与 MCP / 技能 / 记忆页同一位置与样式）。

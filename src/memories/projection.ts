@@ -138,40 +138,40 @@ export function sceneLabel(scene: string, index?: RulesIndex): string {
 /**
  * 记忆段里的场景**分组**标题。
  *
- * `global` 是恒常生效的保留桶，不是"一个场景" —— 叫它 `## 场景：全局` 会让模型以为"全局"
+ * `global` 是恒常生效的保留桶，不是"一个场景" —— 叫它 `## Scene: 全局` 会让模型以为"全局"
  * 是当前场景的另一种取值（用户 2026-09-23：「全局不需要写成场景」）。所以它单独成一种标题：
- * `## 常驻信息`。其余场景仍是 `## 场景：X`。
+ * `## Always-on memories`。其余场景仍是 `## Scene: X`。
  *
- * `_shared`（历史保留名）保持 `## 场景：_shared` 不动 —— 它只在旧数据里出现，且没有
+ * `_shared`（历史保留名）保持 `## Scene: _shared` 不动 —— 它只在旧数据里出现，且没有
  * "全局"这种"它不是场景"的语义歧义（它确实曾是一个共享场景）。
  */
 export const sceneHeading = (scene: string): string =>
-  scene === GLOBAL_SCENE ? '## 常驻信息' : `## 场景：${sceneLabel(scene)}`
+  scene === GLOBAL_SCENE ? '## Always-on memories' : `## Scene: ${sceneLabel(scene)}`
 
 /**
- * 场景段（`scene-manager-catalog`）里的一行：`**「<场景名>」—— 用户描述：<场景说明>**`。
+ * 场景段（`scene-manager-catalog`）里的一行：`**"<场景名>" — user description: <场景说明>**`。
  *
- * 2026-09-23 用户裁定，替换了原来的两行式（`## 场景：X` + `**场景说明：X**`）。三条理由都是
+ * 2026-09-23 用户裁定，替换了原来的两行式（`## Scene: X` + `**场景说明：X**`）。三条理由都是
  * 用户看到**实际注入**之后提的：
  *   - **场景名只出现一次**。上一版里它出现三次（框架线索"现在处在哪个场景"、引导语里的
- *     「代码」、标题里的 `## 场景：代码`），而说明行只是把同一件事换个标签再说一遍。
+ *     「代码」、标题里的 `## Scene: 代码`），而说明行只是把同一件事换个标签再说一遍。
  *   - **场景说明是「标签」，不是「约定」**。它答的是"这个场景是干什么的"，用户的实例就是
  *     「写代码」「前端相关」。上一版把它写成"一律照办、覆盖你的默认做法"，等于要求模型
  *     "照办一个标签" —— 那正是它读不懂这一段的根源。授权语已删，说明只作注解跟在名字后面。
  *   - **没填说明就不带后缀**。上一版会补 `defaultSceneDescription` 的默认句，而
  *     "用户配置的上下文，当前启用"贴在名字后面，读起来像一句真的说明。
  *
- * `用户描述：` 这个前缀是同日追加的（用户：「防止模型误解这是场景名或者其它」）：破折号后面
+ * `user description:` 这半句是同日追加的（用户：「防止模型误解这是场景名或者其它」）：破折号后面
  * 那截的形态本来有歧义 —— `**「代码」—— 写代码**` 读起来像"名字 —— 别名"，而它其实是
- * **用户写的一句说明**。加四个字把来源点明，模型就不会把它当成场景的另一个名字或某种标识符。
- * 前缀只在真有描述时出现（没填描述时整截不出现，不存在"用户描述："后面空着）。
+ * **用户写的一句说明**。加这半句把来源点明，模型就不会把它当成场景的另一个名字或某种标识符。
+ * 前缀只在真有描述时出现（没填描述时整截不出现，不存在"user description:"后面空着）。
  *
  * 为什么不再用 `##` 标题：这一段只讲"当前启用的是哪个 + 它是什么"，一行说完就够。
  * 场景**分组**标题仍在记忆段里用（`sceneHeading`），两段各自承担自己的职责。
  */
 export const sceneLine = (scene: string, index?: RulesIndex): string => {
   const described = String(index?.scenes?.[scene]?.description ?? '').replaceAll(/\s+/g, ' ').trim()
-  return `**「${sceneLabel(scene)}」${described === '' ? '' : `—— 用户描述：${described}`}**\n\n`
+  return `**"${sceneLabel(scene)}"${described === '' ? '' : ` — user description: ${described}`}**\n\n`
 }
 
 /** 场景渲染顺序：全局 `global` 最先（它的记忆对任何对话都成立，先讲总则），
@@ -250,7 +250,7 @@ export function attachmentLine(file: SceneMemoryFile): string {
   if (names.length === 0) return ''
   const shown = names.slice(0, ATTACHMENT_LIST_MAX)
   const more = names.length - shown.length
-  return `附件：${file.bundleDir}（${shown.join('、')}${more > 0 ? ` 等 ${names.length} 个` : ''}）`
+  return `Attachments: ${file.bundleDir} (${shown.join(', ')}${more > 0 ? `, ${names.length} total` : ''})`
 }
 
 // ── 单条记忆的渲染 ─────────────────────────────────────────────────────────
@@ -260,7 +260,7 @@ export function attachmentLine(file: SceneMemoryFile): string {
  *
  * 为什么不是"缩进 2 格就完事"（这是上一版的实现，被实测推翻）：markdown 里缩进 ≤3 格的 `#`
  * **仍然算标题**，所以正文里一句手写的 `# 代码/需求` 会渲染成 H1，**盖过容器自己的
- * `## 场景：X`** —— 用户看到的就是这个：内容看起来"逃出了条目"，与场景标题平级甚至更高。
+ * `## Scene: X`** —— 用户看到的就是这个：内容看起来"逃出了条目"，与场景标题平级甚至更高。
  * 缩到 4 格能压住标题（块级标记都要求 ≤3 格缩进），但正文里的列表/引用只是被"压平"，
  * 视觉上仍与条目正文同级，达不到"明显从属"。
  *
@@ -289,8 +289,8 @@ export const explicitDescriptionOf = (f: SceneMemoryFile): string => (
 /**
  * 单条信息的渲染形态 —— **能一行就一行，但恒为列表项**。
  *
- *   单行且不长的正文 → `- **名称**（描述） — 正文`（与 MCP / 子智能体两个段的列表同形；无显式描述时括号不出现）
- *   多行或过长的正文 → `- **名称**（描述）` + 空行 + **围栏代码块里的正文**（挂在条目下；理由见 `bodyBlock`）
+ *   单行且不长的正文 → `- **名称** (描述) — 正文`（与 MCP / 子智能体两个段的列表同形；无显式描述时括号不出现）
+ *   多行或过长的正文 → `- **名称** (描述)` + 空行 + **围栏代码块里的正文**（挂在条目下；理由见 `bodyBlock`）
  *
  * 名称恒为标题：它就是这条记忆的身份（工具 id `<场景>/<名称>`、bundle 目录/文件名都以它为准），
  * 用户说「记忆里的 X」、模型再调 `memory_manager_*` 时都对得上号；显式描述是括号注解，不抢标题。
@@ -303,14 +303,14 @@ export const explicitDescriptionOf = (f: SceneMemoryFile): string => (
  * 为什么要分两种：用户常有十几条「一句话事实」（「提交格式：PDF」），每条都占标题 + 空行 +
  * 正文三行，整段会散成一长串标题；压成一行后十条信息就是十行。多行正文是**用户写的完整
  * Markdown**（可能自带标题、代码块、嵌套列表），放进围栏块挂到条目下 —— 上一版让它以普通
- * 段落参与外围排版，结果正文里的 `#` 会盖过 `## 场景：X`（见 `bodyBlock` 的说明）。
+ * 段落参与外围排版，结果正文里的 `#` 会盖过 `## Scene: X`（见 `bodyBlock` 的说明）。
  *
  * 返回值带 `inline`：调用方据此决定下一条记忆前要不要空行（单行条目连续排列，其余空行分隔）。
  */
 export function memoryBlock(file: SceneMemoryFile): { text: string; inline: boolean } {
   const desc = explicitDescriptionOf(file)
-  // 加粗的只有名称：`- **名称**（描述） — 正文`，与 MCP 段 `- **server**（N 个工具） — …` 同形。
-  const title = `**${file.name}**` + (desc === '' ? '' : `（${desc}）`)
+  // 加粗的只有名称：`- **名称** (描述) — 正文`，与 MCP 段 `- **server**（N 个工具） — …` 同形。
+  const title = `**${file.name}**` + (desc === '' ? '' : ` (${desc})`)
   const text = String(file.body ?? '').trim()
   const inline = text === '' || (!text.includes('\n') && text.length <= INLINE_BODY_MAX)
   const head = text === ''

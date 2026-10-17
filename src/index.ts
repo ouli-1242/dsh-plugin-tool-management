@@ -817,7 +817,7 @@ export default {
           // 三个目录是 catalog，提示词是 instructions（与官方 AGENTS.md 那条行同一形态）。
           //
           // 深度判据（`applicableTo`）**逐域写在域声明上**，三个域各一条，语义都**不是**"能不能
-          // 委派"。委派可行性由官方决定：`dsh-tool-subagent` 默认 `maxDepth: 3`，provider 只在
+          // 委派"。委派可行性由官方决定：`dsh-subagent` 默认 `maxDepth: 1`（0.2.1 实测核对），provider 只在
           // 传了该值时才校验，所以子代理本来就能继续嵌套（用户实测确认）。此前判据叫"还有没有
           // 委派预算"、语义是"还能不能委派"，那是错的 —— 详见 service.ts 里 `catalogDepth` 的注释。
           //   · 场景与记忆：**恒为"只在顶层"**。这两段说的是**父会话的处境**（此刻在哪个场景、
@@ -839,7 +839,7 @@ export default {
             { key: 'scene', name: 'tool-management:scene', label: '场景', form: 'snapshot', text: () => memoriesService.sceneCatalogText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // 记忆（**内容**）：各场景下的条目。与场景段同源、同一条 `applicableTo`。
             { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: () => memoriesService.memoryText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: () => mcp.stateCatalog.text() },
+            { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent) },
             { key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog', text: (agent) => skillCatalog.text(agent) },
             {
               key: 'subagents',
@@ -1449,6 +1449,9 @@ export default {
       pluginHiddenTools: () => [...toolTableHidden()],
       // 有官方等价物时逐 agent 让位（见上面 CARRIER_DUPLICATES 的注释）。
       carrierHiddenTools: carrierHiddenToolsFor,
+      // 状态段尾句那句「用 `mcp_manager_list` 查」的前提：与技能 / 子智能体两个目录同一份判据
+      // （2026-10-18 审查 B）。
+      listToolVisible: (agent: unknown) => toolVisibleFor('mcp_manager_list', agent),
     })
 
     // ---------- ops ----------

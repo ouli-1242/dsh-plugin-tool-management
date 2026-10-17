@@ -35,12 +35,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CAPABILITY_SPECS, type CapabilitySpec } from './capability-specs.js'
+import { BARE_HOST_MODULE_CONTRACTS } from './host-contracts.js'
 import {
   isAsarPath,
   isFn,
   OWNER_CLASSES,
   realPathWithReason,
   referencePrototypes,
+  provideHostRootCandidates,
   safeResolve,
   textMatchOf,
   versionOf,
@@ -58,6 +60,7 @@ import type {
   HostIdentityPackage,
   HostIdentityRealpathFailure,
   HostIdentityRealpathNote,
+  HostContractStatus,
 } from './probe-types.js'
 
 // 宿主安装根的发现与「该走哪条恢复路」的判定 2026-10-01 整段搬到 ./host-roots.js，正文一字
@@ -80,6 +83,12 @@ export type { OperationName, RouteDecision } from './host-roots.js'
 import { hostRootCandidates, IDENTITY_PACKAGES, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
 import type { OperationName, RouteDecision } from './host-roots.js'
 
+// 「宿主在哪」这份口径只有一份（host-roots.ts 的 hostRootCandidates）。静态能力表里有条目要
+// 按宿主侧解析结果决定**这一轮能不能查**（`staticWhen`，见 connection.admit 那条），而
+// capability-specs.ts 不能反向 import 本文件（probe → specs → probe 成环）。所以在这里把
+// 函数本体注入 host-probe.ts：它只调用、不 import，加载顺序天然正确（本文件先被求值）。
+provideHostRootCandidates(hostRootCandidates)
+
 // 类型面照旧从 lib/compat/probe.js 对外可见（`ops/compat.ts` 等按这个路径引它们）。
 export type {
   CapabilityFinding,
@@ -92,6 +101,8 @@ export type {
   HostIdentityPackage,
   HostIdentityRealpathFailure,
   HostIdentityRealpathNote,
+  HostContractPackageStatus,
+  HostContractStatus,
 } from './probe-types.js'
 
 /** Packages whose physical module identity matters to this plugin. */
@@ -119,9 +130,15 @@ export function isSourceInstall(): boolean {
  * `0.1.8-rc.1` / `0.2.1-rc.1` / `0.3.0-rc.1` 全部 false）—— 范围只能**逐代枚举并集**，
  * 每适配一代新 rc 就补一段（见 README 的升级清单）。
  *
- * 上界刻意不设：宿主跨代升级由**运行时能力探测**兜底（`assessHost` 逐项探测并降级），
- * 而不是在安装期拒绝整包。所以这里用不带上界的 `>=`，**不用** `^`（`^0.2.0` 的隐含上界
- * `<0.3.0` 会在宿主发稳定版 0.3.0 时把插件挡在门外 —— 与"不设上界"自相矛盾）。
+ * 每一代各自**带上界**（0.1.7 → `<0.2.0-rc.1`、0.2.0 → `<0.2.1-rc.2`、
+ * 0.2.1 → `<0.2.2`）：宿主跨 minor 升级时不给"装进去再说"，而是**主动发一版**。新的 minor
+ * 已经动过 SubagentStartRequest、身份比对这些会静默改行为的契约，旧适配继续跑在一份新宿主上，
+ * 失败会以"功能莫名不工作"的形式出现 —— 那时用户无法判断是插件问题还是版本问题。装上被拒 +
+ * 一版新适配，优于装上然后部分功能悄悄失效。
+ * 上界**必须逐段写**：只在最后一段挂 `<0.2.2` 是无效的 —— `>=0.2.0-rc.1` 那一支没有上界，
+ * 并集仍会匹配 0.3.0 / 1.0.0（实测：那种写法下 0.3.0 satisfies 为 true）。`^` 更不能用：
+ * `^0.2.0` 的隐含上界是 `<0.3.0`，而 0.2.1-rc.2 这个已适配版本自己都满足不了它（prerelease
+ * 只在同元组比较器带 prerelease 时才匹配）。
  *
  * 2026-09-30 审查 §5 F9 + §5.4：这一段此前与 `package.json` 的 peerDependencies **漂移**成
  * 两种写法（这里是 `^` 三段、那里是 `>=` 两段，且下界不同）。现在两处是**同一个字符串**，
@@ -136,16 +153,13 @@ export function isSourceInstall(): boolean {
  * 0.2.0-rc.2（桌面版首发）已实测通过：`assessHost` 全通过，宿主版本读得出来，
  * 归档宿主的身份判定见 `hostPackageRoot` / `isAsarPath`。所以它同时进范围与「已验证」。
  */
-export const EXPECTED_PEER_RANGE = '>=0.1.7-rc.2 || >=0.2.0-rc.1'
+export const EXPECTED_PEER_RANGE = '>=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2'
 /** The release this plugin's adapters were last verified against. */
 /**
- * peer range 的下界。
+ * peer range 的下界。仍从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
  *
- * 刻意不带 semver 上界：官方持续发版，硬上界会在宿主跨 minor 升级时直接挡住
- * 插件安装（pnpm peer 校验失败）。上界改为由**运行时能力探测**兜底 ——
- * 宿主版本高于已验证范围时，`assessHost` 会逐项探测并把缺失能力降级/禁用，
- * 而不是在安装期拒绝整包。
- * 从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
+ * 注意它取的是范围里的**最低**那个版本号（`>=0.1.7-rc.2`），不是已验证版本 —— 与上界收敛
+ * 不冲突：这条讲的是"最早支持哪一代"，上界讲的是"当前适配覆盖到哪一代"。
  *
  * 2026-09-29 起**不再出现在界面上**（用户裁定：删掉「最低要求 ≥ …」那一行 —— 它是安装期
  * 门槛，摆在"当前宿主"卡片下面会被读成对当前宿主的断言）。保留此导出是因为它进了
@@ -296,6 +310,11 @@ export interface CapabilityStatic {
 export const CAPABILITY_STATIC: readonly CapabilityStatic[] = CAPABILITY_SPECS.map((spec) => {
   const ref = OWNER_CLASSES[spec.owner]
   const methods = spec.methods
+  // `staticWhen` 是"这一轮能不能静态检查"的门槛。它说不的时候，`check` 必须是 null ——
+   // 否则 doctor 会从插件锚点解析一个本插件不依赖的包，然后把"解析不到"写成"宿主缺失"
+   // （2026-10-17 `connection.admit` 的误报正是这条路径）。null 让它落到 `runtime-only`：
+   // 「只能对活的宿主查」是事实，"missing" 不是。
+  const checkableByStaticView = spec.staticWhen === undefined || spec.staticWhen()
   return {
     id: spec.id,
     label: spec.label,
@@ -303,7 +322,7 @@ export const CAPABILITY_STATIC: readonly CapabilityStatic[] = CAPABILITY_SPECS.m
     optional: spec.optional === true,
     // A `fields`-only spec (instance Maps) and a spec whose judgement lives in
     // its `probe` have nothing a prototype can answer — they stay runtime-only.
-    check: ref !== undefined && methods !== undefined && methods.length > 0
+    check: checkableByStaticView && ref !== undefined && methods !== undefined && methods.length > 0
       ? { pkg: ref.pkg, target: ref.target, members: methods }
       : null,
   }
@@ -350,6 +369,15 @@ export function assessHost(ctx: {
   const registry = unwrap(get('workspaceRegistry')) as Target
   const cache = unwrap(get('sessionProjectionCache')) as Target
   const sessions = unwrap(ctx.sessions !== undefined ? ctx.sessions : get('sessions')) as Target
+  // tools 走 ctx 属性优先（它在插件 inject 清单里）。它有两层取法：宿主平面的 ctx.tools
+  // 与**子代理 scope 里**的那个（restrict 在子 scope 上才作用于该子代理，run-provider.ts
+  // 就是 `childAgent.ctx.get('tools')` 取的）。探测只能看宿主平面那一层 —— 子 scope 还没建。
+  const tools = unwrap((ctx as { tools?: unknown }).tools !== undefined ? (ctx as { tools?: unknown }).tools : get('tools')) as Target
+  // agent 作用域：探测对象是 agent 自己的 ctx（`on` 挂在它上面）。这里没有活的 agent 可看，
+  // 所以拿宿主平面的 ctx 代答 —— 同一个类实例链上的成员存在性，`on` 改名时两边一起改。
+  // 局限如实标注：探得到"on 在不在"，探不到"agent/created 是否仍串行"。
+  const agentContext = ctx as Target
+  const connection = unwrap(get('connection')) as Target
   // settings 走 ctx 属性优先（插件 inject 清单里的正式服务），roster 走服务名查找
   // （'agentPresets' 与 preset-reach.ts 的 presetRosterOf 同名 —— 注入矩阵实际用的就是它）。
   const settings = unwrap(ctx.settings !== undefined ? ctx.settings : get('settings')) as Target
@@ -366,6 +394,9 @@ export function assessHost(ctx: {
     settings: { target: settings, reference: references.settings },
     presetRoster: { target: roster, reference: references.roster },
     fs: { target: fsService, reference: undefined },
+    tools: { target: tools, reference: references.tools },
+    agentContext: { target: agentContext, reference: undefined },
+    connection: { target: connection, reference: references.connection },
   }
 
   const findings = CAPABILITY_SPECS.map((spec) => {
@@ -389,6 +420,8 @@ export function assessHost(ctx: {
   let pluginRealpathNote: string | null = null
   let asarHostVersion: string | null = null
   let asarPluginVersion: string | null = null
+  // 宿主非 peer 契约只跟"宿主装在哪"有关，与下面那个逐包 identity 循环无关，先量一次。
+  const contracts = hostContractStatus(hostRoot)
   for (const name of IDENTITY_PACKAGES) {
     const resolved = safeResolve(name)
     modules[name] = resolved
@@ -506,6 +539,47 @@ export function assessHost(ctx: {
     degraded,
     mayDelete: delta,
     generatedAt: Date.now(),
+    ...(contracts === null ? {} : { contracts }),
+  }
+}
+
+/**
+ * 宿主**非 peer** 契约的实况：插件按裸模块名 require 的那几个官方包，宿主还暴不暴露、
+ * 入口里那几条 canary 还在不在。
+ *
+ * 为什么在探测里量而不是只在 doctor 里量：doctor 是"没有活宿主"的静态视图，而兼容页看到的是
+ * 正在跑的宿主。升级 DSH 后第一眼该看见的正是这一块 —— 官方撤掉某个包时**不抛错**，功能只是
+ * 少一半，除此之外没有任何信号。
+ *
+ * 口径从宿主安装锚点解析（不是插件侧）：这些包**不是**本插件的 peer，插件 `node_modules`
+ * 里通常没有，从插件侧解析只会得到一律"解析不到"，那不是一个结论。
+ *
+ * @param hostRoot - `.../node_modules/@deepseek-ai` 或 `null`（找不到宿主）。
+ */
+function hostContractStatus(hostRoot: string | null): HostContractStatus | null {
+  if (hostRoot === null) return null
+  const packages = BARE_HOST_MODULE_CONTRACTS.map((contract) => {
+    let resolved: string | null = null
+    try {
+      resolved = createRequire(join(dirname(hostRoot), 'package.json')).resolve(contract.package)
+    } catch {
+      resolved = null
+    }
+    let missingMarkers: string[] = []
+    if (resolved !== null && contract.markers.length > 0) {
+      try {
+        const source = readFileSync(resolved, 'utf8')
+        missingMarkers = contract.markers.filter((marker) => !source.includes(marker.needle)).map((marker) => marker.needle)
+      } catch { /* 入口读不到时只报"解析不到"，不额外造一条 canary 结论 */ }
+    }
+    return { package: contract.package, feature: contract.feature, resolved, missingMarkers }
+  })
+  return {
+    packages,
+    missing: packages.filter((item) => item.resolved === null).map((item) => item.package),
+    drifted: packages
+      .filter((item) => item.missingMarkers.length > 0)
+      .map((item) => ({ package: item.package, missingMarkers: item.missingMarkers })),
   }
 }
 

@@ -245,13 +245,13 @@ export const DEFAULT_PERSONA_CATALOG_DEPTH = 1
  * 放在本模块（叶子）而不是 `catalog.ts`：`tools.ts` 也要用它，而 `catalog.ts` 反向依赖
  * `tools.ts` 的 `filterBySceneBinding` —— 放那边会形成 tools ↔ catalog 的循环。
  */
-export const CONTINUABLE_MARK = '（允许追问）'
+export const CONTINUABLE_MARK = ' (continuable)'
 
 /**
  * 「不限制嵌套」的目录注入深度（界面下拉的第四档，前端同值见 client.js 的
  * `CATALOG_DEPTH_UNLIMITED`）。
  *
- * 取值远大于宿主能嵌套到的深度（官方 `dsh-tool-subagent` 默认 `maxDepth: 3`），所以判据
+ * 取值远大于宿主能嵌套到的深度（0.2.1 的 `dsh-subagent` 默认 `maxDepth: 1`），所以判据
  * `深度 < catalogDepth` 在任何可达的会话里都成立 —— 判据本身不必为它加特例分支。
  */
 export const UNLIMITED_PERSONA_CATALOG_DEPTH = 99
@@ -339,18 +339,18 @@ export function textOfBlocks(blocks: unknown, type: string): string {
  */
 export function emptyResultNote(output: unknown, stopReason?: string): string {
   // 连思考都没有 → 子代理确实什么都没产出，这时说「没干活」是对的。
-  if (textOfBlocks(output, 'reasoning') === '') return '(子代理无输出)'
-  const head = '子代理没有返回正文 —— 它产出了思考'
+  if (textOfBlocks(output, 'reasoning') === '') return '(the subagent produced no output)'
+  const head = 'the subagent returned no text — only reasoning'
   switch (stopReason) {
     case 'max-tokens':
-      return `(${head}，但写出结论前就用完了 token 上限；需要结果请把任务拆小些再委派。)`
+      return `(${head}, but it hit the token limit before writing a conclusion; split the task smaller and delegate again if you need a result.)`
     case 'error':
-      return `(${head}，但中途出错了；诊断信息见后。)`
+      return `(${head}, but it errored; diagnostics follow.)`
     case 'aborted':
-      return `(${head}，但写出结论前被中止了。)`
+      return `(${head}, but it was aborted before writing a conclusion.)`
     case 'refusal':
-      return `(${head}，但它拒绝了这项任务。)`
+      return `(${head}, but it refused this task.)`
     default:
-      return `(${head}，但没有写出结论；可以拆小任务重新委派，或你自己接着做。)`
+      return `(${head}, and wrote no conclusion; split the task and delegate again, or carry on yourself.)`
   }
 }

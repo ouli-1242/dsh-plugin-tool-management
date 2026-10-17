@@ -16,6 +16,7 @@ import {
   summarize,
   type CapabilityFinding,
   type HostAssessment,
+  type HostContractPackageStatus,
   type OperationName,
   type RouteDecision,
 } from '../compat/probe.js'
@@ -23,6 +24,7 @@ import { INJECT_DOMAIN_KEYS } from '../context-inject.js'
 import { MCP_TOOL_PREFIX } from '../host-names.js'
 import { assessPresetReach, type PresetRosterLike } from '../compat/preset-reach.js'
 import { runtimeNotes, type RuntimeNote } from '../compat/runtime-notes.js'
+import { AGENTS_MD_REFRESH_PACKAGE } from '../compat/host-contracts.js'
 import { pluginLog } from '../skills/service.js'
 import type { InjectSettings, LiveInjectionSnapshot } from '../context-inject.js'
 import type { SlashSettings } from '../slash-settings.js'
@@ -79,6 +81,21 @@ export interface CompatOpsDeps {
    * 让"改到哪一次"留在调用方那侧，本文件不自己藏状态。
    */
   compatLog: { version?: string }
+}
+
+/**
+ * 功能总览里那几条「宿主契约」行对应的**能力 id**（capability-specs.ts 那张表）。
+ *
+ * 为什么要一张显式映射：`findings` 的 id 是宿主侧的稳定契约名（`agentPreset.register` /
+ * `tools.restrict-method` / `agent.created-event` / `connection.admit`），而行 key 是本插件自己
+ * 的界面标识（`subagent-persona` / ...）。两边命名空间不同，写成字面量表最直白，也最不容易
+ * 在改名时悄悄对错。
+ */
+const CONTRACT_CAPABILITY_IDS: Record<string, string> = {
+  'subagent-persona': 'agentPreset.register',
+  'subagent-tool-restrict': 'tools.restrict-method',
+  'subagent-created-event': 'agent.created-event',
+  'web-admission': 'connection.admit',
 }
 
 export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) => Promise<any>> {
@@ -141,6 +158,9 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           // 修复指引按实际形态给：`scripts/` 不在 `files` 里，npm 安装形态下没有
           // `scripts/doctor.mjs` 与 `scripts/host-deps.mjs`，指了也跑不了。
           sourceInstall: isSourceInstall(),
+          // 宿主非 peer 契约的实况：插件按裸模块名 require 的那几个官方包。与 findings 不同源
+          // （模块层 vs 服务层），所以单独一个字段，界面据此列出"裸模块解析"那一块。
+          ...(assessment.contracts === undefined ? {} : { contracts: assessment.contracts }),
           findings,
           degraded,
           blockers: assessment.identity.blockers,
@@ -393,9 +413,55 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
             ...(asarHost === undefined ? {} : { asarHost: true, asarName: asarHost.asarName }),
           }),
         })
-        // 无独立装配点的域：没有上报就是正常（如实说明依据是"没有降级上报"）。
+        // 宿主契约层（0.2.1 新增的两处 + 一个连接面）：这几条**不是**上面那些从 0.1.x 起
+        // 就在表里的能力，而是本版适配真实依赖的宿主成员。它们的共同点是缺了**不抛错**，
+        // 只是功能少一半 —— 所以必须在总览里占一行，让"升级后某处悄悄不工作"有地方看。
+        //
+        // 逐条的后果（与 capability-specs.ts 里的 fallback 一一对应）：
+        //   · agentPreset.register 没了 → 带人设的子代理委派失败（临时预设注册不上去）；
+        //   · tools.restrict-method 没了 → 人设的 tools/toolsDeny 不生效，子代理继承父级全部工具；
+        //   · agent.created-event 串不起来 → 工具限制慢一步（首轮看到的还是继承来的工具集）；
+        //   · connection.admit 没了 → Web 鉴权退回 requestRejection，再缺则退回本地回环判定。
+        const findingOf = (id: string): CapabilityFinding | undefined =>
+          assessment === undefined ? undefined : assessment.findings.find((item) => item.id === id)
+        const contractRows: Array<[string, string, string]> = [
+          ['subagent-persona', '子智能体人设委派', 'subagents'],
+          ['subagent-tool-restrict', '子代理工具限制', 'subagents'],
+          ['subagent-created-event', '子代理创建时序', 'subagents'],
+          ['web-admission', 'Web 连接准入', 'compat'],
+        ]
+        for (const [key, label, tab] of contractRows) {
+          const finding = findingOf(CONTRACT_CAPABILITY_IDS[key] ?? '')
+          push({
+            key, label, tab,
+            state: finding === undefined ? 'unknown' : finding.state === 'ok' ? 'ok' : 'degraded',
+            detail: finding === undefined ? '能力探测不可用（归档服务未挂载）' : finding.detail,
+            ...(finding === undefined ? {} : { capabilityId: finding.id }),
+          })
+        }
+        // 无独立装配点的域：这一行的依据必须是**真的查过什么**，不能拿一句"无降级上报"糊过去 ——
+        // 那句话对没有上报通道的域恒真（它只说明"没坏到会上报"，不说明"现在好不好"）。
+        // 有宿主模块可核的域（提示词走 AGENTS.md 裸模块，子智能体还要加上人设包）按实况说；
+        // 记忆 / 场景档案确实没有可核的宿主模块，那才停留在"无降级上报"。
+        const contractFeature = (packageName: string): HostContractPackageStatus | undefined =>
+          assessment?.contracts?.packages.find((item) => item.package === packageName)
         for (const [key, label, tab] of [['memory', '记忆', 'memory'], ['prompts', '提示词', 'prompts'], ['subagents', '子智能体', 'subagents'], ['scenes', '场景档案', 'scenes']] as const) {
-          push({ key, label, tab, state: 'ok', detail: '无降级上报（装配失败会出现在这里）' })
+          // 子智能体的依据是那三条宿主契约 + AGENTS.md 裸模块（人设正文要走它注入）。
+          const persona = contractFeature('@deepseek-ai/dsh-persona')
+          const instructions = contractFeature(AGENTS_MD_REFRESH_PACKAGE)
+          const deps = key === 'subagents'
+            ? [persona, instructions].filter((item) => item !== undefined)
+            : key === 'prompts' ? [instructions].filter((item) => item !== undefined) : []
+          const broken = deps.filter((item) => item.resolved === null || item.missingMarkers.length > 0)
+          push({
+            key, label, tab,
+            state: broken.length > 0 ? 'degraded' : 'ok',
+            detail: broken.length > 0
+              ? '宿主契约缺失：' + broken.map((item) => item.feature).join('、')
+              : deps.length > 0
+                ? '依赖的宿主模块在位（' + deps.map((item) => item.feature).join('、') + '）'
+                : '无降级上报（装配失败会出现在这里）',
+          })
         }
         return { ok: true, rows, generatedAt: Date.now() }
       } catch (e) { return { ok: false, error: deps.message(e) } }

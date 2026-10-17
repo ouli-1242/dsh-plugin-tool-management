@@ -147,6 +147,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 - **「取消应用」一步回到链起点**，不是只退一步：这一串应用 / 取消往复开始之前是什么样就恢复成什么样（起点没有 `AGENTS.md` 就把文件删掉）；中途每一份内容都留在 `__last-applied__/AGENTS.md.bak-*`（保留 5 代），随时能再应用回来。
 - **两类不能直接删**：**被场景绑定的**、以及**当前应用的那一份**（后者先点开关「取消应用」就能删）；首次打开时自动生成的那份没「应用」过，可以直接删。删除一律进回收站。
 - **快捷提示词**（同页第二段）：存一段常用的话，`/` 里点一下就原样贴进输入框；场景可以绑定一组（进入只启用勾的那几条、退出按进场景前还原，也可选「无」）。
+- **共享的全局指令也能看见**：`~/.agents/AGENTS.md` 与别的 agent 工具共用、也在被注入；它存在时提示词页会标出来（只读，改它要去改那个文件）。
 
 ### 历史会话
 
@@ -157,10 +158,11 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 ### 宿主兼容
 
 - **「兼容」页**：宿主版本、能力可用数、每个动作走原生 / 适配 / 不可用、降级项与原因；三个写入口：访问令牌、注入设置、模型工具表。
+- **兼容页功能总览**：一行一个功能点，宿主契约四条（子智能体人设委派 / 工具限制 / 创建时序 / Web 准入）与「裸模块解析」四包都列在这里，升级后哪一处悄悄不工作一眼可见。
 - **命令行**：`node scripts/doctor.mjs`（体检）、`node scripts/host-deps.mjs --fix`（依赖对齐）。
 - **压制型预设**（`minimal` 这类）下本插件的注入默认停用，可在「兼容」页按域强制打开。
 - **关掉「技能」「提示词」的勾选 = 连宿主那份一起停**（这两域在标准预设下由官方送）；其余三域勾选完全生效。
-- **注入长什么样**：每个域一条 `<system-reminder>`，`# 板块标题` + 正文 + 一句"以本份为准"；正文里的 `</system-reminder>` 会被转义。
+- **注入长什么样**：每个域一条 `<system-reminder>` —— 英文模板（`# Current …` 等板块标题 + 一句"以本份为准"）包着你自己的内容，名称、说明、备注、正文一律原样注入；正文里的 `</system-reminder>` 会被转义。
 
 ---
 
@@ -211,6 +213,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 重复 MCP 页签                               | 删 `cordis.patch.yml` 里的旧 loader 行后重启。                                                                                              |
 | 改坏配置 DSH 起不来                         | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.<层级>.bak-<时间戳>` 覆盖回去（每份 patch 各留 5 份）。                     |
 | 升级 DSH 后动作不可用                       | 设置 → 工具 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                       |
+| 升级 DSH 后装不上 / 提示 peer 不符           | 兼容范围逐代带上界（当前一代到 `<0.2.2`），跨 minor 升级要等插件同步适配（装新宿主前先升插件）。                                               |
 | 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（出厂默认关着 19 条）；面板和脚本不受影响。                                                      |
 | `approval=never` 还要确认吗                 | 不弹卡，直接放行并记日志；想问回来切回「工作区内修改」。                                                                                    |
 | `subagent_manager_run` 报 provider 不可用   | 对应 provider 没注册：`spawn`（默认）/ `fork`（`inherit`）分别挂 `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` 后重启。 |

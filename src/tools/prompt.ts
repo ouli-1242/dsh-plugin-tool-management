@@ -41,7 +41,7 @@ export function buildPromptTools(deps: PromptToolDeps): void {
     // 那句 `(that reminder is absent when the preset carries the official instructions line)`
     // 删掉（2026-10-15 注入文本审查）：模型**观测不到**"official instructions line"这个条件，
     // 拿它做不了任何决定 —— reminder 在不在，它抬头就能看见，不必由描述来预告。
-    description: 'List AGENTS.md presets (id, description, active state, file path); read that file for a preset body. The one in effect is in the「当前提示词」reminder, whose「来源：」line names the file. Defaults to the one in effect; all=true for the whole library.',
+    description: 'List AGENTS.md presets (id, description, active state, file path); read that file for a preset body. The one in effect is in the "Current prompt" reminder, whose "Instructions from:" line names the file. Defaults to the one in effect; all=true for the whole library.',
     parameters: {
       all: { type: 'boolean', description: 'Include inactive presets (default false).' },
     },
@@ -49,7 +49,7 @@ export function buildPromptTools(deps: PromptToolDeps): void {
     async execute(args: any, exec: any) {
       const showAll = Boolean(args && args.all === true)
       const r: any = await deps.promptOps['agentsmd-list']({})
-      if (!r || r.ok === false) throw new Error((r && r.error) || '读取提示词预设失败')
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read the AGENTS.md presets')
       const all: any[] = r.presets || []
       // 默认只列「这份 AGENTS.md 来自哪个预设」（用户裁定 2026-09-16）。
       // 判定分两级：`active`（场景驱动时 = 场景绑的那份；否则 = 内容逐字节相同）优先，
@@ -107,19 +107,19 @@ export function buildPromptTools(deps: PromptToolDeps): void {
         // 错误码），原样透传。回执要说清恢复成哪种 —— 起点没有文件时是**删文件**，
         // 不说的话用户以为 AGENTS.md 还在（0.19.1 界面弹窗报的就是这两种）。
         const r = await deps.unapplyPreset()
-        if (!r.ok) throw new Error(r.error || '取消应用失败')
+        if (!r.ok) throw new Error(r.error || 'failed to cancel the application')
         return r.removed === true
           ? 'OK: application cancelled — ~/.dsh/AGENTS.md did not exist before the run started, so the file was removed (effective next turn).'
           : 'OK: application cancelled — ~/.dsh/AGENTS.md is back to what it was before the run started (effective next turn).'
       }
       const id = String((args && args.id) || '').trim()
-      if (id === '') throw new Error('缺少参数：id（只有 apply=false 取消时才不用给）')
+      if (id === '') throw new Error('missing argument: id (only optional when apply=false cancels)')
       const r = await deps.applyPresetGuarded(id)
       if (!r.ok) throw new Error(r.error)
       // 场景驱动时写的是「场景绑定」，回执必须说清改的是哪个场景 —— 只说「已应用到
       // AGENTS.md」会让模型对用户谎报（用户不知道自己的场景绑定被换掉了）。
       if (r.viaScene) {
-        return 'OK: preset ' + id + ' is now the prompt binding of scene 「' + (r.scene || '') + '」 and the scene was re-synced (effective next turn; ~/.dsh/AGENTS.md now carries that scene\'s binding).'
+        return 'OK: preset ' + id + ' is now the prompt binding of scene "' + (r.scene || '') + '" and the scene was re-synced (effective next turn; ~/.dsh/AGENTS.md now carries that scene\'s binding).'
       }
       // 生效时机与宿主行为对齐（index.ts 提示词服务一节考证过）：dsh-agent-instructions
       // 每个 pre-step 都 stat 比对版本，写文件即下一轮重读 —— 不是"下个会话"。说错了

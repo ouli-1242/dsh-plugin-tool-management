@@ -31,6 +31,15 @@ import { fileURLToPath } from 'node:url'
 // capability list here would drift from what the plugin actually gates on, and
 // the doctor would then certify a host the plugin refuses to use.
 import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE, CAPABILITY_STATIC, hostRootCandidates } from '../lib/compat/probe.js'
+// 宿主非 peer 契约（裸模块名 + canary）与兼容页共用同一份清单：此前它们只在这里，命令行
+// 报得出来、界面报不出来。现在是共享层，doctor 从 lib/ import。
+import {
+  AGENTS_MD_REFRESH_MARKERS,
+  AGENTS_MD_REFRESH_PACKAGE,
+  BARE_HOST_MODULE_CONTRACTS,
+  JSONL_LAYOUT_MARKERS,
+  JSONL_LAYOUT_PACKAGE,
+} from '../lib/compat/host-contracts.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const JSON_OUT = process.argv.includes('--json')
@@ -61,56 +70,70 @@ const CAPABILITY_SOURCES = CAPABILITY_STATIC.map((spec) => ({
 }))
 
 /**
- * The official JSONL layout the history adapter hard-codes
- * (`src/sessions/workspace.ts` → `jsonlSessionDirectory`).
+ * 静态能力检查从哪里读那个官方包。
  *
- * These are behaviour constants, not cosmetics: if any of them changes, the
- * adapter can no longer verify that a transcript directory belongs to the
- * session it is deleting, and deletion degrades to artifact-only — the parent
- * directory is retained — with nothing but a plugin-side log line to show for
- * it. That degradation is deliberately non-fatal (the artifact is still removed
- * and the removal is re-checked through `persistence.stat`), so a static look
- * at the installed host is the only way to learn about the drift before a user
- * finds orphaned directories on disk.
+ * 顺序有含义：先试**插件自己的锚点** —— 那正是运行时真正 import 的那一份（junction 与宿主
+ * 同物理文件，"读插件侧"与"读宿主侧"是同一件事，而且身份比对那一段已经验过它）。解析不到时
+ * 退回**宿主安装锚点**：有些官方包宿主装、但不要求插件依赖（`@deepseek-ai/dsh-client-connection`
+ * 就是），插件侧天生解析不到；而这一节要回答的是"这台机器上装着的宿主有没有这个成员"，
+ * 那就得读宿主的安装，而不是读一个插件根本拿不到的包名。
  *
- * Static and read-only on purpose: constructing the real persistence needs a
- * live storage domain, and this doctor must never open one.
+ * 2026-10-17：只认插件侧时，`connection.admit` 被记成 `missing` —— 一句与事实相反的结论
+ * （运行时那一条是 `ok`），用户照它去修只会白费功夫。`staticWhen` 负责"这一轮能不能静态回答"，
+ * 本函数负责"能回答时读哪一份"，两件事合起来才是完整的口径。
+ *
+ * @param name - package name from CAPABILITY_SOURCES.
+ * @param host - `.../node_modules/@deepseek-ai` of the host installation, or undefined.
+ * @returns `{ mod, source }` or `{ error }`.
  */
-const JSONL_LAYOUT_MARKERS = [
-  { needle: 'session-persistence-jsonl', why: "the adapter's backend-name gate" },
-  { needle: '_no-cwd', why: 'the bucket used when the header has no cwd' },
-  { needle: '251', why: 'the project-segment truncation length' },
-  { needle: 'padStart(4', why: 'the ~XXXX UTF-16 escape encoding' },
-]
-const JSONL_PACKAGE = '@deepseek-ai/dsh-session-persistence-jsonl'
+function requireCapabilityModule(name, host) {
+  try {
+    return { mod: require(name), source: 'plugin' }
+  } catch (pluginError) {
+    if (host !== undefined) {
+      const anchor = resolveFromHost(host, name)
+      if (anchor !== undefined) {
+        try {
+          return { mod: createRequire(anchor)(name), source: 'host' }
+        } catch { /* fall through to the plugin-side error below */ }
+      }
+    }
+    return { error: String(pluginError) }
+  }
+}
+
 
 /**
- * 插件在运行时按**裸模块名** require 的宿主包（B3）：官方改名/删除其中一个，对应功能会
- * 静默降级（MCP 客户端、人设、AGENTS.md 注入、技能目录）。它们不在 peerDependencies 里
- * （不是硬依赖），所以也不在 IDENTITY_PACKAGES 里 —— 单独列出来，从**宿主**锚点解析，
- * 只报可见性（缺了不阻塞安装，但要看得见）。
+ * 从宿主锚点解析这批裸模块名，逐条给状态（B3：宿主是否仍暴露）。
+ *
+ * 清单与"每个包守着什么"都来自共享层 `compat/host-contracts.js`（兼容页读同一份），这里只做
+ * 检查：包从宿主锚点解析不解析得到、入口里那几条 canary 还在不在。缺 canary 不是"包坏了"，
+ * 是"该人工复核这条契约" —— 所以它落在 `rows[].missingMarkers` 上，不改变 status。
  */
-const BARE_HOST_MODULES = [
-  '@deepseek-ai/dsh-mcp-client',
-  '@deepseek-ai/dsh-persona',
-  '@deepseek-ai/dsh-agent-instructions',
-  '@deepseek-ai/dsh-tool-skill',
-]
-
-/** 从宿主锚点解析这批裸模块名，逐条给状态（B3：宿主是否仍暴露）。 */
 function inspectBareHostModules(hostDir) {
   if (hostDir === undefined) return { status: 'unknown', detail: 'host installation not found', rows: [] }
-  const rows = BARE_HOST_MODULES.map((name) => {
-    const entry = resolveFromHost(hostDir, name)
-    return { package: name, resolved: entry ?? null }
+  const rows = BARE_HOST_MODULE_CONTRACTS.map((contract) => {
+    const entry = resolveFromHost(hostDir, contract.package)
+    let missingMarkers = []
+    if (entry !== undefined && contract.markers.length > 0) {
+      try {
+        const source = readFileSync(entry, 'utf8')
+        missingMarkers = contract.markers.filter((marker) => !source.includes(marker.needle)).map((marker) => marker.needle)
+      } catch { /* 读不到入口时只报"解析不到"，不额外造一条 */ }
+    }
+    return { package: contract.package, feature: contract.feature, resolved: entry ?? null, missingMarkers }
   })
   const missing = rows.filter((row) => row.resolved === null)
+  const drifted = rows.filter((row) => row.missingMarkers.length > 0)
   return {
     status: missing.length === 0 ? 'ok' : 'absent',
     detail: missing.length === 0
       ? `all ${rows.length} runtime-required host modules resolvable from the host`
       : `not resolvable from the host: ${missing.map((row) => row.package).join(', ')}`,
     rows,
+    ...(drifted.length === 0 ? {} : {
+      drifted: drifted.map((row) => ({ package: row.package, missingMarkers: row.missingMarkers })),
+    }),
   }
 }
 
@@ -187,9 +210,9 @@ function pidAlive(pid) {
  */
 function inspectJsonlLayout(hostDir) {
   if (hostDir === undefined) return { status: 'unknown', detail: 'host installation not found' }
-  const entry = resolveFromHost(hostDir, JSONL_PACKAGE)
+  const entry = resolveFromHost(hostDir, JSONL_LAYOUT_PACKAGE)
   if (entry === undefined) {
-    return { status: 'n/a', detail: `${JSONL_PACKAGE} is not resolvable from the host (this host does not use the JSONL backend)` }
+    return { status: 'n/a', detail: `${JSONL_LAYOUT_PACKAGE} is not resolvable from the host (this host does not use the JSONL backend)` }
   }
   let source
   try {
@@ -249,32 +272,12 @@ function hostNotFoundHint() {
   ].join('\n')
 }
 
-/**
- * `~/.dsh/AGENTS.md` 的**增量刷新**契约（审查 §5 F3）—— 本插件"应用提示词预设"依赖它。
- *
- * 插件把预设正文写进全局 `AGENTS.md`，然后靠官方 `dsh-agent-instructions` **每一步**重新
- * 读盘（对比 stat 的 version 与内容 SHA-1）来决定要不要把新正文送进模型。所以官方一旦改成
- * 事件驱动、加 touchedPaths 白名单、或改 digest 口径，"应用预设"就会**静默失效**（旧正文
- * 继续注入），零报错。
- *
- * 这些 needle 是**drift canary，不是证明**：它们取自官方安装源码里承担该契约的几个标识符
- * （`lib/index.js` 实测存在）。官方把它们改名/拆函数，就是"该人工复核这一条契约"的信号；
- * 反过来，needle 还在也不等于语义没变。包解析不到时如实报 `n/a`（可选依赖）。
- */
-const AGENTS_MD_REFRESH_MARKERS = [
-  { needle: 'agentInstructionsHook', why: '每步重读全局 AGENTS.md 的钩子入口' },
-  { needle: 'trimmedInstructionDigest', why: '内容同一性 = 去掉首尾空白后的 SHA-1' },
-  { needle: 'instructionContentSha1', why: 'SHA-1 摘要口径' },
-  { needle: 'sameInstructionChange', why: '按 {action, scope, path, digest} 判「有没有变化」' },
-]
-const AGENTS_MD_PACKAGE = '@deepseek-ai/dsh-agent-instructions'
-
 /** 见 AGENTS_MD_REFRESH_MARKERS。只读：从宿主锚点解析官方源码并做字符串包含检查。 */
 function inspectAgentsMdRefresh(hostDir) {
   if (hostDir === undefined) return { status: 'unknown', detail: 'host installation not found' }
-  const entry = resolveFromHost(hostDir, AGENTS_MD_PACKAGE)
+  const entry = resolveFromHost(hostDir, AGENTS_MD_REFRESH_PACKAGE)
   if (entry === undefined) {
-    return { status: 'n/a', detail: `${AGENTS_MD_PACKAGE} is not resolvable from the host (optional: 该宿主不注入工作区指令)` }
+    return { status: 'n/a', detail: `${AGENTS_MD_REFRESH_PACKAGE} is not resolvable from the host (optional: 该宿主不注入工作区指令)` }
   }
   let source
   try {
@@ -364,7 +367,7 @@ function inspectPackages() {
   return { host: host === undefined ? null : host, rows }
 }
 
-function inspectCapabilities() {
+function inspectCapabilities(host) {
   const rows = []
   for (const capability of CAPABILITY_SOURCES) {
     // Instance-field shapes and behaviour dry-runs need a live host; saying so is
@@ -373,27 +376,30 @@ function inspectCapabilities() {
       rows.push({ ...capability, status: 'runtime-only', detail: 'checkable only against a live host (instance fields / behaviour dry-run)' })
       continue
     }
-    let mod
-    try {
-      mod = require(capability.pkg)
-    } catch (error) {
-      rows.push({ ...capability, status: 'missing', detail: `package unresolvable: ${String(error)}` })
+    const loaded = requireCapabilityModule(capability.pkg, host)
+    if (loaded.error !== undefined) {
+      rows.push({ ...capability, status: 'missing', detail: `package unresolvable: ${loaded.error}` })
       continue
     }
+    const mod = loaded.mod
+    // Provenance, not a state: host-side read is the normal case for packages the
+    // host ships but does not ask plugins to depend on (see requireCapabilityModule).
+    const source = loaded.source === 'host' ? '（取自宿主安装）' : ''
     const klass = mod[capability.target]
     if (typeof klass !== 'function') {
-      rows.push({ ...capability, status: 'missing', detail: `${capability.target} export not found` })
+      rows.push({ ...capability, status: 'missing', detail: `${capability.target} export not found${source}` })
       continue
     }
     const absent = capability.members.filter((member) => typeof klass.prototype?.[member] !== 'function')
     rows.push({
       ...capability,
+      source: loaded.source,
       // An optional slot that is absent is the EXPECTED state on hosts whose
       // official API lacks it — it selects the adapter route, it is not a fault.
       status: absent.length === 0 ? 'ok' : capability.optional ? 'absent-optional' : 'missing',
-      detail: absent.length === 0 ? 'present'
-        : capability.optional ? `absent (optional native slot; adapter route is used): ${absent.join(', ')}`
-        : `missing: ${absent.join(', ')}`,
+      detail: absent.length === 0 ? `present${source}`
+        : capability.optional ? `absent (optional native slot; adapter route is used): ${absent.join(', ')}${source}`
+        : `missing: ${absent.join(', ')}${source}`,
     })
   }
   return rows
@@ -401,7 +407,7 @@ function inspectCapabilities() {
 
 function main() {
   const installed = inspectPackages()
-  const capabilities = inspectCapabilities()
+  const capabilities = inspectCapabilities(installed.host)
   const jsonlLayout = inspectJsonlLayout(installed.host)
   const agentsMdRefresh = inspectAgentsMdRefresh(installed.host)
   const bareModules = inspectBareHostModules(installed.host)
@@ -421,7 +427,7 @@ function main() {
   // not data loss. It must still be loud — the runtime only logs it.
   const warnings = []
   if (jsonlLayout.status === 'drift') {
-    warnings.push(`${JSONL_PACKAGE}: ${jsonlLayout.detail} — ${jsonlLayout.impact}`)
+    warnings.push(`${JSONL_LAYOUT_PACKAGE}: ${jsonlLayout.detail} — ${jsonlLayout.impact}`)
   }
   // 宿主不再暴露某个运行时裸模块：功能静默降级（不是安装阻塞项），但必须看得见（B3）。
   if (bareModules.status === 'absent') {
@@ -494,7 +500,7 @@ function main() {
   console.log('official JSONL session layout (hard-coded by the history adapter):')
   {
     const mark = jsonlLayout.status === 'ok' ? 'ok  ' : jsonlLayout.status === 'drift' ? 'WARN' : 'n/a '
-    console.log(`  [${mark}] ${JSONL_PACKAGE}`)
+    console.log(`  [${mark}] ${JSONL_LAYOUT_PACKAGE}`)
     console.log(`         ${jsonlLayout.detail}`)
     if (jsonlLayout.impact !== undefined) console.log(`         impact: ${jsonlLayout.impact}`)
   }
@@ -502,7 +508,7 @@ function main() {
   console.log('official AGENTS.md incremental-refresh contract ("apply preset" depends on it):')
   {
     const mark = agentsMdRefresh.status === 'ok' ? 'ok  ' : agentsMdRefresh.status === 'drift' ? 'WARN' : 'n/a '
-    console.log(`  [${mark}] ${AGENTS_MD_PACKAGE}`)
+    console.log(`  [${mark}] ${AGENTS_MD_REFRESH_PACKAGE}`)
     console.log(`         ${agentsMdRefresh.detail}`)
     if (agentsMdRefresh.impact !== undefined) console.log(`         impact: ${agentsMdRefresh.impact}`)
   }

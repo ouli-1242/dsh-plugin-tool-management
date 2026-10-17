@@ -55,7 +55,7 @@ export interface ToolTableSettings {
  * 判据是用户 2026-09-23 的三轮裁定，同一条：**这些信息或动作常态下由注入段与面板承担，
  * 平时也用不到模型自己伸手**。三组：
  *   · **写侧五条** —— 三个 `*_save`（MCP / 技能 / 人设：配置本体在面板上改）+ 提示词两条
- *     （这一族只有两条，而当前生效的那份本来就在「当前提示词」注入段里）。
+ *     （这一族只有两条，而当前生效的那份本来就在 `Current prompt` 注入段里）。
  *   · **读侧三条** —— 两个 `*_list`（MCP / 技能）+ `memory_manager_read`。会话开头注入的那几段
  *     目录已经写了当前有什么，模型不必每轮再带一份查询工具。
  *   · **场景三条 + 开关三条** —— 场景一族（建 / 勾档案 / 进入退出）与 `skill` / `memory` /
@@ -78,7 +78,7 @@ export interface ToolTableSettings {
  * 绑定且深度够的、技能目录只列可调用的），所以"没开的那几台 / 被同名覆盖的那份技能 / 没进
  * 上下文的记忆正文"在会话里查不到；`*_switch` 关掉后模型也不能再替你拨启停。三处配套改动为
  * 的就是不把模型往墙上推：目录被条数上限截断时那句「用 `X_manager_list` 查」自动退回「另有
- * N 个未列出。」（`listToolVisible`）；`mcp_manager_list` / `skill_manager_read` 里"没找到 →
+ * N more not listed.)」（`listToolVisible`）；`mcp_manager_list` / `skill_manager_read` 里"没找到 →
  * 去调 list"那两句先问 `deps.toolVisible`；`memory_manager_list` 的描述不再点名已关的工具。
  *
  * 只在**用户从没记过选择**时生效（见 index.ts 的 `toolTableSettingsFrom`：侧车文件读不出来

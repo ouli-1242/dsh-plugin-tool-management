@@ -3,7 +3,7 @@
 // 这张表就是与宿主的契约本体 —— 纯字面量，判定逻辑在 probe.ts 的 inspectCapability，
 // 取数原语在 host-probe.ts。缺一个成员时界面给出的是这一行点名的降级，而不是删除序列
 // 中途抛出的一次异常。
-import { callableWithSentinel, isFn, PROBE_SENTINEL, type Target } from './host-probe.js'
+import { callableWithSentinel, isFn, PROBE_SENTINEL, resolvableFromHost, type Target } from './host-probe.js'
 import type { CapabilityFinding } from './probe-types.js'
 
 export interface CapabilitySpec {
@@ -13,7 +13,7 @@ export interface CapabilitySpec {
   // 这里不写 `CapabilityFinding['owner']`：那张表的 owner 还允许 `'plugin'`（运行时上报的行，
   // 如补丁写入校验不可用），而宿主能力表只可能挂在宿主对象上 —— 写宽了会让下面的
   // `targets: Record<CapabilitySpec['owner'], …>` 强制多出一个不存在的宿主对象。
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs'
+  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs' | 'tools' | 'agentContext' | 'connection'
   readonly fallback: CapabilityFinding['fallback']
   /** Required function members on the owning object's prototype. */
   readonly methods?: readonly string[]
@@ -32,6 +32,15 @@ export interface CapabilitySpec {
   readonly when?: (target: Target) => boolean
   /** Absence is a routing fact, not a failure — see {@link CapabilityFinding.optional}. */
   readonly optional?: boolean
+  /**
+   * 静态检查的**门槛**：只在宿主锚点也认这条能力时才检查（默认总会检查）。
+   *
+   * 什么时候要它：某个 owner 的参考副本不在本插件的依赖图里（如 connection 的
+   * `dsh-client-connection` 不是 peer），doctor 从插件锚点解析不到那个包，于是把一条
+   * 运行时其实存在的能力记成 `missing` —— 那是与事实相反的结论，用户照它去修只会白费
+   * 功夫（2026-10-17 `connection.admit` 就这么误报过）。
+   */
+  readonly staticWhen?: () => boolean
 }
 
 /**
@@ -327,4 +336,63 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
       return undefined
     },
   },
-]
+  // ---- 0.2.1 的四处新契约面 ------------------------------------------------
+  // 这四条都是**本版适配真实依赖**的宿主成员。它们与上面那些的区别是：上面那些从 0.1.x
+  // 起就在表里，而这四个是 0.2.1 才出现的 —— 下一代宿主改掉其中任何一个，对应的功能会
+  // **静默失效**（不抛错、只少一半），所以必须在升级后第一眼可见。
+  //
+  // 逐条的后果：
+  //   ① register 没了 → 带人设的子代理委派失败（临时预设注册不上去）；
+  //   ② restrict 没了 → 人设的 tools/toolsDeny 不生效，子代理继承父级全部工具；
+  //   ③ agent/created 不串行 → 工具限制慢一步（首轮看到的还是继承来的工具集）；
+  //   ④ admit 没了 → Web 鉴权退回本地回环判定，本机任意进程可调写 op。
+  {
+    id: 'agentPreset.register',
+    label: '临时子预设注册',
+    kind: 'write',
+    owner: 'presetRoster',
+    fallback: 'refuse-operation',
+    methods: ['register'],
+    // 只查存在性 + 与参考副本的文本比对，**不真注册**：register 会真的树上挂一棵插件树。
+    probe: (t) => isFn(t?.register) ? undefined : '宿主预设名册缺少 register()：带人设的子代理委派无法创建独立预设',
+  },
+  {
+    id: 'tools.restrict-method',
+    label: '工具限制施加（restrict）',
+    kind: 'write',
+    owner: 'tools',
+    fallback: 'disable-destructive',
+    methods: ['restrict'],
+    probe: (t) => isFn(t?.restrict) ? undefined : '宿主工具服务缺少 restrict()：人设的工具限制不生效，子代理将继承父级全部工具',
+  },
+  {
+    // 探测的是 **agent 作用域**上 `on` 在场这一事实。真正的时序保证（announce 等待
+    // 串行 agent/created 监听全部完成后才放行收件箱）藏在宿主源码里，探针看不见 ——
+    // 这一条能抓的是"ctx.on 整个没了 / 改名"，那时监听器挂不上、限制退化成事后施加。
+    id: 'agent.created-event',
+    label: '子代理创建事件（agent/created）',
+    kind: 'read',
+    owner: 'agentContext',
+    fallback: 'disable-destructive',
+    methods: ['on'],
+    probe: (t) => isFn(t?.on) ? undefined : 'agent 作用域缺少 on()：无法在子代理创建时施加工具限制',
+  },
+  {
+    // 0.2.1 起宿主把鉴权栅栏拆成 admit()/requestRejection() 两层（见 http-fence.ts）。
+    // admit 不在场时插件退回 requestRejection，再缺则退回本地回环判定 —— 每一级都少一层，
+    // 但都不抛错，所以必须单列一条让人看得见现在停在哪一级。
+    id: 'connection.admit',
+    label: '连接准入（admit）',
+    kind: 'read',
+    owner: 'connection',
+    fallback: 'refuse-operation',
+    methods: ['admit'],
+    probe: (t) => isFn(t?.admit) ? undefined : '宿主 connection 缺少 admit()：Web 鉴权降级（退到 requestRejection / 本地回环判定）',
+    // 静态检查的门槛：`dsh-client-connection` **不是**本插件的 peer（宿主不要求插件直接依赖
+    // 它），doctor 从插件锚点解析不到它。那时不能报 `missing` —— 那等于断言"宿主没有这个
+    // 能力"，而运行时探针看到的是 Web 组合里真实的 connection 服务（0.2.1 起一定带 admit）。
+    // 门槛取宿主侧：至少一个宿主锚点解析得到才查；解析不到退回 `runtime-only`（如实标注
+    // "只能对活的宿主查"），而不是编一个"缺失"。
+    staticWhen: () => resolvableFromHost('@deepseek-ai/dsh-client-connection'),
+  },
+]

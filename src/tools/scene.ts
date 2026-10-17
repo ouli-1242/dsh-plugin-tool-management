@@ -82,7 +82,7 @@ function quickPromptIds(value: any): string[] {
 function toolTableLabel(name: unknown): string {
   const v = typeof name === 'string' ? name.trim() : ''
   if (!v) return ''
-  return v === FACTORY_TOOL_TABLE_PRESET ? '出厂默认' : v
+  return v === FACTORY_TOOL_TABLE_PRESET ? 'factory default' : v
 }
 
 /**
@@ -90,21 +90,21 @@ function toolTableLabel(name: unknown): string {
  * 关掉它正用的那台服务器"，数量答不了这一句。`mcpNotes` 是档案里的备注覆盖，单独列一项。
  */
 function archiveText(archive: any): string {
-  if (!archive || typeof archive !== 'object') return '未建（进入时 MCP / 技能 / 人设 三个域全部停用）'
+  if (!archive || typeof archive !== 'object') return 'not created (entering turns off all MCP / skill / persona domains)'
   const keys = (v: any): string[] => (v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v) : [])
   const list = (v: any): string[] => (Array.isArray(v) ? v.map((x) => String(x)) : [])
   const parts = [
     'MCP ' + toolNameList(keys(archive.mcp)),
-    '技能 ' + toolNameList(list(archive.skills)),
-    '人设 ' + toolNameList(list(archive.subagents)),
+    'skills ' + toolNameList(list(archive.skills)),
+    'personas ' + toolNameList(list(archive.subagents)),
   ]
   const notes = keys(archive.mcpNotes)
-  if (notes.length) parts.push('备注 ' + toolNameList(notes))
+  if (notes.length) parts.push('notes ' + toolNameList(notes))
   // 模型工具表方案（0.15.0 起档案里有这一栏）：进入时换的是**模型自己能用什么**，不报就是
   // 让它事后发现自己少了工具却说不出原因。只给方案名 —— 关停名单不在档案里，硬算要多读一次
   // 方案清单，而真正需要条数的时机是切换之后（那条回执有）。没绑就不冒这一格（与备注同口径）。
   const tt = toolTableLabel(archive.toolTablePreset)
-  if (tt) parts.push('工具表方案「' + tt + '」')
+  if (tt) parts.push('tool-table preset "' + tt + '"')
   // 快捷提示词绑定（0.20.0）：进了这个场景会动到 `/` 菜单里哪些条目，不报就只能靠猜。
   // 空表是"进入后全部停用"，与"没绑"（这一域不碰）是两句相反的话，不能压成一个 "0 条"。
   //
@@ -113,7 +113,7 @@ function archiveText(archive: any): string {
   // 没有 id 可抄，那句是一条**指不到的死路**（模型照做只会白跑一趟，然后去问用户）。
   // 与 `skills` / `subagents` 两段同款（那两段本来就是 `toolNameList` 印名字）。
   const qp = archive.quickPrompts
-  if (Array.isArray(qp)) parts.push(qp.length ? '快捷提示词 ' + toolNameList(qp) : '快捷提示词：进入后全部停用')
+  if (Array.isArray(qp)) parts.push(qp.length ? 'quick prompts ' + toolNameList(qp) : 'quick prompts: all off after entering')
   return parts.join(' ｜ ')
 }
 
@@ -132,9 +132,9 @@ function segmentDiff(key: string, beforeValue: any, afterValue: any): { text: st
   const marks: string[] = []
   if (added.length) marks.push('+' + toolNameList(added))
   if (dropped.length) marks.push('-' + toolNameList(dropped))
-  if (!marks.length && JSON.stringify(beforeValue ?? null) !== JSON.stringify(afterValue ?? null)) marks.push('勾选范围有调整')
+  if (!marks.length && JSON.stringify(beforeValue ?? null) !== JSON.stringify(afterValue ?? null)) marks.push('the checked set changed')
   return {
-    text: key + ' ' + b.length + ' 项 → ' + a.length + ' 项' + (marks.length ? '（' + marks.join(' ') + '）' : ''),
+    text: key + ' ' + b.length + ' -> ' + a.length + ' items' + (marks.length ? ' (' + marks.join(' ') + ')' : ''),
     dropped,
   }
 }
@@ -149,9 +149,9 @@ function segmentDiff(key: string, beforeValue: any, afterValue: any): { text: st
  */
 function agentsMdNote(sync: any): string {
   if (!sync || typeof sync !== 'object') return ''
-  if (sync.error) return '\nWARN: 全局基线（AGENTS.md）未同步：' + String(sync.error)
-  if (sync.applied) return '\nAGENTS.md ← 场景绑定的预设「' + String(sync.applied) + '」'
-  if (sync.restored === true) return '\nAGENTS.md ← 已恢复进场景前的基线'
+  if (sync.error) return '\nWARN: the global baseline (AGENTS.md) was not synced: ' + String(sync.error)
+  if (sync.applied) return '\nAGENTS.md <- the scene-bound preset "' + String(sync.applied) + '"'
+  if (sync.restored === true) return '\nAGENTS.md <- restored the pre-scene baseline'
   return ''
 }
 
@@ -163,14 +163,14 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 这种筛选（未启用的场景照样要能被进入，藏着只会让模型以为它不存在）。
     // 描述与参数说明里**不点名同族工具**（scene_manager_list / _switch / _save 三条都在出厂
     // 默认的隐藏名单里）：静态文本没法按 toolVisible 改写，点名一条模型没有的工具只会让它
-    // 白跑一趟。要说"去哪看"就用中性说法（the scene listing / the「当前场景」reminder
+    // 白跑一趟。要说"去哪看"就用中性说法（the scene listing / the "Current scene" reminder
     // —— 后者是常驻源，只要场景域开着就在）。点名只留在**运行时回执**里、按可见性分叉。
-    description: 'List every scene with its archive (what entering it switches on: MCP servers, skills, personas, quick prompts, and the bound model tool-table scheme when there is one), bound prompt preset, memory count and enabled / entered / locked state. The scene currently entered is also shown in the「当前场景」reminder.',
+    description: 'List every scene with its archive (what entering it switches on: MCP servers, skills, personas, quick prompts, and the bound model tool-table scheme when there is one), bound prompt preset, memory count and enabled / entered / locked state. The scene currently entered is also shown in the "Current scene" reminder.',
     parameters: {},
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute() {
       const r: any = await deps.rulesOps['rules-list']({})
-      if (!r || r.ok === false) throw new Error((r && r.error) || '读取场景失败')
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read scenes')
       // 档案与「已进入哪个场景」要额外读一次（纯读盘，`scene-mode-get`）。
       // 读不到**不阻断**清单：场景行退化成只有名字与启用状态，而不是让整条工具失败 ——
       // 一份少了档案的清单仍然有用，一次失败什么都没有。
@@ -190,24 +190,24 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       const scenes: any[] = r.scenes || []
       const lines = scenes.map((s: any) => {
         const name = String(s.name)
-        const state = [s.active === true ? '启用' : '未启用']
+        const state = [s.active === true ? 'on' : 'off']
         // 「启用」与「进入」是两个独立状态轴（见 README「进/出模式」），只报前者的话，
         // 模型会把"启用着"读成"现在就是它" —— 而记忆与提示词只按**进入**的那一个注入。
-        if (entered !== null && name === entered) state.push('已进入')
-        if (s.locked === true) state.push('已锁定')
+        if (entered !== null && name === entered) state.push('entered')
+        if (s.locked === true) state.push('locked')
         // 打**场景名**而不是 label：`scene_manager_save` / `_switch` 要的都是名字（单个
         // 路径段），label 只是界面显示名。两者不同时把 label 放进括号，别让模型照抄错那个。
-        const title = name + (s.label && String(s.label) !== name ? '（' + String(s.label) + '）' : '')
-        const bits = ['- ' + title + ' [' + state.join('·') + '] · 记忆 ' + Number(s.count || 0) + ' 条']
-        if (s.description) bits.push('说明：' + String(s.description))
-        if (s.prompt) bits.push('预设：' + String(s.prompt))
-        bits.push('档案：' + (archives === null ? '读不到（不代表没建）' : archiveText(archives[name])))
+        const title = name + (s.label && String(s.label) !== name ? ' (' + String(s.label) + ')' : '')
+        const bits = ['- ' + title + ' [' + state.join(', ') + '] · memories: ' + Number(s.count || 0)]
+        if (s.description) bits.push('description: ' + String(s.description))
+        if (s.prompt) bits.push('preset: ' + String(s.prompt))
+        bits.push('archive: ' + (archives === null ? 'unreadable (does not mean absent)' : archiveText(archives[name])))
         return bits.join(' · ')
       })
-      return '场景（' + scenes.length + ' 个 · ' +
-        (r.activeMode === 'all' ? '启用集为历史默认（全部启用）' : '启用集已收窄为单选') +
-        (entered === null ? '；当前没有进入任何场景' : '；当前已进入「' + entered + '」') + '）：\n' +
-        (lines.join('\n') || '(无场景)')
+      return 'scenes (' + scenes.length + ' · ' +
+        (r.activeMode === 'all' ? 'the enabled set is the historical default (all enabled)' : 'the enabled set is narrowed to a single scene') +
+        (entered === null ? '; no scene is entered right now' : '; currently entered: "' + entered + '"') + '):\n' +
+        (lines.join('\n') || '(no scenes)')
     },
   }))
 
@@ -219,13 +219,13 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     description: 'Enter a scene, or leave the one currently entered. Entering switches on its archive and everything else off, narrows injection to its memories, and applies its bound prompt preset to AGENTS.md. Leaving restores the runtime snapshot taken on entry. Only when the user asks or approves.',
     parameters: {
       action: { type: 'string', required: true, enum: ['enter', 'exit'], description: 'enter = switch to the scene named in `scene`; exit = leave the current one (no scene needed).' },
-      scene: { type: 'string', description: 'Scene name (one path segment), required for enter. Use the exact name, not the display label — the scene listing and the「当前场景」reminder both print names.' },
+      scene: { type: 'string', description: 'Scene name (one path segment), required for enter. Use the exact name, not the display label — the scene listing and the "Current scene" reminder both print names.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any) {
       const action = String((args && args.action) || '')
       if (action !== 'enter' && action !== 'exit') {
-        throw new Error('action 只能是 enter / exit（收到：' + (action || '(空)') + '）')
+        throw new Error('action must be enter / exit (got: ' + (action || '(empty)') + ')')
       }
       // 刻意**不过** `lockedSceneGuard()`：场景**自身**的启停不在冻结清单里（冻结的是五个
       // 域的内容）。锁定中的场景正被进入时不能退出 —— 那条守卫在 `scene-mode-set` 的包装里
@@ -234,10 +234,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       let scene = ''
       if (action === 'enter') {
         scene = String((args && args.scene) || '').trim()
-        if (scene === '') throw new Error('action=enter 需要 scene：场景名（照抄 scene_manager_list 里那一行）')
+        if (scene === '') throw new Error('action=enter needs scene: the scene name (copy it from the scene_manager_list line)')
         // 场景名是**单个路径段**（与 scene_manager_save 同一条校验、同一句报错）。
         if (scene.indexOf('/') >= 0 || scene.indexOf('\\') >= 0) {
-          throw new Error('场景名是单个路径段，不能含 / 或 \\：' + scene)
+          throw new Error('a scene name is a single path segment (no / or \\): ' + scene)
         }
       }
 
@@ -253,15 +253,15 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       // exitMode）：`scene-mode-set` 只动运行时快照与 mode 位，**启用集合**由
       // `rules-set-active` 写。少调后者，记忆与提示词仍按旧场景注入 —— 而运行时看起来已经切了。
       const mode: any = await deps.archiveOps['scene-mode-set']({ scene: action === 'enter' ? scene : null })
-      if (!mode || mode.ok === false) throw new Error((mode && mode.error) || (action === 'enter' ? '进入场景失败：' + scene : '退出场景失败'))
+      if (!mode || mode.ok === false) throw new Error((mode && mode.error) || (action === 'enter' ? 'failed to enter the scene: ' + scene : 'failed to exit the scene'))
       const act: any = await deps.sceneActivate({ scenes: action === 'enter' ? [scene] : [] })
       if (!act || act.ok === false) {
         // 半成品状态：运行时已经切了，启用集合没跟上。**必须说出来** —— 不说的话模型以为
         // 切完了，而记忆与提示词还是旧场景的。重试一次是安全的（两个 op 都幂等）。
         throw new Error(
-          (action === 'enter' ? '场景「' + scene + '」的运行时已切换' : '运行时已退出场景') +
-          '，但启用集合未写入（记忆与提示词仍按旧场景注入）：' + ((act && act.error) || '未知错误') +
-          ' —— 重试一次 scene_manager_switch 即可（两个 op 都幂等）',
+          (action === 'enter' ? 'runtime switched to scene "' + scene + '"' : 'runtime left the scene') +
+          ', but the enabled set was not written (memories and prompts still inject per the old scene): ' + ((act && act.error) || 'unknown error') +
+          ' — retry scene_manager_switch once (both ops are idempotent)',
         )
       }
 
@@ -277,10 +277,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
         ? (mode.applied === null || mode.applied === undefined)
         : !mode.restored
       const head = noop
-        ? (action === 'enter' ? 'OK: already in scene「' + scene + '」' : 'OK: not in any scene (nothing to leave)')
+        ? (action === 'enter' ? 'OK: already in scene "' + scene + '"' : 'OK: not in any scene (nothing to leave)')
         : action === 'enter'
-          ? 'OK: ' + (before === null ? 'entered' : '「' + before + '」→') + ' scene「' + scene + '」'
-          : 'OK: left the scene「' + (before || '') + '」'
+          ? 'OK: ' + (before === null ? 'entered' : 'left "' + before + '", entered ') + 'scene "' + scene + '"'
+          : 'OK: left the scene "' + (before || '') + '"'
       const parts: string[] = []
       if (count(sw.mcpServers) || count(sw.skillSources)) {
         parts.push('switched ' + count(sw.mcpServers) + ' MCP server(s) / ' + count(sw.skillSources) + ' skill source(s)')
@@ -289,15 +289,15 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       // 原因，用户问"刚才改了什么"时拿回去的就是半截话。引擎只在**名单真的换了**时才回方案名。
       const tt = toolTableLabel(mode && mode.toolTablePreset)
       if (tt) {
-        parts.push('工具表切到方案「' + tt + '」（关 ' + count(sw.toolTableHidden) + ' 条）')
+        parts.push('tool table switched to preset "' + tt + '" (' + count(sw.toolTableHidden) + ' hidden)')
       } else if (action === 'exit' && mode.restored && mode.restored.toolTable === true) {
-        parts.push('工具表按进场景前的快照还原')
+        parts.push('tool table restored from the pre-scene snapshot')
       }
       if (Array.isArray(mode.stale) && mode.stale.length) {
-        parts.push('丢弃了本机不存在的键：' + mode.stale.join('、'))
+        parts.push('dropped keys this machine does not have: ' + mode.stale.join(', '))
       }
       return head + (parts.length ? ' · ' + parts.join(' · ') : '') + agentsMdNote(act.agentsMd) +
-        (noop ? '\n（' + (action === 'enter' ? '目标就是当前场景' : '本来就不在任何场景') + '，运行时没有改动）' : '')
+        (noop ? '\n(' + (action === 'enter' ? 'already in the target scene' : 'already outside every scene') + ' — runtime unchanged)' : '')
     },
   }))
 
@@ -310,7 +310,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     parameters: {
       scene: { type: 'string', required: true, description: 'Scene name (one path segment, ≤64 chars, no / \\ or < > : " | ? *, not `_shared`). Created if absent.' },
       label: { type: 'string', description: 'Display name for this scene. Omit = keep.' },
-      description: { type: 'string', description: 'What this scene is for; shown beside the scene name in the「当前场景」reminder while the scene is on — write an instruction, not a note. Omit = keep.' },
+      description: { type: 'string', description: 'What this scene is for; shown beside the scene name in the "Current scene" reminder while the scene is on — write an instruction, not a note. Omit = keep.' },
       // 与下面 `mcp` / `skills` / `subagents` 同一句式（"Omit = keep; X = 一个都不"）：
       // 界面 2026-10-10 补了「无」这个选项，工具侧的空串语义要跟着说清，否则模型只知道
       // 「省略 = 保持」，不知道还有一条「解绑」的路。
@@ -351,12 +351,12 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
       const scene = String((args && args.scene) || '').trim()
-      if (scene === '') throw new Error('缺少参数：scene 是场景名')
+      if (scene === '') throw new Error('missing argument: scene (the scene name)')
       // 场景名是**单个路径段**（界面把场景当一级列表展示，场景名就是 `memories/<场景>/` 那级
       // 目录名）。`rules-create-scene` 会做完整校验，但档案那条路不经过它 —— 这里先挡一次，
       // 报错也更贴模型要的东西（它要的是"这个名字不行"，不是内部规则）。
       if (scene.indexOf('/') >= 0 || scene.indexOf('\\') >= 0) {
-        throw new Error('场景名是单个路径段，不能含 / 或 \\：' + scene)
+        throw new Error('a scene name is a single path segment (no / or \\): ' + scene)
       }
 
       // ① 场景记录：`rules-create-scene` 本身是**幂等 upsert**（已存在则更新描述/标签/绑定的
@@ -369,7 +369,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       if (args.description !== undefined) { payload.description = String(args.description); touchedRecord.push('description') }
       if (args.prompt !== undefined) { payload.prompt = String(args.prompt); touchedRecord.push('prompt') }
       const created: any = await deps.rulesOps['rules-create-scene'](payload)
-      if (!created || created.ok === false) throw new Error((created && created.error) || '保存场景失败')
+      if (!created || created.ok === false) throw new Error((created && created.error) || 'failed to save the scene')
 
       // ② 两处「解绑」只能走 `rules-update-scene`：`scene-archive-save` 对载荷里**不带的栏**
       //    一律保留现值（archive-engine 的「不带 ≠ 解绑」），从现值复制出来的合并档案会把
@@ -382,7 +382,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       const setToolTable = args.toolTablePreset !== undefined && String(args.toolTablePreset).trim() !== ''
       const setQuickPrompts = args.quickPrompts !== undefined
       if (setQuickPrompts && !Array.isArray(args.quickPrompts)) {
-        throw new Error('quickPrompts 必须是 id 数组（[] = 进入后全部停用；解绑需用户手动操作，本工具不提供）')
+        throw new Error('quickPrompts must be an array of ids ([] = turn them all off on entry; unbinding is a manual step in the panel, not offered here)')
       }
       const touched = ARCHIVE_SECTIONS.filter((k) => (args as Record<string, unknown>)[k] !== undefined)
       const mustWriteArchive = touched.length > 0 || setToolTable || setQuickPrompts
@@ -394,7 +394,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       if (mustWriteArchive || unbindToolTable) {
         const cur: any = await deps.archiveOps['scene-mode-get']({})
         if (!cur || cur.ok === false) {
-          if (mustWriteArchive) throw new Error((cur && cur.error) || '读取场景档案失败')
+          if (mustWriteArchive) throw new Error((cur && cur.error) || 'failed to read the scene archive')
         } else {
           before = (cur.archives || {})[scene] || {}
           beforeKnown = true
@@ -408,7 +408,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
         const u: any = await deps.rulesOps['rules-update-scene'](upd)
         if (!u || u.ok === false) {
           // 主路径已成功、解绑没写上：如实报，别让回执假装绑定已经没了。
-          clearWarn = '\nWARN: 解绑未写入（' + ((u && u.error) || '未知错误') + '），旧绑定仍然有效'
+          clearWarn = '\nWARN: the unbind was not written (' + ((u && u.error) || 'unknown error') + '); the old binding still applies'
         }
       }
 
@@ -431,30 +431,30 @@ export function buildSceneTools(deps: SceneToolDeps): void {
         if (setToolTable) archive.toolTablePreset = String(args.toolTablePreset).trim()
         if (setQuickPrompts) archive.quickPrompts = quickPromptIds(args.quickPrompts)
         const r: any = await deps.archiveOps['scene-archive-save']({ scene, archive })
-        if (!r || r.ok === false) throw new Error((r && r.error) || '保存场景档案失败')
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to save the scene archive')
         // 回执必须回显**这一次替换挤掉了什么**。整段替换本身是对的（省略的段不填回就会被
         // 静默清掉，所以"模型给什么就是什么"），但"给出去的段盖掉了原来的勾选"是**静默**的
         // —— 不写出来，模型只会看到一句"档案段：mcp"，以为只是加了一项。
         const diffs = touched.map((k) => segmentDiff(k, before[k], (args as any)[k]))
         if (diffs.length) {
-          archiveNote = '档案段：' + diffs.map((d) => d.text).join('；')
+          archiveNote = 'archive segments: ' + diffs.map((d) => d.text).join('; ')
           if (diffs.some((d) => d.dropped.length > 0)) {
-            warnTail += '\n注意：这些段是整段替换，上面标 - 的项已被挤掉；要保留就把它们一并写进这次调用。'
+            warnTail += '\nnote: these segments are replaced as a whole; entries marked "-" above were dropped. To keep them, include them in this same call.'
           }
         }
         // 当前环境里不存在的键会被 op 丢弃并报告（改名或删除留下的，含工具表方案名与
         // 快捷提示词 id）：如实说，否则模型以为勾上了而实际没有。
-        if (r.stale && r.stale.length) warnTail += '\n（丢弃了当前环境不存在的键：' + r.stale.join('、') + '）'
+        if (r.stale && r.stale.length) warnTail += '\n(dropped keys the current environment does not have: ' + r.stale.join(', ') + ')'
         // 存盘成功但应用到运行时失败：`scene-archive-save` 对"正是当前模式的那个场景"会就地
         // 重应用，失败不回滚档案。如实报出去，别假装生效了（与界面同口径）。
-        if (r.applyError) warnTail += '\n（已存盘，但应用到运行时失败：' + r.applyError + '）'
+        if (r.applyError) warnTail += '\n(saved, but applying it to the runtime failed: ' + r.applyError + ')'
       }
       // 解绑写失败了就别输出「X → 解绑」—— 上面那句 WARN 才是事实；设置方向不受 ② 影响。
       if (args.toolTablePreset !== undefined && !(unbindToolTable && clearWarn !== '')) {
         toolTableNote = beforeKnown
-          ? '工具表方案：' + (toolTableLabel(before.toolTablePreset) || '未绑') + ' → ' +
-            (unbindToolTable ? '解绑' : toolTableLabel(String(args.toolTablePreset).trim()))
-          : '工具表方案：已解绑（档案现状读不到，无法对比）'
+          ? 'tool-table preset: ' + (toolTableLabel(before.toolTablePreset) || 'unbound') + ' -> ' +
+            (unbindToolTable ? 'unbind' : toolTableLabel(String(args.toolTablePreset).trim()))
+          : 'tool-table preset: unbound (the current archive is unreadable, no diff available)'
       }
       if (setQuickPrompts && beforeKnown) {
         const beforeIds: string[] = Array.isArray(before.quickPrompts) ? before.quickPrompts.map((x: unknown) => String(x)) : []
@@ -464,16 +464,16 @@ export function buildSceneTools(deps: SceneToolDeps): void {
         const marks: string[] = []
         if (added.length) marks.push('+' + toolNameList(added))
         if (dropped.length) marks.push('-' + toolNameList(dropped))
-        quickNote = '快捷提示词：' + beforeIds.length + ' 条 → ' + afterIds.length + ' 条' +
-          (afterIds.length === 0 ? '（进入后全部停用）' : '') +
-          (marks.length ? '（' + marks.join(' ') + '）' : '')
+        quickNote = 'quick prompts: ' + beforeIds.length + ' -> ' + afterIds.length + ' ids' +
+          (afterIds.length === 0 ? ' (all off after entering)' : '') +
+          (marks.length ? ' (' + marks.join(' ') + ')' : '')
       }
 
       // 收敛提示：`rules-create-scene` 在"历史默认（全部启用）"状态下会把启用集合收窄成
       // 单选（`collapseActiveForNewScene`）—— 那是一次**会改变运行时**的动作，必须说出来。
       // 界面上同样如实报（`scenes.result.created.collapsed`）。
       const collapsed = created.collapsedActive === true
-      const parts: string[] = [touchedRecord.length ? '场景记录已更新（' + touchedRecord.join('、') + '）' : '场景已确保存在']
+      const parts: string[] = [touchedRecord.length ? 'scene record updated (' + touchedRecord.join(', ') + ')' : 'scene existence ensured']
       if (archiveNote) parts.push(archiveNote)
       if (toolTableNote) parts.push(toolTableNote)
       if (quickNote) parts.push(quickNote)
@@ -481,13 +481,13 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       // 部分启用（开 save 不开 switch）时指向一条模型没有的工具，只会让它白跑一趟 ——
       // 与 mcp/skill 的 listHint 同一条纪律。
       const enterHint = deps.toolVisible('scene_manager_switch')
-        ? '要让它生效，用 scene_manager_switch 进入。'
-        : '要让它生效，需用户手动进入该场景（本会话未开放 scene_manager_switch）。'
-      return 'OK: scene「' + scene + '」' + parts.join('；') + warnTail + clearWarn +
+        ? 'To take effect, enter it with scene_manager_switch.'
+        : 'To take effect, the user has to enter this scene manually (scene_manager_switch is not available in this session).'
+      return 'OK: scene "' + scene + '"' + parts.join('; ') + warnTail + clearWarn +
         (collapsed
-          ? '\n注意：此前所有场景都处于启用状态（历史「全部启用」默认），本次已收窄为只启用一个，新建的这个不在其中 —— 需用户确认启用状态。'
+          ? '\nnote: every scene was enabled until now (the historical all-enabled default); this call narrowed the enabled set to one scene, and the new one is not it — the user should confirm the enabled state.'
           : '') +
-        '\n保存不改运行时：' + enterHint
+        '\nSaving does not change the runtime: ' + enterHint
     },
   }))
 }
