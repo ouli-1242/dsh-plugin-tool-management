@@ -608,7 +608,9 @@
               React.createElement('div', { className: 'dsm-source-head' },
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: flip },
                   React.createElement('span', { className: 'dsm-source-title', title: group.title }, group.title),
-                  React.createElement('span', { className: 'dsm-count' }, mt('mcp.servers.count', { count: groupRows.length })),
+                  // 分组头只留数字（用户 2026-10-17）：量词（"个服务"）在每一组的标题里已经说过
+                  // 一遍，再挂在数字后面只是重复；同一个数字在三页里一个样，扫起来才对得齐。
+                  React.createElement('span', { className: 'dsm-count' }, String(groupRows.length)),
                   group.path ? React.createElement('span', { className: 'dsm-path', title: group.path }, group.path) : null)),
               open ? React.createElement('div', { className: 'dsm-source-body' },
                 // 表头已随两行制拆除（REDESIGN §3.4 没有表头行；列对齐改由行内两行承担），
@@ -1302,7 +1304,7 @@
               React.createElement('div', { className: 'dsm-source-head' },
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroup(key, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-title', title: label }, label),
-                  React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: count }))),
+                  React.createElement('span', { className: 'dsm-count' }, String(count))),
                 actions ? React.createElement('div', { className: 'dsm-source-actions' }, actions) : null),
               open ? React.createElement('div', { className: 'dsm-source-body' }, bodyNode) : null)
           }

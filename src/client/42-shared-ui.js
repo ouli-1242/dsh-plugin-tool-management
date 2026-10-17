@@ -1450,7 +1450,7 @@ function enabledMemoryCount(rules) {
         return React.createElement('section', { key: g.id, className: split ? 'dsm-trash-split-pane' : 'dsm-trash-pane-group' },
           g.title ? React.createElement('div', { className: 'dsm-trash-pane-group-head' },
             React.createElement('span', { className: 'dsm-trash-pane-group-title', title: g.note }, g.title),
-            React.createElement('span', { className: 'dsm-count' }, t('trash.items.count', { count: list.length }))) : null,
+            React.createElement('span', { className: 'dsm-count' }, String(list.length))) : null,
           d.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, d.error) : null,
           list.length ? bulkRow(g) : null,
           d.loading
@@ -1532,7 +1532,7 @@ function enabledMemoryCount(rules) {
         key: 'trash-modal',
         title: React.createElement('span', { className: 'dsm-modal-title-row' },
           props.title || t('trash.title'),
-          totalReady ? React.createElement('span', { className: 'dsm-count' }, t('trash.total', { count: totalCount })) : null),
+          totalReady ? React.createElement('span', { className: 'dsm-count' }, String(totalCount)) : null),
         closeLabel: t('btn.close'),
         list: true,
         className: 'dsm-modal-list dsm-modal-trash' + (split ? ' dsm-modal-trash-split' : ''),
@@ -1750,7 +1750,7 @@ function enabledMemoryCount(rules) {
               },
                 h(CaretIcon, { key: 'caret', open: open, className: 'dsm-pick-caret' }),
                 h('span', { className: 'dsm-pick-group-name', title: g.name }, g.name),
-                h('span', { className: 'dsm-pick-group-count' }, t('export.group.count', { count: g.rows.length }))) : null,
+                h('span', { className: 'dsm-pick-group-count' }, String(g.rows.length))) : null,
               open ? g.rows.map(function (it) {
                 return pickRow({ key: it.key, checked: picked.indexOf(it.key) >= 0, name: it.name, desc: it.desc, descTitle: it.descTitle || it.desc, onChange: function () { toggle(it.key) } })
               }) : null)

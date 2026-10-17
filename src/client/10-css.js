@@ -1,11 +1,11 @@
     const CSS =
-      ':root{--dsm-warn:#d49245;--dsm-warn-bg:rgba(212,146,69,.12);--dsm-radius-s:4px;--dsm-radius-m:8px;--dsm-radius-l:12px}' +
+      ':root{--dsm-warn:#d49245;--dsm-warn-bg:rgba(212,146,69,.12);--dsm-radius-s:var(--dsw-radius-xs,4px);--dsm-radius-m:var(--dsw-radius-sm,8px);--dsm-radius-l:var(--dsw-radius-md,12px)}' +
       '.dsm-stat-row{display:flex;min-width:0;align-items:center;gap:8px}' +
       '.dsm-version{color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:400;letter-spacing:.3px;line-height:1}' +
       '.dsm-row-hint{grid-column:1/-1;margin:-4px 0 8px;color:var(--dsm-warn);font-size:12px;line-height:16px}' +
       '.dsm-tools{display:flex;flex-direction:column;gap:8px}' +
       '.dsm-tool{padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}' +
-      '.dsm-tool-name{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;font-weight:400;word-break:break-all}' +
+      '.dsm-tool-name{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:12px;font-weight:400;word-break:break-all}' +
       '.dsm-tool-name-row{display:flex;align-items:center;gap:8px}' +
       // 标签紧跟工具名（原来是 space-between，标签被推到中间、与名字隔着一大片空白）；
       // 开关单独用 margin-left:auto 顶到最右，标签不再受它的位置影响。
@@ -14,7 +14,7 @@
       '.dsm-tool-desc{min-width:0;flex:1;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px}' +
       '.dsm-tool-params{display:flex;flex-direction:column;gap:4px;margin-top:8px;padding-top:8px;border-top:1px dashed var(--dsw-alias-border-l2)}' +
       '.dsm-tool-param{display:flex;gap:8px;font-size:12px;align-items:baseline}' +
-      '.dsm-tool-param-key{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-weight:400;min-width:80px;word-break:break-all}' +
+      '.dsm-tool-param-key{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-weight:400;min-width:80px;word-break:break-all}' +
       '.dsm-tool-param-type{color:var(--dsw-alias-label-tertiary);min-width:56px}' +
       '.dsm-tool-param-desc{flex:1;color:var(--dsw-alias-label-secondary);word-break:break-all}' +
       '.dsm-modal textarea.dsm-control.dsm-textarea-sm{min-height:88px}' +
@@ -30,7 +30,7 @@
          在右，组内间距 8px 与行间隙一致。 */
       '.dsm-detail-title-acts{display:flex;align-items:center;gap:8px}' +
       `
-.dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);padding:4px}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:4px 0 24px;container-type:inline-size;flex-direction:column;gap:12px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-feedback-links{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.dsm-title{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.2px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:30px;align-items:center;gap:4px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:400;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:0;flex:none}
+.dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);padding:4px}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:4px 0 24px;container-type:inline-size;flex-direction:column;gap:12px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-feedback-links{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.dsm-title{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.2px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:30px;align-items:center;gap:4px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:400;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:0;flex:none}
 /* 页头动作行：内边距收 2px。批量按钮要按「取消全选」定宽（见 .dsm-btn-bulk），
    收这一点正好把定宽多出来的宽度抵掉，整行仍在一行内。 */
 .dsm-actions .dsm-btn{padding:0 12px}
@@ -115,7 +115,12 @@ button.dsm-qty:disabled{cursor:default}
    铁律：**同一行 / 同一组按钮必须同高** —— 行里有实心或常规动作就整行 30px（弹窗脚、
    页头动作条），整行都是行内小动作才整行 24px（列表行、回收站行、分段组）。
    （CSS 注释里别写反引号：这段整体在 JS 模板字符串里，反引号会把字符串截断。） */
-.dsm-btn{box-sizing:border-box;display:inline-flex;min-height:30px;align-items:center;justify-content:center;padding:0 12px;border:1px solid transparent;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font:inherit;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}.dsm-btn:hover:not(:disabled){opacity:.9}.dsm-btn:disabled{opacity:.48;cursor:default}.dsm-btn-secondary{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.dsm-btn-quiet{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary);min-height:24px;padding:0 8px;font-size:12px;font-weight:400}.dsm-btn-danger{border-color:transparent;background:var(--dsw-alias-state-error-primary);color:#fff}.dsm-btn-lock{background:transparent;color:var(--dsm-warn)}.dsm-btn:focus-visible,.dsm-control:focus-visible,.dsm-select-trigger:focus-visible,.dsm-source-head:focus-visible,.dsm-switch:focus-visible,.dsm-file-remove:focus-visible,.dsm-dropzone:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
+.dsm-btn{box-sizing:border-box;display:inline-flex;min-height:30px;align-items:center;justify-content:center;padding:0 12px;border:1px solid transparent;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font:inherit;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}.dsm-btn:hover:not(:disabled){opacity:.9}.dsm-btn:disabled{opacity:.48;cursor:default}.dsm-btn-secondary{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}.dsm-btn-quiet{border-color:var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary);min-height:24px;padding:0 8px;font-size:12px;font-weight:400}.dsm-btn-danger{border-color:transparent;background:var(--dsw-alias-state-error-primary);color:#fff}.dsm-btn-lock{background:transparent;color:var(--dsm-warn)}/* 焦点环**分三项写、不写 outline 简写**（PR #18 指出的问题，2026-10-17 实测确认）：
+   宿主 focus.css 只声明 outline-color / outline-width、刻意不声明 outline-style，
+   好让「控件自己设了 outline:none 就真的不画」。outline:2px solid <色> 这种简写会把
+   outline-style 一起重置成 solid，等于替宿主"重新打开"那些本该没有环的控件。
+   三项分开写就只覆盖颜色与宽度，style 仍由宿主与控件自己定。 */
+.dsm-btn:focus-visible,.dsm-source-head:focus-visible,.dsm-switch:focus-visible,.dsm-file-remove:focus-visible,.dsm-dropzone:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}
 /* 列表工具条的一行：搜索占满剩余、筛选下拉定宽靠右。
    下拉宽度 210 → 150（用户 2026-10-12：「全部级别缩短，当前太长了，多的内容交给输入框」；
    技能「全部来源」、记忆「全部场景」、会话保留期同一条口径）。触发器内的文本本来就带
@@ -146,7 +151,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
-.dsm-switch{position:relative;width:32px;height:18px;flex:none;padding:0;border:0;border-radius:99px;background:var(--dsw-alias-border-l3);cursor:pointer}.dsm-switch:after{position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:#fff;content:"";transition:transform 160ms ease}.dsm-switch-on{background:var(--dsw-alias-state-success-primary)}.dsm-switch-on:after{transform:translateX(14px)}.dsm-switch:disabled{opacity:.45;cursor:default}.dsm-trash-count{margin-left:auto;padding:4px 8px;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:11px;font-variant-numeric:tabular-nums}.dsm-empty{padding:24px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}.dsm-feedback{padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);color:var(--dsw-alias-label-secondary);font-size:12px}.dsm-undo{display:flex;align-items:center;gap:8px}.dsm-undo-text{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dsm-undo-close{padding:0;border:0;background:transparent;font:inherit;font-size:13px;cursor:pointer;width:24px;height:24px;color:var(--dsw-alias-label-secondary)}.dsm-undo-close:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}.dsm-undo.dsm-warning{background:var(--dsm-warn-bg)}.dsm-undo.dsm-warning .dsm-undo-text{font-weight:400}.dsm-undo.dsm-warning .dsm-undo-close{color:var(--dsm-warn)}.dsm-warning{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+.dsm-switch{position:relative;width:32px;height:18px;flex:none;padding:0;border:0;border-radius:99px;background:var(--dsw-alias-border-l3);cursor:pointer}.dsm-switch:after{position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:#fff;content:"";transition:transform 160ms ease}.dsm-switch-on{background:var(--dsw-alias-state-success-primary)}.dsm-switch-on:after{transform:translateX(14px)}.dsm-switch:disabled{opacity:.45;cursor:default}.dsm-trash-count{margin-left:auto;padding:4px 8px;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:11px;font-variant-numeric:tabular-nums}.dsm-empty{padding:24px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}.dsm-feedback{padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);color:var(--dsw-alias-label-secondary);font-size:12px}.dsm-undo{display:flex;align-items:center;gap:8px}.dsm-undo-text{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dsm-undo-close{padding:0;border:0;background:transparent;font:inherit;font-size:13px;cursor:pointer;width:24px;height:24px;color:var(--dsw-alias-label-secondary)}.dsm-undo-close:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}.dsm-undo.dsm-warning{background:var(--dsm-warn-bg)}.dsm-undo.dsm-warning .dsm-undo-text{font-weight:400}.dsm-undo.dsm-warning .dsm-undo-close{color:var(--dsm-warn)}.dsm-warning{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 .dsm-mask{position:fixed;z-index:1100;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.62)}.dsm-modal{box-sizing:border-box;display:flex;width:min(560px,100%)!important;max-height:min(760px,calc(100vh - 48px));min-width:0;flex-direction:column;gap:16px;padding:20px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-l);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}.dsm-modal-sm{width:min(480px,100%)!important}.dsm-modal-lg,.dsm-modal-wide{width:min(720px,100%)!important}.dsm-modal-list{width:min(560px,100%)!important;height:min(640px,calc(100vh - 48px))!important;max-height:none!important;overflow:hidden}.dsm-modal-list.dsm-modal-editor{width:min(720px,100%)!important}.dsm-modal-body{display:flex;min-height:0;flex-direction:column;gap:8px}.dsm-modal-list .dsm-modal-body{flex:1;overflow:auto;overscroll-behavior:contain}.dsm-modal-head{display:flex;align-items:flex-start;gap:12px}
 /* 头部这一层包住「标题行 + 令牌提示」：提示挂在头部里面（而不是 head 与 body 之间）是为了
    让 body 的子节点位置稳定 —— 位置一变 React 会把 body 整棵重挂（输入框失焦、下拉归零）。 */
@@ -157,7 +162,7 @@ button.dsm-qty:disabled{cursor:default}
 /* 条目清单必须自己声明字号：裸 ul/li 会从宿主那里继承 16px 近白正文（兼容页「工具能用 ≠
    模型知道」三条），比同页的说明文字大两号。口径照 .dsm-help-list。 */
 .dsm-upload-requirements ul{display:flex;margin:4px 0 0;padding-left:16px;flex-direction:column;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}
-.dsm-upload-req{margin-top:8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}.dsm-detail-section{gap:8px}.dsm-detail-path,.dsm-code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.dsm-detail-path{padding:8px 8px;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);word-break:break-all}
+.dsm-upload-req{margin-top:8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}.dsm-detail-section{gap:8px}.dsm-detail-path,.dsm-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}.dsm-detail-path{padding:8px 8px;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);word-break:break-all}
 /* 技能详情的「路径 + 编辑器查看」同一行（用户 2026-10-12）：路径条 flex:1 吃掉剩余宽度，
    按钮 flex:none 固定不动。按钮那颗 .dsm-btn 自带 white-space:nowrap，长路径自己折行。 */
 .dsm-detail-path-row{display:flex;min-width:0;align-items:center;gap:8px}
@@ -193,11 +198,11 @@ button.dsm-qty:disabled{cursor:default}
    （.dsm-trash-group 正是），超出的条目会被**直接裁掉** —— 看不见、也滚不到，表现就是
    「没有滚动条 + 内容缺一截」。列表项的尺寸一律由内容决定，滚动只交给 body 这一层。 */
 .dsm-modal-list .dsm-modal-body>*{flex:none}
-.dsm-fm{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}.dsm-fm-row{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr);gap:8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px;line-height:18px}.dsm-fm-row:last-child{border-bottom:0}.dsm-fm-key{color:var(--dsw-alias-label-secondary);word-break:break-word}.dsm-fm-raw{margin-left:4px;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.dsm-fm-val{min-width:0;color:var(--dsw-alias-label-primary);word-break:break-word;white-space:pre-wrap}
+.dsm-fm{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}.dsm-fm-row{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr);gap:8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px;line-height:18px}.dsm-fm-row:last-child{border-bottom:0}.dsm-fm-key{color:var(--dsw-alias-label-secondary);word-break:break-word}.dsm-fm-raw{margin-left:4px;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}.dsm-fm-val{min-width:0;color:var(--dsw-alias-label-primary);word-break:break-word;white-space:pre-wrap}
 @container(max-width:780px){
 .dsm-path{display:none}
 }@container(max-width:520px){.dsm-head{flex-direction:column}.dsm-actions{width:100%;margin-left:0}.dsm-actions .dsm-btn{flex:1}.dsm-filters{flex-direction:column}.dsm-source-filter{width:100%}}
-.dsm-hist-group-head{gap:8px}.dsm-hist-group-extra{display:flex;align-items:center;gap:8px;flex:none;margin-left:4px}.dsm-hist-group-extra .dsm-tag{flex:none}.dsm-hist-dir-missing{flex:none;padding:1px 6px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;white-space:nowrap;cursor:default;user-select:none}.dsm-hist-register-path{margin-top:-4px;color:var(--dsw-alias-label-tertiary);font-family:var(--dsw-font-mono,monospace);font-size:11px;word-break:break-all}/* （.dsm-hist-batch / .dsm-hist-batch-actions 已随批量动作移进列表工具条删除；
+.dsm-hist-group-head{gap:8px}.dsm-hist-group-extra{display:flex;align-items:center;gap:8px;flex:none;margin-left:4px}.dsm-hist-group-extra .dsm-tag{flex:none}.dsm-hist-dir-missing{flex:none;padding:1px 6px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;white-space:nowrap;cursor:default;user-select:none}.dsm-hist-register-path{margin-top:-4px;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);font-size:11px;word-break:break-all}/* （.dsm-hist-batch / .dsm-hist-batch-actions 已随批量动作移进列表工具条删除；
    .dsm-hist-batch-count 仍用于导出弹窗里的「已选 N 项」计数。） */
 .dsm-hist-batch-count{color:var(--dsw-alias-label-secondary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}.dsm-dir-row{display:flex;gap:8px}.dsm-dir-row .dsm-control{flex:1}.dsm-dir-list{display:flex;max-height:220px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}.dsm-dir-item{display:flex;width:100%;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}.dsm-dir-item:last-child{border-bottom:0}.dsm-dir-item:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-dir-item::before{content:"📁";margin-right:8px;font-size:12px}
 .dsm-rule-shadowed .dsm-note{color:var(--dsw-alias-state-error-primary)}.dsm-rule-off .dsm-note{color:var(--dsw-alias-label-tertiary)}.dsm-rule-shadow-hint{margin-top:4px;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:17px}.dsm-rule-invalid{border-color:var(--dsw-alias-state-error-primary)!important}.dsm-rule-hint{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:17px}/* （.dsm-rule-budget 与 .dsm-budget-bar / -fill / -over-text 都已随记忆页预算条的两次搬家
@@ -259,7 +264,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-scene-tile-mode{border-color:var(--dsw-alias-state-success-primary)}
 .dsm-scene-tile-head{display:flex;min-width:0;align-items:center;gap:8px;padding:12px 12px 0}
 .dsm-scene-tile-name{overflow:hidden;font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
-.dsm-scene-tile-key{flex:none;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}
+.dsm-scene-tile-key{flex:none;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}
 .dsm-scene-tile-head .dsm-tag{flex:none}
 .dsm-scene-tile-switch{margin-left:auto;flex:none}
 /* 描述行是卡片的最后一行（2026-10-16 删掉底部那条 编辑/删除 band，动作进卡头 ⋯），
@@ -378,7 +383,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-mod-row:last-child{border-bottom:0}
 .dsm-compat-mod-list.dsm-compat-cards .dsm-compat-mod-row{display:grid;min-height:0;grid-template-columns:minmax(0,1fr) max-content;gap:4px 10px;padding:8px 12px}
 .dsm-compat-mod-self{grid-column:1/-1}
-.dsm-compat-mod{min-width:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;line-height:17px;word-break:break-word}
+.dsm-compat-mod{min-width:0;font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px;line-height:17px;word-break:break-word}
 .dsm-compat-pill{display:inline-flex;min-height:20px;flex:none;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:99px;color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}
 .dsm-compat-pill-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 .dsm-compat-pill-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
@@ -397,7 +402,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-inject-domains{display:flex;flex-wrap:wrap;gap:6px}
 .dsm-inject-chip{box-sizing:border-box;display:inline-flex;flex:1 1 0;min-width:max-content;min-height:32px;align-items:center;justify-content:center;gap:6px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}
 .dsm-inject-chip:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.dsm-inject-chip:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
+.dsm-inject-chip:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}
 .dsm-inject-chip-dot{flex:none;width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.4}
 .dsm-inject-chip-name{flex:none}
 /* 开：成功色描边 + 主字色 + 实心点。底色不动 —— 六块都涂色会把「注入内容」这一块压得
@@ -434,14 +439,14 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-tooltable-tool{display:grid;grid-template-columns:15px 186px 48px minmax(0,1fr);align-items:center;gap:0 8px;padding:4px 4px;border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer}
 .dsm-tooltable-tool:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsm-tooltable-tool input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
-.dsm-tooltable-name{overflow:hidden;color:var(--dsw-alias-label-primary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}
+.dsm-tooltable-name{overflow:hidden;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);text-overflow:ellipsis;white-space:nowrap}
 .dsm-tooltable-tok{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dsm-tooltable-about{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 注入实况（只读）：与「注入」设置同屏。行 = 域 + 体积 + 状态胶囊，点域名展开正文。 */
 .dsm-inject-live-actions{display:flex;flex:none;align-items:center;gap:4px;margin-left:auto}
 .dsm-inject-live-toggle{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}
 .dsm-inject-live-toggle:hover{text-decoration:underline}
-.dsm-inject-live-toggle:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
+.dsm-inject-live-toggle:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}
 /* 没有正文可展开的行：用一个看不见的同字符占位，把展开箭头那一格宽度留出来，
    这样所有行的域名左缘才会在同一条竖线上（用户 2026-09-17 指出参差不齐）。
    占位与文字放在**同一个** flex 子项里（.dsm-inject-live-static），否则 name 格的
@@ -464,7 +469,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-pill-bad{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 .dsm-compat-name{min-width:0;flex:1;font-size:12px;font-weight:400;word-break:break-word}
 .dsm-compat-label{margin-right:4px;color:var(--dsw-alias-label-tertiary);font-size:12px;white-space:nowrap}
-.dsm-compat-code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}
+.dsm-compat-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}
 .dsm-compat-list{margin:0;padding-left:16px}.dsm-compat-list li+li{margin-top:4px}
 @container(max-width:640px){.dsm-compat-grid{grid-template-columns:1fr}}
 html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-tabs-shell{position:sticky;top:0;z-index:6;display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px;background:var(--dsw-alias-bg-layer-2)}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
@@ -534,7 +539,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-token-banner-go{pointer-events:auto;-webkit-app-region:no-drag;app-region:no-drag;flex:none;align-self:center;padding:4px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;white-space:nowrap}
 .dsm-token-banner-go:hover{background:rgba(255,255,255,.08)}
 .dsm-token-banner-go:active{background:rgba(255,255,255,.14)}
-.dsm-token-banner-go:focus-visible{outline:2px solid var(--dsw-alias-state-success-primary);outline-offset:2px}
+.dsm-token-banner-go:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}
 
 /* 全局轻提示（斜杠命令的执行反馈）。位置在右下角：对话页的输入框居底居中，顶部那条又是
    令牌横幅，两处都会被挡。z-index 比横幅低一档 —— 令牌没过时那句解释比"改成功了"更要紧。 */
@@ -554,7 +559,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-imp-row input[type=checkbox]:disabled{cursor:not-allowed}
 .dsm-imp-main{display:flex;min-width:0;flex-direction:column;gap:4px}
 .dsm-imp-name{display:flex;align-items:center;flex-wrap:wrap;gap:4px;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600}
-.dsm-imp-endpoint{color:var(--dsw-alias-label-secondary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;line-height:16px;word-break:break-all}
+.dsm-imp-endpoint{color:var(--dsw-alias-label-secondary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px;line-height:16px;word-break:break-all}
 .dsm-imp-sub,.dsm-imp-note{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
 .dsm-imp-err{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px}
 .dsm-imp-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
@@ -570,12 +575,22 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-border-l3)}
 .dsm-dot-ok{background:var(--dsw-alias-state-success-primary)}
 .dsm-dot-warn{background:var(--dsm-warn)}
+/* idle / bad 两条此前**根本没写**（2026-10-17 查出来）：StatusDot 的 tone 有
+   ok / idle / bad / warn / busy 五档，CSS 只给了 ok / warn / busy 三条，idle 与 bad
+   全靠 .dsm-dot 的默认灰底顶着 —— idle 恰好就该是灰，所以一直没露馅；而 bad
+   （MCP 加载失败，41-mcp.js 的 liveStatus）本该是红的，实际也是灰的，
+   那颗灯因此在「连不上」和「没加载过」之间完全分不出来。两条都显式写出来，不再吃默认值。 */
+.dsm-dot-idle{background:var(--dsw-alias-border-l3)}
+.dsm-dot-bad{background:var(--dsw-alias-state-error-primary)}
 /* 启动进行中的呼吸点（2026-10-15 用户要求加回：服务启动要数秒，原来只有一个静态灰点，
    "正在启动"只能靠 title 说出来。2026-10-12 曾以"闪动的点只有体检用"为由删过一次，
    这次是 MCP 启动相位自己要 —— 全页只有 phase 非 active 时用它，不会到处闪）。
-   配色改绿（用户 2026-10-15）：business 橙在 dsh 的语义里是"占用中/要处理"，而启动中既不是
-   警告也不是故障，跑起来之后它就变成同一支绿 —— 呼吸与常亮因此是同一个颜色的两种节律。 */
-.dsm-dot-busy{background:var(--dsw-alias-state-success-primary);animation:dsm-dot-pulse 1.1s ease-in-out infinite}
+   配色改黄（用户 2026-10-17）：加载中既没连上也不是故障，取官方 warn 档
+   （--dsw-alias-state-warn-primary = amber-500 #f59e0b，随主题走）—— 与跑起来之后的
+   常亮绿、失败的红三者一眼可分。2026-10-15 曾改绿，那次要的是"别用橙"，
+   但绿与常亮态同色、只能靠节律分辨，用户这次明确要黄。
+   tone='busy' 全仓只有 MCP 的状态灯在用（41-mcp.js 的两处 liveStatus），别处不受影响。 */
+.dsm-dot-busy{background:var(--dsw-alias-state-warn-primary);animation:dsm-dot-pulse 1.1s ease-in-out infinite}
 /* 呼吸的最低亮度从 .3 提到 .65，且改成**长一圈**而不是缩一点（用户 2026-10-15：灯在闪，
    可颜色看着不绿，分不清是不是启动中）。6px 的点压到三成透明度就只剩一层灰；"变亮 + 长大"
    与跑起来那颗常亮的绿一眼可分。 */
@@ -590,7 +605,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-audit-head{grid-template-columns:92px minmax(0,1fr)}
 .dsm-audit-row{display:grid;grid-template-columns:92px minmax(0,1fr);align-items:baseline;gap:8px;padding:4px 0;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px}
 .dsm-audit-row:last-child{border-bottom:0}
-.dsm-audit-time{color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dsm-audit-time{color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dsm-audit-main{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;min-width:0}
 .dsm-audit-item{color:var(--dsw-alias-label-secondary)}
 .dsm-audit-target{color:var(--dsw-alias-label-primary);font-weight:400}
@@ -646,7 +661,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-pick input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
 .dsm-tooltable-ghead input[type=checkbox]{flex:none;width:15px;height:15px;margin:0;cursor:pointer}
 .dsm-imp-row input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer}
-.dsm-select-menu button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px;}
+.dsm-select-menu button:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px); outline-offset: 1px;}
 .dsm-btn-lock:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover);}
 .dsm-btn-quiet:hover:not(:disabled){background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);}
 /* quiet + danger 必须**自己把描边写回来**：单类的 .dsm-btn-danger（实心红底那颗）在
@@ -664,7 +679,19 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-select-trigger > span{min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
 .dsm-select-trigger::after{content:""; flex: none; box-sizing: border-box; width: 7px; height: 7px; margin-top: -3px; border-right: 1.5px solid var(--dsw-alias-label-tertiary); border-bottom: 1.5px solid var(--dsw-alias-label-tertiary); transform: rotate(45deg);}
 .dsm-select-trigger:empty::before{color: var(--dsw-alias-label-dimmed);}
-.dsm-select-trigger:focus-visible{outline: none; border-color: var(--dsw-alias-state-business-primary);}
+/* 输入框的焦点态照官方口径（2026-10-17）：**不画环，只把描边染成主色**（官方 settings-models
+   的 .input:focus 就一句 border-color + outline:none，不加深、不发光晕）。
+   **描边色不能写 --dsw-focus-ring-color**：宿主在鼠标交互时把那个变量改写成 transparent
+   （html[data-input-modality=pointer] body :focus-visible:not(:read-write)），只放过输入框这类
+   :read-write 元素 —— 而下拉触发器是 <button>，不在豁免里，照抄就会「点一下边框整圈消失」。
+   所以这里直接取它缺省的那个业务蓝：深浅两套主题下与官方环同色，且不随交互方式变。
+   非法输入框排除在外：描边被 .dsm-rule-invalid 用 !important 钉成红色，染不上色，
+   留着宿主默认的环反而看得见焦点。 */
+.dsm-control:not(.dsm-rule-invalid):focus-visible,.dsm-select-trigger:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}
+/* 搜索框比普通输入框多一圈 18% 主色的光环（官方 settings-plugin-inventory 的搜索框写法，
+   截图比过色值：1px 描边 + 2px 淡蓝光晕，18% 混白正好落在官方那张图的 (221,230,250)）。
+   只给搜索框，别的输入框不加。 */
+.dsm-search:focus-visible{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent)}
 .dsm-select-trigger:disabled{color: var(--dsw-alias-label-tertiary); cursor: default;}
 .dsm-control[aria-invalid= true ]{border-color: var(--dsw-alias-state-error-primary);}
 /* 这一条**不能再写 background**：它与第 99 行的 .dsm-option:hover 特异性打平
@@ -690,7 +717,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-btn.dsm-btn-icon > svg{width: 14px; height: 14px; flex: none;}
 .dsm-btn.dsm-btn-icon.dsm-btn-lock{border: 0; background: transparent; color: var(--dsw-alias-label-tertiary);}
 .dsm-btn.dsm-btn-icon.dsm-btn-lock:hover:not(:disabled){color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger);}
-.dsm-btn.dsm-btn-icon:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px;}
+.dsm-btn.dsm-btn-icon:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px); outline-offset: 1px;}
 .dsm-preset-row > [role= switch ]{margin-right: 4px;}
 /* ⚠️ 不写 overscroll-behavior:contain（2026-10-12 与场景编辑器组体同批修）：代码块是
    overflow:auto，内容不到 340px 时它不是「没在滚」而是「滚不动」——contain 会把滚轮链
@@ -807,7 +834,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 /* 头部右上角 X 图标钮（§4.3）：替换「关闭」文字钮，aria-label 仍取「关闭」文案。 */
 .dsm-modal-close{flex:none;display:inline-flex;width:30px;height:30px;align-items:center;justify-content:center;padding:0;border:0;border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
 .dsm-modal-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.dsm-modal-close:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.dsm-modal-close:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:1px}
 /* footer 规范（§4.3）：右对齐 [取消][主操作]（.dsm-modal-actions 已是 flex-end）。
    （.dsm-modal-danger-left「危险操作钮靠左」已随场景编辑页那颗「删除场景」一起删除 ——
    它此前是这颗键唯一的落点，用户 2026-10-12 裁定编辑页不再承担删除。） */
@@ -821,7 +848,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    行本体带 role=checkbox + aria-checked，Space/Enter 切换；框是纯视觉（aria-hidden）。 */
 .dsm-rowselect{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-primary);cursor:pointer}
 .dsm-rowselect:hover,.dsm-rowselect-on{background:var(--dsw-alias-interactive-bg-hover)}
-.dsm-rowselect:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.dsm-rowselect:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:1px}
 .dsm-rowselect-disabled{cursor:default;opacity:.5}
 .dsm-rowselect-disabled:hover{background:transparent}
 .dsm-rowselect-box{display:inline-flex;flex:none;width:14px;height:14px;align-items:center;justify-content:center;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-s);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary-foreground)}
@@ -1021,7 +1048,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-listrow-meta-desc{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .dsm-listrow-meta-info{flex:none;color:var(--dsw-alias-label-tertiary)}
 /* 技术值（路径 / id）排印（§2.3）：与普通文案在字形上区分，不靠颜色。 */
-.dsm-listrow-meta .dsm-mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.dsm-listrow-meta .dsm-mono{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace)}
 .dsm-listrow-side{display:flex;flex:none;align-items:center;gap:8px}
 .dsm-listrow-actions{display:flex;flex:none;align-items:center;justify-content:flex-end;gap:4px}
 /* 行2 之下的追加内容（体检结果 / ⚠ 提示 / 被覆盖说明）原本按表格网格留白，

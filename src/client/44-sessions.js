@@ -381,7 +381,7 @@
                 React.createElement(RowCheck, { checked: allChecked, label: t('hist.selectGroup', { title: g.title }), onChange: function () { toggleGroup(g.key, groupIds) } }),
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroupCollapse(g.key, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-title dsm-hist-group-title', title: g.title }, g.title),
-                  React.createElement('span', { className: 'dsm-count' }, t('hist.group.count', { count: g.items.length }))),
+                  React.createElement('span', { className: 'dsm-count' }, String(g.items.length))),
                 // 目录已被删除（dirMissing）时：既不给「重新登记」入口，也不再并列「已移除」标签 ——
                 // 只留一枚醒目告警，明确告诉用户这个工作区的磁盘文件夹已经不存在了
                 // （用户 2026-10-12：「如果工作区已经被删除应该不能恢复……要怎么及时知道这个工作区
@@ -553,7 +553,7 @@
                             React.createElement('button', { type: 'button', className: 'dsm-pick-group-head', 'aria-expanded': open ? 'true' : 'false', onClick: function () { toggleGroupCollapse(key, open) } },
                               React.createElement(CaretIcon, { open: open, className: 'dsm-pick-caret' }),
                               React.createElement('span', { className: 'dsm-pick-group-name', title: g.cwd || t('hist.ungrouped') }, g.cwd || t('hist.ungrouped')),
-                              React.createElement('span', { className: 'dsm-pick-group-count' }, t('export.group.count', { count: g.rows.length }))),
+                              React.createElement('span', { className: 'dsm-pick-group-count' }, String(g.rows.length))),
                             open ? g.rows.map(function (it) {
                               // 导出列表整行可点勾选（REDESIGN §5.1，切片五）：RowSelect 本尊，
                               // 目录走 desc 槽（缺目录的带 ⚠），归档态标签走 meta 槽。

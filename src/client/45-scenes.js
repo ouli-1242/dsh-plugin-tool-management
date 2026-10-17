@@ -18,6 +18,16 @@
           var sceneForm = sfs[0], setSceneForm = sfs[1]
           // 切走这一页 → 场景编辑器关窗时那份暂存作废（见 42-shared-ui.js 的 useFormDraftScope）。
           useFormDraftScope('scene:')
+          // 「新建记忆」子弹窗误关后的暂存槽（用户 2026-10-17：编辑器里那颗「创建」点开写完，
+          // 手一滑点到背板就全没了，而记忆页 / 技能页都有 30 秒兜底）。
+          // key 跟着**这次编辑的是哪个场景**走（`modal.draftKey` 就是 `scene:create` /
+          // `scene:edit:<名字>`）：固定一个槽会让「在 A 里关掉、到 B 里点创建」取回 A 的草稿。
+          // 新建 / 编辑**两个槽分开** —— takeFormDraft 是取回即销账，共用一个槽的话，
+          // 先误关一条编辑中的、再去点「创建」，那份就会被当成"不是新建"而白白丢掉。
+          // 前缀仍是 `scene:`，切走这一页照旧整组作废。
+          function memNewDraftKey(editing) {
+            return String((modal && modal.draftKey) || 'scene:create') + (editing ? ':memedit' : ':memnew')
+          }
           var pos = React.useState([])
           var presetOptions = pos[0], setPresetOptions = pos[1]
           // 当前**生效中**的提示词预设 id（`agentsmd-list` 里 active 的那份）。预览卡要用它把
@@ -722,18 +732,30 @@
           }
           function openMemoryCreate() {
             if (!memoryCreateReady()) return
+            // 30 秒内重开：把刚才误关掉的那份填回来（与记忆页 / 技能页同一套，见
+            // 42-shared-ui.js 的 stashFormDraft）。只认"新建"那一槽。
+            var draft = takeFormDraft(memNewDraftKey(false))
             // `editing` = 这一窗改的是第几条草稿；null = 新建一条。
-            setMemNew({ editing: null, name: '', description: '', body: '', form: 'flat', files: [], error: null })
+            setMemNew(draft
+              ? Object.assign({}, draft, { editing: null, error: null })
+              : { editing: null, name: '', description: '', body: '', form: 'flat', files: [], error: null })
           }
           /** 改一条待创建的记忆：草稿回填进弹窗，保存时**替换**原来那条，而不是又添一条。 */
           function openMemoryEdit(index) {
             if (!modal || modal.type !== 'scene-editor') return
             var m = (modal.pendingMems || [])[index]
             if (!m) return
-            setMemNew({
-              editing: index, name: m.name, description: m.description || '', body: m.body || '',
-              form: m.form || 'flat', files: (m.files || []).slice(), error: null,
-            })
+            // 同一份草稿被误关掉：30 秒内重开填回改了一半的内容。索引会随「删掉别的草稿」
+            // 漂移，所以连**目标名**一起核对 —— 只认索引与名字都对得上的那一份，否则宁可
+            // 从 `pendingMems` 重读，也不能把 A 改了一半的内容塞进 B 的弹窗里。
+            var draft = takeFormDraft(memNewDraftKey(true))
+            var restore = draft && draft.editing === index && draft.linkedName === m.name ? draft : null
+            setMemNew(restore
+              ? Object.assign({}, restore, { editing: index, error: null })
+              : {
+                editing: index, name: m.name, description: m.description || '', body: m.body || '',
+                form: m.form || 'flat', files: (m.files || []).slice(), error: null,
+              })
           }
           /** 撤掉一条还没落盘的记忆草稿。 */
           function dropPendingMemory(index) {
@@ -905,7 +927,21 @@
             // 改草稿时标题与主按钮换成「编辑 / 保存」那一套（与记忆页同词条）——否则同一个弹窗
             // 在"新建"和"改一条已存在的东西"两种语义下长得一模一样，用户分不清点下去会加一条还是改一条。
             var editing = memNew.editing != null
-            return React.createElement(Modal, { key: 'memnew', className: 'dsm-modal-compact', title: editing ? t('memory.edit.title') : t('memory.create.title'), closeLabel: t('btn.close'), onClose: function () { setMemNew(null) } },
+            // 关掉 ≠ 丢掉（与记忆页的 closeEditor 同一条口径）：只有误关这条路进暂存 ——
+            // 提交成功走 stageMemoryDraft，它不经过 onClose，所以不会存下一份已经用掉的草稿。
+            // 编辑态额外记 `linkedName`：`editing` 是数组下标，期间删掉别的草稿就会漂移，
+            // 取回时两个都对得上才认（见 openMemoryEdit）。
+            var closeMemoryCreate = function () {
+              var pending = (modal.pendingMems || [])[memNew.editing]
+              stashFormDraft(memNewDraftKey(editing), {
+                editing: editing ? memNew.editing : null,
+                linkedName: editing && pending ? pending.name : null,
+                name: memNew.name || '', description: memNew.description || '', body: memNew.body || '',
+                form: memNew.form || 'flat', files: (memNew.files || []).slice(),
+              })
+              setMemNew(null)
+            }
+            return React.createElement(Modal, { key: 'memnew', className: 'dsm-modal-compact', title: editing ? t('memory.edit.title') : t('memory.create.title'), closeLabel: t('btn.close'), onClose: closeMemoryCreate },
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.group')),
