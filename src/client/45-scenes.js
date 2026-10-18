@@ -1743,7 +1743,9 @@
             return parts.join(' · ')
           }
           // 当前模式场景被锁 → 「退出模式」按钮与开关一起禁用（服务端守卫兜底）。
-          var modeSceneLocked = !!(modeScene && (data.scenes || []).some(function (s) { return s.name === modeScene && s.locked === true }))
+          // `modeSceneObj` 是那个场景的记录本身：横幅里那颗「锁定」要拿它去调 toggleSceneLock。
+          var modeSceneObj = modeScene ? (data.scenes || []).filter(function (s) { return s.name === modeScene })[0] : null
+          var modeSceneLocked = !!(modeSceneObj && modeSceneObj.locked === true)
           var modeSummary = modeScene ? archiveSummary(data.archives[modeScene], modeScene) : ''
           return React.createElement('section', { className: 'dsm-section' },
             // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 开启提醒 · 回收站；统计内联。
@@ -1786,7 +1788,13 @@
                   t('scenes.mode.active', { name: sceneLabel(data.scenes, modeScene) || modeScene })),
                 React.createElement('div', { className: 'dsm-mode-sub' },
                   modeSummary ? t('scenes.mode.profile', { parts: modeSummary }) : t('scenes.mode.noProfile'))),
-              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || modeSceneLocked, title: modeSceneLocked ? t('scenes.lock.blockedExit') : '', onClick: exitMode }, t('memory.mode.exit'))) : null,
+              // 「锁定」搬到这条横幅里、挨着「退出模式」（用户 2026-10-18：「锁定改成只有开启后
+              // 才出现，而且出现在退出模式旁边」）：锁的是**当前正在用的这个场景**，卡片上每张
+              // 都挂一颗、再按 active 置灰，读起来像"这张卡有锁功能但用不了"。只有进入之后才有
+              // 锁定这回事，于是它只在这条横幅里出现。
+              React.createElement('span', { className: 'dsm-mode-acts' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-lock', disabled: busy, title: t('scenes.lock.hint'), onClick: function () { toggleSceneLock(modeSceneObj) } }, modeSceneLocked ? t('scenes.lock.unlock') : t('scenes.lock.lock')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || modeSceneLocked, title: modeSceneLocked ? t('scenes.lock.blockedExit') : '', onClick: exitMode }, t('memory.mode.exit')))) : null,
             React.createElement(Notice, { key: 'notice', kind: result && result.ok ? 'ok' : 'err', text: result && result.text }),
             React.createElement(UndoBar, { key: 'undo', undo: undo, busy: busy, t: t, onUndo: undoMemories, onClose: dismissUndo }),
             // 历史「全部启用」（active=null）遗留：单选模型下多名场景同时在场是歧义状态。
@@ -1839,30 +1847,35 @@
                 // 不一致就如实标出来，别让用户以为文件里就是它。
                 var promptMismatch = promptLive && !promptMissing && data.scenePrompt.duplicate !== true
                 return React.createElement('article', { key: 's:' + name, className: 'dsm-scene-tile' + (modeScene === name ? ' dsm-scene-tile-mode' : '') },
-                  React.createElement('div', { className: 'dsm-scene-tile-head' },
-                    React.createElement('span', { className: 'dsm-scene-tile-name', title: label }, label),
-                    // 显示名与磁盘目录名不同时才标出真名，方便对文件核对。
-                    name === label ? null : React.createElement('span', { className: 'dsm-scene-tile-key' }, name),
-                    locked ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
-                    modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
-                    sceneLocked ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('scenes.lock.tag')) : null,
-                    !locked && scene.active === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null,
-                    boundPrompt ? React.createElement('span', {
-                      className: 'dsm-tag' + (promptMissing ? ' dsm-tag-off' : promptLive ? ' dsm-tag-on' : ''),
-                      title: promptMismatch ? t('scenes.prompt.mismatch.hint', { id: boundPrompt }) : t('scenes.prompt.tag.hint'),
-                    }, promptMissing
-                      ? t('scenes.prompt.missing', { id: boundPrompt })
-                      : promptLive ? t('scenes.prompt.live', { id: boundPrompt }) : t('scenes.prompt.bound', { id: boundPrompt })) : null,
-                    promptMismatch ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.prompt.mismatch.hint', { id: boundPrompt }) }, t('agm.file.mismatch')) : null,
+                  // 左列：名字 + 描述（两行）。右侧控件是另一格，二者按卡片中线对齐。
+                  React.createElement('div', { className: 'dsm-scene-tile-main' },
+                    React.createElement('div', { className: 'dsm-scene-tile-head' },
+                      React.createElement('span', { className: 'dsm-scene-tile-name', title: label }, label),
+                      // 显示名与磁盘目录名不同时才标出真名，方便对文件核对。
+                      name === label ? null : React.createElement('span', { className: 'dsm-scene-tile-key' }, name),
+                      locked ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
+                      modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
+                      sceneLocked ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('scenes.lock.tag')) : null,
+                      !locked && scene.active === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null,
+                      // 「提示词生效中：X」「提示词：X」两枚标签已删（用户 2026-10-18）：绑定关系在
+                      // 编辑器里一眼可改，挂在卡片上只是每行多一枚药丸。只留**出问题时**的两枚
+                      //（预设不见了 / 文件里不是它）—— 那才是需要人动手的信号。
+                      promptMissing ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.prompt.tag.hint') }, t('scenes.prompt.missing', { id: boundPrompt })) : null,
+                      promptMismatch ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.prompt.mismatch.hint', { id: boundPrompt }) }, t('agm.file.mismatch')) : null),
+                    // 描述固定第二行（用户 2026-10-18：「场景页的备注在设置页没显示，应该显示在第二行」）：
+                    // 在编辑器里填的描述就是这一句，它不在卡头那一行跟名字抢宽度。没有描述也渲染，
+                    // 保持每张卡同样两行高，行与行之间对得齐。
+                    React.createElement('div', { className: 'dsm-scene-tile-desc', title: desc || '' }, desc || t('scenes.noDesc'))),
+                  // 右列：开关 + ⋯（用户 2026-10-18：「switch 按键和三个点按键没有上下居中」）。
+                  // 「锁定」已搬进当前模式横幅，卡片上不再出现 —— 锁的是"正在用的那个场景"。
+                  // 编辑 / 删除收进行尾一颗 ⋯：卡片底下那条只有两颗按钮的空 band 白占一截高度。
+                  // 锁定态「编辑」照旧置灰（改档案是写盘动作，与记忆 / 子智能体那两页的
+                  // "只读能看"不同，场景编辑器一打开就是那张要保存的表）。
+                  React.createElement('div', { className: 'dsm-scene-tile-side' },
                     locked ? null : React.createElement('span', {
                       className: 'dsm-scene-tile-switch',
                       title: blockedByOther ? t('scenes.enable.blocked', { name: sceneLabel(data.scenes, data.activeScene) || data.activeScene || '' }) : (sceneLocked && scene.active === true ? t('scenes.lock.blockedExit') : ''),
                     }, React.createElement(Switch, { on: scene.active === true, disabled: busy || blockedByOther || (sceneLocked && scene.active === true), label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } })),
-                    locked ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-lock', disabled: busy || scene.active !== true, title: scene.active !== true ? t('scenes.lock.notActive') : t('scenes.lock.hint'), onClick: function () { toggleSceneLock(scene) } }, sceneLocked ? t('scenes.lock.unlock') : t('scenes.lock.lock')),
-                    // 编辑 / 删除收进卡头一颗 ⋯（用户 2026-10-16）：卡片底下那条只有两颗按钮的
-                    // 空 band 白占一截高度，档案没内容时整张卡看着像坏了。
-                    // 锁定态「编辑」照旧置灰（改档案是写盘动作，与记忆 / 子智能体那两页的
-                    // "只读能看"不同，场景编辑器一打开就是那张要保存的表）。
                     React.createElement(RowMenu, {
                       key: 'menu',
                       label: t('row.menu', { name: label }),
@@ -1871,10 +1884,7 @@
                       ].concat(locked ? [] : [
                         { key: 'delete', label: t('scenes.row.delete'), danger: true, disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setModal({ type: 'scene-delete', name: name }) } },
                       ]),
-                    })),
-                  // 描述行**只有描述**（数量都收进上面的模式条了）；全文放 title，卡片本身永远一行。
-                  // 它是卡片的最后一行，所以下边距由它承担（原来那条 foot 一并删掉，见上）。
-                  React.createElement('p', { className: 'dsm-scene-tile-desc', title: desc || '' }, desc || t('scenes.noDesc')))
+                    })))
               })),
             modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', className: 'dsm-modal-sm', title: t('memory.deleteScene.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.deleteScene.desc', { name: modal.name })),

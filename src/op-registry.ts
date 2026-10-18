@@ -282,6 +282,9 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 客户端 boot 时必问一次决定挂不挂 `/` 菜单，那一次不能要令牌，否则没配令牌的宿主上这个功能
   // 永远出不来。
   'slash-settings': { write: true, writeWhen: (a) => a.set === true },
+  // 侧栏入口的开关（侧车 `sidebar-settings.json`）：同 `slash-settings` —— 写侧车按写门禁、
+  // 不冻结；读侧是纯读（客户端 boot 时必问一次，那一次不能要令牌）。
+  'sidebar-settings': { write: true, writeWhen: (a) => a.set === true },
   // 清理 patch 备份：删磁盘文件（备份里含明文凭据副本），按写操作门禁。
   'backups-clean': { write: true },
 

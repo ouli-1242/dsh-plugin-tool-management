@@ -23,7 +23,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest      # web
 dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # desktop
 ```
 
-Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart the desktop app after installing for desktop — a **Tools** panel in Settings means it worked. The plugin only writes its own files, never touches skill sources, and your configuration survives restarts and upgrades.
+Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart the desktop app after installing for desktop — a **Tools Management** panel in Settings means it worked. The plugin only writes its own files, never touches skill sources, and your configuration survives restarts and upgrades.
 
 ---
 
@@ -81,7 +81,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest     # desktop
 dsh plugin --profile desktop remove dsh-plugin-tool-management         # desktop · uninstall
 ```
 
-Hard-refresh the browser (web) or restart the desktop app, then a **Tools** panel with eight tabs means it worked. Client changes hot-reload; host-side changes need the client restarted (`dsh web` / the desktop app).
+Hard-refresh the browser (web) or restart the desktop app, then a **Tools Management** panel with eight tabs means it worked. Client changes hot-reload; host-side changes need the client restarted (`dsh web` / the desktop app).
 
 You can also ask the model:
 
@@ -157,6 +157,7 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 
 - **Host tab**: host version, usable capability count, per-action routing (native / adapter / unavailable), degradations and reasons; three write entries: access token, injection settings, model tool table.
 - **Compatibility page overview**: one row per feature point. The four host contracts (subagent persona delegation / tool restriction / creation ordering / Web admission) and the "bare module resolution" block all live there — a feature that silently stops working after a host upgrade shows up at a glance.
+- **Sidebar entry**: a "Tools Management" row in the sidebar opens the same eight pages; the Host tab's "Hide from sidebar / Show in sidebar" button adds or removes that row at any time (on by default, alongside Settings → Tools Management).
 - **Command line**: `node scripts/doctor.mjs` (health check), `node scripts/host-deps.mjs --fix` (align dependencies).
 - Under a **suppressing preset** such as `minimal`, this plugin's injection is off by default; the Host tab can force any domain back on.
 - Unchecking "Skills" or "Prompt" really stops them — under standard presets the host delivers those two itself; the other three domains follow the checkbox exactly.
@@ -194,7 +195,7 @@ The six recycle bins each own one directory under `trash/`: `{skills,memories,su
 | `tokenDisabled` | `true` = the token stays in the config but is not enforced (this is the line written by "Turn protection off"). Writes no longer need it; revealing plaintext still does.                                                                                       |
 | `maxBodyBytes`  | Request body cap, 88 MiB by default.                                                                                                                                                                                                                            |
 
-**Plaintext on disk (read this)**: masking is **display-only**; MCP `env` / `headers` and the plugin's own `token` stay in cleartext inside `cordis.patch.yml` (and each profile copy), and every config change copies the whole file into `~/.dsh/tool-management/backups/` — unencrypted, never rotated, not reclaimed on uninstall. One secret can therefore exist as `5 × (patch files holding it) + 1` plaintext copies. The token gate decides *who may read plaintext over HTTP*; it does nothing about *reading the files*, where the only defence is your filesystem permissions. **To clean up: Settings → Tools → Host → "Clean old backups"**.
+**Plaintext on disk (read this)**: masking is **display-only**; MCP `env` / `headers` and the plugin's own `token` stay in cleartext inside `cordis.patch.yml` (and each profile copy), and every config change copies the whole file into `~/.dsh/tool-management/backups/` — unencrypted, never rotated, not reclaimed on uninstall. One secret can therefore exist as `5 × (patch files holding it) + 1` plaintext copies. The token gate decides *who may read plaintext over HTTP*; it does nothing about *reading the files*, where the only defence is your filesystem permissions. **To clean up: Settings → Tools Management → Host → "Clean old backups"**.
 
 - **Browser**: reads and writes go through cookies, no token needed; **plaintext credentials** (reveal / export) do. The token is managed in the **Access token** block on the Host tab.
 - **Every destructive direction asks for the current token again** (turn protection off / change / delete). Being unlocked this run does not count.
@@ -209,7 +210,7 @@ The six recycle bins each own one directory under `trash/`: `{skills,memories,su
 | Pages missing after install                                           | Hard refresh; restart DSH if that fails.                                                                                                                                               |
 | Duplicate MCP tabs                                                    | Remove the stale loader row from `cordis.patch.yml`, restart.                                                                                                                          |
 | Broken config, DSH won't boot                                         | Restore the newest `cordis.patch.yml.<level>.bak-<timestamp>` from `~/.dsh/tool-management/backups/` (5 per patch file).                                                               |
-| Action stopped working after a DSH upgrade                            | Settings → Tools → **Host** for the reason; `doctor.mjs` → `host-deps.mjs --fix`.                                                                                                      |
+| Action stopped working after a DSH upgrade                            | Settings → Tools Management → **Host** for the reason; `doctor.mjs` → `host-deps.mjs --fix`.                                                                                                      |
 | Won't install / peer mismatch after a DSH upgrade                    | Each generation has its own upper bound (the current one stops below 0.2.2); a minor upgrade needs a matching plugin release (upgrade the plugin before the host).                        |
 | The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab — 19 tools ship switched off. The panel and scripts are unaffected either way.                                                          |
 | Still asked to confirm with `approval=never`?                         | No card appears — straight through with a log line. Switch back to "workspace write" to get the questions again.                                                                       |

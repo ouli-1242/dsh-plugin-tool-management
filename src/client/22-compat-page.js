@@ -2151,6 +2151,19 @@
           React.createElement('div', { className: 'dsm-modal-body' }, presetRows)))
       }
 
+      /**
+       * 侧栏入口的开关（2026-10-18）：按钮文字说的是**点下去会发生什么**（开着 → 「关闭侧栏」），
+       * 与「全选 ↔ 取消全选」「刷新 ↔ 刷新中…」同一套写法。默认开（侧车默认值同）。
+       * 失败只回一行提示，不改按钮 —— 回滚由 saveSidebarEntry 做（乐观更新那一步）。
+       */
+      const sidebarEntry = useSidebarEntrySnapshot()
+      const toggleSidebarEntry = function () {
+        if (sidebarEntry.busy === true) return
+        saveSidebarEntry(sidebarEntry.enabled === false).then(function (r) {
+          if (!r || r.ok) return
+          showPluginToast(r.error || t('compat.sidebar.failed'), 'err')
+        })
+      }
       // 三块内容各自只在**打开时**挂进弹窗；说明句留在框内第一行（原来长在区块小标题右侧，
       // 进了弹窗就没有"标题右边"这个位置了）。
       // 按钮**永远点得开**：数据没读到时框里给一句话，而不是摆一枚按了没反应的按钮
@@ -2199,6 +2212,16 @@
                 : t('compat.backups.btnHint'),
               onClick: openBackupClean,
             }, backups && backups.total ? t('compat.backups.btnCount', { count: backups.total }) : t('compat.backups.btn')),
+            // 侧栏入口的开关：放在诊断工具后面，它改的是本插件自己的入口，与上面三块"看数据"
+            // 不是一类（用户 2026-10-18 要求摆在兼容页这一排）。
+            React.createElement('button', {
+              key: 'sidebar-entry',
+              type: 'button',
+              className: 'dsm-btn dsm-btn-quiet',
+              disabled: sidebarEntry.busy === true,
+              title: t(sidebarEntry.enabled === false ? 'compat.sidebar.showHint' : 'compat.sidebar.hideHint'),
+              onClick: toggleSidebarEntry,
+            }, t(sidebarEntry.enabled === false ? 'compat.sidebar.show' : 'compat.sidebar.hide')),
           ],
         }),
         body,

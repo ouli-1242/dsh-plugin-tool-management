@@ -498,14 +498,19 @@ export default {
       // 退出回放时也不该去动它们，否则会改写用户对副本的显式策略记录。
       currentSkills: async () => (await skillScan()).states,
       applySkills: async (target: Record<string, boolean>) => {
-        // 三道过滤，缺一不可：
+        // 四道过滤，缺一不可：
         //  1. 被同名覆盖的副本直接跳过——它们本来就不生效，写策略只会污染用户的记录。
         //  2. 结构不完整的技能也跳过——core 对它们一律拒绝启停（error.skill.notLoadable），
         //     不跳过就会抛成"应用失败"，**整个场景进不去**（老档案里的残留键能踩到）。
-        //  3. **已经处于目标状态的技能不再写**。`applySkills` 写的是显式策略记录，而目标
+        //  3. **已经不存在的技能也跳过**（用户 2026-10-18 报「启动的场景里有被删除的内容，
+        //     就导致没办法退出」）：快照 / 档案里记的是"进场景那一刻还在"的键，场景期间那条
+        //     技能被删掉之后，退出时按快照回放必然报 `技能不存在`，于是整次退出被这一条打断、
+        //     mode 停在原地 —— 用户被困在场景里。没有可写的对象，跳过才是对的。
+        //  4. **已经处于目标状态的技能不再写**。`applySkills` 写的是显式策略记录，而目标
         //     状态是生效状态，两者不等价：对已经生效为「停用」的技能再 disable 一次，
         //     只是把「没有记录」固化成「显式停用」，场景模式进出一次就会改写 state.json。
         const { states, shadowed, unloadable } = await skillScan()
+        const skipped: string[] = []
         for (const [key, on] of Object.entries(target)) {
           const i = key.indexOf('/')
           if (i <= 0) throw new Error(`技能 key 不合法: ${key}`)
@@ -514,11 +519,25 @@ export default {
           // 结构不完整的技能跳过：core 对它们**一律拒绝启停**（error.skill.notLoadable），
           // 继续往下走会抛成"应用失败"，**整个场景就进不去了**（老档案里的残留键能踩到）。
           if (unloadable.has(key)) continue
+          // 这次扫描里根本没有这个键 = 技能已被删除（或所在目录已消失）：没有可写的对象。
+          if (!(key in states)) { skipped.push(`${key}（已不存在）`); continue }
           if (states[key] === on) continue
           const root = key.slice(0, i)
           const name = key.slice(i + 1)
           const r: any = await skillsService.ops[on ? 'skill-enable' : 'skill-disable']({ root, name })
-          if (r && r.ok === false) throw new Error(`技能 ${key} 应用失败: ${r.error}`)
+          if (r && r.ok === false) {
+            // 结构性失败（这一条现在解不开）只记警告并跳过 —— 与 applySkillSourceSwitches
+            // 同一条口径：拿它中断整个进入 / 退出只会把用户困在场景里，而这一行与本次改动无关。
+            const code = String((r && r.code) || '')
+            if (code === 'error.skill.notFound' || code === 'error.skill.notLoadable' || code === 'error.skill.noFrontmatter') {
+              skipped.push(`${key}（${r.error}）`)
+              continue
+            }
+            throw new Error(`技能 ${key} 应用失败: ${r.error}`)
+          }
+        }
+        if (skipped.length) {
+          ctx.logger?.warn?.(`scene: 跳过无法应用的技能 —— ${skipped.join('、')}`)
         }
       },
       // ── 服务器级 / 来源级启停（P5）────────────────────────────────────────────
@@ -794,6 +813,8 @@ export default {
       sceneSettingsOp,
       readSlashSettings,
       slashSettingsOp,
+      readSidebarSettings,
+      sidebarSettingsOp,
     } = createSettingsSidecars({
       ensurePaths,
       readJsonFile,
@@ -859,7 +880,7 @@ export default {
           // 关掉或没配都是空串）而本次启动还没有人验过 ⇒ 这一步不放行，宿主把 turn 收成
           // `blocked`。这是"没输入令牌就没法对话"的唯一真正落实 —— 客户端那条输入框锁定在
           // 本宿主上无路可走（`ctx.conversation.blocks` 不存在，见 ContextInjectorDeps 注释）。
-          // 只读 op 不受影响，所以「工具 → 兼容」页照常能打开、能填令牌 —— 解铃就在那里。
+          // 只读 op 不受影响，所以「工具管理 → 兼容」页照常能打开、能填令牌 —— 解铃就在那里。
           tokenGateActive: () => TOKEN !== '' && !acceptedThisBoot(),
         })
         contextInjectorLive = () => injector.live()
@@ -1718,6 +1739,9 @@ export default {
       // 斜杠命令入口的开关（读 / 写）：客户端 boot 时读一次决定挂不挂 `/` 菜单里的「工具」段，
       // 兼容页那两颗开关写一次。同 `scene-settings`：按写门禁但不冻结（见 slash-settings.ts）。
       'slash-settings': (args: any) => slashSettingsOp(args),
+      // 侧栏入口的开关（读 / 写）：客户端 boot 时读一次决定注不注册侧栏那一行，兼容页那颗
+      // 按钮写一次。同 `slash-settings`：按写门禁但不冻结（见 sidebar-settings.ts）。
+      'sidebar-settings': (args: any) => sidebarSettingsOp(args),
       // state-doctor：跨域**悬空引用**体检（只读，实现与理由见 src/ops/state-doctor.ts）。
       // 这里只做"把权威集合取来"这一件事 —— 某一域读失败就传 null，体检会把它记进
       // `skipped` 而不是当成"该域没有悬空项"（读不到 ≠ 不存在，报成后者就是骗人）。

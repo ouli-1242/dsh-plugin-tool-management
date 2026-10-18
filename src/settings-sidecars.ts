@@ -10,6 +10,7 @@ import { hubPath } from './hub.js'
 import { DEFAULT_INJECT_SETTINGS, normalizeInjectSettings, type InjectSettings } from './context-inject.js'
 import { normalizeSceneSettings, type SceneSettings } from './scene-settings.js'
 import { normalizeSlashSettings, type SlashSettings } from './slash-settings.js'
+import { normalizeSidebarSettings, type SidebarSettings } from './sidebar-settings.js'
 
 export interface SettingsSidecarDeps {
   /** apply 里的路径发现（懒建目录）；本层所有调用点都在 await 之后，不依赖它的定义顺序。 */
@@ -30,6 +31,8 @@ export interface SettingsSidecars {
   sceneSettingsOp(args: any): Promise<any>
   readSlashSettings(force?: boolean): Promise<SlashSettings>
   slashSettingsOp(args: any): Promise<any>
+  readSidebarSettings(force?: boolean): Promise<SidebarSettings>
+  sidebarSettingsOp(args: any): Promise<any>
 }
 
 export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidecars {
@@ -146,6 +149,37 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
       return { ok: true, settings: next }
     })
   }
+  // 侧栏入口的开关（侧车 `sidebar-settings.json`）：只一项 —— 侧栏里挂不挂本插件那一行。
+  // 与 `slash-settings` 同规格：入口开关，不冻结；读侧不带 `set` 是纯读（客户端 boot 时
+  // 必问一次决定注不注册，那一次不能要令牌，否则没配令牌的宿主上这个入口永远出不来）。
+  const SIDEBAR_SETTINGS_FILE = 'sidebar-settings.json'
+  const SIDEBAR_SETTINGS_TTL_MS = 3000
+  let sidebarSettingsCache: { at: number; value: SidebarSettings } | null = null
+  async function readSidebarSettings(force = false): Promise<SidebarSettings> {
+    if (sidebarSettingsCache && !force && Date.now() - sidebarSettingsCache.at < SIDEBAR_SETTINGS_TTL_MS) return sidebarSettingsCache.value
+    await deps.ensurePaths()
+    const raw = await deps.readJsonFile(hubPath(SIDEBAR_SETTINGS_FILE))
+    const value = normalizeSidebarSettings(raw)
+    sidebarSettingsCache = { at: Date.now(), value }
+    return value
+  }
+  async function sidebarSettingsOp(args: any): Promise<any> {
+    const current = await readSidebarSettings()
+    if (!args || args.set !== true) return { ok: true, settings: current }
+    const next = normalizeSidebarSettings({
+      enabled: typeof args.enabled === 'boolean' ? args.enabled : current.enabled,
+    })
+    await deps.ensurePaths()
+    return deps.withWriteLock(async () => {
+      try {
+        await deps.writeJsonFile(hubPath(SIDEBAR_SETTINGS_FILE), next)
+      } catch (e) {
+        return { ok: false, error: '设置保存失败: ' + deps.message(e) }
+      }
+      sidebarSettingsCache = { at: Date.now(), value: next }
+      return { ok: true, settings: next }
+    })
+  }
   return {
     readInjectSettings,
     injectSettingsSync,
@@ -155,5 +189,7 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
     sceneSettingsOp,
     readSlashSettings,
     slashSettingsOp,
+    readSidebarSettings,
+    sidebarSettingsOp,
   }
 }

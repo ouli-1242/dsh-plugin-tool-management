@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-tool-management",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "description": "一个设置面板，统一管理 MCP、技能、记忆、子智能体、提示词和归档会话；可自定义搭配场景，一个场景即可切换整个环境；Agent也能帮你操作这个插件。",
   "repository": {
     "type": "git",
@@ -12,10 +12,12 @@
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
     "./workspace": "./lib/sessions/workspace.js",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "locale",
     "cordis.patch.yml",
     "README.md",
     "README_EN.md",
@@ -67,6 +69,7 @@
       ]
     }
   },
+  "icon": "./docs/images/icon.png",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh-agent-preset-registry": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",

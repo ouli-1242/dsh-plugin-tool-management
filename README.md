@@ -23,7 +23,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest      # web 版
 dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 ```
 
-装完 web 版硬刷新浏览器（Cmd/Ctrl+Shift+R），桌面版重启应用，设置 → **工具**。插件只写自己的文件，不改技能源文件；重启与升级后配置都在。
+装完 web 版硬刷新浏览器（Cmd/Ctrl+Shift+R），桌面版重启应用，设置 → **工具管理**。插件只写自己的文件，不改技能源文件；重启与升级后配置都在。
 
 ---
 
@@ -83,7 +83,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest     # 桌面�
 dsh plugin --profile desktop remove dsh-plugin-tool-management         # 桌面版 · 卸载
 ```
 
-装完 web 版硬刷新浏览器、桌面版重启应用，设置 → **工具** 出现八栏即成功。界面改动即时生效，宿主侧改动需重启（web 重启 `dsh web`，桌面重启桌面应用）。
+装完 web 版硬刷新浏览器、桌面版重启应用，设置 → **工具管理** 出现八栏即成功。界面改动即时生效，宿主侧改动需重启（web 重启 `dsh web`，桌面重启桌面应用）。
 
 也可以让模型代劳：
 
@@ -159,6 +159,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 - **「兼容」页**：宿主版本、能力可用数、每个动作走原生 / 适配 / 不可用、降级项与原因；三个写入口：访问令牌、注入设置、模型工具表。
 - **兼容页功能总览**：一行一个功能点，宿主契约四条（子智能体人设委派 / 工具限制 / 创建时序 / Web 准入）与「裸模块解析」四包都列在这里，升级后哪一处悄悄不工作一眼可见。
+- **侧栏入口**：侧栏里多一行「工具管理」，点开就是同一套八页；兼容页那颗「关闭侧栏 / 开启侧栏」随时能把这一行撤掉或挂回去（默认挂出，与「设置 → 工具管理」并存）。
 - **命令行**：`node scripts/doctor.mjs`（体检）、`node scripts/host-deps.mjs --fix`（依赖对齐）。
 - **压制型预设**（`minimal` 这类）下本插件的注入默认停用，可在「兼容」页按域强制打开。
 - **关掉「技能」「提示词」的勾选 = 连宿主那份一起停**（这两域在标准预设下由官方送）；其余三域勾选完全生效。
@@ -196,7 +197,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | `tokenDisabled` | `true` = 令牌保留在配置里但当前不生效（兼容页「关闭保护」写的就是这一行）。写操作不再要求令牌，明文查看仍然要。                                |
 | `maxBodyBytes`  | 请求体上限，默认 88 MiB。                                                                                                                      |
 
-**磁盘上的明文（必读）**：打码**只发生在界面展示**；MCP 的 `env` / `headers` 与插件自己的 `token` 在 `cordis.patch.yml`（及各 profile 副本）里始终明文，改配置前整份文件会备份进 `~/.dsh/tool-management/backups/`（不加密、不轮转、卸载也不回收）—— 一份密钥最多有 `5 ×（含它的 patch 文件数）+ 1` 份明文副本。令牌门禁**管不到磁盘读取**，防线是操作系统的文件权限。清理入口：**设置 → 工具 → 兼容 → 「清理旧备份」**。
+**磁盘上的明文（必读）**：打码**只发生在界面展示**；MCP 的 `env` / `headers` 与插件自己的 `token` 在 `cordis.patch.yml`（及各 profile 副本）里始终明文，改配置前整份文件会备份进 `~/.dsh/tool-management/backups/`（不加密、不轮转、卸载也不回收）—— 一份密钥最多有 `5 ×（含它的 patch 文件数）+ 1` 份明文副本。令牌门禁**管不到磁盘读取**，防线是操作系统的文件权限。清理入口：**设置 → 工具管理 → 兼容 → 「清理旧备份」**。
 
 - **浏览器**：读写走 cookie，不需要令牌；**明文密钥**（显示密钥 / 导出）要令牌。令牌在「兼容」页的「访问令牌」块管理：本次启动填一次管到 DSH 退出；写进配置文件要重启生效。
 - **销毁方向一律要当场再输一次当前令牌**（关闭保护 / 修改 / 删除）—— 本次启动解锁过不算。
@@ -212,7 +213,7 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 装完没有页面                                | 硬刷新；不行重启 DSH。                                                                                                                      |
 | 重复 MCP 页签                               | 删 `cordis.patch.yml` 里的旧 loader 行后重启。                                                                                              |
 | 改坏配置 DSH 起不来                         | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.<层级>.bak-<时间戳>` 覆盖回去（每份 patch 各留 5 份）。                     |
-| 升级 DSH 后动作不可用                       | 设置 → 工具 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                       |
+| 升级 DSH 后动作不可用                       | 设置 → 工具管理 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                       |
 | 升级 DSH 后装不上 / 提示 peer 不符           | 兼容范围逐代带上界（当前一代到 `<0.2.2`），跨 minor 升级要等插件同步适配（装新宿主前先升插件）。                                               |
 | 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（出厂默认关着 19 条）；面板和脚本不受影响。                                                      |
 | `approval=never` 还要确认吗                 | 不弹卡，直接放行并记日志；想问回来切回「工作区内修改」。                                                                                    |

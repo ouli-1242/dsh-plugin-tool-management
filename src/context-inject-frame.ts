@@ -146,11 +146,32 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     //     这是它做判断时要用的事实，不是反推。
     //   - 代价 ≈24 tok/轮，只在这一域。
     title: 'Current scene',
-    how: "A scene is the user's working mode: the memories, prompt, tools and personas you are given are already filtered to this one.",
+    how: "A scene is the user's working mode: the memories, prompt, tools and personas you are given are already filtered to it.",
     supersede: SUPERSEDE_NOTE,
   },
   memory: {
     title: 'Current memories',
+    // 2026-10-18（审查 #7）：记忆段截断时，折叠行 `- ... ({rest} more not listed)` 给了计数
+    // 但没给出口——被截掉的条目连名字都没列出来，模型既调不了 `memory_manager_read`（不知道
+    // 传什么名字），也不知道该用 `memory_manager_list` 去发现。另外三个域的溢出行都点名了
+    // 自己的 list 工具，唯独记忆段没有。
+    //
+    // 修法选了「frame `how` 条件点名」而不是「把 listToolVisible 管道接到记忆服务」：记忆 SWR
+    // 缓存是指纹驱动的（缓存渲染结果，不是缓存数据按 agent 重渲染），重构成技能目录那种方式
+    // 要动 4–5 个文件。而 `how` 已经能看 `{ text }`——MCP 就是这么按正文内容决定发不发的。
+    // `text.includes('more not listed')` 只在折叠行出现时命中（rest > 0）；rest = 0（清单列全）
+    // 时折叠行不出现，how 不发——那些条目有名字，模型调 `memory_manager_read` 就行。
+    // 工具被关掉（兼容页 / 人设 toolsDeny）时不点名——与另外三域同一纪律。
+    how: ({ text, toolHidden }) => {
+      // 折叠行 `more not listed` 和截断标记 `(Truncated:` 两种信号都要覆盖：
+      //   - 折叠行 = 清单部分列了 + 剩余没列 → 没名的那些需要 list 工具发现
+      //   - 标记 = 连清单都没放进来 → 全部没名，更需要 list 工具
+      //   - 清单列全（`## Not injected` + 所有名字，rest = 0）→ 两种信号都没有 → 不发 how：
+      //     模型用 `memory_manager_read` 按名字读就行
+      if (!text.includes('more not listed') && !text.includes('(Truncated:')) return undefined
+      if (toolHidden('memory_manager_list')) return undefined
+      return 'Not all memories fit here — see the rest with `memory_manager_list`.'
+    },
     supersede: SUPERSEDE_NOTE,
   },
   mcp: {
@@ -250,24 +271,32 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     // 说明**这些规则是要遵循的**。记忆域有授权语、场景域有定义，唯独效力最强的这一域空着 ——
     // 而官方那条行给的是**降权**措辞（"可作参考"），我们当初刻意没抄，于是等于什么都没说。
     // 现在补一句正面的：要遵循，且用户当场说的优先。
-    how: 'These are the instructions in force for this machine; follow them unless the user says otherwise in this conversation.',
+    // 措辞用 "right now" 不用 "for this machine"（2026-10-18 审查）：场景预设接管时，正文是
+    // 场景绑定的那份 AGENTS.md，不是机器全局的 —— "for this machine" 在那个态下是假话。
+    // "right now" 同时覆盖全局 AGENTS.md 与场景预设两种来源，由正文首行 `Instructions from:`
+    // 给出具体出处。
+    how: 'These are the instructions in force right now; follow them unless the user says otherwise in this conversation.',
     supersede: SUPERSEDE_NOTE,
   },
 }
 
 /**
- * `how` 行里**点名过的工具**（六个域里只有 skills / subagents 两个会点名）。
+ * `how` 行里**点名过的工具**（skills / subagents / memory 三个域会点名）。
  *
  * 为什么要有这份名单：一条 `how` 行是否成立，取决于它点名的工具在**这个 agent 手里**还在不在。
- * 名单放在这里而不是调用方 —— 与上面那两条 `how` 相邻，改一处不会漏另一处。
+ * 名单放在这里而不是调用方 —— 与上面那几条 `how` 相邻，改一处不会漏另一处。
  *
  * "不在手里"有两条路，都要算：
  *   ① 兼容页「模型工具表」把它关掉（用户全局开关，名单在 index.ts 的 `hiddenTools` 里）；
  *   ② **人设的工具限制**把它砍掉（`decideToolFilter` → 官方 `tools.restrict`，只作用于那份
  *      人设启动的子代理）。②此前没人管：目录照注、`how` 行照样点名一个模型手里没有的工具，
  *      等于诱导它去调一个不存在的名字（2026-10-07 修）。
+ *
+ * `memory_manager_list` 2026-10-18 加入（审查 #7）：记忆段截断折叠行不点名查询工具时，
+ * 被截掉的条目无名、模型无法发现它们。`how` 在折叠行出现时点名它，与技能 / 子智能体 /
+ * MCP 三个域的溢出行同构。
  */
-export const HOW_NAMED_TOOLS: readonly string[] = ['skill_manager_read', 'subagent_manager_run']
+export const HOW_NAMED_TOOLS: readonly string[] = ['skill_manager_read', 'subagent_manager_run', 'memory_manager_list']
 
 /** 域声明里没登记的 key（理论上到不了这里）：给一个不出错的通用框架。 */
 export const fallbackFrame = (label: string): DomainFrame => ({

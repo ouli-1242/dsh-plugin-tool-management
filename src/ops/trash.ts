@@ -245,7 +245,13 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     } catch {
       return fail('error.rules.notFound', `回收站条目不存在：${id}`)
     }
-    return { ok: true, id, domain, files: await readTrashPayloadFiles(dir) }
+    // 清单也一并回给界面（用户 2026-10-18：「回收站的详细功能做的不够好，显示的内容不够全，
+    // 例如场景没有显示勾选了什么」）：场景的档案、记忆的场景 / 形态都在 `manifest.json` 里，
+    // 只回文件列表的话，详情页能看到的就只剩"有几个文件"。
+    // 读不到 / 坏了就回 null —— 详情页按"只有文件"那一档渲染，不因为清单缺了就整页报错。
+    let manifest: unknown = null
+    try { manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) } catch { manifest = null }
+    return { ok: true, id, domain, manifest, files: await readTrashPayloadFiles(dir) }
   }
 
   return { rulesRemove, rulesRestore, rulesTrashList, rulesTrashRemove, trashPreview }

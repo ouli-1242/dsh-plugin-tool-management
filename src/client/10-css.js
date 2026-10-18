@@ -63,7 +63,11 @@
 .dsm-btn.dsm-btn-icon{width:24px;min-width:24px;min-height:24px;padding:0}
 /* 目录卡片右侧动作组：间距收窄一档，配合图标化后不再显挤。 */
 /* 卡片头里的标签抬到 11px：左侧「N 个技能」是 12px，10px 的标签在这里显得忽大忽小。 */
-.dsm-source-head .dsm-tag{font-size:12px;min-height:20px;padding:0 8px}
+.dsm-source-head .dsm-tag{font-size:12px;line-height:18px;min-height:20px;padding:0 8px}
+/* 卡头里的按钮与标题同用 18px 行高：字号不同（11/12/13px）时只靠居中，文字基线会各差
+   一两像素，一行里看着"没对齐"（用户 2026-10-18）。 */
+.dsm-source-head .dsm-btn{line-height:18px}
+.dsm-path,.dsm-count,.dsm-source-title{line-height:18px}
 /* 「N 个附件」标签：和 tag 同形，但它是**能点的**（点了去编辑弹窗的附件区），
    所以要把 button 的默认外观抹掉，并给一个可点的悬停反馈 —— 光靠颜色区分不出"能不能点"。 */
 button.dsm-tag{background:transparent;font:inherit;font-size:12px;cursor:pointer}
@@ -86,6 +90,10 @@ button.dsm-qty:disabled{cursor:default}
    淡到读不出的话，用户只会以为这两颗按钮没了。危险项只有红字、没有红框 —— 边框是"常驻控件"
    的语言，收在菜单里的动作不配再占一份视觉重量。 */
 .dsm-rowmenu{display:flex;flex:none;align-items:center}
+/* 场景卡里那颗 ⋯ 与开关同高（用户 2026-10-18：「场景的 switch 按键和展开三个点按钮要
+   上下居中」）：⋯ 自身是 26×24、开关 36×20，两个盒子的中线本来就都在卡片的居中线上，
+   差的是 ⋯ 那 24px 的高度把行撑得比开关高一点点 —— 给它固定 20px 高、图标靠行盒居中。 */
+.dsm-scene-tile .dsm-rowmenu-btn{height:20px}
 .dsm-rowmenu-btn{display:inline-flex;width:26px;height:24px;align-items:center;justify-content:center;padding:0;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
 .dsm-rowmenu-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsm-rowmenu-btn:disabled{opacity:.45;cursor:default}
@@ -96,7 +104,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-select-menu .dsm-option-danger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger)}
 /* 未启用场景卡里的开关跟着灰（.dsm-rule-off 已把名称与描述压成弱色，原先漏了开关）：
    整卡置灰却留一颗亮绿，读着像"开着却没用"，两条口径打架。 */
-.dsm-rule-off .dsm-switch-on{background:var(--dsw-alias-border-l3)}
+.dsm-rule-off .dsm-switch[aria-checked=true]{background:var(--dsw-alias-border-l3)}
 /* 按钮的"档位"里包含尺寸，别把它当纯修饰色（REDESIGN §5，2026-10-11 切片五定稿）：
    .dsm-btn 实心 30px（本屏主操作）/ .dsm-btn-secondary 描边 30px（常规动作）/
    .dsm-btn-quiet 描边 24px（次要动作；叠 -danger 即 quiet-danger）。
@@ -128,7 +136,10 @@ button.dsm-qty:disabled{cursor:default}
    省下的 60px 全部归搜索框（它 flex:1）。 */
 .dsm-filters{display:flex;gap:8px}.dsm-search{flex:1}.dsm-source-filter{width:150px;flex:none}
 .dsm-control,.dsm-select-trigger{box-sizing:border-box;width:100%;min-height:30px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}.dsm-control::placeholder{color:var(--dsw-alias-label-tertiary)}textarea.dsm-control{min-height:160px;padding-top:8px;resize:vertical;line-height:20px}.dsm-select{position:relative}.dsm-select-trigger{display:flex;align-items:center;justify-content:space-between;text-align:left;cursor:pointer}.dsm-select-menu{z-index:40;display:flex;max-height:260px;padding:4px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2)}.dsm-option{padding:8px;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;text-align:left;cursor:pointer}.dsm-option:hover,.dsm-option[aria-selected=true]{background:var(--dsw-alias-interactive-bg-hover)}
-.dsm-sources{display:flex;flex-direction:column;gap:8px}.dsm-source{overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}.dsm-source-head{box-sizing:border-box;display:flex;width:100%;min-height:48px;align-items:center;padding:0 12px}.dsm-source-head-main{display:flex;min-width:0;min-height:48px;flex:1;align-items:center;gap:8px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsm-source-head:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-source-title{font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-count{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;flex:none}.dsm-path{min-width:0;margin-left:auto;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.dsm-source-actions{display:flex;align-items:center;gap:4px;margin-left:8px}.dsm-source-body{border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-sources{display:flex;flex-direction:column;gap:8px}.dsm-source{overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}.dsm-source-head{box-sizing:border-box;display:flex;width:100%;min-height:48px;align-items:center;padding:0 12px}.dsm-source-head-main{display:flex;min-width:0;min-height:48px;flex:1;flex-wrap:wrap;align-items:center;align-content:center;gap:3px 8px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsm-source-head:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-source-title{font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsm-count{color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums;flex:none}.dsm-path{min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}/* 目录挪到标题下面一行、与标题左端对齐（用户 2026-10-18：「应该开头对齐……放在标题下面
+   是不是更好」）：行内右对齐时它的位置随右侧按钮多少而变，几行摞起来参差；单独占一行后
+   每条路径都从同一个 x 起头，也读得下更长的目录。width:100% 负责强制换行。 */
+.dsm-source-head-main>.dsm-path{flex:none;width:100%;margin-left:0;order:99}.dsm-source-actions{display:flex;flex:none;align-items:center;gap:4px;margin-left:8px}.dsm-source-body{border-top:1px solid var(--dsw-alias-border-l1)}
 /* 计数已经改成「启用/总数」这种自带括号感的写法，卡头 8px 的间距把它推太远，读起来像
    另一栏；贴回名称后面（用户 2026-10-16）。 */
 .dsm-count-tight{margin-left:-4px}
@@ -151,7 +162,19 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
-.dsm-switch{position:relative;width:32px;height:18px;flex:none;padding:0;border:0;border-radius:99px;background:var(--dsw-alias-border-l3);cursor:pointer}.dsm-switch:after{position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:50%;background:#fff;content:"";transition:transform 160ms ease}.dsm-switch-on{background:var(--dsw-alias-state-success-primary)}.dsm-switch-on:after{transform:translateX(14px)}.dsm-switch:disabled{opacity:.45;cursor:default}.dsm-trash-count{margin-left:auto;padding:4px 8px;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:11px;font-variant-numeric:tabular-nums}.dsm-empty{padding:24px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}.dsm-feedback{padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);color:var(--dsw-alias-label-secondary);font-size:12px}.dsm-undo{display:flex;align-items:center;gap:8px}.dsm-undo-text{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dsm-undo-close{padding:0;border:0;background:transparent;font:inherit;font-size:13px;cursor:pointer;width:24px;height:24px;color:var(--dsw-alias-label-secondary)}.dsm-undo-close:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}.dsm-undo.dsm-warning{background:var(--dsm-warn-bg)}.dsm-undo.dsm-warning .dsm-undo-text{font-weight:400}.dsm-undo.dsm-warning .dsm-undo-close{color:var(--dsm-warn)}.dsm-warning{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+/* 开关与官方同款（用户 2026-10-18：「switch 按键统一和官方一样的模板」→「改成完全一样」）：
+   36×20 外壳 + 16px 拇指、内边距 2px、滑块位移 16px、开态用 brand-primary，
+   关态拇指用 switch-thumb —— 尺寸与配色照抄宿主设置面板那颗。
+   ⚠️ corner-shape:round 不能省：宿主主题在 :root 上全局设了
+   corner-shape:superellipse(1.5)（dsh-client-ui-theme 的 corner_shape_css），
+   官方开关自己用 corner-shape:round 把它按回正圆角 —— 我们漏了这一句，于是同一个
+   border-radius 画出来是"方肩"的超级椭圆，看着就和官方那颗不是一个东西。
+   aria-checked 是官方判据，本组件的 role=switch 本来就带着它。 */
+.dsm-switch{box-sizing:border-box;position:relative;width:36px;height:20px;flex:none;padding:2px;border:0;border-radius:999px;corner-shape:round;background:var(--dsw-alias-border-l3);cursor:pointer}
+.dsm-switch:after{display:block;width:16px;height:16px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-switch-thumb);content:"";transition:transform .12s ease}
+.dsm-switch[aria-checked=true]{background:var(--dsw-alias-brand-primary)}
+.dsm-switch[aria-checked=true]:after{background:var(--dsw-alias-label-primary-foreground);transform:translate(16px)}
+.dsm-switch:disabled{opacity:.5;cursor:default}.dsm-trash-count{margin-left:auto;padding:4px 8px;border-radius:99px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:11px;font-variant-numeric:tabular-nums}.dsm-empty{padding:24px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}.dsm-feedback{padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);color:var(--dsw-alias-label-secondary);font-size:12px}.dsm-undo{display:flex;align-items:center;gap:8px}.dsm-undo-text{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dsm-undo-close{padding:0;border:0;background:transparent;font:inherit;font-size:13px;cursor:pointer;width:24px;height:24px;color:var(--dsw-alias-label-secondary)}.dsm-undo-close:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}.dsm-undo.dsm-warning{background:var(--dsm-warn-bg)}.dsm-undo.dsm-warning .dsm-undo-text{font-weight:400}.dsm-undo.dsm-warning .dsm-undo-close{color:var(--dsm-warn)}.dsm-warning{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 .dsm-mask{position:fixed;z-index:1100;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.62)}.dsm-modal{box-sizing:border-box;display:flex;width:min(560px,100%)!important;max-height:min(760px,calc(100vh - 48px));min-width:0;flex-direction:column;gap:16px;padding:20px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-l);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-shadow-lv3)}.dsm-modal-sm{width:min(480px,100%)!important}.dsm-modal-lg,.dsm-modal-wide{width:min(720px,100%)!important}.dsm-modal-list{width:min(560px,100%)!important;height:min(640px,calc(100vh - 48px))!important;max-height:none!important;overflow:hidden}.dsm-modal-list.dsm-modal-editor{width:min(720px,100%)!important}.dsm-modal-body{display:flex;min-height:0;flex-direction:column;gap:8px}.dsm-modal-list .dsm-modal-body{flex:1;overflow:auto;overscroll-behavior:contain}.dsm-modal-head{display:flex;align-items:flex-start;gap:12px}
 /* 头部这一层包住「标题行 + 令牌提示」：提示挂在头部里面（而不是 head 与 body 之间）是为了
    让 body 的子节点位置稳定 —— 位置一变 React 会把 body 整棵重挂（输入框失焦、下拉归零）。 */
@@ -162,7 +185,14 @@ button.dsm-qty:disabled{cursor:default}
 /* 条目清单必须自己声明字号：裸 ul/li 会从宿主那里继承 16px 近白正文（兼容页「工具能用 ≠
    模型知道」三条），比同页的说明文字大两号。口径照 .dsm-help-list。 */
 .dsm-upload-requirements ul{display:flex;margin:4px 0 0;padding-left:16px;flex-direction:column;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}
-.dsm-upload-req{margin-top:8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}.dsm-detail-section{gap:8px}.dsm-detail-path,.dsm-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}.dsm-detail-path{padding:8px 8px;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);word-break:break-all}
+.dsm-upload-req{margin-top:8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}.dsm-detail-section{gap:8px}
+/* 详情页只读的备注正文（用户 2026-10-18：「详细页只能看」）：与配置表同形的一格，
+   但它是文字块不是输入框 —— 换行原样保留，长段落读得开。
+   字色用正文色（用户 2026-10-18：「备注后的字应该是黑色的备注」）：它是内容本身，
+   不是"辅助说明"，弱色会让备注看着像灰掉的占位。没备注时那一格照样有边框，
+   只是字换成最弱的一档 —— 空状态也说得出口。 */
+.dsm-detail-note{margin:0;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word}
+.dsm-detail-note-empty{color:var(--dsw-alias-label-tertiary)}.dsm-detail-path,.dsm-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}.dsm-detail-path{padding:8px 8px;border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);word-break:break-all}
 /* 技能详情的「路径 + 编辑器查看」同一行（用户 2026-10-12）：路径条 flex:1 吃掉剩余宽度，
    按钮 flex:none 固定不动。按钮那颗 .dsm-btn 自带 white-space:nowrap，长路径自己折行。 */
 .dsm-detail-path-row{display:flex;min-width:0;align-items:center;gap:8px}
@@ -199,9 +229,10 @@ button.dsm-qty:disabled{cursor:default}
    「没有滚动条 + 内容缺一截」。列表项的尺寸一律由内容决定，滚动只交给 body 这一层。 */
 .dsm-modal-list .dsm-modal-body>*{flex:none}
 .dsm-fm{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}.dsm-fm-row{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr);gap:8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px;line-height:18px}.dsm-fm-row:last-child{border-bottom:0}.dsm-fm-key{color:var(--dsw-alias-label-secondary);word-break:break-word}.dsm-fm-raw{margin-left:4px;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}.dsm-fm-val{min-width:0;color:var(--dsw-alias-label-primary);word-break:break-word;white-space:pre-wrap}
-@container(max-width:780px){
-.dsm-path{display:none}
-}@container(max-width:520px){.dsm-head{flex-direction:column}.dsm-actions{width:100%;margin-left:0}.dsm-actions .dsm-btn{flex:1}.dsm-filters{flex-direction:column}.dsm-source-filter{width:100%}}
+/* 窄面板里**不再隐藏目录**（用户 2026-10-18：「设置页的工具管理不显示路径是怎么回事」）：
+   那条 display:none 是目录还挂在行尾、与标题抢宽度时写的；现在它单独占第二行，
+   窄到 700px 也只是自己截断，没有理由整段不显示。 */
+@container(max-width:520px){.dsm-head{flex-direction:column}.dsm-actions{width:100%;margin-left:0}.dsm-actions .dsm-btn{flex:1}.dsm-filters{flex-direction:column}.dsm-source-filter{width:100%}}
 .dsm-hist-group-head{gap:8px}.dsm-hist-group-extra{display:flex;align-items:center;gap:8px;flex:none;margin-left:4px}.dsm-hist-group-extra .dsm-tag{flex:none}.dsm-hist-dir-missing{flex:none;padding:1px 6px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;white-space:nowrap;cursor:default;user-select:none}.dsm-hist-register-path{margin-top:-4px;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);font-size:11px;word-break:break-all}/* （.dsm-hist-batch / .dsm-hist-batch-actions 已随批量动作移进列表工具条删除；
    .dsm-hist-batch-count 仍用于导出弹窗里的「已选 N 项」计数。） */
 .dsm-hist-batch-count{color:var(--dsw-alias-label-secondary);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}.dsm-dir-row{display:flex;gap:8px}.dsm-dir-row .dsm-control{flex:1}.dsm-dir-list{display:flex;max-height:220px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}.dsm-dir-item{display:flex;width:100%;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}.dsm-dir-item:last-child{border-bottom:0}.dsm-dir-item:hover{background:var(--dsw-alias-interactive-bg-hover)}.dsm-dir-item::before{content:"📁";margin-right:8px;font-size:12px}
@@ -215,6 +246,9 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-attach-actions{display:inline-flex;align-items:center;gap:6px}
 .dsm-attach-cap{max-height:126px;overflow:auto;padding-right:2px}
 .dsm-attach-cap .dsm-file{gap:6px;padding:5px 8px}
+/* 回收站里技能条目的正文：与技能详情同款的一段代码区，吃掉弹窗剩余高度（用户 2026-10-18：
+   「技能的回收站详细还是挤在一起，不能套用技能详细弹窗吗」）。 */
+.dsm-code-fill{flex:1;min-height:200px;max-height:none}
 /* 附件小窗里的拖放区：导入弹窗那一块是给整页用的（170px），这一档 140 —— 再矮就不像能拖东西了。 */
 .dsm-dropzone-sm{min-height:140px;padding:18px}
 .dsm-toast{position:fixed;right:22px;bottom:22px;z-index:1250;box-sizing:border-box;max-width:min(420px,calc(100vw - 44px));padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;animation:dsm-toast-in 160ms ease-out}@keyframes dsm-toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}/* 动效降级：系统开了「减少动态效果」就一律关掉。新增 transition / animation 时记得同步加到这里，
@@ -255,22 +289,48 @@ button.dsm-qty:disabled{cursor:default}
 /* 当前模式条：只在进入模式后出现（没有条 = 自由模式，不需要常驻的解释文案）。 */
 .dsm-mode-bar{display:flex;min-width:0;align-items:center;gap:8px;padding:12px 12px;border:1px solid var(--dsw-alias-state-success-primary);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
 .dsm-mode-bar .dsm-btn{margin-left:auto;flex:none}
+/* 右侧两颗动作（锁定 + 退出模式）成一组、靠右（用户 2026-10-18：「锁定……出现在退出模式
+   旁边」）：margin-left:auto 只给这一组，两颗之间按 8px 排。
+   锁定键在这一组里**与「退出模式」同高同宽口径**（用户 2026-10-18：「锁定按钮的大小对齐
+   旁边按键」）：quiet 默认 24px 高、8px 内边距，旁边那颗 secondary 是 30px / 12px —— 并排
+   看着像两档按钮。这里只在本组内把它抬到同一档。 */
+.dsm-mode-acts{display:flex;flex:none;align-items:center;gap:8px;margin-left:auto}
+.dsm-mode-acts .dsm-btn{margin-left:0}
+/* 锁定键：与旁边「退出模式」同高同宽口径，字重加粗（用户 2026-10-18：「锁定要加粗」）。
+   底色保持透明 —— 用户 2026-10-18：「锁定键白色部分不用变黄了，鼠标放上去微微变黄就行」：
+   常态是"琥珀字 + 琥珀描边"的描边键，只有悬停才铺一层极淡的琥珀。 */
+.dsm-mode-acts .dsm-btn-quiet{min-height:30px;padding:0 12px;font-size:13px}
+.dsm-mode-acts .dsm-btn-lock{font-weight:600;background:transparent}
+.dsm-mode-acts .dsm-btn-lock:hover:not(:disabled){background:var(--dsm-warn-bg);color:var(--dsm-warn)}
+/* 退出模式是**破坏性/收尾**动作（用户 2026-10-18：「退出模式改成红色字体红色边框」）：
+   红字红框的描边键（不是实底 —— 全站实底红只留给确认弹窗里的主操作）。悬停只铺一层
+   极淡的红底，与上面那颗锁定的悬停同一档强度。 */
+.dsm-mode-acts .dsm-btn-secondary{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
+.dsm-mode-acts .dsm-btn-secondary:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);opacity:1}
 .dsm-mode-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
 .dsm-mode-main{min-width:0;flex:1}
 .dsm-mode-title{overflow:hidden;font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .dsm-mode-sub{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}
-.dsm-scenes{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
-.dsm-scene-tile{display:flex;min-width:0;flex-direction:column;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
+/* 场景**一条一行**（用户 2026-10-18 裁定）：原先按 minmax(300px,1fr) 铺网格，名字与标签多的
+   场景被挤成两三行；改成单列之后开关 / 锁定 / ⋯ 一列对齐，扫起来是一张表。 */
+.dsm-scenes{display:flex;flex-direction:column;gap:6px}
+.dsm-scene-tile{display:flex;min-width:0;align-items:center;gap:10px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2);padding:8px 10px}
 .dsm-scene-tile-mode{border-color:var(--dsw-alias-state-success-primary)}
-.dsm-scene-tile-head{display:flex;min-width:0;align-items:center;gap:8px;padding:12px 12px 0}
-.dsm-scene-tile-name{overflow:hidden;font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+/* 左列（名字 + 描述两行）与右侧控件（开关 / ⋯）是**同一条横排**的两个格子（用户 2026-10-18：
+   「场景的 switch 按键和三个点按键没有上下居中」）。描述挪到第二行之后，卡头只剩第一行高，
+   开关若还挂在卡头里，它的中线就贴在上半截 —— 卡片越高偏得越多。改成整张卡横排、右侧控件
+   按卡高中线对齐，和列表行（.dsm-listrow 的 side / actions）是同一种排法。 */
+.dsm-scene-tile-main{display:flex;min-width:0;flex:1;flex-direction:column;gap:2px}
+.dsm-scene-tile-head{display:flex;min-width:0;align-items:center;gap:8px}
+.dsm-scene-tile-name{overflow:hidden;flex:none;max-width:40%;font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .dsm-scene-tile-key{flex:none;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}
 .dsm-scene-tile-head .dsm-tag{flex:none}
-.dsm-scene-tile-switch{margin-left:auto;flex:none}
-/* 描述行是卡片的最后一行（2026-10-16 删掉底部那条 编辑/删除 band，动作进卡头 ⋯），
-   所以卡片下内距由它承担。 */
-.dsm-scene-tile-desc{overflow:hidden;margin:4px 0 0;padding:0 12px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
-@container(max-width:640px){.dsm-scenes{grid-template-columns:1fr}}
+/* 描述固定占**第二行**（用户 2026-10-18：「应该显示在第二行」）：此前它挤在名字同一行、
+   窄屏下还被容器查询整段隐藏 —— 而它恰恰是这个场景"是干什么的"唯一说明。 */
+.dsm-scene-tile-desc{overflow:hidden;min-width:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
+/* 右侧控件是一列横排的两格（开关 + ⋯），二者与卡片中线对齐（见 .dsm-scene-tile）。 */
+.dsm-scene-tile-side{display:flex;flex:none;align-items:center;gap:8px}
+.dsm-scene-tile-switch{flex:none}
 .dsm-tools-grid{display:flex;max-height:180px;padding:4px;overflow:auto;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}
 .dsm-tools-grid>*{flex:none}
 /* ── 高级选项折叠区（人设表单；默认收起，展开后才拉候选数据）────────────────── */
@@ -674,6 +734,12 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 /* 锁定键：文字是 warn 色，边框必须同色 —— 否则「琥珀字 + 灰框」看着像两颗按钮拼的
    （用户 2026-10-12「锁定的边框应该是字体一样」）。 */
 .dsm-btn-quiet.dsm-btn-lock{border-color:var(--dsm-warn);background:transparent;color:var(--dsm-warn)}
+/* 悬停时**字色仍是琥珀**（用户 2026-10-18：「锁定键鼠标放上去也应该是黄色字」）：
+   .dsm-btn-quiet:hover 把字色统一改成正文色，那条通用规则排在后面、权重又只低一级，
+   于是锁键一悬停就变黑 —— 这里把它按同色写回来。
+   2026-10-18 第二轮：底色不再常驻琥珀（「白色部分不用变黄了」），只在悬停铺一层极淡的底，
+   这一条只管"悬停时字别变黑"，底由模式横幅那一组按上下文给。 */
+.dsm-btn-quiet.dsm-btn-lock:hover:not(:disabled){background:var(--dsm-warn-bg);color:var(--dsm-warn)}
 .dsm-bulk-ghost{border: 0; background: none; padding: 0 2px; font: inherit; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); cursor: pointer;}
 .dsm-file-remove:hover{background: var(--dsw-alias-interactive-bg-hover-danger);}
 .dsm-select-trigger > span{min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
@@ -1049,8 +1115,29 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-listrow-meta-info{flex:none;color:var(--dsw-alias-label-tertiary)}
 /* 技术值（路径 / id）排印（§2.3）：与普通文案在字形上区分，不靠颜色。 */
 .dsm-listrow-meta .dsm-mono{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace)}
+/* 目录与「归档日期」分开读（用户 2026-10-18：「目录栏应该和归档对话区分」）：两者原先都是
+   12px 弱色、只隔一个中间点，长路径读起来跟日期连成一句。目录改用等宽字体 + 更弱的色，
+   日期保持正文色 —— 一段是"在哪"，一段是"什么时候"，字形不同就不用再看标点分辨。
+   字号整体压到 10/11px（用户 2026-10-18：「字体都再缩小」）：这一页一屏要扫十几行，
+   两行字都按正文大小排，行与行之间没有主次、只剩一片字。 */
+.dsm-listrow-meta-path{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:10px;line-height:15px;color:var(--dsw-alias-label-tertiary)}
+.dsm-hist-row .dsm-listrow-meta-info{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:15px}
 .dsm-listrow-side{display:flex;flex:none;align-items:center;gap:8px}
 .dsm-listrow-actions{display:flex;flex:none;align-items:center;justify-content:flex-end;gap:4px}
+/* 归档会话行放宽一档（用户 2026-10-18：「归档会话太拥挤了」）：这一页每行是「标题 + 目录 +
+   日期」两段文字，右端还常驻两颗按钮比别处密。48px 的通用行高在这里把三段挤成一坨 ——
+   行高抬到 52px、两行之间 4px，逐行读开。 */
+.dsm-hist-row{min-height:52px;padding:6px 12px}
+.dsm-hist-row .dsm-listrow-main{gap:4px}
+/* 层级靠字号、不靠加粗（用户 2026-10-18：「归档会话的标题不用加粗，放大字体就行」→
+   「字体都再缩小」）：标题去掉 600，字号与正文齐平，靠上面那行目录的小字拉开主次。 */
+.dsm-hist-row .dsm-listrow-name{font-size:13px;font-weight:400}
+/* 分组卡头（工作区目录）与其他页的收缩栏同款（用户 2026-10-18：「会话目录栏感觉太粗太高了，
+   改成和其他收缩栏一样」）：48px、标题 13px/600 —— 上一版为它单独加高的 64px / 15px/700
+   已撤掉，技能 / MCP / 记忆三页的组头就是这套尺寸。 */
+/* 行内按钮**保留描边**（用户 2026-10-18：「归档会话的恢复和永久删除边框怎么不见了」）：
+   上一版为了"降噪"把它们去掉了边框，结果两颗键成了裸文字，跟旁边的目录文字混成一片 ——
+   在行尾它们本来就是按钮，边框是"这是能点的"最直接的信号。降噪改由行高与字号承担。 */
 /* 行2 之下的追加内容（体检结果 / ⚠ 提示 / 被覆盖说明）原本按表格网格留白，
    两行制里由主列 gap 接管，各自的 margin-top 归零。 */
 .dsm-listrow .dsm-row-hint,.dsm-listrow .dsm-rule-hint,.dsm-listrow .dsm-rule-shadow-hint{margin-top:0}
@@ -1096,4 +1183,8 @@ button.dsm-rowselect-box:disabled{cursor:default;opacity:.45}
 .dsm-mode-caret,.dsm-pick-caret{width:12px;height:12px;flex:none;color:var(--dsw-alias-label-tertiary)}
 /* 快照导入预览：行选择纵向堆叠（原为横向勾选 chips，切片五换 RowSelect）。 */
 .dsm-snap-picks{display:flex;flex-direction:column;gap:2px}
+/* 侧栏入口打开的那一页（main 面板）：宿主只给一个空的中栏，滚动与留白都得自己声明。
+   顶端让出标题栏净空（macOS / Windows 桌面端由宿主在这两个属性上给高度），与 dshmarket
+   的主面板同一套算法；内容仍是 .dsm-section —— 宽度上限与居中它自己管。 */
+.dsm-panel{box-sizing:border-box;width:100%;height:100%;min-height:0;overflow:auto;padding:calc(20px + var(--dsh-frame-top-clearance,0px)) clamp(16px,4vw,40px) 32px}
 `

@@ -33,6 +33,7 @@ const SLICES = [
   '23-export-hub.js',   // 导出枢纽 _pages（必须落在 factory 作用域）+ 交给 DICT 的那段说明
   '30-dict.js',         // DICT：中英两份词典
   '40-apply-head.js',   // apply 开头：取词服务、slots 守卫、各页共享的 mt / opMsg
+  '40b-settings-nav-icon.js', // 设置侧栏「工具」行的图标（宿主只认封闭名单，理由见片内注释）
   '41-mcp.js',          // FeedbackLinks + MCPPage + PromptsPage + ToolsSection
   '42-shared-ui.js',    // 通用 helper 与弹窗：callApi / Modal / Trash / Import / Export / DirPicker
   '42b-mcp-json.js',    // MCP JSON 导入/导出：结构识别与名字净化 + 两个弹窗（属于 MCP 域，原先寄在这里）
@@ -43,6 +44,7 @@ const SLICES = [
   '46b-memory-view.js', // memoryView：把记忆数据整理成场景分组的纯渲染函数
   '47-memory.js',       // MemoryPage
   '48-slash.js',        // 斜杠命令「工具」段（宿主 / 菜单；不在设置页里）
+  '49-sidebar-entry.js',// 侧栏入口（main 面板 + sidebar.panellist 那一行，兼容页那颗开关管）
   '90-apply-tail.js',   // apply 收尾（注册各页 + 导出 _pages）
 ]
 

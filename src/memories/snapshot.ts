@@ -497,12 +497,12 @@ export function renderSceneMemory(
     if (lines.length === 0) return byteLen(marker) <= space ? marker : ''
     const rest = missed.length - lines.length
     const fold = `- ... (${rest} more not listed)\n`
-    // 清单已经列全时**不再加标记**：`## Not injected` 这个标题本身就说清了"有东西没进来"，
-    // 再补一句 `(Truncated: …)` 只是把同一件事说两遍。标记只在清单**自己也不全**（有没列出的
-    // 条目）时才有信息量 —— 注意判据是 `rest > 0`，不是"折叠行放得下"：折叠行放不下时清单
-    // 同样是残缺的，标记不能跟着一起消失（那会让残缺的清单看起来是全部）。
+    // 标记与折叠行的关系（2026-10-18 审查收口）：
+    //   - 清单列全（rest === 0）→ 不发标记也不发折叠行：`## Not injected` 标题已说清。
+    //   - 清单不全 + 折叠行放得下 → 只发折叠行（给了具体计数），不发标记（重复）。
+    //   - 清单不全 + 折叠行放不下 → 只发标记（折叠行是更具体的版本，但放不下时标记是唯一信号）。
     const folded = rest > 0 && used + byteLen(fold) <= space
-    const tail = `${head}${lines.join('')}${folded ? fold : ''}${rest > 0 ? marker : ''}`
+    const tail = `${head}${lines.join('')}${folded ? fold : ''}${rest > 0 && !folded ? marker : ''}`
     return tail
   }
 
@@ -543,9 +543,18 @@ export function renderSceneMemory(
   }
 
   let text = `${body}${tail}`.replace(/^\n+/, '')
-  // ③ 兜底：预算小到连标记都放不下时也宁可超出几个字节——"有记忆没注入"这件事
-  // 绝不能静默消失（原来单条超预算会让整段变成空串，模型端完全无痕）。
-  if (text === '' && (missed.length > 0 || probe.truncated)) text = `${TRUNCATION_MARKER}\n`
+  // ③ 兜底：有记忆没注入时绝不能静默消失。
+  //   - 原来（2026-09-? 初版）只兜 text === '' 的情形：body 非空、tail 放不下时，
+  //     模型看到的是一段看起来完整的记忆段 —— 既没有 `## Not injected` 也没有标记，
+  //     被截掉的那些条目就**完全无痕**了。这是 2026-10-18 审查发现的 P1：body 的字节
+  //     核算（`used`）与 `byteLen(body)` 有几字节的误差（渲染时条目间的 `\n` / `\n\n`
+  //     没全进 `used`），于是 reserve 留的余量偶尔不够，标记放不下，3 兜底又不触发。
+  //   - 现在的判据：只要 missed 非空或发现阶段截断，而 text 里既没有标记也没有
+  //     `## Not injected` 标题，就强制追加标记 —— 宁可超预算几字节（原 ③ 注释的原则），
+  //     也不能让截断无痕。两样有一样就不追加（信号已经在）。
+  if ((missed.length > 0 || probe.truncated) && !text.includes(TRUNCATION_MARKER) && !text.includes(DROPPED_HEADING)) {
+    text = text === '' ? `${TRUNCATION_MARKER}\n` : `${text.replace(/\n+$/, '')}\n${TRUNCATION_MARKER}\n`
+  }
 
   const scenes: string[] = []
   for (const c of selected) if (!scenes.includes(c.scene)) scenes.push(c.scene)

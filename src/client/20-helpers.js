@@ -112,7 +112,7 @@
     function MoreIcon(props) {
       var size = (props && props.size) || 14
       return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': 'true', focusable: 'false', className: props && props.className },
-        h('path', { fill: 'currentColor', d: 'M3 6.6h2v2H3zM7 6.6h2v2H7zM11 6.6h2v2h-2z' }))
+        h('path', { fill: 'currentColor', d: 'M3 7h2v2H3zM7 7h2v2H7zM11 7h2v2h-2z' }))
     }
 
     // `react` / `h` 别名（2026-10-11 切片五从 42 片上移）：工厂作用域声明对 apply 内外
@@ -178,7 +178,9 @@
      * 2026-10-11 切片五从 42 片上移：兼容页的原生勾选框（斜杠入口 / 注入域 / 快照）
      * 要换成开关，而兼容页在 apply 之外看不到 42 片的声明。
      */
-    function Switch(props) { return h('button', { type: 'button', className: 'dsm-switch' + (props.on ? ' dsm-switch-on' : ''), role: 'switch', 'aria-checked': props.on, 'aria-label': props.label, title: props.title, disabled: props.disabled, onClick: props.onClick }); }
+    // 开关的视觉完全交给 `[aria-checked]`（用户 2026-10-18：「switch 按键统一和官方一样的模板」）：
+    // 官方那颗也是只靠这个属性切换外观，多挂一个 dsm-switch-on 类等于留两条互相打架的判据。
+    function Switch(props) { return h('button', { type: 'button', className: 'dsm-switch', role: 'switch', 'aria-checked': props.on === true, 'aria-label': props.label, title: props.title, disabled: props.disabled, onClick: props.onClick }); }
 
     /**
      * 下拉菜单的高度上限，**必须与 CSS 里 .dsm-select-menu 的 max-height 一致** ——
@@ -716,6 +718,58 @@
     function setSlashMount(state, key) {
       if (key) slashMountStates[key] = state
       else slashMountStates = { tools: state, quickPrompts: state }
+    }
+
+    // ── 侧栏入口的开关（兼容页那颗按钮写，apply 侧的注册读）──────────────────────
+    //
+    // 为什么放在 factory 作用域：写它的是兼容页（22 片，apply 之外），读它的是 apply 侧的
+    // 两处注册（49 片）—— 只有这个共享作用域两边都够得着，谁也不跨 apply 边界引对方的声明。
+    //
+    // 默认开：侧车那边的默认值也是开，读失败一律按开处理（见 sidebar-settings.ts）——
+    // 判不出来时不该把一个入口藏掉。
+    let sidebarEntryState = { enabled: true, busy: false }
+    const sidebarEntrySubs = new Set()
+    function sidebarEntrySnapshot() { return sidebarEntryState }
+    function setSidebarEntryState(patch) {
+      const next = Object.assign({}, sidebarEntryState, patch)
+      if (next.enabled === sidebarEntryState.enabled && next.busy === sidebarEntryState.busy) return
+      sidebarEntryState = next
+      for (const fn of Array.from(sidebarEntrySubs)) { try { fn() } catch (e) { /* 单个订阅者出错不影响其它 */ } }
+    }
+    /** 订阅这份状态（兼容页与 apply 侧的注册共用，保证两边永远看到同一份）。 */
+    function onSidebarEntryChange(fn) {
+      sidebarEntrySubs.add(fn)
+      return function () { sidebarEntrySubs.delete(fn) }
+    }
+    function useSidebarEntrySnapshot() {
+      const st = React.useState(sidebarEntrySnapshot)
+      React.useEffect(function () {
+        const fn = function () { st[1](sidebarEntrySnapshot()) }
+        sidebarEntrySubs.add(fn)
+        fn()
+        return function () { sidebarEntrySubs.delete(fn) }
+      }, [])
+      return st[0]
+    }
+    /**
+     * 写开关：先乐观更新（点一下就该有反馈），服务端回包为准，失败回滚。
+     * @returns `{ ok: boolean, error?: string }` —— 文案由调用方按当前语言给（这里没有 t）。
+     */
+    function saveSidebarEntry(enabled) {
+      const before = sidebarEntryState.enabled
+      const next = enabled === true
+      setSidebarEntryState({ enabled: next, busy: true })
+      return apiCall('sidebar-settings', { set: true, enabled: next }).then(function (r) {
+        if (r && r.ok && r.settings) {
+          setSidebarEntryState({ enabled: r.settings.enabled !== false, busy: false })
+          return { ok: true }
+        }
+        setSidebarEntryState({ enabled: before, busy: false })
+        return { ok: false, error: (r && r.error) || '' }
+      }).catch(function (e) {
+        setSidebarEntryState({ enabled: before, busy: false })
+        return { ok: false, error: errMsg(e) }
+      })
     }
 
     /**

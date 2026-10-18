@@ -1,6 +1,6 @@
     // ── 斜杠命令「工具」段（对话输入框里直接管六个域）────────────────────────────
     //
-    // 要解决的问题：切个场景、临时停一个 MCP，都得离开当前对话去「设置 → 工具」。这一段把
+    // 要解决的问题：切个场景、临时停一个 MCP，都得离开当前对话去「设置 → 工具管理」。这一段把
     // 这些**可逆**动作搬进宿主的 `/` 菜单：打一个 `/` → 出现「工具」段 → 点一行原地进入该域
     // → 点一条直接启停，**菜单停在原地不关**，接着点下一条也行。
     //
@@ -599,8 +599,11 @@
           // 中英随宿主语言。源名本身（tool-management）因此不会出现在界面上，只当唯一性用。
           showGroupTitle: false,
           async candidates(session, req) {
-            // 只在行首提供：`帮我看看 /tool` 这种半路打出来的 `/` 不该弹我们的东西。
-            if (req.position !== 'leading') return []
+            // 行内也认（用户 2026-10-18：「输入框输入了文字，空格后输入斜杠命令没有工具和
+            // 快捷提示词」）：宿主自己的 `boundaryOk` 只把「紧跟在文字后面的 `/`」当成普通
+            // 字符，前面是空格的 `/` 本来就是合法触发（`position` 报 `inline`）。我们此前一律
+            // 只收 `leading`，于是「先打一段话、空格、再打 /」永远弹不出这两段。
+            // 真正的"半路打出来的 /"（`https://`、`a/b`）宿主已经挡掉，这里不必再拦一遍。
             const domains = domainsOf()
             const query = req.query || ''
             const at = query.indexOf('/')
@@ -730,7 +733,7 @@
           order: 3,
           showGroupTitle: false,
           async candidates(session, req) {
-            if (req.position !== 'leading') return []
+            // 同「工具」段：行内也认（前面是空格的 `/` 本来就是合法触发）。
             const query = String(req.query || '')
             // 只列一层：带 `/` 的草稿（`/tool-skill/…`）不是这一段的 token。
             if (query.indexOf('/') >= 0) return []

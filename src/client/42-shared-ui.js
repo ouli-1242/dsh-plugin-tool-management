@@ -387,7 +387,7 @@ function enabledMemoryCount(rules) {
     /**
      * 「填写令牌」弹窗（用户 2026-10-12 提案：横幅那颗键点开一个弹窗，填对自动关）。
      *
-     * 为什么是弹窗而不是"跳到设置 → 工具 → 兼容"：那条路要求设置面板已经挂载
+     * 为什么是弹窗而不是"跳到设置 → 工具管理 → 兼容"：那条路要求设置面板已经挂载
      * （`navigateToTab` 只在 ToolsSection 挂载时才有值），从对话页点它就得先想办法把宿主的
      * 设置对话框打开 —— 宿主没有这个服务，只能去 DOM 里认领它自己的设置导航行，又脆又绕。
      * 一个自包含的输入框把整条依赖都去掉了：不碰宿主 DOM、不需要跳页、也不必知道用户当时
@@ -1070,6 +1070,10 @@ function enabledMemoryCount(rules) {
       const anyLocked = ysx[0], setAnyLocked = ysx[1]
       const zsx = React.useState([])
       const sceneList = zsx[0], setSceneList = zsx[1]
+      // 技能来源表：只给回收站详情把 `<rootKey>/<name>` 里的根键翻成人看的名字用
+      //（`custom-<uuid>` 那种串摆给人看没有意义，见 manifestInfoRows 的注释）。
+      const rxs = React.useState([])
+      const skillRoots = rxs[0], setSkillRoots = rxs[1]
       React.useEffect(function () { load(); return undefined }, [])
       const dataOf = function (id) { return (data && data[id]) || { loading: true, error: null, entries: [] } }
       function setSlot(id, slot) {
@@ -1085,6 +1089,12 @@ function enabledMemoryCount(rules) {
         })
         // 锁定态（只读判断，失败不拦 —— 写操作到了服务端还有 frozen 这道闸）；
         // `sceneList` 只有记忆组用得上（每条要说清属于哪个场景）。
+        // 技能来源表只给回收站详情翻根键用：读不到就退回原键，不因为这一趟失败影响列表。
+        if (groupIds.indexOf('skills') >= 0) {
+          apiCall('skill-state', {}).then(function (res) {
+            if (res && res.ok) setSkillRoots(res.roots || [])
+          }).catch(function () { })
+        }
         var needLock = groupIds.some(function (gid) { return GROUPS[gid].frozen === true || gid === 'memories' })
         if (!needLock) return
         apiCall('rules-list', {}).then(function (res) {
@@ -1266,7 +1276,7 @@ function enabledMemoryCount(rules) {
       function openPreview(g, item) {
         const id = String(idOfOf(g)(item))
         const meta = g.previewMeta ? g.previewMeta(item) : null
-        setPreview({ group: g.id, id: id, name: g.nameOf(item), meta: meta, loading: meta === null, error: null, files: [] })
+        setPreview({ group: g.id, id: id, name: g.nameOf(item), meta: meta, loading: meta === null, error: null, files: [], manifest: null })
         if (meta !== null) return
         const patch = function (fields) {
           setPreview(function (cur) {
@@ -1275,7 +1285,7 @@ function enabledMemoryCount(rules) {
           })
         }
         apiCall('trash-preview', { domain: g.id, id: id }).then(function (res) {
-          if (res && res.ok) patch({ loading: false, error: null, files: res.files || [] })
+          if (res && res.ok) patch({ loading: false, error: null, files: res.files || [], manifest: res.manifest || null })
           else patch({ loading: false, error: translateError(t, res), files: [] })
         }).catch(function (e) { patch({ loading: false, error: errMsg(e), files: [] }) })
       }
@@ -1489,21 +1499,59 @@ function enabledMemoryCount(rules) {
           body = React.createElement('div', { className: 'dsm-empty' }, t('trash.preview.loading'))
         } else {
           const files = preview.files || []
+          // 记忆 / 场景 / 技能这类条目：清单里写着"删掉的是什么"（场景档案勾了什么、记忆属于
+          // 哪个场景、什么形态），文件列表只是"里面有哪些文件"。用户 2026-10-18：「记忆回收站
+          // 的详细应该记忆在第一栏，附件在下面」—— 所以顺序固定为**条目信息在前、文件在后**，
+          // 不是把两类混成一张表。
+          const info = manifestInfoRows(t, preview.group, preview.manifest, skillRoots)
+          // 技能条目套用「技能详情」弹窗的排版（用户 2026-10-18：「技能的回收站详细还是挤在一起，
+          // 不能套用技能详细弹窗吗」）：正文那份单独成节、其余文件是附件清单，不再一份文件一张
+          // 带边框的卡 —— 那种画法把十个文件挤成十条 240px 的代码窗，什么也读不出来。
+          const isSkill = preview.group === 'skills'
+          const bodyFile = isSkill ? (files.filter(function (f) { return /(^|\/)SKILL\.md$/i.test(String(f.path || '')) })[0] || files[0]) : null
+          const attachFiles = isSkill ? files.filter(function (f) { return f !== bodyFile }) : files
           body = React.createElement('div', { className: 'dsm-preview' },
+            info.length
+              ? React.createElement(React.Fragment, null,
+                formSection(t('trash.preview.entry')),
+                React.createElement('div', { className: 'dsm-fm' }, info.map(function (row) {
+                  return React.createElement('div', { key: row[0], className: 'dsm-fm-row' },
+                    React.createElement('div', { className: 'dsm-fm-key' }, row[0]),
+                    React.createElement('div', { className: 'dsm-fm-val' }, row[1]))
+                })))
+              : null,
+            isSkill && attachFiles.length
+              ? React.createElement(React.Fragment, null,
+                formSection(t('detail.attachments') + ' · ' + attachFiles.length),
+                React.createElement('div', { className: 'dsm-attach-list dsm-attach-cap' }, attachFiles.map(function (f) {
+                  return React.createElement('div', { key: f.path, className: 'dsm-file', title: f.path },
+                    React.createElement('span', { className: 'dsm-file-name' }, f.path),
+                    React.createElement('span', { className: 'dsm-file-meta' }, fmtBytes(f.size)))
+                })))
+              : null,
+            isSkill && bodyFile
+              ? React.createElement('div', { className: 'dsm-detail-section' },
+                React.createElement('div', { className: 'dsm-detail-title' }, t('detail.body')),
+                bodyFile.text === undefined
+                  ? React.createElement('div', { className: 'dsm-preview-flag' }, t('trash.preview.binary'))
+                  : React.createElement('pre', { className: 'dsm-code dsm-code-fill' }, bodyFile.text))
+              : null,
             React.createElement('div', { className: 'dsm-preview-note' },
               t('trash.preview.readonly') + ' · ' + t('trash.preview.files', { count: files.length })),
-            files.length
-              ? React.createElement('div', { className: 'dsm-preview-files' }, files.map(function (f, i) {
-                return React.createElement('section', { key: f.path || i, className: 'dsm-preview-file' },
-                  React.createElement('div', { className: 'dsm-preview-file-head' },
-                    React.createElement('span', { className: 'dsm-preview-path', title: f.path }, f.path),
-                    React.createElement('span', { className: 'dsm-preview-size' }, fmtBytes(f.size))),
-                  f.text === undefined ? null : React.createElement('pre', { className: 'dsm-code' }, f.text),
-                  // 二进制 / 截断各自如实标一句：不标的话用户会以为"这条记录就这么点内容"。
-                  f.binary === true ? React.createElement('div', { className: 'dsm-preview-flag' }, t('trash.preview.binary')) : null,
-                  f.truncated === true ? React.createElement('div', { className: 'dsm-preview-flag' }, t('trash.preview.truncated')) : null)
-              }))
-              : React.createElement(EmptyState, { text: t('trash.preview.empty') }))
+            isSkill
+              ? null
+              : files.length
+                ? React.createElement('div', { className: 'dsm-preview-files' }, files.map(function (f, i) {
+                  return React.createElement('section', { key: f.path || i, className: 'dsm-preview-file' },
+                    React.createElement('div', { className: 'dsm-preview-file-head' },
+                      React.createElement('span', { className: 'dsm-preview-path', title: f.path }, f.path),
+                      React.createElement('span', { className: 'dsm-preview-size' }, fmtBytes(f.size))),
+                    f.text === undefined ? null : React.createElement('pre', { className: 'dsm-code' }, f.text),
+                    // 二进制 / 截断各自如实标一句：不标的话用户会以为"这条记录就这么点内容"。
+                    f.binary === true ? React.createElement('div', { className: 'dsm-preview-flag' }, t('trash.preview.binary')) : null,
+                    f.truncated === true ? React.createElement('div', { className: 'dsm-preview-flag' }, t('trash.preview.truncated')) : null)
+                }))
+                : React.createElement(EmptyState, { text: t('trash.preview.empty') }))
         }
         // 只读预览单开一档（见 10-css.js 的 .dsm-modal-preview）：这里装的是代码正文，
         // S 档 440 一行要折好几次。负载文件那一档再挂 fill（定高 + 代码区吃掉剩余高度）。

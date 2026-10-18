@@ -338,12 +338,15 @@
             // 右侧那两颗按钮整块挡冒泡 —— 点「恢复」不该顺带把这条勾上。
             var at = it.archivedAt || it.createdAt || 0
             var metaBits = []
-            if (it.cwd) metaBits.push(React.createElement('span', { key: 'cwd', className: 'dsm-listrow-meta-desc', title: it.cwd }, it.cwd))
+            if (it.cwd) metaBits.push(React.createElement('span', { key: 'cwd', className: 'dsm-listrow-meta-desc dsm-listrow-meta-path', title: it.cwd }, it.cwd))
             // 归档时间排在目录**后面且不可收缩**：长目录会被截，但"什么时候收进来的"必须留下
             //（保留期默认 30 天，它其实就是"还剩几天"）。宿主没给时间就不显示，不拿未知占位。
             if (at) metaBits.push(React.createElement('span', { key: 'at', className: 'dsm-listrow-meta-info' }, new Date(at).toLocaleDateString()))
             return React.createElement(ListRow, {
               key: it.sessionId,
+              // 行比别处松一档（用户 2026-10-18：「归档会话太拥挤了」）：这一页的行夹着
+              // 目录 + 日期两段文字，还常驻两颗按钮，48px 的通用行高塞下来标题和元信息贴在一起。
+              className: 'dsm-hist-row',
               leading: React.createElement(RowCheck, { checked: selected.has(it.sessionId), label: t('hist.select'), onChange: function () { toggleSelect(it.sessionId) } }),
               onToggle: function () { toggleSelect(it.sessionId) },
               name: it.title || ('Session ' + shortId(it.sessionId)),
@@ -381,21 +384,25 @@
                 React.createElement(RowCheck, { checked: allChecked, label: t('hist.selectGroup', { title: g.title }), onChange: function () { toggleGroup(g.key, groupIds) } }),
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main', 'aria-expanded': open, onClick: function () { toggleGroupCollapse(g.key, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-title dsm-hist-group-title', title: g.title }, g.title),
-                  React.createElement('span', { className: 'dsm-count' }, String(g.items.length))),
+                  React.createElement('span', { className: 'dsm-count' }, String(g.items.length)),
+                  // 目录挪进标题栏、落到第二行（靠 flex-wrap + width:100%）：起点与标题左端对齐，
+                  // 不再被右侧那颗标签挤着走（用户 2026-10-18：「应该开头对齐……放在标题下面是不是更好」）。
+                  g.path ? React.createElement('span', { className: 'dsm-path', title: g.path }, g.path) : null),
                 // 目录已被删除（dirMissing）时：既不给「重新登记」入口，也不再并列「已移除」标签 ——
                 // 只留一枚醒目告警，明确告诉用户这个工作区的磁盘文件夹已经不存在了
                 // （用户 2026-10-12：「如果工作区已经被删除应该不能恢复……要怎么及时知道这个工作区
                 // 实际文件夹已经被删除了」）。宿主 registerWorkspace 的 realpath 本来就会拒绝
                 // 不存在的目录，这里把入口提前收掉，避免点了才报错。
+                // 目录随标题走：放进 .dsm-source-head-main 里，靠 flex-wrap 落到第二行、
+                // 与标题左端对齐（用户 2026-10-18：「应该开头对齐……放在标题下面是不是更好」）。
                 (detached || g.dirMissing) ? React.createElement('div', { className: 'dsm-hist-group-extra' },
                   g.dirMissing
                     // 「原目录不存在」：红色描边标签（用户 2026-10-12：「改成『原目录不存在』
                     // 也加一个边框，但是不能点击」）。边框是它唯一的视觉标记 —— 原先靠行首的
                     // ⚠ 符号，混在一堆文字里看不出这是一枚"状态标签"。它是个 span，本来就不可点。
                     ? React.createElement('span', { className: 'dsm-hist-dir-missing', title: t('hist.group.dirMissing.hint') }, t('hist.group.dirMissing'))
-                    : React.createElement('span', { className: 'dsm-tag', title: t('hist.group.removed.hint') }, t('hist.group.removed')),
-                  detached && !g.dirMissing && g.canRegister ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, title: t('hist.btn.registerWs.hint'), onClick: function () { setModal({ type: 'register', path: g.path, title: g.title }) } }, t('hist.btn.registerWs')) : null) : null,
-                g.path ? React.createElement('span', { className: 'dsm-path', title: g.path }, g.path) : null),
+                    : detached ? React.createElement('span', { className: 'dsm-tag', title: t('hist.group.removed.hint') }, t('hist.group.removed')) : null,
+                  detached && !g.dirMissing && g.canRegister ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, title: t('hist.btn.registerWs.hint'), onClick: function () { setModal({ type: 'register', path: g.path, title: g.title }) } }, t('hist.btn.registerWs')) : null) : null),
               open ? React.createElement('div', { className: 'dsm-source-body' }, g.items.map(renderRow)) : null)
           }
 
@@ -629,8 +636,9 @@
     /**
      * 场景描述最多存多少个字（新建/编辑表单的 `maxLength` 与字数计数都用它）。
      *
-     * 卡片那一行**不靠这个数撑腰**：`.dsm-scene-tile-desc` 是 `nowrap` + 省略号，
-     * 再长也只占一行、不会把卡片撑成纵向。显示层仍按它裁一次，兜住历史数据。
+     * 行内那一格**不靠这个数撑腰**：`.dsm-scene-tile-desc` 是 `nowrap` + 省略号，
+     * 再长也只占一行、不会把行撑成纵向（2026-10-18 起描述与名字同一行）。显示层仍按它裁一次，
+     * 兜住历史数据。
      */
     var SCENE_DESC_MAX = 300
     /** 记忆描述在勾选行里最多显示多少个字：记忆正文可能很长，行内只留一行，超长截断（全文进 title）。 */
@@ -680,6 +688,68 @@
     /** 场景页卡片上的描述行：**只有描述**，数量（记忆条数 / 已配 N 台 MCP…）不进卡片。 */
     function sceneTileDesc(scene) {
       return clipText(scene && scene.description, SCENE_DESC_MAX)
+    }
+
+    /**
+     * 回收站详情里「条目信息」那几行（用户 2026-10-18：「回收站的详细功能做的不够好，显示的内容
+     * 不够全，例如场景没有显示勾选了什么，设置了什么」）。
+     *
+     * 数据来自 `trash-preview` 回传的 `manifest`（就是条目目录里那份 `manifest.json`），按域各取：
+     *   · scenes —— 记录（显示名 / 备注 / 锁定）+ 档案四段勾了多少条 + 绑的提示词与工具表；
+     *   · memories —— 属于哪个场景、形态（flat / bundle）、删除时间；
+     *   · skills / presets / quick / agents —— 名字 + 删除时间（它们的"内容"就是文件本身）。
+     *
+     * 只报**有值的**：段未定义 = 该域不碰（不是"勾了 0 个"），两者不能混成一句话。
+     */
+    function manifestInfoRows(t, domain, manifest, skillRoots) {
+      var rows = []
+      var m = manifest && typeof manifest === 'object' ? manifest : null
+      if (!m) return rows
+      var deleted = m.deletedAt ? new Date(m.deletedAt).toLocaleString() : ''
+      if (deleted) rows.push([t('trash.preview.field.deletedAt'), deleted])
+      if (domain === 'memories') {
+        if (m.group !== undefined) rows.push([t('trash.preview.field.scene'), sceneLabel([], String(m.group || ''))])
+        if (m.form) rows.push([t('trash.preview.field.form'), t('memory.form.' + (m.form === 'bundle' ? 'bundle' : 'flat'))])
+        return rows
+      }
+      if (domain !== 'scenes') return rows
+      var data = (m.data && typeof m.data === 'object') ? m.data : {}
+      var rec = (data.record && typeof data.record === 'object') ? data.record : {}
+      var arc = (data.archive && typeof data.archive === 'object') ? data.archive : {}
+      if (rec.label) rows.push([t('trash.preview.field.label'), String(rec.label)])
+      if (rec.description) rows.push([t('trash.preview.field.desc'), String(rec.description)])
+      if (rec.locked === true) rows.push([t('trash.preview.field.locked'), t('trash.preview.yes')])
+      // 档案四段：只有**段已定义**才报（undefined = 这个域不动，与"勾了 0 个"是两件事）。
+      if (arc.mcp && typeof arc.mcp === 'object') {
+        var servers = Object.keys(arc.mcp)
+        // 工具级收窄：`'*'` 是整台，数组是指定工具 —— 明细放在同一格里，别让人以为只是"勾了几台"。
+        var detail = servers.map(function (k) {
+          var v = arc.mcp[k]
+          return Array.isArray(v) ? k + '（' + v.length + '）' : k
+        }).join('、')
+        rows.push([t('trash.preview.field.mcp'), detail || t('trash.preview.none')])
+      }
+      if (Array.isArray(arc.skills)) {
+        // 技能 id 是 `<rootKey>/<name>`，而 rootKey 对「手动添加的目录」是一串
+        // `custom-<uuid前16位>`（用户 2026-10-18：「场景详细页的 custom-d38da02b873bdb5c
+        // 是什么鬼」）。那一串只是磁盘上的去重键，对人没有意义 —— 详情里把根键换成人看的
+        // 名字，查不到的（来源已被移除）就退回"名字 + 已移除来源"，不把 uuid 摆给人看。
+        rows.push([t('trash.preview.field.skills'), arc.skills.map(function (id) {
+          var s = String(id)
+          var at = s.indexOf('/')
+          if (at < 0) return s
+          var rootKey = s.slice(0, at)
+          var root = (skillRoots || []).filter(function (r) { return r.key === rootKey })[0]
+          var rootName = root ? rootDisplayName(t, root) : (rootKey.indexOf('custom-') === 0 ? t('trash.preview.sourceGone') : rootKey)
+          return rootName + ' / ' + s.slice(at + 1)
+        }).join('、') || t('trash.preview.none')])
+      }
+      if (Array.isArray(arc.subagents)) rows.push([t('trash.preview.field.subagents'), arc.subagents.join('、') || t('trash.preview.none')])
+      if (Array.isArray(arc.quickPrompts)) rows.push([t('trash.preview.field.quick'), arc.quickPrompts.join('、') || t('trash.preview.none')])
+      if (arc.toolTablePreset) rows.push([t('trash.preview.field.toolTable'), String(arc.toolTablePreset)])
+      if (rec.prompt) rows.push([t('trash.preview.field.prompt'), String(rec.prompt)])
+      if (Array.isArray(data.memories)) rows.push([t('trash.preview.field.memories'), String(data.memories.length)])
+      return rows
     }
 
     // ---------- 场景记忆页（场景 = scene-memory/ 下的一级目录；内容自动生效）----------

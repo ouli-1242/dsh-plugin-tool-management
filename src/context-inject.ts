@@ -436,7 +436,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
     // 的可见提示由兼容页那条「去填令牌」横幅承担。
     try {
       if (deps.tokenGateActive && deps.tokenGateActive()) {
-        log('令牌未验证：本轮对话被拒绝（在「工具 → 兼容」页填入访问令牌后恢复）')
+        log('令牌未验证：本轮对话被拒绝（在「工具管理 → 兼容」页填入访问令牌后恢复）')
         return { kind: 'reject' }
       }
     } catch { /* 门禁判定失败不能反过来卡住对话：当作放行 */ }

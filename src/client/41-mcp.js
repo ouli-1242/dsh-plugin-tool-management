@@ -28,14 +28,6 @@
           const [confirmRow, setConfirmRow] = React.useState(null)
           const [reveal, setReveal] = React.useState(false)
           const [settings, setSettings] = React.useState(null)
-          const [noteDraft, setNoteDraft] = React.useState('')
-          // 备注保存的**就地**回执（用户 2026-10-12：「mcp 备注在锁定情况下这个红色的提示词
-          // 不应该显示在 mcp 页，应该显示在详细页」）。此前 saveNote 走的是共用的 `run()`，
-          // 结果一律 setMsg —— 那是**页面级**提示条，而动作发生在弹窗里：锁定期间点「保存备注」
-          // 被冻结闸拒掉，红字却出现在弹窗**后面**的页面上，关上弹窗才看得见，根本对不上号。
-          // 备注这一个动作的回执只属于这个弹窗，所以单独一个槽（成功 / 失败 / 告警都走它），
-          // 打开与关闭详情时清空，只在备注小节里渲染。
-          const [noteNotice, setNoteNotice] = React.useState(null)
           const [compactConfirm, setCompactConfirm] = React.useState(false)
           // A1：粘贴 JSON 导入 / 导出两个弹窗（0.15.0）。
           const [jsonImportOpen, setJsonImportOpen] = React.useState(false)
@@ -199,6 +191,11 @@
                   headers: kvToLines(row.headers),
                   env: kvToLines(row.env),
                   level: row.level === 'global' ? 'global' : 'project',
+                  // 备注也在编辑表单里改（用户 2026-10-18：「mcp 备注编辑功能应该在编辑页，
+                  // 详细页只能看」）：详情页是只读视图，写动作一律回到这张表。
+                  // `origNote` 留一份原文用于判断"这次到底改没改备注"—— 没改就不多写一次侧车。
+                  note: row.notes || '',
+                  origNote: row.notes || '',
                 })
               }
             const closeForm = () => { setFormError(null); setFormModal(null) }
@@ -242,7 +239,17 @@
             if (payload.mode === 'edit') args.id = payload.id
             // 备注只在新增时带：服务端在写补丁的同一次锁里落进侧车（见 mcpmAdd）。
             else args.note = payload.note
-            run(payload.mode === 'edit' ? 'mcpm-edit' : 'mcpm-add', args, 'form', closeForm)
+            // 编辑态：备注在**保存之后**单独写一次（`mcpm-edit` 不碰侧车）。改过才写 ——
+            // 没改就多一次写盘 + 刷新 updatedAt，没有意义。
+            const noteChanged = payload.mode === 'edit' && String(payload.note || '').trim() !== String(payload.origNote || '').trim()
+            run(payload.mode === 'edit' ? 'mcpm-edit' : 'mcpm-add', args, 'form', function () {
+              closeForm()
+              if (noteChanged) {
+                apiCall('mcpm-note', { id: payload.id, note: payload.note }).then(function (res) {
+                  if (res && res.ok === false) setMsg({ kind: 'warn', text: mt('mcp.msg.noteFailed') })
+                }).catch(function () { setMsg({ kind: 'warn', text: mt('mcp.msg.noteFailed') }) }).then(function () { refresh() })
+              }
+            })
           }
 
           // 「启动中」的乐观记账（用户 2026-10-15：呼吸灯要过一会才出现）：翻开开关那一刻宿主
@@ -278,7 +285,13 @@
             setState((prev) => Object.assign({}, prev, {
               rows: (prev.rows || []).map((item) => (
                 item.id === row.id && item.level === row.level
-                  ? Object.assign({}, item, { disabled: nextDisabled })
+                  // `live.enabled` 一起乐观翻掉（用户 2026-10-18：「关闭后绿灯应该立即消失变灰，
+                  // 现在有延迟」）：列表里那盏绿灯读的是宿主上一轮轮询的 `live`，只改 `disabled`
+                  // 的话它得等下一次刷新（默认 5 秒）才灭 —— 点完开关的五秒里界面还在说"它在跑"。
+                  ? Object.assign({}, item, {
+                    disabled: nextDisabled,
+                    live: item.live ? Object.assign({}, item.live, { enabled: !nextDisabled }) : item.live,
+                  })
                   : item
               )),
             }))
@@ -331,23 +344,8 @@
               if (fresh) setDetail(Object.assign({}, detail, { row: fresh }))
             })
           }
-          // 备注保存：不走共用的 `run()`（那个把结果写进页面级 `msg`，见 noteNotice 的说明）。
-          // 成功 / 失败都只回写到详情弹窗的备注小节；文案沿用 `opMsg` / `mcp.msg.failed`，
-          // 失败时**原样透出服务端那句**（锁定态就是冻结闸的「场景已锁定（…）：先到场景页解锁
-          // 再修改」）—— 它正是用户要看到的那句话，只是位置从页面挪进了弹窗。
-          const saveNote = () => {
-            const row = detail && detail.row
-            if (!row) return
-            setNoteNotice(null)
-            setBusy('note')
-            apiCall('mcpm-note', { id: row.id, note: noteDraft }).then((res) => {
-              if (res && res.ok) {
-                setDetail(Object.assign({}, detail, { row: Object.assign({}, row, { notes: noteDraft.trim() }) }))
-                setNoteNotice(opMsg(res))
-                refresh()
-              } else setNoteNotice({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
-            }).catch((e) => setNoteNotice({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
-          }
+          // 备注的写入随「编辑」一起提交（见 submitForm 的 noteChanged），详情页只读 ——
+          // 原先这里那颗 saveNote / noteDraft 随「详细页只能看」一并删除。
           const confirmRemove = () => {
             const row = confirmRow
             setConfirmRow(null)
@@ -381,10 +379,6 @@
             // 请求序号（每次开窗 +1）：两处详情弹窗共用同一份 `detail`，连点两台服务器时
             // 先发的响应可能后到并覆盖后发的那份 —— 序号对不上就丢弃。
             const seq = ++detailSeqRef.current
-            setNoteDraft(row.notes || '')
-            // 换一台服务器 = 换一份备注：上一台的保存回执必须一起清掉，否则新弹窗会顶着
-            // 另一台服务器的红字（成功回执同理）。
-            setNoteNotice(null)
             setDetail({ row, loading: true, error: null, tools: [] })
             apiCall('mcpm-tools', { serverName: row.serverName }).then((res) => {
               if (seq !== detailSeqRef.current) return
@@ -399,7 +393,6 @@
           const closeDetail = () => {
             detailSeqRef.current += 1
             setDetail(null)
-            setNoteNotice(null)
           }
 
           const toggleTool = (row, tool) => {
@@ -721,9 +714,10 @@
                     React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: formModal.headers, placeholder: 'Authorization=Bearer xxx', onChange: setFormField('headers') }))
                 : null,
               // 备注放在表单**最下面**：它是可选项，说的又是"这台怎么用"，不该插在必填的连接参数中间。
-              // 默认不填 = 侧车里不产生条目；只在新增时出现（`mcpm-edit` 不碰侧车，改备注走详情里那枚
-              // 输入框）。上限就是注入段的截断长度 `MCP_NOTE_MAX` —— 写多少模型就能读到多少。
-              formModal.mode === 'edit' ? null : React.createElement('label', { className: 'dsm-field' },
+              // 默认不填 = 侧车里不产生条目。新增与编辑**都出现**（用户 2026-10-18：「备注编辑功能
+              // 应该在编辑页，详细页只能看」）：详情页只读，写备注这一件事只在这里做。
+              // 上限就是注入段的截断长度 `MCP_NOTE_MAX` —— 写多少模型就能读到多少。
+              React.createElement('label', { className: 'dsm-field' },
                 React.createElement('div', { className: 'dsm-budget-meta' },
                   React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.note')),
                   React.createElement('span', { className: 'dsm-char-count' }, String(formModal.note || '').length + ' / ' + MCP_NOTE_MAX)),
@@ -773,26 +767,14 @@
               React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.status')),
               React.createElement('div', { className: 'dsm-feedback' + (detailStatus.tone === 'bad' ? ' dsm-error' : ' dsm-warning') }, detailHint)) : null,
             React.createElement('div', { className: 'dsm-detail-section' },
-              // 标题行只留标题 + 字数计数：备注的上限就是注入段的截断长度（`MCP_NOTE_MAX`）。
-              // 超限标红沿用记忆页描述那套（`dsm-char-over`）—— 服务端不校验备注长度，
-              // 这条之前存的长备注会整条存着、注入时被截掉，得让人看得见超了多少。
-              React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
-                mt('mcp.detail.note'),
-                React.createElement('span', { className: 'dsm-char-count' + (String(noteDraft || '').length > MCP_NOTE_MAX ? ' dsm-char-over' : '') }, String(noteDraft || '').length + ' / ' + MCP_NOTE_MAX)),
-              React.createElement('textarea', { className: 'dsm-control dsm-textarea-sm', value: noteDraft, maxLength: MCP_NOTE_MAX, placeholder: mt('mcp.detail.note.placeholder'), onChange: (ev) => setNoteDraft(ev.target.value) }),
-              // 「保存备注」贴着自己要提交的输入框下方右对齐，且是全弹窗唯一的实心主按钮
-              // （用户 2026-10-15：上一版把它与「刷新工具」都摆成标题行里的 quiet 键，
-              // 两颗一模一样、还落在相邻两节的同一高度 —— 备注输完下意识就点到「刷新
-              // 工具」。两个信号把两颗分开：位置贴着 textarea，提交动作跟着被提交的
-              // 字段走；权重用实心主色，它才是备注区的提交，「刷新工具」保持 quiet
-              // 的工具区动作）。
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || noteDraft.trim() === String(detail.row.notes || ''), onClick: saveNote }, mt('mcp.detail.note.save'))),
-              // 备注保存的回执就地渲染（见 noteNotice 的说明）。文案原样来自服务端：
-              // 成功走 Notice 的 ok 档（右下角浮出的 toast，与全站成功提示同一副长相）；
-              // 被冻结闸拒掉是弹窗内的一条红色 feedback —— 这正是用户要看到的那句话，
-              // 只是位置从页面挪进了弹窗。
-              React.createElement(Notice, { kind: noteNotice && noteNotice.kind, text: noteNotice && noteNotice.text })),
+              // 备注在详情页**只读**（用户 2026-10-18：「mcp 备注编辑功能应该在编辑页，详细页只能看」）：
+              // 详情是"看这台现在配了什么"的地方，要改就走 ⋯ →「编辑」那张表 ——
+              // 写动作只有一个入口，不会出现"改了这里忘了那里"。
+              // 没备注时**也渲染同一个框**（用户 2026-10-18：「没备注也应该有边框，只是显示灰色字
+              // 当前没有备注」）：有备注时是一块正文，没备注时只剩标题、这一节看着像没渲染出来。
+              React.createElement('div', { className: 'dsm-detail-title' }, mt('mcp.detail.note')),
+              React.createElement('p', { className: 'dsm-detail-note' + (detail.row.notes ? '' : ' dsm-detail-note-empty') },
+                detail.row.notes || mt('mcp.detail.note.empty'))),
             React.createElement('div', { className: 'dsm-detail-section' },
               React.createElement('div', { className: 'dsm-detail-title dsm-detail-title-row' },
                 mt('mcp.detail.tools', { count: detail.loading ? '…' : (detail.tools || []).length }),

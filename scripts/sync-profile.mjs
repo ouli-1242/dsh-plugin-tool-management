@@ -91,7 +91,7 @@ const LINKED = ['lib']
  *
  * 加新条目时先问：**构建会不会原地重写它？** 不会 → 放这里。
  */
-const COPIED = ['docs', 'cordis.patch.yml', 'README.md', 'README_EN.md', 'CHANGELOG.md', 'LICENSE', 'screenshots.json', 'package.json']
+const COPIED = ['docs', 'locale', 'cordis.patch.yml', 'README.md', 'README_EN.md', 'CHANGELOG.md', 'LICENSE', 'screenshots.json', 'package.json']
 
 const PLUGIN_DIR = 'dsh-plugin-tool-management'
 const home = process.env.DSH_HOME || join(homedir(), '.dsh')

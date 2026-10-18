@@ -112,6 +112,7 @@
       'tool-table': 'compat.audit.op.toolTable',
       'inject-settings': 'compat.audit.op.injectSettings',
       'scene-settings': 'compat.audit.op.sceneSettings',
+      'sidebar-settings': 'compat.audit.op.sidebarSettings',
       'backups-clean': 'compat.audit.op.backupsClean',
       'history-archive': 'compat.audit.op.sessionArchive',
       'history-unarchive': 'compat.audit.op.sessionUnarchive',
