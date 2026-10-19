@@ -147,6 +147,17 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   /**
    * 把「这次 live 见到的工具」并进一份已知工具表；返回是否有变化。
    *
+   * **live 见到就整体替换那一台**（2026-10-19 用户实测：dhole 升级把 `smart_fetch` 一族改名成
+   * `web_*` 之后，旧名字永远留在表里，详情页每轮都把死名字当「上次运行时」列出来，「刷新工具」
+   * 也刷不掉 —— 它早先只要缓存非空就直接返回，而轮询路径的合并又是只进不出的并集）。理由：
+   * 一台**正在运行**的服务器，它注册进来的工具集就是权威全貌，此刻已经不存在的旧名字留着，
+   * 只会让界面拿"曾经见过"冒充"现在也有"。这份缓存的存在意义是「服务器没跑时的兜底」，
+   * 不是历史博物馆。
+   *
+   * 只在 `live` 里**有这台并且非空**时才替换：这次没见到（服务器没跑 / 还没注册工具）就原样
+   * 保留上一份 —— 否则一台掉线的服务器会被清空，场景档案随即失去挑工具的候选。
+   * 描述按「live 优先、旧的兜底」合并：个别服务器会省略描述，别把上次记下来的那份弄丢。
+   *
    * 抽出来是为了让"要不要写盘"的判断与"锁内真正合并"用**同一个**函数：调用方先在锁外
    * 对本地缓存跑一遍拿到 `changed`（决定要不要进锁），进锁后再对新鲜表跑一遍（那次的结果
    * 才决定落盘）—— 两边口径不一致的话，要么白写要么漏写。
@@ -154,18 +165,17 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   function mergeLiveToolsInto(known: Record<string, KnownMcpTool[]>, live: Record<string, KnownMcpTool[]>): boolean {
     let changed = false
     for (const [server, list] of Object.entries(live)) {
+      if (!list.length) continue
       const prev = known[server] || []
-      const byName = new Map(prev.map((t) => [t.name, t] as const))
-      for (const tool of list) {
-        const old = byName.get(tool.name)
-        if (!old) { byName.set(tool.name, tool); changed = true; continue }
-        if (tool.description && old.description !== tool.description) {
-          byName.set(tool.name, { ...old, description: tool.description })
-          changed = true
-        }
-      }
-      const next = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-      if (next.length !== prev.length) changed = true
+      const prevByName = new Map(prev.map((t) => [t.name, t] as const))
+      const next = list.map((tool) => {
+        const old = prevByName.get(tool.name)
+        const description = tool.description || (old && old.description) || ''
+        return description ? { name: tool.name, description } : { name: tool.name }
+      }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      const same = next.length === prev.length
+        && next.every((t, i) => t.name === prev[i].name && (t.description || '') === (prev[i].description || ''))
+      if (!same) changed = true
       known[server] = next
     }
     return changed

@@ -559,6 +559,32 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return value.slice(0, Math.max(1, limit - 1)).replace(/\s+$/, '') + '…'
   }
 
+  /**
+   * 某台服务器**当前真实注册**的工具 schema（未投影的原始对象）。
+   *
+   * 与 `mcpmList` 那一遍全表扫描同一条取数路径（`tools.schemas()` 的插件级不受限视图），
+   * 只是这里按一台筛。`schemas()` 抛错**不由本函数吞**：`mcpmTools` 要把它翻成 ok:false，
+   * 「刷新工具」按"这次没取到"处理。
+   */
+  async function liveSchemasOf(serverName: string): Promise<any[]> {
+    const prefix = MCP_TOOL_PREFIX + serverName + '__'
+    const schemas = await tools.schemas()
+    return (schemas || []).filter((s: any) => String(s && s.name || '').startsWith(prefix))
+  }
+  /** live schema → 「已知工具」侧车那一行的形状（名字 + 描述；按名字排序，与侧车格式一致）。 */
+  async function liveToolsOf(serverName: string): Promise<KnownMcpTool[]> {
+    const out: KnownMcpTool[] = []
+    const seen = new Set<string>()
+    for (const s of await liveSchemasOf(serverName)) {
+      const rawName = String(s && s.name || '').slice(MCP_TOOL_PREFIX.length + serverName.length + 2)
+      if (!rawName || seen.has(rawName)) continue
+      seen.add(rawName)
+      const desc = typeof s.description === 'string' ? s.description : ''
+      out.push({ name: rawName, ...(desc ? { description: desc } : {}) })
+    }
+    return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  }
+
   // ---------- secret masking (UI view only) ----------
   // Only sensitive-looking keys are masked; `$VAR` / `!!js` references are
   // indirections rather than secrets, so they stay readable. URL query strings
@@ -616,10 +642,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   async function mcpmTools(args: any): Promise<any> {
     const serverName = String(args && args.serverName || '').trim()
     if (!serverName) return { ok: false, error: 'serverName 不能为空' }
-    const prefix = MCP_TOOL_PREFIX + serverName + '__'
     let schemas: any[] = []
     try {
-      schemas = await tools.schemas()
+      schemas = await liveSchemasOf(serverName)
     } catch (e) {
       return { ok: false, error: message(e) }
     }
@@ -629,9 +654,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     const wildcardHere = disabledHere.has('*')
     const toolsList: any[] = []
     for (const s of schemas) {
-      const fullName = String(s && s.name || '')
-      if (!fullName.startsWith(prefix)) continue
-      const rawName = fullName.slice(prefix.length)
+      const rawName = String(s && s.name || '').slice(MCP_TOOL_PREFIX.length + serverName.length + 2)
+      if (!rawName) continue
       const params: any[] = []
       const props = s.parameters && typeof s.parameters === 'object' ? s.parameters.properties : null
       const requiredSet = new Set<string>()
@@ -690,8 +714,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
    * 临时启动服务器以枚举工具（v0.8.1）：从未运行过的服务器在 schemas() 与「已知工具」
    * 缓存里都没有工具名，场景档案勾选器对它一无所知。这里**临时**把它启用（写补丁），
    * 轮询等它的工具注册（npx 冷启动要下载，上限 TOOLS_REFRESH_TIMEOUT_MS），拿到名单后就
-   * **恢复原启停状态**—— 用户环境的服务器开关不受影响。已有已知工具时直接返回现有清单，
-   * 不做任何改动。
+   * **恢复原启停状态**—— 用户环境的服务器开关不受影响。
+   *
+   * 2026-10-19 起它同时是**「刷新工具」的本义**：服务器此刻正在跑，就用 live 名单**整体替换**
+   * 缓存里那一台的旧名单 —— 服务器升级改名（dhole 的 `smart_fetch` → `web_read`）之后旧名字
+   * 必须消失。原先这里只要缓存非空就直接返回，按钮等于死的；而轮询路径的合并又是只进不出
+   * 的并集，于是旧工具永远挂着「上次运行时」的标签赖在详情页里。服务器没在跑时仍退回缓存
+   * （没有 live 可看，临时启动一台停着的服务器不是"刷新"该有的代价）。
    */
   // npx 首次启动要下载包，慢的那次可能要好几秒；给 30 秒上限，超了就如实报"没等到"。
   const TOOLS_REFRESH_TIMEOUT_MS = 30_000
@@ -700,6 +729,20 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     if (!serverName) return { ok: false, error: 'serverName 不能为空' }
     const existing = await mcpmTools({ serverName })
     if (existing && existing.ok === false) return existing
+    // 服务器**此刻正在跑**：live 名单整体替换缓存里那一台（旧名字随之移除），再把最新清单
+    // 返回给界面。这是"刷新工具"该做的事 —— 见上面的函数文档。
+    let live: KnownMcpTool[] = []
+    try { live = await liveToolsOf(serverName) } catch { /* 取不到 live 就当没在跑，走下面的退路 */ }
+    if (live.length) {
+      try {
+        // 读-改-写整段在写锁内（审查 P2-15）：轮询路径也在回写同一份侧车，锁外两步会互相覆盖。
+        // 合并口径与轮询路径同源（`mergeLiveToolsInto`：live 优先、旧的兜底描述）。
+        await mutateKnownMcpTools((cache) => mergeLiveToolsInto(cache, { [serverName]: live }))
+      } catch { /* 缓存写失败不影响本次返回 */ }
+      void mcpStateCatalog.refresh().catch(() => { /* 刷新失败不影响本次结果 */ })
+      return await mcpmTools({ serverName })
+    }
+    // 没在跑：缓存里已有名单就不动它（临时启动一台停着的服务器不是"刷新"该有的代价）。
     if (existing && (existing.tools || []).length) return existing
     const list = await mcpmListView()
     const row = ((list && list.rows) || []).find((r: any) => String(r.serverName) === serverName)
@@ -732,25 +775,20 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
           const t: any = await mcpmTools({ serverName })
           if (t && t.ok && (t.tools || []).length) {
             // 记进「已知工具」缓存：以后未运行时场景档案也能列出（名字 + 这次的描述）。
-            const known = t.tools
-              .filter((x: any) => String(x && x.name))
-              .map((x: any) => ({ name: String(x.name), ...(typeof x.description === 'string' && x.description ? { description: x.description } : {}) }))
+            // 只记 **live 那一份**：`mcpmTools` 的返回里混着缓存中的旧名字（服务器升级改名后
+            // 的死者），拿它回写等于把死名字又写回去 —— 2026-10-19 用户实测的"刷新了还是旧
+            // 工具"正是这条。合并口径与轮询路径同源（live 见到即整体替换那一台）。
+            let known: KnownMcpTool[] = []
+            try { known = await liveToolsOf(serverName) } catch { /* 取不到 live 描述：沿用上面那份清单 */ }
             if (known.length) {
               try {
                 // 读-改-写整段在写锁内（审查 P2-15）：轮询路径也在回写同一份侧车，
-                // 锁外两步会互相覆盖。合并规则（保留旧的描述、新的描述优先）与轮询路径同源。
-                await mutateKnownMcpTools((cache) => {
-                  const byName = new Map((cache[serverName] || []).map((item) => [item.name, item] as const))
-                  for (const item of known) {
-                    const old = byName.get(item.name)
-                    byName.set(item.name, old && old.description && !item.description ? old : { ...old, ...item })
-                  }
-                  cache[serverName] = [...byName.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-                  return true
-                })
+                // 锁外两步会互相覆盖。
+                await mutateKnownMcpTools((cache) => mergeLiveToolsInto(cache, { [serverName]: known }))
               } catch { /* 缓存写失败不影响本次返回 */ }
-            }
-            result = t
+              // 缓存已整体替换 → 重新取一次再返回：这次清单里不再带旧名字（`t` 里还混着）。
+              try { result = await mcpmTools({ serverName }) } catch { result = t }
+            } else result = t
             break
           }
           if (Date.now() >= deadline) {
@@ -957,8 +995,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       // `knownCache` —— 回写会把这次 live 见到的并进去，而这次 live 见到的本来就已经算在
       // liveToolCounts 里了，不需要它来充当"曾经"。
       for (const [server, list] of Object.entries(knownCache)) knownToolCounts[server] = list.length
-      // 回写「已知工具」：live 见到的名字与描述并入缓存（有变化才写盘，读路径上的 best-effort）。
-      // 名字集合变化，或某个已知工具这次拿到了描述而缓存里没有 → 都算变化。
+      // 回写「已知工具」：这次 live 见到几台就整体替换这几台（服务器升级改名后旧名字随之
+      // 消失，2026-10-19 用户实测）；没见到的服务器原样保留上一份 —— 那是它没跑时的兜底。
       // 先在本地这份上跑一遍只为**判断要不要写盘**；真正落盘的那次合并发生在锁内、对象是
       // 刚读出来的新鲜表（审查 P2-15：临时启动路径也在写同一份侧车，锁外两步会互相覆盖）。
       const cacheChanged = mergeLiveToolsInto(knownCache, liveTools)
