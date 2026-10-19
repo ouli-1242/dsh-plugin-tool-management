@@ -346,7 +346,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
     // 面板读的是**这一段对话**的账本；会话已经被回收了就没有账本可读，全零 + `hasAgent:false`。
     const ledger = agent === undefined ? emptyLedger() : ledgerFor(agent)
     const visible = agent === undefined
-      ? new Map<InjectDomainKey, { text: string; form: string; official: boolean }>()
+      ? new Map<InjectDomainKey, { text: string; body?: string; form: string; official: boolean }>()
       : newestDomainTexts(agent, LIVE_KINDS)
     const labelOf = new Map<InjectDomainKey, string>(deps.domains().map((domain) => [domain.key, domain.label] as const))
     const rows: LiveInjectionDomain[] = INJECT_DOMAIN_KEYS.map((key) => {
@@ -520,13 +520,22 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       const toolHidden = hiddenNow === null ? () => false : (name: string) => hiddenNow.has(name)
       for (const section of sections) {
         published.add(section.key)
-        // `current !== undefined` = 该域在可见表面上已有一条更早的己方消息 → 这次是**替换**，
+        // `current !== undefined` = 该域在可见表面上有一条更早的己方**内容**消息 → 这次是**替换**，
         // 界面上的动作标签据此从「已载入」变成「已更新」（见 domainMessage 的 baseline/changes）。
         // 这个判据同时决定框架里那句 `Supersedes …` 发不发（2026-10-18：第一份没有旧内容可取代）。
+        // 「已清空」通知不会落进 `body`（扫描侧把它记成 `cleared` 而不是内容），所以 `current`
+        // 的 `body` 只可能是**内容**指纹；`cleared` 另管"要不要补发通知"，与本判据无关。
         const current = visible.get(section.key)
         const replacing = current !== undefined
-        const text = renderDomainText(section, toolHidden, replacing)
-        if (replacing && current.text === text) continue
+        const rendered = renderDomainText(section, toolHidden, replacing)
+        // 比对**域正文**而不是整条消息（2026-10-19 修）：框架里 `Supersedes …` 只在替换时发，
+        // 首帧没有它。比整条会把"这是本会话第一份"误判成内容变化 → 每个域在第二步多重发一次
+        // （用户实测：场景 / 记忆 / MCP / 子智能体每轮重发）。正文一个字没变就不发 ——
+        // `replacing` 只决定框架长什么样，不影响该不该发。
+        // `body === undefined` 的那一支留给官方载体与旧版本消息（它们不带 `body` 字段）：
+        // 无从比起时按"内容变了"处理，宁可多发一条也不能让模型拿着过期正文。
+        if (current !== undefined && (current.body === undefined || current.body === rendered.body)) continue
+        const text = rendered.text
         let files: readonly InjectSourceFile[] | undefined
         try { files = domainOf.get(section.key)?.files?.() } catch { files = undefined }
         additions.push(domainMessage(section, text, files, replacing))
@@ -541,10 +550,14 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       for (const key of INJECT_DOMAIN_KEYS) {
         if (published.has(key)) continue
         if (failedKeys.has(key)) continue
+        // 该域在表面上"曾经有内容、此刻没有" → 发一条「已清空」。两个判据缺一不可：
+        //   · `previous === undefined`：从没注入过内容的域什么都不用说（没有旧目录要作废）；
+        //   · `previous.cleared`：**已经**通知过清空了（最新一条就是通知）→ 不再叠发。
+        // 后者不能省：省掉之后每个空域每轮都会补发一条「Cleared」（2026-10-19 用户实测
+        // 场景 / MCP / 子智能体三轮各三条）。
         const previous = visible.get(key)
-        if (previous === undefined) continue
+        if (previous === undefined || previous.cleared) continue
         const label = labelOf.get(key) ?? key
-        if (previous.form === 'notice') continue
         additions.push(clearedMessage(key, label, lastReasons[key]))
         appended.push(key)
         clearedKeys.add(key)
@@ -563,7 +576,10 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       try {
         if (typeof agent === 'object') {
           const liveKeys = new Set<InjectDomainKey>()
-          for (const [key, entry] of newestDomainTexts(agent, LIVE_KINDS)) if (entry.form !== 'notice') liveKeys.add(key)
+          // `cleared` 的域正文**不在**上下文里（最新一条是「已清空」通知）—— 它带着更早那条
+          // 内容的指纹，只是为了比对，不能当成"正文正在眼前"（否则采纳统计会把"调了但正文
+          // 不在"记成"调了而且看到了"）。
+          for (const [key, entry] of newestDomainTexts(agent, LIVE_KINDS)) if (!entry.cleared) liveKeys.add(key)
           for (const key of injectedKeys) liveKeys.add(key)
           for (const key of clearedKeys) liveKeys.delete(key)
           liveDomainsByAgent.set(agent as object, liveKeys)
@@ -636,7 +652,12 @@ function domainMessage(
   files?: readonly InjectSourceFile[],
   replacing?: boolean,
 ): unknown {
-  const source: Record<string, unknown> = { kind: INJECT_KIND_OF[section.key], form: section.form }
+  // `body` 是**给扫描侧用的域正文指纹**（2026-10-19）：下一轮 `newestDomainTexts` 要从会话
+  // 表面认出"这条域的内容变没变"，而整条正文里有按场合发的框架行（`Supersedes …` 只在替换时
+  // 发），比整条会把首帧那一差异误判成内容变化 → 每轮重发。把域原文放进 source，扫描侧
+  // 读它即可，不必去剥框架（剥框架要认标题/how/boundary 三行的起止，随时会因改排版而错）。
+  // 只占 source 一个字段，模型侧只看 content，不受影响。
+  const source: Record<string, unknown> = { kind: INJECT_KIND_OF[section.key], form: section.form, body: section.text }
   if (section.form === 'snapshot') source.sections = [{ name: section.name, text: section.text }]
   if (section.form === 'instructions' && files !== undefined && files.length > 0) {
     if (replacing !== true) source.baseline = true

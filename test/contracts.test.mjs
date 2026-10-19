@@ -28,6 +28,7 @@ import {
   selectInjections,
   subagentDepthOf,
 } from '../lib/context-inject.js'
+import { newestDomainTexts, PLUGIN_KINDS } from '../lib/context-inject-surface.js'
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
 import { parseModeState } from '../lib/memories/service.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
@@ -241,36 +242,48 @@ test('子代理结果只取 text 块：思考绝不进正文', () => {
   assert.equal(textOfBlocks([null, 42, { type: 'text' }], 'text'), '')
 })
 
-test('MCP 段不拿缓存冒充现状：连不上的 server 不得被报成可用', () => {
+test('MCP 段只列此刻真有工具的 server：缓存不得冒充现状，掉线档一律不进', () => {
   // 关键不变量：`toolCount`（含「已知工具」缓存）在服务器连不上时依然 > 0，所以它
   // **不能**用来判可用性 —— 判据必须是 `liveEnabledToolCount`（只来自真实 schema）。
   // 破掉的后果是静默的：段里说"可用"、模型照着去调 `mcp__X__*`，而那个工具根本没注册。
+  //
+  // 2026-10-19 用户裁定收紧：掉线的 server（曾经连上过、当前一个工具都没注册）**整台不进段** ——
+  // 「没连接的 mcp 注入上下文是垃圾信息，只有真启动的才需要注入上下文」。所以这里从原来的
+  // 「标 not connected now 也要列」改成「连名都不出现」。代价（见 state-section.ts 文件头）：
+  // 用户写在那台 server 上的备注也没有载体了，模型看不到「A 不可用时改用 B」这类提示。
   const offline = {
     serverName: 'github', disabled: false,
     toolCount: 26, enabledToolCount: 26,      // 缓存算出来的两个数：依然是 26
     liveToolCount: 0, liveEnabledToolCount: 0, // 真实注册：一个都没有
-    knownToolCount: 26,                        // 但曾经连上过
+    knownToolCount: 26,                        // 曾经连上过 —— 现在也不再构成列出的理由
   }
-  const out = renderMcpStateSection([offline])
-  // 可用档现在是**裸名**（不带括号），所以"被报成可用"的形态就是 `- **github**` 单独一行。
-  assert.ok(!/^- \*\*github\*\*$/m.test(out), '不得以无状态标记的形态出现（那会被读成可用）')
-  assert.ok(out.includes('not connected now'), '必须标出它现在不可用')
-  assert.ok(out.includes('github'), '曾经连上过的仍要列出来 —— 那是"曾经成功过"的证据')
-  // 原来这里还断言「上次连上时的 26 个工具要留着」；2026-09-23 起工具数不再注入
-  // （模型不能凭一个数字列举工具名，而 17 B/台 × 每轮是白付的），所以改成上一条。
-  // 分档判据**没变**，仍然是 `liveEnabledToolCount`（见 state-section.ts）。
+  assert.equal(renderMcpStateSection([offline]), '', '掉线的 server 不得进段（含名与备注）')
 
-  // 从未连上过（缓存也空）→ 不列：一直没成功过，不该反复打扰。
+  // 同一条不变量放在混合清单上：一台可用 + 一台掉线 → 段里只有可用的那一台。
+  // 单服务器清单证明不了"被筛掉"（整段为空也可能是别的理由），混合才证明是分档在起作用。
+  const mixed = renderMcpStateSection([
+    { serverName: 'live', disabled: false, liveToolCount: 5, liveEnabledToolCount: 3, knownToolCount: 5 },
+    offline,
+  ])
+  assert.ok(mixed.includes('live'), '可用的要列出来')
+  assert.ok(!mixed.includes('github'), '掉线的不得跟着混进来')
+
+  // 从未连上过（缓存也空）→ 同样不列：与掉线同一档处理（2026-10-19 起两路合一）。
   const never = { serverName: 'never', disabled: false, liveToolCount: 0, liveEnabledToolCount: 0, knownToolCount: 0, toolCount: 0, enabledToolCount: 0 }
   assert.equal(renderMcpStateSection([never]), '')
 
-  // 用户的选择不是故障：补丁停用、工具全被停用 → 都不列（与既定口径一致）。
+  // 用户的选择不是故障：补丁停用 → 不列。
   assert.equal(renderMcpStateSection([{ serverName: 'off', disabled: true, liveToolCount: 0, liveEnabledToolCount: 0, knownToolCount: 9 }]), '')
-  assert.equal(renderMcpStateSection([{ serverName: 'alloff', disabled: false, liveToolCount: 5, liveEnabledToolCount: 0, knownToolCount: 5 }]), '')
+
+  // 工具全被停用 → 列出来并标注（server 此刻在跑，只是工具被关掉；不是"缺失"）。
+  // 这是 2026-10-18 起保留的第二档，也是掉线档删除后**唯一**带状态标记的一档。
+  const alloff = renderMcpStateSection([{ serverName: 'alloff', disabled: false, liveToolCount: 5, liveEnabledToolCount: 0, knownToolCount: 5 }])
+  assert.ok(alloff.includes('alloff'), '工具全停的 server 仍要列出来')
+  assert.ok(alloff.includes('no tools enabled here'), '必须标注成"工具全停"而不是裸名')
 
   // 真可用 → 正常列出，且**不带任何状态标记**（能进段的都是可用的，标状态是废话）。
-  // 判据依然是 `liveEnabledToolCount > 0`：上一条里 `alloff` 那台（live 5 / enabled 0）
-  // 被排除在外，就是这条不变量在起作用 —— 数字不显示了，分档仍然只认真值。
+  // 判据依然是 `liveEnabledToolCount > 0`：上面 `alloff` 那台（live 5 / enabled 0）
+  // 被标成工具全停而不是裸名，就是这条不变量在起作用 —— 数字不显示了，分档仍然只认真值。
   const ok = renderMcpStateSection([{ serverName: 'ok', disabled: false, liveToolCount: 5, liveEnabledToolCount: 3, knownToolCount: 5 }])
   assert.ok(ok.includes('- **ok**'), '真可用的要列出来')
   assert.ok(!ok.includes('未连上'), '真可用的不得标成不可用')
@@ -807,8 +820,8 @@ test('工具描述里引用的注入板块名必须真实存在（跨模块引�
   // 假阴性（真有引用漏改也不报）。
   const titles = new Set(
     INJECT_DOMAIN_KEYS.map((key) => {
-      const text = renderDomainText({ key, label: key, form: 'snapshot', name: 'x', text: '' })
-      const line = text.split('\n').find((l) => l.startsWith('# '))
+      const rendered = renderDomainText({ key, label: key, form: 'snapshot', name: 'x', text: '' })
+      const line = rendered.text.split('\n').find((l) => l.startsWith('# '))
       return line === undefined ? '' : line.slice(2)
     }),
   )
@@ -1381,6 +1394,100 @@ test('注入域取数失败 → 通道报 error 且该域不进「已清空」�
   selectInjections(emptyDomains, DEFAULT_INJECT_SETTINGS, undefined, {}, (key) => noneFailed.add(key))
   assert.equal(noneFailed.size, 0, '空串不算失败（否则全新用户每轮都报琥珀）')
   assert.equal(explainInjections(emptyDomains, DEFAULT_INJECT_SETTINGS, undefined, {}, noneFailed).memory, 'empty')
+})
+
+test('「已清空」通知不占内容键位：它之后内容恢复的域必须能重发', async () => {
+  // 钉的是 2026-10-19 修的那个 bug：`form === 'notice'` 的消息曾占着 `newestDomainTexts` 的键位，
+  // 于是同域恢复内容时扫描到的仍是那条通知（`body` 恒为 undefined）→ 判据永远落在"内容变了"
+  // 那一侧 → 该域再也不注入（用户实测：退出场景再进「测试」场景，场景 / MCP / 技能 / 子智能体
+  // 四条一条都没重发）。破了不会有任何报错，只是静默地少发，所以必须钉。
+  const INJECT_KIND = { scene: 'scene-manager-catalog' }
+  // 假会话：表面 = seq 0（内容）→ seq 1（已清空通知）→ seq 2（内容恢复）。
+  // 自新到旧扫描，正确行为是返回 seq 2 的正文（跳过 seq 1 的通知）。
+  const events = new Map([
+    [0, { type: 'user/message', data: { content: [{ type: 'text', text: 'first-body' }], source: { kind: INJECT_KIND.scene, form: 'snapshot', body: 'first-body' } } }],
+    [1, { type: 'user/message', data: { content: [{ type: 'text', text: 'cleared' }], source: { kind: INJECT_KIND.scene, form: 'notice' } } }],
+    [2, { type: 'user/message', data: { content: [{ type: 'text', text: 'restored-body' }], source: { kind: INJECT_KIND.scene, form: 'snapshot', body: 'restored-body' } } }],
+  ])
+  const agent = {
+    session: {
+      seq: 3,
+      surface: { nodes: [0, 1, 2] },
+      eventAt: (seq) => events.get(Number(seq)),
+    },
+  }
+  const out = newestDomainTexts(agent, PLUGIN_KINDS)
+  const entry = out.get('scene')
+  assert.ok(entry !== undefined, '内容恢复的域必须被扫到')
+  assert.equal(entry.body, 'restored-body', '必须返回最新那条**内容**消息的 body，而不是被通知挡在后面')
+  assert.notEqual(entry.form, 'notice', '返回的不能是通知形态')
+  assert.equal(entry.cleared, false, '通知之后又有内容 = 已经不再是「已清空」')
+
+  // 反向（同一件事的另一半，2026-10-19 用户实测的第二个症状）：**最新一条就是通知**时，
+  // `cleared` 必须为真，否则「该不该补发通知」没有依据 → 每个空域每轮都补发一条「Cleared」。
+  // 而 `body` 仍要给出更早那条内容的指纹（内容恢复时靠它判"变没变"）。
+  const noticeAgent = {
+    session: { seq: 2, surface: { nodes: [0, 1] }, eventAt: (seq) => events.get(Number(seq)) },
+  }
+  const clearedEntry = newestDomainTexts(noticeAgent, PLUGIN_KINDS).get('scene')
+  assert.ok(clearedEntry !== undefined)
+  assert.equal(clearedEntry.cleared, true, '最新一条是通知 → 必须标记为已清空（否则每轮补发）')
+  assert.equal(clearedEntry.body, 'first-body', '已清空仍要带更早那条内容的指纹，供内容恢复时比对')
+})
+
+test('注入去重端到端：内容没变就不发，变了才发（判据行本身不能丢）', async () => {
+  // 上一条钉的是扫描侧的判据，这一条钉**发送侧的判据**（`createContextInjector` 的 pre-step）。
+  // 为什么必须端到端：2026-10-19 的一次注释编辑把 `if (current !== undefined && current.body ===
+  // rendered.body) continue` 整行删掉了，纯函数测试全绿（扫描侧没坏），而真实会话里六个域每一轮
+  // 全量重发 —— 用户实测「每次对话都注入上下文」。只有驱动真监听器才拦得住这种丢失。
+  //
+  // 假会话：一条 surface 记录插件自己上一轮发的注入消息，本步 domains 给出同样的正文。
+  const sent = []
+  const agent = { session: { seq: 5, surface: { nodes: [0] }, eventAt: () => injectedEvent } }
+  const injectedEvent = {
+    type: 'user/message',
+    data: {
+      content: [{ type: 'text', text: '上一轮的整条消息' }],
+      source: { kind: 'mcp-manager-catalog', form: 'catalog', body: '上一轮的域正文' },
+    },
+  }
+  const domains = [{ key: 'mcp', name: 'c', label: 'MCP', form: 'catalog', text: () => '上一轮的域正文' }]
+  let listener = null
+  const ctx = { on: (_name, fn) => { listener = fn; return () => {} } }
+  const injector = createContextInjector({
+    ctx,
+    domains: () => domains,
+    settings: () => DEFAULT_INJECT_SETTINGS,
+    factsFor: async () => undefined,
+  })
+  assert.equal(typeof listener, 'function', 'pre-step 监听必须注册上')
+  // 第一步：表面上已有同域同正文的注入 → 一条都不该新增。
+  const decision = { kind: 'enter', messages: [] }
+  const out = await listener({ agent, step: 2 }, async () => decision)
+  const appended = out.messages.filter((m) => (m.source || {}).kind === 'mcp-manager-catalog')
+  assert.equal(appended.length, 0, '内容一个字没变就不该再发（每轮重发就是这里失守')
+  injector.dispose()
+
+  // 同一套驱动方式，另一半：该域这一轮**没有内容**，而表面上最新一条已经是「已清空」通知
+  // → 一条都不该新增。这一条守的是"每个空域每轮补发一条 Cleared"（2026-10-19 用户实测）。
+  let listener2 = null
+  const clearedEvent = {
+    type: 'user/message',
+    data: { content: [{ type: 'text', text: '通知' }], source: { kind: 'mcp-manager-catalog', form: 'notice' } },
+  }
+  const clearedAgent = { session: { seq: 3, surface: { nodes: [0] }, eventAt: () => clearedEvent } }
+  const emptyDomains = [{ key: 'mcp', name: 'c', label: 'MCP', form: 'catalog', text: () => '' }]
+  const ctx2 = { on: (_name, fn) => { listener2 = fn; return () => {} } }
+  const injector2 = createContextInjector({
+    ctx: ctx2,
+    domains: () => emptyDomains,
+    settings: () => DEFAULT_INJECT_SETTINGS,
+    factsFor: async () => undefined,
+  })
+  const out2 = await listener2({ agent: clearedAgent, step: 2 }, async () => ({ kind: 'enter', messages: [] }))
+  const again = out2.messages.filter((m) => (m.source || {}).kind === 'mcp-manager-catalog')
+  assert.equal(again.length, 0, '已经是「已清空」的域不该每轮再补一条通知')
+  injector2.dispose()
 })
 
 test('URL 打码必须覆盖 userinfo / 片段，且打码值在任何写路径都进不去补丁', () => {

@@ -96,7 +96,7 @@ import {
   sceneOf, sceneOrderOf, signatureOfIndex,
 } from './projection.js'
 // 索引 IO 组与发现/快照组（2026-09-19 抽出）。
-import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, sceneRecordOf, normalizeScenePromptId, pathExists, isAbsentError } from './index-io.js'
+import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, repairFromQuarantine, sceneRecordOf, normalizeScenePromptId, pathExists, isAbsentError } from './index-io.js'
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
 import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
 import type { ParsedSkillDoc, DiscoveredEntry, Snapshot } from './snapshot.js'
@@ -817,6 +817,27 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     'scene-trash-restore': (args) => runWrite(() => sceneOps.sceneTrashRestore(args || {})),
     'scene-trash-delete': (args) => runWrite(() => sceneOps.sceneTrashDelete(args || {})),
     'rules-rebind-prompt': (args) => runWrite(() => sceneOps.rulesRebindPrompt(args || {})),
+
+    // 一键修复（0.21.2）：索引被隔离后唯一的出口。它不"改"状态，是把已被改名移走的
+    // 索引装回原位，所以**不走 runWrite / 也不进普通写队列之外的保护** —— 但必须入队：
+    // 隔离期间其它 op 全被 writeIndex 拒着，队列里可能正排着几个失败的写，让修复与它们
+    // 串行比让它在中间插入更安全（修完的那一刻，队列前面的失败项已经各自报过错）。
+    'memories-index-repair': () => enqueueMutation(async () => {
+      const repaired = await repairFromQuarantine(stateDir)
+      if (repaired === null) {
+        return {
+          ok: false,
+          error: '修复失败：隔离留存的索引文件仍无法解析，已保留现场。'
+            + '请手工检查 .corrupt-* 文件后重启 DSH，或删除它与隔离标记从零开始。',
+        }
+      }
+      return {
+        ok: true,
+        message: '已修复：记忆索引已从隔离留存文件恢复，写入保护已解除。',
+        scenes: Object.keys(repaired.scenes || {}).length,
+        rules: Object.keys(repaired.rules || {}).length,
+      }
+    }),
   }
 
   const service: MemoriesService = {

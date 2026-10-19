@@ -32,6 +32,7 @@ import {
   spliceRanges, splitLines, type ManagedRow,
 } from './patch-yaml.js'
 import { describeMaskedOutcome, maskSecretValue, maskUrlQuery, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './secret-guard.js'
+import { clearMcpRestartMarker, writeMcpRestartMarker } from './restart-marker.js'
 
 /** 本文件需要的外部能力（全部显式传入，不再靠闭包捕获）。 */
 export interface McpManagerDeps {
@@ -89,6 +90,8 @@ export interface McpManagerDeps {
     /** 场景锁定态（场景名 → 是否被锁）；缺席（旧装配）时按"没有场景被锁"处理。 */
     sceneLocks?(): Promise<Record<string, boolean>>
   }
+  /** 本次插件启动的 id（BOOT_ID）。重启标记用它区分「同一轮启动的重放」与「上一个进程」。 */
+  bootId(): string
 }
 
 /** 本文件对外暴露的出口（12 项）。 */
@@ -139,6 +142,15 @@ export interface McpManager {
   detachAgent(agent: unknown): void
   /** 卸载清理：清掉重排定时器与每个 agent 上的限制。 */
   dispose(): void
+  /**
+   * 某个补丁 id 的**当前生效**停用值（读盘，不走缓存）。
+   *
+   * 为什么单独开一个出口：MCP 重启中断收尾（0.21.2）必须确认「阶段 1 留下的强制停用
+   * 现在还是不是生效值」才敢自动写回 —— 拿缓存值判断会把「用户刚改过」当成「没人动」。
+   */
+  isRowDisabledPublic(id: string, level: 'global' | 'project'): Promise<boolean>
+  /** 从补丁原文取某个 id 的生效停用值；解析不了返回 null（不猜）。 */
+  effectiveDisabledIn(content: string, id: string): boolean | null
 }
 
 // ── 宿主服务的最小结构面（本插件只碰这几个方法；完整契约在对应 @deepseek-ai 包）──
@@ -1318,6 +1330,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     // pre-restart state is captured and restored.
     const wasDisabled = await isRowDisabled(id, level)
     const warnings: string[] = []
+    // 0.21.2：先落"重启进行中"标记。它存在的唯一理由是给**崩溃后**的收尾留线索 ——
+    // 补丁里阶段 1 留下的 disabled:true 与「用户主动停用」完全同形，没有这个标记就再也
+    // 分不出来（进程在 ~11s 等待窗口里被杀 → 服务器永久停在停用态、无任何界面能解释）。
+    // best-effort：写失败只 warn，重启照常进行。
+    await writeMcpRestartMarker({ server: id, level, phase: 1, pid: process.pid, bootId: deps.bootId() })
     // Phase 1 write (short lock): force-disable. Stale disable overrides are
     // cleared first so duplicate blocks never accumulate.
     await withWriteLock(async () => {
@@ -1340,6 +1357,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       }
       await wait(1000)
     } finally {
+      // 阶段 2 也标一下：收尾方（启动对账）据此知道"写回走到一半"，恢复时要重新读有效状态
+      // 而不是照抄快照。与阶段 1 同一个理由：这段时间里被杀同样看不出状态。
+      await writeMcpRestartMarker({ server: id, level, phase: 2, pid: process.pid, bootId: deps.bootId() })
       // Phase 2 write (short lock): restore the pre-restart state. The polling
       // waits deliberately run OUTSIDE the write lock — holding the global
       // write lock for up to ~11s stalled every other write op.
@@ -1377,6 +1397,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         if (!on) warnings.push(`loader 未在 ${LOADER_STATE_WAIT_MS / 1000} 秒内重新启用该服务`)
       }
     } else await wait(1500)
+    // 走完了（含恢复失败那条 catch 之后）—— 清理"重启进行中"标记。
+    // **恢复失败也清**：那时补丁里的停用态要么是用户显式选择（护栏那一支）、要么已经是
+    // 恢复不动的既成事实，留着标记只会让下一次启动为一个无法自动处理的现场反复报警。
+    // 真正的收尾信号是上面那条 warning（已经回给界面了）。
+    await clearMcpRestartMarker()
     return warnings.length ? { ok: true, warning: warnings.join('；') } : { ok: true }
   }
 
@@ -1813,5 +1838,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     attachAgent,
     detachAgent,
     dispose,
+    // 0.21.2：重启中断收尾用的两个读口。isRowDisabled 每次重新读盘（不走缓存）——
+    // 收尾要判断「阶段 1 的强制停用现在还是不是生效值」，缓存值会把"用户刚改过"读成"没人动"。
+    isRowDisabledPublic: isRowDisabled,
+    effectiveDisabledIn: (content: string, id: string) => {
+      try { return effectiveDisabledIn(content, id) } catch { return null }
+    },
   }
 }

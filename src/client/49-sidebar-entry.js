@@ -17,9 +17,17 @@
         // 摆在那三行下面比插在插件与市场之间更像话。
         const SIDEBAR_ENTRY_ORDER = 20
 
-        /** 侧栏入口打开的那一页：外层只负责滚动与留白，内容仍是 ToolsSection 本身。 */
+        /**
+         * 侧栏入口打开的那一页：外层只负责滚动，内层负责留白，内容仍是 ToolsSection 本身。
+         *
+         * ⚠️ 留白必须落在**内层**：`.dsm-tabs-shell` 是 position:sticky，它的粘附基准是
+         * 滚动容器的内容盒 —— 留白留在滚动容器（`.dsm-panel`）上，页签只能粘在内容盒顶端，
+         * 视口顶部到页签之间就露出一条滚过去的内容（用户 2026-10-19：内容一长页签浮在半空）。
+         * 留白挪到内层后，页签粘到滚动容器顶边，上下都不再透内容。
+         */
         function SidebarToolsPage() {
-          return React.createElement('div', { className: 'dsm-panel' }, React.createElement(ToolsSection))
+          return React.createElement('div', { className: 'dsm-panel' },
+            React.createElement('div', { className: 'dsm-panel-body' }, React.createElement(ToolsSection)))
         }
 
         /**

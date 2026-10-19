@@ -146,13 +146,32 @@ function segmentDiff(key: string, beforeValue: any, afterValue: any): { text: st
  *
  * 探测不到 / 什么都没做（`unchanged`）就不占行：那两种情况下文件确实没变，
  * 说一句"没变"只是噪音。
+ *
+ * `baselineError`（0.21.2 补齐）：切进去了**但退不回来** —— 场景提示词已写进 AGENTS.md，
+ * 而"进场景之前那份基线"没能落盘。此前这一支在客户端有（45-scenes.js 的
+ * `scenes.agents.note.baselineLost`）、工具回执里没有，于是模型侧唯一能看到的版本是
+ * "切成功了"。它比 `error` 更该说：文件已经改了，只是没有退路。
+ *
+ * `snapshotMissing`（0.21.2 补齐）：**模式快照丢了**，退出场景只能落盘模式位、运行时
+ * （MCP / 技能 / 人设 / 工具表）回不来。客户端有计划卡上的同款文案
+ * （`scenes.exit.noSnapshot`），工具回执此前同样没有 —— 模型只能看到"已退出"。
  */
-function agentsMdNote(sync: any): string {
+function agentsMdNote(sync: any, action?: string): string {
   if (!sync || typeof sync !== 'object') return ''
-  if (sync.error) return '\nWARN: the global baseline (AGENTS.md) was not synced: ' + String(sync.error)
-  if (sync.applied) return '\nAGENTS.md <- the scene-bound preset "' + String(sync.applied) + '"'
-  if (sync.restored === true) return '\nAGENTS.md <- restored the pre-scene baseline'
-  return ''
+  const notes: string[] = []
+  if (sync.error) notes.push('\nWARN: the global baseline (AGENTS.md) was not synced: ' + String(sync.error))
+  if (sync.applied) notes.push('\nAGENTS.md <- the scene-bound preset "' + String(sync.applied) + '"')
+  if (sync.restored === true) notes.push('\nAGENTS.md <- restored the pre-scene baseline')
+  if (sync.baselineError) {
+    notes.push('\nWARN: AGENTS.md was switched, but the pre-scene baseline could not be saved ('
+      + String(sync.baselineError) + ') — leaving this scene will NOT restore your previous global prompt.'
+      + ' The multi-generation backups under __last-applied__/AGENTS.md.bak-* still hold earlier copies.')
+  }
+  if (action === 'exit' && sync.snapshotMissing === true) {
+    notes.push('\nWARN: no mode snapshot was recorded for the scene that was left — the runtime'
+      + ' (MCP servers / skills / personas / tool table) was NOT rolled back; only the mode bit was cleared.')
+  }
+  return notes.join('')
 }
 
 export function buildSceneTools(deps: SceneToolDeps): void {
@@ -296,7 +315,12 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       if (Array.isArray(mode.stale) && mode.stale.length) {
         parts.push('dropped keys this machine does not have: ' + mode.stale.join(', '))
       }
-      return head + (parts.length ? ' · ' + parts.join(' · ') : '') + agentsMdNote(act.agentsMd) +
+      // `snapshotMissing` 从模式侧带过来：`act` 是启用集合那次调用的产物，本身没有它，
+      // 而"退出时快照丢了"这件事只有模式引擎知道（见 archive-engine.ts 的 scene-mode-set）。
+      // 进 / 退两个方向都报 —— 进场景时它说的是"你即将进入一个退不出来的场景"。
+      const snapshotMissing = mode && mode.exit && mode.exit.snapshotMissing === true
+      return head + (parts.length ? ' · ' + parts.join(' · ') : '')
+        + agentsMdNote(act.agentsMd, snapshotMissing ? action : undefined) +
         (noop ? '\n(' + (action === 'enter' ? 'already in the target scene' : 'already outside every scene') + ' — runtime unchanged)' : '')
     },
   }))

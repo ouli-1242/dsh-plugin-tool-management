@@ -95,7 +95,9 @@ export interface SyncResult {
 export interface ScenePromptSyncDeps {
   prompts: {
     apply(id: string): Promise<{ ok: true; id: string; backedUp: boolean } | { ok: false; error: string }>
-    restore(content: string): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }>
+    // `endChain: false`（0.21.2）：场景退出只是"退回全局"，不是取消应用 —— 链起点
+    // （进场景之前那份 AGENTS.md）必须留着，用户才能用「取消应用」一键找回它。
+    restore(content: string, options?: { endChain?: boolean }): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }>
     getCurrent(): Promise<{ ok: true; content: string; presetId: string | null; exists: boolean } | { ok: false; error: string }>
   }
   rules: { ops: Record<string, (args: any) => Promise<any>> }
@@ -303,7 +305,7 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
       return { unchanged: true }
     }
     if (saved.content === null) return { unchanged: true }
-    const res: any = await deps.prompts.restore(saved.content)
+    const res: any = await deps.prompts.restore(saved.content, { endChain: false })
     if (res && res.ok === false) return { error: String(res.error || '恢复 AGENTS.md 失败') }
     await writeBaseline({ v: 1, at: Date.now(), presetId: null, content: null })
     return { restored: true }

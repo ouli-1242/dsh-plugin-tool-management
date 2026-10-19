@@ -532,7 +532,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}
 .dsm-compat-list{margin:0;padding-left:16px}.dsm-compat-list li+li{margin-top:4px}
 @container(max-width:640px){.dsm-compat-grid{grid-template-columns:1fr}}
-html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-tabs-shell{position:sticky;top:0;z-index:6;display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px;background:var(--dsw-alias-bg-layer-2)}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
+html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-tabs-shell{position:sticky;top:0;z-index:6;display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px;background:var(--dsm-surface,var(--dsw-alias-bg-layer-2))}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
 /* 动作可用性表：表头列宽与 dsm-compat-mod-row 一致；窄容器下隐藏表头。 */
 .dsm-compat-table-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:8px;padding:4px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsm-compat-cards .dsm-compat-table-head{display:none}
@@ -1186,5 +1186,5 @@ button.dsm-rowselect-box:disabled{cursor:default;opacity:.45}
 /* 侧栏入口打开的那一页（main 面板）：宿主只给一个空的中栏，滚动与留白都得自己声明。
    顶端让出标题栏净空（macOS / Windows 桌面端由宿主在这两个属性上给高度），与 dshmarket
    的主面板同一套算法；内容仍是 .dsm-section —— 宽度上限与居中它自己管。 */
-.dsm-panel{box-sizing:border-box;width:100%;height:100%;min-height:0;overflow:auto;padding:calc(20px + var(--dsh-frame-top-clearance,0px)) clamp(16px,4vw,40px) 32px}
+.dsm-panel{box-sizing:border-box;width:100%;height:100%;min-height:0;overflow:auto}.dsm-panel-body{box-sizing:border-box;padding:calc(20px + var(--dsh-frame-top-clearance,0px)) clamp(16px,4vw,40px) 32px;--dsm-surface:var(--dsw-alias-bg-base)}
 `

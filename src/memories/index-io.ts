@@ -8,7 +8,8 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, statSync } from 'node:fs'
-import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { renameWithRetry } from '../skills/core.js'
 import { normalizePresetId } from '../prompts/preset-id.js'
@@ -262,19 +263,105 @@ export function isAbsentError(error: unknown): boolean {
 }
 
 /**
+ * 隔离标记文件名（0.21.2）。
+ *
+ * 为什么必须有它：`corruptIndexes` 是**进程内** Map，重启即清零。而隔离的同时文件已被改名
+ * 移走，重启后读到的是一次 ENOENT —— 那条路被当成「全新用户」返回默认索引，`writeIndex`
+ * 于是被接受，第一次普通写入（界面 5s 轮询的 `rules-list` → `buildSnapshot` → `writeIndex`）
+ * 就把空索引落盘。实测链条：截断 → 隔离 → 重启 → 空索引写回，场景/档案/记忆全没，
+ * 原始内容只剩 `.corrupt-*` 文件，而全仓没有任何代码读它。
+ *
+ * 标记文件是**权威闸门**，`corruptIndexes` 退化为同进程内的快速路径：
+ * 判「要不要拒写」时两者取或，判「是不是全新用户」时只看标记文件。
+ */
+export const QUARANTINE_MARKER = `${MEMORIES_INDEX_FILE}.quarantine.json`
+
+export interface QuarantineInfo {
+  v: 1
+  /** 隔离时刻（毫秒）。 */
+  at: number
+  /** 改名后的留存文件绝对路径；改名失败时是原文件路径（没有留存副本）。 */
+  corruptFile: string
+  /** 隔离原因，原样带给用户。 */
+  reason: string
+  /** 写下这个标记的插件版本，便于日后判断布局兼容性。 */
+  pluginVersion: string
+}
+
+/** 标记文件绝对路径。 */
+export function quarantineMarkerPath(stateDir: string): string {
+  return join(stateDir, QUARANTINE_MARKER)
+}
+
+/**
+ * 写隔离标记（**原子写**，best-effort）。
+ *
+ * 失败不改变隔离判定 —— 该拒的写照样拒（进程内 Map 仍在），只是重启后没有持久闸门。
+ * 所以这里 catch 后只 warn：写标记失败是「保护降级」，不是「本次操作失败」。
+ */
+export async function writeQuarantineMarker(stateDir: string, info: Omit<QuarantineInfo, 'v' | 'at'>): Promise<void> {
+  try {
+    await mkdir(stateDir, { recursive: true })
+    await writeFileAtomically(
+      quarantineMarkerPath(stateDir),
+      JSON.stringify({ v: 1, at: Date.now(), ...info } satisfies QuarantineInfo, null, 2),
+    )
+  } catch (e) {
+    console.warn(
+      `[dsh-plugin-tool-management] 隔离标记写入失败（重启后失去持久闸门）：`
+      + `${String((e as Error)?.message ?? e)}`,
+    )
+  }
+}
+
+/** 读隔离标记；不存在 / 读不出 / 形状不对 → `null`（一律不猜）。 */
+export async function readQuarantineMarker(stateDir: string): Promise<QuarantineInfo | null> {
+  try {
+    const obj = JSON.parse(await readFile(quarantineMarkerPath(stateDir), 'utf8')) as Partial<QuarantineInfo>
+    if (!obj || typeof obj !== 'object') return null
+    if (typeof obj.corruptFile !== 'string') return null
+    return {
+      v: 1,
+      at: Number.isFinite(obj.at) ? Number(obj.at) : 0,
+      corruptFile: obj.corruptFile,
+      reason: typeof obj.reason === 'string' ? obj.reason : '',
+      pluginVersion: typeof obj.pluginVersion === 'string' ? obj.pluginVersion : '',
+    }
+  } catch { return null }
+}
+
+/** 同步版（`writeIndex` 的闸门是同步的，不能 await）。读不到就当作没有。 */
+export function hasQuarantineMarker(stateDir: string): boolean {
+  return readFileIfExistsSync(quarantineMarkerPath(stateDir)) !== null
+}
+
+/** 清掉隔离标记（修复完成后调用）。不存在就算了。 */
+export async function clearQuarantineMarker(stateDir: string): Promise<void> {
+  await rm(quarantineMarkerPath(stateDir), { force: true }).catch(() => undefined)
+}
+
+/**
  * 把**解析失败**的索引改名留存并记录该 stateDir 已损坏（幂等，只记一次）。
  *
  * 只给 `parseOrQuarantine` 用（解析失败）。**读失败不要用它** —— 那条路要的是
  * `markIndexUntrusted`：读失败可能是瞬时的，改名会把"重试即可恢复"升级成"记忆全没了"。
+ *
+ * 0.21.2：改名成功后**追加写持久标记**。没有它，重启即失去闸门（见 `QUARANTINE_MARKER` 注释）。
  */
-export function quarantineIndex(stateDir: string): void {
+export async function quarantineIndex(stateDir: string): Promise<void> {
   const key = resolve(stateDir)
   if (corruptIndexes.has(key)) return
   const abs = join(stateDir, MEMORIES_INDEX_FILE)
-  const kept = `${abs}.corrupt-${Date.now()}`
+  // 同毫秒两次隔离会撞名：Date.now() 之外补一个进程内序号（与 index.ts 的 backupStamp 同思路）。
+  const kept = `${abs}.corrupt-${quarantineStamp()}`
   try {
     renameSync(abs, kept)
     corruptIndexes.set(key, kept)
+    await writeQuarantineMarker(stateDir, {
+      corruptFile: kept,
+      reason: '记忆索引解析失败（JSON 无法解析或形状不合法）',
+      pluginVersion: pluginVersionOf(),
+    })
   } catch {
     // 改名失败（被占用/权限）不改判定：仍然标记损坏并拒绝写，只是没有留存副本。
     corruptIndexes.set(key, abs)
@@ -283,6 +370,29 @@ export function quarantineIndex(stateDir: string): void {
     `[dsh-plugin-tool-management] 记忆索引解析失败，已停止写入以免覆盖你的数据。`
     + `损坏的原文件已留存为 ${kept} —— 请检查它（或删除后重启 DSH）再继续操作。`,
   )
+}
+
+/** 隔离文件名的 `ms+序号` 戳：同毫秒多次隔离不撞名。 */
+let quarantineSeq = 0
+function quarantineStamp(): string {
+  quarantineSeq = (quarantineSeq + 1) % 1000
+  return `${String(Date.now()).padStart(13, '0')}${String(quarantineSeq).padStart(3, '0')}`
+}
+
+/**
+ * 插件版本号（只读一次，读不到就是 'unknown'）。
+ *
+ * 不引 `index.ts` 的 `PKG_VERSION`：本文件被 `service.ts` 引用，反向依赖会在运行时成环。
+ * 读失败不该影响隔离本身 —— 它只写进标记文件供人判断布局兼容性。
+ */
+let cachedVersion: string | undefined
+function pluginVersionOf(): string {
+  if (cachedVersion !== undefined) return cachedVersion
+  try {
+    const req = createRequire(import.meta.url)
+    cachedVersion = String((req('../../package.json') as { version?: unknown })?.version || 'unknown')
+  } catch { cachedVersion = 'unknown' }
+  return cachedVersion
 }
 
 /**
@@ -315,7 +425,7 @@ export function isIndexQuarantined(stateDir: string): boolean {
 }
 
 /** 解析索引；失败即隔离该文件并返回默认索引（写侧由 writeIndex 拦截）。 */
-export function parseOrQuarantine(stateDir: string, raw: string): RulesIndex {
+export async function parseOrQuarantine(stateDir: string, raw: string): Promise<RulesIndex> {
   try {
     const index = parseIndex(raw)
     // 读到了能解析的内容 → 之前那次「不可信」判定已过期，解除。
@@ -324,7 +434,7 @@ export function parseOrQuarantine(stateDir: string, raw: string): RulesIndex {
     corruptIndexes.delete(resolve(stateDir))
     return index
   } catch {
-    quarantineIndex(stateDir)
+    await quarantineIndex(stateDir)
     return defaultIndex()
   }
 }
@@ -341,11 +451,20 @@ export async function readIndex(stateDir: string): Promise<RulesIndex> {
     // 而 buildSnapshot 补 `global` 记录后会 writeIndex），也就是打开面板就可能触发覆盖。
     // 现在按 fail-closed 处理：标记该 stateDir 不可信（写侧随即拒写），读侧退默认索引（可见症状）。
     // 用 `markIndexUntrusted` 而不是 `quarantineIndex`：读失败可能是瞬时的，**不改名**用户的文件。
-    if (errnoCode(e) === 'ENOENT') return defaultIndex()
+    if (errnoCode(e) === 'ENOENT') {
+      // 0.21.2：文件不在，先看是不是隔离改名留下的空位（标记文件）。有标记就不是全新用户，
+      // 是「已隔离、闸门只存在于磁盘上」——必须判不可信，否则这条链会继续往下走：
+      // 默认索引 → 界面 5s 轮询的 rules-list → buildSnapshot 补 global → writeIndex 整份落盘。
+      if (hasQuarantineMarker(stateDir)) {
+        markIndexUntrusted(stateDir, '记忆索引此前解析失败已被隔离（见隔离标记）')
+        return defaultIndex()
+      }
+      return defaultIndex()
+    }
     markIndexUntrusted(stateDir, `记忆索引读失败（${errnoText(e)}）`)
     return defaultIndex()
   }
-  return parseOrQuarantine(stateDir, raw)
+  return await parseOrQuarantine(stateDir, raw)
 }
 
 /**
@@ -378,7 +497,12 @@ export function readIndexSync(stateDir: string): RulesIndex {
     indexSyncCache.delete(stateDir)
     // 文件不存在 = 全新用户；其余 IO 错误（被占住/权限）→ 标记不可信（写侧拒写 + 读侧 forceDisabled）。
     // 同样**不改名**文件（瞬时故障要能自愈，见 `markIndexUntrusted`）。
-    if (errnoCode(e) !== 'ENOENT') markIndexUntrusted(stateDir, `记忆索引读失败（${errnoText(e)}）`)
+    if (errnoCode(e) !== 'ENOENT') {
+      markIndexUntrusted(stateDir, `记忆索引读失败（${errnoText(e)}）`)
+    } else if (hasQuarantineMarker(stateDir)) {
+      // 隔离改名把文件移走了，重启后只剩 ENOENT —— 有标记就不是全新用户（同 readIndex）。
+      markIndexUntrusted(stateDir, '记忆索引此前解析失败已被隔离（见隔离标记）')
+    }
     return defaultIndex()
   }
   const cached = indexSyncCache.get(stateDir)
@@ -393,7 +517,17 @@ export function readIndexSync(stateDir: string): RulesIndex {
     if (errnoCode(e) !== 'ENOENT') markIndexUntrusted(stateDir, `记忆索引读失败（${errnoText(e)}）`)
     return defaultIndex()
   }
-  const value = parseOrQuarantine(stateDir, raw)
+  // 同步路径不能 await：**fire-and-forget** 隔离 + 同步退默认索引。
+  // parse 失败时该文件每次都会失败，异步隔离与同步读取无竞态；读侧因此立即按
+  // forceDisabled 投影（宁可少注入，也不注入用户关掉的东西），写侧由 writeIndex 兜住。
+  let value: RulesIndex
+  try {
+    value = parseIndex(raw)
+    corruptIndexes.delete(resolve(stateDir))
+  } catch {
+    void quarantineIndex(stateDir).catch(() => undefined)
+    value = defaultIndex()
+  }
   indexSyncCache.set(stateDir, { key, value })
   return value
 }
@@ -402,11 +536,17 @@ export async function writeIndex(stateDir: string, index: RulesIndex): Promise<v
   // 索引不可信时拒绝写入：这一次写会把空索引落盘，等于用一次解析失败换掉用户全部配置。
   // 值分两种：非空 = parse 失败后改名的留存路径；`''` = 读失败、文件未被改动（仍在原位）。
   const kept = corruptIndexes.get(resolve(stateDir))
-  if (kept !== undefined) {
+  // 0.21.2：`durable` = 本进程没触发过隔离，但磁盘上有隔离标记（上一次进程干的）。
+  // 只查 Map 会漏掉「重启后第一次写」—— 那正是隔离跨重启失效的那一环。
+  const durable = kept === undefined && hasQuarantineMarker(stateDir)
+  if (kept !== undefined || durable) {
+    // 组织错误消息：durable 时优先用标记里的 corruptFile（比口径更准：文件在哪个盘上一目了然）。
+    const markerInfo = durable ? await readQuarantineMarker(stateDir) : null
+    const keptPath = kept || markerInfo?.corruptFile || ''
     throw new Error(
-      kept
-        ? `记忆索引文件损坏，已拒绝写入以免覆盖你的数据（原文件留存为 ${kept}）。`
-          + `请检查或删除该损坏文件后重启 DSH，再重试本次操作。`
+      keptPath
+        ? `记忆索引文件损坏，已拒绝写入以免覆盖你的数据（原文件留存为 ${keptPath}）。`
+          + `请在「记忆管理」页点「一键修复」，或检查/删除该损坏文件后重启 DSH，再重试本次操作。`
         : `记忆索引当前读不到，已拒绝写入以免覆盖你的数据。原文件未被改动`
           + `（仍在 ${join(stateDir, MEMORIES_INDEX_FILE)}）—— 多半是被别的进程暂时占住，`
           + `稍后重试即可；若持续如此，请检查该文件后重启 DSH。`,
@@ -414,6 +554,59 @@ export async function writeIndex(stateDir: string, index: RulesIndex): Promise<v
   }
   await mkdir(stateDir, { recursive: true })
   await writeFileAtomically(join(stateDir, MEMORIES_INDEX_FILE), JSON.stringify(index, null, 2))
+}
+
+/**
+ * 一键修复（0.21.2）：把隔离留存的 `.corrupt-*` 文件重新装回 `memories-index.json`。
+ *
+ * 前提是索引**已经**处在一个不可信状态：要么本进程隔离过（Map 里有），要么磁盘上有标记。
+ * 此时原位置要么空着（改名了）要么是个坏文件 —— 无论哪种，覆盖它都丢不了任何还没丢的东西。
+ * 所以触发的先决条件天然就是安全的，不需要两步确认。
+ *
+ * 行为：解析最新的留存文件 → 通过校验才落盘 → 清 Map + 清标记。
+ * 留存文件也解析不了就**什么都不做**（保留现场），让用户去手工处理 —— 修不了还硬写，
+ * 等于把「一个已知的坏状态」换成「一个悄悄通过校验的空状态」。
+ *
+ * 修好后 `.corrupt-*` **不删**：它是这次事故唯一的现场副本（内容与修回去的完全一致，
+ * 删了就没有第二次机会）。要清理走「兼容 → 清理旧备份」或手工删。
+ */
+export async function repairFromQuarantine(stateDir: string): Promise<RulesIndex | null> {
+  const abs = join(stateDir, MEMORIES_INDEX_FILE)
+  const kept = corruptIndexes.get(resolve(stateDir))
+  const marker = await readQuarantineMarker(stateDir)
+  // 留存文件候选：Map 里的路径优先（本进程亲眼改名的），否则用标记里的，最后扫目录兜底。
+  let source = kept && kept !== abs ? kept : (marker?.corruptFile && marker.corruptFile !== abs ? marker.corruptFile : '')
+  if (!source) {
+    const dir = dirname(quarantineMarkerPath(stateDir))
+    const list = await readdir(dir).catch(() => [] as string[])
+    const found = list
+      .filter(name => name.startsWith(`${basename(abs)}.corrupt-`))
+      .map(name => join(dir, name))
+      .sort()
+    source = found[found.length - 1] || ''
+  }
+  if (!source) return null
+  let index: RulesIndex
+  try {
+    index = parseIndex(await readFile(source, 'utf8'))
+  } catch {
+    return null
+  }
+  await repairFromQuarantineRaw(stateDir, index)
+  // 修好了：本地与持久闸门一起撤。
+  corruptIndexes.delete(resolve(stateDir))
+  await clearQuarantineMarker(stateDir)
+  indexSyncCache.delete(stateDir)
+  return index
+}
+
+/** writeIndex 的免检版：仅在修复路径调用（闸门正是要撤的对象）。 */
+export async function repairFromQuarantineRaw(stateDir: string, index: RulesIndex): Promise<void> {
+  await mkdir(stateDir, { recursive: true })
+  await writeFileAtomically(join(stateDir, MEMORIES_INDEX_FILE), JSON.stringify(index, null, 2))
+  corruptIndexes.delete(resolve(stateDir))
+  await clearQuarantineMarker(stateDir)
+  indexSyncCache.delete(stateDir)
 }
 
 // ── 场景记录（索引内，`memories-index.json` 的 scenes 切片）+ 旧布局迁移 ────────

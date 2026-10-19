@@ -30,6 +30,9 @@ import { createArchiveEngine } from './memories/archive-engine.js'
 import { createSnapshotOps } from './ops/snapshot.js'
 import { AUDIT_TARGET_CONFIG, clearAudit, readAudit, recordAudit, recordOpAudit } from './audit-log.js'
 import { readIndexSync } from './memories/index-io.js'
+import { hasQuarantineMarker, readQuarantineMarker } from './memories/index-io.js'
+import { registerBootReconciler, reconcileMcpRestart, runBootReconcilers } from './boot/reconcile.js'
+import { hasMcpRestartMarker, processAlive, readMcpRestartMarker } from './mcp/restart-marker.js'
 import { runStateDoctor } from './ops/state-doctor.js'
 import { createSubagentService, decideToolFilter, defaultPersonasDir, validPersonaName } from './subagents/service.js'
 import type { ToolFilterDecision } from './subagents/service.js'
@@ -103,7 +106,7 @@ import { extractExportTurns, serializeTranscript } from './exports/transcript.js
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { zipSync } from 'fflate'
 
 // ---------------------------------------------------------------------------
@@ -208,6 +211,72 @@ export default {
     // `$DSH_HOME` 根下的插件侧车 / 日志 / patch 备份，都要在服务读它们之前搬到位。
     // 同步执行：一次性的几次 stat/rename，换来「没有并发窗口」；失败只跳过该项，不抛错。
     migrateHubLayoutSync()
+
+    // 启动期对账（0.21.2）：把「上个进程没干完」的状态补完。必须在任何读盘之前注册，
+    // 因为 reconciler 自己是要读盘的；但**跑**要放到服务装配完之后 —— 它要用到
+    // stateDir / prompts 这些只在 apply() 里才确定的东西。调用点见下面 runBootReconcilers()。
+    registerBootReconciler({
+      id: 'memories-index-guard',
+      label: '记忆索引隔离守卫',
+      async run() {
+        // 只探测、不自动修：自动修复要么读留存文件（可能更糟），要么重写空索引（丢数据）。
+        // 隔离状态的正确出口是**用户点一下**（ops 层 memories-index-repair），
+        // 或者用户手工删掉 .corrupt-* 与标记后重启。
+        const key = resolve(hubRoot())
+        if (!hasQuarantineMarker(hubRoot())) return
+        console.warn(
+          '[dsh-plugin-tool-management] 检测到记忆索引被隔离（memories-index.json 不在原位）。'
+          + '已拒绝一切写入以免覆盖你的数据；请在「记忆管理」页点「一键修复」恢复。',
+        )
+        void key
+      },
+      async probe() {
+        if (!hasQuarantineMarker(hubRoot())) return []
+        const info = await readQuarantineMarker(hubRoot())
+        return [{
+          id: 'index-quarantined',
+          label: '记忆索引被隔离',
+          detail: info
+            ? `记忆索引此前解析失败，已被改名留存为 ${basename(info.corruptFile)}(隔离时间 ${new Date(info.at).toLocaleString('zh-CN')}，写入版本 ${info.pluginVersion})。当前已拒绝一切记忆写入。`
+            : '记忆索引此前解析失败，已被改名留存。当前已拒绝一切记忆写入。',
+          detailKey: 'index-quarantined',
+          params: { pluginVersion: info?.pluginVersion ?? '', corruptFile: info?.corruptFile ?? '' },
+        }]
+      },
+    })
+    // 第二个 reconciler（0.21.2）：MCP 重启中断在阶段 1。**自动恢复**（与索引守卫相反）——
+    // 重启语义就是「状态与重启前一致」，而重启前状态能从补丁备份反推出来，恢复方向明确。
+    // 但它必须等 mcp 装配完（run 里要用 mcpm-set-enabled 的语义），所以 run 在下面注册。
+    registerBootReconciler({
+      id: 'mcp-restart-recovery',
+      label: 'MCP 重启中断收尾',
+      async run() {
+        await reconcileMcpRestart({
+          isRowDisabled: (id, level) => mcp.isRowDisabledPublic(id, level),
+          setRowEnabled: (id, level, enabled) => mcp.ops['mcpm-set-enabled']({ id, level, enabled }),
+          backupDir: () => hubBackupDir(),
+          readBackup: (abs) => readPatch(abs),
+          effectiveDisabledIn: (content, id) => mcp.effectiveDisabledIn(content, id),
+        })
+      },
+      async probe() {
+        if (!hasMcpRestartMarker()) return []
+        const marker = await readMcpRestartMarker()
+        if (!marker) return []
+        // pid 还活着 = 那次重启可能还在跑，那不是「没干完」。如实分开两种措辞。
+        const alive = processAlive(marker.pid)
+        return [{
+          id: 'mcp-restart-pending',
+          label: 'MCP 重启未完成',
+          detail: alive
+            ? `「${marker.server}」的重启还在进行中（pid ${marker.pid} 仍活着）。若它卡住，可再点一次「重连」。`
+            : `「${marker.server}」的重启中断在阶段 ${marker.phase}，该服务当前停在停用态。本次启动会自动按重启前的状态恢复；若已恢复则此提示随之消失。`,
+          detailKey: 'mcp-restart-pending',
+          params: { server: marker.server, level: marker.level, phase: marker.phase, pid: marker.pid, alive },
+        }]
+      },
+    })
+
     const fs = ctx.fs
     const settings = ctx.settings
     const sandboxPolicy = ctx.sandboxPolicy
@@ -1473,6 +1542,8 @@ export default {
       // 状态段尾句那句「用 `mcp_manager_list` 查」的前提：与技能 / 子智能体两个目录同一份判据
       // （2026-10-18 审查 B）。
       listToolVisible: (agent: unknown) => toolVisibleFor('mcp_manager_list', agent),
+      // 本次启动 id：重启标记用它区分「同一轮启动内的重放」与「上一个进程留下的」。
+      bootId: () => BOOT_ID,
     })
 
     // ---------- ops ----------
@@ -1774,6 +1845,22 @@ export default {
             const r = await safe(() => subagentService.list())
             return r === null ? null : new Set(r.map((p) => p.name))
           },
+          // 隔离守卫：本进程没触发过隔离时，磁牌文件是唯一线索（重启后即如此）。
+          indexQuarantined: async () => {
+            try { return await readQuarantineMarker(hubRoot()) } catch { return null }
+          },
+          // MCP 重启中断（0.21.2）：pid 活着 = 那次重启可能还在跑，如实报 alive，
+          // 由体检那边决定算不算问题。
+          mcpRestartPending: async () => {
+            try {
+              const marker = await readMcpRestartMarker()
+              if (!marker) return null
+              return {
+                server: marker.server, level: marker.level, phase: marker.phase,
+                pid: marker.pid, alive: processAlive(marker.pid),
+              }
+            } catch { return null }
+          },
         })
         return { ok: true, ...report }
       },
@@ -1794,8 +1881,34 @@ export default {
     }
 
     // 场景锁定查询（2026-09-19 抽到 ./request-gate.ts）：读 rules-list 得到锁定场景与当前场景。
+    // 场景锁与「当前场景」的**共享读缓存**（0.21.3）。
+    //
+    // 为什么必须有：`annotateLocked`（request-gate.ts）给 5 个列表 op 的响应补
+    // `anyLocked` / `activeScene`，它要**同时**问 `lockedSceneNames()` 与
+    // `activeSceneName()` —— 而这两个函数在 `createSceneLock` 里各调一次
+    // `readSceneList()`，也就是**每个列表 op 都把 `rules-list` 整跑两遍**
+    // （`buildSnapshot` 扫全部记忆文件 + 整份 `memories-index.json` 落盘）。
+    // 实测（2026-10-18 web 端）：`skill-state` 冷启 3.4s / 热启 7ms，而 `state()`
+    // 单独跑只要 106ms —— 差额主要就是这两遍重复读，且它压在每一个热门列表 op 上
+    // （skill-state / mcpm-list / agentsmd-list / subagent-list / mcpm-reveal）。
+    //
+    // TTL 取 1000ms，与 `skills/service.ts` 的 `STATE_TTL_MS` 同一条：都只影响
+    // 「同一窗口内重复问同一份只读现状」，而任何**写**路径之后都不读它 ——
+    // 锁定/场景变化由写操作自己触发（`rules-scene-lock` / `rules-set-active` 等
+    // 都会走到 `refresh()`），下一次读自然是新值。并发吃同一个 in-flight promise，
+    // 不会因为加缓存变成 N 次磁盘读。
+    const SCENE_FACTS_TTL_MS = 1000
+    let sceneFacts: { at: number; value: Promise<any> } | null = null
+    function readSceneFacts(): Promise<any> {
+      if (sceneFacts && Date.now() - sceneFacts.at < SCENE_FACTS_TTL_MS) return sceneFacts.value
+      const value = memoriesService.ops['rules-list']({})
+      // 失败也进缓存（短 TTL）：连续 5 个列表 op 撞同一次故障时，不该把磁盘读放大 5 倍。
+      value.catch(() => undefined)
+      sceneFacts = { at: Date.now(), value }
+      return value
+    }
     const { lockedSceneNames, activeSceneName, lockedSceneGuard } = createSceneLock({
-      readSceneList: () => memoriesService.ops['rules-list']({}),
+      readSceneList: () => readSceneFacts(),
     })
 
     // ---------- 场景内改开关 = 同步改档案（v0.9.2）----------
@@ -2539,6 +2652,11 @@ export default {
     ctx.effect(() => () => {
       mcp.dispose()
     }, 'dsh-plugin-tool-management: tool restriction cleanup')
+
+    // ---------- 启动期对账：放在装配末尾（0.21.2） ----------
+    // reconciler 在前面注册，但**跑**必须等这里 —— 它们要读 hub、比有效状态，都发生在装配之后。
+    // 不 await：apply() 不是异步函数，且启动期对账只是收尾，不能拖住 apply。
+    void runBootReconcilers().catch(() => { /* 框架自己已逐条 try，这里兜底 */ })
 
     // ---------- HTTP API route (UI half), registered defensively ----------
     // 正文 2026-10-01 整段搬到 ./http-api.ts（一字未改，只把 apply 作用域的名字改走 deps）。

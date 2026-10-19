@@ -422,9 +422,17 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
    * 按**原文**写回全局基线（不经过任何预设）。
    * 用途：① 场景切换的「关掉场景 → 恢复进场景之前的基线」——那份内容可能是用户手写的，
    * 不一定对应任何预设；② 「取消应用」的 `'restore'` 分支。
-   * 备份纪律与 `apply` 完全相同；写回即**链结束**，链起点一并清掉（见 `clearChainStart`）。
+   * 备份纪律与 `apply` 完全相同。
+   *
+   * `endChain`（0.21.2）：写回要不要**结束这条链**（清掉链起点）。两种调用方要的是相反的：
+   *   - `unapply()`（取消应用）→ `true`。用户明确说"不要这份预设了"，链到此为止，
+   *     下一次「应用」重新开一条链。
+   *   - 场景退出 → `false`（默认）。场景退出只是"退回全局"，**不是**取消应用：链起点是
+   *     "进场景之前"那份 AGENTS.md，仍然该被「取消应用」一键找回。此前这里无条件清链起点，
+   *     于是用户进过一次场景再退出，「取消应用」就变成 `noBackup` 不可点 —— 恢复原始手写
+   *     内容只能去 `__last-applied__/AGENTS.md.bak-*` 里人工翻（审查 D2）。
    */
-  async function restore(content: string): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }> {
+  async function restore(content: string, options?: { endChain?: boolean }): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }> {
     const text = String(content ?? '')
     const prev = await readGlobal()
     const backedUp = await backupGlobal(prev)
@@ -435,7 +443,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
     }
     // 基线内容可能来自用户手写（场景退出恢复）→ 不绑定任何预设。
     await writeAppliedId(null)
-    await clearChainStart()
+    if (options?.endChain !== false) await clearChainStart()
     return { ok: true, backedUp }
   }
 
@@ -505,7 +513,8 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
         error: '没有可恢复的「链起点内容」：__last-applied__ 里没有备份（AGENTS.md 当前内容不是由「应用」写进去的）。',
       }
     }
-    return restore(content)
+    // `endChain: true`：取消应用是链的终点，语义与 0.21.2 之前的无条件清理一致。
+    return restore(content, { endChain: true })
   }
 
   async function getCurrent(): Promise<{ ok: true; content: string; presetId: string | null; lastApplied: string | null; exists: boolean; unapplyAvailable: boolean; unapplyRemoves: boolean } | { ok: false; error: string }> {

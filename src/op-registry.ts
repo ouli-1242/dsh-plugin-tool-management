@@ -166,6 +166,10 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'scene-mode-preview': { readonly: true },
   'scene-archive-save': { serviceWrite: true, frozen: true, frozenScope: 'self-scene' },
   'scene-mode-set': { serviceWrite: true },
+  // 一键修复（0.21.2）：索引被隔离后唯一的出口。按写门禁 —— 它整份改写 memories-index.json。
+  // **刻意不冻结**：隔离期间所有记忆写 op 都已经被 writeIndex 拒了，它能修复状态而不是改状态，
+  // 与 `mcpm-restart` 同一条口径（恢复路径不能被冻结挡在门外）。
+  'memories-index-repair': { write: true },
 
   // ── 子智能体域（10）────────────────────────────────────────────────────────
   'subagent-list': { annotatesLock: true },

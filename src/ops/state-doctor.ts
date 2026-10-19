@@ -23,7 +23,7 @@ export interface DanglingRef {
   /** 住在哪儿（人可读的位置串，直接显示给用户）。 */
   where: string
   /** 哪一类引用。界面按它分组。 */
-  kind: 'prompt' | 'mcp' | 'mcpNote' | 'skill' | 'persona' | 'snapshot'
+  kind: 'prompt' | 'mcp' | 'mcpNote' | 'skill' | 'persona' | 'snapshot' | 'quarantine'
   /** 指向谁 —— 那个已经不在的名字。 */
   name: string
 }
@@ -48,6 +48,10 @@ export interface StateDoctorDeps {
   skillKeys(): Promise<Set<string> | null>
   /** 实时发现的人设名全集；失败 null。 */
   personaNames(): Promise<Set<string> | null>
+  /** 隔离标记信息；没有标记返回 null。**可省** —— 省略时跳过这一项。 */
+  indexQuarantined?(): Promise<{ at: number; corruptFile: string; reason: string; pluginVersion: string } | null>
+  /** MCP 重启标记；`alive` = 记录的 pid 仍活着（那次重启可能还在跑，不算问题）。 */
+  mcpRestartPending?(): Promise<{ server: string; level: 'global' | 'project'; phase: number; pid: number; alive: boolean } | null>
 }
 
 const toSet = (list: string[] | null): Set<string> | null => (list === null ? null : new Set(list))
@@ -60,13 +64,22 @@ export async function runStateDoctor(deps: StateDoctorDeps): Promise<DoctorRepor
   const scenes: Record<string, any> = index.scenes || {}
   const archives: Record<string, any> = index.archives || {}
 
-  const presets = toSet(await deps.presetIds())
+  // 四域权威集合**并行**读（0.21.3）：它们是四个互不依赖的读，串起来等于把四次读延迟
+  // 首尾相接。实测（2026-10-18 web 端，服务进程已被别的负载占满单核）：state-doctor
+  // 冷启 1.8s，其中绝大部分是这四段串行等待 —— 并行后总耗时≈最慢那一域，而不是四者之和。
+  // 单个读失败仍然只跳过自己那一类（Promise.all 不会因一个 reject 整体失败：
+  // 各 deps 的失败都已被 `safe()` 转成 null，见 index.ts 的 state-doctor handler）。
+  const [presetsRaw, serversRaw, skills, personas] = await Promise.all([
+    deps.presetIds(),
+    deps.serverNames(),
+    deps.skillKeys(),
+    deps.personaNames(),
+  ])
+  const presets = toSet(presetsRaw)
   if (presets === null) skipped.push('prompts')
-  const servers = toSet(await deps.serverNames())
+  const servers = toSet(serversRaw)
   if (servers === null) skipped.push('mcp')
-  const skills = await deps.skillKeys()
   if (skills === null) skipped.push('skills')
-  const personas = await deps.personaNames()
   if (personas === null) skipped.push('subagents')
 
   // ① 场景记录 → 提示词预设。界面上那条 `scenes.prompt.missing` 标签今天**永远不亮**
@@ -133,6 +146,33 @@ export async function runStateDoctor(deps: StateDoctorDeps): Promise<DoctorRepor
       for (const name of personaNames) {
         if (!personas.has(String(name))) findings.push({ where: `模式快照（退出「${modeScene}」时要回写的人设）`, kind: 'snapshot', name: String(name) })
       }
+    }
+  }
+
+  // ⑦ 隔离守卫（0.21.2）：记忆索引被隔离时它不在「悬空」语义里 —— 文件仍在盘上，
+  //    只是不在原位置。但它和悬空引用共享同一个出口（兼容页的体检区），所以复用 findings。
+  //    这一条是**必须出声**的那类：隔离期间写侧被拒，用户点任何记忆操作都会拿到错误。
+  if (deps.indexQuarantined !== undefined) {
+    const info = await deps.indexQuarantined()
+    if (info) {
+      findings.push({
+        where: '记忆索引（memories-index.json）',
+        kind: 'quarantine',
+        name: info.corruptFile ? String(info.corruptFile).split(/[\\/]/).pop() || String(info.corruptFile) : '(已隔离)',
+      })
+    }
+  }
+  // ⑧ MCP 重启中断（0.21.2）：与隔离同一档 —— 它不改用户数据，但会让一台服务器
+  //    无声地停在停用态（补丁里的 disabled:true 与"用户主动停用"完全同形）。
+  //    pid 还活着时不算问题（那次重启可能正在跑），所以判据带上 alive。
+  if (deps.mcpRestartPending !== undefined) {
+    const info = await deps.mcpRestartPending()
+    if (info && info.alive !== true) {
+      findings.push({
+        where: 'MCP 重启（' + info.server + '）',
+        kind: 'quarantine',
+        name: '中断在阶段 ' + info.phase + '，停在停用态',
+      })
     }
   }
 

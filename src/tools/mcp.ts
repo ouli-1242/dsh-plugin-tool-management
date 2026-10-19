@@ -103,12 +103,12 @@ export function buildMcpTools(deps: McpToolDeps): void {
   const listHint = (agent?: unknown) => (deps.toolVisibleFor('mcp_manager_list', agent) ? MCP_LIST_HINT : '')
   register(defineTool({
     name: 'mcp_manager_list',
-    // 注入段与本工具的关系要**如实说成筛过的视图**（而非"同一份清单"）：注入段只列可用 +
-    // 曾连上现掉线的服务器（停用的不进），也不带 level / loader / 工具数。把这个盲区写出来
-    // 是行动依据 —— 模型要知道"停用的那台去哪查"就得靠这句（all=true）。
+    // 注入段与本工具的关系要**如实说成筛过的视图**（而非"同一份清单"）：注入段只列当前真有
+    // 工具注册的服务器（停用与掉线的都不进），也不带 level / loader / 工具数。把这个盲区写出来
+    // 是行动依据 —— 模型要知道"停用 / 掉线的那台去哪查"就得靠这句（all=true）。
     //
     // 2026-10-15 注入文本审查：删掉两处白付的 token ——
-    //   ① 括号里那句把 "Current MCP servers" reminder 的**内容**逐项列了一遍（可用 / 曾连上 /
+    //   ① 括号里那句把 "Current MCP servers" reminder 的**内容**逐项列了一遍（可用 / 工具全停 /
     //      备注 / 停用不进），而那段 reminder 每轮就在模型上下文里，它自己看得到；
     //   ② `where loader:on:<phase> is the loader's current phase` —— 用自己解释自己
     //      （phase 就是 phase），零信息。字段名本身留在输出里，模型照抄即可。

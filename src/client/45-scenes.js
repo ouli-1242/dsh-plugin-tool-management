@@ -1820,6 +1820,29 @@
                 findings.length > shown.length ? React.createElement('div', { key: 'more', className: 'dsm-help' }, t('scenes.doctor.more', { count: findings.length - shown.length })) : null,
                 (doctor.skipped || []).length ? React.createElement('div', { key: 'skip', className: 'dsm-help' }, t('scenes.doctor.skipped', { domains: doctor.skipped.join('、') })) : null)
             })(),
+            // 隔离守卫（0.21.2）：索引被隔离 = **所有记忆写操作都被拒**，与悬空引用不同量级。
+            // 单独一条横幅 + 一颗一键修复按钮。只在这条 finding 存在时渲染 —— 没有就是没有。
+            (function () {
+              var doc = data.doctor
+              var q = doc && (doc.findings || []).filter(function (r) { return r.kind === 'quarantine' })[0]
+              if (!q) return null
+              return React.createElement('div', { key: 'quarantine', className: 'dsm-feedback dsm-warning' },
+                React.createElement('div', { key: 'head' }, t('scenes.quarantine.title')),
+                React.createElement('div', { key: 'row', className: 'dsm-help' }, t('scenes.quarantine.row', { name: q.name })),
+                React.createElement('div', { key: 'hint', className: 'dsm-help' }, t('scenes.quarantine.hint')),
+                React.createElement('button', {
+                  type: 'button', key: 'fix', className: 'dsm-btn dsm-btn-secondary', disabled: busy,
+                  onClick: function () {
+                    if (busy) return
+                    setBusy(true)
+                    apiCall('memories-index-repair', {}).then(function (res) {
+                      setBusy(false)
+                      if (res && res.ok) { setResult({ ok: true, text: t('scenes.quarantine.fixed', { scenes: res.scenes || 0, rules: res.rules || 0 }) }); refresh() }
+                      else setResult({ ok: false, text: translateError(t, res) })
+                    }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+                  },
+                }, t('scenes.quarantine.fix')))
+            })(),
             data.error ? React.createElement(Notice, { key: 'gerr', kind: 'err', text: String(data.error) }) : null,
             // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试）/ 空 /
             // 无结果（+ 清除筛选）/ 有数据（场景卡片网格 —— 场景是「档案」不是列表行，保持卡片）。

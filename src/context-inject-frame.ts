@@ -188,21 +188,21 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     // 同轮二次修正（用户：「mcp 如果用户没写备注不是白写了吗」）：两句**都改成按需发**。
     // 上一版是常量串，于是"一台上线服务器、没有备注"这种最常见的情形里，整段 = 三行说明
     // 解释一个不存在的东西 + 一行 `- **github**` —— 说明比内容长，且每轮都付。
-    // 现在：备注句只在真有备注时发，离线句只在真有 `not connected now` 档时发，两者都没有
-    // 就**不发行**（`undefined`）。正文只有名字时，标题加名字本身已经把话说完了。
+    // 现在：备注句只在真有备注时发，两者都没有就**不发行**（`undefined`）。正文只有名字时，
+    // 标题加名字本身已经把话说完了。
+    //
+    // 2026-10-19：①整句删掉，②的 offline 变体随之消失 —— 掉线的 server 不再进段
+    // （用户裁定「没连接的 mcp 注入上下文是垃圾信息，只有真启动的才需要注入」）。
+    // 于是"缺工具"的三种反应里少了"表里有、只是没连上"那一种：模型看不到掉线的 server，
+    // 也就无从提示"它在重连 / 检查网络"。这是该裁定的直接代价，与 state-section.ts 文件头
+    // 记的是同一件事。剩下的 `no tools enabled here` 是 server **此刻在跑**、只是工具被关掉，
+    // 那句话仍然防着"别把它报成缺失"。
     how: ({ text }) => {
       const parts: string[] = []
       if (text.includes('user hint: ')) {
         parts.push("`user hint:` marks the user's own note on that server — read it before choosing one.")
       }
-      const offline = text.includes('(not connected now)')
-      const muted = text.includes('(no tools enabled here)')
-      // 两个状态标记合起来讲一次：各写一句会把"别当成缺失"重复两遍（2026-10-18 审查收口）。
-      if (offline && muted) {
-        parts.push('Status markers: `not connected now` = no tools registered right now; `no tools enabled here` = up, but every tool is switched off. Neither means the server is missing.')
-      } else if (offline) {
-        parts.push('A server marked `not connected now` registers no tools right now: check this list before telling the user a server is missing or a tool does not exist.')
-      } else if (muted) {
+      if (text.includes('(no tools enabled here)')) {
         parts.push('A server marked `no tools enabled here` is up, but every one of its tools is switched off — do not report it as missing.')
       }
       return parts.length > 0 ? parts.join(' ') : undefined
@@ -348,11 +348,28 @@ export function escapeFrameBody(body: string): string {
  *     同时把**正文也包进标记里**（此前只有引导语在标记内、正文裸奔）—— 官方两条注入行都是
  *     整条包住的，正文里的用户自由文本更需要这层来源标记。
  */
+/**
+ * `renderDomainText` 的产出：整条消息正文 + **域正文原文**。
+ *
+ * 为什么要多给一个 `body`（2026-10-19）：调用方要比对"内容变没变"来决定发不发，而框架里
+ * 有两行**按场合**发（`supersede` 只在替换时发，`how` / `boundary` 按正文内容按需发）——
+ * 于是同一条域正文有两种合法形态。比整条正文会把首帧那一差异判成"内容变了"，每个域在第二步
+ * 多重发一次（用户实测：场景 / 记忆 / MCP / 子智能体每轮都重发）。比 `body` 则两种形态都判为
+ * 没变。`body` 与 `section.text` 逐字节相同（只差 `escapeFrameBody` 的闭合标记转义），
+ * 调用方直接与 `section.text` 比即可。
+ */
+export interface RenderedDomain {
+  /** 整条消息正文（含 `<system-reminder>` 框架）—— 这就是发给模型的内容。 */
+  text: string
+  /** 域正文原文（框架剥掉后的那一部分）—— 只用于"发不发"的比对。 */
+  body: string
+}
+
 export function renderDomainText(
   section: InjectSection,
   toolHidden: (name: string) => boolean = () => false,
   replacing: boolean = true,
-): string {
+): RenderedDomain {
   const frame = domainFrame(section.key, section.label)
   // 层级（2026-09-23 用户看到实际注入后指出「记忆内的场景怎么都是 ## 标题」）：**`#` 一级给板块**
   // （场景 / 记忆 / MCP / 技能 / 子智能体 / 提示词），域正文里的 `##` 才是它的下一层
@@ -373,7 +390,7 @@ export function renderDomainText(
   if (replacing) lines.push(frame.supersede)
   if (frame.boundary !== undefined) lines.push(frame.boundary)
   lines.push('', escapeFrameBody(section.text).replace(/\n+$/, ''), '', FRAME_CLOSE)
-  return lines.join('\n')
+  return { text: lines.join('\n'), body: section.text }
 }
 
 /** 「已清空」通知正文：某个域曾经注入过、现在没有内容时发一条（纯函数，测试用）。 */
