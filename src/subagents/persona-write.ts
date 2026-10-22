@@ -3,6 +3,7 @@
 // 从 subagents/service.ts 整段搬来，一行未改。只写用户填过的键这条纪律留在函数自己的
 // 注释里；名字谓词仍收敛到 ../paths.ts，这里不另写一份。
 import { isValidSegment } from '../paths.js'
+import { yamlScalar } from '../skills/frontmatter.js'
 import { DEFAULT_PERSONA_CATALOG_DEPTH, normalizeReasoningEffort, truthyFlag } from './persona-parse.js'
 import type { PresetToolRule } from './persona-types.js'
 
@@ -49,18 +50,21 @@ export function serializePersona(args: any): string {
   // 说明"它和默认一样"，也保证老的人设文件回写后逐字节不变。入参兼容布尔与字符串两种形态
   // （界面传布尔，手写/导入的 frontmatter 走解析侧已归一成布尔）。
   const continuable = args?.continuable === true || truthyFlag(String(args?.continuable ?? ''))
-  // `output` 可传字符串（按行拆）或数组（界面直接给数组）：一条要求写成一行重复键。
+  // `output` 可传字符串（按行拆）或数组（界面直接给数组）：一条要求写成序列的一项。
   const outputLines = (Array.isArray(args?.output) ? args.output.map((v: unknown) => String(v)) : String(args?.output ?? '').split(/\r?\n/))
     .map((line: string) => line.trim())
     .filter((line: string) => line !== '')
   const lines = ['---']
-  if (description) lines.push('description: ' + description)
-  if (provider) lines.push('provider: ' + provider)
-  if (model) lines.push('model: ' + model)
-  if (reasoningEffort) lines.push('reasoningEffort: ' + reasoningEffort)
+  if (description) lines.push('description: ' + yamlScalar(description))
+  if (provider) lines.push('provider: ' + yamlScalar(provider))
+  if (model) lines.push('model: ' + yamlScalar(model))
+  if (reasoningEffort) lines.push('reasoningEffort: ' + yamlScalar(reasoningEffort))
   if (hasCatalogDepth) lines.push('catalogDepth: ' + String(catalogDepth))
   if (continuable) lines.push('continuable: true')
-  for (const line of outputLines) lines.push('output: ' + line)
+  if (outputLines.length) {
+    lines.push('output:')
+    for (const line of outputLines) lines.push('  - ' + yamlScalar(line))
+  }
   if (tools.length) lines.push('tools: ' + tools.join(', '))
   if (toolsDeny.length) lines.push('toolsDeny: ' + toolsDeny.join(', '))
   if (byPreset.length) {

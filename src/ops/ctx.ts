@@ -7,7 +7,7 @@
 //
 // 刻意不做成 `typeof rc`：那会把契约藏回 service.ts，域文件又得反向引它。
 
-import type { DiscoveredEntry, ParsedSkillDoc, Snapshot } from '../memories/snapshot.js'
+import type { DiscoveredEntry, Snapshot } from '../memories/snapshot.js'
 import type { MemoryScopeOverride, Rule, RulesIndex, SceneMemoryProjection, ScenePromptProjection, SceneRow } from '../memories/service.js'
 
 export interface MemoriesOpsCtx {
@@ -49,7 +49,7 @@ export interface MemoriesOpsCtx {
   copyIntoMemoriesTrash(located: DiscoveredEntry, group: string, name: string): Promise<string>
   listAttachments(bundleDir: string, name: string): Promise<Array<{ name: string; size: number }>>
   serializeRuleFile(fields: Record<string, string | boolean>, body: string): string
-  serializeUpdatedFile(doc: ParsedSkillDoc, newName: string, description: string | undefined | null, body: string): string
+  serializeUpdatedFile(text: string, newName: string, description: string | undefined | null, body: string): string
   ensureLayout(): Promise<void>
   presetExistsSync(id: string): boolean
 }

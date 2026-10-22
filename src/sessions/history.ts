@@ -13,9 +13,10 @@
 // 插件目录 —— npm 安装下 `dsh plugin update` 会整体替换插件目录，账本一丢，保留期
 // 基线就从 archivedAt 退回 createdAt，归档会话会被提前清掉。旧位置启动时一次性搬入。
 
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { writeFileAtomically } from '../memories/index-io.js'
 import { hubPath, hubRoot, relocateEntries } from '../hub.js'
 import { ArchiveWorkspaceRegistry as SessionsService, workspaceBaseName, workspacePathKey } from './workspace.js'
 
@@ -210,7 +211,7 @@ export function createHistoryDomain(deps: HistoryDomainDeps): HistoryDomain {
     const dir = dirname(historyRetentionPath)
     await mkdir(dir, { recursive: true })
     // updatedAt = 修改时刻：每次改保留期，已归档会话的到期基线重置为此时刻。
-    await writeFile(historyRetentionPath, JSON.stringify({ retentionDays, updatedAt: Date.now() }), 'utf8')
+    await writeFileAtomically(historyRetentionPath, JSON.stringify({ retentionDays, updatedAt: Date.now() }))
   }
   /**
    * 计算到期应删的归档会话。基线 = max(archivedAt（账本）?? createdAt（元数据),

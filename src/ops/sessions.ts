@@ -17,6 +17,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { zipSync } from 'fflate'
+import { writeFileAtomicBinary } from '../memories/index-io.js'
 import { detectFormat, parseGenericText, parseJsonlTranscript, parseMarkdownTranscript } from '../imports/parsers.js'
 import { isValidPresetId } from '../prompts/preset-id.js'
 import { defaultPersonasDir, validPersonaName } from '../subagents/service.js'
@@ -535,7 +536,8 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
         zipPath = join(outDir, `dsh-tool-management-${kind}-${stamp}.zip`)
         await mkdir(outDir, { recursive: true })
-        await writeFile(zipPath, Buffer.from(zipSync(bundle)))
+        // 导出包可能含记忆 / 人设 / 会话正文：POSIX 上 0600。
+        await writeFileAtomicBinary(zipPath, Buffer.from(zipSync(bundle)), { mode: 0o600 })
       } catch (e) {
         return { ok: false, error: '写入导出文件失败: ' + deps.message(e) }
       }
@@ -613,7 +615,8 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
           }
           // `'wx'`：绝不覆盖已存在的同名文件 —— 覆盖是静默的，用户会以为导出成功
           // 而实际上把上一次的产物（或自己的文件）抹掉了。撞名就如实报 skipped。
-          await writeFile(path, deps.serializeTurns(turns, format), { encoding: 'utf8', flag: 'wx' })
+          // 会话转录含个人内容：新建文件在 POSIX 上 0600。
+          await writeFile(path, deps.serializeTurns(turns, format), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
           exported.push({ sessionId, fileName, path, count: turns.length })
         } catch (e) {
           skipped.push({ sessionId, error: '导出失败: ' + deps.message(e) })

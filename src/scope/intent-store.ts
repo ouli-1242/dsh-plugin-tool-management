@@ -1,16 +1,17 @@
 // 全局意图侧车的读写（`hub/scope-intent.json`）。形状与判定在 ./intent.ts。
 //
 // 与 `scope-store.ts` 同一条纪律：读走 TTL 缓存、写走 apply 的串行写锁、读坏 = 空表不抛。
-// 不同的只有一点：**同步快照会被注入 / 守卫每步读**，所以额外给一个 `revision()` ——
-// 渲染缓存键吃它，意图一改（含启动加载完成）目录缓存就跟着失效。
+// 写路径是例外：写锁内必须 strict read，读坏就拒绝落盘 —— 否则一次读失败之后的
+// 「改一处 → 整份写」会把 blocked 意图换成空表，对账可能把用户要求停用的资源重新拉起。
 //
 // 读坏 = 空表 = "还没有意见"：对账会从运行态反推一条（见 intent.ts 的 planReconcile）。
 // 这比"读坏 = 全关"安全：全关会让下次对账把所有服务器停掉。
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { hubPath } from '../hub.js'
+import { renameWithRetry } from '../skills/core-util.js'
 import { normalizeScopeIntent, type ScopeIntent } from './intent.js'
 
 /** 侧车文件名（hub 根，与 `scope-overrides.json` 并排）。 */
@@ -60,6 +61,18 @@ export function createIntentStore(deps: IntentStoreDeps): IntentStore {
     }
   }
 
+  /** 写路径专用：只有文件不存在才按空表；读不动 / JSON 坏一律抛，绝不拿空表覆盖。 */
+  async function loadForWrite(): Promise<ScopeIntent> {
+    let raw: string
+    try {
+      raw = await readFile(file(), 'utf8')
+    } catch (e) {
+      if ((e as { code?: string } | null)?.code === 'ENOENT') return empty()
+      throw e
+    }
+    return normalizeScopeIntent(JSON.parse(raw))
+  }
+
   async function read(force = false): Promise<ScopeIntent> {
     if (!force && cache !== null && Date.now() - cache.at < TTL_MS) return cache.value
     const value = await load()
@@ -81,14 +94,19 @@ export function createIntentStore(deps: IntentStoreDeps): IntentStore {
     const abs = file()
     await mkdir(dirname(abs), { recursive: true })
     const temp = join(dirname(abs), '.' + randomUUID().slice(0, 8) + '.intent-tmp')
-    await writeFile(temp, JSON.stringify(next, null, 2) + '\n', 'utf8')
-    await rename(temp, abs)
+    try {
+      await writeFile(temp, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+      await renameWithRetry(temp, abs)
+    } catch (e) {
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw e
+    }
   }
 
   async function mutate(fn: (current: ScopeIntent) => ScopeIntent | undefined): Promise<{ ok: true; intent: ScopeIntent } | { ok: false; error: string }> {
     return deps.withWriteLock(async () => {
       try {
-        const current = await load()
+        const current = await loadForWrite()
         const next = fn(current)
         if (next === undefined) {
           cache = { at: Date.now(), value: current }

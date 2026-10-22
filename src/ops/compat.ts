@@ -25,6 +25,7 @@ import { MCP_TOOL_PREFIX } from '../host-names.js'
 import { assessPresetReach, type PresetRosterLike } from '../compat/preset-reach.js'
 import { runtimeNotes, type RuntimeNote } from '../compat/runtime-notes.js'
 import { AGENTS_MD_REFRESH_PACKAGE } from '../compat/host-contracts.js'
+import type { UpdateCheckResult } from '../update-check.js'
 import { pluginLog } from '../skills/service.js'
 import type { InjectSettings, LiveInjectionSnapshot } from '../context-inject.js'
 import type { SlashSettings } from '../slash-settings.js'
@@ -75,6 +76,14 @@ export interface CompatOpsDeps {
   lockedSceneNames(): Promise<readonly string[]>
   /** 停用表的两个口径（读 TTL 缓存，无 I/O）：整台停用（`*`）的台数 + 单独停用的工具数。 */
   disabledToolSummary(): { servers: number; tools: number; state: 'ok' | 'unknown'; issue: 'corrupt' | 'unreadable' | null }
+  /**
+   * 更新检查器（0.21.2）：只读 op `update-status`。未接线时 undefined —— op 回 `unknown`，
+   * 不假装"已是最新"。
+   */
+  updateChecker?: {
+    check(force?: boolean): Promise<UpdateCheckResult>
+    peek(): UpdateCheckResult | null
+  }
   /** 本插件声明的 inject 服务数（INJECT_SERVICES.length）：挂载行的依据文案用。 */
   injectServiceCount: number
   message(e: unknown): string
@@ -527,6 +536,21 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
       const live = deps.getContextInjectorLive()
       if (live === null) return { ok: false, error: '注入通道未装配' }
       try { return { ok: true, ...live() } } catch (e) { return { ok: false, error: deps.message(e) } }
+    },
+    // 更新检查（只读）：不改配置、不触发安装，只回答"有没有一个与**本宿主**兼容的新版本"。
+    // `refresh:true` 绕过缓存（界面上的「重新检查」）。网络失败也返回 `ok:true` + `status:'unknown'`
+    // —— op 本身成功了，答案就是"不知道"；用 `ok:false` 会让界面把它当成一条错误横幅。
+    'update-status': async (args: any) => {
+      const checker = deps.updateChecker
+      if (!checker) {
+        return { ok: true, status: 'unknown', current: null, host: null, newest: null, bestCompatible: null, command: null, checkedAt: null, fromCache: false, error: '更新检查未接线' }
+      }
+      try {
+        // `ok` 刻意放在最后覆盖：op 本身成功，答案由 `status` 表达（含 `unknown`）。
+        return { ...(await checker.check(Boolean(args && args.refresh))), ok: true }
+      } catch (e) {
+        return { ok: true, status: 'unknown', current: null, host: null, newest: null, bestCompatible: null, command: null, checkedAt: null, fromCache: false, error: deps.message(e) }
+      }
     },
   }
 }

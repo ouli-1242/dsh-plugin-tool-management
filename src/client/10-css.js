@@ -30,7 +30,7 @@
          在右，组内间距 8px 与行间隙一致。 */
       '.dsm-detail-title-acts{display:flex;align-items:center;gap:8px}' +
       `
-.dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);padding:4px}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:4px 0 24px;container-type:inline-size;flex-direction:column;gap:12px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-feedback-links{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.dsm-title{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.2px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:30px;align-items:center;gap:4px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:400;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:0;flex:none}
+.dsm-pick-list{display:flex;max-height:240px;flex-direction:column;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);padding:4px}.dsm-tab{padding:8px 14px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}.dsm-tab-active{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-success-primary)}.dsm-section{box-sizing:border-box;display:flex;width:100%;max-width:820px;min-width:0;margin:0 auto;padding:4px 0 24px;container-type:inline-size;flex-direction:column;gap:12px;color:var(--dsw-alias-label-primary);font-family:inherit}.dsm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dsm-feedback-links{display:flex;align-items:center;gap:8px}.dsm-title{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.2px;white-space:nowrap}.dsm-feedback-link{display:inline-flex;min-height:30px;align-items:center;gap:4px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:400;line-height:18px;text-decoration:none;white-space:nowrap}.dsm-feedback-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsm-feedback-link:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}.dsm-feedback-link svg{flex:none}.dsm-desc{margin:12px 0 0;display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:22px;-webkit-box-orient:vertical;-webkit-line-clamp:2}.dsm-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:0;flex:none}
 /* 页头动作行：内边距收 2px。批量按钮要按「取消全选」定宽（见 .dsm-btn-bulk），
    收这一点正好把定宽多出来的宽度抵掉，整行仍在一行内。 */
 .dsm-actions .dsm-btn{padding:0 12px}
@@ -532,7 +532,22 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}
 .dsm-compat-list{margin:0;padding-left:16px}.dsm-compat-list li+li{margin-top:4px}
 @container(max-width:640px){.dsm-compat-grid{grid-template-columns:1fr}}
-html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-panel-head{position:sticky;top:0;z-index:6;display:flex;min-width:0;flex-direction:column;background:var(--dsm-surface,var(--dsw-alias-bg-layer-2))}.dsm-tabs-shell{display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
+html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-panel-head{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:minmax(0,1fr) max-content;grid-template-areas:"scope links" "tabs tabs";align-items:center;column-gap:8px;min-width:0;background:var(--dsm-surface,var(--dsw-alias-bg-layer-2))}.dsm-tabs-shell{display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
+/* 顶部栏右上角那一行（版本号 · 检查更新 · GitHub）：排在**作用域行**的右端，页签行独占一行。
+   位置由 .dsm-panel-head 的网格排（area links）—— 它要和 GitHub 图标并排（用户 2026-10-22），
+   塞进 .dsm-tabs-shell 就只能挤在页签那一行里。 */
+.dsm-panel-head>.dsm-scope-bar{grid-area:scope}
+.dsm-panel-head>.dsm-tabs-shell{grid-area:tabs}
+.dsm-panel-head>.dsm-feedback-links{grid-area:links;align-self:center;justify-self:end}
+/* 「检查更新」那颗键：与 GitHub 图标同尺寸同描边，有没有新版本都不变（用户 2026-10-22：
+   统一一个图标就行）。button 不像 a 自带 pointer，补上；relative 给右上角那颗红点当基准。 */
+.dsm-feedback-check{position:relative;cursor:pointer}
+/* 有新版本时右上角那颗小红点：绝对定位、不参与布局 —— 挂点不会把这一行挤歪，也不会让
+   图标在状态切换时挪位置。ring 用面板底色把点从按钮描边上"抠"出来。 */
+.dsm-feedback-dot{position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-error-primary);box-shadow:0 0 0 2px var(--dsm-surface,var(--dsw-alias-bg-layer-2))}
+/* 检查中：压暗 + 指针转进度态。不加旋转动画 —— 这颗键平时不是 loading 控件，
+   为一次最多 3 秒的请求转一圈反而像卡住了。 */
+.dsm-feedback-link-busy{opacity:.55;cursor:progress}
 /* 动作可用性表：表头列宽与 dsm-compat-mod-row 一致；窄容器下隐藏表头。 */
 .dsm-compat-table-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:8px;padding:4px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsm-compat-cards .dsm-compat-table-head{display:none}
@@ -1208,7 +1223,7 @@ button.dsm-rowselect-box:disabled{cursor:default;opacity:.45}
 /* 选择框与下拉菜单同宽（用户 2026-10-21），但**不拉满整行**（同日二次：拉满太长）：
    固定 300px，窄面板下可收缩。菜单宽度由触发器量出来（SourceSelect 的 menuStyle
    width = max(触发器宽, menuMinWidth)），这里不给 menuMinWidth，两边自然对齐。 */
-.dsm-scope-bar .dsm-select{flex:0 1 300px;min-width:0;max-width:100%}
+.dsm-scope-bar .dsm-select{flex:1 1 160px;min-width:0;max-width:300px}
 .dsm-scope-bar-label{flex:none;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:18px;white-space:nowrap}
 /* 兼容页「生效层级」（0.21.2）：一行下拉 + 一句模式说明；与作用域条同样的行内节奏。 */
 .dsm-scope-mode{display:flex;align-items:center;gap:8px;flex-wrap:wrap}

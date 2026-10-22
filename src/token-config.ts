@@ -8,6 +8,7 @@
 // 当面再输一次当前令牌、哪几个可以认请求头里那份）全在下面 tokenConfigure 的注释里。
 // HTTP 路由是它唯一的调用方，而且刻意不放进 handlers 表 —— 模型不该有能力关掉访问令牌。
 import { applyLoaderToken, applyLoaderTokenDisabled, buildLoaderOverrideEntry, readLoaderToken, scanLoaderRows } from './mcp/loader-token.js'
+import { appendBlock } from './mcp/patch-yaml.js'
 
 export interface TokenConfigDeps {
   /** apply 的路径发现（缓存住的那份）：只用得到三个补丁文件路径。 */
@@ -29,6 +30,16 @@ export interface TokenConfigDeps {
 export interface TokenConfig {
   tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; envToken: boolean; pendingRestart: boolean }>
   tokenConfigure(args: any, presented: boolean): Promise<any>
+}
+
+/**
+ * 把覆盖条目追加进补丁正文。
+ *
+ * 空补丁 `[]` 是合法 YAML：直接往后拼 `- id: …` 会变成 `[]\n- id: …`，解析直接失败。
+ * 交给 `appendBlock`（它已有 `[]` 特判）；只有空内容单独走一条，免得文件开头多一个空行。
+ */
+export function appendOverrideEntry(content: string, entry: string): string {
+  return content.trim() === '' ? entry + '\n' : appendBlock(content, entry)
 }
 
 export function createTokenConfig(deps: TokenConfigDeps): TokenConfig {
@@ -195,7 +206,7 @@ export function createTokenConfig(deps: TokenConfigDeps): TokenConfig {
       return deps.withWriteLock(async () => {
         let content = ''
         try { content = await deps.readPatch(p.projectPatch) } catch (e) { return { ok: false, error: '读取补丁失败: ' + deps.message(e) } }
-        const next = content === '' ? buildLoaderOverrideEntry(value) + '\n' : (content.endsWith('\n') ? content : content + '\n') + '\n' + buildLoaderOverrideEntry(value)
+        const next = appendOverrideEntry(content, buildLoaderOverrideEntry(value))
         try {
           await deps.writePatch(p.projectPatch, next)
         } catch (e) {

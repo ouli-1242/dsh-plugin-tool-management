@@ -59,6 +59,9 @@
       const [inject, setInject] = React.useState(null)
       // 斜杠命令入口（`/` 菜单里那个「工具」段）的开关。与 inject 同一类：读不到就不渲染这一节。
       const [slash, setSlash] = React.useState(null)
+      // 注入 / 斜杠开关保存失败的原因。这两个开关是乐观更新（点一下立刻变），
+      // 所以服务端拒绝时必须回滚并说明，否则界面会停在"看起来已保存"的假状态。
+      const [saveError, setSaveError] = React.useState(null)
       // 模型工具表（哪些工具整份不发给模型；见 src/tools/table.ts）。与「注入」是两种省法：
       // 注入关掉省的是正文，这里关掉省的是工具 schema（工具表按每个请求付钱）。
       const [toolTable, setToolTable] = React.useState(null)
@@ -86,6 +89,11 @@
       const [liveCopied, setLiveCopied] = React.useState(false)
       // 功能总览（B6）：按功能点看"现在到底能不能用"。数据来自 feature-overview（只读聚合）。
       const [features, setFeatures] = React.useState(null)
+      // 更新检查（0.21.2）：只读、可缓存。取不到就整行不显示 —— 它不参与"能不能安全动数据"的结论。
+      const [updateInfo, setUpdateInfo] = React.useState(null)
+      const [updateCopied, setUpdateCopied] = React.useState(false)
+      // 诊断包（0.21.2）：一段可复制的纯文本，不含密钥 / 正文 / 日志内容。
+      const [diagCopied, setDiagCopied] = React.useState(false)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState(null)
       // 访问令牌（用户裁定 2026-09-18：入口放兼容页）。它不属于"宿主体检"，但**必须有一个
@@ -597,6 +605,27 @@
           .then(function (r) { if (alive !== false && r && r.ok) setFeatures(r) })
           .catch(function () { /* 同上 */ })
       }
+      // 更新检查：只回答"有没有与**本宿主**兼容的新版"，不改任何配置。
+      // 失败（无网 / 代理 / registry 故障）不弹错误横幅 —— 这一行只是信息，不是体检结论。
+      const loadUpdate = function (alive, force) {
+        apiCall('update-status', force ? { refresh: true } : {})
+          .then(function (r) { if (alive !== false && r && r.ok) setUpdateInfo(r) })
+          .catch(function () { /* 静默：没有更新信息不影响本页任何结论 */ })
+      }
+      /** 复制诊断包：服务端只回白名单字段拼成的纯文本，界面不自己拼（避免两处口径分家）。 */
+      const copyDiagnostics = function () {
+        apiCall('diagnostics', {}).then(function (r) {
+          if (!r || !r.ok || !r.text) return
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(String(r.text)).then(function () {
+                setDiagCopied(true)
+                setTimeout(function () { setDiagCopied(false) }, 1500)
+              })
+            }
+          } catch (e) { /* 剪贴板不可用：按钮仍可用，用户可重试 */ }
+        }).catch(function () { /* 诊断失败不弹错：它是排障工具，不是结论 */ })
+      }
       // 工具表跟着顶部作用域走：切对话 / 进出场景都重拉这一层的生效名单。
       // 首挂载也走这里（`lastToolScope` 初值 null），所以下面的挂载 effect 不再单独拉一次。
       // `revision` 进来兜"同一场景里方案改绑"（服务端会把新名单同步到会话，场景名不变）。
@@ -620,22 +649,32 @@
         loadSlash(alive)
         loadLive(alive)
         loadFeatures(alive)
+        loadUpdate(alive)
         loadToken(alive)
         loadBackups(alive)
         return function () { alive = false }
       }, [])
       // 保存注入设置：先乐观更新界面（点一下就该有反馈），服务端返回值到达后以其为准；
       // 失败则重新拉一次。可达性矩阵跟着刷新 —— 芯片要反映新的开关状态。
+      // `{ok:false}` 与网络异常分开处理：前者是服务端明确拒绝（坏侧车 / 令牌失效），
+      // 界面必须回到磁盘真值并给出原因，不能只靠 `.catch`。
       const saveInject = function (patch) {
         if (!inject) return
         const next = Object.assign({}, inject, patch)
         setInject(next)
+        setSaveError(null)
         apiCall('inject-settings', Object.assign({ set: true }, next))
           .then(function (r) {
-            if (r && r.ok && r.settings) setInject(r.settings)
+            if (r && r.ok === false) {
+              setSaveError(r.error || t('compat.save.failed'))
+              loadInject(true)
+              loadReach(true)
+              return
+            }
+            if (r && r.settings) setInject(r.settings)
             loadReach(true)
           })
-          .catch(function () { loadInject(true); loadReach(true) })
+          .catch(function (e) { setSaveError(errMsg(e)); loadInject(true); loadReach(true) })
       }
       /**
        * 保存斜杠命令入口的两颗开关（「工具」段 / 「快捷提示词」段）。与 saveInject 同一条口径：
@@ -648,9 +687,19 @@
         if (!slash) return
         const next = Object.assign({}, slash, patch)
         setSlash(next)
+        setSaveError(null)
         apiCall('slash-settings', Object.assign({ set: true }, next))
-          .then(function (r) { if (r && r.ok && r.settings) setSlash(r.settings); loadFeatures(true) })
-          .catch(function () { loadSlash(true) })
+          .then(function (r) {
+            if (r && r.ok === false) {
+              setSaveError(r.error || t('compat.save.failed'))
+              loadSlash(true)
+              loadFeatures(true)
+              return
+            }
+            if (r && r.settings) setSlash(r.settings)
+            loadFeatures(true)
+          })
+          .catch(function (e) { setSaveError(errMsg(e)); loadSlash(true) })
       }
 
       const findings = (data && data.findings) || []
@@ -663,13 +712,15 @@
       // 锚点里找不到这个包 —— 身份校验等于没做。服务端已单列，这里必须说出来，否则界面只有
       // 一排看不懂的「无法比对」，而页头照样报「全部可用」。
       const unverified = (data && data.unverified) || []
-      const healthy = degraded.length === 0 && blockers.length === 0 && separateCopies.length === 0
       // 可用 = 探测通过 + 宿主没有但插件自己顶上的（optional）。
       // 后者若不算进分子，本机这种"官方缺三个入口"的正常形态会显示成 12/15，
       // 让人以为三成能力坏了 —— 实际上它们全部可用。
       const usableCount = findings.filter(function (item) { return item.state === 'ok' || item.optional === true }).length
-      // 真正拦路的只有"宿主有该服务但缺关键成员"（如 requireState 改名）与未解析的包。
+      // 页头结论只认这一个数：能力降级 + 身份阻塞 + 无法比对 + 两份拷贝。
+      // 少算任何一类，都会出现「横幅转红、摘要报全部可用」的自相矛盾。
       const blockedCount = degraded.length
+        + blockers.length
+        + unverified.length
         + Object.keys(sameAsHost).filter(function (name) { return sameAsHost[name] === false }).length
       const unavailableCount = Object.keys(OPERATION_LABELS).filter(function (op) { return routes[op] === 'none' }).length
 
@@ -1315,7 +1366,9 @@
       // 「任一有值」—— 缺的那半只是不出现，不把另一半一起吞掉。
       if (inject || slash) {
         push(section(inject ? t('compat.inject') : t('compat.slash.title'), inject ? t('compat.inject.hint') : null,
-          React.createElement('div', { className: 'dsm-inject-settings' }, injectParts.concat(slashParts))))
+          React.createElement('div', { className: 'dsm-inject-settings' }, injectParts.concat(slashParts,
+            saveError ? [React.createElement('div', { key: 'save-error', className: 'dsm-feedback dsm-error', role: 'alert' },
+              t('compat.save.failed') + ': ' + saveError)] : []))))
       }
       // 模型工具表：与「注入」并列的第二种省法 —— 那边省正文，这边省工具 schema。
       // 工具表**每个请求都发一遍**（哪怕这一轮用不上），所以关掉的工具是整份不进请求，
@@ -1586,6 +1639,11 @@
           React.createElement('span', { className: 'dsm-compat-dot' + (blockedCount > 0 ? ' dsm-compat-dot-warn' : '') }),
           React.createElement('strong', null, blockedCount > 0 ? t('compat.state.blocked') : t('compat.state.ok')),
           React.createElement('span', { className: 'dsm-compat-sum' }, summaryText)))
+        // 诊断包：排障时用户能一键复制一份"环境 + 状态"，不必逐项截图。
+        // 放在结论条下面而不是页脚：有阻塞项时它就在眼前。
+        push(React.createElement('div', { className: 'dsm-feedback-row' },
+          React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: copyDiagnostics },
+            diagCopied ? t('compat.diag.copied') : t('compat.diag.copy'))))
 
         // 指标卡：宿主 / 本插件适配版本 / 可用能力（含插件自补的 optional 槽位）。
         // 三张卡都只在**有事要说**时带注脚：
@@ -1613,6 +1671,31 @@
             t('compat.host.mismatch')
               .replace('{host}', String(hostVersion))
               .replace('{verified}', String(data.verifiedVersion))))
+        }
+
+        // 更新检查（0.21.2）：只报"有没有与**本宿主**兼容的新版"，不改配置、不自动更新。
+        // 与体检结论分开显示：它是一条信息，不是"能不能安全动数据"的一部分。
+        if (updateInfo) {
+          const st = String(updateInfo.status || 'unknown')
+          // 文案由 `updateStatusText` 一处生成：顶部栏那颗 GitHub 图标点击后说的是**同一句**
+          // （见 20 片）。这里只留"语气"这一层判断 —— 有更新时整行标黄。
+          const updateText = updateStatusText(updateInfo, t)
+          const copyCmd = function () {
+            if (!updateInfo.command) return
+            try {
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(String(updateInfo.command)).then(function () {
+                  setUpdateCopied(true)
+                  setTimeout(function () { setUpdateCopied(false) }, 1500)
+                })
+              }
+            } catch (e) { /* 剪贴板不可用：命令仍可手动选中复制 */ }
+          }
+          push(React.createElement('p', { className: 'dsm-help' + (st === 'update-available' ? ' dsm-help-warn' : '') },
+            updateText,
+            updateInfo.command ? React.createElement('button', {
+              type: 'button', className: 'dsm-btn dsm-btn-quiet', title: String(updateInfo.command), onClick: copyCmd,
+            }, updateCopied ? t('compat.update.copied') : t('compat.update.copy')) : null))
         }
 
         // 功能总览（B6）：一行一个功能点，状态 = 装配层 + 宿主能力层 + 用户配置层 的合成

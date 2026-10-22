@@ -9,6 +9,7 @@ import { resolveAgentsHome } from '../skills/homes.js'
 import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { stampConflict, stampOfText } from '../stale-write.js'
 
 type PromptsServiceLike = ReturnType<typeof createPromptsService>
 type ScenePromptSyncLike = ReturnType<typeof createScenePromptSync>
@@ -100,7 +101,12 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
       })
       return { ...base, presets, ...(scenePrompt ? { scenePrompt } : {}), agentsHomeAgentsMd: agentsHomeAgentsMd() }
     },
-    'agentsmd-read': (args: any) => deps.promptsService.read(String((args && args.id) || '')),
+    'agentsmd-read': async (args: any) => {
+      const res = await deps.promptsService.read(String((args && args.id) || ''))
+      if (!res || res.ok === false) return res
+      // 并发编辑判据（与记忆 `rules-read` 同一条口径）：编辑弹窗把这份指纹带回来。
+      return { ...res, stamp: stampOfText(res.content) }
+    },
     // content 与 from 都可选：新建弹窗里直接写正文（content），或从现有预设复制（from）。
     'agentsmd-create': (args: any) => deps.promptsService.create(String((args && args.id) || ''), {
       ...(args && args.from ? { from: String(args.from) } : {}),
@@ -112,8 +118,16 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
     // 保存后同步一次全局基线：若改的正是「正在驱动基线的那份」，正文要跟着写进
     // `~/.dsh/AGENTS.md`（否则页面标着「生效中」而文件里还是旧内容）。
     'agentsmd-update': async (args: any) => {
+      const id = String((args && args.id) || '')
+      // 并发编辑：先核对磁盘那份是否还是用户看到的那一份。不传 expectedStamp = 旧行为。
+      if (args && args.expectedStamp !== undefined) {
+        const before = await deps.promptsService.read(id)
+        if (!before || before.ok === false) return before
+        const conflict = stampConflict(stampOfText(before.content), args.expectedStamp)
+        if (conflict) return conflict
+      }
       const res = await deps.promptsService.update(
-        String((args && args.id) || ''),
+        id,
         String((args && args.content) ?? ''),
         args && args.nextId !== undefined ? String(args.nextId) : undefined,
         // 描述与正文同一次提交：省略（undefined）= 不动，空串 = 清空。
@@ -130,7 +144,16 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
       return deps.withAgentsMdSync({ ...res, ...renamed })
     },
     // 应用 = 写全局基线文件；场景接管期间只放行「场景绑定的那一份」（见 applyPresetGuarded）。
-    'agentsmd-apply': (args: any) => deps.applyPresetGuarded(String((args && args.id) || '')),
+    // 并发编辑判据落在**全局文件**上（这次写的就是它）：`agentsmd-get-current` 回的 `stamp`。
+    'agentsmd-apply': async (args: any) => {
+      if (args && args.expectedStamp !== undefined) {
+        const cur = await deps.promptsService.getCurrent()
+        if (!cur || cur.ok === false) return cur
+        const conflict = stampConflict(cur.exists ? cur.content : null, args.expectedStamp)
+        if (conflict) return conflict
+      }
+      return deps.applyPresetGuarded(String((args && args.id) || ''))
+    },
     // 取消应用 = **回到链起点**（这一串应用/取消往复开始之前的状态）：起点有内容就把
     // `__last-applied__/AGENTS.md` 写回去，起点文件不存在就把文件删掉（`removed: true`）。
     // 连续应用过 A、B 时是**一步回到起点**，不是只退一步 —— 与场景基线同一条口径
@@ -172,7 +195,8 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
     'agentsmd-get-current': async () => {
       const res = await deps.promptsService.getCurrent()
       if (!res || res.ok === false) return res
-      return { ...res, agentsHomeAgentsMd: agentsHomeAgentsMd() }
+      // `stamp` 是「应用 / 取消应用」的并发编辑判据：文件不存在时是 null。
+      return { ...res, stamp: res.exists ? stampOfText(res.content) : null, agentsHomeAgentsMd: agentsHomeAgentsMd() }
     },
     // 删除：**场景绑定**与**当前应用的那份**拦得住（判据见下方注释）。拒绝时逐条说明「谁在用」，
     // 用户知道该先改哪里。引用清单由 scene-prompt-sync 与显示/注入同源算出。

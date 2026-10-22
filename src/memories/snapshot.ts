@@ -134,7 +134,11 @@ export async function buildSnapshot(memoriesRoot: string, stateDir: string): Pro
   if (ensureSceneRecords(index, discovery.scenes)) dirty = true
   // 索引损坏时跳过这次清理落盘：写侧本就拒绝（会抛），而这里的清理只是收尾性的，
   // 它抛出去会让整个记忆页打不开 —— 用户更需要先看见「记忆都在、只是全未启用」。
-  if (dirty && !quarantined) await writeIndex(stateDir, index)
+  //
+  // 扫描不完整时同理跳过：没扫到 ≠ 已删除。根目录 / 子目录读失败、条目在扫描期间消失、
+  // 或触发目录 / 条目预算，都会让 discovery.entries 少几条；若照旧反删索引，用户会丢掉
+  // enabled/order/tags/pinned/note/scene 绑定，而正文文件还在磁盘上。
+  if (dirty && !quarantined && discovery.complete) await writeIndex(stateDir, index)
 
   const rules: Rule[] = []
   const bodies = new Map<string, string>()
@@ -143,6 +147,7 @@ export async function buildSnapshot(memoriesRoot: string, stateDir: string): Pro
   // 界面表现为"这条记忆不存在"，而 `rules-diagnose` 的 `emptyBody` 依赖 `snap.bodies`、
   // 也兜不到它。走与 `discover()` 同一条 `warnings` 通道 → `rules-list` 透传 → 记忆页横幅。
   const warnings = discovery.warnings.slice()
+  if (!discovery.complete) warnings.push('记忆目录扫描不完整，已跳过索引清理（索引与条目元数据保持不变）。')
   for (const entry of discovery.entries.values()) {
     try {
       const text = await readFile(entry.docPath, 'utf8')

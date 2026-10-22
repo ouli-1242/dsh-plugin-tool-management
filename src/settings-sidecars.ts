@@ -7,6 +7,7 @@
 // 「每次 apply 一份」。搬到模块级就变成每进程一份，热更新重进 apply 时旧缓存会被复用 ——
 // 那是语义翻转，不是搬家。
 import { hubPath } from './hub.js'
+import type { JsonFileRead } from './mcp/disabled-tools.js'
 import { DEFAULT_INJECT_SETTINGS, normalizeInjectSettings, type InjectSettings } from './context-inject.js'
 import { normalizeSceneSettings, type SceneSettings } from './scene-settings.js'
 import { normalizeSlashSettings, type SlashSettings } from './slash-settings.js'
@@ -16,6 +17,8 @@ export interface SettingsSidecarDeps {
   /** apply 里的路径发现（懒建目录）；本层所有调用点都在 await 之后，不依赖它的定义顺序。 */
   ensurePaths(): Promise<unknown>
   readJsonFile(abs: string): Promise<any>
+  /** 严格读：写路径用它区分「文件不存在」与「读坏 / 解析不了」。 */
+  readJsonFileStrict(abs: string): Promise<JsonFileRead>
   writeJsonFile(abs: string, data: any): Promise<void>
   /** apply 的串行写锁：设置写入与其余写操作共用同一条队列。 */
   withWriteLock<T>(fn: () => Promise<T>): Promise<T>
@@ -36,6 +39,20 @@ export interface SettingsSidecars {
 }
 
 export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidecars {
+  /**
+   * 写路径的 strict read：只有文件不存在才回默认值；读坏 / 解析不了一律拒绝保存。
+   * 读路径仍用 lenient read，保证界面能打开（坏文件会以默认值显示）。
+   */
+  async function readForWrite(abs: string, label: string): Promise<{ ok: true; raw: any } | { ok: false; error: string }> {
+    const read = await deps.readJsonFileStrict(abs)
+    if (read.status === 'corrupt' || read.status === 'unreadable') {
+      return {
+        ok: false,
+        error: `${label}文件${read.status === 'corrupt' ? '损坏' : '不可读'}，已拒绝保存：${read.error}`,
+      }
+    }
+    return { ok: true, raw: read.status === 'ok' ? read.value : null }
+  }
 
   // 注入设置（侧车 `inject-settings.json`，界面在「兼容」页）：
   //   - underSuppressingPresets：压制型预设（persona complete / 关运行时上下文，如极简）
@@ -65,16 +82,18 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
     return { underSuppressingPresets: s.underSuppressingPresets, domains: s.domains }
   }
   async function injectSettingsOp(args: any): Promise<any> {
-    const current = await readInjectSettings()
-    if (!args || args.set !== true) return { ok: true, settings: current }
-    const next = normalizeInjectSettings({
-      underSuppressingPresets: typeof args.underSuppressingPresets === 'boolean'
-        ? args.underSuppressingPresets
-        : current.underSuppressingPresets,
-      domains: { ...current.domains, ...(args.domains && typeof args.domains === 'object' ? args.domains : {}) },
-    })
+    if (!args || args.set !== true) return { ok: true, settings: await readInjectSettings() }
     await deps.ensurePaths()
     return deps.withWriteLock(async () => {
+      const read = await readForWrite(hubPath(INJECT_SETTINGS_FILE), '注入设置')
+      if (!read.ok) return read
+      const current = normalizeInjectSettings(read.raw)
+      const next = normalizeInjectSettings({
+        underSuppressingPresets: typeof args.underSuppressingPresets === 'boolean'
+          ? args.underSuppressingPresets
+          : current.underSuppressingPresets,
+        domains: { ...current.domains, ...(args.domains && typeof args.domains === 'object' ? args.domains : {}) },
+      })
       try {
         await deps.writeJsonFile(hubPath(INJECT_SETTINGS_FILE), next)
       } catch (e) {
@@ -100,13 +119,15 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
     return value
   }
   async function sceneSettingsOp(args: any): Promise<any> {
-    const current = await readSceneSettings()
-    if (!args || args.set !== true) return { ok: true, settings: current }
-    const next = normalizeSceneSettings({
-      enterPreview: typeof args.enterPreview === 'boolean' ? args.enterPreview : current.enterPreview,
-    })
+    if (!args || args.set !== true) return { ok: true, settings: await readSceneSettings() }
     await deps.ensurePaths()
     return deps.withWriteLock(async () => {
+      const read = await readForWrite(hubPath(SCENE_SETTINGS_FILE), '场景设置')
+      if (!read.ok) return read
+      const current = normalizeSceneSettings(read.raw)
+      const next = normalizeSceneSettings({
+        enterPreview: typeof args.enterPreview === 'boolean' ? args.enterPreview : current.enterPreview,
+      })
       try {
         await deps.writeJsonFile(hubPath(SCENE_SETTINGS_FILE), next)
       } catch (e) {
@@ -132,14 +153,16 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
     return value
   }
   async function slashSettingsOp(args: any): Promise<any> {
-    const current = await readSlashSettings()
-    if (!args || args.set !== true) return { ok: true, settings: current }
-    const next = normalizeSlashSettings({
-      tools: typeof args.tools === 'boolean' ? args.tools : current.tools,
-      quickPrompts: typeof args.quickPrompts === 'boolean' ? args.quickPrompts : current.quickPrompts,
-    })
+    if (!args || args.set !== true) return { ok: true, settings: await readSlashSettings() }
     await deps.ensurePaths()
     return deps.withWriteLock(async () => {
+      const read = await readForWrite(hubPath(SLASH_SETTINGS_FILE), '斜杠入口设置')
+      if (!read.ok) return read
+      const current = normalizeSlashSettings(read.raw)
+      const next = normalizeSlashSettings({
+        tools: typeof args.tools === 'boolean' ? args.tools : current.tools,
+        quickPrompts: typeof args.quickPrompts === 'boolean' ? args.quickPrompts : current.quickPrompts,
+      })
       try {
         await deps.writeJsonFile(hubPath(SLASH_SETTINGS_FILE), next)
       } catch (e) {
@@ -164,13 +187,15 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
     return value
   }
   async function sidebarSettingsOp(args: any): Promise<any> {
-    const current = await readSidebarSettings()
-    if (!args || args.set !== true) return { ok: true, settings: current }
-    const next = normalizeSidebarSettings({
-      enabled: typeof args.enabled === 'boolean' ? args.enabled : current.enabled,
-    })
+    if (!args || args.set !== true) return { ok: true, settings: await readSidebarSettings() }
     await deps.ensurePaths()
     return deps.withWriteLock(async () => {
+      const read = await readForWrite(hubPath(SIDEBAR_SETTINGS_FILE), '侧栏入口设置')
+      if (!read.ok) return read
+      const current = normalizeSidebarSettings(read.raw)
+      const next = normalizeSidebarSettings({
+        enabled: typeof args.enabled === 'boolean' ? args.enabled : current.enabled,
+      })
       try {
         await deps.writeJsonFile(hubPath(SIDEBAR_SETTINGS_FILE), next)
       } catch (e) {

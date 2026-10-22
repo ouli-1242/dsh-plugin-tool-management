@@ -156,7 +156,7 @@
                 var draft = takeFormDraft(draftKey)
                 // focusAttach 是"打开就替你把文件框点开"的一次性指令，重放它会凭空弹一次文件选择框。
                 if (draft) draft = Object.assign({}, draft, { focusAttach: false, error: null })
-                setEditor(draft || { mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], focusAttach: focusAttach === true })
+                setEditor(draft || { mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], focusAttach: focusAttach === true, stamp: res.stamp })
                 setModal({ type: 'editor' })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
@@ -399,7 +399,7 @@
               return finishEditor(id, doneName, pending, 'done.created', 'memory.result.createdAttached')
             }).catch(function (e) { setBusy(false); setEditor(Object.assign({}, editor, { error: errMsg(e) })) })
           }
-          function submitUpdate() {
+          function submitUpdate(force) {
             var payload = {
               id: editor.id,
               name: String(editor.name || '').trim(),
@@ -407,17 +407,33 @@
               body: editor.body || '',
               form: editor.form || 'flat',
             }
+            // 并发编辑判据：打开编辑器时读到的那份指纹。`force` = 用户明确选择覆盖。
+            if (!force && editor.stamp) payload.expectedStamp = editor.stamp
             var pending = editor.files || []
             setBusy(true)
             apiCall('rules-update', payload).then(function (res) {
               if (!res || !res.ok) {
                 setBusy(false)
-                setEditor(Object.assign({}, editor, { error: translateError(t, res) }))
+                // 冲突不能只报一句错：文件在别处被改过，用户需要「重新加载 / 覆盖保存」两条出路。
+                if (res && res.code === 'stale-write') setEditor(Object.assign({}, editor, { error: t('stale.write.conflict'), stale: true }))
+                else setEditor(Object.assign({}, editor, { error: translateError(t, res) }))
                 return null
               }
               var name = (res.rule && (res.rule.id || res.rule.name)) || payload.name
               return finishEditor(editor.id, name, pending, 'done.saved', 'memory.result.updatedAttached')
             }).catch(function (e) { setBusy(false); setEditor(Object.assign({}, editor, { error: errMsg(e) })) })
+          }
+          /** 冲突后的「重新加载」：丢掉本地改动，重读磁盘那一份（连同新指纹）。 */
+          function reloadEditor() {
+            if (!editor || editor.mode !== 'edit') return
+            setBusy(true)
+            apiCall('rules-read', { id: editor.id }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok && res.rule) {
+                var rd = res.rule
+                setEditor({ mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], stamp: res.stamp })
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
           function submitDelete(rule) {
             setBusy(true)
@@ -851,8 +867,12 @@
               // 锁定态把「为什么保存键是灰的」写在弹窗里：编辑页能打开（看内容是只读的），
               // 但写盘这一步被冻结闸挡住 —— 只说结果不说原因，用户会以为界面坏了。
               anyLocked ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scenes.lock.blockedEdit')) : null,
+              // 冲突（文件在别处被改过）：两条出路，别让用户只能关掉重来。
+              editor.stale ? React.createElement('div', { className: 'dsm-feedback-row' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: reloadEditor }, t('stale.write.reload')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { submitUpdate(true) } }, t('stale.write.overwrite'))) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || anyLocked || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : submitUpdate }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || anyLocked || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : function () { submitUpdate(false) } }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
             // 场景建/删/档案弹窗已移至「场景」页（ScenesPage）。
             // 记忆回收站：本页那一个（42-shared-ui.js 的 TrashModal，domain = memories）。
             // 记忆域的备注（场景 / 形态 / 字节数 / 删除时间）在组件内部按同一条口径拼装。

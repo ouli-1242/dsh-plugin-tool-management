@@ -74,7 +74,7 @@ import { copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, st
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { isInsideRootResolved, isValidSegment } from '../paths.js'
-import { parseSkillDoc, renameWithRetry, resolveDshHome, unquote } from '../skills/core.js'
+import { parseSkillDoc, renameWithRetry, resolveDshHome, rewriteFrontmatterFields, unquote, yamlFieldLines } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
 import { normalizePresetId } from '../prompts/preset-id.js'
 import { normalizeArchive, type ModeState, type SceneArchive } from './archive.js'
@@ -565,44 +565,22 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
 
   // ── 规则文件序列化 ──────────────────────────────────────────────────────
 
-  /**
-   * 值含换行用 `|` 块（保留换行）；否则 `key: value` 原样（parseSkillDoc 按行贪婪解析）。
-   * 例外：多行值里有去空白后恰为 `---` 的行时改用 JSON 引号标量 —— 块标量把内容行缩进
-   * 两格也躲不开 parseSkillDoc 的 frontmatter 结束扫描（`trim() === '---'`），描述会被
-   * 截断、残片混进正文；引号形式是单物理行，扫描无从误判，decodeYamlScalar 无损还原
-   * （skills 写侧的引号标量正是靠这一点免疫同一断裂）。
-   */
-  function yamlField(key: string, value: string | boolean): string[] {
-    if (typeof value === 'boolean') return [`${key}: ${value}`]
-    const s = String(value)
-    if (s.includes('\n')) {
-      if (s.split('\n').some((line) => line.trim() === '---')) return [`${key}: ${JSON.stringify(s)}`]
-      return [`${key}: |`, ...s.split('\n').map((line) => `  ${line}`)]
-    }
-    return [`${key}: ${s}`]
-  }
-
   function serializeRuleFile(fields: Record<string, string | boolean>, body: string): string {
     const lines: string[] = ['---']
-    for (const [key, value] of Object.entries(fields)) lines.push(...yamlField(key, value))
+    for (const [key, value] of Object.entries(fields)) lines.push(...yamlFieldLines(key, value))
     lines.push('---', '')
     return lines.join('\n') + String(body ?? '')
   }
 
-  /** update 时重建文件：保留 frontmatter 其余字段，仅更新 name/description。 */
-  function serializeUpdatedFile(doc: ParsedSkillDoc, newName: string, description: string | undefined | null, body: string): string {
-    const fields: Record<string, string | boolean> = {}
-    for (const [key, value] of Object.entries(doc.map)) {
-      if (key === 'name' || key === 'description') continue
-      fields[key] = String(value)
-    }
-    fields.name = newName
-    if (description === undefined) {
-      if (doc.map.description != null && String(doc.map.description).trim() !== '') fields.description = String(doc.map.description)
-    } else if (description !== null) {
-      fields.description = description
-    }
-    return serializeRuleFile(fields, body)
+  /**
+   * update 时重写文件：只替换 name / description 的取值行，其余字段、嵌套、注释与顺序逐字保留。
+   * `description === undefined` 表示保留原值，`null` 表示删除该字段。
+   */
+  function serializeUpdatedFile(text: string, newName: string, description: string | undefined | null, body: string): string {
+    const updates: Record<string, string | null | undefined> = { name: newName }
+    if (description === null) updates.description = null
+    else if (description !== undefined) updates.description = description
+    return rewriteFrontmatterFields(text, updates, body)
   }
 
   /**
@@ -1020,6 +998,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     // 注意**不能**用 runWrite —— 那个还会 refresh()，会让只读 op 每次都作废快照缓存。
     'rules-list': (args) => enqueueMutation(() => memoryOps.rulesList(args || {})),
     'rules-read': (args) => enqueueMutation(() => memoryOps.rulesRead(args || {})),
+    // 只读搜索：与 rules-list / rules-read 同一条队列（snapshot 可能触发索引清理写）。
+    'rules-search': (args) => enqueueMutation(() => memoryOps.rulesSearch(args || {})),
     'rules-budget': () => memoryOps.rulesBudget(),
     'rules-diagnose': () => enqueueMutation(() => memoryOps.rulesDiagnose()),
     'rules-create': (args) => runWrite(() => memoryOps.rulesCreate(args || {})),

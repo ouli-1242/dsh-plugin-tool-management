@@ -9,6 +9,7 @@ import { createRunProvider } from "./run-provider.js"
 import { createRequire } from 'node:module'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { writeFileAtomically } from '../memories/index-io.js'
 import { isValidSegment } from '../paths.js'
 import { resolveDshHome } from '../skills/core.js'
 // 深度探针与注入通道共用一份实现（口径分叉就会出现"目录说不能、工具却能"的错配）。
@@ -167,7 +168,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
   }
   async function writeEnabled(list: string[]): Promise<void> {
     await mkdir(stateDir, { recursive: true })
-    await writeFile(stateFile, JSON.stringify({ version: 1, enabled: list }, null, 2), 'utf8')
+    await writeFileAtomically(stateFile, JSON.stringify({ version: 1, enabled: list }, null, 2))
     enabledCache = list
     // 写入后重取指纹，让下一次 readEnabled 直接命中缓存（否则会白读一次）。
     enabledStamp = await fileStamp(stateFile)
@@ -312,7 +313,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       } catch (e) {
         return { ok: false, error: `创建人设目录失败: ${dir}（${message(e)}）` }
       }
-      await writeFile(target, serializePersona(args), 'utf8')
+      await writeFileAtomically(target, serializePersona(args))
       // v0.8.5：新建默认不启动——显式集合下新名天然停用；文件缺失时先物化全集并排除新名。
       cache = null
       return withEnabledNote({ ok: true, name }, () => materializeEnabledExcluding([name]))

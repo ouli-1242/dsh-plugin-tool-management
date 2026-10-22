@@ -113,6 +113,137 @@ export function unquote(v: unknown): string {
   return s;
 }
 
+/** 会被 YAML 解析器识别成非字符串的裸值（布尔 / null / 数字 / 日期）。 */
+const YAML_RESERVED_SCALAR_RE =
+  /^(?:true|false|null|~|yes|no|on|off|[-+]?(?:(?:0|[1-9]\d*)(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|\d{4}-\d{2}-\d{2}(?:[Tt ].*)?)$/i;
+/** 不能出现在裸标量开头的 YAML 指示符。 */
+const YAML_INDICATOR_START_RE = /^[-?:,[\]{}#&*!|>'"%@`]/;
+/** 裸标量里会被误读的 `: ` / 行尾 `:` / ` #`。 */
+const YAML_UNSAFE_BODY_RE = /:(?:\s|$)|(?:^|\s)#/;
+
+/**
+ * 把任意字符串编码成一行安全的 YAML 标量：能裸写就裸写，否则用 JSON 双引号。
+ *
+ * 需要引号的情形：首尾空白、控制字符、会开启块标量的指示符、布尔 / null / 数字 / 日期形态、
+ * 含 `: `、行尾 `:`、` #`、以及引号本身。`decodeYamlScalar` 是它的读侧，两边必须对得上。
+ */
+export function yamlScalar(value: unknown): string {
+  const s = String(value == null ? "" : value);
+  if (s === "") return '""';
+  const needsQuote =
+    s !== s.trim() ||
+    /[\u0000-\u001f\u007f]/.test(s) ||
+    YAML_INDICATOR_START_RE.test(s) ||
+    YAML_RESERVED_SCALAR_RE.test(s) ||
+    YAML_UNSAFE_BODY_RE.test(s) ||
+    s.includes('"') ||
+    s.includes("'");
+  return needsQuote ? JSON.stringify(s) : s;
+}
+
+/**
+ * 序列化一个 frontmatter 字段（含键名）：单行走 `yamlScalar`；多行用 `|` 块（保留换行）。
+ * 例外：多行里出现去空白后恰为 `---` 的行时改用 JSON 引号标量 —— 块标量缩进两格也躲不开
+ * `parseSkillDoc` 的结束扫描（`trim() === "---"`），引号形式是单物理行，扫描无从误判。
+ */
+export function yamlFieldLines(
+  key: string,
+  value: string | boolean,
+): string[] {
+  if (typeof value === "boolean") return [`${key}: ${value}`];
+  const s = String(value);
+  if (s.includes("\n")) {
+    if (s.split("\n").some((line) => line.trim() === "---"))
+      return [`${key}: ${JSON.stringify(s)}`];
+    return [`${key}: |`, ...s.split("\n").map((line) => `  ${line}`)];
+  }
+  return [`${key}: ${yamlScalar(s)}`];
+}
+
+/**
+ * 行级重写 frontmatter 的顶层标量字段，其余行（嵌套字段、未知键、注释、顺序）逐字保留。
+ *
+ * - `updates[key]`：字符串 = 写入（已有的整段取值行被替换，块标量的续行一并替换）；`null` = 删除；
+ *   `undefined` = 保持原样。缺失的键追加到字段区末尾。
+ * - `body` 不传 = 保留原正文；传了就整体替换（与旧序列化行为一致）。
+ * - 文件没有 frontmatter 时，按 updates 新建一段（仅写入非 null 的键）。
+ */
+export function rewriteFrontmatterFields(
+  text: string,
+  updates: Record<string, string | null | undefined>,
+  body?: string,
+): string {
+  const src = String(text ?? "");
+  const bom = src.charCodeAt(0) === 0xfeff ? "\uFEFF" : "";
+  const content = bom === "" ? src : src.slice(1);
+  const nl = content.includes("\r\n") ? "\r\n" : "\n";
+  const lines = content.split(/\r?\n/);
+  let end = -1;
+  if (lines[0] != null && lines[0].trim() === "---") {
+    for (let i = 1; i < lines.length; i++) {
+      if (lines[i].trim() === "---") {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) {
+    const head: string[] = ["---"];
+    for (const [key, value] of Object.entries(updates)) {
+      if (typeof value === "string") head.push(...yamlFieldLines(key, value));
+    }
+    head.push("---");
+    return (
+      bom +
+      head.join(nl) +
+      nl +
+      (body === undefined ? content : String(body))
+    );
+  }
+  const front = lines.slice(1, end);
+  const nextBody = body === undefined ? lines.slice(end + 1).join(nl) : String(body);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let i = 0;
+  while (i < front.length) {
+    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(front[i]);
+    if (!m) {
+      out.push(front[i]);
+      i++;
+      continue;
+    }
+    const key = m[1];
+    const isBlock = /^[>|][-+]?\s*$/.test(m[2]);
+    let spanEnd = i + 1;
+    if (isBlock) {
+      while (
+        spanEnd < front.length &&
+        (front[spanEnd] === "" || /^\s/.test(front[spanEnd]))
+      ) {
+        spanEnd++;
+      }
+    } else {
+      while (spanEnd < front.length && /^\s/.test(front[spanEnd])) spanEnd++;
+    }
+    const update = Object.prototype.hasOwnProperty.call(updates, key)
+      ? updates[key]
+      : undefined;
+    if (update === undefined) {
+      for (let k = i; k < spanEnd; k++) out.push(front[k]);
+    } else if (update !== null) {
+      out.push(...yamlFieldLines(key, update));
+    }
+    seen.add(key);
+    i = spanEnd;
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    if (typeof value === "string" && !seen.has(key))
+      out.push(...yamlFieldLines(key, value));
+  }
+  const frontText = out.length === 0 ? "" : out.join(nl) + nl;
+  return `${bom}---${nl}${frontText}---${nl}${nextBody}`;
+}
+
 // ── 声明名改写（退号落盘后同步 frontmatter）─────────────────────────────────
 
 /** frontmatter 整块（开栏 / 字段区 / 闭栏三段各自成组，便于逐字回拼）。 */

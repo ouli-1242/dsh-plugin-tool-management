@@ -82,6 +82,14 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest     # desktop
 dsh plugin --profile desktop remove dsh-plugin-tool-management         # desktop · uninstall
 ```
 
+Two reasons you might not get the newest release, and neither one errors out: npm mirrors / proxies lag behind, and pnpm's `minimumReleaseAge` (release cooldown) skips anything published inside the window. You just quietly end up on an older version. Pinning an exact version bypasses `@latest` resolution:
+
+```sh
+dsh plugin --profile web add dsh-plugin-tool-management@0.21.2
+```
+
+To check what you actually got: the "plugin adapter version" on the **Host** tab is the version baked into the code **loaded this session** (not what `package.json` says), and it should match `version` in `~/.dsh/tool-management/mount.json`.
+
 Hard-refresh the browser (web) or restart the desktop app, then a **Tools Management** panel with eight tabs means it worked. Client changes hot-reload; host-side changes need the client restarted (`dsh web` / the desktop app).
 
 You can also ask the model:
@@ -103,7 +111,6 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 - **Long lists stay out of the way**: every domain lists in full and scrolls on its own; skills group by source directory, memories by scene, enabled ones first.
 - **Both kinds of prompts are here**: the global group picks which one is written into `AGENTS.md` (single-select); the quick group is on/off, and clicking one pastes the saved text into the input box without sending it.
 - **Only reversible actions**: entering a scene and the various toggles; create / delete / edit / import / export stay on their own pages.
-- **Registered through the host's own channel**: DSH's input-trigger interface, no patching of official packages.
 
 ### Scope isolation (all global / per conversation / per workspace)
 
@@ -172,7 +179,7 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 - **Command line**: `node scripts/doctor.mjs` (health check), `node scripts/host-deps.mjs --fix` (align dependencies).
 - Under a **suppressing preset** such as `minimal`, this plugin's injection is off by default; the Host tab can force any domain back on.
 - Unchecking "Skills" or "Prompt" really stops them — under standard presets the host delivers those two itself; the other three domains follow the checkbox exactly.
-- **What the injection looks like**: one `<system-reminder>` per domain — an English frame (`# Current …` headings plus a "this one wins" line) around your own content: names, descriptions, notes and bodies are injected verbatim; a `</system-reminder>` inside the body is escaped.
+- **What the injection looks like**: one framed message per domain. Names, descriptions, notes and bodies go in verbatim, and a hand-written frame-closing marker inside the body is escaped so it cannot end the frame early.
 
 ---
 
@@ -219,17 +226,30 @@ The six recycle bins each own one directory under `trash/`: `{skills,memories,su
 
 ## FAQ
 
+The full runbook (symptom → why → how to confirm → how to fix) lives in **[docs/TROUBLESHOOTING.md](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/TROUBLESHOOTING.md)**. Only the most common cases are listed here.
+
 | Symptom                                                               | Fix                                                                                                                                                                                    |
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pages missing after install                                           | Hard refresh; restart DSH if that fails.                                                                                                                                               |
 | Duplicate MCP tabs                                                    | Remove the stale loader row from `cordis.patch.yml`, restart.                                                                                                                          |
 | Broken config, DSH won't boot                                         | Restore the newest `cordis.patch.yml.<level>.bak-<timestamp>` from `~/.dsh/tool-management/backups/` (5 per patch file).                                                               |
 | Action stopped working after a DSH upgrade                            | Settings → Tools Management → **Host** for the reason; `doctor.mjs` → `host-deps.mjs --fix`.                                                                                                      |
-| Won't install / peer mismatch after a DSH upgrade                    | Each generation has its own upper bound (the current one stops below 0.2.2); a minor upgrade needs a matching plugin release (upgrade the plugin before the host).                        |
-| The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab (pick that conversation / workspace in the layer picker first) — 19 tools ship switched off. The panel and scripts are unaffected either way.           |
+| Won't install / peer mismatch after a DSH upgrade                    | This plugin only supports DSH **0.2.1** (`>=0.2.1-rc.2 <0.2.2`). For any other host generation, install the plugin release that matches it.                          |
+| The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab (pick that conversation / workspace in the layer picker first) — 20 tools ship switched off. The panel and scripts are unaffected either way.           |
 | Still asked to confirm with `approval=never`?                         | No card appears — straight through with a log line. Switch back to "workspace write" to get the questions again.                                                                       |
 | `subagent_manager_run` reports provider unavailable                   | The provider is not registered: `spawn` (default) / `fork` (`inherit`) come from `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` — mount and restart.                |
 | Scene binds persona A, but the official `subagent` ran something else | Those two are host tools and this plugin cannot hide them; work matching a persona goes to `subagent_manager_run`, host tools only when no persona fits or a background job is needed. |
+
+---
+
+## Docs
+
+| Doc | When to read it |
+| --- | --- |
+| [Troubleshooting](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/TROUBLESHOOTING.md) | No panel after install, duplicate tabs, actions broken after an upgrade, corrupted disable table or sidecars |
+| [Architecture](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/ARCHITECTURE.md) | How content reaches the model, why one switch differs between two conversations, which file a change lands in |
+| [Compatibility matrix](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/COMPATIBILITY.md) | Per-host capability matrix (verified / untested / unavailable) |
+| [CHANGELOG](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/CHANGELOG.md) | What changed in each release |
 
 ---
 

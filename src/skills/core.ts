@@ -101,7 +101,14 @@ import { parseSkillDoc, toKebab, unquote } from "./frontmatter.js";
 
 // 拆出去的公开函数照旧挂在 core.js 上（tools/skills.ts 引 toKebab，memories/* 与 ops/memory.ts
 // 引 parseSkillDoc / unquote，契约测试也按 lib/skills/core.js 取它们）。
-export { parseSkillDoc, toKebab, unquote } from "./frontmatter.js";
+export {
+  parseSkillDoc,
+  toKebab,
+  unquote,
+  yamlScalar,
+  yamlFieldLines,
+  rewriteFrontmatterFields,
+} from "./frontmatter.js";
 
 // 官方内置技能段与 home 解析拆到同目录的 official.ts / homes.ts 后，core.js 的公开面照旧
 // （hub.ts、memories/*、subagents/service.ts 都按 ../skills/core.js 引 resolveDshHome）。

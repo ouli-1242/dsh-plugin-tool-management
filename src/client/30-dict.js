@@ -1,7 +1,7 @@
     const DICT = {
       zh: {
         "title": "技能", "desc": "管理技能：启停、导入、创建、回收站。", "link.project": "GitHub", "link.feedback": "问题反馈",
-        "btn.create": "新增", "btn.import": "导入", "btn.refresh": "刷新", "btn.refreshing": "刷新中…", "btn.cancel": "取消", "btn.close": "关闭", "row.menu": "「{name}」的更多操作", "export.hint": "导出为 zip，写入指定目录；只读不改。", "export.outDir": "导出目录", "export.pickDir": "选择导出目录", "export.submit": "导出", "export.busy": "导出中…", "export.done": "已导出 {count} 个文件到 {path}", "scenes.lock.lock": "锁定", "scenes.lock.unlock": "解锁", "scenes.lock.tag": "已锁定", "scenes.lock.hint": "锁定后五个管理域（MCP / 技能 / 子智能体 / 记忆 / 提示词）整体只读；场景启停不受影响", "scenes.lock.blockedEdit": "场景已锁定：先解锁再修改", "scenes.lock.notActive": "场景未启动：先启动再锁定", "scenes.lock.blockedExit": "场景已锁定：先解锁再关闭", "lock.banner": "有场景处于锁定状态：MCP / 技能 / 子智能体 / 记忆 / 提示词已整体冻结，先到场景页解锁再修改。", "scene.switch.banner": "处于「{scene}」场景：依旧可以更改配置，改动会同步档案，退出后状态还原。", "scene.sync.failed": "注意：改动已生效，但没能同步写进场景档案（{error}）——本次进场景期间有效，重新进这个场景时会按旧档案应用。", "state.sync.failed": "注意：启停状态没能写入（{error}）——受影响的条目可能停在启用态、下一轮进入模型上下文，请在本页确认开关。", "agm.apply.rebindScene": "场景「{scene}」接管中：应用这一份会把该场景改绑到它（同步写入场景档案）", "export.empty": "没有可导出的条目", "export.pickAll": "全选", "export.pickNone": "取消全选", "export.group.count": "{count} 项", "export.missing": "；跳过 {count} 项（文件不存在）：{names}", "export.skills": "导出", "export.subagents": "导出", "export.presets": "导出", "export.memories": "导出", "btn.detail": "详情", "btn.trash": "删除", "btn.restore": "恢复", "btn.delete.forever": "永久删除", "btn.file.pick": "选择文件", "btn.folder.pick": "选择文件夹", "btn.create.now": "创建技能", "btn.disable": "停用", "btn.enable": "启用", "btn.open.editor": "编辑器查看", "btn.activate": "启用这个", "btn.activate.title": "把当前来源的版本设为同名技能的首选并启用（不改动任何源文件）", "btn.unprefer": "取消首选", "btn.unprefer.title": "取消同名首选，回到按来源优先级自动选择",
+        "btn.create": "新增", "btn.import": "导入", "btn.refresh": "刷新", "btn.refreshing": "刷新中…", "btn.cancel": "取消", "btn.close": "关闭", "stale.write.conflict": "文件已在别处被修改：重新加载后再改，或选择覆盖保存。", "stale.write.conflictApply": "全局 AGENTS.md 已在别处被修改，已拒绝应用。请刷新页面确认内容后再试。", "stale.write.reload": "重新加载", "stale.write.overwrite": "覆盖保存", "row.menu": "「{name}」的更多操作", "export.hint": "导出为 zip，写入指定目录；只读不改。", "export.outDir": "导出目录", "export.pickDir": "选择导出目录", "export.submit": "导出", "export.busy": "导出中…", "export.done": "已导出 {count} 个文件到 {path}", "scenes.lock.lock": "锁定", "scenes.lock.unlock": "解锁", "scenes.lock.tag": "已锁定", "scenes.lock.hint": "锁定后五个管理域（MCP / 技能 / 子智能体 / 记忆 / 提示词）整体只读；场景启停不受影响", "scenes.lock.blockedEdit": "场景已锁定：先解锁再修改", "scenes.lock.notActive": "场景未启动：先启动再锁定", "scenes.lock.blockedExit": "场景已锁定：先解锁再关闭", "lock.banner": "有场景处于锁定状态：MCP / 技能 / 子智能体 / 记忆 / 提示词已整体冻结，先到场景页解锁再修改。", "scene.switch.banner": "处于「{scene}」场景：依旧可以更改配置，改动会同步档案，退出后状态还原。", "scene.sync.failed": "注意：改动已生效，但没能同步写进场景档案（{error}）——本次进场景期间有效，重新进这个场景时会按旧档案应用。", "state.sync.failed": "注意：启停状态没能写入（{error}）——受影响的条目可能停在启用态、下一轮进入模型上下文，请在本页确认开关。", "agm.apply.rebindScene": "场景「{scene}」接管中：应用这一份会把该场景改绑到它（同步写入场景档案）", "export.empty": "没有可导出的条目", "export.pickAll": "全选", "export.pickNone": "取消全选", "export.group.count": "{count} 项", "export.missing": "；跳过 {count} 项（文件不存在）：{names}", "export.skills": "导出", "export.subagents": "导出", "export.presets": "导出", "export.memories": "导出", "btn.detail": "详情", "btn.trash": "删除", "btn.restore": "恢复", "btn.delete.forever": "永久删除", "btn.file.pick": "选择文件", "btn.folder.pick": "选择文件夹", "btn.create.now": "创建技能", "btn.disable": "停用", "btn.enable": "启用", "btn.open.editor": "编辑器查看", "btn.activate": "启用这个", "btn.activate.title": "把当前来源的版本设为同名技能的首选并启用（不改动任何源文件）", "btn.unprefer": "取消首选", "btn.unprefer.title": "取消同名首选，回到按来源优先级自动选择",
         "btn.custom.add": "添加目录", "btn.custom.remove": "移除", "btn.openDir": "选择",
         "btn.source.remove": "移除来源", "btn.source.remove.title": "不再读取这个来源（源文件不动，之后可在回收站里恢复）", "btn.source.restore": "恢复", "btn.source.forget": "永久删除",
         "trash.section.dirs": "目录", "trash.section.skills": "技能", "trash.section.dirs.sub": "只是不再读取，磁盘文件一个字节都不动", "trash.section.dirs.empty": "没有被移除的来源", "trash.section.skills.sub": "文件真的被移走了：恢复能还原，永久删除会删掉文件", "trash.section.presets.sub": "预设目录已移走：恢复能还原，永久删除会删掉文件", "trash.section.scenes.sub": "场景记录、档案与它的记忆都在这里：恢复会整条放回", "trash.section.agents.sub": "人设文件已移走：恢复能还原，永久删除会删掉文件", "trash.section.memories.sub": "记忆正文已移走：恢复会放回索引，永久删除会删掉正文",
@@ -287,8 +287,22 @@
         "compat.backups.loading": "正在读取备份清单…", "compat.backups.loadFailed": "读取备份清单失败", "compat.backups.cleanFailed": "清理失败",
         "compat.state.ok": "一切正常", "compat.state.blocked": "有需要处理的问题",
         "compat.checking": "检查中…", "compat.empty": "尚未检查", "compat.failed": "检查失败",
+        "compat.save.failed": "保存失败",
         "compat.summary.ok": "宿主 {version} · 能力 {ok}/{total} · 全部可用", "compat.summary.degraded": "宿主 {version} · 能力 {ok}/{total} · 降级 {count} 项",
         "compat.summary.identity": "宿主 {version} · 能力 {ok}/{total} · 身份 {count} 项待处理",
+        "compat.update.available": "插件有兼容更新：{current} → {best}", "compat.update.current": "插件已是最新兼容版本（{current}）",
+        "compat.update.localAhead": "本地版本 {current} 比 registry 上兼容的最高版 {best} 更新", "compat.update.none": "registry 上没有与宿主 {host} 兼容的版本",
+        "compat.update.incompatible": "当前插件版本 {current} 与本宿主 {host} 不兼容", "compat.update.hostUnknown": "取不到宿主版本，已跳过更新检查",
+        "compat.update.proxy": "检测到代理环境，已跳过更新检查（不穿透代理）", "compat.update.unknown": "更新检查暂不可用",
+        "compat.update.copy": "复制安装命令", "compat.update.copied": "已复制",
+        // 顶部栏那颗「检查更新」键（0.21.2）：结论句复用上面那批 compat.update.*，这里只补
+        // 键本身的标签、进行态、重试提示，以及"安装命令在哪"那一句。
+        "update.check": "检查更新", "update.checking": "正在检查更新…", "update.recheck": "点击重新检查",
+        "update.hintCompat": "安装命令在「{tab}」页", "update.failed": "检查更新失败：{error}",
+        // 有兼容更新时那颗键**外观不变**（只多一个红点），但无障碍名换成「更新」——
+        // 这一下点下去是去兼容页拿命令（插件装不了自己），读屏该读到"更新"而不是"检查"。
+        "update.action": "更新", "update.goCompat": "点击去「{tab}」页拿安装命令",
+        "compat.diag.copy": "复制诊断信息", "compat.diag.copied": "已复制诊断信息",
         "compat.host": "宿主版本", "compat.verified": "插件适配版本",
         "compat.caps": "可用能力", "compat.caps.degraded": "{count} 项不可用",
         "compat.caps.substituted": "缺口由插件自补",
@@ -820,9 +834,14 @@
         "scope.loadFailed": "会话作用域读取失败：{error}",
         // 这一行的标题说的是**粒度**，不是"这一屏的会话"。原来写"当前会话设置情况："
         // 会被读成"下面选的是哪个会话"，而实际选的是"这一份设置属于谁"（用户 2026-10-22）。
-        "scope.currentSettings": "每个会话一套设置",
-        "scope.currentWorkspaceSettings": "每个工作区一套设置",
-        "scope.globalNoLayer": "所有对话共用一套设置",
+        //
+        // 三条**必须等长（各 7 字）**：切换粒度时标题宽度一变，右边那个下拉就跟着左右跳
+        // （用户 2026-10-22：「能不能改成『全局统一设置』类似的简洁的话，字数要一样」）。
+        // 而「工作区」天生比「全局 / 会话」多一个字 —— 所以另外两条用**三字主语**对齐：
+        // 全对话 / 工作区 / 单会话。改文案时请保持三条同长，否则下拉会跳。
+        "scope.currentSettings": "单会话独立设置",
+        "scope.currentWorkspaceSettings": "工作区独立设置",
+        "scope.globalNoLayer": "全对话统一设置",
         "scope.layer.session": "本会话",
         "scope.layer.workspace": "本工作区",
         "scope.layer.global": "全局",
@@ -889,7 +908,7 @@
       },
       en: {
         "title": "Skills", "desc": "Manage skills: enable, import, create, trash.", "link.project": "GitHub", "link.feedback": "Issues",
-        "btn.create": "New", "btn.import": "Import", "btn.refresh": "Refresh", "btn.refreshing": "Refreshing…", "btn.cancel": "Cancel", "btn.close": "Close", "row.menu": "More actions for {name}", "export.hint": "Exports a zip into the chosen directory; read-only, changes nothing.", "export.outDir": "Output directory", "export.pickDir": "Choose output directory", "export.submit": "Export", "export.busy": "Exporting…", "export.done": "Exported {count} file(s) to {path}", "scenes.lock.lock": "Lock", "scenes.lock.unlock": "Unlock", "scenes.lock.tag": "Locked", "scenes.lock.hint": "Locking makes all five domains (MCP / skills / subagents / memories / prompts) read-only; starting or stopping scenes still works", "scenes.lock.blockedEdit": "Scene is locked — unlock it to make changes", "scenes.lock.notActive": "Scene is not active — start it before locking", "scenes.lock.blockedExit": "Scene is locked — unlock it before turning it off", "lock.banner": "A scene is locked: MCP, skills, subagents, memories and prompts are frozen. Unlock it on the Scenes page to make changes.", "scene.switch.banner": "In scene “{scene}”: you can still change settings — edits sync to the profile and the state is restored when you leave.", "scene.sync.failed": "Heads-up: the change took effect, but it could not be written into the scene profile ({error}) — it holds for this visit only; re-entering this scene will apply the older profile.", "state.sync.failed": "Heads-up: the enable/disable state could not be written ({error}) — affected items may be left enabled and enter the model context next turn; please check the toggles on this page.", "agm.apply.rebindScene": "Scene “{scene}” is driving the baseline: applying this preset rebinds that scene to it (written into the scene profile as well)", "export.empty": "Nothing to export", "export.pickAll": "Select all", "export.pickNone": "Deselect all", "export.group.count": "{count}", "export.missing": "; skipped {count} (missing on disk): {names}", "export.skills": "Export", "export.subagents": "Export", "export.presets": "Export", "export.memories": "Export", "btn.detail": "Details", "btn.trash": "Delete", "btn.restore": "Restore", "btn.delete.forever": "Delete forever", "btn.file.pick": "Choose file", "btn.folder.pick": "Choose folder", "btn.create.now": "Create skill", "btn.disable": "Disable", "btn.enable": "Enable", "btn.open.editor": "Open in editor", "btn.activate": "Use this one", "btn.activate.title": "Make this source's copy the active one for this shared name and enable it (source files are never touched)", "btn.unprefer": "Auto again", "btn.unprefer.title": "Clear the manual choice and go back to automatic source priority",
+        "btn.create": "New", "btn.import": "Import", "btn.refresh": "Refresh", "btn.refreshing": "Refreshing…", "btn.cancel": "Cancel", "btn.close": "Close", "stale.write.conflict": "This file changed elsewhere: reload and edit again, or overwrite it.", "stale.write.conflictApply": "The global AGENTS.md changed elsewhere, so the apply was refused. Refresh the page and check the content before retrying.", "stale.write.reload": "Reload", "stale.write.overwrite": "Overwrite", "row.menu": "More actions for {name}", "export.hint": "Exports a zip into the chosen directory; read-only, changes nothing.", "export.outDir": "Output directory", "export.pickDir": "Choose output directory", "export.submit": "Export", "export.busy": "Exporting…", "export.done": "Exported {count} file(s) to {path}", "scenes.lock.lock": "Lock", "scenes.lock.unlock": "Unlock", "scenes.lock.tag": "Locked", "scenes.lock.hint": "Locking makes all five domains (MCP / skills / subagents / memories / prompts) read-only; starting or stopping scenes still works", "scenes.lock.blockedEdit": "Scene is locked — unlock it to make changes", "scenes.lock.notActive": "Scene is not active — start it before locking", "scenes.lock.blockedExit": "Scene is locked — unlock it before turning it off", "lock.banner": "A scene is locked: MCP, skills, subagents, memories and prompts are frozen. Unlock it on the Scenes page to make changes.", "scene.switch.banner": "In scene “{scene}”: you can still change settings — edits sync to the profile and the state is restored when you leave.", "scene.sync.failed": "Heads-up: the change took effect, but it could not be written into the scene profile ({error}) — it holds for this visit only; re-entering this scene will apply the older profile.", "state.sync.failed": "Heads-up: the enable/disable state could not be written ({error}) — affected items may be left enabled and enter the model context next turn; please check the toggles on this page.", "agm.apply.rebindScene": "Scene “{scene}” is driving the baseline: applying this preset rebinds that scene to it (written into the scene profile as well)", "export.empty": "Nothing to export", "export.pickAll": "Select all", "export.pickNone": "Deselect all", "export.group.count": "{count}", "export.missing": "; skipped {count} (missing on disk): {names}", "export.skills": "Export", "export.subagents": "Export", "export.presets": "Export", "export.memories": "Export", "btn.detail": "Details", "btn.trash": "Delete", "btn.restore": "Restore", "btn.delete.forever": "Delete forever", "btn.file.pick": "Choose file", "btn.folder.pick": "Choose folder", "btn.create.now": "Create skill", "btn.disable": "Disable", "btn.enable": "Enable", "btn.open.editor": "Open in editor", "btn.activate": "Use this one", "btn.activate.title": "Make this source's copy the active one for this shared name and enable it (source files are never touched)", "btn.unprefer": "Auto again", "btn.unprefer.title": "Clear the manual choice and go back to automatic source priority",
         "btn.custom.add": "Add folder",
         "btn.custom.remove": "Remove",
         "btn.source.remove": "Remove source", "btn.source.remove.title": "Stop reading this source (files stay on disk; restore it later from the trash)", "btn.source.restore": "Restore", "btn.source.forget": "Delete forever",
@@ -1171,8 +1190,18 @@
         "compat.backups.loading": "Reading the backup list…", "compat.backups.loadFailed": "Could not read the backup list", "compat.backups.cleanFailed": "Cleanup failed",
         "compat.state.ok": "All good", "compat.state.blocked": "Needs attention",
         "compat.checking": "Checking…", "compat.empty": "Not checked yet", "compat.failed": "Check failed",
+        "compat.save.failed": "Save failed",
         "compat.summary.ok": "host {version} · capabilities {ok}/{total} · all usable", "compat.summary.degraded": "host {version} · capabilities {ok}/{total} · {count} degraded",
         "compat.summary.identity": "host {version} · capabilities {ok}/{total} · {count} identity issue(s) to resolve",
+        "compat.update.available": "Compatible update available: {current} → {best}", "compat.update.current": "Already on the newest compatible version ({current})",
+        "compat.update.localAhead": "Local version {current} is newer than the newest compatible release ({best})", "compat.update.none": "No release on the registry is compatible with host {host}",
+        "compat.update.incompatible": "Plugin {current} is not compatible with this host ({host})", "compat.update.hostUnknown": "Host version unavailable — update check skipped",
+        "compat.update.proxy": "Proxy environment detected — update check skipped (no proxy bypass)", "compat.update.unknown": "Update check unavailable",
+        "compat.update.copy": "Copy install command", "compat.update.copied": "Copied",
+        "update.check": "Check for updates", "update.checking": "Checking for updates…", "update.recheck": "Click to check again",
+        "update.hintCompat": "Install command is on the {tab} tab", "update.failed": "Update check failed: {error}",
+        "update.action": "Update", "update.goCompat": "Click to open the {tab} tab for the install command",
+        "compat.diag.copy": "Copy diagnostics", "compat.diag.copied": "Diagnostics copied",
         "compat.host": "Host version", "compat.verified": "Verified against",
         "compat.caps": "Usable capabilities", "compat.caps.degraded": "{count} unavailable",
         "compat.caps.substituted": "gaps covered by the plugin",

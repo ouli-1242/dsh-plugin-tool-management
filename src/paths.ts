@@ -10,7 +10,7 @@
 //     是否是 kebab-case）——那些留在各域；
 //   - 长度上限由调用方给（人设名 64、技能名 128…），因为那是各域自己的策略，不是安全边界。
 
-import { realpath } from 'node:fs/promises'
+import { lstat, realpath } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 
 /** 段名默认长度上限（字符）。 */
@@ -107,10 +107,51 @@ export async function realPathOf(path: string): Promise<string> {
 }
 
 /**
+ * 严格版：末级仍允许不存在，但**任何已存在的段解析失败都抛错**。
+ *
+ * 与 `realPathOf` 的区别只在安全侧：后者把 realpath 失败的段一律当“尚未存在”接回去，
+ * 于是一个悬空符号链接（`<root>/link -> /outside/target`）会被还原成逻辑路径并通过根内断言；
+ * 后续写盘若目标父目录已存在，就会顺着链接落到根外。这里在向上找最近既存祖先的每一步
+ * 先 `lstat`：符号链接（含悬空）直接失败；存在但 realpath 失败（权限 / 占用）也失败。
+ */
+export async function realPathOfStrict(path: string): Promise<string> {
+  let current = resolve(path)
+  const missing: string[] = []
+  for (;;) {
+    try {
+      return resolve(await realpath(current), ...missing)
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | null)?.code
+      let info: Awaited<ReturnType<typeof lstat>> | null = null
+      try {
+        info = await lstat(current)
+      } catch (le) {
+        if ((le as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw le
+      }
+      if (info !== null) {
+        if (info.isSymbolicLink()) throw new Error('路径包含无法解析的符号链接：' + current)
+        // 存在却解析不出来（EACCES / EBUSY 等）：不能当成“不存在”继续向上。
+        throw e
+      }
+      if (code !== 'ENOENT') throw e
+      const parent = dirname(current)
+      if (parent === current) return resolve(path)
+      missing.unshift(basename(current))
+      current = parent
+    }
+  }
+}
+
+/**
  * 路径经 realpath 解析后是否仍在根内（含根本身）。
  * 供「写入 / 删除之前」的根内断言使用，是 `isInsideRoot` 的防符号链接版本。
  */
 export async function isInsideRootResolved(root: string, candidate: string): Promise<boolean> {
-  const [rootReal, candidateReal] = await Promise.all([realPathOf(root), realPathOf(candidate)])
-  return isSameOrDescendant(rootReal, candidateReal)
+  try {
+    const [rootReal, candidateReal] = await Promise.all([realPathOfStrict(root), realPathOfStrict(candidate)])
+    return isSameOrDescendant(rootReal, candidateReal)
+  } catch {
+    // 解析不了 = 不能证明在根内 → 按“不在根内”拒绝（调用方都按 false 处理）。
+    return false
+  }
 }

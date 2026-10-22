@@ -33,18 +33,45 @@ export interface DiscoveredEntry {
   /** 仅 shadowed flat 条目：同名 bundle 优先后被遮蔽（UI 标红）。 */
   shadowed?: boolean
 }
-export async function discover(memoriesRoot: string): Promise<{ entries: Map<string, DiscoveredEntry>; shadowed: DiscoveredEntry[]; groups: Set<string>; scenes: string[]; warnings: string[]; truncated: boolean }> {
+export interface DiscoveryResult {
+  entries: Map<string, DiscoveredEntry>
+  shadowed: DiscoveredEntry[]
+  groups: Set<string>
+  scenes: string[]
+  warnings: string[]
+  truncated: boolean
+  /**
+   * 这次扫描是否完整。只有 `true` 才允许拿扫描结果反删索引条目 —— 根目录读不到、
+   * 某个子目录 `realpath` / `readdir` 失败、条目在扫描期间消失、或触发目录 / 条目预算，
+   * 都意味着“没扫到”不等于“已删除”。清理逻辑在 `snapshot.ts`。
+   */
+  complete: boolean
+}
+export async function discover(memoriesRoot: string): Promise<DiscoveryResult> {
   const entries = new Map<string, DiscoveredEntry>()
   const shadowed: DiscoveredEntry[] = []
   const groups = new Set<string>()
   const scenes: string[] = []
   const warnings: string[] = []
   const rootPath = resolve(memoriesRoot)
+  let complete = true
+  let incompleteWarnings = 0
+  /** 失败告警只留前 10 条：一次坏掉几千个条目时，刷屏的 warning 本身也会淹掉真正的原因。 */
+  const markIncomplete = (text: string): void => {
+    complete = false
+    incompleteWarnings += 1
+    if (incompleteWarnings <= 10) warnings.push(text)
+    else if (incompleteWarnings === 11) warnings.push('（更多扫描失败已省略）')
+  }
   try {
     const st = await lstat(rootPath)
-    if (!st.isDirectory() || st.isSymbolicLink()) return { entries, shadowed, groups, scenes, warnings, truncated: false }
-  } catch {
-    return { entries, shadowed, groups, scenes, warnings, truncated: false }
+    if (!st.isDirectory() || st.isSymbolicLink()) {
+      warnings.push('记忆根目录不是可扫描的普通目录，已跳过索引清理：' + rootPath)
+      return { entries, shadowed, groups, scenes, warnings, truncated: false, complete: false }
+    }
+  } catch (e) {
+    warnings.push('记忆根目录不可读，已跳过索引清理（' + message(e) + '）：' + rootPath)
+    return { entries, shadowed, groups, scenes, warnings, truncated: false, complete: false }
   }
   const queue: Array<{ path: string; group: string; depth: number; ancestors: Set<string> }> = [
     { path: rootPath, group: '', depth: 0, ancestors: new Set() },
@@ -72,6 +99,7 @@ export async function discover(memoriesRoot: string): Promise<{ entries: Map<str
   for (let cursor = 0; cursor < queue.length; cursor++) {
     if (directories >= MAX_DIRECTORIES || itemCount >= MAX_ENTRIES) {
       truncated = true
+      markIncomplete(`扫描达到上限（目录 ${directories}/${MAX_DIRECTORIES}，条目 ${itemCount}/${MAX_ENTRIES}），索引清理已跳过`)
       break
     }
     const current = queue[cursor]
@@ -85,13 +113,16 @@ export async function discover(memoriesRoot: string): Promise<{ entries: Map<str
       for (const item of dir) {
         if (itemCount >= MAX_ENTRIES) {
           truncated = true
+          markIncomplete(`条目数达到上限（${MAX_ENTRIES}），索引清理已跳过`)
           break
         }
         itemCount++
         dirents.push(item)
       }
-    } catch {
-      continue // 失效链接或不可读目录不阻断其他来源
+    } catch (e) {
+      // 失效链接或不可读目录不阻断其他来源，但必须让调用方知道这次扫描不完整。
+      markIncomplete(`目录不可读，已跳过：${current.group || '.'}（${message(e)}）`)
+      continue
     }
 
     // bundle 检查：当前目录含 `<目录名>.md`（或旧版 `SKILL.md`）→ 它是规则叶子，父路径为场景。
@@ -145,6 +176,7 @@ export async function discover(memoriesRoot: string): Promise<{ entries: Map<str
           }
           if (current.depth >= MAX_SOURCE_DEPTH || queue.length >= MAX_DIRECTORIES) {
             truncated = true
+            markIncomplete(`目录层级或数量达到上限，已跳过：${current.group ? current.group + '/' : ''}${item.name}`)
             continue
           }
           queue.push({
@@ -160,12 +192,13 @@ export async function discover(memoriesRoot: string): Promise<{ entries: Map<str
         const name = item.name.slice(0, -3)
         const id = current.group ? `${current.group}/${name}` : name
         addEntry({ id, group: current.group, name, kind: 'flat', docPath: path, entryPath: path })
-      } catch {
-        /* 来源在扫描期间失效时跳过 */
+      } catch (e) {
+        // 条目在 readdir 与 lstat 之间消失 / 被占用：这次扫描不能当作完整。
+        markIncomplete(`条目读取失败，已跳过：${current.group ? current.group + '/' : ''}${item.name}（${message(e)}）`)
       }
     }
   }
-  return { entries, shadowed, groups, scenes, warnings, truncated }
+  return { entries, shadowed, groups, scenes, warnings, truncated, complete }
 }
 export function deriveDescription(body: string): string {
   const text = String(body ?? '').trim()

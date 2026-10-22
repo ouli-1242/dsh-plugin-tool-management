@@ -13,8 +13,9 @@
 //
 // `list()` 连**正文一起给**，不是偷懒省一次请求：宿主的 `settle()` 拿到 onPick 的返回值后
 // **同步**执行插入（input-trigger client.js），异步读正文来不及 —— 点的时候手里就得有那段字。
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { writeFileAtomically } from '../memories/index-io.js'
 import { isValidPresetId, normalizePresetId } from './preset-id.js'
 import { listTrashEntries, moveOutOfTrash, moveToTrash, purgeTrashEntry, readTrashEntry, type TrashEntry } from '../hub.js'
 
@@ -84,7 +85,7 @@ export function createQuickPromptsService(deps: QuickPromptsDeps): QuickPromptsS
     const file = join(deps.dir, id, META_FILE)
     try {
       if (!Object.keys(body).length) { await rm(file, { force: true }); return }
-      await writeFile(file, JSON.stringify(body, null, 2) + '\n', 'utf8')
+      await writeFileAtomically(file, JSON.stringify(body, null, 2) + '\n')
     } catch { /* 元信息写不进去不该让保存失败：正文才是本体 */ }
   }
 
@@ -118,7 +119,7 @@ export function createQuickPromptsService(deps: QuickPromptsDeps): QuickPromptsS
     const dir = join(deps.dir, safeId)
     try { await stat(dir); return { ok: false, error: 'id 已存在：' + safeId } } catch { /* 不存在，继续 */ }
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, FILENAME), String(content ?? ''), 'utf8')
+    await writeFileAtomically(join(dir, FILENAME), String(content ?? ''))
     await writeMeta(safeId, { description })
     return { ok: true, id: safeId }
   }
@@ -136,7 +137,7 @@ export function createQuickPromptsService(deps: QuickPromptsDeps): QuickPromptsS
       try { await stat(join(deps.dir, targetId)); return { ok: false, error: '新 id 已存在：' + targetId } } catch { /* 可用 */ }
       try { await rename(join(deps.dir, safeId), join(deps.dir, targetId)) } catch (e) { return { ok: false, error: '改名失败：' + message(e) } }
     }
-    await writeFile(join(deps.dir, targetId, FILENAME), String(content ?? ''), 'utf8')
+    await writeFileAtomically(join(deps.dir, targetId, FILENAME), String(content ?? ''))
     await writeMeta(targetId, { description })
     return { ok: true, id: targetId, ...(targetId === safeId ? {} : { renamedFrom: safeId }) }
   }

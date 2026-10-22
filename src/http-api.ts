@@ -119,14 +119,18 @@ export function installHttpApi(deps: HttpApiDeps): void {
             const v = req.headers?.[name]
             return Array.isArray(v) ? v[0] ?? '' : v ?? ''
           }
+          // 拒绝路径必须带状态码：客户端 / 代理 / 日志都按它分流。所有出口共用这一个 helper，
+          // 避免某条分支又回到“200 + ok:false”的旧形态。
+          const send = (status: number, payload: unknown): void => {
+            res.writeHead(status, { 'content-type': 'application/json' })
+            res.end(JSON.stringify(payload))
+          }
           if (String(req.method || 'POST').toUpperCase() !== 'POST') {
-            res.writeHead(405, { 'content-type': 'application/json' })
-            res.end(JSON.stringify({ ok: false, error: 'method not allowed' }))
+            send(405, { ok: false, error: 'method not allowed' })
             return
           }
           if (hdr('x-dsh-plugin') !== 'dsh-plugin-tool-management') {
-            res.writeHead(403, { 'content-type': 'application/json' })
-            res.end(JSON.stringify({ ok: false, error: 'missing plugin gate header' }))
+            send(403, { ok: false, error: 'missing plugin gate header' })
             return
           }
           // 「本次带的这串对不对」比的是**存量**令牌：关掉令牌功能之后仍然要凭它才能开回来、
@@ -138,22 +142,30 @@ export function installHttpApi(deps: HttpApiDeps): void {
           if (!tokenAccepted) {
             const fence = fenceRejection(req, connection)
             if (fence) {
-              res.writeHead(fence.status, { 'content-type': 'application/json' })
-              res.end(JSON.stringify({ ok: false, error: fence.error }))
+              send(fence.status, { ok: false, error: fence.error })
               return
             }
           }
-          res.writeHead(200, { 'content-type': 'application/json' })
           try {
             let payload: any = {}
+            let bodyText = ''
             try {
-              payload = JSON.parse((await readBody(req)) || '{}')
+              bodyText = await readBody(req)
             } catch (e) {
               if (String((e as Error)?.message).includes('body too large')) {
-                res.end(JSON.stringify({ ok: false, error: '请求体过大' }))
+                send(413, { ok: false, error: '请求体过大' })
                 return
               }
-              /* otherwise fall through with {} */
+              send(400, { ok: false, error: '读取请求体失败: ' + deps.message(e) })
+              return
+            }
+            if (bodyText.trim() !== '') {
+              try {
+                payload = JSON.parse(bodyText)
+              } catch {
+                send(400, { ok: false, error: '请求体不是合法 JSON' })
+                return
+              }
             }
             const op = String(payload.op || '')
             // 敏感 op（会吐明文密钥与完整配置）：**配了令牌就必须带对的**，没配令牌则不设防
@@ -167,7 +179,7 @@ export function installHttpApi(deps: HttpApiDeps): void {
               // 与"从来没配过"不同。
               const gate = secretOpRejection({ tokenConfigured: deps.CONFIG_TOKEN !== '', tokenAccepted })
               if (gate) {
-                res.end(JSON.stringify({ ok: false, error: gate.error, code: gate.code }))
+                send(403, { ok: false, error: gate.error, code: gate.code })
                 return
               }
             }
@@ -182,7 +194,7 @@ export function installHttpApi(deps: HttpApiDeps): void {
             if (deps.TOKEN && deps.WRITE_OPS.has(op) && !readOnlyCall && !deps.tokenMatches(hdr('x-dsh-token'))) {
               // 文案与明文门禁同源（http-fence.ts），code 也统一 —— 界面据此在最右侧挂
               // 「去填令牌」跳转按钮。这条错误会出现在**任意**页面，而入口只有一个。
-              res.end(JSON.stringify({ ok: false, code: TOKEN_CODE_BAD, error: TOKEN_MSG }))
+              send(403, { ok: false, code: TOKEN_CODE_BAD, error: TOKEN_MSG })
               return
             }
             // 令牌状态（只读，**不需要**令牌本身）：回答"宿主配没配"、"本次带的这串对不对"、
@@ -191,7 +203,7 @@ export function installHttpApi(deps: HttpApiDeps): void {
             // 不返回令牌、也不返回它的任何片段 —— 泄给同源页面等于把最后一道门交出去。
             if (op === 'token-status') {
               const state = await deps.tokenConfigState()
-              res.end(JSON.stringify({
+              send(200, {
                 ok: true,
                 // 「宿主配置了令牌」= 配置里**有**值（关掉也算有：随时能开回来）。
                 hostConfigured: deps.CONFIG_TOKEN !== '',
@@ -208,13 +220,13 @@ export function installHttpApi(deps: HttpApiDeps): void {
                 configFound: state.found,
                 envToken: state.envToken === true,
                 pendingRestart: state.pendingRestart,
-              }))
+              })
               return
             }
             // 设置 / 关闭令牌：同样就地处理（理由见 tokenConfigure 的注释 —— 也正因为不进
             // handlers，模型侧没有任何工具能间接关掉它）。
             if (op === 'token-configure') {
-              res.end(JSON.stringify(deps.withPatchWarnings(await deps.tokenConfigure(payload.args || {}, tokenAccepted))))
+              send(200, deps.withPatchWarnings(await deps.tokenConfigure(payload.args || {}, tokenAccepted)))
               return
             }
             // 「锁定」/「删除令牌」的配套：把「本次启动已验过」的闩重新挂上。没有它，解锁一次之后
@@ -224,12 +236,14 @@ export function installHttpApi(deps: HttpApiDeps): void {
             // handlers —— 模型不该有能力拨这颗闩。
             if (op === 'token-unaccept') {
               deps.unmarkAccepted()
-              res.end(JSON.stringify({ ok: true }))
+              send(200, { ok: true })
               return
             }
-            const fn = deps.handlers[op]
-            if (!fn) {
-              res.end(JSON.stringify({ ok: false, error: '未知操作: ' + op }))
+            // 只认自有属性：handlers 是普通对象，`handlers['constructor']` 会命中原型上的
+            // 构造函数 —— 未知 op 被当成可调用函数，安全网就漏了。
+            const fn = Object.prototype.hasOwnProperty.call(deps.handlers, op) ? deps.handlers[op] : undefined
+            if (typeof fn !== 'function') {
+              send(404, { ok: false, error: '未知操作: ' + op })
               return
             }
             const result = await fn(payload.args || {})
@@ -237,9 +251,9 @@ export function installHttpApi(deps: HttpApiDeps): void {
             // 「这次算不算写」的判据在 recordOpAudit 里（与写门禁同源：登记表的 `writeWhen`）
             // —— 不在这里再传一次 `readOnlyCall`，两处各判一次迟早会分家。
             recordOpAudit(op, payload.args || {}, 'panel', result)
-            res.end(JSON.stringify(deps.withPatchWarnings(result === undefined ? { ok: true } : result)))
+            send(200, deps.withPatchWarnings(result === undefined ? { ok: true } : result))
           } catch (e) {
-            res.end(JSON.stringify({ ok: false, error: deps.message(e) }))
+            send(500, { ok: false, error: deps.message(e) })
           }
         },
       }), 'dsh-plugin-tool-management: api route')

@@ -3,6 +3,7 @@
 //
 // 从 subagents/service.ts 整段搬来，一行未改。这一层不认识宿主也不写文件：进来一段文本，
 // 出去一个 PersonaDoc；创建与更新走的解析口径与扫描时同一份，两处不能各写一套。
+import { decodeYamlScalar } from '../skills/frontmatter.js'
 import type { PersonaDoc, PresetToolRule } from './persona-types.js'
 
 /** 逗号/顿号分隔的名字清单（空串 → undefined）。 */
@@ -77,17 +78,29 @@ export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
   let body = raw
   let toolsByPreset: Record<string, PresetToolRule> | undefined
   if (m) {
+    // 新写入用 `output:` + YAML 序列；旧文件是重复的 `output: 一行`。两种都读。
+    let inOutputSequence = false
     for (const line of m[1].split(/\r?\n/)) {
+      if (inOutputSequence) {
+        const item = /^\s*-\s?(.*)$/.exec(line)
+        if (item) {
+          const value = decodeYamlScalar(item[1]).trim()
+          if (value !== '') outputLines.push(value)
+          continue
+        }
+        if (line.trim() === '') continue
+        inOutputSequence = false
+      }
       const kv = /^([A-Za-z_-]+)\s*:\s*(.*)$/.exec(line.trim())
       if (!kv) continue
       const key = kv[1].toLowerCase()
-      // `output:` 是**可重复**的键（一条要求一行，按顺序收集）。frontmatter 是逐行解析的，
-      // 多行契约塞不进一个值里；写成重复键比引入块标量语法简单，也一眼看得懂。
       if (key === 'output') {
-        if (kv[2].trim() !== '') outputLines.push(kv[2].trim())
+        const value = decodeYamlScalar(kv[2]).trim()
+        if (value === '') inOutputSequence = true
+        else outputLines.push(value)
         continue
       }
-      data[key] = kv[2].trim()
+      data[key] = decodeYamlScalar(kv[2]).trim()
     }
     toolsByPreset = parsePresetToolRules(m[1])
     body = raw.slice(m[0].length)

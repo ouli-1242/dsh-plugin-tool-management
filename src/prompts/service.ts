@@ -185,7 +185,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
     const file = join(deps.presetsDir, id, META_FILE)
     try {
       if (text === '') { await rm(file, { force: true }); return }
-      await writeFile(file, JSON.stringify({ description: text }, null, 2) + '\n', 'utf8')
+      await writeFileAtomically(file, JSON.stringify({ description: text }, null, 2) + '\n')
     } catch { /* 描述写不进去不该让保存失败 */ }
   }
 
@@ -212,7 +212,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
     try {
       const defaultDir = join(deps.presetsDir, 'default')
       await mkdir(defaultDir, { recursive: true })
-      await writeFile(join(defaultDir, FILENAME), globalContent, 'utf8')
+      await writeFileAtomically(join(defaultDir, FILENAME), globalContent)
     } catch { /* best effort */ }
   }
 
@@ -285,7 +285,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
       }
     }
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, FILENAME), content, 'utf8')
+    await writeFileAtomically(join(dir, FILENAME), content)
     await writeDescription(safeId, options?.description)
     return { ok: true, id: safeId }
   }
@@ -309,7 +309,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
       try { await stat(nextDir); return { ok: false, error: '新 id 已存在：' + targetId } } catch { /* 可用 */ }
       try { await rename(dir, nextDir) } catch (e) { return { ok: false, error: '改名失败：' + message(e) } }
     }
-    await writeFile(join(deps.presetsDir, targetId, FILENAME), String(content ?? ''), 'utf8')
+    await writeFileAtomically(join(deps.presetsDir, targetId, FILENAME), String(content ?? ''))
     await writeDescription(targetId, description)
     if (targetId !== safeId && await readAppliedId() === safeId) {
       // 改名的正好是「最近一次应用」的那个预设：记录跟着改，否则它指向一个不存在的 id，
@@ -613,7 +613,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
     const dir = join(deps.presetsDir, safeId)
     try { await stat(dir); return { ok: false, error: 'id 已存在：' + safeId } } catch { /* 不存在，继续 */ }
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, FILENAME), String(content ?? ''), 'utf8')
+    await writeFileAtomically(join(dir, FILENAME), String(content ?? ''))
     await writeDescription(safeId, description)
     return { ok: true, id: safeId }
   }

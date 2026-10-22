@@ -8,7 +8,7 @@
 // **上传（编码后）**字节，管不住解压后的体积 —— 一个 8 MiB 条目 × 2000 条 ≈ 16 GiB 会在
 // 单次 `unzipSync` 里被实体化。所以另有 `MAX_IMPORT_UNCOMPRESSED_BYTES` 管**解压后**的
 // 累计量，在 filter 里按档案自报的 `info.originalSize` 累加。
-import { unzipSync } from 'fflate'
+import { unzipLimited } from './unzip.js'
 import { isValidSegment } from '../paths.js'
 
 export interface UploadFile { name?: unknown; data?: unknown }
@@ -77,8 +77,6 @@ export function expandUploads(files: unknown): { entries: RawEntry[]; problems: 
     problems.push({ name: `(其余 ${all.length - MAX_IMPORT_FILES} 个文件)`, reason: `一次最多导入 ${MAX_IMPORT_FILES} 个文件` })
   }
   let total = 0
-  /** 解压后超限只报一次（与"超条目数"同口径，避免几千条问题刷屏）。 */
-  let uncompressedReported = false
   for (const raw of list) {
     const file = (raw || {}) as UploadFile
     const name = String(file.name || '').trim() || '(未命名)'
@@ -95,41 +93,15 @@ export function expandUploads(files: unknown): { entries: RawEntry[]; problems: 
     }
     if (isZipBytes(bytes)) {
       let unzipped: Record<string, Uint8Array>
-      let uncompressed = 0
       try {
-        let count = 0
-        unzipped = unzipSync(bytes, {
-          filter(info) {
-            count += 1
-            // 被 filter 丢掉的条目必须回报：静默丢弃会让用户以为「全都导入成功了」。
-            // 2026-09-13 实测（限额验证批）：9 MiB 附件与第 2001 个条目都曾无声消失，
-            // 响应里 imported=1 / skipped=[] —— 用户完全看不出少了东西。
-            if (count > MAX_IMPORT_ENTRIES) {
-              // 超条目数时只报一次，避免 2000+ 条问题刷屏。
-              if (count === MAX_IMPORT_ENTRIES + 1) {
-                problems.push({ name, reason: `zip 内条目超过 ${MAX_IMPORT_ENTRIES} 个，其余条目已忽略` })
-              }
-              return false
-            }
-            if (!info.name.endsWith('/') && info.originalSize > MAX_IMPORT_ENTRY_BYTES) {
-              problems.push({ name: info.name, reason: `zip 内单条目超过 ${MAX_IMPORT_ENTRY_BYTES >> 20} MiB，已跳过` })
-              return false
-            }
-            // 解压后累计：单条目与条目数都挡不住「2000 × 8 MiB」这种组合，只有累计量挡得住。
-            // 目录条目不占解压预算（originalSize 为 0 且不产出内容）。
-            if (!info.name.endsWith('/')) {
-              uncompressed += info.originalSize
-              if (uncompressed > MAX_IMPORT_UNCOMPRESSED_BYTES) {
-                if (!uncompressedReported) {
-                  uncompressedReported = true
-                  problems.push({ name: info.name, reason: `zip 解压后合计超过 ${MAX_IMPORT_UNCOMPRESSED_BYTES >> 20} MiB，该条目及其后条目已忽略` })
-                }
-                return false
-              }
-            }
-            return true
-          },
+        const result = unzipLimited(bytes, {
+          maxEntries: MAX_IMPORT_ENTRIES,
+          maxEntryBytes: MAX_IMPORT_ENTRY_BYTES,
+          maxTotalUncompressedBytes: MAX_IMPORT_UNCOMPRESSED_BYTES,
+          sourceName: name,
         })
+        unzipped = result.entries
+        problems.push(...result.problems)
       } catch (e) {
         problems.push({ name, reason: 'ZIP 解压失败：' + message(e) })
         continue

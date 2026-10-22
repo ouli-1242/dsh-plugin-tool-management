@@ -58,7 +58,7 @@ import { installSceneLinkage } from './scene-linkage.js'
 // 访问令牌的宿主侧配置读写（2026-10-01 从本文件 apply 闭包整段抽出，依赖显式传参）。
 import { createTokenConfig } from './token-config.js'
 import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
-import { checkPatchWrite, takePatchGuardWarnings } from './compat/patch-dialect.js'
+import { checkPatchWrite, notePatchWriteWarning, takePatchGuardWarnings } from './compat/patch-dialect.js'
 import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 import { assessPresetReach, injectionFactsOf, presetRosterOf, readCompositionFacts, reachNoticeForAgent } from './compat/preset-reach.js'
 import { installHttpApi, type WebServerService } from './http-api.js'
@@ -81,6 +81,8 @@ import { DEFAULT_MCP_NOTE_MAX_LENGTH, createMcpStateCatalog, normalizeMcpNote } 
 import { hubBackupDir, hubPath, hubRoot, migrateHubLayoutSync, relocateEntries } from './hub.js'
 // 分域的 HTTP ops（2026-09-19 从本文件 handlers 表抽出，依赖显式传参）。
 import { buildCompatOps } from './ops/compat.js'
+import { createUpdateChecker } from './update-check.js'
+import { buildDiagnostics, type DiagnosticsSidecar } from './diagnostics.js'
 import { buildPromptOps } from './ops/prompts.js'
 import { buildQuickPromptOps } from './ops/quick-prompts.js'
 import { buildScopeOps, type ScopeSessionRow } from './ops/scope.js'
@@ -354,8 +356,12 @@ export default {
     // Package version, surfaced in the Settings pages and the HTTP API. Read
     // from the installed package.json so it always matches the release tag.
     let PKG_VERSION = 'unknown'
+    // 本插件自己声明的宿主范围：更新检查用它区分「没有兼容版本」与「当前这版就不兼容」。
+    let PKG_DSH_RANGE: string | null = null
     try {
-      PKG_VERSION = (createRequire(import.meta.url)('../package.json') as { version?: string }).version || 'unknown'
+      const pkg = createRequire(import.meta.url)('../package.json') as { version?: string; engines?: { dsh?: string } }
+      PKG_VERSION = pkg.version || 'unknown'
+      PKG_DSH_RANGE = pkg.engines && typeof pkg.engines.dsh === 'string' ? pkg.engines.dsh : null
     } catch (e) { /* keep unknown */ }
 
     // 访问令牌（2026-09-19 抽到 ./request-gate.ts）：配置里的存量令牌 / 生效令牌 / 比对 /
@@ -1218,13 +1224,12 @@ export default {
     const applyToolTableHiddenNow = async (hidden: string[]) => {
       // 与 `tool-table` op 写分支同一条路径、同一顺序：落盘 → 重排可见性 → 两个目录重算。
       // 绕开这套顺序就会留下「名单已经改了、工具下一轮还发给模型」这种最难查的状态。
-      const current = await readToolTableSettings()
-      const next: ToolTableSettings = {
+      // **锁内读-改-写**：presets 必须取锁内最新值，否则并发的存方案会被这次整表写覆盖。
+      const saved = await mutateToolTableSettings((current) => ({
         hidden: normalizeToolTableSettings({ hidden }).hidden.filter((name) => toolTableSizes.has(name)),
         presets: current.presets,
-      }
-      const saved = await writeToolTableSettings(next)
-      if (!saved.ok) throw new Error(saved.error)
+      }))
+      if (!saved.ok) throw new Error(saved.error || toolTableWriteError())
       mcp.scheduleToolRestrictions()
       // 目录重算不挡写入回执（0.21.2，与技能写 op 同一条）：保留旧值的 SWR 让下一拍注入
       // 不会读到空，晚一步到新清单是可接受的代价。场景进入会走到这里，等它等于多等一轮全量扫描。
@@ -1727,7 +1732,7 @@ export default {
     // 用的那一刻，与原闭包同形，既不撞 TDZ 也不动搬走的那些行。
     const {
       toolTableSizes, recordToolSize, readToolTableSettings, toolTableState, toolTableWriteError, toolTableHidden,
-      writeToolTableSettings, toolTableReport, toolTableOp,
+      mutateToolTableSettings, toolTableReport, toolTableOp,
     } = createToolTableSwitch({
       ensurePaths, readJsonFileStrict, writeJsonFile, withWriteLock, message, EMPTY_TOOL_SET,
       get mcp() { return mcp },
@@ -1884,6 +1889,7 @@ export default {
     } = createSettingsSidecars({
       ensurePaths,
       readJsonFile,
+      readJsonFileStrict,
       writeJsonFile,
       withWriteLock,
       message,
@@ -2458,7 +2464,9 @@ export default {
       const stem = base + '.' + tag
       const dir = hubBackupDir()
       await mkdir(dir, { recursive: true })
-      await writeFile(join(dir, stem + '.bak-' + backupStamp()), previous, 'utf8')
+      // 补丁备份含明文 env / headers 凭据：POSIX 上 0600。备份名带时间戳，每次都是新文件，
+      // writeFile 的 mode 会生效；Windows 忽略。
+      await writeFile(join(dir, stem + '.bak-' + backupStamp()), previous, { encoding: 'utf8', mode: 0o600 })
       try {
         // 旧位置的备份没有层级后缀（迁移搬进来的），只统计不删错别人的。
         const mine = (name: string): boolean => name.startsWith(stem + '.bak-') || (tag === 'global' && name.startsWith(base + '.bak-'))
@@ -2577,7 +2585,11 @@ export default {
       if (!verdict.allow) throw new Error(verdict.error)
       try {
         if (previous && previous !== content) await backupPatchFile(abs, previous)
-      } catch (e) { /* a failed backup must never block the write */ }
+      } catch (e) {
+        // 备份失败不阻断写入（旧行为），但必须让回执说出来：用户以为有备份、
+        // 出事时却找不到那才是更坏的结局。warning 走与补丁校验同一条消费式通道。
+        notePatchWriteWarning('补丁备份失败（写入照常进行，但没有可回滚副本）：' + message(e))
+      }
       // 同目录临时文件 + rename 原子替换：进程中断/磁盘满最坏留下一个 .tmp 兄弟，
       // 不会截断补丁本体。官方 app-boot 写这两个补丁文件用的是同一套模式
       // （`filename + '.tmp'` → rename + 瞬时错误重试，lib/index.js `_writeFile`），
@@ -2645,7 +2657,9 @@ export default {
       }
     }
     async function writeJsonFile(abs: string, data: any): Promise<void> {
-      await writeFileAtomically(abs, JSON.stringify(data, null, 2) + '\n')
+      // 侧车是插件私有配置（备注 / 设置 / 停用表 / 工具表 / 令牌相关状态），
+      // POSIX 上按 0600 落盘；Windows 的 mode 语义不生效，无需特判。
+      await writeFileAtomically(abs, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
     }
 
     // ---------- MCP 管理域 ----------
@@ -3670,6 +3684,25 @@ export default {
       return toolTableSessionPayload(sessionId, scope, settings)
     }
 
+    // 更新检查（0.21.2）：只读、后台预热、绝不自动更新。宿主版本在**请求时**才探测 ——
+    // 启动期做一次全量能力探测不划算，而且探测结果本来就可能随装配阶段变化。
+    // 缓存落 hub 根，`update-status` 与启动预热共用同一个 in-flight 请求。
+    const updateChecker = createUpdateChecker({
+      stateDir: hubPath(),
+      current: PKG_VERSION,
+      currentEngines: PKG_DSH_RANGE,
+      hostVersion: () => {
+        try {
+          const registry = history.getSessionsRegistry()
+          const capabilities = registry && typeof registry.capabilities === 'function' ? registry.capabilities() : undefined
+          return capabilities && capabilities.identity ? String(capabilities.identity.version || '') : null
+        } catch { return null }
+      },
+      profile: () => cached?.profileName,
+    })
+    // 预热不 await：更新检查失败（无网 / 代理 / registry 故障）不影响任何启动路径。
+    updateChecker.start()
+
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
       // 「最近改动」流水的读侧（0.15.0 B2）：只读 hub 里的 `audit.jsonl`，倒序、可按域过滤。
@@ -3703,6 +3736,7 @@ export default {
       // inject-settings / backups-list / backups-clean / injection-live。
       // 依赖显式传参，不再靠闭包隐式捕获。
       ...buildCompatOps({
+        updateChecker,
         getSessionsRegistry: history.getSessionsRegistry,
         tools,
         readInjectSettings,
@@ -3949,6 +3983,97 @@ export default {
           },
         })
         return { ok: true, ...report }
+      },
+      // 诊断包（0.21.2）：只读、纯文本、**白名单字段**。不含密钥 / 正文 / 日志内容 ——
+      // 令牌只报"配没配 / 这次生效没有"，侧车只报存在性、大小与时间。
+      // 直接复用同一次装配里的只读 op（compat-status / state-doctor），不另写一份探测。
+      'diagnostics': async () => {
+        const safe = async <T>(read: () => Promise<T>): Promise<T | null> => {
+          try { return await read() } catch { return null }
+        }
+        const compat = await safe(async () => handlers['compat-status']({}))
+        const doctor = await safe(async () => handlers['state-doctor']({}))
+        const rules = await safe(async () => memoriesService.ops['rules-list']({}))
+        const presets = await safe(async () => promptsService.list())
+        const personas = await safe(async () => subagentService.list())
+        const skills = await safe(skillStates)
+        const mcpRows = await safe(async () => mcp.mcpmListView())
+        const quarantine = await safe(async () => readQuarantineMarker(hubRoot()))
+        const toolTable = await safe(async () => { await readToolTableSettings(); return toolTableState() })
+
+        const sidecarNames = [
+          'memories-index.json', 'mcp-disabled-tools.json', 'tool-table.json',
+          'scope-overrides.json', 'scope-intent.json',
+          'inject-settings.json', 'scene-settings.json', 'slash-settings.json', 'sidebar-settings.json',
+          'mcp-notes.json', 'mcp-settings.json', 'mcp-known-tools.json',
+          'subagents-index.json', 'skills-state.json', 'mount.json', 'audit.jsonl',
+        ]
+        const sidecars: DiagnosticsSidecar[] = []
+        for (const name of sidecarNames) {
+          const abs = hubPath(name)
+          let bytes: number | null = null
+          let mtime: string | null = null
+          let exists = false
+          try {
+            const st = await stat(abs)
+            exists = st.isFile()
+            bytes = exists ? st.size : null
+            mtime = exists ? st.mtime.toISOString() : null
+          } catch { /* 不存在或读不到：下面按状态区分 */ }
+          let state: DiagnosticsSidecar['state'] = exists ? 'present' : 'missing'
+          if (name === 'memories-index.json') {
+            if (quarantine) state = 'corrupt'
+            else if (exists) state = 'ok'
+          } else if (name === 'mcp-disabled-tools.json') {
+            const issue = mcp.disabledToolsIssue()
+            state = issue ? issue : (exists ? 'ok' : 'missing')
+          } else if (name === 'tool-table.json') {
+            state = toolTable && toolTable.state === 'unknown' ? (toolTable.issue || 'unreadable') : (exists ? 'ok' : 'missing')
+          }
+          sidecars.push({ name, state, bytes, mtime })
+        }
+
+        const counts: Record<string, number> = {}
+        if (rules && rules.ok !== false) {
+          counts['场景'] = Array.isArray(rules.scenes) ? rules.scenes.length : 0
+          counts['记忆'] = Array.isArray(rules.rules) ? rules.rules.length : 0
+        }
+        if (presets && presets.ok !== false) counts['提示词'] = Array.isArray(presets.presets) ? presets.presets.length : 0
+        if (Array.isArray(personas)) counts['人设'] = personas.length
+        if (skills) counts['技能'] = Object.keys(skills).length
+        if (mcpRows && mcpRows.ok !== false) counts['MCP'] = Array.isArray(mcpRows.rows) ? mcpRows.rows.length : 0
+
+        let auditBytes: number | null = null
+        try { auditBytes = (await stat(hubPath('audit.jsonl'))).size } catch { auditBytes = null }
+
+        const update = updateChecker.peek()
+        const text = buildDiagnostics({
+          pluginVersion: PKG_VERSION,
+          hostVersion: compat && compat.host ? String(compat.host.version || '') || null : null,
+          verifiedVersion: compat ? String(compat.verifiedVersion || '') || null : null,
+          platform: { os: process.platform, node: process.version },
+          dataDir: hubRoot(),
+          token: { configured: CONFIG_TOKEN !== '', active: TOKEN !== '' },
+          update: update
+            ? { status: update.status, current: update.current, bestCompatible: update.bestCompatible }
+            : null,
+          compat: compat
+            ? {
+              findings: Array.isArray(compat.findings) ? compat.findings.length : 0,
+              degraded: Array.isArray(compat.degraded) ? compat.degraded.length : 0,
+              blockers: Array.isArray(compat.blockers) ? compat.blockers : [],
+              unverified: Array.isArray(compat.unverified) ? compat.unverified : [],
+              separateCopies: Object.keys(compat.sameAsHost || {}).filter((k) => (compat.sameAsHost || {})[k] === false),
+            }
+            : null,
+          sidecars,
+          counts,
+          log: { path: hubPath('audit.jsonl'), bytes: auditBytes },
+          doctor: doctor && doctor.ok !== false
+            ? { findings: Array.isArray(doctor.findings) ? doctor.findings : [], skipped: Array.isArray(doctor.skipped) ? doctor.skipped : [] }
+            : null,
+        })
+        return { ok: true, text }
       },
     }
 

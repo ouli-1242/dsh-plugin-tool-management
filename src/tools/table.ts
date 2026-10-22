@@ -103,6 +103,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'scene_manager_save',
   'scene_manager_remove',
   'memory_manager_read',
+  'memory_manager_search',
   'memory_manager_switch',
   'memory_manager_remove',
   'mcp_manager_list',

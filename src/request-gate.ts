@@ -17,7 +17,7 @@
 // 五个读 op 上。整段照搬、顺序未变。
 
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { OP_REGISTRY, frozenOps, opsWith } from './op-registry.js'
+import { OP_REGISTRY, frozenOps, opClassOf, opsWith } from './op-registry.js'
 
 // ── 1. 访问令牌 ──────────────────────────────────────────────────────────────
 
@@ -269,7 +269,7 @@ const SELF_SCENE_LABEL: Record<string, string> = { 'scene-archive-save': '改档
 export function createFrozenGate(deps: FrozenGateDeps): (op: string, args: any) => Promise<string | null> {
   const { lockedSceneNames, activeSceneName } = deps
   return async function frozenRejection(op: string, args: any): Promise<string | null> {
-    const cls = OP_REGISTRY[op]
+    const cls = opClassOf(op)
     if (!cls || cls.frozen !== true) return null
     const scope = cls.frozenScope ?? 'all'
     if (scope === 'active-scene') {

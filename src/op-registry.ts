@@ -127,9 +127,10 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 打开系统编辑器改文件：不改宿主状态，但它是"界面按钮"性质的写入口，按写门禁。
   'skill-open': { write: true },
 
-  // ── 记忆与场景域（27：memories 24 + archive-engine 3）──────────────────────
+  // ── 记忆与场景域（28：memories 25 + archive-engine 3）──────────────────────
   'rules-list': { readonly: true },
   'rules-read': { readonly: true },
+  'rules-search': { readonly: true },
   'rules-budget': { readonly: true },
   'rules-diagnose': { readonly: true },
   'rules-trash-list': { readonly: true },
@@ -269,6 +270,8 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 全部注入域的当前正文**全文**都从这里出去。今天不带令牌就能读，是这批只读里披露面最大的一条；
   // 要不要上门禁是产品决定，登记在这里是为了让它可数。
   'injection-live': { readonly: true },
+  // 更新检查（0.21.2）：只读 registry 元数据并读/写自己的缓存，不改宿主与外部系统状态。
+  'update-status': { readonly: true },
   'backups-list': { readonly: true },
   // 注入设置（各域开关 / 压制型预设口径）写侧车。它是"配置"不是"宿主状态"，但改的是
   // 投递语义，按写操作门禁。读侧（不带 `set:true`）只回当前设置，是纯读。
@@ -325,6 +328,8 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'scene-inventory': { readonly: true },
   // 跨域悬空引用体检：只读对账（索引走 readIndexSync，权威集合各读一次）。
   'state-doctor': { readonly: true },
+  // 诊断包（0.21.2）：只读聚合，输出白名单字段（不含密钥 / 正文 / 日志内容）。
+  'diagnostics': { readonly: true },
   // preset-tools 是只读枚举，但枚举会为预设建立 standing mount（官方语义：每进程只挂一次）。
   // 未授权调用者不该触发挂载 —— 按写门禁。
   'preset-tools': { write: true },
@@ -350,6 +355,16 @@ export function frozenOps(scope?: FrozenScope): string[] {
 }
 
 /**
+ * 取一条登记（只认自有属性）。
+ *
+ * 登记表是普通对象字面量，`OP_REGISTRY['constructor']` 会命中原型上的构造函数 ——
+ * 那样 `constructor` / `toString` 这类名字会被当成"已登记"，对账漏报、门禁误判。
+ */
+export function opClassOf(op: string): OpClass | undefined {
+  return Object.prototype.hasOwnProperty.call(OP_REGISTRY, op) ? OP_REGISTRY[op] : undefined
+}
+
+/**
  * 这次调用是不是「读侧」（免令牌、不记流水）。
  *
  * 判据只有一个来源：登记表的 `writeWhen`。**没带 `writeWhen` 的 op 一律返回 false**
@@ -359,7 +374,7 @@ export function frozenOps(scope?: FrozenScope): string[] {
  * 那种时候**要求令牌**才是安全的方向 —— 反过来会让"某个畸形 args 恰好免门禁"成为漏洞。
  */
 export function isReadCall(op: string, args: unknown): boolean {
-  const cls = OP_REGISTRY[op]
+  const cls = opClassOf(op)
   if (!cls || cls.writeWhen === undefined) return false
   const bag = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
   try {
@@ -376,7 +391,7 @@ export function isReadCall(op: string, args: unknown): boolean {
  * 要么所属 service 自报过写 op 且登记过"，两者都指向同一个条件：登记表里有这一条。
  */
 export function unclassifiedOps(opNames: Iterable<string>): string[] {
-  return [...opNames].filter((op) => OP_REGISTRY[op] === undefined).sort()
+  return [...opNames].filter((op) => opClassOf(op) === undefined).sort()
 }
 
 /** 反方向：登记表里有条目、真实 op 表里却没有 → 改名或删 op 时忘了同步（幽灵条目）。 */

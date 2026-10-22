@@ -23,6 +23,7 @@ scripts/*
 !scripts/check-css-chain.mjs
 !scripts/host-deps.mjs
 !scripts/doctor.mjs
+!scripts/compat-matrix.mjs
 !scripts/sync-profile.mjs
 !scripts/check-css-chain.mjs
 

@@ -22,8 +22,9 @@
 //   ③ `deletedAt` 缺失 / 解析失败**不清扫**。判据宁可漏删也不能误删：条目元数据被手改过、
 //      或来自更早的版本时，我们并不知道它躺了多久 —— 按「刚删的」处理，让它等下一轮。
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { writeFileAtomically } from './memories/index-io.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { recordAudit } from './audit-log.js'
 import {
@@ -97,7 +98,7 @@ export async function readTrashRetention(): Promise<TrashRetention> {
 export async function writeTrashRetention(retentionDays: number): Promise<void> {
   const abs = trashRetentionPath()
   await mkdir(dirname(abs), { recursive: true })
-  await writeFile(abs, JSON.stringify({ retentionDays, updatedAt: Date.now() }), 'utf8')
+  await writeFileAtomically(abs, JSON.stringify({ retentionDays, updatedAt: Date.now() }))
 }
 
 /**

@@ -589,7 +589,16 @@
           method: 'POST',
           headers,
           body: JSON.stringify({ op, args: args || {} }),
-        }).then((r) => r.json()).then((payload) => {
+        }).then(function (r) {
+          // 不再直接 r.json()：代理 / 宿主错误页会返回 HTML，JSON 解析失败时连状态码都丢了。
+          // 先读文本再尝试解析；非 JSON 统一变成 { ok:false, error:'HTTP <status>' }。
+          return r.text().then(function (text) {
+            if (!text) return r.ok ? {} : { ok: false, error: 'HTTP ' + r.status }
+            try { return JSON.parse(text) } catch (e) {
+              return { ok: false, error: 'HTTP ' + r.status + (r.statusText ? ' ' + r.statusText : '') }
+            }
+          })
+        }).then((payload) => {
           // 令牌没过 → 记到那份与页面/弹窗无关的状态里。**在这里记**（而不是各页面各记一遍）
           // 是唯一能保证"无论哪个入口、无论弹窗盖没盖住页面，提示都出得来"的做法：
           // 每个调用点都记 = 必然有地方漏（2026-09-19 实测漏了十来个弹窗）。
@@ -884,4 +893,34 @@
         return () => { alive = false }
       }, [])
       return v ? React.createElement('span', { className: 'dsm-version' }, 'v' + v) : null
+    }
+
+    /**
+     * 把 `update-status` 的答案压成一句话（0.21.2）。
+     *
+     * 为什么单独抽出来：这句话现在有**两处**要用 —— 兼容页那一行、顶部栏 GitHub 图标点击后
+     * 的 toast。各写一条 if 链的话，`update-check.ts` 里新增一个 status 就必有一处静默落到
+     * 「更新检查暂不可用」，而用户会在同一屏看到两个互相矛盾的结论。
+     *
+     * 取词器**由调用方传入**（`t`）：本函数在 factory 作用域（4 空格），按闭包边界纪律不能
+     * 引用 apply 作用域绑定的那份 `t`。兼容页拿到的是 `props.t`，顶部栏拿到的是 apply 的 `t`，
+     * 传进来即可，两处文案仍然同源。
+     *
+     * @param {object|null} info `update-status` 的返回；缺字段一律按 `?` 兜底，不抛错
+     * @param {(key: string, params?: object) => string} t 取词器
+     * @returns {string} 可直接显示的一句话
+     */
+    function updateStatusText(info, t) {
+      var st = String((info && info.status) || 'unknown')
+      var cur = String((info && info.current) || '?')
+      var best = String((info && info.bestCompatible) || '?')
+      var host = String((info && info.host) || '?')
+      if (st === 'update-available') return t('compat.update.available', { current: cur, best: best })
+      if (st === 'up-to-date') return t('compat.update.current', { current: cur })
+      if (st === 'local-ahead') return t('compat.update.localAhead', { current: cur, best: best })
+      if (st === 'no-compatible-version') return t('compat.update.none', { host: host })
+      if (st === 'current-incompatible') return t('compat.update.incompatible', { current: cur, host: host })
+      if (st === 'host-unknown') return t('compat.update.hostUnknown')
+      if (st === 'proxy-unsupported') return t('compat.update.proxy')
+      return t('compat.update.unknown')
     }

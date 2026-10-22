@@ -8,13 +8,16 @@
 //   2. 缓存是**整份侧车**的（会话数量级很小），不像记忆那样需要分桶。TTL 300ms：
 //      界面开关点一下就要看到回执，而注入器每步都要读 —— 3 秒会让"刚关掉的服务器还在
 //      下一步的目录里"变成常态。
-//   3. 读不到 / 读坏 = 空表，**不抛**。会话覆盖是叠加在全局之上的偏好，它坏了最坏是
+//   3. 读不到 / 读坏 = 空表，**不抛**：会话覆盖是叠加在全局之上的偏好，它坏了最坏是
 //      "回到全局"，不该让整个面板或注入通道跟着挂（与 `readTrashRetention` 同口径）。
+//      **写路径不复用这条**：写锁内必须 strict read，读坏就拒绝落盘；否则一次读失败之后的
+//      改一处 → 整份写，会把用户全部会话覆盖换成空表。
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { hubPath } from '../hub.js'
+import { renameWithRetry } from '../skills/core-util.js'
 import {
   normalizeScopeMode,
   normalizeScopeOverrides,
@@ -169,8 +172,13 @@ export function createScopeStore(deps: ScopeStoreDeps): ScopeStore {
     const abs = file()
     await mkdir(dirname(abs), { recursive: true })
     const temp = join(dirname(abs), '.' + randomUUID().slice(0, 8) + '.scope-tmp')
-    await writeFile(temp, JSON.stringify(next, null, 2) + '\n', 'utf8')
-    await rename(temp, abs)
+    try {
+      await writeFile(temp, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+      await renameWithRetry(temp, abs)
+    } catch (e) {
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw e
+    }
   }
 
   async function mutate(
@@ -181,7 +189,7 @@ export function createScopeStore(deps: ScopeStoreDeps): ScopeStore {
     return deps.withWriteLock(async () => {
       try {
         // 写锁里**强制**重读：缓存可能比磁盘旧，而这里是唯一写入口。
-        const current = await load()
+        const current = await readStrict()
         const before = current.sessions[sessionId]
         const after = normalizeSessionScope(mutate(before))
         const sessions: Record<string, SessionScope> = Object.assign(Object.create(null), current.sessions)
@@ -204,7 +212,7 @@ export function createScopeStore(deps: ScopeStoreDeps): ScopeStore {
     const mode = normalizeScopeMode(nextMode)
     return deps.withWriteLock(async () => {
       try {
-        const current = await load()
+        const current = await readStrict()
         const sessions: Record<string, SessionScope> = Object.assign(Object.create(null), current.sessions)
         let seeded = 0
         for (const [key, seed] of Object.entries(seeds)) {
@@ -232,7 +240,7 @@ export function createScopeStore(deps: ScopeStoreDeps): ScopeStore {
     return deps.withWriteLock(async () => {
       try {
         // 与 mutate 同一条纪律：锁内强制重读；缓存可能比磁盘旧。
-        const current = await load()
+        const current = await readStrict()
         const sessions: Record<string, SessionScope> = Object.create(null)
         let changed = 0
         for (const [sessionId, before] of Object.entries(current.sessions)) {
@@ -257,7 +265,7 @@ export function createScopeStore(deps: ScopeStoreDeps): ScopeStore {
     if (!validRecordKey(sessionId)) return { ok: false, error: '缺少或非法的 sessionId' }
     return deps.withWriteLock(async () => {
       try {
-        const current = await load()
+        const current = await readStrict()
         if (current.sessions[sessionId] === undefined) return { ok: true, removed: false }
         const sessions: Record<string, SessionScope> = Object.assign(Object.create(null), current.sessions)
         delete sessions[sessionId]
@@ -282,7 +290,7 @@ export function createScopeStore(deps: ScopeStoreDeps): ScopeStore {
     const keep = alive
     return deps.withWriteLock(async () => {
       try {
-        const current = await load()
+        const current = await readStrict()
         const kept = pruneSessionScopes(current.sessions, keep)
         if (kept.pruned === 0) return { ok: true, pruned: 0 }
         const next: ScopeOverrides = { version: 1, mode: current.mode, sessions: kept.sessions }

@@ -223,7 +223,19 @@ export async function checkPatchWrite(previous: string, next: string): Promise<P
   return decision
 }
 
-/** 写入回执取用：取走并清空本次累积的 warning（每次请求取一次）。 */
+/**
+ * 写入回执取用：取走并清空本次累积的 warning（每次请求取一次）。
+ */
 export function takePatchGuardWarnings(): string[] {
   return pendingWarnings.splice(0, pendingWarnings.length)
+}
+
+/**
+ * 追加一条「写入照常进行、但有一件事要说」的 warning（例如补丁备份失败）。
+ * 与校验 warning 共用同一个消费式队列与上限，调用方不需要另建通道。
+ */
+export function notePatchWriteWarning(warning: string): void {
+  if (!warning) return
+  pendingWarnings.push(warning)
+  if (pendingWarnings.length > WARN_QUEUE_MAX) pendingWarnings.splice(0, pendingWarnings.length - WARN_QUEUE_MAX)
 }

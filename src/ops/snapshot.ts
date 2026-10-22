@@ -14,11 +14,14 @@
 //      导出物不该顺手把它们带走；要完整导出必须显式传 `includeSecrets:true`（界面二次确认）。
 //      打码值导回来由 `secret-guard` 拿目标机的旧真值顶替（`mcpm-import` 既有的行为）。
 
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
-import { unzipSync, zipSync } from 'fflate'
+import { zipSync } from 'fflate'
+import { MAX_IMPORT_ENTRIES, MAX_IMPORT_ENTRY_BYTES, MAX_IMPORT_UNCOMPRESSED_BYTES } from '../imports/upload.js'
+import { unzipLimited } from '../imports/unzip.js'
 import { maskSecretValue, maskUrlQuery } from '../mcp/secret-guard.js'
+import { writeFileAtomically, writeFileAtomicBinary } from '../memories/index-io.js'
 
 export interface SnapshotOpsDeps {
   /** handlers 表调用口：走 op 而不是走服务，门禁与写锁才与界面 / 模型是同一套。 */
@@ -209,7 +212,11 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       return copy
     })
     try {
-      await writeFile(join(dir, F_MCP), JSON.stringify({ exportedAt: new Date().toISOString(), masked: !includeSecrets, rows: mcpOut }, null, 2), 'utf8')
+      await writeFileAtomically(
+        join(dir, F_MCP),
+        JSON.stringify({ exportedAt: new Date().toISOString(), masked: !includeSecrets, rows: mcpOut }, null, 2),
+        { mode: 0o600 },
+      )
     } catch (e) { return { ok: false, error: '写 mcp.json 失败: ' + deps.message(e) } }
     domains.mcp = mcpOut.length
 
@@ -228,7 +235,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
           try { bundle[f.rel] = new Uint8Array(await readFile(f.abs)) } catch (e) { notes.push(kind + ' 跳过 ' + f.rel + '：' + deps.message(e)) }
         }
         try {
-          await writeFile(join(dir, kind + '.zip'), Buffer.from(zipSync(bundle)))
+          await writeFileAtomicBinary(join(dir, kind + '.zip'), Buffer.from(zipSync(bundle)), { mode: 0o600 })
         } catch (e) { notes.push(kind + ' 打包失败：' + deps.message(e)) }
       }
       domains[kind] = files.length
@@ -250,23 +257,23 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       deps.invokeOp('inject-settings', {}),
       deps.invokeOp('scene-settings', {}),
     ])
-    await writeFile(join(dir, F_SETTINGS), JSON.stringify({
+    await writeFileAtomically(join(dir, F_SETTINGS), JSON.stringify({
       exportedAt: new Date().toISOString(),
       toolTable: toolTable && toolTable.ok ? { hidden: toolTable.hidden || [], presets: toolTable.presets || [] } : null,
       inject: inject && inject.ok ? (inject.settings || null) : null,
       sceneSettings: sceneSettings && sceneSettings.ok ? (sceneSettings.settings || null) : null,
-    }, null, 2), 'utf8')
+    }, null, 2), { mode: 0o600 })
     domains.settings = 1
 
     // ── 场景：档案（含 0.15.0 C1 的工具表绑定）+ 场景记录（label / 描述 / 提示词绑定）──
     const modeRes = await deps.invokeOp('scene-mode-get', {})
     const rulesRes = await deps.invokeOp('rules-list', {})
     const archives = (modeRes && modeRes.ok && modeRes.archives) || {}
-    await writeFile(join(dir, F_SCENES), JSON.stringify({
+    await writeFileAtomically(join(dir, F_SCENES), JSON.stringify({
       exportedAt: new Date().toISOString(),
       archives,
       records: sceneRecordsOf(rulesRes),
-    }, null, 2), 'utf8')
+    }, null, 2), { mode: 0o600 })
     domains.scenes = Object.keys(archives).length
 
     const manifest = {
@@ -276,7 +283,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       domains,
       notes,
     }
-    await writeFile(join(dir, F_MANIFEST), JSON.stringify(manifest, null, 2), 'utf8')
+    await writeFileAtomically(join(dir, F_MANIFEST), JSON.stringify(manifest, null, 2), { mode: 0o600 })
     return { ok: true, dir, manifest }
   }
 
@@ -321,7 +328,17 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
     for (const kind of FILE_DOMAINS) {
       if (files[zipKey(kind)]) {
         try {
-          const entries = Object.keys(unzipSync(new Uint8Array(await readFile(files[zipKey(kind)]))))
+          const zipBytes = new Uint8Array(await readFile(files[zipKey(kind)]))
+          const limited = unzipLimited(zipBytes, {
+            maxEntries: MAX_IMPORT_ENTRIES,
+            maxEntryBytes: MAX_IMPORT_ENTRY_BYTES,
+            maxTotalUncompressedBytes: MAX_IMPORT_UNCOMPRESSED_BYTES,
+            sourceName: kind + '.zip',
+          })
+          if (limited.problems.length) {
+            notes.push(...limited.problems.map((p) => `${kind}：${p.name}：${p.reason}`))
+          }
+          const entries = Object.keys(limited.entries)
           // 重名按"顶层条目名"比：人设是扁平文件（`<名>.md`），扩展名不算名字的一部分。
           const stripExt = kind === D_SUBAGENTS ? (n: string) => n.replace(/\.[^.]+$/, '') : (n: string) => n
           const top = [...new Set(entries.map((p) => stripExt(p.split('/')[0])))]
@@ -411,18 +428,27 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
     await run(D_SUBAGENTS, async () => {
       const zip = files[D_SUBAGENTS + '.zip']
       if (!zip) return { imported: 0, skipped: 0 }
-      const entries = unzipSync(new Uint8Array(await readFile(zip)))
+      const limited = unzipLimited(new Uint8Array(await readFile(zip)), {
+        maxEntries: MAX_IMPORT_ENTRIES,
+        maxEntryBytes: MAX_IMPORT_ENTRY_BYTES,
+        maxTotalUncompressedBytes: MAX_IMPORT_UNCOMPRESSED_BYTES,
+        sourceName: D_SUBAGENTS + '.zip',
+      })
+      const entries = limited.entries
       const filesArg: Array<{ name: string, data: string }> = []
-      let skipped = 0
+      let skipped = limited.problems.length
       for (const [rel, bytes] of Object.entries(entries)) {
         // 人设是扁平的 `<名>.md`：嵌套路径不是 subagent-import 认的形状，如实跳过。
         if (rel.indexOf('/') >= 0 || !/\.md$/i.test(rel)) { skipped += 1; continue }
         filesArg.push({ name: rel, data: Buffer.from(bytes).toString('base64') })
       }
-      if (!filesArg.length) return { imported: 0, skipped }
+      const warning = limited.problems.length
+        ? limited.problems.map((p) => `${p.name}：${p.reason}`).join('；')
+        : undefined
+      if (!filesArg.length) return { imported: 0, skipped, ...(warning ? { warning } : {}) }
       const res = await deps.invokeOp('subagent-import', { files: filesArg })
       if (!res || res.ok === false) throw new Error(String((res && res.error) || 'subagent-import 失败'))
-      return { imported: (res.imported || []).length, skipped: skipped + (res.skipped || []).length }
+      return { imported: (res.imported || []).length, skipped: skipped + (res.skipped || []).length, ...(warning ? { warning } : {}) }
     })
 
     // 两个提示词域同形：`<id>/<正文>` + 可选 `<id>/meta.json`，一次一份地导入。差别只在
@@ -430,10 +456,17 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
     const importPromptLike = (domain: string, docName: string, importOp: string, updateOp: string) => run(domain, async () => {
       const zip = files[domain + '.zip']
       if (!zip) return { imported: 0, skipped: 0 }
-      const entries = unzipSync(new Uint8Array(await readFile(zip)))
+      const limited = unzipLimited(new Uint8Array(await readFile(zip)), {
+        maxEntries: MAX_IMPORT_ENTRIES,
+        maxEntryBytes: MAX_IMPORT_ENTRY_BYTES,
+        maxTotalUncompressedBytes: MAX_IMPORT_UNCOMPRESSED_BYTES,
+        sourceName: domain + '.zip',
+      })
+      const entries = limited.entries
       const bodies: Record<string, string> = {}
       const metas: Record<string, any> = {}
-      let skipped = 0
+      let skipped = limited.problems.length
+      const reasons = limited.problems.map((p) => `${p.name}：${p.reason}`)
       for (const [rel, bytes] of Object.entries(entries)) {
         const parts = rel.split('/')
         if (parts.length !== 2) { skipped += 1; continue }
@@ -452,7 +485,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
         if (upd && upd.ok) imported += 1
         else skipped += 1
       }
-      return { imported, skipped }
+      return { imported, skipped, ...(reasons.length ? { warning: reasons.join('；') } : {}) }
     })
 
     await importPromptLike(D_PROMPTS, 'AGENTS.md', 'agentsmd-import', 'agentsmd-update')
@@ -461,10 +494,16 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
     await run(D_MEMORIES, async () => {
       const zip = files[D_MEMORIES + '.zip']
       if (!zip) return { imported: 0, skipped: 0 }
-      const entries = unzipSync(new Uint8Array(await readFile(zip)))
+      const limited = unzipLimited(new Uint8Array(await readFile(zip)), {
+        maxEntries: MAX_IMPORT_ENTRIES,
+        maxEntryBytes: MAX_IMPORT_ENTRY_BYTES,
+        maxTotalUncompressedBytes: MAX_IMPORT_UNCOMPRESSED_BYTES,
+        sourceName: D_MEMORIES + '.zip',
+      })
+      const entries = limited.entries
       // zip 的相对路径就是 `<场景>/<文件>`：按场景分组，每组各调一次 rules-import。
       const byScene: Record<string, Array<{ name: string, data: string }>> = {}
-      let skipped = 0
+      let skipped = limited.problems.length
       for (const [rel, bytes] of Object.entries(entries)) {
         const i = rel.indexOf('/')
         if (i <= 0) { skipped += 1; continue }
@@ -475,7 +514,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
         ;(byScene[scene] || (byScene[scene] = [])).push({ name, data: Buffer.from(bytes).toString('base64') })
       }
       let imported = 0
-      const reasons: string[] = []
+      const reasons: string[] = limited.problems.map((p) => `${p.name}：${p.reason}`)
       for (const scene of Object.keys(byScene)) {
         const res = await deps.invokeOp('rules-import', { scene, files: byScene[scene] })
         if (!res || res.ok === false) { skipped += byScene[scene].length; continue }

@@ -16,6 +16,8 @@ import { writeFileAtomically, writeFileAtomicBinary, readIndex, writeIndex, path
 import type { RuleIndexEntry } from '../memories/index-io.js'
 import { deriveDescription } from '../memories/snapshot.js'
 import type { ParsedSkillDoc } from '../memories/snapshot.js'
+import { stampConflict, stampOfText } from '../stale-write.js'
+import { searchMemories } from '../memories/search.js'
 import type { MemoriesOpsCtx } from './ctx.js'
 import type { MemoryScopeOverride } from '../memories/memories-types.js'
 
@@ -128,6 +130,8 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     const doc = parseSkillDoc(text) as ParsedSkillDoc
     return {
       ok: true,
+      // 并发编辑判据：编辑弹窗把这份指纹带回来，`rules-update` 核对后才写。
+      stamp: stampOfText(text),
       rule: {
         ...rule,
         body: doc.body,
@@ -449,6 +453,10 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     } catch {
       return fail('error.rules.notFound', `规则不存在：${id}`)
     }
+    // 并发编辑：指纹不符就拒绝，别把另一个窗口的改动整份覆盖掉。
+    // 判据在写队列内（`rules-update` 由 runWrite → enqueueMutation 包裹），中间没有让出点。
+    const conflict = stampConflict(stampOfText(text), args && args.expectedStamp)
+    if (conflict) return conflict
     const doc = parseSkillDoc(text) as ParsedSkillDoc
     // flat 形态：frontmatter 声明名必须等于文件名（发现时可列出，更新时校验）。
     const currentName = doc.map.name != null && String(doc.map.name).trim() !== '' ? unquote(String(doc.map.name)).trim() : parts.name
@@ -487,7 +495,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       let descArg: string | undefined | null
       if (args && args.description != null) descArg = String(args.description).trim() === '' ? null : description
       else descArg = undefined
-      return serializeUpdatedFile(doc, newName, descArg, newBody)
+      return serializeUpdatedFile(text, newName, descArg, newBody)
     }
     // 所有写入 / 删除分支的落点都在 `<root>/<group>` 之下：先确认这个目录（经 realpath）仍在根内。
     const denied = await refuseOutsideRoot(join(memoriesRoot, parts.group))
@@ -670,5 +678,30 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     return { ok: true, attachments: await listAttachments(located.entryPath, located.name) }
   }
 
-  return { rulesList, rulesRead, rulesBudget, rulesDiagnose, rulesCreate, rulesImport, rulesUpdate, rulesToggle, rulesSetIndex, rulesAttach, rulesDetach }
+  /**
+   * 记忆正文搜索（只读）。返回片段而不是全文：模型侧一次调用的预算有限，
+   * 要看全文走 `rules-read`。`enabled` 报**本会话投影**后的值（与 `rules-list` 同源）。
+   */
+  async function rulesSearch(args: any): Promise<any> {
+    const query = String((args && args.query) || '')
+    if (query.trim() === '') return fail('error.rules.queryRequired', '请提供搜索词')
+    const scope = memoryScopeFrom(args)
+    const snap = await snapshot()
+    const docs = snap.rules.filter((r) => !r.shadowed).map((r) => {
+      const over = scope && scope.memory ? scope.memory[r.id] : undefined
+      return {
+        id: r.id,
+        name: r.name,
+        group: r.group,
+        description: r.description || '',
+        tags: Array.isArray(r.tags) ? r.tags : [],
+        body: snap.bodies.get(r.id) || '',
+        enabled: typeof over === 'boolean' ? over : r.enabled,
+      }
+    })
+    const hits = searchMemories(docs, query, args && args.limit)
+    return { ok: true, query: query.trim(), count: hits.length, hits }
+  }
+
+  return { rulesList, rulesRead, rulesSearch, rulesBudget, rulesDiagnose, rulesCreate, rulesImport, rulesUpdate, rulesToggle, rulesSetIndex, rulesAttach, rulesDetach }
 }

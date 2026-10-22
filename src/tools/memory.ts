@@ -1,5 +1,5 @@
 // 记忆（rules）域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 改名合并、
-// 同日把场景能力分出去）：memory_manager_list / _read / _switch / _save。
+// 同日把场景能力分出去；0.21.2 加 _search）：memory_manager_list / _read / _search / _switch / _save。
 //
 // 为什么族名在 0.14.0 里绕了一圈回到 `memory_manager_`：中途改成 `scene_memory_manager_`
 // 是为了跟注入段名（`scene-memory-manager-catalog`）对齐，但那个名字描述的是**域**，
@@ -133,6 +133,36 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         ? '\n(switched off here only — the body above is not injected here; the global setting is unchanged) '
         : ''
       return '# ' + rule.id + ' (' + form + ')' + attLine + '\n\n' + (rule.body || '') + offHere
+    },
+  }))
+  register(defineTool({
+    name: 'memory_manager_search',
+    // 为什么单独一条而不是给 list 加 `query`：list 是"清单"（每条都要占一行输出），
+    // 搜索是"找一条"（片段 + 排序）。混在一起时，搜不到就等于清单为空 —— 模型分不清
+    // "没有这条记忆"和"这个词没匹配上"。默认在工具表里**关着**（见 tools/table.ts）：
+    // 它是按需检索，不是每轮都该付 schema 成本的能力。
+    description: 'Search memories by words in id, scene, description, tags or body. Returns ids plus a short snippet; read the memory itself for the full body. All words must match (case-insensitive).',
+    parameters: {
+      query: { type: 'string', required: true, description: 'Words to look for; every word must match somewhere in the memory.' },
+      limit: { type: 'number', description: 'Max hits (default 20, max 100).' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+    async execute(args: any, exec: any) {
+      const query = String((args && args.query) || '').trim()
+      if (query === '') throw new Error('missing argument: query')
+      const opArgs: any = { query }
+      if (args && args.limit !== undefined) opArgs.limit = args.limit
+      // 与 list 同一条会话投影：`enabled` 报的是**这里**的生效值，不是全局。
+      const scoped = sessionScopeOf(deps, exec && exec.agent)
+      if (scoped !== null) opArgs.sessionId = scoped.sessionId
+      const r: any = await deps.rulesOps['rules-search'](opArgs)
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to search memories')
+      const hits: any[] = Array.isArray(r.hits) ? r.hits : []
+      if (!hits.length) return 'no memories match "' + query + '"'
+      const lines = hits.map((h) => '- ' + h.id + ' [' + (h.scene || 'no scene') + ']' +
+        (h.enabled === false ? ' (off here)' : '') +
+        (h.snippet ? ' — ' + h.snippet : ''))
+      return 'memories matching "' + query + '": ' + hits.length + '\n' + lines.join('\n')
     },
   }))
   register(defineTool({

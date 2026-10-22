@@ -24,6 +24,7 @@ import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpPrefixDrift, serverNameCandidates, splitMcpToolName } from '../host-names.js'
 import { hubPath } from '../hub.js'
+import { stampConflict, stampOfText } from '../stale-write.js'
 import {
   cloneDisabledTools,
   emptyDisabledTools,
@@ -524,9 +525,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   /** MCP 侧车绝对路径（都在 hub 内）。 */
   const mcpSidecar = (name: string): string => hubPath(name)
   let notesCache: { at: number; value: Record<string, string> } | null = null
-  async function readNotes(force = false): Promise<Record<string, string>> {
-    if (notesCache && !force && Date.now() - notesCache.at < SIDECAR_TTL_MS) return notesCache.value
-    const raw = await readJsonFile(mcpSidecar(MCP_NOTES_FILE))
+  /** 备注侧车的形状归一化（读路径与写路径共用；写路径的 raw 来自 strict read）。 */
+  function normalizeNotes(raw: any): Record<string, string> {
     const out = Object.create(null) as Record<string, string>
     if (raw && typeof raw === 'object') {
       for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
@@ -534,15 +534,26 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         if (typeof value === 'string' && value.trim()) out[key] = value
       }
     }
+    return out
+  }
+  async function readNotes(force = false): Promise<Record<string, string>> {
+    if (notesCache && !force && Date.now() - notesCache.at < SIDECAR_TTL_MS) return notesCache.value
+    const raw = await readJsonFile(mcpSidecar(MCP_NOTES_FILE))
+    const out = normalizeNotes(raw)
     notesCache = { at: Date.now(), value: out }
     return out
   }
   /**
    * 备注侧车的读-改-写。**必须在调用方已持有写锁时调用** —— 自己再去拿一次锁会自锁。
    * 空 note = 删掉该条目（与 `mcpm-note` 的语义一致）；强制重读，外部改过的侧车是合并而不是覆盖。
+   * 读坏时拒绝写入：`readNotes` 的 lenient 读会把坏文件当空表，照旧写就是整份备注丢失。
    */
   async function writeNoteUnderLock(id: string, note: string): Promise<{ ok: true; notes: Record<string, string> } | { ok: false; error: string }> {
-    const map = Object.assign(Object.create(null), await readNotes(true)) as Record<string, string>
+    const read = await readJsonFileStrict(mcpSidecar(MCP_NOTES_FILE))
+    if (read.status === 'corrupt' || read.status === 'unreadable') {
+      return { ok: false, error: `MCP 备注文件${read.status === 'corrupt' ? '损坏' : '不可读'}，已拒绝保存：${read.error}` }
+    }
+    const map = Object.assign(Object.create(null), normalizeNotes(read.status === 'ok' ? read.value : null)) as Record<string, string>
     if (note) map[id] = note
     else delete map[id]
     try {
@@ -566,7 +577,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   const POLL_INTERVAL_MIN_MS = 2000
   const POLL_INTERVAL_MAX_MS = 60_000
   const SETTINGS_DEFAULTS = { pollIntervalMs: 5000, toolDescriptionMaxLength: 0, requireConfirmForModelRuleWrite: true, requireConfirmForModelSubagentRun: true }
-  let pluginSettingsCache: { at: number; value: { pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean } } | null = null
+  interface PluginSettings {
+    pollIntervalMs: number
+    toolDescriptionMaxLength: number
+    requireConfirmForModelRuleWrite: boolean
+    requireConfirmForModelSubagentRun: boolean
+  }
+  let pluginSettingsCache: { at: number; value: PluginSettings } | null = null
   function clampInt(value: unknown, min: number, max: number, fallback: number): number {
     // Number(null) is 0 — treat missing/empty input as "use the default".
     if (value === null || value === undefined || value === '') return fallback
@@ -574,43 +591,49 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     if (!Number.isFinite(n)) return fallback
     return Math.min(max, Math.max(min, Math.round(n)))
   }
-  async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean }> {
+  function normalizePluginSettings(raw: any): PluginSettings {
+    return {
+      pollIntervalMs: clampInt(raw && raw.pollIntervalMs, POLL_INTERVAL_MIN_MS, POLL_INTERVAL_MAX_MS, SETTINGS_DEFAULTS.pollIntervalMs),
+      // 0 = keep descriptions in full (the UI default); > 0 truncates.
+      toolDescriptionMaxLength: clampInt(raw && raw.toolDescriptionMaxLength, 0, 2000, SETTINGS_DEFAULTS.toolDescriptionMaxLength),
+      // 模型写规则需确认（D2）：程序化强制，只读设置供 tools/pre-execute 判定。
+      requireConfirmForModelRuleWrite: (raw && typeof raw.requireConfirmForModelRuleWrite === 'boolean')
+        ? raw.requireConfirmForModelRuleWrite
+        : SETTINGS_DEFAULTS.requireConfirmForModelRuleWrite,
+      // 子代理运行花真 token：默认确认，设置可关（设计 §3.2）。
+      requireConfirmForModelSubagentRun: (raw && typeof raw.requireConfirmForModelSubagentRun === 'boolean')
+        ? raw.requireConfirmForModelSubagentRun
+        : SETTINGS_DEFAULTS.requireConfirmForModelSubagentRun,
+    }
+  }
+  async function readPluginSettings(force = false): Promise<PluginSettings> {
     if (pluginSettingsCache && !force && Date.now() - pluginSettingsCache.at < SIDECAR_TTL_MS) return pluginSettingsCache.value
     // 读路径不调 ensurePaths：hubPath 走 resolveDshHome，与补丁路径推导无关。
     const raw = await readJsonFile(mcpSidecar(MCP_SETTINGS_FILE))
-    pluginSettingsCache = {
-      at: Date.now(),
-      value: {
-        pollIntervalMs: clampInt(raw && raw.pollIntervalMs, POLL_INTERVAL_MIN_MS, POLL_INTERVAL_MAX_MS, SETTINGS_DEFAULTS.pollIntervalMs),
-        // 0 = keep descriptions in full (the UI default); > 0 truncates.
-        toolDescriptionMaxLength: clampInt(raw && raw.toolDescriptionMaxLength, 0, 2000, SETTINGS_DEFAULTS.toolDescriptionMaxLength),
-        // 模型写规则需确认（D2）：程序化强制，只读设置供 tools/pre-execute 判定。
-        requireConfirmForModelRuleWrite: (raw && typeof raw.requireConfirmForModelRuleWrite === 'boolean')
-          ? raw.requireConfirmForModelRuleWrite
-          : SETTINGS_DEFAULTS.requireConfirmForModelRuleWrite,
-        // 子代理运行花真 token：默认确认，设置可关（设计 §3.2）。
-        requireConfirmForModelSubagentRun: (raw && typeof raw.requireConfirmForModelSubagentRun === 'boolean')
-          ? raw.requireConfirmForModelSubagentRun
-          : SETTINGS_DEFAULTS.requireConfirmForModelSubagentRun,
-      },
-    }
-    return pluginSettingsCache.value
+    const value = normalizePluginSettings(raw)
+    pluginSettingsCache = { at: Date.now(), value }
+    return value
   }
   async function mcpmSettings(args: any): Promise<any> {
-    const current = await readPluginSettings()
-    if (!args || args.set !== true) return { ok: true, settings: current }
-    const next = {
-      pollIntervalMs: clampInt(args.pollIntervalMs, POLL_INTERVAL_MIN_MS, POLL_INTERVAL_MAX_MS, current.pollIntervalMs),
-      toolDescriptionMaxLength: clampInt(args.toolDescriptionMaxLength, 0, 2000, current.toolDescriptionMaxLength),
-      requireConfirmForModelRuleWrite: (args && typeof args.requireConfirmForModelRuleWrite === 'boolean')
-        ? args.requireConfirmForModelRuleWrite
-        : current.requireConfirmForModelRuleWrite,
-      requireConfirmForModelSubagentRun: (args && typeof args.requireConfirmForModelSubagentRun === 'boolean')
-        ? args.requireConfirmForModelSubagentRun
-        : current.requireConfirmForModelSubagentRun,
-    }
-    const p = await ensurePaths()
+    if (!args || args.set !== true) return { ok: true, settings: await readPluginSettings() }
+    await ensurePaths()
     return withWriteLock(async () => {
+      // 写锁内 strict read：读坏时不能拿默认值当基线，否则一次保存就把原设置洗掉。
+      const read = await readJsonFileStrict(mcpSidecar(MCP_SETTINGS_FILE))
+      if (read.status === 'corrupt' || read.status === 'unreadable') {
+        return { ok: false, error: `MCP 设置文件${read.status === 'corrupt' ? '损坏' : '不可读'}，已拒绝保存：${read.error}` }
+      }
+      const current = normalizePluginSettings(read.status === 'ok' ? read.value : null)
+      const next: PluginSettings = {
+        pollIntervalMs: clampInt(args.pollIntervalMs, POLL_INTERVAL_MIN_MS, POLL_INTERVAL_MAX_MS, current.pollIntervalMs),
+        toolDescriptionMaxLength: clampInt(args.toolDescriptionMaxLength, 0, 2000, current.toolDescriptionMaxLength),
+        requireConfirmForModelRuleWrite: (args && typeof args.requireConfirmForModelRuleWrite === 'boolean')
+          ? args.requireConfirmForModelRuleWrite
+          : current.requireConfirmForModelRuleWrite,
+        requireConfirmForModelSubagentRun: (args && typeof args.requireConfirmForModelSubagentRun === 'boolean')
+          ? args.requireConfirmForModelSubagentRun
+          : current.requireConfirmForModelSubagentRun,
+      }
       try {
         await writeJsonFile(mcpSidecar(MCP_SETTINGS_FILE), next)
       } catch (e) {
@@ -630,7 +653,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   // disabledToolsSnapshot() ≡ `disabledToolsCache ? disabledToolsCache.value : {}`。
   const {
     readDisabledTools, readDisabledToolsResult, disabledToolsState, disabledToolsIssue,
-    resetDisabledTools,
+    ensureDisabledToolsForensics, resetDisabledTools,
     readKnownMcpTools, writeKnownMcpTools, mutateKnownMcpTools, mergeLiveToolsInto,
     mcpmToolEnabled, applyToolRestrictions, scheduleToolRestrictions, attachAgent, detachAgent,
     setDisabledToolsCache, disabledToolsSnapshot, disposeVisibility,
@@ -674,19 +697,15 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
 
   // ---------- secret masking (UI view only) ----------
-  // Only sensitive-looking keys are masked; `$VAR` / `!!js` references are
-  // indirections rather than secrets, so they stay readable. URL query strings
-  // are redacted because MCP credentials often ride there.
-  const SENSITIVE_KEY_RE = /(token|secret|password|passwd|auth|credential|api[_-]?key|access[_-]?key|private[_-]?key|cookie|session|signature|bearer)/i
+  // `$VAR` / `!!js` references are indirections rather than secrets, so they stay readable.
+  // URL query strings are redacted because MCP credentials often ride there.
   // 单值打码（`maskSecretValue`）与 URL 打码（`maskUrlQuery`）都挪到 ./secret-guard.js ——
   // 那里是这两条形态的唯一口径，使用方现在有三个（本文件的列表视图 + index.ts 的确认卡
   // + ops/snapshot.ts 的整机迁移导出）。此处不再自建一份。
-  function maskValueMap(map: Record<string, string> | null, onlySensitiveKeys: boolean): Record<string, string> | null {
+  function maskValueMap(map: Record<string, string> | null): Record<string, string> | null {
     if (!map || typeof map !== 'object') return map
     const out: Record<string, string> = {}
-    for (const key of Object.keys(map)) {
-      out[key] = (!onlySensitiveKeys || SENSITIVE_KEY_RE.test(key)) ? maskSecretValue(map[key]) : String(map[key])
-    }
+    for (const key of Object.keys(map)) out[key] = maskSecretValue(map[key])
     return out
   }
   // `maskUrlQuery` 已挪到 ./secret-guard.js：那里是两条打码形态的唯一口径，而使用方
@@ -700,8 +719,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       const view: any = Object.assign({}, row, { notes: notes[row.id] || '' })
       if (!reveal) {
         view.url = maskUrlQuery(row.url)
-        view.headers = maskValueMap(row.headers, true)
-        view.env = maskValueMap(row.env, true)
+        // 默认列表对**所有** env / headers 值打码：键名不可靠 —— `DATABASE_URL`、`OPENAI_KEY`
+        // 这类名字看起来不像密钥，却经常直接携带凭据。`$VAR` / `!!js` 是间接引用，
+        // 由 maskSecretValue 原样保留；编辑弹窗里的打码值由 resolveMaskedKv 从旧配置回填。
+        view.headers = maskValueMap(row.headers)
+        view.env = maskValueMap(row.env)
       }
       return view
     })
@@ -1003,10 +1025,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     const disabledIssue: DisabledToolsIssue | null = disabledUnknown ? disabledRead.status as DisabledToolsIssue : null
     const rows: any[] = []
     const errors: string[] = []
+    // 每层补丁的内容指纹：编辑弹窗带着它回来，`mcpm-edit` 核对后才写（并发编辑判据）。
+    const patchStamps: Record<string, string | null> = {}
     for (const level of ['project', 'global']) {
       const abs = level === 'project' ? p.projectPatch : p.globalPatch
       let content = ''
       try { content = await readPatch(abs) } catch (e) { errors.push(level + ': ' + message(e)); continue }
+      patchStamps[level] = stampOfText(content)
       const { rows: fileRows } = parseRows(content)
       for (const r of fileRows) rows.push(normalizeRow(r, level, abs))
     }
@@ -1239,6 +1264,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       disabledState: disabledUnknown ? 'unknown' : 'ok',
       disabledIssue,
       paths: { project: p.projectPatch, global: p.globalPatch, home: p.home, profile: p.profileName },
+      patchStamps,
       errors,
       warnings,
     }
@@ -1357,12 +1383,21 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     // 已有发射路径的键 —— 其余未知键的保真需要值保持式序列化（裸布尔/数字经
     // unquote/yq 往返会漂成字符串），不在此处理，宁可如实丢弃也不写错类型。
     let curRaw: any = null
-    try {
-      curRaw = parseRows(await readPatch(oldAbs)).rows.find((r) => r.id === id)
+    let oldContent: string | null = null
+    try { oldContent = await readPatch(oldAbs) } catch { /* 旧文件读不了时按建模字段重建，与原行为一致 */ }
+    if (oldContent !== null) {
+      // 并发编辑：界面读到的补丁层指纹对不上就拒绝，别把另一个窗口的改动整份覆盖掉。
+      // 不传 expectedStamp = 旧行为（脚本 / 模型工具不受影响）。
+      const conflict = stampConflict(stampOfText(oldContent), args && args.expectedStamp)
+      if (conflict) return conflict
+      curRaw = parseRows(oldContent).rows.find((r) => r.id === id)
       if (curRaw && curRaw.config && curRaw.config.toolCallTimeoutMs != null) {
         row.toolCallTimeoutMs = curRaw.config.toolCallTimeoutMs
       }
-    } catch { /* 旧文件读不了时按建模字段重建，与原行为一致 */ }
+    } else if (args && args.expectedStamp !== undefined) {
+      // 带了指纹却读不到旧文件：无从校验，按失败处理，不静默放行。
+      return { ok: false, error: '读取补丁失败，无法校验是否被并发修改：' + oldAbs }
+    }
     // 打码值**不能入库**：编辑弹窗的密钥框预填的就是打码值（界面拿到的行本身就是打码的），
     // 所以这里必须拿旧真值顶替，否则"改个别的字段再保存"就把真密钥覆盖成 `••••••`
     // —— 本机 2026-09-18 的 `TAVILY_API_KEY` 就是这样丢的。旧文件读不出来时 `curRaw`
@@ -1393,40 +1428,53 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     }
     const block = buildInsertBlock(row)
     return withWriteLock(async () => {
-      // Per-tool disable state is keyed by the serverName namespace: migrate
-      // it when a rename moves the tools to a new prefix.
-      if (serverName !== cur.serverName) {
+      // 改名要同时动三处：补丁本体、逐工具停用表、运行时场景快照。三者不在一个文件里，
+      // 没有事务；顺序固定为「补丁先落 → 侧车后落」，侧车失败就把补丁回滚。反过来的旧顺序
+      // （先写停用表 / 快照、再写补丁）在补丁失败时会留下“侧车已改名、补丁还是旧名”的半态。
+      const renaming = serverName !== cur.serverName
+      // 侧车迁移先在内存里算好，不落盘。停用表新名下可能已有条目：合并去重，不能覆盖。
+      let toolMapBefore: Record<string, string[]> | null = null
+      let toolMapNext: Record<string, string[]> | null = null
+      if (renaming) {
         const read = await readDisabledToolsResult(true)
         if (read.status === 'corrupt' || read.status === 'unreadable') {
           // 全局 unknown 仍然拦住所有 mcp__*；这里只如实说明“旧名字下的停用项没迁移”。
           guardNotes.push('MCP 停用表不可读，旧服务器名下的逐工具停用项未迁移')
         } else {
-          const toolMap = cloneDisabledTools(read.status === 'ok' ? read.value : emptyDisabledTools())
-          if (toolMap[cur.serverName]) {
-            toolMap[serverName] = toolMap[cur.serverName]
-            delete toolMap[cur.serverName]
-            try {
-              await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMap)
-            } catch (e) {
-              // 迁移失败就中止改名：继续写补丁会让新名字下的工具回到全启用。
-              return { ok: false, error: '逐工具停用项迁移失败（改名未执行）：' + message(e) }
-            }
-            setDisabledToolsCache(toolMap)
+          const map = cloneDisabledTools(read.status === 'ok' ? read.value : emptyDisabledTools())
+          if (map[cur.serverName]) {
+            toolMapBefore = cloneDisabledTools(map)
+            const merged = Array.from(new Set([...(map[serverName] || []), ...(map[cur.serverName] || [])]))
+            map[serverName] = merged
+            delete map[cur.serverName]
+            toolMapNext = map
           }
         }
-        // F-025：运行时快照的 mcp 停用表同样按 serverName 键 —— 改名不跟着改，
-        // 退出场景整体回写时旧键成死键、新名工具的停用状态丢失（回到全启用）。
+      }
+      // 运行时快照的 mcp 停用表同样按 serverName 键 —— 改名不跟着改，退出场景整体回写时
+      // 旧键成死键、新名工具的停用状态丢失（回到全启用）。同样先算、后写。
+      let sceneNext: any = null
+      if (renaming) {
         try {
           const slice: any = await memoriesService.readArchiveSlice()
           const mode: any = slice && slice.mode
           const mcpMap: any = mode && mode.snapshot && mode.snapshot.mcp
           if (mcpMap && Object.prototype.hasOwnProperty.call(mcpMap, cur.serverName)) {
             const next: any = {}
-            for (const [k, v] of Object.entries(mcpMap)) next[k === cur.serverName ? serverName : k] = v
-            await memoriesService.patchIndex({ mode: { ...mode, snapshot: { ...mode.snapshot, mcp: next } } })
+            for (const [k, v] of Object.entries(mcpMap)) {
+              if (k !== cur.serverName) next[k] = v
+            }
+            next[serverName] = Array.from(new Set([
+              ...(Array.isArray(mcpMap[serverName]) ? mcpMap[serverName] : []),
+              ...(Array.isArray(mcpMap[cur.serverName]) ? mcpMap[cur.serverName] : []),
+            ]))
+            sceneNext = { ...mode, snapshot: { ...mode.snapshot, mcp: next } }
           }
         } catch { /* 快照同步失败不阻断改名本身；残留与修复前一致 */ }
       }
+
+      // 补丁是事实源：先写它，并留下能把两份文件都还原的回滚闭包。
+      let patchRollback: (() => Promise<void>) | null = null
       if (oldAbs !== newAbs) {
         // Level migration: remove from the old file, insert into the new one.
         // Not atomic, so keep the old content and restore it if the second
@@ -1439,8 +1487,14 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         } catch (e) {
           return { ok: false, error: '写入失败: ' + message(e) }
         }
-        let c2 = await readPatch(newAbs)
-        const beforeNew = c2
+        let beforeNew: string
+        try {
+          beforeNew = await readPatch(newAbs)
+        } catch (e) {
+          try { await writePatch(oldAbs, origOld) } catch (e2) { /* best effort */ }
+          return { ok: false, error: '读取目标补丁失败（已回滚）: ' + message(e) }
+        }
+        let c2 = beforeNew
         c2 = appendBlock(c2, block)
         if (cur.disabled) c2 = appendBlock(c2, buildDisableBlock(id, true))
         const migrationGuard = duplicateGuard(beforeNew, c2)
@@ -1454,15 +1508,74 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
           try { await writePatch(oldAbs, origOld) } catch (e2) { /* best effort */ }
           return { ok: false, error: '写入失败（已回滚）: ' + message(e) }
         }
+        patchRollback = async () => {
+          const errors: string[] = []
+          try { await writePatch(newAbs, beforeNew) } catch (e) { errors.push('恢复目标补丁失败：' + message(e)) }
+          try { await writePatch(oldAbs, origOld) } catch (e) { errors.push('恢复原补丁失败：' + message(e)) }
+          if (errors.length) throw new Error(errors.join('；'))
+        }
       } else {
-        let c = await readPatch(newAbs)
-        const before = c
-        c = removeEntryAll(c, id)
+        let before: string
+        try {
+          before = await readPatch(newAbs)
+        } catch (e) {
+          return { ok: false, error: '读取补丁失败: ' + message(e) }
+        }
+        let c = removeEntryAll(before, id)
         c = appendBlock(c, block)
         if (cur.disabled) c = appendBlock(c, buildDisableBlock(id, true))
         const guard = duplicateGuard(before, c)
         if (guard) return guard
-        await writePatch(newAbs, c)
+        try {
+          await writePatch(newAbs, c)
+        } catch (e) {
+          return { ok: false, error: '写入失败: ' + message(e) }
+        }
+        patchRollback = async () => { await writePatch(newAbs, before) }
+      }
+
+      const rollbackPatch = async (): Promise<string | null> => {
+        if (patchRollback === null) return null
+        try { await patchRollback(); return null } catch (e) { return message(e) }
+      }
+
+      // 停用表迁移：写失败 → 回滚补丁；此时没有别的侧车已被改动。
+      if (toolMapNext) {
+        try {
+          await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMapNext)
+        } catch (e) {
+          const patchError = await rollbackPatch()
+          return {
+            ok: false,
+            error: '逐工具停用项迁移失败（改名已回滚）：' + message(e)
+              + (patchError ? '；补丁回滚也失败：' + patchError : ''),
+          }
+        }
+        setDisabledToolsCache(toolMapNext)
+      }
+
+      // 运行时快照迁移最后写：失败时把停用表与补丁一起还原。
+      if (sceneNext) {
+        try {
+          await memoriesService.patchIndex({ mode: sceneNext })
+        } catch (e) {
+          const errors: string[] = []
+          if (toolMapNext && toolMapBefore) {
+            try {
+              await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMapBefore)
+              setDisabledToolsCache(toolMapBefore)
+            } catch (e2) {
+              errors.push('停用表恢复失败：' + message(e2))
+            }
+          }
+          const patchError = await rollbackPatch()
+          return {
+            ok: false,
+            error: '运行时快照迁移失败（改名已回滚）：' + message(e)
+              + (errors.length ? '；' + errors.join('；') : '')
+              + (patchError ? '；补丁回滚也失败：' + patchError : ''),
+          }
+        }
       }
       return { ok: true, ...(guardNotes.length ? { warning: guardNotes.join('；') } : {}) }
     })
@@ -1511,11 +1624,16 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     const levelFilter = args.level === 'global' ? 'global' : args.level === 'project' ? 'project' : null
     return withWriteLock(async () => {
       const changed: string[] = []
+      // 静默 `continue` 会让"两层都切了"变成半真半假：一层补丁不可读时用户以为全部生效，
+      // 实际只改了一层。失败按层级收集，最后按"全失败 / 部分失败 / 全成功"分三档回执。
+      const failures: string[] = []
+      let attempted = 0
       for (const level of ['project', 'global']) {
         if (levelFilter && levelFilter !== level) continue
+        attempted++
         const abs = level === 'project' ? p.projectPatch : p.globalPatch
         let c = ''
-        try { c = await readPatch(abs) } catch (e) { continue }
+        try { c = await readPatch(abs) } catch (e) { failures.push(level + ' 层补丁读取失败：' + message(e)); continue }
         const { rows } = parseRows(c)
         for (const row of rows) {
           if (!!row.disabled === !enabled) continue
@@ -1530,9 +1648,12 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
             c = appendBlock(c, buildDisableBlock(row.id, true))
           }
         }
-        await writePatch(abs, c)
+        try { await writePatch(abs, c) } catch (e) { failures.push(level + ' 层补丁写入失败：' + message(e)); continue }
       }
-      return { ok: true, enabled, changed }
+      if (failures.length === 0) return { ok: true, enabled, changed }
+      const detail = failures.join('；')
+      if (failures.length >= attempted) return { ok: false, error: '所有补丁都未能改写：' + detail, changed }
+      return { ok: true, enabled, changed, partial: true, warning: '部分层级未能改写：' + detail }
     })
   }
 
@@ -2016,11 +2137,15 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     await deps.ensurePaths()
     await deps.withWriteLock(async () => {
       const read = await readDisabledToolsResult(true)
-      if ((read.status === 'corrupt' || read.status === 'unreadable') && reason !== 'scene-restore') {
-        throw new Error(`MCP 停用表${read.status === 'corrupt' ? '损坏' : '不可读'}，已拒绝场景写入：${read.error}`)
+      if (read.status === 'corrupt' || read.status === 'unreadable') {
+        if (reason !== 'scene-restore') {
+          throw new Error(`MCP 停用表${read.status === 'corrupt' ? '损坏' : '不可读'}，已拒绝场景写入：${read.error}`)
+        }
+        // scene-restore 写的是进入场景前拍下的快照；这份快照本身可信，但**落点**现在
+        // 已经损坏 / 不可读。覆盖之前必须先留住原文件 —— 否则一次回滚就把现场洗掉，
+        // 用户再也查不出为什么会变成这样。取证失败则拒绝回滚（宁可场景退不出去）。
+        await ensureDisabledToolsForensics()
       }
-      // scene-restore 写的是进入场景前拍下的快照；入口预检保证那份快照来自 ok 状态。
-      // 它同时把损坏文件覆盖回一份合法表（取证副本由四态读的损坏分支负责）。
       await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), cloneDisabledTools(entries))
     })
     setDisabledToolsCache(entries)
@@ -2033,7 +2158,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
    */
   async function updateNotes(mutate: (map: Record<string, string>) => void): Promise<void> {
     await deps.withWriteLock(async () => {
-      const map = Object.assign({}, await readNotes(true))
+      const read = await readJsonFileStrict(mcpSidecar(MCP_NOTES_FILE))
+      if (read.status === 'corrupt' || read.status === 'unreadable') {
+        throw new Error(`MCP 备注文件${read.status === 'corrupt' ? '损坏' : '不可读'}，已拒绝写入：${read.error}`)
+      }
+      const map = Object.assign({}, normalizeNotes(read.status === 'ok' ? read.value : null)) as Record<string, string>
       mutate(map)
       await deps.ensurePaths()
       await writeJsonFile(mcpSidecar(MCP_NOTES_FILE), map)

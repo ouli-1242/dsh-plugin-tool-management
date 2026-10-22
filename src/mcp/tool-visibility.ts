@@ -83,7 +83,12 @@ export interface ToolVisibility {
   /** 最近一次损坏取证副本的绝对路径（没有副本 / 不可读时为 null）。 */
   disabledToolsForensicPath(): string | null
   /**
-   * 重置停用表：仅在 corrupt / unreadable 时可用。corrupt 必须先取证成功才覆盖；
+   * 强制为异常停用表留一份取证副本（复制失败即抛）。corrupt / unreadable 的覆盖型写入
+   * 必须先过这一关；同一份文件已经复制成功过时会复用同一路径。
+   */
+  ensureDisabledToolsForensics(): Promise<string>
+  /**
+   * 重置停用表：仅在 corrupt / unreadable 时可用。两者都必须先取证成功才覆盖；
    * 写回空表（原子写）并清掉 unknown 状态与上报。必须在写锁内调用（本函数自己加锁）。
    */
   resetDisabledTools(): Promise<{ ok: true; forensics: string | null; issue: DisabledToolsIssue } | { ok: false; error: string }>
@@ -265,6 +270,13 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     }
   }
 
+  /** 覆盖型写入的前置条件：异常状态必须先留下一份可检查的原文件副本。 */
+  async function ensureDisabledToolsForensics(): Promise<string> {
+    const path = await copyCorruptDisabledTools(true)
+    if (path === null) throw new Error('取证副本写入失败（未改动原文件）')
+    return path
+  }
+
   /** 写成功后的唯一缓存入口：安全克隆 + bump epoch + 清掉损坏上报。 */
   function setDisabledToolsCacheInternal(value: Record<string, string[]>): void {
     disabledToolsEpoch += 1
@@ -293,12 +305,12 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
         return { ok: false as const, error: '停用表当前可读（未损坏 / 未不可读），重置入口只在状态异常时可用；未改动任何东西' }
       }
       let forensics: string | null = null
-      if (read.status === 'corrupt') {
-        try {
-          forensics = await copyCorruptDisabledTools(true)
-        } catch (e) {
-          return { ok: false as const, error: deps.message(e) }
-        }
+      // corrupt 与 unreadable 都是异常状态：覆盖之前必须证明证据保得住。unreadable 时
+      // copyFile 往往也会失败 —— 那就如实拒绝（先修权限 / 释放占用），绝不空表覆盖。
+      try {
+        forensics = await ensureDisabledToolsForensics()
+      } catch (e) {
+        return { ok: false as const, error: deps.message(e) }
       }
       try {
         await deps.writeJsonFile(deps.mcpSidecar(deps.MCP_DISABLED_TOOLS_FILE), {})
@@ -678,6 +690,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     disabledToolsState,
     disabledToolsIssue,
     disabledToolsForensicPath: () => (forensicCopy && forensicCopy.path ? forensicCopy.path : null),
+    ensureDisabledToolsForensics,
     resetDisabledTools,
     readKnownMcpTools,
     writeKnownMcpTools,

@@ -31,6 +31,7 @@ import {
 } from '../lib/context-inject.js'
 import { newestDomainTexts, PLUGIN_KINDS } from '../lib/context-inject-surface.js'
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
+import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/skills/frontmatter.js'
 import { parseModeState } from '../lib/memories/service.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
@@ -64,7 +65,10 @@ import { pruneSessionScopes } from '../lib/scope/store.js'
 import { createSkillCatalog, renderSkillCatalog, renderSkillCatalogDelta, skillCatalogNeedsTakeover } from '../lib/skills/catalog.js'
 import { createMcpStateCatalog } from '../lib/mcp/state-section.js'
 import { discoverProjectInstructions, findInstructionProjectRoot, renderProjectInstructions } from '../lib/prompts/project-instructions.js'
-import { OP_REGISTRY, contradictoryEntries, frozenOps, isReadCall, writeWhenUnwritten } from '../lib/op-registry.js'
+import { OP_REGISTRY, contradictoryEntries, frozenOps, isReadCall, opClassOf, unclassifiedOps, writeWhenUnwritten } from '../lib/op-registry.js'
+import { appendOverrideEntry } from '../lib/token-config.js'
+import { assertStamp, normalizeStamp, stampConflict, stampOfText } from '../lib/stale-write.js'
+import { searchMemories, snippetOf } from '../lib/memories/search.js'
 import { SessionStore } from '@deepseek-ai/dsh-session'
 import { buildSessionOps } from '../lib/ops/sessions.js'
 import { ArchiveWorkspaceRegistry } from '../lib/sessions/workspace.js'
@@ -635,6 +639,19 @@ test('两态 op 的写判据：`set:true` 之外还有别的写触发键，漏�
   // 判据本身要与登记表自洽：有 `writeWhen` 就必须标 `write`，且不得同时标 `readonly`。
   assert.deepEqual(writeWhenUnwritten(), [], '带写判据却没标写的条目：那份判据永远不会被问到')
   assert.deepEqual(contradictoryEntries(), [], '只读与写自相矛盾的条目')
+})
+
+test('登记表查找不走原型链：`constructor` / `toString` 不算已登记', () => {
+  // 破了这一条的后果是**静默的**：`OP_REGISTRY['constructor']` 命中 Object 构造函数，
+  // 于是 `constructor` 被当成"已登记"——对账漏报，`isReadCall` 拿不到 `writeWhen` 反而
+  // 碰巧按写处理。HTTP 侧的 `handlers[op]` 更直接：未知 op 被当成可调用函数执行。
+  for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf']) {
+    assert.equal(opClassOf(name), undefined, name + ' 不是登记项')
+    assert.equal(isReadCall(name, {}), false, name + ' 未登记 → 按写处理')
+    assert.deepEqual(unclassifiedOps([name]), [name], name + ' 必须报未登记')
+  }
+  assert.ok(opClassOf('rules-list'), '真实登记项照常取得到')
+  assert.deepEqual(unclassifiedOps(['rules-list']), [], '真实登记项不算未登记')
 })
 
 test('场景冻结：HTTP handlers 与模型侧 op 表用同一份判据，锁着**别的**场景时两侧都要拒', async () => {
@@ -1916,6 +1933,18 @@ test('备份名与 peer range：两代时间戳都认、两份范围不漂移', 
   assert.ok(ranges.length > 0, 'package.json 里应当有 dsh-* 的 peer range')
   for (const range of ranges) assert.equal(range, EXPECTED_PEER_RANGE)
   assert.ok(!EXPECTED_PEER_RANGE.includes('^'), '范围不得带 caret 上界')
+  // 只有一代：历史上这里是「每适配一代新 rc 就追加一段」，范围于是累积成
+  // 0.1.7 || 0.2.0 || 0.2.1 三代并集，等于向 npm 声明「当前版本支持 0.1.7 起的每一代」——
+  // 而代码是按 0.2.1 的契约写的。那种声明最坏的结果是"装上了但某几个动作悄悄失效"。
+  // 这条断言把「逐段写」和「累积各代」区分开：可以有多段比较器，但只能有一个 `||` 分支。
+  assert.equal(
+    EXPECTED_PEER_RANGE.split('||').length,
+    1,
+    '范围只声明当前适配的那一代，不累积历史各代（旧宿主装旧版本）',
+  )
+  // engines.dsh 与 peer range 也必须同源：前者是 dsh plugin 安装期的检查，后者是 npm 的
+  // peer 校验，两处说法不一致时用户会看到「装的时候说支持、跑的时候说不支持」。
+  assert.equal(pkg.engines?.dsh, EXPECTED_PEER_RANGE, 'engines.dsh 与 peer range 必须同一个字符串')
 })
 
 test('MCP 工具名前缀只有一处定义', () => {
@@ -4405,4 +4434,192 @@ test('模式切换播种：prune 保留工作区键，克隆到另一层时剥�
   assert.deepEqual(plain(scopeForLayerSeed({ locked: true, skills: { a: true } })), { skills: { a: true } })
   assert.equal(scopeForLayerSeed({ locked: true }), undefined, '只有锁 = 没有可播种的内容')
   assert.equal(scopeForLayerSeed(undefined), undefined)
+})
+
+// ── frontmatter 标量编码与行级保留（0.21.2 P2-5）────────────────────────
+// 破了会静默改数据：描述里带 `: ` 的旧写法让 js-yaml 解析失败，编辑一条记忆丢嵌套字段。
+
+test('YAML 标量：该引号的都被引号包住，自家解码器与 js-yaml 都还原原字符串', () => {
+  const values = [
+    'plain',
+    'a: b',
+    'a # b',
+    '123',
+    'true',
+    'yes',
+    '2026-10-22',
+    ' padded ',
+    "it's",
+    'a"b',
+    '',
+    '[x]',
+    '- dash',
+    'null',
+  ]
+  for (const value of values) {
+    const encoded = yamlScalar(value)
+    assert.ok(!encoded.includes('\n'), '标量必须是一行：' + JSON.stringify(value))
+    assert.equal(decodeYamlScalar(encoded), value, '自家读侧往返：' + JSON.stringify(value))
+    assert.equal(yaml.load('k: ' + encoded).k, value, 'js-yaml 读侧不得改变类型或值：' + JSON.stringify(value))
+  }
+  // 普通文本保持裸写，不制造无意义的引号噪声。
+  assert.equal(yamlScalar('普通描述'), '普通描述')
+})
+
+test('记忆更新只替换 name/description 取值行，嵌套、未知键、注释与顺序原样保留', () => {
+  const before = [
+    '---',
+    'name: old',
+    'description: old desc',
+    'metadata:',
+    '  source: hand-written',
+    '# 保留这条注释',
+    'custom: value',
+    '---',
+    '',
+    'body line',
+  ].join('\r\n')
+  const after = rewriteFrontmatterFields(
+    before,
+    { name: 'new: name', description: 'desc: with # marks' },
+    'new body',
+  )
+  assert.ok(after.includes('  source: hand-written'), '嵌套字段不得丢')
+  assert.ok(after.includes('# 保留这条注释'), '注释不得丢')
+  assert.ok(after.includes('custom: value'), '未知键不得丢')
+  assert.ok(!after.replace(/\r\n/g, '').includes('\n'), 'CRLF 文件的换行风格不得漂移')
+  assert.ok(after.indexOf('name:') < after.indexOf('description:'), '字段顺序保持')
+  assert.ok(after.endsWith('\r\nnew body'), '正文整体替换')
+  // 读回来确认新值可被自家解析器还原。
+  assert.ok(after.includes('name: "new: name"'))
+  assert.ok(after.includes('description: "desc: with # marks"'))
+})
+
+test('记忆更新删除 description 时只删它自己的取值行，其余字段仍在', () => {
+  const before = '---\nname: n\ndescription: d\ncustom: keep\n---\n\nbody\n'
+  const after = rewriteFrontmatterFields(before, { name: 'n', description: null }, 'body')
+  assert.ok(!after.includes('description:'), 'description 必须被删掉')
+  assert.ok(after.includes('custom: keep'), '其余字段仍保留')
+})
+
+test('人设 frontmatter：含冒号的描述可往返，output 新旧两种写法都能读', () => {
+  const serialized = serializePersona({
+    description: 'Use when: reviewing # things',
+    provider: 'p',
+    model: 'm',
+    output: ['first: thing', 'second'],
+    body: 'You are X',
+  })
+  const fm = serialized.split('---')[1]
+  const yamlDoc = yaml.load(fm)
+  assert.equal(yamlDoc.description, 'Use when: reviewing # things', 'js-yaml 不得截断含 `: ` 的值')
+  assert.deepEqual(yamlDoc.output, ['first: thing', 'second'], 'output 落盘为 YAML 序列')
+  const parsed = parsePersona(serialized, 'x')
+  assert.equal(parsed.description, 'Use when: reviewing # things')
+  assert.equal(parsed.output, 'first: thing\nsecond')
+  // 旧文件（重复 output 键）继续可读，不强制迁移。
+  const old = '---\ndescription: old\noutput: a: b\noutput: c\n---\n\nbody\n'
+  assert.equal(parsePersona(old, 'x').output, 'a: b\nc')
+})
+
+test('人设描述里的保留字/数字形态写成引号标量，读回仍是字符串', () => {
+  const serialized = serializePersona({ description: '123', provider: 'null', body: 'x' })
+  const yamlDoc = yaml.load(serialized.split('---')[1])
+  assert.equal(yamlDoc.description, '123')
+  assert.equal(yamlDoc.provider, 'null')
+  assert.equal(parsePersona(serialized, 'x').description, '123')
+  assert.equal(parsePersona(serialized, 'x').provider, 'null')
+})
+
+// ── 令牌覆盖条目的追加（0.21.2 P2-7）────────────────────────────────────
+// 破了会静默写坏启动配置：空补丁 `[]` 后面直接拼 `- id: …`，官方 js-yaml 解析直接失败。
+
+test('令牌覆盖条目：空内容 / 空补丁 `[]` / 普通内容都写出合法 YAML', () => {
+  const entry = '- id: dsh-plugin-tool-management\n  config:\n    token: "t0k"'
+  const parse = (text) => yaml.load(text)
+
+  const fromEmpty = appendOverrideEntry('', entry)
+  assert.deepEqual(parse(fromEmpty), [{ id: 'dsh-plugin-tool-management', config: { token: 't0k' } }], '空内容')
+  assert.equal(fromEmpty.startsWith('\n'), false, '空内容不该在文件开头留空行')
+
+  const fromBracket = appendOverrideEntry('[]\n', entry)
+  assert.deepEqual(parse(fromBracket), [{ id: 'dsh-plugin-tool-management', config: { token: 't0k' } }], '`[]` 被替换而不是追加')
+
+  const fromBracketNoNewline = appendOverrideEntry('[]', entry)
+  assert.deepEqual(parse(fromBracketNoNewline), [{ id: 'dsh-plugin-tool-management', config: { token: 't0k' } }], '无尾换行的 `[]`')
+
+  const existing = '- id: other\n'
+  const merged = appendOverrideEntry(existing, entry)
+  assert.deepEqual(parse(merged), [{ id: 'other' }, { id: 'dsh-plugin-tool-management', config: { token: 't0k' } }], '普通内容追加到末尾')
+})
+
+// ── 并发编辑指纹（0.21.2 Phase 4.1）──────────────────────────────────────
+// 破了会静默丢改动：两个窗口同时编辑，后保存的那份整份覆盖前一份。
+
+test('stale-write：指纹随内容变、不带指纹不拦、不符给出冲突回执', async () => {
+  assert.equal(stampOfText('a'), stampOfText('a'), '同内容指纹稳定')
+  assert.notEqual(stampOfText('a'), stampOfText('b'), '内容变则指纹变')
+  assert.equal(stampOfText(null), null, '文件不存在 = null')
+  assert.equal(normalizeStamp(undefined), null, '没带 = null')
+  assert.equal(normalizeStamp('  '), null, '空串 = 没带')
+  assert.equal(normalizeStamp(123), null, '非字符串 = 没带')
+
+  const stamp = stampOfText('v1')
+  assert.equal(stampConflict(stamp, undefined), null, '不传 expectedStamp = 旧行为')
+  assert.equal(stampConflict(stamp, stamp), null, '一致就放行')
+  const conflict = stampConflict(stamp, stampOfText('v2'))
+  assert.equal(conflict.code, 'stale-write')
+  assert.equal(conflict.ok, false)
+  assert.equal(conflict.current.stamp, stamp, '回执带上当前指纹，界面可据此重载')
+
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-stale-'))
+  const file = join(dir, 'doc.md')
+  try {
+    writeFileSync(file, 'one')
+    await assertStamp(file, stampOfText('one'))
+    writeFileSync(file, 'two')
+    await assert.rejects(() => assertStamp(file, stampOfText('one')), (e) => e.code === 'stale-write' && e.current === stampOfText('two'))
+    await assertStamp(file, undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ── 记忆搜索（0.21.2 Phase 4.3）──────────────────────────────────────────
+// 破了会静默答错：排序或截断变了，模型拿到的"最相关"就不是用户想找的那条。
+
+test('记忆搜索：多词 AND、大小写不敏感、排序按命中字段、空 query 不返回全部', () => {
+  const docs = [
+    { id: 'global/deploy', name: 'deploy', group: 'global', description: 'how to ship', tags: ['ops'], body: 'run the deploy script', enabled: true },
+    { id: 'global/deploy-notes', name: 'deploy-notes', group: 'global', description: 'deploy details', tags: [], body: 'notes about shipping', enabled: false },
+    { id: 'work/incident', name: 'incident', group: 'work', description: 'deploy rollback', tags: ['deploy'], body: 'when a deploy fails', enabled: true },
+  ]
+  assert.deepEqual(searchMemories(docs, ''), [], '空 query 返回空，不是全部')
+  assert.deepEqual(searchMemories(docs, '   '), [], '纯空白同理')
+
+  const hits = searchMemories(docs, 'deploy')
+  assert.equal(hits.length, 3)
+  assert.equal(hits[0].name, 'deploy', '名称精确排第一')
+  assert.equal(hits[1].name, 'deploy-notes', '名称前缀排第二')
+  assert.equal(hits[2].name, 'incident', '只在描述 / 标签 / 正文命中的排后面')
+
+  assert.equal(searchMemories(docs, 'DEPLOY').length, 3, '大小写不敏感')
+  assert.deepEqual(searchMemories(docs, 'deploy rollback').map((h) => h.name), ['incident'], '多词是 AND')
+  assert.deepEqual(searchMemories(docs, 'deploy nothing'), [], '任一词不命中就排除')
+  assert.equal(searchMemories(docs, 'deploy')[1].enabled, false, 'enabled 原样带出（会话投影由调用方合成）')
+  assert.equal(searchMemories(docs, 'deploy', 2).length, 2, 'limit 生效')
+})
+
+test('记忆搜索片段：压平换行、围绕命中截断、总长不超过 160', () => {
+  const body = 'x'.repeat(200) + ' needle ' + 'y'.repeat(200)
+  const snippet = snippetOf(body, ['needle'])
+  assert.ok(snippet.length <= 160, '片段长度上限：' + snippet.length)
+  assert.ok(snippet.includes('needle'), '片段必须含命中词')
+  assert.ok(snippet.startsWith('…') && snippet.endsWith('…'), '两侧都有省略号')
+  assert.equal(snippetOf('short body', ['short']), 'short body', '短文本原样返回')
+  assert.equal(snippetOf('a\nb   c', []), 'a b c', '换行与多余空白压平')
+})
+
+test('记忆搜索工具出厂默认关闭（schema 成本按需付）', () => {
+  assert.ok(DEFAULT_HIDDEN_TOOLS.includes('memory_manager_search'))
 })

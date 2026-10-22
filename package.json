@@ -28,7 +28,7 @@
     "docs/update.md"
   ],
   "engines": {
-    "dsh": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
+    "dsh": ">=0.2.1-rc.2 <0.2.2",
     "node": ">=18"
   },
   "publishConfig": {
@@ -72,17 +72,17 @@
   "icon": "./docs/images/icon.png",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-agent-preset-registry": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-session": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-session-projection-cache": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-settings": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-spill-local": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-storage-domain": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-subagent-fork-in-process": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-subagent-spawn-in-process": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
-    "@deepseek-ai/dsh-workspace": ">=0.1.7-rc.2 <0.2.0-rc.1 || >=0.2.0-rc.1 <0.2.1-rc.2 || >=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-agent-preset-registry": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-session": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-session-projection-cache": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-settings": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-spill-local": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-storage-domain": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-subagent-fork-in-process": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-subagent-spawn-in-process": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-workspace": ">=0.2.1-rc.2 <0.2.2",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -108,12 +108,14 @@
     "@deepseek-ai/dsh-workspace": "^0.2.1-rc.2",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.0.0",
+    "@types/semver": "^7.7.0",
     "react": "^18.2.0",
     "typescript": "^6.0.0"
   },
   "license": "MIT",
   "dependencies": {
     "fflate": "^0.8.3",
-    "js-yaml": "^4.3.2"
+    "js-yaml": "^4.3.2",
+    "semver": "^7.7.2"
   }
 }

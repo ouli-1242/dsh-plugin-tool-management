@@ -7,7 +7,7 @@
 // 对 service.ts 只做 type-only 引用（`import type`），避免与它形成运行时循环依赖。
 
 import { randomUUID } from 'node:crypto'
-import { readFileSync, renameSync, statSync } from 'node:fs'
+import { readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -55,10 +55,11 @@ export interface GroupIndexEntry {
  * 运行时已切换但状态落盘失败，界面开关停在旧状态、还得再点一次）。这种占用是
  * 瞬时的，重试几轮就能过去；全失败才清理临时文件并把错误抛出。
  */
-export async function writeFileAtomically(path: string, content: string): Promise<void> {
+export async function writeFileAtomically(path: string, content: string, options: { mode?: number } = {}): Promise<void> {
   const temp = join(dirname(path), `.${basename(path)}.dsh-rules-${randomUUID()}.tmp`)
   try {
-    await writeFile(temp, content, 'utf8')
+    if (options.mode === undefined) await writeFile(temp, content, 'utf8')
+    else await writeFile(temp, content, { encoding: 'utf8', mode: options.mode })
     await renameWithRetry(temp, path)
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined)
@@ -67,10 +68,11 @@ export async function writeFileAtomically(path: string, content: string): Promis
 }
 
 /** 二进制版原子写（附件用）：临时文件 + rename（同样带瞬时占用重试），失败清理临时文件。 */
-export async function writeFileAtomicBinary(path: string, data: Buffer): Promise<void> {
+export async function writeFileAtomicBinary(path: string, data: Buffer, options: { mode?: number } = {}): Promise<void> {
   const temp = join(dirname(path), `.${basename(path)}.dsh-rules-${randomUUID()}.tmp`)
   try {
-    await writeFile(temp, data)
+    if (options.mode === undefined) await writeFile(temp, data)
+    else await writeFile(temp, data, { mode: options.mode })
     await renameWithRetry(temp, path)
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined)
@@ -340,6 +342,11 @@ export async function clearQuarantineMarker(stateDir: string): Promise<void> {
   await rm(quarantineMarkerPath(stateDir), { force: true }).catch(() => undefined)
 }
 
+/** 同步版：只给 `readIndexSync` 的成功解析路径用（不能在注入热路径上 await）。 */
+function clearQuarantineMarkerSync(stateDir: string): void {
+  try { rmSync(quarantineMarkerPath(stateDir), { force: true }) } catch { /* best effort */ }
+}
+
 /**
  * 把**解析失败**的索引改名留存并记录该 stateDir 已损坏（幂等，只记一次）。
  *
@@ -432,6 +439,9 @@ export async function parseOrQuarantine(stateDir: string, raw: string): Promise<
     // 只对 `markIndexUntrusted` 那类（文件仍在原位）有意义：parse 失败时文件已被改名，
     // 后续读到的是 ENOENT，走不到这里 —— 所以这一行不会削弱 parse 失败的 fail-closed。
     corruptIndexes.delete(resolve(stateDir))
+    // 磁盘标记也要一起撤：用户手工把索引修好后，只有内存解除、标记还在，writeIndex 会
+    // 继续拒写，直到点「一键修复」或重启 —— 状态与文件已经不一致了。
+    if (hasQuarantineMarker(stateDir)) await clearQuarantineMarker(stateDir)
     return index
   } catch {
     await quarantineIndex(stateDir)
@@ -524,6 +534,9 @@ export function readIndexSync(stateDir: string): RulesIndex {
   try {
     value = parseIndex(raw)
     corruptIndexes.delete(resolve(stateDir))
+    // 与 parseOrQuarantine 同一条：手工恢复出可解析的文件后，持久闸门必须跟着撤，
+    // 否则 writeIndex 会一直拒绝写入。只在标记存在时才碰磁盘。
+    if (hasQuarantineMarker(stateDir)) clearQuarantineMarkerSync(stateDir)
   } catch {
     void quarantineIndex(stateDir).catch(() => undefined)
     value = defaultIndex()

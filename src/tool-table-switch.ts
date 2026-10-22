@@ -66,8 +66,24 @@ export interface ToolTableSwitch {
   toolTableWriteError(): string
   toolTableHidden(): ReadonlySet<string>
   writeToolTableSettings(next: ToolTableSettings): Promise<{ ok: true } | { ok: false; error: string }>
+  /**
+   * 锁内读-改-写。所有「先读当前值、再算新值」的调用方都必须走这里 —— 分开读再整表写
+   * 会让并发的存方案 / 改勾选互相覆盖。回调返回失败对象时不落盘。
+   */
+  mutateToolTableSettings(
+    mutate: (current: ToolTableSettings) => ToolTableSettings | ToolTableMutationFailure,
+  ): Promise<{ ok: true; settings: ToolTableSettings } | ToolTableMutationFailure>
   toolTableReport(hidden?: readonly string[]): ToolTableReport
   toolTableOp(args: any): Promise<any>
+}
+
+/** 锁内变更的失败形状：保留 op 层原有的 code / name / limit 字段。 */
+export interface ToolTableMutationFailure {
+  ok: false
+  error?: string
+  code?: string
+  name?: string
+  limit?: number
 }
 
 export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitch {
@@ -178,6 +194,27 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   const toolTableRows = (): ToolTableRow[] => [...toolTableSizes].map(([name, bytes]) => ({ name, bytes }))
   const toolTableReport = (hidden: readonly string[] = [...toolTableHidden()]): ToolTableReport =>
     buildToolTableReport(toolTableRows(), hidden, deps.carrierHiddenTools ? deps.carrierHiddenTools() : [])
+  /** 落盘 + 同步内存缓存；调用方必须已持有写锁。 */
+  async function writeToolTableSettingsLocked(next: ToolTableSettings): Promise<{ ok: true } | { ok: false; error: string }> {
+    // 锁内再确认一次：外部编辑器可能在这几毫秒里把文件写坏。此时覆盖同样会毁掉原内容。
+    const checked = checkToolTableRead(await deps.readJsonFileStrict(hubPath(TOOL_TABLE_FILE)))
+    if (checked.status === 'corrupt' || checked.status === 'unreadable') {
+      toolTableStateValue = 'unknown'
+      toolTableIssueValue = checked.status
+      publishToolTableNote(checked.status, checked.error)
+      return { ok: false as const, error: toolTableRefuseMessage() }
+    }
+    try {
+      await deps.writeJsonFile(hubPath(TOOL_TABLE_FILE), next)
+    } catch (e) {
+      return { ok: false as const, error: '设置保存失败: ' + deps.message(e) }
+    }
+    toolTableCache = { at: Date.now(), value: next, off: new Set(next.hidden) }
+    toolTableStateValue = 'ok'
+    toolTableIssueValue = null
+    clearRuntimeNote('tool-table-file')
+    return { ok: true as const }
+  }
   /** 落盘 + 同步内存缓存（三条写路径共用：改勾选 / 存方案 / 删方案）。 */
   async function writeToolTableSettings(next: ToolTableSettings): Promise<{ ok: true } | { ok: false; error: string }> {
     await deps.ensurePaths()
@@ -186,8 +223,17 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     if (toolTableStateValue === 'unknown') return { ok: false as const, error: toolTableRefuseMessage() }
     // 落盘在写锁里，落完**出了锁**再刷新（`withWriteLock` 是一条不可重入的链：锁里再调
     // 一次会等自己，直接卡死）。刷新是两处目录读，本来也不必占着写锁。
+    return deps.withWriteLock(async () => await writeToolTableSettingsLocked(next))
+  }
+  /**
+   * 锁内读-改-写：strict 读当前值 → 回调算新值 → 再确认一次并落盘。
+   * 回调返回 `{ok:false}` 时不写盘；读坏时直接返回拒绝，绝不拿缓存 / 默认值当基线。
+   */
+  async function mutateToolTableSettings(
+    mutate: (current: ToolTableSettings) => ToolTableSettings | ToolTableMutationFailure,
+  ): Promise<{ ok: true; settings: ToolTableSettings } | ToolTableMutationFailure> {
+    await deps.ensurePaths()
     return deps.withWriteLock(async () => {
-      // 锁内再确认一次：外部编辑器可能在这几毫秒里把文件写坏。此时覆盖同样会毁掉原内容。
       const checked = checkToolTableRead(await deps.readJsonFileStrict(hubPath(TOOL_TABLE_FILE)))
       if (checked.status === 'corrupt' || checked.status === 'unreadable') {
         toolTableStateValue = 'unknown'
@@ -195,16 +241,15 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
         publishToolTableNote(checked.status, checked.error)
         return { ok: false as const, error: toolTableRefuseMessage() }
       }
-      try {
-        await deps.writeJsonFile(hubPath(TOOL_TABLE_FILE), next)
-      } catch (e) {
-        return { ok: false as const, error: '设置保存失败: ' + deps.message(e) }
-      }
-      toolTableCache = { at: Date.now(), value: next, off: new Set(next.hidden) }
-      toolTableStateValue = 'ok'
-      toolTableIssueValue = null
-      clearRuntimeNote('tool-table-file')
-      return { ok: true as const }
+      const current = checked.status === 'missing'
+        ? DEFAULT_TOOL_TABLE_SETTINGS
+        : migrateLegacyToolNames(checked.value).settings
+      const outcome = mutate(current)
+      if ((outcome as ToolTableMutationFailure).ok === false) return outcome as ToolTableMutationFailure
+      const next = outcome as ToolTableSettings
+      const saved = await writeToolTableSettingsLocked(next)
+      if (!saved.ok) return saved
+      return { ok: true as const, settings: next }
     })
   }
   /**
@@ -224,40 +269,43 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   const presetNameOf = (raw: unknown): string =>
     String(raw ?? '').replaceAll(/\s+/g, ' ').trim().slice(0, PRESET_NAME_MAX_LENGTH)
   async function toolTableOp(args: any): Promise<any> {
-    const current = await readToolTableSettings()
     if (!args || args.set !== true) {
       // 存 / 删方案都不动 `hidden`，所以这两条路**不**重排可见性、也不刷目录（那是 `set`
       // 那一条才有的三处联动）。失败原因回 `code` 不回中文串 —— 英文界面会原样露出中文。
       if (args && args.presetSave !== undefined) {
         const name = presetNameOf(args.presetSave)
         if (name === '') return { ok: false, code: 'nameEmpty' }
-        const added = addPreset(current, name, current.hidden)
-        // 同名不覆盖（用户裁定）：撞名要用户换个名字，而不是悄悄改掉已有那份。
-        if (added.exists) return { ok: false, code: 'nameTaken', name }
-        if (current.presets.length >= PRESET_MAX_COUNT) {
-          return { ok: false, code: 'limit', limit: PRESET_MAX_COUNT }
-        }
-        const saved = await writeToolTableSettings(added.settings)
-        if (!saved.ok) return saved
-        return toolTablePayload(added.settings)
+        const outcome = await mutateToolTableSettings((current) => {
+          const added = addPreset(current, name, current.hidden)
+          // 同名不覆盖（用户裁定）：撞名要用户换个名字，而不是悄悄改掉已有那份。
+          if (added.exists) return { ok: false, code: 'nameTaken', name }
+          if (current.presets.length >= PRESET_MAX_COUNT) {
+            return { ok: false, code: 'limit', limit: PRESET_MAX_COUNT }
+          }
+          return added.settings
+        })
+        if (!outcome.ok) return outcome
+        return toolTablePayload(outcome.settings)
       }
       if (args && args.presetDelete !== undefined) {
         const name = presetNameOf(args.presetDelete)
-        const dropped = dropPreset(current, name)
-        if (!dropped.changed) return { ok: false, code: 'notFound', name }
-        const saved = await writeToolTableSettings(dropped.settings)
-        if (!saved.ok) return saved
-        return toolTablePayload(dropped.settings)
+        const outcome = await mutateToolTableSettings((current) => {
+          const dropped = dropPreset(current, name)
+          return dropped.changed ? dropped.settings : { ok: false, code: 'notFound', name }
+        })
+        if (!outcome.ok) return outcome
+        return toolTablePayload(outcome.settings)
       }
-      return toolTablePayload(current)
+      return toolTablePayload(await readToolTableSettings())
     }
     // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错
     // （"names unknown global tool"）。注册失败的工具本来也不在表里。
-    const hidden = normalizeToolTableSettings({ hidden: args.hidden }).hidden
-      .filter((name) => toolTableSizes.has(name))
-    const next: ToolTableSettings = { hidden, presets: current.presets }
-    const saved = await writeToolTableSettings(next)
-    if (!saved.ok) return saved
+    const outcome = await mutateToolTableSettings((current) => {
+      const hidden = normalizeToolTableSettings({ hidden: args.hidden }).hidden
+        .filter((name) => toolTableSizes.has(name))
+      return { hidden, presets: current.presets }
+    })
+    if (!outcome.ok) return outcome
     // 三处跟着变：可见性（restrict 名单重排）、两个目录（截断提示里点名的工具可能没了）。
     // 目录的 refresh 会把新的一句话注入出去 —— 内容变了才重发，这是正确行为。
     deps.mcp.scheduleToolRestrictions()
@@ -265,7 +313,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       deps.skillCatalog.refresh().catch(() => { /* 目录刷新失败不该让保存失败 */ }),
       deps.subagentCatalog.refresh().catch(() => { /* 同上 */ }),
     ])
-    return toolTablePayload(next)
+    return toolTablePayload(outcome.settings)
   }
   return {
     toolTableSizes,
@@ -275,6 +323,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     toolTableWriteError: toolTableRefuseMessage,
     toolTableHidden,
     writeToolTableSettings,
+    mutateToolTableSettings,
     toolTableReport,
     toolTableOp,
   }

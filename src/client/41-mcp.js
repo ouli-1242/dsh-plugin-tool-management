@@ -1,8 +1,109 @@
+        // 顶部栏右上角那一行（0.21.2）：版本号 · 检查更新 · GitHub，横排贴住作用域行右端。
+        //
+        // 用户 2026-10-22 提案：「检查更新能放在 GitHub 图标上吗，用户点击检查更新就知道有没有
+        // 新版本」→ 澄清「是 GitHub 图标**上面**……这一栏的最右边」→ 再定「GitHub 图标也上去
+        // 并排」→ 最后定「统一一个图标显示就可以了，不必有版本更新时增加『更新』二字」。
+        // 所以最终形态是一行三件：
+        //   · 版本号（小灰字，最左）——回答"我现在装的是哪个版本"；
+        //   · 更新键——**永远只是那一颗向上箭头的图标**，有没有新版本都不变宽、不改字；
+        //     有新版本只在右上角多一个红点；
+        //   · GitHub 图标——原样保留，仓库入口一个都不能少。
+        //
+        // 交互约定：
+        //   · 图标态点击 = 查一次（只读 op `update-status` + `refresh:true`）—— 不安装、
+        //     不改配置、不碰 `@latest`，`update-check.ts` 那几条硬约束照旧；
+        //   · 「更新」态点击 = 送去「兼容」页那一行（安装命令 + 复制键在那里）。插件跑在宿主的
+        //     node_modules 里，装不了自己 —— 这颗键**不许**承诺自动更新；
+        //   · 答案用 toast 说，不弹窗：它是一句话结论，弹窗要压暗整页、还得再点一次才关。
+        //
+        // 结果存**会话级**（`updateProbe`）：设置面板每次打开都会重挂本组件，重挂不该把「更新」
+        // 抹掉，也不该每次都去读一遍盘。
+        var updateProbe = { info: null, asked: false }
+
         function FeedbackLinks() {
+          var st = React.useState({ busy: false, info: updateProbe.info })
+          var state = st[0], setState = st[1]
+          var busy = state.busy === true
+          var info = state.info
+
+          // 挂载时补一次缓存读数（不带 refresh）：服务端启动时预热过，这一次通常零网络，
+          // 只是把盘上 `update-check.json` 的结论先摆上来。读不到 = 少一个「更新」标记，不报错。
+          React.useEffect(function () {
+            if (updateProbe.asked) return undefined
+            updateProbe.asked = true
+            var alive = true
+            apiCall('update-status', {}).then(function (r) {
+              if (!r || !r.ok) return
+              updateProbe.info = r
+              // 用户已经自己点过一次（拿到的是更新的结果）就不覆盖。
+              if (alive) setState(function (prev) { return prev.info ? prev : { busy: prev.busy, info: r } })
+            }).catch(function () { /* 静默：这个标记只是便利，不是结论 */ })
+            return function () { alive = false }
+          }, [])
+
+          var hasUpdate = !!info && String(info.status || '') === 'update-available'
+
+          var check = function () {
+            if (busy) return
+            // 已经知道有新版本：这一下要的是"怎么装"，不是再查一遍。插件不自动更新（装不了 ——
+            // 它跑在宿主的 node_modules 里），能给的是那条确切版本的命令，而命令在「兼容」页
+            // 那一行（带「复制安装命令」），所以直接把人送过去。
+            if (hasUpdate) {
+              showPluginToast(t('update.hintCompat', { tab: t('tabs.compat') }), 'warn')
+              jumpToTab('compat')
+              return
+            }
+            setState({ busy: true, info: info })
+            // `refresh:true`：点这一下就是要一个**现在**的答案。读 12 小时前的缓存等于骗人
+            // ——「已是最新」可能是在某个版本发布之前算出来的。
+            apiCall('update-status', { refresh: true }).then(function (r) {
+              if (!r || !r.ok) throw new Error(String((r && r.error) || t('compat.update.unknown')))
+              updateProbe.info = r
+              setState({ busy: false, info: r })
+              var s = String(r.status || 'unknown')
+              var text = updateStatusText(r, t)
+              // 有更新时多说一句"命令在哪"：用户不必去猜安装命令藏在哪一页。
+              if (s === 'update-available') text += ' · ' + t('update.hintCompat', { tab: t('tabs.compat') })
+              // 语气与兼容页那一行一致：有更新 / 不知道 = warn，已最新 = ok。
+              showPluginToast(text, s === 'up-to-date' ? 'ok' : 'warn')
+            }).catch(function (e) {
+              setState({ busy: false, info: info })
+              showPluginToast(t('update.failed', { error: errMsg(e) }), 'err')
+            })
+          }
+
+          // 标题就是"这一下会做什么"：有更新时是"去拿命令"，否则是"再查一遍"。
+          var tip = busy ? t('update.checking')
+            : hasUpdate ? updateStatusText(info, t) + ' · ' + t('update.goCompat', { tab: t('tabs.compat') })
+              : info ? updateStatusText(info, t) + ' · ' + t('update.recheck')
+                : t('update.check')
           return React.createElement('div', { className: 'dsm-feedback-links' },
-            React.createElement('a', { className: 'dsm-feedback-link', href: 'https://github.com/ouli-1242/dsh-plugin-tool-management', target: '_blank', rel: 'noreferrer', 'aria-label': t('link.project'), title: t('link.project') },
-              React.createElement(GithubMark16, null)),
-            React.createElement(VersionBadgeComponent, null))
+            // 版本号在最左：它回答的是"我现在装的是哪个版本"，与右边两颗键各自回答的问题不同，
+            // 所以不并进按钮文字里（并进去就成了"要变成哪个版本"，两件事会混）。
+            React.createElement(VersionBadgeComponent, null),
+            React.createElement('button', {
+              type: 'button',
+              // 永远是同一颗图标键（用户 2026-10-22：不必在有更新时多出「更新」二字）——
+              // 有更新只多一个红点，宽度不变，这一行也就不会因为状态变化而抖一下。
+              className: 'dsm-feedback-link dsm-feedback-check' + (busy ? ' dsm-feedback-link-busy' : ''),
+              'aria-label': hasUpdate ? t('update.action') : t('update.check'),
+              'aria-busy': busy ? 'true' : 'false',
+              title: tip,
+              onClick: check,
+            },
+              React.createElement(UpdateMark16, null),
+              // 有新版本时右上角挂一个小红点：这是这一簇里唯一"扫一眼就看见"的信号，
+              // 图标本身不随状态变（文字在窄面板下还会被挤掉）。
+              hasUpdate ? React.createElement('span', { className: 'dsm-feedback-dot', 'aria-hidden': 'true' }) : null),
+            React.createElement('a', {
+              className: 'dsm-feedback-link',
+              href: 'https://github.com/ouli-1242/dsh-plugin-tool-management',
+              target: '_blank',
+              rel: 'noreferrer',
+              'aria-label': t('link.project'),
+              title: t('link.project'),
+            },
+              React.createElement(GithubMark16, null)))
         }
 
         // MCP 服务页：与 Skills 页共用 dsm-* 设计语言（统计卡 / 筛选 / 分组卡片 / 模态框）。
@@ -11,7 +112,7 @@
           // `mcpm-list` 是全局口径（服务端不认识 sessionId），会话层只做本地投影，
           // 所以这里**不重取**，只重渲染 —— 5 秒一次的轮询已经把全局那份带回来了。
           var scopeState = useScopeLayer()
-          const [state, setState] = React.useState({ loading: true, error: null, rows: [], paths: null, errors: [], warnings: [] })
+          const [state, setState] = React.useState({ loading: true, error: null, rows: [], paths: null, errors: [], warnings: [], patchStamps: {} })
           const [msg, setMsg] = React.useState(null)
           const [busy, setBusy] = React.useState(null)
           const [query, setQuery] = React.useState('')
@@ -69,6 +170,7 @@
                 res && res.ok, res && res.error, rows, res && res.paths, res && res.errors,
                 res && res.warnings, (res && res.anyLocked) === true, (res && res.activeScene) || null,
                 (res && res.disabledState) || 'ok', (res && res.disabledIssue) || null,
+                (res && res.patchStamps) || {},
               ])
               const changed = fingerprint !== lastListFingerprint.current
               lastListFingerprint.current = fingerprint
@@ -86,6 +188,8 @@
                 // 页面要挂横幅并把逐工具开关锁住，不能报成"全部开着"。
                 disabledState: (res && res.disabledState) || 'ok',
                 disabledIssue: (res && res.disabledIssue) || null,
+                // 每层补丁的内容指纹：编辑表单保存时带回去，服务端核对后才写。
+                patchStamps: (res && res.patchStamps) || {},
               } : prev))
               if (onRows) onRows(rows)
             }
@@ -101,7 +205,7 @@
               applyRows(res)
             }).catch((e) => setState({
               loading: false, error: errMsg(e), rows: [], paths: null, errors: [], warnings: [], locked: false,
-              disabledState: 'ok', disabledIssue: null,
+              disabledState: 'ok', disabledIssue: null, patchStamps: {},
             }))
           }
           // The polling tick must always call the newest refresh closure, while
@@ -128,7 +232,7 @@
             return ctx.timeout(() => setMsg(null), 4000)
           }, [msg])
 
-          const run = (method, args, label, onOk) => {
+          const run = (method, args, label, onOk, onFail) => {
             setMsg(null)
             setBusy(label)
             apiCall(method, args).then((res) => {
@@ -138,7 +242,9 @@
                 setMsg(warn ? { kind: 'warn', text: opMsg(res) + ' ' + warn } : opMsg(res))
                 refresh()
                 if (onOk) onOk()
-              } else setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+              } else if (!(onFail && onFail(res) === true)) {
+                setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+              }
             }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
 
@@ -242,10 +348,13 @@
               setFormError(null)
               setFormModal(takeFormDraft('mcp:create') || Object.assign({ mode: 'add', id: null }, emptyForm()))
             }
-              const openEdit = (row) => {
+              const openEdit = (row, force) => {
                 setFormError(null)
-                const draft = takeFormDraft('mcp:edit:' + row.id)
-                if (draft) { setFormModal(draft); return }
+                // `force` = 冲突后重新加载：跳过草稿，用磁盘上的最新一行重建表单。
+                if (!force) {
+                  const draft = takeFormDraft('mcp:edit:' + row.id)
+                  if (draft) { setFormModal(draft); return }
+                }
                 setFormModal({
                   mode: 'edit',
                   id: row.id,
@@ -262,6 +371,8 @@
                   // `origNote` 留一份原文用于判断"这次到底改没改备注"—— 没改就不多写一次侧车。
                   note: row.notes || '',
                   origNote: row.notes || '',
+                  // 打开时那一层补丁的内容指纹：保存时带回去，服务端核对后才写（并发编辑判据）。
+                  stamp: (state.patchStamps || {})[row.level] || null,
                 })
               }
             const closeForm = () => { setFormError(null); setFormModal(null) }
@@ -286,7 +397,7 @@
               }
               return null
             }
-            const submitForm = () => {
+            const submitForm = (force) => {
               const payload = Object.assign({}, formModal)
               if (payload.transport === 'stdio') { payload.url = ''; payload.headers = '' }
               else { payload.command = ''; payload.args = ''; payload.env = '' }
@@ -302,7 +413,11 @@
               headers: payload.headers,
               env: payload.env,
             }
-            if (payload.mode === 'edit') args.id = payload.id
+            if (payload.mode === 'edit') {
+              args.id = payload.id
+              // 并发编辑判据：打开表单时那一层补丁的指纹。`force` = 用户明确选择覆盖。
+              if (!force && payload.stamp) args.expectedStamp = payload.stamp
+            }
             // 备注只在新增时带：服务端在写补丁的同一次锁里落进侧车（见 mcpmAdd）。
             else args.note = payload.note
             // 编辑态：备注在**保存之后**单独写一次（`mcpm-edit` 不碰侧车）。改过才写 ——
@@ -315,7 +430,47 @@
                   if (res && res.ok === false) setMsg({ kind: 'warn', text: mt('mcp.msg.noteFailed') })
                 }).catch(function () { setMsg({ kind: 'warn', text: mt('mcp.msg.noteFailed') }) }).then(function () { refresh() })
               }
+            }, function (res) {
+              // 补丁文件在别处被改过：留在表单里，给出「重新加载 / 覆盖保存」两条出路。
+              if (res && res.code === 'stale-write') {
+                setFormModal(Object.assign({}, formModal, { stale: true }))
+                setFormError(t('stale.write.conflict'))
+                return true
+              }
+              return false
             })
+          }
+          /**
+           * 冲突后的「重新加载」：重读补丁，用磁盘上的那一行重建表单（丢掉本地改动）。
+           * 直接调 `mcpm-list` 而不是等下一次轮询 —— 轮询的 5 秒里用户会以为按钮坏了。
+           */
+          const reloadForm = () => {
+            if (!formModal || formModal.mode !== 'edit') return
+            setBusy('form')
+            apiCall('mcpm-list', {}).then(function (res) {
+              setBusy(null)
+              if (!res || !res.ok) { setFormError((res && res.error) || mt('mcp.msg.loadFailed')); return }
+              const rows = res.rows || []
+              setState(function (prev) { return Object.assign({}, prev, { rows: rows, patchStamps: res.patchStamps || {} }) })
+              const row = rows.find(function (r) { return r.id === formModal.id && r.level === formModal.level })
+              if (!row) { closeForm(); refresh(); return }
+              setFormModal({
+                mode: 'edit',
+                id: row.id,
+                serverName: row.serverName || '',
+                transport: row.transport === 'stdio' ? 'stdio' : 'streamable-http',
+                url: row.url || '',
+                command: row.command || '',
+                args: (row.args || []).join('\n'),
+                headers: kvToLines(row.headers),
+                env: kvToLines(row.env),
+                level: row.level === 'global' ? 'global' : 'project',
+                note: row.notes || '',
+                origNote: row.notes || '',
+                stamp: (res.patchStamps || {})[row.level] || null,
+              })
+              setFormError(null)
+            }).catch(function (e) { setBusy(null); setFormError(errMsg(e)) })
           }
 
           // 「启动中」的乐观记账（用户 2026-10-15：呼吸灯要过一会才出现）：翻开开关那一刻宿主
@@ -999,8 +1154,12 @@
                   React.createElement('span', { className: 'dsm-label' }, mt('mcp.field.note')),
                   React.createElement('span', { className: 'dsm-char-count' }, String(formModal.note || '').length + ' / ' + MCP_NOTE_MAX)),
                 React.createElement('input', { className: 'dsm-control', value: formModal.note || '', maxLength: MCP_NOTE_MAX, placeholder: mt('mcp.field.note.placeholder'), onChange: setFormField('note') }))),
+            // 冲突（补丁在别处被改过）：两条出路，别让用户只能关掉重来。
+            formModal.stale ? React.createElement('div', { className: 'dsm-feedback-row' },
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy === 'form', onClick: reloadForm }, t('stale.write.reload')),
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy === 'form', onClick: function () { submitForm(true) } }, t('stale.write.overwrite'))) : null,
             React.createElement('div', { className: 'dsm-modal-actions' },
-              React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy === 'form' || !formModal.serverName.trim(), onClick: submitForm }, formModal.mode === 'edit' ? mt('mcp.btn.save') : mt('mcp.btn.add'))))
+              React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy === 'form' || !formModal.serverName.trim(), onClick: function () { submitForm(false) } }, formModal.mode === 'edit' ? mt('mcp.btn.save') : mt('mcp.btn.add'))))
 
           const detailStatus = detail ? liveStatus(detail.row) : null
           const detailHint = detail ? liveHint(detail.row) : null
@@ -1411,9 +1570,24 @@
             if (draft) { setEditModal(draft); return }
             // id 可改：改名 = 目录改名，宿主会把场景绑定一起改名（见 rules-rebind-prompt）。
             apiCall('agentsmd-read', { id: p.id }).then(function (res) {
-              if (res && res.ok) setEditModal({ id: p.id, nextId: p.id, content: res.content, description: p.description || '' })
+              if (res && res.ok) setEditModal({ id: p.id, nextId: p.id, content: res.content, description: p.description || '', stamp: res.stamp })
               else actionFailed(res)
             }).catch(actionFailed)
+          }
+          /**
+           * 冲突后的「重新加载」：丢掉本地改动，重读磁盘那一份（连同新指纹）。
+           * 不做静默合并 —— 两边都改过时没有任何可靠的合并判据，让用户看着最新内容重改更安全。
+           */
+          function reloadEdit() {
+            if (!editModal) return
+            beginAction()
+            setBusy('reload')
+            apiCall('agentsmd-read', { id: editModal.id }).then(function (res) {
+              setBusy(null)
+              if (res && res.ok) {
+                setEditModal({ id: editModal.id, nextId: editModal.nextId || editModal.id, content: res.content, description: editModal.description || '', stamp: res.stamp })
+              } else actionFailed(res)
+            }).catch(function (e) { setBusy(null); actionFailed(e) })
           }
           function doApply(id) {
             // 会话层：应用预设 = 写侧车 `prompt.presetId`（全局基线一个字不动）。
@@ -1438,9 +1612,16 @@
             // 预设列表换成一条错误横幅 —— 统计还在（读的是 state.presets）、列表没了，看起来
             // 就像「提示词被覆盖了」（用户实测 2026-09-19，令牌没过时点「重新应用」即如此）。
             // 走 actionFailed 的一次性横幅：可见、不顶掉列表。
-            apiCall('agentsmd-apply', { id: id }).then(function (res) {
+            // `expectedStamp` = 页面加载 / 上次刷新时那份全局文件的指纹：文件在别处被改过时
+            // 拒绝覆盖（应用会整份改写 AGENTS.md，静默覆盖别人的手改是最贵的一种丢数据）。
+            var applyArgs = { id: id }
+            if (state.current && state.current.stamp) applyArgs.expectedStamp = state.current.stamp
+            apiCall('agentsmd-apply', applyArgs).then(function (res) {
               setBusy(null); setApplyConfirm(null)
-              if (res && res.ok === false) { actionFailed(res); return }
+              if (res && res.ok === false) {
+                actionFailed(res.code === 'stale-write' ? { ok: false, error: t('stale.write.conflictApply') } : res)
+                return
+              }
               // 0.21.2 第三轮：全局写口改成「未来基线的来源」，已存在会话冻结在各自快照里。
               // 回执必须把这一点说出来，否则用户会以为刚应用的那份已经进了当前上下文。
               setState(function (s) { return Object.assign({}, s, { notice: { kind: 'ok', text: scopeIsWorkspace() ? t('scope.prompt.globalApplied.workspace', { id: id }) : t('scope.prompt.globalApplied', { id: id }) } }) })
@@ -1583,16 +1764,22 @@
               else if (res) setCreateModal(Object.assign({}, createModal, { error: res.error }))
             }).catch(function () { setBusy(null) })
           }
-          function doUpdate() {
+          function doUpdate(force) {
             if (promptWriteDenied()) return
             beginAction()
             setBusy('update')
-            apiCall('agentsmd-update', { id: editModal.id, nextId: String(editModal.nextId || editModal.id), content: editModal.content, description: String(editModal.description == null ? '' : editModal.description) }).then(function (res) {
+            // `expectedStamp`：打开编辑时读到的那一份指纹。服务端不符就拒绝，界面据此给出
+            // 「重新加载 / 覆盖保存」两条出路。`force` = 用户明确选择覆盖。
+            var payload = { id: editModal.id, nextId: String(editModal.nextId || editModal.id), content: editModal.content, description: String(editModal.description == null ? '' : editModal.description) }
+            if (!force && editModal.stamp) payload.expectedStamp = editModal.stamp
+            apiCall('agentsmd-update', payload).then(function (res) {
               setBusy(null)
               if (res && res.ok) {
                 setEditModal(null)
                 if (res.renamedFrom) setState(function (s) { return Object.assign({}, s, { notice: { kind: 'ok', text: t('agm.result.renamed', { id: res.id }) + (res.reboundScenes ? t('agm.result.rebound', { count: res.reboundScenes }) : '') } }) })
                 refresh()
+              } else if (res && res.code === 'stale-write') {
+                setEditModal(Object.assign({}, editModal, { error: t('stale.write.conflict'), stale: true }))
               } else if (res) setEditModal(Object.assign({}, editModal, { error: res.error }))
             }).catch(function () { setBusy(null) })
           }
@@ -2092,11 +2279,16 @@
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', value: editModal.content, onChange: function (e) { setEditModal(Object.assign({}, editModal, { content: e.target.value })) } })),
               editModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, editModal.error) : null,
+              // 冲突（文件在别处被改过）：给两条出路，别让用户只能关掉重来。
+              // 覆盖保存 = 不带指纹重发，服务端按旧行为写；重新加载 = 丢掉本地改动读磁盘那份。
+              editModal.stale ? React.createElement('div', { className: 'dsm-feedback-row' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null, onClick: reloadEdit }, t('stale.write.reload')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null, onClick: function () { doUpdate(true) } }, t('stale.write.overwrite'))) : null,
               // 锁定态与会话层都说「为什么保存键是灰的」：编辑页照常能打开（用户 2026-10-12），
               // 挡的只是写盘那一步 —— 提示词全局一份，停在某个对话里改不动它。
               promptWriteBlocked ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, promptBlockTitle) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || promptWriteBlocked || !String(editModal.nextId || '').trim(), onClick: doUpdate }, t('agm.btn.save')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || promptWriteBlocked || !String(editModal.nextId || '').trim(), onClick: function () { doUpdate(false) } }, t('agm.btn.save')))) : null,
             // 新建：id + 描述 + **正文文本框**（用户直接写内容）。原先还有一格「或从现有预设复制」，
             // 用户 2026-09-30 要求删掉 —— 抄一份再改是编辑页的事，新建时只想直接写。
             // 弹窗高度跟着内容走（2026-10-10 拆掉 `dsm-modal-fixed` 定高）：当初定高是怕切类型时
@@ -2368,8 +2560,12 @@
                       onClick: function () { setActive(key) },
                       title: label,
                     }, label)
-                  })),
-                React.createElement(FeedbackLinks, null))]),
+                  }))),
+              // 检查更新 / GitHub / 版本号这一簇挂在**粘附头**下，不挂在页签容器里（0.21.2）：
+              // 它要跨"作用域行 + 页签行"两行贴住面板右上角 —— 新键在 GitHub 图标上面，
+              // 又都在这一栏最右边（用户 2026-10-22 的定位）。跨两行只有头的网格排得出来，
+              // 塞进 `.dsm-tabs-shell` 就只能挤在页签那一行里。
+              React.createElement(FeedbackLinks, { key: 'links' })]),
             // 令牌提示的**页面级**那一份：放在页签下面、页面内容上面。位置固定在入口组件里，
             // 与"当前是哪一页、那一页怎么渲染错误"无关 —— 谁拿到这句话谁渲染，就必然有地方漏
             // （用户实测：十来个弹窗里有的没提示、有提示的没有跳转按钮）。
