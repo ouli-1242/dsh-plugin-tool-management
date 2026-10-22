@@ -15,17 +15,20 @@
 // 而体积表由注册口写、被 op 与场景写路径读，所以它作为**同一个 Map 对象**交回母文件，
 // 母文件那几处调用点一个字都不用改。
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 import { hubPath } from './hub.js'
+import type { JsonFileRead } from './mcp/disabled-tools.js'
 import {
-  addPreset, buildToolTableReport, DEFAULT_HIDDEN_TOOLS, dropPreset, migrateLegacyToolNames,
-  normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH, toolTableSettingsFrom,
+  addPreset, buildToolTableReport, classifyToolTableSettings, DEFAULT_HIDDEN_TOOLS, DEFAULT_TOOL_TABLE_SETTINGS, dropPreset, migrateLegacyToolNames,
+  normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH,
   type ToolTableReport, type ToolTableRow, type ToolTableSettings,
 } from './tools/table.js'
 
 export interface ToolTableSwitchDeps {
   /** 确保 hub 目录存在（读侧车前调用，与母文件同一条）。 */
   ensurePaths(): Promise<any>
-  readJsonFile(abs: string): Promise<any>
+  /** 严格读：区分 missing / 解析失败 / IO 失败（不调 ensurePaths）。 */
+  readJsonFileStrict(abs: string): Promise<JsonFileRead>
   writeJsonFile(abs: string, data: any): Promise<void>
   /** 全局写锁：侧车的写在它下面串行（不可重入）。 */
   withWriteLock<T>(fn: () => Promise<T>): Promise<T>
@@ -54,6 +57,13 @@ export interface ToolTableSwitch {
   toolTableSizes: Map<string, number>
   recordToolSize(def: ToolDefinition): void
   readToolTableSettings(force?: boolean): Promise<ToolTableSettings>
+  /**
+   * 侧车安全状态（0.21.2）：`unknown` = 损坏 / 不可读。此时读取沿用「上次成功值 →
+   * 出厂默认」，但**写一律拒绝** —— 覆盖一份读不出来的文件等于把用户的选择洗掉。
+   */
+  toolTableState(): { state: 'ok' | 'unknown'; issue: 'corrupt' | 'unreadable' | null }
+  /** unknown 时统一的拒绝文案（写侧与提示用同一句，不在调用方各写一份）。 */
+  toolTableWriteError(): string
   toolTableHidden(): ReadonlySet<string>
   writeToolTableSettings(next: ToolTableSettings): Promise<{ ok: true } | { ok: false; error: string }>
   toolTableReport(hidden?: readonly string[]): ToolTableReport
@@ -83,20 +93,66 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     } catch { /* 量不出来就不记：它只影响界面上的估算数字 */ }
   }
   let toolTableCache: { at: number; value: ToolTableSettings; off: ReadonlySet<string> } | null = null
+  let toolTableStateValue: 'ok' | 'unknown' = 'ok'
+  let toolTableIssueValue: 'corrupt' | 'unreadable' | null = null
+
+  function publishToolTableNote(issue: 'corrupt' | 'unreadable', reason: string): void {
+    noteRuntime({
+      id: 'tool-table-file',
+      label: '模型工具表侧车',
+      kind: 'read',
+      fallback: 'inform-only',
+      detail: `tool-table.json ${issue === 'corrupt' ? '损坏' : '不可读'}（${reason}）：暂时沿用${toolTableCache ? '上次成功读取' : '出厂默认'}的关停名单；保存已禁用，修复或删除该文件后重试。`,
+      detailKey: issue === 'corrupt' ? 'tool-table-file.corrupt' : 'tool-table-file.unreadable',
+      params: { reason },
+    })
+  }
+
+  const toolTableRefuseMessage = (): string =>
+    `工具表侧车${toolTableIssueValue === 'corrupt' ? '损坏' : toolTableIssueValue === 'unreadable' ? '不可读' : '状态不可读'}：已拒绝保存；请修复或删除 tool-table.json 后重试`
+
+  /** 严格读的四态 → 结构检查后的结果（missing 仍按"没记过选择"处理）。 */
+  function checkToolTableRead(read: JsonFileRead):
+    | { status: 'ok'; value: ToolTableSettings }
+    | { status: 'missing' }
+    | { status: 'corrupt'; error: string }
+    | { status: 'unreadable'; error: string } {
+    if (read.status !== 'ok') return read
+    const checked = classifyToolTableSettings(read.value)
+    return checked.ok ? { status: 'ok', value: checked.value } : { status: 'corrupt', error: checked.error }
+  }
+
   async function readToolTableSettings(force = false): Promise<ToolTableSettings> {
     if (toolTableCache && !force && Date.now() - toolTableCache.at < TOOL_TABLE_TTL_MS) return toolTableCache.value
-    await deps.ensurePaths()
-    const raw = await deps.readJsonFile(hubPath(TOOL_TABLE_FILE))
-    // 0.14.0 旧工具名迁移：读侧翻译一次并**回写盘**（幂等）。不迁移的话，用户"关掉了某条"
-    // 的意图会在新名字上静默失效 —— 那条工具照旧每轮发出去，而界面上看不出来。
-    // 写失败不回滚本次读取：内存里已经是迁移后的值，下次读会再试一次。
-    // 侧车不存在（`readJsonFile` 给 null）= 用户从没记过选择 ⇒ 用**出厂默认**（十四条不发，
-    // 实发 6 条；判据与代价见 tools/table.ts 的 DEFAULT_HIDDEN_TOOLS）。存过盘的
-    // 一律照盘上那份，包括显式的 `hidden: []` —— 那是"我全都要"，不能被默认值盖掉。
-    const migrated = migrateLegacyToolNames(toolTableSettingsFrom(raw))
-    const value = migrated.settings
-    if (migrated.changed) {
-      try { await deps.writeJsonFile(hubPath(TOOL_TABLE_FILE), value) } catch { /* 回写失败：本次仍按迁移后的值生效 */ }
+    // 读路径不调 ensurePaths：hubPath 走 resolveDshHome，与补丁路径推导无关。
+    const checked = checkToolTableRead(await deps.readJsonFileStrict(hubPath(TOOL_TABLE_FILE)))
+    let value: ToolTableSettings
+    if (checked.status === 'missing') {
+      // 侧车不存在 = 用户从没记过选择 ⇒ 出厂默认（判据见 tools/table.ts 的 DEFAULT_HIDDEN_TOOLS）。
+      value = DEFAULT_TOOL_TABLE_SETTINGS
+      toolTableStateValue = 'ok'
+      toolTableIssueValue = null
+      clearRuntimeNote('tool-table-file')
+    } else if (checked.status === 'ok') {
+      // 0.14.0 旧工具名迁移：读侧翻译一次并**回写盘**（幂等）。不迁移的话，用户"关掉了某条"
+      // 的意图会在新名字上静默失效 —— 那条工具照旧每轮发出去，而界面上看不出来。
+      // 写失败不回滚本次读取：内存里已经是迁移后的值，下次读会再试一次。
+      // 存过盘的一律照盘上那份，包括显式的 `hidden: []` —— 那是"我全都要"，不能被默认值盖掉。
+      const migrated = migrateLegacyToolNames(checked.value)
+      value = migrated.settings
+      if (migrated.changed) {
+        try { await deps.writeJsonFile(hubPath(TOOL_TABLE_FILE), value) } catch { /* 回写失败：本次仍按迁移后的值生效 */ }
+      }
+      toolTableStateValue = 'ok'
+      toolTableIssueValue = null
+      clearRuntimeNote('tool-table-file')
+    } else {
+      // 损坏 / 不可读：保留最近一次成功值（没有就出厂默认）。**绝不**把读不出来的
+      // hidden 当空表 —— 那等于让用户关掉的工具在执行守卫眼皮底下复活。
+      value = toolTableCache ? toolTableCache.value : DEFAULT_TOOL_TABLE_SETTINGS
+      toolTableStateValue = 'unknown'
+      toolTableIssueValue = checked.status
+      publishToolTableNote(checked.status, checked.error)
     }
     const changed = toolTableCache === null || toolTableCache.value.hidden.join('\u0000') !== value.hidden.join('\u0000')
     toolTableCache = { at: Date.now(), value, off: new Set(value.hidden) }
@@ -125,15 +181,29 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   /** 落盘 + 同步内存缓存（三条写路径共用：改勾选 / 存方案 / 删方案）。 */
   async function writeToolTableSettings(next: ToolTableSettings): Promise<{ ok: true } | { ok: false; error: string }> {
     await deps.ensurePaths()
+    // 状态未知时先拒绝：正常入口都会先 read 一次，所以这里挡住的是「文件读不出来还硬写」
+    // ——覆盖它等于把用户原来的选择彻底洗掉（没有取证通道）。
+    if (toolTableStateValue === 'unknown') return { ok: false as const, error: toolTableRefuseMessage() }
     // 落盘在写锁里，落完**出了锁**再刷新（`withWriteLock` 是一条不可重入的链：锁里再调
     // 一次会等自己，直接卡死）。刷新是两处目录读，本来也不必占着写锁。
     return deps.withWriteLock(async () => {
+      // 锁内再确认一次：外部编辑器可能在这几毫秒里把文件写坏。此时覆盖同样会毁掉原内容。
+      const checked = checkToolTableRead(await deps.readJsonFileStrict(hubPath(TOOL_TABLE_FILE)))
+      if (checked.status === 'corrupt' || checked.status === 'unreadable') {
+        toolTableStateValue = 'unknown'
+        toolTableIssueValue = checked.status
+        publishToolTableNote(checked.status, checked.error)
+        return { ok: false as const, error: toolTableRefuseMessage() }
+      }
       try {
         await deps.writeJsonFile(hubPath(TOOL_TABLE_FILE), next)
       } catch (e) {
         return { ok: false as const, error: '设置保存失败: ' + deps.message(e) }
       }
       toolTableCache = { at: Date.now(), value: next, off: new Set(next.hidden) }
+      toolTableStateValue = 'ok'
+      toolTableIssueValue = null
+      clearRuntimeNote('tool-table-file')
       return { ok: true as const }
     })
   }
@@ -147,6 +217,8 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   const toolTablePayload = (value: ToolTableSettings) => ({
     ok: true, hidden: value.hidden, presets: value.presets,
     defaultHidden: [...DEFAULT_HIDDEN_TOOLS], report: toolTableReport(value.hidden),
+    // 侧车状态随每次读回传：界面据此禁用开关并说明原因（unknown 时保存会被服务端拒绝）。
+    state: toolTableStateValue, issue: toolTableIssueValue,
   })
   /** 方案名：折叠空白 + 截到上限。空名由调用方报错（这里不猜"用户想叫什么"）。 */
   const presetNameOf = (raw: unknown): string =>
@@ -199,6 +271,8 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     toolTableSizes,
     recordToolSize,
     readToolTableSettings,
+    toolTableState: () => ({ state: toolTableStateValue, issue: toolTableIssueValue }),
+    toolTableWriteError: toolTableRefuseMessage,
     toolTableHidden,
     writeToolTableSettings,
     toolTableReport,

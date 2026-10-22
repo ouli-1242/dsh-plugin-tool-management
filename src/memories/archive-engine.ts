@@ -54,8 +54,11 @@ export interface ArchiveEngineDeps {
   serverKnownTools(): Promise<Record<string, string[]>>
   /** 当前 MCP 停用表原文（serverName → 停用工具名 / ['*']）。 */
   currentMcpRaw(): Promise<Record<string, string[]>>
-  /** 全量重写 MCP 停用表并刷新 restrict（引擎保证串行）。 */
-  applyMcpEntries(entries: Record<string, string[]>): Promise<void>
+  /**
+   * 全量重写 MCP 停用表并刷新 restrict（引擎保证串行）。
+   * `scene-apply` 在停用表不可读时拒绝；`scene-restore` 写的是进场景前的快照，允许覆盖修复。
+   */
+  applyMcpEntries(entries: Record<string, string[]>, reason: 'scene-apply' | 'scene-restore'): Promise<void>
   /**
    * 各服务器的**服务器级**启停现状（`disabled` 来自补丁文件）。
    *
@@ -229,7 +232,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       await deps.applySkillSourceSwitches(sources.map((x) => ({ root: x.root, enabled: x.enabled })))
     }
     const mcp = Object.fromEntries(Object.entries(snapshot.mcp).map(([k, v]) => [k, v.slice()]))
-    await deps.applyMcpEntries(mcp)
+    await deps.applyMcpEntries(mcp, 'scene-restore')
     await deps.applySkills({ ...snapshot.skills })
     // 备注：按快照原值写回（null = 原本没有，删除）。模式期间的手动备注改动不保留（同 §2.2）。
     const notes = snapshot.mcpNotes ?? []
@@ -337,7 +340,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
     if (skillsPlan.sourceSwitches.length) {
       await deps.applySkillSourceSwitches(skillsPlan.sourceSwitches.map((s) => ({ root: s.root, enabled: s.enabled })))
     }
-    await deps.applyMcpEntries(mcpPlan.entries)
+    await deps.applyMcpEntries(mcpPlan.entries, 'scene-apply')
     await deps.applySkills(skillsPlan.target)
     if (archive && archive.mcpNotes) {
       // 与进入时同一口径：场景备注只作用于 mcp 段里实际勾选的服务器。
@@ -864,8 +867,14 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // 进入都可能改动运行时（哪怕只是停掉几台服务器 / 几个技能），退出都得能精确还原。
       // 上层两行传**现状全量**（上面的 mcpServerStates / skillSources 就是进场景前的值），
       // 不是计划里那几行 —— 退出按「现状 ≠ 记录值」回写（见 mcpServerRowsToRestore）。
+      let currentMcp: Record<string, string[]>
+      try {
+        currentMcp = await deps.currentMcpRaw()
+      } catch (e) {
+        return { ok: false, error: `读取 MCP 停用表现状失败（未改动任何东西）：${msg(e)}` }
+      }
       const snapshot = snapshotRuntime(
-        await deps.currentMcpRaw(),
+        currentMcp,
         await deps.currentSkills(),
         mcpServerStates.map((s) => ({ id: s.id, level: s.level, disabled: s.disabled })),
         skillSources.map((s) => ({ root: s.root, enabled: s.enabled })),
@@ -896,7 +905,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         }
         // ② 再写**下层**（工具级停用表 / 技能级策略）。
         stale.push(...mcpPlan.stale)
-        await deps.applyMcpEntries(mcpPlan.entries)
+        await deps.applyMcpEntries(mcpPlan.entries, 'scene-apply')
         stale.push(...skillsPlan.stale)
         await deps.applySkills(skillsPlan.target)
         // ③ 子智能体开关：**勾了的启用、未勾的停用**（子智能体页与目录段同步）。

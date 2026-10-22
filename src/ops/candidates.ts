@@ -4,6 +4,7 @@
 // （宿主 LLM 目录）、scene-inventory（场景档案勾选器的数据源 v2）。
 
 import type { PresetToolCandidates } from '../scenes/candidates.js'
+import type { DisabledToolsRead } from '../mcp/disabled-tools.js'
 
 export interface CandidateOpsDeps {
   /** 一行一个 Agent 预设，各带自己的工具清单与归属组。 */
@@ -25,8 +26,11 @@ export interface CandidateOpsDeps {
   toolStates(): Promise<Record<string, boolean>>
   skillRows(): Promise<unknown>
   subagentList(): Promise<Array<{ name: string; description?: string; toolsByPreset?: unknown }>>
-  /** MCP 停用表：场景档案勾选器据此预勾（把"全停"读成"全启用"是错的）。 */
-  readDisabledTools(force?: boolean): Promise<Record<string, string[]>>
+  /**
+   * MCP 停用表四态读：场景档案勾选器据此预勾（把"全停"读成"全启用"是错的）。
+   * 用四态而不是值：corrupt / unreadable 时勾选器必须显式禁用，不能拿空表当"全开"。
+   */
+  readDisabledToolsResult(force?: boolean): Promise<DisabledToolsRead>
   presetNames(): Promise<Array<{ id: string; name: string; trust: string }>>
   memorySceneCandidates(): Promise<Array<{ name: string; label: string; description: string; count: number; global: boolean }>>
   memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; description: string }>>
@@ -58,8 +62,11 @@ export function buildCandidateOps(deps: CandidateOpsDeps): Record<string, (args:
     },
     // 场景档案勾选器数据源 v2：全部 MCP 服务器（含未运行）+ 技能全集 + 人设清单。
     'scene-inventory': async () => {
-      const [rowsR, tools, skills, subs] = await Promise.all([deps.mcpmListView(), deps.toolStates(), deps.skillRows(), deps.subagentList()])
-      const disabledRaw = await deps.readDisabledTools()
+      const [rowsR, tools, skills, subs, disabledRead] = await Promise.all([
+        deps.mcpmListView(), deps.toolStates(), deps.skillRows(), deps.subagentList(), deps.readDisabledToolsResult(),
+      ])
+      const disabledUnknown = disabledRead.status === 'corrupt' || disabledRead.status === 'unreadable'
+      const disabledRaw = disabledRead.status === 'ok' ? disabledRead.value : {}
       const rows: any[] = (rowsR && rowsR.rows) || []
       const mcpServers: any[] = []
       const seen = new Set<string>()
@@ -74,7 +81,8 @@ export function buildCandidateOps(deps: CandidateOpsDeps): Record<string, (args:
           live,
           serverDisabled: !!row.disabled,
           // 停用表里的 ['*'] = 整台工具停用（勾选器据此预勾，避免把"全停"读成"全启用"）。
-          allToolsDisabled: (disabledRaw[name] || []).indexOf('*') >= 0,
+          // unknown 时恒 false：这不是"没停用"，而是"不知道"，由顶层 `disabledState` 说清。
+          allToolsDisabled: !disabledUnknown && (disabledRaw[name] || []).indexOf('*') >= 0,
           // 未运行且没有任何已知工具 ⇒ null（客户端显示「工具数未知」并引导读取），
           // 不再给出误导性的 0。
           toolCount: live || Number(row.toolCount) > 0
@@ -84,6 +92,10 @@ export function buildCandidateOps(deps: CandidateOpsDeps): Record<string, (args:
       }
       return {
         ok: true,
+        // 勾选器必须能区分"停用表是空的"与"停用表读不出来"：后者下所有工具都被执行侧
+        // 拒绝，界面要把 MCP 段锁住并解释原因（见 45-scenes.js 的 mcpGroup）。
+        disabledState: disabledUnknown ? 'unknown' : 'ok',
+        disabledIssue: disabledUnknown ? disabledRead.status : null,
         mcpServers,
         tools: Object.entries(tools).map(([key, enabled]) => ({ key, enabled })),
         // 技能行：技能名与来源名分开给（早先只给 `<来源 key>/<技能名>`，自定义目录的

@@ -330,6 +330,9 @@
                     mcpServers: inv.mcpServers || [], skills: inv.skills || [], subagents: inv.subagents || [], tools: inv.tools || [],
                     presets: inv.presets || [],
                     memories: inv.memories || [],
+                    // 停用表 unknown：MCP 段的勾选必须锁住（服务端 apply 也会拒绝写入）。
+                    disabledState: inv.disabledState === 'unknown' ? 'unknown' : 'ok',
+                    disabledIssue: inv.disabledIssue || null,
                   },
                 })
               })
@@ -552,9 +555,9 @@
             setSections(Object.assign({}, sections, { mcp: mcp }))
           }
           /** 档案各段共用的段头动作（包装共享的 segActions，把 busy / 文案在这里补上）。 */
-          function archiveSegActions(defined, addLabel, onAdd, onRemove, onAll, onClear, allChecked) {
+          function archiveSegActions(defined, addLabel, onAdd, onRemove, onAll, onClear, allChecked, extraBusy) {
             return segActions({
-              defined: defined, busy: busy, addLabel: addLabel,
+              defined: defined, busy: busy || extraBusy === true, addLabel: addLabel,
               selectAllLabel: t('bulk.selectAll'), clearLabel: t('bulk.unselectAll'), removeLabel: t('memory.archive.removeSection'),
               onAdd: onAdd, onRemove: onRemove, onAll: onAll, onClear: onClear, allChecked: allChecked,
             })
@@ -1039,6 +1042,9 @@
             var sections = modalSections()
             var defined = !!sections.mcp
             var servers = (modal.inventory && modal.inventory.mcpServers) || []
+            // 停用表 unknown：服务端 apply 会拒绝写入（fail-closed），勾选此刻既读不准也写不进，
+            // 所以整段锁住并说明原因（不是"没有停用"，而是"读不出来"）。
+            var mcpUnknown = !!(modal.inventory && modal.inventory.disabledState === 'unknown')
             return editorGroupNode({
               title: t('memory.archive.tools'),
               count: defined ? t('scenes.seg.checked', { checked: Object.keys(sections.mcp).length, total: servers.length }) : t('scenes.archive.sectionOff'),
@@ -1048,46 +1054,52 @@
                 mcpSelectAll,
                 function () { setSections(Object.assign({}, modalSections(), { mcp: {} })) },
                 // 「全选」按钮的全选态：档案里勾了全部服务器（含没在过滤结果里的）。
-                defined && servers.length > 0 && servers.every(function (x) { return sections.mcp[x.name] !== undefined })),
+                defined && servers.length > 0 && servers.every(function (x) { return sections.mcp[x.name] !== undefined }),
+                mcpUnknown),
               query: modal.mcpQuery,
               onQuery: function (v) { setModal(Object.assign({}, modal, { mcpQuery: v })) },
               queryPlaceholder: t('scenes.filter.servers'),
               hideFilter: !defined,
               // 未建段：空态只留一行（全文进悬浮，REDESIGN §7）—— 长段在 2×2 的格子里
               // 一摆出来就把清单区整个顶掉（用户 2026-10-12「四个集挤在一起」）。
-              body: !defined
-                ? React.createElement('div', { className: 'dsm-pick-empty', title: t('scenes.mcp.hint') }, t('scenes.mcp.hint.short'))
-                : (function () {
-                    var q = String(modal.mcpQuery || '').trim().toLowerCase()
-                    var shown = checkedFirst('mcp', q ? servers.filter(function (s) { return String(s.name).toLowerCase().indexOf(q) >= 0 }) : servers,
-                      function (s) { return String(s.name) }, function (s) { return sections.mcp[s.name] !== undefined })
-                    if (!shown.length) return React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mcp.noServers'))
-                    return React.createElement('div', null, shown.map(function (server) {
-                      var selected = sections.mcp[server.name] !== undefined
-                      var spec2 = sections.mcp[server.name]
-                      var specText = !selected ? '' : spec2 === '*' ? t('scenes.mcp.allTools') : t('scenes.mcp.pickedCount', { count: spec2.length })
-                      var hasNote = Boolean((sections.mcpNotes || {})[server.name])
-                      // 工具数未知（从未运行过且无记录）：显示引导而不是误导性的 0。
-                      var desc = server.toolCount === null || server.toolCount === undefined
-                        ? (server.live || server.serverDisabled ? null : t('scenes.mcp.unknownCount'))
-                        : t('scenes.mcp.toolCount', { count: server.toolCount })
-                      return RowSelect({
-                        disabled: busy,
-                        key: server.name,
-                        checked: selected,
-                        name: server.name,
-                        desc: desc,
-                        meta: [
-                          server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
-                          specText ? React.createElement('span', { key: 'spec' }, specText) : null,
-                          hasNote ? React.createElement('span', { key: 'note', className: 'dsm-tag' }, t('scenes.mcp.hasNote')) : null,
-                        ],
-                        actions: selected ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { openDrill(server.name) } }, t('scenes.mcp.edit')) : null,
-                        onChange: function () { toggleMcpServer(server.name) },
-                      })
-                    }))
-                  })(),
+              body: mcpUnknown
+                ? React.createElement(React.Fragment, null,
+                    React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status', title: t('scenes.mcp.stateUnknown') }, t('scenes.mcp.stateUnknown')),
+                    listBody())
+                : listBody(),
             })
+            // 清单本体与 unknown 横幅分开构造：unknown 只加一条说明，不改变原有空态 / 行结构。
+            function listBody() {
+              if (!defined) return React.createElement('div', { className: 'dsm-pick-empty', title: t('scenes.mcp.hint') }, t('scenes.mcp.hint.short'))
+              var q = String(modal.mcpQuery || '').trim().toLowerCase()
+              var shown = checkedFirst('mcp', q ? servers.filter(function (s) { return String(s.name).toLowerCase().indexOf(q) >= 0 }) : servers,
+                function (s) { return String(s.name) }, function (s) { return sections.mcp[s.name] !== undefined })
+              if (!shown.length) return React.createElement('div', { className: 'dsm-pick-empty' }, q ? t('scenes.mem.noMatch') : t('scenes.mcp.noServers'))
+              return React.createElement('div', null, shown.map(function (server) {
+                var selected = sections.mcp[server.name] !== undefined
+                var spec2 = sections.mcp[server.name]
+                var specText = !selected ? '' : spec2 === '*' ? t('scenes.mcp.allTools') : t('scenes.mcp.pickedCount', { count: spec2.length })
+                var hasNote = Boolean((sections.mcpNotes || {})[server.name])
+                // 工具数未知（从未运行过且无记录）：显示引导而不是误导性的 0。
+                var desc = server.toolCount === null || server.toolCount === undefined
+                  ? (server.live || server.serverDisabled ? null : t('scenes.mcp.unknownCount'))
+                  : t('scenes.mcp.toolCount', { count: server.toolCount })
+                return RowSelect({
+                  disabled: busy || mcpUnknown,
+                  key: server.name,
+                  checked: selected,
+                  name: server.name,
+                  desc: desc,
+                  meta: [
+                    server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
+                    specText ? React.createElement('span', { key: 'spec' }, specText) : null,
+                    hasNote ? React.createElement('span', { key: 'note', className: 'dsm-tag' }, t('scenes.mcp.hasNote')) : null,
+                  ],
+                  actions: selected ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || mcpUnknown, onClick: function () { openDrill(server.name) } }, t('scenes.mcp.edit')) : null,
+                  onChange: function () { toggleMcpServer(server.name) },
+                })
+              }))
+            }
           }
           /**
            * 服务器编辑弹窗（v0.8.1 重做）：固定尺寸的次级弹窗，第一栏是场景备注输入框，
@@ -1468,8 +1480,15 @@
             setModal(Object.assign({}, modal, { drill: server, drillError: null }))
             setDrillTools(null)
             apiCall('mcpm-tools', { serverName: server }).then(function (res) {
-              if (res && res.ok) setDrillTools((res.tools || []).map(function (x) { return { key: server + '/' + x.name, short: x.name, enabled: x.enabled !== false } }))
-              else setDrillTools([])
+              if (res && res.ok) {
+                // 停用表读不出来：服务端把每一行都报成停用，勾选没有意义 —— 直接说明原因。
+                if (res.disabledState === 'unknown') {
+                  setDrillTools([])
+                  setModal(Object.assign({}, modal, { drillError: t('scenes.mcp.stateUnknown') }))
+                  return
+                }
+                setDrillTools((res.tools || []).map(function (x) { return { key: server + '/' + x.name, short: x.name, enabled: x.enabled !== false } }))
+              } else setDrillTools([])
             }).catch(function () { setDrillTools([]) })
           }
           /** 从未运行过的服务器：临时启动枚举工具（后端会轮询并在完成后恢复原启停状态）。 */
@@ -1479,7 +1498,15 @@
             apiCall('mcpm-tools-refresh', { serverName: server }).then(function (res) {
               // 成功也可能带 warning：临时启用过的服务器没能恢复成停用。必须落到提示槽，
               // 否则用户看到工具列表、却不知道自己的服务器已被留在启用态。
-              if (res && res.ok) { setDrillTools((res.tools || []).map(function (x) { return { key: server + '/' + x.name, short: x.name, enabled: x.enabled !== false } })); setModal(Object.assign({}, modal, { drillError: res.warning ? String(res.warning) : null })) }
+              if (res && res.ok) {
+                if (res.disabledState === 'unknown') {
+                  setDrillTools([])
+                  setModal(Object.assign({}, modal, { drillError: t('scenes.mcp.stateUnknown') }))
+                  return
+                }
+                setDrillTools((res.tools || []).map(function (x) { return { key: server + '/' + x.name, short: x.name, enabled: x.enabled !== false } }))
+                setModal(Object.assign({}, modal, { drillError: res.warning ? String(res.warning) : null }))
+              }
               else { setDrillTools([]); setModal(Object.assign({}, modal, { drillError: res && res.error ? String(res.error) : '' })) }
             }).catch(function (e) { setDrillTools([]); setModal(Object.assign({}, modal, { drillError: errMsg(e) })) })
           }

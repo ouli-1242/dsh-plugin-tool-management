@@ -20,6 +20,8 @@
 // 而写 op 里包含 `mcpm-add`（command/args 无白名单，宿主 stdio 传输会 spawn 它
 // → 任意命令执行）与 `history-delete`（永久删除会话）。
 
+import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
+
 export interface FenceRequest {
   headers?: Record<string, string | string[] | undefined>
 }
@@ -57,6 +59,24 @@ const headerValue = (req: FenceRequest, name: string): string => {
  * @param req - Node 请求对象（只读 headers）。
  * @param connection - ctx.get('connection')，可缺失。
  */
+/**
+ * 退回本地最小判定时上报（T8）。本地链**没有**浏览器会话鉴权 —— 这是"进程级边界只有
+ * 配了令牌才有"那句话的证据，不能只写在注释里。成功走到宿主栅栏时清掉。
+ */
+function noteFenceFallback(reason: string, threw: boolean): void {
+  noteRuntime({
+    id: 'http-fence-fallback',
+    label: 'HTTP 请求栅栏',
+    kind: 'write',
+    fallback: 'inform-only',
+    detail: threw
+      ? `宿主请求栅栏抛错（${reason}）：本次请求已退回本地判定（只校验回环 Host 与 Origin，没有浏览器会话鉴权）。`
+      : `宿主 connection 服务未提供请求栅栏（${reason}）：已退回本地判定（只校验回环 Host 与 Origin，没有浏览器会话鉴权）。`,
+    detailKey: threw ? 'http-fence-fallback.threw' : 'http-fence-fallback.missing',
+    params: { reason },
+  })
+}
+
 export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): FenceRejection | null {
   try {
     // 优先 `admit()`（0.2.1 起存在）：它做 Host/Origin 栅栏 + 浏览器 session 鉴权，
@@ -72,6 +92,8 @@ export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): 
     // 交出来，它本来就是 owner）；`principal` 在场且 kind 不是 owner ⇒ 才拒绝。
     const admission = connection?.admit?.(req)
     if (admission !== undefined) {
+      // 宿主栅栏真的给出了判定（放行或拒绝都算在岗）：清掉历史回退上报。
+      clearRuntimeNote('http-fence-fallback')
       if ('rejection' in admission) {
         const status = admission.rejection
         return {
@@ -89,6 +111,7 @@ export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): 
     }
     const rejection = connection?.requestRejection?.(req)
     if (typeof rejection === 'number') {
+      clearRuntimeNote('http-fence-fallback')
       return {
         status: rejection,
         error: rejection === 401
@@ -98,8 +121,15 @@ export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): 
     }
     // 栅栏在场且未返回拒绝码 ⇒ 已通过，不再叠加本地判定（宿主的 trustedHosts
     // 部署信息这里拿不到，重复判定只会更松或更严，都不对）。
-    if (typeof connection?.requestRejection === 'function') return null
-  } catch (e) { /* 见上方说明：退回本地判定 */ }
+    if (typeof connection?.requestRejection === 'function') {
+      clearRuntimeNote('http-fence-fallback')
+      return null
+    }
+    noteFenceFallback(connection ? 'connection 服务没有 admit / requestRejection' : '未挂载 connection 服务', false)
+  } catch (e) {
+    // 见上方说明：退回本地判定。**必须出声** —— 静默回退时用户以为浏览器鉴权还在。
+    noteFenceFallback(String((e && (e as Error).message) || e), true)
+  }
 
   const hostHdr = headerValue(req, 'host')
   let host: URL

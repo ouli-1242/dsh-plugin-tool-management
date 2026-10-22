@@ -178,6 +178,11 @@ export function buildMcpTools(deps: McpToolDeps): void {
         // **不调 `mcpm-tools-refresh`**：那个会临时起进程（npx 冷启动可能几十秒），
         // 那是界面上的显式动作，不该由一次列表调用顺手触发。
         const t: any = await deps.mcpmTools({ serverName: String(x.serverName) })
+        // 停用表读不出来：下面每一行都标 (off)（执行侧确实全拒），但必须说清原因 ——
+        // 否则模型会读成"用户把这些工具关了"，进而去建议用户打开它们。
+        if (t && t.disabledState === 'unknown') {
+          lines.push('    (disabled-tools table unreadable: every mcp__ tool is refused until it is repaired)')
+        }
         const items: any[] = t && t.ok !== false ? (t.tools || []) : []
         if (!items.length) {
           lines.push('    ' + (x.disabled ? '(tools not recorded: server is off)' : '(no tools recorded)'))

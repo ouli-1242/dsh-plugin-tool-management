@@ -1210,7 +1210,7 @@ button.dsm-rowselect-box:disabled{cursor:default;opacity:.45}
    width = max(触发器宽, menuMinWidth)），这里不给 menuMinWidth，两边自然对齐。 */
 .dsm-scope-bar .dsm-select{flex:0 1 300px;min-width:0;max-width:100%}
 .dsm-scope-bar-label{flex:none;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:18px;white-space:nowrap}
-/* 兼容页「隔离粒度」（0.21.2）：一行下拉 + 一句模式说明；与作用域条同样的行内节奏。 */
+/* 兼容页「生效层级」（0.21.2）：一行下拉 + 一句模式说明；与作用域条同样的行内节奏。 */
 .dsm-scope-mode{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .dsm-scope-mode .dsm-form-seg{flex:none}
 .dsm-scope-mode-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;flex:1 1 260px;min-width:0}

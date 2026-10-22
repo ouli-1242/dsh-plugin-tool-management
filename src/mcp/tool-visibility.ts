@@ -16,13 +16,26 @@
 // 整表回写三处 + 出口读两处），所以它由本模块交回两个句柄：setDisabledToolsCache（按原
 // 语义刷新 `{at, value}` 那份缓存）与 disabledToolsSnapshot（同步读，无 I/O —— 工具门禁在
 // 热路径上）。其余名字块外零引用，跟着走就行。
+import { copyFile, stat } from 'node:fs/promises'
 import { MCP_TOOL_PREFIX } from '../host-names.js'
 import { clearRuntimeNote, noteRuntime } from '../compat/runtime-notes.js'
+import {
+  classifyDisabledTools,
+  cloneDisabledTools,
+  DisabledToolsUnavailableError,
+  emptyDisabledTools,
+  isUnsafeKey,
+  type DisabledToolsIssue,
+  type DisabledToolsRead,
+  type JsonFileRead,
+} from './disabled-tools.js'
 import type { KnownMcpTool, ToolsService } from './manager.js'
 
 export interface ToolVisibilityDeps {
   /** 通用侧车 JSON 读写（与母文件同一套）。 */
   readJsonFile(abs: string): Promise<any>
+  /** 严格读（区分 ENOENT / 解析失败 / IO 失败；不调 ensurePaths）。 */
+  readJsonFileStrict(abs: string): Promise<JsonFileRead>
   writeJsonFile(abs: string, data: any): Promise<void>
   /** 确保 hub 目录存在（每次读侧车前都调，与原实现一致）。 */
   ensurePaths(): Promise<any>
@@ -61,6 +74,19 @@ export interface ToolVisibilityDeps {
 
 export interface ToolVisibility {
   readDisabledTools(force?: boolean): Promise<Record<string, string[]>>
+  /** 四态读（需要区分 ok / missing / corrupt / unreadable 时用）。 */
+  readDisabledToolsResult(force?: boolean): Promise<DisabledToolsRead>
+  /** 同步安全状态：首次读完成前、corrupt / unreadable 都是 unknown。 */
+  disabledToolsState(): 'ok' | 'unknown'
+  /** 诊断状态：UI 用它区分损坏 / 不可读；正常与 missing 为 null。 */
+  disabledToolsIssue(): DisabledToolsIssue | null
+  /** 最近一次损坏取证副本的绝对路径（没有副本 / 不可读时为 null）。 */
+  disabledToolsForensicPath(): string | null
+  /**
+   * 重置停用表：仅在 corrupt / unreadable 时可用。corrupt 必须先取证成功才覆盖；
+   * 写回空表（原子写）并清掉 unknown 状态与上报。必须在写锁内调用（本函数自己加锁）。
+   */
+  resetDisabledTools(): Promise<{ ok: true; forensics: string | null; issue: DisabledToolsIssue } | { ok: false; error: string }>
   readKnownMcpTools(force?: boolean): Promise<Record<string, KnownMcpTool[]>>
   writeKnownMcpTools(value: Record<string, KnownMcpTool[]>): Promise<void>
   mutateKnownMcpTools(mutate: (known: Record<string, KnownMcpTool[]>) => boolean): Promise<void>
@@ -85,26 +111,206 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   // every scope's model-visible schema list, and `tools.guard` denies the call
   // before the body runs. Disabled tools therefore become invisible AND
   // uncallable — no patch rewrite, no DSH restart.
-  let disabledToolsCache: { at: number; value: Record<string, string[]> } | null = null
+  let disabledToolsCache: { at: number; read: DisabledToolsRead; value: Record<string, string[]> } | null = null
+  /** 写成功后自增：晚到的旧读不得覆盖新缓存（见 readDisabledToolsResult）。 */
+  let disabledToolsEpoch = 0
+  /** 同一时刻只有一个读在飞；force 也先等它，避免并发读把磁盘放大。 */
+  let disabledToolsInflight: Promise<DisabledToolsRead> | null = null
+  /**
+   * 损坏文件的取证副本（copyFile，**不 rename**：原文件留在原处，外部工具仍能检查）。
+   * `key` = 路径 + size + mtime：同一份坏文件只复制一次，TTL 到期重读不会堆出一串副本。
+   */
+  let forensicCopy: { key: string; path: string | null } | null = null
+
+  function freshDisabledToolsRead(at: number): DisabledToolsRead | null {
+    return disabledToolsCache && at - disabledToolsCache.at < deps.SIDECAR_TTL_MS
+      ? disabledToolsCache.read
+      : null
+  }
+
+  /** 对外安全状态：首次读完成前、corrupt / unreadable 都是 unknown。 */
+  function disabledToolsState(): 'ok' | 'unknown' {
+    const read = disabledToolsCache?.read
+    if (!read) return 'unknown'
+    return read.status === 'ok' || read.status === 'missing' ? 'ok' : 'unknown'
+  }
+
+  function disabledToolsIssue(): DisabledToolsIssue | null {
+    const status = disabledToolsCache?.read.status
+    return status === 'corrupt' || status === 'unreadable' ? status : null
+  }
+
+  function publishDisabledToolsNotes(read: DisabledToolsRead, forensics: string | null = null): void {
+    if (read.status === 'ok' || read.status === 'missing') {
+      clearRuntimeNote('mcp-disabled-tools')
+    } else {
+      const forensicNote = forensics ? `；已保留取证副本：${forensics}` : ''
+      noteRuntime({
+        id: 'mcp-disabled-tools',
+        label: 'MCP 停用表',
+        kind: 'read',
+        fallback: 'refuse-operation',
+        detail: read.status === 'corrupt'
+          ? `MCP 停用表损坏（${read.error}）：所有 mcp__* 工具已被拒绝调用；请在 MCP 页重置停用表${forensicNote}。`
+          : `MCP 停用表不可读（${read.error}）：所有 mcp__* 工具已被拒绝调用；请检查文件权限或重置停用表${forensicNote}。`,
+        detailKey: read.status === 'corrupt' ? 'mcp-disabled-tools.corrupt' : 'mcp-disabled-tools.unreadable',
+        params: { reason: read.error, ...(forensics ? { forensics } : {}) },
+      })
+    }
+    if (read.status === 'ok' && read.warnings.length) {
+      noteRuntime({
+        id: 'mcp-disabled-tools-names',
+        label: 'MCP 停用表中的工具名',
+        kind: 'read',
+        fallback: 'inform-only',
+        detail: '停用表里有本插件工具名格式不认识的名字，已原样保留并继续参与拦截：' + read.warnings.join('、'),
+        detailKey: 'mcp-disabled-tools.names',
+        params: { names: read.warnings.join('、') },
+      })
+    } else if (read.status !== 'corrupt' && read.status !== 'unreadable') {
+      clearRuntimeNote('mcp-disabled-tools-names')
+    }
+  }
+
+  async function readDisabledToolsOnce(): Promise<DisabledToolsRead> {
+    const result = await deps.readJsonFileStrict(deps.mcpSidecar(deps.MCP_DISABLED_TOOLS_FILE))
+    if (result.status !== 'ok') return result
+    return classifyDisabledTools(result.value)
+  }
+
+  async function readDisabledToolsResult(force = false): Promise<DisabledToolsRead> {
+    const startedAt = Date.now()
+    if (!force) {
+      const cached = freshDisabledToolsRead(startedAt)
+      if (cached) return cached
+    }
+    if (disabledToolsInflight) {
+      const shared = await disabledToolsInflight
+      if (!force) return shared
+      if (disabledToolsCache && disabledToolsCache.at >= startedAt) return disabledToolsCache.read
+    }
+    if (!force) {
+      const cached = freshDisabledToolsRead(startedAt)
+      if (cached) return cached
+    }
+    const startEpoch = disabledToolsEpoch
+    const task = (async () => {
+      const read = await readDisabledToolsOnce()
+      // 读期间有写完成：写侧已经把新值放进缓存并 bump 了 epoch，晚到的旧读不得覆盖它。
+      if (disabledToolsEpoch !== startEpoch && disabledToolsCache) return disabledToolsCache.read
+      // 损坏时自动留一份取证副本（同一份坏文件只留一次）。失败不改变 fail-closed 结论，
+      // 只是 note 里没有路径 —— 用户仍可从 MCP 页重置（重置路径会强制取证）。
+      let forensics: string | null = null
+      if (read.status === 'corrupt') {
+        try { forensics = await copyCorruptDisabledTools(false) } catch { forensics = null }
+      }
+      const value = read.status === 'ok' ? read.value : emptyDisabledTools()
+      disabledToolsCache = { at: Date.now(), read, value }
+      publishDisabledToolsNotes(read, forensics)
+      return read
+    })()
+    disabledToolsInflight = task
+    try {
+      return await task
+    } finally {
+      if (disabledToolsInflight === task) disabledToolsInflight = null
+    }
+  }
+
+  /**
+   * 兼容出口：ok / missing 返回表，corrupt / unreadable 抛具名错误。
+   *
+   * 新代码应优先用 `readDisabledToolsResult`（需要区分状态时）或 `disabledToolsState`
+   * （同步判定）。保留这个出口是为了让“没接状态的消费者”至少 fail-closed，而不是读到空表。
+   */
   async function readDisabledTools(force = false): Promise<Record<string, string[]>> {
-    if (disabledToolsCache && !force && Date.now() - disabledToolsCache.at < deps.SIDECAR_TTL_MS) return disabledToolsCache.value
-    const p = await deps.ensurePaths()
-    const raw = await deps.readJsonFile(deps.mcpSidecar(deps.MCP_DISABLED_TOOLS_FILE))
-    const out: Record<string, string[]> = {}
-    if (raw && typeof raw === 'object') {
-      for (const serverName of Object.keys(raw)) {
-        const list = (raw as Record<string, unknown>)[serverName]
-        if (Array.isArray(list)) {
-          // `*` 必须原样保留：它是「整台服务器停用」的通配（场景档案未勾选的服务器写的就是它），
-          // 被这里过滤掉的话 guard / restrict / 快照三条链路一起失效——整台停用变成空转。
-          const names = list.map((name) => String(name)).filter((name) => name === '*' || /^[A-Za-z0-9_-]{1,128}$/.test(name))
-          if (names.length) out[serverName] = names
+    const read = await readDisabledToolsResult(force)
+    if (read.status === 'ok') return read.value
+    if (read.status === 'missing') return emptyDisabledTools()
+    throw new DisabledToolsUnavailableError(read.status, read.error)
+  }
+
+  /** 同一份坏文件的稳定标识：路径 + 大小 + mtime（读不到元数据时退化为路径）。 */
+  async function forensicKeyOf(abs: string): Promise<string> {
+    try {
+      const st = await stat(abs)
+      return abs + ':' + st.size + ':' + st.mtimeMs
+    } catch {
+      return abs
+    }
+  }
+
+  /**
+   * 把损坏的停用表复制一份到 `<侧车>.corrupt-<ts>`（**不 rename**，原文件留在原处）。
+   *
+   * `requireSuccess`：重置路径下取证是**前置条件** —— 复制不了就不许覆盖，否则证据没了
+   * 还把一个无法解释的状态洗白。读路径下的自动取证失败不算错误（fail-closed 照旧），
+   * 只是没有副本可给用户。
+   */
+  async function copyCorruptDisabledTools(requireSuccess: boolean): Promise<string | null> {
+    const abs = deps.mcpSidecar(deps.MCP_DISABLED_TOOLS_FILE)
+    const key = await forensicKeyOf(abs)
+    if (forensicCopy && forensicCopy.key === key && (forensicCopy.path !== null || !requireSuccess)) {
+      return forensicCopy.path
+    }
+    const dest = abs + '.corrupt-' + new Date().toISOString().replace(/[:.]/g, '-')
+    try {
+      await copyFile(abs, dest)
+      forensicCopy = { key, path: dest }
+      return dest
+    } catch (e) {
+      forensicCopy = { key, path: null }
+      if (requireSuccess) throw new Error('取证副本写入失败（未改动原文件）：' + deps.message(e))
+      return null
+    }
+  }
+
+  /** 写成功后的唯一缓存入口：安全克隆 + bump epoch + 清掉损坏上报。 */
+  function setDisabledToolsCacheInternal(value: Record<string, string[]>): void {
+    disabledToolsEpoch += 1
+    const safe = cloneDisabledTools(value)
+    disabledToolsCache = { at: Date.now(), read: { status: 'ok', value: safe, warnings: [] }, value: safe }
+    clearRuntimeNote('mcp-disabled-tools')
+    clearRuntimeNote('mcp-disabled-tools-names')
+  }
+
+  /**
+   * 重置停用表（仅 unknown 时可用）。
+   *
+   * 顺序不可换：先**证明**状态确实异常 → 损坏时先取证（复制不了就中止，绝不在
+   * "证据保不住"的情况下覆盖）→ 原子写空表 → 清缓存 / note → 重排可见性。
+   * 正常可读的表拒绝重置：这个入口是恢复通道，不是"清空我的配置"的捷径。
+   */
+  async function resetDisabledTools(): Promise<{ ok: true; forensics: string | null; issue: DisabledToolsIssue } | { ok: false; error: string }> {
+    return deps.withWriteLock(async () => {
+      let read: DisabledToolsRead
+      try {
+        read = await readDisabledToolsResult(true)
+      } catch (e) {
+        return { ok: false as const, error: '读取停用表失败：' + deps.message(e) }
+      }
+      if (read.status === 'ok' || read.status === 'missing') {
+        return { ok: false as const, error: '停用表当前可读（未损坏 / 未不可读），重置入口只在状态异常时可用；未改动任何东西' }
+      }
+      let forensics: string | null = null
+      if (read.status === 'corrupt') {
+        try {
+          forensics = await copyCorruptDisabledTools(true)
+        } catch (e) {
+          return { ok: false as const, error: deps.message(e) }
         }
       }
-    }
-    disabledToolsCache = { at: Date.now(), value: out }
-    return out
+      try {
+        await deps.writeJsonFile(deps.mcpSidecar(deps.MCP_DISABLED_TOOLS_FILE), {})
+      } catch (e) {
+        return { ok: false as const, error: '重置停用表失败（未改动原有内容）：' + deps.message(e) }
+      }
+      setDisabledToolsCacheInternal(emptyDisabledTools())
+      scheduleToolRestrictions()
+      return { ok: true as const, forensics, issue: read.status }
+    })
   }
+
   /** Fully-qualified model-facing names (`mcp__<serverName>__<tool>`) of every disabled tool. */
   function disabledToolNames(map: Record<string, string[]>): string[] {
     const out: string[] = []
@@ -121,12 +327,13 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   let knownMcpToolsCache: { at: number; value: Record<string, KnownMcpTool[]> } | null = null
   async function readKnownMcpTools(force = false): Promise<Record<string, KnownMcpTool[]>> {
     if (knownMcpToolsCache && !force && Date.now() - knownMcpToolsCache.at < deps.SIDECAR_TTL_MS) return knownMcpToolsCache.value
-    const p = await deps.ensurePaths()
+    // 读路径不调 ensurePaths：hubPath 走 resolveDshHome，与补丁路径推导无关（见 G1）。
     const raw = await deps.readJsonFile(deps.mcpSidecar(deps.MCP_KNOWN_TOOLS_FILE))
-    const out: Record<string, KnownMcpTool[]> = {}
+    const out = Object.create(null) as Record<string, KnownMcpTool[]>
     if (raw && typeof raw === 'object') {
-      for (const serverName of Object.keys(raw)) {
-        const list = deps.normalizeKnownTools((raw as Record<string, unknown>)[serverName])
+      for (const [serverName, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (isUnsafeKey(serverName)) continue
+        const list = deps.normalizeKnownTools(value)
         if (list.length) out[serverName] = list
       }
     }
@@ -203,7 +410,15 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     const p = await deps.ensurePaths()
     return deps.withWriteLock(async () => {
       // Force re-read so an externally edited disabled-tools file is merged, not clobbered.
-      const map = Object.assign({}, await readDisabledTools(true))
+      const read = await readDisabledToolsResult(true)
+      if (read.status === 'corrupt' || read.status === 'unreadable') {
+        return {
+          ok: false,
+          code: 'mcp-disabled-unreadable',
+          error: `MCP 停用表${read.status === 'corrupt' ? '损坏' : '不可读'}，已拒绝写入：${read.error}`,
+        }
+      }
+      const map = cloneDisabledTools(read.status === 'ok' ? read.value : emptyDisabledTools())
       const disabled = new Set(map[serverName] || [])
       if (enabled) disabled.delete(tool)
       else disabled.add(tool)
@@ -214,7 +429,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
       } catch (e) {
         return { ok: false, error: '保存失败: ' + deps.message(e) }
       }
-      disabledToolsCache = { at: Date.now(), value: map }
+      setDisabledToolsCacheInternal(map)
       await applyToolRestrictions()
       return { ok: true, serverName, disabled: map[serverName] || [] }
     })
@@ -297,7 +512,12 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     }
     if (mine !== epoch) return
     if (!seenAgents.has(agent)) return
-    const names = [...new Set([...desiredNames.filter((name) => !allowSet.has(name)), ...extra])]
+    // unknown 时 desiredNames 已经包含全部 mcp__*；会话 allow 不得把它们减掉
+    // （本会话显式开着也不能越过“停用表读不出来”）。工具表的 allow 不受影响。
+    const effectiveAllow = disabledToolsState() === 'unknown'
+      ? new Set([...allowSet].filter((name) => !name.startsWith(MCP_TOOL_PREFIX)))
+      : allowSet
+    const names = [...new Set([...desiredNames.filter((name) => !effectiveAllow.has(name)), ...extra])]
     const scoped = scopedToolsOf(agent)
     if (!scoped || typeof scoped.restrict !== 'function') {
       if (names.length === 0) return
@@ -368,17 +588,40 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     }
     // Force re-read: this runs on the tools/change path, which is rare, so a
     // stale cache must not keep an externally edited deny list hidden.
-    const map = await readDisabledTools(true)
-    // 通配 `*`（整服务器停用）先展开成已注册的全名，再与精确名单合并。
-    const wanted = disabledToolNames(map)
+    const read = await readDisabledToolsResult(true)
+    const unknown = read.status === 'corrupt' || read.status === 'unreadable'
+    const map = read.status === 'ok' ? read.value : emptyDisabledTools()
     let registered: Set<string>
     try {
       registered = new Set((await deps.tools.schemas()).map((schema) => String(schema.name)))
-    } catch (e) { return }
-    for (const [serverName, list] of Object.entries(map)) {
-      if (list.indexOf('*') < 0) continue
-      const prefix = MCP_TOOL_PREFIX + serverName + '__'
-      for (const fullName of registered) if (fullName.startsWith(prefix)) wanted.push(fullName)
+      // 枚举成功 = 上一轮「schemas 失败」已恢复；no-restrict 也在前面那道检查里确认过。
+      // 逐 agent 的 partial 若仍成立，restrictAgent 会在下面重新上报。
+      clearRuntimeNote('mcp-tool-visibility')
+    } catch (e) {
+      // 枚举不出工具表 = 这一轮摘不掉任何工具。执行侧 guard 仍拦得住，所以不是"能调"，
+      // 但"停用了却还看得见"必须上报 —— 相邻分支都有，这里是唯一静默放弃的一处（审查 N3）。
+      noteRuntime({
+        id: 'mcp-tool-visibility',
+        label: '停用工具的可见性',
+        kind: 'write',
+        fallback: 'inform-only',
+        detail: '枚举宿主工具表失败（' + deps.message(e) + '）：停用的 MCP 工具与兼容页关掉的本插件工具仍可能留在模型可见的工具表里，执行侧拦截仍然生效。',
+        detailKey: 'mcp-tool-visibility.schemas-failed',
+        params: { reason: deps.message(e) },
+      })
+      return
+    }
+    // unknown 时把所有已注册的 mcp__* 都放进 deny；missing / ok 按表算。
+    const wanted = unknown
+      ? [...registered].filter((name) => name.startsWith(MCP_TOOL_PREFIX))
+      : disabledToolNames(map)
+    if (!unknown) {
+      // 通配 `*`（整服务器停用）先展开成已注册的全名，再与精确名单合并。
+      for (const [serverName, list] of Object.entries(map)) {
+        if (list.indexOf('*') < 0) continue
+        const prefix = MCP_TOOL_PREFIX + serverName + '__'
+        for (const fullName of registered) if (fullName.startsWith(prefix)) wanted.push(fullName)
+      }
     }
     // 兼容页「模型工具表」关掉的本插件工具并进同一份名单（理由见 deps.pluginHiddenTools）。
     // 交给上面那个 `registered` 过滤是**必要的**而不是保险：官方对认不出的名字直接抛错，
@@ -431,6 +674,11 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
 
   return {
     readDisabledTools,
+    readDisabledToolsResult,
+    disabledToolsState,
+    disabledToolsIssue,
+    disabledToolsForensicPath: () => (forensicCopy && forensicCopy.path ? forensicCopy.path : null),
+    resetDisabledTools,
     readKnownMcpTools,
     writeKnownMcpTools,
     mutateKnownMcpTools,
@@ -440,8 +688,8 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     detachAgent,
     applyToolRestrictions,
     scheduleToolRestrictions,
-    setDisabledToolsCache: (value: Record<string, string[]>) => { disabledToolsCache = { at: Date.now(), value } },
-    disabledToolsSnapshot: () => (disabledToolsCache ? disabledToolsCache.value : {}),
+    setDisabledToolsCache: setDisabledToolsCacheInternal,
+    disabledToolsSnapshot: () => (disabledToolsCache ? disabledToolsCache.value : emptyDisabledTools()),
     disposeVisibility,
   }
 }

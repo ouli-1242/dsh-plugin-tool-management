@@ -35,6 +35,8 @@
           const [reveal, setReveal] = React.useState(false)
           const [settings, setSettings] = React.useState(null)
           const [compactConfirm, setCompactConfirm] = React.useState(false)
+          // 停用表损坏 / 不可读时的恢复入口（0.21.2）：破坏性写，先确认再执行。
+          const [disabledResetConfirm, setDisabledResetConfirm] = React.useState(false)
           // A1：粘贴 JSON 导入 / 导出两个弹窗（0.15.0）。
           const [jsonImportOpen, setJsonImportOpen] = React.useState(false)
           const [jsonExportOpen, setJsonExportOpen] = React.useState(false)
@@ -66,6 +68,7 @@
               const fingerprint = JSON.stringify([
                 res && res.ok, res && res.error, rows, res && res.paths, res && res.errors,
                 res && res.warnings, (res && res.anyLocked) === true, (res && res.activeScene) || null,
+                (res && res.disabledState) || 'ok', (res && res.disabledIssue) || null,
               ])
               const changed = fingerprint !== lastListFingerprint.current
               lastListFingerprint.current = fingerprint
@@ -79,6 +82,10 @@
                 locked: (res && res.anyLocked) === true,
                 // 场景内开关由档案定义：页面上这些开关置灰，并说明去哪儿改。
                 scene: (res && res.activeScene) || null,
+                // 停用表状态（0.21.2）：unknown 时所有 mcp__* 都被执行侧拒绝，
+                // 页面要挂横幅并把逐工具开关锁住，不能报成"全部开着"。
+                disabledState: (res && res.disabledState) || 'ok',
+                disabledIssue: (res && res.disabledIssue) || null,
               } : prev))
               if (onRows) onRows(rows)
             }
@@ -94,6 +101,7 @@
               applyRows(res)
             }).catch((e) => setState({
               loading: false, error: errMsg(e), rows: [], paths: null, errors: [], warnings: [], locked: false,
+              disabledState: 'ok', disabledIssue: null,
             }))
           }
           // The polling tick must always call the newest refresh closure, while
@@ -447,6 +455,26 @@
             }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
           }
           /**
+           * 重置停用表（恢复通道）：只在停用表 corrupt / unreadable 时可用，服务端会拒绝
+           * 正常状态下的调用。损坏时先留取证副本再写空表 —— 回执里把副本路径如实带回来。
+           */
+          const doDisabledReset = () => {
+            setDisabledResetConfirm(false)
+            setMsg(null)
+            setBusy('disabled-reset')
+            apiCall('mcpm-disabled-reset', {}).then((res) => {
+              if (res && res.ok) {
+                setMsg({
+                  kind: 'ok',
+                  text: res.forensics
+                    ? mt('mcp.disabledReset.doneWithCopy', { path: res.forensics })
+                    : mt('mcp.disabledReset.done'),
+                })
+                refresh()
+              } else setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+            }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => setBusy(null))
+          }
+          /**
            * 体检（`mcpm-inspect`）已整条移除（用户 2026-10-12：「MCP 的检查功能可以移除，
            * 作用不大」）：页头那颗「全部检查」与每行的「检查」按钮、结果面板、`inspections`
            * 状态、配置指纹失效这几处一起删。它要发连通性探测、还要把 PATH 查询结果铺成
@@ -460,14 +488,14 @@
             // 请求序号（每次开窗 +1）：两处详情弹窗共用同一份 `detail`，连点两台服务器时
             // 先发的响应可能后到并覆盖后发的那份 —— 序号对不上就丢弃。
             const seq = ++detailSeqRef.current
-            setDetail({ row, loading: true, error: null, tools: [] })
+            setDetail({ row, loading: true, error: null, tools: [], disabledState: 'ok' })
             apiCall('mcpm-tools', { serverName: row.serverName }).then((res) => {
               if (seq !== detailSeqRef.current) return
-              if (res && res.ok) setDetail({ row, loading: false, error: null, tools: res.tools || [] })
-              else setDetail({ row, loading: false, error: (res && res.error) || mt('mcp.tools.loadFailed'), tools: [] })
+              if (res && res.ok) setDetail({ row, loading: false, error: null, tools: res.tools || [], disabledState: res.disabledState || 'ok' })
+              else setDetail({ row, loading: false, error: (res && res.error) || mt('mcp.tools.loadFailed'), tools: [], disabledState: 'ok' })
             }).catch((e) => {
               if (seq !== detailSeqRef.current) return
-              setDetail({ row, loading: false, error: errMsg(e), tools: [] })
+              setDetail({ row, loading: false, error: errMsg(e), tools: [], disabledState: 'ok' })
             })
           }
           /** 关闭详情弹窗：先作废在途响应（否则晚到的那份会把弹窗重新打开），再清 state。 */
@@ -476,10 +504,12 @@
             setDetail(null)
           }
 
+          /** 详情页的停用表是不是读不出来：此时执行侧拒绝所有 mcp__*，任何"开着"都是谎话。 */
+          const detailToolsUnknown = !!detail && detail.disabledState === 'unknown'
           /** 详情页某条工具在**本层**的值（`{ value, scoped }`）。会话层 = `mcpTools` 域
            *  （键 `<server>/<tool>`，与注入段、模型工具同一套）；全局层 = `mcpm-tools` 的读数。 */
           const toolFlag = (row, tool) => {
-            const globalOn = tool.enabled !== false
+            const globalOn = detailToolsUnknown ? false : tool.enabled !== false
             return scopeIsSession()
               ? scopeFlag('mcpTools', String(row.serverName || row.id) + '/' + tool.name, globalOn)
               : { value: globalOn, scoped: false }
@@ -850,6 +880,8 @@
               : (detail.tools || []).length === 0
                 ? React.createElement('div', { className: 'dsm-help' }, mt('mcp.tools.none'))
                 : React.createElement(React.Fragment, null,
+                    // 停用表读不出来：所有开关都会是灰的，先解释为什么，别让用户以为是自己关的。
+                    detailToolsUnknown ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('mcp.tools.stateUnknown')) : null,
                     React.createElement('div', { className: 'dsm-help' }, mt('mcp.tools.note')),
                     React.createElement('div', { className: 'dsm-tools' }, (detail.tools || []).map((tool) => React.createElement('div', { className: 'dsm-tool' + ((detailServerHidden ? false : toolFlag(detail.row, tool).value) === false ? ' dsm-tool-off' : ''), key: tool.name },
                       React.createElement('div', { className: 'dsm-tool-name-row' },
@@ -867,9 +899,10 @@
                         React.createElement(Switch, {
                           on: detailServerHidden ? false : toolFlag(detail.row, tool).value,
                           scoped: detailServerHidden ? false : toolFlag(detail.row, tool).scoped,
-                          disabled: busy !== null || scopeWriteLocked(state.locked === true) || detailServerHidden,
-                          title: detailServerHidden ? mt('mcp.tools.serverOff')
-                            : !scopeIsSession() || tool.enabled !== false ? undefined : mt('mcp.session.startGlobal'),
+                          disabled: busy !== null || scopeWriteLocked(state.locked === true) || detailServerHidden || detailToolsUnknown,
+                          title: detailToolsUnknown ? mt('mcp.tools.stateUnknown')
+                            : detailServerHidden ? mt('mcp.tools.serverOff')
+                              : !scopeIsSession() || tool.enabled !== false ? undefined : mt('mcp.session.startGlobal'),
                           label: mt('mcp.toggleTool') + ' ' + tool.name,
                           onClick: () => toggleTool(detail.row, tool),
                         })),
@@ -1037,6 +1070,16 @@
             React.createElement('div', { className: 'dsm-modal-actions' },
               React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null, onClick: doCompact }, mt('mcp.compact.confirm'))))
 
+          const disabledResetNode = disabledResetConfirm && React.createElement(Modal, {
+            key: 'mcp-disabled-reset',
+            title: mt('mcp.disabledReset.title'),
+            closeLabel: mt('btn.close'),
+            onClose: () => setDisabledResetConfirm(false),
+          },
+            React.createElement('p', { className: 'dsm-desc' }, mt('mcp.disabledReset.desc')),
+            React.createElement('div', { className: 'dsm-modal-actions' },
+              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy !== null, onClick: doDisabledReset }, mt('mcp.disabledReset.confirm'))))
+
           const confirmNode = confirmRow && React.createElement(Modal, {
             key: 'mcp-remove',
             title: mt('mcp.remove.title'),
@@ -1111,11 +1154,18 @@
             React.createElement(Notice, { kind: 'err', text: state.error }),
             React.createElement(Notice, { kind: 'warn', text: (state.errors && state.errors.length > 0) ? mt('mcp.err.warnings') + state.errors.join('；') : null }),
             React.createElement(Notice, { kind: 'warn', text: (state.warnings && state.warnings.length > 0) ? state.warnings.join('；') : null }),
+            // 停用表 unknown：不是"没有停用"，而是"读不出来"。所有 mcp__* 已被执行侧拒绝，
+            // 详情页的逐工具开关也会锁住（见 detailToolsUnknown）。这一条必须带恢复入口 ——
+            // 只告诉用户"坏了"而不给动作，等于把他推回文件系统。
+            state.disabledState === 'unknown' ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' },
+              React.createElement('span', null, mt('mcp.disabled.unknown')),
+              React.createElement('button', { key: 'reset', type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy !== null, onClick: () => setDisabledResetConfirm(true) }, mt('mcp.disabledReset.btn'))) : null,
             React.createElement(UndoBar, { key: 'undo', undo: undo, busy: busy !== null, t: mt, onUndo: undoSetAll, onClose: dismissUndo }),
             groupsNode,
             formModalNode,
             detailNode,
             compactNode,
+            disabledResetNode,
             confirmNode,
             stopNode,
             jsonImportOpen ? React.createElement(McpJsonImportModal, {

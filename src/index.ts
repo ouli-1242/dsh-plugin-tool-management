@@ -30,7 +30,7 @@ import { createArchiveEngine } from './memories/archive-engine.js'
 import { createSnapshotOps } from './ops/snapshot.js'
 import { AUDIT_TARGET_CONFIG, clearAudit, readAudit, recordAudit, recordOpAudit } from './audit-log.js'
 import { readIndexSync } from './memories/index-io.js'
-import { hasQuarantineMarker, readQuarantineMarker } from './memories/index-io.js'
+import { hasQuarantineMarker, readQuarantineMarker, writeFileAtomically } from './memories/index-io.js'
 import { registerBootReconciler, reconcileMcpRestart, runBootReconcilers } from './boot/reconcile.js'
 import { hasMcpRestartMarker, processAlive, readMcpRestartMarker } from './mcp/restart-marker.js'
 import { runStateDoctor } from './ops/state-doctor.js'
@@ -63,6 +63,7 @@ import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 import { assessPresetReach, injectionFactsOf, presetRosterOf, readCompositionFacts, reachNoticeForAgent } from './compat/preset-reach.js'
 import { installHttpApi, type WebServerService } from './http-api.js'
 import { createMcpManager } from './mcp/manager.js'
+import type { JsonFileRead } from './mcp/disabled-tools.js'
 // 确认卡回显"新 URL"时要打码（查询串里的凭据不该明文进卡片），口径与列表视图同一份实现。
 import { maskUrlQuery } from './mcp/secret-guard.js'
 import { createCandidates } from './scenes/candidates.js'
@@ -1388,8 +1389,8 @@ export default {
         return out
       },
       currentMcpRaw: () => mcp.readDisabledTools(),
-      applyMcpEntries: async (entries: Record<string, string[]>) => {
-        await mcp.writeDisabledTools(entries)
+      applyMcpEntries: async (entries: Record<string, string[]>, reason: 'scene-apply' | 'scene-restore') => {
+        await mcp.writeDisabledTools(entries, { reason })
       },
       knownSkillKeys: async () => new Set(Object.keys(await skillStates())),
       // 档案保存校验用：被同名覆盖的副本与结构不完整的技能都不算「可勾选」（见 selectableSkillKeys）。
@@ -1725,10 +1726,10 @@ export default {
     // mcp / skillCatalog / subagentCatalog 在本块之后才建，按 getter 交进去：取值发生在真正要
     // 用的那一刻，与原闭包同形，既不撞 TDZ 也不动搬走的那些行。
     const {
-      toolTableSizes, recordToolSize, readToolTableSettings, toolTableHidden,
+      toolTableSizes, recordToolSize, readToolTableSettings, toolTableState, toolTableWriteError, toolTableHidden,
       writeToolTableSettings, toolTableReport, toolTableOp,
     } = createToolTableSwitch({
-      ensurePaths, readJsonFile, writeJsonFile, withWriteLock, message, EMPTY_TOOL_SET,
+      ensurePaths, readJsonFileStrict, writeJsonFile, withWriteLock, message, EMPTY_TOOL_SET,
       get mcp() { return mcp },
       get skillCatalog() { return skillCatalog },
       get subagentCatalog() { return subagentCatalog },
@@ -2622,8 +2623,29 @@ export default {
     async function readJsonFile(abs: string): Promise<any> {
       try { return JSON.parse(await readFile(abs, 'utf8')) } catch (e) { return null }
     }
+    /**
+     * 严格读：把「文件不在」与「读不出来 / 解析不了」分开。
+     *
+     * 停用表是安全控制，不能沿用 readJsonFile 的「异常 = null = 空表」。这里不调
+     * ensurePaths —— 侧车落点走 resolveDshHome，与补丁路径推导无关。
+     */
+    async function readJsonFileStrict(abs: string): Promise<JsonFileRead> {
+      let text: string
+      try {
+        text = await readFile(abs, 'utf8')
+      } catch (e) {
+        if (String((e as { code?: string })?.code || '') === 'ENOENT') return { status: 'missing' }
+        return { status: 'unreadable', error: message(e) }
+      }
+      try {
+        // Windows 编辑器可能在开头写 BOM；它不是结构错误，先去掉再解析。
+        return { status: 'ok', value: JSON.parse(text.replace(/^\uFEFF/, '')) }
+      } catch (e) {
+        return { status: 'corrupt', error: message(e) }
+      }
+    }
     async function writeJsonFile(abs: string, data: any): Promise<void> {
-      await writeFile(abs, JSON.stringify(data, null, 2) + '\n', 'utf8')
+      await writeFileAtomically(abs, JSON.stringify(data, null, 2) + '\n')
     }
 
     // ---------- MCP 管理域 ----------
@@ -2636,6 +2658,7 @@ export default {
     // 经返回的 McpManager 显式暴露。
     const mcp = createMcpManager({
       readJsonFile,
+      readJsonFileStrict,
       writeJsonFile,
       ensurePaths,
       withWriteLock,
@@ -3568,6 +3591,8 @@ export default {
         report: toolTableReport(hidden),
         source,
         locked: scope?.locked === true,
+        // 侧车 unknown：界面禁写并说明原因（会话覆盖也不该在"读不准全局"时落盘）。
+        ...toolTableState(),
       }
     }
 
@@ -3591,6 +3616,11 @@ export default {
       // 面板给的是当前层的键；斜杠 / 旧调用可能给真实 sessionId → 统一折到当前模式。
       const sessionId = await scopeKeyForId(rawId)
       const settings = await readToolTableSettings()
+      // 侧车 unknown：会话覆盖也拒绝写入 —— 基线 / 全局兜底都读不准，落一份基于空表的
+      // 覆盖只会把问题搬到会话层。读取（上面那次）仍按"上次成功值 → 出厂默认"服务。
+      if (args && args.set === true && toolTableState().state === 'unknown') {
+        return { ok: false, error: toolTableWriteError() }
+      }
       let scope = scopeStore.scopeOfSync(sessionId)
       if (!args || args.set !== true) {
         // 方案库是全局的：会话层只负责"读这一层 / 应用一份方案"，不在这里存删。
@@ -3680,6 +3710,8 @@ export default {
         readSlashSettings,
         toolTableOp: (args: any) => toolTableOpWithScope(args),
         toolTableReport: () => toolTableReport(),
+        // 先读一次：预热前 state 是乐观的 'ok'，而这一行要回答的是"文件现在能不能读"。
+        toolTableState: async () => { await readToolTableSettings(); return toolTableState() },
         presetRoster: candidates.presetRoster,
         listPatchBackups,
         cleanPatchBackups,
@@ -3789,7 +3821,7 @@ export default {
         toolStates: candidates.toolStates,
         skillRows: candidates.skillRows,
         subagentList: () => subagentService.list(),
-        readDisabledTools: mcp.readDisabledTools,
+        readDisabledToolsResult: mcp.readDisabledToolsResult,
         presetNames: candidates.presetNames,
         memorySceneCandidates: candidates.memorySceneCandidates,
         memoryCandidates: candidates.memoryCandidates,
@@ -4056,6 +4088,13 @@ export default {
      * 停用表」——与 `computeMcpPlan` 的 `knownTools` 同源，别把「不知道」当成「一个都没有」。
      */
     async function enabledToolNames(server: string): Promise<string[]> {
+      // 停用表 unknown：这个函数的返回值会被**写进场景档案**。此时既不能报"全部启用"
+      // （空数组 = 全部停用，正是旧的错误结果），也不能猜 —— 直接抛，让这一笔同步失败，
+      // 由档案同步的回执如实告诉用户（见 syncSceneArchive 的 catch）。
+      const read = await mcp.readDisabledToolsResult()
+      if (read.status === 'corrupt' || read.status === 'unreadable') {
+        throw new Error('MCP 停用表状态不可读，无法把「全部工具」具化成名单（本笔未写入档案）')
+      }
       const live = await (async () => {
         try {
           const r: any = await mcp.ops['mcpm-tools']({ serverName: server })
@@ -4755,8 +4794,21 @@ export default {
 
     // ---------- per-tool MCP switches: execution guard + visibility ----------
     try {
-      mcp.warmUp().catch(() => { /* side-car unavailable → no restrictions */ })
-    } catch (e) { /* ignore */ }
+      mcp.warmUp().catch((e) => {
+        // 读失败本身已经由四态读落过 note；这里只接住“读成功但预热后半段失败”的异常。
+        if (mcp.disabledToolsIssue() === null) {
+          noteRuntime({
+            id: 'mcp-disabled-tools',
+            label: 'MCP 停用表',
+            kind: 'read',
+            fallback: 'refuse-operation',
+            detail: 'MCP 停用表预热失败（' + message(e) + '）：MCP 工具保持拒绝，直到读取成功或重置。',
+            detailKey: 'mcp-disabled-tools.warmup',
+            params: { reason: message(e) },
+          })
+        }
+      })
+    } catch (e) { /* apply 里的同步异常同样由 unknown 状态兜底 */ }
     // 可见性半边（B1）：官方 `tools.restrict()` 要求 **agent scope**，所以停用的工具要
     // 逐个 agent 应用 —— 与技能侧同一套生命周期写法（`agent/created` / `agent/disposed`
     // + 启动期扫一遍 `agents.list()`，见 skills/service.ts）。
@@ -4797,26 +4849,57 @@ export default {
       } catch (e) { /* agents 服务不可用 → 仅靠事件（与技能侧同一退路） */ }
     }
     if (typeof tools.guard === 'function') {
-      ctx.effect(() => tools.guard!((exec) => {
-        try {
+      try {
+        ctx.effect(() => tools.guard!((exec) => {
           const name = String((exec && exec.name) || '')
-          // 会话层的判定先算（0.21.2）：它有两个方向 —— `deny` 是"这个对话里关掉了"，
-          // `allow` 是"这个对话里显式开着"，后者要能**越过全局停用表**（逐工具开关按会话
-          // 独立：全局关着的工具，本会话开着就该能调）。判据见 `sessionMcpVerdictSync`。
-          const verdict = sessionMcpVerdictSync(exec && exec.agent, name)
-          if (verdict === 'deny') return '该工具在本次对话中已停用（其他对话不受影响）'
-          // Reads the TTL cache without I/O: the guard runs on the hot path.
-          if (verdict !== 'allow' && mcp.isToolDisabled(name)) {
-            return '该工具已在 MCP 管理页停用'
+          const isMcpTool = name.startsWith(MCP_TOOL_PREFIX)
+          try {
+            // unknown 必须先于会话 verdict：本会话显式开着也不能越过“停用表读不出来”。
+            if (isMcpTool && mcp.disabledToolsState() === 'unknown') {
+              return 'MCP 停用表不可读：所有 MCP 工具已暂时拒绝调用（请在 MCP 页重置停用表）'
+            }
+            // 会话层的判定（0.21.2）：它有两个方向 —— `deny` 是"这个对话里关掉了"，
+            // `allow` 是"这个对话里显式开着"，后者要能**越过全局停用表**（逐工具开关按会话
+            // 独立：全局关着的工具，本会话开着就该能调）。判据见 `sessionMcpVerdictSync`。
+            const verdict = sessionMcpVerdictSync(exec && exec.agent, name)
+            if (verdict === 'deny') return '该工具在本次对话中已停用（其他对话不受影响）'
+            // Reads the TTL cache without I/O: the guard runs on the hot path.
+            if (verdict !== 'allow' && mcp.isToolDisabled(name)) {
+              return '该工具已在 MCP 管理页停用'
+            }
+            // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
+            // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。
+            if (toolTableHiddenForSession(scopeKeyForAgent(exec && exec.agent)).has(name)) {
+              return '该工具已在本对话的模型工具表里关掉（要它先在那里打开）'
+            }
+          } catch (e) {
+            // 守卫自身算不出来时，MCP 工具必须 fail-closed；其余工具保持原来的放行方向，
+            // 避免一个守卫 bug 让整个工具表都不可用。
+            if (isMcpTool) return 'MCP 停用表状态不可读：已拒绝调用'
           }
-          // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
-          // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。
-          if (toolTableHiddenForSession(scopeKeyForAgent(exec && exec.agent)).has(name)) {
-            return '该工具已在本对话的模型工具表里关掉（要它先在那里打开）'
-          }
-        } catch (e) { /* fallthrough to allow */ }
-        return undefined
-      }), 'dsh-plugin-tool-management: disabled mcp tool guard')
+          return undefined
+        }), 'dsh-plugin-tool-management: disabled mcp tool guard')
+        clearRuntimeNote('mcp-tool-guard')
+      } catch (e) {
+        noteRuntime({
+          id: 'mcp-tool-guard',
+          label: 'MCP 工具执行守卫',
+          kind: 'write',
+          fallback: 'inform-only',
+          detail: '执行守卫注册失败（' + message(e) + '）：停用的 MCP 工具可能仍可被调用；可见性摘除与停用表仍会尽力生效。',
+          detailKey: 'mcp-tool-guard.register-failed',
+          params: { reason: message(e) },
+        })
+      }
+    } else {
+      noteRuntime({
+        id: 'mcp-tool-guard',
+        label: 'MCP 工具执行守卫',
+        kind: 'write',
+        fallback: 'inform-only',
+        detail: '宿主 tools 服务没有 guard（官方接口变了）：执行侧拦截不存在，停用的 MCP 工具可能仍可被调用。',
+        detailKey: 'mcp-tool-guard.missing',
+      })
     }
     if (typeof ctx.on === 'function') {
       try {

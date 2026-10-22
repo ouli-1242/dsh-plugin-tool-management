@@ -215,6 +215,7 @@ The six recycle bins each own one directory under `trash/`: `{skills,memories,su
 - **curl / scripts**: send `x-dsh-token`, or carry the browser cookie. Except for the fence's 401 / 403, failures come back as **HTTP 200 + `{ ok: false, error }`** — branch on `body.ok`.
 - **Port forwarding**: when the host has no `connection` service the fence falls back to "loopback Host + same origin", which any local process can imitate. If you forward the port to a LAN or the public internet, **configure a token**.
 - **Avoid `__` in a server name**: a tool's full name is `mcp__<server>__<tool>`, so an extra `__` inside a server name makes it ambiguous; the Host tab shows an informational note.
+- **Do not hand-edit the sidecars**: if `mcp-disabled-tools.json` is corrupted every `mcp__*` tool is refused (the MCP page offers "Reset table" and keeps a forensic copy first); if `tool-table.json` is corrupted the last good value stays in effect and saving is blocked.
 
 ## FAQ
 

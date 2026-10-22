@@ -150,7 +150,13 @@ export function createCandidates(deps: CandidateDeps): Candidates {
   const presetRoster = () => presetRosterOf(ctx as unknown as { get?: (name: string) => unknown })
 
   async function toolStates(): Promise<Record<string, boolean>> {
-    const disabled = await mcp.readDisabledTools()
+    // 停用表不可读时**不返回"全部启用"**：这份映射的每个 true 都会被消费方当成
+    // "这个工具开着"，而此刻其实没有任何一个 mcp__* 能被调用（执行守卫 fail-closed）。
+    // 空表 = 没有可声明的状态，调用方必须自己处理 unknown（见 scene-inventory 的
+    // `disabledState`）。
+    const read = await mcp.readDisabledToolsResult()
+    if (read.status === 'corrupt' || read.status === 'unreadable') return {}
+    const disabled = read.status === 'ok' ? read.value : {}
     const states: Record<string, boolean> = {}
     let schemas: any[] = []
     try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅启停表 */ }

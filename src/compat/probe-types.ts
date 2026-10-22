@@ -27,6 +27,12 @@ export interface CapabilityFinding {
     | 'inform-only'
   /** One line a user can act on. */
   readonly detail: string
+  /**
+   * 结构化文案（运行时上报透传）：客户端按键出对应语言的句子，没有就回退 `detail`。
+   * 与 `RuntimeNote` / 功能总览同名同义 —— 服务端给数值与原因，句子归客户端。
+   */
+  readonly detailKey?: string
+  readonly params?: Record<string, string | number>
   /** Members that were absent, when state is missing-member. */
   readonly missing: readonly string[]
   /**

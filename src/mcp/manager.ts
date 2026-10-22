@@ -20,10 +20,18 @@
 
 import { clearRuntimeNote, noteRuntime } from '../compat/runtime-notes.js'
 
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpPrefixDrift, serverNameCandidates, splitMcpToolName } from '../host-names.js'
 import { hubPath } from '../hub.js'
+import {
+  cloneDisabledTools,
+  emptyDisabledTools,
+  isUnsafeKey,
+  type DisabledToolsIssue,
+  type DisabledToolsRead,
+  type JsonFileRead,
+} from './disabled-tools.js'
 import { planOverrideCompaction } from './override-blocks.js'
 import { createMcpStateCatalog, type McpStateCatalog } from './state-section.js'
 import { createToolVisibility } from './tool-visibility.js'
@@ -38,6 +46,8 @@ import { clearMcpRestartMarker, writeMcpRestartMarker } from './restart-marker.j
 export interface McpManagerDeps {
   /** 通用侧车 JSON 读写（注入设置也在用，所以留在 index.ts）。 */
   readJsonFile(abs: string): Promise<any>
+  /** 严格读：区分 ENOENT / 解析失败 / IO 失败，不调 ensurePaths。 */
+  readJsonFileStrict(abs: string): Promise<JsonFileRead>
   writeJsonFile(abs: string, data: any): Promise<void>
   /** 确保 hub 目录存在（写盘前调用）。 */
   ensurePaths(): Promise<any>
@@ -124,16 +134,21 @@ export interface McpManagerDeps {
 export interface McpManager {
   /** MCP 状态段（注入通道的数据源；index.ts 与重启后的目录刷新都用它）。 */
   stateCatalog: McpStateCatalog
-  /** 16 个 MCP op 的 handler（直接 spread 进 ops 表）。 */
+  /** 18 个 MCP op 的 handler（直接 spread 进 ops 表）。 */
   ops: Record<string, (args: any) => Promise<any>>
-  /** 停用表（TTL 缓存；force 跳过缓存）。 */
+  /** 停用表（TTL 缓存；force 跳过缓存）。corrupt / unreadable 时抛具名错误。 */
   readDisabledTools(force?: boolean): Promise<Record<string, string[]>>
+  /** 四态读：需要区分 ok / missing / corrupt / unreadable 时用。 */
+  readDisabledToolsResult(force?: boolean): Promise<DisabledToolsRead>
+  /** 同步安全状态：首次读完成前、corrupt / unreadable 都是 unknown。 */
+  disabledToolsState(): 'ok' | 'unknown'
+  disabledToolsIssue(): DisabledToolsIssue | null
   /** 最后见过的工具名单（未运行的服务器也能算补集）。 */
   readKnownMcpTools(): Promise<Record<string, Array<{ name: string }>>>
   /** 服务器备注（按 loader id）。 */
   readNotes(force?: boolean): Promise<Record<string, string>>
   /** 写停用表：落盘 + 更新缓存 + 重排工具可见性。 */
-  writeDisabledTools(entries: Record<string, string[]>): Promise<void>
+  writeDisabledTools(entries: Record<string, string[]>, options?: { reason?: 'scene-apply' | 'scene-restore' }): Promise<void>
   /** 在写锁内读-改-写备注（merge 由调用方给）。 */
   updateNotes(mutate: (map: Record<string, string>) => void): Promise<void>
   /** MCP 服务器列表视图（已打码）。 */
@@ -172,8 +187,11 @@ export interface McpManager {
   readPluginSettings(force?: boolean): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean }>
   /** 某工具全名是否在停用表里（读 TTL 缓存，无 I/O —— 工具门禁在热路径上）。 */
   isToolDisabled(name: string): boolean
-  /** 停用表的两个口径（读 TTL 缓存；功能总览用）：整台停用的服务器数（`*`）与单独停用的工具数。 */
-  disabledToolSummary(): { servers: number; tools: number }
+  /**
+   * 停用表的两个口径（读 TTL 缓存；功能总览用）：整台停用的服务器数（`*`）与单独停用的工具数。
+   * `state` = unknown 时两个计数不可当事实用（停用表读不出来），调用方必须换口径。
+   */
+  disabledToolSummary(): { servers: number; tools: number; state: 'ok' | 'unknown'; issue: DisabledToolsIssue | null }
   /** 启动预热：读一次停用表并应用工具可见性限制。 */
   warmUp(): Promise<void>
   /** 重排工具可见性（tools/change 后调用）。 */
@@ -308,12 +326,29 @@ export function countEnabledTools(known: ReadonlySet<string> | readonly string[]
  * 也让 `createMcpManager` 不再需要为它保留一个闭包内定义。
  */
 export function isToolDisabledIn(map: Record<string, string[]>, fullName: string): boolean {
-  const parts = splitMcpToolName(fullName, Object.keys(map))
+  const name = String(fullName == null ? '' : fullName)
+  if (!name.startsWith(MCP_TOOL_PREFIX)) return false
+  const rest = name.slice(MCP_TOOL_PREFIX.length)
+  let matchedAny = false
+  // `mcp__a__b__c` 在 `a` 与 `a__b` 同时是停用表键时有两种归属。只靠名字无法判定，
+  // 守卫按 fail-closed 取“任一候选命中即拒”：宁可误伤另一台的同名工具，也不放行一个
+  // 真的被停用的工具（2026-09-30 审查 G14）。
+  for (const [server, list] of Object.entries(map || {})) {
+    if (isUnsafeKey(server) || !Array.isArray(list)) continue
+    if (rest.length <= server.length + 2) continue
+    if (!rest.startsWith(server + '__')) continue
+    matchedAny = true
+    const tool = rest.slice(server.length + 2)
+    if (tool && (list.indexOf('*') >= 0 || list.indexOf(tool) >= 0)) return true
+  }
+  if (matchedAny) return false
+  // 一个候选都没命中 → 与显示侧同一套兜底（最后一个 `__`）。猜出来的 server 不在表里，
+  // 查表结果与“没有候选命中”一致。
+  const parts = splitMcpToolName(name, [])
   if (parts === null) return false
   const list = map[parts.server]
   if (!list) return false
-  if (list.indexOf('*') >= 0) return true
-  return list.indexOf(parts.tool) >= 0
+  return list.indexOf('*') >= 0 || list.indexOf(parts.tool) >= 0
 }
 
 /** `mcpm-parse-patch` 的输入上限：粘贴框不是文件上传口，几十 KB 之外基本都是误贴。 */
@@ -322,7 +357,7 @@ const PATCH_PARSE_MAX_CHARS = 200_000
 export function createMcpManager(deps: McpManagerDeps): McpManager {
   // 外部能力一次解构成局部名：块内代码是逐字搬来的，保持原样最不容易出错。
   const {
-    readJsonFile, writeJsonFile, ensurePaths, withWriteLock, message,
+    readJsonFile, readJsonFileStrict, writeJsonFile, ensurePaths, withWriteLock, message,
     tools, pluginInventory, settings, readPatch, writePatch, memoriesService, wait,
   } = deps
 
@@ -492,10 +527,10 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   async function readNotes(force = false): Promise<Record<string, string>> {
     if (notesCache && !force && Date.now() - notesCache.at < SIDECAR_TTL_MS) return notesCache.value
     const raw = await readJsonFile(mcpSidecar(MCP_NOTES_FILE))
-    const out: Record<string, string> = {}
+    const out = Object.create(null) as Record<string, string>
     if (raw && typeof raw === 'object') {
-      for (const key of Object.keys(raw)) {
-        const value = (raw as Record<string, unknown>)[key]
+      for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (isUnsafeKey(key)) continue
         if (typeof value === 'string' && value.trim()) out[key] = value
       }
     }
@@ -507,7 +542,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
    * 空 note = 删掉该条目（与 `mcpm-note` 的语义一致）；强制重读，外部改过的侧车是合并而不是覆盖。
    */
   async function writeNoteUnderLock(id: string, note: string): Promise<{ ok: true; notes: Record<string, string> } | { ok: false; error: string }> {
-    const map = Object.assign({}, await readNotes(true))
+    const map = Object.assign(Object.create(null), await readNotes(true)) as Record<string, string>
     if (note) map[id] = note
     else delete map[id]
     try {
@@ -541,7 +576,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
   async function readPluginSettings(force = false): Promise<{ pollIntervalMs: number; toolDescriptionMaxLength: number; requireConfirmForModelRuleWrite: boolean; requireConfirmForModelSubagentRun: boolean }> {
     if (pluginSettingsCache && !force && Date.now() - pluginSettingsCache.at < SIDECAR_TTL_MS) return pluginSettingsCache.value
-    const p = await ensurePaths()
+    // 读路径不调 ensurePaths：hubPath 走 resolveDshHome，与补丁路径推导无关。
     const raw = await readJsonFile(mcpSidecar(MCP_SETTINGS_FILE))
     pluginSettingsCache = {
       at: Date.now(),
@@ -594,11 +629,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   // setDisabledToolsCache(x) ≡ `disabledToolsCache = { at: Date.now(), value: x }`，
   // disabledToolsSnapshot() ≡ `disabledToolsCache ? disabledToolsCache.value : {}`。
   const {
-    readDisabledTools, readKnownMcpTools, writeKnownMcpTools, mutateKnownMcpTools, mergeLiveToolsInto,
+    readDisabledTools, readDisabledToolsResult, disabledToolsState, disabledToolsIssue,
+    resetDisabledTools,
+    readKnownMcpTools, writeKnownMcpTools, mutateKnownMcpTools, mergeLiveToolsInto,
     mcpmToolEnabled, applyToolRestrictions, scheduleToolRestrictions, attachAgent, detachAgent,
     setDisabledToolsCache, disabledToolsSnapshot, disposeVisibility,
   } = createToolVisibility({
-    readJsonFile, writeJsonFile, ensurePaths, withWriteLock, message, tools,
+    readJsonFile, readJsonFileStrict, writeJsonFile, ensurePaths, withWriteLock, message, tools,
     pluginHiddenTools: deps.pluginHiddenTools, carrierHiddenTools: deps.carrierHiddenTools,
     sessionMcpOverlay: deps.sessionMcpOverlay,
     sessionToolTableOverlay: deps.sessionToolTableOverlay,
@@ -700,8 +737,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       return { ok: false, error: message(e) }
     }
     const descriptionLimit = (await readPluginSettings()).toolDescriptionMaxLength
-    const disabledMapHere = await readDisabledTools()
-    const disabledHere = new Set(disabledMapHere[serverName] || [])
+    const disabledRead = await readDisabledToolsResult()
+    // 停用表不可读 = 所有 mcp__* 都被执行侧拒绝（fail-closed）。这里必须报 `false`
+    // 而不是让空表把每一行都算成"开着" —— 那正是本次修复要消掉的那句谎话。
+    const disabledUnknown = disabledRead.status === 'corrupt' || disabledRead.status === 'unreadable'
+    const disabledHere = new Set(disabledUnknown ? ['*'] : (disabledRead.status === 'ok' ? (disabledRead.value[serverName] || []) : []))
     const wildcardHere = disabledHere.has('*')
     const toolsList: any[] = []
     for (const s of schemas) {
@@ -758,7 +798,12 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       })
       listed.add(known.name)
     }
-    return { ok: true, tools: toolsList }
+    return {
+      ok: true,
+      tools: toolsList,
+      disabledState: disabledUnknown ? 'unknown' : 'ok',
+      disabledIssue: disabledUnknown ? disabledRead.status : null,
+    }
   }
 
   /**
@@ -951,6 +996,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
 
   async function mcpmList(): Promise<any> {
     const p = await ensurePaths()
+    // 先取四态：后面那段本就在 try 里吞错（schema / 缓存读失败不影响列表），而停用表
+    // 读不出来时**不能**让同一个 catch 把状态也一起吞掉 —— 那会退回"工具全部启用"。
+    const disabledRead = await readDisabledToolsResult()
+    const disabledUnknown = disabledRead.status === 'corrupt' || disabledRead.status === 'unreadable'
+    const disabledIssue: DisabledToolsIssue | null = disabledUnknown ? disabledRead.status as DisabledToolsIssue : null
     const rows: any[] = []
     const errors: string[] = []
     for (const level of ['project', 'global']) {
@@ -985,7 +1035,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     try {
       const schemas = await tools.schemas()
       const knownCache = await readKnownMcpTools()
-      const disabledMap = await readDisabledTools()
+      // unknown → 按"整台停用"扣减：真实可调用数为 0（执行守卫会拒绝每一个 mcp__*），
+      // 但工具**名字**仍如实列出（它们只是此刻调不到，不是不存在）。
+      const disabledMap = disabledUnknown ? emptyDisabledTools() : (disabledRead.status === 'ok' ? disabledRead.value : emptyDisabledTools())
       const liveNames: Record<string, string[]> = {}
       const liveTools: Record<string, KnownMcpTool[]> = {}
       const seen = new Set<string>()
@@ -1095,7 +1147,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         // 可用数 = 已知工具里未被停用表扣减的（`*` = 整台停用 → 0）。场景档案收窄与
         // 手动逐工具开关写的是同一张停用表，段与页面的「N 个工具」都必须按它扣减，
         // 否则收窄后模型看到的数字比它能调的工具多，页面与详情页也会互相矛盾。
-        enabledToolCounts[server] = countEnabledTools(set, disabledMap[server] || [])
+        enabledToolCounts[server] = disabledUnknown ? 0 : countEnabledTools(set, disabledMap[server] || [])
       }
       // 真实来源的两个数：只数 `liveNames`（schema 里真正注册了的），再按停用表扣减。
       // 同时留一份**工具名**（0.21.2）：注入段要按会话逐工具开关在名字上扣减 / 补回。
@@ -1103,9 +1155,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         const set = new Set(list)
         const off = disabledMap[server] || []
         liveToolCounts[server] = set.size
-        liveEnabledToolCounts[server] = countEnabledTools(set, off)
+        // unknown 时"能调到几个"的答案是 0：守卫会把它们全部拒绝，界面与注入段
+        // 都不能报成可用（这是本轮修复的核心口径，见 tool-visibility 的 fail-closed）。
+        liveEnabledToolCounts[server] = disabledUnknown ? 0 : countEnabledTools(set, off)
         liveToolNames[server] = list.slice()
-        liveEnabledToolNames[server] = off.indexOf('*') >= 0 ? [] : list.filter((t) => off.indexOf(t) < 0)
+        liveEnabledToolNames[server] = disabledUnknown || off.indexOf('*') >= 0 ? [] : list.filter((t) => off.indexOf(t) < 0)
       }
       // 「曾经连上过」的证据：缓存里这台 server 见过几个工具。注意读的是**回写之前**的
       // `knownCache` —— 回写会把这次 live 见到的并进去，而这次 live 见到的本来就已经算在
@@ -1149,6 +1203,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       row.liveTools = liveToolNames[row.serverName] || []
       row.liveEnabledTools = liveEnabledToolNames[row.serverName] || []
       row.knownToolCount = knownToolCounts[row.serverName] || 0
+      // 状态段（注入通道）按行渲染，顶层字段到不了它手里 —— unknown 逐行带上。
+      if (disabledUnknown) row.disabledState = 'unknown'
     }
     // 列表顺序（用户要求 2026-09-17）：**全局在前、应用级在后**，各级按服务器名排，
     // 当前在跑的 loader 行垫底。放在服务端而不是页面里：同一个顺序也是场景档案勾选器
@@ -1179,10 +1235,24 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return {
       ok: true,
       rows,
+      // 停用表状态与列表分属两条读路径：后者失败不影响前者，前者 unknown 也不隐藏列表。
+      disabledState: disabledUnknown ? 'unknown' : 'ok',
+      disabledIssue,
       paths: { project: p.projectPatch, global: p.globalPatch, home: p.home, profile: p.profileName },
       errors,
       warnings,
     }
+  }
+
+  /**
+   * 重置停用表（恢复入口）：只在 corrupt / unreadable 时可用。
+   * 实现与取证全在 tool-visibility（写锁、先取证后覆盖、清状态都在那一处）；这里只负责
+   * 成功后的状态段刷新 —— 段里那些行必须立刻从"全部 muted"回到真实状态。
+   */
+  async function mcpmDisabledReset(_args: any): Promise<any> {
+    const result = await resetDisabledTools()
+    if (result.ok) void mcpStateCatalog.refresh().catch(() => { /* 刷新失败不影响本次结果 */ })
+    return result
   }
 
   async function mcpmAdd(args: any): Promise<any> {
@@ -1326,12 +1396,23 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       // Per-tool disable state is keyed by the serverName namespace: migrate
       // it when a rename moves the tools to a new prefix.
       if (serverName !== cur.serverName) {
-        const toolMap = Object.assign({}, await readDisabledTools(true))
-        if (toolMap[cur.serverName]) {
-          toolMap[serverName] = toolMap[cur.serverName]
-          delete toolMap[cur.serverName]
-          try { await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMap) } catch (e) { /* non-fatal */ }
-          setDisabledToolsCache(toolMap)
+        const read = await readDisabledToolsResult(true)
+        if (read.status === 'corrupt' || read.status === 'unreadable') {
+          // 全局 unknown 仍然拦住所有 mcp__*；这里只如实说明“旧名字下的停用项没迁移”。
+          guardNotes.push('MCP 停用表不可读，旧服务器名下的逐工具停用项未迁移')
+        } else {
+          const toolMap = cloneDisabledTools(read.status === 'ok' ? read.value : emptyDisabledTools())
+          if (toolMap[cur.serverName]) {
+            toolMap[serverName] = toolMap[cur.serverName]
+            delete toolMap[cur.serverName]
+            try {
+              await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMap)
+            } catch (e) {
+              // 迁移失败就中止改名：继续写补丁会让新名字下的工具回到全启用。
+              return { ok: false, error: '逐工具停用项迁移失败（改名未执行）：' + message(e) }
+            }
+            setDisabledToolsCache(toolMap)
+          }
         }
         // F-025：运行时快照的 mcp 停用表同样按 serverName 键 —— 改名不跟着改，
         // 退出场景整体回写时旧键成死键、新名工具的停用状态丢失（回到全启用）。
@@ -1569,6 +1650,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     const abs = level === 'global' ? p.globalPatch : p.projectPatch
     const removedScenes: string[] = []
     const skippedLockedScenes: string[] = []
+    const cleanupWarnings: string[] = []
     await withWriteLock(async () => {
       // serverName 在锁内取：场景档案（mcp / mcpNotes）与两张工具侧车表都按它键，
       // 补丁条目 id 是另一套；锁外读会和并发写竞态。
@@ -1632,14 +1714,19 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         try {
           // 停用表与「已知工具」也按 serverName 键：整台没了，键留着只会喂出错的口径
           // （补集里多出一台永远凑不上的服务器的旧工具名）。
-          const toolMap = Object.assign({}, await readDisabledTools(true))
-          if (Object.prototype.hasOwnProperty.call(toolMap, serverName)) {
-            delete toolMap[serverName]
-            await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMap)
-            setDisabledToolsCache(toolMap)
-            await applyToolRestrictions()
+          const read = await readDisabledToolsResult(true)
+          if (read.status === 'corrupt' || read.status === 'unreadable') {
+            cleanupWarnings.push('MCP 停用表不可读，未清理该服务器名下的逐工具停用项')
+          } else {
+            const toolMap = cloneDisabledTools(read.status === 'ok' ? read.value : emptyDisabledTools())
+            if (Object.prototype.hasOwnProperty.call(toolMap, serverName)) {
+              delete toolMap[serverName]
+              await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), toolMap)
+              setDisabledToolsCache(toolMap)
+              await applyToolRestrictions()
+            }
           }
-          const knownMap = Object.assign({}, await readKnownMcpTools(true))
+          const knownMap = Object.assign(Object.create(null), await readKnownMcpTools(true))
           if (Object.prototype.hasOwnProperty.call(knownMap, serverName)) {
             delete knownMap[serverName]
             await writeKnownMcpTools(knownMap)
@@ -1654,7 +1741,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     // 等 loader 把条目摘掉。等待放在**写锁外**（同 mcpm-restart：锁内等待会卡住其他写）。
     // 宿主清单偶尔停在上一帧，等不到**不算失败** —— 补丁条目确实已经删了，宿主侧收敛有
     // 自己的节奏；但要说出来，否则用户对着残留的 include:* 行只会以为插件没删干净。
-    const warnings: string[] = []
+    const warnings: string[] = [...cleanupWarnings]
     if (pluginInventory) {
       const gone = await waitFor(async () => (await liveEntry(id)) === null, LOADER_STATE_WAIT_MS, LOADER_STATE_POLL_MS)
       if (!gone) warnings.push(`宿主 loader 清单未在 ${LOADER_STATE_WAIT_MS / 1000} 秒内摘除该条目，列表可能短暂残留它的行（宿主收敛后自动消失）`)
@@ -1751,8 +1838,17 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       // `writeJsonFile` 不建父目录（hub 路径总是已存在），所以自定义目录要自己 mkdir。
       if (outDir) await mkdir(outDir, { recursive: true })
       await writeJsonFile(abs, payload)
+      // 导出文件含明文 env / headers 凭据：POSIX 上收窄到 0600。Windows 的 chmod 基本
+      // 是 no-op（ACL 由目录继承），跳过即可；收窄失败也不抹掉"已经写出去"这个事实。
+      if (process.platform !== 'win32') {
+        try { await chmod(abs, 0o600) } catch { /* 文件已落盘，权限收紧失败不改变结果 */ }
+      }
       savedTo = abs
-    } catch (e) { /* non-fatal */ }
+    } catch (e) {
+      // 落盘失败必须让调用方看得见：只返回 ok:true + savedTo:null 的隐式契约让
+      // "没写出去"和"写好了"在只看 ok 的调用方眼里完全一样（审查 N4）。
+      return { ok: false, error: '落盘失败：' + message(e), json, savedTo: null }
+    }
     return { ok: true, json, savedTo }
   }
 
@@ -1912,10 +2008,20 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
    * 先确保目录、再在写锁下落盘、然后更新 TTL 缓存、最后重排工具可见性。
    * 顺序有意义：缓存必须在落盘成功之后才更新（失败时不能留下"已生效"的假象）。
    */
-  async function writeDisabledTools(entries: Record<string, string[]>): Promise<void> {
+  async function writeDisabledTools(
+    entries: Record<string, string[]>,
+    options: { reason?: 'scene-apply' | 'scene-restore' } = {},
+  ): Promise<void> {
+    const reason = options.reason ?? 'scene-apply'
     await deps.ensurePaths()
     await deps.withWriteLock(async () => {
-      await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), entries)
+      const read = await readDisabledToolsResult(true)
+      if ((read.status === 'corrupt' || read.status === 'unreadable') && reason !== 'scene-restore') {
+        throw new Error(`MCP 停用表${read.status === 'corrupt' ? '损坏' : '不可读'}，已拒绝场景写入：${read.error}`)
+      }
+      // scene-restore 写的是进入场景前拍下的快照；入口预检保证那份快照来自 ok 状态。
+      // 它同时把损坏文件覆盖回一份合法表（取证副本由四态读的损坏分支负责）。
+      await writeJsonFile(mcpSidecar(MCP_DISABLED_TOOLS_FILE), cloneDisabledTools(entries))
     })
     setDisabledToolsCache(entries)
     scheduleToolRestrictions()
@@ -1935,9 +2041,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
   }
 
-  /** 启动预热（原 index.ts 的 readDisabledTools().then(applyToolRestrictions)，错误由调用方吞）。 */
+  /** 启动预热：先完成首次读（建立 ok / unknown），再应用可见性。读失败不抛给调用方。 */
   async function warmUp(): Promise<void> {
-    await readDisabledTools()
+    await readDisabledToolsResult()
     await applyToolRestrictions()
   }
 
@@ -1964,11 +2070,15 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       'mcpm-restart': mcpmRestart,
       'mcpm-remove': mcpmRemove,
       'mcpm-compact': mcpmCompact,
+      'mcpm-disabled-reset': mcpmDisabledReset,
       'mcpm-export': mcpmExport,
       'mcpm-import': mcpmImport,
       'mcpm-parse-patch': mcpmParsePatch,
     },
     readDisabledTools,
+    readDisabledToolsResult,
+    disabledToolsState,
+    disabledToolsIssue,
     readKnownMcpTools,
     readNotes,
     writeDisabledTools,
@@ -1979,7 +2089,12 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     patchServerRows,
     mcpmRowsWithNotes,
     readPluginSettings,
-    isToolDisabled: (name: string) => isToolDisabledIn(disabledToolsSnapshot(), name),
+    isToolDisabled: (name: string) => {
+      // 防御性兜底：unknown 时 mcp__* 一律视为停用。守卫还会先看 disabledToolsState；
+      // 这里再兜一层，避免以后有人只读 snapshot 就又回到 fail-open。
+      if (disabledToolsState() === 'unknown') return String(name).startsWith(MCP_TOOL_PREFIX)
+      return isToolDisabledIn(disabledToolsSnapshot(), String(name))
+    },
     /** 停用表的两个口径（读 TTL 缓存；功能总览用）：`*` 通配的台数 + 单独停用的工具数。 */
     disabledToolSummary: () => {
       const map = disabledToolsSnapshot()
@@ -1990,7 +2105,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         if (list.indexOf('*') >= 0) servers += 1
         tools += list.filter((name) => name !== '*').length
       }
-      return { servers, tools }
+      // unknown 时两个计数都只是"缓存里剩的东西"，不能当事实报；调用方据此换一句话。
+      return { servers, tools, state: disabledToolsState(), issue: disabledToolsIssue() }
     },
     warmUp,
     scheduleToolRestrictions,

@@ -59,6 +59,8 @@ export interface CompatOpsDeps {
   toolTableOp(args: any): Promise<any>
   /** 当前工具表实况（注册时量到的体积 + 关掉了哪些），功能总览那一行用。 */
   toolTableReport(): ToolTableReport
+  /** 工具表侧车状态（会先读一次，保证不是预热前的乐观默认）。 */
+  toolTableState(): Promise<{ state: 'ok' | 'unknown'; issue: 'corrupt' | 'unreadable' | null }>
   presetRoster(): PresetRosterLike | undefined
   listPatchBackups(): Promise<PatchBackupInfo[]>
   cleanPatchBackups(delByLevel: Record<string, number>): Promise<{ removed: string[]; failed: string[]; kept: number }>
@@ -72,7 +74,7 @@ export interface CompatOpsDeps {
   /** 当前锁定中的场景名（空数组 = 没锁）。 */
   lockedSceneNames(): Promise<readonly string[]>
   /** 停用表的两个口径（读 TTL 缓存，无 I/O）：整台停用（`*`）的台数 + 单独停用的工具数。 */
-  disabledToolSummary(): { servers: number; tools: number }
+  disabledToolSummary(): { servers: number; tools: number; state: 'ok' | 'unknown'; issue: 'corrupt' | 'unreadable' | null }
   /** 本插件声明的 inject 服务数（INJECT_SERVICES.length）：挂载行的依据文案用。 */
   injectServiceCount: number
   message(e: unknown): string
@@ -130,6 +132,8 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           state: 'not-available',
           missing: [],
           detail: note.detail,
+          ...(note.detailKey === undefined ? {} : { detailKey: note.detailKey }),
+          ...(note.params === undefined ? {} : { params: note.params }),
         }))
         const findings = [...assessment.findings, ...extraFindings]
         const degraded = [...assessment.degraded, ...extraFindings]
@@ -290,6 +294,8 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           ['skills-provider', '技能 provider 装配', 'skills'],
           ['projection-cache-adapter', '投影缓存删除屏障', 'sessions'],
           ['mcp-tool-visibility', '工具表可见性（停用 / 关掉的工具不下发）', 'mcp'],
+          ['mcp-tool-guard', 'MCP 工具执行守卫（停用的工具不可调用）', 'mcp'],
+          ['http-fence-fallback', 'HTTP 请求栅栏（本机鉴权）', 'compat'],
         ]
         for (const [noteId, label, tab] of assemblyRows) {
           // 注入通道有**两类**上报：装配失败（`context-injection`）与运行期失败
@@ -352,10 +358,22 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
             : disabledTools.tools > 0
               ? `${disabledTools.tools} 个工具单独停用`
               : '没有停用的工具'
+        // 停用表读不出来时这一行必须降级：此时"没有停用的工具"是一句假话 ——
+        // 所有 mcp__* 都被执行侧 fail-closed 拒绝，而两个计数只是缓存里的残值。
+        const disabledUnknown = disabledTools.state === 'unknown'
+        const disabledIssue = disabledTools.issue
         push({
-          key: 'mcp-tools', label: 'MCP 工具停用', tab: 'mcp', state: 'ok',
-          detail: disabledPart + (disabledTools.servers + disabledTools.tools === 0 ? '' : '（执行拦截 + 可见性摘除）'),
-          servers: disabledTools.servers, tools: disabledTools.tools,
+          key: 'mcp-tools', label: 'MCP 工具停用', tab: 'mcp',
+          state: disabledUnknown ? 'degraded' : 'ok',
+          detail: disabledUnknown
+            ? `MCP 停用表${disabledIssue === 'corrupt' ? '损坏' : disabledIssue === 'unreadable' ? '不可读' : '状态不可读'}：所有 mcp__* 工具已被拒绝调用，请到 MCP 页修复或重置停用表`
+            : disabledPart + (disabledTools.servers + disabledTools.tools === 0 ? '' : '（执行拦截 + 可见性摘除）'),
+          // 结构化文案：客户端按键出对应语言的句子（与运行时 note 同一批键）。
+          ...(disabledUnknown
+            ? { detailKey: disabledIssue === 'corrupt' ? 'mcp-disabled-tools.corrupt' : disabledIssue === 'unreadable' ? 'mcp-disabled-tools.unreadable' : 'mcp-disabled-tools.unknown' }
+            : {}),
+          servers: disabledUnknown ? 0 : disabledTools.servers,
+          tools: disabledUnknown ? 0 : disabledTools.tools,
         })
         // 工具表按每个请求付钱：这一行回答"这一轮实际发出去多少"。关掉（无论出厂默认还是
         // 用户自己关）都是**配置事实**而非故障 —— 状态恒为 ok，琥珀只留给功能出问题
@@ -364,6 +382,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         // 说明只保留一句关了多少：省多少 tok、去哪开关、面板不受影响、skill_manager_read
         // 让位这些次级信息都不上功能总览（正常行一行读完，2026-09-28 用户反馈）；
         // 逐会话的让位差额（index.ts 的 CARRIER_DUPLICATES）在别处自有交代。
+        const tableState = await deps.toolTableState()
         const table = deps.toolTableReport()
         const userOff = table.hiddenCount - table.defaultHiddenCount
         const offPart = table.hiddenCount === 0
@@ -371,8 +390,17 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           : (userOff === 0
             ? `出厂默认关掉 ${table.defaultHiddenCount}/${table.totalCount} 个`
             : `关掉 ${table.hiddenCount}/${table.totalCount} 个（含出厂默认 ${table.defaultHiddenCount} 个）`)
+        const tableUnknown = tableState.state === 'unknown'
         push({
-          key: 'tool-table', label: '模型工具表', tab: 'compat', state: 'ok', detail: offPart,
+          key: 'tool-table', label: '模型工具表', tab: 'compat',
+          // 侧车读不出来 = 当前生效的是"上次成功值 → 出厂默认"，且保存被拒：这是降级，不是配置事实。
+          state: tableUnknown ? 'degraded' : 'ok',
+          detail: tableUnknown
+            ? `tool-table.json ${tableState.issue === 'unreadable' ? '不可读' : '损坏'}：暂时沿用上次成功值（没有则出厂默认），保存已禁用；请修复或删除该文件后重试`
+            : offPart,
+          ...(tableUnknown
+            ? { detailKey: tableState.issue === 'unreadable' ? 'tool-table-file.unreadable' : 'tool-table-file.corrupt' }
+            : {}),
           hidden: table.hiddenCount, total: table.totalCount, defaults: table.defaultHiddenCount,
         })
         // 斜杠命令入口（`/` 菜单里的「工具」与「快捷提示词」两段，各一颗开关）。服务端只知道

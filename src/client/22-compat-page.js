@@ -1,13 +1,13 @@
     /**
-     * 「隔离粒度」分段控件的三档（只存键名，取词在渲染时做，跟着宿主语言走）。
+     * 「生效层级」分段控件的三档（只存键名，取词在渲染时做，跟着宿主语言走）。
      *
-     * 顺序 = 从最粗到最细：关（全局一份）→ 按对话 → 按工作区。`global` 不是"第四种键"，
+     * 顺序 = 从最粗到最细：关（全局一份）→ 按工作区 → 按对话。`global` 不是"第四种键"，
      * 而是**没有会话层** —— 也就是加会话管理之前的样子。
      */
     const SCOPE_MODE_OPTIONS = [
       { value: 'global', labelKey: 'compat.scopeMode.global', tipKey: 'compat.scopeMode.global.tip' },
-      { value: 'session', labelKey: 'compat.scopeMode.session', tipKey: 'compat.scopeMode.session.tip' },
       { value: 'workspace', labelKey: 'compat.scopeMode.workspace', tipKey: 'compat.scopeMode.workspace.tip' },
+      { value: 'session', labelKey: 'compat.scopeMode.session', tipKey: 'compat.scopeMode.session.tip' },
     ]
     function CompatPage(props) {
       const t = props.t
@@ -459,6 +459,9 @@
           source: r.source || '',
           globalHidden: r.globalHidden || r.hidden || [],
           sessionId: r.sessionId || '',
+          // 侧车状态（0.21.2）：unknown 时这一块整体禁写，并挂一条常驻说明。
+          state: r.state === 'unknown' ? 'unknown' : 'ok',
+          issue: r.issue || null,
         }
       }
       const loadToolTable = function (alive) {
@@ -720,6 +723,8 @@
           case 'skills-provider': return t('compat.ov.skillsProvider')
           case 'projection-cache-adapter': return t('compat.ov.projectionCacheAdapter')
           case 'mcp-tool-visibility': return t('compat.ov.mcpToolVisibility')
+          case 'mcp-tool-guard': return t('compat.ov.mcpToolGuard')
+          case 'http-fence-fallback': return t('compat.ov.httpFenceFallback')
           case 'session-delete': return t('compat.ov.sessionDelete')
           case 'session-archive': return t('compat.ov.sessionArchive')
           case 'session-unarchive': return t('compat.ov.sessionUnarchive')
@@ -763,6 +768,16 @@
             case 'projection-cache-adapter.first-use': return t('compat.note.projectionCacheAdapter.firstUse')
             case 'mcp-tool-visibility.no-restrict': return t('compat.note.mcpToolVisibility.noRestrict')
             case 'mcp-tool-visibility.partial': return t('compat.note.mcpToolVisibility.partial', params)
+            case 'mcp-tool-visibility.schemas-failed': return t('compat.note.mcpToolVisibility.schemasFailed', params)
+            case 'mcp-tool-guard.register-failed': return t('compat.note.mcpToolGuard.registerFailed', params)
+            case 'mcp-tool-guard.missing': return t('compat.note.mcpToolGuard.missing')
+            case 'mcp-disabled-tools.corrupt': return t('compat.note.mcpDisabledTools.corrupt')
+            case 'mcp-disabled-tools.unreadable': return t('compat.note.mcpDisabledTools.unreadable')
+            case 'mcp-disabled-tools.unknown': return t('compat.note.mcpDisabledTools.unknown')
+            case 'http-fence-fallback.missing': return t('compat.note.httpFenceFallback.missing', params)
+            case 'http-fence-fallback.threw': return t('compat.note.httpFenceFallback.threw', params)
+            case 'tool-table-file.corrupt': return t('compat.note.toolTableFile.corrupt')
+            case 'tool-table-file.unreadable': return t('compat.note.toolTableFile.unreadable')
             case 'workspace.delete-native': return t('compat.note.workspaceDeleteNative', params)
             case 'mcp-server-name-ambiguous.separator': return t('compat.note.mcpServerNameAmbiguous.separator', params)
             case 'mcp-server-name-ambiguous.prefix': return t('compat.note.mcpServerNameAmbiguous.prefix', params)
@@ -770,7 +785,8 @@
         }
         if (row.key === 'mount' && row.state === 'ok') return t('compat.ov.mount.ok', params)
         if (row.state === 'ok' && (row.key === 'patch-write-guard' || row.key === 'context-injection' || row.key === 'official-suppression' ||
-          row.key === 'skills-provider' || row.key === 'projection-cache-adapter' || row.key === 'mcp-tool-visibility')) {
+          row.key === 'skills-provider' || row.key === 'projection-cache-adapter' || row.key === 'mcp-tool-visibility' ||
+          row.key === 'mcp-tool-guard' || row.key === 'http-fence-fallback')) {
           return t('compat.ov.assembly.ok')
         }
         if (row.key === 'session-delete' || row.key === 'session-archive' || row.key === 'session-unarchive' ||
@@ -796,6 +812,8 @@
             : t('compat.ov.sceneLock.locked', { list: list(row.scenes) })
         }
         if (row.key === 'mcp-tools') {
+          // 停用表读不出来：不是"没有停用"，而是"所有 mcp__* 已被拒绝"。计数此时没有意义。
+          if (row.state === 'degraded') return t('compat.ov.mcpTools.unknown')
           const servers = Number(row.servers || 0)
           const tools = Number(row.tools || 0)
           const body = servers > 0 && tools > 0 ? t('compat.ov.mcpTools.both', { servers: servers, tools: tools })
@@ -805,6 +823,8 @@
           return body + (servers + tools > 0 ? t('compat.ov.mcpTools.guard') : '')
         }
         if (row.key === 'tool-table') {
+          // 侧车读不出来：数字只是兜底值，不能当成"用户的选择"报。
+          if (row.state === 'degraded') return t('compat.ov.toolTable.unknown')
           const hidden = Number(row.hidden || 0)
           if (hidden === 0) return t('compat.ov.toolTable.all', { total: row.total })
           return hidden === Number(row.defaults || 0)
@@ -1310,7 +1330,7 @@
         const hidden = toolTable.hidden || []
         const groups = report.groups || []
         const groupLabel = function (key) { return key === 'other' ? t('compat.tools.other') : t('compat.inject.domain.' + key) }
-        const toolTableDisabled = toolTableBusy || scopeSessionLocked
+        const toolTableDisabled = toolTableBusy || scopeSessionLocked || toolTable.state === 'unknown'
         const rows = []
         groups.forEach(function (group) {
           const onCount = group.tools.filter(function (tool) { return !tool.hidden }).length
@@ -1392,6 +1412,8 @@
                 scopeIsWorkspaceMode ? t('scope.lock.blockedWorkspace') : scopeT('scope.lock.blockedSession'))
               : null,
             toolTableError ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'alert' }, toolTableError) : null,
+            // 侧车 unknown：当前名单是"上次成功值 → 出厂默认"的兜底，保存会被服务端拒绝。
+            toolTable.state === 'unknown' ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('compat.tools.stateUnknown')) : null,
             // 合计只留一行。此前下面还有一句"其中 ≈X 是出厂默认关掉的 N 条…"，2026-10-12
             // 删除（用户裁定）：同一件事在说明行与工具悬停提示里都说过了，这里是第三次；
             // 而且"出厂默认关掉"这件事用户不需要为此做什么 —— 要用就勾上，不用管它。

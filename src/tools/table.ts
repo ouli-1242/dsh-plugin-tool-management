@@ -181,6 +181,27 @@ export function toolTableSettingsFrom(raw: unknown): ToolTableSettings {
 }
 
 /**
+ * 严格结构检查（0.21.2）：宽松归一化会把「合法 JSON 但形状错了」读成 `hidden: []`
+ * ——也就是**全部打开**，用户关掉的工具会在执行守卫眼皮底下复活。
+ *
+ * 只把真正影响可见性的字段判为损坏：顶层必须是对象、`hidden` 必须是字符串数组、
+ * `presets` 必须是数组。方案条目的残缺仍按原口径跳过 —— 它不改变当前 hidden，
+ * 不该因为一条手工改坏的方案把整份设置锁死。
+ */
+export function classifyToolTableSettings(raw: unknown): { ok: true; value: ToolTableSettings } | { ok: false; error: string } {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: '顶层必须是对象' }
+  const obj = raw as Record<string, unknown>
+  if (obj.hidden !== undefined) {
+    if (!Array.isArray(obj.hidden)) return { ok: false, error: 'hidden 必须是字符串数组' }
+    for (const item of obj.hidden) {
+      if (typeof item !== 'string') return { ok: false, error: 'hidden 里出现了非字符串条目' }
+    }
+  }
+  if (obj.presets !== undefined && !Array.isArray(obj.presets)) return { ok: false, error: 'presets 必须是数组' }
+  return { ok: true, value: normalizeToolTableSettings(raw) }
+}
+
+/**
  * 旧工具名 → 新工具名迁移表（0.14.0 与 0.14.x 两轮改名累积）。
  *
  * 为什么必须有它：`tool-table.json` 存的是**用户点名关掉的那些工具**。0.14.0 把五族并成 17 条

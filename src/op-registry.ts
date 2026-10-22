@@ -64,7 +64,7 @@ export interface OpClass {
 
 export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
 
-  // ── MCP 域（17）────────────────────────────────────────────────────────────
+  // ── MCP 域（18）────────────────────────────────────────────────────────────
   'mcpm-list': { annotatesLock: true },
   // reveal 返回**未打码**的凭据。它是读操作，但按写门禁 —— 局域网暴露的端口上，令牌对
   // 明文凭据必须是最后一道防线，而不只对着写操作。
@@ -75,6 +75,9 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'mcpm-remove': { write: true, frozen: true },
   'mcpm-import': { write: true, frozen: true },
   'mcpm-compact': { write: true, frozen: true },
+  // 停用表损坏 / 不可读时的恢复通道：写侧车，但**不冻结** —— 场景锁住时用户更需要
+  // 能修复一个让所有 MCP 工具都不可用的状态（与 mcpm-restart 同一条理由）。
+  'mcpm-disabled-reset': { write: true },
   'mcpm-note': { write: true, frozen: true },
   'mcpm-settings': { write: true, frozen: true, writeWhen: (a) => a.set === true },
   'mcpm-set-enabled': { write: true, frozen: true, syncsArchive: true },

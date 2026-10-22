@@ -90,6 +90,12 @@ export interface McpStateRow {
   /** `liveTools` 里未被**全局**停用表扣减的那部分（会话逐工具开关在此基础上叠加）。 */
   liveEnabledTools?: readonly string[]
   /**
+   * 停用表的安全状态（0.21.2）。`'unknown'` = 损坏 / 不可读 / 首次读尚未完成 ——
+   * 此时执行侧 fail-closed，所有 `mcp__*` 都调不到，段里绝不能把任何服务器报成可用。
+   * 缺省按 `'ok'`（老调用方与界面行数据不带宽这个字段）。
+   */
+  disabledState?: 'ok' | 'unknown'
+  /**
    * 「已知工具」缓存里的工具数 —— **这台 server 曾经真的连上过**的证据
    * （缓存只在真实 schema 里见到工具时才写入）。`0` = 从未连上过。
    *
@@ -177,6 +183,9 @@ export function renderMcpStateSection(
   const onHere = new Set(sessionTools.on)
   const offHereTools = new Set(sessionTools.off)
   const liveEnabledHereOf = (r: McpStateRow): number => {
+    // 停用表 unknown：执行守卫会拒绝每一个 mcp__*，所以"这里能调到几个"的答案是 0，
+    // 与逐工具的会话开关无关（allow 也压不过 unknown，见 tool-visibility 的 restrictAgent）。
+    if (r.disabledState === 'unknown') return 0
     const live = r.liveTools
     if (!Array.isArray(live)) return liveEnabledOf(r)
     const server = String(r.serverName ?? '')
