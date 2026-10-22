@@ -1,4 +1,4 @@
-// 删除 / 回收站族的 model 工具（2026-10-15）：五个域各一条 `*_manager_remove`。
+// 删除 / 回收站族的 model 工具：五个域各一条 `*_manager_remove`。
 //
 // 为什么单开一族：此前模型**只能停用、不能删除** —— "把这条过时的记忆删掉"这类要求手里
 // 没有出口，模型会去调 `*_switch(enabled:false)` 然后回一句"已停用"，用户以为删了。面板上
@@ -6,7 +6,7 @@
 //
 // 三条纪律：
 //   · **删除一律进回收站**（可恢复），与面板同一条路 —— 回执如实说"可恢复"。
-//   · **不做 purge**（永久删除）：低频且不可恢复，用户裁定"使用频率低的可以不要，
+//   · **不做 purge**（永久删除）：低频且不可恢复，用户要求"使用频率低的可以不要，
 //     太多功能反而冗余" —— 清空回收站留给面板。
 //   · `list` 是只读（不进场景冻结守卫，与 `trash-preview` 只读口径一致）；`trash` /
 //     `restore` 是写，过 `lockedSceneGuard()`。
@@ -30,7 +30,7 @@ interface RemoveCfg {
   /** 列回收站：返回规范化后的条目（id = 回收站条目 id）。 */
   list(): Promise<Array<{ id: string; name: string; deletedAt?: string }>>
   /**
-   * 会话覆盖域（0.21.2）：本会话真把这一域改过时，删除回执补一句「那条开关还在」。
+   * 会话覆盖域：本会话真把这一域改过时，删除回执补一句「那条开关还在」。
    * `undefined` = 该域没有会话覆盖概念（提示词）。
    */
   domain?: ScopeFlagDomain | 'scene'
@@ -59,7 +59,7 @@ const ACTION_DESC = 'trash = delete the item named by `id`; restore = put back a
 /** 删除只有全局一份（会话层没有可删的东西），四个域同一句话。 */
 const REMOVE_SCOPE_DESC = scopeGlobalOnlyDesc('one machine-wide copy', 'switch it off here instead')
 /**
- * 场景的变体（2026-10-21 审查 P2-1）：`REMOVE_SCOPE_DESC` 让模型「在本会话里把它关掉」，
+ * 场景的变体：`REMOVE_SCOPE_DESC` 让模型「在本会话里把它关掉」，
  * 而场景根本没有「关掉」这个动作 —— `scene_manager_switch` 只有 enter / exit。照抄那一句
  * 会让模型去找一个不存在的开关，或者干脆回一句「做不到」。
  */
@@ -71,7 +71,7 @@ const REMOVE_SCOPE_DESC_SCENE = scopeGlobalOnlyDesc('the scene record and archiv
  *   · 提示词预设               → `id`（预设的 id 就是它的名字）
  * 记忆还会把投影对象放在 `rule.id` 上，作为第三顺位兜底。
  *
- * 还要解一层 `data`（2026-10-15 复核 P1-6 时漏掉的那半）：技能的 op 表外面包了
+ * 还要解一层 `data`（漏掉的那半）：技能的 op 表外面包了
  * `wrap`（`skills/service.ts:239` —— `{ ok: true, data: result }`），名字在 `r.data.name`，
  * 不在 `r.name` 上。其余四个域的 op 是扁平返回。两边都要看，否则技能域的回执仍会退回 trashId。
  */
@@ -89,8 +89,8 @@ function restoredName(r: any): string {
 /**
  * 一条删除工具的 execute：三个动词的分派与回执。
  *
- * 会话层（0.21.2）：删除是**全局**动作 —— 技能正文、人设 `.md`、场景档案、MCP 补丁、
- * 提示词预设都只有一份，没有「本会话的副本」。计划 §8.2 对这一格的口径是「全局动作」，
+ * 会话层：删除是**全局**动作 —— 技能正文、人设 `.md`、场景档案、MCP 补丁
+ * 提示词预设都只有一份，没有「本会话的副本」，所以这一格的口径就是「全局动作」。
  * 所以这里不写会话层，只在**这个对话真有该域覆盖**时补一句尾注：
  * 删完之后那条会话覆盖还在（读时忽略，对账才清），不说明的话用户会以为它跟着没了。
  */
@@ -109,9 +109,9 @@ async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent?
   // 进 / 出回收站都是写：过场景冻结守卫（与面板的删除按钮同一档）。
   const blocked = await deps.lockedSceneGuard()
   if (blocked) throw new Error(blocked)
-  // 会话层（0.21.2）：`scope: "session"` 是模型**以为**自己能删本会话那一份时的错误，
-  // 当场纠回来。省略 / "global" 照旧（0.21.2 的行为不变）。五条删除都是全局动作 ——
-  // 连提示词那一族也一样（决策 5：提示词根本不进会话域，更没有「本会话的预设」可删）。
+  // 会话层：`scope: "session"` 是模型**以为**自己能删本会话那一份时的错误
+  // 当场纠回来。省略 / "global" 照旧走全局。五条删除都是全局动作 ——
+  // 连提示词那一族也一样（提示词根本不进会话域，更没有「本会话的预设」可删）。
   requireGlobalScope(args, cfg.noun + 's', !sessionLayerOn(deps))
   const id = String((args && args.id) || '').trim()
   if (id === '') throw new Error('missing argument: id (required by action=' + action + ')')
@@ -121,7 +121,7 @@ async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent?
     return 'OK: ' + cfg.label + ' "' + id + '" moved to the trash (recoverable; permanent deletion lives in the panel trash)' +
       (cfg.domain === undefined ? '' : globalActionNote(deps, agent, cfg.domain, cfg.label))
   }
-  // 恢复的回执要说**恢复成了什么**，而不是回收站条目 id（2026-10-15 smoke-test P1-6）：
+  // 恢复的回执要说**恢复成了什么**，而不是回收站条目 id：
   // `id` 是 `action=list` 给的那一串（记忆 `mv…`、技能 `<时间戳>-<uuid>`），模型看到它
   // 认不出恢复了哪一条；退号恢复时最终落盘的名字还与回收站里的原名不同，更要说准。
   const name = restoredName(r) || id
@@ -129,6 +129,7 @@ async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent?
     (name === id ? '' : ' (trash entry ' + id + ')')
 }
 
+/** 注册删除类工具：技能 / 人设 / 场景三种对象各一个动词。 */
 export function buildRemoveTools(deps: RemoveToolDeps): void {
   const { defineTool, register } = deps
   const mem = deps.memoryOps
@@ -149,7 +150,7 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
   }
   const skillCfg: RemoveCfg = {
     noun: 'skill', label: 'skill', domain: 'skills',
-    // 与 `skill_manager_switch` 同一条（smoke-test P0-1）：不给 root 就按名字在全部来源里
+    // 与 `skill_manager_switch` 同一条：不给 root 就按名字在全部来源里
     // 找胜出的那一份。默认值原本是 dsh，而 `skill_manager_save` 落 hub —— 「建完就删」
     // 必然报「技能不存在」。删一个真的不存在的技能时退回 dsh，交给 op 报它自己的错。
     trash: async (a) => {

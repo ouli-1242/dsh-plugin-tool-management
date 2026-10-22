@@ -77,7 +77,7 @@ function makeLog(): (event: string, detail?: unknown) => Promise<void> {
  * 而不是把项目技能整个清空 —— 一次清单读取时序问题不该让某一轮少掉一整类技能。
  */
 export function sessionCwdOf(ctx: any, sessionId: string): string[] | null {
-  // 工作区模式（0.21.2）：面板 / 斜杠菜单传过来的可能是 `ws:<cwd>` 作用域键。
+  // 工作区模式：面板 / 斜杠菜单传过来的可能是 `ws:<cwd>` 作用域键。
   // 它本身就是项目技能根（键里带归一化后的完整路径），不必再去会话清单里找。
   const workspaceCwd = workspaceCwdOfScopeKey(sessionId)
   if (workspaceCwd !== undefined) return [workspaceCwd]
@@ -138,18 +138,18 @@ function notifyChatCatalog(ctx: any, invalidateSkills: () => void): void {
  * 本插件**可写**的技能来源集合，共两员：
  *
  * - `hub`（`$DSH_HOME/tool-management/skills/`，界面名「导入技能」）—— 导入 / 上传的落点；
- * - `dsh`（`$DSH_HOME/skills/`，界面名「DSH 技能」）—— **新建**技能的落点（用户裁定
- *   2026-10-15：「新增技能默认 DSH 技能；导入技能功能才是导入技能目录」）。
+ * - `dsh`（`$DSH_HOME/skills/`，界面名「DSH 技能」）—— **新建**技能的落点（用户要求
  *
  * 其余根（官方内置 / agents / codex / claude / 自定义 / 项目）一律不碰。
  *
  * 这个集合曾经只有 `hub`：新建默认落点还在 hub 的年代那么判够用。落点改到 dsh 之后，
  * 只认 hub 会把「新建 → 再存一次」整条回路掐断 —— 新建默认落 dsh，改的分支永远找不到
- * hub 里的胜出者，每次都回 `error.update.notOwnRoot`。所以它与新建落点是同一条裁定
+ * hub 里的胜出者，每次都回 `error.update.notOwnRoot`。所以它与新建落点是同一条要求
  * 的两面，必须一起扩。
  */
 const PLUGIN_WRITABLE_ROOTS: ReadonlySet<string> = new Set(['hub', 'dsh'])
 
+/** 技能服务的对外面：来源、条目、导入导出与回收站。 */
 export interface SkillsService {
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
@@ -165,11 +165,13 @@ export interface SkillsService {
 
 /** 全插件共用的审计日志：单一串行写队列，避免多处写同一文件交叉。 */
 let sharedLog: ((event: string, detail?: unknown) => Promise<void>) | null = null
+/** 全插件共用的写日志函数（首次调用时创建，之后复用）。 */
 export function pluginLog(): (event: string, detail?: unknown) => Promise<void> {
   if (!sharedLog) sharedLog = makeLog()
   return sharedLog
 }
 
+/** 技能域服务门面：来源枚举、清单扫描、启停与新建 / 更新。 */
 export function createSkillsService(ctx: any): SkillsService {
   const log = pluginLog()
   const roots = userRoots()
@@ -181,9 +183,9 @@ export function createSkillsService(ctx: any): SkillsService {
   }
 
   /**
-   * 项目技能根的 cwd 集合（0.21.2）。
+   * 项目技能根的 cwd 集合。
    *
-   * 不给 `sessionId` 时是**全部活动会话的 cwd 并集**（0.21.2 及以前的行为，界面没有"当前会话"
+   * 不给 `sessionId` 时是**全部活动会话的 cwd 并集**（界面没有"当前会话"
    * 概念时用它）；给了就只取那一个会话的 cwd —— 这是让项目技能按会话隔离的关键：
    * A 对话在 `proj-a`、B 在 `proj-b` 时，并集会让两边都看到两个项目的技能，而"这个对话在哪个
    * 项目里"本来就有唯一答案（会话自己的 `header.cwd`）。
@@ -210,7 +212,7 @@ export function createSkillsService(ctx: any): SkillsService {
    * **项目来源**（`project-dsh:<hash>` / `project-agents:<hash>`）能不能被启停，此前取决于
    * 「它的工作区此刻在不在活动会话里」（`requestRoot` 的第三步）——于是场景快照恢复时工作区
    * 早已关闭，解析落空 → `setSourceEnabled(undefined)` → 「该技能来源不允许启用或停用」→
-   * 退出模式直接失败、卡在场景里（用户 2026-09-17 报的）。
+   * 退出模式直接失败、卡在场景里（用户反馈的）。
    *
    * key 本身就是自描述的（`<kind>:<路径哈希>`），而启停只写本地状态文件
    * （`state.sources[key]`），一个字节都不碰源目录 —— 所以按前缀合成一个最小 definition
@@ -244,7 +246,7 @@ export function createSkillsService(ctx: any): SkillsService {
   // 全部 SKILL.md 正文；UI 默认每 5s 轮询一次。加 1s TTL 缓存吸收密集轮询，
   // 任何写操作成功后立即失效（afterWrite），保证写后读到的总是新状态。
   const STATE_TTL_MS = 1000
-  // ⚠️ 按**项目根集合**分桶（0.21.2）：`projectOptions(sessionId)` 只取该会话的 cwd，两个会话能
+  // ⚠️ 按**项目根集合**分桶：`projectOptions(sessionId)` 只取该会话的 cwd，两个会话能
   // 算出两份不同的技能清单。单槽缓存下 A 读完 B 直接用 —— 症状是「B 的对话里列出了 A 项目的技能」。
   // 键不能是 sessionId：同一工作区里的多个对话、以及全局口径，算出来的是**同一份**扫描结果，
   // 按会话分桶会让 `skillCatalog.refresh()` 为每个会话各扫一遍磁盘（写操作因此从毫秒拖到秒级）。
@@ -261,7 +263,7 @@ export function createSkillsService(ctx: any): SkillsService {
     return [...seen].sort().join('\u0000')
   }
   /**
-   * 同一次扫描的并发合流 + 写后作废（0.21.2）。
+   * 同一次扫描的并发合流 + 写后作废。
    *
    * `scope-get`、斜杠菜单、对账、目录刷新会在同一拍里各问一次「技能清单」——不合流的话
    * 一次场景切换会并发跑好几份全量扫描，既有磁盘开销又抢事件循环；而写操作之后在飞的那份
@@ -315,7 +317,7 @@ export function createSkillsService(ctx: any): SkillsService {
 
   const registerProviders = (): (() => void) => {
     const disposers: Array<() => void> = []
-    // 卸载竞态（0.21.2）：自定义目录那份 watcher 是**异步**挂上的（要先读状态文件）。
+    // 卸载竞态：自定义目录那份 watcher 是**异步**挂上的（要先读状态文件）。
     // 如果插件在 `readManagerState()` 落地之前就被卸载，`dispose()` 已经跑完，随后那句
     // `disposers.push(...)` 就永远没人收 —— 结果是一个 Worker 线程加一组 fs.watch 句柄
     // 留在进程里（Worker 已 unref 不会挡住退出，但每次重载都多一份，热重载环境里会累积）。
@@ -417,7 +419,7 @@ export function createSkillsService(ctx: any): SkillsService {
 
   const ops: Record<string, (args: any) => Promise<any>> = {
     // 读操作（state 走短 TTL 缓存，见上方 readState）
-    // 会话层（0.21.2）：给了 `sessionId` 就只按该会话的 cwd 推导项目技能根。
+    // 会话层：给了 `sessionId` 就只按该会话的 cwd 推导项目技能根。
     'skill-state': wrap((args) => readState(sessionIdOfArgs(args))),
     'skill-detail': wrap(async (args) => {
       const key = String(args.root || 'dsh')
@@ -486,10 +488,10 @@ export function createSkillsService(ctx: any): SkillsService {
       afterWrite,
     ),
     // 创建 / 导入 / 删除 / 回收站
-    // 创建默认落 **DSH 技能目录**（用户裁定 2026-10-15）：v0.4 起这里是 hub，现在改回 dsh ——
+    // 创建默认落 **DSH 技能目录**：v0.4 起这里是 hub，现在改回 dsh ——
     // hub（`tool-management/skills/`）只服务「导入技能」功能。与 UI「创建技能」的
     // `defaultCreateRoot`、core.js 的 createSkill 默认值同口径；core 里的那份是第二道保险。
-    // 落点变了但有一件事没变：`skill_manager_switch` / `_remove` 侧跨来源解析照旧兜得住（P0-1）。
+    // 落点变了但有一件事没变：`skill_manager_switch` / `_remove` 侧跨来源解析照旧兜得住。
     'skill-create': wrap(
       (args) => write(async () => {
         // requestRoot 未命中时回传原始 key，让 core 的 error.root.unknown 带上来源名
@@ -500,7 +502,7 @@ export function createSkillsService(ctx: any): SkillsService {
           log,
           { root: (await requestRoot(key)) || key },
         )
-        // v0.8.5：新建技能默认不启动（用户裁定）——与子智能体 / MCP 同口径。
+        // 新建技能默认不启动 —— 与子智能体 / MCP 同口径。
         if (res && res.ok !== false && res.name) {
           return disableNewSkills([{ root: String(res.root || 'hub'), name: String(res.name) }], res)
         }
@@ -514,7 +516,7 @@ export function createSkillsService(ctx: any): SkillsService {
     // 四份并存，启错根等于没启）。胜出者判定要读来源排序与首选设置，属于状态层，所以在这里
     // 做；core 的 `updateSkill` 只保证不越出给定根。
     //
-    // 门禁为什么不能只认 hub：新建默认落点 2026-10-15 改到 dsh 后，模型 `skill_manager_save`
+    // 门禁为什么不能只认 hub：新建默认落点 改到 dsh 后，模型 `skill_manager_save`
     // 建出来的技能全在 dsh；只认 hub 时改的分支永远找不到 hub 胜出者，「新建 → 再存一次」
     // 直接回 error.update.notOwnRoot。可写集合跟着落点一起扩才闭环。
     'skill-update': wrap(
@@ -569,7 +571,7 @@ export function createSkillsService(ctx: any): SkillsService {
       (args) => write(async () => {
         const res = await importUploadedSkill({ name: args.name, entries: args.entries, zip: args.zip }, log, {
           conflict: args.conflict === 'overwrite' ? 'overwrite' : 'skip',
-          // 上传导入撞名一律退号新增（用户 2026-10-15）：静默跳过会让用户想要的
+          // 上传导入撞名一律退号新增（用户要求）：静默跳过会让用户想要的
           // 那份根本没进来，结果里只多一行"已跳过"。目录导入（skill-import）
           // 不带这个开关，仍是 skip / overwrite 二选一。
           dedupe: true,
@@ -587,12 +589,12 @@ export function createSkillsService(ctx: any): SkillsService {
     'skill-trash-restore': wrap(
       (args) => write(async () => {
         // `dedupe: true` = 界面上"已存在同名技能，是否恢复为 foo-1"确认过之后那一次
-        // （用户 2026-10-14）；不带时撞名照旧拒绝，并把候选名字放在 `params.next` 里回给弹窗。
+        // （用户确认过）；不带时撞名照旧拒绝，并把候选名字放在 `params.next` 里回给弹窗。
         const res = await restoreTrash(String(args.id || ''), log, {
           ...projectOptions(),
           dedupe: args.dedupe === true,
         })
-        // 恢复的技能默认停用（v0.8.5 用户裁定：新建/导入/恢复一律不启动，手动开启）。
+        // 恢复的技能默认停用（新建 / 导入 / 恢复一律不启动，手动开启）。
         // `res.name` 是**最终落盘的名字**（退号恢复时不是回收站里的原名），启停状态必须按它写。
         if (res && res.ok !== false && res.name) {
           return disableNewSkills([{ root: String(res.root || 'hub'), name: String(res.name) }], res)

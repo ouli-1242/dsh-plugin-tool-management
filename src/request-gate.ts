@@ -1,4 +1,4 @@
-// HTTP 请求准入与 handlers 后处理（原 index.ts apply() 闭包内四段，2026-09-19 抽出）。
+// HTTP 请求准入与 handlers 后处理（原 index.ts apply() 闭包内四段，抽出）。
 //
 // 这一域管「谁能改、改哪些、什么时候不许改」：
 //   * 访问令牌（可选）—— 两条用途：宿主浏览器鉴权的逃生口，以及写操作的纵深防御；
@@ -21,11 +21,13 @@ import { OP_REGISTRY, frozenOps, opClassOf, opsWith } from './op-registry.js'
 
 // ── 1. 访问令牌 ──────────────────────────────────────────────────────────────
 
+/** 访问令牌判定的依赖：配置、启动 id 与时钟。 */
 export interface AccessTokenDeps {
   /** 插件配置（apply 的第二个参数）。 */
   config?: Record<string, unknown>
 }
 
+/** 访问令牌判定的对外面：这个请求带没带对的令牌。 */
 export interface AccessToken {
   /** 配置里的**存量**令牌（比较与"关掉后还能开回来"都用它；环境变量也算）。 */
   CONFIG_TOKEN: string
@@ -56,7 +58,7 @@ export interface AccessToken {
    *
    * 不要求凭证 —— 它只会**收紧**（要求重新验令牌），给不了任何人任何权限。没有它，
    * 解锁一次之后「锁定 + 刷新页面」就是个后门：浏览器里已无令牌，闩却挂着，
-   * 对话整个启动期畅通（2026-09-19 用户实测）。
+   * 对话整个启动期畅通（用户实测）。
    */
   unmarkAccepted(): void
 }
@@ -68,28 +70,22 @@ export interface AccessToken {
 export function createAccessToken(deps: AccessTokenDeps): AccessToken {
   const { config } = deps
 
-  // Optional access token. Enabled by setting `config.token` on this plugin's
-  // loader row (profile cordis.patch.yml override) or the
-  // DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN env var. Two roles now:
-  //   1. escape hatch — a correct token is accepted *in place of* the host's
-  //      browser authentication, so curl/scripts and LAN tooling keep working;
-  //   2. defense in depth — when set, every state-changing op additionally
-  //      requires `x-dsh-token: <token>`.
-  // It is NOT the primary gate anymore: the route calls the host's
-  // connection.admit fence first (Host must be loopback/LAN IP-literal →
-  // defeats DNS rebinding, plus browser-session cookie auth, plus the
-  // owner-Principal check an exact route owes), so an unset token no longer
-  // means "anyone may call writes".
-  // NOTE: the entry config arrives as the SECOND apply argument (Cordis
-  // calls `callback(ctx, config)`) — never read it off `ctx.config`, which
-  // is not an injected service and throws "cannot get property without
-  // inject" at boot.
+  // 可选访问令牌。在本插件的 loader 行上写 `config.token`（profile 的 cordis.patch.yml
+  // 覆盖条目），或设 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN 环境变量即可启用。两个作用：
+  //   1. 逃生口 —— 令牌正确时**顶替**宿主的浏览器认证，curl / 脚本与局域网工具照样能用；
+  //   2. 纵深防御 —— 配了之后，每个改状态的 op 还要带 `x-dsh-token: <token>`。
+  // 它**不再是主闸门**：路由先走宿主的 `connection.admit` 栅栏（Host 必须是回环或局域网
+  // IP 字面量 → 挡 DNS rebinding，再加浏览器会话 cookie 认证，再加精确路由该做的属主
+  // Principal 检查），所以不配令牌不再等于"谁都能调写操作"。
+  // 注意：入口 config 是 apply 的**第二个**实参（Cordis 调 `callback(ctx, config)`）——
+  // 绝不要从 `ctx.config` 上读，那不是注入的服务，启动时会抛 "cannot get property without
+  // inject"。
   const CONFIG_TOKEN_FROM_FILE = String((config as { token?: unknown } | undefined)?.token || '').trim()
   const CONFIG_TOKEN = CONFIG_TOKEN_FROM_FILE || String(process.env.DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN || '').trim()
   /**
    * `config.tokenDisabled: true` = 令牌**留在配置里**但当前不生效（用户主动关掉）。
    *
-   * 与"没配令牌"的区别（用户裁定 2026-09-19）：关掉之后随时能开回来，不需要重新输一遍；
+   * 与"没配令牌"的区别：关掉之后随时能开回来，不需要重新输一遍
    * 两者对写操作的要求一样 —— 都不带令牌。
    */
   const TOKEN_DISABLED = (config as { tokenDisabled?: unknown } | undefined)?.tokenDisabled === true
@@ -103,7 +99,7 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
   const tokenMatches = (presented: string): boolean =>
     timingSafeEqual(createHash('sha256').update(presented).digest(), createHash('sha256').update(CONFIG_TOKEN).digest())
 
-  // 本次**进程**的标识（用户裁定 2026-09-18 第 3 条：「每次启动只用填一次，退出进程后再启动就要重填」）。
+  // 本次**进程**的标识（「每次启动只用填一次，退出进程后再启动就要重填」）。
   // 界面把"填过的令牌"和这个值绑在一起存，读到不同值就作废 —— 于是重启后必须重填，
   // 而同一次运行内刷新页面不必重填。
   //
@@ -126,7 +122,7 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
    * 而这与界面的 bootId 口径一致（同一进程内只需填一次）。
    *
    * 已知边界：闩按**进程**记，不区分浏览器 —— 同一启动里任何一个客户端验对过，其它
-   * 客户端的对话也放行。这是"填一次只管本次启动"（裁定 2026-09-18 第 3 条）在 pre-step
+   * 客户端的对话也放行。这是"填一次只管本次启动"在 pre-step
    * 只能看宿主全局状态下的固有代价；外层还有宿主的连接围栏（回环 / 局域网字面量 +
    * 浏览器会话 cookie）兜着。
    */
@@ -147,6 +143,7 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
 
 // ── 2. 写 / 敏感 op 白名单 ───────────────────────────────────────────────────
 
+/** op 白名单的依赖：op 表与读调用判定。 */
 export interface OpWhitelistDeps {
   /** 各 service 自报的写 op（与其 ops 表同文件同源维护）。 */
   writeOps: {
@@ -157,6 +154,7 @@ export interface OpWhitelistDeps {
   }
 }
 
+/** op 白名单的对外面：这个 op 名认不认、算不算读。 */
 export interface OpWhitelist {
   /** 需要访问令牌的写 op。 */
   WRITE_OPS: Set<string>
@@ -185,11 +183,13 @@ export function createOpWhitelist(deps: OpWhitelistDeps): OpWhitelist {
 
 // ── 3. 场景锁定查询 ──────────────────────────────────────────────────────────
 
+/** 场景锁守卫的依赖：索引里的锁定态与冻结口径。 */
 export interface SceneLockDeps {
   /** 读场景清单（`memoriesService.ops['rules-list']({})` 的结果；只用 scenes / activeScene）。 */
   readSceneList(): Promise<unknown>
 }
 
+/** 场景锁守卫的对外面：这个 op 在锁定时该不该拒。 */
 export interface SceneLock {
   /** 所有 locked=true 的场景名。 */
   lockedSceneNames(): Promise<string[]>
@@ -199,7 +199,7 @@ export interface SceneLock {
   lockedSceneGuard(): Promise<string | null>
 }
 
-// ---------- 场景锁定守卫（v0.8）----------
+// ---------- 场景锁定守卫 ----------
 // 任一场景 locked=true = 五个管理域（MCP/技能/子智能体/记忆/提示词）整体冻结：
 // 冻结清单里的写 op 一律拒绝；界面按钮同步禁用，这里是兜底（防止绕过界面直接打 op）。
 //
@@ -209,6 +209,13 @@ export interface SceneLock {
 // applySubagentSwitches / patchIndex），不经过 handlers —— 锁定就是为了让场景能按原样启动，
 // 运行时应用不能被自己挡住。
 // 例外里的例外：scene-archive-save / rules-remove-scene 只对**被锁的那个场景**拒绝。
+
+/**
+ * 场景锁守卫：任一场景 `locked` 时，按冻结口径拒绝写 op。
+ *
+ * @param deps 场景清单读取与冻结口径（`all` / `self-scene`）
+ * @returns 判定「这个 op 在锁定时该不该拒」的门面
+ */
 export function createSceneLock(deps: SceneLockDeps): SceneLock {
   async function lockedSceneNames(): Promise<string[]> {
     const r: any = await deps.readSceneList()
@@ -240,6 +247,7 @@ export function createSceneLock(deps: SceneLockDeps): SceneLock {
 
 // ── 3.5 场景冻结判据（HTTP handlers 与模型侧 op 表**共用这一份**）──────────────
 
+/** 冻结门禁的依赖：场景锁 + 目标场景解析。 */
 export interface FrozenGateDeps {
   lockedSceneNames(): Promise<string[]>
   activeSceneName(): Promise<string | null>
@@ -261,7 +269,7 @@ const SELF_SCENE_LABEL: Record<string, string> = { 'scene-archive-save': '改档
  *
  * 为什么抽成一个函数：HTTP handlers 与**模型侧 op 表**（index.ts 的 `auditOps`）必须用
  * 同一份判据。此前只包 handlers —— 模型工具拿的是 `service.ops`，于是"锁一个**非活动**
- * 场景"在 HTTP 上被拒、在模型侧五个域全放行（审查 F3，0.17.0 修）。判据只写一遍，
+ * 场景"在 HTTP 上被拒、在模型侧五个域全放行。判据只写一遍，
  * 两侧就不可能再分家。
  *
  * 判据只读 `args`、不落盘，所以对同一次调用可以安全地判两次（handlers 与模型侧各一次）。
@@ -300,7 +308,7 @@ export function createFrozenGate(deps: FrozenGateDeps): (op: string, args: any) 
 // ── 3.6 模型侧 op 表的冻结闸（与 handlers 同一份判据）────────────────────────
 
 /**
- * 给**模型侧**的 op 表装冻结闸（审查 F3，0.17.0）。
+ * 给**模型侧**的 op 表装冻结闸。
  *
  * 为什么抽成一个函数、而不是在 index.ts 里手写 for 循环：模型侧与 HTTP 侧必须用**同一个**
  * `frozen` 判据对象。写成两个循环、各自去 `createFrozenGate`，就给了"两边又分家"的机会 ——
@@ -344,6 +352,7 @@ export function guardModelOp<F extends (args: any) => Promise<any>>(
 }
 
 // ── 4. handlers 后处理 ───────────────────────────────────────────────────────
+/** 处理器守卫的依赖：令牌、白名单与冻结门禁三者合成。 */
 export interface HandlerGuardsDeps {
   /** op 表。原地改写：包装会被写回**同一个对象**，所以传引用，不能传副本。 */
   handlers: Record<string, (args: any) => Promise<any>>
@@ -355,6 +364,7 @@ export interface HandlerGuardsDeps {
   subagentToolFailures: Array<{ name: string; reason: string }>
 }
 
+/** 给一组 op handler 包上两层护栏：场景锁定期间拒写，写成功后把改动同步进当前场景。 */
 export function installHandlerGuards(deps: HandlerGuardsDeps): void {
   const { handlers, lockedSceneNames, activeSceneName, syncSwitchToScene, subagentToolFailures } = deps
 
@@ -392,7 +402,7 @@ export function installHandlerGuards(deps: HandlerGuardsDeps): void {
       }
     }
   }
-  // 场景内「开关」类操作（用户裁定 2026-09-17）：未锁定时**可用**，改动同步进当前场景档案。
+  // 场景内「开关」类操作：未锁定时**可用**，改动同步进当前场景档案。
   // 与「锁定」正交：锁定冻结全部写操作，这里只是把页面开关的意图也写进档案。
   syncSceneArchiveOnSwitch(opsWith('syncsArchive'))
   // 各页列表响应带上 anyLocked + activeScene：界面据此禁用写控件、并说明
@@ -405,7 +415,7 @@ export function installHandlerGuards(deps: HandlerGuardsDeps): void {
       res.activeScene = scene
       // 信封里再套一层 `data` 的 op（`skill-state` 就是）必须**同时**写进 `data`：
       // 客户端 callApi 只把 `data` 交给页面，外层字段在那一层就被丢掉了 ——
-      // 于是"服务端明明标了、技能页两个横幅却从来不显示"（2026-09-19 用户报的）。
+      // 于是"服务端明明标了、技能页两个横幅却从来不显示"（用户报的）。
       if (res.data && typeof res.data === 'object') {
         res.data.anyLocked = locked
         res.data.activeScene = scene

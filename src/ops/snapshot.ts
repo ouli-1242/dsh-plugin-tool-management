@@ -1,6 +1,6 @@
-// 整机迁移快照（0.15.0 C2）—— 一键带走全部配置，换机器 / 重装后一键放回来。
+// 整机迁移快照—— 一键带走全部配置，换机器 / 重装后一键放回来。
 //
-// 与另外两条出口的定位区分（用户裁定）：
+// 与另外两条出口的定位区分：
 //   · `mcpm-export` 只带 MCP 一个域；
 //   · 「兼容」页的 patch 备份是**本机故障恢复**（同机、含明文、按层级轮转）；
 //   · 这里是**跨机迁移**：一个目录，人能在上面看、能改、能版本管理。
@@ -23,6 +23,7 @@ import { unzipLimited } from '../imports/unzip.js'
 import { maskSecretValue, maskUrlQuery } from '../mcp/secret-guard.js'
 import { writeFileAtomically, writeFileAtomicBinary } from '../memories/index-io.js'
 
+/** 整机迁移 op 的依赖：op 调用器、路径与版本号。 */
 export interface SnapshotOpsDeps {
   /** handlers 表调用口：走 op 而不是走服务，门禁与写锁才与界面 / 模型是同一套。 */
   invokeOp(name: string, args: any): Promise<any>
@@ -112,7 +113,7 @@ function namesOf(res: any, prefer: string[]): string[] {
 /**
  * 从 `skill-state` 的返回里取「<来源>/<技能名>」清单。
  *
- * 为什么不能复用 `namesOf`（2026-09-30 审查 P1-6）：`skill-state` 的形状是
+ * 为什么不能复用 `namesOf`：`skill-state` 的形状是
  * `{ ok, data: { roots: [{ key, skills: [{ name, declaredName, … }] }] } }` —— 顶层键是
  * `roots`，而 `namesOf` 只找 `rows / personas / presets / scenes / skills / list / entries /
  * items` 这些**数组**键，一个都对不上 → 恒返回 `[]` → 技能域**永远导出 0 项**，而界面显示的
@@ -165,7 +166,7 @@ function sceneRecordsOf(res: any): Array<{ name: string, label?: string, descrip
  *
  * 这里曾经自己写了一份「所有键一律打成 `••••••`」的版本 —— 与 MCP 列表视图的口径不一致，
  * 结果是配置里的间接引用被当成密钥导出、导回来时 `resolveMaskedKv` 顶替不出真值只能丢键。
- * 打码形态只允许有一处定义（审查 P0-4）。
+ * 打码形态只允许有一处定义。
  */
 function maskKv(map: unknown): Record<string, string> {
   const out: Record<string, string> = {}
@@ -175,6 +176,7 @@ function maskKv(map: unknown): Record<string, string> {
   return out
 }
 
+/** 整机迁移的 op：导出成一个目录、从目录导入回来。 */
 export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: any) => Promise<any>> {
   /** 导出：产出一个**目录**（不是 zip）—— 用户要能直接看见里面带了什么、也方便手工挑着带。 */
   async function snapshotExport(args: any): Promise<any> {
@@ -207,7 +209,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       // `?api_key=` / `?access_token=` / `?sig=` / `?client_secret=` 这类 MCP 托管服务最常见的
       // 形态全部漏掉，而这正是「凭据挂在 URL 上」的主流写法。后果不是界面显示问题：默认
       // （`includeSecrets` 缺省 false）导出的 `mcp.json` 里就是**明文凭据**，而这份目录的用途
-      // 就是拷去 U 盘 / 网盘 / 另一台机器（审查 P0-4）。
+      // 就是拷去 U 盘 / 网盘 / 另一台机器。
       if (typeof copy.url === 'string') copy.url = maskUrlQuery(copy.url)
       return copy
     })
@@ -265,7 +267,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
     }, null, 2), { mode: 0o600 })
     domains.settings = 1
 
-    // ── 场景：档案（含 0.15.0 C1 的工具表绑定）+ 场景记录（label / 描述 / 提示词绑定）──
+    // ── 场景：档案（含工具表绑定）+ 场景记录（label / 描述 / 提示词绑定）──
     const modeRes = await deps.invokeOp('scene-mode-get', {})
     const rulesRes = await deps.invokeOp('rules-list', {})
     const archives = (modeRes && modeRes.ok && modeRes.archives) || {}
@@ -394,7 +396,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
     /**
      * 一个域失败只记在这一行上：迁移的意义正是「哪域没过来」看得清，不是整批回滚。
      *
-     * `warning` 也要透传（2026-09-30 审查 P2-9）：各域的 import op 会用它报"带过来了但有
+     * `warning` 也要透传：各域的 import op 会用它报"带过来了但有
      * 东西被跳过"（`mcpm-import` 的「这些密钥已是打码占位符，请在编辑里重新填写」就是其中
      * 最重要的一条）。此前只取 imported/skipped，于是"迁移成功"的界面下藏着一份**需要用户
      * 动手补的密钥清单**，用户在另一台机器上等到调用工具时才发现。
@@ -524,7 +526,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
         skipped += skippedRows.length
         // `rules-import` 的 skipped 是 `{name, reason}` —— 只数个数会把「为什么没过来」
         // 丢掉，而那正是用户要照着修的东西（名字不合法 / 正文超限 / 附件重名）。
-        // 上限 5 条：这是提示不是日志，界面上一行放不下更多（审查 P2-9 同一条口径）。
+        // 上限 5 条：这是提示不是日志，界面上一行放不下更多。
         for (const row of skippedRows.slice(0, 5)) {
           const name = String((row && row.name) || '')
           const reason = String((row && row.reason) || '')
@@ -585,7 +587,7 @@ export function createSnapshotOps(deps: SnapshotOpsDeps): Record<string, (args: 
       let imported = 0
       let skipped = 0
       for (const zip of zips) {
-        // 走 `skill-upload`（把 zip 读成 base64）而**不是** `skill-import`（2026-09-30 审查 P1-6）：
+        // 走 `skill-upload`（把 zip 读成 base64）而**不是** `skill-import`：
         // 导出侧产出的是 `bundle-export` 打的**一个 zip**（内含 `<技能名>/<文件>`），而
         // `skill-import` 的 `analyzeSource` 用 `lstat` + `endsWith('.md')` 判定来源，**完全不认识
         // `.zip`** —— 喂过去必然 `error.source.unrecognized`，该域整行报错。zip 的解包只存在于

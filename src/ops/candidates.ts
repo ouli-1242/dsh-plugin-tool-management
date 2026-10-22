@@ -1,4 +1,4 @@
-// 场景档案与候选源域的 HTTP ops（2026-09-19 从 index.ts 的 handlers 表抽出）。
+// 场景档案与候选源域的 HTTP ops（从 index.ts 的 handlers 表抽出）。
 //
 // 三个 op 都是**只读候选源**：preset-tools（人设表单的工具候选）、model-candidates
 // （宿主 LLM 目录）、scene-inventory（场景档案勾选器的数据源 v2）。
@@ -6,6 +6,7 @@
 import type { PresetToolCandidates } from '../scenes/candidates.js'
 import type { DisabledToolsRead } from '../mcp/disabled-tools.js'
 
+/** 候选清单 op 的依赖：预设工具视图 + 宿主模型目录。 */
 export interface CandidateOpsDeps {
   /** 一行一个 Agent 预设，各带自己的工具清单与归属组。 */
   presetToolCandidates(): Promise<PresetToolCandidates>
@@ -36,11 +37,12 @@ export interface CandidateOpsDeps {
   memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; description: string }>>
 }
 
+/** 候选源的只读 op：给场景 / 人设表单按需拉「有哪些预设、各自带哪些工具」。 */
 export function buildCandidateOps(deps: CandidateOpsDeps): Record<string, (args: any) => Promise<any>> {
   return {
     // 人设表单的两个候选源之一（只读，均为「按需拉取」——不进 scene-inventory，避免每次开
     // 档案弹窗都枚举预设）。
-    // preset-tools：一行一个 Agent 预设，各带自己的工具清单与归属组（0.19.0 起不再返回全体并集）。
+    // preset-tools：一行一个 Agent 预设，各带自己的工具清单与归属组（不再返回全体并集）。
     // `unavailable` = 本插件自己没注册上的工具：工具列表接口是唯一按名字枚举工具的地方，
     // 注册失败只能在这里被如实回答。
     'preset-tools': async () => ({

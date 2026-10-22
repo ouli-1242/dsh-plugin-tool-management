@@ -1,4 +1,4 @@
-// 诊断包（0.21.2 Phase 5.3）—— 一段可直接复制的纯文本。
+// 诊断包—— 一段可直接复制的纯文本。
 //
 // 纪律（写在最前面，改的时候别破坏）：
 //   · **只读**：本模块不碰磁盘、不发请求，所有事实由调用方取好传进来；
@@ -8,8 +8,10 @@
 //
 // 为什么是纯文本而不是 JSON：用户要把它贴进 issue / 聊天窗口。JSON 里那些引号与转义
 // 对人是噪音，对机器也没有额外价值 —— 需要结构化数据的地方直接读各个 op。
+/** 诊断块的首行标题：用户把它整段贴回来时，一眼能认出是哪份文件。 */
 export const DIAGNOSTICS_TITLE = 'dsh-plugin-tool-management 诊断信息'
 
+/** 诊断侧车文件的状态：名字、是否可读、大小、mtime。 */
 export interface DiagnosticsSidecar {
   name: string
   /** 三态读取器给出的结论；没有三态读取器的侧车用 `present` / `missing`。 */
@@ -18,6 +20,7 @@ export interface DiagnosticsSidecar {
   mtime?: string | null
 }
 
+/** 生成诊断块所需的版本、平台与路径信息。 */
 export interface DiagnosticsInput {
   pluginVersion: string
   hostVersion: string | null
@@ -51,6 +54,7 @@ function sidecarLine(row: DiagnosticsSidecar): string {
   return '- ' + row.name + '  ' + row.state + '  ' + size + '  ' + mtime
 }
 
+/** 拼一份可直接复制的诊断包纯文本（版本、宿主、能力、侧车与降级条目）。 */
 export function buildDiagnostics(input: DiagnosticsInput): string {
   const lines: string[] = []
   lines.push(DIAGNOSTICS_TITLE)

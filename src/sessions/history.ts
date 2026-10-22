@@ -1,4 +1,4 @@
-// 归档会话域（原 index.ts apply() 闭包内六段，2026-09-19 抽出）。
+// 归档会话域（原 index.ts apply() 闭包内六段，抽出）。
 //
 // 这一域管的是「归档会话的外围」：侧车账本的落点与搬迁、保留期设置、到期清扫、
 // 批量操作目标的校验、归档列表的分组视图。会话本身的归档 / 恢复 / 删除走宿主
@@ -65,7 +65,7 @@ export interface SessionsRegistry {
   requireTable?(): { get(id: string): { title?: string; path?: string; sessionIds: string[] } | undefined; entries(): Array<[string, { title?: string; path?: string; sessionIds: string[] }]> }
   /**
    * 可选：注册表状态；`workspaceIds` 为权威显示顺序，`archivedSessionIds` 为**权威归档集合**
-   *（`archivedSessionMetadata().items` 只是它的有损投影 —— 判「能不能删」必须用这里，审查 F9）。
+   *（`archivedSessionMetadata().items` 只是它的有损投影 —— 判「能不能删」必须用这里）。
    */
   requireState?(): { workspaceIds: string[]; archivedSessionIds: string[] }
   /** 可选：会话 → 规范路径索引（宿主启动时对全部存储会话建立）。 */
@@ -106,6 +106,7 @@ export interface SessionsRegistry {
 
 // ── 依赖与出口 ──────────────────────────────────────────────────────────────
 
+/** 会话历史域的依赖：宿主登记表 + 账本读写。 */
 export interface HistoryDomainDeps {
   /** 插件上下文：注册生命周期回调、取宿主服务、写日志（都是 cordis Context 的既有能力）。 */
   ctx: Context
@@ -117,6 +118,7 @@ export interface HistoryDomainDeps {
   message(e: unknown): string
 }
 
+/** 会话历史域的对外面：归档、删除、恢复与导出。 */
 export interface HistoryDomain {
   getSessionsRegistry(): SessionsRegistry | undefined
   restoreWorkspaceAccounting(sessionIds: string[]): Promise<{
@@ -141,11 +143,10 @@ export interface HistoryDomain {
 export function createHistoryDomain(deps: HistoryDomainDeps): HistoryDomain {
   const { ctx, config, pluginRoot, message } = deps
 
-  // ---------- independent history facade ----------
-  // Keep the active workspaceRegistry/sessionProjectionCache instances intact.
-  // Native archive extensions are delegated by capability, not package name.
-  // Official gaps use a checked adapter (sessions/bridge.ts); no service or
-  // storage-domain replacement. Retention uses the existing sidecar ledger.
+  // ---------- 独立的历史门面 ----------
+  // 现有的 workspaceRegistry / sessionProjectionCache 实例原样不动。原生归档扩展按**能力**
+  // 委派，不看包名。官方缺口由受检适配器补（`sessions/bridge.ts`）—— 不替换服务、不替换
+  // 存储域。保留期沿用现有的侧车账本。
   // 历史侧车三件套（归档时刻账本 / 保留期设置 / 工作区登记快照）统一放 hub 根
   // （`$DSH_HOME/tool-management/`），**不放插件目录**：npm 安装下插件目录会被
   // `dsh plugin update` 整体替换，放那里等于"升级即丢账本"——账本一丢，保留期基线
@@ -352,7 +353,7 @@ export function createHistoryDomain(deps: HistoryDomainDeps): HistoryDomain {
             liveRecords.push({ id: String(wid), path, title })
           }
           // 活登记也要探一次盘：登记还在、但磁盘上的工作区文件夹被删掉时，界面必须能及时
-          // 标出来（用户 2026-10-12：「要怎么及时知道这个工作区实际文件夹已经被删除了」）。
+          // 标出来（用户 ：「要怎么及时知道这个工作区实际文件夹已经被删除了」）。
           const liveDirMissing = path !== undefined && !(await directoryExists(path))
           const view: SessionsGroupView = {
             id: 'ws:' + wid, title, kind: 'live', registered: true,

@@ -19,6 +19,7 @@ export interface SlashSettings {
   quickPrompts: boolean
 }
 
+/** `/` 菜单出厂值：模型工具与快捷提示词都露出来。 */
 export const DEFAULT_SLASH_SETTINGS: SlashSettings = { tools: true, quickPrompts: true }
 
 /**

@@ -1,4 +1,4 @@
-// 回收站保留期的两条 op（0.19.1）。
+// 回收站保留期的两条 op。
 //
 //   trash-retention-get  只读：当前保留期天数（`0` = 永久保留）
 //   trash-retention-set  写：改保留期，成功后**立即扫一次**（与 `history-retention-set` 同一条）
@@ -12,6 +12,7 @@
 
 import type { TrashSweepResult } from '../trash-retention.js'
 
+/** 回收站保留期 op 的依赖：读写设置 + 立即清扫。 */
 export interface TrashRetentionOpsDeps {
   read(): Promise<{ retentionDays: number }>
   write(retentionDays: number): Promise<void>
@@ -19,6 +20,7 @@ export interface TrashRetentionOpsDeps {
   sweep(): Promise<TrashSweepResult>
 }
 
+/** 回收站保留期设置的 op（读 / 写）。 */
 export function buildTrashRetentionOps(
   deps: TrashRetentionOpsDeps,
 ): Record<string, (args: any) => Promise<any>> {

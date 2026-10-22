@@ -5,7 +5,7 @@
 //
 // 为什么这一层要独立：它是「导入」这条链的下半段，向下只引 ./core-util.js 与 node:* /
 // ../paths.js，**不回引 core.js** —— 所以 core.js 反过来引它是单向的，加载图无环。
-// 留在 core.ts 里时，任何想把上传/导入段搬出去的尝试都会撞到这个环上（0.18.0 试过一回，
+// 留在 core.ts 里时，任何想把上传/导入段搬出去的尝试都会撞到这个环上（试过一回，
 // 判给不做就是这个原因）。
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promises as fs } from "node:fs";
@@ -21,7 +21,9 @@ import type {
   SourceAnalysis,
 } from "./core-types.js";
 
+/** 目录扫描的最大深度：防止链接环或病态目录树把导入拖死。 */
 export const MAX_SOURCE_DEPTH = 64;
+/** 看一眼来源路径：是目录还是文件、是不是技能（有 `SKILL.md`）。 */
 export async function analyzeSource(source: string): Promise<SourceAnalysis> {
   let st;
   try {
@@ -93,6 +95,7 @@ export async function analyzeSource(source: string): Promise<SourceAnalysis> {
     params: { path: source },
   };
 }
+/** 列出目录下的候选技能条目（一层，不下钻）。 */
 export async function collectCandidates(dir: string): Promise<ImportCandidate[]> {
   const items = await fs.readdir(dir, { withFileTypes: true });
   const out: ImportCandidate[] = [];
@@ -136,6 +139,7 @@ export async function collectCandidates(dir: string): Promise<ImportCandidate[]>
   }
   return out;
 }
+/** 来源树里不允许有符号链接（防止导入把链接目标一起复制出去）。 */
 export async function assertNoSymbolicLinks(source: string): Promise<void> {
   const pending: { path: string; depth: number }[] = [
     { path: source, depth: 0 },
@@ -170,6 +174,7 @@ export async function assertNoSymbolicLinks(source: string): Promise<void> {
     }
   }
 }
+/** 导入前的预检：逐条判定「可导入 / 重名冲突 / 不合格」，结果就地写回三个入参数组。 */
 export async function preflightCandidates(
   pending: ImportSourceRef[],
   conflicts: ImportSourceRef[],
@@ -196,6 +201,7 @@ export async function preflightCandidates(
     }
   }
 }
+/** 先复制到目标同目录的临时路径，返回该临时路径（尚未替换目标）。 */
 export async function copyToTemporary(
   source: string,
   target: string,
@@ -214,6 +220,7 @@ export async function copyToTemporary(
     throw error;
   }
 }
+/** 用一份新复制替换目标：先备份旧内容，替换失败则回滚，成功后再删备份。 */
 export async function replaceWithCopy(
   source: string,
   dest: string,

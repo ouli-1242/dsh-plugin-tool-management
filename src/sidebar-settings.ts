@@ -12,6 +12,7 @@ export interface SidebarSettings {
   enabled: boolean
 }
 
+/** 侧栏入口出厂值：默认显示。 */
 export const DEFAULT_SIDEBAR_SETTINGS: SidebarSettings = { enabled: true }
 
 /** 把任意输入夹成合法设置：读不到 / 形状不对一律按默认开启。 */

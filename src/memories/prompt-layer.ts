@@ -1,4 +1,4 @@
-// 用户级提示词那一槽的层级选择 —— 纯函数（0.21.2；0.21.2 第三轮加冻结快照层）。
+// 用户级提示词那一槽的层级选择 —— 纯函数（含冻结快照层）。
 //
 // 顺序（上赢下）：本会话自定义正文 > 本会话引用的预设 > 场景绑定预设 >
 // **本会话创建时的 AGENTS.md 快照** > 当前 ~/.dsh/AGENTS.md。
@@ -13,7 +13,7 @@
 import { clampPromptBaseline } from '../scope/scope-overrides.js'
 
 /**
- * 本会话快照与当前 `~/.dsh/AGENTS.md` 是否**不同**（0.21.2 第三轮，纯函数）。
+ * 本会话快照与当前 `~/.dsh/AGENTS.md` 是否**不同**（纯函数）。
  *
  * `baseline === undefined`（没捕获 / 捕获失败）→ false：这一层没有意见，官方照送。
  * `current === undefined`（这一轮读不到文件）→ false：宁可让官方照旧，也不能把两份都拦掉。
@@ -46,6 +46,7 @@ export interface PromptLayerAvailability {
 /** 选中的那一层；`null` = 五层都没内容。 */
 export type UserPromptLayer = 'session-content' | 'session-preset' | 'scene-preset' | 'session-baseline' | 'global-file' | null
 
+/** 选用户级提示词取哪一层：会话覆盖 → 会话预设 → 冻结快照 → 全局文件。 */
 export function chooseUserPromptLayer(availability: PromptLayerAvailability): UserPromptLayer {
   if (availability.sessionContent) return 'session-content'
   if (availability.sessionPreset) return 'session-preset'

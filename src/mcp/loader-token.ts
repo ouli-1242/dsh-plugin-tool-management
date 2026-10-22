@@ -1,6 +1,6 @@
 // 插件**自己那条 loader 行**的 `config.token` 读写 —— 唯一口径。
 //
-// 为什么需要它（用户裁定 2026-09-18）：访问令牌此前只能靠手改 `cordis.patch.yml` 来设置，
+// 为什么需要它：访问令牌此前只能靠手改 `cordis.patch.yml` 来设置
 // 而"想开明文就得会写 YAML"这个门槛把功能卡住了。现在兼容页可以就地设置 / 关闭，本模块
 // 负责那一次**外科手术式的文本改写**。
 //
@@ -14,7 +14,7 @@
 // 的覆盖条目 —— 同一套相对缩进逻辑都认。找不到那条行时如实回 `found: false`，由调用方
 // 决定怎么报错；唯一的"新建"路径是 0.1.7 的覆盖条目（buildLoaderOverrideEntry，见下）。
 //
-// 两个**不改写、只拒绝**的形状（2026-09-19 审计 T-28）：
+// 两个**不改写、只拒绝**的形状（审计 T-28）：
 //   - `config:` 写成 flow style（`config: {token: x}`）或缩进不是 6 空格 ⇒ 本模块的
 //     `CONFIG_RE` 认不出来，会以为"没有 config"而在 `- id:` 之后**再插一个 `config:`**；
 //     同一映射里出现重复键，官方解析器 `js-yaml` 是 **throw**（不是 last-wins、没有降级开关），
@@ -68,6 +68,7 @@ function parseFlag(raw: string): boolean | null {
   return null
 }
 
+/** 读到的 MCP loader 令牌，以及它落在哪一行。 */
 export interface LoaderTokenRead {
   /** 文件里有没有本插件那条 loader 行。 */
   found: boolean
@@ -77,7 +78,7 @@ export interface LoaderTokenRead {
    * `config.tokenDisabled === true`：令牌**保留**在配置里，但当前不生效（用户主动关掉）。
    *
    * 与"没有令牌"是两件事：关掉之后仍然随时能开回来，不需要重新输一遍
-   * （用户裁定 2026-09-19：原令牌要保留）。两者都不要求写操作带令牌。
+   * （原令牌要保留）。两者都不要求写操作带令牌。
    */
   disabled: boolean
 }
@@ -133,7 +134,7 @@ function locate(content: string, pluginId: string): {
 /**
  * 文件里**所有**本插件 loader 行的形状（行号 + 是 insert 子条目还是顶层覆盖条目）。
  *
- * 为什么需要区分（2026-09-30 审查 P2-12）：`readLoaderToken` 只认**第一条**（`locate` 的行为），
+ * 为什么需要区分：`readLoaderToken` 只认**第一条**（`locate` 的行为），
  * 而「本插件的 loader 行出现在两份补丁里 = 重复挂载 = DSH 起不来」这个判据**只对 insert 条目
  * 成立** —— 覆盖条目（`- id:` 在第 0 列，官方 `applyEntryPatches` 的 id-targeted override）
  * 是官方支持的改法，与 insert 并存是**正常**形状（0.1.7 bundle 挂载下，令牌的写点就是它）。
@@ -173,6 +174,7 @@ export function readLoaderToken(content: string, pluginId: string = PLUGIN_LOADE
   return { found: true, token, disabled }
 }
 
+/** 写令牌的结果：没找到那一行 / 写了但内容没变 / 写成功 / 拒写及原因。 */
 export type LoaderTokenWrite =
   | { found: false }
   | { found: true; changed: boolean; content: string; refused?: string }
@@ -275,7 +277,7 @@ export function applyLoaderToken(content: string, token: string | null, pluginId
  * 打开（`true`）或关掉（`false`）令牌功能 —— **不动 `config.token` 本身**。
  *
  * 关掉 = 写一行 `tokenDisabled: true`：令牌留在配置里，随时能开回来，不需要重新输一遍
- * （用户裁定 2026-09-19）。`false` = 删掉那一行。
+ * 。`false` = 删掉那一行。
  *
  * @param disabled - `true` 写开关；`false` / `null` 删掉该键。
  */

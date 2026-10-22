@@ -4,22 +4,29 @@
 // 约定：只认 .md；zip 内任意层级；隐藏项 / 绝对路径 / `..` 穿越 / 超限条目一律跳过并回报；
 //       重名策略（跳过 or 覆盖）不在这里实现——由调用方按文件系统现状裁决（本项目取「跳过并报告」）。
 //
-// 两条限额的**口径**要分清（2026-09-19 审计 T-09）：`MAX_IMPORT_TOTAL_BYTES` 管的是
+// 两条限额的**口径**要分清（审计 T-09）：`MAX_IMPORT_TOTAL_BYTES` 管的是
 // **上传（编码后）**字节，管不住解压后的体积 —— 一个 8 MiB 条目 × 2000 条 ≈ 16 GiB 会在
 // 单次 `unzipSync` 里被实体化。所以另有 `MAX_IMPORT_UNCOMPRESSED_BYTES` 管**解压后**的
 // 累计量，在 filter 里按档案自报的 `info.originalSize` 累加。
 import { unzipLimited } from './unzip.js'
 import { isValidSegment } from '../paths.js'
 
+/** 客户端传来的一个文件：名字 + base64 正文（两者都可能是任意值，必须自己校验）。 */
 export interface UploadFile { name?: unknown; data?: unknown }
+/** 解压后的一条原始条目：包内路径 + 字节。 */
 export interface RawEntry { path: string; bytes: Uint8Array }
+/** 导入时被跳过的条目及原因。 */
 export interface ImportProblem { name: string; reason: string }
 
+/** 单次导入的文件数上限：再多就不是「导一份技能」而是一次批量迁移了。 */
 export const MAX_IMPORT_FILES = 200
+/** 单个条目（解码后）上限 8 MiB：技能正文与随包资源都远小于此，超了基本是误传。 */
 export const MAX_IMPORT_ENTRY_BYTES = 8 * 1024 * 1024
 /** 上传（编码后）总量：与传输层的 88 MiB 体限是同一层口径，防止一次请求塞进几百 MiB。 */
 export const MAX_IMPORT_TOTAL_BYTES = 32 * 1024 * 1024
+/** 一次导入的条目总数上限：与 `MAX_IMPORT_FILES` 分开算 —— 一个文件里可以有多个条目。 */
 export const MAX_IMPORT_ENTRIES = 2000
+/** 条目名长度上限 64：与技能目录名、文件名的最长合法长度同档。 */
 export const MAX_IMPORT_NAME_LENGTH = 64
 /**
  * 解压后累计上限（与技能上传器 `MAX_UPLOAD_TOTAL_BYTES = 64 MiB` 同层口径）。
@@ -140,6 +147,7 @@ export function isValidImportGroup(group: string): boolean {
   return segs.length > 0 && segs.every((seg) => isValidImportName(seg))
 }
 
+/** 导入目标：一份人设的名字与正文。 */
 export interface PersonaTarget { name: string; bytes: Uint8Array }
 
 /** 人设落点：**只看文件名**（zip 内的目录层级忽略），一个 .md 一个人设；zip 里顺带的非 .md（如附件）忽略。 */
@@ -162,7 +170,9 @@ export function planPersonaImport(entries: RawEntry[]): { targets: PersonaTarget
   return { targets, problems }
 }
 
+/** 一条记忆附件：所属场景 + 名字 + 字节。 */
 export interface MemoryAttachment { name: string; bytes: Uint8Array }
+/** 记忆附件的落点：场景、文件名、正文与附件类型。 */
 export interface MemoryTarget {
   group: string
   name: string

@@ -210,7 +210,7 @@ interface HostWorkspaceRegistry extends RegistryLike {
 	/**
 	 * 官方契约是 `Promise<void>`（dsh-workspace lib/index.js:551-560、types/index.d.ts:224）：
 	 * `enqueueOperation` 的回调无论走早退还是写入分支都不返回值。这里按真实形状声明，
-	 * 免得有人以为能拿它回传的归档集合 —— 0.18.5 之前正是这个误会让用户点「恢复」必报失败。
+	 * 免得有人以为能拿它回传的归档集合 ——原先正是这个误会让用户点「恢复」必报失败。
 	 */
 	unarchiveSession?(sessionId: string): Promise<void>;
 	unarchiveSessions?(target: ArchivedBatchTarget): Promise<{ archivedSessionIds: string[]; unarchivedSessionIds: string[] }>;
@@ -231,7 +231,7 @@ interface SessionsBridge extends ReturnType<typeof createSessionsBridge> {
  * 独立归档门面：消费当前宿主服务，不注册或替换 workspaceRegistry。
  * 外部服务有原生接口时优先委托；官方缺口由受检查的兼容层补齐。
  *
- * 实测边界（2026-09-14，对抗式审查）：现装宿主**没有任何**原生归档扩展接口
+ * 实测边界：现装宿主**没有任何**原生归档扩展接口
  * ——全量 grep `archivedSessionDetails` / `deleteArchivedSessions` / `unarchiveSessions`
  * 均不存在，`@michengai/dsh-archive-manager` 也未安装。因此下面所有
  * `typeof this.registry.X === "function"` 的委托分支在当前环境**都是死代码**，
@@ -257,9 +257,10 @@ interface SessionsBridge extends ReturnType<typeof createSessionsBridge> {
  * 兼容层不拦截官方的 indexHeader，因此不承诺修正外部后端返回陈旧列表的行为。
  */
 /**
- * Compatibility adapter for the official JSONL backend's session-owned layout.
- * A generic locate() path does NOT grant ownership of its parent directory.
- * Unknown backends/layouts keep artifact-only deletion. Do not prune ancestors.
+ * 官方 JSONL 后端「会话自有目录」布局的兼容适配。
+ *
+ * 通用 `locate()` 给出的路径**不**代表它的父目录也归本插件管；后端或布局不认识时只删
+ * transcript 产物，绝不去修剪上级目录。
  */
 function jsonlSessionDirectory(
 	persistence: TranscriptPersistenceLike,
@@ -271,9 +272,9 @@ function jsonlSessionDirectory(
 		location.kind !== "jsonl"
 	)
 		return;
-	// Official JSONL stores its resolved root at construction. Re-resolving a
-	// relative config.root after process.chdir() would point to a different store.
-	// This backend-specific field is optional; only absolute config is a safe fallback.
+	// 官方 JSONL 在构造时就把解析好的根存下来。`process.chdir()` 之后再解析相对的
+	// config.root 会指到另一个存储。这个后端专属字段是可选的；只有**绝对路径**的
+	// config.root 才能当退路。
 	const root = persistence.root ?? persistence.config?.root;
 	if (
 		typeof root !== "string" ||
@@ -289,7 +290,7 @@ function jsonlSessionDirectory(
 	)
 		return;
 	if (typeof header.id !== "string" || header.id.length === 0) return;
-	// Upstream encodes UTF-16 code units as ~XXXX (including lone surrogates).
+	// 上游把 UTF-16 码元写成 ~XXXX（孤立代理项也一样）。
 	const encode = (text: string): string =>
 		text.replace(
 			/[^A-Za-z0-9._-]/g,
@@ -344,8 +345,8 @@ function defaultArchivedAtFile() {
 function defaultWorkspaceSnapshotFile() {
 	return hubPath("history-workspaces.json");
 }
-// Standalone facade over the existing registry. Never instantiate/register a
-// second WorkspaceRegistry, and never open another copy of its storage domain.
+// 套在既有 registry 外面的独立门面：绝不实例化 / 注册第二个 WorkspaceRegistry，
+// 也绝不再打开一份它的存储域。
 var ArchiveWorkspaceRegistry = class {
 	/** 宿主注入的上下文（服务读取按动态面处理，见 `HostContext`）。 */
 	ctx: HostContext;
@@ -443,8 +444,7 @@ var ArchiveWorkspaceRegistry = class {
 			if (!ids.has(id)) { this.archivedAtMap.delete(id); changed = true; }
 		}
 		for (const id of ids) {
-			// Existing entries without a timestamp must get a full retention window,
-			// never be expired using their potentially much older creation time.
+			// 没有时间戳的存量条目要给满一个保留窗口，不能按它可能老得多的创建时间判过期。
 			if (!this.archivedAtMap.has(id)) {
 				this.archivedAtMap.set(id, this.registry.archivedAt?.(id) ?? Date.now());
 				changed = true;
@@ -1007,7 +1007,7 @@ var ArchiveWorkspaceRegistry = class {
 	 * 后续目标并把成功、并发消失和失败分别返回给客户端。
 	 */
 	async deleteArchivedSessions(target: ArchivedBatchTarget) {
-		// 与单删同一条纪律（A3-1）：宿主补上原生批量入口也**先不切换** —— 只上报。
+		// 与单删同一条纪律：宿主补上原生批量入口也**先不切换** —— 只上报。
 		if (typeof this.registry.deleteArchivedSessions === "function") reportNativeDeleteAvailable("deleteArchivedSessions");
 		// 适配路径（无宿主原生批量入口）：在任何会话被删除之前确认整条链路可用。
 		this.bridge.checkWorkspace("delete");
@@ -1109,7 +1109,7 @@ var ArchiveWorkspaceRegistry = class {
 	 * 永久删除一个会话及其全部痕迹（转录目录、工作区记账、归档标记、
 	 * 投影缓存行）。
 	 *
-	 * 级联只删**已归档**的子代理会话（审查 F10）；被保留的未归档子会话 id 通过
+	 * 级联只删**已归档**的子代理会话；被保留的未归档子会话 id 通过
 	 * `keptUnarchivedDescendants` 回给调用方，界面据此如实呈现，不假装整支都没了。
 	 * @param sessionId - 要删除的会话。
 	 * @returns `{ deleted: true }`，有被保留的未归档子会话时附带其 id。
@@ -1133,7 +1133,7 @@ var ArchiveWorkspaceRegistry = class {
 		try {
 			return await this.deleteLocalSession(sessionId, storedIndex);
 		} catch (error) {
-			// Failed deletion must not permanently suppress a still-live session.
+			// 删除失败不能把还活着的会话永久压住（否则它再也不会被列出 / 归档）。
 			// （`clearTombstone` 是**预留位**：宿主无此入口，实际命中的是本插件 bridge guard
 			//  的墓碑 —— 说明见 `cleanupUnknownArchivedSession` 里那一处。）
 			this.getProjectionCache()?.clearTombstone?.(sessionId);
@@ -1168,7 +1168,7 @@ var ArchiveWorkspaceRegistry = class {
 		// 先记录被删生命周期的日志身份：目录删除后头部不可再读，
 		// 冷复用探针（sessionKnown 墓碑分支）靠它区分同 id 的新生命周期。
 		const deletedHeader = this.headers.get(sessionId) ?? live?.header;
-		// Install the barrier BEFORE flush/detach can schedule a final cache put.
+		// 栅栏必须装在 flush / detach 可能排上最后一次缓存写之前。
 		await this.bridge.beginDelete(sessionId, deletedHeader);
 		if (live !== void 0) {
 			// 持久化屏障先行：不能有未落盘的转录写入与目录删除竞争
@@ -1191,7 +1191,7 @@ var ArchiveWorkspaceRegistry = class {
 		await projCache?.whenIdle?.();
 		if (projCache !== void 0) await projCache.delete(sessionId);
 		// 级联只吃已归档的子会话；被保留（未归档）的 id 一路带回 op 层，让界面/模型
-		// 知道「父会话已删，但这一支没有全没」（审查 F10）。
+		// 知道「父会话已删，但这一支没有全没」。
 		const keptDescendants = await this.deleteDescendants(sessionId, storedIndex);
 		await this.cleanSpill(sessionId);
 		await this.removeTranscriptDirectory(sessionId);
@@ -1266,7 +1266,7 @@ var ArchiveWorkspaceRegistry = class {
 			return true;
 		}
 		if (this.deletedSessionIds.has(id)) return this.coldReuseKnown(id);
-		// Refresh from authoritative persistence, not the host's stale header cache.
+		// 从权威持久化刷新，不用宿主那份可能过期的 header 缓存。
 		// 批量删除会传入**批首快照**（同一批里 k 次全库 list() 是纯浪费）；不传就是逐条取新鲜数据。
 		const header = storedIndex !== void 0
 			? storedIndex.get(id)
@@ -1376,10 +1376,8 @@ var ArchiveWorkspaceRegistry = class {
 			const directory = jsonlSessionDirectory(persistence, header, location);
 			if (directory !== void 0) {
 				target = { path: directory, kind: "session directory" };
-				// The configured storage root may itself be an intentional alias, but
-				// project/session links must not redirect recursive deletion elsewhere.
-				// These checks assume trusted, stable storage ancestors; lstat + rm
-				// is not an atomic defense against another process swapping directories.
+				// 配置的存储根本身可能就是有意做的别名，但项目 / 会话链接不得把递归删除引到别处。
+				// 这些检查假定存储祖先可信且稳定：lstat + rm 挡不住另一个进程在中间把目录换掉。
 				for (const path of [dirname(directory), directory]) {
 					let stat;
 					try {
@@ -1452,7 +1450,7 @@ var ArchiveWorkspaceRegistry = class {
 	 * 仅头部标记 `origin: "subagent"` 的会话参与：单凭 `parentSession` 有歧义
 	 *（fork 分支也携带它），而 fork 分支是独立的用户会话，绝不能被级联删除。
 	 *
-	 * **只级联「已归档」的子会话**（2026-09-30 审查 F10）。此前这里只按
+	 * **只级联「已归档」的子会话**。此前这里只按
 	 * `parentSession + origin: subagent` 收集就逐个 `deleteSessionCore`，**完全不查归档集合**，
 	 * 于是「只能删已归档」在**注册表层不成立** —— 删一个已归档父会话，会把它**未归档**的子代理
 	 * 会话一起永久删掉。op 入口那层的收敛（`history-delete` / `deleteArchivedSessions`）拦不住

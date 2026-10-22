@@ -47,6 +47,7 @@ export interface YamlDialectModule {
   load(input: string, options: { schema: unknown }): unknown
 }
 
+/** 补丁方言校验的三种结论：过、解析不了、校验没做成（缺依赖）。 */
 export type PatchVerdict =
   /** 官方那份 schema + 两条断言都过。 */
   | { readonly status: 'ok' }
@@ -55,6 +56,7 @@ export type PatchVerdict =
   /** js-yaml 加载不到：校验没做成（既不是过也不是不过）。 */
   | { readonly status: 'no-dep'; readonly detail: string }
 
+/** 校验没做成的原因：缺 js-yaml，或本插件的副本已落后于宿主。 */
 export type PatchGuardKind = 'no-dep' | 'replica-outdated'
 
 /** 允许写入、但校验没做成时要说出去的事（兼容页一行 + 写入回执一条 warning）。 */
@@ -63,6 +65,7 @@ export interface PatchGuardReport {
   readonly detail: string
 }
 
+/** 写宿主补丁前的裁决：允不允许、报什么、拒绝时给什么错误码。 */
 export interface PatchWriteDecision {
   /** false = 本次写入会把宿主配置写坏，调用方必须中止（原文件与备份保持原样）。 */
   readonly allow: boolean

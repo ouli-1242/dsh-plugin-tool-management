@@ -1675,7 +1675,14 @@
 
         // 更新检查（0.21.2）：只报"有没有与**本宿主**兼容的新版"，不改配置、不自动更新。
         // 与体检结论分开显示：它是一条信息，不是"能不能安全动数据"的一部分。
-        if (updateInfo) {
+        //
+        // `local-ahead` 整行不渲染（用户 2026-10-22 裁定：删掉「本地版本 X 比 registry 上
+        // 兼容的最高版 Y 更新」+「复制安装命令」）。本地比 registry 最高兼容版还新时，
+        // registry 上没有任何**可装**的版本 —— 这句话没有下文可执行；更糟的是右边那颗
+        // 按钮仍然会出来，而它的命令 pin 的是 `bestCompatible`（见 update-check.ts 的
+        // `finish()`：只要 bestCompatible 存在就拼 command），点下去是**降级**。既然这一
+        // 行没有可做的事，就不要占位。
+        if (updateInfo && String(updateInfo.status || '') !== 'local-ahead') {
           const st = String(updateInfo.status || 'unknown')
           // 文案由 `updateStatusText` 一处生成：顶部栏那颗 GitHub 图标点击后说的是**同一句**
           // （见 20 片）。这里只留"语气"这一层判断 —— 有更新时整行标黄。

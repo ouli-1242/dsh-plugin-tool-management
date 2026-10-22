@@ -1,9 +1,9 @@
 // dsh-plugin-tool-management —— 场景绑定提示词 ⇄ 全局基线（`~/.dsh/AGENTS.md`）同步。
 //
-// 用户裁定（2026-09-15）：「切换场景，对应的提示词直接把 AGENTS.md 直接修改」。
+// 用户要求：「切换场景，对应的提示词直接把 AGENTS.md 直接修改」。
 // 因此场景绑定的提示词不再作为提示词段/注入发送，而是**真写全局基线文件**，
 // 与「提示词」页的「应用」走同一条路（覆盖前多代备份到 `prompts/__last-applied__/`）。
-// 例外（2026-09-16）：预设**挂不到**官方 `dsh-agent-instructions` 行时（极简），文件没人读，
+// 例外：预设**挂不到**官方 `dsh-agent-instructions` 行时（极简），文件没人读，
 // 注入通道会拿同一份正文兜底送达（rules 服务的 `promptText()`）。
 //
 // 六个动作会触发同步（调用方在 op 层包一层 `withSync`）：
@@ -27,7 +27,7 @@
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 // 基线快照走原子写（temp + rename）：它是「退出场景时恢复 AGENTS.md」的**唯一依据**，
-// 裸写中断留下半截 JSON 会让 `readBaseline` 解析失败（审查 P2-16）。
+// 裸写中断留下半截 JSON 会让 `readBaseline` 解析失败。
 import { writeFileAtomically } from './memories/index-io.js'
 
 /** 场景侧提示词的只读投影（由 rules 服务的 `rules-list` 提供）。 */
@@ -68,11 +68,12 @@ export type PresetRef =
    *
    * 删除保护要的是 `applied`（用户主动做过这个选择，所以拦住并要求先取消应用）；
    * 播种态那份副本必须放行 —— 拦它没有任何出路（取消应用也关不掉），就是死路
-   * （2026-10-10 用户反馈「当前应用的提示词应该不能删除」，同一次改动里把这条边界钉住）。
+   * （用户反馈「当前应用的提示词应该不能删除」，同一次改动里把这条边界钉住）。
    */
   | { kind: 'file'; applied?: boolean }
   | { kind: 'restore' }
 
+/** 一次提示词同步的结果：改没改、走的是哪条路。 */
 export interface SyncResult {
   /** 刚写进 AGENTS.md 的预设 id。 */
   applied?: string
@@ -87,15 +88,16 @@ export interface SyncResult {
    *
    * 与 `error` 分开，因为两者说的是相反的事：`error` 是「AGENTS.md 没写成」，
    * 这里是「AGENTS.md 写成了，但没有退路」。合成一个字段会让界面把「已切进场景」
-   * 说成「未写入」（2026-09-30 审查 F14）。
+   * 说成「未写入」。
    */
   baselineError?: string
 }
 
+/** 提示词同步的依赖：预设服务、基线文件与场景绑定。 */
 export interface ScenePromptSyncDeps {
   prompts: {
     apply(id: string): Promise<{ ok: true; id: string; backedUp: boolean } | { ok: false; error: string }>
-    // `endChain: false`（0.21.2）：场景退出只是"退回全局"，不是取消应用 —— 链起点
+    // `endChain: false`：场景退出只是"退回全局"，不是取消应用 —— 链起点
     // （进场景之前那份 AGENTS.md）必须留着，用户才能用「取消应用」一键找回它。
     restore(content: string, options?: { endChain?: boolean }): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }>
     getCurrent(): Promise<{ ok: true; content: string; presetId: string | null; exists: boolean } | { ok: false; error: string }>
@@ -113,6 +115,7 @@ interface SceneBaseline {
   content: string | null
 }
 
+/** 提示词同步的对外面：场景进出时驱动 AGENTS.md。 */
 export interface ScenePromptSync {
   /** 按当前场景状态同步全局基线；幂等。 */
   sync(): Promise<SyncResult>
@@ -129,6 +132,7 @@ export interface ScenePromptSync {
   refs(): Promise<Map<string, PresetRef[]> | null>
 }
 
+/** 场景 ↔ `~/.dsh/AGENTS.md` 的同步器：进入场景写入绑定，退出恢复进入前的基线。 */
 export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSync {
   const warn = (message: string): void => { try { deps.logger?.warn?.(message) } catch { /* ignore */ } }
 
@@ -152,7 +156,7 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
   }
 
   /**
-   * 写基线快照。**失败必须让调用方看得见**（2026-09-30 审查 F14）。
+   * 写基线快照。**失败必须让调用方看得见**。
    *
    * 原来这里 catch 后只 `warn` 并返回 void，于是「快照没写成」与「写成了」在调用方眼里
    * 完全一样 —— 结果就是：AGENTS.md 被切到场景态、而退出场景时恢复不回来，用户看到的是
@@ -162,7 +166,7 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
   async function writeBaseline(next: SceneBaseline): Promise<string | null> {
     try {
       await mkdir(dirname(deps.baselineFile), { recursive: true })
-      // 原子写（2026-09-30 审查 P2-16）：裸写在中断/断电时会留下半截 JSON → `readBaseline`
+      // 原子写：裸写在中断/断电时会留下半截 JSON → `readBaseline`
       // 解析失败返回 null → 退出场景**不恢复** AGENTS.md，用户的提示词基线悄悄留在场景态。
       await writeFileAtomically(deps.baselineFile, JSON.stringify(next))
       return null
@@ -258,13 +262,13 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
       content,
     })
     // 基线写不进去 = 退出场景时恢复不回来。**照旧进场景**（那是用户的要求），
-    // 但必须当场说出来，别让用户以为还能退回去（审查 F14）。
+    // 但必须当场说出来，别让用户以为还能退回去。
     if (failed !== null) {
       return `进场景前的提示词基线没能写入（${failed}）：AGENTS.md 已切到场景「${scene}」绑定的预设，但退出场景时恢复不回原来的内容（${deps.baselineFile}）。`
     }
     // 记下来的是**空的**（进场景时 AGENTS.md 就不存在、或读不出来）：退出场景时没有正文
     // 可写回，AGENTS.md 会留在场景态。与「写失败」是两件事，后果一样，同样当场说
-    // （2026-10-15 smoke-test P0-2：这一种此前要等到退出之后，才被误报成「快照损坏」）。
+    // （这一种此前要等到退出之后，才被误报成「快照损坏」）。
     if (content === null) {
       return `进场景前的 AGENTS.md 没有内容可记（文件不存在或读不出来）：退出场景时恢复不回原来的状态，AGENTS.md 会留在场景「${scene}」绑定的预设上。`
     }
@@ -275,7 +279,7 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
     const current = await state()
     if (!current) return { unchanged: true }
     if (drives(current)) {
-      // 基线必须在 `duplicate` 早退**之前**记（2026-10-15 smoke-test P0-2）：早退省的只是
+      // 基线必须在 `duplicate` 早退**之前**记：早退省的只是
       // 「AGENTS.md 不用再写一遍」，不是「不用留退路」。原先这一句在早退之后，于是
       // 「进一个内容已经等于该预设的场景」完全不记基线 —— 退出时恢复不回原内容。
       const baselineError = await captureBaseline(current.scene)
@@ -290,7 +294,7 @@ export function createScenePromptSync(deps: ScenePromptSyncDeps): ScenePromptSyn
     const saved = await readBaseline()
     // 「快照文件在、但读不出来」是**故障** —— 那意味着恢复目标丢了，AGENTS.md 的提示词基线
     // 会悄悄留在场景态。这里曾经一律静默 `unchanged`，用户看到的是"没场景驱动所以什么都没做"
-    // （审查 P2-16）。但两种"没有正文"必须分开（2026-10-15 smoke-test P0-2）：
+    // 。但两种"没有正文"必须分开：
     //   · `saved === null`         → 文件缺失 / 半截 JSON / 解析失败；
     //   · `saved.content === null` → 下面 `writeBaseline({presetId:null, content:null})` 写下的
     //     「没有待恢复基线」哨兵，是**正常终态**（每次正常退出场景之后都会留下它）。

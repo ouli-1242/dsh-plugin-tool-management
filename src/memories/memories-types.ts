@@ -8,6 +8,7 @@ import type { GroupIndexEntry, RuleIndexEntry, SceneIndexEntry } from './index-i
 
 // ── 对外接口 ───────────────────────────────────────────────────────────────
 
+/** 记忆域要的三个根目录：记忆、场景记录、索引侧车。 */
 export interface MemoriesDeps {
   /** 记忆根目录（绝对路径；空串/未提供时按 $DSH_HOME/tool-management/memories 解析）。 */
   memoriesRoot: string
@@ -23,8 +24,8 @@ export interface MemoriesDeps {
   /**
    * 全局 `AGENTS.md` 的**宿主实际读的那一份**（同步返回；拿不到返回 null）。
    *
-   * 为什么必须由外部注入而不是自己 `join(resolveDshHome(), 'AGENTS.md')`（2026-09-30 审查
-   * P2-19）：全局指令的路径在本插件里有**两条独立来源** —— 写侧用宿主文档切片出的 profile
+   * 为什么必须由外部注入而不是自己 `join(resolveDshHome(), 'AGENTS.md')`：全局指令的
+   * 路径在本插件里有**两条独立来源** —— 写侧用宿主文档切片出的 profile
    * home（`ensurePaths()`，见 `index.ts` 的注释「不合并是有意的」），而 `resolveDshHome()`
    * 是 `$DSH_HOME` ‖ `~/.dsh`。两者不同时，去重会拿**另一个文件**去比 → 比对永远不相等 →
    * 同一份预设正文被注入两遍（常驻上下文成本）。所以让调用方把正确路径喂进来，本文件不猜。
@@ -33,18 +34,19 @@ export interface MemoriesDeps {
   /** 场景记忆段预算上限（字节），默认 65536。 */
   maxBytes?: number
   /**
-   * 某个会话的记忆域覆盖（0.21.2）：`scope-overrides.json` 的读取由调用方注入，
+   * 某个会话的记忆域覆盖：`scope-overrides.json` 的读取由调用方注入
    * 本域不自己引 `scope/store.ts` —— 那份侧车有自己的 TTL 缓存，两处各读一份时过期
    * 时刻不同步，界面与注入会各说各话。`undefined` = 没有覆盖 = 全局口径。
    */
   scopeOverrideOf?: (sessionId: string) => MemoryScopeOverride | undefined
 }
 
+/** 一条记忆：正文 + 元数据（场景、顺序、启停、来源）。 */
 export interface Rule {
   id: string
   group: string
   name: string
-  /** 对外契约用 form（与 §7.1 一致）；内部发现用 DiscoveredEntry.kind。 */
+  /** 对外契约用 form；内部发现用 DiscoveredEntry.kind。 */
   form: 'flat' | 'bundle'
   /** 规则文件绝对路径（flat= .md；bundle= <名>.md，旧数据可能是 SKILL.md）。 */
   path: string
@@ -73,6 +75,7 @@ export interface Rule {
   attach?: { count: number; bytes: number; names: string[] }
 }
 
+/** 场景清单里的一行：名字、显示名、顺序、条目数。 */
 export interface GroupRow {
   name: string
   label: string
@@ -127,13 +130,14 @@ export interface ScenePromptProjection {
   duplicate?: boolean
 }
 
+/** 记忆域的对外面：op 表 + 写 op 表。 */
 export interface MemoriesService {
   ops: Record<string, (args: any) => Promise<any>>
   /** 写操作 op 名集合（HTTP 端 WRITE_OPS 由它派生；与 ops 表同文件同源维护）。 */
   writeOps: ReadonlySet<string>
   /**
    * 记忆段文本（`memory-manager-catalog`；注入通道同步取用，见 src/context-inject.ts）。
-   * **读失败抛异常**（2026-09-30 审查 F7）：注入通道据此报 `error` 而不是把"读不动"当成
+   * **读失败抛异常**：注入通道据此报 `error` 而不是把"读不动"当成
    * "用户清空了记忆"，从而不发那条假的「已清空」。界面投影走内部的 `sceneMemory()`（不抛）。
    */
   memoryText: (scope?: MemoryScopeOverride) => string
@@ -156,7 +160,7 @@ export interface MemoriesService {
    */
   promptFiles: (scope?: PromptScopeOverride) => Array<{ path: string; digest: string }>
   /**
-   * 当前 `~/.dsh/AGENTS.md` 的**原文**（同步、带 stat 指纹缓存；0.21.2 第三轮）。
+   * 当前 `~/.dsh/AGENTS.md` 的**原文**（同步、带 stat 指纹缓存）。
    *
    * 只给注入器的首见捕获与"快照 == 当前文件"比对用：解析链不直接读它（那条路走快照）。
    * 读失败抛异常，与 `promptText` 同口径 —— 调用方按"这一轮不捕获 / 不判差异"处理。
@@ -178,7 +182,7 @@ export interface MemoriesService {
   /** 场景档案引擎专用：读 mode/archives/active 切片。 */
   readArchiveSlice: () => Promise<{ mode: ModeState; archives: Record<string, SceneArchive>; active: string[] | null }>
   /**
-   * 某个场景档案里的人设绑定（同步，0.21.2）。
+   * 某个场景档案里的人设绑定（同步）。
    *
    * `undefined` = 档案没定义 `subagents` 段；`[]` = 定义了这一段但一个都没绑。
    * 会话钉住场景时，人设目录与 `subagent_manager_*` 要按它过滤 —— 同步是因为目录的
@@ -186,7 +190,7 @@ export interface MemoriesService {
    */
   sceneSubagentsOf: (scene: string) => string[] | undefined
   /**
-   * 某个场景的**完整档案**（同步，0.21.2）：会话处于场景模式时，场景层按它实时计算
+   * 某个场景的**完整档案**（同步）：会话处于场景模式时，场景层按它实时计算
    * （勾选集 = 该场景下开着的东西）。`undefined` = 没有这份档案 / 读不到 —— 这一层没话说。
    */
   sceneArchiveOf: (scene: string) => SceneArchive | undefined
@@ -200,6 +204,7 @@ export interface MemoriesService {
 
 // ── 内部类型 ───────────────────────────────────────────────────────────────
 
+/** 索引文件的内存形状（版本 + 四张表 + 当前场景 + 模式）。 */
 export interface RulesIndex {
   version: 1
   rules: Record<string, RuleIndexEntry>
@@ -208,9 +213,9 @@ export interface RulesIndex {
   scenes?: Record<string, SceneIndexEntry>
   /** 启用场景集合；`null` / 缺失 = 全部场景启用（默认，保证"丢进去就有用"）。 */
   active?: string[] | null
-  /** 场景档案（设计 §2.1）：每场景可选的 tools/skills/subagents 勾选集，键存在性独立于集合空否。 */
+  /** 场景档案：每场景可选的 tools/skills/subagents 勾选集，键存在性独立于集合空否。 */
   archives?: Record<string, SceneArchive>
-  /** 当前模式（设计 §2.2）：至多一个场景的档案生效；snapshot = 进入时的运行时启停，退出恢复。 */
+  /** 当前模式：至多一个场景的档案生效；snapshot = 进入时的运行时启停，退出恢复。 */
   mode?: ModeState
 }
 
@@ -242,7 +247,7 @@ export interface SceneRecord {
 }
 
 /**
- * 记忆域的**会话层覆盖**（0.21.2）：某个会话与全局不一样的地方。
+ * 记忆域的**会话层覆盖**：某个会话与全局不一样的地方。
  *
  * 只带记忆域用得着的两项 —— 场景与逐条开关。调用方（index.ts）从 `scope-overrides.json`
  * 的 `scene` / `memory` 取，`sessionId` 只用于缓存分桶（不参与渲染）。
@@ -265,13 +270,13 @@ export interface MemoryScopeOverride {
 }
 
 /**
- * 提示词域的**会话层覆盖**（0.21.2）。
+ * 提示词域的**会话层覆盖**。
  *
  * `cwd` 决定项目指令链从哪一级往上找；`scene` 钉住本会话生效的场景；`override` 是
  * 会话级提示词覆盖（自定义正文 / 引用的预设）—— 它取代**用户级那一槽**，项目链仍拼在前面。
  */
 export interface PromptScopeOverride {
-  /** 会话的工作目录；`undefined` = 取不到 → 不带项目链（与 0.21.2 一致）。 */
+  /** 会话的工作目录；`undefined` = 取不到 → 不带项目链。 */
   cwd?: string
   /**
    * 本会话钉住的场景（覆盖表里的 `scene`）：`string` = 钉住它；`null` = 钉住"没有场景"
@@ -293,7 +298,7 @@ export interface PromptScopeOverride {
     content?: string
   }
   /**
-   * 本会话首次被注入器看见时 `~/.dsh/AGENTS.md` 的冻结快照（0.21.2 第三轮）。
+   * 本会话首次被注入器看见时 `~/.dsh/AGENTS.md` 的冻结快照。
    *
    * `undefined` = 还没有快照（捕获失败 / 老装配），解析时退化到当前文件。
    * 空串是有效值：创建时文件为空，这个会话就冻结在"没有全局提示词"。

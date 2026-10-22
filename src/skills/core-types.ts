@@ -221,7 +221,7 @@ export interface WriteOptions {
 /**
  * 回收站恢复选项。
  *
- * `dedupe: true` = 撞名时**退号恢复**（`foo` → `foo-1`，用户 2026-10-14 裁定），缺省撞名即拒。
+ * `dedupe: true` = 撞名时**退号恢复**（`foo` → `foo-1`），缺省撞名即拒。
  * 单独一档而不是并进 `WriteOptions`：这个开关只对恢复有意义，混进写选项里，以后别的写入口
  * 读到它只会以为"撞名可以自动改名"。
  */
@@ -233,7 +233,7 @@ export interface RestoreOptions extends WriteOptions {
 export interface ImportOptions {
   conflict?: unknown;
   dryRun?: unknown;
-  /** 撞名时退号新增（`foo` → `foo-1`）而非跳过 / 覆盖；上传导入恒定带 true（用户 2026-10-15）。 */
+  /** 撞名时退号新增（`foo` → `foo-1`）而非跳过 / 覆盖；上传导入恒定带 true。 */
   dedupe?: unknown;
   renameOptions?: RenameOptions;
 }
@@ -370,7 +370,7 @@ export interface StateSkill {
    *
    * `enabled` 是**赢家**的启用状态（不是本条目的）：赢家被停用时，本条同样不会生效 ——
    * 停用不参与选赢家、停用赢家仍要挡住低优先级副本（见 `listProviderCandidates` 的注释），
-   * 所以「被覆盖」不等于「另一份在跑」。界面据此选文案（2026-09-30 审查 F8）。
+   * 所以「被覆盖」不等于「另一份在跑」。界面据此选文案。
    */
   shadowedBy?: { root: string; name: string; enabled: boolean };
   winner?: boolean;

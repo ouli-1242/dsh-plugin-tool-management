@@ -1,4 +1,4 @@
-// 兼容 / 注入 / 备份域的 HTTP ops（2026-09-19 从 index.ts 的 handlers 表抽出）。
+// 兼容 / 注入 / 备份域的 HTTP ops（从 index.ts 的 handlers 表抽出）。
 //
 // 为什么抽出来：index.ts 的 apply() 闭包里塞了 40 个 op 的内联实现，改一处要在 700 行
 // 的对象字面量里找。这里按域收成一个 `buildCompatOps(deps)` —— 依赖全部显式传参，
@@ -44,6 +44,7 @@ interface CompatRegistryLike {
   capabilities?(force?: boolean): HostAssessment
 }
 
+/** 兼容页 op 的依赖：会话登记表、工具服务与注入设置。 */
 export interface CompatOpsDeps {
   /** 归档/历史注册表；未挂载时 undefined（compat-status 据此报「探测不可用」）。 */
   getSessionsRegistry(): CompatRegistryLike | undefined  /**
@@ -77,7 +78,7 @@ export interface CompatOpsDeps {
   /** 停用表的两个口径（读 TTL 缓存，无 I/O）：整台停用（`*`）的台数 + 单独停用的工具数。 */
   disabledToolSummary(): { servers: number; tools: number; state: 'ok' | 'unknown'; issue: 'corrupt' | 'unreadable' | null }
   /**
-   * 更新检查器（0.21.2）：只读 op `update-status`。未接线时 undefined —— op 回 `unknown`，
+   * 更新检查器：只读 op `update-status`。未接线时 undefined —— op 回 `unknown`
    * 不假装"已是最新"。
    */
   updateChecker?: {
@@ -109,6 +110,7 @@ const CONTRACT_CAPABILITY_IDS: Record<string, string> = {
   'web-admission': 'connection.admit',
 }
 
+/** 兼容页的 op：宿主能力状态、诊断包、更新检查与运行期降级清单。 */
 export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) => Promise<any>> {
   return {
     'compat-status': async (args: any) => {
@@ -166,7 +168,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           unverified: assessment.identity.unverified,
           // 身份校验的说明：不是阻塞项，界面据此解释那一排「无法比较」，而不是留给
           // 用户一句「两份拷贝，去 --fix」。两种来源 —— 宿主在 app.asar 里（桌面版）、
-          // 路径取不到真实形态（realpath 失败，issue #1）。
+          // 路径取不到真实形态（realpath 失败）。
           notes: assessment.identity.notes,
           // 修复指引按实际形态给：`scripts/` 不在 `files` 里，npm 安装形态下没有
           // `scripts/doctor.mjs` 与 `scripts/host-deps.mjs`，指了也跑不了。
@@ -215,7 +217,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
     // 整份不进请求（与 MCP 停用那半边的区别：那些是宿主工具、关掉仍留在表里；这些是
     // 我们自己的工具，关掉两边一起生效）。返回里带分组体积，界面据此显示 ≈token。
     'tool-table': (args: any) => deps.toolTableOp(args),
-    // 功能总览（B6）：**按功能点**回答"现在每一项到底能不能用"，三层合成 ——
+    // 功能总览：**按功能点**回答"现在每一项到底能不能用"，三层合成 ——
     //   ① 装配层（listener / provider / 适配是否真的挂上，来自运行时上报通道）
     //   ② 宿主能力层（compat 探测的路由判定）
     //   ③ 用户配置层（开关 / 令牌 / 场景锁定）
@@ -236,7 +238,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         /**
          * 一行一个功能点：状态三层合成，`detail` 写明依据。
          *
-         * 文案分了两层（2026-09-28 英文界面的总览出现半页中文的整改）：`label` / `detail`
+         * 文案分了两层（英文界面的总览出现半页中文的整改）：`label` / `detail`
          * 仍是服务端中文原文（旧客户端与兜底显示用）；结构化字段供客户端词典出对应语言的
          * 句子 —— **数值归服务端，句子归客户端**：
          *   · `detailKey` / `params` —— note 降级行：客户端按键出模板句（RuntimeNote 同名字段透传）；
@@ -308,7 +310,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         ]
         for (const [noteId, label, tab] of assemblyRows) {
           // 注入通道有**两类**上报：装配失败（`context-injection`）与运行期失败
-          // （`context-injection-runtime`，2026-09-30 P1-8：某域取数抛异常 / 整段注入抛异常）。
+          // （`context-injection-runtime`，P1-8：某域取数抛异常 / 整段注入抛异常）。
           // 合并到同一行 —— 用户关心的是"这条通道现在好不好"，不是"哪一类失败"。
           const note = notes.get(noteId) ?? (noteId === 'context-injection' ? notes.get('context-injection-runtime') : undefined)
           push({
@@ -333,8 +335,8 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           })
         }
         // 用户配置层：注入域 / 令牌 / 场景锁定 / 停用工具数。
-        // 分母必须取自 INJECT_DOMAIN_KEYS：0.14.0 场景与记忆分家后域从 5 个变 6 个，
-        // 写死的「/5」把 6/6 报成 6/5（2026-09-28 用户实测）。
+        // 分母必须取自 INJECT_DOMAIN_KEYS：场景与记忆分家后域从 5 个变 6 个，
+        // 写死的「/5」把 6/6 报成 6/5（用户实测）。
         const domainTotal = INJECT_DOMAIN_KEYS.length
         push({
           key: 'injection-domains', label: '注入域开关', tab: 'compat',
@@ -357,7 +359,7 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         // 停用是用户配置或场景收窄的**事实**，不是故障：功能本身的好坏由上面「工具表可见性」
         // 装配行报（`mcp-tool-visibility` 降级 = 拦截/摘除没装上），这一行只如实陈述停用构成，
         // 状态恒为 ok —— 否则"只开了几台 MCP"的用户会一直看到琥珀，以为出了问题
-        // （2026-09-28 用户裁定：琥珀只留给功能出问题）。
+        // 。
         // 「N 个工具」也说不清整台停用：一条 `*` 通配背后是那台服务器的全部工具，
         // 按条目数报会把 6 台整台停用读成"6 个工具"。两个口径分开说：台数只数 `*`，工具数只数单独停用的条目。
         const disabledPart = disabledTools.servers > 0 && disabledTools.tools > 0
@@ -386,10 +388,10 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         })
         // 工具表按每个请求付钱：这一行回答"这一轮实际发出去多少"。关掉（无论出厂默认还是
         // 用户自己关）都是**配置事实**而非故障 —— 状态恒为 ok，琥珀只留给功能出问题
-        // （口径与 MCP 工具停用一致，2026-09-28 用户裁定）。出厂默认关掉的那几条单说：
+        // （口径与 MCP 工具停用一致）。出厂默认关掉的那几条单说：
         // 那是插件替用户做的一个可逆选择，与用户自己关的分开计数。
         // 说明只保留一句关了多少：省多少 tok、去哪开关、面板不受影响、skill_manager_read
-        // 让位这些次级信息都不上功能总览（正常行一行读完，2026-09-28 用户反馈）；
+        // 让位这些次级信息都不上功能总览（正常行一行读完，用户反馈）；
         // 逐会话的让位差额（index.ts 的 CARRIER_DUPLICATES）在别处自有交代。
         const tableState = await deps.toolTableState()
         const table = deps.toolTableReport()

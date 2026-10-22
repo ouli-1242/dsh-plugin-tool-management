@@ -43,6 +43,7 @@ export interface HostModuleContract {
  * digest 口径，"应用预设"就会**静默失效**（旧正文继续注入），零报错。
  */
 export const AGENTS_MD_REFRESH_PACKAGE = '@deepseek-ai/dsh-agent-instructions'
+/** 上面那套「每步重读」机制的源码记号 —— 少一个就说明官方换了驱动方式。 */
 export const AGENTS_MD_REFRESH_MARKERS: readonly HostContractMarker[] = [
   { needle: 'agentInstructionsHook', why: '每步重读全局 AGENTS.md 的钩子入口' },
   { needle: 'trimmedInstructionDigest', why: '内容同一性 = 去掉首尾空白后的 SHA-1' },
@@ -92,6 +93,7 @@ export const BARE_HOST_MODULE_NAMES: readonly string[] = BARE_HOST_MODULE_CONTRA
  * 检查，是用户在自己翻出孤儿目录之前唯一能知道漂移的办法。
  */
 export const JSONL_LAYOUT_PACKAGE = '@deepseek-ai/dsh-session-persistence-jsonl'
+/** 会话 JSONL 磁盘布局的源码记号（条目形状、文件命名、目录结构）。 */
 export const JSONL_LAYOUT_MARKERS: readonly HostContractMarker[] = [
   { needle: 'session-persistence-jsonl', why: '适配器的后端名门槛' },
   { needle: '_no-cwd', why: '会话头没有 cwd 时落进的桶' },

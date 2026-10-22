@@ -24,6 +24,7 @@ import type {
   SkillSource,
   SkillWarning,
 } from "./core-types.js";
+/** 全部技能来源（官方 / 导入 / DSH 技能 / 人设 / codex / claude / 自定义），按优先级排。 */
 export function userRoots(): SkillSource[] {
   const official = officialSkillRoot();
   return [
@@ -40,16 +41,15 @@ export function userRoots(): SkillSource[] {
       native: true,
       rank: 400,
     },
-    // 官方内置紧随 DSH 技能之后（用户裁定）：同为一眼要看的来源，排在导入技能之前。
+    // 官方内置紧随 DSH 技能之后：同为一眼要看的来源，排在导入技能之前。
     ...(official === null ? [] : [official]),
     {
-      // v0.4：插件**导入/上传**的技能落到 hub 内（用户要求：插件产生的文件收在
+      // 插件**导入/上传**的技能落到 hub 内（用户要求：插件产生的文件收在
       // $DSH_HOME/tool-management/）。rank 高于 DSH 技能，同名时 hub 版本遮蔽官方目录里的；
       // 官方 ~/.dsh/skills/ 仍作为可切换来源列出（不搬走、不删）。
       //
-      // 界面名「导入技能」：它是插件**导入/上传**的落点 —— v0.20.0 及以前新建也落这里，
-      // 2026-10-15 用户裁定「新增技能默认 DSH 技能，导入技能功能才用导入技能目录」后，
-      // 新建改走 DSH 技能目录（见 core.ts 的 createSkill 默认值）。
+      // 界面名「导入技能」：它是插件**导入/上传**的落点 —— 新建不落这里，
+      // 新建走 DSH 技能目录（见 core.ts 的 createSkill 默认值）。
       // 与 dsh 同为默认来源：路径必须读取（不可移除、不可停用），里面的技能可删。
       key: "hub",
       path: join(resolveDshHome(), "tool-management", "skills"),
@@ -96,7 +96,9 @@ export function userRoots(): SkillSource[] {
     },
   ];
 }
+/** 出厂就存在的三个来源 key（`dsh` / `hub` / `official`）；其余来源由状态文件与项目根补上。 */
 export const DEFAULT_SOURCE_KEYS = Object.freeze(["dsh", "hub", OFFICIAL_SOURCE_KEY]);
+/** 是不是内置来源（内置来源不可移除、不可停用，但里面的技能可删）。 */
 export function isDefaultSkillSource(rootOrKey: unknown): boolean {
   const key =
     rootOrKey && typeof rootOrKey === "object"
@@ -104,13 +106,16 @@ export function isDefaultSkillSource(rootOrKey: unknown): boolean {
       : rootOrKey;
   return DEFAULT_SOURCE_KEYS.includes(key as string);
 }
+/** 项目根的稳定短标识（规范化路径的 sha256 前 16 位），用作来源 key 与缓存键。 */
 export function projectIdentity(path: string): string {
   const canonical = pathIdentity(path);
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
+/** 自定义来源的 key：`custom-<路径指纹>`，同一路径永远得到同一个 key。 */
 export function customRootKey(path: string): string {
   return "custom-" + projectIdentity(path);
 }
+/** 从 cwd 向上找最近的 `.git` 所在目录作为项目根；`cwd` 非绝对路径时返回 null。 */
 export async function nearestProjectRoot(cwd: unknown): Promise<ProjectRootProbe> {
   if (typeof cwd !== "string" || !isAbsolute(cwd)) return null;
   let start;
@@ -139,6 +144,7 @@ export async function nearestProjectRoot(cwd: unknown): Promise<ProjectRootProbe
     current = parent;
   }
 }
+/** 项目来源是否可用：与用户技能根重叠的来源要剔掉，否则会绕过用户根的停用策略。 */
 export async function projectSourceSafe(definition: ProjectSource) {
   // 只读来源允许目录链接，但重叠来源会绕过用户根的停用策略。
   if (definition.kind === "project-agents")
@@ -163,7 +169,7 @@ export async function projectSourceSafe(definition: ProjectSource) {
  *
  * 目录缺失 / 是链接 / 读不了，以及点号开头的隐藏条目，一律按「没有」处理 —— 注册一个
  * 没有技能的来源只有噪音：占一个来源位，还会在场景切换时产生「停用 project-dsh:<路径
- * 哈希>」这类只有内部键的提示（用户 2026-10-15 报的）。
+ * 哈希>」这类只有内部键的提示（用户反馈的）。
  */
 async function hasSkillEntry(path: string, mutable: boolean): Promise<boolean> {
   const stat = await lstatOrNull(path);
@@ -187,6 +193,7 @@ async function hasSkillEntry(path: string, mutable: boolean): Promise<boolean> {
   }
   return false;
 }
+/** 由一组会话 cwd 推出项目级技能来源（同一项目根只出一份），重叠 / 异常的记进 `diagnostics`。 */
 export async function projectRoots(
   projectCwds: string[] = [],
   diagnostics?: SkillWarning[],
@@ -264,7 +271,7 @@ export async function projectRoots(
     ];
     for (const candidate of candidates) {
       if (!(await projectSourceSafe(candidate))) continue;
-      // 无技能的项目来源不注册（用户 2026-10-15 裁定）：目录不存在、是链接或底下没有
+      // 无技能的项目来源不注册：目录不存在、是链接或底下没有
       // 一条技能条目时，这个来源对用户不可见也不可用 —— 硬注册出来只会平白占一个来源位、
       // 在场景切换时弹「停用 project-dsh:<路径哈希>」这类只有内部键的提示，而新建技能的
       // 落点也早已不含项目来源（createRoots 只收用户级）。本仓库就没有 .dsh/skills，
@@ -276,23 +283,29 @@ export async function projectRoots(
   }
   return roots;
 }
+/** 插件自己的数据根：`$DSH_HOME/tool-management`。 */
 export function managerHomePath() {
   return join(resolveDshHome(), "tool-management");
 }
+/** 技能状态侧车路径（`skills-state.json`）。 */
 export function managerStatePath() {
   return join(managerHomePath(), "skills-state.json");
 }
+/** 技能回收站根目录。 */
 export function trashRootPath() {
   return join(managerHomePath(), "trash", "skills-trash");
 }
+/** 「DSH 技能」来源的目录（新建技能的默认落点）。 */
 export function dshRootPath(): string {
   // userRoots() 恒含 dsh 来源（见上方列表），断言只为让类型收敛。
   return (userRoots().find((root) => root.key === "dsh") as SkillSource).path;
 }
+/** 新建技能的落点：有「导入技能」来源就落它，否则落 DSH 技能目录。 */
 export function skillCreateRootPath() {
   const hub = userRoots().find((root) => root.key === "hub");
   return hub && hub.path ? hub.path : dshRootPath();
 }
+/** 只读来源上做写操作时统一的拒绝结果（带上被拒的动作名）。 */
 export function readonlyError(action: string): FailureResult {
   return {
     ok: false,
@@ -304,6 +317,7 @@ export function readonlyError(action: string): FailureResult {
         : "该技能来源不允许启用或停用",
   };
 }
+/** 把来源的 key / 对象 / 路径三种入参归一成来源定义；认不出返回 null。 */
 export function rootDefinition(root: RootInput): SkillSource | null {
   if (root && typeof root === "object" && typeof root.key === "string")
     return root;
@@ -311,9 +325,11 @@ export function rootDefinition(root: RootInput): SkillSource | null {
   const resolved = resolve(root);
   return userRoots().find((item) => resolve(item.path) === resolved) || null;
 }
+/** 按 key 查来源定义；不存在返回 null。 */
 export function rootByKey(key: unknown): SkillSource | null {
   return userRoots().find((item) => item.key === key) || null;
 }
+/** 取真实路径；路径不存在时退回原样（只做规范化，不造一个假结果）。 */
 export async function resolvedPath(path: string): Promise<string> {
   try {
     return await fs.realpath(path);
@@ -321,6 +337,7 @@ export async function resolvedPath(path: string): Promise<string> {
     return resolve(path);
   }
 }
+/** 用于「两个路径是不是同一处」的比对路径：逐级解析已存在的祖先，保留尚不存在的尾段。 */
 export async function comparisonPath(path: string): Promise<string> {
   let current = resolve(path);
   const missing: string[] = [];
@@ -335,6 +352,7 @@ export async function comparisonPath(path: string): Promise<string> {
     }
   }
 }
+/** 给定路径是否与任一用户技能根重叠（相同或互为祖先）。 */
 export async function overlapsUserSkillRoot(path: string): Promise<boolean> {
   const candidate = await comparisonPath(path);
   for (const root of userRoots()) {

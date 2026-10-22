@@ -1,11 +1,11 @@
-// 启动期对账框架（0.21.2）。
+// 启动期对账框架。
 //
 // 为什么需要它：插件此前**完全没有启动期对账** —— restoreSnapshot 只有两个调用点，
 // 都在 scene-mode-set 里（archive-engine.ts 的 712 与 297），没有任何 boot 路径。后果是
 // 两类「上个进程没干完」的状态会一直留着：
 //   1. 记忆索引被隔离（memories-index.json 改名成 .corrupt-*）—— 隔离标记只活在进程内
 //      的 corruptIndexes Map 里，重启即清零，而文件已不在原位，于是被当成「全新用户」，
-//      第一次普通写入就把空索引落盘（0.21.2 审查实测）。
+//      第一次普通写入就把空索引落盘。
 //   2. MCP 重启做了一半（阶段 1 停用已落盘、阶段 2 恢复没跑）—— 补丁里留下与「用户主动停用」
 //      完全同形的 disabled: true，无标记可辨、无自愈路径。
 //
@@ -28,6 +28,7 @@ export interface ReconcilerFinding {
   params?: Record<string, unknown>
 }
 
+/** 一个启动期对账器：可重复执行、失败只报不挡启动。 */
 export interface BootReconciler {
   id: string
   label: string
@@ -92,7 +93,7 @@ export async function collectReconcilerFindings(): Promise<ReconcilerFinding[]> 
   }
   return findings
 }
-// ── MCP 重启收尾（0.21.2）───────────────────────────────────────────────────
+// ── MCP 重启收尾───────────────────────────────────────────────────
 //
 // 恢复口径：**重新算，不照抄快照**。重启前状态不在标记里（刻意不存，见 restart-marker.ts 的
 // 文件头），所以从「阶段 1 写之前那份补丁备份」反推 —— writePatch 每次改前都会留一份
@@ -118,6 +119,7 @@ function listPatchBackups(dir: string, level: 'global' | 'project'): Array<{ abs
   } catch { return [] }
 }
 
+/** MCP 重启恢复要的宿主能力：读写补丁行的停用态 + 备份回滚。 */
 export interface McpRestartRecoveryDeps {
   /** 读某个补丁 id 的**当前**生效停用值。 */
   isRowDisabled(id: string, level: 'global' | 'project'): Promise<boolean>

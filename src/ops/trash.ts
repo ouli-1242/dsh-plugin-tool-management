@@ -1,4 +1,4 @@
-// 规则/记忆域的**回收站 ops**（2026-09-19 从 memories/service.ts 的 createMemoriesService 闭包抽出）。
+// 规则/记忆域的**回收站 ops**（从 memories/service.ts 的 createMemoriesService 闭包抽出）。
 //
 // 删除进回收站、从回收站恢复、回收站列出与彻底删除。与记忆正文 ops 分域，
 // 但共用 copyIntoMemoriesTrash 等入口，经 MemoriesOpsCtx 显式传入。
@@ -65,14 +65,14 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
       // 而它是拼进 `join(memoriesRoot, group)` 的那一段 —— 只判类型的话 `../..` 就能把正文写到
       // 记忆根之外（`mkdir({recursive:true})` 还会顺手把目录建出来）。同文件 `rulesTrashList`
       // 一直是有这道判据的（`if (group !== '' && !isValidGroupPath(group)) continue`），
-      // 两条路径口径必须一致（审查 P0-3）。
+      // 两条路径口径必须一致。
       || (manifest.group !== '' && !isValidGroupPath(manifest.group))
     ) {
       return fail('error.rules.notFound', `回收站条目损坏：${trashId}`)
     }
     // 恢复目标已存在（期间用户重建了同名规则）→ 默认拒绝，避免覆盖。
     //
-    // 「同名先问一句」（用户 2026-10-14）：界面上不该静默退号、也不该只丢一句错误让人自己
+    // 「同名先问一句」（用户要求）：界面上不该静默退号、也不该只丢一句错误让人自己
     // 回去改名。所以拒绝时**连候选名字一起回**（`params.next`）—— 弹窗才能如实写出"确认后
     // 会叫 `测（1）`"。用户点确认后带 `dedupe: true` 再来一次，这一次真的按退号的名字恢复。
     //
@@ -99,7 +99,7 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     const groupDir = join(memoriesRoot, manifest.group)
     const denied = await refuseOutsideRoot(groupDir)
     if (denied) return denied
-    // 恢复 = 先复制、后删回收站条目。**复制中途失败必须回滚**（2026-09-30 审查 F11）：
+    // 恢复 = 先复制、后删回收站条目。**复制中途失败必须回滚**：
     // 原来这里 `cp` / `copyFile` 都没有 try/catch，失败时目标留下半份内容、回收站条目仍在，
     // 于是下一次点恢复会撞上面那条「同名记忆已存在」—— 这条记忆**永远恢复不了**，只能人工
     // 去删目录。场景回收站（`sceneTrashRestore`）早有这条回滚（`moveIntoTrash` 反向搬回），
@@ -199,7 +199,7 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
   /**
    * 回收站「详情」（只读）：把一条条目的内容读出来给界面看一眼"删掉的到底是什么"。
    *
-   * 用户 2026-10-12：「回收站的每条信息应该增加一个详情按键，点开就能看这个信息是什么样子，
+   * 用户 ：「回收站的每条信息应该增加一个详情按键，点开就能看这个信息是什么样子，
    * 不能更改内容，没有保存按键」。所以这里**只有读**：不写盘、不改名、不动回收站条目。
    *
    * 为什么是一条跨域的 op 而不是五个域各加一条：五个回收站落在**三套不同的目录布局**里 ——
@@ -245,7 +245,7 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     } catch {
       return fail('error.rules.notFound', `回收站条目不存在：${id}`)
     }
-    // 清单也一并回给界面（用户 2026-10-18：「回收站的详细功能做的不够好，显示的内容不够全，
+    // 清单也一并回给界面（用户 ：「回收站的详细功能做的不够好，显示的内容不够全，
     // 例如场景没有显示勾选了什么」）：场景的档案、记忆的场景 / 形态都在 `manifest.json` 里，
     // 只回文件列表的话，详情页能看到的就只剩"有几个文件"。
     // 读不到 / 坏了就回 null —— 详情页按"只有文件"那一档渲染，不因为清单缺了就整页报错。

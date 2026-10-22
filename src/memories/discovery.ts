@@ -16,13 +16,16 @@ import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowS
 import type { RuleIndexEntry } from './index-io.js'
 import type { Rule, GroupRow, SceneMemoryProjection, RulesIndex, SceneMemoryFile } from './service.js'
 
+/** 路径同一性比较用的归一化键：Windows 大小写不敏感，其余平台原样。 */
 export const identity = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p)
+/** 解析后的 SKILL.md：frontmatter 字段、正文、有没有 frontmatter。 */
 export interface ParsedSkillDoc {
   fields: Array<{ key: string; raw: string }>
   map: Record<string, unknown>
   body: string
   hasFrontmatter: boolean
 }
+/** 扫描发现的一条技能条目（含来源、分组与可加载性）。 */
 export interface DiscoveredEntry {
   id: string
   group: string
@@ -33,6 +36,7 @@ export interface DiscoveredEntry {
   /** 仅 shadowed flat 条目：同名 bundle 优先后被遮蔽（UI 标红）。 */
   shadowed?: boolean
 }
+/** 一次扫描的结果：条目、被同名覆盖的、分组与场景。 */
 export interface DiscoveryResult {
   entries: Map<string, DiscoveredEntry>
   shadowed: DiscoveredEntry[]
@@ -47,6 +51,7 @@ export interface DiscoveryResult {
    */
   complete: boolean
 }
+/** 扫一遍记忆根，返回去重后的条目与被遮蔽的副本。 */
 export async function discover(memoriesRoot: string): Promise<DiscoveryResult> {
   const entries = new Map<string, DiscoveredEntry>()
   const shadowed: DiscoveredEntry[] = []
@@ -102,7 +107,8 @@ export async function discover(memoriesRoot: string): Promise<DiscoveryResult> {
       markIncomplete(`扫描达到上限（目录 ${directories}/${MAX_DIRECTORIES}，条目 ${itemCount}/${MAX_ENTRIES}），索引清理已跳过`)
       break
     }
-    const current = queue[cursor]
+    // 队列只在本轮末尾 push、从不删除，循环条件已保证 cursor < queue.length。
+    const current = queue[cursor]!
     let realDirectory: string
     let dirents: import('node:fs').Dirent[] = []
     try {
@@ -131,7 +137,7 @@ export async function discover(memoriesRoot: string): Promise<DiscoveryResult> {
     // `probeSceneFilesSync`（注入段）同口径。场景 `1` 里一条叫 `1` 的记忆（`memories/1/1.md`）
     // 与「根层的 bundle `1`」在磁盘上同形，认成后者会把整个场景目录吃成叶子：同场景其余
     // 记忆全从列表消失、多出一条「未归属场景」的同名记忆，新建记忆还会被误报「同名 bundle
-    // 遮蔽」（2026-09-16 用户实测）。根层因此没有 bundle，只有 legacy 裸 .md（见 rulesCheck 的 noScene）。
+    // 遮蔽」（用户实测）。根层因此没有 bundle，只有 legacy 裸 .md（见 rulesCheck 的 noScene）。
     if (current.group !== '') {
       const sepIdx = current.group.lastIndexOf('/')
       const parentGroup = sepIdx >= 0 ? current.group.slice(0, sepIdx) : ''
@@ -200,13 +206,17 @@ export async function discover(memoriesRoot: string): Promise<DiscoveryResult> {
   }
   return { entries, shadowed, groups, scenes, warnings, truncated, complete }
 }
+/** 从正文首段派生一句描述（没有正文时返回空串）。 */
 export function deriveDescription(body: string): string {
   const text = String(body ?? '').trim()
   if (!text) return ''
   const heading = /^#\s+(.+)$/m.exec(text)
-  const raw = heading && heading[1].trim() ? heading[1].trim() : text.split(/\r?\n/, 1)[0].trim()
+  const title = heading?.[1]?.trim()
+  const [firstLine = ''] = text.split(/\r?\n/)
+  const raw = title ? title : firstLine.trim()
   return raw.slice(0, MAX_DESCRIPTION_LENGTH)
 }
+/** 从 frontmatter 派生出的展示字段（名字、描述、何时用）。 */
 export interface DerivedFields {
   name: string
   description: string
@@ -215,6 +225,7 @@ export interface DerivedFields {
   globs?: string
   metadata?: unknown
 }
+/** 由文档派生名字、描述、绑定等字段（声明值优先，缺省时从正文推）。 */
 export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): DerivedFields {
   const declaredName = doc.map.name != null && String(doc.map.name).trim() !== '' ? unquote(String(doc.map.name)).trim() : ''
   const name = declaredName || entry.name
@@ -234,6 +245,7 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
   const metadata = doc.map.metadata !== undefined ? doc.map.metadata : undefined
   return { name, description, descriptionDerived, whenToUse, globs, metadata }
 }
+/** 把发现结果投影成注入侧用的规则行（体积、启用状态、场景归属都在这步定）。 */
 export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxEntry: RuleIndexEntry | undefined): Rule {
   // 体积按**正文文件**算（bundle 的附件不计：附件不进注入正文）。一次 stat 一条记忆，
   // 结果随快照的 1s TTL 缓存一起复用；读不到就不带这个字段，别把"不知道"报成 0 B。
@@ -260,6 +272,7 @@ export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxE
   }
   return rule
 }
+/** 把更早版本的记忆目录（`scene-memory` / `rules`）搬进当前的 hub 布局。 */
 export async function relocateLegacyLayout(memoriesRoot: string): Promise<void> {
   const home = resolveDshHome()
   const legacyRoots = [join(home, 'scene-memory'), join(home, 'rules')]

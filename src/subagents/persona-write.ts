@@ -39,7 +39,7 @@ export function serializePersona(args: any): string {
   const byPreset = presetRulesOf(args?.toolsByPreset)
   // 目录注入深度：只在显式给了合法值时写入。默认（1）**不落盘** —— 免得每个新建的人设都
   // 多一行说明"它和默认一样"，也保证老的人设文件回写后逐字节不变。
-  // 入参名兼容三种：catalogDepth（新）、maxDepth / max_depth（0.9.5 定稿前的旧名）。
+  // 入参名兼容三种：catalogDepth（新）、maxDepth / max_depth（旧名）。
   const catalogDepthRaw = args?.catalogDepth ?? args?.catalog_depth ?? args?.maxDepth ?? args?.max_depth
   const catalogDepth = catalogDepthRaw === undefined || catalogDepthRaw === null || String(catalogDepthRaw).trim() === ''
     ? undefined

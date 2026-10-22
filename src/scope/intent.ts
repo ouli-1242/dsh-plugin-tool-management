@@ -1,6 +1,6 @@
 // 全局意图（`hub/scope-intent.json`）—— 把「用户想要什么」与「此刻在跑什么」分开记。
 //
-// ## 为什么需要这一层（0.21.2 会话作用域的核心修正）
+// ## 为什么需要这一层
 //
 // MCP 连接与技能来源启用都是**进程级**的，没有"某个会话的一份"。会话里打开一台全局关着的
 // 服务器时，唯一能让本会话用上它的办法就是把它在全局拉起来。此前「全局开着」只由补丁表示，
@@ -15,7 +15,7 @@
 //     它是**派生**的（从覆盖表 + 场景档案 + 会话清单实时算出），不落盘 —— 落盘就会与会话
 //     删除 / 归档 / 场景改档案这几条路径分叉。
 //
-// 用户裁定（2026-10-20）「仍按租约运行」：全局 off + 有租约 → 连接保持运行，但只有认领的
+// 用户要求「仍按租约运行」：全局 off + 有租约 → 连接保持运行，但只有认领的
 // 会话看得到它；未认领的会话（含新会话）一律按 off。`blocked`（界面上的「彻底停止」）是
 // 唯一的立即停机路径：显式拒绝，压过租约与一切会话层。
 //
@@ -24,7 +24,7 @@
 // 只有它们是"进程级 / 机器级"的资源，没有"某个会话的一份"：
 //   · **MCP 服务器** —— 连接是宿主的；
 //   · **技能来源** —— 启用写在 core 的 `state.json`；
-//   · **单条技能**（0.21.2 补）—— 启停是 core 那张策略表，官方 provider 按进程发布它。
+//   · **单条技能**—— 启停是 core 那张策略表，官方 provider 按进程发布它。
 //     会话里"开"一条全局关着的技能，唯一让它真加载得了的办法就是临时落到那张表上；
 //     不这么做，目录写着有、官方 `skill` 工具必拒（空头承诺）。
 //
@@ -39,9 +39,9 @@ import { isWorkspaceScopeKey, scopeKeyOfRow } from './workspace-key.js'
 export type IntentState = 'on' | 'off' | 'blocked'
 
 /**
- * 有意图这一层的域（0.21.2：MCP 服务器 / 技能来源 / 单条技能）。
+ * 有意图这一层的域：MCP 服务器 / 技能来源 / 单条技能。
  *
- * **冻结**（0.21.2）：这张表被读写四处共用（意图侧车、对账器、快照投影、界面三态）。
+ * **冻结**：这张表被读写四处共用（意图侧车、对账器、快照投影、界面三态）。
  * 运行期往里 push 一个域，等于让其中一处悄悄多认一格、其余三处不认 —— 那种分叉不会抛错，
  * 只会表现为"某一格拨了没反应"。要加域就改这里，四处的类型检查会一起告诉你还差什么。
  */
@@ -151,14 +151,14 @@ export function effectiveLayerOf(
 ): boolean | undefined {
   const over = overrideOf(scope, domain, key)
   if (over !== undefined) return over
-  // 上层闸推导（0.21.2 复核）：显式拨开一条工具 / 技能，就认它所在的整台服务器 / 来源也是开
+  // 上层闸推导：显式拨开一条工具 / 技能，就认它所在的整台服务器 / 来源也是开
   // —— 否则全局后来关掉服务器 / 来源时，这条显式开启会变成"界面开着、模型调不到"。
   // 显式的上层覆盖（含关）压过这条推导，见上一条 `overrideOf`。
   return layeredFlagWithChildren(scope, archive, domain, key)
 }
 
 /**
- * 一条覆盖记录算不算**认领**（0.21.2，归档认领不变式）。
+ * 一条覆盖记录算不算**认领**（归档认领不变式）。
  *
  * 展示侧（`countViewClaims` 的徽章计数）与执行侧（对账器的租约）必须同一口径，
  * 否则会出现两种都很难查的症状：徽章说"还有 2 个对话在用"而资源已经被停掉；
@@ -190,18 +190,19 @@ export interface ClaimScanResult {
   traced: Record<ScopeFlagDomain, Set<string>>
 }
 
+/** 意图对账的输入：哪些会话占着资源、哪些已归档。 */
 export interface ClaimScanInput {
   sessions: Record<string, SessionScope>
   /** 会话清单。`cwd` 用于工作区模式下把会话折到同一个作用域键。 */
   rows: readonly { id: string; archived?: boolean; cwd?: string }[]
-  /** 当前隔离粒度；缺省 = session（0.21.2 行为）。 */
+  /** 当前隔离粒度；缺省 = session。 */
   mode?: ScopeMode
   archiveOf: (scope: SessionScope) => SceneArchive | undefined
   targets: ClaimScanTargets
 }
 
 /**
- * 七域认领扫描（纯函数，0.21.2 第四轮）：一趟扫完"谁在这一格上要它"。
+ * 七域认领扫描（纯函数）：一趟扫完"谁在这一格上要它"。
  *
  * 展示侧（徽章计数）与执行侧（对账租约）此前各写一份扫描（装配层的 `countViewClaims` /
  * `leaseClaimsOf`），口径一旦分叉就会出现两种都很难查的症状：徽章说"还有 2 个对话在用"
@@ -266,7 +267,7 @@ export function scanSessionClaims(input: ClaimScanInput): ClaimScanResult {
     //
     // 全局粒度下**所有**键都要扫（`true`）：那一档没有认领者，但 `traced` 与 `explicit` 仍然
     // 必须如实反映"侧车里被谁动过"。少了它们，对账器在 `adoptExternal` 那一轮会把租约期间
-    // 跑着的资源采纳成"用户全局开过" —— 正是 0.21.2 第四轮修掉的用户报障 A。所以全局粒度
+    // 跑着的资源采纳成"用户全局开过"（用户报障过的错判）。所以全局粒度
     // 只清"认领"（见下面的 activeIds），不清"痕迹"。
     const eligible = mode === 'global'
       ? true
@@ -358,7 +359,7 @@ export interface ReconcileRow {
    */
   explicitClaims: number
   /**
-   * 侧车里有没有**会话痕迹**（0.21.2 第四轮）：任一未过滤的会话（含归档 / 孤儿）在这一格上
+   * 侧车里有没有**会话痕迹**：任一未过滤的会话（含归档 / 孤儿）在这一格上
    * 的有效层为 true。`undefined` = 调用方没给（`scope-set` 之后的普通对账不需要它）。
    *
    * 只对"采纳外部改动"那一条分支有意义：把运行态读成"用户全局开过"之前，先看这一格是不是
@@ -376,6 +377,7 @@ export interface ReconcileDecision {
   runningNext?: boolean
 }
 
+/** 意图对账的选项：是否只预览、是否回写。 */
 export interface ReconcileOptions {
   /**
    * 采纳"外部对运行态的改动"（用户手改补丁 / 官方页面改了来源 / 全局场景引擎刚应用完）。
@@ -410,7 +412,7 @@ export function planReconcile(rows: readonly ReconcileRow[], opts: ReconcileOpti
     } else if (intent === 'off') {
       // 外部把运行态打开了（手改补丁 / 官方页面 / 全局场景）：没有租约、**也没有会话痕迹**时以它为准。
       //
-      // 痕迹闸门（0.21.2 第四轮）：会话里打开一台全局关着的资源会把运行态拉起来（那是在租约里），
+      // 痕迹闸门：会话里打开一台全局关着的资源会把运行态拉起来（那是在租约里）
       // 重启后认领可能整批落空 —— 会话已归档（归档不占资源）、已删除（孤儿条目还没清）、
       // 或启动时工作区表还没恢复全（清单半冷），任何一条都会让 claims 落成 0。此时若照抄运行态，
       // 那次**会话级**开启就被读成了"用户全局开过"，别的会话从此都看得见它（用户报障 A）。

@@ -1,33 +1,23 @@
 /**
- * Host capability probe — the single place that decides what this plugin may
- * do to the running host's data, and why not when it may not.
+ * 宿主能力探测 —— 唯一决定「本插件可以对运行中的宿主做什么、以及为什么不能」的地方。
  *
- * WHY THIS REPLACES THE TEXT-COMPARISON GATE
- * ------------------------------------------
- * The previous gate in `sessions/bridge.ts` compared each host method against
- * this plugin's own copy of the official prototype with
- * `Function.prototype.toString()`. That only ever answered one question —
- * "is the host running the same release I was written against?" — and it
- * answered it with a hard throw, so a harmless upstream refactor disabled
- * whole features. It also quietly assumed the plugin and the host load two
- * *different* copies of the same package.
+ * 为什么不用文本比对做闸门
+ * ------------------------
+ * `sessions/bridge.ts` 曾经拿每个宿主方法与本插件自己那份官方原型做
+ * `Function.prototype.toString()` 比对。它只能回答一个问题 ——「宿主跑的是不是我写代码时
+ * 那一版」—— 而且用硬抛错回答，于是一次无害的上游重构就能关掉整片功能。它还默认了插件与
+ * 宿主加载的是**两份不同**的同名包。
  *
- * The durable questions are different:
+ * 真正稳定的是另外三个问题：
  *
- *   - IDENTITY: do the plugin and the host share the same physical module?
- *     (If yes, `===`, `instanceof` and symbol lookups cross the boundary and
- *     every "same implementation" concern disappears. Missing identity is a
- *     deployment defect, reported as such, not something to guess around.)
- *   - PRESENCE: does the live host object expose the members the adapter
- *     calls? Members are checked as live values with their shape, because a
- *     host may have been upgraded, proxied, or replaced wholesale.
- *   - BEHAVIOUR: for anything that can be observed without mutating host
- *     state, call it and look at the result — a getter that no longer returns
- *     a Map is a fact, a version string is a hint.
+ *   - 身份：插件与宿主是不是同一个物理模块？是则 `===`、`instanceof`、symbol 查找都跨得过
+ *     边界，「是不是同一份实现」这个疑问整体消失。身份不成立是部署缺陷，如实报出来，不绕。
+ *   - 存在：活宿主对象上有没有适配器要调的那些成员？按活值与形状检查 —— 宿主可能被升级、
+ *     代理或整体替换过。
+ *   - 行为：凡是不改宿主状态就能观察的，调一次看结果 —— getter 不再返回 `Map` 是事实，
+ *     版本号只是线索。
  *
- * Every answer is reported per capability instead of collapsing into one
- * boolean, so a caller can degrade exactly the feature that lost support and
- * leave the rest working.
+ * 结论按**能力**逐项报告，不压成一个布尔值：调用方可以只降级失去支持的那一项，其余照常。
  */
 
 import { createRequire } from 'node:module'
@@ -63,7 +53,7 @@ import type {
   HostContractStatus,
 } from './probe-types.js'
 
-// 宿主安装根的发现与「该走哪条恢复路」的判定 2026-10-01 整段搬到 ./host-roots.js，正文一字
+// 宿主安装根的发现与「该走哪条恢复路」的判定 整段搬到 ./host-roots.js，正文一字
 // 未改（moved-verify 逐字对拍）。probe.js 的公开面照旧：搬走的那 12 件全部从这里再出口 ——
 // index.ts / ops/compat.ts / sessions/bridge.ts 都按 ./compat/probe.js 引它们，少一件 equiv
 // 对拍就报「导出面丢失」。
@@ -105,14 +95,12 @@ export type {
   HostContractStatus,
 } from './probe-types.js'
 
-/** Packages whose physical module identity matters to this plugin. */
-
 /**
  * 本插件是不是从**源码检出**跑起来的（仓库里那份，`scripts/host-deps.mjs` 就躺在旁边）。
  *
  * 用来决定「两份拷贝」那条阻塞项给什么修复指引：`scripts/` 不在 `package.json` 的
  * `files` 里（发布形态本就不该带开发者脚本），所以 npm 装出来的用户照那条指引去跑
- * 只会拿到 `MODULE_NOT_FOUND` —— 这是 issue #1 的次要问题之一。指引必须按实际形态给。
+ * 只会拿到 `MODULE_NOT_FOUND`。指引必须按实际形态给。
  */
 const SOURCE_INSTALL = existsSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'host-deps.mjs'))
 
@@ -129,21 +117,19 @@ export function isSourceInstall(): boolean {
  * `>=0.2.1-rc.2` 匹配不了 `0.2.2-rc.1`，`^0.2.1-rc.2` 也匹配不了它 —— 范围只能**逐段写**，
  * 一代一段。
  *
- * 但「逐段写」不等于「把历史各代累积起来」。2026-10-22 修正：此前每适配一代新 rc 就**追加**
- * 一段，范围于是长成 `0.1.7 || 0.2.0 || 0.2.1` 三代并集，等于向 npm 声明「0.21.2 支持
- * 0.1.7-rc.2 起的每一代」。而 0.21.0 起本插件的代码是按 0.2.1 的契约写的（SubagentStartRequest、
- * 身份比对、`connection.admit` 这几处都动过会静默改行为的语义），在 0.2.0 / 0.1.7 上从未验证。
- * 那种声明最坏的后果不是"装不上"，而是"装上了、大部分能用、某几个动作悄悄失效"—— 用户无法
- * 判断是插件问题还是版本问题。
+ * 但「逐段写」不等于「把历史各代累积起来」。累积成 `0.1.7 || 0.2.0 || 0.2.1` 三代并集，
+ * 等于向 npm 声明「支持 0.1.7-rc.2 起的每一代」。而本插件的代码只按 0.2.1 的契约写过
+ * （SubagentStartRequest、身份比对、`connection.admit` 这几处都动过会静默改行为的语义），
+ * 在 0.2.0 / 0.1.7 上从未验证。那种声明最坏的后果不是"装不上"，而是"装上了、大部分能用、
+ * 某几个动作悄悄失效"—— 用户无法判断是插件问题还是版本问题。
  *
  * 所以现在**只声明当前适配的这一代**。旧宿主不是没人管：插件的老版本自己带着老范围，用户装
- * 对应版本即可（`dsh plugin add dsh-plugin-tool-management@0.16.6`）。装上被拒 + 一版新适配，
+ * 对应版本即可（`dsh plugin add dsh-plugin-tool-management@<老版本号>`）。装上被拒 + 一版新适配，
  * 优于装上然后部分功能悄悄失效。
  *
  * 上界**必须写**（`<0.2.2`）：`^` 不能用，它的隐含上界是 `<0.3.0`，而 `0.2.1-rc.2` 这个已适配
  * 版本自己都满足不了 `^0.2.1-rc.2`（prerelease 只在同元组比较器带 prerelease 时才匹配）。
  *
- * 2026-09-30 审查 §5 F9 + §5.4：这一段此前与 `package.json` 的 peerDependencies **漂移**成
  * 两种写法（这里是 `^` 三段、那里是 `>=` 两段，且下界不同）。现在两处是**同一个字符串**，
  * 并由 `test/contracts.test.mjs` 的断言钉住 —— 漂移会让"界面/doctor 报的范围"与"安装期实际
  * 校验的范围"各说各话，而两者都自称是插件的兼容范围。同一条断言现在还钉住「只有一段」，
@@ -157,36 +143,23 @@ export function isSourceInstall(): boolean {
  * 0.2.1-rc.2 已实测通过：`assessHost` 全通过，宿主版本读得出来。
  */
 export const EXPECTED_PEER_RANGE = '>=0.2.1-rc.2 <0.2.2'
-/** The release this plugin's adapters were last verified against. */
 /**
  * peer range 的下界。仍从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
  *
  * 范围收窄到一代之后它**与 VERIFIED_HOST_VERSION 重合**（都是 0.2.1-rc.2）—— 这是正确的：
  * 适配的那一代就是唯一允许安装的那一代。保留这个导出是因为它进了 `compat-status` 的载荷，
  * doctor 与外部脚本可能仍在读；语义仍是"最早支持哪一代"，只是现在只有一代。
- *
- * 2026-09-29 起**不再出现在界面上**（用户裁定：删掉「最低要求 ≥ …」那一行 —— 它是安装期
- * 门槛，摆在"当前宿主"卡片下面会被读成对当前宿主的断言）。保留此导出是因为它进了
- * `compat-status` 的载荷，doctor 与外部脚本可能仍在读。
  */
 export const EXPECTED_MIN_HOST_VERSION =
   EXPECTED_PEER_RANGE.match(/(\d+\.\d+\.\d+(?:-rc\.\d+)?)/)?.[1] ?? VERIFIED_HOST_VERSION
 
 /**
- * The capability sets each operation depends on, grouped by how the plugin
- * reaches the same outcome when a member is missing. Order matters: the first
- * viable route wins.
+ * 单项能力的结论。
  *
- * - `native`: host entry points that already implement the whole operation.
- * - `adapter`: the checked compatibility adapter (the only route that touches
- *   private members), used when the host has no native entry.
- */
-
-/** Texts a user can act on, per capability, when it is the reason for a refusal. */
-
-/**
- * One capability's result. `target` is the live host object; `reference` is
- * this plugin's copy of the same implementation when the package is importable.
+ * @param spec 能力规格（要求的方法、字段与额外探针）
+ * @param target 活宿主对象
+ * @param reference 插件侧同实现的副本；包不可解析时为 undefined
+ * @returns 该项能力的结论；探测内部失败记为 finding，不抛错
  */
 function inspectCapability(spec: CapabilitySpec, target: Target, reference: Record<string, unknown> | undefined): CapabilityFinding {
   const base = {
@@ -237,7 +210,7 @@ function inspectCapability(spec: CapabilitySpec, target: Target, reference: Reco
       return { ...base, state: 'shape-mismatch', detail: failure, missing: [], ...(textMatch === undefined ? {} : { textMatch }) }
     }
   }
-  // 删除类收紧（2026-09-19，07 审查五档问题 2）：textMatch === false 意味着宿主运行的
+  // 删除类收紧：textMatch === false 意味着宿主运行的
   // 不是本插件适配并验证过的实现（参考副本与宿主同源时恒真 —— junction 同物理文件；
   // 只有宿主升级/漂移才会 false）。读/写类维持「按能力使用」的宽口径，但删除不可逆：
   // 漂移的 flush/detachEntered/announce/deleteSession 一律不盲调，路由降级 adapter 或
@@ -271,52 +244,46 @@ function inspectCapability(spec: CapabilitySpec, target: Target, reference: Reco
 }
 
 /**
- * Capability ids whose absence is a routing fact rather than a failure: the
- * plugin substitutes its own implementation. They never appear as degraded and
- * never block a route.
+ * 「缺失只影响走哪条路、不算故障」的能力 id：插件自己有一份实现顶上。它们既不出现在降级
+ * 清单里，也不挡任何路。
  *
- * Superseded by {@link CapabilityFinding.optional}, which marks the same fact on
- * the finding itself (the UI and the doctor both read that flag). Kept as the
- * exported id list so callers can ask "which slots does the plugin itself back?"
- * without duplicating the table.
+ * 同一个事实在 {@link CapabilityFinding.optional} 上也有（界面与 doctor 都读那个标记）；
+ * 这里保留导出是为了让调用方问「哪些槽位是插件自己顶的」而不必复制整张表。
  */
 export const SUBSTITUTED_CAPABILITIES: readonly string[] = CAPABILITY_SPECS
   .filter((spec) => spec.optional === true)
   .map((spec) => spec.id)
 
-/** Where a capability's members must live, for a host that is not running. */
+/** 宿主没在跑时，某项能力的成员必须落在哪里。 */
 export interface CapabilityStaticCheck {
   readonly pkg: string
   readonly target: string
   readonly members: readonly string[]
 }
 
-/** One row of the static view of the capability table. */
+/** 能力表静态视图的一行。 */
 export interface CapabilityStatic {
   readonly id: string
   readonly label: string
   readonly kind: 'read' | 'write' | 'delete'
   readonly optional: boolean
-  /** `null` = checkable only against a live instance (instance fields / behaviour dry-run). */
+  /** `null` = 只能对活实例查（实例字段 / 行为 dry-run）。 */
   readonly check: CapabilityStaticCheck | null
 }
 
 /**
- * The capability table as a *static* view: for each spec, the official class
- * whose prototype must carry the required members. This exists so a CLI without
- * a running host (the doctor) can still answer "can this build archive / delete /
- * list?".
+ * 能力表的**静态**视图：每一项给出"必须由哪个官方类的原型承载这些成员"。存在的理由是没有
+ * 活宿主的 CLI（doctor）也要能回答「这一份构建能不能归档 / 删除 / 列出」。
  *
- * Derived from {@link CAPABILITY_SPECS} — the previous hand-written second table
- * drifted silently: it carried 9 of the 15 ids and missed every `sessions.*` and
- * native-slot capability the routing actually needs.
+ * 全部由 {@link CAPABILITY_SPECS} 派生。手写第二张表必然漂移：漏掉一半 id、漏掉所有
+ * `sessions.*` 与路由真正依赖的原生槽位，而它自己不会报错。
  */
 export const CAPABILITY_STATIC: readonly CapabilityStatic[] = CAPABILITY_SPECS.map((spec) => {
   const ref = OWNER_CLASSES[spec.owner]
   const methods = spec.methods
   // `staticWhen` 是"这一轮能不能静态检查"的门槛。它说不的时候，`check` 必须是 null ——
    // 否则 doctor 会从插件锚点解析一个本插件不依赖的包，然后把"解析不到"写成"宿主缺失"
-   // （2026-10-17 `connection.admit` 的误报正是这条路径）。null 让它落到 `runtime-only`：
+   // （`connection.admit` 的误报正是这条路径）。null 让它落到 `runtime-only`：
    // 「只能对活的宿主查」是事实，"missing" 不是。
   const checkableByStaticView = spec.staticWhen === undefined || spec.staticWhen()
   return {
@@ -324,8 +291,8 @@ export const CAPABILITY_STATIC: readonly CapabilityStatic[] = CAPABILITY_SPECS.m
     label: spec.label,
     kind: spec.kind,
     optional: spec.optional === true,
-    // A `fields`-only spec (instance Maps) and a spec whose judgement lives in
-    // its `probe` have nothing a prototype can answer — they stay runtime-only.
+    // 只认 `fields`（实例 Map）的规格、以及判据落在 `probe` 里的规格，原型上问不出东西
+    // —— 它们只能留在运行期查。
     check: checkableByStaticView && ref !== undefined && methods !== undefined && methods.length > 0
       ? { pkg: ref.pkg, target: ref.target, members: methods }
       : null,
@@ -333,14 +300,13 @@ export const CAPABILITY_STATIC: readonly CapabilityStatic[] = CAPABILITY_SPECS.m
 })
 
 /**
- * Inspect the live host behind one plugin context.
+ * 探测一个插件上下文背后的活宿主。
  *
- * Everything is read-only: the only host code paths touched are getters and
- * `requireState()`/`requireTable()`, both of which the plugin already calls on
- * every list request. A failure inside a probe is a finding, never a throw.
+ * 全程只读：只碰 getter 与 `requireState()`/`requireTable()`，而这两类本插件在每次
+ * 列表请求里本来就会调。探测内部失败记成 finding，绝不抛错。
  *
- * @param ctx - the plugin's cordis context.
- * @returns the assessment snapshot surfaced to the UI, the tools and the log.
+ * @param ctx 插件的 cordis 上下文（只用到 `get` 与几个可选服务字段）
+ * @returns 交给界面、工具与日志的评估快照
  */
 export function assessHost(ctx: {
   get?: (name: string) => unknown
@@ -357,7 +323,7 @@ export function assessHost(ctx: {
     }
   }
 
-  // Cordis exposes traceable proxies; compare and inspect the original objects.
+  // cordis 暴露的是可追踪代理，比对与检查都要落在原始对象上。
   // `Symbol.for('cordis.original')` 与 cordis 导出的 `symbols.original` 是**同一个符号**
   // （该包内即 `original: Symbol.for("cordis.original")`）。这里不 import cordis，是为了让
   // 兼容探测在宿主包加载失败时仍能工作 —— 本文件对宿主零硬依赖（见文件头的 createRequire）。
@@ -408,7 +374,7 @@ export function assessHost(ctx: {
     return inspectCapability(spec, slot.target, slot.reference)
   })
 
-  // Identity: is the plugin loading the same physical modules the host runs?
+  // 身份：插件加载的是不是宿主正在跑的那几个物理模块？
   const modules: Record<string, string | null> = {}
   const sameAsHost: Record<string, boolean | null> = {}
   const blockers: string[] = []
@@ -439,13 +405,12 @@ export function assessHost(ctx: {
       unverified.push(name)
       continue
     }
-    // Resolve the same name from the host installation's own anchor, then
-    // compare PHYSICAL files: a junction is the same module, not a copy.
+    // 用宿主安装自己的锚点再解析同一个名字，然后比**物理文件**：junction 是同一个模块，
+    // 不是一份拷贝。
     //
-    // 逐包解析、逐包取真实形态。realpath 的**机制**确实整轮不变，但上一版曾把
-    // 这句话错写成连**解析结果**一起复用：第一个包（cordis）的宿主侧入口路径被当成
-    // 其余五个包的宿主侧路径，于是五条全部比成「与 cordis 不同」→ 假「两份不同拷贝」
-    // （官方桌面版 0.2.0-rc.2 实测，2026-09-30；解析本就便宜，节点自身还有缓存）。
+    // 逐包解析、逐包取真实形态。**机制**整轮只做一次，但**解析结果**必须逐包算：
+    // 复用第一个包（cordis）的宿主侧入口路径，会让其余五个包全被比成「与 cordis 不同」，
+    // 得出「两份不同拷贝」的假结论（官方桌面版实测）。解析本身不贵，node 自己也有缓存。
     let hostResolved: string | null = null
     let hostRealpath: { path: string } | { reason: string } | null = null
     try {
@@ -455,7 +420,7 @@ export function assessHost(ctx: {
       hostResolved = null
     }
     // 真实形态取不到 → 这一格是「比不了」，不是「两份拷贝」。理由如实上报，
-    // 绝不把路径问题说成模块问题（issue #1 的次要问题之二）。
+    // 绝不把路径问题说成模块问题。
     if (hostRealpath !== null && 'reason' in hostRealpath) {
       sameAsHost[name] = null
       hostRealpathNote = hostRealpathNote ?? hostRealpath.reason
@@ -489,7 +454,7 @@ export function assessHost(ctx: {
     if (same === false) {
       // 指引按**实际形态**给：`scripts/host-deps.mjs` 只存在于源码检出里
       // （`files` 不含 `scripts/`，npm 安装形态下没有这个文件），
-      // 发布形态照那条指引去跑必然 `MODULE_NOT_FOUND` —— issue #1 的次要问题之一。
+      // 发布形态照那条指引去跑必然 `MODULE_NOT_FOUND`。
       blockers.push(
         SOURCE_INSTALL
           ? `${name}：插件与宿主加载的是两份不同拷贝（在插件源码目录运行 node scripts/host-deps.mjs --fix）`
@@ -519,16 +484,13 @@ export function assessHost(ctx: {
     })
   }
 
-  // Degraded = something is genuinely unavailable. Optional slots are excluded:
-  // their absence selects the adapter route and leaves the feature fully
-  // working, so listing them here would tell the user a working feature is
-  // broken (and, with the destructive wording, that its buttons are disabled).
+  // 降级 = 确实用不了。可选槽位不算：它们缺席只是选中适配器路线，功能照常可用；
+  // 列进降级会让用户以为好用的功能坏了（再配上"不可用"的措辞，还会以为按钮被禁掉）。
   const degraded = findings.filter((finding) => finding.state !== 'ok' && finding.optional !== true)
-  // Deletion is possible when SOME route reaches it. The optional native
-  // delegate slots (`workspace.delete-native`, `workspace.unarchive-native`,
-  // `workspace.batch-native`) are expected to be ABSENT on hosts whose official
-  // API lacks those entry points — that absence selects the adapter route, it
-  // does not mean deletion is impossible.
+  // 只要**有一条**路走得到，删除就是可行的。那几个可选的原生委派槽位
+  // （`workspace.delete-native` / `workspace.unarchive-native` /
+  // `workspace.batch-native`）在官方 API 没有对应入口的宿主上本就该缺席 ——
+  // 缺席只是选中适配器路线，不等于删除做不了。
   const delta = routeFor({ findings }, 'delete').via !== 'none'
   return {
     identity: {
@@ -588,12 +550,10 @@ function hostContractStatus(hostRoot: string | null): HostContractStatus | null 
 }
 
 /**
- * The `@deepseek-ai` directory of the DSH installation this plugin is attached
- * to, derived from where a shared package physically lives.
+ * 本插件所挂的那个 DSH 安装的 `@deepseek-ai` 目录，从某个共享包的物理位置推出来。
  *
- * Anchoring on the resolved entry rather than on `require.resolve('@deepseek-ai/dsh')`
- * matters: the plugin never imports the `dsh` app package, so it need not be
- * resolvable from the plugin at all — only the shared libraries are.
+ * 锚在**已解析的入口**上而不是 `require.resolve('@deepseek-ai/dsh')` 上：插件从不 import
+ * `dsh` 应用包，它本来就不必对插件可解析 —— 可解析的只有那些共享库。
  *
  * 注意 pnpm：这里在 `.pnpm/<name>@<ver>/node_modules/` 布局下会返回**该包的隔离目录**
  * （那也是一个 `node_modules/@deepseek-ai`）。它本身不是问题 —— node 的解析会继续向上走到
@@ -610,7 +570,7 @@ function hostPackageRoot(): string | null {
 /**
  * 宿主 `@deepseek-ai` 目录的**候选序列**（按优先级）—— 全仓"宿主在哪"的唯一口径。
  *
- * 为什么单独导出（2026-09-30 审查 §5 F10）：运行时（本文件）与 `scripts/doctor.mjs` /
+ * 为什么单独导出：运行时（本文件）与 `scripts/doctor.mjs` /
  * `scripts/host-deps.mjs` 此前**各写一份**，而且顺序不一样 —— doctor 少了桌面版那一条，
  * 于是在桌面宿主上要么报 "host installation not found"，要么拿 npx 缓存里**另一代宿主**
  * 当锚点比出假 SEPARATE COPY。那正是本文件注释里记过的实测事故，只修了运行时。
@@ -640,7 +600,7 @@ function hostPackageRoot(): string | null {
  * 不起子进程，读不到就当没有这批候选。
  */
 
-/** Human-readable summary line for logs and the settings page header. */
+/** 给日志与设置页标题用的一行摘要。 */
 export function summarize(assessment: HostAssessment): string {
   const total = assessment.findings.length
   const ok = total - assessment.degraded.length
@@ -648,24 +608,9 @@ export function summarize(assessment: HostAssessment): string {
   return `宿主 ${assessment.identity.version} · 能力 ${ok}/${total} · ${state}`
 }
 
-/** Findings by id, for route decisions. */
-
-/** Refusals for every degraded capability in the list, in list order. */
-
 /**
- * Choose how one operation should reach the host.
- *
- * Never silently falls back from a partially available route into a destructive
- * one: a route is chosen only when every capability it needs is `ok`.
- *
- * @param assessment - latest host assessment.
- * @param operation - operation name from {@link OPERATION_ROUTES}.
- * @returns the route to take plus, when `none`, what is missing and why.
- */
-
-/**
- * The error a refused operation throws. Kept as a distinct class so callers can
- * tell "the host cannot do this safely" from "the operation failed".
+ * 被拒绝的操作抛出的错误。单独一个类，是为了让调用方能区分「宿主做不了这件事」与
+ * 「操作本身失败了」。
  */
 export class CapabilityRefusalError extends Error {
   readonly operation: string
@@ -683,7 +628,7 @@ export class CapabilityRefusalError extends Error {
   }
 }
 
-/** Throw unless the assessment allows the operation through some route. */
+/** 评估结果不给路就抛错；给了就返回那条路由决策。 */
 export function requireRoute(assessment: Pick<HostAssessment, 'findings'>, operation: OperationName): RouteDecision {
   const decision = routeFor(assessment, operation)
   if (decision.via === 'none') throw new CapabilityRefusalError(operation, decision.refusals)

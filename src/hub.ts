@@ -1,6 +1,6 @@
-// dsh-plugin-tool-management —— 统一数据目录（v0.4「一个 hub」，v0.9.0 名称按域对齐）。
+// dsh-plugin-tool-management —— 统一数据目录（所有域的数据收在同一个 hub 下，名称按域对齐）。
 //
-// 用户在 2026-09-13 提出：插件产生的文件夹/文件全部收在 `$DSH_HOME/tool-management/`
+// 用户在 提出：插件产生的文件夹/文件全部收在 `$DSH_HOME/tool-management/`
 // 一个目录里，方便统一备份与查看。此前它们散在四处：
 //
 //   $DSH_HOME/scene-memory/                记忆真源            → tool-management/memories/
@@ -8,7 +8,6 @@
 //   $DSH_HOME/subagents/                   人设                → tool-management/subagents/
 //   <插件目录>/data/agents-md-presets/     AGENTS.md 预设库     → tool-management/prompts/
 //
-// 2026-09-16 用户又提出两点：① 根目录下还漏着几个以插件名开头的侧车与日志（`$DSH_HOME/
 // dsh-plugin-tool-management-*.json` / `.log`）+ 改 MCP 配置前的 patch 备份，都该收进 hub；
 // ② hub 内的名字要与**当前代码的域命名**一致（界面「提示词」+ 工具 `prompt_manager_*`，
 // 目录却叫 `agents-md`；域早就叫「记忆」，索引还叫 `rules-index.json`）。于是统一为：
@@ -26,7 +25,7 @@
 //   ├─ backups/cordis.patch.yml.bak-<时间戳>             改宿主 patch 前的备份
 //   ├─ trash/{skills,subagents,prompts,scenes,memories}-trash/<id>/  回收站（六类）
 //
-// 六类回收站的落点已统一在 `trash/` 下（2026-10-10 起；记忆此前在 hub 根的 `memories-trash/`，
+// 六类回收站的落点统一在 `trash/` 下（记忆这一类原先在 hub 根的 `memories-trash/`，
 // 由启动迁移并入 —— 见 `HUB_RENAMES`）。
 // 但**记忆那一类仍不经本模块的 `moveToTrash`**：它走 `memories/service.ts` 自己的路径
 // （`join(stateDir, 'trash/memories-trash', id)`，stateDir = hub 根），manifest 形状也由记忆域
@@ -67,7 +66,7 @@ export function hubBackupDir(home: string = resolveDshHome()): string {
   return join(home, HUB_DIR, 'backups')
 }
 
-// ── 一次性布局迁移（v0.9.0：根目录收编 + 按域改名）────────────────────────────
+// ── 一次性布局迁移（根目录收编 + 按域改名）──────────────────────────────────
 //
 // 旧名 → 新名（hub 内相对路径）。`readIndex` 之类的读取端只用新名，所以迁移必须在任何
 // 读取之前完成 —— 由 `apply()` 在启动期同步跑一次（见 index.ts），不参与并发。
@@ -76,7 +75,7 @@ const HUB_RENAMES: ReadonlyArray<readonly [string, string]> = [
   ['agents-md', 'prompts'],
   ['rules-index.json', 'memories-index.json'],
   ['rules-trash', 'memories-trash'],
-  // 记忆回收站并入 `trash/`，与其余五类同处一处（2026-10-10）。
+  // 记忆回收站并入 `trash/`，与其余五类同处一处。
   // **必须排在上一行之后**：极老的 `rules-trash/` 要先改名成 `memories-trash/`，这一行才能
   // 把它一并搬进 `trash/`。顺序颠倒的话，老用户那份会留在 hub 根下不动 —— 而它恰恰是条目数
   // 最多的一类数据。
@@ -107,7 +106,7 @@ const ROOT_FILE_MOVES: ReadonlyArray<readonly [string, string]> = [
 
 /** 宿主 patch 的备份名（`cordis.patch.yml.bak-<时间戳>`）。 */
 export function isPatchBackupName(name: string): boolean {
-  // 两代时间戳都认（0.17.0 起加了毫秒与进程内序号，见 index.ts 的 backupStamp）。
+  // 两代时间戳都认（加了毫秒与进程内序号，见 index.ts 的 backupStamp）。
   // 这里只用于「把散落在 $DSH_HOME / profiles 下的旧备份搬进 hub/backups」—— 新格式备份
   // 本来就直写 hub/backups，但两处谓词保持同一口径，免得将来手工搬进来一份就漏掉。
   return /^cordis\.patch\.yml\.bak-\d{8}-\d{6}(?:\d{6})?$/.test(basename(name))
@@ -244,7 +243,7 @@ export async function relocateEntries(
 // 六类内容：**技能**、**子智能体人设**、**场景**、**提示词预设**、**快捷提示词**、**记忆**。
 // 落点 `hub/trash/<域>-trash/<id>/`：`manifest.json` + 随条目搬走的负载。
 // 但**只有五类走本模块**（`TrashKind` 就是这四类 ＋ 核心层的 skills）：
-// 技能在 `hub/trash/skills-trash/`（核心层，v0.9.0 前直接躺在 `trash/` 下），
+// 技能在 `hub/trash/skills-trash/`（核心层，原先直接躺在 `trash/` 下），
 // 记忆在 `hub/trash/memories-trash/` —— 位置与其余几类一致，但**读写不走本模块**，由
 // `memories/service.ts` 自己实现（不经本模块的 `moveToTrash`，manifest 形状也自己定）。
 //
@@ -255,14 +254,14 @@ export async function relocateEntries(
 export type TrashKind = 'subagents' | 'scenes' | 'prompts' | 'quick-prompts'
 
 /**
- * 老 manifest 里写着的 kind 值（v0.9.0 按域改名前的）：读盘时一并认，否则升级后
+ * 老 manifest 里写着的 kind 值（按域改名前的旧名）：读盘时一并认，否则升级后
  * 老条目会「列不出来、恢复不了」——目录搬对了名字，manifest 里的字段值还在说旧名。
  */
 const LEGACY_TRASH_KINDS: Record<TrashKind, readonly string[]> = {
   prompts: ['agents-md'],
   subagents: ['agents'],
   scenes: [],
-  // 0.18.0 才有的域，没有旧名字要认。
+  // 这一域从来没有改过名，没有旧名字要认。
   'quick-prompts': [],
 }
 
@@ -298,7 +297,7 @@ export function trashKindDir(kind: TrashKind): string {
 /**
  * 新条目 id（时间戳 base36 + uuid 前 8 位，与记忆回收站同形）。
  *
- * 实现挪到 `./trash-id.ts`（2026-10-15）：本模块引了 `skills/core.js`，技能域要共用这个生成器
+ * 实现挪到 `./trash-id.ts`：本模块引了 `skills/core.js`，技能域要共用这个生成器
  * 就不能再反过来引这里。这里保留同一条导出路径 —— `memories/service.ts` 等既有引方不动。
  */
 export { newTrashId }
@@ -437,7 +436,7 @@ export async function moveToTrash(
   // 入口先过一遍谓词（原先只有恢复侧 `moveOutOfTrash` 校验，删除侧不看）：`dest` 最终会写进
   // manifest 的 `files[]`，恢复时按它搬回来 —— 入口放一个非法名进去，等于把失败推给
   // "将来某一天点恢复"（场景回收站那条链就是这么坏掉的）。现在当场拒绝、什么都不搬，
-  // 由调用方如实报错（审查 P0-2 / P2-14）。
+  // 由调用方如实报错。
   for (const move of moves) {
     if (!isValidTrashPayloadPath(move.dest)) return { ok: false, error: `负载名非法，未搬动任何文件：${move.dest}` }
   }
@@ -520,7 +519,7 @@ export async function readTrashEntry(kind: TrashKind, id: string): Promise<Trash
 /**
  * 条目里的一个负载名是不是"一条**安全的相对路径**"（可以含 `/`）。
  *
- * 为什么允许 `/`（2026-09-30，审查 P0-2）：场景回收站的负载**天然是目录树** —— 一个场景目录
+ * 为什么允许 `/`：场景回收站的负载**天然是目录树** —— 一个场景目录
  * 里的记忆可能是 `<场景>/<名>.md`，也可能是 bundle 形态 `<场景>/<名>/<名>.md` 或任意子目录。
  * 原来这里对任何含 `/` 的名字一律返回 false，于是「含嵌套记忆的场景」删除能成功（`moveToTrash`
  * 侧靠 `cp` 兜底）、恢复**必然失败**，且失败后场景目录已非空 → 再也恢复不了。
@@ -577,7 +576,7 @@ export async function moveOutOfTrash(kind: TrashKind, id: string, dest: string, 
  *
  * 为什么需要它：恢复是逐个负载搬的，中途失败时必须把**已经搬出去的那几个**放回条目里，
  * 否则它们留在目标目录里 —— 而恢复的下一次尝试会撞「目标目录已有内容」的检查，
- * 这个条目就再也恢复不了了（场景回收站那条链正是这么坏掉的，审查 P0-2）。
+ * 这个条目就再也恢复不了了（场景回收站那条链正是这么坏掉的）。
  * 谓词与后置断言与 `moveOutOfTrash` 完全一致（同一道闸，两个方向）。
  * @throws 条目 id 或负载名非法时抛错（调用方按"回滚失败"处理）。
  */

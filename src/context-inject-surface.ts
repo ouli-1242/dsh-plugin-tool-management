@@ -28,9 +28,9 @@ export function textOf(message: unknown): string | undefined {
  *   - `text`：只在「注入实况」里展示给用户看。
  * 为什么要分开：框架层有几行是**按场合**发的（权威声明只在替换时发），于是同一条域正文
  * 有两种合法形态。用整条正文比对会把"首帧没有权威声明"误判成内容变化 → 每个域多重发
- * 一次；用正文比对则两种形态都判为"没变"（2026-10-19 修）。
+ * 一次；用正文比对则两种形态都判为"没变"。
  *
- * ⚠️ **「已清空」通知与内容分开记**（2026-10-19 修，两轮）：一条 `form === 'notice'` 的消息
+ * ⚠️ **「已清空」通知与内容分开记**：一条 `form === 'notice'` 的消息
  * 只说"这个域现在没内容"，它不是内容。把两者混在一个键位里，两个消费方必然有一个读错：
  *   - 只看通知 → `body` 恒为 `undefined`，"发不发"永远判"内容变了" → 内容恢复后反而正常、
  *     但**内容没变也会每轮重发**（用户实测：场景 / MCP / 子智能体每轮补一条通知）；
@@ -61,7 +61,7 @@ export const OFFICIAL_KIND_OF: Readonly<Record<string, InjectDomainKey>> = {
 /**
  * 用户**明确关掉**的域 → 该域对应的官方消息 kind（这些 kind 的消息这一步不放行）。
  *
- * 交互事实（用户 2026-09-17 指出）：技能与提示词两域在标准类预设下由官方送（本插件让位），
+ * 交互事实（用户 指出）：技能与提示词两域在标准类预设下由官方送（本插件让位），
  * 于是"取消勾选"只停掉了本插件自己，官方那条照样进上下文 —— 用户看到的是"关了没用"。
  * 本函数给出需要**连带拦下**的官方 kind：只有"官方自己会送同份内容"的两个域有这一项；
  * MCP / 记忆 / 人设目录官方不送，没有可拦的对象（它们的开关本来就完全生效）。
@@ -77,10 +77,10 @@ export function officialKindsToSuppress(
 }
 
 /**
- * 这一步要拦的官方 kind（0.21.2）：用户关掉的域 + 本会话提示词接管时的
+ * 这一步要拦的官方 kind：用户关掉的域 + 本会话提示词接管时的
  * `agent-instructions` + 技能目录与本会话口径不一致时的 `skill-catalog`。
  * 后两者都由插件自己送整份，官方那条必须让位 —— 不能让一份本对话口径不对的清单
- * 先到达模型（「先注入再移除」，用户 2026-10-21 真机发现）。
+ * 先到达模型（「先注入再移除」，用户 真机发现）。
  *
  * `promptTakeover` = 本会话有提示词覆盖 / 快照与当前文件不一致 / 插件此前已送过提示词
  * （接管持续，见 context-inject 的 pre-step）；`skillCatalogDiverged` 由调用方从同步的
@@ -117,6 +117,11 @@ export interface DomainSurfaceEntry {
   text: string
   /** 该域**最后一条内容**消息的域正文原文；从没注入过内容（或已被压缩出表面）时为 `undefined`。 */
   body?: string
+  /**
+   * 该域**最后一条内容**消息的框架指纹（`source.frame`）。缺省 = 这一条是旧版本发的
+   * （那个版本不写这个字段）→ 判"内容变了"，重发一次把框架补齐。
+   */
+  frame?: string
   /** 该域**最后一条内容**消息的 form（`snapshot` / `catalog` / `instructions`）。 */
   form: string
   /** 该域此刻是否**已经**发过一条「已清空」通知（且其后没有新的内容）—— 避免每轮补发同一条通知。 */
@@ -125,6 +130,7 @@ export interface DomainSurfaceEntry {
   official: boolean
 }
 
+/** 取每个域在对话历史里**最新**那条官方消息的正文（供比对与差异行用）。 */
 export function newestDomainTexts(agent: unknown, kinds: ReadonlyMap<string, KindMapping>): Map<InjectDomainKey, DomainSurfaceEntry> {
   const out = new Map<InjectDomainKey, DomainSurfaceEntry>()
   const session = (agent as { session?: any } | null | undefined)?.session
@@ -155,6 +161,7 @@ export function newestDomainTexts(agent: unknown, kinds: ReadonlyMap<string, Kin
     out.set(mapping.key, {
       text,
       body: typeof source.body === 'string' ? source.body : undefined,
+      frame: typeof source.frame === 'string' ? source.frame : undefined,
       form,
       // **通知比这条内容新** → 仍然是"已清空"：这一格只是补上内容指纹（供"内容恢复后
       // 与旧正文比对"用），不代表内容此刻还在上下文里。反过来，先遇到内容（没遇到通知）

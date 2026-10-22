@@ -5,7 +5,7 @@
 // 「完全权限」预设写的是**会话级** approval/policy fold（dsh-permission-presets
 // 调 approval.setPolicy(agent, 'never')，预设自述 "without approval prompts"）。
 //
-// 口径（2026-09-13 用户裁定，方案 B）：**never = 用户在预设层面已预先批准一切确认门**。
+// 口径：**never = 用户在预设层面已预先批准一切确认门**。
 // 因此插件的三个确认门在 never 会话里直接放行（并写插件审计日志留痕），不再把 ask
 // 交给审批层——宿主 ApprovalService.decide() 对 never 直接返回 rejected（fail-closed），
 // 确认卡永远不会弹出，模型只会收到一句无信息量的「用户拒绝」。这也与 DSH 官方子代理
@@ -16,7 +16,7 @@
 // 读取链的关键约束：**必须用 ctx.get('approval')，不能用 ctx.approval**。
 // 本插件的 inject 未声明 approval，cordis 的上下文代理会沿 fiber 链找 provider，
 // 找不到就抛 `cannot get property "approval" without inject`；旧实现把它写在
-// try/catch 里，异常被吞成 false，于是 never 会话里永远走 ask 分支（2026-09-13
+// try/catch 里，异常被吞成 false，于是 never 会话里永远走 ask 分支（
 // 19:52 会话实测到的 bug）。dsh-tools 自己拿这条缝也是 `this.ctx.get("approval")`
 // （dsh-tools/lib/index.js `serviceAsk`），且它的 inject 同样只有 systemPrompt
 // ——可作对照。

@@ -1,25 +1,27 @@
-// 技能域的 model 工具（2026-09-19 从 index.ts 的注册区抽出；2026-09-23 合并）：
+// 技能域的 model 工具（从 index.ts 的注册区抽出；合并）：
 // skill_manager_list / skill_manager_read / skill_manager_switch / skill_manager_save。
 //
 // create → save：`skill-create` 对同名是**拒绝**的，所以"建还是改"的判定只能在工具这一侧
 // （先读一次 `skill-state`）。改的分支走新加的 `skill-update` op，它只认本插件可写的两个根
-// （hub = 导入落点 / dsh = 新建默认落点，2026-10-15 裁定）里的胜出者。
+// （hub = 导入落点 / dsh = 新建默认落点）里的胜出者。
 
 import { toKebab } from '../skills/core.js'
-import { effectiveScope, globalActionNote, isolationOffNote, locateSkillRoot, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, globalActionNote, globalUnchangedNote, isolationOffNote, locateSkillRoot, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
+/** 技能工具域要的宿主能力：技能 op 表与来源解析。 */
 export interface SkillToolDeps extends ToolDomainDeps {
   /** skills service 的 ops 表：skill-state / skill-enable / skill-disable / skill-create / skill-update。 */
   skillsOps: Record<string, (args: any) => Promise<any>>
 }
 
+/** 注册技能域的 model 工具（列表 / 启停 / 新建或更新）。 */
 export function buildSkillTools(deps: SkillToolDeps): void {
   const { defineTool, register } = deps
-  // Skill-facing tools: list, toggle, create. create is gated by the
-  // tools/pre-execute hook below (the model must ask before writing files).
+  // 面向模型的技能工具：list / toggle / create。create 由下面的 tools/pre-execute 钩子把关
+  //（写文件之前必须先问过用户）。
   register(defineTool({
     name: 'skill_manager_list',
-    // 关于「官方 `skill` 工具挂载时这条读能力由谁提供」：两处都不写了（2026-10-21 审查 P2）。
+    // 关于「官方 `skill` 工具挂载时这条读能力由谁提供」：两处都不写了。
     // 原先把它放在 `skill_manager_read` 的描述里，但那条工具在官方工具挂载时会被
     // `CARRIER_DUPLICATES` 直接隐藏 —— 能看到那句话的 agent，条件必然不成立；条件成立的
     // agent，看不到那句话。这条描述里再写一遍同样是白付 token。工具被隐藏本身就是最准确的信号。
@@ -30,7 +32,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
       const showAll = Boolean(args && args.all === true)
-      // 会话层（0.21.2，计划 §8.2「skill_manager_list 按会话过滤」）：
+      // 会话层（`skill_manager_list` 按会话过滤）：
       //   · `sessionId` 让 op 只按**本会话的 cwd** 推导项目技能根（不给 = 全部活动会话的并集，
       //     两个对话看到同一份清单）；
       //   · `overrides` 是本会话的逐条开关，标出"全局开着、本会话关掉"的那几条。
@@ -49,18 +51,18 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       // 踩到的正是这个坑（同一技能在 dsh/agents/claude/custom 各有一份，启错根等于没启）。
       // 这里把生效/被覆盖如实标出来，让模型（和人）不必猜。
       //
-      // 默认只列启用的（2026-09-16 用户裁定）：本机 36 条里只有 1 条启用，全列一次约 4.3k
+      // 默认只列启用的：本机 36 条里只有 1 条启用，全列一次约 4.3k
       // 字符且永久留在 transcript。表头始终给出全量口径（多少条 / 多少同名组），所以
       // 「还有没列出来的」不会变成盲区 —— 要看就传 all=true。
       const rows: Array<{ root: string; text: string; enabled: boolean }> = []
       const counts = new Map<string, number>()
       for (const root of data.roots || []) {
-        // 来源级停用 = 上层闸：里面的单条技能一条都加载不了。0.21.2 起这一格也有会话层
+        // 来源级停用 = 上层闸：里面的单条技能一条都加载不了。这一格也有会话层
         // （skillSources）：场景勾中的来源为开、没勾的为关；拨开一个来源时写侧会把它按
         // 租约跑起来（来源关着时技能级 enable 会被 core 吞掉）。
         const rootKey = String(root.key || '')
         const srcFlag = flagOf('skillSources', rootKey)
-        // 没有会话层时落到**全局意图**（`globalOn`，0.21.2），不是运行态（`enabled`）：
+        // 没有会话层时落到**全局意图**（`globalOn`），不是运行态（`enabled`）：
         // 租约期间两者不同，读运行态会把"只为几个对话开着"报成"全局开着"。
         const rootEnabled = typeof srcFlag === 'boolean' ? srcFlag
           : (typeof root.globalOn === 'boolean' ? root.globalOn : root.enabled !== false)
@@ -80,7 +82,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
           // 读运行态会把"别的对话临时开着"报成"全局开着"（与上面来源那一格同一条）。
           const skillGlobal = typeof skill.globalOn === 'boolean' ? skill.globalOn : globalEnabled
           const enabled = rootEnabled && (typeof over === 'boolean' ? over : skillGlobal)
-          // 带标签的 `k: v` 串（2026-10-14 对抗性审查 P1-1）：此前是无列头的 pipe 串，两个标记
+          // 带标签的 `k: v` 串：此前是无列头的 pipe 串，两个标记
           // （`shadowed by <root>` / `preferred`）还会挤在同一格里、都没有标签 —— 模型得猜哪段
           // 是字段、哪段是标记，以及 `preferred` 到底是什么（它此前**全仓没有定义**）。
           // 与 `mcp_manager_list` 的 `server:` / `level:` / `user-hint:` 同款。
@@ -106,7 +108,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       }
       const dupGroups = [...counts.values()].filter((n) => n > 1).length
       const shown = showAll ? rows : rows.filter((row) => row.enabled)
-      // 会话层（0.21.2）：项目技能根按**本会话的 cwd** 推导，所以这份清单可能只是这个对话
+      // 会话层：项目技能根按**本会话的 cwd** 推导，所以这份清单可能只是这个对话
       // 看得到的那些。不说清的话，模型会拿它回答"本机装了哪些技能"。
       const sessionNote = scoped === null
         ? ''
@@ -143,7 +145,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       const wanted = String((args && args.name) || '').trim()
       if (!wanted) throw new Error('name is required')
       const rootWanted = String((args && args.root) || '').trim()
-      // 会话层（0.21.2）：项目技能根按本会话的 cwd 推导 —— 与 skill_manager_list 同一份口径，
+      // 会话层：项目技能根按本会话的 cwd 推导 —— 与 skill_manager_list 同一份口径
       // 否则「列表里有、读不到」（两个对话的 cwd 不同时项目技能各有一份）。
       const scoped = sessionScopeOf(deps, exec && exec.agent)
       const overrides = scoped?.scope?.skills
@@ -165,7 +167,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
             shadowedBy: skill.shadowedBy && skill.shadowedBy.root ? String(skill.shadowedBy.root) : '',
             preferred: skill.preferred === true,
             // 与 skill_manager_list 同一套启停推导（影子副本没有 enabled 字段）。
-            // 会话层（0.21.2）：覆盖优先 —— 否则「列表里说关着、读出来说 enabled」两处打架。
+            // 会话层：覆盖优先 —— 否则「列表里说关着、读出来说 enabled」两处打架。
             enabled: (() => {
               const g = skill.enabled !== undefined
                 ? skill.enabled === true
@@ -178,8 +180,8 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       }
       if (!hits.length) {
         // 「去调 skill_manager_list」那句：那条工具在出厂默认里就是关着的，点名一条模型没有的
-        // 工具只会让它白跑一趟（执行侧拦住，而它看不出为什么）。判据按 **agent**（2026-10-14
-        // 对抗性审查 P0-1 的同一条纪律）：人设用 `toolsDeny` 砍掉它时，全局开关看着是开的。
+        // 工具只会让它白跑一趟（执行侧拦住，而它看不出为什么）。判据按 **agent**：
+        // 人设用 `toolsDeny` 砍掉它时，全局开关看着是开的。
         const listHint = deps.toolVisibleFor('skill_manager_list', exec && exec.agent)
           ? ' — call skill_manager_list (pass all=true) to see what is installed'
           : ''
@@ -196,14 +198,14 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       if (picked.shadowedBy) marks.push('shadowed by "' + picked.shadowedBy + '" — the copy actually in effect is a different one')
       if (picked.preferred) marks.push('preferred copy')
       if (!picked.enabled) marks.push('disabled')
-      // 会话层（0.21.2）：本会话关掉的技能照样读得到正文（读 ≠ 生效），但必须说清 ——
+      // 会话层：本会话关掉的技能照样读得到正文（读 ≠ 生效），但必须说清 ——
       // 不说的话模型会以为自己已经掌握了它、下一轮却看不到它。
       const overHere = scoped?.scope?.skills?.[picked.rootKey + '/' + wanted]
       if (overHere === false) marks.push('switched off here only — the global setting is unchanged')
       const dup = hits.filter((hit) => !hit.shadowedBy).length > 1
         ? hits.filter((hit) => !hit.shadowedBy).map((hit) => hit.rootKey).filter((k) => k !== picked.rootKey)
         : []
-      // 附件清单（2026-10-16）：技能正文常写着「详见 references/xxx.md」，而这一条工具是模型
+      // 附件清单：技能正文常写着「详见 references/xxx.md」，而这一条工具是模型
       // 读技能的唯一入口 —— 不列出来，它就会因为"看到的目录里没有那个文件"而凭空猜内容。
       // 只报名与大小、不报正文：正文要走宿主文件工具，这里塞进 transcript 太重。
       const attachments = Array.isArray(detail.attachments) ? detail.attachments : []
@@ -233,29 +235,29 @@ export function buildSkillTools(deps: SkillToolDeps): void {
     description: 'Enable or disable one DSH skill, or a whole source folder via `source`. Pass `prefer` (with `name` + `root`) to make that copy win a same-name collision, or to clear the recorded choice. Enabling a shadowed copy has no effect. Reversible. Only when the user asks or approves.',
     parameters: {
       name: { type: 'string', description: 'Skill name (kebab-case).' },
-      // `enabled` 从 required 改成"要么给 enabled、要么给 prefer"（2026-10-15）：
+      // `enabled` 从 required 改成"要么给 enabled、要么给 prefer"：
       // prefer 是一次独立的写（`skill-prefer`），模型不该为了改首选来源先被迫拨一次开关。
       // 缺省仍然**拒绝**（execute 里那条守卫），不然 `args.enabled ? enable : disable`
       // 会把"忘了给"静默当成"停用"。
       enabled: { type: 'boolean', description: 'true to enable, false to disable. Required unless you only pass `prefer`.' },
       source: { type: 'string', description: 'A source root key to switch as a whole (dsh/hub/agents/codex/claude or a project key).' },
       root: { type: 'string', description: 'Source root the skill lives in (with `name`). Default: whichever source holds it. Required with `prefer`.' },
-      // 同名首选来源（2026-10-15 注入文本审查）。此前这条工具的回执写着
+      // 同名首选来源。此前这条工具的回执写着
       // "or make this root the preferred copy **in the panel**" —— 明明一个布尔能解决，
       // 却把用户推去界面点。而 `skill-prefer` / `skill-unprefer` 两个 op 早就在（面板在用）。
       // 代价为零：本工具在出厂默认名单里就是关着的，加参数不进默认上下文。
       prefer: { type: 'boolean', description: 'true = the copy in `root` wins this name\'s collision; false = drop the recorded choice. Needs `name` + explicit `root`; omit = leave it.' },
-      // 决策 10（2026-10-19）：默认只改**这个对话**。写全局要显式说明。
-      // 0.21.2：`source` 也有会话版本了（拨开时来源按租约跑起来 —— 来源关着时技能级
+      // 默认只改**这个对话**。写全局要显式说明。
+      // `source` 也有会话版本（拨开时来源按租约跑起来 —— 来源关着时技能级
       // 开关会被 core 吞掉，所以那一步在回执里如实交代）。
-      scope: { type: 'string', enum: ['session', 'global'], description: scopeSessionDesc('turning a source or skill on may run that source as a lease, invisible outside that scope (isolation on only). global = every conversation (the state file).') },
+      scope: { type: 'string', enum: ['session', 'global'], description: scopeSessionDesc('turning a source or skill on here may start that source for this scope only. global = every conversation.') },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
       if (args && args.enabled !== undefined && typeof args.enabled !== 'boolean') {
         throw new Error('enabled must be true or false (omit it to only change the preferred copy)')
       }
-      // 场景锁冻结的是**全局**写入（决策 11）：本会话的逐条开关写的是侧车，与锁无关 ——
+      // 场景锁冻结的是**全局**写入：本会话的逐条开关写的是侧车，与锁无关 ——
       // 与面板的 `scopeWriteLocked()` 同一口径。只有真会改全局状态的那几条才过守卫。
       // 全局粒度一律走全局：那一档没有会话层，写的就是状态文件 —— 所以要过场景锁。
       const sessionWrite = Boolean(args && args.enabled !== undefined && effectiveScope(deps, args) === 'session' &&
@@ -266,7 +268,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       }
       const name = String((args && args.name) || '').trim()
       const source = String((args && args.source) || '').trim()
-      // `prefer` 的三态与它自己的前置条件（2026-10-15）：省略 = 不碰首选表；
+      // `prefer` 的三态与它自己的前置条件：省略 = 不碰首选表；
       // true / false = 设 / 撤。**必须点名 root** —— 默认值 `dsh` 在"同名首选"这件事上
       // 恰恰是最容易猜错的一格（要选赢的往往是**非 dsh** 那一份），所以这里不接受默认值。
       const preferGiven = Boolean(args && args.prefer !== undefined)
@@ -276,7 +278,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       if (preferGiven && source) throw new Error('prefer only makes sense for a single skill: pass name, not source')
       if (!name && !source) throw new Error('missing argument: name (one skill) or source (a whole source folder)')
       if (preferGiven && !name) throw new Error('missing argument: prefer needs name')
-      // 会话层（0.21.2）：首选来源是**全局**的一张表，没有会话版本。`scope` 省略时默认是
+      // 会话层：首选来源是**全局**的一张表，没有会话版本。`scope` 省略时默认是
       // session（见参数说明），所以这里必须要求显式 `scope="global"` —— 否则一次「本会话
       // 切个技能」会静默改掉全局的同名胜负。
       const scopeArg = String((args && args.scope) || '')
@@ -295,7 +297,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       }
       if (source) {
         if (args.root !== undefined) throw new Error('source is already a source-level key; do not pass root with it')
-        // 会话层（0.21.2）：来源这一格有会话版本了（`skillSources`）。拨开时 op 侧会把它
+        // 会话层：来源这一格有会话版本了（`skillSources`）。拨开时 op 侧会把它
         // 在**全局**启用（来源关着时技能级 enable 会被 core 吞掉）；拨关只影响本会话的
         // 「看不看得到」，别的对话与全局状态都不动。
         if (effectiveScope(deps, args) === 'session') {
@@ -303,12 +305,12 @@ export function buildSkillTools(deps: SkillToolDeps): void {
           const sc = await deps.sessionScopeSet(exec && exec.agent, 'skillSources', source, args.enabled === true)
           if (!sc || sc.ok === false) throw new Error((sc && sc.error) || 'failed to switch this source here')
           const warnings = sc.warnings !== undefined && sc.warnings.length > 0 ? '\n' + sc.warnings.join('\n') : ''
-          return 'OK: source ' + source + ' now ' + (args.enabled ? 'enabled' : 'disabled') + scopeOnlyNote() +
+          return 'OK: source ' + source + ' now ' + (args.enabled ? 'enabled' : 'disabled') + scopeOnlyNote(deps) +
             (sc.cleared === true ? ' (that matches what this scope would see anyway, so the override was removed)' : '') + warnings +
-            (warnings === '' ? '\nThe global source switch is unchanged; other conversations keep theirs.' : '') +
+            (warnings === '' ? '\n' + globalUnchangedNote(deps) : '') +
             ' Pass scope="global" to change it for every conversation.'
         }
-        // 全局来源开关 = **意图**（0.21.2）：off 之后仍被会话认领的来源保持启用（租约），
+        // 全局来源开关 = **意图**：off 之后仍被会话认领的来源保持启用（租约）
         // 只是别的会话看不到它下面的技能。直接改来源状态会让这次会话级开启串到所有会话 ——
         // 与 MCP 那条是同一个修法。
         if (deps.scopeIntentSet) {
@@ -334,11 +336,11 @@ export function buildSkillTools(deps: SkillToolDeps): void {
           (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '') +
           '\nnote: a whole source folder is global (every conversation); omit scope to switch it here only.' + isolationOffNote(deps)
       }
-      // 不给 root 就在全部来源里找（2026-10-15 smoke-test P0-1）：`skill_manager_save` 的落点
+      // 不给 root 就在全部来源里找：`skill_manager_save` 的落点
       // 是 hub（`tool-management/skills/`），而这里的默认值原本是 dsh —— 「建完就启用」这条
       // 最自然的链路必然报「技能不存在」。默认值改哪一边都不对（面板是显式传 root 的，
       // 两边都依赖各自的默认），所以判定放到工具侧：按名字找**胜出的那一份**。
-      /** 会话覆盖键用的声明名（与目录名可以不同；0.21.2）。 */
+      /** 会话覆盖键用的声明名（与目录名可以不同）。 */
       let canonicalName = name
       const resolveRoot = async (): Promise<string> => {
         const explicit = String((args && args.root) || '').trim()
@@ -383,7 +385,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
           '\nnote: which copy wins a name collision is a global setting (it has no per-conversation version).')
       }
       if (args.enabled !== undefined) {
-        // 决策 10（2026-10-19）：默认写**本会话**（别的对话不受影响），`scope: "global"` 才改状态文件。
+        // 默认写**本会话**（别的对话不受影响），`scope: "global"` 才改状态文件。
         // 会话层只改"列不列"（决策：会话层不碰启停本身），所以它不需要冻结守卫与场景档案同步 ——
         // 那两样保护的是全局状态。
         if (effectiveScope(deps, args) === 'session') {
@@ -395,9 +397,9 @@ export function buildSkillTools(deps: SkillToolDeps): void {
           // 拨开时 op 侧可能顺手在全局把它的**来源**启用（来源关着时技能级开关会被 core 吞掉），
           // 那一步的影响由 `warnings` 如实带出来；没动全局时才说"全局设置未变"。
           const warnings = sc.warnings !== undefined && sc.warnings.length > 0 ? '\n' + sc.warnings.join('\n') : ''
-          out.push('OK: ' + args.name + ' now ' + (args.enabled ? 'enabled' : 'disabled') + scopeOnlyNote() +
+          out.push('OK: ' + args.name + ' now ' + (args.enabled ? 'enabled' : 'disabled') + scopeOnlyNote(deps) +
             (sc.cleared === true ? ' (that matches what this scope would see anyway, so the override was removed)' : '') + warnings +
-            (warnings === '' ? '\nThe global setting is unchanged; other conversations keep theirs.' : '') +
+            (warnings === '' ? '\n' + globalUnchangedNote(deps) : '') +
             ' Pass scope="global" to change it for every conversation.')
           return out.join('\n')
         }
@@ -419,7 +421,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
             }
           }
         } catch { shadowedBy = '' }
-        // 出路指向**本工具自己的参数**（2026-10-15 注入文本审查）：此前写的是
+        // 出路指向**本工具自己的参数**：此前写的是
         // "or make this root the preferred copy in the panel" —— 模型读得到这句却做不到，
         // 只能转述给用户去点界面。现在 `prefer` 就在同一张参数表里；而这条工具在出厂默认
         // 名单里是关着的，模型既然调得到它，就一定拿得到这个参数（不会指到一条它没有的工具）。
@@ -438,23 +440,21 @@ export function buildSkillTools(deps: SkillToolDeps): void {
     // 「新建技能」动作，人点界面和模型调用会落到两个不同的根）。当前两边都是 **DSH 技能目录**
     // （`~/.dsh/skills/`）：UI 是 `43-skills.js` 的 `defaultCreateRoot`，模型侧就是下面这句
     // `skill-create` 的 op 默认值。hub（`tool-management/skills/`）只留给「导入技能」功能
-    // （用户裁定 2026-10-15）。历史上两边曾一个 dsh 一个 hub，靠本条纪律对齐。
+    // 。历史上两边曾一个 dsh 一个 hub，靠本条纪律对齐。
     //
     // 改的分支**认全部来源里的胜出者**：同名技能在 dsh/hub/项目根各有一份时只有一份生效，
     // 改错那一份会返回 OK 而技能毫无变化 —— 那层判定在 `skill-update` op 里，它同时要求
     // 胜出者落在本插件可写的两个根（hub 导入落点 / dsh 新建落点）。也就是说：本工具建出来
     // 的技能（只落在 dsh）一定还能被本工具改回去，不会建完就改不动。
     //
-    // 描述里的落点路径（`under DSH_HOME/tool-management/skills`）删掉（2026-10-15 注入文本
-    // 审查）：模型不按路径行动，而这段路径还与本轮 `remove.ts` 头注释写的落点口径不一
-    // （那里写 hub 的 tool-management/skills/）。真正要它知道的是"建在哪一侧"，
-    // 而"只认本插件写的技能"那半句已经说清了。
+    // 描述里不写落点路径：模型不按路径行动，而写死路径还会与 `remove.ts` 头注释里的落点
+    // 口径打架。真正要它知道的是"建在哪一侧"，而"只认本插件写的技能"那半句已经说清了。
     description: 'Create a DSH skill, or update the one that already has this name — the receipt says which. Only skills this plugin wrote can be updated. Only on the user\'s instruction.',
     parameters: {
       name: { type: 'string', required: true, description: 'Skill name; normalized to kebab-case (≤128 chars, [a-z0-9-]).' },
       description: { type: 'string', description: 'A concise routing description (≤500 chars). Required when creating; omit = keep.' },
       body: { type: 'string', description: 'Markdown instructions (≤256 KiB). Required when creating; omit = keep.' },
-      // 0.21.2：技能 / 人设 / 场景 / MCP 服务器是**机器级**对象，没有「本会话的一份」。
+      // 技能 / 人设 / 场景 / MCP 服务器是**机器级**对象，没有「本会话的一份」。
       // 这个参数只为一件事：模型以为自己在改会话时，当场纠回来（见 deps.ts 的 requireGlobalScope）。
       scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('a skill file is machine-wide', 'switch it here instead of editing it') },
     },
@@ -493,13 +493,13 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         if (!r || r.ok === false) throw new Error((r && r.error) || 'skill create failed')
         const data: any = r.data || {}
         // 新建的技能默认停用（与 MCP / 人设同口径）。这句必须留 —— 不说的话模型会直接去用，
-        // 然后发现技能不生效，而它不知道自己少拨了一个开关（smoke-test 报告 P1-3：三个 save
+        // 然后发现技能不生效，而它不知道自己少拨了一个开关（三个 save
         // 里只有这一条不报启用状态）。点名的 `skill_manager_switch` 在出厂默认名单里就是关着的，
         // 关着就改说"用户启用后才能用"，别指一条模型没有的工具。
-        const enableHint = deps.toolVisible('skill_manager_switch')
+        const enableHint = deps.toolVisibleFor('skill_manager_switch', exec && exec.agent)
           ? ' (created disabled; use skill_manager_switch to enable it)'
           : ' (created disabled; the user has to enable it first)'
-        // 会话层（0.21.2）：技能文件是**机器级**的，本会话的开关只决定这里看不看得到它。
+        // 会话层：技能文件是**机器级**的，本会话的开关只决定这里看不看得到它。
         return 'Created DSH skill ' + (data.name || kebab) + ' at ' + (data.path || '(unknown)') + enableHint +
           globalActionNote(deps, exec && exec.agent, 'skills', 'skill')
       }

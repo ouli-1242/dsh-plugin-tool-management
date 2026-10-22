@@ -59,19 +59,16 @@ interface CacheGuard {
   release(): Promise<void>;
 }
 
-// No Service subclass, no ctx.provide(), no second storage-domain owner.
-// The official API lacks unarchive and a cache deletion barrier, so this file
-// adapts the gaps. WHICH parts of the host it may touch is decided by
-// ../compat/probe.ts from live, observable facts (module identity, member
-// presence, shapes, read-only behaviour), never from comparing source text:
-// text equality only ever proved "same release", and it turned every harmless
-// upstream refactor into a total feature outage.
+// 不继承 Service、不 ctx.provide()、不当第二个存储域的主人。官方 API 缺 unarchive
+// 与缓存删除屏障，本文件只补这两个缺口。「能碰宿主哪些部分」由 ../compat/probe.ts 按活的、
+// 可观察的事实判定（模块身份、成员存在、形状、只读行为），绝不比对源码文本：文本相等只
+// 证明过「同一版发布」，而它把每一次无害的上游重构都变成整片功能失效。
 //
-// 纪律边界（对工作区「官方包与宿主机制只读」一条的解释，2026-09-18 复核确认）：
+// 纪律边界（对工作区「官方包与宿主机制只读」一条的解释，复核确认）：
 // 这里的包装是**运行时实例**上的临时、可恢复、能力门控的适配（仅当宿主自己缺
 // delete/whenIdle 时才装；按原 descriptor 恢复；serial 队列防复活），不修改任何
 // 官方包文件、不持久化改动、不改变宿主机制的对外行为 —— 与「不 patch 官方代码」
-// 禁令针对的对象（包文件与宿主机制的永久改写）不同层。若用户裁定该解释不成立，
+// 禁令针对的对象（包文件与宿主机制的永久改写）不同层。若用户要求该解释不成立，
 // 撤掉 acquire/releaseCacheGuard 即可整体退回「无删除屏障」的降级形态。
 const cacheGuards = new WeakMap<object, CacheGuard>();
 const raw = <T>(value: T): T => {
@@ -83,16 +80,14 @@ const sameLifecycle = (a: CheckpointIdentity | null | undefined, b: CheckpointId
   a && b && a.createdAt === b.createdAt && (a.cwd ?? null) === (b.cwd ?? null);
 
 /**
- * Install the write barrier around the host's projection cache when (and only
- * when) the host cannot safely delete a cache row on its own.
+ * 给宿主的投影缓存装写屏障 —— 只在宿主自己删不干净缓存行时装。
  *
- * Guarded on capability, not on implementation text: the cache is wrapped only
- * when the write path and a deletable table are both present, and a host that
- * ships its own `delete`/`whenIdle` barrier never gets wrapped at all.
+ * 按**能力**设门，不看实现文本：写路径与可删的表都在才装；宿主自带
+ * `delete`/`whenIdle` 屏障时一律不装。
  *
- * @param cache - host projection cache instance.
- * @returns the barrier handle.
- * @throws {CapabilityRefusalError} when the cache cannot support a safe delete.
+ * @param cache 宿主的投影缓存实例
+ * @returns 屏障句柄
+ * @throws {CapabilityRefusalError} 缓存支撑不了安全删除时
  */
 function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
   const existing = cacheGuards.get(cache);
@@ -156,13 +151,13 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
   }
   const wrappers: CacheWriteWrappers = {
     put(id, identity, rows) {
-      // Preserve the upstream snapshot-at-call boundary even while queued.
+      // 即使排队，也要保住上游「调用瞬间快照」的边界：identity 先拷一份再入队。
       if (isBlocked(id, identity)) return Promise.resolve();
       const expected = { ...identity };
       let detached;
       try { detached = structuredClone(rows); }
       catch (error) { return Promise.reject(error); }
-      // Serialize puts with deletion; never erase a new lifecycle reusing id.
+      // 让 put 与删除串行；同一个 id 被新生命周期复用时，绝不清掉新的那条。
       return serial(id, async () => {
         if (isBlocked(id, expected)) return;
         try {
@@ -180,8 +175,8 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
       });
     },
     write(session) {
-      // Track the flush await before put as well as put itself. Otherwise a
-      // delayed write could outlive disposal and bypass the restored method.
+      // put 之前的 flush 与 put 本身都要记在账上：否则一次延迟的写可能活过 dispose，
+      // 绕过已恢复的原方法。
       let task: Promise<unknown>;
       try { task = track(Promise.resolve(originals.write.call(cache, session))); }
       catch (error) {
@@ -222,7 +217,7 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
   function restoreWrappers(): boolean {
     let clean = true;
     for (const name of ["put", "write"]) {
-      // Never overwrite a later third-party wrapper.
+      // 后来装上的第三方包装绝不覆盖。
       if (cache[name] !== wrappers[name]) { clean = false; continue; }
       if (descriptors[name]) Object.defineProperty(cache, name, descriptors[name]);
       else delete cache[name];
@@ -260,18 +255,14 @@ function acquireCacheGuard(cache: ProjectionCacheLike): CacheGuard {
 }
 
 /**
- * Live-session members the delete sequence needs, split by branch.
+ * 删除序列需要的能力 id，按分支给。
  *
- * `liveEntryFor`/`detachEntered` are private in the official declarations
- * (dsh-session lib/types/index.d.ts), so they are consumed through the same
- * capability gate as everything else. The point of checking BEFORE any
- * destructive step is unchanged: otherwise the failure lands mid-sequence
- * (after flush, before ledger cleanup) and leaves "transcript gone, archive
- * flag still set" behind.
+ * `liveEntryFor`/`detachEntered` 在官方声明里是私有的（dsh-session 的
+ * `lib/types/index.d.ts`），所以与其余能力一样走能力闸门。**动手之前**先查这一点不变：
+ * 否则失败会落在序列中段（已 flush、尚未清账），留下「transcript 没了、归档标记还在」。
  *
- * @param sessions - ctx.sessions; the cold branch tolerates it being absent.
- * @param hasLiveSession - whether this session is currently live.
- * @returns the capability ids that must be `ok`, in evaluation order.
+ * @param hasLiveSession 这个会话此刻是否活着
+ * @returns 必须为 `ok` 的能力 id，按求值顺序
  */
 export function requiredSessionCapabilities(hasLiveSession: boolean): string[] {
   return hasLiveSession
@@ -279,13 +270,14 @@ export function requiredSessionCapabilities(hasLiveSession: boolean): string[] {
     : ["sessions.cold-announce"];
 }
 
+/** 归档会话的宿主桥：按能力选路、装缓存删除屏障、监听官方归档事件。 */
 export function createSessionsBridge(
   ctx: Context,
   suppliedRegistry: RegistryLike,
   onArchive: (id: string, at: number | null) => Promise<unknown>,
 ) {
-  // Cordis returns a fresh traceable method proxy on access. Compare and adapt
-  // the original object, not proxies; calls retain the service owner's context.
+  // cordis 每次取成员都返回一个新的可追踪方法代理：要比对、要适配都落在原始对象上，
+  // 不碰代理；调用时仍保留服务属主的上下文。
   const registry = raw(suppliedRegistry);
   // 官方声明把 put/requireTable 标为 private（运行时存在，见文件头「纪律边界」），
   // 因此按本文件实际调用面收窄，不改动宿主对象本身。
@@ -294,21 +286,19 @@ export function createSessionsBridge(
   let stopObserving: (() => void) | undefined;
   let assessment: HostAssessment | undefined;
   let assessmentAt = 0;
-  /** Re-probe at most every 5s: probing is cheap but not free on hot paths. */
+  /** 最多每 5s 重探一次：探测不贵，但在热路径上不是免费。 */
   const ASSESS_TTL_MS = 5000;
 
   /**
-   * The current host assessment. Refreshed lazily so a host that gains or
-   * loses a service is noticed without a plugin reload.
-   * @param force - re-probe even when a cached value is still fresh.
+   * 当前宿主评估。懒刷新 —— 宿主多一个或少一个服务不必重载插件就能被发现。
+   * @param force 缓存还新鲜也重探一次
    */
   function hostAssessment(force = false) {
     const now = Date.now();
     if (force || assessment === undefined || now - assessmentAt > ASSESS_TTL_MS) {
       try { assessment = assessHost(ctx); }
       catch (error) {
-        // A probe that throws is itself a finding: report it rather than
-        // letting it escape into a delete sequence.
+        // 探测自己抛错也是一条 finding：记下来，不让它漏进删除序列。
         ctx.logger?.warn?.(`host capability probe failed: ${String(error)}`);
         assessment = undefined;
       }
@@ -316,13 +306,13 @@ export function createSessionsBridge(
     }
     return assessment;
   }
-  /** Capability ids not `ok` from the given list. */
+  /** 给定清单里状态不是 `ok` 的能力 id。 */
   function unavailable(ids: readonly string[]): CapabilityRefusal[] {
     const current = hostAssessment();
     if (current === undefined) return ids.map((id) => ({ id, label: id, detail: "宿主能力探测不可用", recovery: "请查看插件日志 dsh-plugin-tool-management.log" }));
     return refusalsFor(current, ids);
   }
-  /** Throw when any listed capability is not usable; nothing is written before this runs. */
+  /** 名单里任一能力不可用就抛错 —— 它跑在任何写入之前，所以拒绝时一个字都没落盘。 */
   function requireCapabilities(operation: OperationName, ids: readonly string[]) {
     const refusals = unavailable(ids);
     if (refusals.length > 0) throw new CapabilityRefusalError(operation, refusals);
@@ -334,11 +324,8 @@ export function createSessionsBridge(
     return (registry[name] as (...rest: unknown[]) => unknown).call(registry, ...args);
   };
   /**
-   * The adapter route needs the registry's read/write/delegate members. This is
-   * a presence-and-shape check on the live object — the previous implementation
-   * compared these methods' source text against this plugin's own copy of the
-   * official prototype, which failed on any upstream refactor and, worse,
-   * depended on the plugin loading a second copy of the package.
+   * 适配器路线需要 registry 的读 / 写 / 委派成员。这是对**活对象**的存在与形状检查 ——
+   * 比对这几个方法的源码文本会在任何上游重构时失败，更糟的是它默认了插件加载了第二份包。
    */
   function checkWorkspace(operation: OperationName = "archive"): RouteDecision {
     const current = hostAssessment();
@@ -350,7 +337,7 @@ export function createSessionsBridge(
     requireCapabilities(operation, ["workspace.read-state", "workspace.enqueue"]);
     return { via: "adapter", refusals: [] };
   }
-  /** Structural check of the workspace index shape. */
+  /** 工作区索引的形状检查。 */
   function checkIndexShape() {
     for (const name of ["headers", "sessionPaths", "invalidSessionPaths", "entities"]) {
       if (!(registry[name] instanceof Map)) throw new Error(`工作区索引 ${name} 不兼容，未修改数据`);
@@ -358,15 +345,15 @@ export function createSessionsBridge(
   }
   return {
     registry,
-    /** Latest assessment, for the compatibility surface and the HTTP status op. */
+    /** 最新评估，给兼容页与 HTTP 状态 op 用。 */
     capabilities(force = false) { return hostAssessment(force); },
-    /** Capability ids an operation still needs, without throwing. */
-    refusalsFor(operation: OperationName, ids: readonly string[]) { return unavailable(ids); },    observe() {
+    /** 某个操作还缺哪些能力 id；不抛错。 */
+    refusalsFor(operation: OperationName, ids: readonly string[]) { return unavailable(ids); },
+    observe() {
       if (stopObserving) return;
       let previous = new Set(registry.archivedSessionIds);
-      // Official durable domain notifications also cover archive operations
-      // from the official sidebar or an external archive manager. No monkey
-      // patch of archiveSession and no competing writer of its ledger.
+      // 官方的持久域通知也覆盖从官方侧栏或外部归档工具发起的归档操作。所以不 monkey patch
+      // `archiveSession`，也不去当它那本账的第二个写者。
       stopObserving = ctx.on("domain/changed", (change) => {
         // 官方事件类型把 value 声明为 unknown（载荷形状由 workspace 域规范决定）。
         const payload = change.value as { archivedSessionIds?: readonly string[] } | undefined;
@@ -386,8 +373,7 @@ export function createSessionsBridge(
     setState: (state: unknown) => method("setState", state),
     readHeader: (id: string) => method("readSessionHeader", id),
     /**
-     * Install the cache delete barrier for one session, before anything is
-     * flushed or detached. Prefers a host-native barrier when it exists.
+     * 在 flush / detach 之前给一个会话装上缓存删除屏障。宿主自带屏障时优先用它。
      */
     async beginDelete(id: string, header: CheckpointIdentity | null | undefined) {
       checkWorkspace("delete");

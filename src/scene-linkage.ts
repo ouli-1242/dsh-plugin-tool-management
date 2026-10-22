@@ -13,6 +13,7 @@ import type { buildQuickPromptOps } from './ops/quick-prompts.js'
 import type { createSubagentCatalog } from './subagents/catalog.js'
 import type { createSubagentService } from './subagents/service.js'
 
+/** 场景联动的依赖：记忆域 + 运行时五域。 */
 export interface SceneLinkageDeps {
   /** 读档案切片 / 逐场景增量写 / 改索引里的 mode 段。 */
   memoriesService: ReturnType<typeof createMemoriesService>
@@ -26,7 +27,7 @@ export interface SceneLinkageDeps {
   /** 场景锁的名单查询 —— apply 里排在**后面**，所以调用点给的是 getter（见 index.ts）。 */
   lockedSceneNames(): Promise<string[]>
   /**
-   * 档案里的工具表方案**变了**（0.21.2 复核）：把新名单同步到停在这个场景里的会话。
+   * 档案里的工具表方案**变了**：把新名单同步到停在这个场景里的会话。
    *
    * 档案保存是全局场景与**模型**改绑定的入口（面板走 `rules-update-scene`，另一条在
    * `onToolTablePresetChanged`）。工具表是进场景那一刻抄进会话的，不发这一声，已经进来的
@@ -35,6 +36,7 @@ export interface SceneLinkageDeps {
   onSceneToolTableChanged?(scene: string, preset: string): Promise<void>
 }
 
+/** 装改名联动：人设 / 提示词改名后同步场景档案里的绑定，免得留下悬空引用。 */
 export function installSceneLinkage(deps: SceneLinkageDeps): void {
   /**
    * 人设改名后同步场景绑定：场景档案的 `subagents` 名单存的是**人设名**，
@@ -51,7 +53,7 @@ export function installSceneLinkage(deps: SceneLinkageDeps): void {
         touched[scene] = { ...(archive as Record<string, unknown>), subagents: list.map((n) => (n === from ? to : n)) } as typeof archive
       }
       const names = Object.keys(touched)
-      // 逐场景增量（审查 P2-3）：此前整表回写，会把窗口期里别人保存的**别的场景**档案抹掉。
+      // 逐场景增量：此前整表回写，会把窗口期里别人保存的**别的场景**档案抹掉。
       for (const scene of names) await deps.memoriesService.saveArchive(scene, touched[scene])
       return names.length
     } catch {
@@ -116,7 +118,7 @@ export function installSceneLinkage(deps: SceneLinkageDeps): void {
         if (!Array.isArray(list) || !list.includes(from)) continue
         touched.push([scene, { ...(archive as Record<string, unknown>), quickPrompts: list.map((n) => (n === from ? to : n)) }])
       }
-      // 逐场景增量写（与审查 P2-3 同一条口径）：整表回写会抹掉窗口期里别人存的别的场景。
+      // 逐场景增量写：整表回写会抹掉窗口期里别人存的别的场景。
       for (const [scene, next] of touched) await deps.memoriesService.saveArchive(scene, next)
     } catch { /* 同步失败不阻断改名本身；残留由档案保存时的 stale 清理兜住 */ }
   }
@@ -133,7 +135,7 @@ export function installSceneLinkage(deps: SceneLinkageDeps): void {
   const baseSceneModeSet = deps.archiveService.ops['scene-mode-set']
   if (typeof baseSceneModeSet === 'function') {
     deps.archiveService.ops['scene-mode-set'] = async (args: any) => {
-      // 锁定的场景不能关闭（用户裁定）：退出模式（scene=null）和切换到别的场景
+      // 锁定的场景不能关闭：退出模式（scene=null）和切换到别的场景
       // 都意味着先退出当前模式 —— 当前模式场景处于锁定状态时一律拒绝。
       // 目标就是当前场景 = 无操作，放行（引擎自己会 early-return）。
       try {
@@ -170,7 +172,7 @@ export function installSceneLinkage(deps: SceneLinkageDeps): void {
   if (typeof baseSceneArchiveSave === 'function') {
     deps.archiveService.ops['scene-archive-save'] = async (args: any) => {
       const res: any = await baseSceneArchiveSave(args)
-      // 工具表方案改绑（0.21.2 复核）：档案是全局场景与模型共用的写入口。只认**档案里
+      // 工具表方案改绑：档案是全局场景与模型共用的写入口。只认**档案里
       // 现在真有这一栏**的情况；不带这一栏 = 保留现值 / 解绑已由别的路径处理，保持现状。
       if (res && res.ok !== false && deps.onSceneToolTableChanged) {
         const archive = res.archive as { toolTablePreset?: unknown } | null | undefined
@@ -192,7 +194,7 @@ export function installSceneLinkage(deps: SceneLinkageDeps): void {
           if (toOff.length) await deps.subagentService.enabledStore.setEnabled(toOff, false)
           if (toOn.length || toOff.length) void deps.subagentCatalog.refresh()
           const snapshot = mode.snapshot
-          // 新快照带**全量映射**（`subagentsAll`，v0.9.1）→ 退出按映射逐个精确还原，这两个
+          // 新快照带**全量映射**（`subagentsAll`）→ 退出按映射逐个精确还原，这两个
           // 部分名单不再需要，也不再往新快照里写（老快照没有映射，仍然照旧维护，见
           // archive-engine 的 restoreSnapshot 兼容分支）。
           if (snapshot && !snapshot.subagentsAll && (toOn.length || toOff.length)) {

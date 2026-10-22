@@ -5,7 +5,7 @@
 //
 // 为什么这一段终于能搬：它向下要的东西分三层齐了 —— 路径与来源在 ./skill-roots.js、
 // 错误码与原子改名在 ./core-util.js、预检（读成候选 / 拒符号链 / 临时件 / 替换）在
-// ./import-pipeline.js。0.18.0 那次试切判给不做，缺的就是这三层：当时它们全在 core.ts 里，
+// ./import-pipeline.js。想切出去就得先有这三层 —— 否则它们全在 core.ts 里，
 // 搬上传段必然反过来引 core，而 core 的 handlers 又引上传 ⇒ 运行时环。
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -43,14 +43,22 @@ import type {
   UploadPath,
 } from "./core-types.js";
 
+/** 技能目录名的合法形状（kebab-case）：它同时是 frontmatter 里 `name` 的推荐写法。 */
 export const KEBAB_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** Windows 保留设备名（`con` / `nul` / `com1`…）：同名目录在 Windows 上根本建不出来。 */
 export const WINDOWS_DEVICE_NAME_RE =
   /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+/** 上传压缩包本身的上限 32 MiB（与传输层体限同档，先挡住再解压）。 */
 export const MAX_UPLOAD_ARCHIVE_BYTES = 32 << 20;
+/** 解压后单个条目上限 32 MiB —— 防 zip 炸弹的第二道闸。 */
 export const MAX_UPLOAD_ENTRY_BYTES = 32 << 20;
+/** 解压后累计上限 64 MiB：与记忆附件、导入器同层口径，超过就不是一份技能了。 */
 export const MAX_UPLOAD_TOTAL_BYTES = 64 << 20;
+/** 压缩包内条目数上限 1000：正常技能包是几十个文件，上千基本是打包错了。 */
 export const MAX_UPLOAD_ENTRIES = 1000;
+/** 包内路径长度上限 512：再长会撞上 Windows 的路径长度限制，解压必失败。 */
 export const MAX_UPLOAD_PATH_LENGTH = 512;
+/** 两个路径是否相同或互为祖先（按真实形态比）。 */
 export async function pathsOverlap(a: string, b: string): Promise<boolean> {
   const left = await resolvedPath(a);
   const right = await resolvedPath(b);
@@ -87,6 +95,7 @@ async function nextFreeImportName(
   }
   return null;
 }
+/** 从磁盘上的一个目录导入技能（新建或按 options 覆盖）。 */
 export async function importSkill(
   source: string,
   log: LogFn | undefined,
@@ -202,7 +211,7 @@ export async function importSkill(
     const existing = await existingEntryPaths(targetRoot, c.kebab);
     let renamedFrom: string | undefined;
     if (existing.length) {
-      // 上传导入撞名一律退号新增（用户 2026-10-15）：旧行为是静默跳过，结果里只多
+      // 上传导入撞名一律退号新增（用户要求）：静默跳过的话结果里只多
       // 一行"已跳过"，用户想要的那份根本没进来。`skill-import`（目录导入）不带
       // dedupe，仍是 skip / overwrite 二选一。
       if (options.dedupe !== true) {
@@ -321,10 +330,12 @@ export async function importSkill(
   if (failed.length && imported.length === 0) return failureResult();
   return { kind: analysis.kind, imported, skipped, failed };
 }
+/** 这个路径段在上传时会被改写（含控制字符或结尾的点 / 空白）。 */
 export function pathSegmentRewritten(part: string): boolean {
   if (/[\u0000-\u001f\u007f]/.test(part)) return true;
   return part !== part.replace(/[.\s]+$/, "");
 }
+/** 归一化上传条目里的相对路径：统一分隔符、拒掉绝对路径与 `..`。 */
 export function normalizeUploadPath(input: unknown): UploadPath {
   const raw = String(input == null ? "" : input).replace(/\\/g, "/");
   if (
@@ -364,6 +375,7 @@ export function normalizeUploadPath(input: unknown): UploadPath {
   }
   return { path: parts.join("/"), directory };
 }
+/** 解码上传的 Base64 内容，并按 `maxBytes` 卡上限（超限抛带 code 的错误）。 */
 export function decodeUploadBase64(
   value: unknown,
   maxBytes: number,
@@ -402,6 +414,7 @@ export function decodeUploadBase64(
   const bytes = Buffer.from(raw, "base64");
   return bytes;
 }
+/** 把上传过程中的抛出值折成统一的失败结果（保留既有兜底文案）。 */
 export function uploadError(error: unknown) {
   // 按可选 message 读取抛出值，保持既有兜底文案。
   const cause = error as { message?: unknown } | null | undefined;
@@ -413,6 +426,7 @@ export function uploadError(error: unknown) {
     error,
   );
 }
+/** 把上传的「文件条目数组」逐个落到 `contentRoot` 下。 */
 export async function writeUploadedEntries(
   contentRoot: string,
   entries: unknown,
@@ -460,6 +474,7 @@ export async function writeUploadedEntries(
     await fs.writeFile(target, bytes);
   }
 }
+/** 把上传的 ZIP 解开落到 `contentRoot` 下（解压前先卡大小与条目数）。 */
 export async function writeUploadedZip(contentRoot: string, encoded: unknown): Promise<void> {
   const archive = decodeUploadBase64(
     encoded,
@@ -510,11 +525,13 @@ export async function writeUploadedZip(contentRoot: string, encoded: unknown): P
   }));
   await writeUploadedEntries(contentRoot, entries);
 }
+/** 上传来源：压缩包字节，或已解开的散文件条目。 */
 export interface UploadSource {
   name?: unknown;
   entries?: unknown;
   zip?: unknown;
 }
+/** 把一次上传落成磁盘上的一份源目录，返回它的路径。 */
 export async function prepareUploadedSource(
   sessionRoot: string,
   input: UploadSource,
@@ -531,7 +548,6 @@ export async function prepareUploadedSource(
     // 没有根级 SKILL.md：剩下的合法形态只有两种 —— 根级 .md（单文件技能）或子目录
     // 带 SKILL.md（批量），与 importSkill 的 collectCandidates 收录口径一一对应。
     // 两者都不占，这个包就打不开：此时说清缺的是 SKILL.md、以及是哪个包（用户
-    // 2026-10-15：老报错是 importSkill 的空来源错误，带着 uuid 临时目录路径、落在
     // 通用「文件要求」段，认不出是谁、也看不出缺什么）。
     const items = await fs.readdir(contentRoot, { withFileTypes: true });
     for (const it of items) {
@@ -571,6 +587,7 @@ export async function prepareUploadedSource(
   await renameWithRetry(contentRoot, wrappedRoot);
   return batchRoot;
 }
+/** 上传导入的完整流程：落盘 → 预检 → 复制进目标根 → 清理临时目录。 */
 export async function importUploadedSkill(
   input: unknown,
   log: LogFn | undefined,

@@ -1,7 +1,7 @@
-// 回收站条目 id：**一个生成器，五个域共用**（2026-10-15 smoke-test P1-7）。
+// 回收站条目 id：**一个生成器，五个域共用**。
 //
 // 为什么单独一个文件：`hub.ts` 引了 `skills/core.js` 的 `resolveDshHome`，所以技能域不能反过来
-// 引 `hub.ts` 取这个函数 —— 那正好把 2026-10-01 剥层拆掉的那个运行时环重新接上（见 core.ts
+// 引 `hub.ts` 取这个函数 —— 那正好把 剥层拆掉的那个运行时环重新接上（见 core.ts
 // 头部的层注释）。放到这一叶模块里，两边都只向下引，不产生环。
 //
 // 形状：时间戳 base36 + uuid 前 8 位。统一它不是为了审美 —— 五个域的 `*_manager_remove` 都按
@@ -12,6 +12,7 @@
 // 两种形状都过；磁盘上已有的旧条目照旧能列、能恢复。
 import { randomUUID } from 'node:crypto'
 
+/** 生成回收站条目 id：时间戳（可排序）+ 随机后缀（防同毫秒撞车）。 */
 export function newTrashId(): string {
   return Date.now().toString(36) + '-' + randomUUID().slice(0, 8)
 }

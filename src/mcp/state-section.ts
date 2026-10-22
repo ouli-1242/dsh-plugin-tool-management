@@ -9,31 +9,31 @@
 // 这类信息在任何工具 schema 里都拿不到：工具只暴露 `mcp__<server>__<tool>` 的名字与
 // 参数，永远不会说「A 挂了改用 B」。所以「列出 server」只是载体。
 //
-// 范围（2026-09-15 用户裁定；2026-09-17 按实测修正"可用"的判据；2026-10-19 删掉掉线档）：
+// 范围：
 //   - 分两档，判据全部可验证：
 //       ① **可用**：配置上已启用 **且** 当前真实注册了未被停用的工具
 //          （`liveEnabledToolCount > 0`；场景档案收窄与手动逐工具开关都会写停用表，这里如实扣减）。
 //       ② **连着但工具全被停用**：当前注册了工具、但停用表把它们全扣光（`liveToolCount > 0`
-//          而 `liveEnabledToolCount === 0`）。2026-10-18 起列出来：它是"模型手上一条 MCP 工具
+//          而 `liveEnabledToolCount === 0`）。起列出来：它是"模型手上一条 MCP 工具
 //          都没有，可 server 确实在跑"的唯一线索，而此前不列的理由（"留着只会谎报数量"）
 //          随工具数一起作废了。
-//     **掉线档（曾经连上、现在一个工具都没注册）2026-10-19 删除**，理由（用户裁定）：
+//     **掉线档（曾经连上、现在一个工具都没注册）删除**，理由：
 //     "没连接的 mcp 注入上下文是垃圾信息，只有真启动的才需要注入上下文"。原来的动机是
 //     防止模型把"配了但连不上"读成"本机没配"而去建议用户装一个 —— 但那个动机付的代价是：
 //     每台正在重连 / 刚启动还没握完手 / 已经挂了的 server 都常驻一行，模型**一条工具也调不到**，
 //     还要附一句"别当成缺失"的说明。两害相权，噪声更大。
 //     ⚠️ 删掉的不只是这一行：**用户写在那台 server 上的备注也一起不到模型眼前了**
 //     （备注行挂在 server 名下，server 不进段，备注就没有载体）。这正是原设计留着它的理由，
-//     现在按用户裁定接受这个代价 —— 要看备注请调 `mcp_manager_list`（它列全部已启用的 server）。
+//     现在按用户要求接受这个代价 —— 要看备注请调 `mcp_manager_list`（它列全部已启用的 server）。
 //   - 只列 **server 名 + 状态（②档）+ 备注**；**具体工具名绝不注入** ——
 //     已启用 server 的工具本来就在模型自己的工具 schema 里（`mcp__<server>__<tool>`），
 //     段里再列一遍是重复；模型按前缀就能对上号。
-//   - **工具数不列**（2026-09-23）：模型不能凭"这台有 N 个工具"做任何事（能调哪些在它自己的
+//   - **工具数不列**：模型不能凭"这台有 N 个工具"做任何事（能调哪些在它自己的
 //     schema 里），而 17 B/台 × 每轮的开销是白付的。
 //   - 无备注 → 只有名字（①档）或名字 + 状态（②档）。
 //   - 不写「已启用」字样：能进段的都是已启用的，标状态是废话；②档则必须标，否则就是谎报。
-//   - **两档都空才返回 `''`**（无 server 可讲时零 token 成本）。注意 2026-10-18 的
-//     「无备注就不发」已被同日的用户裁定推翻，理由见 `renderMcpStateSection` 的注释。
+//   - **两档都空才返回 `''`**（无 server 可讲时零 token 成本）。注意 的
+//     「无备注就不发」已被同日的用户要求推翻，理由见 `renderMcpStateSection` 的注释。
 //
 // 一条**测不出来**的边界（写在这里免得后来者以为它是 bug）：宿主没有暴露"MCP 已连接"这个信号
 // （插件清单只有 entryId / moduleName / enabled / fiberPhase），所以本模块只能读"工具有没有注册"。
@@ -53,7 +53,7 @@ export const DEFAULT_MCP_MAX_ENTRIES = 50
  */
 export const DEFAULT_MCP_NOTE_MAX_LENGTH = 300
 /**
- * 备注的固定前缀（模型侧口径，用户裁定 2026-09-16：字段与段统一叫 user-hint / 用户提示）。
+ * 备注的固定前缀（模型侧口径：字段与段统一叫 user-hint / 用户提示）。
  *
  * 原为「备注：」，取「降低被读成指令的概率」——备注是自由文本，注入后**由插件背书**地到达模型。
  * 改叫 `user hint:` 是有意为之：它本来就该被读成**用户的决策提示**（「A 挂了改用 B」），
@@ -83,14 +83,14 @@ export interface McpStateRow {
   /** 上面这个数里未被停用表扣减的（真正能调到的）。缺省时退回 enabledToolCount → toolCount。 */
   liveEnabledToolCount?: number
   /**
-   * 当前注册的**工具名**（0.21.2）。逐工具会话开关要按名字扣减 / 补回，只有计数不够。
+   * 当前注册的**工具名**。逐工具会话开关要按名字扣减 / 补回，只有计数不够。
    * 老调用方不给这两个字段时退回计数口径（见 `renderMcpStateSection`）。
    */
   liveTools?: readonly string[]
   /** `liveTools` 里未被**全局**停用表扣减的那部分（会话逐工具开关在此基础上叠加）。 */
   liveEnabledTools?: readonly string[]
   /**
-   * 停用表的安全状态（0.21.2）。`'unknown'` = 损坏 / 不可读 / 首次读尚未完成 ——
+   * 停用表的安全状态。`'unknown'` = 损坏 / 不可读 / 首次读尚未完成 ——
    * 此时执行侧 fail-closed，所有 `mcp__*` 都调不到，段里绝不能把任何服务器报成可用。
    * 缺省按 `'ok'`（老调用方与界面行数据不带宽这个字段）。
    */
@@ -99,7 +99,6 @@ export interface McpStateRow {
    * 「已知工具」缓存里的工具数 —— **这台 server 曾经真的连上过**的证据
    * （缓存只在真实 schema 里见到工具时才写入）。`0` = 从未连上过。
    *
-   * 2026-10-19 起**不参与本段的任何判断**（掉线档删除）：曾经连上过不再构成"现在要列出来"的
    * 理由。字段保留是因为行数据由 `mcpmRowsWithNotes` 统一产出，删它要动数据源；且界面与
    * `mcp_manager_list` 仍读它区分"启动失败"与"从未启动"（见 `41-mcp.js` 的 knownOf）。
    */
@@ -108,6 +107,7 @@ export interface McpStateRow {
   notes?: string
 }
 
+/** MCP 状态段的渲染选项：条目上限与备注长度。 */
 export interface McpStateOptions {
   maxEntries?: number
   noteMaxLength?: number
@@ -126,13 +126,13 @@ export function normalizeMcpNote(value: unknown, maxLength: number): string {
   return flat.length <= maxLength ? flat : `${flat.slice(0, maxLength - 3)}...`
 }
 
-/** 段里一行服务器的状态：可用 / 连着但工具全被停用。（掉线档 2026-10-19 删除，见文件头。） */
+/** 段里一行服务器的状态：可用 / 连着但工具全被停用。（掉线档 删除，见文件头。） */
 type McpStatus = 'ok' | 'muted'
 
 /**
  * 渲染 MCP 状态段（纯函数，便于单独推理）。
  *
- * **整段的取舍**（2026-10-18 用户裁定「无备注不发这样不好」，推翻了同日的 A 方案）：
+ * **整段的取舍**：
  * 只要有一台该说的 server 就发，不因为"没有备注"而整段省略。理由：
  *   - 这一域是**唯一**说明"这台机器上配了哪些 server、各自什么状态"的地方，而模型手里的工具表
  *     只说得出"我现在能调什么"。少了它，"连着但工具被关掉"与"根本没配过"在模型看来完全等价
@@ -140,7 +140,6 @@ type McpStatus = 'ok' | 'muted'
  *   - 代价已经不是问题：`how` 行按需发、权威声明只在替换时发之后，只有名字的那种段在上下文里
  *     只剩标题 + 一两行，且内容不变就不重发。
  *
- * 2026-10-19 收窄（用户裁定「没连接的 mcp 注入上下文是垃圾信息」）：**掉线的 server 不再列**。
  * 原第三档「曾经连上、现在不可用」被删，理由与代价见文件头。注意这与"删掉整段"是两件事 ——
  * 剩下的两档（可用 / 连着但工具全停）都是 server **此刻确实在跑**的，一条都调不到的那一档
  * 才是噪声。
@@ -152,12 +151,12 @@ export function renderMcpStateSection(
   opts: McpStateOptions = {},
   listToolVisible: boolean = true,
   /**
-   * 本会话停用的服务器名（0.21.2）：这些行**整条不进段** —— 它们在别处也许可用，但在这个
+   * 本会话停用的服务器名：这些行**整条不进段** —— 它们在别处也许可用，但在这个
    * 对话里模型一条工具都调不到，列出来只会让它去试。与 `disabled`（全局停用）同一处置。
    */
   sessionDisabled: readonly string[] = [],
   /**
-   * 本会话逐工具的判定（0.21.2，键 = `server/tool`）：`off` = 本会话关掉，`on` = 本会话
+   * 本会话逐工具的判定（键 = `server/tool`）：`off` = 本会话关掉，`on` = 本会话
    * 显式开着（越过全局停用表）。两者都参与「可用 / 连着但工具全停」的分档 —— 否则 A 会话
    * 把一台服务器的工具全关掉，状态段仍报它可用，模型会去调一条它手里没有的工具。
    */
@@ -199,14 +198,14 @@ export function renderMcpStateSection(
     }
     return n
   }
-  // 曾经连上过的证据。**2026-10-19 起本段不再使用**（掉线档删除），保留只为旧调用方与界面
+  // 曾经连上过的证据。**起本段不再使用**（掉线档删除），保留只为旧调用方与界面
   // （`41-mcp.js` 的 knownOf 用它区分"启动失败"与"从未启动"，与这里的取舍无关）。
   const knownOf = (r: McpStateRow): number => Number(r.knownToolCount) || 0
 
-  // 两档，判据全部可验证（第三档 `offline` 2026-10-19 删除）：
+  // 两档，判据全部可验证（第三档 `offline` 删除）：
   //   ① `usable` —— 已启用，当前真注册了未被停用的工具（模型现在就能调）。
   //   ② `muted`  —— 已启用、也真的连着（注册过工具），但**工具全被停用**：场景档案收窄或
-  //                 手动逐工具开关的结果。2026-10-18 起列出来并标注（此前不列）：它是
+  //                 手动逐工具开关的结果。起列出来并标注（此前不列）：它是
   //                 "模型手上一条工具都没有，但 server 确实在跑"的**唯一**线索，而旧理由
   //                 （"留着只会谎报数量"）随着工具数一起消失了 —— 现在只给名字与状态。
   // 会话层停用的服务器：与全局 `disabled` 同一处置（整条不进段）。用 serverName 而不是 id ——
@@ -232,7 +231,6 @@ export function renderMcpStateSection(
     const name = String(row.serverName ?? row.id)
     // 非"可用"的那一档必须把状态写出来：不写就等于谎报"可用"。
     //
-    // 2026-09-23：两档的**工具数都去掉了**（用户看到实际注入后要求精简）。数字对模型没有
     // 动作价值 —— 它不能凭"这台有 8 个工具"列举出工具名（真正能调的都在它自己的工具
     // schema 里，按 `mcp__<server>__` 前缀就能对上号），而每轮都要付 17 B/台。
     // 顺带消掉一处隐患：②档原来写「上次连上时 N 个工具」，那个数字是**历史事实**，措辞上
@@ -250,12 +248,12 @@ export function renderMcpStateSection(
   ]
 
   // 只有清单：标题（`# Current MCP servers`）由注入通道的框架承担
-  // （2026-09-18 起，见 context-inject.ts 的 DOMAIN_FRAME）—— 同一件事只有一个出处，
+  // （见 context-inject.ts 的 DOMAIN_FRAME）—— 同一件事只有一个出处，
   // 框架已经写了标题，正文再写一遍就是每步多付一行 token。
   const out = [...lines]
   const hidden = (usable.length + muted.length)
     - (shownUsable.length + shownMuted.length)
-  // 超上限时给出口（2026-10-18 审查 B）：技能与子智能体两个目录早就这么写了，这是唯一漏掉
+  // 超上限时给出口：技能与子智能体两个目录早就这么写了，这是唯一漏掉
   // 的一处。工具被关掉（兼容页 / 人设 toolsDeny）时不点名 —— 点名一个模型手里没有的工具，
   // 只会让它去猜名字；数量照报，那是实话。
   if (hidden > 0) {
@@ -266,19 +264,20 @@ export function renderMcpStateSection(
   return out.join('\n')
 }
 
+/** 状态段要的数据源：服务器行、工具表与备注。 */
 export interface McpStateDeps {
   /** 必须用 `mcpmRowsWithNotes(false)` —— 传 `true` 会带上**未打码**的 url/headers/env（含明文密钥）。 */
   rows(): Promise<{ ok?: boolean; rows?: McpStateRow[] }>
   /**
    * `mcp_manager_list` **在这个 agent 手里**吗（尾句那个出口的前提）。默认在。
    *
-   * 收 `agent` 而不是零参（2026-10-18 审查 B）：只读全局开关时，某个人设用 `toolsDeny`
+   * 收 `agent` 而不是零参：只读全局开关时，某个人设用 `toolsDeny`
    * 砍掉这条工具之后，尾句照样说「用 `mcp_manager_list` 查」—— 指向一条它手里没有的工具。
    * 判据与技能 / 子智能体两个目录同一份（index.ts 的 `toolVisibleFor`），不定义第二份。
    */
   listToolVisible?: (agent?: unknown) => boolean
   /**
-   * 某台服务器在本会话里是不是**隐藏**的（0.21.2）。判据只有一份（index.ts 的四层并值：
+   * 某台服务器在本会话里是不是**隐藏**的。判据只有一份（index.ts 的四层并值：
    * 会话覆盖 → 场景层 → 基线 → 全局），这里逐行问它 —— 行数组本身就是服务器全集。
    *
    * 看不到的行与全局停用同形：整条不进段（这台服务器的工具在本会话一条都调不到，
@@ -286,13 +285,14 @@ export interface McpStateDeps {
    */
   sessionServerHidden?: (agent: unknown, serverName: string) => boolean
   /**
-   * 某台服务器下逐工具在本会话里的判定（0.21.2）：`allow` / `deny` / `undefined`（无会话
+   * 某台服务器下逐工具在本会话里的判定：`allow` / `deny` / `undefined`（无会话
    * 意见，按全局）。按 agent 取一次，返回的判定函数会被逐工具调用 —— 调用方构造一次
    * 会话快照即可，不必为每个工具重算。
    */
   sessionToolVerdictFor?: (agent?: unknown) => (serverName: string, tool: string) => 'allow' | 'deny' | undefined
 }
 
+/** 状态段的缓存门面：取文本 / 强制重算。 */
 export interface McpStateCatalog {
   /**
    * 同步返回段文本（可能比磁盘状态滞后一个 TTL）。
@@ -300,12 +300,24 @@ export interface McpStateCatalog {
    * `agent` 只决定**尾句点不点名那个查询工具**（清单本体与它无关）；不传按"在手里"算。
    */
   text: (agent?: unknown) => string
+  /**
+   * 这一轮**还说不准**（`true` = 别发「已清空」，上一份仍然有效）。
+   *
+   * 只治一种情形：配置里还有启用的服务器，但此刻一台都没注册工具 —— 启动 / 重连的窗口里
+   * 就是这个样子，而"段为空"与"用户把它们全关了"在下游长得一模一样。没有它，会话恢复后的
+   * 第一步会先发一条「已清空」，等 server 连上再发一次内容：两次注入，第一次还是假的。
+   *
+   * 判据带**宽限期**（`graceMs`）：从进程启动或上一次非空渲染算起，窗口内算 pending；
+   * 过了窗口如实清空 —— 服务器真死了不能永远沉默。`data` 还没读到也算 pending。
+   */
+  pending: (agent?: unknown) => boolean
   /** 立即重算（写操作后调用）。 */
   refresh: () => Promise<void>
   /** 预热：插件加载时调一次，避免首个请求落到空值。 */
   warm: () => Promise<void>
 }
 
+/** 状态段缓存的 TTL 与时钟（时钟可注入，便于测试）。 */
 export interface McpStateCatalogOptions extends McpStateOptions {
   /**
    * 缓存新鲜度。取 3000ms，与 `readNotes` 的 `SIDECAR_TTL_MS` 对齐；
@@ -313,6 +325,16 @@ export interface McpStateCatalogOptions extends McpStateOptions {
    */
   ttlMs?: number
   now?: () => number
+  /**
+   * 「还没连上」的宽限期（毫秒）。取 60s 的依据：
+   *   - 进程启动时，上一次跑通过的服务器的重连是秒级（不涉及下载）；
+   *   - 宿主自己在**重连期间**会保留工具注册约 2.5 分钟（`maxAttempts: 10` + 指数退避，
+   *     见文件头），所以"段变空"只会发生在它放弃之后 —— 那时该 agent 的非空时刻刚被刷新，
+   *     宽限期重新起算，不会与宿主那段窗口重叠。
+   * 调大 → 服务器真死时模型手里的旧名单保留更久；调小 → 启动慢的机器会重新出现
+   * 「先清空、再发一次」。
+   */
+  graceMs?: number
 }
 
 /** 创建 SWR 的 MCP 状态目录。计算失败时保留上一次的值，不把段清空。 */
@@ -349,48 +371,90 @@ export function createMcpStateCatalog(
     return inflight
   }
 
-  return {
-    text: (agent?: unknown) => {
-      if (now() - loadedAt > ttlMs) void revalidate()
-      if (data === null) return ''
-      const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
-      // 本会话隐藏的服务器：**逐行**问谓词（行数组就是全集），算出名字清单再渲染 ——
-      // 缓存键吃这份清单，所以"覆盖改了但隐藏集合没变"不会白重算。
-      let sessionOff: string[] = []
-      if (deps.sessionServerHidden) {
-        try {
-          sessionOff = data
-            .filter((row) => deps.sessionServerHidden!(agent, String(row.serverName ?? '')))
-            .map((row) => String(row.serverName ?? ''))
-        } catch { sessionOff = [] }
-      }
-      // 逐工具判定：缓存键必须吃下这份名单，否则 A 的「可用」会出现在 B 里。
-      const toolOn: string[] = []
-      const toolOff: string[] = []
-      if (deps.sessionToolVerdictFor) {
-        try {
-          const verdictOf = deps.sessionToolVerdictFor(agent)
-          for (const row of data) {
-            const server = String(row.serverName ?? '')
-            const live = row.liveTools
-            if (!server || !Array.isArray(live)) continue
-            for (const tool of live) {
-              const verdict = verdictOf(server, tool)
-              if (verdict === 'allow') toolOn.push(server + '/' + tool)
-              else if (verdict === 'deny') toolOff.push(server + '/' + tool)
-            }
+  /** 进程启动时刻：宽限期的下界（某个 agent 从未渲染出非空段时用它）。 */
+  const bootAt = now()
+  /**
+   * 每个 agent 上一次渲染出**非空**段的时刻。段一旦变空，宽限期从它重新起算。
+   *
+   * 必须按 agent 分开：进程里同时有多个会话，另一个会话每步渲染非空会不断刷新同一个时间戳，
+   * 本会话的「已清空」就会被**无限推迟**（不是延迟一个宽限期，是永远不发）。
+   * 拿不到 agent（全局口径 / 测试）时退到进程级那一份。
+   */
+  const lastNonEmptyByAgent = new WeakMap<object, number>()
+  let lastNonEmptyGlobal = Number.NEGATIVE_INFINITY
+  const agentKeyOf = (agent: unknown): object | null => (
+    (typeof agent === 'object' && agent !== null) || typeof agent === 'function' ? (agent as object) : null
+  )
+  const markNonEmpty = (agent: unknown): void => {
+    const at = now()
+    const key = agentKeyOf(agent)
+    if (key === null) lastNonEmptyGlobal = at
+    else lastNonEmptyByAgent.set(key, at)
+  }
+  const graceMs = opts.graceMs ?? 60_000
+
+  const text = (agent?: unknown): string => {
+    if (now() - loadedAt > ttlMs) void revalidate()
+    if (data === null) return ''
+    const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
+    // 本会话隐藏的服务器：**逐行**问谓词（行数组就是全集），算出名字清单再渲染 ——
+    // 缓存键吃这份清单，所以"覆盖改了但隐藏集合没变"不会白重算。
+    let sessionOff: string[] = []
+    if (deps.sessionServerHidden) {
+      try {
+        sessionOff = data
+          .filter((row) => deps.sessionServerHidden!(agent, String(row.serverName ?? '')))
+          .map((row) => String(row.serverName ?? ''))
+      } catch { sessionOff = [] }
+    }
+    // 逐工具判定：缓存键必须吃下这份名单，否则 A 的「可用」会出现在 B 里。
+    const toolOn: string[] = []
+    const toolOff: string[] = []
+    if (deps.sessionToolVerdictFor) {
+      try {
+        const verdictOf = deps.sessionToolVerdictFor(agent)
+        for (const row of data) {
+          const server = String(row.serverName ?? '')
+          const live = row.liveTools
+          if (!server || !Array.isArray(live)) continue
+          for (const tool of live) {
+            const verdict = verdictOf(server, tool)
+            if (verdict === 'allow') toolOn.push(server + '/' + tool)
+            else if (verdict === 'deny') toolOff.push(server + '/' + tool)
           }
-        } catch { toolOn.length = 0; toolOff.length = 0 }
-      }
-      const key = (visible ? '1' : '0') +
-        '\u0000' + sessionOff.slice().sort().join('\u0001') +
-        '\u0002' + toolOn.slice().sort().join('\u0001') +
-        '\u0003' + toolOff.slice().sort().join('\u0001')
-      if (rendered && rendered.key === key) return rendered.text
-      const out = renderMcpStateSection(data, opts, visible, sessionOff, { on: toolOn, off: toolOff })
-      rendered = { key, text: out }
-      return out
-    },
+        }
+      } catch { toolOn.length = 0; toolOff.length = 0 }
+    }
+    const key = (visible ? '1' : '0') +
+      '\u0000' + sessionOff.slice().sort().join('\u0001') +
+      '\u0002' + toolOn.slice().sort().join('\u0001') +
+      '\u0003' + toolOff.slice().sort().join('\u0001')
+    if (rendered && rendered.key === key) {
+      if (rendered.text !== '') markNonEmpty(agent)
+      return rendered.text
+    }
+    const out = renderMcpStateSection(data, opts, visible, sessionOff, { on: toolOn, off: toolOff })
+    rendered = { key, text: out }
+    if (out !== '') markNonEmpty(agent)
+    return out
+  }
+
+  const pending = (agent?: unknown): boolean => {
+    // 清单还没读到：这一轮什么都不知道，上一份仍然有效。
+    if (data === null) return true
+    // 一台启用的服务器都没有 = 用户真的关光了，清空是对的（不该被宽限期挡住）。
+    if (!data.some((row) => row.disabled !== true)) return false
+    // 过了宽限期就如实清空：服务器真死了不能永远沉默。
+    const key = agentKeyOf(agent)
+    const lastNonEmpty = key === null ? lastNonEmptyGlobal : (lastNonEmptyByAgent.get(key) ?? Number.NEGATIVE_INFINITY)
+    if (now() - Math.max(bootAt, lastNonEmpty) >= graceMs) return false
+    // 段非空 = 有东西可发，与「已清空」无关。
+    return text(agent) === ''
+  }
+
+  return {
+    text,
+    pending,
     refresh: () => {
       loadedAt = Number.NEGATIVE_INFINITY
       return revalidate()

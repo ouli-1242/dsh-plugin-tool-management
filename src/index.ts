@@ -1,15 +1,12 @@
-// dsh-plugin-tool-management — host half, written in TypeScript to the DeepSeek Harness
-// plugin development standard (https://deepseek-harness.github.io/deepseek-harness/develop/basic/):
-//   * object-form Cordis plugin: { name, inject, apply } (docs: "对象形式")
-//   * required services declared in `inject` — the framework guarantees they are
-//     ready before apply runs, and reloads the plugin if one disappears
-//   * agent-facing capability exposed as registered tools (ctx.tools.register +
-//     defineTool), the documented way to add model-callable abilities
-//   * UI-facing capability exposed via a webServer exact route (used by the
-//     client half), registered defensively
+// dsh-plugin-tool-management —— 宿主侧，按 DeepSeek Harness 插件开发规范
+// （https://deepseek-harness.github.io/deepseek-harness/develop/basic/）用 TypeScript 写成：
+//   * 对象形式 Cordis 插件：{ name, inject, apply }
+//   * 必需服务在 `inject` 里声明 —— 框架保证它们在 apply 之前就绪，某个消失时重载插件
+//   * 面向 agent 的能力以注册工具的形式暴露（ctx.tools.register + defineTool）
+//   * 面向界面的能力经 webServer 精确路由暴露（客户端那一半用），注册时按缺失降级
 //
-// Build: `tsc -p tsconfig.json` compiles this to lib/index.js (the shipped
-// artifact — same convention as DSH's own packages, which ship compiled JS).
+// 构建：`tsc -p tsconfig.json` 编到 lib/index.js —— 交付的就是编译产物，与 DSH 自己的
+// 包同一惯例。
 
 import type { Context } from '@deepseek-ai/cordis'
 import { symbols } from '@deepseek-ai/cordis'
@@ -32,6 +29,7 @@ import { AUDIT_TARGET_CONFIG, clearAudit, readAudit, recordAudit, recordOpAudit 
 import { readIndexSync } from './memories/index-io.js'
 import { hasQuarantineMarker, readQuarantineMarker, writeFileAtomically } from './memories/index-io.js'
 import { registerBootReconciler, reconcileMcpRestart, runBootReconcilers } from './boot/reconcile.js'
+import { pruneDesktopAuthCookies } from './desktop-cookie-prune.js'
 import { hasMcpRestartMarker, processAlive, readMcpRestartMarker } from './mcp/restart-marker.js'
 import { runStateDoctor } from './ops/state-doctor.js'
 import { createSubagentService, decideToolFilter, defaultPersonasDir, validPersonaName } from './subagents/service.js'
@@ -53,9 +51,9 @@ import {
 } from './tools/table.js'
 import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
-// 改名 / 进场景 / 存档案的联动（op 重包，2026-10-01 从本文件 apply 闭包整段抽出）。
+// 改名 / 进场景 / 存档案的联动（op 重包，从本文件 apply 闭包整段抽出）。
 import { installSceneLinkage } from './scene-linkage.js'
-// 访问令牌的宿主侧配置读写（2026-10-01 从本文件 apply 闭包整段抽出，依赖显式传参）。
+// 访问令牌的宿主侧配置读写（从本文件 apply 闭包整段抽出，依赖显式传参）。
 import { createTokenConfig } from './token-config.js'
 import { EXPECTED_MIN_HOST_VERSION, EXPECTED_PEER_RANGE, VERIFIED_HOST_VERSION, summarize } from './compat/probe.js'
 import { checkPatchWrite, notePatchWriteWarning, takePatchGuardWarnings } from './compat/patch-dialect.js'
@@ -70,16 +68,15 @@ import { createCandidates } from './scenes/candidates.js'
 import type { PluginInventoryService, ToolsService } from './mcp/manager.js'
 
 // 「已知工具」归一化与「当前可用工具数」原本定义在本文件（导出仅为测试接缝），
-// 2026-09-19 随 MCP 域搬进 ./mcp/manager.ts。这里保持原路径可导出，契约不变。
 export { normalizeKnownTools, countEnabledTools } from './mcp/manager.js'
 import { planOverrideCompaction } from './mcp/override-blocks.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, buildLoaderOverrideEntry, readLoaderToken, scanLoaderRows } from './mcp/loader-token.js'
-// cordis.patch.yml 受管行的生成/解析/块编辑（2026-09-19 从本文件 apply 闭包抽出，纯字符串运算）。
+// cordis.patch.yml 受管行的生成/解析/块编辑（从本文件 apply 闭包抽出，纯字符串运算）。
 import { appendBlock, buildDisableBlock, buildInsertBlock, parseRows, removeEntryAll, removeMarked, spliceRanges, splitLines, type ManagedRow } from './mcp/patch-yaml.js'
 import { describeMaskedOutcome, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './mcp/secret-guard.js'
 import { DEFAULT_MCP_NOTE_MAX_LENGTH, createMcpStateCatalog, normalizeMcpNote } from './mcp/state-section.js'
 import { hubBackupDir, hubPath, hubRoot, migrateHubLayoutSync, relocateEntries } from './hub.js'
-// 分域的 HTTP ops（2026-09-19 从本文件 handlers 表抽出，依赖显式传参）。
+// 分域的 HTTP ops（从本文件 handlers 表抽出，依赖显式传参）。
 import { buildCompatOps } from './ops/compat.js'
 import { createUpdateChecker } from './update-check.js'
 import { buildDiagnostics, type DiagnosticsSidecar } from './diagnostics.js'
@@ -88,7 +85,7 @@ import { buildQuickPromptOps } from './ops/quick-prompts.js'
 import { buildScopeOps, type ScopeSessionRow } from './ops/scope.js'
 import { buildSessionOps } from './ops/sessions.js'
 import { buildTrashRetentionOps } from './ops/trash-retention.js'
-// 会话作用域（0.21.2）：侧车 scope-overrides.json + 五条 op + 启动对账。
+// 会话作用域：侧车 scope-overrides.json + 五条 op + 启动对账。
 import { rememberSessionCwd, scopeKeyOfAgent, scopeKeyOfIdSync, sessionIdentityOf, sessionIdOf, sessionScopeIdOf } from './scope/resolve.js'
 import { createScopeStore } from './scope/store.js'
 import { isWorkspaceScopeKey, scopeKeyLabel, workspaceScopeKeyOf } from './scope/workspace-key.js'
@@ -132,9 +129,9 @@ import {
 import type { SceneArchive } from './memories/archive.js'
 import type { MemoryScopeOverride, PromptScopeOverride } from './memories/service.js'
 import { promptBaselineDiffers } from './memories/prompt-layer.js'
-// 回收站保留期（0.19.1）：侧车 `hub/trash-retention.json` + 六类回收站的到期清扫。
+// 回收站保留期：侧车 `hub/trash-retention.json` + 六类回收站的到期清扫。
 import { createTrashRetentionDomain } from './trash-retention.js'
-// HTTP 请求准入与 handlers 后处理（2026-09-19 从本文件 apply 闭包抽出，依赖显式传参）。
+// HTTP 请求准入与 handlers 后处理（从本文件 apply 闭包抽出，依赖显式传参）。
 import { createAccessToken, createFrozenGate, createOpWhitelist, createSceneLock, guardModelOp, guardModelOps, installHandlerGuards } from './request-gate.js'
 // `isReadCall` 随 HTTP 路由一起搬走了（写门禁与审计流水都读同一份登记表判据）。
 import { auditOpRegistry, auditProblems } from './op-registry.js'
@@ -158,11 +155,10 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { zipSync } from 'fflate'
 
 // ---------------------------------------------------------------------------
-// Minimal structural types for the service surfaces this plugin touches.
-// The full contracts live in the corresponding @deepseek-ai packages; these
-// local interfaces keep the build dependency surface small.
+// 本插件碰到的服务面，只声明最小结构类型。完整契约在对应的 @deepseek-ai 包里；
+// 本地只留用得上的几个成员，免得构建期多出一堆依赖。
 //
-// HttpReq / HttpRes / WebServerService 原本也住在这里：2026-10-01 随 HTTP 路由正文
+// HttpReq / HttpRes / WebServerService 原本也住在这里：随 HTTP 路由正文
 // 一起搬进 ./http-api.ts（只有那条路由与下面的 DshContext.webServer 用得到）。
 // ---------------------------------------------------------------------------
 
@@ -187,7 +183,7 @@ interface SandboxPolicyService {
 
 
 
-// ---------- Skills management types (minimal surface of ctx.skills) ----------
+// ---------- 技能管理类型（ctx.skills 的最小面）----------
 interface SkillInvocation {
   modelInvocable: boolean
   userInvocable: boolean
@@ -231,13 +227,13 @@ interface DshContext extends Context {
 }
 
 // ---------------------------------------------------------------------------
-// Transcript export lives in src/exports/transcript.ts (0.18.5).
+// 对话导出在 src/exports/transcript.ts。
 // ---------------------------------------------------------------------------
 
 /**
  * `inject` 的服务名清单（单一来源）：既声明给宿主，也是「挂载心跳」与 doctor 核对的内容。
  *
- * 为什么值得单列：任何一个名字被官方改名，本插件**根本不会 apply** —— 实测（2026-09-20，本仓库
+ * 为什么值得单列：任何一个名字被官方改名，本插件**根本不会 apply** —— 实测（本仓库
  * cordis）cordis 对未解析的 inject 既不抛错、不打日志、不发 warning，只把该 Fiber 停在非活动态。
  * 那种情形下探测表 / 上报通道 / 兼容页**全都不存在**（失败域里一个信号都没有），本插件两次
  * "宿主起不来"的历史事故也属于这一类。心跳文件是事后唯一的线索：doctor 读它 + 这份名单，
@@ -260,7 +256,12 @@ export default {
     // 同步执行：一次性的几次 stat/rename，换来「没有并发窗口」；失败只跳过该项，不抛错。
     migrateHubLayoutSync()
 
-    // 启动期对账（0.21.2）：把「上个进程没干完」的状态补完。必须在任何读盘之前注册，
+    // 桌面壳每次启动换一条鉴权 cookie 却不清理旧的，堆多了 welcome 握手会被拒
+    // （界面表现为「Web authentication failed」，应用起不来）。这里同步跑在装配期，
+    // 早于桌面端发起握手；失败静默，理由见模块注释。
+    pruneDesktopAuthCookies()
+
+    // 启动期对账：把「上个进程没干完」的状态补完。必须在任何读盘之前注册
     // 因为 reconciler 自己是要读盘的；但**跑**要放到服务装配完之后 —— 它要用到
     // stateDir / prompts 这些只在 apply() 里才确定的东西。调用点见下面 runBootReconcilers()。
     registerBootReconciler({
@@ -292,7 +293,7 @@ export default {
         }]
       },
     })
-    // 第二个 reconciler（0.21.2）：MCP 重启中断在阶段 1。**自动恢复**（与索引守卫相反）——
+    // 第二个 reconciler：MCP 重启中断在阶段 1。**自动恢复**（与索引守卫相反）——
     // 重启语义就是「状态与重启前一致」，而重启前状态能从补丁备份反推出来，恢复方向明确。
     // 但它必须等 mcp 装配完（run 里要用 mcpm-set-enabled 的语义），所以 run 在下面注册。
     registerBootReconciler({
@@ -325,7 +326,7 @@ export default {
       },
     })
 
-    // 第三个 reconciler（0.21.2）：全局意图与租约的对账。启动时先对齐"上个进程留下的
+    // 第三个 reconciler：全局意图与租约的对账。启动时先对齐"上个进程留下的
     // 运行态"：意图没有记录的新装 / 升级首轮从补丁反推（显式会话覆盖还在的按租约处理，
     // 不让旧版本的"会话级开启"变成全局开启）；之后运行态恒为 `意图 ∪ 租约`。
     //
@@ -350,11 +351,11 @@ export default {
     const agents = ctx.get('agents') as unknown as {
       create?(options: Record<string, unknown>): Promise<unknown>
     } | undefined
-    // pluginInventory is optional: probe at use time, degrade to no live info.
+    // pluginInventory 是可选的：用到时才探，拿不到就退化成「没有实时信息」。
     const pluginInventory = ctx.get('pluginInventory') as PluginInventoryService | undefined
 
-    // Package version, surfaced in the Settings pages and the HTTP API. Read
-    // from the installed package.json so it always matches the release tag.
+    // 包版本，设置页与 HTTP API 都会吐。从**装着的** package.json 读，
+    // 这样它永远与发布标签一致。
     let PKG_VERSION = 'unknown'
     // 本插件自己声明的宿主范围：更新检查用它区分「没有兼容版本」与「当前这版就不兼容」。
     let PKG_DSH_RANGE: string | null = null
@@ -364,7 +365,7 @@ export default {
       PKG_DSH_RANGE = pkg.engines && typeof pkg.engines.dsh === 'string' ? pkg.engines.dsh : null
     } catch (e) { /* keep unknown */ }
 
-    // 访问令牌（2026-09-19 抽到 ./request-gate.ts）：配置里的存量令牌 / 生效令牌 / 比对 /
+    // 访问令牌（抽到 ./request-gate.ts）：配置里的存量令牌 / 生效令牌 / 比对 /
     // 进程标识。引用点用解构保持原名字，index.ts 的调用处一行未改。
     const { CONFIG_TOKEN, CONFIG_TOKEN_FROM_FILE, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID, acceptedThisBoot, markAccepted, unmarkAccepted } = createAccessToken({ config })
 
@@ -378,7 +379,7 @@ export default {
       return run
     }
 
-    // ---------- skills management (core service, ported from dsh-skills-manager) ----------
+    // ---------- 技能管理（核心服务，移植自 dsh-skills-manager）----------
     // 文件操作核心在 ./skills/core.js 与 ./skills/readonly-discovery.js（原样移植，
     // 来源裁剪为 dsh/agents/codex/claude）；服务层把 core 的结果适配成 { op, args }
     // 协议，并在全局层与每个活动 agent 的 scope 内注册 manager provider：
@@ -436,7 +437,7 @@ export default {
     // 与上面的预设库**两份存储**，不是同一份加个标记位：`list()` 只扫自己目录，所以快捷词
     // 天然进不了「应用 / 场景绑定 / 注入 / 模型工具」这四条只认 hub/prompts/ 的路径。
     // 理由见 ./prompts/quick-service.ts 头注。
-    // ---------- 会话作用域（0.21.2）：侧车 hub/scope-overrides.json ----------
+    // ---------- 会话作用域：侧车 hub/scope-overrides.json ----------
     // 「同一台机器上多个对话各用一套设置」的叠加层：全局那一份一个字都不动，这里只记
     // **某个会话与全局不一样的地方**。三态存储 / 二态展示 / 自动清除的判定全在
     // ./scope/scope-overrides.ts（纯函数），本处只建读写通道。
@@ -455,7 +456,7 @@ export default {
     // 让「重启后第一轮」也能看到上次钉住的场景 / 覆盖，而不是要等到第二轮。
     void scopeStore.read().catch(() => { /* 读不到 = 空表，注入侧按全局走 */ })
 
-    // ── 作用域键解析（0.21.2）────────────────────────────────────────────────
+    // ── 作用域键解析────────────────────────────────────────────────
     //
     // 会话模式 = 会话 id；工作区模式 = `ws:<cwd>`。注入 / 守卫 / 工具表 / 提示词这些热路径
     // （同步）用 agent 自带 / 记忆下来的 cwd；ops 入口拿到的可能是真实 sessionId（斜杠菜单）
@@ -481,7 +482,7 @@ export default {
       } catch { /* 清单读不到 → 回退会话键（宁可少共享，不串工作区） */ }
       return id
     }
-    // 全局意图（0.21.2）：`hub/scope-intent.json`。「全局开关 = 用户想要什么」与「补丁 / 来源
+    // 全局意图：`hub/scope-intent.json`。「全局开关 = 用户想要什么」与「补丁 / 来源
     // 状态 = 为了租约此刻在跑什么」分开记，对账器把后者维持成 `意图 ∪ 租约`（见 scope/intent.ts）。
     const intentStore = createIntentStore({ withWriteLock, message })
     void intentStore.read().catch(() => { /* 读不到 = 没有意见，对账从运行态反推 */ })
@@ -489,18 +490,18 @@ export default {
     // 回答"这一台现在有谁在认领"，不能每次都去算一遍全集。空表 = 还没对账过（按无租约处理）。
     let mcpLeasesSync = new Map<string, string[]>()
     let sourceLeasesSync = new Map<string, string[]>()
-    /** 单条技能的租约（0.21.2）：键是 `<root>/<声明名>`。 */
+    /** 单条技能的租约：键是 `<root>/<声明名>`。 */
     let skillLeasesSync = new Map<string, string[]>()
     /** 对账串行链：写 op 会 await 它（拿回执），启动 / 场景联动只排进队列。 */
     let reconcileChain: Promise<void> = Promise.resolve()
     /**
-     * **原始**的技能清单 op（0.21.2）：包装版会顺带给每条补 `intent` / `globalOn` / 租约计数
+     * **原始**的技能清单 op：包装版会顺带给每条补 `intent` / `globalOn` / 租约计数
      * （一次 `scanClaimsOnce`，要读会话清单并扫整张覆盖表）。内部路径（全局快照、对账、
      * 场景引擎、技能目录）只读 `enabled` / `roots`，走包装版等于每读一次清单多做一次租约扫描
      * —— 斜杠菜单一次下钻能叠出好几份，正是「切到某个域要等很久」的一截。
      */
     const rawSkillState = skillsService.ops['skill-state']
-    // 技能清单的每个来源带上意图三态 + 租约计数（0.21.2，面板与模型工具读同一份）。
+    // 技能清单的每个来源带上意图三态 + 租约计数（面板与模型工具读同一份）。
     // 包在 service 的 op 上而不是 HTTP 层：`skill_manager_list` 也直调这条 op ——
     // 只包一层的话，模型看到的"来源开着"会是租约拉起后的运行态，而用户看的是意图。
     skillsService.ops['skill-state'] = async (args: any) => annotateSkillState(await rawSkillState(args))
@@ -512,7 +513,7 @@ export default {
     const rawSkillDisable = skillsService.ops['skill-disable']
     const rawSkillSetAll = skillsService.ops['skill-set-all']
     /**
-     * 来源启停的**原始** op（0.21.2）：包装层会在每次写后刷一遍技能目录，场景批量应用时
+     * 来源启停的**原始** op：包装层会在每次写后刷一遍技能目录，场景批量应用时
      * 一域要拨好几条 —— 逐条各刷一遍等于把每个会话的目录扫好几轮。这里绕过包装，
      * 由调用方在整批落地后统一刷一次（见 `applySkillSourceSwitches` 的末尾）。
      */
@@ -550,7 +551,7 @@ export default {
       const unmapped: string[] = []
       for (const it of wanted) {
         const key = byDir.get(it.root + '\u0000' + it.name)
-        // **键归一化不变式**（0.21.2）：读侧（目录 / 档案 / 覆盖 / 徽章计数）一律按
+        // **键归一化不变式**：读侧（目录 / 档案 / 覆盖 / 徽章计数）一律按
         // `<root>/<声明名>`，所以映射不出来时**不写**这条意图 —— 写一条读侧永远对不上的键，
         // 比不写更坏：用户点了关、对账器以为还开着，而界面上永远看不到那条记录。
         // 这条键也确实不该有意图：它要么已被删除，要么这一轮根本没扫到，对账器不会为它出决策。
@@ -607,12 +608,12 @@ export default {
     const quickPromptsDir = hubPath('quick-prompts')
     const quickPromptsService = createQuickPromptsService({ dir: quickPromptsDir })
     const quickPromptOps = buildQuickPromptOps(quickPromptsService, {
-      // 会话层：列表按本会话的生效值算 enabled（侧车一个字不动）。四层并值（0.21.2）——
+      // 会话层：列表按本会话的生效值算 enabled（侧车一个字不动）。四层并值——
       // 覆盖 → 场景层 → 基线 → undefined（= 交给 op 自己的全局值）。
       flagFor: (sessionId) => flagResolverOfSession(sessionId, 'quickPrompts'),
     })
 
-    // ── 会话层解析（0.21.2）：四层并值的唯一出处 ─────────────────────────────
+    // ── 会话层解析：四层并值的唯一出处 ─────────────────────────────
     //
     //   行情的四层：会话覆盖 → 场景层（在场景模式时按档案实时算）→ 基线（脱离时）→ 全局。
     //   前两层 + 基线在这里收口（`flagResolverOfSession` / `layeredFlag`），全局由各消费方
@@ -661,7 +662,7 @@ export default {
     }
 
     /**
-     * 某个会话的记忆域覆盖（0.21.2；0.21.2 起带层语义）。**唯一**的一处转换：侧车形状 →
+     * 某个会话的记忆域覆盖（带层语义）。**唯一**的一处转换：侧车形状 →
      * 记忆域要的那两项。
      *
      * 两个入口都走它 —— 注入域（同步，`text(agent)` 契约）与 `rules-list`（按 sessionId）。
@@ -697,10 +698,10 @@ export default {
     }
 
     /**
-     * 提示词冻结快照（0.21.2 第三轮）：**首见捕获**，内存先生效、异步落侧车。
+     * 提示词冻结快照：**首见捕获**，内存先生效、异步落侧车。
      *
      * 为什么在注入器里捕获：插件拿不到宿主「会话创建」事件，只能在第一次看见这个会话时
-     * 取当前 `~/.dsh/AGENTS.md`。对 0.21.2 之前就存在的老会话，等价于「从现在起冻结」。
+     * 取当前 `~/.dsh/AGENTS.md`。对还没有快照的老会话，等价于「从现在起冻结」。
      *
      * 两处状态：
      *   - 侧车 `prompt.baseline` 是持久的那一份（跨重启、归档恢复都在）；
@@ -726,7 +727,7 @@ export default {
     }
     /**
      * 取本会话的冻结快照；没有就**现在捕获**一份。`undefined` = 读文件失败（这一轮不捕获，
-     * 注入退化为当前文件 = 0.21.2 前两轮的行为）。
+     * 注入退化为当前文件）。
      */
     function ensurePromptBaseline(sessionId: string): string | undefined {
       // 工作区模式下把真实 sessionId 折成作用域键：冻结快照按工作区存，工作区里第一个
@@ -751,7 +752,7 @@ export default {
       return text
     }
     /**
-     * 注入侧判据：本会话的快照与当前 `~/.dsh/AGENTS.md` 是否不一致（同步，0.21.2 第三轮）。
+     * 注入侧判据：本会话的快照与当前 `~/.dsh/AGENTS.md` 是否不一致（同步）。
      *
      * 首见那一轮先捕获、按「无差异」返回（快照就是这一版，官方照送）。之后文件怎么改，
      * 本会话都判有差异 → 拦官方、由插件送快照链。读文件失败按「无差异」处理 ——
@@ -767,7 +768,7 @@ export default {
     }
 
     /**
-     * 注入侧取本会话的提示词作用域（0.21.2）：`cwd` 定位项目指令链、`scene` 是生效场景、
+     * 注入侧取本会话的提示词作用域：`cwd` 定位项目指令链、`scene` 是生效场景
      * `override` 是会话级提示词覆盖、`baseline` 是冻结快照（第三轮）。
      *
      * 提示词**接管官方那条 AGENTS.md** 的三种情形：有覆盖、快照与当前文件不一致、本插件
@@ -775,20 +776,28 @@ export default {
      * 由插件送用户级整份；首份带「Supersedes …」把已进历史的官方那份压下去。无接管时维持
      * 原口径：官方在送就让位（见 domain 注释）。
      *
-     * 取不到会话 → `undefined`（= 不带项目链，与 0.21.2 行为一致）。
+     * 取不到会话 → `undefined`（= 不带项目链）。
      */
     function promptScopeOf(agent: unknown): PromptScopeOverride | undefined {
       const identity = sessionIdentityOf(agent)
       if (identity === null) return undefined
       // 子代理 / 侧聊继承所属用户会话的提示词作用域；工作区模式下再折到工作区键。
       // cwd 仍用会话自己的 —— 项目指令链按它所在的工作目录往上找，与父会话通常相同。
-      const scopeId = scopeKeyForAgent(agent) ?? identity.sessionId
-      const scope = scopeStore.scopeOfSync(scopeId)
+      //
+      // `null` = 全局粒度（没有会话层），**不能**退回 `identity.sessionId`：切到「全部全局」
+      // 之后侧车里那些旧会话记录仍然留着（`switchMode` 刻意保留，切回「按对话」还要用），
+      // 退回它等于让它们继续生效 —— 同一个全局设置下，这个对话按它当年钉的场景 / 覆盖走、
+      // 别的对话按全局走。判定侧（`promptOverrideActiveOf` / `promptBaselineDivergedOf`）
+      // 在 `null` 时一律按"没有覆盖"算，这里若还读旧记录，两边就自相矛盾：判定说不接管，
+      // 正文却是按覆盖算出来的。
+      const key = scopeKeyForAgent(agent)
+      const scope = key === null ? undefined : scopeStore.scopeOfSync(key)
       const scene = sessionScenePinOf(scope)
       const override = promptOverrideOf(scope)
       // 首见捕获也在这里兜一次：`promptBaselineDiverged` 与域取数各自独立，
-      // 任何一个先跑到都能保证快照落下来。
-      const baseline = ensurePromptBaseline(scopeId)
+      // 任何一个先跑到都能保证快照落下来。（`key === null` 时不捕获：全局档没有
+      // "这个对话出生时的 AGENTS.md"这回事，见 `ensurePromptBaseline`。）
+      const baseline = key === null ? undefined : ensurePromptBaseline(key)
       if (identity.cwd === undefined && scene === undefined && override === undefined && baseline === undefined) return undefined
       return {
         ...(identity.cwd === undefined ? {} : { cwd: identity.cwd }),
@@ -826,7 +835,7 @@ export default {
     }
 
     /**
-     * 某台 MCP 服务器在某个会话里的解析（0.21.2）：**注入段 / 工具表 / 执行守卫三处同源**。
+     * 某台 MCP 服务器在某个会话里的解析：**注入段 / 工具表 / 执行守卫三处同源**。
      *
      *   有效层（覆盖 → 场景层 → 基线）→ 全局意图（on / off / blocked）→ 运行态兜底。
      *
@@ -851,7 +860,7 @@ export default {
     }
 
     /**
-     * 单条技能在某个会话里的解析（0.21.2，与来源 / 服务器同一套判据）。
+     * 单条技能在某个会话里的解析（与来源 / 服务器同一套判据）。
      *
      * 为什么单条技能也要走意图：那张策略表是**机器级**的，租约把它拉起来之后
      * `skill-state` 回的是运行态，直接读就等于"某个对话开了一条技能，别的对话也看得见"
@@ -867,7 +876,7 @@ export default {
     }
 
     /**
-     * 此刻是否有技能 / 来源**只靠别的会话的租约**在跑（同步，0.21.2）。
+     * 此刻是否有技能 / 来源**只靠别的会话的租约**在跑（同步）。
      *
      * 为什么需要它：拦官方技能目录的判据本来是 `skillCatalog.delta()`，而那份差异要读
      * **本会话的目录数据** —— 它是异步取的（`skill-state` 冷启实测 3.4s），新对话第一轮
@@ -893,7 +902,7 @@ export default {
     }
 
     /**
-     * 会话 MCP 判定的**唯一快照**（0.21.2）：执行守卫（`sessionMcpVerdictSync`，同步）与
+     * 会话 MCP 判定的**唯一快照**：执行守卫（`sessionMcpVerdictSync`，同步）与
      * 可见性限制层（`sessionMcpOverlayOf`，异步）共用这一份。
      *
      * 为什么必须共用（守卫与可见性一致不变式）：两处对同一个 `(agent, server)` 必须得出
@@ -948,7 +957,7 @@ export default {
     }
 
     /**
-     * 本会话的 MCP 覆盖**同步判定**（0.21.2，执行守卫用）：`allow` / `deny` / `undefined`
+     * 本会话的 MCP 覆盖**同步判定**（执行守卫用）：`allow` / `deny` / `undefined`
      * （undefined = 交给全局守卫）。
      *
      * 判据：服务器可见性（三处同源）+ `(server, tool)` 两格的有效层：
@@ -969,7 +978,7 @@ export default {
     }
 
     /**
-     * 本会话的 MCP 可见性覆盖（0.21.2，restrict 层用）：在**此刻注册着的**工具全名上算
+     * 本会话的 MCP 可见性覆盖（restrict 层用）：在**此刻注册着的**工具全名上算
      * `{ allow, deny }`（名单语义见 mcp/manager.ts 的 deps 注释）。
      *
      * 没有会话层也要算：全局意图 off 的服务器可能是**别的会话**的租约在跑，它的工具此刻
@@ -1006,7 +1015,7 @@ export default {
     }
 
     /**
-     * 读一次侧车 + 会话清单，按给定键集合扫一遍七域认领（0.21.2 第四轮：`scanSessionClaims`）。
+     * 读一次侧车 + 会话清单，按给定键集合扫一遍七域认领（`scanSessionClaims`）。
      *
      * 展示侧（徽章 / 下拉条数）与执行侧（对账租约）现在都走这一趟 —— 扫描逻辑只此一份。
      *
@@ -1033,7 +1042,7 @@ export default {
     }
 
     /**
-     * 本会话生效的模型工具表关停名单（0.21.2）。
+     * 本会话生效的模型工具表关停名单。
      *
      * 每个对话一份：本对话自己的整份名单 → 创建时抄的基线 → 实时全局（老会话没有基线时
      * 的兜底）。全局只给新对话当默认模板；已有对话不会再跟着全局变。
@@ -1074,7 +1083,7 @@ export default {
     }
 
     /**
-     * 某台服务器在本会话里是不是**隐藏**的（0.21.2，状态段 / `mcp_manager_list` 逐行问）。
+     * 某台服务器在本会话里是不是**隐藏**的（状态段 / `mcp_manager_list` 逐行问）。
      * 场景模式里"没勾的服务器"算隐藏；全局意图 off（不论连接是不是别的会话的租约）也算。
      */
     function sessionServerHiddenOf(agent: unknown, serverName: string): boolean {
@@ -1086,7 +1095,7 @@ export default {
     // **场景是显式记录**（memories-index.json 的 scenes 切片）：含保留场景 `global`（界面「全局」，
     // 其记忆注入任何对话），空场景也合法存在——不再是"恰好有这个目录名"的隐式约定。
     // 单投影 = 活动场景记忆 → 上下文注入（自动在场，模型无需调用任何工具；见下方注入通道）。
-    // 原"始终层写 ~/.dsh/AGENTS.md"已下线（变更单 01 §4/§10）：公共基线由 _shared/ 承担。
+    // 原"始终层写 ~/.dsh/AGENTS.md"已下线：公共基线由 _shared/ 承担。
     // 旧的 $DSH_HOME/scene-memory 与 $DSH_HOME/rules 由服务在首次读盘前搬入本目录。
     // memoriesRoot / memoriesStateDir / memoriesScenesDir 仅测试注入，生产留空由服务按 DSH_HOME 解析。
     const memoriesService = createMemoriesService(ctx, {
@@ -1104,7 +1113,7 @@ export default {
       // 全局 AGENTS.md 的**宿主实际读的那一份**（profile home 下，与上面 `getGlobalAgentsMdPath`
       // 同源）。`readGlobalAgentsMdSync` 的去重/兜底必须读它 —— `resolveDshHome()` 是另一条
       // 独立来源（见 `ensurePaths` 的注释「不合并是有意的」），两边不同时会取到另一个文件、
-      // 去重永远不相等 → 同一份预设正文注入两遍（审查 P2-19）。
+      // 去重永远不相等 → 同一份预设正文注入两遍。
       // 惰性求值：`cached` 在下面的 path discovery 段才声明（`let`），而本箭头函数只在 op
       // 被调用时才求值 —— 那时 `ensurePaths()` 早已跑过。外面这层 `try` 是防**将来**有人在
       // apply 中途同步调用 memories op 那种时序（`let` 的 TDZ 会抛 ReferenceError）。
@@ -1116,18 +1125,18 @@ export default {
           return p.home + sep + 'AGENTS.md'
         } catch { return null }
       },
-      // 会话层覆盖（0.21.2）：记忆域按会话投影场景与逐条开关。侧车归 scopeStore 管
+      // 会话层覆盖：记忆域按会话投影场景与逐条开关。侧车归 scopeStore 管
       // （它有自己的 TTL 缓存），这里只转手 —— 记忆域不引第二份读取点。
       scopeOverrideOf: memoryScopeOfSession,
     })
     // 场景记忆段的注册/生命周期由下面的注入通道统一管（memoriesService.memoryText / promptText）。
 
-    // ---------- 场景档案引擎（设计 §2）----------
+    // ---------- 场景档案引擎----------
     // deps 把既有写通道（MCP 单工具启停 / 技能启停）注入引擎；引擎自身串行，
     // 状态机与纯逻辑在 ./memories/archive*.ts。mcpmToolEnabled / readDisabledTools
     // 为函数声明（提升），此处引用安全。
     // MCP 工具全名 → `{ server, tool }`。**切分规则只有一套**：`splitMcpToolName`
-    // （`host-names.ts`），与执行侧守卫 `mcp.isToolDisabled` 走的是同一个函数（2026-09-30 审查 N1）。
+    // （`host-names.ts`），与执行侧守卫 `mcp.isToolDisabled` 走的是同一个函数。
     // 这里只负责把**候选 serverName 集合**传进去 —— 集合不同是切分结论不同的另一个来源，
     // 所以集合也用同一个 builder（`serverNameCandidates`）从**同一批表**（停用表 ∪ 已知工具缓存）
     // 取并集，不在这里手写 `Object.keys`。
@@ -1179,7 +1188,7 @@ export default {
           states[key] = on
           all[key] = on
           // core 按**条目名**（目录 / 文件名）解析，声明名与它可以不同：传错会得到
-          // 「技能不存在: <声明名>」（2026-10-21 真机，pdf-skill / pdf-reader）。
+          // 「技能不存在: <声明名>」（真机，pdf-skill / pdf-reader）。
           entryNames[key] = String(sk.name || name)
         }
       }
@@ -1209,7 +1218,7 @@ export default {
     // 整体替换关停名单的那一步抽成具名函数：引擎的 apply 依赖与「修改场景」表单的
     // 即时生效（scene-sync 包装）共用同一条写路径，不能各抄一份。
     /**
-     * 一份工具表方案 → 关停名单（0.21.2）。用户存的方案**优先**：万一有人把方案起名叫
+     * 一份工具表方案 → 关停名单。用户存的方案**优先**：万一有人把方案起名叫
      * 'factory-default'，他要的是自己那份。方案不存在返回 null。
      *
      * 全局进场景与**本对话**进场景共用这一份：两处各写一遍，某天改名规则一改就会分叉。
@@ -1231,13 +1240,13 @@ export default {
       }))
       if (!saved.ok) throw new Error(saved.error || toolTableWriteError())
       mcp.scheduleToolRestrictions()
-      // 目录重算不挡写入回执（0.21.2，与技能写 op 同一条）：保留旧值的 SWR 让下一拍注入
+      // 目录重算不挡写入回执（与技能写 op 同一条）：保留旧值的 SWR 让下一拍注入
       // 不会读到空，晚一步到新清单是可接受的代价。场景进入会走到这里，等它等于多等一轮全量扫描。
       scheduleSkillCatalogRefresh()
       void subagentCatalog.refresh().catch(() => { /* 同上 */ })
     }
 
-    // ── 场景生命周期 → 会话覆盖的同步（0.21.2 复核）────────────────────────────
+    // ── 场景生命周期 → 会话覆盖的同步────────────────────────────
     // 场景改名 / 删除 / 改绑工具表都发生在**场景**这一层，而停在里面的会话各有一份
     // `scope.scene` / `toolTableHidden`。这三件事以前没人通知会话：
     //   · 删除：会话停在"幽灵场景"，所有域静默退回全局、记忆注入还漏掉全局场景；
@@ -1312,12 +1321,12 @@ export default {
     }
 
     /**
-     * 场景应用**要停**一个资源之前的租约保护（0.21.2 复核）。
+     * 场景应用**要停**一个资源之前的租约保护。
      *
      * 判据是"还有没有会话在认领"，不是对账器缓存里的 `*LeasesSync`：那张表只收
      * 「意图已经不是 on」的租约，而全局场景要停的常常正是**意图还开着**的资源 ——
      * 先写 off 再查旧表，必然查不到认领，于是停掉 → 对账按 claims 重新拉起，
-     * 一次换场景就是一次闪断（D2）。这里直接读会话认领（与徽章 / 对账同一份扫描）。
+     * 一次换场景就是一次闪断。这里直接读会话认领（与徽章 / 对账同一份扫描）。
      *
      * 读不到就**保护**（不真停）：宁可多留一个租约，也不能把正在用的会话的连接停掉。
      */
@@ -1340,7 +1349,7 @@ export default {
     }
 
     /**
-     * 场景应用写全局意图：`blocked`（彻底停止）是比场景更强的用户裁定，场景不得覆盖它
+     * 场景应用写全局意图：`blocked`（彻底停止）是比场景更强的用户要求，场景不得覆盖它
      * —— 只有全局意图开关（`scope-intent-set`）能解除。不挡的话，进一次包含这台服务器 /
      * 这条技能的场景，就会把「彻底停止」悄悄降级成 off，之后任何会话的租约都能把它拉起来。
      */
@@ -1354,17 +1363,17 @@ export default {
       // 记在边界这一层而不是往五个 apply* 里散着写：一条流水说的是「引擎动了整个环境」，
       // 与同一次进入里面板/模型那条记录天然按秒分组显示。
       audit: (op: string, target: string) => recordAudit({ ts: Date.now(), op, target: target || AUDIT_TARGET_CONFIG, source: 'engine' }),
-      // ── 模型工具表（0.15.0 C1）：场景可以绑一份方案，进场景整体换成那一份 ──
+      // ── 模型工具表：场景可以绑一份方案，进场景整体换成那一份 ──
       currentToolTableHidden: async () => [...(await readToolTableSettings()).hidden],
       toolTablePresetHidden,
       applyToolTableHidden: applyToolTableHiddenNow,
       loadSlice: async () => ({ ...(await memoriesService.readArchiveSlice()) }),
-      // `fields` 必须原样透传：它决定"本次只写哪几片"，是审查 P2-3 里防丢更新的关键。
+      // `fields` 必须原样透传：它决定"本次只写哪几片"，漏传就会把没提到的切片一并覆盖掉。
       saveSlice: (slice, fields) => memoriesService.patchIndex(slice, fields),
       saveArchive: (scene, archive) => memoriesService.saveArchive(scene, archive),
       // 与 `serverKnownTools` 用同一个出口：都是「补丁里配了哪些 serverName」。
       // 早先这里走 `mcpmListView()` —— 那份会顺带枚举工具 schema 并回写「已知工具」缓存，
-      // 而档案引擎只要名字（2026-09-30 审查 N1 顺带收窄）。
+      // 而档案引擎只要名字。
       configuredServers: () => mcp.configuredServerNames(),
       serverKnownTools: async () => {
         const out: Record<string, string[]> = {}
@@ -1379,7 +1388,7 @@ export default {
         // 拿它当候选就成了循环论证（切错了也照样"命中"）。
         //
         // 三个来源里，补丁那份（`configuredServerNames`）是唯一与切分结果无关的 —— 停用表的键
-        // 来自界面勾选、缓存键来自上一次切分，单靠它们会锁死错误结论（审查 N1 / R3）。
+        // 来自界面勾选、缓存键来自上一次切分，单靠它们会锁死错误结论。
         let configured: string[] = []
         try { configured = await mcp.configuredServerNames() } catch { /* 补丁读不到 → 退化为另两份 */ }
         const serverNames = serverNameCandidates(configured, raw, known)
@@ -1411,7 +1420,7 @@ export default {
         //  1. 被同名覆盖的副本直接跳过——它们本来就不生效，写策略只会污染用户的记录。
         //  2. 结构不完整的技能也跳过——core 对它们一律拒绝启停（error.skill.notLoadable），
         //     不跳过就会抛成"应用失败"，**整个场景进不去**（老档案里的残留键能踩到）。
-        //  3. **已经不存在的技能也跳过**（用户 2026-10-18 报「启动的场景里有被删除的内容，
+        //  3. **已经不存在的技能也跳过**（用户反馈「启动的场景里有被删除的内容，
         //     就导致没办法退出」）：快照 / 档案里记的是"进场景那一刻还在"的键，场景期间那条
         //     技能被删掉之后，退出时按快照回放必然报 `技能不存在`，于是整次退出被这一条打断、
         //     mode 停在原地 —— 用户被困在场景里。没有可写的对象，跳过才是对的。
@@ -1456,7 +1465,7 @@ export default {
             return next
           }).catch(() => { /* 写失败 → 对账会从运行态反推；不拦场景应用 */ })
         }
-        // 租约保护（0.21.2 复核）：判据改成**会话认领**，不再只看 `skillLeasesSync`
+        // 租约保护：判据改成**会话认领**，不再只看 `skillLeasesSync`
         // —— 后者只收「意图已不是 on」的租约，而场景刚要停的常常是意图还开着、被某个
         // 会话显式开着的那一条。意图上面已经写成 off，这里若是租约就只让对账维持运行。
         const stoppingSkills = planned.filter((p) => !p.on && states[p.key] === true).map((p) => p.key)
@@ -1488,7 +1497,7 @@ export default {
           ctx.logger?.warn?.(`scene: 跳过无法应用的技能 —— ${skipped.join('、')}`)
         }
       },
-      // ── 服务器级 / 来源级启停（P5）────────────────────────────────────────────
+      // ── 服务器级 / 来源级启停 ─────────────────────────────────────
       // 为什么档案必须能改**上层**：工具级停用只在「服务器已经加载」时才有意义 ——
       // 服务器没起来，它的工具根本不存在，勾选与否毫无区别。技能同理：来源关闭时，
       // 技能级的 enable 会被 core 的 sourceEnabled 判定直接吞掉。
@@ -1537,7 +1546,7 @@ export default {
             return next
           }).catch(() => { /* 写失败 → 对账会从运行态反推；不拦场景应用 */ })
         }
-        // 租约保护（0.21.2 复核）：按**会话认领**判，理由见 `claimedInSessions`。
+        // 租约保护：按**会话认领**判，理由见 `claimedInSessions`。
         const stoppingMcp = [...new Set(switches
           .filter((s) => !s.enabled)
           .map((s) => nameOf.get(s.level + '\u0000' + s.id))
@@ -1557,7 +1566,7 @@ export default {
         // 补丁改动由宿主热重载（实测 ≤5s）。这里**不等**，避免进入模式被拖住十几秒；
         // 界面在应用完成后即可用，工具集合会在数秒内补齐。
       },
-      // 场景备注（v0.8.1）：备注写在 hub 内的 `mcp-notes.json`（按 loader id），
+      // 场景备注：备注写在 hub 内的 `mcp-notes.json`（按 loader id），
       // 场景档案按 serverName 存 —— 引擎负责映射与读写，与 mcpm-note 同一条写锁。
       currentMcpNotes: async () => ({ ...(await mcp.readNotes()) }),
       applyMcpNotes: async (entries) => {
@@ -1593,7 +1602,7 @@ export default {
       /**
        * 来源级启停（进入 / 退出 / 就地重应用共用）。
        *
-       * 容错口径（用户 2026-09-17 报「退出模式失败 → 卡在场景里」之后加的）：**结构性**失败
+       * 容错口径（用户反馈「退出模式失败 → 卡在场景里」之后加的）：**结构性**失败
        * （来源解析不到 / 该来源本来就不允许启停）只记警告并跳过 —— 这一行与本次改动无关，
        * 拿它中断整个恢复只会把用户困在场景里；**写盘**类失败仍然抛错，那说明确实没还原成功。
        * 结构性失败的正解在 `skills/service.ts` 的 `requestSwitchRoot`（项目来源按 key 前缀解析）。
@@ -1619,7 +1628,7 @@ export default {
             return next
           }).catch(() => { /* 写失败 → 对账会从运行态反推 */ })
         }
-        // 租约保护（0.21.2 复核）：按会话认领判，与 MCP / 单条技能同一条（见 `claimedInSessions`）。
+        // 租约保护：按会话认领判，与 MCP / 单条技能同一条（见 `claimedInSessions`）。
         const sourceClaims = await claimedInSessions('skillSources', switches.filter((s) => !s.enabled).map((s) => s.root))
         const skipped: string[] = []
         for (const s of switches) {
@@ -1669,7 +1678,7 @@ export default {
         if (on.length) await subagentService.enabledStore.setEnabled(on, true)
         void subagentCatalog.refresh()
       },
-      // 快捷提示词（0.18.0）：档案定义了 quickPrompts 段时，进入场景 = 把每一条的开关置成
+      // 快捷提示词：档案定义了 quickPrompts 段时，进入场景 = 把每一条的开关置成
       // 「在不在这份清单里」，退出按快照还原。读写的就是提示词页那颗开关的同一份存储
       // （`hub/quick-prompts/<id>/meta.json`），不在别处再算一套状态。
       knownQuickPrompts: async () => {
@@ -1694,17 +1703,17 @@ export default {
       },
     })
 
-    // ---------- 轻量子智能体（设计 §3）----------
+    // ---------- 轻量子智能体----------
     // 人设 = $DSH_HOME/tool-management/subagents/<name>.md；运行走官方 ctx.subagents.start（spawn provider）。
     // stateDir 与 rules 共用同一个覆盖键（测试注入一致）；子智能体开关存 <stateDir>/subagents-index.json。
     const subagentService = createSubagentService(ctx, { stateDir: String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || '') })
-    /** 某个 agent 生效的场景（0.21.2；0.21.2 起含基线那一份）：string = 钉住，null = 钉住没有，undefined = 跟随全局。 */
+    /** 某个 agent 生效的场景（含基线那一份）：string = 钉住，null = 钉住没有，undefined = 跟随全局。 */
     const sceneOverrideOfAgent = (agent: unknown): string | null | undefined => {
       const sessionId = scopeKeyForAgent(agent)
       return sessionId === null ? undefined : sessionScenePinOf(scopeStore.scopeOfSync(sessionId))
     }
     // sceneLists 供场景绑定校验：启用场景（rules-list 的 active 行）档案里的 subagents 并集。
-    // 会话进入场景时（0.21.2）取**那个场景**的绑定 —— 否则会话层切了场景、人设目录还按全局
+    // 会话进入场景时取**那个场景**的绑定 —— 否则会话层切了场景、人设目录还按全局
     // 正在用的那个场景过滤。钉住"没有场景"（脱离且基线无场景）→ 不按任何场景绑定过滤。
     const subagentSceneLists = async (agent?: unknown): Promise<string[][]> => {
       const pinned = sceneOverrideOfAgent(agent)
@@ -1783,13 +1792,13 @@ export default {
      *      `skill_manager_read` 之后，技能目录照注、`how` 行照样点名一个模型手里没有的工具。
      *      拿不到 agent 时跳过：`get(name, undefined)` 问的是**全局视图**，会得出相反结论。
      *
-     * 为什么要有这一份（2026-10-14 对抗性审查 P0-1/P1-8）：此前只有全局开关一条路，于是
+     * 为什么要有这一份：此前只有全局开关一条路，于是
      * `mcp_manager_switch` 的 `listHint`、技能目录与子智能体目录的尾句都会点名一条**这个模型
      * 手里没有的**工具。它是这两处的唯一判据 —— 工具侧经 `toolVisibleFor` 依赖拿，注入侧经
      * `injectHiddenToolsFor` 拿，同一个函数，不定义第二份。
      */
     const toolVisibleFor = (name: string, agent: unknown): boolean => {
-      // 0.21.2：工具表按对话解析（本对话名单 → 基线 → 全局）；拿不到 agent 时按全局。
+      // 工具表按对话解析（本对话名单 → 基线 → 全局）；拿不到 agent 时按全局。
       if (toolTableHiddenForSession(scopeKeyForAgent(agent)).has(name)) return false
       if (agent === null || (typeof agent !== 'object' && typeof agent !== 'function')) return true
       try { return tools.get(name, agent as object) !== undefined } catch { return true /* 读不到 = 按还在手里算 */ }
@@ -1820,10 +1829,10 @@ export default {
       list: () => subagentService.list(),
       sceneLists: subagentSceneLists,
       // 人在「兼容」页把 `subagent_manager_list` 关掉、或某个人设用 `toolsDeny` 砍掉它之后，
-      // 截断提示里那句「用 X 查」就是假的。判据按 **agent**（2026-10-14 对抗性审查 P1-8）：
+      // 截断提示里那句「用 X 查」就是假的。判据按 **agent**：
       // 与 `how` 行、MCP 回执同一份 `toolVisibleFor`，不再只看全局开关。
       listToolVisible: (agent) => toolVisibleFor('subagent_manager_list', agent),
-      // 会话层（0.21.2）：四层并值（覆盖 → 场景层绑定 → 基线）。本会话开的**能救回**
+      // 会话层：四层并值（覆盖 → 场景层绑定 → 基线）。本会话开的**能救回**
       // 场景绑定的排除项；没话说时目录自己落到全局口径（场景绑定 ∩ 全局启停）。
       flagFor: (agent) => flagResolverOfAgent(agent, 'subagents'),
       layerKeyFor: (agent) => layerKeyOfAgent(agent),
@@ -1833,15 +1842,15 @@ export default {
     // dsh-tool-skill / dsh-agent-instructions 时注入侧会跳过它们（见 context-inject.ts 的
     // CARRIER_FACT_OF），挂不到（极简）时才由这里送 —— 所以极简下也能按开关决定要不要。
     const skillCatalog = createSkillCatalog({
-      // 项目技能根按**本会话的 cwd** 推导（0.21.2）：不给 sessionId 时是全部活动会话的
+      // 项目技能根按**本会话的 cwd** 推导：不给 sessionId 时是全部活动会话的
       // cwd 并集，两个对话会看到同一份清单（A 能看到 B 项目的技能）。
       state: (sessionId) => rawSkillState(sessionId === undefined ? {} : { sessionId }),
       // 注入侧按 agent 取会话 id；取不到 = 全局口径。
       sessionIdFor: (agent) => sessionScopeIdOf(agent) ?? undefined,
-      // 与子智能体目录同一份判据（2026-10-14 对抗性审查 P1-8）：只看全局开关时，人设用
+      // 与子智能体目录同一份判据：只看全局开关时，人设用
       // `toolsDeny` 砍掉 `skill_manager_list` 之后，技能目录尾句照样点名一条它手里没有的工具。
       listToolVisible: (agent) => toolVisibleFor('skill_manager_list', agent),
-      // 会话层（0.21.2）：两格 —— 技能（覆盖 → 场景层 → 基线 + 全局意图）与来源（同一条）。
+      // 会话层：两格 —— 技能（覆盖 → 场景层 → 基线 + 全局意图）与来源（同一条）。
       //
       // 两格**总是给**：策略表 / 来源状态是机器级的，租约期间读到的是运行态。不给会话层
       // 就等于把"A 开了一条技能，B 也看见"留在原地 —— 用户实测的那条串味。
@@ -1855,7 +1864,7 @@ export default {
       layerKeyFor: (agent) => layerKeyOfAgent(agent),
     })
     /**
-     * 技能目录重算的**合并调度**（0.21.2）。
+     * 技能目录重算的**合并调度**。
      *
      * 一次场景应用 / 连点几个开关会在几百毫秒内落下好几笔写；每笔各刷一次目录，会让
      * `refresh()` 反复换代、把上一波还没跑完的扫描作废再起一波 —— 磁盘和事件循环都被
@@ -1905,7 +1914,7 @@ export default {
       ctx.effect(() => {
         const injector = createContextInjector({
           ctx,
-          // 顺序即界面勾选与消息顺序（用户裁定 2026-09-16）：场景和记忆 → MCP → 技能 →
+          // 顺序即界面勾选与消息顺序：场景和记忆 → MCP → 技能 →
           // 子智能体 → 提示词。form 是宿主语义轴：记忆是「当前状态」（snapshot，后发取代先发），
           // 三个目录是 catalog，提示词是 instructions（与官方 AGENTS.md 那条行同一形态）。
           //
@@ -1916,8 +1925,7 @@ export default {
           //   · 场景与记忆：**恒为"只在顶层"**。这两段说的是**父会话的处境**（此刻在哪个场景、
           //     这个场景下攒了什么），子代理要什么由父代理写进委派说明；记忆本体又是几 KB 的
           //     常驻文本，子代理真有需要可以自己用 `memory_manager_*` 取。放它们进子会话，
-          //     子代理的上下文就不再收敛为「角色 + 任务」。（0.19.0 中途有一版把这两条放开到
-          //     所有深度，已回退。）
+          //     子代理的上下文就不再收敛为「角色 + 任务」。（曾把这两条放开到所有深度，已回退。）
           //   · 子智能体目录：人设的 `catalogDepth`（默认 1 = 只在顶层）—— 它问的是"**目录该不该
           //     注入到这么深的会话**"，与"这个域要不要注入"是两件事。目录正文也按同一判据过滤
           //     （`text(agent)`），两处同源所以不会分叉。
@@ -1929,19 +1937,21 @@ export default {
           domains: () => [
             // 场景（**框架**）：启用的场景 + 场景说明（用户的约定）。排第一 —— 先让模型知道
             // "现在在哪个场景、这个场景的约定是什么"，再读下面的记忆条目。
-            // 场景与记忆两域**按会话取覆盖**（0.21.2）：`scopeOf(agent)` 给出本会话的场景与逐条
+            // 场景与记忆两域**按会话取覆盖**：`scopeOf(agent)` 给出本会话的场景与逐条
             // 开关，取不到会话 id 时返回 undefined = 跟随全局（风险表最后一条：取不到不猜）。
             { key: 'scene', name: 'tool-management:scene', label: '场景', form: 'snapshot', text: (agent) => memoriesService.sceneCatalogText(memoryScopeOf(agent)), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // 记忆（**内容**）：各场景下的条目。与场景段同源、同一条 `applicableTo`。
             { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: (agent) => memoriesService.memoryText(memoryScopeOf(agent)), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent) },
+            // `pending`：启动 / 重连窗口里段是空的，但"空"不等于"用户关光了" —— 这一轮沉默，
+            // 别先发一条「已清空」再在 server 连上后发一次内容（两次注入，第一次还是假的）。
+            { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent), pending: (agent) => mcp.stateCatalog.pending(agent) },
             // 有差异（租约 / 会话覆盖）时注入器拦下官方那份，由 `text` 送会话版整份
-            // （0.21.2 第二轮）；`delta` 保留为接管判据未接上时的兜底差异行。
+            // ；`delta` 保留为接管判据未接上时的兜底差异行。
             //
-            // `pending`（0.21.2 第三轮）：清单数据还没到手时**这一轮什么都不说** ——
+            // `pending`：清单数据还没到手时**这一轮什么都不说** ——
             // `text()` 在冷缓存下只能返回空串，而注入侧把"空串"理解成"这一域没内容"，
             // 于是会向模型发一条假的「已清空」。写操作把目录打回重算的那一拍正是这种情形
-            // （2026-10-22 用户实测：对话中途拨开一条技能，模型先被告知目录失效）。
+            // （用户实测：对话中途拨开一条技能，模型先被告知目录失效）。
             {
               key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog',
               text: (agent) => skillCatalog.text(agent),
@@ -1956,18 +1966,21 @@ export default {
               text: (agent) => subagentCatalog.text(agent),
               applicableTo: (agent) => subagentCatalog.catalogVisibleAt(subagentDepthOf(agent), agent),
             },
-            // 提示词（0.21.2）：`cwd` 决定项目指令链从哪一级往上找；会话层有覆盖时由本域送
+            // 提示词：`cwd` 决定项目指令链从哪一级往上找；会话层有覆盖时由本域送
             // 会话版整份（官方 `agent-instructions` 这一步被拦下，见 context-inject 的 suppress 并集）。
             // 没有覆盖时维持原口径：官方载体在送就让位，极简 / 压制型预设下由这里兜底。
             { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: (agent) => memoriesService.promptText(promptScopeOf(agent)), files: (agent) => memoriesService.promptFiles(promptScopeOf(agent)) },
           ],
           settings: () => injectSettingsSync(),
+          // 隔离粒度：注入侧据此在**一条**消息里写一行「设置写在哪一层」。工具 schema 是静态的，
+          // 三档并列写在 `scope` 参数里，模型读不出自己处在哪一档（见 `scopeLineOf`）。
+          scopeMode: () => scopeMode(),
           // 工具表开关：`how` 行里点名工具的那几句要跟着它换话术（关掉的不点名）。
           hiddenTools: injectHiddenToolsFor,
-          // 提示词（0.21.2）：预设事实原样交给注入侧。会话覆盖 / 接管判定在注入器里用
+          // 提示词：预设事实原样交给注入侧。会话覆盖 / 接管判定在注入器里用
           // **同步表面扫描**做（`promptOverrideActive` + 本会话已发过的插件提示词）——
           // 那里才能在"清覆盖后退回全局版"时把官方那条继续拦下并重发一份正确的正文。
-          // 技能目录（0.21.2 第二轮）：有差异时同样整份接管 —— 不能先让模型看到官方那份
+          // 技能目录：有差异时同样整份接管 —— 不能先让模型看到官方那份
           // 本对话口径不对的清单，再补一行纠正。判据真算 delta（租约造成的差异侧车里没有
           // 覆盖记录），复用目录自己的 SWR 缓存，不另造第二份。
           factsFor: (agent) => candidates.presetFactsForAgent(agent),
@@ -1984,7 +1997,7 @@ export default {
            * 否则官方那份带运行态的清单会先到达模型（见 `skillCatalogHasForeignLease`）。
            */
           skillCatalogDiverged: (agent) => skillCatalogNeedsTakeover(skillCatalog.delta(agent)) || skillCatalogHasForeignLease(agent),
-          // 令牌门禁（2026-09-19，用户裁定「宿主侧硬拦截」）：令牌**在生效**（`TOKEN !== ''`，
+          // 令牌门禁：令牌**在生效**（`TOKEN !== ''`，
           // 关掉或没配都是空串）而本次启动还没有人验过 ⇒ 这一步不放行，宿主把 turn 收成
           // `blocked`。这是"没输入令牌就没法对话"的唯一真正落实 —— 客户端那条输入框锁定在
           // 本宿主上无路可走（`ctx.conversation.blocks` 不存在，见 ContextInjectorDeps 注释）。
@@ -2018,7 +2031,7 @@ export default {
       iso: new Date().toISOString(),
       version: PKG_VERSION,
       injects: [...INJECT_SERVICES],
-      // 宿主**进程身份**（2026-09-30 审查 §5 F1）：插件与宿主同进程，所以 `pid` 就是宿主的 pid，
+      // 宿主**进程身份**：插件与宿主同进程，所以 `pid` 就是宿主的 pid，
       // 而 `hostStartedAt` 是本进程的启动时刻（`Date.now() - uptime`）。有了这两个值，doctor
       // 才能把「这份心跳是不是**这一轮**宿主写的」变成一条可计算的结论：
       //   pid 已经不存在 → 宿主自那以后重启过（或那次运行已结束）；
@@ -2043,7 +2056,7 @@ export default {
         })
       }
     } catch (e) { /* 拿不到 symbols 就跳过（探针自己也有一条退路） */ }
-    // 预热放到下一轮事件循环：此时 apply 的同步初始化（补丁路径、tools 服务…）已全部完成，
+    // 预热放到下一轮事件循环：此时 apply 的同步初始化已全部完成，
     // 避免在初始化中途就去读 MCP 补丁与工具 schema。
     setTimeout(() => {
       void subagentCatalog.warm().catch(() => { /* 预热失败只影响首屏速度，下次读会重建 */ })
@@ -2057,7 +2070,7 @@ export default {
       if (typeof original !== 'function') continue
       skillsService.ops[opName] = async (args: any) => {
         const result = await original(args)
-        // **不阻塞写回执**（0.21.2）：refresh 会把每个已知会话的目录重扫一遍，等它落地等于
+        // **不阻塞写回执**：refresh 会把每个已知会话的目录重扫一遍，等它落地等于
         // 一次技能开关 / 场景应用要多等几秒 —— 用户实测「实际开启要等很久」「切换提醒要等很久」。
         // 目录缓存现在保留上一份数据（见 skills/catalog.ts 的 refresh），所以先回执不会出现
         // 那一拍读到空而误报「已清空」；新清单晚一步到达，下一轮注入自然会带上。
@@ -2077,7 +2090,7 @@ export default {
       }
     }
     // ---------- 改名 / 进场景 / 存档案的联动（op 重包） ----------
-    // 正文 2026-10-01 整段搬到 ./scene-linkage.ts（一字未改，只把七个 apply 作用域名字改走
+    // 正文 整段搬到 ./scene-linkage.ts（一字未改，只把七个 apply 作用域名字改走
     // deps）。调用点位置原样不动 —— 重包的是那四个 service 对象上的 ops 表，而下游（handlers
     // 表、工具依赖表）取的是**当时那份函数**：包晚了，联动对它们就不存在。
     // 两个**定义在本调用之后**的名字用 getter 传：`mcp` 在 MCP 管理域那一段才建、
@@ -2091,7 +2104,7 @@ export default {
       onSceneToolTableChanged: (scene, preset) => syncSessionsForSceneToolTable(scene, preset),
     })
 
-    // HTTP 写 / 敏感 op 白名单（2026-09-19 抽到 ./request-gate.ts）：四个 service 自报的
+    // HTTP 写 / 敏感 op 白名单（抽到 ./request-gate.ts）：四个 service 自报的
     // writeOps，加上本文件内联域（mcpm-* / skill-open / agentsmd-* / history-*）。
     const { WRITE_OPS, SENSITIVE_OPS } = createOpWhitelist({
       writeOps: {
@@ -2116,16 +2129,16 @@ export default {
     // 才能让"记到哪一条"两侧都看见。`logged` 保证控制台只报一次。
     const subagentFailures = { list: subagentToolFailures, logged: false }
 
-    // 归档会话域（2026-09-19 抽到 ./sessions/history.ts）：侧车账本落点与搬迁、
+    // 归档会话域（抽到 ./sessions/history.ts）：侧车账本落点与搬迁、
     // 保留期设置与到期清扫、批量操作目标校验、归档列表分组视图。构造实例、首次清扫、
     // 挂周期定时器都在工厂内完成 —— 它们原本就写在 apply() 的同一位置。
     const history = createHistoryDomain({ ctx, config, pluginRoot: PLUGIN_ROOT, message })
 
-    // 第三个 reconciler（0.21.2）：会话覆盖的**孤儿清理**。会话被永久删除之后，它的覆盖
+    // 第三个 reconciler：会话覆盖的**孤儿清理**。会话被永久删除之后，它的覆盖
     // 条目（`scope-overrides.json` 的 `sessions[id]`）就再没有任何入口能看到它 —— 下拉框
     // 按会话头枚举，头没了那条就永远列不出来，只会越积越多。
     //
-    // 只清**真删除**的（决策 13）：归档会话的头仍在 `listStoredHeaders()` 里，所以归档
+    // 只清**真删除**的：归档会话的头仍在 `listStoredHeaders()` 里，所以归档
     // 的覆盖会被保留，恢复后自动回来。读不到会话清单时**什么都不删** —— 那说明宿主那边
     // 出了问题，此时清表等于把用户的全部设置一次性抹掉。
     registerBootReconciler({
@@ -2163,9 +2176,9 @@ export default {
       },
     })
 
-    // 第四个 reconciler（0.21.2 复核）：**悬空场景引用**的自愈。
+    // 第四个 reconciler：**悬空场景引用**的自愈。
     //
-    // 场景删除 / 改名发生在场景层，0.21.2 之前的写路径不会回头改会话的 `scope.scene`。
+    // 场景删除 / 改名发生在场景层，老写路径不会回头改会话的 `scope.scene`。
     // 停在一个已不存在场景里的会话会静默退回全局 —— 更糟的是 `sessionSceneOf` 仍拿旧名
     // 当生效场景，记忆注入只取 `_shared + global`、漏掉全局当前场景；之后若有人新建同名
     // 场景，这些会话还会**自动进入**它。删除 / 改名的新路径已经就地同步；这一条兜住
@@ -2197,12 +2210,12 @@ export default {
       },
     })
 
-    // 回收站保留期域（0.19.1）：与上面的 history 同形 —— 构造、首次清扫、周期定时器都在
+    // 回收站保留期域：与上面的 history 同形 —— 构造、首次清扫、周期定时器都在
     // 工厂内完成。默认保留期是 `0`（永久保留），所以对没打开过这个开关的宿主来说，
     // 启动那次清扫读完侧车就返回了，一次磁盘遍历都不做。
     //
     // 记忆回收站那两条**走 memories 域的 op**，不在这里重抄路径与 manifest 形状：它在
-    // `hub/trash/memories-trash/`（2026-10-10 起与其余五类同处一处，之前是 hub 根下的独立
+    // `hub/trash/memories-trash/`（与其余五类同处一处，原先在 hub 根下的独立
     // 目录），形状由 memories 域自己定 —— 重抄一遍只会得到第二份会漂移的真相。
     const trashRetention = createTrashRetentionDomain({
       ctx,
@@ -2227,7 +2240,7 @@ export default {
 
     // ── 场景提示词 → 全局基线（AGENTS.md）同步 ────────────────────────────────
     //
-    // 用户裁定（2026-09-15）：「切换场景，对应的提示词直接把 AGENTS.md 直接修改」。
+    // 用户要求：「切换场景，对应的提示词直接把 AGENTS.md 直接修改」。
     // 实现收在 ./scene-prompt-sync.ts（可在临时目录上端到端验证）：启用/切换场景、
     // 关掉场景、改绑定、编辑"驱动基线的那份预设"四个动作都会同步；关掉场景时按
     // 进场景前的基线快照（`scene-baseline.json`，hub 内）原文写回。
@@ -2250,13 +2263,13 @@ export default {
      *
      * 场景接管期间（启用场景 / 全局绑定在驱动基线）：
      *   - 应用**同一份** = 重新应用（把被手改的基线写回去），走场景同步；
-     *   - 应用**别的份** = 换掉这个场景的绑定（用户裁定 2026-09-17：未锁定时切换要可用，
+     *   - 应用**别的份** = 换掉这个场景的绑定（用户要求 ：未锁定时切换要可用，
      *     并且同步写进场景档案）。绑定改完再走一次场景同步，于是「场景页显示什么 / 实际注入
      *     什么 / 谁是引用方」三处立刻重新对齐（此前的做法是直接拒绝，用户得先退出场景）。
      * 锁定由 `guardLockedOps` 挡住（agentsmd-apply 在冻结清单里）；模型工具
      * `prompt_manager_apply` 不经过 handlers，execute 里自带 `lockedSceneGuard`（F-001）。
      */
-    async function applyPresetGuarded(id: string): Promise<{ ok: true; id: string; backedUp?: boolean; viaScene?: boolean; scene?: string } | { ok: false; error: string; code?: string; params?: Record<string, string> }> {
+    async function applyPresetGuarded(id: string): Promise<{ ok: true; id: string; backedUp?: boolean; viaScene?: boolean; scene?: string; label?: string } | { ok: false; error: string; code?: string; params?: Record<string, string> }> {
       const driver = await scenePromptSync.driver()
       if (driver) {
         const target = String(id ?? '').trim()
@@ -2275,7 +2288,9 @@ export default {
         if (r.error) return { ok: false, error: r.error }
         // 带上场景名：调用方要能如实告诉用户「改的是哪个场景的绑定」，而不是笼统说
         // 「已应用到 AGENTS.md」——场景驱动时写进 AGENTS.md 的内容来自场景绑定。
-        return { ok: true, id, viaScene: true, scene: driver.label }
+        // `scene` 是**名字**（`scene_manager_*` 认的那个），`label` 只是界面显示名：
+        // 两个都回，调用方才不会把「全局」当成场景名去转述（那个名字是 `global`）。
+        return { ok: true, id, viaScene: true, scene: driver.scene, label: driver.label }
       }
       return promptsService.apply(id)
     }
@@ -2289,11 +2304,10 @@ export default {
     }
 
     // ---------- path discovery ----------
-    // Known limitation: profile detection probes PROFILE_CANDIDATES ('web' then
-    // 'headless', see host-names.ts) by presence of profiles/<name>/cordis.patch.yml,
-    // then falls back to any profile that has one, and finally to
-    // DEFAULT_PROFILE_NAME. A profile whose directory name matches none of these
-    // and has no patch file yet is not detected.
+    // 已知限制：profile 探测按 profiles/<name>/cordis.patch.yml 是否存在，依次试
+    // PROFILE_CANDIDATES（'web' → 'headless'，见 host-names.ts），再退回"任何有补丁的
+    // profile"，最后落到 DEFAULT_PROFILE_NAME。目录名不在候选里、又还没有补丁文件的
+    // profile 探测不到。
     let cached: { home: string; profileDir: string; profileName: string; projectPatch: string; globalPatch: string; bundlePatch: string } | null = null
     async function ensurePaths() {
       if (cached) return cached
@@ -2314,7 +2328,7 @@ export default {
           // 0.1.7 起 `prepareDocument()` 返回的是 **profile 补丁**（`configEditor.documentPath`，
           // 形如 `<home>\profiles\web\cordis.patch.yml`）；0.1.5 返回的才是主目录下的设置文档。
           // 直接切片会把 profile 目录当成主目录 —— globalPatch 随之指到 profile 补丁，
-          // 全局补丁里那些 MCP 行就全部读不到了（0.15.0 实测）。所以先认这个形状：
+          // 全局补丁里那些 MCP 行就全部读不到了（实测如此）。所以先认这个形状：
           // 目录以 `profiles\<name>` 结尾 ⇒ 它自己就是 profileDir，主目录上溯两级。
           const profileShaped = /^(.+)[\\/]profiles[\\/]([^\\/]+)$/.exec(docDir)
           if (profileShaped) {
@@ -2348,7 +2362,7 @@ export default {
       // 推导出的 profileDir 直接可信；只有它没给出 profile 形状时才走下面的候选探测。
       const profileShapedPatchExists = derivedProfileDir !== null
         && (await exists(derivedProfileDir + sep + 'cordis.patch.yml'))
-      // —— 推导自检（0.15.0）：健康时不留 note（运行时上报一律渲染成兼容页的问题行，
+      // —— 推导自检：健康时不留 note（运行时上报一律渲染成兼容页的问题行，
       // 常驻健康行会违反「琥珀只留给故障」的口径），只在推导结果反常时记，恢复时收掉。
       // 两条不变量照着 0.1.7 事故的形状挑：那次推出的「主目录」其实存在（是 profile 目录），
       // 存在性检查抓不住，**profiles 子目录**检查才抓得住 —— 主目录下永远有 profiles\
@@ -2430,14 +2444,13 @@ export default {
       }
     }
 
-    // Timestamped copies of the previous patch content. The template upstream
-    // learned this the hard way: a bad edit to cordis.patch.yml can stop DSH
-    // from booting, so the pre-write file must stay recoverable without git.
+    // 每次写补丁前留一份带时间戳的副本：cordis.patch.yml 改坏能让 DSH 起不来，
+    // 所以写前那份必须不靠 git 也能拿回来。
     const KEEP_PATCH_BACKUPS = 5
     /**
      * 备份名里的时间戳：**到毫秒 + 进程内序号**（定宽）。
      *
-     * 为什么不能只到秒（2026-09-30 审查 P2-5）：同一次操作里常常连写两遍补丁（`mcpm-set-enabled`
+     * 为什么不能只到秒：同一次操作里常常连写两遍补丁（`mcpm-set-enabled`
      * 的强制写 + 恢复写、整理补丁的批量写），两次落在同一秒时**后一份备份会覆盖前一份** ——
      * `KEEP_PATCH_BACKUPS=5` 于是不是"留 5 个历史状态"而是"留 5 个秒"，最坏情况下唯一能回滚的
      * 中间副本被挤掉。序号保证同一毫秒内也不撞名。
@@ -2486,7 +2499,7 @@ export default {
      * 用它列目录会得到 0 份。它的用途是启动期搬运旧文件，语义不同，别混。
      */
     function isBackupFileName(name: string): boolean {
-      // 两代时间戳都认：老名字到秒（`\d{6}`），0.17.0 起加了毫秒与序号（共 `\d{12}`）。
+      // 两代时间戳都认：老名字到秒（`\d{6}`），加了毫秒与序号（共 `\d{12}`）。
       // 只认新格式会让**存量备份**在清单与自动剪枝里集体消失 —— 它们既不再被剪掉，
       // 也不再出现在「清理旧备份」里，等于把明文密钥副本永久留在盘上。
       return /^cordis\.patch\.yml(?:\.[A-Za-z0-9._-]+)?\.bak-\d{8}-\d{6}(?:\d{6})?$/.test(basename(String(name || '')))
@@ -2530,7 +2543,7 @@ export default {
      * 对"回滚"几乎没有额外价值，对"密钥扩散"却全是成本。自动剪枝只保证上限，不提供"我现在
      * 就想把它们清掉"的出口 —— 这个 op 就是那个出口。
      *
-     * 口径沿革（用户裁定 2026-09-19）：先是"每层留 N 份"，再改成"每层各删 N 份"，最后落到
+     * 口径沿革：先是"每层留 N 份"，再改成"每层各删 N 份"，最后落到
      * **每个层级各选一份数** —— 两个层级的份数本来就不等（实测 4 / 5），共用一个 N 时总数
      * 只能凑出偶数、份数少的那层先被删光就断档（选 5 得到 9），选中的档位与"删了几个"对不上。
      * 逐层各选就没这个限制，而且"这一份是从哪层删的"一一对应。
@@ -2620,7 +2633,7 @@ export default {
     }
 
     // ---------- 访问令牌：宿主侧配置的读写（兼容页就地开关） ----------
-    // 正文 2026-10-01 整段搬到 ./token-config.ts（一字未改，只把八个 apply 作用域名字改走
+    // 正文 整段搬到 ./token-config.ts（一字未改，只把八个 apply 作用域名字改走
     // deps）。这一段是 apply 里唯一**改写宿主启动配置**的手：四个方向的凭证判据、写点优先级、
     // 拒写形状全在那一层的注释里。这里按原位置建一次工厂 —— 它没有状态，两个出口仍然只被
     // apply 末尾的 HTTP 路由就地调用（刻意不进 handlers 表，模型关不掉访问令牌）。
@@ -2664,7 +2677,7 @@ export default {
 
     // ---------- MCP 管理域 ----------
     // 侧车读写（备注 / 设置 / 停用表）+ 补丁受管行的生成与块编辑 + 16 个 op，实现在
-    // ./mcp/manager.ts（2026-09-19 从本闭包原样抽出，约 1300 行）。
+    // ./mcp/manager.ts（从本闭包原样抽出，约 1300 行）。
     //
     // 为什么经工厂 + 返回对象，而不是把函数留在这里：这一域有**反向依赖** —— 注入通道要
     // 打码后的列表行、场景档案引擎要读写停用表与备注、工具门禁要读 TTL 缓存判断某工具是否
@@ -2691,17 +2704,17 @@ export default {
       // 有官方等价物时逐 agent 让位（见上面 CARRIER_DUPLICATES 的注释）。
       carrierHiddenTools: carrierHiddenToolsFor,
       // 状态段尾句那句「用 `mcp_manager_list` 查」的前提：与技能 / 子智能体两个目录同一份判据
-      // （2026-10-18 审查 B）。
+      // 。
       listToolVisible: (agent: unknown) => toolVisibleFor('mcp_manager_list', agent),
-      // 会话层（0.21.2）：两半各管一头 ——
+      // 会话层：两半各管一头 ——
       //   · `sessionMcpOverlay`（异步）给 restrictAgent：在**此刻注册着的**工具全名上算
       //     allow / deny（deny 追加、allow 从全局停用名单里减掉，见 tool-visibility.ts）；
       //   · `sessionHiddenServer`（同步）给状态段与 mcp_manager_list 逐行问。
       sessionMcpOverlay: (agent: unknown) => sessionMcpOverlayOf(agent),
-      // 模型工具表也按对话走（0.21.2）：本对话的整份关停名单与全局的差异并进同一层 restrict。
+      // 模型工具表也按对话走：本对话的整份关停名单与全局的差异并进同一层 restrict。
       sessionToolTableOverlay: (agent: unknown) => sessionToolTableOverlayOf(agent),
       sessionHiddenServer: (agent: unknown, serverName: string) => sessionServerHiddenOf(agent, serverName),
-      // 逐工具会话判定（0.21.2）：状态段按它把「本会话把工具全关了」的服务器标成不可用。
+      // 逐工具会话判定：状态段按它把「本会话把工具全关了」的服务器标成不可用。
       // 每次渲染只建一次会话快照（覆盖 / 场景层 / 基线 / 意图四张表），逐工具再问不会重算。
       sessionToolVerdictFor: (agent?: unknown) => {
         const ctx = sessionMcpContextOf(agent)
@@ -2728,11 +2741,9 @@ export default {
     }
 
 
-    // ---------- open a skill source in the OS default editor ----------
-    // Fire-and-forget: the launcher detaches, so a hanging editor never blocks
-    // the request. Only existing Markdown source files are accepted — the route
-    // is same-origin + token gated, but it must not become a "launch anything"
-    // primitive.
+    // ---------- 用系统默认编辑器打开技能来源 ----------
+    // 发出去就不管：启动器自己 detach，编辑器卡住也不会挂住请求。只接受**已存在的
+    // Markdown 源文件** —— 这条路由虽然同源 + token 门控，也不能变成「启动任意程序」的入口。
     function openWithSystemEditor(abs: string): boolean {
       try {
         const platform = process.platform
@@ -2792,7 +2803,7 @@ export default {
 
 
     // ---------- 候选源（场景 / 表单的取数）----------
-    // 实现在 ./scenes/candidates.ts（2026-09-19 从本闭包 10 段抽出，约 260 行）。
+    // 实现在 ./scenes/candidates.ts（从本闭包 10 段抽出，约 260 行）。
     // 放在这里而不是更早：它要 mcp（读停用表）与 toolKeyParts（416 行的 const），
     // 而唯一在更早处引用它的地方（注入 deps 的 factsFor）是箭头函数，调用发生在之后。
     // 本插件注册过的工具名。**唯一**可靠的"插件工具"判据：官方没有工具级归属接口
@@ -2846,7 +2857,7 @@ export default {
       warn: (m: string) => { ctx.logger?.warn?.(m) },
     })
 
-    // ---------- 会话作用域的全局快照与会话清单（0.21.2）----------
+    // ---------- 会话作用域的全局快照与会话清单----------
     // 两件事都**复用各域自己的 op**，不另读一遍磁盘：全局值就是那几条列表 op 回的 enabled
     // 字段，抄第二份判定必然分叉（某天 core 改了"未记录 = 启用"的口径，这边不会跟着变）。
     //
@@ -2856,7 +2867,7 @@ export default {
       const flags: Record<string, Record<string, boolean>> = { skills: {}, subagents: {}, memory: {}, quickPrompts: {}, mcp: {}, mcpTools: {}, skillSources: {} }
       const unavailable: string[] = []
       let scene: string | null = null
-      // 意图（0.21.2）：MCP 与技能来源两格的"全局值"现在是**意图**，不是补丁 / 来源状态。
+      // 意图：MCP 与技能来源两格的"全局值"现在是**意图**，不是补丁 / 来源状态。
       // 读不到 = 没有意见 → 那两格退回运行态（见 planReconcile 的升级推断）。
       let intentSnapshot: ScopeIntent = intentStore.snapshot()
       try { intentSnapshot = await intentStore.read() } catch { /* 读不到 = 没有意见 */ }
@@ -2897,7 +2908,7 @@ export default {
           if (!r || r.ok === false) { unavailable.push('skillSources'); throw new Error('skill-state failed') }
           const data = r.data ? r.data : r
           for (const root of ((data && data.roots) || [])) {
-            // 来源一格（0.21.2）与技能一格共用这次扫描。来源的全局值是**意图**：
+            // 来源一格与技能一格共用这次扫描。来源的全局值是**意图**：
             // on / off / blocked 以意图为准，没记录才落到运行态（`root.enabled`，缺省 = 开）。
             const rootKey = String(root.key || '')
             if (rootKey) {
@@ -2909,7 +2920,7 @@ export default {
             for (const sk of (root.skills || [])) {
               const name = String(sk.declaredName || sk.name || '')
               if (!name || !rootKey) continue
-              // 单条技能的全局值也是**意图**优先（0.21.2）：租约期间运行态是开着的，
+              // 单条技能的全局值也是**意图**优先：租约期间运行态是开着的
               // 直接读 `sk.enabled` 会把"某个对话临时开着"报成"全局开着"，
               // 新会话于是继承那条技能 —— 与服务器那格修过的串味同一条路径。
               const skillKey = rootKey + '/' + name
@@ -2935,7 +2946,7 @@ export default {
           }
         }),
         settle('mcp', async () => {
-          // MCP 的全局口径 = **意图**（0.21.2）。不能用补丁当全局值：补丁是 `意图 ∪ 租约`，
+          // MCP 的全局口径 = **意图**。不能用补丁当全局值：补丁是 `意图 ∪ 租约`
           // 把租约当成全局开着，正是"会话开了 mcp，新会话也注入"那条串味路径。
           // 也不能用逐工具停用表：那张表的 `*` 是场景档案把整台工具收窄，与服务器开没开是两件事。
           // 意图没有记录时（升级首轮 / 新服务器）才退回补丁的启停值。
@@ -2948,7 +2959,7 @@ export default {
                 : row.disabled !== true
           }
         }),
-        // 逐工具一格（0.21.2）：`<server>/<tool>` → 全局可见性。真值与 `mcpTools` 覆盖表、
+        // 逐工具一格：`<server>/<tool>` → 全局可见性。真值与 `mcpTools` 覆盖表
         // 场景档案的 `mcp` 段（工具清单）都按同一批键对齐 —— 用 `candidates.toolStates()`
         // （停用表 ∪ live schema 的同一份推导），不另算一遍。
         settle('mcpTools', async () => {
@@ -2956,7 +2967,7 @@ export default {
           for (const [key, enabled] of Object.entries(states)) flags.mcpTools[key] = enabled === true
         }),
       ])
-      // 租约计数（0.21.2 第四轮）：**七个域全部读时现算**。此前 mcp / skillSources / skills
+      // 租约计数：**七个域全部读时现算**。此前 mcp / skillSources / skills
       // 三格读的是对账器维护的内存 Map —— 而会话的删除 / 归档 / 恢复 / 重启都不走插件的写 op，
       // 没有任何路径会去刷那三个 Map，徽章于是停在旧值（用户报障 B / C）。现算把"谁记得刷新它"
       // 这条依赖整个删掉：会话清单此刻长什么样，徽章就是什么样。
@@ -3031,7 +3042,7 @@ export default {
     async function captureBaselineSnapshot(): Promise<SessionBaseline | null> {
       try {
         const snap = await scopeGlobalSnapshot()
-        // 模型工具表也抄一份（0.21.2）：每个对话从创建那一刻起有自己的整份名单。
+        // 模型工具表也抄一份：每个对话从创建那一刻起有自己的整份名单。
         // 先 await 一次设置读取，避免缓存还冷时把"一个都不关"抄成基线。
         const toolTable = await readToolTableSettings()
         return {
@@ -3094,7 +3105,7 @@ export default {
         for (const domain of SCOPE_FLAG_DOMAINS) traced[domain] = new Set()
         return { mcp: empty(), skillSources: empty(), skills: empty(), mcpExplicit: empty(), sourceExplicit: empty(), skillExplicit: empty(), traced }
       }
-      // **严格读**（0.21.2 第四轮）：痕迹闸门要在"这份侧车没读出来"时保守 ——
+      // **严格读**：痕迹闸门要在"这份侧车没读出来"时保守 ——
       // 而吞错语义下空表与读失败长得一模一样，那正好会把"不采纳"翻成"采纳"。
       const { scan, readable } = await scanClaimsOnce(targets, true)
       return {
@@ -3161,13 +3172,13 @@ export default {
         }))
         .filter((root) => root.key !== '')
       const sources = sourceRows.map((root) => root.key)
-      // 单条技能一行（0.21.2）：`running` 取 core 那份策略表的实际启停。
+      // 单条技能一行：`running` 取 core 那份策略表的实际启停。
       // 影子副本不进对账 —— 同名只有胜出者会被 core 加载，去启用副本等于白写一次；
       // 没有声明名的条目同理（键都对不上，写进去就是一条永远读不到的策略）。
       //
       // ⚠️ 键用**声明名**（`dsh/pdf-reader`），core 的启停 op 用**条目名 / 目录名**
       // （`pdf-skill`）。两者可以不同（SKILL.md 的 `name` 与文件夹名各写各的），
-      // 把声明名传给 core 会得到「技能不存在: pdf-reader」（2026-10-21 真机：重启后
+      // 把声明名传给 core 会得到「技能不存在: pdf-reader」（真机：重启后
       // 租约里的技能拉不起来）。界面的启停 op 收的是 `sk.name`，与这里同一个口径。
       const skillRows: Array<{ key: string; root: string; name: string; running: boolean }> = []
       for (const root of roots) {
@@ -3190,7 +3201,7 @@ export default {
         // 连扫描都没跑成 → 一切按"有痕迹"算（最保守的一档，见 `planReconcile` 的痕迹闸门）。
         traced: null,
       }))
-      // 痕迹闸门（0.21.2 第四轮）：`traced === null` = 侧车没读出来，一律当有痕迹 ——
+      // 痕迹闸门：`traced === null` = 侧车没读出来，一律当有痕迹 ——
       // 宁可少采纳（运行态落回 claims>0），也不把某个会话留下的运行态提升成全局 `on`。
       const tracedOf = (domain: ScopeFlagDomain, key: string): boolean =>
         claims.traced === null || (claims.traced[domain]?.has(key) ?? false)
@@ -3286,7 +3297,7 @@ export default {
       }
       // 来源与单条技能的目录重算合并到 ④ 之后一次做：两处各刷一次会让同一轮对账把
       // 每个会话的目录扫两遍（`refresh` 会换代并作废在飞的那一批）。
-      // ④ 运行态：单条技能（0.21.2）。这一格的策略表是**机器级**的 —— core 按进程发布，
+      // ④ 运行态：单条技能。这一格的策略表是**机器级**的 —— core 按进程发布
       //    官方 `skill` 工具只认那张表。所以"本对话开一条全局关着的技能"必须临时落进表里
       //    才加载得了；不落地就是目录写着有、真调用必拒的空头承诺。
       //    走**没被包过一层**的原始 op：包过的那条会先写意图再排对账，这里再调就自己跟自己打转。
@@ -3308,7 +3319,7 @@ export default {
         }
       }
       if (skillChanged || sourceChanged || intentWrites.some((write) => write.domain === 'skills' || write.domain === 'skillSources')) {
-        // **不阻塞对账回执**（0.21.2，与来源那一格同一条）：这条链是 `scope-set` → 对账 →
+        // **不阻塞对账回执**（与来源那一格同一条）：这条链是 `scope-set` → 对账 →
         // 这里，等目录重算落地等于每次拨开关都多等一轮全量扫描。旧数据保留在缓存里，注入侧
         // 不会读到空，也就不会误发「已清空」；新清单晚一步到，下一轮注入自然带上。
         scheduleSkillCatalogRefresh()
@@ -3348,14 +3359,14 @@ export default {
     }
 
     /**
-     * 给 MCP 列表行补三个字段（0.21.2）：`intent`（三态）/ `globalOn`（意图优先，运行态兜底）/
+     * 给 MCP 列表行补三个字段：`intent`（三态）/ `globalOn`（意图优先，运行态兜底）/
      * `leaseCount`（有几个别的会话在认领它）。
      *
      * 面板的全局开关必须读 `globalOn` 而不是 `disabled`：后者是运行态，租约期间两者不同 ——
      * 读 `disabled` 会把"全局关着、只为几个对话临时跑着"显示成"全局开着"。
      */
     /**
-     * `leaseCount` **现算**（0.21.2 第四轮）：读的是此刻的会话清单，不是对账器上一次留下的
+     * `leaseCount` **现算**：读的是此刻的会话清单，不是对账器上一次留下的
      * 内存 Map —— 后者在"会话被删除 / 归档 / 恢复"之后没人刷（那些操作不走插件的写 op）。
      */
     async function annotateMcpRows(result: any): Promise<any> {
@@ -3381,7 +3392,7 @@ export default {
 
     /**
      * 技能清单的来源行：与 `annotateMcpRows` 同一套字段与口径（`globalOn` 是意图，不是运行态）。
-     * `leaseCount` 同样**现算**（0.21.2 第四轮）。
+     * `leaseCount` 同样**现算**。
      */
     async function annotateSkillState(result: any): Promise<any> {
       if (!result || result.ok === false) return result
@@ -3406,7 +3417,7 @@ export default {
       const decorate = (root: any): any => {
         const key = String((root && root.key) || '')
         const state = intentOf(intent, 'skillSources', key)
-        // 单条技能也带上三件（0.21.2）：界面上的「临时运行 · N 个对话」与"全局开着吗"
+        // 单条技能也带上三件：界面上的「临时运行 · N 个对话」与"全局开着吗"
         // 都读这份，缺了它界面就会把租约期间的开着说成用户全局开过。
         const skills = ((root && root.skills) || []).map((sk: any) => {
           const name = String((sk && (sk.declaredName || sk.name)) || '')
@@ -3437,7 +3448,7 @@ export default {
     }
 
     /**
-     * 宿主**已知的全部**会话 id（含归档、含未挂回工作区的孤儿）—— 侧车 GC 的判据（0.21.2）。
+     * 宿主**已知的全部**会话 id（含归档、含未挂回工作区的孤儿）—— 侧车 GC 的判据。
      *
      * 与 `scopeSessionRows` 的区别是这条**不做**"当前会话区成员"过滤：那一层过滤是下拉框的
      * 展示口径（列出来只会是一串同名条目），而 GC 要回答的是"宿主还认得这个会话吗"。
@@ -3462,7 +3473,7 @@ export default {
     }
 
     /**
-     * 下拉框的会话清单：**当前会话区里的**会话（用户 2026-10-20），带归档标记。
+     * 下拉框的会话清单：**当前会话区里的**会话（与侧栏同源），带归档标记。
      *
      * "当前会话区" = 宿主工作区记账表里的会话成员：只读 `sessionIds` 并集。持久化目录里
      * 还有大量未挂回任何工作区的旧会话（同一目录重建登记后留下的孤儿），它们不在侧栏里，
@@ -3544,14 +3555,14 @@ export default {
      *
      * 为什么直接读 `storages/session_projcache` 的文件：宿主的 `cachedSnapshot(header)`
      * 只对**已加载**的会话给值，冷会话读出来是空 —— 于是下拉里全是没标题的空壳
-     * （2026-10-20 实测）。投影缓存文件是宿主自己在磁盘上的权威副本，布局稳定
+     * 。投影缓存文件是宿主自己在磁盘上的权威副本，布局稳定
      * （`record.rows.title.val` / `record.rows.titleInput.val.count`）。读不到就返回
      * undefined，调用方保留兜底标题、也不做空壳过滤。30 秒 TTL：自动起标题是低频动作。
      */
     const scopeSummaryCache = new Map<string, { at: number; value: { title?: string; hasMessages: boolean } | undefined }>()
     const SCOPE_SUMMARY_TTL_MS = 30000
     /**
-     * 上限 200 条 LRU（0.21.2）。此前只有 TTL 判断、**从不淘汰**：过期条目一直躺在 Map 里，
+     * 上限 200 条 LRU。此前只有 TTL 判断、**从不淘汰**：过期条目一直躺在 Map 里
      * 每个被下拉框看过的会话都留一条，长期运行的实例上这是无界增长（每条还攥着标题字符串）。
      * 键是会话 id，Map 保序 ⇒ 命中时移到队尾，头部就是最久没用的那条。
      */
@@ -3629,7 +3640,7 @@ export default {
     }
 
     /**
-     * `tool-table` 的会话分支（0.21.2）：
+     * `tool-table` 的会话分支：
      *   · 带 `sessionId` 读 → 本对话生效名单；
      *   · 带 `sessionId` + `set` → **整份替换**本对话的名单（不写全局）；
      *   · 方案存 / 删仍是全局库，会话层直接拒绝（界面把入口置灰）。
@@ -3676,7 +3687,7 @@ export default {
       // 只收注册过的工具名：陌生名字会让官方 restrict 抛错。
       const target = normalizeToolTableSettings({ hidden: args.hidden }).hidden
         .filter((name) => toolTableSizes.has(name))
-      // 老会话的基线里没有这一栏（那是 0.21.2 才加的）：第一次写时按**当前全局**补一份，
+      // 老会话的基线里没有这一栏：第一次写时按**当前全局**补一份，
       // 否则退出场景会退回"实时全局"，与"每个对话从创建起有自己的那份"这条口径不符。
       const backfillBaselineTt = scope?.baseline !== undefined && scope.baseline.toolTableHidden === undefined
       const base = scope?.baseline?.toolTableHidden ?? (backfillBaselineTt ? settings.hidden : undefined)
@@ -3695,14 +3706,14 @@ export default {
         return { ok: false, error: '保存失败: ' + message(e) }
       }
       mcp.scheduleToolRestrictions()
-      // 同上：会话工具表保存也不等两个目录重算（0.21.2）。
+      // 同上：会话工具表保存也不等两个目录重算。
       scheduleSkillCatalogRefresh()
       void subagentCatalog.refresh().catch(() => { /* 同上 */ })
       scope = scopeStore.scopeOfSync(sessionId)
       return toolTableSessionPayload(sessionId, scope, settings)
     }
 
-    // 更新检查（0.21.2）：只读、后台预热、绝不自动更新。宿主版本在**请求时**才探测 ——
+    // 更新检查：只读、后台预热、绝不自动更新。宿主版本在**请求时**才探测 ——
     // 启动期做一次全量能力探测不划算，而且探测结果本来就可能随装配阶段变化。
     // 缓存落 hub 根，`update-status` 与启动预热共用同一个 in-flight 请求。
     const updateChecker = createUpdateChecker({
@@ -3723,7 +3734,7 @@ export default {
 
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
-      // 「最近改动」流水的读侧（0.15.0 B2）：只读 hub 里的 `audit.jsonl`，倒序、可按域过滤。
+      // 「最近改动」流水的读侧：只读 hub 里的 `audit.jsonl`，倒序、可按域过滤。
       'audit-list': async (args: any) => ({ ok: true, entries: await readAudit(args || {}) }),
       // 清空流水。清完这一条 op 自己会被下面的包装层记进新流水（"谁清过"也留痕）。
       'audit-clear': async () => await clearAudit(),
@@ -3768,7 +3779,7 @@ export default {
         listPatchBackups,
         cleanPatchBackups,
         getContextInjectorLive: () => contextInjectorLive,
-        // 功能总览（B6）的三层合成：令牌实况与兼容页「访问令牌」同源；场景锁定与写门禁同源；
+        // 功能总览的三层合成：令牌实况与兼容页「访问令牌」同源；场景锁定与写门禁同源；
         // 停用工具的两个口径读 mcp 的 TTL 缓存（无 I/O）。
         readTokenState: async () => ({ active: TOKEN !== '', accepted: TOKEN !== '' && acceptedThisBoot() }),
         lockedSceneNames: () => lockedSceneNames(),
@@ -3827,7 +3838,7 @@ export default {
           return slice.mode && slice.mode.scene ? slice.mode.scene : null
         },
         sceneModeSet: (args: any) => archiveService.ops['scene-mode-set'](args),
-        // 会话同步（0.21.2 复核）：改名 / 删除发生在场景层，停在里面（或引用它）的会话要跟着走。
+        // 会话同步：改名 / 删除发生在场景层，停在里面（或引用它）的会话要跟着走。
         onSceneRenamed: (from, to) => syncSessionsForSceneRename(from, to),
         onSceneRemoved: (name) => syncSessionsForSceneRemoval(name),
         onToolTablePresetChanged: async (scene: string, value: string) => {
@@ -3835,7 +3846,7 @@ export default {
           // 那一份（与「改档案 = 立刻生效」同口径）。解绑（''）按下拉里的承诺 =「保持现状」，
           // 运行时不动；悬空绑定（方案已删）也不在这里硬失败，交给引擎进出场景时的 stale 处理。
           //
-          // 会话层（0.21.2 复核）：工具表是按对话的一份，停在**这个场景**里的会话各自
+          // 会话层：工具表是按对话的一份，停在**这个场景**里的会话各自
           // 也有一份抄下来的名单 —— 与全局模式无关，先把它们一起换掉。
           if (value) await syncSessionsForSceneToolTable(scene, value)
           const slice = await memoriesService.readArchiveSlice()
@@ -3889,7 +3900,7 @@ export default {
       'sidebar-settings': (args: any) => sidebarSettingsOp(args),
       // 会话作用域五条（ops/scope.ts）：scope-get / scope-set / scope-clear /
       // scope-sessions-list / scope-lock。**都不冻结** —— 场景锁冻结的是全局写入，
-      // 而这里改的是叠加在全局之上的会话视图（决策 11 / 12，理由见 ops/scope.ts 文件头）。
+      // 而这里改的是叠加在全局之上的会话视图（理由见 ops/scope.ts 文件头）。
       // 全局快照与真值同源：场景取 `rules-list` 的 activeScene，技能取 `skill-state` 的
       // enabled，人设取 `subagent-list` 的 enabled，快捷词取 `quickprompt-list` 的 enabled，
       // MCP 取补丁层的启停（`configuredServerStates`，与界面开关同一份真值；不是逐工具停用表）。
@@ -3912,7 +3923,7 @@ export default {
         summaryOf: (id) => scopeSessionSummary(id),
         // 场景档案（同步）：场景层按它实时计算（档案改了，下一个请求就跟着变）。
         sceneArchiveOf: (scene) => memoriesService.sceneArchiveOf(scene),
-        // 模型工具表（0.21.2）：进场景时把绑定方案套到**本对话**；注册表用来滤掉历史名字。
+        // 模型工具表：进场景时把绑定方案套到**本对话**；注册表用来滤掉历史名字。
         toolTablePresetHidden,
         toolTableAvailable: () => toolTableSizes,
         sceneExists: async (name) => {
@@ -3928,7 +3939,7 @@ export default {
         },
         // 基线：会话**创建时**的冻结快照 —— 启动期与 agent/created 各调一次（`ensureBaselineFor`）。
         captureBaseline: () => captureBaselineSnapshot(),
-        // 会话提示词（0.21.2）：应用前读一次正文（校验存在性 + 拒绝空预设）；
+        // 会话提示词：应用前读一次正文（校验存在性 + 拒绝空预设）
         // scope-get 的预填走同一条解析链（含场景预设 / AGENTS.md 退化）。
         presetContent: async (id) => {
           const r: any = await promptOps['agentsmd-read']({ id })
@@ -3987,7 +3998,7 @@ export default {
           indexQuarantined: async () => {
             try { return await readQuarantineMarker(hubRoot()) } catch { return null }
           },
-          // MCP 重启中断（0.21.2）：pid 活着 = 那次重启可能还在跑，如实报 alive，
+          // MCP 重启中断：pid 活着 = 那次重启可能还在跑，如实报 alive
           // 由体检那边决定算不算问题。
           mcpRestartPending: async () => {
             try {
@@ -4002,7 +4013,7 @@ export default {
         })
         return { ok: true, ...report }
       },
-      // 诊断包（0.21.2）：只读、纯文本、**白名单字段**。不含密钥 / 正文 / 日志内容 ——
+      // 诊断包：只读、纯文本、**白名单字段**。不含密钥 / 正文 / 日志内容 ——
       // 令牌只报"配没配 / 这次生效没有"，侧车只报存在性、大小与时间。
       // 直接复用同一次装配里的只读 op（compat-status / state-doctor），不另写一份探测。
       'diagnostics': async () => {
@@ -4109,15 +4120,15 @@ export default {
       }
     }
 
-    // 场景锁定查询（2026-09-19 抽到 ./request-gate.ts）：读 rules-list 得到锁定场景与当前场景。
-    // 场景锁与「当前场景」的**共享读缓存**（0.21.2）。
+    // 场景锁定查询（抽到 ./request-gate.ts）：读 rules-list 得到锁定场景与当前场景。
+    // 场景锁与「当前场景」的**共享读缓存**。
     //
     // 为什么必须有：`annotateLocked`（request-gate.ts）给 5 个列表 op 的响应补
     // `anyLocked` / `activeScene`，它要**同时**问 `lockedSceneNames()` 与
     // `activeSceneName()` —— 而这两个函数在 `createSceneLock` 里各调一次
     // `readSceneList()`，也就是**每个列表 op 都把 `rules-list` 整跑两遍**
     // （`buildSnapshot` 扫全部记忆文件 + 整份 `memories-index.json` 落盘）。
-    // 实测（2026-10-18 web 端）：`skill-state` 冷启 3.4s / 热启 7ms，而 `state()`
+    // 实测（web 端）：`skill-state` 冷启 3.4s / 热启 7ms，而 `state()`
     // 单独跑只要 106ms —— 差额主要就是这两遍重复读，且它压在每一个热门列表 op 上
     // （skill-state / mcpm-list / agentsmd-list / subagent-list / mcpm-reveal）。
     //
@@ -4140,9 +4151,9 @@ export default {
       readSceneList: () => readSceneFacts(),
     })
 
-    // ---------- 场景内改开关 = 同步改档案（v0.9.2）----------
+    // ---------- 场景内改开关 = 同步改档案 ----------
     /**
-     * 用户裁定（2026-09-17）：场景**未锁定**时，页面上的开关（MCP / 技能 / 子智能体 / 提示词）
+     * 用户要求：场景**未锁定**时，页面上的开关（MCP / 技能 / 子智能体 / 提示词）
      * 照常可用，改动**同步写进当前场景的档案**；只有「锁定」才冻结这些开关。
      * 记忆不在此列 —— 它的开关是 `rules[*].enabled` 单一真相源，本来就不经过场景档案。
      *
@@ -4258,7 +4269,7 @@ export default {
      * 返回 null = 无需改动（没有活动场景 / 已锁定 / 这一笔不影响档案）；
      * 返回字符串 = 档案没跟上（运行时已经生效，如实告诉用户，而不是假装成功）。
      *
-     * **串行闸门**（2026-09-19 修）：档案是「读 → 改 → 写」三步，而撤销是**并发**发的
+     * **串行闸门**：档案是「读 → 改 → 写」三步，而撤销是**并发**发的
      * （`runUndo` 对每条改动各发一个请求）。5 条并发时每个请求都从同一份「全开」快照出发、
      * 各自只删掉自己那一台，最后落盘的是"只删掉一台"的结果 —— 表现就是**撤销把状态改成
      * 了反的**：场景里原本只开 1 台 MCP，全选后点撤销，结果变成 5 台开、1 台关。
@@ -4283,7 +4294,7 @@ export default {
       // 的参数里**根本没有 `enabled` 字段**（只有 root / name），早先统一读 `args.enabled`
       // 会把它们一律读成 false，于是「在场景里打开某个技能」被同步成「关闭」——目标集合
       // 一次变化都没有 → 直接早退不写盘，用户看到的就是「开关了但档案不跟着变」
-      // （2026-09-17 用真实产物复现）。反向更糟：启用一个来源会被同步成「把该来源下的
+      // （用真实产物复现）。反向更糟：启用一个来源会被同步成「把该来源下的
       // 技能全部从档案里删掉」，档案与运行时当场对不上。
       // 其余 op 仍按宿主逐字对齐：`mcpm-tool-enabled` 的语义是「缺省 = 启用」（`enabled !== false`）。
       const enabled = opName === 'skill-enable' || opName === 'skill-source-enable'
@@ -4456,11 +4467,11 @@ export default {
       return null
     }
 
-    // handlers 后处理（2026-09-19 抽到 ./request-gate.ts）：场景锁定守卫、开关同步档案、
+    // handlers 后处理（抽到 ./request-gate.ts）：场景锁定守卫、开关同步档案、
     // 读 op 的 anyLocked/activeScene 注解、子智能体失败清单 attach。
     // 顺序即语义（先装的在内层），整段搬运未改。
     //
-    // 整机迁移快照（0.15.0 C2）在门禁装好**之前**并入 handlers：它自己不写任何域的数据，
+    // 整机迁移快照在门禁装好**之前**并入 handlers：它自己不写任何域的数据，
     // 而是逐域调 handlers 表里那些 op —— 装好后取到的就是带门禁的那一份，场景锁定期间各域
     // 自己拒绝，迁移这边不必再判一套锁。
     const snapshotOps = createSnapshotOps({
@@ -4494,7 +4505,7 @@ export default {
     // A1 的"机器那一边"：拿**真实** op 表与 `./op-registry.ts` 对账，四个方向都查（未归类 /
     // 幽灵条目 / serviceWrite 与 service 自报分叉 / 只读与写自相矛盾）。
     // 为什么值得在启动期花这一次遍历：门禁失守的症状从来不是报错，而是"没配令牌也能写"或
-    // "锁定的场景能被改"（0.6.0 / 0.7.0 / 0.10.0 已失守四次）。少一个 op 没登记，这里当场
+    // "锁定的场景能被改"（这条纪律已经失守过四次）。少一个 op 没登记，这里当场
     // 在兼容页挂一条降级，而不是等到出事再倒查。
     {
       const problems = auditProblems(auditOpRegistry(Object.keys(handlers), [
@@ -4550,7 +4561,7 @@ export default {
      *
      * 类型上刻意**不重写签名**，而是把箭头函数断言成 `typeof hostDefineTool`：宿主签名带
      * `const S/O` 类型参数，照着写一遍会让 TS 在每个调用点上多展开一层 `InferObject<S, ?>`，
-     * 直接撞 "Excessive stack depth comparing types"（实测）。断言成宿主自己的类型之后，
+     * 直接撞 "Excessive stack depth comparing types"。断言成宿主自己的类型之后，
      * 14 个调用点的参数表推断与改造前**完全一致** —— 宿主改签名时该报错的地方照旧报错；
      * 包装体本身只是转发（参数收 `unknown`、原样交给宿主），不参与推断，也就没有可失效的类型。
      */
@@ -4561,7 +4572,7 @@ export default {
     // 各域共用的那一份依赖（形状见 tools/deps.ts）。defineTool 带着遥测一起传下去 ——
     // 各域必须用它，直接 import 宿主的那个会丢掉采纳统计。
     /**
-     * 「最近改动」流水的模型侧挂点（0.15.0 B2）。
+     * 「最近改动」流水的模型侧挂点。
      *
      * 为什么包在**交给工具的 op 表**上而不是散进每个 op：op 执行有多条入口路径（HTTP 路由、
      * 模型工具的 execute、场景引擎），而判断「谁干的」这件事只有调用点知道 —— 在 op 里自己猜
@@ -4569,7 +4580,7 @@ export default {
      * 只多记一条流水：不改行为、不改返回值、也不吞异常（写类与成败的判据在 ./audit-log.ts）。
      */
     /**
-     * **模型侧的冻结闸**（审查 F3，0.17.0）：与 HTTP handlers 用同一个判据函数。
+     * **模型侧的冻结闸**：与 HTTP handlers 用同一个判据函数。
      *
      * 此前冻结只装在 `handlers` 上，而模型工具拿的是 `service.ops` 的副本 —— 于是「锁一个
      * **非活动**场景」在 HTTP 上被拒、在模型侧五个域（技能/记忆/MCP/子智能体/场景档案）
@@ -4597,20 +4608,17 @@ export default {
       register: (def: ToolDefinition) => { recordToolSize(def); tools.register(def); selfToolNames.add(String(def.name)) },
       lockedSceneGuard,
       syncSwitchToScene,
-      // 错误句里点名工具前要先问一句（判据与两个目录的 `listToolVisible` 同一份缓存）。
-      toolVisible: (name: string) => !toolTableHidden().has(name),
-      // 同上一句，但把**该 agent 的工具限制**也算进去（2026-10-14 对抗性审查 P0-1/P1-8）：
-      // 人设用 `toolsDeny` 砍掉 `mcp_manager_list` 之后，只看全局开关就会让回执点名一条
-      // 这个模型手里没有的工具。与注入侧 `injectHiddenToolsFor` 同一个函数。
+      // 错误句与回执里点名工具前要先问一句：工具表按作用域各一份，还要算上该 agent 的
+      // 工具限制（人设 `toolsDeny`）。与注入侧 `injectHiddenToolsFor` 同一个函数。
       toolVisibleFor: (name: string, agent: unknown) => toolVisibleFor(name, agent),
       reachNoticeForAgent,
       presetRoster: candidates.presetRoster,
       injectNoticeOptions,
       message,
-      // 当前隔离粒度（0.21.2+）：写类工具据此决定 `scope` 的**默认值**。`global` 粒度下
+      // 当前隔离粒度：写类工具据此决定 `scope` 的**默认值**。`global` 粒度下
       // 会话层不存在，省略 scope 的写入必须落到全局 —— 见 `effectiveScope`。
       scopeMode: () => scopeMode(),
-      // 会话层（0.21.2，决策 10）：写类工具**默认写会话**，`scope: "global"` 才走各域原路径。
+      // 会话层：写类工具**默认写会话**，`scope: "global"` 才走各域原路径。
       // 这里只提供"改本会话这一条"的窄接口 —— 自动清除 / 会话锁 / 侧车落盘的判定都在
       // ops/scope.ts 那一份实现里，工具不重复实现。
       sessionScopeSet: (agent: unknown, domain: any, key: string, value: any) => {
@@ -4621,18 +4629,18 @@ export default {
         const args = domain === 'scene' ? { sessionId, domain, value } : { sessionId, domain, key, value }
         return handlers['scope-set'](args) as Promise<{ ok: boolean; cleared?: boolean; warnings?: string[]; error?: string }>
       },
-      // 全局意图（0.21.2）：模型工具的 `scope: "global"` 走这里，不再直接改补丁 / 来源状态。
+      // 全局意图：模型工具的 `scope: "global"` 走这里，不再直接改补丁 / 来源状态。
       // 场景档案的同步由工具自己调 `syncSwitchToScene('scope-intent-set', …)`（与面板同一条）。
       scopeIntentSet: (domain: 'mcp' | 'skillSources', keys: string[], value: 'on' | 'off' | 'blocked') =>
         handlers['scope-intent-set']({ domain, keys, value }) as Promise<{ ok: boolean; warnings?: string[]; error?: string; sceneSyncError?: string }>,
-      // 读侧那一半（0.21.2）：列表工具按会话取数据（项目技能根按会话 cwd）+ 标出本会话的
+      // 读侧那一半：列表工具按会话取数据（项目技能根按会话 cwd）+ 标出本会话的
       // 逐条开关。与写侧同一个 store，读到的永远是刚写进去的那一份（TTL 300ms 只对外部改文件生效）。
       sessionScope: (agent: unknown) => {
         const sessionId = scopeKeyForAgent(agent)
         if (sessionId === null) return null
         return { sessionId, scope: scopeStore.scopeOfSync(sessionId) }
       },
-      // 某一格的**四层并值**（0.21.2）：列表类工具逐条问它（undefined = 落到该域的全局值）。
+      // 某一格的**四层并值**：列表类工具逐条问它（undefined = 落到该域的全局值）。
       sessionFlagOf: (agent: unknown, domain: any, key: string) => {
         const resolver = flagResolverOfAgent(agent, domain)
         return resolver === undefined ? undefined : resolver(key)
@@ -4641,7 +4649,7 @@ export default {
     const mcpToolOps = auditOps(mcp.ops)
     buildMcpTools({
       ...toolDeps,
-      // 会话层（0.21.2）：本会话隐藏的服务器在清单里与全局停用同形（默认不列、all=true 标注）。
+      // 会话层：本会话隐藏的服务器在清单里与全局停用同形（默认不列、all=true 标注）。
       // 逐行问谓词 —— 行数组就是全集（判据：覆盖 → 场景层 → 基线）。
       sessionHiddenServer: (agent: unknown, serverName: string) => sessionServerHiddenOf(agent, serverName),
       // 模型侧也读意图（`globalOn` / `intent` / `leaseCount`）：它看到的"全局开着"必须与用户
@@ -4666,7 +4674,7 @@ export default {
     // `applyPresetGuarded` 是模型侧**唯一**不经 op 表的写路径（`prompt_manager_apply` 直接调它，
     // 见上面 `frozenGate` 的注释），所以冻结闸要在这里显式套一层 —— 它对应的 HTTP op 是
     // `agentsmd-apply`（冻结清单里那条）。少了这一层，"锁着**别的**场景"时模型仍能换掉当前
-    // 场景的提示词绑定（审查 F3 的另一半）。
+    // 场景的提示词绑定。
     const applyPresetForModel = async (id: string) => {
       const denied = await frozenGate('agentsmd-apply', { id })
       return denied ? { ok: false as const, error: denied } : applyPresetGuarded(id)
@@ -4730,17 +4738,17 @@ export default {
       subagentService: Object.assign(Object.create(subagentService), { ops: auditOps(subagentService.ops) }),
       sceneLists: subagentSceneLists,
       toolFilterFor: subagentToolFilterFor,
-      // 会话层（0.21.2）：四层并值 —— 本会话关掉的人设看不见、也调不动；显式开着的
+      // 会话层：四层并值 —— 本会话关掉的人设看不见、也调不动；显式开着的
       // （含场景绑定的排除项被救回来的那些）看得见、调得动。
       subagentFlagFor: (exec: unknown) => flagResolverOfAgent((exec as { agent?: unknown } | null)?.agent, 'subagents'),
-      // 原始覆盖表只给列表那句"显式关了几条"的统计用（0.21.2）。
+      // 原始覆盖表只给列表那句"显式关了几条"的统计用。
       subagentOverridesFor: (exec: unknown) => {
         const scopeId = scopeKeyForAgent((exec as { agent?: unknown } | null)?.agent)
         return scopeId === null ? undefined : scopeStore.scopeOfSync(scopeId)?.subagents
       },
       failures: subagentFailures,
     })
-    // 删除 / 回收站族（tools/remove.ts，2026-10-15）：五个域各一条 `*_manager_remove`。
+    // 删除 / 回收站族（tools/remove.ts）：五个域各一条 `*_manager_remove`。
     // 此前模型只能停用、不能删除。删除一律进回收站（可恢复）；**不做永久删除**（低频且
     // 不可恢复，留给面板）。`sceneRemove` 传 handlers 里那份（`withAgentsMdSync` 包过），
     // 与 `sceneActivate` 同一条纪律：直调 `memoriesService.ops` 会静默漏掉 AGENTS.md 那一步。
@@ -4757,32 +4765,32 @@ export default {
     })
 
     if (typeof ctx.on === 'function') {
-      // 三个确认门的统一前裁决。口径（用户裁定，方案 B）：会话审批策略为 never（「完全权限」预设）
+      // 三个确认门的统一前裁决。口径（方案 B）：会话审批策略为 never（「完全权限」预设）
       // = 用户已在预设层面预先批准一切确认门，**直接放行**并写审计日志留痕。
       // 不能把 ask 丢给审批层：宿主 decide() 对 never 直接返回 rejected（fail-closed），确认卡
       // 永远弹不出，模型只会收到一句无信息量的「用户拒绝」。这与官方子代理工具（无 ask 门）
       // 在完全权限下的行为一致；探测实现与回归测试见 approval-policy.ts（必须 ctx.get('approval')，
       // 不能用 ctx.approval——inject 未声明该服务时 cordis 代理会抛 "cannot get property without inject"）。
       const CONFIRM_LABELS: Record<string, string> = {
-        // 0.14.0 起 create 与 update 并成 save（标签取中性的「保存」：改一份已有技能时
+        // create 与 update 并成 save（标签取中性的「保存」：改一份已有技能时
         // "新建"是句假话）。危险度不变 —— 两者都往 hub 落文件。
         skill_manager_save: '「保存技能」',
-        // 0.14.0 起 write/update 并成一条 upsert，标签取中性的「保存记忆」：「写入」在改一条
+        // write/update 并成一条 upsert，标签取中性的「保存记忆」：「写入」在改一条
         // 已有记忆时是句假话（与同一轮修 `prompt_manager_list` 的「生效中」同一个口径）。
         memory_manager_save: '「保存记忆」',
         // 场景族的唯一写工具。无条件问（不设开关）—— 它改的是"进入这个场景时会切换哪些
         // mcp / 技能 / 人设"，改错了影响的是用户切场景之后的**整个运行时环境**，而不是一次
         // 输出。与 skill / subagent 的 save 同一档（都是"以后每次都按它来"的长期资产）。
         scene_manager_save: '「保存场景」',
-        // 0.14.0 的边界是"启用与进入留在界面"，0.14.x 补上这条工具后它成为**改运行时**的那一条：
+        // 边界是"启用与进入留在界面"，补上这条工具后它成为**改运行时**的那一条：
         // 六处开关一起动 + 收窄注入 + 改写 AGENTS.md。危险度高于 `_save`（那个只写剧本），
         // 所以门禁同档、不降。
         scene_manager_switch: '「切换场景」',
         subagent_manager_run: '「运行子代理」',
-        // 0.14.0 起 create 与 update 并成 save（标签取中性的「保存人设」：改一份已有文件时
+        // create 与 update 并成 save（标签取中性的「保存人设」：改一份已有文件时
         // "新建"是句假话）。危险度不变 —— 两者都往 hub 里落/整份重写一份文件。
         subagent_manager_save: '「保存人设」',
-        // 0.14.0 起 add 与 edit 并成 save，模型侧能塞进任意 command/args 的仍只有这一个工具
+        // add 与 edit 并成 save，模型侧能塞进任意 command/args 的仍只有这一个工具
         // —— 门禁挂在它上面即覆盖整个模型可达面。标签取中性的「保存」：改一台已有服务器
         // （含改 URL / 命令）与新增一台是同一档危险度，但"新增"在改分支上是句假话。
         mcp_manager_save: '「保存 MCP 服务器」',
@@ -4807,8 +4815,8 @@ export default {
           return true
         }
       }
-      // 0.14.0 删掉了 `subagentWriteWouldApply`：它是为"create 要目标未被占用 / update 要
-      // 改名已存在"这套两工具分工写的裁决。合并成一条 upsert 之后它恒为"会应用"（判定只剩
+      // 不需要 `subagentWriteWouldApply` 那种裁决：它是为"create 要目标未被占用 / update 要
+      // 改名已存在"这套两工具分工写的。合并成一条 upsert 之后它恒为"会应用"（判定只剩
       // "存在就改、不存在就建"，没有第三种情况），留着就是一个永远返回 true 的函数。
       ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', async (exec, next) => {
         if (!exec || !CONFIRM_LABELS[String(exec.name)]) return next()
@@ -4816,7 +4824,7 @@ export default {
         if (bypassedByFullAccess(exec)) return next()
         if (exec.name === 'skill_manager_save') {
           // 卡是**执行前**弹的：此时工具还没读 `skill-state`，走建还是改还没判出来，
-          // 所以 reason 只能取并集。0.14.0 起 create 与 update 并成一条 upsert。
+          // 所以 reason 只能取并集。 create 与 update 并成一条 upsert。
           return Promise.resolve({ kind: 'ask', reason: 'Create or overwrite a skill under ~/.dsh/tool-management/skills' })
         }
         if (exec.name === 'mcp_manager_save') {
@@ -4825,7 +4833,7 @@ export default {
           // 写一个技能文件都要问，注册一条能起进程的配置却直接放行，是门禁倒挂 ——
           // 危险度与门禁强度必须同向。
           // 卡里回显将执行的命令行：用户批准的是「跑这条命令」，不是「加一个服务器」。
-          // 0.14.0 起 save 也覆盖"改一台已存在的服务器"，此时把**旧命令**一并摆出来：
+          // save 也覆盖"改一台已存在的服务器"，此时把**旧命令**一并摆出来：
           // 「把 `npx A` 改成 `npx B`」与「新增一台跑 `npx B` 的」是两件不同的事，
           // 只报新那句会让一次改命令看起来像新建。
           const a = (exec && exec.arguments) || {}
@@ -4864,7 +4872,7 @@ export default {
         if (exec.name === 'memory_manager_save') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
           // 不在此处做任何兜底放行。
-          // 0.14.0 起 write/update 并成一条 upsert，reason 必须同时覆盖两种可能：卡是**执行前**
+          // write/update 并成一条 upsert，reason 必须同时覆盖两种可能：卡是**执行前**
           // 弹的，此时工具还没跑，走"建"还是"改"要读一次 `rules-list` 才知道。旧实现按工具名
           // 分叉出两句，合并后只能取并集 —— 不能只留 "write"，那会让一次覆盖已有内容的操作
           // 在卡上看起来像新建（危险度与门禁强度必须同向）。
@@ -4935,7 +4943,7 @@ export default {
       })
     }
 
-    // ---------- per-tool MCP switches: execution guard + visibility ----------
+    // ---------- 逐工具 MCP 开关：执行拦截 + 可见性 ----------
     try {
       mcp.warmUp().catch((e) => {
         // 读失败本身已经由四态读落过 note；这里只接住“读成功但预热后半段失败”的异常。
@@ -4952,7 +4960,7 @@ export default {
         }
       })
     } catch (e) { /* apply 里的同步异常同样由 unknown 状态兜底 */ }
-    // 可见性半边（B1）：官方 `tools.restrict()` 要求 **agent scope**，所以停用的工具要
+    // 可见性半边：官方 `tools.restrict()` 要求 **agent scope**，所以停用的工具要
     // 逐个 agent 应用 —— 与技能侧同一套生命周期写法（`agent/created` / `agent/disposed`
     // + 启动期扫一遍 `agents.list()`，见 skills/service.ts）。
     if (typeof ctx.on === 'function') {
@@ -4960,11 +4968,11 @@ export default {
         ctx.effect(() => {
           const stop = (ctx.on as (event: string, cb: (payload: any) => void) => (() => void) | void)('agent/created', (payload) => {
             mcp.attachAgent(payload && payload.agent)
-            // 技能目录按会话 cwd 取数（0.21.2）：先热一份，否则该会话首轮注入会少掉整段目录。
+            // 技能目录按会话 cwd 取数：先热一份，否则该会话首轮注入会少掉整段目录。
             // 子代理热的是**所属用户会话**那一份：它的目录 / 覆盖都继承父会话（见 `sessionScopeIdOf`）。
             const scopeSid = sessionScopeIdOf(payload && payload.agent)
             if (scopeSid !== null) void skillCatalog.warmSession(scopeSid)
-            // 基线（0.21.2）：**创建时**记一份"这个会话最开始的样子"——「退出模式」要回到它，
+            // 基线：**创建时**记一份"这个会话最开始的样子"——「退出模式」要回到它
             // 而只有现在这一刻取得才是创建时的样子（子代理会话不记：它们不占用户会话）。
             const sid = sessionIdOf(payload && payload.agent)
             if (sid !== null && subagentDepthOf(payload && payload.agent) === 0) void ensureBaselineFor(scopeKeyForAgent(payload && payload.agent) ?? sid)
@@ -5001,12 +5009,12 @@ export default {
             if (isMcpTool && mcp.disabledToolsState() === 'unknown') {
               return 'MCP 停用表不可读：所有 MCP 工具已暂时拒绝调用（请在 MCP 页重置停用表）'
             }
-            // 会话层的判定（0.21.2）：它有两个方向 —— `deny` 是"这个对话里关掉了"，
+            // 会话层的判定：它有两个方向 —— `deny` 是"这个对话里关掉了"
             // `allow` 是"这个对话里显式开着"，后者要能**越过全局停用表**（逐工具开关按会话
             // 独立：全局关着的工具，本会话开着就该能调）。判据见 `sessionMcpVerdictSync`。
             const verdict = sessionMcpVerdictSync(exec && exec.agent, name)
             if (verdict === 'deny') return '该工具在本次对话中已停用（其他对话不受影响）'
-            // Reads the TTL cache without I/O: the guard runs on the hot path.
+            // 只读 TTL 缓存、不做 I/O —— 这段跑在每一次工具调用的热路径上。
             if (verdict !== 'allow' && mcp.isToolDisabled(name)) {
               return '该工具已在 MCP 管理页停用'
             }
@@ -5046,13 +5054,12 @@ export default {
     }
     if (typeof ctx.on === 'function') {
       try {
-        // MCP servers (de)register their tools as instances come and go; the
-        // visible-set restriction must track that — and so must the MCP state
-        // section: 工具加载完成后若不重算，注入文本会一直停留在「空/旧集合」的缓存值上
-        //（用户切 MCP 后立即看上下文注入就是空段 —— 2026-09-16 实测）。
+        // MCP 服务器随实例增删注册 / 注销工具，可见集限制必须跟着变，状态段也是：
+        // 工具加载完成后若不重算，注入文本会一直停在「空 / 旧集合」的缓存值上
+        //（用户切 MCP 后立刻看上下文注入就是空段 —— 实测）。
         ctx.effect(() => {
           /**
-           * 状态段重算的**定窗节流**（0.21.2，issue #21）。
+           * 状态段重算的**定窗节流**。
            *
            * 这里原来是裸的 `void mcp.stateCatalog.refresh()`：`tools/change` 来一条就全量重算
            * 一次。而 `refresh()` 会作废缓存并跑 `rows()`（= `mcpmList`，要枚举每个服务器的工具
@@ -5100,13 +5107,13 @@ export default {
       mcp.dispose()
     }, 'dsh-plugin-tool-management: tool restriction cleanup')
 
-    // ---------- 启动期对账：放在装配末尾（0.21.2） ----------
+    // ---------- 启动期对账：放在装配末尾 ----------
     // reconciler 在前面注册，但**跑**必须等这里 —— 它们要读 hub、比有效状态，都发生在装配之后。
     // 不 await：apply() 不是异步函数，且启动期对账只是收尾，不能拖住 apply。
     void runBootReconcilers().catch(() => { /* 框架自己已逐条 try，这里兜底 */ })
 
-    // ---------- HTTP API route (UI half), registered defensively ----------
-    // 正文 2026-10-01 整段搬到 ./http-api.ts（一字未改，只把 apply 作用域的名字改走 deps）。
+    // ---------- HTTP API 路由（界面那一半），注册时按容错处理 ----------
+    // 正文 整段搬到 ./http-api.ts（一字未改，只把 apply 作用域的名字改走 deps）。
     // 位置也保持原样：这一段是 apply 的最后一条注册，前面的 handlers 表 / 门禁 / 白名单都已就位。
     // 传引用而不是快照：`handlers` 在本调用之前还被 Object.assign 追加过、被 installHandlerGuards
     // 逐条重包过，注册之后请求期读的也是当时的最新那份。

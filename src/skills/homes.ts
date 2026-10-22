@@ -8,10 +8,12 @@ import { join } from "node:path";
 
 // ── 路径解析 ────────────────────────────────────────────────────────────────
 
+/** DSH 主目录：`$DSH_HOME`，缺省 `~/.dsh`。 */
 export function resolveDshHome(): string {
   return process.env.DSH_HOME || join(homedir(), ".dsh");
 }
 
+/** 共享 agents 根：`$DSH_AGENTS_HOME`，缺省 `~/.agents`。 */
 export function resolveAgentsHome(): string {
   return process.env.DSH_AGENTS_HOME || join(homedir(), ".agents");
 }

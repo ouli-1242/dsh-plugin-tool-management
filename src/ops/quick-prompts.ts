@@ -9,14 +9,16 @@ import type { createQuickPromptsService } from '../prompts/quick-service.js'
 
 type QuickServiceLike = ReturnType<typeof createQuickPromptsService>
 
+/** 快捷提示词 op 的依赖：读本会话的开关并值。 */
 export interface QuickPromptOpsDeps {
   /**
-   * 某个会话某一格的**四层并值**（0.21.2）：覆盖 → 场景层 → 基线 → `undefined`（= 跟随全局）。
+   * 某个会话某一格的**四层并值**：覆盖 → 场景层 → 基线 → `undefined`（= 跟随全局）。
    * `undefined`（函数本身）= 没有会话层。逐条问它 —— 清单本身就是全集，不需要另建一份。
    */
   flagFor?: (sessionId: string) => ((key: string) => boolean | undefined) | undefined
 }
 
+/** 快捷提示词域的 op（`AGENTS.md` 片段库）：列表、保存、删除、启停。 */
 export function buildQuickPromptOps(
   quick: QuickServiceLike,
   deps: QuickPromptOpsDeps = {},

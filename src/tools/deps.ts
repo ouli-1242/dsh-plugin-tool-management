@@ -6,6 +6,7 @@
 import { defineTool as hostDefineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { ScopeFlagDomain, SessionScope } from '../scope/scope-overrides.js'
 
+/** 工具回执的正文块形状（与宿主内容块同形，只带 text）。 */
 export type TextPart = Array<{ type: 'text'; text: string }>
 
 /** 每个工具 output.render 的统一出口：把字符串包成宿主要的 content 数组。 */
@@ -22,6 +23,7 @@ export function text(value: string): TextPart {
  * 截断则是因为这些文字都要进上下文，不能无上限。
  */
 export const TOOL_NAME_LIST_CAP = 6
+/** 把工具名列表折成一句可读文案（超长只报前几个与总数）。 */
 export function toolNameList(list: readonly string[]): string {
   if (!list.length) return 'none'
   const head = list.slice(0, TOOL_NAME_LIST_CAP).join(', ')
@@ -35,7 +37,7 @@ export interface SkillRootLookup {
   /** 命中时：这个技能的**胜出副本**所在来源键；没命中 = null。 */
   root: string | null
   /**
-   * 胜出副本的**声明名**（`declaredName || name`，0.21.2）。
+   * 胜出副本的**声明名**（`declaredName || name`）。
    *
    * 会话覆盖的键用的是声明名（与面板、注入段、模型列表同一份 canonical），而
    * `skill-enable` 这类全局 op 认的是**目录名** —— 两者不同时必须分开取。
@@ -50,7 +52,7 @@ export interface SkillRootLookup {
 /**
  * 按名字找技能落在哪个来源（root）。
  *
- * 为什么需要它（2026-10-15 smoke-test P0-1）：`skill-create` 的默认落点是 **hub**
+ * 为什么需要它：`skill-create` 的默认落点是 **hub**
  * （`tool-management/skills/`，与界面「创建技能」一致），而 `skill-enable` / `skill-disable` /
  * `skill-prefer` / `skill-delete` 这些 op 的默认 root 是 **dsh**。于是「建完就启用」这条
  * 最自然的链路必然报「技能不存在」—— 同一个动作在工具侧落 hub、在开关侧查 dsh。
@@ -91,6 +93,7 @@ export async function locateSkillRoot(
   return { ok: true, root: winner ? winner.root : null, canonical: winner ? winner.canonical : null, roots, matches: hits }
 }
 
+/** 各工具域共用的依赖：宿主服务、共享工具表与文案助手。 */
 export interface ToolDomainDeps {
   /**
    * 与宿主 defineTool **同签名的本地包装**（已包了采纳遥测，见 index.ts 的 trackAdoption）。
@@ -104,24 +107,18 @@ export interface ToolDomainDeps {
   /** 场景锁定守卫：返回拒绝文案，null = 未锁定。 */
   lockedSceneGuard(): Promise<string | null>
   /**
-   * 这条工具现在**发给模型**吗（「模型工具表」关掉的与出厂默认关掉的都算不发）。
+   * 这条工具**在这个 agent 手里吗**：全局开关 + 该 scope 的工具表 + 该 scope 的工具限制
+   * （人设的 `toolsDeny` 经官方 `tools.restrict` 装上的那层）并起来。
    *
    * 只为一件事：错误与回执里点名工具的那句（"用 `mcp_manager_list` 看清单"）在工具被关掉后
-   * 就是把模型往墙上推 —— 它照那句去调，执行侧拦住它，白跑一趟还查不出原因。与两个目录的
-   * `listToolVisible` 同一条判据，同步、只读缓存。
-   */
-  toolVisible(name: string): boolean
-  /**
-   * 同上一句，但按**这个 agent 手里有没有**判：全局开关 + 该 scope 的工具限制（人设的
-   * `toolsDeny` 经官方 `tools.restrict` 装上的那层）两路并起来。
+   * 就是把模型往墙上推 —— 它照那句去调，执行侧拦住它，白跑一趟还查不出原因。
+   * 判据与注入框架 `how` 行同源（index.ts 的 `injectHiddenToolsFor`），不再定义第二份。
    *
-   * 为什么需要它（2026-10-14 对抗性审查 P0-1/P1-8）：`toolVisible` 只读全局开关，于是
-   * 「人设砍掉了 `mcp_manager_list`」这种情形下，工具回执与目录尾句照样点名一条**这个模型
-   * 手里没有的**工具 —— 它照着去调，执行侧拦住，白跑一趟还查不出原因。判据与注入框架
-   * `how` 行那一份同源（index.ts 的 `injectHiddenToolsFor`），不再定义第二份。
+   * **不存在"只读全局开关"的那一档**：工具表按作用域各一份，只看全局会在
+   * 「这个对话把它关了」时点名一条模型没有的工具 —— 那正是这一档必须带 agent 的原因。
    *
-   * 拿不到 agent 时**退化成 `toolVisible`**（只算全局开关）—— 问不了就不多隐藏，
-   * 与"读不到 = 按还在手里算"同一条安全方向。
+   * 拿不到 agent 时只按全局开关判 —— 问不了就不多隐藏，与"读不到 = 按还在手里算"
+   * 同一条安全方向。
    */
   toolVisibleFor(name: string, agent: unknown): boolean
   /**
@@ -138,17 +135,17 @@ export interface ToolDomainDeps {
   injectNoticeOptions(): unknown
   message(e: unknown): string
   /**
-   * 当前隔离粒度（同步，0.21.2+）。三种：`global` / `session` / `workspace`。
+   * 当前隔离粒度（同步）。三种：`global` / `session` / `workspace`。
    *
    * 工具需要它只有一个原因：`scope` 参数的**默认值**得跟着走。`global` 粒度下没有会话层，
    * `scope: "session"`（以及省略 scope 时的默认）都必须落到全局 —— 否则会写进一个不存在的
    * 键，或者更糟：让 agent 回报「只影响这个对话」，而实际什么都没改。
    *
-   * 未接这条通道 = 按 `session`（与 0.21.2 逐字相同，宿主缺这个字段时行为不变）。
+   * 未接这条通道 = 按 `session`（宿主缺这个字段时行为不变）。
    */
   scopeMode?(): 'global' | 'session' | 'workspace'
   /**
-   * 写**本会话**的一个开关覆盖（0.21.2，决策 10：模型工具默认写会话）。
+   * 写**本会话**的一个开关覆盖（模型工具默认写会话）。
    *
    * 为什么做成一条窄接口而不是把整个 scopeStore 递进来：工具只该有"改这一条"这一个动作。
    * 递整个 store 等于让二十几个工具各自去决定"写哪一层"，而这一层的语义（自动清除、
@@ -164,7 +161,7 @@ export interface ToolDomainDeps {
     value: boolean | string | null,
   ): Promise<{ ok: boolean; cleared?: boolean; warnings?: string[]; error?: string }>
   /**
-   * 写**全局意图**（0.21.2）：MCP 服务器 / 技能来源的全局开关。
+   * 写**全局意图**：MCP 服务器 / 技能来源的全局开关。
    *
    * 与旧路径的区别是"off 不再等于立刻停"：off 之后仍被会话认领的资源保持运行（租约），
    * 只是别的会话看不到；只有 `blocked`（彻底停止）会连租约一起停。全局动作走这里，
@@ -176,14 +173,14 @@ export interface ToolDomainDeps {
     value: 'on' | 'off' | 'blocked',
   ): Promise<{ ok: boolean; warnings?: string[]; error?: string; sceneSyncError?: string }>
   /**
-   * 本会话某一格的四层并值（读侧，0.21.2）：覆盖 → 场景层 → 基线 → `undefined`（= 跟随全局）。
+   * 本会话某一格的四层并值（读侧）：覆盖 → 场景层 → 基线 → `undefined`（= 跟随全局）。
    *
    * 给列表类工具用：它们手里有完整的条目清单（技能 / 人设 / 记忆 / 工具），逐条问这一格
    * "本会话的显式层是什么"，undefined 就落到该域自己的全局值 —— 不需要另建一份全集。
    */
   sessionFlagOf?(agent: unknown, domain: ScopeFlagDomain, key: string): boolean | undefined
   /**
-   * 本会话的身份与覆盖（0.21.2）：读侧那一半。
+   * 本会话的身份与覆盖：读侧那一半。
    *
    * 两个用途，缺一不可：
    *   · `sessionId` —— 有些 op 按会话取数据（`rules-list` / `skill-state`：项目技能根按
@@ -210,7 +207,7 @@ export function sessionScopeOf(
 }
 
 /**
- * 全局动作的回执尾注（0.21.2）：**只在这个对话真有该域覆盖时**才出现。
+ * 全局动作的回执尾注：**只在这个对话真有该域覆盖时**才出现。
  *
  * 为什么需要：`*_save` / `*_remove` / `prompt_manager_*` 动的是磁盘上的那一份 —— 技能、
  * 人设、场景、MCP 服务器、提示词预设都是**机器级**对象，没有"本会话的一份"。模型据此
@@ -234,7 +231,7 @@ export function globalActionNote(deps: ToolDomainDeps, agent: unknown, domain: S
 }
 
 /**
- * 一条工具这次的 `scope` 到底走哪条路（0.21.2+ 全局粒度）。
+ * 一条工具这次的 `scope` 到底走哪条路（含全局粒度）。
  *
  * 唯一的判定点。三种粒度下 `scope` 的**默认值**不同：
  *
@@ -258,13 +255,13 @@ export function sessionLayerOn(deps: ToolDomainDeps): boolean {
 }
 
 /**
- * 全局动作的**歧义守卫**（0.21.2，计划 §8.2 的「会话层下拒绝并说明」）。
+ * 全局动作的**歧义守卫**（会话层下拒绝并说明）。
  *
  * 只加在**有会话层同胞**的那几条上：技能 / 人设 / 场景 / MCP 服务器各自都有一条
  * `*_manager_switch` 能按会话改「看不看得到」，于是「删掉它」在会话语境里天然有歧义 ——
  * 用户说的可能是「这个对话里别再用它」，而这条工具动的是磁盘上的那一份。
  *
- * **缺省不拒**（`scope` 省略 = 全局，与上一版逐字相同）：这几条工具每个都要付 token，
+ * **缺省不拒**（`scope` 省略 = 全局，行为不变）：这几条工具每个都要付 token，
  * 而"每次删除都先失败一次再重试"是纯摩擦 —— 模型并不知道用户此刻在面板里编辑哪一层。
  * 真正要挡的是**模型自己以为在改会话**：它显式写了 `scope: "session"` 时，这里当场纠回来，
  * 而不是静默地改掉全局。
@@ -275,7 +272,7 @@ export function sessionLayerOn(deps: ToolDomainDeps): boolean {
  * 加在：技能 / 人设 / 场景 / MCP 四条 `*_save`、五条 `*_remove`。
  * 不加在：`memory_manager_save`（落 `<场景>/<名字>`，写哪儿由 id 自己说清）、
  * `*_manager_switch`（它们本来就按会话写，`scope` 是真的）。
- * `prompt_manager_apply` 也从清单里去掉了（2026-10-21 审查 P2-2）：它的参数表里没有
+ * `prompt_manager_apply` 也从清单里去掉了：它的参数表里没有
  * `scope`，守卫读不到东西 —— 模型按 schema 不可能传，这条守卫等于永不触发，留着只会
  * 让人以为它被守住了。提示词只有全局一层，参数表已经说清。
  */
@@ -291,13 +288,13 @@ export function requireGlobalScope(args: unknown, what: string, isolationOff = f
 }
 
 /**
- * 模型面 `scope` 参数的共同措辞（0.21.2 描述瘦身）。
+ * 模型面 `scope` 参数的共同措辞。
  *
  * 为什么收成一处：同一件事（这一格只有全局一层）此前在 14 个参数上各写一套，最长的一条
  * 563 字符 —— 这些字节每个请求都跟着工具表发一遍。可写会话层的那几条各域还要补自己的
  * 存储名与租约语义，所以只收这一类。
  *
- * `unless isolation is off`（0.21.2+）：全局粒度下没有会话层，`scope: "session"` 的所指
+ * `unless isolation is off`：全局粒度下没有会话层，`scope: "session"` 的所指
  * 就是全局，守卫也放行 —— 只说"被拒"会让模型在一个合法的调用前先自我否决。
  */
 export function scopeGlobalOnlyDesc(what: string, instead: string): string {
@@ -305,7 +302,7 @@ export function scopeGlobalOnlyDesc(what: string, instead: string): string {
 }
 
 /**
- * 模型面「会话层」`scope` 参数的共同措辞（2026-10-21 审查 P0-1）。
+ * 模型面「会话层」`scope` 参数的共同措辞。
  *
  * 为什么不能写死 "this conversation only"：隔离粒度可切（`scope-mode-set`）。切到工作区后
  * `session` 这一档写的是 `ws:<cwd>` 那一格 —— **同工作区的每个对话都读它**；关掉隔离
@@ -322,10 +319,13 @@ export function scopeSessionDesc(tail: string): string {
 }
 
 /**
- * 会话层写入回执的统一后缀（2026-10-21 审查 P0-1 延伸）。
+ * 会话层写入回执的统一后缀：按**当前隔离粒度**说清影响范围。
  *
- * 与 `scopeSessionDesc` 同一件事，但用在**回执**上：原文五处都写 "**for this conversation
- * only**"，在工作区粒度下是同一个问题 —— 写的是 `ws:<cwd>` 那一格，同工作区的每个对话都读它。
+ * 为什么必须带 `deps`：粒度是运行时事实（可切），而这句话会被 agent 原样转述给用户。
+ * 此前写成「this conversation, or every conversation in its workspace under workspace
+ * isolation」—— 三档同时成立，于是它什么都没说：用户问「是不是只影响这个对话」，
+ * agent 只能把这句话再念一遍。拿得到粒度就写死一档；拿不到（宿主没接这条通道）
+ * 才退回那句兜底。
  *
  * 只在会话层真的被写到时才用。全局粒度下 `effectiveScope` 会把所有写入导向全局，
  * 回执走各域原有的"机器级"措辞，不会到这里。
@@ -333,8 +333,23 @@ export function scopeSessionDesc(tail: string): string {
  * 回执不是常驻成本（只在调用时出现一次），所以这里可以写全，不必像工具描述那样抠字：
  * agent 会把这句话原样转述给用户，含糊的措辞比长一点的措辞贵得多。
  */
-export function scopeOnlyNote(): string {
+export function scopeOnlyNote(deps: ToolDomainDeps): string {
+  const mode = deps.scopeMode?.()
+  if (mode === 'workspace') return ' **for this whole workspace only** (every conversation in it; other workspaces are unaffected)'
+  if (mode === 'session') return ' **for this conversation only**'
   return ' **for this scope only** (this conversation, or every conversation in its workspace under workspace isolation)'
+}
+
+/**
+ * 「全局没动、别人不受影响」那句：谁算「别人」由粒度决定。
+ *
+ * 工作区粒度下同工作区的其它对话读的是**同一格**，照旧写 "other conversations keep
+ * theirs" 就是假话 —— 而且它与同一句回执里的 `scopeOnlyNote` 直接打架。
+ */
+export function globalUnchangedNote(deps: ToolDomainDeps): string {
+  return deps.scopeMode?.() === 'workspace'
+    ? 'The global setting is unchanged; other workspaces keep theirs.'
+    : 'The global setting is unchanged; other conversations keep theirs.'
 }
 
 /** 全局粒度下写入回执的说明：让 agent 别把这句转述成"只影响这个对话"。 */

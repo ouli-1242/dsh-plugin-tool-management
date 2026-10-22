@@ -1,6 +1,6 @@
 // src/context-inject.ts —— 模型可见信息的注入通道（本插件唯一的注入实现）。
 //
-// 为什么有这条通道（2026-09-16 用户裁定）：
+// 为什么有这条通道：
 //   插件此前用 `systemPrompt.section()` 把信息送进系统提示词，但那条通道会被 persona
 //   `complete: true` 的预设整段压掉（极简等），模型什么都看不到；换成官方的
 //   `systemPrompt.context()` 也不行 —— 极简同时写着 `includeRuntimeContext: false`，
@@ -12,7 +12,7 @@
 //     · 时间上下文（@deepseek-ai/dsh-time-context）
 //   这条通道没有任何预设开关能关掉，是"任何预设都到得了"的唯一选择。
 //
-// 形态（2026-09-16 第二版，用户裁定）：**每个域一条自己的消息**，不再是一条大快照 ——
+// 形态：**每个域一条自己的消息**，不再是一条大快照 ——
 // 与官方 skill-catalog 同款：各自的来源 kind（轨迹里各自一行、各显各的名字）、各自的
 // form、各自的去重。好处是"只改了一个域就只重发那一条"；代价是进场景这类多域同时变的
 // 时刻会一次发几条（每条带一句自己的引导语）。各域与轨迹行名（清单见下 INJECT_DOMAIN_KEYS）：
@@ -34,12 +34,11 @@
 //   - 某域曾经注入过、现在没有内容（域被关掉或正文清空）→ 发一条该域的「已清空」，
 //     免得旧目录继续被当成现状。
 //
-// 2026-09-17 第二版加的两件事：
 //   - **按深度抑制人设目录**：宿主平面注册意味着子代理派生的会话也收到全部域。而人设目录
 //     要不要出现在某个深度的会话里，由人设的 `catalogDepth`（默认 1 = 只在顶层注入）决定；
 //     判定放在域声明的 `applicableTo` 上，通道只负责问一句 —— "哪个域对哪类会话不成立"
 //     是域的语义，不是通道的机制。
-//     ⚠️ 2026-09-17 方案 A 纠正：这**不是**"子会话不能委派"。官方 `dsh-tool-subagent`
+//     ⚠️ 方案 A 纠正：这**不是**"子会话不能委派"。官方 `dsh-tool-subagent`
 //     默认 `maxDepth: 1`（0.2.1 实测核对：`dsh-subagent/lib/index.js` 的 Config 默认值），
 //     provider 只在传了该值时才校验 —— 子代理本来就能继续嵌套
 //     （用户实测确认）。这个抑制只是让常驻目录不进入子会话、减少噪声；委派能力由官方
@@ -48,18 +47,16 @@
 //     「投递 N 次 / 调用 M 次 / 调用时正文在眼前 K 次」，工具注册处调 `noteToolUse` 记账。
 //     没有这三个数，"模型忽略了注入内容"只是一句感觉，改了措辞也无从验证。
 //
-// 2026-09-17 第三版（两件事）：
 //   - **界面契约对齐**：`source` 上补齐宿主给界面的结构化字段 —— snapshot 形态的 `sections`
 //     一直有；instructions 形态现在带 `changes`（+ 首帧 `baseline`，来源文件由域声明的 `files`
 //     提供），界面从"一坨原文"升级成官方 AGENTS.md 同款「文件 + 已载入/已更新」。这些字段
 //     **只给界面看**：模型侧 content 不受影响，去重比对的也还是 content。
 //   - **instructions 形态不再裸送**：模型侧正文改成与其他四域同款的 `<system-reminder>` 框架
 //     （此前"原样送"的理由是"对齐官方"，与官方实际行为不符 —— 官方那条是包框架的；详见
-//     `renderDomainText` 的第三版说明）。
+//     `renderDomainText` 的注释）。
 //（catalog 形态**有意不带** `entries`：界面的条目渲染会整段替换正文，而我们的目录正文带着
 //  框架句、未运行标记与"N 个未列出"这类补充行，给条目反而显示得更少。）
 //
-// 2026-09-18 第四版（用户：注入仍不能很好提醒模型去主动使用 + 该用 md 排版突出重点信息）：
 //   - **框架改 md 四级结构**：`## 标题`（标签）+ **加粗动作句**（决策点线索）+ 补充动作行
 //     （工具名 / 触发条件）+ 权威声明句（取代哪一份）。写法逐条对照 Claude Code 与 Codex CLI
 //     的官方注入（理由见 `DOMAIN_FRAME`）。
@@ -93,7 +90,7 @@ import {
   selectInjections,
   shouldAnnounceCleared,
 } from './context-inject-select.js'
-import { clearedDomainText, renderDomainText } from './context-inject-frame.js'
+import { clearedDomainText, renderDomainText, scopeLineOf } from './context-inject-frame.js'
 import {
   kindOfMessage,
   LIVE_KINDS,
@@ -127,7 +124,7 @@ export {
   type InjectReason,
   type InjectSection,
 } from './context-inject-select.js'
-export { clearedDomainText, escapeFrameBody, HOW_NAMED_TOOLS, renderDomainText } from './context-inject-frame.js'
+export { clearedDomainText, escapeFrameBody, HOW_NAMED_TOOLS, renderDomainText, scopeLineOf } from './context-inject-frame.js'
 export { officialKindsToSuppress, suppressedKindsForSession } from './context-inject-surface.js'
 
 // B4：关域拦截的**顺序自检**。官方那两条注入行与本插件同挂在这条瀑布上，拦截成立的剩余前提是
@@ -165,6 +162,7 @@ function suppressionVerdict(active: boolean, dropped: number, counter: { turns: 
   })
 }
 
+/** 注入器要的宿主服务、域清单与设置读取。 */
 export interface ContextInjectorDeps {
   /** 插件 ctx（宿主平面：agent 事件天然冒泡到这里）。 */
   ctx: any
@@ -172,10 +170,18 @@ export interface ContextInjectorDeps {
   domains: () => readonly InjectDomain[]
   /** 取当前设置（同步快照；读失败由调用方兜底为默认值）。 */
   settings: () => InjectSettings
+  /**
+   * 当前隔离粒度（同步）。只用于在**一条**消息里写一行「设置写在哪一层」。
+   *
+   * 为什么必须有：工具 schema 是静态的，`scope` 参数只能把三档并列写一遍，模型读不出自己
+   * 处在哪一档 —— 于是「这个开关影响谁」这类问题只能把并列句再念一遍。缺省 = 不发那一行
+   * （宁可少一句，也不发一句猜的）。
+   */
+  scopeMode?: () => 'global' | 'session' | 'workspace'
   /** 该 agent 所在预设的两条事实；`undefined` = 读不到（按未压制 / 已承载处理）。 */
   factsFor: (agent: unknown) => Promise<PresetInjectionFacts | undefined> | PresetInjectionFacts | undefined
   /**
-   * 本会话有没有提示词覆盖（同步，0.21.2）。
+   * 本会话有没有提示词覆盖（同步）。
    *
    * 有覆盖时：官方 `agent-instructions` 这一步被拦下（只限本会话），提示词域由本插件送整份；
    * 同时 `replacing` 的判据放宽到"表面上有任一提示词内容"（含官方第 1 轮那条），
@@ -183,7 +189,7 @@ export interface ContextInjectorDeps {
    */
   promptOverrideActive?: (agent: unknown) => boolean
   /**
-   * 本会话的提示词冻结快照与当前 `~/.dsh/AGENTS.md` 是否不一致（同步，0.21.2 第三轮）。
+   * 本会话的提示词冻结快照与当前 `~/.dsh/AGENTS.md` 是否不一致（同步）。
    *
    * 不一致：官方 `agent-instructions` 这一步被拦下（只限本会话），提示词域改送**快照链**
    * 整份（会话覆盖 > 场景预设 > 快照）；`replacing` 的判据放宽到表面上已有任一提示词内容，
@@ -196,7 +202,7 @@ export interface ContextInjectorDeps {
    */
   promptBaselineDiverged?: (agent: unknown) => boolean
   /**
-   * 本会话的技能目录与官方那份口径是否不一致（同步，0.21.2 第二轮）。
+   * 本会话的技能目录与官方那份口径是否不一致（同步）。
    *
    * 不一致（`skillCatalog.delta()` 非空）：官方 `skill-catalog` 这一步被拦下（只限本会话），
    * 技能域改由本插件送会话版整份；`replacing` 的判据同样放宽到表面上已有任一技能内容
@@ -212,7 +218,7 @@ export interface ContextInjectorDeps {
    *
    * 为什么拦在这里：客户端那条「锁输入框」的路子在这台宿主上根本不存在 ——
    * `ctx.conversation.blocks` 是官方留的口子，但客户端服务注册表里没有 `conversation`
-   * （2026-09-19 真机实测：37 项服务、严格/非严格读都拿不到，宿主自己的
+   * （真机实测：37 项服务、严格/非严格读都拿不到，宿主自己的
    * ui-model-selection 也拿不到），所以令牌开了也锁不住输入框。`agent/pre-step` 是**宿主
    * 平面**，与客户端无关，返回 `{kind:'reject'}` 会让这一轮直接判 `blocked` —— 这才是
    * "没验令牌就没法对话"的真正落实（宿主原文也承认 composer block 只是 affordance）。
@@ -223,8 +229,12 @@ export interface ContextInjectorDeps {
    * `how` 行里点名过的工具中，**这个 agent 手里没有**的那些（同步快照）。
    *
    * 只为一件事：`how` 行里点名工具的那几句在工具不在手里时就是假的（"用 `skill_manager_read`
-   * 拿正文"—— 模型手里没有这个工具）。不在手里的不点名，其余照旧。框架文本变了会当成"内容变了"
-   * 重发一次，这是正确行为（模型上下文里那份确实已经不准确了）。
+   * 拿正文"—— 模型手里没有这个工具）。不在手里的不点名，其余照旧。
+   *
+   * ⚠️ 这份快照**不进**去重键（见 `frameKeyOf`）：它依赖 `tools.get`，而工具注册在热重载 /
+   * 启动间隙会瞬时为空 —— 并进去重键会先注入一句"你手里没有这个工具"（假话），下一步再撤回。
+   * 代价是：工具在会话中途被关掉时，`how` 要等该域正文下一次变化才跟上。这是刻意的取舍。
+   * 静态字符串型的 `how` 不受影响，它本来就在 `frameKeyOf` 里。
    *
    * ⚠️ **必须带 agent**：两条路都会让工具不在手里 —— 兼容页的全局开关（同一份名单给所有
    * agent），以及**人设的工具限制**（`tools.restrict`，逐 agent 不同）。此前只读全局那份，
@@ -343,7 +353,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
   /**
    * 一次对话的注入账本（投递 / 采纳 / 观测三组计数）。
    *
-   * 为什么按**会话**记而不是按进程累加（2026-09-22 用户裁定）：进程级的那份把今天所有
+   * 为什么按**会话**记而不是按进程累加：进程级的那份把今天所有
    * 对话混在一个数字里 —— 「注入 8 次 · 从未调用」说的其实是"这台机器开机以来"，
    * 而用户看这块面板时问的是"我眼前这一段对话里模型用没用"。两个问题差得很远，
    * 前者几乎永远读不出可行动的结论。会话身份本来就有（下面的 `liveDomainsByAgent`
@@ -461,7 +471,6 @@ export function createContextInjector(deps: ContextInjectorDeps): {
   // cordis-plugin-loader/lib/index.js），每个官方包 apply 的完成先后由模块导入与 IO 决定，
   // 逐次启动都可能不同；本插件的条目又是补丁层 `insert` 推到条目列表**末尾**的
   // （dsh-app-boot/lib/index.js：顶层 insert 走 `data.push(...insert)`）。
-  // 2026-09-20 实测到那次翻转：关掉技能 / 提示词域后，官方注入照旧进上下文。
   // `prepend` 由 cordis `EventsService.register()` 实现（`hooks[options.prepend ? 'unshift' : 'push']`），
   // 于是不论挂载先后，本插件都排在官方那两条**默认 push** 注册的注入行之前 ——
   // 顺序从"竞态"变成"约定"。
@@ -477,12 +486,12 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       }
     } catch { /* 门禁判定失败不能反过来卡住对话：当作放行 */ }
     const decision = await next()
-    // 本步的失败痕迹（2026-09-30，审查 P1-8）：域取数抛异常 / 整段注入抛异常。
+    // 本步的失败痕迹：域取数抛异常 / 整段注入抛异常。
     // 两者都必须是**用户看得见**的降级（兼容页 + 「注入实况」），不能只剩控制台一行日志 ——
-    // 这条通道整段停掉时，此前唯一的痕迹就是 `console.error`（脆弱性地图 F2）。
+    // 这条通道整段停掉时，此前唯一的痕迹就是 `console.error`。
     let injectionFailed = false
     let failedKeys: Set<InjectDomainKey> = new Set()
-    // 本步"数据还没到手"的域（0.21.2 第三轮）：与 failed 同口径 —— 这一轮沉默，不发通知。
+    // 本步"数据还没到手"的域：与 failed 同口径 —— 这一轮沉默，不发通知。
     let pendingKeys: Set<InjectDomainKey> = new Set()
     try {
       if (!decision || decision.kind === 'reject') return decision
@@ -513,21 +522,21 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // 按 **agent** 算的只有预设事实那一条；官方消息要拦三种（都只限本会话）：
       //   ① 用户在兼容页关掉的域（officialKindsToSuppress）；
       //   ② 提示词接管时的官方 AGENTS.md；
-      //   ③ 技能目录与本会话口径不一致时的官方 skill-catalog（0.21.2 第二轮）。
+      //   ③ 技能目录与本会话口径不一致时的官方 skill-catalog。
       // ②③ 都由插件送整份，官方那条必须让位。①的例外是会话钉住场景**不再**拦官方
-      // AGENTS.md（0.21.2 定：拦了也收不回官方第 1 轮那条，模型手里就是两份）。
+      // AGENTS.md（拦了也收不回官方第 1 轮那条，模型手里就是两份）。
       //
-      // 提示词接管（0.21.2）：本会话有覆盖 / 快照与当前文件不一致 / 本插件此前已经为这个
+      // 提示词接管：本会话有覆盖 / 快照与当前文件不一致 / 本插件此前已经为这个
       // 会话送过提示词。最后一条是「清覆盖」后的兜底：官方那条在接管期间被拦下过，实测
       // 清覆盖后它**不会**自己重发；插件继续接管并送快照链，否则模型手里会一直留着旧正文。
       //
-      // 快照差异（0.21.2 第三轮，用户裁定「会话冻结快照制」）：会话创建时冻结一份
+      // 快照差异（「会话冻结快照制」）：会话创建时冻结一份
       // AGENTS.md，之后全局文件怎么改（应用预设 / 手改 / 外部工具）都不影响已存在会话。
       // 有差异时官方 `agent-instructions` 被拦下、插件送快照版整份 —— 与技能目录同一条
       // 「不能让口径不对的那份先到达模型」。判据在 `deps.promptBaselineDiverged` 里同步算，
       // 首见捕获也发生在那里（快照写入不阻塞注入）。
       //
-      // 技能目录接管（0.21.2 第二轮，用户真机发现「先注入再移除」）：官方按**机器启停**列
+      // 技能目录接管（用户真机发现「先注入再移除」）：官方按**机器启停**列
       // 清单，不知道租约 / 会话层；有差异时它先列出本对话不可用的条目，插件再补一行纠正。
       // 现在改成有差异就拦下官方、由插件送会话版整份（`text()` 已按会话层过滤）。
       // 判据真算 delta（租约造成的差异在侧车里根本没有覆盖记录），来自 SWR 缓存，同步可得。
@@ -577,13 +586,16 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         : facts
       // 域取数抛异常 → 记下来（本步不发它的「已清空」，实况报 error，兼容页留一条降级）。
       failedKeys = new Set()
-      // 域**这一轮还拿不到数据**（0.21.2 第三轮）：`text()` 在冷缓存下只能返回空串，
+      // 域**这一轮还拿不到数据**：`text()` 在冷缓存下只能返回空串
       // 而"没读到"与"真的空了"在下游是两回事 —— 后者会收到一条假的「已清空」
-      // （2026-10-22 用户实测：对话中途拨开一条技能，那一拍模型被告知技能目录失效）。
+      // （用户实测：对话中途拨开一条技能，那一拍模型被告知技能目录失效）。
       // 与 failed 同口径处理：这一轮沉默，不说它空了。
       pendingKeys = new Set()
       for (const domain of domains) {
         if (domain.pending === undefined) continue
+        // 用户把这个域关掉了：不需要"还在加载"的保护 —— 那是明确的选择，不是暂时读不到，
+        // 「已清空（不在此发送）」应当立刻发出去，而不是被宽限期拖住。
+        if (settings.domains[domain.key] !== true) continue
         try {
           if (domain.pending(agent) === true) pendingKeys.add(domain.key)
         } catch { /* 判据自己出错 = 不 pending：宁可多试一次，也不把域永久静音 */ }
@@ -603,7 +615,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       })
       // 记录每个域这一步"为什么发 / 为什么不发"，供「注入实况」解释状态（口径见 explainInjections）。
       lastReasons = explainInjections(domains, settings, injectionFacts, agent, failedKeys)
-      // 接管时的取代判据（0.21.2）：表面上有**任一**该域内容就算有旧内容 —— 含官方第 1 轮
+      // 接管时的取代判据：表面上有**任一**该域内容就算有旧内容 —— 含官方第 1 轮
       // 那条（它不在 PLUGIN_KINDS 里）。这样首份会话版也会带 Supersedes，清覆盖后重发的
       // 全局版同样带取代声明。技能目录同一条：接管时官方那份就是被取代的旧内容。
       const takeoverSurface = promptTakeover || skillTakeover ? newestDomainTexts(agent, LIVE_KINDS) : undefined
@@ -621,41 +633,54 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // 人设的工具限制也会让工具不在手里，而那份名单逐 agent 不同。
       const hiddenNow = deps.hiddenTools !== undefined ? deps.hiddenTools(agent) : null
       const toolHidden = hiddenNow === null ? () => false : (name: string) => hiddenNow.has(name)
+      // 「设置写在哪一层」那一行**只挂一条消息**：六条各挂一份 = 同一句话付六次（≈60 tok/轮）。
+      // 优先「场景」（它讲的就是此刻的处境），其次「记忆」，都没有就挂本步第一条。
+      // 跳过 `delta` 那一条：它是"官方那份还在，这里只补差异"，多一行状态读起来像两份都说。
+      const scopeLine = scopeLineOf(deps.scopeMode?.())
+      const scopeCarrierPool = sections.filter((section) => section.delta !== true)
+      const scopeCarrier = scopeCarrierPool.find((section) => section.key === 'scene')
+        ?? scopeCarrierPool.find((section) => section.key === 'memory')
+        ?? scopeCarrierPool[0]
       for (const section of sections) {
         published.add(section.key)
         // `current !== undefined` = 该域在可见表面上有一条更早的己方**内容**消息 → 这次是**替换**，
         // 界面上的动作标签据此从「已载入」变成「已更新」（见 domainMessage 的 baseline/changes）。
-        // 这个判据同时决定框架里那句 `Supersedes …` 发不发（2026-10-18：第一份没有旧内容可取代）。
+        // 这个判据同时决定框架里那句 `Supersedes …` 发不发（：第一份没有旧内容可取代）。
         // `current.body` 是**内容**指纹；最新一条若是「已清空」通知，扫描侧会另外置
         // `cleared`（通知本身不是内容），下面的判据必须把这一位也算上。
         const current = visible.get(section.key)
         const replacing = current !== undefined
           || (section.key === 'prompt' && promptOnSurface)
           || (section.key === 'skills' && skillOnSurface)
-        const rendered = renderDomainText(section, toolHidden, replacing)
-        // 比对**域正文**而不是整条消息（2026-10-19 修）：框架里 `Supersedes …` 只在替换时发，
-        // 首帧没有它。比整条会把"这是本会话第一份"误判成内容变化 → 每个域在第二步多重发一次
-        // （用户实测：场景 / 记忆 / MCP / 子智能体每轮重发）。正文一个字没变就不发 ——
-        // `replacing` 只决定框架长什么样，不影响该不该发。
-        // `body === undefined` 的那一支留给官方载体与旧版本消息（它们不带 `body` 字段）：
-        // 无从比起时按"内容变了"处理，宁可多发一条也不能让模型拿着过期正文。
-        // **最新一条是「已清空」通知时例外**（2026-10-21 实测）：通知携带的 `body` 只是更早
+        const rendered = renderDomainText(section, toolHidden, replacing, section === scopeCarrier ? scopeLine : undefined)
+        // 判据是**域正文 + 框架指纹**，不是整条消息：框架里 `Supersedes …` 只在替换时发，
+        // 首帧没有它 —— 比整条会把"这是本会话第一份"误判成内容变化，每个域在第二步多重发一次
+        // （用户实测：场景 / 记忆 / MCP / 子智能体每轮重发）。
+        // 只比正文又会漏掉另一种变化：插件升级改了 `title` / `how`，正文一个字没动 → 永不重发，
+        // 模型手里那份框架就永远停在旧版本（`frameKeyOf` 记的正是这件事）。
+        // `body` 缺失（旧版本发的消息不带它）按"无从比起"处理：宁可多发一条，也不能让模型
+        // 拿着过期正文 —— 此前这一支写成 `||`，与注释相反，旧消息因此永远不会被补齐。
+        // **最新一条是「已清空」通知时例外**：通知携带的 `body` 只是更早
         // 那条内容的指纹，供"恢复后变没变"比对；拿它判"没变"会跳过重发，于是域重新打开后
         // 模型看到的最新消息仍是「不再发送」，而内容其实已经回来了。通知不是内容 —— 必须重发。
-        if (current !== undefined && current.cleared !== true
-          && (current.body === undefined || current.body === rendered.body)) continue
+        const unchanged = current !== undefined
+          && current.cleared !== true
+          && current.body !== undefined
+          && current.body === rendered.body
+          && current.frame === rendered.frameKey
+        if (unchanged) continue
         const text = rendered.text
         let files: readonly InjectSourceFile[] | undefined
-        // 传 agent（0.21.2）：提示词域的来源文件清单按**本会话的 cwd** 算项目链。
+        // 传 agent：提示词域的来源文件清单按**本会话的 cwd** 算项目链。
         // 其余域不用它，多一个实参对它们没有影响。
         try { files = domainOf.get(section.key)?.files?.(agent) } catch { files = undefined }
-        additions.push(domainMessage(section, text, files, replacing))
+        additions.push(domainMessage(section, text, rendered.frameKey, files, replacing))
         appended.push(section.key)
         injectedKeys.add(section.key)
       }
       // 曾经注入过、这一轮没有内容的域 → 一条「已清空」；从没注入过的域什么都不用说。
       // **取数失败的域不发「已清空」**：那条通知的字面意思是"这份内容已失效"，而真实情况是
-      // "我们这一轮没取到" —— 发出去等于向模型谎报（审查 P1-8）。保留上一轮内容不动更安全。
+      // "我们这一轮没取到" —— 发出去等于向模型谎报。保留上一轮内容不动更安全。
       const labelOf = new Map(domains.map((domain) => [domain.key, domain.label] as const))
       const clearedKeys = new Set<InjectDomainKey>()
       // 压制型预设且没开「仍然注入」时，`selectInjections` 一个域都不送 —— 新增的「技能目录
@@ -666,9 +691,9 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         // 该域在表面上"曾经有内容、此刻没有" → 发一条「已清空」。四个判据缺一不可：
         //   · `previous === undefined`：从没注入过内容的域什么都不用说（没有旧目录要作废）；
         //   · `previous.cleared`：**已经**通知过清空了（最新一条就是通知）→ 不再叠发
-        //     （2026-10-19 用户实测：场景 / MCP / 子智能体三轮各三条）；
-        //   · `failed`：这一轮**取数失败** —— "没读到"≠"没有了"（审查 P1-8）；
-        //   · `pending`：这一轮**数据还没到手** —— 同上，而它正是 2026-10-22 用户实测那条
+        //     （用户实测：场景 / MCP / 子智能体三轮各三条）；
+        //   · `failed`：这一轮**取数失败** —— "没读到"≠"没有了"；
+        //   · `pending`：这一轮**数据还没到手** —— 同上，而它正是 用户实测那条
         //     假「已清空」的来路（写操作把目录缓存打回重算，那一拍读到了空串）。
         // 判定本体在 `shouldAnnounceCleared`（纯函数，测试直接钉）。
         const previous = visible.get(key)
@@ -727,7 +752,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       injectionFailed = true
       log('context injection failed: ' + String((error && (error as Error).message) || error))
       // 但"尽力而为"不等于"无声无息"：这一步整段抛异常时，模型**一个域的内容都没收到**，
-      // 而此前唯一的痕迹是上面那行 console.error（审查 P1-8 / 脆弱性地图 F2）。
+      // 而此前唯一的痕迹是上面那行 console.error。
       // 兼容页据此至少能看到一条降级 —— 否则用户只会觉得"模型怎么不知道我的配置"。
       noteRuntime({
         id: 'context-injection-runtime',
@@ -747,7 +772,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
   return {
     dispose: () => {
       try { if (typeof stop === 'function') (stop as () => void)() } catch { /* ignore */ }
-      // 注入通道没了，自检结论也失效（B4）——留着会让兼容页报一件不存在的事。
+      // 注入通道没了，自检结论也失效——留着会让兼容页报一件不存在的事。
       clearRuntimeNote('official-suppression')
       // 运行期上报同理：通道都不在了，"这一轮注入抛异常"没有意义（且不会再被刷新）。
       clearRuntimeNote('context-injection-runtime')
@@ -776,15 +801,17 @@ function messagesOf(decision: any): readonly unknown[] {
 function domainMessage(
   section: InjectSection,
   text: string,
+  frameKey: string,
   files?: readonly InjectSourceFile[],
   replacing?: boolean,
 ): unknown {
-  // `body` 是**给扫描侧用的域正文指纹**（2026-10-19）：下一轮 `newestDomainTexts` 要从会话
+  // `body` 是**给扫描侧用的域正文指纹**：下一轮 `newestDomainTexts` 要从会话
   // 表面认出"这条域的内容变没变"，而整条正文里有按场合发的框架行（`Supersedes …` 只在替换时
   // 发），比整条会把首帧那一差异误判成内容变化 → 每轮重发。把域原文放进 source，扫描侧
   // 读它即可，不必去剥框架（剥框架要认标题/how/boundary 三行的起止，随时会因改排版而错）。
-  // 只占 source 一个字段，模型侧只看 content，不受影响。
-  const source: Record<string, unknown> = { kind: INJECT_KIND_OF[section.key], form: section.form, body: section.text }
+  // `frame` 是同一层里的第二个指纹：正文不变、框架换了（插件升级）也要重发一次，
+  // 否则模型手里那份引导语永远是旧版本。两个字段都只占 source，模型侧只看 content。
+  const source: Record<string, unknown> = { kind: INJECT_KIND_OF[section.key], form: section.form, body: section.text, frame: frameKey }
   if (section.form === 'snapshot') source.sections = [{ name: section.name, text: section.text }]
   if (section.form === 'instructions' && files !== undefined && files.length > 0) {
     if (replacing !== true) source.baseline = true

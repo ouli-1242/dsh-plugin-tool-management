@@ -114,12 +114,12 @@ export {
 // （hub.ts、memories/*、subagents/service.ts 都按 ../skills/core.js 引 resolveDshHome）。
 export { resolveAgentsHome, resolveDshHome } from "./homes.js";
 
-// 业务错误码 / 条目路径谓词 / 可恢复 rename 的重试这一层 2026-10-01 剥到 ./core-util.js：
+// 业务错误码 / 条目路径谓词 / 可恢复 rename 的重试这一层 剥到 ./core-util.js：
 // 这几件被导入链路与技能读写**两侧同时**用到，留在本文件里就意味着任何搬出去的段都要反过来
 // 引 core —— 那是运行时环。搬到这里，两侧都只向下引这一层。公开面照旧：entryPath 与
 // renameWithRetry 仍有外部引方（index.ts 按 ./skills/core.js 引 renameWithRetry）。
 export { entryPath, renameWithRetry } from "./core-util.js";
-// 来源与路径底座（四来源 / 项目级来源 / root-state-trash 路径 / 路径比较口径）2026-10-01
+// 来源与路径底座（四来源 / 项目级来源 / root-state-trash 路径 / 路径比较口径）
 // 剥到 ./skill-roots.js。那一层只向下引 ./official.js / ./homes.js / ./core-util.js，
 // 不回引本文件；userRoots / projectRoots / trashRootPath 有外部引方（service.ts、
 // system-trash.ts），而 core.js 的公开面里还挂着另外四件 —— 全部照旧从 core.js 出口走。
@@ -132,11 +132,11 @@ export {
   trashRootPath,
   userRoots,
 } from "./skill-roots.js";
-// 上传落盘链路（Base64 目录 / ZIP 校成来源、写进技能根目录）2026-10-01 剥到
+// 上传落盘链路（Base64 目录 / ZIP 校成来源、写进技能根目录）剥到
 // ./upload-pipeline.js；它向下引 core-util / import-pipeline / skill-roots 三层，不回引本文件。
 // service.ts 按 ./core.js 引这两件，公开面照旧再出口一次。
 export { importSkill, importUploadedSkill } from "./upload-pipeline.js";
-// 技能回收站（可写根判定 / 移进移出 / 清单读写）2026-10-01 剥到 ./skill-trash.js。
+// 技能回收站（可写根判定 / 移进移出 / 清单读写）剥到 ./skill-trash.js。
 // 四件本来在 core.js 的出口上（外部按 ./core.js 引），照旧再出口一次。
 export { listTrash, permanentlyDeleteTrash, readTrashMetadata, restoreTrash } from "./skill-trash.js";
 import {
@@ -146,7 +146,7 @@ import {
   safeExistingEntryPaths,
   trashRootMetadata,
 } from "./skill-trash.js";
-// manager 状态层（状态文档与归一 / 启停策略 / 来源扫描去重）2026-10-01 剥到 ./manager-state.js：
+// manager 状态层（状态文档与归一 / 启停策略 / 来源扫描去重）剥到 ./manager-state.js：
 // 那三件事共用一份进程内 singleton state，拆成两层就得让一层去引另一层的私有状态，等于没拆。
 // readManagerState / effectiveSkillPolicy / entryOf 等本来挂在 core.js 的出口上（兄弟模块按
 // ./core.js 引），照旧再出口一次。
@@ -203,7 +203,7 @@ import {
   trashRootPath,
   userRoots,
 } from "./skill-roots.js";
-// 导入预检链路（来源读成候选 / 拒符号链 / 临时件拷贝 / 原子替换）2026-10-01 剥到
+// 导入预检链路（来源读成候选 / 拒符号链 / 临时件拷贝 / 原子替换）剥到
 // ./import-pipeline.js。那一层只向下引 core-util.js、不回引本文件，所以这一侧引它是单向的。
 import {
   analyzeSource,
@@ -239,7 +239,7 @@ const MAX_BROWSE_ENTRIES = 500;
 /**
  * 默认来源：插件自己的读写根 —— `dsh`（官方技能目录）与 `hub`（新建/导入落点）。
  *
- * 用户裁定的是**不对称**语义，两个方向必须成对记住，只改一半就是漏改：
+ * 用户要求的是**不对称**语义，两个方向必须成对记住，只改一半就是漏改：
  *
  *   - 来源**路径**：必须读取。既不能「移除来源」（连目录都不扫），也不能「停用来源」
  *     （仍然扫描但仍算不读取的策略位）—— 界面上没有来源开关，服务端也拒绝这两个写操作。
@@ -979,7 +979,7 @@ export async function setSkillEnabled(
 }
 
 /**
- * 批量显式停用技能（v0.8.5：新建 / 导入 / 回收站恢复默认不启动 —— 用户裁定）。
+ * 批量显式停用技能（新建 / 导入 / 回收站恢复默认不启动）。
  * 直接写 disabledSkills 名单（与 setSkillEnabled 同一张表），不做 frontmatter 等
  * 二次校验——调用方传入的必然是刚落盘/刚恢复的条目。
  * 必须在调用方的写锁（service 的 write()）内执行。
@@ -1005,7 +1005,7 @@ export async function markSkillsDisabled(
      * 少了这一步，「显式启用过 → 删除 → 从回收站恢复」这条链会把同一个名字同时留在两份名单
      * 上（删除不清策略、恢复又要默认停用），整份状态随即被判非法 —— 插件 fail-closed 停用
      * **所有**技能，而且 `writable` 一并变 false，用户在界面上连一个开关都按不动，等于被锁死在
-     * 一份自己造不出来的状态上（用户 2026-10-14 实测踩到）。
+     * 一份自己造不出来的状态上（用户 实测踩到）。
      *
      * 摘除要放在下面那个 `continue` **之前**：名字已经在 disabled 里、却还挂在 enabled 上
      * （就是被锁死的那份文件的形状）时，`continue` 会把清理一并跳过去。
@@ -1196,7 +1196,7 @@ export async function deleteSkill(
       params: { name },
     };
   const targets = await safeExistingEntryPaths(definition.path, name);
-  // 回收站条目 id 走五个域共用的那个生成器（2026-10-15 smoke-test P1-7）：此前这里另写了一套
+  // 回收站条目 id 走五个域共用的那个生成器：此前这里另写了一套
   // `${Date.now()}-${randomUUID()}`，于是同一次操作里记忆/人设/场景/提示词拿到 `mv8faxqe-…`
   // 这种形状、技能拿到 `1792001296466-62d3d393-…`。模型按 `action=list` 的 id 跨域 restore，
   // 两种长相只会让它多猜一层。读侧只校验单个合法路径段，旧条目照旧能列、能恢复。
@@ -1306,7 +1306,7 @@ export async function deleteSkill(
 /**
  * 一个上传路径段会不会被文件系统**改写**成别的东西。
  *
- * 为什么必须单判这一条（2026-09-30 审查 P2-17，实为路径逃逸而非口径分叉）：
+ * 为什么必须单判这一条：
  * 下面的 `part === ".."` 只挡**恰好**是 `..` 的段，而 Windows 的路径归一化会把段尾的
  * **点与空格**静默裁掉 —— `.. `（`..` 加一个空格）在 `CreateFileW` / `CreateDirectoryW`
  * 眼里就是 `..`。于是 `join(contentRoot, ".. ", "x")` 看着在根内（`isSameOrDescendant`
@@ -1354,13 +1354,14 @@ interface CreateSkillOptions {
   root?: RootInput;
 }
 
+/** 新建一条技能，按落点写到对应根下。 */
 export async function createSkill(
   input: CreateSkillInput,
   log: LogFn | undefined,
   options: CreateSkillOptions = {},
 ): Promise<CreateSkillResult | FailureResult> {
-  // 默认落点是「DSH 技能目录」（用户裁定 2026-10-15 改回）：v0.4-v0.20.0 期间这里是 hub。
-  // hub（`tool-management/skills/`）现在只服务「导入技能」功能 —— 那边走
+  // 默认落点是「DSH 技能目录」。hub（`tool-management/skills/`）只服务
+  // 「导入技能」功能 —— 那边走
   // `skillCreateRootPath()`，不经这里。调用方显式传 options.root（如项目根）时仍以调用方为准。
   const requestedRoot = Object.prototype.hasOwnProperty.call(options, "root")
     ? options.root
@@ -1572,7 +1573,7 @@ export async function updateSkill(
   return { name, path: existingDoc, root: definition.key };
 }
 
-/** 详情弹窗列出的 bundle 附件上限：再多就不是给人看的清单了（2026-10-16）。 */
+/** 详情弹窗列出的 bundle 附件上限：再多就不是给人看的清单了。 */
 const MAX_DETAIL_ATTACHMENTS = 200;
 const MAX_DETAIL_ATTACHMENT_DEPTH = 6;
 
@@ -1624,6 +1625,14 @@ async function listBundleAttachments(dir: string): Promise<{
   return { files, truncated };
 }
 
+/**
+ * 一条技能的详情：正文、元数据与随包附件清单。
+ *
+ * @param keyOrRoot 来源 key，或已解析好的来源定义（自定义来源由 service 层解析后传入）
+ * @param name 技能名（frontmatter 里的声明名，不是文件夹名）
+ * @param options.projectCwds 项目来源要在这些工作区里解析
+ * @returns 成功时带正文与附件清单；来源未知 / 技能不存在 / 不可加载时返回带 `code` 的失败回执
+ */
 export async function skillDetail(
   keyOrRoot: RootInput,
   name: string,
@@ -1690,7 +1699,7 @@ export async function skillDetail(
 /**
  * 生成 manager provider 候选：保留禁用候选以阻止低优先级重名副本意外激活。
  *
- * **同名首选必须传进分组**（2026-09-30 审查 F8）。此前这里调
+ * **同名首选必须传进分组**。此前这里调
  * `groupLoadableSkillsByName(items)` 时没带 `preferred`，而管理页（`markWinners`）带了 ——
  * 于是「同名首选」只在界面上生效：用户把 A 设为首选，界面把 A 标成「同名首选」、把 B 标成
  * 「被覆盖」，模型侧却仍按 rank 拿到 B。**界面说的和模型用的不是同一份**，且没有任何一处报错。
@@ -1789,6 +1798,17 @@ export async function listProviderCandidates(
   return candidates;
 }
 
+/**
+ * 按候选取回技能正文 —— 宿主 provider 的 `get()` 走这里。
+ *
+ * 候选里的 locator 是**上一次扫描时的快照**，取回时必须逐项复核（来源、声明名、真实路径、
+ * 文档真实路径）：任何一项对不上就返回 `undefined`，让宿主回落到别的 provider。返回 `undefined`
+ * 与返回空正文是两件事 —— 前者表示「这条我不认」，后者会被模型当成一份空技能。
+ *
+ * @param candidate 扫描阶段产出的候选（含 locator）
+ * @param options.cwd 项目来源要在哪个工作区里重新解析
+ * @returns 技能正文与元数据；候选失效、路径对不上或读取失败时为 `undefined`
+ */
 export async function getProviderSkill(
   candidate: ProviderCandidate | null | undefined,
   options: { cwd?: string } = {},
@@ -1816,7 +1836,7 @@ export async function getProviderSkill(
   // `rootByKey()` 恒取不到。少了这一支就是「列得出、调不动」：`state()` 扫的是
   // `userRoots() + customRootsFromState()`，官方 catalog 因此把目录里的技能列给模型，
   // 而模型真去 `skill` 工具取正文时这里返回 undefined —— 症状是
-  // `skill "brainstorming" is unknown or no longer available`（用户 2026-09-22 报的）。
+  // `skill "brainstorming" is unknown or no longer available`（用户反馈的）。
   if (
     !root &&
     CUSTOM_ROOT_KEY_RE.test(locator.rootKey)
@@ -1866,14 +1886,5 @@ export async function getProviderSkill(
 }
 
 // ── 状态快照 ────────────────────────────────────────────────────────────────
-
-/**
- * 真实路径去重后按声明名分组；管理页与当前工作区 provider 共用来源优先级。
- *
- * `preferred`（技能名 → 来源 key）是用户对同名技能的显式选择：命中的来源排到同名前，
- * 其余仍按来源 rank 排序；未命中（或键已失效）时退化为纯 rank 顺序。
- */
-
-/** DSH、常见 Agent、自定义目录与活动 Session 项目根的技能快照。 */
 
 export { KEBAB_RE };

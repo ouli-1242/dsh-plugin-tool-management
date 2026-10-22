@@ -8,7 +8,7 @@
 //
 // 这里只回答一个问题：要收敛的话，删哪些行区间**且生效值保证不变**。
 //
-// ⚠ 这个模块第一版出过一次事故：调用方把 `parseRows()` 合并覆盖块之后的**生效值**
+// ⚠ 这个模块出过一次事故：调用方把 `parseRows()` 合并覆盖块之后的**生效值**
 // 当基准传进来，而生效值恒等于 decider 的值 —— 于是"decider 的值 == 基准"永远成立，
 // 每个 decider 都被当成 no-op 删掉，6 台 MCP 全部被启用。为了从结构上杜绝这种传错，
 // 现在的接口是：`planOverrideCompaction(content, otherFileContents)` —— 基准只能由
@@ -142,6 +142,7 @@ export function insertBaseRows(content: string): OverrideBaseRow[] {
   return out
 }
 
+/** 覆盖块的统计：总数与因不合法被丢弃的条数。 */
 export interface OverrideStat {
   /** 该 id 的覆盖块总数。 */
   total: number

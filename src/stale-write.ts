@@ -1,4 +1,4 @@
-// 并发编辑的「内容指纹」判据（0.21.2 Phase 4）。
+// 并发编辑的「内容指纹」判据。
 //
 // 问题：两个窗口同时打开同一份记忆 / 提示词 / 补丁，后保存的那一份会把前一份的改动整份覆盖。
 // 文件锁只能防同进程的两条路径，防不住外部编辑器 —— 所以判据必须是**内容**：读的时候给一份
@@ -12,8 +12,10 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
+/** 「基于旧值写」被拒的统一错误码：界面按它弹「重新加载 / 覆盖保存」。 */
 export const STALE_WRITE_CODE = 'stale-write'
 
+/** 「基于旧值写」的回执：成功，或冲突 + 磁盘上现在的值。 */
 export interface StaleWriteResult {
   ok: false
   code: typeof STALE_WRITE_CODE
@@ -44,6 +46,7 @@ export function normalizeStamp(expected: unknown): string | null {
   return s === '' ? null : s
 }
 
+/** 「基于旧值写」被拒时的统一结果，带上磁盘上现在的值。 */
 export function staleWriteResult(current: string | null): StaleWriteResult {
   return {
     ok: false,
@@ -63,6 +66,12 @@ export function stampConflict(current: string | null, expected: unknown): StaleW
   return want === current ? null : staleWriteResult(current)
 }
 
+/**
+ * 「基于旧值写」被拒时的异常形态，供没有结构化回执通道的写路径使用。
+ *
+ * 与 `staleWriteResult()` 是同一件事的两种出口：有回执通道的 op 返回结果，没有的抛这个。
+ * `current` 带上磁盘上现在的值，调用方才能让用户决定「重新加载」还是「覆盖保存」。
+ */
 export class StaleWriteError extends Error {
   readonly code = STALE_WRITE_CODE
   readonly current: string | null

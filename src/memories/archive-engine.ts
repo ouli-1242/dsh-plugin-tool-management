@@ -1,5 +1,5 @@
 // src/memories/archive-engine.ts —— 场景档案引擎：sidecar 读写 + 运行时应用，全部经 deps 注入（无直接 I/O）。
-// 状态机（设计 §2.2）：进入 = 快照 → 先落盘 mode（留可退路径）→ 应用已定义段 → 记忆收窄为 {S}；
+// 状态机：进入 = 快照 → 先落盘 mode（留可退路径）→ 应用已定义段 → 记忆收窄为 {S}；
 //                     退出 = 恢复快照 → 落盘自由模式；切换 = 先退后进。
 // 失败语义（fail-closed）：任一步失败即反向恢复运行时并写回旧切片；回滚不全会如实写进错误文本。
 // v2：MCP 段两级（服务器勾选 + '*' / 工具明细），停用表存勾选集的补集，通配由 index.ts 的 guard/restrict 原生支持。
@@ -22,20 +22,22 @@ import {
 type McpServerRow = { id: string; level: string; disabled: boolean }
 type SkillSourceRow = { root: string; enabled: boolean }
 
+/** 档案引擎要读写的那一片索引（档案、模式、当前场景）。 */
 export interface ArchiveIndexSlice {
   archives: Record<string, SceneArchive>
   mode: ModeState
-  /** 记忆启用场景集合（null = 全部启用）；进入模式时收窄为 [S]，退出**不**恢复（设计 §2.2）。 */
+  /** 记忆启用场景集合（null = 全部启用）；进入模式时收窄为 [S]，退出**不**恢复。 */
   active: string[] | null
 }
 
+/** 档案引擎要的索引读写入口。 */
 export interface ArchiveEngineDeps {
   /** 读 memories-index.json 的 mode/archives/active 切片（rules service 唯一属主）。 */
   loadSlice(): Promise<ArchiveIndexSlice>
   /**
    * 写回切片（合并进 memories-index.json，rules service 负责原子写与缓存失效）。
    *
-   * `fields` 是**意图声明**，必须显式列出本次要改哪几项（2026-09-30 审查 P2-3）。
+   * `fields` 是**意图声明**，必须显式列出本次要改哪几项。
    * 为什么不能"整片回写"：`loadSlice` 是**队外**读的，而这个写是队内执行的 —— 两者之间的
    * 窗口里另一个写者（HTTP op / 模型工具 / 另一条引擎路径）改过的字段，会被我们手里这份
    * 陈旧值整片覆盖掉。`scene-mode-set` 的窗口尤其长（跨整个运行时应用，可能好几秒），
@@ -45,7 +47,7 @@ export interface ArchiveEngineDeps {
   /**
    * 只写**一个场景**的档案（队列内逐场景增量）。
    * `archive === null` = 删掉该场景的档案。与 `saveSlice(..., ['archives'])` 的区别是
-   * 后者写的是**整张表**，会覆盖并发写进来的别的场景（审查 P2-3）。
+   * 后者写的是**整张表**，会覆盖并发写进来的别的场景。
    */
   saveArchive(scene: string, archive: SceneArchive | null): Promise<void>
   /** 配置中真实存在的 MCP 服务器名全集（含未运行的）。 */
@@ -123,12 +125,13 @@ export interface ArchiveEngineDeps {
    */
   applyToolTableHidden(hidden: string[]): Promise<void>
   /**
-   * 「最近改动」流水（0.15.0 B2）：引擎整体应用 / 还原档案时各记一条。
+   * 「最近改动」流水：引擎整体应用 / 还原档案时各记一条。
    * 缺席就是什么都不做 —— 流水是附属能力，不该成为引擎的硬依赖。
    */
   audit?(op: string, target: string): void
 }
 
+/** 档案引擎的对外面：应用档案、还原快照、只读 op。 */
 export interface ArchiveEngine {
   ops: Record<string, (args: any) => Promise<any>>
   writeOps: ReadonlySet<string>
@@ -136,6 +139,7 @@ export interface ArchiveEngine {
 
 const msg = (e: unknown): string => String((e && (e as Error).message) || e)
 
+/** 场景档案引擎：进入 / 退出 / 保存三种动作的串行执行体（同一时刻只跑一个，失败按快照回滚）。 */
 export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
   let chain: Promise<unknown> = Promise.resolve()
   const serial = <T>(task: () => Promise<T>): Promise<T> => {
@@ -200,8 +204,8 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
   /**
    * 还原到快照（退出模式与失败回滚共用同一条路径）：
    * MCP 停用表**按快照原文整体回写**——模式自己写进去的键（未勾服务器的 ['*']）必须随之消失，
-   * 否则退出后用户环境仍被静默停用（比"多留一个键"严重得多）；模式期间的手动改动按设计 §2.2
-   * 不保留（「退出 = 恢复 mode.snapshot」，手动改动只在「保存到场景」时回写）。
+   * 否则退出后用户环境仍被静默停用（比"多留一个键"严重得多）；模式期间的手动改动不保留
+   * （「退出 = 恢复 mode.snapshot」，手动改动只在「保存到场景」时回写）。
    * 技能只写快照列出的键（这是既有批量通道的语义）：模式期间新增的技能保持现状。
    * 上层两行（服务器级 / 来源级）按**全量**快照还原 —— 只回写与现状不同的行，见
    * mcpServerRowsToRestore / skillSourceRowsToRestore。
@@ -234,12 +238,12 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
     const mcp = Object.fromEntries(Object.entries(snapshot.mcp).map(([k, v]) => [k, v.slice()]))
     await deps.applyMcpEntries(mcp, 'scene-restore')
     await deps.applySkills({ ...snapshot.skills })
-    // 备注：按快照原值写回（null = 原本没有，删除）。模式期间的手动备注改动不保留（同 §2.2）。
+    // 备注：按快照原值写回（null = 原本没有，删除）。模式期间的手动备注改动不保留。
     const notes = snapshot.mcpNotes ?? []
     if (notes.length) {
       await deps.applyMcpNotes(notes.map((x) => ({ id: x.id, note: x.note })))
     }
-    // 子智能体开关（v0.9.1）：**全量映射优先**——退出即精确还原「进场景前」的开与关。
+    // 子智能体开关：**全量映射优先** —— 退出即精确还原「进场景前」的开与关。
     // 为什么不能只靠下面那两个部分名单：场景内页面开关已开放（未锁定即可改、改动同步进档案），
     // 「现在开着」不再只来自档案勾选，部分名单答不出「这个人是场景开的还是用户开的」。
     // 表里**记过的名字**逐个还原；场景中新建的人设不在表里 → 不动它（与技能域同口径）。
@@ -258,7 +262,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         await deps.applySubagentSwitches(personasOn.map((n) => ({ name: n, enabled: true })))
       }
     }
-    // 快捷提示词（0.18.0）：按快照的全量映射还原，但**只回写与现状不同的那几条** ——
+    // 快捷提示词：按快照的全量映射还原，但**只回写与现状不同的那几条** ——
     // 与 mcpServerRowsToRestore 同一条理由：没变过的行不该白写一遍侧车。读不到现状就退回全量
     // 回写（宁可多写几行，不可少还原）。老快照没有这一栏 → 一个字都不动（进场景时也没碰过）。
     // 场景期间被删掉的条目由实现侧静默跳过：没有可还原的状态，硬写会把"退出场景"卡成报错。
@@ -274,7 +278,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         if (switches.length) await deps.applyQuickPromptSwitches(switches)
       }
     }
-    // 模型工具表（C1）：按快照原值整体回写。老快照没有这一栏 → 一个字都不动（与进场景前一致）。
+    // 模型工具表：按快照原值整体回写。老快照没有这一栏 → 一个字都不动（与进场景前一致）。
     // 先与现状比一次：绑的方案与进场景前本来就是同一份名单时，这一步什么都没改 —— 既不该白跑
     // 一遍"落盘 → 重排可见性 → 两个目录重算"，回执更不该跟着说「工具表按快照还原」（用户问
     // "刚才改了什么"时凭空多一项）。读不到现状就照旧回写（宁可多写一遍，不可少还原）。
@@ -315,7 +319,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
   /**
    * 把**当前模式**的档案就地重新应用一次（改档案 → 立即生效）。
    *
-   * 存在的理由（用户裁定 2026-09-16）：场景内页面上的开关被禁用，改环境只能改档案；
+   * 存在的理由：场景内页面上的开关被禁用，改环境只能改档案
    * 若档案改完不立刻生效，用户就得「退出场景再进一次」才看得到结果。
    *
    * 口径与进入模式**完全一致**（四域同口径）：勾选集 = 该场景下开着的东西，段未定义 =
@@ -357,7 +361,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
     // 快捷提示词：段定义了才碰（未定义 = 保持现状）。快照里的原值**不动** ——
     // 退出场景仍回到「进场景前」那批开关，而不是回到上一次档案的勾选。
     if (archive && Array.isArray(archive.quickPrompts)) await applyQuickPrompts(archive.quickPrompts)
-    // 工具表方案（C1）：改档案 = 立刻生效，这一域也得跟上。快照里的原值**不动** ——
+    // 工具表方案：改档案 = 立刻生效，这一域也得跟上。快照里的原值**不动** ——
     // 退出场景仍然回到「进场景前」那份名单，而不是回到上一次档案的方案。
     const reapplyPreset = (archive && archive.toolTablePreset) || ''
     if (reapplyPreset) {
@@ -423,7 +427,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
             quickPrompts: Object.keys(snap.quickPromptsAll || {}).length,
             mcpNotes: (snap.mcpNotes ?? []).length,
           },
-          // 记忆启用集**不随退出恢复**（设计 §2.2）：退出后仍是这个场景，界面别把它写成"会还原"。
+          // 记忆启用集**不随退出恢复**：退出后仍是这个场景，界面别把它写成"会还原"。
           memory: { from: slice.active, to: slice.active, narrowed: false },
           mcp: null, skills: null, subagents: null, stale: [], truncated: false,
         }
@@ -502,7 +506,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // ⚠️ 只报**前后都在跑**的服务器（`offServers`）。服务器没在跑的时候，它的工具停用表只是
       // 记账：把一台本来就没启用的（或这次正要停用的）服务器记成「整台停用」没有任何可见效果，
       // 报成「停用 N 个 MCP 工具」是假话 —— 用户实测就是这么看到「停用 6 个 MCP 工具：
-      // context7/*、fastgraph/* …」，而那 6 台从来没启用过（2026-09-23）。服务器级的改动
+      // context7/*、fastgraph/* …」，而那 6 台从来没启用过。服务器级的改动
       // 由 `serverSwitches` 那一行如实说（它只含真的会变的），工具级留给逐工具开关真正起作用的
       // 情形。
       const offServers = new Set<string>()
@@ -546,10 +550,10 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // 来源级切换（skillsPlan.sourceSwitches）只做不说：它是技能启停的实现细节 ——
       // 勾了技能的来源才启用、一条都没勾就停用。项目来源的 key 是路径哈希
       // （`project-dsh:47d48f408c5edc5e`），目录对用户可能根本不存在、也不是新建技能的
-      // 落点，报上预览卡只会被当成故障（用户 2026-10-15 裁定：提醒不显示技能目录）。
+      // 落点，报上预览卡只会被当成故障（提醒不显示技能目录）。
 
       const stale = [...mcpPlan.stale, ...skillsPlan.stale]
-      // 工具表方案（C1）：绑了就说清「会切成哪一份、关几条」。方案在别处被删掉 / 换机器之后
+      // 工具表方案：绑了就说清「会切成哪一份、关几条」。方案在别处被删掉 / 换机器之后
       // 查不到时 hiddenCount 给 null，界面那句会改成"方案已不存在，这次不会切换"——
       // 比让预览卡继续显示一条看不懂的数字诚实。
       const previewPreset = (archive && archive.toolTablePreset) || ''
@@ -565,7 +569,6 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         : 0
       // 「进入后处于启用」的服务器（场景勾着的那几台 ∩ 配置里真实存在的）。它是**状态**不是改动，
       // 与上面几行的"会改什么"互补：什么都没变时 MCP 那一段整段消失，读起来像缺了信息（用户
-      // 2026-09-23 实测）。工具级不列（服务器没在跑时它的工具数无从得知，报了就是猜）。
       const enterServers = Object.keys((archive && archive.mcp) || {})
         .filter((name) => configured.indexOf(name) >= 0)
         .sort()
@@ -659,7 +662,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // 保存档案时顺手把残留字段清掉，避免新旧语义并存造成误读。
       if (archive.memories !== undefined) delete archive.memories
       const slice = await deps.loadSlice()
-      // 工具表方案的绑定入口已改到「修改场景」表单（0.15.0 用户裁定）：档案保存的载荷
+      // 工具表方案的绑定入口已改到「修改场景」表单：档案保存的载荷
       // 不再携带这一栏，**不带 ≠ 解绑** —— 保留现值（解绑走 rules-update-scene 的空串；
       // 带上来的值仍走上面的 stale 校验，保留的现值由进出场景时的 stale 处理兜底）。
       if (archive.toolTablePreset === undefined) {
@@ -672,7 +675,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
         const prev = slice.archives[scene]
         if (prev && Array.isArray(prev.quickPrompts)) archive.quickPrompts = prev.quickPrompts.slice()
       }
-      // 逐场景增量写（审查 P2-3）：这里只该动 `archives[scene]` 这一条，而 `slice` 是队外
+      // 逐场景增量写：这里只该动 `archives[scene]` 这一条，而 `slice` 是队外
       // 读的 —— 整片回写会把窗口期里别人保存的**别的场景**档案一起抹掉。
       const archiveNext = Object.keys(archive).length === 0 ? null : archive
       if (archiveNext === null) delete slice.archives[scene]
@@ -690,7 +693,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           const snapshot = slice.mode.snapshot
           if (snapshot && (changed.mcpServers.length || changed.skillSources.length)) {
             // 只写 mode：`reapplyActiveArchive` 期间可能有人改了 active 或别的场景的档案，
-            // 整片回写会顺手把它们带回旧值（审查 P2-3）。
+            // 整片回写会顺手把它们带回旧值。
             await deps.saveSlice(
               { ...slice, mode: { ...slice.mode, snapshot: mergeSnapshotSwitches(snapshot, changed.mcpServers, changed.skillSources) } },
               ['mode'],
@@ -704,7 +707,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
     }),
 
     // 写：进入/退出/切换当前模式
-    // scene=null 退出；目标场景没有 mcp/skills 段 = 结构化拒绝（设计 §2.4：此类场景不显示模式按钮）。
+    // scene=null 退出；目标场景没有 mcp/skills 段 = 结构化拒绝（此类场景不显示模式按钮）。
     'scene-mode-set': (args: any) => serial(async () => {
       const hasKey = args && 'scene' in (args || {})
       if (!hasKey) return { ok: false, error: '缺少 scene（null = 退出模式）' }
@@ -728,7 +731,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       if (current.scene) {
         const exited: ArchiveIndexSlice = { ...slice, mode: { scene: null, snapshot: null } }
         try {
-          // 只落 mode（审查 P2-3）：退出模式不该顺手改写 active（记忆收窄的语义是"退出不恢复"）
+          // 只落 mode：退出模式不该顺手改写 active（记忆收窄的语义是"退出不恢复"）
           // 或 archives —— 而 `slice` 是队外读的，整片回写会把这些带成陈旧值。
           await deps.saveSlice(exited, ['mode'])
         } catch (e) {
@@ -752,7 +755,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       let unboundPersonas: string[] = []
       let personaRestore: string[] = []
       let personaRestoreOn: string[] = []
-      // 全量开关映射（v0.9.1）：退出即精确还原「进场景前」。半个名单做不到这件事 ——
+      // 全量开关映射：退出即精确还原「进场景前」。半个名单做不到这件事 ——
       // 场景里手动开过的人设，「改动前是关还是开」只在这张全量表里。
       let personaStates: Record<string, boolean> = {}
       try {
@@ -765,7 +768,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       } catch (e) {
         return { ok: false, error: `读取人设开关状态失败（未改动任何东西）：${msg(e)}` }
       }
-      // **四域同口径**（用户实测三连，2026-09-16）：档案的勾选集 = 该场景下开着的东西，
+      // **四域同口径**（用户实测三连）：档案的勾选集 = 该场景下开着的东西，
       // **段未定义 = 一个都没勾 = 全部停用**。此前只有人设域按这条应用，MCP / 技能沿用旧口径
       // 「未定义 = 该域不碰」——于是「场景档案没开 MCP 工具集 / 技能集」时，进场景后原本在跑的
       // 服务器与技能照样开着（用户报的 ②③）。开关既然已收归档案（场景内页面不可改），
@@ -783,7 +786,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       let mcpServerStates: McpServerState[] = []
       let skillSources: SkillSourceState[] = []
       try {
-        // 五批读互不依赖，**并行**取（0.21.2）：`skill-state` 冷启实测数秒，与 MCP 列表、
+        // 五批读互不依赖，**并行**取：`skill-state` 冷启实测数秒，与 MCP 列表
         // 已知工具串行相加就是用户看到的「切场景要等很久」。任何一批失败仍整轮中止，
         // 运行时一个字都不动（与原来串行时的口径一致）。
         const [mcpStates, sourceStates, configured, knownTools, knownSkills] = await Promise.all([
@@ -804,7 +807,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       } catch (e) {
         return { ok: false, error: `读取运行时状态失败（未改动任何东西）：${msg(e)}` }
       }
-      // 场景备注（v0.8.1）：把 `mcpNotes`（serverName → 场景备注）映射到 loader id，
+      // 场景备注：把 `mcpNotes`（serverName → 场景备注）映射到 loader id，
       // 记录**改动前**的备注（快照恢复用），应用时写进 notes.json 覆盖全局备注。
       let noteTargets: Array<{ id: string; note: string }> | null = null
       let noteBefore: Array<{ id: string; note: string | null }> = []
@@ -814,7 +817,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           const targets: Array<{ id: string; note: string }> = []
           const before: Array<{ id: string; note: string | null }> = []
           // 只对**mcp 段里实际勾选**的服务器应用场景备注：未勾选的服务器该场景根本不用它，
-          // 覆盖它的全局备注属于误伤（2026-09-16 用户实测「没勾的服务器备注也变了」）。
+          // 覆盖它的全局备注属于误伤（用户实测「没勾的服务器备注也变了」）。
           const selectedServers = archive.mcp ? Object.keys(archive.mcp) : []
           for (const [server, note] of Object.entries(archive.mcpNotes)) {
             if (selectedServers.indexOf(server) < 0) continue
@@ -831,7 +834,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
           return { ok: false, error: `读取备注状态失败（未改动任何东西）：${msg(e)}` }
         }
       }
-      // 工具表方案（C1）：**改任何东西之前**先把现状读出来 —— 读失败就等于什么都没动。
+      // 工具表方案：**改任何东西之前**先把现状读出来 —— 读失败就等于什么都没动。
       // 没绑定方案就完全不碰这一域（也不往快照里加栏），老场景行为逐字节不变。
       const toolTablePreset = (archive && archive.toolTablePreset) || ''
       let toolTableBefore: string[] | null = null
@@ -850,8 +853,8 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       // 这一档"报不报"看的是**名单有没有变**：绑的方案与现状是同一份关停名单时，进入这一步
       // 什么都没改，回执再说「工具表切到方案 X」就是给"刚才改了什么"凭空添一项。
       const toolTableSwitched = !!toolTableTarget && !sameNameList(toolTableBefore, toolTableTarget)
-      // 快捷提示词（0.18.0）：档案**定义了**这一段才碰这一域（未定义 = 保持现状，与
-      // mcp/skills/subagents 的「未定义 = 全关」不同 —— 用户 2026-10-01 裁定这一栏的默认是
+      // 快捷提示词：档案**定义了**这一段才碰这一域（未定义 = 保持现状，与
+      // mcp/skills/subagents 的「未定义 = 全关」不同 —— 用户要求这一栏的默认是
       // 「当前启用的快捷提示词」）。读现状同样放在改任何东西之前：读失败就等于什么都没动。
       const quickList = archive && Array.isArray(archive.quickPrompts) ? archive.quickPrompts : null
       let quickStates: Record<string, boolean> | null = null
@@ -888,7 +891,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       const entered: ArchiveIndexSlice = { ...slice, mode: { scene: target, snapshot }, active: [target] }
       try {
         // 先落 **mode**（留可退快照）；active 留到最后一步再落 —— 中途失败要能按原样退回，
-        // 而"记忆已经收窄、运行时还没应用"是最难看的中间态。只写 mode 不写别的（审查 P2-3）。
+        // 而"记忆已经收窄、运行时还没应用"是最难看的中间态。只写 mode 不写别的。
         await deps.saveSlice({ ...slice, mode: entered.mode }, ['mode'])
       } catch (e) {
         return { ok: false, error: '进入模式前落盘快照失败（运行时未改动）：' + msg(e) }
@@ -931,7 +934,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       }
       // ③ 记忆启用集收窄为 {S}（`_shared` 由 resolveActiveScenes 恒常加入；退出不恢复）。
       try {
-        // 落 mode + active（这两片是本次的意图），**不落 archives**（审查 P2-3）：上面那一段
+        // 落 mode + active（这两片是本次的意图），**不落 archives**：上面那一段
         // 运行时应用可能耗时数秒，期间一次"保存别的场景的档案"会被陈旧整片回写抹掉。
         await deps.saveSlice(entered, ['mode', 'active'])
       } catch (e) {

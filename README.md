@@ -14,7 +14,7 @@
 [![dshfind](https://dshfind.com/api/badge/ouli-1242/dsh-plugin-tool-management?lang=zh)](https://dshfind.com/zh/plugins/ouli-1242/dsh-plugin-tool-management)
 [![0xsline](https://img.shields.io/badge/0xsline-%E5%B7%B2%E6%94%B6%E5%BD%95-3fb950)](https://github.com/0xsline/awesome-deepseek-harness)
 
-**简体中文** · [English](README_EN.md) · [Changelog](CHANGELOG.md) · [版本更新概要](docs/update.md)
+**简体中文** · [English](README_EN.md) · [Changelog](CHANGELOG.md) · [版本更新概要](docs/UPDATE.md)
 
 DeepSeek Harness 的 **MCP、技能、场景、记忆、子智能体、提示词与归档会话**管理插件。八个页签：场景 / MCP / 技能 / 子智能体 / 提示词 / 记忆 / 会话 / 兼容。
 

@@ -59,12 +59,12 @@ export function catalogDescription(value: unknown, maxLength: number): string {
  * 返回 `''` 表示不注入 —— `renderPrompt` 会删除空段，所以不用人设的用户零 token 成本。
  * 名字按字典序排序：即使底层目录枚举顺序变化，段文本也保持逐字节稳定（前缀缓存契约）。
  *
- * 文案纪律（2026-09-16 用户裁定）：**只写模型能照做的事，不写实现说明**。原文两句里
+ * 文案纪律：**只写模型能照做的事，不写实现说明**。原文两句里
  * 「该人设的完整提示词会成为子代理的系统提示词」「子代理在独立上下文中执行」都是宿主内部
  * 机制，模型无法据此行动；而委派的调用语义与成本（自包含任务、只回最终结果、会开新会话）
  * 已经写在 `subagent_manager_run` 的描述里 —— 常驻层再重复一遍等于同一件事付两次 token。
  *
- * 第三版（2026-09-17 用户指出"还是那句套话"）：**职责彻底切开** —— 本函数只排版清单
+ * **职责彻底切开**（用户指出"还是那句套话"）—— 本函数只排版清单
  * （`- **名字** — 描述`），"这是什么 + 该拿它做什么"整句交给注入通道的引导语。于是这里
  * 既没有标题也没有"可委派给下列子智能体"那句：一处内容只有一个出处。
  */
@@ -79,13 +79,13 @@ export function renderSubagentCatalog(
   const shown = sorted.slice(0, Math.max(0, maxEntries))
   const lines = shown.map((p) => '- **' + p.name + '** — ' + (catalogDescription(p.description, maxDescription) || NO_DESCRIPTION) + (p.continuable === true ? CONTINUABLE_MARK : ''))
   const hidden = sorted.length - shown.length
-  // 只给清单。"这是什么"与"该拿它做什么"由注入通道的框架交代 —— 2026-09-18 起是
+  // 只给清单。"这是什么"与"该拿它做什么"由注入通道的框架交代 —— 起是
   // context-inject.ts 的 `DOMAIN_FRAME.subagents`（标题 + 加粗的动作句 + 工具名行）。
   // 这里原本还有 `## 子智能体` 标题与一句加粗的「可委派给下列子智能体（调 `subagent_manager_run`）。」
-  // —— 加上引导语，同一件事说了三遍（用户 2026-09-17 指出）。正文从此只管排版。
+  // —— 加上引导语，同一件事说了三遍（用户 指出）。正文从此只管排版。
   const out = [...lines]
   // 查询工具**只在真被 40 条上限截掉时**才出现：常态下不提，省常驻字符，也免得模型为了
-  // 「确认一遍」去调它（用户裁定：没列出来的就是当前不想要的）。与 MCP 状态段的
+  // 「确认一遍」去调它（没列出来的就是当前不想要的）。与 MCP 状态段的
   // `(${N} more not listed.)` 同一句式，但这里多给一个出口——不给人设就真的找不回来了。
   if (hidden > 0) {
     // 与技能目录同一条纪律：点名一个被关掉的工具只会让模型去猜名字。数量照报。
@@ -96,18 +96,19 @@ export function renderSubagentCatalog(
   return out.join('\n')
 }
 
+/** 人设目录的依赖：人设清单、场景绑定与会话层。 */
 export interface SubagentCatalogDeps {
   list(): Promise<PersonaDoc[]>
   sceneLists(): Promise<string[][]>
   /**
    * `subagent_manager_list` **在这个 agent 手里**吗（截断提示里那句话的前提）。默认在。
    *
-   * 收 `agent` 的理由与技能目录同一份（2026-10-14 对抗性审查 P1-8）：只读全局开关时，
+   * 收 `agent` 的理由与技能目录同一份：只读全局开关时
    * 人设用 `toolsDeny` 砍掉这条工具之后，目录尾句照样点名一条它手里没有的工具。
    */
   listToolVisible?: (agent?: unknown) => boolean
   /**
-   * 本会话人设那一格的四层并值（0.21.2）：覆盖 → 场景层（进入场景的档案绑定）→ 基线 →
+   * 本会话人设那一格的四层并值：覆盖 → 场景层（进入场景的档案绑定）→ 基线 →
    * `undefined`（= 落到全局口径：正在用的场景绑定 ∩ 全局启停）。
    *
    * 与 `listToolVisible` 同一条：按 agent 取，判据只有一份（`scope-overrides.json` +
@@ -121,6 +122,7 @@ export interface SubagentCatalogDeps {
   layerKeyFor?: (agent?: unknown) => string
 }
 
+/** 人设目录的对外面：快照、单条详情与可委派判定。 */
 export interface SubagentCatalog {
   /**
    * 同步返回段文本（可能比磁盘状态滞后一个 TTL，见文件头 SWR 说明）。
@@ -144,6 +146,7 @@ export interface SubagentCatalog {
   warm: () => Promise<void>
 }
 
+/** 人设目录的选项：场景、会话深度与是否含停用。 */
 export interface SubagentCatalogOptions {
   maxEntries?: number
   maxDescription?: number

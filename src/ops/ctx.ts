@@ -1,4 +1,4 @@
-// 记忆域 op 的**显式上下文契约**（2026-09-19 抽出，配合 memories/service.ts 组装）。
+// 记忆域 op 的**显式上下文契约**（抽出，配合 memories/service.ts 组装）。
 //
 // 为什么要有它：24 个 op 原先写在 createMemoriesService 闭包里，靠闭包隐式捕获读模型
 // （snapshot / sceneMemory / scenePrompt）、写管道（invalidateSnapshot）、入口
@@ -10,6 +10,7 @@
 import type { DiscoveredEntry, Snapshot } from '../memories/snapshot.js'
 import type { MemoryScopeOverride, Rule, RulesIndex, SceneMemoryProjection, ScenePromptProjection, SceneRow } from '../memories/service.js'
 
+/** 记忆 op 共享的上下文：三个根目录 + 注入预算。 */
 export interface MemoriesOpsCtx {
   // 路径与预算（原闭包顶部的四个配置常量）
   stateDir: string
@@ -30,7 +31,7 @@ export interface MemoriesOpsCtx {
   sceneMemory(scope?: MemoryScopeOverride): SceneMemoryProjection
   scenePrompt(): ScenePromptProjection
   /**
-   * 某个会话的记忆域覆盖（0.21.2）：由 service 从 `scope-overrides.json` 取，`undefined` =
+   * 某个会话的记忆域覆盖：由 service 从 `scope-overrides.json` 取，`undefined` =
    * 没有覆盖 = 全局口径。
    *
    * 为什么放在这里而不是让 ops 直接读侧车：侧车归 `scope/store.ts` 管（TTL 缓存 + 写锁），

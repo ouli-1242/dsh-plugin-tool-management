@@ -1,9 +1,8 @@
-// src/imports/parsers.js — transcript parsing for conversation import.
-// Pure Node, no DSH dependencies: detect format, then convert a Claude Code /
-// Cursor JSONL, a Codex-style Markdown transcript, or generic prefixed text
-// into an ordered list of `{ role: 'user' | 'assistant', text }` turns.
+// 会话导入用的转录稿解析。纯 node、不依赖 DSH：先判格式，再把 Claude Code / Cursor 的
+// JSONL、Codex 风格的 Markdown 转录稿、或带前缀的普通文本，转成有序的
+// `{ role: 'user' | 'assistant', text }` 轮次列表。
 
-/** Heading lines that begin a Markdown turn (`## User` / `### Assistant` …). */
+/** 开启一个 Markdown 轮次的标题行（`## User` / `### Assistant` …）。 */
 const HEADING_RE = /^#{1,3}\s+(User|Human|Assistant|AI|Bot)\s*:?\s*$/i
 /** Bold-prefix lines (`**User:** …` / `**User**: …`). */
 const BOLD_PREFIX_RE = /^\*\*(User|Human|Assistant|AI|Bot):?\*\*\s*:?\s*(.*)$/i
@@ -16,7 +15,7 @@ export interface TranscriptTurn {
   text: string
 }
 
-/** Flatten a message content value (string, text-block array, or nested object) to text. */
+/** 把消息 content 摊平成文本（字符串 / 文本块数组 / 嵌套对象三种形状）。 */
 export function extractText(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
@@ -40,7 +39,7 @@ export function extractText(content: unknown): string {
   return ''
 }
 
-/** Push a finished turn, trimming empty bodies. */
+/** 收下一轮完整对话；正文为空的不收。 */
 function flushTurn(current: TranscriptTurn | null, turns: TranscriptTurn[]): void {
   if (!current) return
   const text = String(current.text || '').trim()
@@ -81,10 +80,9 @@ function sniffFormat(content: unknown): 'jsonl' | 'markdown' | 'generic' {
 }
 
 /**
- * Detect the transcript format. Extension wins; content sniffing applies
- * when the name carries no recognized extension **or is `.txt`**.
+ * 判断转录稿格式。扩展名优先；文件名没有可识别的扩展名**或是 `.txt`** 时改看内容嗅探。
  *
- * `.txt` 走嗅探，不是无条件 generic（2026-09-30 审查 F12）：`.txt` 恰恰是**最常被改名**的
+ * `.txt` 走嗅探，不是无条件 generic：`.txt` 恰恰是**最常被改名**的
  * 扩展名 —— Claude Code / Cursor 的 JSONL、Markdown 转录稿都可能被存成 `transcript.txt`
  *（客户端拿不到文件名时自己就默认这个名字）。原来无条件判 generic，于是整份对话被折成
  * **一条 user 消息**、分轮结构全失、零警告，op 还回 `{ok:true,count:1}`。
@@ -99,11 +97,13 @@ export function detectFormat(fileName: unknown, content: unknown): 'jsonl' | 'ma
 }
 
 /**
- * Parse a Claude Code / Cursor style JSONL transcript.
- * Recognizes `{type:'user'|'assistant', message:{role,content}}` (Claude Code)
- * and `{role, content}` (Cursor-like). System/tool lines are skipped; adjacent
- * turns with the same role are merged.
- * @returns {Array<{role:'user'|'assistant', text:string}>}
+ * 解析 Claude Code / Cursor 风格的 JSONL 转录稿。
+ *
+ * 认两种形状：`{type:'user'|'assistant', message:{role,content}}`（Claude Code）与
+ * `{role, content}`（Cursor 一类）。system / tool 行跳过；相邻同角色的轮次合并。
+ *
+ * @param text 转录稿原文
+ * @returns 按出现顺序排好的轮次
  */
 export function parseJsonlTranscript(text: unknown): TranscriptTurn[] {
   const turns: TranscriptTurn[] = []
@@ -143,9 +143,11 @@ export function parseJsonlTranscript(text: unknown): TranscriptTurn[] {
 }
 
 /**
- * Parse a Markdown transcript into turns by heading or bold-prefix markers
- * (`## User`, `### Assistant`, `**User:**`, …). Content lines accumulate under
- * the current turn until the next marker.
+ * 按标题行或加粗前缀标记（`## User` / `### Assistant` / `**User:**` …）把 Markdown
+ * 转录稿切成轮次。正文行累积到当前轮次，直到下一个标记出现。
+ *
+ * @param text 转录稿原文
+ * @returns 按出现顺序排好的轮次
  */
 export function parseMarkdownTranscript(text: unknown): TranscriptTurn[] {
   const turns: TranscriptTurn[] = []
@@ -170,9 +172,11 @@ export function parseMarkdownTranscript(text: unknown): TranscriptTurn[] {
 }
 
 /**
- * Parse generic prefixed text. Lines starting with `User:` / `Assistant:` /
- * `用户：` / `助手：` begin a new turn; everything else appends to the current
- * one. When no marker is present the whole text becomes one user turn.
+ * 解析带前缀的普通文本。以 `User:` / `Assistant:` / `用户：` / `助手：` 开头的行开启新
+ * 轮次，其余行追加到当前轮次。一个标记都没有时，整段文本算一条 user 轮次。
+ *
+ * @param text 转录稿原文
+ * @returns 按出现顺序排好的轮次
  */
 export function parseGenericText(text: unknown): TranscriptTurn[] {
   const lines = String(text || '').split(/\r?\n/)

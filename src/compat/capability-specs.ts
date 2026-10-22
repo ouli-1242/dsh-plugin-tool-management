@@ -6,6 +6,7 @@
 import { callableWithSentinel, isFn, PROBE_SENTINEL, resolvableFromHost, type Target } from './host-probe.js'
 import type { CapabilityFinding } from './probe-types.js'
 
+/** 一项宿主能力的规格：长在哪、要什么、怎么判、缺了怎么绕。 */
 export interface CapabilitySpec {
   readonly id: string
   readonly label: string
@@ -15,22 +16,21 @@ export interface CapabilitySpec {
   // `targets: Record<CapabilitySpec['owner'], …>` 强制多出一个不存在的宿主对象。
   readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs' | 'tools' | 'agentContext' | 'connection'
   readonly fallback: CapabilityFinding['fallback']
-  /** Required function members on the owning object's prototype. */
+  /** 宿主对象原型上必须具备的方法名。 */
   readonly methods?: readonly string[]
-  /** Required non-function members, checked for `instanceof` when given. */
+  /** 必须具备的非函数成员；给了 `instanceOf` 就按 `instanceof` 校验类型。 */
   readonly fields?: readonly { readonly name: string; readonly instanceOf?: 'Map' | 'Array' | 'Set' }[]
-  /** Extra live behaviour check; returns a failure detail or undefined. */
+  /** 额外的活体行为检查：返回失败说明，或 undefined 表示通过。 */
   readonly probe?: (target: Target) => string | undefined
   /**
-   * Optional extra text appended to the ok detail — how a spec shows what it
-   * OBSERVED on the live host (e.g. the settings document path). 返回 undefined
-   * 就不加后缀。健康行也带观测值：官方下一次改返回语义，页面上那行字一眼见底，
-   * 而不必等到哪个功能静默失明（0.15.0 的教训）。
+   * 可选：往 ok 的说明后面追加观测值（如设置文档的实际路径）。返回 undefined 就不加后缀。
+   * 健康行也要带观测值 —— 官方下一次改返回语义时，页面上那行字一眼见底，
+   * 不必等到某个功能静默失明才发现。
    */
   readonly describe?: (target: Target) => string | undefined
-  /** Members that must be callable when the capability applies. */
+  /** 能力适用时必须可调用的成员。 */
   readonly when?: (target: Target) => boolean
-  /** Absence is a routing fact, not a failure — see {@link CapabilityFinding.optional}. */
+  /** 缺席是路由事实而非失败，见 {@link CapabilityFinding.optional}。 */
   readonly optional?: boolean
   /**
    * 静态检查的**门槛**：只在宿主锚点也认这条能力时才检查（默认总会检查）。
@@ -38,19 +38,17 @@ export interface CapabilitySpec {
    * 什么时候要它：某个 owner 的参考副本不在本插件的依赖图里（如 connection 的
    * `dsh-client-connection` 不是 peer），doctor 从插件锚点解析不到那个包，于是把一条
    * 运行时其实存在的能力记成 `missing` —— 那是与事实相反的结论，用户照它去修只会白费
-   * 功夫（2026-10-17 `connection.admit` 就这么误报过）。
+   * 功夫（`connection.admit` 就这么误报过）。
    */
   readonly staticWhen?: () => boolean
 }
 
 /**
- * The capability table. This IS the contract with the host: everything the
- * adapters reach for is listed here with what happens when it is absent, so a
- * missing member produces a named, visible degradation instead of a throw from
- * somewhere in the middle of a delete sequence.
+ * 能力表。它就是与宿主之间的契约：适配器伸手要的每一样都列在这里，并写清缺席时的后果，
+ * 于是缺一个成员得到的是**有名有姓、界面上看得见**的降级，而不是删除序列跑到一半抛出的错。
  */
 export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
-  // ---- workspace registry: read side -------------------------------------
+  // ---- 工作区登记表：读侧 ----------------------------------------------
   {
     id: 'workspace.read-state',
     label: '读取工作区状态',
@@ -109,7 +107,7 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     fallback: 'refuse-operation',
     methods: ['readSessionHeader'],
   },
-  // ---- workspace registry: write side ------------------------------------
+  // ---- 工作区登记表：写侧 ----------------------------------------------
   {
     id: 'workspace.enqueue',
     label: '串行写事务',
@@ -171,18 +169,17 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     label: '宿主原生删除入口',
     kind: 'delete',
     owner: 'workspace',
-    // NOT `disable-destructive`: when this slot is empty the plugin performs the
-    // whole delete itself, so nothing is disabled. `native-entry` describes what
-    // actually happens (the adapter takes over).
+    // 不能写 `disable-destructive`：这个槽位空着时插件自己把整个删除做完，没有任何东西被
+    // 停用。`native-entry` 说的是实际发生的事（适配器接管）。
     fallback: 'native-entry',
     methods: ['deleteSession'],
     optional: true,
-    // 删除路由的 native 判定此前只看方法存在（07 审查五档问题 2）：宿主升级把同名
+    // 删除路由的 native 判定此前只看方法存在：宿主升级把同名
     // 方法换成别的签名，路由仍会走 native 裸调。哨兵真调把口径提到「可调用」，
     // 文本比对收紧（见 inspectCapability 的 delete 类分支）负责「实现漂移」那一层。
     probe: (t) => callableWithSentinel(t, 'deleteSession', PROBE_SENTINEL),
   },
-  // ---- sessions runtime (private members, used only on the live branch) ---
+  // ---- 会话运行时（私有成员，只在活宿主分支上用）------------------------
   {
     id: 'sessions.detach-live',
     label: '实时会话落盘与分离',
@@ -219,7 +216,7 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
   },
   {
     // B2：此前它只是 bridge 运行时那句拒绝里的**临时 id**（`acquireCacheGuard` 里现场拼的），
-    // 于是客户端压根不知道它 —— 宿主表不可删时，"路由说可用、点下去必拒"（V13）。提升为
+    // 于是客户端压根不知道它 —— 宿主表不可删时，"路由说可用、点下去必拒"。提升为
     // 能力表的正式条目后，路由判定与运行时前提同一份依据。
     id: 'projection.table-delete',
     label: '投影缓存行删除',
@@ -241,9 +238,8 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     label: '投影缓存删除屏障',
     kind: 'delete',
     owner: 'projectionCache',
-    // Absent on rc.2: `sessions/bridge.ts` installs a checked write barrier
-    // instead, so absence is a routing fact, not a failure. Only a cache whose
-    // write path cannot be wrapped at all is a real problem.
+    // 宿主没有它时 `sessions/bridge.ts` 会装一层受检的写屏障顶上，所以缺席是路由事实、
+    // 不是故障。真正的故障只有一种：缓存的写路径根本包不住。
     fallback: 'native-entry',
     optional: true,
     probe: (t) => {
@@ -263,7 +259,7 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
   // ---- settings document path（0.1.7 的两处适配面之一）----------------------
   // `prepareDocument()` 在 0.1.7 把返回值从「主目录下的设置文档路径」改成「profile 补丁
   // 路径」（`configEditor.documentPath`）—— 方法一直在、语义变了，方法存在性探测抓不住
-  // （0.15.0 的 MCP 页事故就是这么静默发生的）。这一条能拦的是「方法消失 / 签名漂移到
+  // （MCP 页就这样静默失明过一次）。这一条能拦的是「方法消失 / 签名漂移到
   // 同步抛 TypeError」；**返回值形状**是异步结果，同步探针看不到，那一半由 ensurePaths
   // 的 await 后自检负责（src/index.ts：认 profile 形状上溯 + 主目录不变量检查，异常走
   // noteRuntime）。两半合起来才是这个契约的完整探测。
@@ -286,7 +282,7 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
       } catch { return undefined }
     },
   },
-  // ---- ctx.fs：MCP 域补丁写路径的唯一出口（审查 §5 F5）----------------------
+  // ---- ctx.fs：MCP 域补丁写路径的唯一出口----------------------
   // 为什么值得单列：补丁文件在插件自己的数据目录**之外**（`~/.dsh/cordis.patch.yml` 与
   // `profiles/<名>/cordis.patch.yml`），读写都得经 `ctx.fs` 显式升级沙箱策略。五个方法里
   // 任何一个改名，19 处补丁写路径会**一起**报错 —— 报错是可见的（不是静默），但要等到用户

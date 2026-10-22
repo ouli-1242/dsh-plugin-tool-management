@@ -67,10 +67,12 @@ export function parsePresetToolRules(frontmatter: string): Record<string, Preset
  * 变成一行无主文本。限长是防脏值（正常档位 id 都很短）。
  */
 export const REASONING_EFFORT_MAX_LENGTH = 64
+/** 归一化推理强度：去换行、trim、按上限截断。 */
 export function normalizeReasoningEffort(value: unknown): string {
   return String(value ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, REASONING_EFFORT_MAX_LENGTH)
 }
 
+/** 解析人设 `.md`：frontmatter 可选，缺名字时用文件名兜底。 */
 export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw)
   const data: Record<string, string> = {}
@@ -166,7 +168,7 @@ export function isChinesePersona(name: string, description: string, body: string
 }
 
 /**
- * 人设 → 子代理系统提示词里那一段的**成品文本**（2026-09-17）。
+ * 人设 → 子代理系统提示词里那一段的**成品文本**。
  *
  * 为什么需要这层框：宿主给子代理的 persona 只占一个槽位 —— `deployment:persona-prefix`，
  * section order 0，位置紧贴 `harness:identity`（order -1000，那句 "You are an AI agent
@@ -183,7 +185,6 @@ export function isChinesePersona(name: string, description: string, body: string
  * 框里四样东西各有分工，缺一样就退化成原来的裸文本：
  *   - `# 角色：名` —— 结构信号（markdown 标题是模型最强的分段线索）+ 可引用的名字；
  *   - 归属 + 授权一行 —— "由调用方指定、与默认倾向冲突时以它为准"，给正文上位效力；
- *     2026-09-17 补了半句"任务说要什么，怎么做以它为准"：不写这句，模型会把 `task`
  *     （父代理按自己的框架写的具体指令）读成人设的上级，人设只剩风格提示的分量；
  *   - 边界一句 —— 角色决定**怎么做**，不改变**能做什么**。这不是装饰：官方
  *     `subagent:delegation` 运行时上下文已经声明"权限在启动时固定"，两处不呼应的话，
@@ -192,7 +193,7 @@ export function isChinesePersona(name: string, description: string, body: string
  *
  * 语言跟随人设整体（名字 + 描述 + 正文）：中文人设配中文框，英文配英文。
  *
- * 框里**不列 `description`**（2026-09-17 用户裁定，此前列）：那个字段的用途是**给调用方
+ * 框里**不列 `description`**：那个字段的用途是**给调用方
  * 选用**（本机那份写的是"当用户提到审查或使用审查子智能体时使用"），对已经在执行的人设
  * 子代理是错位信息 —— 可能被读成"满足某个条件才按这个角色"的前置条件。要给人设子代理
  * 看的简介属于正文（`description` 仍照常参与语言判定与目录展示）。
@@ -201,7 +202,7 @@ export function isChinesePersona(name: string, description: string, body: string
  */
 export function renderPersonaPrompt(persona: PersonaDoc): string {
   // 名字与正文/输出过同一道中和：名字原样进框时，宿主对 section 文本的严格插值会把
-  // `{{…}}` 当未注册变量抛错，委派直接硬失败 —— 0.9.5 的中和只盖了正文与输出，漏了名字
+  // `{{…}}` 当未注册变量抛错，委派直接硬失败 —— 中和只盖了正文与输出，漏了名字
   // （validPersonaName 不挡花括号，手写 frontmatter 造得出这种名字）。
   const name = neutralizePromptVariables(String(persona.name || '').trim()) || '(unnamed)'
   const raw = String(persona.body ?? '')
@@ -209,7 +210,7 @@ export function renderPersonaPrompt(persona: PersonaDoc): string {
   if (body === '') return name
   const rawDescription = String(persona.description ?? '').trim()
   const output = neutralizePromptVariables(String(persona.output ?? '').trim())
-  // 身份定位句（0.19.0）：此前只有"你正在以「X」的身份执行本次委派任务"一句，它说的是
+  // 身份定位句：此前只有"你正在以「X」的身份执行本次委派任务"一句，它说的是
   // **角色**，没说**身份**。而子会话是整份 join 父会话预设的（官方 `composeFrom`，无分项
   // 开关），于是 `~/.dsh/AGENTS.md` 那份"写给主代理的操作手册"也进了它的上下文 —— 通篇是
   // "最新用户消息""向用户确认""开分支""等 review"。子代理据此认定自己是主代理。
@@ -248,7 +249,7 @@ export function renderPersonaPrompt(persona: PersonaDoc): string {
 export const DEFAULT_PERSONA_CATALOG_DEPTH = 1
 
 /**
- * 允许追问人设的标记（0.19.0），由人设目录与 `subagent_manager_list` 两处共用。
+ * 允许追问人设的标记，由人设目录与 `subagent_manager_list` 两处共用。
  *
  * 为什么标在目录行上：`continuable` 改变的是**委派的返回值形态**（回执一个 id 而不是产出），
  * 模型必须在这一刻就知道 —— 否则它会按"等下会拿到结果"来安排后续动作，然后拿到一个 id
@@ -288,7 +289,6 @@ export function catalogDepthOf(persona: Pick<PersonaDoc, 'catalogDepth'>): numbe
  * 域该不该注入、实况报什么状态，全都问它。各写一份必然分叉。
  *
  * ⚠️ 它回答的**不是**"能不能委派"（那由官方决定，且默认能嵌套到 3 层）。这个区分是
- * 2026-09-17 用户实测后纠正的：此前函数名是 `canDelegateTo`，把"目录可见性"当成了
  * "委派可行性"，于是同一个子会话里官方工具能委派、我们的工具被自己的守卫拦下。
  */
 export function catalogInjectedAt(persona: Pick<PersonaDoc, 'catalogDepth'>, depth: number): boolean {
@@ -298,7 +298,7 @@ export function catalogInjectedAt(persona: Pick<PersonaDoc, 'catalogDepth'>, dep
 
 /** frontmatter 里目录注入深度的几种写法都认（含旧的 `maxDepth`，见下）。 */
 export function parseCatalogDepth(data: Record<string, string>): number | undefined {
-  // 旧键 `maxDepth` 也读：0.9.5 定稿前这个字段叫过那个名字，且当时语义是"递归上限"。
+  // 旧键 `maxDepth` 也读：这个字段早先叫过那个名字，且当时语义是"递归上限"。
   // 读它只是为了不让手写过旧键的文件静默失效；**写回时一律写新键**（见 serializePersona）。
   const raw = data.catalogdepth ?? data['catalog-depth'] ?? data.catalog_depth ?? data.maxdepth ?? data['max-depth'] ?? data.max_depth
   if (raw === undefined || raw.trim() === '') return undefined
@@ -307,6 +307,7 @@ export function parseCatalogDepth(data: Record<string, string>): number | undefi
   return value
 }
 
+/** 子智能体结果回传的截断上限 16 KiB：它是进父会话上下文的正文，不是日志。 */
 export const RESULT_MAX = 16 * 1024
 
 /**

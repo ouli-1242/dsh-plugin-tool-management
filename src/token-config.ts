@@ -10,6 +10,7 @@
 import { applyLoaderToken, applyLoaderTokenDisabled, buildLoaderOverrideEntry, readLoaderToken, scanLoaderRows } from './mcp/loader-token.js'
 import { appendBlock } from './mcp/patch-yaml.js'
 
+/** 令牌配置的依赖：补丁路径与读写锁。 */
 export interface TokenConfigDeps {
   /** apply 的路径发现（缓存住的那份）：只用得到三个补丁文件路径。 */
   ensurePaths(): Promise<any>
@@ -27,6 +28,7 @@ export interface TokenConfigDeps {
   tokenMatches(presented: string): boolean
 }
 
+/** 令牌配置的对外面：读、写、以及它在补丁里的落点。 */
 export interface TokenConfig {
   tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; envToken: boolean; pendingRestart: boolean }>
   tokenConfigure(args: any, presented: boolean): Promise<any>
@@ -42,9 +44,10 @@ export function appendOverrideEntry(content: string, entry: string): string {
   return content.trim() === '' ? entry + '\n' : appendBlock(content, entry)
 }
 
+/** 访问令牌的读写与开关：改的是本插件自己那条 loader 行的 `config.token`。 */
 export function createTokenConfig(deps: TokenConfigDeps): TokenConfig {
   // ---------- 访问令牌：宿主侧配置的读写（兼容页就地开关） ----------
-  // 用户裁定 2026-09-18：① 没配令牌时能在面板里"设置"；② 已配时，填对令牌就能"关闭"；
+  // 用户要求 ：① 没配令牌时能在面板里"设置"；② 已配时，填对令牌就能"关闭"；
   // ③ 填过的令牌只在本次进程内有效，重启要重填。③在客户端实现（见 client.js 的 bootId 绑定），
   // ①②在这里 —— 它们要改的是**插件自己那条 loader 行**的 config.token。
 
@@ -57,7 +60,7 @@ export function createTokenConfig(deps: TokenConfigDeps): TokenConfig {
    * 冲突只认 **insert** 条目：同 id 的两条 insert 才会重复挂载、让 DSH 起不来（与
    * duplicateGuard 同一口径）。顶层**覆盖条目**（`- id:` 在第 0 列）是官方支持的改法，
    * 与 insert 并存是正常形状 —— 把它也算成"第二份补丁"会让 0.1.7 bundle 挂载下的令牌
-   * 操作被全量拒绝（2026-09-30 审查 P2-12）。
+   * 操作被全量拒绝。
    *
    * `files` 的**顺序即写点优先级**：覆盖条目在前。理由：官方 `applyEntryPatches` 在所有
    * bundle 层**之后**应用覆盖条目、且是整体替换那条 loader 的 `config` —— 所以两种形状
@@ -122,15 +125,14 @@ export function createTokenConfig(deps: TokenConfigDeps): TokenConfig {
    * 改宿主侧的令牌配置：`set` 写入 / 换掉令牌、`off` 关掉令牌功能、`on` 重新打开、
    * `clear` 把令牌从配置里删掉（回到"还没有令牌"那一态）。
    *
-   * 关键设计（用户裁定 2026-09-19）：
+   * 关键设计：
    *   - **`off` 不再删除 `token`**，只写一行 `tokenDisabled: true` —— 原令牌保留，随时能开回来，
    *     不需要重新输一遍（此前的实现把配置删了，用户想再开就得重新想一遍令牌）。
-   *   - **`clear` 才是"删掉"**（用户 2026-09-19 问"令牌没有彻底清除按钮"）：删 `config.token`
+   *   - **`clear` 才是"删掉"**（用户 问"令牌没有彻底清除按钮"）：删 `config.token`
    *     与 `tokenDisabled` 两行，回到从未设置过的样子 —— 写操作不再要凭证、明文密钥随之
    *     不可见。它是不可逆的那一端（配置里没有副本了），所以与 `off` 共用同一条凭证口径。
    *   - **`off` / `clear` 只认"当场再输一次"的令牌**（`value` 对得上才算）：请求头里那份已验过
-   *     的凭证不算数 —— 解锁之后顺手一点就能把防护关掉 / 把令牌删掉，等于没把守（用户裁定
-   *     2026-09-19：「就算输入过了令牌，关闭保护也应该再次输入令牌才能关闭」）。界面据此就地在
+   *     的凭证不算数 —— 解锁之后顺手一点就能把防护关掉 / 把令牌删掉，等于没把守（用户要求
    *     「保护开关」/「宿主配置」里展开一个确认框。
    *   - **`set` 与 `off` / `clear` 同一条口径**：宿主已有令牌时，改令牌也必须当场再输一次当前
    *     令牌（走 `current` 字段 —— `token` 里是新令牌，证明不了知道旧值；凭证是旧值这件事不能
@@ -155,7 +157,7 @@ export function createTokenConfig(deps: TokenConfigDeps): TokenConfig {
     const proofByValue = mode !== 'set' && value !== '' && deps.CONFIG_TOKEN !== '' && deps.tokenMatches(value)
     const proofByCurrent = mode === 'set' && currentRaw !== '' && deps.CONFIG_TOKEN !== '' && deps.tokenMatches(currentRaw)
     // 关闭保护 / 删除令牌 / 修改令牌都是"改凭证 / 减防护"的方向：**不认**请求头里已经验过的
-    // 那份凭证，必须当面再输一次当前令牌（用户裁定 2026-09-19 —— 先判「关闭」，随后同一口径
+    // 那份凭证，必须当面再输一次当前令牌（用户要求 —— 先判「关闭」，随后同一口径
     // 推到「修改」，再推到「删除」）。开启保护仍接受请求头里的凭证。
     if (mode === 'off' && deps.CONFIG_TOKEN !== '' && !proofByValue) {
       return { ok: false, code: 'error.secret.badToken', error: '关闭保护要再输一次当前令牌。' }
@@ -186,8 +188,8 @@ export function createTokenConfig(deps: TokenConfigDeps): TokenConfig {
     if (!files.length && !(mode === 'set' && bundleBase)) {
       return { ok: false, error: '没找到本插件的 loader 行，也无法确认 bundle 层的挂载条目，无法自动改写配置：请在 profile 的 cordis.patch.yml 里手动加一条覆盖条目（- id: dsh-plugin-tool-management → config: → token: "…"），或改用环境变量 DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN。' }
     }
-    // 只有**两条 insert 条目**才是"重复挂载、DSH 起不来"（审查 P2-12：覆盖条目与 insert
-    // 并存是 0.1.7 的正常形状，把它也算进来会让令牌操作被全量拒绝）。
+    // 只有**两条 insert 条目**才是"重复挂载、DSH 起不来"：覆盖条目与 insert 并存是正常
+    // 形状，把它也算进来会让令牌操作被全量拒绝。
     if (insertFiles.length > 1) {
       return { ok: false, error: '本插件的 loader 行作为 insert 条目同时出现在两份补丁文件里（重复挂载会导致 DSH 无法启动）：请先清掉重复那条，再回来设置令牌。' }
     }

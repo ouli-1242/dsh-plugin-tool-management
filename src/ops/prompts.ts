@@ -1,4 +1,4 @@
-// AGENTS.md / 提示词预设域的 HTTP ops（2026-09-19 从 index.ts 的 handlers 表抽出）。
+// AGENTS.md / 提示词预设域的 HTTP ops（从 index.ts 的 handlers 表抽出）。
 //
 // 与 ops/compat.ts 同一条纪律：只负责 op 实现，依赖显式传参；MCP 写后刷新、场景锁定守卫
 // 仍作用在组装后的整张表上（见 index.ts）。
@@ -14,6 +14,7 @@ import { stampConflict, stampOfText } from '../stale-write.js'
 type PromptsServiceLike = ReturnType<typeof createPromptsService>
 type ScenePromptSyncLike = ReturnType<typeof createScenePromptSync>
 
+/** 提示词 op 的依赖：预设服务、场景同步与记忆 op。 */
 export interface PromptOpsDeps {
   /** 预设库服务（../prompts/service.ts）。 */
   promptsService: PromptsServiceLike
@@ -36,6 +37,7 @@ export interface PromptOpsDeps {
   warn(message: string): void
 }
 
+/** 提示词预设域的 op：列表、读取、应用、改名、删除与场景同步。 */
 export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) => Promise<any>> {
   /**
    * 共享 agents 根的 `AGENTS.md`（`~/.agents/AGENTS.md`）。
@@ -56,7 +58,7 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
   return {
     // 提示词预设库（由 ../prompts/service.ts 提供）。这里把两件事对齐成用户看到的一份状态：
     //   - `active`（界面「生效中」）= **当前真正在起作用的基线**：启用的场景绑了预设就是它，
-    //     否则才看文件比对（预设正文 == ~/.dsh/AGENTS.md）。用户裁定：「场景启动了，
+    //     否则才看文件比对（预设正文 == ~/.dsh/AGENTS.md）。用户要求：「场景启动了，
     //     提示词页生效中的应该是场景选择的那个」。
     //   - `fileApplied` = 文件比对结果（AGENTS.md 里确实是它）。两者同时为真说明
     //     场景绑的就是已应用的那份，正文一致时宿主不会再注入第二遍（去重）。
@@ -79,7 +81,7 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
         if (r && r.ok && r.scenePrompt) scenePrompt = r.scenePrompt
       } catch { /* 场景服务不可用 → 只回预设库 */ }
       const sceneId = scenePrompt && !scenePrompt.missing && scenePrompt.scene ? scenePrompt.presetId : null
-      // 场景驱动时**只有场景绑的那份**算生效中（用户裁定）；文件里那份降级为「文件里是它」，
+      // 场景驱动时**只有场景绑的那份**算生效中；文件里那份降级为「文件里是它」，
       // 因为场景的提示词已经接管基线。没有场景驱动时才按文件比对定「生效中」。
       const sceneDrives = sceneId !== null
       // 引用清单与删除保护同源（scene-prompt-sync）：界面据此禁用删除并说明「谁在用」，
@@ -159,9 +161,9 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
     // 连续应用过 A、B 时是**一步回到起点**，不是只退一步 —— 与场景基线同一条口径
     // （见 `service.ts` 的 `backupGlobal`）。
     // 它是「生效中」那颗开关的**关**方向 —— 此前只有「应用」没有反向动作，于是「只有一份预设
-    // 且它生效中」时开关关不掉、删除又被引用拦着（2026-10-10 实测反馈）。
+    // 且它生效中」时开关关不掉、删除又被引用拦着。
     //
-    // 用户 2026-10-10 第二次反馈「取消应用，AGENTS.md 还是存在」暴露了另一半：`backupGlobal()`
+    // 用户 第二次反馈「取消应用，AGENTS.md 还是存在」暴露了另一半：`backupGlobal()`
     // 原先在文件不存在时**什么都不写**，"起点不存在"因此不可恢复，取消应用恒判 noBackup，
     // 而这里给出的出路「删除这份预设」不成立（remove 不碰 AGENTS.md）。现在那个事实由
     // `__last-applied__/absent.json` 记着，删文件这一支才走得通。
@@ -201,7 +203,7 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
     // 删除：**场景绑定**与**当前应用的那份**拦得住（判据见下方注释）。拒绝时逐条说明「谁在用」，
     // 用户知道该先改哪里。引用清单由 scene-prompt-sync 与显示/注入同源算出。
     //
-    // 探测**失败**时改为拒绝（2026-09-30 审查 F13）。原来的取舍是「放行并记 warn：删预设不动
+    // 探测**失败**时改为拒绝。原来的取舍是「放行并记 warn：删预设不动
     // ~/.dsh/AGENTS.md，最坏是少一份副本，可重建」—— 这对「副本」成立，对**场景态**不成立：
     // 删掉场景绑定的那一份，场景驱动会因为找不到预设而静默失效（`driver()` 返回 null），
     // 而 AGENTS.md 停在场景态，用户看到的是「没场景驱动所以什么都没做」。
@@ -226,7 +228,7 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
       //      就返回 null，场景静默失效（AGENTS.md 停在场景态，用户看到的是"什么都没做"）。
       //   ② **当前应用的**那份（`file` + `applied`，见下）→ 会留下中间态：删掉之后
       //      `~/.dsh/AGENTS.md` 内容一字不变、**照旧生效**，但界面上再没有任何预设对应它。
-      //      用户看到的是「我把它删了，怎么全局提示词还在？」（2026-10-10 用户反馈：
+      //      用户看到的是「我把它删了，怎么全局提示词还在？」（用户反馈：
       //      「当前应用的提示词如果直接删除，AGENTS.md 还存在，当前应用的提示词应该不能删除」）。
       //      拦住并引导先「取消应用」，这一步会把文件恢复成链起点（开始应用之前的状态），
       //      之后就能删了。
@@ -237,7 +239,6 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
       //     一份副本），而**拦它就是死路** —— 那份没有链起点可回，取消应用关不掉。
       //   - `restore`（退出场景要恢复的那一份）：恢复走的是 `scene-baseline.json` 里存下的
       //     **正文**（scene-prompt-sync 的 `restore(saved.content)`），不读预设目录。
-      // 2026-09-16 的裁定是三类一律拦，那条规则在「只有一份预设且它生效中」时构成**死锁**：
       // 开关关不掉（基线没有"全部不应用"这一态）、引用又解不开。现在开关能关了（取消应用），
       // 拦 ② 才有出路 —— 取消应用会把 `__applied__.json` 清成 null，`applied` 随之变 false。
       const blocking = (refs.get(id) || []).filter((r) =>

@@ -4,6 +4,7 @@
 // 合法形状」，不认识注册表也不碰宿主 —— 写坏了统一抛 TypeError，由调用方决定是修复还是拒绝。
 import type { HostResultRecord } from "./workspace.js";
 
+/** 会话 id：非空字符串。 */
 export const sessionIdSchema = {
 	parse(value: unknown): string {
 		if (typeof value !== "string" || value.length === 0)
@@ -13,6 +14,7 @@ export const sessionIdSchema = {
 		return value;
 	},
 };
+/** 工作区 id：非空字符串。 */
 export const workspaceIdSchema = {
 	parse(value: unknown): string {
 		if (typeof value !== "string" || value.length === 0)
@@ -22,6 +24,7 @@ export const workspaceIdSchema = {
 		return value;
 	},
 };
+/** 归档结果：`archivedSessionIds` 必须是字符串数组。 */
 export const archivedSetSchema = {
 	parse(value: HostResultRecord): HostResultRecord {
 		if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -32,6 +35,7 @@ export const archivedSetSchema = {
 		return value;
 	},
 };
+/** 删除结果：`deleted === true`。 */
 export const deletedSchema = {
 	parse(value: HostResultRecord): HostResultRecord {
 		if (
@@ -44,6 +48,7 @@ export const deletedSchema = {
 		return value;
 	},
 };
+/** 批量归档的单个目标：通过后由调用方按 `scope` 判别式收窄。 */
 export const archivedBatchTargetSchema = {
 	// 校验通过后原样返回记录，调用方按 scope 判别式收窄（宿主返回值校验器，故返回 any）。
 	parse(value: HostResultRecord): any {
@@ -68,6 +73,7 @@ export const archivedBatchTargetSchema = {
 		);
 	},
 };
+/** 批量取消归档的结果。 */
 export const unarchivedBatchSchema = {
 	parse(value: HostResultRecord): HostResultRecord {
 		if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -85,6 +91,7 @@ export const unarchivedBatchSchema = {
 		return value;
 	},
 };
+/** 按工作区批量归档的结果。 */
 export const archivedWorkspaceBatchSchema = {
 	parse(value: HostResultRecord): HostResultRecord {
 		if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -102,6 +109,7 @@ export const archivedWorkspaceBatchSchema = {
 		return value;
 	},
 };
+/** 批量删除的结果。 */
 export const deletedBatchSchema = {
 	parse(value: HostResultRecord): HostResultRecord {
 		if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -131,6 +139,7 @@ export const deletedBatchSchema = {
 		return value;
 	},
 };
+/** 归档会话的元数据（标题、时间、工作区归属）。 */
 export const archivedSessionMetadataSchema = {
 	parse(value: HostResultRecord): HostResultRecord {
 		if (

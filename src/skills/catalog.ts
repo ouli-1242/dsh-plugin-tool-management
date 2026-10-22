@@ -12,7 +12,6 @@
 // 与官方目录的两处有意差别：
 //   - 只列**当前启用且可被模型调用**的（官方只过滤可调用性，不管用户在插件页关掉了谁）。
 //   - 「本预设没有官方 `skill` 加载工具，要正文先用 `skill_manager_list` 取源文件路径」那句
-//     2026-09-18 起挪进注入框架的 `how` 行（context-inject.ts 的 DOMAIN_FRAME.skills）——
 //     本段只排版清单，标题与"怎么用"一处一个出处。
 //
 // 同步性：`text()` 必须同步返回（注入通道每个 step 同步取文本），而技能清单是异步读盘 →
@@ -51,7 +50,7 @@ function isEnabled(row: SkillCatalogRow): boolean {
 }
 
 /**
- * 会话层对某一格的并值解析（0.21.2）：`false` / `true` = 本会话这一层有话要说；
+ * 会话层对某一格的并值解析：`false` / `true` = 本会话这一层有话要说
  * `undefined` = 落到这一层之外的全局值。技能一格给 `<rootKey>/<name>`，来源一格给 root key。
  */
 export interface SkillCatalogLayer {
@@ -87,7 +86,7 @@ export function renderSkillCatalog(
       if (!Array.isArray(skills)) continue
       const rootKey = String((root as { key?: unknown }).key ?? '')
       // 来源级停用是**上层闸**：里面的单条技能默认一条都加载不了。
-      // 0.21.2 起这一格有会话层（skillSources）：场景勾中的来源为开、没勾的为关；全局意图
+      // 这一格有会话层（skillSources）：场景勾中的来源为开、没勾的为关；全局意图
       // off 的来源对**没认领的**会话也是关（租约只把它拉起来，不把它变成全局开着）。
       // 装配层给的 `source` 是有效可见性（含意图），undefined = 没有意图，落到运行态。
       const srcLayer = layer?.source !== undefined && rootKey !== '' ? layer.source(rootKey) : undefined
@@ -104,7 +103,7 @@ export function renderSkillCatalog(
         // 来源闸**始终生效**：显式开一条技能时写侧会一并认领它的来源（见 ops/scope.ts 的
         // `upperOf`），所以这里不需要也不应该让技能级覆盖越过一个**明确关掉的**来源
         // —— 用户在本会话把来源关掉、界面已经把整组画成"关"，注入却还列着里面某条技能，
-        // 就是显示与上下文各说各话（0.21.2 复核）。来源开着时，显式覆盖才决定这一条。
+        // 就是显示与上下文各说各话。来源开着时，显式覆盖才决定这一条。
         const enabledNow = rootEnabled && (typeof over === 'boolean' ? over : isEnabled(row))
         if (!enabledNow || row.modelInvocable === false) continue
         const name = declared
@@ -120,7 +119,7 @@ export function renderSkillCatalog(
   const shown = sorted.slice(0, Math.max(0, maxEntries))
   const lines = shown.map((row) => (row.description ? '- `' + row.name + '`: ' + row.description : '- `' + row.name + '`'))
   // 只有清单：标题、工具名与"只给摘要、读完再用"的纪律由注入通道的框架承担
-  // （2026-09-18 起，见 context-inject.ts 的 DOMAIN_FRAME 的 `how` 行）—— 一处内容一个出处。
+  // （见 context-inject.ts 的 DOMAIN_FRAME 的 `how` 行）—— 一处内容一个出处。
   const out = [...lines]
   const hidden = sorted.length - shown.length
   // 查询工具被关掉（兼容页的模型工具表）时只说"还有几个"：点名一个模型手里没有的工具，
@@ -137,7 +136,7 @@ export function renderSkillCatalog(
  * 本会话与**官方那份目录**的差异（纯函数）。`''` = 没有差异。
  *
  * 用途有两处：
- *   1. **接管判据**（0.21.2 第二轮）：非空时注入侧拦下官方 `skill-catalog`（只限本会话），
+ *   1. **接管判据**：非空时注入侧拦下官方 `skill-catalog`（只限本会话）
  *      由 `renderSkillCatalog` 送会话版整份。用户真机发现「先注入官方清单、再补一行
  *      not available here」等于让模型先看到错的再被告知不可用 —— 有差异就不能让官方那份
  *      继续到达模型。官方更早那条仍在历史里，由首份会话版的取代声明压过。
@@ -190,7 +189,7 @@ export function renderSkillCatalogDelta(data: unknown, layer?: SkillCatalogLayer
 }
 
 /**
- * 本会话是否需要**整份接管**技能目录（0.21.2 第二轮）：差异行非空就是需要。
+ * 本会话是否需要**整份接管**技能目录：差异行非空就是需要。
  *
  * 纯函数只为把"什么算有差异"钉在测试里：空串与纯空白都不算，其余一个字就算。
  * 判据只服务注入层（同步的 SWR 缓存），不进 `sessionMcpContextOf` 那套同步守卫路径。
@@ -199,27 +198,28 @@ export function skillCatalogNeedsTakeover(delta: unknown): boolean {
   return String(delta ?? '').trim() !== ''
 }
 
+/** 技能目录的依赖：管理状态、来源扫描与首选表。 */
 export interface SkillCatalogDeps {
   /**
    * 取技能清单（插件技能服务的 `skill-state` op）。
    *
-   * `sessionId`（0.21.2）：项目技能根按**这个会话的 cwd** 推导。省略 = 全局口径
+   * `sessionId`：项目技能根按**这个会话的 cwd** 推导。省略 = 全局口径
    * （全部活动会话的 cwd 并集）。
    */
   state: (sessionId?: string) => Promise<any>
-  /** 某个 agent 的会话 id（0.21.2）；取不到 = 全局口径。 */
+  /** 某个 agent 的会话 id；取不到 = 全局口径。 */
   sessionIdFor?: (agent?: unknown) => string | undefined
   /**
    * `skill_manager_list` **在这个 agent 手里**吗（截断提示里那句话的前提）。默认在。
    *
-   * 为什么收 `agent` 而不是零参（2026-10-14 对抗性审查 P1-8）：只读全局开关时，某个人设用
+   * 为什么收 `agent` 而不是零参：只读全局开关时，某个人设用
    * `toolsDeny` 把这条工具砍掉之后，目录照注、尾句照样说「用 `skill_manager_list` 查」
    * —— 指向一条它手里没有的工具。判据与注入框架 `how` 行同一份（index.ts 的
    * `injectHiddenToolsFor`），不再定义第二份。
    */
   listToolVisible?: (agent?: unknown) => boolean
   /**
-   * 本会话的两格解析（0.21.2）：技能（`skills` 域）与来源（`skillSources` 域）。
+   * 本会话的两格解析：技能（`skills` 域）与来源（`skillSources` 域）。
    * 按 agent 取，不在目录里自己算 —— 判据只有一份（`scope-overrides.json` + 场景档案），
    * 目录只是消费者。`undefined` = 没有会话层，全按全局。
    */
@@ -231,6 +231,7 @@ export interface SkillCatalogDeps {
   layerKeyFor?: (agent?: unknown) => string
 }
 
+/** 技能目录的对外面：快照、单条详情与同名分组。 */
 export interface SkillCatalog {
   /**
    * 同步返回段文本（可能比磁盘状态滞后一个 TTL）。
@@ -240,13 +241,13 @@ export interface SkillCatalog {
    */
   text: (agent?: unknown) => string
   /**
-   * 本会话相对官方口径的**差异行**（0.21.2）：注入侧用它判断要不要整份接管
+   * 本会话相对官方口径的**差异行**：注入侧用它判断要不要整份接管
    * （`skillCatalogNeedsTakeover`）；接管判据未接上时才真的把这一行发出去。
    * `''` = 没有差异 / 没有会话层 / 这一会话的清单还没取到。
    */
   delta: (agent?: unknown) => string
   /**
-   * 本会话的清单数据**是否已经在手里**（0.21.2 第三轮）。
+   * 本会话的清单数据**是否已经在手里**。
    *
    * `false` 说的是"还没读到"，不是"没有技能" —— 两者在下游的含义完全相反：前者应当
    * 这一轮什么都不说（上一轮那份仍然有效），后者才是"这一域真的空了"。冷缓存
@@ -259,12 +260,13 @@ export interface SkillCatalog {
   /** 预热：插件加载时调一次，避免首个请求落到空值。 */
   warm: () => Promise<void>
   /**
-   * 预热某个会话的清单（0.21.2）。`agent/created` 时调一次：否则该会话的第一轮注入
+   * 预热某个会话的清单。`agent/created` 时调一次：否则该会话的第一轮注入
    * 会因为"会话缓存还没加载"而少掉整段技能目录。
    */
   warmSession: (sessionId: string) => Promise<void>
 }
 
+/** 技能目录的选项：工作区路径与是否含被覆盖的副本。 */
 export interface SkillCatalogOptions {
   maxEntries?: number
   maxDescription?: number
@@ -277,7 +279,7 @@ export interface SkillCatalogOptions {
  * 创建 SWR 的技能目录。计算失败时保留上一次的值（不把段清空），首次失败维持 `''`。
  * 并发调用共享同一次计算（inflight 折叠）。
  *
- * ⚠️ 缓存**按会话分桶**（0.21.2）：`skill-state` 带 sessionId 时项目技能根只取该会话的
+ * ⚠️ 缓存**按会话分桶**：`skill-state` 带 sessionId 时项目技能根只取该会话的
  * cwd，两个会话能算出两份不同的清单。单槽缓存下 A 算完 B 直接用 —— 症状是「B 的对话里
  * 列出了 A 项目的技能」。键 = sessionId（全局口径用空串），上限 16 条 LRU。
  */
@@ -303,7 +305,7 @@ export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOpt
     dataByKey.set(key, hit)
   }
 
-  // `force`（0.21.2 第三轮）：写操作后调用的那次**不许并到在飞的那一次上**。并过去的话，
+  // `force`：写操作后调用的那次**不许并到在飞的那一次上**。并过去的话
   // 拿回的是刷新前的旧任务 —— 它带着旧的 generation，结果会被作废，于是缓存停在旧数据，
   // 而调用方以为已经重算完了（症状：刚拨开的技能这一轮仍不出现）。
   const revalidate = (key: string, force = false): Promise<void> => {
@@ -380,10 +382,10 @@ export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOpt
       generation += 1
       const keys = [...new Set([...dataByKey.keys(), ''])]
       inflight.clear()
-      // **不先清空 `dataByKey`**（2026-10-22 用户实测修正）：清空之后、新数据回来之前的那一拍，
+      // **不先清空 `dataByKey`**（用户实测修正）：清空之后、新数据回来之前的那一拍，
       // `text()` / `delta()` 一律读到空 → 注入侧按"这一域没内容"发一条「已清空」，于是
       // 「对话中途拨开一条技能」的那一轮，模型收到的是「Cleared — 不再有效」，下一轮才看到
-      // 真正的清单。留着上一份：最坏是这一拍仍是上一版（`ready()` 仍为真，不会误报清空）。
+      // 真正的清单。留着上一份：最坏是这一拍仍是上一份（`ready()` 仍为真，不会误报清空）。
       rendered = null
       return Promise.all(keys.map((key) => revalidate(key, true))).then(() => {})
     },

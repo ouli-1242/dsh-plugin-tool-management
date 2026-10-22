@@ -8,8 +8,10 @@
 // 解压产物比申报的大，不会绕过条目数 / 单条上限；累计量仍以申报值为准。
 import { unzipSync } from 'fflate'
 
+/** 解压时被挡下的单个条目及原因。 */
 export interface UnzipProblem { name: string; reason: string }
 
+/** 解压的四道上限：条目数、单条字节、累计字节、来源名（报错用）。 */
 export interface UnzipLimits {
   /** 档案内条目上限（含目录条目）。 */
   maxEntries: number

@@ -4,18 +4,20 @@
 // 的能力表都要读这些类型。留在 probe.ts 里会让三者互相 import 出类型环，
 // 同目录已有先例 —— memories/constants.ts 正是为断环而抽出的常量层。
 
+/** 一项能力的四种状态：可用、缺成员、形状不符、根本没有。 */
 export type CapabilityState = 'ok' | 'missing-member' | 'shape-mismatch' | 'not-available'
 
+/** 一项能力的探测结论（静态检查 + 活体探针合成）。 */
 export interface CapabilityFinding {
-  /** Stable id used by the UI and by logs. */
+  /** 稳定 id：界面与日志都按它对齐。 */
   readonly id: string
-  /** Short human label (Chinese, matching the plugin's other surfaces). */
+  /** 给人看的短标签（中文，与插件其余界面一致）。 */
   readonly label: string
   readonly kind: 'read' | 'write' | 'delete'
-  /** Which host service the capability lives on. */
+  /** 这项能力长在哪个宿主服务上。 */
   readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs' | 'tools' | 'agentContext' | 'connection' | 'plugin'
   readonly state: CapabilityState
-  /** What can be done without this capability. */
+  /** 缺了这项能力还能怎么做。 */
   readonly fallback:
     | 'native-entry'      // an official entry point covers it
     | 'refuse-operation'  // routeFor() returns `none`: the operation is refused, not degraded
@@ -25,7 +27,7 @@ export interface CapabilityFinding {
      * 界面据此显示「不影响写入」，而不是「相关按钮已禁用」——后者是一句假话。
      */
     | 'inform-only'
-  /** One line a user can act on. */
+  /** 一行用户能照着动手的说明。 */
   readonly detail: string
   /**
    * 结构化文案（运行时上报透传）：客户端按键出对应语言的句子，没有就回退 `detail`。
@@ -33,31 +35,29 @@ export interface CapabilityFinding {
    */
   readonly detailKey?: string
   readonly params?: Record<string, string | number>
-  /** Members that were absent, when state is missing-member. */
+  /** 状态为 missing-member 时，具体缺了哪些成员。 */
   readonly missing: readonly string[]
   /**
-   * Whether the member's source text still equals this plugin's own copy of
-   * the implementation. Diagnostic only: with the packaging fixed the two are
-   * the same function object, and where they are not, identity is the thing to
-   * repair — never a reason to refuse data operations.
+   * 成员的源码文本是否仍等于本插件那份同实现。
+   *
+   * 只作诊断：打包正常时两者是同一个函数对象；不是时该修的是**身份**（模块重复），
+   * 它从来不是拒绝数据操作的理由。
    */
   readonly textMatch?: boolean
   /**
-   * True for slots whose ABSENCE is a routing fact rather than a failure: the
-   * plugin ships its own implementation for exactly this gap, so a host without
-   * the member keeps full functionality through the adapter route.
+   * 该槽位**缺席**是路由事实而不是故障：插件针对这个缺口自带一份实现，宿主没有这个成员时
+   * 功能经适配器路线完整可用。
    *
-   * These must never be reported as "degraded": the DSH release this plugin was
-   * verified against does not have them, and telling the user that a working
-   * feature is degraded (worse: "the affected buttons are disabled") is a
-   * factual lie about their installation.
+   * 这类槽位绝不能报成「降级」：本插件适配的那一版 DSH 本来就没有它们，把好用的功能说成
+   * 降级（更糟：说「相关按钮已停用」）是在编造用户安装环境的状况。
    */
   readonly optional?: boolean
 }
 
+/** 宿主身份：版本、物理模块路径、与插件是否同源。 */
 export interface HostIdentity {
   readonly version: string
-  /** package name -> resolved entry path, or null when unresolvable. */
+  /** 包名 → 解析到的入口路径；解析不出来为 null。 */
   readonly modules: Record<string, string | null>
   readonly sameAsHost: Record<string, boolean | null>
   readonly blockers: readonly string[]
@@ -104,7 +104,7 @@ export interface HostIdentityAsarNote {
 /**
  * 路径**没能取到真实形态**（realpath 失败）时的说明。
  *
- * 这一条来自 issue #1（2026-09-23）：`realPathOf()` 以前 `catch { return value }`
+ * 这一条来自 ：`realPathOf()` 以前 `catch { return value }`
  * 把「这条路径不可解析」静默降级成「拿输入去比较」，于是路径问题看起来就是
  * 「插件与宿主加载的是两份不同拷贝」—— 结论是编的，用户照着它去修只会白费功夫。
  * 现在这类包给 `sameAsHost = null`（比不了），并在这里把原因原样报出来。
@@ -136,16 +136,16 @@ export interface HostIdentityPackage {
   readonly pluginPath: string
 }
 
+/** 一次完整评估：身份 + 逐项能力 + 降级清单。 */
 export interface HostAssessment {
   readonly identity: HostIdentity
   readonly findings: readonly CapabilityFinding[]
   /**
-   * Capabilities that are genuinely unavailable — optional slots excluded.
-   * `findings` remains the full picture (the UI renders every slot, marking the
-   * optional-absent ones as "adapter takes over").
+   * 真正拿不到的能力 —— 可选槽位不算。`findings` 仍是全貌（界面每个槽位都渲染，
+   * 可选而缺席的标成「适配器接管」）。
    */
   readonly degraded: readonly CapabilityFinding[]
-  /** True when the delete operation has a viable route (native or adapter). */
+  /** 删除操作还有路可走（原生或适配器）时为 true。 */
   readonly mayDelete: boolean
   readonly generatedAt: number
   /**
@@ -181,7 +181,7 @@ export interface HostContractStatus {
   readonly drifted: ReadonlyArray<{ readonly package: string; readonly missingMarkers: readonly string[] }>
 }
 
-/** A capability the current operation needs but the host cannot provide. */
+/** 当前操作需要、而宿主给不出的能力。 */
 export interface CapabilityRefusal {
   readonly id: string
   readonly label: string

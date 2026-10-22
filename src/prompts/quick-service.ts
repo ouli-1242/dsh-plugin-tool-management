@@ -24,11 +24,13 @@ const FILENAME = 'PROMPT.md'
 /** 侧车（说明 + 启停），与正文同目录：正文本身一个字都不该被这些元信息污染。 */
 const META_FILE = 'meta.json'
 
+/** 快捷提示词服务的依赖：文件路径、会话层并值。 */
 export interface QuickPromptsDeps {
   /** 快捷提示词库根目录（已解析的绝对路径，`hub/quick-prompts`）。 */
   dir: string
 }
 
+/** 快捷提示词清单里的一行：键、标题、正文与启停。 */
 export interface QuickPromptRow {
   id: string
   description: string
@@ -37,6 +39,7 @@ export interface QuickPromptRow {
   enabled: boolean
 }
 
+/** 快捷提示词服务的对外面：清单、启停与保存。 */
 export interface QuickPromptsService {
   list(): Promise<{ ok: true; prompts: QuickPromptRow[] } | { ok: false; error: string }>
   create(id: string, content: string, description?: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
@@ -50,6 +53,7 @@ export interface QuickPromptsService {
   trashDelete(id: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
 }
 
+/** 快捷提示词服务：`AGENTS.md` 片段库的落盘、启停与渲染。 */
 export function createQuickPromptsService(deps: QuickPromptsDeps): QuickPromptsService {
   const message = (e: unknown): string => String((e && (e as Error).message) || e)
   const idError = (raw: unknown): string | null => {

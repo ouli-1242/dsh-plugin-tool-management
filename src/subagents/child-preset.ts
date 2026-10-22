@@ -1,10 +1,8 @@
-// Agent Preset helpers for persona-scoped child composition.
+// 给「按人设隔离的子组合」用的 Agent Preset 辅助。
 //
-// DSH 0.2.1 removed persona/toolFilter from SubagentStartRequest. A spawn child
-// can still select an independent preset, so this module clones the parent's
-// declared preset, replaces its persona row, and registers a short-lived preset
-// id for that child. The clone is mounted by the official registry; nothing in
-// the official package is patched.
+// 官方从 `SubagentStartRequest` 里拿掉了 persona / toolFilter，而 spawn 出来的子会话仍可以
+// 选一份独立预设。所以这里复制父会话声明的那份预设、替换其中的人设行，为子会话注册一个
+// 短命的预设 id。克隆体由官方 registry 挂载 —— 官方包里一个字节都不改。
 
 import { createHash } from 'node:crypto'
 import { JSON_SCHEMA, Type, load } from 'js-yaml'
@@ -53,8 +51,7 @@ function cloneEntry(value: unknown): unknown {
 
 function isPersonaOrPresetSwitch(row: Record<string, unknown>): boolean {
   if (row.name === '@deepseek-ai/dsh-persona') return true
-  // A custom preset row would replace the whole composition; cloning it would
-  // silently change the parent instead of merely overriding its persona.
+  // 自定义预设行会替换整个组合；复制它等于悄悄改掉父会话，而不只是覆盖人设。
   return row.name === '@deepseek-ai/dsh-agent-preset'
 }
 
@@ -78,7 +75,7 @@ function removePersonaRows(rows: unknown[]): unknown[] {
   return kept
 }
 
-/** Read the parent preset's declared rows and return a child definition. */
+/** 读父预设声明的那几行，拼出一份子预设定义。 */
 export async function childPresetDefinition(parentAgent: any, persona: PersonaDoc): Promise<PresetDefinition> {
   const parentCtx = parentAgent?.ctx
   const roster = presetRosterOf(parentCtx)
@@ -112,7 +109,7 @@ export async function childPresetDefinition(parentAgent: any, persona: PersonaDo
   })
 
   // hash 必须覆盖**父预设的组合正文**：同一个 id 的内容可以被 profile 补丁改写，只按
-  // id + 人设定哈希会让改过的内容继续复用旧定义（冷恢复/追问时加载的是上一版插件树）。
+  // id + 人设定哈希会让改过的内容继续复用旧定义（冷恢复/追问时加载的是上一次构建的插件树）。
   const hash = createHash('sha256')
     .update(parentPresetId)
     .update('\0')

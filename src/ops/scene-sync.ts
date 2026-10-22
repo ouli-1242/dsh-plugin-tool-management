@@ -1,4 +1,4 @@
-// rules 域里需要包装的那四个 op（2026-09-19 从 index.ts 的 handlers 表抽出）。
+// rules 域里需要包装的那四个 op（从 index.ts 的 handlers 表抽出）。
 //
 // rules 域的**其余 op 由 ./memories/service.ts 直接 spread 进表**，不经过本文件 —— 这里只放
 // 四个要走「场景 ↔ 全局基线同步」包装的写 op。
@@ -11,9 +11,9 @@ const SKIP = Symbol('skip')
 /**
  * 「启用集合」与「当前模式」是同一个意图的两片状态：`active` 决定记忆与绑定的提示词按哪个
  * 场景注入，`mode.scene` 决定运行时（MCP / 技能 / 人设 / 工具表 / 快捷词）停在哪份档案上。
- * 两者必须恒等 —— 历史上每次只有一个动，就出现过一个方向各坏一次：拨开关不应用档案（面板
- * 0.9.x 的旧账，见 45-scenes.js 的 ⚠️ 注释），以及 `/` 菜单进 / 出场景只写 `active`
- * （用户 2026-10-01 报，图见 CHANGELOG）。
+ * 两者必须恒等 —— 每次只有一个动，就会有一个方向坏掉：拨开关不应用档案（面板走的是只改
+ * 档案那条老路，见 45-scenes.js 的 ⚠️ 注释），或者 `/` 菜单进 / 出场景只写 `active`
+ * （用户反馈，图见 CHANGELOG）。
  *
  * 所以这里**在服务端兜住这条不变量**，而不是要求每个调用方各开两枪：`rules-set-active` 是
  * "我要让哪个场景生效"的那个 op，四个调用方（面板开关、`/` 菜单、模型工具、以后新增的入口）
@@ -51,6 +51,7 @@ function targetSceneOf(args: any): string | null | typeof SKIP {
   return names.length > 1 ? SKIP : (names[0] ?? null)
 }
 
+/** 场景同步 op 的依赖：AGENTS.md 同步与当前场景查询。 */
 export interface SceneSyncOpsDeps {
   /**
    * 场景 ↔ 全局基线（AGENTS.md）同步包装：先执行原逻辑，成功后把当前场景绑定的提示词
@@ -65,24 +66,24 @@ export interface SceneSyncOpsDeps {
    */
   sceneModeSet(args: { scene: string | null }): Promise<any>
   /**
-   * 模型工具表方案绑定落在**当前启用场景**时的即时生效（0.15.0）：
+   * 模型工具表方案绑定落在**当前启用场景**时的即时生效：
    * 把关停名单整体换成那份方案。缺席或抛错都不拦保存本身（与 AGENTS.md 同步同口径）。
    */
   onToolTablePresetChanged?(scene: string, value: string): Promise<void>
   /**
-   * 快捷提示词勾选集落在**当前启用场景**时的即时生效（0.18.0）：与「改档案 = 立刻生效」
+   * 快捷提示词勾选集落在**当前启用场景**时的即时生效：与「改档案 = 立刻生效」
    * 同一条路（走 `scene-archive-save`，含 stale 清理与快照并入）。`null` = 解绑 = 这一域
    * 回到"保持现状"，运行时不回滚（进场景前那批开关仍在快照里，退出照常还原）。
    */
   onQuickPromptsChanged?(scene: string, value: string[] | null): Promise<void>
   /**
-   * 场景**改名**成功后的会话同步（0.21.2 复核）：停在这个场景里的会话要把 `scene` 与
+   * 场景**改名**成功后的会话同步：停在这个场景里的会话要把 `scene` 与
    * 记忆键一起换到新名。不改的话，它们会指向一个不存在的场景 —— 下次有人新建同名场景，
    * 这些会话会**突然进入新场景**（档案、租约全跟着变），而用户什么都没点。
    */
   onSceneRenamed?(from: string, to: string): Promise<void>
   /**
-   * 场景**删除**成功后的会话同步（0.21.2 复核）：停在这个场景里的会话按「退出场景」处理
+   * 场景**删除**成功后的会话同步：停在这个场景里的会话按「退出场景」处理
    * （下层换成基线），并清掉所有会话里指向该场景记忆的覆盖。否则会话会停在"幽灵场景"：
    * 档案读不到 → 所有域静默退回全局，记忆注入还会漏掉全局当前场景。
    */
@@ -96,9 +97,10 @@ export interface SceneSyncOpsDeps {
   }
 }
 
+/** 场景 ↔ 全局基线同步的包装 op：先跑原逻辑，成功后把当前场景绑定的提示词写进 `AGENTS.md`。 */
 export function buildSceneSyncOps(deps: SceneSyncOpsDeps): Record<string, (args: any) => Promise<any>> {
   return {
-    // 场景 ↔ 全局基线（AGENTS.md）同步：用户裁定「切换场景，对应的提示词直接把 AGENTS.md
+    // 场景 ↔ 全局基线（AGENTS.md）同步：用户要求「切换场景，对应的提示词直接把 AGENTS.md
     // 直接修改」，所以这四个 rules 写 op 走包装 —— 先执行原逻辑，成功后把当前场景绑定的
     // 提示词写进 `~/.dsh/AGENTS.md`（或关掉场景时恢复进场景前的基线），结果并进响应
     // 的 `agentsMd` 字段（`applied` / `restored` / `unchanged` / `error`）。
@@ -117,14 +119,14 @@ export function buildSceneSyncOps(deps: SceneSyncOpsDeps): Record<string, (args:
     },
     'rules-update-scene': async (args: any) => {
       const res: any = await deps.rulesOps['rules-update-scene'](args)
-      // 改名成功后，停在这个场景里的会话跟着换名（0.21.2 复核）。要在下面两个绑定回调
+      // 改名成功后，停在这个场景里的会话跟着换名。要在下面两个绑定回调
       // **之前**做：它们按场景名找当前模式 / 档案，旧名这时候已经不存在了。
       const renamedFrom = res && res.ok !== false && typeof res.renamedFrom === 'string' ? res.renamedFrom : ''
       const finalName = String((res && res.scene && res.scene.name) || (args && args.nextName) || (args && args.name) || '')
       if (renamedFrom !== '' && finalName !== '' && deps.onSceneRenamed !== undefined) {
         try { await deps.onSceneRenamed(renamedFrom, finalName) } catch { /* 会话同步失败不拦保存；下次启动的孤儿修复会兜 */ }
       }
-      // 工具表方案绑定改动（0.15.0）：改的是**当前启用场景**且这次真的带了这一参数时即时生效；
+      // 工具表方案绑定改动：改的是**当前启用场景**且这次真的带了这一参数时即时生效；
       // 改名在场景处于模式中时会被拦（rulesUpdateScene 的 sceneInMode），所以这里 finalName 就是生效场景的名字。
       if (res && res.ok !== false && deps.onToolTablePresetChanged && args && args.toolTablePreset !== undefined) {
         try { await deps.onToolTablePresetChanged(finalName, String(args.toolTablePreset)) } catch { /* 即时生效失败不拦保存；下次进/退场景会对齐 */ }

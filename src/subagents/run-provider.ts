@@ -53,6 +53,7 @@ export {
 export { presetRulesOf, serializePersona, validPersonaName } from './persona-write.js'
 export { decideToolFilter } from './tool-filter.js'
 
+/** 委派 provider 的依赖：宿主 subagent 服务与人设解析。 */
 export interface RunProviderDeps {
   /** 宿主上下文：委派要在父 agent 上开子 run。 */
   ctx: any
@@ -61,6 +62,7 @@ export interface RunProviderDeps {
   message(e: unknown): string
 }
 
+/** 子智能体运行侧：按 `spawn` / `fork` 挂 provider，并负责一次委派的人设与工具限制。 */
 export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
   const PROVIDER_PACKAGES = {
     spawn: { pkg: '@deepseek-ai/dsh-subagent-spawn-in-process', label: 'spawn (fresh session)' },
@@ -105,16 +107,14 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
   }
 
   /**
-   * Install the persona's optional tool mask on one exact child scope. The
-   * official request no longer accepts toolFilter, so this is the only place
-   * the mask can be applied without widening the child's inherited tools.
+   * 把某个人设的可选工具掩码装到**恰好那一个**子作用域上。
    *
-   * Must run inside `agent/created` for that exact child (0.2.1)：the official
-   * factory awaits every serial `agent/created` listener **before** it releases
-   * the queued first prompt (`dsh-agent/lib/types/index.js:334` → `announce`),
-   * so a restriction installed here is already in force at the child's first
-   * tool call. Installing after `startActivation()` resolves would race: the
-   * first turn could already have run with the inherited tools.
+   * 官方请求已不接受 toolFilter，所以这是唯一能在不放宽子会话继承工具的前提下装掩码的地方。
+   * 必须在那个子会话的 `agent/created` 里装：官方工厂会先 await 所有串行
+   * `agent/created` 监听器，**之后**才放行排队的第一条提示词
+   *（`dsh-agent/lib/types/index.js:334` → `announce`），所以在这里装上的限制在子会话第一次
+   * 调工具时已经生效。等到 `startActivation()` resolve 之后再装就有竞态：第一轮可能已经
+   * 带着继承来的工具跑完了。
    */
   function restrictChildTools(childAgent: any, filter: ToolFilter): () => void {
     const tools = childAgent?.ctx?.get?.('tools')
@@ -207,10 +207,10 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     // 这里**刻意没有**"预算用尽就拒绝"的前置检查：宿主统一决定委派深度
     // （当前默认 maxDepth=1），本工具不传 maxDepth，也不自行判断能否继续委派。
     //
-    // 通道选择（方案 C，2026-09-17）：`inherit` → 官方 fork provider（子会话被**本次会话已完成的
+    // 通道选择：`inherit` → 官方 fork provider（子会话被**本次会话已完成的
     // 对话**播种，`task` 只需写新增部分）；默认 → spawn（全新会话，任务必须自包含）。
-    // 为什么必须有这一档：官方的 `subagent_fork` 靠"继承上下文"赢走过模型的选择 —— 本机实测
-    // （session-ee722e23）上下文里明明有「先在这里选人设…用 subagent_manager_run 执行」与
+    // 为什么必须有这一档：官方的 `subagent_fork` 靠"继承上下文"赢走过模型的选择 —— 实测中
+    // 上下文里明明有「先在这里选人设…用 subagent_manager_run 执行」与
     // `code-review` 人设，模型在**读进 README 之后**仍选了 `subagent_fork`：那能把已读内容带过去、
     // 不必复述。人设通道缺这一档时，"贴合人设的任务"会持续被官方工具抢走 —— 补齐能力比改文案
     // 更根本（模型选的是省力，不是没看见）。
@@ -225,7 +225,6 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     // provider 与 model 是模型路由的两半：DSH 的 resolveModel(provider, model) 不做
     // `provider/model` 字符串拆分，只改 model 会落在**主会话的 provider** 上——跨来源
     // 指定模型（如 sensenova 的 sensenova-6.8-flash-lite）必须两个键一起给。
-    // 2026-09-23 加 `reasoningEffort`：条件是"三个键任一有值"—— 只设强度（不改模型）也得
     // 把这个对象发出去，否则那一格永远不生效。官方合并语义（`dsh-subagent/lib/index.js:471-483`）
     // 是"先继承主会话的三项、再用这里的覆盖"，所以只给 reasoningEffort 时 provider/model
     // 照旧继承；反过来，改了 provider/model 而没给 reasoningEffort 时，**继承来的那一档会被
@@ -363,8 +362,8 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     }
   }
 
-  // v1 串行：同一时刻至多一次**启动**在途（设计 §3.2）。
-  // ⚠️ 0.19.0 起这条不再等于"至多一个子代理在跑"：允许追问（`continuable`）的子代理在
+  // v1 串行：同一时刻至多一次**启动**在途。
+  // ⚠️这条不再等于"至多一个子代理在跑"：允许追问（`continuable`）的子代理在
   // `startActivation()` 返回后仍在后台运行，而这里只串行化"启动"这一步。这是官方通道的
   // 固有语义（后台子级本来就允许并存），不是本插件放宽了限制。
   // `continuable: true` 的返回值是 `{ text: '', stopReason: 'started' }` —— 产出不在这里，

@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-tool-management",
-  "version": "0.21.2",
+  "version": "0.21.3",
   "description": "一个设置面板，统一管理 MCP、技能、记忆、子智能体、提示词和归档会话；可自定义搭配场景，一个场景即可切换整个环境；Agent也能帮你操作这个插件。",
   "repository": {
     "type": "git",
@@ -25,7 +25,7 @@
     "LICENSE",
     "screenshots.json",
     "docs/images",
-    "docs/update.md"
+    "docs/UPDATE.md"
   ],
   "engines": {
     "dsh": ">=0.2.1-rc.2 <0.2.2",
@@ -42,6 +42,7 @@
     "typecheck:client": "node scripts/sync-client.mjs && tsc -p tsconfig.client.json",
     "check:i18n": "node scripts/check-i18n.mjs lib/client.js",
     "check:host": "node scripts/host-deps.mjs && node scripts/doctor.mjs",
+    "check:strict": "node scripts/check-strict.mjs",
     "host-deps": "node scripts/host-deps.mjs --fix",
     "doctor": "node scripts/doctor.mjs",
     "test": "npm run build && npm run check:i18n && npm run typecheck:client && node --test test/contracts.test.mjs test/client-exports.test.mjs",

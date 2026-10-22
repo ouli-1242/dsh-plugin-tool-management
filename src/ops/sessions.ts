@@ -1,4 +1,4 @@
-// 归档会话（History）域的 HTTP ops（2026-09-19 从 index.ts 的 handlers 表抽出）。
+// 归档会话（History）域的 HTTP ops（从 index.ts 的 handlers 表抽出）。
 //
 // 同一条纪律：只负责 op 实现，依赖显式传参；MCP 写后刷新、场景锁定守卫仍作用在组装后的
 // 整张表上（见 index.ts）。
@@ -37,7 +37,7 @@ interface SessionsRegistryLike {
    * 注册表状态：`archivedSessionIds` 是**权威归档集合**（`workspaceIds` 为权威显示顺序）。
    *
    * `archivedSessionMetadata().items` 只是它的**有损投影**（读不到头部的会被跳过），
-   * 判「能不能删」必须用这里（2026-09-30 审查 F9）。宿主契约由 `compat/probe.ts` 的
+   * 判「能不能删」必须用这里。宿主契约由 `compat/probe.ts` 的
    * `workspace-registry-state` 探针核对（两个字段都必须是数组）。
    */
   requireState?(): { workspaceIds: string[]; archivedSessionIds: string[] }
@@ -54,6 +54,7 @@ interface SessionsRegistryLike {
   registerWorkspace?(path: string, title?: string): Promise<unknown>
 }
 
+/** 会话历史 op 的依赖：登记表、消息格式化与保留期读写。 */
 export interface SessionOpsDeps {
   /** 归档/历史注册表；未挂载时 undefined（各 op 据此返回明确错误，不崩页面）。 */
   getSessionsRegistry(): SessionsRegistryLike | undefined
@@ -105,11 +106,12 @@ async function xdgDesktopDir(): Promise<string | undefined> {
   } catch { return undefined }
 }
 
+/** History（归档会话）域的 op：列表、保留期、取消归档与删除。 */
 export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any) => Promise<any>> {
   return {
     // History（归档会话管理）ops。只读：history-list / history-retention-get；
     // 写：history-unarchive / history-delete / history-retention-set。
-    // workspaceRegistry 缺失（补丁未生效）时返回明确错误，不崩页面。
+    // workspaceRegistry 缺失时返回明确错误，不崩页面。
     'history-list': async () => {
       const registry = deps.getSessionsRegistry()
       if (!registry) return { ok: false, error: '归档服务未就绪：请检查宿主 workspaceRegistry 服务。' }
@@ -245,7 +247,7 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
       try {
         // 不接 registry 的返回值：官方 `unarchiveSession` 是 `Promise<void>`，而界面只要
         // ok / error / workspace —— 每次单条恢复都把整个归档集合回传一遍纯属浪费。
-        // 0.18.5 之前这里读 `r.archivedSessionIds`，于是宿主恢复**成功之后**构造回执时抛
+        //原先这里读 `r.archivedSessionIds`，于是宿主恢复**成功之后**构造回执时抛
         // TypeError，界面弹「操作失败」，用户以为没恢复、其实已经恢复了。
         await registry.unarchiveSession(sessionId)
         const workspace = await deps.restoreWorkspaceAccounting([sessionId])
@@ -257,13 +259,13 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
       if (!registry) return { ok: false, error: '归档服务未挂载' }
       const sessionId = String((args && args.sessionId) || '').trim()
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-      // 范围收敛（2026-09-30 审查 P1-7）：单删也只允许删**已归档**的会话 —— 与批量路径
+      // 范围收敛：单删也只允许删**已归档**的会话 —— 与批量路径
       // （`deleteArchivedSessions` → `archivedSessionIdsForTarget` 的四种 scope 全部与
       // `archivedSessionIds` 求交）同一口径，也与界面对齐（`history-list` 只回已归档会话，
       // 删除按钮只出现在那份列表里）。原先这里直接 `registry.deleteSession(sessionId)`，而
       // `deleteLocalSession` 只问「这个 id 在持久化里存在吗」—— 于是一个客户端 bug 或一次
       // 手工请求就能**永久删除任意已持久化会话**，包括未归档的和当前正开着的。
-      // 判据必须是**权威归档集合**，不是摘要投影（2026-09-30 审查 F9）。
+      // 判据必须是**权威归档集合**，不是摘要投影。
       // `archivedSessionMetadata()` 是**有损**的：逐条 try，读不到 header 或 `createdAt`
       // 非有限就 `continue` 且不抛（`workspace.ts` 的 `archivedSessionMetadata`）。拿它的
       // `items` 拼门禁集合，就会把「确实已归档、只是头部暂时读不到」的会话判成未归档 →
@@ -336,7 +338,7 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         return { ok: false, error: '当前环境不支持重新登记工作区（registry 未实现 registerWorkspace）' }
       }
       const title = args && args.title ? String(args.title) : undefined
-      // 目录已被删除时提前拦下（用户 2026-10-12：工作区文件夹删掉后不该还能「重新登记」）。
+      // 目录已被删除时提前拦下（用户 ：工作区文件夹删掉后不该还能「重新登记」）。
       // 宿主 registerWorkspace 内部的 realpath 本来就会拒绝，但报错文本是底层的；这里给
       // 一句能直接读懂的提示。界面在 dirMissing 时已不再渲染该按钮，这条是防御性兜底。
       try {
@@ -365,7 +367,7 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         return { ok: false, error: '对话解析失败: ' + deps.message(e) }
       }
       if (!turns.length) return { ok: false, error: '未能从该文件中识别出对话内容' }
-      // 「折成一条 user 消息」这件事本身要出声（2026-09-30 审查 F12）。
+      // 「折成一条 user 消息」这件事本身要出声。
       // 嗅探（`detectFormat`）已经能救回「JSONL / Markdown 被改名成 .txt」那一种，但**真的**
       // 没有说话人标记的文本仍会走 generic：多行内容全塞进 1 条 user turn、结构全失，
       // 而 op 此前回的是 `{ok:true,count:1}` —— 零警告。这里把它标出来（`lossy` 给界面出
@@ -405,7 +407,7 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
         return { ok: false, error: '创建会话失败: ' + deps.message(e) }
       }
     },
-    // ---------- 通用导出（D14）----------
+    // ---------- 通用导出 ----------
     // 技能 / 子智能体 / 提示词 / 记忆四个域的差异只有「从哪取哪些文件」，其余
     //（绝对路径校验、建目录、zip 打包、错误回报）完全相同 —— 所以只加**一个** op。
     // 打包用已在依赖里的 `fflate.zipSync`（此前只用了 unzipSync）。
@@ -606,7 +608,7 @@ export function buildSessionOps(deps: SessionOpsDeps): Record<string, (args: any
           const events = await readEvents(sessionId)
           const turns = deps.extractTurnsFromEvents(events || [], detail)
           if (!turns.length) {
-            // 简洁档现在**不含思考与工具**（0.18.5 之前思考被混在正文里），所以"只有思考没正文"
+            // 简洁档现在**不含思考与工具**（原先思考被混在正文里），所以"只有思考没正文"
             // 的会话会第一次变成导不出来 —— 得说清楚是档位问题，不是内容丢了。
             skipped.push({ sessionId, error: !events ? '无法读取会话内容（不在活动存储且无持久化句柄）'
               : detail !== 'full' ? '会话中没有可导出的正文（思考与工具调用不计入本档 —— 换更高一档可以导出它们）'

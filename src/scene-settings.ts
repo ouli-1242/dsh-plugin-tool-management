@@ -14,6 +14,7 @@ export interface SceneSettings {
   enterPreview: boolean
 }
 
+/** 场景设置出厂值：进场景前先弹确认（这是不可逆动作，默认要问一句）。 */
 export const DEFAULT_SCENE_SETTINGS: SceneSettings = { enterPreview: true }
 
 /** 把任意输入夹成合法设置（缺项/类型不对一律退回默认：默认不阻止任何确认）。 */

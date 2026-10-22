@@ -20,11 +20,13 @@ export const SCOPE_INTENT_FILE = 'scope-intent.json'
 /** 读缓存 TTL：与覆盖表同一量级（界面点一下就回）。 */
 const TTL_MS = 300
 
+/** 意图存储的依赖：侧车文件路径与写锁。 */
 export interface IntentStoreDeps {
   withWriteLock<T>(fn: () => Promise<T>): Promise<T>
   message(e: unknown): string
 }
 
+/** 意图存储的对外面：读、写、按需重建。 */
 export interface IntentStore {
   /** 读整份侧车（TTL 缓存；`force` 跳过缓存）。 */
   read(force?: boolean): Promise<ScopeIntent>
@@ -40,6 +42,7 @@ export interface IntentStore {
   invalidate(): void
 }
 
+/** 全局意图侧车（`scope-intent.json`）的读写门面：用户想要什么与运行态分开记。 */
 export function createIntentStore(deps: IntentStoreDeps): IntentStore {
   let cache: { at: number; value: ScopeIntent } | null = null
   let warming = false

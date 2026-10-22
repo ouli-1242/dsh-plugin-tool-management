@@ -1,4 +1,4 @@
-// MCP 重启做了一半的状态标记（0.21.2）。
+// MCP 重启做了一半的状态标记。
 //
 // 为什么必须有它：`mcpm-restart` 是**两段写**——阶段 1 强制停用并落盘，等 loader 反映
 // （最多 ~11s），阶段 2 再按重启前的状态写回。补丁里阶段 1 落下的 `disabled: true` 与
@@ -26,8 +26,10 @@ import { hubPath } from '../hub.js'
 /** 标记文件名（hub 根）。 */
 export const MCP_RESTART_STATE_FILE = 'mcp-restart-state.json'
 
+/** 重启三阶段：已强制停用等 loader、正在写回、已写回。 */
 export type McpRestartPhase = 1 | 2 | 3
 
+/** 重启标记：停用 → 等 loader → 写回的三阶段进度，跨进程可续。 */
 export interface McpRestartMarker {
   v: 1
   /** 卡住的那个补丁条目 id。 */

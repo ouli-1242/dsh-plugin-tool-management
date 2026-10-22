@@ -1,8 +1,9 @@
 // src/memories/archive.ts —— 场景档案数据模型与模式切换纯逻辑（无 I/O；I/O 由 archive-engine 注入）。
-// 勾选集语义（设计 §2.1）：段内存储「勾选的启用集合」；应用时该域置为与勾选集完全一致；
+// 勾选集语义：段内存储「勾选的启用集合」；应用时该域置为与勾选集完全一致
 // 段未定义 = 该域不碰；段已定义但全不勾 = 合法（全部停用）。清单只对"实时发现"的条目生效。
 // v2：MCP 段为两级——服务器勾选（mcp 键存在）+ 可选工具明细（'*' = 整台，string[] = 指定工具）。
 
+/** 一份场景档案：六个域的勾选、绑定与备注。 */
 export interface SceneArchive {
   mcp?: Record<string, '*' | string[]>   // serverName → '*' 整台 | 工具名清单；键存在 = 段已定义
   /**
@@ -16,8 +17,8 @@ export interface SceneArchive {
   /**
    * 勾选的快捷提示词（id）。**段语义与 mcp/skills/subagents 三段相反**，与下面的
    * `toolTablePreset` 同族：
-   *   · 段**未定义** = 这个域完全不碰（进入场景后仍按每条自己的开关）—— 这是用户 2026-10-01
-   *     裁定的默认形态（「下拉框默认选择是当前启动的快捷提示词」）；
+   *   · 段**未定义** = 这个域完全不碰（进入场景后仍按每条自己的开关）—— 默认形态就是
+   *     这样（「下拉框默认选择是当前启动的快捷提示词」）；
    *   · 段**已定义**（含空表）= 进入时把每一条的开关置为"在不在这份清单里"，退出按快照还原。
    * 空表是合法值（= 进入后全部停用），所以它**不能**跟着「空段 = 未定义」那条清理走。
    */
@@ -30,7 +31,7 @@ export interface SceneArchive {
    */
   memories?: string[]
   /**
-   * 绑定的**模型工具表方案**（0.15.0 C1）：进入该场景时把「发给模型的工具」关停名单整体换成
+   * 绑定的**模型工具表方案**：进入该场景时把「发给模型的工具」关停名单整体换成
    * 这一份方案（不是合并）。缺省 = 这个域完全不动，老档案没有这一栏，进出行为逐字节不变。
    * `'factory-default'` 是合法值 = 出厂默认那份关 15 条，不是用户自己存的方案。
    */
@@ -48,7 +49,7 @@ export interface ModeSnapshot {
   mcp: Record<string, string[]>
   skills: Record<string, boolean>
   /**
-   * **每一行**服务器级启停的进场景前 `disabled`（全量，v0.9.5 起）。
+   * **每一行**服务器级启停的进场景前 `disabled`（全量，v）。
    *
    * 为什么从「只记被档案改动过的行」升级成全量：场景期间用户能在页面上改开关（未锁定时
    * 可用，改动同步进档案），只记进场景时那几行的话，用户自己改的行没有原值可回。
@@ -65,7 +66,7 @@ export interface ModeSnapshot {
    */
   skillSources?: Array<{ root: string; enabled: boolean }>
   /**
-   * 子智能体开关（v0.8）：进入模式时档案勾选的人设被**自动启用**，这里记的是
+   * 子智能体开关：进入模式时档案勾选的人设被**自动启用**，这里记的是
    * 其中「改动前处于停用状态」的名字 —— 退出时按名单停回，不动用户手动开关过的其他行。
    */
   subagents?: string[]
@@ -78,7 +79,7 @@ export interface ModeSnapshot {
    */
   subagentsOn?: string[]
   /**
-   * 人设开关的**全量**映射（名字 → 进入模式时的开关状态），v0.9.1 起写入。
+   * 人设开关的**全量**映射（名字 → 进入模式时的开关状态），v写入。
    *
    * 为什么要从「两个方向的部分名单」升级成全量映射：场景内页面开关已开放（未锁定即
    * 可改，改动同步进档案），于是「某个人设现在开着」不再只来自档案勾选 —— 部分名单
@@ -101,11 +102,12 @@ export interface ModeSnapshot {
    */
   mcpNotes?: Array<{ id: string; note: string | null }>
   /**
-   * 进场景前的**模型工具表关停名单**（0.15.0 C1）。老快照没有这一栏 → 退出不动工具表。
+   * 进场景前的**模型工具表关停名单**。老快照没有这一栏 → 退出不动工具表。
    * 记全量而不是「方案名」：用户在场景里自己去兼容页改了工具表，退出仍要回到进场景前的那份。
    */
   toolTableHidden?: string[]
 }
+/** 当前模式：停在哪个场景，以及进场景前的快照。 */
 export interface ModeState { scene: string | null; snapshot: ModeSnapshot | null }
 
 /** 一台服务器的**服务器级**启停现状（`disabled` 来自补丁文件）。 */
@@ -119,6 +121,7 @@ export interface McpServerState {
   disabled: boolean
 }
 
+/** MCP 域的还原计划：逐条、通配、以及已经失效的项。 */
 export interface McpPlan {
   /** 每台服务器的精确停用名单（[] = 全部启用；['*'] = 整台停用）。 */
   entries: Record<string, string[]>
@@ -143,6 +146,7 @@ export interface McpPlan {
   }>
 }
 
+/** 把字符串（逗号分隔）或数组归一成去空、去重的字符串列表。 */
 export function normalizeStringList(raw: unknown): string[] {
   if (typeof raw === 'string') raw = raw.split(/[,，]/)
   if (!Array.isArray(raw)) return []
@@ -152,7 +156,7 @@ export function normalizeStringList(raw: unknown): string[] {
 /**
  * MCP 规范化：serverName → '*' 或工具名清单；非法形态丢弃。
  * 空清单是**合法值**（勾了服务器但一个工具都不勾 = 该服务器全部停用），必须保留——
- * 否则「段已定义但全不勾 = 全部停用」（设计 §2.1）无法持久化。
+ * 否则「段已定义但全不勾 = 全部停用」无法持久化。
  */
 export function normalizeMcpSpec(raw: unknown): Record<string, '*' | string[]> | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
@@ -200,10 +204,12 @@ export function normalizeArchive(raw: unknown): SceneArchive {
   return out
 }
 
+/** 档案里有没有写过这一段 —— 「没写过」与「写过但为空」语义不同。 */
 export function hasSection(archive: SceneArchive, section: 'mcp' | 'skills' | 'subagents' | 'memories' | 'mcpNotes'): boolean {
   return archive[section] !== undefined
 }
 
+/** 算 MCP 还原计划要的输入：已配置的服务器与已知工具名。 */
 export interface McpPlanInput {
   /** 配置中真实存在的服务器名全集（含未运行的）。 */
   configuredServers: string[]
@@ -257,6 +263,7 @@ export function computeMcpPlan(mcp: Record<string, '*' | string[]>, input: McpPl
 /** 一个技能来源（root）的启停现状。 */
 export interface SkillSourceState { root: string; enabled: boolean }
 
+/** 技能域的还原计划：目标启停与已失效的来源。 */
 export interface SkillsPlan {
   target: Record<string, boolean>
   stale: string[]
@@ -344,6 +351,24 @@ export function mergeSnapshotSwitches(
   }
 }
 
+/**
+ * 进场景前的运行时快照：退出时按它还原。
+ *
+ * 只记「这次改动会碰到的东西」—— 每一格都带改动前的原值，退出按「现状 ≠ 原值」回写，
+ * 场景期间用户手改过的项因此不会被无条件推翻。
+ *
+ * @param mcpRaw 服务器 → 工具名的停用表原文
+ * @param skills 技能名 → 是否启用
+ * @param mcpServers 进场景前每一行 MCP 服务器的停用态（全量）
+ * @param skillSources 进场景前每个技能来源的启停态
+ * @param subagents 将被档案**启用**的人设名（改动前停用的子集）
+ * @param subagentsOn 将被档案**停用**的人设名（改动前启用的子集）
+ * @param mcpNotes 将被档案改动的备注行，带改动前的备注（null = 原本没有）
+ * @param subagentStates 进场景时**全部**人设的开关；给了就精确还原，包括场景里手动开过的
+ * @param toolTableHidden 进场景前的模型工具表关停名单（null = 这次不进快照，退出也不动它）
+ * @param quickPromptStates 进场景前每一条快捷提示词的开关（null = 档案没定义该段，这一域不碰）
+ * @returns 可直接存档的快照；空集合的字段不落键，退出时即「不动这一域」
+ */
 export function snapshotRuntime(
   mcpRaw: Record<string, string[]>,
   skills: Record<string, boolean>,
@@ -389,7 +414,7 @@ export function snapshotRuntime(
 // 记忆只是**投影**（正文进 system prompt）。所以记忆段不产生"应用计划"、不进模式快照，
 // 而是在渲染时被查询——勾选后下一个请求即生效，退出模式无需回滚任何东西。
 
-// P5（2026-09-15）已删除 `memoryAllowed` 与 `computeMemoriesPlan`：
+// P5已删除 `memoryAllowed` 与 `computeMemoriesPlan`：
 // 记忆的注入条件改为**单一真相源** `rules[*].enabled`，场景档案不再持有 `memories` 段。
 // 原因是「两个开关串联 + 两步操作」——用户必须先建段、再逐条勾，而且记忆页与档案页
 // 各显示一半状态，看起来永远对不上。现在档案弹窗里的记忆勾选直接读写 `enabled`，

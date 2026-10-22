@@ -1,12 +1,12 @@
 // 会话转录导出：把宿主的 SessionEvent[] 提成可再导入的转录文本。
 //
-// 从 src/index.ts 剥出来（0.18.5），同时补上两件事：
+// 从 src/index.ts 剥出来，同时补上两件事：
 //
 // 1. **按块类型取文本**。宿主的内容块是带 type 标签的联合（dsh-llm types.d.ts:114-122）：
 //    `text` 是用户可见正文，`reasoning` 是思考，`tool-call` 是模型发起的调用。此前导出走
 //    `extractText`，它只判「这个对象有没有 text 字段」—— 而 `ReasoningBlock` 恰好就是
-//    `{type:'reasoning', text}`，所以**思考一直混在助手正文里导出去**。同一类缺陷 0.16.x
-//    已在子智能体侧用 `textOfBlocks` 修过（persona-parse.ts:275），导出侧是它的第二个出口。
+//    `{type:'reasoning', text}`，所以**思考会混在助手正文里导出去**。子智能体侧已用
+//    `textOfBlocks` 避开了同一类缺陷（persona-parse.ts:275），导出侧是它的第二个出口。
 // 2. **导出分三档，且是累进的**：正文 → 另加工具 → 再加思考。每档都是上一档的超集，
 //    所以一个下拉就说得清（两个独立勾选框是另一种答案，用户不要）。
 //    三档仍是**可读转录，不是完整备份**：每块有上限并明说截断，token 统计与压缩结构不在里面。
@@ -208,7 +208,7 @@ function indentBlock(text: string): string {
 /**
  * 序列化为可再导入的转录文本：Codex 风格 Markdown 或 Claude Code 风格 JSONL。
  *
- * 签名与 0.18.5 之前一致 —— 附加信息全在 `turn.details` 里，所以 `details` 为空时两种输出
+ * 签名与原先一致 —— 附加信息全在 `turn.details` 里，所以 `details` 为空时两种输出
  * 与旧版逐字节相同。`## User` / `### Assistant` 两级标题不能改：导入侧靠它切轮次与嗅探格式。
  */
 export function serializeTranscript(turns: ExportTurn[], format: 'markdown' | 'jsonl'): string {

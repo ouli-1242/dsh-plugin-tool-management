@@ -31,6 +31,7 @@ import {
 } from './disabled-tools.js'
 import type { KnownMcpTool, ToolsService } from './manager.js'
 
+/** 可见性接缝要的文件读写与路径解析。 */
 export interface ToolVisibilityDeps {
   /** 通用侧车 JSON 读写（与母文件同一套）。 */
   readJsonFile(abs: string): Promise<any>
@@ -57,7 +58,7 @@ export interface ToolVisibilityDeps {
   /** 「有官方等价物在场就让位」那半边：按 agent 算的额外 hide 名单。 */
   carrierHiddenTools?(agent: unknown): Promise<string[]>
   /**
-   * 本会话的 MCP 可见性覆盖（0.21.2）：在**此刻注册着的**工具全名上算出的两个名单。
+   * 本会话的 MCP 可见性覆盖：在**此刻注册着的**工具全名上算出的两个名单。
    *
    * 全名要按"此刻注册了什么"（`tools.schemas()`）算，而那件事只有本模块顺手 —— 让调用方
    * 去拼全名等于把"哪些名字算数"抄第二份。所以调用方的判据（四层并值）是按
@@ -68,10 +69,11 @@ export interface ToolVisibilityDeps {
    * 调得动，别的会话照旧。
    */
   sessionMcpOverlay?(agent: unknown): Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
-  /** 本会话的模型工具表覆盖（0.21.2）：与 MCP overlay 合进同一层 restrict。 */
+  /** 本会话的模型工具表覆盖：与 MCP overlay 合进同一层 restrict。 */
   sessionToolTableOverlay?(agent: unknown): { allow?: readonly string[]; deny?: readonly string[] } | Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
 }
 
+/** 可见性接缝的对外面：停用表、状态与问题上报。 */
 export interface ToolVisibility {
   readDisabledTools(force?: boolean): Promise<Record<string, string[]>>
   /** 四态读（需要区分 ok / missing / corrupt / unreadable 时用）。 */
@@ -109,13 +111,13 @@ export interface ToolVisibility {
   disposeVisibility(): void
 }
 
+/** 工具可见性门面：把逐工具启停同时落到「看不见」（restrict）与「调不到」（guard）两侧。 */
 export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   // ---------- per-tool enable/disable (execution + visibility boundary) ----------
-  // dsh-mcp-client has no per-tool config, but the DSH tool runtime exposes
-  // two official seams: `tools.restrict({ deny })` removes a global tool from
-  // every scope's model-visible schema list, and `tools.guard` denies the call
-  // before the body runs. Disabled tools therefore become invisible AND
-  // uncallable — no patch rewrite, no DSH restart.
+  // dsh-mcp-client 没有逐工具配置，但 DSH 的工具运行时留了两个官方接缝：
+  // `tools.restrict({ deny })` 把全局工具从每个作用域对模型可见的 schema 列表里摘掉，
+  // `tools.guard` 在工具主体运行前拒绝调用。于是停用的工具既看不见也调不到 ——
+  // 不必改补丁，也不必重启 DSH。
   let disabledToolsCache: { at: number; read: DisabledToolsRead; value: Record<string, string[]> } | null = null
   /** 写成功后自增：晚到的旧读不得覆盖新缓存（见 readDisabledToolsResult）。 */
   let disabledToolsEpoch = 0
@@ -323,7 +325,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     })
   }
 
-  /** Fully-qualified model-facing names (`mcp__<serverName>__<tool>`) of every disabled tool. */
+  /** 每个停用工具对模型的全名（`mcp__<serverName>__<tool>`）。 */
   function disabledToolNames(map: Record<string, string[]>): string[] {
     const out: string[] = []
     for (const serverName of Object.keys(map)) {
@@ -331,7 +333,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     }
     return out
   }
-  // ---------- 「已知工具」侧车（v0.8.1）-----------------------------------
+  // ---------- 「已知工具」侧车 -------------------------------------------
   // MCP 工具名只在服务器**运行**时可见（tools.schemas() 里才有）。未运行的服务器在
   // 场景档案里既显示 0 工具、工具明细也空空如也 —— 用户没法给未运行服务器挑工具。
   // 每次枚举到 live 工具时按 serverName 记一份「最后见过的工具名」，未运行时用它兜底：
@@ -360,7 +362,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   /**
    * 「已知工具」侧车的**读-改-写**，整段在写锁内。
    *
-   * 为什么不能「先 readKnownMcpTools() 再 writeKnownMcpTools()」（2026-09-30 审查 P2-15）：
+   * 为什么不能「先 readKnownMcpTools() 再 writeKnownMcpTools()」：
    * 这个侧车有两个并发写者 —— 列表轮询（`mcpmListView`，每次发现新工具就回写）与
    * 临时启动（`mcpmTools` 等到工具注册后回写）。两步之间是队外窗口，两个写者各读到同一份
    * 旧表、各并进自己那一台服务器的工具，后写的把先写的整份覆盖掉 —— 先那台的"曾经见过"
@@ -380,7 +382,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   /**
    * 把「这次 live 见到的工具」并进一份已知工具表；返回是否有变化。
    *
-   * **live 见到就整体替换那一台**（2026-10-19 用户实测：dhole 升级把 `smart_fetch` 一族改名成
+   * **live 见到就整体替换那一台**（用户实测：dhole 升级把 `smart_fetch` 一族改名成
    * `web_*` 之后，旧名字永远留在表里，详情页每轮都把死名字当「上次运行时」列出来，「刷新工具」
    * 也刷不掉 —— 它早先只要缓存非空就直接返回，而轮询路径的合并又是只进不出的并集）。理由：
    * 一台**正在运行**的服务器，它注册进来的工具集就是权威全貌，此刻已经不存在的旧名字留着，
@@ -421,7 +423,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     const enabled = (args && args.enabled) !== false
     const p = await deps.ensurePaths()
     return deps.withWriteLock(async () => {
-      // Force re-read so an externally edited disabled-tools file is merged, not clobbered.
+      // 强制重读：外部改过的停用表要被合并进来，不能被旧缓存覆盖掉。
       const read = await readDisabledToolsResult(true)
       if (read.status === 'corrupt' || read.status === 'unreadable') {
         return {
@@ -447,17 +449,16 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     })
   }
 
-  // Visibility seam: keep one active restriction per **agent scope**, refreshed whenever
-  // the tool set / the disabled set / this agent's carrier set changes. Three facts decide
-  // this design（都读过官方源码 dsh-tools 0.1.5-rc.2）：
+  // 可见性接缝：**每个 agent 作用域**只保留一条生效的 restriction，工具集 / 停用集 /
+  // 该 agent 的载体集任一变化就刷新。三条官方源码事实决定了这个设计：
   //   · `restrict()` **要求 scoped context** —— 插件级 ctx 调用必抛 "requires a scoped
-  //     context"，这正是「停用工具从模型可见 schema 消失」这半边此前从未生效的原因（V1）；
+  //     context"—— 这正是「停用工具从模型可见 schema 消失」这半边一直没生效的原因；
   //   · 每次 layer 变化（restriction 就是一次 layer effect）官方都会 emit `tools/change`
   //     （`layers = new ScopedLayers(…, () => this.ctx.emit("tools/change"))`），而重放正挂在
   //     `tools/change` 上 —— 名单没变还重放就是自激；
   //   · 表要取自**不受限**的插件级视图：在 agent scope 里取 `schemas()`，第一次限制生效后
   //     表里就没有被停用的工具了，第二次重放会把它从 deny 名单里筛掉 —— 停用静默复活。
-  // （2026-09-23：名单有三处来源，其中 `carrierHiddenTools` 逐 agent 不同，所以从"一份名单给
+  // （：名单有三处来源，其中 `carrierHiddenTools` 逐 agent 不同，所以从"一份名单给
   //  所有 agent"改成逐 agent 各装一层 —— 见下面 restrictAgent / appliedByAgent 的注释。）
   let restrictTimer: ReturnType<typeof setTimeout> | null = null
   /** 已应用名单的键；相同即返回（防自激，也让每次 tools/change 变成一次廉价判等）。 */
@@ -497,7 +498,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
       // 判据失败一律当"没有额外要藏的"：藏错了模型就少一条路，留着只是多花 token。
       try { extra = await deps.carrierHiddenTools(agent) } catch (e) { extra = [] }
     }
-    // 会话层的两个方向（0.21.2）：`deny` 追加、`allow` 从全局名单里减掉 —— 允许**减**
+    // 会话层的两个方向：`deny` 追加、`allow` 从全局名单里减掉 —— 允许**减**
     // 是关键：全局停用表（含场景引擎写的收窄）关着的工具，本会话显式拨开 / 场景勾着时
     // 要能重新看见，而全局一个字不动。名单已按注册全名算过（调用方用同一份 schemas），
     // 这里照样过一遍 registered 过滤 —— 认不出的名字官方 restrict 会直接抛。
@@ -511,7 +512,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
         }
       } catch { /* 取不到会话覆盖 = 按"没有额外要藏的"算（跟随全局） */ }
     }
-    // 模型工具表也按对话走（0.21.2）：本对话的整份名单可能重新打开全局关掉的工具，
+    // 模型工具表也按对话走：本对话的整份名单可能重新打开全局关掉的工具
     // 也可能关掉全局开着的工具 —— 与 MCP 覆盖同一层 deny，不各装一层。
     if (deps.sessionToolTableOverlay) {
       try {
@@ -583,7 +584,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   }
 
   async function applyToolRestrictions(): Promise<void> {
-    // 全局 tools 面上没有 restrict → 可见性半边整条做不成，如实上报（2026-09-30 审查 P2-8）。
+    // 全局 tools 面上没有 restrict → 可见性半边整条做不成，如实上报。
     // 此前这里是**裸 return**：停用工具仍留在模型可见的工具表里，而兼容页因为没有上报仍报
     // 一行"ok"，用户看到的是"停用了但工具还在"。与 `restrictAgent` 里那条 noteRuntime 同文案、
     // 同 id（noteRuntime 按 id 覆盖，两处不会互相刷屏）。
@@ -598,8 +599,8 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
       })
       return
     }
-    // Force re-read: this runs on the tools/change path, which is rare, so a
-    // stale cache must not keep an externally edited deny list hidden.
+    // 强制重读：这条走 tools/change 路径，频率低，但旧缓存绝不能把外部改过的停用名单
+    // 一直藏住。
     const read = await readDisabledToolsResult(true)
     const unknown = read.status === 'corrupt' || read.status === 'unreadable'
     const map = read.status === 'ok' ? read.value : emptyDisabledTools()
@@ -611,7 +612,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
       clearRuntimeNote('mcp-tool-visibility')
     } catch (e) {
       // 枚举不出工具表 = 这一轮摘不掉任何工具。执行侧 guard 仍拦得住，所以不是"能调"，
-      // 但"停用了却还看得见"必须上报 —— 相邻分支都有，这里是唯一静默放弃的一处（审查 N3）。
+      // 但"停用了却还看得见"必须上报 —— 相邻分支都有，这里是唯一静默放弃的一处。
       noteRuntime({
         id: 'mcp-tool-visibility',
         label: '停用工具的可见性',
@@ -652,7 +653,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     if (key === appliedNamesKey && deps.carrierHiddenTools === undefined && deps.sessionMcpOverlay === undefined && deps.sessionToolTableOverlay === undefined) return
     appliedNamesKey = key
     desiredNames = names
-    // **绝不无条件 lift**（0.21.2 自激振荡根因）：`liftRestriction` 会把 `appliedByAgent` 的键
+    // **绝不无条件 lift**：`liftRestriction` 会把 `appliedByAgent` 的键
     // 一并删掉，下一轮 `restrictAgent` 的逐 agent 键判等必然失配 → 拆了又装 → 装层又是一次
     // layer 变化 → 官方再 emit `tools/change` → 去抖后再来一轮 → 无限循环（界面表现为对话里
     // 反复播报「工具已更新 · 新增/移除 N 个」）。

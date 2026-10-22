@@ -1,4 +1,4 @@
-// 规则/记忆域的**场景 ops**（2026-09-19 从 memories/service.ts 的 createMemoriesService 闭包抽出）。
+// 规则/记忆域的**场景 ops**（从 memories/service.ts 的 createMemoriesService 闭包抽出）。
 //
 // 启用场景切换、场景记录增删改、场景锁、场景回收站（管场景记录与档案，与记忆回收站分开）、
 // 提示词改绑。动的是 index 的 scenes / active 切片与 AGENTS.md 投影，与记忆正文 ops 互不调用。
@@ -31,14 +31,14 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
   const { ensureLayout, invalidateSnapshot, presetExistsSync, memoriesRoot, refuseOutsideRoot, sceneRows, snapshot, stateDir } = rc
 
   /**
-   * 设置"启用场景"（全局持久化，切换后**下一个请求即生效**，§4 对照表）。
-   *   - `args.scenes` 数组 → 启用集合；**至多一个非保留场景**（用户裁定：除「全局」外
+   * 设置"启用场景"（全局持久化，切换后**下一个请求即生效**）。
+   *   - `args.scenes` 数组 → 启用集合；**至多一个非保留场景**（用户要求：除「全局」外
    *     同时只能启用一个），`[]` = 全部关闭（只留恒常的 `_shared` 与 `global`）
    *   - `args.all === true` → 旧的"全部启用"形态，与新模型冲突，明确拒绝（不猜）
    * 场景名按放宽后的规则校验；不存在的场景名也允许保存（目录随后创建即可生效）。
    */
   async function rulesSetActive(args: any): Promise<any> {
-    // 会话层切换**不走这里**（0.21.2，决策 14）：本 op 改的是索引里的全局 `active`，还会
+    // 会话层切换**不走这里**：本 op 改的是索引里的全局 `active`，还会
     // 触发场景模式的运行时应用（见 ops/scene-sync.ts 与 index.ts 的包装）。会话层切场景
     // 只改"本会话看到什么" —— 不切运行时、不写 AGENTS.md、不碰全局 active。
     // 带着 sessionId 调过来必须当场拒绝：静默切全局正是"A 切场景，B 也跟着变"的成因。
@@ -64,7 +64,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       const name = String(item == null ? '' : item).trim()
       // 恒常启用的保留场景不入显式集合：`_shared`（公共基线）与 `global`（「全局」）。
       if (name === '' || name === SHARED_GROUP || name === GLOBAL_SCENE) continue
-      // 启用集合里的场景名必须是**单个路径段**（2026-09-30 审查 P2-4）。此前这里走
+      // 启用集合里的场景名必须是**单个路径段**。此前这里走
       // `isValidGroupPath`，于是 `a/b` 这种多段名**通过校验并被写进 `active`**，但它压根
       // 不是一个场景：场景恒等于一级目录（见 `snapshot.ts` 的 `depth === 1` 与
       // `projection.ts` 的 `sceneOf`），注入时桶名是 `a`、`active` 里写的是 `a/b` ——
@@ -95,7 +95,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
    * 新建场景：写一条场景记录（索引 scenes 切片）+ 建空目录 `memories/<场景>/`。
    * 场景是**显式实体**——空场景（还没有记忆）也是合法场景，会出现在场景列表里。
    *
-   * 场景名的统一口径（2026-09-30 审查 P2-4 收敛，此前全仓分成两派）：
+   * 场景名的统一口径：
    *   - **命名路径**（新建 / 改名目标 / 启用集合）一律是**单个路径段**。场景恒等于一级目录
    *     （见 `snapshot.ts` 的 `depth === 1` 与 `projection.ts` 的 `sceneOf`），允许 `a/b`
    *     只会让「场景」与「场景内的分组」两套语义互相打架，而且启用时桶名对不上（静默失效）。
@@ -141,7 +141,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     }
     if (name === GLOBAL_SCENE) next.label = GLOBAL_SCENE_LABEL
     index.scenes[name] = next
-    // 模型工具表方案绑定（0.15.0 用户裁定：入口改到「修改场景」表单）：绑定存**档案**，
+    // 模型工具表方案绑定（入口在「修改场景」表单）：绑定存**档案**，
     // 只在真的绑了东西时才建档案存根 —— 不绑就保持「没有档案」的原语义
     //（没有档案与有空档案在进入场景的预览提示上不等价）。
     const toolTablePreset = args && args.toolTablePreset !== undefined ? String(args.toolTablePreset).trim() : ''
@@ -152,7 +152,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       if (!index.archives) index.archives = {}
       index.archives[name] = { ...(index.archives[name] || {}), toolTablePreset }
     }
-    // 快捷提示词勾选集（0.18.0）：同样存进**档案**。空数组也要落 —— 它说的是"进入后全部停用"，
+    // 快捷提示词勾选集：同样存进**档案**。空数组也要落 —— 它说的是"进入后全部停用"，
     // 与"没绑"（不碰这一域）是相反的意思。
     const quickCreate = quickPromptsArg(args)
     if (quickCreate) {
@@ -204,7 +204,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       else next.prompt = prompt
     }
     if (args && args.toolTablePreset !== undefined) {
-      // 模型工具表方案绑定（0.15.0 用户裁定：入口改到「修改场景」表单）：绑定存**档案**，
+      // 模型工具表方案绑定（入口在「修改场景」表单）：绑定存**档案**，
       // 记录与档案同在一份索引 JSON，这一次读-改-写顺带落掉。''= 解绑（删字段；档案因此
       // 变空时整条删掉，与档案保存「空档案不落条目」的约定一致）；不传这个参数 = 完全不碰
       // 这一域（旧调用方兼容）。绑了不存在的方案在这里不硬失败 —— 引擎在进出场景时按
@@ -221,7 +221,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       else delete index.archives[name]
     }
     if (args && args.quickPrompts !== undefined) {
-      // 快捷提示词勾选集（0.18.0，用户裁定入口在「修改场景」表单）：与工具表方案同一族 ——
+      // 快捷提示词勾选集（入口在「修改场景」表单）：与工具表方案同一族 ——
       // 绑定存**档案**，这一次读-改-写顺带落掉。`null` = 解绑（这一域回到"保持现状"）；
       // 空数组 = 绑定了但一条都没勾（进入后全部停用），**不是**解绑。不传这个参数 = 完全不碰。
       const quick = quickPromptsArg(args)
@@ -282,7 +282,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
           index.archives[nextRaw] = index.archives[name]
           delete index.archives[name]
         }
-        // 该场景下的**记忆条目**也要跟着换前缀（2026-09-30 审查 P1-1）。不迁的话：改名后
+        // 该场景下的**记忆条目**也要跟着换前缀。不迁的话：改名后
         // 旧键 `<旧场景>/<名>` 在磁盘上找不到对应文件，`buildSnapshot` 的清理会把它删掉
         // （见 `memories/snapshot.ts` 的"索引有记录但文件已删"分支）→ 那条记忆失去索引条目
         // → `projectRule` 的 `enabled ?? true` 把它**重新启用** —— 用户显式停用的记忆复活，
@@ -318,7 +318,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
   }
 
   /**
-   * 场景锁定（v0.8）：锁定后五个管理域（MCP/技能/子智能体/记忆/提示词）整体只读 ——
+   * 场景锁定：锁定后五个管理域（MCP / 技能 / 子智能体 / 记忆 / 提示词）整体只读 ——
    * 场景页的档案编辑与功能页的启停/编辑都被拒（index.ts 的 handlers 守卫 + 界面禁用），
    * 场景自身的启停（进/退模式）不受影响。`locked` 必须显式给布尔值（与 rules-toggle 同一口径）。
    * 保留场景 `global` 不在场景页出现，不可锁。
@@ -332,7 +332,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     }
     const index = await readIndex(stateDir)
     if (!index.scenes || !index.scenes[name]) return fail('error.rules.notFound', `场景不存在：${name}`)
-    // 未启动的场景不能上锁（用户裁定）：锁定的意义是冻结**运行中**场景的配置。
+    // 未启动的场景不能上锁：锁定的意义是冻结**运行中**场景的配置。
     // 解锁随时允许 —— 否则退出模式后，被锁的场景就没人能解了。
     if (args.locked === true && (!index.mode || index.mode.scene !== name)) {
       return fail('error.rules.sceneNotActive', `场景「${name}」未启动：先启动再锁定`)
@@ -348,7 +348,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
    * 同时删掉场景记录、把它从 `active` 集合里摘掉、清掉它的档案，避免悬空引用。
    * 保留场景 `global` 不可删除。
    *
-   * 场景名在这里按**完整路径**寻址（`isValidGroupPath`，2026-09-30 审查 P2-4）：命名路径
+   * 场景名在这里按**完整路径**寻址（`isValidGroupPath`）：命名路径
    * （创建 / 改名目标 / 启用集合）一律要求单段，而历史与导入留下的多段记录得能**被清掉** ——
    * 否则它就成了"看得见、动不了"的死条目。删除只是定位 + 移入回收站，多段名不会造成歧义。
    */
@@ -367,13 +367,13 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     if (index.mode?.scene === name) {
       return fail('error.rules.sceneInMode', `场景「${name}」正处在当前模式，请先退出模式再删除`)
     }
-    // 删除场景 = **连它下面的全部记忆一起去掉**（用户裁定）：不管有没有启用、是不是子目录、
+    // 删除场景 = **连它下面的全部记忆一起去掉**：不管有没有启用、是不是子目录、
     // 是不是 bundle 附件，统统收走。
     // 但一律**先移入回收站**（与场景记录、档案装在同一条条目里），所以「删错了」还能整条恢复：
     // 记忆文件按原来的相对路径放回，场景记录与档案也一起回来。
     const sceneDir = join(memoriesRoot, name)
     // 删除前先确认落点仍在根内（realpath 口径）—— 与 `rulesRemove` / `rulesRestore` 同一道闸。
-    // 为什么删除侧最需要它（2026-09-30 审查 P1-2，已实测复现）：`memories/<场景>` 若是指向根外的
+    // 为什么删除侧最需要它：`memories/<场景>` 若是指向根外的
     // 目录链接（用户手工建、或旧布局迁移带进来的），下面 `collect` 的 `readdir` 会**列出链接目标
     // 的内容**，于是 `from` 拼成 `<memoriesRoot>/<场景>/x.md` 看着在根内、`rename` 实际作用于
     // **根外的真实文件** —— 删除场景会把 `D:\重要数据` 里的文件搬进回收站。`isValidGroupSegment`
@@ -402,7 +402,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     }
     await collect(sceneDir, '')
     // 该场景下每条记忆的索引条目（enabled / order / tags / pinned / note）一并收进回收站条目
-    // 的 `data`（2026-09-30 审查 P1-1）。不带的话：恢复出来的记忆全部按 `enabled ?? true`
+    // 的 `data`。不带的话：恢复出来的记忆全部按 `enabled ?? true`
     // 重置 —— 用户停用的会复活，其余元数据归零。文件在回收站、元数据也得跟着在。
     const sceneRuleSubset: Record<string, unknown> = {}
     for (const id of Object.keys(index.rules || {})) {
@@ -428,7 +428,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       }
       // **回滚没做完就绝不 purge**：purge 会把条目整目录删掉，而没能放回的那些文件还在里面
       // —— 那是一次静默的**永久删除**（用户记忆），且场景目录还留在原地（一个被掏空的场景）。
-      // 宁可留一条脏条目（界面看得见、能再点一次恢复），也不要"删干净"（审查 P0-2）。
+      // 宁可留一条脏条目（界面看得见、能再点一次恢复），也不要"删干净"。
       if (rollbackFailed > 0) {
         return fail(
           'error.rules.ioFailed',
@@ -487,9 +487,9 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
   /**
    * 从回收站恢复一个场景：重建记忆目录 + 写回记录与档案。
    * 同名场景已存在时默认**拒绝**（绝不覆盖既有场景）；带 `dedupe: true` 时退号恢复
-   * （`甲` → `甲（1）`，用户 2026-10-14 裁定四个域都要能退号）。
+   * （`甲` → `甲（1）`，用户要求四个域都要能退号）。
    *
-   * 场景名按**完整路径**寻址（2026-09-30 审查 P2-4，与删除侧同口径）：回收站里的名字来自
+   * 场景名按**完整路径**寻址：回收站里的名字来自
    * 当初删掉的那条记录，多段名同样得能恢复回来 —— 否则删得掉、恢复不了，数据就卡在回收站里。
    */
   async function sceneTrashRestore(args: any): Promise<any> {
@@ -501,7 +501,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     const index = await readIndex(stateDir)
     let name = oldName
     if (index.scenes?.[name]) {
-      // 「同名先问一句」（用户 2026-10-14）：拒绝时把候选名字一起回（`params.next`），
+      // 「同名先问一句」（用户要求）：拒绝时把候选名字一起回（`params.next`），
       // 界面弹窗才能如实写出"确认后会叫 `甲（1）`"；用户确认后带 `dedupe: true` 重来。
       const next = nextFreeSceneName(index, name)
       if (args?.dedupe !== true || !next) {
@@ -518,7 +518,6 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     const dir = join(memoriesRoot, name)
     // 恢复是**写入**方向：落点若是指向根外的目录链接，`mkdir` 会顺着链接成功、随后
     // `moveOutOfTrash` 把记忆文件写到**根外**去。与删除侧同一个根因（缺 realpath 根内断言），
-    // 2026-09-30 审查 P1-2 的相邻面 —— 修一处必须一起修，否则只是把同一个洞挪了个方向。
     const deniedDir = await refuseOutsideRoot(dir)
     if (deniedDir) return deniedDir
     let entries: string[] = []
@@ -542,7 +541,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
       } catch (e) {
         // 已放回的文件**搬回回收站**再报错：原来这里是直接 return，已放回的那几个留在记忆目录里
         // —— 下一次点恢复会撞上面那条「目录里已有内容」的检查，于是这个场景**永远恢复不了**
-        // （审查 P0-2）。回滚失败也如实说清楚，别让用户以为还能原样重试。
+        // 。回滚失败也如实说清楚，别让用户以为还能原样重试。
         let backFailed = 0
         for (const doneRel of [...restored].reverse()) {
           try { await moveIntoTrash('scenes', id, join(dir, doneRel), doneRel) } catch { backFailed += 1 }
@@ -556,7 +555,7 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
     if (data.record && typeof data.record === 'object') index.scenes = { ...(index.scenes || {}), [name]: data.record as SceneIndexEntry }
     if (data.archive && typeof data.archive === 'object') index.archives = { ...(index.archives || {}), [name]: data.archive as SceneArchive }
     // 记忆条目随文件一起回来（删除时存进 `data.rules`，见 `rulesRemoveScene`）——
-    // 否则恢复出来的记忆全部按 `enabled ?? true` 重置，用户停用的会复活（审查 P1-1）。
+    // 否则恢复出来的记忆全部按 `enabled ?? true` 重置，用户停用的会复活。
     // **只补不覆盖**：同名键若已存在以现有为准（上面已拒绝同名场景，正常情况下不会撞）。
     //
     // 退号恢复时这批记忆的 key 也要**跟着改名**：索引里的 key 是 `<场景>/<名>`，照抄旧 key

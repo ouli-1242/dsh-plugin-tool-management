@@ -13,8 +13,10 @@ export type JsonFileRead =
   | { status: 'corrupt'; error: string }
   | { status: 'unreadable'; error: string }
 
+/** 停用表读不出来的两类问题：内容坏了，或文件读不了。 */
 export type DisabledToolsIssue = 'corrupt' | 'unreadable'
 
+/** 读停用表的四种结果 —— 「没有文件」与「读坏了」必须分开。 */
 export type DisabledToolsRead =
   | { status: 'ok'; value: Record<string, string[]>; warnings: string[] }
   | { status: 'missing' }
@@ -27,6 +29,7 @@ const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'p
 /** 与写入口 / 界面同一套工具名格式；不匹配的名字保留并上报，不升级为整表损坏。 */
 const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,128}$/
 
+/** 这个键是不是原型链污染那一类（`__proto__` / `constructor` 等），读写侧车时要拒掉。 */
 export function isUnsafeKey(key: string): boolean {
   return UNSAFE_KEYS.has(key)
 }

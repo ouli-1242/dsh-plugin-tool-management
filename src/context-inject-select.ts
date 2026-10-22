@@ -37,7 +37,7 @@ export interface InjectSection {
   form: InjectForm
   text: string
   /**
-   * 这一条是**差异行**而不是整份正文（0.21.2，见 `InjectDomain.delta`）：
+   * 这一条是**差异行**而不是整份正文（见 `InjectDomain.delta`）：
    * 框架层据此不套 `how` / 边界句 —— 那两句是整份目录的说明，配在一行差异上是假话。
    */
   delta?: boolean
@@ -46,7 +46,7 @@ export interface InjectSection {
 /**
  * 纯函数：按设置 + 预设事实 + 目标 agent 挑出本次要注入的域。
  *
- * 规则（设计 2026-09-16；目录注入深度 2026-09-17）：
+ * 规则（域开关 × 预设压制 × 注入深度）：
  *   - 域开关关掉的、文本为空的，都不进；
  *   - **压制型预设**且没开「仍然注入」→ 一个都不进（跟随预设）；
  *   - 域声明 `applicableTo` 说不成立的域不进（**深度判据逐域写**：场景与记忆只在顶层
@@ -55,18 +55,18 @@ export interface InjectSection {
  *     见 service.ts 里 `catalogDepth` 的注释）；
  *   - 有官方载体的两个域（提示词 / 技能目录）：预设挂得到官方那条行时不进
  *     —— 官方自己会送，再注入一遍只会重复；预设事实读不到（`undefined`）时按"已承载"处理
- *     （宁可与现状一致，也不制造重复）。**例外**（0.21.2）：域给了 `delta` 时，官方在送整份
+ *     （宁可与现状一致，也不制造重复）。**例外**：域给了 `delta` 时，官方在送整份
  *     这一轮只补一行本会话的差异 —— 接管整份会和官方第 1 轮那份并存，而那条已在历史里收不回；
  *   - 同一段文本出现两次只保留前一个（跨域保险）。
  *
- * `onError`（2026-09-30 审查 P1-8）：某个域的 `text()` **取数失败**时回调一次，并跳过该域。
+ * `onError`：某个域的 `text()` **取数失败**时回调一次，并跳过该域。
  * 为什么不能像原来那样静默吞成空串：调用方据此判定"该域这一轮没内容"，而下游还有一条
  * 「上一轮可见、这一轮没内容 → 发一条『已清空』」的通知 —— 于是一次取数失败会让模型收到
  * **假的"已清空"**，据此认为那份内容已失效，下一轮内容恢复后又重发一次。
  *
  * ⚠️ 这条通道**只认抛异常**，所以域的 `text()` 实现必须把"读失败"与"真的空"分开：
- * 返回空串一律被当成后者（2026-09-30 审查 F7 —— 修复第一版只覆盖了抛异常那一半，
- * 而真实世界里 IO 失败走的是 `catch → return ''` 那条路）。`src/memories/service.ts`
+ * 返回空串一律被当成后者 —— 而真实世界里 IO 失败走的正是 `catch → return ''` 那条路，
+ * 只防抛异常挡不住它。`src/memories/service.ts`
  * 的 `requireSceneMemory` / `sceneCatalog` / `readPresetTextSync` 已按此改。
  */
 export function selectInjections(
@@ -85,11 +85,11 @@ export function selectInjections(
     // 域自己不成立就不发（如人设目录的 catalogDepth 没覆盖到本会话的深度）。**这里没有开关，是刻意的**：
     // 曾经有个 `suppressInSubagentSessions` 想让这一步可选，但它是个空开关 —— 域不成立时
     // 正文自己也被过滤成空的（见 `subagents/catalog.ts` 的按深度过滤），两道闸条件相同，
-    // 开关只控制得了其中一道。留一个点了没反应的勾选框比没有更糟，所以删掉（2026-09-17）。
+    // 开关只控制得了其中一道。留一个点了没反应的勾选框比没有更糟，所以删掉。
     if (domain.applicableTo !== undefined && !domain.applicableTo(agent)) continue
     const carrier = CARRIER_FACT_OF[domain.key]
     // 官方载体已挂（或读不到预设、只能按已挂算）→ 不重复送整份。
-    // 但域给了 `delta` 时补一行本会话的差异（0.21.2）——**兜底路径**：正常装配下注入器
+    // 但域给了 `delta` 时补一行本会话的差异——**兜底路径**：正常装配下注入器
     // 已经在有差异时把官方载体从 `facts` 里摘掉（`carriesSkillCatalog: false`），于是这里
     // 走下面的整份分支；只有在接管判据未接上的旧装配 / 测试里才会走到这条差异行。
     if (carrier !== undefined && facts?.[carrier] !== false) {
@@ -127,16 +127,15 @@ export function selectInjections(
 export type InjectReason = 'off' | 'official' | 'empty' | 'sent' | 'child' | 'error'
 
 /**
- * 纯函数：某一步某域**该不该发一条「已清空」**（2026-10-22 从注入器抽出来，便于测试）。
+ * 纯函数：某一步某域**该不该发一条「已清空」**（从注入器抽出来，便于测试）。
  *
  * 通知的字面意思是"这份内容已失效，别再用"。所以只有当"上一轮确有一条内容、这一轮确实
  * 一条都没有"时才发 —— 下面四种情形下那句话是假话，一条都不能发：
  *
  *   · 从没注入过这个域（没有旧内容要作废）；
- *   · 最新一条已经是通知了（再发就是每轮刷屏，2026-10-19 用户实测）；
- *   · 这一轮取数失败（"没读到"≠"没有了"，审查 P1-8）；
+ *   · 最新一条已经是通知了（再发就是每轮刷屏，用户实测）；
+ *   · 这一轮取数失败（"没读到"≠"没有了"）；
  *   · 这一轮数据还没到手（`pending`：首轮 / LRU 顶掉 / 写操作后正在重算 ——
- *     2026-10-22 用户实测的那条假「已清空」正是漏了这一格）。
  */
 export function shouldAnnounceCleared(input: {
   published: boolean
@@ -166,7 +165,7 @@ export function shouldAnnounceCleared(input: {
  *
  * ⚠️ 这里**故意不镜像** `selectInjections` 开头那条"压制型预设一个都不进"的提前返回：
  * 该分支下本函数仍按各域自身的原因作答，于是压制型预设 + 没开「仍然注入」时，
- * 界面看到的是"未投递"（琥珀）而不是"已关闭"（灰）。这是 0.9.1 的既有行为，本次未改，
+ * 界面看到的是"未投递"（琥珀）而不是"已关闭"（灰）。这是既有行为，本次未改，
  * 改动它属于另一个话题（"跟随预设"到底该报成故障还是报成选择）。
  */
 export function explainInjections(
@@ -191,8 +190,8 @@ export function explainInjections(
       continue
     }
     // 取数失败过 → 报 `error` 而不是 `empty`：两者在界面上的含义完全不同（一个是故障、
-    // 一个是"本来就没内容"），而原来这条路上永远只能看到后者（审查 P1-8）。`failed` 由调用方
-    // 从 `selectInjections` 的 `onError` 收集；**只认抛异常**，返回空串仍算 `empty`（F7）。
+    // 一个是"本来就没内容"），而原来这条路上永远只能看到后者。`failed` 由调用方
+    // 从 `selectInjections` 的 `onError` 收集；**只认抛异常**，返回空串仍算 `empty`。
     if (failed?.has(domain.key)) { reasons[domain.key] = 'error'; continue }
     let text = ''
     try { text = String(domain.text(agent) ?? '') } catch { text = '' }

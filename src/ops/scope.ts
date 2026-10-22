@@ -1,4 +1,4 @@
-// 会话作用域的 HTTP op（P1：状态层，2026-10-19；四层模型 0.21.2）。
+// 会话作用域的 HTTP op（状态层；四层模型）。
 //
 //   scope-get            只读：某个会话的覆盖 + 全局快照 + 生效差异（空 sessionId = 全局层）
 //   scope-set            写：设一个键（布尔开关）/ 进出一个场景
@@ -9,20 +9,20 @@
 //
 // ## 为什么这几条都不标 frozen
 //
-// 场景锁（`index.scenes[n].locked`）冻结的是**全局**写入（决策 11）。会话覆盖是叠加在
+// 场景锁（`index.scenes[n].locked`）冻结的是**全局**写入。会话覆盖是叠加在
 // 全局之上的视图偏好，它改不动任何全局状态 —— 全局那一份在锁着的时候本来就没人能改。
 // 让场景锁连"本会话先别看这个服务器"也一起挡住，等于把一个视图开关关进写门禁，
 // 用户能做的只有"解锁 → 改 → 再锁上"，而那个空窗期恰恰是锁要防的。
 //
-// 会话锁（决策 12）是另一把锁，只冻结**这个会话自己**的 `scope-set` / `scope-clear`。
+// 会话锁是另一把锁，只冻结**这个会话自己**的 `scope-set` / `scope-clear`。
 // `scope-lock` 自己不能被它挡住，否则锁上就解不开了（与 `rules-scene-lock` 同一条）。
 //
-// ## 场景模式（0.21.2）：`scope-set` 的 scene 分支 = 进出场景
+// ## 场景模式：`scope-set` 的 scene 分支 = 进出场景
 //
 // `value` 给场景名 = **进入**该场景（本会话）；`value` 给 null / 空串 = **退出场景**。
 // 两件事都只写会话侧车；进入后跑一轮意图对账 —— 场景勾中的全局关着的服务器 / 来源成为
 // **租约**（运行起来，但意图仍是 off，别的会话看不到）。见 `deps.reconcile`。
-// 模型工具表（0.21.2）：场景绑了方案就在进入这一次**套到本对话**（不改全局那份），
+// 模型工具表：场景绑了方案就在进入这一次**套到本对话**（不改全局那份）
 // 退出时连本对话在场景里改过的一起清掉，回到创建时抄的基线。
 //
 // ## 为什么 `scope-set` 不接"写全局"
@@ -69,7 +69,7 @@ export interface ScopeSessionRow {
   title: string
   /** 覆盖条目数（`scene` 算一条）。 */
   count: number
-  /** 已归档（决策 13：归档会话的覆盖保留，但不出现在下拉框里）。 */
+  /** 已归档（归档会话的覆盖保留，但不出现在下拉框里）。 */
   archived: boolean
   /** 工作区目录：下拉框按它分组（空串 = 未归属）。 */
   cwd?: string
@@ -79,10 +79,11 @@ export interface ScopeSessionRow {
   sessions?: number
 }
 
+/** 会话覆盖 op 的依赖：覆盖存储 + 会话键解析。 */
 export interface ScopeOpsDeps {
   store: ScopeStore
   /**
-   * 把外部给的 `sessionId` / 作用域键折成**当前模式**的作用域键（0.21.2）。
+   * 把外部给的 `sessionId` / 作用域键折成**当前模式**的作用域键。
    *
    * 面板传的是选中的层键；斜杠菜单 / 旧调用仍传真实 sessionId —— 工作区模式下必须折到
    * `ws:<cwd>`，否则会写进一条永远读不到的会话记录。缺省 = 原样使用（兼容测试/旧装配）。
@@ -91,7 +92,7 @@ export interface ScopeOpsDeps {
   /** 当前隔离粒度（同步读 store 缓存；缺省 = session）。 */
   mode?(): ScopeMode
   /**
-   * 模式切换之后的通知（0.21.2）：重排工具可见性、刷新两个目录、跑一轮不采纳的意图对账。
+   * 模式切换之后的通知：重排工具可见性、刷新两个目录、跑一轮不采纳的意图对账。
    * 通知失败绝不能把已经落盘的模式切换报成失败。
    */
   onModeChanged?(mode: ScopeMode): void
@@ -112,7 +113,7 @@ export interface ScopeOpsDeps {
   /** 场景存在吗（进入前校验；不接 = 不校验）。 */
   sceneExists?(scene: string): Promise<boolean>
   /**
-   * 场景绑定的模型工具表方案（0.21.2）：返回关停名单；方案不存在返回 null。
+   * 场景绑定的模型工具表方案：返回关停名单；方案不存在返回 null。
    * 进入场景时**套到本对话**（不是改全局）—— 工具表是每个对话自己的整份名单。
    */
   toolTablePresetHidden?(name: string): Promise<string[] | null>
@@ -124,7 +125,7 @@ export interface ScopeOpsDeps {
    */
   captureBaseline?(): Promise<SessionBaseline | null>
   /**
-   * 跑一轮意图对账（0.21.2）：运行态 := 意图 ∪ 租约。
+   * 跑一轮意图对账：运行态 := 意图 ∪ 租约。
    *
    * 写会话覆盖 / 写全局意图之后都调它 —— 新写入的"开"是一条租约，服务器 / 来源要跟着
    * 被拉起来；写入的"关"若带走了最后一个租约，也要跟着停。返回逐条结果（失败与刚拉起的
@@ -144,7 +145,7 @@ export interface ScopeOpsDeps {
    */
   promptTextOf?(sessionId: string): string
   /**
-   * 确保本会话的提示词**冻结快照**已捕获（首次写会话提示词前调一次，0.21.2 复核）。
+   * 确保本会话的提示词**冻结快照**已捕获（首次写会话提示词前调一次）。
    *
    * 快照平时由注入侧首见捕获；但"面板先于第一条消息打开、先写了会话正文"这条路上没人
    * 捕获过 —— 之后「恢复全局」会退到**当时的**全局文件，而不是会话出生时那份。
@@ -152,7 +153,7 @@ export interface ScopeOpsDeps {
    */
   ensurePromptBaseline?(sessionId: string): string | undefined
   /**
-   * 覆盖写入成功后的通知（0.21.2）。`domain` = 这一笔改的域；清除整个会话时按 `''` 报。
+   * 覆盖写入成功后的通知。`domain` = 这一笔改的域；清除整个会话时按 `''` 报。
    *
    * 用途只有一处：MCP 会话覆盖会改变「本会话可见的工具」，而可见性层（官方
    * `tools.restrict`）只在 `tools/change` 时重排 —— 写侧不动它，界面拨回开关后模型
@@ -168,7 +169,7 @@ function scopeOrEmpty(overrides: ScopeOverrides, sessionId: string): SessionScop
 }
 
 /**
- * 全局粒度下写会话层的统一拒绝文案（0.21.2+）。
+ * 全局粒度下写会话层的统一拒绝文案。
  *
  * 三条写 op（`scope-set` / `scope-clear` / `scope-lock`）共用一句：它们都收一个具体
  * sessionId，而全局粒度下那个身份没有可写的格子。静默转成全局写入是不行的 —— 用户点的是
@@ -176,6 +177,7 @@ function scopeOrEmpty(overrides: ScopeOverrides, sessionId: string): SessionScop
  */
 const GLOBAL_MODE_NO_LAYER = '隔离已关闭（全局模式）：没有会话层可写。要改就改全局设置，或在界面上把隔离粒度调成「按对话」/「按工作区」。'
 
+/** 会话作用域的 op：状态、四层并值、覆盖读写与租约认领。 */
 export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) => Promise<any>> {
   /** 当前隔离粒度（同步；没接 = session）。 */
   const modeOf = (): ScopeMode => deps.mode?.() ?? 'session'
@@ -310,7 +312,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
           return { ok: false, error: '读取全局状态失败: ' + deps.message(e) }
         }
       }
-      // 空 sessionId = **全局层**（0.21.2）：面板停在「全局默认」时也走这一条，拿到的
+      // 空 sessionId = **全局层**：面板停在「全局默认」时也走这一条，拿到的
       // `global` 与切到某个会话时同一份（意图三态 + 租约计数都在里面）。
       if (!rawId) return await globalLayer()
       // 全局粒度：这个会话没有自己的格子 —— 回答"它看到什么"就等同于全局层。走这一条
@@ -336,10 +338,10 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
             : { scene: raw.baseline.scene, capturedAt: raw.baseline.capturedAt ?? null },
           overrides: scope ?? {},
           effective: effectiveDiff(raw, archive, global),
-          // 本对话自己的工具表名单（0.21.2）：null = 没有显式设置，跟随基线/全局。
+          // 本对话自己的工具表名单：null = 没有显式设置，跟随基线/全局。
           toolTableHidden: raw?.toolTableHidden ?? null,
-          // 提示词覆盖（0.21.2）：`override` 只回用户写的那一半（content / presetId 二选一）
-          // —— 冻结快照是系统元数据，不混进"覆盖"（0.21.2 第三轮）。
+          // 提示词覆盖：`override` 只回用户写的那一半（content / presetId 二选一）
+          // —— 冻结快照是系统元数据，不混进"覆盖"。
           // `effective` 是用户级那一槽此刻的正文（含快照链；界面编辑本会话正文时预填）。
           prompt: {
             override: promptOverrideOf(raw) ?? null,
@@ -353,7 +355,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
     'scope-set': async (args: any) => {
       const rawId = String((args && args.sessionId) || '').trim()
       if (!rawId) return { ok: false, error: '缺少 sessionId' }
-      // 全局粒度（0.21.2+）：没有会话层可写。这里**必须挡**而不是静默改全局 —— op 的入参
+      // 全局粒度：没有会话层可写。这里**必须挡**而不是静默改全局 —— op 的入参
       // 是一个具体 sessionId，调用方以为自己在改那一格；把它转成机器级写入就是一次无声的扩大。
       if (modeOf() === 'global') return { ok: false, error: GLOBAL_MODE_NO_LAYER }
       const sessionId = await resolveKey(rawId)
@@ -404,7 +406,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         // 场景档案只读一次：工具表套用与下面的租约回执都要用。
         let archive: SceneArchive | undefined
         try { archive = deps.sceneArchiveOf?.(wanted) } catch { archive = undefined }
-        // 模型工具表（0.21.2）：场景绑了方案就把**本对话**的整份关停名单换成那份；
+        // 模型工具表：场景绑了方案就把**本对话**的整份关停名单换成那份
         // 没绑就不碰（对话自己调过的工具表保持原样）。方案不存在时也不拦进入，
         // 只是保持原样并给一条警告 —— 其余域照常进入。
         const toolTablePreset = archive !== undefined && typeof archive.toolTablePreset === 'string'
@@ -423,7 +425,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         /**
          * 旧场景是否绑定过工具表方案。切场景时它的名单已经抄进了本会话的
          * `toolTableHidden` —— 新场景没绑（或绑定方案已不存在）时不能再留着它，
-         * 否则"换了个场景、工具表还是上一个场景的"（0.21.2 复核）。
+         * 否则"换了个场景、工具表还是上一个场景的"。
          * 同场景重进不删（那是"重新应用"的场景表单语义）。
          */
         const oldScenePreset = (scope: SessionScope | undefined): string => {
@@ -433,7 +435,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         let droppedPrevSceneToolTable = false
         // 进入场景：先落覆盖（这一步定义了这个会话的认领），再跑一轮对账 —— 场景勾中的
         // 全局关着的服务器 / 来源会成为租约：连接 / 来源被拉起来，但**意图保持 off**，
-        // 别的会话看不到它们（用户裁定「仍按租约运行」）。
+        // 别的会话看不到它们（「仍按租约运行」）。
         const res = await deps.store.mutate(sessionId, (cur) => {
           let next = enterSceneInScope(cur, wanted).scope
           if (baseline !== null) next = withBaseline(next, baseline).scope
@@ -550,7 +552,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
       /** 这次写的是"压制子项推导"的显式上层关（不是自动清除）。 */
       let suppressed = false
       const res = await deps.store.mutate(sessionId, (cur) => {
-        // 锁内按重读出来的 `cur` 重算下层，同值自动清除也随之重判（写路径原子性，0.21.2 复核）。
+        // 锁内按重读出来的 `cur` 重算下层，同值自动清除也随之重判（写路径原子性）。
         // blocked 检查**不在这里**：它用的是锁外那份全局意图快照，本意是快速拒绝；这里只保证
         // 「下层是谁」与落盘判定同源。
         const parent = parentValueOf(cur, archiveOf(cur), global, domain, key)
@@ -590,12 +592,12 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         const report = await deps.reconcile().catch(() => undefined)
         if (value) warnings = reconcileWarnings(report, intentTargetsOf(domain, key))
       }
-      // `cleared` = 这次写入等于下层值，覆盖被自动清掉（决策 3）。压制子项推导时写的是一条
+      // `cleared` = 这次写入等于下层值，覆盖被自动清掉。压制子项推导时写的是一条
       // 真实覆盖（哪怕它等于下层），不能报成"已清除"。
       return { ok: true, sessionId, domain, key, value, cleared: !suppressed && value === parent.value, ...(warnings.length > 0 ? { warnings } : {}), scope: res.scope ?? {} }
     },
     /**
-     * 会话级提示词覆盖（0.21.2）：apply / unapply / edit。
+     * 会话级提示词覆盖：apply / unapply / edit。
      *
      * 只写侧车 `prompt` 域，**永不写** `~/.dsh/AGENTS.md`；场景锁不拦（它只冻结全局写），
      * 会话锁照常拦（与 `scope-set` 同一个 `lo` 判据）。预设被删后解析时退化到下一层
@@ -612,7 +614,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         const res = await deps.store.mutate(sessionId, (cur) => {
           if (cur === undefined || cur.prompt === undefined) return cur
           const next: SessionScope = { ...cur }
-          // 只清用户覆盖，**快照留着**（0.21.2 第三轮）：取消应用要回到本会话冻结的基线，
+          // 只清用户覆盖，**快照留着**：取消应用要回到本会话冻结的基线
           // 不是回到此刻的全局文件。把整个 prompt 删掉会让下一轮重新捕获当前文件，
           // 等于"取消应用顺手解冻"。
           const baseline = cur.prompt.baseline
@@ -628,7 +630,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         if (rawPreset === '') return { ok: false, error: '缺少 presetId' }
         // 与预设库 / 场景绑定同一套 id 规则（`presets/preset-id.ts`）：id 同时是磁盘目录名，
         // 这里的校验挡住分隔符与 `..` —— 只按长度 / 控制字符放行时，一个构造出来的 id 能让
-        // 注入侧读到预设目录之外的同名 AGENTS.md（0.21.2 复核）。
+        // 注入侧读到预设目录之外的同名 AGENTS.md。
         const normalized = normalizePresetId(rawPreset)
         if (!normalized.ok) return { ok: false, error: normalized.error }
         const presetId = normalized.id
@@ -676,7 +678,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
     'scope-clear': async (args: any) => {
       const rawId = String((args && args.sessionId) || '').trim()
       if (!rawId) return { ok: false, error: '缺少 sessionId' }
-      // 全局粒度（0.21.2+）：没有会话层可写。这里**必须挡**而不是静默改全局 —— op 的入参
+      // 全局粒度：没有会话层可写。这里**必须挡**而不是静默改全局 —— op 的入参
       // 是一个具体 sessionId，调用方以为自己在改那一格；把它转成机器级写入就是一次无声的扩大。
       if (modeOf() === 'global') return { ok: false, error: GLOBAL_MODE_NO_LAYER }
       const sessionId = await resolveKey(rawId)
@@ -742,7 +744,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
       }
       return { ok: true, sessionId, domain, ...(key === '' ? {} : { key }), scope: res.scope ?? {} }
     },
-    // 列**当前会话区里的未归档会话**（用户 2026-10-20：按工作区分组，像来源目录那样）——
+    // 列**当前会话区里的未归档会话**（用户 ：按工作区分组，像来源目录那样）——
     // 只列有覆盖的那些会让用户找不到还没动过的对话；归档、未挂回工作区的孤儿，以及
     // 从没发过消息的空壳都不列（覆盖留着，恢复后自然回来）。空壳判定见下面的 summaryOf：
     // 侧栏也不显示它们，列进来只会是一串同名条目。当前会话永远在（否则下拉框会把它
@@ -752,12 +754,12 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
       try {
         const [overrides, rows] = await Promise.all([deps.store.read(), deps.sessions()])
         const mode = overrides.mode
-        // 侧车 GC（0.21.2）：剪掉宿主**已不认识**的会话条目。判据由 store 自己取
+        // 侧车 GC：剪掉宿主**已不认识**的会话条目。判据由 store 自己取
         // （宿主已知的全部会话，含归档与未挂回工作区的孤儿）—— 这里手头这份 `rows` 是
         // 展示口径（按当前会话区成员过滤过），拿它当判据会把孤儿会话的覆盖一并抹掉。
         // 不 await：剪枝失败不该让下拉框空掉，下一轮会再剪。
         void deps.store.pruneDeletedSessions().catch(() => { /* 下一轮再剪 */ })
-        // 运行态自愈（0.21.2 第四轮，裁决 3）：面板每次挂载 / 会话清单变化都会拉这一条，
+        // 运行态自愈：面板每次挂载 / 会话清单变化都会拉这一条，
         // 顺手排一轮**不采纳**的对账 —— 删除 / 归档 / 恢复 / 重启都不走插件的写 op，
         // 没有任何触发点可挂，这里是它们唯一的落点。对账幂等、无差异不写盘，
         // 读的成本与 `scope-get` 同量级。不 await：回执照旧，对账失败也不该让下拉框空掉。
@@ -776,7 +778,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
 
         // 标题补全 + 空壳过滤：持久化表头里没有标题，摘要直接读宿主的投影缓存文件
         // （`summaryOf`）。**从没发过消息的会话**（titleInput.count = 0）不在侧栏的
-        // 当前会话区里，也不进下拉 —— 只剩一串同名空条目（用户 2026-10-20 实测）。
+        // 当前会话区里，也不进下拉 —— 只剩一串同名空条目（用户 实测）。
         // 当前会话永远在（哪怕刚建、还没有第一条消息）；读不到摘要时也不过滤。
         const candidates: ScopeSessionRow[] = []
         for (const row of rows) {
@@ -875,7 +877,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
       }
     },
     /**
-     * 切换隔离粒度（0.21.2）：会话 ↔ 工作区。
+     * 切换隔离粒度：会话 ↔ 工作区。
      *
      * 播种规则（决策：**首次进入一侧时用另一侧已有设置初始化，已有记录一律保留**）：
      *   · 切到工作区：每个工作区**还没有** `ws:` 记录时，用当前会话（若属于该工作区）或
@@ -898,14 +900,14 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         if (overrides.mode === wanted) return { ok: true, mode: wanted, seeded: 0 }
         const seeds: Record<string, SessionScope | undefined> = {}
         /**
-         * 坍缩摘要（2026-10-21 审查 P1-2）：切到工作区粒度时，N 个会话的个性化设置
+         * 坍缩摘要：切到工作区粒度时，N 个会话的个性化设置
          * 必须收敛成 1 份，规则是「当前会话优先，否则项数最多」。这个选择此前对用户
          * 完全不可见 —— 一次点击丢掉几十份配置，界面上只说「同一个工作区共用一份设置」。
          * 这里如实回报：涉及多少工作区、多少会话本来带设置、其中多少份没被采用。
          */
         let summary: { workspaces: number; conversations: number; dropped: number } | undefined
         /**
-         * 关闭隔离时的存量摘要（0.21.2+）。`global` 粒度不删除任何记录、也不播种 ——
+         * 关闭隔离时的存量摘要。`global` 粒度不删除任何记录、也不播种 ——
          * 那些会话 / 工作区设置原样躺在侧车里，切回来就恢复。但用户在界面上看不到这一点，
          * 很容易以为「切到全局 = 设置被清掉了」。这里报个数，让提示语能说"还留着 N 份"。
          */
@@ -964,7 +966,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         } else if (wanted === 'session') {
           for (const row of rows) {
             if (row.archived === true) continue
-            // 判据是「用户真在这一层设过什么」，不是「有没有这条记录」（2026-10-21 审查 P1-1）。
+            // 判据是「用户真在这一层设过什么」，不是「有没有这条记录」。
             // `ensureBaselineFor` 在每个 `agent/created` 都会写一条只有 `baseline` 的记录，
             // 所以 `!== undefined` 对所有会话恒真 —— 播种永远不执行，工作区期间的配置
             // 永远带不回老会话。`overrideCountOf` 不计基线、但**计入显式的 false**
@@ -993,7 +995,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         return { ok: false, error: '切换失败: ' + deps.message(e) }
       }
     },
-    // 全局意图（0.21.2）：MCP 服务器 / 技能来源两格的**全局开关**写这里，不再直接改补丁 /
+    // 全局意图：MCP 服务器 / 技能来源两格的**全局开关**写这里，不再直接改补丁 /
     // 来源状态 —— 后者是运行态，由对账器维持成 `意图 ∪ 租约`。三态里只有 `blocked`（界面的
     // 「彻底停止」）会连租约一起停；`off` 在有租约时保持连接运行，只是别的会话看不到。
     'scope-intent-set': async (args: any) => {
@@ -1026,7 +1028,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
     'scope-lock': async (args: any) => {
       const rawId = String((args && args.sessionId) || '').trim()
       if (!rawId) return { ok: false, error: '缺少 sessionId' }
-      // 全局粒度（0.21.2+）：没有会话层可写。这里**必须挡**而不是静默改全局 —— op 的入参
+      // 全局粒度：没有会话层可写。这里**必须挡**而不是静默改全局 —— op 的入参
       // 是一个具体 sessionId，调用方以为自己在改那一格；把它转成机器级写入就是一次无声的扩大。
       if (modeOf() === 'global') return { ok: false, error: GLOBAL_MODE_NO_LAYER }
       const sessionId = await resolveKey(rawId)

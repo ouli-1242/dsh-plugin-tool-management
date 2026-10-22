@@ -1,5 +1,5 @@
-// cordis.patch.yml 的「受管 loader 行」读写层 —— 2026-09-19 从 index.ts 的 apply 闭包
-// 原样抽出（07 审查五档问题 3：巨型单文件）。这里是所有 MCP 写路径的**唯一** YAML 出口：
+// cordis.patch.yml 的「受管 loader 行」读写层 —— 从 index.ts 的 apply 闭包
+// 原样抽出（巨型单文件）。这里是所有 MCP 写路径的**唯一** YAML 出口：
 // 生成（buildInsertBlock / buildDisableBlock）、解析（parseRows，供界面读生效值）、
 // 行级块编辑（removeEntryAll / removeMarked / appendBlock / spliceRanges）。
 // 纯字符串运算，不碰 ctx / 文件系统 —— 读写盘由调用方负责。
@@ -7,6 +7,7 @@ import { MCP_CLIENT_MODULE } from '../host-names.js'
 import { isMaskedUrl, maskedKeysIn } from './secret-guard.js'
 import { readToggleEntry } from './override-blocks.js'
 
+/** 补丁里一行受管条目：id、服务器名、层级与生效停用态。 */
 export interface ManagedRow {
   id: string
   name?: string
@@ -21,6 +22,7 @@ export interface ManagedRow {
 function yq(v: unknown): string { return typeof v === 'string' ? JSON.stringify(v) : String(v) }
 function yplain(v: string): string { return /^[A-Za-z0-9_.:@%+=/-]+$/.test(v) ? v : yq(v) }
 
+/** 生成一条 insert 补丁块（含本插件的归属标记行，供后续定位与清理）。 */
 export function buildInsertBlock(row: { id: string; serverName: string; transport: string; url?: string; command?: string; args?: string[]; env?: Record<string, string>; headers?: Record<string, string>; toolCallTimeoutMs?: number }): string {
   const lines = [
     '# dsh-plugin-tool-management:server:' + row.id,
@@ -53,7 +55,7 @@ export function buildInsertBlock(row: { id: string; serverName: string; transpor
       for (const k of ek) lines.push('          ' + yq(k) + ': ' + yq(env[k]))
     }
   }
-  // 超时值只在**能解析成有限数、且非 0** 时才写这一行（2026-09-30 审查 P2-13）。
+  // 超时值只在**能解析成有限数、且非 0** 时才写这一行。
   // 此前是 `if (row.toolCallTimeoutMs)`：手写补丁里这个键被读成字符串（`unquote` 只认纯数字），
   // 于是 `"30s"` / `"abc"` 这类值会走 `Number()` → `NaN` 落盘，补丁里出现一个**不是数字**的
   // `toolCallTimeoutMs` —— 宿主读到的要么是字符串、要么是 YAML 里的字符串 "NaN"，两种都不是
@@ -64,10 +66,10 @@ export function buildInsertBlock(row: { id: string; serverName: string; transpor
   }
   // 结构性兜底：这里是所有 MCP 写路径的**唯一** YAML 出口。打码值到这一步还没被拦下，
   // 说明某个调用点漏过了 ./secret-guard.js —— 那是代码缺陷，宁可整次写入失败，
-  // 也不能把 `••••••` 写进补丁文件（真密钥一旦被覆盖就找不回来了：本机 2026-09-18
+  // 也不能把 `••••••` 写进补丁文件（真密钥一旦被覆盖就找不回来了：本机 
   // `TAVILY_API_KEY` 就是这样丢的）。所以这里**抛错**而不是静默剔除。
   //
-  // 两种形态都查（2026-09-30 审查 F4 补上第二种）：env / headers 的整串 `•`，
+  // 两种形态都查：env / headers 的整串 `•`，
   // 以及 URL 的 userinfo / 查询串 / 片段哨兵（`isMaskedUrl`）。此前只有前者，
   // 注释自己写着"URL 的打码是另一套……不在这里"—— 于是 `mcpmAdd` 与 `mcpmImport`
   // 两条写路径都没有 `resolveMaskedUrl`，打码 URL 会原样落盘，**且不产生任何 warning**。
@@ -83,6 +85,7 @@ export function buildInsertBlock(row: { id: string; serverName: string; transpor
   return lines.join('\n')
 }
 
+/** 生成一条启停覆盖块：`disabled: true` 停用，`false` 打开。 */
 export function buildDisableBlock(id: string, disabled: boolean): string {
   return [
     '# dsh-plugin-tool-management:' + (disabled ? 'disable' : 'enable') + ':' + id,
@@ -93,15 +96,14 @@ export function buildDisableBlock(id: string, disabled: boolean): string {
 }
 
 // ---------- YAML parsing (mini parser) ----------
-// Known limitation: this hand-rolled parser assumes the exact indentation
-// style that buildInsertBlock emits (config at 6 spaces, children at 8,
-// nested maps/lists at 10+). Hand-edited patch files using different
-// indentation may parse incorrectly — DSH itself only cares about the
-// effective YAML it reads, and this parser exists purely for the UI.
+// 已知限制：这个手写解析器只认 `buildInsertBlock` 自己写出的缩进（config 6 空格、子项 8、
+// 嵌套 map / 列表 10 起）。手工改过缩进的补丁可能解析错 —— DSH 自己只看它读到的生效 YAML，
+// 这个解析器纯粹是给界面用的。
 function splitKV(text: string): { key: string; value: string } | null {
   const m = text.match(/^("(?:\\.|[^"])*"|'[^']*'|[^:]+?)\s*:\s*(.*)$/)
   if (!m) return null
-  return { key: unquote(m[1]), value: m[2] }
+  // 两个捕获组都非可选，match 命中即恒为 string。
+  return { key: unquote(m[1]!), value: m[2]! }
 }
 function unquote(v: string): any {
   if (v === undefined || v === null) return v
@@ -138,7 +140,7 @@ function parseEntry(lines: string[]): { id?: string; name?: string; disabled?: b
       if (kv.key === 'id') entry.id = unquote(kv.value)
       else if (kv.key === 'name') entry.name = unquote(kv.value)
       else if (kv.key === 'disabled') {
-        // 只认**字面量** true / false（2026-09-30 审查 P2-6）：`!!js` 这类读不出来的写法
+        // 只认**字面量** true / false：`!!js` 这类读不出来的写法
         // 此前被算成**显式 false**，于是"读不出来"与"明确启用"混成同一个值 —— 覆盖块会拿它
         // 去改写当前生效值（`parseRows` 的 `entry.disabled !== undefined` 那道闸因此失效）。
         // 读不出来就保持 `undefined` = 不表态，让生效值维持原样。
@@ -190,11 +192,12 @@ function splitInsertChildren(blockText: string): string[][] {
   const parts = blockText.split('\n')
   const children: string[][] = []
   let j = 0
+  // 三处下标都落在 `< parts.length` 的分支里，取值必然存在。
   while (j < parts.length) {
-    if (/^    - /.test(parts[j])) {
-      const lines = [parts[j]]
+    if (/^    - /.test(parts[j]!)) {
+      const lines = [parts[j]!]
       j++
-      while (j < parts.length && !/^    - /.test(parts[j])) { lines.push(parts[j]); j++ }
+      while (j < parts.length && !/^    - /.test(parts[j]!)) { lines.push(parts[j]!); j++ }
       children.push(lines)
     } else j++
   }
@@ -207,7 +210,7 @@ function splitInsertChildren(blockText: string): string[][] {
  * 为什么不能复用 `parseRows`：它只收 `name === MCP_CLIENT_MODULE` 的行（本插件只管 MCP），
  * 而「两条同 id 的 insert 会让插件组装失败、**DSH 起不来**」这个约束对**任何** loader 都成立。
  * 只统计 MCP 行的话，导入一条非 MCP loader 就能撞出第二条同 id 条目而守卫看不见
- * （2026-09-30 审查 P1-5）。
+ * 。
  *
  * 只收 **insert 子条目**，不收顶层覆盖块：覆盖块的 id 本来就应该与某个 insert 相同，
  * 那是正常用法而非重复。
@@ -215,7 +218,8 @@ function splitInsertChildren(blockText: string): string[][] {
 export function insertEntryIds(content: string): string[] {
   const out: string[] = []
   for (const blockText of splitTopBlocks(content.split(/\r?\n/))) {
-    if (!/^- insert:/.test(blockText.split('\n')[0])) continue
+    // 块文本从行首开始，`^` 不带 `m` 只锚在整串开头，等价于只看首行。
+    if (!/^- insert:/.test(blockText)) continue
     for (const childLines of splitInsertChildren(blockText)) {
       const entry = parseEntry(childLines)
       if (entry.id) out.push(entry.id)
@@ -224,19 +228,19 @@ export function insertEntryIds(content: string): string[] {
   return out
 }
 
+/** 从补丁原文解析出归本插件管理的行（只看带归属标记的条目）。 */
 export function parseRows(content: string): { rows: ManagedRow[] } {
   const lines = content.split(/\r?\n/)
   const managedIds = new Set<string>()
   for (const line of lines) {
-    // Markers written by either this plugin or the template upstream count
-    // as managed (coexistence: both can edit the same patch file).
+    // 本插件与模板上游写的标记都算「归管理」（两者会改同一份补丁，必须能共存）。
     const m = line.match(/^# (?:dsh-plugin-tool-management|dsh-mcp-manager):server:(.+)$/)
-    if (m) managedIds.add(m[1].trim())
+    if (m) managedIds.add(m[1]!.trim())
   }
   const rows: ManagedRow[] = []
   for (const blockText of splitTopBlocks(lines)) {
-    const head = blockText.split('\n')[0]
-    if (/^- insert:/.test(head)) {
+    // 同 insertEntryIds：块文本从行首开始，`^` 锚在整串开头即等价于只看首行。
+    if (/^- insert:/.test(blockText)) {
       for (const childLines of splitInsertChildren(blockText)) {
         const entry = parseEntry(childLines)
         if (entry && entry.name === MCP_CLIENT_MODULE) {
@@ -258,7 +262,9 @@ export function parseRows(content: string): { rows: ManagedRow[] } {
   return { rows }
 }
 
-// ---------- line-based block editing ----------
+// ---------- 按行编辑块 ----------
+
+/** 按 `\n` / `\r\n` 切行 —— 保留行内容原样，不做 trim（行级改写要能原样写回）。 */
 export function splitLines(content: string): string[] { return content.split(/\r?\n/) }
 
 /** 映射键（裸 / 双引号 / 单引号三种写法）。 */
@@ -274,7 +280,7 @@ const YAML_BLOCK_INDICATOR = String.raw`[|>](?:\d[+-]?|[+-]\d?)?`
 /**
  * 一条**块标量头部**行：映射值（`key: <属性> <指示符>`）或序列项（`- <属性> <指示符>`）。
  *
- * 为什么必须认全（2026-09-30 审查 F6）：判据此前是 `key:\s*[|>][+-]?\d*`，它只认裸 `script: |`
+ * 为什么必须认全：判据此前是 `key:\s*[|>][+-]?\d*`，它只认裸 `script: |`
  * 这一种。于是 `script: !!js |`（CHANGELOG 与注释**点名**要覆盖的那个形态）、`script: &a |`、
  * `script: |2-` 全都落进"不在块标量里"，`joinLines` 照旧把它们内部的 3+ 连续空行折成 1 行 ——
  * 补丁照旧能读、表达式照旧能 eval，**只是算出来的值变了**。方向恰好是改写用户手写的内容。
@@ -299,7 +305,7 @@ const SUSPICIOUS_BLOCK_HEADER_RE = new RegExp(
 /**
  * 标出「哪些行在**块标量**（`key: |` / `key: >`）里」。
  *
- * 为什么折叠空行前必须知道这件事（2026-09-30 审查 P2-7）：`joinLines` 每次行级编辑
+ * 为什么折叠空行前必须知道这件事：`joinLines` 每次行级编辑
  * （任何一次 MCP 增 / 改 / 删 / 启停）都会把整份文件里 3+ 连续换行折成 1 个空行 —— 那是为了
  * 不让反复增删在文件里积出越来越长的空行。但块标量的**内容就是换行与缩进**，它内部的空行
  * 属于内容本身：折掉一次等于改写了用户手写的表达式（`!!js |`），而补丁照旧能读、表达式
@@ -315,13 +321,14 @@ const SUSPICIOUS_BLOCK_HEADER_RE = new RegExp(
 function blockScalarLineMask(lines: string[]): boolean[] {
   const inScalar = new Array<boolean>(lines.length).fill(false)
   let i = 0
+  // 本节的下标取值都落在「循环条件已判过下标」的位置。
   while (i < lines.length) {
-    const m = BLOCK_SCALAR_HEADER_RE.exec(lines[i])
+    const m = BLOCK_SCALAR_HEADER_RE.exec(lines[i]!)
     if (!m) { i++; continue }
-    const keyIndent = m[1].length
+    const keyIndent = m[1]!.length
     let j = i + 1
     while (j < lines.length) {
-      const line = lines[j]
+      const line = lines[j]!
       if (line.trim() === '') { inScalar[j] = true; j++; continue }
       const indent = line.match(/^\s*/)![0].length
       if (indent <= keyIndent) break
@@ -345,15 +352,16 @@ function joinLines(lines: string[]): string {
   const folded: string[] = []
   let blanks = 0
   for (let i = 0; i < lines.length; i++) {
-    if (protectedLine[i]) { blanks = 0; folded.push(lines[i]); continue }
-    if (lines[i].trim() === '') {
+    const line = lines[i]!
+    if (protectedLine[i]) { blanks = 0; folded.push(line); continue }
+    if (line.trim() === '') {
       blanks++
       // 最多留 1 个空行 —— 与改动前 `/\n{3,}/ → /\n\n/` 的力度一致。
-      if (blanks <= 1) folded.push(lines[i])
+      if (blanks <= 1) folded.push(line)
       continue
     }
     blanks = 0
-    folded.push(lines[i])
+    folded.push(line)
   }
   // 尾部若正处在块标量里，就不做「补一个换行」的归一化（那也会动到内容）；只去首部空行。
   const tailProtected = lines.length > 0 && protectedLine[lines.length - 1]
@@ -362,8 +370,8 @@ function joinLines(lines: string[]): string {
   if (!res.trim()) {
     res = '[]\n'
   } else if (!/^- /m.test(res) && !/^\[\]\s*$/m.test(res)) {
-    // A patch file must stay a top-level YAML array: after removing the last
-    // entry, emit [] so loadOptionalPatches never throws on a comments-only file.
+    // 补丁文件必须始终是顶层 YAML 数组：删掉最后一条后要写出 []，
+    // 否则 `loadOptionalPatches` 读到只剩注释的文件会抛错。
     res = res.replace(/\n*$/, '\n[]\n')
   }
   return res
@@ -372,20 +380,19 @@ function escRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$
 
 function markerRanges(lines: string[], id: string, ops: string): Array<[number, number]> {
   const n = lines.length
-  // Match this plugin's markers AND the template upstream's
-  // (`# dsh-mcp-manager:server|disable|enable:<id>`) so an entry written by
-  // either manager can be located and cleaned up without orphan blocks —
-  // the two plugins are designed to coexist.
+  // 本插件的标记与模板上游的标记（`# dsh-mcp-manager:server|disable|enable:<id>`）都要匹配，
+  // 这样任一管理器写的条目都能被定位、清理，不留孤儿块 —— 两个插件是设计成共存的。
   const re = new RegExp('^# (?:dsh-plugin-tool-management|dsh-mcp-manager):(' + ops + '):' + escRe(id) + '$')
   const ranges: Array<[number, number]> = []
+  // 下标都落在 `< n` 的分支里，取值必然存在。
   for (let i = 0; i < n; i++) {
-    if (!re.test(lines[i])) continue
+    if (!re.test(lines[i]!)) continue
     let j = i + 1
-    while (j < n && !/^- /.test(lines[j])) j++
+    while (j < n && !/^- /.test(lines[j]!)) j++
     let end = j
-    if (j < n && /^- /.test(lines[j])) {
+    if (j < n && /^- /.test(lines[j]!)) {
       let k = j + 1
-      while (k < n && !/^- /.test(lines[k])) k++
+      while (k < n && !/^- /.test(lines[k]!)) k++
       end = k
     }
     ranges.push([i, end])
@@ -407,12 +414,13 @@ function markerRanges(lines: string[], id: string, ops: string): Array<[number, 
 function insertBlockRange(lines: string[], id: string): [number, number] | null {
   const n = lines.length
   const entryRe = new RegExp('^\\s*- id: ' + escRe(id) + '\\s*$')
+  // 下标都落在 `< n` 的分支里；`starts` 的下标由 `s < starts.length` 保证。
   for (let i = 0; i < n; i++) {
-    if (!/^- insert:/.test(lines[i])) continue
+    if (!/^- insert:/.test(lines[i]!)) continue
     let end = i + 1
-    while (end < n && !/^- /.test(lines[end])) end++
+    while (end < n && !/^- /.test(lines[end]!)) end++
     const starts: number[] = []
-    for (let k = i + 1; k < end; k++) if (/^ {4}- /.test(lines[k])) starts.push(k)
+    for (let k = i + 1; k < end; k++) if (/^ {4}- /.test(lines[k]!)) starts.push(k)
     // 切不出子条目（缩进不是生成器那套的手写块）：退回"整块"，与改动前一致 ——
     // 认不出形状时宁可照旧删整块，也好过认不出就跳过、让 edit 追加出一条重复条目。
     if (!starts.length) {
@@ -420,8 +428,8 @@ function insertBlockRange(lines: string[], id: string): [number, number] | null 
       continue
     }
     for (let s = 0; s < starts.length; s++) {
-      const from = starts[s]
-      const to = s + 1 < starts.length ? starts[s + 1] : end
+      const from = starts[s]!
+      const to = s + 1 < starts.length ? starts[s + 1]! : end
       if (!lines.slice(from, to).some((l) => entryRe.test(l))) continue
       return starts.length === 1 ? [i, end] : [from, to]
     }
@@ -433,11 +441,12 @@ function bareOverrideRanges(lines: string[], id: string): Array<[number, number]
   const n = lines.length
   const re = new RegExp('^- id: ' + escRe(id) + '\\s*$')
   const ranges: Array<[number, number]> = []
+  // 下标都落在 `< n` 的分支里，取值必然存在。
   for (let i = 0; i < n; i++) {
-    if (!re.test(lines[i])) continue
+    if (!re.test(lines[i]!)) continue
     let end = i + 1
-    while (end < n && !/^- /.test(lines[end])) end++
-    // 只删**纯块**（2026-09-30 审查 P2-6）：`mcpm-edit` / `mcpm-remove` 原来把同 id 的顶层
+    while (end < n && !/^- /.test(lines[end]!)) end++
+    // 只删**纯块**：`mcpm-edit` / `mcpm-remove` 原来把同 id 的顶层
     // 覆盖块**一律**删掉，而用户完全可能在里面手写 `config`（补丁是按 **loader id** 生效的，
     // 别的模块名写同一个 id 时改的仍是那个条目，手写 config 因此是合法且有用的）。删掉它
     // 就是静默丢掉用户手写的配置。判据与 `override-blocks.ts` 的 `readToggleEntry().pure`
@@ -448,12 +457,14 @@ function bareOverrideRanges(lines: string[], id: string): Array<[number, number]
   return ranges
 }
 
+/** 按 `[起, 止)` 区间批量删行，返回删完的文本。 */
 export function spliceRanges(lines: string[], ranges: Array<[number, number]>): string {
   const remove = new Set<number>()
   for (const r of ranges) for (let i = r[0]; i < r[1]; i++) remove.add(i)
   return joinLines(lines.filter((_, i) => !remove.has(i)))
 }
 
+/** 把这个 id 的 server / disable / enable 三类块全部删掉。 */
 export function removeEntryAll(content: string, id: string): string {
   const lines = splitLines(content)
   const ranges = markerRanges(lines, id, 'server|disable|enable')
@@ -463,10 +474,12 @@ export function removeEntryAll(content: string, id: string): string {
   return spliceRanges(lines, ranges)
 }
 
+/** 只删指定 op（`server` / `disable` / `enable`）的块，别的原样留着。 */
 export function removeMarked(content: string, id: string, op: string): string {
   return spliceRanges(splitLines(content), markerRanges(splitLines(content), id, op))
 }
 
+/** 追加一个块；文件是空数组 `[]` 时直接顶替它，免得留下 `[]` 加内容的非法形状。 */
 export function appendBlock(content: string, block: string): string {
   let c = content
   if (/^\[\]\s*$/m.test(c)) c = c.replace(/^\[\]\s*$/m, block + '\n')

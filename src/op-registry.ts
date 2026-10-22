@@ -3,7 +3,7 @@
 // 为什么要有这个文件：门禁今天靠**五张手写清单**（`WRITE_OPS`、`SENSITIVE_OPS`、
 // `guardLockedOps`、`syncSceneArchiveOnSwitch`、`annotateLocked` 的 op 列表）。它们各自
 // 回答一个不同的问题，作用在同一批 op 名字上，中间没有任何约束 —— 新加一个 op 只写
-// handler，编译器一声不吭。这条纪律反复失守过四次（0.6.0 / 0.7.0 / 0.10.0 两次），
+// handler，编译器一声不吭。这条纪律反复失守过四次，
 // 症状都不是报错，而是"没配令牌也能写"或"锁定的场景能被改"。
 //
 // 判据（一个 op 可以同时占多条，所以这是**标志集合**不是单一分类）：
@@ -36,6 +36,7 @@
 /** frozen 的三种口径，见文件头。 */
 export type FrozenScope = 'all' | 'self-scene' | 'active-scene'
 
+/** 一个 op 的分类：写 / 只读 / 需令牌 / 受场景锁冻结，门禁全靠它。 */
 export interface OpClass {
   serviceWrite?: boolean
   write?: boolean
@@ -54,7 +55,7 @@ export interface OpClass {
    * `WRITE_OPS`，读侧也一起被拦（界面表现是"没填令牌时整块设置消失"）。此前靠 index.ts
    * 里一句手写的 `readOnlyCall` 打补丁，判据只认 `args.set === true` —— 而 `tool-table`
    * 的 `presetSave` / `presetDelete` **不写 `hidden`**、绕过 `set`，于是配了令牌的宿主上
-   * 一次免令牌请求就能改侧车（审查 F2，0.17.0 修）。判据搬进登记表后，写侧与读侧的定义
+   * 一次免令牌请求就能改侧车。判据搬进登记表后，写侧与读侧的定义
    * 挨着放，加一个新的写触发键时不会漏在另一个文件里。
    *
    * 判据抛错按"写"处理（fail-closed）：见 `isReadCall`。
@@ -62,10 +63,11 @@ export interface OpClass {
   writeWhen?: (args: Record<string, unknown>) => boolean
 }
 
+/** 全部 op 的分类表：写 / 只读 / 需令牌 / 受场景锁冻结，逐条登记，缺一条就是门禁漏一条。 */
 export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
 
   // ── MCP 域（18）────────────────────────────────────────────────────────────
-  'mcpm-list': { annotatesLock: true },
+  'mcpm-list': { annotatesLock: true, readonly: true },
   // reveal 返回**未打码**的凭据。它是读操作，但按写门禁 —— 局域网暴露的端口上，令牌对
   // 明文凭据必须是最后一道防线，而不只对着写操作。
   'mcpm-reveal': { write: true, sensitive: true, annotatesLock: true },
@@ -88,14 +90,14 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // —— 它同时是"卡住了重连一下"这条恢复路径。
   'mcpm-restart': { write: true },
   // 为了拿实时工具表会临时启用目标服务器、结束后恢复原状（两次 writePatch），恢复失败还
-  // 会停在启用态 —— 是写不是读。（0.6.0 / 0.7.0 各有漏列前科，见文件头。）
+  // 会停在启用态 —— 是写不是读。（漏列是这条纪律最常见的失守方式，见文件头。）
   'mcpm-tools-refresh': { write: true },
   'mcpm-tools': { readonly: true },
   // 把粘贴的补丁片段读成条目：纯文本运算，不读盘也不写盘（客户端在浏览器里解析不了 YAML）。
   'mcpm-parse-patch': { readonly: true },
 
   // ── 技能域（22，含内联的 skill-open）───────────────────────────────────────
-  'skill-state': { annotatesLock: true },
+  'skill-state': { annotatesLock: true, readonly: true },
   'skill-detail': { readonly: true },
   'skill-browse': { readonly: true },
   'skill-enable': { serviceWrite: true, frozen: true, syncsArchive: true },
@@ -110,7 +112,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'skill-unprefer': { serviceWrite: true, frozen: true },
   'skill-create': { serviceWrite: true, frozen: true },
   // 改写本插件自己写过的那一份技能（`skill_manager_save` 的改分支）。与 create 同规格：
-  // 落点只限本插件可写的两个根 —— hub（导入落点）+ dsh（新建默认落点，2026-10-15 裁定，
+  // 落点只限本插件可写的两个根 —— hub（导入落点）+ dsh（新建默认落点），
   // 见 service.ts 的 PLUGIN_WRITABLE_ROOTS）。它**不动**官方根里的技能 —— 那层边界在
   // service 的胜出者判定里。
   'skill-update': { serviceWrite: true, frozen: true },
@@ -149,7 +151,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'rules-set-index': { serviceWrite: true, frozen: true },
   // 场景启停本身要可用（否则进不去也出不来），但它能把**当前场景清空** —— 而"当前场景已
   // 锁定"是模型侧 `lockedSceneGuard` 唯一的判据，场景一空它就返回 null，四个写工具全放开，
-  // 运行时却仍是那个场景的档案态（2026-09-19 审计 T-32）。所以单独一刀，见 frozenScope。
+  // 运行时却仍是那个场景的档案态（审计 T-32）。所以单独一刀，见 frozenScope。
   'rules-set-active': { serviceWrite: true, frozen: true, frozenScope: 'active-scene' },
   'rules-remove-scene': { serviceWrite: true, frozen: true, frozenScope: 'self-scene' },
   'rules-rebind-prompt': { serviceWrite: true },
@@ -170,13 +172,13 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'scene-mode-preview': { readonly: true },
   'scene-archive-save': { serviceWrite: true, frozen: true, frozenScope: 'self-scene' },
   'scene-mode-set': { serviceWrite: true },
-  // 一键修复（0.21.2）：索引被隔离后唯一的出口。按写门禁 —— 它整份改写 memories-index.json。
+  // 一键修复：索引被隔离后唯一的出口。按写门禁 —— 它整份改写 memories-index.json。
   // **刻意不冻结**：隔离期间所有记忆写 op 都已经被 writeIndex 拒了，它能修复状态而不是改状态，
   // 与 `mcpm-restart` 同一条口径（恢复路径不能被冻结挡在门外）。
   'memories-index-repair': { write: true },
 
   // ── 子智能体域（10）────────────────────────────────────────────────────────
-  'subagent-list': { annotatesLock: true },
+  'subagent-list': { annotatesLock: true, readonly: true },
   'subagent-get': { readonly: true },
   'subagent-trash-list': { readonly: true },
   'subagent-create': { serviceWrite: true, frozen: true },
@@ -188,7 +190,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'subagent-trash-delete': { serviceWrite: true, frozen: true },
 
   // ── 提示词域（12）──────────────────────────────────────────────────────────
-  'agentsmd-list': { annotatesLock: true },
+  'agentsmd-list': { annotatesLock: true, readonly: true },
   'agentsmd-read': { readonly: true },
   'agentsmd-get-current': { readonly: true },
   'agentsmd-trash-list': { readonly: true },
@@ -206,7 +208,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // ── 快捷提示词域（8）───────────────────────────────────────────────────────
   // 只改插件自己的侧车（`hub/quick-prompts/`），不写 AGENTS.md、不进场景、不进注入；
   // 但"改用户存好的东西"按本文件口径就是写操作（判据不是"会不会写盘"，见文件头）。
-  // frozen 与五个管理域同一条：**锁定期间整体只读**（用户裁定 2026-09-30，不给它开例外，
+  // frozen 与五个管理域同一条：**锁定期间整体只读**（用户要求 不给它开例外，
   // 免得"锁定"这件事要分两套话术解释）。
   'quickprompt-list': { readonly: true },
   'quickprompt-trash-list': { readonly: true },
@@ -258,7 +260,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'audit-list': { readonly: true },
   // 清空流水：删的是插件自己的文件，但它是**一次改动**（清完还会留下一条 `audit-clear`），按写门禁。
   'audit-clear': { write: true },
-  // 整机迁移快照（0.15.0 C2）。export 标 sensitive 与 `mcpm-export` 同档：`includeSecrets` 时
+  // 整机迁移快照。export 标 sensitive 与 `mcpm-export` 同档：`includeSecrets` 时
   // 它交出的就是明文凭据；不配令牌时不设防（判据见 http-fence.ts 的 secretOpRejection）。
   'snapshot-export': { write: true, sensitive: true },
   'snapshot-preview': { readonly: true },
@@ -270,7 +272,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 全部注入域的当前正文**全文**都从这里出去。今天不带令牌就能读，是这批只读里披露面最大的一条；
   // 要不要上门禁是产品决定，登记在这里是为了让它可数。
   'injection-live': { readonly: true },
-  // 更新检查（0.21.2）：只读 registry 元数据并读/写自己的缓存，不改宿主与外部系统状态。
+  // 更新检查：只读 registry 元数据并读/写自己的缓存，不改宿主与外部系统状态。
   'update-status': { readonly: true },
   'backups-list': { readonly: true },
   // 注入设置（各域开关 / 压制型预设口径）写侧车。它是"配置"不是"宿主状态"，但改的是
@@ -278,7 +280,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'inject-settings': { write: true, writeWhen: (a) => a.set === true },
   // 模型工具表（哪些工具根本不发给模型）也写侧车，改的是每轮请求的内容 —— 同上按写门禁。
   // 三条写触发：`set` 换名单；`presetSave` / `presetDelete` 只动 `presets`、**不动 `hidden`**
-  // —— 后两条不经过 `set`，只认 `set` 的判据会把它们当成读放行（审查 F2）。
+  // —— 后两条不经过 `set`，只认 `set` 的判据会把它们当成读放行。
   'tool-table': {
     write: true,
     writeWhen: (a) => a.set === true || a.presetSave !== undefined || a.presetDelete !== undefined,
@@ -299,13 +301,13 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // ── 会话作用域（5）────────────────────────────────────────────────────────
   // 侧车 `hub/scope-overrides.json`：某个会话与全局不一样的地方（叠加层，不动全局）。
   //
-  // **全部不标 frozen**：场景锁冻结的是全局写入（决策 11），而这里改的是会话自己的视图
+  // **全部不标 frozen**：场景锁冻结的是全局写入，而这里改的是会话自己的视图
   // 偏好 —— 全局那一份在锁着的时候本来就没人能改。让场景锁连"本会话先别看这个服务器"
   // 也挡住，用户能做的只有"解锁 → 改 → 再锁上"，而那个空窗期恰恰是锁要防的。
-  // 会话锁（决策 12）是另一把锁，判据在 ops/scope.ts 里，只挡 scope-set / scope-clear。
+  // 会话锁是另一把锁，判据在 ops/scope.ts 里，只挡 scope-set / scope-clear。
   'scope-get': { readonly: true },
   'scope-sessions-list': { readonly: true },
-  // 隔离粒度（0.21.2）：会话 / 工作区。它改的是"以后按哪把键查"，不写任何管理域，
+  // 隔离粒度：会话 / 工作区。它改的是"以后按哪把键查"，不写任何管理域
   // 因此按写门禁但**不冻结**（与其余 scope-* 同一条：场景锁保护的是管理数据，不是层选择）。
   'scope-mode-set': { write: true },
   'scope-set': { write: true },
@@ -328,7 +330,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'scene-inventory': { readonly: true },
   // 跨域悬空引用体检：只读对账（索引走 readIndexSync，权威集合各读一次）。
   'state-doctor': { readonly: true },
-  // 诊断包（0.21.2）：只读聚合，输出白名单字段（不含密钥 / 正文 / 日志内容）。
+  // 诊断包：只读聚合，输出白名单字段（不含密钥 / 正文 / 日志内容）。
   'diagnostics': { readonly: true },
   // preset-tools 是只读枚举，但枚举会为预设建立 standing mount（官方语义：每进程只挂一次）。
   // 未授权调用者不该触发挂载 —— 按写门禁。
@@ -434,6 +436,21 @@ export function writeWhenUnwritten(): string[] {
     .sort()
 }
 
+/**
+ * 有条目但一个分类标志都没有：漏登记和「确实只读」在编译器眼里长得一样。
+ *
+ * 文件头要求「归不进上面任何一条的**必须显式写** `readonly`」，但漏掉这一条时登记表照样
+ * 对得上 —— 名字在、没有矛盾、也没有永远不会被问到的判据。这类条目不受任何门禁约束，
+ * 症状与四次失守完全同形，所以单独查一遍。
+ */
+export function unlabeledEntries(): string[] {
+  return Object.entries(OP_REGISTRY)
+    .filter(([, cls]) => cls.write !== true && cls.serviceWrite !== true && cls.readonly !== true)
+    .map(([op]) => op)
+    .sort()
+}
+
+/** op 表的自检结果：未分类、陈旧、service 自报不一致。 */
 export interface OpRegistryAudit {
   /** 真实 op 表里有、登记表里没归类 → 这条 op 不受任何门禁约束。 */
   unclassified: string[]
@@ -447,6 +464,8 @@ export interface OpRegistryAudit {
   contradictory: string[]
   /** 带 `writeWhen` 却没标 `write`（写判据永远不会被问到）。 */
   writeWhenUnwritten: string[]
+  /** 有条目但一个分类标志都没有（与「确实只读」无法区分）。 */
+  unlabeled: string[]
   /** 真实 op 表的键数（界面与日志报"多少条里出了几处问题"用）。 */
   total: number
 }
@@ -467,6 +486,7 @@ export function auditOpRegistry(opNames: Iterable<string>, serviceWriteOps: Iter
     serviceWriteExtra: mismatch.extra,
     contradictory: contradictoryEntries(),
     writeWhenUnwritten: writeWhenUnwritten(),
+    unlabeled: unlabeledEntries(),
     total: names.length,
   }
 }
@@ -480,5 +500,6 @@ export function auditProblems(audit: OpRegistryAudit): string[] {
     ...audit.serviceWriteExtra.map((op) => op + '（登记表标了写、service 未自报）'),
     ...audit.contradictory.map((op) => op + '（只读与写自相矛盾）'),
     ...audit.writeWhenUnwritten.map((op) => op + '（有写判据却没标写）'),
+    ...audit.unlabeled.map((op) => op + '（无分类标志）'),
   ]
 }

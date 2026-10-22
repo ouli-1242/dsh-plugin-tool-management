@@ -1,18 +1,18 @@
 // 打码值不得入库 —— env / headers 与 URL 查询串两条形态的唯一口径。
 //
-// 为什么需要它（2026-09-18，本机真实事故）：MCP 列表默认把 env / headers 里的凭据打码成
+// 为什么需要它（本机真实事故）：MCP 列表默认把 env / headers 里的凭据打码成
 // `••••••`，而「编辑」弹窗的密钥框**预填的就是这个打码值** —— 界面拿到的行本身就是打码的
 // （列表视图走 `mcpmRowsWithNotes(false)`）。于是"打开编辑 → 改个别的字段 → 保存"这条
 // 最普通的操作，会把打码值当成真值写回补丁文件，**真密钥永久丢失、且无法找回**
 // （本机 `TAVILY_API_KEY` 就是这样变成 `••••••` 的）。
 //
-// URL 是**第二种形态**，别把它漏掉（2026-09-19 审计 T-23）：`maskUrlQuery` 不产出 `••••••`，
+// URL 是**第二种形态**，别把它漏掉（审计 T-23）：`maskUrlQuery` 不产出 `••••••`，
 // 而是把承载凭据的那几段换成 `<redacted>` 哨兵（经 URL 序列化后是 `%3Credacted%3E`）。
 // 打码值判据只认整串 `•` 时它永远命中不了，于是 `mcpmEdit` 会把 `?<redacted>` 当成真 URL
 // 写回补丁 —— 一次普通「编辑保存」即把 URL 里的凭据**永久**改成占位串。所以本模块同时
 // 提供 `isMaskedUrl` / `resolveMaskedUrl`，与下面的 env / headers 判据并列。
 //
-// 「那几段」= **userinfo / 查询串 / 片段**三处（2026-09-30 审查 F5）：`new URL()` 把 userinfo
+// 「那几段」= **userinfo / 查询串 / 片段**三处：`new URL()` 把 userinfo
 // 与 fragment 存在 `username/password` 与 `hash` 里，`toString()` 原样带出。只换 `search`
 // 的话，`https://user:pass@host/mcp`（Basic-Auth 形态）与 `https://host/mcp#access_token=…`
 // 会整条原样返回 —— 而这两条路正是免令牌出口（`mcpm-list` / 模型工具 /
@@ -57,7 +57,7 @@ export function maskedKeysIn(map: Record<string, string> | null | undefined): st
 /**
  * 单个值的打码形态（env / headers 那一类键值对）。
  *
- * 为什么提到本模块（2026-09-30，审查 P0-4）：这个函数原先私有在 `mcp/manager.ts`，而整机迁移
+ * 为什么提到本模块：这个函数原先私有在 `mcp/manager.ts`，而整机迁移
  * 的导出侧（`ops/snapshot.ts`）自己另写了一份「所有键一律打成 `••••••`」的版本 —— 同一件事
  * 两套口径，于是 `$VAR` / `!!js` 这类**间接引用**在两条出口上的命运不同。本模块是两条打码
  * 形态（占位符 / URL）的唯一口径，键值对这条也归这里。
@@ -99,7 +99,7 @@ function isRedactedPart(part: string): boolean {
  * 判据只覆盖 userinfo / 查询串 / 片段这三处：路径与主机是该服务的身份，打码不会碰它们，
  * 把它们算进来会把真 URL 误判成打码值（判错的方向是丢掉真配置）。
  *
- * 为什么三处各自独立判、命中一处即算（2026-09-30 审查 F5）：`resolveMaskedUrl` 的语义是
+ * 为什么三处各自独立判、命中一处即算：`resolveMaskedUrl` 的语义是
  * "这条 URL 是打码形态 ⇒ 不能写回盘"。只判查询串的话，`https://user:pass@host/mcp`
  * （userinfo 承载 Basic 凭据，MCP 托管服务真实存在的形态）与 `...#access_token=…`
  * 都会被判成真值原样落盘 —— 一次普通「编辑保存」即把凭据永久换成占位串。
@@ -160,7 +160,7 @@ function maskUrlPartsByString(url: string): string {
  * 以及整机迁移的导出（`ops/snapshot.ts`，那份目录是要拷去 U 盘 / 另一台机器的）。
  * 各处各写一份的话，改了一处就会漂成几种打码形态，而 `isMaskedUrl` 只认其中一种。
  *
- * 为什么是**三段**而不是只有查询串（2026-09-30 审查 F5）：`new URL()` 把 userinfo 与
+ * 为什么是**三段**而不是只有查询串：`new URL()` 把 userinfo 与
  * fragment 存在 `username/password` 与 `hash` 里，`toString()` 会原样带出 ——
  * 只替换 `search` 的话，`https://user:pass@host/mcp` 与 `https://host/mcp#access_token=…`
  * 会**整条原样返回**（后者连 `?` 都没有），而这两条路正是免令牌出口
@@ -187,6 +187,7 @@ export function maskUrlQuery(url: string | null): string | null {
   }
 }
 
+/** 打码 URL 的还原结果：值、是否还原成功、是否不可恢复。 */
 export interface MaskedUrlOutcome {
   /** 可以直接写盘的 URL。 */
   value: string
@@ -217,6 +218,7 @@ export function resolveMaskedUrl(incoming: string | null | undefined, current: s
 /** 键值对输入（表单解析结果 / 补丁里的旧值），两者都可缺。 */
 export type KvMap = Record<string, string> | null | undefined
 
+/** 打码键值表的还原结果：值、还原数、丢弃数、原本就坏掉的键。 */
 export interface MaskedKvOutcome {
   /** 可以直接写盘的映射：打码值已被顶替或剔除。 */
   value: Record<string, string>

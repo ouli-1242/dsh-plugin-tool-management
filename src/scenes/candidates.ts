@@ -1,6 +1,5 @@
 // 场景 / 表单的**候选源** —— 界面要"选一个"的地方，数据从哪来。
 //
-// 2026-09-19 从 index.ts 的 apply 闭包原样抽出（10 段，约 260 行）。为什么单独一个文件：
 // 这些函数是**只读的取数**，彼此只有缓存关系，与"写补丁 / 改场景"完全无关；此前散在
 // apply 闭包的四个角落（286 / 425 / 532 / 833 / 1924-2133），改一处要在 3000 行里找。
 //
@@ -36,7 +35,7 @@ export interface CandidateDeps {
   memoriesService: { ops: Record<string, (args: any) => Promise<any>> }
   /** 工具全名 → `{ server, tool }`（切分规则见 `host-names.ts` 的 `splitMcpToolName`）。
    *  `serverNames` 是切分的候选 serverName 集合 —— **必填**，因为光看全名无法消解
-   *  `serverName` 含 `__` 的歧义（审查 N1）。 */
+   *  `serverName` 含 `__` 的歧义。 */
   toolKeyParts(toolName: string, serverNames: Iterable<string>): McpToolNameParts | null
   /**
    * 本插件自己注册过的工具名（在 `index.ts` 的注册漏斗里逐个登记）。
@@ -67,7 +66,7 @@ export interface PresetToolView {
 /**
  * 「工具限制」的候选载荷：一行一个 Agent 预设（roster 顺序），各带自己的工具清单与归属组。
  *
- * 0.19.0 前这里还有一份 `tools`（全体并集 + `presets` / `current`）—— 整条链上零读取点，
+ * 原先这里还有一份 `tools`（全体并集 + `presets` / `current`）—— 整条链上零读取点，
  * 且是同一份数据的第二个真相，已删。
  */
 export interface PresetToolCandidates {
@@ -76,7 +75,7 @@ export interface PresetToolCandidates {
     name: string
     trust: string
     broken: boolean
-    /** 该预设自己的工具名（旧字段名，语义从 0.19.0 起才真的是"该预设自己的"）。 */
+    /** 该预设自己的工具名（旧字段名，语义从才真的是"该预设自己的"）。 */
     tools: string[]
     /** 名字 → 归属组；与 `tools` 一一对应。缺项按 `other` 处理。 */
     toolGroups: Record<string, ToolOrigin>
@@ -140,6 +139,7 @@ export interface ModelReasoningResult {
  */
 const MODEL_REASONING_TIMEOUT_MS = 10_000
 
+/** 场景档案表单的候选源：人设、提示词预设、MCP 服务器、技能与工具表。 */
 export function createCandidates(deps: CandidateDeps): Candidates {
   // 外部能力一次解构成局部名：块内代码逐字搬来，保持原样最不容易出错。
   const { get, tools, mcp, skillsService, memoriesService, toolKeyParts, selfToolNames } = deps
@@ -162,7 +162,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅启停表 */ }
     // 切分的候选 serverName 集合必须与 `serverKnownTools`（index.ts）同源 —— 同一批来源、
     // 同一个 builder，否则「服务器名含 `__`」时两处会把同一个全名切成不同的 (server, tool)
-    // （2026-09-30 审查 N1）。三个来源里补丁那份是唯一与切分结果无关的（另两份是插件自己
+    // 。三个来源里补丁那份是唯一与切分结果无关的（另两份是插件自己
     // 写出来的：停用表键来自界面勾选、缓存键来自上一次切分），缺它会在首次遇到含 `__` 的名字时
     // 切错并锁死。任一份读不到就退化为其余两份（少候选 = 少命中，不会多命中）。
     let known: Record<string, unknown> = {}
@@ -212,7 +212,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
    * 场景档案「技能集」的技能行 —— 技能名与来源名**分开**给出。
    *
    * 界面早先直接渲染 `key`（形如 `<来源 key>/<技能名>`），而自定义目录的来源 key 是
-   * `custom-<sha256-16>`，于是导入的技能在场景档案里显示成一串哈希（用户 2026-09-15 报的）。
+   * `custom-<sha256-16>`，于是导入的技能在场景档案里显示成一串哈希（用户反馈的）。
    * 这里把来源的 label / localeKey 一并带上，界面就能显示「技能名 · 来源名」。
    *
    * 含被覆盖的副本（`shadowed`）：场景允许勾选任意一条技能，用生效集校验会把合法勾选判成 stale。
@@ -315,12 +315,11 @@ export function createCandidates(deps: CandidateDeps): Candidates {
    * 工具清单与归属组。
    *
    * 为什么按预设切而不是给一份并集：人设可能在任意预设下被子代理复用，而界面一行只对那个
-   * 预设生效，所以勾出来的名字必须属于那一行。见 `presetToolView`（判据与 0.19.0 修掉的
-   * 那条断链）。
+   * 预设生效，所以勾出来的名字必须属于那一行。见 `presetToolView`。
    *
-   * 0.19.0 删掉了原来那份「全体并集」（`tools`，含 `presets` / `current` 两个字段）：整条链
-   * 上零读取点（客户端只读 `presets`），而它是同一份数据的第二个真相 —— 从 `presets[].tools`
-   * 直接推得出来，每次调用白背 ≈2KB 载荷。
+   * 不再另给一份「全体并集」（`tools`，含 `presets` / `current` 两个字段）：整条链上零读取点
+   * （客户端只读 `presets`），而它是同一份数据的第二个真相 —— 从 `presets[].tools` 直接推得
+   * 出来，每次调用白背 ≈2KB 载荷。
    */
   // 两个预设枚举缓存（全体候选 / 单个预设）共用这个 TTL：枚举要一次 acquireScope 租约 +
   // 一次 schemas()，与内容变化无关，所以只要别刷得太勤就行。
@@ -347,7 +346,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
             name: String((p && (p.name || p.id)) || id),
             // 官方 registry 的预设**没有** trust 字段 —— 缺省必须是 ''（未知）而不是 'user'：
             // 客户端只对显式 user 隐藏内置模式的词典名，缺省 'user' 会让四个内置模式永远
-            // 显示原始 id（2026-09-28 用户截图）。
+            // 显示原始 id（用户截图）。
             trust: String((p && p.trust) || ''),
             broken: typeof (p && p.broken) === 'string',
             tools: names,
@@ -423,7 +422,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
         try { if (lease && typeof lease[Symbol.asyncDispose] === 'function') await lease[Symbol.asyncDispose]() } catch { /* 已经还过 */ }
       }
     } else {
-      // 老宿主没有 `acquireScope`：退回宿主平面（= 0.19.0 之前的可见行为），并且**什么都不认成
+      // 老宿主没有 `acquireScope`：退回宿主平面（=原先的可见行为），并且**什么都不认成
       // 官方**。这比列一份空的强（用户至少还看得见、还能勾），也比拿全局清单冒充"该预设自己的"诚实。
       names = [...hostNames]
     }

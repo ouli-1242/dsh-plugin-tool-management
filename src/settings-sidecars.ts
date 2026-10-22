@@ -13,6 +13,7 @@ import { normalizeSceneSettings, type SceneSettings } from './scene-settings.js'
 import { normalizeSlashSettings, type SlashSettings } from './slash-settings.js'
 import { normalizeSidebarSettings, type SidebarSettings } from './sidebar-settings.js'
 
+/** 设置侧车的依赖：hub 路径与默认值。 */
 export interface SettingsSidecarDeps {
   /** apply 里的路径发现（懒建目录）；本层所有调用点都在 await 之后，不依赖它的定义顺序。 */
   ensurePaths(): Promise<unknown>
@@ -25,6 +26,7 @@ export interface SettingsSidecarDeps {
   message(e: unknown): string
 }
 
+/** 设置侧车的对外面：读写场景 / 侧栏 / `/` 菜单三份设置。 */
 export interface SettingsSidecars {
   readInjectSettings(force?: boolean): Promise<InjectSettings>
   injectSettingsSync(): InjectSettings
@@ -38,6 +40,7 @@ export interface SettingsSidecars {
   sidebarSettingsOp(args: any): Promise<any>
 }
 
+/** 设置类侧车（注入设置、工具表等）的读写门面：读宽松、写严格。 */
 export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidecars {
   /**
    * 写路径的 strict read：只有文件不存在才回默认值；读坏 / 解析不了一律拒绝保存。

@@ -1,4 +1,4 @@
-// 规则/记忆域的**发现与快照**（2026-09-19 从 memories/service.ts 抽出）。
+// 规则/记忆域的**发现与快照**（从 memories/service.ts 抽出）。
 //
 // 两件事：① `discover` 扫 memories/ 目录树得出条目清单（必须自实现，理由见 service.ts 文件头）；
 // ② `buildSnapshot` / `renderSceneMemory` 把索引 + 文件内容投影成界面与注入看到的那份快照。
@@ -18,7 +18,7 @@ import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowS
 import type { RuleIndexEntry } from './index-io.js'
 import type { Rule, GroupRow, SceneMemoryProjection, RulesIndex, SceneMemoryFile } from './service.js'
 
-// 来源发现与投影（扫目录读成条目 / frontmatter 投成规则 / 老布局搬家）2026-10-01 整段搬到
+// 来源发现与投影（扫目录读成条目 / frontmatter 投成规则 / 老布局搬家）整段搬到
 // ./discovery.js，正文一字未改（moved-verify 逐字对拍）。snapshot.js 的公开面照旧：搬走的
 // 九件全部从这里再出口 —— memories/service.ts 按 ./snapshot.js 引它们。
 export {
@@ -39,6 +39,7 @@ import {
 } from './discovery.js'
 import type { DiscoveredEntry, ParsedSkillDoc } from './discovery.js'
 
+/** 一次投影的产物：规则、场景、警告，供注入与界面共用。 */
 export interface Snapshot {
   rules: Rule[]
   groups: GroupRow[]
@@ -108,6 +109,16 @@ export interface SceneBlockCandidate {
 
 // ── 快照（发现 + 索引合并 + 索引清理）──────────────────────────────────────
 
+/**
+ * 扫一遍记忆目录并与索引合并，产出一份可直接用于注入与界面的快照。
+ *
+ * 索引读坏了不会让整份快照失败：那一路按「全部未启用」投影，并把问题记进 `warnings` ——
+ * 注入宁可少给，也不能因为一个坏文件让会话开不了。
+ *
+ * @param memoriesRoot 记忆正文根目录
+ * @param stateDir 索引侧车所在目录
+ * @returns 规则、场景与警告；目录不存在时是空集合而不是抛错
+ */
 export async function buildSnapshot(memoriesRoot: string, stateDir: string): Promise<Snapshot> {
   const discovery = await discover(memoriesRoot)
   let index = await readIndex(stateDir)
@@ -190,10 +201,10 @@ export async function buildSnapshot(memoriesRoot: string, stateDir: string): Pro
 
 // ── 场景记忆段：两相扫描（廉价指纹 → 按需读正文）──────────────────────────
 //
-// 硬约束 1（§5.1）：注入通道每个 step 都要求**同步**取一次文本（`text: () => string`，
+// 硬约束 1：注入通道每个 step 都要求**同步**取一次文本（`text: () => string`
 // 见 src/context-inject.ts），返回 Promise 会让这一步的注入直接失败（异常被吞）。
 //
-// 缓存策略（§5.4 S3）：文本出口必须同步返回 string，但不希望每个模型步骤都
+// 缓存策略：文本出口必须同步返回 string，但不希望每个模型步骤都
 // 读一遍所有记忆正文。因此拆成两相：
 //   ① `probeSceneFilesSync()`：只走目录树 + `statSync`（**不读正文**），产出候选文件
 //      与**指纹**（`id|mtime|size` + 影响渲染的索引字段）。
@@ -201,7 +212,7 @@ export async function buildSnapshot(memoriesRoot: string, stateDir: string): Pro
 //
 // 为什么不用「内存缓存 + 目录监听（方案 a）」：fs.watch 在 Windows 上不可靠（本仓库
 // 技能侧不得不把 watcher 放进 worker 线程才不被卡死），而 watcher 静默失效的后果是
-// **永久返回过期内容**——正是本次变更单要根治的"静默失效"形态。指纹探测每次装配只做
+// **永久返回过期内容**——正是要根治的"静默失效"形态。指纹探测每次装配只做
 // 一次 stat 遍历（个人记忆树是亚毫秒级），换来"永远最新且永不静默失效"，优先于"零 IO"。
 //
 // 与 discover() 的关系：discover 是异步全量快照（供 CRUD/列表/体检），这里是同步轻量
@@ -224,7 +235,7 @@ export interface SceneFileRef {
 /**
  * `mtime:size` 指纹；**不存在**返回 `'missing'`，其余 IO 失败**抛异常**。
  *
- * 为什么抛（2026-09-30 审查 F7）：探测阶段这个值同时用来判「bundle 的正文文件在不在」。
+ * 为什么抛：探测阶段这个值同时用来判「bundle 的正文文件在不在」。
  * 把 EACCES/EBUSY 一并吞成 `'missing'`，等于把"读不动"读成"没有这条记忆" —— 段里少一条，
  * 而注入通道只看到"内容变了/变空了"，最坏时发出一条假的「已清空」。抛出去之后，注入侧
  * 报 `error` 并**保留上一轮内容**，界面侧退回上一轮投影（见 service.ts 的同名注释）。
@@ -247,7 +258,7 @@ export function fileStampSync(path: string): string {
  * 因此这里不再扫描根层文件——把文件丢在 memories/ 根下不会静默生效，也不会被投影。
  * `signature` 不变 ⇒ 上次渲染结果可原样复用（零正文 IO、零重排）。
  *
- * **读失败抛异常、不存在才算空**（2026-09-30 审查 F7）：根目录与子目录的 `readdirSync` 只在
+ * **读失败抛异常、不存在才算空**：根目录与子目录的 `readdirSync` 只在
  * `ENOENT`（目录不存在 = 全新用户 / 刚删掉）时退化成空段；其余 IO 错误（Windows 上杀软 /
  * 索引器 / 备份软件占住会报 EACCES/EBUSY）一律抛给调用方 —— 把"读不动"当成"没有记忆"会让
  * 注入通道发出假的「已清空」。
@@ -260,7 +271,7 @@ export function probeSceneFilesSync(
   // 是可解释、可恢复的；替用户决定全开不是。
   forceDisabled = false,
   /**
-   * 本会话的覆盖（0.21.2）：`scene` 取代全局当前场景（`null` = 钉住"没有场景"），
+   * 本会话的覆盖：`scene` 取代全局当前场景（`null` = 钉住"没有场景"）
    * `memory` 逐条改开关。
    *
    * 为什么必须在**探测阶段**就参与：指纹要跟着它变，否则 A 会话算过的段会被 B 会话直接
@@ -279,7 +290,7 @@ export function probeSceneFilesSync(
     rootEntries = readdirSync(memoriesRoot, { withFileTypes: true })
   } catch (e) {
     // 目录不存在（全新用户 / 刚删掉）→ 空段。签名含固定前缀，便于与"空树"区分。
-    // 其余 IO 错误必须抛：见函数头注释（F7）。
+    // 其余 IO 错误必须抛：见函数头注释。
     // ⚠️ 这条早退也要带会话覆盖：refs 空不代表渲染结果相同 —— 场景段（`renderSceneCatalog`）
     // 的清单取自 `index.scenes` 而不是磁盘目录，两个会话覆盖到不同场景时段的正文不同。
     if (!isAbsentError(e)) throw e
@@ -314,7 +325,7 @@ export function probeSceneFilesSync(
     try {
       entries = readdirSync(dir, { withFileTypes: true })
     } catch (e) {
-      // 子目录在遍历中途被删 → 跳过（正常竞态）；其余 IO 失败照函数头的口径抛出（F7）。
+      // 子目录在遍历中途被删 → 跳过（正常竞态）；其余 IO 失败照函数头的口径抛出。
       if (isAbsentError(e)) return
       throw e
     }
@@ -402,14 +413,14 @@ export function renderSceneMemory(
   probe: { refs: SceneFileRef[]; scenes: string[]; truncated: boolean },
   index: RulesIndex,
   maxBytes: number,
-  /** 会话层覆盖的场景（0.21.2）：给了就取代 `index.active`，只影响本会话看到什么。 */
+  /** 会话层覆盖的场景：给了就取代 `index.active`，只影响本会话看到什么。 */
   sceneOverride?: string | null,
 ): SceneMemoryProjection {
   const files: SceneMemoryFile[] = []
   for (const ref of probe.refs) {
     const text = readFileOrThrowSync(ref.path)
     // 探测与读取之间被删 → 跳过（下次指纹变化会再校正）。读不动**不**走这条：那会静默
-    // 少一条记忆，最坏时让注入通道发假的「已清空」（F7）—— 抛出去由调用方决定处置。
+    // 少一条记忆，最坏时让注入通道发假的「已清空」—— 抛出去由调用方决定处置。
     if (text === null) continue
     const doc = parseSkillDoc(text) as ParsedSkillDoc
     const derived = deriveFromDoc(
@@ -472,7 +483,7 @@ export function renderSceneMemory(
   /**
    * 选中块 → 段正文（同一场景的 `## Scene: x` 只在首次出现时发出）。
    *
-   * 授权语**两版**（2026-10-18 审查恢复分叉，理由见 `SCENE_MEMORY_NOTE_PARTIAL`）：不截断时带
+   * 授权语**两版**：不截断时带
    * "this is the complete set"，截断时去掉 —— 否则段首的完整性与段尾的 `## Not injected` 直接
    * 打架。预算仍按全量版预留（`sceneNoteBytes()`），截断态那句更短，不会多占。
    */
@@ -501,12 +512,11 @@ export function renderSceneMemory(
     if (buf !== '') chunks.push(buf)
     // 引导语只出现**一次**，放在板块层（第一个场景块之前）。
     //
-    // 为什么挪上来（用户 2026-09-23 看到实际注入后要求）：此前它跟着**每个场景块**各来一遍
+    // 为什么挪上来（用户 看到实际注入后要求）：此前它跟着**每个场景块**各来一遍
     // —— 2 个场景就是 272 B ≈68 tok/轮，占记忆段整段的 22%；而且它夹在 `## Scene: X` 与条目
     // 之间，把"分组"和"内容"隔开了。它管的本来就是整段（授权语讲的是这一整段条目的效力，
     // 不是某个场景的），放在最前面才对得上。
     //
-    // 2026-09-23 更早那条「放最顶层会飘在场景之外（用户实测）」的约束**已不成立**：那次是
     // 板块标题还是 `##`、与场景分组平级，放顶层确实分不清它管谁；现在板块升成 `#` 一级、
     // 场景分组是 `##` 二级，放在两者之间就是明确的"板块级说明"。
     return `${note}\n\n${chunks.join('\n')}`
@@ -523,7 +533,7 @@ export function renderSceneMemory(
     const lines: string[] = []
     let used = byteLen(head) + byteLen(marker)
     for (const c of missed) {
-      // 只给 `场景/名称`：字节数对人有用、对模型没有动作价值（2026-10-18 审查）。
+      // 只给 `场景/名称`：字节数对人有用、对模型没有动作价值。
       const line = `- ${sceneLabelOf(c.scene)}/${c.item.name}\n`
       if (used + byteLen(line) > space) break
       lines.push(line)
@@ -532,7 +542,7 @@ export function renderSceneMemory(
     if (lines.length === 0) return byteLen(marker) <= space ? marker : ''
     const rest = missed.length - lines.length
     const fold = `- ... (${rest} more not listed)\n`
-    // 标记与折叠行的关系（2026-10-18 审查收口）：
+    // 标记与折叠行的关系：
     //   - 清单列全（rest === 0）→ 不发标记也不发折叠行：`## Not injected` 标题已说清。
     //   - 清单不全 + 折叠行放得下 → 只发折叠行（给了具体计数），不发标记（重复）。
     //   - 清单不全 + 折叠行放不下 → 只发标记（折叠行是更具体的版本，但放不下时标记是唯一信号）。
@@ -579,12 +589,12 @@ export function renderSceneMemory(
 
   let text = `${body}${tail}`.replace(/^\n+/, '')
   // ③ 兜底：有记忆没注入时绝不能静默消失。
-  //   - 原来（2026-09-? 初版）只兜 text === '' 的情形：body 非空、tail 放不下时，
-  //     模型看到的是一段看起来完整的记忆段 —— 既没有 `## Not injected` 也没有标记，
-  //     被截掉的那些条目就**完全无痕**了。这是 2026-10-18 审查发现的 P1：body 的字节
-  //     核算（`used`）与 `byteLen(body)` 有几字节的误差（渲染时条目间的 `\n` / `\n\n`
-  //     没全进 `used`），于是 reserve 留的余量偶尔不够，标记放不下，3 兜底又不触发。
-  //   - 现在的判据：只要 missed 非空或发现阶段截断，而 text 里既没有标记也没有
+  //   - 只兜 text === '' 不够：body 非空、tail 放不下时，模型看到的是一段看起来完整的记忆段
+  //     —— 既没有 `## Not injected` 也没有标记，被截掉的那些条目就**完全无痕**了。根因是
+  //     body 的字节核算（`used`）与 `byteLen(body)` 有几字节的误差（渲染时条目间的
+  //     `\n` / `\n\n` 没全进 `used`），于是 reserve 留的余量偶尔不够，标记放不下，
+  //     只兜空串的那一支又不触发。
+  //   - 判据：只要 missed 非空或发现阶段截断，而 text 里既没有标记也没有
   //     `## Not injected` 标题，就强制追加标记 —— 宁可超预算几字节（原 ③ 注释的原则），
   //     也不能让截断无痕。两样有一样就不追加（信号已经在）。
   if ((missed.length > 0 || probe.truncated) && !text.includes(TRUNCATION_MARKER) && !text.includes(DROPPED_HEADING)) {
@@ -614,15 +624,14 @@ export function renderSceneMemory(
  * 场景段（`scene-manager-catalog`）：列出**当前启用**的场景，一行一个
  * （`**「场景名」—— 场景说明**`，见 `sceneLine`）。
  *
- * 为什么从记忆段里拆出来（2026-09-23 用户裁定）：场景说明是"这个场景是干什么的"，记忆条目是
+ * 为什么从记忆段里拆出来：场景说明是"这个场景是干什么的"，记忆条目是
  * **记录**（权威等级低于用户当场说的）—— 两者性质不同，而原来的实现靠一句话同时管两者。拆开后
  * 用户能**单独关掉记忆段**（省字节）而保留场景说明。
  *
- * 本段**没有任何引导语**：授权语在 2026-09-23 第二次裁定里删掉（上一版把场景说明写成
- * "一律照办"的约定，而它的实例是「写代码」这种**标签**，让模型"照办一个标签"正是它读不懂
- * 这一段的原因）；替它补的那句"场景是什么"线索当天也被删了（第三次裁定，连同六个域的动作句
- * 一起，理由见 `DomainFrame`）。现在本段只有 `sceneLine` 一行 —— 用户的原则是「上下文注入
- * 就是当前的情况，不需要模型知道没用的信息」。
+ * 本段**没有任何引导语**：场景说明是用户写的约定，而它的实例是「写代码」这种**标签** ——
+ * 让模型"照办一个标签"正是它读不懂这一段的原因；补一句"场景是什么"也不解决问题，六个域的
+ * 动作句同样被删（理由见 `DomainFrame`）。现在本段只有 `sceneLine` 一行 —— 用户的原则是
+ * 「上下文注入就是当前的情况，不需要模型知道没用的信息」。
  *
  * 与记忆段的分工：这里给"框架"，记忆段给"内容"（各场景下的条目）。**场景说明只在这里出现**
  * —— 记忆段的场景块只留标题（`sceneHeading`），否则同一句话会在上下文里出现两遍。代价是
@@ -633,7 +642,7 @@ export function renderSceneMemory(
  * 没有内容"本身就是框架信息（记忆段只列有记忆的场景，两者不是同一份清单）。
  *
  * **只列启用的非保留场景**（排除 `global` / `_shared`）：那两个桶恒常生效，说"当前处于全局"
- * 是废话 —— 默认状态不该占上下文（用户 2026-09-23 裁定）。一个具体场景都没启用时整段返回
+ * 是废话 —— 默认状态不该占上下文。一个具体场景都没启用时整段返回
  * 空串（通道不发这条消息），而不是发一句"当前处于全局"。
  *
  * **场景是单选的**：除保留场景（`global` / `_shared`）外至多一个处于启用状态。这条约束由
@@ -646,7 +655,7 @@ export function renderSceneCatalog(
   probe: { scenes: string[]; truncated: boolean },
   index: RulesIndex,
   maxBytes: number,
-  /** 会话层覆盖的场景（0.21.2）：同 `renderSceneMemory`。 */
+  /** 会话层覆盖的场景：同 `renderSceneMemory`。 */
   sceneOverride?: string | null,
 ): SceneMemoryProjection {
   const { active } = resolveActiveScenes(index, probe.scenes, sceneOverride)
@@ -662,7 +671,6 @@ export function renderSceneCatalog(
   // 这一段**只给当前情况**：启用了哪些非保留场景、各自是什么（`sceneLine`）。
   //
   // 曾经在这里加过一句因果（"下面的记忆、MCP、技能与人设都已按它筛过"），已删（用户
-  // 2026-09-23 裁定）：「上下文注入就是当前的情况，目的是让 agent 知道现在的情况，不需要它
   // 知道没用的信息，反推更是浪费 token」。那句话解释的是**另外四段是怎么产生的**（机制），
   // 不是当前情况本身。留着它的两个额外代价也一并消失：① 场景**启用**（`active`）与场景
   // **进入**（`mode.scene`）是两份状态、两个 op，只启用没进入时那句是假话，得按 mode 分叉
@@ -693,6 +701,7 @@ export function renderSceneCatalog(
   }
 }
 
+/** 场景说明段固定占用的字节数 —— 预算要先扣掉它，再分给各条记忆。 */
 export const sceneNoteBytes = (): number => byteLen(`${SCENE_MEMORY_NOTE}\n\n`)
 
 // ── 创建服务 ───────────────────────────────────────────────────────────────

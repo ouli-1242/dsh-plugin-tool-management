@@ -3,7 +3,7 @@
 // 为什么单独一个文件：这份形状有三个使用方（HTTP ops、注入器、模型工具），而判定规则
 // （三态 → 二态、自动清除、僵尸覆盖）只有一份。抄进任何一处都会分叉。
 //
-// ## 四层叠加（0.21.2）
+// ## 四层叠加
 //
 // 一个会话看到的东西按四层叠加，自上而下：
 //
@@ -35,12 +35,12 @@
 // ## 两条域边界
 //
 //   · **记忆不收场景层**（`sceneFlagOf` 对 memory 恒 undefined）：记忆的"在哪一层"由场景名
-//     与逐条开关决定，档案的 memories 段已废弃（P5）。正文投影归记忆域，这里只管开关。
+//     与逐条开关决定，档案的 memories 段已废弃。正文投影归记忆域，这里只管开关。
 //   · **词表收场景层**：`mcpTools` 的键是 `<server>/<tool>`、`skillSources` 的键是来源 root，
 //     档案里对应的段落分别是 `mcp`（每个服务器 '*' 或工具名清单）与 `skills`（勾选的技能键，
 //     来源层由此反推："这个来源下有勾中的技能 = 开"）。
 //
-// ## 模型工具表不在七域里（0.21.2）
+// ## 模型工具表不在七域里
 //
 // `toolTableHidden` 是**整份关停名单**，不是逐格布尔：工具表在 `tool-table.json` / 方案里
 // 本来就是这个形状，拆成一格一覆盖只会多出第二份真相。取数顺序也不同 ——
@@ -66,7 +66,7 @@ export type ScopeDomain = (typeof SCOPE_DOMAINS)[number]
 /**
  * 会话创建时的冻结快照（`退出模式` 要回到的那一份）。
  *
- * 为什么冻结时点：用户裁定「退出模式 = 退出到这个会话最开始的样子，不要退回到全局，
+ * 为什么冻结时点：用户要求「退出模式 = 退出到这个会话最开始的样子，不要退回到全局，
  * 因为全局是会变的」。所以基线的**值**在会话创建那一刻取定，此后全局怎么改都与它无关。
  */
 export interface SessionBaseline {
@@ -75,7 +75,7 @@ export interface SessionBaseline {
   /** 创建时各域各键的全局开关。 */
   flags: Record<string, Record<string, boolean>>
   /**
-   * 创建时全局的模型工具表关停名单（0.21.2）。
+   * 创建时全局的模型工具表关停名单。
    *
    * 工具表是**每个对话一份**：创建时抄下全局那份，此后全局再改也与这个对话无关。
    * 空数组是有效值（"这个对话全都要"），与"没记过"（`undefined`）不是一回事。
@@ -103,21 +103,21 @@ export interface SessionScope {
   /** 技能**来源**：root key → 本会话可不可见（拨开时按租约运行，见 op 侧）。 */
   skillSources?: Record<string, boolean>
   /**
-   * 本会话的提示词覆盖（0.21.2）：取代**用户级那一槽**（场景预设 / `~/.dsh/AGENTS.md`），
+   * 本会话的提示词覆盖：取代**用户级那一槽**（场景预设 / `~/.dsh/AGENTS.md`）
    * 项目指令链仍拼在前面。两字段互斥，`content` 有值时 `presetId` 必须为空。
    *
    * 写的是侧车，**永远不写** `~/.dsh/AGENTS.md`；预设被删除后解析时退化回全局链。
    */
   prompt?: SessionPromptOverride
   /**
-   * 本对话的**模型工具表关停名单**（0.21.2）：不在这个列表里的工具对模型可见。
+   * 本对话的**模型工具表关停名单**：不在这个列表里的工具对模型可见。
    *
    * 它是整份名单而不是逐工具布尔：工具表本来就是"一份关停名单"，整份存才与
    * `tool-table.json` / 方案同一个形状。没有这一项 = 跟随 `baseline.toolTableHidden`
    * （= 创建时抄的全局那份）；空数组 = 本对话全都要。
    */
   toolTableHidden?: string[]
-  /** 会话锁：只冻结这个会话自己的覆盖，不影响全局写入（决策 12）。 */
+  /** 会话锁：只冻结这个会话自己的覆盖，不影响全局写入。 */
   locked?: boolean
 }
 
@@ -128,7 +128,7 @@ export interface SessionPromptOverride {
   /** 会话自定义正文（快捷编辑产生）；上限与 `AGENTS_MD_MAX_BYTES` 同闸。 */
   content?: string
   /**
-   * 本会话首次被注入器看见时 `~/.dsh/AGENTS.md` 的冻结字节快照（0.21.2 第三轮）。
+   * 本会话首次被注入器看见时 `~/.dsh/AGENTS.md` 的冻结字节快照。
    *
    * **不是用户覆盖**：`hasPromptOverride` 不看它，`overrideCountOf` 也不数它；
    * 它只回答"这个会话的全局基线是哪一版"。没有它（捕获失败 / 老装配）= 退化到当前文件。
@@ -141,7 +141,7 @@ export interface SessionPromptOverride {
 export const PROMPT_CONTENT_MAX_BYTES = 65536
 
 /**
- * 把一份 `~/.dsh/AGENTS.md` 原文夹进快照预算（0.21.2 第三轮）。
+ * 把一份 `~/.dsh/AGENTS.md` 原文夹进快照预算。
  *
  * 与官方 `truncateUtf8` 同一手法：按字节截断并退到 UTF-8 字符边界，不切出半个字。
  * 捕获与"快照 == 当前文件"的比对都走它 —— 否则一个超过 64 KiB 的文件会永远判"有差异"，
@@ -156,7 +156,7 @@ export function clampPromptBaseline(text: string): string {
 }
 
 /**
- * 隔离粒度（0.21.2，0.21.2+ 补 `global`）。
+ * 隔离粒度。
  *
  *   · `global`    —— **没有会话层**：所有读写直接落到各域的全局状态（加会话管理之前的样子）；
  *   · `session`   —— 每个对话一份覆盖；
@@ -185,7 +185,7 @@ export function normalizeScopeMode(raw: unknown): ScopeMode {
 export interface ScopeOverrides {
   version: 1
   /**
-   * 当前隔离粒度。缺省 = `session`（0.21.2 及更早写出的文件）。
+   * 当前隔离粒度。缺省 = `session`（老侧车文件没有这一格）。
    *
    * 工作区记录与会话记录同处 `sessions` 表：工作区键是 `ws:<归一化 cwd>`（见
    * `scope/workspace-key.ts`）。放同一张表是刻意的 —— 场景改名 / 删除 / 改绑工具表的
@@ -319,7 +319,7 @@ export function normalizePromptOverride(raw: unknown): SessionPromptOverride | u
     return { content: obj.content, ...withBaseline }
   }
   // presetId 同时是**磁盘目录名**：侧车被手改 / 旧版本写进来的构造值不能原样透到注入侧的
-  // 读盘路径（`presets/<id>/AGENTS.md`）。规则与预设库同一份（0.21.2 复核）。
+  // 读盘路径（`presets/<id>/AGENTS.md`）。规则与预设库同一份。
   if (typeof obj.presetId === 'string') {
     const preset = normalizePresetId(obj.presetId)
     if (preset.ok) return { presetId: preset.id, ...withBaseline }
@@ -329,7 +329,7 @@ export function normalizePromptOverride(raw: unknown): SessionPromptOverride | u
 }
 
 /**
- * 本会话有没有**用户写的**提示词覆盖（0.21.2 第三轮：快照不算）。
+ * 本会话有没有**用户写的**提示词覆盖（快照不算）。
  *
  * 冻结快照是系统捕获，每个会话都有；拿 `scope.prompt !== undefined` 当覆盖判据会把
  * 所有会话都判成"有覆盖" —— 官方 carrier 被全量拦下、下拉框每条都显示「1 项」。
@@ -446,7 +446,7 @@ export function scopeForLayerSeed(scope: SessionScope | undefined): SessionScope
   const out: SessionScope = { ...scope }
   delete out.locked
   /**
-   * `detached` 不搬（2026-10-22 实测，用户报「场景勾着但没注入」）。
+   * `detached` 不搬。
    *
    * 搬到刚建出来的层上后果是**无声**的：`sessionScenePinOf` 见到 `detached` 就回
    * `baseline.scene ?? null`；基线里当时没有场景 ⇒ 新层一出生就"钉住没有场景"，
@@ -477,7 +477,7 @@ export function scopeForLayerSeed(scope: SessionScope | undefined): SessionScope
 }
 
 /**
- * 一个会话**生效**的模型工具表关停名单（0.21.2）。
+ * 一个会话**生效**的模型工具表关停名单。
  *
  * 顺序：本对话自己的整份名单 → 创建时抄的基线 → 实时全局（老会话没有基线时的兜底）。
  * 全局只给新对话当默认模板；已有对话不会再跟着全局变。
@@ -567,7 +567,7 @@ function hasTruePrefix(map: Record<string, boolean> | undefined, prefix: string)
 
 /**
  * 本会话的**上层闸推导**：把某条工具 / 技能显式拨开，就认它所在的整台服务器 / 来源也是开
- * （0.21.2 复核）。没有这条推导，全局后来关掉服务器 / 来源时，会话里那条显式开启会变成
+ * 。没有这条推导，全局后来关掉服务器 / 来源时，会话里那条显式开启会变成
  * "界面开着、模型调不到"——读侧（可见性 / 认领 / 目录）与界面各说各话。
  *
  * 只做**正向**推导：显式关一条子项不关上层。显式的上层覆盖（含关）由调用方先判。
@@ -638,7 +638,7 @@ export function sessionSceneOf(scope: SessionScope | undefined): string | undefi
 }
 
 /**
- * 本会话**钉住的场景**（三态，0.21.2 复核）：`string` = 钉住它；`null` = 钉住"没有场景"
+ * 本会话**钉住的场景**（三态）：`string` = 钉住它；`null` = 钉住"没有场景"
  * （已脱离且基线里就没有场景）；`undefined` = 跟随全局。
  *
  * 与 `sessionSceneOf` 的差别只在 `null` 这一支：那个函数把"创建时没有场景"折成 undefined，
@@ -716,20 +716,20 @@ export function applyFlag(
  * 进入场景：清掉七个域的显式覆盖（场景模式从场景的状态开始），删 `detached`，写 `scene`。
  *
  * `toolTableHidden` **不在这里清**：工具表是每个对话自己的整份名单，场景没绑方案时
- * 不该碰它；绑了方案时由 op 层在这一次写入里整份替换（0.21.2）。
+ * 不该碰它；绑了方案时由 op 层在这一次写入里整份替换。
  */
 export function enterSceneInScope(scope: SessionScope | undefined, scene: string): { scope: SessionScope; changed: boolean } {
   const out: SessionScope = { ...(scope === undefined ? {} : scope), scene }
   delete out.detached
   for (const domain of SCOPE_FLAG_DOMAINS) delete out[domain]
-  // 提示词覆盖是会话层显式设置，不进场景快照、进出场景都不清（0.21.2）。
+  // 提示词覆盖是会话层显式设置，不进场景快照、进出场景都不清。
   return { scope: out, changed: true }
 }
 
 /**
  * 退出场景：删 `scene` 与七个域的显式覆盖，写 `detached`（下层换成基线 = 会话创建时的样子）。
  *
- * 显式覆盖也一起清：用户裁定「退出到这个会话最开始的样子」—— 场景模式期间拨过的所有开关
+ * 显式覆盖也一起清：用户要求「退出到这个会话最开始的样子」—— 场景模式期间拨过的所有开关
  * 都不该留到退出之后。`locked` 与 `baseline` 保留（前者是元数据，后者正是要回到的那一份）。
  */
 export function exitSceneInScope(scope: SessionScope | undefined): { scope: SessionScope; changed: boolean } {
@@ -774,7 +774,7 @@ function renameKeyPrefix(map: Record<string, boolean>, from: string, to: string)
 }
 
 /**
- * 场景**改名**后同步一个会话（0.21.2 复核）。返回原引用 = 这个会话与旧名无关。
+ * 场景**改名**后同步一个会话。返回原引用 = 这个会话与旧名无关。
  *
  * 场景名会出现在两处键里：`scene` / `baseline.scene`，以及记忆键（`<场景>/<名>`）
  * —— 改名会迁移 `index.rules` 的键，会话覆盖不跟着换前缀就会指向不存在的记忆。
@@ -812,7 +812,7 @@ export function renameSceneInScope(
 }
 
 /**
- * 场景**删除**后同步一个会话（0.21.2 复核）。
+ * 场景**删除**后同步一个会话。
  *
  * 会话正停在这个场景里 → 按「退出场景」处理（下层换成基线；场景期间拨过的开关与场景
  * 套上的工具表一起清掉）。所有会话里指向该场景记忆的覆盖也一并删掉 —— 那些记忆条目
@@ -858,7 +858,7 @@ export function removeSceneInScope(
 }
 
 /**
- * 场景里的工具表方案**改了**以后，把新名单同步到停在这个场景里的会话（0.21.2 复核）。
+ * 场景里的工具表方案**改了**以后，把新名单同步到停在这个场景里的会话。
  *
  * 工具表是进场景那一刻抄进 `toolTableHidden` 的（与 mcp / 技能等"按档案实时算"的域不同），
  * 方案后来怎么改都到不了已经进来的会话 —— 用户改了绑定、本对话却还按旧名单。`hidden`
@@ -878,7 +878,7 @@ export function setSceneToolTableInScope(
  * `mcpTools` 键（`<server>/<tool>`）里的 server 段。
  *
  * 会话 MCP 判定的候选集合要收它：只把整串键塞进 `serverNameCandidates` 会得到
- * `a/tool` 这种不是服务器的名字，server 名本身含 `__` 时切分就认不出来（0.21.2）。
+ * `a/tool` 这种不是服务器的名字，server 名本身含 `__` 时切分就认不出来。
  */
 export function mcpToolServerSegments(map: Record<string, boolean> | undefined): string[] {
   if (map === undefined) return []
@@ -903,7 +903,7 @@ export interface ScopeGlobalSnapshot {
    */
   unavailable?: readonly string[]
   /**
-   * 三格真租约的**意图**（0.21.2：MCP 服务器 / 技能来源 / 单条技能）。`flags` 里那几格给的
+   * 三格真租约的**意图**（MCP 服务器 / 技能来源 / 单条技能）。`flags` 里那几格给的
    * 是意图的布尔投影（blocked 也投影成 false），这里保留三态：界面要区分「关着」与「彻底停止」。
    */
   intent?: {
@@ -912,12 +912,12 @@ export interface ScopeGlobalSnapshot {
     skills: Record<string, IntentState>
   }
   /**
-   * 本会话之外**还在认领**这一格的会话数（0.21.2，租约的读侧 —— 七个域都给）。
+   * 本会话之外**还在认领**这一格的会话数（租约的读侧 —— 七个域都给）。
    *
    * 界面据此显示「临时运行 · N 个对话」：全局 off 但连接在跑，用户要能看见为什么。
    * 会话层拨关时也用它提示"别的对话还在用，连接不会停"。
    *
-   * **全部读时现算**（0.21.2 第四轮，`scanSessionClaims`）：会话的删除 / 归档 / 恢复 / 重启
+   * **全部读时现算**（`scanSessionClaims`）：会话的删除 / 归档 / 恢复 / 重启
    * 都不走插件的写 op，没有任何触发点可挂 —— 挂在对账器内存缓存上的那三个域（mcp /
    * skillSources / skills）会因此停在旧值。现算之后这一份恒等于"此刻的会话清单"。
    *

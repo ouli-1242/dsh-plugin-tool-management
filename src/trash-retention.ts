@@ -1,4 +1,4 @@
-// 回收站保留期（0.19.1）—— 超过保留期的回收站条目由清扫**自动永久删除**。
+// 回收站保留期—— 超过保留期的回收站条目由清扫**自动永久删除**。
 //
 // 为什么要有它：回收站此前只有「进来」没有「出去」—— 除了用户一条条点「永久删除」，
 // 没有任何自动清空的开关。删掉一个场景、一批技能、一堆记忆之后，条目会一直躺在磁盘上。
@@ -7,15 +7,14 @@
 // 「改设置即重置倒计时」语义。两处口径一旦分家，用户在两个页面看到的就是两套话术。
 //
 // 覆盖六类：hub 五类（`trash/<域>-trash/<id>/manifest.json`，含记忆 —— 它的落点自
-// 2026-10-10 起也在这里，读写仍走 memories 域自己的实现）+ 技能（`trash/skills-trash/`，
 // 元数据文件叫 `metadata.json`，是 core 层自己写的那套）。
 //
 // 三条口径（改这个文件前先读）：
 //   ① `retentionDays <= 0` = **永久保留**，清扫是纯 no-op。这是默认值，也是本文件存在的
-//      前提：`skills/manager-state.ts` 里有一条更早的产品裁定 ——「回收站没有自动清理：
+//      前提：`skills/manager-state.ts` 里有一条更早的产品决定 ——「回收站没有自动清理：
 //      超龄条目通过 warnings 提示用户到 Skills 管理页处理，**避免静默删除用户可能还想
-//      恢复的内容**」。那条裁定针对的是「没有开关的自动删除」，所以这里默认关闭、
-//      只有用户显式打开才删。默认值改了就等于推翻那条裁定，别顺手改。
+//      恢复的内容**」。那条决定针对的是「没有开关的自动删除」，所以这里默认关闭、
+//      只有用户显式打开才删。默认值改了就等于推翻那条决定，别顺手改。
 //   ② 到期基线 = `max(deletedAt, updatedAt)`，`updatedAt` 是**最近一次改保留期的时刻**。
 //      于是「把保留期从 30 天改成 7 天」不会当场删掉一批 8 天前的条目 —— 倒计时从改设置
 //      那一刻按新天数重算。与 History 页同一条（那边原话：「改保留期即重置倒计时」）。
@@ -279,6 +278,7 @@ export async function sweepTrash(
 /** 装配用的 ctx —— 直接用 cordis `Context`（与 `createHistoryDomain` 同一个类型，免得两处签名分家）。 */
 export type TrashRetentionCtx = Context
 
+/** 回收站保留期域的依赖：六类回收站与设置侧车。 */
 export interface TrashRetentionDomainDeps {
   ctx: TrashRetentionCtx
   /** 插件配置（读 `sweepIntervalMs`，与 history 域共用同一个键）。 */
@@ -287,6 +287,7 @@ export interface TrashRetentionDomainDeps {
   memories: MemoryTrashAccess
 }
 
+/** 回收站保留期域的对外面：读设置、改设置、立即清扫。 */
 export interface TrashRetentionDomain {
   read(): Promise<TrashRetention>
   write(retentionDays: number): Promise<void>

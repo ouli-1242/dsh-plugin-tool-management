@@ -1,4 +1,4 @@
-// 域 op（2026-09-19 抽出）：24 个 op 按记忆正文 / 回收站 / 场景分域，依赖经显式 ctx 传入。
+// 域 op（抽出）：24 个 op 按记忆正文 / 回收站 / 场景分域，依赖经显式 ctx 传入。
 import { buildMemoryOps } from '../ops/memory.js'
 import { buildTrashOps } from '../ops/trash.js'
 import { buildSceneRecordOps } from '../ops/scene-records.js'
@@ -44,14 +44,14 @@ export type {
 // 只 `mkdir` 它、并把路径回显给前端，从不读写里面的文件（`SCENES_DIR` 全仓仅 3 处命中）。
 // 场景因此不依赖"memories/ 下恰好有这个名字的目录"这种隐式约定：空场景可以存在，
 // 且场景可以有描述。目录名即场景名（任意 Unicode，见 isValidGroupSegment）。
-// （按 `scenes/*.json` 去找场景记录、或按它写备份/迁移脚本，都会扑空 —— 2026-09-19 订正。）
+// （按 `scenes/*.json` 去找场景记录、或按它写备份/迁移脚本，都会扑空 —— 订正。）
 // 保留场景 `global`（界面显示「全局」）：其记忆注入任何对话；它恒定存在、不可删除。
 // 勾选启用后，该目录树内所有 .md 的正文自动进入模型的上下文（index.ts 注册的注入通道，
 // 每步一条消息；见 src/context-inject.ts），模型无需做任何动作 —— 这就是"不用每次都要解释"。
 //
-// 单投影（原 ADR-4 的"双投影"已被本变更单修订）：
+// 单投影：
 //   - 活动场景记忆 → 上下文注入（自动在场，会话级恒定 → 前缀稳定、缓存可命中；
-//     文本没变时不重发 —— 2026-09-16 从 systemPrompt 段改道，理由见 context-inject.ts 文件头）
+//     文本没变时不重发 —— 从 systemPrompt 段改道，理由见 context-inject.ts 文件头）
 //   - `_shared/` 承担"恒常"语义（所有场景共用）；原 per-rule `always` 标志已移除
 //   - 不再写 ~/.dsh/AGENTS.md（原始终层投影下线）
 //
@@ -62,7 +62,7 @@ export type {
 // 发现必须自实现（不复用 readonly-discovery）：可写来源只扫一层会压扁子目录场景，
 // 而规则的目录树天然是多层的；且 readonly-discovery 的 flat 只认顶层。
 //
-// 缓存红线（§5.2）：段内容只由「启用场景 + 文件内容」决定，禁止时间戳/计数/相对时间；
+// 缓存红线：段内容只由「启用场景 + 文件内容」决定，禁止时间戳/计数/相对时间
 // 场景组合或记忆文件不变 ⇒ 逐字节稳定 ⇒ 前缀缓存命中。切换场景/编辑记忆只变化一次。
 //
 // 错误约定：业务校验失败返回 { ok:false, error: 中文, code, params? }（与 skills core 一致）；
@@ -79,7 +79,7 @@ import { expandUploads, planMemoryImport } from '../imports/upload.js'
 import { normalizePresetId } from '../prompts/preset-id.js'
 import { normalizeArchive, type ModeState, type SceneArchive } from './archive.js'
 import { isValidTrashId, listTrashEntries, moveOutOfTrash, moveToTrash, newTrashId, purgeTrashEntry, readTrashEntry } from '../hub.js'
-// 预算 / 保留场景名 / 段渲染常量（2026-09-19 抽到 ./constants.ts：投影函数与本服务共用，
+// 预算 / 保留场景名 / 段渲染常量（抽到 ./constants.ts：投影函数与本服务共用，
 // 留在这里会让 projection.ts 反向 import 本文件，形成运行时循环依赖）。
 import {
   ATTACHMENT_LIST_MAX, bundleDocName, byteLen, DEFAULT_GROUP_ORDER, DEFAULT_MAX_BYTES, DEFAULT_ORDER,
@@ -94,14 +94,14 @@ export { GLOBAL_SCENE, GLOBAL_SCENE_LABEL } from './constants.js'
 export { isValidGroupSegment, isValidGroupPath, MEMORIES_INDEX_FILE, MEMORIES_TRASH_DIR } from './constants.js'
 // parseModeState 搬到了 index-io.ts，但 test/contracts.test.mjs 按原路径引它 —— 契约不能断。
 export { parseModeState } from './index-io.js'
-// 投影 / 渲染纯函数（2026-09-19 抽到 ./projection.ts）：索引 → 界面与注入看到的那份文本。
+// 投影 / 渲染纯函数（抽到 ./projection.ts）：索引 → 界面与注入看到的那份文本。
 import {
   attachmentLine, attachmentNamesSync, attachmentSummarySync, collapseActiveForNewScene,
   compareSceneBuckets, enabledSceneOf, ensureSceneRecords, explicitDescriptionOf,
   bodyBlock, memoryBlock, normalizeActive, resolveActiveScenes, sceneHeading, sceneLabel,
   sceneOf, sceneOrderOf, signatureOfIndex,
 } from './projection.js'
-// 索引 IO 组与发现/快照组（2026-09-19 抽出）。
+// 索引 IO 组与发现/快照组（抽出）。
 import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, repairFromQuarantine, sceneRecordOf, normalizeScenePromptId, pathExists, isAbsentError } from './index-io.js'
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
 import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
@@ -125,8 +125,10 @@ import type { ParsedSkillDoc, DiscoveredEntry, Snapshot } from './snapshot.js'
  */
 export const HUB_DIR = 'tool-management'
 
+/** 场景记录所在子目录名（相对 hub 根）。 */
 export const SCENES_DIR = 'scenes'
 
+/** 记忆正文真源所在子目录名（相对 hub 根）。 */
 export const MEMORIES_DIR = 'memories'
 
 
@@ -134,6 +136,7 @@ export const MEMORIES_DIR = 'memories'
 export const PRESETS_DIR = 'prompts'
 
 
+/** 记忆域服务门面：索引、场景档案、注入用的投影读口与迁移都在这里。 */
 export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesService {
   // 仅测试注入绝对路径；生产按 $DSH_HOME 解析（与核心技能目录同源）。
   // v0.4：全部落到 $DSH_HOME/tool-management/ 一个目录内（memories/ + scenes/ + 侧车），
@@ -163,7 +166,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
 
   let snapCache: { at: number; value: Snapshot } | null = null
   /**
-   * 同一拍里的并发读合流（0.21.2）。`rules-list` 被斜杠菜单、场景写入后的刷新、记忆页轮询
+   * 同一拍里的并发读合流。`rules-list` 被斜杠菜单、场景写入后的刷新、记忆页轮询
    * 同时问到时，各建一份快照等于把同一棵目录树扫好几遍；而写操作之后在飞的那份是写之前的，
    * 不能拿它当新鲜数据。`generation` 只让**写之后发起**的扫描落缓存。
    */
@@ -196,13 +199,13 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   //
   // 段文本 = 活动场景（`_shared` ∪ index.active，缺失时全部）下所有 .md 正文，
   // 按「场景顺序 → 记忆名」确定性拼接；超预算按同一顺序确定性截断并追加固定标记。
-  // 禁止时间戳/计数：否则每请求都变，前缀缓存永远不命中（§5.2）。
+  // 禁止时间戳/计数：否则每请求都变，前缀缓存永远不命中。
   //
   // 每次装配：只做「读索引 + stat 遍历」的廉价探测；指纹不变直接返回上次结果，
   // 指纹一变（切场景 / 改文件 / 外部编辑器改文件 / 改 enabled）才重读正文并重排。
   // 见文件顶部「两相扫描」注释里为什么不选 fs.watch 方案。
 
-  // ⚠️ 这两份缓存**必须是 Map**（0.21.2）：会话作用域让"同一份磁盘、不同会话"能算出两份
+  // ⚠️ 这两份缓存**必须是 Map**：会话作用域让"同一份磁盘、不同会话"能算出两份
   // 不同的段。单槽缓存下 A 算完 B 直接用 —— 症状是「A 的场景记忆出现在 B 的上下文里」，
   // 而且它不报错、只在两个会话交替使用时出现，是最难查的一类。键 = 会话作用域的指纹，
   // 上限 16 条 LRU（会话数量级远小于这个数，超了只说明有大量一次性会话）。
@@ -243,7 +246,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
         JSON.stringify(scope.memory ?? {}),
       ].join('\u0000')
 
-  // ── 注入侧取数：读失败必须出声（2026-09-30 审查 F7）────────────────────────
+  // ── 注入侧取数：读失败必须出声────────────────────────
   //
   // 注入通道把 `text()` 返回的空串读成"这一轮没有内容"；若该域此前发布过，它会据此发一条
   // 「已清空 —— 此前注入的同类内容不再有效」。但空串有两个来源：**真的没内容**与**读失败**。
@@ -312,7 +315,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
 
   // ── 场景提示词（绑定预设正文；读盘、只读；写文件由 scene-prompt-sync.ts 负责）──
   //
-  // 语义（用户裁定 2026-09-15）：
+  // 语义：
   //   - 场景可绑定**一个**提示词预设（`scenes[].prompt` → `prompts/<id>/AGENTS.md`）；
   //   - 除保留场景 `global` 外**同时只能启用一个场景**，所以同一时刻至多一份提示词在场；
   //   - 没有启用其它场景时才轮到 `global` 自己的绑定（它恒常生效，覆盖"永远在场的提示词"）；
@@ -345,7 +348,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
       return ''
     }
     // 路径上**有东西但不是普通文件**（目录 / 设备）→ 也是故障，不能当成"预设不存在"：
-    // 后者会让提示词域静默退回基线、或在该域此前发布过时发一条假的「已清空」（F7）。
+    // 后者会让提示词域静默退回基线、或在该域此前发布过时发一条假的「已清空」。
     if (!isFile) throw new Error(`预设正文不是一个文件：${file}`)
     const cached = promptFileCache.get(id)
     if (cached && cached.key === key) return cached.text
@@ -380,7 +383,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   function readGlobalAgentsMdSync(): string {
     // 优先用宿主实际读的那一份（`deps.globalAgentsMdPath`，与写侧同源）；拿不到时退回
     // `resolveDshHome()`（`$DSH_HOME` ‖ `~/.dsh`）—— 那是**另一条独立来源**，两边不同时
-    // 会取到另一个文件（2026-09-30 审查 P2-19：去重读错文件 → 正文注入两遍）。
+    // 会取到另一个文件。
     const file = deps.globalAgentsMdPath?.() || join(resolveDshHome(), 'AGENTS.md')
     let key: string
     let isFile = false
@@ -415,19 +418,19 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    */
   function resolveScenePreset(
     /**
-     * 会话层钉住的场景（0.21.2）：`string` = 取**这个场景**绑定的预设，而不是全局当前场景的；
+     * 会话层钉住的场景：`string` = 取**这个场景**绑定的预设，而不是全局当前场景的
      * `null` = 钉住"没有场景"（已脱离且基线无场景）→ 场景预设这一层整层不参与。
      *
      * 语义差别必须写清：全局那条走的是"启用场景 → 其绑定 → 退化到 global"这条链（进场景
      * 会改写 AGENTS.md，所以文件里本来就是它）；会话层那条是"本会话要看到哪个场景的提示词"
-     * —— 只读预设正文，**不写 AGENTS.md**（决策 14）。
+     * —— 只读预设正文，**不写 AGENTS.md**。
      */
     pinnedScene?: string | null,
   ): { scene: string; presetId: string; text: string } | null {
     // 钉住"没有场景"：不取任何场景绑定（global 的绑定也属于场景层，不参与）。
     if (pinnedScene === null) return null
     const index = readIndexSync(stateDir)
-    // 索引读不到 → 连"哪个场景绑了哪个预设"都无从得知，这必须报故障而不是报"没有提示词"（F7）。
+    // 索引读不到 → 连"哪个场景绑了哪个预设"都无从得知，这必须报故障而不是报"没有提示词"。
     assertIndexReadable()
     // 会话层钉住了场景 → 直接取它绑的那份（没有绑定就返回 null，由调用方退化到用户级）。
     if (pinnedScene !== undefined && pinnedScene !== '') {
@@ -586,7 +589,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   /**
    * 写操作成功后：失效快照 + 丢弃场景记忆段缓存 + 通知 provider。
    * 指纹本身已能发现变化，这里显式丢弃是为了让写操作返回后**必然**是新鲜结果。
-   * 不再写 ~/.dsh/AGENTS.md（原始终层投影已下线，见变更单 §4/§10）：
+   * 不再写 ~/.dsh/AGENTS.md（原始终层投影已下线）：
    * 公共基线改由 `_shared/` 场景承担，统一走 systemPrompt 段。
    */
   const refresh = async (): Promise<void> => {
@@ -600,7 +603,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   /**
    * 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内，保持与其余索引写串行）。
    *
-   * `fields` 是**意图声明**（2026-09-30 审查 P2-3）：不传 = 老行为（按 `patch` 里出现的字段
+   * `fields` 是**意图声明**：不传 = 老行为（按 `patch` 里出现的字段
    * 全写）。传了就只写列出的那几项 —— 引擎的每条路径各自动的是哪一片是明确的（"只落 mode"
    * 与"落 mode + active"是两件事），而"我没打算改的字段"必须留给**队列内刚读出来**的值，
    * 否则一次陈旧的整片回写会把窗口期里别人改的东西抹掉。
@@ -623,7 +626,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   /**
    * 场景档案引擎专用：只写**一个场景**的档案（队列内按**逐场景增量**落盘）。
    *
-   * 为什么不能走 `patchIndex({ archives })`（2026-09-30 审查 P2-3）：那个接口拿到的是
+   * 为什么不能走 `patchIndex({ archives })`：那个接口拿到的是
    * 一份**整表**，而整表是在队外读出来的 —— 引擎保存场景 A 的档案期间，另一个写者（HTTP op /
    * 模型工具 / 另一条引擎路径）保存了场景 B 的档案，前者落盘时会把 B 的整份覆盖掉。
    * 逐场景增量只动自己那一条，其余键保留队列内读到的值。
@@ -646,7 +649,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   }
 
   /**
-   * 某个场景的完整档案（同步，0.21.2）：会话的**场景层**按它实时计算（档案改了，下一个
+   * 某个场景的完整档案（同步）：会话的**场景层**按它实时计算（档案改了，下一个
    * 请求就跟着变）。读不到索引时返回 `undefined`（= 这一层没话说，按全局算）—— 失败的方向
    * 必须是"少过滤"，不能是"把本会话的东西整个关光"。
    */
@@ -660,7 +663,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   }
 
   /**
-   * 某个场景档案里的人设绑定（同步，0.21.2）。读不到索引时返回 `undefined`（= 不过滤）——
+   * 某个场景档案里的人设绑定（同步）。读不到索引时返回 `undefined`（= 不过滤）——
    * 这里失败的方向必须是"多列几个人设"，不能是"把人设目录整个清空"。
    */
   const sceneSubagentsOf = (scene: string): string[] | undefined => {
@@ -678,10 +681,10 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   /**
    * 场景行：**以索引的场景记录为准**（空场景也在列表里），记忆条数由快照统计。
    *
-   * `override`（0.21.2）= 本会话钉住的场景。给了就按它算 `active` / `selectable` —— 少了这一步，
+   * `override`= 本会话钉住的场景。给了就按它算 `active` / `selectable` —— 少了这一步
    * `rules-list` 里 `activeScene` 已经按会话投影了，而 `scenes[]` 每一行还报着全局值：
    * 场景页的「当前」标签、记忆页的场景卡、单选置灰全都不动，表现就是「切换场景没反应」
-   * （2026-10-19 实测）。
+   * 。
    */
   function sceneRows(snap: Snapshot, index: RulesIndex, override?: string | null): SceneRow[] {
     const names = new Set<string>([GLOBAL_SCENE, ...Object.keys(index.scenes || {}), ...snap.scenes])
@@ -757,7 +760,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     return out
   }
 
-  // 注入文本出口（2026-09-16 第四版）。
+  // 注入文本出口。
   //
   // 历史：本服务先后把场景记忆做成"系统提示词段"（会被 persona complete 压掉）与
   // "写 AGENTS.md 文件"（预设不挂 dsh-agent-instructions 时到不了模型）。现在两条都交给
@@ -765,7 +768,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   // 这里只留**同步取文本**的两个出口，注册/生命周期由 index.ts 的注入器统一管。
   //
   //   - `memoryText`：场景记忆段（记忆正文；`''` = 没有可注入的内容）。走**注入侧口径**
-  //     （`requireSceneMemory`）：读失败抛异常，由注入通道报 `error` 并保留上一轮内容（F7）。
+  //     （`requireSceneMemory`）：读失败抛异常，由注入通道报 `error` 并保留上一轮内容。
   //     界面投影用的是 `sceneMemory()`（不抛、退回上一轮），两者共用同一个 `requireSceneMemory`。
   //   - `promptText`：全局提示词正文 = 场景期间用场景提示词、平时用 AGENTS.md 正文。
   //     **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
@@ -804,22 +807,22 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 不是"这次注入了什么"；界面只拿它当悬停提示，不参与任何判定。
    *
    * `text` 是**模型侧**正文，开头一行 `Instructions from: <展示路径>` —— 与官方 agent-instructions
-   * 逐字同形（`render.js` 的 `sectionText`；2026-10-18 由 `Source:` 改过来：官方注入本来就用
+   * 逐字同形（`render.js` 的 `sectionText`；由 `Source:` 改过来：官方注入本来就用
    * 这个措辞，模型对它有现成的先验）。模型据此知道这些规则写在哪个文件里：用户说"把这条记下来"
    * 时它知道该改哪份文件，而不是只能凭印象回答。
    */
   const resolvePrompt = (scope?: PromptScopeOverride, pinnedScene?: string | null): { path: string; digest: string; text: string } | null => {
     // 场景提示词与 AGENTS.md 正文在用户眼里就是同一件事（"全局提示词"）：场景期间前者取代后者，
     // 与官方语义一致（进场景改写文件、退出恢复）。所以一个域、一份文本，取到非空的场景提示词就用它。
-    // 项目链（0.21.2）：与官方同构，**永远跟着走**（未钉住时官方自己送它，钉住时由我们送）。
-    // 取不到 cwd（冷会话 / 子代理）→ 空链，退化成"只有用户级"，与 0.21.2 行为一致。
+    // 项目链：与官方同构，**永远跟着走**（未钉住时官方自己送它，钉住时由我们送）。
+    // 取不到 cwd（冷会话 / 子代理）→ 空链，退化成"只有用户级"，与既有行为一致。
     const project = scope === undefined || scope.cwd === undefined ? null : renderProjectInstructions(discoverProjectInstructions(scope.cwd), AGENTS_MD_MAX_BYTES)
     if (project !== null && project.text.trim() !== '') {
-      // 有项目链时把它拼在用户级**之前**（官方顺序：用户级 → 项目链，宽 → 窄）。
+      // 有项目链时把它拼在用户级**之后**（官方顺序：用户级 → 项目链，宽 → 窄）。
       // 用户级那一槽由调用方决定用哪一份（场景预设 / ~/.dsh/AGENTS.md）。
       // ⚠️ 拼的是 `user.text` 而不是 `user` 本身：`resolveUserLevelPrompt` 回的是
       // `{ path, digest, text }`，把整个对象 join 进数组会得到字面量 `[object Object]`
-      // —— 用户级那一槽就这样被吃掉了（极简下只剩项目级那一段，2026-10-19 实测）。
+      // —— 用户级那一槽就这样被吃掉了（极简下只剩项目级那一段，实测）。
       const user = resolveUserLevelPrompt(pinnedScene, scope?.override, scope?.baseline)
       const combined = [user === null ? '' : user.text, project.text].filter((part) => part !== '').join('\n\n')
       if (combined.trim() === '') return null
@@ -847,14 +850,14 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 从 `resolvePrompt` 里拆出来是因为项目链要**拼在它前面**：两段来源不同、判定不同
    * （预设 / 会话覆盖 / 快照 vs 文件），但用户看到的是同一件事（"全局提示词"）。
    *
-   * 会话覆盖（0.21.2）取代的正是**这一槽**：
+   * 会话覆盖取代的正是**这一槽**：
    *   · `content` 直接用（来源行标成侧车，模型能看出这是会话级覆盖）；
    *   · `presetId` 去读那份预设；删了 / 读不动 → 退化到下一层，不报错、不清侧车。
    *
-   * 冻结快照（0.21.2 第三轮）：`baseline !== undefined` 时 AGENTS.md 槽位换成它 ——
+   * 冻结快照：`baseline !== undefined` 时 AGENTS.md 槽位换成它 ——
    * 全局文件之后怎么改都与这个会话无关。**快照为空串也算一层**（返回 null）：
    * 创建时没有 AGENTS.md 的会话，不该因为后来全局应用了预设就突然多出提示词。
-   * 只有从来没有快照时才读当前文件（退化路径，与 0.21.2 前两轮逐字相同）。
+   * 只有从来没有快照时才读当前文件（退化路径）。
    */
   const resolveUserLevelPrompt = (
     pinnedScene?: string | null,
@@ -867,14 +870,14 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
       return {
         path,
         digest: createHash('sha1').update(sessionContent).digest('hex'),
-        // 来源行点名"session override"：模型能看出这份取代了全局基线（0.21.2）。
+        // 来源行点名"session override"：模型能看出这份取代了全局基线。
         text: `Instructions from: ${path} (session override)\n\n${clampPromptBody(sessionContent, 'the session override')}`,
       }
     }
     const scene = resolveScenePreset(pinnedScene)
     const hasBaseline = baseline !== undefined
     // 有快照时**不读**当前文件：既不需要它的内容，也不需要它此刻读不读得动。
-    // 没有快照时仍按老口径读：它是最后一层，读失败必须出声（F7），不能被当成"没有提示词"。
+    // 没有快照时仍按老口径读：它是最后一层，读失败必须出声，不能被当成"没有提示词"。
     let raw = ''
     let rawError: unknown = null
     if (!hasBaseline) {
@@ -1027,7 +1030,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     'scene-trash-delete': (args) => runWrite(() => sceneOps.sceneTrashDelete(args || {})),
     'rules-rebind-prompt': (args) => runWrite(() => sceneOps.rulesRebindPrompt(args || {})),
 
-    // 一键修复（0.21.2）：索引被隔离后唯一的出口。它不"改"状态，是把已被改名移走的
+    // 一键修复：索引被隔离后唯一的出口。它不"改"状态，是把已被改名移走的
     // 索引装回原位，所以**不走 runWrite / 也不进普通写队列之外的保护** —— 但必须入队：
     // 隔离期间其它 op 全被 writeIndex 拒着，队列里可能正排着几个失败的写，让修复与它们
     // 串行比让它在中间插入更安全（修完的那一刻，队列前面的失败项已经各自报过错）。

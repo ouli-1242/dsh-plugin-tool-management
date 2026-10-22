@@ -1,7 +1,7 @@
-// 人设运行侧（provider 挂载 + 一次委派），2026-10-01 从本文件的工厂体剥出。
+// 人设运行侧（provider 挂载 + 一次委派），从本文件的工厂体剥出。
 import { createRunProvider } from "./run-provider.js"
 // src/subagents/service.ts —— 轻量子智能体：人设发现（TTL 扫描）+ 官方 ctx.subagents.start 薄封装。
-// 设计 §3：人设 = $DSH_HOME/tool-management/agents/<name>.md（frontmatter 可选，缺省派生）；v1 串行运行；
+// 人设 = $DSH_HOME/tool-management/agents/<name>.md（frontmatter 可选，缺省派生）；串行运行；
 // provider 缺失时经 createRequire 挂载宿主侧包：`spawn`（新会话，默认）与 `fork`（继承本次会话）。
 //
 // v0.4 目录变更：人设由 `$DSH_HOME/subagents/` 搬到 `$DSH_HOME/tool-management/agents/`
@@ -89,6 +89,7 @@ async function relocateLegacyPersonas(dir: string): Promise<void> {
   }
 }
 
+/** 人设域服务门面：人设发现（TTL 扫描）与委派入口。 */
 export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; stateDir?: string }): SubagentService {
   const dir = opts?.subagentsDir || defaultPersonasDir()
   const stateDir = opts?.stateDir && opts.stateDir.trim() !== '' ? opts.stateDir : join(resolveDshHome(), 'tool-management')
@@ -173,7 +174,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
     // 写入后重取指纹，让下一次 readEnabled 直接命中缓存（否则会白读一次）。
     enabledStamp = await fileStamp(stateFile)
   }
-  /** 新建/导入/恢复的人设默认停用（v0.8.5 用户裁定，与技能 / MCP 同口径）：
+  /** 新建/导入/恢复的人设默认停用（与技能 / MCP 同口径）：
    *  文件缺失（含旧数据）时先把「全部启用」物化成显式全集**并排除新名**——
    *  否则新名会随"文件缺失=全启用"的兼容语义被误判为启用。已有显式集合时新名
    *  不在集合里，天然停用，无需写盘。 */
@@ -249,7 +250,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const fresh: PersonaDoc[] = []
       try {
         const entries = await readdir(dir)
-        // 只列**能管得动**的人设（2026-09-30 审查 P2-18）：`validPersonaName` 走
+        // 只列**能管得动**的人设：`validPersonaName` 走
         // `paths.ts` 的 `isValidSegment`，隐藏名（`.foo`）被判 `hidden` —— 于是此前列表里
         // 会出现一个「看得见、改不了、删不掉」的人设（任何 op 都拒它）。同一条谓词在这里
         // 收口；大小写也按 `relocateLegacyPersonas` 的 `toLowerCase()` 口径统一（`A.MD` 在
@@ -266,14 +267,14 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
     return withEnabled(docs, await readEnabled())
   }
 
-  // provider 在场性（设计 §3.2，落地方式见 cordis.patch.yml 的取舍注释）：
+  // provider 在场性（落地方式见 cordis.patch.yml 的取舍注释）：
   // 官方通道探测（ctx.subagents.list()）→ 缺失才挂载 → 失败把原因原样带出（不吞、不谎报）。
   // 不是一次性静默标记：每次调用都先探测，宿主后来注册了 provider 也能立刻跟上。
   //
-  // 两个 provider（2026-09-17 加 fork，理由见 runOnce 的通道说明）：
+  // 两个 provider（加 fork，理由见 runOnce 的通道说明）：
   //   spawn = 新起的独立会话（默认）；fork = **继承本次会话已完成的对话**（官方 subagent_fork 用的是它）。
-  // ---------- 运行侧：provider 挂载与一次委派（0.16.x 设计 §3.2） ----------
-  // 正文 2026-10-01 整段搬到 ./run-provider.js（一字未改，只把 ctx / req / message 三个
+  // ---------- 运行侧：provider 挂载与一次委派 ----------
+  // 正文 整段搬到 ./run-provider.js（一字未改，只把 ctx / req / message 三个
   // 闭包名字改走 deps）。`req` 由**这里**造好再传过去：provider 包是按 service.js 自己的
   // 位置解析的，把 createRequire 那行搬走等于换解析基准。
   const { runSerial } = createRunProvider({ ctx, req, message })
@@ -314,7 +315,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         return { ok: false, error: `创建人设目录失败: ${dir}（${message(e)}）` }
       }
       await writeFileAtomically(target, serializePersona(args))
-      // v0.8.5：新建默认不启动——显式集合下新名天然停用；文件缺失时先物化全集并排除新名。
+      // 新建默认不启动 —— 显式集合下新名天然停用；文件缺失时先物化全集并排除新名。
       cache = null
       return withEnabledNote({ ok: true, name }, () => materializeEnabledExcluding([name]))
     },
@@ -386,7 +387,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       if (!entry) return { ok: false, error: `回收站条目不存在: ${id}` }
       if (!validPersonaName(entry.name)) return { ok: false, error: `回收站里的人设名不合法: ${entry.name}` }
       /*
-       * 同名先问一句（用户 2026-10-14）：撞名时**默认仍拒绝**（绝不覆盖），但把候选名字一起
+       * 同名先问一句（用户要求）：撞名时**默认仍拒绝**（绝不覆盖），但把候选名字一起
        * 回（`params.next`），界面弹窗才能如实写出"确认后会叫 `写作助手（1）`"；用户确认后带
        * `dedupe: true` 重来，这一次真的按退号的名字落盘。
        *
@@ -416,7 +417,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
         return { ok: false, error: `恢复失败: ${message(e)}` }
       }
       await purgeTrashEntry('subagents', id)
-      // v0.8.5：回收站恢复默认不启动（与新建/导入同口径）。
+      // 回收站恢复默认不启动（与新建 / 导入同口径）。
       // 启停名单必须按**最终落盘的名字**写：退号恢复时它不是回收站里的原名。
       cache = null
       return withEnabledNote({ ok: true, name, renamed: name !== entry.name }, () => materializeEnabledExcluding([name]))
@@ -462,7 +463,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       )
     },
     /**
-     * 子智能体开关（v0.8）：停用 = 不注入目录段、subagent_manager_list/run 不可见；文件本体不动。
+     * 子智能体开关：停用 = 不注入目录段、`subagent_manager_list` / `run` 不可见；文件本体不动。
      * `enabled` 必须显式给布尔值 —— 与 rules-toggle 同一条口径：不按"翻转"推断，
      * 免得参数丢了时界面以为改了、实际什么都没动。
      */

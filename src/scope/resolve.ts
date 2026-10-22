@@ -11,12 +11,12 @@
 //
 // 子代理 / 侧聊**有**自己的 session id，但它属于父会话这个"对话"：作用域一律向上找到
 // 用户会话再查（`sessionScopeIdOf`），否则父会话里藏起来的服务器 / 技能 / 工具表，派一个
-// 子代理就能重新看见（0.21.2 复核）。
+// 子代理就能重新看见。
 //
 // ## 为什么不用 workspaceId
 //
 // 会话头里没有它。要拿得走 `ctx.workspaceRegistry` 线性查一遍（每个 step 一次）。
-// 0.21.2 的「工作区隔离」因此以**会话头的 cwd** 为准（与下拉分组、工作区挂回同一口径），
+// 「工作区隔离」因此以**会话头的 cwd** 为准（与下拉分组、工作区挂回同一口径），
 // 派生出的作用域键见 `scope/workspace-key.ts`；仍然不需要 workspaceId。
 
 import { nearestProjectRoot } from '../skills/skill-roots.js'
@@ -31,7 +31,7 @@ export interface SessionIdentity {
 }
 
 /**
- * 见过的会话 cwd（0.21.2 工作区模式用）。
+ * 见过的会话 cwd（工作区模式用）。
  *
  * 为什么另记一份：工作区作用域键要从**根会话**的 cwd 派生，而 `sessionScopeIdOf` 只沿着
  * `header.parentSession` 走 id，手里没有父会话的 header。父会话的 agent 先被看见时把 cwd
@@ -80,7 +80,7 @@ export function sessionIdOf(agent: unknown): string | null {
 }
 
 /**
- * 子会话 → 父会话（官方在会话头 `header.parentSession` 里记，0.21.2 复核）。
+ * 子会话 → 父会话（官方在会话头 `header.parentSession` 里记）。
  *
  * 只记内存：它是**活 agent 对象**上的一手信息，恢复出来的子会话重建 agent 时会再记一次。
  * 上限 4096 条，超了丢最早的 —— 键只是会话 id 字符串，丢了最多让深处嵌套的子代理退回
@@ -100,7 +100,7 @@ function parentOfSession(agent: unknown): string | null {
 }
 
 /**
- * 用于**作用域解析**的会话 id（0.21.2 复核）：子代理 / 侧聊会话 → 它所属的用户会话。
+ * 用于**作用域解析**的会话 id：子代理 / 侧聊会话 → 它所属的用户会话。
  *
  * 为什么必须往上找：作用域是按"对话"记的，而子代理有**自己的** session id。直接用子会话
  * id 查侧车必然查不到，于是它在全局口径下拿到父会话已经关掉的服务器 / 技能 / 工具表 ——
@@ -146,7 +146,7 @@ export async function projectRootOf(cwd: string | undefined): Promise<string | n
   }
 }
 
-// ── 工作区模式（0.21.2）：把一个会话折叠到工作区作用域键 ──────────────────────
+// ── 工作区模式：把一个会话折叠到工作区作用域键 ──────────────────────
 
 /**
  * 一个**已知 cwd 的会话 id** → 当前模式下的作用域键（同步）。

@@ -63,7 +63,8 @@ export async function discoverReadonlyEntries(root: string): Promise<ReadonlyDis
       truncated = true;
       break;
     }
-    const current = queue[cursor];
+    // 队列只在本轮末尾 push、从不删除，循环条件已保证 cursor < queue.length。
+    const current = queue[cursor]!;
     let realDirectory: string;
     const items: Dirent[] = [];
     try {

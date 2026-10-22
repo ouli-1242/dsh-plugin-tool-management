@@ -24,6 +24,7 @@ import {
   type ToolTableReport, type ToolTableRow, type ToolTableSettings,
 } from './tools/table.js'
 
+/** 工具表切换的依赖：方案存储、可见性接缝与执行守卫。 */
 export interface ToolTableSwitchDeps {
   /** 确保 hub 目录存在（读侧车前调用，与母文件同一条）。 */
   ensurePaths(): Promise<any>
@@ -52,13 +53,14 @@ export interface ToolTableSwitchDeps {
   carrierHiddenTools?: () => readonly string[]
 }
 
+/** 工具表切换的对外面：换方案、还原、读当前关停名单。 */
 export interface ToolTableSwitch {
   /** 注册时量到的工具体积（同一个 Map 交回母文件：注册口在别处写它）。 */
   toolTableSizes: Map<string, number>
   recordToolSize(def: ToolDefinition): void
   readToolTableSettings(force?: boolean): Promise<ToolTableSettings>
   /**
-   * 侧车安全状态（0.21.2）：`unknown` = 损坏 / 不可读。此时读取沿用「上次成功值 →
+   * 侧车安全状态：`unknown` = 损坏 / 不可读。此时读取沿用「上次成功值 →
    * 出厂默认」，但**写一律拒绝** —— 覆盖一份读不出来的文件等于把用户的选择洗掉。
    */
   toolTableState(): { state: 'ok' | 'unknown'; issue: 'corrupt' | 'unreadable' | null }
@@ -86,6 +88,7 @@ export interface ToolTableMutationFailure {
   limit?: number
 }
 
+/** 模型工具表开关（侧车 `tool-table.json`）：出厂默认名单、按会话 / 全局改可见集。 */
 export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitch {
       // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
   // 工具表按**每个请求**付钱：20 个工具的整份定义合计 ≈3,769 tok 每轮都在。关掉某几个，
@@ -150,7 +153,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       toolTableIssueValue = null
       clearRuntimeNote('tool-table-file')
     } else if (checked.status === 'ok') {
-      // 0.14.0 旧工具名迁移：读侧翻译一次并**回写盘**（幂等）。不迁移的话，用户"关掉了某条"
+      // 旧工具名迁移：读侧翻译一次并**回写盘**（幂等）。不迁移的话，用户"关掉了某条"
       // 的意图会在新名字上静默失效 —— 那条工具照旧每轮发出去，而界面上看不出来。
       // 写失败不回滚本次读取：内存里已经是迁移后的值，下次读会再试一次。
       // 存过盘的一律照盘上那份，包括显式的 `hidden: []` —— 那是"我全都要"，不能被默认值盖掉。
@@ -277,7 +280,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
         if (name === '') return { ok: false, code: 'nameEmpty' }
         const outcome = await mutateToolTableSettings((current) => {
           const added = addPreset(current, name, current.hidden)
-          // 同名不覆盖（用户裁定）：撞名要用户换个名字，而不是悄悄改掉已有那份。
+          // 同名不覆盖：撞名要用户换个名字，而不是悄悄改掉已有那份。
           if (added.exists) return { ok: false, code: 'nameTaken', name }
           if (current.presets.length >= PRESET_MAX_COUNT) {
             return { ok: false, code: 'limit', limit: PRESET_MAX_COUNT }

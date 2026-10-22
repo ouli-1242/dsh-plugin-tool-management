@@ -13,13 +13,13 @@ import { resolveDshHome } from "./homes.js";
 
 // ── 官方内置技能来源（随宿主注入会话上下文的内置技能）──────────────────────
 //
-// 宿主按形态注入不同的官方技能（官方源码逐一核对，2026-09-30）：
+// 宿主按形态注入不同的官方技能（官方源码逐一核对）：
 //   - 桌面版 4 个：office-docx / office-pptx / office-xlsx（dsh-skill-office 只在桌面
 //     宿主装配，assetRoot 指到 `<resources>/runtime/office-skills`）+ diagnose-windows-
 //     sandbox-acl（dsh-sandbox-local 的门控是 `process.platform === "win32"`，rank 600）。
-//   - web 版：沙盒诊断技能由宿主注入（门控只看 win32 —— 用户 2026-09-30 截图实锤，
-//     0.16.5 按「web 不注入」的误判把 web 挡在门外，导致页面不显示、宿主照注）；office
-//     插件 web 宿主不装配、不注入，但用户裁定（2026-09-30）技能页照样把这三个暴露出来
+//   - web 版：沙盒诊断技能由宿主注入（门控只看 win32 —— 用户截图实锤，
+//     按「web 不注入」的误判把 web 挡在门外，会让页面不显示而宿主照注）；office
+//     插件 web 宿主不装配、不注入，但用户要求技能页照样把这三个暴露出来
 //     统一管理（npm 包自带完整 assets，接管后可启停）。
 //
 // 它们或住在官方 asar 里、或由官方 provider 复制进临时目录自管，插件直接扫描/接管有两个
@@ -30,14 +30,15 @@ import { resolveDshHome } from "./homes.js";
 // （`$DSH_HOME/tool-management/official-skills/<desktop|web>/`）：每次宿主启动从官方源头
 // 整目录覆盖拷贝（与官方 provider 的「私有资源副本」同一做法），扫描、启停、overlay、
 // 脚本执行全部落在真实文件上。599 压过宿主 provider 的 600，停用即不注入。分形态是竞态
-// 教训：0.16.5 之前共用一份目录，web 启动把它解析到的沙盒技能盖进去，桌面物化好的
-// 4 个只剩 1 个（实测）；改成各写各的子目录，互不清对方的账。共享布局的残留（旧条目
+// 教训：原先共用一份目录，web 启动把它解析到的沙盒技能盖进去，桌面物化好的
+// 4 个只剩 1 个；改成各写各的子目录，互不清对方的账。共享布局的残留（旧条目
 // 直接躺在 official-skills/ 下）按已知名单清理。
 //
-//   - 预设参考技能（dsh-agent-preset/skills）不注入会话上下文，不列入（用户裁定）。
+//   - 预设参考技能（dsh-agent-preset/skills）不注入会话上下文，不列入。
 //
 // 单个来源、随 DSH 技能之后排列，来源层语义同默认来源（不可移除、无来源开关）。
 
+/** 官方来源的 key：只读、不可删，界面按它区分「官方内置」与用户来源。 */
 export const OFFICIAL_SOURCE_KEY = "official";
 
 /** electron 的 resources 目录；非桌面宿主（web 等普通 node 进程）没有这个属性。 */
@@ -97,7 +98,7 @@ function resolvedPackageDir(packageName: string, subpath: string): string | null
 /**
  * office 技能源头。桌面版由宿主挂载：运行时真实目录优先（官方 assetRoot），其次 asar
  * 包内 assets。web 宿主不装配 office 插件（不注入），但 npm 包自带完整 assets —— 用户
- * 裁定（2026-09-30）技能页照样暴露这三个技能，走宿主进程解析链取包内一份。解析不到
+ * 要求技能页照样暴露这三个技能，走宿主进程解析链取包内一份。解析不到
  * 一律 null —— 不把拿不到真实文件的技能凭空列出来。
  */
 function officialOfficeSource(): string | null {
@@ -133,7 +134,7 @@ function officialSandboxSource(): string | null {
 // 「Installed LibreOffice Kit」：SKILL.md 明文要求「使用这段提供的 libreofficeKit.node
 // 与 .cli 绝对路径，禁止自行搜索/猜测」。我们以 599 接管后官方 provider 不再被问到，
 // 这段必须由我们补上 —— 否则模型拿到的 office 技能缺执行 LibreOffice 命令所需的全部
-// 路径（这个缺口 0.16.5 在桌面上就已存在）。文案与 JSON 形状逐字取自官方
+// 路径（这个缺口在桌面上本来就有）。文案与 JSON 形状逐字取自官方
 // dsh-skill-office lib/index.js 的 officeRuntime()；node/cli 的落点按宿主形态各自核实：
 //   - 桌面：官方明确要求 packaged 应用必须给**独立 node**（electron 本体不行）。
 //     实测桌面把运行时装在 `<resources>/runtime/primary-runtime/`（DSH_PRIMARY_RUNTIME
@@ -143,6 +144,7 @@ function officialSandboxSource(): string | null {
 // 任一路径不是真实文件 → 用官方口径的「已停用」文案（SKILL.md 自有降级分支，模型不会
 // 去猜路径），绝不给一个跑不起来的路径。
 
+/** 三个 office 技能的名字：get 时要为它们补官方 provider 追加的 LibreOffice Kit 段。 */
 export const OFFICE_SKILL_NAMES = new Set([
   "office-docx",
   "office-pptx",
@@ -237,7 +239,7 @@ function officialFormName(): "desktop" | "web" {
 }
 
 /**
- * 0.16.5 之前各形态共用一份目录（旧条目直接躺在 official-skills/ 下）；分形态目录后
+ *原先各形态共用一份目录（旧条目直接躺在 official-skills/ 下）；分形态目录后
  * 这些残留只会变成幽灵条目，按这份已知名单清掉。只清名单内的名字，绝不碰旁边的
  * `<form>/` 子目录 —— 那是另一种形态物化的现役目录。
  */
@@ -290,6 +292,7 @@ function materializeOfficialSkills(): string | null {
   }
 }
 
+/** 官方内置技能的只读来源；materialize 不出真实目录时返回 null（不凭空列出）。 */
 export function officialSkillRoot(): SkillSource | null {
   if (officialRootCache !== undefined) return officialRootCache;
   const dir = materializeOfficialSkills();
@@ -306,7 +309,7 @@ export function officialSkillRoot(): SkillSource | null {
           // 来源层无开关（同默认来源），单个技能可启停；overlay 以 599 压过官方
           // provider 的 600，脚本从物化副本的真实路径执行。
           //
-          // 残余风险（2026-09-30 审查 §5 F12，如实标注、不修）：`599` 是个**数字契约** ——
+          // 残余风险：`599` 是个**数字契约** ——
           // 它只在"官方那个 provider 的 rank 恰好是 600"时成立。官方调档位（把内置技能提到
           // 599 以上、或降到 599 以下）会让接管失效：要么官方内置技能重新注入、与 599 层并存
           // （同名两份），要么本插件反向遮蔽掉本不该遮蔽的东西。rank 是纯数字、没有能力探测

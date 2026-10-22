@@ -41,7 +41,7 @@ export function stripReserved(names: string[]): { kept: string[]; dropped: strin
  *
  * 所以：
  *   - 当前预设配了名单（且名单非空）→ 用它；白名单额外并入**当时真实在跑的 MCP 工具**
- *     （官方 allow 是"清单之外全砍"，不并进来会把 MCP 一起砍掉；用户裁定：子代理要能
+ *     （官方 allow 是"清单之外全砍"，不并进来会把 MCP 一起砍掉；用户要求：子代理要能
  *     用当前启动的 MCP）；
  *   - 当前预设没配 → 回落旧的全局 `tools` / `toolsDeny`（老文件行为不变）；
  *   - 名单里有已经消失的工具名、或写了保留名 → **丢掉并在 note 里如实说明**（不接受静默失效）；

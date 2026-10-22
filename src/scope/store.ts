@@ -35,13 +35,14 @@ export const SCOPE_OVERRIDES_FILE = 'scope-overrides.json'
 /** 读缓存 TTL：够密（界面点一下就回）又不至于每个注入 step 都读盘。 */
 const TTL_MS = 300
 
+/** 会话覆盖存储的依赖：侧车路径与写锁。 */
 export interface ScopeStoreDeps {
   /** apply 的串行写锁：与其余侧车共用同一条队列。 */
   withWriteLock<T>(fn: () => Promise<T>): Promise<T>
   /** 错误转人话（apply 里那个 `message`）。 */
   message(e: unknown): string
   /**
-   * 宿主会话清单里**此刻还活着**的会话 id（0.21.2，侧车 GC 用）。
+   * 宿主会话清单里**此刻还活着**的会话 id（侧车 GC 用）。
    *
    * 不传 = 不做 GC（老行为）。返回 `null` = 这一轮读不到清单 → **不剪**：读不到 ≠ 全被删了，
    * 按空表剪会把所有会话的覆盖一次抹掉。归档会话**算活着**（覆盖留着，恢复后自然回来）。
@@ -49,13 +50,14 @@ export interface ScopeStoreDeps {
   liveSessionIds?(): Promise<ReadonlySet<string> | null>
 }
 
+/** 会话覆盖存储的对外面：读一层、写一层、清一层。 */
 export interface ScopeStore {
   /** 读整份侧车（TTL 缓存；`force` 跳过缓存）。 */
   read(force?: boolean): Promise<ScopeOverrides>
   /**
    * 严格读整份侧车：**文件存在却读不动 / 解析不了**时**抛错**（`read` 会吞成空表）。
    *
-   * 只给启动对账的痕迹闸门用（0.21.2 第四轮）。那一处必须在读不到时保守 —— 一律当"有痕迹"、
+   * 只给启动对账的痕迹闸门用。那一处必须在读不到时保守 —— 一律当"有痕迹"
    * 不采纳运行态 —— 而 `read` 的吞错语义分不出"这台机器真的没有会话覆盖"与"这份侧车没读出来"。
    * 文件**不存在**（全新机器 / 从未用过会话作用域）= 确实没有任何会话痕迹，按空表返回，不抛。
    */
@@ -92,7 +94,7 @@ export interface ScopeStore {
   /** 清掉某个会话的全部覆盖。 */
   clearSession(sessionId: string): Promise<{ ok: true; removed: boolean } | { ok: false; error: string }>
   /**
-   * 侧车 GC（0.21.2）：剪掉宿主会话清单里**已经删除**的会话的条目，返回剪掉了几条。
+   * 侧车 GC：剪掉宿主会话清单里**已经删除**的会话的条目，返回剪掉了几条。
    *
    * 归档未删除的**保留**（可恢复）。清单读不到时返回 0 且不写盘（见 `liveSessionIds` 的注释）。
    *
@@ -104,6 +106,7 @@ export interface ScopeStore {
   invalidate(): void
 }
 
+/** 会话作用域侧车（`scope-overrides.json`）的读写门面：会话 / 工作区两种键共用一张表。 */
 export function createScopeStore(deps: ScopeStoreDeps): ScopeStore {
   let cache: { at: number; value: ScopeOverrides } | null = null
   let warming = false

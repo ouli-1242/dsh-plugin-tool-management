@@ -173,9 +173,28 @@ function mirrorFile(from, to, link) {
 /** Mirror one source tree into the target: copy what exists, drop what does not. */
 function mirror(from, to, link) {
   mkdirSync(to, { recursive: true })
-  const names = new Set()
-  for (const entry of readdirSync(from, { withFileTypes: true })) {
-    names.add(entry.name)
+  const entries = readdirSync(from, { withFileTypes: true })
+  const names = new Set(entries.map((entry) => entry.name))
+
+  // 只改大小写的重命名（`docs/update.md` → `docs/UPDATE.md`）必须先删旧名，否则下面两步
+  // 会互相抵消：复制时目标路径在大小写不敏感的文件系统（Windows / 默认 macOS）上**就是**
+  // 那个旧文件，copyFileSync 原地写穿、磁盘上的名字仍是 `update.md`；紧接着清理时 readdir
+  // 报出的还是 `update.md`，不在 `names` 里 → 被当成陈旧文件删掉。一次构建的净效果是文件
+  // **消失**（2026-10-22 改 `docs/UPDATE.md` 时实测：`1 个复制 · 清掉 1 个陈旧文件`，目录空）。
+  // 大小写敏感的文件系统上这段什么也不做（本来就该由下面的清理删掉），所以不需要探测文件系统。
+  for (const entry of readdirSync(to, { withFileTypes: true })) {
+    if (names.has(entry.name)) continue
+    const lower = entry.name.toLowerCase()
+    if (!entries.some((src) => src.name !== entry.name && src.name.toLowerCase() === lower)) continue
+    try {
+      rmSync(join(to, entry.name), { recursive: entry.isDirectory(), force: true })
+      stats.pruned += 1
+    } catch (error) {
+      failures.push(`${rel(join(to, entry.name))}: ${String((error && error.message) || error)}`)
+    }
+  }
+
+  for (const entry of entries) {
     const src = join(from, entry.name)
     const dst = join(to, entry.name)
     if (entry.isDirectory()) {

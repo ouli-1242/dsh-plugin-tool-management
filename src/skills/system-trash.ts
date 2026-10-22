@@ -20,6 +20,7 @@ import { permanentlyDeleteTrash, trashRootPath } from './core.js'
  */
 export const EXTERNAL_CMD_TIMEOUT_MS = 30_000
 
+/** 跑一个外部命令，成功返回 true，失败 / 超时 / 命令不存在一律返回 false（不抛错）。 */
 export function runQuietly(command: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false
@@ -46,6 +47,7 @@ export function runQuietly(command: string, args: string[]): Promise<boolean> {
   })
 }
 
+/** PowerShell 单引号字面量转义（内部单引号翻倍）。 */
 export function psQuote(value: string): string {
   return "'" + String(value).replace(/'/g, "''") + "'"
 }
@@ -80,7 +82,7 @@ export async function permanentlyDeleteTrashSafely(
 ): Promise<any> {
   const clean = String(id || '').trim()
   const root = trashRootPath()
-  // 走 `paths.ts` 的单段名校验，而不是自写白名单（审查 F1，0.17.0）：
+  // 走 `paths.ts` 的单段名校验，而不是自写白名单：
   // 原判据 `/^[A-Za-z0-9._-]{1,128}$/` 放行 `.` 与 `..`，而 `root + sep + '..'` 解析后
   // 正是**回收站根目录**，末尾那句字符串前缀比对拦不住它 —— 于是「删掉某一条」变成
   // 「把整个 `trash/`（技能/场景/子智能体/提示词四类）送进系统回收站」，且返回 `ok:true`。

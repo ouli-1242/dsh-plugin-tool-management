@@ -21,9 +21,9 @@ export const INJECT_DOMAIN_KEYS = ['scene', 'memory', 'mcp', 'skills', 'subagent
  * 命名对齐官方 `*-catalog` 风格与本插件的工具族（`*_manager_*`）；改名等于换身份，
  * 旧消息会被当成"不在上下文里"而重发一次，所以这几个字符串是稳定契约。
  *
- * ⚠️ 0.14.0 把 `memory` 的 kind 从 `scene-memory-manager-catalog` 改成
- * `memory-manager-catalog`，并把场景拆成独立的 `scene` 域 —— 升级后每个会话**会重发一次**
- * 这两段（旧消息认不出来）。一次性代价，换来的是两段能各自开关、各自去重。
+ * ⚠️ `memory` 的 kind 从 `scene-memory-manager-catalog` 改成了 `memory-manager-catalog`，场景
+ * 也拆成独立的 `scene` 域 —— 升级后每个会话**会重发一次**这两段（旧消息认不出来）。一次性
+ * 代价，换来的是两段能各自开关、各自去重。
  */
 export const INJECT_KIND_OF: Record<InjectDomainKey, string> = {
   scene: 'scene-manager-catalog',
@@ -46,7 +46,7 @@ export const INJECT_KIND_OF: Record<InjectDomainKey, string> = {
  * 都说明模型确实在读这一域。改工具名等于换身份，这几个字符串是稳定契约。
  *
  * 为什么值是**数组**：工具族与注入域不是一一对应的概念 —— 域是"给模型看的信息分组"
- * （界面上的勾选），族是"操作哪类对象"。0.14.0 里场景与记忆就一度同域两族
+ * （界面上的勾选），族是"操作哪类对象"。场景与记忆就一度同域两族
  * （`memory_manager_*` + `scene_manager_*`），拆开后现在每个域各一个前缀。留着数组是
  * 为了让"一个域挂多个族"在类型上成立，将来加族不必改类型。顺序不影响判定。
  */
@@ -107,7 +107,7 @@ export function subagentDepthOf(agent: unknown): number {
  * 这个 agent 是不是**子会话**（子代理派生的会话）。深度判定的布尔投影。
  *
  * ⚠️ 生产代码现在只用 `subagentDepthOf` —— 判据是"目录该不该注入到这么深的会话"，
- * 需要的是**深度数字**，不是一个布尔身份（2026-09-17 方案 A：委派可行性由官方决定，
+ * 需要的是**深度数字**，不是一个布尔身份（方案 A：委派可行性由官方决定，
  * 与"是不是子会话"无关）。这个投影留给真正需要布尔判断的场合，以及测试。
  */
 export function isSubagentSession(agent: unknown): boolean {
@@ -153,15 +153,15 @@ export interface InjectDomain {
   /**
    * 同步返回域文本；`''` = 该域本次没有内容。
    *
-   * 可以看 agent（2026-09-17 第二版）：人设目录要按**调用方深度**过滤 —— 深度 1 的会话
+   * 可以看 agent：人设目录要按**调用方深度**过滤 —— 深度 1 的会话
    * 只能看到"预算还够"的人设，否则就是它刚被修掉的那个陷阱（目录写着可委派、真调用必失败）。
    * 仍然必须同步：注入通道每个 step 同步取文本，域自带 SWR 缓存，这里不能读盘。
    */
   text: (agent?: unknown) => string
   /**
-   * 官方载体正在送整份时的**兜底差异行**（0.21.2）。`''` = 没有差异。
+   * 官方载体正在送整份时的**兜底差异行**。`''` = 没有差异。
    *
-   * 正常路径（0.21.2 第二轮起）：注入器先用这个判据决定**整份接管** —— 有差异就拦下
+   * 正常路径：注入器先用这个判据决定**整份接管** —— 有差异就拦下
    * 官方那条、由 `text()` 送会话版整份，首份带取代声明。只在接管判据未接上的旧装配 /
    * 测试里才会真的把这一行发出去。两条路都不提"全局 / 机器"：模型只需要知道这个对话里
    * 哪几条算数。
@@ -218,6 +218,7 @@ export interface InjectSettings {
   domains: Record<InjectDomainKey, boolean>
 }
 
+/** 出厂注入设置：六个域全开，由用户或档案再收窄。 */
 export const DEFAULT_INJECT_SETTINGS: InjectSettings = {
   underSuppressingPresets: false,
   domains: { scene: true, memory: true, mcp: true, skills: true, subagents: true, prompt: true },

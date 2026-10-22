@@ -1,6 +1,5 @@
 // MCP 管理域 —— 侧车读写（备注 / 设置 / 停用表）+ 补丁文件行编辑 + 17 个 op 的实现。
 //
-// 2026-09-19 从 index.ts 的 apply 闭包原样抽出（块 A 1795-1913 + 块 B 1920-3100）。
 // 为什么单独一个文件：这 1300 行只做一件事 —— 把「MCP 配置」翻译成补丁文件的改动与
 // 界面看到的一份状态。它此前夹在注入通道、令牌门禁与场景档案之间，改一处要在 4000 行里穿行。
 //
@@ -84,7 +83,7 @@ export interface McpManagerDeps {
    */
   carrierHiddenTools?(agent: unknown): Promise<string[]>
   /**
-   * 本会话的 MCP 可见性覆盖（0.21.2）：在**此刻注册着的**工具全名上算出的两个名单。
+   * 本会话的 MCP 可见性覆盖：在**此刻注册着的**工具全名上算出的两个名单。
    *
    *   · `deny`  —— 本会话关掉的（会话覆盖 / 场景层"没勾" / 基线的都算），在全局名单之外追加；
    *   · `allow` —— 本会话开着的（显式拨开 / 场景层"勾了"），从全局名单里**减去** ——
@@ -95,7 +94,7 @@ export interface McpManagerDeps {
    */
   sessionMcpOverlay?(agent: unknown): Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
   /**
-   * 本会话的**模型工具表**覆盖（0.21.2）：本对话自己的整份关停名单相对全局的差异。
+   * 本会话的**模型工具表**覆盖：本对话自己的整份关停名单相对全局的差异。
    * `allow` = 本对话重新打开、`deny` = 本对话关掉；与 `sessionMcpOverlay` 合进同一层 restrict。
    */
   sessionToolTableOverlay?(agent: unknown): { allow?: readonly string[]; deny?: readonly string[] } | Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
@@ -105,7 +104,7 @@ export interface McpManagerDeps {
    */
   sessionHiddenServer?(agent: unknown, serverName: string): boolean
   /**
-   * 逐工具的本会话判定（0.21.2）：状态段用它把「本会话把这台服务器的工具全关了」标成
+   * 逐工具的本会话判定：状态段用它把「本会话把这台服务器的工具全关了」标成
    * muted，而不是继续报可用。按 agent 建一次快照，返回的函数逐工具调用。
    */
   sessionToolVerdictFor?(agent?: unknown): (serverName: string, tool: string) => 'allow' | 'deny' | undefined
@@ -155,9 +154,9 @@ export interface McpManager {
   /** MCP 服务器列表视图（已打码）。 */
   mcpmListView(): Promise<any>
   /**
-   * 已配置的 serverName 名单（补丁文件里的**真实**名字；只读补丁，不枚举工具 schema）。
+   * 已配置的 serverName 名单。
    *
-   * 存在的理由（2026-09-30 审查 N1 / R3）：切分 `mcp__<server>__<tool>` 需要一个候选
+   * 存在的理由：切分 `mcp__<server>__<tool>` 需要一个候选
    * serverName 集合，而另外两个来源都是**插件自己写出来的** —— 停用表的键来自界面勾选、
    * 已知工具缓存的键来自上一次切分。拿它们当候选是循环论证：一旦切错，错键进集合，下次照旧
    * 切错，**且不自愈**。补丁里的 `serverName` 是宿主真正用来拼 `mcp__${publicName}__${name}`
@@ -165,7 +164,7 @@ export interface McpManager {
    */
   configuredServerNames(): Promise<string[]>
   /**
-   * 已配置服务器及其**补丁层**的启停值（0.21.2）。
+   * 已配置服务器及其**补丁层**的启停值。
    *
    * 会话作用域的全局快照必须与界面上那颗开关读同一份真值：服务器启停写在
    * `cordis.patch.yml` 的 `disabled` 覆盖块里，**不在**逐工具停用表（那张表的 `*`
@@ -208,7 +207,7 @@ export interface McpManager {
   /**
    * 某个补丁 id 的**当前生效**停用值（读盘，不走缓存）。
    *
-   * 为什么单独开一个出口：MCP 重启中断收尾（0.21.2）必须确认「阶段 1 留下的强制停用
+   * 为什么单独开一个出口：MCP 重启中断收尾必须确认「阶段 1 留下的强制停用
    * 现在还是不是生效值」才敢自动写回 —— 拿缓存值判断会把「用户刚改过」当成「没人动」。
    */
   isRowDisabledPublic(id: string, level: 'global' | 'project'): Promise<boolean>
@@ -218,28 +217,29 @@ export interface McpManager {
 
 // ── 宿主服务的最小结构面（本插件只碰这几个方法；完整契约在对应 @deepseek-ai 包）──
 
+/** 宿主工具服务的最小面：注册、枚举、可见性摘除、执行前守卫。 */
 export interface ToolsService {
   register(definition: unknown): () => void
   schemas(scope?: unknown): Array<{ name: string; description?: string }>
   /**
-   * Optional (dsh-tools): remove global tool names from every scope's
-   * model-visible schema list. Fails on names that are not currently
-   * registered, so callers must intersect with schemas() first.
+   * 可选（dsh-tools）：把全局工具名从每个作用域对模型可见的 schema 列表里摘掉。
+   * 名字未注册会抛错，调用方必须先与 `schemas()` 求交。
    */
   restrict?(filter: { deny?: readonly string[] }): () => void
   /**
-   * Optional (dsh-tools): monotonic execution guard — a returned reason string
-   * denies the call before the tool body runs.
+   * 可选（dsh-tools）：执行前守卫 —— 返回非空原因字符串即拒绝本次调用，工具主体不会运行。
    */
   guard?(guard: (execution: { name?: string }) => string | undefined): () => void
 }
 
+/** 宿主插件清单服务的最小面。 */
 export interface PluginInventoryService {
   list(): Promise<{ entries: PluginInventoryEntry[] }>
 }
 
-// ── MCP 域专属的类型与纯函数（2026-09-19 从 index.ts 搬来，逐字未改）──
+// ── MCP 域专属的类型与纯函数（从 index.ts 搬来，逐字未改）──
 
+/** 宿主插件清单里的一条（id、模块名、启停、fiber 阶段）。 */
 export interface PluginInventoryEntry {
   entryId: string
   moduleName?: string
@@ -250,7 +250,7 @@ export interface PluginInventoryEntry {
 /**
  * 「已知工具」侧车里的一个条目：工具名 + **最后一次运行时的描述**。
  *
- * 描述是 v0.9.0 才加进来的（此前只存名字）：未运行的服务器在 `tools.schemas()` 里什么都没有，
+ * 描述也一起存（早期只存名字）：未运行的服务器在 `tools.schemas()` 里什么都没有，
  * 详情页只能对每个工具重复一句「描述暂不可用」。而描述在服务器运行时就拿得到，顺手存下来，
  * 未运行时就能显示上次见过的描述（界面标「上次运行时」，不假装是实时数据）。
  * 旧侧车文件是 `string[]`，`normalizeKnownTools` 兼容读取。
@@ -263,7 +263,7 @@ export interface KnownMcpTool {
 /**
  * 归一化「已知工具」侧车的一行值。
  *
- * 兼容两种格式：旧版 `string[]`（只存名字，v0.8.5 及以前）与新版 `Array<{name, description?}>`。
+ * 兼容两种格式：旧版 `string[]`（只存名字）与新版 `Array<{name, description?}>`。
  * 非法名字、重复名字一律丢掉并去重后按名字排序 —— 排序保证写盘内容稳定（不会因为枚举顺序
  * 变化而反复重写侧车）。导出仅为测试接缝（与 client 的 `memDefaultPickIds` 同一用意）。
  */
@@ -305,16 +305,16 @@ export function countEnabledTools(known: ReadonlySet<string> | readonly string[]
 /**
  * 单工具停用判定（含整服务器通配 `*`——场景档案的"MCP 工具集=整台"写的就是它）。
  *
- * 切分走 `splitMcpToolName`（`host-names.ts`）—— **全插件唯一的一套切分规则**（2026-09-30 审查 N1）。
+ * 切分走 `splitMcpToolName`（`host-names.ts`）—— **全插件唯一的一套切分规则**。
  *
- * 改之前的两代口径（免得下次又退回老路）：
- *   * 0.16.6 及以前用 `indexOf('__')`（取**第一个**）：serverName 含 `__` 时被截成 `a` → 查表
- *     未命中 → **返回 false（不拦）** → 被停用的工具仍可调用。这是**执行侧**守卫失效，不只是
- *     显示问题：调用链是 `tools.guard`（`index.ts`）→ `mcp.isToolDisabled`（本文件的出口，
- *     喂的就是本函数），而文件头承诺 disabled = invisible AND uncallable。
- *   * 0.16.7 改成「最长已知 serverName 前缀匹配」（候选 = 停用表的键），守卫这一侧修对了；但
- *     显示侧（`index.ts` 的 `toolKeyParts`）当时改成了「取最后一个 `__`」——**两套规则并存**，
- *     于是「工具名含 `__`」时守卫与界面键仍会给出不同的 `(server, tool)`。
+ * 为什么不能用更简单的切法（两条老路都试过，都会 fail-open）：
+ *   * 用 `indexOf('__')` 取**第一个**：serverName 含 `__` 时被截成 `a` → 查表未命中 →
+ *     **返回 false（不拦）** → 被停用的工具仍可调用。这是**执行侧**守卫失效，不只是显示问题：
+ *     调用链是 `tools.guard`（`index.ts`）→ `mcp.isToolDisabled`（本文件的出口，喂的就是本函数），
+ *     而文件头承诺 disabled = invisible AND uncallable。
+ *   * 守卫用「最长已知 serverName 前缀匹配」（候选 = 停用表的键）而显示侧（`index.ts` 的
+ *     `toolKeyParts`）用「取最后一个 `__`」：**两套规则并存**，于是「工具名含 `__`」时守卫与
+ *     界面键仍会给出不同的 `(server, tool)`。
  *   * 现在两侧共用 `splitMcpToolName`（最长候选命中，一个都不命中才退回最后一个 `__`）。
  *
  * 候选集合取**停用表的键**，不是「全部已配置服务器」—— 理由见 `splitMcpToolName` 的文档：
@@ -333,7 +333,7 @@ export function isToolDisabledIn(map: Record<string, string[]>, fullName: string
   let matchedAny = false
   // `mcp__a__b__c` 在 `a` 与 `a__b` 同时是停用表键时有两种归属。只靠名字无法判定，
   // 守卫按 fail-closed 取“任一候选命中即拒”：宁可误伤另一台的同名工具，也不放行一个
-  // 真的被停用的工具（2026-09-30 审查 G14）。
+  // 真的被停用的工具。
   for (const [server, list] of Object.entries(map || {})) {
     if (isUnsafeKey(server) || !Array.isArray(list)) continue
     if (rest.length <= server.length + 2) continue
@@ -355,6 +355,7 @@ export function isToolDisabledIn(map: Record<string, string[]>, fullName: string
 /** `mcpm-parse-patch` 的输入上限：粘贴框不是文件上传口，几十 KB 之外基本都是误贴。 */
 const PATCH_PARSE_MAX_CHARS = 200_000
 
+/** MCP 域的全部门面：补丁读写、启停、重启收尾、工具预览与导入导出。 */
 export function createMcpManager(deps: McpManagerDeps): McpManager {
   // 外部能力一次解构成局部名：块内代码是逐字搬来的，保持原样最不容易出错。
   const {
@@ -372,19 +373,18 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     // 会话层：本会话隐藏的服务器整条不进段（理由见 state-section.ts）。逐行问谓词 ——
     // 行数组本身就是服务器全集，不需要另建一份。
     ...(deps.sessionHiddenServer === undefined ? {} : { sessionServerHidden: deps.sessionHiddenServer }),
-    // 逐工具会话判定（0.21.2）：一台服务器在本会话里的工具全关掉时，段里标 muted 而不是可用。
+    // 逐工具会话判定：一台服务器在本会话里的工具全关掉时，段里标 muted 而不是可用。
     ...(deps.sessionToolVerdictFor === undefined ? {} : { sessionToolVerdictFor: deps.sessionToolVerdictFor }),
   })
 
 
 
-  // ---------- duplicate loader-id guard ----------
-  // Two rows with the same loader id make the plugin composition fail to
-  // boot (upstream hit exactly this after renaming an entry), so duplicates
-  // are reported on read and new ones are refused before any write.
+  // ---------- 重复 loader id 的拦截 ----------
+  // 同一个 loader id 出现两行会让插件组装失败、宿主起不来（上游改名后撞过一次），
+  // 所以读时报告重复、写前拒绝新增。
   function duplicateIdsOf(content: string): string[] {
     const counts = new Map<string, number>()
-    // 扫**全部** insert 子条目的 id，不只 MCP 行（2026-09-30 审查 P1-5）。原实现走
+    // 扫**全部** insert 子条目的 id，不只 MCP 行。原实现走
     // `parseRows`，而它只收 `name === MCP_CLIENT_MODULE` 的行 —— 于是导入一条非 MCP 的
     // loader（例如 `{"id":"dsh-plugin-tool-management", ...}`）能撞出第二条同 id 条目，
     // 守卫看不见、直接 `appendBlock` 落盘。而按本仓一贯记载（`:229-231`），同 id 的两条
@@ -414,7 +414,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         ids.add(r.id)
         const sn = r.config && r.config.serverName ? String(r.config.serverName) : r.id
         serverNames.add(sn)
-        // `config` 一并带出（2026-09-30 审查 F4）：`mcpm-import` 的覆盖模式要靠它拿**旧真值**
+        // `config` 一并带出：`mcpm-import` 的覆盖模式要靠它拿**旧真值**
         // 顶替表单里的打码值（URL 的 userinfo/查询串/片段、env/headers 的整串 `•`）。
         // 此前这里只带 id/serverName/level/disabled，于是 `prevRow.url` 恒为 `undefined` ——
         // 覆盖模式也走"没有原值"分支，把打码值丢弃并报一句"没有原值可保留"（诊断也是错的）。
@@ -504,17 +504,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return { ok: true, row }
   }
 
-  // User notes are keyed by loader id: they survive renames of the server
-  // name and are never touched by config rewrites.
+  // 用户备注按 loader id 归档：服务器改名后备注还在，配置重写也从不碰它。
   //
-  // Sidecar caches (notes / settings / disabled tools) are short-TTL: reads
-  // hit the cache, but every WRITE re-reads the file (force=true) and merges
-  // on top of the fresh on-disk state. Without the forced re-read, a manual
-  // edit of the sidecar file would be silently overwritten by a stale cache.
+  // 侧车缓存（备注 / 设置 / 停用工具）是短 TTL 的：读走缓存，但**每次写**都重新读盘
+  // （force=true）并合到刚读出的状态之上。少了这次强制重读，手工改侧车会被旧缓存静默覆盖。
   //
   // 落点：**hub 内**（`~/.dsh/tool-management/`），文件名按域取（`mcp-*`）。
   // 它们曾经躺在 `$DSH_HOME` 根下、还带着插件名前缀（`dsh-plugin-tool-management-notes.json`），
-  // 2026-09-16 用户要求「插件产生的文件全部收进 hub、名字与当前代码一致」——
   // 旧文件由 hub.ts 的 `migrateHubLayoutSync()` 在启动时搬进来（见 apply()）。
   const SIDECAR_TTL_MS = 3000
   const MCP_NOTES_FILE = 'mcp-notes.json'
@@ -585,7 +581,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
   let pluginSettingsCache: { at: number; value: PluginSettings } | null = null
   function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-    // Number(null) is 0 — treat missing/empty input as "use the default".
+    // `Number(null)` 与 `Number('')` 都是 0 —— 缺省与空串必须当「用默认值」，不能当 0。
     if (value === null || value === undefined || value === '') return fallback
     const n = Number(value)
     if (!Number.isFinite(n)) return fallback
@@ -594,13 +590,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   function normalizePluginSettings(raw: any): PluginSettings {
     return {
       pollIntervalMs: clampInt(raw && raw.pollIntervalMs, POLL_INTERVAL_MIN_MS, POLL_INTERVAL_MAX_MS, SETTINGS_DEFAULTS.pollIntervalMs),
-      // 0 = keep descriptions in full (the UI default); > 0 truncates.
+      // 0 = 描述全留（界面默认）；> 0 才截断。
       toolDescriptionMaxLength: clampInt(raw && raw.toolDescriptionMaxLength, 0, 2000, SETTINGS_DEFAULTS.toolDescriptionMaxLength),
-      // 模型写规则需确认（D2）：程序化强制，只读设置供 tools/pre-execute 判定。
+      // 模型写规则需确认：程序化强制，只读设置供 tools/pre-execute 判定。
       requireConfirmForModelRuleWrite: (raw && typeof raw.requireConfirmForModelRuleWrite === 'boolean')
         ? raw.requireConfirmForModelRuleWrite
         : SETTINGS_DEFAULTS.requireConfirmForModelRuleWrite,
-      // 子代理运行花真 token：默认确认，设置可关（设计 §3.2）。
+      // 子代理运行花真 token：默认确认，设置可关。
       requireConfirmForModelSubagentRun: (raw && typeof raw.requireConfirmForModelSubagentRun === 'boolean')
         ? raw.requireConfirmForModelSubagentRun
         : SETTINGS_DEFAULTS.requireConfirmForModelSubagentRun,
@@ -696,9 +692,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   }
 
-  // ---------- secret masking (UI view only) ----------
-  // `$VAR` / `!!js` references are indirections rather than secrets, so they stay readable.
-  // URL query strings are redacted because MCP credentials often ride there.
+  // ---------- 密钥打码（只作用于界面视图）----------
+  // `$VAR` / `!!js` 是间接引用而不是密钥本身，原样保留可读。
+  // URL 查询串要打码 —— MCP 凭据常常就挂在查询串里。
   // 单值打码（`maskSecretValue`）与 URL 打码（`maskUrlQuery`）都挪到 ./secret-guard.js ——
   // 那里是这两条形态的唯一口径，使用方现在有三个（本文件的列表视图 + index.ts 的确认卡
   // + ops/snapshot.ts 的整机迁移导出）。此处不再自建一份。
@@ -710,7 +706,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
   // `maskUrlQuery` 已挪到 ./secret-guard.js：那里是两条打码形态的唯一口径，而使用方
   // 现在有三个（本文件的列表视图 + index.ts 的确认卡 + ops/snapshot.ts 的整机迁移导出）。
-  /** Shared UI rows: mcpmList plus notes, secrets masked unless `reveal`. */
+  /** 界面共用行：`mcpmList` 加上备注；除 `reveal` 外一律打码。 */
   async function mcpmRowsWithNotes(reveal: boolean): Promise<any> {
     const result: any = await mcpmList()
     if (!result || result.ok === false) return result
@@ -729,26 +725,23 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
     return Object.assign({}, result, { rows })
   }
-  /** Default list view: secrets always masked. */
+  /** 默认列表视图：密钥一律打码。 */
   async function mcpmListView(): Promise<any> {
     return mcpmRowsWithNotes(false)
   }
   /**
-   * Plain-text view. Split from mcpm-list into its own op so it can live in
-   * WRITE_OPS: `mcpm-list` stays token-free for rendering, while revealing
-   * env/headers secrets requires `x-dsh-token` when a token is configured —
-   * otherwise a LAN-exposed port would leak credentials read-only.
+   * 明文视图。从 `mcpm-list` 拆成独立 op 是为了能挂进 `WRITE_OPS`：`mcpm-list` 保持
+   * 免 token 以便渲染，而吐明文 env / headers 在配了 token 时必须带 `x-dsh-token` ——
+   * 否则暴露到局域网的端口会被只读请求拿到凭据。
    */
   async function mcpmReveal(): Promise<any> {
     return mcpmRowsWithNotes(true)
   }
 
-  // Tool preview for one MCP server: project the model-facing schemas down to
-  // a name + description + parameter-summary list. The registry prefixes every
-  // MCP tool with `mcp__<serverName>__`; we filter on that and strip the prefix
-  // for display. Only the direct `properties` of the parameters object are
-  // summarized — nested object/array children are omitted (one level is enough
-  // for a preview, keeps the dialog readable).
+  // 单台服务器的工具预览：把模型可见的 schema 压成「名字 + 描述 + 参数摘要」。
+  // 注册表给每个 MCP 工具加 `mcp__<serverName>__` 前缀，按它筛掉别的服务器再剥前缀显示。
+  // 参数只摘 `properties` 的直接子项，对象 / 数组的下一层不展开 —— 预览看到一层就够，
+  // 展开会把对话框撑得读不动。
   async function mcpmTools(args: any): Promise<any> {
     const serverName = String(args && args.serverName || '').trim()
     if (!serverName) return { ok: false, error: 'serverName 不能为空' }
@@ -793,10 +786,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         parameters: params,
       })
     }
-    // Some dsh-tools builds strip restricted tools from schemas(); without
-    // this merge a disabled tool would vanish from the dialog with no way to
-    // re-enable it from the UI. Names come from the sidecar, so they always
-    // stay reachable; the description is unavailable once the schema is gone.
+    // 有些 dsh-tools 版本的 `schemas()` 会把被限制的工具整个摘掉；不并上侧车里的名单，
+    // 停用的工具就会从对话框里消失、界面上再也开不回来。名字来自侧车，所以永远够得着；
+    // schema 没了之后描述拿不到，只能留占位。
     const listed = new Set(toolsList.map((t: any) => t.name))
     for (const name of disabledHere) {
       if (name === '*') continue // 整服务器通配：已在上方逐工具体现，不再展示占位行
@@ -805,7 +797,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       }
     }
     // 「已知工具」缓存兜底：服务器没运行时 schemas() 里没有它任何工具 —— 场景档案里
-    // 想给未运行服务器挑工具就全靠这份最后见过的名单。描述也一并带上（v0.9.0 起缓存），
+    // 想给未运行服务器挑工具就全靠这份最后见过的名单。描述也一并带上（v缓存），
     // 并标 `stale: true`：界面据此说明「上次运行时」，不假装是实时数据。
     for (const known of (await readKnownMcpTools())[serverName] || []) {
       if (listed.has(known.name)) continue
@@ -829,12 +821,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
 
   /**
-   * 临时启动服务器以枚举工具（v0.8.1）：从未运行过的服务器在 schemas() 与「已知工具」
+   * 临时启动服务器以枚举工具：从未运行过的服务器在 schemas() 与「已知工具」
    * 缓存里都没有工具名，场景档案勾选器对它一无所知。这里**临时**把它启用（写补丁），
    * 轮询等它的工具注册（npx 冷启动要下载，上限 TOOLS_REFRESH_TIMEOUT_MS），拿到名单后就
    * **恢复原启停状态**—— 用户环境的服务器开关不受影响。
    *
-   * 2026-10-19 起它同时是**「刷新工具」的本义**：服务器此刻正在跑，就用 live 名单**整体替换**
    * 缓存里那一台的旧名单 —— 服务器升级改名（dhole 的 `smart_fetch` → `web_read`）之后旧名字
    * 必须消失。原先这里只要缓存非空就直接返回，按钮等于死的；而轮询路径的合并又是只进不出
    * 的并集，于是旧工具永远挂着「上次运行时」的标签赖在详情页里。服务器没在跑时仍退回缓存
@@ -853,7 +844,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     try { live = await liveToolsOf(serverName) } catch { /* 取不到 live 就当没在跑，走下面的退路 */ }
     if (live.length) {
       try {
-        // 读-改-写整段在写锁内（审查 P2-15）：轮询路径也在回写同一份侧车，锁外两步会互相覆盖。
+        // 读-改-写整段在写锁内：轮询路径也在回写同一份侧车，锁外两步会互相覆盖。
         // 合并口径与轮询路径同源（`mergeLiveToolsInto`：live 优先、旧的兜底描述）。
         await mutateKnownMcpTools((cache) => mergeLiveToolsInto(cache, { [serverName]: live }))
       } catch { /* 缓存写失败不影响本次返回 */ }
@@ -894,13 +885,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
           if (t && t.ok && (t.tools || []).length) {
             // 记进「已知工具」缓存：以后未运行时场景档案也能列出（名字 + 这次的描述）。
             // 只记 **live 那一份**：`mcpmTools` 的返回里混着缓存中的旧名字（服务器升级改名后
-            // 的死者），拿它回写等于把死名字又写回去 —— 2026-10-19 用户实测的"刷新了还是旧
+            // 的死者），拿它回写等于把死名字又写回去 —— 用户实测的"刷新了还是旧
             // 工具"正是这条。合并口径与轮询路径同源（live 见到即整体替换那一台）。
             let known: KnownMcpTool[] = []
             try { known = await liveToolsOf(serverName) } catch { /* 取不到 live 描述：沿用上面那份清单 */ }
             if (known.length) {
               try {
-                // 读-改-写整段在写锁内（审查 P2-15）：轮询路径也在回写同一份侧车，
+                // 读-改-写整段在写锁内：轮询路径也在回写同一份侧车，
                 // 锁外两步会互相覆盖。
                 await mutateKnownMcpTools((cache) => mergeLiveToolsInto(cache, { [serverName]: known }))
               } catch { /* 缓存写失败不影响本次返回 */ }
@@ -958,7 +949,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
 
   /**
-   * 补丁层启停值的合并视图（0.21.2）：只读补丁、不枚举工具 schema。
+   * 补丁层启停值的合并视图：只读补丁、不枚举工具 schema。
    *
    * 同名服务器在两个层级各有一份时，会话覆盖只能整名隐藏 —— 所以只要有一份是开着的，
    * 全局就按「开着」算（会话层关掉它才有意义）；两份都关着才是「全局关着」。
@@ -1039,7 +1030,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     const enabledToolCounts: Record<string, number> = {}
     // 只来自**真实 schema** 的两个数，以及只来自**「已知工具」缓存**的一个数。
     //
-    // 为什么必须与上面那两个分开（2026-09-17 用户实测发现）：`toolCounts` 是三处并集
+    // 为什么必须与上面那两个分开（用户实测发现）：`toolCounts` 是三处并集
     // （live ∪ 停用表 ∪ 缓存），把"这台 server 曾经有什么工具"与"它现在有什么工具"混成了
     // 一个数。界面状态胶囊与注入段此前读的就是它，于是**一台已经连不上的 server 会被报成
     // 「已运行」并注入上下文**，模型照着去调 `mcp__X__*`，而那个工具根本没注册 —— 白烧一轮。
@@ -1066,7 +1057,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       const liveNames: Record<string, string[]> = {}
       const liveTools: Record<string, KnownMcpTool[]> = {}
       const seen = new Set<string>()
-      // 切分走 `splitMcpToolName` —— 与执行侧守卫、界面勾选键**同一套规则**（2026-09-30 审查 N1）。
+      // 切分走 `splitMcpToolName` —— 与执行侧守卫、界面勾选键**同一套规则**。
       //
       // 这里以前是贪婪正则 `^mcp__([A-Za-z0-9_-]+)__(.+)$`（等价于"取最后一个 `__`"）。它不只是
       // 第三套规则：它算出的键就是 `mcp-known-tools.json` 的键，而那个缓存又会被显示侧当候选集合
@@ -1079,7 +1070,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         disabledMap,
         knownCache,
       )
-      // 前缀漂移的线索（审查 §5 F6）：判据与理由见 `host-names.ts` 的
+      // 前缀漂移的线索：判据与理由见 `host-names.ts` 的
       // `looksLikeMcpPrefixDrift` —— 关键是**排除 `mcp_` 开头的那一族**（本插件自己的
       // `mcp_manager_*` 就在里面，不排除的话这条上报每台机器都会误报）。
       const mcpStemOther: string[] = []
@@ -1099,7 +1090,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         const desc = typeof s.description === 'string' ? s.description : ''
         if (!bucket.some((t) => t.name === parts.tool)) bucket.push({ name: parts.tool, ...(desc ? { description: desc } : {}) })
       }
-      // 前缀契约的 inform-only 上报（审查 §5 F6）：宿主面上出现了词根后换了分隔符的 `mcp*` 工具名，
+      // 前缀契约的 inform-only 上报：宿主面上出现了词根后换了分隔符的 `mcp*` 工具名，
       // 同时按本插件认的前缀一条都筛不出来 —— 大概率官方改了 MCP 工具的命名前缀。这时停用表 /
       // 执行侧门禁 / 工具计数会**一起静默失明**（守卫认为"这工具不在我的表里"，于是放行），
       // 而这是纯字符串契约、没有能力探测能提前发现。
@@ -1119,13 +1110,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       } else {
         clearRuntimeNote('mcp-tool-prefix')
       }
-      // 命名歧义的 inform-only 上报（2026-09-30 审查 N2）：`mcp__<server>__<tool>` 这个契约
+      // 命名歧义的 inform-only 上报：`mcp__<server>__<tool>` 这个契约
       // 对 `__` 本身有歧义，而 `serverName` 的校验（`/^[A-Za-z0-9_-]{1,32}$/`）**允许含 `__`**。
       // 两种形状会让切分变成"猜"：① 某个 serverName 自己含 `__`；② 两个 serverName 互为 `__`
       // 前缀（`a` 与 `a__b`）—— 全名 `mcp__a__b__c` 两种归属都讲得通。
       //
-      // **只上报、不改行为**：改校验会把存量服务器从"能管"变成"管不了"（计划 §4 未决 1 的
-      // 裁定），而这里要的只是"切不准时出声"。判据本身保证没有这两种形状时一条都不报
+      // **只上报、不改行为**：改校验会把存量服务器从"能管"变成"管不了"，而这里要的只是
+      // "切不准时出声"。判据本身保证没有这两种形状时一条都不报
       // （`ambiguousServerNames`），条件不成立就清掉，避免陈旧告警 —— 与上面那条同一条纪律。
       // 两条互斥、取**更具体**的那条，永远只出一行：
       // 「互为前缀」必然蕴含「含 `__`」（长的那半就是 `短名 + '__' + 余下`），两条一起报
@@ -1175,7 +1166,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         enabledToolCounts[server] = disabledUnknown ? 0 : countEnabledTools(set, disabledMap[server] || [])
       }
       // 真实来源的两个数：只数 `liveNames`（schema 里真正注册了的），再按停用表扣减。
-      // 同时留一份**工具名**（0.21.2）：注入段要按会话逐工具开关在名字上扣减 / 补回。
+      // 同时留一份**工具名**：注入段要按会话逐工具开关在名字上扣减 / 补回。
       for (const [server, list] of Object.entries(liveNames)) {
         const set = new Set(list)
         const off = disabledMap[server] || []
@@ -1191,9 +1182,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       // liveToolCounts 里了，不需要它来充当"曾经"。
       for (const [server, list] of Object.entries(knownCache)) knownToolCounts[server] = list.length
       // 回写「已知工具」：这次 live 见到几台就整体替换这几台（服务器升级改名后旧名字随之
-      // 消失，2026-10-19 用户实测）；没见到的服务器原样保留上一份 —— 那是它没跑时的兜底。
+      // 消失，用户实测）；没见到的服务器原样保留上一份 —— 那是它没跑时的兜底。
       // 先在本地这份上跑一遍只为**判断要不要写盘**；真正落盘的那次合并发生在锁内、对象是
-      // 刚读出来的新鲜表（审查 P2-15：临时启动路径也在写同一份侧车，锁外两步会互相覆盖）。
+      // 刚读出来的新鲜表。
       const cacheChanged = mergeLiveToolsInto(knownCache, liveTools)
       if (cacheChanged) void mutateKnownMcpTools((fresh) => mergeLiveToolsInto(fresh, liveTools)).catch(() => { /* 侧车写失败不影响列表 */ })
     } catch (e) { /* ignore */ }
@@ -1231,7 +1222,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       // 状态段（注入通道）按行渲染，顶层字段到不了它手里 —— unknown 逐行带上。
       if (disabledUnknown) row.disabledState = 'unknown'
     }
-    // 列表顺序（用户要求 2026-09-17）：**全局在前、应用级在后**，各级按服务器名排，
+    // 列表顺序（用户要求）：**全局在前、应用级在后**，各级按服务器名排，
     // 当前在跑的 loader 行垫底。放在服务端而不是页面里：同一个顺序也是场景档案勾选器
     // （`scene-inventory`）与模型侧 `mcp_manager_list` 的顺序 —— 三处说同一件事。
     // 名字比较与技能页同一套（localeCompare），大小写混排时不会把大写全顶到前面。
@@ -1241,15 +1232,15 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       (levelRank[a.level] ?? 3) - (levelRank[b.level] ?? 3) ||
       serverNameOf(a).localeCompare(serverNameOf(b)) ||
       String(a.id).localeCompare(String(b.id)))
-    // A loader id that appears twice (same id in both patch files, or twice in
-    // one) makes the composition fail to boot. Surface it instead of hiding it.
+    // 同一个 loader id 出现两次（两份补丁各一条，或同一份里两条）会让组装失败、宿主起不来。
+    // 暴露出来，不要藏。
     const idCounts = new Map<string, number>()
     for (const row of rows) idCounts.set(String(row.id), (idCounts.get(String(row.id)) || 0) + 1)
     const duplicateIds = [...idCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id)
     for (const row of rows) row.duplicate = duplicateIds.indexOf(String(row.id)) >= 0
     const warnings: string[] = []
     if (duplicateIds.length) warnings.push('检测到重复的 loader id（会导致 DSH 无法启动，请手动清理补丁文件）：' + duplicateIds.join('、'))
-    // 补丁文件里**已经**是打码占位符的密钥：那说明真值曾经被写坏过（本机 2026-09-18 的
+    // 补丁文件里**已经**是打码占位符的密钥：那说明真值曾经被写坏过（本机 的
     // `TAVILY_API_KEY` 就是）。主动报出来 —— 不报的话用户只会在下次编辑保存时再次触发
     // 同一个坏结果，而原值已经找不回来了，必须让他知道要去重新填。
     const brokenSecrets = [...new Set(rows.flatMap((row: any) => [
@@ -1308,7 +1299,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       if (!/^https?:\/\//.test(url)) return { ok: false, error: 'url 需为 http(s):// 开头的地址' }
       // 新增条目**没有旧值可顶替** —— 打码 URL 一律拒绝，让用户重填完整地址（判据见
       // ./mcp/secret-guard.js）。原来这里直接 `row.url = url`，于是「把列表里那条打码 URL
-      // 复制到新增表单」就会把凭据永久写成 `%3Credacted%3E`，界面还显示成功（审查 F4）。
+      // 复制到新增表单」就会把凭据永久写成 `%3Credacted%3E`，界面还显示成功。
       const urlGuard = resolveMaskedUrl(url, null)
       if (urlGuard.unrecoverable) {
         return { ok: false, error: 'URL 里的 userinfo / 查询串 / 片段是打码占位符（新增条目没有原值可恢复）：请重新填写完整 URL 后再保存。' }
@@ -1328,7 +1319,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       try { content = await readPatch(abs) } catch (e) { return { ok: false, error: '读取补丁失败: ' + message(e) } }
       const before = content
       content = appendBlock(content, buildInsertBlock(row))
-      // v0.8.5：新增服务器默认不启动（用户裁定，与技能 / 子智能体同口径）；
+      // 新增服务器默认不启动（与技能 / 子智能体同口径）；
       // 显式传 enabled: true 才创建即启动。
       const defaultDisabled = args.enabled !== true
       if (defaultDisabled) content = appendBlock(content, buildDisableBlock(id, true))
@@ -1400,7 +1391,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     }
     // 打码值**不能入库**：编辑弹窗的密钥框预填的就是打码值（界面拿到的行本身就是打码的），
     // 所以这里必须拿旧真值顶替，否则"改个别的字段再保存"就把真密钥覆盖成 `••••••`
-    // —— 本机 2026-09-18 的 `TAVILY_API_KEY` 就是这样丢的。旧文件读不出来时 `curRaw`
+    // —— 本机 的 `TAVILY_API_KEY` 就是这样丢的。旧文件读不出来时 `curRaw`
     // 为空，走"丢弃"分支，方向仍是安全的（宁可少一个键，也不写一个假值）。
     const guardNotes: string[] = []
     const curConfig: any = (curRaw && curRaw.config) || {}
@@ -1476,9 +1467,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       // 补丁是事实源：先写它，并留下能把两份文件都还原的回滚闭包。
       let patchRollback: (() => Promise<void>) | null = null
       if (oldAbs !== newAbs) {
-        // Level migration: remove from the old file, insert into the new one.
-        // Not atomic, so keep the old content and restore it if the second
-        // write fails — losing the entry is worse than a transient dup.
+        // 层级迁移：从旧文件删、往新文件插。两步不是原子的，所以留住旧内容，
+        // 第二次写失败就还原 —— 丢条目比短暂重复更糟。
         const origOld = await readPatch(oldAbs)
         let c = origOld
         c = removeEntryAll(c, id)
@@ -1591,11 +1581,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return withWriteLock(async () => {
       let c = await readPatch(abs)
       if (enabled) {
-        // Drop every `disabled: true` override for this id. If the insert row
-        // itself still says disabled (e.g. user hand-edited it), append an
-        // explicit `disabled: false` override so the effective state flips.
-        // Enable overrides are intentionally left in place — they are the
-        // mechanism that lets a disabled-by-default row be turned on.
+        // 先摘掉这个 id 的所有 `disabled: true` 覆盖。若 insert 行本身仍写着 disabled
+        // （用户手改过），补一条显式 `disabled: false` 覆盖把生效值翻过来。
+        // `enable` 覆盖刻意留着 —— 那是让"默认停用"的行能被打开的机制。
         c = removeMarked(c, id, 'disable')
         const { rows } = parseRows(c)
         const row = rows.find((r) => r.id === id)
@@ -1614,10 +1602,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     })
   }
 
-  // Bulk enable/disable for every patch-resident server row. Covers both
-  // levels at once, or a single level via args.level. Loader-only rows
-  // (never written to a patch file) are out of scope. Each file is rewritten
-  // at most once; rows already in the target state are left untouched.
+  // 批量启停补丁里的服务器行：默认两个层级一起，也可用 args.level 只动一层。
+  // 只活在 loader 里、从没写进补丁的行不在此列。每个文件最多重写一次，
+  // 已在目标状态的行原样不动。
   async function mcpmSetAll(args: any): Promise<any> {
     const p = await ensurePaths()
     const enabled = !!args.enabled
@@ -1663,7 +1650,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return row ? !!row.disabled : false
   }
 
-  /** Effective disabled state of a patch row (insert-row flag merged with override blocks). */
+  /** 补丁行实际生效的停用态（插入行的 flag 与覆盖块合并后的结果）。 */
   async function isRowDisabled(id: string, level: string): Promise<boolean> {
     const p = await ensurePaths()
     const abs = level === 'global' ? p.globalPatch : p.projectPatch
@@ -1683,19 +1670,16 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     if (!id || (level !== 'global' && level !== 'project')) return { ok: false, error: '缺少 id 或 level' }
     if (!(await entryExists(id, level))) return { ok: false, error: '未找到条目 ' + id }
     const abs = level === 'global' ? p.globalPatch : p.projectPatch
-    // A restart reconnects the server; it must NOT flip the enabled state.
-    // The recovery write below used to strip every disable override, which
-    // silently re-enabled servers the user had disabled on purpose — so the
-    // pre-restart state is captured and restored.
+    // 重启只负责重连，**不得**改启停状态。收尾写回若把所有 disable 覆盖一并摘掉，
+    // 会把用户有意停用的服务器悄悄重新启用 —— 所以先拍下重启前的状态，事后原样恢复。
     const wasDisabled = await isRowDisabled(id, level)
     const warnings: string[] = []
-    // 0.21.2：先落"重启进行中"标记。它存在的唯一理由是给**崩溃后**的收尾留线索 ——
+    // 先落"重启进行中"标记。它存在的唯一理由是给**崩溃后**的收尾留线索 ——
     // 补丁里阶段 1 留下的 disabled:true 与「用户主动停用」完全同形，没有这个标记就再也
     // 分不出来（进程在 ~11s 等待窗口里被杀 → 服务器永久停在停用态、无任何界面能解释）。
     // best-effort：写失败只 warn，重启照常进行。
     await writeMcpRestartMarker({ server: id, level, phase: 1, pid: process.pid, bootId: deps.bootId() })
-    // Phase 1 write (short lock): force-disable. Stale disable overrides are
-    // cleared first so duplicate blocks never accumulate.
+    // 阶段 1 写（短锁）：强制停用。先清掉旧的 disable 覆盖，避免块越积越多。
     await withWriteLock(async () => {
       let c = await readPatch(abs)
       c = removeMarked(c, id, 'enable')
@@ -1719,9 +1703,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       // 阶段 2 也标一下：收尾方（启动对账）据此知道"写回走到一半"，恢复时要重新读有效状态
       // 而不是照抄快照。与阶段 1 同一个理由：这段时间里被杀同样看不出状态。
       await writeMcpRestartMarker({ server: id, level, phase: 2, pid: process.pid, bootId: deps.bootId() })
-      // Phase 2 write (short lock): restore the pre-restart state. The polling
-      // waits deliberately run OUTSIDE the write lock — holding the global
-      // write lock for up to ~11s stalled every other write op.
+      // 阶段 2 写（短锁）：恢复重启前的状态。轮询等待**刻意放在写锁之外** ——
+      // 把全局写锁按住约 11s 会卡死其他所有写操作。
       await withWriteLock(async () => {
         // 并发护栏：阶段 1 的强制写自身必然把 effective 状态置为停用，所以走到这里时
         // 若读到「已启用」，只可能是等待窗口内别的写操作重新启用了它 —— 以现状为准并
@@ -1739,7 +1722,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         // 覆盖块全删掉之后，生效值**回落**到 insert 行自带的 `disabled:`，而它与「重启前的
         // 生效状态」不一定相同 —— insert 行写着 `disabled: true`、靠一条 enable 覆盖块启用，
         // 就是这种形状。此前只在 `wasDisabled` 为真时补一条 disable，于是这种形状下重启会把
-        // 服务器**留在停用态**（2026-09-30 审查 P2-11）。所以这里比一次：不等就按 `wasDisabled`
+        // 服务器**留在停用态**。所以这里比一次：不等就按 `wasDisabled`
         // 显式补一条覆盖；相等就不补 —— 补了会让每次重启都往补丁里多留一个块，没必要。
         if (effectiveDisabledIn(c, id) !== wasDisabled) c = appendBlock(c, buildDisableBlock(id, wasDisabled))
         await writePatch(abs, c)
@@ -1834,7 +1817,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         } catch { /* 清理失败不拦删除本身；死键无行为影响，与修复前一致 */ }
         try {
           // 停用表与「已知工具」也按 serverName 键：整台没了，键留着只会喂出错的口径
-          // （补集里多出一台永远凑不上的服务器的旧工具名）。
+          // 。
           const read = await readDisabledToolsResult(true)
           if (read.status === 'corrupt' || read.status === 'unreadable') {
             cleanupWarnings.push('MCP 停用表不可读，未清理该服务器名下的逐工具停用项')
@@ -1877,12 +1860,12 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
    *
    * 只删"删掉也不改变生效状态"的块（判定见 planOverrideCompaction）：insert 行、
    * 带 config 的覆盖块、以及决定当前生效值的那一条都原样保留。删除前 writePatch
-   * 会自动备份上一版（保留最近 5 份），所以这一步是可回退的。
+   * 会自动备份上一份（保留最近 5 份），所以这一步是可回退的。
    *
    * 基准状态由 planOverrideCompaction 自己从 insert 行读（另一份文件的内容只用来补
    * "insert 行不在本文件里"的情况）。这里**不要**喂 parseRows() 的 rows —— 那是合并
-   * 覆盖块之后的生效值，会让每个 decider 都被判成多余：第一版就是这么把 6 台 MCP
-   * 全部启用的。同理，界面不显示任何"多余块数"（那个数字也来自同一条错误口径）。
+   * 覆盖块之后的生效值，会让每个 decider 都被判成多余 —— 真发生过一次，6 台 MCP 全部
+   * 被启用。同理，界面不显示任何"多余块数"（那个数字也来自同一条错误口径）。
    */
   async function mcpmCompact(): Promise<any> {
     const p = await ensurePaths()
@@ -1919,7 +1902,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
    * `args.outDir`（可选）：给了就写到该目录下的 `mcp-export.json`，不给则照旧写 hub 侧车。
    *
    * 判据与 `bundle-export` / `snapshot-export` 完全一致（必须绝对路径）：相对路径会落到
-   * 进程 CWD，那是猜。用户 2026-10-12：「mcp 的导出缺少选择导出目录」—— 此前这一档只能
+   * 进程 CWD，那是猜。用户 ：「mcp 的导出缺少选择导出目录」—— 此前这一档只能
    * 落到 `~/.dsh/tool-management/mcp-export.json`，界面上没有任何可改的出口。
    *
    * `args.dryRun`（可选）：只算 JSON、**不落盘**。界面打开弹窗时先用它取预览，真正落盘
@@ -1949,7 +1932,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     let savedTo: string | null = null
     try {
       const abs = outDir ? join(outDir, MCP_EXPORT_FILE) : mcpSidecar(MCP_EXPORT_FILE)
-      // 用 `writeJsonFile`（直写 JSON）而**不是** `writePatch`（2026-09-30 审查 P1-3）：
+      // 用 `writeJsonFile`（直写 JSON）而**不是** `writePatch`：
       // `writePatch` 是宿主**补丁文件**的写口，写前会跑 `checkPatchWrite` 的官方方言校验
       // （顶层必须是 YAML 数组），而这里写的是 hub 里一份 JSON **对象** —— 校验必然失败、
       // 异常被下面的 catch 吞掉，于是 `savedTo` 恒为 null，界面显示"没能落盘（hub 目录写入
@@ -1967,7 +1950,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       savedTo = abs
     } catch (e) {
       // 落盘失败必须让调用方看得见：只返回 ok:true + savedTo:null 的隐式契约让
-      // "没写出去"和"写好了"在只看 ok 的调用方眼里完全一样（审查 N4）。
+      // "没写出去"和"写好了"在只看 ok 的调用方眼里完全一样。
       return { ok: false, error: '落盘失败：' + message(e), json, savedTo: null }
     }
     return { ok: true, json, savedTo }
@@ -2017,15 +2000,14 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
           const note = describeMaskedOutcome(outcome)
           if (note) importNotes.push(row.serverName + '：' + note)
         }
-        // serverName is globally unique: a DIFFERENT id owning the name is
-        // always skipped, even in overwrite mode.
+        // serverName 全局唯一：名字被**另一个** id 占着时一律跳过，覆盖模式也不例外。
         if (nameTaken && !idTaken) { skipped.push({ id: row.id, reason: 'serverName 已存在' }); continue }
         if (idTaken && !overwrite) { skipped.push({ id: row.id, reason: 'id 已存在' }); continue }
         // URL 与 env / headers 同一条纪律（判据见 ./mcp/secret-guard.js）：打码值绝不入库。
         // 覆盖模式下拿被覆盖条目的旧真值顶替；没有旧真值可顶替时**跳过这一条**并给出理由 ——
         // URL 不是可丢的键值对，写一个"能连上但鉴权失败"的地址比不导入更糟。
         // 这条原先不存在，于是 `snapshot-export`（默认 `includeSecrets=false` 会把 URL 打码）
-        // 导到目标机后，补丁里落进 `%3Credacted%3E` 而**没有任何 warning**（审查 F4）。
+        // 导到目标机后，补丁里落进 `%3Credacted%3E` 而**没有任何 warning**。
         if (row.transport === 'streamable-http') {
           const urlGuard = resolveMaskedUrl(row.url, prevConfig.url)
           if (urlGuard.unrecoverable) {
@@ -2035,11 +2017,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
           row.url = urlGuard.value
           if (urlGuard.restored) importNotes.push(row.serverName + '：URL 未改动，已保留原值')
         }
-        // Overwrite: purge every trace of the id from BOTH patch files first,
-        // then insert the imported row at its own level. The purge is not
-        // atomic with the insert, so keep the pre-purge content of both files
-        // and restore it when the insert fails — same trade-off as mcpmEdit's
-        // level migration: losing the old entries is worse than a transient dup.
+        // 覆盖：先把这个 id 从**两份**补丁里彻底清掉，再按它自己的层级插入导入行。
+        // 清理与插入不是原子的，所以留住两份文件的清理前内容，插入失败就还原 ——
+        // 与 `mcpmEdit` 的层级迁移同一个取舍：丢旧条目比短暂重复更糟。
         const origs: Array<{ abs: string; content: string }> = []
         let purgeFailed = false
         if (idTaken && overwrite) {
@@ -2093,7 +2073,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   }
 
   /**
-   * 补丁片段解析（0.20.1 导入弹窗）：把用户粘贴的 dsh 补丁文本读成条目 —— 不读盘、不写盘。
+   * 补丁片段解析（导入弹窗用）：把用户粘贴的 dsh 补丁文本读成条目 —— 不读盘、不写盘。
    *
    * 为什么这件事在宿主侧：客户端那一半跑在浏览器里（`window.__ModuleLoader__`），那里的
    * `require` 只解析宿主注册过的浏览器模块，`js-yaml` 永远取不到 —— 界面自己解析 YAML 补丁
@@ -2242,7 +2222,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     attachAgent,
     detachAgent,
     dispose,
-    // 0.21.2：重启中断收尾用的两个读口。isRowDisabled 每次重新读盘（不走缓存）——
+    // 重启中断收尾用的两个读口。isRowDisabled 每次重新读盘（不走缓存）——
     // 收尾要判断「阶段 1 的强制停用现在还是不是生效值」，缓存值会把"用户刚改过"读成"没人动"。
     isRowDisabledPublic: isRowDisabled,
     effectiveDisabledIn: (content: string, id: string) => {

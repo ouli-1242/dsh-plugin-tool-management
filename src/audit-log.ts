@@ -1,4 +1,4 @@
-// 「最近改动」流水（0.15.0 B2）—— 写类 op 成功之后追加一条 JSONL，兼容页倒序显示。
+// 「最近改动」流水—— 写类 op 成功之后追加一条 JSONL，兼容页倒序显示。
 //
 // 为什么要有它：启用态被三方动过 —— 面板点击、模型的 `_switch` 工具、场景引擎 ——
 // 事后回答不了「这个开关是谁、什么时候关的」。所有写动作的收口点都在 op 层，包一层就能
@@ -22,8 +22,10 @@ const ROTATE_KEEP_LINES = 500
 /** 读上限：界面上限 500 条，再多没有意义（列表本身也只渲染最近这些）。 */
 const READ_MAX_LIMIT = 500
 
+/** 流水里的「谁」：面板点击、模型工具、还是场景引擎。 */
 export type AuditSource = 'panel' | 'model' | 'engine'
 
+/** 一条「最近改动」流水：写类 op 成功后追加，只记对象名不记参数。 */
 export interface AuditEntry {
   ts: number
   op: string

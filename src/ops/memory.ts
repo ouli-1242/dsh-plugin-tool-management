@@ -1,4 +1,4 @@
-// 规则/记忆域的**记忆正文 ops**（2026-09-19 从 memories/service.ts 的 createMemoriesService 闭包抽出）。
+// 规则/记忆域的**记忆正文 ops**（从 memories/service.ts 的 createMemoriesService 闭包抽出）。
 //
 // 列出 / 读取 / 预算 / 体检 / 新建 / 导入 / 更新 / 开关 / 索引调整 / 附件增删 —— 记忆正文这条主线。
 // 与回收站、场景两个域互不调用；共享的读模型与写管道经 MemoriesOpsCtx 显式传入。
@@ -26,7 +26,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
   const { buildProjected, copyIntoMemoriesTrash, invalidateSnapshot, listAttachments, locateRule, maxBytes, parseId, refuseOutsideRoot, memoriesRoot, sceneMemory, scenePrompt, sceneRows, scenesRoot, serializeRuleFile, serializeUpdatedFile, snapshot, stateDir } = rc
 
   /**
-   * 从 op 入参取会话作用域（0.21.2）。`sessionId` 缺失 = 全局口径（返回 undefined）。
+   * 从 op 入参取会话作用域。`sessionId` 缺失 = 全局口径（返回 undefined）。
    *
    * 为什么由 `sessionId` 反查而不是让调用方直接传覆盖：op 的入参来自 HTTP / 模型，
    * 传一个覆盖对象等于把"哪个会话"的解释权交给调用方 —— 界面只要传当前会话 id，
@@ -40,8 +40,8 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
 
   async function rulesList(args: any): Promise<any> {
     const groupFilter = args && typeof args.group === 'string' && args.group !== '' ? args.group : undefined
-    // 会话层（0.21.2）：给了 sessionId 就按本会话的场景与逐条开关投影 —— 界面切到"某个会话"
-    // 时看到的就是那个会话的样子。不给 = 全局（与 0.21.2 逐字相同）。
+    // 会话层：给了 sessionId 就按本会话的场景与逐条开关投影 —— 界面切到"某个会话"
+    // 时看到的就是那个会话的样子。不给 = 全局。
     const scope = memoryScopeFrom(args)
     const snap = await snapshot()
     // 索引直接用快照里那份：以前这里再 `readIndex(stateDir)` 一次 —— 同一次调用把
@@ -51,7 +51,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     const rules = snap.rules
       .filter((r) => !groupFilter || r.group === groupFilter)
       .sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order || a.name.localeCompare(b.name))
-      // bundle 记忆附带附件摘要（用户裁定 2026-09-17）：界面要显示「几个附件」。
+      // bundle 记忆附带附件摘要：界面要显示「几个附件」。
       // 代价是**同步**系统调用（其余读路径都是 await）：每条 bundle 一次 `readdirSync`
       // + 每个附件一次 `statSync`，总量 = bundle 条数 × 平均附件数，随内容线性增长。
       // 「可以忽略」这个判断只成立于 bundle 少、附件也少的时候 —— 列表是界面轮询的热路径
@@ -63,10 +63,10 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
         return attach ? { ...r, attach } : r
       })
     const groups = groupFilter ? snap.groups.filter((g) => g.name === groupFilter) : snap.groups
-    // 会话层（0.21.2）：`scenes[]` 每一行的 `active` / `selectable` 也按本会话投影 ——
+    // 会话层：`scenes[]` 每一行的 `active` / `selectable` 也按本会话投影 ——
     // 只改 `activeScene` 而不改行，场景页的「当前」标签与记忆页的场景卡都不动。
     const scenes = sceneRows(snap, index, scope?.scene)
-    // 场景锁定状态（v0.8）：任意一个场景锁定 = 五个管理域整体冻结。界面据此禁用各页的写控件。
+    // 场景锁定状态：任意一个场景锁定 = 五个管理域整体冻结。界面据此禁用各页的写控件。
     const anyLocked = Object.values(index.scenes || {}).some((s) => s.locked === true)
     const projection = sceneMemory(scope)
     const promptProjection = scenePrompt()
@@ -80,7 +80,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     return {
       ok: true,
       rules: effectiveRules,
-      // 对外契约（§7.1）用 key 标识分组；name 保留兼容内部引用。
+      // 对外契约用 key 标识分组；name 保留兼容内部引用。
       groups: groups.map((g) => ({ ...g, key: g.name })),
       // 场景 = 显式记录（含保留场景 global 与尚无记忆的空场景）；active = 是否参与注入。
       scenes,
@@ -88,7 +88,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       anyLocked,
       activeMode: scope?.scene !== undefined ? 'custom' : (normalizeActive(index.active) === null ? 'all' : 'custom'),
       // 单选模型：当前启用的那个场景（null = 只留 `_shared` 与 `global`）。
-      // 会话层下报**本会话**的场景（决策 14：只改视图，不改运行时）。
+      // 会话层下报**本会话**的场景（只改视图，不改运行时）。
       activeScene: enabledSceneOf(index, scope?.scene),
       sceneMemory: { usedBytes: projection.bytes, maxBytes: projection.maxBytes, truncated: projection.truncated, dropped: projection.dropped },
       // 当前生效的场景提示词（绑定的预设正文；与 ~/.dsh/AGENTS.md 一致时不重复注入）。
@@ -105,7 +105,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       // 路径供 UI 显示「文件在哪」；不再让界面硬编码 ~/.dsh/scene-memory。
       paths: { memories: memoriesRoot, scenes: scenesRoot, hub: stateDir },
       // 统计必须用**投影后**那份：会话层下「N 启用」报全局值，页头那几个数字与下面
-      // 一排开关就对不上了（2026-10-19）。
+      // 一排开关就对不上了。
       stats: {
         total: effectiveRules.length,
         enabled: effectiveRules.filter((r) => r.enabled).length,
@@ -149,7 +149,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
 
   /**
    * 场景记忆段预算视图。段落由「活动场景 + 文件内容」决定，超限时**不拒绝写入**，
-   * 而是按确定性顺序截断（§4 对照表）——这里只报告事实，供 UI 显著告警。
+   * 而是按确定性顺序截断——这里只报告事实，供 UI 显著告警。
    */
   async function rulesBudget(): Promise<any> {
     const projection = sceneMemory()
@@ -261,7 +261,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     if (!isValidGroupSegment(name)) return fail('error.rules.invalidName', `记忆名非法：${name}（${SEGMENT_RULE_HINT}）`)
     // 目标已存在（bundle 或 flat 皆算）→ 拒绝，避免静默覆盖。
     // 用 exists 而不是 shadowed：后者说的是「同名 bundle 把 flat 遮蔽了」，用户看到
-    // 「被同名 bundle 遮蔽」会去找一个并不存在的 bundle（2026-09-16 实测）。
+    // 「被同名 bundle 遮蔽」会去找一个并不存在的 bundle。
     const existing = await locateRule(group, name)
     if (existing) {
       return fail('error.rules.exists', `同名记忆已存在（${existing.kind === 'bundle' ? 'bundle' : 'flat'}）：${existing.id}`)
@@ -285,7 +285,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       description = derived // 派生只进内存投影，不写回文件
     }
     // 正文序列化（frontmatter 仅写用户显式提供的字段）。是否生效由"场景是否启用"决定，
-    // 超预算只在渲染时确定性截断 + 告警，不再拒绝写入（§4 对照表）。
+    // 超预算只在渲染时确定性截断 + 告警，不再拒绝写入。
     const fields: Record<string, string | boolean> = { name }
     if (rawDescription !== '') fields.description = description!
     const text = serializeRuleFile(fields, body)
@@ -294,7 +294,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     const createdId = `${targetGroup}/${name}`
     const index = indexForScene
     // P5：新建记忆默认**不开启** —— 记忆的开关是单一真相源（`enabled`），
-    // 用户裁定「创建的记忆默认不开启，在记忆页开启后对应的场景档案也要显示开启」。
+    // 用户要求「创建的记忆默认不开启，在记忆页开启后对应的场景档案也要显示开启」。
     index.rules[createdId] = { order: DEFAULT_ORDER, enabled: false, updatedAt: new Date().toISOString() }
     if (!index.groups[targetGroup]) index.groups[targetGroup] = { order: DEFAULT_GROUP_ORDER, label: targetGroup }
     // **先落索引、再落文件**，顺序不能反。索引条目指向一个尚不存在的文件是无害的：列表与投影
@@ -516,7 +516,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       await copyIntoMemoriesTrash(located, parts.group, parts.name)
       await rm(join(memoriesRoot, parts.group, parts.name + '.md'), { force: true })
     } else if (located.kind === 'bundle' && newName !== parts.name) {
-      // bundle 改名 = **目录连同附件一起改**（2026-10-14 对抗性审查 P0-4）。
+      // bundle 改名 = **目录连同附件一起改**。
       //
       // 此前这条落到下面的 else：只把 frontmatter/正文写回**旧**路径，而索引照新名迁移 ——
       // 实测（临时目录内复现）结果是索引里多一条指向不存在路径的记录（`rules-read` 报
@@ -548,7 +548,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     // 索引：改名则迁移记录（保留 order/tags/enabled 等），否则原地更新。
     // 判据只看"名字变没变"，不再附加 `index.rules[id]` 存在 —— 磁盘上由外部新增、索引里
     // 还没有记录的条目（发现侧会认它）改名时，旧判据会走到 else 把记录写回**旧名**，
-    // 于是新名下没有记录、旧名下多一条悬空的（2026-10-14 对抗性审查 P0-4 同族）。
+    // 于是新名下没有记录、旧名下多一条悬空的。
     const index = await readIndex(stateDir)
     const newId = `${parts.group}/${newName}`
     if (newId !== id) {
@@ -563,7 +563,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
   }
 
   async function rulesToggle(args: any): Promise<any> {
-    // 会话层写入**不走这里**（0.21.2）：本 op 改的是索引里的全局开关，而会话覆盖住在
+    // 会话层写入**不走这里**：本 op 改的是索引里的全局开关，而会话覆盖住在
     // 另一个侧车。带着 sessionId 调过来时必须当场拒绝 —— 静默写全局正是这次要修的症状
     // （用户以为只改了本会话，实际上所有对话都变了）。写入入口只有 `scope-set`。
     if (args && typeof args.sessionId === 'string' && args.sessionId.trim() !== '') {
@@ -579,7 +579,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     if (typeof (args && args.enabled) !== 'boolean') {
       return fail('error.rules.invalidArgs', '缺少参数：enabled 必须是布尔值（toggle 只按传入值写入，不做"翻转"推断）')
     }
-    // 不存在的 id 必须拒绝（2026-10-15 smoke-test P1-4）：`parseId` 只校验 `<场景>/<名字>`
+    // 不存在的 id 必须拒绝：`parseId` 只校验 `<场景>/<名字>`
     // 的形状，原先据此直接 `index.rules[id] = {...}` —— 于是一次拼错的 id 会**写进一条幽灵
     // 索引**（磁盘上没有正文、清单里也列不出来，索引里却多一条 enabled），调用方还收到 ok。
     // 判据与 `rulesRead` / `rulesUpdate` 同源：`locateRule` 在磁盘上找得到才算存在。

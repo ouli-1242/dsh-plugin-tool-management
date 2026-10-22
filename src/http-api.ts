@@ -14,6 +14,7 @@ import type { AccessToken, OpWhitelist } from './request-gate.js'
 
 // 宿主 webServer 三个面的最小结构类型（原本定义在 index.ts 的「本地接口」区，
 // 只有这条路由与 DshContext.webServer 用得到，随正文一起搬过来）。
+/** 宿主 HTTP 请求的最小面（只看头、不读体）。 */
 export interface HttpReq {
   url?: string
   method?: string
@@ -21,15 +22,18 @@ export interface HttpReq {
   on(event: string, callback: (chunk?: unknown) => void): void
 }
 
+/** 宿主 HTTP 响应的最小面（写头、结束、出错）。 */
 export interface HttpRes {
   writeHead(code: number, headers?: Record<string, string>): void
   end(body?: string): void
 }
 
+/** 宿主 web 服务的最小面：本插件只用到注册路由。 */
 export interface WebServerService {
   register(route: { kind: 'exact'; path: string; handler(req: HttpReq, res: HttpRes): void }): () => void
 }
 
+/** 注册 HTTP API 要的上下文、配置与 web 服务。 */
 export interface HttpApiDeps extends
   // 访问令牌与 op 白名单：apply 里由 request-gate 的两个工厂建好，逐字段透传（类型钉回工厂出口）。
   Pick<AccessToken, 'CONFIG_TOKEN' | 'TOKEN_DISABLED' | 'TOKEN' | 'tokenMatches' | 'BOOT_ID' | 'markAccepted' | 'unmarkAccepted'>,
@@ -46,15 +50,14 @@ export interface HttpApiDeps extends
   tokenConfigure(args: any, presented: boolean): Promise<any>
 }
 
+/** 注册 `/dsh-plugin-tool-management/api` 这条精确路由 —— 客户端那一半的唯一入口；`webServer` 缺席时不注册。 */
 export function installHttpApi(deps: HttpApiDeps): void {
 
-  // ---------- HTTP API route (UI half), registered defensively ----------
+  // ---------- HTTP API 路由（界面那一半），注册时按容错处理 ----------
   if (deps.webServer) {
-    // Cap request bodies (88 MiB): skill-upload carries Base64 folder/ZIP
-    // payloads (64 MiB of raw content). Reachability is decided by
-    // fenceRejection() below — the host's Host/Origin + browser-session fence
-    // (or a correct explicit token). `config.maxBodyBytes` overrides the cap
-    // (tests use a small value).
+    // 请求体上限（88 MiB）：技能上传要带 Base64 的目录 / ZIP（原始内容 64 MiB）。
+    // 能不能进由下面的 `fenceRejection()` 判 —— 宿主的 Host/Origin + 浏览器会话栅栏
+    // （或正确的显式令牌）。`config.maxBodyBytes` 可覆盖（测试用小值）。
     const configuredMaxBody = Number((deps.config as { maxBodyBytes?: unknown } | undefined)?.maxBodyBytes)
     // 默认 88 MiB：够塞下一份带多张大附件（图片 / PDF）的技能或记忆打包体，又不至于让
     // 一个失控的客户端把进程内存吃光。`config.maxBodyBytes` 可覆盖（测试用小值）。
@@ -72,9 +75,8 @@ export function installHttpApi(deps: HttpApiDeps): void {
         reject(new Error('request body too large'))
         return
       }
-      // Accumulate Buffers and decode ONCE at the end: decoding each chunk
-      // separately corrupts multi-byte UTF-8 characters that straddle a
-      // chunk boundary (e.g. long Chinese skill bodies).
+      // 先攒 Buffer、最后**一次性**解码：逐块解码会把跨块边界的多字节 UTF-8 字符切坏
+      //（中文技能正文一长就必踩）。
       const chunks: Buffer[] = []
       let size = 0
       req.on('data', (c) => {
@@ -93,14 +95,18 @@ export function installHttpApi(deps: HttpApiDeps): void {
     // 并交回这次请求所代表的 Peer（本路由是 exact 路由，只服务 owner Peer）。
     // 本插件此前只查公开常量 x-dsh-plugin 与自比对（Origin.host === Host）的 "同源"，
     // 两者都挡不住 rebind 后的网页或本机任意进程 —— 等于没鉴权。现在优先走宿主栅栏。
-    const connection = ((): ConnectionSeam | undefined => {
+    // **每次请求现取，不在注册时捕获**：`connection` 由宿主在组合期挂载，挂载顺序不保证
+    // 早于本插件的 `apply()`。捕获一次的话，晚挂载时那个 `undefined` 会永久留在闭包里 ——
+    // 栅栏此后一直停在本地判定（只查回环 Host/Origin，没有浏览器会话鉴权），兼容页那条
+    // 降级也就一直挂着，而宿主其实早就把服务挂上了。服务确实不在场时行为不变：照样退回
+    // 本地判定并上报（`fenceRejection` 里那条 `noteFenceFallback`）。
+    const hostConnection = (): ConnectionSeam | undefined => {
       try { return deps.ctx.get('connection') as ConnectionSeam | undefined }
       catch { return undefined }
-    })()
+    }
     try {
-      // ctx.effect wires the route's disposer into this plugin's scope, so an
-      // unload (HMR removal, disable, update) unregisters the route — the
-      // documented cleanup contract (webServer.register does not auto-scope).
+      // `ctx.effect` 把路由的 disposer 挂进本插件的作用域，卸载（HMR 移除 / 停用 / 更新）时
+      // 路由跟着注销 —— 这是官方文档里的清理契约（`webServer.register` 自己不管作用域）。
       deps.ctx.effect(() => deps.webServer.register({
         kind: 'exact',
         path: '/dsh-plugin-tool-management/api',
@@ -140,7 +146,7 @@ export function installHttpApi(deps: HttpApiDeps): void {
           // 那一边看不到请求头，只能由这里告诉它"这台机器已经有人验过令牌了"。
           if (tokenAccepted) deps.markAccepted()
           if (!tokenAccepted) {
-            const fence = fenceRejection(req, connection)
+            const fence = fenceRejection(req, hostConnection())
             if (fence) {
               send(fence.status, { ok: false, error: fence.error })
               return
@@ -168,8 +174,16 @@ export function installHttpApi(deps: HttpApiDeps): void {
               }
             }
             const op = String(payload.op || '')
+            // args 只接受普通对象：`payload.args || {}` 只挡假值，字符串 / 数字 / 数组会原样
+            // 进 handler。归一成一份之后，下面 `isReadCall`、`tokenConfigure`、handler、
+            // `recordOpAudit` 四处看的是同一个对象 —— 否则"这次算不算写"可能按两份不同的
+            // args 各判一次。
+            const args: Record<string, unknown> =
+              payload.args !== null && typeof payload.args === 'object' && !Array.isArray(payload.args)
+                ? payload.args
+                : {}
             // 敏感 op（会吐明文密钥与完整配置）：**配了令牌就必须带对的**，没配令牌则不设防
-            // （判定与理由见 http-fence.ts 的 secretOpRejection —— 用户裁定 2026-09-19：
+            // （判定与理由见 http-fence.ts 的 secretOpRejection —— 用户要求 ：
             // 没配令牌时那道门没有出路，用户无从填一个不存在的令牌）。
             // 之前这里只查"有没有 Origin 头"，而 token 为空时它形同虚设 —— 任何能
             // 打开 GUI 的浏览器都拿得到全部密钥原文。
@@ -185,12 +199,12 @@ export function installHttpApi(deps: HttpApiDeps): void {
             }
             // 「读改写」两态 op（`inject-settings` / `tool-table` / `scene-settings` /
             // `mcpm-settings`）：同一个名字既读又写，于是整条 op 被列进 WRITE_OPS —— 读侧也
-            // 一起被拦，界面表现是"没填令牌时整块设置消失、填了还要刷新才出现"（2026-09-19
+            // 一起被拦，界面表现是"没填令牌时整块设置消失、填了还要刷新才出现"（
             // 用户报的）。判据是**这次调用要不要写**，不是 op 名在不在名单里。
             // 判据本身在登记表（`writeWhen`），这里不再手写一份 —— 手写那份只认 `set:true`，
             // 于是 `tool-table` 的 `presetSave` / `presetDelete` 被当成读放行，配了令牌也能
-            // 只凭宿主栅栏改侧车（审查 F2，0.17.0 修）。
-            const readOnlyCall = isReadCall(op, payload.args)
+            // 只凭宿主栅栏改侧车。
+            const readOnlyCall = isReadCall(op, args)
             if (deps.TOKEN && deps.WRITE_OPS.has(op) && !readOnlyCall && !deps.tokenMatches(hdr('x-dsh-token'))) {
               // 文案与明文门禁同源（http-fence.ts），code 也统一 —— 界面据此在最右侧挂
               // 「去填令牌」跳转按钮。这条错误会出现在**任意**页面，而入口只有一个。
@@ -211,7 +225,7 @@ export function installHttpApi(deps: HttpApiDeps): void {
                 disabled: deps.TOKEN_DISABLED,
                 // 「当前进程里令牌**在生效**」= 写操作要不要令牌。关掉或没配都是 false。
                 // 界面据此判断"填令牌"这件事有没有意义（没生效时填了也没人验，还会把
-                // 一句无处可填的提示挂在屏幕上 —— 用户 2026-09-19 报的就是这个）。
+                // 一句无处可填的提示挂在屏幕上 —— 用户反馈的就是这个）。
                 active: deps.TOKEN !== '',
                 accepted: tokenAccepted,
                 bootId: deps.BOOT_ID,
@@ -226,12 +240,12 @@ export function installHttpApi(deps: HttpApiDeps): void {
             // 设置 / 关闭令牌：同样就地处理（理由见 tokenConfigure 的注释 —— 也正因为不进
             // handlers，模型侧没有任何工具能间接关掉它）。
             if (op === 'token-configure') {
-              send(200, deps.withPatchWarnings(await deps.tokenConfigure(payload.args || {}, tokenAccepted)))
+              send(200, deps.withPatchWarnings(await deps.tokenConfigure(args, tokenAccepted)))
               return
             }
             // 「锁定」/「删除令牌」的配套：把「本次启动已验过」的闩重新挂上。没有它，解锁一次之后
             // 锁定 + 强刷新，浏览器里已无令牌，闩却挂着 —— pre-step 门禁读闩
-            // （tokenGateActive），整个启动期都放行对话（2026-09-19 用户实测的漏洞）。
+            // （tokenGateActive），整个启动期都放行对话（用户实测的漏洞）。
             // 不要求凭证：它只会收紧（要求重新验令牌），给不了任何人任何权限；同样不进
             // handlers —— 模型不该有能力拨这颗闩。
             if (op === 'token-unaccept') {
@@ -246,11 +260,11 @@ export function installHttpApi(deps: HttpApiDeps): void {
               send(404, { ok: false, error: '未知操作: ' + op })
               return
             }
-            const result = await fn(payload.args || {})
+            const result = await fn(args)
             // 「最近改动」流水：来源 = 面板（这条 HTTP 路由是界面唯一的入口）。
             // 「这次算不算写」的判据在 recordOpAudit 里（与写门禁同源：登记表的 `writeWhen`）
             // —— 不在这里再传一次 `readOnlyCall`，两处各判一次迟早会分家。
-            recordOpAudit(op, payload.args || {}, 'panel', result)
+            recordOpAudit(op, args, 'panel', result)
             send(200, deps.withPatchWarnings(result === undefined ? { ok: true } : result))
           } catch (e) {
             send(500, { ok: false, error: deps.message(e) })
@@ -258,9 +272,9 @@ export function installHttpApi(deps: HttpApiDeps): void {
         },
       }), 'dsh-plugin-tool-management: api route')
     } catch (e) {
-      // A registration failure must never take down the whole entry: log and continue.
+      // 路由注册失败绝不能带崩整个入口：记日志，继续。
       console.error('[dsh-plugin-tool-management] webServer route registration failed:', deps.message(e))
-      // 结构性弱点（2026-09-30 审查 §5 F4）：compat-status **本身就走这条路由**，所以路由没注册上
+      // 结构性弱点：compat-status **本身就走这条路由**，所以路由没注册上
       // 时兼容页也拿不到这条降级行 —— 面板是**整页失联**，不是"少一行"。这里至少把它写进运行期
       // 上报通道（日志里必然有一条，进程内可查），并在 README 里写明"面板空白先看宿主日志"。
       // 之所以不是"必然可见"的告警：可见的通道就是这条路由，它自己挂了就没得显示。

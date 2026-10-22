@@ -1650,13 +1650,10 @@ test('技能目录接管端到端：拦官方、送会话版整份；无差异�
   // 接管开始后 delta 归空：官方不会重发同一摘要（它第 1 轮那条仍与机器一致），所以不能
   // 立刻交还 —— 否则插件会补一条假的「官方已接管」，而模型手里最新的仍是插件那份。
   // 继续接管 + 内容没变 = 官方被拦、插件一条都不发。
-  const pluginEvent = {
-    type: 'user/message',
-    data: {
-      content: [{ type: 'text', text: 'PLUGIN-OLD' }],
-      source: { kind: 'skill-manager-catalog', form: 'catalog', body: 'SESSION-CATALOG' },
-    },
-  }
+  // 表面上那条「插件旧消息」直接用上面**真发出去的那一条**（`ours[0]`）：手写 `source` 会漏掉
+  // 框架指纹 `frame`（0.21.3 起它是去重判据的一位），于是"内容没变"永远判不出来，这条断言
+  // 就退化成摆设 —— 真实会话里每轮重发，测试却是绿的。
+  const pluginEvent = { type: 'user/message', data: { content: ours[0].content, source: ours[0].source } }
   const tookOverAgent = {
     session: { seq: 2, surface: { nodes: [0, 1] }, eventAt: (seq) => (Number(seq) === 1 ? pluginEvent : officialEvent) },
   }
@@ -1755,13 +1752,8 @@ test('提示词快照接管端到端：拦官方 AGENTS.md、送快照整份；�
   assert.equal(out2.messages.some((m) => (m.source || {}).kind === 'prompt-manager-catalog'), false, '无差异时插件不出声')
 
   // 接管过之后差异归零：官方不会重发同一摘要，插件必须继续接管；内容没变就一个字都不发。
-  const pluginEvent = {
-    type: 'user/message',
-    data: {
-      content: [{ type: 'text', text: 'PLUGIN-OLD' }],
-      source: { kind: 'prompt-manager-catalog', form: 'instructions', body: 'FROZEN-BODY' },
-    },
-  }
+  // 同前一条：回灌**真发出去的那条**，手写 source 会漏掉框架指纹 `frame`。
+  const pluginEvent = { type: 'user/message', data: { content: ours[0].content, source: ours[0].source } }
   const tookOverAgent = {
     session: { seq: 2, surface: { nodes: [0, 1] }, eventAt: (seq) => (Number(seq) === 1 ? pluginEvent : officialEvent) },
   }
@@ -2123,16 +2115,9 @@ test('注入去重端到端：内容没变就不发，变了才发（判据行�
   // rendered.body) continue` 整行删掉了，纯函数测试全绿（扫描侧没坏），而真实会话里六个域每一轮
   // 全量重发 —— 用户实测「每次对话都注入上下文」。只有驱动真监听器才拦得住这种丢失。
   //
-  // 假会话：一条 surface 记录插件自己上一轮发的注入消息，本步 domains 给出同样的正文。
-  const sent = []
-  const agent = { session: { seq: 5, surface: { nodes: [0] }, eventAt: () => injectedEvent } }
-  const injectedEvent = {
-    type: 'user/message',
-    data: {
-      content: [{ type: 'text', text: '上一轮的整条消息' }],
-      source: { kind: 'mcp-manager-catalog', form: 'catalog', body: '上一轮的域正文' },
-    },
-  }
+  // 假会话：**先让插件自己发一条**，再把它发出来的那条当"上一轮的消息"。
+  // 手写 `source` 会漏掉框架指纹 `frame`（0.21.3 起它是判据的一位），于是"没变"永远判不出来 ——
+  // 测试一直绿，真实会话里每轮重发，正好是这条要拦的东西。
   const domains = [{ key: 'mcp', name: 'c', label: 'MCP', form: 'catalog', text: () => '上一轮的域正文' }]
   let listener = null
   const ctx = { on: (_name, fn) => { listener = fn; return () => {} } }
@@ -2143,9 +2128,17 @@ test('注入去重端到端：内容没变就不发，变了才发（判据行�
     factsFor: async () => undefined,
   })
   assert.equal(typeof listener, 'function', 'pre-step 监听必须注册上')
-  // 第一步：表面上已有同域同正文的注入 → 一条都不该新增。
-  const decision = { kind: 'enter', messages: [] }
-  const out = await listener({ agent, step: 2 }, async () => decision)
+  const blank = { session: { seq: 0, surface: { nodes: [] }, eventAt: () => undefined } }
+  // 第一拍按真实情形给一条用户消息：`step 1 且一条消息都没有` 时注入器直接返回（空 turn
+  // 不注入，官方同款守卫），那是另一条契约，不在这里测。
+  const firstOut = await listener({ agent: blank, step: 1 }, async () => ({ kind: 'enter', messages: [{ content: [{ type: 'text', text: '你好' }] }] }))
+  const emitted = firstOut.messages.find((m) => (m.source || {}).kind === 'mcp-manager-catalog')
+  assert.ok(emitted !== undefined, '空表面必须发一条')
+  assert.equal(typeof emitted.source.frame, 'string', '发出的消息必须带框架指纹（下一轮靠它判「没变」）')
+  // 第一步：表面上已有同域、同正文、同框架的注入 → 一条都不该新增。
+  const injectedEvent = { type: 'user/message', data: { content: emitted.content, source: emitted.source } }
+  const agent = { session: { seq: 5, surface: { nodes: [0] }, eventAt: () => injectedEvent } }
+  const out = await listener({ agent, step: 2 }, async () => ({ kind: 'enter', messages: [] }))
   const appended = out.messages.filter((m) => (m.source || {}).kind === 'mcp-manager-catalog')
   assert.equal(appended.length, 0, '内容一个字没变就不该再发（每轮重发就是这里失守')
   injector.dispose()

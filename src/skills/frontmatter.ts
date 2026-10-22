@@ -34,10 +34,11 @@ export function parseSkillDoc(text: unknown): SkillDoc {
   const fields = [];
   let body = src;
   let hasFrontmatter = false;
-  if (lines.length > 0 && lines[0].trim() === "---") {
+  // split 至少返回一个元素，所以只判首行在不在，不再重复判长度。
+  if (lines[0] != null && lines[0].trim() === "---") {
     let end = -1;
     for (let i = 1; i < lines.length; i++) {
-      if (lines[i].trim() === "---") {
+      if (lines[i]?.trim() === "---") {
         end = i;
         break;
       }
@@ -45,24 +46,28 @@ export function parseSkillDoc(text: unknown): SkillDoc {
     if (end >= 0) {
       hasFrontmatter = true;
       for (let i = 1; i < end; i++) {
-        const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(lines[i]);
+        // end 是 lines 的合法下标，循环体内 lines[i] 恒存在。
+        const line = lines[i]!;
+        const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
         if (m) {
-          fields.push({ key: m[1], raw: m[2] });
-          const block = /^([>|])[-+]?\s*$/.exec(m[2]);
+          // 该正则两个捕获组都非可选，命中即恒为 string。
+          const key = m[1]!;
+          const raw = m[2]!;
+          fields.push({ key, raw });
+          const block = /^([>|])[-+]?\s*$/.exec(raw);
           if (block) {
-            const content = [];
-            while (
-              i + 1 < end &&
-              (/^\s/.test(lines[i + 1]) || lines[i + 1] === "")
-            ) {
+            const content: string[] = [];
+            while (i + 1 < end) {
+              const next = lines[i + 1]!;
+              if (!/^\s/.test(next) && next !== "") break;
               i++;
-              content.push(lines[i]);
+              content.push(next);
             }
             const indentation = content
               .filter((line) => line.trim() !== "")
               .reduce(
                 (min, line) =>
-                  Math.min(min, (/^\s*/.exec(line) || [""])[0].length),
+                  Math.min(min, (/^\s*/.exec(line)?.[0] ?? "").length),
                 Infinity,
               );
             const normalized = content.map((line) =>
@@ -70,12 +75,12 @@ export function parseSkillDoc(text: unknown): SkillDoc {
                 ? line.slice(Math.min(indentation, line.length))
                 : line,
             );
-            map[m[1]] =
+            map[key] =
               block[1] === ">"
                 ? normalized.join(" ").replace(/\s+/g, " ").trim()
                 : normalized.join("\n").trim();
           } else {
-            map[m[1]] = decodeYamlScalar(m[2]);
+            map[key] = decodeYamlScalar(raw);
           }
         }
       }
@@ -101,6 +106,7 @@ export function decodeYamlScalar(v: unknown): string {
   return s;
 }
 
+/** 去掉 frontmatter 值两侧的引号并 trim；不是字符串时按空串处理。 */
 export function unquote(v: unknown): string {
   const s = String(v == null ? "" : v).trim();
   if (
@@ -181,7 +187,7 @@ export function rewriteFrontmatterFields(
   let end = -1;
   if (lines[0] != null && lines[0].trim() === "---") {
     for (let i = 1; i < lines.length; i++) {
-      if (lines[i].trim() === "---") {
+      if (lines[i]?.trim() === "---") {
         end = i;
         break;
       }
@@ -206,30 +212,33 @@ export function rewriteFrontmatterFields(
   const seen = new Set<string>();
   let i = 0;
   while (i < front.length) {
-    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(front[i]);
+    // i < front.length，所以这一行恒存在。
+    const line = front[i]!;
+    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
     if (!m) {
-      out.push(front[i]);
+      out.push(line);
       i++;
       continue;
     }
-    const key = m[1];
-    const isBlock = /^[>|][-+]?\s*$/.test(m[2]);
+    // 该正则两个捕获组都非可选，命中即恒为 string。
+    const key = m[1]!;
+    const isBlock = /^[>|][-+]?\s*$/.test(m[2]!);
     let spanEnd = i + 1;
     if (isBlock) {
       while (
         spanEnd < front.length &&
-        (front[spanEnd] === "" || /^\s/.test(front[spanEnd]))
+        (front[spanEnd] === "" || /^\s/.test(front[spanEnd]!))
       ) {
         spanEnd++;
       }
     } else {
-      while (spanEnd < front.length && /^\s/.test(front[spanEnd])) spanEnd++;
+      while (spanEnd < front.length && /^\s/.test(front[spanEnd]!)) spanEnd++;
     }
     const update = Object.prototype.hasOwnProperty.call(updates, key)
       ? updates[key]
       : undefined;
     if (update === undefined) {
-      for (let k = i; k < spanEnd; k++) out.push(front[k]);
+      for (let k = i; k < spanEnd; k++) out.push(front[k]!);
     } else if (update !== null) {
       out.push(...yamlFieldLines(key, update));
     }

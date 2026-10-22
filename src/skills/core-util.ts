@@ -12,7 +12,9 @@ import { randomUUID } from "node:crypto";
 import { isSameOrDescendant, isValidSegment } from "../paths.js";
 import type { RenameOptions } from "./core-types.js";
 
+/** 技能条目名长度上限 128：留足中文与后缀，又不至于撞上文件系统的 255 字节限。 */
 export const MAX_ENTRY_NAME_LENGTH = 128;
+/** 可以重试的改名错误码 —— Windows 上杀毒 / 索引服务短暂占用文件就会报这三个。 */
 export const TRANSIENT_RENAME_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
 // ── 业务错误码 ────────────────────────────────────────────────────────────────
 
@@ -40,10 +42,12 @@ export function attachCode(item: any, error: unknown): any {
   if (coded && coded.params) item.params = coded.params;
   return item;
 }
+/** 用于比较的路径标识：绝对化，Windows 上再折成小写（文件系统不区分大小写）。 */
 export function pathIdentity(path: string): string {
   const canonical = resolve(path);
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
+/** `lstat` 的 null 版：路径不存在返回 null，别的错误照抛。 */
 export async function lstatOrNull(path: string) {
   try {
     return await fs.lstat(path);
@@ -94,6 +98,7 @@ export async function renameWithRetry(
     }
   }
 }
+/** 目标同目录下的临时路径（同卷才能 rename），带 `kind` 便于辨认用途。 */
 export function temporaryPath(target: string, kind: string): string {
   return join(
     dirname(target),

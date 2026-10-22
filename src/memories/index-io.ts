@@ -1,4 +1,4 @@
-// 规则/记忆域的**索引 IO**（2026-09-19 从 memories/service.ts 抽出）。
+// 规则/记忆域的**索引 IO**（从 memories/service.ts 抽出）。
 //
 // memories-index.json 的解析、校验、原子落盘与损坏隔离都在这里。索引是「启停/排序/标签/
 // 启用场景集合」的真源（记忆文件只负责正文），所以这一层必须 fail-closed：解析不出来就隔离
@@ -27,13 +27,14 @@ export interface SceneIndexEntry {
   order?: number
   createdAt?: string
   /**
-   * 场景锁定（v0.8）：锁定后五个管理域（MCP/技能/子智能体/记忆/提示词）整体只读 ——
+   * 场景锁定：锁定后五个管理域（MCP / 技能 / 子智能体 / 记忆 / 提示词）整体只读 ——
    * 场景页的档案编辑与功能页的启停/编辑都被拒（index.ts 的 handlers 守卫 +
    * 界面按钮禁用）；场景自身的启停（进/退模式）不受影响。任意一个场景锁定即全局冻结。
    */
   locked?: boolean
 }
 
+/** 索引里一条记忆的元数据：顺序、标签、置顶、启停。 */
 export interface RuleIndexEntry {
   order?: number
   tags?: string[]
@@ -43,6 +44,7 @@ export interface RuleIndexEntry {
   updatedAt?: string
 }
 
+/** 索引里一个场景的元数据：顺序与显示名。 */
 export interface GroupIndexEntry {
   order?: number
   label?: string
@@ -82,6 +84,7 @@ export async function writeFileAtomicBinary(path: string, data: Buffer, options:
 
 // ── 递归发现 ───────────────────────────────────────────────────────────────
 
+/** 空索引（版本、四个空表、`active: null`）—— 首次落盘与「读不到就当没有」共用这一份。 */
 export const defaultIndex = (): RulesIndex => ({ version: INDEX_VERSION, rules: {}, groups: {}, scenes: {}, active: null, archives: {}, mode: { scene: null, snapshot: null } })
 
 /** 场景镜像条目归一化：只保留已知字段，非法值丢弃（容忍脏数据）。 */
@@ -97,11 +100,12 @@ export function parseSceneEntry(raw: unknown): SceneIndexEntry | null {
   }
   if (typeof obj.order === 'number' && Number.isFinite(obj.order)) out.order = obj.order
   if (typeof obj.createdAt === 'string' && obj.createdAt !== '') out.createdAt = obj.createdAt
-  // 场景锁定（v0.8）：读盘必须原样保留 —— 这里曾只重建已知字段，锁了也会被剥成未锁。
+  // 场景锁定：读盘必须原样保留 —— 这里曾只重建已知字段，锁了也会被剥成未锁。
   if (obj.locked === true) out.locked = true
   return out
 }
 
+/** 解析索引里的场景表；形状不对时返回空表（不半信半疑地用）。 */
 export function parseScenes(raw: unknown): Record<string, SceneIndexEntry> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
   const out: Record<string, SceneIndexEntry> = {}
@@ -113,7 +117,7 @@ export function parseScenes(raw: unknown): Record<string, SceneIndexEntry> {
   return out
 }
 
-/** 档案切片归一化：未知形态 → 空对象（容忍脏数据，与 §9.3 同哲学）。 */
+/** 档案切片归一化：未知形态 → 空对象（容忍脏数据）。 */
 export function parseArchives(raw: unknown): Record<string, SceneArchive> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
   const out: Record<string, SceneArchive> = {}
@@ -124,6 +128,7 @@ export function parseArchives(raw: unknown): Record<string, SceneArchive> {
   return out
 }
 
+/** 解析「当前处在哪个场景」这一格；非法值按「没有场景」处理。 */
 export function parseModeState(raw: unknown): ModeState {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const scene = typeof obj.scene === 'string' && obj.scene.trim() !== '' ? obj.scene : null
@@ -155,7 +160,7 @@ export function parseModeState(raw: unknown): ModeState {
       if (list.indexOf(tool) < 0) list.push(tool)
     }
   }
-  // v2 快照的**服务器级 / 来源级**名单、v0.8 的子智能体名单、v0.9.1 的人设全量映射
+  // v2 快照的**服务器级 / 来源级**名单、子智能体名单、人设全量映射
   // 必须原样透传 —— 这里曾把它们剥掉，结果退出模式时两张恢复名单全是空的：服务器级 MCP 与
   // 技能来源永远不回滚（用户报的「MCP 不复原」「技能目录不回退」），只有工具级 / 技能级能还原。
   const mcpServers = (Array.isArray(snapshotRaw.mcpServers) ? snapshotRaw.mcpServers : [])
@@ -170,16 +175,16 @@ export function parseModeState(raw: unknown): ModeState {
   // 同 subagents 一组：进入时被档案**关掉**的人设（退出要重新打开）。漏掉它 = 用户实测的
   // 「进场景关掉了，退出却没开回来」——快照落盘后读回来就只剩「被启用」那一半名单。
   const subagentsOn = (Array.isArray(snapshotRaw.subagentsOn) ? snapshotRaw.subagentsOn : []).map((x) => String(x)).filter(Boolean)
-  // v0.9.1 的人设**全量**开关映射（名字 → 进场景时是否开着）：同样必须原样透传 ——
+  // 人设**全量**开关映射（名字 → 进场景时是否开着）：同样必须原样透传 ——
   // 剥掉它，退出模式就只能退回上面两个部分名单，「场景里手动开过的人设」不再被还原。
   const subagentsAll = toFlagMap(snapshotRaw.subagentsAll)
-  // v0.8.1 的场景备注恢复名单：**必须原样透传**——这里漏掉它，退出模式时备注永不回退
+  // 场景备注恢复名单：**必须原样透传** —— 这里漏掉它，退出模式时备注永不回退
   //（与历史上 mcpServers / skillSources 被剥掉是同一类 bug）。
   const mcpNotes = (Array.isArray(snapshotRaw.mcpNotes) ? snapshotRaw.mcpNotes : [])
     .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
     .map((x) => ({ id: String(x.id || ''), note: typeof x.note === 'string' ? x.note : null }))
     .filter((x) => x.id !== '')
-  // v0.15 的模型工具表原值名单：**同样必须原样透传**（剥掉它 = 退出场景后工具表停在方案那份，
+  // 模型工具表原值名单：**同样必须原样透传**（剥掉它 = 退出场景后工具表停在方案那份，
   // 与历史上 mcpServers / mcpNotes 被剥掉是同一类 bug）。老快照没有这一栏 → null = 不还原。
   const toolTableHidden = Array.isArray(snapshotRaw.toolTableHidden)
     ? snapshotRaw.toolTableHidden.map((x) => String(x))
@@ -202,7 +207,7 @@ export function parseModeState(raw: unknown): ModeState {
   }
 }
 
-/** 解析 memories-index.json 原文；任何异常/版本不符 → 默认索引（容忍缺失，§9.3）。 */
+/** 解析 memories-index.json 原文；任何异常/版本不符 → 默认索引（容忍缺失）。 */
 export function parseIndex(raw: string): RulesIndex {
   const parsed = JSON.parse(raw) as Partial<RulesIndex>
   if (!parsed || parsed.version !== INDEX_VERSION || typeof parsed.rules !== 'object' || parsed.rules === null) throw new Error('bad index')
@@ -230,16 +235,16 @@ export function parseIndex(raw: string): RulesIndex {
 //     是可见症状而不是静默改写；
 //   - 写侧 fail-closed —— 拒绝落盘并把原因回给界面，用户的数据一个字节不动。
 //
-// 2026-09-30（审查 P0-1）补的那一刀：上面第一段说的「三者合并」其实**只修掉了一条**——
 // 隔离只由 parse 失败触发，读失败仍被并进「文件不存在」这条路。于是「文件在、这一次读不到」
 // 依然能走完整条静默覆盖链。现在**读失败（非 ENOENT）也判不可信**：它和「解析不出来」是
 // 同一件事的两面 —— 我们都不知道里面是什么，都不许拿一份空索引去覆盖它。
 //
-// 但两条路的**处置**必须分开（2026-09-30 自查，避免修 A 挖 B）：
+// 但两条路的**处置**必须分开（自查，避免修 A 挖 B）：
 //   - parse 失败 → `quarantineIndex`：改名留存 + 标记。同一份内容每次 parse 都失败，文件
 //     确实坏了，改名是恰当的处置。
 //   - 读失败   → `markIndexUntrusted`：**只标记，不动文件**。读失败常常是瞬时的（见该函数注释）。
 // Map 的值 = 改名后的留存路径；`''` = 文件未被改动（仍在原位），供 `writeIndex` 换措辞。
+/** 读坏过的索引路径 → 原因。只用于界面如实上报，不参与任何判定。 */
 export const corruptIndexes = new Map<string, string>()
 
 /** 一个 fs 错误的 `code`（取不到就返回空串）。 */
@@ -256,7 +261,7 @@ function errnoText(error: unknown): string {
 /**
  * 该错误是不是「目标**不存在**」（`ENOENT`）。
  *
- * 这是本仓「全新用户」与「这一次读失败」的**唯一分界**：整个 0.16.x 的数据丢失事故
+ * 这是本仓「全新用户」与「这一次读失败」的**唯一分界**：那次数据丢失事故
  * （见 `readIndex` 的长注释）就源于把两者合并。凡是要把 IO 失败与"本来就没有"分开的读路径
  * 都应当用这一条判据，而不要各写一套。
  */
@@ -265,7 +270,7 @@ export function isAbsentError(error: unknown): boolean {
 }
 
 /**
- * 隔离标记文件名（0.21.2）。
+ * 隔离标记文件名。
  *
  * 为什么必须有它：`corruptIndexes` 是**进程内** Map，重启即清零。而隔离的同时文件已被改名
  * 移走，重启后读到的是一次 ENOENT —— 那条路被当成「全新用户」返回默认索引，`writeIndex`
@@ -278,6 +283,7 @@ export function isAbsentError(error: unknown): boolean {
  */
 export const QUARANTINE_MARKER = `${MEMORIES_INDEX_FILE}.quarantine.json`
 
+/** 坏索引被隔离时的记录：时间、隔离文件、原因。 */
 export interface QuarantineInfo {
   v: 1
   /** 隔离时刻（毫秒）。 */
@@ -353,7 +359,7 @@ function clearQuarantineMarkerSync(stateDir: string): void {
  * 只给 `parseOrQuarantine` 用（解析失败）。**读失败不要用它** —— 那条路要的是
  * `markIndexUntrusted`：读失败可能是瞬时的，改名会把"重试即可恢复"升级成"记忆全没了"。
  *
- * 0.21.2：改名成功后**追加写持久标记**。没有它，重启即失去闸门（见 `QUARANTINE_MARKER` 注释）。
+ * 改名成功后**追加写持久标记**。没有它，重启即失去闸门（见 `QUARANTINE_MARKER` 注释）。
  */
 export async function quarantineIndex(stateDir: string): Promise<void> {
   const key = resolve(stateDir)
@@ -405,7 +411,7 @@ function pluginVersionOf(): string {
 /**
  * 标记该 stateDir 的索引**不可信** → 写侧拒写、读侧按「全部未启用」投影。**不动文件**。
  *
- * 为什么读失败不能走 `quarantineIndex`（2026-09-30 自查 P0-1 的次生风险）：那条路会
+ * 为什么读失败不能走 `quarantineIndex`（次生风险）：那条路会
  * `renameSync` 把文件改名成 `.corrupt-*`。但「读失败」与「解析失败」的**确定性**不同 ——
  * parse 失败对同一份内容可复现（文件确实坏了，改名留存是对的）；而读失败常常是**瞬时**的
  * （Windows 上杀软 / 索引器 / 备份软件占住会报 EACCES/EBUSY），内容很可能完好。对一次瞬时
@@ -449,6 +455,7 @@ export async function parseOrQuarantine(stateDir: string, raw: string): Promise<
   }
 }
 
+/** 读记忆索引。文件不存在按空索引；解析失败会把坏文件改名留存，避免下一次写覆盖用户配置。 */
 export async function readIndex(stateDir: string): Promise<RulesIndex> {
   let raw: string
   try {
@@ -462,7 +469,7 @@ export async function readIndex(stateDir: string): Promise<RulesIndex> {
     // 现在按 fail-closed 处理：标记该 stateDir 不可信（写侧随即拒写），读侧退默认索引（可见症状）。
     // 用 `markIndexUntrusted` 而不是 `quarantineIndex`：读失败可能是瞬时的，**不改名**用户的文件。
     if (errnoCode(e) === 'ENOENT') {
-      // 0.21.2：文件不在，先看是不是隔离改名留下的空位（标记文件）。有标记就不是全新用户，
+      // 文件不在，先看是不是隔离改名留下的空位（标记文件）。有标记就不是全新用户，
       // 是「已隔离、闸门只存在于磁盘上」——必须判不可信，否则这条链会继续往下走：
       // 默认索引 → 界面 5s 轮询的 rules-list → buildSnapshot 补 global → writeIndex 整份落盘。
       if (hasQuarantineMarker(stateDir)) {
@@ -490,13 +497,13 @@ export async function readIndex(stateDir: string): Promise<RulesIndex> {
  * （`signatureOfIndex` / `resolveActiveScenes` / `sceneLine` / `compareSceneBuckets` /
  * `sceneOrderOf`）都已确认只读 —— 新增调用方请保持这条。
  *
- * 2026-09-30（审查 P0-1）：**读失败**（非 ENOENT）同样走隔离分支，不再只是「退默认索引」。
  * 退默认索引在注入侧等于 `enabled ?? true` → 用户显式停用的记忆会**重新注入**；隔离之后
  * `isIndexQuarantined()` 为真，调用方按 `forceDisabled` 投影成「全部未启用」（宁可少注入，
  * 也不注入用户关掉的东西）。写侧同时也被保护（见 writeIndex）。
  */
 export const indexSyncCache = new Map<string, { key: string; value: RulesIndex }>()
 
+/** 同步读记忆索引（带 stat 指纹缓存），给同步调用点用。 */
 export function readIndexSync(stateDir: string): RulesIndex {
   const file = join(stateDir, MEMORIES_INDEX_FILE)
   let key: string
@@ -545,11 +552,12 @@ export function readIndexSync(stateDir: string): RulesIndex {
   return value
 }
 
+/** 原子写记忆索引；索引不可信（解析失败后）时拒绝写入，不拿空索引换掉用户配置。 */
 export async function writeIndex(stateDir: string, index: RulesIndex): Promise<void> {
   // 索引不可信时拒绝写入：这一次写会把空索引落盘，等于用一次解析失败换掉用户全部配置。
   // 值分两种：非空 = parse 失败后改名的留存路径；`''` = 读失败、文件未被改动（仍在原位）。
   const kept = corruptIndexes.get(resolve(stateDir))
-  // 0.21.2：`durable` = 本进程没触发过隔离，但磁盘上有隔离标记（上一次进程干的）。
+  // `durable` = 本进程没触发过隔离，但磁盘上有隔离标记（上一次进程干的）。
   // 只查 Map 会漏掉「重启后第一次写」—— 那正是隔离跨重启失效的那一环。
   const durable = kept === undefined && hasQuarantineMarker(stateDir)
   if (kept !== undefined || durable) {
@@ -570,7 +578,7 @@ export async function writeIndex(stateDir: string, index: RulesIndex): Promise<v
 }
 
 /**
- * 一键修复（0.21.2）：把隔离留存的 `.corrupt-*` 文件重新装回 `memories-index.json`。
+ * 一键修复：把隔离留存的 `.corrupt-*` 文件重新装回 `memories-index.json`。
  *
  * 前提是索引**已经**处在一个不可信状态：要么本进程隔离过（Map 里有），要么磁盘上有标记。
  * 此时原位置要么空着（改名了）要么是个坏文件 —— 无论哪种，覆盖它都丢不了任何还没丢的东西。
@@ -637,7 +645,7 @@ export function sceneRecordOf(name: string, entry: SceneIndexEntry | undefined):
   }
 }
 
-/** 提示词预设 id 的口径与提示词预设服务**同源**（用户裁定：id 什么都能写）。 */
+/** 提示词预设 id 的口径与提示词预设服务**同源**（id 什么都能写）。 */
 
 /** 校验场景要绑定的提示词预设 id；返回 `''` 表示解绑，`null` 表示非法。 */
 export function normalizeScenePromptId(value: unknown): string | null {
@@ -657,6 +665,7 @@ export async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/** 读文件；不存在返回 null，别的错误照抛。 */
 export function readFileIfExistsSync(path: string): string | null {
   try {
     return readFileSync(path, 'utf8')
@@ -670,7 +679,7 @@ export function readFileIfExistsSync(path: string): string | null {
  *
  * 与 `readFileIfExistsSync` 只差这一条，而它正是注入通道要的：那个函数把「不存在」与
  * 「读失败」一起吞成 `null`，调用方据此把后者读成「这一轮没内容」，进而在该域此前发布过时
- * 发出一条假的「已清空 —— 此前注入的同类内容不再有效」（2026-09-30 审查 F7）。
+ * 发出一条假的「已清空 —— 此前注入的同类内容不再有效」。
  * 凡是"读失败必须出声"的读路径都用这个；界面投影那类"失败退化成空"的路径仍用上面那个。
  */
 export function readFileOrThrowSync(path: string): string | null {

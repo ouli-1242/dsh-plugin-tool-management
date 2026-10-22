@@ -5,7 +5,7 @@
 // 预设库（每套一个子目录 + AGENTS.md），「应用」= 把选中预设内容写入
 // ~/.dsh/AGENTS.md，下一轮对话生效（宿主每个 agent/pre-step 都会 stat 并重读该文件）。
 //
-// id 即目录名：字符集口径见 `./preset-id.ts`（用户裁定「什么都能写」，只留
+// id 即目录名：字符集口径见 `./preset-id.ts`（用户要求「什么都能写」，只留
 // 文件系统安全约束）；`__last-applied__` 是备份槽，不算用户预设。
 // 「当前生效」（`active`）靠比对 ~/.dsh/AGENTS.md 的 sha256 与各预设 sha256 推断 ——
 // 用户手改全局文件也能如实反映。但那只能回答「内容一不一样」，回答不了「这份文件是
@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto'
 import { isValidPresetId, LAST_APPLIED_PRESET_ID, normalizePresetId } from './preset-id.js'
 import { listTrashEntries, moveOutOfTrash, moveToTrash, purgeTrashEntry, readTrashEntry, type TrashEntry } from '../hub.js'
 // 全局 AGENTS.md 的落盘走**原子写**（temp + rename，见 `memories/index-io.ts`）。
-// 为什么非它不可（2026-09-30 审查 P2-2）：这个文件是宿主**每个 agent/pre-step 都会 stat 并
+// 为什么非它不可：这个文件是宿主**每个 agent/pre-step 都会 stat 并
 // 重读**的，裸 `writeFile` 在中断/断电时会留下**半截内容** —— 而半截的提示词会原样进模型
 // 上下文（截断点还可能在代码块中间）。原子写保证读到的是「要么旧、要么新」的完整内容。
 import { writeFileAtomically } from '../memories/index-io.js'
@@ -31,7 +31,7 @@ const META_FILE = 'meta.json'
  * `maxLength` 与字数计数的分母，客户端镜像在 `42-shared-ui.js` 的 `PRESET_DESC_MAX`
  * —— 改这里要一起改它。
  *
- * 为什么需要它（0.14.0）：描述此前是"只给使用者看"的，一个字都不进模型上下文，所以没有
+ * 为什么需要它：描述此前是"只给使用者看"的，一个字都不进模型上下文，所以没有
  * 上限也说得过去。现在 `prompt_manager_list` 会把它打给模型（否则模型无法在预设之间做
  * 选择），它就成了**常驻成本**，必须有个预算。300 与 MCP 备注同数（那一条也是"给模型看的
  * 一句用户提示"），但那是两个各自独立的预算，别当成同一个常量共用。
@@ -56,7 +56,7 @@ const APPLIED_FILE = '__applied__.json'
 /**
  * 「应用前 AGENTS.md 根本不存在」这个**事实**的标记文件，与备份内容同放在 `__last-applied__/`。
  *
- * 为什么需要它（0.19.1 修，用户 2026-10-10 反馈「全局提示词取消应用，AGENTS.md 还是存在」）：
+ * 为什么需要它（用户 反馈「全局提示词取消应用，AGENTS.md 还是存在」）：
  * `backupGlobal()` 原先在 `current === null` 时直接 `return false` —— **一个字节都不写**。
  * 于是"应用前没有这个文件"在磁盘上没留下任何痕迹，`unapply()` 便永远读不到备份、恒判
  * `noBackup`，取消应用**永久关不掉**；而界面给出的出路「删除这份预设」根本不成立
@@ -67,7 +67,7 @@ const APPLIED_FILE = '__applied__.json'
  * 与内容槽 `AGENTS.md` **同时只应有一个**：两个都在时 `unapplyState()` 优先判 `'restore'`，
  * 就会把一份不相干的内容写进用户的文件。
  *
- * **但"只能有一个"不等于"每次写都刷掉另一个"**（0.19.1 再修，见 `backupGlobal` 的注释）：
+ * **但"只能有一个"不等于"每次写都刷掉另一个"**（见 `backupGlobal` 的注释）：
  * 这两个槽位合起来记的是**链起点**，链走到中途（应用 a 之后又应用 b）不许动它 ——
  * 原先 `backupGlobal` 每写一笔都顺手 `rm` 掉另一个槽，于是「应用 a → 应用 b」这一步就把
  * "起点不存在"永久抹掉了，取消应用再也回不到"没有文件"。
@@ -80,6 +80,7 @@ const BLANK_TEMPLATE = '# AGENTS.md\n\n（DSH 全局指令基线预设，待编�
 /** 全局 AGENTS.md 的备份代际上限：与 mcpm patch 的 KEEP_PATCH_BACKUPS 同纪律。 */
 const KEEP_GLOBAL_BACKUPS = 5
 
+/** 提示词服务的依赖：预设目录、全局基线文件与会话层。 */
 export interface PromptsDeps {
   /** 预设库根目录（已解析的绝对路径）。 */
   presetsDir: string
@@ -87,6 +88,7 @@ export interface PromptsDeps {
   getGlobalAgentsMdPath: () => Promise<string>
 }
 
+/** 提示词预设清单里的一行：id、显示名、描述与生效状态。 */
 export interface PromptPresetRow {
   id: string
   /** 内容逐字节等于当前 ~/.dsh/AGENTS.md（真·生效）。 */
@@ -101,13 +103,14 @@ export interface PromptPresetRow {
   /**
    * 一句话说明。存 `<id>/meta.json`，**绝不写进 AGENTS.md**（正文会被原样注入）。
    *
-   * 0.14.0 起**模型也看得到**：`prompt_manager_list` 会把它打出来（否则模型无法在预设之间
+   ***模型也看得到**：`prompt_manager_list` 会把它打出来（否则模型无法在预设之间
    * 做选择）。原先这里写的是「只给使用者看」，那句话从这一刻起不成立了 —— 所以它同时有了
    * 字数上限（见 `DEFAULT_PRESET_DESC_MAX_LENGTH`）。
    */
   description?: string
 }
 
+/** 提示词服务的对外面：预设 CRUD、应用 / 取消应用与基线备份。 */
 export interface PromptsService {
   list(): Promise<{ ok: true; presets: PromptPresetRow[] } | { ok: false; error: string }>
   read(id: string): Promise<{ ok: true; content: string } | { ok: false; error: string }>
@@ -140,6 +143,7 @@ export interface PromptsService {
   importPreset(id: string, content: string, description?: string): Promise<{ ok: true; id: string } | { ok: false; error: string }>
 }
 
+/** 提示词预设服务：预设文件的读写、应用与场景绑定。 */
 export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsService {
   const message = (e: unknown): string => String((e && (e as Error).message) || e)
 
@@ -161,7 +165,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
   // ── 描述（给人看，也进模型清单）────────────────────────────────────────────
   // 存在预设目录的 `meta.json` 里，**不写进 AGENTS.md**：那个文件的正文会被原样注入
   // 系统提示词，把「这份预设是干什么的」写进去等于凭空给模型加了一段说明。
-  // 0.14.0 起另有一条通道会把它带给模型 —— `prompt_manager_list` 的清单行（模型要在预设
+  //另有一条通道会把它带给模型 —— `prompt_manager_list` 的清单行（模型要在预设
   // 之间做选择，而 id 本身不说明用途），所以它有了 `DEFAULT_PRESET_DESC_MAX_LENGTH` 这条预算。
   // 读写都 best-effort：描述坏掉/写不进去不该让「保存预设」失败（正文才是本体）。
 
@@ -192,7 +196,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
   // 幂等初始化：**只在库目录本身不存在时**把全局 AGENTS.md 拷成 default
   // 预设（首次运行引导）。
   //
-  // 判据为什么是「目录在不在」而不是「目录里有没有预设」（0.19.1 修）：后者把
+  // 判据为什么是「目录在不在」而不是「目录里有没有预设」：后者把
   // 「用户把预设删光了」误判成「首次运行的空库」，于是 list() / getCurrent() 每次都重新
   // 播种 —— 用户删掉最后一个预设、刷新列表，同名 default 又回来了（内容 = 当前
   // AGENTS.md，所以 md5 相同），删除看起来「不持久」。库目录一旦存在就说明这个库已经
@@ -326,7 +330,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
    * "连续应用/取消往复"这一整串动作**开始之前**的文件状态。所以**只在链起点写一次**：
    * 一旦记下，后面每一笔写入都原样保留它，直到链结束（取消应用 / 写回基线）才清掉。
    *
-   * 为什么不是"每笔覆盖"（0.19.1 修，用户 2026-10-10 报：「原本没有 AGENTS.md，新建 a、b
+   * 为什么不是"每笔覆盖"（用户反馈：「原本没有 AGENTS.md，新建 a、b
    * 两份提示词，启动 a，再启动 b；不启动 a 也不启动 b，`~/.dsh/AGENTS.md` 没有消失」）：
    *   ① 起点      文件不存在   槽位=空
    *   ② 应用 a    文件="# a"   槽位=absent（"应用前不存在"）
@@ -427,13 +431,13 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
    * 不一定对应任何预设；② 「取消应用」的 `'restore'` 分支。
    * 备份纪律与 `apply` 完全相同。
    *
-   * `endChain`（0.21.2）：写回要不要**结束这条链**（清掉链起点）。两种调用方要的是相反的：
+   * `endChain`：写回要不要**结束这条链**（清掉链起点）。两种调用方要的是相反的：
    *   - `unapply()`（取消应用）→ `true`。用户明确说"不要这份预设了"，链到此为止，
    *     下一次「应用」重新开一条链。
    *   - 场景退出 → `false`（默认）。场景退出只是"退回全局"，**不是**取消应用：链起点是
    *     "进场景之前"那份 AGENTS.md，仍然该被「取消应用」一键找回。此前这里无条件清链起点，
    *     于是用户进过一次场景再退出，「取消应用」就变成 `noBackup` 不可点 —— 恢复原始手写
-   *     内容只能去 `__last-applied__/AGENTS.md.bak-*` 里人工翻（审查 D2）。
+   *     内容只能去 `__last-applied__/AGENTS.md.bak-*` 里人工翻。
    */
   async function restore(content: string, options?: { endChain?: boolean }): Promise<{ ok: true; backedUp: boolean } | { ok: false; error: string }> {
     const text = String(content ?? '')
@@ -472,7 +476,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
    *
    * 语义边界（写清楚是因为它决定了开关什么时候可关）：
    *   - 恢复的是**链起点**，不是"上一步"。连续应用过 A、B 时，取消应用直接回到"应用 A 之前"
-   *     —— 文件不存在就删掉文件、有一份手写内容就写回那份内容（0.19.1 修，见 `backupGlobal`）。
+   *     —— 文件不存在就删掉文件、有一份手写内容就写回那份内容（见 `backupGlobal`）。
    *     想从 B 切回 A 就点 A 的开关，效果等价，不必先退回 A 再取消。
    *   - **没有链起点就拒绝**（`noBackup`）。没有链起点只有一种成因：AGENTS.md 的当前内容不是
    *     由「应用」写进去的（首次打开提示词页时播种出来的 `default` 就是这样，它内容与 AGENTS.md
@@ -516,7 +520,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
         error: '没有可恢复的「链起点内容」：__last-applied__ 里没有备份（AGENTS.md 当前内容不是由「应用」写进去的）。',
       }
     }
-    // `endChain: true`：取消应用是链的终点，语义与 0.21.2 之前的无条件清理一致。
+    // `endChain: true`：取消应用是链的终点，语义与旧的无条件清理一致。
     return restore(content, { endChain: true })
   }
 

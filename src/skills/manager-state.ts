@@ -58,8 +58,11 @@ import type {
   StateSkill,
 } from "./core-types.js";
 
+/** 项目来源 key 的形状（`project-<kind>:<路径哈希>`）—— 启停时按前缀解析回路径。 */
 export const PROJECT_ROOT_KEY_RE = /^project-(?:dsh|agents):[a-f0-9]{16}$/;
+/** 自定义来源 key 的形状（`custom-<路径哈希>`）—— 它们不住在 `userRoots()` 里，只在状态文件中。 */
 export const CUSTOM_ROOT_KEY_RE = /^custom-[a-f0-9]{16}$/;
+/** 从状态文件里取出自定义来源列表（形状不对时返回空数组，不猜）。 */
 export function customRootsFromState(stateValue: unknown): SkillSource[] {
   const state = stateValue as { customRoots?: unknown } | null | undefined;
   const list =
@@ -90,12 +93,14 @@ export function customRootsFromState(stateValue: unknown): SkillSource[] {
   }
   return out;
 }
+/** 路径是否落在某个已解析的真实根之内（含根本身）。 */
 export async function isInsideResolvedRoot(
   rootReal: string,
   path: string,
 ): Promise<boolean> {
   return isSameOrDescendant(rootReal, await resolvedPath(path));
 }
+/** 原子写：先写同目录临时文件再 rename，避免写一半留下坏文件。 */
 export async function writeFileAtomically(
   path: string,
   content: string,
@@ -115,12 +120,14 @@ export async function writeFileAtomically(
     throw error;
   }
 }
+/** 解析 `true`/`yes`/`on`/`1` 这类布尔写法；认不出返回 `undefined`（不猜）。 */
 export function parseBoolValue(raw: unknown): boolean | undefined {
   const v = unquote(raw).trim().toLowerCase();
   if (v === "true" || v === "yes" || v === "on" || v === "1") return true;
   if (v === "false" || v === "no" || v === "off" || v === "0") return false;
   return undefined;
 }
+/** 把一份已解析的技能文档折成清单行（声明名优先，描述缺省为空）。 */
 export function entryOf(
   name: string,
   kind: "bundle" | "flat",
@@ -175,6 +182,7 @@ export function entryOf(
     diagnostics,
   };
 }
+/** 扫一个来源根下的全部技能条目；不可变来源（官方 / 项目）按只读处理。 */
 export async function scanEntries(
   root: RootInput,
   options: ScanOptions = {},
@@ -269,6 +277,7 @@ export async function scanEntries(
   );
   return { exists: true, entries };
 }
+/** 并发扫多个来源根，按根 key 归位；结果里保留每个根的扫描结论（含告警）。 */
 export async function scanDeduplicatedRoots(
   roots: SkillSource[] = userRoots(),
   options: ScanOptions = {},
@@ -316,6 +325,7 @@ export async function scanDeduplicatedRoots(
   }
   return scans;
 }
+/** 出厂状态：所有内置来源开启，没有逐条覆盖，没有自定义根。 */
 export function defaultManagerState(): ManagerState {
   const sources = Object.create(null);
   const disabledSkills = Object.create(null);
@@ -343,9 +353,11 @@ export function defaultManagerState(): ManagerState {
     forgottenSources: [],
   };
 }
+/** 技能名是否合法（与发现层同一套谓词）。 */
 export function validStateSkillName(name: unknown): boolean {
   return validDiscoveryName(name);
 }
+/** 「同名时优先哪个来源」里记的名字是否合法。 */
 export function validPreferredSkillName(name: unknown): boolean {
   return (
     typeof name === "string" &&
@@ -356,11 +368,13 @@ export function validPreferredSkillName(name: unknown): boolean {
     !name.includes("\\")
   );
 }
+/** 读不到状态时的兜底：全部来源按**关闭**处理 —— 宁可少列，不可越过用户的停用。 */
 export function failClosedManagerState(): ManagerState {
   const state = defaultManagerState();
   for (const key of Object.keys(state.sources)) state.sources[key] = false;
   return state;
 }
+/** 校验「按来源记的启用 / 停用名单」的形状；`allowMissing` 允许整段缺席。 */
 export function validPolicyLists(value: unknown, allowMissing = false): boolean {
   if (value === undefined && allowMissing) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -375,6 +389,7 @@ export function validPolicyLists(value: unknown, allowMissing = false): boolean 
   }
   return true;
 }
+/** 校验状态文件整份文档的形状（坏文件按默认值处理，不半信半疑地用）。 */
 export function validManagerStateDocument(value: ManagerStateDocument): boolean {
   if (
     !value ||
@@ -446,6 +461,7 @@ export function validManagerStateDocument(value: ManagerStateDocument): boolean 
   }
   return true;
 }
+/** 把一份形状合法的文档补全成完整状态：缺的字段按出厂值填，多余字段丢弃。 */
 export function normalizeManagerState(value: ManagerStateDocument): ManagerState {
   const normalized = defaultManagerState();
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -554,14 +570,14 @@ export function normalizeManagerState(value: ManagerStateDocument): ManagerState
    *
    * 为什么这里**自愈**而不是照旧报错：`readManagerState` 碰到非法文档会 fail-closed 停用
    * **所有**技能，并且把 `writable` 一起置 false —— 用户在界面上连一个开关都按不动，等于被
-   * 锁死在一份自己造不出来的状态里（用户 2026-10-14 实测踩到，出这条冲突的链是
+   * 锁死在一份自己造不出来的状态里（用户 实测踩到，出这条冲突的链是
    * 「显式启用 → 删除 → 从回收站恢复」，写入侧已在 `markSkillsDisabled` 修掉）。
    * 而这条不一致本身是无害的：两份名单都只是"用户显式说过什么"，选哪边都能让插件正常工作。
    * 这与本函数既有的自愈口径一致（指向未知来源的首选、非法的自定义来源条目都是逐条丢掉）。
    *
    * 收敛方向取**保守的那一边**：保留 disabled、摘掉 enabled。反向（让 enabled 赢）会静默把
    * 一个技能打开并送进模型上下文 —— 那才是危险方向；而"关着"用户看得见，翻一下开关就好。
-   * 这也正是 v0.8.5「新建 / 导入 / 恢复默认停用」本来要的落点。
+   * 这也正是「新建 / 导入 / 恢复默认停用」这条规则本来要的落点。
    */
   for (const [key, disabled] of Object.entries(normalized.disabledSkills)) {
     const enabled = normalized.enabledSkills[key];
@@ -572,6 +588,7 @@ export function normalizeManagerState(value: ManagerStateDocument): ManagerState
   }
   return normalized;
 }
+/** 归一化自定义来源：丢掉形状不对的、去掉重复路径，保留首次出现的顺序。 */
 export function normalizeCustomRoots(value: unknown): CustomRoot[] {
   if (!Array.isArray(value)) return [];
   const out: CustomRoot[] = [];
@@ -591,6 +608,7 @@ export function normalizeCustomRoots(value: unknown): CustomRoot[] {
   }
   return out;
 }
+/** 读技能状态侧车。文件不存在按出厂值；读坏或解析不了时 `failClosed`，并把原因带回去。 */
 export async function readManagerState(): Promise<ManagerStateReadResult> {
   try {
     const raw = await fs.readFile(managerStatePath(), "utf8");
@@ -641,6 +659,7 @@ export async function readManagerState(): Promise<ManagerStateReadResult> {
     };
   }
 }
+/** 原子写技能状态侧车（目录不存在时先建）。 */
 export async function writeManagerState(value: ManagerState): Promise<void> {
   await fs.mkdir(managerHomePath(), { recursive: true });
   await writeFileAtomically(
@@ -648,6 +667,7 @@ export async function writeManagerState(value: ManagerState): Promise<void> {
     `${JSON.stringify(normalizeManagerState(value), null, 2)}\n`,
   );
 }
+/** 某条技能在某来源下的显式覆盖：`true` 开、`false` 关、`undefined` 没记过。 */
 export function managerSkillOverride(
   policy: ManagerState,
   rootKey: string,
@@ -667,6 +687,7 @@ export function managerSkillOverride(
   if (inheritedEnable) return true;
   return undefined;
 }
+/** 一条技能的生效策略：来源开关 + 逐条覆盖 + 只读来源，合成最终的可加载与可操作判定。 */
 export function effectiveSkillPolicy(
   policyResult: ManagerStateReadResult,
   root: SkillSource,
@@ -710,9 +731,11 @@ export function effectiveSkillPolicy(
     enabled: modelInvocable && userInvocable,
   };
 }
+/** 用于跨来源比对的规范名：声明名优先，没有声明名才用目录名。 */
 export function canonicalSkillName(item: RootedEntry): string {
   return item.entry.declaredName || item.entry.name;
 }
+/** 按规范名把可加载条目分组（同名跨来源的都进同一组），供「谁遮蔽谁」判定用。 */
 export function groupLoadableSkillsByName<T extends RootedEntry>(
   items: T[],
   preferred?: Record<string, string> | null,
@@ -738,6 +761,7 @@ export function groupLoadableSkillsByName<T extends RootedEntry>(
   }
   return groups;
 }
+/** 在每组同名条目里标出胜出者（来源优先级 + 用户指定的优先来源），返回名字 → 胜出条目。 */
 export function markWinners(
   items: StateItem[],
   options: MarkWinnersOptions = {},
@@ -771,7 +795,7 @@ export function markWinners(
        *
        * 两者必须分得开，因为界面能采取的动作完全不同：跨来源时那颗「启用这个」写的是
        * `preferredSkills[名] = 来源 key`（真的能换掉生效的那一份）；同来源内部则怎么写都
-       * 指不出区别 —— 首选表的值就是来源 key，两份都在同一个来源里。用户 2026-10-14 报的
+       * 指不出区别 —— 首选表的值就是来源 key，两份都在同一个来源里。用户反馈的
        * 正是这颗**按下去什么都不会变**的假按钮（技能页把它摆在两份同名之间）。
        * 界面按这个判据收掉按钮（见 client 的 `renderSkill`），但**保留"被覆盖"这个标记**：
        * 同来源里的落选那份确实不会被加载，如实说比什么都不说好。
@@ -783,6 +807,7 @@ export function markWinners(
   }
   return winners;
 }
+/** 技能页要的完整快照：来源清单 + 每个来源的扫描结果 + 每条技能的生效策略与胜出者。 */
 export async function state(
   options: { projectCwds?: string[] } = {},
 ): Promise<StateResult> {
@@ -793,7 +818,7 @@ export async function state(
       : [],
   );
   // 「永久删除」过的来源（回收站 → 目录 里那条记录的终点）：连行都不留 —— 界面不该再有
-  // 它的位置，「恢复读取」也无从谈起（用户 2026-10-12 要求 codex / Claude 也能永久删除）。
+  // 它的位置，「恢复读取」也无从谈起（用户 要求 codex / Claude 也能永久删除）。
   // 注意它同时也在 `activeUserRoots` 里被摘掉，所以下面这层过滤只影响**列表展示**。
   const forgottenKeys = new Set<string>(
     Array.isArray(policyResult.state.forgottenSources)
@@ -870,9 +895,8 @@ export async function state(
       continue;
     }
     // 项目来源只在真的有技能条目时才注册（skill-roots.ts 的 projectRoots，用户
-    // 2026-10-15 裁定「无技能的项目来源不注册」）；走到这里还不存在的项目根没有可显示的
     // 内容，跳过。旧实现曾反过来 —— 「即使 .dsh/skills 不存在也把可写根返给创建表单」，
-    // 而创建落点 2026-10-15 已收敛到用户级目录（createRoots 排除 scope=project），
+    // 而创建落点 已收敛到用户级目录（createRoots 排除 scope=project），
     // 那条 carve-out 只剩把空来源泵进场景切换的副作用，故删。
     if (root.scope === "project" && !exists) continue;
     if (truncated)

@@ -3,6 +3,7 @@
 // 从 subagents/service.ts 整段搬来，一行未改。类型在编译期擦除，单独一层只为把「形状」
 // 与「实现」分开放 —— service.ts 那 1200 行里，读一个接口要翻过两百行实现。
 
+/** 一份人设文档：frontmatter 字段 + 正文。 */
 export interface PersonaDoc {
   name: string
   description: string
@@ -12,7 +13,7 @@ export interface PersonaDoc {
   /**
    * **思考强度档位**（frontmatter `reasoningEffort`；值 = 该模型暴露的某个档位 id；缺省 = 不在这里指定）。
    *
-   * 官方契约（都读过源码，见 2026-09-23 的核对）：
+   * 官方契约（都读过源码，见 的核对）：
    *   · `AgentOptions.reasoningEffort?: ReasoningEffortId` —— `@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts:21-30`；
    *   · 档位清单由 **adapter** 给出（`llm.resolveModelInfo(provider, model)` →
    *     `reasoning.efforts[]` / `defaultEffort`，`dsh-llm/lib/types/types.d.ts:295-312`），
@@ -51,7 +52,6 @@ export interface PersonaDoc {
    * `maxDepth` 默认是 **1**（0.2.1 核对 `dsh-subagent/lib/index.js` 的 `Config`：
    * `maxDepth: z.number().step(1).min(0).default(1).volatile()`），provider 只在**传了该值**时
    * 才校验（`resolveChildDepth` → `SubagentDepthError`）；没传就用宿主配置那一档。
-   * 2026-09-17 用户实测推翻了此前"子会话委派必然失败"的假设：那个假设只对**本插件自己的**
    * 工具成立（因为我们当时传了 `maxDepth: 1`），而官方工具用的是它自己的默认值。**同一个
    * 子会话里官方工具能委派、我们的不能**，是那次自相矛盾的根源。
    * 结论不变：这个字段只管"目录出现在哪些会话"，能不能继续委派始终问官方，不在这里判。
@@ -124,6 +124,7 @@ export interface ToolFilterDecision {
   note?: string
 }
 
+/** 子智能体服务的对外面：人设 CRUD、启停与委派。 */
 export interface SubagentService {
   list(): Promise<PersonaDoc[]>
   /**

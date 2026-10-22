@@ -46,6 +46,7 @@ import type {
   WriteOptions,
 } from "./core-types.js";
 
+/** 来源定义里可写的那一份；只读或认不出的来源返回 null。 */
 export function writableRootDefinition(root: RootInput): SkillSource | null {
   const definition = rootDefinition(root);
   if (!definition || definition.mutable !== true) return null;
@@ -71,6 +72,7 @@ export function writableRootDefinition(root: RootInput): SkillSource | null {
     return null;
   return definition;
 }
+/** 同 {@link writableRootDefinition}，但对项目来源额外核对目录边界后才算可写。 */
 export async function checkedWritableRootDefinition(
   root: RootInput,
 ): Promise<WritableRootResult> {
@@ -102,6 +104,7 @@ export async function checkedWritableRootDefinition(
   }
   return definition;
 }
+/** 删掉搬走后残留的旧路径；本来就不存在时静默返回。 */
 export async function removeMovedPath(path: string): Promise<void> {
   const st = await lstatOrNull(path);
   if (!st) return;
@@ -109,6 +112,7 @@ export async function removeMovedPath(path: string): Promise<void> {
     await fs.rm(path, { recursive: true, force: false });
   else await fs.unlink(path);
 }
+/** rename 优先，跨卷失败时退回「复制 + 删除」。 */
 export async function movePathWithFallback(
   source: string,
   destination: string,
@@ -150,6 +154,7 @@ export async function movePathWithFallback(
   }
   return { copied: true, cleanupError, quarantine };
 }
+/** 一条技能在某个根下**实际存在**的所有路径（bundle 与 flat 两种形态都可能残留）。 */
 export async function safeExistingEntryPaths(
   root: string,
   name: string,
@@ -166,6 +171,7 @@ export async function safeExistingEntryPaths(
     paths.push({ path: flat, fileName: `${name}.md`, recursive: false });
   return paths;
 }
+/** 读回收站条目的元数据；id 不合法或条目不存在返回 null。 */
 export async function readTrashMetadata(id: string): Promise<TrashMetadata | null> {
   if (entryPath(trashRootPath(), id) === null) return null;
   try {
@@ -184,6 +190,7 @@ export async function readTrashMetadata(id: string): Promise<TrashMetadata | nul
     return null;
   }
 }
+/** 来源在回收站元数据里的形状：项目来源记 `project`，其余一律记 `user`。 */
 export function trashRootMetadata(definition: SkillSource): TrashRootMetadata {
   if (definition.scope !== "project")
     return { key: definition.key, scope: "user", label: definition.label };
@@ -196,11 +203,12 @@ export function trashRootMetadata(definition: SkillSource): TrashRootMetadata {
     label: definition.label,
   };
 }
+/** 由回收站元数据反推恢复目标来源；旧版条目一律归 `$DSH_HOME/skills`。 */
 export async function restoreRootDefinition(
   metadata: TrashMetadata,
   options: WriteOptions = {},
 ): Promise<WritableRootResult> {
-  // version 1 entries predate scoped Trash and always belong to $DSH_HOME/skills.
+  // version 1 的条目早于分域回收站，一律属于 $DSH_HOME/skills。
   if (!metadata.root) return rootByKey("dsh");
   // 用户级来源按 key 重新解析：路径来自 userRoots()，不信元数据里记住的 path
   // （DSH_HOME 换过之后，旧路径可能已经不在读取范围内了）。
@@ -236,6 +244,7 @@ export async function restoreRootDefinition(
   }
   return checkedWritableRootDefinition(root);
 }
+/** 列出回收站里全部条目；目录读不到时返回空列表（不报错）。 */
 export async function listTrash(): Promise<TrashMetadata[]> {
   let items;
   try {
@@ -271,7 +280,7 @@ async function nextFreeSkillName(root: string, name: string): Promise<string | n
   return null;
 }
 /**
- * 退号恢复时把技能**声明名**改成新的落盘名（用户 2026-10-14）。
+ * 退号恢复时把技能**声明名**改成新的落盘名（用户确认退号时）。
  *
  * 为什么必须改：`canonicalSkillName()` 取的是 frontmatter 里的 `name:`，**不是文件夹名** ——
  * 技能页的同名判定、`preferredSkills` 首选表、喂给宿主的 provider 候选名，全都以它为准。
@@ -320,6 +329,7 @@ async function retitleRestoredSkill(
   }
   return true;
 }
+/** 把一条技能从回收站恢复回它原来的来源根。 */
 export async function restoreTrash(
   id: string,
   log: LogFn | undefined,
@@ -338,7 +348,7 @@ export async function restoreTrash(
     return definition || readonlyError("restore");
   const root = definition.path;
   /*
-   * 同名先问一句（用户 2026-10-14）：撞名时**默认仍拒绝**，但把候选名字一起回（`params.next`），
+   * 同名先问一句（用户要求）：撞名时**默认仍拒绝**，但把候选名字一起回（`params.next`），
    * 界面弹窗才能如实写出"确认后会叫 `foo-1`"；用户确认后带 `dedupe: true` 重来，这一次真的
    * 按退号的名字落盘。
    *
@@ -403,6 +413,7 @@ export async function restoreTrash(
     throw error;
   }
 }
+/** 永久删除一条回收站条目（不可恢复，调用方必须先确认）。 */
 export async function permanentlyDeleteTrash(
   id: string,
   log: LogFn | undefined,

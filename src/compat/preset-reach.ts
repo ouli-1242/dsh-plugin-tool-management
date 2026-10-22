@@ -1,113 +1,89 @@
 /**
- * Agent-preset injection reachability — the read-only answer to
- * "does what this plugin injects actually reach the model under the preset
- * this session runs?".
+ * 预设注入可达性：只读地回答「本插件注入的内容，在当前预设下是否真的到得了模型」。
  *
- * WHY THIS EXISTS
- * ---------------
- * The plugin TELLS the model four things (scene memories, the subagent roster,
- * the MCP server list with the user's notes, and the scene prompt) by injecting
- * a synthetic message at `agent/pre-step` (see `src/context-inject.ts`). A preset
- * can still decide it wants none of that: `@deepseek-ai/dsh-persona` with
- * `complete: true` declares its prompt the only one, and `includeRuntimeContext:
- * false` switches the official runtime-context snapshot off — the shipped
- * `minimal` preset sets both. The plugin then injects nothing by default (the
- * user can force it on the compat page), and no surface may claim otherwise.
+ * 为什么需要它
+ * ------------
+ * 插件在 `agent/pre-step` 注入一条合成消息，告诉模型四件事：场景记忆、子智能体目录、带用户
+ * 备注的 MCP 服务器清单、场景提示词（见 `src/context-inject.ts`）。预设仍可以拒绝这一切：
+ * `@deepseek-ai/dsh-persona` 的 `complete: true` 声明自己的提示词是唯一一份，
+ * `includeRuntimeContext: false` 关掉官方运行时快照 —— 出厂 `minimal` 预设两者都开。此时插件
+ * 默认不注入（用户可在兼容页强制打开），任何界面都不能声称注入到了。
  *
- * A second, different question is whether the OFFICIAL carriers are mounted at
- * all: `@deepseek-ai/dsh-agent-instructions` (AGENTS.md) and
- * `@deepseek-ai/dsh-tool-skill` (the skill catalog) are host rows that the Web
- * bundle disables in favour of per-preset rows — a preset that mounts neither
- * gives the model no AGENTS.md text and no skill catalog, whichever persona it
- * declares.
+ * 另一个不同的问题是官方载体在不在：`@deepseek-ai/dsh-agent-instructions`（AGENTS.md）与
+ * `@deepseek-ai/dsh-tool-skill`（技能目录）是 Web bundle 为按预设行让位而关掉的宿主行 ——
+ * 两者都不挂的预设，无论声明什么 persona，模型都拿不到 AGENTS.md 正文与技能目录。
  *
- * WHAT IS MEASURED, AND HOW
- * -------------------------
- * Answers come from each preset's own composition text, read through the
- * roster's public `read(id)` — evidence, not inference, and no mount:
+ * 量什么、怎么量
+ * --------------
+ * 答案来自每个预设自己的组合文本，经 roster 的公开 `read(id)` 读取 —— 是证据，不是推断，且
+ * 不触发挂载：
  *
- *   - `personaComplete` / `includeRuntimeContext`: does the preset declare
- *     "nothing but my prompt"? (both suppress plugin-injected text)
- *   - `agentInstructions`: is `@deepseek-ai/dsh-agent-instructions` mounted?
- *     (the row that carries `~/.dsh/AGENTS.md` into the conversation)
- *   - `toolSkill`: is `@deepseek-ai/dsh-tool-skill` mounted?
- *     (the row that gives the model the skill catalog)
- *   - `mcpClient`: does the composition mount its own MCP client?
- *     (the shipped presets mount none, so MCP *tools* come from the host plane
- *     and are callable under every preset — see `ReachContext.mcpTools`)
+ *   - `personaComplete` / `includeRuntimeContext`：预设是否声明「只要我自己的提示词」？
+ *     （两者都会压掉插件注入的文本）
+ *   - `agentInstructions`：`@deepseek-ai/dsh-agent-instructions` 挂了吗？
+ *     （把 `~/.dsh/AGENTS.md` 送进对话的那一行）
+ *   - `toolSkill`：`@deepseek-ai/dsh-tool-skill` 挂了吗？（把技能目录给模型的那一行）
+ *   - `mcpClient`：组合是否挂了自己的 MCP 客户端？（出厂预设都不挂，所以 MCP 工具来自宿主
+ *     平面，在任何预设下都可调用 —— 见 `ReachContext.mcpTools`）
  *
- * TOOLS ARE NOT TEXT — the distinction is the whole point:
+ * 工具不是文本 —— 这个区分就是全部要点：
  *
- *   - TOOL plane (host, preset-independent): the plugin's own model tools and
- *     every `mcp__*` tool register in the HOST plane (this plugin's loader row in
- *     the profile patch), so every preset's session resolves them.
- *   - TEXT plane (preset-dependent): the runtime snapshot the plugin injects, the
- *     AGENTS.md carrier, and the skill catalog. Callable is not the same as
- *     known: under `minimal` the model can call every `mcp__*` tool while knowing
- *     nothing about the servers behind them — no names, no tool counts, no
- *     enablement, and none of the user's notes.
+ *   - 工具平面（宿主，与预设无关）：插件自己的模型工具与所有 `mcp__*` 工具注册在宿主平面
+ *     （本插件在 profile patch 里的 loader 行），所以每个预设的会话都能解析到它们。
+ *   - 文本平面（随预设变化）：插件注入的运行时快照、AGENTS.md 载体、技能目录。「可调用」不等于
+ *     「知道」：`minimal` 下模型能调用每个 `mcp__*` 工具，却对背后的服务器一无所知 —— 没有名字、
+ *     没有工具数、没有启用状态，也没有用户的备注。
  *
- * Reading never mounts. `list()`/`read(id)`/`readDocument(id)` are roster reads, so building the
- * matrix cannot activate a preset early — the same guarantee
- * `compositionInventory()` gives the plugin-listing surfaces.
+ * 读取不触发挂载：`list()` / `read(id)` / `readDocument(id)` 都是 roster 读，构建矩阵不会提前
+ * 激活预设 —— 与 `compositionInventory()` 给插件列表界面的保证相同。
  *
- * This module is deliberately advisory: it never changes what is injected and
- * never refuses an operation. A preset that asks for no extra text is doing
- * exactly what its author asked for; the plugin's job is to say so out loud and
- * point at the switch that overrides it.
+ * 本模块刻意只做告知：从不改变注入内容，也从不拒绝操作。预设要求不加额外文本，正是其作者
+ * 想要的结果；插件的职责是把这件事说出来，并指向能覆盖它的开关。
  */
 import { MCP_CLIENT_MODULE } from '../host-names.js'
 import { noteRuntime } from './runtime-notes.js'
 
-/**
- * `MCP_CLIENT_MODULE` (from `host-names.ts`) is the client name this module scans
- * for: an MCP client mounted INSIDE a composition. The shipped presets mount
- * none, so MCP tools normally come from the host plane
- * (the `$DSH_HOME/cordis.patch.yml` layer) and are callable under every preset; a
- * user-authored preset that mounts its own client only carries those tools under
- * itself, and this scan is how the page can tell the two apart. Tool reachability
- * is not the column's answer, though — the server list and the user's notes are a
- * prompt section, which a complete persona suppresses whichever client serves the
- * tools.
- */
+// 本模块扫描的客户端名是 `MCP_CLIENT_MODULE`（见 `host-names.ts`）：它指**装在一个组合
+// 内部**的 MCP 客户端。出厂预设一个都不装，所以 MCP 工具通常来自宿主平面（`$DSH_HOME/
+// cordis.patch.yml` 那一层），在任何预设下都可调；用户自写的预设若自带客户端，那些工具
+// 只在该预设下存在 —— 这一列扫的就是两者的区别。但工具可达性不是这一列的答案：服务器清单
+// 与用户备注是一段**提示词**，无论哪个客户端供工具，complete 人设都会把它压掉。
 
-/** Whether one composition mounts a given module, and whether it is switched on. */
+/** 某份组合是否挂了某个模块，以及它是不是开着。 */
 export type ModulePresence = 'mounted' | 'absent' | 'conditional'
 
 /**
- * Whether one capability reaches the model under a preset.
+ * 一项能力在某个预设下是否到得了模型。
  *
- * `absent` is a routing fact (the row is not in this composition), not a
- * failure; `suppressed` means the row may be mounted but the persona's
- * complete flag keeps every other prompt section out of the prompt.
+ * `absent` 是路由事实（这一行不在组合里），不是失败；`suppressed` 表示行可能挂着，但 persona
+ * 的 complete 标志把其他所有提示词段都挡在提示词外。
  */
 export type ReachState = 'ok' | 'suppressed' | 'absent' | 'unknown'
 
-/** Facts parsed out of ONE preset's composition text. */
+/** 从**单个**预设的组合文本里解析出来的事实。 */
 export interface CompositionFacts {
-  /** `true` only when a live `@deepseek-ai/dsh-persona` row declares it. */
+  /** 只有活的 `@deepseek-ai/dsh-persona` 行明确声明时才为 `true`。 */
   readonly personaComplete: boolean | 'unknown'
   /**
-   * The persona row's `includeRuntimeContext` (schema default `true`).
+   * persona 行的 `includeRuntimeContext`（schema 默认 `true`）。
    *
-   * `false` makes `dsh-persona` call `systemPrompt.suppressRuntimeContext()`, which kills the
-   * official runtime-context snapshot (sandbox / approval policy) — and would kill this
-   * plugin's text too if it went through `systemPrompt.context()`. The shipped `minimal`
-   * preset sets it; that is why the plugin's injection lives on the `agent/pre-step` message
-   * channel instead (see src/context-inject.ts).
+   * `false` 会让 `dsh-persona` 调用 `systemPrompt.suppressRuntimeContext()`，关掉官方运行时
+   * 上下文快照（sandbox / approval policy）—— 若本插件的文本走 `systemPrompt.context()`，
+   * 也会一起被杀掉。出厂 `minimal` 预设就开着它，这正是插件注入改走 `agent/pre-step` 消息
+   * 通道的原因（见 src/context-inject.ts）。
    */
   readonly includeRuntimeContext: boolean | 'unknown'
-  /** Whether the preset mounts that persona row at all (global fallback otherwise). */
+  /** 预设是否挂了这一行 persona（否则回落到全局）。 */
   readonly personaMounted: boolean
   readonly agentInstructions: ModulePresence
   readonly toolSkill: ModulePresence
-  /** Whether the composition mounts its own MCP client. */
+  /** 组合是否挂了自己的 MCP 客户端。 */
   readonly mcpClient: ModulePresence
-  /** Why the text could not be parsed, when it could not. */
+  /** 文本解析失败的原因（解析成功时缺省）。 */
   readonly parseFailure?: string
 }
 
-/** One preset's reachability row. */
+/** 一个预设的可达性行。 */
 export interface PresetReachRow {
   readonly presetId: string
   readonly name?: string
@@ -117,45 +93,44 @@ export interface PresetReachRow {
   readonly personaMounted: boolean
   readonly agentInstructions: ModulePresence
   readonly toolSkill: ModulePresence
-  /** The scene catalog this plugin injects (enabled scenes + their descriptions). */
+  /** 本插件注入的场景目录（启用的场景 + 各自描述）。 */
   readonly scene: ReachState
-  /** Memory entries this plugin injects (under each scene). */
+  /** 本插件注入的记忆条目（挂在各场景下）。 */
   readonly memory: ReachState
-  /** `~/.dsh/AGENTS.md`, carried by `dsh-agent-instructions`. */
+  /** `~/.dsh/AGENTS.md`，由 `dsh-agent-instructions` 承载。 */
   readonly agentsMd: ReachState
-  /** The skill catalog the `skill` tool publishes. */
+  /** `skill` 工具发布的技能目录。 */
   readonly skillCatalog: ReachState
-  /** The official delegation tool (`subagent`), which `minimal` does not mount. */
+  /** 官方委派工具（`subagent`）；`minimal` 预设不挂它。 */
   readonly subagent: ReachState
-  /** MCP tools: this preset's own client, else the host-plane set. */
+  /** MCP 工具：预设自带客户端就用它，否则用宿主平面那套。 */
   readonly mcp: ReachState
-  /** persona `complete: true` or `includeRuntimeContext: false` — the preset asks for no extra text. */
+  /** persona `complete: true` 或 `includeRuntimeContext: false` —— 该预设不要任何额外文本。 */
   readonly suppressing: boolean
-  /** Why the preset cannot compose a session at all, when discovery said so. */
+  /** 预设根本组不出会话时的原因（发现阶段报的）。 */
   readonly broken?: string
-  /** Why this row's answers are `unknown`, when they are. */
+  /** 这一行的答案为什么是 `unknown`。 */
   readonly reason?: string
 }
 
-/** The whole matrix, as surfaced to the settings page. */
+/** 整张矩阵，按设置页要的样子给。 */
 export interface PresetReachReport {
   readonly rows: readonly PresetReachRow[]
   readonly defaultId: string | null
   readonly generatedAt: number
   readonly summary: string
   readonly blockers: readonly string[]
-  /** Host-plane MCP state, repeated on every row that carries no MCP client. */
+  /** 宿主平面的 MCP 状态；每条没有自带客户端的行都会重复带上它。 */
   readonly mcpTools?: number
 }
 
-/** Facts the caller contributes about the host plane (no composition can answer them). */
+/** 调用方补的宿主平面事实 —— 任何组合文本都答不出这些。 */
 export interface ReachContext {
-  /** Live `mcp__*` tool count on the host plane; `undefined` when the probe failed. */
+  /** 宿主平面上活的 `mcp__*` 工具数；探测失败时缺省。 */
   readonly mcpTools?: number
   /**
-   * The plugin's injection settings, when the caller has them loaded: with
-   * `underSuppressingPresets` on, a suppressing preset no longer hides the plugin's text,
-   * and a domain switched off is honestly `absent` rather than `ok`.
+   * 插件的注入设置（调用方已加载时传入）：打开 `underSuppressingPresets` 后，压制型预设不再
+   * 藏起插件的文本；被关掉的域如实报 `absent`，而不是 `ok`。
    */
   readonly inject?: {
     readonly underSuppressingPresets: boolean
@@ -164,26 +139,25 @@ export interface ReachContext {
 }
 
 /**
- * The preset facts the injection decision needs (src/context-inject.ts): whether the preset
- * asks for "nothing but my prompt", and which OFFICIAL carriers it mounts — the plugin's
- * fallback domains only fire where those carriers are missing (AGENTS.md, the skill catalog),
- * so the two sides never deliver the same text twice.
+ * 注入决策需要的预设事实（src/context-inject.ts）：预设是否要求「只要我自己的提示词」，
+ * 以及它挂了哪些官方载体 —— 插件的兜底域只在那些载体缺席时触发（AGENTS.md、技能目录），
+ * 两边因此不会把同一份文本送两次。
  */
 export interface PresetInjectionFacts {
-  /** persona `complete: true` or `includeRuntimeContext: false` — the preset wants no extra text. */
+  /** persona `complete: true` 或 `includeRuntimeContext: false` —— 预设不要额外文本。 */
   readonly suppressing: boolean
-  /** The composition mounts `@deepseek-ai/dsh-agent-instructions` (the `~/.dsh/AGENTS.md` carrier). */
+  /** 组合挂了 `@deepseek-ai/dsh-agent-instructions`（`~/.dsh/AGENTS.md` 载体）。 */
   readonly carriesAgentsMd: boolean
-  /** The composition mounts `@deepseek-ai/dsh-tool-skill` (the official skill catalog + loader). */
+  /** 组合挂了 `@deepseek-ai/dsh-tool-skill`（官方技能目录 + loader）。 */
   readonly carriesSkillCatalog: boolean
 }
 
-/** Whether a preset declares "no extra text": persona `complete: true` or runtime context off. */
+/** 预设是否声明「不要额外文本」：persona `complete: true` 或运行时上下文关闭。 */
 export function isSuppressingPreset(facts: CompositionFacts): boolean {
   return facts.personaComplete === true || facts.includeRuntimeContext === false
 }
 
-/** Map composition facts onto the injection decision's facts (parse failure → not suppressing). */
+/** 把组合事实映射成注入决策要的形状（解析失败 = 不算压制）。 */
 export function injectionFactsOf(facts: CompositionFacts | undefined): PresetInjectionFacts | undefined {
   if (facts === undefined) return undefined
   return {
@@ -193,7 +167,7 @@ export function injectionFactsOf(facts: CompositionFacts | undefined): PresetInj
   }
 }
 
-/** Module specifiers whose mounting decides reachability. */
+/** 这几个模块挂没挂，直接决定可达性。 */
 const PERSONA_MODULE = '@deepseek-ai/dsh-persona'
 const AGENT_INSTRUCTIONS_MODULE = '@deepseek-ai/dsh-agent-instructions'
 const TOOL_SKILL_MODULE = '@deepseek-ai/dsh-tool-skill'
@@ -204,18 +178,17 @@ const DISABLED_LINE = /^\s*disabled:\s*(.+?)\s*(?:#.*)?$/
 const COMPLETE_LINE = /^\s*complete:\s*(true|false)\s*(?:#.*)?$/
 const RUNTIME_CONTEXT_LINE = /^\s*includeRuntimeContext:\s*(true|false)\s*(?:#.*)?$/
 
-/** Leading whitespace width of a line, used as its nesting level. */
+/** 行首空白宽度，当嵌套层级用。 */
 function indentOf(line: string): number {
   const match = /^(\s*)/.exec(line)
   return match === null ? 0 : match[1].length
 }
 
 /**
- * The lines belonging to the composition row that owns `nameIndex`.
+ * 拥有 `nameIndex` 的那一行所辖的文本行。
  *
- * The row starts at the nearest entry bullet above the `name:` line that is
- * less indented than it (a nested row inside a `cordis:group` still gets its
- * own block) and ends at the next bullet at or above that bullet's indent.
+ * 行从 `name:` 上方最近、缩进更浅的条目 bullet 开始（`cordis:group` 里的嵌套行仍拿到自己的
+ * 块），到下一个缩进不深于该 bullet 的条目为止。
  */
 function rowBlockAround(lines: readonly string[], nameIndex: number): readonly string[] {
   const nameIndent = indentOf(lines[nameIndex])
@@ -240,11 +213,10 @@ function rowBlockAround(lines: readonly string[], nameIndex: number): readonly s
 }
 
 /**
- * How the row owning `nameIndex` decides enablement.
+ * 拥有 `nameIndex` 的那一行如何决定启用状态。
  *
- * `!!js` expressions are only answerable inside a mount, so they stay
- * `'conditional'` rather than being guessed — the same rule
- * `compositionInventory()` applies to its disabled gates.
+ * `!!js` 表达式只有挂载后才有答案，所以保持 `'conditional'` 而不猜 —— 与
+ * `compositionInventory()` 对其 disabled 门采用同一规则。
  */
 function presenceForRow(lines: readonly string[], nameIndex: number): ModulePresence {
   for (const line of rowBlockAround(lines, nameIndex)) {
@@ -258,7 +230,7 @@ function presenceForRow(lines: readonly string[], nameIndex: number): ModulePres
   return 'mounted'
 }
 
-/** Whether ANY row naming `specifier` survives into the composition. */
+/** 点名 `specifier` 的任意一行是否留在了组合里。 */
 function presenceOf(lines: readonly string[], specifier: string): ModulePresence {
   let best: ModulePresence = 'absent'
   for (let i = 0; i < lines.length; i += 1) {
@@ -272,15 +244,12 @@ function presenceOf(lines: readonly string[], specifier: string): ModulePresence
 }
 
 /**
- * Parse the facts that decide reachability out of one composition's text.
+ * 从一份组合文本里解析决定可达性的事实。
  *
- * Deliberately a text scan rather than a YAML load: this module must not add
- * a parser dependency, and every question it asks is answered by a row's own
- * key/value lines. A `complete: true` nested inside a multi-line scalar cannot
- * produce a false positive because the match is anchored to a whole line.
+ * 刻意用文本扫描而不是 YAML 加载：本模块不能新增解析器依赖，而它问的每个问题都能由行内的
+ * key/value 回答。匹配锚定整行，所以多行标量里嵌套的 `complete: true` 不会造成误报。
  *
- * Never throws: unparsable input degrades to `unknown`, which the caller
- * renders as "could not tell" instead of "fine".
+ * 从不抛错：解析不了就降级为 `unknown`，调用方据此渲染成「判断不了」而不是「没问题」。
  */
 export function readCompositionFacts(text: string): CompositionFacts {
   try {
@@ -298,14 +267,14 @@ export function readCompositionFacts(text: string): CompositionFacts {
     }
 
     let personaComplete: boolean | 'unknown' = false
-    // Schema default is `true`: a mounted persona row that does not state the flag keeps
-    // the official runtime context (only `false` suppresses it).
+    // schema 默认 `true`：挂载的 persona 行没写这个标志时保留官方运行时上下文
+    // （只有 `false` 才压制）。
     let includeRuntimeContext: boolean | 'unknown' = true
     let personaMounted = false
     for (let i = 0; i < lines.length; i += 1) {
       const named = NAME_LINE.exec(lines[i])
       if (named === null || named[3] !== PERSONA_MODULE) continue
-      // A disabled persona row does not shadow the deployment persona.
+      // 停用的人设行不会遮蔽部署的人设。
       if (presenceForRow(lines, i) === 'absent') continue
       personaMounted = true
       for (const line of rowBlockAround(lines, i)) {
@@ -338,7 +307,7 @@ export function readCompositionFacts(text: string): CompositionFacts {
   }
 }
 
-/** Map parsed facts onto the five user-visible capability columns. */
+/** 把解析出的事实映射成用户可见的那五列能力。 */
 export function deriveReach(
   facts: CompositionFacts,
   ctx?: ReachContext,
@@ -370,7 +339,7 @@ export function deriveReach(
    */
   const officialOrFallback = (domainKey: string, carrier: ModulePresence): ReachState => {
     // 官方那条行挂着 = **官方自己送到**，与本插件的域开关无关（开关只管本插件的兜底）：
-    // 用户实测（2026-09-16）—— 把注入域全关掉后，标准 / ptc / 创造三行的技能与提示词
+    // 用户实测—— 把注入域全关掉后，标准 / ptc / 创造三行的技能与提示词
     // 依然应该是绿的（模型确实拿得到，官方 `dsh-tool-skill` / `dsh-agent-instructions` 送），
     // 只有极简那行是红的（两条行都没挂 + 兜底也关着）。
     if (carrier === 'mounted') return 'ok'
@@ -387,7 +356,7 @@ export function deriveReach(
   const agentsMd = officialOrFallback('prompt', facts.agentInstructions)
   const skillCatalog = officialOrFallback('skills', facts.toolSkill)
 
-  // 子智能体列（用户裁定 2026-09-16 第二版）：与记忆 / MCP 两列**同口径** —— 答"人设目录
+  // 子智能体列：与记忆 / MCP 两列**同口径** —— 答"人设目录
   // 到不到得了模型"。内容由本插件的注入域送达，跑起来用本插件自己的 `subagent_manager_run`
   // （宿主平面工具，任何预设下都在），所以可达性只看域开关与压制。此前这一列只答"官方
   // `dsh-tool-subagent` 挂没挂"——于是极简下就算开了「极简模式也注入」也永远红着，而那条官方
@@ -400,11 +369,10 @@ export function deriveReach(
 }
 
 /**
- * The roster surface this module reads. Every member is optional so a
- * deployment without the agent-preset service degrades to a blocker
- * line instead of a throw.
+ * 本模块读取的 roster 接口。每个成员都可选，所以没有 agent-preset 服务的部署会降级成一条
+ * blocker 行，而不是抛错。
  *
- * 组合文本有两个官方入口（0.15.0 实测，同宿主两代）：
+ * 组合文本有两个官方入口（同一宿主的两代实现）：
  *   - 0.1.5 的 `read(id)`：直接返回组合文本；
  *   - 0.1.7 的 `readDocument(id)`：返回 `AgentPresetDocument`，组合 YAML 在 `.content`
  *     字段（`{ agentPreset, content, name?, description? }`）。
@@ -423,10 +391,9 @@ export interface PresetRosterLike {
  * `read(id)`（0.1.5 直返文本）或 `readDocument(id).content`（0.1.7 文档对象）。
  * 两者都不可用时抛错，由调用方决定降级口径 —— reason 文案由此保持单一来源。
  *
- * 兜底路径的可见性（0.15.0）：兜底成功**不留运行时上报** —— 上报一律渲染成问题行，
- * 而「read 改名 readDocument 后走兜底」是 0.1.7 的正常形态，不是降级（琥珀只留给故障，
- * 2026-09-28 用户反馈）。走的哪条路由探测表 `preset.roster-surface` 的健康行说明承担；
- * 这里只在**真异常**（readDocument 在场但文档缺 `.content`）时留痕。同 id 覆盖，不堆积。
+ * 兜底路径的可见性：兜底成功不留运行时上报 —— 上报一律渲染成问题行，而「read 改名
+ * readDocument 后走兜底」是 0.1.7 的正常形态，不是降级（琥珀只留给故障）。这里只在真异常
+ * （readDocument 在场但文档缺 `.content`）时留痕。同 id 覆盖，不堆积。
  */
 export async function readCompositionText(roster: PresetRosterLike, presetId: string): Promise<string> {
   if (typeof roster.read === 'function') {
@@ -449,7 +416,7 @@ export async function readCompositionText(roster: PresetRosterLike, presetId: st
   throw new Error('预设名单未提供 read()/readDocument()：无法读取组合文件')
 }
 
-/** Narrow the roster off a cordis context without throwing. */
+/** 从 cordis 上下文里取出预设名单；取不到就返回 undefined，不抛错。 */
 export function presetRosterOf(ctx: { get?: (name: string) => unknown }): PresetRosterLike | undefined {
   try {
     const value = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined
@@ -527,10 +494,9 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
 }
 
 /**
- * Build the whole preset × capability matrix.
+ * 算出整张「预设 × 能力」矩阵。
  *
- * Read-only end to end; a preset whose text cannot be read yields a named
- * `reason` on its own row rather than failing the report.
+ * 全程只读：某个预设的文本读不出来，只在它自己那行给出 `reason`，不让整份报告失败。
  */
 export async function assessPresetReach(roster: PresetRosterLike | undefined, ctx?: ReachContext): Promise<PresetReachReport> {
   const generatedAt = Date.now()
@@ -586,28 +552,25 @@ export async function assessPresetReach(roster: PresetRosterLike | undefined, ct
 }
 
 /**
- * The one-line boundary notice a model tool appends to its result.
+ * 模型工具在结果后面追加的一行边界提示。
  *
- * This is the load-bearing half of the fix: a model that lists memories while
- * running under a suppressing preset would otherwise assume those memories are
- * already in its context. The same reasoning covers MCP and the subagent roster:
- * none of them reach the model while the preset keeps the plugin's runtime
- * snapshot out of the conversation, so the notice says which tool to call
- * instead — and where the user can flip that off.
+ * 这一句是整套修正里承重的那一半：模型在压制型预设下列出记忆，会默认这些记忆已经在
+ * 上下文里。MCP 与子智能体目录同理 —— 预设把插件的运行时快照挡在对话之外时，这三者都
+ * 到不了模型，所以提示要说清「改调哪个工具」，以及用户在哪里能把这个开关打开。
  *
- * Pure and synchronous so a contract test can pin the wording to the facts.
+ * 纯函数、同步，便于契约测试把措辞钉在事实上。
  *
- * 写法纪律（2026-09-16 第三版）：
+ * 写法纪律：
  *   - **不点名任何工具**。这条提示挂在 5 个发现型工具上，点名就必然出现循环
  *     （`mcp_manager_list` 的结果里写着「用 mcp_manager_list 查询」——
  *     用户实测发现）。按域名过滤只是把循环换成残缺列表；干脆不枚举：**域 → 工具**的
  *     映射属于工具描述（常驻层），提示只负责说清「什么不在你上下文里」。
  *   - 全域一句话说完，不逐域展开；不复述工具 schema 的细节。
- *   - 第二版把"被 persona complete 压制"当成不可改变的事实；现在本插件改走 pre-step
- *     注入消息（src/context-inject.ts），压制型预设下**默认不注入但可以打开**，
- *     提示里如实给出这个开关的位置。
+ *   - 不把「被 persona complete 压制」当成不可改变的事实：本插件走 pre-step 注入消息
+ *     （src/context-inject.ts），压制型预设下**默认不注入但可以打开**，提示里如实给出
+ *     这个开关的位置。
  *
- * @returns the notice, or `''` when nothing is out of context.
+ * @returns 提示文本；没有内容落在上下文外时返回空串
  */
 export function reachNoticeFor(
   presetId: string,
@@ -617,10 +580,10 @@ export function reachNoticeFor(
   const parts: string[] = []
   const domainOff = (key: string): boolean => inject?.domains?.[key] === false
   if (isSuppressingPreset(facts) && inject?.underSuppressingPresets !== true) {
-    // 末尾那句「（想让它在这类预设下也注入：插件的「兼容」页 → 注入。）」已删（2026-10-15 用户裁定）：
-    // 它是**给人看的操作路径**（界面怎么点），而这段文字进的是**工具回执** —— 回执留在 transcript 里，
-    // 比工具 schema 还贵（每次调用都会带一份）。判据与上一轮 P1-5 从场景锁定守卫里清掉
-    // 「去界面解锁」逐字同一条：守卫/提示只**陈述事实**，"怎么改"由模型自己向用户解释。
+    // 不写「（想让它在这类预设下也注入：插件的「兼容」页 → 注入。）」：那是给人看的操作路径
+    // （界面怎么点），而这段文字进的是工具回执 —— 回执留在 transcript 里，比工具 schema 还贵
+    // （每次调用都会带一份）。判据与场景锁定守卫一致：守卫 / 提示只陈述事实，「怎么改」由模型
+    // 自己向用户解释。
     parts.push(
       `预设「${presetId}」声明只要它自己的文本（persona complete / 关闭运行时上下文）：` +
       '本插件注入的 —— 场景、记忆、MCP、技能、子智能体、提示词 —— 默认不注入，' +
@@ -639,10 +602,9 @@ export function reachNoticeFor(
 }
 
 /**
- * Resolve the notice for the agent a tool call runs as.
+ * 为一次工具调用所属的 agent 求边界提示。
  *
- * Every failure path answers `''` — a boundary notice must never turn a
- * successful read into an error.
+ * 所有失败路径都返回空串 —— 边界提示绝不能把一次成功读取变成错误。
  */
 export async function reachNoticeForAgent(
   roster: PresetRosterLike | undefined,

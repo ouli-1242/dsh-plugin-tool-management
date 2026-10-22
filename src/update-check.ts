@@ -1,4 +1,4 @@
-// 更新检查（0.21.2 Phase 5.1）—— 只读、可缓存、绝不自动更新。
+// 更新检查—— 只读、可缓存、绝不自动更新。
 //
 // 判据只有一条：**每个候选版本自己的 `engines.dsh`**。插件版本号与宿主版本号之间没有可推导的
 // 对应关系（本仓库的版本约定是人工映射），拿 `latest` 或"版本号更大"当兼容结论都会把人带到
@@ -14,10 +14,14 @@ import { join } from 'node:path'
 import * as semver from 'semver'
 import { writeFileAtomically } from './memories/index-io.js'
 
+/** 更新检查结果的缓存文件名（在 hub 内）；删掉只是下次重新查。 */
 export const UPDATE_CHECK_FILE = 'update-check.json'
+/** 本插件在 npm 上的包名 —— 查更新与拼安装命令都用它。 */
 export const PACKAGE_NAME = 'dsh-plugin-tool-management'
+/** npm registry 的元数据地址（只读一次、3 秒超时、走系统代理设置）。 */
 export const REGISTRY_URL = 'https://registry.npmjs.org/' + PACKAGE_NAME
 
+/** 更新检查的结论：有新版本 / 已最新 / 没有兼容版本 / 当前版本已不兼容 等。 */
 export type UpdateStatus =
   | 'update-available'
   | 'up-to-date'
@@ -28,6 +32,7 @@ export type UpdateStatus =
   | 'proxy-unsupported'
   | 'unknown'
 
+/** 一次更新检查的结果：当前版本、最新版本、有没有新东西。 */
 export interface UpdateCheckResult {
   ok: boolean
   status: UpdateStatus
@@ -46,6 +51,7 @@ export interface UpdateCheckResult {
   error?: string
 }
 
+/** 更新检查的选项：超时、是否走代理、缓存路径。 */
 export interface UpdateCheckerOptions {
   /** 缓存落点目录（插件 hub）。 */
   stateDir: string
@@ -71,6 +77,7 @@ export interface UpdateCheckerOptions {
   now?: () => number
 }
 
+/** 更新检查的对外面：查一次、读缓存、判断能不能升。 */
 export interface UpdateChecker {
   /** 读缓存（或发一次请求），不抛错。 */
   check(force?: boolean): Promise<UpdateCheckResult>
@@ -148,6 +155,7 @@ export function installCommand(profile: string | undefined, version: string): st
     ' add ' + PACKAGE_NAME + '@' + version
 }
 
+/** 更新检查器：按 TTL 缓存结果，3 秒超时，检测到代理直接跳过，绝不自动更新。 */
 export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecker {
   const ttlMs = options.ttlMs ?? 12 * 60 * 60 * 1000
   const failureTtlMs = options.failureTtlMs ?? 60 * 60 * 1000

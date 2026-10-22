@@ -4,7 +4,7 @@
 // 人设名，场景记录存提示词预设 id，模式快照存进场景前的那一整套。名字会过期：改名与删除
 // 之后，存着旧名的那一条**不会报错，只是再也不匹配任何东西**。界面因此骗人：
 // 「档案里还写着 代码审查」→ 看着像绑着，委派时按新名找不到，设置像在、其实不生效。
-// 这一类已经真出过两次（0.9.1 人设改名、0.10.0 预设改名），所以缺的不是又一份同步代码，
+// 这一类已经真出过两次（人设改名、预设改名各一次），所以缺的不是又一份同步代码，
 // 是一个把全部悬空引用一次数出来的出口。
 //
 // 为什么是一个 op 而不是一份"引用表"：那要求所有写路径都改成先登记再引用，是一次大动作，
@@ -28,6 +28,7 @@ export interface DanglingRef {
   name: string
 }
 
+/** 状态自检报告：问题清单、按级别计数、跳过的检查项。 */
 export interface DoctorReport {
   /** 全部悬空引用；空数组 = 一致。 */
   findings: DanglingRef[]
@@ -37,6 +38,7 @@ export interface DoctorReport {
   skipped: string[]
 }
 
+/** 自检要的索引切片：场景、预设、服务器与技能键。 */
 export interface StateDoctorDeps {
   /** 只读拿索引（`readIndexSync(stateDir)`）。 */
   index(): any
@@ -64,8 +66,8 @@ export async function runStateDoctor(deps: StateDoctorDeps): Promise<DoctorRepor
   const scenes: Record<string, any> = index.scenes || {}
   const archives: Record<string, any> = index.archives || {}
 
-  // 四域权威集合**并行**读（0.21.2）：它们是四个互不依赖的读，串起来等于把四次读延迟
-  // 首尾相接。实测（2026-10-18 web 端，服务进程已被别的负载占满单核）：state-doctor
+  // 四域权威集合**并行**读：它们是四个互不依赖的读，串起来等于把四次读延迟
+  // 首尾相接。实测（web 端，服务进程已被别的负载占满单核）：state-doctor
   // 冷启 1.8s，其中绝大部分是这四段串行等待 —— 并行后总耗时≈最慢那一域，而不是四者之和。
   // 单个读失败仍然只跳过自己那一类（Promise.all 不会因一个 reject 整体失败：
   // 各 deps 的失败都已被 `safe()` 转成 null，见 index.ts 的 state-doctor handler）。
@@ -149,7 +151,7 @@ export async function runStateDoctor(deps: StateDoctorDeps): Promise<DoctorRepor
     }
   }
 
-  // ⑦ 隔离守卫（0.21.2）：记忆索引被隔离时它不在「悬空」语义里 —— 文件仍在盘上，
+  // ⑦ 隔离守卫：记忆索引被隔离时它不在「悬空」语义里 —— 文件仍在盘上
   //    只是不在原位置。但它和悬空引用共享同一个出口（兼容页的体检区），所以复用 findings。
   //    这一条是**必须出声**的那类：隔离期间写侧被拒，用户点任何记忆操作都会拿到错误。
   if (deps.indexQuarantined !== undefined) {
@@ -162,8 +164,8 @@ export async function runStateDoctor(deps: StateDoctorDeps): Promise<DoctorRepor
       })
     }
   }
-  // ⑧ MCP 重启中断（0.21.2）：与隔离同一档 —— 它不改用户数据，但会让一台服务器
-  //    无声地停在停用态（补丁里的 disabled:true 与"用户主动停用"完全同形）。
+  // ⑧ MCP 重启中断：与隔离同一档 —— 它不改用户数据，但会让一台服务器
+  //    无声地停在停用态。
   //    pid 还活着时不算问题（那次重启可能正在跑），所以判据带上 alive。
   if (deps.mcpRestartPending !== undefined) {
     const info = await deps.mcpRestartPending()

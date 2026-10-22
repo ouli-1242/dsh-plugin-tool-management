@@ -1,30 +1,31 @@
-// 「模型工具表」开关（2026-09-23）。
+// 「模型工具表」开关。
 //
 // 为什么要有它：工具表是按**每个请求**付钱的 —— 每一轮都随请求发出工具 schema，哪怕这一轮
 // 根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；面板
 // （118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着十九条**（57 条里实发 38 条）—— 名单、判据与代价见下面
+// 出厂**默认就关着二十条**（整张表 26 条，每轮实发 6 条）—— 名单、判据与代价见下面
 // `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // 实测数字（口径：宿主 `recordToolSize` 的 `ceil(JSON.stringify(header.tools).length / 4) + 4`，
 // 即**字符数 / 4**；界面「模型工具表」那行合计与逐条 ≈tok 就是这份，逐条相加与整份数组
 // 的算法差不到 1%）：
-//   · 2026-10-20 重测：十九条隐藏 ≈**5,213 tok**（≈20,852 字符），默认可见那六条 ≈**1,547 tok**。
+//   · 重测：二十条隐藏 ≈**5,213 tok**（≈20,852 字符），默认可见那六条 ≈**1,547 tok**。
 //     比 10-18 那份（16,743 字符 ≈4,186）涨了两成 —— 会话作用域这轮给工具描述加了"写本对话
 //     还是全局""`scope` 参数""租约"这些句子，名单一个字没变。
+//     那次实测的名单里还没有 `memory_manager_search`（它自己 ≈70 tok 未计入）。
 //   · 10-18 那轮 A/B（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
 //     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
 //     所以它们是**净节省的下界**，不是"省了多少"的上界。**那对数量的是当天那份描述** ——
 //     描述一改就得重测，新的净省要在真实环境跑 A/B，这里不拿估算冒充实测。
 //
-// ⚠️ **那个口径不是 token 数，别拿它跟别的数直接比**（2026-09-23 用真 BPE 词表实测）：
+// ⚠️ **那个口径不是 token 数，别拿它跟别的数直接比**（用真 BPE 词表实测）：
 // 工具描述是英文，`字符数 / 4` 对英文**高估约 10%** —— 18 个工具那一版真实是 ≈3,137 tok（o200k）。
 // 反方向也一样：注入段是中文，同一个口径对它**低估约 13%**（四段 716 → 真 823）。
 // 所以"工具表 / 注入"这两个数不是同一把尺子，跨语言比大小会得出错的结论。
 // 口径本身是**宿主的**（`recordToolSize`），我们改不了；能做的只是知道它偏在哪。
 //
-// 当前环境（2026-10-18 查过，2026-10-20 复述）**没有 BPE 分词器可实测**：306 个官方包里零个
+// 当前环境（查过，复述）**没有 BPE 分词器可实测**：306 个官方包里零个
 // 词表文件，本机 python site-packages 里也没有 tiktoken / transformers。所以 5,213 只是
 // **按宿主的尺子**量出来的数，真 BPE 值按上面那条经验约低一成（≈4,7xx）—— 没有实测，别当实测引用。
 //
@@ -32,7 +33,7 @@
 // 注入设置（`inject-settings.json`）走同一套写法。
 //
 // 谁读这份设置：
-//   · index.ts 的 op `tool-table`（读写侧车 + 写后刷新可见性与两个目录）—— 0.21.2 起
+//   · index.ts 的 op `tool-table`（读写侧车 + 写后刷新可见性与两个目录）——
 //     带 `sessionId` 的那一支改的是**本对话**的整份名单（存 `scope-overrides.json`），
 //     这份侧车只剩"新对话的默认模板"与方案库；
 //   · mcp/manager.ts 的 `pluginHiddenTools` —— 官方 `tools.restrict()` 只允许**每个 agent
@@ -62,9 +63,9 @@ export interface ToolTableSettings {
 }
 
 /**
- * 出厂默认关掉的**十九条**：整张表 25 条，关掉后**每轮实发 6 条**。
+ * 出厂默认关掉的**二十条**：整张表 26 条，关掉后**每轮实发 6 条**。
  *
- * 判据是用户 2026-09-23 的三轮裁定，同一条：**这些信息或动作常态下由注入段与面板承担，
+ * 判据只有一条：**这些信息或动作常态下由注入段与面板承担，
  * 平时也用不到模型自己伸手**。三组：
  *   · **写侧五条** —— 三个 `*_save`（MCP / 技能 / 人设：配置本体在面板上改）+ 提示词两条
  *     （这一族只有两条，而当前生效的那份本来就在 `Current prompt` 注入段里）。
@@ -75,13 +76,11 @@ export interface ToolTableSettings {
  *     写着当前开着哪些。**`mcp_manager_switch` 刻意留着**：它是"这台先给我关了"这条最常用的
  *     临时动作的唯一入口，也是 MCP 域留下来的一条腿。
  *
- * 2026-10-14（对抗性审查 P0-2）：**`subagent_manager_list` 从这份名单里拿了出来**（十四条）。
  * 判据与上面那条"注入段承担"不同 —— 人设域**没有官方载体兜底**：MCP / 技能 / 记忆三个域的
  * 目录即便被压制型预设压掉，也各自还有一条常驻发现路径，而人设目录一旦不注入，模型手里就
  * 只剩 `subagent_manager_run` 一条可见工具、**无从知道任何人设名**（死路：有工具、没输入）。
  * 它只有 42 tok，买的是把"注入段是唯一发现路径"这个单点消掉。
  *
- * 2026-10-15：**删除 / 回收站族五条**（`*_manager_remove`）出厂默认关。判据是"删一条记忆 /
  * 技能 / 人设"是常问的，但它**低频于"读现状 + 拨开关 + 建改定义"**那批，而且面板每个域都有
  * 删除入口 —— 默认关、要用时在「兼容」页勾上（与另外十四条同一条纪律，不额外付 token）。
  *
@@ -120,16 +119,17 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'prompt_manager_remove',
 ])
 
-/** 出厂默认那份设置：十九条不发（名单与理由见上面），方案清单是空的。 */
+/** 出厂默认那份设置：二十条不发（名单与理由见上面），方案清单是空的。 */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */
 export const PRESET_NAME_MAX_LENGTH = 40
 /**
- * 场景档案绑定「出厂默认那份」时用的方案名（0.15.0 C1）。
+ * 场景档案绑定「出厂默认那份」时用的方案名。
  * 它不是一个可保存的方案名，只在档案里当哨兵用；解析时用户存的同名方案优先。
  */
-export const FACTORY_TOOL_TABLE_PRESET = 'factory-default'/** 存得下的方案数上限 —— 侧车是人手能审的文件，不放开。 */
+export const FACTORY_TOOL_TABLE_PRESET = 'factory-default'
+/** 存得下的方案数上限 —— 侧车是人手能审的文件，不放开。 */
 export const PRESET_MAX_COUNT = 20
 
 const DEFAULT_HIDDEN_SET: ReadonlySet<string> = new Set(DEFAULT_HIDDEN_TOOLS)
@@ -182,7 +182,7 @@ export function toolTableSettingsFrom(raw: unknown): ToolTableSettings {
 }
 
 /**
- * 严格结构检查（0.21.2）：宽松归一化会把「合法 JSON 但形状错了」读成 `hidden: []`
+ * 严格结构检查：宽松归一化会把「合法 JSON 但形状错了」读成 `hidden: []`
  * ——也就是**全部打开**，用户关掉的工具会在执行守卫眼皮底下复活。
  *
  * 只把真正影响可见性的字段判为损坏：顶层必须是对象、`hidden` 必须是字符串数组、
@@ -203,9 +203,9 @@ export function classifyToolTableSettings(raw: unknown): { ok: true; value: Tool
 }
 
 /**
- * 旧工具名 → 新工具名迁移表（0.14.0 与 0.14.x 两轮改名累积）。
+ * 旧工具名 → 新工具名迁移表（两轮改名累积）。
  *
- * 为什么必须有它：`tool-table.json` 存的是**用户点名关掉的那些工具**。0.14.0 把五族并成 17 条
+ * 为什么必须有它：`tool-table.json` 存的是**用户点名关掉的那些工具**。五族并成 17 条
  * 之后，旧名在新表里根本不存在 —— 不迁移的话，用户"关掉了某条"的意图会在新名字上**静默失效**
  * （那条工具照旧每轮发出去，而他以为早就关了）。
  *
@@ -216,8 +216,8 @@ export function classifyToolTableSettings(raw: unknown): { ok: true; value: Tool
  * 误删别人的条目比留着一条死名更糟。
  */
 export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
-  // 记忆族：0.14.0 只把 write + update 并成一条 `save`，名字本身没动 —— 所以只有这两条要迁移。
-  // （0.14.0 开发中途曾把整族改叫 `scene_memory_manager_*`，但那个名字**从未发布**，用户侧
+  // 记忆族：只把 write + update 并成一条 `save`，名字本身没动 —— 所以只有这两条要迁移。
+  // （开发中途曾把整族改叫 `scene_memory_manager_*`，但那个名字**从未发布**，用户侧
   // 不可能有它，因此不存在需要从它迁回来的数据。）
   memory_manager_write: 'memory_manager_save',
   memory_manager_update: 'memory_manager_save',
@@ -227,7 +227,7 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   skill_manager_create: 'skill_manager_save',
   subagent_manager_create: 'subagent_manager_save',
   subagent_manager_update: 'subagent_manager_save',
-  // 0.14.x：「拨一个开关」六域同形 —— `_set_enabled` → `_switch`（与 `mcp_manager_set_enabled`
+  // 「拨一个开关」六域同形 —— `_set_enabled` → `_switch`（与 `mcp_manager_set_enabled`
   // → `mcp_manager_switch` 同一条路）。**改的只是名字，参数不动**（仍是 `enabled` 布尔），
   // 所以这里是一对一翻译、不涉及语义合并。
   memory_manager_set_enabled: 'memory_manager_switch',
@@ -265,7 +265,7 @@ export function migrateLegacyToolNames(settings: ToolTableSettings): { settings:
 }
 
 /**
- * 新存一份命名方案：**同名不覆盖**（用户 2026-09-23：「保存方案不能同名」）。"保存"这颗按钮
+ * 新存一份命名方案：**同名不覆盖**（用户 ：「保存方案不能同名」）。"保存"这颗按钮
  * 不该悄悄改掉一份已有的记录 —— 那是破坏性动作，而它连一句确认都没有。撞名时 `exists=true`
  * 且原样返回，由调用方在写盘之前挡下来并如实报错。封顶同样由调用方挡（超了要报错，不是静默丢）。
  */
@@ -290,6 +290,7 @@ export interface ToolTableRow {
   bytes: number
 }
 
+/** 工具表里的一条工具：全名、所属族与是否可关。 */
 export interface ToolTableTool {
   name: string
   tok: number
@@ -298,6 +299,7 @@ export interface ToolTableTool {
   defaultHidden: boolean
 }
 
+/** 工具表里的一个族：族名、显示名与成员。 */
 export interface ToolTableGroup {
   /** 域 key；与注入域清单（context-inject 的 INJECT_DOMAIN_KEYS）同源。认不出前缀的工具归到 `other`。 */
   key: InjectDomainKey | 'other'
@@ -308,6 +310,7 @@ export interface ToolTableGroup {
   hiddenTok: number
 }
 
+/** 工具表报告：分组、关停名单与「关掉会失去什么」的提示。 */
 export interface ToolTableReport {
   groups: ToolTableGroup[]
   /** 当前会随请求发出的部分。 */
@@ -335,7 +338,7 @@ export interface ToolTableReport {
    * `hiddenCount - defaultHiddenCount` 反推"用户自己关了几条"。载体让位既不是用户关的、
    * 也不是出厂关的 —— 并进去，兼容页就会报出一个假的"用户关掉了 1 条"。
    * 而**不计入可见**是必须的：那条工具在标准预设下确实不进请求（`index.ts` 的
-   * `CARRIER_DUPLICATES`），报成"实发"就是虚报（2026-10-14 对抗性审查 P2-1）。
+   * `CARRIER_DUPLICATES`），报成"实发"就是虚报。
    */
   carrierHiddenCount: number
   carrierHiddenTok: number
@@ -350,6 +353,7 @@ export interface ToolTableReport {
  */
 export const CHARS_PER_TOKEN = 4
 
+/** 按宿主的尺子把字节数估成 token 数（经验值，见文件头；不是 BPE 实测）。 */
 export function estimateTok(bytes: number): number {
   const value = Number(bytes)
   if (!Number.isFinite(value) || value <= 0) return 0

@@ -11,13 +11,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CapabilityFinding } from './probe-types.js'
 
-/** The slice of a host object a probe inspects. `unknown` keeps callers honest. */
+/** 探针要检查的那一片宿主对象。用 `unknown` 逼调用方自己收窄。 */
 export type Target = Record<string, unknown> | undefined
 
+/** `typeof` 的函数判定，带上类型收窄 —— 探针里到处要用，别各写一遍。 */
 export const isFn = (value: unknown): value is (...args: unknown[]) => unknown => typeof value === 'function'
 
 /**
- * Resolve a package the way this plugin resolves it, without throwing.
+ * 按本插件自己的方式解析一个包；解析不到返回 null，不抛错。
  *
  * `import.meta.resolve` 给的是**URL**：目录里带空格的路径（桌面版装在
  * `D:\DeepSeek Harness\...`）会以 `%20` 形式回来，直接当路径用会得到一个
@@ -37,7 +38,7 @@ export function safeResolve(specifier: string): string | null {
 }
 
 /**
- * Whether a path lives inside an electron `app.asar` archive.
+ * 路径是否落在 electron 的 `app.asar` 归档里。
  *
  * 桌面版把整个 DSH 装进 `resources/app.asar`：宿主的 `@deepseek-ai/*` 物理上就在
  * 归档里，插件（装在 `$DSH_HOME/profiles/<name>/node_modules`）在外面的磁盘上。
@@ -51,13 +52,13 @@ export function isAsarPath(value: string | null): boolean {
 }
 
 /**
- * Resolve a path through every junction/symlink to its physical file.
- * Node loads modules by real path, so two different-looking paths that
- * realpath to one file ARE the same module — which is exactly the property
- * this plugin depends on, and the reason `@deepseek-ai/*` is junctioned into
- * the host installation instead of being copied.
+ * 把路径穿过所有 junction / symlink 解析成物理文件。
  *
- * 取不到真实形态时**不再拿输入去比**（issue #1 要求）：那会把「路径不可解析」
+ * node 按真实路径加载模块，所以两个长得不一样的路径只要 realpath 到同一个文件就是同一个
+ * 模块 —— 这正是本插件依赖的性质，也是 `@deepseek-ai/*` 用 junction 接进宿主安装、
+ * 而不是复制一份的原因。
+ *
+ * 取不到真实形态时**不再拿输入去比**：那会把「路径不可解析」
  * 伪装成「两份不同拷贝」，给出一个编出来的结论。改由调用方把原因报成说明。
  */
 export function realPathWithReason(value: string | null): { path: string } | { reason: string } {
@@ -72,7 +73,7 @@ export function realPathWithReason(value: string | null): { path: string } | { r
   }
 }
 
-/** Read a package version from a resolvable manifest. */
+/** 从可解析的包清单里读版本号。 */
 export function versionOf(specifier: string): string | undefined {
   const entry = safeResolve(specifier)
   if (entry === null) return undefined
@@ -82,7 +83,7 @@ export function versionOf(specifier: string): string | undefined {
       const parsed = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: string; version?: string }
       if (parsed.name === specifier && typeof parsed.version === 'string') return parsed.version
     } catch {
-      /* keep walking up */
+      /* 这一层没有就继续往上找 */
     }
     const parent = dirname(dir)
     if (parent === dir) break
@@ -92,8 +93,8 @@ export function versionOf(specifier: string): string | undefined {
 }
 
 /**
- * Version of the package a resolved entry path belongs to: walk up until a
- * `package.json` whose `name` matches the package directory we came from.
+ * 一个已解析入口路径所属包的版本：向上找 `package.json`，直到 `name` 与入口所在的
+ * 包目录对得上。
  *
  * 与 `versionOf` 的分工：那个从**说明符**出发（要能解析），这个从**已经拿到的路径**
  * 出发。归档宿主那种「路径不同但版本相同」的判断只能用后者 —— 前者在 `.asar` 里
@@ -129,9 +130,9 @@ function packageNameOfPath(entry: string): string | null {
 }
 
 /**
- * Compare a live member with this plugin's copy of the implementation.
- * `undefined` means "not comparable" — the member is absent on the live object
- * or the reference copy does not have it either.
+ * 把活成员与本插件那份同实现做文本比对。
+ *
+ * `undefined` = 比不了：活对象上没有这个成员，或参考副本里也没有。
  */
 export function textMatchOf(live: unknown, reference: unknown): boolean | undefined {
   if (!isFn(live) || !isFn(reference)) return undefined
@@ -144,9 +145,7 @@ export function textMatchOf(live: unknown, reference: unknown): boolean | undefi
 }
 
 /**
- * The prototype that defines a live instance's members, following the prototype
- * chain so proxies, subclass instances and cross-realm objects all answer
- * honestly.
+ * 定义活实例成员的那个原型。沿原型链走，代理、子类实例、跨 realm 对象都能问出真话。
  */
 function prototypeOf(instance: unknown): Record<string, unknown> | undefined {
   if (instance === null || typeof instance !== 'object') return undefined
@@ -155,27 +154,24 @@ function prototypeOf(instance: unknown): Record<string, unknown> | undefined {
   return proto !== null && typeof proto === 'object' ? (proto as Record<string, unknown>) : undefined
 }
 
-// The official package + class each capability owner's members live on. This is
-// the single answer to "which class defines this owner" — both the live
-// reference-prototype lookup below and the exported static table read it, so a
-// host drift is described in exactly one place.
+// 每个能力属主的成员落在哪个官方包 / 类上 —— 「谁定义了这个属主」只在这里回答一次：
+// 下面的活原型查找与对外的静态表都读它，宿主漂移因此只有一个描述处。
 const WORKSPACE_CLASS = { pkg: '@deepseek-ai/dsh-workspace', target: 'WorkspaceRegistry' } as const
 const PROJECTION_CLASS = { pkg: '@deepseek-ai/dsh-session-projection-cache', target: 'SessionProjectionCache' } as const
-// `sessions.*` members are host-private members, but they are still declared on
-// an official class: `@deepseek-ai/dsh-session` is a peer this plugin declares,
-// and `SessionStore` is where `flush`/`liveEntryFor`/`detachEntered`/`enter`/
-// `announce` live. Without this entry the doctor could not see the two
-// capabilities the delete route depends on.
+// `sessions.*` 的成员虽然是宿主私有的，但仍声明在官方类上：`@deepseek-ai/dsh-session`
+// 是本插件声明的 peer，`SessionStore` 就是 `flush` / `liveEntryFor` / `detachEntered` /
+// `enter` / `announce` 的所在。少了这一条，doctor 看不见删除路线依赖的那两项能力。
 const SESSIONS_CLASS = { pkg: '@deepseek-ai/dsh-session', target: 'SessionStore' } as const
-// 0.15.0 新增的两块契约面 —— 恰是 0.1.7 升级咬人的两处（prepareDocument 返回语义变了、
-// read 改名 readDocument），此前不在表里，故障只能靠用户实测发现。类名按官方安装源码核对
-// （dsh-settings 导出 SettingsForms；dsh-agent-preset-registry 导出 AgentPresetRegistry）。
+// 设置与预设名册两块契约面：类名按官方安装源码核对（dsh-settings 导出 SettingsForms；
+// dsh-agent-preset-registry 导出 AgentPresetRegistry）。不在表里时，这两处契约一变
+// （prepareDocument 返回语义、read 改名 readDocument）只能靠用户实测才发现。
 const SETTINGS_CLASS = { pkg: '@deepseek-ai/dsh-settings', target: 'SettingsForms' } as const
 const ROSTER_CLASS = { pkg: '@deepseek-ai/dsh-agent-preset-registry', target: 'AgentPresetRegistry' } as const
-// 0.2.1 的两块契约面（tools.restrict / connection.admit）也都声明在官方类上，所以同样接入
-// 「参考副本 + 文本比对」：官方改了实现，比对的结论从"一致"变成"漂移"，界面上看得见。
+// tools.restrict / connection.admit 也声明在官方类上，所以同样接入「参考副本 + 文本比对」：
+// 官方改了实现，结论就从"一致"变成"漂移"，界面上看得见。
 const TOOLS_CLASS = { pkg: '@deepseek-ai/dsh-tools', target: 'ToolRuntime' } as const
 const CONNECTION_CLASS = { pkg: '@deepseek-ai/dsh-client-connection', target: 'HostConnectionService' } as const
+/** 每类宿主服务由哪个包的哪个导出承载 —— 静态检查要据此拿到官方原型。 */
 export const OWNER_CLASSES: Partial<Record<CapabilityFinding['owner'], { readonly pkg: string; readonly target: string }>> = {
   workspace: WORKSPACE_CLASS,
   projectionCache: PROJECTION_CLASS,
@@ -186,7 +182,7 @@ export const OWNER_CLASSES: Partial<Record<CapabilityFinding['owner'], { readonl
   connection: CONNECTION_CLASS,
 }
 
-/** The named export's prototype, or undefined when the package is absent/trimmed. */
+/** 具名导出的原型；包缺席或被裁剪时为 undefined。 */
 function classPrototypeOf(ref: { pkg: string; target: string }): Record<string, unknown> | undefined {
   try {
     const mod = createRequire(import.meta.url)(ref.pkg) as Record<string, unknown>
@@ -205,12 +201,12 @@ function classPrototypeOf(ref: { pkg: string; target: string }): Record<string, 
 export const PROBE_SENTINEL = '__dshm_probe_never_exists__'
 
 /**
- * 用哨兵实参**真调**一个宿主方法（2026-09-19 分层探针第二层），验证「存在且可调用」：
+ * 用哨兵实参**真调**一个宿主方法（分层探针第二层），验证「存在且可调用」：
  * - 同步抛 `TypeError` → 实现坏了/签名漂移，返回失败详情（shape-mismatch）；
  * - 受控同步拒绝（普通 `Error`，如 not found）或返回值（含 rejected Promise）→ 通过。
  *
  * 只判同步段：探针框架是同步的（`assessHost` 不能 await），异步结果分类留待
- * 异步化改造（见审查 07 跟进项）。返回的 Promise 一律挂 `.catch` 吞掉，探针
+ * 异步化改造。返回的 Promise 一律挂 `.catch` 吞掉，探针
  * 不制造 unhandled rejection。调用必须以 `target` 为 receiver —— 私有方法全靠
  * `this.*` 拿内部状态，脱离 receiver 调用会把好实现误判成 TypeError。
  *
@@ -235,7 +231,7 @@ export function callableWithSentinel(target: Target, name: string, ...args: unkn
   }
 }
 
-/** Official prototypes this plugin's adapters mirror, when importable. */
+/** 官方原型：本插件的适配器照着它写，能 import 到才给。 */
 export function referencePrototypes(): {
   workspace?: Record<string, unknown>
   cache?: Record<string, unknown>
@@ -277,7 +273,7 @@ export function referencePrototypes(): {
  * `node_modules` 里就没有 —— `safeResolve`/`classPrototypeOf` 一律取不到。运行时探测不看
  * 插件侧（它看的是 ctx 上的活服务），所以只有 doctor 这种"没有活宿主"的静态视图会被误导：
  * 它从插件锚点解析，解析不到就把一条**运行时确实存在**的能力记成 `missing`
- * （2026-10-17 `connection.admit` 就这么误报过：`dsh-client-connection` 不在插件依赖图里，
+ * （`connection.admit` 就这么误报过：`dsh-client-connection` 不在插件依赖图里，
  * 而它承载的 `admit()` 在 0.2.1 的 Web 组合里一定有）。
  *
  * 判据必须是宿主侧：逐个宿主安装锚点试着解析（纯 `require.resolve`，不 import），只要有
@@ -290,7 +286,7 @@ export function resolvableFromHost(specifier: string): boolean {
       createRequire(anchor).resolve(specifier)
       return true
     } catch {
-      /* try the next anchor */
+      /* 换下一个锚点再试 */
     }
   }
   return false
@@ -311,6 +307,7 @@ function hostResolveAnchors(): string[] {
 // `hostRootCandidates()` 的注入点：由 probe.ts 在模块加载时填进来。不反向 import 是为了
 // 不成环（probe.ts → host-probe.ts → probe.ts），而"宿主在哪"的口径仍然只有一份。
 let hostRootCandidatesFn: () => string[] = () => []
+/** 注入「宿主根候选」的实现。放在这里是为了让 host-probe 不反向依赖 host-roots（避免循环引用）。 */
 export function provideHostRootCandidates(fn: () => string[]): void {
   hostRootCandidatesFn = fn
 }
