@@ -56,7 +56,7 @@ import { rootByKey } from '../lib/skills/skill-roots.js'
 import { managerStatePath } from '../lib/skills/skill-roots.js'
 import { readManagerState } from '../lib/skills/manager-state.js'
 import { isValidSegment } from '../lib/paths.js'
-import { PROMPT_CONTENT_MAX_BYTES, applyFlag, clampPromptBaseline, enterSceneInScope, exitSceneInScope, hasPromptOverride, isEmptyScope, isKeepableScope, mcpToolServerSegments, normalizeScopeMode, normalizeScopeOverrides, normalizeSessionScope, overrideCountOf, promptBaselineOf, promptOverrideOf, pruneScope, scopeForLayerSeed, sessionToolTableHidden } from '../lib/scope/scope-overrides.js'
+import { PROMPT_CONTENT_MAX_BYTES, applyFlag, clampPromptBaseline, enterSceneInScope, exitSceneInScope, hasPromptOverride, isEmptyScope, isKeepableScope, mcpToolServerSegments, normalizeScopeMode, normalizeScopeOverrides, normalizeSessionScope, overrideCountOf, promptBaselineOf, promptOverrideOf, pruneScope, scopeForLayerSeed, sessionScenePinOf, sessionToolTableHidden } from '../lib/scope/scope-overrides.js'
 import { WORKSPACE_SCOPE_KEY_MAX, WORKSPACE_SCOPE_PREFIX, isWorkspaceScopeKey, scopeKeyLabel, scopeKeyOfRow, workspaceCwdOfScopeKey, workspaceScopeKeyOf } from '../lib/scope/workspace-key.js'
 import { chooseUserPromptLayer, promptBaselineDiffers } from '../lib/memories/prompt-layer.js'
 import { suppressedKindsForSession } from '../lib/context-inject.js'
@@ -4434,6 +4434,32 @@ test('模式切换播种：prune 保留工作区键，克隆到另一层时剥�
   assert.deepEqual(plain(scopeForLayerSeed({ locked: true, skills: { a: true } })), { skills: { a: true } })
   assert.equal(scopeForLayerSeed({ locked: true }), undefined, '只有锁 = 没有可播种的内容')
   assert.equal(scopeForLayerSeed(undefined), undefined)
+})
+
+test('模式切换播种：detached 不跟着搬，否则新层一出生就钉住"没有场景"', () => {
+  const plain = (v) => JSON.parse(JSON.stringify(v))
+  // 源层"退出过场景"且基线里当时没有场景：直接搬 detached 会让新层 = 钉住没有场景，
+  // 场景段当场停止注入（用户报的「场景勾着却没注入」）。剥掉后应回到"跟随全局"。
+  const fromNoScene = scopeForLayerSeed({
+    detached: true,
+    baseline: { scene: null, flags: { skills: { a: true, b: false } } },
+    prompt: { baseline: 'x' },
+  })
+  assert.equal(fromNoScene.detached, undefined, 'detached 不搬')
+  assert.equal(sessionScenePinOf(fromNoScene), undefined, '新层跟随全局，而不是钉住"没有场景"')
+  // 基线里显式写的开关要物化进覆盖，否则剥掉 detached 就等于把用户看到的生效值丢了。
+  assert.deepEqual(plain(fromNoScene.skills), { a: true, b: false })
+  assert.deepEqual(plain(fromNoScene.prompt), { baseline: 'x' }, '提示词快照照旧留着')
+  // 基线里是**真实场景名**时，显式钉住它（用户看到的还是这个场景）。
+  const fromScene = scopeForLayerSeed({ detached: true, baseline: { scene: 'web', flags: {} } })
+  assert.equal(sessionScenePinOf(fromScene), 'web')
+  // 源层自己的显式覆盖压在基线之上。
+  const overridden = scopeForLayerSeed({
+    detached: true,
+    baseline: { scene: null, flags: { skills: { a: false } } },
+    skills: { a: true },
+  })
+  assert.deepEqual(plain(overridden.skills), { a: true })
 })
 
 // ── frontmatter 标量编码与行级保留（0.21.2 P2-5）────────────────────────

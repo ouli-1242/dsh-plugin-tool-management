@@ -433,14 +433,46 @@ export function overrideCountOf(scope: SessionScope | undefined): number {
 /**
  * 把一条记录**播种**到另一层（会话 ↔ 工作区）时的形状。
  *
- * 只去掉 `locked`：锁是"保护这一层不被改"的元数据，跟着复制会把整个工作区 / 一批会话
- * 突然锁死，不是用户这次切换的意图。其余字段（含基线、提示词冻结快照、工具表）照抄 ——
- * 少了基线，退出场景 / 工具表回落会踩空。
+ * 去掉两样：
+ *   - `locked`：锁是"保护这一层不被改"的元数据，跟着复制会把整个工作区 / 一批会话
+ *     突然锁死，不是用户这次切换的意图。
+ *   - `detached`：它说的是"**这一层**退出过场景模式、下层从全局换成它自己的基线"，
+ *     是这一层的历史，不是一份能复制给另一层的设置（详见下面那段）。
+ *
+ * 其余字段（含基线、提示词冻结快照、工具表）照抄 —— 少了基线，退出场景 / 工具表回落会踩空。
  */
 export function scopeForLayerSeed(scope: SessionScope | undefined): SessionScope | undefined {
   if (scope === undefined) return undefined
   const out: SessionScope = { ...scope }
   delete out.locked
+  /**
+   * `detached` 不搬（2026-10-22 实测，用户报「场景勾着但没注入」）。
+   *
+   * 搬到刚建出来的层上后果是**无声**的：`sessionScenePinOf` 见到 `detached` 就回
+   * `baseline.scene ?? null`；基线里当时没有场景 ⇒ 新层一出生就"钉住没有场景"，
+   * 场景段当场停止注入。而界面上显示的还是全局那个场景的勾选 —— 用户看到的就是
+   * 「场景勾着，上下文里却没有场景」，且切换场景之后才恢复。
+   *
+   * 剥掉 `detached` 后下层变回全局。为了不丢用户原本看到的生效值，把基线里**显式**的
+   * 那些物化进覆盖（源层写过的照样压在上面）。基线本身留着：工具表名单与提示词快照
+   * 仍按它取（见 `sessionToolTableHidden`）。
+   *
+   * 基线里的场景只在它是**真实场景名**时才显式钉住 —— `null` 是"当时就没有场景"，
+   * 那种情况下跟随全局才是原意，不能再钉成"没有场景"。
+   */
+  if (out.detached === true) {
+    const base = out.baseline
+    delete out.detached
+    if (base !== undefined) {
+      for (const domain of SCOPE_FLAG_DOMAINS) {
+        const fromBase = base.flags?.[domain]
+        if (fromBase === undefined) continue
+        out[domain] = { ...fromBase, ...(out[domain] ?? {}) }
+      }
+      const baseScene = base.scene
+      if (typeof baseScene === 'string' && baseScene !== '') out.scene = baseScene
+    }
+  }
   return isKeepableScope(out) ? out : undefined
 }
 
