@@ -15,7 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   DEFAULT_INJECT_SETTINGS,
   DOMAIN_TOOL_PREFIX,
@@ -26,6 +26,7 @@ import {
   isSubagentSession,
   renderDomainText,
   selectInjections,
+  shouldAnnounceCleared,
   subagentDepthOf,
 } from '../lib/context-inject.js'
 import { newestDomainTexts, PLUGIN_KINDS } from '../lib/context-inject-surface.js'
@@ -54,6 +55,15 @@ import { rootByKey } from '../lib/skills/skill-roots.js'
 import { managerStatePath } from '../lib/skills/skill-roots.js'
 import { readManagerState } from '../lib/skills/manager-state.js'
 import { isValidSegment } from '../lib/paths.js'
+import { PROMPT_CONTENT_MAX_BYTES, applyFlag, clampPromptBaseline, enterSceneInScope, exitSceneInScope, hasPromptOverride, isEmptyScope, isKeepableScope, mcpToolServerSegments, normalizeScopeMode, normalizeScopeOverrides, normalizeSessionScope, overrideCountOf, promptBaselineOf, promptOverrideOf, pruneScope, scopeForLayerSeed, sessionToolTableHidden } from '../lib/scope/scope-overrides.js'
+import { WORKSPACE_SCOPE_KEY_MAX, WORKSPACE_SCOPE_PREFIX, isWorkspaceScopeKey, scopeKeyLabel, scopeKeyOfRow, workspaceCwdOfScopeKey, workspaceScopeKeyOf } from '../lib/scope/workspace-key.js'
+import { chooseUserPromptLayer, promptBaselineDiffers } from '../lib/memories/prompt-layer.js'
+import { suppressedKindsForSession } from '../lib/context-inject.js'
+import { normalizeScopeIntent, INTENT_DOMAINS, claimsResource, planReconcile, resolveResource, scanSessionClaims } from '../lib/scope/intent.js'
+import { pruneSessionScopes } from '../lib/scope/store.js'
+import { createSkillCatalog, renderSkillCatalog, renderSkillCatalogDelta, skillCatalogNeedsTakeover } from '../lib/skills/catalog.js'
+import { createMcpStateCatalog } from '../lib/mcp/state-section.js'
+import { discoverProjectInstructions, findInstructionProjectRoot, renderProjectInstructions } from '../lib/prompts/project-instructions.js'
 import { OP_REGISTRY, contradictoryEntries, frozenOps, isReadCall, writeWhenUnwritten } from '../lib/op-registry.js'
 import { SessionStore } from '@deepseek-ai/dsh-session'
 import { buildSessionOps } from '../lib/ops/sessions.js'
@@ -287,6 +297,18 @@ test('MCP 段只列此刻真有工具的 server：缓存不得冒充现状，掉
   const ok = renderMcpStateSection([{ serverName: 'ok', disabled: false, liveToolCount: 5, liveEnabledToolCount: 3, knownToolCount: 5 }])
   assert.ok(ok.includes('- **ok**'), '真可用的要列出来')
   assert.ok(!ok.includes('未连上'), '真可用的不得标成不可用')
+
+  // 会话逐工具关停（0.21.2 复核）：本会话把唯一可用的工具关掉 → 与"工具全停"同一档
+  // （模型一条也调不到）；本会话显式开的工具要能越过全局停用表把可用数补回来。
+  const sessTools = {
+    serverName: 'sess', disabled: false, liveToolCount: 2, liveEnabledToolCount: 1,
+    liveTools: ['a', 'b'], liveEnabledTools: ['a'], knownToolCount: 2,
+  }
+  const sessOff = renderMcpStateSection([sessTools], {}, true, [], { on: [], off: ['sess/a'] })
+  assert.ok(sessOff.includes('no tools enabled here'), '本会话把可用工具全关掉 → 标成工具全停')
+  const sessOn = renderMcpStateSection([sessTools], {}, true, [], { on: ['sess/b'], off: ['sess/a'] })
+  assert.ok(sessOn.includes('- **sess**'), '本会话显式开着的工具要被算进可用数')
+  assert.ok(!sessOn.includes('no tools enabled here'), '还有一条能调 → 不得标成工具全停')
 })
 
 test('parseModeState 透传全部快照恢复名单（哪张被剥掉，退出模式就有一类状态永远不复原）', () => {
@@ -1201,6 +1223,637 @@ test('档案切片写：只声明写的字段才动，场景档案按增量落�
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
+
+// ── 会话作用域：记忆段按会话分桶（0.21.2）────────────────────────────────────
+//
+// 这一条钉的是**串内容**：两份不同的会话覆盖必须算出两段不同的正文，且两份缓存
+// 各自命中各自的结果。破了它的症状是「A 的场景记忆出现在 B 的上下文里」——
+// 不报错、只在两个会话交替使用时出现，是整个会话作用域里最难查的一类。
+
+// ── 会话作用域：技能目录与项目根（0.21.2）────────────────────────────────────
+//
+// 两条不变量：① 会话覆盖关掉的技能不进目录（同一个 agent 与不传覆盖必须给出两份不同的
+// 目录）；② 项目技能根的 cwd 取**本会话**那一个，不是所有活动会话的并集 —— 后者会让
+// A 对话看到 B 项目的技能。
+
+// ── 项目指令链（0.21.2）────────────────────────────────────────────────────
+//
+// 这一族钉的是**与官方同构**：候选名、项目根判据、祖先链顺序、同目录去重、段前缀。
+// 破了任一条的症状是"项目 AGENTS.md 读不到 / 读重了 / 顺序反了"——都不报错，
+// 只是模型拿到一份错的规则。
+//
+// 行为表（0.21.2，见 prompts/project-instructions.ts 文件头）：
+//   未钉住 + 官方在  → 官方送（本插件不发）
+//   未钉住 + 官方不在 → 本插件送项目链 + 用户级
+//   钉住 + 预设非空   → 本插件送项目链 + 场景预设（用户级槽位被替换）
+//   钉住 + 预设为空   → 项目链 + 用户级（退化，不丢东西）
+//
+// 这条测试钉的是**前两条能分开**：官方在时注入侧跳过提示词域，官方不在时才发。
+// 破了它的症状是"同一份 AGENTS.md 在上下文里出现两遍"或"一遍都没有"。
+test('提示词投递：官方载体在时让位，不在时兜底；钉住场景时强制让位', () => {
+  const domains = [{ key: 'prompt', name: 'x', label: '提示词', form: 'instructions', text: () => 'PLUGIN-PROMPT' }]
+  const settings = { underSuppressingPresets: true, domains: { scene: true, memory: true, mcp: true, skills: true, subagents: true, prompt: true } }
+
+  // 官方在 → 本插件不发（否则同一份正文进两遍）。
+  const withCarrier = selectInjections(domains, settings, { suppressing: false, carriesAgentsMd: true, carriesSkillCatalog: false })
+  assert.equal(withCarrier.length, 0, '官方载体在时不重复发')
+
+  // 官方不在（极简）→ 本插件兜底发。
+  const withoutCarrier = selectInjections(domains, settings, { suppressing: false, carriesAgentsMd: false, carriesSkillCatalog: false })
+  assert.equal(withoutCarrier.length, 1, '官方不在时兜底发')
+  assert.equal(withoutCarrier[0].text, 'PLUGIN-PROMPT')
+
+  // 域被关掉 → 不发。
+  const off = { ...settings, domains: { ...settings.domains, prompt: false } }
+  assert.equal(selectInjections(domains, off, { suppressing: false, carriesAgentsMd: false, carriesSkillCatalog: false }).length, 0, '域关掉时不发')
+
+  // 压制型预设 + 没开「仍然注入」→ 一个都不发（跟随预设）。
+  assert.equal(selectInjections(domains, { ...settings, underSuppressingPresets: false }, { suppressing: true, carriesAgentsMd: false, carriesSkillCatalog: false }).length, 0, '压制型预设下跟随')
+})
+test('项目指令链：候选名 / 祖先链顺序 / 同目录去重 / 段前缀与官方同构', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-proj-instr-'))
+  try {
+    const root = join(home, 'repo')
+    const sub = join(root, 'pkg')
+    mkdirSync(sub, { recursive: true })
+    mkdirSync(join(root, '.git'))
+    // 根级 AGENTS.md + CLAUDE.md（主候选两份都要收）
+    writeFileSync(join(root, 'AGENTS.md'), 'ROOT-AGENTS')
+    writeFileSync(join(root, 'CLAUDE.md'), 'ROOT-CLAUDE')
+    // 子目录的本地覆盖层
+    writeFileSync(join(sub, 'AGENTS.local.md'), 'SUB-LOCAL')
+
+    const files = discoverProjectInstructions(sub)
+    const displays = files.map((f) => f.displayPath)
+    // 顺序：宽 → 窄；每级主候选在前、本地覆盖层在后。
+    assert.deepEqual(displays, ['AGENTS.md', 'CLAUDE.md', join('pkg', 'AGENTS.local.md')],
+      '祖先链由宽到窄，主候选在前、本地覆盖层在后')
+
+    // 段前缀与官方 sectionText 逐字同形。
+    const rendered = renderProjectInstructions(files)
+    assert.ok(rendered.text.startsWith('Instructions from: AGENTS.md\n\nROOT-AGENTS'), '段前缀与官方同形')
+    assert.ok(rendered.text.includes('Instructions from: ' + join('pkg', 'AGENTS.local.md') + '\n\nSUB-LOCAL'), '窄的那一级也在')
+    assert.equal(rendered.omitted.length, 0, '预算够时不丢任何一份')
+
+    // 同目录去重：同一个目录里两份内容相同（trim 后）只留第一份（官方按**目录**去重，
+    // 不是全局去重 —— 同一份内容出现在两个目录时两份都要留，它们说的是不同层级的规则）。
+    const sameDir = join(home, 'same')
+    mkdirSync(sameDir, { recursive: true })
+    writeFileSync(join(sameDir, 'AGENTS.md'), 'DUP')
+    writeFileSync(join(sameDir, 'CLAUDE.md'), '  DUP  ')
+    const deduped = discoverProjectInstructions(sameDir).map((f) => f.displayPath)
+    assert.deepEqual(deduped, ['AGENTS.md'], '同目录同内容只留第一份')
+
+    // 反过来：同内容跨目录必须**都留**（不同层级的规则）。
+    writeFileSync(join(sub, 'AGENTS.md'), 'ROOT-AGENTS')
+    const cross = discoverProjectInstructions(sub).map((f) => f.displayPath)
+    assert.ok(cross.includes('AGENTS.md'), '根级那份保留')
+    assert.ok(cross.includes(join('pkg', 'AGENTS.md')), '跨目录同内容也保留（去重只在目录内）')
+
+    // 项目根判据：没有 .git 时 cwd 自己就是根（与官方 findProjectRoot 一致）。
+    const plain = join(home, 'plain')
+    mkdirSync(plain, { recursive: true })
+    writeFileSync(join(plain, 'AGENTS.md'), 'PLAIN')
+    assert.equal(findInstructionProjectRoot(plain), resolve(plain), '没有 .git 时根就是 cwd')
+    assert.deepEqual(discoverProjectInstructions(plain).map((f) => f.displayPath), ['AGENTS.md'], '非 git 目录也读得到')
+
+    // 预算超了从**最宽**那一头丢：更具体的优先保留。
+    const tight = renderProjectInstructions(files, 40)
+    assert.ok(tight.omitted.length > 0, '预算不足时确有丢弃')
+    assert.equal(tight.omitted[0], 'AGENTS.md', '从最宽的那一份开始丢')
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+// ── 会话作用域：MCP 状态段（0.21.2）──────────────────────────────────────────
+//
+// 本会话停用的服务器**整条不进段**（与全局停用同形）：列出来只会让模型去试一条它调不到的路。
+// 缓存同样必须按会话分桶，否则 A 的段会出现在 B 的上下文里。
+test('MCP 状态段按会话过滤：本会话停用的服务器不进段，且缓存不得跨会话顶替', () => {
+  const rows = [
+    { id: 'mcp-a', serverName: 'alpha', liveToolCount: 3, liveEnabledToolCount: 3, notes: 'use when x fails' },
+    { id: 'mcp-b', serverName: 'beta', liveToolCount: 2, liveEnabledToolCount: 2 },
+  ]
+  const global = renderMcpStateSection(rows)
+  assert.ok(global.includes('alpha') && global.includes('beta'), '全局口径两台都在')
+
+  const scoped = renderMcpStateSection(rows, {}, true, ['beta'])
+  assert.ok(scoped.includes('alpha'), '没被停用的那台仍在')
+  assert.equal(scoped.includes('beta'), false, '本会话停用的服务器不进段')
+
+  // 缓存分桶：两个 agent 的两份隐藏名单必须各自命中各自的渲染结果。
+  const scope = { a: ['beta'], b: [] }
+  const cat = createMcpStateCatalog({
+    rows: async () => ({ ok: true, rows }),
+    sessionServerHidden: (agent, serverName) => (scope[(agent && agent.id) || 'b'] || []).indexOf(String(serverName)) >= 0,
+  }, { ttlMs: 60000 })
+  return cat.warm().then(() => {
+    const a = cat.text({ id: 'a' })
+    const b = cat.text({ id: 'b' })
+    assert.equal(a.includes('beta'), false, 'agent a 看不到 beta')
+    assert.ok(b.includes('beta'), 'agent b 仍看得到 beta')
+    assert.equal(cat.text({ id: 'a' }), a, 'a 的结果不得被 b 顶掉')
+  })
+})
+
+test('技能目录按会话过滤：本会话关掉的不进目录，且缓存不得跨会话顶替', () => {
+  const data = {
+    roots: [
+      { key: 'dsh', skills: [
+        { declaredName: 'alpha', description: 'A', enabled: true, modelInvocable: true },
+        { declaredName: 'beta', description: 'B', enabled: true, modelInvocable: true },
+      ] },
+    ],
+  }
+  const global = renderSkillCatalog(data)
+  assert.ok(global.includes('alpha') && global.includes('beta'), '全局口径两条都在')
+
+  const scoped = renderSkillCatalog(data, undefined, undefined, true, { skill: (key) => (key === 'dsh/beta' ? false : undefined) })
+  assert.ok(scoped.includes('alpha'), '会话覆盖没关的那条仍在')
+  assert.equal(scoped.includes('beta'), false, '会话覆盖关掉的那条不进目录')
+
+  // 反向：全局关着、本会话显式开着 → 必须进目录（覆盖是双向的）
+  const offGlobal = { roots: [{ key: 'dsh', skills: [{ declaredName: 'gamma', description: 'G', enabled: false, modelInvocable: true }] }] }
+  assert.equal(renderSkillCatalog(offGlobal).includes('gamma'), false, '全局关着不进目录')
+  assert.ok(renderSkillCatalog(offGlobal, undefined, undefined, true, { skill: (key) => (key === 'dsh/gamma' ? true : undefined) }).includes('gamma'), '本会话显式开启要进目录')
+
+  // 来源一格（skillSources，0.21.2）：来源关着时**一条都不进** —— 界面把整组按关显示、
+  // 执行守卫也 deny，目录如果还列着里面某条技能，就是显示与上下文各说各话。要开这条技能
+  // 得先开它的来源（写侧拨开子项时会一并认领上层，不会留下"来源关、子项开"的状态）。
+  const sourceOff = { source: (rootKey) => (rootKey === 'dsh' ? false : undefined) }
+  assert.equal(
+    renderSkillCatalog(data, undefined, undefined, true, sourceOff).includes('beta'),
+    false,
+    '来源关着时没点过的技能不进目录',
+  )
+  assert.equal(
+    renderSkillCatalog(data, undefined, undefined, true, {
+      ...sourceOff,
+      skill: (key) => (key === 'dsh/beta' ? true : undefined),
+    }).includes('beta'),
+    false,
+    '来源关着时技能级为开也不进目录（来源闸始终生效）',
+  )
+
+  // 缓存分桶：`layerFor` 按 agent 取层、`layerKeyFor` 给层指纹，两个 agent 必须各自命中
+  // 各自的渲染结果。破了它 = A 的目录出现在 B 的上下文里（与记忆段那条同一类故障）。
+  const scope = { a: { 'dsh/beta': false }, b: undefined }
+  const layerFor = (agent) => {
+    const map = scope[(agent && agent.id) || 'b']
+    if (!map) return undefined
+    return { skill: (key) => (key in map ? map[key] : undefined) }
+  }
+  const cat = createSkillCatalog({
+    state: async () => ({ ok: true, data }),
+    layerFor: (agent) => layerFor(agent),
+    layerKeyFor: (agent) => JSON.stringify(scope[(agent && agent.id) || 'b'] ?? null),
+  }, { ttlMs: 60000 })
+  return cat.warm().then(() => {
+    const a = cat.text({ id: 'a' })
+    const b = cat.text({ id: 'b' })
+    assert.equal(a.includes('beta'), false, 'agent a 看不到 beta')
+    assert.ok(b.includes('beta'), 'agent b 仍看得到 beta')
+    // 再问一次 a：缓存被 b 顶掉就会在这一步露出来
+    assert.equal(cat.text({ id: 'a' }), a, 'a 的结果不得被 b 顶掉')
+    assert.ok(cat.text({ id: 'a' }).includes('alpha'), 'a 的另一条照常')
+  })
+})
+
+// ── 写操作之后的那一拍不能变成「目录没了」（2026-10-22 用户实测）──────────────
+//
+// 症状：对话中途拨开一条技能，模型先收到一条「Cleared — 不再有效」，下一轮才看到真正
+// 的清单。来路是 `refresh()` 先把缓存清空、再异步重算，而注入通道的 `text()` / `delta()`
+// 是**同步**的 —— 那一拍读到空串，下游按"这一域没内容"发了一条假的「已清空」。
+// 这两条钉住：刷新窗口里同步读不塌，等刷新落地后读到的是新值。
+test('技能目录：refresh 之后同步读仍是上一份，等它落地才换成新值', () => {
+  const first = { roots: [{ key: 'dsh', skills: [{ declaredName: 'alpha', description: 'A', enabled: true, modelInvocable: true }] }] }
+  const second = { roots: [{ key: 'dsh', skills: [{ declaredName: 'alpha', description: 'A', enabled: true, modelInvocable: true }, { declaredName: 'gamma', description: 'G', enabled: true, modelInvocable: true }] }] }
+  let current = first
+  const cat = createSkillCatalog({ state: async () => ({ ok: true, data: current }) }, { ttlMs: 60000 })
+  return cat.warm().then(() => {
+    assert.ok(cat.ready({ id: 'a' }) === true, '预热过就算在手里')
+    assert.equal(cat.text({ id: 'a' }).includes('gamma'), false, '初始清单没有 gamma')
+    current = second
+    const pending = cat.refresh()
+    // 刷新进行中：同步读**不得塌成空串**（旧实现在这里返回 ''，注入侧据此发「已清空」）
+    assert.ok(cat.ready({ id: 'a' }) === true, '重算期间仍算"数据在手"')
+    assert.ok(cat.text({ id: 'a' }).includes('alpha'), '重算期间至少还是上一份')
+    return pending.then(() => {
+      assert.ok(cat.text({ id: 'a' }).includes('gamma'), '重算落地后读到新值')
+      assert.equal(cat.delta({ id: 'a' }), '', '没有会话层时没有差异行')
+    })
+  })
+})
+
+// 冷缓存（首轮 / 被顶掉 / 还没预热）：`ready()` 必须报 false，好让注入侧这一轮沉默 ——
+// "还没读到"与"真的空了"是两回事，后者会收到一条假的「已清空」。
+test('技能目录：没预热过的会话 ready 为假、文本为空', () => {
+  const cat = createSkillCatalog({ state: async () => ({ ok: true, data: { roots: [] } }) }, { ttlMs: 60000 })
+  assert.equal(cat.ready({ id: 'never' }), false, '没取过数就不算在手里')
+  assert.equal(cat.text({ id: 'never' }), '', '冷缓存返回空串（调用方据此判定"这一轮不发"）')
+  assert.equal(cat.delta({ id: 'never' }), '', '冷缓存的差异行同样为空')
+})
+
+// 重算进行中又来了一个写操作：`refresh()` 不许并到在飞的那一次上 —— 并过去的话拿回的是
+// 刷新前的旧任务（旧 generation，结果会被作废），缓存停在旧数据，而调用方以为算完了。
+test('技能目录：重算进行中再 refresh 会另起一次，不会并到旧任务上', () => {
+  let calls = 0
+  let release = null
+  const cat = createSkillCatalog({
+    state: () => { calls += 1; return calls === 1 ? Promise.resolve({ ok: true, data: { roots: [] } }) : new Promise((r) => { release = r }) },
+  }, { ttlMs: 60000 })
+  return cat.warm().then(() => {
+    assert.equal(calls, 1, '预热只算一次')
+    // 在飞的那一次（第二次）挂住不放
+    void cat.refresh()
+    assert.equal(calls, 2, '第一次 refresh 起了一次重算')
+    // 第二次 refresh：必须再起一次，不能并到挂着的那次上
+    let done = false
+    const second = cat.refresh().then(() => { done = true })
+    assert.equal(calls, 3, '重算进行中也要另起一次')
+    release({ ok: true, data: { roots: [] } })
+    return second.then(() => { assert.equal(done, true, '第二次 refresh 等的是自己那次') })
+  })
+})
+
+// ── 官方载体在送时的"差异行"通道（0.21.2）───────────────────────────────────
+//
+// 破了它的症状就是用户 2026-10-20 实测的那两幕：对话中途进场景，全局提示词与技能目录
+// 各再进一遍 —— 接管整份会拦下官方，但只拦得住之后的步骤，官方第 1 轮那条已经在历史里
+// 收不回，于是模型手里两份。这两条钉住：同文/无差异时**一条都不发**，有差异时只发差异。
+test('差异行通道：官方在送整份时只补本会话差异，无差异时不发', () => {
+  const settings = { underSuppressingPresets: true, domains: { scene: true, memory: true, mcp: true, skills: true, subagents: true, prompt: true } }
+  const officialOn = { suppressing: false, carriesAgentsMd: true, carriesSkillCatalog: true }
+  const officialOff = { suppressing: false, carriesAgentsMd: false, carriesSkillCatalog: false }
+  const domains = [{
+    key: 'skills', name: 'x', label: '技能目录', form: 'catalog',
+    text: () => 'FULL-CATALOG', delta: () => 'DELTA-LINE',
+  }]
+
+  const sent = selectInjections(domains, settings, officialOn)
+  assert.equal(sent.length, 1, '有差异时官方那份照发，本插件补一行')
+  assert.equal(sent[0].text, 'DELTA-LINE')
+  assert.equal(sent[0].delta, true, '差异行要带标记（框架据此不套整份目录的说明句）')
+
+  assert.equal(selectInjections([{ ...domains[0], delta: () => '   ' }], settings, officialOn).length, 0, '没有差异 = 一条都不发')
+
+  const minimal = selectInjections(domains, settings, officialOff)
+  assert.equal(minimal.length, 1)
+  assert.equal(minimal[0].text, 'FULL-CATALOG', '官方不在（极简）时照旧发整份')
+  assert.equal(minimal[0].delta, undefined, '整份不是差异行')
+
+  // 没有 delta 出口的域（提示词）行为一字不变：官方在就不发。
+  const promptOnly = [{ key: 'prompt', name: 'p', label: '提示词', form: 'instructions', text: () => 'P' }]
+  assert.equal(selectInjections(promptOnly, settings, officialOn).length, 0, '提示词域没给 delta 就照旧让位')
+
+  // 「注入实况」的口径必须与发送一致，否则界面说"官方在送"而模型其实收到了我们一行。
+  assert.equal(explainInjections(domains, settings, officialOn).skills, 'sent', '有差异行时报 sent')
+  assert.equal(explainInjections([{ ...domains[0], delta: () => '' }], settings, officialOn).skills, 'official', '无差异时报 official')
+
+  // 差异行的框架：只有标题 + 正文，不套 `how` / 边界句（那两句说的是整份目录）。
+  const rendered = renderDomainText({ key: 'skills', name: 'x', label: '技能目录', form: 'catalog', text: 'DELTA-LINE', delta: true }, () => false, false)
+  assert.ok(rendered.text.includes('# Current skills'), '板块标题仍在')
+  assert.ok(rendered.text.includes('DELTA-LINE'))
+  assert.equal(rendered.text.includes('A skill is a reusable set'), false, '差异行不套整份目录的说明句')
+  assert.equal(rendered.text.includes('Only enabled skills are listed'), false, '差异行不套边界句')
+})
+
+// ── 技能目录整份接管（0.21.2 第二轮）─────────────────────────────────────────
+//
+// 用户 2026-10-21 真机发现：A 会话启动技能（租约运行中）时，B 会话的官方 available_skills
+// 仍列出它（官方按机器启停列，不知道租约 / 会话层），插件随后再补一行 "not available here"
+// —— 模型先看到技能、再被告知不可用。新口径与提示词域同一哲学：有差异时拦下官方那份，
+// 由插件送会话版整份；没有差异时一条都不动（官方照送、插件不出声）。
+test('技能目录接管判据：delta 非空才拦官方，空 / 纯空白都不拦', () => {
+  const settings = { underSuppressingPresets: true, domains: { scene: true, memory: true, mcp: true, skills: true, subagents: true, prompt: true } }
+  const data = { roots: [{ key: 'dsh', enabled: true, skills: [{ declaredName: 'alpha', description: 'A', enabled: true, modelInvocable: true }] }] }
+  const diff = renderSkillCatalogDelta(data, { skill: () => false })
+  assert.ok(diff.trim() !== '', '夹具必须真的有差异')
+
+  assert.equal(skillCatalogNeedsTakeover(''), false, '没有差异行 → 不接管')
+  assert.equal(skillCatalogNeedsTakeover(' \n\t '), false, '纯空白不算差异')
+  assert.equal(skillCatalogNeedsTakeover(diff), true, '有差异行 → 接管')
+
+  assert.equal(suppressedKindsForSession(settings, false, false).has('skill-catalog'), false, '无差异不拦官方')
+  assert.equal(suppressedKindsForSession(settings, false, true).has('skill-catalog'), true, '有差异拦官方')
+  // 域被用户关掉时照旧拦（既有口径：官方被拦 + 插件不发）。
+  const off = { ...settings, domains: { ...settings.domains, skills: false } }
+  assert.equal(suppressedKindsForSession(off, false, false).has('skill-catalog'), true, '域关掉时拦')
+  // 提示词接管的既有行为不受影响。
+  assert.equal(suppressedKindsForSession(settings, true, false).has('agent-instructions'), true, '提示词接管照旧拦 AGENTS.md')
+})
+
+// 「已清空」的四种**不发**情形（纯函数，直接钉）：这条通知的字面意思是"这份内容已失效，
+// 别再用"，所以只有"上一轮确有一条、这一轮确实一条都没有"时才发。漏掉任何一条，
+// 模型收到的都是谎报 —— 2026-10-22 用户实测的那条假「Cleared」正是漏了 pending 这一格。
+test('「已清空」判定：取数失败 / 数据未到手 / 已经通知过 / 从没注入过，都不发', () => {
+  const had = { body: 'OLD' }
+  assert.equal(shouldAnnounceCleared({ published: false, failed: false, pending: false, previous: had }), true, '曾经有、现在没有 → 发')
+  assert.equal(shouldAnnounceCleared({ published: true, failed: false, pending: false, previous: had }), false, '这一轮发了内容就无所谓通知')
+  assert.equal(shouldAnnounceCleared({ published: false, failed: true, pending: false, previous: had }), false, '取数失败 ≠ 没有内容（审查 P1-8）')
+  assert.equal(shouldAnnounceCleared({ published: false, failed: false, pending: true, previous: had }), false, '数据还没到手 ≠ 没有内容（2026-10-22 实测）')
+  assert.equal(shouldAnnounceCleared({ published: false, failed: false, pending: false, previous: { cleared: true, body: 'OLD' } }), false, '已经通知过就不叠发（2026-10-19 实测）')
+  assert.equal(shouldAnnounceCleared({ published: false, failed: false, pending: false, previous: undefined }), false, '从没注入过的域没有旧内容要作废')
+  // 唯一的放宽：接管时官方那份已被拦下、会话版又为空 → 必须补一条。
+  assert.equal(shouldAnnounceCleared({ published: false, failed: false, pending: false, previous: undefined, takeoverEmpty: true }), true, '接管 + 会话版为空要补通知')
+  assert.equal(shouldAnnounceCleared({ published: false, failed: false, pending: true, previous: undefined, takeoverEmpty: true }), false, '同样受 pending 约束')
+})
+
+test('技能目录接管：官方被摘掉后送会话版整份，差异行只作兜底', () => {
+  const settings = { underSuppressingPresets: true, domains: { scene: true, memory: true, mcp: true, skills: true, subagents: true, prompt: true } }
+  const domains = [{ key: 'skills', name: 'x', label: '技能目录', form: 'catalog', text: () => 'SESSION-CATALOG', delta: () => 'DELTA-LINE' }]
+  const carrier = { suppressing: false, carriesAgentsMd: true, carriesSkillCatalog: true }
+  // 正常装配：有差异时注入器把 carriesSkillCatalog 改成 false（见 context-inject.ts）。
+  const takeoverFacts = { ...carrier, carriesSkillCatalog: false }
+  const full = selectInjections(domains, settings, takeoverFacts)
+  assert.equal(full.length, 1)
+  assert.equal(full[0].text, 'SESSION-CATALOG', '接管后送整份')
+  assert.equal(full[0].delta, undefined, '整份不是差异行')
+  assert.equal(explainInjections(domains, settings, takeoverFacts).skills, 'sent', '实况按整份口径报 sent')
+
+  // 旧装配（没接判据）：仍走兜底差异行。
+  const fallback = selectInjections(domains, settings, carrier)
+  assert.equal(fallback[0].text, 'DELTA-LINE')
+  assert.equal(fallback[0].delta, true)
+
+  // 会话版为空：不送正文，实况报 empty（注入器据此补「已清空」）。
+  const emptyDomains = [{ ...domains[0], text: () => '' }]
+  assert.equal(selectInjections(emptyDomains, settings, takeoverFacts).length, 0)
+  assert.equal(explainInjections(emptyDomains, settings, takeoverFacts).skills, 'empty')
+})
+
+test('技能目录接管端到端：拦官方、送会话版整份；无差异时不误拦', async () => {
+  const officialEvent = {
+    type: 'user/message',
+    data: { content: [{ type: 'text', text: 'OFFICIAL-CATALOG' }], source: { kind: 'skill-catalog', form: 'catalog' } },
+  }
+  const agent = { session: { seq: 1, surface: { nodes: [0] }, eventAt: () => officialEvent } }
+  const carrier = { suppressing: false, carriesAgentsMd: true, carriesSkillCatalog: true }
+  const officialDecision = () => ({
+    kind: 'enter',
+    messages: [{ source: { kind: 'skill-catalog', form: 'catalog' }, content: [{ type: 'text', text: 'OFFICIAL-CATALOG' }] }],
+  })
+  const drive = async (domains, diverged, target = agent) => {
+    let listener = null
+    const injector = createContextInjector({
+      ctx: { on: (_name, fn) => { listener = fn; return () => {} } },
+      domains: () => domains,
+      settings: () => DEFAULT_INJECT_SETTINGS,
+      factsFor: async () => carrier,
+      skillCatalogDiverged: () => diverged,
+    })
+    try {
+      return await listener({ agent: target, step: 2 }, async () => officialDecision())
+    } finally { injector.dispose() }
+  }
+
+  const domains = [{
+    key: 'skills', name: 'x', label: '技能目录', form: 'catalog',
+    text: () => 'SESSION-CATALOG',
+    delta: () => 'DELTA-LINE',
+  }]
+  const out = await drive(domains, true)
+  assert.equal(out.messages.some((m) => (m.source || {}).kind === 'skill-catalog'), false, '有差异时官方那条必须被拦')
+  const ours = out.messages.filter((m) => (m.source || {}).kind === 'skill-manager-catalog')
+  assert.equal(ours.length, 1, '插件送会话版整份')
+  assert.ok(ours[0].content[0].text.includes('SESSION-CATALOG'))
+  assert.ok(ours[0].content[0].text.includes('Supersedes earlier injected content'), '首份会话版要带取代声明')
+
+  // 无差异：官方照常放行，插件不出声（S3）。
+  const quiet = [{ ...domains[0], delta: () => '   ' }]
+  const out2 = await drive(quiet, false)
+  assert.equal(out2.messages.some((m) => (m.source || {}).kind === 'skill-catalog'), true, '无差异时官方照送')
+  assert.equal(out2.messages.some((m) => (m.source || {}).kind === 'skill-manager-catalog'), false, '无差异时插件不出声')
+
+  // 会话版为空但官方那份在表面上：补一条「已清空」，不让错误清单继续有效。
+  const out3 = await drive([{ ...domains[0], text: () => '' }], true)
+  assert.equal(out3.messages.some((m) => (m.source || {}).kind === 'skill-catalog'), false, '官方仍被拦')
+  const notices = out3.messages.filter((m) => (m.source || {}).kind === 'skill-manager-catalog' && (m.source || {}).form === 'notice')
+  assert.equal(notices.length, 1, '会话版为空时补一条「已清空」')
+
+  // 接管开始后 delta 归空：官方不会重发同一摘要（它第 1 轮那条仍与机器一致），所以不能
+  // 立刻交还 —— 否则插件会补一条假的「官方已接管」，而模型手里最新的仍是插件那份。
+  // 继续接管 + 内容没变 = 官方被拦、插件一条都不发。
+  const pluginEvent = {
+    type: 'user/message',
+    data: {
+      content: [{ type: 'text', text: 'PLUGIN-OLD' }],
+      source: { kind: 'skill-manager-catalog', form: 'catalog', body: 'SESSION-CATALOG' },
+    },
+  }
+  const tookOverAgent = {
+    session: { seq: 2, surface: { nodes: [0, 1] }, eventAt: (seq) => (Number(seq) === 1 ? pluginEvent : officialEvent) },
+  }
+  const out4 = await drive(domains, false, tookOverAgent)
+  assert.equal(out4.messages.some((m) => (m.source || {}).kind === 'skill-catalog'), false, '接管过之后官方仍被拦')
+  assert.equal(out4.messages.some((m) => (m.source || {}).kind === 'skill-manager-catalog'), false, '内容没变就一个字都不发（不补假通知）')
+})
+
+test('技能目录端到端：数据还没到手的那一拍不许发假的「已清空」', async () => {
+  // 复现 2026-10-22 用户实测：对话中途拨开一条技能 → 对账拉起运行态 → 目录缓存被打回
+  // 重算 → 紧接着的那一拍 `text()` 读到空串 → 注入侧发一条「Cleared — 不再有效」，
+  // 下一轮才看到真正的清单。修法：域声明 `pending()`，数据不在手时这一轮沉默。
+  const officialEvent = {
+    type: 'user/message',
+    data: { content: [{ type: 'text', text: 'OFFICIAL-CATALOG' }], source: { kind: 'skill-catalog', form: 'catalog' } },
+  }
+  const carrier = { suppressing: false, carriesAgentsMd: true, carriesSkillCatalog: true }
+  const drive = async (domains, diverged) => {
+    // 表面上有一条插件自己发的旧目录（seq 1）→ "曾经有内容"
+    const pluginEvent = {
+      type: 'user/message',
+      data: {
+        content: [{ type: 'text', text: 'PLUGIN-OLD' }],
+        source: { kind: 'skill-manager-catalog', form: 'catalog', body: 'SESSION-CATALOG' },
+      },
+    }
+    const agent = { session: { seq: 2, surface: { nodes: [0, 1] }, eventAt: (seq) => (Number(seq) === 1 ? pluginEvent : officialEvent) } }
+    let listener = null
+    const injector = createContextInjector({
+      ctx: { on: (_name, fn) => { listener = fn; return () => {} } },
+      domains: () => domains,
+      settings: () => DEFAULT_INJECT_SETTINGS,
+      factsFor: async () => carrier,
+      skillCatalogDiverged: () => diverged,
+    })
+    try {
+      return await listener({ agent, step: 2 }, async () => ({ kind: 'enter', messages: [{ source: { kind: 'skill-catalog', form: 'catalog' }, content: [{ type: 'text', text: 'OFFICIAL-CATALOG' }] }] }))
+    } finally { injector.dispose() }
+  }
+  const base = { key: 'skills', name: 'x', label: '技能目录', form: 'catalog', delta: () => 'DELTA-LINE' }
+
+  // 冷缓存：一条都不该发（既不重发旧清单，也不说它失效）。
+  const cold = await drive([{ ...base, text: () => '', pending: () => true }], true)
+  assert.equal(cold.messages.some((m) => (m.source || {}).kind === 'skill-catalog'), false, '接管中官方仍被拦')
+  assert.equal(
+    cold.messages.some((m) => (m.source || {}).form === 'notice'),
+    false,
+    '数据没到手 → 不发「已清空」（上一轮那份仍然有效）',
+  )
+  assert.equal(cold.messages.some((m) => (m.source || {}).kind === 'skill-manager-catalog'), false, '没有内容可发')
+
+  // 对照组：数据在手、确实是空的 → 照旧补一条「已清空」（这条不能一起被改没了）。
+  const empty = await drive([{ ...base, text: () => '', pending: () => false }], true)
+  assert.equal(
+    empty.messages.filter((m) => (m.source || {}).form === 'notice').length,
+    1,
+    '真的空着才发通知',
+  )
+})
+
+test('提示词快照接管端到端：拦官方 AGENTS.md、送快照整份；接管后不交还', async () => {
+  const officialEvent = {
+    type: 'user/message',
+    data: { content: [{ type: 'text', text: 'OFFICIAL-AGENTS' }], source: { kind: 'agent-instructions', form: 'instructions' } },
+  }
+  const agent = { session: { seq: 1, surface: { nodes: [0] }, eventAt: () => officialEvent } }
+  const carrier = { suppressing: false, carriesAgentsMd: true, carriesSkillCatalog: true }
+  const officialDecision = () => ({
+    kind: 'enter',
+    messages: [{ source: { kind: 'agent-instructions', form: 'instructions' }, content: [{ type: 'text', text: 'OFFICIAL-AGENTS' }] }],
+  })
+  const drive = async (domains, diverged, target = agent) => {
+    let listener = null
+    const injector = createContextInjector({
+      ctx: { on: (_name, fn) => { listener = fn; return () => {} } },
+      domains: () => domains,
+      settings: () => DEFAULT_INJECT_SETTINGS,
+      factsFor: async () => carrier,
+      promptBaselineDiverged: () => diverged,
+    })
+    try {
+      return await listener({ agent: target, step: 2 }, async () => officialDecision())
+    } finally { injector.dispose() }
+  }
+  const domains = [{ key: 'prompt', name: 'x', label: '提示词', form: 'instructions', text: () => 'FROZEN-BODY' }]
+  const out = await drive(domains, true)
+  assert.equal(out.messages.some((m) => (m.source || {}).kind === 'agent-instructions'), false, '快照与文件不一致时官方那条必须被拦')
+  const ours = out.messages.filter((m) => (m.source || {}).kind === 'prompt-manager-catalog')
+  assert.equal(ours.length, 1, '插件送快照链整份')
+  assert.ok(ours[0].content[0].text.includes('FROZEN-BODY'))
+  assert.ok(ours[0].content[0].text.includes('Supersedes earlier injected content'), '首份快照版要带取代声明')
+
+  // 一致：官方照送，插件不出声（新会话首轮 / P4）。
+  const out2 = await drive(domains, false)
+  assert.equal(out2.messages.some((m) => (m.source || {}).kind === 'agent-instructions'), true, '无差异时官方照送')
+  assert.equal(out2.messages.some((m) => (m.source || {}).kind === 'prompt-manager-catalog'), false, '无差异时插件不出声')
+
+  // 接管过之后差异归零：官方不会重发同一摘要，插件必须继续接管；内容没变就一个字都不发。
+  const pluginEvent = {
+    type: 'user/message',
+    data: {
+      content: [{ type: 'text', text: 'PLUGIN-OLD' }],
+      source: { kind: 'prompt-manager-catalog', form: 'instructions', body: 'FROZEN-BODY' },
+    },
+  }
+  const tookOverAgent = {
+    session: { seq: 2, surface: { nodes: [0, 1] }, eventAt: (seq) => (Number(seq) === 1 ? pluginEvent : officialEvent) },
+  }
+  const out3 = await drive(domains, false, tookOverAgent)
+  assert.equal(out3.messages.some((m) => (m.source || {}).kind === 'agent-instructions'), false, '接管过之后官方仍被拦')
+  assert.equal(out3.messages.some((m) => (m.source || {}).kind === 'prompt-manager-catalog'), false, '内容没变就不重发（不补假通知）')
+})
+
+test('技能目录差异：只报本会话与全局不一致的条目，两个方向都要说清', () => {
+  const data = {
+    roots: [
+      { key: 'dsh', enabled: true, skills: [
+        { declaredName: 'alpha', description: 'A', enabled: true, modelInvocable: true },
+        { declaredName: 'beta', description: 'B', enabled: true, modelInvocable: true },
+      ] },
+    ],
+  }
+  assert.equal(renderSkillCatalogDelta(data, undefined), '', '没有会话层 = 没有差异')
+  assert.equal(renderSkillCatalogDelta(data, { skill: () => undefined }), '', '会话层没说话 = 没有差异')
+
+  const off = renderSkillCatalogDelta(data, { skill: (key) => (key === 'dsh/beta' ? false : undefined) })
+  assert.ok(off.includes('beta') && !off.includes('alpha'), '只报被关掉的那一条')
+  assert.ok(off.includes('not available here'), '方向要说清（本会话看不到）')
+
+  const on = renderSkillCatalogDelta(
+    { roots: [{ key: 'dsh', enabled: true, skills: [{ declaredName: 'gamma', description: 'G', enabled: false, modelInvocable: true }] }] },
+    { skill: (key) => (key === 'dsh/gamma' ? true : undefined) },
+  )
+  assert.ok(on.includes('gamma') && on.includes('- available here:'), '官方那份没有的条目 → 报"这里可用"')
+  assert.equal(off.includes('global') || off.includes('machine'), false, '正文不得提"全局 / 机器"—— 模型不知道有这两层设置')
+
+  // 来源闸：租约把来源拉起来跑（全局目录会把它算成开着），没认领的会话必须看到"这里不可用"。
+  const leased = renderSkillCatalogDelta(data, { source: () => false })
+  assert.ok(leased.includes('alpha') && leased.includes('beta'), '来源被本会话判关时里面的技能都要报')
+
+  // 影子副本 / 不可调用的条目：它们两边都不在目录里，不该出现在差异里。
+  const shadowed = {
+    roots: [{ key: 'dsh', enabled: true, skills: [
+      { declaredName: 'dup', description: 'D', enabled: true, modelInvocable: true },
+      { declaredName: 'dup', description: 'D2', enabled: true, modelInvocable: true, shadowedBy: 'dsh' },
+      { declaredName: 'nocall', description: 'N', enabled: true, modelInvocable: false },
+    ] }],
+  }
+  assert.equal(renderSkillCatalogDelta(shadowed, { skill: () => undefined }), '', '会话层没说话 = 没有差异')
+  const shadowDiff = renderSkillCatalogDelta(shadowed, { skill: () => false })
+  assert.ok(shadowDiff.includes('`dup`'), '真正生效的那一份要报')
+  assert.equal(shadowDiff.includes('nocall'), false, '不可调用的条目两边都不在目录里，不算差异')
+  assert.equal(shadowDiff.split('dup').length - 1, 1, '影子副本不得再报一次同名条目')
+
+  // 目录出口：全局口径（没有会话 id）永远不出差异行 —— 差异本来就是相对全局算的。
+  const cat = createSkillCatalog({
+    state: async () => ({ ok: true, data }),
+    sessionIdFor: (agent) => (agent && agent.id) || null,
+    layerFor: (agent) => (agent && agent.id) === 'a' ? { skill: (key) => (key === 'dsh/beta' ? false : undefined) } : undefined,
+    layerKeyFor: (agent) => String((agent && agent.id) || ''),
+  }, { ttlMs: 60000 })
+  return cat.warmSession('a').then(() => {
+    assert.ok(cat.delta({ id: 'a' }).includes('beta'), '会话 a 有差异行')
+    assert.equal(cat.delta({ id: 'b' }), '', '会话 b 没说话 = 没差异')
+    assert.equal(cat.delta(undefined), '', '全局口径不出差异行')
+  })
+})
+
+test('记忆段按会话分桶：两个会话的覆盖各算各的，缓存不得互相顶替', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-scope-mem-'))
+  try {
+    const stateDir = join(home, 'tool-management')
+    const memoriesRoot = join(stateDir, 'memories')
+    for (const scene of ['alpha', 'beta']) {
+      mkdirSync(join(memoriesRoot, scene), { recursive: true })
+      writeFileSync(join(memoriesRoot, scene, scene + '-note.md'), '---\nname: ' + scene + '-note\ndescription: d\n---\nBODY-' + scene.toUpperCase() + '\n')
+    }
+    const svc = createMemoriesService({}, { memoriesRoot, stateDir })
+    // 全局当前场景 = alpha
+    await svc.patchIndex({ active: ['alpha'] }, ['active'])
+
+    // 全局口径：只有 alpha 进段
+    const globalText = svc.memoryText()
+    assert.ok(globalText.includes('BODY-ALPHA'), '全局口径应含 alpha')
+    assert.equal(globalText.includes('BODY-BETA'), false, '全局口径不该含 beta')
+
+    // 会话 A 覆盖到 beta：同一份磁盘、同一时刻，段必须换成 beta 的内容
+    const a = svc.memoryText({ sessionId: 'sess-a', scene: 'beta' })
+    assert.ok(a.includes('BODY-BETA'), '会话 A 应看到 beta')
+    assert.equal(a.includes('BODY-ALPHA'), false, '会话 A 不该看到全局的 alpha')
+
+    // 关键：再问一次全局，必须**还是** alpha —— 缓存被会话 A 顶掉就是串内容
+    const globalAgain = svc.memoryText()
+    assert.equal(globalAgain, globalText, '会话 A 算过之后，全局口径必须逐字节不变')
+
+    // 会话 B 不带场景覆盖（跟随全局）→ 与全局一致，且不得是 A 的 beta
+    const b = svc.memoryText({ sessionId: 'sess-b' })
+    assert.equal(b, globalText, '跟随全局的会话必须拿到全局那一份')
+
+    // 逐条开关覆盖：关掉 alpha 之后全局口径里那条消失，但会话 A（beta）不受影响
+    const off = svc.memoryText({ sessionId: 'sess-c', memory: { 'alpha/alpha-note': false } })
+    assert.equal(off.includes('BODY-ALPHA'), false, '逐条覆盖关掉的记忆不得进段')
+    const aAgain = svc.memoryText({ sessionId: 'sess-a', scene: 'beta' })
+    assert.ok(aAgain.includes('BODY-BETA'), '别的会话的逐条覆盖不得影响会话 A')
+
+    // 场景段同一条：覆盖到 beta 时会话 A 的清单里是 beta
+    const aCatalog = svc.sceneCatalogText({ sessionId: 'sess-a', scene: 'beta' })
+    assert.ok(aCatalog.includes('beta'), '会话 A 的场景段应含 beta')
+    const gCatalog = svc.sceneCatalogText()
+    assert.ok(gCatalog.includes('alpha'), '全局场景段应含 alpha')
+    assert.equal(gCatalog.includes('beta'), false, '全局场景段不该含 beta')
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
 test('技能上传：尾随空格的 .. 不得逃出暂存目录，正常点文件照常放行', async () => {
   // 这不是"口径分叉"，是**路径逃逸**：Windows 的路径归一化会裁掉段尾的点与空格，
   // 于是 `.. `（`..` 加空格）在 CreateFileW 眼里就是 `..`；而 `isSameOrDescendant` 只按
@@ -1488,6 +2141,38 @@ test('注入去重端到端：内容没变就不发，变了才发（判据行�
   const again = out2.messages.filter((m) => (m.source || {}).kind === 'mcp-manager-catalog')
   assert.equal(again.length, 0, '已经是「已清空」的域不该每轮再补一条通知')
   injector2.dispose()
+
+  // 第三半（2026-10-21 真机发现）：最新一条是「已清空」通知，域重新打开后内容恢复、
+  // 且与更早那条逐字节相同。通知带的 `body` 只是旧指纹，不能拿它判"没变" —— 否则
+  // 模型看到的最新消息仍是「不再发送」，而内容其实已经回来了。
+  let listener3 = null
+  const oldContentEvent = {
+    type: 'user/message',
+    data: {
+      content: [{ type: 'text', text: '更早的内容' }],
+      source: { kind: 'mcp-manager-catalog', form: 'catalog', body: 'same-body' },
+    },
+  }
+  const restoredAgent = {
+    session: {
+      seq: 2,
+      surface: { nodes: [0, 1] },
+      eventAt: (seq) => (Number(seq) === 1 ? clearedEvent : oldContentEvent),
+    },
+  }
+  const restoredDomains = [{ key: 'mcp', name: 'c', label: 'MCP', form: 'catalog', text: () => 'same-body' }]
+  const ctx3 = { on: (_name, fn) => { listener3 = fn; return () => {} } }
+  const injector3 = createContextInjector({
+    ctx: ctx3,
+    domains: () => restoredDomains,
+    settings: () => DEFAULT_INJECT_SETTINGS,
+    factsFor: async () => undefined,
+  })
+  const out3 = await listener3({ agent: restoredAgent, step: 2 }, async () => ({ kind: 'enter', messages: [] }))
+  const restored = out3.messages.filter((m) => (m.source || {}).kind === 'mcp-manager-catalog')
+  assert.equal(restored.length, 1, '「已清空」之后内容恢复必须重发（即使正文与更早那条相同）')
+  assert.equal(restored[0].source.form, 'catalog', '重发的必须是内容，不是又一条通知')
+  injector3.dispose()
 })
 
 test('URL 打码必须覆盖 userinfo / 片段，且打码值在任何写路径都进不去补丁', () => {
@@ -2788,8 +3473,13 @@ test('记忆行：体积与附件走 nameAfter 槽且无边框，编辑/删除�
   assert.match(row[1], /nameAfter:[^\n]*sizeTag/, '体积必须走 nameAfter 槽（旁边再挂一枚附件标记也算，别退回第二行）')
   assert.match(row[1], /className:\s*'dsm-qty'/,
     '体积必须是 .dsm-qty（弱色等宽、无边框）—— 换回 .dsm-tag 就把边框加回来了')
-  assert.match(row[1], /nameAfter:\s*qtyBits\(sizeTag,\s*attachNode\)/,
-    '附件标记与体积同属"量值"，必须一起走 qtyBits（缺件时不留孤点）')
+  // 附件标记与体积同属"量值"，必须一起走 qtyBits（缺件时不留孤点）。0.21.2 起这一槽
+  // 前面还挂着租约徽章（`leaseTag`），所以这里认的是「qtyBits 里含 sizeTag 与 attachNode」，
+  // 而不是"qtyBits 的第一个实参恰好是 sizeTag"。
+  const qty = /nameAfter:\s*qtyBits\(([^\n]*)\)/.exec(row[1])
+  assert.ok(qty, 'nameAfter 必须由 qtyBits 拼（多个量值之间用分隔点，不能各自 createElement）')
+  assert.match(qty[1], /sizeTag/, '体积必须在 qtyBits 里')
+  assert.match(qty[1], /attachNode/, '附件标记必须在 qtyBits 里（缺件时不留孤点）')
 
   // ②b 行内只留开关这一颗常驻控件（用户 2026-10-16：「记忆看起来很乱」→ 选定收进 ⋯ 菜单）。
   //     红框删除是这一屏里最抢眼的东西，六行就是六个红框；它现在只是菜单里一行红字。
@@ -3144,4 +3834,575 @@ test('技能策略两份名单互斥：写入不制造冲突，读出能自愈�
     }
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+// ── 会话作用域（0.21.2）──────────────────────────────────────────────────────
+//
+// 这一族只钉**纯函数不变量**：三态存储 / 二态展示的判定、自动清除的两个方向、
+// 读不到的全局值不得拿来剪枝。界面与接线交给 `npm run build` 与真实使用。
+test('会话覆盖的三态与自动清除：等于全局就是没有覆盖（写侧与读侧各判一次）', () => {
+  // 侧车里的键表是**无原型对象**（防 `__proto__` 改写原型）；这里只比较内容，
+  // 不用严格原型比较 —— 那个差异是实现细节，不是这条不变量要钉的东西。
+  const plain = (v) => JSON.parse(JSON.stringify(v))
+  // ① 键不存在 = 跟随全局；写入一个**等于全局**的值 → 不落条目（否则界面会有个永远
+  //    与全局同值的蓝勾，用户看不出差别、也不知道自己点过一次本会话）。
+  assert.equal(applyFlag(undefined, 'skills', 'dsh/a', false, false).scope, undefined, '写等于全局 → 不留覆盖')
+  assert.deepEqual(plain(applyFlag(undefined, 'skills', 'dsh/a', true, false).scope), { skills: { 'dsh/a': true } }, '写不等于全局 → 留覆盖')
+
+  // ② 已有覆盖，再写回全局值 → 当场清掉。
+  assert.equal(applyFlag({ skills: { 'dsh/a': true } }, 'skills', 'dsh/a', false, false).scope, undefined, '写回全局值 → 清掉')
+
+  // ③ 只清目标键，同域其余键保留。
+  assert.deepEqual(
+    plain(applyFlag({ skills: { 'dsh/a': true, 'dsh/b': true } }, 'skills', 'dsh/a', false, false).scope),
+    { skills: { 'dsh/b': true } },
+    '清一个键不得牵连同域其它键',
+  )
+
+  // ④ 场景是**模式**不是取值（0.21.2）：进入总是写 scene（与全局同名也留 —— 它是
+  //    "按这个场景的档案走"，不是一个格的值）；进入时清掉七域的显式覆盖；退出换下层
+  //    为基线（detached），覆盖一起清、锁保留。
+  assert.deepEqual(plain(enterSceneInScope(undefined, 'web').scope), { scene: 'web' }, '进入场景：写 scene')
+  assert.deepEqual(
+    plain(enterSceneInScope({ skills: { 'dsh/a': true } }, 'web').scope),
+    { scene: 'web' },
+    '进入场景：清掉七域的显式覆盖',
+  )
+  assert.deepEqual(
+    plain(exitSceneInScope({ scene: 'web', skills: { 'dsh/a': true }, locked: true }).scope),
+    { detached: true, locked: true },
+    '退出场景：换下层为基线，覆盖清掉、锁保留',
+  )
+
+  // ⑤ 读侧（pruneScope）：全局后来被改成与覆盖同值 → 那条覆盖视为不存在；
+  //    **scene 不参与剪枝**（它是模式，与全局同名也保留）。
+  const global = { scene: 'web', flags: { skills: { 'dsh/a': false }, subagents: {}, memory: {}, quickPrompts: {}, mcp: {}, mcpTools: {}, skillSources: {} } }
+  assert.equal(pruneScope({ skills: { 'dsh/a': false } }, global), undefined, '僵尸覆盖（与全局同值）读时剪掉')
+  assert.deepEqual(pruneScope({ skills: { 'dsh/a': true } }, global), { skills: { 'dsh/a': true } }, '与全局不同的覆盖保留')
+  assert.deepEqual(pruneScope({ scene: 'web' }, global), { scene: 'web' }, '场景是模式：与全局同名也保留')
+  assert.deepEqual(pruneScope({ scene: 'api' }, global), { scene: 'api' }, '场景不同 → 保留')
+
+  // ⑥ 会话锁可以单独存在：只挂锁、还没有任何覆盖时，这条记录**不得**被当成空丢掉
+  //    （丢了就等于"锁上之后自己解开"）。
+  assert.deepEqual(
+    plain(normalizeScopeOverrides({ sessions: { s1: { locked: true } } }).sessions.s1),
+    { locked: true },
+    '只有锁的会话记录必须保留',
+  )
+  assert.deepEqual(
+    applyFlag({ locked: true }, 'skills', 'dsh/a', false, false).scope,
+    { locked: true },
+    '最后一个覆盖被清掉时锁要留着',
+  )
+
+  // ⑦ 全局读不到的那一域**不剪枝**：一次读盘失败不得把用户的设置静默删掉。
+  const partial = { scene: null, flags: { skills: {}, subagents: {}, memory: {}, quickPrompts: {}, mcp: {} }, unavailable: ['skills'] }
+  assert.deepEqual(
+    pruneScope({ skills: { 'dsh/a': false } }, partial),
+    { skills: { 'dsh/a': false } },
+    '全局值读不到的域不得按"空快照"剪枝',
+  )
+
+  // ⑧ 坏输入一律夹掉，不抛：会话覆盖坏了最坏是回到全局，不该让面板或注入通道跟着挂。
+  assert.deepEqual(plain(normalizeScopeOverrides(null)), { version: 1, mode: 'session', sessions: {} }, 'null → 空表 + 按会话')
+  assert.equal(normalizeScopeMode('workspace'), 'workspace')
+  assert.equal(normalizeScopeMode('nope'), 'session', '坏值退回按会话')
+  assert.equal(normalizeScopeMode(undefined), 'session')
+  assert.equal(plain(normalizeScopeOverrides({ mode: 'workspace' })).mode, 'workspace', '模式跟着侧车落盘')
+  assert.equal(plain(normalizeScopeOverrides({ mode: 'nope' })).mode, 'session')
+  assert.deepEqual(
+    plain(normalizeScopeOverrides({ sessions: { s: { skills: { '': true, ok: 'yes', good: false } } } }).sessions.s),
+    { skills: { good: false } },
+    '非法键与非布尔值丢掉',
+  )
+  assert.deepEqual(plain(normalizeScopeOverrides({ sessions: { '': { scene: 'x' } } }).sessions), {}, '非法会话 id 丢掉')
+
+  // ⑨ 覆盖条数（下拉框「N 项」）：scene 算一条、每个键算一条，locked 不算。
+  assert.equal(overrideCountOf({ scene: 'web', skills: { a: true, b: false } }), 3, '条数口径')
+  assert.equal(overrideCountOf(undefined), 0, '没有覆盖 = 0 项')
+
+  // ⑩ 模型工具表按对话（0.21.2）：每个对话一份整名单，全局只给新对话当默认。
+  //    判据三条：本对话 > 创建时基线 > 实时全局；空名单是有效值（"全都要"）。
+  assert.deepEqual(
+    sessionToolTableHidden({ toolTableHidden: ['a'], baseline: { toolTableHidden: ['b'] } }, ['c']),
+    ['a'],
+    '本对话那份赢过基线与全局',
+  )
+  assert.deepEqual(
+    sessionToolTableHidden({ baseline: { toolTableHidden: ['b'] } }, ['c']),
+    ['b'],
+    '没单独设置时用创建时抄的那份（全局后来改了也不算）',
+  )
+  assert.deepEqual(sessionToolTableHidden(undefined, ['c']), ['c'], '没有基线的老会话退回全局')
+  assert.deepEqual(sessionToolTableHidden({ toolTableHidden: [] }, ['c']), [], '空名单 = 本对话全都要')
+  assert.equal(overrideCountOf({ toolTableHidden: ['a', 'b', 'c'] }), 1, '整份工具表算一条设置，不按名字个数膨胀')
+
+  // 进出场景：进入**不碰**工具表（场景没绑方案时对话自己调过的那份得留着），
+  // 退出回到基线（与其他开关同一条「退出到这个会话最开始的样子」）。
+  assert.deepEqual(
+    plain(enterSceneInScope({ toolTableHidden: ['a'] }, 'web').scope),
+    { scene: 'web', toolTableHidden: ['a'] },
+    '进入场景：没绑方案时本对话的工具表保持不变',
+  )
+  assert.deepEqual(
+    plain(exitSceneInScope({ scene: 'web', toolTableHidden: ['a'], baseline: { toolTableHidden: ['b'] } }).scope),
+    { detached: true, baseline: { toolTableHidden: ['b'] } },
+    '退出场景：工具表回到创建时那份',
+  )
+
+  // 读侧剪枝：与基线同值（顺序无关）的显式名单不留；不同就留；没基线也留。
+  const ttGlobal = { scene: null, flags: {} }
+  assert.deepEqual(
+    pruneScope({ toolTableHidden: ['a', 'b'], baseline: { toolTableHidden: ['b', 'a'] } }, ttGlobal),
+    { baseline: { toolTableHidden: ['b', 'a'] } },
+    '与基线同值的工具表读时剪掉',
+  )
+  assert.deepEqual(
+    plain(pruneScope({ toolTableHidden: ['a'], baseline: { toolTableHidden: ['b'] } }, ttGlobal).toolTableHidden),
+    ['a'],
+    '与基线不同的工具表保留',
+  )
+  assert.deepEqual(
+    plain(pruneScope({ toolTableHidden: [] }, ttGlobal).toolTableHidden),
+    [],
+    '没有基线时空名单也要留着（否则等于退回全局）',
+  )
+
+  // 落盘形状：坏名字夹掉、空名单留着、基线里那一份也要留着。
+  assert.deepEqual(
+    plain(normalizeScopeOverrides({ sessions: { s: { toolTableHidden: ['a', '', 'a', 7, '__proto__'] } } }).sessions.s),
+    { toolTableHidden: ['a'] },
+    '工具表名单：非字符串 / 空串 / 非法键丢掉，重复只留一份',
+  )
+  assert.deepEqual(
+    plain(normalizeScopeOverrides({ sessions: { s: { toolTableHidden: [] } } }).sessions.s),
+    { toolTableHidden: [] },
+    '空名单是有效值，不得被当成"没有设置"丢掉',
+  )
+  assert.deepEqual(
+    plain(normalizeScopeOverrides({ sessions: { s: { baseline: { scene: null, flags: {}, toolTableHidden: ['x'] } } } }).sessions.s),
+    { baseline: { scene: null, flags: {}, toolTableHidden: ['x'] } },
+    '基线里的工具表那份要跟着落盘',
+  )
+})
+
+// ── 意图 / 租约：运行态 = 意图 ∪ 租约（0.21.2）──────────────────────────────
+//
+// 这组判据错了的症状与用户实测的那条一模一样：会话里打开一台全局关着的服务器，
+// 新会话也看得到它。纯函数层面把三条不变量钉死，比在界面里复现一次故障可靠。
+test('意图对账：运行态 = 意图 ∪ 租约，blocked 压过租约，升级不把租约读成全局', () => {
+  // off + 有租约 → 保持运行，意图不动（用户裁定「仍按租约运行」）
+  assert.deepEqual(planReconcile([{ key: 'a', intent: 'off', running: true, claims: 2, explicitClaims: 2 }]), [])
+  // off + 最后一个租约消失 → 停
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'off', running: true, claims: 0, explicitClaims: 0 }]),
+    [{ key: 'a', runningNext: false }],
+  )
+  // blocked + 租约 → 停（显式拒绝压过租约与一切会话层）
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'blocked', running: true, claims: 2, explicitClaims: 2 }]),
+    [{ key: 'a', runningNext: false }],
+  )
+  // 还没有意图记录、补丁开着、有**显式**会话覆盖 → 那是旧版本的"会话级开启"，
+  // 记 off 让它落回租约（不把运行态照抄成全局开启）
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: undefined, running: true, claims: 1, explicitClaims: 1 }]),
+    [{ key: 'a', intentNext: 'off' }],
+  )
+  // 没有显式覆盖、只是场景勾中 → 就是普通的全局开启
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: undefined, running: true, claims: 1, explicitClaims: 0 }]),
+    [{ key: 'a', intentNext: 'on' }],
+  )
+  // 外部改动（启动 / 全局场景应用之后）：没有租约时才采纳
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'on', running: false, claims: 0, explicitClaims: 0 }], { adoptExternal: true }),
+    [{ key: 'a', intentNext: 'off' }],
+  )
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'off', running: true, claims: 0, explicitClaims: 0 }], { adoptExternal: true }),
+    [{ key: 'a', intentNext: 'on' }],
+  )
+  // 有租约时运行态与意图不同是**正常**的，不采纳
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'off', running: true, claims: 1, explicitClaims: 1 }], { adoptExternal: true }),
+    [],
+  )
+})
+
+test('资源可见性：blocked 压过会话层；意图 off 时只有认领的会话看得到', () => {
+  assert.deepEqual(resolveResource('blocked', true), { visible: false, claim: false }, '彻底停止压过会话层')
+  assert.deepEqual(resolveResource('off', true), { visible: true, claim: true }, '全局 off + 会话认领 = 租约可见')
+  assert.deepEqual(resolveResource('off', false), { visible: false, claim: false }, '会话也没认领 = 看不到')
+  assert.deepEqual(resolveResource('off', undefined), { visible: false, claim: false }, '全局 off、无会话层 = 看不到')
+  assert.deepEqual(resolveResource('on', false), { visible: false, claim: false }, '全局 on、本会话关掉 = 看不到')
+  assert.deepEqual(resolveResource('on', true), { visible: true, claim: false }, '全局 on + 本会话开着 = 看得到')
+  assert.deepEqual(resolveResource(undefined, undefined), { visible: undefined, claim: false }, '没有意图 = 交给运行态')
+})
+
+test('意图侧车：坏输入夹成空表，三态之外的取值丢掉', () => {
+  const empty = normalizeScopeIntent(null)
+  assert.equal(Object.keys(empty.mcp).length, 0)
+  assert.equal(Object.keys(empty.skillSources).length, 0)
+  const parsed = normalizeScopeIntent({ mcp: { a: 'blocked', b: 'yes', '': 'on' }, skillSources: { root: 'off' } })
+  assert.equal(parsed.mcp.a, 'blocked')
+  assert.equal(parsed.mcp.b, undefined)
+  assert.equal(parsed.mcp[''], undefined)
+  assert.equal(parsed.skillSources.root, 'off')
+})
+
+// ── 0.21.2 加固：四条不变式（契约级，纯函数）────────────────────────────────
+//
+// 这组用例钉的是**判据本身**，不是某一次故障的界面表现（AGENTS.md 口径：只钉纯函数不变量）。
+
+test('意图域：含 skills 且冻结（增删域要同时改读写四处，冻结让漏改当场红）', () => {
+  assert.deepEqual([...INTENT_DOMAINS], ['mcp', 'skillSources', 'skills'], '三格都是进程级资源，缺一个就有域没有意图层')
+  assert.equal(Object.isFrozen(INTENT_DOMAINS), true, '冻结：运行期改它等于让读侧悄悄分叉')
+  assert.throws(() => { INTENT_DOMAINS.push('memory') }, 'memory 是纯视图域，不该进意图层')
+})
+
+test('键归一化：技能的意图键恒为 <root>/<声明名>，目录名不进键', () => {
+  // 目录名（`my-skill`）与声明名（`My Skill`）不同时，四处必须用声明名那一套：
+  // 覆盖表写、意图写、租约读、徽章计数。用目录名写进去 = 一条永远读不到的意图。
+  const plain = (v) => JSON.parse(JSON.stringify(v))
+  const root = 'dsh'
+  const dirName = 'my-skill'
+  const declaredName = 'My Skill'
+  const key = root + '/' + declaredName
+  assert.equal(key.indexOf(root + '/'), 0, '键形状必须是 <root>/<声明名>')
+  assert.notEqual(key, root + '/' + dirName, '目录名与声明名不同时，两者不是同一个键')
+  // 同一形状在覆盖表 / 档案 / 意图三处都能被同一个字符串命中。
+  const overrides = normalizeScopeOverrides({ sessions: { s: { skills: { [key]: false } } } }).sessions.s
+  assert.deepEqual(plain(overrides.skills), { [key]: false })
+  const intent = normalizeScopeIntent({ skills: { [key]: 'off' } })
+  assert.equal(intent.skills[key], 'off')
+})
+
+test('归档认领：归档会话不持有资源；清单读不到时不剪（读不到 ≠ 全被删了）', () => {
+  // 展示侧（徽章计数）与执行侧（租约）共用这一份判据 —— 两边分开写就会
+  // 「徽章说还有人在用」而资源已经被停掉。
+  assert.equal(claimsResource({ archived: true }, true), false, '归档会话不认领')
+  assert.equal(claimsResource({ archived: false }, true), true, '活跃会话认领')
+  assert.equal(claimsResource(undefined, true), false, '清单里没有（已删除 / 孤儿）不认领')
+  assert.equal(claimsResource(undefined, false), true, '清单一条都没读到 → 宁可多留一个租约')
+  // 端到端口径：认领会话归档后，全局 off 的资源该停。
+  const claims = { archived: false }
+  const archivedClaims = { archived: true }
+  const decide = (c) => planReconcile([{ key: 'srv', intent: 'off', running: true, claims: claimsResource(c, true) ? 1 : 0, explicitClaims: 0 }])
+  assert.deepEqual(decide(claims), [], '有活跃认领 → 保持运行（租约）')
+  assert.deepEqual(decide(archivedClaims), [{ key: 'srv', runningNext: false }], '认领会话归档 → 资源停')
+})
+
+// ── 0.21.2 第四轮：痕迹闸门与七域统一认领扫描（契约级，纯函数）──────────────
+//
+// 用户报障 A：会话里开了一台全局关着的 mcp，重启后这一格变成"全局开着"。病根是启动对账
+// 在没有租约时就把运行态采纳成了全局 `on` —— 而"没有租约"有四条路径（会话已归档 / 已删除 /
+// 清单半冷 / 侧车读失败），条条都是**会话留下的运行态**被读成了"用户全局开过"。
+test('痕迹闸门：侧车里还有会话痕迹时不把运行态采纳成全局 on', () => {
+  const adopt = { adoptExternal: true }
+  // 无痕迹 + 运行中 + 没有租约 → 采纳（用户手改补丁 / 官方页面 / 全局场景）。
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'off', running: true, claims: 0, explicitClaims: 0, traced: false }], adopt),
+    [{ key: 'a', intentNext: 'on' }],
+  )
+  // **有痕迹** → 不采纳：那是某个会话拨开的运行态，运行态按 claims>0 落（这里是停机）。
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'off', running: true, claims: 0, explicitClaims: 0, traced: true }], adopt),
+    [{ key: 'a', runningNext: false }],
+  )
+  // 有痕迹且还有活跃认领 → 保持运行，意图不动（租约照旧）。
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'off', running: true, claims: 2, explicitClaims: 1, traced: true }], adopt),
+    [],
+  )
+  // 没给 `traced`（`scope-set` 之后的普通对账）→ 与旧行为一致：采纳只看有没有租约。
+  assert.deepEqual(
+    planReconcile([{ key: 'a', intent: 'off', running: true, claims: 0, explicitClaims: 0 }], adopt),
+    [{ key: 'a', intentNext: 'on' }],
+  )
+})
+
+test('七域认领扫描：认领 / 显式 / 痕迹三份口径各归各位', () => {
+  const rows = [{ id: 'live' }, { id: 'arch', archived: true }, { id: 'sceneOnly' }]
+  const sessions = {
+    live: { mcp: { github: true } },
+    arch: { mcp: { github: true } },
+    ghost: { mcp: { github: true } },                                  // 清单里没有（已删除 / 孤儿）
+    quiet: { prompt: { presetId: 'p' } },                              // 一个域都没话说
+    sceneOnly: { scene: 's1' },
+  }
+  const out = scanSessionClaims({
+    sessions,
+    rows,
+    archiveOf: (scope) => (scope.scene === 's1' ? { skills: ['root/sk'] } : undefined),
+    targets: { mcp: ['github', 'nobody'], skills: ['root/sk'], skillSources: ['root'] },
+  })
+  // 认领：只算**未归档、且在清单里**的会话。
+  assert.deepEqual(out.claims.mcp.get('github'), ['live'])
+  assert.equal(out.claims.mcp.get('nobody'), undefined, '没人认领的键不落表')
+  // 显式：不做归档 / 清单过滤 —— 升级首轮判"旧版本的会话级开启"要的就是这份。
+  assert.deepEqual(out.explicit.mcp.get('github'), ['live', 'arch', 'ghost'])
+  // 痕迹：归档 / 孤儿留下的条目也算（痕迹闸门靠它拒绝采纳）。
+  assert.equal(out.traced.mcp.has('github'), true)
+  assert.equal(out.traced.mcp.has('nobody'), false)
+  // 场景层（进场景时勾中的键）同样是认领，来源格由它的技能反推。
+  assert.deepEqual(out.claims.skills.get('root/sk'), ['sceneOnly'])
+  assert.deepEqual(out.claims.skillSources.get('root'), ['sceneOnly'])
+  assert.equal(out.traced.skillSources.has('root'), true)
+})
+
+test('七域认领扫描：detached 会话按基线认领（不需要显式覆盖）', () => {
+  // 退出场景后会话停在自己的基线层上：基线里开着、全局已关的键仍要算认领，
+  // 否则退出场景的那一刻服务器 / 技能来源会被停掉，用户看到的是"退出就把东西关了"。
+  const baseline = {
+    capturedAt: '2026-10-21T00:00:00.000Z',
+    scene: null,
+    flags: { skills: { 'dsh/x': true }, mcp: { srv: true }, memory: {} },
+    toolTableHidden: [],
+  }
+  const out = scanSessionClaims({
+    sessions: { d: { detached: true, baseline } },
+    rows: [{ id: 'd' }],
+    archiveOf: () => undefined,
+    targets: { skills: ['dsh/x'], mcp: ['srv'] },
+  })
+  assert.deepEqual(out.claims.skills.get('dsh/x'), ['d'], '基线为开 = 认领')
+  assert.deepEqual(out.claims.mcp.get('srv'), ['d'], 'mcp 同一条判据')
+  assert.deepEqual(out.explicit.skills.get('dsh/x'), undefined, '基线不是显式覆盖')
+})
+
+test('七域认领扫描：清单读不到时不剪（读不到 ≠ 全被删了）', () => {
+  const out = scanSessionClaims({
+    sessions: { s: { memory: { m1: true } } },
+    rows: [],
+    archiveOf: () => undefined,
+    targets: { memory: ['m1'] },
+  })
+  assert.deepEqual(out.claims.memory.get('m1'), ['s'], '清单一条都没读到 → 宁可多留一个租约')
+})
+
+test('七域认领扫描：逐工具 / 单条技能为开也认领它所在的整台服务器 / 来源', () => {
+  const out = scanSessionClaims({
+    sessions: { s: { mcpTools: { 'srv/tool': true }, skills: { 'root/one': true } } },
+    rows: [{ id: 's' }],
+    archiveOf: () => undefined,
+    targets: { mcp: ['srv'], skillSources: ['root'] },
+  })
+  assert.deepEqual(out.claims.mcp.get('srv'), ['s'], '工具能调的前提是那台服务器在跑')
+  assert.deepEqual(out.claims.skillSources.get('root'), ['s'], '来源不启用时 core 不会加载那条技能')
+  assert.deepEqual(out.explicit.mcp.get('srv'), ['s'])
+  assert.equal(out.traced.mcp.has('srv'), true, '逐工具为开也算这一格的会话痕迹')
+})
+
+test('七域认领扫描：上层被显式关掉时，子项为开不再认领它', () => {
+  // 历史侧车 / 手改文件可能留下"来源关、里面一条技能为开"的矛盾状态。界面按来源关显示、
+  // 执行守卫也 deny —— 这时再认领来源只会白跑一台服务器并挂一条假的「临时运行」。
+  const out = scanSessionClaims({
+    sessions: { s: {
+      mcp: { srv: false }, mcpTools: { 'srv/tool': true },
+      skillSources: { root: false }, skills: { 'root/one': true },
+    } },
+    rows: [{ id: 's' }],
+    archiveOf: () => undefined,
+    targets: { mcp: ['srv'], skillSources: ['root'] },
+  })
+  assert.deepEqual(out.claims.mcp.get('srv'), undefined, '服务器显式关：工具为开不认领')
+  assert.deepEqual(out.claims.skillSources.get('root'), undefined, '来源显式关：技能为开不认领')
+  assert.deepEqual(out.explicit.mcp.get('srv'), undefined, '也不该记成显式认领')
+  assert.equal(out.traced.mcp.has('srv'), false, '不留下痕迹（否则对账会拒绝采纳外部关闭）')
+})
+
+test('会话提示词覆盖：形状收敛、互斥与预算（content > presetId，超 64 KiB 整条丢弃）', () => {
+  const plain = (v) => JSON.parse(JSON.stringify(v))
+  const both = normalizeSessionScope({ prompt: { presetId: 'p', content: 'hello' } })
+  assert.deepEqual(plain(both.prompt), { content: 'hello' }, 'content 有值时清掉 presetId（互斥）')
+  assert.deepEqual(plain(normalizeSessionScope({ prompt: { presetId: 'p' } }).prompt), { presetId: 'p' })
+  assert.equal(normalizeSessionScope({ prompt: { content: 'x'.repeat(PROMPT_CONTENT_MAX_BYTES + 1) } }), undefined, '超预算整条丢弃，不写半截')
+  assert.equal(normalizeSessionScope({ prompt: { content: 'a'.repeat(PROMPT_CONTENT_MAX_BYTES) } }).prompt.content.length, PROMPT_CONTENT_MAX_BYTES, '恰好等于上限保留')
+  assert.equal(normalizeSessionScope({ prompt: { presetId: '__proto__' } }), undefined, '非法 presetId 丢弃')
+  assert.equal(normalizeSessionScope({ prompt: { content: 42 } }), undefined, '非字符串正文丢弃')
+  assert.doesNotThrow(() => normalizeScopeOverrides({ sessions: { s: { prompt: { content: 42 } } } }), '坏输入不抛')
+  // prompt 是"一条覆盖"：算进下拉计数，并让条目可保留 / 非空。
+  assert.equal(isKeepableScope({ prompt: { presetId: 'p' } }), true)
+  assert.equal(isEmptyScope({ prompt: { presetId: 'p' } }), false)
+  assert.equal(overrideCountOf({ prompt: { presetId: 'p' } }), 1)
+  // 进出场景不清提示词覆盖（它不进场景模式快照）。
+  assert.deepEqual(plain(enterSceneInScope({ prompt: { content: 'x' } }, 'web').scope.prompt), { content: 'x' })
+  assert.deepEqual(plain(exitSceneInScope({ prompt: { content: 'x' }, scene: 'web' }).scope.prompt), { content: 'x' })
+  // 剪枝不按下层清 prompt（它不是开关，没有"与下层同值"这一态）。
+  assert.deepEqual(plain(pruneScope({ prompt: { presetId: 'p' } }, { scene: null, flags: {} }).prompt), { presetId: 'p' })
+})
+
+test('提示词用户级槽位顺序：会话正文 > 会话预设 > 场景预设 > 冻结快照 > AGENTS.md', () => {
+  const pick = (over) => chooseUserPromptLayer({ sessionContent: false, sessionPreset: false, scenePreset: false, sessionBaseline: false, globalFile: false, ...over })
+  assert.equal(pick({ sessionContent: true, sessionPreset: true, scenePreset: true, sessionBaseline: true, globalFile: true }), 'session-content')
+  assert.equal(pick({ sessionPreset: true, scenePreset: true, sessionBaseline: true, globalFile: true }), 'session-preset')
+  assert.equal(pick({ scenePreset: true, sessionBaseline: true, globalFile: true }), 'scene-preset')
+  assert.equal(pick({ sessionBaseline: true, globalFile: true }), 'session-baseline', '快照压过当前文件')
+  assert.equal(pick({ globalFile: true }), 'global-file', '没有快照才轮到当前文件（退化路径）')
+  assert.equal(pick({}), null)
+})
+
+test('提示词冻结快照：白名单 / 预算 / 不计数 / 场景与剪枝都保留', () => {
+  const plain = (v) => JSON.parse(JSON.stringify(v))
+  // 只有快照的条目：要留住（isKeepable），但不是"用户覆盖"（不计入下拉 / 不触发接管判据）。
+  const only = normalizeSessionScope({ prompt: { baseline: '' } })
+  assert.deepEqual(plain(only.prompt), { baseline: '' }, '空串快照是有效值（创建时文件为空），不能丢')
+  assert.equal(promptBaselineOf(only), '')
+  assert.equal(hasPromptOverride(only), false, '快照是系统捕获，不是用户覆盖')
+  assert.equal(isKeepableScope(only), true, '快照随会话条目生灭，条目本身要留住')
+  assert.equal(isEmptyScope(only), true, '没有用户覆盖 = 空（不影响下拉的"N 项"）')
+  assert.equal(overrideCountOf(only), 0, '快照不数进覆盖条目')
+  // 用户覆盖与快照并存：投影只露用户那一半。
+  const both = normalizeSessionScope({ prompt: { presetId: 'p', baseline: 'BASE' } })
+  assert.deepEqual(plain(both.prompt), { presetId: 'p', baseline: 'BASE' })
+  assert.deepEqual(promptOverrideOf(both), { presetId: 'p' }, '快照不混进覆盖投影')
+  assert.equal(hasPromptOverride(both), true)
+  assert.equal(overrideCountOf(both), 1)
+  // 64 KiB 闸：超大快照单独出现整条丢弃；与 content 并存时只丢快照。
+  assert.equal(normalizeSessionScope({ prompt: { baseline: 'x'.repeat(PROMPT_CONTENT_MAX_BYTES + 1) } }), undefined)
+  assert.deepEqual(
+    plain(normalizeSessionScope({ prompt: { content: 'c', baseline: 'x'.repeat(PROMPT_CONTENT_MAX_BYTES + 1) } }).prompt),
+    { content: 'c' },
+  )
+  // 截断必须落在 UTF-8 字符边界上（半个字符会变成替换符，正文指纹也跟着变）。
+  const clamped = clampPromptBaseline('é'.repeat(40000))
+  assert.ok(Buffer.byteLength(clamped, 'utf8') <= PROMPT_CONTENT_MAX_BYTES)
+  assert.equal(clamped.includes('\uFFFD'), false)
+  // 进出场景、剪枝都不清快照（快照不是场景层的东西）。
+  assert.equal(promptBaselineOf(enterSceneInScope({ prompt: { baseline: 'B' } }, 'web').scope), 'B')
+  assert.equal(promptBaselineOf(exitSceneInScope({ scene: 'web', prompt: { baseline: 'B' } }).scope), 'B')
+  assert.equal(promptBaselineOf(pruneScope({ prompt: { baseline: 'B' } }, { scene: null, flags: {} })), 'B')
+})
+
+test('提示词快照差异判据：无快照 / 读不到文件不拦，内容变了才拦', () => {
+  assert.equal(promptBaselineDiffers(undefined, 'x'), false, '没有快照 = 这一层没意见（让位给官方）')
+  assert.equal(promptBaselineDiffers('x', undefined), false, '当前文件读不到 = 这一轮不接管，不能两份都拦')
+  assert.equal(promptBaselineDiffers('x', 'x'), false, '一致 = 官方照送')
+  assert.equal(promptBaselineDiffers('x', 'y'), true, '内容变了 = 接管')
+  assert.equal(promptBaselineDiffers('', 'x'), true, '创建时为空、后来写进内容 = 也要冻结')
+  const big = 'x'.repeat(PROMPT_CONTENT_MAX_BYTES + 100)
+  assert.equal(promptBaselineDiffers(clampPromptBaseline(big), big), false, '超预算文件按同一预算夹完再比，不能每轮都判"变了"')
+})
+
+test('有会话提示词覆盖时拦官方 agent-instructions（无覆盖不拦）', () => {
+  const on = { ...DEFAULT_INJECT_SETTINGS, domains: { ...DEFAULT_INJECT_SETTINGS.domains } }
+  assert.equal(suppressedKindsForSession(on, true).has('agent-instructions'), true)
+  assert.equal(suppressedKindsForSession(on, false).has('agent-instructions'), false)
+  // 域本身被关掉时同样在集合里（官方被拦 + 插件不发 = 本会话没有提示词）。
+  const off = { ...on, domains: { ...on.domains, prompt: false } }
+  assert.equal(suppressedKindsForSession(off, false).has('agent-instructions'), true)
+})
+
+test('MCP 逐工具键的 server 段并入切分候选（server 名含 __ 时仍能认对）', () => {
+  assert.deepEqual(mcpToolServerSegments({ 'a__b/tool': true, 'no-slash': true }), ['a__b'])
+  assert.deepEqual(mcpToolServerSegments(undefined), [])
+  const candidates = serverNameCandidates(['a__b'], mcpToolServerSegments({ 'a__b/tool': true }))
+  const parts = splitMcpToolName('mcp__a__b__tool', candidates)
+  assert.equal(parts.server, 'a__b')
+  assert.equal(parts.tool, 'tool')
+})
+
+test('侧车 GC：已删除会话的条目剪掉，归档未删除的保留（可恢复）', () => {
+  const plain = (v) => JSON.parse(JSON.stringify(v))
+  const sessions = {
+    live: { skills: { 'dsh/a': true } },
+    archived: { scene: 'web' },
+    deleted: { skills: { 'dsh/b': false } },
+  }
+  const kept = pruneSessionScopes(sessions, new Set(['live', 'archived']))
+  assert.deepEqual(Object.keys(plain(kept.sessions)).sort(), ['archived', 'live'], '归档未删除的保留')
+  assert.equal(kept.pruned, 1, '已删除的那一条被剪掉')
+  // 全都不在清单里 = 全剪（调用方负责在清单读不到时**不调**这个函数，见 store.ts）。
+  assert.equal(pruneSessionScopes(sessions, new Set()).pruned, 3)
+  // 剪枝不改入参（调用方可能还要读它）。
+  assert.equal(Object.keys(sessions).length, 3)
+})
+
+// ── 隔离粒度：按会话 / 按工作区（0.21.2）────────────────────────────────────
+test('工作区作用域键：同一工作区归一成同一个键，没有 cwd 退回会话', () => {
+  // Windows 盘符大小写 / 分隔符 / 末尾斜杠同一口径（与工作区挂回、下拉分组同一份归一）。
+  assert.equal(workspaceScopeKeyOf('C:\\Proj\\'), WORKSPACE_SCOPE_PREFIX + 'c:\\proj')
+  assert.equal(workspaceScopeKeyOf('c:/proj'), workspaceScopeKeyOf('C:\\Proj\\'))
+  assert.equal(workspaceScopeKeyOf('/Users/me/proj/'), 'ws:/Users/me/proj')
+  assert.equal(workspaceScopeKeyOf(''), undefined, '没有 cwd = 不共享')
+  assert.equal(workspaceScopeKeyOf(undefined), undefined)
+  // 超长路径不截断：宁可退回会话隔离，也不让两个工作区撞成一个键。
+  assert.equal(workspaceScopeKeyOf('x'.repeat(WORKSPACE_SCOPE_KEY_MAX)), undefined)
+  assert.equal(isWorkspaceScopeKey('ws:C:\\proj'), true)
+  assert.equal(isWorkspaceScopeKey('ws:'), false)
+  assert.equal(isWorkspaceScopeKey('abc'), false)
+  assert.equal(workspaceCwdOfScopeKey('ws:C:\\proj'), 'C:\\proj')
+  assert.equal(workspaceCwdOfScopeKey('abc'), undefined)
+  // 错误提示里不点名原始键：工作区键显示目录名，会话键原样。
+  assert.equal(scopeKeyLabel('ws:c:\\proj'), 'proj')
+  assert.equal(scopeKeyLabel('ws:/Users/me/my-proj/'), 'my-proj')
+  assert.equal(scopeKeyLabel('s1'), 's1')
+
+  assert.equal(scopeKeyOfRow({ id: 's1', cwd: 'C:\\P\\' }, 'workspace'), 'ws:c:\\p')
+  assert.equal(scopeKeyOfRow({ id: 's1', cwd: '' }, 'workspace'), 's1', '没有 cwd → 按会话独立')
+  assert.equal(scopeKeyOfRow({ id: 's1', cwd: 'C:\\P\\' }, 'session'), 's1', '会话模式不看 cwd')
+})
+
+test('工作区模式认领：同一工作区的未归档会话一起认领，归档的不算', () => {
+  const rows = [
+    { id: 'a1', cwd: 'C:\\Proj' },
+    { id: 'a2', cwd: 'c:/proj/' },
+    { id: 'arch', cwd: 'C:\\Proj', archived: true },
+    { id: 'b1', cwd: 'C:\\Other' },
+    { id: 'solo', cwd: '' },
+  ]
+  const sessions = {
+    'ws:c:\\proj': { mcp: { srv: true } },
+    'ws:c:\\other': { mcp: { srv: true }, mcpTools: { 'srv/tool': true } },
+    solo: { mcp: { srv: true } },
+    // 被工作区收编的旧会话记录：工作区模式下不能算租约（键不落在任何工作区桶里，
+    // 也没有 cwd 让它成为独立会话）。
+    a1: { mcp: { srv: true } },
+  }
+  const out = scanSessionClaims({
+    sessions,
+    rows,
+    mode: 'workspace',
+    archiveOf: () => undefined,
+    targets: { mcp: ['srv'] },
+  })
+  // a1 / b1 各认一次；a2 同一工作区；arch 归档不认；solo 没有 cwd 按会话独立。
+  assert.deepEqual(out.claims.mcp.get('srv').slice().sort(), ['a1', 'a2', 'b1', 'solo'])
+  // 显式不做归档过滤（升级推断）：归档会话的旧覆盖仍是证据；工作区键没有真实会话时不算。
+  assert.deepEqual(out.explicit.mcp.get('srv').slice().sort(), ['a1', 'a2', 'arch', 'b1', 'solo'])
+  assert.equal(out.traced.mcp.has('srv'), true)
+  // 逐工具为开同样按工作区里的会话认领。
+  const tools = scanSessionClaims({ sessions, rows, mode: 'workspace', archiveOf: () => undefined, targets: { mcpTools: ['srv/tool'] } })
+  assert.deepEqual(tools.claims.mcpTools.get('srv/tool'), ['b1'], '逐条工具按工作区里的会话认领')
+  // 会话模式下 ws: 键不参与；a1 的记录照旧算认领。
+  const sessionMode = scanSessionClaims({ sessions, rows, archiveOf: () => undefined, targets: { mcp: ['srv'] } })
+  assert.deepEqual(sessionMode.claims.mcp.get('srv').slice().sort(), ['a1', 'solo'], '会话模式按会话 id 各归各的')
+})
+
+test('工作区模式认领：清单读不到时留一个占位租约，不把资源停掉', () => {
+  const out = scanSessionClaims({
+    sessions: { 'ws:c:\\proj': { mcp: { srv: true } } },
+    rows: [],
+    mode: 'workspace',
+    archiveOf: () => undefined,
+    targets: { mcp: ['srv'] },
+  })
+  assert.deepEqual(out.claims.mcp.get('srv'), ['ws:c:\\proj'], '读不到 ≠ 全被删了')
+  assert.deepEqual(out.explicit.mcp.get('srv'), undefined, '工作区键不是可升级推断的旧会话 id')
+})
+
+test('模式切换播种：prune 保留工作区键，克隆到另一层时剥掉锁', () => {
+  const plain = (v) => JSON.parse(JSON.stringify(v))
+  // GC 不剪 ws: 键：它没有对应的宿主会话，但它不是"已删除的会话"。
+  const kept = pruneSessionScopes(
+    { 'ws:c:\\p': { scene: 'web' }, gone: { scene: 'x' } },
+    new Set(),
+  )
+  assert.deepEqual(plain(kept.sessions), { 'ws:c:\\p': { scene: 'web' } })
+  assert.equal(kept.pruned, 1)
+  // 播种 = 把一侧的记录做成另一侧的初始值；锁跟着层走，不跟内容走。
+  assert.deepEqual(plain(scopeForLayerSeed({ locked: true, skills: { a: true } })), { skills: { a: true } })
+  assert.equal(scopeForLayerSeed({ locked: true }), undefined, '只有锁 = 没有可播种的内容')
+  assert.equal(scopeForLayerSeed(undefined), undefined)
 })

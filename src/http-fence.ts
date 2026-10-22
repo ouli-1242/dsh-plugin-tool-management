@@ -13,7 +13,8 @@
 //   2. browser-session cookie 鉴权（HttpOnly + SameSite=Strict，Path=/）。
 //
 // `admit()` 还交回这次请求所代表的 **Peer**，而本插件的 exact 路由按官方契约只服务
-// owner Peer（非 owner 一律 403），所以 principal 也要验 —— 只取状态码会漏掉这一层。
+// owner Peer（非 owner 一律 403），所以 Peer 上的 principal 也要验 —— 只取状态码会漏掉
+// 这一层。但「Peer 带不带 principal」随宿主版本而变，判据见下方 `fenceRejection` 里那一段。
 //
 // 只查公开常量 `x-dsh-plugin` 与自比对 Origin 等于没鉴权：本机任意进程都能调写 op，
 // 而写 op 里包含 `mcpm-add`（command/args 无白名单，宿主 stdio 传输会 spawn 它
@@ -62,7 +63,13 @@ export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): 
     // 并把"这次请求代表谁"作为 Peer 交出来。`requestRejection()` 只给状态码 —— 状态码
     // 足以回答"拦不拦"，却不足以回答"这个调用方被授权到什么程度"，而本插件的路由是
     // **exact 路由**（`kind: 'exact'`，官方契约：只有 owner Peer 才该拿到响应）。
-    // 没有 principal 信息时只能当作非 owner 处理 —— 这正是下面 403 那一支的理由。
+    //
+    // Peer 是否带 `principal` 随宿主版本而变：0.2.0-rc.2 的 `admit()` 把 `OperatorPeer`
+    // 直接交出来，那个类的字段只有 `id` / `ctx` / `scope`，**没有** `principal`。
+    // 于是「没有 principal 就当作非 owner」会把**每一次**合法的 GUI 请求都判成 403 ——
+    // 2026-10-21 在真实浏览器里就是这么表现的全部接口失败（面板显示"拒绝：调用方不是本机
+    // 所有者身份"）。所以判据改成：`principal` 缺席 ⇒ 放行（admit 只把唯一那个 operator
+    // 交出来，它本来就是 owner）；`principal` 在场且 kind 不是 owner ⇒ 才拒绝。
     const admission = connection?.admit?.(req)
     if (admission !== undefined) {
       if ('rejection' in admission) {
@@ -74,7 +81,8 @@ export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): 
             : 'Host/Origin 栅栏拒绝：该请求不是发往本机地址的同源请求',
         }
       }
-      if (admission.peer?.principal?.kind !== 'owner') {
+      const principal = admission.peer?.principal
+      if (principal !== undefined && principal.kind !== 'owner') {
         return { status: 403, error: '拒绝：调用方不是本机所有者身份' }
       }
       return null

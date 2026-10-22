@@ -27,8 +27,13 @@ export interface AccessTokenDeps {
 }
 
 export interface AccessToken {
-  /** 配置里的**存量**令牌（比较与"关掉后还能开回来"都用它）。 */
+  /** 配置里的**存量**令牌（比较与"关掉后还能开回来"都用它；环境变量也算）。 */
   CONFIG_TOKEN: string
+  /**
+   * 存量令牌里**来自配置文件**的那一份（不含环境变量）。为空但 CONFIG_TOKEN 非空
+   * = 令牌由环境变量提供：判断"待重启"时不能拿文件侧的空值去和运行值比。
+   */
+  CONFIG_TOKEN_FROM_FILE: string
   /** `config.tokenDisabled === true`：令牌留在配置里但不生效。 */
   TOKEN_DISABLED: boolean
   /** 写门禁用的**生效**令牌：关掉即视为没配。 */
@@ -47,10 +52,10 @@ export interface AccessToken {
   /** 记下"本次进程验过一次令牌"（HTTP 入口在带对令牌时调用）。 */
   markAccepted(): void
   /**
-   * 把闩重新挂上（「清除令牌」调用）：此后 pre-step 门禁恢复拦截，直到再有人验对。
+   * 把闩重新挂上（界面「锁定」/「删除令牌」调用）：此后 pre-step 门禁恢复拦截，直到再有人验对。
    *
    * 不要求凭证 —— 它只会**收紧**（要求重新验令牌），给不了任何人任何权限。没有它，
-   * 解锁一次之后「清除令牌 + 刷新页面」就是个后门：浏览器里已无令牌，闩却挂着，
+   * 解锁一次之后「锁定 + 刷新页面」就是个后门：浏览器里已无令牌，闩却挂着，
    * 对话整个启动期畅通（2026-09-19 用户实测）。
    */
   unmarkAccepted(): void
@@ -79,7 +84,8 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
   // calls `callback(ctx, config)`) — never read it off `ctx.config`, which
   // is not an injected service and throws "cannot get property without
   // inject" at boot.
-  const CONFIG_TOKEN = String((config as { token?: unknown } | undefined)?.token || process.env.DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN || '').trim()
+  const CONFIG_TOKEN_FROM_FILE = String((config as { token?: unknown } | undefined)?.token || '').trim()
+  const CONFIG_TOKEN = CONFIG_TOKEN_FROM_FILE || String(process.env.DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN || '').trim()
   /**
    * `config.tokenDisabled: true` = 令牌**留在配置里**但当前不生效（用户主动关掉）。
    *
@@ -110,7 +116,7 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
 
   /**
    * 「本次启动已经验过令牌」的闩。验过即置位；唯一的手动清零入口是 `unmarkAccepted`
-   * （「清除令牌」走的 `token-unaccept`，见上）。重启自然清零。
+   * （「锁定」/「删除令牌」走的 `token-unaccept`，见上）。重启自然清零。
    *
    * 用途：`agent/pre-step` 的令牌门禁要回答"这台机器现在是不是还没人验过令牌"，而它看不到
    * 浏览器请求头。HTTP 入口是唯一知道答案的地方（那里才知道 `x-dsh-token` 对不对），
@@ -128,6 +134,7 @@ export function createAccessToken(deps: AccessTokenDeps): AccessToken {
 
   return {
     CONFIG_TOKEN,
+    CONFIG_TOKEN_FROM_FILE,
     TOKEN_DISABLED,
     TOKEN,
     tokenMatches,

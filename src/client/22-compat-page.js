@@ -1,5 +1,57 @@
+    /**
+     * 「隔离粒度」分段控件的三档（只存键名，取词在渲染时做，跟着宿主语言走）。
+     *
+     * 顺序 = 从最粗到最细：关（全局一份）→ 按对话 → 按工作区。`global` 不是"第四种键"，
+     * 而是**没有会话层** —— 也就是加会话管理之前的样子。
+     */
+    const SCOPE_MODE_OPTIONS = [
+      { value: 'global', labelKey: 'compat.scopeMode.global', tipKey: 'compat.scopeMode.global.tip' },
+      { value: 'session', labelKey: 'compat.scopeMode.session', tipKey: 'compat.scopeMode.session.tip' },
+      { value: 'workspace', labelKey: 'compat.scopeMode.workspace', tipKey: 'compat.scopeMode.workspace.tip' },
+    ]
     function CompatPage(props) {
       const t = props.t
+      // 会话作用域（0.21.2）：工具表是**每个对话自己的整份名单**，这一页跟着顶部下拉走。
+      // 全局那一层只编辑"新对话的默认模板"。
+      const scopeSnap = React.useSyncExternalStore(subscribeScope, scopeSnapshot, scopeSnapshot)
+      const scopeSessionId = scopeSnap.sessionId !== SCOPE_GLOBAL ? String(scopeSnap.sessionId || '') : ''
+      const scopeSessionLocked = scopeSessionId !== '' && scopeSnap.locked === true
+      // 隔离粒度（0.21.2）：会话 / 工作区。切换由服务端落盘并播种另一侧记录，这里只管往返与置灰。
+      const scopeMode = scopeSnap.mode === 'workspace' ? 'workspace' : scopeSnap.mode === 'global' ? 'global' : 'session'
+      const scopeIsWorkspaceMode = scopeMode === 'workspace'
+      const scopeIsGlobalMode = scopeMode === 'global'
+      const [scopeModeBusy, setScopeModeBusy] = React.useState(false)
+      const [scopeModeError, setScopeModeError] = React.useState(null)
+      // 坍缩摘要（0.21.2 审查 P1-2）：切到工作区粒度时，N 个对话的个性化设置收敛成 1 份，
+      // 规则是「当前会话优先，否则项数最多」。不告知的话，用户会觉得「切一下我的设置全没了」。
+      const [scopeModeNotice, setScopeModeNotice] = React.useState(null)
+      const changeScopeMode = function (next) {
+        const mode = next === 'workspace' ? 'workspace' : next === 'global' ? 'global' : 'session'
+        if (scopeModeBusy || mode === scopeMode) return
+        setScopeModeBusy(true)
+        setScopeModeError(null)
+        setScopeModeNotice(null)
+        scopeSetMode(mode)
+          .then(function (res) {
+            setScopeModeBusy(false)
+            if (!res || res.ok === false) { setScopeModeError((res && res.error) || t('compat.scopeMode.failed')); return }
+            const sum = res.summary
+            if (sum && sum.dropped > 0) {
+              setScopeModeNotice(t('compat.scopeMode.collapsed', {
+                workspaces: String(sum.workspaces),
+                conversations: String(sum.conversations),
+                dropped: String(sum.dropped),
+              }))
+              return
+            }
+            // 关掉隔离不是删除：那些会话 / 工作区设置原样留着，调回来就恢复。
+            const kept = res.kept
+            if (kept && kept.scopes > 0) {
+              setScopeModeNotice(t('compat.scopeMode.kept', { scopes: String(kept.scopes) }))
+            }
+          })
+          .catch(function (e) { setScopeModeBusy(false); setScopeModeError(errMsg(e)) })
+      }
       const [data, setData] = React.useState(null)
       const [presetReach, setPresetReach] = React.useState(null)
       // 注入设置（本插件各注入域的开关，清单见 context-inject 的 INJECT_DOMAIN_KEYS）。它和可达性矩阵是一体两面：
@@ -12,6 +64,8 @@
       const [toolTable, setToolTable] = React.useState(null)
       // 保存往返期间把整块置灰（见 saveToolTable 的注释：不做乐观更新）。
       const [toolTableBusy, setToolTableBusy] = React.useState(false)
+      // 会话锁 / 写失败的原因（不静默失败：用户得知道为什么勾了没保存）。
+      const [toolTableError, setToolTableError] = React.useState(null)
       // 「方案」弹窗：null = 未打开。`mode:'save'` 给当前这套勾选起名存下来；
       // `mode:'apply'` 列出已存的方案 + 那条不可删的出厂默认，点一行就应用。
       const [toolPreset, setToolPreset] = React.useState(null)
@@ -42,11 +96,14 @@
       const [tokenState, setTokenState] = React.useState(null)
       const [tokenDraft, setTokenDraft] = React.useState('')
       const [tokenMsg, setTokenMsg] = React.useState(null)
-      // 令牌管理弹窗：null = 未打开；`{ mode: 'set'|'off'|'clear'|'on', current, next, repeat, value }` = 已打开。
+      // 令牌配置弹窗：null = 未打开；`{ mode: 'set'|'off'|'clear'|'on', current, next, repeat, value, forceProof }` = 已打开。
+      // `forceProof`：宿主回了 badToken、但客户端先前以为不用凭证（状态陈旧）时就地补出凭证框，
+      // 避免"点了确认却无从输入"的死路。
       // 四种配置操作（设置/修改、关闭保护、删除令牌、开启保护）共用**一个**弹窗 —— 表单
       // 一律不落在页面上（用户 2026-09-19 三次反馈：页面要"不跳来跳去"，功能要分类清楚），
       // 弹窗打开时页面纹丝不动，确认后弹窗收起、状态行自己更新。要求输两遍（用户裁定
-      // 2026-09-19）与"再输一次当前令牌"的口径都在弹窗内执行。
+      // 2026-09-19）与"再输一次当前令牌"的口径都在弹窗内执行。「锁定本机」只收紧、
+      // 不碰配置，因此不走弹窗，点了就地生效。
       const [tokenModal, setTokenModal] = React.useState(null)
       // patch 备份：份数 / 占用（只读，给按钮一个准数）+ 清理弹窗。
       // 每份备份都是整份 patch 的副本，里面的凭据是**明文** —— 所以给一个显式出口让人能删。
@@ -240,6 +297,7 @@
           configHasToken: r.configHasToken === true,
           configDisabled: r.configDisabled === true,
           configFound: r.configFound === true,
+          envToken: r.envToken === true,
           pendingRestart: r.pendingRestart === true,
         })
       }
@@ -285,7 +343,7 @@
         loadToken(true)
       }
       /**
-       * 改宿主侧配置。三种模式：
+       * 改宿主侧配置。四种模式：
        *   `set` —— 写入 / 换掉令牌（新值由表单传进来，必须输两遍；宿主已有令牌时还要在
        *            表单里**当场再输一次当前令牌**当凭证，走 `current` 那一栏）；
        *   `off` —— 关掉保护（**令牌留在配置里**，随时能开回来；凭证只能是**这次输入的**当前令牌，
@@ -303,7 +361,11 @@
       const configureHostToken = function (mode, value, current, fieldKey) {
         const proof = String(value || '').trim()
         if (mode === 'set' && !proof) { setTokenMsg({ kind: 'err', text: t('compat.token.empty'), field: 'next' }); return }
-        if ((mode === 'off' || mode === 'clear') && !proof) { setTokenMsg({ kind: 'err', text: t('compat.token.proofNeed'), field: fieldKey }); return }
+        // 只有当前进程**真的拿着**令牌时才要求再输一次。配置里写了、但还没重启加载进来时
+        // 没有可验证的值，宿主那边同样不要求 —— 这里不能凭空多要一格。
+        if ((mode === 'off' || mode === 'clear') && tokenHostConfigured && !proof) {
+          setTokenMsg({ kind: 'err', text: t('compat.token.proofNeed'), field: fieldKey }); return
+        }
         setTokenMsg(null)
         // `current` 只有 set 用：那个值是**新**令牌，证明不了你知道旧值，所以凭证单独一栏
         // （宿主侧同样只认它 —— 请求头里更新过的那份对 set 不作数，见 src/index.ts tokenConfigure）。
@@ -314,6 +376,13 @@
             // 一遍，而不是把人指到别的地方去。四种模式（含开启保护时填错）共用同一句。
             const wrong = !!(r && r.code === 'error.secret.badToken')
             const text = wrong ? t('compat.token.wrong') : ((r && r.error) || t('compat.token.failed'))
+            // 宿主说令牌不对、而客户端先前以为"不用凭证"（状态陈旧 / 环境变量刚变化）：
+            // 把凭证框补出来，否则用户看着一句"请填入当前令牌"却没有地方可填。
+            if (wrong && (mode === 'off' || mode === 'clear') && !tokenHostConfigured) {
+              setTokenModal(function (prev) {
+                return prev ? Object.assign({}, prev, { forceProof: true, value: '' }) : prev
+              })
+            }
             // 令牌不对时把**那一格**标红（`field`）：整句提示在框内，但"错在哪个框"得看得出
             // —— set 的凭证是「当前令牌」那一栏，其余错误归属触发它的那个表单。
             setTokenMsg({ kind: 'err', text: text, field: wrong && mode === 'set' ? 'current' : fieldKey })
@@ -329,12 +398,16 @@
             setTokenDraft('')
           }
           setTokenModal(null)
-          loadToken(true)
+          // 删除配置令牌 = 一步回到"还没有令牌"：本机记住的那串也跟着作废，并把宿主侧
+          // 「本次启动已验过」的闩重新挂上（clearToken 同时做这三件事）。只删配置、把本机
+          // 令牌留着的话，用户下次还会以为是自己没填对。
+          if (mode === 'clear') clearToken()
+          else loadToken(true)
         }).catch(function (e) { setTokenMsg({ kind: 'err', text: errMsg(e), field: fieldKey }) })
       }
       /** 打开令牌管理弹窗（四种模式共用一个弹窗，见 tokenModal 的注释）。 */
       const openTokenModal = function (mode) {
-        setTokenModal({ mode: mode, current: '', next: '', repeat: '', value: '' })
+        setTokenModal({ mode: mode, current: '', next: '', repeat: '', value: '', forceProof: false })
         setTokenMsg(null)
       }
       const closeTokenModal = function () { setTokenModal(null); setTokenMsg(null) }
@@ -352,17 +425,12 @@
         }
         // off / clear 只认当场输入的当前令牌；on 是反风险方向，宿主还接受请求头里
         // 已验过的凭证（accepted 时可以不填直接开，见 src/index.ts tokenConfigure）。
-        // clearLocal 是本机操作，宿主不参与：输一次令牌是与其余三行同款的确认手势，
-        // 不校验对错 —— 校验了反而把"清除记错的旧令牌"这条路堵死，非空即可确认。
-        if (tokenModal.mode === 'clearLocal') {
-          if (!tokenModal.value.trim()) return
-          clearToken()
-          setTokenModal(null)
-          return
-        }
+        const needProof = tokenHostConfigured && (tokenModal.mode === 'off' || tokenModal.mode === 'clear')
         const allowEmpty = tokenModal.mode === 'on' && !!(tokenState && tokenState.accepted)
-        if (!tokenModal.value.trim() && !allowEmpty) return
-        configureHostToken(tokenModal.mode, tokenModal.value.trim(), '', tokenModal.mode)
+        const value = tokenModal.value.trim()
+        if (needProof && !value) return
+        if (tokenModal.mode === 'on' && !value && !allowEmpty) return
+        configureHostToken(tokenModal.mode, value, '', tokenModal.mode)
       }
       /** 弹窗里的输入框按回车 = 确认（所有框挂同一个，顺序无所谓）。 */
       const enterToSubmit = function (ev) { if (ev.key === 'Enter') submitTokenModal() }
@@ -387,11 +455,20 @@
         return {
           hidden: r.hidden || hiddenFallback || [], presets: r.presets || [],
           defaultHidden: r.defaultHidden || [], report: r.report,
+          // 会话层：当前名单的来源（本对话 / 创建时 / 全局兜底）与全局默认名单（「恢复默认」用）。
+          source: r.source || '',
+          globalHidden: r.globalHidden || r.hidden || [],
+          sessionId: r.sessionId || '',
         }
       }
       const loadToolTable = function (alive) {
-        apiCall('tool-table', {})
-          .then(function (r) { applyToolTable(r, alive) })
+        // 全局层不带 sessionId（老行为）；会话层读这一对话生效的整份名单。
+        const sid = scopeSessionId
+        apiCall('tool-table', sid ? { sessionId: sid } : {})
+          .then(function (r) {
+            if (alive === false) return
+            if (r && r.ok) { applyToolTable(r, alive); setToolTableError(null) }
+          })
           .catch(function () { /* 读不到 → 不渲染这一节 */ })
       }
       /**
@@ -403,28 +480,40 @@
        * 往返可以忽略，所以选择在等待期间把整块变灰。
        */
       const saveToolTable = function (names) {
-        if (!toolTable || toolTableBusy) return
+        if (!toolTable || toolTableBusy || scopeSessionLocked) return
         setToolTableBusy(true)
-        apiCall('tool-table', { set: true, hidden: names.slice() })
+        setToolTableError(null)
+        const payload = { set: true, hidden: names.slice() }
+        if (scopeSessionId) payload.sessionId = scopeSessionId
+        apiCall('tool-table', payload)
           .then(function (r) {
-            if (r && r.ok && r.report) setToolTable(toolTableFrom(r, names))
-            else loadToolTable(true)
+            if (r && r.ok && r.report) {
+              setToolTable(toolTableFrom(r, names))
+              // 会话层的工具表也是"这一层的覆盖"：顶部下拉的条数要跟着变。
+              if (scopeSessionId) refreshScope()
+            } else {
+              setToolTableError(r && r.error ? String(r.error) : t('compat.tools.saveFailed'))
+              loadToolTable(true)
+            }
             // 功能总览那一行写着"一轮发出去多少"，它得跟着变。
             loadFeatures(true)
           })
-          .catch(function () { loadToolTable(true) })
+          .catch(function () {
+            setToolTableError(t('compat.tools.saveFailed'))
+            loadToolTable(true)
+          })
           .then(function () { setToolTableBusy(false) })
       }
       /** 单个工具的勾选：在 hidden 名单里加 / 删一个名字。 */
       const toggleToolTableTool = function (name, on) {
-        if (!toolTable) return
+        if (!toolTable || scopeSessionLocked) return
         const hid = (toolTable.hidden || []).filter(function (n) { return n !== name })
         if (!on) hid.push(name)
         saveToolTable(hid)
       }
       /** 整个域一起开 / 关（分组勾选框）。 */
       const toggleToolTableGroup = function (group, on) {
-        if (!toolTable) return
+        if (!toolTable || scopeSessionLocked) return
         const names = group.tools.map(function (tool) { return tool.name })
         const hid = (toolTable.hidden || []).filter(function (n) { return names.indexOf(n) < 0 })
         if (!on) Array.prototype.push.apply(hid, names)
@@ -459,7 +548,7 @@
       const presetNameNorm = function (value) { return String(value || '').replace(/\s+/g, ' ').trim() }
       /** 存方案：空名与撞名在本地先挡住（服务端也会挡，但那是白跑一趟）。 */
       const submitToolPreset = function () {
-        if (!toolPreset || toolPreset.busy) return
+        if (!toolPreset || toolPreset.busy || scopeSessionId) return
         const name = presetNameNorm(toolPreset.name)
         if (!name) {
           setToolPreset(Object.assign({}, toolPreset, { error: t('compat.tools.preset.err.nameEmpty') }))
@@ -479,7 +568,7 @@
       }
       /** 删方案：留在弹窗里（用户多半还要接着挑），只把清单换成服务端那份。 */
       const deleteToolPreset = function (name) {
-        if (toolPreset && toolPreset.busy) return
+        if ((toolPreset && toolPreset.busy) || scopeSessionId) return
         setToolPreset({ mode: 'apply', busy: true })
         apiCall('tool-table', { presetDelete: name })
           .then(function (r) {
@@ -505,6 +594,18 @@
           .then(function (r) { if (alive !== false && r && r.ok) setFeatures(r) })
           .catch(function () { /* 同上 */ })
       }
+      // 工具表跟着顶部作用域走：切对话 / 进出场景都重拉这一层的生效名单。
+      // 首挂载也走这里（`lastToolScope` 初值 null），所以下面的挂载 effect 不再单独拉一次。
+      // `revision` 进来兜"同一场景里方案改绑"（服务端会把新名单同步到会话，场景名不变）。
+      const lastToolScope = React.useRef(null)
+      const toolScopeSig = scopeSessionId + '|' + String(scopeSnap.scene || '') + '|' + (scopeSnap.detached === true ? '1' : '0') + '|' + String(Number(scopeSnap.revision) || 0)
+      React.useEffect(function () {
+        if (lastToolScope.current === toolScopeSig) return
+        lastToolScope.current = toolScopeSig
+        setToolTable(null)
+        setToolTableError(null)
+        loadToolTable(true)
+      }, [toolScopeSig])
       React.useEffect(function () {
         let alive = true
         setBusy(true)
@@ -514,7 +615,6 @@
         loadReach(alive)
         loadInject(alive)
         loadSlash(alive)
-        loadToolTable(alive)
         loadLive(alive)
         loadFeatures(alive)
         loadToken(alive)
@@ -811,65 +911,72 @@
       // 访问令牌（用户裁定 2026-09-18：放在「注入」**上面** —— 令牌不过时写操作全被拒，
       // 它是"先解决才能用别的"的一件事，位置就该在设置项之前）。
       //
-      // 排版口径（2026-09-19 第三次重构；「折叠管理区」首版与「常驻清单」二版之后，
-      // 用户点破关键：「按钮、输入框、提示句的位置、大小、长度要统一，页面不要跳来跳去；
-      // 功能要分类出来，互通的功能合在一起会很混乱，不必受现有结构束缚」）——
-      // 于是按**作用域**拆成两个分区，所有表单搬进弹窗：
+      // 排版口径（2026-10-22 第四次重构）：原来的「状态框 + 四行管理清单」太占地方，
+      // 四行里「删除令牌 / 清除令牌」又几乎看不出区别，于是并成**两行**：
       //
-      //   ① 访问令牌（本机、临时）：一枚胶囊 + 一句实况 + 一个控件槽，永远只有两行。
-      //      待解锁 = 输入框 + 解锁；已解锁 = 原位换绿胶囊（同一个容器，min-height 拉平，
-      //      框高不变）；其余状态不放控件。解锁错误顶替实况那一行显示（红色），高度同样不变。
-      //   ② 令牌管理（配置文件、持久）：四行**静态**清单 —— 令牌（设置/修改）、保护开关、
-      //      删除令牌、清除令牌。行名、说明、按钮三列同形同位同宽，行不随状态增删
-      //      （不可用时禁用、由说明解释）；按钮上带 … 的开**弹窗**（照备份弹窗的手工
-      //      模式拼装），页面上不存在任何会展开收起的东西。
+      //   ① 令牌行：胶囊 + 一句实况 + 设置/修改/删除/锁定。待解锁时输入框就长在这一行
+      //      下面；写配置的表单全在弹窗里，页面上没有会展开收起的东西。
+      //   ② 保护开关行：一颗 Switch（开启后每次启动要解锁）。
       //
-      //   反馈模型：页面**永远不出现游离的结果框**。成功 = 弹窗收起 / 胶囊翻绿 + 状态行
-      //      更新（「待重启」横幅是写配置成功的唯一回执）；失败 = 弹窗不关、错误显示在
-      //      弹窗内部（`field` 归属哪个框）。红色只出现在确认按钮上。
-      // 它**有意替换**同日早些时候的全部三条口径（「本次启动 / 宿主配置 / 保护开关」三行
-      // 常驻、就地展开确认、结果框报告成败）：三行把实现模型摆给用户，就地展开与结果框
-      // 是页面跳动的来源。「本次启动」行随之退役。
+      //   「删除令牌」与原来的「清除令牌」合并：删配置的同时忘掉本机记录，一步回到
+      //      "还没有令牌"；只想清本机、不动配置时用「锁定」（已解锁时才出现）。
+      //
+      //   反馈模型不变：页面**永远不出现游离的结果框**。成功 = 弹窗收起 / 胶囊更新；
+      //      失败 = 弹窗不关、错误显示在弹窗内部（`field` 归属）。红色只出现在确认按钮上。
       const tokenHostConfigured = !!(tokenState && tokenState.hostConfigured)
+      // 配置文件里**有值**（含 tokenDisabled=true 的保留态）。它和 hostConfigured 的区别：
+      // 后者说的是"当前进程拿到的值"，刚写入、还没重启时只有它为 true。
+      const tokenConfigHasToken = !!(tokenState && tokenState.configHasToken)
+      // 「有没有令牌可管理」：配置里有，或当前进程里有（环境变量供的令牌只体现在后者）。
+      const tokenConfigured = tokenHostConfigured || tokenConfigHasToken
       // 当前进程里令牌**是否在生效**（宿主回的 `active`：关掉或没配都是 false）。
       const tokenActive = !!(tokenState && tokenState.active)
-      // 「保护当下是否算开着」—— 开关行的方向用它，**不能**只看配置文件：令牌也可能
-      // 来自环境变量（文件里没有 token），只看配置会把"开着"说成"已关闭"，环境变量用户
-      // 就永远找不到关闭入口（好在 TOKEN_DISABLED 是文件侧旗标、对环境变量供的令牌同样
-      // 生效，见 src/request-gate.ts createAccessToken，所以「关闭」对他们真实可用）。
-      const tokenProtectOn = tokenActive
-        || !!(tokenState && tokenState.configHasToken === true && tokenState.configDisabled !== true)
-      // 本次进程解锁没有（填过，且宿主认可这串）。
+      // 开关反映**配置意图**（文件里开没开），胶囊反映**当前进程**。改了配置还没重启时
+      // 两边会不一致，由下方「待重启」横幅解释；开关若跟着进程走，点完不会动，看起来
+      // 像没生效。环境变量供的令牌在配置里没有值，只看文件侧的开关旗标。
+      const tokenEnvToken = !!(tokenState && tokenState.envToken)
+      const tokenProtectOn = !!tokenState && tokenState.configDisabled !== true
+        && (tokenEnvToken || tokenConfigHasToken)
+      // 本次进程解锁没有（本机这串被宿主认可了）。
       const tokenUnlocked = !!TOKEN && !!(tokenState && tokenState.accepted)
-      // 胶囊四态：未设置 / 已关闭 / 已开启·待解锁 / 已开启·已解锁（状态还没到 → loading）。
+      // 胶囊五态：未设置 / 待重启 / 已关闭 / 已开启·待解锁 / 已开启·已解锁。
       const tokenKind = !tokenState
         ? 'loading'
-        : (!tokenHostConfigured ? 'unset'
-          : (tokenActive ? (tokenUnlocked ? 'unlocked' : 'locked') : 'off'))
-      // 绿=这一程能改配置；告警=要注意（开着但没解锁 / 关着）；灰=还没配。
+        : (!tokenConfigured ? 'unset'
+          : (tokenActive
+            ? (tokenUnlocked ? 'unlocked' : 'locked')
+            : (tokenState.pendingRestart && tokenState.configDisabled !== true ? 'pending' : 'off')))
+      // 待解锁 = 胶囊说"待解锁"（本机没填 / 填了没被认可）。控件槽跟胶囊同一判据，
+      // 免得出现"说待解锁却没有输入框"的死路。
+      const tokenNeedsUnlock = tokenKind === 'locked'
+      // 绿=这一程能改配置；告警=要注意（开着但没解锁 / 关着 / 待重启）；灰=还没配。
       const tokenPillTone = tokenKind === 'unlocked'
         ? ' dsm-pill-ok'
-        : (tokenKind === 'off' || tokenKind === 'locked' ? ' dsm-pill-warn' : ' dsm-pill-muted')
+        : (tokenKind === 'off' || tokenKind === 'locked' || tokenKind === 'pending' ? ' dsm-pill-warn' : ' dsm-pill-muted')
       const tokenModalOpen = tokenModal !== null
       const tokenSetInvalid = tokenModalOpen && tokenModal.mode === 'set' && tokenModal.next !== tokenModal.repeat
-      // 错误只出现在**触发它的弹窗内部**（`field` 归属：run=状态区实况行（顶替实况）/
-      // current·next=设置弹窗 / off·clear·on=各自弹窗）；成功则弹窗收起、状态行自己更新。
+      // 错误只出现在**触发它的弹窗内部**（`field` 归属：run=令牌行的实况 / current·next=
+      // 设置弹窗 / off·clear·on=各自弹窗）；成功则弹窗收起、状态自己更新。
       const tokenFormError = function (fields) {
         if (!tokenMsg || !tokenMsg.field || fields.indexOf(tokenMsg.field) < 0) return null
         return React.createElement('p', { className: 'dsm-token-ferr dsm-feedback dsm-error', role: 'alert' }, tokenMsg.text)
       }
-      // ① 状态区：实况句与解锁错误共用一行 —— 错误顶替实况（红色），行高、位置都不变。
-      // 「还没有令牌」这一态**不出实况句**（用户裁定 2026-09-28）：那句话讲的是"没令牌会怎样"，
-      // 而这一区已经有灰胶囊 + 「设置令牌」入口，解释反而像吓唬人。其余状态各有一句。
-      const tokenStatusLine = !tokenState ? null
-        : (tokenMsg && tokenMsg.field === 'run')
-          ? React.createElement('span', { className: 'dsm-help dsm-token-stat-err' }, tokenMsg.text)
-          : (tokenKind === 'unset' ? null
-            : React.createElement('span', { className: 'dsm-help' }, t('compat.token.sentence.' + tokenKind)))
-      // 控件槽：只有「待解锁」态才有内容（输入框 + 解锁）。已解锁后状态行本身就是
-      // 绿胶囊 + 实况，控件槽里再摆一枚「已解锁」纯属重复、框也空落落（用户 2026-09-19
-      // 实测反馈）—— 其余状态什么都不放，这一区最省就一行。
-      const tokenControl = tokenKind === 'locked'
+      // 令牌行的说明：实况句与解锁 / 开关错误共用一格 —— 错误顶替实况（红色），行高、位置都不变。
+      const tokenRowError = !!(tokenMsg && (tokenMsg.field === 'run' || tokenMsg.field === 'protect'))
+      const tokenStatusText = !tokenState ? ''
+        : tokenRowError
+          ? tokenMsg.text
+          : (tokenKind === 'unset' ? t('compat.token.sentence.unset')
+            : tokenKind === 'pending' ? '' // 下方「待重启」横幅已经把话说完，不重复
+              : t('compat.token.sentence.' + tokenKind))
+      const tokenStatusLine = tokenStatusText
+        ? React.createElement('span', {
+            className: tokenRowError ? 'dsm-token-stat-err' : undefined,
+          }, tokenStatusText)
+        : null
+      // 控件槽：只有「待解锁」态才有内容（输入框 + 解锁）。已解锁后胶囊本身就是标识，
+      // 不再重复摆一枚「已解锁」。
+      const tokenControl = tokenNeedsUnlock
         ? React.createElement('div', { className: 'dsm-token-unlock' },
           React.createElement('input', {
             ref: tokenInputRef,
@@ -886,82 +993,116 @@
             disabled: !tokenDraft.trim(), onClick: saveToken,
           }, t('compat.token.save')))
         : null
-      // ── ② 令牌管理：四行静态清单（配置文件、持久）────────────────────────────────
-      // 行构造：名字 · 一句说明 · 按钮 —— SettingsRow（REDESIGN §5.2，切片五收编）：
-      // 名字与说明在左（说明跟在名字下一行），按钮靠右，行间分隔线分节。行**永远
-      // 存在**（不随状态增删，不可用时禁用、由说明解释为什么），按钮一律次级样式，
-      // 红色只出现在弹窗里的确认按钮上；点带 … 的按钮开弹窗，页面本身纹丝不动。
-      const tokenRow = function (name, hint, btn) {
-        return React.createElement(SettingsRow, { name: name, desc: hint, control: btn })
+      // 令牌行右侧的动作：锁定 / 设置或修改 / 删除，三颗同宽并排。
+      // 红色只出现在弹窗里的确认按钮上。
+      const tokenActions = []
+      // 「锁定」只在本机记住了东西时出现：它只收紧权限（忘掉本机令牌 + 重新挂上
+      // 验证闩），不需要再输一次，点了就地生效。
+      if (TOKEN) {
+        tokenActions.push(React.createElement('button', {
+          key: 'lock', type: 'button',
+          className: 'dsm-btn dsm-btn-secondary dsm-btn-lock',
+          title: t('compat.token.lock.title'),
+          onClick: clearToken,
+        }, t('compat.token.lock')))
       }
-      /** 状态会翻转的按钮（修改↔设置 / 关闭↔开启）：fixedLabelPair 用隐形占位把两种
-       *  文案里更宽的那个当宽度，翻转时按钮尺寸不变（见 fixedLabelPair 上的注释）。 */
-      const tokenRowBtn = function (label, otherLabel, disabled, onClick) {
-        return React.createElement('button', {
-          type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk',
-          disabled: disabled, onClick: onClick,
-        }, fixedLabelPair(label, otherLabel))
+      // 设置↔修改用 fixedLabelPair 定宽：刚写入、还没重启时 tokenHostConfigured 还是
+      // false，但配置里已经有值了 —— 文案按 tokenConfigured 判，避免把它说成"设置"。
+      tokenActions.push(React.createElement('button', {
+        key: 'edit', type: 'button',
+        className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk',
+        disabled: !tokenState,
+        onClick: function () { openTokenModal('set') },
+      }, fixedLabelPair(
+        t(tokenConfigured ? 'compat.token.edit.btn' : 'compat.token.setHost.btn'),
+        t(tokenConfigured ? 'compat.token.setHost.btn' : 'compat.token.edit.btn'))))
+      if (tokenConfigured) {
+        tokenActions.push(React.createElement('button', {
+          key: 'delete', type: 'button',
+          className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk',
+          // 配置里没有值可删（令牌来自环境变量）时禁用；悬停那句说明原因。
+          disabled: !tokenState || !tokenConfigHasToken,
+          title: tokenConfigHasToken ? t('compat.token.clearHost.rowHint') : t('compat.token.clearHost.envHint'),
+          onClick: function () { openTokenModal('clear') },
+        }, fixedLabelPair(t('compat.token.clearHost.btn'), t('compat.token.clearHost.btn'))))
       }
-      // 第 1 行：令牌（设置 / 修改）。凭证在弹窗里当场输一次，不要求"先解锁"（原先那道
-      // 前置会让用户把同一串令牌填两遍，用户裁定 2026-09-19 移除）。
-      const tokenRowValue = tokenRow(
-        t(tokenHostConfigured ? 'compat.token.edit' : 'compat.token.setHost'),
-        t(tokenHostConfigured ? 'compat.token.edit.rowHint' : 'compat.token.hostHint'),
-        tokenRowBtn(
-          t(tokenHostConfigured ? 'compat.token.edit.btn' : 'compat.token.setHost.btn'),
-          t(tokenHostConfigured ? 'compat.token.setHost.btn' : 'compat.token.edit.btn'),
-          !tokenState, function () { openTokenModal('set') }))
-      // 第 2 行：保护开关。方向按 tokenProtectOn 判（见其注释）—— 环境变量供的令牌也能
-      // 在这里关掉；还没设置令牌时没有可开关的东西，禁用。
-      const tokenRowProtect = tokenRow(
-        t('compat.token.row.protect'),
-        t(tokenProtectOn ? 'compat.token.offHost.rowHint' : 'compat.token.onHint'),
-        tokenRowBtn(
-          t(tokenProtectOn ? 'compat.token.offHost.btn' : 'compat.token.onHost.btn'),
-          t(tokenProtectOn ? 'compat.token.onHost.btn' : 'compat.token.offHost.btn'),
-          !tokenState, function () { openTokenModal(tokenProtectOn ? 'off' : 'on') }))
-      // 第 3 行：删除令牌。配置文件里没有值可删时禁用 —— 靠环境变量供令牌时是"没有可删
-      // 的值"（说明改口解释），还没设置过令牌是正常的禁用。删除回到"还没有令牌"那一态
-      // （写操作不再要凭证、明文密钥也可直接查看）。
-      const tokenRowDelete = tokenRow(
-        t('compat.token.clearHost'),
-        tokenState && tokenHostConfigured && tokenState.configHasToken !== true
-          ? t('compat.token.clearHost.envHint')
-          : t('compat.token.clearHost.rowHint'),
-        tokenRowBtn(t('compat.token.clearHost.btn'), t('compat.token.clearHost.btn'),
-          !tokenState || tokenState.configHasToken !== true,
-          function () { openTokenModal('clear') }))
-      // 第 4 行：清除令牌。只清浏览器里记住的那串（本机令牌），不动配置；但与其余三行
-      // 同一套交互 —— 弹窗里输一次令牌确认（用户 2026-09-19 要求）。浏览器没记住东西时禁用。
-      const tokenRowClearLocal = tokenRow(
-        t('compat.token.clearLocal'),
-        t('compat.token.clearLocal.rowHint'),
-        tokenRowBtn(t('compat.token.clear'), t('compat.token.clear'),
-          !TOKEN, function () { openTokenModal('clearLocal') }))
-      push(section(t('compat.token'), t('compat.token.hint'),
+      // 保护开关：没有令牌时没有可开关的东西（开关点了也没有校验对象），禁用。
+      // 说明写**当前状态**（不是"点一下会怎样"）—— 开关开着时还写着"暂时停用校验"
+      // 会让用户以为它已经停了。
+      const tokenProtectHint = !tokenState
+        ? ''
+        : (!tokenConfigured
+          ? t('compat.token.protect.unset')
+          : (tokenProtectOn ? t('compat.token.protect.on') : t('compat.token.protect.off')))
+      push(section(t('compat.token'), t('compat.token.manage.hint'),
         React.createElement('div', { className: 'dsm-token-block' },
-          // 状态行：胶囊 + 实况（或解锁错误）—— 永远只有这一行，位置不变。
-          React.createElement('div', { className: 'dsm-stat-row' },
-            React.createElement('span', { className: 'dsm-pill' + tokenPillTone },
+          React.createElement(SettingsRow, {
+            name: t('compat.token.row.token'),
+            tag: React.createElement('span', { className: 'dsm-pill' + tokenPillTone },
               tokenState ? t('compat.token.pill.' + tokenKind) : '…'),
-            tokenStatusLine),
-          // 控件槽：待解锁 = 输入框 + 解锁；已解锁 = 原位绿胶囊；其余状态不渲染。
+            desc: tokenStatusLine,
+            descTitle: tokenStatusText || null,
+            control: tokenActions,
+          }),
           tokenControl,
+          React.createElement(SettingsRow, {
+            name: t('compat.token.row.protect'),
+            desc: tokenProtectHint,
+            control: React.createElement(Switch, {
+              on: tokenProtectOn,
+              disabled: !tokenState || !tokenConfigured,
+              label: t('compat.token.row.protect'),
+              onClick: function () {
+                // 关闭是减防护：仍按既定口径弹窗再输一次当前令牌。
+                if (tokenProtectOn) { openTokenModal('off'); return }
+                // 开启是收紧方向：本次启动已经解锁（请求头带着宿主认可的令牌）就直接开，
+                // 不再为一次开关弹一层窗；失败时错误落在令牌行的说明上。
+                if (tokenState && tokenState.accepted) {
+                  configureHostToken('on', '', '', 'protect')
+                  return
+                }
+                openTokenModal('on')
+              },
+            }),
+          }),
+          // 令牌来自环境变量：配置里没有可删的值，删除键是灰的 —— 说清楚它为什么灰。
+          tokenEnvToken && !tokenConfigHasToken
+            ? React.createElement('p', { className: 'dsm-help' }, t('compat.token.envNote'))
+            : null,
           // 配置改了但没重启：这句必须显眼，否则用户会以为"设置了却没反应"。它同时是
           // 写配置成功的**唯一回执** —— 成功 = 弹窗收起 + 这句横幅出现，不另弹结果框。
           tokenState && tokenState.pendingRestart
             ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('compat.token.pendingRestart'))
             : null,
           // loader 行读不到：**所有**写配置的操作都会被宿主拒绝 —— 它是管理区的前置
-          // 事实，作为一行说明放在状态区底部。
+          // 事实，作为一行说明放在区块底部。
           tokenState && tokenState.configFound === false
             ? React.createElement('p', { className: 'dsm-help' }, t('compat.token.notFound'))
             : null),
         true))
-      push(section(t('compat.token.manage.title'), t('compat.token.manage.hint'),
-        React.createElement('div', { className: 'dsm-token-rows' },
-          tokenRowValue, tokenRowProtect, tokenRowDelete, tokenRowClearLocal),
-        true))
+
+      // 隔离粒度（0.21.2，用户 2026-10-21）：排在「访问令牌」与「注入」之间 —— 它决定这一页
+      // 与下面各页"按哪一层取数"。切换不是删除：另一侧的记录原样保留（服务端只播种缺的那一侧）。
+      // 小节副标题与"按哪一层隔离"那格按用户口径删掉，只留两颗按钮与当前态那一句。
+      push(section(t('compat.scopeMode'), null,
+        React.createElement('div', { className: 'dsm-scope-mode' },
+          // 两个互斥值用分段控件（与 MCP 的「传输方式」同款，用户 2026-10-21）：下拉要多点一下
+          // 才看得见另一档，而这里一共就两档。
+          React.createElement('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': t('compat.scopeMode') },
+            SCOPE_MODE_OPTIONS.map(function (o) {
+              return React.createElement('button', {
+                key: o.value, type: 'button', title: t(o.tipKey), disabled: scopeModeBusy,
+                'aria-pressed': scopeMode === o.value ? 'true' : 'false',
+                onClick: function () { changeScopeMode(o.value) },
+              }, t(o.labelKey))
+            })),
+          React.createElement('span', { className: 'dsm-scope-mode-hint' },
+            scopeIsGlobalMode
+              ? t('compat.scopeMode.current.global')
+              : (scopeIsWorkspaceMode ? t('compat.scopeMode.current.workspace') : t('compat.scopeMode.current.session'))),
+          scopeModeError ? React.createElement('span', { className: 'dsm-feedback dsm-warning', role: 'alert' }, scopeModeError) : null,
+          // 坍缩摘要只在「确实丢了东西」时出现（dropped > 0），不打扰常规切换。
+          scopeModeNotice ? React.createElement('span', { className: 'dsm-feedback dsm-ok', role: 'status' }, scopeModeNotice) : null)))
 
       // ── 令牌管理弹窗（手工拼装 —— `Modal` 在 apply 内引用不到，照备份弹窗的模式）──
       // 遮罩点击关闭 + 头部标题/关闭键 + body + 底部动作行；Esc 关闭 / Tab 焦点陷阱
@@ -972,16 +1113,17 @@
       if (tokenModal) {
         const m = tokenModal
         const title = t(m.mode === 'set'
-          ? (tokenHostConfigured ? 'compat.token.edit' : 'compat.token.setHost')
+          ? (tokenConfigured ? 'compat.token.edit' : 'compat.token.setHost')
           : m.mode === 'off' ? 'compat.token.offHost'
-            : m.mode === 'clear' ? 'compat.token.clearHost'
-              : m.mode === 'clearLocal' ? 'compat.token.clearLocal' : 'compat.token.onHost')
+            : m.mode === 'clear' ? 'compat.token.clearHost' : 'compat.token.onHost')
         let fields
         if (m.mode === 'set') {
           // 竖排三格（圆点看不出填的是哪格，竖排靠顺序当说明）：当前令牌（仅宿主已配时 ——
           // 首次设置没有"当前"可证明，宿主同样不要求）、新令牌、再输一次；三格都齐了
           // 才让按：当前令牌是凭证（宿主会验），新令牌输两遍防手滑（用户裁定 2026-09-19）。
           fields = [
+            // 配置改动一律要重启才生效 —— 写在这里，免得用户改完以为没反应。
+            React.createElement('p', { key: 'restart', className: 'dsm-help' }, t('compat.token.edit.restartHint')),
             tokenHostConfigured ? React.createElement('input', {
               key: 'current', ref: tokenCurrentRef,
               className: 'dsm-control' + (tokenMsg && tokenMsg.field === 'current' ? ' dsm-rule-invalid' : ''),
@@ -1010,31 +1152,36 @@
           ]
         } else {
           // "再输一次当前令牌"确认：关闭 / 删除只认当场输入的值（用户裁定 2026-09-19）；
+          // 但当前进程没拿着令牌时（配置里刚写入、还没重启）没有可验证的值，宿主也
+          // 不要求 —— 此时不摆输入框，只让用户确认。
           // 开启是反风险方向，accepted 时宿主还认请求头凭证，可以不填直接开。
+          const proofRequired = (tokenHostConfigured || m.forceProof === true) && (m.mode === 'off' || m.mode === 'clear')
           const allowEmpty = m.mode === 'on' && !!(tokenState && tokenState.accepted)
+          const showProof = proofRequired || (m.mode === 'on' && !allowEmpty)
           fields = [
-            React.createElement('input', {
+            showProof ? React.createElement('input', {
               key: 'proof',
               className: 'dsm-control' + (tokenMsg && tokenMsg.field === m.mode ? ' dsm-rule-invalid' : ''),
               type: 'password', value: m.value,
               placeholder: t('compat.token.proofPlaceholder'), 'aria-label': t('compat.token.proofPlaceholder'),
-              onChange: function (ev) { setTokenModal({ mode: m.mode, current: '', next: '', repeat: '', value: ev.target.value }) },
+              onChange: function (ev) { setTokenModal({ mode: m.mode, current: '', next: '', repeat: '', value: ev.target.value, forceProof: m.forceProof === true }) },
               onKeyDown: function (ev) { if (ev.key === 'Enter' && (m.value.trim() || allowEmpty)) submitTokenModal() },
-            }),
+            }) : null,
             React.createElement('p', { key: 'hint', className: 'dsm-help' },
-              t(m.mode === 'off' ? 'compat.token.offConfirm.hint'
-                : m.mode === 'clear' ? 'compat.token.clearConfirm.hint'
-                  : m.mode === 'clearLocal' ? 'compat.token.clearLocalConfirm.hint' : 'compat.token.onHint')),
+              t(m.mode === 'off' ? (proofRequired ? 'compat.token.offConfirm.hint' : 'compat.token.offConfirm.hintNoProof')
+                : m.mode === 'clear' ? (proofRequired ? 'compat.token.clearConfirm.hint' : 'compat.token.clearConfirm.hintNoProof')
+                  : 'compat.token.onHint')),
             tokenFormError([m.mode]),
           ]
         }
         const yesLabel = m.mode === 'set' ? t('compat.token.edit.save')
           : m.mode === 'off' ? t('compat.token.offConfirm.yes')
-            : m.mode === 'clear' ? t('compat.token.clearConfirm.yes')
-              : m.mode === 'clearLocal' ? t('compat.token.clearLocalConfirm.yes') : t('compat.token.onConfirm.yes')
+            : m.mode === 'clear' ? t('compat.token.clearConfirm.yes') : t('compat.token.onConfirm.yes')
+        const proofRequired = (tokenHostConfigured || m.forceProof === true) && (m.mode === 'off' || m.mode === 'clear')
         const yesDisabled = m.mode === 'set'
           ? (!m.next.trim() || tokenSetInvalid || (tokenHostConfigured && !m.current.trim()))
-          : (!m.value.trim() && !(m.mode === 'on' && !!(tokenState && tokenState.accepted)))
+          : (proofRequired && !m.value.trim())
+            || (m.mode === 'on' && !m.value.trim() && !(tokenState && tokenState.accepted))
         tokenModalEl = React.createElement('div', {
           key: 'token-modal',
           className: 'dsm-mask',
@@ -1055,7 +1202,7 @@
             React.createElement('div', { className: 'dsm-modal-actions' }, [
               React.createElement('button', {
                 key: 'yes', type: 'button',
-                className: 'dsm-btn' + (m.mode === 'off' || m.mode === 'clear' || m.mode === 'clearLocal' ? ' dsm-btn-danger' : ''),
+                className: 'dsm-btn' + (m.mode === 'off' || m.mode === 'clear' ? ' dsm-btn-danger' : ''),
                 disabled: yesDisabled, onClick: submitTokenModal,
               }, yesLabel),
               React.createElement('button', {
@@ -1163,6 +1310,7 @@
         const hidden = toolTable.hidden || []
         const groups = report.groups || []
         const groupLabel = function (key) { return key === 'other' ? t('compat.tools.other') : t('compat.inject.domain.' + key) }
+        const toolTableDisabled = toolTableBusy || scopeSessionLocked
         const rows = []
         groups.forEach(function (group) {
           const onCount = group.tools.filter(function (tool) { return !tool.hidden }).length
@@ -1175,6 +1323,7 @@
                   // 半开半关时显示成"未全选"，点一下 = 全开（与其余全选控件同款：勾选框只表达
                   // 两种意思，第三种状态靠计数说清）。
                   onChange: function () { toggleToolTableGroup(group, onCount !== group.tools.length) },
+                  disabled: toolTableDisabled,
                   label: groupLabel(group.key),
                 }),
                 React.createElement('span', { className: 'dsm-tooltable-gname' }, groupLabel(group.key)),
@@ -1192,35 +1341,59 @@
                       ? (tool.defaultHidden ? t('compat.tools.defaultOffTitle') : t('compat.tools.offTitle'))
                       : t('compat.tools.onTitle')),
                   },
-                    React.createElement(RowCheck, { checked: !tool.hidden, label: tool.name, onChange: function () { toggleToolTableTool(tool.name, !!tool.hidden) } }),
+                    React.createElement(RowCheck, { checked: !tool.hidden, disabled: toolTableDisabled, label: tool.name, onChange: function () { toggleToolTableTool(tool.name, !!tool.hidden) } }),
                     React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
                     React.createElement('span', { className: 'dsm-tooltable-tok' }, '≈' + tool.tok),
                     React.createElement('span', { className: 'dsm-tooltable-about' }, about))
                 }))))
         })
         const presetCount = (toolTable.presets || []).length
-        push(section(t('compat.tools'), t('compat.tools.hint'),
+        // 会话 / 工作区层那一句：这一张表是谁的、改动影响谁。全局层不显示。
+        const scopeLine = scopeSessionId
+          ? t('compat.tools.scope.' + (toolTable.source === 'session'
+            ? (scopeIsWorkspaceMode ? 'workspace' : 'session')
+            : toolTable.source === 'baseline'
+              ? (scopeIsWorkspaceMode ? 'baseline.workspace' : 'baseline')
+              : (scopeIsWorkspaceMode ? 'global.workspace' : 'global')))
+          : null
+        push(section(t('compat.tools'), null,
           React.createElement('div', { className: 'dsm-tooltable' + (toolTableBusy ? ' dsm-tooltable-busy' : '') },
             React.createElement('div', { className: 'dsm-tooltable-summary' },
               React.createElement('span', null, hidden.length === 0
                 ? t('compat.tools.summaryAll', { total: report.totalCount, tok: report.totalTok })
                 : t('compat.tools.summary', { on: report.visibleCount, total: report.totalCount, tok: report.visibleTok, saved: report.hiddenTok })),
-              // 两颗按钮钉在合计那一行的最右（用户 2026-09-23 指定位置）：方案管的是**整块**
+              // 按钮钉在合计那一行的最右（用户 2026-09-23 指定位置）：方案管的是**整块**
               // 勾选，不属于任何一个域，所以既不放分组头也不放表尾。
               React.createElement('span', { className: 'dsm-tooltable-preset-actions' },
+                // 会话 / 工作区层（0.21.2）：把这一层的工具表恢复成**当前全局默认**（只影响这一层）。
+                scopeSessionId ? React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: toolTableDisabled,
+                  title: scopeIsWorkspaceMode ? t('compat.tools.reset.tip.workspace') : t('compat.tools.reset.tip'),
+                  onClick: function () { saveToolTable((toolTable.globalHidden || []).slice()) },
+                }, t('compat.tools.reset')) : null,
                 React.createElement('button', {
-                  type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: toolTableBusy,
-                  title: t('compat.tools.preset.save.tip'),
+                  type: 'button', className: 'dsm-btn dsm-btn-secondary',
+                  // 方案库是全局的：会话 / 工作区层只允许"应用"，存 / 删先切到全局默认。
+                  disabled: toolTableDisabled || !!scopeSessionId,
+                  title: scopeSessionId
+                    ? (scopeIsWorkspaceMode ? t('compat.tools.preset.save.workspaceTip') : t('compat.tools.preset.save.sessionTip'))
+                    : t('compat.tools.preset.save.tip'),
                   onClick: function () { setToolPreset({ mode: 'save', name: '', error: '' }) },
                 }, t('compat.tools.preset.save')),
                 React.createElement('button', {
-                  type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: toolTableBusy,
+                  type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: toolTableDisabled,
                   title: presetCount ? t('compat.tools.preset.apply.tip') : t('compat.tools.preset.apply.tipEmpty'),
                   onClick: function () { setToolPreset({ mode: 'apply' }) },
                 }, t('compat.tools.preset.apply')))),
+            // 这一张表归属哪一层 / 为什么勾不动（锁）。读不到时这一节本来就不渲染。
+            scopeLine ? React.createElement('div', { className: 'dsm-tooltable-scope' }, scopeLine) : null,
+            scopeSessionLocked
+              ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' },
+                scopeIsWorkspaceMode ? t('scope.lock.blockedWorkspace') : scopeT('scope.lock.blockedSession'))
+              : null,
+            toolTableError ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'alert' }, toolTableError) : null,
             // 合计只留一行。此前下面还有一句"其中 ≈X 是出厂默认关掉的 N 条…"，2026-10-12
-            // 删除（用户裁定）：同一件事在说明行（`compat.tools.hint`，已改成一句
-            // "勾选的工具每轮随请求发送给模型"）与工具悬停提示里都说过了，这里是第三次；
+            // 删除（用户裁定）：同一件事在说明行与工具悬停提示里都说过了，这里是第三次；
             // 而且"出厂默认关掉"这件事用户不需要为此做什么 —— 要用就勾上，不用管它。
             rows)))
       }
@@ -1423,7 +1596,7 @@
         // 功能总览（B6）：一行一个功能点，状态 = 装配层 + 宿主能力层 + 用户配置层 的合成
         // （服务端聚合，见 feature-overview）。行可点，跳到该功能所在的页签。
         if (features && Array.isArray(features.rows) && features.rows.length) {
-          push(section(t('compat.features'), t('compat.features.hint'),
+          push(section(t('compat.features'), null,
             React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
               features.rows.map(function (row) {
                 const cls = row.state === 'ok' ? 'dsm-compat-pill-ok'
@@ -1459,7 +1632,7 @@
         const contractFindings = findings.filter(function (item) {
           return CONTRACT_CAPABILITY_IDS.indexOf(item.id) !== -1 && item.state !== 'ok'
         })
-        push(section(t('compat.contracts'), t('compat.contracts.hint'),
+        push(section(t('compat.contracts'), null,
           contractFindings.length === 0
             ? React.createElement('p', { className: 'dsm-help' }, t('compat.contracts.allOk'))
             : React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
@@ -1472,7 +1645,7 @@
                 }))))
 
         // 动作可用性：一行一个动作 + 路径标记（不可用的标红）。
-        push(section(t('compat.ops'), t('compat.ops.hint'),
+        push(section(t('compat.ops'), null,
           React.createElement('div', { className: 'dsm-compat-mod-list' },
             React.createElement('div', { className: 'dsm-compat-table-head' },
               React.createElement('span', null, t('compat.op.name')),
@@ -1516,7 +1689,7 @@
         // 所以分开显示、各自的胶囊文案也不同。
         const optionalAbsent = findings.filter(function (item) { return item.state !== 'ok' && item.optional === true })
         if (optionalAbsent.length) {
-          push(section(t('compat.others'), t('compat.others.hint'),
+          push(section(t('compat.others'), null,
             React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
               optionalAbsent.map(function (item) {
                 return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.id },
@@ -1544,7 +1717,7 @@
         const realpathNames = ((realpathNoteForPill && realpathNoteForPill.failures) || []).map(function (item) {
           return String(item && item.name || '')
         })
-        push(section(t('compat.modules'), t('compat.modules.hint'),
+        push(section(t('compat.modules'), null,
           React.createElement('div', { className: 'dsm-compat-mod-list' },
             Object.keys(sameAsHost).map(function (name) {
               const same = sameAsHost[name]
@@ -1568,7 +1741,7 @@
         // 必须在这里列一行。canary 缺失不是「包坏了」，是「该人工复核这条契约」，显示成提示而非红色。
         const contractPackages = (data && data.contracts && data.contracts.packages) || []
         if (contractPackages.length) {
-          push(section(t('compat.bareModules'), t('compat.bareModules.hint'),
+          push(section(t('compat.bareModules'), null,
             React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
               contractPackages.map(function (item) {
                 const missing = item.resolved === null
@@ -1631,11 +1804,12 @@
               .replace('{plugin}', sideText('plugin') || t('compat.modules.realpathNone'))))
         }
 
-        push(React.createElement('p', { className: 'dsm-help' },
-          t(data && data.sourceInstall === true ? 'compat.hint.doctor' : 'compat.hint.doctorRelease'),
-          data && data.sourceInstall === true
-            ? React.createElement('code', { className: 'dsm-compat-code' }, ' node scripts/doctor.mjs')
-            : null))
+        // 命令行体检那句只在源码检出时说：npm 安装形态不带 scripts/，指过去是条走不通的路。
+        if (data && data.sourceInstall === true) {
+          push(React.createElement('p', { className: 'dsm-help' },
+            t('compat.hint.doctor'),
+            React.createElement('code', { className: 'dsm-compat-code' }, ' node scripts/doctor.mjs')))
+        }
       }
 
       // 预设注入边界：五类内容（记忆 / 全局提示词 / 技能 / MCP / 子智能体）在**每个 Agent
@@ -1648,7 +1822,7 @@
       // 灰框=判断不了**；不再出现 ✓/✗ 符号，也不再有任何整行的解释文字 —— 预设损坏与
       // 解析失败缩成预设名旁边的小标签。MCP 与子智能体两列由宿主侧的 preset-reach 给出。
       if (presetReach && Array.isArray(presetReach.rows) && presetReach.rows.length) {
-        push(section(t('compat.reach'), t('compat.reach.hint'),
+        push(section(t('compat.reach'), null,
           React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
             presetReach.rows.map(function (row) {
               // ok → 绿框；absent / suppressed → 红框；其余（unknown，含宿主还没回传该字段）
@@ -2100,7 +2274,10 @@
             // 漏了它 typecheck:client 会红；运行时 `e.builtin ? 删除键 : null` 依赖这个假值。
             entries.push({ key: p.name, name: p.name, builtin: false, hidden: p.hidden || [] })
           })
-          presetRows.push(React.createElement('p', { className: 'dsm-help', key: 'hint' }, t('compat.tools.preset.applyHint')))
+          presetRows.push(React.createElement('p', { className: 'dsm-help', key: 'hint' },
+            t('compat.tools.preset.applyHint') + (scopeSessionId
+              ? ' ' + (scopeIsWorkspaceMode ? t('compat.tools.preset.applyHint.workspace') : t('compat.tools.preset.applyHint.session'))
+              : '')))
           presetRows.push(React.createElement('div', { className: 'dsm-preset-list', key: 'list' },
             entries.map(function (e) {
               // 只数**注册表里真有的**名字：方案可能存自更早的版本（那条工具已经不叫这个了），
@@ -2123,8 +2300,10 @@
                 // 出厂默认不在文件里（它是代码里那份名单），所以没有删除键 —— 删它没有意义，
                 // 下次读盘它还会回来；能删的只有用户自己存的那几份。
                 e.builtin ? null : React.createElement('button', {
-                  type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: presetBusy,
-                  title: t('compat.tools.preset.removeTitle', { name: e.name }),
+                  type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: presetBusy || !!scopeSessionId,
+                  title: scopeSessionId
+                    ? (scopeIsWorkspaceMode ? t('compat.tools.preset.delete.workspaceTip') : t('compat.tools.preset.delete.sessionTip'))
+                    : t('compat.tools.preset.removeTitle', { name: e.name }),
                   onClick: function () { deleteToolPreset(e.name) },
                 }, t('btn.custom.remove')))
             })))

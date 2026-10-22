@@ -43,6 +43,20 @@ export interface ToolVisibilityDeps {
   pluginHiddenTools?(): string[]
   /** 「有官方等价物在场就让位」那半边：按 agent 算的额外 hide 名单。 */
   carrierHiddenTools?(agent: unknown): Promise<string[]>
+  /**
+   * 本会话的 MCP 可见性覆盖（0.21.2）：在**此刻注册着的**工具全名上算出的两个名单。
+   *
+   * 全名要按"此刻注册了什么"（`tools.schemas()`）算，而那件事只有本模块顺手 —— 让调用方
+   * 去拼全名等于把"哪些名字算数"抄第二份。所以调用方的判据（四层并值）是按
+   * `(server, tool)` 出的，展开成注册全名的这一步留在 `restrictAgent`（见那里的调用）。
+   *
+   * 语义边界：会话层**不改连接**（`cordis.patch.yml` 是进程级的），只让工具在本会话里
+   * 看不见。`allow` 名单会把全局停用表关着的工具**从 deny 里减掉** —— 本会话看得见、
+   * 调得动，别的会话照旧。
+   */
+  sessionMcpOverlay?(agent: unknown): Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
+  /** 本会话的模型工具表覆盖（0.21.2）：与 MCP overlay 合进同一层 restrict。 */
+  sessionToolTableOverlay?(agent: unknown): { allow?: readonly string[]; deny?: readonly string[] } | Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
 }
 
 export interface ToolVisibility {
@@ -248,7 +262,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     if (release) { try { release() } catch (e) { /* ignore */ } }
   }
 
-  /** 把该 agent 该背的名单装到它 scope 上（全局那份 ∪ 它自己那份；空名单 = 不碰它）。 */
+  /** 把该 agent 该背的名单装到它 scope 上（全局那份 ∓ 会话覆盖 ∪ 它自己那份；空名单 = 不碰它）。 */
   async function restrictAgent(agent: any): Promise<void> {
     const mine = epoch
     let extra: string[] = []
@@ -256,9 +270,34 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
       // 判据失败一律当"没有额外要藏的"：藏错了模型就少一条路，留着只是多花 token。
       try { extra = await deps.carrierHiddenTools(agent) } catch (e) { extra = [] }
     }
+    // 会话层的两个方向（0.21.2）：`deny` 追加、`allow` 从全局名单里减掉 —— 允许**减**
+    // 是关键：全局停用表（含场景引擎写的收窄）关着的工具，本会话显式拨开 / 场景勾着时
+    // 要能重新看见，而全局一个字不动。名单已按注册全名算过（调用方用同一份 schemas），
+    // 这里照样过一遍 registered 过滤 —— 认不出的名字官方 restrict 会直接抛。
+    let allowSet = new Set<string>()
+    if (deps.sessionMcpOverlay) {
+      try {
+        const ov = await deps.sessionMcpOverlay(agent)
+        if (ov) {
+          if (ov.deny !== undefined && ov.deny.length) extra = [...extra, ...ov.deny]
+          if (ov.allow !== undefined && ov.allow.length) allowSet = new Set(ov.allow)
+        }
+      } catch { /* 取不到会话覆盖 = 按"没有额外要藏的"算（跟随全局） */ }
+    }
+    // 模型工具表也按对话走（0.21.2）：本对话的整份名单可能重新打开全局关掉的工具，
+    // 也可能关掉全局开着的工具 —— 与 MCP 覆盖同一层 deny，不各装一层。
+    if (deps.sessionToolTableOverlay) {
+      try {
+        const ov = await deps.sessionToolTableOverlay(agent)
+        if (ov) {
+          if (ov.deny !== undefined && ov.deny.length) extra = [...extra, ...ov.deny]
+          if (ov.allow !== undefined && ov.allow.length) for (const name of ov.allow) allowSet.add(name)
+        }
+      } catch { /* 取不到 = 跟随全局 */ }
+    }
     if (mine !== epoch) return
     if (!seenAgents.has(agent)) return
-    const names = [...new Set([...desiredNames, ...extra])]
+    const names = [...new Set([...desiredNames.filter((name) => !allowSet.has(name)), ...extra])]
     const scoped = scopedToolsOf(agent)
     if (!scoped || typeof scoped.restrict !== 'function') {
       if (names.length === 0) return
@@ -353,13 +392,24 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     // 而它变了不会改全局键（官方挂载/卸载本身就发 tools/change，正是靠这条通路追上）。
     // 代价是每次 tools/change 都重算一遍 —— 逐 agent 的键判等会把绝大多数挡在装层之前，
     // 事实读取也有 TTL 缓存；装层本身会再发一次 tools/change，那一轮键相同即收敛，不自激。
-    if (key === appliedNamesKey && deps.carrierHiddenTools === undefined) return
+    // 有逐 agent 的名单来源时不拿全局键短路：那份名单与会话覆盖 / 官方挂载状态有关，
+    // 它们变了不会改全局键。逐 agent 的键判等会把绝大多数挡在装层之前。
+    if (key === appliedNamesKey && deps.carrierHiddenTools === undefined && deps.sessionMcpOverlay === undefined && deps.sessionToolTableOverlay === undefined) return
     appliedNamesKey = key
     desiredNames = names
-    // 每次重放先撤掉每个 agent 上的旧层：名单变短（重新启用某个工具）时，只有撤掉这层限制
-    // 它才会重新可见；名单变了（含逐 agent 那份）也必须重装而不是叠加。
+    // **绝不无条件 lift**（0.21.2 自激振荡根因）：`liftRestriction` 会把 `appliedByAgent` 的键
+    // 一并删掉，下一轮 `restrictAgent` 的逐 agent 键判等必然失配 → 拆了又装 → 装层又是一次
+    // layer 变化 → 官方再 emit `tools/change` → 去抖后再来一轮 → 无限循环（界面表现为对话里
+    // 反复播报「工具已更新 · 新增/移除 N 个」）。
+    //
+    // 名单变化（含变短、含逐 agent 那份）时的重装由 `restrictAgent` 自己的「键不同 → lift →
+    // 装新（或空名单即只 lift）」覆盖，不需要这里先拆一遍。这里只清理**已不在 seenAgents**
+    // 的 agent 的残留层（兜底；正常下线走 detachAgent）。
+    //
+    // 收敛：真实变化 → 一轮拆+装 → 装层发 tools/change → 下一轮重算，逐 agent 键相等 →
+    // 空转、零事件 → 稳态。
     epoch += 1
-    for (const agent of [...agentRestrictions.keys()]) liftRestriction(agent)
+    for (const agent of [...agentRestrictions.keys()]) if (!seenAgents.has(agent)) liftRestriction(agent)
     for (const agent of seenAgents) void restrictAgent(agent).catch(() => { /* best effort */ })
   }
   function scheduleToolRestrictions(): void {

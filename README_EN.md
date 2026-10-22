@@ -69,6 +69,7 @@ In one line: **configure "work / writing / coding" each as a scene and switch th
 | Lock it and relax             | Locking a scene makes create/update/delete across the five domains read-only                                                                                                                                       |
 | Deleted is not gone           | Skills / memories / personas / presets / scenes land in a recycle bin (permanent session deletion excepted); tick items to delete in bulk, or set a retention period so it cleans itself (keep-forever by default) |
 | Safe by default               | Only the plugin's own files are written; secrets masked, plaintext needs a token                                                                                                                                   |
+| Per-conversation or workspace | Pick a layer at the top of the panel; every domain's toggles apply to that layer only (all global / per conversation / per workspace), the others stay as they were                                                     |
 
 ## Quick start
 
@@ -97,12 +98,22 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 
 ### Slash commands (manage from the chat box)
 
-- **Type `/` for a "Tools" section**: scenes / skills / MCP servers / subagents / prompts / memories. Click a row to enter that domain, click an item to apply it; the menu stays open.
+- **Type `/` for a "Tools" section**: scenes / skills / MCP servers / subagents / prompts / memories. Click a row to enter that domain, click an item to apply it; the menu stays open and the command text is cleaned out of the input.
 - **State is visible**: green check / empty box / note in grey, plus a status summary on the domain row.
 - **Long lists stay out of the way**: every domain lists in full and scrolls on its own; skills group by source directory, memories by scene, enabled ones first.
 - **Both kinds of prompts are here**: the global group picks which one is written into `AGENTS.md` (single-select); the quick group is on/off, and clicking one pastes the saved text into the input box without sending it.
 - **Only reversible actions**: entering a scene and the various toggles; create / delete / edit / import / export stay on their own pages.
 - **Registered through the host's own channel**: DSH's input-trigger interface, no patching of official packages.
+
+### Scope isolation (all global / per conversation / per workspace)
+
+- **One panel, three granularities**: switch between "all global", "per conversation" and "per workspace" on the Host tab — all-global has no conversation layer, so every conversation shares one set (the way it worked before scopes existed); per-conversation keeps A and B apart; per-workspace shares one copy inside a workspace while different workspaces stay isolated; conversations without a cwd (or with an overlong path) stay independent. Switching away deletes nothing — switch back and it all returns.
+- **Four layers stack up**: overrides made on this layer > the entered scene > the snapshot taken when the conversation was created > global; each cell takes the topmost layer that has a say, and matching the lower value clears the override.
+- **Enter and leave scenes from a conversation**: from the Scenes page or the `/` menu; the archive's memories / skills / personas / MCP servers apply live to the current layer, and leaving returns to how that layer started (never back to a global that keeps changing).
+- **Eight domains follow the current layer**: scenes, skills (incl. source directories), subagents, memories, quick prompts, MCP server and per-tool visibility, and the model tool table (one whole list per layer; the global one is only the default for new conversations / workspaces).
+- **Globally off, still usable here — with honest badges**: a server or skill source runs as a lease for the current layer, invisible to others; seven domains plus per-tool cells show live badges; "Stop permanently" overrides everything.
+- **Prompts can also be overridden per layer**: applying a preset or editing the body changes only this layer (sidecar, never `~/.dsh/AGENTS.md`); the preset library stays global, so edit it on the global layer.
+- **Model tools write to the current layer by default**: receipts name the layer; `scope: "global"` changes the global one. Two independent locks: the scene lock freezes global writes, the conversation / workspace lock only that layer.
 
 ### Scenes & memories
 
@@ -179,7 +190,9 @@ For the desktop app, swap `web` for `desktop` and end with "remind me to restart
 | Memory index / scenes / profiles                               | `~/.dsh/tool-management/memories-index.json`                                                     |
 | MCP sidecars (disabled tools / known tools / notes / settings) | `~/.dsh/tool-management/mcp-*.json`                                                              |
 | Injection settings (six domain switches)                       | `~/.dsh/tool-management/inject-settings.json`                                                    |
-| Model tool table (switched-off tools + saved sets)             | `~/.dsh/tool-management/tool-table.json`                                                         |
+| Model tool table (global default + saved sets)                 | `~/.dsh/tool-management/tool-table.json`                                                         |
+| Scope overrides (conversation / workspace, incl. tool table)    | `~/.dsh/tool-management/scope-overrides.json`                                                    |
+| Global intent (default MCP / skill-source switches)            | `~/.dsh/tool-management/scope-intent.json`                                                       |
 | Scene page preference (preview card before entering a scene)   | `~/.dsh/tool-management/scene-settings.json`                                                     |
 | Runtime log / patch backups                                    | `~/.dsh/tool-management/tool-management.log` · `backups/`                                        |
 
@@ -212,7 +225,7 @@ The six recycle bins each own one directory under `trash/`: `{skills,memories,su
 | Broken config, DSH won't boot                                         | Restore the newest `cordis.patch.yml.<level>.bak-<timestamp>` from `~/.dsh/tool-management/backups/` (5 per patch file).                                                               |
 | Action stopped working after a DSH upgrade                            | Settings → Tools Management → **Host** for the reason; `doctor.mjs` → `host-deps.mjs --fix`.                                                                                                      |
 | Won't install / peer mismatch after a DSH upgrade                    | Each generation has its own upper bound (the current one stops below 0.2.2); a minor upgrade needs a matching plugin release (upgrade the plugin before the host).                        |
-| The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab — 19 tools ship switched off. The panel and scripts are unaffected either way.                                                          |
+| The model cannot call a tool it should have                           | Check the **Model tool table** on the Host tab (pick that conversation / workspace in the layer picker first) — 19 tools ship switched off. The panel and scripts are unaffected either way.           |
 | Still asked to confirm with `approval=never`?                         | No card appears — straight through with a log line. Switch back to "workspace write" to get the questions again.                                                                       |
 | `subagent_manager_run` reports provider unavailable                   | The provider is not registered: `spawn` (default) / `fork` (`inherit`) come from `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` — mount and restart.                |
 | Scene binds persona A, but the official `subagent` ran something else | Those two are host tools and this plugin cannot hide them; work matching a persona goes to `subagent_manager_run`, host tools only when no persona fits or a background job is needed. |

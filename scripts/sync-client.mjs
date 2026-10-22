@@ -28,6 +28,7 @@ const SLICES = [
   '00-prelude.js',      // 文件头注释 + ModuleLoader 注册头 + React
   '10-css.js',          // CSS：设计变量与全部 dsm-* 规则
   '20-helpers.js',      // 核心 helper：异常文案 / 样式注入 / 令牌行 / 通用小工具
+  '20b-scope.js',       // 会话作用域：面板顶部下拉 + 三态开关的数据源（0.21.2）
   '21-compat-data.js',  // 兼容页的数据表与路由判定（OPERATION_LABELS / AUDIT_OP_LABELS / operationRoutes）
   '22-compat-page.js',  // CompatPage 一个组件（兼容与体检页的全部渲染）
   '23-export-hub.js',   // 导出枢纽 _pages（必须落在 factory 作用域）+ 交给 DICT 的那段说明

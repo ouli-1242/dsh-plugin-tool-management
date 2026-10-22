@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { isInsideRootResolved, isSameOrDescendant, isValidSegment } from '../paths.js'
+import { workspaceCwdOfScopeKey } from '../scope/workspace-key.js'
 import {
   state,
   setSkillEnabled,
@@ -64,6 +65,35 @@ function makeLog(): (event: string, detail?: unknown) => Promise<void> {
       }
     })
     await queue
+  }
+}
+
+/**
+ * 某个会话的 cwd（`null` = 在自己的活动会话清单里找不到这个会话）。
+ *
+ * 与 `activeSessionCwds` 同一条取法（`sessions.list()` → `header.cwd`），只是按 id 过滤。
+ * 用 `list()` 而不是 `sessions.get(id)`：前者是宿主公开的活会话清单，后者在冷会话上返回
+ * undefined。**找不到 ≠ 没有 cwd**：调用方据此退回全局口径（全部活动会话），
+ * 而不是把项目技能整个清空 —— 一次清单读取时序问题不该让某一轮少掉一整类技能。
+ */
+export function sessionCwdOf(ctx: any, sessionId: string): string[] | null {
+  // 工作区模式（0.21.2）：面板 / 斜杠菜单传过来的可能是 `ws:<cwd>` 作用域键。
+  // 它本身就是项目技能根（键里带归一化后的完整路径），不必再去会话清单里找。
+  const workspaceCwd = workspaceCwdOfScopeKey(sessionId)
+  if (workspaceCwd !== undefined) return [workspaceCwd]
+  try {
+    const sessions = (typeof ctx.get === 'function' ? ctx.get('sessions') : undefined) || ctx.sessions
+    const list = sessions && typeof sessions.list === 'function' ? sessions.list() : []
+    for (const session of Array.isArray(list) ? list : []) {
+      const id = session && (session.id ?? (session.header && session.header.id))
+      if (String(id ?? '') !== sessionId) continue
+      const cwd = session && session.header && session.header.cwd
+      // 找到了这个会话：有 cwd 就只取它；没有 cwd = 这个对话不在任何项目里。
+      return typeof cwd === 'string' && cwd.trim() !== '' ? [cwd.trim()] : []
+    }
+    return null
+  } catch {
+    return null
   }
 }
 
@@ -144,7 +174,26 @@ export function createSkillsService(ctx: any): SkillsService {
   const log = pluginLog()
   const roots = userRoots()
   const rootByKey: Record<string, any> = Object.fromEntries(roots.map((root: any) => [root.key, root]))
-  const projectOptions = () => ({ projectCwds: activeSessionCwds(ctx) })
+  /** op 入参里的 `sessionId`（空串 / 非字符串 → undefined = 全局口径）。 */
+  const sessionIdOfArgs = (args: any): string | undefined => {
+    const raw = args && typeof args.sessionId === 'string' ? args.sessionId.trim() : ''
+    return raw === '' ? undefined : raw
+  }
+
+  /**
+   * 项目技能根的 cwd 集合（0.21.2）。
+   *
+   * 不给 `sessionId` 时是**全部活动会话的 cwd 并集**（0.21.2 及以前的行为，界面没有"当前会话"
+   * 概念时用它）；给了就只取那一个会话的 cwd —— 这是让项目技能按会话隔离的关键：
+   * A 对话在 `proj-a`、B 在 `proj-b` 时，并集会让两边都看到两个项目的技能，而"这个对话在哪个
+   * 项目里"本来就有唯一答案（会话自己的 `header.cwd`）。
+   */
+  const projectOptions = (sessionId?: string) => {
+    if (sessionId === undefined) return { projectCwds: activeSessionCwds(ctx) }
+    const own = sessionCwdOf(ctx, sessionId)
+    // 清单里找不到这个会话（时序 / 冷会话）→ 退回全局口径，不把项目技能清空。
+    return { projectCwds: own === null ? activeSessionCwds(ctx) : own }
+  }
   const requestRoot = async (key: string) => {
     if (rootByKey[key]) return rootByKey[key]
     // 自定义来源不在静态 root 表里：从状态文件的 customRoots 解析 definition。
@@ -195,16 +244,65 @@ export function createSkillsService(ctx: any): SkillsService {
   // 全部 SKILL.md 正文；UI 默认每 5s 轮询一次。加 1s TTL 缓存吸收密集轮询，
   // 任何写操作成功后立即失效（afterWrite），保证写后读到的总是新状态。
   const STATE_TTL_MS = 1000
-  let stateCache: { at: number; value: unknown } | null = null
-  const readState = async (): Promise<unknown> => {
-    if (stateCache && Date.now() - stateCache.at < STATE_TTL_MS) return stateCache.value
-    const value = await state(projectOptions())
-    stateCache = { at: Date.now(), value }
-    return value
+  // ⚠️ 按**项目根集合**分桶（0.21.2）：`projectOptions(sessionId)` 只取该会话的 cwd，两个会话能
+  // 算出两份不同的技能清单。单槽缓存下 A 读完 B 直接用 —— 症状是「B 的对话里列出了 A 项目的技能」。
+  // 键不能是 sessionId：同一工作区里的多个对话、以及全局口径，算出来的是**同一份**扫描结果，
+  // 按会话分桶会让 `skillCatalog.refresh()` 为每个会话各扫一遍磁盘（写操作因此从毫秒拖到秒级）。
+  // 上限 16 条 LRU（与记忆段同一手法）。
+  const STATE_CACHE_MAX = 16
+  const stateCache = new Map<string, { at: number; value: unknown }>()
+  /** cwd 集合 → 缓存键（去重、排序：同一组项目根只有一个桶）。 */
+  const stateKeyOf = (cwds: readonly string[]): string => {
+    const seen = new Set<string>()
+    for (const cwd of cwds) {
+      const trimmed = String(cwd || '').trim()
+      if (trimmed !== '') seen.add(trimmed)
+    }
+    return [...seen].sort().join('\u0000')
+  }
+  /**
+   * 同一次扫描的并发合流 + 写后作废（0.21.2）。
+   *
+   * `scope-get`、斜杠菜单、对账、目录刷新会在同一拍里各问一次「技能清单」——不合流的话
+   * 一次场景切换会并发跑好几份全量扫描，既有磁盘开销又抢事件循环；而写操作之后在飞的那份
+   * 是**写之前**的，不能复用。`generation` 同时解决两件事：同代的在飞共享，换代后的旧结果不落缓存。
+   */
+  let stateGeneration = 0
+  const stateInflight = new Map<string, { gen: number; promise: Promise<unknown> }>()
+  const readState = async (sessionId?: string): Promise<unknown> => {
+    const options = projectOptions(sessionId)
+    const key = stateKeyOf(options.projectCwds)
+    const hit = stateCache.get(key)
+    if (hit !== undefined && Date.now() - hit.at < STATE_TTL_MS) return hit.value
+    const running = stateInflight.get(key)
+    if (running !== undefined && running.gen === stateGeneration) return running.promise
+    const gen = stateGeneration
+    let promise: Promise<unknown>
+    promise = state(options).then((value) => {
+      // 扫描期间有过写操作 → 这份结果可能是写之前的，丢掉（下一次读会重扫）。
+      if (gen === stateGeneration) {
+        stateCache.delete(key)
+        stateCache.set(key, { at: Date.now(), value })
+        while (stateCache.size > STATE_CACHE_MAX) {
+          const oldest = stateCache.keys().next()
+          if (oldest.done === true) break
+          stateCache.delete(oldest.value)
+        }
+      }
+      return value
+    }).finally(() => {
+      const current = stateInflight.get(key)
+      if (current !== undefined && current.promise === promise) stateInflight.delete(key)
+    })
+    stateInflight.set(key, { gen, promise })
+    return promise
   }
 
   const afterWrite = () => {
-    stateCache = null
+    // 写操作影响的是磁盘事实 → 全清；同时换代，让写之前发出的扫描结果不再被当成新鲜数据。
+    stateGeneration += 1
+    stateCache.clear()
+    stateInflight.clear()
     notifyChatCatalog(ctx, invalidateSkills)
   }
 
@@ -305,11 +403,12 @@ export function createSkillsService(ctx: any): SkillsService {
 
   const ops: Record<string, (args: any) => Promise<any>> = {
     // 读操作（state 走短 TTL 缓存，见上方 readState）
-    'skill-state': wrap(() => readState()),
+    // 会话层（0.21.2）：给了 `sessionId` 就只按该会话的 cwd 推导项目技能根。
+    'skill-state': wrap((args) => readState(sessionIdOfArgs(args))),
     'skill-detail': wrap(async (args) => {
       const key = String(args.root || 'dsh')
       // requestRoot 未命中时回传原始 key，让 core 的 error.root.unknown 带上来源名（而非 undefined）。
-      return skillDetail((await requestRoot(key)) || key, String(args.name || ''), projectOptions())
+      return skillDetail((await requestRoot(key)) || key, String(args.name || ''), projectOptions(sessionIdOfArgs(args)))
     }),
     'skill-browse': wrap((args) => browseDirectories(args && args.path)),
     // 启停（写 manager 状态，不改源文件）

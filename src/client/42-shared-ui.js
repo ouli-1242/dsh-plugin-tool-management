@@ -175,6 +175,15 @@ function enabledMemoryCount(rules) {
   return (rules || []).filter(function (r) { return r.enabled !== false }).length
 }
     function isSkillEnabled(skill) { if (skill.enabled !== undefined) return skill.enabled === true; return skill.invocationPolicyValid && skill.modelInvocable && skill.userInvocable && skill.managerEnabled !== false; }
+    /**
+     * 单条技能的**全局层显示值**（0.21.2）：意图优先（`skill.globalOn`），没记录才落到运行态。
+     *
+     * 为什么不能再用 `isSkillEnabled` 当 `scopeFlag` 的兜底实参：租约期间运行态是开着的，
+     * 而全局意图是 off —— 读运行态会把"仅为几个对话临时开着"显示成"全局开着"（与 MCP
+     * 服务器那格修过的串味同一条路径）。`globalOn` 由服务端 `annotateSkillState` 补，
+     * 老宿主 / 老数据没有这个字段时才退回 `isSkillEnabled`。
+     */
+    function skillGlobalOn(skill) { return typeof skill.globalOn === 'boolean' ? skill.globalOn : isSkillEnabled(skill); }
     function countKey(key, count) { return key + (Number(count) === 1 ? ".one" : ".other"); }
     function rootDisplayName(t, root) { var base = translateOrFallback(t, "root." + (root.localeKey || root.kind || root.key), root.label); return root.projectName ? base + " · " + root.projectName : base; }
     function summarizeImportResult(t, data) {
@@ -444,7 +453,6 @@ function enabledMemoryCount(rules) {
         hideGateNotice: true,
         onClose: function () { if (!busy) props.onClose() },
       },
-        h('p', { className: 'dsm-help' }, t('compat.token.hint')),
         h('input', {
           ref: inputRef,
           className: 'dsm-control' + (err ? ' dsm-rule-invalid' : ''),
@@ -484,11 +492,15 @@ function enabledMemoryCount(rules) {
      * 只会复述开关状态的装饰性标签 —— 开关本身就是状态，标签只该留给需要处理的事。
      * tone：ok=启用/已连（success）、idle=默认/未启（灰）、bad=失败/丢失（error）、
      * warn=当前不能用但不是故障、busy=进行中（闪）。
+     *
+     * `scoped`（0.21.2）：这一行的值来自**本会话覆盖** → 点染绿（来源），形状/大小不变。
+     * 用户 2026-10-19 裁定：来源一律标在圆点上，开关不染色（见 20-helpers 的 Switch）；
+     * 2026-10-20 二次裁定：全局与会话**统一绿色**，不再分深浅。
      * 读屏读不到颜色：title 必填（role=img + aria-label 同源，与状态点同一口径）。
      */
     function StatusDot(props) {
       return h('span', {
-        className: 'dsm-dot dsm-dot-' + (props.tone || 'idle'),
+        className: 'dsm-dot dsm-dot-' + (props.tone || 'idle') + (props.scoped === true ? ' dsm-dot-scoped' : ''),
         role: 'img',
         'aria-label': props.title,
         title: props.title,
@@ -1067,7 +1079,9 @@ function enabledMemoryCount(rules) {
       // 人设 / 提示词 / 记忆五组都冻结，只有场景自己的回收站不冻 —— `scene-trash-*` 两条 op
       // 本来就没标 frozen。界面与判据同源，才不会出现"画得能点、点下去被拒"。
       const ysx = React.useState(false)
-      const anyLocked = ysx[0], setAnyLocked = ysx[1]
+      // `props.locked` = 调用方这一层的额外只读判据（会话层的提示词回收站：恢复 / 彻底删除
+      // 写的都是全局那一份，本对话改不了它）。与场景锁同一个出口，只是理由不同。
+      const anyLocked = ysx[0] === true || props.locked === true, setAnyLocked = ysx[1]
       const zsx = React.useState([])
       const sceneList = zsx[0], setSceneList = zsx[1]
       // 技能来源表：只给回收站详情把 `<rootKey>/<name>` 里的根键翻成人看的名字用
@@ -1752,7 +1766,9 @@ function enabledMemoryCount(rules) {
             h("div", { className: "dsm-upload-req", title: props.requirementTitle || undefined }, props.requirement)) : null),
         h("div", { className: "dsm-modal-actions" },
           picked.length ? h("button", { type: "button", className: "dsm-btn dsm-btn-quiet", disabled: props.busy, onClick: function () { setPicked([]); setEntries([]) } }, t("import.clear")) : null,
-          h("button", { type: "button", className: "dsm-btn", disabled: props.busy || !picked.length, onClick: function () { props.onSubmit(entries, picked) } }, props.busy ? t("upload.importing") : t("import.submit"))))
+          // `disabled`（0.21.2）：调用方说"这一档现在写不进去"时（提示词页的会话层 / 锁定态），
+          // 确认键与拖拽区一起停 —— 只灰确认键的话，用户还能选完文件再撞一堵墙。
+          h("button", { type: "button", className: "dsm-btn", disabled: props.busy || props.disabled === true || !picked.length, title: props.disabled === true ? props.disabledTitle : undefined, onClick: function () { props.onSubmit(entries, picked) } }, props.busy ? t("upload.importing") : t("import.submit"))))
     }
 
     /**
@@ -1872,4 +1888,33 @@ function enabledMemoryCount(rules) {
     function StatusTag(props) {
       var tone = props.tone === 'ok' ? ' dsm-tag-on' : props.tone === 'bad' ? ' dsm-tag-off' : props.tone === 'warn' ? ' dsm-tag-warn' : ''
       return h('span', { className: 'dsm-tag' + tone, title: props.title }, props.text)
+    }
+    /**
+     * 租约徽章（0.21.2）：**六个域共用的唯一出口** —— 同一 HTML 结构、同一 class 族、同一 tooltip。
+     *
+     * 为什么必须共用一个函数：这六处的文案与判据曾经各写一份（技能来源用 `scope.intent.lease`，
+     * 其余五处干脆没有），口径一分叉就会出现"同一件事在 MCP 页写着临时运行、在记忆页什么都不说"。
+     *
+     * 两种语义，靠 `count` 的**来源**区分，文案也据此分开：
+     *   · 真写运行态的域（mcp / skillSources / skills）—— 传 `scopeLeaseCount(...)`，
+     *     那是"有几个对话在认领、资源因此保持运行"，文案 `scope.intent.lease`；
+     *   · 纯视图域（memory / subagents / quickPrompts）—— 传的也是 `scopeLeaseCount(...)`
+     *     （服务端 `countViewClaims` 数的是**会话覆盖数**），文案 `scope.view.lease`。
+     *
+     * `count <= 0` 返回 null（不占位）；会话层一律不画（那一层只回答"本对话看到什么"，
+     * 租约是全局层的解释）。
+     *
+     * @param {{ t: Function, domain: string, key: string, runtime: boolean, tagKey?: string }} props
+     */
+    function leaseTag(props) {
+      var t = props.t
+      var count = scopeLeaseCount(props.domain, props.key)
+      if (!(count > 0)) return null
+      if (scopeIsSession()) return null
+      var runtime = props.runtime === true
+      return h('span', {
+        key: props.tagKey || undefined,
+        className: 'dsm-tag dsm-tag-lease',
+        title: runtime ? t('scope.intent.leaseHint', { count: count }) : t('scope.view.leaseHint', { count: count }),
+      }, runtime ? t('scope.intent.lease', { count: count }) : t('scope.view.lease', { count: count }))
     }

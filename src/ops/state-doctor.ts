@@ -64,7 +64,7 @@ export async function runStateDoctor(deps: StateDoctorDeps): Promise<DoctorRepor
   const scenes: Record<string, any> = index.scenes || {}
   const archives: Record<string, any> = index.archives || {}
 
-  // 四域权威集合**并行**读（0.21.3）：它们是四个互不依赖的读，串起来等于把四次读延迟
+  // 四域权威集合**并行**读（0.21.2）：它们是四个互不依赖的读，串起来等于把四次读延迟
   // 首尾相接。实测（2026-10-18 web 端，服务进程已被别的负载占满单核）：state-doctor
   // 冷启 1.8s，其中绝大部分是这四段串行等待 —— 并行后总耗时≈最慢那一域，而不是四者之和。
   // 单个读失败仍然只跳过自己那一类（Promise.all 不会因一个 reject 整体失败：

@@ -7,7 +7,7 @@
 // 「是哪一个没注册上」——只打一行日志时，模型侧只会「查无此工具」、界面毫无痕迹。
 
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from '../subagents/tools.js'
-import { text, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, globalActionNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, text, type ToolDomainDeps } from './deps.js'
 
 /**
  * 高频高级字段：`subagent_manager_save` 与 op 之间原样透传的那几个（省略 = 不出现 = op 侧保持）。
@@ -34,6 +34,15 @@ export interface SubagentToolDeps extends ToolDomainDeps {
   sceneLists: any
   toolFilterFor: any
   /**
+   * 本会话人设那一格的四层并值（0.21.2）：覆盖 → 场景层 → 基线 → undefined（跟随全局）。
+   *
+   * 收 `exec` 而不是零参：这条工具是同一个注册实例，而会话层是每个会话一套 ——
+   * 取法只有一份（index.ts 的层解析），这里只转手。
+   */
+  subagentFlagFor?: (exec: unknown) => ((name: string) => boolean | undefined) | undefined
+  /** 本会话的**原始覆盖表**（0.21.2）：只给列表工具那句"显式关了几条"的统计用。 */
+  subagentOverridesFor?: (exec: unknown) => Record<string, boolean> | undefined
+  /**
    * 注册失败的记录（可变，用对象持有）：`list` 会被子智能体页的黄条与 preset-tools 的
    * `unavailable` 读走，`logged` 保证控制台只报一次。
    */
@@ -56,6 +65,8 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
       sceneLists: deps.sceneLists,
       // 与其余发现型工具同口径：压制型预设下不注入时，人设目录不在模型上下文里，
       // 只有工具可用。挂上边界提示，模型才不会把「看不到人设」当成「没有人设」。
+      flagFor: deps.subagentFlagFor,
+      overridesFor: deps.subagentOverridesFor,
       noticeFor: (exec: unknown) => deps.reachNoticeForAgent(
         deps.presetRoster(),
         exec && (exec as { agent?: { ctx?: unknown } }).agent && (exec as { agent?: { ctx?: unknown } }).agent!.ctx,
@@ -78,7 +89,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
     // 与 index.ts 造这个包装层时用的是同一个写法（那边注释写的是「原型链回真实服务，其余读法一字不动」）。
     register(defineTool(defineSubagentManagerRunTool(Object.assign(
       Object.create(deps.subagentService),
-      { sceneLists: deps.sceneLists, toolFilterFor: deps.toolFilterFor },
+      { sceneLists: deps.sceneLists, toolFilterFor: deps.toolFilterFor, flagFor: deps.subagentFlagFor },
     ))))
   } catch (e) {
     recordFailure('subagent_manager_run', e)
@@ -100,20 +111,40 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
       description: 'Enable or disable one persona. Only enabled personas appear in the "Current subagents" catalog and can be given work. Reversible. Only when the user asks or approves.',
       parameters: {
         name: { type: 'string', required: true, description: 'Persona name.' },
-        enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable; omission is refused.' },
+        enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable.' },
+        // 决策 10（2026-10-19）：默认只改**这个对话**。写全局要显式说明。
+        scope: { type: 'string', enum: ['session', 'global'], description: scopeSessionDesc('global = every conversation (the persona state file).') },
       },
       output: { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => text(String(v)) },
-      async execute(args: any) {
-        const blocked = await deps.lockedSceneGuard()
-        if (blocked) throw new Error(blocked)
+      async execute(args: any, exec: any) {
         const name = String((args && args.name) || '').trim()
+        // 省略 `enabled` 时不能静默当成 false —— 默认写的是**本会话**，一次猜错就是
+        // 这个对话里的人设凭空消失（全局那条倒是没动，更难查）。
+        if (typeof (args && args.enabled) !== 'boolean') throw new Error('missing argument: enabled must be true or false')
+        // 场景锁冻结的是**全局**写入（决策 11）：会话覆盖写侧车，与锁无关。
+        // 全局粒度下一律走全局：那一档没有会话层，写的就是状态文件。
+        const sessionOnly = effectiveScope(deps, args) === 'session'
+        if (!sessionOnly) {
+          const blocked = await deps.lockedSceneGuard()
+          if (blocked) throw new Error(blocked)
+        }
+        // 决策 10：默认写**本会话**（别的对话不受影响），`scope: "global"` 才改状态文件。
+        // 会话层只改"列不列、调不调得动"，不碰启停本身 —— 所以不需要场景档案同步。
+        if (sessionOnly) {
+          if (!deps.sessionScopeSet) throw new Error('per-conversation switches are unavailable in this host: pass scope="global" to change it for every conversation')
+          const sc = await deps.sessionScopeSet(exec && exec.agent, 'subagents', name, args.enabled === true)
+          if (!sc || sc.ok === false) throw new Error((sc && sc.error) || 'failed to switch this persona here')
+          return 'OK: persona ' + name + ' ' + (args.enabled === true ? 'enabled' : 'disabled') + scopeOnlyNote() +
+            (sc.cleared === true ? ' (that matches the global setting, so the per-conversation override was removed)' : '') +
+            '. The global setting is unchanged; other conversations keep theirs. Pass scope="global" to change it for every conversation.'
+        }
         const r: any = await ops()['subagent-toggle']({ name, enabled: args.enabled === true })
         if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to toggle the persona')
         // 场景内改开关要同步进当前场景档案（与 HTTP 层 syncsArchive 同一口径 —— 模型工具
         // 直接调 service op，绕过了那一层包装，所以这里自己叫一声）。
         const syncErr = await deps.syncSwitchToScene('subagent-toggle', { name, enabled: args.enabled === true })
         return 'OK: persona ' + name + ' ' + (args.enabled === true ? 'enabled' : 'disabled') +
-          (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '')
+          (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '') + isolationOffNote(deps)
       },
     }))
   } catch (e) {
@@ -133,22 +164,26 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
       // 落点路径（`at ~/.dsh/tool-management/subagents/<name>.md`）删掉（2026-10-15 注入文本
       // 审查）：模型不按路径行动，这条工具也没有"给我路径"的用法（要读正文有 `list` +
       // 宿主的文件工具，而人设正文本来就是给它自己当系统提示词用的）。
-      description: 'Create a persona, or update the one that already has this name — the receipt says which. Omitted fields keep their current values. Write `body` as who this is and how it judges its own work — not the steps or paths, those belong to the task; put hard output requirements in `output` (one per line), not buried in prose. The three settings changed most often are settable here too: `model` (route this persona to another model; \'\' = inherit), `continuable` (allow follow-up), and the tool allow/deny lists `tools`/`toolsDeny` ([] = clear). Other routing/limit fields stay panel-only. Blocked while the active scene is locked. Only on the user\'s instruction.',
+      description: 'Create a persona, or update the one with this name — the receipt says which; omitted fields keep their values. Write `body` as who this is and how it judges its own work, not steps or paths (those belong to the task); put hard output requirements in `output`, one per line. Also settable: `model` (\'\' = inherit), `continuable`, `tools`/`toolsDeny` ([] = clear) — other routing/limit fields aren\'t. Blocked while the active scene is locked. Only on the user\'s instruction.',
       parameters: {
         name: { type: 'string', required: true, description: 'Persona name (= file name); ≤64 chars, one path segment — no / \\ or < > : " | ? *, no leading dot, no reserved device name, no trailing dot or space.' },
-        description: { type: 'string', description: 'One-line routing description — this is what shows up in the delegation catalog. Required when creating; omit = keep.' },
-        body: { type: 'string', description: 'Markdown role definition. Required when creating; omit = keep.' },
-        output: { type: 'string', description: 'Output contract, one requirement per line. Empty string clears it; omit = keep.' },
-        nextName: { type: 'string', description: 'New name (rename); re-points scene-profile bindings. Omit = keep. Refused if a persona already has that name.' },
-        model: { type: 'string', description: "Model id for this persona's runs. '' = inherit the main session's model; omit = keep." },
-        continuable: { type: 'boolean', description: 'true = this persona may be followed up (runs in the background and returns an agent id); false = one-shot. Omit = keep.' },
-        tools: { type: 'array', items: { type: 'string' }, description: 'Tool allowlist — the subagent keeps only these tools. [] = clear; omit = keep.' },
-        toolsDeny: { type: 'array', items: { type: 'string' }, description: 'Tool denylist — removed from the subagent; wins over the allowlist. [] = clear; omit = keep.' },
+        description: { type: 'string', description: 'One-line routing description (what the delegation catalog shows). Required when creating.' },
+        body: { type: 'string', description: 'Markdown role definition. Required when creating.' },
+        output: { type: 'string', description: 'Output contract, one requirement per line. Empty string clears it.' },
+        nextName: { type: 'string', description: 'New name (rename); re-points scene bindings. Refused if the name is taken.' },
+        model: { type: 'string', description: "Model id for this persona's runs. '' = inherit the main session's model." },
+        continuable: { type: 'boolean', description: 'true = this persona may be followed up (runs in the background and returns an agent id); false = one-shot.' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Tool allowlist — the subagent keeps only these tools. [] = clear.' },
+        toolsDeny: { type: 'array', items: { type: 'string' }, description: 'Tool denylist — removed from the subagent; wins over the allowlist. [] = clear.' },
+        // 0.21.2：人设是**机器级**文件，没有「本会话的一份」。这个参数只为一件事：
+        // 模型以为自己在改会话时，当场纠回来（见 deps.ts 的 requireGlobalScope）。
+        scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('a persona file is machine-wide', 'switch it here instead of editing it') },
       },
       output: { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => text(String(v)) },
-      async execute(args: any) {
+      async execute(args: any, exec: any) {
         const blocked = await deps.lockedSceneGuard()
         if (blocked) throw new Error(blocked)
+        requireGlobalScope(args, 'personas', !sessionLayerOn(deps))
         const name = String((args && args.name) || '').trim()
         // 高级字段的形状校验：填错会在 op 侧**静默**（`serializePersona` 对非数组 `tools`
         // 是"当空处理"，等于把用户原有的名单清掉）。在这里先挡一句。
@@ -180,7 +215,9 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
           const enableHint = deps.toolVisible('subagent_manager_switch')
             ? ' (created disabled; use subagent_manager_switch to enable it before delegating)'
             : ' (created disabled; the user has to enable it before you can delegate)'
-          return 'OK: persona ' + String(r.name || name) + ' created' + enableHint
+          // 会话层（0.21.2）：人设文件是**机器级**的，本会话的开关只决定这里看不看得到它。
+          return 'OK: persona ' + String(r.name || name) + ' created' + enableHint +
+            globalActionNote(deps, exec && exec.agent, 'subagents', 'persona')
         }
         const keep = current.persona || {}
         // 省略 = 保持（读回现值），给了 = 覆盖。高级字段走同一套 —— 不在工具侧合并，
@@ -212,7 +249,8 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
         const r: any = await ops()['subagent-update'](merged)
         if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to update the persona')
         return 'OK: persona ' + String(r.name || name) + ' updated (changed ' + touched.join(', ') + ')' +
-          (r.renamedFrom ? ' — was named "' + r.renamedFrom + '"; the scene-archive binding was renamed too' : '')
+          (r.renamedFrom ? ' — was named "' + r.renamedFrom + '"; the scene-archive binding was renamed too' : '') +
+          globalActionNote(deps, exec && exec.agent, 'subagents', 'persona')
       },
     }))
   } catch (e) {

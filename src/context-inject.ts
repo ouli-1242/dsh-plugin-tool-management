@@ -91,6 +91,7 @@ import {
   type InjectReason,
   type InjectSection,
   selectInjections,
+  shouldAnnounceCleared,
 } from './context-inject-select.js'
 import { clearedDomainText, renderDomainText } from './context-inject-frame.js'
 import {
@@ -99,6 +100,7 @@ import {
   newestDomainTexts,
   officialKindsToSuppress,
   PLUGIN_KINDS,
+  suppressedKindsForSession,
 } from './context-inject-surface.js'
 
 // 拆出的四层照旧从 context-inject.js 对外可见（index.ts、ops/compat.ts、tools/table.ts、
@@ -121,11 +123,12 @@ export {
   explainInjections,
   normalizeInjectSettings,
   selectInjections,
+  shouldAnnounceCleared,
   type InjectReason,
   type InjectSection,
 } from './context-inject-select.js'
 export { clearedDomainText, escapeFrameBody, HOW_NAMED_TOOLS, renderDomainText } from './context-inject-frame.js'
-export { officialKindsToSuppress } from './context-inject-surface.js'
+export { officialKindsToSuppress, suppressedKindsForSession } from './context-inject-surface.js'
 
 // B4：关域拦截的**顺序自检**。官方那两条注入行与本插件同挂在这条瀑布上，拦截成立的剩余前提是
 // "本插件排在它们上游"（本插件用 `{ prepend: true }` 把自己钉在钩子表最前，所以真正还依赖的
@@ -171,6 +174,39 @@ export interface ContextInjectorDeps {
   settings: () => InjectSettings
   /** 该 agent 所在预设的两条事实；`undefined` = 读不到（按未压制 / 已承载处理）。 */
   factsFor: (agent: unknown) => Promise<PresetInjectionFacts | undefined> | PresetInjectionFacts | undefined
+  /**
+   * 本会话有没有提示词覆盖（同步，0.21.2）。
+   *
+   * 有覆盖时：官方 `agent-instructions` 这一步被拦下（只限本会话），提示词域由本插件送整份；
+   * 同时 `replacing` 的判据放宽到"表面上有任一提示词内容"（含官方第 1 轮那条），
+   * 让首份会话版带 `Supersedes …` 取代声明。
+   */
+  promptOverrideActive?: (agent: unknown) => boolean
+  /**
+   * 本会话的提示词冻结快照与当前 `~/.dsh/AGENTS.md` 是否不一致（同步，0.21.2 第三轮）。
+   *
+   * 不一致：官方 `agent-instructions` 这一步被拦下（只限本会话），提示词域改送**快照链**
+   * 整份（会话覆盖 > 场景预设 > 快照）；`replacing` 的判据放宽到表面上已有任一提示词内容，
+   * 让首份快照版带 `Supersedes …`。
+   *
+   * 与 `skillCatalogDiverged` 同构：判据来自注入器首见时捕获的快照 + 当前文件（同步读，
+   * 带 stat 缓存）；首见那一轮捕获完按"无差异"处理（快照就是刚刚这一版）。
+   * 返回 `false` 也**不表示交还**：本会话已经由插件送过提示词时继续接管（官方不会重发
+   * 同一摘要，交还只会留下假通知 —— 与技能目录第二轮同一条理由）。
+   */
+  promptBaselineDiverged?: (agent: unknown) => boolean
+  /**
+   * 本会话的技能目录与官方那份口径是否不一致（同步，0.21.2 第二轮）。
+   *
+   * 不一致（`skillCatalog.delta()` 非空）：官方 `skill-catalog` 这一步被拦下（只限本会话），
+   * 技能域改由本插件送会话版整份；`replacing` 的判据同样放宽到表面上已有任一技能内容
+   * （含官方第 1 轮那条），让首份会话版带 `Supersedes …` 取代声明。
+   *
+   * 判据来自技能目录的 SWR 缓存，同步可得；缓存未热时返回空 → 这一轮按原样让位，下一轮再接管。
+   * 返回 `false` 也**不表示交还**：本会话已经由插件送过技能目录时继续接管（理由见 pre-step
+   * 里的注释：官方不会重发同一摘要，交还只会留下一条假通知）。
+   */
+  skillCatalogDiverged?: (agent: unknown) => boolean
   /**
    * 令牌门禁：返回真 = 这一步**不放行**（令牌在生效、而本次启动还没有人验过）。
    *
@@ -446,6 +482,8 @@ export function createContextInjector(deps: ContextInjectorDeps): {
     // 这条通道整段停掉时，此前唯一的痕迹就是 `console.error`（脆弱性地图 F2）。
     let injectionFailed = false
     let failedKeys: Set<InjectDomainKey> = new Set()
+    // 本步"数据还没到手"的域（0.21.2 第三轮）：与 failed 同口径 —— 这一轮沉默，不发通知。
+    let pendingKeys: Set<InjectDomainKey> = new Set()
     try {
       if (!decision || decision.kind === 'reject') return decision
       const agent = payload && payload.agent
@@ -472,7 +510,46 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // dsh-agent-instructions `toSpliced(lastClaimedIndex + 1, 0, desired)`），而瀑布的
       // `next()` 只做"取钩子表的下一个"。所以只有排在他们**上游**的监听器，其 `next()`
       // 返回时才看得见这些追加 —— 本插件的过滤在 `next()` 之后，位置必须在上游。
-      const suppressedKinds = officialKindsToSuppress(settings)
+      // 按 **agent** 算的只有预设事实那一条；官方消息要拦三种（都只限本会话）：
+      //   ① 用户在兼容页关掉的域（officialKindsToSuppress）；
+      //   ② 提示词接管时的官方 AGENTS.md；
+      //   ③ 技能目录与本会话口径不一致时的官方 skill-catalog（0.21.2 第二轮）。
+      // ②③ 都由插件送整份，官方那条必须让位。①的例外是会话钉住场景**不再**拦官方
+      // AGENTS.md（0.21.2 定：拦了也收不回官方第 1 轮那条，模型手里就是两份）。
+      //
+      // 提示词接管（0.21.2）：本会话有覆盖 / 快照与当前文件不一致 / 本插件此前已经为这个
+      // 会话送过提示词。最后一条是「清覆盖」后的兜底：官方那条在接管期间被拦下过，实测
+      // 清覆盖后它**不会**自己重发；插件继续接管并送快照链，否则模型手里会一直留着旧正文。
+      //
+      // 快照差异（0.21.2 第三轮，用户裁定「会话冻结快照制」）：会话创建时冻结一份
+      // AGENTS.md，之后全局文件怎么改（应用预设 / 手改 / 外部工具）都不影响已存在会话。
+      // 有差异时官方 `agent-instructions` 被拦下、插件送快照版整份 —— 与技能目录同一条
+      // 「不能让口径不对的那份先到达模型」。判据在 `deps.promptBaselineDiverged` 里同步算，
+      // 首见捕获也发生在那里（快照写入不阻塞注入）。
+      //
+      // 技能目录接管（0.21.2 第二轮，用户真机发现「先注入再移除」）：官方按**机器启停**列
+      // 清单，不知道租约 / 会话层；有差异时它先列出本对话不可用的条目，插件再补一行纠正。
+      // 现在改成有差异就拦下官方、由插件送会话版整份（`text()` 已按会话层过滤）。
+      // 判据真算 delta（租约造成的差异在侧车里根本没有覆盖记录），来自 SWR 缓存，同步可得。
+      const visible = newestDomainTexts(agent, PLUGIN_KINDS)
+      // 两个判据各自抛异常时按"没有差异"处理：宁可这一轮沿用旧口径，也不能让整条注入通道
+      // 因为一次文件/目录计算失败而全线停摆（外层的 catch 会把六个域一起丢掉）。
+      let promptDiverged = false
+      try { promptDiverged = deps.promptBaselineDiverged?.(agent) === true } catch { promptDiverged = false }
+      const promptTakeover = promptDiverged || deps.promptOverrideActive?.(agent) === true || visible.has('prompt')
+      let skillDiverged = false
+      try { skillDiverged = deps.skillCatalogDiverged?.(agent) === true } catch { skillDiverged = false }
+      // **接管一旦开始就持续到这条目录离开可见表面**（与提示词域同一手法，不在 delta 归空时
+      // 立刻交还）：官方只在摘要变化或旧目录被压缩掉时才重发，delta 归空时它看到自己第 1 轮
+      // 那条仍与机器一致，**不会重发**。此时交还只会让插件补一条「官方已接管」的假通知，
+      // 而模型手里最新的仍是插件那份。继续接管则内容没变就一个字都不发，变了才更新整份。
+      const skillTakeover = skillDiverged || visible.has('skills')
+      // 被关掉的官方载体域 + 两种会话接管：后者由插件送整份。域开关关掉时照样拦 ——
+      // 官方被拦 + 本插件不发 = 本会话没有这一域（用户自己的选择，如实执行）。
+      const suppressedKinds = suppressedKindsForSession(settings, promptTakeover, skillTakeover)
+      // B4 自检只守**用户关掉的域**。技能接管持续期间，官方可能因摘要仍未变化而压根不再
+      // 尝试发送 —— 把它算成"该拦却没拦到"会在接管稳定后每 5 轮亮一条假警报。
+      const watchUserOff = officialKindsToSuppress(settings).size > 0
       let messages: readonly unknown[] = messagesOf(decision)
       if (suppressedKinds.size > 0) {
         let dropped = 0
@@ -483,14 +560,35 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         })
         if (kept.length !== messages.length) messages = kept
         // B4 自检：只有"这一步真的在拦"时才有意义（令牌门禁 reject、空 turn 早退都在上面）。
-        suppressionVerdict(true, dropped, suppressionCounter)
+        suppressionVerdict(watchUserOff, dropped, suppressionCounter)
       } else {
         suppressionVerdict(false, 0, suppressionCounter)
       }
       const facts = await deps.factsFor(agent)
+      // 本插件接管提示词 / 技能目录时，对应的官方载体对本会话等同缺席：整份由该域送。
+      // 其余沿用原事实（读不到时按"官方在送 / 未压制"处理，与既有口径一致）。
+      // 两个接管互不影响：只接管技能时提示词照旧让位给官方。
+      const injectionFacts: PresetInjectionFacts | undefined = promptTakeover || skillTakeover
+        ? {
+            suppressing: facts?.suppressing === true,
+            carriesAgentsMd: promptTakeover ? false : facts?.carriesAgentsMd !== false,
+            carriesSkillCatalog: skillTakeover ? false : facts?.carriesSkillCatalog !== false,
+          }
+        : facts
       // 域取数抛异常 → 记下来（本步不发它的「已清空」，实况报 error，兼容页留一条降级）。
       failedKeys = new Set()
-      const sections = selectInjections(domains, settings, facts, agent, (key, error) => {
+      // 域**这一轮还拿不到数据**（0.21.2 第三轮）：`text()` 在冷缓存下只能返回空串，
+      // 而"没读到"与"真的空了"在下游是两回事 —— 后者会收到一条假的「已清空」
+      // （2026-10-22 用户实测：对话中途拨开一条技能，那一拍模型被告知技能目录失效）。
+      // 与 failed 同口径处理：这一轮沉默，不说它空了。
+      pendingKeys = new Set()
+      for (const domain of domains) {
+        if (domain.pending === undefined) continue
+        try {
+          if (domain.pending(agent) === true) pendingKeys.add(domain.key)
+        } catch { /* 判据自己出错 = 不 pending：宁可多试一次，也不把域永久静音 */ }
+      }
+      const sections = selectInjections(domains, settings, injectionFacts, agent, (key, error) => {
         failedKeys.add(key)
         const label = domains.find((domain) => domain.key === key)?.label ?? key
         noteRuntime({
@@ -504,8 +602,13 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         })
       })
       // 记录每个域这一步"为什么发 / 为什么不发"，供「注入实况」解释状态（口径见 explainInjections）。
-      lastReasons = explainInjections(domains, settings, facts, agent, failedKeys)
-      const visible = newestDomainTexts(agent, PLUGIN_KINDS)
+      lastReasons = explainInjections(domains, settings, injectionFacts, agent, failedKeys)
+      // 接管时的取代判据（0.21.2）：表面上有**任一**该域内容就算有旧内容 —— 含官方第 1 轮
+      // 那条（它不在 PLUGIN_KINDS 里）。这样首份会话版也会带 Supersedes，清覆盖后重发的
+      // 全局版同样带取代声明。技能目录同一条：接管时官方那份就是被取代的旧内容。
+      const takeoverSurface = promptTakeover || skillTakeover ? newestDomainTexts(agent, LIVE_KINDS) : undefined
+      const promptOnSurface = promptTakeover && takeoverSurface?.get('prompt') !== undefined
+      const skillOnSurface = skillTakeover && takeoverSurface?.get('skills') !== undefined
       const additions: unknown[] = []
       const appended: InjectDomainKey[] = []
       // 本步真正投出去的**域正文**（不含下面的「已清空」通知）：采纳统计的 `injected` 只算它，
@@ -523,10 +626,12 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         // `current !== undefined` = 该域在可见表面上有一条更早的己方**内容**消息 → 这次是**替换**，
         // 界面上的动作标签据此从「已载入」变成「已更新」（见 domainMessage 的 baseline/changes）。
         // 这个判据同时决定框架里那句 `Supersedes …` 发不发（2026-10-18：第一份没有旧内容可取代）。
-        // 「已清空」通知不会落进 `body`（扫描侧把它记成 `cleared` 而不是内容），所以 `current`
-        // 的 `body` 只可能是**内容**指纹；`cleared` 另管"要不要补发通知"，与本判据无关。
+        // `current.body` 是**内容**指纹；最新一条若是「已清空」通知，扫描侧会另外置
+        // `cleared`（通知本身不是内容），下面的判据必须把这一位也算上。
         const current = visible.get(section.key)
         const replacing = current !== undefined
+          || (section.key === 'prompt' && promptOnSurface)
+          || (section.key === 'skills' && skillOnSurface)
         const rendered = renderDomainText(section, toolHidden, replacing)
         // 比对**域正文**而不是整条消息（2026-10-19 修）：框架里 `Supersedes …` 只在替换时发，
         // 首帧没有它。比整条会把"这是本会话第一份"误判成内容变化 → 每个域在第二步多重发一次
@@ -534,10 +639,16 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         // `replacing` 只决定框架长什么样，不影响该不该发。
         // `body === undefined` 的那一支留给官方载体与旧版本消息（它们不带 `body` 字段）：
         // 无从比起时按"内容变了"处理，宁可多发一条也不能让模型拿着过期正文。
-        if (current !== undefined && (current.body === undefined || current.body === rendered.body)) continue
+        // **最新一条是「已清空」通知时例外**（2026-10-21 实测）：通知携带的 `body` 只是更早
+        // 那条内容的指纹，供"恢复后变没变"比对；拿它判"没变"会跳过重发，于是域重新打开后
+        // 模型看到的最新消息仍是「不再发送」，而内容其实已经回来了。通知不是内容 —— 必须重发。
+        if (current !== undefined && current.cleared !== true
+          && (current.body === undefined || current.body === rendered.body)) continue
         const text = rendered.text
         let files: readonly InjectSourceFile[] | undefined
-        try { files = domainOf.get(section.key)?.files?.() } catch { files = undefined }
+        // 传 agent（0.21.2）：提示词域的来源文件清单按**本会话的 cwd** 算项目链。
+        // 其余域不用它，多一个实参对它们没有影响。
+        try { files = domainOf.get(section.key)?.files?.(agent) } catch { files = undefined }
         additions.push(domainMessage(section, text, files, replacing))
         appended.push(section.key)
         injectedKeys.add(section.key)
@@ -547,16 +658,32 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // "我们这一轮没取到" —— 发出去等于向模型谎报（审查 P1-8）。保留上一轮内容不动更安全。
       const labelOf = new Map(domains.map((domain) => [domain.key, domain.label] as const))
       const clearedKeys = new Set<InjectDomainKey>()
+      // 压制型预设且没开「仍然注入」时，`selectInjections` 一个域都不送 —— 新增的「技能目录
+      // 接管但会话版为空」通知也要跟着安静，否则等于绕过预设的"什么都别送"。
+      const presetSilent = injectionFacts !== undefined && injectionFacts.suppressing && !settings.underSuppressingPresets
       for (const key of INJECT_DOMAIN_KEYS) {
         if (published.has(key)) continue
-        if (failedKeys.has(key)) continue
-        // 该域在表面上"曾经有内容、此刻没有" → 发一条「已清空」。两个判据缺一不可：
+        // 该域在表面上"曾经有内容、此刻没有" → 发一条「已清空」。四个判据缺一不可：
         //   · `previous === undefined`：从没注入过内容的域什么都不用说（没有旧目录要作废）；
-        //   · `previous.cleared`：**已经**通知过清空了（最新一条就是通知）→ 不再叠发。
-        // 后者不能省：省掉之后每个空域每轮都会补发一条「Cleared」（2026-10-19 用户实测
-        // 场景 / MCP / 子智能体三轮各三条）。
+        //   · `previous.cleared`：**已经**通知过清空了（最新一条就是通知）→ 不再叠发
+        //     （2026-10-19 用户实测：场景 / MCP / 子智能体三轮各三条）；
+        //   · `failed`：这一轮**取数失败** —— "没读到"≠"没有了"（审查 P1-8）；
+        //   · `pending`：这一轮**数据还没到手** —— 同上，而它正是 2026-10-22 用户实测那条
+        //     假「已清空」的来路（写操作把目录缓存打回重算，那一拍读到了空串）。
+        // 判定本体在 `shouldAnnounceCleared`（纯函数，测试直接钉）。
         const previous = visible.get(key)
-        if (previous === undefined || previous.cleared) continue
+        // 技能目录接管但会话版为空（本对话一条都用不了）：官方那份已被拦下，必须补一条
+        // 「已清空」—— 否则模型手里只剩历史里那份已经不对的清单。只在这条新路径上放宽
+        // `previous === undefined`；域开关关掉时不发（与提示词域同口径：官方被拦、插件不送）。
+        const takeoverEmpty = key === 'skills' && skillTakeover && skillOnSurface
+          && settings.domains.skills === true && !presetSilent
+        if (!shouldAnnounceCleared({
+          published: false,
+          failed: failedKeys.has(key),
+          pending: pendingKeys.has(key),
+          previous,
+          takeoverEmpty,
+        })) continue
         const label = labelOf.get(key) ?? key
         additions.push(clearedMessage(key, label, lastReasons[key]))
         appended.push(key)

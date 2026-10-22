@@ -19,7 +19,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createHistoryDomain } from './sessions/history.js'
 import type { SessionsRegistry } from './sessions/history.js'
 import { createSkillsService, pluginLog } from './skills/service.js'
-import { renameWithRetry, trashRootPath } from './skills/core.js'
+import { renameWithRetry, resolveDshHome, trashRootPath } from './skills/core.js'
 import { createPromptsService } from './prompts/service.js'
 import { createQuickPromptsService } from './prompts/quick-service.js'
 import { isValidPresetId } from './prompts/preset-id.js'
@@ -37,7 +37,7 @@ import { runStateDoctor } from './ops/state-doctor.js'
 import { createSubagentService, decideToolFilter, defaultPersonasDir, validPersonaName } from './subagents/service.js'
 import type { ToolFilterDecision } from './subagents/service.js'
 import { createSubagentCatalog } from './subagents/catalog.js'
-import { createSkillCatalog } from './skills/catalog.js'
+import { createSkillCatalog, skillCatalogNeedsTakeover } from './skills/catalog.js'
 import {
   createContextInjector,
   HOW_NAMED_TOOLS,
@@ -82,8 +82,53 @@ import { hubBackupDir, hubPath, hubRoot, migrateHubLayoutSync, relocateEntries }
 import { buildCompatOps } from './ops/compat.js'
 import { buildPromptOps } from './ops/prompts.js'
 import { buildQuickPromptOps } from './ops/quick-prompts.js'
+import { buildScopeOps, type ScopeSessionRow } from './ops/scope.js'
 import { buildSessionOps } from './ops/sessions.js'
 import { buildTrashRetentionOps } from './ops/trash-retention.js'
+// 会话作用域（0.21.2）：侧车 scope-overrides.json + 五条 op + 启动对账。
+import { rememberSessionCwd, scopeKeyOfAgent, scopeKeyOfIdSync, sessionIdentityOf, sessionIdOf, sessionScopeIdOf } from './scope/resolve.js'
+import { createScopeStore } from './scope/store.js'
+import { isWorkspaceScopeKey, scopeKeyLabel, workspaceScopeKeyOf } from './scope/workspace-key.js'
+import { createIntentStore } from './scope/intent-store.js'
+import {
+  effectiveLayerOf,
+  intentOf,
+  isIntentDomain,
+  planReconcile,
+  resolveResource,
+  scanSessionClaims,
+  withIntent,
+  type ClaimScanResult,
+  type ClaimScanTargets,
+  type IntentDomain,
+  type IntentState,
+  type ScopeIntent,
+  type ScopeReconcileReport,
+} from './scope/intent.js'
+import {
+  SCOPE_FLAG_DOMAINS,
+  clampPromptBaseline,
+  hasPromptOverride,
+  layeredFlag,
+  mcpToolServerSegments,
+  promptBaselineOf,
+  promptOverrideOf,
+  removeSceneInScope,
+  renameSceneInScope,
+  sceneFlagOf,
+  sessionScenePinOf,
+  sessionSceneOf,
+  sessionToolTableHidden,
+  setSceneToolTableInScope,
+  withBaseline,
+  type ScopeFlagDomain,
+  type ScopeGlobalSnapshot,
+  type SessionBaseline,
+  type SessionScope,
+} from './scope/scope-overrides.js'
+import type { SceneArchive } from './memories/archive.js'
+import type { MemoryScopeOverride, PromptScopeOverride } from './memories/service.js'
+import { promptBaselineDiffers } from './memories/prompt-layer.js'
 // 回收站保留期（0.19.1）：侧车 `hub/trash-retention.json` + 六类回收站的到期清扫。
 import { createTrashRetentionDomain } from './trash-retention.js'
 // HTTP 请求准入与 handlers 后处理（2026-09-19 从本文件 apply 闭包抽出，依赖显式传参）。
@@ -277,6 +322,23 @@ export default {
       },
     })
 
+    // 第三个 reconciler（0.21.2）：全局意图与租约的对账。启动时先对齐"上个进程留下的
+    // 运行态"：意图没有记录的新装 / 升级首轮从补丁反推（显式会话覆盖还在的按租约处理，
+    // 不让旧版本的"会话级开启"变成全局开启）；之后运行态恒为 `意图 ∪ 租约`。
+    //
+    // ⚠️ **注册序即执行序，且这一条必须先于 `scope-overrides-orphans`**（下面的孤儿清理，
+    // `runBootReconcilers` 逐条 await）。痕迹闸门认的就是"侧车里还留着那个会话的条目"：
+    // 会话被删除后，采纳判定的那一刻条目**还在**才算痕迹（这份痕迹正好随后被孤儿清理抹掉）。
+    // 顺序一旦调换，删除场景的痕迹在采纳判定时已经不在，运行态会被读成"用户全局开过" ——
+    // 也就是用户报障 A 的第二条路径复活。
+    registerBootReconciler({
+      id: 'scope-intent',
+      label: '全局意图与租约对账',
+      async run() {
+        await enqueueScopeReconcile({ adoptExternal: true })
+      },
+    })
+
     const fs = ctx.fs
     const settings = ctx.settings
     const sandboxPolicy = ctx.sandboxPolicy
@@ -297,7 +359,7 @@ export default {
 
     // 访问令牌（2026-09-19 抽到 ./request-gate.ts）：配置里的存量令牌 / 生效令牌 / 比对 /
     // 进程标识。引用点用解构保持原名字，index.ts 的调用处一行未改。
-    const { CONFIG_TOKEN, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID, acceptedThisBoot, markAccepted, unmarkAccepted } = createAccessToken({ config })
+    const { CONFIG_TOKEN, CONFIG_TOKEN_FROM_FILE, TOKEN_DISABLED, TOKEN, tokenMatches, BOOT_ID, acceptedThisBoot, markAccepted, unmarkAccepted } = createAccessToken({ config })
 
     const wait = (ms: number) => ctx.timeout(ms)
     const message = (e: unknown) => String((e && (e as Error).message) || e)
@@ -367,9 +429,650 @@ export default {
     // 与上面的预设库**两份存储**，不是同一份加个标记位：`list()` 只扫自己目录，所以快捷词
     // 天然进不了「应用 / 场景绑定 / 注入 / 模型工具」这四条只认 hub/prompts/ 的路径。
     // 理由见 ./prompts/quick-service.ts 头注。
+    // ---------- 会话作用域（0.21.2）：侧车 hub/scope-overrides.json ----------
+    // 「同一台机器上多个对话各用一套设置」的叠加层：全局那一份一个字都不动，这里只记
+    // **某个会话与全局不一样的地方**。三态存储 / 二态展示 / 自动清除的判定全在
+    // ./scope/scope-overrides.ts（纯函数），本处只建读写通道。
+    //
+    // 为什么排在各域之前：下面每个域（快捷词 / 记忆 / 技能 / 子智能体 / MCP）都要问它
+    // "这个会话的覆盖是什么"，而它自身不依赖任何一个域。
+    const scopeStore = createScopeStore({
+      withWriteLock,
+      message,
+      // 侧车 GC 的"活着的会话"：宿主**已知的全部**会话（含归档、含未挂回工作区的孤儿）——
+      // 不能用下拉框那份清单（它按当前会话区成员过滤，会把孤儿当已删除）。
+      // 读不到返回 null，store 那边按"不剪"处理（读不到 ≠ 全被删了）。
+      liveSessionIds: () => liveSessionIds(),
+    })
+    // 预热：注入侧的 `scopeOfSync` 在缓存为空时一律按全局算（安全但不隔离）。启动时先读一次，
+    // 让「重启后第一轮」也能看到上次钉住的场景 / 覆盖，而不是要等到第二轮。
+    void scopeStore.read().catch(() => { /* 读不到 = 空表，注入侧按全局走 */ })
+
+    // ── 作用域键解析（0.21.2）────────────────────────────────────────────────
+    //
+    // 会话模式 = 会话 id；工作区模式 = `ws:<cwd>`。注入 / 守卫 / 工具表 / 提示词这些热路径
+    // （同步）用 agent 自带 / 记忆下来的 cwd；ops 入口拿到的可能是真实 sessionId（斜杠菜单）
+    // 或工作区键（面板），异步那一路查一次会话清单补齐。
+    /** 当前隔离粒度（同步；侧车缓存未加载时按 session）。 */
+    const scopeMode = () => scopeStore.modeSync()
+    /** agent → 作用域键。 */
+    const scopeKeyForAgent = (agent: unknown): string | null => scopeKeyOfAgent(agent, scopeMode())
+    /** 会话 id / 作用域键 → 作用域键（同步；冷会话 cwd 未知时原样退回会话键）。 */
+    const scopeKeyForIdSync = (id: string): string => scopeKeyOfIdSync(id, scopeMode())
+    /** 会话 id / 作用域键 → 作用域键（异步；cwd 未知时查一次会话清单并记住）。 */
+    async function scopeKeyForId(id: string): Promise<string> {
+      if (id === '' || scopeMode() !== 'workspace' || isWorkspaceScopeKey(id)) return id
+      const sync = scopeKeyForIdSync(id)
+      if (sync !== id) return sync
+      try {
+        const rows = await scopeSessionRows()
+        const row = rows.find((item) => item.id === id)
+        if (row !== undefined && row.cwd) {
+          rememberSessionCwd(id, row.cwd)
+          return scopeKeyForIdSync(id)
+        }
+      } catch { /* 清单读不到 → 回退会话键（宁可少共享，不串工作区） */ }
+      return id
+    }
+    // 全局意图（0.21.2）：`hub/scope-intent.json`。「全局开关 = 用户想要什么」与「补丁 / 来源
+    // 状态 = 为了租约此刻在跑什么」分开记，对账器把后者维持成 `意图 ∪ 租约`（见 scope/intent.ts）。
+    const intentStore = createIntentStore({ withWriteLock, message })
+    void intentStore.read().catch(() => { /* 读不到 = 没有意见，对账从运行态反推 */ })
+    // 租约的**同步视图**（对账器每次跑完刷新）：注入 / 守卫 / 全局场景应用都要在热路径上
+    // 回答"这一台现在有谁在认领"，不能每次都去算一遍全集。空表 = 还没对账过（按无租约处理）。
+    let mcpLeasesSync = new Map<string, string[]>()
+    let sourceLeasesSync = new Map<string, string[]>()
+    /** 单条技能的租约（0.21.2）：键是 `<root>/<声明名>`。 */
+    let skillLeasesSync = new Map<string, string[]>()
+    /** 对账串行链：写 op 会 await 它（拿回执），启动 / 场景联动只排进队列。 */
+    let reconcileChain: Promise<void> = Promise.resolve()
+    /**
+     * **原始**的技能清单 op（0.21.2）：包装版会顺带给每条补 `intent` / `globalOn` / 租约计数
+     * （一次 `scanClaimsOnce`，要读会话清单并扫整张覆盖表）。内部路径（全局快照、对账、
+     * 场景引擎、技能目录）只读 `enabled` / `roots`，走包装版等于每读一次清单多做一次租约扫描
+     * —— 斜杠菜单一次下钻能叠出好几份，正是「切到某个域要等很久」的一截。
+     */
+    const rawSkillState = skillsService.ops['skill-state']
+    // 技能清单的每个来源带上意图三态 + 租约计数（0.21.2，面板与模型工具读同一份）。
+    // 包在 service 的 op 上而不是 HTTP 层：`skill_manager_list` 也直调这条 op ——
+    // 只包一层的话，模型看到的"来源开着"会是租约拉起后的运行态，而用户看的是意图。
+    skillsService.ops['skill-state'] = async (args: any) => annotateSkillState(await rawSkillState(args))
+    // 单条技能的启停落在 core 那张**机器级**策略表上（官方 provider 按进程发布它），所以它
+    // 与 MCP / 来源同一条：全局开关写的是**意图**，运行态由对账器维持 `意图 ∪ 租约`。
+    // 原始 op 留出来给对账器与场景引擎直接落运行态 —— 包过一层的那条会再写一次意图、
+    // 再排一次对账，自己跟自己打转。
+    const rawSkillEnable = skillsService.ops['skill-enable']
+    const rawSkillDisable = skillsService.ops['skill-disable']
+    const rawSkillSetAll = skillsService.ops['skill-set-all']
+    /**
+     * 来源启停的**原始** op（0.21.2）：包装层会在每次写后刷一遍技能目录，场景批量应用时
+     * 一域要拨好几条 —— 逐条各刷一遍等于把每个会话的目录扫好几轮。这里绕过包装，
+     * 由调用方在整批落地后统一刷一次（见 `applySkillSourceSwitches` 的末尾）。
+     */
+    const rawSkillSourceEnable = skillsService.ops['skill-source-enable']
+    const rawSkillSourceDisable = skillsService.ops['skill-source-disable']
+    /**
+     * 把启停入参（`root` + 目录名或声明名）换成意图 / 覆盖那套键 `<root>/<声明名>`。
+     *
+     * 必须换：界面与模型工具传的是**目录名**，而注入段、场景档案、会话覆盖一律按声明名建键
+     * —— 名字不同的那条技能如果按目录名记意图，那条意图永远读不到（面板仍显示关着，
+     * 而对账器以为它开着）。扫描放在写之前，蹭的还是上一轮读到的缓存。
+     */
+    async function skillIntentKeys(items: ReadonlyArray<{ root?: unknown; name?: unknown }>): Promise<{ keys: string[]; unmapped: string[] }> {
+      const wanted = items
+        .map((it) => ({ root: String((it && it.root) || ''), name: String((it && it.name) || '') }))
+        .filter((it) => it.root !== '' && it.name !== '')
+      if (wanted.length === 0) return { keys: [], unmapped: [] }
+      const byDir = new Map<string, string>()
+      try {
+        const r: any = await rawSkillState({})
+        for (const root of ((r && r.data && r.data.roots) || []) as any[]) {
+          const rootKey = String((root && root.key) || '')
+          if (rootKey === '') continue
+          for (const sk of ((root && root.skills) || []) as any[]) {
+            const declared = String((sk && (sk.declaredName || sk.name)) || '')
+            const dir = String((sk && sk.name) || '')
+            if (declared === '' || dir === '') continue
+            const key = rootKey + '/' + declared
+            byDir.set(rootKey + '\u0000' + dir, key)
+            if (!byDir.has(rootKey + '\u0000' + declared)) byDir.set(rootKey + '\u0000' + declared, key)
+          }
+        }
+      } catch { /* 扫不到 → 下面按"映射不出来"处理：不写意图，如实告警 */ }
+      const out: string[] = []
+      const unmapped: string[] = []
+      for (const it of wanted) {
+        const key = byDir.get(it.root + '\u0000' + it.name)
+        // **键归一化不变式**（0.21.2）：读侧（目录 / 档案 / 覆盖 / 徽章计数）一律按
+        // `<root>/<声明名>`，所以映射不出来时**不写**这条意图 —— 写一条读侧永远对不上的键，
+        // 比不写更坏：用户点了关、对账器以为还开着，而界面上永远看不到那条记录。
+        // 这条键也确实不该有意图：它要么已被删除，要么这一轮根本没扫到，对账器不会为它出决策。
+        if (key === undefined) { unmapped.push(it.root + '/' + it.name); continue }
+        if (!out.includes(key)) out.push(key)
+      }
+      if (unmapped.length > 0) {
+        console.warn('[dsh-plugin-tool-management] 技能键没能归一化成 <root>/<声明名>，本次不写全局意图：' + unmapped.join('、'))
+      }
+      return { keys: out, unmapped }
+    }
+    /** 把「这些键没能归一化」并进 op 回执（回执形状不变，只多一条 warnings）。 */
+    function withIntentWarnings(result: any, unmapped: readonly string[]): any {
+      if (unmapped.length === 0 || !result || typeof result !== 'object') return result
+      const note = '这些技能没能对上声明名，本次没有记下全局意图（下一轮对账会按运行态反推）：' + unmapped.join('、')
+      const prev = Array.isArray(result.warnings) ? result.warnings : []
+      return { ...result, warnings: [...prev, note] }
+    }
+    /**
+     * 全局开关写完运行态之后补上意图，并把对账排进队列（运行态 := 意图 ∪ 租约）。
+     *
+     * 对账**不**采纳外部改动：这一轮的运行态就是我们刚写的，采纳会让别的会话的租约被
+     * 误读成"用户全局开过"。
+     */
+    async function noteSkillIntent(keys: readonly string[], on: boolean): Promise<void> {
+      if (keys.length === 0) return
+      await intentStore.mutate((current) => withIntent(current, 'skills', keys, on ? 'on' : 'off'))
+        .catch(() => { /* 写失败 → 对账从运行态反推 */ })
+      void enqueueScopeReconcile().catch(() => { /* 下一轮写 op 还会对账 */ })
+    }
+    skillsService.ops['skill-enable'] = async (args: any) => {
+      const { keys, unmapped } = await skillIntentKeys([{ root: args && args.root, name: args && args.name }])
+      const r = await rawSkillEnable(args)
+      if (r && r.ok === false) return r
+      await noteSkillIntent(keys, true)
+      return withIntentWarnings(r, unmapped)
+    }
+    skillsService.ops['skill-disable'] = async (args: any) => {
+      const { keys, unmapped } = await skillIntentKeys([{ root: args && args.root, name: args && args.name }])
+      const r = await rawSkillDisable(args)
+      if (r && r.ok === false) return r
+      await noteSkillIntent(keys, false)
+      return withIntentWarnings(r, unmapped)
+    }
+    skillsService.ops['skill-set-all'] = async (args: any) => {
+      const items: any[] = Array.isArray(args && args.items) ? args.items : []
+      const { keys, unmapped } = await skillIntentKeys(items)
+      const r = await rawSkillSetAll(args)
+      if (r && r.ok === false) return r
+      await noteSkillIntent(keys, (args && args.enabled) === true)
+      return withIntentWarnings(r, unmapped)
+    }
+
     const quickPromptsDir = hubPath('quick-prompts')
     const quickPromptsService = createQuickPromptsService({ dir: quickPromptsDir })
-    const quickPromptOps = buildQuickPromptOps(quickPromptsService)
+    const quickPromptOps = buildQuickPromptOps(quickPromptsService, {
+      // 会话层：列表按本会话的生效值算 enabled（侧车一个字不动）。四层并值（0.21.2）——
+      // 覆盖 → 场景层 → 基线 → undefined（= 交给 op 自己的全局值）。
+      flagFor: (sessionId) => flagResolverOfSession(sessionId, 'quickPrompts'),
+    })
+
+    // ── 会话层解析（0.21.2）：四层并值的唯一出处 ─────────────────────────────
+    //
+    //   行情的四层：会话覆盖 → 场景层（在场景模式时按档案实时算）→ 基线（脱离时）→ 全局。
+    //   前两层 + 基线在这里收口（`flagResolverOfSession` / `layeredFlag`），全局由各消费方
+    //   （各域自己的 op / 目录）照旧兜底 —— 所以消费方拿到的签名统一是
+    //   `(key) => boolean | undefined`，`undefined` = "这一层没话说，去问全局"。
+    //
+    //   为什么做成解析器而不是合并好的表：键全集在各消费方手里（技能清单 / 服务器行 /
+    //   人设清单），在这里攒一份全集等于把"哪些算存在"抄第二遍。
+    /** 某个会话进入的场景档案（同步；没进场景 / 档案读不到 → undefined）。 */
+    function sceneArchiveOfSession(scope: SessionScope | undefined): SceneArchive | undefined {
+      if (scope?.scene === undefined) return undefined
+      return memoriesService.sceneArchiveOf(scope.scene)
+    }
+    /**
+     * 某个会话某一格的**有效层**解析器（覆盖 → 场景层 → 基线）。没有任何一层时返回
+     * `undefined` —— 快路径：调用方全按全局算，一个字节都不改。
+     *
+     * 必须带上显式覆盖：调用方（技能目录 / 人设目录 / 快捷提示词 / 列表工具）拿到的是
+     * "这一格在本会话里是什么"，不是"覆盖之下的那一层"。少了它，会话里拨的开关只在
+     * `effectiveDiff`（界面画勾）里生效，注入与工具看到的仍是下层值。
+     */
+    function flagResolverOfSession(sessionId: string | null, domain: ScopeFlagDomain): ((key: string) => boolean | undefined) | undefined {
+      if (sessionId === null) return undefined
+      const scope = scopeStore.scopeOfSync(scopeKeyForIdSync(sessionId))
+      if (scope === undefined) return undefined
+      if (scope.scene === undefined && scope.detached !== true && scope[domain] === undefined) return undefined
+      const archive = sceneArchiveOfSession(scope)
+      return (key: string) => effectiveLayerOf(scope, archive, domain, key)
+    }
+    /** 按 agent 取（注入侧专用）。 */
+    function flagResolverOfAgent(agent: unknown, domain: ScopeFlagDomain): ((key: string) => boolean | undefined) | undefined {
+      return flagResolverOfSession(scopeKeyForAgent(agent), domain)
+    }
+    /**
+     * 本会话的**层指纹**（覆盖 + 进入的场景档案 + 意图代次）。注入目录的渲染缓存键吃它 ——
+     * 少了它，同一个会话拨过开关之后目录不会重算（键里只有 sessionId 是不够的）；意图代次
+     * 则覆盖"没有会话层、但全局意图改了"的那一半（技能来源的可见性依赖它）。
+     */
+    function layerKeyOfAgent(agent: unknown): string {
+      const rev = 'i' + intentStore.revision()
+      const sessionId = scopeKeyForAgent(agent)
+      if (sessionId === null) return rev
+      const scope = scopeStore.scopeOfSync(sessionId)
+      if (scope === undefined) return rev
+      return JSON.stringify([scope, sceneArchiveOfSession(scope) ?? null, rev])
+    }
+
+    /**
+     * 某个会话的记忆域覆盖（0.21.2；0.21.2 起带层语义）。**唯一**的一处转换：侧车形状 →
+     * 记忆域要的那两项。
+     *
+     * 两个入口都走它 —— 注入域（同步，`text(agent)` 契约）与 `rules-list`（按 sessionId）。
+     * 分开写两份转换就是给"注入看到 A、界面看到 B"留机会，而那种症状没有任何报错。
+     *
+     * 记忆**不走场景层**（档案里"哪些记忆进"由场景名 + 逐条开关决定，见 scope-overrides.ts
+     * 文件头），但基线要铺（脱离时 = 创建时的逐条开关）。场景名走 `sessionScenePinOf`：
+     * 进入的场景 → 基线里的场景（脱离时）→ 跟随全局。基线里记的是"创建时没有场景"时
+     * 必须传 `null`（钉住没有场景），不能折成 undefined 去跟随**后来**才启用的全局场景。
+     */
+    const memoryScopeOfSession = (sessionId: string): MemoryScopeOverride | undefined => {
+      // 工作区模式下，面板 / 斜杠菜单给的真实 sessionId 先折成作用域键（同步；cwd 见过才算）。
+      const scopeId = scopeKeyForIdSync(sessionId)
+      const scope = scopeStore.scopeOfSync(scopeId)
+      if (scope === undefined) return undefined
+      const scene = sessionScenePinOf(scope)
+      const base = scope.detached === true ? scope.baseline?.flags?.memory : undefined
+      const memory = base === undefined ? scope.memory : { ...base, ...(scope.memory ?? {}) }
+      return {
+        sessionId: scopeId,
+        ...(scene === undefined ? {} : { scene }),
+        ...(memory === undefined ? {} : { memory }),
+      }
+    }
+
+    /**
+     * 注入侧取本会话的记忆覆盖：**同步**，因为注入域的 `text(agent)` 是同步契约。
+     * 取不到会话 id → `undefined` = 跟随全局（风险表最后一条）。
+     */
+    function memoryScopeOf(agent: unknown): MemoryScopeOverride | undefined {
+      const sessionId = scopeKeyForAgent(agent)
+      return sessionId === null ? undefined : memoryScopeOfSession(sessionId)
+    }
+
+    /**
+     * 提示词冻结快照（0.21.2 第三轮）：**首见捕获**，内存先生效、异步落侧车。
+     *
+     * 为什么在注入器里捕获：插件拿不到宿主「会话创建」事件，只能在第一次看见这个会话时
+     * 取当前 `~/.dsh/AGENTS.md`。对 0.21.2 之前就存在的老会话，等价于「从现在起冻结」。
+     *
+     * 两处状态：
+     *   - 侧车 `prompt.baseline` 是持久的那一份（跨重启、归档恢复都在）；
+     *   - `pendingPromptBaselines` 是「已捕获但落盘还没成功」的那一份 —— 写盘失败不能让
+     *     本进程里的冻结失效（失败只意味着重启后会重新捕获）。写成功就删掉。
+     *
+     * 捕获本身**不读用户覆盖**：不管这个会话有没有 content / presetId，快照都要落，
+     * 否则用户清掉覆盖的那一刻会解冻到当时的全局文件（不是会话创建时的基线）。
+     */
+    const pendingPromptBaselines = new Map<string, string>()
+    function persistPromptBaseline(sessionId: string, text: string): void {
+      void scopeStore.mutate(sessionId, (cur) => {
+        // 锁内再判一次：并发 / 上一个进程可能已经写过，绝不覆盖已有快照。
+        if (cur?.prompt?.baseline !== undefined) return cur
+        return {
+          ...(cur === undefined ? {} : cur),
+          prompt: { ...(cur?.prompt === undefined ? {} : cur.prompt), baseline: text },
+        }
+      }).then((res) => {
+        if (res.ok) pendingPromptBaselines.delete(sessionId)
+        // 失败不报警：下一轮注入会拿着 pending 再试；本进程内冻结照旧生效。
+      }).catch(() => { /* 同上 */ })
+    }
+    /**
+     * 取本会话的冻结快照；没有就**现在捕获**一份。`undefined` = 读文件失败（这一轮不捕获，
+     * 注入退化为当前文件 = 0.21.2 前两轮的行为）。
+     */
+    function ensurePromptBaseline(sessionId: string): string | undefined {
+      // 工作区模式下把真实 sessionId 折成作用域键：冻结快照按工作区存，工作区里第一个
+      // 被注入的会话负责捕获。已经是 ws: 键的原样通过。
+      const scopeId = scopeKeyForIdSync(sessionId)
+      // 全局粒度 = 没有会话层，也就没有"这个会话出生时的 AGENTS.md"这回事：一个空键
+      // 什么都存不下（`mutate('')` 会被合法键检查拒掉），继续往下走就是每轮一次注定
+      // 失败的写盘。返回 undefined = 这一轮不冻结，与"读文件失败"同一条降级。
+      if (scopeId === '') return undefined
+      const stored = promptBaselineOf(scopeStore.scopeOfSync(scopeId))
+      if (stored !== undefined) return stored
+      const pending = pendingPromptBaselines.get(scopeId)
+      if (pending !== undefined) {
+        // 上次落盘没成功 → 再排一次（成功后从 pending 删除）。
+        persistPromptBaseline(scopeId, pending)
+        return pending
+      }
+      let text: string
+      try { text = clampPromptBaseline(memoriesService.promptBaselineText()) } catch { return undefined }
+      pendingPromptBaselines.set(scopeId, text)
+      persistPromptBaseline(scopeId, text)
+      return text
+    }
+    /**
+     * 注入侧判据：本会话的快照与当前 `~/.dsh/AGENTS.md` 是否不一致（同步，0.21.2 第三轮）。
+     *
+     * 首见那一轮先捕获、按「无差异」返回（快照就是这一版，官方照送）。之后文件怎么改，
+     * 本会话都判有差异 → 拦官方、由插件送快照链。读文件失败按「无差异」处理 ——
+     * 宁可让官方照旧、也不能在这一轮把两份都拦掉。
+     */
+    function promptBaselineDivergedOf(agent: unknown): boolean {
+      const sessionId = scopeKeyForAgent(agent)
+      if (sessionId === null) return false
+      const baseline = ensurePromptBaseline(sessionId)
+      let current: string
+      try { current = memoriesService.promptBaselineText() } catch { return false }
+      return promptBaselineDiffers(baseline, current)
+    }
+
+    /**
+     * 注入侧取本会话的提示词作用域（0.21.2）：`cwd` 定位项目指令链、`scene` 是生效场景、
+     * `override` 是会话级提示词覆盖、`baseline` 是冻结快照（第三轮）。
+     *
+     * 提示词**接管官方那条 AGENTS.md** 的三种情形：有覆盖、快照与当前文件不一致、本插件
+     * 此前已为该会话送过提示词（接管持续）。接管时拦下 `agent-instructions`（仅本会话），
+     * 由插件送用户级整份；首份带「Supersedes …」把已进历史的官方那份压下去。无接管时维持
+     * 原口径：官方在送就让位（见 domain 注释）。
+     *
+     * 取不到会话 → `undefined`（= 不带项目链，与 0.21.2 行为一致）。
+     */
+    function promptScopeOf(agent: unknown): PromptScopeOverride | undefined {
+      const identity = sessionIdentityOf(agent)
+      if (identity === null) return undefined
+      // 子代理 / 侧聊继承所属用户会话的提示词作用域；工作区模式下再折到工作区键。
+      // cwd 仍用会话自己的 —— 项目指令链按它所在的工作目录往上找，与父会话通常相同。
+      const scopeId = scopeKeyForAgent(agent) ?? identity.sessionId
+      const scope = scopeStore.scopeOfSync(scopeId)
+      const scene = sessionScenePinOf(scope)
+      const override = promptOverrideOf(scope)
+      // 首见捕获也在这里兜一次：`promptBaselineDiverged` 与域取数各自独立，
+      // 任何一个先跑到都能保证快照落下来。
+      const baseline = ensurePromptBaseline(scopeId)
+      if (identity.cwd === undefined && scene === undefined && override === undefined && baseline === undefined) return undefined
+      return {
+        ...(identity.cwd === undefined ? {} : { cwd: identity.cwd }),
+        ...(scene === undefined ? {} : { scene }),
+        ...(override === undefined ? {} : { override }),
+        ...(baseline === undefined ? {} : { baseline }),
+      }
+    }
+
+    /** 本会话有没有**用户写的**提示词覆盖（注入侧同步判据：拦官方 kind / 决定 replacing）。 */
+    function promptOverrideActiveOf(agent: unknown): boolean {
+      const sessionId = scopeKeyForAgent(agent)
+      return sessionId === null ? false : hasPromptOverride(scopeStore.scopeOfSync(sessionId))
+    }
+
+    /**
+     * 按会话 id 取提示词作用域（`scope-get` 的编辑预填用）。
+     *
+     * 没有 agent，取不到 `cwd` —— 预填的是**用户级那一槽**（会话覆盖 / 场景预设 / 快照），
+     * 项目指令链本来就不在这里编辑，不影响写回（写回只存用户级正文）。
+     * 快照用侧车那份 / 内存里待落盘的那份，**不在这里新捕获**（界面读不该改状态）。
+     */
+    function promptScopeOfSession(sessionId: string): PromptScopeOverride | undefined {
+      const scopeId = scopeKeyForIdSync(sessionId)
+      const scope = scopeStore.scopeOfSync(scopeId)
+      const scene = sessionScenePinOf(scope)
+      const override = promptOverrideOf(scope)
+      const baseline = promptBaselineOf(scope) ?? pendingPromptBaselines.get(scopeId)
+      if (scene === undefined && override === undefined && baseline === undefined) return undefined
+      return {
+        ...(scene === undefined ? {} : { scene }),
+        ...(override === undefined ? {} : { override }),
+        ...(baseline === undefined ? {} : { baseline }),
+      }
+    }
+
+    /**
+     * 某台 MCP 服务器在某个会话里的解析（0.21.2）：**注入段 / 工具表 / 执行守卫三处同源**。
+     *
+     *   有效层（覆盖 → 场景层 → 基线）→ 全局意图（on / off / blocked）→ 运行态兜底。
+     *
+     * `visible === undefined` 只在"意图还没落盘、会话层也没话说"时出现（升级首轮 / 新服务器），
+     * 调用方按运行态处理。`claim` = 全局意图不是 on，但这个会话要它（租约的来源）。
+     */
+    function mcpServerViewOf(sessionId: string | null, serverName: string): ReturnType<typeof resolveResource> {
+      const intent = intentOf(intentStore.snapshot(), 'mcp', serverName)
+      const scope = sessionId === null ? undefined : scopeStore.scopeOfSync(scopeKeyForIdSync(sessionId))
+      const archive = sceneArchiveOfSession(scope)
+      const lower = effectiveLayerOf(scope, archive, 'mcp', serverName)
+      return resolveResource(intent, lower)
+    }
+
+    /** 某个技能来源在某个会话里的解析（与 `mcpServerViewOf` 同一套判据）。 */
+    function skillSourceViewOf(sessionId: string | null, rootKey: string): ReturnType<typeof resolveResource> {
+      const intent = intentOf(intentStore.snapshot(), 'skillSources', rootKey)
+      const scope = sessionId === null ? undefined : scopeStore.scopeOfSync(scopeKeyForIdSync(sessionId))
+      const archive = sceneArchiveOfSession(scope)
+      const lower = effectiveLayerOf(scope, archive, 'skillSources', rootKey)
+      return resolveResource(intent, lower)
+    }
+
+    /**
+     * 单条技能在某个会话里的解析（0.21.2，与来源 / 服务器同一套判据）。
+     *
+     * 为什么单条技能也要走意图：那张策略表是**机器级**的，租约把它拉起来之后
+     * `skill-state` 回的是运行态，直接读就等于"某个对话开了一条技能，别的对话也看得见"
+     * —— 与服务器那格修过的串味同一条路径。`visible === undefined`（没有意图、会话层也没
+     * 说话）时调用方按运行态兜底。
+     */
+    function skillViewOf(sessionId: string | null, key: string): ReturnType<typeof resolveResource> {
+      const intent = intentOf(intentStore.snapshot(), 'skills', key)
+      const scope = sessionId === null ? undefined : scopeStore.scopeOfSync(scopeKeyForIdSync(sessionId))
+      const archive = sceneArchiveOfSession(scope)
+      const lower = effectiveLayerOf(scope, archive, 'skills', key)
+      return resolveResource(intent, lower)
+    }
+
+    /**
+     * 此刻是否有技能 / 来源**只靠别的会话的租约**在跑（同步，0.21.2）。
+     *
+     * 为什么需要它：拦官方技能目录的判据本来是 `skillCatalog.delta()`，而那份差异要读
+     * **本会话的目录数据** —— 它是异步取的（`skill-state` 冷启实测 3.4s），新对话第一轮
+     * 常常还没到，于是差异算成空、官方那份照旧到达模型。官方那份列的是**运行态**，其中就
+     * 包含别的会话靠租约开着的技能 —— 用户实测：新建一个对话、什么都没设置，上下文里却出现
+     * 了别的对话开的三条技能。租约表是对账器维护的同步视图，判"这个会话该不该看到官方那份"
+     * 不需要等目录数据。
+     *
+     * 认领者名单里放的是**真实会话 id**（清单读不到时才退成作用域键），所以两个都比对。
+     * 本会话自己认领的那条不算差异：官方列出它来对这个会话也是对的。
+     */
+    function skillCatalogHasForeignLease(agent: unknown): boolean {
+      const mine: string[] = []
+      const sid = sessionIdOf(agent)
+      if (sid !== null) mine.push(sid)
+      const scopeKey = scopeKeyForAgent(agent)
+      if (scopeKey !== null && !mine.includes(scopeKey)) mine.push(scopeKey)
+      if (mine.length === 0) return false
+      const claimedByMe = (list: readonly string[]): boolean => list.some((id) => mine.includes(id))
+      for (const list of skillLeasesSync.values()) if (!claimedByMe(list)) return true
+      for (const list of sourceLeasesSync.values()) if (!claimedByMe(list)) return true
+      return false
+    }
+
+    /**
+     * 会话 MCP 判定的**唯一快照**（0.21.2）：执行守卫（`sessionMcpVerdictSync`，同步）与
+     * 可见性限制层（`sessionMcpOverlayOf`，异步）共用这一份。
+     *
+     * 为什么必须共用（守卫与可见性一致不变式）：两处对同一个 `(agent, server)` 必须得出
+     * 同一个 verdict —— 否则模型「看得见却调不动」或「看不见却调得动」，两种症状都没有报错，
+     * 只能靠人肉撞见。三样东西必须同源：
+     *   · 会话覆盖：`scopeStore.scopeOfSync`（同一个 TTL 缓存）；
+     *   · 全局意图：`intentStore.snapshot`（同一个快照）；
+     *   · 工具名切分的候选 serverName 集合：**只有**这个函数算得出来。
+     *
+     * 候选集合只用**同步可读**的那几张表（覆盖 / 基线 / 档案 / 意图键）。这不是偷懒：
+     * 会话层要判的每一台服务器，必然出现在这四张表之一（要么有意图记录，要么有覆盖键），
+     * 而 `configured` / 停用表 / 已知工具缓存都是异步读盘 —— 守卫在热路径上（同步契约）
+     * 拿不到它们，两路各用一套就等于把「切分结论可能不同」重新引回来。
+     * 认不出的名字由 `splitMcpToolName` 按最后一个 `__` 兜底（与显示侧同一口径），
+     * 名字本身含 `__` 的歧义由 `ambiguousServerNames` 另行上报。
+     */
+    function sessionMcpContextOf(agent: unknown): {
+      sessionId: string | null
+      scope: SessionScope | undefined
+      archive: SceneArchive | undefined
+      candidates: Set<string>
+    } {
+      const sessionId = scopeKeyForAgent(agent)
+      const scope = sessionId === null ? undefined : scopeStore.scopeOfSync(sessionId)
+      const archive = sceneArchiveOfSession(scope)
+      const candidates = serverNameCandidates(
+        scope?.mcp, mcpToolServerSegments(scope?.mcpTools),
+        scope?.baseline?.flags?.mcp, mcpToolServerSegments(scope?.baseline?.flags?.mcpTools),
+        archive?.mcp,
+        Object.keys(intentStore.snapshot().mcp),
+      )
+      return { sessionId, scope, archive, candidates }
+    }
+
+    /**
+     * 一个已切开的工具全名在本会话里的 verdict：`allow` / `deny` / `undefined`（交给全局）。
+     *
+     * **判据只有这一份**（守卫与可见性层都调它）：服务器可见性（三处同源）+ 工具格 / 服务器格
+     * 的有效层。`allow` 的语义在两处相同 —— 越过全局停用表（本会话显式开着）。
+     */
+    function mcpVerdictOf(
+      ctx: ReturnType<typeof sessionMcpContextOf>,
+      parts: McpToolNameParts,
+    ): 'allow' | 'deny' | undefined {
+      const view = mcpServerViewOf(ctx.sessionId, parts.server)
+      if (view.visible === false) return 'deny'
+      const toolVal = effectiveLayerOf(ctx.scope, ctx.archive, 'mcpTools', parts.server + '/' + parts.tool)
+      if (toolVal === false) return 'deny'
+      if (toolVal === true) return 'allow'
+      if (effectiveLayerOf(ctx.scope, ctx.archive, 'mcp', parts.server) === true) return 'allow'
+      return undefined
+    }
+
+    /**
+     * 本会话的 MCP 覆盖**同步判定**（0.21.2，执行守卫用）：`allow` / `deny` / `undefined`
+     * （undefined = 交给全局守卫）。
+     *
+     * 判据：服务器可见性（三处同源）+ `(server, tool)` 两格的有效层：
+     *   · 服务器看不到（本会话关掉 / 场景没勾 / 全局意图 off 且本会话没认领 / blocked）→ deny；
+     *   · 工具格或服务器格显式"关" → deny；显式"开" → allow（越过全局停用表）；
+     *   · 都没话说 → undefined（全局守卫照旧守停用表与工具表）。
+     * 名字切不开时按 undefined（少一层保险，不会多放行）。
+     *
+     * 失败方向（与 `sessionMcpOverlayOf` 同向，见那里的说明）：本函数体包在调用方的
+     * try/catch 里，抛错 = 不拦 —— 会话层是叠在全局之上的视图，读一次侧车失手不该让模型
+     * 在对话中途丢掉工具；全局守卫与停用表照旧生效。
+     */
+    function sessionMcpVerdictSync(agent: unknown, toolName: string): 'allow' | 'deny' | undefined {
+      const ctx = sessionMcpContextOf(agent)
+      const parts = toolKeyParts(toolName, ctx.candidates)
+      if (parts === null) return undefined
+      return mcpVerdictOf(ctx, parts)
+    }
+
+    /**
+     * 本会话的 MCP 可见性覆盖（0.21.2，restrict 层用）：在**此刻注册着的**工具全名上算
+     * `{ allow, deny }`（名单语义见 mcp/manager.ts 的 deps 注释）。
+     *
+     * 没有会话层也要算：全局意图 off 的服务器可能是**别的会话**的租约在跑，它的工具此刻
+     * 注册在宿主里 —— 不隐藏的话，没有覆盖的新会话照样看得到（正是这次要修的串味）。
+     *
+     * 失败方向：**与执行守卫同向 = fail-open（不额外限制）**。理由：这一层是叠在全局规则
+     * 之上的会话视图，`tools.schemas()` 读一次失败就整层 deny 会让每个对话在那一瞬间丢掉
+     * 全部工具（比"本会话没藏住"难看得多），而且下一轮 `tools/change` 会重算回来。
+     * 守卫那边同一条：算不出来就不拦，全局停用表 / 工具表照旧。两处同向，才不会出现
+     * 「看不见却调得动」。
+     */
+    async function sessionMcpOverlayOf(agent: unknown): Promise<{ allow: string[]; deny: string[] }> {
+      const empty = { allow: [] as string[], deny: [] as string[] }
+      const ctx = sessionMcpContextOf(agent)
+      const intentSnapshot = intentStore.snapshot()
+      const hasGlobalFilter = Object.values(intentSnapshot.mcp).some((state) => state === 'off' || state === 'blocked')
+      const hasSessionLayer = ctx.scope !== undefined &&
+        (ctx.scope.scene !== undefined || ctx.scope.detached === true || ctx.scope.mcp !== undefined || ctx.scope.mcpTools !== undefined)
+      if (!hasGlobalFilter && !hasSessionLayer) return empty
+      let schemas: any[] = []
+      try { schemas = await tools.schemas() } catch { return empty }
+      if (schemas.length === 0) return empty
+      const allow: string[] = []
+      const deny: string[] = []
+      for (const s of schemas) {
+        const name = String((s && s.name) || '')
+        const parts = toolKeyParts(name, ctx.candidates)
+        if (parts === null) continue
+        const verdict = mcpVerdictOf(ctx, parts)
+        if (verdict === 'deny') deny.push(name)
+        else if (verdict === 'allow') allow.push(name)
+      }
+      return { allow, deny }
+    }
+
+    /**
+     * 读一次侧车 + 会话清单，按给定键集合扫一遍七域认领（0.21.2 第四轮：`scanSessionClaims`）。
+     *
+     * 展示侧（徽章 / 下拉条数）与执行侧（对账租约）现在都走这一趟 —— 扫描逻辑只此一份。
+     *
+     * @param strict 用**严格读**取侧车（`readStrict`：文件在却读不动 / 解析不了就抛）。
+     *   `readable === false` 表示没读出来，而空侧车在痕迹闸门眼里等于"这一格从没被会话动过"
+     *   —— 与"宁可少采纳，不误提升"正好相反，所以调用方必须把读失败当成**处处有痕迹**处理。
+     */
+    async function scanClaimsOnce(targets: ClaimScanTargets, strict = false): Promise<{ scan: ClaimScanResult; readable: boolean }> {
+      let sessions: Record<string, SessionScope> = {}
+      let readable = false
+      try {
+        sessions = (strict ? await scopeStore.readStrict() : await scopeStore.read()).sessions
+        readable = true
+      } catch { /* 读不到 → 空表；保守口径见 `strict` 的说明 */ }
+      let rows: ScopeSessionRow[] = []
+      try { rows = await scopeSessionRows() } catch { rows = [] }
+      try {
+        return { scan: scanSessionClaims({ sessions, rows, mode: scopeMode(), archiveOf: sceneArchiveOfSession, targets }), readable }
+      } catch {
+        // 装饰性读数：算不出来不该让列表 op / 面板整份失败（下一轮再算）。
+        // `readable: false` 让它与"侧车读不出来"同档 —— 对账那边必须保守（不采纳运行态）。
+        return { scan: scanSessionClaims({ sessions: {}, rows: [], mode: scopeMode(), archiveOf: () => undefined, targets }), readable: false }
+      }
+    }
+
+    /**
+     * 本会话生效的模型工具表关停名单（0.21.2）。
+     *
+     * 每个对话一份：本对话自己的整份名单 → 创建时抄的基线 → 实时全局（老会话没有基线时
+     * 的兜底）。全局只给新对话当默认模板；已有对话不会再跟着全局变。
+     */
+    function toolTableHiddenForSession(sessionId: string | null): ReadonlySet<string> {
+      const globalHidden = toolTableHidden()
+      if (sessionId === null) return globalHidden
+      const scope = scopeStore.scopeOfSync(scopeKeyForIdSync(sessionId))
+      if (scope === undefined) return globalHidden
+      if (scope.toolTableHidden === undefined && scope.baseline?.toolTableHidden === undefined) return globalHidden
+      return new Set(sessionToolTableHidden(scope, [...globalHidden]))
+    }
+
+    /**
+     * 本会话相对全局的工具表差异（restrict 层用）：`allow` = 本会话重新打开、
+     * `deny` = 本会话关掉。与 MCP 的 overlay 同一条合并路径（见 mcp/manager.ts）。
+     */
+    function sessionToolTableOverlayOf(agent: unknown): { allow: string[]; deny: string[] } {
+      const sessionId = scopeKeyForAgent(agent)
+      if (sessionId === null) return { allow: [], deny: [] }
+      const scope = scopeStore.scopeOfSync(sessionId)
+      if (scope === undefined) return { allow: [], deny: [] }
+      if (scope.toolTableHidden === undefined && scope.baseline?.toolTableHidden === undefined) {
+        return { allow: [], deny: [] }
+      }
+      const effective = new Set(sessionToolTableHidden(scope, [...toolTableHidden()]))
+      const globalHidden = toolTableHidden()
+      const allow: string[] = []
+      const deny: string[] = []
+      // 只算本插件注册过的工具：MCP 工具走各自的 mcp / mcpTools 覆盖，不混进这一域。
+      for (const name of toolTableSizes.keys()) {
+        const hiddenHere = effective.has(name)
+        const hiddenGlobal = globalHidden.has(name)
+        if (!hiddenHere && hiddenGlobal) allow.push(name)
+        else if (hiddenHere && !hiddenGlobal) deny.push(name)
+      }
+      return { allow, deny }
+    }
+
+    /**
+     * 某台服务器在本会话里是不是**隐藏**的（0.21.2，状态段 / `mcp_manager_list` 逐行问）。
+     * 场景模式里"没勾的服务器"算隐藏；全局意图 off（不论连接是不是别的会话的租约）也算。
+     */
+    function sessionServerHiddenOf(agent: unknown, serverName: string): boolean {
+      return mcpServerViewOf(scopeKeyForAgent(agent), serverName).visible === false
+    }
 
     // ---------- rules（规则/记忆，v0.4）----------
     // 记忆真源 $DSH_HOME/tool-management/memories/<场景>/<name>.md（仅用户级，D1）。
@@ -406,6 +1109,9 @@ export default {
           return p.home + sep + 'AGENTS.md'
         } catch { return null }
       },
+      // 会话层覆盖（0.21.2）：记忆域按会话投影场景与逐条开关。侧车归 scopeStore 管
+      // （它有自己的 TTL 缓存），这里只转手 —— 记忆域不引第二份读取点。
+      scopeOverrideOf: memoryScopeOfSession,
     })
     // 场景记忆段的注册/生命周期由下面的注入通道统一管（memoriesService.memoryText / promptText）。
 
@@ -439,12 +1145,15 @@ export default {
       all: Record<string, boolean>
       /** 结构不完整（缺 frontmatter / 名字非法 / 描述为空）的键：core 一律拒绝启停。 */
       unloadable: Set<string>
+      /** 键（`<root>/<声明名>`）→ core 启停 op 要的条目名（目录 / 文件名）。 */
+      entryNames: Record<string, string>
     }> {
-      const r: any = await skillsService.ops['skill-state']({})
+      const r: any = await rawSkillState({})
       const states: Record<string, boolean> = {}
       const all: Record<string, boolean> = {}
       const shadowed = new Set<string>()
       const unloadable = new Set<string>()
+      const entryNames: Record<string, string> = {}
       for (const root of ((r && r.data && r.data.roots) || [])) {
         for (const sk of (root.skills || [])) {
           const name = String(sk.declaredName || sk.name || '')
@@ -462,9 +1171,12 @@ export default {
           const on = sk.enabled === true
           states[key] = on
           all[key] = on
+          // core 按**条目名**（目录 / 文件名）解析，声明名与它可以不同：传错会得到
+          // 「技能不存在: <声明名>」（2026-10-21 真机，pdf-skill / pdf-reader）。
+          entryNames[key] = String(sk.name || name)
         }
       }
-      return { states, shadowed, all, unloadable }
+      return { states, shadowed, all, unloadable, entryNames }
     }
     /**
      * 档案里**能写、且写了有意义**的技能键：既不被同名技能覆盖，结构也完整。
@@ -489,6 +1201,19 @@ export default {
 
     // 整体替换关停名单的那一步抽成具名函数：引擎的 apply 依赖与「修改场景」表单的
     // 即时生效（scene-sync 包装）共用同一条写路径，不能各抄一份。
+    /**
+     * 一份工具表方案 → 关停名单（0.21.2）。用户存的方案**优先**：万一有人把方案起名叫
+     * 'factory-default'，他要的是自己那份。方案不存在返回 null。
+     *
+     * 全局进场景与**本对话**进场景共用这一份：两处各写一遍，某天改名规则一改就会分叉。
+     */
+    const toolTablePresetHidden = async (name: string): Promise<string[] | null> => {
+      const s = await readToolTableSettings()
+      const hit = s.presets.filter((p) => p.name === name)[0]
+      if (hit) return [...hit.hidden]
+      return name === FACTORY_TOOL_TABLE_PRESET ? [...DEFAULT_HIDDEN_TOOLS] : null
+    }
+
     const applyToolTableHiddenNow = async (hidden: string[]) => {
       // 与 `tool-table` op 写分支同一条路径、同一顺序：落盘 → 重排可见性 → 两个目录重算。
       // 绕开这套顺序就会留下「名单已经改了、工具下一轮还发给模型」这种最难查的状态。
@@ -500,10 +1225,122 @@ export default {
       const saved = await writeToolTableSettings(next)
       if (!saved.ok) throw new Error(saved.error)
       mcp.scheduleToolRestrictions()
-      await Promise.all([
-        skillCatalog.refresh().catch(() => { /* 目录刷新失败不该让工具表写入算失败（与 op 侧同口径） */ }),
-        subagentCatalog.refresh().catch(() => { /* 同上 */ }),
-      ])
+      // 目录重算不挡写入回执（0.21.2，与技能写 op 同一条）：保留旧值的 SWR 让下一拍注入
+      // 不会读到空，晚一步到新清单是可接受的代价。场景进入会走到这里，等它等于多等一轮全量扫描。
+      scheduleSkillCatalogRefresh()
+      void subagentCatalog.refresh().catch(() => { /* 同上 */ })
+    }
+
+    // ── 场景生命周期 → 会话覆盖的同步（0.21.2 复核）────────────────────────────
+    // 场景改名 / 删除 / 改绑工具表都发生在**场景**这一层，而停在里面的会话各有一份
+    // `scope.scene` / `toolTableHidden`。这三件事以前没人通知会话：
+    //   · 删除：会话停在"幽灵场景"，所有域静默退回全局、记忆注入还漏掉全局场景；
+    //   · 改名：会话指向旧名；下次新建同名场景会被**自动进入**；
+    //   · 改绑工具表：已经进来的会话一直按旧名单（其余域是读档案实时算的）。
+    // 三处都做同一件事：在写锁内一次改完所有会话，再让可见性 / 目录 / 对账跟上。
+
+    /** 场景改名后把会话里的场景名与记忆键换到新名。 */
+    async function syncSessionsForSceneRename(from: string, to: string): Promise<void> {
+      if (from === '' || to === '' || from === to) return
+      try {
+        const res = await scopeStore.mutateAll((scope) => {
+          const r = renameSceneInScope(scope, from, to)
+          return r.changed ? r.scope : scope
+        })
+        if (!res.ok) {
+          ctx.logger?.warn?.('场景改名后的会话同步失败：' + res.error)
+        }
+      } catch (e) {
+        ctx.logger?.warn?.('场景改名后的会话同步失败：' + message(e))
+      }
+    }
+
+    /** 场景删除后让停在里面的会话退出场景，并清掉指向该场景记忆的覆盖。 */
+    async function syncSessionsForSceneRemoval(name: string): Promise<void> {
+      if (name === '') return
+      try {
+        const res = await scopeStore.mutateAll((scope) => {
+          const r = removeSceneInScope(scope, name)
+          return r.changed ? r.scope : scope
+        })
+        if (!res.ok) {
+          ctx.logger?.warn?.('场景删除后的会话同步失败：' + res.error)
+          return
+        }
+        if (res.changed === 0) return
+        // 会话的场景层被清掉 = MCP / 技能 / 人设的可见集合可能变了；工具表也可能回到基线。
+        mcp.scheduleToolRestrictions()
+        scheduleSkillCatalogRefresh()
+        void subagentCatalog.refresh().catch(() => { /* 同上 */ })
+        // 认领可能跟着场景一起消失：最后一个租约用完的资源要停。
+        void enqueueScopeReconcile({ adoptExternal: false }).catch(() => { /* 下一轮写 op 还会对账 */ })
+      } catch (e) {
+        ctx.logger?.warn?.('场景删除后的会话同步失败：' + message(e))
+      }
+    }
+
+    /** 场景改绑工具表方案后，把新名单同步到停在这个场景里的会话。`presetName` 为空 = 保持现状。 */
+    async function syncSessionsForSceneToolTable(scene: string, presetName: string): Promise<void> {
+      if (scene === '' || presetName === '') return
+      try {
+        let hidden: string[] | null = null
+        try { hidden = await toolTablePresetHidden(presetName) } catch { hidden = null }
+        // 方案已不存在：保持现状（与场景表单「悬空绑定不硬失败」同口径）。
+        if (hidden === null) return
+        const filtered = hidden.filter((name) => toolTableSizes.has(name))
+        const res = await scopeStore.mutateAll((scope) => {
+          const r = setSceneToolTableInScope(scope, scene, filtered)
+          return r.changed ? r.scope : scope
+        })
+        if (!res.ok) {
+          ctx.logger?.warn?.('场景工具表方案同步到会话失败：' + res.error)
+          return
+        }
+        if (res.changed === 0) return
+        mcp.scheduleToolRestrictions()
+        scheduleSkillCatalogRefresh()
+        void subagentCatalog.refresh().catch(() => { /* 同上 */ })
+      } catch (e) {
+        ctx.logger?.warn?.('场景工具表方案同步到会话失败：' + message(e))
+      }
+    }
+
+    /**
+     * 场景应用**要停**一个资源之前的租约保护（0.21.2 复核）。
+     *
+     * 判据是"还有没有会话在认领"，不是对账器缓存里的 `*LeasesSync`：那张表只收
+     * 「意图已经不是 on」的租约，而全局场景要停的常常正是**意图还开着**的资源 ——
+     * 先写 off 再查旧表，必然查不到认领，于是停掉 → 对账按 claims 重新拉起，
+     * 一次换场景就是一次闪断（D2）。这里直接读会话认领（与徽章 / 对账同一份扫描）。
+     *
+     * 读不到就**保护**（不真停）：宁可多留一个租约，也不能把正在用的会话的连接停掉。
+     */
+    async function claimedInSessions(
+      domain: 'mcp' | 'skillSources' | 'skills',
+      keys: readonly string[],
+    ): Promise<{ claimed: Set<string>; readable: boolean }> {
+      const unique = [...new Set(keys)]
+      if (unique.length === 0) return { claimed: new Set<string>(), readable: true }
+      try {
+        const { scan, readable } = await scanClaimsOnce({ [domain]: unique })
+        const claimed = new Set<string>()
+        for (const key of unique) {
+          if ((scan.claims[domain].get(key) || []).length > 0) claimed.add(key)
+        }
+        return { claimed, readable }
+      } catch {
+        return { claimed: new Set<string>(), readable: false }
+      }
+    }
+
+    /**
+     * 场景应用写全局意图：`blocked`（彻底停止）是比场景更强的用户裁定，场景不得覆盖它
+     * —— 只有全局意图开关（`scope-intent-set`）能解除。不挡的话，进一次包含这台服务器 /
+     * 这条技能的场景，就会把「彻底停止」悄悄降级成 off，之后任何会话的租约都能把它拉起来。
+     */
+    function withSceneIntent(current: ScopeIntent, domain: IntentDomain, key: string, state: IntentState): ScopeIntent {
+      if (intentOf(current, domain, key) === 'blocked') return current
+      return withIntent(current, domain, [key], state)
     }
 
     const archiveService = createArchiveEngine({
@@ -513,13 +1350,7 @@ export default {
       audit: (op: string, target: string) => recordAudit({ ts: Date.now(), op, target: target || AUDIT_TARGET_CONFIG, source: 'engine' }),
       // ── 模型工具表（0.15.0 C1）：场景可以绑一份方案，进场景整体换成那一份 ──
       currentToolTableHidden: async () => [...(await readToolTableSettings()).hidden],
-      toolTablePresetHidden: async (name: string) => {
-        const s = await readToolTableSettings()
-        // 用户存的方案**优先**：万一有人把方案起名叫 'factory-default'，他要的是自己那份。
-        const hit = s.presets.filter((p) => p.name === name)[0]
-        if (hit) return [...hit.hidden]
-        return name === FACTORY_TOOL_TABLE_PRESET ? [...DEFAULT_HIDDEN_TOOLS] : null
-      },
+      toolTablePresetHidden,
       applyToolTableHidden: applyToolTableHiddenNow,
       loadSlice: async () => ({ ...(await memoriesService.readArchiveSlice()) }),
       // `fields` 必须原样透传：它决定"本次只写哪几片"，是审查 P2-3 里防丢更新的关键。
@@ -567,6 +1398,9 @@ export default {
       // 退出回放时也不该去动它们，否则会改写用户对副本的显式策略记录。
       currentSkills: async () => (await skillScan()).states,
       applySkills: async (target: Record<string, boolean>) => {
+        // 与 MCP / 来源同一条：场景引擎改的是**全局定义** → 先写意图，再落运行态
+        // （运行态恒为 `意图 ∪ 租约`，只改策略表的话下一轮对账会按旧意图改回来）。
+        //
         // 四道过滤，缺一不可：
         //  1. 被同名覆盖的副本直接跳过——它们本来就不生效，写策略只会污染用户的记录。
         //  2. 结构不完整的技能也跳过——core 对它们一律拒绝启停（error.skill.notLoadable），
@@ -575,10 +1409,14 @@ export default {
         //     就导致没办法退出」）：快照 / 档案里记的是"进场景那一刻还在"的键，场景期间那条
         //     技能被删掉之后，退出时按快照回放必然报 `技能不存在`，于是整次退出被这一条打断、
         //     mode 停在原地 —— 用户被困在场景里。没有可写的对象，跳过才是对的。
-        //  4. **已经处于目标状态的技能不再写**。`applySkills` 写的是显式策略记录，而目标
-        //     状态是生效状态，两者不等价：对已经生效为「停用」的技能再 disable 一次，
-        //     只是把「没有记录」固化成「显式停用」，场景模式进出一次就会改写 state.json。
-        const { states, shadowed, unloadable } = await skillScan()
+        //  4. **生效值已经是目标的技能不再写**。写的是显式记录，而目标是生效状态，两者不等价：
+        //     对已经停用的技能再 disable 一次，只是把"没有记录"固化成"显式停用"，
+        //     场景模式进出一次就会改写 state.json。意图那一格同口径。
+        const { states, shadowed, unloadable, entryNames } = await skillScan()
+        const intentSnap = intentStore.snapshot()
+        /** 全局「彻底停止」的技能：场景不得覆盖（见 `withSceneIntent`），物理启停也一并跳过。 */
+        const blocked = new Set<string>()
+        const planned: Array<{ key: string; on: boolean; intentChanged: boolean }> = []
         const skipped: string[] = []
         for (const [key, on] of Object.entries(target)) {
           const i = key.indexOf('/')
@@ -590,20 +1428,55 @@ export default {
           if (unloadable.has(key)) continue
           // 这次扫描里根本没有这个键 = 技能已被删除（或所在目录已消失）：没有可写的对象。
           if (!(key in states)) { skipped.push(`${key}（已不存在）`); continue }
-          if (states[key] === on) continue
-          const root = key.slice(0, i)
-          const name = key.slice(i + 1)
-          const r: any = await skillsService.ops[on ? 'skill-enable' : 'skill-disable']({ root, name })
+          // 全局彻底停止压过场景（与 `scope-set` 拒写「开」同一条）：既不改意图也不动策略表。
+          // 技能还要看所在来源：来源被彻底停止时，技能级开关开着也加载不到（来源闸恒生效）。
+          if (intentOf(intentSnap, 'skills', key) === 'blocked' ||
+            intentOf(intentSnap, 'skillSources', key.slice(0, i)) === 'blocked') {
+            blocked.add(key)
+            if (on) skipped.push(`${key}（已在全局「彻底停止」）`)
+            continue
+          }
+          const wanted: IntentState = on ? 'on' : 'off'
+          const cur = intentOf(intentSnap, 'skills', key)
+          // 没有意见且生效值已是目标 → 这一格什么都不写（第 4 道过滤）。
+          if (cur === undefined && states[key] === on) continue
+          planned.push({ key, on, intentChanged: cur !== wanted })
+        }
+        const writes = planned.filter((p) => p.intentChanged)
+        if (writes.length > 0) {
+          await intentStore.mutate((current) => {
+            let next = current
+            for (const s of writes) next = withSceneIntent(next, 'skills', s.key, s.on ? 'on' : 'off')
+            return next
+          }).catch(() => { /* 写失败 → 对账会从运行态反推；不拦场景应用 */ })
+        }
+        // 租约保护（0.21.2 复核）：判据改成**会话认领**，不再只看 `skillLeasesSync`
+        // —— 后者只收「意图已不是 on」的租约，而场景刚要停的常常是意图还开着、被某个
+        // 会话显式开着的那一条。意图上面已经写成 off，这里若是租约就只让对账维持运行。
+        const stoppingSkills = planned.filter((p) => !p.on && states[p.key] === true).map((p) => p.key)
+        const skillClaims = await claimedInSessions('skills', stoppingSkills)
+        for (const p of planned) {
+          if (states[p.key] === p.on) continue
+          const i = p.key.indexOf('/')
+          // 不真停：策略表是进程级的，停了那个会话当轮就加载不到。运行态留给对账维持开。
+          if (!p.on && (skillLeasesSync.has(p.key) || !skillClaims.readable || skillClaims.claimed.has(p.key))) continue
+          const r: any = await (p.on ? rawSkillEnable : rawSkillDisable)({ root: p.key.slice(0, i), name: entryNames[p.key] || p.key.slice(i + 1) })
           if (r && r.ok === false) {
             // 结构性失败（这一条现在解不开）只记警告并跳过 —— 与 applySkillSourceSwitches
             // 同一条口径：拿它中断整个进入 / 退出只会把用户困在场景里，而这一行与本次改动无关。
             const code = String((r && r.code) || '')
             if (code === 'error.skill.notFound' || code === 'error.skill.notLoadable' || code === 'error.skill.noFrontmatter') {
-              skipped.push(`${key}（${r.error}）`)
+              skipped.push(`${p.key}（${r.error}）`)
               continue
             }
-            throw new Error(`技能 ${key} 应用失败: ${r.error}`)
+            throw new Error(`技能 ${p.key} 应用失败: ${r.error}`)
           }
+        }
+        // 排一轮对账：把被跳过的租约补回来，并采纳外部改动。
+        if (planned.length > 0) {
+          void enqueueScopeReconcile({ adoptExternal: true }).catch(() => { /* 下一轮写 op 还会对账 */ })
+          // 原始启停 op 没有包装层那次目录重算；整批技能应用完之后补一次（不阻塞场景回执）。
+          scheduleSkillCatalogRefresh()
         }
         if (skipped.length) {
           ctx.logger?.warn?.(`scene: 跳过无法应用的技能 —— ${skipped.join('、')}`)
@@ -630,10 +1503,51 @@ export default {
         return out
       },
       applyMcpServerSwitches: async (switches) => {
+        // 场景引擎改的是**全局定义**：先按 id → serverName 归一，再把意图写下来。
+        // 不能只写补丁：补丁是运行态，而运行态恒为 `意图 ∪ 租约` —— 只改补丁的话，
+        // 下一轮对账会按旧意图把它改回去（全局场景的改动就丢了）。
+        const rows = await mcp.patchServerRows().catch(() => [])
+        const nameOf = new Map(rows.map((row) => [row.level + '\u0000' + row.id, row.serverName]))
+        const intentSnap = intentStore.snapshot()
+        const wanted = new Map<string, boolean>()
         for (const s of switches) {
+          const name = nameOf.get(s.level + '\u0000' + s.id)
+          if (name === undefined) continue
+          const prev = wanted.get(name)
+          wanted.set(name, prev === undefined ? s.enabled : prev || s.enabled)
+        }
+        // 全局「彻底停止」压过场景：不改意图、不动补丁（见 `withSceneIntent`）。
+        const blocked = new Set<string>()
+        for (const [name, enabled] of [...wanted]) {
+          if (intentOf(intentSnap, 'mcp', name) !== 'blocked') continue
+          wanted.delete(name)
+          blocked.add(name)
+          if (enabled) ctx.logger?.warn?.(`场景要启用 MCP 服务器「${name}」，但它已在全局「彻底停止」：已跳过`)
+        }
+        if (wanted.size > 0) {
+          await intentStore.mutate((current) => {
+            let next = current
+            for (const [name, enabled] of wanted) next = withSceneIntent(next, 'mcp', name, enabled ? 'on' : 'off')
+            return next
+          }).catch(() => { /* 写失败 → 对账会从运行态反推；不拦场景应用 */ })
+        }
+        // 租约保护（0.21.2 复核）：按**会话认领**判，理由见 `claimedInSessions`。
+        const stoppingMcp = [...new Set(switches
+          .filter((s) => !s.enabled)
+          .map((s) => nameOf.get(s.level + '\u0000' + s.id))
+          .filter((name): name is string => name !== undefined))]
+        const mcpClaims = await claimedInSessions('mcp', stoppingMcp)
+        for (const s of switches) {
+          const name = nameOf.get(s.level + '\u0000' + s.id)
+          if (name !== undefined && blocked.has(name)) continue
+          // 不真停：连接是进程级的，停了那个会话当轮就没有工具。意图已经写成 off，
+          // 运行态留给对账维持开（并只对认领者可见）。
+          if (!s.enabled && name !== undefined && (mcpLeasesSync.has(name) || !mcpClaims.readable || mcpClaims.claimed.has(name))) continue
           const r: any = await mcp.ops['mcpm-set-enabled']({ id: s.id, level: s.level, enabled: s.enabled })
           if (r && r.ok === false) throw new Error(`MCP 服务器 ${s.id} ${s.enabled ? '启用' : '停用'}失败：${r.error}`)
         }
+        // 排一轮对账：把被跳过的租约补回来（若开关期间认领变了），并采纳外部改动。
+        void enqueueScopeReconcile({ adoptExternal: true }).catch(() => { /* 下一轮写 op 还会对账 */ })
         // 补丁改动由宿主热重载（实测 ≤5s）。这里**不等**，避免进入模式被拖住十几秒；
         // 界面在应用完成后即可用，工具集合会在数秒内补齐。
       },
@@ -658,7 +1572,7 @@ export default {
         return undefined
       },
       skillSourceStates: async () => {
-        const r: any = await skillsService.ops['skill-state']({})
+        const r: any = await rawSkillState({})
         const roots = (r && r.data && r.data.roots) || []
         const out: Array<{ root: string; enabled: boolean }> = []
         for (const root of roots) {
@@ -679,12 +1593,38 @@ export default {
        * 结构性失败的正解在 `skills/service.ts` 的 `requestSwitchRoot`（项目来源按 key 前缀解析）。
        */
       applySkillSourceSwitches: async (switches) => {
+        // 与 MCP 同一条：场景引擎改的是全局定义 → 先写意图，再改来源状态（见
+        // applyMcpServerSwitches 的注释；运行态 = 意图 ∪ 租约）。
+        const intentSnap = intentStore.snapshot()
+        // 全局「彻底停止」压过场景：不改意图、不动来源状态（见 `withSceneIntent`）。
+        const blocked = new Set<string>()
+        for (const s of switches) {
+          if (intentOf(intentSnap, 'skillSources', s.root) !== 'blocked') continue
+          blocked.add(s.root)
+          if (s.enabled) ctx.logger?.warn?.(`场景要启用技能来源「${s.root}」，但它已在全局「彻底停止」：已跳过`)
+        }
+        if (switches.length > 0) {
+          await intentStore.mutate((current) => {
+            let next = current
+            for (const s of switches) {
+              if (blocked.has(s.root)) continue
+              next = withSceneIntent(next, 'skillSources', s.root, s.enabled ? 'on' : 'off')
+            }
+            return next
+          }).catch(() => { /* 写失败 → 对账会从运行态反推 */ })
+        }
+        // 租约保护（0.21.2 复核）：按会话认领判，与 MCP / 单条技能同一条（见 `claimedInSessions`）。
+        const sourceClaims = await claimedInSessions('skillSources', switches.filter((s) => !s.enabled).map((s) => s.root))
         const skipped: string[] = []
         for (const s of switches) {
-          const op = s.enabled ? 'skill-source-enable' : 'skill-source-disable'
+          if (blocked.has(s.root)) continue
+          // 不真停：技能级 enable 依赖来源启用；意图已经写成 off，运行态留给对账维持开。
+          if (!s.enabled && (sourceLeasesSync.has(s.root) || !sourceClaims.readable || sourceClaims.claimed.has(s.root))) continue
+          // 用原始 op：整批来源切换结束后只刷一次目录（见本函数末尾）。
+          const raw = s.enabled ? rawSkillSourceEnable : rawSkillSourceDisable
           let r: any
           try {
-            r = await skillsService.ops[op]({ root: s.root })
+            r = await raw({ root: s.root })
           } catch (e) {
             r = { ok: false, error: message(e), code: '' }
           }
@@ -699,6 +1639,10 @@ export default {
             throw new Error(`技能来源 ${s.root} ${s.enabled ? '启用' : '停用'}失败：${r.error}`)
           }
         }
+        void enqueueScopeReconcile({ adoptExternal: true }).catch(() => { /* 下一轮写 op 还会对账 */ })
+        // 整批来源切换完只刷一次目录（原始 op 没有包装层那次刷新）。不 await：场景切换的
+        // 回执不该等目录重算，缓存保留旧值，下一轮注入不会读到空。
+        if (switches.length > 0) scheduleSkillCatalogRefresh()
         if (skipped.length) {
           ctx.logger?.warn?.(`scene: 跳过无法启停的技能来源 —— ${skipped.join('、')}`)
         }
@@ -746,10 +1690,24 @@ export default {
 
     // ---------- 轻量子智能体（设计 §3）----------
     // 人设 = $DSH_HOME/tool-management/subagents/<name>.md；运行走官方 ctx.subagents.start（spawn provider）。
-    // sceneLists 供场景绑定校验：启用场景（rules-list 的 active 行）档案里的 subagents 并集。
     // stateDir 与 rules 共用同一个覆盖键（测试注入一致）；子智能体开关存 <stateDir>/subagents-index.json。
     const subagentService = createSubagentService(ctx, { stateDir: String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || '') })
-    const subagentSceneLists = async (): Promise<string[][]> => {
+    /** 某个 agent 生效的场景（0.21.2；0.21.2 起含基线那一份）：string = 钉住，null = 钉住没有，undefined = 跟随全局。 */
+    const sceneOverrideOfAgent = (agent: unknown): string | null | undefined => {
+      const sessionId = scopeKeyForAgent(agent)
+      return sessionId === null ? undefined : sessionScenePinOf(scopeStore.scopeOfSync(sessionId))
+    }
+    // sceneLists 供场景绑定校验：启用场景（rules-list 的 active 行）档案里的 subagents 并集。
+    // 会话进入场景时（0.21.2）取**那个场景**的绑定 —— 否则会话层切了场景、人设目录还按全局
+    // 正在用的那个场景过滤。钉住"没有场景"（脱离且基线无场景）→ 不按任何场景绑定过滤。
+    const subagentSceneLists = async (agent?: unknown): Promise<string[][]> => {
+      const pinned = sceneOverrideOfAgent(agent)
+      if (pinned === null) return []
+      if (pinned !== undefined) {
+        const bound = memoriesService.sceneSubagentsOf(pinned)
+        // 档案没定义 subagents 段 = 不过滤（与引擎同口径）。
+        return bound === undefined ? [] : [bound]
+      }
       const slice = await memoriesService.readArchiveSlice()
       const r: any = await memoriesService.ops['rules-list']({})
       if (!r || r.ok === false) return []
@@ -825,7 +1783,8 @@ export default {
      * `injectHiddenToolsFor` 拿，同一个函数，不定义第二份。
      */
     const toolVisibleFor = (name: string, agent: unknown): boolean => {
-      if (toolTableHidden().has(name)) return false
+      // 0.21.2：工具表按对话解析（本对话名单 → 基线 → 全局）；拿不到 agent 时按全局。
+      if (toolTableHiddenForSession(scopeKeyForAgent(agent)).has(name)) return false
       if (agent === null || (typeof agent !== 'object' && typeof agent !== 'function')) return true
       try { return tools.get(name, agent as object) !== undefined } catch { return true /* 读不到 = 按还在手里算 */ }
     }
@@ -835,7 +1794,7 @@ export default {
      * 判据就是上面那份 `toolVisibleFor`，这里只把它收成一份集合交给注入框架。
      */
     const injectHiddenToolsFor = (agent: unknown): ReadonlySet<string> => {
-      const hidden = new Set<string>(toolTableHidden())
+      const hidden = new Set<string>(toolTableHiddenForSession(scopeKeyForAgent(agent)))
       for (const name of HOW_NAMED_TOOLS) if (!toolVisibleFor(name, agent)) hidden.add(name)
       return hidden
     }
@@ -858,17 +1817,54 @@ export default {
       // 截断提示里那句「用 X 查」就是假的。判据按 **agent**（2026-10-14 对抗性审查 P1-8）：
       // 与 `how` 行、MCP 回执同一份 `toolVisibleFor`，不再只看全局开关。
       listToolVisible: (agent) => toolVisibleFor('subagent_manager_list', agent),
+      // 会话层（0.21.2）：四层并值（覆盖 → 场景层绑定 → 基线）。本会话开的**能救回**
+      // 场景绑定的排除项；没话说时目录自己落到全局口径（场景绑定 ∩ 全局启停）。
+      flagFor: (agent) => flagResolverOfAgent(agent, 'subagents'),
+      layerKeyFor: (agent) => layerKeyOfAgent(agent),
     })
     // ⚠️ 取数必须用 mcpmRowsWithNotes(false)：true 会带上**未打码**的 url/headers/env（含明文密钥）。
     // 技能目录与提示词两个域是**官方载体的兜底**：预设挂得到官方
     // dsh-tool-skill / dsh-agent-instructions 时注入侧会跳过它们（见 context-inject.ts 的
     // CARRIER_FACT_OF），挂不到（极简）时才由这里送 —— 所以极简下也能按开关决定要不要。
     const skillCatalog = createSkillCatalog({
-      state: () => skillsService.ops['skill-state']({}),
+      // 项目技能根按**本会话的 cwd** 推导（0.21.2）：不给 sessionId 时是全部活动会话的
+      // cwd 并集，两个对话会看到同一份清单（A 能看到 B 项目的技能）。
+      state: (sessionId) => rawSkillState(sessionId === undefined ? {} : { sessionId }),
+      // 注入侧按 agent 取会话 id；取不到 = 全局口径。
+      sessionIdFor: (agent) => sessionScopeIdOf(agent) ?? undefined,
       // 与子智能体目录同一份判据（2026-10-14 对抗性审查 P1-8）：只看全局开关时，人设用
       // `toolsDeny` 砍掉 `skill_manager_list` 之后，技能目录尾句照样点名一条它手里没有的工具。
       listToolVisible: (agent) => toolVisibleFor('skill_manager_list', agent),
+      // 会话层（0.21.2）：两格 —— 技能（覆盖 → 场景层 → 基线 + 全局意图）与来源（同一条）。
+      //
+      // 两格**总是给**：策略表 / 来源状态是机器级的，租约期间读到的是运行态。不给会话层
+      // 就等于把"A 开了一条技能，B 也看见"留在原地 —— 用户实测的那条串味。
+      // 返回 `undefined` 的那一格（没有意图、会话层也没说话）由目录自己落到运行态。
+      layerFor: (agent) => {
+        const sessionId = scopeKeyForAgent(agent)
+        const skill = (key: string) => skillViewOf(sessionId, key).visible
+        const source = (rootKey: string) => skillSourceViewOf(sessionId, rootKey).visible
+        return { skill, source }
+      },
+      layerKeyFor: (agent) => layerKeyOfAgent(agent),
     })
+    /**
+     * 技能目录重算的**合并调度**（0.21.2）。
+     *
+     * 一次场景应用 / 连点几个开关会在几百毫秒内落下好几笔写；每笔各刷一次目录，会让
+     * `refresh()` 反复换代、把上一波还没跑完的扫描作废再起一波 —— 磁盘和事件循环都被
+     * 同一件事占满，所有域的请求跟着变慢。这里把同一小段时间里的刷新并成一次。
+     *
+     * 目录是 SWR：旧值保留在缓存里，晚 120ms 重算不会让注入读到空，也不影响写回执。
+     */
+    let skillCatalogRefreshTimer: ReturnType<typeof setTimeout> | null = null
+    function scheduleSkillCatalogRefresh(): void {
+      if (skillCatalogRefreshTimer !== null) return
+      skillCatalogRefreshTimer = setTimeout(function () {
+        skillCatalogRefreshTimer = null
+        void skillCatalog.refresh().catch(() => { /* 下一轮读会重建，不影响已完成的写 */ })
+      }, 120)
+    }
 
     // 三份界面设置侧车（inject / scene / slash）拆到 ./settings-sidecars.ts：读走 3 秒 TTL 缓存，
     // 写共用上面那条串行写锁。工厂只在这里调用一次，三份缓存仍是「每次 apply 一份」。
@@ -926,25 +1922,61 @@ export default {
           domains: () => [
             // 场景（**框架**）：启用的场景 + 场景说明（用户的约定）。排第一 —— 先让模型知道
             // "现在在哪个场景、这个场景的约定是什么"，再读下面的记忆条目。
-            { key: 'scene', name: 'tool-management:scene', label: '场景', form: 'snapshot', text: () => memoriesService.sceneCatalogText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            // 场景与记忆两域**按会话取覆盖**（0.21.2）：`scopeOf(agent)` 给出本会话的场景与逐条
+            // 开关，取不到会话 id 时返回 undefined = 跟随全局（风险表最后一条：取不到不猜）。
+            { key: 'scene', name: 'tool-management:scene', label: '场景', form: 'snapshot', text: (agent) => memoriesService.sceneCatalogText(memoryScopeOf(agent)), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // 记忆（**内容**）：各场景下的条目。与场景段同源、同一条 `applicableTo`。
-            { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: () => memoriesService.memoryText(), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: (agent) => memoriesService.memoryText(memoryScopeOf(agent)), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent) },
-            { key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog', text: (agent) => skillCatalog.text(agent) },
+            // 有差异（租约 / 会话覆盖）时注入器拦下官方那份，由 `text` 送会话版整份
+            // （0.21.2 第二轮）；`delta` 保留为接管判据未接上时的兜底差异行。
+            //
+            // `pending`（0.21.2 第三轮）：清单数据还没到手时**这一轮什么都不说** ——
+            // `text()` 在冷缓存下只能返回空串，而注入侧把"空串"理解成"这一域没内容"，
+            // 于是会向模型发一条假的「已清空」。写操作把目录打回重算的那一拍正是这种情形
+            // （2026-10-22 用户实测：对话中途拨开一条技能，模型先被告知目录失效）。
+            {
+              key: 'skills', name: 'tool-management:skill-catalog', label: '技能目录', form: 'catalog',
+              text: (agent) => skillCatalog.text(agent),
+              delta: (agent) => skillCatalog.delta(agent),
+              pending: (agent) => skillCatalog.ready(agent) === false,
+            },
             {
               key: 'subagents',
               name: 'tool-management:subagents',
               label: '子智能体',
               form: 'catalog',
               text: (agent) => subagentCatalog.text(agent),
-              applicableTo: (agent) => subagentCatalog.catalogVisibleAt(subagentDepthOf(agent)),
+              applicableTo: (agent) => subagentCatalog.catalogVisibleAt(subagentDepthOf(agent), agent),
             },
-            { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: () => memoriesService.promptText(), files: () => memoriesService.promptFiles() },
+            // 提示词（0.21.2）：`cwd` 决定项目指令链从哪一级往上找；会话层有覆盖时由本域送
+            // 会话版整份（官方 `agent-instructions` 这一步被拦下，见 context-inject 的 suppress 并集）。
+            // 没有覆盖时维持原口径：官方载体在送就让位，极简 / 压制型预设下由这里兜底。
+            { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: (agent) => memoriesService.promptText(promptScopeOf(agent)), files: (agent) => memoriesService.promptFiles(promptScopeOf(agent)) },
           ],
           settings: () => injectSettingsSync(),
           // 工具表开关：`how` 行里点名工具的那几句要跟着它换话术（关掉的不点名）。
           hiddenTools: injectHiddenToolsFor,
+          // 提示词（0.21.2）：预设事实原样交给注入侧。会话覆盖 / 接管判定在注入器里用
+          // **同步表面扫描**做（`promptOverrideActive` + 本会话已发过的插件提示词）——
+          // 那里才能在"清覆盖后退回全局版"时把官方那条继续拦下并重发一份正确的正文。
+          // 技能目录（0.21.2 第二轮）：有差异时同样整份接管 —— 不能先让模型看到官方那份
+          // 本对话口径不对的清单，再补一行纠正。判据真算 delta（租约造成的差异侧车里没有
+          // 覆盖记录），复用目录自己的 SWR 缓存，不另造第二份。
           factsFor: (agent) => candidates.presetFactsForAgent(agent),
+          /** 本会话有提示词覆盖（同步）：注入侧据此拦官方那条，并放宽 supersede 判据。 */
+          promptOverrideActive: promptOverrideActiveOf,
+          /**
+           * 本会话的快照与当前 AGENTS.md 不一致（同步，第三轮）：拦官方 agent-instructions、
+           * 由插件送快照链整份。首见捕获也在这个回调里（内存先生效、异步落侧车）。
+           */
+          promptBaselineDiverged: promptBaselineDivergedOf,
+          /**
+           * 本会话技能目录与官方口径不一致（同步）：注入侧据此拦官方 skill-catalog（接管后持续到目录离开可见表面）。
+           * 两条判据并列：目录数据已到时按差异算；**没到的那一拍**（新对话首轮常见）改看租约表，
+           * 否则官方那份带运行态的清单会先到达模型（见 `skillCatalogHasForeignLease`）。
+           */
+          skillCatalogDiverged: (agent) => skillCatalogNeedsTakeover(skillCatalog.delta(agent)) || skillCatalogHasForeignLease(agent),
           // 令牌门禁（2026-09-19，用户裁定「宿主侧硬拦截」）：令牌**在生效**（`TOKEN !== ''`，
           // 关掉或没配都是空串）而本次启动还没有人验过 ⇒ 这一步不放行，宿主把 turn 收成
           // `blocked`。这是"没输入令牌就没法对话"的唯一真正落实 —— 客户端那条输入框锁定在
@@ -1018,7 +2050,11 @@ export default {
       if (typeof original !== 'function') continue
       skillsService.ops[opName] = async (args: any) => {
         const result = await original(args)
-        if (result && result.ok !== false) void skillCatalog.refresh().catch(() => { /* SWR 主动刷新失败只影响缓存新鲜度，下次读会重建，不该带崩写操作的结果 */ })
+        // **不阻塞写回执**（0.21.2）：refresh 会把每个已知会话的目录重扫一遍，等它落地等于
+        // 一次技能开关 / 场景应用要多等几秒 —— 用户实测「实际开启要等很久」「切换提醒要等很久」。
+        // 目录缓存现在保留上一份数据（见 skills/catalog.ts 的 refresh），所以先回执不会出现
+        // 那一拍读到空而误报「已清空」；新清单晚一步到达，下一轮注入自然会带上。
+        if (result && result.ok !== false) scheduleSkillCatalogRefresh()
         return result
       }
     }
@@ -1044,6 +2080,8 @@ export default {
       memoriesService, subagentService, archiveService, quickPromptOps, subagentCatalog,
       get mcp() { return mcp },
       get lockedSceneNames() { return lockedSceneNames },
+      // 档案保存里的工具表方案（模型 / 全局场景的入口）：同步到停在这个场景里的会话。
+      onSceneToolTableChanged: (scene, preset) => syncSessionsForSceneToolTable(scene, preset),
     })
 
     // HTTP 写 / 敏感 op 白名单（2026-09-19 抽到 ./request-gate.ts）：四个 service 自报的
@@ -1075,6 +2113,82 @@ export default {
     // 保留期设置与到期清扫、批量操作目标校验、归档列表分组视图。构造实例、首次清扫、
     // 挂周期定时器都在工厂内完成 —— 它们原本就写在 apply() 的同一位置。
     const history = createHistoryDomain({ ctx, config, pluginRoot: PLUGIN_ROOT, message })
+
+    // 第三个 reconciler（0.21.2）：会话覆盖的**孤儿清理**。会话被永久删除之后，它的覆盖
+    // 条目（`scope-overrides.json` 的 `sessions[id]`）就再没有任何入口能看到它 —— 下拉框
+    // 按会话头枚举，头没了那条就永远列不出来，只会越积越多。
+    //
+    // 只清**真删除**的（决策 13）：归档会话的头仍在 `listStoredHeaders()` 里，所以归档
+    // 的覆盖会被保留，恢复后自动回来。读不到会话清单时**什么都不删** —— 那说明宿主那边
+    // 出了问题，此时清表等于把用户的全部设置一次性抹掉。
+    registerBootReconciler({
+      id: 'scope-overrides-orphans',
+      label: '会话作用域孤儿清理',
+      async run() {
+        const registry = history.getSessionsRegistry()
+        if (!registry || typeof registry.listStoredHeaders !== 'function') return
+        const headers = await registry.listStoredHeaders()
+        const live = new Set(headers.map((h) => String((h as { id?: unknown }).id ?? '')).filter((id) => id !== ''))
+        if (live.size === 0) return
+        const overrides = await scopeStore.read(true)
+        // 工作区键不是会话 id，不在孤儿判据里（见 store 的 pruneSessionScopes）。
+        const orphans = Object.keys(overrides.sessions).filter((id) => !isWorkspaceScopeKey(id) && !live.has(id))
+        if (orphans.length === 0) return
+        for (const id of orphans) await scopeStore.clearSession(id)
+        scopeStore.invalidate()
+      },
+      async probe() {
+        const registry = history.getSessionsRegistry()
+        if (!registry || typeof registry.listStoredHeaders !== 'function') return []
+        const headers = await registry.listStoredHeaders()
+        const live = new Set(headers.map((h) => String((h as { id?: unknown }).id ?? '')).filter((id) => id !== ''))
+        if (live.size === 0) return []
+        const overrides = await scopeStore.read(true)
+        const orphans = Object.keys(overrides.sessions).filter((id) => !isWorkspaceScopeKey(id) && !live.has(id))
+        if (orphans.length === 0) return []
+        return [{
+          id: 'scope-overrides-orphans',
+          label: '会话作用域孤儿条目',
+          detail: `${orphans.length} 条会话覆盖指向已删除的会话（${orphans.map((id) => id.slice(0, 8)).join('、')}）。本次启动已自动清理；若仍出现，说明会话库那边读不到头。`,
+          detailKey: 'scope-overrides-orphans',
+          params: { count: orphans.length },
+        }]
+      },
+    })
+
+    // 第四个 reconciler（0.21.2 复核）：**悬空场景引用**的自愈。
+    //
+    // 场景删除 / 改名发生在场景层，0.21.2 之前的写路径不会回头改会话的 `scope.scene`。
+    // 停在一个已不存在场景里的会话会静默退回全局 —— 更糟的是 `sessionSceneOf` 仍拿旧名
+    // 当生效场景，记忆注入只取 `_shared + global`、漏掉全局当前场景；之后若有人新建同名
+    // 场景，这些会话还会**自动进入**它。删除 / 改名的新路径已经就地同步；这一条兜住
+    // 历史数据与同步失败的那一次。
+    //
+    // 必须在 `scope-overrides-orphans` **之后**（注册序即执行序）：先剪掉已删除会话，
+    // 不必再为它们读场景表。
+    registerBootReconciler({
+      id: 'scope-sessions-dangling-scene',
+      label: '会话场景引用自愈',
+      async run() {
+        let known: Set<string>
+        try {
+          const r: any = await memoriesService.ops['rules-list']({})
+          if (!r || r.ok === false) return
+          known = new Set((r.scenes || []).map((s: any) => String((s && s.name) || '')).filter((name: string) => name !== ''))
+        } catch { return }
+        const res = await scopeStore.mutateAll((scope) => {
+          if (scope.scene === undefined || known.has(scope.scene)) return scope
+          const r = removeSceneInScope(scope, scope.scene)
+          return r.changed ? r.scope : scope
+        })
+        if (!res.ok || res.changed === 0) return
+        mcp.scheduleToolRestrictions()
+        scheduleSkillCatalogRefresh()
+        void subagentCatalog.refresh().catch(() => { /* 同上 */ })
+        // 这次清理可能带走了认领（场景档案原本把资源拉起来）→ 按不采纳对账收一遍。
+        await enqueueScopeReconcile({ adoptExternal: false }).catch(() => { /* 面板挂载那一轮还会再对 */ })
+      },
+    })
 
     // 回收站保留期域（0.19.1）：与上面的 history 同形 —— 构造、首次清扫、周期定时器都在
     // 工厂内完成。默认保留期是 `0`（永久保留），所以对没打开过这个开关的宿主来说，
@@ -1499,7 +2613,7 @@ export default {
     // apply 末尾的 HTTP 路由就地调用（刻意不进 handlers 表，模型关不掉访问令牌）。
     const { tokenConfigState, tokenConfigure } = createTokenConfig({
       ensurePaths, readPatch, writePatch, withWriteLock, message,
-      TOKEN, CONFIG_TOKEN, tokenMatches,
+      TOKEN, CONFIG_TOKEN, CONFIG_TOKEN_FROM_FILE, tokenMatches,
     })
 
     // ---------- 通用侧车 JSON 读写 ----------
@@ -1542,6 +2656,31 @@ export default {
       // 状态段尾句那句「用 `mcp_manager_list` 查」的前提：与技能 / 子智能体两个目录同一份判据
       // （2026-10-18 审查 B）。
       listToolVisible: (agent: unknown) => toolVisibleFor('mcp_manager_list', agent),
+      // 会话层（0.21.2）：两半各管一头 ——
+      //   · `sessionMcpOverlay`（异步）给 restrictAgent：在**此刻注册着的**工具全名上算
+      //     allow / deny（deny 追加、allow 从全局停用名单里减掉，见 tool-visibility.ts）；
+      //   · `sessionHiddenServer`（同步）给状态段与 mcp_manager_list 逐行问。
+      sessionMcpOverlay: (agent: unknown) => sessionMcpOverlayOf(agent),
+      // 模型工具表也按对话走（0.21.2）：本对话的整份关停名单与全局的差异并进同一层 restrict。
+      sessionToolTableOverlay: (agent: unknown) => sessionToolTableOverlayOf(agent),
+      sessionHiddenServer: (agent: unknown, serverName: string) => sessionServerHiddenOf(agent, serverName),
+      // 逐工具会话判定（0.21.2）：状态段按它把「本会话把工具全关了」的服务器标成不可用。
+      // 每次渲染只建一次会话快照（覆盖 / 场景层 / 基线 / 意图四张表），逐工具再问不会重算。
+      sessionToolVerdictFor: (agent?: unknown) => {
+        const ctx = sessionMcpContextOf(agent)
+        // 没有任何会话层 → 逐工具判定恒为 undefined，省掉每台服务器每条工具的层级计算
+        // （这段在注入热路径上，每个 step 都会跑一次）。
+        const scope = ctx.scope
+        const hasLayer = scope !== undefined &&
+          (scope.scene !== undefined || scope.detached === true || scope.mcp !== undefined || scope.mcpTools !== undefined)
+        if (!hasLayer) return () => undefined
+        return (serverName: string, tool: string) => mcpVerdictOf(ctx, {
+          key: serverName + '/' + tool,
+          server: serverName,
+          tool,
+          certain: true,
+        })
+      },
       // 本次启动 id：重启标记用它区分「同一轮启动内的重放」与「上一个进程留下的」。
       bootId: () => BOOT_ID,
     })
@@ -1642,6 +2781,18 @@ export default {
     // **文件比对**口径（预设正文 == ~/.dsh/AGENTS.md），而界面报的是 `agentsmd-list` 的口径
     // （启用的场景绑了预设时，**只有那份**算生效中）—— 同一件事两个答案，场景驱动时工具就在
     // 说假话。工具改走 op 之后两边只有一份判定。
+    /**
+     * 本会话**真正注入**的提示词正文（去掉「Instructions from:」来源行）。
+     * `scope-get` 的 `prompt.effective` 与提示词页的「会话层沿用哪一份预设」共用这一份。
+     */
+    const sessionPromptTextOf = (sessionId: string): string => {
+      try {
+        // 编辑框要的是**正文**：`Instructions from:` 那行由解析层在注入时生成，
+        // 留着它保存会多套一层来源头（下次解析再加一条会话覆盖的来源行）。
+        // 工作区模式：真实 sessionId 先折成作用域键（`promptScopeOfSession` 内部也会再折一次）。
+        return memoriesService.promptText(promptScopeOfSession(scopeKeyForIdSync(sessionId))).replace(/^Instructions from: [^\n]*\n\n/, '')
+      } catch { return '' }
+    }
     const promptOps = buildPromptOps({
       promptsService,
       scenePromptSync,
@@ -1654,8 +2805,840 @@ export default {
       applyPresetGuarded,
       withAgentsMdSync,
       promptRefReason,
+      sessionPromptText: sessionPromptTextOf,
       warn: (m: string) => { ctx.logger?.warn?.(m) },
     })
+
+    // ---------- 会话作用域的全局快照与会话清单（0.21.2）----------
+    // 两件事都**复用各域自己的 op**，不另读一遍磁盘：全局值就是那几条列表 op 回的 enabled
+    // 字段，抄第二份判定必然分叉（某天 core 改了"未记录 = 启用"的口径，这边不会跟着变）。
+    //
+    // 读失败只让**那一域**空着：空着 = "全局没有开着的项"，覆盖因此**不会被判成同值而清掉**
+    // —— 宁可多留一条覆盖，也不能因为一次读盘失败把用户的设置静默删掉。
+    async function scopeGlobalSnapshot(): Promise<ScopeGlobalSnapshot> {
+      const flags: Record<string, Record<string, boolean>> = { skills: {}, subagents: {}, memory: {}, quickPrompts: {}, mcp: {}, mcpTools: {}, skillSources: {} }
+      const unavailable: string[] = []
+      let scene: string | null = null
+      // 意图（0.21.2）：MCP 与技能来源两格的"全局值"现在是**意图**，不是补丁 / 来源状态。
+      // 读不到 = 没有意见 → 那两格退回运行态（见 planReconcile 的升级推断）。
+      let intentSnapshot: ScopeIntent = intentStore.snapshot()
+      try { intentSnapshot = await intentStore.read() } catch { /* 读不到 = 没有意见 */ }
+      const settle = async (domain: string, run: () => Promise<void>): Promise<void> => {
+        try { await run() } catch { unavailable.push(domain) }
+      }
+      // 场景与记忆共用同一次 `rules-list`（它一次回齐 activeScene 与 rules）。分开 settle
+      // 是为了"某一份读失败只影响那一域"这条口径——读失败时两域一起标 unavailable。
+      const sceneAndMemory = settle('scene', async () => {
+        // 两域共用这一次读：**读失败/抛异常时两域都要标 unavailable**，否则场景写被拒、
+        // 记忆写却按"全局全关"去判同值 —— 一次显式开启会被当场清掉。
+        const r: any = await memoriesService.ops['rules-list']({}).catch((e: unknown) => {
+          unavailable.push('memory')
+          throw e
+        })
+        if (!r || r.ok === false) {
+          unavailable.push('memory')
+          throw new Error('rules-list failed')
+        }
+        scene = r.activeScene ? String(r.activeScene) : null
+        // 记忆的全局口径是**索引里的 enabled**（缺省 = 启用），键与档案里那份一致：
+        // `<场景>/<名>`。读 `rules-list` 而不是直接读索引，是为了与界面看到的是同一份投影。
+        for (const rule of (r.rules || [])) {
+          if (rule && rule.id) flags.memory[String(rule.id)] = rule.enabled !== false
+        }
+      })
+      await Promise.all([
+        sceneAndMemory,
+        settle('skills', async () => {
+          const r: any = await rawSkillState({}).catch((e: unknown) => {
+            // 两域共用这一次扫描：读失败时技能与来源一起标 unavailable，否则"关掉一个来源"
+            // 会被判成"与全局同值（空表）"而自动清除。
+            unavailable.push('skillSources')
+            throw e
+          })
+          // `ok:false` 是**读失败**（core 扫描出错），不是"全都没开"。当成空表会让写侧
+          // 把一次关闭判成"与全局同值"而自动清除，所以这一域整体标 unavailable。
+          if (!r || r.ok === false) { unavailable.push('skillSources'); throw new Error('skill-state failed') }
+          const data = r.data ? r.data : r
+          for (const root of ((data && data.roots) || [])) {
+            // 来源一格（0.21.2）与技能一格共用这次扫描。来源的全局值是**意图**：
+            // on / off / blocked 以意图为准，没记录才落到运行态（`root.enabled`，缺省 = 开）。
+            const rootKey = String(root.key || '')
+            if (rootKey) {
+              const state = intentOf(intentSnapshot, 'skillSources', rootKey)
+              flags.skillSources[rootKey] = state === 'on' ? true
+                : (state === 'off' || state === 'blocked') ? false
+                  : root.enabled !== false
+            }
+            for (const sk of (root.skills || [])) {
+              const name = String(sk.declaredName || sk.name || '')
+              if (!name || !rootKey) continue
+              // 单条技能的全局值也是**意图**优先（0.21.2）：租约期间运行态是开着的，
+              // 直接读 `sk.enabled` 会把"某个对话临时开着"报成"全局开着"，
+              // 新会话于是继承那条技能 —— 与服务器那格修过的串味同一条路径。
+              const skillKey = rootKey + '/' + name
+              const skillState = intentOf(intentSnapshot, 'skills', skillKey)
+              flags.skills[skillKey] = skillState === 'on' ? true
+                : (skillState === 'off' || skillState === 'blocked') ? false
+                  : sk.enabled === true
+            }
+          }
+        }),
+        settle('subagents', async () => {
+          const r: any = await subagentService.ops['subagent-list']({})
+          if (!r || r.ok === false) throw new Error('subagent-list failed')
+          for (const p of ((r && r.subagents) || [])) {
+            if (p && p.name) flags.subagents[String(p.name)] = p.enabled === true
+          }
+        }),
+        settle('quickPrompts', async () => {
+          const r: any = await quickPromptsService.list()
+          if (!r || r.ok === false) throw new Error('quickprompt-list failed')
+          for (const p of ((r && r.prompts) || [])) {
+            if (p && p.id) flags.quickPrompts[String(p.id)] = p.enabled === true
+          }
+        }),
+        settle('mcp', async () => {
+          // MCP 的全局口径 = **意图**（0.21.2）。不能用补丁当全局值：补丁是 `意图 ∪ 租约`，
+          // 把租约当成全局开着，正是"会话开了 mcp，新会话也注入"那条串味路径。
+          // 也不能用逐工具停用表：那张表的 `*` 是场景档案把整台工具收窄，与服务器开没开是两件事。
+          // 意图没有记录时（升级首轮 / 新服务器）才退回补丁的启停值。
+          const states = await mcp.configuredServerStates()
+          for (const row of states) {
+            const name = String(row.serverName)
+            const state = intentOf(intentSnapshot, 'mcp', name)
+            flags.mcp[name] = state === 'on' ? true
+              : (state === 'off' || state === 'blocked') ? false
+                : row.disabled !== true
+          }
+        }),
+        // 逐工具一格（0.21.2）：`<server>/<tool>` → 全局可见性。真值与 `mcpTools` 覆盖表、
+        // 场景档案的 `mcp` 段（工具清单）都按同一批键对齐 —— 用 `candidates.toolStates()`
+        // （停用表 ∪ live schema 的同一份推导），不另算一遍。
+        settle('mcpTools', async () => {
+          const states = await candidates.toolStates()
+          for (const [key, enabled] of Object.entries(states)) flags.mcpTools[key] = enabled === true
+        }),
+      ])
+      // 租约计数（0.21.2 第四轮）：**七个域全部读时现算**。此前 mcp / skillSources / skills
+      // 三格读的是对账器维护的内存 Map —— 而会话的删除 / 归档 / 恢复 / 重启都不走插件的写 op，
+      // 没有任何路径会去刷那三个 Map，徽章于是停在旧值（用户报障 B / C）。现算把"谁记得刷新它"
+      // 这条依赖整个删掉：会话清单此刻长什么样，徽章就是什么样。
+      //
+      // 只问**全局关着**的那些格：开着的那些本来就该显示成开着，数它没有意义，而记忆这类域
+      // 可能有几百条键 —— 每次读面板都全扫一遍是不必要的成本。
+      // 键集合的口径：**意图域**只数「意图不是 on」的键（全局开着不是租约，彻底停止没有
+      // 租约这回事）；**纯视图域**只数「全局关着」的键。两句话都只回答"这一格该不该挂徽章"。
+      const leaseKeys: Partial<Record<ScopeFlagDomain, readonly string[]>> = {}
+      for (const domain of SCOPE_FLAG_DOMAINS) {
+        const all = Object.keys(flags[domain] ?? {})
+        const intentDomain: IntentDomain | null = isIntentDomain(domain) ? domain : null
+        const keys = intentDomain !== null
+          ? all.filter((key) => {
+            const state = intentOf(intentSnapshot, intentDomain, key)
+            return state !== 'on' && state !== 'blocked'
+          })
+          : all.filter((key) => flags[domain][key] !== true)
+        if (keys.length > 0) leaseKeys[domain] = keys
+      }
+      const { scan: leaseScan } = await scanClaimsOnce(leaseKeys)
+      const leaseCounts = (domain: ScopeFlagDomain): Record<string, number> => {
+        const out: Record<string, number> = {}
+        for (const [key, list] of leaseScan.claims[domain]) out[key] = list.length
+        return out
+      }
+      return {
+        scene,
+        flags,
+        unavailable,
+        // 三态意图与租约计数（界面用）：`flags` 把 blocked 投影成 false，分不出「关着」与
+        // 「彻底停止」；租约计数则是全局 off 却仍在跑的唯一解释。
+        intent: { mcp: intentSnapshot.mcp, skillSources: intentSnapshot.skillSources, skills: intentSnapshot.skills },
+        leases: {
+          mcp: leaseCounts('mcp'),
+          skillSources: leaseCounts('skillSources'),
+          skills: leaseCounts('skills'),
+          mcpTools: leaseCounts('mcpTools'),
+          memory: leaseCounts('memory'),
+          subagents: leaseCounts('subagents'),
+          quickPrompts: leaseCounts('quickPrompts'),
+        },
+      }
+    }
+
+    /**
+     * `scope-get` 用的全局快照：**同一拍的重复读合成一次**（in-flight 合流 + 150ms 短 TTL）。
+     *
+     * 为什么必须有：一次 `scopeGlobalSnapshot()` 要把 `rules-list` / `skill-state` /
+     * `mcpm-list` / `subagent-list` / 快捷词五批读全跑一遍（`skill-state` 冷启实测 3.4s），
+     * 而斜杠菜单每敲一个键问一次、面板每切一层问一次，同一次交互里六个域行还会各自把这些
+     * op 再读一遍 —— 一份现状被读成好几遍，界面就卡在"等最慢那一批"上。
+     *
+     * TTL 只取 150ms：它要合的是**同一拍内的重复读**，不是拿缓存换新鲜度。写之后最坏 150ms
+     * 才反映到"全局值"这一栏，而各域自己的列表 op 一个字都没缓存（面板画的勾来自那些 op
+     * 与 `effective` 差异，不经过这里）。读失败不进缓存：下一次照实重读。
+     */
+    const SCOPE_GLOBAL_TTL_MS = 150
+    let scopeGlobalCache: { at: number; value: Promise<ScopeGlobalSnapshot> } | null = null
+    function scopeGlobalSnapshotShared(): Promise<ScopeGlobalSnapshot> {
+      const now = Date.now()
+      if (scopeGlobalCache !== null && now - scopeGlobalCache.at < SCOPE_GLOBAL_TTL_MS) return scopeGlobalCache.value
+      const value = scopeGlobalSnapshot()
+      value.catch(() => {
+        if (scopeGlobalCache !== null && scopeGlobalCache.value === value) scopeGlobalCache = null
+      })
+      scopeGlobalCache = { at: now, value }
+      return value
+    }
+
+    /** 会话**创建时**的冻结快照（基线）：全局快照原样存下 + 时间戳。读失败返回 null（调用方如实降级）。 */
+    async function captureBaselineSnapshot(): Promise<SessionBaseline | null> {
+      try {
+        const snap = await scopeGlobalSnapshot()
+        // 模型工具表也抄一份（0.21.2）：每个对话从创建那一刻起有自己的整份名单。
+        // 先 await 一次设置读取，避免缓存还冷时把"一个都不关"抄成基线。
+        const toolTable = await readToolTableSettings()
+        return {
+          scene: snap.scene,
+          flags: snap.flags,
+          toolTableHidden: toolTable.hidden.slice(),
+          capturedAt: new Date().toISOString(),
+        }
+      } catch { return null }
+    }
+
+    /**
+     * 给某个会话把基线记下来（已有就跳过）。**创建时**记才有意义 —— 「退出模式」要回到的是
+     * 那一刻的样子，此后全局怎么变都与它无关。best effort：记不上就退出时如实降级为跟随全局。
+     */
+    async function ensureBaselineFor(sessionId: string): Promise<void> {
+      if (sessionId === '') return
+      // 调用方可能给真实会话 id（agent/created）或工作区键（面板）。统一折到当前模式的键。
+      const scopeId = scopeKeyForIdSync(sessionId)
+      // 全局粒度：会话层不存在，基线没有落脚处（`mutate('')` 必失败）。切回会话 / 工作区
+      // 粒度时基线由注入侧与下一次 `agent/created` 重新捕获 —— 少一份快照不影响正确性，
+      // 只影响那一档"退出场景回到创建时样子"的精度，而那个档位此刻根本没被使用。
+      if (scopeId === '') return
+      const current = scopeStore.scopeOfSync(scopeId)
+      if (current?.baseline !== undefined && current.baseline.capturedAt !== undefined) return
+      const baseline = await captureBaselineSnapshot()
+      if (baseline === null) return
+      try { await scopeStore.mutate(scopeId, (cur) => withBaseline(cur, baseline).scope) } catch { /* best effort */ }
+    }
+
+    /**
+     * 租约认领：哪些**未归档**会话在某一格上"要"它。
+     *
+     * 判据 = 有效层（覆盖 → 场景层 → 基线）为 true。它**不**看全局意图 —— 是不是租约由
+     * 调用方按"意图不是 on"来判。显式覆盖另数一份：升级首轮用它判断"补丁开着"是不是
+     * 旧版本"会话里打开全局关着的服务器"那次拉起留下的运行态（见 scope/intent.ts）。
+     *
+     * 归档会话不算（它的覆盖留着，但会话已经不用了）；已删除的会话也不算 —— 清单读不到时
+     * 不做这条判定，宁可多留一个租约，也不能把正在用的会话的服务器停掉。
+     *
+     * 扫描本身在 `scanSessionClaims`（与展示侧同一份），这里只做域名的映射与严格读的包装。
+     */
+    async function leaseClaimsOf(servers: readonly string[], sources: readonly string[], skillKeys: readonly string[] = []): Promise<{
+      mcp: Map<string, string[]>
+      skillSources: Map<string, string[]>
+      skills: Map<string, string[]>
+      mcpExplicit: Map<string, string[]>
+      sourceExplicit: Map<string, string[]>
+      skillExplicit: Map<string, string[]>
+      /** 侧车里有没有会话痕迹（域 → 键）。`null` = 侧车**没读出来** → 调用方一律当有痕迹。 */
+      traced: Record<ScopeFlagDomain, Set<string>> | null
+    }> {
+      const empty = (): Map<string, string[]> => new Map<string, string[]>()
+      const targets: ClaimScanTargets = {}
+      if (servers.length > 0) targets.mcp = servers
+      if (sources.length > 0) targets.skillSources = sources
+      if (skillKeys.length > 0) targets.skills = skillKeys
+      if (Object.keys(targets).length === 0) {
+        const traced = {} as Record<ScopeFlagDomain, Set<string>>
+        for (const domain of SCOPE_FLAG_DOMAINS) traced[domain] = new Set()
+        return { mcp: empty(), skillSources: empty(), skills: empty(), mcpExplicit: empty(), sourceExplicit: empty(), skillExplicit: empty(), traced }
+      }
+      // **严格读**（0.21.2 第四轮）：痕迹闸门要在"这份侧车没读出来"时保守 ——
+      // 而吞错语义下空表与读失败长得一模一样，那正好会把"不采纳"翻成"采纳"。
+      const { scan, readable } = await scanClaimsOnce(targets, true)
+      return {
+        mcp: scan.claims.mcp,
+        skillSources: scan.claims.skillSources,
+        skills: scan.claims.skills,
+        mcpExplicit: scan.explicit.mcp,
+        sourceExplicit: scan.explicit.skillSources,
+        skillExplicit: scan.explicit.skills,
+        traced: readable ? scan.traced : null,
+      }
+    }
+
+    /**
+     * 把对账排进串行链（写 op 会 await 它取回执；启动 / 场景联动只排队）。
+     * 并发调用不会并行写补丁 —— 两轮同时改同一份补丁会互相覆盖。
+     */
+    function enqueueScopeReconcile(opts: { adoptExternal?: boolean } = {}): Promise<ScopeReconcileReport> {
+      const run = reconcileChain.then(() => reconcileScopeResourcesOnce(opts), () => reconcileScopeResourcesOnce(opts))
+      reconcileChain = run.then(() => { /* 结果已交给调用方 */ }, () => { /* 同上 */ })
+      return run
+    }
+
+    /**
+     * 一趟意图对账：`运行态 := 意图 ∪ 租约`。
+     *
+     * 读失败**整轮放弃**、保留现状 —— 按空表对账会把用户的服务器 / 来源全部停掉。
+     * 每一笔失败逐条记进报告（写 op 如实带出），不中断其余行：一台服务器补丁写失败
+     * 不该让别的会话的租约也起不来。
+     *
+     * `adoptExternal` 只在启动与全局场景应用之后给（见 scope/intent.ts）：
+     * 用户手改补丁 / 官方页面改了来源 / 场景引擎刚应用完，运行态与意图不一致是**外部改动**，
+     * 没有租约时以运行态为准；有租约时那本来就是租约该有的样子，不采纳。
+     */
+    async function reconcileScopeResourcesOnce(opts: { adoptExternal?: boolean } = {}): Promise<ScopeReconcileReport> {
+      const report: ScopeReconcileReport = { started: [], stopped: [], failed: [] }
+      let intent: ScopeIntent
+      let patchRows: Array<{ id: string; serverName: string; level: 'global' | 'project'; disabled: boolean }>
+      let roots: any[]
+      try {
+        intent = await intentStore.read(true)
+        const [rowsResult, skillResult] = await Promise.all([
+          mcp.patchServerRows(),
+          rawSkillState({}),
+        ])
+        patchRows = rowsResult
+        const st: any = skillResult
+        roots = st && st.ok !== false ? ((st.data && st.data.roots) || []) : []
+      } catch {
+        return report
+      }
+      const byServer = new Map<string, Array<{ id: string; level: 'global' | 'project'; disabled: boolean }>>()
+      for (const row of patchRows) {
+        const list = byServer.get(row.serverName) || []
+        list.push({ id: row.id, level: row.level, disabled: row.disabled })
+        byServer.set(row.serverName, list)
+      }
+      const servers = [...byServer.keys()]
+      const sourceRows = roots
+        .map((root) => ({
+          key: String((root && root.key) || ''),
+          enabled: root && root.enabled !== false,
+          defaultSource: root && root.defaultSource === true,
+        }))
+        .filter((root) => root.key !== '')
+      const sources = sourceRows.map((root) => root.key)
+      // 单条技能一行（0.21.2）：`running` 取 core 那份策略表的实际启停。
+      // 影子副本不进对账 —— 同名只有胜出者会被 core 加载，去启用副本等于白写一次；
+      // 没有声明名的条目同理（键都对不上，写进去就是一条永远读不到的策略）。
+      //
+      // ⚠️ 键用**声明名**（`dsh/pdf-reader`），core 的启停 op 用**条目名 / 目录名**
+      // （`pdf-skill`）。两者可以不同（SKILL.md 的 `name` 与文件夹名各写各的），
+      // 把声明名传给 core 会得到「技能不存在: pdf-reader」（2026-10-21 真机：重启后
+      // 租约里的技能拉不起来）。界面的启停 op 收的是 `sk.name`，与这里同一个口径。
+      const skillRows: Array<{ key: string; root: string; name: string; running: boolean }> = []
+      for (const root of roots) {
+        const rootKey = String((root && root.key) || '')
+        if (rootKey === '') continue
+        for (const sk of ((root && root.skills) || []) as any[]) {
+          if (!sk || sk.shadowedBy) continue
+          const name = String(sk.declaredName || sk.name || '')
+          if (name === '') continue
+          skillRows.push({ key: rootKey + '/' + name, root: rootKey, name: String(sk.name || name), running: sk.enabled === true })
+        }
+      }
+      const claims = await leaseClaimsOf(servers, sources, skillRows.map((row) => row.key)).catch(() => ({
+        mcp: new Map<string, string[]>(),
+        skillSources: new Map<string, string[]>(),
+        skills: new Map<string, string[]>(),
+        mcpExplicit: new Map<string, string[]>(),
+        sourceExplicit: new Map<string, string[]>(),
+        skillExplicit: new Map<string, string[]>(),
+        // 连扫描都没跑成 → 一切按"有痕迹"算（最保守的一档，见 `planReconcile` 的痕迹闸门）。
+        traced: null,
+      }))
+      // 痕迹闸门（0.21.2 第四轮）：`traced === null` = 侧车没读出来，一律当有痕迹 ——
+      // 宁可少采纳（运行态落回 claims>0），也不把某个会话留下的运行态提升成全局 `on`。
+      const tracedOf = (domain: ScopeFlagDomain, key: string): boolean =>
+        claims.traced === null || (claims.traced[domain]?.has(key) ?? false)
+      const mcpDecisions = planReconcile(servers.map((server) => {
+        const rows = byServer.get(server) || []
+        return {
+          key: server,
+          intent: intentOf(intent, 'mcp', server),
+          // 同名（project + global 各一台）任一行开着 = 整名开着（与会话覆盖按 serverName 键一致）。
+          running: rows.some((row) => !row.disabled),
+          claims: (claims.mcp.get(server) || []).length,
+          explicitClaims: (claims.mcpExplicit.get(server) || []).length,
+          traced: tracedOf('mcp', server),
+        }
+      }), { adoptExternal: opts.adoptExternal === true })
+      const sourceDecisions = planReconcile(sourceRows.map((root) => ({
+        key: root.key,
+        intent: intentOf(intent, 'skillSources', root.key),
+        running: root.enabled,
+        claims: (claims.skillSources.get(root.key) || []).length,
+        explicitClaims: (claims.sourceExplicit.get(root.key) || []).length,
+        traced: tracedOf('skillSources', root.key),
+      })), { adoptExternal: opts.adoptExternal === true })
+      const skillDecisions = planReconcile(skillRows.map((row) => ({
+        key: row.key,
+        intent: intentOf(intent, 'skills', row.key),
+        running: row.running,
+        claims: (claims.skills.get(row.key) || []).length,
+        explicitClaims: (claims.skillExplicit.get(row.key) || []).length,
+        traced: tracedOf('skills', row.key),
+      })), { adoptExternal: opts.adoptExternal === true })
+      // ① 意图采纳（升级推断 / 外部改动）一次落盘。写失败不拦运行态 —— 下一轮会再试。
+      const intentWrites: Array<{ domain: IntentDomain; key: string; state: IntentState }> = []
+      for (const d of mcpDecisions) if (d.intentNext !== undefined) intentWrites.push({ domain: 'mcp', key: d.key, state: d.intentNext })
+      for (const d of sourceDecisions) if (d.intentNext !== undefined) intentWrites.push({ domain: 'skillSources', key: d.key, state: d.intentNext })
+      for (const d of skillDecisions) if (d.intentNext !== undefined) intentWrites.push({ domain: 'skills', key: d.key, state: d.intentNext })
+      let finalIntent = intent
+      if (intentWrites.length > 0) {
+        const res = await intentStore.mutate((current) => {
+          let next = current
+          for (const write of intentWrites) next = withIntent(next, write.domain, [write.key], write.state)
+          return next
+        })
+        if (res.ok) finalIntent = res.intent
+        else report.failed.push({ domain: 'mcp', key: '*', error: '意图写入失败: ' + res.error })
+      }
+      const decisionOf = (list: typeof mcpDecisions, key: string) => list.find((d) => d.key === key)
+      // ② 运行态：MCP 补丁。
+      let mcpChanged = false
+      for (const decision of mcpDecisions) {
+        if (decision.runningNext === undefined) continue
+        let okAll = true
+        for (const row of byServer.get(decision.key) || []) {
+          try {
+            const r: any = await mcp.ops['mcpm-set-enabled']({ id: row.id, level: row.level, enabled: decision.runningNext })
+            if (!r || r.ok === false) {
+              okAll = false
+              report.failed.push({ domain: 'mcp', key: decision.key, error: String((r && r.error) || '写补丁失败') })
+            }
+          } catch (e) {
+            okAll = false
+            report.failed.push({ domain: 'mcp', key: decision.key, error: message(e) })
+          }
+        }
+        if (!okAll) continue
+        mcpChanged = true
+        ;(decision.runningNext ? report.started : report.stopped).push({ domain: 'mcp', key: decision.key })
+      }
+      const mcpIntentChanged = intentWrites.some((write) => write.domain === 'mcp')
+      if (mcpChanged || mcpIntentChanged) {
+        void mcp.stateCatalog.refresh().catch(() => { /* 下一轮对账还会再刷 */ })
+        // 工具注册 / 注销、以及**意图变化**都要重排可见性：全局 off 之后，别的会话（含没有
+        // 覆盖的新会话）必须立刻看不到这台服务器的工具 —— 连接还在跑（租约），但仅对认领者可见。
+        mcp.scheduleToolRestrictions()
+      }
+      // ③ 运行态：技能来源。默认来源（dsh / hub）不能停用，core 会拒绝 —— 跳过。
+      let sourceChanged = false
+      for (const decision of sourceDecisions) {
+        if (decision.runningNext === undefined) continue
+        const root = sourceRows.find((row) => row.key === decision.key)
+        if (root === undefined || root.defaultSource) continue
+        try {
+          const r: any = await skillsService.ops[decision.runningNext ? 'skill-source-enable' : 'skill-source-disable']({ root: decision.key })
+          if (r && r.ok === false) {
+            report.failed.push({ domain: 'skillSources', key: decision.key, error: String(r.error || '启用 / 停用来源失败') })
+            continue
+          }
+          sourceChanged = true
+          ;(decision.runningNext ? report.started : report.stopped).push({ domain: 'skillSources', key: decision.key })
+        } catch (e) {
+          report.failed.push({ domain: 'skillSources', key: decision.key, error: message(e) })
+        }
+      }
+      // 来源与单条技能的目录重算合并到 ④ 之后一次做：两处各刷一次会让同一轮对账把
+      // 每个会话的目录扫两遍（`refresh` 会换代并作废在飞的那一批）。
+      // ④ 运行态：单条技能（0.21.2）。这一格的策略表是**机器级**的 —— core 按进程发布，
+      //    官方 `skill` 工具只认那张表。所以"本对话开一条全局关着的技能"必须临时落进表里
+      //    才加载得了；不落地就是目录写着有、真调用必拒的空头承诺。
+      //    走**没被包过一层**的原始 op：包过的那条会先写意图再排对账，这里再调就自己跟自己打转。
+      let skillChanged = false
+      for (const decision of skillDecisions) {
+        if (decision.runningNext === undefined) continue
+        const row = skillRows.find((r) => r.key === decision.key)
+        if (row === undefined) continue
+        try {
+          const r: any = await (decision.runningNext ? rawSkillEnable : rawSkillDisable)({ root: row.root, name: row.name })
+          if (r && r.ok === false) {
+            report.failed.push({ domain: 'skills', key: decision.key, error: String(r.error || '启用 / 停用技能失败') })
+            continue
+          }
+          skillChanged = true
+          ;(decision.runningNext ? report.started : report.stopped).push({ domain: 'skills', key: decision.key })
+        } catch (e) {
+          report.failed.push({ domain: 'skills', key: decision.key, error: message(e) })
+        }
+      }
+      if (skillChanged || sourceChanged || intentWrites.some((write) => write.domain === 'skills' || write.domain === 'skillSources')) {
+        // **不阻塞对账回执**（0.21.2，与来源那一格同一条）：这条链是 `scope-set` → 对账 →
+        // 这里，等目录重算落地等于每次拨开关都多等一轮全量扫描。旧数据保留在缓存里，注入侧
+        // 不会读到空，也就不会误发「已清空」；新清单晚一步到，下一轮注入自然带上。
+        scheduleSkillCatalogRefresh()
+      }
+      // ④ 刷新租约的同步视图（注入 / 守卫 / 场景联动读它）。
+      //    租约 = 最终运行态为开、意图不是 on、且真的有会话在认领。
+      const nextMcpLeases = new Map<string, string[]>()
+      for (const server of servers) {
+        const decision = decisionOf(mcpDecisions, server)
+        const rows = byServer.get(server) || []
+        const running = decision && decision.runningNext !== undefined ? decision.runningNext : rows.some((row) => !row.disabled)
+        const state = decision && decision.intentNext !== undefined ? decision.intentNext : intentOf(finalIntent, 'mcp', server)
+        const list = claims.mcp.get(server) || []
+        if (running && state !== 'on' && list.length > 0) nextMcpLeases.set(server, list)
+      }
+      mcpLeasesSync = nextMcpLeases
+      const nextSourceLeases = new Map<string, string[]>()
+      for (const root of sourceRows) {
+        const decision = decisionOf(sourceDecisions, root.key)
+        const running = decision && decision.runningNext !== undefined ? decision.runningNext : root.enabled
+        const state = decision && decision.intentNext !== undefined ? decision.intentNext : intentOf(finalIntent, 'skillSources', root.key)
+        const list = claims.skillSources.get(root.key) || []
+        if (running && state !== 'on' && list.length > 0) nextSourceLeases.set(root.key, list)
+      }
+      sourceLeasesSync = nextSourceLeases
+      // ⑤ 单条技能的租约：与上面两格同一条判据（运行着、意图不是 on、有会话在认领）。
+      const nextSkillLeases = new Map<string, string[]>()
+      for (const row of skillRows) {
+        const decision = decisionOf(skillDecisions, row.key)
+        const running = decision && decision.runningNext !== undefined ? decision.runningNext : row.running
+        const state = decision && decision.intentNext !== undefined ? decision.intentNext : intentOf(finalIntent, 'skills', row.key)
+        const list = claims.skills.get(row.key) || []
+        if (running && state !== 'on' && list.length > 0) nextSkillLeases.set(row.key, list)
+      }
+      skillLeasesSync = nextSkillLeases
+      return report
+    }
+
+    /**
+     * 给 MCP 列表行补三个字段（0.21.2）：`intent`（三态）/ `globalOn`（意图优先，运行态兜底）/
+     * `leaseCount`（有几个别的会话在认领它）。
+     *
+     * 面板的全局开关必须读 `globalOn` 而不是 `disabled`：后者是运行态，租约期间两者不同 ——
+     * 读 `disabled` 会把"全局关着、只为几个对话临时跑着"显示成"全局开着"。
+     */
+    /**
+     * `leaseCount` **现算**（0.21.2 第四轮）：读的是此刻的会话清单，不是对账器上一次留下的
+     * 内存 Map —— 后者在"会话被删除 / 归档 / 恢复"之后没人刷（那些操作不走插件的写 op）。
+     */
+    async function annotateMcpRows(result: any): Promise<any> {
+      if (!result || result.ok === false) return result
+      const intent = intentStore.snapshot()
+      const rowsIn = ((result.rows || []) as any[])
+      const names = [...new Set(rowsIn.map((row) => String((row && (row.serverName || row.id)) || '')).filter((name) => name !== ''))]
+      const { scan } = names.length > 0 ? await scanClaimsOnce({ mcp: names }) : { scan: null }
+      const rows = rowsIn.map((row: any) => {
+        const name = String((row && (row.serverName || row.id)) || '')
+        const state = intentOf(intent, 'mcp', name)
+        // 全局开着（`on`）不是租约；彻底停止（`blocked`）压过一切会话层 —— 两种都不挂徽章。
+        const leaseCount = state === 'on' || state === 'blocked' || scan === null ? 0 : (scan.claims.mcp.get(name) || []).length
+        return {
+          ...row,
+          intent: state ?? null,
+          globalOn: state === 'on' ? true : (state === 'off' || state === 'blocked') ? false : row.disabled !== true,
+          leaseCount,
+        }
+      })
+      return { ...result, rows }
+    }
+
+    /**
+     * 技能清单的来源行：与 `annotateMcpRows` 同一套字段与口径（`globalOn` 是意图，不是运行态）。
+     * `leaseCount` 同样**现算**（0.21.2 第四轮）。
+     */
+    async function annotateSkillState(result: any): Promise<any> {
+      if (!result || result.ok === false) return result
+      const intent = intentStore.snapshot()
+      const rootsIn: any[] = (result.data && typeof result.data === 'object' ? (result.data.roots || []) : (result.roots || [])) as any[]
+      const sourceKeys: string[] = []
+      const skillKeys: string[] = []
+      for (const root of rootsIn) {
+        const key = String((root && root.key) || '')
+        if (key !== '') sourceKeys.push(key)
+        for (const sk of ((root && root.skills) || []) as any[]) {
+          const name = String((sk && (sk.declaredName || sk.name)) || '')
+          if (key !== '' && name !== '') skillKeys.push(key + '/' + name)
+        }
+      }
+      const targets: ClaimScanTargets = {}
+      if (sourceKeys.length > 0) targets.skillSources = sourceKeys
+      if (skillKeys.length > 0) targets.skills = skillKeys
+      const { scan } = Object.keys(targets).length > 0 ? await scanClaimsOnce(targets) : { scan: null }
+      const leaseOf = (domain: ScopeFlagDomain, key: string, state: IntentState | undefined): number =>
+        state === 'on' || state === 'blocked' || scan === null ? 0 : (scan.claims[domain].get(key) || []).length
+      const decorate = (root: any): any => {
+        const key = String((root && root.key) || '')
+        const state = intentOf(intent, 'skillSources', key)
+        // 单条技能也带上三件（0.21.2）：界面上的「临时运行 · N 个对话」与"全局开着吗"
+        // 都读这份，缺了它界面就会把租约期间的开着说成用户全局开过。
+        const skills = ((root && root.skills) || []).map((sk: any) => {
+          const name = String((sk && (sk.declaredName || sk.name)) || '')
+          if (key === '' || name === '') return sk
+          const skillKey = key + '/' + name
+          const skillState = intentOf(intent, 'skills', skillKey)
+          return {
+            ...sk,
+            intent: skillState ?? null,
+            globalOn: skillState === 'on' ? true
+              : (skillState === 'off' || skillState === 'blocked') ? false
+                : sk.enabled !== false,
+            leaseCount: leaseOf('skills', skillKey, skillState),
+          }
+        })
+        return {
+          ...root,
+          skills,
+          intent: state ?? null,
+          globalOn: state === 'on' ? true : (state === 'off' || state === 'blocked') ? false : root.enabled !== false,
+          leaseCount: leaseOf('skillSources', key, state),
+        }
+      }
+      if (result.data && typeof result.data === 'object') {
+        return { ...result, data: { ...result.data, roots: ((result.data.roots || []) as any[]).map(decorate) } }
+      }
+      return { ...result, roots: ((result.roots || []) as any[]).map(decorate) }
+    }
+
+    /**
+     * 宿主**已知的全部**会话 id（含归档、含未挂回工作区的孤儿）—— 侧车 GC 的判据（0.21.2）。
+     *
+     * 与 `scopeSessionRows` 的区别是这条**不做**"当前会话区成员"过滤：那一层过滤是下拉框的
+     * 展示口径（列出来只会是一串同名条目），而 GC 要回答的是"宿主还认得这个会话吗"。
+     * 拿展示口径去剪，会把"只是没挂回工作区"的会话当成已删除、连覆盖一起抹掉 —— 那不可恢复。
+     *
+     * 读不到 / 一条都没有时返回 `null`：不剪（读不到 ≠ 全被删了）。
+     */
+    async function liveSessionIds(): Promise<ReadonlySet<string> | null> {
+      const registry = history.getSessionsRegistry()
+      if (!registry || typeof registry.listStoredHeaders !== 'function') return null
+      try {
+        const headers = await registry.listStoredHeaders()
+        const out = new Set<string>()
+        for (const header of headers) {
+          const id = header && typeof (header as { id?: unknown }).id === 'string' ? String((header as { id: string }).id) : ''
+          // 子代理派生的会话不占用户会话列表（与 history-sessions 同一条过滤），
+          // 但它们的覆盖本来也不会存在 —— 不放进集合只是让 GC 顺手清掉可能的残留。
+          if (id !== '' && (header as { origin?: string }).origin !== 'subagent') out.add(id)
+        }
+        return out.size > 0 ? out : null
+      } catch { return null }
+    }
+
+    /**
+     * 下拉框的会话清单：**当前会话区里的**会话（用户 2026-10-20），带归档标记。
+     *
+     * "当前会话区" = 宿主工作区记账表里的会话成员：只读 `sessionIds` 并集。持久化目录里
+     * 还有大量未挂回任何工作区的旧会话（同一目录重建登记后留下的孤儿），它们不在侧栏里，
+     * 列进下拉只会是一串同名条目。归档标记照留：`scope-sessions-list` 用它滤掉，租约
+     * 认领也按它跳过。
+     *
+     * 归档集合优先读**公开 getter** `archivedSessionIds`：`requireState()` 是宿主私有成员，
+     * 缺它时整条归档判定会静默失效（所有归档会话都漏进下拉）。表格也按 `history-list`
+     * 同一条取法（`requireState().workspaceIds` → `table.entries()`）兜底；两样都读不到时
+     * 不按成员过滤，宁可多列也不把该显示的会话藏起来。
+     */
+    async function scopeSessionRows(): Promise<ScopeSessionRow[]> {
+      const registry = history.getSessionsRegistry()
+      if (!registry || typeof registry.listStoredHeaders !== 'function') return []
+      const headers = await registry.listStoredHeaders()
+      let archived = new Set<string>()
+      try {
+        const direct = (registry as { archivedSessionIds?: unknown }).archivedSessionIds
+        if (Array.isArray(direct)) archived = new Set(direct.map((id) => String(id)))
+        else {
+          const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
+          if (state && Array.isArray(state.archivedSessionIds)) archived = new Set(state.archivedSessionIds.map((id) => String(id)))
+          else archived = new Set((await registry.archivedSessionMetadata()).items.map((i) => String(i.sessionId)))
+        }
+      } catch { /* 归档集合读不到 → 全按未归档（宁可多列一条，也不把该显示的会话藏起来） */ }
+      // 当前会话区成员（工作区记账表里的 sessionIds 并集）。
+      let owned: Set<string> | null = null
+      try {
+        const table = typeof registry.requireTable === 'function'
+          ? registry.requireTable() as { entries?(): Array<[string, { sessionIds?: readonly string[] }]>; get?(id: string): { sessionIds?: readonly string[] } | undefined }
+          : undefined
+        if (table) {
+          const state = typeof registry.requireState === 'function' ? registry.requireState() : undefined
+          const ids = state && Array.isArray(state.workspaceIds) && state.workspaceIds.length
+            ? state.workspaceIds.map((id) => String(id))
+            : (typeof table.entries === 'function' ? [...table.entries()].map(([id]) => String(id)) : [])
+          owned = new Set<string>()
+          for (const wid of ids) {
+            const rec = typeof table.get === 'function' ? table.get(wid) : undefined
+            for (const sid of rec && Array.isArray(rec.sessionIds) ? rec.sessionIds : []) owned.add(String(sid))
+          }
+        }
+      } catch { owned = null }
+      const cache = ctx.get('sessionProjectionCache') as {
+        cachedSnapshot?(header: unknown, keys?: string[]): { values?: Record<string, unknown> } | undefined
+      } | undefined
+      const headerIndex = registry.headers instanceof Map ? registry.headers : undefined
+      const titleOf = (id: string, header: unknown): string | undefined => {
+        if (!cache || typeof cache.cachedSnapshot !== 'function') return undefined
+        // 先试宿主索引里的 header：持久化清单给的那份缺少投影缓存校验用的身份字段。
+        for (const candidate of [headerIndex ? headerIndex.get(id) : undefined, header]) {
+          if (candidate === undefined || candidate === null) continue
+          try {
+            const snap = cache.cachedSnapshot(candidate, ['title'])
+            const title = snap && snap.values ? snap.values.title : undefined
+            if (typeof title === 'string' && title !== '') return title
+          } catch { /* 这一份不认，试下一份 */ }
+        }
+        return undefined
+      }
+      const rows: ScopeSessionRow[] = []
+      for (const header of headers) {
+        const id = header && typeof (header as { id?: unknown }).id === 'string' ? String((header as { id: string }).id) : ''
+        if (id === '') continue
+        // 子代理派生的会话不占用户会话列表（与 history-sessions 同一条过滤）。
+        if ((header as { origin?: string }).origin === 'subagent') continue
+        if (owned !== null && !owned.has(id)) continue
+        const cwd = (header as { cwd?: unknown }).cwd
+        const cwdText = typeof cwd === 'string' ? cwd : ''
+        if (cwdText !== '') rememberSessionCwd(id, cwdText)
+        const fallback = cwdText !== '' ? basename(cwdText) : id.slice(0, 8)
+        // 归档标记照留：下拉把它滤掉，租约认领也按它跳过（归档会话不再占着连接）。
+        rows.push({ id, title: titleOf(id, header) || fallback, count: 0, archived: archived.has(id), cwd: cwdText })
+      }
+      return rows
+    }
+    /**
+     * 会话摘要（下拉框用）：真实标题 + 有没有过用户输入。
+     *
+     * 为什么直接读 `storages/session_projcache` 的文件：宿主的 `cachedSnapshot(header)`
+     * 只对**已加载**的会话给值，冷会话读出来是空 —— 于是下拉里全是没标题的空壳
+     * （2026-10-20 实测）。投影缓存文件是宿主自己在磁盘上的权威副本，布局稳定
+     * （`record.rows.title.val` / `record.rows.titleInput.val.count`）。读不到就返回
+     * undefined，调用方保留兜底标题、也不做空壳过滤。30 秒 TTL：自动起标题是低频动作。
+     */
+    const scopeSummaryCache = new Map<string, { at: number; value: { title?: string; hasMessages: boolean } | undefined }>()
+    const SCOPE_SUMMARY_TTL_MS = 30000
+    async function scopeSessionSummary(sessionId: string): Promise<{ title?: string; hasMessages: boolean } | undefined> {
+      const hit = scopeSummaryCache.get(sessionId)
+      if (hit && Date.now() - hit.at < SCOPE_SUMMARY_TTL_MS) return hit.value
+      let value: { title?: string; hasMessages: boolean } | undefined
+      // 会话 id 要拼进路径，只认安全字符。
+      if (/^[A-Za-z0-9_-]{1,200}$/.test(sessionId)) {
+        try {
+          const file = join(resolveDshHome(), 'storages', 'session_projcache', 'sessions', sessionId + '.json')
+          const record = (JSON.parse(await readFile(file, 'utf8')) as {
+            record?: { rows?: Record<string, { val?: unknown }> }
+          }).record
+          const rows = record && record.rows ? record.rows : undefined
+          if (rows !== undefined) {
+            const titleRow = rows.title
+            const title = titleRow && typeof titleRow.val === 'string' && titleRow.val !== '' ? titleRow.val : undefined
+            const input = rows.titleInput ? rows.titleInput.val as { count?: unknown } | undefined : undefined
+            const count = input && typeof input.count === 'number' ? input.count : undefined
+            // titleInput 不在（老缓存）→ 按有内容算，宁可多列，不误藏。
+            const hasMessages = title !== undefined || count === undefined || count > 0
+            value = { ...(title !== undefined ? { title } : {}), hasMessages }
+          }
+        } catch { /* 文件不存在 / 解析失败：按取不到处理 */ }
+      }
+      scopeSummaryCache.set(sessionId, { at: Date.now(), value })
+      return value
+    }
+
+    /** 两份工具名名单是否同一份（顺序无关）。 */
+    function sameToolNameList(a: readonly string[], b: readonly string[]): boolean {
+      if (a.length !== b.length) return false
+      const set = new Set(b)
+      return a.every((name) => set.has(name))
+    }
+
+    /**
+     * 回给界面的**会话层**工具表：这一层生效的关停名单 + 来源（本对话 / 创建时 / 全局兜底）。
+     * 与全局那份同一形状（`hidden` / `presets` / `report`），界面不需要分两套读法。
+     */
+    function toolTableSessionPayload(sessionId: string, scope: SessionScope | undefined, settings: ToolTableSettings): any {
+      // 只报注册过的名字：基线 / 方案里可能留着更早版本关停过、如今已不存在的工具。
+      const hidden = sessionToolTableHidden(scope, settings.hidden).filter((name) => toolTableSizes.has(name))
+      const source = scope?.toolTableHidden !== undefined
+        ? 'session'
+        : (scope?.baseline?.toolTableHidden !== undefined ? 'baseline' : 'global')
+      return {
+        ok: true,
+        sessionId,
+        scopeKind: isWorkspaceScopeKey(sessionId) ? 'workspace' : 'session',
+        hidden,
+        globalHidden: settings.hidden.slice(),
+        presets: settings.presets,
+        defaultHidden: [...DEFAULT_HIDDEN_TOOLS],
+        report: toolTableReport(hidden),
+        source,
+        locked: scope?.locked === true,
+      }
+    }
+
+    /**
+     * `tool-table` 的会话分支（0.21.2）：
+     *   · 带 `sessionId` 读 → 本对话生效名单；
+     *   · 带 `sessionId` + `set` → **整份替换**本对话的名单（不写全局）；
+     *   · 方案存 / 删仍是全局库，会话层直接拒绝（界面把入口置灰）。
+     *
+     * 为什么整份写、不做逐工具覆盖：工具表本来就以"关停名单"为真源，整份替换与
+     * `tool-table.json` / 方案同一个形状；基线那份在退出场景时负责还原。
+     */
+    async function toolTableOpWithScope(args: any): Promise<any> {
+      const rawId = String((args && args.sessionId) || '').trim()
+      if (rawId === '') return toolTableOp(args)
+      // 全局粒度：没有会话层可写。`scope-sessions-list` 那一档返回空表，界面也不会传出这一层；
+      // 走到这里说明是旧调用 / 斜杠菜单的存量参数 —— 与其静默写进一个读不到的格子，不如说清。
+      if (scopeMode() === 'global') {
+        return { ok: false, error: '隔离已关闭（全局模式）：没有会话层可写。要改就改全局设置，或先把隔离粒度调成「按对话」/「按工作区」。' }
+      }
+      // 面板给的是当前层的键；斜杠 / 旧调用可能给真实 sessionId → 统一折到当前模式。
+      const sessionId = await scopeKeyForId(rawId)
+      const settings = await readToolTableSettings()
+      let scope = scopeStore.scopeOfSync(sessionId)
+      if (!args || args.set !== true) {
+        // 方案库是全局的：会话层只负责"读这一层 / 应用一份方案"，不在这里存删。
+        if (args && (args.presetSave !== undefined || args.presetDelete !== undefined)) {
+          return { ok: false, code: 'globalOnly' }
+        }
+        return toolTableSessionPayload(sessionId, scope, settings)
+      }
+      if (scope?.locked === true) {
+        const layer = isWorkspaceScopeKey(sessionId) ? '工作区' : '会话'
+        return { ok: false, error: `${layer}「${scopeKeyLabel(sessionId)}」的作用域已锁定：先解锁再改` }
+      }
+      // 第一次写时补一份基线：退出场景要回到"这个对话创建时"的那份名单。
+      if (scope?.baseline === undefined) {
+        const baseline = await captureBaselineSnapshot().catch(() => null)
+        if (baseline !== null) {
+          try { await scopeStore.mutate(sessionId, (cur) => withBaseline(cur, baseline).scope) } catch { /* best effort */ }
+          scope = scopeStore.scopeOfSync(sessionId)
+        }
+      }
+      // 只收注册过的工具名：陌生名字会让官方 restrict 抛错。
+      const target = normalizeToolTableSettings({ hidden: args.hidden }).hidden
+        .filter((name) => toolTableSizes.has(name))
+      // 老会话的基线里没有这一栏（那是 0.21.2 才加的）：第一次写时按**当前全局**补一份，
+      // 否则退出场景会退回"实时全局"，与"每个对话从创建起有自己的那份"这条口径不符。
+      const backfillBaselineTt = scope?.baseline !== undefined && scope.baseline.toolTableHidden === undefined
+      const base = scope?.baseline?.toolTableHidden ?? (backfillBaselineTt ? settings.hidden : undefined)
+      try {
+        await scopeStore.mutate(sessionId, (cur) => {
+          const out: SessionScope = { ...(cur === undefined ? {} : cur) }
+          if (backfillBaselineTt && out.baseline !== undefined) {
+            out.baseline = { ...out.baseline, toolTableHidden: settings.hidden.slice() }
+          }
+          // 与基线同值就不留显式名单：退出场景 / 全局再变时少一条永远相等的覆盖。
+          if (base !== undefined && sameToolNameList(target, base)) delete out.toolTableHidden
+          else out.toolTableHidden = target.slice()
+          return Object.keys(out).length > 0 ? out : undefined
+        })
+      } catch (e) {
+        return { ok: false, error: '保存失败: ' + message(e) }
+      }
+      mcp.scheduleToolRestrictions()
+      // 同上：会话工具表保存也不等两个目录重算（0.21.2）。
+      scheduleSkillCatalogRefresh()
+      void subagentCatalog.refresh().catch(() => { /* 同上 */ })
+      scope = scopeStore.scopeOfSync(sessionId)
+      return toolTableSessionPayload(sessionId, scope, settings)
+    }
 
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
@@ -1695,7 +3678,7 @@ export default {
         readInjectSettings,
         injectSettingsOp,
         readSlashSettings,
-        toolTableOp,
+        toolTableOp: (args: any) => toolTableOpWithScope(args),
         toolTableReport: () => toolTableReport(),
         presetRoster: candidates.presetRoster,
         listPatchBackups,
@@ -1760,10 +3743,17 @@ export default {
           return slice.mode && slice.mode.scene ? slice.mode.scene : null
         },
         sceneModeSet: (args: any) => archiveService.ops['scene-mode-set'](args),
+        // 会话同步（0.21.2 复核）：改名 / 删除发生在场景层，停在里面（或引用它）的会话要跟着走。
+        onSceneRenamed: (from, to) => syncSessionsForSceneRename(from, to),
+        onSceneRemoved: (name) => syncSessionsForSceneRemoval(name),
         onToolTablePresetChanged: async (scene: string, value: string) => {
           // 「修改场景」里改绑工具表方案且改的是**当前启用场景** → 立即把关停名单整体换成
           // 那一份（与「改档案 = 立刻生效」同口径）。解绑（''）按下拉里的承诺 =「保持现状」，
           // 运行时不动；悬空绑定（方案已删）也不在这里硬失败，交给引擎进出场景时的 stale 处理。
+          //
+          // 会话层（0.21.2 复核）：工具表是按对话的一份，停在**这个场景**里的会话各自
+          // 也有一份抄下来的名单 —— 与全局模式无关，先把它们一起换掉。
+          if (value) await syncSessionsForSceneToolTable(scene, value)
           const slice = await memoriesService.readArchiveSlice()
           if (!slice.mode || slice.mode.scene !== scene || !value) return
           const s = await readToolTableSettings()
@@ -1813,6 +3803,70 @@ export default {
       // 侧栏入口的开关（读 / 写）：客户端 boot 时读一次决定注不注册侧栏那一行，兼容页那颗
       // 按钮写一次。同 `slash-settings`：按写门禁但不冻结（见 sidebar-settings.ts）。
       'sidebar-settings': (args: any) => sidebarSettingsOp(args),
+      // 会话作用域五条（ops/scope.ts）：scope-get / scope-set / scope-clear /
+      // scope-sessions-list / scope-lock。**都不冻结** —— 场景锁冻结的是全局写入，
+      // 而这里改的是叠加在全局之上的会话视图（决策 11 / 12，理由见 ops/scope.ts 文件头）。
+      // 全局快照与真值同源：场景取 `rules-list` 的 activeScene，技能取 `skill-state` 的
+      // enabled，人设取 `subagent-list` 的 enabled，快捷词取 `quickprompt-list` 的 enabled，
+      // MCP 取补丁层的启停（`configuredServerStates`，与界面开关同一份真值；不是逐工具停用表）。
+      // **一处读失败只让那一域空着**（= 没有全局开着的项），不整体失败：读不到全局时把覆盖
+      // 判成"等于全局"会让覆盖被误清。
+      ...buildScopeOps({
+        store: scopeStore,
+        // 真实 sessionId（斜杠菜单 / 旧调用）→ 当前模式的作用域键；面板传的 `ws:` 键原样。
+        resolveKey: (idOrKey) => scopeKeyForId(idOrKey),
+        mode: () => scopeMode(),
+        // 切换粒度后：可见性层、两个目录、租约都要按新键重算一遍（与写覆盖后的通知同一条出口）。
+        onModeChanged: (_mode) => {
+          mcp.scheduleToolRestrictions()
+          scheduleSkillCatalogRefresh()
+          void subagentCatalog.refresh().catch(() => { /* 同上 */ })
+          void enqueueScopeReconcile({ adoptExternal: false }).catch(() => { /* 面板下一次刷新还会再对 */ })
+        },
+        global: () => scopeGlobalSnapshotShared(),
+        sessions: () => scopeSessionRows(),
+        summaryOf: (id) => scopeSessionSummary(id),
+        // 场景档案（同步）：场景层按它实时计算（档案改了，下一个请求就跟着变）。
+        sceneArchiveOf: (scene) => memoriesService.sceneArchiveOf(scene),
+        // 模型工具表（0.21.2）：进场景时把绑定方案套到**本对话**；注册表用来滤掉历史名字。
+        toolTablePresetHidden,
+        toolTableAvailable: () => toolTableSizes,
+        sceneExists: async (name) => {
+          const r: any = await memoriesService.ops['rules-list']({})
+          return !!(r && r.ok !== false && (r.scenes || []).some((s: any) => String(s.name) === name))
+        },
+        // 写会话覆盖 / 意图之后的意图对账：运行态 := 意图 ∪ 租约（见 reconcileScopeResourcesOnce）。
+        reconcile: (opts) => enqueueScopeReconcile(opts),
+        // 全局意图写入（scope-intent-set）：只写侧车，运行态交给对账器。
+        writeIntent: async (domain, keys, state) => {
+          const res = await intentStore.mutate((current) => withIntent(current, domain, keys, state))
+          return res.ok ? null : res.error
+        },
+        // 基线：会话**创建时**的冻结快照 —— 启动期与 agent/created 各调一次（`ensureBaselineFor`）。
+        captureBaseline: () => captureBaselineSnapshot(),
+        // 会话提示词（0.21.2）：应用前读一次正文（校验存在性 + 拒绝空预设）；
+        // scope-get 的预填走同一条解析链（含场景预设 / AGENTS.md 退化）。
+        presetContent: async (id) => {
+          const r: any = await promptOps['agentsmd-read']({ id })
+          return r && r.ok !== false && typeof r.content === 'string' ? String(r.content) : null
+        },
+        promptTextOf: (sessionId) => sessionPromptTextOf(sessionId),
+        // 首次写会话提示词前把冻结快照补上（面板可能先于第一条消息打开，注入侧还没捕获过）。
+        ensurePromptBaseline: (sessionId) => ensurePromptBaseline(sessionId),
+        // MCP 覆盖改的是「本会话可见的工具」—— 写侧不重排的话，官方 restrict 层要等下一次
+        // 无关的 tools/change 才跟上（拨回开关后模型那边仍看不到工具）。其余域由各自的
+        // 注入目录按每次 step 读取，不需要通知。
+        onChanged: (_sessionId, domain) => {
+          if (domain === 'mcp' || domain === 'mcpTools' || domain === 'scene' || domain === 'toolTable' || domain === '') mcp.scheduleToolRestrictions()
+          // 工具表换了（进场景套方案 / 会话层改名单 / 清掉）→ 两个目录里那句
+          // 「用 `X_manager_list` 查」得跟着重算，否则会点名一条本对话没有的工具。
+          if (domain === 'scene' || domain === 'toolTable' || domain === '') {
+            scheduleSkillCatalogRefresh()
+            void subagentCatalog.refresh().catch(() => { /* 同上 */ })
+          }
+        },
+        message,
+      }),
       // state-doctor：跨域**悬空引用**体检（只读，实现与理由见 src/ops/state-doctor.ts）。
       // 这里只做"把权威集合取来"这一件事 —— 某一域读失败就传 null，体检会把它记进
       // `skipped` 而不是当成"该域没有悬空项"（读不到 ≠ 不存在，报成后者就是骗人）。
@@ -1881,7 +3935,7 @@ export default {
     }
 
     // 场景锁定查询（2026-09-19 抽到 ./request-gate.ts）：读 rules-list 得到锁定场景与当前场景。
-    // 场景锁与「当前场景」的**共享读缓存**（0.21.3）。
+    // 场景锁与「当前场景」的**共享读缓存**（0.21.2）。
     //
     // 为什么必须有：`annotateLocked`（request-gate.ts）给 5 个列表 op 的响应补
     // `anyLocked` / `activeScene`，它要**同时**问 `lockedSceneNames()` 与
@@ -1933,7 +3987,7 @@ export default {
     async function skillArchiveKeys(): Promise<Map<string, { key: string; selectable: boolean }>> {
       const map = new Map<string, { key: string; selectable: boolean }>()
       try {
-        const r: any = await skillsService.ops['skill-state']({})
+        const r: any = await rawSkillState({})
         for (const root of ((r && r.data && r.data.roots) || [])) {
           const rootKey = String((root && root.key) || '')
           if (!rootKey) continue
@@ -1961,7 +4015,7 @@ export default {
       const all: string[] = []
       const selectable: string[] = []
       try {
-        const r: any = await skillsService.ops['skill-state']({})
+        const r: any = await rawSkillState({})
         for (const root of ((r && r.data && r.data.roots) || [])) {
           if (String((root && root.key) || '') !== rootKey) continue
           for (const sk of ((root && root.skills) || [])) {
@@ -2105,6 +4159,37 @@ export default {
             next.skills = list
             break
           }
+          case 'scope-intent-set': {
+            // 全局意图改的是"这个场景下开着哪些东西"本身：MCP 段按服务器名勾选，
+            // 来源段按"来源下可生效的技能"并入 / 清出（与来源开关同一条反推口径）。
+            const domain = String((args && args.domain) || '')
+            const state = String((args && args.value) || '')
+            const keys: string[] = Array.isArray(args && args.keys)
+              ? (args.keys as unknown[]).map((key) => String(key))
+              : (args && args.key !== undefined && String(args.key) !== '' ? [String(args.key)] : [])
+            if (domain === 'mcp') {
+              const mcpSection = { ...((next.mcp && typeof next.mcp === 'object') ? next.mcp : {}) }
+              for (const server of keys) {
+                if (state === 'on') mcpSection[server] = '*'
+                else delete mcpSection[server]
+              }
+              next.mcp = mcpSection
+            } else if (domain === 'skillSources') {
+              let list: string[] = Array.isArray(next.skills) ? next.skills.slice() : []
+              for (const root of keys) {
+                const rootKeys = await skillArchiveKeysOfRoot(root)
+                const pick = state === 'on' ? rootKeys.selectable : rootKeys.all
+                if (state === 'on') {
+                  for (const key of pick) if (list.indexOf(key) < 0) list.push(key)
+                } else {
+                  const drop = new Set(pick)
+                  list = list.filter((key) => !drop.has(key))
+                }
+              }
+              next.skills = list
+            }
+            break
+          }
           case 'mcpm-set-enabled': {
             const server = await serverNameOfId(String((args && args.id) || ''))
             if (!server) return null
@@ -2209,6 +4294,12 @@ export default {
       message,
     })
     Object.assign(handlers, snapshotOps)
+    // MCP 列表的两个视图补上意图 / 租约字段（见 annotateMcpRows）。放在 installHandlerGuards
+    // 之前：冻结 / 档案同步 / 锁定标注那几层包的是最终这一份。
+    for (const opName of ['mcpm-list', 'mcpm-reveal'] as const) {
+      const original = handlers[opName]
+      if (typeof original === 'function') handlers[opName] = async (args: any) => annotateMcpRows(await original(args))
+    }
 
     installHandlerGuards({
       handlers,
@@ -2334,11 +4425,46 @@ export default {
       presetRoster: candidates.presetRoster,
       injectNoticeOptions,
       message,
+      // 当前隔离粒度（0.21.2+）：写类工具据此决定 `scope` 的**默认值**。`global` 粒度下
+      // 会话层不存在，省略 scope 的写入必须落到全局 —— 见 `effectiveScope`。
+      scopeMode: () => scopeMode(),
+      // 会话层（0.21.2，决策 10）：写类工具**默认写会话**，`scope: "global"` 才走各域原路径。
+      // 这里只提供"改本会话这一条"的窄接口 —— 自动清除 / 会话锁 / 侧车落盘的判定都在
+      // ops/scope.ts 那一份实现里，工具不重复实现。
+      sessionScopeSet: (agent: unknown, domain: any, key: string, value: any) => {
+        const sessionId = scopeKeyForAgent(agent)
+        if (sessionId === null) return Promise.resolve({ ok: false, error: 'no session id on this agent: cannot write a per-conversation switch' })
+        // `scene` 走 `value`（场景名 / null），其余各域走 `key` + `value` —— 与 `scope-set` op
+        // 的入参形状逐字对齐，不在这里再造一套（再造一套就是两份会分叉的协议）。
+        const args = domain === 'scene' ? { sessionId, domain, value } : { sessionId, domain, key, value }
+        return handlers['scope-set'](args) as Promise<{ ok: boolean; cleared?: boolean; warnings?: string[]; error?: string }>
+      },
+      // 全局意图（0.21.2）：模型工具的 `scope: "global"` 走这里，不再直接改补丁 / 来源状态。
+      // 场景档案的同步由工具自己调 `syncSwitchToScene('scope-intent-set', …)`（与面板同一条）。
+      scopeIntentSet: (domain: 'mcp' | 'skillSources', keys: string[], value: 'on' | 'off' | 'blocked') =>
+        handlers['scope-intent-set']({ domain, keys, value }) as Promise<{ ok: boolean; warnings?: string[]; error?: string; sceneSyncError?: string }>,
+      // 读侧那一半（0.21.2）：列表工具按会话取数据（项目技能根按会话 cwd）+ 标出本会话的
+      // 逐条开关。与写侧同一个 store，读到的永远是刚写进去的那一份（TTL 300ms 只对外部改文件生效）。
+      sessionScope: (agent: unknown) => {
+        const sessionId = scopeKeyForAgent(agent)
+        if (sessionId === null) return null
+        return { sessionId, scope: scopeStore.scopeOfSync(sessionId) }
+      },
+      // 某一格的**四层并值**（0.21.2）：列表类工具逐条问它（undefined = 落到该域的全局值）。
+      sessionFlagOf: (agent: unknown, domain: any, key: string) => {
+        const resolver = flagResolverOfAgent(agent, domain)
+        return resolver === undefined ? undefined : resolver(key)
+      },
     }
     const mcpToolOps = auditOps(mcp.ops)
     buildMcpTools({
       ...toolDeps,
-      mcpmListView: mcp.mcpmListView,
+      // 会话层（0.21.2）：本会话隐藏的服务器在清单里与全局停用同形（默认不列、all=true 标注）。
+      // 逐行问谓词 —— 行数组就是全集（判据：覆盖 → 场景层 → 基线）。
+      sessionHiddenServer: (agent: unknown, serverName: string) => sessionServerHiddenOf(agent, serverName),
+      // 模型侧也读意图（`globalOn` / `intent` / `leaseCount`）：它看到的"全局开着"必须与用户
+      // 面板一致，而不是租约拉起后的运行态。
+      mcpmListView: async () => annotateMcpRows(await mcp.mcpmListView()),
       mcpmTools: mcp.ops['mcpm-tools'],
       mcpmSetEnabled: mcpToolOps['mcpm-set-enabled'],
       mcpmRestart: mcpToolOps['mcpm-restart'],
@@ -2384,8 +4510,36 @@ export default {
     // 再包一次，是为了让工具与 HTTP API 共用同一个实现（不会各自漂移）。
     buildSceneTools({
       ...toolDeps,
-      rulesOps: auditOps(memoriesService.ops),
-      archiveOps: auditOps(archiveService.ops),
+      rulesOps: {
+        ...auditOps(memoriesService.ops),
+        // 模型改场景记录也要走 handlers 里那份包装（buildSceneSyncOps）：`scene_manager_save`
+        // 会经 `rules-create-scene` 改写 / 解绑**当前启用场景**的提示词，直调原 op 会静默漏掉
+        // AGENTS.md 同步与工具表 / 快捷词即时生效（与下面 `sceneActivate` 同一条纪律）。
+        'rules-create-scene': auditFn('rules-create-scene', (args: any) => handlers['rules-create-scene'](args)),
+        'rules-update-scene': auditFn('rules-update-scene', (args: any) => handlers['rules-update-scene'](args)),
+      },
+      archiveOps: {
+        ...auditOps(archiveService.ops),
+        // 模型把工具表方案写在**档案**里（不经 `rules-update-scene` 的绑定回调）：
+        // 已经停在这个场景里的会话会一直按旧名单。保存前记下旧绑定，成功且确实变了时补一次
+        // 会话同步（与面板改绑同一条路）。没变就不动 —— 会话里手动调整过的名单不该被一次
+        // 无关保存覆盖。
+        'scene-archive-save': auditFn('scene-archive-save', async (args: any) => {
+          const scene = String((args && args.scene) || '')
+          const archive = args && args.archive && typeof args.archive === 'object' ? args.archive : null
+          const hasPreset = archive !== null && Object.prototype.hasOwnProperty.call(archive, 'toolTablePreset')
+          const nextPreset = hasPreset ? String(archive.toolTablePreset || '') : ''
+          let prevPreset = ''
+          if (hasPreset && scene !== '') {
+            try { prevPreset = String(memoriesService.sceneArchiveOf(scene)?.toolTablePreset || '') } catch { prevPreset = '' }
+          }
+          const res: any = await archiveService.ops['scene-archive-save'](args)
+          if (hasPreset && scene !== '' && nextPreset !== '' && nextPreset !== prevPreset && res && res.ok !== false) {
+            await syncSessionsForSceneToolTable(scene, nextPreset).catch(() => { /* 下次进 / 退场景会对齐 */ })
+          }
+          return res
+        }),
+      },
       sceneActivate: auditFn('rules-set-active', (args: any) => handlers['rules-set-active'](args)),
     })
     buildSubagentTools({
@@ -2394,6 +4548,14 @@ export default {
       subagentService: Object.assign(Object.create(subagentService), { ops: auditOps(subagentService.ops) }),
       sceneLists: subagentSceneLists,
       toolFilterFor: subagentToolFilterFor,
+      // 会话层（0.21.2）：四层并值 —— 本会话关掉的人设看不见、也调不动；显式开着的
+      // （含场景绑定的排除项被救回来的那些）看得见、调得动。
+      subagentFlagFor: (exec: unknown) => flagResolverOfAgent((exec as { agent?: unknown } | null)?.agent, 'subagents'),
+      // 原始覆盖表只给列表那句"显式关了几条"的统计用（0.21.2）。
+      subagentOverridesFor: (exec: unknown) => {
+        const scopeId = scopeKeyForAgent((exec as { agent?: unknown } | null)?.agent)
+        return scopeId === null ? undefined : scopeStore.scopeOfSync(scopeId)?.subagents
+      },
       failures: subagentFailures,
     })
     // 删除 / 回收站族（tools/remove.ts，2026-10-15）：五个域各一条 `*_manager_remove`。
@@ -2603,6 +4765,14 @@ export default {
         ctx.effect(() => {
           const stop = (ctx.on as (event: string, cb: (payload: any) => void) => (() => void) | void)('agent/created', (payload) => {
             mcp.attachAgent(payload && payload.agent)
+            // 技能目录按会话 cwd 取数（0.21.2）：先热一份，否则该会话首轮注入会少掉整段目录。
+            // 子代理热的是**所属用户会话**那一份：它的目录 / 覆盖都继承父会话（见 `sessionScopeIdOf`）。
+            const scopeSid = sessionScopeIdOf(payload && payload.agent)
+            if (scopeSid !== null) void skillCatalog.warmSession(scopeSid)
+            // 基线（0.21.2）：**创建时**记一份"这个会话最开始的样子"——「退出模式」要回到它，
+            // 而只有现在这一刻取得才是创建时的样子（子代理会话不记：它们不占用户会话）。
+            const sid = sessionIdOf(payload && payload.agent)
+            if (sid !== null && subagentDepthOf(payload && payload.agent) === 0) void ensureBaselineFor(scopeKeyForAgent(payload && payload.agent) ?? sid)
           })
           return typeof stop === 'function' ? stop : () => { /* noop */ }
         }, 'dsh-plugin-tool-management: mcp visibility (agent created)')
@@ -2614,21 +4784,35 @@ export default {
         }, 'dsh-plugin-tool-management: mcp visibility (agent disposed)')
         const agents = typeof ctx.get === 'function' ? ctx.get('agents') as { list?: () => unknown[] } | undefined : undefined
         if (agents && typeof agents.list === 'function') {
-          for (const agent of agents.list()) mcp.attachAgent(agent)
+          for (const agent of agents.list()) {
+            mcp.attachAgent(agent)
+            const scopeSid = sessionScopeIdOf(agent)
+            if (scopeSid !== null) void skillCatalog.warmSession(scopeSid)
+            // 老会话（本功能上线前创建的）没有基线：启动时补记一份"现在"——
+            // 取不到创建时那一刻，这是能做到的最好一份（记不上时退出会如实降级为跟随全局）。
+            const sid = sessionIdOf(agent)
+            if (sid !== null && subagentDepthOf(agent) === 0) void ensureBaselineFor(scopeKeyForAgent(agent) ?? sid)
+          }
         }
       } catch (e) { /* agents 服务不可用 → 仅靠事件（与技能侧同一退路） */ }
     }
     if (typeof tools.guard === 'function') {
       ctx.effect(() => tools.guard!((exec) => {
         try {
+          const name = String((exec && exec.name) || '')
+          // 会话层的判定先算（0.21.2）：它有两个方向 —— `deny` 是"这个对话里关掉了"，
+          // `allow` 是"这个对话里显式开着"，后者要能**越过全局停用表**（逐工具开关按会话
+          // 独立：全局关着的工具，本会话开着就该能调）。判据见 `sessionMcpVerdictSync`。
+          const verdict = sessionMcpVerdictSync(exec && exec.agent, name)
+          if (verdict === 'deny') return '该工具在本次对话中已停用（其他对话不受影响）'
           // Reads the TTL cache without I/O: the guard runs on the hot path.
-          if (mcp.isToolDisabled(String((exec && exec.name) || ''))) {
+          if (verdict !== 'allow' && mcp.isToolDisabled(name)) {
             return '该工具已在 MCP 管理页停用'
           }
           // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
           // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。
-          if (toolTableHidden().has(String((exec && exec.name) || ''))) {
-            return '该工具已在「兼容」页的模型工具表里关掉（要它先在那里打开）'
+          if (toolTableHiddenForSession(scopeKeyForAgent(exec && exec.agent)).has(name)) {
+            return '该工具已在本对话的模型工具表里关掉（要它先在那里打开）'
           }
         } catch (e) { /* fallthrough to allow */ }
         return undefined

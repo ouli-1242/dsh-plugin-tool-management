@@ -98,6 +98,13 @@
           // 场景卡片的「启用的排前面」同一口径：开关当场不重排，刷新或重进这页才重新置顶。
           var sceneRank = useRank()
           React.useEffect(function () { if (!result || result.ok !== true) return undefined; var timer = setTimeout(function () { setResult(null) }, 2600); return function () { clearTimeout(timer) } }, [result])
+          /**
+           * 本页要订阅当前层（0.21.2）：卡片边框、开关值、三格统计都跟着层走。
+           * 不订阅时切层只重画顶部那颗下拉，卡片还是上一层那一份（"切换会话没有刷新"）。
+           */
+          var scopeState = useScopeLayer()
+          /** 取数用的会话 id：全局层传空串（= 服务端按全局口径算）。 */
+          function scopeSessionId() { return scopeIsSession() ? scopeState.sessionId : '' }
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
             apiCall('scene-mode-get', {}).then(function (m) {
@@ -110,14 +117,26 @@
             if (!silent) apiCall('state-doctor', {}).then(function (d) {
               setData(function (prev) { return Object.assign({}, prev, { doctor: d && d.ok ? { findings: d.findings || [], skipped: d.skipped || [] } : null }) })
             }).catch(function () { setData(function (prev) { return Object.assign({}, prev, { doctor: null }) }) })
-            apiCall('rules-list', {}).then(function (r) {
+            // 记忆开关在这页是**全局**状态的一部分：档案弹窗的勾选、进入预览、档案摘要说的都是
+            // "全局进入这个场景会发生什么"。会话层不能拿投影后的 `enabled` 顶替 —— 看到的是本
+            // 会话的值、点下去写的是 `rules-toggle`（全局），两者会错位成"点了没反应"。
+            // 先挂一个 catch：它要在投影那次请求成功之后才被消费，若投影先失败，这个
+            // promise 会没有人接 —— 一次网络抖动就会在控制台留一条未处理拒绝。
+            var globalRulesCall = scopeIsSession() ? apiCall('rules-list', {}).catch(function () { return null }) : null
+            apiCall('rules-list', { sessionId: scopeSessionId() }).then(function (r) {
               // rules 也留下来：档案弹窗「记忆」段的默认勾选要用每条记忆的启用状态
               //（scene-inventory 的 memories 里没有 enabled，客户端自己算，省一次宿主改动）。
-              if (r && r.ok) setData(function (prev) { return Object.assign({}, prev, { loading: false, error: null, scenes: r.scenes || [], rules: r.rules || [], activeMode: r.activeMode === 'custom' ? 'custom' : 'all', activeScene: r.activeScene || null, scenePrompt: r.scenePrompt || null, stats: r.stats || prev.stats }) })
-              else setData(function (prev) { return Object.assign({}, prev, { loading: false, error: translateError(t, r) }) })
+              if (r && r.ok) {
+                setData(function (prev) { return Object.assign({}, prev, { loading: false, error: null, scenes: r.scenes || [], rules: r.rules || [], activeMode: r.activeMode === 'custom' ? 'custom' : 'all', activeScene: r.activeScene || null, scenePrompt: r.scenePrompt || null, stats: r.stats || prev.stats }) })
+                if (globalRulesCall) globalRulesCall.then(function (g) {
+                  if (g && g.ok) setData(function (prev) { return Object.assign({}, prev, { rules: g.rules || [] }) })
+                }).catch(function () { /* 读不到就先用投影那份兜底，下一次刷新再来 */ })
+              } else setData(function (prev) { return Object.assign({}, prev, { loading: false, error: translateError(t, r) }) })
             }).catch(function (e) { setData(function (prev) { return Object.assign({}, prev, { loading: false, error: errMsg(e) }) }) })
           }
-          React.useEffect(function () { refresh() }, [])
+          // 切层时**重取**（不是只重渲染）：本层的场景生效值、记忆开关都由服务端按
+          // `sessionId` 投影，手里那份是上一层算出来的。
+          React.useEffect(function () { refresh() }, [scopeState.sessionId])
           /** 读一次界面设置（读不到就保持默认 = 弹卡，本页其它功能不受影响）。 */
           function loadSceneSettings() {
             apiCall('scene-settings', {}).then(function (res) {
@@ -162,7 +181,7 @@
             setBusy(true); setResult(null)
             apiCall('rules-set-active', { scenes: names }).then(function (res) {
               setBusy(false)
-              if (res && res.ok) { setResult({ ok: !(res.agentsMd && (res.agentsMd.error || res.agentsMd.baselineError)), text: t('memory.result.active') + agentsMdNote(res) }); refresh(true) }
+              if (res && res.ok) { setResult({ ok: !(res.agentsMd && (res.agentsMd.error || res.agentsMd.baselineError)), text: t('memory.result.active') + agentsMdNote(res) }); refresh(true); syncScopeBar() }
               else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
@@ -178,6 +197,32 @@
            */
           function toggleScene(scene) {
             if (busy || scene.shared || scene.global) return
+            // 会话作用域（0.21.2）：会话层切场景 = **进入 / 退出场景模式** —— 不调
+            // scene-mode-set、不调 rules-set-active、不写 AGENTS.md。与全局层同一副交互：
+            // 点生效中的那个 = 退出模式（回到本对话创建时的样子），点别的 = 进入它。
+            // 进入时服务端会把档案里勾中、而全局关着的服务器 / 来源按租约临时运行
+            // （连接是进程级的，但只有本对话看得见），警告挂到作用域条上。
+            if (scopeIsSession()) {
+              var flagHere = scopeScene(data.activeScene)
+              var next = flagHere.value === scene.name ? null : scene.name
+              setBusy(true)
+              scopeWriteScene(next, function () { return { ok: true } })
+                .then(function (res) {
+                  setBusy(false)
+                  if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+                  // 场景绑了工具表方案时把这一档也报出来（0.21.2：方案只套到**本对话**）。
+                  var tt = res && res.toolTable
+                  var ttText = next !== null && tt && tt.applied
+                    ? ' ' + t('scope.scene.toolTable', { preset: tt.preset, count: tt.hidden })
+                    : ''
+                  setResult({ ok: true, text: (next === null
+                    ? scopeT('scope.scene.exitMode')
+                    : scopeT('scope.scene.entered', { name: sceneLabel(data.scenes, scene.name) || scene.name })) + ttText })
+                  refresh(true)
+                })
+                .catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+              return
+            }
             if (scene.active === true) exitMode()
             else if (enterPreview) askEnter(scene.name)
             else enterMode(scene.name)
@@ -404,6 +449,7 @@
             }
             setResult({ ok: ok, text: text })
             refresh(true)
+            syncScopeBar()
           }
           function submitDeleteScene(name) {
             setBusy(true)
@@ -419,6 +465,7 @@
                     : t('done.deleted', { name: name }),
                 })
                 refresh(true)
+                syncScopeBar()
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
@@ -1645,8 +1692,14 @@
                 if (act && act.ok) setResult({ ok: true, text: t('memory.result.modeSet', { name: name }) + switchNote + staleNote })
                 else setResult({ ok: false, text: t('memory.result.modeSet', { name: name }) + switchNote + staleNote + ' · ' + translateError(t, act) })
                 refresh(true)
+                syncScopeBar()
               }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }); refresh(true) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          // 场景写成功之后重拉一次作用域条：改档案 / 改绑工具表 / 删场景 / 全局进出模式都会
+          // 改"本会话此刻生效什么"，而顶部条与各页的投影读的正是那一份（0.21.2 复核）。
+          function syncScopeBar() {
+            try { refreshScope() } catch (e) { /* 面板未挂载 = 一次白读，忽略 */ }
           }
           /**
            * 退出模式（P6）：与开关**同一条路径** —— 恢复档案 + 取消场景启用，两者一起写。
@@ -1662,10 +1715,46 @@
                 if (act && act.ok) setResult({ ok: true, text: t('memory.result.modeExited') })
                 else setResult({ ok: false, text: t('memory.result.modeExited') + ' · ' + translateError(t, act) })
                 refresh(true)
+                syncScopeBar()
               }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }); refresh(true) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
+          /**
+           * 退出场景模式（本会话，0.21.2）：回到本对话**创建时**的样子 —— 用户裁定
+           * 「不要退回到全局，因为全局是会变的」。服务端把下层换成基线快照（`detached`），
+           * 场景模式期间拨过的开关一起清掉。
+           */
+          function exitSessionMode() {
+            if (busy) return
+            if (scopeState.locked === true) { setResult({ ok: false, text: scopeT('scope.lock.blockedSession') }); return }
+            setBusy(true)
+            scopeWriteScene(null, function () { return { ok: true } }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+              setResult({ ok: true, text: scopeT('scope.scene.exitMode') })
+              refresh(true)
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          /** 锁 / 解锁本会话的覆盖（0.21.2，决策 12）：只冻结这一层，与场景锁互不干扰。 */
+          function toggleSessionLock() {
+            if (busy) return
+            setBusy(true)
+            scopeSetLocked(scopeState.locked !== true).then(function (res) {
+              setBusy(false)
+              if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+              setResult({ ok: true, text: scopeState.locked === true ? scopeT('scope.lock.unlocked') : scopeT('scope.lock.locked') })
+              refresh(true)
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
           var modeScene = data.mode && data.mode.scene
+          // 会话层（0.21.2）：本会话**生效**的场景（进入的 → 退出后的基线 → 全局的）。
+          // 与 `modeScene` 分开：后者是运行时，会话层只改本对话看到什么、不碰运行时。
+          var sessionLayer = scopeIsSession()
+          var sessionScene = sessionLayer ? (data.activeScene || null) : null
+          // 「进入」与「已退出」是两种不同的会话状态：进入 = 场景层（按档案实时算）；
+          // 已退出 = 基线层（会话创建时的快照）。都没设 = 跟随全局。
+          var sessionEntered = sessionLayer && typeof scopeState.overrides.scene === 'string'
+          var sessionDetached = sessionLayer && scopeState.detached === true
           // 遗留检测 + 预设场景过滤 + 三格统计 + 「启用的排前面」：一次算完。这四步只跟
           // `data.scenes` / `data.archives` 有关，弹窗、提示条、忙碌标记之类的状态变化不再重跑。
           // 卡片 key 仍来自场景名，未动。
@@ -1689,7 +1778,11 @@
             // 一眼看到的状态（锁定期间整个管理域冻结）。
             var stats = {
               total: presets.length,
-              active: presets.filter(function (s) { return s.active === true }).length,
+              // 会话层按本对话生效的场景算（进入的 / 退出后基线里的 / 跟随全局的）；照抄全局值会让
+              // 页头数字与本层卡片上的勾对不上。
+              active: scopeIsSession()
+                ? presets.filter(function (s) { return s.name === data.activeScene; }).length
+                : presets.filter(function (s) { return s.active === true; }).length,
               archives: presets.filter(function (s) { return !!data.archives[s.name] }).length,
               locked: presets.filter(function (s) { return s.locked === true }).length,
             }
@@ -1708,7 +1801,7 @@
               visibleScenes: visible,
               orderedScenes: rankedFirst(sceneRank, function (scene) { return scene.name }, visible, function (scene) { return scene.active === true; }),
             }
-          }, [data.scenes, data.archives, dq])
+          }, [data.scenes, data.archives, data.activeScene, dq, scopeState])
           var legacyAllScenes = sceneView.legacyAllScenes
           var presetScenes = sceneView.presetScenes
           var sceneStats = sceneView.sceneStats
@@ -1777,11 +1870,32 @@
                 placeholder: t('scenes.search.placeholder'),
                 onChange: function (e) { setQuery(e.target.value) },
               })),
-            // 当前模式条：**只在真的进入了模式时才出现**。
+            // 会话层（0.21.2）：本对话当前生效的场景 + 会话锁。**不显示**运行时的「退出模式」
+            // / 场景锁 —— 那两个动作改的是全局，在本层点它们等于"以为在改本对话、实际改了全局"。
+            // 本层自己的「退出模式」= 回到本对话创建时的样子（与全局层那颗同名不同义：
+            // 全局那颗退到运行时快照，这一颗退到会话基线）。
+            sessionLayer ? React.createElement('div', { key: 'scope-mode', className: 'dsm-mode-bar dsm-mode-bar-scoped' },
+              React.createElement('span', { className: 'dsm-mode-dot' + (sessionEntered ? ' dsm-mode-dot-scoped' : '') }),
+              React.createElement('div', { className: 'dsm-mode-main' },
+                React.createElement('div', { className: 'dsm-mode-title' },
+                  sessionEntered
+                    ? scopeT('scenes.mode.session', { name: sceneLabel(data.scenes, sessionScene) || sessionScene }) + ' · ' + t('scope.mode.entered')
+                    : sessionDetached
+                      ? scopeT('scope.mode.detached')
+                      : (sessionScene
+                        ? scopeT('scenes.mode.session', { name: sceneLabel(data.scenes, sessionScene) || sessionScene }) + ' · ' + t('scope.mode.followGlobal')
+                        : scopeT('scope.mode.noScene'))),
+                React.createElement('div', { className: 'dsm-mode-sub' }, scopeT('scope.mode.note'))),
+              React.createElement('span', { className: 'dsm-mode-acts' },
+                sessionEntered
+                  ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || scopeState.locked === true, title: scopeState.locked === true ? scopeT('scope.lock.blockedSession') : '', onClick: exitSessionMode }, t('scope.scene.exitMode.btn'))
+                  : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-lock', disabled: busy, title: scopeIsWorkspace() ? t('scope.lock.hintWorkspace') : scopeT('scope.lock.hint'), onClick: toggleSessionLock }, scopeState.locked === true ? scopeT('scope.lock.unlock') : scopeT('scope.lock.lock')))) : null,
+            // 全局层「当前模式条」：**只在真的进入了模式时才出现**。
             // 以前没有模式时也常驻一条「自由模式 + 一句解释」，用户反馈「这个是干什么的，感觉没什么用」——
             // 静态解释占一整条，而「没有条 = 没有模式」本来就不言自明。现在它只承载有状态的信息：
             // 哪个场景是当前模式、它包含什么档案、怎么退出。
-            modeScene ? React.createElement('div', { key: 'mode', className: 'dsm-mode-bar' },
+            !sessionLayer && modeScene ? React.createElement('div', { key: 'mode', className: 'dsm-mode-bar' },
               React.createElement('span', { className: 'dsm-mode-dot' }),
               React.createElement('div', { className: 'dsm-mode-main' },
                 React.createElement('div', { className: 'dsm-mode-title' },
@@ -1799,7 +1913,7 @@
             React.createElement(UndoBar, { key: 'undo', undo: undo, busy: busy, t: t, onUndo: undoMemories, onClose: dismissUndo }),
             // 历史「全部启用」（active=null）遗留：单选模型下多名场景同时在场是歧义状态。
             // 不静默改写（那会改变注入范围），而是给一个显式收敛按钮，并说清点下去会发生什么。
-            legacyAllScenes.length > 1 ? React.createElement('div', { key: 'legacyall', className: 'dsm-feedback dsm-warning' },
+            legacyAllScenes.length > 1 && !sessionLayer ? React.createElement('div', { key: 'legacyall', className: 'dsm-feedback dsm-warning' },
               React.createElement('span', null, t('scenes.legacyAll', { count: legacyAllScenes.length })),
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { enterMode(legacyAllScenes[0].name) } }, t('scenes.legacyAll.fix'))) : null,
             // 改名 / 删除留下的悬空引用：这一条列表上看着还绑着，运行时按那个名字已经找不到了。
@@ -1869,7 +1983,20 @@
                 // 生效中但 AGENTS.md 里不是它（被手动改过？）——「显示必须等于实际注入」，
                 // 不一致就如实标出来，别让用户以为文件里就是它。
                 var promptMismatch = promptLive && !promptMissing && data.scenePrompt.duplicate !== true
-                return React.createElement('article', { key: 's:' + name, className: 'dsm-scene-tile' + (modeScene === name ? ' dsm-scene-tile-mode' : '') },
+                // 会话作用域（0.21.2）：**来源标记打在卡片边框上**（用户 2026-10-19 裁定，
+                // 颜色统一为绿 —— 停在某一层时看到的绿框说的就是"这一层在用它"）。
+                // ⚠️ 判据是**覆盖表里有没有这一条**（进入过），不是「本层生效场景是不是它」：
+                // 后者在没进入时等于全局那个场景，会话层一打开就会把全局场景也标成"本会话
+                // 进入"—— 而这个标记说的是"这一格与本对话以外不一样"。
+                var sceneOver = scopeIsSession() ? scopeState.overrides.scene : undefined
+                var enteredHere = typeof sceneOver === 'string' && sceneOver === name
+                // 绿框 / 「当前」标签跟着**正在看的那一层**走：会话层 = 本对话生效的场景
+                // （进入的 / 退出后基线里的 / 跟随全局的），全局层 = 运行时那个。
+                var tileCurrent = scopeIsSession() ? (data.activeScene || null) : modeScene
+                var tileClass = 'dsm-scene-tile'
+                  + (tileCurrent === name ? ' dsm-scene-tile-mode' : '')
+                  + (enteredHere ? ' dsm-scene-tile-scoped' : '')
+                return React.createElement('article', { key: 's:' + name, className: tileClass },
                   // 左列：名字 + 描述（两行）。右侧控件是另一格，二者按卡片中线对齐。
                   React.createElement('div', { className: 'dsm-scene-tile-main' },
                     React.createElement('div', { className: 'dsm-scene-tile-head' },
@@ -1877,7 +2004,7 @@
                       // 显示名与磁盘目录名不同时才标出真名，方便对文件核对。
                       name === label ? null : React.createElement('span', { className: 'dsm-scene-tile-key' }, name),
                       locked ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.scene.shared')) : null,
-                      modeScene === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
+                      tileCurrent === name ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('memory.mode.current')) : null,
                       sceneLocked ? React.createElement('span', { className: 'dsm-tag dsm-tag-on' }, t('scenes.lock.tag')) : null,
                       !locked && scene.active === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null,
                       // 「提示词生效中：X」「提示词：X」两枚标签已删（用户 2026-10-18）：绑定关系在
@@ -1895,10 +2022,27 @@
                   // 锁定态「编辑」照旧置灰（改档案是写盘动作，与记忆 / 子智能体那两页的
                   // "只读能看"不同，场景编辑器一打开就是那张要保存的表）。
                   React.createElement('div', { className: 'dsm-scene-tile-side' },
-                    locked ? null : React.createElement('span', {
-                      className: 'dsm-scene-tile-switch',
-                      title: blockedByOther ? t('scenes.enable.blocked', { name: sceneLabel(data.scenes, data.activeScene) || data.activeScene || '' }) : (sceneLocked && scene.active === true ? t('scenes.lock.blockedExit') : ''),
-                    }, React.createElement(Switch, { on: scene.active === true, disabled: busy || blockedByOther || (sceneLocked && scene.active === true), label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } })),
+                    locked ? null : (function () {
+                      // 会话作用域（0.21.2）：这一格的值来自 `scopeScene`（本层生效值）；
+                      // 本对话进入过它时卡片上另画来源边框（见 10-css.js 的视觉口径）。
+                      // 会话层下**没有**「被别的场景挡住」这件事 —— 本对话的场景不占全局名额。
+                      // 开关交互与全局层同构：点生效中的那个 = 退出场景模式（回到创建时的
+                      // 样子）；点别的 = 进入它。
+                      var flag = scopeScene(data.activeScene)
+                      var onHere = scopeIsSession() ? flag.value === name : scene.active === true
+                      var blockedHere = scopeIsSession() ? false : blockedByOther
+                      var enteredNow = scopeIsSession() && typeof scopeState.overrides.scene === 'string' && scopeState.overrides.scene === name
+                      var sessionLocked = scopeIsSession() && scopeState.locked === true
+                      var switchTitle = blockedHere
+                        ? t('scenes.enable.blocked', { name: sceneLabel(data.scenes, data.activeScene) || data.activeScene || '' })
+                        : (scopeIsSession() && onHere
+                          ? scopeT('scope.scene.exitHint')
+                          : (!scopeIsSession() && sceneLocked && scene.active === true ? t('scenes.lock.blockedExit') : ''))
+                      return React.createElement('span', {
+                        className: 'dsm-scene-tile-switch',
+                        title: switchTitle,
+                      }, React.createElement(Switch, { on: onHere, scoped: enteredNow, disabled: busy || blockedHere || sessionLocked || (!scopeIsSession() && sceneLocked && scene.active === true), label: t('memory.scene.enable') + ' ' + name, onClick: function () { toggleScene(scene) } }))
+                    })(),
                     React.createElement(RowMenu, {
                       key: 'menu',
                       label: t('row.menu', { name: label }),

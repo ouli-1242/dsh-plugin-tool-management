@@ -20,7 +20,7 @@
 // 本身。memory_manager_save 受 tools/pre-execute 审批门禁（D2）。
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
-import { text, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, globalActionNote, isolationOffNote, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
 export interface MemoryToolDeps extends ToolDomainDeps {
   /** rules service 的 ops 表：rules-list / rules-read / rules-create / rules-update / rules-toggle。 */
@@ -33,13 +33,13 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     name: 'memory_manager_list',
     // 末尾**不点名** `scene_manager_list`：场景一族在出厂默认里就是关着的，指向一条模型没有的
     // 工具只会让它去猜名字（用户 2026-09-23 把默认名单扩到十五条时去掉的这句）。
-    description: 'List memories (id, scene, enabled, form flat|bundle, description) plus the scene injection currently follows. What is injected each turn is in the "Current memories" reminder; use this for ids and for entries that are off. Pass a `scene` to filter by scene; all=true lists everything.',
+    description: 'List memories (id, scene, enabled, form flat|bundle, description) plus the scene the injection follows. What is injected each turn is in the "Current memories" reminder; use this for ids and for entries that are off. Pass `scene` to filter; all=true lists everything.',
     parameters: {
       // 参数名与其余五个域同词（2026-10-14 对抗性审查 P1-3）：同一个概念在工具面只该有一个名字，
       // 而 `scene` 是它在 `scene_manager_*`、`<scene>/<name>` 与注入段标题里的叫法。
       // op 的内部契约字段仍是 `group`（`rules-list` 与界面侧调用方都读它），所以 execute 里
       // 显式映射一次 —— 改 op 的字段名要动界面，那不是这一条能顺手做的事。
-      scene: { type: 'string', description: 'Optional scene filter.' },
+      scene: { type: 'string', description: 'Optional scene filter; `global` is the always-on scene.' },
       all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
@@ -48,6 +48,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // `scene` → `group`：只把 op 认的那个字段传过去，别把 `scene` 也塞给它（它不认）。
       const opArgs: any = {}
       if (args && args.scene !== undefined) opArgs.group = args.scene
+      // 会话层（0.21.2，计划 §8.2「memory_manager_list 只列本会话场景」）：带上 sessionId，
+      // op 就按本会话钉住的场景与逐条开关投影 —— 「会注入」这一栏与模型真实看到的一致。
+      // 取不到会话 = 不给，op 退回全局口径（不报错）。
+      const scoped = sessionScopeOf(deps, exec && exec.agent)
+      if (scoped !== null) opArgs.sessionId = scoped.sessionId
       const r: any = await deps.rulesOps['rules-list'](opArgs)
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read memories')
       // 「会注入」的判定与记忆段同源（renderSceneMemory）：global 场景恒常注入，其余场景要
@@ -79,11 +84,18 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const scope = r.activeMode === 'all'
         ? 'every scene (historical default, not narrowed)'
         : (r.activeScene ? '"' + String(r.activeScene) + '"' : 'no scene is on')
+      // 会话层（0.21.2）：本会话钉了场景 / 改了个别开关时，上面那行报的是**本会话**的投影，
+      // 与全局可能不同。不说清的话，模型会拿这份名单去回答"全局现在是什么" —— 那是错的答案。
+      const sessionNote = scoped === null || scoped.scope === undefined
+        ? ''
+        : '\nthis is the view here (this conversation, or its whole workspace under per-workspace isolation)' +
+          (scoped.scope.scene !== undefined ? ' — scene pinned to "' + scoped.scope.scene + '"; the machine-wide scene may differ' : '') +
+          (scoped.scope.memory !== undefined ? '; ' + Object.keys(scoped.scope.memory).length + ' switch(es) applied here' : '')
       const header = 'memories: ' + (showAll
         ? rows.length + ' total'
         : shown.length + ' injecting / ' + rows.length + ' total' +
           (shown.length === rows.length ? '' : ' (pass all=true for all)')) +
-        '\ninjects from: ' + scope + ' + global (global always injects)\n'
+        '\ninjects from: ' + scope + ' + global (global always injects)' + sessionNote + '\n'
       // 注入边界：压制型预设（persona complete / 关闭运行时上下文）下本插件默认不注入，
       // 此时列出的记忆**不在**模型上下文里。必须说出来，否则模型会假设自己已经看到正文。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
@@ -95,12 +107,12 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // "dropped by the byte budget" 改成"left out of it"（2026-10-15 注入文本审查）：byte budget
     // 是本插件内部术语，模型没有这个概念 —— 它只知道"这条在不在我上下文里"。说内部机制
     // 等于让它去猜一个它观测不到的量。
-    description: 'Read the full body of one memory, plus its form (flat|bundle) and the names of its attachments. Only for ones not already in your context (disabled, in an inactive scene, or left out of it). Attachment contents are not returned — read those with your file tools.',
+    description: 'Read one memory\'s full body, its form (flat|bundle) and its attachment names. Only for ones not already in your context (disabled, in an inactive scene, or left out). Attachment contents are not returned — use your file tools.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args) {
+    async execute(args: any, exec: any) {
       // op 的字段名是 `id`，不改 op：这里显式转换（键名对模型是 `<场景>/<名字>`，对 op 是 `id`）。
       const r: any = await deps.rulesOps['rules-read']({ id: String((args && args.memory) || '') })
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read memories')
@@ -113,7 +125,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const attLine = attach.length
         ? '\nattachments (' + attach.length + '): ' + attach.map((a: any) => String((a && a.name) || a)).join(', ')
         : ''
-      return '# ' + rule.id + ' (' + form + ')' + attLine + '\n\n' + (rule.body || '')
+      // 会话层（0.21.2）：这条记忆在本会话是关着的（或不在本会话钉住的场景里）时，读得到
+      // 正文 ≠ 它会进上下文。不说清的话，模型会以为自己已经掌握了它、下一轮却看不到。
+      const scoped = sessionScopeOf(deps, exec && exec.agent)
+      const over = scoped?.scope?.memory?.[String(rule.id)]
+      const offHere = over === false
+        ? '\n(switched off here only — the body above is not injected here; the global setting is unchanged) '
+        : ''
+      return '# ' + rule.id + ' (' + form + ')' + attLine + '\n\n' + (rule.body || '') + offHere
     },
   }))
   register(defineTool({
@@ -136,16 +155,35 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     description: 'Enable or disable one memory. Disabled memories stop being injected. Reversible. Only when the user asks or approves.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
-      enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable; omission is refused.' },
+      enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable.' },
+      // 决策 10（2026-10-19）：默认只改**这个对话**。写全局要显式说明。
+      scope: { type: 'string', enum: ['session', 'global'], description: scopeSessionDesc('global = every conversation (the memory index).') },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args) {
-      const blocked = await deps.lockedSceneGuard()
-      if (blocked) throw new Error(blocked)
+    async execute(args: any, exec: any) {
       const memory = String((args && args.memory) || '')
       // `enabled` 必须是布尔：`rules-toggle` 缺了它直接拒（ops/memory.ts），但那是给用户看的
       // 中文 op 错；这里先挡一句说清"这条工具要什么"。
       if (typeof (args && args.enabled) !== 'boolean') throw new Error('missing argument: enabled must be true or false')
+      // 场景锁冻结的是**全局**写入（决策 11）：会话覆盖写的是侧车，与锁无关 ——
+      // 与面板的 `scopeWriteLocked()` 同一口径。只有全局那条路才过守卫。
+      // 全局粒度下 `effectiveScope` 一律返回 global：那一档没有会话层，写的就是索引本身。
+      const scope = effectiveScope(deps, args)
+      const sessionOnly = scope === 'session'
+      if (!sessionOnly) {
+        const blocked = await deps.lockedSceneGuard()
+        if (blocked) throw new Error(blocked)
+      }
+      // 决策 10：默认写**本会话**（别的对话不受影响），`scope: "global"` 才改索引。
+      // 会话层只改"注入不注入"，不碰索引里那条记录 —— 所以不需要场景档案同步。
+      if (sessionOnly) {
+        if (!deps.sessionScopeSet) throw new Error('per-conversation switches are unavailable in this host: pass scope="global" to change it for every conversation')
+        const sc = await deps.sessionScopeSet(exec && exec.agent, 'memory', memory, args.enabled === true)
+        if (!sc || sc.ok === false) throw new Error((sc && sc.error) || 'failed to switch this memory here')
+        return 'OK: ' + memory + ' now ' + (args.enabled ? 'enabled' : 'disabled') + scopeOnlyNote() +
+          (sc.cleared === true ? ' (that matches the global setting, so the per-conversation override was removed)' : '') +
+          '. The global setting is unchanged; other conversations keep theirs. Pass scope="global" to change it for every conversation.'
+      }
       const r: any = await deps.rulesOps['rules-toggle']({ id: memory, enabled: args.enabled })
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to switch this memory')
       const rule = r.rule || {}
@@ -160,7 +198,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           if (!on) sceneNote = ' — BUT its scene "' + group + '" is not the one injecting, so it still will not be injected; turn that scene on (or move it to global) first'
         }
       } catch { sceneNote = '' }
-      return 'OK: memory ' + String(rule.id || memory) + ' ' + (rule.enabled === false ? 'disabled' : 'enabled') + sceneNote
+      return 'OK: memory ' + String(rule.id || memory) + ' ' + (rule.enabled === false ? 'disabled' : 'enabled') + sceneNote + isolationOffNote(deps)
     },
   }))
   register(defineTool({
@@ -169,7 +207,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // （场景段 128 KiB），而模型很乐意把「这个项目用 pnpm」记一条 —— 那看一眼 `package.json`
     // 就知道，记下来却永久占着每一轮请求。合并 write/update 后这两句更要留：upsert 降低了
     // "再记一条"的摩擦，而摩擦正是这里唯一拦得住它的东西。
-    description: 'Create a memory, or update the one that already has this id — the receipt says which happened. Memories cost context on EVERY later request, so record only what cannot be re-derived from code, config or git, and check the list for one that already says this — update that instead of adding a near-duplicate. Blocked while the active scene is locked. Only on the user\'s instruction.',
+    description: 'Create a memory, or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. Blocked while the active scene is locked. Only on the user\'s instruction.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name> — copy it from the list. `global` is the always-on scene.' },
       description: { type: 'string', description: 'One-sentence description (<=500 chars). Required when creating. Empty string = drop it and re-derive from the body; omit = keep.' },
@@ -180,7 +218,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       nextName: { type: 'string', description: 'New memory name (= file name); omit to keep it.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args) {
+    async execute(args: any, exec: any) {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
       const memory = String((args && args.memory) || '').trim()
@@ -254,13 +292,22 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // `enabled: false`（ops/memory.ts 的 rulesCreate），而原先这句只提场景 —— 读起来像
       // "场景一开它就自动生效"，模型据此以为已经生效，实际还差一次开关。与 skill_manager_save
       // 的 enableHint 同一形状：点名的工具在出厂默认名单里是关着的，关着就改说"用户开启后"。
+      // 「会不会注入」按**本会话**的投影判（0.21.2）：会话钉了别的场景时，这条记忆落进的
+      // 那个场景在这个对话里根本没开着 —— 照全局口径回一句"打开就能用"是错的答案。
+      const scoped = sessionScopeOf(deps, exec && exec.agent)
+      const effScene = scoped?.scope?.scene
+      const activeNow = effScene === undefined ? all.activeScene : effScene
+      const activeMode = effScene === undefined ? all.activeMode : 'custom'
       const sceneActive = group === 'global' ||
-        (group !== '' && (all.activeMode === 'all' || String(all.activeScene || '') === group))
+        (group !== '' && (activeMode === 'all' || String(activeNow || '') === group))
       const sceneTail = sceneActive ? '' : ', and turn scene "' + group + '" on'
       const enableHint = deps.toolVisible('memory_manager_switch')
         ? ' (created disabled — turn it on first with memory_manager_switch' + sceneTail + ')'
         : ' (created disabled — the user has to turn it on first' + sceneTail + ')'
-      return 'OK: created ' + r.rule.id + enableHint + warn
+      // 会话层：这条记忆写的是**磁盘上的那一份**（所有对话共用），本会话的开关只决定
+      // "这里看不看得到"。模型据此回一句"记下了"时，用户很容易读成"只在这个对话里"。
+      return 'OK: created ' + r.rule.id + enableHint + warn +
+        globalActionNote(deps, exec && exec.agent, 'memory', 'memory')
     },
   }))
 }

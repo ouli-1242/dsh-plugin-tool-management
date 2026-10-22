@@ -75,6 +75,18 @@ export interface SceneSyncOpsDeps {
    * 回到"保持现状"，运行时不回滚（进场景前那批开关仍在快照里，退出照常还原）。
    */
   onQuickPromptsChanged?(scene: string, value: string[] | null): Promise<void>
+  /**
+   * 场景**改名**成功后的会话同步（0.21.2 复核）：停在这个场景里的会话要把 `scene` 与
+   * 记忆键一起换到新名。不改的话，它们会指向一个不存在的场景 —— 下次有人新建同名场景，
+   * 这些会话会**突然进入新场景**（档案、租约全跟着变），而用户什么都没点。
+   */
+  onSceneRenamed?(from: string, to: string): Promise<void>
+  /**
+   * 场景**删除**成功后的会话同步（0.21.2 复核）：停在这个场景里的会话按「退出场景」处理
+   * （下层换成基线），并清掉所有会话里指向该场景记忆的覆盖。否则会话会停在"幽灵场景"：
+   * 档案读不到 → 所有域静默退回全局，记忆注入还会漏掉全局当前场景。
+   */
+  onSceneRemoved?(name: string): Promise<void>
   /** rules service 的四个原 op；写死名字，rules 域改名会立刻红而不是静默 undefined。 */
   rulesOps: {
     'rules-set-active'(args: any): Promise<any>
@@ -105,20 +117,33 @@ export function buildSceneSyncOps(deps: SceneSyncOpsDeps): Record<string, (args:
     },
     'rules-update-scene': async (args: any) => {
       const res: any = await deps.rulesOps['rules-update-scene'](args)
+      // 改名成功后，停在这个场景里的会话跟着换名（0.21.2 复核）。要在下面两个绑定回调
+      // **之前**做：它们按场景名找当前模式 / 档案，旧名这时候已经不存在了。
+      const renamedFrom = res && res.ok !== false && typeof res.renamedFrom === 'string' ? res.renamedFrom : ''
+      const finalName = String((res && res.scene && res.scene.name) || (args && args.nextName) || (args && args.name) || '')
+      if (renamedFrom !== '' && finalName !== '' && deps.onSceneRenamed !== undefined) {
+        try { await deps.onSceneRenamed(renamedFrom, finalName) } catch { /* 会话同步失败不拦保存；下次启动的孤儿修复会兜 */ }
+      }
       // 工具表方案绑定改动（0.15.0）：改的是**当前启用场景**且这次真的带了这一参数时即时生效；
-      // 改名在场景处于模式中时会被拦（rulesUpdateScene 的 sceneInMode），所以这里 args.name 就是生效场景的名字。
+      // 改名在场景处于模式中时会被拦（rulesUpdateScene 的 sceneInMode），所以这里 finalName 就是生效场景的名字。
       if (res && res.ok !== false && deps.onToolTablePresetChanged && args && args.toolTablePreset !== undefined) {
-        try { await deps.onToolTablePresetChanged(String(args.name || ''), String(args.toolTablePreset)) } catch { /* 即时生效失败不拦保存；下次进/退场景会对齐 */ }
+        try { await deps.onToolTablePresetChanged(finalName, String(args.toolTablePreset)) } catch { /* 即时生效失败不拦保存；下次进/退场景会对齐 */ }
       }
       // 快捷提示词勾选集同理：只有这次真的带了这一参数才动（不传 = 不碰这一域）。
       if (res && res.ok !== false && deps.onQuickPromptsChanged && args && args.quickPrompts !== undefined) {
         try {
-          await deps.onQuickPromptsChanged(String(args.name || ''), Array.isArray(args.quickPrompts) ? args.quickPrompts.map((x: unknown) => String(x)) : null)
+          await deps.onQuickPromptsChanged(finalName, Array.isArray(args.quickPrompts) ? args.quickPrompts.map((x: unknown) => String(x)) : null)
         } catch { /* 同上 */ }
       }
       return deps.withAgentsMdSync(res)
     },
     'rules-create-scene': async (args: any) => deps.withAgentsMdSync(await deps.rulesOps['rules-create-scene'](args)),
-    'rules-remove-scene': async (args: any) => deps.withAgentsMdSync(await deps.rulesOps['rules-remove-scene'](args)),
+    'rules-remove-scene': async (args: any) => {
+      const res: any = await deps.rulesOps['rules-remove-scene'](args)
+      if (res && res.ok !== false && deps.onSceneRemoved !== undefined) {
+        try { await deps.onSceneRemoved(String(res.name || (args && args.name) || '')) } catch { /* 会话同步失败不拦删除；下次启动的孤儿修复会兜 */ }
+      }
+      return deps.withAgentsMdSync(res)
+    },
   }
 }

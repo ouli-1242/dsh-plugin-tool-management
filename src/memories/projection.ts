@@ -58,7 +58,27 @@ export function ensureSceneRecords(index: RulesIndex, probeScenes: string[]): bo
  * 缺失 memories-index.json 一律按默认值运行，不抛错（§9.3）。
  * 场景生效与否只由 index.active 决定（场景档案/模式也写这一份）。
  */
-export function resolveActiveScenes(index: RulesIndex, knownScenes: string[]): { active: Set<string>; mode: 'all' | 'custom' } {
+export function resolveActiveScenes(
+  index: RulesIndex,
+  knownScenes: string[],
+  /**
+   * 会话层覆盖的场景（0.21.2）：`string` = 只启用它；`null` = 钉住"没有场景"（只有
+   * `_shared` / `global` 两个恒常桶）；`undefined` = 跟随全局。
+   *
+   * 语义差别必须写清楚：索引的 `active` 是**全局**的当前场景（进场景模式会改写它），
+   * 而这里给的是"本会话用哪个场景"—— 只影响本会话看到什么，**不切运行时、不写 AGENTS.md**
+   * （决策 14）。所以它是纯投影参数，不参与任何写路径。
+   */
+  override?: string | null,
+): { active: Set<string>; mode: 'all' | 'custom' } {
+  if (override === null) {
+    return { active: new Set<string>([SHARED_GROUP, GLOBAL_SCENE]), mode: 'custom' }
+  }
+  if (override !== undefined) {
+    // 会话层是单选：一个场景 + 两个恒常保留桶。`mode` 报 custom —— 它不是"全部启用"。
+    const active = new Set<string>([override, SHARED_GROUP, GLOBAL_SCENE])
+    return { active, mode: 'custom' }
+  }
   const stored = normalizeActive(index.active)
   const mode: 'all' | 'custom' = stored === null ? 'all' : 'custom'
   const active = new Set<string>(stored === null ? knownScenes : stored)
@@ -68,9 +88,9 @@ export function resolveActiveScenes(index: RulesIndex, knownScenes: string[]): {
 }
 
 /** 当前启用的**非保留**场景（单选模型下至多一个；多个时按场景顺序取第一个）。 */
-export function enabledSceneOf(index: RulesIndex): string | null {
+export function enabledSceneOf(index: RulesIndex, override?: string | null): string | null {
   const names = Object.keys(index.scenes || {})
-  const { active } = resolveActiveScenes(index, names)
+  const { active } = resolveActiveScenes(index, names, override)
   const enabled = names
     .filter((n) => n !== SHARED_GROUP && n !== GLOBAL_SCENE && active.has(n))
     .sort((a, b) => sceneOrderOf(index, a) - sceneOrderOf(index, b) || a.localeCompare(b))

@@ -26,11 +26,11 @@ export function text(v: string) {
  * 注意放开的只是**可见性**：`subagent_manager_run` 仍然按完整两道闸判"能不能委派"，
  * 列出来 ≠ 可委派（回执里那句「人设不可用」照旧成立）。
  */
-export async function filterBySceneBinding(
+export function filterBySceneBinding(
   docs: PersonaDoc[],
   enabledSceneLists: string[][],
   includeUnavailable = false,
-): Promise<{ allowed: PersonaDoc[]; reason: string | null }> {
+): { allowed: PersonaDoc[]; reason: string | null } {
   const live = includeUnavailable ? docs : docs.filter((d) => d.enabled !== false)
   const bound = new Set(enabledSceneLists.flat())
   if (includeUnavailable || !bound.size) return { allowed: live, reason: null }
@@ -38,9 +38,57 @@ export async function filterBySceneBinding(
   return { allowed, reason: allowed.length ? null : `the enabled scene's subagent bindings: ${[...bound].join(', ')}` }
 }
 
+/**
+ * 本会话这一格怎么说（0.21.2）：四层并值（覆盖 → 场景层 → 基线）优先；层里没话说时按
+ * **全局口径**判（场景绑定 ∩ 全局启停）。
+ *
+ * 与旧版（0.21.2）的关键差别：那时的会话覆盖只能"关"（场景绑定先过滤、覆盖再过滤，
+ * 两者叠加），现在**能救回**场景绑定的排除项 —— 进入场景之后还想开什么就开什么。
+ */
+function decideInSession(
+  persona: PersonaDoc,
+  flag: ((name: string) => boolean | undefined) | undefined,
+  boundSet: ReadonlySet<string>,
+): boolean {
+  const f = flag ? flag(persona.name) : undefined
+  if (typeof f === 'boolean') return f
+  if (persona.enabled === false) return false
+  return boundSet.size === 0 || boundSet.has(persona.name)
+}
+
+/** 从 exec 取本会话的某一格解析（解析失败 = 跟随全局，绝不把异常抛给模型）。 */
+function flagOfExec(
+  resolve: ((exec: unknown) => ((name: string) => boolean | undefined) | undefined) | undefined,
+  exec: unknown,
+): ((name: string) => boolean | undefined) | undefined {
+  if (resolve === undefined) return undefined
+  try { return resolve(exec) } catch { return undefined }
+}
+
+/** 从 exec 取本会话的人设**原始覆盖表**（只用于"本会话显式关了几条"那句统计）。 */
+function overridesOfExec(
+  resolve: ((exec: unknown) => Record<string, boolean> | undefined) | undefined,
+  exec: unknown,
+): Record<string, boolean> | undefined {
+  if (resolve === undefined) return undefined
+  try { return resolve(exec) } catch { return undefined }
+}
+
 export function defineSubagentManagerListTool(subagents: {
   list(): Promise<PersonaDoc[]>
-  sceneLists(): Promise<string[][]>
+  /**
+   * 启用场景绑定的人设名单（每组 = 一个启用场景的档案 `subagents` 段）。
+   *
+   * `agent`（0.21.2）：会话钉住场景时取**那个场景**的绑定，而不是全局正在用的那个。
+   */
+  sceneLists(agent?: unknown): Promise<string[][]>
+  /**
+   * 本会话人设那一格的四层并值（0.21.2）。`undefined`（函数本身）= 没有会话层。
+   * 为什么按 `exec` 取而不是全局：会话层是**每个会话一套**，而这条工具是同一个注册实例。
+   */
+  flagFor?: (exec: unknown) => ((name: string) => boolean | undefined) | undefined
+  /** 本会话的**原始覆盖表**（0.21.2）：只用于"本会话显式关了几条"那句统计。 */
+  overridesFor?: (exec: unknown) => Record<string, boolean> | undefined
   /**
    * 预设注入边界提示（可选）。人设目录段在 persona complete 的预设下被压制，此时模型
    * 只看得到工具、看不到任何人设 —— 挂上这条提示，它才不会把「被压制」读成「插件没有
@@ -52,7 +100,7 @@ export function defineSubagentManagerListTool(subagents: {
     name: 'subagent_manager_list',
     // `depth-filtered` 删掉（2026-10-15 注入文本审查）：注入深度是**注入侧**的实现细节，
     // 模型看到的是"目录里有哪些人设"，`catalogDepth` 那个词对它没有任何可操作性。
-    description: 'List personas (pre-configured subagent profiles) with their descriptions. The "Current subagents" reminder carries a view of the same catalog; call this for the always-current full list, or pass all=true to include personas that are disabled or outside the active scene.',
+    description: 'List personas (pre-configured subagent profiles) with their descriptions. The "Current subagents" reminder carries a view of the same catalog; call this for the always-current full list, or all=true to include disabled personas and ones outside the active scene.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled personas and ones outside the active scene (default false). Listed ≠ delegable: `run` still refuses those.' },
     } as const,
@@ -63,7 +111,18 @@ export function defineSubagentManagerListTool(subagents: {
     async execute(args: unknown, exec: unknown) {
       const includeUnavailable = Boolean((args as { all?: unknown } | null)?.all === true)
       const docs = await subagents.list()
-      const { allowed, reason } = await filterBySceneBinding(docs, await subagents.sceneLists(), includeUnavailable)
+      const sceneLists = await subagents.sceneLists(exec)
+      const bound = filterBySceneBinding(docs, sceneLists, includeUnavailable)
+      // 会话层（0.21.2）：四层并值优先（本会话显式开的**能救回**场景绑定之外的人设），
+      // 层里没话说时按全局口径（场景绑定 ∩ 全局启停）判。`all=true` 放开可见性，
+      // 但仍逐条标出"现在不可委派"。
+      const flag = flagOfExec(subagents.flagFor, exec)
+      const overrides = overridesOfExec(subagents.overridesFor, exec)
+      const boundSet = new Set<string>(sceneLists.flat())
+      const allowed = includeUnavailable
+        ? docs
+        : docs.filter((p) => decideInSession(p, flag, boundSet))
+      const reason = allowed.length === 0 ? bound.reason : null
       // 这里**不再按深度过滤**（2026-09-17 用户裁定，方案 A）：`catalogDepth` 只决定常驻目录
       // 注入到哪些会话，与"能不能委派"无关 —— 委派由官方决定（`dsh-tool-subagent` 默认能嵌套
       // 到 3 层）。此前按深度过滤等于把可用人设藏起来：目录不注入时模型只能靠这个工具查，
@@ -72,7 +131,7 @@ export function defineSubagentManagerListTool(subagents: {
       // （与技能列表标 `shadowed-by:` 同一条理由 —— 列出来不等于能用）。
       const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(no description)') +
         (p.continuable === true ? CONTINUABLE_MARK : '') +
-        (includeUnavailable ? (p.enabled === false ? ' (disabled — turn it on first)' : '') : ''))
+        (includeUnavailable ? (!decideInSession(p, flag, boundSet) ? ' (disabled — turn it on first)' : '') : ''))
       // 默认口径下有多少个没列出来（停用的 + 不在启用场景里的）：不报的话，模型看到一份短名单
       // 会当成"本机只有这些人设"。数量照报，与另外三个 list 的表头同一口径。
       const hiddenCount = includeUnavailable ? 0 : docs.length - allowed.length
@@ -80,8 +139,18 @@ export function defineSubagentManagerListTool(subagents: {
       try {
         notice = typeof subagents.noticeFor === 'function' ? await subagents.noticeFor(exec) : ''
       } catch { notice = '' }
+      // 会话层（0.21.2，计划 §8.2「subagent_manager_list 按会话过滤」）：本会话关掉的人设
+      // 与全局停用**同形**（默认不列、all=true 标 disabled），但换个对话就回来了 ——
+      // 不说清的话，模型会把这份短名单当成「本机只有这些人设」。
+      const offHere = overrides === undefined
+        ? 0
+        : Object.keys(overrides).filter((name) => {
+          const doc = docs.find((d) => d.name === name)
+          return overrides[name] === false && doc !== undefined && doc.enabled !== false
+        }).length
       const header = 'persona subagents (' + allowed.length + ')' +
-        (hiddenCount > 0 ? ' (' + hiddenCount + ' more are disabled or outside the current scene; pass all=true to see them)' : '') + ':\n'
+        (hiddenCount > 0 ? ' (' + hiddenCount + ' more are disabled or outside the current scene; pass all=true to see them)' : '') +
+        (offHere > 0 ? ' (' + offHere + ' switched off here only)' : '') + ':\n'
       return header + (lines.join('\n') || '(none)') + (reason ? '\nnote: ' + reason : '') + notice
     },
   }
@@ -89,7 +158,10 @@ export function defineSubagentManagerListTool(subagents: {
 
 /** `subagent_manager_run` 的依赖：服务本体 + 场景绑定 + 按当前预设决定工具限制。 */
 export interface RunToolDeps extends SubagentService {
-  sceneLists(): Promise<string[][]>
+  /** 启用场景绑定的人设名单（`agent` 用于会话进入的场景，0.21.2）。 */
+  sceneLists(agent?: unknown): Promise<string[][]>
+  /** 本会话人设那一格的四层并值（0.21.2）：与 list 工具同一份判据。 */
+  flagFor?: (exec: unknown) => ((name: string) => boolean | undefined) | undefined
   /**
    * 按当前会话的 Agent 预设决定这次委派的工具限制（宿主侧实现：读预设名单 +
    * 枚举该预设的工具名，见 index.ts 的 subagentToolFilterFor）。
@@ -129,9 +201,9 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
     // 最贵的单个参数。收完两处重复后目标 ≈325 tok。判据是"删掉的那句在描述里已经有了吗"：
     // Modes 段留着（它是模型的入口），参数说明只留"这一段独有的信息"。
     // `inherit` 那句"轮中委派拿不到当前轮"必须留 —— 它是这条参数唯一会让人写错 task 的地方。
-    description: 'Run a named persona as a subagent: it gets the persona as its own system prompt, works on `task`, and returns only its final output. A persona marked `(continuable)` instead returns an agent id and runs in the background — continue it with `send_message`.\n\nModes: by default a fresh child that cannot see this conversation, so `task` must be self-contained. With `inherit: true` it also gets this conversation\'s **finished** turns (like the host\'s `subagent_fork`) — the current turn is never included, so a mid-turn hand-off still needs a self-contained `task`.\n\n`task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the "Current subagents" reminder (a review, an investigation, a piece of writing) and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
+    description: 'Run a named persona as a subagent: it gets the persona as its system prompt, works on `task`, and returns only its final output. A persona marked `(continuable)` returns an agent id and runs in the background — continue it with `send_message`.\n\nBy default the child cannot see this conversation, so `task` must be self-contained; `inherit: true` also hands it this conversation\'s **finished** turns (never the current one). `task` = the goal plus the context it needs; leave method and output format to the persona.\n\nUse it when the work matches a persona in the "Current subagents" reminder and the detail should not sit in your own context. Not for reading a file (Read), finding a definition (Grep/Glob), or touching two or three files.',
     parameters: {
-      agent: { type: 'string', required: true, description: 'Persona name — see the "Current subagents" reminder, or list personas with subagent_manager_list.' },
+      agent: { type: 'string', required: true, description: 'Persona name — see the "Current subagents" reminder.' },
       // `task` 的说明只留"这是什么"（2026-10-15 注入文本审查）：上面描述里那句
       // "leave method and output format to the persona." 此前在这里**逐字重复**了一遍
       // （57 字符），而模型填这个参数时两处都在手上 —— 同一件事付两次 token。
@@ -150,9 +222,20 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
       // 官方 SubagentStartRequest.parent 必填：调用方 agent 缺失时给结构化错误，不把 undefined 透传下去。
       if (!exec || !exec.agent) throw new Error('no caller agent (exec.agent is unavailable): cannot create a subagent run')
       const docs = await subagents.list()
-      const { allowed, reason } = await filterBySceneBinding(docs, await subagents.sceneLists())
+      const sceneLists = await subagents.sceneLists(exec)
+      const bound = filterBySceneBinding(docs, sceneLists)
+      // 会话层（0.21.2）：四层并值优先（本会话显式开的能救回场景绑定之外的人设）；
+      // 层里没话说时按全局口径（场景绑定 ∩ 全局启停）。看不见的人设**调不动** ——
+      // 否则会话层就等于只改了目录（决策 9 对 MCP 用的是同一条口径）。
+      const flag = flagOfExec(subagents.flagFor, exec)
+      const boundSet = new Set<string>(sceneLists.flat())
+      const allowed = docs.filter((p) => decideInSession(p, flag, boundSet))
+      const reason = allowed.length === 0 ? bound.reason : null
       const persona = allowed.find((p) => p.name === name)
       if (!persona) {
+        // 关掉的人设要单独说清 —— 否则模型会以为"这个人设不存在"，转而去编一个名字。
+        const offHere = docs.some((p) => p.name === name)
+        if (offHere) throw new Error('persona unavailable: ' + name + ' (turned off — here, by its global switch, or outside the active scene; the user can enable it)')
         const available = allowed.map((p) => p.name).join(', ') || '(none)'
         throw new Error('persona unavailable: ' + name + (reason ? ' (' + reason + ')' : ' (available: ' + available + ')'))
       }

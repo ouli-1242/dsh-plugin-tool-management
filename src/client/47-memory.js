@@ -82,9 +82,13 @@
             })
           }
 
+          // 本页订阅当前层（0.21.2）：逐条开关的生效值与来源都跟着层走。
+          var scopeState = useScopeLayer()
+          /** 取数用的会话 id：全局层传空串（= 服务端按全局口径算）。 */
+          function scopeSessionId() { return scopeIsSession() ? scopeState.sessionId : '' }
           function refresh(silent) {
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
-            apiCall('rules-list', {}).then(function (r) {
+            apiCall('rules-list', { sessionId: scopeSessionId() }).then(function (r) {
               if (r && r.ok) {
                 // 合并式更新：只覆盖本页由 rules-list 驱动的字段，其余 state 键保持不变。
                 // `anyLocked` / `activeScene` 必须一起合并 —— 它们此前**从没被写进 state**
@@ -108,7 +112,9 @@
               setData(function (prev) { return Object.assign({}, prev, { loading: false, error: errMsg(e), rules: [], scenes: [], activeMode: 'all', sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS, warnings: [] }) })
             })
           }
-          React.useEffect(function () { refresh() }, [])
+          // 切层要重取：逐条记忆的生效值由服务端按 `sessionId` 投影（见 refresh）。
+          // 同一层里进 / 退场景、清覆盖也会改投影（场景记忆预览、activeScene）→ 修订号一起进依赖。
+          React.useEffect(function () { refresh() }, [scopeState.sessionId, scopeState.revision])
 
           // 成功提示自动消失（2.6s）：浮层只是「刚做完什么」的短暂回执，不该长期占屏。
           // 错误（ok === false）不自动清理，一直留到下一次操作把它替换掉。
@@ -231,6 +237,18 @@
           function toggleRule(rule) {
             if (busy) return
             setBusy(true); setResult(null)
+            // 会话作用域（0.21.2）：会话层只改"本会话注入不注入"，索引里那条记录不动。
+            if (scopeIsSession()) {
+              var nextOn = rule.enabled === false
+              scopeWriteFlag('memory', String(rule.id), nextOn, function () { return { ok: true } })
+                .then(function (res) {
+                  setBusy(false)
+                  if (res && res.ok) { setResult({ ok: true, text: nextOn ? t('done.enabled', { name: rule.name }) : t('done.disabled', { name: rule.name }) }); refresh(true) }
+                  else setResult({ ok: false, text: translateError(t, res) })
+                })
+                .catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+              return
+            }
             apiCall('rules-toggle', { id: rule.id, enabled: rule.enabled === false }).then(function (res) {
               setBusy(false)
               // 回执动词表（REDESIGN §12.4）：两个方向各取字面量键，不合成三元选词。
@@ -261,10 +279,17 @@
             var done = 0
             var failed = null
             var chain = Promise.resolve()
+            // 会话作用域（0.21.2）：会话层逐条写 `scope-set`，不碰索引 —— `rules-toggle` 改的是
+            // 全局启停名单，用它承接批量按钮就是「本会话全关、别的对话一起被关了」（决策 10）。
+            var writeOne = function (id, value) {
+              return scopeIsSession()
+                ? scopeWriteFlag('memory', String(id), value, function () { return { ok: true } })
+                : apiCall('rules-toggle', { id: id, enabled: value })
+            }
             list.forEach(function (id) {
               chain = chain.then(function () {
                 if (failed) return null
-                return apiCall('rules-toggle', { id: id, enabled: on }).then(function (res) {
+                return writeOne(id, on).then(function (res) {
                   if (res && res.ok) done += 1
                   else failed = translateError(t, res)
                 }).catch(function (e) { failed = errMsg(e) })
@@ -288,7 +313,7 @@
                   enabled: on ? enabledMemoryCount(data.rules) + pre.length : enabledMemoryCount(data.rules) - pre.length,
                 }),
                 items: pre,
-                revert: function (item) { return apiCall('rules-toggle', { id: item.id, enabled: item.on }) },
+                revert: function (item) { return writeOne(item.id, item.on) },
                 scope: scope || null,
               })
               refresh(true)
@@ -537,15 +562,26 @@
               : null
             return React.createElement(ListRow, {
               key: r.id,
-              dots: attention ? [] : [React.createElement(StatusDot, { key: 'dot', tone: statusKey === 'status.enabled' ? 'ok' : 'idle', title: t(statusKey) })],
+              // 会话作用域（0.21.2）：点 = **这一层**开不开（与开关同值）；「来源」只在开着时染色。
+              // 全局层维持原来的状态词（场景里被关的那条仍说 sceneOff）。
+              dots: attention ? [] : [(function () {
+                var flag = scopeFlag('memory', String(r.id), enabled)
+                var onHere = scopeIsSession() ? flag.value : statusKey === 'status.enabled'
+                var titleKey = onHere ? 'status.enabled' : (scopeIsSession() ? 'memory.status.off' : statusKey)
+                return React.createElement(StatusDot, { key: 'dot', tone: onHere ? 'ok' : 'idle', scoped: onHere && flag.scoped, title: t(titleKey) })
+              })()],
               name: r.name,
-              // 名称旁两枚量值：体积 + 附件数（2026-10-16 从描述那一行挪上来，用户：
-              // 「一个图标加一个数字就行，在 145 B 旁边」）。都只报量、细节进 title。
-              nameAfter: qtyBits(sizeTag, attachNode),
+              // 纯视图域的会话覆盖计数（0.21.2）：有几个对话单独拨过这一条记忆。
+              // 与技能 / MCP 的真租约不同 —— 记忆没有要落地的运行态，文案因此分开。
+              nameAfter: qtyBits(leaseTag({ t: t, domain: 'memory', key: String(r.id), runtime: false }), sizeTag, attachNode),
               tag: attention ? React.createElement(StatusTag, { tone: statusTone, text: t(statusKey) }) : null,
               meta: metaBits,
               extra: shadowed ? React.createElement('div', { className: 'dsm-rule-shadow-hint' }, t('memory.shadowed.hint')) : null,
-              side: React.createElement(Switch, { on: enabled, disabled: busy || shadowed || anyLocked, label: t('memory.enable') + ' ' + r.name, onClick: function () { toggleRule(r) } }),
+              // 会话作用域（0.21.2）：会话层下这一格表示"本会话注入不注入它"；来源看行首那颗点。
+              side: (function () {
+                var flag = scopeFlag('memory', String(r.id), enabled)
+                return React.createElement(Switch, { on: flag.value, scoped: flag.scoped, disabled: busy || shadowed || scopeWriteLocked(anyLocked), label: t('memory.enable') + ' ' + r.name, onClick: function () { toggleRule(r) } })
+              })(),
               // 行内只留开关这一颗常驻控件（用户 2026-10-16：「记忆看起来很乱」→ 选定
               // 「编辑 / 删除收进 ⋯ 菜单」）：原先每行三颗、删除常年红描边，一屏六条就是
               // 六个红框。删除仍在菜单里用红字标出，但不再占行内的视觉重量。
@@ -601,7 +637,7 @@
                 React.createElement('div', { className: 'dsm-source-actions' },
                   // 每个场景一张卡：卡内的「全选 / 取消全选」只作用于**这张卡里的**记忆
                   // —— 用户说的「记忆的不同场景都缺少全选清空」。
-                  isOrphan || !bucket.rules.length ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: busy || anyLocked || !cardToggles.length, onClick: function () { setMemories(cardToggles, !cardAllOn, 's:' + name) } }, bulkPair(cardAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), cardAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
+                  isOrphan || !bucket.rules.length ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: busy || scopeWriteLocked(anyLocked) || !cardToggles.length, onClick: function () { setMemories(cardToggles, !cardAllOn, 's:' + name) } }, bulkPair(cardAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), cardAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
                   // 卡内的「新建记忆」是写盘动作，锁定态必须置灰（用户 2026-10-12：
                   // 「场景锁定情况下新建记忆应该也是灰色的，不能点击」）—— 原先这里只看了 busy。
                   isOrphan ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || anyLocked, onClick: function () { openCreate(name) } }, t('memory.scene.new')))),
@@ -666,15 +702,16 @@
                 // 「全选」从工具条搬到页头、紧挨回收站左侧（用户 2026-10-12：「全选移到回收站
                 // 旁边」）。它管的是列表，但和「回收站」一样是**整页范围**的动作，跟其余页头键
                 // 同排读起来才成组；留在工具条会把搜索行挤窄，而那一行现在要让给搜索框。
-                React.createElement('button', { key: 'bulk', type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy || anyLocked || !bulkIds.length, onClick: function () { setMemories(bulkIds, !bulkAllOn, null) } }, bulkPair(bulkAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), bulkAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
+                React.createElement('button', { key: 'bulk', type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy || scopeWriteLocked(anyLocked) || !bulkIds.length, onClick: function () { setMemories(bulkIds, !bulkAllOn, null) } }, bulkPair(bulkAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), bulkAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
               ],
             }),
             // 两条横幅（与 MCP / 技能 / 子智能体页同源、同位置、同顺序）：
             // 锁定时只留锁定那条 —— 冻结期间"改动会同步写进场景档案"是句空话，两条并排
             // 还会互相矛盾（用户 2026-09-19 指出：锁定时长的场景提示没必要出现）。
-            anyLocked ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
-            (!anyLocked && sceneName) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
+            anyLocked && !scopeIsSession() ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
+            // 会话层不显示（同 MCP 页）：本层开关写的是会话覆盖，不同步档案。
+            (!anyLocked && sceneName && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
             // 工具条（REDESIGN §3.3 + §6 备注，切片四换共享 Toolbar）：搜索 + 场景筛选住 children。
             // batch 槽已空 —— 「全选」上移页头（挨着回收站），预算上移统计格；空槽不传，
             // 免得渲染出一个没有内容的 .dsm-toolbar-batch 把搜索框往里挤。

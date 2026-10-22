@@ -38,6 +38,13 @@ export function buildSceneRecordOps(rc: MemoriesOpsCtx) {
    * 场景名按放宽后的规则校验；不存在的场景名也允许保存（目录随后创建即可生效）。
    */
   async function rulesSetActive(args: any): Promise<any> {
+    // 会话层切换**不走这里**（0.21.2，决策 14）：本 op 改的是索引里的全局 `active`，还会
+    // 触发场景模式的运行时应用（见 ops/scene-sync.ts 与 index.ts 的包装）。会话层切场景
+    // 只改"本会话看到什么" —— 不切运行时、不写 AGENTS.md、不碰全局 active。
+    // 带着 sessionId 调过来必须当场拒绝：静默切全局正是"A 切场景，B 也跟着变"的成因。
+    if (args && typeof args.sessionId === 'string' && args.sessionId.trim() !== '') {
+      return fail('error.rules.sessionScopeWrite', '会话层场景请走 scope-set（本 op 改的是全局当前场景，会切换运行时）')
+    }
     // 参数必须显式二选一。旧实现把「没传参数」「传了未知参数名」都落进 else 分支、
     // 用空数组覆盖 active，于是 `rules-set-active {}` 会静默把模式切成 custom 且零激活场景
     // （用户以为自己只是"没改动"，实际已经改了注入范围）。这里显式拒绝。

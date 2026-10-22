@@ -9,12 +9,43 @@ import type { createQuickPromptsService } from '../prompts/quick-service.js'
 
 type QuickServiceLike = ReturnType<typeof createQuickPromptsService>
 
-export function buildQuickPromptOps(quick: QuickServiceLike): Record<string, (args: any) => Promise<any>> {
+export interface QuickPromptOpsDeps {
+  /**
+   * 某个会话某一格的**四层并值**（0.21.2）：覆盖 → 场景层 → 基线 → `undefined`（= 跟随全局）。
+   * `undefined`（函数本身）= 没有会话层。逐条问它 —— 清单本身就是全集，不需要另建一份。
+   */
+  flagFor?: (sessionId: string) => ((key: string) => boolean | undefined) | undefined
+}
+
+export function buildQuickPromptOps(
+  quick: QuickServiceLike,
+  deps: QuickPromptOpsDeps = {},
+): Record<string, (args: any) => Promise<any>> {
+  const flagFor = (sessionId: string): ((key: string) => boolean | undefined) | undefined =>
+    deps.flagFor === undefined ? undefined : deps.flagFor(sessionId)
   const text = (args: any, key: string): string | undefined =>
     args && typeof args[key] === 'string' ? String(args[key]) : undefined
   return {
     // 列表连正文一起回（客户端点用时手里就得有那段字，见 quick-service.ts 头注）。
-    'quickprompt-list': async () => quick.list(),
+    //
+    // 会话层：给了 `sessionId` 就按本会话的生效值算 `enabled`（并额外带 `globalEnabled` /
+    // `overridden`）。**只改这一条回执里的值** —— 侧车里的 `meta.json` 一个字不动，
+    // 别的会话读到的仍是全局值。
+    'quickprompt-list': async (args: any) => {
+      const sessionId = args && typeof args.sessionId === 'string' ? args.sessionId.trim() : ''
+      const res = await quick.list()
+      if (sessionId === '' || !res || res.ok === false) return res
+      const resolver = flagFor(sessionId)
+      if (resolver === undefined) return res
+      return {
+        ...res,
+        prompts: res.prompts.map((row) => {
+          const over = resolver(String(row.id))
+          if (typeof over !== 'boolean') return row
+          return { ...row, enabled: over, globalEnabled: row.enabled, overridden: true }
+        }),
+      }
+    },
     'quickprompt-create': (args: any) => quick.create(
       String((args && args.id) || ''),
       text(args, 'content') ?? '',

@@ -27,7 +27,7 @@
 // `resolveMaskedKv({}, 旧值)` 把整份 headers / env 静默清空、连 warning 都不给。
 
 import { DEFAULT_MCP_NOTE_MAX_LENGTH, normalizeMcpNote } from '../mcp/state-section.js'
-import { text, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, globalActionNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, text, type ToolDomainDeps } from './deps.js'
 
 export interface McpToolDeps extends ToolDomainDeps {
   /** MCP 列表视图（含备注、已打码）。 */
@@ -40,6 +40,11 @@ export interface McpToolDeps extends ToolDomainDeps {
   mcpmAdd(args: any): Promise<any>
   mcpmEdit(args: any): Promise<any>
   mcpmNote(args: { id: string; note: string }): Promise<any>
+  /**
+   * 某台服务器在本会话里是不是隐藏的（0.21.2）：默认口径下与全局停用同形（不列），
+   * `all=true` 时列出来并标注。同步 —— 覆盖表与场景档案都有各自的缓存。
+   */
+  sessionHiddenServer?(agent: unknown, serverName: string): boolean
 }
 
 /** 「去看清单」那句：`mcp_manager_list` 不在模型手里时不能点名它（调用方按 `toolVisibleFor` 决定给不给）。 */
@@ -112,7 +117,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
     //      备注 / 停用不进），而那段 reminder 每轮就在模型上下文里，它自己看得到；
     //   ② `where loader:on:<phase> is the loader's current phase` —— 用自己解释自己
     //      （phase 就是 phase），零信息。字段名本身留在输出里，模型照抄即可。
-    description: 'List configured MCP servers (level project|global; enabled state; live loader status; tool count excluding switched-off tools; user hint). The "Current MCP servers" reminder is a filtered view; this tool is the raw one — defaults to enabled servers, all=true for every configured one. Pass tools=true to list each server\'s tool names.',
+    description: 'List configured MCP servers (level, enabled state, loader status, tool count excluding switched-off ones, hint). The "Current MCP servers" reminder is a filtered view; this is the full one — all=true also includes disabled servers. Pass tools=true for each server\'s tool names.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled servers (default false).' },
       tools: { type: 'boolean', description: 'Also list each server\'s tool names, marking the switched-off ones (default false).' },
@@ -130,14 +135,40 @@ export function buildMcpTools(deps: McpToolDeps): void {
       const all: any[] = r.rows || []
       // 默认只列「已启用」的（用户裁定 2026-09-16，与技能 / 记忆列表同口径）：停用的服务器
       // 模型调不到，列出来只是噪音。表头给出全量口径，所以不会变成盲区。
-      const shown = showAll ? all : all.filter((x: any) => !x.disabled)
+      // 会话层（0.21.2）：本会话隐藏的服务器 —— 它们**此刻一条工具都调不到**，与全局停用同形。
+      // 默认口径下按停用处理（不列）；`all=true` 时列出来并标注，否则模型会以为这台服务器不存在。
+      // 逐行问谓词（0.21.2）：行数组就是全集，判据（覆盖 → 场景层 → 基线）在 index.ts 一份。
+      const offHere = new Set<string>()
+      if (deps.sessionHiddenServer) {
+        for (const x of all) {
+          if (deps.sessionHiddenServer(exec && exec.agent, String(x.serverName))) offHere.add(String(x.serverName))
+        }
+      }
+      const isOff = (x: any): boolean => x.disabled === true || offHere.has(String(x.serverName))
+      const shown = showAll ? all : all.filter((x: any) => !isOff(x))
       const lines: string[] = []
       for (const x of shown) {
         const note = normalizeMcpNote(x.notes, DEFAULT_MCP_NOTE_MAX_LENGTH)
         // 工具数 = 可用数（停用表扣减后）：段里给模型的是同一个口径，模型据此与
         // 自己 schema 里的 `mcp__*` 工具对得上；被场景收窄 / 手动关掉的工具不算。
         const usableTools = typeof x.enabledToolCount === 'number' ? x.enabledToolCount : x.toolCount
-        lines.push('server:' + x.serverName + ' | level:' + x.level + ' | ' + (x.disabled ? 'disabled' : 'enabled') +
+        // 「本会话关掉」必须与「全局停用」分开说：前者换个对话就回来了，后者要改配置。
+        // 0.21.2 起还有第三种：**全局意图 off、但本会话认领着它**（租约）—— 对这里调用
+        // 模型的那个会话来说它是可用的，但别的对话看不到；不说清就会被读成"全局开着"。
+        const serverName = String(x.serverName)
+        const globalOn = x.intent === 'blocked' ? false : (typeof x.globalOn === 'boolean' ? x.globalOn : x.disabled !== true)
+        const sessionOff = offHere.has(serverName)
+        const leases = typeof x.leaseCount === 'number' ? x.leaseCount : 0
+        const state = x.intent === 'blocked'
+          ? 'stopped-machine-wide (every conversation)'
+          : !globalOn
+            ? (sessionOff
+              ? 'disabled-globally' + (leases > 0 ? ' (kept running by ' + leases + ' conversation(s))' : '')
+              : 'enabled-in-this-conversation (global: off' + (leases > 0 ? ', kept running by ' + leases + ' conversation(s)' : '') + ')')
+            : sessionOff
+              ? 'off-here (global: enabled)'
+              : 'enabled'
+        lines.push('server:' + x.serverName + ' | level:' + x.level + ' | ' + state +
           (x.live ? ' | loader:' + (x.live.enabled ? 'on' : 'off') + (x.live.phase ? ':' + x.live.phase : '') : '') +
           (typeof usableTools === 'number' ? ' | tools:' + usableTools : '') +
           (note ? ' | user-hint:' + note : ''))
@@ -154,10 +185,18 @@ export function buildMcpTools(deps: McpToolDeps): void {
         }
         lines.push('    tools: ' + items.map((it: any) => it.name + (it.enabled === false ? ' (off)' : '')).join(', '))
       }
+      // 会话层（0.21.2，计划 §8.2「mcp_manager_list 标注本会话可见性」）：本会话停用的服务器
+      // 与全局停用**同形**（默认不列、all=true 标注），但两者的含义完全不同 —— 前者换个对话
+      // 就回来，后者要改配置。表头点一句，模型才不会把这份清单当成"这台机器的配置"。
+      const sessionLine = offHere.size === 0
+        ? ''
+        : '\n' + offHere.size + ' server(s) are switched off here (' +
+          [...offHere].join(', ') + ') — the connection is still up, and conversations outside this scope keep them.\n'
       const header = 'MCP servers: ' + (showAll
         ? all.length + ' configured'
         : shown.length + ' enabled of ' + all.length + ' configured' +
-          (shown.length === all.length ? '' : ' (pass all=true for every configured server)')) + '\n'
+          (shown.length === all.length ? '' : ' (pass all=true for every configured server)')) +
+        (sessionLine === '' ? '\n' : sessionLine)
       // 注入边界：压制型预设（persona complete / 关闭运行时上下文，如极简）下本插件
       // 默认不注入 —— 模型只有 mcp__* 的工具名与参数，没有服务级信息。不说明的话，
       // 模型会把「能调用这些工具」当成「已经知道有哪些 server、用户给它们写了什么备注」。
@@ -172,32 +211,58 @@ export function buildMcpTools(deps: McpToolDeps): void {
     // 让它在三个动词里选一个，比让它猜两个布尔的组合省一次往返。
     // `restart` 的含义只在 `action` 参数里说一次（2026-10-15 注入文本审查）：描述里那句
     // "(reconnects and re-syncs tools)" 与参数说明逐字重复，而模型读参数时两处都在手上。
-    description: 'Turn one configured MCP server on or off, or restart it. Pass `tool` to switch just that tool. Blocked while the active scene is locked — except restart, which is the recovery path. Only when the user asks or approves.',
+    description: 'Turn one MCP server on or off, restart it, or stop it machine-wide; pass `tool` to target named tools on it. `off` leaves a server running while any conversation still uses it, `stop` ends it for them too. Blocked while the active scene is locked, except restart (the recovery path). Only when the user asks or approves.',
     parameters: {
       // 出口必须指向**常驻**来源，不能指向 `mcp_manager_list`（2026-10-14 对抗性审查 P0-1）：
       // 那条工具在出厂默认里就是关着的，`listHint()` 在它不可见时返回空串，于是猜错名字时的
       // 报错退化成「没有这台服务器：<你猜的>」—— 一个字都不告诉它还能去哪看。
       // 指向模型自己的工具表（`mcp__<server>__<tool>` 就在它的 schema 里）与常驻注入段，
       // 这两条**不需要任何工具可见**就成立。
-      server: { type: 'string', required: true, description: 'Server name, as it appears in your own `mcp__<server>__<tool>` tool names (the "Current MCP servers" reminder lists the usable ones).' },
-      action: { type: 'string', required: true, enum: ['on', 'off', 'restart'], description: 'on = enable, off = disable, restart = reconnect and re-sync tools.' },
+      server: { type: 'string', required: true, description: 'Server name — the one in your own `mcp__<server>__<tool>` names.' },
+      action: { type: 'string', required: true, enum: ['on', 'off', 'restart', 'stop'], description: 'on = enable, off = disable, restart = reconnect and re-sync tools, stop = disable and disconnect anything still using it.' },
       level: { type: 'string', description: 'project or global — only to disambiguate same-name servers.' },
-      tool: { type: 'string', description: 'One tool name on that server (no mcp__ prefix). Only for on/off.' },
+      // 支持数组（2026-10-21 审查 P2-3）：关 8 个工具原本要 8 次调用，每次都带着整份工具表
+      // 重新推理一遍 —— 那是这份工具集里最贵的开销，而工具描述本身只占百分之几。
+      tool: { type: 'array', items: { type: 'string' }, description: 'Tool name(s) on that server (no mcp__ prefix) — one or several. Only for on/off.' },
+      // 决策 10（2026-10-19）：默认只改**这个对话**，别的对话不受影响。写全局要显式说明。
+      // 0.21.2：开启一台机器级关着的服务器时，那一步在全局发生（连接是进程级的）—— 租约
+      // 这个词一句带过就够，别的对话看不到它。
+      scope: { type: 'string', enum: ['session', 'global'], description: scopeSessionDesc('a server it turns on runs as a lease, invisible outside that scope (isolation on only). global = every conversation (off keeps leased connections running, stop cuts them). restart / stop are always global.') },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
       const action = String((args && args.action) || '')
-      if (action !== 'on' && action !== 'off' && action !== 'restart') {
-        throw new Error('action must be on / off / restart (got: ' + (action || '(empty)') + ')')
+      if (action !== 'on' && action !== 'off' && action !== 'restart' && action !== 'stop') {
+        throw new Error('action must be on / off / restart / stop (got: ' + (action || '(empty)') + ')')
       }
       const server = String((args && args.server) || '').trim()
-      const tool = args && args.tool !== undefined ? String(args.tool).trim() : ''
-      if (tool !== '' && action === 'restart') {
-        throw new Error('restart is a whole-server action (off, wait for it to drop, then back on at its previous state); a single tool cannot be restarted')
+      // 单值仍然接受（旧提示词 / 手写调用），数组是新增的批量形态。
+      const rawTool = args && args.tool !== undefined && args.tool !== null ? args.tool : undefined
+      const tools: string[] = (Array.isArray(rawTool) ? rawTool : rawTool === undefined ? [] : [rawTool])
+        .map((t: any) => String(t).trim())
+        .filter((t: string) => t !== '')
+      if (tools.length > 0 && (action === 'restart' || action === 'stop')) {
+        throw new Error('restart and stop are whole-server actions (' + (action === 'stop' ? 'stopping cuts off every conversation using it' : 'off, wait for it to drop, then back on at its previous state') + '); a single tool cannot be ' + action + 'ped')
       }
+      // 决策 10：默认写**本会话**（别的对话不受影响），`scope: "global"` 才改补丁。
+      // 两条边界决定了这里的分支：
+      //   · restart 是进程级动作（要真停一次再起），没有会话版本 —— 永远走全局；
+      //   · 会话层写不碰补丁、不进场景档案，所以不需要冻结守卫与 syncSwitchToScene
+      //     —— 例外是"在本会话里打开一台全局关着的服务器"：连接是进程级的，那一步把它
+      //     作为本会话的租约跑起来（见下面的 sessionOnly 分支）。
+      const scope = effectiveScope(deps, args)
+      // 调用方是否**以为**自己在改会话层（省略 scope 也算）。全局粒度下这个以为会落空，
+      // 回执必须点出来 —— 否则 agent 会把"机器级改动"转述成"只影响这个对话"。
+      const askedForSession = (args && args.scope) !== 'global'
+      // restart 与 stop 都是机器级动作（重启要真停一次；彻底停止定义上就压过所有会话），
+      // 没有会话版本 —— 与 restart 同一条，忽略 scope 并如实点出来。
+      const sessionOnly = scope !== 'global' && action !== 'restart' && action !== 'stop'
       // on|off 会写补丁（`mcpm-set-enabled` / `mcpm-tool-enabled` 在登记表里是 frozen），
       // 所以过场景冻结守卫；restart 不过 —— 它是锁定期间唯一的恢复入口（见文件头）。
-      if (action !== 'restart') {
+      // 会话层写入（`sessionOnly`）也不被场景锁挡住：它写的是侧车，与全局状态无关
+      // （决策 11，与面板的 `scopeWriteLocked()` 同口径）。那个"租约跑起来"的例外
+      // 同样不受场景锁管：它是进入本会话的前置条件，不是一次独立的全局配置改动。
+      if (action !== 'restart' && !sessionOnly) {
         const blocked = await deps.lockedSceneGuard()
         if (blocked) throw new Error(blocked)
       }
@@ -206,26 +271,97 @@ export function buildMcpTools(deps: McpToolDeps): void {
       const level = args && args.level !== undefined ? String(args.level) : undefined
       const row = locate(list.rows || [], server, level, listHint(exec && exec.agent))
       const enabled = action === 'on'
+      if (sessionOnly) {
+        const setter = deps.sessionScopeSet
+        if (setter === undefined) throw new Error('per-conversation switches are unavailable in this host: pass scope="global" to change the config for every conversation')
+        // 开启一台全局关着的服务器时，op 侧把它作为本会话的租约跑起来（连接是进程级的，
+        // 没有会话版本）—— 用户裁定「仍按租约运行」。那一步的影响由回执里的 `warnings`
+        // 如实带出来（哪些临时跑起来了），这里不重写一份判定。
+        const one = async (domain: 'mcp' | 'mcpTools', key: string): Promise<any> => {
+          const r = await setter(exec && exec.agent, domain, key, enabled)
+          if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to switch this here')
+          return r
+        }
+        const globalNote = ' Pass scope="global" to change it for every conversation.'
+        // 回执必须说清写的是哪一层：用户看到「已停用」而全局其实没变时，才不会以为别的对话也变了。
+        // 措辞用 `scopeOnlyNote()`（不再写死「本对话」，见 2026-10-21 审查 P0-1）。
+        if (tools.length === 0) {
+          const r = await one('mcp', String(row.serverName))
+          const warnings = r.warnings !== undefined && r.warnings.length > 0 ? '\n' + r.warnings.join('\n') : ''
+          return 'OK: ' + String(row.serverName) + ' now ' + (enabled ? 'enabled' : 'disabled') + scopeOnlyNote() +
+            (r.cleared === true ? ' (that matches what this scope would see anyway, so the override was removed)' : '') + warnings +
+            (warnings === '' ? '\nThe global setting is unchanged; conversations outside this scope keep theirs.' : '') + globalNote
+        }
+        let cleared = 0
+        const warningsAll: string[] = []
+        for (const t of tools) {
+          const r = await one('mcpTools', String(row.serverName) + '/' + t)
+          if (r.cleared === true) cleared += 1
+          if (r.warnings !== undefined) warningsAll.push(...r.warnings)
+        }
+        const what = tools.length === 1
+          ? 'tool ' + tools[0] + ' on ' + String(row.serverName)
+          : tools.length + ' tools on ' + String(row.serverName) + ' (' + tools.join(', ') + ')'
+        const warnings = warningsAll.length > 0 ? '\n' + warningsAll.join('\n') : ''
+        return 'OK: ' + what + ' now ' + (enabled ? 'enabled' : 'disabled') + scopeOnlyNote() +
+          (cleared === tools.length ? ' (that matches what this scope would see anyway, so the overrides were removed)' : '') + warnings +
+          (warnings === '' ? '\nThe global setting is unchanged; conversations outside this scope keep theirs.' : '') + globalNote
+      }
 
-      if (tool !== '') {
-        const r: any = await deps.mcpmToolEnabled({ serverName: String(row.serverName), tool, enabled })
-        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to switch this tool')
-        // 与面板同一条同步：`mcpm-tool-enabled` 在登记表里带 syncsArchive，漏了就是
-        // "页面拨的进档案、模型拨的不进"。
-        const syncErr = await deps.syncSwitchToScene('mcpm-tool-enabled', { serverName: String(row.serverName), tool, enabled })
+      // 走到这里说明这次是**全局**动作：显式 scope="global"、restart / stop（它们没有
+      // 会话版本），或者隔离被关掉了（全局粒度）。默认值是 session，所以模型很可能以为
+      // 自己在改本会话；不点一句就是一次静默的「改了全局」。
+      const scopeIgnored = action === 'restart'
+        ? '\nnote: this one is global (a restart has no per-conversation version); every conversation is affected.'
+        : action === 'stop'
+          ? '\nnote: stop is global — it ends the server even for conversations still using it.'
+          : (scope === 'global' && askedForSession ? isolationOffNote(deps) : '')
+      if (tools.length > 0) {
+        // 批量时逐条写、逐条同步场景档案；任一失败就抛，回执里说清是哪一条。
+        const syncErrs: string[] = []
+        for (const t of tools) {
+          const r: any = await deps.mcpmToolEnabled({ serverName: String(row.serverName), tool: t, enabled })
+          if (!r || r.ok === false) throw new Error('failed to switch tool ' + t + ': ' + ((r && r.error) || 'unknown error'))
+          // 与面板同一条同步：`mcpm-tool-enabled` 在登记表里带 syncsArchive，漏了就是
+          // "页面拨的进档案、模型拨的不进"。
+          const syncErr = await deps.syncSwitchToScene('mcpm-tool-enabled', { serverName: String(row.serverName), tool: t, enabled })
+          if (syncErr) syncErrs.push(tools.length === 1 ? String(syncErr) : t + ': ' + String(syncErr))
+        }
         // 整台停用时，工具级开关在运行时本来就不生效（那个工具压根不存在）—— 不说的话
         // 模型会以为已经生效。与记忆族"启用了一条不在启用场景里的记忆"同一条理由。
         const offNote = row.disabled ? ' (note: the whole server is off right now, so this tool-level switch only takes effect once the server is on)' : ''
-        return 'OK: ' + String(row.serverName) + ' tool ' + tool + ' now ' + (enabled ? 'enabled' : 'disabled') + offNote +
-          (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '')
+        const what = tools.length === 1
+          ? 'tool ' + tools[0]
+          : tools.length + ' tools (' + tools.join(', ') + ')'
+        return 'OK: ' + String(row.serverName) + ' ' + what + ' now ' + (enabled ? 'enabled' : 'disabled') + offNote +
+          (syncErrs.length > 0 ? '\nWARN: the current scene archive was not synced (' + syncErrs.join('; ') + ')' : '') + scopeIgnored
       }
 
       if (action === 'restart') {
         const r: any = await deps.mcpmRestart({ id: row.id, level: row.level })
         if (!r || r.ok === false) throw new Error((r && r.error) || 'restart failed')
-        return 'OK: ' + String(row.serverName) + ' (' + row.level + ') restarted'
+        return 'OK: ' + String(row.serverName) + ' (' + row.level + ') restarted' + scopeIgnored
       }
 
+      // 全局开关 = **意图**（0.21.2）：off 不再立刻停 —— 还在用它的会话会按租约继续跑，
+      // 只有 stop（blocked）会连它们一起切断。直接写补丁会让"谁也看不到"与"连接停不停"
+      // 变成同一件事，那正是会话级开启串到新会话里的根源。
+      if (deps.scopeIntentSet) {
+        const value: 'on' | 'off' | 'blocked' = action === 'stop' ? 'blocked' : enabled ? 'on' : 'off'
+        // 这一条走的是 handlers 表（与面板同一条路径）：场景档案同步由那层包装做，
+        // 回执里的 `sceneSyncError` 才是"档案没跟上"的真相。
+        const r = await deps.scopeIntentSet('mcp', [String(row.serverName)], value)
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to switch this server')
+        const syncErr = r.sceneSyncError ? String(r.sceneSyncError) : null
+        const warnings = r.warnings !== undefined && r.warnings.length > 0 ? '\n' + r.warnings.join('\n') : ''
+        const what = action === 'stop'
+          ? 'stopped machine-wide (every conversation, including any that still had it on)'
+          : enabled
+            ? 'enabled for every conversation'
+            : 'disabled globally (conversations already using it keep the connection until none does; use stop to cut them off now)'
+        return 'OK: ' + String(row.serverName) + ' (' + row.level + ') now ' + what + warnings +
+          (syncErr ? '\nWARN: the current scene archive was not synced (' + syncErr + ')' : '') + scopeIgnored
+      }
       const r: any = await deps.mcpmSetEnabled({ id: row.id, level: row.level, enabled })
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to switch this server')
       // 场景未锁定时，页面 / 模型改的开关都要落进当前场景的档案（与 handlers 层同一套同步）。
@@ -236,26 +372,30 @@ export function buildMcpTools(deps: McpToolDeps): void {
   }))
   register(defineTool({
     name: 'mcp_manager_save',
-    description: 'Add a new MCP server, or update the one with this name — the receipt says which. Omitted fields keep their current values, so never restate the whole server. Pass `hint` to add a usage hint or fallback note. Blocked while the active scene is locked. Only on the user\'s instruction.',
+    description: 'Add a new MCP server, or update the one with this name — the receipt says which. Omitted fields keep their current values, so never restate the whole server. Pass `hint` for a usage note. Blocked while the active scene is locked. Only on the user\'s instruction.',
     parameters: {
       server: { type: 'string', required: true, description: 'Server name (1-32 chars, [A-Za-z0-9_-]) — the name the mcp__<server>__ tools use.' },
-      transport: { type: 'string', description: 'streamable-http or stdio. Required when creating; omit = keep.' },
-      url: { type: 'string', description: 'Server URL (streamable-http). Omit = keep.' },
-      command: { type: 'string', description: 'Executable to spawn (stdio). Omit = keep.' },
-      args: { type: 'string', description: 'Arguments, space or comma separated (stdio). Omit = keep.' },
-      headers: { type: 'string', description: 'Extra headers, key=value per line (streamable-http). Omit = keep — omitting is what preserves the real secrets.' },
-      env: { type: 'string', description: 'Extra env vars, key=value per line (stdio). Omit = keep.' },
+      transport: { type: 'string', description: 'streamable-http or stdio. Required when creating.' },
+      url: { type: 'string', description: 'Server URL (streamable-http).' },
+      command: { type: 'string', description: 'Executable to spawn (stdio).' },
+      args: { type: 'string', description: 'Arguments, space or comma separated (stdio).' },
+      headers: { type: 'string', description: 'Extra headers, key=value per line (streamable-http). Omitting it is what preserves the real secrets.' },
+      env: { type: 'string', description: 'Extra env vars, key=value per line (stdio).' },
       level: { type: 'string', description: 'project or global (project when creating); only needed for same-name servers.' },
       // 名字与注入段对齐（2026-10-14 对抗性审查 P1-2）：注入段与工具输出都写 `user-hint`
       // （对应注入行里那句 `user hint:`），参数名跟着叫 `hint`，一份数据三个面一个词。
       // 「写什么」那半句已经由注入框架的 `how` 行逐字说过（"选服务器之前先看一眼"），
       // 这里只留参数独有的信息：长度上限与截断行为（2026-10-14 审查 P2-4）。
-      hint: { type: 'string', description: "Short hint for later (≤300 chars; longer is stored whole but truncated in listings). '' clears the existing hint; omit = keep." },
+      hint: { type: 'string', description: "Short hint for later (≤300 chars; longer is stored whole but truncated in listings). '' clears the existing hint." },
+      // 0.21.2：MCP 服务器是**机器级**配置（cordis 补丁），没有「本会话的一份」。这个参数只为一件事：
+      // 模型以为自己在改会话时，当场纠回来（见 deps.ts 的 requireGlobalScope）。
+      scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('the server config is machine-wide', 'hide a server here with mcp_manager_switch') },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
+      requireGlobalScope(args, 'MCP servers', !sessionLayerOn(deps))
       const server = String((args && args.server) || '').trim()
       if (!server) throw new Error('missing argument: server (the server name)')
       const levelArg = args && args.level !== undefined ? String(args.level) : undefined
@@ -302,7 +442,9 @@ export function buildMcpTools(deps: McpToolDeps): void {
           const n: any = await deps.mcpmNote({ id: String(r.row.id), note: hintText })
           if (!n || n.ok === false) warn = '\nWARN: the server was created, but the hint was not written (' + ((n && n.error) || 'unknown reason') + ')'
         }
-        return 'OK: created ' + r.row.id + ' at ' + r.row.level + warn
+        // 会话层（0.21.2）：服务器是**机器级**配置（cordis 补丁），本会话只能把它藏起来。
+        return 'OK: created ' + r.row.id + ' at ' + r.row.level + warn +
+          globalActionNote(deps, exec && exec.agent, 'mcp', 'MCP')
       }
 
       // ── 改：省略 = 保持，且必须**显式填回**（见文件头那条 parseKv 的坑）────────
@@ -360,7 +502,8 @@ export function buildMcpTools(deps: McpToolDeps): void {
       if (ignored.length) {
         warn += '\nWARN: ' + ignored.join(' / ') + ' do not apply to the current transport (' + transport + ') and were ignored'
       }
-      return 'OK: updated ' + String(cur.serverName) + ' (changed ' + changed.join(', ') + ')' + warn
+      return 'OK: updated ' + String(cur.serverName) + ' (changed ' + changed.join(', ') + ')' + warn +
+        globalActionNote(deps, exec && exec.agent, 'mcp', 'MCP')
     },
   }))
 }

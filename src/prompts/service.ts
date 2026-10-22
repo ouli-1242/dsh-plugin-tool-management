@@ -91,6 +91,8 @@ export interface PromptPresetRow {
   id: string
   /** 内容逐字节等于当前 ~/.dsh/AGENTS.md（真·生效）。 */
   active: boolean
+  /** 正文的 sha256（十六进制）：界面把它与"本会话真正生效的正文"比对，标出会话层沿用的那一份。 */
+  contentHash?: string
   /**
    * 最近一次「应用」写入的是这个预设 —— 但全局文件之后可能被手改过（此时 `active` 为 false）。
    * 有它，模型侧列表在手改之后仍能给出「这份文件从哪来」，而不必退化成全列。
@@ -235,6 +237,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
           return {
             id,
             active: globalHash !== null && contentHash !== null && globalHash === contentHash,
+            ...(contentHash !== null ? { contentHash } : {}),
             ...(appliedId === id ? { lastApplied: true } : {}),
             description: await readDescription(id),
           }

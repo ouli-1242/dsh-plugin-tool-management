@@ -161,7 +161,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-sources{gap:0}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
-.dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
+.dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 /* 开关与官方同款（用户 2026-10-18：「switch 按键统一和官方一样的模板」→「改成完全一样」）：
    36×20 外壳 + 16px 拇指、内边距 2px、滑块位移 16px、开态用 brand-primary，
    关态拇指用 switch-thumb —— 尺寸与配色照抄宿主设置面板那颗。
@@ -411,20 +411,18 @@ button.dsm-qty:disabled{cursor:default}
 /* 域列表（注入实况）自己就带边框与底色，放进带边框的框里时去掉 —— 否则框里套框、
    两层同色，看起来只是多了一圈多余的线（行与行之间本来就有细分隔线）。 */
 .dsm-compat-box .dsm-compat-mod-list{border:0;border-radius:0;background:transparent}
-/* 访问令牌（兼容页）2026-09-19 第三次重构：按作用域拆两个分区 ——
-   ① 访问令牌 = 状态行 + 控件槽（本机、临时）；② 令牌管理 = 静态四行清单（配置、持久），
-   所有写配置的表单开在弹窗里，页面上没有任何会展开收起的东西。 */
-/* 状态区的实况行与解锁错误共用：错误顶替实况（红色），行高不变。 */
+/* 访问令牌（兼容页）：一个区块两行 —— 令牌行（状态胶囊 + 说明 + 设置/修改/删除/锁定）
+   与保护开关行（Switch）。所有写配置的表单开在弹窗里，页面上没有会展开收起的东西。 */
+/* 令牌行的实况句与解锁错误共用：错误顶替实况（红色），行高不变。 */
 .dsm-token-stat-err{color:var(--dsw-alias-state-error-primary)}
-/* 控件槽（仅「待解锁」态渲染）：输入框 + 解锁。浅描边 + 左侧警示竖线（不用警示底色：
-   与「待重启」横幅同用 warn 色，两个大色块叠一张卡只会互相稀释）。已解锁后这一槽
-   不渲染 —— 状态行的绿胶囊就是唯一标识，不再重复。 */
-.dsm-token-unlock{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-left:2px solid var(--dsm-warn);border-radius:var(--dsm-radius-m)}
+/* 控件槽（仅「待解锁」态渲染）：输入框 + 解锁。它就长在令牌行下方，不再套第二层边框
+   （外层 .dsm-compat-box 已经有一圈，框里再套框只会显得乱）。 */
+.dsm-token-unlock{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .dsm-token-unlock .dsm-control{flex:1 1 190px;min-width:0}
-/* 管理清单的行：名字 · 一句说明 · 按钮，三列同形同位 —— 行不随状态增删。 */
-.dsm-token-rows{display:flex;flex-direction:column;gap:8px}
-/* 行按钮统一宽度（fixedLabelPair 负责文案翻转不挤宽），四行按钮的右缘对齐成一列；
-   min-width 按"四个汉字 + 内边距"留足余量，不让文案贴边截断。 */
+/* 解锁行插在两行之间时，保护开关行仍然要有分隔线（.dsm-setrow + .dsm-setrow
+   被解锁行隔断就失效了，行距会随状态变一次）。 */
+.dsm-token-unlock + .dsm-setrow{border-top:1px solid var(--dsw-alias-border-l1)}
+/* 锁定与修改 / 删除并排，同高同宽（定宽由文件尾段 .dsm-setrow .dsm-btn 统一给）。 */
 /* 弹窗里的表单：密码框**各占一行**（圆点看不出填的是哪格，竖排靠顺序就够）。 */
 .dsm-token-form{display:flex;flex-direction:column;gap:8px}
 /* 横排 .dsm-control 的 flex-basis 在竖排里会被当成高度（每格被撑成 190px 高），
@@ -479,6 +477,8 @@ button.dsm-qty:disabled{cursor:default}
 /* 保存往返期间：整块不吃点击、略灰 —— 这一块刻意没有乐观更新（见 saveToolTable 注释）。 */
 .dsm-tooltable-busy{pointer-events:none;opacity:.55}
 .dsm-tooltable-summary{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+/* 会话层那一句（0.21.2）：这张工具表归属哪一层、改动影响谁。 */
+.dsm-tooltable-scope{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 /* 「保存方案 / 恢复方案」钉在合计那一行的最右（用户 2026-09-23 指定位置）。
    按钮压到与 18px 行高齐平：宿主默认的 .dsm-btn 比这行字高，直接放会把整行顶开。 */
 .dsm-tooltable-preset-actions{display:flex;flex:none;align-items:center;gap:4px;margin-left:auto}
@@ -532,7 +532,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}
 .dsm-compat-list{margin:0;padding-left:16px}.dsm-compat-list li+li{margin-top:4px}
 @container(max-width:640px){.dsm-compat-grid{grid-template-columns:1fr}}
-html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-tabs-shell{position:sticky;top:0;z-index:6;display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px;background:var(--dsm-surface,var(--dsw-alias-bg-layer-2))}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
+html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-panel-head{position:sticky;top:0;z-index:6;display:flex;min-width:0;flex-direction:column;background:var(--dsm-surface,var(--dsw-alias-bg-layer-2))}.dsm-tabs-shell{display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
 /* 动作可用性表：表头列宽与 dsm-compat-mod-row 一致；窄容器下隐藏表头。 */
 .dsm-compat-table-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:8px;padding:4px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsm-compat-cards .dsm-compat-table-head{display:none}
@@ -1152,7 +1152,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    1px 分隔线；页签条 z-index 6，组头 5，吸住时从其下方滑过。宿主换滚动结构时 sticky
    只是不触发（组头留在原位），不会错位。 */
 .dsm-source:has(> .dsm-source-head-pin){overflow:clip}
-.dsm-source-head-pin{position:sticky;z-index:5;top:37px;background:var(--dsw-alias-bg-layer-2);border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsm-source-head-pin{position:sticky;z-index:5;top:var(--dsm-head-h,37px);background:var(--dsw-alias-bg-layer-2);border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source:has(> .dsm-source-head-pin) > .dsm-source-body{border-top:0}
 /* ── 切片五·控件层（REDESIGN §5，2026-10-11）────────────────────────────────── */
 /* 设置行 SettingsRow（§5.2/§13.2，macOS 设置窗模式）：label 左对齐、控件右对齐，
@@ -1187,4 +1187,48 @@ button.dsm-rowselect-box:disabled{cursor:default;opacity:.45}
    顶端让出标题栏净空（macOS / Windows 桌面端由宿主在这两个属性上给高度），与 dshmarket
    的主面板同一套算法；内容仍是 .dsm-section —— 宽度上限与居中它自己管。 */
 .dsm-panel{box-sizing:border-box;width:100%;height:100%;min-height:0;overflow:auto}.dsm-panel-body{box-sizing:border-box;padding:calc(20px + var(--dsh-frame-top-clearance,0px)) clamp(16px,4vw,40px) 32px;--dsm-surface:var(--dsw-alias-bg-base)}
-`
+
+/* ── 会话作用域（0.21.2）────────────────────────────────────────────────────
+   视觉口径（用户 2026-10-20 裁定）：**统一绿色，不再区分全局与会话**。
+   停在某一层时看到的**就是这个对话的生效值** —— 一种颜色，没有第二层信息要读。
+   绿色标记（圆点 / 卡片边框）只表示"这一格/这一张与全局默认不同"，不再分深浅。
+   ⚠️ **开关本身不染色**：开关的形状与拇指位移是 2026-10-18 与官方逐像素对齐过的，
+   为会话层再给它上色，会让"同一个开关"在一屏里有两种样子，且与"开关 = 状态"的读法打架。
+   来源是**另一维**信息，所以另给一格 —— 圆点与卡片边框本来就是"这一行/这一张与别的
+   有什么不同"的位置。 */
+.dsm-dot-scoped{background:var(--dsw-alias-state-success-primary)}
+/* 卡片（场景）那一层：边框跟着来源走，与「当前模式」的绿边框**同一格**。 */
+.dsm-scene-tile-scoped{border-color:var(--dsw-alias-state-success-primary)}
+/* 会话层的「当前模式」条：同一个位置、同一套结构，与全局那条同色。 */
+.dsm-mode-bar-scoped{border-color:var(--dsw-alias-state-success-primary)}
+.dsm-mode-dot-scoped{background:var(--dsw-alias-state-success-primary)}
+/* 面板顶部的作用域行：标题 + 下拉 + 解锁口（用户 2026-10-21：删掉那句说明，改为一句标题，
+   选择框与下拉菜单同宽）。这一行与页签同属 .dsm-panel-head（粘附），行底不留白。 */
+.dsm-scope-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0}
+/* 选择框与下拉菜单同宽（用户 2026-10-21），但**不拉满整行**（同日二次：拉满太长）：
+   固定 300px，窄面板下可收缩。菜单宽度由触发器量出来（SourceSelect 的 menuStyle
+   width = max(触发器宽, menuMinWidth)），这里不给 menuMinWidth，两边自然对齐。 */
+.dsm-scope-bar .dsm-select{flex:0 1 300px;min-width:0;max-width:100%}
+.dsm-scope-bar-label{flex:none;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:18px;white-space:nowrap}
+/* 兼容页「隔离粒度」（0.21.2）：一行下拉 + 一句模式说明；与作用域条同样的行内节奏。 */
+.dsm-scope-mode{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-scope-mode .dsm-form-seg{flex:none}
+.dsm-scope-mode-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;flex:1 1 260px;min-width:0}
+.dsm-scope-bar-hint{color:var(--dsw-alias-label-tertiary);font-size:12px}
+/* 写入回执里的警告（全局被顺手动过什么）：占一整行挂在条下方。 */
+.dsm-scope-bar-warn{flex-basis:100%;display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--dsm-warn);border-radius:var(--dsm-radius-m);background:var(--dsm-warn-bg);color:var(--dsm-warn);font-size:12px;line-height:18px;white-space:pre-wrap}
+.dsm-scope-bar-warn>.dsm-btn{margin-left:auto;flex:none}
+/* 写入失败（0.21.2）：与上面那条警告同构，配色用错误色 —— 一条是"没写进去"，一条是"写进去了但动了全局"。 */
+.dsm-scope-bar-error{flex-basis:100%;display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsm-radius-m);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;white-space:pre-wrap}
+.dsm-scope-bar-error>.dsm-btn{margin-left:auto;flex:none}
+/* 分组下拉（会话按工作区区分，用户 2026-10-20）：组头是说明文字、不可点；
+   富行 = 行首选中勾 + 标题 + 行尾说明（条数 / 当前 / 未归属）。 */
+.dsm-select-group{display:flex;flex-direction:column}
+.dsm-select-group + .dsm-select-group{margin-top:2px;padding-top:2px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-select-group-label{display:flex;align-items:center;gap:8px;padding:6px 8px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden}
+.dsm-select-group-name{min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.dsm-select-group-meta{margin-left:auto;flex:none;font-variant-numeric:tabular-nums}
+.dsm-select-menu .dsm-option-rich{display:flex;align-items:center;gap:6px}
+.dsm-option-check{display:inline-flex;width:14px;height:14px;flex:none;align-items:center;justify-content:center;color:var(--dsw-alias-state-success-primary)}
+.dsm-option-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-option-meta{margin-left:auto;flex:none;padding-left:8px;color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums}`

@@ -7,6 +7,10 @@
 
         // MCP 服务页：与 Skills 页共用 dsm-* 设计语言（统计卡 / 筛选 / 分组卡片 / 模态框）。
         function MCPPage() {
+          // 本页订阅当前层（0.21.2）：行首圆点的蓝标、开关的生效值都跟着层走。
+          // `mcpm-list` 是全局口径（服务端不认识 sessionId），会话层只做本地投影，
+          // 所以这里**不重取**，只重渲染 —— 5 秒一次的轮询已经把全局那份带回来了。
+          var scopeState = useScopeLayer()
           const [state, setState] = React.useState({ loading: true, error: null, rows: [], paths: null, errors: [], warnings: [] })
           const [msg, setMsg] = React.useState(null)
           const [busy, setBusy] = React.useState(null)
@@ -26,6 +30,8 @@
           // 详情弹窗的请求序号：见 openDetail / closeDetail（晚到响应不得复活弹窗）。
           const detailSeqRef = React.useRef(0)
           const [confirmRow, setConfirmRow] = React.useState(null)
+          // 「彻底停止」确认（0.21.2）：与删除不同，它切断的是**正在用它的会话** —— 必须问一次。
+          const [stopConfirm, setStopConfirm] = React.useState(null)
           const [reveal, setReveal] = React.useState(false)
           const [settings, setSettings] = React.useState(null)
           const [compactConfirm, setCompactConfirm] = React.useState(false)
@@ -139,18 +145,67 @@
            * 全部启动 / 停用会把每一条都设成目标态，所以结果是个确定值。
            */
           const setAllServers = () => {
-            const target = summary.enabled < summary.total
-            const managed = (state.rows || []).filter((r) => r.level !== 'loader')
-            const items = managed.filter((r) => !r.disabled !== target).map((r) => ({ id: r.id, level: r.level, on: !r.disabled }))
-            run('mcpm-set-all', { enabled: target }, 'setall', () => setUndo({
-              text: mt('undo.mcp', {
-                action: mt(target ? 'bulk.enabled' : 'bulk.disabled'),
-                count: items.length,
-                enabled: target ? managed.length : 0,
-              }),
-              items: items,
-              revert: (item) => apiCall('mcpm-set-enabled', { id: item.id, level: item.level, enabled: item.on }),
-            }))
+            const turnOn = !bulkAllOn
+            const changed = bulkServers
+              .map((row) => ({ serverName: String(row.serverName || row.id), on: rowOnInLayer(row) }))
+              .filter((item) => item.on !== turnOn)
+            if (!changed.length) return
+            // 会话作用域（0.21.2，决策 9）：会话层只改"本对话看不看得到"（认领 / 撤销认领），
+            // **不写补丁**。逐台写 `scope-set`；撤销按操作前的生效值写回。
+            if (scopeIsSession()) {
+              const sessionId = scopeState.sessionId
+              setMsg(null)
+              setBusy('setall')
+              Promise.all(changed.map((item) => apiCall('scope-set', {
+                sessionId: sessionId, domain: 'mcp', key: item.serverName, value: turnOn,
+              }).catch((e) => ({ ok: false, error: errMsg(e) })))).then((results) => {
+                setBusy(null)
+                const failed = results.filter((r) => !r || r.ok === false).length
+                if (failed) setMsg({ kind: 'err', text: mt('mcp.msg.failed') })
+                else setMsg({ kind: 'ok', text: mt('mcp.msg.ok') })
+                try { refreshScope() } catch (e) { /* 面板没开着也只是白跑一次读 */ }
+                refresh()
+                if (failed) return
+                setUndo({
+                  text: mt('undo.mcp', {
+                    action: mt(turnOn ? 'bulk.enabled' : 'bulk.disabled'),
+                    count: changed.length,
+                    enabled: turnOn ? bulkServers.length : 0,
+                  }),
+                  items: changed,
+                  sessionScoped: true,
+                  revert: (item) => apiCall('scope-set', {
+                    sessionId: sessionId, domain: 'mcp', key: item.serverName, value: item.on,
+                  }),
+                })
+              })
+              return
+            }
+            // 全局层 = 写**意图**（0.21.2）：off 不再立刻停 —— 还在用它的会话按租约继续跑，
+            // 只有「彻底停止」才切断。撤销按操作前的意图值逐台写回。
+            setMsg(null)
+            setBusy('setall')
+            apiCall('scope-intent-set', { domain: 'mcp', keys: changed.map((item) => item.serverName), value: turnOn ? 'on' : 'off' })
+              .then((res) => {
+                if (res && res.ok === false) { setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') }); return }
+                if (res && res.warnings && res.warnings.length) setMsg({ kind: 'warn', text: res.warnings.join('；') })
+                else setMsg({ kind: 'ok', text: mt('mcp.msg.ok') })
+                try { refreshScope() } catch (e) { /* 同上 */ }
+                refresh()
+                setUndo({
+                  text: mt('undo.mcp', {
+                    action: mt(turnOn ? 'bulk.enabled' : 'bulk.disabled'),
+                    count: changed.length,
+                    enabled: turnOn ? bulkServers.length : 0,
+                  }),
+                  items: changed,
+                  // 这一栏只用来在撤销后重拉作用域（意图改了，面板的全局开关要跟着变）。
+                  sessionScoped: true,
+                  revert: (item) => apiCall('scope-intent-set', { domain: 'mcp', keys: [item.serverName], value: item.on ? 'on' : 'off' }),
+                })
+              })
+              .catch((e) => setMsg({ kind: 'err', text: errMsg(e) }))
+              .then(() => setBusy(null))
           }
 
           /**
@@ -166,6 +221,9 @@
             runUndo(entry).then((failed) => {
               setBusy(null)
               setMsg(failed ? { kind: 'err', text: mt('undo.failed', { count: failed }) } : { kind: 'ok', text: mt('undo.done') })
+              if (entry.sessionScoped === true) {
+                try { refreshScope() } catch (e) { /* 面板没开着也只是白跑一次读 */ }
+              }
               refresh()
             })
           }
@@ -277,38 +335,45 @@
           // Toggling updates only the clicked row (scroll position and expanded
           // groups survive); a failed write re-reads the server state instead.
           const toggleRow = (row) => {
-            const nextDisabled = !row.disabled
             setMsg(null)
-            // 翻开（nextDisabled=false）= 立刻按「启动中」显示；关掉 = 销账，否则刚停用的那行
-            // 还在呼吸。（2026-10-15 这一条写反过一次：结果是"开了不绿、关了反而绿 30 秒"。）
-            if (nextDisabled) clearStarting(row); else markStarting(row)
-            setState((prev) => Object.assign({}, prev, {
-              rows: (prev.rows || []).map((item) => (
-                item.id === row.id && item.level === row.level
-                  // `live.enabled` 一起乐观翻掉（用户 2026-10-18：「关闭后绿灯应该立即消失变灰，
-                  // 现在有延迟」）：列表里那盏绿灯读的是宿主上一轮轮询的 `live`，只改 `disabled`
-                  // 的话它得等下一次刷新（默认 5 秒）才灭 —— 点完开关的五秒里界面还在说"它在跑"。
-                  ? Object.assign({}, item, {
-                    disabled: nextDisabled,
-                    live: item.live ? Object.assign({}, item.live, { enabled: !nextDisabled }) : item.live,
-                  })
-                  : item
-              )),
-            }))
+            // 会话作用域（0.21.2）：会话层下只改"本会话看不看得到这台服务器"（租约 / 撤销认领），
+            // **不动补丁、不断连接** —— 别的对话照常用。
+            if (scopeIsSession()) {
+              // 同名两层行按"任一行开着"算全局（与会话快照同一口径）。
+              const globalOn = serverGlobalOn(row)
+              const current = scopeFlag('mcp', String(row.serverName || row.id), globalOn)
+              const nextOn = !current.value
+              setBusy(row.id + ':toggle')
+              scopeWriteFlag('mcp', String(row.serverName), nextOn, function () { return { ok: true } })
+                .then((res) => {
+                  if (res && res.ok === false) { setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') }); return }
+                  // 拨开一台全局关着的服务器会成为本会话的**租约**（连接跑起来、别的对话
+                  // 看不到）；服务端把这件事写进回执的警告里，这里照实转述。
+                  if (res && res.warnings && res.warnings.length) setMsg({ kind: 'warn', text: res.warnings.join('；') })
+                  refresh()
+                })
+                .catch((e) => { setMsg({ kind: 'err', text: errMsg(e) }); refresh() })
+                .then(() => setBusy(null))
+              return
+            }
+            // 全局层（0.21.2）= 写**意图**，不是补丁：off 之后仍被会话认领的服务器保持运行
+            // （租约），只有「彻底停止」才切断它们。开关读的也是意图（见 `serverGlobalOn`）。
+            const name = String(row.serverName || row.id)
+            const nextOn = !serverGlobalOn(row)
+            // 翻开 = 先按「启动中」显示（宿主拉起进程要几秒）；关掉 = 销账。
+            if (nextOn) markStarting(row); else clearStarting(row)
             setBusy(row.id + ':toggle')
-            apiCall('mcpm-set-enabled', { id: row.id, level: row.level, enabled: row.disabled }).then((res) => {
-              if (res && !res.ok) {
-                clearStarting(row)
-                setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') })
+            scopeWriteIntent('mcp', [name], nextOn ? 'on' : 'off')
+              .then((res) => {
+                if (res && res.ok === false) { setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') }); return }
+                if (res && res.warnings && res.warnings.length) { setMsg({ kind: 'warn', text: res.warnings.join('；') }); return }
+                const leases = scopeLeaseCount('mcp', name)
+                if (!nextOn && leases > 0) setMsg({ kind: 'warn', text: mt('mcp.intent.keptRunning', { count: leases }) })
+                else setMsg({ kind: 'ok', text: mt(nextOn ? 'mcp.intent.onOk' : 'mcp.intent.offOk', { name: name }) })
                 refresh()
-              } else if (res && res.warning) {
-                setMsg({ kind: 'warn', text: mt('mcp.msg.warn', { warning: res.warning }) })
-              }
-            }).catch((e) => {
-              clearStarting(row)
-              setMsg({ kind: 'err', text: errMsg(e) })
-              refresh()
-            }).then(() => setBusy(null))
+              })
+              .catch((e) => { setMsg({ kind: 'err', text: errMsg(e) }); refresh() })
+              .then(() => setBusy(null))
           }
           /**
            * 重连一台服务（`mcpm-restart`）：服务端先把它临时停用、等 loader 摘掉、再按重启前的
@@ -328,6 +393,22 @@
                 setMsg({ kind: 'ok', text: mt('mcp.msg.restarted', { name: row.serverName }) })
               }
             }).catch((e) => setMsg({ kind: 'err', text: errMsg(e) })).then(() => { setBusy(null); refresh() })
+          }
+
+          /**
+           * 全局意图的两种"重"动作（0.21.2）：恢复启用 / 彻底停止。
+           * 与行开关的区别只有 blocked：它压过所有会话（含正在用它的），所以走菜单 + 确认。
+           */
+          const setServerIntent = (row, value) => {
+            const name = String(row.serverName || row.id)
+            setMsg(null)
+            setBusy(row.id + ':intent')
+            scopeWriteIntent('mcp', [name], value).then((res) => {
+              if (res && res.ok === false) { setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') }); return }
+              if (res && res.warnings && res.warnings.length) setMsg({ kind: 'warn', text: res.warnings.join('；') })
+              else setMsg({ kind: 'ok', text: mt(value === 'blocked' ? 'mcp.intent.stopped' : 'mcp.intent.onOk', { name: name }) })
+              refresh()
+            }).catch((e) => { setMsg({ kind: 'err', text: errMsg(e) }); refresh() }).then(() => setBusy(null))
           }
 
           const toggleReveal = () => {
@@ -395,10 +476,37 @@
             setDetail(null)
           }
 
+          /** 详情页某条工具在**本层**的值（`{ value, scoped }`）。会话层 = `mcpTools` 域
+           *  （键 `<server>/<tool>`，与注入段、模型工具同一套）；全局层 = `mcpm-tools` 的读数。 */
+          const toolFlag = (row, tool) => {
+            const globalOn = tool.enabled !== false
+            return scopeIsSession()
+              ? scopeFlag('mcpTools', String(row.serverName || row.id) + '/' + tool.name, globalOn)
+              : { value: globalOn, scoped: false }
+          }
           const toggleTool = (row, tool) => {
-            const nextEnabled = tool.enabled === false
             setMsg(null)
             setBusy('tool:' + tool.name)
+            // 会话作用域（0.21.2，用户裁定「逐工具开关也按会话独立」）：会话层写 `mcpTools`。
+            // 开关只在服务器于本层已可见时可用（见 `detailServerHidden`）；服务器由上面
+            // 那颗开关按租约拉起，警告随回执带回来，照实转述。
+            if (scopeIsSession()) {
+              const serverName = String(row.serverName || row.id)
+              const nextEnabled = !toolFlag(row, tool).value
+              scopeWriteFlag('mcpTools', serverName + '/' + tool.name, nextEnabled, function () { return { ok: true } })
+                .then((res) => {
+                  if (res && res.ok === false) { setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') }); return }
+                  // 乐观翻一下那一行（`scopeFlag` 的回退值就是它）：refreshScope 回来之前
+                  // 屏幕上的开关就该是刚点出来的样子。
+                  setDetail((prev) => (prev === null ? prev : Object.assign({}, prev, { tools: (prev.tools || []).map((item) => (item.name === tool.name ? Object.assign({}, item, { enabled: nextEnabled }) : item)) })))
+                  if (res && res.warnings && res.warnings.length) setMsg({ kind: 'warn', text: res.warnings.join('；') })
+                  else setMsg({ kind: 'ok', text: nextEnabled ? mt('done.enabled', { name: tool.name }) : mt('done.disabled', { name: tool.name }) })
+                })
+                .catch((e) => setMsg({ kind: 'err', text: errMsg(e) }))
+                .then(() => setBusy(null))
+              return
+            }
+            const nextEnabled = tool.enabled === false
             apiCall('mcpm-tool-enabled', { serverName: row.serverName, tool: tool.name, enabled: nextEnabled }).then((res) => {
               if (res && res.ok) {
                 setDetail(Object.assign({}, detail, { tools: (detail.tools || []).map((item) => (item.name === tool.name ? Object.assign({}, item, { enabled: nextEnabled }) : item)) }))
@@ -434,6 +542,33 @@
           }
 
           const rows = state.rows || []
+          /**
+           * 同一台服务器可能在两层各有一行（project + global）。`mcpm-list` 的 `disabled` 是
+           * **逐行**的，而会话覆盖的键是 serverName —— 会话层问的是"这台服务器看不看得到"，
+           * 所以先按名字合并成"任一行开着 = 这台开着"，与 `configuredServerStates()` 同口径。
+           */
+          const serverOnMap = React.useMemo(() => {
+            const map = new Map()
+            for (const row of rows) {
+              const name = String(row.serverName || row.id)
+              map.set(name, map.get(name) === true || row.disabled !== true)
+            }
+            return map
+          }, [rows])
+          /**
+           * 这台服务器在**全局**开没开（合并同名行）—— 读**意图**（0.21.2），运行态兜底。
+           *
+           * 必须读意图而不是补丁：全局 off、但还有会话在用（租约）时补丁仍是开着，读补丁会把
+           * "临时运行"显示成"全局开着"。`scopeGlobalOn` 就是这条口径。
+           */
+          const serverGlobalOn = (row) => {
+            const name = String(row.serverName || row.id)
+            return scopeGlobalOn('mcp', name, serverOnMap.get(name) === true)
+          }
+          /** 这一行在**本层**开不开：会话层 = 本地投影（含租约认领），全局层 = 全局意图。 */
+          const rowOnInLayer = (row) => scopeIsSession()
+            ? scopeFlag('mcp', String(row.serverName || row.id), serverGlobalOn(row)).value
+            : serverGlobalOn(row)
           // 工具数的三个口径（与 src/mcp/state-section.ts 同源，理由见那里的文件头）：
           //   liveToolCount        当前真实注册了几个工具（**不含**「已知工具」缓存）
           //   liveEnabledToolCount 其中未被停用表扣减的（真正能调到的）
@@ -465,15 +600,31 @@
           const toolTotals = React.useMemo(() => rows.reduce((acc, row) => {
             const total = liveOf(row)
             acc.total += total
-            acc.enabled += liveEnabledOf(row)
+            // 会话层藏掉的服务器，它的工具在这个对话里一条也调不到 —— 分子按本层算。
+            // 分母仍是全机注册数，这样这组数字回答的是"这台机器上注册的里面，本对话能用几个"。
+            if (rowOnInLayer(row)) acc.enabled += liveEnabledOf(row)
             return acc
-          }, { total: 0, enabled: 0 }), [rows])
+          }, { total: 0, enabled: 0 }), [rows, scopeState])
           const summary = React.useMemo(() => ({
             total: rows.length,
-            enabled: rows.filter((row) => !row.disabled).length,
+            enabled: rows.filter(rowOnInLayer).length,
             tools: toolTotals.enabled,
             toolsTotal: toolTotals.total,
-          }), [rows, toolTotals])
+          }), [rows, toolTotals, scopeState])
+          // 「全部启用 / 全部停用」按**服务器名**去重（会话覆盖与全局意图都按 serverName 键）：
+          // 同名两层行只算一台，loader 行在全局层不可操作（补丁里没有它）。
+          const bulkServers = React.useMemo(() => {
+            const byName = new Map()
+            for (const row of rows) {
+              const name = String(row.serverName || row.id)
+              if (byName.has(name)) continue
+              if (!scopeIsSession() && row.level === 'loader') continue
+              byName.set(name, row)
+            }
+            return [...byName.values()]
+          }, [rows, scopeState.sessionId])
+          const bulkAllOn = bulkServers.length > 0 && bulkServers.every(rowOnInLayer)
+          const bulkEmpty = bulkServers.length === 0
           const profilePath = state.paths && state.paths.profile ? 'profile: ' + state.paths.profile : null
           const groups = React.useMemo(() => (levelFilter === 'loader'
             ? [{ key: 'live', title: mt('mcp.level.loader'), path: profilePath, match: isRunning }]
@@ -492,8 +643,8 @@
           // —— 这一页没有「刷新」按钮（它自己 5 秒轮询），所以也不往 refresh 上挂 resetRank。
           const mcpRank = useRank()
           const grouped = React.useMemo(
-            () => groups.map((group) => ({ group: group, rows: rankedFirst(mcpRank, (row) => row.id, visibleRows.filter(group.match), (row) => !row.disabled) })),
-            [groups, visibleRows],
+            () => groups.map((group) => ({ group: group, rows: rankedFirst(mcpRank, (row) => row.id, visibleRows.filter(group.match), rowOnInLayer) })),
+            [groups, visibleRows, scopeState],
           )
 
           // 状态口径：tone 只决定胶囊配色（ok=能用、bad=坏了、warn=当前没工具、muted=没在跑）。
@@ -561,6 +712,20 @@
             if (toolCount) meta.push(React.createElement('span', { key: 'tools', className: 'dsm-listrow-meta-info' }, toolCount))
             // 备注可能很长：给可收缩的 desc 类（min-width:0 + 省略号），超宽时截断而不是把行撑爆。
             if (row.notes) meta.push(React.createElement('span', { key: 'note', className: 'dsm-listrow-meta-desc', title: row.notes }, mt('mcp.note.prefix') + row.notes))
+            // 全局层的意图状态（0.21.2）：彻底停止 / **临时运行 · N 个对话**。
+            // 后者是"全局 off 却仍在跑"的唯一解释 —— 不标出来，用户会以为全局开关坏了。
+            // 同名两层行只标在**第一行**上（两行说同一件事，标两遍只是噪声）。
+            if (!scopeIsSession()) {
+              const rowName = String(row.serverName || row.id)
+              const firstOfName = rows.find((item) => String(item.serverName || item.id) === rowName) === row
+              const intentHere = scopeIntentOf('mcp', rowName)
+              if (firstOfName && intentHere === 'blocked') {
+                meta.push(React.createElement('span', { key: 'intent', className: 'dsm-tag dsm-tag-off', title: mt('mcp.intent.blockedHint') }, mt('mcp.intent.blocked')))
+              } else if (firstOfName) {
+                // 六域共用的租约徽章出口（0.21.2）：同一 HTML / class / tooltip。
+                meta.push(leaseTag({ t: mt, tagKey: 'intent', domain: 'mcp', key: rowName, runtime: true }))
+              }
+            }
             // 行尾：一颗常驻动作 + 一颗 ⋯（用户 2026-10-16：「详情」要留边框）。
             // 「详情」是只读动作，锁定期间照常可用；编辑 / 删除进菜单，删除在菜单里红字。
             const actions = [
@@ -570,6 +735,11 @@
               key: 'menu',
               label: mt('row.menu', { name: row.serverName }),
               items: [
+                // 全局层的意图动作（0.21.2）：菜单里给「彻底停止 / 恢复启用」。
+                // 会话层没有这一项 —— 会话只能"看不到它"，停整台机器是全局动作。
+                ...(scopeIsSession() ? [] : [scopeIntentOf('mcp', String(row.serverName || row.id)) === 'blocked'
+                  ? { key: 'intent-resume', label: mt('mcp.intent.resume'), disabled: actDisabled, onClick: () => setServerIntent(row, 'on') }
+                  : { key: 'intent-stop', label: mt('mcp.intent.stop'), danger: true, disabled: actDisabled, onClick: () => setStopConfirm(row) }]),
                 { key: 'edit', label: mt('mcp.btn.edit'), disabled: actDisabled, onClick: () => openEdit(row) },
                 { key: 'remove', label: mt('mcp.btn.remove'), danger: true, disabled: actDisabled, onClick: () => setConfirmRow(row) },
               ],
@@ -578,14 +748,67 @@
               key: row.id,
               // 行首状态点只剩连接态一个（体检态那枚随体检一起删）：它的 title 就是
               // 「已连接 / 未运行 / 未启用」，正是原来那枚体检点想说的"这台现在什么状态"。
-              dots: [React.createElement(StatusDot, { key: 'live', tone: status.tone === 'muted' ? 'idle' : status.tone, title: status.text })],
+              // 会话作用域（0.21.2）：来源标记打在点上（用户 2026-10-19 裁定，开关不染色）。
+              // 0.21.2 起不再用"全局开着"当门禁：全局关着的服务器也能被本会话拨开，
+              // 那一格的来源标记照实画（点 = 这一格与本对话以外的状态不一样）。
+              dots: [(function () {
+                const name = String(row.serverName || row.id)
+                const running = serverGlobalOn(row)
+                const flag = scopeFlag('mcp', name, running)
+                // 点 = **这一层**开不开（与右边那颗开关同值）。全局关着、被某个会话的租约
+                // 拉起时点仍是灰的 —— 谁在用它由行 2 的「临时运行 · N 个对话」说明
+                // （用户 2026-10-21）。开着的行继续用连接态（失败 / 加载中 / 工具全停）。
+                const layerOn = scopeIsSession() ? flag.value : scopeGlobalOn('mcp', name, running)
+                return React.createElement(StatusDot, {
+                  key: 'live',
+                  tone: layerOn ? (status.tone === 'muted' ? 'idle' : status.tone) : 'idle',
+                  // 来源色只在「开着」时染；连接失败的红不能被来源绿盖掉。
+                  scoped: layerOn && flag.scoped && (status.tone === 'ok' || status.tone === 'muted'),
+                  title: layerOn ? status.text : mt('mcp.live.stopped'),
+                })
+              })()],
               name: row.serverName,
               tag: row.duplicate ? React.createElement('span', { className: 'dsm-tag dsm-tag-off' }, mt('mcp.duplicate')) : null,
               meta: meta.length ? meta : null,
               extra: [
                 hint ? React.createElement('div', { key: 'hint', className: 'dsm-row-hint' }, '⚠ ' + hint) : null,
               ],
-              side: editable ? React.createElement(Switch, { on: !row.disabled, disabled: actDisabled, label: mt('mcp.toggleServer') + ' ' + row.serverName, onClick: () => toggleRow(row) }) : null,
+              // 会话作用域（0.21.2）：会话层下这一格表示"本会话看不看得到它"；来源看行首那颗点。
+              // 会话层不要求可编辑（补丁里那行怎么配的与本会话无关）。
+              side: (function () {
+                if (scopeIsSession()) {
+                  // 会话层的开关是**服务器级**（同名两层行合并后只有一个状态）。
+                  var globalOn = serverGlobalOn(row)
+                  var flag = scopeFlag('mcp', String(row.serverName || row.id), globalOn)
+                  // 全局「彻底停止」压过会话层：那颗开关拨了也会被服务端拒掉，直接置灰并说明。
+                  var blockedHere = scopeIntentOf('mcp', String(row.serverName || row.id)) === 'blocked'
+                  // 全局关着的服务器也能在本会话拨开（0.21.2）：成为本会话的租约（仅本对话可见）。
+                  return React.createElement(Switch, {
+                    on: flag.value,
+                    scoped: flag.scoped,
+                    disabled: busy !== null || scopeWriteLocked(false) || blockedHere,
+                    title: blockedHere ? mt('scope.intent.blockedHint')
+                      : globalOn ? undefined : mt('mcp.session.startGlobal'),
+                    label: mt('mcp.toggleServer') + ' ' + row.serverName,
+                    onClick: () => toggleRow(row),
+                  })
+                }
+                // 全局层 = **意图**（0.21.2）：开关值是 `on / off`，运行态（补丁）由对账器维持。
+                // 同名两行显示同一个意图值（意图按 serverName 键），不会一行开一行关。
+                const nameHere = String(row.serverName || row.id)
+                const intentHere = scopeIntentOf('mcp', nameHere)
+                const leasesHere = scopeLeaseCount('mcp', nameHere)
+                return editable ? React.createElement(Switch, {
+                  on: serverGlobalOn(row),
+                  scoped: false,
+                  disabled: actDisabled,
+                  title: intentHere === 'blocked' ? mt('mcp.intent.blockedHint')
+                    : leasesHere > 0 ? mt('mcp.intent.leaseHint', { count: leasesHere })
+                      : undefined,
+                  label: mt('mcp.toggleServer') + ' ' + row.serverName,
+                  onClick: () => toggleRow(row),
+                }) : null
+              })(),
               actions,
             })
           }
@@ -615,6 +838,11 @@
             React.createElement('div', { className: 'dsm-fm-key' }, label),
             React.createElement('div', { className: 'dsm-fm-val' }, value))
 
+          // 会话层里服务器本身看不到时，逐工具开关置灰（先开服务器再拨工具）：
+          // 这里不提供"拨一个工具就把整台服务器拉起来"的捷径，避免用户只想要一条工具、
+          // 结果整台服务器临时跑起来。服务器开关本身仍可在本层打开（按租约临时运行）。
+          const detailServerHidden = !!detail && scopeIsSession() &&
+            !scopeFlag('mcp', String(detail.row.serverName || detail.row.id), serverGlobalOn(detail.row)).value
           const toolListNode = detail && (detail.loading
             ? React.createElement('div', { className: 'dsm-help' }, mt('mcp.tools.loading'))
             : detail.error
@@ -623,12 +851,28 @@
                 ? React.createElement('div', { className: 'dsm-help' }, mt('mcp.tools.none'))
                 : React.createElement(React.Fragment, null,
                     React.createElement('div', { className: 'dsm-help' }, mt('mcp.tools.note')),
-                    React.createElement('div', { className: 'dsm-tools' }, (detail.tools || []).map((tool) => React.createElement('div', { className: 'dsm-tool' + (tool.enabled === false ? ' dsm-tool-off' : ''), key: tool.name },
+                    React.createElement('div', { className: 'dsm-tools' }, (detail.tools || []).map((tool) => React.createElement('div', { className: 'dsm-tool' + ((detailServerHidden ? false : toolFlag(detail.row, tool).value) === false ? ' dsm-tool-off' : ''), key: tool.name },
                       React.createElement('div', { className: 'dsm-tool-name-row' },
                         React.createElement('div', { className: 'dsm-tool-name' }, tool.name),
                         // 描述来自「已知工具」缓存（服务器未运行）→ 标明是旧数据，不假装实时。
                         tool.stale ? React.createElement('span', { className: 'dsm-tag' }, mt('mcp.tools.stale')) : null,
-                        React.createElement(Switch, { on: tool.enabled !== false, disabled: busy !== null || state.locked === true, label: mt('mcp.toggleTool') + ' ' + tool.name, onClick: () => toggleTool(detail.row, tool) })),
+                        // 逐工具的「N 个对话单独设置」：这一格此前**两侧都没有徽章来源**
+                        // （`countViewClaims` 只列了 memory / subagents / quickPrompts，
+                        // `INTENT_DOMAINS` 又不含 mcpTools）—— 会话里拨开一个全局关着的工具，
+                        // 全局页这一格什么标记都没有。键与覆盖表 / 档案同一套 `<server>/<tool>`。
+                        leaseTag({ t: mt, tagKey: 'lease', domain: 'mcpTools', key: String(detail.row.serverName || detail.row.id) + '/' + tool.name, runtime: false }),
+                        // 会话作用域（0.21.2）：逐工具开关在本层拨（会话层写 `mcpTools`，
+                        // 键 `<server>/<tool>`）。全局关着的那条也能在本会话拨开 ——
+                        // 服务端把它的服务器按租约临时运行，警告随回执带回来。
+                        React.createElement(Switch, {
+                          on: detailServerHidden ? false : toolFlag(detail.row, tool).value,
+                          scoped: detailServerHidden ? false : toolFlag(detail.row, tool).scoped,
+                          disabled: busy !== null || scopeWriteLocked(state.locked === true) || detailServerHidden,
+                          title: detailServerHidden ? mt('mcp.tools.serverOff')
+                            : !scopeIsSession() || tool.enabled !== false ? undefined : mt('mcp.session.startGlobal'),
+                          label: mt('mcp.toggleTool') + ' ' + tool.name,
+                          onClick: () => toggleTool(detail.row, tool),
+                        })),
                       tool.description ? React.createElement(ToolDesc, { text: tool.description, expandLabel: mt('mcp.tools.expand'), collapseLabel: mt('mcp.tools.collapse') }) : null,
                       (tool.parameters && tool.parameters.length > 0) ? React.createElement('div', { className: 'dsm-tool-params' }, tool.parameters.map((param) => React.createElement('div', { className: 'dsm-tool-param', key: param.key },
                           React.createElement('span', { className: 'dsm-tool-param-key' }, param.key + (param.required ? ' *' : '')),
@@ -803,6 +1047,22 @@
             React.createElement('div', { className: 'dsm-modal-actions' },
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: confirmRemove }, mt('mcp.btn.remove'))))
 
+          // 「彻底停止」确认（0.21.2）：它切断的是**正在用它的会话**（租约也压不过），
+          // 与普通关闭不是一回事 —— 必须问一次，并把影响说清。
+          const stopNode = stopConfirm && React.createElement(Modal, {
+            key: 'mcp-stop',
+            title: mt('mcp.intent.stopTitle'),
+            closeLabel: mt('btn.close'),
+            onClose: () => setStopConfirm(null),
+          },
+            React.createElement('p', { className: 'dsm-desc' }, mt('mcp.intent.stopDesc', { name: stopConfirm.serverName })),
+            React.createElement('div', { className: 'dsm-modal-actions' },
+              React.createElement('button', {
+                type: 'button',
+                className: 'dsm-btn dsm-btn-danger',
+                onClick: () => { const row = stopConfirm; setStopConfirm(null); setServerIntent(row, 'blocked') },
+              }, mt('mcp.intent.stop'))))
+
           return React.createElement('section', { className: 'dsm-section' },
             // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 整理补丁 · 全部启用。
             // 低频两件（整理补丁 / 批量启停）用 quiet 弱化视觉权重（§6 备注），全部常驻可见 ——
@@ -827,15 +1087,20 @@
                 // 批量启停与页头其余动作同栏。场景内**照常可用**：
                 // 改动会同步写进当前场景的档案（宿主 syncSwitchToScene），只有场景锁定才冻结。
                 // 两个方向各取各的字面量键，不合成三元（词典键必须 t('字面量') 直传）。
-                React.createElement('button', { key: 'setall', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading || !summary.total, onClick: setAllServers },
-                  summary.total > 0 && summary.enabled === summary.total ? mt('mcp.btn.disableAll') : mt('mcp.btn.enableAll')),
+                React.createElement('button', { key: 'setall', type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy !== null || state.loading || bulkEmpty || scopeWriteLocked(false), onClick: setAllServers },
+                  // 会话层只能藏不能连：全局关着的那几台本来就不可能亮起来，判"是不是全开"
+                  // 要把它们排除 —— 否则全部可见之后按钮仍写着「全部启用」，点了什么也不发生。
+                  bulkAllOn ? mt('mcp.btn.disableAll') : mt('mcp.btn.enableAll')),
               ],
             }),
-            state.locked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('lock.banner')) : null,
+            // 场景锁只冻结全局写入；会话层改的是本对话的可见性，照样能改 —— 不显示这条。
+            state.locked === true && !scopeIsSession() ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('lock.banner')) : null,
             // 场景未锁定时开关照常可用：说清「改动会同步写进该场景的档案」，别让用户担心白改。
             // 锁定期间不显示 —— 那时开关是灰的，"改动会写进档案"是句空话，与上一条锁定横幅
             // 并排还会互相矛盾（用户 2026-09-19）。
-            (state.locked !== true && state.scene) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('scene.switch.banner', { scene: state.scene })) : null,
+            // 会话层不显示这条：它说的是「改动会同步档案」，而本层的开关写的是会话覆盖，
+            // 与档案无关（说了就是假话）。本层另有作用域条上那句说明。
+            (state.locked !== true && state.scene && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('scene.switch.banner', { scene: state.scene })) : null,
             // 列表工具条（REDESIGN §3.3，切片四）：搜索 + 层级筛选住 children；本页无批量动作，
             // batch 槽留空。
             React.createElement(Toolbar, { key: 'filters' },
@@ -852,6 +1117,7 @@
             detailNode,
             compactNode,
             confirmNode,
+            stopNode,
             jsonImportOpen ? React.createElement(McpJsonImportModal, {
               key: 'mcp-import-json',
               t: mt,
@@ -887,6 +1153,8 @@
           // 提示词域（预设 + 快捷）的清单加载与恢复/永久删除都在组件内部完成，
           // 本页只在写操作后重读自己的数据。
           var ts = React.useState(false), trash = ts[0], setTrash = ts[1]
+          // 会话层「编辑本会话生效正文」（0.21.2）：null = 关闭；{content, error}。
+          var se = React.useState(null), sessionEdit = se[0], setSessionEdit = se[1]
           // D14：导出弹窗（null = 关闭；{busy, result}）。
           var xo = React.useState(null), exportState = xo[0], setExportState = xo[1]
           // ── 快捷提示词（用户存好的现成文字，只在对话框 `/` 菜单里由自己点出来）────
@@ -899,8 +1167,12 @@
           // 三个弹窗（新增预设 / 编辑预设 / 编辑快捷提示词）各自一份关窗暂存（见 42-shared-ui.js：
           // 关窗存、打开取，成功提交不走这条路，所以没有"成功后要记得清"那一步）。
           useFormDraftScope('prompt:')
+          /** 取数用的会话 id：全局层传空串（= 服务端按全局口径算）。 */
+          function scopeSessionId() { return scopeIsSession() ? scopeState.sessionId : '' }
           function refreshQuick() {
-            apiCall('quickprompt-list', {})
+            // 快捷词的 `enabled` 按本会话覆盖投影（quick-prompts.ts）；不带 sessionId 时
+            // 会话层看到的永远是全局值 —— 切了层却看不出任何一行变了，就是这个漏。
+            apiCall('quickprompt-list', { sessionId: scopeSessionId() })
               .then(function (res) {
                 if (res && res.ok) setQuick({ loading: false, error: null, prompts: res.prompts || [] })
                 else setQuick({ loading: false, error: (res && res.error) || t('mcp.msg.loadFailed'), prompts: [] })
@@ -939,6 +1211,7 @@
             return String(name || '').replace(/\.(md|markdown|txt)$/i, '').trim().replace(/[\\/<>:"|?*]+/g, '-') || 'imported'
           }
           function doImportFiles(files) {
+            if (promptWriteDenied()) return
             var list = Array.prototype.slice.call(files || [])
             if (!list.length) return
             setImportBusy(true); setImportResult(null)
@@ -972,10 +1245,14 @@
             // 页面内部那些「操作完顺手重读」的调用传 silent，免得按钮每次都闪一下。
             if (!silent) setState(function (s) { return Object.assign({}, s, { loading: true }) })
             refreshQuick()
-            apiCall('agentsmd-list', {}).then(function (res) {
+            // 会话层把本会话 id 一起带上：服务端拿「本会话真正注入的正文」与每份预设比对，
+            // 标出会话层沿用的那一份（全局应用 / 场景 / 冻结快照都不带 presetId，只能比内容）。
+            apiCall('agentsmd-list', scopeIsSession() ? { sessionId: scopeState.sessionId } : {}).then(function (res) {
               // 刷新即清掉上一次的「拒绝」说明（它解释的是那一次点击，不是常驻状态）。
-              setState(function (s) { return { loading: false, error: res && res.ok ? null : ((res && res.error) || mt('mcp.msg.loadFailed')), presets: (res && res.presets) || [], current: s.current, scenePrompt: (res && res.scenePrompt) || null, anyLocked: (res && res.anyLocked) === true, deny: res && res.ok ? null : s.deny } })
-            }).catch(function (e) { setState({ loading: false, error: errMsg(e), presets: [], current: null, scenePrompt: null, deny: null }) })
+              // **`notice` 要留着**：操作成功后是先写回执、再调 refresh 重读的；这里返回一个
+              // 新状态对象会把回执一起吞掉（全局应用的「不影响已存在会话」正是这样消失的）。
+              setState(function (s) { return { loading: false, error: res && res.ok ? null : ((res && res.error) || mt('mcp.msg.loadFailed')), presets: (res && res.presets) || [], current: s.current, scenePrompt: (res && res.scenePrompt) || null, anyLocked: (res && res.anyLocked) === true, deny: res && res.ok ? null : s.deny, notice: s.notice } })
+            }).catch(function (e) { setState(function (s) { return { loading: false, error: errMsg(e), presets: [], current: null, scenePrompt: null, deny: null, notice: s.notice } }) })
             apiCall('agentsmd-get-current', {}).then(function (res) {
               if (res && res.ok) setState(function (s) { return Object.assign({}, s, { current: res }) })
               else actionFailed(res)
@@ -992,7 +1269,17 @@
               : errMsg(resOrErr)
             setState(function (s) { return Object.assign({}, s, { notice: { kind: 'err', text: t('error.action', { error: text }) } }) })
           }
-          React.useEffect(function () { refresh() }, [])
+          // 本页订阅当前层（0.21.2）：快捷词每一行的生效值与来源都跟着层走。
+          var scopeState = useScopeLayer()
+          // 本会话的提示词覆盖（会话层才有）：`{presetId?} / {content?}`，null = 没覆盖。
+          var sessionPrompt = scopeIsSession() && scopeState.prompt ? scopeState.prompt.override : null
+          // 本会话正文是**手写**的（不是某份预设）：此时列表里哪一份都不该标「沿用」——
+          // 注入的正文不来自任何预设，标了就会让用户以为应用的是那一份（0.21.2 复核）。
+          var sessionCustomBody = !!sessionPrompt && typeof sessionPrompt.content === 'string' && sessionPrompt.content !== ''
+          // 切层要重取：`quickprompt-list` 带 `sessionId` 时按本会话投影 `enabled`；
+          // 预设那两块（`agentsmd-list` / `agentsmd-get-current`）是全局口径，跟着重取一次
+          // 也无妨 —— 它们在会话层里不该显示覆盖值，重取正好把上一层的残留清掉。
+          React.useEffect(function () { refresh() }, [scopeState.sessionId, scopeState.revision])
 
           var cur = state.current
           // 场景接管基线时（scenePrompt 指向某个启用场景的绑定），提示词页的「应用」只对
@@ -1055,6 +1342,18 @@
           function beginAction() {
             setState(function (s) { return Object.assign({}, s, { notice: null }) })
           }
+          /**
+           * 写口的**最后一道收口**（0.21.2）：按钮置灰只是提示，键盘 / 残留状态 / 未来的新入口
+           * 都可能绕过它。所有会写提示词内容的函数开头都过这一关，拦下时把原因说成一条 notice。
+           *
+           * `promptWriteBlocked` 是渲染期赋值的 `var`（函数作用域提升），这些写函数只在
+           * 用户事件里调用 —— 那时渲染早已跑完，读到的是最新一份判据。
+           */
+          function promptWriteDenied() {
+            if (!promptWriteBlocked) return false
+            setState(function (s) { return Object.assign({}, s, { notice: { kind: 'warn', text: promptBlockTitle } }) })
+            return true
+          }
           function openEdit(p) {
             beginAction()
             // 30 秒内重开同一份：把刚才关掉的那份编辑内容填回去，不重读磁盘。
@@ -1067,6 +1366,19 @@
             }).catch(actionFailed)
           }
           function doApply(id) {
+            // 会话层：应用预设 = 写侧车 `prompt.presetId`（全局基线一个字不动）。
+            if (scopeIsSession()) {
+              beginAction()
+              setBusy('apply-' + id)
+              scopeWritePrompt({ action: 'apply', presetId: id }).then(function (res) {
+                setBusy(null); setApplyConfirm(null)
+                if (res && res.ok === false) { actionFailed(res); return }
+                setState(function (s) { return Object.assign({}, s, { notice: { kind: 'ok', text: scopeT('scope.prompt.appliedToSession', { id: id }) } }) })
+                refresh()
+              }).catch(function (e) { setBusy(null); setApplyConfirm(null); actionFailed(e) })
+              return
+            }
+            if (promptWriteDenied()) return
             beginAction()
             setBusy('apply-' + id)
             // 应用会写全局基线（接管期间还可能改绑场景），失败必须可见 —— 静默返回会让
@@ -1078,8 +1390,11 @@
             // 走 actionFailed 的一次性横幅：可见、不顶掉列表。
             apiCall('agentsmd-apply', { id: id }).then(function (res) {
               setBusy(null); setApplyConfirm(null)
-              if (res && res.ok === false) actionFailed(res)
-              else refresh()
+              if (res && res.ok === false) { actionFailed(res); return }
+              // 0.21.2 第三轮：全局写口改成「未来基线的来源」，已存在会话冻结在各自快照里。
+              // 回执必须把这一点说出来，否则用户会以为刚应用的那份已经进了当前上下文。
+              setState(function (s) { return Object.assign({}, s, { notice: { kind: 'ok', text: scopeIsWorkspace() ? t('scope.prompt.globalApplied.workspace', { id: id }) : t('scope.prompt.globalApplied', { id: id }) } }) })
+              refresh()
             }).catch(function (e) { setBusy(null); setApplyConfirm(null); actionFailed(e) })
           }
           /**
@@ -1096,6 +1411,19 @@
            * `removed` 分两种说法，把"到底发生了什么"直接写在页面上。
            */
           function doUnapply() {
+            // 会话层：取消应用 = 清侧车 `prompt` 域，内容回退全局链。
+            if (scopeIsSession()) {
+              beginAction()
+              setBusy('unapply')
+              scopeWritePrompt({ action: 'unapply' }).then(function (res) {
+                setBusy(null); setApplyConfirm(null)
+                if (res && res.ok === false) { actionFailed(res); return }
+                setState(function (s) { return Object.assign({}, s, { notice: { kind: 'ok', text: scopeT('scope.prompt.clearedToGlobal') } }) })
+                refresh()
+              }).catch(function (e) { setBusy(null); setApplyConfirm(null); actionFailed(e) })
+              return
+            }
+            if (promptWriteDenied()) return
             beginAction()
             setBusy('unapply')
             apiCall('agentsmd-unapply', {}).then(function (res) {
@@ -1108,7 +1436,36 @@
               refresh()
             }).catch(function (e) { setBusy(null); setApplyConfirm(null); actionFailed(e) })
           }
+          /**
+           * 会话层「编辑本会话生效正文」（0.21.2）：以**当前生效正文**预填
+           * （`scope-get` 的 `prompt.effective`，含会话覆盖 / 场景预设 / AGENTS.md 的退化结果）；
+           * 保存写侧车 `prompt.content` —— 原本是 `presetId` 引用时，这一步展开为正文并清引用。
+           */
+          function openSessionEdit() {
+            beginAction()
+            var draft = takeFormDraft('prompt:session')
+            if (draft) { setSessionEdit(draft); return }
+            var effective = scopeState.prompt && typeof scopeState.prompt.effective === 'string' ? scopeState.prompt.effective : ''
+            setSessionEdit({ content: effective, error: null })
+          }
+          function doSessionEditSave() {
+            if (!sessionEdit) return
+            if (String(sessionEdit.content || '').trim() === '') {
+              setSessionEdit(Object.assign({}, sessionEdit, { error: t('scope.prompt.contentEmpty') }))
+              return
+            }
+            beginAction()
+            setBusy('session-edit')
+            scopeWritePrompt({ action: 'edit', content: String(sessionEdit.content) }).then(function (res) {
+              setBusy(null)
+              if (res && res.ok === false) { setSessionEdit(Object.assign({}, sessionEdit, { error: res.error })); return }
+              setSessionEdit(null)
+              setState(function (s) { return Object.assign({}, s, { notice: { kind: 'ok', text: scopeT('scope.prompt.editSaved') } }) })
+              refresh()
+            }).catch(function (e) { setBusy(null); setSessionEdit(Object.assign({}, sessionEdit, { error: errMsg(e) })) })
+          }
           function doRemove(p) {
+            if (promptWriteDenied()) return
             beginAction()
             setBusy('rm-' + p.id)
             // 删除只有**场景绑定**拦得住（宿主侧 agentsmd-remove 同一判据）。被场景绑定的那份
@@ -1147,6 +1504,7 @@
           }
           /** 真正落盘那一步（id 已定）。`id` 来自 `submitCreate` 或确认弹窗。 */
           function doCreate(id, content, description) {
+            if (promptWriteDenied()) return
             beginAction()
             setBusy('create')
             if (createModal && createModal.kind === 'quick') {
@@ -1176,6 +1534,7 @@
             }).catch(function () { setBusy(null) })
           }
           function doUpdate() {
+            if (promptWriteDenied()) return
             beginAction()
             setBusy('update')
             apiCall('agentsmd-update', { id: editModal.id, nextId: String(editModal.nextId || editModal.id), content: editModal.content, description: String(editModal.description == null ? '' : editModal.description) }).then(function (res) {
@@ -1202,6 +1561,7 @@
             setQuickEdit({ id: p.id, nextId: p.id, content: p.content || '', description: p.description || '' })
           }
           function doQuickUpdate() {
+            if (promptWriteDenied()) return
             beginAction()
             setBusy('quick-update')
             apiCall('quickprompt-update', {
@@ -1214,6 +1574,7 @@
             }).catch(function () { setBusy(null) })
           }
           function doQuickRemove(id) {
+            if (promptWriteDenied()) return
             beginAction()
             setBusy('quick-remove')
             apiCall('quickprompt-remove', { id: id }).then(function (res) {
@@ -1230,6 +1591,15 @@
             beginAction()
             const next = p.enabled === false
             setBusy('quick-toggle-' + p.id)
+            // 会话作用域（0.21.2，决策 8）：会话层下写 `scope-set`（`quickPrompts` 域），
+            // 全局层仍走 `quickprompt-toggle`。两条路不能合并：后者改的是 `meta.json`，
+            // 前者只写一个侧车 —— 合并就意味着会话层要把全局值改掉。
+            if (scopeIsSession()) {
+              scopeWriteFlag('quickPrompts', p.id, next, function () { return { ok: true } })
+                .then(function (res) { setBusy(null); if (res && res.ok) refreshQuick(); else if (res) actionFailed(res) })
+                .catch(function (e) { setBusy(null); actionFailed(e) })
+              return
+            }
             apiCall('quickprompt-toggle', { id: p.id, enabled: next }).then(function (res) {
               setBusy(null)
               if (res && res.ok) refreshQuick()
@@ -1253,19 +1623,23 @@
           var activeCount = React.useMemo(function () {
             return state.presets.filter(function (p) { return p.active }).length
           }, [state.presets])
+          // 会话层的「生效中」：本会话真正注入的正文对上哪一份预设就是哪一份 —— 会话覆盖、
+          // 全局沿用、场景绑定、冻结快照都算（服务端按内容比对，见 agentsmd-list 的 sessionActive）。
+          // 手写的会话正文不算任何预设（见 `sessionCustomBody`），但它本身是一份生效中的正文。
+          var sessionActiveCount = sessionCustomBody ? 1 : (state.presets.some(function (p) { return p.sessionActive === true }) ? 1 : 0)
           // 快捷提示词里"还开着"的条数（关掉的留在列表里，只是不进 `/` 菜单）。页头统计要用
           // 「启用 / 总数」，所以除了总数还得有这个分子。
           var quickEnabledCount = React.useMemo(function () {
-            return quick.prompts.filter(function (p) { return p.enabled !== false }).length
-          }, [quick.prompts])
+            return quick.prompts.filter(function (p) { return scopeFlag('quickPrompts', p.id, p.enabled !== false).value }).length
+          }, [quick.prompts, scopeState])
           var visibleQuick = React.useMemo(function () {
             return quick.prompts.filter(function (p) { return matchPresetQuery(p, dq) })
           }, [quick.prompts, dq])
           // 与上面预设那一档同一条口径：亮着的排前面。关掉的照样列着（那只是"不在 `/` 菜单里出现"，
           // 不是删掉），沉到底部是为了让常用的那几条留在第一眼。
           var orderedQuick = React.useMemo(function () {
-            return rankedFirst(quickRank, function (p) { return p.id }, visibleQuick, function (p) { return p.enabled !== false })
-          }, [visibleQuick])
+            return rankedFirst(quickRank, function (p) { return p.id }, visibleQuick, function (p) { return scopeFlag('quickPrompts', p.id, p.enabled !== false).value })
+          }, [visibleQuick, scopeState])
           // ── 两组都是**可折叠卡片**（用户 2026-10-01 裁定：做成技能那样）──────────
           // 默认展开；打了字强制展开 —— 卡片收着的话搜索结果一行都看不见（技能页 / MCP 页同口径）。
           var cg = React.useState({})
@@ -1301,12 +1675,30 @@
           function toggleQuickBulk() {
             var list = visibleQuick
             if (!list.length) return
-            var turnOn = !list.every(function (p) { return p.enabled !== false })
-            var targets = list.filter(function (p) { return (p.enabled !== false) !== turnOn })
+            // 本层的生效值（会话层 = 覆盖优先，全局层 = meta.json）。
+            var onOf = function (p) { return scopeFlag('quickPrompts', p.id, p.enabled !== false).value }
+            var turnOn = !list.every(onOf)
+            var targets = list.filter(function (p) { return onOf(p) !== turnOn })
             if (!targets.length) return
             beginAction()
             setGroupsCollapsed(Object.assign({}, groupsCollapsed, { quick: false }))
             setBusy('quick-bulk')
+            // 会话作用域（0.21.2，决策 8）：会话层逐条写 `scope-set`，**不动 meta.json**。
+            // 用 `quickprompt-toggle` 承接批量就是「本会话全开、别的对话一起被打开」。
+            if (scopeIsSession()) {
+              var sid = scopeState.sessionId
+              Promise.all(targets.map(function (p) {
+                return apiCall('scope-set', { sessionId: sid, domain: 'quickPrompts', key: p.id, value: turnOn })
+                  .catch(function (e) { return { ok: false, error: errMsg(e) } })
+              })).then(function (all) {
+                setBusy(null)
+                try { refreshScope() } catch (e) { /* 面板没开着也只是白跑一次读 */ }
+                refreshQuick()
+                var bad = all.filter(function (r) { return !r || r.ok !== true }).length
+                if (bad) setState(function (s) { return Object.assign({}, s, { notice: { kind: 'err', text: t('prompts.bulk.failed', { done: all.length - bad, failed: bad }) } }) })
+              })
+              return
+            }
             // 逐条走同一个 `quickprompt-toggle`（不新增批量 op）：每条都要能被场景档案同步跟上
             // （登记表里那颗 syncsArchive），自己拼一条批量通道就会把这件事漏掉。
             Promise.all(targets.map(function (p) {
@@ -1319,10 +1711,20 @@
               if (bad) setState(function (s) { return Object.assign({}, s, { notice: { kind: 'err', text: t('prompts.bulk.failed', { done: all.length - bad, failed: bad }) } }) })
             })
           }
-          var quickAllOn = visibleQuick.length > 0 && visibleQuick.every(function (p) { return p.enabled !== false })
+          var quickAllOn = visibleQuick.length > 0 && visibleQuick.every(function (p) { return scopeFlag('quickPrompts', p.id, p.enabled !== false).value })
+          /**
+           * **预设库**（新建 / 导入 / 编辑 / 删除 / 回收站恢复）是全局资产：
+           *   · 会话层：一律置灰并提示切到全局默认（预设库写口不随对话走）；
+           *   · 全局层：受场景锁（`anyLocked`）拦。
+           *
+           * 应用 / 取消应用 / 编辑本会话正文**不在此列**：会话层写的是侧车 `prompt` 域，
+           * 场景锁不挡（`scopeWritePrompt` 只受会话锁约束）。
+           */
+          var promptWriteBlocked = state.anyLocked === true || scopeIsSession()
+          var promptBlockTitle = scopeIsSession() ? t('scope.prompt.libraryGlobalOnly') : t('scenes.lock.blockedEdit')
           var quickBulkButton = React.createElement('button', {
             type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk',
-            disabled: busy !== null || state.anyLocked === true || !visibleQuick.length,
+            disabled: busy !== null || scopeWriteLocked(state.anyLocked === true) || !visibleQuick.length,
             title: t('prompts.bulk.quick'),
             onClick: toggleQuickBulk,
           }, bulkPair(t(quickAllOn ? 'bulk.unselectAll' : 'bulk.selectAll'), t(quickAllOn ? 'bulk.selectAll' : 'bulk.unselectAll')))
@@ -1333,20 +1735,31 @@
             // （在不在 `/` 菜单里出现）就是左边那颗开关，行首点只复述它。
             return React.createElement(ListRow, {
               key: p.id,
-              dots: [React.createElement(StatusDot, {
-                key: 'dot',
-                tone: p.enabled !== false ? 'ok' : 'idle',
-                title: p.enabled !== false ? t('status.enabled') : t('status.disabled'),
-              })],
+              dots: [(function () {
+                var flag = scopeFlag('quickPrompts', p.id, p.enabled !== false)
+                return React.createElement(StatusDot, {
+                  key: 'dot',
+                  tone: flag.value ? 'ok' : 'idle',
+                  scoped: flag.value && flag.scoped,
+                  title: flag.value ? t('status.enabled') : t('status.disabled'),
+                })
+              })()],
               name: p.id,
+              // 纯视图域的会话覆盖计数（0.21.2）：有几个对话单独拨过这一条快捷提示词。
+              nameAfter: leaseTag({ t: t, domain: 'quickPrompts', key: String(p.id), runtime: false }),
               meta: p.description || null,
-              side: React.createElement(Switch, {
-                on: p.enabled !== false,
-                disabled: busy !== null || state.anyLocked === true,
-                label: t('quickprompt.toggle') + ' ' + p.id,
-                title: t('quickprompt.toggle.hint'),
-                onClick: function () { toggleQuick(p) },
-              }),
+              // 会话作用域（0.21.2）：值来自 `scopeFlag`；来源看行首那颗点，开关本身不染色。
+              side: (function () {
+                var flag = scopeFlag('quickPrompts', p.id, p.enabled !== false)
+                return React.createElement(Switch, {
+                  on: flag.value,
+                  scoped: flag.scoped,
+                  disabled: busy !== null || scopeWriteLocked(state.anyLocked === true),
+                  label: t('quickprompt.toggle') + ' ' + p.id,
+                  title: t('quickprompt.toggle.hint'),
+                  onClick: function () { toggleQuick(p) },
+                })
+              })(),
               actions: [
                 // 编辑 / 删除**都**收进 ⋯（用户 2026-10-16 第二轮）：这一页的行只有名字与描述，
                 // 行尾留两颗按钮就把两行文字挤没了。删除在菜单里是红字。
@@ -1356,8 +1769,8 @@
                   key: 'menu',
                   label: t('row.menu', { name: p.id }),
                   items: [
-                    { key: 'edit', label: t('agm.btn.edit'), disabled: busy !== null, onClick: function () { openQuickEdit(p) } },
-                    { key: 'delete', label: t('agm.btn.delete'), danger: true, disabled: busy !== null || state.anyLocked === true, title: state.anyLocked === true ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setQuickConfirm({ id: p.id }) } },
+                    { key: 'edit', label: t('agm.btn.edit'), disabled: busy !== null || scopeIsSession(), title: scopeIsSession() ? promptBlockTitle : undefined, onClick: function () { openQuickEdit(p) } },
+                    { key: 'delete', label: t('agm.btn.delete'), danger: true, disabled: busy !== null || promptWriteBlocked, title: promptWriteBlocked ? promptBlockTitle : undefined, onClick: function () { setQuickConfirm({ id: p.id }) } },
                   ],
                 }),
               ],
@@ -1387,6 +1800,14 @@
                     // 「生效中」= 当前真正在起作用的基线：启用的场景绑了它，就是它（用户裁定）；
                     // 否则看文件比对。p.fileApplied 单独留着，说明「AGENTS.md 里确实是它」。
                     var viaScene = p.activeVia === 'scene'
+                    // 会话层（0.21.2）：生效标记按**本会话真正注入的正文**投影 —— 会话覆盖、
+                    // 全局沿用、场景绑定、冻结快照都算（服务端按内容比对，见 sessionActive）。
+                    // `sessionOwned` 才是「本会话单独应用了它」；开关的开态看**是否生效**
+                    // （用户 2026-10-21：全局那行明明「本会话沿用」，开关却是关的，看起来像没开）。
+                    // 沿用的那份点开关 = 把它钉到本会话（不是关掉：提示词域没有「不用任何预设」态）。
+                    var sessionOwned = scopeIsSession() && !!sessionPrompt && sessionPrompt.presetId === p.id
+                    var sessionActive = scopeIsSession() && !sessionCustomBody && (sessionOwned || p.sessionActive === true)
+                    var rowOn = scopeIsSession() ? sessionActive : p.active === true
                     var refs = p.refs || []
                     var restoreRef = refs.some(function (r) { return r.kind === 'restore' })
                     // 场景绑定与「当前应用的」那份拦得住删除（判据见 blockingRefsOf 的说明）。
@@ -1407,17 +1828,29 @@
                       key: p.id,
                       dots: [React.createElement(StatusDot, {
                         key: 'dot',
-                        tone: p.active ? 'ok' : 'idle',
-                        title: p.active
-                          ? (viaScene ? t('agm.active.hint.scene', { scene: (state.scenePrompt && state.scenePrompt.label) || (state.scenePrompt && state.scenePrompt.scene) || '' }) : t('agm.active.hint.file'))
-                          : t('agm.inactive'),
+                        tone: (scopeIsSession() ? sessionActive : rowOn) ? 'ok' : 'idle',
+                        // 来源标记只标**本会话覆盖**：沿用的那一份是绿点但不是 scoped（用户
+                        // 2026-10-21：沿用被点上"来源"环，看起来像本会话单独设过）。
+                        scoped: scopeIsSession() && sessionOwned,
+                        title: scopeIsSession()
+                          ? (sessionOwned ? scopeT('scope.prompt.sessionOverride')
+                            : sessionActive ? scopeT('scope.prompt.inherited') : t('agm.inactive'))
+                          : (rowOn
+                            ? (viaScene ? t('agm.active.hint.scene', { scene: (state.scenePrompt && state.scenePrompt.label) || (state.scenePrompt && state.scenePrompt.scene) || '' }) : t('agm.active.hint.file'))
+                            : t('agm.inactive')),
                       })],
                       name: p.id,
-                      tag: fileMismatch ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('agm.file.mismatch.hint') }, t('agm.file.mismatch')) : null,
+                      tag: !scopeIsSession() && fileMismatch ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('agm.file.mismatch.hint') }, t('agm.file.mismatch')) : null,
+                      // 会话层只留描述：AGENTS.md 的文件比对 / 退出恢复是全局口径，摆在这一层会各说各话。
                       meta: [
                         p.description ? React.createElement('span', { key: 'desc', className: 'dsm-listrow-meta-desc', title: p.description }, p.description) : null,
-                        !p.active && p.fileApplied ? React.createElement('span', { key: 'applied', className: 'dsm-listrow-meta-info', title: t('agm.file.applied.hint') }, t('agm.file.applied')) : null,
-                        restoreRef ? React.createElement('span', { key: 'restore', className: 'dsm-listrow-meta-info', title: t('agm.restore.tag.hint') }, t('agm.restore.tag')) : null,
+                        // 会话层沿用（全局 / 场景 / 冻结快照）时点出「这不是本会话单独应用的」，
+                        // 否则用户会以为右边那颗开关本来就开着。
+                        scopeIsSession() && sessionActive && !sessionOwned
+                          ? React.createElement('span', { key: 'inherited', className: 'dsm-listrow-meta-info', title: scopeT('scope.prompt.inherited.hint') }, scopeT('scope.prompt.inherited'))
+                          : null,
+                        !scopeIsSession() && !p.active && p.fileApplied ? React.createElement('span', { key: 'applied', className: 'dsm-listrow-meta-info', title: t('agm.file.applied.hint') }, t('agm.file.applied')) : null,
+                        !scopeIsSession() && restoreRef ? React.createElement('span', { key: 'restore', className: 'dsm-listrow-meta-info', title: t('agm.restore.tag.hint') }, t('agm.restore.tag')) : null,
                       ],
                       side: React.createElement(Switch, {
                         // 「应用 / 取消应用」同一颗药丸开关（0.19.1 起有两个方向）：
@@ -1431,15 +1864,24 @@
                         //     换绑场景）；撤销归场景页管，本页不该把场景的绑定偷偷撤掉。
                         // 没有链起点可回时（播种出来的 default 就是这样）不开弹窗，
                         // 只给一条说明，并把出路（应用别的预设 / 直接编辑 AGENTS.md）说清楚。
-                        on: p.active === true,
-                        disabled: busy !== null || state.anyLocked === true,
+                        on: rowOn,
+                        disabled: busy !== null || (scopeIsSession() ? scopeState.locked === true : promptWriteBlocked),
                         label: t('agm.apply.switch') + ' ' + p.id,
-                        title: applyRebinds ? t('agm.apply.rebindScene', { scene: sceneDriverLabel })
+                        title: scopeIsSession()
+                          ? (sessionOwned ? t('scope.prompt.restoreGlobal')
+                            : sessionActive ? scopeT('scope.prompt.pinSwitch', { id: p.id })
+                            : scopeT('scope.prompt.applyToSession', { id: p.id }))
+                          : promptWriteBlocked ? promptBlockTitle
+                          : applyRebinds ? t('agm.apply.rebindScene', { scene: sceneDriverLabel })
                           : p.active
                             ? (viaScene ? t('agm.apply.switch.on')
                               : (unapplyReady ? (unapplyRemoves ? t('agm.unapply.switch.onRemove') : t('agm.unapply.switch.on')) : t('agm.unapply.switch.blocked')))
                             : t('agm.apply.hint'),
                         onClick: function () {
+                          if (scopeIsSession()) {
+                            if (sessionOwned) { setApplyConfirm({ id: p.id, unapply: true, session: true }); return }
+                            setApplyConfirm({ id: p.id, session: true }); return
+                          }
                           if (!p.active || viaScene) { setApplyConfirm({ id: p.id }); return }
                           if (!unapplyReady) { setState(function (s) { return Object.assign({}, s, { deny: t('agm.unapply.unavailable') }) }); return }
                           setApplyConfirm({ id: p.id, unapply: true })
@@ -1451,11 +1893,21 @@
                           key: 'menu',
                           label: t('row.menu', { name: p.id }),
                           items: [
-                            { key: 'edit', label: t('agm.btn.edit'), disabled: busy !== null, onClick: function () { openEdit(p) } },
+                            // 会话层（0.21.2 第三轮）：预设库仍是全局资产，「编辑」这一项切换语义 ——
+                            // 编辑的是**本会话生效正文**（写侧车），不再禁用。全局状态区块删除后，
+                            // 「编辑本会话正文」就靠这一项保持可达（用户裁定不新开区块）。
+                            scopeIsSession()
+                              ? { key: 'edit-session', label: scopeT('scope.prompt.editSessionBody'), disabled: busy !== null || scopeState.locked === true, title: scopeState.locked === true ? scopeT('scope.lock.blockedSession') : undefined, onClick: openSessionEdit }
+                              : { key: 'edit', label: t('agm.btn.edit'), disabled: busy !== null, onClick: function () { openEdit(p) } },
+                            // 「恢复全局」在会话层必须有出口：content 覆盖时没有哪一行显示「生效中」，
+                            // 那颗开关也就指不到它。挂在行菜单里（覆盖存在时每行都有，语义相同）。
+                            scopeIsSession() && sessionPrompt
+                              ? { key: 'restore-global', label: t('scope.prompt.restoreGlobal'), disabled: busy !== null || scopeState.locked === true, onClick: function () { setApplyConfirm({ id: sessionPrompt.presetId || '', unapply: true, session: true }) } }
+                              : null,
                             {
                               key: 'delete', label: t('agm.btn.delete'), danger: true,
-                              disabled: busy !== null || state.anyLocked === true,
-                              title: blockingTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) : t('scenes.lock.blockedEdit'),
+                              disabled: busy !== null || promptWriteBlocked,
+                              title: blockingTexts.length > 0 ? t('agm.btn.delete.blocked.refs', { refs: blockingTexts.join(t('agm.ref.sep')) }) : promptBlockTitle,
                               onClick: function () {
                                 // 被引用中的预设**点得动但删不掉**：当面说出「谁在用 / 该怎么解除」，
                                 // 而不是让用户对着禁用按钮猜（disabled 的按钮连 title 都不弹）。
@@ -1466,7 +1918,7 @@
                                 setApplyConfirm({ id: p.id, remove: true, removeFileApplied: p.fileApplied === true })
                               },
                             },
-                          ],
+                          ].filter(Boolean),
                         }),
                       ],
                     })
@@ -1482,29 +1934,34 @@
               // 「启用 / 总数」的比例（关掉的照样列着，只是不进 `/` 菜单，所以"总数"要看得见）。
               stats: [
                 [state.presets.length, t('agm.stat.total')],
-                [activeCount, t('agm.stat.active')],
+                [scopeIsSession() ? sessionActiveCount : activeCount, t('agm.stat.active')],
                 [quickEnabledCount + '/' + quick.prompts.length, t('quickprompt.stat')],
               ],
               actions: [
-                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: state.anyLocked === true, onClick: function () { setCreateModal(takeFormDraft('prompt:create') || { kind: 'global', id: '', content: '', description: '', error: null }) } }, t('agm.btn.new')),
-                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || state.anyLocked === true, onClick: function () { setImportResult(null); setImportOpen(true) } }, t('agm.btn.import')),
+                React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: promptWriteBlocked, title: promptWriteBlocked ? promptBlockTitle : undefined, onClick: function () { setCreateModal(takeFormDraft('prompt:create') || { kind: 'global', id: '', content: '', description: '', error: null }) } }, t('agm.btn.new')),
+                React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || promptWriteBlocked, title: promptWriteBlocked ? promptBlockTitle : undefined, onClick: function () { setImportResult(null); setImportOpen(true) } }, t('agm.btn.import')),
                 React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy !== null || !(state.presets.length || quick.prompts.length), onClick: function () { setExportState({ busy: false, result: null }) } }, t('export.presets')),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setTrash(true) } }, t('trash.btn.open')),
               ],
             }),
-            state.anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
+            state.anyLocked === true && !scopeIsSession() ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             // 场景接管时把「为什么应用按钮点不动」直接写出来，而不是让用户对着置灰的按钮猜。
             // **锁定期间不显示**：那时「应用别的预设会改绑场景」是句空话（按钮全灰），与上面
             // 那条锁定横幅并排还会互相矛盾 —— MCP / 技能 / 子智能体 / 记忆四页都是
             // 「锁定时只显示锁定横幅」，提示词页此前漏了这层互斥，于是同一件事说了两遍
             // （用户 2026-09-19 截图：提示词页两条黄条，其他管理页只有一条）。
-            (state.anyLocked !== true && sceneDriver) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('agm.sceneLock.notice', { scene: sceneDriverLabel, id: sceneDriver.presetId })) : null,
+            (state.anyLocked !== true && sceneDriver && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('agm.sceneLock.notice', { scene: sceneDriverLabel, id: sceneDriver.presetId })) : null,
             // 共享 agents 根那一份 AGENTS.md（`~/.agents/AGENTS.md`）**只读提示**：0.2.1 起
             // 官方把用户全局链扩成两份并列（`$DSH_HOME/AGENTS.md` → `<agentsHome>/AGENTS.md`），
             // 这一页只管得到前一份。所以"改了没生效"有了第二个解释 —— 真正在说话的是后一份。
             // 只提示、不给写入入口：这不是本插件的预设，写它会与官方的去重/刷新规则互相覆盖。
             (state.current && state.current.agentsHomeAgentsMd && state.current.agentsHomeAgentsMd.exists)
               ? React.createElement('div', { className: 'dsm-feedback', role: 'status' }, t('agm.agentsHome.present', { path: state.current.agentsHomeAgentsMd.path }))
+              : null,
+            // 本会话正文是手写的（不属于任何预设）：列表里没有一行会显示「生效中」，
+            // 不说一句用户就会以为提示词没生效（0.21.2 复核）。恢复入口在行菜单的「恢复全局」。
+            scopeIsSession() && sessionCustomBody
+              ? React.createElement('div', { className: 'dsm-feedback', role: 'status' }, scopeT('scope.prompt.customBody'))
               : null,
             // 一次性拒绝说明（被引用的预设删不掉）：不替换列表，只加一条横幅。
             state.deny ? React.createElement(Notice, { kind: 'warn', text: state.deny }) : null,
@@ -1518,6 +1975,9 @@
                 placeholder: t('agm.search.placeholder'),
                 onChange: function (e) { setQuery(e.target.value) },
               })),
+            // 会话层不再有独立状态区块（用户 2026-10-21 裁定）：应用 / 取消应用仍是行内那颗
+            // 开关，编辑本会话正文 / 恢复全局走行菜单（见上面 RowMenu）。冻结状态不另做展示 ——
+            // 需要查证时看「注入实况」。
             // 两段各一张可折叠卡片：卡片头是组名 + 条数（点它收起/展开），卡片体里才是条目。
             groupCard('global', t('prompts.group.global'), state.presets.length, null, body, activeCount > 0),
             quickSection,
@@ -1557,6 +2017,9 @@
             trash ? React.createElement(TrashModal, {
               t: t,
               domain: 'prompts',
+              // 恢复 / 永久删除写的都是全局那一份提示词内容 → 与其余写口同一判据（0.21.2：
+              // 此前只挡会话层，场景锁着时回收站里的写仍然能过）。
+              locked: promptWriteBlocked,
               onClose: function () { setTrash(false) },
               onReload: function () { refresh(true) },
             }) : null,
@@ -1579,11 +2042,11 @@
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', value: editModal.content, onChange: function (e) { setEditModal(Object.assign({}, editModal, { content: e.target.value })) } })),
               editModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, editModal.error) : null,
-              // 锁定态说明「为什么保存键是灰的」：编辑页在锁定期间能打开（用户 2026-10-12），
-              // 但写盘这一步被冻结闸挡住。
-              state.anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scenes.lock.blockedEdit')) : null,
+              // 锁定态与会话层都说「为什么保存键是灰的」：编辑页照常能打开（用户 2026-10-12），
+              // 挡的只是写盘那一步 —— 提示词全局一份，停在某个对话里改不动它。
+              promptWriteBlocked ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, promptBlockTitle) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || state.anyLocked === true || !String(editModal.nextId || '').trim(), onClick: doUpdate }, t('agm.btn.save')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || promptWriteBlocked || !String(editModal.nextId || '').trim(), onClick: doUpdate }, t('agm.btn.save')))) : null,
             // 新建：id + 描述 + **正文文本框**（用户直接写内容）。原先还有一格「或从现有预设复制」，
             // 用户 2026-09-30 要求删掉 —— 抄一份再改是编辑页的事，新建时只想直接写。
             // 弹窗高度跟着内容走（2026-10-10 拆掉 `dsm-modal-fixed` 定高）：当初定高是怕切类型时
@@ -1609,11 +2072,25 @@
                 React.createElement('label', { className: 'dsm-label' }, t('agm.field.content')),
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', placeholder: t(createModal.kind === 'quick' ? 'quickprompt.field.content.placeholder' : 'agm.field.content.placeholder'), value: createModal.content || '', onChange: function (e) { setCreateModal(Object.assign({}, createModal, { content: e.target.value })) } })),
               createModal.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, createModal.error) : null,
+              // 与编辑弹窗同一口径（0.21.2）：会话层 / 锁定态都能打开表单，写盘那一步置灰并说明。
+              promptWriteBlocked ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, promptBlockTitle) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || !String(createModal.id || '').trim(), onClick: function () { submitCreate(createModal.id, createModal.content, createModal.description) } }, t('agm.btn.create')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || promptWriteBlocked || !String(createModal.id || '').trim(), onClick: function () { submitCreate(createModal.id, createModal.content, createModal.description) } }, t('agm.btn.create')))) : null,
             // 三种确认共用一个弹窗：删除 / 取消应用 / 应用（`applyConfirm` 上的标记位区分）。
-            applyConfirm ? React.createElement(Modal, { className: 'dsm-modal-sm', title: applyConfirm.remove ? (t('agm.remove.title') + ' · ' + applyConfirm.id) : ((applyConfirm.unapply ? t('agm.unapply.title') : t('agm.applyModal.title')) + ' · ' + applyConfirm.id), closeLabel: t('btn.close'), onClose: function () { setApplyConfirm(null) } },
-              applyConfirm.remove
+            applyConfirm ? React.createElement(Modal, {
+              className: 'dsm-modal-sm',
+              title: applyConfirm.session
+                ? (applyConfirm.unapply ? t('scope.prompt.restoreGlobal') : scopeT('scope.prompt.applyToSession', { id: applyConfirm.id }))
+                : applyConfirm.remove ? (t('agm.remove.title') + ' · ' + applyConfirm.id) : ((applyConfirm.unapply ? t('agm.unapply.title') : t('agm.applyModal.title')) + ' · ' + applyConfirm.id),
+              closeLabel: t('btn.close'), onClose: function () { setApplyConfirm(null) },
+            },
+              applyConfirm.session
+                ? React.createElement('div', null,
+                    React.createElement('p', { className: 'dsm-help' }, applyConfirm.unapply
+                      ? scopeT('scope.prompt.clearSessionBodyGeneric')
+                      : scopeT('scope.prompt.applySessionBody', { id: applyConfirm.id })),
+                    React.createElement('div', { className: 'dsm-feedback dsm-warning' }, scopeT('scope.prompt.applySessionNote')))
+                : applyConfirm.remove
                 ? React.createElement('div', null,
                     React.createElement('p', { className: 'dsm-help' }, t('agm.remove.title') + ' ' + applyConfirm.id + t('agm.remove.suffix')),
                     // 删的正是「AGENTS.md 里就是它」的那一份 → 必须说清**文件不会被改动、
@@ -1628,12 +2105,38 @@
                       React.createElement('div', { className: 'dsm-feedback dsm-warning' }, unapplyRemoves ? t('agm.unapply.noteRemove') : t('agm.unapply.note')))
                   : React.createElement('div', null,
                       React.createElement('p', { className: 'dsm-help' }, t('agm.apply.prefix') + applyConfirm.id + t('agm.apply.suffix')),
-                      React.createElement('div', { className: 'dsm-feedback dsm-warning' }, t('agm.apply.note'))),
+                      React.createElement('div', { className: 'dsm-feedback dsm-warning' }, t('agm.apply.note')),
+                      // 0.21.2 第三轮：全局层写的是**未来基线**，已存在会话冻结在各自快照里。
+                      // 必须在点下去之前就说清，否则"应用了却没变化"会被当成故障。
+                      React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, scopeIsWorkspace() ? t('scope.prompt.globalApplyNote.workspace') : t('scope.prompt.globalApplyNote'))),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn ' + (applyConfirm.remove || (applyConfirm.unapply && unapplyRemoves) ? 'dsm-btn-danger' : ''), disabled: busy !== null, onClick: function () { if (applyConfirm.remove) doRemove({ id: applyConfirm.id }); else if (applyConfirm.unapply) doUnapply(); else doApply(applyConfirm.id) } }, applyConfirm.remove ? t('agm.btn.confirmRemove') : (applyConfirm.unapply ? (unapplyRemoves ? t('agm.btn.confirmUnapplyRemove') : t('agm.btn.confirmUnapply')) : t('agm.btn.confirmApply'))))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn ' + (!applyConfirm.session && (applyConfirm.remove || (applyConfirm.unapply && unapplyRemoves)) ? 'dsm-btn-danger' : ''), disabled: busy !== null, onClick: function () { if (applyConfirm.remove) doRemove({ id: applyConfirm.id }); else if (applyConfirm.unapply) doUnapply(); else doApply(applyConfirm.id) } }, applyConfirm.session
+                  ? (applyConfirm.unapply ? t('scope.prompt.restoreGlobal') : t('agm.btn.confirmApply'))
+                  : applyConfirm.remove ? t('agm.btn.confirmRemove') : (applyConfirm.unapply ? (unapplyRemoves ? t('agm.btn.confirmUnapplyRemove') : t('agm.btn.confirmUnapply')) : t('agm.btn.confirmApply'))))) : null,
+            // 会话层「编辑本会话生效正文」（0.21.2）：预填生效正文，保存写侧车。
+            sessionEdit ? React.createElement(Modal, {
+              className: 'dsm-modal-form-tall',
+              title: scopeT('scope.prompt.editTitle'),
+              closeLabel: t('btn.close'),
+              onClose: function () { stashFormDraft('prompt:session', sessionEdit); setSessionEdit(null) },
+            },
+              React.createElement('p', { className: 'dsm-help' }, scopeT('scope.prompt.editHint')),
+              React.createElement('div', { className: 'dsm-field' },
+                React.createElement('label', { className: 'dsm-label' }, scopeT('scope.prompt.editTitle')),
+                React.createElement('textarea', {
+                  className: 'dsm-control dsm-textarea-lg',
+                  value: sessionEdit.content || '',
+                  onChange: function (e) { setSessionEdit(Object.assign({}, sessionEdit, { content: e.target.value, error: null })) },
+                })),
+              sessionEdit.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, sessionEdit.error) : null,
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null, onClick: doSessionEditSave }, t('agm.btn.save')))) : null,
             importOpen ? React.createElement(ImportModal, {
               key: 'imp', t: t, title: t('agm.btn.import'), accept: '.md', hint: t('upload.drop.prompt'),
               busy: importBusy, result: importResult,
+              // 会话层 / 锁定态：提示词内容写的是全局那一份，导入链同样收口（0.21.2）。
+              disabled: promptWriteBlocked,
+              disabledTitle: promptBlockTitle,
               // 类型选择放在弹窗顶部（`extra` 槽）：一次导入只进一类，选完再拖文件。
               extra: kindPicker(importKind, setImportKind),
               requirement: t('upload.req.prompt'),
@@ -1657,10 +2160,11 @@
                 React.createElement('label', { className: 'dsm-label' }, t('quickprompt.field.content')),
                 React.createElement('textarea', { className: 'dsm-control dsm-textarea-lg', value: quickEdit.content, onChange: function (e) { setQuickEdit(Object.assign({}, quickEdit, { content: e.target.value })) } })),
               quickEdit.error ? React.createElement('div', { className: 'dsm-feedback dsm-error' }, quickEdit.error) : null,
-              // 同预设编辑：锁定态能打开，保存键置灰并说明原因。
-              state.anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scenes.lock.blockedEdit')) : null,
+              // 同预设编辑：锁定态 / 会话层都能打开，保存键置灰并说明原因（0.21.2：
+              // 会话层那句用 `scope.prompt.libraryGlobalOnly`，与预设编辑弹窗同一口径）。
+              promptWriteBlocked ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, promptBlockTitle) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || state.anyLocked === true || !String(quickEdit.nextId || '').trim(), onClick: doQuickUpdate }, t('agm.btn.save')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy !== null || promptWriteBlocked || !String(quickEdit.nextId || '').trim(), onClick: doQuickUpdate }, t('agm.btn.save')))) : null,
             quickConfirm ? React.createElement(Modal, { className: 'dsm-modal-sm', title: t('quickprompt.remove.title') + ' · ' + quickConfirm.id, closeLabel: t('btn.close'), onClose: function () { setQuickConfirm(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('quickprompt.remove.hint')),
               React.createElement('div', { className: 'dsm-modal-actions' },
@@ -1690,11 +2194,28 @@
             return function () { if (navigateToTab === setActive) navigateToTab = null }
           }, [])
           var sectionRef = React.useRef(null)
+          var headRef = React.useRef(null)
+          // 页签条下缘的位置随「作用域行」是否换行 / 是否多出警告行而变：技能页的组头
+          // 要吸在页签下缘（`.dsm-source-head-pin` 的 top），所以把整个粘附头的实时
+          // 高度写成变量，CSS 用它算 top —— 写死像素会在窄一点的面板里把组头藏进头里。
+          React.useEffect(function () {
+            var section = sectionRef.current
+            var head = headRef.current
+            if (!section || !head) return undefined
+            var sync = function () { section.style.setProperty('--dsm-head-h', head.offsetHeight + 'px') }
+            sync()
+            var ro = typeof ResizeObserver === 'function' ? new ResizeObserver(sync) : null
+            if (ro) ro.observe(head)
+            return function () {
+              if (ro) ro.disconnect()
+              section.style.removeProperty('--dsm-head-h')
+            }
+          }, [])
           React.useEffect(function () {
             // 设置宿主的真正滚动容器，而不是 body：不同页签内容高度不同，
             // 让滚动条按需出现会改变 options 宽度，页签/GitHub 随之左右跳动。
             //
-            // ⚠️ 必须**向上查找**而不是固定跳两级：`.dsm-tabs-shell` 的 position:sticky
+            // ⚠️ 必须**向上查找**而不是固定跳两级：`.dsm-panel-head` 的 position:sticky
             // 依赖祖先链上没有被 overflow 裁剪的层，宿主 DOM 结构一变，「上两级」就可能
             // 指到非滚动容器（sticky 随之失效，页签被内容滚走）。
             var section = sectionRef.current
@@ -1776,24 +2297,29 @@
           // 认子节点，令牌提示一出现/消失就把 `page` 换一个位置 → React 把整页卸载重挂
           // （页面状态与列表全丢，看起来像"页面自己刷新了"）。带 key 之后位置永远稳定。
           return React.createElement('section', { ref: sectionRef, className: 'dsm-section', onKeyDown: onSectionKeyDown }, [
-            React.createElement('div', { key: 'tabs', className: 'dsm-tabs-shell' },
-              React.createElement('div', { className: 'dsm-tabs', role: 'tablist', 'aria-label': t('nav.title'), onKeyDown: onTabKeyDown },
-                TABS.map(function (entry) {
-                  var key = entry[0], label = entry[1], on = active === key
-                  return React.createElement('button', {
-                    key: key,
-                    type: 'button',
-                    role: 'tab',
-                    id: 'dsm-tab-' + key,
-                    'aria-selected': on,
-                    'aria-controls': 'dsm-tabpanel',
-                    tabIndex: on ? 0 : -1,
-                    className: 'dsm-tab' + (on ? ' dsm-tab-active' : ''),
-                    onClick: function () { setActive(key) },
-                    title: label,
-                  }, label)
-                })),
-              React.createElement(FeedbackLinks, null)),
+            // 会话作用域 + 页签共用一个粘附头：往下滚时两行一起钉住（用户 2026-10-20：
+            // 「下滑下拉框就消失，应该固定住」）。作用域行在下拉之上（决策 1）：它是
+            // "整个面板正在编辑哪一层"，与当前是哪一页无关。
+            React.createElement('div', { key: 'head', ref: headRef, className: 'dsm-panel-head' }, [
+              React.createElement(ScopeBar, { key: 'scope', t: t }),
+              React.createElement('div', { key: 'tabs', className: 'dsm-tabs-shell' },
+                React.createElement('div', { className: 'dsm-tabs', role: 'tablist', 'aria-label': t('nav.title'), onKeyDown: onTabKeyDown },
+                  TABS.map(function (entry) {
+                    var key = entry[0], label = entry[1], on = active === key
+                    return React.createElement('button', {
+                      key: key,
+                      type: 'button',
+                      role: 'tab',
+                      id: 'dsm-tab-' + key,
+                      'aria-selected': on,
+                      'aria-controls': 'dsm-tabpanel',
+                      tabIndex: on ? 0 : -1,
+                      className: 'dsm-tab' + (on ? ' dsm-tab-active' : ''),
+                      onClick: function () { setActive(key) },
+                      title: label,
+                    }, label)
+                  })),
+                React.createElement(FeedbackLinks, null))]),
             // 令牌提示的**页面级**那一份：放在页签下面、页面内容上面。位置固定在入口组件里，
             // 与"当前是哪一页、那一页怎么渲染错误"无关 —— 谁拿到这句话谁渲染，就必然有地方漏
             // （用户实测：十来个弹窗里有的没提示、有提示的没有跳转按钮）。

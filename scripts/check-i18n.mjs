@@ -71,8 +71,10 @@ const badArgs = [...zhMap.keys()]
 // 代码里以字面量形式引用的键必须都在词典里：少一个键，界面上就会直接把原始键名
 // 显示给用户（例如把 `mcp.detail.entryId` 写成 `mcp.field.entryId`）。
 // 动态键（`t(item.code)` / `t('root.' + key)`）不是字面量，天然不在此列。
+// `scopeT`（20b 片那层带 `{layer}` 注入的取词壳）与 `mt` 一样要算进来 —— 否则改用它的调用点
+// 就从这份静态守护里消失了，拼错的键名没人报（0.21.2 隔离粒度一轮就是这么漏掉 24 个键）。
 const referenced = new Set(
-  [...src.matchAll(/\b(?:mt|t)\(\s*(['"])([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_-]+)*)\1/g)].map((m) => m[2]),
+  [...src.matchAll(/\b(?:mt|t|scopeT)\(\s*(['"])([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_-]+)*)\1/g)].map((m) => m[2]),
 )
 const missingKeys = [...referenced].filter((k) => !zhMap.has(k)).sort()
 

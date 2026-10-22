@@ -66,11 +66,34 @@ export const OFFICIAL_KIND_OF: Readonly<Record<string, InjectDomainKey>> = {
  * 本函数给出需要**连带拦下**的官方 kind：只有"官方自己会送同份内容"的两个域有这一项；
  * MCP / 记忆 / 人设目录官方不送，没有可拦的对象（它们的开关本来就完全生效）。
  */
-export function officialKindsToSuppress(settings: InjectSettings): ReadonlySet<string> {
+export function officialKindsToSuppress(
+  settings: InjectSettings,
+): ReadonlySet<string> {
   const out = new Set<string>()
   for (const [kind, key] of Object.entries(OFFICIAL_KIND_OF)) {
     if (settings.domains[key] === false) out.add(kind)
   }
+  return out
+}
+
+/**
+ * 这一步要拦的官方 kind（0.21.2）：用户关掉的域 + 本会话提示词接管时的
+ * `agent-instructions` + 技能目录与本会话口径不一致时的 `skill-catalog`。
+ * 后两者都由插件自己送整份，官方那条必须让位 —— 不能让一份本对话口径不对的清单
+ * 先到达模型（「先注入再移除」，用户 2026-10-21 真机发现）。
+ *
+ * `promptTakeover` = 本会话有提示词覆盖 / 快照与当前文件不一致 / 插件此前已送过提示词
+ * （接管持续，见 context-inject 的 pre-step）；`skillCatalogDiverged` 由调用方从同步的
+ * `skillCatalog.delta()` 算出（空 = 无差异）。
+ */
+export function suppressedKindsForSession(
+  settings: InjectSettings,
+  promptTakeover: boolean,
+  skillCatalogDiverged: boolean = false,
+): ReadonlySet<string> {
+  const out = new Set(officialKindsToSuppress(settings))
+  if (promptTakeover) out.add('agent-instructions')
+  if (skillCatalogDiverged) out.add('skill-catalog')
   return out
 }
 

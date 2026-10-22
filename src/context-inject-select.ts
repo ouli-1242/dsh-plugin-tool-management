@@ -36,6 +36,11 @@ export interface InjectSection {
   label: string
   form: InjectForm
   text: string
+  /**
+   * 这一条是**差异行**而不是整份正文（0.21.2，见 `InjectDomain.delta`）：
+   * 框架层据此不套 `how` / 边界句 —— 那两句是整份目录的说明，配在一行差异上是假话。
+   */
+  delta?: boolean
 }
 
 /**
@@ -50,7 +55,8 @@ export interface InjectSection {
  *     见 service.ts 里 `catalogDepth` 的注释）；
  *   - 有官方载体的两个域（提示词 / 技能目录）：预设挂得到官方那条行时不进
  *     —— 官方自己会送，再注入一遍只会重复；预设事实读不到（`undefined`）时按"已承载"处理
- *     （宁可与现状一致，也不制造重复）；
+ *     （宁可与现状一致，也不制造重复）。**例外**（0.21.2）：域给了 `delta` 时，官方在送整份
+ *     这一轮只补一行本会话的差异 —— 接管整份会和官方第 1 轮那份并存，而那条已在历史里收不回；
  *   - 同一段文本出现两次只保留前一个（跨域保险）。
  *
  * `onError`（2026-09-30 审查 P1-8）：某个域的 `text()` **取数失败**时回调一次，并跳过该域。
@@ -82,8 +88,20 @@ export function selectInjections(
     // 开关只控制得了其中一道。留一个点了没反应的勾选框比没有更糟，所以删掉（2026-09-17）。
     if (domain.applicableTo !== undefined && !domain.applicableTo(agent)) continue
     const carrier = CARRIER_FACT_OF[domain.key]
-    // 官方载体已挂（或读不到预设、只能按已挂算）→ 不重复送；只有明确"没挂"才兜底。
-    if (carrier !== undefined && facts?.[carrier] !== false) continue
+    // 官方载体已挂（或读不到预设、只能按已挂算）→ 不重复送整份。
+    // 但域给了 `delta` 时补一行本会话的差异（0.21.2）——**兜底路径**：正常装配下注入器
+    // 已经在有差异时把官方载体从 `facts` 里摘掉（`carriesSkillCatalog: false`），于是这里
+    // 走下面的整份分支；只有在接管判据未接上的旧装配 / 测试里才会走到这条差异行。
+    if (carrier !== undefined && facts?.[carrier] !== false) {
+      if (domain.delta === undefined) continue
+      let delta = ''
+      try { delta = String(domain.delta(agent) ?? '') } catch { delta = '' /* 差异行读不到 = 没有差异 */ }
+      if (delta.trim() === '') continue
+      if (seen.has(delta.trim())) continue
+      seen.add(delta.trim())
+      out.push({ key: domain.key, name: domain.name, label: domain.label, form: domain.form, text: delta, delta: true })
+      continue
+    }
     let text = ''
     try { text = String(domain.text(agent) ?? '') } catch (error) {
       // 取数失败 ≠ 没有内容：交给调用方（上报 + 这一轮不发"已清空"），本域这一轮不发。
@@ -109,6 +127,37 @@ export function selectInjections(
 export type InjectReason = 'off' | 'official' | 'empty' | 'sent' | 'child' | 'error'
 
 /**
+ * 纯函数：某一步某域**该不该发一条「已清空」**（2026-10-22 从注入器抽出来，便于测试）。
+ *
+ * 通知的字面意思是"这份内容已失效，别再用"。所以只有当"上一轮确有一条内容、这一轮确实
+ * 一条都没有"时才发 —— 下面四种情形下那句话是假话，一条都不能发：
+ *
+ *   · 从没注入过这个域（没有旧内容要作废）；
+ *   · 最新一条已经是通知了（再发就是每轮刷屏，2026-10-19 用户实测）；
+ *   · 这一轮取数失败（"没读到"≠"没有了"，审查 P1-8）；
+ *   · 这一轮数据还没到手（`pending`：首轮 / LRU 顶掉 / 写操作后正在重算 ——
+ *     2026-10-22 用户实测的那条假「已清空」正是漏了这一格）。
+ */
+export function shouldAnnounceCleared(input: {
+  published: boolean
+  failed: boolean
+  pending: boolean
+  /** 表面上这一域最近一条的状态；`undefined` = 这个会话从没注入过它。 */
+  previous: { cleared?: boolean } | undefined
+  /**
+   * 技能目录接管但会话版为空（本对话一条都用不了）时的特例：官方那份已被拦下，
+   * 不补一条的话模型手里只剩历史里那份已经不对的清单。
+   */
+  takeoverEmpty?: boolean
+}): boolean {
+  if (input.published) return false
+  if (input.failed) return false
+  if (input.pending) return false
+  if (input.previous !== undefined && input.previous.cleared) return false
+  return input.previous !== undefined || input.takeoverEmpty === true
+}
+
+/**
  * 纯函数：算出某一步每个域的原因（`selectInjections` 的镜像，供「注入实况」解释状态）。
  *
  * 与 `selectInjections` 分开写是为了让两边各自可读：一个是"发什么"，一个是"为什么"。
@@ -132,7 +181,15 @@ export function explainInjections(
     if (settings.domains[domain.key] !== true) { reasons[domain.key] = 'off'; continue }
     if (domain.applicableTo !== undefined && !domain.applicableTo(agent)) { reasons[domain.key] = 'child'; continue }
     const carrier = CARRIER_FACT_OF[domain.key]
-    if (carrier !== undefined && facts?.[carrier] !== false) { reasons[domain.key] = 'official'; continue }
+    if (carrier !== undefined && facts?.[carrier] !== false) {
+      // 与 `selectInjections` 同一条：官方在送整份，但本会话有差异行要补 → 这一轮确实送了一条。
+      // 正常情况下技能目录接管会把 `carriesSkillCatalog` 置 false（走下面的整份读数），
+      // 这里的 `sent` 只对应旧装配的兜底差异行。
+      let delta = ''
+      if (domain.delta !== undefined) { try { delta = String(domain.delta(agent) ?? '') } catch { delta = '' } }
+      reasons[domain.key] = delta.trim() === '' ? 'official' : 'sent'
+      continue
+    }
     // 取数失败过 → 报 `error` 而不是 `empty`：两者在界面上的含义完全不同（一个是故障、
     // 一个是"本来就没内容"），而原来这条路上永远只能看到后者（审查 P1-8）。`failed` 由调用方
     // 从 `selectInjections` 的 `onError` 收集；**只认抛异常**，返回空串仍算 `empty`（F7）。

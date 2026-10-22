@@ -72,6 +72,32 @@ export interface McpManagerDeps {
    * 所以调用方约定**拿不准就返回空**（宁可多花 token，也不让模型少一条路）。
    */
   carrierHiddenTools?(agent: unknown): Promise<string[]>
+  /**
+   * 本会话的 MCP 可见性覆盖（0.21.2）：在**此刻注册着的**工具全名上算出的两个名单。
+   *
+   *   · `deny`  —— 本会话关掉的（会话覆盖 / 场景层"没勾" / 基线的都算），在全局名单之外追加；
+   *   · `allow` —— 本会话开着的（显式拨开 / 场景层"勾了"），从全局名单里**减去** ——
+   *     本会话能把全局停用表关着的工具重新拿出来看、拿出来用，而全局一个字不动。
+   *
+   * 与 `carrierHiddenTools` 分开的理由同上：那是"官方在场就让位"的推断，这是明确动作。
+   * 取不到会话 / 没有任何一层时返回空（= 跟随全局）。
+   */
+  sessionMcpOverlay?(agent: unknown): Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
+  /**
+   * 本会话的**模型工具表**覆盖（0.21.2）：本对话自己的整份关停名单相对全局的差异。
+   * `allow` = 本对话重新打开、`deny` = 本对话关掉；与 `sessionMcpOverlay` 合进同一层 restrict。
+   */
+  sessionToolTableOverlay?(agent: unknown): { allow?: readonly string[]; deny?: readonly string[] } | Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
+  /**
+   * 某台服务器在本会话里是不是**隐藏**的（同步）：状态段与 `mcp_manager_list` 逐行问它 ——
+   * 它们手里都有完整的服务器清单（行数组），逐行判定不需要另建一份"全集"。
+   */
+  sessionHiddenServer?(agent: unknown, serverName: string): boolean
+  /**
+   * 逐工具的本会话判定（0.21.2）：状态段用它把「本会话把这台服务器的工具全关了」标成
+   * muted，而不是继续报可用。按 agent 建一次快照，返回的函数逐工具调用。
+   */
+  sessionToolVerdictFor?(agent?: unknown): (serverName: string, tool: string) => 'allow' | 'deny' | undefined
   /** 读补丁文件原文。 */
   readPatch(abs: string): Promise<string>
   /** 写补丁文件（原子替换；写门禁已在 op 层判定）。 */
@@ -122,6 +148,24 @@ export interface McpManager {
    * 的那一份，是唯一与切分结果无关的来源。
    */
   configuredServerNames(): Promise<string[]>
+  /**
+   * 已配置服务器及其**补丁层**的启停值（0.21.2）。
+   *
+   * 会话作用域的全局快照必须与界面上那颗开关读同一份真值：服务器启停写在
+   * `cordis.patch.yml` 的 `disabled` 覆盖块里，**不在**逐工具停用表（那张表的 `*`
+   * 只代表场景档案把整台工具收窄）。拿停用表当全局值会让「全局关着」被算成「全局开着」，
+   * 会话层写覆盖时被自动清除。
+   *
+   * 同名服务器在两个层级各有一份时按「任一份开着 = 开着」合并（会话覆盖按 serverName 键）。
+   */
+  configuredServerStates(): Promise<Array<{ serverName: string; disabled: boolean }>>
+  /**
+   * 补丁里**真实存在**的服务器行（id / serverName / level / 生效停用值），不枚举工具 schema。
+   *
+   * 意图对账与全局场景联动用它把 id 映射回 serverName —— 两者都可能不同（改名后的旧 id）。
+   * `mcpmListView()` 会顺带枚举 schema 并回写缓存，对账每跑一次都付那份代价不值。
+   */
+  patchServerRows(): Promise<Array<{ id: string; serverName: string; level: 'global' | 'project'; disabled: boolean }>>
   /** 列表行（mask=false 时**含明文凭据**，只有注入侧该用 false 那份）。 */
   mcpmRowsWithNotes(mask: boolean): Promise<any[]>
   /** 插件设置（轮询间隔 / 描述长度上限 / 两个确认开关）。 */
@@ -289,6 +333,11 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   const mcpStateCatalog = createMcpStateCatalog({
     rows: () => mcpmRowsWithNotes(false),
     ...(deps.listToolVisible === undefined ? {} : { listToolVisible: deps.listToolVisible }),
+    // 会话层：本会话隐藏的服务器整条不进段（理由见 state-section.ts）。逐行问谓词 ——
+    // 行数组本身就是服务器全集，不需要另建一份。
+    ...(deps.sessionHiddenServer === undefined ? {} : { sessionServerHidden: deps.sessionHiddenServer }),
+    // 逐工具会话判定（0.21.2）：一台服务器在本会话里的工具全关掉时，段里标 muted 而不是可用。
+    ...(deps.sessionToolVerdictFor === undefined ? {} : { sessionToolVerdictFor: deps.sessionToolVerdictFor }),
   })
 
 
@@ -551,6 +600,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   } = createToolVisibility({
     readJsonFile, writeJsonFile, ensurePaths, withWriteLock, message, tools,
     pluginHiddenTools: deps.pluginHiddenTools, carrierHiddenTools: deps.carrierHiddenTools,
+    sessionMcpOverlay: deps.sessionMcpOverlay,
+    sessionToolTableOverlay: deps.sessionToolTableOverlay,
     normalizeKnownTools, mcpSidecar, SIDECAR_TTL_MS, MCP_DISABLED_TOOLS_FILE, MCP_KNOWN_TOOLS_FILE,
   })
 
@@ -839,6 +890,65 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     return out
   }
 
+  /**
+   * 补丁层启停值的合并视图（0.21.2）：只读补丁、不枚举工具 schema。
+   *
+   * 同名服务器在两个层级各有一份时，会话覆盖只能整名隐藏 —— 所以只要有一份是开着的，
+   * 全局就按「开着」算（会话层关掉它才有意义）；两份都关着才是「全局关着」。
+   */
+  async function configuredServerStates(): Promise<Array<{ serverName: string; disabled: boolean }>> {
+    const p = await ensurePaths()
+    const merged = new Map<string, boolean>()
+    const patchIds = new Set<string>()
+    for (const level of ['project', 'global']) {
+      const abs = level === 'project' ? p.projectPatch : p.globalPatch
+      let content = ''
+      try { content = await readPatch(abs) } catch { continue }
+      for (const r of parseRows(content).rows) {
+        const row = normalizeRow(r, level, abs)
+        const n = String(row.serverName || '')
+        if (!n) continue
+        patchIds.add(String(row.id))
+        const disabled = row.disabled === true
+        const prev = merged.get(n)
+        merged.set(n, prev === undefined ? disabled : prev && disabled)
+      }
+    }
+    // loader 里有、补丁里没有的条目（临时挂载 / 手写 loader 配置）：`mcpm-list` 会列出它们，
+    // 面板的会话开关也能点到 —— 全局快照必须认识，否则「关掉本会话」会被判成与全局同值而清掉。
+    if (pluginInventory) {
+      try {
+        const res = await pluginInventory.list()
+        for (const e of res.entries) {
+          if (e.moduleName !== MCP_CLIENT_MODULE) continue
+          if (patchIds.has(bareEntryId(e.entryId))) continue
+          const name = String(e.entryId)
+          const prev = merged.get(name)
+          merged.set(name, prev === undefined ? e.enabled !== true : prev && e.enabled !== true)
+        }
+      } catch { /* loader 清单读不到 → 只按补丁那几台算 */ }
+    }
+    return [...merged].map(([serverName, disabled]) => ({ serverName, disabled }))
+  }
+
+  /** 补丁行（只读补丁，不枚举 schema）—— 对账与场景联动的 id → serverName 映射。 */
+  async function patchServerRows(): Promise<Array<{ id: string; serverName: string; level: 'global' | 'project'; disabled: boolean }>> {
+    const p = await ensurePaths()
+    const out: Array<{ id: string; serverName: string; level: 'global' | 'project'; disabled: boolean }> = []
+    for (const level of ['project', 'global'] as const) {
+      const abs = level === 'project' ? p.projectPatch : p.globalPatch
+      let content = ''
+      try { content = await readPatch(abs) } catch { continue }
+      for (const r of parseRows(content).rows) {
+        const row = normalizeRow(r, level, abs)
+        const serverName = String(row.serverName || '')
+        if (!serverName) continue
+        out.push({ id: String(row.id), serverName, level, disabled: row.disabled === true })
+      }
+    }
+    return out
+  }
+
   async function mcpmList(): Promise<any> {
     const p = await ensurePaths()
     const rows: any[] = []
@@ -869,6 +979,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     // 档案挑工具、详情页清单用（那里"上次见过哪些工具"正是需要的，且已标 `stale`）。
     const liveToolCounts: Record<string, number> = {}
     const liveEnabledToolCounts: Record<string, number> = {}
+    const liveToolNames: Record<string, string[]> = {}
+    const liveEnabledToolNames: Record<string, string[]> = {}
     const knownToolCounts: Record<string, number> = {}
     try {
       const schemas = await tools.schemas()
@@ -986,10 +1098,14 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         enabledToolCounts[server] = countEnabledTools(set, disabledMap[server] || [])
       }
       // 真实来源的两个数：只数 `liveNames`（schema 里真正注册了的），再按停用表扣减。
+      // 同时留一份**工具名**（0.21.2）：注入段要按会话逐工具开关在名字上扣减 / 补回。
       for (const [server, list] of Object.entries(liveNames)) {
         const set = new Set(list)
+        const off = disabledMap[server] || []
         liveToolCounts[server] = set.size
-        liveEnabledToolCounts[server] = countEnabledTools(set, disabledMap[server] || [])
+        liveEnabledToolCounts[server] = countEnabledTools(set, off)
+        liveToolNames[server] = list.slice()
+        liveEnabledToolNames[server] = off.indexOf('*') >= 0 ? [] : list.filter((t) => off.indexOf(t) < 0)
       }
       // 「曾经连上过」的证据：缓存里这台 server 见过几个工具。注意读的是**回写之前**的
       // `knownCache` —— 回写会把这次 live 见到的并进去，而这次 live 见到的本来就已经算在
@@ -1029,6 +1145,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
       // 描述的是"这台 server 有过哪些工具"。两者混淆过一次，代价是注入段谎报可用。
       row.liveToolCount = liveToolCounts[row.serverName] || 0
       row.liveEnabledToolCount = liveEnabledToolCounts[row.serverName] || 0
+      // 工具名同样总是覆盖：会话逐工具判定按名字算，用上一轮的旧名单会串会话。
+      row.liveTools = liveToolNames[row.serverName] || []
+      row.liveEnabledTools = liveEnabledToolNames[row.serverName] || []
       row.knownToolCount = knownToolCounts[row.serverName] || 0
     }
     // 列表顺序（用户要求 2026-09-17）：**全局在前、应用级在后**，各级按服务器名排，
@@ -1856,6 +1975,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     updateNotes,
     mcpmListView,
     configuredServerNames,
+    configuredServerStates,
+    patchServerRows,
     mcpmRowsWithNotes,
     readPluginSettings,
     isToolDisabled: (name: string) => isToolDisabledIn(disabledToolsSnapshot(), name),

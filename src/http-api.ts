@@ -42,7 +42,7 @@ export interface HttpApiDeps extends
   handlers: Record<string, (args: any) => Promise<any>>
   message(e: unknown): string
   withPatchWarnings(result: any): any
-  tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; pendingRestart: boolean }>
+  tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; envToken: boolean; pendingRestart: boolean }>
   tokenConfigure(args: any, presented: boolean): Promise<any>
 }
 
@@ -206,6 +206,7 @@ export function installHttpApi(deps: HttpApiDeps): void {
                 configHasToken: state.configHasToken,
                 configDisabled: state.configDisabled,
                 configFound: state.found,
+                envToken: state.envToken === true,
                 pendingRestart: state.pendingRestart,
               }))
               return
@@ -216,8 +217,8 @@ export function installHttpApi(deps: HttpApiDeps): void {
               res.end(JSON.stringify(deps.withPatchWarnings(await deps.tokenConfigure(payload.args || {}, tokenAccepted))))
               return
             }
-            // 「清除令牌」的配套：把「本次启动已验过」的闩重新挂上。没有它，解锁一次之后
-            // 清除令牌 + 强刷新，浏览器里已无令牌，闩却挂着 —— pre-step 门禁读闩
+            // 「锁定」/「删除令牌」的配套：把「本次启动已验过」的闩重新挂上。没有它，解锁一次之后
+            // 锁定 + 强刷新，浏览器里已无令牌，闩却挂着 —— pre-step 门禁读闩
             // （tokenGateActive），整个启动期都放行对话（2026-09-19 用户实测的漏洞）。
             // 不要求凭证：它只会收紧（要求重新验令牌），给不了任何人任何权限；同样不进
             // handlers —— 模型不该有能力拨这颗闩。

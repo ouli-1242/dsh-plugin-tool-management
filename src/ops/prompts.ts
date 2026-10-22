@@ -7,6 +7,7 @@ import type { createPromptsService } from '../prompts/service.js'
 import type { createScenePromptSync } from '../scene-prompt-sync.js'
 import { resolveAgentsHome } from '../skills/homes.js'
 import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 type PromptsServiceLike = ReturnType<typeof createPromptsService>
@@ -25,6 +26,11 @@ export interface PromptOpsDeps {
   applyPresetGuarded(id: string): Promise<any>
   withAgentsMdSync(res: any): Promise<any>
   promptRefReason(ref: { kind?: string; label?: string; active?: boolean }): string
+  /**
+   * 本会话**真正生效**的提示词正文（已去掉「Instructions from:」来源行）。
+   * 界面在会话层用它比对预设正文，标出「沿用全局 / 场景 / 快照」的那一份。
+   */
+  sessionPromptText?(sessionId: string): string
   /** 引用探测失败的告警出口（宿主 logger 可能为 undefined，所以不直接依赖 ctx）。 */
   warn(message: string): void
 }
@@ -53,9 +59,19 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
     //     提示词页生效中的应该是场景选择的那个」。
     //   - `fileApplied` = 文件比对结果（AGENTS.md 里确实是它）。两者同时为真说明
     //     场景绑的就是已应用的那份，正文一致时宿主不会再注入第二遍（去重）。
-    'agentsmd-list': async () => {
+    'agentsmd-list': async (args: any) => {
       const base = await deps.promptsService.list()
       if (!base || base.ok === false) return base
+      // 会话层「生效中」：拿本会话真正注入的正文与每份预设的正文比对（沿用的可能是
+      // 全局文件、场景预设或冻结快照，三者都不带 presetId，只能比内容）。读不到就不标。
+      const sessionId = String((args && args.sessionId) || '').trim()
+      let sessionHash: string | null = null
+      if (sessionId !== '' && deps.sessionPromptText !== undefined) {
+        try {
+          const text = deps.sessionPromptText(sessionId)
+          if (text.trim() !== '') sessionHash = createHash('sha256').update(text).digest('hex')
+        } catch { /* 读不到 = 不做会话标记，不影响预设库 */ }
+      }
       let scenePrompt: { scene: string | null; label?: string | null; presetId: string | null; missing: boolean; duplicate?: boolean; bytes: number } | undefined
       try {
         const r: any = await deps.rulesOps['rules-list']({})
@@ -77,6 +93,8 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
           active,
           fileApplied,
           activeVia: byScene ? 'scene' : (active && fileApplied ? 'file' : null),
+          // 会话层：这一份就是本会话实际注入的正文（比对内容，不依赖 presetId）。
+          sessionActive: sessionHash !== null && p.contentHash === sessionHash,
           refs: refs ? refs.get(p.id) || [] : [],
         }
       })

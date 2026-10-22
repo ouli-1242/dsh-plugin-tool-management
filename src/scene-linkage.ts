@@ -25,6 +25,14 @@ export interface SceneLinkageDeps {
   mcp: { stateCatalog: { refresh(): Promise<unknown> } }
   /** 场景锁的名单查询 —— apply 里排在**后面**，所以调用点给的是 getter（见 index.ts）。 */
   lockedSceneNames(): Promise<string[]>
+  /**
+   * 档案里的工具表方案**变了**（0.21.2 复核）：把新名单同步到停在这个场景里的会话。
+   *
+   * 档案保存是全局场景与**模型**改绑定的入口（面板走 `rules-update-scene`，另一条在
+   * `onToolTablePresetChanged`）。工具表是进场景那一刻抄进会话的，不发这一声，已经进来的
+   * 会话会一直按旧名单。`preset` 为空串 = 这一栏不在档案里，保持现状。
+   */
+  onSceneToolTableChanged?(scene: string, preset: string): Promise<void>
 }
 
 export function installSceneLinkage(deps: SceneLinkageDeps): void {
@@ -162,6 +170,15 @@ export function installSceneLinkage(deps: SceneLinkageDeps): void {
   if (typeof baseSceneArchiveSave === 'function') {
     deps.archiveService.ops['scene-archive-save'] = async (args: any) => {
       const res: any = await baseSceneArchiveSave(args)
+      // 工具表方案改绑（0.21.2 复核）：档案是全局场景与模型共用的写入口。只认**档案里
+      // 现在真有这一栏**的情况；不带这一栏 = 保留现值 / 解绑已由别的路径处理，保持现状。
+      if (res && res.ok !== false && deps.onSceneToolTableChanged) {
+        const archive = res.archive as { toolTablePreset?: unknown } | null | undefined
+        const preset = archive && typeof archive.toolTablePreset === 'string' ? archive.toolTablePreset : ''
+        if (preset !== '') {
+          try { await deps.onSceneToolTableChanged(String(res.scene || (args && args.scene) || ''), preset) } catch { /* 会话同步失败不拦保存；下次重进场景会对齐 */ }
+        }
+      }
       try {
         const bound = res && res.ok !== false && res.archive && Array.isArray(res.archive.subagents) ? res.archive.subagents as string[] : []
         const slice = await deps.memoriesService.readArchiveSlice()

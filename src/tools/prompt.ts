@@ -12,7 +12,8 @@
 
 import { join } from 'node:path'
 import { normalizePresetDescription } from '../prompts/service.js'
-import { text, type ToolDomainDeps } from './deps.js'
+import { hasPromptOverride, type SessionScope } from '../scope/scope-overrides.js'
+import { sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
 export interface PromptToolDeps extends ToolDomainDeps {
   /**
@@ -41,7 +42,7 @@ export function buildPromptTools(deps: PromptToolDeps): void {
     // 那句 `(that reminder is absent when the preset carries the official instructions line)`
     // 删掉（2026-10-15 注入文本审查）：模型**观测不到**"official instructions line"这个条件，
     // 拿它做不了任何决定 —— reminder 在不在，它抬头就能看见，不必由描述来预告。
-    description: 'List AGENTS.md presets (id, description, active state, file path); read that file for a preset body. The one in effect is in the "Current prompt" reminder, whose "Instructions from:" line names the file. Defaults to the one in effect; all=true for the whole library.',
+    description: 'List AGENTS.md presets (id, description, active state, file path); read that file for a body. The one in effect is in the "Current prompt" reminder. Defaults to the one in effect; all=true for the whole library.',
     parameters: {
       all: { type: 'boolean', description: 'Include inactive presets (default false).' },
     },
@@ -75,12 +76,20 @@ export function buildPromptTools(deps: PromptToolDeps): void {
         const desc = normalizePresetDescription(p.description)
         return p.id + mark + ' | ' + (desc || '(no description)') + ' | ' + join(deps.promptsDir, p.id, 'AGENTS.md')
       })
+      // 会话层（0.21.2，决策 5）：提示词**不进**会话域 —— 预设写的是全局基线 ~/.dsh/AGENTS.md，
+      // 宿主每轮只读一份。会话能改的是生效场景，而场景绑哪个预设是场景自己的事。
+      // 这句只在模型真会读错时才值钱：它会拿这份清单回答「本会话现在用哪份提示词」，
+      // 而本会话钉住场景时，答案来自那个场景的绑定，不是这份 active 标记。
+      const pinned = sessionScopeOf(deps, exec && exec.agent)?.scope?.scene
+      const sessionLine = pinned === undefined
+        ? '\n(prompts are global: this scope has no preset of its own)'
+        : '\n(prompts are global; this scope pins scene "' + pinned + '", so the preset in effect here is that scene\'s binding — not necessarily the [active] one below)'
       const header = 'AGENTS.md presets: ' + (showAll
         ? all.length + ' in the library'
         : fallback.length
           ? fallback.length + (active.length ? ' active' : ' last applied') + ' of ' + all.length +
             (fallback.length === all.length ? '' : ' (pass all=true for the whole library)')
-          : '0 active of ' + all.length + ' (pass all=true for the whole library)') + '\n'
+          : '0 active of ' + all.length + ' (pass all=true for the whole library)') + sessionLine + '\n'
       // 同上：AGENTS.md 由官方 dsh-agent-instructions 行承载（极简没挂这一行），
       // 这一行不在时文件内容不会进上下文。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
@@ -89,7 +98,7 @@ export function buildPromptTools(deps: PromptToolDeps): void {
   }))
   register(defineTool({
     name: 'prompt_manager_apply',
-    description: 'Apply one AGENTS.md preset by id; effective next turn. If a scene drives the baseline this does NOT refuse — it rebinds that scene to the preset and re-syncs it, so tell the user which scene was rebound. A locked scene blocks the call. Pass apply=false to cancel instead — AGENTS.md goes back to what it was before the run of applies (the file is removed if there was none to begin with); a scene driving the baseline refuses that, rebind the scene instead. Only on the user\'s instruction.',
+    description: 'Apply one AGENTS.md preset by id; effective next turn. When a scene drives the baseline this does not refuse — it rebinds that scene, so tell the user which one. A locked scene blocks the call. apply=false cancels instead: AGENTS.md goes back to what it was before this run of applies (removed if there was none), which a scene-driven baseline refuses — rebind the scene instead. Only on the user\'s instruction.',
     parameters: {
       // `id` 从 required 摘掉（2026-10-15 smoke-test P1-5）：描述一直写着 "Ignored when
       // apply=false"，schema 却把它标成必填 —— 模型照描述「取消不用给 id」操作，先被 schema
@@ -99,18 +108,29 @@ export function buildPromptTools(deps: PromptToolDeps): void {
       apply: { type: 'boolean', description: 'Omit or true = apply the preset in `id`; false = cancel — undo the run of applies (no `id` needed).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args) {
+    async execute(args: any, exec: any) {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
+      // 会话层（0.21.2，决策 5）：提示词永远全局。本会话钉了场景时，这里改的是**那个场景**
+      // 的绑定（`applyPresetGuarded` 的 viaScene 分支）—— 别的对话只要没钉同一个场景就不受影响，
+      // 但这不是「本会话的提示词」，回执必须按那条路说清。
+      // 提示词**不进**会话域（决策 5），所以这里没有 scope 参数，也**不做**
+      // `requireGlobalScope` 守卫（2026-10-21 审查 P2-2）：守卫读 `args.scope`，而参数表里
+      // 没有这个字段 —— 模型按 schema 不可能传它，守卫只在「模型自己编了一个未声明参数」时
+      // 才触发，等于靠运气。留着这行还让 deps.ts 的清单以为这条被守住了。
+      // 提示词确实只有全局一层，参数表已经把这件事说完了。
+      const scoped = sessionScopeOf(deps, exec && exec.agent)
+      const pinned = scoped?.scope?.scene
       if (args.apply === false) {
         // 取消方向：`agentsmd-unapply` 自带两条护栏（场景驱动时拒绝、没有链起点时给确定
         // 错误码），原样透传。回执要说清恢复成哪种 —— 起点没有文件时是**删文件**，
         // 不说的话用户以为 AGENTS.md 还在（0.19.1 界面弹窗报的就是这两种）。
         const r = await deps.unapplyPreset()
         if (!r.ok) throw new Error(r.error || 'failed to cancel the application')
-        return r.removed === true
+        return (r.removed === true
           ? 'OK: application cancelled — ~/.dsh/AGENTS.md did not exist before the run started, so the file was removed (effective next turn).'
-          : 'OK: application cancelled — ~/.dsh/AGENTS.md is back to what it was before the run started (effective next turn).'
+          : 'OK: application cancelled — ~/.dsh/AGENTS.md is back to what it was before the run started (effective next turn).') +
+          promptScopeTail(scoped?.scope)
       }
       const id = String((args && args.id) || '').trim()
       if (id === '') throw new Error('missing argument: id (only optional when apply=false cancels)')
@@ -119,12 +139,43 @@ export function buildPromptTools(deps: PromptToolDeps): void {
       // 场景驱动时写的是「场景绑定」，回执必须说清改的是哪个场景 —— 只说「已应用到
       // AGENTS.md」会让模型对用户谎报（用户不知道自己的场景绑定被换掉了）。
       if (r.viaScene) {
-        return 'OK: preset ' + id + ' is now the prompt binding of scene "' + (r.scene || '') + '" and the scene was re-synced (effective next turn; ~/.dsh/AGENTS.md now carries that scene\'s binding).'
+        return 'OK: preset ' + id + ' is now the prompt binding of scene "' + (r.scene || '') + '" and the scene was re-synced (effective next turn; ~/.dsh/AGENTS.md now carries that scene\'s binding).' +
+          // 会话层：这个场景可能只是**本会话**钉住的那个（别的对话钉别的场景），所以「绑到了场景」
+          // 与「所有对话都变成这份提示词」不是一回事。
+          (pinned === undefined || pinned !== String(r.scene || '')
+            ? ''
+            : '\nnote: that is this scope\'s pinned scene. Other conversations only pick this up if they pin the same scene; the machine-wide baseline is whatever the global scene binds.')
       }
       // 生效时机与宿主行为对齐（index.ts 提示词服务一节考证过）：dsh-agent-instructions
       // 每个 pre-step 都 stat 比对版本，写文件即下一轮重读 —— 不是"下个会话"。说错了
       // 模型会劝用户重开会话，而其实下一句话就已经在新基线下跑。
-      return 'OK: preset ' + id + ' applied to ~/.dsh/AGENTS.md — effective next turn' + (r.backedUp ? ' (previous backed up to __last-applied__)' : '')
+      return 'OK: preset ' + id + ' applied to ~/.dsh/AGENTS.md — effective next turn' + (r.backedUp ? ' (previous backed up to __last-applied__)' : '') +
+        // 成功分支也要带尾注（2026-10-21 审查 P0-2）：`applyPresetGuarded` 走的是**全局**
+        // driver，本会话钉着的场景/会话级覆盖都不在其中 —— 不带的话，模型会照回执说
+        // 「提示词已换」，而用户在这个对话里看到的是原来那份。
+        promptScopeTail(scoped?.scope)
     },
   }))
+}
+
+/**
+ * 提示词回执的会话尾注（0.21.2，决策 5；2026-10-21 审查 P0-2 由「钉场景」扩成三路）。
+ *
+ * 提示词**不进**会话域：预设写的是全局基线 `~/.dsh/AGENTS.md`，宿主每轮只读一份。
+ * 但**生效来源**按会话走 —— 本会话可能钉了场景（`scene-preset`），也可能带会话级
+ * 提示词覆盖（`session-preset` / `session-content`），两者都排在 `global-file` 之上。
+ * 不说清的话，模型会回一句「提示词已换」，而用户在自己的对话里看到的是别的。
+ *
+ * 为什么必须三路：`prompt_manager_apply` 走的是**全局** driver（`applyPresetGuarded`），
+ * 会话钉的场景不在其中。「全局没有场景 + 本会话钉了场景」是日常形态，而这条路此前
+ * 只在 `apply=false` 分支带了尾注，成功分支漏了 —— 用户按回执去验证，必然发现没变。
+ */
+function promptScopeTail(scope: SessionScope | undefined): string {
+  if (scope === undefined) return ''
+  if (hasPromptOverride(scope)) {
+    return '\nnote: prompts are global — this changed the machine-wide baseline. This scope carries its own prompt override, so what it gets here stays the same until that override is cleared.'
+  }
+  const pinned = scope.scene
+  if (pinned === undefined) return ''
+  return '\nnote: prompts are global — this changed the machine-wide baseline. This scope pins scene "' + pinned + '", so what it actually gets is that scene\'s binding.'
 }

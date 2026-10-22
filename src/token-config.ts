@@ -19,13 +19,15 @@ export interface TokenConfigDeps {
   message(e: unknown): string
   /** 生效令牌（功能关掉即空串）：`pendingRestart` 比的是它。 */
   TOKEN: string
-  /** 配置里的**存量**令牌：四个方向的凭证判据都以它为基准。 */
+  /** 配置里的**存量**令牌：四个方向的凭证判据都以它为基准（环境变量也算）。 */
   CONFIG_TOKEN: string
+  /** 存量令牌里来自配置文件的那一份（空 = 令牌来自环境变量）。 */
+  CONFIG_TOKEN_FROM_FILE: string
   tokenMatches(presented: string): boolean
 }
 
 export interface TokenConfig {
-  tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; pendingRestart: boolean }>
+  tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; envToken: boolean; pendingRestart: boolean }>
   tokenConfigure(args: any, presented: boolean): Promise<any>
 }
 
@@ -83,16 +85,26 @@ export function createTokenConfig(deps: TokenConfigDeps): TokenConfig {
    * 局限（写下来免得当成 bug）：读不到环境变量，所以靠 `DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN`
    * 提供令牌时（文件里没有 token），这里会报"待重启"。那是保守方向 —— 环境变量改动同样要重启。
    */
-  async function tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; pendingRestart: boolean }> {
+  async function tokenConfigState(): Promise<{ found: boolean; configHasToken: boolean; configDisabled: boolean; envToken: boolean; pendingRestart: boolean }> {
+    // 令牌由环境变量提供：文件里本来就没有 token，不能拿文件侧的"没有"去和运行值比，
+    // 否则环境变量用户会永远看到「待重启」。这一态只看文件侧的开关旗标。
+    const envToken = deps.CONFIG_TOKEN_FROM_FILE === '' && deps.CONFIG_TOKEN !== ''
     try {
       const { files, infoOf } = await loaderTokenFiles()
-      if (files.length !== 1) return { found: false, configHasToken: false, configDisabled: false, pendingRestart: false }
+      if (files.length !== 1) return { found: false, configHasToken: false, configDisabled: false, envToken, pendingRestart: false }
       const info = infoOf.get(files[0]) || { token: '', disabled: false }
       const configHasToken = info.token !== ''
       // 「文件里配的」与「当前进程在用的」是否一致 —— 比的是**生效**状态（有位子但关了 = 没生效）。
-      const fileEffective = configHasToken && !info.disabled
-      return { found: true, configHasToken, configDisabled: info.disabled, pendingRestart: fileEffective !== (deps.TOKEN !== '') }
-    } catch { return { found: false, configHasToken: false, configDisabled: false, pendingRestart: false } }
+      // 环境变量供令牌时"生效"只由文件侧开关决定；配置文件供令牌时还要比令牌值本身，
+      // 否则改了令牌（两边都非空）会被误判成"不用重启"。比的是**当前进程真正在用的**
+      // 那串（环境变量供的也算），所以"环境变量与配置文件写同一个值"不会误报。
+      const fileEffective = envToken ? !info.disabled : (configHasToken && !info.disabled)
+      const tokenChanged = configHasToken && info.token !== deps.CONFIG_TOKEN
+      return {
+        found: true, configHasToken, configDisabled: info.disabled, envToken,
+        pendingRestart: fileEffective !== (deps.TOKEN !== '') || tokenChanged,
+      }
+    } catch { return { found: false, configHasToken: false, configDisabled: false, envToken, pendingRestart: false } }
   }
 
   /**

@@ -40,6 +40,9 @@ function presetIdProblemText(problem: SegmentProblem, id: string): string {
 export function normalizePresetId(raw: unknown): { ok: true; id: string } | { ok: false; error: string } {
   const id = String(raw ?? '').trim()
   if (id === LAST_APPLIED_PRESET_ID) return { ok: false, error: `「${LAST_APPLIED_PRESET_ID}」是「应用」的备份槽，不能用作预设 id` }
+  // `__proto__` 在 JSON / 普通对象上是原型槽而不是普通键：这个 id 会被当作索引键、侧车键
+  // 与目录名使用，落在普通对象上会静默改原型或丢失。
+  if (id === '__proto__') return { ok: false, error: '「__proto__」不能用作预设 id' }
   // 文件系统安全那一组交给共享谓词（`../paths.js`）—— 此前这里与 rules / subagents /
   // imports / skills 各写一套，五份实现迟早会漂。长度上限仍是本域自己的策略。
   const problem = segmentProblem(id, PRESET_ID_MAX)

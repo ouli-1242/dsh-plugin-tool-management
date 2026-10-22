@@ -180,7 +180,28 @@
      */
     // 开关的视觉完全交给 `[aria-checked]`（用户 2026-10-18：「switch 按键统一和官方一样的模板」）：
     // 官方那颗也是只靠这个属性切换外观，多挂一个 dsm-switch-on 类等于留两条互相打架的判据。
-    function Switch(props) { return h('button', { type: 'button', className: 'dsm-switch', role: 'switch', 'aria-checked': props.on === true, 'aria-label': props.label, title: props.title, disabled: props.disabled, onClick: props.onClick }); }
+    /**
+     * 开关。**这一层只画状态（开 / 关），不画来源** —— 用户 2026-10-19 裁定：
+     * 来源标记一律打在圆点 / 卡片边框上，开关保持与官方那颗逐像素相同。
+     *
+     * 理由：开关的形状与拇指位移是 2026-10-18 与官方对齐过的，而"开 / 关"本身已经
+     * 是它唯一的意思。再让它按来源换色，一屏里就会出现两种颜色的开关，读起来像"两种
+     * 不同的开关"，而不是"同一个开关、两种来源"。
+     *
+     * `scoped` 仍收下但**不参与渲染**：调用方按统一形状传参，将来若要恢复染色只改这里。
+     */
+    function Switch(props) {
+      return h('button', {
+        type: 'button',
+        className: 'dsm-switch',
+        role: 'switch',
+        'aria-checked': props.on === true,
+        'aria-label': props.label,
+        title: props.title,
+        disabled: props.disabled,
+        onClick: props.onClick,
+      })
+    }
 
     /**
      * 下拉菜单的高度上限，**必须与 CSS 里 .dsm-select-menu 的 max-height 一致** ——
@@ -202,7 +223,7 @@
      * props：options [{value,label,title?}] / value / onChange / disabled? / ariaLabel? / className?。
      */
     function SourceSelect(props) {
-      var state = react.useState(false), open = state[0], setOpen = state[1], selected = props.options.find(function (o) { return o.value === props.value; }) || props.options[0] || { label: '' }, ref = react.useRef(null);
+      var state = react.useState(false), open = state[0], setOpen = state[1], selected = props.options.find(function (o) { return o.value === props.value; }) || props.options[0] || { label: '' }, ref = react.useRef(null), menuRef = react.useRef(null);
       // 菜单的定位与高度，**视口坐标**（`{left,width,top,bottom,maxHeight}`，top/bottom 二选一）。
       // null = 还没量过（只在打开的那一帧出现，见下面的兜底样式）。
       var posState = react.useState(null), pos = posState[0], setPos = posState[1];
@@ -225,13 +246,18 @@
         var el = ref.current;
         if (!el) return;
         var box = el.getBoundingClientRect();
-        var need = Math.min(props.options.length * 34 + 14, MENU_MAX_H);
+        var sections = props.groups && props.groups.length ? props.groups : null;
+        var rowCount = 0, headCount = 0;
+        if (sections) {
+          sections.forEach(function (g) { rowCount += (g.options || []).length; if (g.label) headCount += 1; });
+        } else { rowCount = props.options.length; }
+        var need = Math.min(rowCount * 34 + headCount * 26 + 14, MENU_MAX_H);
         var gap = 4;
         var below = window.innerHeight - box.bottom - gap - 8;
         var above = box.top - gap - 8;
         var nextUp = below < need && above > below;
         var next = {
-          left: box.left, width: box.width, up: nextUp,
+          left: box.left, width: Math.max(box.width, Number(props.menuMinWidth) || 0), up: nextUp,
           top: nextUp ? null : box.bottom + gap,
           bottom: nextUp ? window.innerHeight - box.top + gap : null,
           maxHeight: Math.max(96, Math.min(need, nextUp ? above : below)),
@@ -243,12 +269,20 @@
       }
       react.useEffect(function () { if (!open) return undefined;
         measure();
+        // 选中项可能在滚动区外（会话按工作区分组后尤其如此）：打开时把它带进视野。
+        var reveal = setTimeout(function () {
+          var menu = menuRef.current;
+          if (!menu) return;
+          var active = menu.querySelector('[data-selected="true"]');
+          if (active && typeof active.scrollIntoView === "function") active.scrollIntoView({ block: "nearest" });
+        }, 0);
         function close(event) { if (!ref.current || !ref.current.contains(event.target)) setOpen(false); }
         document.addEventListener("pointerdown", close);
         // 打开期间窗口一动（滚 / 缩放）就重新量 —— fixed 菜单不会跟着触发器走。
         window.addEventListener("resize", measure);
         window.addEventListener("scroll", measure, true);
         return function () {
+          clearTimeout(reveal);
           document.removeEventListener("pointerdown", close);
           window.removeEventListener("resize", measure);
           window.removeEventListener("scroll", measure, true);
@@ -262,9 +296,41 @@
         }
         // 还没量到（打开的那一帧）先挪到屏幕外，免得在 0,0 闪一下。
         : { position: "fixed", left: "-9999px", top: "-9999px", maxHeight: MENU_MAX_H + "px" };
+      /**
+       * 一行选项。`checkSelected` / `meta` 任一在场才算「富行」：行首选中勾与行尾说明。
+       * 普通下拉（绝大多数）仍走原来的纯文本渲染，一字不差。
+       */
+      var renderOption = function (o, keyPrefix) {
+        var checked = o.value === props.value;
+        var rich = props.checkSelected === true || o.meta !== undefined;
+        return h("button", {
+          key: keyPrefix + (o.value || "all"), type: "button", role: "option",
+          className: "dsm-option" + (rich ? " dsm-option-rich" : ""),
+          "aria-selected": checked, "data-selected": checked ? "true" : undefined,
+          title: o.title || undefined,
+          onClick: function () { props.onChange(o.value); setOpen(false); },
+        }, rich ? [
+          props.checkSelected === true ? h("span", { key: "check", className: "dsm-option-check", "aria-hidden": "true" },
+            checked ? h("svg", { viewBox: "0 0 12 12", width: 11, height: 11, focusable: "false" },
+              h("path", { d: "M2.5 6.5L5 9L9.5 3.5", fill: "none", stroke: "currentColor", "stroke-width": 1.5, "stroke-linecap": "round", "stroke-linejoin": "round" })) : null) : null,
+          h("span", { key: "label", className: "dsm-option-text" }, o.label),
+          o.meta ? h("span", { key: "meta", className: "dsm-option-meta" }, o.meta) : null,
+        ] : o.label);
+      };
+      var menuBody = props.options.map(function (o) { return renderOption(o, ""); });
+      if (props.groups && props.groups.length) {
+        menuBody = props.groups.map(function (g, gi) {
+          return h("div", { key: "group" + gi, className: "dsm-select-group", role: "group", "aria-label": g.label || undefined }, [
+            g.label ? h("div", { key: "head", className: "dsm-select-group-label", title: g.title || g.label }, [
+              h("span", { key: "name", className: "dsm-select-group-name" }, g.label),
+              g.meta ? h("span", { key: "meta", className: "dsm-select-group-meta" }, g.meta) : null,
+            ]) : null,
+          ].concat((g.options || []).map(function (o) { return renderOption(o, "g" + gi + ":"); })));
+        });
+      }
       return h("div", { className: "dsm-select" + (props.className ? " " + props.className : ""), ref: ref },
         h("button", { type: "button", className: "dsm-select-trigger", "aria-haspopup": "listbox", "aria-expanded": open, "aria-label": props.ariaLabel || undefined, disabled: props.disabled === true, onClick: function () { if (props.disabled === true) return; if (!open) measure(); setOpen(!open); } }, h("span", null, selected.label)),
-        open ? h("div", { className: "dsm-select-menu", role: "listbox", style: menuStyle }, props.options.map(function (o) { return h("button", { key: o.value || "all", type: "button", role: "option", className: "dsm-option", "aria-selected": o.value === props.value, title: o.title || undefined, onClick: function () { props.onChange(o.value); setOpen(false); } }, o.label); })) : null);
+        open ? h("div", { ref: menuRef, className: "dsm-select-menu", role: "listbox", style: menuStyle }, menuBody) : null);
     }
 
     /**
@@ -402,7 +468,7 @@
       } catch (e) { /* storage unavailable */ }
     }
 
-    // 跨标签页联动（storage 事件只在**其它**标签页触发，正好）：A 标签页「清除令牌」之后，
+    // 跨标签页联动（storage 事件只在**其它**标签页触发，正好）：A 标签页「锁定」/「删除令牌」之后，
     // B 标签页内存里那串还揣着 —— 它的轮询请求会一直带着旧令牌的请求头，把宿主侧刚用
     // token-unaccept 重新挂上的闩又置回去。所以记录一被删，本页内存令牌立即作废；
     // 这页的输入框锁要等下一次 token-status 判定才会跟上，期间宿主侧门禁兜底。

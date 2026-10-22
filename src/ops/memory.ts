@@ -17,13 +17,30 @@ import type { RuleIndexEntry } from '../memories/index-io.js'
 import { deriveDescription } from '../memories/snapshot.js'
 import type { ParsedSkillDoc } from '../memories/snapshot.js'
 import type { MemoriesOpsCtx } from './ctx.js'
+import type { MemoryScopeOverride } from '../memories/memories-types.js'
 
 /** 组装本域 op。rc 由 createMemoriesService 组装，契约见 ./ctx.ts。 */
 export function buildMemoryOps(rc: MemoriesOpsCtx) {
   const { buildProjected, copyIntoMemoriesTrash, invalidateSnapshot, listAttachments, locateRule, maxBytes, parseId, refuseOutsideRoot, memoriesRoot, sceneMemory, scenePrompt, sceneRows, scenesRoot, serializeRuleFile, serializeUpdatedFile, snapshot, stateDir } = rc
 
+  /**
+   * 从 op 入参取会话作用域（0.21.2）。`sessionId` 缺失 = 全局口径（返回 undefined）。
+   *
+   * 为什么由 `sessionId` 反查而不是让调用方直接传覆盖：op 的入参来自 HTTP / 模型，
+   * 传一个覆盖对象等于把"哪个会话"的解释权交给调用方 —— 界面只要传当前会话 id，
+   * 覆盖永远由服务端从侧车读，两边不可能对不上。
+   */
+  const memoryScopeFrom = (args: any): MemoryScopeOverride | undefined => {
+    const sessionId = args && typeof args.sessionId === 'string' ? args.sessionId.trim() : ''
+    if (sessionId === '') return undefined
+    return rc.scopeOverrideOf(sessionId)
+  }
+
   async function rulesList(args: any): Promise<any> {
     const groupFilter = args && typeof args.group === 'string' && args.group !== '' ? args.group : undefined
+    // 会话层（0.21.2）：给了 sessionId 就按本会话的场景与逐条开关投影 —— 界面切到"某个会话"
+    // 时看到的就是那个会话的样子。不给 = 全局（与 0.21.2 逐字相同）。
+    const scope = memoryScopeFrom(args)
     const snap = await snapshot()
     // 索引直接用快照里那份：以前这里再 `readIndex(stateDir)` 一次 —— 同一次调用把
     // memories-index.json 读两遍，且可能出现「规则来自 t0、锁定/场景来自 t1」的混合态。
@@ -44,23 +61,33 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
         return attach ? { ...r, attach } : r
       })
     const groups = groupFilter ? snap.groups.filter((g) => g.name === groupFilter) : snap.groups
-    const scenes = sceneRows(snap, index)
+    // 会话层（0.21.2）：`scenes[]` 每一行的 `active` / `selectable` 也按本会话投影 ——
+    // 只改 `activeScene` 而不改行，场景页的「当前」标签与记忆页的场景卡都不动。
+    const scenes = sceneRows(snap, index, scope?.scene)
     // 场景锁定状态（v0.8）：任意一个场景锁定 = 五个管理域整体冻结。界面据此禁用各页的写控件。
     const anyLocked = Object.values(index.scenes || {}).some((s) => s.locked === true)
-    const projection = sceneMemory()
+    const projection = sceneMemory(scope)
     const promptProjection = scenePrompt()
+    // 逐条生效值：`enabled` 报**本会话**的（覆盖优先），另外带上全局值与是否被覆盖，
+    // 界面直接用合成后的 `enabled` 画勾，`overridden` 决定那一格加不加「本会话」标记。
+    const effectiveRules = scope === undefined ? rules : rules.map((r) => {
+      const over = scope.memory?.[r.id]
+      if (typeof over !== 'boolean') return r
+      return { ...r, enabled: over, globalEnabled: r.enabled, overridden: true }
+    })
     return {
       ok: true,
-      rules,
+      rules: effectiveRules,
       // 对外契约（§7.1）用 key 标识分组；name 保留兼容内部引用。
       groups: groups.map((g) => ({ ...g, key: g.name })),
       // 场景 = 显式记录（含保留场景 global 与尚无记忆的空场景）；active = 是否参与注入。
       scenes,
       // 任一场景被锁定 = 五个管理域整体冻结（客户端据此禁用写控件；服务端 handlers 另有守卫）。
       anyLocked,
-      activeMode: normalizeActive(index.active) === null ? 'all' : 'custom',
+      activeMode: scope?.scene !== undefined ? 'custom' : (normalizeActive(index.active) === null ? 'all' : 'custom'),
       // 单选模型：当前启用的那个场景（null = 只留 `_shared` 与 `global`）。
-      activeScene: enabledSceneOf(index),
+      // 会话层下报**本会话**的场景（决策 14：只改视图，不改运行时）。
+      activeScene: enabledSceneOf(index, scope?.scene),
       sceneMemory: { usedBytes: projection.bytes, maxBytes: projection.maxBytes, truncated: projection.truncated, dropped: projection.dropped },
       // 当前生效的场景提示词（绑定的预设正文；与 ~/.dsh/AGENTS.md 一致时不重复注入）。
       // `label` 是给用户指路用的显示名（「去场景设置里改『全局』的绑定」）——`global`
@@ -75,9 +102,11 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       },
       // 路径供 UI 显示「文件在哪」；不再让界面硬编码 ~/.dsh/scene-memory。
       paths: { memories: memoriesRoot, scenes: scenesRoot, hub: stateDir },
+      // 统计必须用**投影后**那份：会话层下「N 启用」报全局值，页头那几个数字与下面
+      // 一排开关就对不上了（2026-10-19）。
       stats: {
-        total: rules.length,
-        enabled: rules.filter((r) => r.enabled).length,
+        total: effectiveRules.length,
+        enabled: effectiveRules.filter((r) => r.enabled).length,
         scenes: scenes.filter((s) => s.active).length,
       },
       ...(snap.warnings.length ? { warnings: snap.warnings } : {}),
@@ -526,6 +555,12 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
   }
 
   async function rulesToggle(args: any): Promise<any> {
+    // 会话层写入**不走这里**（0.21.2）：本 op 改的是索引里的全局开关，而会话覆盖住在
+    // 另一个侧车。带着 sessionId 调过来时必须当场拒绝 —— 静默写全局正是这次要修的症状
+    // （用户以为只改了本会话，实际上所有对话都变了）。写入入口只有 `scope-set`。
+    if (args && typeof args.sessionId === 'string' && args.sessionId.trim() !== '') {
+      return fail('error.rules.sessionScopeWrite', '会话层开关请走 scope-set（本 op 只改全局）')
+    }
     const id = String((args && args.id) || '')
     const parts = parseId(id)
     if (!parts) return fail('error.rules.notFound', `规则不存在：${id}`)

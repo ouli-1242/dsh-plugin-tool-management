@@ -1,5 +1,8 @@
     function SkillManagerSection(props) {
       var t = props.t;
+      // 订阅「现在编辑的是哪一层」（20b-scope）：技能清单按会话 cwd 推导项目根，
+      // 切层必须重新拉一次 —— 不订阅时页面停在切层前那份快照（2026-10-19 实测）。
+      var scopeState = useScopeLayer();
       var ss = react.useState({ loading: true, error: null, data: null }), snapshot = ss[0], setSnapshot = ss[1];
       var bs = react.useState(false), busy = bs[0], setBusy = bs[1];
       var qs = react.useState(""), query = qs[0], setQuery = qs[1];
@@ -42,8 +45,48 @@
       // 事件回调里要读「当前」的撤销条：点开关到请求返回之间用户可能已经点过撤销。
       var undoRef = react.useRef(null);
       undoRef.current = undo;
-      function refresh(silent) { if (!silent) setSnapshot({ loading: true, error: null, data: snapshot.data }); return callApi("/state").then(function (data) { setSnapshot({ loading: false, error: null, data: data }); return data; }).catch(function (error) { setSnapshot({ loading: false, error: translateError(t, error), data: snapshot.data }); }); }
-      react.useEffect(function () { refresh(false); }, []);
+      /** 取数用的会话 id：全局层传空串（= 服务端按全局口径算，与 0.21.2 逐字相同）。 */
+      function scopeSessionId() { return scopeIsSession() ? scopeState.sessionId : '' }
+      /**
+       * 来源在**本层**开不开（0.21.2）。
+       *
+       * 会话层：`skillSources` 域（键 = 来源 root，与注入段、模型工具同一套）。拨开一个
+       * 全局关着的来源时，服务端会先在**全局**把它启用（来源关着时技能级开关会被 core
+       * 吞掉）—— 警告随回执带回，`scopeWriteFlag` 会把它挂到作用域条上。
+       */
+      function srcOnInLayer(root) {
+        // 全局层读**意图**（`root.globalOn`，0.21.2），运行态兜底：租约期间来源状态是开着的，
+        // 读 `root.enabled` 会把"仅为几个对话开着"显示成全局开着。
+        var globalOn = typeof root.globalOn === 'boolean' ? root.globalOn : root.enabled !== false
+        return scopeIsSession() ? scopeFlag('skillSources', String(root.key), globalOn).value : globalOn
+      }
+      /**
+       * 全局意图的两种"重"动作（0.21.2）：来源停用是 off（有租约就继续跑），
+       * 彻底停止（blocked）才会连还在用它的会话一起切断 —— 所以后者走确认。
+       */
+      function setSourceIntent(root, value) {
+        var key = String(root.key || '')
+        var name = rootDisplayName(t, root)
+        setBusy(true)
+        setResult(null)
+        return apiCall('scope-intent-set', { domain: 'skillSources', keys: [key], value: value })
+          .then(function (res) {
+            if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+            var warnings = res && res.warnings && res.warnings.length ? res.warnings.join('；') : ''
+            var leases = scopeLeaseCount('skillSources', key)
+            var text = value === 'blocked' ? t('scope.intent.stopped', { name: name })
+              : value === 'on' ? t('done.enabled', { name: name })
+                : leases > 0 ? t('scope.intent.keptRunning', { count: leases }) : t('done.disabled', { name: name })
+            setResult({ ok: true, text: text + (warnings ? ' ' + warnings : '') })
+            refreshScope()
+            refresh(true)
+          })
+          .catch(function (error) { setResult({ ok: false, text: t('error.action', { error: translateError(t, error) }) }) })
+          .finally(function () { setBusy(false) })
+      }
+      // 项目技能根按**会话 cwd** 推导（skills/service.ts 的 `sessionCwdOf`），所以带上层。
+      function refresh(silent) { if (!silent) setSnapshot({ loading: true, error: null, data: snapshot.data }); return callApi("/state", { body: JSON.stringify({ sessionId: scopeSessionId() }) }).then(function (data) { setSnapshot({ loading: false, error: null, data: data }); return data; }).catch(function (error) { setSnapshot({ loading: false, error: translateError(t, error), data: snapshot.data }); }); }
+      react.useEffect(function () { refresh(false); }, [scopeState.sessionId]);
       function post(path, body, successKey, successParams) { if (inflightRef.current) return Promise.reject({ error: "operation already in progress" }); inflightRef.current = true; setBusy(true); setResult(null); return callApi(path, { body: JSON.stringify(body || {}) }).then(function (data) { var warn = joinWarn(sceneSyncWarn(t, data), stateSyncWarn(t, data)); setResult({ ok: !warn, warning: !!warn, text: (successKey ? t(successKey, successParams || data || {}) : t("result.updated")) + (warn ? " " + warn : "") }); return refresh(true).then(function () { return data; }); }).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); throw error; }).finally(function () { inflightRef.current = false; setBusy(false); }); }
       /** post 把失败写进 setResult 后会 re-throw 供链式消费；不消费的调用方挂它吞掉重抛，
           否则控制台全是 unhandled rejection（失败反馈本身 post 已经给过了）。 */
@@ -53,7 +96,7 @@
         // 先发的响应可能后到并顶掉后发的那份 —— 序号对不上就丢弃。
         var seq = ++detailSeqRef.current;
         setBusy(true); setDetail(null); setModal("detail");
-        callApi("/detail", { body: JSON.stringify({ root: root.key, name: skill.name }) })
+        callApi("/detail", { body: JSON.stringify({ root: root.key, name: skill.name, sessionId: scopeSessionId() }) })
           .then(function (data) { if (seq === detailSeqRef.current) setDetail(data); })
           .catch(function (error) {
             if (seq !== detailSeqRef.current) return;
@@ -182,21 +225,42 @@
           filtered[root.key] = (root.skills || []).filter(function (skill) { return matchSkillQuery(Object.assign({}, skill, { rootKey: root.key, rootLabel: displayName }), dq); });
           var list = [];
           // 与 bulkTargets 同一口径：来源级开关关掉的不参与；页头那颗还受来源筛选约束。
-          if (root.toggleable !== false && root.enabled !== false && !(activeSource && activeSource !== root.key)) {
+          // 会话作用域（0.21.2）：判据按**本层**的来源值（本会话藏掉的来源，里面不参与批量）。
+          if (root.toggleable !== false && srcOnInLayer(root) && !(activeSource && activeSource !== root.key)) {
             var skills = root.skills || [];
             for (var j = 0; j < skills.length; j++) {
               var sk = skills[j];
               if (sk.loadable === false || sk.shadowedBy) continue;
               if (!matchSkillQuery(Object.assign({}, sk, { rootKey: root.key, rootLabel: displayName }), dq)) continue;
-              list.push({ root: root.key, name: sk.name, on: isSkillEnabled(sk) });
+              // 会话作用域（0.21.2）：批量按钮的「全开没有」也按**本层**算 —— 用全局值的话，
+              // 会话层刚全关掉，按钮还写着「取消全选」（2026-10-19 实测）。
+              // `canonical` 是覆盖键用的声明名；`name` 仍是全局 op 认的目录名，两者别混。
+              var canonical = sk.declaredName || sk.name;
+              list.push({ root: root.key, name: sk.name, canonical: canonical, on: scopeFlag('skills', root.key + '/' + canonical, skillGlobalOn(sk)).value });
             }
           }
           targets[root.key] = list;
           all = all.concat(list);
         }
         targets[""] = all;
-        return { filtered: filtered, targets: targets };
-      }, [roots, dq, activeSource, t]);
+        // 页头「启用 / 总数」在会话层按本层算：`summary.enabled` 是服务端按全局算的，
+        // 会话层照抄它，页头那几个数字与下面一排开关就对不上（2026-10-19）。
+        var enabledCount = 0;
+        for (var r2 = 0; r2 < roots.length; r2++) {
+          // 来源级停用时里面一条都加载不了 —— 残留的会话 `true` 不能把它算进"启用"。
+          // 判据按本层（会话藏掉的来源同样一条都不算）。
+          if (!srcOnInLayer(roots[r2])) continue;
+          var rs = roots[r2].skills || [];
+          for (var s2 = 0; s2 < rs.length; s2++) {
+            // 与 `summary.enabled`（服务端只数胜出者）同一口径：影子副本没有 `enabled` 字段，
+            // 走 `isSkillEnabled` 的兜底推导会被算成"开着"，页头那个数字就比服务端多。
+            if (rs[s2].loadable === false || rs[s2].shadowedBy) continue;
+            if (scopeFlag("skills", roots[r2].key + "/" + (rs[s2].declaredName || rs[s2].name), skillGlobalOn(rs[s2])).value) enabledCount += 1;
+          }
+        }
+        return { filtered: filtered, targets: targets, enabledCount: enabledCount };
+        // `scopeState` 进依赖：批量目标集的 `on` 跟着层走（见上面那条 push）。
+      }, [roots, dq, activeSource, t, scopeState]);
       // 创建位置候选：只要**用户级**可写根（DSH 技能 / 导入技能）。项目级来源
       // （`project-dsh:<hash>`，标签「项目 DSH · <仓库名>」）排除在外 —— 用户裁定
       // 2026-10-15「新增技能默认 DSH 技能；导入技能功能才是导入技能目录」，新建落点
@@ -393,6 +457,20 @@
       }
       function renderSkill(root, skill) {
         var enabled = isSkillEnabled(skill), key = skill.shadowedBy ? "status.shadowed" : skill.loadable === false ? "status.invalid" : enabled ? "status.enabled" : "status.disabled";
+        // 覆盖键用**声明名**（`<root>/<declaredName>`）：注入段、档案与模型工具都是这套键。
+        var skillName = skill.declaredName || skill.name
+        var skillKey = root.key + '/' + skillName
+        // 全局层显示「意图 ∪ 租约」的有效值（`globalOn`），不是运行态瞬时值（0.21.2）。
+        var globalOnHere = skillGlobalOn(skill)
+        // 来源级停用是上层闸（0.21.2）：里面单条技能的会话覆盖即使写着 true 也不生效，
+        // 界面与页头统计必须按"关"显示 —— 否则会出现"本对话开着、却加载不了"的绿勾。
+        // 0.21.2 起判据是**本层**的来源值（会话层 = `skillSources` 域）：本会话藏掉的来源，
+        // 里面的行照"关"显示；本会话拨开的全局关来源，里面按"假设开着"算。
+        var rootOff = !srcOnInLayer(root);
+        // 行首点 = **这一层**开不开（与右边那颗开关同值）。运行态可能是别的会话的租约拉起来的，
+        // 那由行 2 的「临时运行 · N 个对话」说明，不拿绿点冒充「本层开着」（用户 2026-10-21）。
+        var flagHere = scopeFlag("skills", skillKey, globalOnHere)
+        var onHere = rootOff ? false : flagHere.value
         // 胶囊配色：橙=诊断异常（要人去看），灰=没生效但不是故障（被同名覆盖、本条停用），绿=生效中。
         var tone = skill.shadowedBy ? "muted" : skill.loadable === false ? "warn" : enabled ? "ok" : "muted";
         var canToggle = root.toggleable !== false && skill.loadable !== false;
@@ -407,6 +485,9 @@
         var metaBits = [
           h("span", { key: "desc", className: "dsm-listrow-meta-desc", title: skill.description || t("note.missing") }, skill.description || t("note.missing")),
           skill.preferred === true ? h("span", { key: "preferred", className: "dsm-listrow-meta-info" }, t("status.preferred")) : null,
+          // 六域租约徽章（0.21.2）：这一条有几个对话在认领它（真写运行态的域，文案「临时运行 · N 个对话」）。
+          // 放在行 2 而不是行 1：行 1 的契约是「名称 + 至多 1 个需要处理的 tag」（见 ListRow 注释）。
+          leaseTag({ t: t, domain: 'skills', key: skillKey, runtime: true }),
           // （这里曾有一枚「源文件只读」：它说的就是"这一整组来源是只读的"，而组卡头已经把来源
           //  名字摆在上面 —— 每一行重复一遍没有任何新信息，2026-10-12 删掉。）
           root.mutable && !root.deletable ? h("span", { key: "notDeletable", className: "dsm-listrow-meta-info", title: t("status.notDeletable.hint") }, t("status.notDeletable")) : null,
@@ -428,8 +509,8 @@
          * 收掉的只是那颗**做不到它承诺的事**的按钮。判据是来源 key，不是文案。
          */
         var canPrefer = !!skill.shadowedBy && skill.shadowedBy.root !== root.key;
-        if (canToggle && canPrefer) menuItems.push({ key: "activate", label: t("btn.activate"), title: t("btn.activate.title"), disabled: busy || anyLocked, onClick: function () { activateShadowed(root, skill); } });
-        if (skill.preferred === true) menuItems.push({ key: "unprefer", label: t("btn.unprefer"), title: t("btn.unprefer.title"), disabled: busy || anyLocked, onClick: function () { clearPreferred(root, skill); } });
+        if (canToggle && canPrefer) menuItems.push({ key: "activate", label: t("btn.activate"), title: t("btn.activate.title"), disabled: busy || anyLocked || scopeIsSession(), onClick: function () { activateShadowed(root, skill); } });
+        if (skill.preferred === true) menuItems.push({ key: "unprefer", label: t("btn.unprefer"), title: t("btn.unprefer.title"), disabled: busy || anyLocked || scopeIsSession(), onClick: function () { clearPreferred(root, skill); } });
         actions.push(h("button", { key: "detail", type: "button", className: "dsm-btn dsm-btn-quiet", onClick: function () { openDetail(root, skill); } }, t("btn.detail")));
         // 「删除」留在行内（用户 2026-10-16 第四轮：「技能把删除拿出来」，与会话页同一口径）：
         // 这一页的行本来就靠这颗收尾，藏进 ⋯ 反而要多点一次才找得到。
@@ -437,16 +518,28 @@
         if (menuItems.length) actions.push(h(RowMenu, { key: "menu", label: t("row.menu", { name: skill.declaredName || skill.name }), items: menuItems }));
         return h(ListRow, {
           key: skill.name,
-          dots: attention ? [] : [h(StatusDot, { key: "dot", tone: enabled ? "ok" : "idle", title: t(key) })],
+          // 会话作用域（0.21.2）：来源标记打在点上（用户 2026-10-19 裁定，开关不染色）。
+          // 覆盖键用**声明名**（`<root>/<declaredName>`）：注入段、档案与模型工具都是这套键，
+          // 目录名与声明名不同时用目录名会写进一条永远读不到的覆盖。
+          dots: attention ? [] : [h(StatusDot, { key: "dot", tone: onHere ? "ok" : "idle", scoped: onHere && flagHere.scoped, title: t(onHere ? "status.enabled" : "status.disabled") })],
           name: skill.declaredName || skill.name,
           tag: attention ? h(StatusTag, { tone: tone, text: t(key) }) : null,
           meta: metaBits,
           extra: shadowedHint ? h("div", { className: "dsm-rule-hint" }, shadowedHint) : null,
-          side: canToggle && !skill.shadowedBy ? h(Switch, { on: enabled, disabled: busy || root.enabled === false || anyLocked, label: t("skill.toggle") + " " + skill.name, onClick: function () {
-                    // 回执动词表（REDESIGN §12.4）：两个方向各取字面量键，不合成三元选词。
-                    if (enabled) post("/disable", { root: root.key, name: skill.name }, "done.disabled", { name: skill.declaredName || skill.name });
-                    else post("/enable", { root: root.key, name: skill.name }, "done.enabled", { name: skill.declaredName || skill.name });
-                  } }) : null,
+          // 会话作用域（0.21.2）：这一格的值与"是不是本会话覆盖的"都来自 scopeFlag；
+          // 会话层下点击写 `scope-set`，全局层仍走 `/enable` `/disable`。
+          side: canToggle && !skill.shadowedBy ? (function () {
+            return h(Switch, { on: onHere, scoped: !rootOff && flagHere.scoped, disabled: busy || rootOff || scopeWriteLocked(anyLocked), label: t('skill.toggle') + ' ' + skill.name, onClick: function () {
+              // 回执动词表（REDESIGN §12.4）：两个方向各取字面量键，不合成三元选词。
+              if (scopeIsSession()) {
+                scopeWriteFlag('skills', skillKey, !onHere, function () { return { ok: true } })
+                  .then(function (res) { setResult(res && res.ok === false ? { ok: false, text: translateError(t, res) } : { ok: true, text: t(onHere ? 'done.disabled' : 'done.enabled', { name: skillName }) }) })
+                return
+              }
+              if (onHere) post('/disable', { root: root.key, name: skill.name }, 'done.disabled', { name: skillName })
+              else post('/enable', { root: root.key, name: skill.name }, 'done.enabled', { name: skillName })
+            } })
+          })() : null,
           actions: actions,
         });
       }
@@ -460,7 +553,16 @@
         var baseOpen = openFlag === undefined ? bulkTargets(root.key).some(function (x) { return x.on }) : !!openFlag;
         var open = baseOpen || !!dq;
         var rootCount = root.count == null ? root.skills.length : root.count;
-        var section = h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head dsm-source-head-pin" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !baseOpen })); } }, h("span", { className: "dsm-source-title", title: displayName }, displayName), h("span", { className: "dsm-count" }, String(rootCount)), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.defaultSource === true ? "" : root.enabled ? "dsm-tag-on" : "") }, root.scope === "project" ? t("status.project") : root.defaultSource === true ? t("status.manageable") : t(root.enabled ? "status.source.on" : "status.source.off")), root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), (function () {
+        var srcOnHere = srcOnInLayer(root);
+        // 全局意图 / 租约（0.21.2）：与 MCP 页同一套徽章 —— 「彻底停止」与「临时运行 · N 个对话」。
+        // 会话层不显示（那一层只回答"这个对话看得到哪些技能"）。
+        var rootKeyHere = String(root.key || "");
+        var intentHere = scopeIntentOf('skillSources', rootKeyHere);
+        var leaseHere = scopeLeaseCount('skillSources', rootKeyHere);
+        var intentTag = scopeIsSession() || root.defaultSource === true ? null
+          : intentHere === 'blocked' ? h("span", { key: "intent", className: "dsm-tag dsm-tag-off", title: t("scope.intent.blockedHint") }, t("scope.intent.blocked"))
+            : h(react.Fragment, { key: "intent" }, leaseTag({ t: t, domain: 'skillSources', key: rootKeyHere, runtime: true }));
+        var section = h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head dsm-source-head-pin" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !baseOpen })); } }, h("span", { className: "dsm-source-title", title: displayName }, displayName), h("span", { className: "dsm-count" }, String(rootCount)), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.defaultSource === true ? "" : srcOnHere ? "dsm-tag-on" : "") }, root.scope === "project" ? t("status.project") : root.defaultSource === true ? t("status.manageable") : t(srcOnHere ? "status.source.on" : "status.source.off")), intentTag, root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), (function () {
           // 目录级「全选 / 取消全选」（用户裁定 2026-09-17）：只作用于**这个目录下当前
           // 可见且可切换**的技能 —— 与页头那颗同一套目标集逻辑（bulkTargets 传 rootKey），
           // 同名技能只算生效的那一个（被覆盖的副本跳过）。
@@ -471,13 +573,50 @@
           // 点这颗按钮**顺带把卡片展开**（用户裁定 2026-09-17）：批量开关的结果就在下面这几行里，
           // 卡片收着的话点完只剩按钮文案从「全选」变成「取消全选」，到底改了哪几个技能看不见。
           // 只展开、不收起 —— 两个方向（全选 / 取消全选）都要能看见结果，收起是点卡片头的事。
-          if (bulk.targets.length) acts.push(h("button", { key: "all", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-bulk", disabled: busy || anyLocked, title: t("source.bulk.title"), onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: true })); submitBulk(bulk.targets, !bulk.on, root.key); } }, bulkPair(bulk.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulk.on ? t("bulk.selectAll") : t("bulk.unselectAll"))));
+          if (bulk.targets.length) acts.push(h("button", { key: "all", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-bulk", disabled: busy || scopeWriteLocked(anyLocked), title: t("source.bulk.title"), onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: true })); submitBulk(bulk.targets, !bulk.on, root.key); } }, bulkPair(bulk.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulk.on ? t("bulk.selectAll") : t("bulk.unselectAll"))));
           if (showSwitch) {
             // 开关来源时**顺带把卡片展开**（用户裁定 2026-09-17），与旁边那颗「全选」同口径：
             // 启停的结果就是下面这些技能行（开启 = 整目录可用了，关闭 = 逐行变停用），卡片收着
             // 的话点完只剩标签从「已停用」变「已启用」，目录里到底有什么、哪些真的可用了看不见。
             // 只展开、不收起 —— 两个方向都要能看见结果，收起仍然是点卡片头那一行的事。
-            acts.push(h(Switch, { key: "sw", on: root.enabled, disabled: busy || anyLocked, label: t("source.toggle") + " " + displayName, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: true })); (root.enabled ? post("/source-disable", { root: root.key }, "done.disabled", { name: displayName }) : post("/source-enable", { root: root.key }, "done.enabled", { name: displayName })).then(function () { dropUndoForRoot(root.key, displayName); }); } }));
+            // 会话作用域（0.21.2）：会话层写 `skillSources` 域；拨开一个全局关着的来源时
+            // 服务端会先在**全局**启用它（来源关着时技能级开关被 core 吞掉），警告挂作用域条。
+            var srcFlag = scopeFlag('skillSources', String(root.key), typeof root.globalOn === 'boolean' ? root.globalOn : root.enabled !== false);
+            var srcOn = scopeIsSession() ? srcFlag.value : srcOnHere;
+            // 全局「彻底停止」压过会话层：会话开关置灰并说明（拨了也会被服务端拒掉）。
+            var blockedHere = intentHere === 'blocked';
+            acts.push(h(Switch, {
+              key: "sw",
+              on: srcOn,
+              scoped: scopeIsSession() ? srcFlag.scoped : false,
+              disabled: busy || scopeWriteLocked(anyLocked) || blockedHere,
+              title: blockedHere ? t("scope.intent.blockedHint") : undefined,
+              label: t("source.toggle") + " " + displayName,
+              onClick: function () {
+                setExpanded(Object.assign({}, expanded, { [root.key]: true }));
+                if (scopeIsSession()) {
+                  scopeWriteFlag('skillSources', String(root.key), !srcOn, function () { return { ok: true } })
+                    .then(function (res) {
+                      if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+                      setResult({ ok: true, text: t(srcOn ? 'done.disabled' : 'done.enabled', { name: displayName }) })
+                      refresh(true)
+                    })
+                  return
+                }
+                // 全局层 = 写**意图**（0.21.2）：off 之后仍被会话认领的来源保持启用（租约），
+                // 只有「彻底停止」才切断它们。
+                setSourceIntent(root, srcOn ? 'off' : 'on');
+              },
+            }));
+            // 「彻底停止 / 恢复启用」：只在全局层、且确实有区别的时候出现
+            //（off 或还有租约 —— 普通开着时那颗开关已经能停，停完再出现"彻底停止"）。
+            if (!scopeIsSession()) {
+              if (intentHere === 'blocked') {
+                acts.push(h("button", { key: "intent", type: "button", className: "dsm-btn dsm-btn-quiet", disabled: busy || scopeWriteLocked(anyLocked), onClick: function () { setSourceIntent(root, 'on'); } }, t("scope.intent.resume")));
+              } else if (intentHere === 'off' || leaseHere > 0) {
+                acts.push(h("button", { key: "intent", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy || scopeWriteLocked(anyLocked), title: t("scope.intent.stopHint"), onClick: function () { setModal({ type: "source-stop-confirm", key: root.key, name: displayName }); } }, t("scope.intent.stop")));
+              }
+            }
             // 「移除来源」只要文字，放在开关**右侧**（用户裁定 2026-10-15，连续推翻两次：
             // 2026-09-17 的「只留图标」与当天早些时候的「图标 + 文字」—— 图标在这颗 quiet
             // 键里只是装饰，「移除来源」四个字已把语义说全；破坏性操作的郑重感由确认弹窗
@@ -485,7 +624,10 @@
             if (root.removable === true) acts.push(h("button", { key: "rm", type: "button", className: "dsm-btn dsm-btn-quiet dsm-btn-danger", disabled: busy || anyLocked, title: t("btn.source.remove.title"), "aria-label": t("btn.source.remove"), onClick: function () { setModal({ type: "source-remove-confirm", key: root.key, name: displayName }); } }, t("btn.source.remove")));
           }
           return acts.length ? h("span", { className: "dsm-source-actions" }, acts) : null;
-        })()), open ? h("div", { className: "dsm-source-body" }, filtered.length ? rankedFirst(skillRank, function (skill) { return skill.key || (root.key + "/" + skill.name) }, filtered, function (skill) { return isSkillEnabled(skill); }).map(function (skill) { return renderSkill(root, skill); }) : h("div", { className: "dsm-empty" }, dq ? t("empty.search") : t("empty.source"))) : null);
+        })()), open ? h("div", { className: "dsm-source-body" }, filtered.length ? rankedFirst(skillRank, function (skill) { return skill.key || (root.key + "/" + skill.name) }, filtered, function (skill) {
+          // 会话层按本层生效值排序（与行内开关同一判据），否则刚全关的技能仍排在「启用」那一段。
+          return scopeFlag('skills', root.key + '/' + (skill.declaredName || skill.name), skillGlobalOn(skill)).value;
+        }).map(function (skill) { return renderSkill(root, skill); }) : h("div", { className: "dsm-empty" }, dq ? t("empty.search") : t("empty.source"))) : null);
         // 表头已随列表行两行制拆除（REDESIGN §3.4 没有表头行；「来源」列的信息由组头承担，
         // 组头挂 dsm-source-head-pin：滚动长列表时组名 + 计数 + 组内全选吸在页签条下缘，
         // 切片三移交项，样式见 10-css.js 尾段）。
@@ -529,6 +671,46 @@
       function submitBulk(items, enabled, scope) {
         if (!items || !items.length) return;
         setBusy(true); setResult(null);
+        // 会话作用域（0.21.2）：会话层**逐条写 `scope-set`**，不碰 `skill-set-all`。
+        // 那条 op 改的是全局启停名单与首选策略；会话层只是本会话的可见性视图（决策 10），
+        // 用它来承接批量按钮就是「批量点了、别的对话一起变了」。串行提交的理由与记忆页
+        // 同一条：侧车每次写都要整份重写，并发只是排队，还会让失败时的书写顺序不可读。
+        if (scopeIsSession()) {
+          var doneN = 0, failText = null;
+          var chain = Promise.resolve();
+          items.forEach(function (x) {
+            chain = chain.then(function () {
+              if (failText) return null;
+              return scopeWriteFlag('skills', x.root + '/' + (x.canonical || x.name), enabled, function () { return { ok: true } })
+                .then(function (res) { if (res && res.ok === false) failText = translateError(t, res); else doneN += 1 })
+                .catch(function (e) { failText = errMsg(e) });
+            });
+          });
+          chain.then(function () {
+            setBusy(false);
+            var changedN = 0;
+            for (var k = 0; k < items.length; k++) if (items[k].on !== enabled) changedN += 1;
+            // 复用 `bulk.done.skills` 那条（带「失败 N」），失败原因另起一句挂在后面 ——
+            // 记忆页那条 `memory.bulk.partial` 的量词是「条记忆」，套到技能上就是错话。
+            setResult(failText
+              ? { ok: false, text: t("bulk.done.skills", { action: t(enabled ? "bulk.enabled" : "bulk.disabled"), count: doneN, failed: items.length - doneN }) + " · " + failText }
+              : { ok: true, text: t("bulk.done.skills", { action: t(enabled ? "bulk.enabled" : "bulk.disabled"), count: changedN, failed: 0 }) });
+            if (!failText) {
+              // 「当前共 N 个启用」按**本层**算（`skillView.enabledCount` 是本层投影后的值）；
+              // 用全局的 `summary.enabled` 会在会话层报一个与页头不一致的数字。
+              var enabledNow = skillView.enabledCount;
+              setUndo({
+                text: t("undo.skills", { action: t(enabled ? "bulk.enabled" : "bulk.disabled"), count: changedN, enabled: enabled ? enabledNow + changedN : enabledNow - changedN }),
+                items: items,
+                revert: function (item) { return scopeWriteFlag('skills', item.root + '/' + (item.canonical || item.name), item.on, function () { return { ok: true } }) },
+                scope: scope || null,
+                roots: items.map(function (x) { return x.root; }).filter(function (v, i, a) { return a.indexOf(v) === i; }),
+              });
+            }
+            refresh(true);
+          });
+          return;
+        }
         apiCall("skill-set-all", {
           items: items.map(function (x) { return { root: x.root, name: x.name }; }),
           enabled: enabled,
@@ -621,11 +803,12 @@
         // 三格：技能「启用 / 总数」比例 · 来源目录数 · 诊断项数。第一格此前只给总数
         // （"12 个技能"），答不了"有几个是开着的"；分母服务端一直在给（summary.total）。
         // 诊断项 >0 时整格转错误色（dsm-stat-over），让"有没有问题"一眼可见。
-        stats: [[summary.enabled + "/" + summary.total, statLabel("summary.total", summary.total)], [roots.length, statLabel("summary.sources", roots.length)], [summary.issues, statLabel("summary.issues", summary.issues), summary.issues > 0 ? "dsm-stat-over" : ""]],
-        actions: [h("button", { key: "new", type: "button", className: "dsm-btn", disabled: anyLocked, onClick: openCreate }, t("btn.create")), h("button", { key: "import", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: anyLocked, onClick: function () { setResult(null); setUpload(null); setModal("import"); } }, t("btn.import")), h("button", { key: "export", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setModal("export"); } }, t("export.skills")), h("button", { key: "custom", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setCustomForm({ path: "", label: "" }); setModal("custom-add"); } }, t("btn.custom.add")), h("button", { key: "bulk", type: "button", className: "dsm-btn dsm-btn-secondary dsm-btn-bulk", disabled: busy || anyLocked || !bulkAll.targets.length, title: t("bulk.head.title"), onClick: function () { submitBulk(bulkAll.targets, !bulkAll.on, null) } }, bulkPair(bulkAll.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulkAll.on ? t("bulk.selectAll") : t("bulk.unselectAll"))), h("button", { key: "trash", type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal("trash"); } }, t("trash.btn.open"))] }), anyLocked ? h("div", { key: "lockbanner", className: "dsm-feedback dsm-warning", role: "status" }, t("lock.banner")) : null,
+        stats: [[(scopeIsSession() ? skillView.enabledCount : summary.enabled) + "/" + summary.total, statLabel("summary.total", summary.total)], [roots.length, statLabel("summary.sources", roots.length)], [summary.issues, statLabel("summary.issues", summary.issues), summary.issues > 0 ? "dsm-stat-over" : ""]],
+        actions: [h("button", { key: "new", type: "button", className: "dsm-btn", disabled: anyLocked, onClick: openCreate }, t("btn.create")), h("button", { key: "import", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: anyLocked, onClick: function () { setResult(null); setUpload(null); setModal("import"); } }, t("btn.import")), h("button", { key: "export", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setModal("export"); } }, t("export.skills")), h("button", { key: "custom", type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: function () { setResult(null); setCustomForm({ path: "", label: "" }); setModal("custom-add"); } }, t("btn.custom.add")), h("button", { key: "bulk", type: "button", className: "dsm-btn dsm-btn-secondary dsm-btn-bulk", disabled: busy || scopeWriteLocked(anyLocked) || !bulkAll.targets.length, title: t("bulk.head.title"), onClick: function () { submitBulk(bulkAll.targets, !bulkAll.on, null) } }, bulkPair(bulkAll.on ? t("bulk.unselectAll") : t("bulk.selectAll"), bulkAll.on ? t("bulk.selectAll") : t("bulk.unselectAll"))), h("button", { key: "trash", type: "button", className: "dsm-btn dsm-btn-secondary", onClick: function () { setModal("trash"); } }, t("trash.btn.open"))] }), anyLocked && !scopeIsSession() ? h("div", { key: "lockbanner", className: "dsm-feedback dsm-warning", role: "status" }, t("lock.banner")) : null,
       // 锁定期间不显示场景那条长句：开关全是灰的，"改动会同步写进档案"没有落点，
       // 两条并排还会互相矛盾（用户 2026-09-19）。
-      (!anyLocked && sceneName) ? h("div", { key: "scenebanner", className: "dsm-feedback dsm-warning", role: "status" }, t("scene.switch.banner", { scene: sceneName })) : null,
+      // 会话层不显示（同 MCP 页）：本层开关写的是会话覆盖，不同步档案。
+      (!anyLocked && sceneName && !scopeIsSession()) ? h("div", { key: "scenebanner", className: "dsm-feedback dsm-warning", role: "status" }, t("scene.switch.banner", { scene: sceneName })) : null,
       h(Toolbar, { key: "filters" }, h("input", { className: "dsm-control dsm-search", value: query, "aria-label": t("search"), placeholder: t("search.placeholder"), onChange: function (e) { setQuery(e.target.value); } }), h("div", { className: "dsm-source-filter" }, h(SourceSelect, { value: activeSource, options: options, onChange: setSource }))), undo && undo.scope == null ? h(UndoBar, { key: "undo", undo: undo, busy: busy, t: t, onUndo: undoBulk, onClose: dismissUndo }) : null, result && modal !== "import" ? h(Notice, { key: "result", kind: result.warning ? "warn" : result.ok ? "ok" : "err", text: result.text }) : null].concat((data.warnings || []).map(function (warning, index) { return h(Notice, { key: "warning-" + index, kind: "warn", text: translateError(t, warning) }); }), [snapshot.error ? h(Notice, { key: "error", kind: "err", text: snapshot.error }) : null,
       // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试，只在完全没有
       // 旧数据时顶掉列表）/ 有数据。错误横幅照旧挂着 —— 它同时承担「有缓存数据时的错误」。
@@ -723,6 +906,7 @@
       if (modal && modal.type === "trash-confirm") content.push(h(Modal, { key: "trash-confirm", title: t("confirm.trash.title"), closeLabel: t("btn.close"), className: "dsm-modal-sm", onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.trash.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn", disabled: busy, onClick: function () { post("/delete", { root: modal.root, name: modal.name }, "result.trashed", { name: modal.name }).then(function () { setModal(null); }).catch(swallowPostError); } }, t("btn.trash")))));
       if (modal === "custom-add") content.push(h(Modal, { key: "custom-add", title: t("custom.add.title"), closeLabel: t("btn.close"), onClose: function () { setModal(null); } }, h("div", { className: "dsm-form" }, h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("custom.add.path")), h("div", { className: "dsm-dir-row" }, h("input", { className: "dsm-control", value: customForm.path, placeholder: defaultIoDir(), onChange: function (e) { setCustomForm(Object.assign({}, customForm, { path: e.target.value })); } }), h("button", { type: "button", className: "dsm-btn dsm-btn-secondary", disabled: busy, onClick: openCustomDir, title: t("custom.add.openDir.title") }, t("btn.openDir")))), h("label", { className: "dsm-field" }, h("span", { className: "dsm-label" }, t("custom.add.label")), h("input", { className: "dsm-control", value: customForm.label, placeholder: t("custom.add.label.placeholder"), onChange: function (e) { setCustomForm(Object.assign({}, customForm, { label: e.target.value })); } })), h("p", { className: "dsm-help" }, t("custom.add.help")), result ? h("div", { className: "dsm-feedback" + (result.warning ? " dsm-warning" : result.ok ? "" : " dsm-error"), role: "alert" }, result.text) : null), customForm.picking ? h(DirPickerModal, { key: "custom-dir-picker", title: t("custom.add.picker.title"), initial: String(customForm.path || ""), closeLabel: t("btn.close"), onClose: function () { setCustomForm(Object.assign({}, customForm, { picking: false })); }, onPick: function (path) { setCustomForm(Object.assign({}, customForm, { path: path, picking: false })); } }) : null, h("div", { className: "dsm-modal-actions" }, h("button", { type: "button", className: "dsm-btn", disabled: busy || !String(customForm.path || "").trim(), onClick: submitCustomAdd }, t("custom.add.submit")))));
       if (modal && modal.type === "source-remove-confirm") content.push(h(Modal, { key: "source-remove-confirm", title: t("confirm.source.remove.title"), closeLabel: t("btn.close"), className: "dsm-modal-sm", onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.source.remove.desc", { name: modal.name })), h("p", { className: "dsm-help" }, t("confirm.source.remove.hint")), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { post("/source-remove", { root: modal.key }, "result.sourceRemoved", { name: modal.name }).then(function () { setModal(null); }).catch(swallowPostError); } }, t("btn.source.remove")))));
+      if (modal && modal.type === "source-stop-confirm") content.push(h(Modal, { key: "source-stop-confirm", title: t("scope.intent.stopTitle"), closeLabel: t("btn.close"), className: "dsm-modal-sm", onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("scope.intent.stopDesc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { var key = modal.key, name = modal.name; setModal(null); setSourceIntent({ key: key, label: name }, 'blocked'); } }, t("scope.intent.stop")))));
       if (modal && modal.type === "custom-remove-confirm") content.push(h(Modal, { key: "custom-remove-confirm", title: t("confirm.custom.remove.title"), closeLabel: t("btn.close"), className: "dsm-modal-sm", onClose: function () { setModal(null); } }, h("p", { className: "dsm-desc" }, t("confirm.custom.remove.desc", { name: modal.name })), h("div", { className: "dsm-modal-actions" }, h("button", { className: "dsm-btn dsm-btn-danger", disabled: busy, onClick: function () { submitCustomRemove(modal.key, modal.name); } }, t("btn.custom.remove")))));
       // 「已存在同名技能」小窗：叠在「创建技能」弹窗之上（`Modal` 自带 gateModalDepth 计数）。
       // 取消 → 回到创建弹窗改名字，简介与正文一个字都不动。

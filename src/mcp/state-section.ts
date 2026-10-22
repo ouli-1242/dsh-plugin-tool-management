@@ -83,6 +83,13 @@ export interface McpStateRow {
   /** 上面这个数里未被停用表扣减的（真正能调到的）。缺省时退回 enabledToolCount → toolCount。 */
   liveEnabledToolCount?: number
   /**
+   * 当前注册的**工具名**（0.21.2）。逐工具会话开关要按名字扣减 / 补回，只有计数不够。
+   * 老调用方不给这两个字段时退回计数口径（见 `renderMcpStateSection`）。
+   */
+  liveTools?: readonly string[]
+  /** `liveTools` 里未被**全局**停用表扣减的那部分（会话逐工具开关在此基础上叠加）。 */
+  liveEnabledTools?: readonly string[]
+  /**
    * 「已知工具」缓存里的工具数 —— **这台 server 曾经真的连上过**的证据
    * （缓存只在真实 schema 里见到工具时才写入）。`0` = 从未连上过。
    *
@@ -138,6 +145,17 @@ export function renderMcpStateSection(
   rows: readonly McpStateRow[],
   opts: McpStateOptions = {},
   listToolVisible: boolean = true,
+  /**
+   * 本会话停用的服务器名（0.21.2）：这些行**整条不进段** —— 它们在别处也许可用，但在这个
+   * 对话里模型一条工具都调不到，列出来只会让它去试。与 `disabled`（全局停用）同一处置。
+   */
+  sessionDisabled: readonly string[] = [],
+  /**
+   * 本会话逐工具的判定（0.21.2，键 = `server/tool`）：`off` = 本会话关掉，`on` = 本会话
+   * 显式开着（越过全局停用表）。两者都参与「可用 / 连着但工具全停」的分档 —— 否则 A 会话
+   * 把一台服务器的工具全关掉，状态段仍报它可用，模型会去调一条它手里没有的工具。
+   */
+  sessionTools: { on: readonly string[]; off: readonly string[] } = { on: [], off: [] },
 ): string {
   const maxEntries = opts.maxEntries ?? DEFAULT_MCP_MAX_ENTRIES
   const noteMaxLength = opts.noteMaxLength ?? DEFAULT_MCP_NOTE_MAX_LENGTH
@@ -154,6 +172,24 @@ export function renderMcpStateSection(
   const liveOf = (r: McpStateRow): number => (
     Number.isFinite(Number(r.liveToolCount)) ? Number(r.liveToolCount) : liveEnabledOf(r)
   )
+  // 本会话真正能调到的工具数：在全局可用集合上叠加逐工具判定。行里没有工具名时退回
+  // 全局计数（老调用方），那只可能与实际差在"会话把工具全关了"这一档上。
+  const onHere = new Set(sessionTools.on)
+  const offHereTools = new Set(sessionTools.off)
+  const liveEnabledHereOf = (r: McpStateRow): number => {
+    const live = r.liveTools
+    if (!Array.isArray(live)) return liveEnabledOf(r)
+    const server = String(r.serverName ?? '')
+    const enabledBase = Array.isArray(r.liveEnabledTools) ? r.liveEnabledTools : null
+    let n = 0
+    for (const tool of live) {
+      const key = server + '/' + tool
+      if (offHereTools.has(key)) continue
+      if (onHere.has(key)) { n += 1; continue }
+      if (enabledBase === null || enabledBase.indexOf(tool) >= 0) n += 1
+    }
+    return n
+  }
   // 曾经连上过的证据。**2026-10-19 起本段不再使用**（掉线档删除），保留只为旧调用方与界面
   // （`41-mcp.js` 的 knownOf 用它区分"启动失败"与"从未启动"，与这里的取舍无关）。
   const knownOf = (r: McpStateRow): number => Number(r.knownToolCount) || 0
@@ -164,8 +200,12 @@ export function renderMcpStateSection(
   //                 手动逐工具开关的结果。2026-10-18 起列出来并标注（此前不列）：它是
   //                 "模型手上一条工具都没有，但 server 确实在跑"的**唯一**线索，而旧理由
   //                 （"留着只会谎报数量"）随着工具数一起消失了 —— 现在只给名字与状态。
-  const usable = rows.filter((r) => !r.disabled && liveEnabledOf(r) > 0)
-  const muted = rows.filter((r) => !r.disabled && liveOf(r) > 0 && liveEnabledOf(r) === 0)
+  // 会话层停用的服务器：与全局 `disabled` 同一处置（整条不进段）。用 serverName 而不是 id ——
+  // 停用表与工具全名 `mcp__<serverName>__` 都是按 serverName 走的，两边必须同一个键。
+  const offHere = new Set(sessionDisabled.map((name) => String(name)))
+  const visibleRows = offHere.size === 0 ? rows : rows.filter((r) => !offHere.has(String(r.serverName ?? '')))
+  const usable = visibleRows.filter((r) => !r.disabled && liveEnabledHereOf(r) > 0)
+  const muted = visibleRows.filter((r) => !r.disabled && liveOf(r) > 0 && liveEnabledHereOf(r) === 0)
   if (!usable.length && !muted.length) return ''
 
   // 按展示名排序：即使补丁文件里的行序变化，段文本也保持逐字节稳定（前缀缓存契约）。
@@ -228,6 +268,20 @@ export interface McpStateDeps {
    * 判据与技能 / 子智能体两个目录同一份（index.ts 的 `toolVisibleFor`），不定义第二份。
    */
   listToolVisible?: (agent?: unknown) => boolean
+  /**
+   * 某台服务器在本会话里是不是**隐藏**的（0.21.2）。判据只有一份（index.ts 的四层并值：
+   * 会话覆盖 → 场景层 → 基线 → 全局），这里逐行问它 —— 行数组本身就是服务器全集。
+   *
+   * 看不到的行与全局停用同形：整条不进段（这台服务器的工具在本会话一条都调不到，
+   * 列出来只会让模型去试）。
+   */
+  sessionServerHidden?: (agent: unknown, serverName: string) => boolean
+  /**
+   * 某台服务器下逐工具在本会话里的判定（0.21.2）：`allow` / `deny` / `undefined`（无会话
+   * 意见，按全局）。按 agent 取一次，返回的判定函数会被逐工具调用 —— 调用方构造一次
+   * 会话快照即可，不必为每个工具重算。
+   */
+  sessionToolVerdictFor?: (agent?: unknown) => (serverName: string, tool: string) => 'allow' | 'deny' | undefined
 }
 
 export interface McpStateCatalog {
@@ -265,7 +319,9 @@ export function createMcpStateCatalog(
   let data: McpStateRow[] | null = null
   let loadedAt = Number.NEGATIVE_INFINITY
   let inflight: Promise<void> | null = null
-  let rendered: { visible: boolean; text: string } | null = null
+  // 渲染缓存键 = (尾句前提, 本会话停用的服务器)。两者都影响正文，少一个就会让 A 的段
+  // 出现在 B 里（与技能 / 人设两个目录同一手法）。
+  let rendered: { key: string; text: string } | null = null
 
   const recompute = async (): Promise<void> => {
     try {
@@ -289,9 +345,41 @@ export function createMcpStateCatalog(
       if (now() - loadedAt > ttlMs) void revalidate()
       if (data === null) return ''
       const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
-      if (rendered && rendered.visible === visible) return rendered.text
-      const out = renderMcpStateSection(data, opts, visible)
-      rendered = { visible, text: out }
+      // 本会话隐藏的服务器：**逐行**问谓词（行数组就是全集），算出名字清单再渲染 ——
+      // 缓存键吃这份清单，所以"覆盖改了但隐藏集合没变"不会白重算。
+      let sessionOff: string[] = []
+      if (deps.sessionServerHidden) {
+        try {
+          sessionOff = data
+            .filter((row) => deps.sessionServerHidden!(agent, String(row.serverName ?? '')))
+            .map((row) => String(row.serverName ?? ''))
+        } catch { sessionOff = [] }
+      }
+      // 逐工具判定：缓存键必须吃下这份名单，否则 A 的「可用」会出现在 B 里。
+      const toolOn: string[] = []
+      const toolOff: string[] = []
+      if (deps.sessionToolVerdictFor) {
+        try {
+          const verdictOf = deps.sessionToolVerdictFor(agent)
+          for (const row of data) {
+            const server = String(row.serverName ?? '')
+            const live = row.liveTools
+            if (!server || !Array.isArray(live)) continue
+            for (const tool of live) {
+              const verdict = verdictOf(server, tool)
+              if (verdict === 'allow') toolOn.push(server + '/' + tool)
+              else if (verdict === 'deny') toolOff.push(server + '/' + tool)
+            }
+          }
+        } catch { toolOn.length = 0; toolOff.length = 0 }
+      }
+      const key = (visible ? '1' : '0') +
+        '\u0000' + sessionOff.slice().sort().join('\u0001') +
+        '\u0002' + toolOn.slice().sort().join('\u0001') +
+        '\u0003' + toolOff.slice().sort().join('\u0001')
+      if (rendered && rendered.key === key) return rendered.text
+      const out = renderMcpStateSection(data, opts, visible, sessionOff, { on: toolOn, off: toolOff })
+      rendered = { key, text: out }
       return out
     },
     refresh: () => {

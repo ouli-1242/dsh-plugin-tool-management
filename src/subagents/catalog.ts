@@ -106,6 +106,19 @@ export interface SubagentCatalogDeps {
    * 人设用 `toolsDeny` 砍掉这条工具之后，目录尾句照样点名一条它手里没有的工具。
    */
   listToolVisible?: (agent?: unknown) => boolean
+  /**
+   * 本会话人设那一格的四层并值（0.21.2）：覆盖 → 场景层（进入场景的档案绑定）→ 基线 →
+   * `undefined`（= 落到全局口径：正在用的场景绑定 ∩ 全局启停）。
+   *
+   * 与 `listToolVisible` 同一条：按 agent 取，判据只有一份（`scope-overrides.json` +
+   * 场景档案）。启停本身仍是全局状态文件 —— 会话层只改"列不列"。
+   */
+  flagFor?: (agent?: unknown) => ((name: string) => boolean | undefined) | undefined
+  /**
+   * 本会话的**层指纹**（覆盖 + 进入的场景档案）。渲染缓存键吃它 —— 少了它，同一个会话
+   * 拨过开关之后目录不会重算。
+   */
+  layerKeyFor?: (agent?: unknown) => string
 }
 
 export interface SubagentCatalog {
@@ -124,7 +137,7 @@ export interface SubagentCatalog {
    * 同步、只读缓存 —— 域声明的 `applicableTo` 要求同步纯函数（注入通道每个 step 同步取文本）。
    * 与 `text()` 同源：都用 `catalogInjectedAt`，所以"目录里有内容"与"域该不该注入"不会分叉。
    */
-  catalogVisibleAt: (depth: number) => boolean
+  catalogVisibleAt: (depth: number, agent?: unknown) => boolean
   /** 立即重算（写操作后调用）。 */
   refresh: () => Promise<void>
   /** 预热：插件加载时调一次，避免首个请求落到空值。 */
@@ -155,21 +168,44 @@ export function createSubagentCatalog(
   const ttlMs = opts.ttlMs ?? 1000
   const now = opts.now ?? (() => Date.now())
 
-  let allowed: PersonaDoc[] = []
+  let docs: PersonaDoc[] = []
+  let globalSceneLists: string[][] = []
+  /** 全局口径的可见集合（正在用的场景绑定 ∩ 全局启停）—— 每次重算从 docs 推一次。 */
+  let globalAllowed = new Set<string>()
   let loadedAt = Number.NEGATIVE_INFINITY
   let inflight: Promise<void> | null = null
-  // 渲染结果按**深度 + 尾句前提**缓存：过滤只依赖深度这一个整数（实际出现的深度就 0/1/2 三档），
-  // 而尾句点不点名 `subagent_manager_list` 取决于**这个 agent 手里有没有它**（2026-10-14
-  // 审查 P1-8：此前只按深度缓存，于是尾句用的是第一个来问的 agent 的答案）。
-  // 两维都是小枚举，于是"每个 step 同步渲染"退化成一次查表。重算成功时清空。
+  // 渲染结果按**深度 + 尾句前提 + 会话层指纹**缓存：过滤只依赖这三样。
   const rendered = new Map<string, string>()
 
   const recompute = async (): Promise<void> => {
     try {
-      allowed = (await filterBySceneBinding(await deps.list(), await deps.sceneLists())).allowed
+      docs = await deps.list()
+      globalSceneLists = await deps.sceneLists()
+      globalAllowed = new Set(
+        filterBySceneBinding(docs, globalSceneLists).allowed
+          .filter((p) => p.enabled !== false)
+          .map((p) => p.name),
+      )
       rendered.clear()
     } catch { /* 保留上一次的值；首次失败则维持 [] */ }
     loadedAt = now()
+  }
+
+  /**
+   * 某个 agent 该列的人设：四层并值（`flagFor`）优先；这一层没话说就落到全局口径。
+   *
+   * 会话层**能救回**场景绑定的排除项（"进入场景之后还想开什么就开什么"）—— 所以这里不再
+   * 先按场景过滤再按覆盖过滤，而是逐条问一句"本会话怎么判"，只有判不出来时才用全局集合。
+   */
+  const listedFor = (agent: unknown, depth: number): PersonaDoc[] => {
+    let flag: ((name: string) => boolean | undefined) | undefined
+    try { flag = deps.flagFor ? deps.flagFor(agent) : undefined } catch { flag = undefined }
+    return docs.filter((p) => {
+      if (!catalogInjectedAt(p, depth)) return false
+      const f = flag ? flag(p.name) : undefined
+      if (typeof f === 'boolean') return f
+      return globalAllowed.has(p.name)
+    })
   }
 
   const revalidate = (): Promise<void> => {
@@ -183,19 +219,20 @@ export function createSubagentCatalog(
       if (now() - loadedAt > ttlMs) void revalidate()
       const depth = subagentDepthOf(agent)
       const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
-      const key = depth + '|' + (visible ? '1' : '0')
-      const cached = rendered.get(key)
-      if (cached !== undefined) return cached
-      const out = renderSubagentCatalog(
-        allowed.filter((p) => catalogInjectedAt(p, depth)),
-        maxEntries,
-        maxDescription,
-        visible,
-      )
-      rendered.set(key, out)
+      const hasLayer = deps.flagFor !== undefined && deps.flagFor(agent) !== undefined
+      // 有会话层但装配层没给指纹（老装配 / 测试）时不走渲染缓存：宁可多算一次。
+      const cacheable = !hasLayer || deps.layerKeyFor !== undefined
+      const layerKey = deps.layerKeyFor ? deps.layerKeyFor(agent) : ''
+      const key = layerKey + '\u0000' + depth + '|' + (visible ? '1' : '0')
+      if (cacheable) {
+        const cached = rendered.get(key)
+        if (cached !== undefined) return cached
+      }
+      const out = renderSubagentCatalog(listedFor(agent, depth), maxEntries, maxDescription, visible)
+      if (cacheable) rendered.set(key, out)
       return out
     },
-    catalogVisibleAt: (depth) => allowed.some((p) => catalogInjectedAt(p, depth)),
+    catalogVisibleAt: (depth, agent) => listedFor(agent, depth).length > 0,
     refresh: () => {
       loadedAt = Number.NEGATIVE_INFINITY
       return revalidate()

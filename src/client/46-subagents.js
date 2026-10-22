@@ -64,14 +64,26 @@
               else setData({ loading: false, error: translateError(t, r), subagents: [], toolFailures: [] })
             }).catch(function (e) { setData({ loading: false, error: errMsg(e), subagents: [], toolFailures: [] }) })
           }
-          React.useEffect(function () { refresh() }, [])
+          // 本页订阅当前层（0.21.2）：人设的可见性与来源都跟着层走。
+          var scopeState = useScopeLayer()
+          React.useEffect(function () { refresh() }, [scopeState.sessionId])
           /**
            * 子智能体开关（与记忆页同一套交互）：停用 = 不注入目录段、subagent_manager_list/run
            * 不可见；人设文件不动。开关联动全局状态，立即提交。
            */
           function togglePersona(p) {
-            var next = !(p.enabled !== false)
+            // 目标值按**这一层生效值**取，不是全局值：会话层刚关掉一条，再点回来时
+            // 用 `p.enabled` 会一直写 false，开关永远回不到开（2026-10-19 实测）。
+            var flag = scopeFlag('subagents', String(p.name), p.enabled !== false)
+            var next = !flag.value
             setBusy(true)
+            // 会话作用域（0.21.2）：会话层只改"本会话列不列、调不调得动"，不碰启停名单。
+            if (scopeIsSession()) {
+              scopeWriteFlag('subagents', String(p.name), next, function () { return { ok: true } })
+                .then(function (r) { setBusy(false); if (r && r.ok) refresh(true); else if (r) setResult({ ok: false, text: translateError(t, r) }) })
+                .catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+              return
+            }
             apiCall('subagent-toggle', { name: p.name, enabled: next }).then(function (r) {
               setBusy(false)
               if (r && r.ok) {
@@ -685,15 +697,15 @@
           // 定序表：开关当场不重排，重新进这一页（或点刷新）才重新置顶（rankedFirst / resetRank）。
           var personaRank = useRank()
           var orderedSubagents = React.useMemo(function () {
-            return rankedFirst(personaRank, function (p) { return p.name }, visibleSubagents, function (p) { return p.enabled !== false; })
-          }, [visibleSubagents])
+            return rankedFirst(personaRank, function (p) { return p.name }, visibleSubagents, function (p) { return scopeFlag('subagents', String(p.name), p.enabled !== false).value; })
+          }, [visibleSubagents, scopeState])
           var limitedCount = React.useMemo(function () {
             return data.subagents.filter(function (p) { return (p.tools && p.tools.length) || (p.toolsDeny && p.toolsDeny.length) || (p.toolsByPreset && Object.keys(p.toolsByPreset).length) }).length
           }, [data.subagents])
           // 「启用 / 总数」的分子（`enabled !== false` 是这一页判定开关亮着的口径，与列表行一致）。
           var enabledCount = React.useMemo(function () {
-            return data.subagents.filter(function (p) { return p.enabled !== false }).length
-          }, [data.subagents])
+            return data.subagents.filter(function (p) { return scopeFlag('subagents', String(p.name), p.enabled !== false).value }).length
+          }, [data.subagents, scopeState])
           return React.createElement('section', { className: 'dsm-section' },
             // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 回收站；统计内联。
             React.createElement(PageHead, {
@@ -712,10 +724,11 @@
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setTrash(true) } }, t('trash.btn.open')),
               ],
             }),
-            anyLocked === true ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
+            anyLocked === true && !scopeIsSession() ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             // 锁定期间不显示场景那条长句：开关全是灰的，"改动会同步写进档案"没有落点，
             // 两条并排还会互相矛盾（用户 2026-09-19）。
-            (anyLocked !== true && sceneName) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
+            // 会话层不显示（同 MCP 页）：本层开关写的是会话覆盖，不同步档案。
+            (anyLocked !== true && sceneName && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
             // 列表工具条（REDESIGN §3.3，切片四）：搜索住 children；本页无批量动作。
             React.createElement(Toolbar, null,
               React.createElement('input', {
@@ -747,15 +760,28 @@
                 return React.createElement(ListRow, {
                   key: p.name,
                   // 行首状态点（REDESIGN §3.4 状态点前移，切片三移交）：以前点跟在名字后面。
-                  dots: [React.createElement(StatusDot, {
-                    key: 'dot',
-                    tone: p.enabled === false ? 'idle' : 'ok',
-                    title: p.enabled === false ? t('subagents.disabled') + '：' + t('subagents.disabled.hint') : t('subagents.enabled'),
-                  })],
+                  // 会话作用域（0.21.2）：来源标记打在点上（开关不染色）。
+                  dots: [(function () {
+                    var flag = scopeFlag('subagents', String(p.name), p.enabled !== false)
+                    return React.createElement(StatusDot, {
+                      key: 'dot',
+                      tone: flag.value ? 'ok' : 'idle',
+                      scoped: flag.value && flag.scoped,
+                      title: flag.value ? t('subagents.enabled') : t('subagents.disabled') + '：' + t('subagents.disabled.hint'),
+                    })
+                  })()],
                   name: p.name,
+                  // 纯视图域的会话覆盖计数（0.21.2）：有几个对话单独拨过这一条。
+                  // 与 MCP / 技能两格的真租约**不同**：这里全局一个字没动，文案因此是
+                  // 「{n} 个对话单独设置」而不是「临时运行 · N 个对话」。
+                  nameAfter: leaseTag({ t: t, domain: 'subagents', key: String(p.name), runtime: false }),
                   // 没有描述就不渲染行 2：空行会撑出一截无内容的空隙。
                   meta: p.description || null,
-                  side: React.createElement(Switch, { on: p.enabled !== false, disabled: busy || anyLocked, label: t('subagents.toggle') + ' ' + p.name, onClick: function () { togglePersona(p) } }),
+                  // 会话作用域（0.21.2）：会话层下这一格表示"本会话列不列它"；来源看行首那颗点。
+                  side: (function () {
+                    var flag = scopeFlag('subagents', String(p.name), p.enabled !== false)
+                    return React.createElement(Switch, { on: flag.value, scoped: flag.scoped, disabled: busy || scopeWriteLocked(anyLocked), label: t('subagents.toggle') + ' ' + p.name, onClick: function () { togglePersona(p) } })
+                  })(),
                   actions: [
                     // 编辑 / 删除**都**收进 ⋯（用户 2026-10-16 第二轮）：这一页行 2 是整句人设描述，
                     // 行尾摆两颗按钮就把描述挤掉了。删除在菜单里是红字。

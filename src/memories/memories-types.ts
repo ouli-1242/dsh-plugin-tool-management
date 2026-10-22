@@ -32,6 +32,12 @@ export interface MemoriesDeps {
   globalAgentsMdPath?: () => string | null
   /** 场景记忆段预算上限（字节），默认 65536。 */
   maxBytes?: number
+  /**
+   * 某个会话的记忆域覆盖（0.21.2）：`scope-overrides.json` 的读取由调用方注入，
+   * 本域不自己引 `scope/store.ts` —— 那份侧车有自己的 TTL 缓存，两处各读一份时过期
+   * 时刻不同步，界面与注入会各说各话。`undefined` = 没有覆盖 = 全局口径。
+   */
+  scopeOverrideOf?: (sessionId: string) => MemoryScopeOverride | undefined
 }
 
 export interface Rule {
@@ -130,25 +136,33 @@ export interface MemoriesService {
    * **读失败抛异常**（2026-09-30 审查 F7）：注入通道据此报 `error` 而不是把"读不动"当成
    * "用户清空了记忆"，从而不发那条假的「已清空」。界面投影走内部的 `sceneMemory()`（不抛）。
    */
-  memoryText: () => string
+  memoryText: (scope?: MemoryScopeOverride) => string
   /**
    * 场景段文本（`scene-manager-catalog`）：**启用的场景 + 场景说明**（约定）。
    * 与记忆段是两个独立注入段，各自去重、各自可被关掉（见 snapshot.ts 的 renderSceneCatalog）。
    * 与 `memoryText` 同口径：读失败抛异常。
    */
-  sceneCatalogText: () => string
+  sceneCatalogText: (scope?: MemoryScopeOverride) => string
   /**
    * 全局提示词正文（注入兜底用；官方 agent-instructions 行没挂时才被取用）：
    * 场景期间 = 当前场景绑定的提示词，否则 = `~/.dsh/AGENTS.md` 正文。
    * **读失败抛异常**（同 `memoryText`）：预设/基线文件读不动时不能报成"没有提示词"。
    */
-  promptText: () => string
+  promptText: (scope?: PromptScopeOverride) => string
   /**
    * `promptText()` 的来源文件（同步；注入通道用作 instructions 形态的 `changes`，
    * 界面据此显示文件清单与「已载入/已更新」）。`[]` = 本次没有提示词正文。
    * 与 `promptText()` 同源，因此同样可能抛 —— 注入通道已在自己的 `files()` 调用处接住。
    */
-  promptFiles: () => Array<{ path: string; digest: string }>
+  promptFiles: (scope?: PromptScopeOverride) => Array<{ path: string; digest: string }>
+  /**
+   * 当前 `~/.dsh/AGENTS.md` 的**原文**（同步、带 stat 指纹缓存；0.21.2 第三轮）。
+   *
+   * 只给注入器的首见捕获与"快照 == 当前文件"比对用：解析链不直接读它（那条路走快照）。
+   * 读失败抛异常，与 `promptText` 同口径 —— 调用方按"这一轮不捕获 / 不判差异"处理。
+   * 走的是与 `promptText` 同一个读取器，路径不会分叉到另一个文件。
+   */
+  promptBaselineText: () => string
   /** 失效快照与场景记忆缓存（写操作后调用）。 */
   refresh: () => Promise<void>
   /**
@@ -163,6 +177,19 @@ export interface MemoriesService {
   saveArchive: (scene: string, archive: SceneArchive | null) => Promise<void>
   /** 场景档案引擎专用：读 mode/archives/active 切片。 */
   readArchiveSlice: () => Promise<{ mode: ModeState; archives: Record<string, SceneArchive>; active: string[] | null }>
+  /**
+   * 某个场景档案里的人设绑定（同步，0.21.2）。
+   *
+   * `undefined` = 档案没定义 `subagents` 段；`[]` = 定义了这一段但一个都没绑。
+   * 会话钉住场景时，人设目录与 `subagent_manager_*` 要按它过滤 —— 同步是因为目录的
+   * `text(agent)` 是同步契约，只能从内存里的索引快照读。
+   */
+  sceneSubagentsOf: (scene: string) => string[] | undefined
+  /**
+   * 某个场景的**完整档案**（同步，0.21.2）：会话处于场景模式时，场景层按它实时计算
+   * （勾选集 = 该场景下开着的东西）。`undefined` = 没有这份档案 / 读不到 —— 这一层没话说。
+   */
+  sceneArchiveOf: (scene: string) => SceneArchive | undefined
   /**
    * 各场景的锁定态（场景名 → 是否被锁；只读快照，直接读索引）。
    * MCP 删除服务要同步清场景档案里的引用：被锁场景的档案是用户显式冻结的，
@@ -212,6 +239,66 @@ export interface SceneRecord {
   order?: number
   /** ISO 时间戳；只要**创建**时间，不参与提示词段（段必须逐字节稳定）。 */
   createdAt?: string
+}
+
+/**
+ * 记忆域的**会话层覆盖**（0.21.2）：某个会话与全局不一样的地方。
+ *
+ * 只带记忆域用得着的两项 —— 场景与逐条开关。调用方（index.ts）从 `scope-overrides.json`
+ * 的 `scene` / `memory` 取，`sessionId` 只用于缓存分桶（不参与渲染）。
+ *
+ * 为什么用"可选参数"而不是"必填的上下文对象"：这个域有 24 个 op 与两个注入出口，其中
+ * 绝大多数与会话无关（读正文、增删附件、回收站）。给每个都塞一个上下文对象等于让"不关心
+ * 会话"的地方也要拼一份出来，而那些地方拼错的方向（漏传）恰好会静默退回全局 —— 正是
+ * 会话作用域要修的那种症状。默认不传 = 全局，与现状逐字相同。
+ */
+export interface MemoryScopeOverride {
+  /** 哪个会话（只用于缓存分桶）。 */
+  sessionId?: string
+  /**
+   * 本会话用哪个场景：`string` = 钉住它；`null` = 钉住"没有场景"（已脱离且基线里就没有）；
+   * `undefined` = 跟随全局。
+   */
+  scene?: string | null
+  /** 逐条记忆的开关覆盖（`<场景>/<名>` → 开/关）；`undefined` = 全部跟随全局。 */
+  memory?: Record<string, boolean>
+}
+
+/**
+ * 提示词域的**会话层覆盖**（0.21.2）。
+ *
+ * `cwd` 决定项目指令链从哪一级往上找；`scene` 钉住本会话生效的场景；`override` 是
+ * 会话级提示词覆盖（自定义正文 / 引用的预设）—— 它取代**用户级那一槽**，项目链仍拼在前面。
+ */
+export interface PromptScopeOverride {
+  /** 会话的工作目录；`undefined` = 取不到 → 不带项目链（与 0.21.2 一致）。 */
+  cwd?: string
+  /**
+   * 本会话钉住的场景（覆盖表里的 `scene`）：`string` = 钉住它；`null` = 钉住"没有场景"
+   * （已脱离且基线里就没有）；`undefined` = 跟随全局。null 必须与 undefined 区分开，否则
+   * 退出场景后会跟着后来才启用的全局场景取提示词。
+   *
+   * 有值时用户级那一槽换成**那个场景绑定的预设**；没有绑定 / 预设为空 → 退回用户级
+   * （退化不丢东西，见 project-instructions.ts 文件头的行为表）。
+   */
+  scene?: string | null
+  /**
+   * 本会话的提示词覆盖（侧车 `prompt` 域）。
+   *
+   * 解析顺序：`content` > `presetId` > 场景绑定预设 > `baseline`（冻结快照）> 当前
+   * `~/.dsh/AGENTS.md`。预设被删除 / 读不到时退化到下一层，不报错、不清侧车。
+   */
+  override?: {
+    presetId?: string
+    content?: string
+  }
+  /**
+   * 本会话首次被注入器看见时 `~/.dsh/AGENTS.md` 的冻结快照（0.21.2 第三轮）。
+   *
+   * `undefined` = 还没有快照（捕获失败 / 老装配），解析时退化到当前文件。
+   * 空串是有效值：创建时文件为空，这个会话就冻结在"没有全局提示词"。
+   */
+  baseline?: string
 }
 
 /** 同步扫描得到的单条场景记忆（供注入文本渲染）。 */

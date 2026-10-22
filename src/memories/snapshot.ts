@@ -254,6 +254,15 @@ export function probeSceneFilesSync(
   // 而默认值（无记录 = 启用）会把**全部**记忆一次性注入模型上下文。表现为「记忆都没生效」
   // 是可解释、可恢复的；替用户决定全开不是。
   forceDisabled = false,
+  /**
+   * 本会话的覆盖（0.21.2）：`scene` 取代全局当前场景（`null` = 钉住"没有场景"），
+   * `memory` 逐条改开关。
+   *
+   * 为什么必须在**探测阶段**就参与：指纹要跟着它变，否则 A 会话算过的段会被 B 会话直接
+   * 复用（单槽缓存的经典串内容）。而且 `memory` 的逐条开关会改变 `refs` 集合本身 ——
+   * 放到渲染阶段过滤等于让指纹对不上 refs。
+   */
+  override?: { scene?: string | null; memory?: Record<string, boolean> },
 ): { refs: SceneFileRef[]; scenes: string[]; truncated: boolean; signature: string } {
   const byId = new Map<string, SceneFileRef>()
   const scenes: string[] = []
@@ -266,8 +275,22 @@ export function probeSceneFilesSync(
   } catch (e) {
     // 目录不存在（全新用户 / 刚删掉）→ 空段。签名含固定前缀，便于与"空树"区分。
     // 其余 IO 错误必须抛：见函数头注释（F7）。
+    // ⚠️ 这条早退也要带会话覆盖：refs 空不代表渲染结果相同 —— 场景段（`renderSceneCatalog`）
+    // 的清单取自 `index.scenes` 而不是磁盘目录，两个会话覆盖到不同场景时段的正文不同。
     if (!isAbsentError(e)) throw e
-    return { refs: [], scenes: [], truncated: false, signature: `∅|${signatureOfIndex(index)}` }
+    return { refs: [], scenes: [], truncated: false, signature: `∅|${signatureOfIndex(index)}|${override?.scene ?? '-'}` }
+  }
+
+  /**
+   * 这条记忆在本会话开不开：会话覆盖优先，其次索引（索引缺省 = 启用）。
+   * `forceDisabled`（索引不可信）时一律关 —— 它排在会话覆盖之前，因为"索引读不到"时
+   * 连"用户开过哪些"都不知道，会话覆盖也救不回来。
+   */
+  const enabledIn = (id: string): boolean => {
+    if (forceDisabled) return false
+    const over = override?.memory?.[id]
+    if (typeof over === 'boolean') return over
+    return index.rules[id]?.enabled !== false
   }
 
   const add = (ref: SceneFileRef): void => {
@@ -316,7 +339,7 @@ export function probeSceneFilesSync(
           const stamp = `${fileStampSync(docPath)}:${fileStampSync(child)}`
           // bundle 规则（叶子）：父路径为场景，目录名为记忆名。
           const id = scene ? `${scene}/${relChild}` : relChild
-          if (forceDisabled || index.rules[id]?.enabled === false) continue // 单条停用 → 不进入段
+          if (!enabledIn(id)) continue // 单条停用（全局或本会话）→ 不进入段
           add({ id, scene, name: item.name, kind: 'bundle', path: docPath, order: index.rules[id]?.order ?? DEFAULT_ORDER, stamp })
           continue
         }
@@ -327,7 +350,7 @@ export function probeSceneFilesSync(
       if (!item.name.toLowerCase().endsWith('.md')) continue // 只认 .md
       budget.items++
       const id = scene ? `${scene}/${relChild.slice(0, -3)}` : relChild.slice(0, -3)
-      if (forceDisabled || index.rules[id]?.enabled === false) continue
+      if (!enabledIn(id)) continue
       add({
         id,
         scene,
@@ -353,10 +376,15 @@ export function probeSceneFilesSync(
   for (const scene of scenes) walk(scene, join(memoriesRoot, scene), '', 1)
 
   const refs = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+  // 指纹必须含会话覆盖：同一份磁盘 + 两个会话的两份不同覆盖 = 两段不同的正文，
+  // 指纹相同就会被单槽缓存直接复用（"A 的记忆出现在 B 里"）。`scene` 与 `memory`
+  // 都要进来 —— 前者决定哪些场景进段，后者决定哪些条目进 refs（refs 已在下面逐条列出，
+  // 但"某条被覆盖关掉"会让它从 refs 消失，两处任一变化都改变指纹）。
   const signature = [
     signatureOfIndex(index),
     truncated ? 'T' : '-',
     scenes.join('\u0001'),
+    override?.scene === undefined ? '-' : 'S:' + override.scene,
     ...refs.map((r) => `${r.id}\u0000${r.kind}\u0000${r.order}\u0000${r.stamp}`),
   ].join('\u0002')
   return { refs, scenes, truncated, signature }
@@ -369,6 +397,8 @@ export function renderSceneMemory(
   probe: { refs: SceneFileRef[]; scenes: string[]; truncated: boolean },
   index: RulesIndex,
   maxBytes: number,
+  /** 会话层覆盖的场景（0.21.2）：给了就取代 `index.active`，只影响本会话看到什么。 */
+  sceneOverride?: string | null,
 ): SceneMemoryProjection {
   const files: SceneMemoryFile[] = []
   for (const ref of probe.refs) {
@@ -395,7 +425,7 @@ export function renderSceneMemory(
     })
   }
 
-  const { active } = resolveActiveScenes(index, probe.scenes)
+  const { active } = resolveActiveScenes(index, probe.scenes, sceneOverride)
   const buckets = new Map<string, SceneMemoryFile[]>()
   for (const file of files) {
     // 保留场景 global 恒定生效（「全局」= 任何对话都注入）；其余由 index.active 决定。
@@ -611,8 +641,10 @@ export function renderSceneCatalog(
   probe: { scenes: string[]; truncated: boolean },
   index: RulesIndex,
   maxBytes: number,
+  /** 会话层覆盖的场景（0.21.2）：同 `renderSceneMemory`。 */
+  sceneOverride?: string | null,
 ): SceneMemoryProjection {
-  const { active } = resolveActiveScenes(index, probe.scenes)
+  const { active } = resolveActiveScenes(index, probe.scenes, sceneOverride)
   const names = new Set<string>([...probe.scenes, ...Object.keys(index.scenes || {})])
   const wanted = [...names]
     .filter((scene) => scene !== '' && scene !== GLOBAL_SCENE && scene !== SHARED_GROUP && active.has(scene))

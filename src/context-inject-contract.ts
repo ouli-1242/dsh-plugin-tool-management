@@ -159,6 +159,15 @@ export interface InjectDomain {
    */
   text: (agent?: unknown) => string
   /**
+   * 官方载体正在送整份时的**兜底差异行**（0.21.2）。`''` = 没有差异。
+   *
+   * 正常路径（0.21.2 第二轮起）：注入器先用这个判据决定**整份接管** —— 有差异就拦下
+   * 官方那条、由 `text()` 送会话版整份，首份带取代声明。只在接管判据未接上的旧装配 /
+   * 测试里才会真的把这一行发出去。两条路都不提"全局 / 机器"：模型只需要知道这个对话里
+   * 哪几条算数。
+   */
+  delta?: (agent?: unknown) => string
+  /**
    * 本域正文的**来源文件**（同步；当前只有 instructions 形态用）。
    *
    * 为什么要有它：instructions 形态的界面契约是「文件清单 + 正文」—— 官方
@@ -169,7 +178,7 @@ export interface InjectDomain {
    * 与 `text` 不同，**只在真要发消息时**调用（不是每个 step），所以允许一点算力
    * （提示词域要读一次盘 + sha1）。抛异常 = 本次不带清单，消息照发（清单是锦上添花）。
    */
-  files?: () => readonly InjectSourceFile[]
+  files?: (agent?: unknown) => readonly InjectSourceFile[]
   /**
    * 该域对这个 agent 是否成立（`false` = 本次不注入）。缺省 = 对任何 agent 都成立。
    *
@@ -178,6 +187,16 @@ export interface InjectDomain {
    * step 同步取文本，这里不能读盘。
    */
   applicableTo?: (agent: unknown) => boolean
+  /**
+   * 本域**这一轮还拿不到数据**（`true` = 别问它，也别说它"空了"）。
+   *
+   * 与 `text()` 返回 `''` 的区别是**这一位只影响通知**：返回空串下游会理解成"这一域真的
+   * 没有内容"，进而给模型发一条「已清空」；而"清单还在读 / 刚被写操作打回重算"这种
+   * 情形下那句话是假的（上一轮那份仍然有效）。有它之后，冷缓存只让这一域这一轮沉默。
+   *
+   * 同步纯函数（每条 step 都会问一次），缺省 = 从不 pending。
+   */
+  pending?: (agent?: unknown) => boolean
 }
 
 /** 注入设置（插件侧车 `inject-settings.json`；界面在兼容页）。 */

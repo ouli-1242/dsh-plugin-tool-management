@@ -440,15 +440,23 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       let sourceStates: SkillSourceState[]
       let configured: string[] = []
       try {
-        serverStates = await deps.mcpServerStates()
-        sourceStates = await deps.skillSourceStates()
-        configured = await deps.configuredServers()
+        // 与进入场景同一条：五批读互不依赖，并行取，别让冷启动的技能扫描把整轮拖成串行。
+        const [mcpStateRows, sourceStateRows, configuredServers, knownTools, knownSkills] = await Promise.all([
+          deps.mcpServerStates(),
+          deps.skillSourceStates(),
+          deps.configuredServers(),
+          deps.serverKnownTools(),
+          deps.knownSkillKeys(),
+        ])
+        serverStates = mcpStateRows
+        sourceStates = sourceStateRows
+        configured = configuredServers
         mcpPlan = computeMcpPlan((archive && archive.mcp) || {}, {
           configuredServers: configured,
-          knownTools: await deps.serverKnownTools(),
+          knownTools,
           serverStates,
         })
-        skillsPlan = computeSkillsPlan((archive && archive.skills) || [], await deps.knownSkillKeys(), sourceStates)
+        skillsPlan = computeSkillsPlan((archive && archive.skills) || [], knownSkills, sourceStates)
       } catch (e) {
         return { ok: false, error: `读取运行时状态失败：${msg(e)}` }
       }
@@ -772,14 +780,24 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
       let mcpServerStates: McpServerState[] = []
       let skillSources: SkillSourceState[] = []
       try {
-        mcpServerStates = await deps.mcpServerStates()
-        skillSources = await deps.skillSourceStates()
+        // 五批读互不依赖，**并行**取（0.21.2）：`skill-state` 冷启实测数秒，与 MCP 列表、
+        // 已知工具串行相加就是用户看到的「切场景要等很久」。任何一批失败仍整轮中止，
+        // 运行时一个字都不动（与原来串行时的口径一致）。
+        const [mcpStates, sourceStates, configured, knownTools, knownSkills] = await Promise.all([
+          deps.mcpServerStates(),
+          deps.skillSourceStates(),
+          deps.configuredServers(),
+          deps.serverKnownTools(),
+          deps.knownSkillKeys(),
+        ])
+        mcpServerStates = mcpStates
+        skillSources = sourceStates
         mcpPlan = computeMcpPlan(mcpSpec, {
-          configuredServers: await deps.configuredServers(),
-          knownTools: await deps.serverKnownTools(),
+          configuredServers: configured,
+          knownTools,
           serverStates: mcpServerStates,
         })
-        skillsPlan = computeSkillsPlan(skillsSpec, await deps.knownSkillKeys(), skillSources)
+        skillsPlan = computeSkillsPlan(skillsSpec, knownSkills, skillSources)
       } catch (e) {
         return { ok: false, error: `读取运行时状态失败（未改动任何东西）：${msg(e)}` }
       }

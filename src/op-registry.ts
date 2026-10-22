@@ -289,6 +289,28 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 侧栏入口的开关（侧车 `sidebar-settings.json`）：同 `slash-settings` —— 写侧车按写门禁、
   // 不冻结；读侧是纯读（客户端 boot 时必问一次，那一次不能要令牌）。
   'sidebar-settings': { write: true, writeWhen: (a) => a.set === true },
+
+  // ── 会话作用域（5）────────────────────────────────────────────────────────
+  // 侧车 `hub/scope-overrides.json`：某个会话与全局不一样的地方（叠加层，不动全局）。
+  //
+  // **全部不标 frozen**：场景锁冻结的是全局写入（决策 11），而这里改的是会话自己的视图
+  // 偏好 —— 全局那一份在锁着的时候本来就没人能改。让场景锁连"本会话先别看这个服务器"
+  // 也挡住，用户能做的只有"解锁 → 改 → 再锁上"，而那个空窗期恰恰是锁要防的。
+  // 会话锁（决策 12）是另一把锁，判据在 ops/scope.ts 里，只挡 scope-set / scope-clear。
+  'scope-get': { readonly: true },
+  'scope-sessions-list': { readonly: true },
+  // 隔离粒度（0.21.2）：会话 / 工作区。它改的是"以后按哪把键查"，不写任何管理域，
+  // 因此按写门禁但**不冻结**（与其余 scope-* 同一条：场景锁保护的是管理数据，不是层选择）。
+  'scope-mode-set': { write: true },
+  'scope-set': { write: true },
+  'scope-prompt-set': { write: true },
+  'scope-clear': { write: true },
+  // 锁开关自己不能被自己挡住，否则锁上了解不开（与 `rules-scene-lock` 同一条）。
+  'scope-lock': { write: true },
+  // 全局意图（`hub/scope-intent.json`）：MCP 服务器 / 技能来源两格的**全局开关**。
+  // 与 `mcpm-set-enabled` / `skill-source-enable` 同档：写全局定义、场景锁要冻结它。
+  // 会话层的 scope-set 仍不冻结（它只写租约，不改全局）。
+  'scope-intent-set': { write: true, frozen: true, syncsArchive: true },
   // 清理 patch 备份：删磁盘文件（备份里含明文凭据副本），按写操作门禁。
   'backups-clean': { write: true },
 

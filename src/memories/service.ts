@@ -3,9 +3,13 @@ import { buildMemoryOps } from '../ops/memory.js'
 import { buildTrashOps } from '../ops/trash.js'
 import { buildSceneRecordOps } from '../ops/scene-records.js'
 import type { MemoriesOpsCtx } from '../ops/ctx.js'
+import { discoverProjectInstructions, renderProjectInstructions } from '../prompts/project-instructions.js'
+import { chooseUserPromptLayer } from './prompt-layer.js'
 import type {
   MemoriesDeps,
   MemoriesService,
+  MemoryScopeOverride,
+  PromptScopeOverride,
   Rule,
   RulesIndex,
   SceneMemoryProjection,
@@ -21,6 +25,8 @@ export type {
   GroupRow,
   MemoriesDeps,
   MemoriesService,
+  MemoryScopeOverride,
+  PromptScopeOverride,
   Rule,
   RulesIndex,
   SceneMemoryFile,
@@ -156,15 +162,34 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   }
 
   let snapCache: { at: number; value: Snapshot } | null = null
+  /**
+   * 同一拍里的并发读合流（0.21.2）。`rules-list` 被斜杠菜单、场景写入后的刷新、记忆页轮询
+   * 同时问到时，各建一份快照等于把同一棵目录树扫好几遍；而写操作之后在飞的那份是写之前的，
+   * 不能拿它当新鲜数据。`generation` 只让**写之后发起**的扫描落缓存。
+   */
+  let snapGeneration = 0
+  let snapInflight: { gen: number; promise: Promise<Snapshot> } | null = null
   const snapshot = async (): Promise<Snapshot> => {
     if (snapCache && Date.now() - snapCache.at < SNAPSHOT_TTL_MS) return snapCache.value
-    await ensureLayout()
-    const value = await buildSnapshot(memoriesRoot, stateDir)
-    snapCache = { at: Date.now(), value }
-    return value
+    if (snapInflight !== null && snapInflight.gen === snapGeneration) return snapInflight.promise
+    const gen = snapGeneration
+    const promise = (async () => {
+      await ensureLayout()
+      return buildSnapshot(memoriesRoot, stateDir)
+    })()
+    snapInflight = { gen, promise }
+    try {
+      const value = await promise
+      if (gen === snapGeneration) snapCache = { at: Date.now(), value }
+      return value
+    } finally {
+      if (snapInflight !== null && snapInflight.promise === promise) snapInflight = null
+    }
   }
   const invalidateSnapshot = (): void => {
+    snapGeneration += 1
     snapCache = null
+    snapInflight = null
   }
 
   // ── 场景记忆段（两相扫描 + 指纹缓存）──────────────────────────────────────
@@ -177,8 +202,46 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   // 指纹一变（切场景 / 改文件 / 外部编辑器改文件 / 改 enabled）才重读正文并重排。
   // 见文件顶部「两相扫描」注释里为什么不选 fs.watch 方案。
 
-  let sceneCache: { signature: string; value: SceneMemoryProjection } | null = null
-  let sceneCatalogCache: { signature: string; value: SceneMemoryProjection } | null = null
+  // ⚠️ 这两份缓存**必须是 Map**（0.21.2）：会话作用域让"同一份磁盘、不同会话"能算出两份
+  // 不同的段。单槽缓存下 A 算完 B 直接用 —— 症状是「A 的场景记忆出现在 B 的上下文里」，
+  // 而且它不报错、只在两个会话交替使用时出现，是最难查的一类。键 = 会话作用域的指纹，
+  // 上限 16 条 LRU（会话数量级远小于这个数，超了只说明有大量一次性会话）。
+  const SCENE_CACHE_MAX = 16
+  const sceneCache = new Map<string, { signature: string; value: SceneMemoryProjection }>()
+  const sceneCatalogCache = new Map<string, { signature: string; value: SceneMemoryProjection }>()
+  /** 取一条缓存并把它移到队尾（Map 保序 ⇒ 头部就是最久没用的那条）。 */
+  const cacheGet = <T>(cache: Map<string, T>, key: string): T | undefined => {
+    const hit = cache.get(key)
+    if (hit === undefined) return undefined
+    cache.delete(key)
+    cache.set(key, hit)
+    return hit
+  }
+  /** 写一条缓存并按上限淘汰最久没用的。 */
+  const cacheSet = <T>(cache: Map<string, T>, key: string, value: T): void => {
+    cache.delete(key)
+    cache.set(key, value)
+    while (cache.size > SCENE_CACHE_MAX) {
+      const oldest = cache.keys().next()
+      if (oldest.done === true) break
+      cache.delete(oldest.value)
+    }
+  }
+  /**
+   * 会话作用域的缓存键：会话 id + 覆盖指纹。取不到会话 id 时按全局（空串）。
+   *
+   * 为什么把覆盖也编进键：同一个会话切场景之后段要重算，而它的 signature 已经变了；
+   * 但"覆盖被清空回到全局"这种变化下 signature 未必变（比如覆盖只是把某条记忆关掉又打开），
+   * 键里带上覆盖就能保证两种状态各自命中各自的缓存。
+   */
+  const scopeKeyOf = (scope: MemoryScopeOverride | undefined): string =>
+    scope === undefined
+      ? ''
+      : [
+        scope.sessionId ?? '',
+        scope.scene === undefined ? '\u0002global' : scope.scene === null ? '\u0002none' : scope.scene,
+        JSON.stringify(scope.memory ?? {}),
+      ].join('\u0000')
 
   // ── 注入侧取数：读失败必须出声（2026-09-30 审查 F7）────────────────────────
   //
@@ -207,13 +270,16 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   }
 
   /** 记忆段：注入侧口径（索引不可信或目录读不动 → 抛）。 */
-  function requireSceneMemory(): SceneMemoryProjection {
+  function requireSceneMemory(scope?: MemoryScopeOverride): SceneMemoryProjection {
     const index = readIndexSync(stateDir)
     assertIndexReadable() // 抛在这里 ⇒ 下面必然处于「索引可信」状态，无需再传 forceDisabled
-    const probe = probeSceneFilesSync(memoriesRoot, index, false)
-    if (sceneCache && sceneCache.signature === probe.signature) return sceneCache.value
-    const value = renderSceneMemory(probe, index, maxBytes)
-    sceneCache = { signature: probe.signature, value }
+    const override = { scene: scope?.scene, memory: scope?.memory }
+    const probe = probeSceneFilesSync(memoriesRoot, index, false, override)
+    const key = scopeKeyOf(scope)
+    const hit = cacheGet(sceneCache, key)
+    if (hit !== undefined && hit.signature === probe.signature) return hit.value
+    const value = renderSceneMemory(probe, index, maxBytes, override.scene)
+    cacheSet(sceneCache, key, { signature: probe.signature, value })
     return value
   }
 
@@ -223,18 +289,24 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 为什么退上一轮而不是空投影：界面上的内存占用条突然归零会让用户以为记忆没了；上一轮那个数
    * 是**已知的最后一份真相**，与注入侧"保留上一轮内容"同一取向。故障本身由注入实况报 `error`。
    */
-  function sceneMemory(): SceneMemoryProjection {
-    try { return requireSceneMemory() } catch { return sceneCache?.value ?? emptySceneMemory() }
+  function sceneMemory(scope?: MemoryScopeOverride): SceneMemoryProjection {
+    try { return requireSceneMemory(scope) } catch {
+      // 退回**本会话**上一轮算出来的那份（没有才退空投影）：退到别的会话那份就是串内容。
+      return cacheGet(sceneCache, scopeKeyOf(scope))?.value ?? emptySceneMemory()
+    }
   }
 
   /** 场景段：只有注入侧一个消费者，直接按注入口径（读失败抛）。 */
-  function sceneCatalog(): SceneMemoryProjection {
+  function sceneCatalog(scope?: MemoryScopeOverride): SceneMemoryProjection {
     const index = readIndexSync(stateDir)
     assertIndexReadable()
-    const probe = probeSceneFilesSync(memoriesRoot, index, false)
-    if (sceneCatalogCache && sceneCatalogCache.signature === probe.signature) return sceneCatalogCache.value
-    const value = renderSceneCatalog(probe, index, SCENE_CATALOG_MAX_BYTES)
-    sceneCatalogCache = { signature: probe.signature, value }
+    const override = { scene: scope?.scene, memory: scope?.memory }
+    const probe = probeSceneFilesSync(memoriesRoot, index, false, override)
+    const key = scopeKeyOf(scope)
+    const hit = cacheGet(sceneCatalogCache, key)
+    if (hit !== undefined && hit.signature === probe.signature) return hit.value
+    const value = renderSceneCatalog(probe, index, SCENE_CATALOG_MAX_BYTES, override.scene)
+    cacheSet(sceneCatalogCache, key, { signature: probe.signature, value })
     return value
   }
 
@@ -341,10 +413,29 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 「绑了但预设为空/已删」按没绑处理（不注入空段），继续找下一个；
    * 「绑了但预设**读不动**」抛异常 —— 注入侧要的是"故障"而不是"没绑"（见上面 F7 那一节）。
    */
-  function resolveScenePreset(): { scene: string; presetId: string; text: string } | null {
+  function resolveScenePreset(
+    /**
+     * 会话层钉住的场景（0.21.2）：`string` = 取**这个场景**绑定的预设，而不是全局当前场景的；
+     * `null` = 钉住"没有场景"（已脱离且基线无场景）→ 场景预设这一层整层不参与。
+     *
+     * 语义差别必须写清：全局那条走的是"启用场景 → 其绑定 → 退化到 global"这条链（进场景
+     * 会改写 AGENTS.md，所以文件里本来就是它）；会话层那条是"本会话要看到哪个场景的提示词"
+     * —— 只读预设正文，**不写 AGENTS.md**（决策 14）。
+     */
+    pinnedScene?: string | null,
+  ): { scene: string; presetId: string; text: string } | null {
+    // 钉住"没有场景"：不取任何场景绑定（global 的绑定也属于场景层，不参与）。
+    if (pinnedScene === null) return null
     const index = readIndexSync(stateDir)
     // 索引读不到 → 连"哪个场景绑了哪个预设"都无从得知，这必须报故障而不是报"没有提示词"（F7）。
     assertIndexReadable()
+    // 会话层钉住了场景 → 直接取它绑的那份（没有绑定就返回 null，由调用方退化到用户级）。
+    if (pinnedScene !== undefined && pinnedScene !== '') {
+      const id = index.scenes?.[pinnedScene]?.prompt
+      if (!id) return null
+      const text = readPresetTextSync(id)
+      return text.trim() === '' ? null : { scene: pinnedScene, presetId: id, text }
+    }
     const names = Object.keys(index.scenes || {})
     const { active } = resolveActiveScenes(index, names)
     // 单选：取唯一一个非保留启用场景（resolveActiveScenes 已保证 ≤1，这里仍做确定性排序兜底）。
@@ -522,7 +613,10 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    */
   const refresh = async (): Promise<void> => {
     invalidateSnapshot()
-    sceneCache = null
+    // 两份段缓存**全清**（不是清某一条）：写操作改变的是磁盘事实，它对每个会话的作用
+    // 都可能不同（比如某条记忆被本会话覆盖关掉），逐条算哪几条受影响只会漏。
+    sceneCache.clear()
+    sceneCatalogCache.clear()
   }
 
   /**
@@ -573,10 +667,45 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     return { mode: index.mode ?? { scene: null, snapshot: null }, archives: index.archives ?? {}, active: normalizeActive(index.active) }
   }
 
+  /**
+   * 某个场景的完整档案（同步，0.21.2）：会话的**场景层**按它实时计算（档案改了，下一个
+   * 请求就跟着变）。读不到索引时返回 `undefined`（= 这一层没话说，按全局算）—— 失败的方向
+   * 必须是"少过滤"，不能是"把本会话的东西整个关光"。
+   */
+  const sceneArchiveOf = (scene: string): SceneArchive | undefined => {
+    try {
+      const archive = readIndexSync(stateDir).archives?.[scene]
+      return archive === undefined ? undefined : archive
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 某个场景档案里的人设绑定（同步，0.21.2）。读不到索引时返回 `undefined`（= 不过滤）——
+   * 这里失败的方向必须是"多列几个人设"，不能是"把人设目录整个清空"。
+   */
+  const sceneSubagentsOf = (scene: string): string[] | undefined => {
+    try {
+      const archive = readIndexSync(stateDir).archives?.[scene]
+      const list = archive && Array.isArray(archive.subagents) ? archive.subagents : undefined
+      return list === undefined ? undefined : list.map((name) => String(name))
+    } catch {
+      return undefined
+    }
+  }
+
   // ── 场景行（UI 用：启用/停用开关）──────────────────────────────────────
 
-  /** 场景行：**以索引的场景记录为准**（空场景也在列表里），记忆条数由快照统计。 */
-  function sceneRows(snap: Snapshot, index: RulesIndex): SceneRow[] {
+  /**
+   * 场景行：**以索引的场景记录为准**（空场景也在列表里），记忆条数由快照统计。
+   *
+   * `override`（0.21.2）= 本会话钉住的场景。给了就按它算 `active` / `selectable` —— 少了这一步，
+   * `rules-list` 里 `activeScene` 已经按会话投影了，而 `scenes[]` 每一行还报着全局值：
+   * 场景页的「当前」标签、记忆页的场景卡、单选置灰全都不动，表现就是「切换场景没反应」
+   * （2026-10-19 实测）。
+   */
+  function sceneRows(snap: Snapshot, index: RulesIndex, override?: string | null): SceneRow[] {
     const names = new Set<string>([GLOBAL_SCENE, ...Object.keys(index.scenes || {}), ...snap.scenes])
     const counts = new Map<string, number>()
     for (const rule of snap.rules) {
@@ -586,8 +715,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
       counts.set(scene, (counts.get(scene) || 0) + 1)
     }
     const known = [...names]
-    const { active } = resolveActiveScenes(index, known)
-    const enabledScene = enabledSceneOf(index)
+    const { active } = resolveActiveScenes(index, known, override)
+    const enabledScene = enabledSceneOf(index, override)
     return known
       .map((name) => ({
         name,
@@ -663,12 +792,12 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   //   - `promptText`：全局提示词正文 = 场景期间用场景提示词、平时用 AGENTS.md 正文。
   //     **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
   //     （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
-  const memoryText = (): string => requireSceneMemory().text
+  const memoryText = (scope?: MemoryScopeOverride): string => requireSceneMemory(scope).text
   // 场景段。与记忆段是**两次探测**：`probeSceneFilesSync` 没有内部缓存（signature 本身就是
   // 扫描的结果，缓存不了），代价是有界的一次目录树 stat（**不读正文**），换来两段各自渲染、
   // 各自去重 —— 只改场景描述时不会连带重发整段记忆正文。
   // 渲染本身在 `sceneCatalog()`（见上面「注入侧取数」那一节，读失败抛）。
-  const sceneCatalogText = (): string => sceneCatalog().text
+  const sceneCatalogText = (scope?: MemoryScopeOverride): string => sceneCatalog(scope).text
   /**
    * `~/.dsh/AGENTS.md` 正文的上限，与官方那一行的 `maxBytes` 同量级（64 KiB）：超大文件按字节
    * 截断并留一行标记，免得一份手写的巨型基线把上下文撑爆。
@@ -701,34 +830,133 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 这个措辞，模型对它有现成的先验）。模型据此知道这些规则写在哪个文件里：用户说"把这条记下来"
    * 时它知道该改哪份文件，而不是只能凭印象回答。
    */
-  const resolvePrompt = (): { path: string; digest: string; text: string } | null => {
+  const resolvePrompt = (scope?: PromptScopeOverride, pinnedScene?: string | null): { path: string; digest: string; text: string } | null => {
     // 场景提示词与 AGENTS.md 正文在用户眼里就是同一件事（"全局提示词"）：场景期间前者取代后者，
     // 与官方语义一致（进场景改写文件、退出恢复）。所以一个域、一份文本，取到非空的场景提示词就用它。
-    const scene = resolveScenePreset()
-    if (scene && scene.text.trim() !== '') {
+    // 项目链（0.21.2）：与官方同构，**永远跟着走**（未钉住时官方自己送它，钉住时由我们送）。
+    // 取不到 cwd（冷会话 / 子代理）→ 空链，退化成"只有用户级"，与 0.21.2 行为一致。
+    const project = scope === undefined || scope.cwd === undefined ? null : renderProjectInstructions(discoverProjectInstructions(scope.cwd), AGENTS_MD_MAX_BYTES)
+    if (project !== null && project.text.trim() !== '') {
+      // 有项目链时把它拼在用户级**之前**（官方顺序：用户级 → 项目链，宽 → 窄）。
+      // 用户级那一槽由调用方决定用哪一份（场景预设 / ~/.dsh/AGENTS.md）。
+      // ⚠️ 拼的是 `user.text` 而不是 `user` 本身：`resolveUserLevelPrompt` 回的是
+      // `{ path, digest, text }`，把整个对象 join 进数组会得到字面量 `[object Object]`
+      // —— 用户级那一槽就这样被吃掉了（极简下只剩项目级那一段，2026-10-19 实测）。
+      const user = resolveUserLevelPrompt(pinnedScene, scope?.override, scope?.baseline)
+      const combined = [user === null ? '' : user.text, project.text].filter((part) => part !== '').join('\n\n')
+      if (combined.trim() === '') return null
+      return {
+        path: user === null ? project.files[0].path : user.path,
+        digest: createHash('sha1').update(combined).digest('hex'),
+        text: combined,
+      }
+    }
+    return resolveUserLevelPrompt(pinnedScene, scope?.override, scope?.baseline)
+  }
+  /**
+   * 把一份用户级正文夹到预算内（与 `~/.dsh/AGENTS.md` 的 64 KiB 同闸）。
+   * 预设 / 会话覆盖 / 文件三条路共用，避免"绑定预设绕过预算"那类口子。
+   */
+  const clampPromptBody = (text: string, label: string): string => (
+    Buffer.byteLength(text, 'utf8') <= AGENTS_MD_MAX_BYTES
+      ? text
+      : Buffer.from(text, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8') +
+        `\n\n(Truncated: ${label} is over ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB.)`
+  )
+  /**
+   * 用户级那一条（会话覆盖 > 场景预设 > 本会话冻结快照 > 当前 `~/.dsh/AGENTS.md`）。
+   *
+   * 从 `resolvePrompt` 里拆出来是因为项目链要**拼在它前面**：两段来源不同、判定不同
+   * （预设 / 会话覆盖 / 快照 vs 文件），但用户看到的是同一件事（"全局提示词"）。
+   *
+   * 会话覆盖（0.21.2）取代的正是**这一槽**：
+   *   · `content` 直接用（来源行标成侧车，模型能看出这是会话级覆盖）；
+   *   · `presetId` 去读那份预设；删了 / 读不动 → 退化到下一层，不报错、不清侧车。
+   *
+   * 冻结快照（0.21.2 第三轮）：`baseline !== undefined` 时 AGENTS.md 槽位换成它 ——
+   * 全局文件之后怎么改都与这个会话无关。**快照为空串也算一层**（返回 null）：
+   * 创建时没有 AGENTS.md 的会话，不该因为后来全局应用了预设就突然多出提示词。
+   * 只有从来没有快照时才读当前文件（退化路径，与 0.21.2 前两轮逐字相同）。
+   */
+  const resolveUserLevelPrompt = (
+    pinnedScene?: string | null,
+    override?: { presetId?: string; content?: string },
+    baseline?: string,
+  ): { path: string; digest: string; text: string } | null => {
+    const sessionContent = override?.content !== undefined && override.content.trim() !== '' ? override.content : undefined
+    if (sessionContent !== undefined) {
+      const path = `${dshHomeDisplay()}/${HUB_DIR}/scope-overrides.json`
+      return {
+        path,
+        digest: createHash('sha1').update(sessionContent).digest('hex'),
+        // 来源行点名"session override"：模型能看出这份取代了全局基线（0.21.2）。
+        text: `Instructions from: ${path} (session override)\n\n${clampPromptBody(sessionContent, 'the session override')}`,
+      }
+    }
+    const scene = resolveScenePreset(pinnedScene)
+    const hasBaseline = baseline !== undefined
+    // 有快照时**不读**当前文件：既不需要它的内容，也不需要它此刻读不读得动。
+    // 没有快照时仍按老口径读：它是最后一层，读失败必须出声（F7），不能被当成"没有提示词"。
+    let raw = ''
+    let rawError: unknown = null
+    if (!hasBaseline) {
+      try { raw = readGlobalAgentsMdSync() } catch (e) { rawError = e }
+    }
+    const hasGlobalFile = !hasBaseline && raw.trim() !== ''
+    let choice = chooseUserPromptLayer({
+      sessionContent: false,
+      sessionPreset: override?.presetId !== undefined,
+      scenePreset: scene !== null,
+      sessionBaseline: hasBaseline,
+      globalFile: hasGlobalFile,
+    })
+    if (choice === 'session-preset' && override?.presetId !== undefined) {
+      let text = ''
+      try { text = readPresetTextSync(override.presetId) } catch { text = '' /* 读不动 = 退化，不报错 */ }
+      if (text.trim() !== '') {
+        const path = `${dshHomeDisplay()}/${HUB_DIR}/${PRESETS_DIR}/${override.presetId}/AGENTS.md`
+        return {
+          path,
+          digest: createHash('sha1').update(text).digest('hex'),
+          text: `Instructions from: ${path} (session override)\n\n${clampPromptBody(text, 'the session preset body')}`,
+        }
+      }
+      // 预设被全局删除 / 为空 → 当次退化回下一层（场景预设 / 快照 / 当前文件）。
+      choice = chooseUserPromptLayer({
+        sessionContent: false,
+        sessionPreset: false,
+        scenePreset: scene !== null,
+        sessionBaseline: hasBaseline,
+        globalFile: hasGlobalFile,
+      })
+    }
+    if (choice === 'scene-preset' && scene !== null) {
       const path = `${dshHomeDisplay()}/${HUB_DIR}/${PRESETS_DIR}/${scene.presetId}/AGENTS.md`
-      // 与下面的 AGENTS.md 分支**同一套截断**（2026-09-30 审查 P2-1）：场景绑定的预设正文
-      // 此前**没有任何上限**，一份超大预设会把 system-reminder 挤爆（AGENTS.md 那条路一直有
-      // 64 KiB 的闸）。两条出口在用户眼里就是同一件事（"全局提示词"），预算必须一致 ——
-      // 否则"把预设绑到场景上"就成了绕过预算的口子。`digest` 仍算**原文**（与另一分支同口径）。
-      const body = Buffer.byteLength(scene.text, 'utf8') <= AGENTS_MD_MAX_BYTES
-        ? scene.text
-        : Buffer.from(scene.text, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8') +
-          `\n\n(Truncated: the preset body is over ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB.)`
       return {
         path,
         digest: createHash('sha1').update(scene.text).digest('hex'),
-        text: `Instructions from: ${path}\n\n${body}`,
+        text: `Instructions from: ${path}\n\n${clampPromptBody(scene.text, 'the preset body')}`,
       }
     }
-    const raw = readGlobalAgentsMdSync()
-    if (raw.trim() === '') return null
-    const path = `${dshHomeDisplay()}/AGENTS.md`
-    const body = Buffer.byteLength(raw, 'utf8') <= AGENTS_MD_MAX_BYTES
-      ? raw
-      : Buffer.from(raw, 'utf8').subarray(0, AGENTS_MD_MAX_BYTES).toString('utf8') +
-        `\n\n(Truncated: the file is over ${Math.floor(AGENTS_MD_MAX_BYTES / 1024)} KiB.)`
-    return { path, digest: createHash('sha1').update(raw).digest('hex'), text: `Instructions from: ${path}\n\n${body}` }
+    if (choice === 'session-baseline' && baseline !== undefined) {
+      if (baseline.trim() === '') return null
+      const path = `${dshHomeDisplay()}/AGENTS.md`
+      return {
+        path,
+        digest: createHash('sha1').update(baseline).digest('hex'),
+        text: `Instructions from: ${path}\n\n${clampPromptBody(baseline, 'the frozen session baseline')}`,
+      }
+    }
+    if (choice === 'global-file') {
+      if (rawError !== null) throw rawError
+      const path = `${dshHomeDisplay()}/AGENTS.md`
+      return {
+        path,
+        digest: createHash('sha1').update(raw).digest('hex'),
+        text: `Instructions from: ${path}\n\n${clampPromptBody(raw, 'the file')}`,
+      }
+    }
+    return null
   }
   /**
    * 模型侧的提示词正文（`''` = 没有可注入的内容）。
@@ -736,7 +964,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
    * （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
    */
-  const promptText = (): string => resolvePrompt()?.text ?? ''
+  const promptText = (scope?: PromptScopeOverride): string => resolvePrompt(scope, scope?.scene)?.text ?? ''
   /**
    * `promptText()` 的**来源文件**（同步）：注入通道把它当作 instructions 形态的
    * `changes` 交给界面（文件清单 + 已载入/已更新），见 context-inject.ts 的 `files`。
@@ -745,8 +973,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 路径用**展示形态**（见 `dshHomeDisplay`）：界面里官方 agent-instructions 那条行写的是
    * `~/.dsh/AGENTS.md`，我们写绝对路径的话，同一个界面上会出现两种风格。
    */
-  const promptFiles = (): Array<{ path: string; digest: string }> => {
-    const resolved = resolvePrompt()
+  const promptFiles = (scope?: PromptScopeOverride): Array<{ path: string; digest: string }> => {
+    const resolved = resolvePrompt(scope, scope?.scene)
     return resolved === null ? [] : [{ path: resolved.path, digest: resolved.digest }]
   }
 
@@ -767,6 +995,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     stateDir, memoriesRoot, scenesRoot, maxBytes,
     ...(deps.skillsTrashDir ? { skillsTrashDir: deps.skillsTrashDir } : {}),
     snapshot, invalidateSnapshot, sceneMemory, scenePrompt,
+    scopeOverrideOf: (sessionId: string) => deps.scopeOverrideOf?.(sessionId),
     parseId, locateRule, refuseOutsideRoot, buildProjected, sceneRows,
     copyIntoMemoriesTrash, listAttachments, serializeRuleFile, serializeUpdatedFile,
     ensureLayout, presetExistsSync,
@@ -847,10 +1076,13 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     sceneCatalogText,
     promptText,
     promptFiles,
+    promptBaselineText: readGlobalAgentsMdSync,
     refresh,
     patchIndex,
     saveArchive,
     readArchiveSlice,
+    sceneArchiveOf,
+    sceneSubagentsOf,
     sceneLocks: async (): Promise<Record<string, boolean>> => {
       const index = await readIndex(stateDir)
       const out: Record<string, boolean> = {}

@@ -166,6 +166,35 @@
           } catch (e) { return undefined }
         }
         /**
+         * 订阅宿主的会话列表与工作区记账（归档 / 恢复走后者）。名单本身由服务端
+         * `scope-sessions-list` 按工作区成员 + 归档 + 空壳过滤好；这里只负责在
+         * 会话列表 / 归档集合变化时通知下拉重拉。
+         */
+        const subscribeSessionList = function (fn) {
+          const offs = []
+          const add = function (service, key) {
+            try {
+              const list = service && service[key]
+              if (list && typeof list.subscribe === 'function') {
+                const off = list.subscribe(fn)
+                if (typeof off === 'function') offs.push(off)
+              }
+            } catch (e) { /* 订阅不上只是晚一拍，不影响名单本身 */ }
+          }
+          add(serviceOf('sessions'), 'list')
+          add(serviceOf('workspaces'), 'list')
+          if (!offs.length) return null
+          return function () { offs.forEach(function (off) { try { off() } catch (e) { /* ignore */ } }) }
+        }
+        // 会话作用域（0.21.2）：20b 片在更早的位置，取词与"当前会话"只能从这里注入。
+        // 与 `translateOrFallback` 收 t 为参同一条纪律 —— 分片共用一个 factory 作用域，
+        // 但**声明顺序**决定了谁能直接引用谁。
+        configureScopeDeps({
+          t: t,
+          currentSessionId: currentSessionId,
+          subscribeSessionList: subscribeSessionList,
+        })
+        /**
          * 一次性「服务点名」：锁挂不上时把几个关键服务在**本插件上下文里**的可见性一起写出来。
          * 只报「拿不到 conversation」查不出原因 —— 到底是所有服务都看不见（跨 cordis 实例），
          * 还是只有它看不见（提供方 fiber 没起来），这两种要修的地方完全不同。
@@ -360,6 +389,9 @@
                 if (id === lockedSessionId) return
                 lockedSessionId = id
                 applyComposerLock(tokenLocked)
+                // 面板顶部那颗下拉也要跟上（20b 片）：停在「当前对话」那一层时跟着换，
+                // 否则切会话后下拉还指着上一个会话（"切换会话没有刷新"，2026-10-19）。
+                try { onCurrentSessionChanged(id) } catch (e) { /* 下拉不跟只是晚一拍，不影响门禁 */ }
               })
               applyComposerLock(tokenLocked)
               return
