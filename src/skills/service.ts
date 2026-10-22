@@ -315,14 +315,24 @@ export function createSkillsService(ctx: any): SkillsService {
 
   const registerProviders = (): (() => void) => {
     const disposers: Array<() => void> = []
+    // 卸载竞态（0.21.2）：自定义目录那份 watcher 是**异步**挂上的（要先读状态文件）。
+    // 如果插件在 `readManagerState()` 落地之前就被卸载，`dispose()` 已经跑完，随后那句
+    // `disposers.push(...)` 就永远没人收 —— 结果是一个 Worker 线程加一组 fs.watch 句柄
+    // 留在进程里（Worker 已 unref 不会挡住退出，但每次重载都多一份，热重载环境里会累积）。
+    // 所以记一个"已卸载"标记：晚到的 disposer 当场自己跑掉。
+    let disposed = false
+    const add = (dispose: () => void): void => {
+      if (disposed) { try { dispose() } catch { /* ignore */ } return }
+      disposers.push(dispose)
+    }
     try {
       const dispose = ctx.skills.registerProvider((control: any) => externalSkillProvider(control, providerInvalidators))
-      if (typeof dispose === 'function') disposers.push(dispose)
+      if (typeof dispose === 'function') add(dispose)
     } catch (e) {
       console.error('[dsh-plugin-tool-management] global skills provider registration failed:', message(e))
     }
     try {
-      disposers.push(registerAgentSkillProviders(ctx, providerInvalidators))
+      add(registerAgentSkillProviders(ctx, providerInvalidators))
     } catch (e) {
       console.error('[dsh-plugin-tool-management] agent-scoped provider setup failed:', message(e))
     }
@@ -332,7 +342,7 @@ export function createSkillsService(ctx: any): SkillsService {
         .filter((root: any) => root.key !== 'official')
         .map((root: any) => String((root && root.path) || ''))
         .filter(Boolean)
-      disposers.push(watchDirectories(watchPaths, invalidateSkills))
+      add(watchDirectories(watchPaths, invalidateSkills))
       // 自定义目录在状态文件里，注册时读取一次并一并监听（后添加的目录由
       // provider 首次 list 天然覆盖，等插件重载后才有 watcher）。
       readManagerState()
@@ -340,13 +350,17 @@ export function createSkillsService(ctx: any): SkillsService {
           const customPaths = customRootsFromState(current.state)
             .map((root: any) => String((root && root.path) || ''))
             .filter(Boolean)
-          if (customPaths.length) disposers.push(watchDirectories(customPaths, invalidateSkills))
+          if (customPaths.length) add(watchDirectories(customPaths, invalidateSkills))
         })
         .catch(() => { /* 状态不可用时仅监听静态根 */ })
     } catch (e) {
       console.error('[dsh-plugin-tool-management] skill watcher setup failed:', message(e))
     }
-    return () => { for (const dispose of disposers) { try { dispose() } catch { /* ignore */ } } }
+    return () => {
+      disposed = true
+      for (const dispose of disposers) { try { dispose() } catch { /* ignore */ } }
+      disposers.length = 0
+    }
   }
 
   /** 成功 → {ok:true, data}；core 业务失败 → 原样透传 {ok:false,...}；成功后可选触发 afterWrite。 */

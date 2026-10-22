@@ -3550,9 +3550,22 @@ export default {
      */
     const scopeSummaryCache = new Map<string, { at: number; value: { title?: string; hasMessages: boolean } | undefined }>()
     const SCOPE_SUMMARY_TTL_MS = 30000
+    /**
+     * 上限 200 条 LRU（0.21.2）。此前只有 TTL 判断、**从不淘汰**：过期条目一直躺在 Map 里，
+     * 每个被下拉框看过的会话都留一条，长期运行的实例上这是无界增长（每条还攥着标题字符串）。
+     * 键是会话 id，Map 保序 ⇒ 命中时移到队尾，头部就是最久没用的那条。
+     */
+    const SCOPE_SUMMARY_MAX = 200
     async function scopeSessionSummary(sessionId: string): Promise<{ title?: string; hasMessages: boolean } | undefined> {
       const hit = scopeSummaryCache.get(sessionId)
-      if (hit && Date.now() - hit.at < SCOPE_SUMMARY_TTL_MS) return hit.value
+      if (hit !== undefined) {
+        if (Date.now() - hit.at < SCOPE_SUMMARY_TTL_MS) {
+          scopeSummaryCache.delete(sessionId)
+          scopeSummaryCache.set(sessionId, hit)
+          return hit.value
+        }
+        scopeSummaryCache.delete(sessionId)
+      }
       let value: { title?: string; hasMessages: boolean } | undefined
       // 会话 id 要拼进路径，只认安全字符。
       if (/^[A-Za-z0-9_-]{1,200}$/.test(sessionId)) {
@@ -3574,6 +3587,11 @@ export default {
         } catch { /* 文件不存在 / 解析失败：按取不到处理 */ }
       }
       scopeSummaryCache.set(sessionId, { at: Date.now(), value })
+      while (scopeSummaryCache.size > SCOPE_SUMMARY_MAX) {
+        const oldest = scopeSummaryCache.keys().next()
+        if (oldest.done) break
+        scopeSummaryCache.delete(oldest.value)
+      }
       return value
     }
 
@@ -5033,11 +5051,48 @@ export default {
         // section: 工具加载完成后若不重算，注入文本会一直停留在「空/旧集合」的缓存值上
         //（用户切 MCP 后立即看上下文注入就是空段 —— 2026-09-16 实测）。
         ctx.effect(() => {
+          /**
+           * 状态段重算的**定窗节流**（0.21.2，issue #21）。
+           *
+           * 这里原来是裸的 `void mcp.stateCatalog.refresh()`：`tools/change` 来一条就全量重算
+           * 一次。而 `refresh()` 会作废缓存并跑 `rows()`（= `mcpmList`，要枚举每个服务器的工具
+           * schema、还要逐个读补丁文件），是整条事件链上最重的一步。一旦上游把 `tools/change`
+           * 发得密（自激环、或别的插件反复重注册工具），本插件就被动地按同频重解析一遍 ——
+           * 报告人在空闲态量到 ~17.8 次/秒 `tools/change`，对应 `readPluginMeta` 20 秒 434 次、
+           * 单核 ~46%。
+           *
+           * 为什么这样写：**前缘立刻刷**，真实的一笔工具变化不拖延（面板里改完马上看注入就是
+           * 新值）；窗口内（2s）后续事件只记一个"欠一笔"，窗口结束时补刷 —— 既有上界
+           * （≤0.5 次/秒），又不会把连续事件里的最后一笔丢掉。
+           *
+           * 为什么不怕漏：状态段本身是 SWR，`text()` 在 `ttlMs`（3s）过期后会自己 revalidate，
+           * 所以即使尾刷被卸载打断，下一次读也会重建，不会长期停在旧值。
+           */
+          const MCP_STATE_REFRESH_WINDOW_MS = 2000
+          let timer: ReturnType<typeof setTimeout> | null = null
+          let pending = false
+          const flush = (): void => {
+            pending = false
+            void mcp.stateCatalog.refresh().catch(() => { /* 下一轮读按 TTL 重建，不影响已完成的写 */ })
+          }
+          const schedule = (): void => {
+            if (timer !== null) { pending = true; return }
+            flush()
+            timer = setTimeout(function () {
+              timer = null
+              if (pending) schedule()
+            }, MCP_STATE_REFRESH_WINDOW_MS)
+          }
           const stop = (ctx.on as (event: string, cb: () => void) => (() => void) | void)('tools/change', () => {
             mcp.scheduleToolRestrictions()
-            void mcp.stateCatalog.refresh()
+            schedule()
           })
-          return typeof stop === 'function' ? stop : () => {}
+          return () => {
+            // 卸载时把窗口定时器一起收掉：留着它会在 dispose 之后再跑一次全量重算。
+            if (timer !== null) { clearTimeout(timer); timer = null }
+            pending = false
+            if (typeof stop === 'function') stop()
+          }
         }, 'dsh-plugin-tool-management: tools/change listener')
       } catch (e) { /* ignore */ }
     }
