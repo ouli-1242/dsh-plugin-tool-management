@@ -228,7 +228,8 @@
     /** 有多少个会话 / 工作区进入了场景（全局层专用；会话层返回 0）。传场景名只数那一个。 */
     function scopeSceneLeaseCount(sceneName) {
       if (scopeIsSession()) return 0
-      var global = scopeState.global || {}
+      var global = scopeState.global
+      if (!global) return 0
       var raw = sceneName === undefined
         ? global.sceneLeases
         : (global.sceneLeaseCounts || {})[String(sceneName)]
