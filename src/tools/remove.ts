@@ -15,7 +15,10 @@
 // 场景名），`restore` 时是 `action=list` 给出的**回收站条目 id** —— 两种含义在描述里写清。
 
 import type { ScopeFlagDomain } from '../scope/scope-overrides.js'
-import { globalActionNote, locateSkillRoot, requireGlobalScope, scopeGlobalOnlyDesc, sessionLayerOn, text, type ToolDomainDeps } from './deps.js'
+import {
+  candidateNote, globalActionNote, locateSkillRoot, requireGlobalScope, scopeGlobalOnlyDesc, sessionLayerOn, text,
+  toolOrNeutral, type ToolDomainDeps,
+} from './deps.js'
 
 /** 一条删除工具的域配置（纯数据，execute 逻辑共用 `runRemove`）。 */
 interface RemoveCfg {
@@ -34,6 +37,22 @@ interface RemoveCfg {
    * `undefined` = 该域没有会话覆盖概念（提示词）。
    */
   domain?: ScopeFlagDomain | 'scene'
+  /**
+   * 漏传 / 传错 `id` 时的补救：现成候选从哪儿读，读不到时退到哪儿。
+   *
+   * 只在这条错误路径上被调用（正常删除不会碰它）。五个域的参数名都叫 `id`，而用户
+   * 口语里给的往往是"那条记忆"/"docx 那个技能"—— 模型真正缺的是**现成的叫什么**，
+   * 让它再去列一次清单就是白跑一趟。
+   */
+  idHelp: {
+    /** 列这个域清单的工具名：只在它真在模型手里时才点名（见 `toolOrNeutral`）。 */
+    tool: string
+    /** `tool` 不可见时的中性出口 —— 指向常驻注入段，不点名任何工具。 */
+    neutral: string
+    /** 候选标签（"memory ids" / "skills" …），进 `candidateNote` 的文案。 */
+    label: string
+    list(): Promise<string[]>
+  }
 }
 
 /** 五个域各自的 op 表 + 场景删除（后者走 handlers 里带 AGENTS.md 同步的那份）。 */
@@ -94,7 +113,15 @@ function restoredName(r: any): string {
  * 所以这里不写会话层，只在**这个对话真有该域覆盖**时补一句尾注：
  * 删完之后那条会话覆盖还在（读时忽略，对账才清），不说明的话用户会以为它跟着没了。
  */
-async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent?: unknown): Promise<string> {
+/**
+ * 记忆库存在性探测：给「带斜杠的 id 传到别的域」那条错误用。
+ *
+ * 单独传进来而不是放进 `RemoveCfg`：五个域共用同一个实现，而它要读的是记忆域的 op。
+ * 实现方必须自己吞掉失败 —— 探不到就当不是记忆 id（少说一句总好过说错）。
+ */
+type MemoryIdProbe = (id: string) => Promise<boolean>
+
+async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent: unknown, isMemoryId: MemoryIdProbe): Promise<string> {
   const action = String((args && args.action) || '')
   if (action !== 'trash' && action !== 'restore' && action !== 'list') {
     throw new Error('action must be trash / restore / list (got: ' + (action || '(empty)') + ')')
@@ -114,7 +141,30 @@ async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent?
   // 连提示词那一族也一样（提示词根本不进会话域，更没有「本会话的预设」可删）。
   requireGlobalScope(args, cfg.noun + 's', !sessionLayerOn(deps))
   const id = String((args && args.id) || '').trim()
-  if (id === '') throw new Error('missing argument: id (required by action=' + action + ')')
+  if (id === '') {
+    // 恢复的 id 是**回收站条目 id**（与 trash 的资源标识不是一回事），指错地方最费时间 ——
+    // 这一条不用候选名单，一句 `action=list` 就是正解。
+    let note = ''
+    let hint = ''
+    if (action === 'restore') {
+      note = ' A restore id is a trash entry id — action=list prints them.'
+    } else {
+      note = await candidateNote(cfg.idHelp.list, cfg.idHelp.label)
+      // 有候选就不必再说去哪儿拿（两句叠在一起只是把错误读长一倍）；一条都读不到时才指路。
+      if (note === '') {
+        hint = toolOrNeutral(deps, agent, cfg.idHelp.tool, ' Call `' + cfg.idHelp.tool + '` to get one.', cfg.idHelp.neutral)
+      }
+    }
+    throw new Error('missing argument: id (required by action=' + action + ')' + note + hint)
+  }
+  // 跨族误用里唯一能**确认**的一种：带斜杠的 id 落到别的域，且这个 id 确实在记忆库里。
+  // 只按形状（`a/b`）判会误伤 —— 场景名与技能名都没有禁止斜杠的校验，用户起的名字里
+  // 完全可能出现。所以这里读一次记忆库确认存在；读不到就当不是，宁可少说一句。
+  if (action === 'trash' && cfg.domain !== 'memory' && id.indexOf('/') > 0 && await isMemoryId(id)) {
+    throw new Error('"' + id + '" is a memory id (memory ids are <scene>/<name>); this tool handles ' + cfg.noun + 's.'
+      + toolOrNeutral(deps, agent, 'memory_manager_remove', ' Use `memory_manager_remove` with action=trash for it.',
+        ' Pass it to the memory manager instead — this one only handles ' + cfg.noun + 's.'))
+  }
   const r: any = action === 'trash' ? await cfg.trash(args) : await cfg.restore(args)
   if (!r || r.ok === false) throw new Error((r && r.error) || (action === 'trash' ? 'failed to move it to the trash' : 'restore failed'))
   if (action === 'trash') {
@@ -138,6 +188,20 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
   const pr = deps.promptOps
   const sc = deps.sceneOps
 
+  /**
+   * 这个 id 是不是记忆库里一条真实存在的记忆。
+   *
+   * 只在「带斜杠的 id 传到别的域」那条错误路径上调用，正常删除不会碰它。
+   * 读失败一律 false：探不到就不说那句话，错误结论仍由原逻辑给出。
+   */
+  const isMemoryId: MemoryIdProbe = async (id) => {
+    try {
+      const r: any = await mem['rules-list']({})
+      if (!r || r.ok === false) return false
+      return (r.rules || []).some((x: any) => String(x.id) === id)
+    } catch { return false }
+  }
+
   const memoryCfg: RemoveCfg = {
     noun: 'memory', label: 'memory', domain: 'memory',
     trash: (a) => mem['rules-remove']({ id: String(a.id || '') }),
@@ -146,6 +210,15 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       const r: any = await mem['rules-trash-list']({})
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read the trash')
       return (r.entries || []).map((e: any) => ({ id: String(e.trashId), name: String(e.name), deletedAt: e.deletedAt }))
+    },
+    idHelp: {
+      tool: 'memory_manager_list',
+      neutral: ' — the ids are the lines in the "Current memories" reminder.',
+      label: 'memory ids',
+      list: async () => {
+        const r: any = await mem['rules-list']({})
+        return r && r.ok !== false ? (r.rules || []).map((x: any) => String(x.id)) : []
+      },
     },
   }
   const skillCfg: RemoveCfg = {
@@ -166,6 +239,22 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       if (!r || r.ok === false) throw new Error((r && r.error) || 'skill-state failed')
       return (((r.data && r.data.trash) || []) as any[]).map((e: any) => ({ id: String(e.id), name: String(e.name), deletedAt: e.deletedAt }))
     },
+    idHelp: {
+      tool: 'skill_manager_list',
+      neutral: ' — the names are in the "Current skills" reminder.',
+      label: 'skills',
+      list: async () => {
+        const r: any = await sk['skill-state']({})
+        const names: string[] = []
+        for (const root of (r && r.ok !== false && r.data && r.data.roots) || []) {
+          for (const skill of root.skills || []) {
+            const n = String(skill.declaredName || skill.name || '')
+            if (n !== '' && names.indexOf(n) < 0) names.push(n)
+          }
+        }
+        return names
+      },
+    },
   }
   const subagentCfg: RemoveCfg = {
     noun: 'persona', label: 'persona', domain: 'subagents',
@@ -175,6 +264,15 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       const r: any = await sub['subagent-trash-list']({})
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read the trash')
       return (r.trash || []).map((e: any) => ({ id: String(e.id), name: String(e.name), deletedAt: e.deletedAt }))
+    },
+    idHelp: {
+      tool: 'subagent_manager_list',
+      neutral: ' — the names are in the "Current subagents" reminder.',
+      label: 'personas',
+      list: async () => {
+        const r: any = await sub['subagent-list']({})
+        return r && r.ok !== false ? (r.subagents || []).map((p: any) => String(p.name)) : []
+      },
     },
   }
   const promptCfg: RemoveCfg = {
@@ -186,6 +284,15 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read the trash')
       const arr = Array.isArray(r) ? r : (r.presets || r.trash || r.entries || [])
       return arr.map((e: any) => ({ id: String(e.id), name: String(e.name || e.id), deletedAt: e.deletedAt }))
+    },
+    idHelp: {
+      tool: 'prompt_manager_list',
+      neutral: ' — the one in effect is named in the "Current prompt" reminder.',
+      label: 'presets',
+      list: async () => {
+        const r: any = await pr['agentsmd-list']({})
+        return r && r.ok !== false ? (r.presets || []).map((p: any) => String(p.id)) : []
+      },
     },
   }
   const sceneCfg: RemoveCfg = {
@@ -199,6 +306,15 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read the trash')
       return (r.trash || []).map((e: any) => ({ id: String(e.id), name: String(e.name), deletedAt: e.deletedAt }))
     },
+    idHelp: {
+      tool: 'scene_manager_list',
+      neutral: ' — the names are in the "Current scene" reminder.',
+      label: 'scenes',
+      list: async () => {
+        const r: any = await sc['rules-list']({})
+        return r && r.ok !== false ? (r.scenes || []).map((s: any) => String(s.name)) : []
+      },
+    },
   }
 
   register(defineTool({
@@ -210,7 +326,7 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       scope: { type: 'string', enum: ['session', 'global'], description: REMOVE_SCOPE_DESC },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, memoryCfg, args, exec && exec.agent) },
+    async execute(args: any, exec: any) { return runRemove(deps, memoryCfg, args, exec && exec.agent, isMemoryId) },
   }))
 
   register(defineTool({
@@ -223,7 +339,7 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       root: { type: 'string', description: 'Source root the skill lives in. Default: whichever source holds that skill; only used by action=trash.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, skillCfg, args, exec && exec.agent) },
+    async execute(args: any, exec: any) { return runRemove(deps, skillCfg, args, exec && exec.agent, isMemoryId) },
   }))
 
   register(defineTool({
@@ -235,7 +351,7 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       scope: { type: 'string', enum: ['session', 'global'], description: REMOVE_SCOPE_DESC },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, subagentCfg, args, exec && exec.agent) },
+    async execute(args: any, exec: any) { return runRemove(deps, subagentCfg, args, exec && exec.agent, isMemoryId) },
   }))
 
   register(defineTool({
@@ -247,7 +363,7 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('a preset writes the one global baseline', 'there is nothing per-conversation to delete') },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, promptCfg, args, exec && exec.agent) },
+    async execute(args: any, exec: any) { return runRemove(deps, promptCfg, args, exec && exec.agent, isMemoryId) },
   }))
 
   register(defineTool({
@@ -259,6 +375,6 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       scope: { type: 'string', enum: ['session', 'global'], description: REMOVE_SCOPE_DESC_SCENE },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, sceneCfg, args, exec && exec.agent) },
+    async execute(args: any, exec: any) { return runRemove(deps, sceneCfg, args, exec && exec.agent, isMemoryId) },
   }))
 }

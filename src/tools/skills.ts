@@ -6,7 +6,7 @@
 // （hub = 导入落点 / dsh = 新建默认落点）里的胜出者。
 
 import { toKebab } from '../skills/core.js'
-import { effectiveScope, globalActionNote, globalUnchangedNote, isolationOffNote, locateSkillRoot, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, locateSkillRoot, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
 /** 技能工具域要的宿主能力：技能 op 表与来源解析。 */
 export interface SkillToolDeps extends ToolDomainDeps {
@@ -185,7 +185,14 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         const listHint = deps.toolVisibleFor('skill_manager_list', exec && exec.agent)
           ? ' — call skill_manager_list (pass all=true) to see what is installed'
           : ''
-        throw new Error('no skill named "' + wanted + '"' + (rootWanted ? ' in source "' + rootWanted + '"' : '') + listHint)
+        // 名字打错是这条错误最常见的成因，而现成的名字这一次已经扫到了（`data.roots` 在手），
+        // 不必再读一次盘。条目多时只列前几个，见 `toolNameList`。
+        const names: string[] = []
+        for (const root of data.roots || []) {
+          for (const skill of root.skills || []) names.push(String(skill.declaredName || skill.name || ''))
+        }
+        throw new Error('no skill named "' + wanted + '"' + (rootWanted ? ' in source "' + rootWanted + '"' : '') + listHint
+          + existingNote(names, 'skills'))
       }
       // 胜出者优先：同名的影子副本读得到，但那不是生效的一份，所以默认不选它。
       const picked = hits.find((hit) => !hit.shadowedBy && hit.enabled)
@@ -360,7 +367,8 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         // 探得到、就是没这个技能：当场把"查过哪些来源"说清楚。否则模型收到 op 那句不带
         // 来源信息的「技能不存在」后，只能猜该传哪个 root（smoke-test P1-4-old 同一处）。
         if (found.ok) {
-          throw new Error('no such skill: ' + name + (found.roots.length ? ' (searched ' + found.roots.join(', ') + ')' : ''))
+          throw new Error('no such skill: ' + name + (found.roots.length ? ' (searched ' + found.roots.join(', ') + ')' : '')
+            + existingNote(found.names, 'skills'))
         }
         // 探不到（skill-state 失败）就别在这里编结论：退回旧默认，交给 op 报它自己的错。
         return 'dsh'

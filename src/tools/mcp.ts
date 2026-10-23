@@ -27,7 +27,7 @@
 // `resolveMaskedKv({}, 旧值)` 把整份 headers / env 静默清空、连 warning 都不给。
 
 import { DEFAULT_MCP_NOTE_MAX_LENGTH, normalizeMcpNote } from '../mcp/state-section.js'
-import { effectiveScope, globalActionNote, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, text, type ToolDomainDeps } from './deps.js'
+import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, text, type ToolDomainDeps } from './deps.js'
 
 /** MCP 工具域要的宿主能力：列表视图、工具预览、逐工具开关与备注。 */
 export interface McpToolDeps extends ToolDomainDeps {
@@ -65,7 +65,11 @@ const MCP_NEUTRAL_HINT = ' (copy the server name from your own `mcp__<server>__<
 function locate(rows: any[], server: string, level?: string, listHint: string = MCP_LIST_HINT): any {
   const hits = (rows || []).filter((r) => String(r.serverName) === server)
   if (!hits.length) {
-    throw new Error('no such server: ' + server + (listHint || MCP_NEUTRAL_HINT))
+    // 猜错 serverName 是这条族里最常见的一次失败（口语里说的是「github 那个」）。清单这一趟
+    // 已经读在手上，直接把现成名字列出来 —— 指路的那两句仍然留着：它们解释**名字从哪来**，
+    // 而候选只回答"现在有哪些"。
+    throw new Error('no such server: ' + server + (listHint || MCP_NEUTRAL_HINT)
+      + existingNote((rows || []).map((r) => String(r.serverName)), 'MCP servers'))
   }
   if (level) {
     const picked = hits.filter((r) => r.level === level)
@@ -262,6 +266,14 @@ export function buildMcpTools(deps: McpToolDeps): void {
         throw new Error('action must be on / off / restart / stop (got: ' + (action || '(empty)') + ')')
       }
       const server = String((args && args.server) || '').trim()
+      // 空名字单独报「缺参数」：落进 `locate` 会变成 `no such server: （空）`，读起来像
+      // 「这台服务器不存在」，而真实原因是它根本没传。
+      if (server === '') {
+        throw new Error('missing argument: server (the server name)' + await candidateNote(async () => {
+          const r: any = await deps.mcpmListView()
+          return r && r.ok !== false ? ((r.rows || []) as any[]).map((x) => String(x.serverName)) : []
+        }, 'MCP servers'))
+      }
       // 单值仍然接受（旧提示词 / 手写调用），数组是新增的批量形态。
       const rawTool = args && args.tool !== undefined && args.tool !== null ? args.tool : undefined
       const tools: string[] = (Array.isArray(rawTool) ? rawTool : rawTool === undefined ? [] : [rawTool])
@@ -423,7 +435,12 @@ export function buildMcpTools(deps: McpToolDeps): void {
       if (blocked) throw new Error(blocked)
       requireGlobalScope(args, 'MCP servers', !sessionLayerOn(deps))
       const server = String((args && args.server) || '').trim()
-      if (!server) throw new Error('missing argument: server (the server name)')
+      if (!server) {
+        throw new Error('missing argument: server (the server name)' + await candidateNote(async () => {
+          const r: any = await deps.mcpmListView()
+          return r && r.ok !== false ? ((r.rows || []) as any[]).map((x) => String(x.serverName)) : []
+        }, 'MCP servers'))
+      }
       const levelArg = args && args.level !== undefined ? String(args.level) : undefined
       // `hint` 的三态：省略 = 保持；`''` = **清空**；非空 = 设置。
       // 此前用 `hintText.trim() !== ''` 判"要不要写备注"，把"清空"与"省略"混成一件事 ——

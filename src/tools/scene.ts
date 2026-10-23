@@ -25,7 +25,7 @@
 // **场景段的动作句仍然不加回来**：「上下文注入只给现在是什么」是同一天定下的原则，
 // 不因为多了一条工具就破例（工具描述本来就是写"什么时候该用它"的地方）。
 
-import { effectiveScope, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, toolNameList, type ToolDomainDeps } from './deps.js'
+import { candidateNote, effectiveScope, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, toolNameList, type ToolDomainDeps } from './deps.js'
 import { FACTORY_TOOL_TABLE_PRESET } from './table.js'
 
 /** 场景工具域要的宿主能力：场景记录、联动与档案。 */
@@ -175,6 +175,21 @@ function agentsMdNote(sync: any, action?: string): string {
   return notes.join('')
 }
 
+/**
+ * 「缺场景名」时的补救：现成的场景名读一次盘带出来。
+ *
+ * 只在错误路径上调用。场景名是用户口语里给出的那个词（「切到写作场景」），而 schema 里
+ * 要的是**确切名字**（单个路径段，界面显示名可能不同）—— 不给候选，模型只能猜第二次。
+ * 读不到（或一个场景都没有）时退回常驻来源，不点名任何工具。
+ */
+async function sceneCandidates(deps: SceneToolDeps): Promise<string> {
+  const note = await candidateNote(async () => {
+    const r: any = await deps.rulesOps['rules-list']({})
+    return r && r.ok !== false ? (r.scenes || []).map((s: any) => String(s.name)) : []
+  }, 'scenes')
+  return note !== '' ? note : ' — the names are in the "Current scene" reminder.'
+}
+
 /** 注册场景域的 model 工具（列表 / 进入 / 保存 / 删除）。 */
 export function buildSceneTools(deps: SceneToolDeps): void {
   const { defineTool, register } = deps
@@ -283,7 +298,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
         let wanted: string | null = null
         if (action === 'enter') {
           wanted = String((args && args.scene) || '').trim()
-          if (wanted === '') throw new Error('action=enter needs scene: the scene name (copy it from the scene_manager_list line)')
+          if (wanted === '') throw new Error('action=enter needs scene: the scene name' + await sceneCandidates(deps))
           if (wanted.indexOf('/') >= 0 || wanted.indexOf('\\') >= 0) throw new Error('a scene name is a single path segment (no / or \\): ' + wanted)
         }
         // `scope-set` 的 scene 分支读的是 `value`：场景名 = 进入，null = 退出（下层换成基线）。
@@ -300,7 +315,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       let scene = ''
       if (action === 'enter') {
         scene = String((args && args.scene) || '').trim()
-        if (scene === '') throw new Error('action=enter needs scene: the scene name (copy it from the scene_manager_list line)')
+        if (scene === '') throw new Error('action=enter needs scene: the scene name' + await sceneCandidates(deps))
         // 场景名是**单个路径段**（与 scene_manager_save 同一条校验、同一句报错）。
         if (scene.indexOf('/') >= 0 || scene.indexOf('\\') >= 0) {
           throw new Error('a scene name is a single path segment (no / or \\): ' + scene)

@@ -13,7 +13,7 @@
 import { join } from 'node:path'
 import { normalizePresetDescription } from '../prompts/service.js'
 import { hasPromptOverride, type SessionScope } from '../scope/scope-overrides.js'
-import { sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { candidateNote, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
 /** 提示词工具域要的宿主能力：预设 op 表与场景接管判定。 */
 export interface PromptToolDeps extends ToolDomainDeps {
@@ -135,7 +135,14 @@ export function buildPromptTools(deps: PromptToolDeps): void {
           promptScopeTail(scoped?.scope)
       }
       const id = String((args && args.id) || '').trim()
-      if (id === '') throw new Error('missing argument: id (only optional when apply=false cancels)')
+      if (id === '') {
+        // 用户口语里很少同时说出预设 id（「换成简洁那版」）—— 缺 id 时就给现成的几个，
+        // 只在错误路径上读一次盘。
+        throw new Error('missing argument: id (only optional when apply=false cancels)' + await candidateNote(async () => {
+          const l: any = await deps.promptOps['agentsmd-list']({})
+          return l && l.ok !== false ? (l.presets || []).map((p: any) => String(p.id)) : []
+        }, 'presets'))
+      }
       const r = await deps.applyPresetGuarded(id)
       if (!r.ok) throw new Error(r.error)
       // 场景驱动时写的是「场景绑定」，回执必须说清改的是哪个场景 —— 只说「已应用到

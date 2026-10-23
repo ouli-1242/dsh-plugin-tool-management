@@ -30,6 +30,55 @@ export function toolNameList(list: readonly string[]): string {
   return list.length > TOOL_NAME_LIST_CAP ? head + ' ...(' + list.length + ' total)' : head
 }
 
+/**
+ * 同 `candidateNote`，候选已经在手上时用这个（同步、不读盘）。
+ *
+ * 多数错误路径上数据本来就扫到了（`rules-list` / `skill-state` / `rows` 都在作用域里），
+ * 再包一层 thunk 只是绕路。
+ */
+export function existingNote(names: readonly unknown[], label: string): string {
+  const list = (names || []).map((v) => String(v ?? '').trim()).filter((v) => v !== '')
+  if (!list.length) return ''
+  return ' Existing ' + label + ': ' + toolNameList(list) + '.'
+}
+
+/**
+ * 错误消息里的「现成候选」：只在出错时出现，不进 schema，所以不占每轮预算。
+ *
+ * 为什么不写进参数说明：候选随数据变，写进描述必然很快过期，而且每轮都要付一次 token。
+ * 模型缺参数、名字打错之后再告诉它「现成的是这几个」，正好是它需要的那一刻 —— 这也正是
+ * 口语请求最容易断的一环（用户说「删掉那条记忆」，模型手里只有一个叫法，没有 id）。
+ *
+ * `read` 失败一律返回空串：取候选失败绝不能改变错误结论 —— 原报错更接近真相。
+ */
+export async function candidateNote(read: () => Promise<readonly unknown[]>, label: string): Promise<string> {
+  let raw: readonly unknown[] = []
+  try { raw = await read() } catch { return '' }
+  return existingNote(raw, label)
+}
+
+/**
+ * 运行时点名一条工具：在它手里才点名，否则退回中性说法。
+ *
+ * 静态描述里不能这么做（契约测试会拦），而且指一条模型没有的工具本来就是把它往墙上推。
+ * 错误消息与回执是运行时分支、可以点名，但判据仍是 `toolVisibleFor` —— 「这是错误消息
+ * 所以随便写」是错的理解：那条约束的实质是「不让模型看见它手里没有的东西」，与字符串
+ * 写在哪一行无关。
+ *
+ * 判定本身抛错时按**不可见**处理：中性说法永远成立，点名可能落空。
+ */
+export function toolOrNeutral(
+  deps: ToolDomainDeps,
+  agent: unknown,
+  tool: string,
+  named: string,
+  neutral: string,
+): string {
+  let visible = false
+  try { visible = deps.toolVisibleFor(tool, agent) } catch { visible = false }
+  return visible ? named : neutral
+}
+
 /** `locateSkillRoot` 的结论。 */
 export interface SkillRootLookup {
   /** `skill-state` 探测成功了吗。false = 探不到，调用方应退回旧默认、别在这里编结论。 */
@@ -47,6 +96,13 @@ export interface SkillRootLookup {
   roots: string[]
   /** 全部命中（同名的每一份副本），供"指定了 root"的调用方取那个来源里的声明名。 */
   matches: Array<{ root: string; canonical: string; shadowedBy: string }>
+  /**
+   * 这次扫到的全部技能名（去重，按来源顺序）。
+   *
+   * 只为「没有这个技能」那条错误：名字打错时，模型缺的不是"查过哪些来源"（它已经知道了），
+   * 而是"现成的有哪些"。顺手带出来，省掉错误路径上再来一次 `skill-state`。
+   */
+  names: string[]
 }
 
 /**
@@ -66,22 +122,26 @@ export async function locateSkillRoot(
   skillsOps: Record<string, (args: any) => Promise<any>>,
   name: string,
 ): Promise<SkillRootLookup> {
+  const empty: SkillRootLookup = { ok: true, root: null, canonical: null, roots: [], matches: [], names: [] }
   const wanted = String(name || '').trim()
-  if (wanted === '') return { ok: true, root: null, canonical: null, roots: [], matches: [] }
+  if (wanted === '') return empty
   let state: any
   try {
     state = await skillsOps['skill-state']({})
   } catch {
-    return { ok: false, root: null, canonical: null, roots: [], matches: [] }
+    return { ok: false, root: null, canonical: null, roots: [], matches: [], names: [] }
   }
-  if (!state || state.ok === false) return { ok: false, root: null, canonical: null, roots: [], matches: [] }
+  if (!state || state.ok === false) return { ok: false, root: null, canonical: null, roots: [], matches: [], names: [] }
   const roots: string[] = []
+  const names: string[] = []
   const hits: Array<{ root: string; canonical: string; shadowedBy: string }> = []
   for (const root of (state.data && state.data.roots) || []) {
     roots.push(String(root.key || ''))
     for (const skill of root.skills || []) {
       // 与 list / read / save 同一套名字口径：`declaredName || name`，再比目录名。
-      if (String(skill.declaredName || skill.name || '') !== wanted && String(skill.name || '') !== wanted) continue
+      const canonical = String(skill.declaredName || skill.name || '')
+      if (canonical !== '' && names.indexOf(canonical) < 0) names.push(canonical)
+      if (canonical !== wanted && String(skill.name || '') !== wanted) continue
       hits.push({
         root: String(root.key || ''),
         canonical: String(skill.declaredName || skill.name || wanted),
@@ -90,7 +150,7 @@ export async function locateSkillRoot(
     }
   }
   const winner = hits.find((hit) => hit.shadowedBy === '') || hits[0]
-  return { ok: true, root: winner ? winner.root : null, canonical: winner ? winner.canonical : null, roots, matches: hits }
+  return { ok: true, root: winner ? winner.root : null, canonical: winner ? winner.canonical : null, roots, matches: hits, names }
 }
 
 /** 各工具域共用的依赖：宿主服务、共享工具表与文案助手。 */

@@ -20,7 +20,7 @@
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
 import { GLOBAL_SCENE, SHARED_GROUP } from '../memories/constants.js'
-import { effectiveScope, globalActionNote, globalUnchangedNote, isolationOffNote, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
 /** 记忆工具域要的宿主能力：记忆 op 表与场景记录。 */
 export interface MemoryToolDeps extends ToolDomainDeps {
@@ -271,7 +271,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 清单里打印的就是 `<场景>/<名字>`，照抄比拼装准。
       const slash = memory.indexOf('/')
       if (slash <= 0 || slash === memory.length - 1) {
-        throw new Error('memory must be <scene>/<name> (copy that from the listing; the always-on scene is written global/<name>): ' + (memory || '(empty)'))
+        // 这一条错得最有规律：用户口语里说的是「编程约定」，模型手里没有 id，就把那个名字
+        // 直接传进来了。给两条现成的 id 比再解释一遍格式有用；读失败就只报格式
+        // （`candidateNote` 自己吞掉失败，不改变错误结论）。
+        const note = await candidateNote(async () => {
+          const r: any = await deps.rulesOps['rules-list']({})
+          return r && r.ok !== false ? (r.rules || []).map((x: any) => String(x.id)) : []
+        }, 'memory ids')
+        throw new Error('memory must be <scene>/<name> (copy that from the listing; the always-on scene is written global/<name>): ' + (memory || '(empty)') + note)
       }
       const group = memory.slice(0, slash)
       const name = memory.slice(slash + 1)
@@ -308,7 +315,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         body.trim() === '' ? 'body' : '',
         description.trim() === '' ? 'description' : '',
       ].filter((x) => x !== '')
-      if (missing.length) throw new Error('creating a memory needs ' + missing.join(' and ') + ' (' + memory + ' does not exist yet)')
+      if (missing.length) {
+        // id 不存在 + 内容也不全：最可能是名字记差了一个字。先给**同一场景**里现成的 id
+        // （整个库列出来只会把这条错误变成噪音），一条都没有才退回全库。
+        const ids: string[] = (all.rules || []).map((x: any) => String(x.id))
+        const here = ids.filter((id: string) => id.indexOf(group + '/') === 0)
+        throw new Error('creating a memory needs ' + missing.join(' and ') + ' (' + memory + ' does not exist yet)'
+          + existingNote(here.length ? here : ids, 'memory ids'))
+      }
       // 查重只**说出来**，不拒绝 —— 猜错一次就把该记的东西记不下去，比多记一条代价大得多；
       // 而且"像不像同一条"本来就是人判断的事。只在建的分支提示：改的分支没有"再记一条"的风险。
       const norm = (value: unknown): string => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
