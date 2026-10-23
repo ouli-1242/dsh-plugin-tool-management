@@ -241,7 +241,14 @@ export function buildMcpTools(deps: McpToolDeps): void {
     // 让它在三个动词里选一个，比让它猜两个布尔的组合省一次往返。
     // `restart` 的含义只在 `action` 参数里说一次：描述里那句
     // "(reconnects and re-syncs tools)" 与参数说明逐字重复，而模型读参数时两处都在手上。
-    description: 'Turn one MCP server on or off, restart it, or stop it machine-wide; pass `tool` to target named tools on it. `off` leaves a server running while any conversation still uses it, `stop` ends it for them too. Blocked while the active scene is locked, except restart (the recovery path). Only when the user asks or approves.',
+    //
+    // 场景锁那句必须**分开说清豁免的范围**。`restart` 在确认门里是放行的（`confirm-gate.ts`：
+    // 它是场景锁唯一的恢复出口，加确认卡会把恢复路径本身掐断），所以这句描述是 restart 面前
+    // **唯一**的约束。旧写法 "except restart (the recovery path)" 把括号当定语还是理由分不清，
+    // 紧挨着的 "Only when the user asks or approves" 就被读成对别的动作说的 —— 模型可能理解成
+    // 「restart 是我的自愈手段，不用问」。`the lock skips it, approval does not` 把两个主语
+    // 摆在一起，豁免只剥掉锁那一层。
+    description: 'Turn one MCP server on or off, restart it, or stop it machine-wide; pass `tool` to target named tools on it. `off` leaves a server running while any conversation still uses it, `stop` ends it for them too. Blocked while the active scene is locked, except restart (the recovery path; the lock skips it, approval does not). Only when the user asks or approves.',
     parameters: {
       // 出口必须指向**常驻**来源，不能指向 `mcp_manager_list`：
       // 那条工具在出厂默认里就是关着的，`listHint()` 在它不可见时返回空串，于是猜错名字时的
