@@ -29,7 +29,7 @@ Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart
 
 ## Demo
 
-<video controls src="https://github.com/user-attachments/assets/91b9673d-d201-462a-83de-8bc663c7629d"></video>
+<video controls src="https://github.com/user-attachments/assets/8f785896-891a-4a91-9845-768a1d0bc829"></video>
 
 Every interface shown is a real screenshot of the running product — no redrawn UI, no fabricated controls.
 
