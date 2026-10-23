@@ -145,6 +145,7 @@ import { buildMemoryTools } from './tools/memory.js'
 import { buildRemoveTools } from './tools/remove.js'
 import { buildSceneTools } from './tools/scene.js'
 import { buildSubagentTools } from './tools/subagent.js'
+import { ARG_CONDITIONAL_CONFIRM_TOOLS, argConditionalConfirmReason } from './confirm-gate.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './subagents/tools.js'
 import { extractExportTurns, serializeTranscript } from './exports/transcript.js'
@@ -4816,6 +4817,21 @@ export default {
         // —— 门禁挂在它上面即覆盖整个模型可达面。标签取中性的「保存」：改一台已有服务器
         // （含改 URL / 命令）与新增一台是同一档危险度，但"新增"在改分支上是句假话。
         mcp_manager_save: '「保存 MCP 服务器」',
+        // 删除与「应用提示词」原先只有描述里的 consent 句。它们动的都是磁盘上那一份：
+        // 删除进回收站可恢复，应用改写的是全局 AGENTS.md 基线 —— 与上面几条同一档，
+        // 门禁不该比"往 hub 里写一个技能文件"更松。
+        memory_manager_remove: '「删除记忆」',
+        skill_manager_remove: '「删除技能」',
+        subagent_manager_remove: '「删除人设」',
+        scene_manager_remove: '「删除场景」',
+        prompt_manager_remove: '「删除提示词预设」',
+        prompt_manager_apply: '「应用提示词预设」',
+        // 四条 switch 只在**机器级**写入时问一次（判据在 `confirm-gate.ts`）。
+        // 默认写本会话，爆炸半径只有一个对话 —— 给默认路径挂卡是纯摩擦。
+        mcp_manager_switch: '「MCP 服务器开关」',
+        memory_manager_switch: '「记忆开关」',
+        skill_manager_switch: '「技能开关」',
+        subagent_manager_switch: '「人设开关」',
       }
       const bypassedByFullAccess = (exec: any): boolean => {
         if (!isApprovalNever(ctx, exec)) return false
@@ -4843,6 +4859,17 @@ export default {
       ;(ctx.on as (event: string, cb: (exec: any, next: () => unknown) => unknown) => unknown)('tools/pre-execute', async (exec, next) => {
         if (!exec || !CONFIRM_LABELS[String(exec.name)]) return next()
         if (exec.name === 'subagent_manager_run' && !(await subagentManagerRunTargetExists(exec))) return next()
+        // 按参数判定的那批（删除的 trash、开关的机器级写入、提示词的正向应用）：
+        // 先算"这一次要不要问"，不问就直接放行 —— 不能落到末尾那条 "Run a subagent" 的
+        // 兜底分支上。bypass 放到判定之后：`remove list` 这类根本不问的调用不该在
+        // 审计日志里留下一条"跳过了确认"。
+        const confirmName = String(exec.name)
+        if (ARG_CONDITIONAL_CONFIRM_TOOLS.has(confirmName)) {
+          const reason = argConditionalConfirmReason(confirmName, exec.arguments, await scopeStore.mode())
+          if (reason === null) return next()
+          if (bypassedByFullAccess(exec)) return next()
+          return Promise.resolve({ kind: 'ask', reason })
+        }
         if (bypassedByFullAccess(exec)) return next()
         if (exec.name === 'skill_manager_save') {
           // 卡是**执行前**弹的：此时工具还没读 `skill-state`，走建还是改还没判出来，

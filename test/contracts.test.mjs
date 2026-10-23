@@ -35,6 +35,7 @@ import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/s
 import { parseModeState } from '../lib/memories/service.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
+import { argConditionalConfirmReason } from '../lib/confirm-gate.js'
 import { createAccessToken, createFrozenGate, guardModelOps, installHandlerGuards } from '../lib/request-gate.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
 import { checkPatchWrite, decidePatchWrite, judgePatchText } from '../lib/compat/patch-dialect.js'
@@ -4641,4 +4642,26 @@ test('记忆搜索片段：压平换行、围绕命中截断、总长不超过 1
 
 test('记忆搜索工具出厂默认关闭（schema 成本按需付）', () => {
   assert.ok(DEFAULT_HIDDEN_TOOLS.includes('memory_manager_search'))
+})
+
+test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器级写入才拦', () => {
+  const asks = (name, args, mode = 'session') => argConditionalConfirmReason(name, args, mode) !== null
+  // 删除：trash 才是删除；list 是读、restore 是恢复（与 restart 同一档，不该拦）
+  assert.equal(asks('memory_manager_remove', { action: 'trash', id: 'global/x' }), true)
+  assert.equal(asks('memory_manager_remove', { action: 'restore', id: 't1' }), false)
+  assert.equal(asks('skill_manager_remove', { action: 'list' }), false)
+  // 缺 id 的删除注定失败：弹卡等于让用户批准一次做不成的操作
+  assert.equal(asks('memory_manager_remove', { action: 'trash' }), false)
+  // 提示词：正向应用要问，撤销（apply=false）不问
+  assert.equal(asks('prompt_manager_apply', { id: 'p' }), true)
+  assert.equal(asks('prompt_manager_apply', { id: 'p', apply: false }), false)
+  // MCP：restart 是服务器挂掉时的恢复路径（场景锁都为它开口），stop 是机器级停机
+  assert.equal(asks('mcp_manager_switch', { server: 's', action: 'stop' }), true)
+  assert.equal(asks('mcp_manager_switch', { server: 's', action: 'restart' }), false)
+  // 开关：默认写本会话（爆炸半径一个对话）不问，机器级才问
+  assert.equal(asks('memory_manager_switch', { memory: 'global/a', enabled: false }), false)
+  assert.equal(asks('memory_manager_switch', { memory: 'global/a', enabled: false, scope: 'global' }), true)
+  assert.equal(asks('skill_manager_switch', { name: 'x', enabled: false }, 'global'), true)
+  // 参数不成立时不拦：让工具自己报错，别产生无效审批
+  assert.equal(asks('subagent_manager_switch', { name: 'x' }), false)
 })
