@@ -361,7 +361,7 @@
            * 编辑器唯一的保存动作：场景本体（名字 / 描述 / 三个绑定）+ 档案四组一起落盘。
            * 创建：rules-create-scene 成功后，若四组里有任何一段已定义，接着 scene-archive-save
            * 把档案写进新场景 —— 原先「创建时顺手绑好」的语义不变；档案没存上时弹窗**不关**、
-           * 转为编辑态（主按钮变「保存到场景」），错误挂在弹窗顶部可重试。
+           * 转为编辑态（主按钮变「保存」），错误挂在弹窗顶部可重试。
            */
           function submitSceneEditor() {
             if (!modal || modal.type !== 'scene-editor') return
@@ -420,7 +420,7 @@
               apiCall('scene-archive-save', { scene: name, archive: archivePayload }).then(function (ares) {
                 if (ares && ares.ok) flushPendingMemories(name, isEdit, res, ares)
                 else {
-                  // 场景已建/已改、档案没存上：留在编辑器里如实报错，主按钮变「保存到场景」可重试。
+                  // 场景已建/已改、档案没存上：留在编辑器里如实报错，主按钮变「保存」可重试。
                   setBusy(false)
                   setModal(Object.assign({}, modal, { name: name, error: translateError(t, ares) }))
                 }
@@ -568,9 +568,9 @@
           // 与记忆页同一个写入口（`rules-toggle`）。于是「记忆页开了 → 档案页显示开启」
           // 天然成立，不存在两套状态、也不需要双向同步代码。
           //
-          // 已存在记忆的勾选**立即提交**（不等「保存到场景」）：它是全局状态，不属于场景档案。
+          // 已存在记忆的勾选**立即提交**（不等「保存」）：它是全局状态，不属于场景档案。
           // 本次新配的记忆是**草稿**，走另一条路 —— 存在 `modal.pendingMems` 里，点「创建 /
-          // 保存到场景」时才落盘（见 flushPendingMemories），所以两种时机的行为没有分叉。
+          // 保存」时才落盘（见 flushPendingMemories），所以两种时机的行为没有分叉。
           //
           // **只列被编辑场景自己的记忆**：保留场景 `global` 恒定注入（任何对话都生效），
           // 不需要在这里配置，列出来只会让人以为「不勾就不注入」。
@@ -654,7 +654,7 @@
           /**
            * 组 4：记忆集。两段内容拼在一张清单里：
            *   · 已存在的记忆 —— 勾选**立即提交**（P5：单一真相源 = `rules[*].enabled`，不随「保存」落盘）；
-           *   · 本次新配的草稿 —— 只存在于编辑器里，随「创建 / 保存到场景」一起落盘（`pendingMems`）。
+           *   · 本次新配的草稿 —— 只存在于编辑器里，随「创建 / 保存」一起落盘（`pendingMems`）。
            */
           /**
            * 附件标记（回形针 + 个数）。两种来源同一副长相：已落盘的真记忆读宿主在
@@ -754,7 +754,7 @@
            * 场景选择器** —— 场景由编辑器上下文定死，以只读一行显示。
            *
            * 与其余三组同一条模型：**弹窗里建出来的都只是草稿**，存在 `modal.pendingMems` 里，
-           * 点「创建 / 保存到场景」那一刻才真正落盘（`flushPendingMemories`）。创建态如此，
+           * 点「创建 / 保存」那一刻才真正落盘（`flushPendingMemories`）。创建态如此，
            * 编辑态也一样（用户 2026-10-14：「已经存在的场景，本次创建记忆应该也能编辑、移除，
            * 也是未创建的记录」）—— 于是两种时机只有**落点**不同，行为不再分叉：草稿行一律
            * 可勾选、可编辑、可移除。
@@ -878,7 +878,7 @@
            * 弹窗的提交动作：**先问一句再退号**（用户 2026-10-14 第二轮）。
            *
            * 原来这里静默退号 —— 输入框里写着「测」，草稿行上却是「测（1）」。现在撞名先弹一个
-           * 小窗说明，确认后才按 `测（1）` 攒草稿。落盘仍然是点「创建 / 保存到场景」那一刻
+           * 小窗说明，确认后才按 `测（1）` 攒草稿。落盘仍然是点「创建 / 保存」那一刻
            * （见 flushPendingMemories）：这里一个请求都不发。
            */
           function submitMemoryCreate() {
@@ -1334,7 +1334,7 @@
           /**
            * 场景编辑器（新建 / 编辑 / 档案三弹窗融合，REDESIGN §6.2）：L=720 列表壳。
            * 一行两格（场景名 | 描述）→ 绑定行（三下拉并排）→ 摘要行 → 四组 2×2 →
-           * footer [删除场景(仅编辑态,左)] [取消] [保存到场景/创建]。
+           * footer [删除场景(仅编辑态,左)] [取消] [保存/创建]。
            * MCP 服务器编辑弹窗渲染在外层：不能放进列表 Modal 的滚动容器里（会被裁掉）。
            */
           function editorNode() {
@@ -1366,7 +1366,7 @@
               : (quickOptions || []).filter(function (p) { return p.enabled !== false }).length
             // 「删除场景」已从编辑页移除（用户 2026-10-12）：删除是**场景卡片**上那一颗
             // （行内二次确认弹窗），编辑页的主职责是改内容 —— 左下角再挂一颗红键，和
-            // 「取消 / 保存到场景」并排，误触代价又最大（会带走该场景下的全部记忆）。
+            // 「取消 / 保存」并排，误触代价又最大（会带走该场景下的全部记忆）。
             var main = React.createElement(Modal, { key: 'sedit', list: true, className: 'dsm-modal-list dsm-modal-editor',
               // 档案摘要挂在**标题旁边**（2026-10-12 重排）：它是一句"现在配了多少"的概览，
               // 原来单占一行（24px + 12px 间距）把四组往下顶；并入标题后这一行省给清单体。
@@ -1762,6 +1762,32 @@
               refresh(true)
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
+          /**
+           * 页头「全部关闭」：把所有仍在场景里的会话 / 工作区退出场景，回到各自进入前的样子。
+           * 只在真有临时运行时出现 —— 全局层那条「退出模式」只退当前运行态，管不到别的对话。
+           */
+          function stopAllScenes() {
+            var count = scopeSceneLeaseCount()
+            if (!count) return
+            setBusy(true); setResult(null)
+            apiCall('scope-stop-now', { domain: 'scene' }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+              setResult({ ok: true, text: t('scope.stopAll.done', { count: Number((res && res.cleared) || count) }) })
+              // 本地清零：页头按钮立刻消失，不重拉整层（会重排列表）。
+              scopeForgetSceneLeases()
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          /** 单张场景卡的「统一关闭」：只退出进入过这一场的对话 / 工作区。 */
+          function stopOneScene(name) {
+            setBusy(true); setResult(null)
+            apiCall('scope-stop-now', { domain: 'scene', key: name }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+              setResult({ ok: true, text: t('scope.unifiedClose.sceneDone', { name: name }) })
+              scopeForgetSceneLeases(name)
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
           /** 锁 / 解锁本会话的覆盖（0.21.2，决策 12）：只冻结这一层，与场景锁互不干扰。 */
           function toggleSessionLock() {
             if (busy) return
@@ -1888,6 +1914,7 @@
                   onClick: function () { saveEnterPreview(!enterPreview) },
                 }, enterPreview ? t('scenes.preview.toggle.off') : t('scenes.preview.toggle.on')),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setTrash(true) } }, t('trash.btn.open')),
+                scopeSceneLeaseCount() > 0 ? React.createElement('button', { key: 'stopall', type: 'button', className: 'dsm-btn dsm-btn-danger-outline', disabled: busy || sceneStats.locked > 0, onClick: stopAllScenes }, t('scope.stopAll')) : null,
               ],
             }),
             // 列表工具条（REDESIGN §3.3，切片四）：搜索住 children；场景页没有批量动作与筛选下拉。
@@ -2074,6 +2101,7 @@
                       key: 'menu',
                       label: t('row.menu', { name: label }),
                       items: [
+                        ...(scopeIsSession() || scopeSceneLeaseCount(name) <= 0 ? [] : [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || sceneStats.locked > 0, title: sceneStats.locked > 0 ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setModal({ type: 'scene-stop', name: name }) } }]),
                         { key: 'edit', label: t('scenes.row.edit'), disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { openEditor(scene) } },
                       ].concat(locked ? [] : [
                         { key: 'delete', label: t('scenes.row.delete'), danger: true, disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setModal({ type: 'scene-delete', name: name }) } },
@@ -2085,6 +2113,11 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDeleteScene(modal.name) } }, t('memory.btn.deleteScene')))) : null,
+            modal && modal.type === 'scene-stop' ? React.createElement(Modal, { key: 'sstop', className: 'dsm-modal-sm', title: t('scope.unifiedClose'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('scope.unifiedClose.sceneDesc', { name: modal.name })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { var name = modal.name; setModal(null); stopOneScene(name) } }, t('scope.unifiedClose')))) : null,
             // 「进入场景」的改动预览卡（askEnter）。预览拿不到时不拦进入这条路 ——
             // 这是一张说明卡，不是一道新门禁；把它做成前置条件就等于新增了"进不去场景"。
             //

@@ -335,6 +335,34 @@
               refresh(true)
             })
           }
+          /**
+           * 页头「全部关闭」：把各会话 / 工作区 / 场景里单独开着的记忆一并停掉。
+           * 只改全局索引停不到别的对话 —— 那些是各层自己的认领，得走统一关闭 op 清掉。
+           */
+          function stopAllMemories() {
+            var keys = scopeLeaseKeys('memory')
+            if (!keys.length) return
+            setBusy(true); setResult(null)
+            apiCall('scope-stop-now', { domain: 'memory', keys: keys }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+              if (res && res.warnings && res.warnings.length) { setResult({ ok: false, text: res.warnings.join('；') }); return }
+              setResult({ ok: true, text: t('scope.stopAll.done', { count: keys.length }) })
+              // 本地摘掉租约：页头按钮与行内「单独设置」徽章立刻消失，不重拉整层。
+              scopeForgetLeases('memory', keys)
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          /** 单条记忆的「统一关闭」：清掉各对话 / 工作区单独打开它的覆盖，全局启停不动。 */
+          function stopOneMemory(rule) {
+            var id = String(rule.id)
+            setBusy(true); setResult(null)
+            apiCall('scope-stop-now', { domain: 'memory', key: id }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+              setResult({ ok: true, text: t('scope.unifiedClose.viewDone', { name: rule.name || id }) })
+              scopeForgetLeases('memory', [id])
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
           /** 可批量切换的记忆 = 非被同名 bundle 覆盖的（与行内 Switch 同一条件）。 */
           function toggleableIds(rules) {
             return (rules || []).filter(function (r) { return r.shadowed !== true }).map(function (r) { return String(r.id) })
@@ -608,6 +636,7 @@
                   // 「编辑」在锁定态**照常可点**（用户 2026-10-12：「场景锁定下改成子智能体、
                   // 提示词、记忆可以打开编辑页面，但是不能保存」）：只读地看一眼内容不该被锁挡住，
                   // 真正写盘的那一步（弹窗里的保存键）才置灰。其余会写盘的动作照旧置灰。
+                  ...(scopeLeaseCount('memory', String(r.id)) > 0 ? [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || scopeWriteLocked(anyLocked), onClick: function () { setModal({ type: 'stop', rule: r }) } }] : []),
                   { key: 'edit', label: t('memory.edit'), disabled: busy || shadowed, onClick: function () { openEditor(r) } },
                   { key: 'delete', label: t('memory.delete'), danger: true, disabled: busy || shadowed || anyLocked, onClick: function () { setModal({ type: 'delete', rule: r }) } },
                 ],
@@ -720,6 +749,7 @@
                 // 同排读起来才成组；留在工具条会把搜索行挤窄，而那一行现在要让给搜索框。
                 React.createElement('button', { key: 'bulk', type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy || scopeWriteLocked(anyLocked) || !bulkIds.length, onClick: function () { setMemories(bulkIds, !bulkAllOn, null) } }, bulkPair(bulkAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), bulkAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
+                scopeLeaseKeys('memory').length > 0 ? React.createElement('button', { key: 'stopall', type: 'button', className: 'dsm-btn dsm-btn-danger-outline', disabled: busy || scopeWriteLocked(anyLocked), onClick: stopAllMemories }, t('scope.stopAll')) : null,
               ],
             }),
             // 两条横幅（与 MCP / 技能 / 子智能体页同源、同位置、同顺序）：
@@ -759,6 +789,11 @@
               React.createElement('p', { className: 'dsm-help' }, t('memory.delete.desc', { name: modal.rule.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('memory.btn.delete.confirm')))) : null,
+            modal && modal.type === 'stop' ? React.createElement(Modal, { key: 'mstop', className: 'dsm-modal-sm', title: t('scope.unifiedClose'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('scope.unifiedClose.viewDesc', { name: modal.rule.name || modal.rule.id })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { var rule = modal.rule; setModal(null); stopOneMemory(rule) } }, t('scope.unifiedClose')))) : null,
             modal && modal.type === 'import' ? React.createElement(ImportModal, {
               key: 'mimp', t: t, title: t('memory.import.title'), busy: busy, hint: t('upload.drop.mzip'),
               requirement: t('upload.req.mdzip'),

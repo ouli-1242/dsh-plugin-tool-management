@@ -16,8 +16,9 @@
 //     删除 / 归档 / 场景改档案这几条路径分叉。
 //
 // 用户要求「仍按租约运行」：全局 off + 有租约 → 连接保持运行，但只有认领的
-// 会话看得到它；未认领的会话（含新会话）一律按 off。`blocked`（界面上的「彻底停止」）是
-// 唯一的立即停机路径：显式拒绝，压过租约与一切会话层。
+// 会话看得到它；未认领的会话（含新会话）一律按 off。`blocked` 是显式拒绝，压过租约与
+// 一切会话层；新界面不再写它 —— MCP 的「统一关闭」已改为一次性动作（先写 off 再清掉
+// 各层认领），读侧仍认这个值，保证升级前留下的记录照旧生效。
 //
 // ## 为什么只有这三格有意图
 //
@@ -35,7 +36,7 @@ import type { SceneArchive } from '../memories/archive.js'
 import { SCOPE_FLAG_DOMAINS, layeredFlagWithChildren, overrideOf, type ScopeFlagDomain, type ScopeMode, type SessionScope } from './scope-overrides.js'
 import { isWorkspaceScopeKey, scopeKeyOfRow } from './workspace-key.js'
 
-/** 意图三态。`blocked` = 彻底停止（显式拒绝，压过租约）。 */
+/** 意图三态。`blocked` = 显式拒绝，压过租约与一切会话层（旧版本的值；新界面不再写它）。 */
 export type IntentState = 'on' | 'off' | 'blocked'
 
 /**
@@ -129,9 +130,9 @@ export interface ResourceView {
  * 一台服务器 / 一个来源在某个会话里的可见性。`lower` 是会话的那三层
  * （覆盖 → 场景层 → 基线）的并值，`undefined` = 三层都没话说。
  *
- * 优先级：`blocked`（全局彻底停止）> 会话层 > `on` / `off` > 运行态。
- * blocked 压过会话层是"彻底停止"的定义：否则一个还留着 `mcp[x]=true` 的会话就能把它复活，
- * 用户点了「彻底停止」却还看得见工具，那一步就没有出口了。
+ * 优先级：`blocked`（显式拒绝）> 会话层 > `on` / `off` > 运行态。
+ * blocked 压过会话层是它的定义：否则一个还留着 `mcp[x]=true` 的会话就能把它复活，
+ * 那一步就没有出口了。
  */
 export function resolveResource(intent: IntentState | undefined, lower: boolean | undefined): ResourceView {
   if (intent === 'blocked') return { visible: false, claim: false }

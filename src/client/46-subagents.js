@@ -95,6 +95,35 @@
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
           /**
+           * 页头「全部关闭」：把各会话 / 工作区 / 场景里单独开着的人设一并停掉。
+           * 与快捷提示词同一条：只改全局启停名单停不到别的对话，得走统一关闭 op 清各层认领。
+           */
+          function stopAllSubagents() {
+            var keys = scopeLeaseKeys('subagents')
+            if (!keys.length) return
+            setResult(null)
+            setBusy(true)
+            apiCall('scope-stop-now', { domain: 'subagents', keys: keys }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+              if (res && res.warnings && res.warnings.length) { setResult({ ok: false, warning: true, text: res.warnings.join('；') }); return }
+              setResult({ ok: true, text: t('scope.stopAll.done', { count: keys.length }) })
+              // 本地摘掉租约：页头按钮与行内「单独设置」徽章立刻消失，不重拉整层。
+              scopeForgetLeases('subagents', keys)
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          /** 单条人设的「统一关闭」：清掉各对话 / 工作区单独打开它的覆盖，全局启停不动。 */
+          function stopOnePersona(name) {
+            setResult(null)
+            setBusy(true)
+            apiCall('scope-stop-now', { domain: 'subagents', key: name }).then(function (res) {
+              setBusy(false)
+              if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
+              setResult({ ok: true, text: t('scope.unifiedClose.viewDone', { name: name }) })
+              scopeForgetLeases('subagents', [name])
+            }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+          /**
            * 人设表单的候选数据（模型目录 / 全体预设工具并集）只在**首次展开高级选项**时拉取：
            * 宿主枚举预设需要为尚未挂载的预设建立 standing mount，不该在打开弹窗时就付这个代价。
            */
@@ -722,6 +751,7 @@
                 React.createElement('button', { key: 'import', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || anyLocked, onClick: function () { setResult(null); setModal({ type: 'import' }) } }, t('subagents.import')),
                 React.createElement('button', { key: 'export', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy || !data.subagents.length, onClick: function () { setResult(null); setModal({ type: 'export' }) } }, t('export.subagents')),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', onClick: function () { setTrash(true) } }, t('trash.btn.open')),
+                scopeLeaseKeys('subagents').length > 0 ? React.createElement('button', { key: 'stopall', type: 'button', className: 'dsm-btn dsm-btn-danger-outline', disabled: busy || anyLocked, onClick: stopAllSubagents }, t('scope.stopAll')) : null,
               ],
             }),
             anyLocked === true && !scopeIsSession() ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
@@ -792,6 +822,7 @@
                       key: 'menu',
                       label: t('row.menu', { name: p.name }),
                       items: [
+                        ...(scopeLeaseCount('subagents', String(p.name)) > 0 ? [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || anyLocked, onClick: function () { setModal({ type: 'stop', name: p.name }) } }] : []),
                         { key: 'edit', label: t('memory.edit'), disabled: busy, onClick: function () { openEditor(p.name) } },
                         { key: 'delete', label: t('memory.delete'), danger: true, disabled: busy || anyLocked, onClick: function () { setModal({ type: 'delete', name: p.name }) } },
                       ],
@@ -986,6 +1017,11 @@
               React.createElement('p', { className: 'dsm-help' }, t('subagents.delete.desc', { name: modal.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.name) } }, t('memory.btn.delete.confirm')))) : null,
+            modal && modal.type === 'stop' ? React.createElement(Modal, { key: 'sstop', className: 'dsm-modal-sm', title: t('scope.unifiedClose'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('scope.unifiedClose.viewDesc', { name: modal.name })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { var name = modal.name; setModal(null); stopOnePersona(name) } }, t('scope.unifiedClose')))) : null,
             modal && modal.type === 'import' ? React.createElement(ImportModal, { key: 'simp', t: t, title: t('subagents.import.title'), busy: busy, hint: t('upload.drop.mzip'), requirement: t('upload.req.mdzip'), requirementTitle: [t('upload.requirement.persona.1'), t('upload.requirement.persona.2'), t('upload.requirement.persona.3')].join('\n'), onClose: function () { setModal(null) }, onSubmit: submitImport }) : null,
             modal && modal.type === 'export' ? React.createElement(ExportModal, {
               key: 'export', t: t, title: t('export.subagents'),

@@ -280,7 +280,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
       // 调用方是否**以为**自己在改会话层（省略 scope 也算）。全局粒度下这个以为会落空，
       // 回执必须点出来 —— 否则 agent 会把"机器级改动"转述成"只影响这个对话"。
       const askedForSession = (args && args.scope) !== 'global'
-      // restart 与 stop 都是机器级动作（重启要真停一次；彻底停止定义上就压过所有会话），
+      // restart 与 stop 都是机器级动作（重启要真停一次；blocked 定义上就压过所有会话），
       // 没有会话版本 —— 与 restart 同一条，忽略 scope 并如实点出来。
       const sessionOnly = scope !== 'global' && action !== 'restart' && action !== 'stop'
       // on|off 会写补丁（`mcpm-set-enabled` / `mcpm-tool-enabled` 在登记表里是 frozen），

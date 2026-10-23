@@ -205,7 +205,7 @@ export function createArchiveEngine(deps: ArchiveEngineDeps): ArchiveEngine {
    * 还原到快照（退出模式与失败回滚共用同一条路径）：
    * MCP 停用表**按快照原文整体回写**——模式自己写进去的键（未勾服务器的 ['*']）必须随之消失，
    * 否则退出后用户环境仍被静默停用（比"多留一个键"严重得多）；模式期间的手动改动不保留
-   * （「退出 = 恢复 mode.snapshot」，手动改动只在「保存到场景」时回写）。
+   * （「退出 = 恢复 mode.snapshot」，手动改动只在「保存」时回写）。
    * 技能只写快照列出的键（这是既有批量通道的语义）：模式期间新增的技能保持现状。
    * 上层两行（服务器级 / 来源级）按**全量**快照还原 —— 只回写与现状不同的行，见
    * mcpServerRowsToRestore / skillSourceRowsToRestore。

@@ -89,9 +89,6 @@
       const [liveCopied, setLiveCopied] = React.useState(false)
       // 功能总览（B6）：按功能点看"现在到底能不能用"。数据来自 feature-overview（只读聚合）。
       const [features, setFeatures] = React.useState(null)
-      // 更新检查（0.21.2）：只读、可缓存。取不到就整行不显示 —— 它不参与"能不能安全动数据"的结论。
-      const [updateInfo, setUpdateInfo] = React.useState(null)
-      const [updateCopied, setUpdateCopied] = React.useState(false)
       // 诊断包（0.21.2）：一段可复制的纯文本，不含密钥 / 正文 / 日志内容。
       const [diagCopied, setDiagCopied] = React.useState(false)
       const [busy, setBusy] = React.useState(false)
@@ -605,13 +602,6 @@
           .then(function (r) { if (alive !== false && r && r.ok) setFeatures(r) })
           .catch(function () { /* 同上 */ })
       }
-      // 更新检查：只回答"有没有与**本宿主**兼容的新版"，不改任何配置。
-      // 失败（无网 / 代理 / registry 故障）不弹错误横幅 —— 这一行只是信息，不是体检结论。
-      const loadUpdate = function (alive, force) {
-        apiCall('update-status', force ? { refresh: true } : {})
-          .then(function (r) { if (alive !== false && r && r.ok) setUpdateInfo(r) })
-          .catch(function () { /* 静默：没有更新信息不影响本页任何结论 */ })
-      }
       /** 复制诊断包：服务端只回白名单字段拼成的纯文本，界面不自己拼（避免两处口径分家）。 */
       const copyDiagnostics = function () {
         apiCall('diagnostics', {}).then(function (r) {
@@ -649,7 +639,6 @@
         loadSlash(alive)
         loadLive(alive)
         loadFeatures(alive)
-        loadUpdate(alive)
         loadToken(alive)
         loadBackups(alive)
         return function () { alive = false }
@@ -1671,38 +1660,6 @@
             t('compat.host.mismatch')
               .replace('{host}', String(hostVersion))
               .replace('{verified}', String(data.verifiedVersion))))
-        }
-
-        // 更新检查（0.21.2）：只报"有没有与**本宿主**兼容的新版"，不改配置、不自动更新。
-        // 与体检结论分开显示：它是一条信息，不是"能不能安全动数据"的一部分。
-        //
-        // `local-ahead` 整行不渲染（用户 2026-10-22 裁定：删掉「本地版本 X 比 registry 上
-        // 兼容的最高版 Y 更新」+「复制安装命令」）。本地比 registry 最高兼容版还新时，
-        // registry 上没有任何**可装**的版本 —— 这句话没有下文可执行；更糟的是右边那颗
-        // 按钮仍然会出来，而它的命令 pin 的是 `bestCompatible`（见 update-check.ts 的
-        // `finish()`：只要 bestCompatible 存在就拼 command），点下去是**降级**。既然这一
-        // 行没有可做的事，就不要占位。
-        if (updateInfo && String(updateInfo.status || '') !== 'local-ahead') {
-          const st = String(updateInfo.status || 'unknown')
-          // 文案由 `updateStatusText` 一处生成：顶部栏那颗 GitHub 图标点击后说的是**同一句**
-          // （见 20 片）。这里只留"语气"这一层判断 —— 有更新时整行标黄。
-          const updateText = updateStatusText(updateInfo, t)
-          const copyCmd = function () {
-            if (!updateInfo.command) return
-            try {
-              if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(String(updateInfo.command)).then(function () {
-                  setUpdateCopied(true)
-                  setTimeout(function () { setUpdateCopied(false) }, 1500)
-                })
-              }
-            } catch (e) { /* 剪贴板不可用：命令仍可手动选中复制 */ }
-          }
-          push(React.createElement('p', { className: 'dsm-help' + (st === 'update-available' ? ' dsm-help-warn' : '') },
-            updateText,
-            updateInfo.command ? React.createElement('button', {
-              type: 'button', className: 'dsm-btn dsm-btn-quiet', title: String(updateInfo.command), onClick: copyCmd,
-            }, updateCopied ? t('compat.update.copied') : t('compat.update.copy')) : null))
         }
 
         // 功能总览（B6）：一行一个功能点，状态 = 装配层 + 宿主能力层 + 用户配置层 的合成

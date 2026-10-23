@@ -139,11 +139,15 @@
      * （颜色统一为绿/灰，这个标记只留给"来源点"与统计用）。全局层恒 `scoped: false`。
      */
     function scopeFlag(domain, key, globalValue) {
-      // 全局「彻底停止」压过一切会话层（与后端 `resolveResource` 同一条）：会话里的覆盖、
+      // 全局 blocked（旧版「统一关闭」留下的持久停机）压过一切会话层（与后端 `resolveResource` 同一条）：会话里的覆盖、
       // 场景勾选、逐工具 / 单条技能的推导都不能把它显成开着 —— 否则开关是绿的、模型调不到。
-      // 技能还要看所在来源：来源被彻底停止时，技能级开着也加载不到。
+      // 技能还要看所在来源：来源被 blocked 时，技能级开着也加载不到。
       if (domain === 'mcp' || domain === 'skills' || domain === 'skillSources') {
-        if (scopeIntentOf(domain, key) === 'blocked') return { value: false, scoped: false }
+        var intentState = scopeIntentOf(domain, key)
+        if (intentState === 'blocked') return { value: false, scoped: false }
+        // 意图比列表里那份 `globalOn` 新：写完统一关闭后列表还没重读，全局开关也该立刻翻过去。
+        if (intentState === 'on') globalValue = true
+        else if (intentState === 'off') globalValue = false
       }
       if (domain === 'mcpTools') {
         var mt = String(key).indexOf('/')
@@ -162,7 +166,7 @@
     //
     // MCP 服务器与技能来源两格的全局开关**不是**补丁 / 来源状态，而是意图：
     //   on —— 全局启用；off —— 全局关闭（有会话还在用就保持运行，即租约）；
-    //   blocked —— 彻底停止（压过租约与一切会话层）。
+    //   blocked —— 持久停机（旧版统一关闭；压过租约与一切会话层）。
     // 界面上的全局开关读意图；"临时运行 · N 个对话"来自 `leases`，它是全局 off 却能跑的
     // 唯一解释。会话层不显示意图（那一层只回答"这个对话看不看得到"）。
     /** 某一格的全局意图：`'on' | 'off' | 'blocked' | null`（没记录 = 跟随运行态）。 */
@@ -177,6 +181,78 @@
       var leases = scopeState.global && scopeState.global.leases ? scopeState.global.leases[domain] : null
       var n = leases && typeof leases === 'object' ? Number(leases[key]) : 0
       return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+    }
+    /** 这一域此刻有租约的键（全局层专用；会话层返回空）。「全部关闭」按它取目标集。 */
+    function scopeLeaseKeys(domain) {
+      if (scopeIsSession()) return []
+      var leases = scopeState.global && scopeState.global.leases ? scopeState.global.leases[domain] : null
+      if (!leases || typeof leases !== 'object') return []
+      return Object.keys(leases).filter(function (key) { return Number(leases[key]) > 0 })
+    }
+    /**
+     * 统一关闭成功后**就地**摘掉本地快照里的租约与意图，不等 `scope-get` 回来。
+     *
+     * 为什么不能改成再拉一次：服务端快照有短 TTL，紧接着的 `scope-get` 可能仍是写前的
+     * 那一份 —— 徽章会先消失又冒回来；而且整层重拉会让列表按新状态重新定序，用户刚打开的
+     * 几条会被顶到最前。这里只改这次操作真正碰到的那几格。
+     */
+    function scopeForgetLeases(domain, keys) {
+      if (scopeIsSession()) return
+      var global = scopeState.global
+      if (!global) return
+      var list = (Array.isArray(keys) ? keys : [keys]).map(function (key) { return String(key) })
+      if (!list.length) return
+      var patch = {}
+      var leases = global.leases || {}
+      var domainLeases = Object.assign({}, leases[domain] || {})
+      var leasesChanged = false
+      list.forEach(function (key) {
+        if (domainLeases[key] !== undefined) { delete domainLeases[key]; leasesChanged = true }
+      })
+      if (leasesChanged) {
+        var nextLeases = Object.assign({}, leases)
+        nextLeases[domain] = domainLeases
+        patch.leases = nextLeases
+      }
+      if (domain === 'mcp' || domain === 'skills' || domain === 'skillSources') {
+        var intent = global.intent || {}
+        var nextDomainIntent = Object.assign({}, intent[domain] || {})
+        list.forEach(function (key) { nextDomainIntent[key] = 'off' })
+        var nextIntent = Object.assign({}, intent)
+        nextIntent[domain] = nextDomainIntent
+        patch.intent = nextIntent
+      }
+      if (patch.leases === undefined && patch.intent === undefined) return
+      setScopeState({ global: Object.assign({}, global, patch) })
+    }
+    /** 有多少个会话 / 工作区进入了场景（全局层专用；会话层返回 0）。传场景名只数那一个。 */
+    function scopeSceneLeaseCount(sceneName) {
+      if (scopeIsSession()) return 0
+      var global = scopeState.global || {}
+      var raw = sceneName === undefined
+        ? global.sceneLeases
+        : (global.sceneLeaseCounts || {})[String(sceneName)]
+      var n = Number(raw)
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+    }
+    /** 统一关闭某个（或全部）场景后，就地改本地计数 —— 理由同 `scopeForgetLeases`。 */
+    function scopeForgetSceneLeases(sceneName) {
+      if (scopeIsSession()) return
+      var global = scopeState.global
+      if (!global) return
+      var counts = Object.assign({}, global.sceneLeaseCounts || {})
+      var total = Number(global.sceneLeases) || 0
+      if (sceneName === undefined) {
+        counts = {}
+        total = 0
+      } else {
+        var key = String(sceneName)
+        var n = Number(counts[key]) || 0
+        if (n <= 0) return
+        delete counts[key]
+        total = Math.max(0, total - n)
+      }
+      setScopeState({ global: Object.assign({}, global, { sceneLeaseCounts: counts, sceneLeases: total }) })
     }
     /** 全局开关的**显示值**：意图优先（blocked 也是关），没记录才落到运行态。 */
     function scopeGlobalOn(domain, key, runningOn) {

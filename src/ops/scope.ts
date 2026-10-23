@@ -56,7 +56,7 @@ import {
   type SessionBaseline,
   type SessionScope,
 } from '../scope/scope-overrides.js'
-import { isIntentDomain, normalizeIntentState, type IntentDomain, type IntentState, type ScopeReconcileReport } from '../scope/intent.js'
+import { effectiveLayerOf, isIntentDomain, normalizeIntentState, type IntentDomain, type IntentState, type ScopeReconcileReport } from '../scope/intent.js'
 import { normalizePresetId } from '../prompts/preset-id.js'
 import { isWorkspaceScopeKey, scopeKeyLabel, scopeKeyOfRow, workspaceScopeKeyOf } from '../scope/workspace-key.js'
 import { workspaceBaseName } from '../sessions/path-key.js'
@@ -223,8 +223,8 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
   /**
    * 这一格落到哪些**意图**域/键上（逐工具 → 服务器；单条技能 → 自己 + 所在来源）。
    *
-   * 用途只有两个：判断全局是不是「彻底停止」，以及回执里点名"仅为这个对话临时运行"的那一格。
-   * 技能要**两个**都查：来源被彻底停止时，技能级策略表开着也加载不到 —— 只查自己会给出
+   * 用途只有两个：判断全局是不是「统一关闭」，以及回执里点名"仅为这个对话临时运行"的那一格。
+   * 技能要**两个**都查：来源被统一关闭时，技能级策略表开着也加载不到 —— 只查自己会给出
    * 一条"能开"的假承诺。
    */
   function intentTargetsOf(domain: ScopeFlagDomain, key: string): Array<{ domain: IntentDomain; key: string }> {
@@ -473,10 +473,10 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
             for (const root of roots) entries.push({ domain: 'skillSources', key: root })
           }
           warnings = warnings.concat(reconcileWarnings(report, entries))
-          // 全局「彻底停止」压过场景：勾中它也不会运行。不说的话用户会以为场景坏了。
+          // 全局「统一关闭」压过场景：勾中它也不会运行。不说的话用户会以为场景坏了。
           for (const entry of entries) {
             if (global.intent?.[entry.domain]?.[entry.key] === 'blocked') {
-              warnings.unshift(`${intentLabel(entry.domain)}「${entry.key}」已在全局「彻底停止」：这个场景里它不会运行`)
+              warnings.unshift(`${intentLabel(entry.domain)}「${entry.key}」已在全局「统一关闭」：这个场景里它不会运行`)
             }
           }
         }
@@ -496,13 +496,13 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
       if (key === '__proto__') return { ok: false, error: '非法 key: __proto__' }
       if (typeof (args && args.value) !== 'boolean') return { ok: false, error: 'value 必须是布尔值（只按传入值写入，不做"翻转"推断）' }
       const value = args.value === true
-      // 全局「彻底停止」压过一切会话层（显式拒绝的语义）：写一条"开"只会看起来生效、
+      // 全局「统一关闭」压过一切会话层（显式拒绝的语义）：写一条"开"只会看起来生效、
       // 实际调不到 —— 当场拒掉并给出出口（先把全局改成关闭或启用）。
       // 技能要连**所在来源**一起查：来源停了，技能级策略开着也加载不到。
       const blockedTarget = intentTargetsOf(domain, key)
         .find((target) => global.intent?.[target.domain]?.[target.key] === 'blocked')
       if (value && blockedTarget !== undefined) {
-        return { ok: false, error: `「${blockedTarget.key}」已在全局「彻底停止」：先把全局改回关闭或启用，它才可能再运行` }
+        return { ok: false, error: `「${blockedTarget.key}」已在全局「统一关闭」：先把全局改回关闭或启用，它才可能再运行` }
       }
       // 下层值的**预检**（锁外、读缓存）：只为快速拒绝，不是权威判定 —— 权威那一份在
       // `store.mutate` 的锁内按**重读出来的** `cur` 再算一次（见下面 `effectiveParent`）。
@@ -995,12 +995,13 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         return { ok: false, error: '切换失败: ' + deps.message(e) }
       }
     },
-    // 全局意图：MCP 服务器 / 技能来源两格的**全局开关**写这里，不再直接改补丁 /
-    // 来源状态 —— 后者是运行态，由对账器维持成 `意图 ∪ 租约`。三态里只有 `blocked`（界面的
-    // 「彻底停止」）会连租约一起停；`off` 在有租约时保持连接运行，只是别的会话看不到。
+    // 全局意图：MCP 服务器 / 技能（含来源）三格的**全局开关**写这里，不再直接改补丁 /
+    // 来源状态 —— 后者是运行态，由对账器维持成 `意图 ∪ 租约`。
+    // `blocked` 仍可读（旧版本留下的 MCP 值），新界面不再写它：「统一关闭」是一次性
+    // 动作，走下面的 `scope-stop-now`。
     'scope-intent-set': async (args: any) => {
       const domain = String((args && args.domain) || '').trim()
-      if (!isIntentDomain(domain)) return { ok: false, error: `未知 domain: ${domain}（可用：mcp / skillSources）` }
+      if (!isIntentDomain(domain)) return { ok: false, error: `未知 domain: ${domain}（可用：mcp / skillSources / skills）` }
       const raw = args && args.value
       const state = normalizeIntentState(raw) ?? (raw === true ? 'on' as const : raw === false ? 'off' as const : undefined)
       if (state === undefined) return { ok: false, error: 'value 必须是 on / off / blocked' }
@@ -1023,6 +1024,91 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         .filter((item) => item.domain === domain && keySet.has(item.key))
         .map((item) => `「${item.key}」的全局意图已记下，但运行态没跟上（${item.error}）：下一次对账会再试`)
       return { ok: true, domain, value: state, keys, ...(warnings.length > 0 ? { warnings } : {}) }
+    },
+    /**
+     * 「统一关闭」/「全部关闭」：一次性停机，不留下持久的 `blocked`。
+     *
+     * 对布尔域：先把全局意图写成 `off`（只有 mcp / skills / skillSources 有意图），再把
+     * **所有层里开着它的**会话 / 工作区写成显式关闭 —— 只写 off 不够：那些层里的 `true`
+     * （或场景勾选）会在下一轮对账里成为租约，把它重新拉起来。显式 `false` 同时压过场景层，
+     * 所以场景里的会话也会一起停下。memory / subagents / quickPrompts 没有运行态，清掉
+     * 认领就够了。
+     *
+     * `scene` 没有布尔键：把每个进入过场景的会话 / 工作区退回基线（`exitSceneInScope`）；
+     * 带 `key` / `keys` 时只退这些场景，不带 = 页头「全部关闭」退全部。
+     * 全局正在用的那个场景不动 —— 它是全局设置，不是"临时运行"。
+     *
+     * 归档会话不写：它已经不占资源，改它的设置只是噪音。被锁的层照写 —— 这是用户显式
+     * 触发的全局停机，层锁保护的是误触，不是拒绝停机。
+     */
+    'scope-stop-now': async (args: any) => {
+      const domain = String((args && args.domain) || 'mcp').trim()
+      const isFlagDomainArg = (value: string): value is ScopeFlagDomain =>
+        value === 'mcp' || value === 'skills' || value === 'skillSources' || value === 'memory' || value === 'subagents' || value === 'quickPrompts'
+      if (domain !== 'scene' && !isFlagDomainArg(domain)) {
+        return { ok: false, error: `不支持的 domain: ${domain}（可用：mcp / skills / skillSources / memory / subagents / quickPrompts / scene）` }
+      }
+      let archived = new Set<string>()
+      try {
+        archived = new Set((await deps.sessions()).filter((row) => row.archived === true).map((row) => row.id))
+      } catch { /* 清单读不到：不按归档过滤，宁可多关几格 */ }
+      if (domain === 'scene') {
+        // 不带 key = 页头的「全部关闭」；带 key = 某一张场景卡菜单里的「统一关闭」。
+        const rawScenes: unknown[] = Array.isArray(args && args.keys)
+          ? (args.keys as unknown[])
+          : (args && args.key !== undefined ? [args.key] : [])
+        const sceneNames = new Set(rawScenes.map((key) => String(key)).filter((key) => key !== ''))
+        for (const key of sceneNames) {
+          if (key === '__proto__' || key.length > 256 || /[\u0000-\u001f\u007f]/.test(key)) return { ok: false, error: '非法 key: ' + key }
+        }
+        const res = await deps.store.mutateAll((scope, sessionId) => {
+          if (archived.has(sessionId) || typeof scope.scene !== 'string' || scope.scene === '') return scope
+          if (sceneNames.size > 0 && !sceneNames.has(scope.scene)) return scope
+          return exitSceneInScope(scope).scope
+        })
+        if (!res.ok) return { ok: false, error: '退出场景失败: ' + res.error }
+        if (res.changed > 0) deps.onChanged?.('', 'scene')
+        if (deps.reconcile !== undefined) await deps.reconcile().catch(() => undefined)
+        return { ok: true, domain, cleared: res.changed, ...(sceneNames.size > 0 ? { keys: [...sceneNames] } : {}) }
+      }
+      const rawList: unknown[] = Array.isArray(args && args.keys)
+        ? (args.keys as unknown[])
+        : (args && args.key !== undefined ? [args.key] : [])
+      const keys = [...new Set(rawList.map((key) => String(key)).filter((key) => key !== ''))]
+      if (keys.length === 0) return { ok: false, error: '缺少 key（或 keys）' }
+      if (keys.length > 512) return { ok: false, error: '一次最多改 512 项' }
+      for (const key of keys) {
+        if (key === '__proto__' || key.length > 256 || /[\u0000-\u001f\u007f]/.test(key)) return { ok: false, error: '非法 key: ' + key }
+      }
+      const runtime = domain === 'mcp' || domain === 'skills' || domain === 'skillSources'
+      if (runtime) {
+        if (deps.writeIntent === undefined) return { ok: false, error: '当前环境不支持全局意图写入' }
+        const error = await deps.writeIntent(domain as IntentDomain, keys, 'off')
+        if (error !== null) return { ok: false, error: '写入失败: ' + error }
+      }
+      const cleared: Record<string, number> = Object.create(null)
+      const res = await deps.store.mutateAll((scope, sessionId) => {
+        if (archived.has(sessionId)) return scope
+        const archive = scope.scene !== undefined ? deps.sceneArchiveOf?.(scope.scene) : undefined
+        const table: Record<string, boolean> | undefined = scope[domain]
+        let next = table
+        for (const key of keys) {
+          if (effectiveLayerOf(scope, archive, domain, key) !== true) continue
+          if (next === undefined) next = {}
+          else if (next === table) next = Object.assign({}, next)
+          next[key] = false
+          cleared[key] = (cleared[key] || 0) + 1
+        }
+        return next === table ? scope : Object.assign({}, scope, { [domain]: next })
+      })
+      if (!res.ok) return { ok: false, error: '关闭会话开关失败: ' + res.error }
+      if (res.changed > 0) deps.onChanged?.('', domain)
+      const report = runtime && deps.reconcile !== undefined ? await deps.reconcile().catch(() => undefined) : undefined
+      const keySet = new Set(keys)
+      const warnings = (report === undefined ? [] : report.failed)
+        .filter((item) => item.domain === domain && keySet.has(item.key))
+        .map((item) => `「${item.key}」已记录为关闭，但运行态没跟上（${item.error}）：下一次对账会再试`)
+      return { ok: true, domain, keys, cleared, ...(warnings.length > 0 ? { warnings } : {}) }
     },
     // 锁 / 解锁：与 `rules-scene-lock` 同一条 —— 它自己不能被锁挡住，否则锁上就解不开。
     'scope-lock': async (args: any) => {

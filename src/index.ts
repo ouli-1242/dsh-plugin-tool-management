@@ -1349,9 +1349,9 @@ export default {
     }
 
     /**
-     * 场景应用写全局意图：`blocked`（彻底停止）是比场景更强的用户要求，场景不得覆盖它
+     * 场景应用写全局意图：`blocked`（统一关闭）是比场景更强的用户要求，场景不得覆盖它
      * —— 只有全局意图开关（`scope-intent-set`）能解除。不挡的话，进一次包含这台服务器 /
-     * 这条技能的场景，就会把「彻底停止」悄悄降级成 off，之后任何会话的租约都能把它拉起来。
+     * 这条技能的场景，就会把「统一关闭」悄悄降级成 off，之后任何会话的租约都能把它拉起来。
      */
     function withSceneIntent(current: ScopeIntent, domain: IntentDomain, key: string, state: IntentState): ScopeIntent {
       if (intentOf(current, domain, key) === 'blocked') return current
@@ -1429,7 +1429,7 @@ export default {
         //     场景模式进出一次就会改写 state.json。意图那一格同口径。
         const { states, shadowed, unloadable, entryNames } = await skillScan()
         const intentSnap = intentStore.snapshot()
-        /** 全局「彻底停止」的技能：场景不得覆盖（见 `withSceneIntent`），物理启停也一并跳过。 */
+        /** 全局「统一关闭」的技能：场景不得覆盖（见 `withSceneIntent`），物理启停也一并跳过。 */
         const blocked = new Set<string>()
         const planned: Array<{ key: string; on: boolean; intentChanged: boolean }> = []
         const skipped: string[] = []
@@ -1443,12 +1443,12 @@ export default {
           if (unloadable.has(key)) continue
           // 这次扫描里根本没有这个键 = 技能已被删除（或所在目录已消失）：没有可写的对象。
           if (!(key in states)) { skipped.push(`${key}（已不存在）`); continue }
-          // 全局彻底停止压过场景（与 `scope-set` 拒写「开」同一条）：既不改意图也不动策略表。
-          // 技能还要看所在来源：来源被彻底停止时，技能级开关开着也加载不到（来源闸恒生效）。
+          // 全局统一关闭压过场景（与 `scope-set` 拒写「开」同一条）：既不改意图也不动策略表。
+          // 技能还要看所在来源：来源被统一关闭时，技能级开关开着也加载不到（来源闸恒生效）。
           if (intentOf(intentSnap, 'skills', key) === 'blocked' ||
             intentOf(intentSnap, 'skillSources', key.slice(0, i)) === 'blocked') {
             blocked.add(key)
-            if (on) skipped.push(`${key}（已在全局「彻底停止」）`)
+            if (on) skipped.push(`${key}（已在全局「统一关闭」）`)
             continue
           }
           const wanted: IntentState = on ? 'on' : 'off'
@@ -1531,13 +1531,13 @@ export default {
           const prev = wanted.get(name)
           wanted.set(name, prev === undefined ? s.enabled : prev || s.enabled)
         }
-        // 全局「彻底停止」压过场景：不改意图、不动补丁（见 `withSceneIntent`）。
+        // 全局「统一关闭」压过场景：不改意图、不动补丁（见 `withSceneIntent`）。
         const blocked = new Set<string>()
         for (const [name, enabled] of [...wanted]) {
           if (intentOf(intentSnap, 'mcp', name) !== 'blocked') continue
           wanted.delete(name)
           blocked.add(name)
-          if (enabled) ctx.logger?.warn?.(`场景要启用 MCP 服务器「${name}」，但它已在全局「彻底停止」：已跳过`)
+          if (enabled) ctx.logger?.warn?.(`场景要启用 MCP 服务器「${name}」，但它已在全局「统一关闭」：已跳过`)
         }
         if (wanted.size > 0) {
           await intentStore.mutate((current) => {
@@ -1611,12 +1611,12 @@ export default {
         // 与 MCP 同一条：场景引擎改的是全局定义 → 先写意图，再改来源状态（见
         // applyMcpServerSwitches 的注释；运行态 = 意图 ∪ 租约）。
         const intentSnap = intentStore.snapshot()
-        // 全局「彻底停止」压过场景：不改意图、不动来源状态（见 `withSceneIntent`）。
+        // 全局「统一关闭」压过场景：不改意图、不动来源状态（见 `withSceneIntent`）。
         const blocked = new Set<string>()
         for (const s of switches) {
           if (intentOf(intentSnap, 'skillSources', s.root) !== 'blocked') continue
           blocked.add(s.root)
-          if (s.enabled) ctx.logger?.warn?.(`场景要启用技能来源「${s.root}」，但它已在全局「彻底停止」：已跳过`)
+          if (s.enabled) ctx.logger?.warn?.(`场景要启用技能来源「${s.root}」，但它已在全局「统一关闭」：已跳过`)
         }
         if (switches.length > 0) {
           await intentStore.mutate((current) => {
@@ -2974,7 +2974,7 @@ export default {
       //
       // 只问**全局关着**的那些格：开着的那些本来就该显示成开着，数它没有意义，而记忆这类域
       // 可能有几百条键 —— 每次读面板都全扫一遍是不必要的成本。
-      // 键集合的口径：**意图域**只数「意图不是 on」的键（全局开着不是租约，彻底停止没有
+      // 键集合的口径：**意图域**只数「意图不是 on」的键（全局开着不是租约，统一关闭没有
       // 租约这回事）；**纯视图域**只数「全局关着」的键。两句话都只回答"这一格该不该挂徽章"。
       const leaseKeys: Partial<Record<ScopeFlagDomain, readonly string[]>> = {}
       for (const domain of SCOPE_FLAG_DOMAINS) {
@@ -2994,12 +2994,32 @@ export default {
         for (const [key, list] of leaseScan.claims[domain]) out[key] = list.length
         return out
       }
+      // 场景页的「全部关闭」：只数**会话层进入过场景**的未归档会话 / 工作区。全局正在用的
+      // 那个场景是全局设置，不算临时运行；没有场景覆盖时连会话清单都不读。
+      let sceneLeases = 0
+      const sceneLeaseCounts: Record<string, number> = Object.create(null)
+      try {
+        const overrides = await scopeStore.read()
+        const sceneIds = Object.entries(overrides.sessions)
+          .filter(([, scope]) => typeof scope.scene === 'string' && scope.scene !== '')
+          .map(([id]) => id)
+        if (sceneIds.length > 0) {
+          const rows = await scopeSessionRows()
+          const archived = new Set(rows.filter((row) => row.archived === true).map((row) => row.id))
+          for (const id of sceneIds) {
+            if (archived.has(id)) continue
+            const name = String(overrides.sessions[id].scene)
+            sceneLeaseCounts[name] = (sceneLeaseCounts[name] || 0) + 1
+            sceneLeases += 1
+          }
+        }
+      } catch { /* 读不到 = 没有临时场景 */ }
       return {
         scene,
         flags,
         unavailable,
         // 三态意图与租约计数（界面用）：`flags` 把 blocked 投影成 false，分不出「关着」与
-        // 「彻底停止」；租约计数则是全局 off 却仍在跑的唯一解释。
+        // 「统一关闭」；租约计数则是全局 off 却仍在跑的唯一解释。
         intent: { mcp: intentSnapshot.mcp, skillSources: intentSnapshot.skillSources, skills: intentSnapshot.skills },
         leases: {
           mcp: leaseCounts('mcp'),
@@ -3010,6 +3030,8 @@ export default {
           subagents: leaseCounts('subagents'),
           quickPrompts: leaseCounts('quickPrompts'),
         },
+        sceneLeases,
+        sceneLeaseCounts,
       }
     }
 
@@ -3378,7 +3400,7 @@ export default {
       const rows = rowsIn.map((row: any) => {
         const name = String((row && (row.serverName || row.id)) || '')
         const state = intentOf(intent, 'mcp', name)
-        // 全局开着（`on`）不是租约；彻底停止（`blocked`）压过一切会话层 —— 两种都不挂徽章。
+        // 全局开着（`on`）不是租约；统一关闭（`blocked`）压过一切会话层 —— 两种都不挂徽章。
         const leaseCount = state === 'on' || state === 'blocked' || scan === null ? 0 : (scan.claims.mcp.get(name) || []).length
         return {
           ...row,
