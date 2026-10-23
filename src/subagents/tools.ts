@@ -107,7 +107,7 @@ export function defineSubagentManagerListTool(subagents: {
     name: 'subagent_manager_list',
     // `depth-filtered` 删掉：注入深度是**注入侧**的实现细节
     // 模型看到的是"目录里有哪些人设"，`catalogDepth` 那个词对它没有任何可操作性。
-    description: 'List personas (pre-configured subagent profiles) with their descriptions. The "Current subagents" reminder carries a view of the same catalog; call this for the always-current full list, or all=true to include disabled personas and ones outside the active scene.',
+    description: 'List personas (pre-configured subagent profiles) with descriptions and the file holding each body (read it with your file tools). The "Current subagents" reminder carries a view of the same catalog; call this for the always-current full list, or all=true to include disabled personas and ones outside the active scene.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled personas and ones outside the active scene (default false). Listed ≠ delegable: `run` still refuses those.' },
     } as const,
@@ -136,9 +136,18 @@ export function defineSubagentManagerListTool(subagents: {
       // 而工具又不列全，结果是"明明能委派却查不到人设"。
       // `all=true` 时**标出哪些不可用**：只列名字的话，模型照样分不清哪个能直接委派
       // （与技能列表标 `shadowed-by:` 同一条理由 —— 列出来不等于能用）。
+      // 每行带**正文文件路径**。这个域刻意没有 `subagent_manager_read`（正文是文件，不是
+      // 另一份存储），但模型手里有通用文件工具 —— 不给路径，用户说「读一下这个人设的完整
+      // 定义」时它只能回「做不到」。清单本来只有 description，正文在 `PersonaDoc.path`
+      // （`service.ts` 扫目录时一起记下的绝对路径），这里原样带出去，零额外读取。
+      //
+      // 放在行尾而不是表头给一个目录模板：模型拼 `<dir>/<name>.md` 要多一步推理，路径里
+      // 有空格或非 ASCII 目录名时还可能拼错；每条一个完整路径是零歧义，代价只在调用时付
+      // （不是每轮的 schema 成本）。
       const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(no description)') +
         (p.continuable === true ? CONTINUABLE_MARK : '') +
-        (includeUnavailable ? (!decideInSession(p, flag, boundSet) ? ' (disabled — turn it on first)' : '') : ''))
+        (includeUnavailable ? (!decideInSession(p, flag, boundSet) ? ' (disabled — turn it on first)' : '') : '') +
+        (p.path ? ' · ' + p.path : ''))
       // 默认口径下有多少个没列出来（停用的 + 不在启用场景里的）：不报的话，模型看到一份短名单
       // 会当成"本机只有这些人设"。数量照报，与另外三个 list 的表头同一口径。
       const hiddenCount = includeUnavailable ? 0 : docs.length - allowed.length
