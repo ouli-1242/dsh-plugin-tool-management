@@ -29,7 +29,9 @@ Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart
 
 ## Demo
 
-<video controls src="https://github.com/user-attachments/assets/8f785896-891a-4a91-9845-768a1d0bc829"></video>
+<video controls src="https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3"></video>
+
+Player refuses to start (browsers with a stricter CSP sometimes block the inline embed)? [Watch the same file directly](https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3).
 
 Every interface shown is a real screenshot of the running product — no redrawn UI, no fabricated controls.
 

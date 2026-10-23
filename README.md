@@ -29,7 +29,9 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 
 ## 演示视频
 
-<video controls src="https://github.com/user-attachments/assets/8f785896-891a-4a91-9845-768a1d0bc829"></video>
+<video controls src="https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3"></video>
+
+播放器起不来（登录态偶发被浏览器 CSP 拦）？[点此直接看同一个文件](https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3)。
 
 画面里每一个界面都是真机截图，没有重画的 UI，也没有伪造控件。
 
