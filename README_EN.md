@@ -85,7 +85,7 @@ dsh plugin --profile desktop remove dsh-plugin-tool-management         # desktop
 Two reasons you might not get the newest release, and neither one errors out: npm mirrors / proxies lag behind, and pnpm's `minimumReleaseAge` (release cooldown) skips anything published inside the window. You just quietly end up on an older version. Pinning an exact version bypasses `@latest` resolution:
 
 ```sh
-dsh plugin --profile web add dsh-plugin-tool-management@0.21.2
+dsh plugin --profile web add dsh-plugin-tool-management@0.21.4
 ```
 
 To check what you actually got: the "plugin adapter version" on the **Host** tab is the version baked into the code **loaded this session** (not what `package.json` says), and it should match `version` in `~/.dsh/tool-management/mount.json`.

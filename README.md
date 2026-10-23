@@ -85,7 +85,7 @@ dsh plugin --profile desktop remove dsh-plugin-tool-management         # 桌面�
 装不到最新版先看这两条：npm 镜像 / 代理有同步延迟；pnpm 若开了 `minimumReleaseAge`（发布冷却），新版本在冷却期内会被直接跳过。两种都不报错，只是安静地装成旧版 —— 用确切版本号安装可以绕开 `@latest` 的解析：
 
 ```sh
-dsh plugin --profile web add dsh-plugin-tool-management@0.21.2
+dsh plugin --profile web add dsh-plugin-tool-management@0.21.4
 ```
 
 核对装上的到底是哪一版：设置 → 工具管理 → **兼容** 页的「本插件适配版本」是**这一轮实际加载的代码**里的版本号（不是 `package.json` 里写的），应与 `~/.dsh/tool-management/mount.json` 的 `version` 一致。
