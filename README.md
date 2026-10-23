@@ -71,7 +71,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 | 锁住就不怕手滑              | 场景可以上锁：五个域的增删改整体只读                                                                                               |
 | 删了能找回                  | 技能 / 记忆 / 人设 / 提示词 / 场景的删除都进回收站（会话永久删除除外）；可勾选批量永久删除，也可设保留期让它自动清（默认永久保留） |
 | 安全、不添乱                | 只写自己的文件；密钥默认打码、看明文要令牌                                                                                         |
-| 对话 / 工作区各管各的       | 面板顶部先选层，各域开关只影响那一层（全部全局 / 按对话 / 按工作区）；其他层原样不动                                                         |
+| 对话 / 工作区各管各的       | 面板顶部先选层，各域开关只影响那一层（全部全局 / 按对话 / 按工作区）；其他层原样不动                                               |
 
 ## 快速开始
 
@@ -87,7 +87,7 @@ dsh plugin --profile desktop remove dsh-plugin-tool-management         # 桌面�
 装不到最新版先看这两条：npm 镜像 / 代理有同步延迟；pnpm 若开了 `minimumReleaseAge`（发布冷却），新版本在冷却期内会被直接跳过。两种都不报错，只是安静地装成旧版 —— 用确切版本号安装可以绕开 `@latest` 的解析：
 
 ```sh
-dsh plugin --profile web add dsh-plugin-tool-management@0.21.4
+dsh plugin --profile web add dsh-plugin-tool-management@0.X.X
 ```
 
 核对装上的到底是哪一版：设置 → 工具管理 → **兼容** 页的「本插件适配版本」是**这一轮实际加载的代码**里的版本号（不是 `package.json` 里写的），应与 `~/.dsh/tool-management/mount.json` 的 `version` 一致。
@@ -238,9 +238,9 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 | 装完没有页面                                | 硬刷新；不行重启 DSH。                                                                                                                      |
 | 重复 MCP 页签                               | 删 `cordis.patch.yml` 里的旧 loader 行后重启。                                                                                              |
 | 改坏配置 DSH 起不来                         | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.<层级>.bak-<时间戳>` 覆盖回去（每份 patch 各留 5 份）。                     |
-| 升级 DSH 后动作不可用                       | 设置 → 工具管理 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                       |
-| 升级 DSH 后装不上 / 提示 peer 不符           | 本插件只适配 DSH **0.2.1**（`>=0.2.1-rc.2 <0.2.2`）：别的宿主代次请装对应版本的插件，跨代升级要等插件同步适配。                                  |
-| 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（顶部先选到那个对话 / 工作区；出厂默认关着 20 条）；面板和脚本不受影响。                              |
+| 升级 DSH 后动作不可用                       | 设置 → 工具管理 → **兼容** 看原因；`doctor.mjs` → `host-deps.mjs --fix`。                                                                   |
+| 升级 DSH 后装不上 / 提示 peer 不符          | 本插件只适配 DSH **0.2.1**（`>=0.2.1-rc.2 <0.2.2`）：别的宿主代次请装对应版本的插件，跨代升级要等插件同步适配。                             |
+| 模型调不到某条工具                          | 「兼容」页的**模型工具表**看它是不是被关了（顶部先选到那个对话 / 工作区；出厂默认关着 20 条）；面板和脚本不受影响。                         |
 | `approval=never` 还要确认吗                 | 不弹卡，直接放行并记日志；想问回来切回「工作区内修改」。                                                                                    |
 | `subagent_manager_run` 报 provider 不可用   | 对应 provider 没注册：`spawn`（默认）/ `fork`（`inherit`）分别挂 `@deepseek-ai/dsh-subagent-spawn-in-process` / `-fork-in-process` 后重启。 |
 | 场景绑了 A 人设，官方 `subagent` 还在跑别的 | 官方那两个是宿主的工具，本插件管不到；贴合人设的走 `subagent_manager_run`，官方只在没有人设贴合或要后台跑时用。                             |
@@ -249,12 +249,12 @@ dsh plugin --profile web add dsh-plugin-tool-management@latest
 
 ## 文档
 
-| 文档 | 什么时候看 |
-| --- | --- |
-| [故障排查](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/TROUBLESHOOTING.md) | 装完没页面、重复页签、升级后动作不可用、停用表坏了、侧车损坏 |
-| [架构](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/ARCHITECTURE.md) | 想知道内容怎么进模型、同一个开关为什么两个对话不一样、改完落到哪个文件 |
-| [兼容矩阵](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/COMPATIBILITY.md) | 各 DSH 版本的能力矩阵（已验证 / 未实测 / 不可用） |
-| [CHANGELOG](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/CHANGELOG.md) | 每一版改了什么 |
+| 文档                                                                                                  | 什么时候看                                                             |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| [故障排查](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/TROUBLESHOOTING.md) | 装完没页面、重复页签、升级后动作不可用、停用表坏了、侧车损坏           |
+| [架构](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/ARCHITECTURE.md)        | 想知道内容怎么进模型、同一个开关为什么两个对话不一样、改完落到哪个文件 |
+| [兼容矩阵](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/docs/COMPATIBILITY.md)   | 各 DSH 版本的能力矩阵（已验证 / 未实测 / 不可用）                      |
+| [CHANGELOG](https://github.com/ouli-1242/dsh-plugin-tool-management/blob/main/CHANGELOG.md)           | 每一版改了什么                                                         |
 
 ---
 
