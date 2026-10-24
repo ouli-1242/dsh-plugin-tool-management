@@ -114,7 +114,7 @@ export function isSourceInstall(): boolean {
  *
  * 官方全程走 prerelease 渠道（x.y.z-rc.N），而 semver 有一条硬规则：**带 prerelease 标签的
  * 版本，只有在"同 [major,minor,patch] 元组"的比较器也带 prerelease 标签时才能匹配**。所以
- * `>=0.2.1-rc.2` 匹配不了 `0.2.2-rc.1`，`^0.2.1-rc.2` 也匹配不了它 —— 范围只能**逐段写**，
+ * `>=0.2.1-rc.3` 匹配不了 `0.2.2-rc.1`，`^0.2.1-rc.3` 也匹配不了它 —— 范围只能**逐段写**，
  * 一代一段。
  *
  * 但「逐段写」不等于「把历史各代累积起来」。累积成 `0.1.7 || 0.2.0 || 0.2.1` 三代并集，
@@ -127,8 +127,8 @@ export function isSourceInstall(): boolean {
  * 对应版本即可（`dsh plugin add dsh-plugin-tool-management@<老版本号>`）。装上被拒 + 一版新适配，
  * 优于装上然后部分功能悄悄失效。
  *
- * 上界**必须写**（`<0.2.2`）：`^` 不能用，它的隐含上界是 `<0.3.0`，而 `0.2.1-rc.2` 这个已适配
- * 版本自己都满足不了 `^0.2.1-rc.2`（prerelease 只在同元组比较器带 prerelease 时才匹配）。
+ * 上界**必须写**（`<0.2.2`）：`^` 不能用，它的隐含上界是 `<0.3.0`，而 `0.2.1-rc.3` 这个已适配
+ * 版本自己都满足不了 `^0.2.1-rc.3`（prerelease 只在同元组比较器带 prerelease 时才匹配）。
  *
  * 两种写法（这里是 `^` 三段、那里是 `>=` 两段，且下界不同）。现在两处是**同一个字符串**，
  * 并由 `test/contracts.test.mjs` 的断言钉住 —— 漂移会让"界面/doctor 报的范围"与"安装期实际
@@ -140,13 +140,14 @@ export function isSourceInstall(): boolean {
  * "任意未来 prerelease"的 range。缓解方式：官方每发一代新 rc，同步改这一段（同时改
  * `VERIFIED_HOST_VERSION`），以及 `--legacy-peer-deps` 这条逃生门。
  *
- * 0.2.1-rc.2 已实测通过：`assessHost` 全通过，宿主版本读得出来。
+ * 0.2.1-rc.3 的验证依据：rc.2 上 `assessHost` 全量通过（宿主版本读得出来），rc.3 与 rc.2
+ * 的逐包比对里受监视的全部包只有版本号变化（改动集中在客户端 UI，cordis 未动）。
  */
-export const EXPECTED_PEER_RANGE = '>=0.2.1-rc.2 <0.2.2'
+export const EXPECTED_PEER_RANGE = '>=0.2.1-rc.3 <0.2.2'
 /**
  * peer range 的下界。仍从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
  *
- * 范围收窄到一代之后它**与 VERIFIED_HOST_VERSION 重合**（都是 0.2.1-rc.2）—— 这是正确的：
+ * 范围收窄到一代之后它**与 VERIFIED_HOST_VERSION 重合**（都是 0.2.1-rc.3）—— 这是正确的：
  * 适配的那一代就是唯一允许安装的那一代。保留这个导出是因为它进了 `compat-status` 的载荷，
  * doctor 与外部脚本可能仍在读；语义仍是"最早支持哪一代"，只是现在只有一代。
  */

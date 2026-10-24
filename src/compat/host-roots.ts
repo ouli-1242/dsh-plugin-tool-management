@@ -51,7 +51,7 @@ export const IDENTITY_PACKAGES = [
   '@deepseek-ai/dsh-spill-local',
 ] as const
 /** 本插件适配器最后一次对着验证过的宿主版本 —— 改它等于宣布适配了新的一代。 */
-export const VERIFIED_HOST_VERSION = '0.2.1-rc.2'
+export const VERIFIED_HOST_VERSION = '0.2.1-rc.3'
 /**
  * 每个操作依赖的能力集合，按「缺成员时插件怎么达到同样结果」分组。
  *
