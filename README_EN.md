@@ -131,6 +131,7 @@ More than a version number:
 
 - **Only its own files**: skill sources are never touched; MCP changes go to `cordis.patch.yml`, with five backups per patch file.
 - **Token**: once set, every write and every plaintext secret requires `x-dsh-token`; browser reads and writes use cookies, but plaintext still needs the token.
+- **Process-level boundary is the token**: writes normally sit behind the host's browser auth; when the host fence is absent the route falls back to a loopback-only check, which any local process can pass — only the access token gives you a process-level boundary.
 - **Plaintext on disk**: masking happens in the UI only. MCP `env` / `headers` and the plugin `token` stay plaintext in the patch file, and backups are neither encrypted nor rotated. The token gate cannot stop disk reads — file permissions are the boundary.
 - **Deletes are recoverable**: skills / memories / personas / presets / scenes go to the recycle bin (permanent session deletion excepted), with an optional retention period (keep forever by default).
 
