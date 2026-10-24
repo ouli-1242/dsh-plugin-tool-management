@@ -157,14 +157,16 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'rules-rebind-prompt': { serviceWrite: true },
   // 锁定开关自己**不能**被冻结挡住，否则锁上了解不开。
   'rules-scene-lock': { serviceWrite: true },
-  // ⚠️ 口径不一致，登记时才看得出来：`rules-remove-scene` 冻结，而 `rules-create-scene` /
-  // `rules-update-scene` 不冻结 —— 都是改场景集合，三缺一。今天按现状登记（A1 只登记不改
-  // 行为），要统一得单独判一次，记在这里别丢。
+  // 冻结口径：改**被锁的那个场景自己**的记录（改绑提示词 / 改名 / 说明）按 self-scene 拒
+  // —— 锁的意义就是那份档案不许动；`rules-create-scene` 不冻结：新建场景不触碰任何
+  // 既有场景的数据，锁不必挡着加新场景。
   'rules-create-scene': { serviceWrite: true },
-  'rules-update-scene': { serviceWrite: true },
+  'rules-update-scene': { serviceWrite: true, frozen: true, frozenScope: 'self-scene' },
   'scene-trash-list': { readonly: true },
   'scene-trash-restore': { serviceWrite: true },
-  'scene-trash-delete': { serviceWrite: true },
+  // 与其余五类 `*-trash-delete` 同一条理由（见 `trash-retention-set` 那条）：能永久删
+  // 回收站条目的 op 比单条删除更宽松，等于给冻结开洞。
+  'scene-trash-delete': { serviceWrite: true, frozen: true },
   'scene-mode-get': { readonly: true },
   // 进入场景前的「会改什么」预览：与 `scene-mode-set` 走同一批纯计划函数，但只读现状、
   // 不落盘也不应用 —— 登记成 readonly 就是这条承诺的机器可查版本（改这个 op 的人

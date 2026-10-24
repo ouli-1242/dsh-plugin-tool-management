@@ -12,7 +12,8 @@
 // 从哪个预设来的」：手改一次之后 `active` 全为 false，模型侧列表就只剩空（或被迫
 // 全列，白烧上下文）。所以另记一份 `__applied__.json`（只记「最近一次应用的是谁」），
 // 两个事实分开报：`active` = 内容逐字节相同；`lastApplied` = 最近一次应用写入的是它。
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { renameWithRetry } from '../skills/core.js'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { isValidPresetId, LAST_APPLIED_PRESET_ID, normalizePresetId } from './preset-id.js'
@@ -311,7 +312,7 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
       targetId = String(nextId).trim()
       const nextDir = join(deps.presetsDir, targetId)
       try { await stat(nextDir); return { ok: false, error: '新 id 已存在：' + targetId } } catch { /* 可用 */ }
-      try { await rename(dir, nextDir) } catch (e) { return { ok: false, error: '改名失败：' + message(e) } }
+      try { await renameWithRetry(dir, nextDir) } catch (e) { return { ok: false, error: '改名失败：' + message(e) } }
     }
     await writeFileAtomically(join(deps.presetsDir, targetId, FILENAME), String(content ?? ''))
     await writeDescription(targetId, description)

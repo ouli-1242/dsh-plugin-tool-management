@@ -54,8 +54,8 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       // bundle 记忆附带附件摘要：界面要显示「几个附件」。
       // 代价是**同步**系统调用（其余读路径都是 await）：每条 bundle 一次 `readdirSync`
       // + 每个附件一次 `statSync`，总量 = bundle 条数 × 平均附件数，随内容线性增长。
-      // 「可以忽略」这个判断只成立于 bundle 少、附件也少的时候 —— 列表是界面轮询的热路径
-      // （默认 5 秒一次，见 SETTINGS_DEFAULTS.pollIntervalMs），到几百条就该换成缓存或异步。
+      // 「可以忽略」这个判断只成立于 bundle 少、附件也少的时候 —— 记忆页不轮询（刷新点是
+      // 页面打开 / 切换会话 / 写操作之后），但每次刷新都是全量，bundle 到几百条就该换缓存或异步。
       // flat 没有目录，原样返回（不加字段 = 界面不显示附件标签）。
       .map((r) => {
         if (r.form !== 'bundle') return r
@@ -647,6 +647,13 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
       total += data.length
       if (total > MAX_ATTACH_TOTAL_BYTES) return fail('error.rules.tooLarge', `附件总大小超过 ${MAX_ATTACH_TOTAL_BYTES >> 20} MiB`, { limit: MAX_ATTACH_TOTAL_BYTES >> 20 })
       pending.push({ name, data })
+    }
+    // 落点断言与 rules-detach 同一条：locateRule 只 lstat 正文末级，场景目录 / bundle
+    // 目录本身若是指向记忆根外的符号链接，附件就会写到根外 —— 全域其余写路径都有这道闸，
+    // attach 不能是唯一例外。
+    for (const file of pending) {
+      const denied = await refuseOutsideRoot(join(located.entryPath, file.name))
+      if (denied) return denied
     }
     for (const file of pending) await writeFileAtomicBinary(join(located.entryPath, file.name), file.data)
     return { ok: true, attachments: await listAttachments(located.entryPath, located.name) }

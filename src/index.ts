@@ -4525,6 +4525,19 @@ export default {
       subagentToolFailures,
     })
 
+    // 场景事实缓存的主动失效：锁定 / 切换 / 建档改档一旦成功，1s TTL 内的旧结论
+    // （「没有锁定」「旧的活动场景」）不能再被冻结门禁与 anyLocked 注解读到 ——
+    // TTL 只为合并同一拍的重复读，不该吞掉刚发生的写。
+    for (const opName of ['rules-scene-lock', 'rules-set-active', 'rules-create-scene', 'rules-update-scene', 'rules-remove-scene', 'scene-archive-save', 'scene-mode-set']) {
+      const original = handlers[opName]
+      if (typeof original !== 'function') continue
+      handlers[opName] = async (args: any) => {
+        const res = await original(args)
+        if (res && res.ok !== false) sceneFacts = null
+        return res
+      }
+    }
+
     // A1 的"机器那一边"：拿**真实** op 表与 `./op-registry.ts` 对账，四个方向都查（未归类 /
     // 幽灵条目 / serviceWrite 与 service 自报分叉 / 只读与写自相矛盾）。
     // 为什么值得在启动期花这一次遍历：门禁失守的症状从来不是报错，而是"没配令牌也能写"或

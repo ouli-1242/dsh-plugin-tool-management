@@ -11,7 +11,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import { join } from 'node:path'
 import { writeFileAtomically } from '../memories/index-io.js'
 import { isValidSegment } from '../paths.js'
-import { resolveDshHome } from '../skills/core.js'
+import { renameWithRetry, resolveDshHome } from '../skills/core.js'
 // 深度探针与注入通道共用一份实现（口径分叉就会出现"目录说不能、工具却能"的错配）。
 // 方向是 service → context-inject，单向：context-inject 不 import 本模块。
 import { subagentDepthOf } from '../context-inject.js'
@@ -351,7 +351,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
       const tmp = join(dir, `.${finalName}.tmp-${process.pid}-${Date.now()}`)
       try {
         await writeFile(tmp, serializePersona({ ...args, name: finalName }), 'utf8')
-        await rename(tmp, finalTarget)
+        await renameWithRetry(tmp, finalTarget)
       } catch (e) {
         await rm(tmp, { force: true }).catch(() => undefined)
         return { ok: false, error: `保存人设失败: ${message(e)}` }

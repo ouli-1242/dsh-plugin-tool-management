@@ -25,6 +25,15 @@ export function toStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.map((x: unknown) => String(x).trim()).filter(Boolean) : []
 }
 
+/**
+ * 名单里单条名字的转义。名字按逗号分隔落盘，含逗号（半角 / 全角）的名字不引起来
+ * 会在回读时裂成两条 —— `yamlScalar` 不引逗号（单值场景无此问题），这里补上。
+ * 读侧（persona-parse 的 `listOf`）按引号感知的切分配对解码。
+ */
+function listEntry(name: string): string {
+  return /[,，]/.test(name) ? JSON.stringify(name) : yamlScalar(name)
+}
+
 /** 人设文件序列化：frontmatter 只写用户填过的键；正文 = 人设提示词。 */
 export function serializePersona(args: any): string {
   const description = String((args && args.description) || '').replace(/\r?\n/g, ' ').trim()
@@ -65,11 +74,11 @@ export function serializePersona(args: any): string {
     lines.push('output:')
     for (const line of outputLines) lines.push('  - ' + yamlScalar(line))
   }
-  if (tools.length) lines.push('tools: ' + tools.join(', '))
-  if (toolsDeny.length) lines.push('toolsDeny: ' + toolsDeny.join(', '))
+  if (tools.length) lines.push('tools: ' + tools.map(listEntry).join(', '))
+  if (toolsDeny.length) lines.push('toolsDeny: ' + toolsDeny.map(listEntry).join(', '))
   if (byPreset.length) {
     lines.push('toolsByPreset:')
-    for (const [id, rule] of byPreset) lines.push('  ' + id + ': ' + rule.mode + ': ' + rule.names.join(', '))
+    for (const [id, rule] of byPreset) lines.push('  ' + id + ': ' + rule.mode + ': ' + rule.names.map(listEntry).join(', '))
   }
   lines.push('---', '', body, '')
   return lines.join('\n')

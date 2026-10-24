@@ -33,7 +33,9 @@ import {
   type TrashEntry,
   type TrashKind,
 } from './hub.js'
-import { listTrash as listSkillTrash, permanentlyDeleteTrash } from './skills/skill-trash.js'
+import { listTrash as listSkillTrash } from './skills/skill-trash.js'
+import { permanentlyDeleteTrashSafely } from './skills/system-trash.js'
+import { pluginLog } from './skills/service.js'
 
 /** 一天的毫秒数（保留期按「天」配置，比较按毫秒）。与 sessions/history.ts 同一个常量。 */
 export const MS_PER_DAY = 24 * 60 * 60 * 1000
@@ -202,7 +204,9 @@ export async function collectTrashCandidates(memories: MemoryTrashAccess): Promi
         name: item.name,
         // `deletedAt` 在技能元数据里是可选的：更早的版本可能没写 → 空串 → 不清扫（第 ③ 条）。
         deletedAt: String(item.deletedAt ?? ''),
-        purge: () => permanentlyDeleteTrash(item.id, undefined),
+        // 与手工 skill-trash-delete 同一道保险：先送系统回收站、失败才硬删。自动清扫
+        // 无人值守、破坏力更大，不能反而比手工路径少一层。
+        purge: () => permanentlyDeleteTrashSafely(item.id, pluginLog()),
       })
     }
   } catch { /* 技能回收站读不出来 → 本轮跳过 */ }

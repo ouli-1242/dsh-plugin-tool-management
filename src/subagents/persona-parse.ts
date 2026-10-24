@@ -6,11 +6,36 @@
 import { decodeYamlScalar } from '../skills/frontmatter.js'
 import type { PersonaDoc, PresetToolRule } from './persona-types.js'
 
-/** 逗号/顿号分隔的名字清单（空串 → undefined）。 */
+/**
+ * 按逗号/顿号切名单，引号内的逗号不切 —— 与写侧 `listEntry`（persona-write.ts）配对：
+ * 名字本身含逗号时整体加引落盘，这里必须原样取回，不能把一条名字裂成两条。
+ * 双引号内按 JSON 转义对（`\"`）原样透传给解码器。
+ */
+function splitNameList(text: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  let quote = ''
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i] as string
+    if (quote !== '') {
+      cur += ch
+      if (ch === '\\' && i + 1 < text.length) { cur += text[++i] as string; continue }
+      if (ch === quote) quote = ''
+      continue
+    }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue }
+    if (ch === ',' || ch === '，') { out.push(cur); cur = ''; continue }
+    cur += ch
+  }
+  out.push(cur)
+  return out
+}
+
+/** 逗号/顿号分隔的名字清单（空串 → undefined）；单条按 YAML 标量解码，配对写侧的引号。 */
 export function listOf(value: unknown): string[] | undefined {
   const text = String(value ?? '').trim()
   if (!text) return undefined
-  const list = text.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+  const list = splitNameList(text).map((s) => decodeYamlScalar(s).trim()).filter(Boolean)
   return list.length ? list : undefined
 }
 
@@ -100,6 +125,12 @@ export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
         const value = decodeYamlScalar(kv[2]).trim()
         if (value === '') inOutputSequence = true
         else outputLines.push(value)
+        continue
+      }
+      // 名单字段的引号是**逐条**的（含逗号的名字整体加引）：整值解码会把唯一加引的
+      // 条目提前解开、再被 listOf 按逗号切坏 —— 这两个键存原值，解码交给 listOf。
+      if (key === 'tools' || key === 'toolsdeny') {
+        data[key] = kv[2].trim()
         continue
       }
       data[key] = decodeYamlScalar(kv[2]).trim()

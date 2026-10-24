@@ -33,6 +33,7 @@ import { newestDomainTexts, PLUGIN_KINDS } from '../lib/context-inject-surface.j
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
 import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/skills/frontmatter.js'
 import { parseModeState } from '../lib/memories/service.js'
+import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
 import { argConditionalConfirmReason } from '../lib/confirm-gate.js'
@@ -3633,6 +3634,36 @@ test('四条新建 op 不许认 dedupe：模型工具靠"同名即拒"判断新�
   assert.ok(!createScene[0].includes('dedupe'), '新建场景不许认 dedupe')
 })
 
+// rules-attach 的落点断言：与 rules-detach 同一道 refuseOutsideRoot —— locateRule 只 lstat
+// 正文末级，场景 / bundle 目录若是指向记忆根外的符号链接，附件就会写到根外。这里钉
+// 「断言先于写盘、拒绝原样透传」：拒绝返回时根本走不到写盘那一步。
+test('rules-attach：附件落点必须先过根内断言，拒绝时写盘一步都到不了', async () => {
+  const asked = []
+  const ops = buildMemoryOps({
+    parseId: (id) => {
+      const i = id.indexOf('/')
+      return i > 0 && i < id.length - 1 ? { group: id.slice(0, i), name: id.slice(i + 1) } : null
+    },
+    locateRule: async (group, name) => ({
+      id: `${group}/${name}`, group, name, kind: 'bundle',
+      docPath: `/fake/${group}/${name}/${name}.md`, entryPath: `/fake/${group}/${name}`,
+    }),
+    refuseOutsideRoot: async (target) => {
+      asked.push(target)
+      return { ok: false, error: '拒绝操作：解析后的落点不在记忆根目录内', code: 'error.rules.outsideRoot' }
+    },
+    listAttachments: async () => [],
+  })
+  const res = await ops.rulesAttach({
+    id: 's/bundle',
+    files: [{ name: 'a.png', data: Buffer.from('x').toString('base64') }],
+  })
+  assert.equal(res.ok, false, '断言拒绝必须原样透传')
+  assert.equal(res.code, 'error.rules.outsideRoot')
+  assert.equal(asked.length, 1, '逐附件都要问一次断言')
+  assert.ok(asked[0].endsWith('a.png'), '断言问的是附件的实际落点')
+})
+
 // ── 退号恢复必须改**声明名**，不能只改文件夹名 ────────────────────────────────
 //
 // 用户 2026-10-14 报的：同名技能退号恢复出 `1-1` 目录，但里面的 SKILL.md 仍写着 `name: 1`。
@@ -4549,6 +4580,25 @@ test('人设描述里的保留字/数字形态写成引号标量，读回仍是�
   assert.equal(yamlDoc.provider, 'null')
   assert.equal(parsePersona(serialized, 'x').description, '123')
   assert.equal(parsePersona(serialized, 'x').provider, 'null')
+})
+
+test('人设名单字段逐条转义可往返：逗号 / 冒号 / 引号 / 换行 / 保留字', () => {
+  const tricky = ['read_file', 'a,b', 'c: d', 'e"f', "g'h", 'true', '含，全角逗号', 'multi\nline']
+  const serialized = serializePersona({
+    tools: ['x'],
+    toolsDeny: tricky,
+    toolsByPreset: { std: { mode: 'deny', names: tricky } },
+    body: 'b',
+  })
+  const parsed = parsePersona(serialized, 'p')
+  assert.deepEqual(parsed.tools, ['x'])
+  assert.deepEqual(parsed.toolsDeny, tricky, '含逗号 / 冒号 / 引号 / 换行的名字都要原样回读')
+  assert.deepEqual(parsed.toolsByPreset.std.names, tricky, 'toolsByPreset 的名单同一口径')
+  // 单条加引的名单（整行恰好以引号开头收尾）也不能被整值解码提前解开。
+  const single = serializePersona({ toolsDeny: ['a,b'], body: 'b' })
+  assert.deepEqual(parsePersona(single, 'p').toolsDeny, ['a,b'])
+  // 未转义的旧格式（存量文件）照旧可读。
+  assert.deepEqual(parsePersona('---\ntoolsDeny: a, b\n---\n\nbody\n', 'p').toolsDeny, ['a', 'b'])
 })
 
 // ── 令牌覆盖条目的追加（0.21.2 P2-7）────────────────────────────────────

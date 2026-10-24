@@ -13,7 +13,8 @@
 //
 // `list()` 连**正文一起给**，不是偷懒省一次请求：宿主的 `settle()` 拿到 onPick 的返回值后
 // **同步**执行插入（input-trigger client.js），异步读正文来不及 —— 点的时候手里就得有那段字。
-import { mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { renameWithRetry } from '../skills/core.js'
 import { join } from 'node:path'
 import { writeFileAtomically } from '../memories/index-io.js'
 import { isValidPresetId, normalizePresetId } from './preset-id.js'
@@ -139,7 +140,7 @@ export function createQuickPromptsService(deps: QuickPromptsDeps): QuickPromptsS
       if (badNext) return { ok: false, error: '非法新 id：' + badNext }
       targetId = String(nextId).trim()
       try { await stat(join(deps.dir, targetId)); return { ok: false, error: '新 id 已存在：' + targetId } } catch { /* 可用 */ }
-      try { await rename(join(deps.dir, safeId), join(deps.dir, targetId)) } catch (e) { return { ok: false, error: '改名失败：' + message(e) } }
+      try { await renameWithRetry(join(deps.dir, safeId), join(deps.dir, targetId)) } catch (e) { return { ok: false, error: '改名失败：' + message(e) } }
     }
     await writeFileAtomically(join(deps.dir, targetId, FILENAME), String(content ?? ''))
     await writeMeta(targetId, { description })
