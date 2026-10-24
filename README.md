@@ -50,26 +50,30 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 
 <video controls width="100%" src="https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3"></video>
 
-播放器起不来（登录态偶发被浏览器 CSP 拦）？[点此直接看同一个文件](https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3)。画面里每个界面都是真机截图，没有重画的 UI。背景音乐：Kevin MacLeod「Limit 70」，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。
+播放器起不来（登录态偶发被浏览器 CSP 拦）？[点此直接看同一个文件](https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3)。
+
+画面里每个界面都是真机截图，没有重画的 UI。
+
+背景音乐：Kevin MacLeod「Limit 70」，[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。
 
 ## 界面
 
-|  |  |
-|:--:|:--:|
-| <img src="docs/images/1.png" alt="场景" width="100%"><br>**场景** | <img src="docs/images/2.png" alt="MCP" width="100%"><br>**MCP** |
-| <img src="docs/images/3.png" alt="技能" width="100%"><br>**技能** | <img src="docs/images/4.png" alt="子智能体" width="100%"><br>**子智能体** |
-| <img src="docs/images/5.png" alt="提示词" width="100%"><br>**提示词** | <img src="docs/images/6.png" alt="记忆" width="100%"><br>**记忆** |
-| <img src="docs/images/7.png" alt="会话" width="100%"><br>**会话** | <img src="docs/images/8.png" alt="兼容" width="100%"><br>**兼容** |
+|                                                                       |                                                                           |
+|:---------------------------------------------------------------------:|:-------------------------------------------------------------------------:|
+| <img src="docs/images/1.png" alt="场景" width="100%"><br>**场景**     | <img src="docs/images/2.png" alt="MCP" width="100%"><br>**MCP**           |
+| <img src="docs/images/3.png" alt="技能" width="100%"><br>**技能**     | <img src="docs/images/4.png" alt="子智能体" width="100%"><br>**子智能体** |
+| <img src="docs/images/5.png" alt="提示词" width="100%"><br>**提示词** | <img src="docs/images/6.png" alt="记忆" width="100%"><br>**记忆**         |
+| <img src="docs/images/7.png" alt="会话" width="100%"><br>**会话**     | <img src="docs/images/8.png" alt="兼容" width="100%"><br>**兼容**         |
 
 ## 三种作用域
 
 默认每个对话各一份设置。在**兼容页 → 生效层级**切换一次，整个面板和模型工具都跟着这一层走：
 
-|  | 全部全局 | 按工作区 | 按会话（默认） |
-|:--|:--|:--|:--|
-| **谁共用一套** | 所有对话 | 同一工作区的对话 | 每个对话各自一份 |
-| **适合** | 一个人一台机器，处处一致 | 一个项目一套环境 | 同一项目并行不同任务 |
-| **切走会丢吗** | — | 不删记录，调回来即恢复 | 不删记录，调回来即恢复 |
+|                | 全部全局                 | 按工作区               | 按会话（默认）         |
+|:-------------- |:------------------------ |:---------------------- |:---------------------- |
+| **谁共用一套** | 所有对话                 | 同一工作区的对话       | 每个对话各自一份       |
+| **适合**       | 一个人一台机器，处处一致 | 一个项目一套环境       | 同一项目并行不同任务   |
+| **切走会丢吗** | —                        | 不删记录，调回来即恢复 | 不删记录，调回来即恢复 |
 
 面板顶部那条选择器可以切到某个对话或工作区，直接看它自己的那份设置；锁着的时候解锁口也在那一行。同一层里，每个开关按 **本层改过 > 进入的场景 > 创建时快照 > 全局** 取最上面有话说的一层。
 
@@ -112,18 +116,18 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 <details>
 <summary><b>数据落在哪 · 安全边界</b></summary>
 
-| 内容 | 位置 |
-|:--|:--|
-| MCP 定义 | `~/.dsh/cordis.patch.yml`（插件只写它；改前自动备份） |
-| 技能策略 / 自定义目录 | `~/.dsh/tool-management/skills-state.json` |
-| 技能 / 记忆 / 人设 / 预设 | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/` |
-| 记忆索引 / 场景 / 档案 | `~/.dsh/tool-management/memories-index.json` |
-| 回收站（技能 / 记忆 / 人设 / 预设 / 场景） | `~/.dsh/tool-management/trash/<域>-trash/` |
-| 归档账本 / 保留期 | `~/.dsh/tool-management/history-*.json` |
-| MCP 侧车（停用表 / 已知工具 / 备注 / 设置） | `~/.dsh/tool-management/mcp-*.json` |
-| 注入设置（六个域开关） | `~/.dsh/tool-management/inject-settings.json` |
-| 模型工具表 / 作用域覆盖 | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json` |
-| 运行日志 / patch 备份 | `~/.dsh/tool-management/tool-management.log` · `backups/` |
+| 内容                                        | 位置                                                              |
+|:------------------------------------------- |:----------------------------------------------------------------- |
+| MCP 定义                                    | `~/.dsh/cordis.patch.yml`（插件只写它；改前自动备份）             |
+| 技能策略 / 自定义目录                       | `~/.dsh/tool-management/skills-state.json`                        |
+| 技能 / 记忆 / 人设 / 预设                   | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/`     |
+| 记忆索引 / 场景 / 档案                      | `~/.dsh/tool-management/memories-index.json`                      |
+| 回收站（技能 / 记忆 / 人设 / 预设 / 场景）  | `~/.dsh/tool-management/trash/<域>-trash/`                        |
+| 归档账本 / 保留期                           | `~/.dsh/tool-management/history-*.json`                           |
+| MCP 侧车（停用表 / 已知工具 / 备注 / 设置） | `~/.dsh/tool-management/mcp-*.json`                               |
+| 注入设置（六个域开关）                      | `~/.dsh/tool-management/inject-settings.json`                     |
+| 模型工具表 / 作用域覆盖                     | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json` |
+| 运行日志 / patch 备份                       | `~/.dsh/tool-management/tool-management.log` · `backups/`         |
 
 - **只写自己的文件**：不动技能源文件；MCP 只改 `cordis.patch.yml`，每份 patch 各留 5 份备份。
 - **令牌**：设置后所有写操作与明文密钥都要 `x-dsh-token`；浏览器读写走 cookie，明文查看仍要令牌。
@@ -134,25 +138,25 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 
 ## 常见问题
 
-| 现象 | 解决 |
-|:--|:--|
-| 装完没有页面 | 硬刷新浏览器；还不行就重启 DSH。 |
-| 模型调不到某条工具 | 兼容页 →「模型工具表」，先选对当前对话 / 工作区（出厂默认关着 20 条）。面板和脚本不受影响。 |
-| 升级 DSH 后动作不可用 | 兼容页看降级原因；`node scripts/doctor.mjs`，再 `node scripts/host-deps.mjs --fix`。 |
-| 版本对不上 | 只适配 DSH **0.2.1**（`>=0.2.1-rc.2 <0.2.2`），跨代升级要等插件同步适配。 |
-| 重复 MCP 页签 | 删掉 `cordis.patch.yml` 里的旧 loader 行，再重启。 |
-| 改坏配置 DSH 起不来 | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.*.bak-*` 覆盖回去。 |
+| 现象                  | 解决                                                                                        |
+|:--------------------- |:------------------------------------------------------------------------------------------- |
+| 装完没有页面          | 硬刷新浏览器；还不行就重启 DSH。                                                            |
+| 模型调不到某条工具    | 兼容页 →「模型工具表」，先选对当前对话 / 工作区（出厂默认关着 20 条）。面板和脚本不受影响。 |
+| 升级 DSH 后动作不可用 | 兼容页看降级原因；`node scripts/doctor.mjs`，再 `node scripts/host-deps.mjs --fix`。        |
+| 版本对不上            | 只适配 DSH **0.2.1**（`>=0.2.1-rc.2 <0.2.2`），跨代升级要等插件同步适配。                   |
+| 重复 MCP 页签         | 删掉 `cordis.patch.yml` 里的旧 loader 行，再重启。                                          |
+| 改坏配置 DSH 起不来   | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.*.bak-*` 覆盖回去。         |
 
 完整排查手册见 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)。
 
 ## 文档
 
-| 文档 | 什么时候看 |
-|:--|:--|
-| [故障排查](docs/TROUBLESHOOTING.md) | 装完没页面、重复页签、升级后动作不可用、侧车损坏 |
-| [架构](docs/ARCHITECTURE.md) | 内容怎么进模型、同一个开关为什么两个对话不一样、改完落到哪个文件 |
-| [兼容矩阵](docs/COMPATIBILITY.md) | 各 DSH 版本的能力矩阵（已验证 / 未实测 / 不可用） |
-| [更新日志](CHANGELOG.md) · [版本概要](docs/UPDATE.md) | 每一版改了什么 |
+| 文档                                                  | 什么时候看                                                       |
+|:----------------------------------------------------- |:---------------------------------------------------------------- |
+| [故障排查](docs/TROUBLESHOOTING.md)                   | 装完没页面、重复页签、升级后动作不可用、侧车损坏                 |
+| [架构](docs/ARCHITECTURE.md)                          | 内容怎么进模型、同一个开关为什么两个对话不一样、改完落到哪个文件 |
+| [兼容矩阵](docs/COMPATIBILITY.md)                     | 各 DSH 版本的能力矩阵（已验证 / 未实测 / 不可用）                |
+| [更新日志](CHANGELOG.md) · [版本概要](docs/UPDATE.md) | 每一版改了什么                                                   |
 
 ## 开发
 

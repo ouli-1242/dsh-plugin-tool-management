@@ -50,26 +50,30 @@ Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart
 
 <video controls width="100%" src="https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3"></video>
 
-Player refuses to start (browsers with a stricter CSP sometimes block the inline embed)? [Watch the same file directly](https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3). Every interface shown is a real screenshot of the running product. Music: Kevin MacLeod「Limit 70」, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Player refuses to start (browsers with a stricter CSP sometimes block the inline embed)? [Watch the same file directly](https://github.com/user-attachments/assets/ff3111c3-4228-45b7-9e28-b85dc60fb6b3). 
+
+Every interface shown is a real screenshot of the running product. 
+
+Music: Kevin MacLeod「Limit 70」, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## Screenshots
 
-|  |  |
-|:--:|:--:|
-| <img src="docs/images/1-EN.png" alt="Scenes" width="100%"><br>**Scenes** | <img src="docs/images/2-EN.png" alt="MCP" width="100%"><br>**MCP** |
-| <img src="docs/images/3-EN.png" alt="Skills" width="100%"><br>**Skills** | <img src="docs/images/4-EN.png" alt="Subagents" width="100%"><br>**Subagents** |
-| <img src="docs/images/5-EN.png" alt="Prompts" width="100%"><br>**Prompts** | <img src="docs/images/6-EN.png" alt="Memories" width="100%"><br>**Memories** |
-| <img src="docs/images/7-EN.png" alt="Sessions" width="100%"><br>**Sessions** | <img src="docs/images/8-EN.png" alt="Host" width="100%"><br>**Host** |
+|                                                                              |                                                                                |
+|:----------------------------------------------------------------------------:|:------------------------------------------------------------------------------:|
+| <img src="docs/images/1-EN.png" alt="Scenes" width="100%"><br>**Scenes**     | <img src="docs/images/2-EN.png" alt="MCP" width="100%"><br>**MCP**             |
+| <img src="docs/images/3-EN.png" alt="Skills" width="100%"><br>**Skills**     | <img src="docs/images/4-EN.png" alt="Subagents" width="100%"><br>**Subagents** |
+| <img src="docs/images/5-EN.png" alt="Prompts" width="100%"><br>**Prompts**   | <img src="docs/images/6-EN.png" alt="Memories" width="100%"><br>**Memories**   |
+| <img src="docs/images/7-EN.png" alt="Sessions" width="100%"><br>**Sessions** | <img src="docs/images/8-EN.png" alt="Host" width="100%"><br>**Host**           |
 
 ## Three scopes
 
 Every conversation gets its own settings by default. Switch once on the **Host page → Scope**, and the whole panel plus every model tool follows that layer:
 
-|  | All global | Per workspace | Per conversation (default) |
-|:--|:--|:--|:--|
-| **Who shares one set** | Every conversation | Conversations in the same workspace | Each conversation separately |
-| **Best for** | One person, one machine, consistent everywhere | One project, one environment | Parallel tasks in one project |
-| **Lost when switching?** | — | Nothing is deleted; switch back to restore | Nothing is deleted; switch back to restore |
+|                          | All global                                     | Per workspace                              | Per conversation (default)                 |
+|:------------------------ |:---------------------------------------------- |:------------------------------------------ |:------------------------------------------ |
+| **Who shares one set**   | Every conversation                             | Conversations in the same workspace        | Each conversation separately               |
+| **Best for**             | One person, one machine, consistent everywhere | One project, one environment               | Parallel tasks in one project              |
+| **Lost when switching?** | —                                              | Nothing is deleted; switch back to restore | Nothing is deleted; switch back to restore |
 
 The selector at the top of the panel jumps to a specific conversation or workspace and shows its own copy; when that layer is locked, the unlock button sits on the same row. Within a layer, every switch resolves top-down: **this layer's edit > entered scene > creation snapshot > global**.
 
@@ -112,18 +116,18 @@ More than a version number:
 <details>
 <summary><b>Where data lives · security boundaries</b></summary>
 
-| Content | Location |
-|:--|:--|
-| MCP definitions | `~/.dsh/cordis.patch.yml` (the only file the plugin writes; backed up first) |
-| Skill policy / custom directories | `~/.dsh/tool-management/skills-state.json` |
-| Skills / memories / personas / presets | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/` |
-| Memory index / scenes / profiles | `~/.dsh/tool-management/memories-index.json` |
-| Recycle bins (skills / memories / personas / presets / scenes) | `~/.dsh/tool-management/trash/<domain>-trash/` |
-| Archive ledger / retention | `~/.dsh/tool-management/history-*.json` |
-| MCP sidecars (disabled tools / known tools / notes / settings) | `~/.dsh/tool-management/mcp-*.json` |
-| Injection settings (six domain switches) | `~/.dsh/tool-management/inject-settings.json` |
-| Model-tool table / scope overrides | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json` |
-| Runtime log / patch backups | `~/.dsh/tool-management/tool-management.log` · `backups/` |
+| Content                                                        | Location                                                                     |
+|:-------------------------------------------------------------- |:---------------------------------------------------------------------------- |
+| MCP definitions                                                | `~/.dsh/cordis.patch.yml` (the only file the plugin writes; backed up first) |
+| Skill policy / custom directories                              | `~/.dsh/tool-management/skills-state.json`                                   |
+| Skills / memories / personas / presets                         | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/`                |
+| Memory index / scenes / profiles                               | `~/.dsh/tool-management/memories-index.json`                                 |
+| Recycle bins (skills / memories / personas / presets / scenes) | `~/.dsh/tool-management/trash/<domain>-trash/`                               |
+| Archive ledger / retention                                     | `~/.dsh/tool-management/history-*.json`                                      |
+| MCP sidecars (disabled tools / known tools / notes / settings) | `~/.dsh/tool-management/mcp-*.json`                                          |
+| Injection settings (six domain switches)                       | `~/.dsh/tool-management/inject-settings.json`                                |
+| Model-tool table / scope overrides                             | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json`            |
+| Runtime log / patch backups                                    | `~/.dsh/tool-management/tool-management.log` · `backups/`                    |
 
 - **Only its own files**: skill sources are never touched; MCP changes go to `cordis.patch.yml`, with five backups per patch file.
 - **Token**: once set, every write and every plaintext secret requires `x-dsh-token`; browser reads and writes use cookies, but plaintext still needs the token.
@@ -134,25 +138,25 @@ More than a version number:
 
 ## FAQ
 
-| Symptom | Fix |
-|:--|:--|
-| No panel after installing | Hard-refresh the browser; if that fails, restart DSH. |
-| The model cannot call a tool | Host page → “Model tools”, make sure the right conversation / workspace is selected (20 tools are off by default). The panel and scripts are unaffected. |
-| Actions unavailable after a DSH upgrade | Check the reason on the Host page; run `node scripts/doctor.mjs`, then `node scripts/host-deps.mjs --fix`. |
-| Version mismatch | Supports DSH **0.2.1** only (`>=0.2.1-rc.2 <0.2.2`); cross-generation upgrades wait for the plugin to catch up. |
-| Duplicate MCP tab | Remove the old loader line from `cordis.patch.yml` and restart. |
-| DSH won't start after a bad edit | Restore the newest `cordis.patch.yml.*.bak-*` from `~/.dsh/tool-management/backups/`. |
+| Symptom                                 | Fix                                                                                                                                                      |
+|:--------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No panel after installing               | Hard-refresh the browser; if that fails, restart DSH.                                                                                                    |
+| The model cannot call a tool            | Host page → “Model tools”, make sure the right conversation / workspace is selected (20 tools are off by default). The panel and scripts are unaffected. |
+| Actions unavailable after a DSH upgrade | Check the reason on the Host page; run `node scripts/doctor.mjs`, then `node scripts/host-deps.mjs --fix`.                                               |
+| Version mismatch                        | Supports DSH **0.2.1** only (`>=0.2.1-rc.2 <0.2.2`); cross-generation upgrades wait for the plugin to catch up.                                          |
+| Duplicate MCP tab                       | Remove the old loader line from `cordis.patch.yml` and restart.                                                                                          |
+| DSH won't start after a bad edit        | Restore the newest `cordis.patch.yml.*.bak-*` from `~/.dsh/tool-management/backups/`.                                                                    |
 
 Full troubleshooting guide: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## Docs
 
-| Doc | When to read it |
-|:--|:--|
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Missing panel, duplicate tab, actions unavailable after an upgrade, broken sidecars |
-| [Architecture](docs/ARCHITECTURE.md) | How content reaches the model, why one toggle differs between conversations, which file a change lands in |
-| [Compatibility matrix](docs/COMPATIBILITY.md) | Capability matrix per DSH version (verified / untested / unavailable) |
-| [Changelog](CHANGELOG.md) · [Release overview](docs/UPDATE.md) | What changed in each version |
+| Doc                                                            | When to read it                                                                                           |
+|:-------------------------------------------------------------- |:--------------------------------------------------------------------------------------------------------- |
+| [Troubleshooting](docs/TROUBLESHOOTING.md)                     | Missing panel, duplicate tab, actions unavailable after an upgrade, broken sidecars                       |
+| [Architecture](docs/ARCHITECTURE.md)                           | How content reaches the model, why one toggle differs between conversations, which file a change lands in |
+| [Compatibility matrix](docs/COMPATIBILITY.md)                  | Capability matrix per DSH version (verified / untested / unavailable)                                     |
+| [Changelog](CHANGELOG.md) · [Release overview](docs/UPDATE.md) | What changed in each version                                                                              |
 
 ## Development
 
