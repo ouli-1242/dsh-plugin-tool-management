@@ -4665,3 +4665,35 @@ test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器�
   // 参数不成立时不拦：让工具自己报错，别产生无效审批
   assert.equal(asks('subagent_manager_switch', { name: 'x' }), false)
 })
+
+// 签发端与校验端的指纹必须同口径（#22）：get-current 发的是 stampOfText 16 位指纹，
+// apply 核对时也要先算指纹再比 —— 任何一侧拿正文当指纹，应用预设就会恒判冲突静默失效。
+// deps 全部注入假实现：钉的是口径不变量，不碰真实文件与服务。
+test('提示词指纹签发/校验同口径：get-current 发的 stamp 原样带回 apply 必须放行，外部改动后才拒', async () => {
+  const content = '# 全局提示词\n\n正文内容。\n'
+  let currentOnDisk = { ok: true, content, presetId: null, lastApplied: null, exists: true, unapplyAvailable: false, unapplyRemoves: false }
+  const applied = []
+  const ops = buildPromptOps({
+    promptsService: { getCurrent: async () => currentOnDisk },
+    scenePromptSync: {},
+    rulesOps: {},
+    applyPresetGuarded: async (id) => { applied.push(id); return { ok: true, id } },
+    withAgentsMdSync: async (res) => res,
+    promptRefReason: () => '',
+    warn: () => {},
+  })
+  const current = await ops['agentsmd-get-current']()
+  assert.equal(current.ok, true)
+  assert.match(current.stamp, /^[0-9a-f]{16}$/, '签发端给的是 16 位内容指纹')
+  // 内容未动：签发端指纹原样回传 → 放行写入
+  const ok = await ops['agentsmd-apply']({ id: 'p1', expectedStamp: current.stamp })
+  assert.equal(ok.ok, true)
+  assert.deepEqual(applied, ['p1'])
+  // 外部改了文件：同一个旧指纹 → stale-write 拒绝，回执带磁盘上的新指纹
+  currentOnDisk = { ...currentOnDisk, content: content + '\n外部追加的一段。\n' }
+  const stale = await ops['agentsmd-apply']({ id: 'p1', expectedStamp: current.stamp })
+  assert.equal(stale.ok, false)
+  assert.equal(stale.code, 'stale-write')
+  assert.match(stale.current.stamp, /^[0-9a-f]{16}$/)
+  assert.equal(applied.length, 1, '被拒的那次不能写入')
+})

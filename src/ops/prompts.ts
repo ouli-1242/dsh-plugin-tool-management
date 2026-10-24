@@ -151,7 +151,8 @@ export function buildPromptOps(deps: PromptOpsDeps): Record<string, (args: any) 
       if (args && args.expectedStamp !== undefined) {
         const cur = await deps.promptsService.getCurrent()
         if (!cur || cur.ok === false) return cur
-        const conflict = stampConflict(cur.exists ? cur.content : null, args.expectedStamp)
+        // 与签发端同口径：比的是 stampOfText 指纹，拿正文比指纹会恒判冲突。
+        const conflict = stampConflict(cur.exists ? stampOfText(cur.content) : null, args.expectedStamp)
         if (conflict) return conflict
       }
       return deps.applyPresetGuarded(String((args && args.id) || ''))
