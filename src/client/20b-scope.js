@@ -332,18 +332,57 @@
      * 还会和菜单自己的那一拍抢读。
      */
     var scopeMounted = 0
+    /**
+     * 后台刷新（静默）的最小间隔。
+     *
+     * 会话列表在对话流式输出期间按帧通知（任何一条会话的投影更新都会让宿主重建清单），
+     * 只靠下面的 400ms 去抖仍然会变成每 400ms 一次重拉 —— 而每次重拉是两条重查询
+     * （`scope-sessions-list` 扫会话清单、`scope-get` 扫五个域），页面还会跟着修订号
+     * 整份重取，用户看到的就是面板一直闪。清单变化只影响下拉里的标题 / 「当前」标记，
+     * 2 秒的滞后看不出来。
+     */
+    var SCOPE_SILENT_MIN_INTERVAL_MS = 2000
+    var scopeLastSilentAt = 0
     /** 会话列表变化后的合并刷新：标题 / 归档 / 恢复可能连着来，400ms 内只重拉一次。 */
     var scopeRefreshTimer = null
     function scheduleScopeRefresh() {
       if (scopeRefreshTimer !== null) return
-      scopeRefreshTimer = setTimeout(function () { scopeRefreshTimer = null; refreshScope() }, 400)
+      var wait = 400
+      if (scopeLastSilentAt > 0) {
+        var since = Date.now() - scopeLastSilentAt
+        if (since < SCOPE_SILENT_MIN_INTERVAL_MS) wait = Math.max(wait, SCOPE_SILENT_MIN_INTERVAL_MS - since)
+      }
+      scopeRefreshTimer = setTimeout(function () { scopeRefreshTimer = null; refreshScope({ silent: true }) }, wait)
     }
-    function refreshScope() {
+    /** 界面上会被 `refreshScope` 改到的字段指纹（options 已含标题 / 条数 / 「当前」标记）。 */
+    function scopeVisibleSig(s) {
+      return JSON.stringify([
+        s.mode, s.currentSessionId, s.currentScopeKey, s.workspaces, s.options, s.groups,
+        s.overrides, s.effective, s.scene, s.detached, s.prompt, s.global, s.locked,
+      ])
+    }
+    /**
+     * 页面是否需要重取的指纹。
+     *
+     * 页面把 `revision` 当依赖（提示词 / 记忆页），而后台上拉只要写一次状态就会让修订号 +1：
+     * 内容没变也重取，空列表会整块闪成「加载中」。所以修订号只在**内容真的变了**时推进。
+     */
+    function scopeContentSig(s) {
+      return JSON.stringify([s.mode, s.overrides, s.effective, s.scene, s.detached, s.prompt, s.global, s.locked])
+    }
+    /**
+     * @param {object} [opts] 刷新选项。
+     * @param opts.silent 后台刷新：不立 loading、失败不标错误、字段全等时不写状态。
+     *   只有宿主会话清单变动这类非用户动作走它；用户切层 / 写回执仍走默认（可见）路径。
+     */
+    function refreshScope(opts) {
       if (scopeMounted === 0) return Promise.resolve()
+      var silent = !!(opts && opts.silent)
+      if (silent) scopeLastSilentAt = Date.now()
       var current = ''
       try { current = (typeof scopeDeps.currentSessionId === 'function' ? scopeDeps.currentSessionId() : '') || '' } catch (e) { current = '' }
       var seq = ++scopeRefreshSeq
-      setScopeState({ loading: true, error: null, currentSessionId: current })
+      if (!silent) setScopeState({ loading: true, error: null, currentSessionId: current })
       // **只按 `sessionId` 取，不拿 `current` 兜底**：全局那一层给空 sessionId，拿的是
       // 全局快照（含意图三态与租约计数），与某个会话那一层同形。用当前会话兜底会把它的
       // `overrides` 与 `locked` 灌进全局层 —— 面板顶上就会挂着「本会话已锁定」。
@@ -428,23 +467,23 @@
             sessionId: selected, mode: mode, currentSessionId: current, currentScopeKey: currentKey,
             followCurrent: false, workspaces: workspaces, options: options, groups: groups,
           })
-          return refreshScope()
+          return refreshScope(opts)
         }
         return apiCall('scope-get', { sessionId: selected }).then(function (getRes) {
           // 已经有人发起了更新的一次（切了层 / 刚写完）→ 这一份是旧层的，整份丢掉。
           if (seq !== scopeRefreshSeq) return
           if (!getRes || getRes.ok === false) throw new Error(scopeErrorText(getRes))
-          setScopeState({
+          var next = {
             loading: false,
             error: null,
             mode: mode,
+            currentSessionId: current,
             currentScopeKey: currentKey,
             workspaces: workspaces,
             options: options,
             groups: groups,
             overrides: getRes.overrides || {},
             effective: getRes.effective || {},
-            revision: (Number(scopeState.revision) || 0) + 1,
             scene: typeof getRes.scene === 'string' ? getRes.scene : null,
             detached: getRes.detached === true,
             prompt: getRes.prompt && typeof getRes.prompt === 'object'
@@ -452,11 +491,20 @@
               : { override: null, effective: '' },
             global: getRes.global || { scene: null, flags: {} },
             locked: getRes.locked === true,
-          })
+          }
+          var contentChanged = scopeContentSig(next) !== scopeContentSig(scopeState)
+          // 后台上拉且一个字段都没变 → 不写状态。每次写都会让所有订阅页重渲染一遍，
+          // 对话流式输出期间就是每帧一次（面板看着像在闪）。
+          if (silent && !contentChanged && scopeVisibleSig(next) === scopeVisibleSig(scopeState) &&
+            scopeState.loading !== true && scopeState.error === null) return
+          next.revision = contentChanged ? (Number(scopeState.revision) || 0) + 1 : scopeState.revision
+          setScopeState(next)
         })
       }).catch(function (e) {
         // 旧层的失败也不该把新层标成错误。
         if (seq !== scopeRefreshSeq) return
+        // 后台上拉失败不把面板标成读不到：下一次成功会自己清掉，页面那份提示仍在。
+        if (silent && scopeState.loading !== true) return
         setScopeState({ loading: false, error: errMsg(e) })
       })
     }
@@ -480,13 +528,13 @@
       if (!following) {
         setScopeState({ currentSessionId: next })
         // 下拉里「当前对话」那一项 / 它的标题可能变了：重拉一次会话清单（全局层不取覆盖）。
-        refreshScope()
+        refreshScope({ silent: true })
         return
       }
       // 新工作区键要等服务端按 cwd 算出来 —— 置 followCurrent，refreshScope 取完列表后会
       // 把选中层换到 currentKey 并用新键重取一次，不拿旧层数据冒充新层。
       setScopeState({ currentSessionId: next, followCurrent: true, overrides: {}, effective: {}, scene: null, detached: false, locked: false, prompt: { override: null, effective: '' } })
-      refreshScope()
+      refreshScope({ silent: true })
     }
     /** 一行会话选项：标题进正文，覆盖条数与「当前」放行尾。 */
     function scopeSessionOption(row, current) {
