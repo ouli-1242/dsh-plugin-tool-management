@@ -10,7 +10,7 @@ import type { DisabledToolsRead } from '../mcp/disabled-tools.js'
 export interface CandidateOpsDeps {
   /** 一行一个 Agent 预设，各带自己的工具清单与归属组。 */
   presetToolCandidates(): Promise<PresetToolCandidates>
-  /** 宿主 LLM 目录里的 (provider, model) 对 + 去重后的来源清单（不发网络请求）。 */
+  /** 宿主 LLM 目录里的 (provider, model) 对 + 去重后的来源清单（`listModels`，官方适配器带缓存）。 */
   modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }>; providers: Array<{ id: string; name: string }> }>
   /**
    * 某个 (provider, model) 的思考强度档位。与上面那个**代价不同**：要问 adapter，官方注释写明
@@ -50,12 +50,13 @@ export function buildCandidateOps(deps: CandidateOpsDeps): Record<string, (args:
       ...(await deps.presetToolCandidates()),
       unavailable: deps.getToolFailures().map((f) => ({ ...f })),
     }),
-    // model-candidates：宿主 LLM 目录里的 (provider, model) 对（不发网络请求）。
+    // model-candidates：宿主 LLM 目录里的 (provider, model) 对（`listModels`，官方适配器带缓存）。
     'model-candidates': async () => ({ ok: true, ...(await deps.modelCandidates()) }),
     // model-reasoning：某个 (provider, model) 支持的思考强度档位（人设表单的「思考强度」下拉）。
-    // 为什么单独一个 op：档位清单要问 adapter（`llm.resolveModelInfo`，异步、可能联网），而
-    // model-candidates 是"不发网络请求"的本地目录 —— 捆在一次调用里会让"打开人设表单"这件事
-    // 忽然变成可能联网的操作。这里只做参数归一与转发，判定留给调用方（界面按 ok 分两态显示）。
+    // 为什么单独一个 op：档位清单要逐个模型问 adapter（`llm.resolveModelInfo`，异步、
+    // 可能联网），代价随模型数量增长；而 model-candidates 读的是有缓存的官方目录。
+    // 捆在一次调用里会让"打开人设表单"多付这部分代价。这里只做参数归一与转发，
+    // 判定留给调用方（界面按 ok 分两态显示）。
     'model-reasoning': async (args: any) => {
       const provider = String((args && args.provider) || '').trim()
       const model = String((args && args.model) || '').trim()

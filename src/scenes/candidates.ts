@@ -8,7 +8,8 @@
 //     直接读各自 service 的 op，无缓存；
 //   * **预设工具**（presetToolCandidates / presetToolNames）—— 每次枚举要为每个预设取一次
 //     官方 `acquireScope` 租约 + 读一次 `tools.schemas()`，所以按 PRESET_ENUM_CACHE_MS 缓存；
-//   * **模型**（modelCandidates）—— 只读宿主 LLM 目录，**不发网络请求**。
+//   * **模型**（modelCandidates）—— 读宿主 LLM 目录（`listModels`）。官方 DeepSeek API-key
+//     适配器把它实现为服务端模型列表（带缓存，过期后台刷新），不是纯本地读取。
 //
 // 依赖全部经 deps 显式传入。注意 \`toolKeyParts\` 留在 index.ts：场景档案引擎也在用它，
 // 放进本文件会让两个域互相引用。
@@ -98,14 +99,15 @@ export interface Candidates {
   presetToolNames(id: string): Promise<string[]>
   /** 预设名单（名字投影）。 */
   presetNames(): Promise<Array<{ id: string; name: string; trust: string }>>
-  /** 人设表单的模型候选：模型对 + 来源清单（只读宿主 LLM 目录，不发网络请求）。 */
+  /** 人设表单的模型候选：模型对 + 来源清单（读宿主 LLM 目录；官方 DeepSeek 适配器读服务端列表，带缓存）。 */
   modelCandidates(): Promise<{ models: Array<{ provider: string; providerName: string; id: string; name: string }>; providers: Array<{ id: string; name: string }> }>
   /**
    * 某个 (provider, model) 支持的思考强度档位（人设表单的「思考强度」下拉）。
    *
-   * 与 `modelCandidates` **代价差一个数量级**：那个读本地目录、不发请求；这个要问 adapter，
-   * 官方注释写明是 `adapter-owned asynchronous lookup`（可能联网），所以它是**单独的 op**、
-   * 按需拉取，不捆进 model-candidates。
+   * 与 `modelCandidates` **代价差一个数量级**：那个读目录（官方适配器带缓存，通常直接返回，
+   * 过期才后台刷新）；这个逐个 (provider, model) 问 adapter，官方注释写明是
+   * `adapter-owned asynchronous lookup`（可能联网），所以它是**单独的 op**、按需拉取，
+   * 不捆进 model-candidates。
    *
    * 失败原样上报，**不回落**到"猜几个常见档位"：官方对不支持的显式 effort 是在 provider I/O
    * **之前**直接拒（不夹紧、不别名），猜错一次就是子代理起不来。
@@ -495,7 +497,8 @@ export function createCandidates(deps: CandidateDeps): Candidates {
 
   /**
    * 模型候选（人设的「模型」与「模型来源」两个下拉）：宿主已注册的 provider + 各 provider
-   * 能宣告的模型。只读宿主 LLM 目录，**不发起网络请求**（`discoverModels` 会打端点，这里不用）；
+   * 能宣告的模型。`listModels` 是官方契约，但**不是纯本地读取** —— 官方 DeepSeek API-key
+   * 适配器把它实现为服务端模型列表，自带缓存、过期后台刷新，首次访问会等一次加载。
    * 拿不到就返回空列表，UI 退回手填（跨来源模型如 sensenova 的手工条目仍需手填兜底）。
    *
    * 两份投影、用途不同：
