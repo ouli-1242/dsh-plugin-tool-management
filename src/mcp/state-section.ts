@@ -320,10 +320,22 @@ export interface McpStateCatalog {
 /** 状态段缓存的 TTL 与时钟（时钟可注入，便于测试）。 */
 export interface McpStateCatalogOptions extends McpStateOptions {
   /**
-   * 缓存新鲜度。取 3000ms，与 `readNotes` 的 `SIDECAR_TTL_MS` 对齐；
+   * 缓存新鲜度（清单非空时）。取 3000ms，与 `readNotes` 的 `SIDECAR_TTL_MS` 对齐；
    * `mcpmList` 比人设目录重（要枚举工具 schema + 读补丁文件），不适合更短的 TTL。
+   * 空清单走下面的 `emptyTtlMs`。
    */
   ttlMs?: number
+  /**
+   * 「清单确认是空的」时的自动重算间隔。默认 60s。
+   *
+   * 判据是数据级的 `data.length === 0`：空清单对任何 agent 都渲染成空段，拉长它只影响
+   * "多久确认一次还是空的"，不会让哪一屏停在上一次的内容上。有行但段为空（全部停用）
+   * **有意不拉长** —— 那种状态下 loader 条目的启用位仍可能翻转。
+   * 调大 → 手写补丁且宿主不热加载这类无事件来路，状态段跟上得更慢；调小 → 0 台服务器
+   * 时后台重算更频繁（`mcpmList` 每次都要全量枚举已装 bundle）。
+   * 事件驱动的 `refresh()` 不受它影响。
+   */
+  emptyTtlMs?: number
   now?: () => number
   /**
    * 「还没连上」的宽限期（毫秒）。取 60s 的依据：
@@ -343,6 +355,7 @@ export function createMcpStateCatalog(
   opts: McpStateCatalogOptions = {},
 ): McpStateCatalog {
   const ttlMs = opts.ttlMs ?? 3000
+  const emptyTtlMs = opts.emptyTtlMs ?? 60_000
   const now = opts.now ?? (() => Date.now())
 
   // 缓存的是**行数据**而不是渲染结果（与技能 / 子智能体两个目录同一手法）：清单只依赖磁盘，
@@ -353,6 +366,8 @@ export function createMcpStateCatalog(
   // 渲染缓存键 = (尾句前提, 本会话停用的服务器)。两者都影响正文，少一个就会让 A 的段
   // 出现在 B 里（与技能 / 人设两个目录同一手法）。
   let rendered: { key: string; text: string } | null = null
+  /** 空清单按 `emptyTtlMs` 走，有行时仍按 `ttlMs`（判据见 `emptyTtlMs` 的注释）。 */
+  const ttlFor = (): number => (data !== null && data.length === 0 ? emptyTtlMs : ttlMs)
 
   const recompute = async (): Promise<void> => {
     try {
@@ -394,7 +409,7 @@ export function createMcpStateCatalog(
   const graceMs = opts.graceMs ?? 60_000
 
   const text = (agent?: unknown): string => {
-    if (now() - loadedAt > ttlMs) void revalidate()
+    if (now() - loadedAt > ttlFor()) void revalidate()
     if (data === null) return ''
     const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
     // 本会话隐藏的服务器：**逐行**问谓词（行数组就是全集），算出名字清单再渲染 ——
