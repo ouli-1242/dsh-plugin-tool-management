@@ -6,6 +6,7 @@
 //   scope-sessions-list  只读：当前会话区里的未归档会话（下拉框的数据源，按工作区分组）
 //   scope-lock           写：锁 / 解锁某个会话的覆盖
 //   scope-intent-set     写：MCP 服务器 / 技能来源的全局意图（on / off / blocked）
+//   scope-repair         写：隔离损坏的 scope-overrides.json / scope-intent.json（显式修复）
 //
 // ## 为什么这几条都不标 frozen
 //
@@ -160,6 +161,10 @@ export interface ScopeOpsDeps {
    * 那边要等下一次无关的工具变化才恢复。装配层据此重排。
    */
   onChanged?: (sessionId: string, domain: string) => void
+  /** 隔离损坏的 `scope-overrides.json`（用户明确点「修复」时才调）。 */
+  repairScope?(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }>
+  /** 隔离损坏的 `scope-intent.json`（用户明确点「修复」时才调）。 */
+  repairIntent?(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }>
   message(e: unknown): string
 }
 
@@ -1130,6 +1135,29 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
       })
       if (!res.ok) return { ok: false, error: '保存失败: ' + res.error }
       return { ok: true, sessionId, locked }
+    },
+    /**
+     * 修复损坏的作用域侧车：只把解析不了的文件改名留存，不覆盖任何健康文件。
+     *
+     * 这是**显式**的破坏性动作：隔离后覆盖表/意图表按空表继续，下一次对账会把意图从
+     * 运行态反推。界面必须先确认再调用；健康的文件返回 `null`，不做任何事。
+     */
+    'scope-repair': async () => {
+      const errors: string[] = []
+      let scopeQuarantined: string | null = null
+      let intentQuarantined: string | null = null
+      if (deps.repairScope) {
+        const res = await deps.repairScope()
+        if (res.ok) scopeQuarantined = res.quarantined
+        else errors.push('scope-overrides.json: ' + res.error)
+      }
+      if (deps.repairIntent) {
+        const res = await deps.repairIntent()
+        if (res.ok) intentQuarantined = res.quarantined
+        else errors.push('scope-intent.json: ' + res.error)
+      }
+      if (errors.length) return { ok: false, error: errors.join('；') }
+      return { ok: true, scopeQuarantined, intentQuarantined }
     },
   }
 }

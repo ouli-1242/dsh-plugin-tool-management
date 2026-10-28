@@ -93,6 +93,13 @@ const LINKED = ['lib']
  */
 const COPIED = ['docs', 'locale', 'cordis.patch.yml', 'README.md', 'README_EN.md', 'CHANGELOG.md', 'LICENSE', 'screenshots.json', 'package.json']
 
+/**
+ * 不进 profile 的 `docs/` 子目录：演示视频约 97MB，且不在发布面里
+ * （`package.json#files` 只有 `docs/images` 与 `docs/UPDATE.md`）。镜像时跳过源里的它，
+ * 目标里的旧副本会被底部的「清理陈旧文件」一并删掉。
+ */
+const DOC_MIRROR_SKIP = new Set(['videos'])
+
 const PLUGIN_DIR = 'dsh-plugin-tool-management'
 const home = process.env.DSH_HOME || join(homedir(), '.dsh')
 const targetOf = (profile) => join(home, 'profiles', profile, 'node_modules', PLUGIN_DIR)
@@ -170,10 +177,16 @@ function mirrorFile(from, to, link) {
   }
 }
 
-/** Mirror one source tree into the target: copy what exists, drop what does not. */
-function mirror(from, to, link) {
+/**
+ * Mirror one source tree into the target: copy what exists, drop what does not.
+ * @param {string} from source directory
+ * @param {string} to target directory
+ * @param {boolean} link whether files are build artifacts (hardlink) or copied
+ * @param {Set<string>} [skipNames] names to leave out; their target copies get pruned
+ */
+function mirror(from, to, link, skipNames) {
   mkdirSync(to, { recursive: true })
-  const entries = readdirSync(from, { withFileTypes: true })
+  const entries = readdirSync(from, { withFileTypes: true }).filter((entry) => !(skipNames && skipNames.has(entry.name)))
   const names = new Set(entries.map((entry) => entry.name))
 
   // 只改大小写的重命名（`docs/update.md` → `docs/UPDATE.md`）必须先删旧名，否则下面两步
@@ -198,7 +211,7 @@ function mirror(from, to, link) {
     const src = join(from, entry.name)
     const dst = join(to, entry.name)
     if (entry.isDirectory()) {
-      mirror(src, dst, link)
+      mirror(src, dst, link, skipNames)
       continue
     }
     mirrorFile(src, dst, link)
@@ -221,7 +234,7 @@ function syncTo(target) {
   for (const [entries, link] of [[LINKED, true], [COPIED, false]]) {
     for (const entry of entries) {
       if (!existsSync(entry)) continue
-      if (statSync(entry).isDirectory()) mirror(entry, join(target, entry), link)
+      if (statSync(entry).isDirectory()) mirror(entry, join(target, entry), link, entry === 'docs' ? DOC_MIRROR_SKIP : undefined)
       else mirrorFile(entry, join(target, entry), link)
     }
   }

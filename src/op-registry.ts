@@ -317,6 +317,8 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'scope-clear': { write: true },
   // 锁开关自己不能被自己挡住，否则锁上了解不开（与 `rules-scene-lock` 同一条）。
   'scope-lock': { write: true },
+  // 作用域侧车损坏后的显式修复：隔离现场、按空表继续。**不冻结** —— 场景锁着时也可能需要修。
+  'scope-repair': { write: true },
   // 全局意图（`hub/scope-intent.json`）：MCP 服务器 / 技能 / 技能来源三格的**全局开关**。
   // 与 `mcpm-set-enabled` / `skill-source-enable` 同档：写全局定义、场景锁要冻结它。
   // 会话层的 scope-set 仍不冻结（它只写租约，不改全局）。

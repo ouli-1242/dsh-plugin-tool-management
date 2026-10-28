@@ -111,10 +111,12 @@ $DSH_HOME/
    ├─ trash-retention.json              回收站保留期
    ├─ update-check.json                 更新检查缓存（纯缓存，可删）
    ├─ mount.json                        挂载心跳：这一轮插件真的挂上了吗
+   ├─ .write.lock                       跨进程写锁（临时；崩溃后最多挡 1 分钟）
    ├─ audit.jsonl                       审计记录（追加写，不参与任何判定）
    ├─ tool-management.log (+ .1)        插件日志（滚动）
    │
-   ├─ backups/cordis.patch.yml.bak-<时间戳>     改宿主 patch 前的备份
+   ├─ backups/cordis.patch.yml[.global|.profile-<名字>].bak-<YYYYMMDD>-<HHMMSSmmmsss>
+   │                                            改宿主 patch 前的备份（按层级各留 5 份）
    └─ trash/
       ├─ skills-trash/<id>/            六类回收站：条目 = manifest.json + 负载
       ├─ subagents-trash/<id>/         移入 = 移动（原位置立刻消失）

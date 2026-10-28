@@ -10,20 +10,33 @@
         //   · GitHub 图标——原样保留，仓库入口一个都不能少。
         //
         // 交互约定：
-        //   · 点击 = 查一次（只读 op `update-status` + `refresh:true`）—— 不安装、不改配置、
-        //     不碰 `@latest`，`update-check.ts` 那几条硬约束照旧。插件跑在宿主的
-        //     node_modules 里，装不了自己 —— 这颗键**不许**承诺自动更新；
-        //   · 答案用 toast 说，不弹窗：它是一句话结论，弹窗要压暗整页、还得再点一次才关。
+        //   · 没有更新时点击 = 查一次（只读 op `update-status` + `refresh:true`）；
+        //   · 有更新时点击 = 打开升级卡，展示**固定版本**的 CLI 命令供复制。
+        //     插件跑在宿主的 node_modules 里，不能自我安装；宿主也没有"更新已装插件"的接口
+        //     （`installBundle` 对已在 profile 依赖里的包在 HMR 下必拒），所以这里只给命令，
+        //     不承诺在界面内完成安装，也不出现 `@latest`。
+        //   · 检查结论用 toast 说（一句话结论，不必弹窗）；只有要给人抄命令时才弹卡。
         //
-        // 结果存**会话级**（`updateProbe`）：设置面板每次打开都会重挂本组件，重挂不该把「更新」
-        // 抹掉，也不该每次都去读一遍盘。
+        // 结果存**会话级**（`updateProbe`）：设置面板每次打开都会重挂本组件，重挂不该把
+        // 「更新」抹掉，也不该每次都去读一遍盘。
         var updateProbe = { info: null, asked: false }
 
         function FeedbackLinks() {
           var st = React.useState({ busy: false, info: updateProbe.info })
           var state = st[0], setState = st[1]
+          var co = React.useState(false)
+          var cardOpen = co[0], setCardOpen = co[1]
+          var cp = React.useState(false)
+          var copied = cp[0], setCopied = cp[1]
           var busy = state.busy === true
           var info = state.info
+          var hasUpdate = !!info && String(info.status || '') === 'update-available'
+          var targetVersion = String((info && info.bestCompatible) || '')
+          // 服务端按当前 profile 拼好的命令；缓存读数读到 old cache 时也会重建（见 update-check.ts）。
+          var command = String((info && info.command) || '')
+
+          // 只改给到的字段：补读数 / 检查两路异步回填不能互相覆盖。
+          var patch = function (next) { setState(function (prev) { return Object.assign({}, prev, next) }) }
 
           // 挂载时补一次缓存读数（不带 refresh）：服务端启动时预热过，这一次通常零网络，
           // 只是把盘上 `update-check.json` 的结论先摆上来。读不到 = 少一个「更新」标记，不报错。
@@ -35,61 +48,111 @@
               if (!r || !r.ok) return
               updateProbe.info = r
               // 用户已经自己点过一次（拿到的是更新的结果）就不覆盖。
-              if (alive) setState(function (prev) { return prev.info ? prev : { busy: prev.busy, info: r } })
+              if (alive) setState(function (prev) { return prev.info ? prev : Object.assign({}, prev, { info: r }) })
             }).catch(function () { /* 静默：这个标记只是便利，不是结论 */ })
             return function () { alive = false }
           }, [])
 
-          var hasUpdate = !!info && String(info.status || '') === 'update-available'
-
           var check = function () {
             if (busy) return
-            setState({ busy: true, info: info })
+            patch({ busy: true })
             // `refresh:true`：点这一下就是要一个**现在**的答案。读 12 小时前的缓存等于骗人
             // ——「已是最新」可能是在某个版本发布之前算出来的。
             apiCall('update-status', { refresh: true }).then(function (r) {
               if (!r || !r.ok) throw new Error(String((r && r.error) || t('compat.update.unknown')))
               updateProbe.info = r
-              setState({ busy: false, info: r })
+              patch({ busy: false, info: r })
               var s = String(r.status || 'unknown')
               showPluginToast(updateStatusText(r, t), s === 'up-to-date' ? 'ok' : 'warn')
             }).catch(function (e) {
-              setState({ busy: false, info: info })
+              patch({ busy: false })
               showPluginToast(t('update.failed', { error: errMsg(e) }), 'err')
             })
           }
 
-          // 标题就是"这一下会做什么"：没有答案时是"查一次"，有答案时是"再查一遍"。
+          /**
+           * 复制升级命令。命令由服务端按当前 profile 拼好（固定版本），这里只负责放进剪贴板。
+           * 剪贴板不可用时命令仍显示在卡里，用户可以直接选中复制。
+           */
+          var copyCommand = function () {
+            if (command === '') return
+            var done = function () {
+              setCopied(true)
+              showPluginToast(t('update.install.copied'), 'ok')
+            }
+            var fail = function () { showPluginToast(t('update.install.copyFailed'), 'err') }
+            try {
+              if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                navigator.clipboard.writeText(command).then(done, fail)
+                return
+              }
+            } catch (e) { /* 落到下面的失败提示 */ }
+            fail()
+          }
+
+          var onUpdateClick = function () {
+            if (busy) return
+            if (hasUpdate) { setCopied(false); setCardOpen(true); return }
+            check()
+          }
+
+          // 标题就是"这一下会做什么"：没答案时"查一次"，有答案时"再查一遍"，
+          // 有更新时"查看升级命令"。
           var tip = busy ? t('update.checking')
-            : info ? updateStatusText(info, t) + ' · ' + t('update.recheck')
-              : t('update.check')
-          return React.createElement('div', { className: 'dsm-feedback-links' },
-            // 版本号在最左：它回答的是"我现在装的是哪个版本"，与右边两颗键各自回答的问题不同，
-            // 所以不并进按钮文字里（并进去就成了"要变成哪个版本"，两件事会混）。
-            React.createElement(VersionBadgeComponent, null),
-            React.createElement('button', {
-              type: 'button',
-              // 永远是同一颗图标键（用户 2026-10-22：不必在有更新时多出「更新」二字）——
-              // 有更新只多一个红点，宽度不变，这一行也就不会因为状态变化而抖一下。
-              className: 'dsm-feedback-link dsm-feedback-check' + (busy ? ' dsm-feedback-link-busy' : ''),
-              'aria-label': hasUpdate ? t('update.action') : t('update.check'),
-              'aria-busy': busy ? 'true' : 'false',
-              title: tip,
-              onClick: check,
+            : hasUpdate ? updateStatusText(info, t) + ' · ' + t('update.install.open')
+              : info ? updateStatusText(info, t) + ' · ' + t('update.recheck')
+                : t('update.check')
+          var label = hasUpdate ? t('update.action') : t('update.check')
+          return React.createElement(React.Fragment, null,
+            React.createElement('div', { className: 'dsm-feedback-links' },
+              // 版本号在最左：它回答的是"我现在装的是哪个版本"，与右边两颗键各自回答的问题不同，
+              // 所以不并进按钮文字里（并进去就成了"要变成哪个版本"，两件事会混）。
+              React.createElement(VersionBadgeComponent, null),
+              React.createElement('button', {
+                type: 'button',
+                // 永远是同一颗图标键（用户 2026-10-22：不必在有更新时多出「更新」二字）——
+                // 有更新只多一个红点，宽度不变，这一行也就不会因为状态变化而抖一下。
+                className: 'dsm-feedback-link dsm-feedback-check' + (busy ? ' dsm-feedback-link-busy' : ''),
+                'aria-label': label,
+                'aria-busy': busy ? 'true' : 'false',
+                title: tip,
+                onClick: onUpdateClick,
+              },
+                React.createElement(UpdateMark16, null),
+                hasUpdate ? React.createElement('span', { className: 'dsm-feedback-dot', 'aria-hidden': 'true' }) : null),
+              React.createElement('a', {
+                className: 'dsm-feedback-link',
+                href: 'https://github.com/ouli-1242/dsh-plugin-tool-management',
+                target: '_blank',
+                rel: 'noreferrer',
+                'aria-label': t('link.project'),
+                title: t('link.project'),
+              },
+                React.createElement(GithubMark16, null))),
+            cardOpen ? React.createElement(Modal, {
+              title: t('update.install.title', { version: targetVersion }),
+              closeLabel: t('btn.close'),
+              onClose: function () { setCardOpen(false) },
+              className: 'dsm-modal-sm',
             },
-              React.createElement(UpdateMark16, null),
-              // 有新版本时右上角挂一个小红点：这是这一簇里唯一"扫一眼就看见"的信号，
-              // 图标本身不随状态变（文字在窄面板下还会被挤掉）。
-              hasUpdate ? React.createElement('span', { className: 'dsm-feedback-dot', 'aria-hidden': 'true' }) : null),
-            React.createElement('a', {
-              className: 'dsm-feedback-link',
-              href: 'https://github.com/ouli-1242/dsh-plugin-tool-management',
-              target: '_blank',
-              rel: 'noreferrer',
-              'aria-label': t('link.project'),
-              title: t('link.project'),
-            },
-              React.createElement(GithubMark16, null)))
+              React.createElement('p', { className: 'dsm-help' }, t('update.install.body', {
+                current: String((info && info.current) || '?'),
+                version: targetVersion,
+              })),
+              command !== ''
+                ? React.createElement('pre', { className: 'dsm-code' }, command)
+                : React.createElement('p', { className: 'dsm-help' }, t('update.install.noCommand')),
+              React.createElement('div', { className: 'dsm-feedback dsm-warning' }, t('update.install.after')),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-secondary',
+                  onClick: function () { setCardOpen(false) },
+                }, t('btn.close')),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn', disabled: command === '',
+                  onClick: copyCommand,
+                }, copied ? t('update.install.copied') : t('update.install.copy'))))
+              : null)
         }
 
         // MCP 服务页：与 Skills 页共用 dsm-* 设计语言（统计卡 / 筛选 / 分组卡片 / 模态框）。

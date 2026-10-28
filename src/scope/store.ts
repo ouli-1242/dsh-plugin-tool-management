@@ -102,6 +102,12 @@ export interface ScopeStore {
    * （`scope-sessions-list` 正是这种情况）。不传则走 `deps.liveSessionIds`。
    */
   pruneDeletedSessions(live?: ReadonlySet<string> | null): Promise<{ ok: true; pruned: number } | { ok: false; error: string }>
+  /**
+   * 隔离损坏的侧车：解析不了就改名成 `scope-overrides.json.corrupt-<时间戳>`，然后按空表继续。
+   *
+   * 只在用户明确点「修复」时调用；健康的文件什么都不做，绝不为了让写入通过而覆盖现场。
+   */
+  repair(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }>
   /** 丢掉缓存（测试与启动对账用）。 */
   invalidate(): void
 }
@@ -306,11 +312,36 @@ export function createScopeStore(deps: ScopeStoreDeps): ScopeStore {
     })
   }
 
+  async function repair(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }> {
+    return deps.withWriteLock(async () => {
+      let raw: string
+      try {
+        raw = await readFile(file(), 'utf8')
+      } catch (e) {
+        if ((e as { code?: string } | null)?.code === 'ENOENT') return { ok: true, quarantined: null }
+        return { ok: false, error: deps.message(e) }
+      }
+      try {
+        normalizeScopeOverrides(JSON.parse(raw))
+        return { ok: true, quarantined: null }
+      } catch {
+        const target = file() + '.corrupt-' + Date.now()
+        try {
+          await renameWithRetry(file(), target)
+        } catch (e) {
+          return { ok: false, error: deps.message(e) }
+        }
+        cache = null
+        return { ok: true, quarantined: target }
+      }
+    })
+  }
+
   function invalidate(): void {
     cache = null
   }
 
-  return { read, readStrict, snapshot, mode, modeSync, scopeOf, scopeOfSync, switchMode, mutate, mutateAll, clearSession, pruneDeletedSessions, invalidate }
+  return { read, readStrict, snapshot, mode, modeSync, scopeOf, scopeOfSync, switchMode, mutate, mutateAll, clearSession, pruneDeletedSessions, repair, invalidate }
 }
 
 /**

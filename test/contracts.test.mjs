@@ -48,6 +48,7 @@ import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpP
 import { isToolDisabledIn } from '../lib/mcp/manager.js'
 import { renderMcpStateSection } from '../lib/mcp/state-section.js'
 import { EXPECTED_PEER_RANGE, assessHost } from '../lib/compat/probe.js'
+import { pickBestCompatible, sourcePlan } from '../lib/update-check.js'
 import { scanLoaderRows } from '../lib/mcp/loader-token.js'
 import { isValidGroupPath, isValidGroupSegment } from '../lib/memories/constants.js'
 import { createMemoriesService } from '../lib/memories/service.js'
@@ -62,7 +63,7 @@ import { PROMPT_CONTENT_MAX_BYTES, applyFlag, clampPromptBaseline, enterSceneInS
 import { WORKSPACE_SCOPE_KEY_MAX, WORKSPACE_SCOPE_PREFIX, isWorkspaceScopeKey, scopeKeyLabel, scopeKeyOfRow, workspaceCwdOfScopeKey, workspaceScopeKeyOf } from '../lib/scope/workspace-key.js'
 import { chooseUserPromptLayer, promptBaselineDiffers } from '../lib/memories/prompt-layer.js'
 import { suppressedKindsForSession } from '../lib/context-inject.js'
-import { normalizeScopeIntent, INTENT_DOMAINS, claimsResource, planReconcile, resolveResource, scanSessionClaims } from '../lib/scope/intent.js'
+import { normalizeScopeIntent, pruneIntentKeys, INTENT_DOMAINS, claimsResource, planReconcile, resolveResource, scanSessionClaims } from '../lib/scope/intent.js'
 import { pruneSessionScopes } from '../lib/scope/store.js'
 import { createSkillCatalog, renderSkillCatalog, renderSkillCatalogDelta, skillCatalogNeedsTakeover } from '../lib/skills/catalog.js'
 import { createMcpStateCatalog } from '../lib/mcp/state-section.js'
@@ -4746,4 +4747,52 @@ test('提示词指纹签发/校验同口径：get-current 发的 stamp 原样带
   assert.equal(stale.code, 'stale-write')
   assert.match(stale.current.stamp, /^[0-9a-f]{16}$/)
   assert.equal(applied.length, 1, '被拒的那次不能写入')
+})
+
+test('更新检查的源计划：宿主顺序优先、私有源不被公网测速挤后、无登记回退单源', () => {
+  const npm = 'https://registry.npmjs.org/'
+  const mirror = 'https://registry.npmmirror.com/'
+  // 取不到宿主登记：空计划，调用方走 npm 官方单源
+  assert.deepEqual(sourcePlan(null, mirror), [])
+  // 配置为空：pnpm 解析值在前，fallback 随后
+  assert.deepEqual(sourcePlan({ registry: null, resolved: npm, fallbackRegistries: [mirror] }, null), [npm, mirror])
+  // 测速命中是计划成员且首项为公网源：提到最前
+  assert.deepEqual(sourcePlan({ registry: null, resolved: npm, fallbackRegistries: [mirror] }, mirror), [mirror, npm])
+  // 首项是私有源：即使测速命中，也不许把它挤后
+  const privateRegistry = 'https://npm.corp.example/npm/'
+  assert.deepEqual(
+    sourcePlan({ registry: privateRegistry, resolved: null, fallbackRegistries: [mirror] }, mirror),
+    [privateRegistry, mirror],
+  )
+  // 重复、非法地址被去掉；URL 规范化（末尾斜杠、主机小写）
+  assert.deepEqual(
+    sourcePlan({ registry: 'https://REGISTRY.NPMJS.ORG', resolved: null, fallbackRegistries: ['https://registry.npmjs.org/', 'ftp://x/', 'not a url'] }, null),
+    [npm],
+  )
+})
+
+test('更新检查跳过 deprecated 版本：只废弃版可用时宁可不推荐', () => {
+  const range = '>=0.2.1-rc.3 <0.2.2'
+  const host = '0.2.1-rc.3'
+  const versions = {
+    '0.21.9': { engines: { dsh: range } },
+    '0.21.10': { engines: { dsh: range }, deprecated: 'broken release' },
+    '0.21.8': { engines: { dsh: range } },
+  }
+  assert.equal(pickBestCompatible(versions, host), '0.21.9')
+  assert.equal(pickBestCompatible({ '0.21.10': { engines: { dsh: range }, deprecated: 'broken release' } }, host), null)
+  assert.equal(pickBestCompatible({ '0.21.9': { engines: { dsh: range }, deprecated: false } }, host), '0.21.9')
+})
+
+test('意图清理只删除清单里不存在的键，无变化时返回原对象', () => {
+  const base = normalizeScopeIntent({
+    mcp: {},
+    skillSources: { 'src/a': 'on', 'src/b': 'blocked' },
+    skills: { 'src/a/skill': 'off' },
+  })
+  const pruned = pruneIntentKeys(base, 'skillSources', new Set(['src/a']))
+  assert.deepEqual(Object.keys(pruned.skillSources), ['src/a'])
+  assert.equal(pruned.skillSources['src/a'], 'on')
+  assert.equal(pruned.skills['src/a/skill'], 'off', '别的域原样保留')
+  assert.equal(pruneIntentKeys(base, 'skillSources', new Set(['src/a', 'src/b'])), base)
 })

@@ -38,6 +38,13 @@ export interface IntentStore {
    * 读-改-写（写锁内强制重读）。`mutate` 返回新意图；返回 `undefined` = 放弃写入。
    */
   mutate(mutate: (current: ScopeIntent) => ScopeIntent | undefined): Promise<{ ok: true; intent: ScopeIntent } | { ok: false; error: string }>
+  /**
+   * 隔离损坏的侧车：解析不了就改名成 `scope-intent.json.corrupt-<时间戳>`，然后按空表继续。
+   *
+   * 只在用户明确点「修复」时调用；健康的文件什么都不做。空表意味着"还没有意见"，
+   * 下一次对账会从运行态反推 —— 调用方必须先把这一点讲清楚，不能静默执行。
+   */
+  repair(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }>
   /** 丢掉缓存（测试与启动对账用）。 */
   invalidate(): void
 }
@@ -126,10 +133,36 @@ export function createIntentStore(deps: IntentStoreDeps): IntentStore {
     })
   }
 
+  async function repair(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }> {
+    return deps.withWriteLock(async () => {
+      let raw: string
+      try {
+        raw = await readFile(file(), 'utf8')
+      } catch (e) {
+        if ((e as { code?: string } | null)?.code === 'ENOENT') return { ok: true, quarantined: null }
+        return { ok: false, error: deps.message(e) }
+      }
+      try {
+        normalizeScopeIntent(JSON.parse(raw))
+        return { ok: true, quarantined: null }
+      } catch {
+        const target = file() + '.corrupt-' + Date.now()
+        try {
+          await renameWithRetry(file(), target)
+        } catch (e) {
+          return { ok: false, error: deps.message(e) }
+        }
+        cache = null
+        rev += 1
+        return { ok: true, quarantined: target }
+      }
+    })
+  }
+
   function invalidate(): void {
     cache = null
     rev += 1
   }
 
-  return { read, snapshot, revision: () => rev, mutate, invalidate }
+  return { read, snapshot, revision: () => rev, mutate, repair, invalidate }
 }

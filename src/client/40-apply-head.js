@@ -193,6 +193,7 @@
           t: t,
           currentSessionId: currentSessionId,
           subscribeSessionList: subscribeSessionList,
+          toast: showPluginToast,
         })
         /**
          * 一次性「服务点名」：锁挂不上时把几个关键服务在**本插件上下文里**的可见性一起写出来。

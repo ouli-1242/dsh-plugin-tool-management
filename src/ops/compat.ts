@@ -545,13 +545,13 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
     'update-status': async (args: any) => {
       const checker = deps.updateChecker
       if (!checker) {
-        return { ok: true, status: 'unknown', current: null, host: null, newest: null, bestCompatible: null, command: null, checkedAt: null, fromCache: false, error: '更新检查未接线' }
+        return { ok: true, status: 'unknown', current: null, host: null, newest: null, bestCompatible: null, source: null, command: null, checkedAt: null, fromCache: false, error: '更新检查未接线' }
       }
       try {
         // `ok` 刻意放在最后覆盖：op 本身成功，答案由 `status` 表达（含 `unknown`）。
         return { ...(await checker.check(Boolean(args && args.refresh))), ok: true }
       } catch (e) {
-        return { ok: true, status: 'unknown', current: null, host: null, newest: null, bestCompatible: null, command: null, checkedAt: null, fromCache: false, error: deps.message(e) }
+        return { ok: true, status: 'unknown', current: null, host: null, newest: null, bestCompatible: null, source: null, command: null, checkedAt: null, fromCache: false, error: deps.message(e) }
       }
     },
   }

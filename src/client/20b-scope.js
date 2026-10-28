@@ -299,6 +299,8 @@
       currentSessionId: function () { return '' },
       /** 订阅宿主会话列表 / 工作区记账（归档 / 恢复 / 起标题后下拉要跟着变）；返回取消函数。 */
       subscribeSessionList: function (fn) { return null },
+      /** 提示条（修复结果用）；缺省不弹。 */
+      toast: function () {},
     }
     function configureScopeDeps(next) {
       scopeDeps = Object.assign({}, scopeDeps, next || {})
@@ -722,6 +724,32 @@
       if (scopeState.writeError !== null) setScopeState({ writeError: null })
     }
     /**
+     * 隔离损坏的作用域侧车（`scope-repair`）。
+     *
+     * 只改名、不覆盖：损坏文件留在 hub 里供事后查看，覆盖表/意图表按空表继续。
+     * 调用方（ScopeBar）负责二次确认 —— 这是把用户设置退回默认的动作。
+     */
+    function scopeRepair() {
+      return apiCall('scope-repair', {}).then(function (res) {
+        if (!res || res.ok !== true) {
+          scopeDeps.toast(scopeT('scope.repair.failed', { error: scopeErrorText(res) || '?' }), 'err')
+          return res
+        }
+        var files = []
+        if (res.scopeQuarantined) files.push('scope-overrides.json')
+        if (res.intentQuarantined) files.push('scope-intent.json')
+        scopeDeps.toast(files.length
+          ? scopeT('scope.repair.done', { files: files.join(' / ') })
+          : scopeT('scope.repair.none'), files.length ? 'ok' : 'warn')
+        scopeClearWriteError()
+        refreshScope({ silent: true })
+        return res
+      }).catch(function (e) {
+        scopeDeps.toast(scopeT('scope.repair.failed', { error: errMsg(e) }), 'err')
+        return { ok: false, error: errMsg(e) }
+      })
+    }
+    /**
      * 锁 / 解锁**本会话**（0.21.2，决策 12）。只在会话层成立：
      * 锁冻结的是这个会话自己的覆盖写入，与场景锁（全局写）互不干扰。
      */
@@ -752,6 +780,13 @@
     function ScopeBar(props) {
       var t = props.t
       var snap = React.useSyncExternalStore(subscribeScope, scopeSnapshot, scopeSnapshot)
+      // 修复是破坏性动作：第一次点只切到「确认」，第二次才执行。
+      var ra = React.useState(false)
+      var repairArmed = ra[0], setRepairArmed = ra[1]
+      // 错误消失（修复成功 / 用户点掉）后别让下一次错误直接落在「确认」态。
+      React.useEffect(function () {
+        if (!snap.writeError) setRepairArmed(false)
+      }, [snap.writeError])
       // 首次挂载拉一次：面板一打开就要知道"我在哪一层"。失败不阻塞页面（下拉仍在，只是选项少）。
       // **每次挂载都拉**：设置页与侧栏入口是两个挂载点，切页签又会让页面重新挂载；
       // 只在模块作用域缓存一份的话，别处写进去的覆盖要等下一次下拉操作才看得见。
@@ -807,6 +842,18 @@
         snap.writeError
           ? h('div', { key: 'writeerr', className: 'dsm-scope-bar-error', role: 'alert' }, [
             h('span', { key: 'text' }, String(snap.writeError)),
+            // 损坏的侧车没有别的恢复入口：写入会一直失败。修复只隔离现场，不覆盖健康文件。
+            h('button', {
+              key: 'repair',
+              type: 'button',
+              className: 'dsm-btn dsm-btn-quiet',
+              title: scopeT('scope.repair.hint'),
+              onClick: function () {
+                if (!repairArmed) { setRepairArmed(true); return }
+                setRepairArmed(false)
+                scopeRepair()
+              },
+            }, repairArmed ? scopeT('scope.repair.confirm') : scopeT('scope.repair.action')),
             h('button', { key: 'x', type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { scopeClearWriteError() } }, scopeT('scope.warn.dismiss')),
           ])
           : null,

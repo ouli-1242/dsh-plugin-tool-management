@@ -7,7 +7,12 @@
 //   · 挑不出来就说 `no-compatible-version`，不给"最新版"这种没有意义的答案；
 //   · 命令固定 `dsh plugin --profile <p> add <pkg>@<version>`，**绝不出现 `@latest`**。
 //
-// 网络策略：只请求 npm registry；3 秒硬超时；检测到代理环境变量直接返回 `proxy-unsupported`，
+// 下载源跟宿主走，不自己再定一套：`pluginManager.registries()` 给出配置的第一源与 fallback，
+// `pluginRegistryProbe.fastest()` 是宿主自己的双源测速；两个都取不到时退回 npm 官方单源。
+// 这里只把宿主的顺序落成请求顺序 —— 私有源优先是用户明确配置的意图，测速结果不许把它挤后。
+//
+// 网络策略：只请求 npm registry（不穿透代理）；首源 3 秒、回退源 4 秒——镜像的元数据可能比
+// `/ping` 慢得多，3 秒会把能通的路判死；检测到代理环境变量直接返回 `proxy-unsupported`，
 // 不尝试穿透（穿透失败会挂住启动流程，而这件事本来就不该阻塞任何东西）。
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -18,8 +23,29 @@ import { writeFileAtomically } from './memories/index-io.js'
 export const UPDATE_CHECK_FILE = 'update-check.json'
 /** 本插件在 npm 上的包名 —— 查更新与拼安装命令都用它。 */
 export const PACKAGE_NAME = 'dsh-plugin-tool-management'
-/** npm registry 的元数据地址（只读一次、3 秒超时、走系统代理设置）。 */
-export const REGISTRY_URL = 'https://registry.npmjs.org/' + PACKAGE_NAME
+/** npm 官方 registry：没有宿主登记时的唯一来源，也是单源回退的默认值。 */
+const DEFAULT_REGISTRY = 'https://registry.npmjs.org/'
+/** npm registry 的元数据地址（单源回退时使用）。 */
+export const REGISTRY_URL = DEFAULT_REGISTRY + PACKAGE_NAME
+/** 公网源集合：宿主测速只覆盖这两个，只有它们能被测速结果提到最前。 */
+const PUBLIC_REGISTRIES = new Set([DEFAULT_REGISTRY, 'https://registry.npmmirror.com/'])
+/**
+ * registry 元数据的响应体上限（8 MiB）。
+ *
+ * 本包的 install-v1 元数据只有几十 KiB；上限只用来挡住恶意或误配的源在超时前推来
+ * 数百 MB —— `res.json()` 本身不设限，宿主与插件同进程，内存峰值会直接拖垮宿主。
+ */
+const MAX_REGISTRY_BYTES = 8 * 1024 * 1024
+
+/** 宿主登记的下载源（`pluginManager.registries()` 的投影）。 */
+export interface HostRegistries {
+  /** 配置里显式指定的第一源；未配置 = null（此时看 `resolved`）。 */
+  registry: string | null
+  /** 第一源不可达或副本过期时依次跟上的源，顺序即优先级。 */
+  fallbackRegistries: string[]
+  /** pnpm 在 profile 里实际解析到的源；解析不出 = null。 */
+  resolved: string | null
+}
 
 /** 更新检查的结论：有新版本 / 已最新 / 没有兼容版本 / 当前版本已不兼容 等。 */
 export type UpdateStatus =
@@ -44,6 +70,8 @@ export interface UpdateCheckResult {
   newest: string | null
   /** 与当前宿主兼容的最高版本。 */
   bestCompatible: string | null
+  /** 回答这次检查的源（规范化 URL）；单源回退时是 npm 官方。 */
+  source: string | null
   /** 可直接复制的安装命令（`bestCompatible` 为空时是 null）。 */
   command: string | null
   checkedAt: string
@@ -63,12 +91,22 @@ export interface UpdateCheckerOptions {
   currentEngines?: string | null
   /** 安装命令里的 profile 名；未知时命令里写 `<profile>`。 */
   profile?: string | (() => string | undefined)
+  /** 宿主的下载源登记（`pluginManager.registries()`）；取不到 = null，退回单源。 */
+  registries?: () => Promise<HostRegistries | null>
+  /** 宿主双源测速（`pluginRegistryProbe.fastest()`）；返回命中的源或 null。 */
+  fastest?: () => Promise<string | null>
   /** 成功结果的缓存时长（默认 12h）。 */
   ttlMs?: number
   /** 失败结果的缓存时长（默认 1h）。 */
   failureTtlMs?: number
-  /** 请求超时（默认 3s）。 */
+  /** 首个源的请求超时（默认 3s）。 */
   timeoutMs?: number
+  /** 回退源的请求超时（默认 4s）：镜像元数据慢于 `/ping`，首源的 3 秒对它不公平。 */
+  fallbackTimeoutMs?: number
+  /** 读宿主源登记的上限（默认 2.5s）：只有宿主需要去跑 pnpm 解析 `.npmrc` 时才会用到。 */
+  planTimeoutMs?: number
+  /** 等测速结论的上限（默认 2s）：宿主自己 1.5 秒就会给答案。 */
+  probeTimeoutMs?: number
   /** 便于测试注入；默认 `process.env`。 */
   env?: Record<string, string | undefined>
   /** 便于测试注入；默认全局 fetch。 */
@@ -104,9 +142,131 @@ export function proxyDetected(env: Record<string, string | undefined>): boolean 
 }
 
 /**
+ * 规范成与 pnpm 比较时同样的形状：http(s)、主机小写、路径以 `/` 结尾。
+ *
+ * 保留路径与端口 —— 私有源常挂在反向代理的子路径下（`/artifactory/api/npm/`），
+ * 砍掉就指到别处去了。
+ *
+ * @param raw 配置里的原始地址
+ * @returns 规范化后的地址；不是合法 http(s) URL 时 null
+ */
+function normalizeRegistry(raw: string | null | undefined): string | null {
+  const text = String(raw ?? '').trim()
+  if (text === '') return null
+  try {
+    const url = new URL(text)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    if (!url.pathname.endsWith('/')) url.pathname += '/'
+    url.search = ''
+    url.hash = ''
+    // 凭据走 ~/.npmrc（宿主安装器的口径），不跟着地址进缓存与界面。
+    url.username = ''
+    url.password = ''
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 把宿主的下载源登记整理成按序尝试的列表。
+ *
+ * 顺序就是宿主安装器自己的顺序：配置的第一源 → fallback 列表 →（配置为空时）pnpm 解析到的源。
+ * 测速结果只在**首项本来就是公网源**时提前：首项是私有源时保持用户配置的顺序，
+ * 一次公网测速不许把私有源挤到后面。
+ *
+ * @param configured 宿主登记；null（取不到）→ 返回空数组，由调用方走 npm 官方单源
+ * @param fastest 测速命中的源；null = 没测或都不可达
+ * @returns 规范化、去重后的源列表；可能为空
+ */
+export function sourcePlan(configured: HostRegistries | null, fastest: string | null): string[] {
+  if (!configured) return []
+  const first = normalizeRegistry(configured.registry) ?? normalizeRegistry(configured.resolved)
+  const plan: string[] = []
+  for (const raw of [first, ...configured.fallbackRegistries.map(normalizeRegistry)]) {
+    if (raw !== null && !plan.includes(raw)) plan.push(raw)
+  }
+  const probed = normalizeRegistry(fastest)
+  const head = plan[0]
+  if (probed !== null && plan.includes(probed) && (head === undefined || PUBLIC_REGISTRIES.has(head))) {
+    return [probed, ...plan.filter((registry) => registry !== probed)]
+  }
+  return plan
+}
+
+/**
+ * 限时等待外部答案；超时或抛错都得到 null。
+ *
+ * 超时的那次调用没法取消（宿主的 pnpm 子进程照跑），但这里不等它 ——
+ * 更新检查不该被一次 pnpm 慢启动拖住。
+ */
+async function settleWithin<T>(run: (() => Promise<T | null>) | undefined, ms: number): Promise<T | null> {
+  if (!run) return null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      run().catch(() => null),
+      new Promise<null>((resolvePromise) => { timer = setTimeout(() => resolvePromise(null), ms) }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+/**
+ * 读一份 registry 元数据，流式累计并限制响应体大小。
+ *
+ * @param fetchImpl 注入的 fetch（便于测试）
+ * @param url 完整元数据地址
+ * @param timeoutMs 本次请求的超时（与调用方的首源 / 回退源预算一致）
+ * @returns 解析后的元数据
+ * @throws 非 2xx、响应体超过 `MAX_REGISTRY_BYTES`、超时或 JSON 不合法
+ */
+async function readRegistryMeta(fetchImpl: typeof fetch, url: string, timeoutMs: number): Promise<RegistryMeta> {
+  const res = await fetchImpl(url, {
+    headers: { accept: 'application/vnd.npm.install-v1+json' },
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  if (!res.ok) throw new Error('registry HTTP ' + res.status)
+  const declared = Number(res.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > MAX_REGISTRY_BYTES) throw new Error('registry response too large')
+  const body = res.body as {
+    getReader?: () => {
+      read(): Promise<{ done: boolean; value?: Uint8Array }>
+      cancel?(): Promise<void>
+    }
+  } | null
+  let text: string
+  if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (!value) continue
+        total += value.byteLength
+        if (total > MAX_REGISTRY_BYTES) throw new Error('registry response too large')
+        chunks.push(value)
+      }
+    } finally {
+      try { await reader.cancel?.() } catch { /* 已经读完或已中止 */ }
+    }
+    text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total).toString('utf8')
+  } else {
+    // 没有流实现的 fetch（测试替身 / 老运行时）：只能读完再校验，至少不把超大文本交给 JSON.parse。
+    text = await res.text()
+    if (Buffer.byteLength(text, 'utf8') > MAX_REGISTRY_BYTES) throw new Error('registry response too large')
+  }
+  return JSON.parse(text) as RegistryMeta
+}
+
+/**
  * 从 registry 的 `versions` 里挑与 `host` 兼容的最高版本。
  *
  * 兼容判据是**每个版本自己的** `engines.dsh`：没有该字段、不是合法 range、或不满足 → 跳过。
+ * 被维护者标记 `deprecated` 的版本也跳过 —— 它可能仍满足 range，但正是维护者明确不建议装的。
  * `host` 为空 / 非法 → `null`（调用方报 `host-unknown`）。
  */
 export function pickBestCompatible(versions: RegistryVersion[] | Record<string, RegistryVersion>, host: string | null): string | null {
@@ -117,6 +277,8 @@ export function pickBestCompatible(versions: RegistryVersion[] | Record<string, 
   const compatible: string[] = []
   for (const { version, meta } of list) {
     if (!semver.valid(version)) continue
+    const deprecated = meta && (meta as { deprecated?: unknown }).deprecated
+    if (deprecated !== undefined && deprecated !== null && deprecated !== false && deprecated !== '') continue
     const range = meta && meta.engines && typeof meta.engines.dsh === 'string' ? meta.engines.dsh.trim() : ''
     if (range === '') continue
     let ok = false
@@ -155,11 +317,14 @@ export function installCommand(profile: string | undefined, version: string): st
     ' add ' + PACKAGE_NAME + '@' + version
 }
 
-/** 更新检查器：按 TTL 缓存结果，3 秒超时，检测到代理直接跳过，绝不自动更新。 */
+/** 更新检查器：按 TTL 缓存结果，源跟随宿主登记，检测到代理直接跳过，绝不自动更新。 */
 export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecker {
   const ttlMs = options.ttlMs ?? 12 * 60 * 60 * 1000
   const failureTtlMs = options.failureTtlMs ?? 60 * 60 * 1000
   const timeoutMs = options.timeoutMs ?? 3000
+  const fallbackTimeoutMs = options.fallbackTimeoutMs ?? 4000
+  const planTimeoutMs = options.planTimeoutMs ?? 2500
+  const probeTimeoutMs = options.probeTimeoutMs ?? 2000
   const env = options.env ?? process.env
   const now = options.now ?? Date.now
   const cacheFile = join(options.stateDir, UPDATE_CHECK_FILE)
@@ -177,13 +342,15 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
       host,
       newest: null,
       bestCompatible: null,
+      source: null,
       command: null,
     }
   }
 
   const finish = (status: UpdateStatus, extra: Partial<UpdateCheckResult> = {}): UpdateCheckResult => {
     const result: UpdateCheckResult = {
-      ok: status !== 'unknown',
+      // `host-unknown` 是"这一拍读不到宿主版本"，不是结论：按失败 TTL 缓存，等宿主就绪后重试。
+      ok: status !== 'unknown' && status !== 'host-unknown',
       ...base(),
       status,
       checkedAt: new Date(now()).toISOString(),
@@ -209,7 +376,13 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
       if (!Number.isFinite(age) || age < 0) return null
       const ttl = raw.ok === false ? failureTtlMs : ttlMs
       if (age > ttl) return null
-      const result: UpdateCheckResult = { ...raw, fromCache: true }
+      // 旧缓存没有 `source`：按 null 处理，装的时候不指定源即可，不算无效缓存。
+      const result: UpdateCheckResult = { ...raw, fromCache: true, source: typeof raw.source === 'string' ? raw.source : null }
+      // 命令按当前 profile 重建：启动早期的检查可能还没有 profile 名，缓存里的 `<profile>` 不能一直留着。
+      if (result.bestCompatible) {
+        const profile = typeof options.profile === 'function' ? options.profile() : options.profile
+        result.command = installCommand(profile, result.bestCompatible)
+      }
       last = result
       return result
     } catch {
@@ -226,24 +399,40 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
     }
   }
 
+  /** 宿主登记 + 测速 → 本次按序尝试的源；登记取不到时返回空数组，调用方走默认单源。 */
+  const resolveSources = async (): Promise<string[]> => {
+    const configured = await settleWithin(options.registries, planTimeoutMs)
+    if (!configured) return []
+    const head = sourcePlan(configured, null)[0]
+    // 首项已是私有源时不测速：测速只覆盖两个公网源，把结果提到私有源前面是错的。
+    const probed = head === undefined || PUBLIC_REGISTRIES.has(head)
+      ? await settleWithin(options.fastest, probeTimeoutMs)
+      : null
+    return sourcePlan(configured, probed)
+  }
+
   const run = async (): Promise<UpdateCheckResult> => {
     const b = base()
     if (proxyDetected(env)) return finish('proxy-unsupported')
     if (!b.host) return finish('host-unknown')
     const fetchImpl = options.fetchImpl ?? globalThis.fetch
     if (typeof fetchImpl !== 'function') return finish('unknown', { ok: false, error: 'fetch unavailable' })
-    let meta: RegistryMeta
-    try {
-      const res = await fetchImpl(REGISTRY_URL, {
-        headers: { accept: 'application/vnd.npm.install-v1+json' },
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-      if (!res.ok) return finish('unknown', { ok: false, error: 'registry HTTP ' + res.status })
-      meta = await res.json() as RegistryMeta
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      return finish('unknown', { ok: false, error: message })
+    const plan = await resolveSources()
+    // 最多试两个：首项（通常已经过测速）失败时用回退源兜一次，再多只是把等待拖长。
+    const sources = plan.length ? plan.slice(0, 2) : [DEFAULT_REGISTRY]
+    let meta: RegistryMeta | null = null
+    let source: string | null = null
+    let lastError = ''
+    for (const [index, registry] of sources.entries()) {
+      try {
+        meta = await readRegistryMeta(fetchImpl, registry + PACKAGE_NAME, index === 0 ? timeoutMs : fallbackTimeoutMs)
+        source = registry
+        break
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e)
+      }
     }
+    if (!meta) return finish('unknown', { ok: false, error: lastError || 'registry unreachable' })
     const versions = meta && meta.versions && typeof meta.versions === 'object' ? meta.versions : {}
     const all = Object.keys(versions).filter((v) => semver.valid(v))
     const newest = all.length ? semver.rsort(all)[0] : (meta && meta['dist-tags'] && meta['dist-tags'].latest) || null
@@ -254,7 +443,7 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
       bestCompatible,
       currentEngines: options.currentEngines ?? null,
     })
-    return finish(status, { newest, bestCompatible })
+    return finish(status, { newest, bestCompatible, source })
   }
 
   const check = async (force?: boolean): Promise<UpdateCheckResult> => {

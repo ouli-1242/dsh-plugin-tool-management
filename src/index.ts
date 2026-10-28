@@ -76,6 +76,7 @@ import { appendBlock, buildDisableBlock, buildInsertBlock, parseRows, removeEntr
 import { describeMaskedOutcome, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './mcp/secret-guard.js'
 import { DEFAULT_MCP_NOTE_MAX_LENGTH, createMcpStateCatalog, normalizeMcpNote } from './mcp/state-section.js'
 import { hubBackupDir, hubPath, hubRoot, migrateHubLayoutSync, relocateEntries } from './hub.js'
+import { createHubFileLock } from './hub-lock.js'
 // 分域的 HTTP ops（从本文件 handlers 表抽出，依赖显式传参）。
 import { buildCompatOps } from './ops/compat.js'
 import { createUpdateChecker } from './update-check.js'
@@ -85,7 +86,7 @@ import { buildQuickPromptOps } from './ops/quick-prompts.js'
 import { buildScopeOps, type ScopeSessionRow } from './ops/scope.js'
 import { buildSessionOps } from './ops/sessions.js'
 import { buildTrashRetentionOps } from './ops/trash-retention.js'
-// 会话作用域：侧车 scope-overrides.json + 五条 op + 启动对账。
+// 会话作用域：侧车 scope-overrides.json / scope-intent.json + 作用域 op + 启动对账。
 import { rememberSessionCwd, scopeKeyOfAgent, scopeKeyOfIdSync, sessionIdentityOf, sessionIdOf, sessionScopeIdOf } from './scope/resolve.js'
 import { createScopeStore } from './scope/store.js'
 import { isWorkspaceScopeKey, scopeKeyLabel, workspaceScopeKeyOf } from './scope/workspace-key.js'
@@ -95,6 +96,7 @@ import {
   intentOf,
   isIntentDomain,
   planReconcile,
+  pruneIntentKeys,
   resolveResource,
   scanSessionClaims,
   withIntent,
@@ -373,9 +375,13 @@ export default {
     const wait = (ms: number) => ctx.timeout(ms)
     const message = (e: unknown) => String((e && (e as Error).message) || e)
 
+    // 两层串行：`writeChain` 管同一进程内的排队；`hubLock` 管 web / desktop 两个进程
+    // 共用同一个 `$DSH_HOME` 时的整份读-改-写。只保留前者会让后写的整份覆盖先写的
+    // （停用表丢掉一条 = 已停用的 MCP 工具重新可调用）。
+    const hubLock = createHubFileLock(hubPath())
     let writeChain: Promise<void> = Promise.resolve()
     function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-      const run = writeChain.then(() => fn(), () => fn())
+      const run = writeChain.then(() => hubLock.run(fn), () => hubLock.run(fn))
       writeChain = run.then(() => undefined, () => undefined)
       return run
     }
@@ -3168,6 +3174,7 @@ export default {
       let intent: ScopeIntent
       let patchRows: Array<{ id: string; serverName: string; level: 'global' | 'project'; disabled: boolean }>
       let roots: any[]
+      let skillStateOk = false
       try {
         intent = await intentStore.read(true)
         const [rowsResult, skillResult] = await Promise.all([
@@ -3176,7 +3183,8 @@ export default {
         ])
         patchRows = rowsResult
         const st: any = skillResult
-        roots = st && st.ok !== false ? ((st.data && st.data.roots) || []) : []
+        skillStateOk = !!st && st.ok !== false
+        roots = skillStateOk ? ((st.data && st.data.roots) || []) : []
       } catch {
         return report
       }
@@ -3204,14 +3212,20 @@ export default {
       // 把声明名传给 core 会得到「技能不存在: pdf-reader」（真机：重启后
       // 租约里的技能拉不起来）。界面的启停 op 收的是 `sk.name`，与这里同一个口径。
       const skillRows: Array<{ key: string; root: string; name: string; running: boolean }> = []
+      // 影子副本不参与对账，但**算"这个键还在"**：它只是暂时被同名条目压住，
+      // 压住它的那份删掉后还会回来，不能把它的意图当成"资源已删除"清掉。
+      const knownSkillKeys = new Set<string>()
       for (const root of roots) {
         const rootKey = String((root && root.key) || '')
         if (rootKey === '') continue
         for (const sk of ((root && root.skills) || []) as any[]) {
-          if (!sk || sk.shadowedBy) continue
+          if (!sk) continue
           const name = String(sk.declaredName || sk.name || '')
           if (name === '') continue
-          skillRows.push({ key: rootKey + '/' + name, root: rootKey, name: String(sk.name || name), running: sk.enabled === true })
+          const key = rootKey + '/' + name
+          knownSkillKeys.add(key)
+          if (sk.shadowedBy) continue
+          skillRows.push({ key, root: rootKey, name: String(sk.name || name), running: sk.enabled === true })
         }
       }
       const claims = await leaseClaimsOf(servers, sources, skillRows.map((row) => row.key)).catch(() => ({
@@ -3256,16 +3270,29 @@ export default {
         explicitClaims: (claims.skillExplicit.get(row.key) || []).length,
         traced: tracedOf('skills', row.key),
       })), { adoptExternal: opts.adoptExternal === true })
-      // ① 意图采纳（升级推断 / 外部改动）一次落盘。写失败不拦运行态 —— 下一轮会再试。
+      // ① 意图采纳（升级推断 / 外部改动）与清理（资源已不存在）一次落盘。
+      //    写失败不拦运行态 —— 下一轮会再试。
       const intentWrites: Array<{ domain: IntentDomain; key: string; state: IntentState }> = []
       for (const d of mcpDecisions) if (d.intentNext !== undefined) intentWrites.push({ domain: 'mcp', key: d.key, state: d.intentNext })
       for (const d of sourceDecisions) if (d.intentNext !== undefined) intentWrites.push({ domain: 'skillSources', key: d.key, state: d.intentNext })
       for (const d of skillDecisions) if (d.intentNext !== undefined) intentWrites.push({ domain: 'skills', key: d.key, state: d.intentNext })
+      // 清单完整才清理：技能状态读失败时 `roots` 是空数组，拿它当"全部删除"会把用户
+      // 所有技能意图一次清掉（与 `liveSessionIds` 读不到不剪枝同一条纪律）。
+      //
+      // MCP 这一轮**不剪**：`patchServerRows` 只覆盖两份 patch，loader 里临时挂载 / 手写
+      // 配置的服务器不在其中；而 loader 清单读取失败时 `configuredServerStates` 会静默退回
+      // patch-only。拿一份可能缺项的名册剪意图，会把仍在运行的服务器决定删掉。
+      const pruneSources = skillStateOk ? new Set(sources) : null
+      const pruneSkills = skillStateOk ? knownSkillKeys : null
+      const pruneNeeded = (pruneSources !== null && Object.keys(intent.skillSources).some((key) => !pruneSources.has(key)))
+        || (pruneSkills !== null && Object.keys(intent.skills).some((key) => !pruneSkills.has(key)))
       let finalIntent = intent
-      if (intentWrites.length > 0) {
+      if (intentWrites.length > 0 || pruneNeeded) {
         const res = await intentStore.mutate((current) => {
           let next = current
           for (const write of intentWrites) next = withIntent(next, write.domain, [write.key], write.state)
+          if (pruneSources !== null) next = pruneIntentKeys(next, 'skillSources', pruneSources)
+          if (pruneSkills !== null) next = pruneIntentKeys(next, 'skills', pruneSkills)
           return next
         })
         if (res.ok) finalIntent = res.intent
@@ -3743,6 +3770,53 @@ export default {
       stateDir: hubPath(),
       current: PKG_VERSION,
       currentEngines: PKG_DSH_RANGE,
+      // 下载源跟宿主走：`configuredRegistries` 是宿主安装器自己的配置源（第一源 + fallback），
+      // `fastest()` 是宿主插件页用的双源测速。两个都软取 —— 服务没挂载或字段不在
+      // 就返回 null，更新检查退回 npm 官方单源，不因为取不到宿主服务而失败。
+      //
+      // **先读 `configuredRegistries` 属性，不先调 `registries()`**：后者每次都会 spawn
+      // `pnpm config get registry`（宿主默认 20 秒超时），而更新检查只等 2.5 秒 —— 冷启动时
+      // 会把用户显式配置的私有源丢掉。属性里已经有显式源时不需要 pnpm 的 `resolved`；
+      // 只有「没配置第一源、也没有 fallback」的 `.npmrc`-only 机器才回退去问宿主。
+      registries: async () => {
+        try {
+          const manager = ctx.get('pluginManager') as {
+            configuredRegistries?: { registry?: unknown; fallbackRegistries?: unknown }
+            registries?: () => Promise<unknown>
+          } | undefined
+          if (!manager) return null
+          const direct = manager.configuredRegistries
+          if (direct && typeof direct === 'object') {
+            const fallback = Array.isArray(direct.fallbackRegistries)
+              ? direct.fallbackRegistries.filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+              : []
+            const registry = typeof direct.registry === 'string' && direct.registry.trim() !== '' ? direct.registry : null
+            if (registry !== null || fallback.length > 0) {
+              return { registry, fallbackRegistries: fallback, resolved: null }
+            }
+          }
+          if (typeof manager.registries !== 'function') return null
+          const raw = await manager.registries() as
+            { registry?: unknown; fallbackRegistries?: unknown; resolved?: unknown } | null
+          if (!raw || typeof raw !== 'object') return null
+          const fallback = Array.isArray(raw.fallbackRegistries)
+            ? raw.fallbackRegistries.filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+            : []
+          return {
+            registry: typeof raw.registry === 'string' && raw.registry.trim() !== '' ? raw.registry : null,
+            fallbackRegistries: fallback,
+            resolved: typeof raw.resolved === 'string' && raw.resolved.trim() !== '' ? raw.resolved : null,
+          }
+        } catch { return null }
+      },
+      fastest: async () => {
+        try {
+          const probe = ctx.get('pluginRegistryProbe') as { fastest?: () => Promise<unknown> } | undefined
+          if (!probe || typeof probe.fastest !== 'function') return null
+          const answer = await probe.fastest()
+          return typeof answer === 'string' && answer.trim() !== '' ? answer : null
+        } catch { return null }
+      },
       hostVersion: () => {
         try {
           const registry = history.getSessionsRegistry()
@@ -3960,6 +4034,9 @@ export default {
           const res = await intentStore.mutate((current) => withIntent(current, domain, keys, state))
           return res.ok ? null : res.error
         },
+        // 作用域侧车损坏时的显式修复通道（scope-repair）：隔离现场后按空表继续。
+        repairScope: () => scopeStore.repair(),
+        repairIntent: () => intentStore.repair(),
         // 基线：会话**创建时**的冻结快照 —— 启动期与 agent/created 各调一次（`ensureBaselineFor`）。
         captureBaseline: () => captureBaselineSnapshot(),
         // 会话提示词：应用前读一次正文（校验存在性 + 拒绝空预设）

@@ -114,6 +114,23 @@ export function withIntent(intent: ScopeIntent, domain: IntentDomain, keys: read
 }
 
 /**
+ * 只保留 `keep` 里的键（返回新对象，不改入参）。
+ *
+ * 资源被删除后它的意图要跟着消失：否则重新创建同名资源会继承旧的 off / blocked，
+ * 用户以为新资源默认能用，实际被一条已经无主的决定压着。调用方必须**先确认清单完整**：
+ * 清单读失败时传空集合会把所有意图清掉，那比不清理危险得多。
+ */
+export function pruneIntentKeys(intent: ScopeIntent, domain: IntentDomain, keep: ReadonlySet<string>): ScopeIntent {
+  let changed = false
+  const next: Record<string, IntentState> = Object.create(null)
+  for (const [key, state] of Object.entries(intent[domain])) {
+    if (keep.has(key)) next[key] = state
+    else changed = true
+  }
+  return changed ? { ...intent, [domain]: next } : intent
+}
+
+/**
  * 某一格在这个会话里的解析结果。
  *
  * `visible` 是**界面 / 注入 / 工具表 / 执行守卫**四处共用的那一个答案：
