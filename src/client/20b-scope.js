@@ -299,8 +299,8 @@
       currentSessionId: function () { return '' },
       /** 订阅宿主会话列表 / 工作区记账（归档 / 恢复 / 起标题后下拉要跟着变）；返回取消函数。 */
       subscribeSessionList: function (fn) { return null },
-      /** 提示条（修复结果用）；缺省不弹。 */
-      toast: function () {},
+      /** 提示条（修复结果用）；缺省不弹。参数须与 `showPluginToast` 同形，供 checkJs 推断。 */
+      toast: function (text, kind) {},
     }
     function configureScopeDeps(next) {
       scopeDeps = Object.assign({}, scopeDeps, next || {})
