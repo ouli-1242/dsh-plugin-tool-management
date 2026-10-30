@@ -60,6 +60,12 @@ jobs:
           echo "dir=$HOST_DIR" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Compile plugin for host tooling
+        # host-deps.mjs 直接 import 编译产物里的宿主发现逻辑（全仓同一份口径）。
+        # 完整 build 要等对齐宿主之后才能跑（它按宿主类型检查），所以先用锁文件里的
+        # devDeps 编译一遍，只为让脚本有 lib/ 可用。
+        run: npx tsc -p tsconfig.json
+
       - name: Align plugin host packages
         run: node scripts/host-deps.mjs --fix --host "${{ steps.host.outputs.dir }}"
 
