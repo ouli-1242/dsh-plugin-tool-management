@@ -8,6 +8,10 @@
 #
 # 只跟 latest：alpha 是下一代的预览包，版本号大概率超出当前 peer 范围，天天红没有信息量；
 # 需要提前看 alpha 时手动跑一次 workflow_dispatch 并临时把矩阵改成 alpha 即可。
+#
+# 跑在 windows-latest：本插件的主战场是桌面 Windows，契约测试里也有依赖 Windows 临时
+# 目录可读性的用例（Linux runner 的 /tmp 下有不可读目录，会误报）。bash 步骤统一用
+# Git Bash（defaults.run.shell），保证与本地脚本同一套写法。
 
 name: DSH nightly canary
 
@@ -24,7 +28,10 @@ permissions:
 jobs:
   canary:
     name: host ${{ matrix.channel }}
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +52,8 @@ jobs:
         run: |
           set -euo pipefail
           PREFIX="$RUNNER_TEMP/dsh-host"
+          # Git Bash 下统一成正斜杠混合路径，后面的 node -e 才能直接拼进 JS 字符串。
+          if command -v cygpath >/dev/null 2>&1; then PREFIX="$(cygpath -m "$RUNNER_TEMP")/dsh-host"; fi
           mkdir -p "$PREFIX"
           cd "$PREFIX"
           npm init -y >/dev/null
@@ -55,7 +64,7 @@ jobs:
           OUTER="$PREFIX/node_modules/@deepseek-ai"
           if [ -f "$NESTED/cordis/package.json" ]; then HOST_DIR="$NESTED"; else HOST_DIR="$OUTER"; fi
           test -f "$HOST_DIR/cordis/package.json"
-          VERSION=$(node -e "console.log(require('$PREFIX/node_modules/@deepseek-ai/dsh/package.json').version)")
+          VERSION=$(node -e "console.log(require('./node_modules/@deepseek-ai/dsh/package.json').version)")
           echo "resolved ${{ matrix.channel }} -> $VERSION at $HOST_DIR"
           echo "dir=$HOST_DIR" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
