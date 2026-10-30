@@ -1,5 +1,5 @@
 // 官方内置技能来源：把宿主随会话注入的内置技能物成本插件自有的真实目录（单技能可启停），
-// 并给出 Office 三件套那段「Installed LibreOffice Kit」运行时说明。
+// 并给出 Office 操作技能那段「Installed LibreOffice Kit」运行时说明。
 //
 // 从 core.ts 整段搬来，一行未改。这一段是本插件里唯一直接摸宿主安装形态的代码
 // （resourcesDir / desktopPackageDir / resolvedPackageDir），单独成层后 core.ts 只管
@@ -10,16 +10,19 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } fr
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { SkillSource } from "./core-types.js";
 import { resolveDshHome } from "./homes.js";
+import { clearRuntimeNote, noteRuntime } from "../compat/runtime-notes.js";
 
 // ── 官方内置技能来源（随宿主注入会话上下文的内置技能）──────────────────────
 //
 // 宿主按形态注入不同的官方技能（官方源码逐一核对）：
-//   - 桌面版 4 个：office-docx / office-pptx / office-xlsx（dsh-skill-office 只在桌面
-//     宿主装配，assetRoot 指到 `<resources>/runtime/office-skills`）+ diagnose-windows-
-//     sandbox-acl（dsh-sandbox-local 的门控是 `process.platform === "win32"`，rank 600）。
+//   - 桌面版 8 个：office 路由 + office-docx / office-pptx / office-xlsx（创作）+
+//     office-render / office-recalculate / office-export-pdf（操作）（dsh-skill-office
+//     只在桌面宿主装配，assetRoot 指到 `<resources>/runtime/office-skills`）+
+//     diagnose-windows-sandbox-acl（dsh-sandbox-local 的门控是
+//     `process.platform === "win32"`，rank 600）。
 //   - web 版：沙盒诊断技能由宿主注入（门控只看 win32 —— 用户截图实锤，
 //     按「web 不注入」的误判把 web 挡在门外，会让页面不显示而宿主照注）；office
-//     插件 web 宿主不装配、不注入，但用户要求技能页照样把这三个暴露出来
+//     插件 web 宿主不装配、不注入，但用户要求技能页照样把这七个暴露出来
 //     统一管理（npm 包自带完整 assets，接管后可启停）。
 //
 // 它们或住在官方 asar 里、或由官方 provider 复制进临时目录自管，插件直接扫描/接管有两个
@@ -31,7 +34,7 @@ import { resolveDshHome } from "./homes.js";
 // 整目录覆盖拷贝（与官方 provider 的「私有资源副本」同一做法），扫描、启停、overlay、
 // 脚本执行全部落在真实文件上。599 压过宿主 provider 的 600，停用即不注入。分形态是竞态
 // 教训：原先共用一份目录，web 启动把它解析到的沙盒技能盖进去，桌面物化好的
-// 4 个只剩 1 个；改成各写各的子目录，互不清对方的账。共享布局的残留（旧条目
+// 8 个只剩 1 个；改成各写各的子目录，互不清对方的账。共享布局的残留（旧条目
 // 直接躺在 official-skills/ 下）按已知名单清理。
 //
 //   - 预设参考技能（dsh-agent-preset/skills）不注入会话上下文，不列入。
@@ -96,27 +99,48 @@ function resolvedPackageDir(packageName: string, subpath: string): string | null
 }
 
 /**
+ * 目录里是否至少有一个带 SKILL.md 的技能子目录。
+ *
+ * 不点名校验 / 不比对固定清单：官方技能集合会变（新增 / 改名 / 重排），只要源还是
+ * 「子目录 + SKILL.md」这个形态就整目录接管；一个都没有说明这份源不完整，宁可返回
+ * false 让上层不列出，也不物化一份空壳。
+ */
+function hasSkillDocs(dir: string): boolean {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).some(
+      (entry) => entry.isDirectory() && existsSync(join(dir, entry.name, "SKILL.md")),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * office 技能源头。桌面版由宿主挂载：运行时真实目录优先（官方 assetRoot），其次 asar
  * 包内 assets。web 宿主不装配 office 插件（不注入），但 npm 包自带完整 assets —— 用户
- * 要求技能页照样暴露这三个技能，走宿主进程解析链取包内一份。解析不到
+ * 要求技能页照样暴露这些技能，走宿主进程解析链取包内一份。解析不到
  * 一律 null —— 不把拿不到真实文件的技能凭空列出来。
  */
 function officialOfficeSource(): string | null {
+  // 桌面壳通过 DSH_BUNDLED_OFFICE_SKILLS 指定宿主实际使用的 assets 根，照抄最稳。
+  const bundled = process.env.DSH_BUNDLED_OFFICE_SKILLS;
+  if (bundled !== undefined && bundled !== "" && hasSkillDocs(bundled))
+    return bundled;
   const resources = resourcesDir();
   if (resources !== null) {
     const runtimeDir = join(resources, "runtime", "office-skills");
-    if (existsSync(join(runtimeDir, "office-docx"))) return runtimeDir;
+    if (hasSkillDocs(runtimeDir)) return runtimeDir;
     const asarDir = desktopPackageDir("@deepseek-ai/dsh-skill-office", "assets");
-    if (asarDir !== null && existsSync(join(asarDir, "office-docx")))
-      return asarDir;
+    if (asarDir !== null && hasSkillDocs(asarDir)) return asarDir;
   }
-  return resolvedPackageDir("@deepseek-ai/dsh-skill-office", "assets");
+  const resolved = resolvedPackageDir("@deepseek-ai/dsh-skill-office", "assets");
+  return resolved !== null && hasSkillDocs(resolved) ? resolved : null;
 }
 
 /** 沙盒诊断技能源头（桌面 asar 直连优先，其次宿主进程解析链；宿主门控仅看 win32，web/桌面皆注入）。 */
 function officialSandboxSource(): string | null {
   if (process.platform !== "win32") return null;
-  return (
+  const source =
     desktopPackageDir(
       "@deepseek-ai/dsh-sandbox-windows-acl",
       "assets/diagnose-windows-sandbox-acl",
@@ -124,32 +148,41 @@ function officialSandboxSource(): string | null {
     resolvedPackageDir(
       "@deepseek-ai/dsh-sandbox-windows-acl",
       "assets/diagnose-windows-sandbox-acl",
-    )
-  );
+    );
+  return source !== null && existsSync(join(source, "SKILL.md")) ? source : null;
 }
 
 // ── office 技能的「Installed LibreOffice Kit」段 ────────────────────────────
 //
-// 官方 dsh-office provider 在 get 时给三个 office 技能的正文**追加**一段
-// 「Installed LibreOffice Kit」：SKILL.md 明文要求「使用这段提供的 libreofficeKit.node
-// 与 .cli 绝对路径，禁止自行搜索/猜测」。我们以 599 接管后官方 provider 不再被问到，
-// 这段必须由我们补上 —— 否则模型拿到的 office 技能缺执行 LibreOffice 命令所需的全部
-// 路径（这个缺口在桌面上本来就有）。文案与 JSON 形状逐字取自官方
+// 官方 dsh-office provider 在 get 时只给三个**操作**技能（office-render /
+// office-recalculate / office-export-pdf）的正文**追加**一段「Installed LibreOffice
+// Kit」：SKILL.md 明文要求「使用这段提供的 libreofficeKit.node 与 .cli 绝对路径，
+// 禁止自行搜索/猜测」。三个创作技能只产出 OOXML，不执行 LibreOffice 命令，官方不给它们
+// 补段。我们以覆盖方式接管后官方 provider 不再被问到，这段必须由我们补上 ——
+// 否则模型拿到的操作技能缺执行 LibreOffice 命令所需的全部路径。文案与 JSON 形状逐字取自官方
 // dsh-skill-office lib/index.js 的 officeRuntime()；node/cli 的落点按宿主形态各自核实：
 //   - 桌面：官方明确要求 packaged 应用必须给**独立 node**（electron 本体不行）。
-//     实测桌面把运行时装在 `<resources>/runtime/primary-runtime/`（DSH_PRIMARY_RUNTIME
-//     指向它，SDK 部署可被同名环境变量改写），node 在其 dependencies/node/bin 下；cli
-//     必须用 `app.asar.unpacked` 里的真实文件 —— 独立 node 读不了 asar 内部。
+//     桌面壳通过 `DSH_BUNDLED_OFFICE_NODE` / `DSH_BUNDLED_OFFICE_CLI` 传真实路径
+//     （运行时装在 `<resources>/runtime/primary-runtime/`，node 在其 dependencies/node/bin
+//     下；cli 在 `app.asar.unpacked` 里 —— 独立 node 读不了 asar 内部）；变量缺席时才按
+//     形态兜底。
 //   - web：官方默认 process.execPath（宿主是普通 node 进程），cli 从宿主进程解析链取。
 // 任一路径不是真实文件 → 用官方口径的「已停用」文案（SKILL.md 自有降级分支，模型不会
 // 去猜路径），绝不给一个跑不起来的路径。
 
-/** 三个 office 技能的名字：get 时要为它们补官方 provider 追加的 LibreOffice Kit 段。 */
-export const OFFICE_SKILL_NAMES = new Set([
-  "office-docx",
-  "office-pptx",
-  "office-xlsx",
-]);
+/**
+ * 一个官方技能是否需要补 LibreOffice Kit 段。
+ *
+ * 官方按写死的技能名单注入；照抄名单会在官方增删操作技能时静默漏挂或错挂。改看正文：
+ * 需要这段的技能自己会写明「使用下方提供的 Node / CLI 绝对路径」，正文里必然出现
+ * LibreOffice。三个创作技能不提它，操作技能都提 —— 官方换名字 / 加技能也照样命中。
+ *
+ * @param body SKILL.md 正文（frontmatter 之后）
+ * @returns 正文提到 LibreOffice 时为 true
+ */
+export function officeKitApplies(body: string): boolean {
+  return /\blibreoffice\b/iu.test(body);
+}
 
 const OFFICE_RUNTIME_DISABLED =
   "\n\nLibreOffice Kit is disabled in this deployment.";
@@ -164,33 +197,40 @@ export function officialOfficeRuntimeSection(): string {
 }
 
 function computeOfficeRuntimeSection(): string {
+  const env = process.env;
   const resources = resourcesDir();
+  const runtimeRoot =
+    env.DSH_PRIMARY_RUNTIME || env.DSH_BUNDLED_PRIMARY_RUNTIME || "";
+  const nodeBin = join(
+    "bin",
+    process.platform === "win32" ? "node.exe" : "node",
+  );
   let node: string;
   let cli: string | null;
-  const runtimeRoot =
-    process.env.DSH_PRIMARY_RUNTIME || process.env.DSH_BUNDLED_PRIMARY_RUNTIME;
-  if (runtimeRoot) {
-    // SDK / 容器部署：官方配置从运行时根推导（cordis 装配逐字核对）。
-    node = join(
-      resolve(runtimeRoot),
-      "dependencies",
-      "node",
-      "bin",
-      process.platform === "win32" ? "node.exe" : "node",
-    );
-    cli = resolvedPackageDir("@deepseek-ai/libreoffice-kit", "lib/cli.js");
+  // 官方 provider 的路径来源就是这几个环境变量（cordis 装配逐字核对）：桌面壳会把独立
+  // node 与 unpacked 的 cli 直接传进来。优先照抄，免得按形态猜错 —— 桌面上
+  // DSH_BUNDLED_PRIMARY_RUNTIME 也在，若只看它会从解析链拿到 asar 内部的 cli，
+  // 独立 node 读不了。
+  if (env.DSH_BUNDLED_OFFICE_CLI === "") return OFFICE_RUNTIME_DISABLED;
+  if (env.DSH_BUNDLED_OFFICE_CLI !== undefined) {
+    cli = env.DSH_BUNDLED_OFFICE_CLI;
+    node =
+      env.DSH_BUNDLED_OFFICE_NODE ??
+      (runtimeRoot !== ""
+        ? join(resolve(runtimeRoot), "dependencies", "node", nodeBin)
+        : process.execPath);
   } else if (resources !== null) {
+    // 桌面兜底（壳未给 OFFICE_* 环境变量时）：运行时装在 runtime/primary-runtime 下；
+    // 桌面的 cli 只认 unpacked 真实文件（独立 node 读不了 asar；electron 的 fs 补丁
+    // 会让 existsSync 对 asar 内部也返回真，所以这里不用解析链兜底）。
     node = join(
       resources,
       "runtime",
       "primary-runtime",
       "dependencies",
       "node",
-      "bin",
-      process.platform === "win32" ? "node.exe" : "node",
+      nodeBin,
     );
-    // 桌面的 cli 只认 unpacked 真实文件（独立 node 读不了 asar；electron 的 fs 补丁
-    // 会让 existsSync 对 asar 内部也返回真，所以这里不用解析链兜底）。
     cli = join(
       resources,
       "app.asar.unpacked",
@@ -201,6 +241,10 @@ function computeOfficeRuntimeSection(): string {
       "lib",
       "cli.js",
     );
+  } else if (runtimeRoot !== "") {
+    // SDK / 容器部署：官方配置从运行时根推导（cordis 装配逐字核对）。
+    node = join(resolve(runtimeRoot), "dependencies", "node", nodeBin);
+    cli = resolvedPackageDir("@deepseek-ai/libreoffice-kit", "lib/cli.js");
   } else {
     node = process.execPath;
     cli = resolvedPackageDir("@deepseek-ai/libreoffice-kit", "lib/cli.js");
@@ -212,8 +256,21 @@ function computeOfficeRuntimeSection(): string {
       return false;
     }
   };
-  if (!usable(node) || cli === null || !usable(cli))
+  if (!usable(node) || cli === null || !usable(cli)) {
+    // 可用的路径不存在时不把跑不起来的路径写进正文；同时留一条界面可见的降级，
+    // 否则用户只会看到技能「少了那段说明」，不知道该修哪。
+    noteRuntime({
+      id: "office-kit",
+      label: "LibreOffice Kit 路径",
+      kind: "read",
+      fallback: "inform-only",
+      detail: "未找到可用的独立 Node 或 LibreOffice CLI，office 操作技能本轮使用官方的「已停用」文案。请检查 DSH 安装的 runtime 是否完整。",
+      detailKey: "office-kit",
+      params: { node, cli: cli ?? "" },
+    });
     return OFFICE_RUNTIME_DISABLED;
+  }
+  clearRuntimeNote("office-kit");
   return `\n\n## Installed LibreOffice Kit\n\nUse these absolute paths for every LibreOffice Kit command. Pass the CLI entry as the first argument to Node.\n\n${JSON.stringify({ libreofficeKit: { node, cli } }, null, 2)}`;
 }
 
@@ -306,15 +363,12 @@ export function officialSkillRoot(): SkillSource | null {
           localeKey: "official",
           mutable: false,
           deletable: false,
-          // 来源层无开关（同默认来源），单个技能可启停；overlay 以 599 压过官方
-          // provider 的 600，脚本从物化副本的真实路径执行。
+          // 来源层无开关（同默认来源），单个技能可启停；脚本从物化副本的真实路径执行。
           //
-          // 残余风险：`599` 是个**数字契约** ——
-          // 它只在"官方那个 provider 的 rank 恰好是 600"时成立。官方调档位（把内置技能提到
-          // 599 以上、或降到 599 以下）会让接管失效：要么官方内置技能重新注入、与 599 层并存
-          // （同名两份），要么本插件反向遮蔽掉本不该遮蔽的东西。rank 是纯数字、没有能力探测
-          // 能提前发现，doctor 也查不了（要枚举官方 provider 的注册参数）。所以记为**已知
-          // 假设**，列进 CHANGELOG 的宿主适配矩阵，官方更新时人工核对这一处。
+          // rank 只决定**本 provider 内部**同名候选的先后（官方 599 排在 hub / dsh / agents
+          // 之后，被用户自己的同名技能盖住）。对宿主官方 provider 的接管不靠数字：
+          // 全局层由宿主自己提供官方技能，我们只在每个 agent 的 scoped 层里注册同一份候选，
+          // 层优先级「最近一层胜出」直接压过全局层 —— 官方改 rank 常量不会让接管失效。
           toggleable: true,
           native: false,
           scope: "user",

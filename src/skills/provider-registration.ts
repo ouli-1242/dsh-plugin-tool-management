@@ -4,19 +4,33 @@
 // 从 skills/service.ts 整段搬来，一行未改。invalidators 由调用方注入，本层不持有状态 ——
 // 它是官方 provider 通道的使用方，不改官方包、也不 monkey-patch。
 import { getProviderSkill, listProviderCandidates } from './core.js'
+import { OFFICIAL_SOURCE_KEY } from './official.js'
+import { noteRuntime } from '../compat/runtime-notes.js'
 
 const PROVIDER_NAME = 'dsh-plugin-tool-management-external'
 const message = (e: unknown): string => String((e && (e as Error).message) || e)
 
-/** manager provider：以 core 的候选/正文接口接管四个来源（含启停策略）。 */
-export function externalSkillProvider(control: any, invalidators: Set<() => void>): any {
+/**
+ * manager provider：以 core 的候选/正文接口接管四个外部来源（含启停策略）。
+ *
+ * @param scope `global` 时**不**返回官方内置技能的候选。那一家由宿主自己的 provider 在
+ *   全局层提供；我们在每个 agent 的 scoped 层里再注册一份，靠「最近一层胜出」接管它，
+ *   不再依赖数字 rank 与宿主内部常量对齐。全局层若也放一份同名候选，等于把 rank 假设
+ *   重新引回来 —— 官方改档位时接管会静默失效。
+ */
+export function externalSkillProvider(control: any, invalidators: Set<() => void>, scope: 'global' | 'agent' = 'agent'): any {
   if (control && typeof control.invalidate === 'function') invalidators.add(control.invalidate)
   if (control && control.signal && typeof control.signal.addEventListener === 'function') {
     control.signal.addEventListener('abort', () => { invalidators.delete(control.invalidate) }, { once: true })
   }
   return {
     name: PROVIDER_NAME,
-    list: async (options: any) => listProviderCandidates(options),
+    list: async (options: any) => {
+      const candidates = await listProviderCandidates(options)
+      return scope === 'global'
+        ? candidates.filter((candidate: any) => candidate?.locator?.rootKey !== OFFICIAL_SOURCE_KEY)
+        : candidates
+    },
     get: async (candidate: any, options: any) => getProviderSkill(candidate, options),
   }
 }
@@ -41,10 +55,21 @@ export function registerAgentSkillProviders(ctx: any, invalidators: Set<() => vo
     const skills = skillsOf(agent)
     if (!skills) return
     try {
-      const dispose = skills.registerProvider((control: any) => externalSkillProvider(control, invalidators))
+      const dispose = skills.registerProvider((control: any) => externalSkillProvider(control, invalidators, 'agent'))
       registrations.set(agent.id, typeof dispose === 'function' ? dispose : () => {})
     } catch (e) {
-      console.error('[dsh-plugin-tool-management] agent-scoped skills provider registration failed:', message(e))
+      console.error('[dsh-plugin-tool-management] agent-scoped skills provider setup failed:', message(e))
+      // 这一层没挂上时，官方内置技能仍由宿主注入，但我们的启停不再生效 ——
+      // 界面上看不出差别，留一条降级让兼容页说清。
+      noteRuntime({
+        id: 'skills-agent-provider',
+        label: '技能作用域接管',
+        kind: 'read',
+        fallback: 'inform-only',
+        detail: 'agent 作用域的技能 provider 未挂上（' + message(e) + '）：官方内置技能这一轮由宿主直接注入，启停开关不生效。',
+        detailKey: 'skills-agent-provider',
+        params: { reason: message(e) },
+      })
     }
   }
   const uninstall = (agent: any) => {

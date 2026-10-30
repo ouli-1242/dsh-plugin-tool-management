@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url'
 // Single source of truth: the runtime probe itself. A second hand-written
 // capability list here would drift from what the plugin actually gates on, and
 // the doctor would then certify a host the plugin refuses to use.
-import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE, CAPABILITY_STATIC, hostRootCandidates } from '../lib/compat/probe.js'
+import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE, CAPABILITY_STATIC, hostRootCandidates, hostVersionOf, looksLikeHostPackageDir } from '../lib/compat/probe.js'
 // 宿主非 peer 契约（裸模块名 + canary）与兼容页共用同一份清单：此前它们只在这里，命令行
 // 报得出来、界面报不出来。现在是共享层，doctor 从 lib/ import。
 import {
@@ -250,7 +250,7 @@ function versionOf(entry) {
  */
 function findHost() {
   for (const candidate of hostRootCandidates()) {
-    if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
+    if (looksLikeHostPackageDir(candidate)) return candidate
   }
   return undefined
 }
@@ -263,10 +263,11 @@ function findHost() {
 function hostNotFoundHint() {
   return [
     'no DSH host installation found — 已按以下顺序找过：',
-    '  ① 桌面版归档（仅 electron 进程可见，CLI 下查不到）',
+    '  ① 正在运行的宿主入口（仅宿主内可见；CLI 下查不到）与桌面版归档（`resources/app.asar`，仅 electron 进程可见）',
     '  ② $DSH_HOME/profiles/node_modules/@deepseek-ai（或 ~/.dsh/...）',
-    '  ③ 本插件自身位置逐级上溯的 node_modules/@deepseek-ai',
-    '  ④ npx 缓存 <npm cache>/_npx/*/node_modules/@deepseek-ai',
+    '  ③ 全局 npm 前缀（`<prefix>/node_modules/@deepseek-ai` 及其 `dsh/node_modules` 内层）',
+    '  ④ 本插件自身位置逐级上溯的 node_modules/@deepseek-ai',
+    '  ⑤ npx 缓存 <npm cache>/_npx/*/node_modules/@deepseek-ai',
     '若你用的是**桌面版 DSH**：这是预期结果（归档路径 CLI 读不到），请改在宿主内看「兼容」页的能力探测；',
     '若你用的是 `dsh web`：确认 DSH_HOME 指向正确的档案目录（当前 DSH_HOME=' + (process.env.DSH_HOME || '(未设置)') + '）。',
   ].join('\n')
@@ -321,7 +322,13 @@ function inspectProfileLinkTree(home) {
  * @returns the resolved entry file, or undefined when the host cannot see it.
  */
 function resolveFromHost(hostDir, name) {
-  const anchors = [join(hostDir, 'dsh', 'package.json'), join(dirname(hostDir), 'package.json')]
+  const anchors = [
+    join(hostDir, 'dsh', 'package.json'),
+    // 全局 npm 安装的宿主在 `.../@deepseek-ai/dsh/node_modules/@deepseek-ai`，
+    // 这一层没有 `dsh` 同级包，锚点要落到上一层的 `dsh/package.json`。
+    join(dirname(dirname(hostDir)), 'package.json'),
+    join(dirname(hostDir), 'package.json'),
+  ]
   for (const anchor of anchors) {
     if (!existsSync(anchor)) continue
     try {
@@ -434,8 +441,8 @@ function main() {
     warnings.push(`${bareModules.detail} — the matching feature degrades silently at runtime`)
   }
   // 宿主版本栅栏（B3）：实际版本高于验证过的版本时显式说明「差异未知、按实际探测走」。
-  const hostVersion = versionOf('dsh')
-  if (hostVersion !== undefined && hostVersion !== VERIFIED_HOST_VERSION) {
+  const hostVersion = installed.host === null ? null : hostVersionOf(installed.host)
+  if (hostVersion !== null && hostVersion !== VERIFIED_HOST_VERSION) {
     warnings.push(`host DSH ${hostVersion} differs from the verified ${VERIFIED_HOST_VERSION} — capabilities below are probed against what is actually installed; treat the degraded list as authoritative`)
   }
   // 0.1.5 遗留的 junction 树悬空：不影响判定（宿主已从 npx 缓存找到），但要让用户看得见。
@@ -467,7 +474,7 @@ function main() {
     console.log('host packages   : (not found)')
     for (const line of hostNotFoundHint().split('\n')) console.log(`                  ${line}`)
   } else {
-    console.log(`host packages   : ${installed.host}`)
+    console.log(`host packages   : ${installed.host}${hostVersion === null ? '' : ` (DSH ${hostVersion})`}`)
   }
   console.log(`verified against: DSH ${VERIFIED_HOST_VERSION} (peer range ${EXPECTED_PEER_RANGE})`)
   console.log('')

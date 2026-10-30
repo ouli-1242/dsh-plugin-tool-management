@@ -254,6 +254,10 @@ export default {
   name: 'dsh-plugin-tool-management-host',
   inject: [...INJECT_SERVICES],
   apply(ctx: DshContext, config?: Record<string, unknown>) {
+    // 最后一道防线：装配期任何一步抛错都不能拖垮宿主启动。cordis 会把抛错的插件标成
+    // 装载失败；在桌面版上那等于应用起不来。这里把异常收在插件内，记一条降级后返回 ——
+    // 中断点之后的功能本轮不注册，但这之前的（以及宿主自身）照常工作。
+    try {
     // 布局迁移必须**先于任何读盘**：hub 内的旧名（`agents-md/` → `prompts/` 等）与
     // `$DSH_HOME` 根下的插件侧车 / 日志 / patch 备份，都要在服务读它们之前搬到位。
     // 同步执行：一次性的几次 stat/rename，换来「没有并发窗口」；失败只跳过该项，不抛错。
@@ -5263,6 +5267,21 @@ export default {
       WRITE_OPS, SENSITIVE_OPS,
     })
 
+    } catch (error) {
+      const reason = String((error && (error as Error).message) || error)
+      console.error('[dsh-plugin-tool-management] apply() 未完成，插件已降级（宿主继续启动）：' + reason)
+      try {
+        noteRuntime({
+          id: 'plugin-apply',
+          label: '插件装配未完成',
+          kind: 'read',
+          fallback: 'inform-only',
+          detail: '插件这一轮装配中断（' + reason + '）：中断点之后的功能不会注册。重启 DSH 后仍失败，请运行 node scripts/doctor.mjs 并附上这条日志。',
+          detailKey: 'plugin-apply',
+          params: { reason },
+        })
+      } catch { /* 降级记录本身失败不再升级成启动问题 */ }
+    }
   },
 }
 

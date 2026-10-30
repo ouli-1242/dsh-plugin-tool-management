@@ -31,9 +31,10 @@
  * back, so the operation is reversible.
  *
  * Usage:
- *   node scripts/host-deps.mjs            # report only (exit 1 when drift)
- *   node scripts/host-deps.mjs --fix      # align (junction + backup)
- *   node scripts/host-deps.mjs --restore  # put the originals back
+ *   node scripts/host-deps.mjs               # report only (exit 1 when drift)
+ *   node scripts/host-deps.mjs --fix         # align (junction + backup)
+ *   node scripts/host-deps.mjs --restore     # put the originals back
+ *   node scripts/host-deps.mjs --host <dir>  # pick one host's @deepseek-ai dir explicitly
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -42,14 +43,20 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // 宿主发现序列与运行时 / doctor 共用同一份（审查 §5 F10）：三处各写一份的代价是
 // 桌面宿主上找不到宿主、或拿 npx 缓存里另一代宿主当锚点比出假差异。
-import { hostRootCandidates } from '../lib/compat/probe.js'
+import { hostRootCandidates, hostVersionOf, looksLikeHostPackageDir } from '../lib/compat/probe.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LOCAL_DIR = join(ROOT, 'node_modules', '@deepseek-ai')
 const BACKUP_DIR = join(ROOT, '.host-deps-backup')
-const args = new Set(process.argv.slice(2))
+const argv = process.argv.slice(2)
+const args = new Set(argv)
 const FIX = args.has('--fix')
 const RESTORE = args.has('--restore')
+/** `--host <dir>`：显式指定要对接的宿主 `@deepseek-ai` 目录（多代宿主并存时用）。 */
+const HOST_ARG = (() => {
+  const index = argv.indexOf('--host')
+  return index >= 0 && index + 1 < argv.length ? argv[index + 1] : undefined
+})()
 
 /** Recursively hash a package directory by relative path + file bytes. */
 function hashTree(dir) {
@@ -87,16 +94,26 @@ function pkgMeta(dir) {
 }
 
 function hostCandidates() {
-  // 共用 `lib/compat/probe.js` 的候选序列（桌面归档 → $DSH_HOME → 自身锚点上溯 → npx 缓存）。
+  // 共用 `lib/compat/probe.js` 的候选序列（运行中的宿主入口 → 桌面归档 → $DSH_HOME →
+  // 全局 npm 前缀 → 自身锚点上溯 → npx 缓存）。
   return hostRootCandidates()
 }
 
-/** Pick the first candidate that looks like an installation (has @deepseek-ai/dsh). */
+/**
+ * Pick the host installation to align against.
+ *
+ * 判据是「目录里确实装着宿主包」，不是「有没有 @deepseek-ai/dsh 同级包」：全局 npm 安装
+ * 把依赖放在 `dsh/node_modules/@deepseek-ai`，那一层没有 `dsh` 自己。多代宿主并存时用
+ * `--host <dir>` 显式指定。
+ */
 function findHost() {
+  if (HOST_ARG !== undefined) {
+    if (!looksLikeHostPackageDir(HOST_ARG)) return undefined
+    return { dir: resolve(HOST_ARG), via: resolve(HOST_ARG), dshVersion: hostVersionOf(HOST_ARG) ?? '(unknown)' }
+  }
   for (const candidate of hostCandidates()) {
-    if (!existsSync(candidate)) continue
-    const dsh = pkgMeta(join(candidate, 'dsh'))
-    if (dsh !== undefined) return { dir: candidate, via: candidate, dshVersion: dsh.version }
+    if (!looksLikeHostPackageDir(candidate)) continue
+    return { dir: candidate, via: candidate, dshVersion: hostVersionOf(candidate) ?? '(unknown)' }
   }
   return undefined
 }

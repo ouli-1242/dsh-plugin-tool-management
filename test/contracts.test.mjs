@@ -38,6 +38,7 @@ import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
 import { argConditionalConfirmReason } from '../lib/confirm-gate.js'
 import { createAccessToken, createFrozenGate, guardModelOps, installHandlerGuards } from '../lib/request-gate.js'
+import { officeKitApplies } from '../lib/skills/official.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
 import { checkPatchWrite, decidePatchWrite, judgePatchText } from '../lib/compat/patch-dialect.js'
 import * as yaml from 'js-yaml'
@@ -47,7 +48,7 @@ import { isIndexQuarantined, readIndex, writeFileAtomically, writeIndex } from '
 import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpPrefixDrift, serverNameCandidates, splitMcpToolName } from '../lib/host-names.js'
 import { isToolDisabledIn } from '../lib/mcp/manager.js'
 import { renderMcpStateSection } from '../lib/mcp/state-section.js'
-import { EXPECTED_PEER_RANGE, assessHost } from '../lib/compat/probe.js'
+import { EXPECTED_PEER_RANGE, assessHost, hostPackageDirsFromPath, hostVersionOf, looksLikeHostPackageDir } from '../lib/compat/probe.js'
 import { pickBestCompatible, sourcePlan } from '../lib/update-check.js'
 import { scanLoaderRows } from '../lib/mcp/loader-token.js'
 import { isValidGroupPath, isValidGroupSegment } from '../lib/memories/constants.js'
@@ -4795,4 +4796,42 @@ test('意图清理只删除清单里不存在的键，无变化时返回原对�
   assert.equal(pruned.skillSources['src/a'], 'on')
   assert.equal(pruned.skills['src/a/skill'], 'off', '别的域原样保留')
   assert.equal(pruneIntentKeys(base, 'skillSources', new Set(['src/a', 'src/b'])), base)
+})
+
+test('宿主发现同时认平铺与全局 npm 的嵌套布局，拒绝只有 dsh 壳的顶层目录', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-host-root-'))
+  const writePackage = (dir, name, version) => {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version }))
+  }
+  try {
+    // 全局安装：<prefix>/node_modules/@deepseek-ai 只有 dsh；身份包在 dsh/node_modules 里。
+    const shell = join(root, 'global', 'node_modules', '@deepseek-ai')
+    const nested = join(shell, 'dsh', 'node_modules', '@deepseek-ai')
+    writePackage(join(shell, 'dsh'), '@deepseek-ai/dsh', '0.2.1-rc.5')
+    writePackage(join(nested, 'cordis'), '@deepseek-ai/cordis', '4.0.5')
+    writePackage(join(nested, 'dsh-tools'), '@deepseek-ai/dsh-tools', '0.2.1-rc.5')
+    assert.equal(looksLikeHostPackageDir(shell), false, '只有 dsh 壳的顶层不是宿主目录')
+    assert.equal(looksLikeHostPackageDir(nested), true, '嵌套层才是宿主目录')
+    assert.deepEqual(hostPackageDirsFromPath(join(nested, 'dsh-tools', 'lib', 'index.js')), [nested, shell], '由近到远给出两层，交给调用方按内容挑')
+    assert.equal(hostVersionOf(nested), '0.2.1-rc.5')
+
+    // 平铺布局：npx 缓存与桌面 asar 的形态。
+    const flat = join(root, 'npx', 'node_modules', '@deepseek-ai')
+    writePackage(join(flat, 'dsh'), '@deepseek-ai/dsh', '0.2.1-rc.5')
+    writePackage(join(flat, 'cordis'), '@deepseek-ai/cordis', '4.0.5')
+    writePackage(join(flat, 'dsh-tools'), '@deepseek-ai/dsh-tools', '0.2.1-rc.5')
+    assert.equal(looksLikeHostPackageDir(flat), true)
+    assert.equal(hostVersionOf(flat), '0.2.1-rc.5')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('LibreOffice Kit 段按正文判断，不写死技能名', () => {
+  // 操作技能正文自述要这段路径；创作技能不提 LibreOffice。
+  assert.equal(officeKitApplies('Use the installed LibreOffice Kit CLI through the shell with the absolute Node and CLI paths supplied below.'), true)
+  assert.equal(officeKitApplies('Read, create, edit and validate Word documents (.docx).'), false)
+  // 大小写与行内位置都不影响。
+  assert.equal(officeKitApplies('依赖 libreoffice 完成渲染'), true)
 })

@@ -174,8 +174,14 @@ export function pluginLog(): (event: string, detail?: unknown) => Promise<void> 
 /** 技能域服务门面：来源枚举、清单扫描、启停与新建 / 更新。 */
 export function createSkillsService(ctx: any): SkillsService {
   const log = pluginLog()
-  const roots = userRoots()
-  const rootByKey: Record<string, any> = Object.fromEntries(roots.map((root: any) => [root.key, root]))
+  // 根系**按需推导**：`userRoots()` 会物化官方内置技能（同步拷贝宿主安装里的文件）。
+  // 放在构造期等于让宿主启动路径去读宿主目录；首次取用（列技能、装 watcher、越界校验）
+  // 时再算，失败也不影响宿主启动。
+  let rootsCache: any[] | null = null
+  const roots = (): any[] => (rootsCache ??= userRoots())
+  let rootByKeyCache: Record<string, any> | null = null
+  const rootByKey = (): Record<string, any> =>
+    (rootByKeyCache ??= Object.fromEntries(roots().map((root: any) => [root.key, root])))
   /** op 入参里的 `sessionId`（空串 / 非字符串 → undefined = 全局口径）。 */
   const sessionIdOfArgs = (args: any): string | undefined => {
     const raw = args && typeof args.sessionId === 'string' ? args.sessionId.trim() : ''
@@ -197,7 +203,8 @@ export function createSkillsService(ctx: any): SkillsService {
     return { projectCwds: own === null ? activeSessionCwds(ctx) : own }
   }
   const requestRoot = async (key: string) => {
-    if (rootByKey[key]) return rootByKey[key]
+    const known = rootByKey()
+    if (known[key]) return known[key]
     // 自定义来源不在静态 root 表里：从状态文件的 customRoots 解析 definition。
     try {
       const policy = await readManagerState()
@@ -328,7 +335,7 @@ export function createSkillsService(ctx: any): SkillsService {
       disposers.push(dispose)
     }
     try {
-      const dispose = ctx.skills.registerProvider((control: any) => externalSkillProvider(control, providerInvalidators))
+      const dispose = ctx.skills.registerProvider((control: any) => externalSkillProvider(control, providerInvalidators, 'global'))
       if (typeof dispose === 'function') add(dispose)
     } catch (e) {
       console.error('[dsh-plugin-tool-management] global skills provider registration failed:', message(e))
@@ -338,26 +345,31 @@ export function createSkillsService(ctx: any): SkillsService {
     } catch (e) {
       console.error('[dsh-plugin-tool-management] agent-scoped provider setup failed:', message(e))
     }
-    try {
-      const watchPaths = roots
-        // 官方内置来源是宿主启动时物化的只读副本，不会中途变化，不起 watcher。
-        .filter((root: any) => root.key !== 'official')
-        .map((root: any) => String((root && root.path) || ''))
-        .filter(Boolean)
-      add(watchDirectories(watchPaths, invalidateSkills))
-      // 自定义目录在状态文件里，注册时读取一次并一并监听（后添加的目录由
-      // provider 首次 list 天然覆盖，等插件重载后才有 watcher）。
-      readManagerState()
-        .then((current) => {
-          const customPaths = customRootsFromState(current.state)
-            .map((root: any) => String((root && root.path) || ''))
-            .filter(Boolean)
-          if (customPaths.length) add(watchDirectories(customPaths, invalidateSkills))
-        })
-        .catch(() => { /* 状态不可用时仅监听静态根 */ })
-    } catch (e) {
-      console.error('[dsh-plugin-tool-management] skill watcher setup failed:', message(e))
-    }
+    // 静态来源的 watcher 与状态文件都**推迟到装配之后**：`roots()` 会物化官方内置技能
+    // （同步拷贝宿主安装里的文件），apply 里调用等于让宿主启动路径读宿主目录。
+    void Promise.resolve()
+      .then(() => {
+        if (disposed) return null
+        const watchPaths = roots()
+          // 官方内置来源是宿主启动时物化的只读副本，不会中途变化，不起 watcher。
+          .filter((root: any) => root.key !== 'official')
+          .map((root: any) => String((root && root.path) || ''))
+          .filter(Boolean)
+        add(watchDirectories(watchPaths, invalidateSkills))
+        // 自定义目录在状态文件里，注册时读取一次并一并监听（后添加的目录由
+        // provider 首次 list 天然覆盖，等插件重载后才有 watcher）。
+        return readManagerState()
+      })
+      .then((current) => {
+        if (current === null) return
+        const customPaths = customRootsFromState(current.state)
+          .map((root: any) => String((root && root.path) || ''))
+          .filter(Boolean)
+        if (customPaths.length) add(watchDirectories(customPaths, invalidateSkills))
+      })
+      .catch((e) => {
+        console.error('[dsh-plugin-tool-management] skill watcher setup failed:', message(e))
+      })
     return () => {
       disposed = true
       for (const dispose of disposers) { try { dispose() } catch { /* ignore */ } }
@@ -632,7 +644,7 @@ export function createSkillsService(ctx: any): SkillsService {
    * 静态根（`userRoots`）+ 状态文件里的自定义根 + 当前活动工作区的项目来源。
    */
   async function isInsideKnownSkillRoot(abs: string): Promise<boolean> {
-    const dirs: string[] = roots.map((r: any) => String((r && r.path) || '')).filter(Boolean)
+    const dirs: string[] = roots().map((r: any) => String((r && r.path) || '')).filter(Boolean)
     try {
       for (const r of customRootsFromState((await readManagerState()).state)) {
         if (r && r.path) dirs.push(String(r.path))

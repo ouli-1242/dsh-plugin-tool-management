@@ -2,7 +2,7 @@
 
 > 本文件由 `node scripts/compat-matrix.mjs` 生成，请勿手工编辑。
 >
-> 插件 0.21.8 · 生成于 2026-10-28 · 验证基准 DSH `0.2.1-rc.3` · 安装期适配范围 `>=0.2.1-rc.3 <0.2.2`
+> 插件 0.21.9 · 生成于 2026-10-30 · 验证基准 DSH `0.2.1-rc.5` · 安装期适配范围 `>=0.2.1-rc.5 <0.2.2`
 
 这张表回答一个问题：**同一个插件，装在不同版本的 DSH 宿主上，哪些能力还在、哪些已经对不上。**
 它只做静态判定（读宿主安装里的官方包，看原型上的成员在不在），不启动宿主、不碰会话数据。
@@ -28,50 +28,51 @@
 
 | DSH 版本 | 安装形态 | 安装位置 | 在适配范围内 | 静态可查 | 缺失 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0.2.1-rc.3`（基准） | npx 缓存 | `D:\Cache\npm\_npx\a3a60f53b42a237b\node_modules\@deepseek-ai` | 是 | 15/17 | 2 | 与本插件适配基准一致（另 2 项可选原生入口不存在，走适配器） |
-| `0.2.1-rc.2` | npx 缓存 | `D:\Cache\npm\_npx\50d2c97abf8f4186\node_modules\@deepseek-ai` | **否** | 15/17 | 2 | **超出适配范围**（本插件只适配 `0.2.1-rc.3`） |
-| `0.2.0-rc.2` | npx 缓存 | `D:\Cache\npm\_npx\1e7f6d9597241db0\node_modules\@deepseek-ai` | **否** | 15/17 | 2 | **超出适配范围**（本插件只适配 `0.2.1-rc.3`） |
+| `0.2.1-rc.5`（基准） | 本地安装 | `C:\Users\ouli\AppData\Roaming\npm\node_modules\@deepseek-ai` | 是 | 15/17 | 2 | 与本插件适配基准一致（另 2 项可选原生入口不存在，走适配器） |
+| `0.2.1-rc.3` | npx 缓存 | `D:\Cache\npm\_npx\a3a60f53b42a237b\node_modules\@deepseek-ai` | **否** | 15/17 | 2 | **超出适配范围**（本插件只适配 `0.2.1-rc.5`） |
+| `0.2.1-rc.2` | npx 缓存 | `D:\Cache\npm\_npx\50d2c97abf8f4186\node_modules\@deepseek-ai` | **否** | 15/17 | 2 | **超出适配范围**（本插件只适配 `0.2.1-rc.5`） |
+| `0.2.0-rc.2` | npx 缓存 | `D:\Cache\npm\_npx\1e7f6d9597241db0\node_modules\@deepseek-ai` | **否** | 15/17 | 2 | **超出适配范围**（本插件只适配 `0.2.1-rc.5`） |
 
 ## 能力
 
-| 能力 | 类型 | 可选 | `0.2.1-rc.3` | `0.2.1-rc.2` | `0.2.0-rc.2` |
-| --- | --- | --- | --- | --- | --- |
-| `workspace.read-state` | read |  | 已验证 | 未适配 | 未适配 |
-| `workspace.read-table` | read |  | 已验证 | 未适配 | 未适配 |
-| `workspace.index-shape` | read |  | — | — | — |
-| `workspace.read-header` | read |  | 已验证 | 未适配 | 未适配 |
-| `workspace.enqueue` | write |  | 已验证 | 未适配 | 未适配 |
-| `workspace.set-state` | write |  | 已验证 | 未适配 | 未适配 |
-| `workspace.index-header` | write |  | 已验证 | 未适配 | 未适配 |
-| `workspace.archive-native` | write | 可选 | 已验证 | 未适配 | 未适配 |
-| `workspace.unarchive-native` | write | 可选 | 已验证 | 未适配 | 未适配 |
-| `workspace.batch-native` | write | 可选 | 不可用 | 不可用 | 不可用 |
-| `workspace.delete-native` | delete | 可选 | 不可用 | 不可用 | 不可用 |
-| `sessions.detach-live` | delete |  | 已验证 | 未适配 | 未适配 |
-| `sessions.cold-announce` | delete |  | 已验证 | 未适配 | 未适配 |
-| `projection.write` | write |  | 已验证 | 未适配 | 未适配 |
-| `projection.table-delete` | delete |  | — | — | — |
-| `projection.delete-native` | delete | 可选 | — | — | — |
-| `settings.document-path` | read |  | 已验证 | 未适配 | 未适配 |
-| `fs.patch-io` | write |  | — | — | — |
-| `preset.roster-surface` | read |  | — | — | — |
-| `agentPreset.register` | write |  | 已验证 | 未适配 | 未适配 |
-| `tools.restrict-method` | write |  | 已验证 | 未适配 | 未适配 |
-| `agent.created-event` | read |  | — | — | — |
-| `connection.admit` | read |  | 已验证 | 未适配 | 未适配 |
+| 能力 | 类型 | 可选 | `0.2.1-rc.5` | `0.2.1-rc.3` | `0.2.1-rc.2` | `0.2.0-rc.2` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `workspace.read-state` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.read-table` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.index-shape` | read |  | — | — | — | — |
+| `workspace.read-header` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.enqueue` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.set-state` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.index-header` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.archive-native` | write | 可选 | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.unarchive-native` | write | 可选 | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.batch-native` | write | 可选 | 不可用 | 不可用 | 不可用 | 不可用 |
+| `workspace.delete-native` | delete | 可选 | 不可用 | 不可用 | 不可用 | 不可用 |
+| `sessions.detach-live` | delete |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `sessions.cold-announce` | delete |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `projection.write` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `projection.table-delete` | delete |  | — | — | — | — |
+| `projection.delete-native` | delete | 可选 | — | — | — | — |
+| `settings.document-path` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `fs.patch-io` | write |  | — | — | — | — |
+| `preset.roster-surface` | read |  | — | — | — | — |
+| `agentPreset.register` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `tools.restrict-method` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `agent.created-event` | read |  | — | — | — | — |
+| `connection.admit` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
 
 ## 操作
 
 一项操作可用，意味着它需要的**每一项**能力都齐备 —— 插件不会从「部分可用」悄悄滑进另一条路由。
 「原生」是宿主自己的入口；「适配器」是插件在宿主公开成员上拼出来的等价路径。
 
-| 操作 | `0.2.1-rc.3` | `0.2.1-rc.2` | `0.2.0-rc.2` |
-| --- | --- | --- | --- |
-| archive | 可用（原生） | 可用（原生） | 可用（原生） |
-| unarchive | 可用（原生） | 可用（原生） | 可用（原生） |
-| batch | 可用（适配器） | 可用（适配器） | 可用（适配器） |
-| delete | 待确认 | 待确认 | 待确认 |
-| list | 待确认 | 待确认 | 待确认 |
+| 操作 | `0.2.1-rc.5` | `0.2.1-rc.3` | `0.2.1-rc.2` | `0.2.0-rc.2` |
+| --- | --- | --- | --- | --- |
+| archive | 可用（原生） | 可用（原生） | 可用（原生） | 可用（原生） |
+| unarchive | 可用（原生） | 可用（原生） | 可用（原生） | 可用（原生） |
+| batch | 可用（适配器） | 可用（适配器） | 可用（适配器） | 可用（适配器） |
+| delete | 待确认 | 待确认 | 待确认 | 待确认 |
+| list | 待确认 | 待确认 | 待确认 | 待确认 |
 
 「待确认」的来由：delete 卡在 `projection.table-delete`；list 卡在 `workspace.index-shape`。这几项读的是活实例上的字段与行为，静态视图看不到。
 

@@ -60,8 +60,12 @@ import type {
 export {
   asarHostPackageRoot,
   findingsById,
+  globalNpmHostPackageDirs,
+  hostPackageDirsFromPath,
   hostRootCandidates,
+  hostVersionOf,
   IDENTITY_PACKAGES,
+  looksLikeHostPackageDir,
   npxCacheHostRoots,
   OPERATION_ROUTES,
   recoveryFor,
@@ -70,7 +74,7 @@ export {
   VERIFIED_HOST_VERSION,
 } from './host-roots.js'
 export type { OperationName, RouteDecision } from './host-roots.js'
-import { hostRootCandidates, IDENTITY_PACKAGES, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
+import { hostRootCandidates, IDENTITY_PACKAGES, looksLikeHostPackageDir, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
 import type { OperationName, RouteDecision } from './host-roots.js'
 
 // 「宿主在哪」这份口径只有一份（host-roots.ts 的 hostRootCandidates）。静态能力表里有条目要
@@ -114,7 +118,7 @@ export function isSourceInstall(): boolean {
  *
  * 官方全程走 prerelease 渠道（x.y.z-rc.N），而 semver 有一条硬规则：**带 prerelease 标签的
  * 版本，只有在"同 [major,minor,patch] 元组"的比较器也带 prerelease 标签时才能匹配**。所以
- * `>=0.2.1-rc.3` 匹配不了 `0.2.2-rc.1`，`^0.2.1-rc.3` 也匹配不了它 —— 范围只能**逐段写**，
+ * `>=0.2.1-rc.5` 匹配不了 `0.2.2-rc.1`，`^0.2.1-rc.5` 也匹配不了它 —— 范围只能**逐段写**，
  * 一代一段。
  *
  * 但「逐段写」不等于「把历史各代累积起来」。累积成 `0.1.7 || 0.2.0 || 0.2.1` 三代并集，
@@ -127,8 +131,8 @@ export function isSourceInstall(): boolean {
  * 对应版本即可（`dsh plugin add dsh-plugin-tool-management@<老版本号>`）。装上被拒 + 一版新适配，
  * 优于装上然后部分功能悄悄失效。
  *
- * 上界**必须写**（`<0.2.2`）：`^` 不能用，它的隐含上界是 `<0.3.0`，而 `0.2.1-rc.3` 这个已适配
- * 版本自己都满足不了 `^0.2.1-rc.3`（prerelease 只在同元组比较器带 prerelease 时才匹配）。
+ * 上界**必须写**（`<0.2.2`）：`^` 不能用，它的隐含上界是 `<0.3.0`，而 `0.2.1-rc.5` 这个已适配
+ * 版本自己都满足不了 `^0.2.1-rc.5`（prerelease 只在同元组比较器带 prerelease 时才匹配）。
  *
  * 两种写法（这里是 `^` 三段、那里是 `>=` 两段，且下界不同）。现在两处是**同一个字符串**，
  * 并由 `test/contracts.test.mjs` 的断言钉住 —— 漂移会让"界面/doctor 报的范围"与"安装期实际
@@ -140,14 +144,15 @@ export function isSourceInstall(): boolean {
  * "任意未来 prerelease"的 range。缓解方式：官方每发一代新 rc，同步改这一段（同时改
  * `VERIFIED_HOST_VERSION`），以及 `--legacy-peer-deps` 这条逃生门。
  *
- * 0.2.1-rc.3 的验证依据：rc.2 上 `assessHost` 全量通过（宿主版本读得出来），rc.3 与 rc.2
- * 的逐包比对里受监视的全部包只有版本号变化（改动集中在客户端 UI，cordis 未动）。
+ * 0.2.1-rc.5 的验证依据：桌面宿主上 `assessHost` 全量通过（23/23，身份比对全部同一份实现）；
+ * 官方内置技能清单新增 `office` 路由与三个操作技能，LibreOffice Kit 的注入名单随之变化，
+ * 本插件已按官方源码对齐。
  */
-export const EXPECTED_PEER_RANGE = '>=0.2.1-rc.3 <0.2.2'
+export const EXPECTED_PEER_RANGE = '>=0.2.1-rc.5 <0.2.2'
 /**
  * peer range 的下界。仍从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
  *
- * 范围收窄到一代之后它**与 VERIFIED_HOST_VERSION 重合**（都是 0.2.1-rc.3）—— 这是正确的：
+ * 范围收窄到一代之后它**与 VERIFIED_HOST_VERSION 重合**（都是 0.2.1-rc.5）—— 这是正确的：
  * 适配的那一代就是唯一允许安装的那一代。保留这个导出是因为它进了 `compat-status` 的载荷，
  * doctor 与外部脚本可能仍在读；语义仍是"最早支持哪一代"，只是现在只有一代。
  */
@@ -551,19 +556,16 @@ function hostContractStatus(hostRoot: string | null): HostContractStatus | null 
 }
 
 /**
- * 本插件所挂的那个 DSH 安装的 `@deepseek-ai` 目录，从某个共享包的物理位置推出来。
+ * 本插件所挂的那个 DSH 安装的 `@deepseek-ai` 目录。
  *
- * 锚在**已解析的入口**上而不是 `require.resolve('@deepseek-ai/dsh')` 上：插件从不 import
- * `dsh` 应用包，它本来就不必对插件可解析 —— 可解析的只有那些共享库。
- *
- * 注意 pnpm：这里在 `.pnpm/<name>@<ver>/node_modules/` 布局下会返回**该包的隔离目录**
- * （那也是一个 `node_modules/@deepseek-ai`）。它本身不是问题 —— node 的解析会继续向上走到
- * 顶层 `node_modules`，所以能解析出的包集合与顶层锚点相同（实测确认）。真正的风险在
- * 调用方：从锚点解析不到的包会被判成 `same = null`，见 assessHost 里的 `unverified`。
+ * 判据是「这个目录里确实装着宿主包」（`looksLikeHostPackageDir`），不是「有没有
+ * `@deepseek-ai/dsh` 同级包」：全局 npm 安装把依赖放在 `dsh/node_modules/@deepseek-ai`，
+ * 那一层没有 `dsh` 自己；按同级包判会把全局安装整体跳过，退到 npx 缓存里另一代宿主上
+ * 比出假的「两份不同拷贝」。
  */
 function hostPackageRoot(): string | null {
   for (const candidate of hostRootCandidates()) {
-    if (existsSync(join(candidate, 'dsh', 'package.json'))) return candidate
+    if (looksLikeHostPackageDir(candidate)) return candidate
   }
   return null
 }

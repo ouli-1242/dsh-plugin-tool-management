@@ -1,0 +1,115 @@
+# 每日宿主对表：拿 npm 上的最新宿主（latest 标签）跑一遍插件侧的全部硬检查。
+#
+# 为什么不用「发版前手动跑」：官方 rc 的节奏比本插件的发版快，等到发版才发现契约变了，
+# 用户已经先装上了。这里每天自动把「最新宿主 × 本插件」量一遍：
+#   - 能力探测缺项（doctor blocker）→ 开 issue；
+#   - 契约测试 / 构建失败 → 同一标题的 issue 追加一条评论；
+#   - 恢复通过 → 自动关闭该 issue。
+#
+# 只跟 latest：alpha 是下一代的预览包，版本号大概率超出当前 peer 范围，天天红没有信息量；
+# 需要提前看 alpha 时手动跑一次 workflow_dispatch 并临时把矩阵改成 alpha 即可。
+
+name: DSH nightly canary
+
+on:
+  schedule:
+    # 每天 02:17 UTC。避开整点，减少 GitHub 调度拥堵。
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  canary:
+    name: host ${{ matrix.channel }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install plugin dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install DSH host (${{ matrix.channel }})
+        id: host
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/dsh-host"
+          mkdir -p "$PREFIX"
+          cd "$PREFIX"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --no-save "@deepseek-ai/dsh@${{ matrix.channel }}"
+          # npm 可能把宿主依赖平铺到顶层，也可能套在 dsh 自己的 node_modules 下；
+          # 两种形态都认，交给 host-deps 的同一份形状判定。
+          NESTED="$PREFIX/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai"
+          OUTER="$PREFIX/node_modules/@deepseek-ai"
+          if [ -f "$NESTED/cordis/package.json" ]; then HOST_DIR="$NESTED"; else HOST_DIR="$OUTER"; fi
+          test -f "$HOST_DIR/cordis/package.json"
+          VERSION=$(node -e "console.log(require('$PREFIX/node_modules/@deepseek-ai/dsh/package.json').version)")
+          echo "resolved ${{ matrix.channel }} -> $VERSION at $HOST_DIR"
+          echo "dir=$HOST_DIR" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Align plugin host packages
+        run: node scripts/host-deps.mjs --fix --host "${{ steps.host.outputs.dir }}"
+
+      - name: Build
+        run: npm run build
+
+      - name: Contract tests
+        run: node --test test/contracts.test.mjs
+
+      - name: Doctor
+        run: |
+          set -o pipefail
+          node scripts/doctor.mjs 2>&1 | tee doctor.txt
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: Canary failed for DSH ${{ matrix.channel }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          SIG=$( { tail -60 doctor.txt 2>/dev/null || echo 'no doctor output'; } | sha256sum | cut -c1-12)
+          BODY=$(printf 'DSH `%s` (`%s`) canary failed.\n\nRun: %s\n\n```\n%s\n```\n\nsig: %s\n' \
+            "${{ steps.host.outputs.version }}" "${{ matrix.channel }}" "$RUN_URL" \
+            "$(tail -80 doctor.txt 2>/dev/null || echo 'no doctor output (an earlier step failed)')" \
+            "$SIG")
+          NUM=$(gh issue list --state open --limit 100 --json number,title \
+            --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1)
+          if [ -n "$NUM" ]; then
+            # 同一个失败签名不重复评论：issue 里保留首次现场，后续只在失败形态变化时追加。
+            SEEN=$(gh issue view "$NUM" --json comments --jq '[.comments[].body] | join("\n")')
+            if printf '%s' "$SEEN" | grep -q "sig: $SIG"; then
+              echo "same failure signature (sig: $SIG); issue #$NUM already up to date"
+            else
+              gh issue comment "$NUM" --body "$BODY"
+            fi
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: Close recovered issue
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: Canary failed for DSH ${{ matrix.channel }}
+        run: |
+          set -euo pipefail
+          NUM=$(gh issue list --state open --limit 100 --json number,title \
+            --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1)
+          if [ -n "$NUM" ]; then
+            gh issue close "$NUM" --comment "Recovered: the nightly canary passes against DSH ${{ steps.host.outputs.version }}."
+          fi

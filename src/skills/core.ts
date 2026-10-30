@@ -91,8 +91,8 @@ import type {
   WriteOptions,
 } from "./core-types.js";
 import {
-  OFFICE_SKILL_NAMES,
   OFFICIAL_SOURCE_KEY,
+  officeKitApplies,
   officialOfficeRuntimeSection,
   officialSkillRoot,
 } from "./official.js";
@@ -1862,11 +1862,11 @@ export async function getProviderSkill(
     const summary = entryOf(locator.entryName, entry.kind, entry.docPath, doc);
     if (!summary.loadable || summary.declaredName !== candidate.name)
       return undefined;
-    // 官方 office 技能：补上官方 provider 在 get 时追加的 LibreOffice Kit 段
-    // （SKILL.md 明文引用这段的 node/cli 路径，见上方块注释）。
+    // 官方 office 操作技能：补上官方 provider 在 get 时追加的 LibreOffice Kit 段
+    // （SKILL.md 明文引用这段的 node/cli 路径，见上方块注释）。按正文判断而不是按技能名，
+    // 官方增删 / 改名操作技能时不会漏挂。
     const officeRuntime =
-      locator.rootKey === OFFICIAL_SOURCE_KEY &&
-      OFFICE_SKILL_NAMES.has(locator.entryName)
+      locator.rootKey === OFFICIAL_SOURCE_KEY && officeKitApplies(doc.body)
         ? officialOfficeRuntimeSection()
         : "";
     return {

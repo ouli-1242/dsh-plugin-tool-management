@@ -6,6 +6,7 @@
 // （hub = 导入落点 / dsh = 新建默认落点）里的胜出者。
 
 import { toKebab } from '../skills/core.js'
+import { OFFICIAL_SOURCE_KEY, officeKitApplies, officialOfficeRuntimeSection } from '../skills/official.js'
 import { effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, locateSkillRoot, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
 /** 技能工具域要的宿主能力：技能 op 表与来源解析。 */
@@ -234,7 +235,14 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       // 注入边界：正文读进来就永久留在这一轮的 transcript 里，压制型预设下目录也可能不在 ——
       // 与 skill_manager_list 同一句说明，别让模型以为"读过就等于技能开着"。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
-      return header + String(detail.body || '').trim() + notice
+      // 官方 office 操作技能：provider 的 get 会补 LibreOffice Kit 段，这里读到的正文
+      // 必须与真正注入的一致，否则模型按少了 node/cli 路径的正文去猜。判据同 get：看正文。
+      const body = String(detail.body || '')
+      const officeRuntime =
+        picked.rootKey === OFFICIAL_SOURCE_KEY && officeKitApplies(body)
+          ? officialOfficeRuntimeSection()
+          : ''
+      return header + body.trim() + officeRuntime + notice
     },
   }))
   register(defineTool({

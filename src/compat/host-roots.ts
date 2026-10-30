@@ -8,6 +8,7 @@
 // 一挪就改语义），这里只吃已解析好的路径。
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { CAPABILITY_SPECS, type CapabilitySpec } from './capability-specs.js'
 import {
   isAsarPath,
@@ -51,7 +52,7 @@ export const IDENTITY_PACKAGES = [
   '@deepseek-ai/dsh-spill-local',
 ] as const
 /** 本插件适配器最后一次对着验证过的宿主版本 —— 改它等于宣布适配了新的一代。 */
-export const VERIFIED_HOST_VERSION = '0.2.1-rc.3'
+export const VERIFIED_HOST_VERSION = '0.2.1-rc.5'
 /**
  * 每个操作依赖的能力集合，按「缺成员时插件怎么达到同样结果」分组。
  *
@@ -92,14 +93,155 @@ export type OperationName = keyof typeof OPERATION_ROUTES
 export function recoveryFor(_finding: CapabilityFinding): string {
   return `宿主 ${VERIFIED_HOST_VERSION} 的该项能力未通过探测；请更新本插件到与本机 DSH 匹配的版本，或改用宿主原生入口（先运行 node scripts/doctor.mjs 查看差异）。`
 }
+const HOST_PACKAGE_DIR_TAIL = '/node_modules/@deepseek-ai'
+
+/** 路径归一化成 `/` 分隔：Windows、POSIX 与 asar 内部路径用同一套比较。 */
+function normalizePath(value: string): string {
+  return value.replace(/\\/gu, '/').replace(/\/+$/u, '')
+}
+
+/** 这个目录本身是不是 `node_modules/@deepseek-ai`（平铺与 `dsh/node_modules` 嵌套都算）。 */
+function isHostPackageDirPath(dir: string): boolean {
+  return normalizePath(dir).endsWith(HOST_PACKAGE_DIR_TAIL)
+}
+
+/**
+ * 从一个入口路径向上收集所有 `node_modules/@deepseek-ai` 祖先。
+ *
+ * 全局 npm 安装把宿主依赖放在 `<prefix>/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai`。
+ * 只看第一层会拿到一个只有 `dsh` 的壳目录，真正装着身份包的是里层。
+ *
+ * @param entry 任意文件路径（宿主入口、包清单等）
+ * @param limit 最多向上找几层
+ * @returns 由近到远的包目录
+ */
+export function hostPackageDirsFromPath(entry: string, limit = 12): string[] {
+  const out: string[] = []
+  let dir = dirname(entry)
+  for (let i = 0; i < limit; i += 1) {
+    if (isHostPackageDirPath(dir)) out.push(dir)
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return out
+}
+
+/**
+ * 目录像不像宿主的 `@deepseek-ai` 目录：有 `cordis`，且至少一个 `dsh-*` 身份包在。
+ *
+ * 判据不能用 `@deepseek-ai/dsh` 同级包：全局 npm 安装的顶层 `@deepseek-ai` 里只有 `dsh`
+ * 这一层壳，真正的宿主依赖在 `dsh/node_modules/@deepseek-ai` 下。把 `dsh` 当门槛会把全局
+ * 安装整体判成「不是宿主」，退到 npx 缓存里另一代宿主上比出假的「两份不同拷贝」。
+ */
+export function looksLikeHostPackageDir(dir: string): boolean {
+  try {
+    if (!existsSync(join(dir, 'cordis', 'package.json'))) return false
+    return IDENTITY_PACKAGES.some((name) =>
+      name.startsWith('@deepseek-ai/dsh-')
+      && existsSync(join(dir, name.slice(name.indexOf('/') + 1), 'package.json')),
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 宿主版本：平铺布局读同级的 `dsh`，嵌套布局读 `@deepseek-ai/dsh` 包自身的清单。
+ *
+ * @returns 版本号；两条路都读不到（或读到别的包）时为 null
+ */
+export function hostVersionOf(dir: string): string | null {
+  const manifests = [join(dir, 'dsh', 'package.json'), join(dirname(dirname(dir)), 'package.json')]
+  for (const manifest of manifests) {
+    try {
+      const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown; version?: unknown }
+      if (typeof parsed.version === 'string' && typeof parsed.name === 'string' && parsed.name.startsWith('@deepseek-ai/dsh')) {
+        return parsed.version
+      }
+    } catch { /* 这一处读不到就试下一处 */ }
+  }
+  return null
+}
+
+/**
+ * 正在运行本插件的宿主入口所对应的包目录。
+ *
+ * `dsh web` 的入口是 `<host>/lib/bin.js`，桌面宿主子进程的入口在 `app.asar` 里；
+ * 两处都能从 `process.argv[1]` 向上走到宿主自己的 `@deepseek-ai`。脚本（doctor /
+ * host-deps）自己的 argv[1] 在插件目录内，必须排除 —— 否则会把仓库的旧依赖当成宿主。
+ */
+function runningHostPackageDirs(): string[] {
+  const entry = process.argv[1]
+  if (typeof entry !== 'string' || entry === '') return []
+  const selfRoot = normalizePath(join(dirname(fileURLToPath(import.meta.url)), '..', '..'))
+  const normalizedEntry = normalizePath(entry)
+  if (normalizedEntry === selfRoot || normalizedEntry.startsWith(`${selfRoot}/`)) return []
+  const ownPackages = `${selfRoot}/node_modules/@deepseek-ai`
+  return hostPackageDirsFromPath(entry)
+    .filter((dir) => normalizePath(dir) !== ownPackages)
+    // 全局安装的顶层只有 `dsh` 壳，真正的包在它下面的嵌套层；两处都作为候选，
+    // 由 `looksLikeHostPackageDir` 决定哪一层才算数。
+    .flatMap((dir) => [dir, join(dir, 'dsh', 'node_modules', '@deepseek-ai')])
+}
+
+/**
+ * 全局 npm 前缀下的 `@deepseek-ai` 目录（含全局安装的嵌套一层）。
+ *
+ * 前缀依次看 `npm_config_prefix` / `.npmrc` 的 `prefix=`、平台默认安装位置与 node 自身的前缀。
+ * 找不到的目录由调用方按存在性过滤 —— 这里只负责列位置。
+ */
+export function globalNpmHostPackageDirs(): string[] {
+  const modulesDirs = new Set<string>()
+  const addPrefix = (prefix: string): void => {
+    if (prefix === '') return
+    if (process.platform === 'win32') {
+      modulesDirs.add(join(prefix, 'node_modules'))
+      return
+    }
+    modulesDirs.add(join(prefix, 'lib', 'node_modules'))
+    modulesDirs.add(join(prefix, 'node_modules'))
+  }
+  let envPrefix = process.env.npm_config_prefix || process.env.NPM_CONFIG_PREFIX || ''
+  if (envPrefix === '') {
+    // `npm install -g` 的落点由 npm prefix 决定；`.npmrc` 里显式写过 prefix 时要照它走，
+    // 否则全局宿主会被漏掉，退到另一代安装上比对。
+    const home = process.env.USERPROFILE || process.env.HOME || ''
+    if (home !== '') {
+      try {
+        envPrefix = readFileSync(join(home, '.npmrc'), 'utf8').match(/^\s*prefix\s*=\s*(.+?)\s*$/m)?.[1] ?? ''
+      } catch { /* no .npmrc — platform defaults below */ }
+    }
+  }
+  addPrefix(envPrefix)
+  if (process.platform === 'win32') {
+    if (process.env.APPDATA) addPrefix(join(process.env.APPDATA, 'npm'))
+  } else {
+    addPrefix('/usr/local')
+    if (process.env.HOME) addPrefix(join(process.env.HOME, '.npm-global'))
+    addPrefix(dirname(dirname(process.execPath)))
+  }
+  const out: string[] = []
+  for (const modulesDir of modulesDirs) {
+    const top = join(modulesDir, '@deepseek-ai')
+    out.push(top, join(top, 'dsh', 'node_modules', '@deepseek-ai'))
+  }
+  return out
+}
+
 /**
  * 宿主 `@deepseek-ai` 目录的候选序列，按优先级排 —— 全仓「宿主装在哪」的唯一口径。
  *
- * 四步，前一步找不到才看下一步：
- *   1. 桌面版的 `resources/app.asar`（见 {@link asarHostPackageRoot}）；
- *   2. `$DSH_HOME/profiles/node_modules/@deepseek-ai`；
- *   3. 从 {@link IDENTITY_PACKAGES} 里每个能解析的锚点向上找 `node_modules/@deepseek-ai`；
- *   4. npx 缓存里的安装（见 {@link npxCacheHostRoots}）。
+ * 六步，前一步找不到才看下一步：
+ *   1. 正在运行的宿主入口（`process.argv[1]`）上溯到的 `@deepseek-ai`；
+ *   2. 桌面版的 `resources/app.asar`（见 {@link asarHostPackageRoot}）；
+ *   3. `$DSH_HOME/profiles/node_modules/@deepseek-ai`；
+ *   4. 全局 npm 前缀（见 {@link globalNpmHostPackageDirs}）；
+ *   5. 从 {@link IDENTITY_PACKAGES} 里每个能解析的锚点向上找 `node_modules/@deepseek-ai`；
+ *   6. npx 缓存里的安装（见 {@link npxCacheHostRoots}）。
+ *
+ * 前两步是「正在跑的那一代宿主」，后三步是安装痕迹；全局安装排在 npx 缓存之前，
+ * 否则会用缓存里另一代宿主当锚点，把同一条安装比成「两份不同拷贝」。
  *
  * 锚点那一步只认**真实形态**：取不到就跳过 —— 这里没有可比的对象，跳过是如实；而身份
  * 比对那边取不到必须报出来（见 `assessHost` 的 realpath 说明）。
@@ -108,10 +250,21 @@ export function recoveryFor(_finding: CapabilityFinding): string {
  */
 export function hostRootCandidates(): string[] {
   const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh')
+  const ownPackages = normalizePath(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', '@deepseek-ai'))
   const candidates: string[] = []
+  const push = (dir: string): void => {
+    const normalized = normalizePath(dir)
+    // 插件自己那份依赖永远不是宿主锚点：把它当宿主会让 doctor 拿插件和它自己比，
+    // 得出「全部一致」的假结论（源码检出里最容易发生）。
+    if (normalized === '' || normalized === ownPackages) return
+    if (candidates.some((item) => normalizePath(item) === normalized)) return
+    candidates.push(dir)
+  }
+  for (const dir of runningHostPackageDirs()) push(dir)
   const asarHost = asarHostPackageRoot()
-  if (asarHost !== null) candidates.push(asarHost)
-  if (home !== '') candidates.push(join(home, 'profiles', 'node_modules', '@deepseek-ai'))
+  if (asarHost !== null) push(asarHost)
+  if (home !== '') push(join(home, 'profiles', 'node_modules', '@deepseek-ai'))
+  for (const dir of globalNpmHostPackageDirs()) push(dir)
   for (const anchor of IDENTITY_PACKAGES) {
     // 锚点候选只认**真实形态**：取不到就跳过（这里没有可比的对象，如实跳过即可，
     // 与身份比对不同 —— 那边取不到必须报出来，见 assessHost 的 realpath 说明）。
@@ -120,13 +273,13 @@ export function hostRootCandidates(): string[] {
     const resolved = real.path
     let dir = dirname(resolved)
     for (let i = 0; i < 4; i += 1) {
-      if (dir.endsWith(join('node_modules', '@deepseek-ai'))) { candidates.push(dir); break }
+      if (isHostPackageDirPath(dir)) { push(dir); break }
       const parent = dirname(dir)
       if (parent === dir) break
       dir = parent
     }
   }
-  candidates.push(...npxCacheHostRoots())
+  for (const dir of npxCacheHostRoots()) push(dir)
   return candidates
 }
 /**
@@ -136,14 +289,14 @@ export function hostRootCandidates(): string[] {
  * （普通 node）下一律返回 null。归档内路径由 electron 自己的 fs 修补解析，归档外的普通
  * node 读不到，因此这里失败是正常路径，不报错。
  *
- * @returns 归档内的目录；不是桌面版、或归档里没有 `dsh` 包时为 null
+ * @returns 归档内的目录；不是桌面版、或归档里没有宿主包时为 null
  */
 export function asarHostPackageRoot(): string | null {
   const resources = (process as { resourcesPath?: string }).resourcesPath
   if (typeof resources !== 'string' || resources === '') return null
   const dir = join(resources, 'app.asar', 'dsh', 'node_modules', '@deepseek-ai')
   try {
-    if (!existsSync(join(dir, 'dsh', 'package.json'))) return null
+    if (!looksLikeHostPackageDir(dir)) return null
   } catch {
     return null
   }
@@ -174,7 +327,7 @@ export function npxCacheHostRoots(): string[] {
   try { entries = readdirSync(npxRoot) } catch { return [] }
   for (const entry of entries) {
     const dir = join(npxRoot, entry, 'node_modules', '@deepseek-ai')
-    if (!existsSync(join(dir, 'dsh', 'package.json'))) continue
+    if (!looksLikeHostPackageDir(dir)) continue
     try { roots.push({ dir, mtime: statSync(dir).mtimeMs }) } catch { /* raced — skip */ }
   }
   return roots.sort((left, right) => right.mtime - left.mtime).map((root) => root.dir)
