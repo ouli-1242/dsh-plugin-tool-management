@@ -193,13 +193,11 @@ export interface SecretGateRejection {
 /** 令牌缺失 / 不匹配时给界面的那句话（两种情况合并，不告诉调用方是哪一种）。 */
 export const TOKEN_MSG = '缺少访问令牌，或令牌不对'
 /**
- * 界面按 code 在最右侧挂「填写令牌」跳转按钮（这一族里的 code 都算）。
+ * 令牌错误码：界面按它认出「要填令牌」，而不是按文案匹配。
  *
- * 但常量与界面词典里的 `error.secret.noToken` 都留着：宿主没重启时旧响应里还可能出现它，
- * 而界面同时按 code 与**文本相等**两条路识别这一族（见 client.js 的 isTokenGateText）。
+ * 旧宿主没重启时响应里还可能出现 `error.secret.noToken`，界面同时按 code 与**文本相等**
+ * 两条路识别这一族（见 client.js 的 isTokenGateText）。
  */
-export const TOKEN_CODE_NO_HOST = 'error.secret.noToken'
-/** 上面那句话的错误码：界面按它认出「要填令牌」，而不是按文案匹配。 */
 export const TOKEN_CODE_BAD = 'error.token.required'
 
 /**

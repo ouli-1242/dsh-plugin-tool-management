@@ -2695,6 +2695,6 @@
           ])
         }
         slots.inject('settings.section', () => slots.register(
-          { name: 'settings.section', id: 'dsm-tools', order: 16, label: function () { return t('nav.title') }, locale: NS },
+          { name: 'settings.section', id: SETTINGS_SECTION_ID, order: 16, label: function () { return t('nav.title') }, locale: NS },
           () => React.createElement(ToolsSection)
         ))

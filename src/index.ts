@@ -30,7 +30,7 @@ import { readIndexSync } from './memories/index-io.js'
 import { hasQuarantineMarker, readQuarantineMarker, writeFileAtomically } from './memories/index-io.js'
 import { registerBootReconciler, reconcileMcpRestart, runBootReconcilers } from './boot/reconcile.js'
 import { pruneDesktopAuthCookies } from './desktop-cookie-prune.js'
-import { hasMcpRestartMarker, processAlive, readMcpRestartMarker } from './mcp/restart-marker.js'
+import { hasMcpRestartMarker, pidLikelyAlive, readMcpRestartMarker } from './mcp/restart-marker.js'
 import { runStateDoctor } from './ops/state-doctor.js'
 import { createSubagentService, decideToolFilter, defaultPersonasDir, validPersonaName } from './subagents/service.js'
 import type { ToolFilterDecision } from './subagents/service.js'
@@ -320,7 +320,7 @@ export default {
         const marker = await readMcpRestartMarker()
         if (!marker) return []
         // pid 还活着 = 那次重启可能还在跑，那不是「没干完」。如实分开两种措辞。
-        const alive = processAlive(marker.pid)
+        const alive = pidLikelyAlive(marker.pid)
         return [{
           id: 'mcp-restart-pending',
           label: 'MCP 重启未完成',
@@ -4110,7 +4110,7 @@ export default {
               if (!marker) return null
               return {
                 server: marker.server, level: marker.level, phase: marker.phase,
-                pid: marker.pid, alive: processAlive(marker.pid),
+                pid: marker.pid, alive: pidLikelyAlive(marker.pid),
               }
             } catch { return null }
           },

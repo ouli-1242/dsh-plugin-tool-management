@@ -204,11 +204,6 @@ export function normalizeArchive(raw: unknown): SceneArchive {
   return out
 }
 
-/** 档案里有没有写过这一段 —— 「没写过」与「写过但为空」语义不同。 */
-export function hasSection(archive: SceneArchive, section: 'mcp' | 'skills' | 'subagents' | 'memories' | 'mcpNotes'): boolean {
-  return archive[section] !== undefined
-}
-
 /** 算 MCP 还原计划要的输入：已配置的服务器与已知工具名。 */
 export interface McpPlanInput {
   /** 配置中真实存在的服务器名全集（含未运行的）。 */

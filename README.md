@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-plugin-tool-management"><img src="https://img.shields.io/npm/v/dsh-plugin-tool-management?logo=npm&color=cb3837&style=flat-square" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT"></a>
-  <img src="https://img.shields.io/badge/DSH-0.2.1-4f7cf7?style=flat-square" alt="DSH 0.2.1">
+  <img src="https://img.shields.io/badge/DSH-0.2.2-4f7cf7?style=flat-square" alt="DSH 0.2.2">
   <a href="https://github.com/ouli-1242/dsh-plugin-tool-management"><img src="https://img.shields.io/badge/GitHub-ouli--1242-181717?logo=github&style=flat-square" alt="GitHub"></a>
 </p>
 
@@ -144,7 +144,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 | 装完没有页面          | 硬刷新浏览器；还不行就重启 DSH。                                                            |
 | 模型调不到某条工具    | 兼容页 →「模型工具表」，先选对当前对话 / 工作区（出厂默认关着 20 条）。面板和脚本不受影响。 |
 | 升级 DSH 后动作不可用 | 兼容页看降级原因；`node scripts/doctor.mjs`，再 `node scripts/host-deps.mjs --fix`。        |
-| 版本对不上            | 只适配 DSH **0.2.1**（`>=0.2.1-rc.2 <0.2.2`），跨代升级要等插件同步适配。                   |
+| 版本对不上            | 只适配 DSH **0.2.2**（`>=0.2.2-rc.1 <0.2.3`），跨代升级要等插件同步适配；旧宿主请装 0.21.x。 |
 | 重复 MCP 页签         | 删掉 `cordis.patch.yml` 里的旧 loader 行，再重启。                                          |
 | 改坏配置 DSH 起不来   | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.*.bak-*` 覆盖回去。         |
 

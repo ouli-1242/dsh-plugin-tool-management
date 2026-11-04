@@ -75,7 +75,6 @@ export {
 } from './host-roots.js'
 export type { OperationName, RouteDecision } from './host-roots.js'
 import { hostRootCandidates, IDENTITY_PACKAGES, looksLikeHostPackageDir, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
-import type { OperationName, RouteDecision } from './host-roots.js'
 
 // 「宿主在哪」这份口径只有一份（host-roots.ts 的 hostRootCandidates）。静态能力表里有条目要
 // 按宿主侧解析结果决定**这一轮能不能查**（`staticWhen`，见 connection.admit 那条），而
@@ -121,38 +120,40 @@ export function isSourceInstall(): boolean {
  * `>=0.2.1-rc.5` 匹配不了 `0.2.2-rc.1`，`^0.2.1-rc.5` 也匹配不了它 —— 范围只能**逐段写**，
  * 一代一段。
  *
- * 但「逐段写」不等于「把历史各代累积起来」。累积成 `0.1.7 || 0.2.0 || 0.2.1` 三代并集，
- * 等于向 npm 声明「支持 0.1.7-rc.2 起的每一代」。而本插件的代码只按 0.2.1 的契约写过
- * （SubagentStartRequest、身份比对、`connection.admit` 这几处都动过会静默改行为的语义），
- * 在 0.2.0 / 0.1.7 上从未验证。那种声明最坏的后果不是"装不上"，而是"装上了、大部分能用、
+ * 但「逐段写」不等于「把历史各代累积起来」。累积成 `0.2.0 || 0.2.1 || 0.2.2` 三代并集，
+ * 等于向 npm 声明「支持 0.2.0 起的每一代」。而本插件的代码只按 0.2.2 的契约写过
+ * （工具准入、Session Projection 注册、子代理创建语义这几处都动过会静默改行为的语义），
+ * 在 0.2.1 及更早的宿主上从未验证。那种声明最坏的后果不是"装不上"，而是"装上了、大部分能用、
  * 某几个动作悄悄失效"—— 用户无法判断是插件问题还是版本问题。
  *
  * 所以现在**只声明当前适配的这一代**。旧宿主不是没人管：插件的老版本自己带着老范围，用户装
  * 对应版本即可（`dsh plugin add dsh-plugin-tool-management@<老版本号>`）。装上被拒 + 一版新适配，
  * 优于装上然后部分功能悄悄失效。
  *
- * 上界**必须写**（`<0.2.2`）：`^` 不能用，它的隐含上界是 `<0.3.0`，而 `0.2.1-rc.5` 这个已适配
- * 版本自己都满足不了 `^0.2.1-rc.5`（prerelease 只在同元组比较器带 prerelease 时才匹配）。
+ * 上界**必须写**（`<0.2.3`）：`^` 不能用，它的隐含上界是 `<0.3.0`，而 `0.2.2-rc.1` 这个已适配
+ * 版本自己都满足不了 `^0.2.2-rc.1`（prerelease 只在同元组比较器带 prerelease 时才匹配）。
  *
- * 两种写法（这里是 `^` 三段、那里是 `>=` 两段，且下界不同）。现在两处是**同一个字符串**，
+ * 两处（本文件的常量与 `package.json` 的 `engines.dsh` / 11 个 peer）是**同一个字符串**，
  * 并由 `test/contracts.test.mjs` 的断言钉住 —— 漂移会让"界面/doctor 报的范围"与"安装期实际
  * 校验的范围"各说各话，而两者都自称是插件的兼容范围。同一条断言现在还钉住「只有一段」，
  * 防止范围再被追加成多代并集。
  *
- * 已知且**无法**用 range 消除的缺口（如实标注）：尚未枚举的新 rc 元组（如 0.2.1-rc.1）
+ * 已知且**无法**用 range 消除的缺口（如实标注）：尚未枚举的新 rc 元组（如 0.2.2-rc.2）
  * 在 npm7+ 下会触发 ERESOLVE 告警。这不是写法问题 —— semver 规则决定了不存在能匹配
  * "任意未来 prerelease"的 range。缓解方式：官方每发一代新 rc，同步改这一段（同时改
  * `VERIFIED_HOST_VERSION`），以及 `--legacy-peer-deps` 这条逃生门。
  *
- * 0.2.1-rc.5 的验证依据：桌面宿主上 `assessHost` 全量通过（23/23，身份比对全部同一份实现）；
- * 官方内置技能清单新增 `office` 路由与三个操作技能，LibreOffice Kit 的注入名单随之变化，
- * 本插件已按官方源码对齐。
+ * 0.2.2-rc.1 的验证依据：把官方 0.2.1-rc.5 → 0.2.2-rc.1 的包逐份对拍（工作区登记表、会话、
+ * 投影缓存、设置、文件服务、预设名册、工具服务、连接准入、子代理 provider），本插件伸手要的
+ * 成员一个没少；新增项都是可选参数或新方法（`tools.register` 的准入选项、`executable` /
+ * `resolve`、文件服务的 `deleteFile` / `move` / `patch`）。`agent/pre-step` 只增
+ * `modelSelection` 字段；`dsh-skill-office` 的七个内置技能名与 LibreOffice Kit 注入名单未变。
  */
-export const EXPECTED_PEER_RANGE = '>=0.2.1-rc.5 <0.2.2'
+export const EXPECTED_PEER_RANGE = '>=0.2.2-rc.1 <0.2.3'
 /**
  * peer range 的下界。仍从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
  *
- * 范围收窄到一代之后它**与 VERIFIED_HOST_VERSION 重合**（都是 0.2.1-rc.5）—— 这是正确的：
+ * 范围收窄到一代之后它**与 VERIFIED_HOST_VERSION 重合**（都是 0.2.2-rc.1）—— 这是正确的：
  * 适配的那一代就是唯一允许安装的那一代。保留这个导出是因为它进了 `compat-status` 的载荷，
  * doctor 与外部脚本可能仍在读；语义仍是"最早支持哪一代"，只是现在只有一代。
  */
@@ -248,17 +249,6 @@ function inspectCapability(spec: CapabilitySpec, target: Target, reference: Reco
     ...(textMatch === undefined ? {} : { textMatch }),
   }
 }
-
-/**
- * 「缺失只影响走哪条路、不算故障」的能力 id：插件自己有一份实现顶上。它们既不出现在降级
- * 清单里，也不挡任何路。
- *
- * 同一个事实在 {@link CapabilityFinding.optional} 上也有（界面与 doctor 都读那个标记）；
- * 这里保留导出是为了让调用方问「哪些槽位是插件自己顶的」而不必复制整张表。
- */
-export const SUBSTITUTED_CAPABILITIES: readonly string[] = CAPABILITY_SPECS
-  .filter((spec) => spec.optional === true)
-  .map((spec) => spec.id)
 
 /** 宿主没在跑时，某项能力的成员必须落在哪里。 */
 export interface CapabilityStaticCheck {
@@ -631,9 +621,3 @@ export class CapabilityRefusalError extends Error {
   }
 }
 
-/** 评估结果不给路就抛错；给了就返回那条路由决策。 */
-export function requireRoute(assessment: Pick<HostAssessment, 'findings'>, operation: OperationName): RouteDecision {
-  const decision = routeFor(assessment, operation)
-  if (decision.via === 'none') throw new CapabilityRefusalError(operation, decision.refusals)
-  return decision
-}

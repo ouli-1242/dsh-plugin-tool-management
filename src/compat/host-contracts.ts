@@ -80,9 +80,6 @@ export const BARE_HOST_MODULE_CONTRACTS: readonly HostModuleContract[] = [
   },
 ]
 
-/** doctor 的 CLI 用：裸模块名清单（顺序与上面一致）。 */
-export const BARE_HOST_MODULE_NAMES: readonly string[] = BARE_HOST_MODULE_CONTRACTS.map((item) => item.package)
-
 /**
  * 官方 JSONL 会话目录布局的 canary —— 历史适配器（`src/sessions/workspace.ts` →
  * `jsonlSessionDirectory`）硬编码了它。

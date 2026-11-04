@@ -25,8 +25,6 @@ export const UPDATE_CHECK_FILE = 'update-check.json'
 export const PACKAGE_NAME = 'dsh-plugin-tool-management'
 /** npm 官方 registry：没有宿主登记时的唯一来源，也是单源回退的默认值。 */
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org/'
-/** npm registry 的元数据地址（单源回退时使用）。 */
-export const REGISTRY_URL = DEFAULT_REGISTRY + PACKAGE_NAME
 /** 公网源集合：宿主测速只覆盖这两个，只有它们能被测速结果提到最前。 */
 const PUBLIC_REGISTRIES = new Set([DEFAULT_REGISTRY, 'https://registry.npmmirror.com/'])
 /**

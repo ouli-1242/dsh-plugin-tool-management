@@ -19,7 +19,6 @@
 // 「工作区隔离」因此以**会话头的 cwd** 为准（与下拉分组、工作区挂回同一口径），
 // 派生出的作用域键见 `scope/workspace-key.ts`；仍然不需要 workspaceId。
 
-import { nearestProjectRoot } from '../skills/skill-roots.js'
 import { isWorkspaceScopeKey, workspaceScopeKeyOf } from './workspace-key.js'
 import type { ScopeMode } from './scope-overrides.js'
 
@@ -127,22 +126,6 @@ export function sessionScopeIdOf(agent: unknown): string | null {
     if (up === undefined || up === current || seen.has(up)) return current
     seen.add(current)
     current = up
-  }
-}
-
-/**
- * 会话的项目根（判据与官方一致：向上找最近的 `.git`，找不到就没有项目根）。
- *
- * 与 `skills/skill-roots.ts` 的 `nearestProjectRoot` 是**同一个函数**，不另写一份 ——
- * 项目技能根与项目 AGENTS.md 必须认同一个目录，否则"技能按 A 项目隔离、指令按 B 项目读"。
- */
-export async function projectRootOf(cwd: string | undefined): Promise<string | null> {
-  if (cwd === undefined) return null
-  try {
-    const found = await nearestProjectRoot(cwd)
-    return found && found.root ? found.root : null
-  } catch {
-    return null
   }
 }
 

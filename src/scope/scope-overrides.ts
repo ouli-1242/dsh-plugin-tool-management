@@ -172,9 +172,6 @@ export function clampPromptBaseline(text: string): string {
  */
 export type ScopeMode = 'global' | 'session' | 'workspace'
 
-/** 三种隔离粒度（界面与校验共用，顺序即界面顺序：从最粗到最细）。 */
-export const SCOPE_MODES: readonly ScopeMode[] = Object.freeze(['global', 'session', 'workspace'])
-
 /** 夹一个模式；不认识的按会话粒度。 */
 export function normalizeScopeMode(raw: unknown): ScopeMode {
   if (raw === 'global' || raw === 'workspace') return raw
@@ -209,11 +206,6 @@ const MAX_RECORD_KEY_LENGTH = 1024
 /** 是不是布尔型覆盖域。 */
 export function isFlagDomain(domain: unknown): domain is ScopeFlagDomain {
   return typeof domain === 'string' && (SCOPE_FLAG_DOMAINS as readonly string[]).includes(domain)
-}
-
-/** 是不是覆盖域（含 `scene`）。 */
-export function isScopeDomain(domain: unknown): domain is ScopeDomain {
-  return domain === 'scene' || isFlagDomain(domain)
 }
 
 /** 一个键能不能进覆盖表：非空、不超长、不含控制字符（键最终会进 JSON，不参与路径拼接）。 */

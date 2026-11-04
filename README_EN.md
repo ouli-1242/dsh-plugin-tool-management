@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-plugin-tool-management"><img src="https://img.shields.io/npm/v/dsh-plugin-tool-management?logo=npm&color=cb3837&style=flat-square" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT"></a>
-  <img src="https://img.shields.io/badge/DSH-0.2.1-4f7cf7?style=flat-square" alt="DSH 0.2.1">
+  <img src="https://img.shields.io/badge/DSH-0.2.2-4f7cf7?style=flat-square" alt="DSH 0.2.2">
   <a href="https://github.com/ouli-1242/dsh-plugin-tool-management"><img src="https://img.shields.io/badge/GitHub-ouli--1242-181717?logo=github&style=flat-square" alt="GitHub"></a>
 </p>
 
@@ -144,7 +144,7 @@ More than a version number:
 | No panel after installing               | Hard-refresh the browser; if that fails, restart DSH.                                                                                                    |
 | The model cannot call a tool            | Host page → “Model tools”, make sure the right conversation / workspace is selected (20 tools are off by default). The panel and scripts are unaffected. |
 | Actions unavailable after a DSH upgrade | Check the reason on the Host page; run `node scripts/doctor.mjs`, then `node scripts/host-deps.mjs --fix`.                                               |
-| Version mismatch                        | Supports DSH **0.2.1** only (`>=0.2.1-rc.2 <0.2.2`); cross-generation upgrades wait for the plugin to catch up.                                          |
+| Version mismatch                        | Supports DSH **0.2.2** only (`>=0.2.2-rc.1 <0.2.3`); cross-generation upgrades wait for the plugin to catch up. Install 0.21.x for older hosts.          |
 | Duplicate MCP tab                       | Remove the old loader line from `cordis.patch.yml` and restart.                                                                                          |
 | DSH won't start after a bad edit        | Restore the newest `cordis.patch.yml.*.bak-*` from `~/.dsh/tool-management/backups/`.                                                                    |
 

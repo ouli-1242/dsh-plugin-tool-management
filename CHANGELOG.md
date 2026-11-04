@@ -10,6 +10,20 @@
 
 ---
 
+## [0.22.0] - 2026-11-04
+
+### 变更
+
+- **适配宿主 0.2.2-rc.1**：兼容范围改为 `>=0.2.2-rc.1 <0.2.3`，`engines.dsh` 与 11 个 `@deepseek-ai/dsh-*` peer 同源；0.2.1 及更早的宿主请装 0.21.x。
+- **宿主适配代码无需改动**：工作区登记表、会话、投影缓存、设置、预设名册、工具服务、连接准入的成员面与 0.2.1 一致，0.2.2 的新增项均为可选参数或新方法（`tools.register` 的准入选项、`executable` / `resolve`、文件服务的 `deleteFile` / `move` / `patch`）。
+- **最低 Node 版本提到 24.9**：跟随宿主自身的最低运行时要求。
+- **开发依赖跟进 Cordis 4.1.0**：`symbols.original` 与事件注册签名未变。
+- **兼容矩阵按 0.2.2-rc.1 重生成**。
+- **设置侧栏图标改走官方 `settings.section.icon` 插槽**：0.2.2 把导航图标包进 `span.navIcon`，旧的「CSS 藏宿主 svg + `::before` 画图」接管法失配，导致「工具管理」一行并排出现叠方块与齿轮两个图标；改用宿主插槽后整段 DOM 接管（样式 + MutationObserver）删除。
+- **删除 12 个全仓零引用的导出**：boot 的两个测试钩子、`projectRootOf` 包装层、`SCOPE_MODES`、`isScopeDomain`、`SUBSTITUTED_CAPABILITIES`、`requireRoute`、`BARE_HOST_MODULE_NAMES`、`TOKEN_CODE_NO_HOST`、`hasSection`、`REGISTRY_URL`、`quarantineMcpRestartMarker`。
+- **MCP 重启标记的 pid 判定改名 `pidLikelyAlive`**：与 hub 锁对非法 pid 的相反默认值区分开，避免被当成重复实现合并。
+- **子智能体服务缺失的报错不再写死宿主版本**：改从兼容范围常量派生；README 徽章同步到 0.2.2。
+
 ## [0.21.9] - 2026-10-30
 
 ### 新增

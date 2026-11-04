@@ -16,7 +16,7 @@
 
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { clearMcpRestartMarker, processAlive, readMcpRestartMarker } from '../mcp/restart-marker.js'
+import { clearMcpRestartMarker, pidLikelyAlive, readMcpRestartMarker } from '../mcp/restart-marker.js'
 
 /** 一条「上次没干完」的发现，供兼容页降级区与 state-doctor 共用。 */
 export interface ReconcilerFinding {
@@ -51,16 +51,6 @@ export function registerBootReconciler(reconciler: BootReconciler): void {
   reconcilers.push(reconciler)
 }
 
-/** 已注册的 reconciler（顺序即执行顺序）。 */
-export function registeredReconcilers(): readonly BootReconciler[] {
-  return reconcilers
-}
-
-/** 清空注册表。仅测试用 —— 生产环境一次 apply 一份。 */
-export function resetBootReconcilers(): void {
-  reconcilers.length = 0
-}
-
 /**
  * 跑一遍所有 reconciler。**永不抛错**。
  *
@@ -79,7 +69,10 @@ export async function runBootReconcilers(): Promise<void> {
 
 /**
  * 收集所有 reconciler 的探测结果（best-effort，单个失败只 warn）。
- * 供 state-doctor 与兼容页降级区共用 —— 两处都不自己写探测逻辑。
+ *
+ * 现状**无调用方**：它是四个 reconciler 的 `probe()` 的唯一入口，留着是因为删掉就把
+ * 「索引被隔离 / MCP 重启中断 / 作用域孤儿 / 悬空场景引用」四条诊断一起废了；
+ * 接进兼容页降级区前要先定「降级」与「仅提示」的界面口径，属功能变更，单独排期。
  */
 export async function collectReconcilerFindings(): Promise<ReconcilerFinding[]> {
   const findings: ReconcilerFinding[] = []
@@ -141,7 +134,7 @@ export async function reconcileMcpRestart(deps: McpRestartRecoveryDeps): Promise
   const marker = await readMcpRestartMarker()
   if (marker === null) return 'no-marker'
   // ② pid 还活着 → 那次重启可能还在跑，别动它的补丁。
-  if (processAlive(marker.pid)) return 'pid-alive'
+  if (pidLikelyAlive(marker.pid)) return 'pid-alive'
   const level = marker.level
   let current: boolean
   try { current = await deps.isRowDisabled(marker.server, level) } catch (e) {

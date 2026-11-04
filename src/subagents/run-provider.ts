@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isValidSegment } from '../paths.js'
+import { EXPECTED_MIN_HOST_VERSION } from '../compat/probe.js'
 import { resolveDshHome } from '../skills/core.js'
 // 深度探针与注入通道共用一份实现（口径分叉就会出现"目录说不能、工具却能"的错配）。
 // 方向是 service → context-inject，单向：context-inject 不 import 本模块。
@@ -80,7 +81,10 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
   async function ensureProvider(kind: ProviderKind): Promise<any> {
     const runtime = deps.ctx.get?.('subagents')
     if (!runtime || typeof runtime.startActivation !== 'function') {
-      throw new Error('the subagent service is not mounted or lacks startActivation (ctx.subagents is missing; check that DSH is >= 0.2.1-rc.2)')
+      throw new Error(
+        'the subagent service is not mounted or lacks startActivation '
+        + `(ctx.subagents is missing; check that DSH is >= ${EXPECTED_MIN_HOST_VERSION})`,
+      )
     }
     if (hasProvider(runtime, kind)) return runtime
     // 宿主没有 list() 就探测不了：不重复挂载（避免同名 provider 二次注册），交给 start 报官方错误兜底。

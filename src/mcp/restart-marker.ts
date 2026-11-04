@@ -17,7 +17,7 @@
 // 一样要重新读一遍才敢写（磁盘上可能已经变了）。存快照只会多一处会过期的真相源 ——
 // 所以恢复走「重新算」（见 boot/reconcile.ts 的 reconcileMcpRestart）。
 
-import { readFileSync, renameSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { writeFileAtomically } from '../memories/index-io.js'
@@ -105,13 +105,14 @@ export async function clearMcpRestartMarker(): Promise<void> {
 }
 
 /**
- * 进程是否还活着（同机）。
+ * 进程是否**可能**还活着（同机）。与 `hub-lock.ts` 里那把锁的判定方向相反（那边把非法
+ * pid 当没活，因为要允许抢锁），两处不能合并成一份实现。
  *
  * `pid <= 0`（老标记 / 读不出来）按**活着**处理 —— 那种情况下自动恢复才是最危险的分支
  * （可能在一次正常的重启中途插进去改补丁）。宁可漏一次自动恢复（用户手动重启即可），
  * 也不要在一个未知进程可能正持有写锁时动它的文件。
  */
-export function processAlive(pid: number): boolean {
+export function pidLikelyAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return true
   try { process.kill(pid, 0); return true } catch (e) {
     const code = (e as NodeJS.ErrnoException)?.code
@@ -120,7 +121,3 @@ export function processAlive(pid: number): boolean {
   }
 }
 
-/** 留一份坏标记便于事后核对（与索引隔离同思路）。 */
-export function quarantineMcpRestartMarker(): void {
-  try { renameSync(mcpRestartMarkerPath(), `${mcpRestartMarkerPath()}.corrupt-${Date.now()}`) } catch { /* 没有就算了 */ }
-}
