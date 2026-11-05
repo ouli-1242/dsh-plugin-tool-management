@@ -1954,16 +1954,22 @@ function enabledMemoryCount(rules) {
      */
     function LeaseTagBadge(props) {
       var t = props.t
-      var count = props.count
       var runtime = props.runtime === true
       var details = props.details || []
+      var groups = leaseGroups(details)
+      // 工作区粒度：认领是**按工作区**记的 —— 徽章上的个数得跟浮窗里的行数同一个单位，
+      // 否则会出现「2 个对话」配 1 行工作区（看着像漏了一条）。用户 2026-11-06。
+      var workspaceMode = scopeIsWorkspace()
+      var count = workspaceMode ? groups.length : props.count
       var openState = React.useState(false), open = openState[0], setOpen = openState[1]
       var posState = React.useState(null), pos = posState[0], setPos = posState[1]
       var busyState = React.useState(null), busyId = busyState[0], setBusyId = busyState[1]
       var ref = React.useRef(null)
       var popRef = React.useRef(null)
       var closeTimer = React.useRef(null)
-      var label = runtime ? t('scope.intent.lease', { count: count }) : t('scope.view.lease', { count: count })
+      var label = workspaceMode
+        ? (runtime ? t('scope.intent.leaseWs', { count: count }) : t('scope.view.leaseWs', { count: count }))
+        : (runtime ? t('scope.intent.lease', { count: count }) : t('scope.view.lease', { count: count }))
       /**
        * 关掉浮窗要**等一等**：指针从徽章移到浮窗的路上有一段空白（浮窗在徽章下方 6px），
        * 一移开就收的话，指针还没走到那颗「×」浮窗就没了（用户 2026-11-05 实测）。
@@ -1990,10 +1996,10 @@ function enabledMemoryCount(rules) {
        * 写一次「关」—— 服务端随即重算租约：最后一个认领者走了，连接 / 来源就跟着停。
        * 工作区粒度下这条覆盖落在工作区上，同工作区的对话一起不再用（标题里说清楚）。
        */
-      function release(d) {
+      function release(d, label) {
         if (busyId !== null) return
         var id = String((d && d.id) || '')
-        var name = String((d && d.title) || id)
+        var name = String(label || (d && d.title) || id)
         // 调用方自带放掉动作时用它（场景层要的是"退出场景"，不是"关掉某一格"）。
         if (typeof props.onRelease === 'function') {
           props.onRelease(d)
@@ -2016,7 +2022,9 @@ function enabledMemoryCount(rules) {
           }
           // 本地先把这一条摘掉（全局快照有 150ms TTL，紧接着的重拉可能还是写前那一份）。
           scopeForgetLeaseSession(props.domain, props.key, id)
-          showPluginToast(t('scope.lease.released', { title: name }), 'ok')
+          // 工作区粒度放掉的是**整个工作区**（同工作区的对话共用那份覆盖）—— 提示要说工作区，
+          // 别让用户以为只关了一个对话。
+          showPluginToast(workspaceMode ? t('scope.lease.releasedWs', { title: name }) : t('scope.lease.released', { title: name }), 'ok')
           setTimeout(function () { refreshScope({ silent: true }) }, 400)
         }).catch(function (e) {
           showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(e) || t('scope.lease.unknownError') }), 'err')
@@ -2073,26 +2081,26 @@ function enabledMemoryCount(rules) {
           style.top = pos.top === null || pos.top === undefined ? 'auto' : pos.top + 'px'
           style.bottom = pos.bottom === null || pos.bottom === undefined ? 'auto' : pos.bottom + 'px'
         }
-        var groups = leaseGroups(details)
-        var releaseBtn = function (d, key) {
+        var releaseBtn = function (d, key, label) {
           return h('button', {
             key: key,
             type: 'button',
             className: 'dsm-lease-pop-x',
             disabled: busyId !== null,
-            title: scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
-            'aria-label': scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
-            onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d) },
+            title: workspaceMode ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
+            'aria-label': workspaceMode ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
+            onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d, label) },
           }, '×')
         }
         // 工作区粒度：认领是**按工作区**记的（同工作区的对话共用一份覆盖）—— 逐个列会话标题
         // 只是噪声，列出工作区就够了（用户 2026-11-05）。
-        var body = scopeIsWorkspace()
+        var body = workspaceMode
           ? groups.map(function (g) {
               var d = g.rows[0]
+              var wsName = g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')
               return h('div', { key: 'w:' + g.cwd, className: 'dsm-lease-pop-item' },
-                h('span', { className: 'dsm-lease-pop-ws', title: g.cwd }, g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')),
-                d !== undefined ? releaseBtn(d, 'x') : null)
+                h('span', { className: 'dsm-lease-pop-ws', title: g.cwd }, wsName),
+                d !== undefined ? releaseBtn(d, 'x', wsName) : null)
             })
           : groups.map(function (g, gi) {
               return h('div', { key: 'g' + gi, className: 'dsm-lease-pop-group' },
