@@ -1907,10 +1907,39 @@ function enabledMemoryCount(rules) {
     /** 租约浮窗的最大高度（`measure` 与 CSS 共用同一个上限）。 */
     var LEASE_POP_MAX_H = 240
     /**
+     * 浮窗里的分组：按**工作区**归拢，同一个工作区的对话挨在一起。
+     *
+     * 为什么按工作区分组（用户 2026-11-05）：认领是逐个对话记的，但用户找的是"哪个项目
+     * 在用它" —— 同一个工作区的那几个对话排成一块，才看得出"是这个项目在跑"。
+     * 组内按标题排；没有工作区的那些排在最后（它们不属于任何项目）。
+     */
+    function leaseGroups(details) {
+      var byCwd = Object.create(null)
+      var order = []
+      details.forEach(function (d) {
+        var cwd = String((d && d.cwd) || '')
+        if (!byCwd[cwd]) { byCwd[cwd] = []; order.push(cwd) }
+        byCwd[cwd].push(d)
+      })
+      order.sort(function (a, b) {
+        if (a === '') return 1
+        if (b === '') return -1
+        return a < b ? -1 : a > b ? 1 : 0
+      })
+      return order.map(function (cwd) {
+        var rows = byCwd[cwd].slice().sort(function (x, y) {
+          var xt = String((x && x.title) || '')
+          var yt = String((y && y.title) || '')
+          return xt < yt ? -1 : xt > yt ? 1 : 0
+        })
+        return { cwd: cwd, rows: rows }
+      })
+    }
+    /**
      * 租约徽章 + 悬浮浮窗：**临时运行的是哪几个对话**。
      *
      * 徽章正文只说"几个对话"（`临时运行 · N 个对话`），用户真正要问的是"是哪几个"——
-     * 浮窗逐行列出「工作区 · 标题」，一个对话一行。
+     * 浮窗按工作区分组列出那些对话：组头是工作区（白），组内每行一个对话（灰）。
      *
      * 浮窗用 `position:fixed` + **视口坐标**：徽章所在的列表行是 `overflow:hidden`
      * （`.dsm-listrow-meta`），绝对定位的浮层会被裁掉（与 `SourceSelect` 的菜单同一条理由）。
@@ -1927,8 +1956,27 @@ function enabledMemoryCount(rules) {
       var busyState = React.useState(null), busyId = busyState[0], setBusyId = busyState[1]
       var ref = React.useRef(null)
       var popRef = React.useRef(null)
-      var hint = runtime ? t('scope.intent.leaseHint', { count: count }) : t('scope.view.leaseHint', { count: count })
+      var closeTimer = React.useRef(null)
       var label = runtime ? t('scope.intent.lease', { count: count }) : t('scope.view.lease', { count: count })
+      /**
+       * 关掉浮窗要**等一等**：指针从徽章移到浮窗的路上有一段空白（浮窗在徽章下方 6px），
+       * 一移开就收的话，指针还没走到那颗「×」浮窗就没了（用户 2026-11-05 实测）。
+       * 进了浮窗本体就把这个计时撤掉 —— 那是"用户还在看它"的明确信号。
+       */
+      function cancelClose() {
+        if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null }
+      }
+      function scheduleClose() {
+        cancelClose()
+        closeTimer.current = setTimeout(function () {
+          closeTimer.current = null
+          setOpen(false)
+          setPos(null)
+        }, 320)
+      }
+      React.useEffect(function () {
+        return function () { if (closeTimer.current !== null) clearTimeout(closeTimer.current) }
+      }, [])
       /**
        * 放掉**一个**对话的认领：只让它不再临时运行，其它对话照旧。
        *
@@ -2012,37 +2060,36 @@ function enabledMemoryCount(rules) {
           className: 'dsm-lease-pop',
           style: style,
           ref: popRef,
+          // 指针进了浮窗就别收：否则指不到那颗「×」。
+          onMouseEnter: cancelClose,
+          onMouseLeave: scheduleClose,
           // 浮窗在徽章里面：点它不该触发行上的动作。
           onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation() },
-        }, [
-          h('div', { key: 'hint', className: 'dsm-lease-pop-hint' }, hint),
-        ].concat(details.map(function (d, i) {
-          var cwd = String((d && d.cwd) || '')
-          var title = String((d && d.title) || (d && d.id) || '')
-          var ws = cwd !== '' ? scopeWorkspaceName(cwd) : t('scope.lease.noWorkspace')
-          var id = String((d && d.id) || '')
-          return h('div', { key: 'row' + i, className: 'dsm-lease-pop-item', title: cwd !== '' ? cwd + ' · ' + title : title },
-            h('span', { className: 'dsm-lease-pop-ws' }, ws),
-            h('span', { className: 'dsm-lease-pop-title' }, title),
-            // 逐个放掉：只有「全部关闭」时，用户没法只让其中一个对话停下来。
-            h('button', {
-              key: 'x',
-              type: 'button',
-              className: 'dsm-lease-pop-x',
-              disabled: busyId !== null,
-              title: scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
-              'aria-label': scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
-              onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d) },
-            }, '×'))
-        })))
+        }, leaseGroups(details).map(function (g, gi) {
+          return h('div', { key: 'g' + gi, className: 'dsm-lease-pop-group' },
+            h('div', { className: 'dsm-lease-pop-ws', title: g.cwd }, g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')),
+            g.rows.map(function (d, ri) {
+              var title = String((d && d.title) || (d && d.id) || '')
+              return h('div', { key: 'r' + ri, className: 'dsm-lease-pop-item' },
+                h('span', { className: 'dsm-lease-pop-title', title: title }, title),
+                // 逐个放掉：只有「全部关闭」时，用户没法只让其中一个对话停下来。
+                h('button', {
+                  key: 'x',
+                  type: 'button',
+                  className: 'dsm-lease-pop-x',
+                  disabled: busyId !== null,
+                  title: scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
+                  'aria-label': scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
+                  onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d) },
+                }, '×'))
+            }))
+        }))
       }
       return h('span', {
         className: 'dsm-tag dsm-tag-lease',
         ref: ref,
-        // 有名单时不再挂原生 title：原生浮窗只会显示一行，还会和浮窗叠在一起。
-        title: details.length > 0 ? undefined : hint,
-        onMouseEnter: function () { setOpen(true) },
-        onMouseLeave: function () { setOpen(false); setPos(null) },
+        onMouseEnter: function () { cancelClose(); setOpen(true) },
+        onMouseLeave: scheduleClose,
       }, [label, popup])
     }
     /**
