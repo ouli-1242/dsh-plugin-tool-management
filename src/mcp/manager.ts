@@ -175,6 +175,11 @@ export interface McpManager {
    */
   configuredServerStates(): Promise<Array<{ serverName: string; disabled: boolean }>>
   /**
+   * 同上，但带一份「这次读全了没有」—— 名册少几条与「名册本来就短」在返回值上同形，
+   * 要据此下判断的调用方必须能分辨（见实现处的说明）。
+   */
+  configuredServerStatesDetailed(): Promise<{ states: Array<{ serverName: string; disabled: boolean }>; complete: boolean }>
+  /**
    * 补丁里**真实存在**的服务器行（id / serverName / level / 生效停用值），不枚举工具 schema。
    *
    * 意图对账与全局场景联动用它把 id 映射回 serverName —— 两者都可能不同（改名后的旧 id）。
@@ -227,9 +232,19 @@ export interface ToolsService {
    */
   restrict?(filter: { deny?: readonly string[] }): () => void
   /**
-   * 可选（dsh-tools）：执行前守卫 —— 返回非空原因字符串即拒绝本次调用，工具主体不会运行。
+   * 可选（dsh-tools）：按名字取一条已注册的工具定义。省略 scope = 全局视图。
+   *
+   * 「这个名字此刻注册着没有」要用它判：官方 `restrict()` 只认全局与祖先层的名字，
+   * 而「被限制摘掉」在**本作用域**里读成 absent —— 问全局视图才不会与摘除动作自激。
    */
-  guard?(guard: (execution: { name?: string }) => string | undefined): () => void
+  get?(name: string, scope?: unknown): unknown
+  /**
+   * 可选（dsh-tools）：执行前守卫 —— 返回非空原因字符串即拒绝本次调用，工具主体不会运行。
+   *
+   * `arguments` 是本次调用的已解析参数（官方 `ToolExecution.arguments`）：按参数判可见性的
+   * 工具（官方共享资源工具的 `server`）要读它。
+   */
+  guard?(guard: (execution: { name?: string; arguments?: unknown; agent?: unknown }) => string | undefined): () => void
 }
 
 /** 宿主插件清单服务的最小面。 */
@@ -955,13 +970,29 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
    * 全局就按「开着」算（会话层关掉它才有意义）；两份都关着才是「全局关着」。
    */
   async function configuredServerStates(): Promise<Array<{ serverName: string; disabled: boolean }>> {
+    return (await configuredServerStatesDetailed()).states
+  }
+
+  /**
+   * 同 `configuredServerStates()`，但**带一份「这次读全了没有」**。
+   *
+   * 为什么要有这个：那份名册是**按层**读的，任一层读不动，它就只少几条（读错误在内部被吞成
+   * 「跳过这一层」），返回值上与「名册本来就短」同形。调用方要据此回答「这台机器上还有没有
+   * MCP 服务器」时必须能分辨这两种 —— 按一份缺项的名册下判断，会把明明在跑的服务器当成不存在。
+   *
+   * `complete === false` = 有一层没读全（补丁某层读不动，或 loader 清单读不到）。
+   * 文件**不存在**不算没读全（那是常态：多数部署没有某一层的补丁；`readPatch` 对
+   * FS_NOT_FOUND 返回空串而不抛）。
+   */
+  async function configuredServerStatesDetailed(): Promise<{ states: Array<{ serverName: string; disabled: boolean }>; complete: boolean }> {
     const p = await ensurePaths()
     const merged = new Map<string, boolean>()
     const patchIds = new Set<string>()
+    let complete = true
     for (const level of ['project', 'global']) {
       const abs = level === 'project' ? p.projectPatch : p.globalPatch
       let content = ''
-      try { content = await readPatch(abs) } catch { continue }
+      try { content = await readPatch(abs) } catch { complete = false; continue }
       for (const r of parseRows(content).rows) {
         const row = normalizeRow(r, level, abs)
         const n = String(row.serverName || '')
@@ -984,9 +1015,9 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
           const prev = merged.get(name)
           merged.set(name, prev === undefined ? e.enabled !== true : prev && e.enabled !== true)
         }
-      } catch { /* loader 清单读不到 → 只按补丁那几台算 */ }
+      } catch { complete = false /* loader 清单读不到 → 名册可能缺 loader 上挂着的那几台 */ }
     }
-    return [...merged].map(([serverName, disabled]) => ({ serverName, disabled }))
+    return { states: [...merged].map(([serverName, disabled]) => ({ serverName, disabled })), complete }
   }
 
   /** 补丁行（只读补丁，不枚举 schema）—— 对账与场景联动的 id → serverName 映射。 */
@@ -2195,6 +2226,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     mcpmListView,
     configuredServerNames,
     configuredServerStates,
+    configuredServerStatesDetailed,
     patchServerRows,
     mcpmRowsWithNotes,
     readPluginSettings,

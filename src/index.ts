@@ -21,7 +21,7 @@ import { createPromptsService } from './prompts/service.js'
 import { createQuickPromptsService } from './prompts/quick-service.js'
 import { isValidPresetId } from './prompts/preset-id.js'
 import { isInsideRoot, isInsideRootResolved } from './paths.js'
-import { DEFAULT_PROFILE_NAME, MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, PROFILE_CANDIDATES, serverNameCandidates, splitMcpToolName, type McpToolNameParts } from './host-names.js'
+import { DEFAULT_PROFILE_NAME, MCP_CLIENT_MODULE, MCP_RESOURCE_TOOL_NAMES, MCP_TOOL_PREFIX, PROFILE_CANDIDATES, isMcpResourceTool, serverNameCandidates, splitMcpToolName, type McpToolNameParts } from './host-names.js'
 import { createMemoriesService, planMemoryExport } from './memories/service.js'
 import { createArchiveEngine } from './memories/archive-engine.js'
 import { createSnapshotOps } from './ops/snapshot.js'
@@ -992,6 +992,117 @@ export default {
     }
 
     /**
+     * MCP 服务器名册的短 TTL 快照（**与 agent 无关** —— 只有「可见性过滤」才逐 agent）。
+     *
+     * 为什么缓存：名册 = 两份补丁读盘 + 一次 loader 清单，而可见性那一层每个 agent 每个
+     * 重排轮次都要算一遍 —— 不缓存就是「agent 数 × 轮次」次读盘。
+     *
+     * TTL 取 3 秒，与侧车 TTL 同量级（服务器增删是罕见事件）。**陈旧的后果要说明白**：
+     * 刚加的服务器晚 3 秒才进名册，这段时间名册缺它 —— 若名册里别的服务器在本会话都看不见，
+     * 就会走到「一台都看不见」那一支；判据⑤会在新服务器**有工具**时拦下（全局工具表里已经有
+     * 它的 `mcp__*`），只有无工具的服务器才会真被摘掉。恢复要等「TTL 到期后的下一次重排」
+     * —— 重排本身会触发，但 TTL 没到期时它重算的还是陈旧名册。
+     */
+    let configuredServerStatesCache: { at: number; value: { states: Array<{ serverName: string; disabled: boolean }>; complete: boolean } } | null = null
+    const CONFIGURED_SERVER_STATES_TTL_MS = 3000
+    async function configuredServerStatesCached(): Promise<{ states: Array<{ serverName: string; disabled: boolean }>; complete: boolean }> {
+      const now = Date.now()
+      const cached = configuredServerStatesCache
+      if (cached !== null && now - cached.at < CONFIGURED_SERVER_STATES_TTL_MS) return cached.value
+      const value = await mcp.configuredServerStatesDetailed()
+      configuredServerStatesCache = { at: now, value }
+      return value
+    }
+
+    /**
+     * 本作用域**看得见的** MCP 服务器名，名册里的全部名字，以及「名册读全了没有」。
+     *
+     * `visible` = 看得见的那些（与状态段 / `mcp_manager_list` 同一份判据）。
+     * `names` = 名册里的全部名字（看得见 + 看不见）。
+     * `complete` = 名册读全了没有：任一层读不动它就只少几条，返回值上与「名册本来就短」
+     * 同形（读错误在 `configuredServerStates` 内部被吞成「跳过这一层」）。
+     *
+     * 可见性为 undefined（意图还没落盘、会话层也没话说）时按运行态兜底 —— 当它看得见。
+     */
+    async function visibleMcpServerNames(agent: unknown): Promise<{ visible: string[]; names: Set<string>; complete: boolean } | null> {
+      let roster: { states: Array<{ serverName: string; disabled: boolean }>; complete: boolean }
+      try {
+        roster = await configuredServerStatesCached()
+      } catch { return null }
+      if (!roster || !Array.isArray(roster.states)) return null
+      const names = new Set<string>()
+      const visible: string[] = []
+      for (const row of roster.states) {
+        const name = String((row && row.serverName) || '')
+        if (!name) continue
+        names.add(name)
+        if (sessionServerHiddenOf(agent, name)) continue
+        visible.push(name)
+      }
+      return { visible, names, complete: roster.complete }
+    }
+
+    /**
+     * 名册是不是**漏了**某台正在跑的服务器。
+     *
+     * 名册来自补丁与 loader 清单，任何一层出问题它都会少几条：读错误被吞成「跳过这一层」，
+     * 手写补丁也可能被插件那个容错行解析器整条丢掉（它只认自己写出的缩进，见 patch-yaml.ts）。
+     * 名册缺项的后果是「明明在跑的服务器被当成不存在」⇒ 把还能用的资源工具摘掉。
+     *
+     * 判据：全局工具表里有 `mcp__<server>__<tool>`，而 `<server>` 既不在名册里、名册里也没有
+     * `mcp-<server>` 这条（插件自己写的补丁条目 id 就是 `mcp-<serverName>`）—— 那这台服务器
+     * 确实在跑，却没进名册。切分取**第一个** `__`（宿主解析 MCP 工具名的口径；展示侧取最后
+     * 一个，这里要的是宿主那个）。
+     *
+     * 读不到工具表时当成缺项：判错方向要选「不摘」那一侧。
+     */
+    async function rosterMissesRunningServer(names: Set<string>): Promise<boolean> {
+      try {
+        const schemas = await tools.schemas()
+        for (const s of schemas) {
+          const full = String((s && s.name) || '')
+          if (!full.startsWith(MCP_TOOL_PREFIX)) continue
+          const rest = full.slice(MCP_TOOL_PREFIX.length)
+          const i = rest.indexOf('__')
+          if (i <= 0) continue
+          const server = rest.slice(0, i)
+          if (names.has(server) || names.has('mcp-' + server)) continue
+          return true
+        }
+        return false
+      } catch { return true }
+    }
+
+    /**
+     * 本作用域要不要摘掉官方那三个共享资源工具。
+     *
+     * 判据（一条都不许反）：
+     *   · 这三个名字**此刻注册着** —— 官方只在作用域里出现第一个 provider 时才注册它们。
+     *     把没注册的名字塞进 `tools.restrict({ deny })` 会让官方抛 "unknown global tool"，
+     *     **整份 deny 名单一起失效**（停用工具会静默复活）。
+     *   · 名册**读全了**且**没漏掉正在跑的服务器** —— 名册缺项时按它下判断，会把明明在跑的
+     *     服务器当成不存在，于是摘掉模型还在用的能力。
+     *   · 本作用域**一台服务器都看不见** —— 此时这三个工具在本作用域没有任何正当用途：
+     *     官方 `mcpResources.request()` 按「全局层 + 作用域链」解析服务器，别的会话租约起来
+     *     的服务器在这里照样能列能读 —— 这正是要堵的串味通道，不是「反正调不通」。
+     *
+     * 注册与否问**全局视图**（`tools.get(name)` 不给 scope）：插件自己装在 agent scope 上的
+     * 限制会让 `get(name, agent)` 读成「不在」—— 拿它当判据会与摘除动作自激。
+     */
+    async function resourceToolDenyFor(agent: unknown): Promise<string[]> {
+      try {
+        const registered = MCP_RESOURCE_TOOL_NAMES.filter((name) => tools.get(name) !== undefined)
+        if (registered.length === 0) return []
+        const roster = await visibleMcpServerNames(agent)
+        if (roster === null) return []
+        if (!roster.complete) return []
+        if (roster.visible.length > 0) return []
+        if (await rosterMissesRunningServer(roster.names)) return []
+        return registered
+      } catch { return [] }
+    }
+
+    /**
      * 本会话的 MCP 可见性覆盖（restrict 层用）：在**此刻注册着的**工具全名上算
      * `{ allow, deny }`（名单语义见 mcp/manager.ts 的 deps 注释）。
      *
@@ -1003,18 +1114,23 @@ export default {
      * 全部工具（比"本会话没藏住"难看得多），而且下一轮 `tools/change` 会重算回来。
      * 守卫那边同一条：算不出来就不拦，全局停用表 / 工具表照旧。两处同向，才不会出现
      * 「看不见却调得动」。
+     *
+     * 官方那三个共享资源工具也进这一份名单（见 `resourceToolDenyFor`）：它们不在
+     * `mcp__` 前缀里，上面的切分认不出，但它们同样要服从「这个作用域看不看得见服务器」。
      */
     async function sessionMcpOverlayOf(agent: unknown): Promise<{ allow: string[]; deny: string[] }> {
-      const empty = { allow: [] as string[], deny: [] as string[] }
       const ctx = sessionMcpContextOf(agent)
       const intentSnapshot = intentStore.snapshot()
       const hasGlobalFilter = Object.values(intentSnapshot.mcp).some((state) => state === 'off' || state === 'blocked')
       const hasSessionLayer = ctx.scope !== undefined &&
         (ctx.scope.scene !== undefined || ctx.scope.detached === true || ctx.scope.mcp !== undefined || ctx.scope.mcpTools !== undefined)
-      if (!hasGlobalFilter && !hasSessionLayer) return empty
+      // 官方共享资源工具的摘除**不受下面那条早退影响**：它判的是「这个作用域有没有服务器」，
+      // 与会话层有没有覆盖记录无关（全局开着的一台服务器在任何会话都看得见）。
+      const resourceDeny = await resourceToolDenyFor(agent)
+      if (!hasGlobalFilter && !hasSessionLayer) return { allow: [], deny: resourceDeny }
       let schemas: any[] = []
-      try { schemas = await tools.schemas() } catch { return empty }
-      if (schemas.length === 0) return empty
+      try { schemas = await tools.schemas() } catch { return { allow: [], deny: resourceDeny } }
+      if (schemas.length === 0) return { allow: [], deny: resourceDeny }
       const allow: string[] = []
       const deny: string[] = []
       for (const s of schemas) {
@@ -1025,7 +1141,7 @@ export default {
         if (verdict === 'deny') deny.push(name)
         else if (verdict === 'allow') allow.push(name)
       }
-      return { allow, deny }
+      return { allow, deny: [...deny, ...resourceDeny] }
     }
 
     /**
@@ -5184,6 +5300,26 @@ export default {
         ctx.effect(() => tools.guard!((exec) => {
           const name = String((exec && exec.name) || '')
           const isMcpTool = name.startsWith(MCP_TOOL_PREFIX)
+          // 官方那三个共享资源工具：按 `server` 参数判这台服务器在本作用域看不看得见。
+          //
+          // 为什么必须单独守：官方 `mcpResources.request()` 按「全局层 + 作用域链」解析服务器，
+          // 而 provider 注册在**全局层** —— 所以别的会话租约起来的服务器，本会话照样能
+          // 列出/读到它的资源。可见性层（restrict）管不到这个粒度（三个工具是共享的一套，
+          // 摘掉就连自己看得见的服务器也读不到了）。
+          //
+          // 失败方向：算不出来**不拦**。与同文件里 `sessionMcpVerdictSync` 同一档：会话层是叠在
+          // 全局规则之上的**视图**，读一次失手不该让模型在对话中途丢掉工具（`sessionServerHiddenOf`
+          // 是纯内存读，几乎不会抛）。这与下面「停用表读不出来 ⇒ MCP 工具 fail-closed」不矛盾：
+          // 那条守的是**停用表**（磁盘上的权威），这条守的是**会话层视图**（读不到就当没有覆盖）。
+          if (isMcpResourceTool(name)) {
+            try {
+              const args = (exec && exec.arguments) as { server?: unknown } | undefined
+              const server = String((args && args.server) || '')
+              if (server !== '' && sessionServerHiddenOf(exec && exec.agent, server)) {
+                return 'MCP 服务器「' + server + '」在本对话中不可用'
+              }
+            } catch (e) { /* 算不出来 = 不拦 */ }
+          }
           try {
             // unknown 必须先于会话 verdict：本会话显式开着也不能越过“停用表读不出来”。
             if (isMcpTool && mcp.disabledToolsState() === 'unknown') {

@@ -8,7 +8,7 @@ import { toStringList } from './persona-write.js'
 
 /**
  * 官方 `tools.restrict()` 的**保留名**：名单里出现它时，官方不是"当它不存在"，而是**直接抛错**
- * （`dsh-tools/lib/index.js:2800`：cannot name reserved PTC mode presentation transport），
+ * （`dsh-tools/lib/index.js:463`：cannot name reserved PTC mode presentation transport），
  * 子代理当场起不来。
  *
  * 为什么必须在这里显式剔除：`run_code` 在宿主面上是**合法可见**的工具名（非 native 模式下
@@ -30,7 +30,7 @@ export function stripReserved(names: string[]): { kept: string[]; dropped: strin
  *
  * 为什么必须按预设分：子代理跑在父会话的预设里（官方 `composeFrom(childCtx, parent.ctx)`），
  * 而各预设的工具集合差别极大（极简模式只有持久 shell）。官方 `tools.restrict()` 实有
- * **四个**抛错点（`dsh-tools/lib/index.js:2790-2803`），抛了子代理就起不来：
+ * **四个**抛错点（`dsh-tools/lib/index.js:455-466`），抛了子代理就起不来：
  *
  *   ① 非 scoped context 调用（宿主 `childCtx` 已满足，无风险）；
  *   ② `allow` 与 `deny` 同时缺省 ⇒ `restrict({})` 抛 —— 本函数用 `filter: null`（不下发）

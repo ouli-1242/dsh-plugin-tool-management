@@ -25,6 +25,26 @@ export const MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
 export const MCP_TOOL_PREFIX = 'mcp__'
 
 /**
+ * 官方**共享资源工具**的三个名字（`@deepseek-ai/dsh-mcp-resources` 注册）。
+ *
+ * 这三个工具是所有已配置 MCP 服务器**共享的一套**：作用域里第一个 provider 注册时整体
+ * 注册，最后一个移除才整体注销 —— 没有「一台服务器一个工具」的粒度。
+ *
+ * 它们注册在**全局** tools 层：补丁里的 mcp-client 实例挂在根作用域 ⇒ provider 进全局层
+ * ⇒ 工具注册到全局 tools 层。于是：
+ *   · 每个 agent 作用域都看得见 —— 别的会话开了 MCP，这台机器上每个会话都会多出这三个工具；
+ *   · 它们在官方 `tools.restrict()` 的 `restrictableNames` 里（全局工具可被摘），插件能逐会话摘掉；
+ *   · 官方 `mcpResources.request()` 按「全局层 + 作用域链」解析服务器 ⇒ 按 server 分的粒度
+ *     官方管不了，只能由插件的执行侧守卫守。
+ */
+export const MCP_RESOURCE_TOOL_NAMES = ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'] as const
+
+/** 是不是官方那三个共享资源工具。 */
+export function isMcpResourceTool(name: string): boolean {
+  return (MCP_RESOURCE_TOOL_NAMES as readonly string[]).includes(String(name == null ? '' : name))
+}
+
+/**
  * 一个工具名算不算「MCP 前缀漂移」的**证据**：以 `mcp` 开头，但词根后面**不是** `_`。
  *
  * 为什么要这么窄：本插件自己的工具就叫

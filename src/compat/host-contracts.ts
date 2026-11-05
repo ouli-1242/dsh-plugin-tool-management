@@ -2,8 +2,9 @@
 // `scripts/doctor.mjs` 都要读它们，所以只有这一份。
 //
 // 为什么单独一层：这些包**不在**本插件的 `peerDependencies` 里 —— 宿主不要求插件依赖它们，
-// 但插件在运行时按**裸模块名**直接 require（MCP 客户端、人设、全局指令、技能目录）。它们有
-// 两个共同点让它们必须被看见：
+// 但插件要么在运行时按**裸模块名**直接 require（MCP 客户端、人设、全局指令、技能目录），
+// 要么把它们的**标识符**写死在自己代码里（共享资源工具的三个名字）。它们有两个共同点让
+// 它们必须被看见：
 //   (1) 官方改名或撤掉其中一个，对应功能**静默降级**（不抛错，只是少一半）；
 //   (2) 它们不参与模块身份比对（不是硬依赖），所以"两份不同拷贝"那一栏根本看不到它们。
 //
@@ -52,16 +53,28 @@ export const AGENTS_MD_REFRESH_MARKERS: readonly HostContractMarker[] = [
 ]
 
 /**
- * 运行时按**裸模块名** require 的宿主包，以及每个包守着的契约。
+ * 运行时依赖的宿主包，以及每个包守着的契约。
  *
  * 与 `AGENTS_MD_REFRESH_MARKERS` 的分工：那一份是"同一个包内的若干标识符"，这一份是
  * "若干不同的包各要求什么"。合起来才是"官方撤掉了什么"的完整清单。
+ *
+ * 条目有两种：插件**按裸模块名 require** 的那几个（`markers` 多半为空），以及插件把它的
+ * **标识符写死在自己代码里**的那几个 —— 后者靠 `markers` 里的 canary 盯住名字漂移。
  */
 export const BARE_HOST_MODULE_CONTRACTS: readonly HostModuleContract[] = [
   {
     package: '@deepseek-ai/dsh-mcp-client',
     feature: 'MCP 客户端（MCP 服务器装配的宿主出口）',
     markers: [],
+  },
+  {
+    package: '@deepseek-ai/dsh-mcp-resources',
+    feature: 'MCP 共享资源工具（官方那三个资源工具的宿主出口）',
+    markers: [
+      { needle: 'list_mcp_resources', why: '共享资源工具的名字（插件的逐会话可见性摘除与执行侧守卫按这三个名字认它）' },
+      { needle: 'list_mcp_resource_templates', why: '同上（三个共享资源工具之一）' },
+      { needle: 'read_mcp_resource', why: '同上（三个共享资源工具之一）' },
+    ],
   },
   {
     package: '@deepseek-ai/dsh-persona',
