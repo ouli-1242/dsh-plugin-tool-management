@@ -208,6 +208,13 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     rootLabel: string
     rootLocaleKey?: string
     rootKind?: string
+    /**
+     * 来源在**技能页**里的次序（`skill-state` 的 roots 顺序）。
+     *
+     * 场景编辑器的技能集按来源分组，组的次序照这个来（用户 2026-11-06：「目录的排序按照
+     * 实际技能页的排序」）—— 平铺列表按技能名排，顺序信息就丢了。
+     */
+    rootIndex: number
   }
 
   /**
@@ -223,7 +230,9 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     const rows: SceneSkillRow[] = []
     try {
       const r: any = await skillsService.ops['skill-state']({})
-      for (const root of ((r && r.data && r.data.roots) || [])) {
+      const roots = (r && r.data && r.data.roots) || []
+      for (let rootIndex = 0; rootIndex < roots.length; rootIndex++) {
+        const root = roots[rootIndex]
         const rootKey = String((root && root.key) || '')
         if (!rootKey) continue
         for (const sk of ((root && root.skills) || [])) {
@@ -239,6 +248,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
             rootLabel: String((root && root.label) || rootKey),
             ...(root && root.localeKey ? { rootLocaleKey: String(root.localeKey) } : {}),
             ...(root && root.kind ? { rootKind: String(root.kind) } : {}),
+            rootIndex,
           })
         }
       }

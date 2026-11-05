@@ -1202,17 +1202,74 @@
              */
             var pickable = function (x) { return !x.shadowed && x.loadable !== false }
             var pickableItems = allItems.filter(pickable)
-            var items = checkedFirst('skills', (function () {
-              var q = String(modal.skillQuery || '').trim().toLowerCase()
-              if (!q) return allItems
+            var q = String(modal.skillQuery || '').trim().toLowerCase()
+            var matches = function (x) {
+              if (!q) return true
               // 搜索同时匹配技能名与来源名（用户按"来源"找技能是常见动作）。
-              return allItems.filter(function (x) {
-                var d = skillDisplay(x)
-                return (d.name + ' ' + d.source + ' ' + d.key).toLowerCase().indexOf(q) >= 0
+              var d = skillDisplay(x)
+              return (d.name + ' ' + d.source + ' ' + d.key).toLowerCase().indexOf(q) >= 0
+            }
+            /**
+             * **按来源分组**（用户 2026-11-06）：平铺按技能名排，一屏四十六条混在一起很乱。
+             * 组的次序 = 技能页里的次序（服务端给的 `rootIndex`）；组内按技能名排。
+             */
+            var groups = []
+            var groupOf = {}
+            allItems.forEach(function (x) {
+              var d = skillDisplay(x)
+              var rootKey = String((x && x.rootKey) || '')
+              var g = groupOf[rootKey]
+              if (!g) {
+                g = { key: rootKey, label: d.source, rootIndex: Number(x.rootIndex) || 0, all: [], rows: [] }
+                groupOf[rootKey] = g
+                groups.push(g)
+              }
+              g.all.push(x)
+              if (matches(x)) g.rows.push(x)
+            })
+            groups.sort(function (a, b) {
+              if (a.rootIndex !== b.rootIndex) return a.rootIndex - b.rootIndex
+              return a.label < b.label ? -1 : a.label > b.label ? 1 : 0
+            })
+            // 没有（匹配到的）技能的目录不显示（用户 2026-11-06）。
+            groups = groups.filter(function (g) { return g.rows.length > 0 })
+            groups.forEach(function (g) {
+              g.rows.sort(function (x, y) {
+                var xn = String((x && x.name) || '')
+                var yn = String((y && y.name) || '')
+                return xn.localeCompare(yn)
               })
-            })(), function (x) { return String(x.key) },
-              function (x) { return !!sections.skills && sections.skills.indexOf(x.key) >= 0 })
+            })
             var pickedCount = pickableItems.filter(function (x) { return sections.skills && sections.skills.indexOf(x.key) >= 0 }).length
+            /** 展开状态：默认"这一组有勾选的就展开"（编辑时一眼看见自己选了什么）。 */
+            function expandedOf(g, picked) {
+              if (q) return true
+              var saved = modal.skillExpanded
+              if (saved && saved[g.key] !== undefined) return saved[g.key] === true
+              return picked > 0
+            }
+            function setExpanded(key, open) {
+              var next = Object.assign({}, modal.skillExpanded || {})
+              next[key] = open === true
+              setModal(Object.assign({}, modal, { skillExpanded: next }))
+            }
+            /** 组勾选框：全选 / 全不选这一整个来源。 */
+            function toggleGroup(g, allChecked) {
+              var list = sections.skills.slice()
+              g.all.filter(pickable).forEach(function (x) {
+                var i = list.indexOf(x.key)
+                if (allChecked) { if (i >= 0) list.splice(i, 1) } else if (i < 0) list.push(x.key)
+              })
+              // 全不选就把这一组收起来（全选则展开）——「关闭后不显示里面的技能」。
+              var nextExpanded = Object.assign({}, modal.skillExpanded || {})
+              nextExpanded[g.key] = !allChecked
+              // **一次写回**：两次 setModal 都拿同一份旧 modal，后一次会把前一次盖掉（勾选与
+              // 展开会互相抵消）。
+              setModal(Object.assign({}, modal, {
+                sections: Object.assign({}, modalSections(), { skills: list }),
+                skillExpanded: nextExpanded,
+              }))
+            }
             return editorGroupNode({
               title: t('memory.archive.skills'),
               count: defined ? t('scenes.seg.checked', { checked: pickedCount, total: pickableItems.length }) : t('scenes.archive.sectionOff'),
@@ -1228,28 +1285,60 @@
               hideFilter: !defined,
               body: !defined
                 ? React.createElement('div', { className: 'dsm-pick-empty', title: t('scenes.skills.hint') }, t('scenes.skills.hint.short'))
-                : items.length
-                  ? React.createElement('div', null, items.map(function (item) {
-                      var d = skillDisplay(item)
-                      var offered = pickable(item)
-                      return RowSelect({
-                        disabled: busy || !offered,
-                        key: item.key,
-                        checked: offered && sections.skills.indexOf(item.key) >= 0,
-                        name: d.name,
-                        desc: d.source || null,
-                        descTitle: d.key,
-                        meta: item.shadowed
-                          ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.skills.shadowed.hint') }, t('status.shadowed'))
-                          : (item.loadable === false
-                            ? React.createElement('span', { className: 'dsm-tag', title: t('scenes.skills.invalid.hint') }, t('status.invalid'))
-                            : (item.enabled === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null)),
-                        onChange: function () {
-                          var list = sections.skills.slice(); var i = list.indexOf(item.key)
-                          if (i >= 0) list.splice(i, 1); else list.push(item.key)
-                          setSections(Object.assign({}, modalSections(), { skills: list }))
-                        },
-                      })
+                : groups.length
+                  ? React.createElement('div', { className: 'dsm-skill-groups' }, groups.map(function (g) {
+                      var pickableInGroup = g.all.filter(pickable)
+                      var picked = pickableInGroup.filter(function (x) { return sections.skills.indexOf(x.key) >= 0 }).length
+                      var allChecked = pickableInGroup.length > 0 && picked === pickableInGroup.length
+                      var some = picked > 0 && !allChecked
+                      var expanded = expandedOf(g, picked)
+                      return React.createElement('div', { key: 'g:' + g.key, className: 'dsm-skill-group' },
+                        React.createElement('div', { className: 'dsm-skill-group-head' },
+                          // 组勾选框：全选 / 全不选这一整个来源（部分勾上是横杠）。
+                          React.createElement('button', {
+                            key: 'box',
+                            type: 'button',
+                            className: 'dsm-rowselect-box' + (allChecked ? ' dsm-rowselect-box-on' : ''),
+                            disabled: busy || pickableInGroup.length === 0,
+                            title: allChecked ? t('scenes.skills.groupUncheck') : t('scenes.skills.groupCheck'),
+                            'aria-label': (allChecked ? t('scenes.skills.groupUncheck') : t('scenes.skills.groupCheck')) + ' · ' + g.label,
+                            onClick: function (e) { e.stopPropagation(); toggleGroup(g, allChecked) },
+                          }, allChecked
+                            ? React.createElement('svg', { viewBox: '0 0 12 12', width: 10, height: 10, focusable: 'false' },
+                                React.createElement('path', { d: 'M2.5 6.5L5 9L9.5 3.5', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }))
+                            : some ? React.createElement('span', { className: 'dsm-rowselect-dash' }) : null),
+                          // 来源名 = 展开 / 收起（点勾选框才是全选 / 全不选）。
+                          React.createElement('button', {
+                            key: 'name',
+                            type: 'button',
+                            className: 'dsm-skill-group-name',
+                            title: g.label,
+                            onClick: function () { setExpanded(g.key, !expanded) },
+                          }, React.createElement(CaretIcon, { open: expanded, className: 'dsm-skill-group-caret' }), g.label),
+                          React.createElement('span', { key: 'count', className: 'dsm-skill-group-count' }, picked + '/' + pickableInGroup.length)),
+                        expanded
+                          ? React.createElement('div', { className: 'dsm-skill-group-items' }, g.rows.map(function (item) {
+                              var offered = pickable(item)
+                              return RowSelect({
+                                disabled: busy || !offered,
+                                key: item.key,
+                                checked: offered && sections.skills.indexOf(item.key) >= 0,
+                                name: String((item && item.name) || ''),
+                                desc: null,
+                                descTitle: item.key,
+                                meta: item.shadowed
+                                  ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.skills.shadowed.hint') }, t('status.shadowed'))
+                                  : (item.loadable === false
+                                    ? React.createElement('span', { className: 'dsm-tag', title: t('scenes.skills.invalid.hint') }, t('status.invalid'))
+                                    : (item.enabled === false ? React.createElement('span', { className: 'dsm-tag' }, t('memory.scene.off')) : null)),
+                                onChange: function () {
+                                  var list = sections.skills.slice(); var i = list.indexOf(item.key)
+                                  if (i >= 0) list.splice(i, 1); else list.push(item.key)
+                                  setSections(Object.assign({}, modalSections(), { skills: list }))
+                                },
+                              })
+                            }))
+                          : null)
                     }))
                   : React.createElement('div', { className: 'dsm-pick-empty' }, modal.skillQuery ? t('scenes.mem.noMatch') : t('scenes.skills.empty')),
             })

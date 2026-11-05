@@ -1201,6 +1201,19 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-setrow-desc{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-setrow-control{display:flex;flex:none;align-items:center;gap:8px}
 .dsm-setrow .dsm-btn{min-width:92px}
+/* 场景档案的技能集：**按来源分组**（用户 2026-11-06：平铺按技能名排，一屏四十六条
+   混在一起很乱）。组头 = 一颗组勾选框（全选 / 全不选这一整个来源）+ 来源名（点它
+   展开 / 收起）+ "N/M"；组内按技能名排。 */
+.dsm-skill-groups{display:flex;flex-direction:column;gap:2px}
+.dsm-skill-group{display:flex;flex-direction:column}
+.dsm-skill-group-head{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:var(--dsm-radius-s)}
+.dsm-skill-group-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsm-skill-group-name{display:flex;min-width:0;flex:1;align-items:center;gap:4px;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;font-weight:600;text-align:left;cursor:pointer}
+.dsm-skill-group-caret{flex:none}
+.dsm-skill-group-count{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;font-variant-numeric:tabular-nums}
+.dsm-skill-group-items{padding-left:16px}
+/* 部分勾选：框里一根横杠（全选是主色实底 + 白勾，见 .dsm-rowselect-box-on）。 */
+.dsm-rowselect-dash{display:block;width:8px;height:2px;border-radius:1px;background:var(--dsw-alias-label-primary)}
 /* RowCheck：框本身是控制件（button）—— 去按钮默认内边距、给禁用态；选中态与
    RowSelect 的选中框同款主色实底（原规则钉在 .dsm-rowselect-on 父级上，独立框用这
    条直接落在框上）。 */
