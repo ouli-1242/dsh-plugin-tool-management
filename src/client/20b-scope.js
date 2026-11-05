@@ -182,6 +182,17 @@
       var n = leases && typeof leases === 'object' ? Number(leases[key]) : 0
       return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
     }
+    /**
+     * 这一格的租约认领者（`[{ id, title, cwd }]`）：徽章浮窗逐行列出"是哪几个对话"。
+     * 与 `scopeLeaseCount` 同一份服务端数据（`global.leaseDetails`），全局层才读得到。
+     */
+    function scopeLeaseDetails(domain, key) {
+      if (scopeIsSession()) return []
+      var all = scopeState.global && scopeState.global.leaseDetails ? scopeState.global.leaseDetails : null
+      var byKey = all && typeof all === 'object' ? all[domain] : null
+      var list = byKey && typeof byKey === 'object' ? byKey[key] : null
+      return Array.isArray(list) ? list : []
+    }
     /** 这一域此刻有租约的键（全局层专用；会话层返回空）。「全部关闭」按它取目标集。 */
     function scopeLeaseKeys(domain) {
       if (scopeIsSession()) return []
@@ -214,6 +225,18 @@
         nextLeases[domain] = domainLeases
         patch.leases = nextLeases
       }
+      // 认领者名单跟计数同生共死：计数摘了还留着名单，浮窗会列出已经不认领的对话。
+      var details = global.leaseDetails || {}
+      var domainDetails = Object.assign({}, details[domain] || {})
+      var detailsChanged = false
+      list.forEach(function (key) {
+        if (domainDetails[key] !== undefined) { delete domainDetails[key]; detailsChanged = true }
+      })
+      if (detailsChanged) {
+        var nextDetails = Object.assign({}, details)
+        nextDetails[domain] = domainDetails
+        patch.leaseDetails = nextDetails
+      }
       if (domain === 'mcp' || domain === 'skills' || domain === 'skillSources') {
         var intent = global.intent || {}
         var nextDomainIntent = Object.assign({}, intent[domain] || {})
@@ -222,7 +245,7 @@
         nextIntent[domain] = nextDomainIntent
         patch.intent = nextIntent
       }
-      if (patch.leases === undefined && patch.intent === undefined) return
+      if (patch.leases === undefined && patch.intent === undefined && patch.leaseDetails === undefined) return
       setScopeState({ global: Object.assign({}, global, patch) })
     }
     /** 有多少个会话 / 工作区进入了场景（全局层专用；会话层返回 0）。传场景名只数那一个。 */

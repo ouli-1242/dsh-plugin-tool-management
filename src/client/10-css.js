@@ -162,6 +162,14 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+/* 租约浮窗（悬在「临时运行 · N 个对话」徽章上）：逐行列出是**哪几个对话**在用它。
+   固定定位 + 视口坐标 —— 徽章所在的列表行是 overflow:hidden，绝对定位会被裁掉
+   （与 SourceSelect 的菜单同一条理由）。 */
+.dsm-lease-pop{position:fixed;z-index:1200;box-sizing:border-box;width:max-content;max-width:min(320px,80vw);padding:8px 10px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:normal;text-align:left}
+.dsm-lease-pop-hint{margin-bottom:6px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
+.dsm-lease-pop-item{display:flex;gap:6px;align-items:baseline}
+.dsm-lease-pop-ws{flex:none;color:var(--dsw-alias-label-tertiary)}
+.dsm-lease-pop-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 开关与官方同款（用户 2026-10-18：「switch 按键统一和官方一样的模板」→「改成完全一样」）：
    36×20 外壳 + 16px 拇指、内边距 2px、滑块位移 16px、开态用 brand-primary，
    关态拇指用 switch-thumb —— 尺寸与配色照抄宿主设置面板那颗。

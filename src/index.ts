@@ -95,6 +95,7 @@ import {
   effectiveLayerOf,
   intentOf,
   isIntentDomain,
+  leaseSessionDetails,
   planReconcile,
   pruneIntentKeys,
   resolveResource,
@@ -123,6 +124,7 @@ import {
   sessionToolTableHidden,
   setSceneToolTableInScope,
   withBaseline,
+  type LeaseSessionDetail,
   type ScopeFlagDomain,
   type ScopeGlobalSnapshot,
   type SessionBaseline,
@@ -1033,8 +1035,9 @@ export default {
      * @param strict 用**严格读**取侧车（`readStrict`：文件在却读不动 / 解析不了就抛）。
      *   `readable === false` 表示没读出来，而空侧车在痕迹闸门眼里等于"这一格从没被会话动过"
      *   —— 与"宁可少采纳，不误提升"正好相反，所以调用方必须把读失败当成**处处有痕迹**处理。
+     * @returns `rows` 是这一趟读到的会话清单（认领者的标题 / 工作区就从这里取）。
      */
-    async function scanClaimsOnce(targets: ClaimScanTargets, strict = false): Promise<{ scan: ClaimScanResult; readable: boolean }> {
+    async function scanClaimsOnce(targets: ClaimScanTargets, strict = false): Promise<{ scan: ClaimScanResult; readable: boolean; rows: ScopeSessionRow[] }> {
       let sessions: Record<string, SessionScope> = {}
       let readable = false
       try {
@@ -1044,11 +1047,11 @@ export default {
       let rows: ScopeSessionRow[] = []
       try { rows = await scopeSessionRows() } catch { rows = [] }
       try {
-        return { scan: scanSessionClaims({ sessions, rows, mode: scopeMode(), archiveOf: sceneArchiveOfSession, targets }), readable }
+        return { scan: scanSessionClaims({ sessions, rows, mode: scopeMode(), archiveOf: sceneArchiveOfSession, targets }), readable, rows }
       } catch {
         // 装饰性读数：算不出来不该让列表 op / 面板整份失败（下一轮再算）。
         // `readable: false` 让它与"侧车读不出来"同档 —— 对账那边必须保守（不采纳运行态）。
-        return { scan: scanSessionClaims({ sessions: {}, rows: [], mode: scopeMode(), archiveOf: () => undefined, targets }), readable: false }
+        return { scan: scanSessionClaims({ sessions: {}, rows: [], mode: scopeMode(), archiveOf: () => undefined, targets }), readable: false, rows: [] }
       }
     }
 
@@ -2999,11 +3002,22 @@ export default {
           : all.filter((key) => flags[domain][key] !== true)
         if (keys.length > 0) leaseKeys[domain] = keys
       }
-      const { scan: leaseScan } = await scanClaimsOnce(leaseKeys)
+      const { scan: leaseScan, rows: leaseRows } = await scanClaimsOnce(leaseKeys)
       const leaseCounts = (domain: ScopeFlagDomain): Record<string, number> => {
         const out: Record<string, number> = {}
         for (const [key, list] of leaseScan.claims[domain]) out[key] = list.length
         return out
+      }
+      // 认领者的名单（徽章浮窗逐行显示"是哪几个对话"）：与 `leaseCounts` 同一趟扫描的结果，
+      // 标题 / 工作区从这一趟读到的会话清单里取 —— 清单里没有的会话（孤儿 / 作用域键占位）
+      // 只留一个短 id，不编工作区名。
+      const leaseRowById = new Map<string, ScopeSessionRow>()
+      for (const row of leaseRows) leaseRowById.set(row.id, row)
+      const leaseDetails: Partial<Record<ScopeFlagDomain, Record<string, LeaseSessionDetail[]>>> = {}
+      for (const domain of SCOPE_FLAG_DOMAINS) {
+        const claims = leaseScan.claims[domain]
+        if (claims.size === 0) continue
+        leaseDetails[domain] = leaseSessionDetails(claims, leaseRowById)
       }
       // 场景页的「全部关闭」：只数**会话层进入过场景**的未归档会话 / 工作区。全局正在用的
       // 那个场景是全局设置，不算临时运行；没有场景覆盖时连会话清单都不读。
@@ -3041,6 +3055,7 @@ export default {
           subagents: leaseCounts('subagents'),
           quickPrompts: leaseCounts('quickPrompts'),
         },
+        leaseDetails,
         sceneLeases,
         sceneLeaseCounts,
       }

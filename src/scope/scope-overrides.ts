@@ -882,6 +882,20 @@ export function mcpToolServerSegments(map: Record<string, boolean> | undefined):
   return out
 }
 
+/**
+ * 一个租约认领者（会话）：徽章浮窗里的一行。
+ *
+ * 徽章只说「临时运行 · N 个对话」，用户真正要问的是"是哪几个" —— 这条就是那个答案。
+ */
+export interface LeaseSessionDetail {
+  /** 会话 id（认领表里的那份，界面不用它，只用来对回原始会话）。 */
+  id: string
+  /** 会话标题（取不到时回落到短 id）。 */
+  title: string
+  /** 会话所在工作区的路径（cwd）；空串 = 这个会话没挂在任何工作区下。 */
+  cwd: string
+}
+
 /** 全局快照里本插件认识的那一份（`scene` 是当前场景名，`flags` 是各域各键的全局开关）。 */
 export interface ScopeGlobalSnapshot {
   scene: string | null
@@ -926,6 +940,13 @@ export interface ScopeGlobalSnapshot {
     subagents: Record<string, number>
     quickPrompts: Record<string, number>
   }
+  /**
+   * 租约的**认领者**：域 → 键 → 那些对话（标题 + 工作区）。
+   *
+   * `leases` 只给个数；界面把徽章的浮窗做成"逐行列出是哪几个对话"，靠的就是这一份。
+   * 与 `leases` 同源同拍（同一趟认领扫描），因此个数与名单永远一致。
+   */
+  leaseDetails?: Partial<Record<ScopeFlagDomain, Record<string, LeaseSessionDetail[]>>>
   /**
    * 有多少个未归档的会话 / 工作区**进入了场景**（会话层）。
    *

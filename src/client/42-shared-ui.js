@@ -1904,8 +1904,106 @@ function enabledMemoryCount(rules) {
       var tone = props.tone === 'ok' ? ' dsm-tag-on' : props.tone === 'bad' ? ' dsm-tag-off' : props.tone === 'warn' ? ' dsm-tag-warn' : ''
       return h('span', { className: 'dsm-tag' + tone, title: props.title }, props.text)
     }
+    /** 租约浮窗的最大高度（`measure` 与 CSS 共用同一个上限）。 */
+    var LEASE_POP_MAX_H = 240
     /**
-     * 租约徽章（0.21.2）：**六个域共用的唯一出口** —— 同一 HTML 结构、同一 class 族、同一 tooltip。
+     * 租约徽章 + 悬浮浮窗：**临时运行的是哪几个对话**。
+     *
+     * 徽章正文只说"几个对话"（`临时运行 · N 个对话`），用户真正要问的是"是哪几个"——
+     * 浮窗逐行列出「工作区 · 标题」，一个对话一行。
+     *
+     * 浮窗用 `position:fixed` + **视口坐标**：徽章所在的列表行是 `overflow:hidden`
+     * （`.dsm-listrow-meta`），绝对定位的浮层会被裁掉（与 `SourceSelect` 的菜单同一条理由）。
+     *
+     * @param {{ t: Function, count: number, runtime: boolean, details: Array<{id?: string, title?: string, cwd?: string}> }} props
+     */
+    function LeaseTagBadge(props) {
+      var t = props.t
+      var count = props.count
+      var runtime = props.runtime === true
+      var details = props.details || []
+      var openState = React.useState(false), open = openState[0], setOpen = openState[1]
+      var posState = React.useState(null), pos = posState[0], setPos = posState[1]
+      var ref = React.useRef(null)
+      var hint = runtime ? t('scope.intent.leaseHint', { count: count }) : t('scope.view.leaseHint', { count: count })
+      var label = runtime ? t('scope.intent.lease', { count: count }) : t('scope.view.lease', { count: count })
+      /**
+       * 量一次徽章的位置，算出浮窗放哪儿。
+       *
+       * 上下方向按"下方装不下且上方更宽裕才上翻"判；高度夹到那一侧的可用空间，
+       * 夹住之后浮窗自己滚 —— 与 `SourceSelect` 的菜单同一条口径。
+       */
+      function measure() {
+        var el = ref.current
+        if (!el) return
+        var box = el.getBoundingClientRect()
+        var gap = 6
+        var need = Math.min(details.length * 22 + 40, LEASE_POP_MAX_H)
+        var below = window.innerHeight - box.bottom - gap - 8
+        var above = box.top - gap - 8
+        var nextUp = below < need && above > below
+        var next = {
+          left: Math.max(8, Math.min(box.left, window.innerWidth - 320)),
+          top: nextUp ? null : box.bottom + gap,
+          bottom: nextUp ? window.innerHeight - box.top + gap : null,
+          maxHeight: Math.max(96, Math.min(need, nextUp ? above : below)),
+        }
+        // 位置没变就别换新对象（滚动时每次都换会让整个浮窗重渲染一遍）。
+        setPos(function (prev) {
+          if (prev === null) return next
+          return prev.left === next.left && prev.top === next.top && prev.bottom === next.bottom && prev.maxHeight === next.maxHeight ? prev : next
+        })
+      }
+      React.useEffect(function () {
+        if (!open) return undefined
+        measure()
+        // 页面滚动 / 窗口尺寸变了，浮窗要跟着徽章走 —— 否则它会停在原地，指着空气。
+        var onMove = function () { measure() }
+        window.addEventListener('scroll', onMove, true)
+        window.addEventListener('resize', onMove)
+        return function () {
+          window.removeEventListener('scroll', onMove, true)
+          window.removeEventListener('resize', onMove)
+        }
+      }, [open])
+      var popup = null
+      if (open && details.length > 0) {
+        var style = { left: '0px', top: '0px', bottom: 'auto', maxHeight: '240px', visibility: 'hidden' }
+        if (pos !== null) {
+          style.left = pos.left + 'px'
+          style.visibility = 'visible'
+          style.maxHeight = pos.maxHeight + 'px'
+          style.top = pos.top === null || pos.top === undefined ? 'auto' : pos.top + 'px'
+          style.bottom = pos.bottom === null || pos.bottom === undefined ? 'auto' : pos.bottom + 'px'
+        }
+        popup = h('div', {
+          className: 'dsm-lease-pop',
+          style: style,
+          role: 'tooltip',
+          // 浮窗在徽章里面：点它不该触发行上的动作。
+          onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation() },
+        }, [
+          h('div', { key: 'hint', className: 'dsm-lease-pop-hint' }, hint),
+        ].concat(details.map(function (d, i) {
+          var cwd = String((d && d.cwd) || '')
+          var title = String((d && d.title) || (d && d.id) || '')
+          var ws = cwd !== '' ? scopeWorkspaceName(cwd) : t('scope.lease.noWorkspace')
+          return h('div', { key: 'row' + i, className: 'dsm-lease-pop-item', title: cwd !== '' ? cwd + ' · ' + title : title },
+            h('span', { className: 'dsm-lease-pop-ws' }, ws),
+            h('span', { className: 'dsm-lease-pop-title' }, title))
+        })))
+      }
+      return h('span', {
+        className: 'dsm-tag dsm-tag-lease',
+        ref: ref,
+        // 有名单时不再挂原生 title：原生浮窗只会显示一行，还会和浮窗叠在一起。
+        title: details.length > 0 ? undefined : hint,
+        onMouseEnter: function () { setOpen(true) },
+        onMouseLeave: function () { setOpen(false); setPos(null) },
+      }, [label, popup])
+    }
+    /**
+     * 租约徽章（0.21.2）：**六个域共用的唯一出口** —— 同一 HTML 结构、同一 class 族、同一浮窗。
      *
      * 为什么必须共用一个函数：这六处的文案与判据曾经各写一份（技能来源用 `scope.intent.lease`，
      * 其余五处干脆没有），口径一分叉就会出现"同一件事在 MCP 页写着临时运行、在记忆页什么都不说"。
@@ -1927,9 +2025,11 @@ function enabledMemoryCount(rules) {
       if (!(count > 0)) return null
       if (scopeIsSession()) return null
       var runtime = props.runtime === true
-      return h('span', {
+      return h(LeaseTagBadge, {
         key: props.tagKey || undefined,
-        className: 'dsm-tag dsm-tag-lease',
-        title: runtime ? t('scope.intent.leaseHint', { count: count }) : t('scope.view.leaseHint', { count: count }),
-      }, runtime ? t('scope.intent.lease', { count: count }) : t('scope.view.lease', { count: count }))
+        t: t,
+        count: count,
+        runtime: runtime,
+        details: scopeLeaseDetails(props.domain, props.key),
+      })
     }

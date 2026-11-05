@@ -33,7 +33,7 @@
 // 不需要意图这一层。
 
 import type { SceneArchive } from '../memories/archive.js'
-import { SCOPE_FLAG_DOMAINS, layeredFlagWithChildren, overrideOf, type ScopeFlagDomain, type ScopeMode, type SessionScope } from './scope-overrides.js'
+import { SCOPE_FLAG_DOMAINS, layeredFlagWithChildren, overrideOf, type LeaseSessionDetail, type ScopeFlagDomain, type ScopeMode, type SessionScope } from './scope-overrides.js'
 import { isWorkspaceScopeKey, scopeKeyOfRow } from './workspace-key.js'
 
 /** 意图三态。`blocked` = 显式拒绝，压过租约与一切会话层（旧版本的值；新界面不再写它）。 */
@@ -358,6 +358,36 @@ export function scanSessionClaims(input: ClaimScanInput): ClaimScanResult {
     }
   }
   return { claims, explicit, traced }
+}
+
+/**
+ * 认领者名单（徽章浮窗用）：键 → 那些对话（标题 + 工作区）。
+ *
+ * 徽章只说"临时运行 · N 个对话"，用户要问的是"是哪几个"—— 这一份就是答案。
+ * 与 `claims` 同源：个数与名单永远一致（同一批会话 id）。
+ *
+ * 清单里没有的会话（孤儿 / 清单读不到时用来占位的作用域键）只留一个短 id：
+ * 编不出标题与工作区时如实留空，不猜。
+ *
+ * @param claims 键 → 认领会话 id（`scanSessionClaims` 的 `claims`）。
+ * @param rows 会话 id → 那一行的标题与工作区目录。
+ */
+export function leaseSessionDetails(
+  claims: ReadonlyMap<string, readonly string[]>,
+  rows: ReadonlyMap<string, { title?: string; cwd?: string }>,
+): Record<string, LeaseSessionDetail[]> {
+  const out: Record<string, LeaseSessionDetail[]> = {}
+  for (const [key, ids] of claims) {
+    out[key] = ids.map((id) => {
+      const row = rows.get(id)
+      return {
+        id,
+        title: row !== undefined && typeof row.title === 'string' && row.title !== '' ? row.title : id.slice(0, 8),
+        cwd: row !== undefined && typeof row.cwd === 'string' ? row.cwd : '',
+      }
+    })
+  }
+  return out
 }
 
 /** 对账输入的一行（MCP 服务器或技能来源）。 */
