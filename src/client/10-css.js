@@ -165,11 +165,17 @@ button.dsm-qty:disabled{cursor:default}
 /* 租约浮窗（悬在「临时运行 · N 个对话」徽章上）：逐行列出是**哪几个对话**在用它。
    固定定位 + 视口坐标 —— 徽章所在的列表行是 overflow:hidden，绝对定位会被裁掉
    （与 SourceSelect 的菜单同一条理由）。 */
-.dsm-lease-pop{position:fixed;z-index:1200;box-sizing:border-box;width:max-content;max-width:min(320px,80vw);padding:8px 10px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:normal;text-align:left}
-.dsm-lease-pop-hint{margin-bottom:6px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
-.dsm-lease-pop-item{display:flex;gap:6px;align-items:baseline}
+.dsm-lease-pop{position:fixed;z-index:1200;box-sizing:border-box;width:max-content;max-width:min(92vw,720px);padding:8px 10px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:normal;text-align:left}
+/* 提示语**一行**：折成两行会让人以为后面还有半句话（用户 2026-11-05）。窗口不够宽时
+   省略号收尾，不折行。 */
+.dsm-lease-pop-hint{margin-bottom:6px;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
+.dsm-lease-pop-item{display:flex;gap:6px;align-items:center}
 .dsm-lease-pop-ws{flex:none;color:var(--dsw-alias-label-tertiary)}
 .dsm-lease-pop-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 每行末尾那颗「×」：只放开这一个对话的临时运行，其余对话照旧（认领是逐个对话记的）。 */
+.dsm-lease-pop-x{flex:none;box-sizing:border-box;width:20px;height:20px;padding:0;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:14px;line-height:20px;cursor:pointer}
+.dsm-lease-pop-x:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dsm-lease-pop-x:disabled{cursor:default;opacity:.5}
 /* 开关与官方同款（用户 2026-10-18：「switch 按键统一和官方一样的模板」→「改成完全一样」）：
    36×20 外壳 + 16px 拇指、内边距 2px、滑块位移 16px、开态用 brand-primary，
    关态拇指用 switch-thumb —— 尺寸与配色照抄宿主设置面板那颗。
@@ -1133,6 +1139,9 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
    4px 的 flex 间距对**文字**来说不够，两段会连成一句读不出边界；点由后一件的 ::before 提供，
    所以只有一段时不会多出孤点。 */
 .dsm-listrow-meta>*+*::before{content:"·";margin-right:4px;color:var(--dsw-alias-label-tertiary)}
+/* 租约徽章自带一圈虚线边框，前面再挂一个「·」就像坏掉的标点（用户 2026-11-05 报障）：
+   徽章是**独立的一枚**，不是元信息里的一段文字，不需要分隔点。 */
+.dsm-listrow-meta>.dsm-tag-lease::before{content:none}
 .dsm-listrow-meta:empty{display:none}
 .dsm-listrow-meta-desc{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .dsm-listrow-meta-info{flex:none;color:var(--dsw-alias-label-tertiary)}

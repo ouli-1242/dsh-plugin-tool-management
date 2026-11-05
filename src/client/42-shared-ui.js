@@ -1915,7 +1915,7 @@ function enabledMemoryCount(rules) {
      * 浮窗用 `position:fixed` + **视口坐标**：徽章所在的列表行是 `overflow:hidden`
      * （`.dsm-listrow-meta`），绝对定位的浮层会被裁掉（与 `SourceSelect` 的菜单同一条理由）。
      *
-     * @param {{ t: Function, count: number, runtime: boolean, details: Array<{id?: string, title?: string, cwd?: string}> }} props
+     * @param {{ t: Function, count: number, runtime: boolean, domain: string, key: string, details: Array<{id?: string, title?: string, cwd?: string}> }} props
      */
     function LeaseTagBadge(props) {
       var t = props.t
@@ -1924,9 +1924,39 @@ function enabledMemoryCount(rules) {
       var details = props.details || []
       var openState = React.useState(false), open = openState[0], setOpen = openState[1]
       var posState = React.useState(null), pos = posState[0], setPos = posState[1]
+      var busyState = React.useState(null), busyId = busyState[0], setBusyId = busyState[1]
       var ref = React.useRef(null)
+      var popRef = React.useRef(null)
       var hint = runtime ? t('scope.intent.leaseHint', { count: count }) : t('scope.view.leaseHint', { count: count })
       var label = runtime ? t('scope.intent.lease', { count: count }) : t('scope.view.lease', { count: count })
+      /**
+       * 放掉**一个**对话的认领：只让它不再临时运行，其它对话照旧。
+       *
+       * 认领是**逐个对话**记的（会话层那条覆盖），所以放掉一个就是在那条对话的会话层
+       * 写一次「关」—— 服务端随即重算租约：最后一个认领者走了，连接 / 来源就跟着停。
+       * 工作区粒度下这条覆盖落在工作区上，同工作区的对话一起不再用（标题里说清楚）。
+       */
+      function release(d) {
+        if (busyId !== null) return
+        var id = String((d && d.id) || '')
+        var name = String((d && d.title) || id)
+        setBusyId(id)
+        apiCall('scope-set', { sessionId: id, domain: props.domain, key: props.key, value: false })
+          .then(function (res) {
+            if (!res || res.ok === false) {
+              showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(res) || '?' }), 'err')
+              return
+            }
+            // 本地先把这一条摘掉（全局快照有 150ms TTL，紧接着的重拉可能还是写前那一份）。
+            scopeForgetLeaseSession(props.domain, props.key, id)
+            showPluginToast(t('scope.lease.released', { title: name }), 'ok')
+            setTimeout(function () { refreshScope({ silent: true }) }, 400)
+          })
+          .catch(function (e) {
+            showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(e) || '?' }), 'err')
+          })
+          .then(function () { setBusyId(null) })
+      }
       /**
        * 量一次徽章的位置，算出浮窗放哪儿。
        *
@@ -1942,8 +1972,10 @@ function enabledMemoryCount(rules) {
         var below = window.innerHeight - box.bottom - gap - 8
         var above = box.top - gap - 8
         var nextUp = below < need && above > below
+        // 浮窗比徽章宽得多：按它自己的宽度靠右，别让它顶出窗口。
+        var width = popRef.current ? popRef.current.offsetWidth : 320
         var next = {
-          left: Math.max(8, Math.min(box.left, window.innerWidth - 320)),
+          left: Math.max(8, Math.min(box.left, window.innerWidth - width - 8)),
           top: nextUp ? null : box.bottom + gap,
           bottom: nextUp ? window.innerHeight - box.top + gap : null,
           maxHeight: Math.max(96, Math.min(need, nextUp ? above : below)),
@@ -1979,7 +2011,7 @@ function enabledMemoryCount(rules) {
         popup = h('div', {
           className: 'dsm-lease-pop',
           style: style,
-          role: 'tooltip',
+          ref: popRef,
           // 浮窗在徽章里面：点它不该触发行上的动作。
           onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation() },
         }, [
@@ -1988,9 +2020,20 @@ function enabledMemoryCount(rules) {
           var cwd = String((d && d.cwd) || '')
           var title = String((d && d.title) || (d && d.id) || '')
           var ws = cwd !== '' ? scopeWorkspaceName(cwd) : t('scope.lease.noWorkspace')
+          var id = String((d && d.id) || '')
           return h('div', { key: 'row' + i, className: 'dsm-lease-pop-item', title: cwd !== '' ? cwd + ' · ' + title : title },
             h('span', { className: 'dsm-lease-pop-ws' }, ws),
-            h('span', { className: 'dsm-lease-pop-title' }, title))
+            h('span', { className: 'dsm-lease-pop-title' }, title),
+            // 逐个放掉：只有「全部关闭」时，用户没法只让其中一个对话停下来。
+            h('button', {
+              key: 'x',
+              type: 'button',
+              className: 'dsm-lease-pop-x',
+              disabled: busyId !== null,
+              title: scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
+              'aria-label': scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
+              onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d) },
+            }, '×'))
         })))
       }
       return h('span', {

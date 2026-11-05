@@ -248,6 +248,51 @@
       if (patch.leases === undefined && patch.intent === undefined && patch.leaseDetails === undefined) return
       setScopeState({ global: Object.assign({}, global, patch) })
     }
+    /**
+     * 释放**一个**对话的认领之后，就地改本地快照（计数减一、名单摘掉一条）。
+     *
+     * 为什么不能等服务端重拉：全局快照有 150ms 的短 TTL，紧接着的 `scope-get` 可能还是
+     * 写前那一份 —— 徽章会先留着又消失。摘干净之后由调用方补一次静默重拉对齐。
+     *
+     * 工作区粒度下认领是**按工作区**记的：放掉一个对话等于放掉整个工作区，这一格里
+     * 同工作区的那些对话一起摘掉（与服务端写到的层一致）。
+     */
+    function scopeForgetLeaseSession(domain, key, sessionId) {
+      if (scopeIsSession()) return
+      var global = scopeState.global
+      if (!global) return
+      var id = String(sessionId || '')
+      var leases = global.leases || {}
+      var details = global.leaseDetails || {}
+      var domainDetails = Object.assign({}, details[domain] || {})
+      var list = Array.isArray(domainDetails[key]) ? domainDetails[key].slice() : []
+      if (list.length === 0) return
+      var found = false
+      var cwd = ''
+      list.forEach(function (d) {
+        if (found) return
+        if (String((d && d.id) || '') === id) { found = true; cwd = String((d && d.cwd) || '') }
+      })
+      if (!found) return
+      var keep = list.filter(function (d) {
+        if (String((d && d.id) || '') === id) return false
+        if (scopeIsWorkspace() && cwd !== '' && String((d && d.cwd) || '') === cwd) return false
+        return true
+      })
+      var domainLeases = Object.assign({}, leases[domain] || {})
+      if (keep.length > 0) {
+        domainDetails[key] = keep
+        domainLeases[key] = keep.length
+      } else {
+        delete domainDetails[key]
+        delete domainLeases[key]
+      }
+      var nextLeases = Object.assign({}, leases)
+      nextLeases[domain] = domainLeases
+      var nextDetails = Object.assign({}, details)
+      nextDetails[domain] = domainDetails
+      setScopeState({ global: Object.assign({}, global, { leases: nextLeases, leaseDetails: nextDetails }) })
+    }
     /** 有多少个会话 / 工作区进入了场景（全局层专用；会话层返回 0）。传场景名只数那一个。 */
     function scopeSceneLeaseCount(sceneName) {
       if (scopeIsSession()) return 0
