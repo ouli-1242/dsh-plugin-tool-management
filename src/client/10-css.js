@@ -162,6 +162,8 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+/* 中性标签：灰边框 + 主色字（用户 2026-11-06：MCP 的「未运行」不该是红的 —— 没跑起来不是故障）。 */
+.dsm-tag-quiet{border-color:var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}
 /* 租约浮窗（悬在「临时运行 · N 个对话」徽章上）：按工作区分组列出是**哪几个对话**在用它。
    固定定位 + 视口坐标 —— 徽章所在的列表行是 overflow:hidden，绝对定位会被裁掉
    （与 SourceSelect 的菜单同一条理由）。 */

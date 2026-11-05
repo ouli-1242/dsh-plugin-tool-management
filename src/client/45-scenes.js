@@ -1091,7 +1091,7 @@
                   name: server.name,
                   desc: desc,
                   meta: [
-                    server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-off' }, t('scenes.mcp.notRunning')),
+                    server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-quiet' }, t('scenes.mcp.notRunning')),
                     specText ? React.createElement('span', { key: 'spec' }, specText) : null,
                     hasNote ? React.createElement('span', { key: 'note', className: 'dsm-tag' }, t('scenes.mcp.hasNote')) : null,
                   ],
@@ -2235,11 +2235,13 @@
                       key: 'menu',
                       label: t('row.menu', { name: label }),
                       items: [
-                        ...(scopeIsSession() || scopeSceneLeaseCount(name) <= 0 ? [] : [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || sceneStats.locked > 0, title: sceneStats.locked > 0 ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setModal({ type: 'scene-stop', name: name }) } }]),
                         { key: 'edit', label: t('scenes.row.edit'), disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { openEditor(scene) } },
                       ].concat(locked ? [] : [
                         { key: 'delete', label: t('scenes.row.delete'), danger: true, disabled: busy || sceneLocked, title: sceneLocked ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setModal({ type: 'scene-delete', name: name }) } },
-                      ]),
+                      ]).concat(
+                        // 「全部关闭」放在最后（删除下面）：它是停机动作（用户 2026-11-06）。
+                        scopeIsSession() || scopeSceneLeaseCount(name) <= 0 ? [] : [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || sceneStats.locked > 0, title: sceneStats.locked > 0 ? t('scenes.lock.blockedEdit') : undefined, onClick: function () { setModal({ type: 'scene-stop', name: name }) } }],
+                      ),
                     })))
               })),
             modal && modal.type === 'scene-delete' ? React.createElement(Modal, { key: 'sdel', className: 'dsm-modal-sm', title: t('memory.deleteScene.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },

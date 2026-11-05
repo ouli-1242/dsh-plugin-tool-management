@@ -636,9 +636,10 @@
                   // 「编辑」在锁定态**照常可点**（用户 2026-10-12：「场景锁定下改成子智能体、
                   // 提示词、记忆可以打开编辑页面，但是不能保存」）：只读地看一眼内容不该被锁挡住，
                   // 真正写盘的那一步（弹窗里的保存键）才置灰。其余会写盘的动作照旧置灰。
-                  ...(scopeLeaseCount('memory', String(r.id)) > 0 ? [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || scopeWriteLocked(anyLocked), onClick: function () { setModal({ type: 'stop', rule: r }) } }] : []),
                   { key: 'edit', label: t('memory.edit'), disabled: busy || shadowed, onClick: function () { openEditor(r) } },
                   { key: 'delete', label: t('memory.delete'), danger: true, disabled: busy || shadowed || anyLocked, onClick: function () { setModal({ type: 'delete', rule: r }) } },
+                  // 「全部关闭」放在最后（删除下面）：它是停机动作（用户 2026-11-06）。
+                  ...(scopeLeaseCount('memory', String(r.id)) > 0 ? [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || scopeWriteLocked(anyLocked), onClick: function () { setModal({ type: 'stop', rule: r }) } }] : []),
                 ],
               })],
             })

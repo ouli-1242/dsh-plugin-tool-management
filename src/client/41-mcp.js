@@ -990,12 +990,13 @@
               key: 'menu',
               label: mt('row.menu', { name: row.serverName }),
               items: [
-                // 全局层的「统一关闭」：只在真有其他对话 / 工作区在临时用它时出现（没有租约时
-                // 普通开关就能停，菜单不必多一项）。它是一次性动作，不在菜单里留「恢复启用」。
-                // 会话层没有这一项 —— 会话只能"看不到它"，停整台机器是全局动作。
-                ...(scopeIsSession() || scopeLeaseCount('mcp', String(row.serverName || row.id)) <= 0 ? [] : [{ key: 'intent-stop', label: mt('mcp.intent.stop'), danger: true, disabled: actDisabled, onClick: () => setStopConfirm(row) }]),
                 { key: 'edit', label: mt('mcp.btn.edit'), disabled: actDisabled, onClick: () => openEdit(row) },
                 { key: 'remove', label: mt('mcp.btn.remove'), danger: true, disabled: actDisabled, onClick: () => setConfirmRow(row) },
+                // 全局层的「全部关闭」：只在真有其他对话 / 工作区在临时用它时出现（没有租约时
+                // 普通开关就能停，菜单不必多一项）。它是一次性动作，不在菜单里留「恢复启用」。
+                // 会话层没有这一项 —— 会话只能"看不到它"，停整台机器是全局动作。
+                // 放在**最后**（删除下面）：它是停机动作，不是这一行的日常操作（用户 2026-11-06）。
+                ...(scopeIsSession() || scopeLeaseCount('mcp', String(row.serverName || row.id)) <= 0 ? [] : [{ key: 'intent-stop', label: mt('mcp.intent.stop'), danger: true, disabled: actDisabled, onClick: () => setStopConfirm(row) }]),
               ],
             }))
             return React.createElement(ListRow, {
@@ -2116,9 +2117,10 @@
                   key: 'menu',
                   label: t('row.menu', { name: p.id }),
                   items: [
-                    ...(scopeLeaseCount('quickPrompts', p.id) > 0 ? [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy !== null || state.anyLocked === true, onClick: function () { setQuickStop({ id: p.id }) } }] : []),
                     { key: 'edit', label: t('agm.btn.edit'), disabled: busy !== null || scopeIsSession(), title: scopeIsSession() ? promptBlockTitle : undefined, onClick: function () { openQuickEdit(p) } },
                     { key: 'delete', label: t('agm.btn.delete'), danger: true, disabled: busy !== null || promptWriteBlocked, title: promptWriteBlocked ? promptBlockTitle : undefined, onClick: function () { setQuickConfirm({ id: p.id }) } },
+                    // 「全部关闭」放在最后（删除下面）：它是停机动作（用户 2026-11-06）。
+                    ...(scopeLeaseCount('quickPrompts', p.id) > 0 ? [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy !== null || state.anyLocked === true, onClick: function () { setQuickStop({ id: p.id }) } }] : []),
                   ],
                 }),
               ],

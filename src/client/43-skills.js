@@ -553,9 +553,10 @@
         var actions = [];
         var menuItems = [];
         var stopLease = scopeLeaseCount('skills', skillKey);
-        if (stopLease > 0) menuItems.push({ key: "stop", label: t("scope.unifiedClose"), danger: true, disabled: busy || scopeWriteLocked(anyLocked), onClick: function () { setModal({ type: "skill-stop-confirm", key: skillKey, name: skillName }); } });
         if (root.mutable === true && !skill.shadowedBy) menuItems.push({ key: "edit", label: t("btn.edit"), disabled: busy || anyLocked, onClick: function () { openSkillEdit(root, skill); } });
         if (root.deletable === true) menuItems.push({ key: "trash", label: t("btn.trash"), danger: true, disabled: busy || anyLocked, onClick: function () { setModal({ type: "trash-confirm", root: root.key, name: skill.name }); } });
+        // 「全部关闭」放在最后（删除下面）：它是停机动作（用户 2026-11-06）。
+        if (stopLease > 0) menuItems.push({ key: "stop", label: t("scope.unifiedClose"), danger: true, disabled: busy || scopeWriteLocked(anyLocked), onClick: function () { setModal({ type: "skill-stop-confirm", key: skillKey, name: skillName }); } });
         /**
          * 「启用这个」写的是「同名技能该用哪个**来源**」的首选表（`/prefer` →
          * `preferredSkills[名] = 来源 key`，`shadowedBy.root === 本行来源` 即表示撞名发生在

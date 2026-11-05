@@ -822,9 +822,10 @@
                       key: 'menu',
                       label: t('row.menu', { name: p.name }),
                       items: [
-                        ...(scopeLeaseCount('subagents', String(p.name)) > 0 ? [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || anyLocked, onClick: function () { setModal({ type: 'stop', name: p.name }) } }] : []),
                         { key: 'edit', label: t('memory.edit'), disabled: busy, onClick: function () { openEditor(p.name) } },
                         { key: 'delete', label: t('memory.delete'), danger: true, disabled: busy || anyLocked, onClick: function () { setModal({ type: 'delete', name: p.name }) } },
+                        // 「全部关闭」放在最后（删除下面）：它是停机动作（用户 2026-11-06）。
+                        ...(scopeLeaseCount('subagents', String(p.name)) > 0 ? [{ key: 'stop', label: t('scope.unifiedClose'), danger: true, disabled: busy || anyLocked, onClick: function () { setModal({ type: 'stop', name: p.name }) } }] : []),
                       ],
                     }),
                   ],
