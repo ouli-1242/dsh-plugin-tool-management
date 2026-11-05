@@ -165,14 +165,14 @@ button.dsm-qty:disabled{cursor:default}
 /* 租约浮窗（悬在「临时运行 · N 个对话」徽章上）：按工作区分组列出是**哪几个对话**在用它。
    固定定位 + 视口坐标 —— 徽章所在的列表行是 overflow:hidden，绝对定位会被裁掉
    （与 SourceSelect 的菜单同一条理由）。 */
-.dsm-lease-pop{position:fixed;z-index:1200;box-sizing:border-box;width:max-content;max-width:min(92vw,720px);padding:8px 10px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:normal;text-align:left}
+.dsm-lease-pop{position:fixed;z-index:1200;box-sizing:border-box;width:max-content;max-width:min(92vw,720px);padding:10px 12px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;white-space:normal;text-align:left}
 /* 组头 = 工作区（白、稍重）：它是"哪个项目在用它"；组内每行一个对话（灰、缩进）。 */
-.dsm-lease-pop-group+.dsm-lease-pop-group{margin-top:8px}
-.dsm-lease-pop-ws{color:var(--dsw-alias-label-primary);font-weight:600}
-.dsm-lease-pop-item{display:flex;gap:8px;align-items:center;padding-left:10px}
-.dsm-lease-pop-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap}
+.dsm-lease-pop-group+.dsm-lease-pop-group{margin-top:10px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-lease-pop-ws{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:20px}
+.dsm-lease-pop-item{display:flex;gap:10px;align-items:center;min-height:24px;padding-left:12px}
+.dsm-lease-pop-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;text-overflow:ellipsis;white-space:nowrap}
 /* 每行末尾那颗「×」：只放开这一个对话的临时运行，其余对话照旧（认领是逐个对话记的）。 */
-.dsm-lease-pop-x{flex:none;box-sizing:border-box;width:20px;height:20px;padding:0;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:14px;line-height:20px;cursor:pointer}
+.dsm-lease-pop-x{flex:none;box-sizing:border-box;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:16px;line-height:24px;cursor:pointer}
 .dsm-lease-pop-x:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsm-lease-pop-x:disabled{cursor:default;opacity:.5}
 /* 开关与官方同款（用户 2026-10-18：「switch 按键统一和官方一样的模板」→「改成完全一样」）：

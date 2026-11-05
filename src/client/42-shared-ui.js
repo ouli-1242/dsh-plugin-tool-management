@@ -1905,7 +1905,7 @@ function enabledMemoryCount(rules) {
       return h('span', { className: 'dsm-tag' + tone, title: props.title }, props.text)
     }
     /** 租约浮窗的最大高度（`measure` 与 CSS 共用同一个上限）。 */
-    var LEASE_POP_MAX_H = 240
+    var LEASE_POP_MAX_H = 320
     /**
      * 浮窗里的分组：按**工作区**归拢，同一个工作区的对话挨在一起。
      *
@@ -2016,7 +2016,7 @@ function enabledMemoryCount(rules) {
         if (!el) return
         var box = el.getBoundingClientRect()
         var gap = 6
-        var need = Math.min(details.length * 22 + 40, LEASE_POP_MAX_H)
+        var need = Math.min(details.length * 26 + 56, LEASE_POP_MAX_H)
         var below = window.innerHeight - box.bottom - gap - 8
         var above = box.top - gap - 8
         var nextUp = below < need && above > below
@@ -2026,7 +2026,7 @@ function enabledMemoryCount(rules) {
           left: Math.max(8, Math.min(box.left, window.innerWidth - width - 8)),
           top: nextUp ? null : box.bottom + gap,
           bottom: nextUp ? window.innerHeight - box.top + gap : null,
-          maxHeight: Math.max(96, Math.min(need, nextUp ? above : below)),
+          maxHeight: Math.max(120, Math.min(need, nextUp ? above : below)),
         }
         // 位置没变就别换新对象（滚动时每次都换会让整个浮窗重渲染一遍）。
         setPos(function (prev) {
