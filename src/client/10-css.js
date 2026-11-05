@@ -953,6 +953,9 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 /* 单行版（compact）：名字与描述并排一行，描述吃掉余量并截断 —— 一屏多看一半条目
    （场景档案的四个集，user 2026-11-06）。 */
 .dsm-rowselect-compact .dsm-rowselect-main{flex-direction:row;align-items:baseline;gap:8px}
+/* 单行版里**名字不缩**（用户 2026-11-06：「标题名字要全部展示」）—— 挤掉的是描述，
+   不是名字。 */
+.dsm-rowselect-compact .dsm-rowselect-name{flex:none}
 .dsm-rowselect-compact .dsm-rowselect-desc{min-width:0;flex:1 1 auto}
 .dsm-rowselect-name{overflow:hidden;font-size:13px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-rowselect-desc{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
