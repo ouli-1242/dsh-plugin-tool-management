@@ -1138,8 +1138,7 @@
                     React.createElement('div', { className: 'dsm-budget-meta' },
                       React.createElement('span', { className: 'dsm-label' }, t('scenes.mcp.noteLabel')),
                       React.createElement('span', { className: 'dsm-char-count' + (String(noteVal || '').length > MCP_NOTE_MAX ? ' dsm-char-over' : '') }, String(noteVal || '').length + ' / ' + MCP_NOTE_MAX)),
-                    React.createElement('input', { className: 'dsm-control', type: 'text', value: noteVal, maxLength: MCP_NOTE_MAX, placeholder: t('scenes.mcp.notePlaceholder'), onChange: function (e) { setMcpNote(server, e.target.value) } }),
-                    React.createElement('p', { className: 'dsm-help' }, t('scenes.mcp.noteHint'))),
+                    React.createElement('input', { className: 'dsm-control', type: 'text', value: noteVal, maxLength: MCP_NOTE_MAX, placeholder: t('scenes.mcp.notePlaceholder'), onChange: function (e) { setMcpNote(server, e.target.value) } })),
                   React.createElement('div', { className: 'dsm-field' },
                     React.createElement('div', { className: 'dsm-mcp-edit-tools-head' },
                       React.createElement('label', { className: 'dsm-label' }, t('scenes.mcp.toolsOf')),
@@ -1166,8 +1165,7 @@
                             React.createElement('div', { className: 'dsm-pick-empty' }, t('scenes.mcp.noTools')),
                             modal.drillError ? React.createElement('div', { className: 'dsm-seg-empty-error' }, modal.drillError) : null,
                             React.createElement('div', { className: 'dsm-seg-empty-actions' },
-                              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: drillTools === null, onClick: probeMcpTools }, t('scenes.mcp.probeTools')))),
-                    React.createElement('div', { className: 'dsm-seg-foot' }, t('scenes.mcp.drillHint')))))
+                              React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: drillTools === null, onClick: probeMcpTools }, t('scenes.mcp.probeTools')))))))
           }
           /** 段 2：技能集。 */
           /**
