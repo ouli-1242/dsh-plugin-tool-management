@@ -361,7 +361,7 @@ export function scanSessionClaims(input: ClaimScanInput): ClaimScanResult {
 }
 
 /**
- * 认领者名单（徽章浮窗用）：键 → 那些对话（标题 + 工作区）。
+ * 认领者名单（徽章浮窗用）：键 → 那些对话（标题 + 工作区 + 落在哪几格）。
  *
  * 徽章只说"临时运行 · N 个对话"，用户要问的是"是哪几个"—— 这一份就是答案。
  * 与 `claims` 同源：个数与名单永远一致（同一批会话 id）。
@@ -371,23 +371,80 @@ export function scanSessionClaims(input: ClaimScanInput): ClaimScanResult {
  *
  * @param claims 键 → 认领会话 id（`scanSessionClaims` 的 `claims`）。
  * @param rows 会话 id → 那一行的标题与工作区目录。
+ * @param domain 这一格的域（写进 `keys`，界面照着它写会话层的覆盖）。
  */
 export function leaseSessionDetails(
+  domain: string,
   claims: ReadonlyMap<string, readonly string[]>,
   rows: ReadonlyMap<string, { title?: string; cwd?: string }>,
 ): Record<string, LeaseSessionDetail[]> {
   const out: Record<string, LeaseSessionDetail[]> = {}
   for (const [key, ids] of claims) {
-    out[key] = ids.map((id) => {
-      const row = rows.get(id)
-      return {
-        id,
-        title: row !== undefined && typeof row.title === 'string' && row.title !== '' ? row.title : id.slice(0, 8),
-        cwd: row !== undefined && typeof row.cwd === 'string' ? row.cwd : '',
-      }
-    })
+    out[key] = ids.map((id) => ({
+      id,
+      title: leaseTitleOf(id, rows),
+      cwd: leaseCwdOf(id, rows),
+      keys: [{ domain, key }],
+    }))
   }
   return out
+}
+
+/**
+ * **来源格**的认领者名单：来源自己 + 它底下那些技能各自认领的对话（**并集**）。
+ *
+ * 为什么是并集：官方内置 / DSH 技能这类**默认来源没有来源级开关**，租约只落在底下的
+ * 技能上；而技能要加载就得让来源开着 —— 所以"这个来源里还有几个对话在临时运行"正是
+ * 这个并集。少了它，默认来源的组头永远是干净的（用户 2026-11-05 报障）。
+ *
+ * `keys` 记下这一条认领**具体落在哪几格**：来源那一格 + 底下那些技能各自的键。界面那颗
+ * 「×」照着它写会话层的覆盖，不必自己再猜一遍。
+ *
+ * @param sourceClaims 来源 → 认领会话 id。
+ * @param skillClaims 技能键（`<来源>/<技能名>`）→ 认领会话 id。
+ * @param rows 会话 id → 那一行的标题与工作区目录。
+ */
+export function leaseSourceDetails(
+  sourceClaims: ReadonlyMap<string, readonly string[]>,
+  skillClaims: ReadonlyMap<string, readonly string[]>,
+  rows: ReadonlyMap<string, { title?: string; cwd?: string }>,
+): Record<string, LeaseSessionDetail[]> {
+  const out: Record<string, LeaseSessionDetail[]> = {}
+  for (const [root, ids] of sourceClaims) {
+    out[root] = ids.map((id) => ({
+      id,
+      title: leaseTitleOf(id, rows),
+      cwd: leaseCwdOf(id, rows),
+      keys: [{ domain: 'skillSources', key: root }],
+    }))
+  }
+  for (const [skillKey, ids] of skillClaims) {
+    const slash = skillKey.indexOf('/')
+    if (slash <= 0) continue
+    const root = skillKey.slice(0, slash)
+    const list = out[root] ?? (out[root] = [])
+    for (const id of ids) {
+      let row = list.find((item) => item.id === id)
+      if (row === undefined) {
+        row = { id, title: leaseTitleOf(id, rows), cwd: leaseCwdOf(id, rows), keys: [] }
+        list.push(row)
+      }
+      row.keys.push({ domain: 'skills', key: skillKey })
+    }
+  }
+  return out
+}
+
+/** 认领者的标题：清单里有就用它，没有就回落到短 id（不编）。 */
+function leaseTitleOf(id: string, rows: ReadonlyMap<string, { title?: string }>): string {
+  const row = rows.get(id)
+  return row !== undefined && typeof row.title === 'string' && row.title !== '' ? row.title : id.slice(0, 8)
+}
+
+/** 认领者的工作区目录：清单里没有就是空串（它不属于任何工作区）。 */
+function leaseCwdOf(id: string, rows: ReadonlyMap<string, { cwd?: string }>): string {
+  const row = rows.get(id)
+  return row !== undefined && typeof row.cwd === 'string' ? row.cwd : ''
 }
 
 /** 对账输入的一行（MCP 服务器或技能来源）。 */

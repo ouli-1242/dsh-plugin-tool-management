@@ -922,6 +922,7 @@
         "scope.lease.releaseWorkspace": "不再让这个工作区临时运行它（同工作区的对话一起不再用）",
         "scope.lease.released": "已让「{title}」不再临时运行",
         "scope.lease.releaseFailed": "没能让「{title}」停止临时运行：{error}",
+        "scope.lease.unknownError": "原因未说明",
       },
       en: {
         "title": "Skills", "desc": "Manage skills: enable, import, create, trash.", "link.project": "GitHub", "link.feedback": "Issues",
@@ -1815,6 +1816,7 @@
         "scope.lease.releaseWorkspace": "Stop it from running for this workspace (its conversations stop too)",
         "scope.lease.released": "“{title}” no longer runs it temporarily",
         "scope.lease.releaseFailed": "Could not stop the temporary run for “{title}”: {error}",
+        "scope.lease.unknownError": "no reason given",
         "scope.intent.keptRunning": "Disabled globally; {count} conversation(s) still use it, so the source stays enabled for them.",
         "scope.intent.onOk": "Enabled “{name}” globally.", "scope.intent.offOk": "Disabled “{name}” globally.",
         "scope.intent.resume": "Turn back on",

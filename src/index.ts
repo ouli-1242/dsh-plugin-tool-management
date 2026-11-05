@@ -96,6 +96,7 @@ import {
   intentOf,
   isIntentDomain,
   leaseSessionDetails,
+  leaseSourceDetails,
   planReconcile,
   pruneIntentKeys,
   resolveResource,
@@ -3015,10 +3016,16 @@ export default {
       for (const row of leaseRows) leaseRowById.set(row.id, row)
       const leaseDetails: Partial<Record<ScopeFlagDomain, Record<string, LeaseSessionDetail[]>>> = {}
       for (const domain of SCOPE_FLAG_DOMAINS) {
+        if (domain === 'skillSources') continue
         const claims = leaseScan.claims[domain]
         if (claims.size === 0) continue
-        leaseDetails[domain] = leaseSessionDetails(claims, leaseRowById)
+        leaseDetails[domain] = leaseSessionDetails(domain, claims, leaseRowById)
       }
+      // 来源格：**并集**（来源自己 + 它底下那些技能各自认领的对话）。默认来源（官方内置 /
+      // DSH 技能）全局开着、租约只落在底下的技能上 —— 组头不标的话，用户只会在某一行技能
+      // 上看到徽章（用户 2026-11-05 报障）。
+      const sourceDetails = leaseSourceDetails(leaseScan.claims.skillSources, leaseScan.claims.skills, leaseRowById)
+      if (Object.keys(sourceDetails).length > 0) leaseDetails.skillSources = sourceDetails
       // 场景页的「全部关闭」：只数**会话层进入过场景**的未归档会话 / 工作区。全局正在用的
       // 那个场景是全局设置，不算临时运行；没有场景覆盖时连会话清单都不读。
       let sceneLeases = 0

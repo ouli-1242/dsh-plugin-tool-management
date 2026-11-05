@@ -894,6 +894,13 @@ export interface LeaseSessionDetail {
   title: string
   /** 会话所在工作区的路径（cwd）；空串 = 这个会话没挂在任何工作区下。 */
   cwd: string
+  /**
+   * 这一条认领**具体落在哪几格**（域 + 键）。
+   *
+   * 界面那颗「×」照着这份写会话层的覆盖 —— 它不必自己再猜一遍"这个对话到底认领了
+   * 来源本身还是它底下的某条技能"（默认来源根本没有来源那一格）。
+   */
+  keys: Array<{ domain: string; key: string }>
 }
 
 /** 全局快照里本插件认识的那一份（`scene` 是当前场景名，`flags` 是各域各键的全局开关）。 */

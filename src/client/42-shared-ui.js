@@ -1912,27 +1912,33 @@ function enabledMemoryCount(rules) {
      * 为什么按工作区分组（用户 2026-11-05）：认领是逐个对话记的，但用户找的是"哪个项目
      * 在用它" —— 同一个工作区的那几个对话排成一块，才看得出"是这个项目在跑"。
      * 组内按标题排；没有工作区的那些排在最后（它们不属于任何项目）。
+     *
+     * 分组键取**归一化**过的路径（小写、去尾分隔符）：同一个目录在清单里可能写成
+     * `C:\a\b` 与 `c:\a\b\` 两种样子 —— 不归一就会分成两块，组头还同名（用户 2026-11-05 实测）。
      */
     function leaseGroups(details) {
       var byCwd = Object.create(null)
       var order = []
+      var nameOf = Object.create(null)
       details.forEach(function (d) {
         var cwd = String((d && d.cwd) || '')
-        if (!byCwd[cwd]) { byCwd[cwd] = []; order.push(cwd) }
-        byCwd[cwd].push(d)
+        var key = cwd.replace(/[\\/]+$/, '').toLowerCase()
+        if (!byCwd[key]) { byCwd[key] = []; order.push(key) }
+        byCwd[key].push(d)
+        if (cwd !== '' && nameOf[key] === undefined) nameOf[key] = cwd
       })
       order.sort(function (a, b) {
         if (a === '') return 1
         if (b === '') return -1
         return a < b ? -1 : a > b ? 1 : 0
       })
-      return order.map(function (cwd) {
-        var rows = byCwd[cwd].slice().sort(function (x, y) {
+      return order.map(function (key) {
+        var rows = byCwd[key].slice().sort(function (x, y) {
           var xt = String((x && x.title) || '')
           var yt = String((y && y.title) || '')
           return xt < yt ? -1 : xt > yt ? 1 : 0
         })
-        return { cwd: cwd, rows: rows }
+        return { cwd: nameOf[key] === undefined ? '' : nameOf[key], rows: rows }
       })
     }
     /**
@@ -1988,20 +1994,19 @@ function enabledMemoryCount(rules) {
         if (busyId !== null) return
         var id = String((d && d.id) || '')
         var name = String((d && d.title) || id)
-        // 一个对话可能同时认领着来源和它底下的技能（来源格算的是并集）：一次全放掉。
-        var claims = scopeLeaseClaimsOf(props.domain, props.key, id)
-        if (claims.length === 0) {
-          showPluginToast(t('scope.lease.releaseFailed', { title: name, error: '?' }), 'err')
-          return
-        }
+        // 这一条认领落在哪几格，由**服务端**随名单一起给（`keys`）—— 来源格可能是"来源
+        // 自己 + 底下那几条技能"，客户端不必（也不该）自己再猜一遍。
+        var keys = (d && Array.isArray(d.keys) && d.keys.length > 0)
+          ? d.keys
+          : [{ domain: props.domain, key: props.key }]
         setBusyId(id)
-        claims.reduce(function (chain, claim) {
+        keys.reduce(function (chain, k) {
           return chain.then(function () {
-            return apiCall('scope-set', { sessionId: id, domain: claim.domain, key: claim.key, value: false })
+            return apiCall('scope-set', { sessionId: id, domain: String(k.domain), key: String(k.key), value: false })
           })
         }, Promise.resolve()).then(function (res) {
           if (!res || res.ok === false) {
-            showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(res) || '?' }), 'err')
+            showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(res) || t('scope.lease.unknownError') }), 'err')
             return
           }
           // 本地先把这一条摘掉（全局快照有 150ms TTL，紧接着的重拉可能还是写前那一份）。
@@ -2009,7 +2014,7 @@ function enabledMemoryCount(rules) {
           showPluginToast(t('scope.lease.released', { title: name }), 'ok')
           setTimeout(function () { refreshScope({ silent: true }) }, 400)
         }).catch(function (e) {
-          showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(e) || '?' }), 'err')
+          showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(e) || t('scope.lease.unknownError') }), 'err')
         }).then(function () { setBusyId(null) })
       }
       /**
