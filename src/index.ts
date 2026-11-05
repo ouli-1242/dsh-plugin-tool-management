@@ -89,7 +89,7 @@ import { buildTrashRetentionOps } from './ops/trash-retention.js'
 // 会话作用域：侧车 scope-overrides.json / scope-intent.json + 作用域 op + 启动对账。
 import { rememberSessionCwd, scopeKeyOfAgent, scopeKeyOfIdSync, sessionIdentityOf, sessionIdOf, sessionScopeIdOf } from './scope/resolve.js'
 import { createScopeStore } from './scope/store.js'
-import { isWorkspaceScopeKey, scopeKeyLabel, workspaceScopeKeyOf } from './scope/workspace-key.js'
+import { isWorkspaceScopeKey, scopeKeyLabel, workspaceCwdOfScopeKey, workspaceScopeKeyOf } from './scope/workspace-key.js'
 import { createIntentStore } from './scope/intent-store.js'
 import {
   effectiveLayerOf,
@@ -3030,6 +3030,8 @@ export default {
       // 那个场景是全局设置，不算临时运行；没有场景覆盖时连会话清单都不读。
       let sceneLeases = 0
       const sceneLeaseCounts: Record<string, number> = Object.create(null)
+      /** 按场景拆开的**进入者**（徽章浮窗逐行列出是哪些对话 / 工作区在这个场景里）。 */
+      const sceneLeaseDetails: Record<string, LeaseSessionDetail[]> = Object.create(null)
       try {
         const overrides = await scopeStore.read()
         const sceneIds = Object.entries(overrides.sessions)
@@ -3038,11 +3040,23 @@ export default {
         if (sceneIds.length > 0) {
           const rows = await scopeSessionRows()
           const archived = new Set(rows.filter((row) => row.archived === true).map((row) => row.id))
+          const rowById = new Map(rows.map((row) => [row.id, row] as const))
           for (const id of sceneIds) {
             if (archived.has(id)) continue
             const name = String(overrides.sessions[id].scene)
             sceneLeaseCounts[name] = (sceneLeaseCounts[name] || 0) + 1
             sceneLeases += 1
+            // 谁在这个场景里（徽章浮窗逐行列出）：会话键取清单里的标题与工作区；工作区键
+            // 取目录名 —— 这一层记的是**作用域**，工作区粒度下一格就是整个工作区。
+            const row = rowById.get(id)
+            const cwd = isWorkspaceScopeKey(id)
+              ? String(workspaceCwdOfScopeKey(id) || '')
+              : (row !== undefined && typeof row.cwd === 'string' ? row.cwd : '')
+            const title = row !== undefined && row.title !== ''
+              ? row.title
+              : (cwd !== '' ? basename(cwd) : id.slice(0, 8))
+            const list = sceneLeaseDetails[name] || (sceneLeaseDetails[name] = [])
+            list.push({ id, title, cwd, keys: [{ domain: 'scene', key: name }] })
           }
         }
       } catch { /* 读不到 = 没有临时场景 */ }
@@ -3065,6 +3079,7 @@ export default {
         leaseDetails,
         sceneLeases,
         sceneLeaseCounts,
+        sceneLeaseDetails,
       }
     }
 

@@ -963,6 +963,12 @@ export interface ScopeGlobalSnapshot {
   sceneLeases?: number
   /** 按场景拆开的进入数（键 = 场景名）：行菜单的「统一关闭」只在那一场有临时运行时出现。 */
   sceneLeaseCounts?: Record<string, number>
+  /**
+   * 按场景拆开的**进入者**（键 = 场景名）：徽章浮窗逐行列出是哪些对话 / 工作区在这个场景里。
+   *
+   * 与 `sceneLeaseCounts` 同源同拍（同一批作用域键），因此个数与名单永远一致。
+   */
+  sceneLeaseDetails?: Record<string, LeaseSessionDetail[]>
 }
 
 /**

@@ -1950,7 +1950,7 @@ function enabledMemoryCount(rules) {
      * 浮窗用 `position:fixed` + **视口坐标**：徽章所在的列表行是 `overflow:hidden`
      * （`.dsm-listrow-meta`），绝对定位的浮层会被裁掉（与 `SourceSelect` 的菜单同一条理由）。
      *
-     * @param {{ t: Function, count: number, runtime: boolean, domain: string, key: string, details: Array<{id?: string, title?: string, cwd?: string}> }} props
+     * @param {{ t: Function, count: number, runtime: boolean, domain: string, key: string, details: Array<{id?: string, title?: string, cwd?: string, keys?: Array<{domain: string, key: string}>}>, onRelease?: Function }} props
      */
     function LeaseTagBadge(props) {
       var t = props.t
@@ -1994,6 +1994,11 @@ function enabledMemoryCount(rules) {
         if (busyId !== null) return
         var id = String((d && d.id) || '')
         var name = String((d && d.title) || id)
+        // 调用方自带放掉动作时用它（场景层要的是"退出场景"，不是"关掉某一格"）。
+        if (typeof props.onRelease === 'function') {
+          props.onRelease(d)
+          return
+        }
         // 这一条认领落在哪几格，由**服务端**随名单一起给（`keys`）—— 来源格可能是"来源
         // 自己 + 底下那几条技能"，客户端不必（也不该）自己再猜一遍。
         var keys = (d && Array.isArray(d.keys) && d.keys.length > 0)
@@ -2068,6 +2073,36 @@ function enabledMemoryCount(rules) {
           style.top = pos.top === null || pos.top === undefined ? 'auto' : pos.top + 'px'
           style.bottom = pos.bottom === null || pos.bottom === undefined ? 'auto' : pos.bottom + 'px'
         }
+        var groups = leaseGroups(details)
+        var releaseBtn = function (d, key) {
+          return h('button', {
+            key: key,
+            type: 'button',
+            className: 'dsm-lease-pop-x',
+            disabled: busyId !== null,
+            title: scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
+            'aria-label': scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
+            onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d) },
+          }, '×')
+        }
+        // 工作区粒度：认领是**按工作区**记的（同工作区的对话共用一份覆盖）—— 逐个列会话标题
+        // 只是噪声，列出工作区就够了（用户 2026-11-05）。
+        var body = scopeIsWorkspace()
+          ? groups.map(function (g) {
+              var d = g.rows[0]
+              return h('div', { key: 'w:' + g.cwd, className: 'dsm-lease-pop-item' },
+                h('span', { className: 'dsm-lease-pop-ws', title: g.cwd }, g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')),
+                d !== undefined ? releaseBtn(d, 'x') : null)
+            })
+          : groups.map(function (g, gi) {
+              return h('div', { key: 'g' + gi, className: 'dsm-lease-pop-group' },
+                h('div', { className: 'dsm-lease-pop-ws', title: g.cwd }, g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')),
+                g.rows.map(function (d, ri) {
+                  return h('div', { key: 'r' + ri, className: 'dsm-lease-pop-item' },
+                    h('span', { className: 'dsm-lease-pop-title', title: String((d && d.title) || '') }, String((d && d.title) || (d && d.id) || '')),
+                    releaseBtn(d, 'x'))
+                }))
+            })
         popup = h('div', {
           className: 'dsm-lease-pop',
           style: style,
@@ -2077,25 +2112,7 @@ function enabledMemoryCount(rules) {
           onMouseLeave: scheduleClose,
           // 浮窗在徽章里面：点它不该触发行上的动作。
           onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation() },
-        }, leaseGroups(details).map(function (g, gi) {
-          return h('div', { key: 'g' + gi, className: 'dsm-lease-pop-group' },
-            h('div', { className: 'dsm-lease-pop-ws', title: g.cwd }, g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')),
-            g.rows.map(function (d, ri) {
-              var title = String((d && d.title) || (d && d.id) || '')
-              return h('div', { key: 'r' + ri, className: 'dsm-lease-pop-item' },
-                h('span', { className: 'dsm-lease-pop-title', title: title }, title),
-                // 逐个放掉：只有「全部关闭」时，用户没法只让其中一个对话停下来。
-                h('button', {
-                  key: 'x',
-                  type: 'button',
-                  className: 'dsm-lease-pop-x',
-                  disabled: busyId !== null,
-                  title: scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
-                  'aria-label': scopeIsWorkspace() ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
-                  onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d) },
-                }, '×'))
-            }))
-        }))
+        }, body)
         // 浮窗挂到 `document.body` 上：留在面板里会被祖先的 `overflow:hidden` 裁掉
         // （来源卡片就是 `overflow:hidden` —— 浮窗探出去的那截被裁掉，底下一张卡片的
         // 内容透上来，就是用户看到的「穿模」，用户 2026-11-05 实测）。

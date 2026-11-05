@@ -309,6 +309,17 @@
       var n = Number(raw)
       return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
     }
+    /**
+     * 这一场有谁在用（场景层）：徽章浮窗逐行列出是哪些对话 / 工作区进入了这个场景。
+     *
+     * 与 `scopeSceneLeaseCount` 同一份服务端数据（`global.sceneLeaseDetails`），全局层才读得到。
+     */
+    function scopeSceneLeaseDetails(sceneName) {
+      if (scopeIsSession()) return []
+      var all = scopeState.global && scopeState.global.sceneLeaseDetails ? scopeState.global.sceneLeaseDetails : null
+      var list = all && typeof all === 'object' ? all[String(sceneName)] : null
+      return Array.isArray(list) ? list : []
+    }
     /** 统一关闭某个（或全部）场景后，就地改本地计数 —— 理由同 `scopeForgetLeases`。 */
     function scopeForgetSceneLeases(sceneName) {
       if (scopeIsSession()) return

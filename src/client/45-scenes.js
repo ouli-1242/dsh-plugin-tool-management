@@ -1788,6 +1788,48 @@
               scopeForgetSceneLeases(name)
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
+          /**
+           * 放掉**一个**对话的场景进入：让那个对话退出这个场景（其余对话照旧）。
+           *
+           * 写的是会话层的 scene = null（退出场景模式，回到它进入前的样子）—— 不是全局：
+           * 全局正在用的那个场景不受影响。
+           */
+          function exitSceneLease(d) {
+            var id = String((d && d.id) || '')
+            var name = String((d && d.title) || id)
+            if (id === '') return
+            apiCall('scope-set', { sessionId: id, domain: 'scene', value: null }).then(function (res) {
+              if (res && res.ok === false) {
+                showPluginToast(t('scope.lease.releaseFailed', { title: name, error: translateError(t, res) || t('scope.lease.unknownError') }), 'err')
+                return
+              }
+              showPluginToast(t('scope.lease.released', { title: name }), 'ok')
+              // 全局快照有 150ms 的短 TTL：立刻重拉可能还是写前那一份。
+              setTimeout(function () { refreshScope({ silent: true }) }, 400)
+            }).catch(function (e) {
+              showPluginToast(t('scope.lease.releaseFailed', { title: name, error: errMsg(e) || t('scope.lease.unknownError') }), 'err')
+            })
+          }
+          /**
+           * 场景行的租约徽章：几个对话 / 工作区在用这个场景（进入过）。
+           *
+           * 与其它域同一颗徽章（用户 2026-11-05：「场景缺少临时运行」）：浮窗里逐行列出是
+           * 哪几个，那颗「×」让其中一个退出这个场景。
+           */
+          function sceneLeaseTag(name) {
+            if (scopeIsSession()) return null
+            var count = scopeSceneLeaseCount(name)
+            if (!(count > 0)) return null
+            return React.createElement(LeaseTagBadge, {
+              key: 'lease',
+              t: t,
+              count: count,
+              runtime: true,
+              domain: 'scene',
+              details: scopeSceneLeaseDetails(name),
+              onRelease: exitSceneLease,
+            })
+          }
           /** 锁 / 解锁本会话的覆盖（0.21.2，决策 12）：只冻结这一层，与场景锁互不干扰。 */
           function toggleSessionLock() {
             if (busy) return
@@ -2065,7 +2107,10 @@
                       // 编辑器里一眼可改，挂在卡片上只是每行多一枚药丸。只留**出问题时**的两枚
                       //（预设不见了 / 文件里不是它）—— 那才是需要人动手的信号。
                       promptMissing ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.prompt.tag.hint') }, t('scenes.prompt.missing', { id: boundPrompt })) : null,
-                      promptMismatch ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.prompt.mismatch.hint', { id: boundPrompt }) }, t('agm.file.mismatch')) : null),
+                      promptMismatch ? React.createElement('span', { className: 'dsm-tag dsm-tag-off', title: t('scenes.prompt.mismatch.hint', { id: boundPrompt }) }, t('agm.file.mismatch')) : null,
+                      // 「临时运行 · N 个对话」：有几个对话 / 工作区进入了这一场（用户 2026-11-05：
+                      // 场景此前不挂这颗，别的域都挂 —— 同一件事两种长相）。
+                      sceneLeaseTag(name)),
                     // 描述固定第二行（用户 2026-10-18：「场景页的备注在设置页没显示，应该显示在第二行」）：
                     // 在编辑器里填的描述就是这一句，它不在卡头那一行跟名字抢宽度。没有描述也渲染，
                     // 保持每张卡同样两行高，行与行之间对得齐。
