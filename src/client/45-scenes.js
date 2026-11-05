@@ -695,6 +695,8 @@
                 name: m.name,
                 desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
                 descTitle: m.description || null,
+                // 单行：与下面的真记忆同一形状（用户 2026-11-06）。
+                compact: true,
                 meta: React.createElement(React.Fragment, null,
                   React.createElement('span', { className: 'dsm-tag', title: t('scenes.mem.pendingTagTitle') }, t('scenes.mem.pendingTag')),
                   attachMark((m.files || []).length, (m.files || []).reduce(function (sum, f) { return sum + Number(f.size || 0) }, 0))),
@@ -722,6 +724,8 @@
                 // 记忆描述是自由正文的首行，可能很长：截断到 MEM_DESC_MAX，全文放 title。
                 desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
                 descTitle: m.description || null,
+                // 单行：描述排在名字右边（用户 2026-11-06）。
+                compact: true,
                 // 带附件的 bundle 记忆标一枚回形针 + 个数（见 attachMark）。
                 meta: attachMark(m.attach && m.attach.count, m.attach && m.attach.bytes),
                 onChange: function () { toggleMemory(String(m.id)) },
@@ -1090,6 +1094,8 @@
                   checked: selected,
                   name: server.name,
                   desc: desc,
+                  // 单行：名字与工具数并排，标签与「编辑」在右边 —— 一屏多看几台（用户 2026-11-06）。
+                  compact: true,
                   meta: [
                     server.live ? null : React.createElement('span', { key: 'nr', className: 'dsm-tag dsm-tag-quiet' }, t('scenes.mcp.notRunning')),
                     specText ? React.createElement('span', { key: 'spec' }, specText) : null,
@@ -1407,6 +1413,8 @@
                         checked: sections.subagents.indexOf(item.name) >= 0,
                         name: item.name,
                         desc: item.description || null,
+                        // 单行：描述截断排在名字右边（全文在悬浮里），一屏多看几条（用户 2026-11-06）。
+                        compact: true,
                         // 按模式配的工具限制摘要（没配就不显示）：场景改不了会话的模式，
                         // 但要让用户看得见"这条人设在某些模式下是被限工具的"。
                         meta: personaRuleSummary(item),

@@ -340,13 +340,16 @@
      * 行才是可点目标；14px 的框是纯视觉（aria-hidden），给它挂 role 只会造出第二个
      * 不可聚焦的 checkbox。动作槽里的按钮自己 stopPropagation，点动作不翻勾。
      * props：checked / disabled / name / desc / descTitle / meta / actions / onChange / key。
+     * `compact`：**单行版** —— 名字与描述并排一行（描述截断，全文在 descTitle 里）。场景
+     * 档案的四个集用它：一屏能多看一半条目（用户 2026-11-06：「这样能展示更多条」）。
      * 2026-10-11 切片五从 42 片上移：快照导入预览（兼容页）也要用行选择。
      */
     function RowSelect(props) {
       var disabled = props.disabled === true
       var toggle = function () { if (!disabled && props.onChange) props.onChange() }
       return h('div', {
-        className: 'dsm-rowselect' + (props.checked ? ' dsm-rowselect-on' : '') + (disabled ? ' dsm-rowselect-disabled' : ''),
+        className: 'dsm-rowselect' + (props.checked ? ' dsm-rowselect-on' : '') + (disabled ? ' dsm-rowselect-disabled' : '') + (props.compact ? ' dsm-rowselect-compact' : ''),
+
         role: 'checkbox', 'aria-checked': props.checked === true, 'aria-disabled': disabled || undefined,
         tabIndex: disabled ? -1 : 0,
         onClick: toggle,
