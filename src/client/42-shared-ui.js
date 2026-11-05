@@ -1988,22 +1988,29 @@ function enabledMemoryCount(rules) {
         if (busyId !== null) return
         var id = String((d && d.id) || '')
         var name = String((d && d.title) || id)
+        // 一个对话可能同时认领着来源和它底下的技能（来源格算的是并集）：一次全放掉。
+        var claims = scopeLeaseClaimsOf(props.domain, props.key, id)
+        if (claims.length === 0) {
+          showPluginToast(t('scope.lease.releaseFailed', { title: name, error: '?' }), 'err')
+          return
+        }
         setBusyId(id)
-        apiCall('scope-set', { sessionId: id, domain: props.domain, key: props.key, value: false })
-          .then(function (res) {
-            if (!res || res.ok === false) {
-              showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(res) || '?' }), 'err')
-              return
-            }
-            // 本地先把这一条摘掉（全局快照有 150ms TTL，紧接着的重拉可能还是写前那一份）。
-            scopeForgetLeaseSession(props.domain, props.key, id)
-            showPluginToast(t('scope.lease.released', { title: name }), 'ok')
-            setTimeout(function () { refreshScope({ silent: true }) }, 400)
+        claims.reduce(function (chain, claim) {
+          return chain.then(function () {
+            return apiCall('scope-set', { sessionId: id, domain: claim.domain, key: claim.key, value: false })
           })
-          .catch(function (e) {
-            showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(e) || '?' }), 'err')
-          })
-          .then(function () { setBusyId(null) })
+        }, Promise.resolve()).then(function (res) {
+          if (!res || res.ok === false) {
+            showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(res) || '?' }), 'err')
+            return
+          }
+          // 本地先把这一条摘掉（全局快照有 150ms TTL，紧接着的重拉可能还是写前那一份）。
+          scopeForgetLeaseSession(props.domain, props.key, id)
+          showPluginToast(t('scope.lease.released', { title: name }), 'ok')
+          setTimeout(function () { refreshScope({ silent: true }) }, 400)
+        }).catch(function (e) {
+          showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(e) || '?' }), 'err')
+        }).then(function () { setBusyId(null) })
       }
       /**
        * 量一次徽章的位置，算出浮窗放哪儿。
@@ -2084,6 +2091,13 @@ function enabledMemoryCount(rules) {
                 }, '×'))
             }))
         }))
+        // 浮窗挂到 `document.body` 上：留在面板里会被祖先的 `overflow:hidden` 裁掉
+        // （来源卡片就是 `overflow:hidden` —— 浮窗探出去的那截被裁掉，底下一张卡片的
+        // 内容透上来，就是用户看到的「穿模」，用户 2026-11-05 实测）。
+        // 拿不到 react-dom 就退回就地渲染：功能在，只是可能被裁。
+        if (ReactDOM && typeof ReactDOM.createPortal === 'function' && typeof document !== 'undefined' && document.body) {
+          popup = ReactDOM.createPortal(popup, document.body)
+        }
       }
       return h('span', {
         className: 'dsm-tag dsm-tag-lease',

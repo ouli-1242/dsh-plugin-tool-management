@@ -178,20 +178,71 @@
     /** 这一格有几个会话在认领（租约）。全局层才读得到；会话层返回 0。 */
     function scopeLeaseCount(domain, key) {
       if (scopeIsSession()) return 0
+      // 来源格算的是**并集**（来源自己 + 它底下那些技能）：见 `scopeLeaseDetails`。
+      if (domain === 'skillSources') return scopeLeaseDetails('skillSources', key).length
       var leases = scopeState.global && scopeState.global.leases ? scopeState.global.leases[domain] : null
       var n = leases && typeof leases === 'object' ? Number(leases[key]) : 0
       return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
     }
     /**
      * 这一格的租约认领者（`[{ id, title, cwd }]`）：徽章浮窗逐行列出"是哪几个对话"。
-     * 与 `scopeLeaseCount` 同一份服务端数据（`global.leaseDetails`），全局层才读得到。
+     *
+     * 来源格（`skillSources`）算的是**并集**：来源自己 + 它底下那些技能各自认领的对话。
+     * 为什么：官方内置 / DSH 技能这类**默认来源没有来源级开关**，租约只落在技能上；
+     * 而技能要加载就得让来源开着 —— 所以"这个来源里还有几个对话在临时运行"正是这个并集。
+     * 少了它，官方内置的组头永远是干净的，用户只会在某一行的技能上看到徽章。
      */
     function scopeLeaseDetails(domain, key) {
       if (scopeIsSession()) return []
       var all = scopeState.global && scopeState.global.leaseDetails ? scopeState.global.leaseDetails : null
       var byKey = all && typeof all === 'object' ? all[domain] : null
       var list = byKey && typeof byKey === 'object' ? byKey[key] : null
-      return Array.isArray(list) ? list : []
+      var out = Array.isArray(list) ? list.slice() : []
+      if (domain !== 'skillSources' || !all) return out
+      var prefix = key + '/'
+      var skills = all.skills && typeof all.skills === 'object' ? all.skills : null
+      if (!skills) return out
+      Object.keys(skills).forEach(function (skillKey) {
+        if (skillKey.indexOf(prefix) !== 0) return
+        var rows = skills[skillKey]
+        if (!Array.isArray(rows)) return
+        rows.forEach(function (d) {
+          if (!d || !d.id) return
+          var known = false
+          for (var i = 0; i < out.length; i++) {
+            if (out[i] && out[i].id === d.id) { known = true; break }
+          }
+          if (!known) out.push(d)
+        })
+      })
+      return out
+    }
+    /**
+     * 这个对话在这一格上认领的东西：`[{ domain, key }]`。
+     *
+     * 来源格要连带它底下的技能 —— 浮窗里那颗「×」放掉的是"这个对话不再用这个来源里的
+     * 东西"，不是只放掉来源那一格（默认来源根本没有来源那一格）。
+     */
+    function scopeLeaseClaimsOf(domain, key, sessionId) {
+      var out = []
+      var all = scopeState.global && scopeState.global.leaseDetails ? scopeState.global.leaseDetails : null
+      if (!all) return out
+      var id = String(sessionId || '')
+      var holds = function (rows) {
+        return Array.isArray(rows) && rows.some(function (d) { return d && d.id === id })
+      }
+      if (domain === 'skillSources') {
+        if (holds(all.skillSources && all.skillSources[key])) out.push({ domain: 'skillSources', key: key })
+        var prefix = key + '/'
+        var skills = all.skills && typeof all.skills === 'object' ? all.skills : {}
+        Object.keys(skills).forEach(function (skillKey) {
+          if (skillKey.indexOf(prefix) !== 0) return
+          if (holds(skills[skillKey])) out.push({ domain: 'skills', key: skillKey })
+        })
+        return out
+      }
+      if (holds(all[domain] && all[domain][key])) out.push({ domain: domain, key: key })
+      return out
     }
     /** 这一域此刻有租约的键（全局层专用；会话层返回空）。「全部关闭」按它取目标集。 */
     function scopeLeaseKeys(domain) {

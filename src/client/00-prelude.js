@@ -17,6 +17,15 @@ window.__ModuleLoader__.load({
     var exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
     const React = require('react')
+    /**
+     * `react-dom`（只取 `createPortal`）：浮窗要挂到 `document.body` 上 ——
+     * 挂在面板里会被祖先的 `overflow:hidden` 裁掉（用户 2026-11-05 实测的「穿模」：
+     * 浮窗被来源卡片裁掉一半，底下一张卡片的内容透上来）。
+     * 拿不到就退回「就地渲染」：功能在，观感差一点。
+     * @type {any}
+     */
+    var ReactDOM = null
+    try { ReactDOM = require('react-dom') } catch (e) { ReactDOM = null }
 
     // 本插件自己的设计变量（宿主那套是 `--dsw-*`）。告警色此前在 12 条规则里各写一遍
     // 十六进制字面量，换主题要改 12 次 —— 收敛成 `--dsm-warn`，字面量只留下面那一处。

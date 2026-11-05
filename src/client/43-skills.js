@@ -610,11 +610,13 @@
         var rootCount = root.count == null ? root.skills.length : root.count;
         var srcOnHere = srcOnInLayer(root);
         // 全局意图 / 租约：来源关闭后还有会话在用时挂「临时运行 · N 个对话」；
-        // 旧版本留下的 blocked 仍显示「已统一关闭」，并给一个恢复入口。
+        // 旧版本留下的 blocked 仍显示「已全部关闭」，并给一个恢复入口。
         // 会话层不显示（那一层只回答"这个对话看得到哪些技能"）。
+        // **默认来源（官方内置 / DSH 技能）也挂**：它们没有来源级开关，租约落在底下的
+        // 技能上 —— 组头不标，用户只会在某一行技能上看到徽章（用户 2026-11-05 报障）。
         var rootKeyHere = String(root.key || "");
         var intentHere = scopeIntentOf('skillSources', rootKeyHere);
-        var intentTag = scopeIsSession() || root.defaultSource === true ? null
+        var intentTag = scopeIsSession() ? null
           : intentHere === 'blocked' ? h("span", { key: "intent", className: "dsm-tag dsm-tag-off", title: t("scope.intent.blockedHint") }, t("scope.intent.blocked"))
             : h(react.Fragment, { key: "intent" }, leaseTag({ t: t, domain: 'skillSources', key: rootKeyHere, runtime: true }));
         var section = h("section", { key: root.key, className: "dsm-source" }, h("div", { className: "dsm-source-head dsm-source-head-pin" }, h("button", { type: "button", className: "dsm-source-head-main", "aria-expanded": open, onClick: function () { setExpanded(Object.assign({}, expanded, { [root.key]: !baseOpen })); } }, h("span", { className: "dsm-source-title", title: displayName }, displayName), h("span", { className: "dsm-count" }, String(rootCount)), h("span", { className: "dsm-tag " + (root.scope === "project" ? "dsm-tag-on" : root.defaultSource === true ? "" : srcOnHere ? "dsm-tag-on" : "") }, root.scope === "project" ? t("status.project") : root.defaultSource === true ? t("status.manageable") : t(srcOnHere ? "status.source.on" : "status.source.off")), intentTag, root.scope === "project" ? h("span", { className: "dsm-tag" }, t("status.rank", { rank: root.rank })) : null, h("span", { className: "dsm-path", title: root.path }, root.path)), (function () {
