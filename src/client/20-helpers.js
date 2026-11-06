@@ -50,26 +50,29 @@
     function ensureCss() {
       if (typeof document === 'undefined') return function () {}
       const id = 'dsh-plugin-tool-management'
+      // 复用分支拿到的是 `Element`（没有 `dataset`），所以引用数走 attribute 读写，
+      // 两个分支共用同一份实现。
+      const REFS = 'data-plugin-css-refs'
       /** 把一个标签的引用数 +1，并返回只生效一次的释放函数。 */
       function retain(tag) {
         var released = false
         return function () {
           if (released) return
           released = true
-          var left = Number(tag.dataset.pluginCssRefs || '1') - 1
-          if (left > 0) { tag.dataset.pluginCssRefs = String(left); return }
+          var left = Number(tag.getAttribute(REFS) || '1') - 1
+          if (left > 0) { tag.setAttribute(REFS, String(left)); return }
           try { if (tag.parentNode) tag.parentNode.removeChild(tag) } catch (e) { /* 文档已卸载 */ }
         }
       }
       const existing = document.querySelector('style[data-plugin-css="' + id + '"]')
       if (existing) {
-        existing.dataset.pluginCssRefs = String(Number(existing.dataset.pluginCssRefs || '1') + 1)
+        existing.setAttribute(REFS, String(Number(existing.getAttribute(REFS) || '1') + 1))
         return retain(existing)
       }
       const tag = document.createElement('style')
       tag.dataset.plugin = id
       tag.dataset.pluginCss = id
-      tag.dataset.pluginCssRefs = '1'
+      tag.setAttribute(REFS, '1')
       tag.textContent = CSS
       document.head.appendChild(tag)
       return retain(tag)
