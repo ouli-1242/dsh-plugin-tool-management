@@ -10,6 +10,8 @@
           var busy = bs[0], setBusy = bs[1]
           var rs = React.useState(null)
           var result = rs[0], setResult = rs[1]
+          // 场景徽章那颗「×」的请求在途标记（`onRelease` 走这里，徽章内部的 busy 管不到）。
+          var sceneReleaseBusy = React.useRef(null)
           var ups = useUndoState()
           var undo = ups[0], setUndo = ups[1], dismissUndo = ups[2]
           var ms = React.useState(null)
@@ -1412,6 +1414,7 @@
                         name: item.name,
                         desc: item.description || null,
                         // 单行：描述截断排在名字右边（全文在悬浮里），一屏多看几条（用户 2026-11-06）。
+                        descTitle: item.description || null,
                         compact: true,
                         // 按模式配的工具限制摘要（没配就不显示）：场景改不了会话的模式，
                         // 但要让用户看得见"这条人设在某些模式下是被限工具的"。
@@ -1873,7 +1876,7 @@
               scopeForgetSceneLeases()
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
-          /** 单张场景卡的「统一关闭」：只退出进入过这一场的对话 / 工作区。 */
+          /** 单张场景卡的「全部关闭」：只退出进入过这一场的对话 / 工作区。 */
           function stopOneScene(name) {
             setBusy(true); setResult(null)
             apiCall('scope-stop-now', { domain: 'scene', key: name }).then(function (res) {
@@ -1893,7 +1896,12 @@
             var id = String((d && d.id) || '')
             var name = String((d && d.title) || id)
             if (id === '') return
+            // 徽章自带的 busy 只在它自己发请求时置位（`onRelease` 是立即返回的）——
+            // 双击同一行会叠出两次 `scope-set`，第二次还会把已成功的提示再报一遍。
+            if (sceneReleaseBusy.current !== null) return
+            sceneReleaseBusy.current = id
             apiCall('scope-set', { sessionId: id, domain: 'scene', value: null }).then(function (res) {
+              sceneReleaseBusy.current = null
               if (res && res.ok === false) {
                 showPluginToast(t('scope.lease.releaseFailed', { title: name, error: translateError(t, res) || t('scope.lease.unknownError') }), 'err')
                 return
@@ -1902,6 +1910,7 @@
               // 全局快照有 150ms 的短 TTL：立刻重拉可能还是写前那一份。
               setTimeout(function () { refreshScope({ silent: true }) }, 400)
             }).catch(function (e) {
+              sceneReleaseBusy.current = null
               showPluginToast(t('scope.lease.releaseFailed', { title: name, error: errMsg(e) || t('scope.lease.unknownError') }), 'err')
             })
           }
@@ -1912,7 +1921,9 @@
            * 哪几个，那颗「×」让其中一个退出这个场景。
            */
           function sceneLeaseTag(name) {
-            if (scopeIsSession()) return null
+            // 全局粒度下会话层整层不读（`scope-set` 也直接拒写）—— 这里的「谁在临时运行」
+            // 既不生效、那颗「×」也只会报错，整颗徽章都不该出现。
+            if (scopeIsSession() || scopeIsGlobalMode()) return null
             var count = scopeSceneLeaseCount(name)
             if (!(count > 0)) return null
             return React.createElement(LeaseTagBadge, {

@@ -99,14 +99,15 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 
 - **默认只发 6 条**（约 1.6k token/轮），其余 20 条关着。关掉不是藏起来，是**根本没进 schema**——模型看不到，也调不到。
 - **按层生效**：模型默认只改当前这一层，回执会说清写的是哪一层；带 `scope: "global"` 才动全局。
-- **写操作有确认卡**：停机、删除、开关落到机器级等都会先问一句；恢复动作（重启 / 还原 / 取消应用）不拦。
+- **写操作有确认卡**：停机、删除、开关落到机器级等都会先问一句；恢复动作（重启 / 还原 / 取消应用）不拦。会话处于「完全权限」审批策略（`never`）时不弹卡、直接放行，只记一条日志。
 - **逐条可开关**：兼容页的「模型工具表」按层调整，26 条全开约 6.2k token/轮；可以按任务存成不同方案，跟场景一起切。
 
 ## 兼容页
 
 不只是版本号：
 
-- **体检**：宿主版本、这一轮实际加载的插件版本、每个动作走原生 / 适配 / 不可用及原因。升级后哪一处悄悄失效，一眼看到。
+- **体检**：宿主版本、这一轮实际加载的插件版本、每个动作走原生 / 适配 / 不可用及原因。升级后哪一处悄悄失效，一眼看到；页头「重新检测」可原地复核。
+- **升级差异**：逐包对照 cordis、11 个 peer 与 15 个运行时官方包的版本和适配基准（超出 peer 范围直接进阻塞项），并把事件名、会话目录布局、补丁方言、MCP 配置键与工具参数表、提示词段排序位、客户端界面槽位、官方技能资产等宿主契约的 canary 一并列出。
 - **访问令牌**：设置 / 关闭 / 修改 / 删除；写操作与明文密钥都走它。
 - **生效层级**：全部全局 / 按工作区 / 按会话，一键切。
 - **注入**：六个域各自开关、极简模式兜底注入、斜杠命令两段入口、侧栏入口。
@@ -118,7 +119,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 
 | 内容                                        | 位置                                                              |
 |:------------------------------------------- |:----------------------------------------------------------------- |
-| MCP 定义                                    | `~/.dsh/cordis.patch.yml`（插件只写它；改前自动备份）             |
+| MCP 定义                                    | `~/.dsh/cordis.patch.yml`（全局）· `~/.dsh/profiles/<名>/cordis.patch.yml`（当前档案） |
 | 技能策略 / 自定义目录                       | `~/.dsh/tool-management/skills-state.json`                        |
 | 技能 / 记忆 / 人设 / 预设                   | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/`     |
 | 记忆索引 / 场景 / 档案                      | `~/.dsh/tool-management/memories-index.json`                      |
@@ -129,10 +130,10 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 | 模型工具表 / 作用域覆盖                     | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json` |
 | 运行日志 / patch 备份                       | `~/.dsh/tool-management/tool-management.log` · `backups/`         |
 
-- **只写自己的文件**：不动技能源文件；MCP 只改 `cordis.patch.yml`，每份 patch 各留 5 份备份。
-- **令牌**：设置后所有写操作与明文密钥都要 `x-dsh-token`；浏览器读写走 cookie，明文查看仍要令牌。
+- **写入范围**：技能源文件只读；MCP 只改上面那两份 patch（各留 5 份备份）；提示词「应用」会覆盖宿主读的 `~/.dsh/AGENTS.md`（原文留在 hub 内）；桌面版启动时清掉 10 分钟前的 `dsh-auth-*` cookie。
+- **令牌**：设置后所有写操作与明文密钥都要 `x-dsh-token`；界面填一次后存在浏览器 localStorage、与本次启动绑定（重启要重填），明文查看仍要令牌。
 - **进程级边界靠令牌**：写接口默认由宿主的浏览器鉴权把关；宿主栅栏缺席时退回只查回环地址的本地判定，本机其它进程即可直连——配了访问令牌才有进程级这道门。
-- **磁盘上是明文**：打码只发生在界面。MCP 的 `env` / `headers` 与插件的 `token` 在 patch 文件里始终明文，备份也不加密、不轮转。令牌门禁管不到磁盘读取，防线是文件权限。
+- **磁盘上是明文**：打码只发生在界面。MCP 的 `env` / `headers` 与插件的 `token` 在 patch 文件里始终明文，备份也不加密。令牌门禁管不到磁盘读取，防线是文件权限。
 - **删除可找回**：技能 / 记忆 / 人设 / 提示词 / 场景的删除都进回收站（会话永久删除除外），可设保留期自动清理（默认永久保留）。
 
 </details>
@@ -168,7 +169,7 @@ npm test             # 构建 + i18n + 契约测试
 npm run doctor       # 宿主兼容体检
 ```
 
-`lib/` 不入版本库，克隆后先 `npm run build`；改完重启 `dsh web` 才生效。运行时依赖只有 `fflate` 与 `js-yaml`（惰性加载），`@deepseek-ai/*` 一律用宿主那份。
+`lib/` 不入版本库，克隆后先 `npm run build`；改完重启 `dsh web` 才生效。运行时依赖是 `fflate`、`js-yaml` 与 `semver`（构建产物里是静态 import，缺任一个插件不会加载），`@deepseek-ai/*` 一律用宿主那份。
 
 ## 许可证
 

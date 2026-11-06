@@ -17,6 +17,10 @@ export type Target = Record<string, unknown> | undefined
 /** `typeof` 的函数判定，带上类型收窄 —— 探针里到处要用，别各写一遍。 */
 export const isFn = (value: unknown): value is (...args: unknown[]) => unknown => typeof value === 'function'
 
+/** 异步函数判定：签名漂移成同步实现时，调用方 await 得到的是非 Promise。 */
+export const isAsyncFn = (value: unknown): boolean =>
+  isFn(value) && Object.prototype.toString.call(value) === '[object AsyncFunction]'
+
 /**
  * 按本插件自己的方式解析一个包；解析不到返回 null，不抛错。
  *
@@ -130,6 +134,30 @@ function packageNameOfPath(entry: string): string | null {
 }
 
 /**
+ * 一个已解析入口所属包的根目录（含 `package.json` 的那一层）。
+ *
+ * 多文件 canary 需要从包根拼相对路径（例如 `lib/client.js`、`lib/pipeline.js`）；
+ * 只从入口的 `dirname` 起找，遇到 `package.json` 就停。归档路径同样适用。
+ *
+ * @param entry 已解析的包入口路径
+ * @returns 包根目录；路径形态认不出或读不到清单时为 null
+ */
+export function packageRootOf(entry: string): string | null {
+  const expected = packageNameOfPath(entry)
+  let dir = dirname(entry)
+  for (let i = 0; i < 5; i += 1) {
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: string }
+      if (expected === null || parsed.name === expected) return dir
+    } catch { /* keep walking up */ }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+/**
  * 把活成员与本插件那份同实现做文本比对。
  *
  * `undefined` = 比不了：活对象上没有这个成员，或参考副本里也没有。
@@ -170,7 +198,13 @@ const ROSTER_CLASS = { pkg: '@deepseek-ai/dsh-agent-preset-registry', target: 'A
 // tools.restrict / connection.admit 也声明在官方类上，所以同样接入「参考副本 + 文本比对」：
 // 官方改了实现，结论就从"一致"变成"漂移"，界面上看得见。
 const TOOLS_CLASS = { pkg: '@deepseek-ai/dsh-tools', target: 'ToolRuntime' } as const
+const SYSTEM_PROMPT_CLASS = { pkg: '@deepseek-ai/dsh-system-prompt', target: 'SystemPrompt' } as const
 const CONNECTION_CLASS = { pkg: '@deepseek-ai/dsh-client-connection', target: 'HostConnectionService' } as const
+const SKILLS_CLASS = { pkg: '@deepseek-ai/dsh-skill', target: 'SkillRegistry' } as const
+const AGENTS_CLASS = { pkg: '@deepseek-ai/dsh-agent', target: 'AgentRegistry' } as const
+const INVENTORY_CLASS = { pkg: '@deepseek-ai/dsh-host-plugin-inventory', target: 'PluginInventoryGateway' } as const
+const WEBSERVER_CLASS = { pkg: '@deepseek-ai/dsh-host-webserver', target: 'WebServer' } as const
+const SANDBOX_POLICY_CLASS = { pkg: '@deepseek-ai/dsh-sandbox-policy', target: 'SandboxPolicyService' } as const
 /** 每类宿主服务由哪个包的哪个导出承载 —— 静态检查要据此拿到官方原型。 */
 export const OWNER_CLASSES: Partial<Record<CapabilityFinding['owner'], { readonly pkg: string; readonly target: string }>> = {
   workspace: WORKSPACE_CLASS,
@@ -179,7 +213,13 @@ export const OWNER_CLASSES: Partial<Record<CapabilityFinding['owner'], { readonl
   settings: SETTINGS_CLASS,
   presetRoster: ROSTER_CLASS,
   tools: TOOLS_CLASS,
+  systemPrompt: SYSTEM_PROMPT_CLASS,
   connection: CONNECTION_CLASS,
+  skills: SKILLS_CLASS,
+  agents: AGENTS_CLASS,
+  pluginInventory: INVENTORY_CLASS,
+  webServer: WEBSERVER_CLASS,
+  sandboxPolicy: SANDBOX_POLICY_CLASS,
 }
 
 /** 具名导出的原型；包缺席或被裁剪时为 undefined。 */
@@ -265,7 +305,7 @@ export function referencePrototypes(): {
   const connection = classPrototypeOf(CONNECTION_CLASS)
   if (connection !== undefined) out.connection = connection
   return out
-}
+}
 /**
  * 从**宿主侧**能不能解析到一个包（不 import，只看解析）。
  *

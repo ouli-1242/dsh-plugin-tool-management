@@ -48,7 +48,11 @@ import { isIndexQuarantined, readIndex, writeFileAtomically, writeIndex } from '
 import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpPrefixDrift, serverNameCandidates, splitMcpToolName } from '../lib/host-names.js'
 import { isToolDisabledIn } from '../lib/mcp/manager.js'
 import { renderMcpStateSection } from '../lib/mcp/state-section.js'
-import { EXPECTED_PEER_RANGE, assessHost, hostPackageDirsFromPath, hostVersionOf, looksLikeHostPackageDir } from '../lib/compat/probe.js'
+import { EXPECTED_PEER_RANGE, HOST_PACKAGE_BASELINES, OPERATION_ROUTES, assessHost, hostContractStatus, hostPackageDirsFromPath, hostVersionOf, inspectStaticSchemaContracts, inspectStaticSkillAssets, looksLikeHostPackageDir, routeFor } from '../lib/compat/probe.js'
+import { CAPABILITY_SPECS } from '../lib/compat/capability-specs.js'
+import { BARE_HOST_MODULE_CONTRACTS, HOST_BEHAVIOR_CONTRACTS, HOST_CLIENT_UI_CONTRACTS } from '../lib/compat/host-contracts.js'
+import { manualReviewItems } from '../lib/compat/manual-review.js'
+import { MCP_RESOURCE_SECTION_NAME, MCP_SERVERS_SECTION_ORDER, createMcpPromptShadow, mcpPromptShadowPlan, mcpServerSectionName, renderMcpResourceServersSection } from '../lib/mcp/prompt-shadow.js'
 import { pickBestCompatible, sourcePlan } from '../lib/update-check.js'
 import { scanLoaderRows } from '../lib/mcp/loader-token.js'
 import { isValidGroupPath, isValidGroupSegment } from '../lib/memories/constants.js'
@@ -64,7 +68,7 @@ import { PROMPT_CONTENT_MAX_BYTES, applyFlag, clampPromptBaseline, enterSceneInS
 import { WORKSPACE_SCOPE_KEY_MAX, WORKSPACE_SCOPE_PREFIX, isWorkspaceScopeKey, scopeKeyLabel, scopeKeyOfRow, workspaceCwdOfScopeKey, workspaceScopeKeyOf } from '../lib/scope/workspace-key.js'
 import { chooseUserPromptLayer, promptBaselineDiffers } from '../lib/memories/prompt-layer.js'
 import { suppressedKindsForSession } from '../lib/context-inject.js'
-import { normalizeScopeIntent, pruneIntentKeys, INTENT_DOMAINS, claimsResource, planReconcile, resolveResource, scanSessionClaims } from '../lib/scope/intent.js'
+import { normalizeScopeIntent, pruneIntentKeys, INTENT_DOMAINS, claimsResource, leaseSessionDetails, leaseSourceDetails, planReconcile, resolveResource, scanSessionClaims } from '../lib/scope/intent.js'
 import { pruneSessionScopes } from '../lib/scope/store.js'
 import { createSkillCatalog, renderSkillCatalog, renderSkillCatalogDelta, skillCatalogNeedsTakeover } from '../lib/skills/catalog.js'
 import { createMcpStateCatalog } from '../lib/mcp/state-section.js'
@@ -1941,6 +1945,33 @@ test('备份名与 peer range：两代时间戳都认、两份范围不漂移', 
   // engines.dsh 与 peer range 也必须同源：前者是 dsh plugin 安装期的检查，后者是 npm 的
   // peer 校验，两处说法不一致时用户会看到「装的时候说支持、跑的时候说不支持」。
   assert.equal(pkg.engines?.dsh, EXPECTED_PEER_RANGE, 'engines.dsh 与 peer range 必须同一个字符串')
+})
+
+test('逐包版本基准覆盖全部 dsh peer，且范围与 package.json 同源', () => {
+  // 兼容页的「宿主包版本」表按这份基准逐包比对。少了某个 peer，升级后恰好变的是它时
+  // 页面会漏报；范围写错则会把「仍在范围内」报成越界（反之更糟）。
+  const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8'))
+  const peerRanges = pkg.peerDependencies
+  const dshPeers = Object.keys(peerRanges).filter((name) => name.startsWith('@deepseek-ai/dsh-'))
+  const peerBaselines = HOST_PACKAGE_BASELINES.filter((item) => item.peerRange !== null && item.name.startsWith('@deepseek-ai/dsh-'))
+  assert.deepEqual(
+    [...new Set(peerBaselines.map((item) => item.name))].sort(),
+    [...dshPeers].sort(),
+    'peer 版本基准必须与 package.json 的 dsh-* peer 一一对应',
+  )
+  for (const baseline of peerBaselines) {
+    assert.equal(baseline.peerRange, peerRanges[baseline.name], `${baseline.name} 的 peer 范围必须取自 package.json`)
+  }
+  // 非 peer 的运行时观测包：只比基准、不判范围；它们正好是行为/裸模块契约里那些
+  // 「宿主不要求插件依赖、但改了会静默降级」的包。
+  const observed = HOST_PACKAGE_BASELINES.filter((item) => item.observed === true)
+  assert.ok(observed.length >= 10, '观测包不应只剩零星几条')
+  for (const baseline of observed) {
+    assert.equal(baseline.peerRange, null, `${baseline.name} 是观测包，不能有 peer 范围`)
+  }
+  for (const name of ['@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-mcp-client', '@deepseek-ai/dsh-mcp-resources', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-skill']) {
+    assert.ok(observed.some((item) => item.name === name), `${name} 应在逐包版本观测里`)
+  }
 })
 
 test('MCP 工具名前缀只有一处定义', () => {
@@ -4834,4 +4865,366 @@ test('LibreOffice Kit 段按正文判断，不写死技能名', () => {
   assert.equal(officeKitApplies('Read, create, edit and validate Word documents (.docx).'), false)
   // 大小写与行内位置都不影响。
   assert.equal(officeKitApplies('依赖 libreoffice 完成渲染'), true)
+})
+
+test('来源格认领名单是「来源 + 技能」并集：同一对话的多格合成一条 keys', () => {
+  const rows = new Map([
+    ['s1', { title: 'A', cwd: 'C:\Proj' }],
+    ['s2', { title: 'B' }],
+  ])
+  const out = leaseSourceDetails(
+    new Map([['root', ['s1']]]),
+    new Map([['root/skill-a', ['s1', 's2']], ['not-a-skill-key', ['s2']]]),
+    rows,
+  )
+  assert.deepEqual(out.root.map((d) => d.id), ['s1', 's2'])
+  const first = out.root.find((d) => d.id === 's1')
+  assert.deepEqual(first.keys, [
+    { domain: 'skillSources', key: 'root' },
+    { domain: 'skills', key: 'root/skill-a' },
+  ])
+  const second = out.root.find((d) => d.id === 's2')
+  assert.deepEqual(second.keys, [{ domain: 'skills', key: 'root/skill-a' }])
+  assert.equal(second.title, 'B')
+  assert.equal(second.cwd, '')
+  // 没有来源前缀的技能键不属于任何来源，不能凭空造出一格。
+  assert.equal(out['not-a-skill-key'], undefined)
+})
+
+test('认领名单缺少会话行时回落短 id，不编标题与工作区', () => {
+  const out = leaseSessionDetails('mcp', new Map([['srv', ['deadbeef-1234']]]), new Map())
+  assert.equal(out.srv.length, 1)
+  assert.equal(out.srv[0].title, 'deadbeef')
+  assert.equal(out.srv[0].cwd, '')
+  assert.deepEqual(out.srv[0].keys, [{ domain: 'mcp', key: 'srv' }])
+})
+
+test('MCP prompt 遮蔽计划：只在真有隐藏服务器时替换资源段', () => {
+  assert.deepEqual(mcpPromptShadowPlan(['a', 'b'], ['a']), { resource: true, hidden: ['b'] })
+  assert.deepEqual(mcpPromptShadowPlan(['a'], ['a']), { resource: false, hidden: [] })
+  assert.deepEqual(mcpPromptShadowPlan([], []), { resource: false, hidden: [] })
+  assert.equal(renderMcpResourceServersSection([]), '')
+  const text = renderMcpResourceServersSection(['beta', 'alpha'])
+  assert.match(text, /"alpha","beta"/)
+  assert.doesNotMatch(text, /"beta","alpha"/)
+})
+
+test('MCP prompt 遮蔽：隐藏段为空、资源段只列可见服务器，名册变化时差分撤销', () => {
+  const registered = []
+  const disposed = []
+  const service = {
+    getSectionOrder: (name) => (name === MCP_SERVERS_SECTION_ORDER ? 3100 : undefined),
+    section: (section) => {
+      registered.push(section)
+      return () => { disposed.push(section.name) }
+    },
+  }
+  const shadow = createMcpPromptShadow(() => service)
+  const agent = {}
+  shadow.sync(agent, ['alpha', 'beta'], ['alpha'], { resourceAvailable: true })
+  assert.deepEqual(registered.map((s) => s.name), [MCP_RESOURCE_SECTION_NAME, 'mcp:beta'])
+  assert.equal(registered[0].order, 3100)
+  assert.match(registered[0].text(), /"alpha"/)
+  assert.doesNotMatch(registered[0].text(), /beta/)
+  assert.equal(registered[1].text(), '')
+
+  // 可见集合反转：资源段复用（文本读最新快照），只为新隐藏的 alpha 注册、撤掉 beta 的段。
+  shadow.sync(agent, ['alpha', 'beta'], ['beta'], { resourceAvailable: true })
+  assert.deepEqual(registered.map((s) => s.name), [MCP_RESOURCE_SECTION_NAME, 'mcp:beta', 'mcp:alpha'])
+  assert.deepEqual(disposed, ['mcp:beta'])
+  assert.match(registered[0].text(), /"beta"/)
+
+  // 全部可见：两条遮蔽段都该撤掉，官方段恢复原样。
+  shadow.sync(agent, ['alpha', 'beta'], ['alpha', 'beta'], { resourceAvailable: true })
+  assert.deepEqual(disposed.slice().sort(), [MCP_RESOURCE_SECTION_NAME, 'mcp:alpha', 'mcp:beta'].sort())
+
+  // agent 下线：不再持有任何段。
+  shadow.sync(agent, ['alpha', 'beta'], ['alpha'], { resourceAvailable: true })
+  const before = disposed.length
+  shadow.disposeAll()
+  assert.equal(disposed.length, before + 2)
+})
+
+test('资源工具没注册时不合成资源段，但服务器 instructions 段照旧遮蔽', () => {
+  const registered = []
+  const service = { getSectionOrder: () => 3100, section: (section) => { registered.push(section.name); return () => {} } }
+  const shadow = createMcpPromptShadow(() => service)
+  shadow.sync({}, ['alpha', 'beta'], ['alpha'], { resourceAvailable: false })
+  assert.deepEqual(registered, ['mcp:beta'])
+})
+
+test('MCP prompt 隔离的段名与宿主 canary 同源（官方改名时这条会红）', () => {
+  const resources = BARE_HOST_MODULE_CONTRACTS.find((c) => c.package === '@deepseek-ai/dsh-mcp-resources')
+  const client = BARE_HOST_MODULE_CONTRACTS.find((c) => c.package === '@deepseek-ai/dsh-mcp-client')
+  const systemPrompt = HOST_BEHAVIOR_CONTRACTS.find((c) => c.package === '@deepseek-ai/dsh-system-prompt')
+  assert.ok(resources.markers.some((m) => m.needle === MCP_RESOURCE_SECTION_NAME))
+  assert.ok(client.markers.some((m) => m.needle === 'mcp:${server}'))
+  // 全名拼法也是契约：插件按 `mcp__<server>__<tool>` 拆名、停用与计数；只钉前缀不够。
+  assert.ok(client.markers.some((m) => m.needle === 'mcp__${serverName}__${rawName}'))
+  assert.ok(client.markers.some((m) => m.needle === 'SERVER_NAME_PATTERN'))
+  assert.ok(systemPrompt.markers.some((m) => m.needle === MCP_SERVERS_SECTION_ORDER))
+  assert.equal(mcpServerSectionName('alpha'), 'mcp:alpha')
+})
+
+test('操作路由 fail-closed：能力 id 缺失时不再当作满足', () => {
+  const ids = new Set(CAPABILITY_SPECS.map((spec) => spec.id))
+  for (const [operation, routes] of Object.entries(OPERATION_ROUTES)) {
+    for (const id of [...routes.native, ...routes.adapter]) {
+      assert.ok(ids.has(id), `${operation} 引用了不存在的能力 ${id}`)
+    }
+  }
+  // 探测结果为空（规格被删 / 评估载荷来自旧版本）：每条路由都必须拒绝，不能静默放行。
+  const decision = routeFor({ findings: [] }, 'delete')
+  assert.equal(decision.via, 'none')
+  assert.ok(decision.refusals.some((item) => item.id === 'workspace.delete-native'))
+})
+
+test('共享资源工具参数探针：server / uri 不在 required 时报警', () => {
+  const spec = CAPABILITY_SPECS.find((item) => item.id === 'tools.mcp-resource-args')
+  assert.ok(spec && typeof spec.probe === 'function')
+  const toolsOf = (definitions) => ({ get: (name) => definitions[name] })
+  const schema = (required) => ({ parameters: { properties: Object.fromEntries(required.map((key) => [key, { type: 'string' }])), required } })
+  const good = toolsOf({
+    list_mcp_resources: schema(['server']),
+    list_mcp_resource_templates: schema(['server']),
+    read_mcp_resource: schema(['server', 'uri']),
+  })
+  assert.equal(spec.probe(good), undefined)
+  const bad = toolsOf({
+    list_mcp_resources: schema(['server']),
+    list_mcp_resource_templates: schema(['server']),
+    read_mcp_resource: schema(['server']),
+  })
+  assert.match(spec.probe(bad), /read_mcp_resource/)
+})
+
+test('工具 schema 形状与 MCP 段排序位：形状变了要报出来', () => {
+  const schemaSpec = CAPABILITY_SPECS.find((item) => item.id === 'tools.schema-list')
+  assert.ok(schemaSpec && typeof schemaSpec.probe === 'function')
+  assert.equal(schemaSpec.probe({ schemas: () => [{ name: 'a' }] }), undefined)
+  assert.match(schemaSpec.probe({ schemas: () => [{}] }), /name/)
+  assert.match(schemaSpec.probe({ schemas: () => ({}) }), /数组/)
+  const promptSpec = CAPABILITY_SPECS.find((item) => item.id === 'systemPrompt.mcp-section')
+  assert.ok(promptSpec && typeof promptSpec.probe === 'function')
+  assert.equal(promptSpec.probe({ getSectionOrder: () => 3100 }), undefined)
+  assert.match(promptSpec.probe({ getSectionOrder: () => undefined }), /MCP_SERVERS/)
+})
+
+test('MCP 客户端配置 schema：字段表缺失时报 shape-mismatch', () => {
+  const makeHost = (keys) => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-schema-'))
+    const pkgDir = join(root, 'node_modules', '@deepseek-ai', 'dsh-mcp-client')
+    mkdirSync(pkgDir, { recursive: true })
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-mcp-client', version: '0.0.0', main: 'index.js' }))
+    writeFileSync(join(pkgDir, 'index.js'),
+      'module.exports = { Config: { toJSON: () => ({ refs: { a: { type: "object", dict: '
+      + JSON.stringify(Object.fromEntries(keys.map((key) => [key, 1])))
+      + ' } } }) } }\n')
+    return { root, hostRoot: join(root, 'node_modules', '@deepseek-ai') }
+  }
+  const good = makeHost(['transport', 'serverName', 'command', 'args', 'env', 'headers', 'url', 'toolCallTimeoutMs'])
+  const bad = makeHost(['transport', 'serverName', 'command'])
+  try {
+    const goodFindings = inspectStaticSchemaContracts(good.hostRoot)
+    assert.equal(goodFindings.length, 1)
+    assert.equal(goodFindings[0].state, 'ok')
+    const badFindings = inspectStaticSchemaContracts(bad.hostRoot)
+    assert.equal(badFindings.length, 1)
+    assert.equal(badFindings[0].state, 'shape-mismatch')
+    assert.ok(badFindings[0].missing.includes('url'))
+  } finally {
+    rmSync(good.root, { recursive: true, force: true })
+    rmSync(bad.root, { recursive: true, force: true })
+  }
+})
+
+test('多文件 canary：marker.file 从包根拼相对路径，缺文件与缺标记分开报', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-multicanary-'))
+  const pkgDir = join(root, 'node_modules', '@deepseek-ai', 'dsh-multi')
+  mkdirSync(join(pkgDir, 'lib'), { recursive: true })
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-multi', version: '0.0.0', main: 'index.js' }))
+  writeFileSync(join(pkgDir, 'index.js'), 'export const entryMarker = "entry-marker"\n')
+  writeFileSync(join(pkgDir, 'lib', 'pipeline.js'), 'export const pipelineMarker = "pipeline-marker"\n')
+  const contracts = [{
+    package: '@deepseek-ai/dsh-multi',
+    feature: '多文件标记',
+    markers: [
+      { needle: 'entry-marker', why: '入口标记' },
+      { needle: 'pipeline-marker', why: '流水线标记', file: 'lib/pipeline.js' },
+    ],
+  }]
+  try {
+    const status = hostContractStatus(join(root, 'node_modules', '@deepseek-ai'), contracts)
+    assert.equal(status.packages[0].missingMarkers.length, 0)
+    // 入口还在、流水线文件被删：只该报 file 那一条，不能把入口标记也牵连进来。
+    writeFileSync(join(pkgDir, 'index.js'), 'export const entryMarker = "entry-marker"\n')
+    writeFileSync(join(pkgDir, 'lib', 'pipeline.js'), 'export const nothing = true\n')
+    const drifted = hostContractStatus(join(root, 'node_modules', '@deepseek-ai'), contracts)
+    assert.deepEqual(drifted.packages[0].missingMarkers, ['pipeline-marker'])
+    assert.equal(drifted.packages[0].missingMarkerNotes[0].file, 'lib/pipeline.js')
+    // 包本身解析不到：resolved 为 null，而不是「标记都在」。
+    const absent = hostContractStatus(join(root, 'node_modules', '@deepseek-ai'), [{ ...contracts[0], package: '@deepseek-ai/dsh-absent' }])
+    assert.equal(absent.packages[0].resolved, null)
+    assert.equal(hostContractStatus(null, contracts), null)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('官方技能资产：office / sandbox 分开报，脚本被裁掉时报 shape-mismatch', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-skillassets-'))
+  const packageBase = join(root, 'node_modules')
+  const hostRoot = join(packageBase, '@deepseek-ai')
+  const makePkg = (name) => {
+    const dir = join(packageBase, name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version: '0.0.0', main: 'index.js' }))
+    writeFileSync(join(dir, 'index.js'), 'module.exports = {}\n')
+    return dir
+  }
+  try {
+    // 两个包都不在：都应是可选缺席，不能报成宿主故障。
+    const none = inspectStaticSkillAssets(hostRoot)
+    assert.equal(none.length, 2)
+    assert.ok(none.every((item) => item.optional === true && item.state === 'not-available'))
+
+    const office = makePkg('@deepseek-ai/dsh-skill-office')
+    mkdirSync(join(office, 'assets', 'office-docx'), { recursive: true })
+    writeFileSync(join(office, 'assets', 'office-docx', 'SKILL.md'), '# docx\n')
+    let findings = inspectStaticSkillAssets(hostRoot)
+    const officeFinding = findings.find((item) => item.id === 'official-skill-assets')
+    assert.equal(officeFinding.state, 'ok')
+    assert.match(officeFinding.detail, /1 个技能目录/)
+
+    const sandbox = makePkg('@deepseek-ai/dsh-sandbox-windows-acl')
+    const assetDir = join(sandbox, 'assets', 'diagnose-windows-sandbox-acl')
+    mkdirSync(join(assetDir, 'scripts'), { recursive: true })
+    writeFileSync(join(assetDir, 'SKILL.md'), '# sandbox\n')
+    writeFileSync(join(assetDir, 'scripts', 'diagnose-windows-sandbox-acl.ps1'), '# script\n')
+    findings = inspectStaticSkillAssets(hostRoot)
+    assert.equal(findings.find((item) => item.id === 'official-sandbox-asset').state, 'ok')
+
+    rmSync(join(assetDir, 'scripts', 'diagnose-windows-sandbox-acl.ps1'))
+    findings = inspectStaticSkillAssets(hostRoot)
+    const broken = findings.find((item) => item.id === 'official-sandbox-asset')
+    assert.equal(broken.state, 'shape-mismatch')
+    assert.ok(broken.missing.some((item) => item.endsWith('.ps1')))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('人工核对清单：并进契约的 manual 说明，按 id 去重且不含空项', () => {
+  const contracts = [
+    { package: '@deepseek-ai/dsh-a', feature: 'A 功能', manual: '只能人工核对 A。', markers: [] },
+    { package: '@deepseek-ai/dsh-a', feature: 'A 功能（重复）', manual: '重复说明。', markers: [] },
+    { package: '@deepseek-ai/dsh-b', feature: 'B 功能', markers: [] },
+  ]
+  const items = manualReviewItems(contracts)
+  const ids = items.map((item) => item.id)
+  assert.equal(new Set(ids).size, ids.length)
+  assert.ok(ids.includes('@deepseek-ai/dsh-a'))
+  assert.ok(!ids.includes('@deepseek-ai/dsh-b'))
+  // 能力表的盲区也要在清单里（它们没有对应契约包）。
+  for (const id of ['agent.created-event', 'sandboxPolicy.resolve', 'official-skill-assets', 'projection-title-disk']) {
+    assert.ok(ids.includes(id), `缺少人工核对项 ${id}`)
+  }
+  assert.ok(items.every((item) => item.label !== '' && item.detail !== ''))
+})
+
+test('新增服务探针：缺成员 / 形状变化都在对应能力上报出来', () => {
+  const probeOf = (id) => {
+    const spec = CAPABILITY_SPECS.find((item) => item.id === id)
+    assert.ok(spec && typeof spec.probe === 'function', `缺少探针：${id}`)
+    return spec.probe
+  }
+
+  const skills = probeOf('skills.register-provider')
+  assert.equal(skills({ registerProvider(create) {} }), undefined)
+  assert.match(skills({ registerProvider(a, b) {} }), /单参数/)
+  assert.match(skills({}), /registerProvider/)
+
+  const agents = probeOf('agents.list')
+  assert.equal(agents({ list: () => [{ id: 'a', ctx: {} }] }), undefined)
+  assert.match(agents({ list: () => ({}) }), /数组/)
+  assert.match(agents({ list: () => [{ id: 'a' }] }), /ctx/)
+
+  const inventory = probeOf('pluginInventory.list')
+  assert.equal(inventory({ list: async () => [] }), undefined)
+  assert.match(inventory({ list: () => [] }), /异步/)
+  assert.match(inventory({ list: async (scope) => scope }), /零参数/)
+
+  const webServer = probeOf('webServer.register')
+  assert.equal(webServer({ register(route) {} }), undefined)
+  assert.match(webServer({ register(route, extra) {} }), /单参数/)
+  assert.match(webServer({}), /register/)
+
+  const sandboxPolicy = probeOf('sandboxPolicy.resolve')
+  assert.equal(sandboxPolicy({ resolve: () => ({ mode: 'read-only', workspaceRoot: 'C:\\workspace' }) }), undefined)
+  assert.match(sandboxPolicy({ resolve: () => ({ mode: 'read-only', workspaceRoot: '' }) }), /workspaceRoot/)
+  assert.match(sandboxPolicy({ resolve: () => { throw new Error('boom') } }), /boom/)
+
+  const projection = probeOf('projection.cached-title')
+  assert.equal(projection({ cachedSnapshot: () => undefined, cachedPredecessorTitle: () => undefined }), undefined)
+  assert.match(projection({ cachedPredecessorTitle: () => undefined }), /cachedSnapshot/)
+  assert.match(projection({ cachedSnapshot: () => ({ values: null }), cachedPredecessorTitle: () => undefined }), /values/)
+
+  const subagents = probeOf('subagents.runtime')
+  assert.equal(subagents({ list: () => ['in-process'], startActivation: async function () {} }), undefined)
+  assert.match(subagents({ list: () => ['in-process'], startActivation: function () {} }), /异步/)
+  assert.match(subagents({ list: () => [1], startActivation: async function () {} }), /字符串/)
+
+  const llm = probeOf('llm.model-catalog')
+  assert.equal(llm({
+    listProviders: () => [{ id: 'deepseek', name: 'DeepSeek' }],
+    listModels: async () => [],
+    resolveModelInfo: async () => ({}),
+  }), undefined)
+  assert.match(llm({
+    listProviders: () => [{ id: 'deepseek' }],
+    listModels: async () => [],
+    resolveModelInfo: async () => ({}),
+  }), /name/)
+  assert.match(llm({ listProviders: () => [], listModels: () => [], resolveModelInfo: async () => ({}) }), /listModels/)
+
+  const approval = probeOf('approval.effective-policy')
+  assert.equal(approval({ effectivePolicy(session) {} }), undefined)
+  assert.match(approval({ effectivePolicy(session, extra) {} }), /单参数/)
+})
+
+test('客户端 UI 契约与多文件 canary：标记都落在 lib/client.js，包名与槽位是可核对的清单', () => {
+  assert.ok(HOST_CLIENT_UI_CONTRACTS.length >= 7)
+  const byPackage = new Map(HOST_CLIENT_UI_CONTRACTS.map((item) => [item.package, item]))
+  const expected = {
+    '@deepseek-ai/dsh-client-modules': ['__ModuleLoader__'],
+    '@deepseek-ai/dsh-client-ui-settings-general': ['settings.section', 'settings.section.icon'],
+    '@deepseek-ai/dsh-client-ui-sidebar': ['sidebar.panellist'],
+    '@deepseek-ai/dsh-client-ui-conversation': ['storeFor'],
+    '@deepseek-ai/dsh-client-ui-layout': ['activePanelId', 'selectPanel'],
+    '@deepseek-ai/dsh-client-ui-workspace': ['pickDirectory'],
+    '@deepseek-ai/dsh-api-session-controller': ['reflect.provide("sessions"', 'projectList'],
+  }
+  for (const [pkg, needles] of Object.entries(expected)) {
+    const contract = byPackage.get(pkg)
+    assert.ok(contract, `缺少客户端契约 ${pkg}`)
+    assert.equal(contract.optional, true)
+    assert.deepEqual(contract.markers.map((marker) => marker.needle), needles)
+    for (const marker of contract.markers) {
+      assert.equal(marker.file, 'lib/client.js', `${pkg} 的 ${marker.needle} 应标明所在文件`)
+    }
+  }
+  // 服务端 canary 里也有非入口文件：tools/pre-execute 在 lib/pipeline.js。
+  const tools = HOST_BEHAVIOR_CONTRACTS.find((item) => item.package === '@deepseek-ai/dsh-tools')
+  assert.equal(tools.markers.find((marker) => marker.needle === 'tools/pre-execute')?.file, 'lib/pipeline.js')
+})
+
+test('观测包基线：office / sandbox / LibreOffice Kit 都登记，且没有重复包名', () => {
+  const names = HOST_PACKAGE_BASELINES.map((item) => item.name)
+  assert.equal(new Set(names).size, names.length)
+  for (const name of ['@deepseek-ai/dsh-skill-office', '@deepseek-ai/dsh-sandbox-windows-acl', '@deepseek-ai/libreoffice-kit']) {
+    const item = HOST_PACKAGE_BASELINES.find((entry) => entry.name === name)
+    assert.ok(item, `缺少观测包 ${name}`)
+    assert.equal(item.observed, true)
+  }
+  assert.equal(HOST_PACKAGE_BASELINES.find((item) => item.name === '@deepseek-ai/libreoffice-kit').baselineVersion, '0.1.5')
 })

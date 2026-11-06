@@ -6,18 +6,23 @@
       batch: 'compat.op.batch', delete: 'compat.op.delete',
     }
     /**
-     * 0.2.1 起**新增**的宿主契约能力 id（capability-specs.ts 的那四条）。
+     * 本插件依赖的**必备**宿主契约能力 id（capability-specs.ts 里没有等价兜底、缺席即功能
+     * 少一半的那些）。
      *
      * 与上面那排 action 的区别：action 是"这个操作走哪条路"，这些是"某个契约还在不在"。
      * 它们缺了都不抛错、只是功能少一半，所以单独一块而不是混进 action 表 —— 混进去会让
      * "删除不可用"和"工具限制失效"看起来一样严重，实际后者不影响你删任何东西。
      *
-     * 键集必须与服务端 `CONTRACT_CAPABILITY_IDS` 对齐：那里按 feature-overview 的行 key 映射
-     * 到能力 id，这里按能力 id 过滤 findings。两边任一处改名，另一处会在界面上静默失效
-     * （契约行不再出现），所以加了就两处一起加。
+     * 与服务端 `CONTRACT_CAPABILITY_IDS` 的关系：那边只映射 feature-overview 里**有独立行**
+     * 的四条；这里还包含没有独立行、但同属必备契约的能力。两处都按能力 id 过滤 findings，
+     * 任一处改名都会让对应条目在界面上静默消失，所以改了能力 id 就一起登记。
      */
     var CONTRACT_CAPABILITY_IDS = [
       'agentPreset.register', 'tools.restrict-method', 'agent.created-event', 'connection.admit',
+      'tools.get-method', 'tools.guard-dispatch', 'tools.mcp-resource-args', 'systemPrompt.mcp-section',
+      'mcp-client.config-schema', 'skills.register-provider', 'agents.list', 'pluginInventory.list',
+      'webServer.register', 'sandboxPolicy.resolve', 'projection.cached-title',
+      'official-skill-assets', 'official-sandbox-asset',
     ]
     /**
      * 「最近改动」流水里 op 的人类名（0.15.0 B2）。
@@ -133,19 +138,26 @@
       const findings = (data && data.findings) || []
       const byId = {}
       findings.forEach(function (f) { byId[f.id] = f })
-      const ok = function (id) { return byId[id] === undefined || byId[id].state === 'ok' }
+      // 缺席的 id 不能当成满足：那说明能力表被删 / 改名了，路由却仍会走一条已不再被探测的
+      // 破坏性路径。与服务端 routeFor 同口径（fail-closed），否则页面说"可用"、点下去被拒。
+      const ok = function (id) { return byId[id] !== undefined && byId[id].state === 'ok' }
       const routes = {}
-      routes.list = ok('workspace.read-state') && ok('workspace.read-table') && ok('workspace.index-shape') ? 'adapter' : 'none'
+      routes.list = ok('workspace.read-state') && ok('workspace.read-table') && ok('workspace.index-shape')
+        && ok('persistence.list') ? 'adapter' : 'none'
       routes.archive = ok('workspace.archive-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
       routes.unarchive = ok('workspace.unarchive-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
       routes.batch = ok('workspace.batch-native') ? 'native' : (ok('workspace.enqueue') && ok('workspace.set-state') ? 'adapter' : 'none')
-      // 与服务端 OPERATION_ROUTES 同源（src/compat/probe.ts）：
+      // 与服务端 OPERATION_ROUTES 同源（src/compat/host-roots.ts）：
       //   · delete 不要求 `projection.delete-native` —— 宿主自带删除屏障是可选槽位，
       //     要求它会把 rc.2 上的删除显示成不可用（服务端有意不要求）；
-      //   · 但要求 `projection.table-delete` —— 那是运行时的硬前提（表不可删就没法安全删行）。
+      //   · 但要求 `projection.table-delete` —— 那是运行时的硬前提（表不可删就没法安全删行）；
+      //   · 还要求 `workspace.read-header` / `sessions.live-access` / `persistence.list` /
+      //     `persistence.transcript-locate` —— 删除入口在破坏性步骤之前会硬检查它们，
+      //     不算进路由就会「页面说可用、点下去在链路中段报错」。
       routes.delete = ok('workspace.delete-native') ? 'native'
         : (ok('workspace.enqueue') && ok('workspace.set-state') && ok('workspace.index-header')
-          && ok('sessions.detach-live') && ok('sessions.cold-announce') && ok('projection.write')
-          && ok('projection.table-delete') ? 'adapter' : 'none')
+          && ok('workspace.read-header') && ok('sessions.detach-live') && ok('sessions.cold-announce')
+          && ok('sessions.live-access') && ok('persistence.list') && ok('persistence.transcript-locate')
+          && ok('projection.write') && ok('projection.table-delete') ? 'adapter' : 'none')
       return routes
     }

@@ -323,7 +323,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 与 `mcpm-set-enabled` / `skill-source-enable` 同档：写全局定义、场景锁要冻结它。
   // 会话层的 scope-set 仍不冻结（它只写租约，不改全局）。
   'scope-intent-set': { write: true, frozen: true, syncsArchive: true },
-  // 「统一关闭」/「全部停止」：一次性动作（关会话 / 工作区的开关 + 写 off），不是持久意图。
+  // 「全部关闭」/「全部停止」：一次性动作（关会话 / 工作区的开关 + 写 off），不是持久意图。
   // 写全局意图之外还改会话侧车，所以照全局写入口同一档冻结；不同步场景档案 ——
   // 它是一次性的，不该把场景里的勾选永久改掉。
   'scope-stop-now': { write: true, frozen: true },

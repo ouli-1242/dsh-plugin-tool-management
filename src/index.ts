@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { symbols } from '@deepseek-ai/cordis'
 import { defineTool as hostDefineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createHistoryDomain } from './sessions/history.js'
 import type { SessionsRegistry } from './sessions/history.js'
@@ -61,6 +62,7 @@ import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 import { assessPresetReach, injectionFactsOf, presetRosterOf, readCompositionFacts, reachNoticeForAgent } from './compat/preset-reach.js'
 import { installHttpApi, type WebServerService } from './http-api.js'
 import { createMcpManager } from './mcp/manager.js'
+import { createMcpPromptShadow, type McpPromptSectionService } from './mcp/prompt-shadow.js'
 import type { JsonFileRead } from './mcp/disabled-tools.js'
 // 确认卡回显"新 URL"时要打码（查询串里的凭据不该明文进卡片），口径与列表视图同一份实现。
 import { maskUrlQuery } from './mcp/secret-guard.js'
@@ -387,8 +389,24 @@ export default {
     // （停用表丢掉一条 = 已停用的 MCP 工具重新可调用）。
     const hubLock = createHubFileLock(hubPath())
     let writeChain: Promise<void> = Promise.resolve()
+    /**
+     * 「本条异步调用链已经持有写锁」的标记。
+     *
+     * 为什么必须可重入：锁内确实会回调别的域 —— MCP 改名 / 删台在锁内调
+     * `memoriesService.patchIndex` 同步场景档案，而记忆域自己也取锁。没有这个标记，
+     * 那条 op 会排在**自己**后面：不是报错，是永远不返回。
+     *
+     * 用 `AsyncLocalStorage` 而不是一个布尔：多个请求并发共用同一个进程，布尔会让后到的
+     * 请求误以为自己也持锁，直接跳过排队。
+     *
+     * ⚠️ 由此派生的**游离任务**（在临界区里 `void` 起、活过外层临界区）也会被算作"已持锁"，
+     * 这类任务不得写 hub；现有调用点没有这种形状。
+     */
+    const writeLockScope = new AsyncLocalStorage<true>()
     function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-      const run = writeChain.then(() => hubLock.run(fn), () => hubLock.run(fn))
+      if (writeLockScope.getStore() === true) return fn()
+      const enter = (): Promise<T> => writeLockScope.run(true, fn)
+      const run = writeChain.then(() => hubLock.run(enter), () => hubLock.run(enter))
       writeChain = run.then(() => undefined, () => undefined)
       return run
     }
@@ -992,6 +1010,48 @@ export default {
     }
 
     /**
+     * agent 作用域上的 `systemPrompt` 服务（取不到返回 undefined）。
+     *
+     * 必须从 **agent.ctx.get** 取：Cordis 的 traceable 代理会把方法调用时的 `this.ctx`
+     * 换成取服务的那个作用域，`systemPrompt.section()` 才会注册到该 agent 的 scoped 层。
+     * 从插件根 ctx 取会把遮蔽段注册到全局层 —— 那会遮蔽所有 agent，而不是只遮蔽本会话。
+     */
+    function systemPromptServiceOf(agent: unknown): McpPromptSectionService | undefined {
+      try {
+        const agentCtx = (agent as { ctx?: { get?: (name: string) => unknown } } | null | undefined)?.ctx
+        const service = agentCtx && typeof agentCtx.get === 'function' ? agentCtx.get('systemPrompt') : undefined
+        const candidate = service as Partial<McpPromptSectionService> | undefined
+        return candidate !== undefined && typeof candidate.section === 'function' && typeof candidate.getSectionOrder === 'function'
+          ? candidate as McpPromptSectionService
+          : undefined
+      } catch { return undefined }
+    }
+
+    /** 跨会话 prompt 隔离：按 agent 作用域同名遮蔽官方 MCP 段（见 mcp/prompt-shadow.ts）。 */
+    const mcpPromptShadow = createMcpPromptShadow(systemPromptServiceOf)
+
+    /** 把名册同步到某个 agent 的 prompt 遮蔽段；失败只记在本地（不拖垮工具可见性）。 */
+    function syncMcpPromptShadows(agent: unknown, roster: { visible: string[]; names: Set<string> }, resourceAvailable: boolean): void {
+      try { mcpPromptShadow.sync(agent, [...roster.names], roster.visible, { resourceAvailable }) } catch { /* best effort */ }
+    }
+
+    /**
+     * 预热某个 agent 的 prompt 遮蔽段。
+     *
+     * 工具可见性重排是异步的；agent 刚创建时先主动算一趟，避免首轮系统提示词在重排完成前
+     * 就带上别的对话的服务器名 / instructions。失败与重排那条路一样是 best effort。
+     */
+    function warmMcpPromptShadows(agent: unknown): void {
+      void (async () => {
+        try {
+          const registered = MCP_RESOURCE_TOOL_NAMES.filter((name) => tools.get(name) !== undefined)
+          const roster = await visibleMcpServerNames(agent)
+          if (roster !== null) syncMcpPromptShadows(agent, roster, registered.length > 0)
+        } catch { /* best effort */ }
+      })()
+    }
+
+    /**
      * MCP 服务器名册的短 TTL 快照（**与 agent 无关** —— 只有「可见性过滤」才逐 agent）。
      *
      * 为什么缓存：名册 = 两份补丁读盘 + 一次 loader 清单，而可见性那一层每个 agent 每个
@@ -999,8 +1059,9 @@ export default {
      *
      * TTL 取 3 秒，与侧车 TTL 同量级（服务器增删是罕见事件）。**陈旧的后果要说明白**：
      * 刚加的服务器晚 3 秒才进名册，这段时间名册缺它 —— 若名册里别的服务器在本会话都看不见，
-     * 就会走到「一台都看不见」那一支；判据⑤会在新服务器**有工具**时拦下（全局工具表里已经有
-     * 它的 `mcp__*`），只有无工具的服务器才会真被摘掉。恢复要等「TTL 到期后的下一次重排」
+     * 就会走到「一台都看不见」那一支；`rosterMissesRunningServer` 会在新服务器**有工具**时
+     * 拦下（全局工具表里已经有它的 `mcp__*`），只有无工具的服务器才会真被摘掉。恢复要等
+     * 「TTL 到期后的下一次重排」
      * —— 重排本身会触发，但 TTL 没到期时它重算的还是陈旧名册。
      */
     let configuredServerStatesCache: { at: number; value: { states: Array<{ serverName: string; disabled: boolean }>; complete: boolean } } | null = null
@@ -1017,7 +1078,8 @@ export default {
     /**
      * 本作用域**看得见的** MCP 服务器名，名册里的全部名字，以及「名册读全了没有」。
      *
-     * `visible` = 看得见的那些（与状态段 / `mcp_manager_list` 同一份判据）。
+     * `visible` = 补丁 / loader 里启用、且本作用域看得见的那些（与状态段 / `mcp_manager_list`
+     * 同一份判据）。停用的服务器没有运行中的 provider，不算「看得见」。
      * `names` = 名册里的全部名字（看得见 + 看不见）。
      * `complete` = 名册读全了没有：任一层读不动它就只少几条，返回值上与「名册本来就短」
      * 同形（读错误在 `configuredServerStates` 内部被吞成「跳过这一层」）。
@@ -1036,6 +1098,7 @@ export default {
         const name = String((row && row.serverName) || '')
         if (!name) continue
         names.add(name)
+        if (row.disabled === true) continue
         if (sessionServerHiddenOf(agent, name)) continue
         visible.push(name)
       }
@@ -1092,9 +1155,14 @@ export default {
     async function resourceToolDenyFor(agent: unknown): Promise<string[]> {
       try {
         const registered = MCP_RESOURCE_TOOL_NAMES.filter((name) => tools.get(name) !== undefined)
-        if (registered.length === 0) return []
         const roster = await visibleMcpServerNames(agent)
         if (roster === null) return []
+        // 同一趟名册顺带同步 prompt 遮蔽：工具表与系统提示词必须一起收窄，否则本会话会
+        // 「看不到工具、却被提示词教着去调用」。名册不完整时只遮蔽已知的隐藏项，方向选
+        // 不漏掉别的对话。资源工具没注册时仍要遮蔽 `mcp:<server>` 的 instructions ——
+        // 那是另一个官方包注册的段，只是不合成资源段文本。
+        syncMcpPromptShadows(agent, roster, registered.length > 0)
+        if (registered.length === 0) return []
         if (!roster.complete) return []
         if (roster.visible.length > 0) return []
         if (await rosterMissesRunningServer(roster.names)) return []
@@ -1259,6 +1327,9 @@ export default {
       // 会话层覆盖：记忆域按会话投影场景与逐条开关。侧车归 scopeStore 管
       // （它有自己的 TTL 缓存），这里只转手 —— 记忆域不引第二份读取点。
       scopeOverrideOf: memoryScopeOfSession,
+      // 跨进程写锁：索引是整份读-改-写，web 与 desktop 两个宿主共用同一个 hub 时
+      // 没有这把锁就会互相覆盖（丢场景档案与记忆启停，且无报错）。
+      withWriteLock,
     })
     // 场景记忆段的注册/生命周期由下面的注入通道统一管（memoriesService.memoryText / promptText）。
 
@@ -1480,9 +1551,9 @@ export default {
     }
 
     /**
-     * 场景应用写全局意图：`blocked`（统一关闭）是比场景更强的用户要求，场景不得覆盖它
+     * 场景应用写全局意图：`blocked`（全部关闭）是比场景更强的用户要求，场景不得覆盖它
      * —— 只有全局意图开关（`scope-intent-set`）能解除。不挡的话，进一次包含这台服务器 /
-     * 这条技能的场景，就会把「统一关闭」悄悄降级成 off，之后任何会话的租约都能把它拉起来。
+     * 这条技能的场景，就会把「全部关闭」悄悄降级成 off，之后任何会话的租约都能把它拉起来。
      */
     function withSceneIntent(current: ScopeIntent, domain: IntentDomain, key: string, state: IntentState): ScopeIntent {
       if (intentOf(current, domain, key) === 'blocked') return current
@@ -1560,7 +1631,7 @@ export default {
         //     场景模式进出一次就会改写 state.json。意图那一格同口径。
         const { states, shadowed, unloadable, entryNames } = await skillScan()
         const intentSnap = intentStore.snapshot()
-        /** 全局「统一关闭」的技能：场景不得覆盖（见 `withSceneIntent`），物理启停也一并跳过。 */
+        /** 全局「全部关闭」的技能：场景不得覆盖（见 `withSceneIntent`），物理启停也一并跳过。 */
         const blocked = new Set<string>()
         const planned: Array<{ key: string; on: boolean; intentChanged: boolean }> = []
         const skipped: string[] = []
@@ -1574,12 +1645,12 @@ export default {
           if (unloadable.has(key)) continue
           // 这次扫描里根本没有这个键 = 技能已被删除（或所在目录已消失）：没有可写的对象。
           if (!(key in states)) { skipped.push(`${key}（已不存在）`); continue }
-          // 全局统一关闭压过场景（与 `scope-set` 拒写「开」同一条）：既不改意图也不动策略表。
-          // 技能还要看所在来源：来源被统一关闭时，技能级开关开着也加载不到（来源闸恒生效）。
+          // 全局全部关闭压过场景（与 `scope-set` 拒写「开」同一条）：既不改意图也不动策略表。
+          // 技能还要看所在来源：来源被全部关闭时，技能级开关开着也加载不到（来源闸恒生效）。
           if (intentOf(intentSnap, 'skills', key) === 'blocked' ||
             intentOf(intentSnap, 'skillSources', key.slice(0, i)) === 'blocked') {
             blocked.add(key)
-            if (on) skipped.push(`${key}（已在全局「统一关闭」）`)
+            if (on) skipped.push(`${key}（已在全局「全部关闭」）`)
             continue
           }
           const wanted: IntentState = on ? 'on' : 'off'
@@ -1662,13 +1733,13 @@ export default {
           const prev = wanted.get(name)
           wanted.set(name, prev === undefined ? s.enabled : prev || s.enabled)
         }
-        // 全局「统一关闭」压过场景：不改意图、不动补丁（见 `withSceneIntent`）。
+        // 全局「全部关闭」压过场景：不改意图、不动补丁（见 `withSceneIntent`）。
         const blocked = new Set<string>()
         for (const [name, enabled] of [...wanted]) {
           if (intentOf(intentSnap, 'mcp', name) !== 'blocked') continue
           wanted.delete(name)
           blocked.add(name)
-          if (enabled) ctx.logger?.warn?.(`场景要启用 MCP 服务器「${name}」，但它已在全局「统一关闭」：已跳过`)
+          if (enabled) ctx.logger?.warn?.(`场景要启用 MCP 服务器「${name}」，但它已在全局「全部关闭」：已跳过`)
         }
         if (wanted.size > 0) {
           await intentStore.mutate((current) => {
@@ -1742,12 +1813,12 @@ export default {
         // 与 MCP 同一条：场景引擎改的是全局定义 → 先写意图，再改来源状态（见
         // applyMcpServerSwitches 的注释；运行态 = 意图 ∪ 租约）。
         const intentSnap = intentStore.snapshot()
-        // 全局「统一关闭」压过场景：不改意图、不动来源状态（见 `withSceneIntent`）。
+        // 全局「全部关闭」压过场景：不改意图、不动来源状态（见 `withSceneIntent`）。
         const blocked = new Set<string>()
         for (const s of switches) {
           if (intentOf(intentSnap, 'skillSources', s.root) !== 'blocked') continue
           blocked.add(s.root)
-          if (s.enabled) ctx.logger?.warn?.(`场景要启用技能来源「${s.root}」，但它已在全局「统一关闭」：已跳过`)
+          if (s.enabled) ctx.logger?.warn?.(`场景要启用技能来源「${s.root}」，但它已在全局「全部关闭」：已跳过`)
         }
         if (switches.length > 0) {
           await intentStore.mutate((current) => {
@@ -3105,7 +3176,7 @@ export default {
       //
       // 只问**全局关着**的那些格：开着的那些本来就该显示成开着，数它没有意义，而记忆这类域
       // 可能有几百条键 —— 每次读面板都全扫一遍是不必要的成本。
-      // 键集合的口径：**意图域**只数「意图不是 on」的键（全局开着不是租约，统一关闭没有
+      // 键集合的口径：**意图域**只数「意图不是 on」的键（全局开着不是租约，全部关闭没有
       // 租约这回事）；**纯视图域**只数「全局关着」的键。两句话都只回答"这一格该不该挂徽章"。
       const leaseKeys: Partial<Record<ScopeFlagDomain, readonly string[]>> = {}
       for (const domain of SCOPE_FLAG_DOMAINS) {
@@ -3181,7 +3252,7 @@ export default {
         flags,
         unavailable,
         // 三态意图与租约计数（界面用）：`flags` 把 blocked 投影成 false，分不出「关着」与
-        // 「统一关闭」；租约计数则是全局 off 却仍在跑的唯一解释。
+        // 「全部关闭」；租约计数则是全局 off 却仍在跑的唯一解释。
         intent: { mcp: intentSnapshot.mcp, skillSources: intentSnapshot.skillSources, skills: intentSnapshot.skills },
         leases: {
           mcp: leaseCounts('mcp'),
@@ -3585,7 +3656,7 @@ export default {
       const rows = rowsIn.map((row: any) => {
         const name = String((row && (row.serverName || row.id)) || '')
         const state = intentOf(intent, 'mcp', name)
-        // 全局开着（`on`）不是租约；统一关闭（`blocked`）压过一切会话层 —— 两种都不挂徽章。
+        // 全局开着（`on`）不是租约；全部关闭（`blocked`）压过一切会话层 —— 两种都不挂徽章。
         const leaseCount = state === 'on' || state === 'blocked' || scan === null ? 0 : (scan.claims.mcp.get(name) || []).length
         return {
           ...row,
@@ -5264,6 +5335,7 @@ export default {
         ctx.effect(() => {
           const stop = (ctx.on as (event: string, cb: (payload: any) => void) => (() => void) | void)('agent/created', (payload) => {
             mcp.attachAgent(payload && payload.agent)
+            warmMcpPromptShadows(payload && payload.agent)
             // 技能目录按会话 cwd 取数：先热一份，否则该会话首轮注入会少掉整段目录。
             // 子代理热的是**所属用户会话**那一份：它的目录 / 覆盖都继承父会话（见 `sessionScopeIdOf`）。
             const scopeSid = sessionScopeIdOf(payload && payload.agent)
@@ -5278,13 +5350,16 @@ export default {
         ctx.effect(() => {
           const stop = (ctx.on as (event: string, cb: (payload: any) => void) => (() => void) | void)('agent/disposed', (payload) => {
             mcp.detachAgent(payload && payload.agent)
+            mcpPromptShadow.dispose(payload && payload.agent)
           })
           return typeof stop === 'function' ? stop : () => { /* noop */ }
         }, 'dsh-plugin-tool-management: mcp visibility (agent disposed)')
+        ctx.effect(() => () => { mcpPromptShadow.disposeAll() }, 'dsh-plugin-tool-management: mcp prompt shadow cleanup')
         const agents = typeof ctx.get === 'function' ? ctx.get('agents') as { list?: () => unknown[] } | undefined : undefined
         if (agents && typeof agents.list === 'function') {
           for (const agent of agents.list()) {
             mcp.attachAgent(agent)
+            warmMcpPromptShadows(agent)
             const scopeSid = sessionScopeIdOf(agent)
             if (scopeSid !== null) void skillCatalog.warmSession(scopeSid)
             // 老会话（本功能上线前创建的）没有基线：启动时补记一份"现在"——

@@ -164,19 +164,37 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 /* 中性标签：灰边框 + 主色字（用户 2026-11-06：MCP 的「未运行」不该是红的 —— 没跑起来不是故障）。 */
 .dsm-tag-quiet{border-color:var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}
-/* 租约浮窗（悬在「临时运行 · N 个对话」徽章上）：按工作区分组列出是**哪几个对话**在用它。
+/* 租约浮窗（悬在「临时运行 · N 个对话」徽章上）：一行一个认领者，对话标题在左、
+   工作区弱化成行尾后缀、放行按钮贴右边。早先按工作区分组时，组头与缩进各占一行，
+   只有一两个对话时整块像张空卡片（用户反馈「太多空白」）——分组只保留排序意义，不再占行。
    固定定位 + 视口坐标 —— 徽章所在的列表行是 overflow:hidden，绝对定位会被裁掉
-   （与 SourceSelect 的菜单同一条理由）。 */
-.dsm-lease-pop{position:fixed;z-index:1200;box-sizing:border-box;width:max-content;max-width:min(92vw,720px);padding:10px 12px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;white-space:normal;text-align:left}
-/* 组头 = 工作区（白、稍重）：它是"哪个项目在用它"；组内每行一个对话（灰、缩进）。 */
-.dsm-lease-pop-group+.dsm-lease-pop-group{margin-top:10px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1)}
-.dsm-lease-pop-ws{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:20px}
-.dsm-lease-pop-item{display:flex;gap:10px;align-items:center;min-height:24px;padding-left:12px}
-.dsm-lease-pop-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;text-overflow:ellipsis;white-space:nowrap}
+   （与 SourceSelect 的菜单同一条理由）。
+   宽度上限 280px：标题与工作区都长时两边一起省略，边框不会跟着内容无限拉长。 */
+.dsm-lease-pop{position:fixed;z-index:1200;box-sizing:border-box;display:flex;width:max-content;min-width:180px;max-width:min(88vw,280px);flex-direction:column;padding:0;overflow:visible;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;white-space:normal;text-align:left}
+/* 徽章与浮窗之间留了 6px 空档：用不可见的桥接条补上，指针从徽章移进浮窗时
+   不会经过"两边都不在"的位置 —— 因此一离开两者就能立刻收起，不必等关闭延迟。
+   浮窗在上方时桥接条改到下方（dsm-lease-pop-up），始终朝着徽章那一侧。
+   滚动必须放在内层：外层一旦 overflow:auto，伸出去 8px 的桥接条会被裁掉。 */
+.dsm-lease-pop:not(.dsm-lease-pop-up)::before,.dsm-lease-pop-up::after{position:absolute;right:0;left:0;height:8px;content:""}
+.dsm-lease-pop:not(.dsm-lease-pop-up)::before{top:-8px}
+.dsm-lease-pop-up::after{bottom:-8px}
+.dsm-lease-pop-body{box-sizing:border-box;min-height:0;flex:1 1 auto;padding:6px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l2) transparent}
+.dsm-lease-pop-body::-webkit-scrollbar{width:8px;height:8px}
+.dsm-lease-pop-body::-webkit-scrollbar-track{background:transparent}
+.dsm-lease-pop-body::-webkit-scrollbar-thumb{border-radius:99px;background:var(--dsw-alias-border-l2)}
+.dsm-lease-pop-item{box-sizing:border-box;display:flex;gap:8px;align-items:center;min-height:28px;padding:2px 6px;border-radius:var(--dsm-radius-s)}
+.dsm-lease-pop-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
+/* 标题吃满剩余宽度：行尾的「×」才会贴住右边缘，而不是跟在短标题后面留一截空白。 */
+.dsm-lease-pop-title{min-width:0;overflow:hidden;flex:1;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;text-overflow:ellipsis;white-space:nowrap}
+/* 工作区后缀：弱化到辅助信息一档；上限 38% 是为了长路径不把标题挤没。 */
+.dsm-lease-pop-ws{min-width:0;max-width:38%;overflow:hidden;flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
 /* 每行末尾那颗「×」：只放开这一个对话的临时运行，其余对话照旧（认领是逐个对话记的）。 */
-.dsm-lease-pop-x{flex:none;box-sizing:border-box;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:16px;line-height:24px;cursor:pointer}
+.dsm-lease-pop-x{flex:none;box-sizing:border-box;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsm-radius-s);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:14px;line-height:24px;cursor:pointer}
+.dsm-lease-pop-item:hover .dsm-lease-pop-x{color:var(--dsw-alias-label-secondary)}
 .dsm-lease-pop-x:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsm-lease-pop-x:disabled{cursor:default;opacity:.5}
+/* 徽章与「×」都能用键盘操作（Enter/空格开合、Tab 进浮窗）：焦点必须看得见。 */
+.dsm-tag-lease:focus-visible,.dsm-lease-pop-x:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:1px}
 /* 开关与官方同款（用户 2026-10-18：「switch 按键统一和官方一样的模板」→「改成完全一样」）：
    36×20 外壳 + 16px 拇指、内边距 2px、滑块位移 16px、开态用 brand-primary，
    关态拇指用 switch-thumb —— 尺寸与配色照抄宿主设置面板那颗。
@@ -547,7 +565,12 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px}
 .dsm-compat-list{margin:0;padding-left:16px}.dsm-compat-list li+li{margin-top:4px}
 @container(max-width:640px){.dsm-compat-grid{grid-template-columns:1fr}}
-html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!important;scrollbar-gutter:stable}.dsm-panel-head{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:minmax(0,1fr) max-content;grid-template-areas:"scope links" "tabs tabs";align-items:center;column-gap:8px;min-width:0;background:var(--dsm-surface,var(--dsw-alias-bg-layer-2))}.dsm-tabs-shell{display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
+/* 滚动条装订线只在面板挂载期间生效，两个落点各管一种布局：
+   · .dsm-settings-scroll-host —— 41 片按计算样式找出宿主真正的滚动容器，临时挂上这个类；
+   · html.dsm-scroll-stable   —— 滚动落在视口上时（找不到祖先容器）由 41 片临时加类。
+   两段类名是为了压过宿主自己的选择器，替代原先的 !important —— 强制值会盖掉宿主的 overflow 语义。
+   以前这里是一条常驻的 html/body 规则：它改的是整个应用、卸载后也不会撤销，已删除。 */
+.dsm-settings-scroll-host.dsm-settings-scroll-host{overflow-y:auto;scrollbar-gutter:stable}html.dsm-scroll-stable{scrollbar-gutter:stable}.dsm-panel-head{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:minmax(0,1fr) max-content;grid-template-areas:"scope links" "tabs tabs";align-items:center;column-gap:8px;min-width:0;background:var(--dsm-surface,var(--dsw-alias-bg-layer-2))}.dsm-tabs-shell{display:flex;min-width:0;align-items:center;gap:4px;margin-bottom:0;padding-top:2px}.dsm-tabs{display:grid;min-width:0;flex:1;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:0;overflow:hidden;margin-bottom:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-tab{box-sizing:border-box;width:100%;min-width:0;padding-right:4px;padding-left:4px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.dsm-feedback-link{width:30px;height:30px;box-sizing:border-box;padding:0;justify-content:center}.dsm-feedback-link svg{width:16px;height:16px}@container(max-width:620px){.dsm-tab{padding-right:4px;padding-left:4px;font-size:12px}}
 /* 顶部栏右上角那一行（版本号 · 检查更新 · GitHub）：排在**作用域行**的右端，页签行独占一行。
    位置由 .dsm-panel-head 的网格排（area links）—— 它要和 GitHub 图标并排（用户 2026-10-22），
    塞进 .dsm-tabs-shell 就只能挤在页签那一行里。 */
@@ -955,7 +978,7 @@ html,body{scrollbar-gutter:stable}.dsm-settings-scroll-host{overflow-y:scroll!im
 .dsm-rowselect-compact .dsm-rowselect-main{flex-direction:row;align-items:baseline;gap:8px}
 /* 单行版里**名字不缩**（用户 2026-11-06：「标题名字要全部展示」）—— 挤掉的是描述，
    不是名字。 */
-.dsm-rowselect-compact .dsm-rowselect-name{flex:none}
+.dsm-rowselect-compact .dsm-rowselect-name{flex:none;max-width:100%}
 .dsm-rowselect-compact .dsm-rowselect-desc{min-width:0;flex:1 1 auto}
 .dsm-rowselect-name{overflow:hidden;font-size:13px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
 .dsm-rowselect-desc{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}

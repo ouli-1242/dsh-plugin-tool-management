@@ -12,6 +12,10 @@ import type { createMemoriesService } from './memories/service.js'
 import type { buildQuickPromptOps } from './ops/quick-prompts.js'
 import type { createSubagentCatalog } from './subagents/catalog.js'
 import type { createSubagentService } from './subagents/service.js'
+import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
+
+/** 异常文案：Error 取 message，其余 String（与仓库其它模块同一写法）。 */
+const msg = (e: unknown): string => String((e && (e as Error).message) || e)
 
 /** 场景联动的依赖：记忆域 + 运行时五域。 */
 export interface SceneLinkageDeps {
@@ -55,8 +59,20 @@ export function installSceneLinkage(deps: SceneLinkageDeps): void {
       const names = Object.keys(touched)
       // 逐场景增量：此前整表回写，会把窗口期里别人保存的**别的场景**档案抹掉。
       for (const scene of names) await deps.memoriesService.saveArchive(scene, touched[scene])
+      // 上一次若报过失败，这次成功就把它收掉（上报通道表达的是"现在的状态"）。
+      clearRuntimeNote('scene-archive-rebind')
       return names.length
-    } catch {
+    } catch (e) {
+      // 改名已经成功、档案没跟上：界面会把那条绑定显示成 stale，但没人知道是**写失败**。
+      // 挂一条运行时上报（兼容页可见），别让用户只能靠"勾选悄悄没了"去倒查。
+      noteRuntime({
+        id: 'scene-archive-rebind',
+        label: '场景档案改绑',
+        kind: 'write',
+        fallback: 'inform-only',
+        detail: `人设「${from}」改名为「${to}」后，场景档案里的引用没能同步（${msg(e)}）：相关场景仍指向旧名，进场景时那一项会被当成失效条目。`,
+        params: { from, to, reason: msg(e) },
+      })
       return 0
     }
   }

@@ -2004,7 +2004,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
     //   ① 重扫 = 重新读取并解析两个补丁文件，N 条就是 N 次全量解析（行数多时平方级）；
     //   ② 顺带把「整批导入」变成对其它写者的原子操作，不再允许别的写插到条目之间。
     // 存在性判定仍留在锁内（TOCTOU 的初衷不变），改成从一次性快照增量维护。
-    // 注意 withWriteLock **不可重入**（它挂在同一条 writeChain 上），所以循环体里不能再包一层。
+    // 注意 withWriteLock 在同一异步调用链上可重入（重入并入外层临界区、不再排队），
+    // 循环体里仍不必再包一层：外层已经持锁。
     await withWriteLock(async () => {
       const existing = await collectAll()
       // 按 id / serverName 两张表维护同一份快照：覆盖模式会摘掉旧行，两张表必须同步。

@@ -16,7 +16,14 @@
       // 写在 apply 方法体里的导出会随 apply 提前返回而静默消失（见下方注释）。
       pages: _pages,
       apply(ctx) {
-        ensureCss()
+        // 样式表挂在 document.head 上，不随插件 fiber 销毁 —— 把移除函数交给宿主作用域，
+        // 卸载 / 热重载后规则跟着走（判定与「为什么」见 20 片的 ensureCss）。
+        var stopCss = ensureCss()
+        try {
+          if (ctx && typeof ctx.effect === 'function') {
+            ctx.effect(function () { return stopCss }, 'dsh-plugin-tool-management: stylesheet')
+          }
+        } catch (e) { /* 旧宿主没有 effect：退化成"留到下次刷新"，与改造前一致 */ }
         // 导入 / 导出弹窗的默认目录：问一次宿主（桌面 → 主目录，跨平台跨用户），缓存起来供
         // 各处输入框取用。放在 apply 开头是因为它**不依赖 ctx**（apiCall 直接走 fetch），
         // 而用户打开那些弹窗要晚得多 —— 早一点发出去，打开时就已经到位（见 20 片的说明）。

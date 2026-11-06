@@ -139,13 +139,13 @@
      * （颜色统一为绿/灰，这个标记只留给"来源点"与统计用）。全局层恒 `scoped: false`。
      */
     function scopeFlag(domain, key, globalValue) {
-      // 全局 blocked（旧版「统一关闭」留下的持久停机）压过一切会话层（与后端 `resolveResource` 同一条）：会话里的覆盖、
+      // 全局 blocked（旧版「全部关闭」留下的持久停机）压过一切会话层（与后端 `resolveResource` 同一条）：会话里的覆盖、
       // 场景勾选、逐工具 / 单条技能的推导都不能把它显成开着 —— 否则开关是绿的、模型调不到。
       // 技能还要看所在来源：来源被 blocked 时，技能级开着也加载不到。
       if (domain === 'mcp' || domain === 'skills' || domain === 'skillSources') {
         var intentState = scopeIntentOf(domain, key)
         if (intentState === 'blocked') return { value: false, scoped: false }
-        // 意图比列表里那份 `globalOn` 新：写完统一关闭后列表还没重读，全局开关也该立刻翻过去。
+        // 意图比列表里那份 `globalOn` 新：写完全部关闭后列表还没重读，全局开关也该立刻翻过去。
         if (intentState === 'on') globalValue = true
         else if (intentState === 'off') globalValue = false
       }
@@ -166,7 +166,7 @@
     //
     // MCP 服务器与技能来源两格的全局开关**不是**补丁 / 来源状态，而是意图：
     //   on —— 全局启用；off —— 全局关闭（有会话还在用就保持运行，即租约）；
-    //   blocked —— 持久停机（旧版统一关闭；压过租约与一切会话层）。
+    //   blocked —— 持久停机（旧版全部关闭；压过租约与一切会话层）。
     // 界面上的全局开关读意图；"临时运行 · N 个对话"来自 `leases`，它是全局 off 却能跑的
     // 唯一解释。会话层不显示意图（那一层只回答"这个对话看不看得到"）。
     /** 某一格的全局意图：`'on' | 'off' | 'blocked' | null`（没记录 = 跟随运行态）。 */
@@ -198,6 +198,27 @@
       var list = byKey && typeof byKey === 'object' ? byKey[key] : null
       return Array.isArray(list) ? list : []
     }
+    /**
+     * 这一格的认领**单位数**：工作区粒度按工作区计，会话粒度按对话计。
+     *
+     * 与徽章浮窗的分组同一口径（`leaseGroups`）：有 cwd 的按归一化路径去重；没有 cwd 的
+     * 会话各自算一个单位，不能并成一个「无工作区」。用于开关悬浮提示与操作回执，避免
+     * 工作区粒度下文案说「N 个对话」而徽章说「N 个工作区」。
+     */
+    function scopeLeaseUnitCount(domain, key) {
+      var details = scopeLeaseDetails(domain, key)
+      if (!scopeIsWorkspace()) return details.length
+      var seen = Object.create(null)
+      var n = 0
+      details.forEach(function (d) {
+        var cwd = String((d && d.cwd) || '')
+        var unit = cwd === '' ? 'id:' + String((d && d.id) || '') : scopeWorkspacePathKey(cwd)
+        if (seen[unit]) return
+        seen[unit] = true
+        n += 1
+      })
+      return n
+    }
     /** 这一域此刻有租约的键（全局层专用；会话层返回空）。「全部关闭」按它取目标集。 */
     function scopeLeaseKeys(domain) {
       if (scopeIsSession()) return []
@@ -206,7 +227,7 @@
       return Object.keys(leases).filter(function (key) { return Number(leases[key]) > 0 })
     }
     /**
-     * 统一关闭成功后**就地**摘掉本地快照里的租约与意图，不等 `scope-get` 回来。
+     * 全部关闭成功后**就地**摘掉本地快照里的租约与意图，不等 `scope-get` 回来。
      *
      * 为什么不能改成再拉一次：服务端快照有短 TTL，紧接着的 `scope-get` 可能仍是写前的
      * 那一份 —— 徽章会先消失又冒回来；而且整层重拉会让列表按新状态重新定序，用户刚打开的
@@ -279,9 +300,10 @@
         if (String((d && d.id) || '') === id) { found = true; cwd = String((d && d.cwd) || '') }
       })
       if (!found) return
+      var workspaceKey = scopeWorkspacePathKey(cwd)
       var keep = list.filter(function (d) {
         if (String((d && d.id) || '') === id) return false
-        if (scopeIsWorkspace() && cwd !== '' && String((d && d.cwd) || '') === cwd) return false
+        if (scopeIsWorkspace() && workspaceKey !== '' && scopeWorkspacePathKey(d && d.cwd) === workspaceKey) return false
         return true
       })
       var domainLeases = Object.assign({}, leases[domain] || {})
@@ -320,7 +342,7 @@
       var list = all && typeof all === 'object' ? all[String(sceneName)] : null
       return Array.isArray(list) ? list : []
     }
-    /** 统一关闭某个（或全部）场景后，就地改本地计数 —— 理由同 `scopeForgetLeases`。 */
+    /** 全部关闭某个（或全部）场景后，就地改本地计数 —— 理由同 `scopeForgetLeases`。 */
     function scopeForgetSceneLeases(sceneName) {
       if (scopeIsSession()) return
       var global = scopeState.global
@@ -636,6 +658,22 @@
       var trimmed = String(cwd || '').replace(/[\\/]+$/, '')
       var parts = trimmed.split(/[\\/]/)
       return parts.length ? parts[parts.length - 1] : trimmed
+    }
+    /**
+     * 工作区路径比较键：与服务端 `sessions/path-key.ts` 的 `workspacePathKey` 同一口径 ——
+     * Windows 盘符 / UNC 路径统一分隔符并小写，其余平台大小写敏感；去掉尾分隔符。
+     *
+     * 为什么客户端也要这一份：浮窗按 cwd 给认领分组，分组键必须与服务端 `ws:<cwd>` 的
+     * 归一化一致，否则同一个工作区会显示成两块、计数与释放范围也对不上。改这里时同步改
+     * 服务端那一份（它是会话挂回与工作区作用域键的唯一真相）。
+     */
+    function scopeWorkspacePathKey(cwd) {
+      var raw = String(cwd == null ? '' : cwd).trim()
+      if (!raw) return ''
+      var windows = /^[A-Za-z]:[\\/]/.test(raw) || raw.indexOf('\\\\') === 0
+      var out = windows ? raw.replace(/\//g, '\\') : raw
+      while (out.length > 1 && (out.charAt(out.length - 1) === '\\' || out.charAt(out.length - 1) === '/')) out = out.slice(0, -1)
+      return windows ? out.toLowerCase() : out
     }
     /** 工作区键（`ws:<cwd>`）→ 显示名（键里带完整路径，去掉前缀再取末段）。 */
     function scopeWorkspaceNameFromKey(key) {

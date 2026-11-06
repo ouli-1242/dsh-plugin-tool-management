@@ -39,6 +39,16 @@ export interface MemoriesDeps {
    * 时刻不同步，界面与注入会各说各话。`undefined` = 没有覆盖 = 全局口径。
    */
   scopeOverrideOf?: (sessionId: string) => MemoryScopeOverride | undefined
+  /**
+   * 跨进程写锁（宿主注入的 `withWriteLock`）。
+   *
+   * 为什么本域必须自己接一把：`mutationQueue` 只串行**本进程**，而 web 与 desktop 是两个
+   * 宿主进程、共用同一个 `$DSH_HOME`。索引是整份读-改-写（readIndex → 改 → writeIndex），
+   * 两个进程交错时后写的会把先写的整片覆盖 —— 丢的是场景档案与记忆启停，且没有任何报错。
+   *
+   * 缺席时退化为仅进程内串行（测试与单进程部署）。
+   */
+  withWriteLock?: <T>(fn: () => Promise<T>) => Promise<T>
 }
 
 /** 一条记忆：正文 + 元数据（场景、顺序、启停、来源）。 */

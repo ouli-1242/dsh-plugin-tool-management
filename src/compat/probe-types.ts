@@ -15,7 +15,11 @@ export interface CapabilityFinding {
   readonly label: string
   readonly kind: 'read' | 'write' | 'delete'
   /** 这项能力长在哪个宿主服务上。 */
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs' | 'tools' | 'agentContext' | 'connection' | 'plugin'
+  readonly owner:
+    | 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings'
+    | 'presetRoster' | 'fs' | 'tools' | 'systemPrompt' | 'agentContext' | 'connection'
+    | 'subagents' | 'llm' | 'approval' | 'skills' | 'agents' | 'pluginInventory'
+    | 'webServer' | 'sandboxPolicy' | 'plugin'
   readonly state: CapabilityState
   /** 缺了这项能力还能怎么做。 */
   readonly fallback:
@@ -54,12 +58,43 @@ export interface CapabilityFinding {
   readonly optional?: boolean
 }
 
+/**
+ * 一个官方包在宿主 / 插件两侧的版本与适配判定。
+ *
+ * 为什么要逐包而不是只看宿主版本：官方发版时各包可能不同步；插件适配的是成员契约，
+ * 而每个包自己的版本才是「这一份实现有没有换过」的直接线索。`inPeerRange` 对宿主与
+ * 插件两侧都判定，`versionDrift` 与适配基准版本比较。
+ */
+export interface HostPackageStatus {
+  readonly name: string
+  /** 本插件为该包声明的 peer 范围；`null` = 非 peer 的运行时观测包（只比版本、不判范围）。 */
+  readonly peerRange: string | null
+  /** 本插件适配器验证过的该包版本（`null` = 没有基准记录）。 */
+  readonly baselineVersion: string | null
+  /** 插件侧解析到的版本；插件没有自己的副本时为 null。 */
+  readonly pluginVersion: string | null
+  /** 宿主侧解析到的版本；宿主不暴露该包时为 null。 */
+  readonly hostVersion: string | null
+  /** 两侧是否同一物理模块；只有参与身份比对的包有结论，其余为 null。 */
+  readonly sameModule: boolean | null
+  /** 运行时生效的那一份是否满足 peer 范围；非 peer / 两侧都解析不到时为 null。 */
+  readonly inPeerRange: boolean | null
+  /** 宿主或插件侧版本与适配基准不同（两侧都缺版本时为 false）。 */
+  readonly versionDrift: boolean
+  /** 可选 peer：两侧都解析不到是正常形态。 */
+  readonly optional?: boolean
+  /** 非 peer：只观测版本是否偏离基准，不参与安装期范围判定。 */
+  readonly observed?: true
+}
+
 /** 宿主身份：版本、物理模块路径、与插件是否同源。 */
 export interface HostIdentity {
   readonly version: string
   /** 包名 → 解析到的入口路径；解析不出来为 null。 */
   readonly modules: Record<string, string | null>
   readonly sameAsHost: Record<string, boolean | null>
+  /** 逐包版本与 peer 范围判定（含 cordis 与 11 个 dsh-* peer）。 */
+  readonly packages: readonly HostPackageStatus[]
   readonly blockers: readonly string[]
   /**
    * 已解析到、但**没能与宿主比对**的包（宿主的解析锚点里找不到它）。
@@ -158,24 +193,64 @@ export interface HostAssessment {
    * `undefined` = 本轮没量（例如找不到宿主安装锚点）。界面据此显示"判断不了"，而不是"正常"。
    */
   readonly contracts?: HostContractStatus
+  /**
+   * 宿主**行为契约**的实况（事件名 / 磁盘布局 / 配置键 / 补丁方言）。
+   *
+   * 与 `contracts` 同一套判定，但关注点不同：那一份看「插件要用的包还在不在」，
+   * 这一份看「插件写死的宿主行为字符串还成不成立」——官方改掉其中一个同样不抛错，
+   * 只是对应功能悄悄失效。
+   */
+  readonly behaviors?: HostContractStatus
+  /**
+   * 宿主**客户端**契约的实况（模块加载器 / 插槽名 / 客户端服务）。
+   *
+   * 与上面两份同源判定，但读者是浏览器那半 —— 服务端探测完全看不见它的失效。
+   */
+  readonly clientUi?: HostContractStatus
+  /**
+   * 只能人工核对的契约（时序 / 返回值 / 真实渲染）。随兼容状态 JSON 返回，供诊断使用；
+   * 页面不展示。
+   */
+  readonly manualChecks: readonly ManualReviewItem[]
 }
 
-/** 一个"裸模块名"包在宿主侧的实况。 */
+/** 一条无法自动验证的契约：稳定 id + 短标签 + 具体缺什么验证。 */
+export interface ManualReviewItem {
+  readonly id: string
+  readonly label: string
+  readonly detail: string
+}
+
+/** 缺失 canary 的说明：标识符 + 它守着的契约。 */
+export interface HostContractMarkerNote {
+  readonly needle: string
+  readonly why: string
+  /** 标记要求所在的包内文件；缺省为包入口。 */
+  readonly file?: string
+}
+
+/** 一个宿主契约包在宿主侧的实况。 */
 export interface HostContractPackageStatus {
   /** 官方包名。 */
   readonly package: string
   /** 失去它时受影响的功能。 */
   readonly feature: string
+  /** 漂移或缺失时用户能感知到的后果。 */
+  readonly impact?: string
+  /** 缺席是部署形态（例如宿主不用 JSONL 后端），不是故障。 */
+  readonly optional?: boolean
   /** 从宿主安装锚点解析到的入口；`null` = 宿主不再暴露这个包。 */
   readonly resolved: string | null
   /** 入口里缺失的 canary 标识符（空数组 = 都在）。 */
   readonly missingMarkers: readonly string[]
+  /** 缺失 canary 各自守着的契约（与 `missingMarkers` 同序）。 */
+  readonly missingMarkerNotes: readonly HostContractMarkerNote[]
 }
 
-/** 宿主非 peer 契约的整体实况。 */
+/** 宿主契约的整体实况。 */
 export interface HostContractStatus {
   readonly packages: readonly HostContractPackageStatus[]
-  /** 宿主不再暴露的包（功能静默降级的来源）。 */
+  /** 宿主不再暴露的包（含可选包；功能静默降级的来源）。 */
   readonly missing: readonly string[]
   /** canary 缺失的包（契约可能已漂移，需人工复核）。 */
   readonly drifted: ReadonlyArray<{ readonly package: string; readonly missingMarkers: readonly string[] }>

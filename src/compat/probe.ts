@@ -24,12 +24,15 @@ import { createRequire } from 'node:module'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import * as semver from 'semver'
 import { CAPABILITY_SPECS, type CapabilitySpec } from './capability-specs.js'
-import { BARE_HOST_MODULE_CONTRACTS } from './host-contracts.js'
+import { BARE_HOST_MODULE_CONTRACTS, HOST_BEHAVIOR_CONTRACTS, HOST_CLIENT_UI_CONTRACTS, type HostModuleContract } from './host-contracts.js'
+import { manualReviewItems } from './manual-review.js'
 import {
   isAsarPath,
   isFn,
   OWNER_CLASSES,
+  packageRootOf,
   realPathWithReason,
   referencePrototypes,
   provideHostRootCandidates,
@@ -50,7 +53,9 @@ import type {
   HostIdentityPackage,
   HostIdentityRealpathFailure,
   HostIdentityRealpathNote,
+  HostContractMarkerNote,
   HostContractStatus,
+  HostPackageStatus,
 } from './probe-types.js'
 
 // 宿主安装根的发现与「该走哪条恢复路」的判定 整段搬到 ./host-roots.js，正文一字
@@ -74,7 +79,7 @@ export {
   VERIFIED_HOST_VERSION,
 } from './host-roots.js'
 export type { OperationName, RouteDecision } from './host-roots.js'
-import { hostRootCandidates, IDENTITY_PACKAGES, looksLikeHostPackageDir, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
+import { hostRootCandidates, hostVersionOf, IDENTITY_PACKAGES, looksLikeHostPackageDir, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
 
 // 「宿主在哪」这份口径只有一份（host-roots.ts 的 hostRootCandidates）。静态能力表里有条目要
 // 按宿主侧解析结果决定**这一轮能不能查**（`staticWhen`，见 connection.admit 那条），而
@@ -94,8 +99,10 @@ export type {
   HostIdentityPackage,
   HostIdentityRealpathFailure,
   HostIdentityRealpathNote,
+  HostContractMarkerNote,
   HostContractPackageStatus,
   HostContractStatus,
+  HostPackageStatus,
 } from './probe-types.js'
 
 /**
@@ -159,6 +166,87 @@ export const EXPECTED_PEER_RANGE = '>=0.2.2-rc.1 <0.2.3'
  */
 export const EXPECTED_MIN_HOST_VERSION =
   EXPECTED_PEER_RANGE.match(/(\d+\.\d+\.\d+(?:-rc\.\d+)?)/)?.[1] ?? VERIFIED_HOST_VERSION
+
+/** 一条逐包版本基准：包名、插件声明的 peer 范围、适配时验证过的版本。 */
+export interface HostPackageBaseline {
+  readonly name: string
+  /** `null` = 非 peer 的运行时观测包：只比版本，不参与安装期范围判定。 */
+  readonly peerRange: string | null
+  readonly baselineVersion: string
+  /** 可选 peer：本机未安装 / 宿主不提供是正常形态。 */
+  readonly optional?: boolean
+  /** 非 peer：插件不依赖它，但运行时契约与它绑定；版本偏离基准仍值得提示。 */
+  readonly observed?: true
+}
+
+/**
+ * 逐包版本基准：cordis 与 11 个 `@deepseek-ai/dsh-*` peer。
+ *
+ * 官方发版时这些包通常同代；逐包列出来是为了升级后能看见**哪一个包先变了**。
+ * 新增 / 撤掉 peer 时这里要同步增删，否则版本表会漏报或多报一个包；某个包独立发版时
+ * 直接改对应条目的 `baselineVersion`。宿主与插件两侧的版本在 {@link assessHost} 里逐包现读。
+ */
+const DSH_PEER_PACKAGES = [
+  '@deepseek-ai/dsh-agent-preset-registry',
+  '@deepseek-ai/dsh-llm',
+  '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-session-projection-cache',
+  '@deepseek-ai/dsh-settings',
+  '@deepseek-ai/dsh-spill-local',
+  '@deepseek-ai/dsh-storage-domain',
+  '@deepseek-ai/dsh-subagent-fork-in-process',
+  '@deepseek-ai/dsh-subagent-spawn-in-process',
+  '@deepseek-ai/dsh-tools',
+  '@deepseek-ai/dsh-workspace',
+] as const
+
+/** 可选 peer：宿主不提供时由插件自带副本或按需挂载，缺席不是安装故障。 */
+const OPTIONAL_PEER_PACKAGES = new Set<string>([
+  '@deepseek-ai/dsh-subagent-fork-in-process',
+  '@deepseek-ai/dsh-subagent-spawn-in-process',
+])
+
+/**
+ * 非 peer、但运行时契约与插件绑定的官方包：只观测宿主版本是否偏离适配基准，不判 peer 范围。
+ *
+ * 为什么不能省：peer 范围只覆盖 11 个 `dsh-*`；宿主可以只升级 `dsh-system-prompt` /
+ * `dsh-mcp-client` 这类「宿主不要求插件依赖」的包 —— 这时 peer 全部在范围内，插件却可能
+ * 已经按旧契约在跑。逐包列出宿主版本，至少让"这一代没验证过"在页面上有据可查。
+ */
+const OBSERVED_HOST_PACKAGES = [
+  '@deepseek-ai/dsh-agent',
+  '@deepseek-ai/dsh-host-plugin-inventory',
+  '@deepseek-ai/dsh-host-webserver',
+  '@deepseek-ai/dsh-mcp-client',
+  '@deepseek-ai/dsh-mcp-resources',
+  '@deepseek-ai/dsh-persona',
+  '@deepseek-ai/dsh-sandbox-policy',
+  '@deepseek-ai/dsh-session-persistence-jsonl',
+  '@deepseek-ai/dsh-skill',
+  '@deepseek-ai/dsh-skill-office',
+  '@deepseek-ai/dsh-sandbox-windows-acl',
+  '@deepseek-ai/dsh-subagent',
+  '@deepseek-ai/dsh-system-prompt',
+  '@deepseek-ai/dsh-tool-skill',
+] as const
+
+export const HOST_PACKAGE_BASELINES: readonly HostPackageBaseline[] = [
+  { name: '@deepseek-ai/cordis', peerRange: '^4.0.2', baselineVersion: '4.1.0' },
+  ...DSH_PEER_PACKAGES.map((name) => ({
+    name,
+    peerRange: EXPECTED_PEER_RANGE,
+    baselineVersion: VERIFIED_HOST_VERSION,
+    ...(OPTIONAL_PEER_PACKAGES.has(name) ? { optional: true } : {}),
+  })),
+  ...OBSERVED_HOST_PACKAGES.map((name) => ({
+    name,
+    peerRange: null,
+    baselineVersion: VERIFIED_HOST_VERSION,
+    observed: true as const,
+  })),
+  // LibreOffice Kit 跟着宿主运行时走，但版本号与 DSH 不同步（0.1.x）。
+  { name: '@deepseek-ai/libreoffice-kit', peerRange: null, baselineVersion: '0.1.5', observed: true },
+]
 
 /**
  * 单项能力的结论。
@@ -310,6 +398,8 @@ export function assessHost(ctx: {
   sessionPersistence?: unknown
   settings?: unknown
   fs?: unknown
+  webServer?: unknown
+  sandboxPolicy?: unknown
 }): HostAssessment {
   const get = (name: string): unknown => {
     try {
@@ -339,6 +429,9 @@ export function assessHost(ctx: {
   // 与**子代理 scope 里**的那个（restrict 在子 scope 上才作用于该子代理，run-provider.ts
   // 就是 `childAgent.ctx.get('tools')` 取的）。探测只能看宿主平面那一层 —— 子 scope 还没建。
   const tools = unwrap((ctx as { tools?: unknown }).tools !== undefined ? (ctx as { tools?: unknown }).tools : get('tools')) as Target
+  // 系统提示词服务：插件在 agent 作用域里用同名段遮蔽官方 MCP 段；这里从宿主平面取一份
+  // 只读视图，核对 MCP_SERVERS 排序位仍在（状态页与 doctor 都不该等隔离失效才发现）。
+  const systemPrompt = unwrap(get('systemPrompt')) as Target
   // agent 作用域：探测对象是 agent 自己的 ctx（`on` 挂在它上面）。这里没有活的 agent 可看，
   // 所以拿宿主平面的 ctx 代答 —— 同一个类实例链上的成员存在性，`on` 改名时两边一起改。
   // 局限如实标注：探得到"on 在不在"，探不到"agent/created 是否仍串行"。
@@ -350,6 +443,17 @@ export function assessHost(ctx: {
   const roster = unwrap(get('agentPresets')) as Target
   // fs 走 ctx 属性优先（它在插件 inject 清单里），与 settings 同一条取法。
   const fsService = unwrap(ctx.fs !== undefined ? ctx.fs : get('fs')) as Target
+  // 三个不在 inject 清单里的宿主服务：只能用 ctx.get 软取（属性访问在未声明时会抛）。
+  const subagents = unwrap(get('subagents')) as Target
+  const llm = unwrap(get('llm')) as Target
+  const approval = unwrap(get('approval')) as Target
+  // 技能 / agent 清单 / Loader 条目：插件按 scope 注册 provider 与等待 loader 时需要它们。
+  const skills = unwrap(get('skills')) as Target
+  const agents = unwrap(get('agents')) as Target
+  const pluginInventory = unwrap(get('pluginInventory')) as Target
+  // webServer / sandboxPolicy 在 inject 清单里：属性优先，取不到再按服务名软取。
+  const webServer = unwrap(ctx.webServer !== undefined ? ctx.webServer : get('webServer')) as Target
+  const sandboxPolicy = unwrap(ctx.sandboxPolicy !== undefined ? ctx.sandboxPolicy : get('sandboxPolicy')) as Target
 
   const references = referencePrototypes()
   const targets: Record<CapabilitySpec['owner'], { target: Target; reference?: Record<string, unknown> }> = {
@@ -361,14 +465,18 @@ export function assessHost(ctx: {
     presetRoster: { target: roster, reference: references.roster },
     fs: { target: fsService, reference: undefined },
     tools: { target: tools, reference: references.tools },
+    systemPrompt: { target: systemPrompt, reference: undefined },
     agentContext: { target: agentContext, reference: undefined },
     connection: { target: connection, reference: references.connection },
+    subagents: { target: subagents, reference: undefined },
+    llm: { target: llm, reference: undefined },
+    approval: { target: approval, reference: undefined },
+    skills: { target: skills, reference: undefined },
+    agents: { target: agents, reference: undefined },
+    pluginInventory: { target: pluginInventory, reference: undefined },
+    webServer: { target: webServer, reference: undefined },
+    sandboxPolicy: { target: sandboxPolicy, reference: undefined },
   }
-
-  const findings = CAPABILITY_SPECS.map((spec) => {
-    const slot = targets[spec.owner]
-    return inspectCapability(spec, slot.target, slot.reference)
-  })
 
   // 身份：插件加载的是不是宿主正在跑的那几个物理模块？
   const modules: Record<string, string | null> = {}
@@ -386,8 +494,29 @@ export function assessHost(ctx: {
   let pluginRealpathNote: string | null = null
   let asarHostVersion: string | null = null
   let asarPluginVersion: string | null = null
-  // 宿主非 peer 契约只跟"宿主装在哪"有关，与下面那个逐包 identity 循环无关，先量一次。
-  const contracts = hostContractStatus(hostRoot)
+  // 宿主版本优先读宿主应用自己的清单；读不到再退回插件解析到的 workspace 版本。
+  // 只读 workspace 会在「插件与宿主两份拷贝」时把插件侧版本当成宿主版本。
+  const hostVersion = (hostRoot === null ? null : hostVersionOf(hostRoot)) ?? versionOf('@deepseek-ai/dsh-workspace') ?? 'unknown'
+  // 宿主契约只跟"宿主装在哪"有关，与下面那个逐包 identity 循环无关，先各量一次。
+  const contracts = hostContractStatus(hostRoot, BARE_HOST_MODULE_CONTRACTS)
+  const behaviors = hostContractStatus(hostRoot, HOST_BEHAVIOR_CONTRACTS)
+  // 客户端 UI 契约：服务端看不见浏览器，只能核对宿主客户端 bundle 里的模块加载器 / 插槽名。
+  const clientUi = hostContractStatus(hostRoot, HOST_CLIENT_UI_CONTRACTS)
+  // 只能人工核对的项：能力表 + 三份契约清单里的 `manual` 说明。随诊断 JSON 返回，
+  // 页面不展示 —— 保留给排障时逐项核对。
+  const manualChecks = manualReviewItems([
+    ...BARE_HOST_MODULE_CONTRACTS,
+    ...HOST_BEHAVIOR_CONTRACTS,
+    ...HOST_CLIENT_UI_CONTRACTS,
+  ])
+  // 配置 schema 这类"导出对象上的字段名"：canary 只能证明字符串还在，读一次 JSON 表示才能
+  // 确认插件写出的键仍被官方接受。解析不到就不出结论（契约清单会报包缺失）。
+  const schemaFindings = inspectHostSchemaContracts(hostRoot)
+  const assetFindings = inspectOfficialSkillAssets(hostRoot)
+  const findings = CAPABILITY_SPECS.map((spec) => {
+    const slot = targets[spec.owner]
+    return inspectCapability(spec, slot.target, slot.reference)
+  }).concat(schemaFindings, assetFindings)
   for (const name of IDENTITY_PACKAGES) {
     const resolved = safeResolve(name)
     modules[name] = resolved
@@ -480,6 +609,19 @@ export function assessHost(ctx: {
     })
   }
 
+  // 逐包版本审计：升级宿主后「哪个包先变了、还在不在适配范围」在这里一次答完。
+  const packages = hostPackageStatuses(hostRoot, sameAsHost)
+  const outOfRange = packages.filter((item) => item.inPeerRange === false)
+  if (outOfRange.length > 0) {
+    // 装得上不等于适配：peer 的范围只在安装期校验一次，宿主原地升级后运行时会照跑。
+    // 这条阻塞项把「跑着但版本对不上」摆到页头，而不是等某个动作失败才发现。
+    blockers.push(
+      `这些官方包的版本超出本插件声明的 peer 范围（${EXPECTED_PEER_RANGE}）：`
+      + `${outOfRange.map((item) => `${item.name}（宿主 ${item.hostVersion ?? '?'} / 插件 ${item.pluginVersion ?? '?'}）`).join('、')}。`
+      + '请安装与本机 DSH 匹配的插件版本。',
+    )
+  }
+
   // 降级 = 确实用不了。可选槽位不算：它们缺席只是选中适配器路线，功能照常可用；
   // 列进降级会让用户以为好用的功能坏了（再配上"不可用"的措辞，还会以为按钮被禁掉）。
   const degraded = findings.filter((finding) => finding.state !== 'ok' && finding.optional !== true)
@@ -490,9 +632,10 @@ export function assessHost(ctx: {
   const delta = routeFor({ findings }, 'delete').via !== 'none'
   return {
     identity: {
-      version: versionOf('@deepseek-ai/dsh-workspace') ?? 'unknown',
+      version: hostVersion,
       modules,
       sameAsHost,
+      packages,
       blockers,
       unverified,
       notes,
@@ -502,25 +645,282 @@ export function assessHost(ctx: {
     mayDelete: delta,
     generatedAt: Date.now(),
     ...(contracts === null ? {} : { contracts }),
+    ...(behaviors === null ? {} : { behaviors }),
+    ...(clientUi === null ? {} : { clientUi }),
+    manualChecks,
   }
 }
 
 /**
- * 宿主**非 peer** 契约的实况：插件按裸模块名 require 的那几个官方包，宿主还暴不暴露、
- * 入口里那几条 canary 还在不在。
+ * 宿主某份官方包的版本；宿主不暴露该包时为 null。
+ *
+ * 从宿主自己的解析锚点量，而不是插件侧：插件可能是另一份拷贝，或者根本没有这个包
+ * （可选 peer / 宿主专属包）。
+ */
+function hostPackageVersion(hostRoot: string | null, name: string): string | null {
+  if (hostRoot === null) return null
+  try {
+    const resolved = createRequire(join(dirname(hostRoot), 'package.json')).resolve(name)
+    return versionOfPackageAt(resolved)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 逐包版本审计：宿主实际装的是哪一版、插件解析到哪一版、是否仍在 peer 范围内。
+ *
+ * `inPeerRange` 对**两侧都判定**：任一侧解析到且超出范围就是 false。宿主升级后插件
+ * 自己的副本通常没变，只看插件版本会把「宿主已经超出范围」藏起来；反过来插件装了一份
+ * 越界的私副本时，只看宿主版本同样会漏。
+ */
+function hostPackageStatuses(hostRoot: string | null, sameAsHost: Record<string, boolean | null>): HostPackageStatus[] {
+  return HOST_PACKAGE_BASELINES.map((baseline) => {
+    const pluginVersion = versionOf(baseline.name) ?? null
+    const hostVersion = hostPackageVersion(hostRoot, baseline.name)
+    const satisfiesRange = (version: string | null): boolean | null => {
+      if (version === null || baseline.peerRange === null) return null
+      try {
+        return semver.satisfies(version, baseline.peerRange)
+      } catch {
+        return null
+      }
+    }
+    const pluginInPeerRange = satisfiesRange(pluginVersion)
+    const hostInPeerRange = satisfiesRange(hostVersion)
+    const inPeerRange = pluginInPeerRange === false || hostInPeerRange === false
+      ? false
+      : (pluginInPeerRange === true || hostInPeerRange === true ? true : null)
+    return {
+      name: baseline.name,
+      peerRange: baseline.peerRange,
+      baselineVersion: baseline.baselineVersion,
+      pluginVersion,
+      hostVersion,
+      sameModule: sameAsHost[baseline.name] ?? null,
+      inPeerRange,
+      versionDrift: (hostVersion !== null && hostVersion !== baseline.baselineVersion)
+        || (pluginVersion !== null && pluginVersion !== baseline.baselineVersion),
+      ...(baseline.optional === true ? { optional: true } : {}),
+      ...(baseline.observed === true ? { observed: true } : {}),
+    }
+  })
+}
+
+/**
+ * 官方技能资产：技能页把宿主安装里的 office / sandbox 技能整目录物化到插件自家目录。
+ * 包还在、`assets/<技能>/SKILL.md` 的形态变了，技能页只会少几个来源（或来源为空），
+ * 而能力表全绿 —— 所以单独探测一次。
+ *
+ * 两个来源分开报：office 与 sandbox 是不同包、不同宿主形态（sandbox 只在 win32 注入），
+ * 合成一行会让「其中一个没了」看起来像「整个技能页坏了」。
+ *
+ * @param hostRoot - `.../node_modules/@deepseek-ai` 或 `null`。
+ */
+function inspectOfficialSkillAssets(hostRoot: string | null): CapabilityFinding[] {
+  if (hostRoot === null) return []
+  const requireFromHost = createRequire(join(dirname(hostRoot), 'package.json'))
+  const resolvePackage = (name: string): string | null => {
+    try { return packageRootOf(requireFromHost.resolve(name)) } catch { return null }
+  }
+  const out: CapabilityFinding[] = []
+  const officeRoot = resolvePackage('@deepseek-ai/dsh-skill-office')
+  if (officeRoot === null) {
+    out.push({
+      id: 'official-skill-assets', label: '官方 office 技能资产', kind: 'read',
+      owner: 'plugin', fallback: 'inform-only', state: 'not-available', missing: [], optional: true,
+      detail: '宿主未安装 office 技能资源包：技能页不会出现官方 office 技能（本部署形态，不是故障）',
+    })
+  } else {
+    const assets = join(officeRoot, 'assets')
+    let names: string[] = []
+    try {
+      names = readdirSync(assets, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(join(assets, entry.name, 'SKILL.md')))
+        .map((entry) => entry.name)
+    } catch { names = [] }
+    if (names.length === 0) {
+      out.push({
+        id: 'official-skill-assets', label: '官方 office 技能资产', kind: 'read',
+        owner: 'plugin', fallback: 'inform-only', state: 'shape-mismatch', missing: ['assets/*/SKILL.md'],
+        detail: 'office 技能包还在，但 assets 下找不到任何带 SKILL.md 的技能目录：技能页这一来源会是空的。',
+      })
+    } else {
+      out.push({
+        id: 'official-skill-assets', label: '官方 office 技能资产', kind: 'read',
+        owner: 'plugin', fallback: 'inform-only', state: 'ok', missing: [],
+        detail: `office 技能源在位（${names.length} 个技能目录）`,
+      })
+    }
+  }
+  const sandboxRoot = resolvePackage('@deepseek-ai/dsh-sandbox-windows-acl')
+  if (sandboxRoot === null) {
+    out.push({
+      id: 'official-sandbox-asset', label: '官方沙盒诊断技能资产', kind: 'read',
+      owner: 'plugin', fallback: 'inform-only', state: 'not-available', missing: [], optional: true,
+      detail: process.platform === 'win32'
+        ? '宿主未安装 Windows ACL 沙盒包：技能页不会出现沙盒诊断技能（宿主可能使用其他沙盒后端）'
+        : '非 Windows 宿主不注入沙盒诊断技能（本部署形态，不是故障）',
+    })
+  } else {
+    // 技能正文会指引模型执行这个脚本；只查 SKILL.md 会漏掉「文档在、脚本被裁掉」。
+    const assetDir = 'assets/diagnose-windows-sandbox-acl'
+    const required = ['SKILL.md', 'scripts/diagnose-windows-sandbox-acl.ps1']
+    const missing = required
+      .filter((rel) => !existsSync(join(sandboxRoot, assetDir, rel)))
+      .map((rel) => `${assetDir}/${rel}`)
+    out.push(missing.length === 0
+      ? {
+          id: 'official-sandbox-asset', label: '官方沙盒诊断技能资产', kind: 'read',
+          owner: 'plugin', fallback: 'inform-only', state: 'ok', missing: [],
+          detail: '沙盒诊断技能源在位（SKILL.md 与 PowerShell 脚本都可读）',
+        }
+      : {
+          id: 'official-sandbox-asset', label: '官方沙盒诊断技能资产', kind: 'read',
+          owner: 'plugin', fallback: 'inform-only', state: 'shape-mismatch', missing,
+          detail: `沙盒包还在，但 ${missing.join('、')} 不存在：技能页即使列出该技能也跑不起来。`,
+        })
+  }
+  return out
+}
+
+/**
+ * 供 CLI（doctor）复用同一份官方技能资产判定。
+ *
+ * @param hostRoot - `.../node_modules/@deepseek-ai` 或 `null`。
+ */
+export function inspectStaticSkillAssets(hostRoot: string | null): CapabilityFinding[] {
+  return inspectOfficialSkillAssets(hostRoot)
+}
+
+/**
+ * 官方包**导出的 schema 对象**上的字段名：canary 只能证明字符串还在，读一次 JSON 表示
+ * 才能确认插件写出的键仍被宿主接受。目前只有 MCP 客户端配置一份（插件写补丁的唯一出口）。
+ *
+ * 解析不到包 / 没有 `Config` 导出时不返回结论 —— 那是契约清单（`BARE_HOST_MODULE_CONTRACTS`）
+ * 的职责，不在这里重复报一次。
+ *
+ * @param hostRoot - `.../node_modules/@deepseek-ai` 或 `null`。
+ */
+function inspectHostSchemaContracts(hostRoot: string | null): CapabilityFinding[] {
+  if (hostRoot === null) return []
+  const finding = inspectMcpClientConfig(hostRoot)
+  return finding === null ? [] : [finding]
+}
+
+/**
+ * 供 CLI（doctor）复用同一份 schema 契约判定：页面在活宿主里跑 `assessHost`，没有活宿主时
+ * 只能由这里读宿主安装的导出对象。行为与页面完全同源。
+ *
+ * @param hostRoot - `.../node_modules/@deepseek-ai` 或 `null`。
+ */
+export function inspectStaticSchemaContracts(hostRoot: string | null): CapabilityFinding[] {
+  return inspectHostSchemaContracts(hostRoot)
+}
+
+/** 插件写 MCP 补丁时用到的全部配置键（`patch-yaml.ts` 的 buildInsertBlock）。 */
+const MCP_CLIENT_CONFIG_KEYS = [
+  'transport', 'serverName', 'command', 'args', 'env', 'headers', 'url', 'toolCallTimeoutMs',
+] as const
+
+/**
+ * 从宿主安装锚点 require `dsh-mcp-client` 的 `Config`，收集 schema JSON 里所有对象字段名，
+ * 核对插件写出的键还在不在。
+ *
+ * 为什么读 `Config.toJSON()` 而不是拿样例跑一遍：schemastery 对未知键是"原样保留"，
+ * 改名后的旧键会作为未知字段留在结果里 —— 样例校验会给出假绿；schema 的 `dict` 键表
+ * 才是权威字段名。
+ */
+function inspectMcpClientConfig(hostRoot: string): CapabilityFinding | null {
+  let mod: Record<string, unknown>
+  try {
+    mod = createRequire(join(dirname(hostRoot), 'package.json'))('@deepseek-ai/dsh-mcp-client') as Record<string, unknown>
+  } catch {
+    return null
+  }
+  const Config = mod.Config as { toJSON?: () => unknown } | undefined
+  if (Config === undefined || typeof Config.toJSON !== 'function') return null
+  let json: unknown
+  try { json = Config.toJSON() } catch (error) {
+    return {
+      id: 'mcp-client.config-schema',
+      label: 'MCP 客户端配置 schema',
+      kind: 'read',
+      owner: 'plugin',
+      fallback: 'inform-only',
+      state: 'not-available',
+      missing: [],
+      detail: `无法读取 dsh-mcp-client 的 Config.toJSON()：${String((error as Error)?.message ?? error)}`,
+    }
+  }
+  const keys = new Set<string>()
+  collectSchemaDictKeys(json, keys, new Set(), 0)
+  if (keys.size === 0) {
+    return {
+      id: 'mcp-client.config-schema',
+      label: 'MCP 客户端配置 schema',
+      kind: 'read',
+      owner: 'plugin',
+      fallback: 'inform-only',
+      state: 'not-available',
+      missing: [],
+      detail: '无法从 Config 的 JSON 表示里读出字段名：官方换了 schema 的表示方式，MCP 配置键需要人工复核',
+    }
+  }
+  const missing = MCP_CLIENT_CONFIG_KEYS.filter((key) => !keys.has(key))
+  if (missing.length > 0) {
+    return {
+      id: 'mcp-client.config-schema',
+      label: 'MCP 客户端配置 schema',
+      kind: 'read',
+      owner: 'plugin',
+      fallback: 'inform-only',
+      state: 'shape-mismatch',
+      missing,
+      detail: `官方 MCP 客户端 schema 里找不到配置键 ${missing.join('、')}：插件写出的补丁会被宿主忽略，MCP 页仍会显示「已配置」`,
+    }
+  }
+  return {
+    id: 'mcp-client.config-schema',
+    label: 'MCP 客户端配置 schema',
+    kind: 'read',
+    owner: 'plugin',
+    fallback: 'inform-only',
+    state: 'ok',
+    missing: [],
+    detail: `插件写出的 ${MCP_CLIENT_CONFIG_KEYS.length} 个配置键都在官方 schema 里`,
+  }
+}
+
+/** 递归收集 schema JSON 里 `dict` 的键（对象字段名）；限深并防环。 */
+function collectSchemaDictKeys(node: unknown, out: Set<string>, seen: Set<object>, depth: number): void {
+  if (depth > 12 || node === null || typeof node !== 'object') return
+  if (seen.has(node)) return
+  seen.add(node)
+  const record = node as Record<string, unknown>
+  const dict = record.dict
+  if (dict !== null && typeof dict === 'object') {
+    for (const key of Object.keys(dict as Record<string, unknown>)) out.add(key)
+  }
+  for (const value of Object.values(record)) collectSchemaDictKeys(value, out, seen, depth + 1)
+}
+
+/**
+ * 一组宿主契约的实况：插件依赖的官方包还暴不暴露、入口里那几条 canary 还在不在。
  *
  * 为什么在探测里量而不是只在 doctor 里量：doctor 是"没有活宿主"的静态视图，而兼容页看到的是
- * 正在跑的宿主。升级 DSH 后第一眼该看见的正是这一块 —— 官方撤掉某个包时**不抛错**，功能只是
- * 少一半，除此之外没有任何信号。
+ * 正在跑的宿主。升级 DSH 后第一眼该看见的正是这一块 —— 官方撤掉某个包 / 改掉一个事件名时
+ * **不抛错**，功能只是少一半，除此之外没有任何信号。
  *
- * 口径从宿主安装锚点解析（不是插件侧）：这些包**不是**本插件的 peer，插件 `node_modules`
- * 里通常没有，从插件侧解析只会得到一律"解析不到"，那不是一个结论。
+ * 口径统一从宿主安装锚点解析（不是插件侧）：这一块回答的是「宿主这一份现在怎样」，
+ * 而插件可能是另一份拷贝；宿主专属包从插件侧解析更只会得到一律"解析不到"，那不是结论。
  *
  * @param hostRoot - `.../node_modules/@deepseek-ai` 或 `null`（找不到宿主）。
+ * @param contracts - 要检查的契约清单（裸模块 / 行为契约各一份）。
  */
-function hostContractStatus(hostRoot: string | null): HostContractStatus | null {
+export function hostContractStatus(hostRoot: string | null, contracts: readonly HostModuleContract[]): HostContractStatus | null {
   if (hostRoot === null) return null
-  const packages = BARE_HOST_MODULE_CONTRACTS.map((contract) => {
+  const packages = contracts.map((contract) => {
     let resolved: string | null = null
     try {
       resolved = createRequire(join(dirname(hostRoot), 'package.json')).resolve(contract.package)
@@ -528,13 +928,41 @@ function hostContractStatus(hostRoot: string | null): HostContractStatus | null 
       resolved = null
     }
     let missingMarkers: string[] = []
+    let missingMarkerNotes: HostContractMarkerNote[] = []
     if (resolved !== null && contract.markers.length > 0) {
-      try {
-        const source = readFileSync(resolved, 'utf8')
-        missingMarkers = contract.markers.filter((marker) => !source.includes(marker.needle)).map((marker) => marker.needle)
-      } catch { /* 入口读不到时只报"解析不到"，不额外造一条 canary 结论 */ }
+      const root = packageRootOf(resolved)
+      const cache = new Map<string, string | null>()
+      const read = (file: string | undefined): string | null => {
+        const key = file ?? ''
+        if (cache.has(key)) return cache.get(key) ?? null
+        let source: string | null = null
+        try {
+          const target = file === undefined ? resolved : (root === null ? null : join(root, ...file.split('/')))
+          source = target === null ? null : readFileSync(target, 'utf8')
+        } catch { source = null }
+        cache.set(key, source)
+        return source
+      }
+      const missing = contract.markers.filter((marker) => {
+        const source = read(marker.file)
+        return source === null || !source.includes(marker.needle)
+      })
+      missingMarkers = missing.map((marker) => marker.needle)
+      missingMarkerNotes = missing.map((marker) => ({
+        needle: marker.needle,
+        why: marker.why,
+        ...(marker.file === undefined ? {} : { file: marker.file }),
+      }))
     }
-    return { package: contract.package, feature: contract.feature, resolved, missingMarkers }
+    return {
+      package: contract.package,
+      feature: contract.feature,
+      ...(contract.impact === undefined ? {} : { impact: contract.impact }),
+      ...(contract.optional === true ? { optional: true } : {}),
+      resolved,
+      missingMarkers,
+      missingMarkerNotes,
+    }
   })
   return {
     packages,

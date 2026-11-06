@@ -493,6 +493,20 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     return queued
   }
 
+  /**
+   * 在跨进程写锁里跑一段读-改-写（锁由宿主注入；缺席时原地执行）。
+   *
+   * 为什么锁要套在**队列内层**：`mutationQueue` 只串行本进程，web 与 desktop 共用同一个
+   * `$DSH_HOME` 时，两边各自 readIndex → 改 → writeIndex 会整份覆盖对方。队列在外、锁在内
+   * 保证同一进程内先到先得，锁只覆盖真正的临界区（不把等待时间叠进队列）。
+   *
+   * 锁在同一异步调用链上可重入：MCP 改名 / 删台会在锁内回调本域的 `patchIndex`，那一条
+   * 直接并入外层临界区，不会排在**自己**后面。代价是重入方共享外层的持锁时长 ——
+   * 所以临界区里仍然只做索引与记忆文件的读写，不夹带目录扫描之类的大动作。
+   */
+  const withProcessLock = <T>(task: () => Promise<T>): Promise<T> =>
+    deps.withWriteLock === undefined ? task() : deps.withWriteLock(task)
+
   // ── 定位 / 解析 id ──────────────────────────────────────────────────────
 
   /** id = "<group>/<name>"；group 可含 '/'（多层），根下规则允许 group 为空。 */
@@ -612,7 +626,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     patch: { mode?: ModeState; archives?: Record<string, SceneArchive>; active?: string[] | null },
     fields?: ReadonlyArray<'mode' | 'active' | 'archives'>,
   ): Promise<void> =>
-    enqueueMutation(async () => {
+    enqueueMutation(() => withProcessLock(async () => {
       const index = await readIndex(stateDir)
       const want = (f: 'mode' | 'active' | 'archives'): boolean => (fields ? fields.indexOf(f) >= 0 : patch[f] !== undefined)
       if (want('mode') && patch.mode !== undefined) index.mode = patch.mode
@@ -621,7 +635,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
       if (want('active') && patch.active !== undefined) index.active = patch.active
       await writeIndex(stateDir, index)
       await refresh()
-    })
+    }))
 
   /**
    * 场景档案引擎专用：只写**一个场景**的档案（队列内按**逐场景增量**落盘）。
@@ -632,7 +646,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 逐场景增量只动自己那一条，其余键保留队列内读到的值。
    */
   const saveArchive = (scene: string, archive: SceneArchive | null): Promise<void> =>
-    enqueueMutation(async () => {
+    enqueueMutation(() => withProcessLock(async () => {
       const index = await readIndex(stateDir)
       const archives = index.archives ?? {}
       if (archive === null) delete archives[scene]
@@ -640,7 +654,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
       index.archives = archives
       await writeIndex(stateDir, index)
       await refresh()
-    })
+    }))
 
   /** 场景档案引擎专用：读 mode/archives/active 切片（容忍缺失，缺省 = 无档案 + 自由模式 + 全部启用）。 */
   const readArchiveSlice = async (): Promise<{ mode: ModeState; archives: Record<string, SceneArchive>; active: string[] | null }> => {
@@ -962,7 +976,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   /** 写操作：串行队列内执行，成功后触发 refresh（失效缓存，下一请求即生效）。 */
   const runWrite = (task: () => Promise<any>) =>
     enqueueMutation(async () => {
-      const result = await task()
+      // 临界区只包写本身，refresh 放锁外：它只读盘，多挂一会儿只会让另一个宿主空等。
+      const result = await withProcessLock(task)
       if (result && result.ok !== false) await refresh()
       return result
     })

@@ -3,7 +3,7 @@
 // 这张表就是与宿主的契约本体 —— 纯字面量，判定逻辑在 probe.ts 的 inspectCapability，
 // 取数原语在 host-probe.ts。缺一个成员时界面给出的是这一行点名的降级，而不是删除序列
 // 中途抛出的一次异常。
-import { callableWithSentinel, isFn, PROBE_SENTINEL, resolvableFromHost, type Target } from './host-probe.js'
+import { callableWithSentinel, isAsyncFn, isFn, PROBE_SENTINEL, resolvableFromHost, type Target } from './host-probe.js'
 import type { CapabilityFinding } from './probe-types.js'
 
 /** 一项宿主能力的规格：长在哪、要什么、怎么判、缺了怎么绕。 */
@@ -14,7 +14,11 @@ export interface CapabilitySpec {
   // 这里不写 `CapabilityFinding['owner']`：那张表的 owner 还允许 `'plugin'`（运行时上报的行，
   // 如补丁写入校验不可用），而宿主能力表只可能挂在宿主对象上 —— 写宽了会让下面的
   // `targets: Record<CapabilitySpec['owner'], …>` 强制多出一个不存在的宿主对象。
-  readonly owner: 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings' | 'presetRoster' | 'fs' | 'tools' | 'agentContext' | 'connection'
+  readonly owner:
+    | 'workspace' | 'projectionCache' | 'sessions' | 'persistence' | 'settings'
+    | 'presetRoster' | 'fs' | 'tools' | 'systemPrompt' | 'agentContext' | 'connection'
+    | 'subagents' | 'llm' | 'approval' | 'skills' | 'agents' | 'pluginInventory'
+    | 'webServer' | 'sandboxPolicy'
   readonly fallback: CapabilityFinding['fallback']
   /** 宿主对象原型上必须具备的方法名。 */
   readonly methods?: readonly string[]
@@ -205,6 +209,48 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     // **enter 不真调**（官方实现对任意输入都会往 store 写入条目），它只有存在性 + 文本比对。
     probe: (t) => callableWithSentinel(t, 'announce', PROBE_SENTINEL),
   },
+  {
+    // 列表与删除都会碰实时会话：历史页读会话正文用 `get`，删除子会话级联用 `list`。
+    // 缺任何一个都不会在"进入删除主体之前"被发现 —— 路由必须把它们算进要求里。
+    id: 'sessions.live-access',
+    label: '实时会话读取（get / list）',
+    kind: 'read',
+    owner: 'sessions',
+    fallback: 'refuse-operation',
+    methods: ['get', 'list'],
+  },
+  // ---- 持久化后端：历史列表与删除的共同底座 ------------------------------
+  // 这两个成员此前完全不在能力表里：删除入口自己会在破坏性步骤前硬检查，
+  // 但兼容页 / 路由看不见它们 —— 页面说「删除可用」而点下去在链路中段才报错。
+  {
+    id: 'persistence.list',
+    label: '会话存储枚举',
+    kind: 'read',
+    owner: 'persistence',
+    fallback: 'refuse-operation',
+    methods: ['list'],
+  },
+  {
+    id: 'persistence.transcript-locate',
+    label: '会话转写工件定位',
+    kind: 'delete',
+    owner: 'persistence',
+    fallback: 'disable-destructive',
+    methods: ['locate'],
+  },
+  {
+    // 投影修复是可选路径：两代读取入口任一在场即可（新版 open 句柄 / 旧版 readFrom）。
+    // 都缺时只少「归档会话的投影补建」，不碰数据，所以只上报不拦路。
+    id: 'persistence.transcript-read',
+    label: '会话转写读取（投影修复）',
+    kind: 'read',
+    owner: 'persistence',
+    fallback: 'inform-only',
+    optional: true,
+    probe: (t) => (isFn(t?.readFrom) || isFn(t?.open))
+      ? undefined
+      : '持久化后端既没有 readFrom 也没有 open：归档会话的投影修复会静默跳过',
+  },
   // ---- projection cache ---------------------------------------------------
   {
     id: 'projection.write',
@@ -230,6 +276,36 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
       try { table = (target.requireTable as () => { delete?: unknown })() }
       catch (error) { return `宿主投影缓存 requireTable() 抛错：${String(error)}` }
       if (typeof table?.delete !== 'function') return '宿主投影缓存存储不支持安全删除（table.delete 缺失）'
+      return undefined
+    },
+  },
+  {
+    id: 'projection.cached-title',
+    label: '投影缓存标题读取（cachedSnapshot）',
+    kind: 'read',
+    owner: 'projectionCache',
+    fallback: 'inform-only',
+    methods: ['cachedSnapshot', 'cachedPredecessorTitle'],
+    // 两个入口都是同步、零 I/O 的列表提示面；用哨兵 header 真调一次，只验证「不抛错」
+    // 与「有值时带 values 对象」—— 真实标题取决于磁盘记录，交给人工核对。
+    probe: (t) => {
+      const snapshot = (t as { cachedSnapshot?: (meta: unknown, keys?: unknown) => unknown }).cachedSnapshot
+      const predecessor = (t as { cachedPredecessorTitle?: (meta: unknown) => unknown }).cachedPredecessorTitle
+      if (typeof snapshot !== 'function') return '宿主投影缓存缺少 cachedSnapshot()：归档列表读不到标题'
+      if (typeof predecessor !== 'function') return '宿主投影缓存缺少 cachedPredecessorTitle()：旧格式代际的标题提示不可用'
+      try {
+        const value = snapshot.call(t, { id: PROBE_SENTINEL }, ['title'])
+        if (value !== undefined) {
+          const values = value === null ? null : (value as { values?: unknown }).values
+          if (typeof value !== 'object' || values === null || typeof values !== 'object') {
+            return 'cachedSnapshot() 的返回值缺少 values 对象：标题读取形状变了'
+          }
+        }
+      } catch (error) {
+        return `cachedSnapshot(哨兵 header) 抛错：${String((error as Error)?.message ?? error)}`
+      }
+      try { predecessor.call(t, { id: PROBE_SENTINEL }) }
+      catch (error) { return `cachedPredecessorTitle(哨兵 header) 抛错：${String((error as Error)?.message ?? error)}` }
       return undefined
     },
   },
@@ -390,5 +466,265 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     // 门槛取宿主侧：至少一个宿主锚点解析得到才查；解析不到退回 `runtime-only`（如实标注
     // "只能对活的宿主查"），而不是编一个"缺失"。
     staticWhen: () => resolvableFromHost('@deepseek-ai/dsh-client-connection'),
+  },
+  // ---- 不在 inject 清单里的宿主服务：缺席不阻止插件挂载，但会静默少一块功能 ----
+  // 这几条与上面那些契约面的区别：它们不是「宿主某个对象上的成员」，而是**整个服务**
+  // 换名 / 消失。插件在运行时用 `ctx.get(name)` 软取，取不到就各自降级 —— 没有全局信号，
+  // 所以逐条列出来，升级后第一眼能看见是哪一块没了。
+  {
+    id: 'subagents.runtime',
+    label: '子智能体运行时（startActivation）',
+    kind: 'write',
+    owner: 'subagents',
+    fallback: 'refuse-operation',
+    methods: ['startActivation', 'list'],
+    // list() 是只读的 provider 名册：既能证明运行时在，也能核对「名字数组」这个返回形状。
+    // startActivation 不能真调（会启动一个子代理），只核对它是异步方法。
+    probe: (t) => {
+      const list = (t as { list?: () => unknown }).list
+      if (typeof list !== 'function') return '宿主子智能体运行时缺少 list()'
+      let names: unknown
+      try { names = list.call(t) } catch (error) { return `subagents.list() 抛错：${String((error as Error)?.message ?? error)}` }
+      if (!Array.isArray(names)) return 'subagents.list() 未返回数组：provider 名册读不出来'
+      const invalid = names.find((name) => typeof name !== 'string')
+      if (invalid !== undefined) return 'subagents.list() 的元素不是字符串：provider 名册形状变了'
+      return isAsyncFn((t as { startActivation?: unknown }).startActivation)
+        ? undefined
+        : 'startActivation 不是异步方法：派活调用会同步失败或返回非 Promise'
+    },
+    describe: (t) => {
+      try {
+        const names = (t as { list?: () => unknown }).list?.()
+        return Array.isArray(names) && names.length > 0 ? `已注册 provider：${names.join('、')}` : undefined
+      } catch { return undefined }
+    },
+  },
+  {
+    id: 'llm.model-catalog',
+    label: '模型目录（场景模型候选）',
+    kind: 'read',
+    owner: 'llm',
+    fallback: 'inform-only',
+    methods: ['listProviders', 'listModels', 'resolveModelInfo'],
+    // listProviders() 是同步且只读的：能直接核对 LlmProviderInfo[] 的 id / name 形状。
+    // listModels / resolveModelInfo 是异步（可能联网）的，只核对异步方法签名，不发起调用。
+    probe: (t) => {
+      const listProviders = (t as { listProviders?: () => unknown }).listProviders
+      if (typeof listProviders !== 'function') return '宿主 llm 服务缺少 listProviders()'
+      let providers: unknown
+      try { providers = listProviders.call(t) } catch (error) { return `listProviders() 抛错：${String((error as Error)?.message ?? error)}` }
+      if (!Array.isArray(providers)) return 'listProviders() 未返回数组：模型来源枚举失效'
+      const invalid = providers.find((item) => item === null || typeof item !== 'object'
+        || typeof (item as { id?: unknown }).id !== 'string'
+        || typeof (item as { name?: unknown }).name !== 'string')
+      if (invalid !== undefined) return 'listProviders() 的元素缺少字符串 id / name：模型来源形状变了'
+      if (!isAsyncFn((t as { listModels?: unknown }).listModels)) return 'listModels 不是异步方法：来源下的模型枚举会失效'
+      if (!isAsyncFn((t as { resolveModelInfo?: unknown }).resolveModelInfo)) return 'resolveModelInfo 不是异步方法：思考档位清单会失效'
+      return undefined
+    },
+    describe: (t) => isFn((t as Record<string, unknown>).listModels) ? '支持 listModels（可枚举模型）' : '无 listModels（只列来源，模型需手填）',
+  },
+  {
+    id: 'approval.effective-policy',
+    label: '审批策略读取（完全权限判定）',
+    kind: 'read',
+    owner: 'approval',
+    fallback: 'inform-only',
+    methods: ['effectivePolicy'],
+    // 私有实现细节：只核对接收一个 session 参数，返回值取决于会话（可能是 never / ask）；
+    // 用哨兵真调会把「没有会话」误报成契约漂移，所以不调用。
+    probe: (t) => (t as { effectivePolicy?: (...args: unknown[]) => unknown }).effectivePolicy?.length === 1
+      ? undefined
+      : 'effectivePolicy 的签名不再是单参数（session）：完全权限判定可能失真',
+  },
+  {
+    id: 'tools.schema-list',
+    label: '工具清单读取（schemas）',
+    kind: 'read',
+    owner: 'tools',
+    fallback: 'inform-only',
+    methods: ['schemas'],
+    // 工具名从 `schemas()` 的元素上读；元素形状一变，MCP 工具计数会恒为 0，
+    // 可见性摘除的名单也会跟着变空 —— 两处都静默。只查方法存在不够。
+    probe: (t) => {
+      const schemas = (t as { schemas?: () => unknown }).schemas
+      if (typeof schemas !== 'function') return '宿主工具服务缺少 schemas()'
+      let list: unknown
+      try { list = schemas.call(t) } catch (error) { return `schemas() 抛错：${String((error as Error)?.message ?? error)}` }
+      if (!Array.isArray(list)) return 'schemas() 没有返回数组：工具计数与可见性名单无法生成'
+      const invalid = list.find((item) => item === null || typeof item !== 'object' || typeof (item as { name?: unknown }).name !== 'string')
+      return invalid === undefined ? undefined : 'schemas() 的元素缺少字符串 name：工具名读不出来'
+    },
+  },
+  // ---- 其余宿主服务的公开面：缺了不会让插件挂不上，但对应功能会静默少一块 ----
+  {
+    id: 'skills.register-provider',
+    label: '技能 provider 注册（registerProvider）',
+    kind: 'write',
+    owner: 'skills',
+    fallback: 'inform-only',
+    methods: ['registerProvider'],
+    // 真注册一个 provider 会进入技能目录并触发失效事件，所以只核对签名：
+    // 官方若改成两参 / 返回不可调用对象，下面的注册逻辑会静默失效。
+    probe: (t) => {
+      const register = (t as { registerProvider?: (...args: unknown[]) => unknown }).registerProvider
+      if (typeof register !== 'function') return '宿主技能服务缺少 registerProvider()：技能启停与官方内置技能接管失效'
+      return register.length === 1
+        ? undefined
+        : 'registerProvider 的签名不再是单参数（create）：provider 注册可能静默失效'
+    },
+  },
+  {
+    id: 'agents.list',
+    label: '活动 agent 清单（agents.list）',
+    kind: 'read',
+    owner: 'agents',
+    fallback: 'inform-only',
+    methods: ['list'],
+    // 只读调用：返回活动 agent 数组。非空时核对 id / ctx；空数组时只能证明返回形状是数组。
+    probe: (t) => {
+      let agents: unknown
+      try { agents = (t as { list: () => unknown }).list() } catch (error) { return `agents.list() 抛错：${String((error as Error)?.message ?? error)}` }
+      if (!Array.isArray(agents)) return 'agents.list() 未返回数组：agent 作用域 provider 无法补装'
+      const invalid = agents.find((agent) => agent === null || typeof agent !== 'object'
+        || typeof (agent as { id?: unknown }).id !== 'string'
+        || (agent as { ctx?: unknown }).ctx === null || typeof (agent as { ctx?: unknown }).ctx !== 'object')
+      return invalid === undefined ? undefined : 'agents.list() 的元素缺少字符串 id 或 ctx：agent 作用域 provider 无法补装'
+    },
+  },
+  {
+    id: 'pluginInventory.list',
+    label: 'Loader 插件条目清单（pluginInventory.list）',
+    kind: 'read',
+    owner: 'pluginInventory',
+    fallback: 'inform-only',
+    methods: ['list'],
+    // 异步读取实时 Loader 树；探测不发起调用（会等宿主加载），只核对异步签名。
+    probe: (t) => {
+      const list = (t as { list?: unknown }).list
+      if (!isAsyncFn(list)) return 'pluginInventory.list 不是异步方法：loader 条目清单读不出来'
+      return (list as (...args: unknown[]) => unknown).length === 0
+        ? undefined
+        : 'pluginInventory.list 的签名不再是零参数：条目清单可能读不出来'
+    },
+  },
+  {
+    id: 'webServer.register',
+    label: 'HTTP 路由注册（webServer.register）',
+    kind: 'write',
+    owner: 'webServer',
+    fallback: 'refuse-operation',
+    methods: ['register'],
+    // 真注册一条路由会占用宿主路由表；只核对单参数签名。
+    probe: (t) => {
+      const register = (t as { register?: (...args: unknown[]) => unknown }).register
+      if (typeof register !== 'function') return '宿主 webServer 缺少 register()：插件面板 API 无法挂载（整页 404）'
+      return register.length === 1
+        ? undefined
+        : 'webServer.register 的签名不再是单参数（route）：面板 API 路由可能挂不上'
+    },
+    describe: (t) => isFn((t as Record<string, unknown>).registerUpgrade) ? '支持 registerUpgrade' : undefined,
+  },
+  {
+    id: 'sandboxPolicy.resolve',
+    label: '沙箱策略解析（sandboxPolicy.resolve）',
+    kind: 'read',
+    owner: 'sandboxPolicy',
+    fallback: 'refuse-operation',
+    methods: ['resolve'],
+    // 零副作用真调：read-only 请求不涉及会话与文件，返回的 mode / workspaceRoot 是纯计算。
+    probe: (t) => {
+      let policy: unknown
+      try { policy = (t as { resolve: (request?: unknown) => unknown }).resolve({ mode: 'read-only' }) }
+      catch (error) { return `sandboxPolicy.resolve({ mode: "read-only" }) 抛错：${String((error as Error)?.message ?? error)}` }
+      if (policy === null || typeof policy !== 'object') return 'sandboxPolicy.resolve() 未返回对象：补丁写入的授权策略读不出来'
+      const value = policy as { mode?: unknown; workspaceRoot?: unknown }
+      if (typeof value.mode !== 'string') return 'sandboxPolicy.resolve() 的返回值缺少字符串 mode'
+      if (typeof value.workspaceRoot !== 'string' || value.workspaceRoot === '') return 'sandboxPolicy.resolve() 的返回值缺少 workspaceRoot'
+      return undefined
+    },
+    describe: (t) => {
+      try {
+        const policy = (t as { resolve: (request?: unknown) => { mode?: unknown } }).resolve({ mode: 'read-only' })
+        return typeof policy?.mode === 'string' ? `观测 read-only → ${policy.mode}` : undefined
+      } catch { return undefined }
+    },
+  },
+  {
+    id: 'tools.get-method',
+    label: '按名读取工具定义（get）',
+    kind: 'read',
+    owner: 'tools',
+    fallback: 'inform-only',
+    methods: ['get'],
+    // `get` 是「这台服务器的共享资源工具此刻注册着没有」与装层前过滤未知名的唯一判据；
+    // 缺了它，逐会话资源工具摘除会整段跳过，别的对话的服务器资源重新可见。
+    probe: (t) => isFn(t?.get) ? undefined : '宿主工具服务缺少 get()：共享资源工具的逐会话摘除与装层前过滤会静默跳过',
+  },
+  {
+    id: 'tools.guard-dispatch',
+    label: '工具执行守卫分发（guard / checkGuards）',
+    kind: 'write',
+    owner: 'tools',
+    fallback: 'inform-only',
+    methods: ['guard', 'checkGuards'],
+    // 只查 `guard` 不够：宿主可能保留注册入口、却不再在 pipeline 里调 checkGuards。
+    // 那种情况下注册成功、零报错，停用表与逐会话开关全部失效。
+    probe: (t) => isFn(t?.guard) && isFn(t?.checkGuards)
+      ? undefined
+      : '宿主工具服务缺少 guard() / checkGuards()：停用工具与逐会话开关的执行侧拦截不会生效',
+  },
+  {
+    id: 'tools.mcp-resource-args',
+    label: 'MCP 共享资源工具参数（server / uri）',
+    kind: 'read',
+    owner: 'tools',
+    fallback: 'inform-only',
+    // 只查工具名不够：守卫读的是 `execution.arguments.server`，参数名一改就变成空串，
+    // 按「算不出来不拦」静默放行 —— 别的对话的服务器资源可被本对话列出 / 读取。
+    probe: (t) => {
+      const get = (t as { get?: (name: string) => unknown }).get
+      if (typeof get !== 'function') return '宿主工具服务缺少 get()：无法核对共享资源工具的参数名'
+      const requiredByTool: Record<string, readonly string[]> = {
+        list_mcp_resources: ['server'],
+        list_mcp_resource_templates: ['server'],
+        read_mcp_resource: ['server', 'uri'],
+      }
+      for (const [name, required] of Object.entries(requiredByTool)) {
+        let definition: unknown
+        try { definition = get.call(t, name) } catch { definition = undefined }
+        // 没有 MCP 服务器时官方不注册这三个工具；一台都没有不是故障。
+        if (definition === undefined) continue
+        const parameters = (definition as { parameters?: { properties?: unknown; required?: unknown } }).parameters
+        const properties = parameters?.properties
+        const list = Array.isArray(parameters?.required) ? parameters.required : []
+        const missing = required.filter((param) => properties === null || typeof properties !== 'object'
+          || !(param in (properties as Record<string, unknown>))
+          || !list.includes(param))
+        if (missing.length > 0) {
+          return `${name} 的参数 ${missing.join('、')} 不在 properties/required 里：逐会话守卫读不到服务器名，会静默放行`
+        }
+      }
+      return undefined
+    },
+  },
+  {
+    id: 'systemPrompt.mcp-section',
+    label: '系统提示词 MCP 段（MCP_SERVERS）',
+    kind: 'read',
+    owner: 'systemPrompt',
+    fallback: 'inform-only',
+    methods: ['section', 'getSectionOrder'],
+    // `MCP_SERVERS` 改名后 getSectionOrder 返回 undefined，prompt-shadow 直接放弃注册，
+    // 别的对话的服务器名与 instructions 会静默进入本对话。
+    probe: (t) => {
+      const orderOf = (t as { getSectionOrder?: (name: string) => unknown }).getSectionOrder
+      if (typeof orderOf !== 'function') return '宿主 systemPrompt 缺少 getSectionOrder()'
+      let order: unknown
+      try { order = orderOf.call(t, 'MCP_SERVERS') } catch (error) { return `getSectionOrder("MCP_SERVERS") 抛错：${String((error as Error)?.message ?? error)}` }
+      return Number.isFinite(order)
+        ? undefined
+        : 'getSectionOrder("MCP_SERVERS") 没有返回数字：MCP 提示词段排序位变了，跨会话 prompt 隔离无法挂载'
+    },
   },
 ]

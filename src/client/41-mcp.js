@@ -180,7 +180,7 @@
           // 详情弹窗的请求序号：见 openDetail / closeDetail（晚到响应不得复活弹窗）。
           const detailSeqRef = React.useRef(0)
           const [confirmRow, setConfirmRow] = React.useState(null)
-          // 「统一关闭」确认：与删除不同，它切断的是**正在用它的会话** —— 必须问一次。
+          // 「全部关闭」确认：与删除不同，它切断的是**正在用它的会话** —— 必须问一次。
           const [stopConfirm, setStopConfirm] = React.useState(null)
           const [reveal, setReveal] = React.useState(false)
           const [settings, setSettings] = React.useState(null)
@@ -345,7 +345,7 @@
               return
             }
             // 全局层 = 写**意图**（0.21.2）：off 不再立刻停 —— 还在用它的会话按租约继续跑，
-            // 只有「统一关闭」才切断。撤销按操作前的意图值逐台写回。
+            // 只有「全部关闭」才切断。撤销按操作前的意图值逐台写回。
             setMsg(null)
             setBusy('setall')
             apiCall('scope-intent-set', { domain: 'mcp', keys: changed.map((item) => item.serverName), value: turnOn ? 'on' : 'off' })
@@ -569,7 +569,7 @@
               return
             }
             // 全局层（0.21.2）= 写**意图**，不是补丁：off 之后仍被会话认领的服务器保持运行
-            // （租约），只有「统一关闭」才切断它们。开关读的也是意图（见 `serverGlobalOn`）。
+            // （租约），只有「全部关闭」才切断它们。开关读的也是意图（见 `serverGlobalOn`）。
             const name = String(row.serverName || row.id)
             const nextOn = !serverGlobalOn(row)
             // 翻开 = 先按「启动中」显示（宿主拉起进程要几秒）；关掉 = 销账。
@@ -579,8 +579,8 @@
               .then((res) => {
                 if (res && res.ok === false) { setMsg({ kind: 'err', text: (res && res.error) || mt('mcp.msg.failed') }); return }
                 if (res && res.warnings && res.warnings.length) { setMsg({ kind: 'warn', text: res.warnings.join('；') }); return }
-                const leases = scopeLeaseCount('mcp', name)
-                if (!nextOn && leases > 0) setMsg({ kind: 'warn', text: mt('mcp.intent.keptRunning', { count: leases }) })
+                const leases = scopeLeaseUnitCount('mcp', name)
+                if (!nextOn && leases > 0) setMsg({ kind: 'warn', text: mt(scopeIsWorkspace() ? 'mcp.intent.keptRunningWs' : 'mcp.intent.keptRunning', { count: leases }) })
                 else setMsg({ kind: 'ok', text: mt(nextOn ? 'mcp.intent.onOk' : 'mcp.intent.offOk', { name: name }) })
                 refresh()
               })
@@ -608,7 +608,7 @@
           }
 
           /**
-           * MCP「统一关闭」是一次性动作：全局意图写 off，并把正在认领它的会话 / 工作区
+           * MCP「全部关闭」是一次性动作：全局意图写 off，并把正在认领它的会话 / 工作区
            * 一并写成显式关闭 —— 这样租约不会把它重新拉起来，也不会留下「恢复启用」状态。
            * 走 op 而不是 `scope-intent-set`：后者只能写意图，写不到那些层的开关。
            */
@@ -627,7 +627,7 @@
           }
 
           /**
-           * 页头「全部关闭」：逐台走同一个 op，与行菜单里的「统一关闭」是一回事 ——
+           * 页头「全部关闭」：逐台走同一个 op，与行菜单里的「全部关闭」是一回事 ——
            * 只改意图停不掉正在认领它的场景 / 工作区，那些层的开关也得写成显式关闭。
            * 只在真有临时运行时出现（`scopeLeaseKeys` 非空），没东西可停就不占页头。
            */
@@ -970,7 +970,7 @@
             if (row.notes) meta.push(React.createElement('span', { key: 'note', className: 'dsm-listrow-meta-desc', title: row.notes }, mt('mcp.note.prefix') + row.notes))
             // 全局层的意图状态只挂**临时运行 · N 个对话** —— 它是"全局 off 却仍在跑"的
             // 唯一解释，不标出来，用户会以为全局开关坏了。
-            // 统一关闭不挂标签：开关本身就是关的，标签会长期占着这一行；状态由开关的
+            // 全部关闭不挂标签：开关本身就是关的，标签会长期占着这一行；状态由开关的
             // 悬浮说明承担。
             // 同名两层行只标在**第一行**上（两行说同一件事，标两遍只是噪声）。
             if (!scopeIsSession()) {
@@ -1052,13 +1052,13 @@
                 // 同名两行显示同一个意图值（意图按 serverName 键），不会一行开一行关。
                 const nameHere = String(row.serverName || row.id)
                 const intentHere = scopeIntentOf('mcp', nameHere)
-                const leasesHere = scopeLeaseCount('mcp', nameHere)
+                const leasesHere = scopeLeaseUnitCount('mcp', nameHere)
                 return editable ? React.createElement(Switch, {
                   on: serverGlobalOn(row),
                   scoped: false,
                   disabled: actDisabled,
                   title: intentHere === 'blocked' ? mt('mcp.intent.blockedHint')
-                    : leasesHere > 0 ? mt('mcp.intent.leaseHint', { count: leasesHere })
+                    : leasesHere > 0 ? mt(scopeIsWorkspace() ? 'mcp.intent.leaseHintWs' : 'mcp.intent.leaseHint', { count: leasesHere })
                       : undefined,
                   label: mt('mcp.toggleServer') + ' ' + row.serverName,
                   onClick: () => toggleRow(row),
@@ -1319,7 +1319,7 @@
             React.createElement('div', { className: 'dsm-modal-actions' },
               React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: confirmRemove }, mt('mcp.btn.remove'))))
 
-          // 「统一关闭」确认：它会**立即**停掉连接，还会把正在用它的会话 / 工作区的开关
+          // 「全部关闭」确认：它会**立即**停掉连接，还会把正在用它的会话 / 工作区的开关
           // 一并关掉 —— 与普通关闭不是一回事，必须问一次，并把影响说清。
           const stopNode = stopConfirm && React.createElement(Modal, {
             key: 'mcp-stop',
@@ -1364,7 +1364,7 @@
                   // 要把它们排除 —— 否则全部可见之后按钮仍写着「全部启用」，点了什么也不发生。
                   bulkAllOn ? mt('mcp.btn.disableAll') : mt('mcp.btn.enableAll')),
                 // 只在有临时运行时出现（会话 / 场景 / 工作区正在认领某几台）；
-                // 与行菜单的「统一关闭」同一个 op，别在这里另写一条只改意图的路径。
+                // 与行菜单的「全部关闭」同一个 op，别在这里另写一条只改意图的路径。
                 scopeLeaseKeys('mcp').length > 0 ? React.createElement('button', { key: 'stopall', type: 'button', className: 'dsm-btn dsm-btn-danger-outline', disabled: busy !== null || state.loading || state.locked === true, onClick: stopAllServers }, mt('scope.stopAll')) : null,
               ],
             }),
@@ -1446,7 +1446,7 @@
           var quick = qs[0], setQuick = qs[1]
           var qk = React.useState(null), quickEdit = qk[0], setQuickEdit = qk[1]
           var qf = React.useState(null), quickConfirm = qf[0], setQuickConfirm = qf[1]
-          // 单条快捷提示词的「统一关闭」确认（`{ id }`）：切断的是各对话 / 工作区正在单独用它的那份。
+          // 单条快捷提示词的「全部关闭」确认（`{ id }`）：切断的是各对话 / 工作区正在单独用它的那份。
           var qz = React.useState(null), quickStop = qz[0], setQuickStop = qz[1]
           // 三个弹窗（新增预设 / 编辑预设 / 编辑快捷提示词）各自一份关窗暂存（见 42-shared-ui.js：
           // 关窗存、打开取，成功提交不走这条路，所以没有"成功后要记得清"那一步）。
@@ -1896,7 +1896,7 @@
             }).catch(function (e) { setBusy(null); setQuickConfirm(null); actionFailed(e) })
           }
           /**
-           * 单条快捷提示词的「统一关闭」：清掉各对话 / 工作区单独打开它的覆盖。
+           * 单条快捷提示词的「全部关闭」：清掉各对话 / 工作区单独打开它的覆盖。
            * 全局启停不动（页面那颗开关管的是它），这里只收临时的那一份。
            */
           function doQuickStop(id) {
@@ -2040,7 +2040,7 @@
           var quickAllOn = visibleQuick.length > 0 && visibleQuick.every(function (p) { return scopeFlag('quickPrompts', p.id, p.enabled !== false).value })
           /**
            * 页头「全部关闭」：把各会话 / 工作区 / 场景里单独开着的快捷提示词一并停掉 ——
-           * 「本对话关掉、别的对话还开着」不算全部关闭，所以走统一关闭 op 清各层认领，
+           * 「本对话关掉、别的对话还开着」不算全部关闭，所以走全部关闭 op 清各层认领，
            * 而不是只写全局 `meta.json`。全局那一档是单选基线，没有"临时运行"可言。
            */
           function stopAllQuick() {
@@ -2581,6 +2581,9 @@
             // 指到非滚动容器（sticky 随之失效，页签被内容滚走）。
             var section = sectionRef.current
             if (!section) return undefined
+            // 宿主把滚动放在视口上时（找不到祖先滚动容器），装订线只能挂在 html 上：
+            // 加一个类、卸载时撤掉 —— 不是一条常驻的全局规则。
+            document.documentElement.classList.add('dsm-scroll-stable')
             var host = null
             var node = section.parentElement
             while (node && node !== document.body) {
@@ -2590,9 +2593,12 @@
             }
             // 找不到（宿主换了实现）→ 退回原来的「上两级」，保持兼容。
             if (!host) host = section.parentElement && section.parentElement.parentElement
-            if (!host) return undefined
+            if (!host) return function () { document.documentElement.classList.remove('dsm-scroll-stable') }
             host.classList.add('dsm-settings-scroll-host')
-            return function () { host.classList.remove('dsm-settings-scroll-host') }
+            return function () {
+              host.classList.remove('dsm-settings-scroll-host')
+              document.documentElement.classList.remove('dsm-scroll-stable')
+            }
           }, [])
           var page = active === 'scenes' ? React.createElement(ScenesPage)
             : active === 'mcp' ? React.createElement(MCPPage)

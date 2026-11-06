@@ -65,7 +65,7 @@
       }
       /**
        * 写来源的全局意图：`off` 只是"默认不要"—— 还有会话在用就保持启用（租约），
-       * 不切断正在用它的对话。技能来源没有逐条「统一关闭」这一档（页头「全部关闭」可一次收掉）。
+       * 不切断正在用它的对话。技能来源没有逐条「全部关闭」这一档（页头「全部关闭」可一次收掉）。
        */
       function setSourceIntent(root, value) {
         var key = String(root.key || '')
@@ -76,9 +76,9 @@
           .then(function (res) {
             if (res && res.ok === false) { setResult({ ok: false, text: translateError(t, res) }); return }
             var warnings = res && res.warnings && res.warnings.length ? res.warnings.join('；') : ''
-            var leases = scopeLeaseCount('skillSources', key)
+            var leases = scopeLeaseUnitCount('skillSources', key)
             var text = value === 'on' ? t('done.enabled', { name: name })
-              : leases > 0 ? t('scope.intent.keptRunning', { count: leases }) : t('done.disabled', { name: name })
+              : leases > 0 ? t(scopeIsWorkspace() ? 'scope.intent.keptRunningWs' : 'scope.intent.keptRunning', { count: leases }) : t('done.disabled', { name: name })
             setResult({ ok: true, text: text + (warnings ? ' ' + warnings : '') })
             refreshScope()
             refresh(true)
@@ -147,7 +147,7 @@
           .catch(function (error) { setResult({ ok: false, text: errMsg(error) }); })
           .finally(function () { setBusy(false); });
       }
-      /** 统一关闭一条技能：一次性写 off + 清掉正在用它那几层的开关。 */
+      /** 全部关闭一条技能：一次性写 off + 清掉正在用它那几层的开关。 */
       function stopSkillNow(target) {
         setBusy(true); setResult(null);
         apiCall("scope-stop-now", { domain: "skills", key: target.key })
@@ -547,7 +547,7 @@
           root.mutable && !root.deletable ? h("span", { key: "notDeletable", className: "dsm-listrow-meta-info", title: t("status.notDeletable.hint") }, t("status.notDeletable")) : null,
         ];
         // 行尾：详情常驻，其余动作收进 ⋯（与 MCP 页同一套口径）：
-        //   统一关闭 —— 真有其他对话 / 工作区在临时用它时才出现；
+        //   全部关闭 —— 真有其他对话 / 工作区在临时用它时才出现；
         //   编辑 / 删除 —— 官方内置与只读来源没有这两项（`mutable` / `deletable` 由服务端给）。
         // 锁定期间只有「详情」还活着：其余都会改配置，一律置灰。
         var actions = [];
@@ -662,11 +662,11 @@
                   return
                 }
                 // 全局层 = 写**意图**（0.21.2）：off 之后仍被会话认领的来源保持启用（租约），
-                // 只有「统一关闭」才切断它们。
+                // 只有「全部关闭」才切断它们。
                 setSourceIntent(root, srcOn ? 'off' : 'on');
               },
             }));
-            // 技能来源没有逐条「统一关闭」：关闭只改默认，正在用它的会话 / 工作区照旧运行（租约），
+            // 技能来源没有逐条「全部关闭」：关闭只改默认，正在用它的会话 / 工作区照旧运行（租约），
             // 页头「全部关闭」才把两格（技能 + 来源）的租约一起收掉。
             // 旧版本留下的 blocked 仍要给出口 —— 那颗开关在 blocked 下是灰的，只能从这里恢复。
             if (!scopeIsSession() && intentHere === 'blocked') {

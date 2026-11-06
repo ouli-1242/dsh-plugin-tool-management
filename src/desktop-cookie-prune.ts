@@ -34,6 +34,19 @@ const AUTH_COOKIE_PREFIX = 'dsh-auth-'
 const AUTH_COOKIE_HOST = '127.0.0.1'
 
 /**
+ * 只清理**创建于这个时长之前**的条目。
+ *
+ * 为什么需要时间下限：本模块的初衷是"清掉历次启动留下的旧条目"，但整类 DELETE 会连
+ * 当前这次启动刚换到的凭证一起删掉 —— 只要 apply 跑在桌面壳握手之后（热重载、同机第二个
+ * 宿主实例），用户当场就会重新撞上「Web authentication failed」。按创建时间切一刀之后，
+ * 本次的凭证永远在保留侧，堆积仍然会被清掉（一次启动最多留几条）。
+ */
+const MIN_AGE_MS = 10 * 60 * 1000
+
+/** Chromium 的 `cookies.creation_utc` 是「1601-01-01 起的微秒」。 */
+const CHROME_EPOCH_OFFSET_US = 11_644_473_600_000_000
+
+/**
  * 值得留一行日志的条数阈值。正常情况下每次启动罐里只有上一轮留下的 1 条，
  * 明显多于这个数说明曾经堆积过 —— 那种情况写一行日志，便于下次复盘。
  */
@@ -76,9 +89,10 @@ export function desktopCookieStorePath(
 let done = false
 
 /**
- * 清掉回环地址上残留的 `dsh-auth-*`。
+ * 清掉回环地址上**历次启动**留下的 `dsh-auth-*`（创建时间早于 `MIN_AGE_MS`）。
  *
- * 保留不了「本次启动新换的那条」—— 此刻还没换，所以整类清空是安全且彻底的。
+ * 不整类清空：apply 也可能跑在握手之后（热重载、同机第二个宿主实例），那时这次启动
+ * 刚换到的凭证就在库里，删掉它等于当场把用户踢下线。按创建时间切一刀两头都照顾到。
  * 进程内只跑一次：热重载再调也只返回空结果，避免反复去抢 Electron 正开着的库。
  *
  * @returns 本次调用的结果；`opened: false` 表示没有可清理的对象或环境不支持
@@ -94,7 +108,13 @@ export function pruneDesktopAuthCookies(): DesktopAuthPruneResult {
     const Ctor = sqlite.DatabaseSync
     if (typeof Ctor !== 'function') return { opened: false, removed: 0 }
     db = new Ctor(file)
-    const info = db.prepare('DELETE FROM cookies WHERE host_key = ? AND name LIKE ?').run(AUTH_COOKIE_HOST, `${AUTH_COOKIE_PREFIX}%`)
+    // 时间下限见 MIN_AGE_MS：删的是"以前启动留下的"，不是"这一次正在用的"。
+    // 表里没有 creation_utc（非 Chromium 库 / 结构又变了）时这条会抛，走下面的 catch
+    // —— 最坏结果是"本次不清"，不会误删。
+    const createdBefore = (Date.now() - MIN_AGE_MS) * 1000 + CHROME_EPOCH_OFFSET_US
+    const info = db.prepare(
+      'DELETE FROM cookies WHERE host_key = ? AND name LIKE ? AND creation_utc < ?',
+    ).run(AUTH_COOKIE_HOST, `${AUTH_COOKIE_PREFIX}%`, createdBefore)
     const removed = Number(info?.changes ?? 0)
     if (removed > NOISY_COUNT) {
       console.warn(`[dsh-plugin-tool-management] 清掉了 ${removed} 条桌面壳鉴权 cookie（宿主不清理，堆多了会导致启动握手被拒）。`)

@@ -228,8 +228,8 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
   /**
    * 这一格落到哪些**意图**域/键上（逐工具 → 服务器；单条技能 → 自己 + 所在来源）。
    *
-   * 用途只有两个：判断全局是不是「统一关闭」，以及回执里点名"仅为这个对话临时运行"的那一格。
-   * 技能要**两个**都查：来源被统一关闭时，技能级策略表开着也加载不到 —— 只查自己会给出
+   * 用途只有两个：判断全局是不是「全部关闭」，以及回执里点名"仅为这个对话临时运行"的那一格。
+   * 技能要**两个**都查：来源被全部关闭时，技能级策略表开着也加载不到 —— 只查自己会给出
    * 一条"能开"的假承诺。
    */
   function intentTargetsOf(domain: ScopeFlagDomain, key: string): Array<{ domain: IntentDomain; key: string }> {
@@ -478,10 +478,10 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
             for (const root of roots) entries.push({ domain: 'skillSources', key: root })
           }
           warnings = warnings.concat(reconcileWarnings(report, entries))
-          // 全局「统一关闭」压过场景：勾中它也不会运行。不说的话用户会以为场景坏了。
+          // 全局「全部关闭」压过场景：勾中它也不会运行。不说的话用户会以为场景坏了。
           for (const entry of entries) {
             if (global.intent?.[entry.domain]?.[entry.key] === 'blocked') {
-              warnings.unshift(`${intentLabel(entry.domain)}「${entry.key}」已在全局「统一关闭」：这个场景里它不会运行`)
+              warnings.unshift(`${intentLabel(entry.domain)}「${entry.key}」已在全局「全部关闭」：这个场景里它不会运行`)
             }
           }
         }
@@ -501,13 +501,13 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
       if (key === '__proto__') return { ok: false, error: '非法 key: __proto__' }
       if (typeof (args && args.value) !== 'boolean') return { ok: false, error: 'value 必须是布尔值（只按传入值写入，不做"翻转"推断）' }
       const value = args.value === true
-      // 全局「统一关闭」压过一切会话层（显式拒绝的语义）：写一条"开"只会看起来生效、
+      // 全局「全部关闭」压过一切会话层（显式拒绝的语义）：写一条"开"只会看起来生效、
       // 实际调不到 —— 当场拒掉并给出出口（先把全局改成关闭或启用）。
       // 技能要连**所在来源**一起查：来源停了，技能级策略开着也加载不到。
       const blockedTarget = intentTargetsOf(domain, key)
         .find((target) => global.intent?.[target.domain]?.[target.key] === 'blocked')
       if (value && blockedTarget !== undefined) {
-        return { ok: false, error: `「${blockedTarget.key}」已在全局「统一关闭」：先把全局改回关闭或启用，它才可能再运行` }
+        return { ok: false, error: `「${blockedTarget.key}」已在全局「全部关闭」：先把全局改回关闭或启用，它才可能再运行` }
       }
       // 下层值的**预检**（锁外、读缓存）：只为快速拒绝，不是权威判定 —— 权威那一份在
       // `store.mutate` 的锁内按**重读出来的** `cur` 再算一次（见下面 `effectiveParent`）。
@@ -1002,7 +1002,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
     },
     // 全局意图：MCP 服务器 / 技能（含来源）三格的**全局开关**写这里，不再直接改补丁 /
     // 来源状态 —— 后者是运行态，由对账器维持成 `意图 ∪ 租约`。
-    // `blocked` 仍可读（旧版本留下的 MCP 值），新界面不再写它：「统一关闭」是一次性
+    // `blocked` 仍可读（旧版本留下的 MCP 值），新界面不再写它：「全部关闭」是一次性
     // 动作，走下面的 `scope-stop-now`。
     'scope-intent-set': async (args: any) => {
       const domain = String((args && args.domain) || '').trim()
@@ -1031,7 +1031,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
       return { ok: true, domain, value: state, keys, ...(warnings.length > 0 ? { warnings } : {}) }
     },
     /**
-     * 「统一关闭」/「全部关闭」：一次性停机，不留下持久的 `blocked`。
+     * 「全部关闭」：一次性停机，不留下持久的 `blocked`。
      *
      * 对布尔域：先把全局意图写成 `off`（只有 mcp / skills / skillSources 有意图），再把
      * **所有层里开着它的**会话 / 工作区写成显式关闭 —— 只写 off 不够：那些层里的 `true`
@@ -1058,7 +1058,7 @@ export function buildScopeOps(deps: ScopeOpsDeps): Record<string, (args: any) =>
         archived = new Set((await deps.sessions()).filter((row) => row.archived === true).map((row) => row.id))
       } catch { /* 清单读不到：不按归档过滤，宁可多关几格 */ }
       if (domain === 'scene') {
-        // 不带 key = 页头的「全部关闭」；带 key = 某一张场景卡菜单里的「统一关闭」。
+        // 不带 key = 页头的「全部关闭」；带 key = 某一张场景卡菜单里的「全部关闭」。
         const rawScenes: unknown[] = Array.isArray(args && args.keys)
           ? (args.keys as unknown[])
           : (args && args.key !== undefined ? [args.key] : [])

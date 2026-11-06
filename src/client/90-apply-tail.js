@@ -30,6 +30,8 @@
         // 只有真渲染才看得出挤不挤（同 `_pages.VersionBadge` 那条理由）。
         _pages.TrashModal = TrashModal
         _pages.RetentionSelect = RetentionSelect
+        // 租约浮窗：行距与「×」贴边这类排版只有真渲染才看得出，预览脚本直接渲染它。
+        _pages.LeaseTagBadge = LeaseTagBadge
       },
     }
     return module.exports

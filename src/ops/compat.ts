@@ -176,6 +176,17 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           // 宿主非 peer 契约的实况：插件按裸模块名 require 的那几个官方包。与 findings 不同源
           // （模块层 vs 服务层），所以单独一个字段，界面据此列出"裸模块解析"那一块。
           ...(assessment.contracts === undefined ? {} : { contracts: assessment.contracts }),
+          // 行为契约（事件名 / 数据布局 / 配置键 / 补丁方言）：与上一份同一套判定，
+          // 但检查的是插件写死的宿主行为字符串 —— 官方改掉一个同样不抛错。
+          ...(assessment.behaviors === undefined ? {} : { behaviors: assessment.behaviors }),
+          // 客户端 UI 契约（模块加载器 / 插槽名 / 客户端服务）：服务端看不见浏览器，
+          // 只能核对宿主客户端 bundle 里的字符串标记。
+          ...(assessment.clientUi === undefined ? {} : { clientUi: assessment.clientUi }),
+          // 只能人工核对的项：能力表探针与契约 canary 的盲区，随诊断 JSON 返回，页面不展示。
+          manualChecks: assessment.manualChecks,
+          // 逐包版本：每个 peer 在宿主 / 插件两侧的版本、适配基准与 peer 范围判定。
+          // 升级后"哪个包先变了、还在不在范围内"由这一份回答。
+          packages: assessment.identity.packages,
           findings,
           degraded,
           blockers: assessment.identity.blockers,
@@ -268,6 +279,8 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           defaults?: number
           version?: string
           blockers?: readonly string[]
+          /** 待复核的包（`host-contracts` 行）：客户端按它出各语言的包名 / 功能名句子。 */
+          contracts?: Array<{ package: string; feature: string }>
         }
         const rows: OverviewRow[] = []
         const push = (row: OverviewRow) => rows.push(row)
@@ -319,6 +332,26 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
             ...noteFields(note),
           })
         }
+        // 宿主契约层：模块还在、入口字符串没了（或整个包不在了）时，对应功能可能已经按旧契约
+        // 在跑。单独一行汇总，让"哪些功能要复核"出现在功能总览里 —— 不能只在下方契约表里
+        // 列一串包名，页头/总览却全是绿的。
+        const contractIssues = assessment === undefined ? [] : [
+          ...(assessment.contracts?.packages ?? []),
+          ...(assessment.behaviors?.packages ?? []),
+          ...(assessment.clientUi?.packages ?? []),
+        ].filter((item) => item.resolved === null ? item.optional !== true : item.missingMarkers.length > 0)
+        push({
+          key: 'host-contracts',
+          label: '宿主契约（事件 / 配置键 / 布局 / 界面）',
+          tab: 'compat',
+          state: contractIssues.length === 0 ? 'ok' : 'degraded',
+          detail: contractIssues.length === 0
+            ? 'canary 齐全：事件名、配置键、磁盘布局与客户端界面标记仍与适配基准一致'
+            : `需复核 ${contractIssues.length} 个包：` + contractIssues.map((item) => `${item.package}（${item.feature}）`).join('、'),
+          ...(contractIssues.length === 0
+            ? {}
+            : { contracts: contractIssues.map((item) => ({ package: item.package, feature: item.feature })) }),
+        })
         // 宿主能力层：删除 / 归档 / 恢复 / 批量各自由路由判定回答（与服务端执行同源）。
         const deleteRoute = routeOf('delete')
         push({

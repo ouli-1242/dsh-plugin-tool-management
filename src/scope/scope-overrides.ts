@@ -917,7 +917,7 @@ export interface ScopeGlobalSnapshot {
   unavailable?: readonly string[]
   /**
    * 三格真租约的**意图**（MCP 服务器 / 技能来源 / 单条技能）。`flags` 里那几格给的
-   * 是意图的布尔投影（blocked 也投影成 false），这里保留三态：界面要区分「关着」与「统一关闭」。
+   * 是意图的布尔投影（blocked 也投影成 false），这里保留三态：界面要区分「关着」与「全部关闭」。
    */
   intent?: {
     mcp: Record<string, IntentState>
@@ -961,7 +961,7 @@ export interface ScopeGlobalSnapshot {
    * 全局正在用的场景不算临时运行，不计数。
    */
   sceneLeases?: number
-  /** 按场景拆开的进入数（键 = 场景名）：行菜单的「统一关闭」只在那一场有临时运行时出现。 */
+  /** 按场景拆开的进入数（键 = 场景名）：行菜单的「全部关闭」只在那一场有临时运行时出现。 */
   sceneLeaseCounts?: Record<string, number>
   /**
    * 按场景拆开的**进入者**（键 = 场景名）：徽章浮窗逐行列出是哪些对话 / 工作区在这个场景里。

@@ -70,14 +70,22 @@ export const OPERATION_ROUTES = {
     // 要求，会让本插件适配的那一版宿主反而删不了东西。
     adapter: [
       'workspace.enqueue', 'workspace.set-state', 'workspace.index-header',
-      'sessions.detach-live', 'sessions.cold-announce', 'projection.write',
+      // 删除入口自己会在任何破坏性步骤之前硬检查这些：头部读不到就无法确认要删的是谁，
+      // 实时会话接口缺失 / 持久化后端不暴露 locate() 都会让失败点落在链路中段。
+      // 路由必须与那份运行时前提同源，否则页面说可用、点下去才报错。
+      'workspace.read-header', 'sessions.detach-live', 'sessions.cold-announce',
+      'sessions.live-access', 'persistence.list', 'persistence.transcript-locate',
+      'projection.write',
       // `projection.table-delete` 是运行时硬前提，也算一条路由要求 —— 不算进来的话，宿主表
       // 不可删时路由说可用、点下去必拒。batch 的 adapter 路由**有意**只留 enqueue / set-state：
       // 它的逐条失败会在结果里按 sessionId 报出来，此处不放宽也不收紧。
       'projection.table-delete',
     ],
   },
-  list: { native: [], adapter: ['workspace.read-state', 'workspace.read-table', 'workspace.index-shape'] },
+  list: {
+    native: [],
+    adapter: ['workspace.read-state', 'workspace.read-table', 'workspace.index-shape', 'persistence.list'],
+  },
 } as const satisfies Record<string, { native: readonly string[]; adapter: readonly string[] }>
 /** 可选的操作名，与 {@link OPERATION_ROUTES} 的键一一对应。 */
 export type OperationName = keyof typeof OPERATION_ROUTES
@@ -355,7 +363,16 @@ export function refusalsFor(assessment: Pick<HostAssessment, 'findings'>, ids: r
   const out: CapabilityRefusal[] = []
   for (const id of ids) {
     const finding = index.get(id)
-    if (finding === undefined || finding.state === 'ok') continue
+    if (finding === undefined) {
+      out.push({
+        id,
+        label: id,
+        detail: '本插件的能力表里找不到这条能力（规格被删或改名）：路由按不可用处理',
+        recovery: recoveryFor({ id } as CapabilityFinding),
+      })
+      continue
+    }
+    if (finding.state === 'ok') continue
     out.push({ id: finding.id, label: finding.label, detail: finding.detail, recovery: recoveryFor(finding) })
   }
   return out
@@ -378,12 +395,10 @@ export interface RouteDecision {
 export function routeFor(assessment: Pick<HostAssessment, 'findings'>, operation: OperationName): RouteDecision {
   const routes = OPERATION_ROUTES[operation]
   const index = findingsById(assessment)
+  // 找不到 id **不能**当成满足：那说明本插件的能力表被删/改名了，而路由仍会走一条
+  // 已不再被探测的破坏性路径。按 fail-closed 处理，让页面显示"缺这条能力"，而不是静默放行。
   const allOk = (ids: readonly string[]): boolean =>
-    ids.every((id) => {
-      const finding = index.get(id)
-      // 宿主根本没暴露的能力，挡不住一条用不到它的路线；缺席的 id 按满足处理。
-      return finding === undefined || finding.state === 'ok'
-    })
+    ids.every((id) => index.get(id)?.state === 'ok')
   if (routes.native.length > 0 && allOk(routes.native)) return { via: 'native', refusals: [] }
   if (allOk(routes.adapter)) return { via: 'adapter', refusals: [] }
   const needed = routes.native.length > 0 ? [...new Set([...routes.native, ...routes.adapter])] : routes.adapter

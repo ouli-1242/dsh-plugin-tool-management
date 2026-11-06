@@ -643,6 +643,22 @@
         loadBackups(alive)
         return function () { alive = false }
       }, [])
+      // 页头的「重新检测」：与首挂载同一组请求，显式带 refresh 绕过服务端 5 秒缓存。
+      // 契约 / 版本在宿主原地升级后可能已经变了，而用户不该为此退页重进。
+      const refreshAll = function () {
+        setBusy(true)
+        setError(null)
+        apiCall('compat-status', { refresh: true })
+          .then(function (r) { apply(r, true) })
+          .catch(function (e) { setError(errMsg(e)); setBusy(false) })
+        loadReach(true)
+        loadInject(true)
+        loadSlash(true)
+        loadLive(true)
+        loadFeatures(true)
+        loadToken(true)
+        loadBackups(true)
+      }
       // 保存注入设置：先乐观更新界面（点一下就该有反馈），服务端返回值到达后以其为准；
       // 失败则重新拉一次。可达性矩阵跟着刷新 —— 芯片要反映新的开关状态。
       // `{ok:false}` 与网络异常分开处理：前者是服务端明确拒绝（坏侧车 / 令牌失效），
@@ -711,6 +727,18 @@
         + blockers.length
         + unverified.length
         + Object.keys(sameAsHost).filter(function (name) { return sameAsHost[name] === false }).length
+      // 契约漂移 / 缺失不一定让能力探测失败，但会让某项功能"看起来在跑、实际按旧契约跑"。
+      // 页头必须把它算进结论，否则会出现「能力 18/18 全部可用」配一排黄色契约警告。
+      // 可选包（宿主本就不提供）不算 —— 那条是部署形态，不是待复核。
+      const contractReviewCount = [data && data.contracts && data.contracts.packages, data && data.behaviors && data.behaviors.packages, data && data.clientUi && data.clientUi.packages]
+        .map(function (list) { return Array.isArray(list) ? list : [] })
+        .reduce(function (sum, list) {
+          return sum + list.filter(function (item) {
+            return item && (item.resolved === null ? item.optional !== true : (item.missingMarkers || []).length > 0)
+          }).length
+        }, 0)
+      // 三种结论：真问题（红） / 契约待复核（黄） / 全部可用（无标记）。
+      const attention = blockedCount > 0 ? 'blocked' : contractReviewCount > 0 ? 'review' : 'ok'
       const unavailableCount = Object.keys(OPERATION_LABELS).filter(function (op) { return routes[op] === 'none' }).length
 
       const routeClass = function (via) {
@@ -739,12 +767,33 @@
           case 'workspace.delete-native': return t('compat.cap.workspaceDeleteNative')
           case 'sessions.detach-live': return t('compat.cap.sessionsDetachLive')
           case 'sessions.cold-announce': return t('compat.cap.sessionsColdAnnounce')
+          case 'sessions.live-access': return t('compat.cap.sessionsLiveAccess')
+          case 'persistence.list': return t('compat.cap.persistenceList')
+          case 'persistence.transcript-locate': return t('compat.cap.persistenceTranscriptLocate')
+          case 'persistence.transcript-read': return t('compat.cap.persistenceTranscriptRead')
           case 'projection.write': return t('compat.cap.projectionWrite')
           case 'projection.table-delete': return t('compat.cap.projectionTableDelete')
           case 'agentPreset.register': return t('compat.cap.agentPresetRegister')
           case 'tools.restrict-method': return t('compat.cap.toolsRestrictMethod')
+          case 'tools.schema-list': return t('compat.cap.toolsSchemaList')
+          case 'tools.get-method': return t('compat.cap.toolsGetMethod')
+          case 'tools.guard-dispatch': return t('compat.cap.toolsGuardDispatch')
+          case 'tools.mcp-resource-args': return t('compat.cap.toolsMcpResourceArgs')
+          case 'systemPrompt.mcp-section': return t('compat.cap.systemPromptMcpSection')
+          case 'mcp-client.config-schema': return t('compat.cap.mcpClientConfigSchema')
+          case 'skills.register-provider': return t('compat.cap.skillsRegisterProvider')
+          case 'agents.list': return t('compat.cap.agentsList')
+          case 'pluginInventory.list': return t('compat.cap.pluginInventoryList')
+          case 'webServer.register': return t('compat.cap.webServerRegister')
+          case 'sandboxPolicy.resolve': return t('compat.cap.sandboxPolicyResolve')
+          case 'projection.cached-title': return t('compat.cap.projectionCachedTitle')
+          case 'official-skill-assets': return t('compat.cap.officialSkillAssets')
+          case 'official-sandbox-asset': return t('compat.cap.officialSandboxAsset')
           case 'agent.created-event': return t('compat.cap.agentCreatedEvent')
           case 'connection.admit': return t('compat.cap.connectionAdmit')
+          case 'subagents.runtime': return t('compat.cap.subagentsRuntime')
+          case 'llm.model-catalog': return t('compat.cap.llmModelCatalog')
+          case 'approval.effective-policy': return t('compat.cap.approvalEffectivePolicy')
           case 'archive': return t('compat.cap.opArchive')
           case 'unarchive': return t('compat.cap.opUnarchive')
           case 'batch': return t('compat.cap.opBatch')
@@ -778,6 +827,7 @@
           case 'slash-commands': return t('compat.ov.slashCommands')
           case 'native-delete': return t('compat.ov.nativeDelete')
           case 'host-identity': return t('compat.ov.hostIdentity')
+          case 'host-contracts': return t('compat.ov.hostContracts')
           case 'memory': return t('compat.ov.memory')
           case 'prompts': return t('compat.ov.prompts')
           case 'subagents': return t('compat.ov.subagents')
@@ -877,6 +927,13 @@
           if (row.state === 'disabled') return t('compat.ov.slashCommands.off')
           if (row.slashTools && row.slashQuickPrompts) return t('compat.ov.slashCommands.on')
           return t(row.slashTools ? 'compat.ov.slashCommands.onTools' : 'compat.ov.slashCommands.onQuick')
+        }
+        if (row.key === 'host-contracts') {
+          if (row.state === 'ok') return t('compat.ov.hostContracts.ok')
+          const items = (row.contracts || []).map(function (item) {
+            return t('compat.ov.hostContracts.item', { package: item.package, feature: item.feature })
+          })
+          return t('compat.ov.hostContracts.degraded', { count: items.length, list: list(items) })
         }
         if (row.key === 'host-identity') {
           if (row.state === 'unknown') return t('compat.ov.route.unknown')
@@ -1461,6 +1518,53 @@
             // 而且"出厂默认关掉"这件事用户不需要为此做什么 —— 要用就勾上，不用管它。
             rows)))
       }
+      // 预设注入边界：五类内容（记忆 / 全局提示词 / 技能 / MCP / 子智能体）在**每个 Agent
+      // 预设**下到不到得了模型。回答的是"面板标着已注入，模型真的看得到吗"——本插件的
+      // 注入由它自己在每步发出（极简这类预设下默认不发，可用上面的「注入」块强制），
+      // 而全局提示词与技能目录还要看官方那两条行挂没挂（极简都没挂）。紧挨模型工具表下方；
+      // 取不到时这一节不显示，不影响上面的结论。
+      //
+      // 排版口径（用户裁定 2026-09-15）：每格一枚描边标签，**绿框=能用、红框=不能用、
+      // 灰框=判断不了**；不再出现 ✓/✗ 符号，也不再有任何整行的解释文字 —— 预设损坏与
+      // 解析失败缩成预设名旁边的小标签。MCP 与子智能体两列由宿主侧的 preset-reach 给出。
+      if (presetReach && Array.isArray(presetReach.rows) && presetReach.rows.length) {
+        push(section(t('compat.reach'), null,
+          React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+            presetReach.rows.map(function (row) {
+              // ok → 绿框；absent / suppressed → 红框；其余（unknown，含宿主还没回传该字段）
+              // 一律灰框，绝不把"读不到"画成"不能用"。
+              const chip = function (label, state) {
+                const kind = state === 'ok' ? 'ok' : (state === 'absent' || state === 'suppressed') ? 'bad' : 'unknown'
+                return React.createElement('span', { className: 'dsm-reach-chip dsm-reach-' + kind, key: label }, label)
+              }
+              const tags = []
+              if (row.suppressing) tags.push(React.createElement('span', { className: 'dsm-tag dsm-tag-off', key: 'suppressing' }, t('compat.reach.suppressing')))
+              if (row.broken) tags.push(React.createElement('span', { className: 'dsm-tag dsm-tag-off', key: 'broken' }, t('compat.reach.broken')))
+              else if (row.reason) tags.push(React.createElement('span', { className: 'dsm-tag', key: 'reason' }, t('compat.reach.whyUnknown')))
+              return React.createElement('div', { className: 'dsm-compat-mod-row', key: row.presetId },
+                React.createElement('span', { className: 'dsm-compat-name dsm-reach-name' },
+                  React.createElement('span', null, (PRESET_MODE_NAME_KEYS[row.presetId] ? t(PRESET_MODE_NAME_KEYS[row.presetId]) : (row.name || row.presetId)) + (row.isDefault ? ' · ' + t('compat.reach.default') : '')),
+                  tags.length ? React.createElement('span', { className: 'dsm-tags' }, tags) : null),
+                // 芯片顺序与「注入」块的勾选顺序一致（用户裁定 2026-09-16；2026-09-23 起
+                // 场景与记忆是两个域，各占一枚）：场景 → 记忆 → MCP → 技能 → 子智能体 → 提示词。
+                React.createElement('span', { className: 'dsm-compat-reach-marks' },
+                  chip(t('compat.reach.mark.scene'), row.scene),
+                  chip(t('compat.reach.mark.memory'), row.memory),
+                  chip(t('compat.reach.mark.mcp'), row.mcp),
+                  chip(t('compat.reach.mark.skill'), row.skillCatalog),
+                  chip(t('compat.reach.mark.subagent'), row.subagent),
+                  chip(t('compat.reach.mark.agentsMd'), row.agentsMd)))
+            }))))
+
+        // 页脚用「标题 + 条目」清单，与导入弹窗的「文件要求」同款结构与样式（用户裁定
+        // 2026-09-16 第二版：条目要短、不列路径与内部机制，使用者知道"有这回事"就够）。
+        push(React.createElement('div', { className: 'dsm-upload-requirements' },
+          React.createElement('div', { className: 'dsm-label' }, t('compat.reach.tools.title')),
+          React.createElement('ul', null,
+            [1, 2, 3].map(function (n) {
+              return React.createElement('li', { key: n }, t('compat.reach.tools.' + n))
+            }))))
+      }
       // 注入实况：紧挨「注入」设置块下方。数据来自 `injection-live`（宿主读最近活跃会话的
       // 可见表面），是"回放"不是"重算"—— 界面显示已注入而模型实际没收到时（场景接管、
       // 压制型预设、开关被关、压缩后还没补发），这里一眼可见。
@@ -1612,27 +1716,34 @@
         // 它自带的 summary 是中文，直接渲染会让英文界面露出中文）。
         const findingsN = Array.isArray(data.findings) ? data.findings.length : 0
         const degradedN = Array.isArray(data.degraded) ? data.degraded.length : 0
-        // 摘要三形态：能力降级 / 仅身份待处理 / 全部可用。仅身份待处理时**不能**说
-        // 「全部可用」—— 横幅已转红（有阻塞项），摘要却报一切正常，两句自相矛盾
-        // （2026-09-30 桌面版实测）。
+        // 摘要四形态：能力降级 / 仅身份待处理 / 契约待复核 / 全部可用。后两种都不能说
+        // 「全部可用」—— 横幅已转黄或转红，摘要却报一切正常，两句自相矛盾。
         const summaryKey = degradedN > 0 ? 'compat.summary.degraded'
-          : blockedCount > 0 ? 'compat.summary.identity' : 'compat.summary.ok'
+          : blockedCount > 0 ? 'compat.summary.identity'
+            : contractReviewCount > 0 ? 'compat.summary.review' : 'compat.summary.ok'
+        const summaryCount = degradedN > 0 ? degradedN : blockedCount > 0 ? blockedCount : contractReviewCount
         const summaryText = findingsN === 0
           ? (data.summary || '')
           : t(summaryKey)
             .replace('{version}', String((data.host && data.host.version) || '?'))
             .replace('{ok}', String(findingsN - degradedN))
             .replace('{total}', String(findingsN))
-            .replace('{count}', String(degradedN > 0 ? degradedN : blockedCount))
-        push(React.createElement('div', { className: 'dsm-compat-bar' + (blockedCount > 0 ? ' dsm-compat-bar-warn' : '') },
-          React.createElement('span', { className: 'dsm-compat-dot' + (blockedCount > 0 ? ' dsm-compat-dot-warn' : '') }),
-          React.createElement('strong', null, blockedCount > 0 ? t('compat.state.blocked') : t('compat.state.ok')),
+            .replace('{count}', String(summaryCount))
+        push(React.createElement('div', { className: 'dsm-compat-bar' + (attention !== 'ok' ? ' dsm-compat-bar-warn' : '') },
+          React.createElement('span', { className: 'dsm-compat-dot' + (attention !== 'ok' ? ' dsm-compat-dot-warn' : '') }),
+          React.createElement('strong', null, attention === 'blocked' ? t('compat.state.blocked')
+            : attention === 'review' ? t('compat.state.review') : t('compat.state.ok')),
           React.createElement('span', { className: 'dsm-compat-sum' }, summaryText)))
         // 诊断包：排障时用户能一键复制一份"环境 + 状态"，不必逐项截图。
         // 放在结论条下面而不是页脚：有阻塞项时它就在眼前。
+        // 同时给出检测时间：compat-status 有 5s 短 TTL，用户得知道眼前这份结论有多旧。
         push(React.createElement('div', { className: 'dsm-feedback-row' },
           React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: copyDiagnostics },
-            diagCopied ? t('compat.diag.copied') : t('compat.diag.copy'))))
+            diagCopied ? t('compat.diag.copied') : t('compat.diag.copy')),
+          data.generatedAt
+            ? React.createElement('span', { className: 'dsm-help' },
+              t('compat.generatedAt').replace('{time}', new Date(Number(data.generatedAt)).toLocaleString()))
+            : null))
 
         // 指标卡：宿主 / 本插件适配版本 / 可用能力（含插件自补的 optional 槽位）。
         // 三张卡都只在**有事要说**时带注脚：
@@ -1737,7 +1848,7 @@
             React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
               degraded.map(function (item) {
                 return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.id },
-                  React.createElement('span', { className: 'dsm-compat-name' }, item.label),
+                  React.createElement('span', { className: 'dsm-compat-name' }, capLabel(item.id, item.label)),
                   React.createElement('span', { className: 'dsm-compat-pill dsm-compat-pill-warn' },
                     item.fallback === 'native-entry' ? t('compat.fallback.native')
                       : item.fallback === 'refuse-operation' ? t('compat.fallback.refuse')
@@ -1762,8 +1873,10 @@
             React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
               optionalAbsent.map(function (item) {
                 return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.id },
-                  React.createElement('span', { className: 'dsm-compat-name' }, item.label),
-                  React.createElement('span', { className: 'dsm-compat-pill' }, t('compat.fallback.substituted')),
+                  React.createElement('span', { className: 'dsm-compat-name' }, capLabel(item.id, item.label)),
+                  React.createElement('span', { className: 'dsm-compat-pill' }, item.fallback === 'inform-only'
+                    ? t('compat.fallback.informOnly')
+                    : t('compat.fallback.substituted')),
                   React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
                     React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')),
                     item.detail))
@@ -1802,10 +1915,54 @@
                 React.createElement('span', { className: 'dsm-compat-pill ' + cls }, text))
             }))))
 
+        // 逐包版本：回答「升级后哪个官方包先变了、还在不在适配范围」。
+        // 与上面模块实体那一块分开的：那里比的是**物理文件是不是同一份**，
+        // 这里比的是**版本号与 peer 范围** —— 路径相同也可能版本已经变了（宿主原地升级）。
+        const hostPackages = (data && data.packages) || []
+        if (hostPackages.length) {
+          const driftedPackages = hostPackages.filter(function (item) { return item.versionDrift === true }).length
+          push(section(t('compat.packages'), driftedPackages > 0
+            ? t('compat.packages.hint', { count: driftedPackages })
+            : t('compat.packages.allOk'),
+            React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+              hostPackages.map(function (item) {
+                const known = Boolean(item.hostVersion)
+                const optionalUnknown = !known && item.optional === true
+                const outOfRange = item.inPeerRange === false
+                const drifted = item.versionDrift === true
+                const cls = optionalUnknown ? ''
+                  : outOfRange ? 'dsm-compat-pill-bad'
+                    : drifted ? 'dsm-compat-pill-warn'
+                      : known ? 'dsm-compat-pill-ok' : ''
+                const pill = optionalUnknown ? t('compat.packages.optional')
+                  : outOfRange ? t('compat.packages.out')
+                    : drifted ? t('compat.packages.changed')
+                      : known ? t('compat.packages.baseline') : t('compat.packages.unknown')
+                const detail = optionalUnknown
+                  ? t('compat.packages.optionalDetail')
+                  : item.observed === true
+                    ? t('compat.packages.detailObserved', {
+                      host: item.hostVersion || '—',
+                      baseline: item.baselineVersion || '—',
+                    })
+                    : t('compat.packages.detail', {
+                      host: item.hostVersion || '—',
+                      plugin: item.pluginVersion || '—',
+                      baseline: item.baselineVersion || '—',
+                      range: item.peerRange || '—',
+                    }) + (item.sameModule === false ? ' · ' + t('compat.packages.separate') : '')
+                return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.name },
+                  React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, item.name),
+                  React.createElement('span', { className: 'dsm-compat-pill ' + cls }, pill),
+                  React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
+                    React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')), detail))
+              }))))
+        }
+
         // 裸模块解析（与上面那一块的分工：上面比的是**同一份物理模块**，这里看的是**包还在不在**）。
         //
         // 为什么分开：上面那 6 个包是插件的 peerDependency，「两份不同拷贝」那种故障只可能发生在
-        // 它们身上；而下面这 4 个包是插件按**裸模块名**在运行时 require 的官方包，宿主不要求插件
+        // 它们身上；而下面这 5 个包是插件按**裸模块名**在运行时 require 的官方包，宿主不要求插件
         // 依赖它们。官方撤掉其中一个，对应功能静默降级，而身份比对那一栏根本看不见它们 —— 所以
         // 必须在这里列一行。canary 缺失不是「包坏了」，是「该人工复核这条契约」，显示成提示而非红色。
         const contractPackages = (data && data.contracts && data.contracts.packages) || []
@@ -1827,7 +1984,77 @@
               }))))
         }
 
-        // 「无法比对」必须给原因：否则一排未知标记看起来只是噪音，用户会当成正常现象。
+        // 宿主行为契约：插件没有 require 这些包，但把事件名 / 磁盘布局 / 配置键 / 补丁方言
+        // 写死在自己代码里。官方改掉其中一个不抛错，对应功能只是悄悄失效 —— 所以单独一块
+        // 列出「守着什么、缺了会怎样」，而不是混进能力降级里。
+        const behaviorPackages = (data && data.behaviors && data.behaviors.packages) || []
+        if (behaviorPackages.length) {
+          push(section(t('compat.behaviors'), t('compat.behaviors.hint'),
+            React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+              behaviorPackages.map(function (item) {
+                const missing = item.resolved === null
+                const optionalAbsent = missing && item.optional === true
+                const drifted = !missing && (item.missingMarkers || []).length > 0
+                const cls = optionalAbsent ? ''
+                  : missing ? 'dsm-compat-pill-bad'
+                    : drifted ? 'dsm-compat-pill-warn' : 'dsm-compat-pill-ok'
+                const pill = optionalAbsent ? t('compat.behaviors.optional')
+                  : missing ? t('compat.behaviors.absent')
+                    : drifted ? t('compat.behaviors.drift') : t('compat.behaviors.present')
+                const notes = item.missingMarkerNotes || []
+                const markers = notes.length
+                  ? notes.map(function (note) { return String(note.needle || '') + '（' + String(note.why || '') + '）' }).join('；')
+                  : (item.missingMarkers || []).join('、')
+                const detail = optionalAbsent
+                  ? t('compat.behaviors.optionalWhy', { feature: item.feature || '', impact: item.impact || '' })
+                  : missing
+                    ? t('compat.behaviors.absentWhy', { feature: item.feature || '', impact: item.impact || '' })
+                    : drifted
+                      ? t('compat.behaviors.driftWhy', { feature: item.feature || '', markers: markers, impact: item.impact || '' })
+                      : t('compat.behaviors.presentWhy', { feature: item.feature || '' })
+                return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.package },
+                  React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, item.package),
+                  React.createElement('span', { className: 'dsm-compat-pill ' + cls }, pill),
+                  React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
+                    React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')), detail))
+              }))))
+        }
+
+        // 宿主客户端 UI 契约：模块加载器 / 插槽名 / 客户端服务都在宿主客户端 bundle 里；
+        // 服务端看不见浏览器，只能核对字符串标记。缺失只说明「该人工复核」，不是已坏。
+        const clientUiPackages = (data && data.clientUi && data.clientUi.packages) || []
+        if (clientUiPackages.length) {
+          push(section(t('compat.clientUi'), t('compat.clientUi.hint'),
+            React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
+              clientUiPackages.map(function (item) {
+                const missing = item.resolved === null
+                const optionalAbsent = missing && item.optional === true
+                const drifted = !missing && (item.missingMarkers || []).length > 0
+                const cls = optionalAbsent ? ''
+                  : missing ? 'dsm-compat-pill-bad'
+                    : drifted ? 'dsm-compat-pill-warn' : 'dsm-compat-pill-ok'
+                const pill = optionalAbsent ? t('compat.clientUi.optional')
+                  : missing ? t('compat.clientUi.absent')
+                    : drifted ? t('compat.clientUi.drift') : t('compat.clientUi.present')
+                const notes = item.missingMarkerNotes || []
+                const markers = notes.length
+                  ? notes.map(function (note) { return String(note.needle || '') + '（' + String(note.why || '') + '）' }).join('；')
+                  : (item.missingMarkers || []).join('、')
+                const detail = optionalAbsent
+                  ? t('compat.clientUi.optionalWhy', { feature: item.feature || '', impact: item.impact || '' })
+                  : missing
+                    ? t('compat.clientUi.absentWhy', { feature: item.feature || '', impact: item.impact || '' })
+                    : drifted
+                      ? t('compat.clientUi.driftWhy', { feature: item.feature || '', markers: markers, impact: item.impact || '' })
+                      : t('compat.clientUi.presentWhy', { feature: item.feature || '' })
+                return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.package },
+                  React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, item.package),
+                  React.createElement('span', { className: 'dsm-compat-pill ' + cls }, pill),
+                  React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
+                    React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')), detail))
+              }))))
+        }
+
         // 归档宿主的说明排最前 —— 它解释的正是这一排「无法比较」的成因，而且必须讲明白
         // **不要去跑 host-deps --fix**：那条命令会把插件的依赖指向 npx 缓存里另一个版本。
         if (asarNote) {
@@ -1879,54 +2106,6 @@
             t('compat.hint.doctor'),
             React.createElement('code', { className: 'dsm-compat-code' }, ' node scripts/doctor.mjs')))
         }
-      }
-
-      // 预设注入边界：五类内容（记忆 / 全局提示词 / 技能 / MCP / 子智能体）在**每个 Agent
-      // 预设**下到不到得了模型。回答的是"面板标着已注入，模型真的看得到吗"——本插件的
-      // 注入由它自己在每步发出（极简这类预设下默认不发，可用上面的「注入」块强制），
-      // 而全局提示词与技能目录还要看官方那两条行挂没挂（极简都没挂）。单独一块：取不到时
-      // 这一节不显示，不影响上面的结论。
-      //
-      // 排版口径（用户裁定 2026-09-15）：每格一枚描边标签，**绿框=能用、红框=不能用、
-      // 灰框=判断不了**；不再出现 ✓/✗ 符号，也不再有任何整行的解释文字 —— 预设损坏与
-      // 解析失败缩成预设名旁边的小标签。MCP 与子智能体两列由宿主侧的 preset-reach 给出。
-      if (presetReach && Array.isArray(presetReach.rows) && presetReach.rows.length) {
-        push(section(t('compat.reach'), null,
-          React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
-            presetReach.rows.map(function (row) {
-              // ok → 绿框；absent / suppressed → 红框；其余（unknown，含宿主还没回传该字段）
-              // 一律灰框，绝不把"读不到"画成"不能用"。
-              const chip = function (label, state) {
-                const kind = state === 'ok' ? 'ok' : (state === 'absent' || state === 'suppressed') ? 'bad' : 'unknown'
-                return React.createElement('span', { className: 'dsm-reach-chip dsm-reach-' + kind, key: label }, label)
-              }
-              const tags = []
-              if (row.suppressing) tags.push(React.createElement('span', { className: 'dsm-tag dsm-tag-off', key: 'suppressing' }, t('compat.reach.suppressing')))
-              if (row.broken) tags.push(React.createElement('span', { className: 'dsm-tag dsm-tag-off', key: 'broken' }, t('compat.reach.broken')))
-              else if (row.reason) tags.push(React.createElement('span', { className: 'dsm-tag', key: 'reason' }, t('compat.reach.whyUnknown')))
-              return React.createElement('div', { className: 'dsm-compat-mod-row', key: row.presetId },
-                React.createElement('span', { className: 'dsm-compat-name dsm-reach-name' },
-                  React.createElement('span', null, (PRESET_MODE_NAME_KEYS[row.presetId] ? t(PRESET_MODE_NAME_KEYS[row.presetId]) : (row.name || row.presetId)) + (row.isDefault ? ' · ' + t('compat.reach.default') : '')),
-                  tags.length ? React.createElement('span', { className: 'dsm-tags' }, tags) : null),
-                // 芯片顺序与「注入」块的勾选顺序一致（用户裁定 2026-09-16；2026-09-23 起
-                // 场景与记忆是两个域，各占一枚）：场景 → 记忆 → MCP → 技能 → 子智能体 → 提示词。
-                React.createElement('span', { className: 'dsm-compat-reach-marks' },
-                  chip(t('compat.reach.mark.scene'), row.scene),
-                  chip(t('compat.reach.mark.memory'), row.memory),
-                  chip(t('compat.reach.mark.mcp'), row.mcp),
-                  chip(t('compat.reach.mark.skill'), row.skillCatalog),
-                  chip(t('compat.reach.mark.subagent'), row.subagent),
-                  chip(t('compat.reach.mark.agentsMd'), row.agentsMd)))
-            }))))
-
-        // 页脚用「标题 + 条目」清单，与导入弹窗的「文件要求」同款结构与样式（用户裁定
-        // 2026-09-16 第二版：条目要短、不列路径与内部机制，使用者知道"有这回事"就够）。
-        push(React.createElement('div', { className: 'dsm-upload-requirements' },
-          React.createElement('div', { className: 'dsm-label' }, t('compat.reach.tools.title')),
-          React.createElement('ul', null,
-            [1, 2, 3].map(function (n) {
-              return React.createElement('li', { key: n }, t('compat.reach.tools.' + n))
-            }))))
       }
 
       // ── 最近改动（0.15.0 B2）─────────────────────────────────────────────────
@@ -2445,6 +2624,14 @@
           title: t('compat.title'),
           desc: t('compat.desc'),
           actions: [
+            React.createElement('button', {
+              key: 'refresh',
+              type: 'button',
+              className: 'dsm-btn dsm-btn-quiet',
+              disabled: busy,
+              title: t('compat.refresh.title'),
+              onClick: refreshAll,
+            }, t('compat.refresh')),
             compatDialogButton('audit', t('compat.audit')),
             compatDialogButton('snapshot', t('snapshot.title')),
             compatDialogButton('live', t('compat.live.title')),

@@ -21,6 +21,7 @@
  * Usage:
  *   node scripts/doctor.mjs           # human report, exit 1 on any blocker
  *   node scripts/doctor.mjs --json    # machine-readable report
+ *   node scripts/doctor.mjs --strict  # exit 1 on canary / layout drift as well
  */
 import { createRequire } from 'node:module'
 import { existsSync, readFileSync } from 'node:fs'
@@ -30,19 +31,25 @@ import { fileURLToPath } from 'node:url'
 // Single source of truth: the runtime probe itself. A second hand-written
 // capability list here would drift from what the plugin actually gates on, and
 // the doctor would then certify a host the plugin refuses to use.
-import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE, CAPABILITY_STATIC, hostRootCandidates, hostVersionOf, looksLikeHostPackageDir } from '../lib/compat/probe.js'
+import { IDENTITY_PACKAGES, VERIFIED_HOST_VERSION, EXPECTED_PEER_RANGE, CAPABILITY_STATIC, HOST_PACKAGE_BASELINES, hostRootCandidates, hostVersionOf, inspectStaticSchemaContracts, inspectStaticSkillAssets, looksLikeHostPackageDir } from '../lib/compat/probe.js'
+import { packageRootOf } from '../lib/compat/host-probe.js'
 // 宿主非 peer 契约（裸模块名 + canary）与兼容页共用同一份清单：此前它们只在这里，命令行
 // 报得出来、界面报不出来。现在是共享层，doctor 从 lib/ import。
 import {
   AGENTS_MD_REFRESH_MARKERS,
   AGENTS_MD_REFRESH_PACKAGE,
   BARE_HOST_MODULE_CONTRACTS,
+  HOST_BEHAVIOR_CONTRACTS,
+  HOST_CLIENT_UI_CONTRACTS,
   JSONL_LAYOUT_MARKERS,
   JSONL_LAYOUT_PACKAGE,
 } from '../lib/compat/host-contracts.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const JSON_OUT = process.argv.includes('--json')
+// 夜间 canary 用 `--strict`：canary / 布局漂移默认只是警告（功能降级，不是装不上），
+// 但 CI 要的是"官方源码变了就红"，否则这份检查永远只能靠人翻日志。
+const STRICT = process.argv.includes('--strict')
 const require = createRequire(join(ROOT, 'package.json'))
 
 /** Packages whose module identity must match the host's — the runtime list. */
@@ -104,6 +111,35 @@ function requireCapabilityModule(name, host) {
 
 
 /**
+ * 逐条核对契约标记：缺省读包入口，带 `file` 的读包内相对文件。
+ *
+ * @param entry - 已解析的包入口。
+ * @param markers - 共享契约清单里的标记。
+ * @returns 缺失标记（含 needle / why / file），入口读不到时返回全部缺失。
+ */
+function readContractMarkers(entry, markers) {
+  const root = packageRootOf(entry)
+  const cache = new Map()
+  const read = (file) => {
+    const key = file ?? ''
+    if (cache.has(key)) return cache.get(key)
+    let source = null
+    try {
+      const target = file === undefined ? entry : (root === null ? null : join(root, ...file.split('/')))
+      source = target === null ? null : readFileSync(target, 'utf8')
+    } catch { source = null }
+    cache.set(key, source)
+    return source
+  }
+  return markers
+    .filter((marker) => {
+      const source = read(marker.file)
+      return source === null || !source.includes(marker.needle)
+    })
+    .map((marker) => ({ needle: marker.needle, why: marker.why, ...(marker.file === undefined ? {} : { file: marker.file }) }))
+}
+
+/**
  * 从宿主锚点解析这批裸模块名，逐条给状态（B3：宿主是否仍暴露）。
  *
  * 清单与"每个包守着什么"都来自共享层 `compat/host-contracts.js`（兼容页读同一份），这里只做
@@ -116,10 +152,8 @@ function inspectBareHostModules(hostDir) {
     const entry = resolveFromHost(hostDir, contract.package)
     let missingMarkers = []
     if (entry !== undefined && contract.markers.length > 0) {
-      try {
-        const source = readFileSync(entry, 'utf8')
-        missingMarkers = contract.markers.filter((marker) => !source.includes(marker.needle)).map((marker) => marker.needle)
-      } catch { /* 读不到入口时只报"解析不到"，不额外造一条 */ }
+      try { missingMarkers = readContractMarkers(entry, contract.markers).map((marker) => marker.needle) }
+      catch { /* 读不到入口时只报"解析不到"，不额外造一条 */ }
     }
     return { package: contract.package, feature: contract.feature, resolved: entry ?? null, missingMarkers }
   })
@@ -137,8 +171,62 @@ function inspectBareHostModules(hostDir) {
   }
 }
 
-const MOUNT_HEARTBEAT_FILE = join(process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh'), 'tool-management', 'mount.json')
+/**
+ * 一份契约清单的静态实况：包能否从宿主锚点解析、标记是否还在。
+ *
+ * 行为契约与客户端 UI 契约共用这一套判定；差别只在清单与展示名。
+ *
+ * @param hostDir - `.../node_modules/@deepseek-ai` of the host installation.
+ * @param contracts - 共享契约清单。
+ * @param label - 报告里用的类别名（behavior / client UI）。
+ */
+function inspectContractList(hostDir, contracts, label) {
+  if (hostDir === undefined) return { status: 'unknown', detail: 'host installation not found', rows: [] }
+  const rows = contracts.map((contract) => {
+    const entry = resolveFromHost(hostDir, contract.package)
+    let missingMarkers = []
+    if (entry !== undefined && contract.markers.length > 0) {
+      try { missingMarkers = readContractMarkers(entry, contract.markers) }
+      catch { /* 读不到入口时只报"解析不到"，不额外造一条 canary 结论 */ }
+    }
+    return {
+      package: contract.package,
+      feature: contract.feature,
+      impact: contract.impact,
+      optional: contract.optional === true,
+      resolved: entry ?? null,
+      missingMarkers,
+      ...(contract.manual === undefined ? {} : { manual: contract.manual }),
+    }
+  })
+  const absent = rows.filter((row) => row.resolved === null && !row.optional)
+  const drifted = rows.filter((row) => row.missingMarkers.length > 0)
+  return {
+    status: absent.length === 0 ? 'ok' : 'absent',
+    detail: absent.length === 0
+      ? `all ${rows.length} ${label} contracts resolvable from the host`
+      : `not resolvable from the host: ${absent.map((row) => row.package).join(', ')}`,
+    rows,
+    ...(drifted.length === 0 ? {} : {
+      drifted: drifted.map((row) => ({
+        package: row.package,
+        missingMarkers: row.missingMarkers.map((marker) => marker.needle),
+      })),
+    }),
+  }
+}
 
+/** 宿主行为契约（事件名 / 配置键 / 方言标记）。 */
+function inspectBehaviorContracts(hostDir) {
+  return inspectContractList(hostDir, HOST_BEHAVIOR_CONTRACTS, 'behavior')
+}
+
+/** 宿主客户端 UI 契约（模块加载器 / 插槽名 / 客户端服务）。 */
+function inspectClientUiContracts(hostDir) {
+  return inspectContractList(hostDir, HOST_CLIENT_UI_CONTRACTS, 'client UI')
+}
+
+const MOUNT_HEARTBEAT_FILE = join(process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh'), 'tool-management', 'mount.json')
 /**
  * 插件的挂载心跳（B3）：apply 成功时由插件写 `hub/mount.json`。
  *
@@ -366,12 +454,55 @@ function inspectPackages() {
       package: name,
       resolved: pluginPath,
       pluginVersion,
-      hostVersion: versionOf(join(host, ...name.split('/'))),
+      hostVersion: versionAtDir(packageDirUnder(host, name)),
       sameFile,
       note: sameFile ? 'same module as host' : 'SEPARATE COPY',
     })
   }
   return { host: host === undefined ? null : host, rows }
+}
+
+/** 目录里的 package.json 版本；读不到返回 null。 */
+function versionAtDir(dir) {
+  try {
+    return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).version ?? null
+  } catch {
+    return null
+  }
+}
+
+/** `@deepseek-ai/dsh-x` → `<host>/dsh-x`（host 本身已经是 `.../@deepseek-ai`）。 */
+function packageDirUnder(host, name) {
+  const parts = name.split('/')
+  return join(host, ...parts.slice(1))
+}
+
+/**
+ * 逐包版本审计：peer 判范围，非 peer 的运行时观测包只比基准。
+ *
+ * 与兼容页共用 `HOST_PACKAGE_BASELINES`（页面按活宿主算，这里按安装目录算）——
+ * 官方只升级 `dsh-system-prompt` 这类非 peer 包时，CLI 也能看见版本偏离。
+ */
+function inspectPackageVersions(host) {
+  if (host === undefined) return []
+  return HOST_PACKAGE_BASELINES.map((baseline) => {
+    const hostVersion = versionAtDir(packageDirUnder(host, baseline.name))
+    let pluginVersion = null
+    try {
+      const resolved = require.resolve(`${baseline.name}/package.json`)
+      pluginVersion = JSON.parse(readFileSync(resolved, 'utf8')).version ?? null
+    } catch { /* 插件侧没有副本：观测包常态 */ }
+    return {
+      name: baseline.name,
+      peerRange: baseline.peerRange,
+      baselineVersion: baseline.baselineVersion,
+      hostVersion,
+      pluginVersion,
+      versionDrift: (hostVersion !== null && hostVersion !== baseline.baselineVersion)
+        || (pluginVersion !== null && pluginVersion !== baseline.baselineVersion),
+      observed: baseline.observed === true,
+    }
+  })
 }
 
 function inspectCapabilities(host) {
@@ -418,10 +549,18 @@ function main() {
   const jsonlLayout = inspectJsonlLayout(installed.host)
   const agentsMdRefresh = inspectAgentsMdRefresh(installed.host)
   const bareModules = inspectBareHostModules(installed.host)
+  const behaviors = inspectBehaviorContracts(installed.host)
+  const clientUi = inspectClientUiContracts(installed.host)
+  const packageVersions = inspectPackageVersions(installed.host)
+  const schemaContracts = inspectStaticSchemaContracts(installed.host ?? null)
+  const skillAssets = inspectStaticSkillAssets(installed.host ?? null)
   const mount = inspectMount()
   const linkTree = inspectProfileLinkTree()
 
   const blockers = []
+  // `--strict` 的失败项：canary / 布局漂移这类"功能静默降级"的结论。默认只当警告
+  // （不影响安装），夜间 canary 传 `--strict` 让它们变成非零退出。
+  const strictFailures = []
   for (const row of installed.rows) {
     if (row.resolved === null) blockers.push(`${row.package}: cannot be resolved at all`)
     else if (row.sameFile === false) blockers.push(`${row.package}: the plugin loads a SEPARATE copy — run 'node scripts/host-deps.mjs --fix'`)
@@ -433,12 +572,64 @@ function main() {
   // artifact and re-checks the result, so the outcome is orphaned directories,
   // not data loss. It must still be loud — the runtime only logs it.
   const warnings = []
-  if (jsonlLayout.status === 'drift') {
-    warnings.push(`${JSONL_LAYOUT_PACKAGE}: ${jsonlLayout.detail} — ${jsonlLayout.impact}`)
-  }
   // 宿主不再暴露某个运行时裸模块：功能静默降级（不是安装阻塞项），但必须看得见（B3）。
   if (bareModules.status === 'absent') {
     warnings.push(`${bareModules.detail} — the matching feature degrades silently at runtime`)
+    strictFailures.push(`bare host modules: ${bareModules.detail}`)
+  }
+  for (const row of bareModules.drifted ?? []) {
+    warnings.push(`${row.package}: canary missing ${row.missingMarkers.join(', ')} — review the contract before trusting that feature`)
+    strictFailures.push(`${row.package}: canary missing ${row.missingMarkers.join(', ')}`)
+  }
+  // 行为契约（事件名 / 配置键 / 方言标记）：包还在、记号没了 = 官方换了实现，功能会静默降级。
+  if (behaviors.status === 'absent') {
+    warnings.push(`${behaviors.detail} — the matching feature degrades silently at runtime`)
+    strictFailures.push(`host behavior contracts: ${behaviors.detail}`)
+  }
+  for (const row of behaviors.drifted ?? []) {
+    const why = behaviors.rows
+      .find((item) => item.package === row.package)
+      ?.missingMarkers.map((marker) => `"${marker.needle}" (${marker.why})`).join('; ')
+    warnings.push(`${row.package}: behavior canary missing ${why ?? row.missingMarkers.join(', ')} — review the contract before trusting that feature`)
+    strictFailures.push(`${row.package}: behavior canary missing ${row.missingMarkers.join(', ')}`)
+  }
+  // 客户端 UI 契约：槽位 / 模块加载器改名会让插件界面整块消失，服务端零报错。
+  if (clientUi.status === 'absent') {
+    warnings.push(`${clientUi.detail} — the matching plugin UI will not load`)
+    strictFailures.push(`client UI contracts: ${clientUi.detail}`)
+  }
+  for (const row of clientUi.drifted ?? []) {
+    const why = clientUi.rows
+      .find((item) => item.package === row.package)
+      ?.missingMarkers.map((marker) => `"${marker.needle}" (${marker.why})`).join('; ')
+    warnings.push(`${row.package}: client UI canary missing ${why ?? row.missingMarkers.join(', ')} — review the contract before trusting that part of the panel`)
+    strictFailures.push(`${row.package}: client UI canary missing ${row.missingMarkers.join(', ')}`)
+  }
+  // 官方技能资产：包还在但 assets 目录形态变了，技能页只会少来源。
+  for (const finding of skillAssets) {
+    if (finding.state === 'ok' || finding.optional === true) continue
+    warnings.push(`${finding.label}: ${finding.detail}`)
+    strictFailures.push(`${finding.label}: ${finding.missing.join(', ') || finding.detail}`)
+  }
+  // 导出 schema 的字段名（MCP 配置键）：canary 只能证明字符串还在，这里读的是权威字段表。
+  for (const finding of schemaContracts) {
+    if (finding.state === 'ok') continue
+    warnings.push(`${finding.label}: ${finding.detail}`)
+    strictFailures.push(`${finding.label}: ${finding.missing.join(', ') || finding.detail}`)
+  }
+  // 版本偏离适配基准：只提示，不阻塞 —— 官方每次发版都会触发，等适配器更新后自然消失。
+  const driftedVersions = packageVersions.filter((item) => item.versionDrift)
+  if (driftedVersions.length > 0) {
+    warnings.push(`official package(s) differ from the verified baseline ${VERIFIED_HOST_VERSION}: `
+      + driftedVersions.map((item) => `${item.name}（宿主 ${item.hostVersion ?? '?'}）`).join('、'))
+  }
+  if (jsonlLayout.status === 'drift') {
+    warnings.push(`${JSONL_LAYOUT_PACKAGE}: ${jsonlLayout.detail} — ${jsonlLayout.impact}`)
+    strictFailures.push(`${JSONL_LAYOUT_PACKAGE}: layout canary missing`)
+  }
+  if (agentsMdRefresh.status === 'drift') {
+    warnings.push(`${AGENTS_MD_REFRESH_PACKAGE}: ${agentsMdRefresh.detail} — ${agentsMdRefresh.impact}`)
+    strictFailures.push(`${AGENTS_MD_REFRESH_PACKAGE}: refresh canary missing`)
   }
   // 宿主版本栅栏（B3）：实际版本高于验证过的版本时显式说明「差异未知、按实际探测走」。
   const hostVersion = installed.host === null ? null : hostVersionOf(installed.host)
@@ -450,9 +641,12 @@ function main() {
     warnings.push(`${linkTree.detail} — ${linkTree.impact}`)
   }
 
+  const failed = blockers.length > 0 || (STRICT && strictFailures.length > 0)
+
   if (JSON_OUT) {
     console.log(JSON.stringify({
-      ok: blockers.length === 0,
+      ok: !failed,
+      strict: STRICT,
       host: installed.host,
       verifiedVersion: VERIFIED_HOST_VERSION,
       expectedPeerRange: EXPECTED_PEER_RANGE,
@@ -461,12 +655,18 @@ function main() {
       jsonlLayout,
       agentsMdRefresh,
       bareModules,
+      behaviors,
+      clientUi,
+      packageVersions,
+      schemaContracts,
+      skillAssets,
       mount,
       linkTree,
       blockers,
+      strictFailures,
       warnings,
     }, null, 2))
-    return blockers.length === 0 ? 0 : 1
+    return failed ? 1 : 0
   }
 
   console.log('dsh-plugin-tool-management — host compatibility doctor')
@@ -494,7 +694,51 @@ function main() {
   console.log('')
   console.log('runtime-required host modules (bare names the plugin resolves at runtime):')
   for (const row of bareModules.rows) {
-    console.log(`  [${row.resolved === null ? 'WARN' : 'ok  '}] ${row.package.padEnd(46)} ${row.resolved ?? 'not resolvable from the host'}`)
+    const drift = row.missingMarkers.length > 0 ? `  <- canary missing: ${row.missingMarkers.join(', ')}` : ''
+    console.log(`  [${row.resolved === null ? 'WARN' : 'ok  '}] ${row.package.padEnd(46)} ${row.resolved ?? 'not resolvable from the host'}${drift}`)
+  }
+  console.log('')
+  console.log('host behavior contracts (event names / config keys / dialect markers):')
+  for (const row of behaviors.rows) {
+    const mark = row.resolved === null ? (row.optional ? 'n/a ' : 'WARN') : row.missingMarkers.length > 0 ? 'WARN' : 'ok  '
+    const drift = row.missingMarkers.length > 0
+      ? '  <- canary missing: ' + row.missingMarkers.map((marker) => `"${marker.needle}" (${marker.why})`).join('; ')
+      : ''
+    console.log(`  [${mark}] ${row.package.padEnd(46)} ${row.resolved ?? (row.optional ? 'not used by this host' : 'not resolvable from the host')}${drift}`)
+  }
+  console.log('')
+  console.log('host client UI contracts (module loader / slots / client services):')
+  for (const row of clientUi.rows) {
+    const mark = row.resolved === null ? (row.optional ? 'n/a ' : 'WARN') : row.missingMarkers.length > 0 ? 'WARN' : 'ok  '
+    const drift = row.missingMarkers.length > 0
+      ? '  <- canary missing: ' + row.missingMarkers.map((marker) => `"${marker.needle}" (${marker.why})`).join('; ')
+      : ''
+    console.log(`  [${mark}] ${row.package.padEnd(46)} ${row.resolved ?? (row.optional ? 'not used by this host' : 'not resolvable from the host')}${drift}`)
+  }
+  console.log('')
+  console.log('official package versions (peer + observed):')
+  for (const row of packageVersions) {
+    const mark = row.hostVersion === null ? 'n/a ' : row.versionDrift ? 'WARN' : 'ok  '
+    console.log(`  [${mark}] ${row.name.padEnd(46)} host=${row.hostVersion ?? '-'}  baseline=${row.baselineVersion}  ${row.observed ? '(observed)' : `peer ${row.peerRange}`}`)
+  }
+  console.log('')
+  console.log('host schema contracts (exported field names):')
+  if (schemaContracts.length === 0) {
+    console.log('  [n/a ] dsh-mcp-client Config not resolvable — nothing to compare')
+  } else {
+    for (const finding of schemaContracts) {
+      console.log(`  [${finding.state === 'ok' ? 'ok  ' : 'WARN'}] ${finding.label}: ${finding.detail}`)
+    }
+  }
+  console.log('')
+  console.log('official skill assets (office / sandbox):')
+  if (skillAssets.length === 0) {
+    console.log('  [n/a ] host installation not found — nothing to compare')
+  } else {
+    for (const finding of skillAssets) {
+      const mark = finding.state === 'ok' ? 'ok  ' : finding.optional === true ? 'n/a ' : 'WARN'
+      console.log(`  [${mark}] ${finding.label}: ${finding.detail}`)
+    }
   }
   console.log('')
   console.log('plugin mount heartbeat:')
@@ -533,15 +777,20 @@ function main() {
     for (const warning of warnings) console.log(`  - ${warning}`)
     console.log('')
   }
-  if (blockers.length === 0) {
-    console.log(warnings.length === 0
-      ? 'OK — the plugin shares the host modules and every statically checkable capability is present.'
-      : `OK with ${warnings.length} warning(s) above — no blockers, but the host has drifted from what an adapter assumes.`)
-    return 0
+  if (blockers.length !== 0) {
+    console.log(`${blockers.length} blocker(s):`)
+    for (const blocker of blockers) console.log(`  - ${blocker}`)
+    return 1
   }
-  console.log(`${blockers.length} blocker(s):`)
-  for (const blocker of blockers) console.log(`  - ${blocker}`)
-  return 1
+  if (STRICT && strictFailures.length !== 0) {
+    console.log(`${strictFailures.length} strict failure(s) (canary / layout drift):`)
+    for (const failure of strictFailures) console.log(`  - ${failure}`)
+    return 1
+  }
+  console.log(warnings.length === 0
+    ? 'OK — the plugin shares the host modules and every statically checkable capability is present.'
+    : `OK with ${warnings.length} warning(s) above — no blockers, but the host has drifted from what an adapter assumes.`)
+  return 0
 }
 
 process.exitCode = main()

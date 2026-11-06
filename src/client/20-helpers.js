@@ -34,15 +34,45 @@
       }).catch(function () { return ioDefaultDir })
     }
 
+    /**
+     * 注入插件样式表（幂等，引用计数）。
+     *
+     * @returns 释放本次持有的那个 `<style>` 的清理函数（可重复调用）。
+     *
+     * 为什么要交出去：样式标签挂在 `document.head`，不随插件 fiber 销毁。热重载或停用之后
+     * 规则仍然生效（`.dsm-*` 会命中残留 DOM，滚动条装订线也会留在宿主容器上），只能靠刷新
+     * 页面才恢复。调用点（40 片）把它注册进 `ctx.effect`。
+     *
+     * 为什么按引用计数而不是"有就复用、没有就建"：热重载时新旧实例可能同时持有一份样式
+     * （新实例先 apply、旧 fiber 后 dispose）。直接删会让新实例当场失去样式；直接复用则
+     * 旧实例一释放就把新实例的那份一起带走。计数只让**最后一个**持有者负责移除。
+     */
     function ensureCss() {
-      if (typeof document === 'undefined') return
+      if (typeof document === 'undefined') return function () {}
       const id = 'dsh-plugin-tool-management'
-      if (document.querySelector('style[data-plugin-css="' + id + '"]')) return
+      /** 把一个标签的引用数 +1，并返回只生效一次的释放函数。 */
+      function retain(tag) {
+        var released = false
+        return function () {
+          if (released) return
+          released = true
+          var left = Number(tag.dataset.pluginCssRefs || '1') - 1
+          if (left > 0) { tag.dataset.pluginCssRefs = String(left); return }
+          try { if (tag.parentNode) tag.parentNode.removeChild(tag) } catch (e) { /* 文档已卸载 */ }
+        }
+      }
+      const existing = document.querySelector('style[data-plugin-css="' + id + '"]')
+      if (existing) {
+        existing.dataset.pluginCssRefs = String(Number(existing.dataset.pluginCssRefs || '1') + 1)
+        return retain(existing)
+      }
       const tag = document.createElement('style')
       tag.dataset.plugin = id
       tag.dataset.pluginCss = id
+      tag.dataset.pluginCssRefs = '1'
       tag.textContent = CSS
       document.head.appendChild(tag)
+      return retain(tag)
     }
 
     /**

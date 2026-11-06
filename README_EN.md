@@ -40,7 +40,7 @@ Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart
 <td width="34%" valign="top"><b>Three scopes</b><br>All global / per workspace / per conversation. By default every conversation has its own settings — two conversations in the same project can run two different environments at once.</td>
 </tr>
 <tr>
-<td valign="top"><b>The agent can drive it</b><br>26 model tools across six domains: list, read, create, update, delete, toggle, enter scenes, apply prompts, run personas. Writes ask for confirmation; disabled tools are not in the schema at all.</td>
+<td valign="top"><b>The agent can drive it</b><br>26 model tools across six domains: list, read, create, update, delete, toggle, enter scenes, apply prompts, run personas. Writes ask for confirmation (except in a full-permission session, where the card is skipped and only a log line is written); disabled tools are not in the schema at all.</td>
 <td valign="top"><b>The Host page is a control center</b><br>Version and capability checks, access token, scope mode, per-domain injection switches, the model-tool table and the sidebar entry — all on one page.</td>
 <td valign="top"><b>One panel, eight tabs</b><br>Scenes / MCP / Skills / Subagents / Prompts / Memories / Sessions / Host — no more hunting through six different settings pages.</td>
 </tr>
@@ -106,7 +106,8 @@ Six domains, **26 model tools**: list, read, create, update, delete, toggle, ent
 
 More than a version number:
 
-- **Checks**: host version, the plugin build actually loaded this run, and whether each action is native / adapted / unavailable, with reasons. If an upgrade quietly breaks something, it shows up here.
+- **Checks**: host version, the plugin build actually loaded this run, and whether each action is native / adapted / unavailable, with reasons. Items whose names can be checked but whose timing or rendering cannot are listed under “not automatically verifiable”. If an upgrade quietly breaks something, it shows up here; the “Re-check” button re-runs the probe in place.
+- **Upgrade diff**: per-package versions for cordis, the 11 peers and 15 runtime-only official packages against the verified baseline (out-of-range peers become blockers), plus canaries for event names, session-directory layout, patch dialect, MCP config keys and tool argument schemas, prompt section ordering, client UI slots and official skill assets.
 - **Access token**: set / disable / change / delete; writes and plaintext secrets go through it.
 - **Scope**: all global / per workspace / per conversation.
 - **Injection**: per-domain switches, minimal-preset fallback, the two slash-menu entries, sidebar entry.
@@ -118,7 +119,7 @@ More than a version number:
 
 | Content                                                        | Location                                                                     |
 |:-------------------------------------------------------------- |:---------------------------------------------------------------------------- |
-| MCP definitions                                                | `~/.dsh/cordis.patch.yml` (the only file the plugin writes; backed up first) |
+| MCP definitions                                                | `~/.dsh/cordis.patch.yml` (global) · `~/.dsh/profiles/<name>/cordis.patch.yml` (current profile) |
 | Skill policy / custom directories                              | `~/.dsh/tool-management/skills-state.json`                                   |
 | Skills / memories / personas / presets                         | `~/.dsh/tool-management/{skills,memories,subagents,prompts}/`                |
 | Memory index / scenes / profiles                               | `~/.dsh/tool-management/memories-index.json`                                 |
@@ -129,10 +130,10 @@ More than a version number:
 | Model-tool table / scope overrides                             | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json`            |
 | Runtime log / patch backups                                    | `~/.dsh/tool-management/tool-management.log` · `backups/`                    |
 
-- **Only its own files**: skill sources are never touched; MCP changes go to `cordis.patch.yml`, with five backups per patch file.
-- **Token**: once set, every write and every plaintext secret requires `x-dsh-token`; browser reads and writes use cookies, but plaintext still needs the token.
+- **Write scope**: skill sources are never touched; MCP changes go to the two patch files above (five backups each); applying a prompt overwrites the `~/.dsh/AGENTS.md` the host reads (the previous text is kept inside the hub); the desktop build clears `dsh-auth-*` cookies older than ten minutes at startup.
+- **Token**: once set, every write and every plaintext secret requires `x-dsh-token`; the UI stores it in browser localStorage bound to the current boot (a restart asks again), and plaintext still needs the token.
 - **Process-level boundary is the token**: writes normally sit behind the host's browser auth; when the host fence is absent the route falls back to a loopback-only check, which any local process can pass — only the access token gives you a process-level boundary.
-- **Plaintext on disk**: masking happens in the UI only. MCP `env` / `headers` and the plugin `token` stay plaintext in the patch file, and backups are neither encrypted nor rotated. The token gate cannot stop disk reads — file permissions are the boundary.
+- **Plaintext on disk**: masking happens in the UI only. MCP `env` / `headers` and the plugin `token` stay plaintext in the patch file, and backups are not encrypted. The token gate cannot stop disk reads — file permissions are the boundary.
 - **Deletes are recoverable**: skills / memories / personas / presets / scenes go to the recycle bin (permanent session deletion excepted), with an optional retention period (keep forever by default).
 
 </details>
@@ -168,7 +169,7 @@ npm test             # build + i18n + contract tests
 npm run doctor       # host compatibility check
 ```
 
-`lib/` is not committed — run `npm run build` after cloning, and restart `dsh web` to pick up changes. Runtime dependencies are only `fflate` and `js-yaml` (lazy-loaded); every `@deepseek-ai/*` package uses the host's copy.
+`lib/` is not committed — run `npm run build` after cloning, and restart `dsh web` to pick up changes. Runtime dependencies are `fflate`, `js-yaml` and `semver` (static imports in the build; the plugin will not load without any of them); every `@deepseek-ai/*` package uses the host's copy.
 
 ## License
 

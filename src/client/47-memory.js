@@ -337,7 +337,7 @@
           }
           /**
            * 页头「全部关闭」：把各会话 / 工作区 / 场景里单独开着的记忆一并停掉。
-           * 只改全局索引停不到别的对话 —— 那些是各层自己的认领，得走统一关闭 op 清掉。
+           * 只改全局索引停不到别的对话 —— 那些是各层自己的认领，得走全部关闭 op 清掉。
            */
           function stopAllMemories() {
             var keys = scopeLeaseKeys('memory')
@@ -352,7 +352,7 @@
               scopeForgetLeases('memory', keys)
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
-          /** 单条记忆的「统一关闭」：清掉各对话 / 工作区单独打开它的覆盖，全局启停不动。 */
+          /** 单条记忆的「全部关闭」：清掉各对话 / 工作区单独打开它的覆盖，全局启停不动。 */
           function stopOneMemory(rule) {
             var id = String(rule.id)
             setBusy(true); setResult(null)

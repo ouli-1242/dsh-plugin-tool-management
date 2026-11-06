@@ -31,7 +31,7 @@ export interface ToolTableSwitchDeps {
   /** 严格读：区分 missing / 解析失败 / IO 失败（不调 ensurePaths）。 */
   readJsonFileStrict(abs: string): Promise<JsonFileRead>
   writeJsonFile(abs: string, data: any): Promise<void>
-  /** 全局写锁：侧车的写在它下面串行（不可重入）。 */
+  /** 全局写锁：侧车的写在它下面串行（同一异步调用链可重入）。 */
   withWriteLock<T>(fn: () => Promise<T>): Promise<T>
   /** 错误 → 文案（与全仓同源）。 */
   message(e: unknown): string
@@ -224,8 +224,8 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     // 状态未知时先拒绝：正常入口都会先 read 一次，所以这里挡住的是「文件读不出来还硬写」
     // ——覆盖它等于把用户原来的选择彻底洗掉（没有取证通道）。
     if (toolTableStateValue === 'unknown') return { ok: false as const, error: toolTableRefuseMessage() }
-    // 落盘在写锁里，落完**出了锁**再刷新（`withWriteLock` 是一条不可重入的链：锁里再调
-    // 一次会等自己，直接卡死）。刷新是两处目录读，本来也不必占着写锁。
+    // 落盘在写锁里，落完**出了锁**再刷新：刷新是两处目录读，不必占着写锁拉长其它写者的
+    // 等待（锁可重入，但代价是重入方也一起变慢）。
     return deps.withWriteLock(async () => await writeToolTableSettingsLocked(next))
   }
   /**

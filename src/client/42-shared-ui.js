@@ -1904,7 +1904,7 @@ function enabledMemoryCount(rules) {
       var tone = props.tone === 'ok' ? ' dsm-tag-on' : props.tone === 'bad' ? ' dsm-tag-off' : props.tone === 'warn' ? ' dsm-tag-warn' : ''
       return h('span', { className: 'dsm-tag' + tone, title: props.title }, props.text)
     }
-    /** 租约浮窗的最大高度（`measure` 与 CSS 共用同一个上限）。 */
+    /** 租约浮窗的最大高度；`measure` 会按这一侧可用空间再夹一次（CSS 只负责滚动）。 */
     var LEASE_POP_MAX_H = 320
     /**
      * 浮窗里的分组：按**工作区**归拢，同一个工作区的对话挨在一起。
@@ -1913,24 +1913,32 @@ function enabledMemoryCount(rules) {
      * 在用它" —— 同一个工作区的那几个对话排成一块，才看得出"是这个项目在跑"。
      * 组内按标题排；没有工作区的那些排在最后（它们不属于任何项目）。
      *
-     * 分组键取**归一化**过的路径（小写、去尾分隔符）：同一个目录在清单里可能写成
-     * `C:\a\b` 与 `c:\a\b\` 两种样子 —— 不归一就会分成两块，组头还同名（用户 2026-11-05 实测）。
+     * 分组键取**与服务端同一口径**的路径键（`scopeWorkspacePathKey`）：同一个目录在清单里
+     * 可能写成 `C:\a\b`、`C:/a/b` 与 `c:\a\b\` 几种样子 —— 不归一就会分成两块，组头还同名。
+     *
+     * 工作区粒度下没有 cwd 的会话是**会话隔离**，不是同一个「无工作区」：它们各自算一组，
+     * 否则徽章会把 N 个独立认领显示成 1 个、那颗「×」也只能放掉其中一个。
      */
-    function leaseGroups(details) {
+    function leaseGroups(details, workspaceMode) {
       var byCwd = Object.create(null)
       var order = []
       var nameOf = Object.create(null)
       details.forEach(function (d) {
         var cwd = String((d && d.cwd) || '')
-        var key = cwd.replace(/[\\/]+$/, '').toLowerCase()
+        var key = cwd === ''
+          ? (workspaceMode ? '\u0000' + String((d && d.id) || '') : '')
+          : scopeWorkspacePathKey(cwd)
         if (!byCwd[key]) { byCwd[key] = []; order.push(key) }
         byCwd[key].push(d)
         if (cwd !== '' && nameOf[key] === undefined) nameOf[key] = cwd
       })
       order.sort(function (a, b) {
-        if (a === '') return 1
-        if (b === '') return -1
-        return a < b ? -1 : a > b ? 1 : 0
+        var ac = nameOf[a] === undefined ? '' : nameOf[a]
+        var bc = nameOf[b] === undefined ? '' : nameOf[b]
+        if (ac === '' && bc === '') return a < b ? -1 : a > b ? 1 : 0
+        if (ac === '') return 1
+        if (bc === '') return -1
+        return ac < bc ? -1 : ac > bc ? 1 : 0
       })
       return order.map(function (key) {
         var rows = byCwd[key].slice().sort(function (x, y) {
@@ -1938,68 +1946,99 @@ function enabledMemoryCount(rules) {
           var yt = String((y && y.title) || '')
           return xt < yt ? -1 : xt > yt ? 1 : 0
         })
-        return { cwd: nameOf[key] === undefined ? '' : nameOf[key], rows: rows }
+        return { key: key, cwd: nameOf[key] === undefined ? '' : nameOf[key], rows: rows }
       })
     }
     /**
      * 租约徽章 + 悬浮浮窗：**临时运行的是哪几个对话**。
      *
      * 徽章正文只说"几个对话"（`临时运行 · N 个对话`），用户真正要问的是"是哪几个"——
-     * 浮窗按工作区分组列出那些对话：组头是工作区（白），组内每行一个对话（灰）。
+     * 浮窗一行一个对话：标题在左，所属工作区作为弱化后缀，末尾一颗「×」只放开这一个。
+     * 工作区粒度下每行就是一个工作区，那一行只显示工作区名。
      *
      * 浮窗用 `position:fixed` + **视口坐标**：徽章所在的列表行是 `overflow:hidden`
      * （`.dsm-listrow-meta`），绝对定位的浮层会被裁掉（与 `SourceSelect` 的菜单同一条理由）。
      *
-     * @param {{ t: Function, count: number, runtime: boolean, domain: string, key: string, details: Array<{id?: string, title?: string, cwd?: string, keys?: Array<{domain: string, key: string}>}>, onRelease?: Function }} props
+     * @param {{ t: Function, count: number, runtime: boolean, domain: string, key: string, details: Array<{id?: string, title?: string, cwd?: string, keys?: Array<{domain: string, key: string}>}>, onRelease?: Function, workspaceMode?: boolean }} props
      */
     function LeaseTagBadge(props) {
       var t = props.t
       var runtime = props.runtime === true
       var details = props.details || []
-      var groups = leaseGroups(details)
       // 工作区粒度：认领是**按工作区**记的 —— 徽章上的个数得跟浮窗里的行数同一个单位，
-      // 否则会出现「2 个对话」配 1 行工作区（看着像漏了一条）。用户 2026-11-06。
-      var workspaceMode = scopeIsWorkspace()
+      // 否则会出现「2 个对话」配 1 行工作区（看着像漏了一条）。
+      // 预览 / 测试可直接指定；正常渲染不传，读当前隔离粒度。
+      var workspaceMode = typeof props.workspaceMode === 'boolean' ? props.workspaceMode : scopeIsWorkspace()
+      var groups = leaseGroups(details, workspaceMode)
       var count = workspaceMode ? groups.length : props.count
       var openState = React.useState(false), open = openState[0], setOpen = openState[1]
       var posState = React.useState(null), pos = posState[0], setPos = posState[1]
       var busyState = React.useState(null), busyId = busyState[0], setBusyId = busyState[1]
       var ref = React.useRef(null)
       var popRef = React.useRef(null)
-      var closeTimer = React.useRef(null)
+      // 浮窗是给键盘用户打开的（Enter/空格）才把焦点送进去；鼠标悬停打开时抢焦点会打断输入。
+      var keyboardOpen = React.useRef(false)
       var label = workspaceMode
         ? (runtime ? t('scope.intent.leaseWs', { count: count }) : t('scope.view.leaseWs', { count: count }))
         : (runtime ? t('scope.intent.lease', { count: count }) : t('scope.view.lease', { count: count }))
+      /** 指针是否还在徽章或浮窗里：浮窗是 portal，不能只看徽章的 DOM 子树。 */
+      function pointerWithin(target) {
+        if (!target) return false
+        return (ref.current && typeof ref.current.contains === 'function' && ref.current.contains(target))
+          || (popRef.current && typeof popRef.current.contains === 'function' && popRef.current.contains(target))
+      }
+      /** 立即收起。徽章与浮窗之间的空档由不可见的桥接条补上，不再需要关闭延迟。 */
+      function closeNow() {
+        keyboardOpen.current = false
+        setOpen(false)
+        setPos(null)
+      }
       /**
-       * 关掉浮窗要**等一等**：指针从徽章移到浮窗的路上有一段空白（浮窗在徽章下方 6px），
-       * 一移开就收的话，指针还没走到那颗「×」浮窗就没了（用户 2026-11-05 实测）。
-       * 进了浮窗本体就把这个计时撤掉 —— 那是"用户还在看它"的明确信号。
+       * 指针离开徽章或浮窗。relatedTarget 还在两者之内时不动 —— 那只是从徽章跨进浮窗
+       * （或反过来），桥接条让这段路始终落在浮窗的命中区里。
        */
-      function cancelClose() {
-        if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null }
+      function onLeave(e) {
+        if (pointerWithin(e && e.relatedTarget)) return
+        closeNow()
       }
-      function scheduleClose() {
-        cancelClose()
-        closeTimer.current = setTimeout(function () {
-          closeTimer.current = null
-          setOpen(false)
-          setPos(null)
-        }, 320)
+      /** 关掉浮窗并把焦点还给徽章：键盘用户按 Escape 或再按一次 Enter 时不能把焦点丢在 body 上。 */
+      function closeAndFocus() {
+        closeNow()
+        var el = ref.current
+        if (el && typeof el.focus === 'function') el.focus()
       }
-      React.useEffect(function () {
-        return function () { if (closeTimer.current !== null) clearTimeout(closeTimer.current) }
-      }, [])
+      function onBadgeKeyDown(e) {
+        if (e.key === 'Escape') {
+          if (open) { e.preventDefault(); closeAndFocus() }
+          return
+        }
+        // 浮窗里的按钮自己处理 Enter/空格，别让它们冒泡成「收起浮窗」。
+        if (e.target !== ref.current) return
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+          e.preventDefault()
+          if (open) { closeAndFocus(); return }
+          keyboardOpen.current = true
+          setOpen(true)
+        }
+      }
       /**
        * 放掉**一个**对话的认领：只让它不再临时运行，其它对话照旧。
        *
        * 认领是**逐个对话**记的（会话层那条覆盖），所以放掉一个就是在那条对话的会话层
        * 写一次「关」—— 服务端随即重算租约：最后一个认领者走了，连接 / 来源就跟着停。
-       * 工作区粒度下这条覆盖落在工作区上，同工作区的对话一起不再用（标题里说清楚）。
+       * 工作区粒度下这条覆盖落在工作区上，同工作区的对话一起不再用（标题里说清楚）；
+       * 没有 cwd 的会话在工作区粒度下仍是独立的会话覆盖，提示按「对话」说。
+       *
+       * @param {object} d 认领明细（含 `id` / `title` / `keys`）
+       * @param {string} [label] 提示里用的名字
+       * @param {boolean} [wholeWorkspace] 这条覆盖是否落在整个工作区上
        */
-      function release(d, label) {
+      function release(d, label, wholeWorkspace) {
         if (busyId !== null) return
         var id = String((d && d.id) || '')
         var name = String(label || (d && d.title) || id)
+        // 工作区粒度的默认口径：整条覆盖落在工作区上；单个会话（没有 cwd）传 false。
+        var whole = wholeWorkspace === undefined ? workspaceMode : wholeWorkspace === true
         // 调用方自带放掉动作时用它（场景层要的是"退出场景"，不是"关掉某一格"）。
         if (typeof props.onRelease === 'function') {
           props.onRelease(d)
@@ -2011,22 +2050,37 @@ function enabledMemoryCount(rules) {
           ? d.keys
           : [{ domain: props.domain, key: props.key }]
         setBusyId(id)
-        keys.reduce(function (chain, k) {
-          return chain.then(function () {
-            return apiCall('scope-set', { sessionId: id, domain: String(k.domain), key: String(k.key), value: false })
-          })
-        }, Promise.resolve()).then(function (res) {
-          if (!res || res.ok === false) {
-            showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(res) || t('scope.lease.unknownError') }), 'err')
-            return
-          }
+        // 逐格写、**一次一格**：中途失败就停在那一格 —— 后面的不再写，免得「前面失败、
+        // 最后一条成功」被当成整体成功（提示会说反）。
+        var applied = 0
+        function writeNext(i) {
+          if (i >= keys.length) return Promise.resolve()
+          var k = keys[i]
+          return Promise.resolve()
+            .then(function () {
+              return apiCall('scope-set', { sessionId: id, domain: String(k.domain), key: String(k.key), value: false })
+            })
+            .then(function (res) {
+              if (!res || res.ok === false) throw new Error(scopeErrorText(res) || t('scope.lease.unknownError'))
+              applied += 1
+              return writeNext(i + 1)
+            })
+        }
+        writeNext(0).then(function () {
           // 本地先把这一条摘掉（全局快照有 150ms TTL，紧接着的重拉可能还是写前那一份）。
           scopeForgetLeaseSession(props.domain, props.key, id)
-          // 工作区粒度放掉的是**整个工作区**（同工作区的对话共用那份覆盖）—— 提示要说工作区，
-          // 别让用户以为只关了一个对话。
-          showPluginToast(workspaceMode ? t('scope.lease.releasedWs', { title: name }) : t('scope.lease.released', { title: name }), 'ok')
+          // 整个工作区一起停时提示要说工作区，别让用户以为只关了一个对话；
+          // 没有 cwd 的会话仍是单独的会话覆盖。
+          showPluginToast(whole ? t('scope.lease.releasedWs', { title: name }) : t('scope.lease.released', { title: name }), 'ok')
           setTimeout(function () { refreshScope({ silent: true }) }, 400)
         }).catch(function (e) {
+          if (applied > 0) {
+            // 有格子已经放掉了：服务端状态变了，本地快照也得跟上；提示必须说明是**部分**完成。
+            scopeForgetLeaseSession(props.domain, props.key, id)
+            showPluginToast(t('scope.lease.releasePartial', { title: name, done: applied, total: keys.length }), 'warn')
+            setTimeout(function () { refreshScope({ silent: true }) }, 400)
+            return
+          }
           showPluginToast(t('scope.lease.releaseFailed', { title: name, error: scopeErrorText(e) || t('scope.lease.unknownError') }), 'err')
         }).then(function () { setBusyId(null) })
       }
@@ -2041,12 +2095,13 @@ function enabledMemoryCount(rules) {
         if (!el) return
         var box = el.getBoundingClientRect()
         var gap = 6
-        var need = Math.min(details.length * 26 + 56, LEASE_POP_MAX_H)
+        var rowCount = workspaceMode ? groups.length : details.length
+        var need = Math.min(rowCount * 28 + 16, LEASE_POP_MAX_H)
         var below = window.innerHeight - box.bottom - gap - 8
         var above = box.top - gap - 8
         var nextUp = below < need && above > below
         // 浮窗比徽章宽得多：按它自己的宽度靠右，别让它顶出窗口。
-        var width = popRef.current ? popRef.current.offsetWidth : 320
+        var width = popRef.current ? popRef.current.offsetWidth : 260
         var next = {
           left: Math.max(8, Math.min(box.left, window.innerWidth - width - 8)),
           top: nextUp ? null : box.bottom + gap,
@@ -2060,13 +2115,22 @@ function enabledMemoryCount(rules) {
         })
       }
       React.useEffect(function () {
-        if (!open) return undefined
+        if (!open) { keyboardOpen.current = false; return undefined }
         measure()
+        // 键盘打开时把焦点送到第一颗「×」：否则用户按了 Enter 之后还得再按 Tab 才够得着操作。
+        var focusTimer = keyboardOpen.current
+          ? setTimeout(function () {
+              var el = popRef.current
+              var first = el && typeof el.querySelector === 'function' ? el.querySelector('button') : null
+              if (first && typeof first.focus === 'function') first.focus()
+            }, 0)
+          : null
         // 页面滚动 / 窗口尺寸变了，浮窗要跟着徽章走 —— 否则它会停在原地，指着空气。
         var onMove = function () { measure() }
         window.addEventListener('scroll', onMove, true)
         window.addEventListener('resize', onMove)
         return function () {
+          if (focusTimer !== null) clearTimeout(focusTimer)
           window.removeEventListener('scroll', onMove, true)
           window.removeEventListener('resize', onMove)
         }
@@ -2081,46 +2145,58 @@ function enabledMemoryCount(rules) {
           style.top = pos.top === null || pos.top === undefined ? 'auto' : pos.top + 'px'
           style.bottom = pos.bottom === null || pos.bottom === undefined ? 'auto' : pos.bottom + 'px'
         }
-        var releaseBtn = function (d, key, label) {
+        var releaseBtn = function (d, key, label, wholeWorkspace) {
+          var whole = wholeWorkspace === true
+          var action = whole ? t('scope.lease.releaseWorkspace') : t('scope.lease.release')
           return h('button', {
             key: key,
             type: 'button',
             className: 'dsm-lease-pop-x',
             disabled: busyId !== null,
-            title: workspaceMode ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
-            'aria-label': workspaceMode ? t('scope.lease.releaseWorkspace') : t('scope.lease.release'),
-            onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d, label) },
+            title: action,
+            'aria-label': action,
+            onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation(); release(d, label, whole) },
           }, '×')
         }
         // 工作区粒度：认领是**按工作区**记的（同工作区的对话共用一份覆盖）—— 逐个列会话标题
-        // 只是噪声，列出工作区就够了（用户 2026-11-05）。
-        var body = workspaceMode
-          ? groups.map(function (g) {
-              var d = g.rows[0]
-              var wsName = g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')
-              return h('div', { key: 'w:' + g.cwd, className: 'dsm-lease-pop-item' },
-                h('span', { className: 'dsm-lease-pop-ws', title: g.cwd }, wsName),
-                d !== undefined ? releaseBtn(d, 'x', wsName) : null)
+        // 只是噪声，列出工作区就够了。没有 cwd 的会话各自是一份独立覆盖（见 `leaseGroups`），
+        // 行名用会话标题，否则 N 条都会显示成「无工作区」，根本分不出该放哪一条。
+        // 会话粒度：一行一个对话，工作区作为弱化后缀跟在标题后面 —— 不另起组头，
+        // 一两个对话时浮窗也就只有一两行高。
+        var body = []
+        if (workspaceMode) {
+          groups.forEach(function (g) {
+            var d = g.rows[0]
+            var wsName = g.cwd !== '' ? scopeWorkspaceName(g.cwd) : String((d && d.title) || (d && d.id) || t('scope.lease.noWorkspace'))
+            body.push(h('div', { key: 'w:' + g.key, className: 'dsm-lease-pop-item' },
+              h('span', { className: 'dsm-lease-pop-title', title: g.cwd !== '' ? g.cwd : wsName }, wsName),
+              // 工作区行顺带说清「这个工作区里有几个对话在认领它」：那颗「×」放掉的是整片。
+              g.cwd !== '' ? h('span', { className: 'dsm-lease-pop-ws' }, t('scope.sessions.count', { count: g.rows.length })) : null,
+              d !== undefined ? releaseBtn(d, 'x:' + g.key, wsName, g.cwd !== '') : null))
+          })
+        } else {
+          groups.forEach(function (g, gi) {
+            var wsName = g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')
+            g.rows.forEach(function (d, ri) {
+              var title = String((d && d.title) || (d && d.id) || '')
+              body.push(h('div', { key: 'r:' + gi + ':' + ri, className: 'dsm-lease-pop-item' },
+                h('span', { className: 'dsm-lease-pop-title', title: title }, title),
+                h('span', { className: 'dsm-lease-pop-ws', title: g.cwd !== '' ? g.cwd : wsName }, wsName),
+                releaseBtn(d, 'x:' + gi + ':' + ri)))
             })
-          : groups.map(function (g, gi) {
-              return h('div', { key: 'g' + gi, className: 'dsm-lease-pop-group' },
-                h('div', { className: 'dsm-lease-pop-ws', title: g.cwd }, g.cwd !== '' ? scopeWorkspaceName(g.cwd) : t('scope.lease.noWorkspace')),
-                g.rows.map(function (d, ri) {
-                  return h('div', { key: 'r' + ri, className: 'dsm-lease-pop-item' },
-                    h('span', { className: 'dsm-lease-pop-title', title: String((d && d.title) || '') }, String((d && d.title) || (d && d.id) || '')),
-                    releaseBtn(d, 'x'))
-                }))
-            })
+          })
+        }
+        var up = pos !== null && pos.bottom !== null && pos.bottom !== undefined
         popup = h('div', {
-          className: 'dsm-lease-pop',
+          className: 'dsm-lease-pop' + (up ? ' dsm-lease-pop-up' : ''),
           style: style,
           ref: popRef,
-          // 指针进了浮窗就别收：否则指不到那颗「×」。
-          onMouseEnter: cancelClose,
-          onMouseLeave: scheduleClose,
+          role: 'dialog',
+          'aria-label': label,
+          onMouseLeave: onLeave,
           // 浮窗在徽章里面：点它不该触发行上的动作。
           onClick: function (e) { if (e && e.stopPropagation) e.stopPropagation() },
-        }, body)
+        }, h('div', { className: 'dsm-lease-pop-body' }, body))
         // 浮窗挂到 `document.body` 上：留在面板里会被祖先的 `overflow:hidden` 裁掉
         // （来源卡片就是 `overflow:hidden` —— 浮窗探出去的那截被裁掉，底下一张卡片的
         // 内容透上来，就是用户看到的「穿模」，用户 2026-11-05 实测）。
@@ -2132,9 +2208,21 @@ function enabledMemoryCount(rules) {
       return h('span', {
         className: 'dsm-tag dsm-tag-lease',
         ref: ref,
-        onMouseEnter: function () { cancelClose(); setOpen(true) },
-        onMouseLeave: scheduleClose,
-      }, [label, popup])
+        role: 'button',
+        tabIndex: 0,
+        'aria-haspopup': 'dialog',
+        'aria-expanded': open ? 'true' : 'false',
+        onKeyDown: onBadgeKeyDown,
+        onBlur: function (e) {
+          if (!open) return
+          // 焦点还在徽章或浮窗里（浮窗是 portal，不在徽章的 DOM 子树里）。
+          if (pointerWithin(e && e.relatedTarget)) return
+          // Tab 走出去了：静默收起，不把焦点抢回来。
+          closeNow()
+        },
+        onMouseEnter: function () { keyboardOpen.current = false; setOpen(true) },
+        onMouseLeave: onLeave,
+      }, label, popup)
     }
     /**
      * 租约徽章（0.21.2）：**六个域共用的唯一出口** —— 同一 HTML 结构、同一 class 族、同一浮窗。

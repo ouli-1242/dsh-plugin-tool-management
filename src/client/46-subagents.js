@@ -96,7 +96,7 @@
           }
           /**
            * 页头「全部关闭」：把各会话 / 工作区 / 场景里单独开着的人设一并停掉。
-           * 与快捷提示词同一条：只改全局启停名单停不到别的对话，得走统一关闭 op 清各层认领。
+           * 与快捷提示词同一条：只改全局启停名单停不到别的对话，得走全部关闭 op 清各层认领。
            */
           function stopAllSubagents() {
             var keys = scopeLeaseKeys('subagents')
@@ -112,7 +112,7 @@
               scopeForgetLeases('subagents', keys)
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
-          /** 单条人设的「统一关闭」：清掉各对话 / 工作区单独打开它的覆盖，全局启停不动。 */
+          /** 单条人设的「全部关闭」：清掉各对话 / 工作区单独打开它的覆盖，全局启停不动。 */
           function stopOnePersona(name) {
             setResult(null)
             setBusy(true)

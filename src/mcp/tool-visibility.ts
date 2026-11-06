@@ -40,7 +40,7 @@ export interface ToolVisibilityDeps {
   writeJsonFile(abs: string, data: any): Promise<void>
   /** 确保 hub 目录存在（每次读侧车前都调，与原实现一致）。 */
   ensurePaths(): Promise<any>
-  /** 全局写锁：停用表的写都在它下面串行（注意不可重入）。 */
+  /** 全局写锁：停用表的写都在它下面串行（同一异步调用链可重入）。 */
   withWriteLock<T>(fn: () => Promise<T>): Promise<T>
   /** 错误 → 文案（与全仓同源）。 */
   message(e: unknown): string
@@ -370,7 +370,8 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
    *
    * `mutate` 收到的是**锁内刚读出来**的表（`force` 绕 TTL，否则拿到的还是锁外那份缓存）；
    * 返回 `true` 表示有变化、需要落盘。
-   * 注意：`withWriteLock` **不可重入** —— 调用方不得已经持有写锁。
+   * 注意：`withWriteLock` 在同一异步调用链上可重入（重入直接并入外层临界区、不再排队），
+   * 但重入不会重新读盘 —— 需要"锁内刚写下的值"时必须显式 `force`。
    */
   async function mutateKnownMcpTools(mutate: (known: Record<string, KnownMcpTool[]>) => boolean): Promise<void> {
     return deps.withWriteLock(async () => {
@@ -546,14 +547,20 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
       })
       return
     }
-    const key = names.slice().sort().join('\u0000')
-    if (appliedByAgent.get(agent) === key) return
+    // 从枚举到装层之间可能过去一拍：服务器恰好停了 / 注册被摘掉，而官方 `restrict` 对
+    // 认不出的名字是**整份名单抛错**（不是跳过那一个）—— 一个过期名字就会让所有工具重新
+    // 出现在模型工具表里。装之前再问一次全局视图，把已经不存在的名字剔掉。
+    const denyNames = typeof deps.tools.get === 'function'
+      ? names.filter((name) => { try { return deps.tools.get!(name) !== undefined } catch { return false } })
+      : names
+    const denyKey = denyNames.slice().sort().join('\u0000')
+    if (appliedByAgent.get(agent) === denyKey) return
     liftRestriction(agent)
-    if (names.length === 0) { clearRuntimeNote('mcp-tool-visibility'); return }
+    if (denyNames.length === 0) { clearRuntimeNote('mcp-tool-visibility'); return }
     try {
-      const dispose = scoped.restrict({ deny: names })
+      const dispose = scoped.restrict({ deny: denyNames })
       agentRestrictions.set(agent, typeof dispose === 'function' ? dispose as () => void : () => {})
-      appliedByAgent.set(agent, key)
+      appliedByAgent.set(agent, denyKey)
       clearRuntimeNote('mcp-tool-visibility')
     } catch (e) {
       // 这个名字在这个 scope 里认不出 / scope 已经收了：可见性半边没生效。执行侧的 guard
