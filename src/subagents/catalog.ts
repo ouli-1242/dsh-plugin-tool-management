@@ -22,6 +22,7 @@
 import type { PersonaDoc } from './service.js'
 import { catalogInjectedAt, CONTINUABLE_MARK } from './service.js'
 import { subagentDepthOf } from '../context-inject.js'
+import { CATALOG_CAP_DEFAULTS } from '../catalog-caps.js'
 import { filterBySceneBinding } from './tools.js'
 
 /**
@@ -32,9 +33,9 @@ import { filterBySceneBinding } from './tools.js'
  * 而且这是官方旋钮的默认值，不是本插件拍脑袋定的数。日后 token 成本成为问题时，
  * 官方对应的旋钮是 `catalogDescriptionMaxLength`。
  */
-export const DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH = 500
+export const DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH = CATALOG_CAP_DEFAULTS.subagentsDescription
 /** 段里最多列几个人设；超出部分只报数量，让模型自己去调 subagent_manager_list。 */
-export const DEFAULT_CATALOG_MAX_ENTRIES = 50
+export const DEFAULT_CATALOG_MAX_ENTRIES = CATALOG_CAP_DEFAULTS.subagents
 
 /** 无描述时的占位，与 `subagent_manager_list` 工具的输出保持同一口径。 */
 const NO_DESCRIPTION = '(no description)'
@@ -88,10 +89,11 @@ export function renderSubagentCatalog(
   // 「确认一遍」去调它（没列出来的就是当前不想要的）。与 MCP 状态段的
   // `(${N} more not listed.)` 同一句式，但这里多给一个出口——不给人设就真的找不回来了。
   if (hidden > 0) {
-    // 与技能目录同一条纪律：点名一个被关掉的工具只会让模型去猜名字。数量照报。
+    // 与技能目录同一条纪律：点名一个被关掉的工具只会让模型去猜名字。数量照报，
+    // 再补一句可转告的事实 —— 工具是关着的、用户能开（折叠行只在真被截掉时出现）。
     out.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`subagent_manager_list\`.)`
-      : `(${hidden} more not listed.)`)
+      : `(${hidden} more not listed — the listing tool is disabled in this session; ask the user to enable it.)`)
   }
   return out.join('\n')
 }
@@ -146,10 +148,12 @@ export interface SubagentCatalog {
   warm: () => Promise<void>
 }
 
-/** 人设目录的选项：场景、会话深度与是否含停用。 */
+/** 人设目录的选项：场景、会话深度与是否含停用。上限支持函数式（与技能目录同一条理由：设置有 TTL 缓存，传死数会让界面改完不生效）。 */
 export interface SubagentCatalogOptions {
-  maxEntries?: number
-  maxDescription?: number
+  /** 最多列几个人设；缺省 / 返回 `undefined` = 出厂值 `DEFAULT_CATALOG_MAX_ENTRIES`。 */
+  maxEntries?: number | (() => number | undefined)
+  /** 单条描述的最大字符数；缺省 / 返回 `undefined` = 出厂值。 */
+  maxDescription?: number | (() => number | undefined)
   /** 缓存新鲜度；与 rules 的 SNAPSHOT_TTL_MS 同量级。 */
   ttlMs?: number
   /** 供测试注入时钟。 */
@@ -166,10 +170,13 @@ export function createSubagentCatalog(
   deps: SubagentCatalogDeps,
   opts: SubagentCatalogOptions = {},
 ): SubagentCatalog {
-  const maxEntries = opts.maxEntries ?? DEFAULT_CATALOG_MAX_ENTRIES
-  const maxDescription = opts.maxDescription ?? DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH
+  const maxEntriesDefault = DEFAULT_CATALOG_MAX_ENTRIES
+  const maxDescriptionDefault = DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH
   const ttlMs = opts.ttlMs ?? 1000
   const now = opts.now ?? (() => Date.now())
+  /** 函数式上限求值（兼容页的设置每次渲染现取；静态值原样返回）。 */
+  const resolveCap = (value: number | (() => number | undefined) | undefined): number | undefined =>
+    typeof value === 'function' ? value() : value
 
   let docs: PersonaDoc[] = []
   let globalSceneLists: string[][] = []
@@ -177,7 +184,7 @@ export function createSubagentCatalog(
   let globalAllowed = new Set<string>()
   let loadedAt = Number.NEGATIVE_INFINITY
   let inflight: Promise<void> | null = null
-  // 渲染结果按**深度 + 尾句前提 + 会话层指纹**缓存：过滤只依赖这三样。
+  // 渲染结果按**深度 + 尾句前提 + 会话层指纹 + 两个上限**缓存：过滤与排版只依赖这四样。
   const rendered = new Map<string, string>()
 
   const recompute = async (): Promise<void> => {
@@ -222,11 +229,15 @@ export function createSubagentCatalog(
       if (now() - loadedAt > ttlMs) void revalidate()
       const depth = subagentDepthOf(agent)
       const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
+      // 上限每次渲染现取（设置有 TTL 缓存，这里只是转发）；缺省回落厂值。
+      const maxEntries = resolveCap(opts.maxEntries) ?? maxEntriesDefault
+      const maxDescription = resolveCap(opts.maxDescription) ?? maxDescriptionDefault
       const hasLayer = deps.flagFor !== undefined && deps.flagFor(agent) !== undefined
       // 有会话层但装配层没给指纹（老装配 / 测试）时不走渲染缓存：宁可多算一次。
       const cacheable = !hasLayer || deps.layerKeyFor !== undefined
       const layerKey = deps.layerKeyFor ? deps.layerKeyFor(agent) : ''
-      const key = layerKey + '\u0000' + depth + '|' + (visible ? '1' : '0')
+      // 缓存键必须带上两个上限：改了设置而键没变的话，渲染缓存会一直发旧文本。
+      const key = layerKey + '\u0000' + depth + '|' + (visible ? '1' : '0') + '\u0000' + maxEntries + '\u0000' + maxDescription
       if (cacheable) {
         const cached = rendered.get(key)
         if (cached !== undefined) return cached

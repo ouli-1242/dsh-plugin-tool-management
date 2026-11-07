@@ -199,6 +199,28 @@ export interface InjectDomain {
   pending?: (agent?: unknown) => boolean
 }
 
+/**
+ * 条数型目录（技能 / MCP / 子智能体）的渲染上限（`inject-settings.json` 的 `catalogCaps`，界面在兼容页）。
+ *
+ * 每项缺省 = 各目录模块里的出厂常量（技能 100 条、MCP / 子智能体 50 条、描述 500 字符）。
+ * 只有这三个域开口子：
+ * 场景与记忆走**字节预算**（记忆的旋钮在插件 config 的 `rulesMaxBytes`），提示词整份注入
+ * 没有自有上限 —— 官方载体那行的 `maxBytes`（预设配置）才是它的截断点。**上限不改变截断
+ * 语义**：超过上限的条目仍以 `(N more not listed…)` 折叠，查询工具可见时照样点名它。
+ */
+export interface CatalogCaps {
+  /** 技能目录最多列几条。 */
+  skills?: number
+  /** 技能目录单条描述的最大字符数（与官方 `catalogDescriptionMaxLength` 同一语义）。 */
+  skillsDescription?: number
+  /** MCP 状态段最多列几台服务器（可用与静音两档各按这个数截）。 */
+  mcp?: number
+  /** 子智能体目录最多列几个人设。 */
+  subagents?: number
+  /** 子智能体目录单条描述的最大字符数。 */
+  subagentsDescription?: number
+}
+
 /** 注入设置（插件侧车 `inject-settings.json`；界面在兼容页）。 */
 export interface InjectSettings {
   /**
@@ -216,10 +238,13 @@ export interface InjectSettings {
    * 只能靠一份 childId → 人设名的持久映射，代价远超收益。
    */
   domains: Record<InjectDomainKey, boolean>
+  /** 条数型目录的渲染上限；缺省项落回各目录模块的出厂常量。 */
+  catalogCaps: CatalogCaps
 }
 
-/** 出厂注入设置：六个域全开，由用户或档案再收窄。 */
+/** 出厂注入设置：六个域全开，目录上限全走出厂值，由用户或档案再收窄。 */
 export const DEFAULT_INJECT_SETTINGS: InjectSettings = {
   underSuppressingPresets: false,
   domains: { scene: true, memory: true, mcp: true, skills: true, subagents: true, prompt: true },
+  catalogCaps: {},
 }

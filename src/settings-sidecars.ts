@@ -7,6 +7,7 @@
 // 「每次 apply 一份」。搬到模块级就变成每进程一份，热更新重进 apply 时旧缓存会被复用 ——
 // 那是语义翻转，不是搬家。
 import { hubPath } from './hub.js'
+import { CATALOG_CAP_DEFAULTS } from './catalog-caps.js'
 import type { JsonFileRead } from './mcp/disabled-tools.js'
 import { DEFAULT_INJECT_SETTINGS, normalizeInjectSettings, type InjectSettings } from './context-inject.js'
 import { normalizeSceneSettings, type SceneSettings } from './scene-settings.js'
@@ -85,7 +86,10 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
     return { underSuppressingPresets: s.underSuppressingPresets, domains: s.domains }
   }
   async function injectSettingsOp(args: any): Promise<any> {
-    if (!args || args.set !== true) return { ok: true, settings: await readInjectSettings() }
+    // 回包带一份**出厂值**：兼容页的输入框用它当 placeholder 灰显（没配 = 出厂值）。
+    // 值只有一份真相（src/catalog-caps.ts），界面不再自己写一份字面量。
+    const defaults = { catalogDefaults: CATALOG_CAP_DEFAULTS }
+    if (!args || args.set !== true) return { ok: true, settings: await readInjectSettings(), ...defaults }
     await deps.ensurePaths()
     return deps.withWriteLock(async () => {
       const read = await readForWrite(hubPath(INJECT_SETTINGS_FILE), '注入设置')
@@ -96,6 +100,9 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
           ? args.underSuppressingPresets
           : current.underSuppressingPresets,
         domains: { ...current.domains, ...(args.domains && typeof args.domains === 'object' ? args.domains : {}) },
+        // 目录上限逐项合并（与 domains 同一条规则）：请求里没带的项沿用当前值。
+        // 整个字段缺席（旧客户端）= 完全沿用 current，一行都不动。
+        catalogCaps: { ...current.catalogCaps, ...(args.catalogCaps && typeof args.catalogCaps === 'object' ? args.catalogCaps : {}) },
       })
       try {
         await deps.writeJsonFile(hubPath(INJECT_SETTINGS_FILE), next)
@@ -103,7 +110,7 @@ export function createSettingsSidecars(deps: SettingsSidecarDeps): SettingsSidec
         return { ok: false, error: '设置保存失败: ' + deps.message(e) }
       }
       injectSettingsCache = { at: Date.now(), value: next }
-      return { ok: true, settings: next }
+      return { ok: true, settings: next, ...defaults }
     })
   }
 

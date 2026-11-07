@@ -53,7 +53,7 @@ export const SHARED_GROUP = '_shared'       // 保留场景名：公共基线（
  */
 export const TRUNCATION_MARKER = '(Truncated: some entries are not shown.)'
 // 段尾清单：让模型知道自己漏了什么。不挂「场景记忆」前缀 —— 它紧跟在场景块之后，
-// 与段首引导语同一说法，两者都是英文（见 SCENE_MEMORY_NOTE）。
+// 与收尾的授权语同一说法，两者都是英文（见 SCENE_MEMORY_NOTE）。
 // 每行只有 `场景/名称`，不带 `(N B)`：字节数对人有用、对模型零动作价值
 //（它不能凭"这条 800 B"决定读不读）。
 /** 超预算时替换掉被丢段落的标题（英文，因为它会进模型上下文，与其余注入文案同语言）。 */
@@ -78,16 +78,18 @@ export const ATTACHMENT_LIST_MAX = 10
  *      当成"不重要就可以忽略"，而这里要说的是"可以提，只是别主动提"。
  *   ④ **完整性声明**：`this is the complete set`。这是本段唯一的**防探测**手段 —— 没有它，
  *      模型在清单里找不到某件事时会去调 `memory_manager_list` 找更多。真发生截断时改用
- *      `SCENE_MEMORY_NOTE_PARTIAL`：否则段首声称"全部"、段尾 `## Not injected` 又列出没
- *      进来的条目，每一条注入都在说谎。
+ *      `SCENE_MEMORY_NOTE_PARTIAL`：否则段尾声称"全部"、其后的 `## Not injected` 又列出
+ *      没进来的条目，每一条注入都在说谎。
  *
- * 形式：单行、加粗，放在**板块层**（第一个场景块之前），整段只出现一次 —— 挂在每个场景的
- * 段头里会在多场景时重复注入。加粗是 markdown 里最省字符的强调手段。
+ * 形式：单行、加粗，放在**板块层收尾**（全部场景块之后、`## Not injected` 尾注之前），整段
+ * 只出现一次 —— 挂在每个场景的段头里会在多场景时重复注入。加粗是 markdown 里最省字符的
+ * 强调手段。句式是**收束**不是引入：原版以冒号结尾引出清单，挪到条目后面后改句号收尾
+ * （与其他五域"说明句后置"同一版式）。
  *
  * **不点名任何工具**：模型从工具 schema 就知道 `memory_manager_list` 存在，点名反而像在
  * 提示它去调。用户写的内容（记忆正文、场景名与说明）一律原样注入，一个字符都不动。
  */
-export const SCENE_MEMORY_NOTE = '**Memories for the current scene; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant; this is the complete set:**'
+export const SCENE_MEMORY_NOTE = '**Memories for the current scene; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant; this is the complete set.**'
 
 /**
  * 同一条授权语，**去掉完整性声明**的版本 —— 只在真发生截断时用。
@@ -98,7 +100,7 @@ export const SCENE_MEMORY_NOTE = '**Memories for the current scene; where they c
  *
  * 预算按全量版预留（`sceneNoteBytes`），截断态这句更短，所以分叉不会挤掉任何条目。
  */
-export const SCENE_MEMORY_NOTE_PARTIAL = '**Memories for the current scene; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant:**'
+export const SCENE_MEMORY_NOTE_PARTIAL = '**Memories for the current scene; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant.**'
 
 // ── bundle 与索引 ──────────────────────────────────────────────────────────
 

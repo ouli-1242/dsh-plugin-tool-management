@@ -22,7 +22,7 @@ import {
 } from '../compat/probe.js'
 import { INJECT_DOMAIN_KEYS } from '../context-inject.js'
 import { MCP_TOOL_PREFIX } from '../host-names.js'
-import { assessPresetReach, type PresetRosterLike } from '../compat/preset-reach.js'
+import { assessPresetReach, readPatchCarrierPresence, type PresetRosterLike, type ReachContext } from '../compat/preset-reach.js'
 import { runtimeNotes, type RuntimeNote } from '../compat/runtime-notes.js'
 import { AGENTS_MD_REFRESH_PACKAGE } from '../compat/host-contracts.js'
 import type { UpdateCheckResult } from '../update-check.js'
@@ -64,6 +64,11 @@ export interface CompatOpsDeps {
   /** 工具表侧车状态（会先读一次，保证不是预热前的乐观默认）。 */
   toolTableState(): Promise<{ state: 'ok' | 'unknown'; issue: 'corrupt' | 'unreadable' | null }>
   presetRoster(): PresetRosterLike | undefined
+  /**
+   * 宿主平面 patch 文本（全局 + 当前 profile 两份 `cordis.patch.yml` 拼接；缺席 = 不做并集）。
+   * 预设矩阵的载体行第二来源 —— 与注入侧（`candidates.presetFactsForAgent`）同一份文本。
+   */
+  profilePatchText?: () => Promise<string>
   listPatchBackups(): Promise<PatchBackupInfo[]>
   cleanPatchBackups(delByLevel: Record<string, number>): Promise<{ removed: string[]; failed: string[]; kept: number }>
   /**
@@ -215,9 +220,18 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           mcpTools = schemas.filter((s: any) => String(s && s.name || '').startsWith(MCP_TOOL_PREFIX)).length
         } catch { mcpTools = undefined }
         const settings = await deps.readInjectSettings()
+        // 载体行的 patch 第二来源：组合里缺席、patch 挂了就算挂着（与注入侧同一口径）。
+        // 读不到（读取器缺席 / 抛错）就不并 —— 矩阵按组合口径如实显示。
+        let patchCarriers: ReachContext['patchCarriers'] = undefined
+        if (deps.profilePatchText !== undefined) {
+          try {
+            patchCarriers = readPatchCarrierPresence(await deps.profilePatchText())
+          } catch { patchCarriers = undefined }
+        }
         const report = await assessPresetReach(deps.presetRoster(), {
           mcpTools,
           inject: { underSuppressingPresets: settings.underSuppressingPresets, domains: settings.domains },
+          ...(patchCarriers === undefined ? {} : { patchCarriers }),
         })
         return { ok: true, ...report }
       } catch (e) { return { ok: false, error: deps.message(e) } }

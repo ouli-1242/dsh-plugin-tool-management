@@ -500,6 +500,18 @@ button.dsm-qty:disabled{cursor:default}
    比上面的总开关还重，与它「细项」的层级不符。 */
 .dsm-inject-chip-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-label-primary)}
 .dsm-inject-chip-on .dsm-inject-chip-dot{background:var(--dsw-alias-state-success-primary);opacity:1}
+/* 目录上限：三个域各占一行 —— 域名固定宽（三行的「条数」列因此左右对齐），右侧
+   「条数 [框] 描述 [框]」。框是窄数字框（右对齐、矮一行），placeholder 灰显当前生效值
+   （没配 = 出厂值）；隐藏 number 输入的上下箭头 —— 小框里它们挤成两个点，还误导"可点击
+   步进"，鼠标滚轮与键盘照样能改。 */
+.dsm-caps-row{display:flex;flex-direction:column;gap:7px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
+.dsm-cap-group{display:inline-flex;align-items:center;gap:8px}
+.dsm-cap-name{flex:none;min-width:72px;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:nowrap}
+.dsm-cap-field{display:inline-flex;align-items:center;gap:4px}
+.dsm-cap-label{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;white-space:nowrap}
+.dsm-cap-unit{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;white-space:nowrap}
+.dsm-cap-input{width:58px;height:24px;min-height:0;padding:0 4px;text-align:center;font-size:12px;appearance:textfield;-moz-appearance:textfield}
+.dsm-cap-input::-webkit-inner-spin-button,.dsm-cap-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 /* 模型工具表：与「注入」同屏的第二种开关。**一行一个工具、四列固定宽度**（勾选框 / 名字 /
    ≈tok / 一句话介绍）—— 列宽不固定就竖着扫不出任何一列（用户 2026-09-23 指出挤成一排很难看）。
    名字用等宽、数字用 tabular-nums 右对齐；介绍超长省略，完整那句在悬停里。

@@ -1023,6 +1023,87 @@
           } catch (e) { return undefined }
         }
 
+        // ── 菜单的滚动位置：点一条之后重开时按原位摆回去 ─────────────────────────────────
+        //
+        // 为什么需要：宿主对**非下钻**的选取一律先关菜单（input-trigger 的 `settle`），
+        // 菜单一关，那一格滚动视口就整个卸掉 —— 滚动位置随之没了。我们再把它开回来时是
+        // 一格新的视口，停在最上面：技能那一域动辄几十条，点完一条要重新滑回去找下一条。
+        //
+        // 宿主没有滚动接口（`InputTriggerController` 只管候选与高亮），只能从 DOM 反查：
+        // 菜单壳带 `data-trigger-menu`，里面 `role="listbox"` 的那一格就是滚动视口。
+        /** 记住的滚动位置（`-1` = 没什么要恢复的）。 */
+        var slashScrollTop = -1
+        /** 恢复滚动位置的那条帧循环（同时只留一条）。 */
+        var slashScrollTimer = 0
+
+        /** 菜单的滚动视口；取不到（菜单没开 / 宿主改了结构）= null。 */
+        function slashViewport() {
+          try { return document.querySelector('[data-trigger-menu] [role="listbox"]') } catch (e) { return null }
+        }
+
+        /**
+         * 记住点选那一刻的滚动位置。
+         *
+         * 宿主的 `settle()` 拿到 `onPick` 的回执之后才关菜单，所以此刻还读得到那一格视口。
+         * 只有**列表不变**的那次选取才记（下钻 / 回上层换的是另一份列表，旧位置没有意义）。
+         */
+        function rememberSlashScroll() {
+          const vp = slashViewport()
+          slashScrollTop = vp && vp.scrollTop > 0 ? vp.scrollTop : 0
+          // 上一轮恢复还在跑就收掉：这一次的位置才是要摆回去的（连着点两条时尤其重要）。
+          stopSlashScrollRestore()
+        }
+
+        /** 换了一份列表：旧位置作废。 */
+        function forgetSlashScroll() {
+          slashScrollTop = -1
+          stopSlashScrollRestore()
+        }
+
+        /** 收掉正在跑的那条恢复循环。 */
+        function stopSlashScrollRestore() {
+          if (!slashScrollTimer) return
+          try { cancelAnimationFrame(slashScrollTimer) } catch (e) { /* 忽略 */ }
+          slashScrollTimer = 0
+        }
+
+        /**
+         * 候选刚落定时把滚动位置摆回去。
+         *
+         * 为什么连着摆好几帧：重开时那一格视口里先是骨架行，真正的内容随后才到；内容到齐
+         * 之后宿主自己会把高亮行滚进视野（`scrollIntoView`）—— 那一枪在渲染之后，我们得
+         * 压过它，所以不止摆一次。用户自己滚过就不跟他抢（重开后视口从 0 起，滚过就不是 0）。
+         */
+        function scheduleSlashScrollRestore() {
+          if (slashScrollTop <= 0) return
+          if (slashScrollTimer) return
+          // 没有帧循环的环境（无头 / 非浏览器）→ 这一步直接不做：菜单照常，只是位置回不到原处。
+          if (typeof requestAnimationFrame !== 'function') return
+          let last = -1
+          let applied = -1
+          let frames = 0
+          const step = function () {
+            const vp = slashViewport()
+            // 视口还没挂上（菜单还没开起来）：再等几帧；一直等不到就收手。
+            if (!vp) {
+              if (frames++ < 40) { slashScrollTimer = requestAnimationFrame(step); return }
+              slashScrollTimer = 0
+              return
+            }
+            const top = slashScrollTop
+            // 目标换了（用户又点了一条）→ 从头摆。
+            if (top !== applied) { applied = top; last = -1 }
+            const current = vp.scrollTop
+            // 用户自己滚了（既不是 0，也不是我们上次摆的位置）→ 收手，别跟他抢。
+            if (current !== 0 && current !== last) { slashScrollTimer = 0; return }
+            vp.scrollTop = top
+            last = vp.scrollTop
+            if (frames++ < 40) { slashScrollTimer = requestAnimationFrame(step); return }
+            slashScrollTimer = 0
+          }
+          slashScrollTimer = requestAnimationFrame(step)
+        }
+
         /**
          * 用官方口把菜单开在 `query` 那一层。
          *
@@ -1195,11 +1276,19 @@
             // 却不生效的旧覆盖当成现状（用户明明切了全局，菜单里还挂着几个对话的旧勾）。
             const layerId = slashLayerIdOf(scope, sessionId)
             const domains = domainsFor(scope)
-            if (at < 0) return domainRows(domains, query, layerId)
-            const token = query.slice(0, at)
-            const domain = domains.filter(function (d) { return d.token === token })[0]
-            if (!domain) return []
-            return leafRows(domain, query.slice(at + 1), layerId)
+            const rows = at < 0
+              ? domainRows(domains, query, layerId)
+              : (function () {
+                const token = query.slice(0, at)
+                const domain = domains.filter(function (d) { return d.token === token })[0]
+                if (!domain) return []
+                return leafRows(domain, query.slice(at + 1), layerId)
+              })()
+            const items = await rows
+            // 候选刚落定 —— 这正是重开时记住的滚动位置能摆回去的时候（那一刻视口里还是骨架行，
+            // 真内容随后才渲染出来）。摆完这一轮，菜单就停在用户刚才那一屏。
+            scheduleSlashScrollRestore()
+            return items
           },
           header(session, req) {
             const query = req.query || ''
@@ -1270,8 +1359,13 @@
              * 就关菜单）—— 而每一域本来就全量列出、自己带滚动。
              *
              * `query` 是不带前导 `/` 的那一段：`''` = 域列表，`tool-skill/` = 技能那一层。
+             *
+             * `keepScroll` = 这一下**列表不变**（叶子行启停）：菜单重开时按原位摆回滚动位置 ——
+             * 宿主关菜单时那一格视口整个卸掉，滚动位置随之没了，不摆回去就得重新滑一遍。
+             * 下钻 / 回上层换的是另一份列表，位置没有意义（`forgetSlashScroll`）。
              */
-            const stayCleared = function (query) {
+            const stayCleared = function (query, keepScroll) {
+              if (keepScroll === true) rememberSlashScroll(); else forgetSlashScroll()
               if (typeof spanStart === 'number') Promise.resolve().then(function () { keepOpenClean(sessionId, query, spanStart) })
               return { text: '', continue: true }
             }
@@ -1354,7 +1448,7 @@
             }).catch(function (e) {
               showPluginToast(errMsg(e), 'err')
             })
-            return stayCleared(domain.token + '/')
+            return stayCleared(domain.token + '/', true)
           },
           async matchEnter(session, line) {
             // 只认领"整行就是半个 token"这一种：`/tool-skill 帮我…` 后面还跟着正文时不拦，

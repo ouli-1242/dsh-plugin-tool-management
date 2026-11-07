@@ -286,16 +286,31 @@ export const HOST_BEHAVIOR_CONTRACTS: readonly HostModuleContract[] = [
   },
   {
     package: '@deepseek-ai/dsh-skill',
-    feature: '技能 provider 注册与候选协议',
-    impact: '技能启停、官方内置技能接管与技能目录会静默失效',
+    feature: '技能 provider 注册、候选协议与按会话分层的清单',
+    impact: '技能启停、官方内置技能接管与技能目录会静默失效；技能清单会串到别的会话',
     markers: [
       { needle: 'registerProvider', why: 'provider 注册入口（全局层与每个 agent 层各注册一份）' },
       { needle: 'invalidate', why: '注册生命周期里的失效通知（来源变化后重读候选）' },
       { needle: 'candidates', why: 'provider 候选观测的 candidates 字段' },
       { needle: 'complete', why: '候选观测的完成标记（未完成不缓存）' },
       { needle: 'locator', why: '候选上的发现定位符（get 时原样带回）' },
+      { needle: 'scopeChainOf', why: '官方清单按查看方 agent 的 scope 链分层（清单按会话隔离的依据）' },
+      { needle: 'provider.list(options)', why: 'provider 拿到含 scope 的同一份 options（provider 按会话收紧的依据）' },
     ],
-    manual: 'provider 的 list/get 返回形状与 control.signal / control.invalidate 的调用时序只能核对字符串：探测里真注册一个 provider 会进入技能目录并触发失效事件。',
+    manual: 'provider 的 list/get 返回形状与 control.signal / control.invalidate 的调用时序只能核对字符串：探测里真注册一个 provider 会进入技能目录并触发失效事件。scope 链的语义（查看方 agent 决定分层）同样只能核对字符串。',
+  },
+  {
+    package: '@deepseek-ai/dsh-api-session-controller',
+    feature: '会话侧技能清单的 scope 解析',
+    impact: '宿主 `/` 菜单的「技能」段与官方 skill 工具不再按会话区分：别的会话开着的技能会串过来',
+    // 与客户端 UI 契约那一份同包 —— 那边盯客户端 bundle，这边盯服务端 RPC 怎么取 scope。
+    // 同样按可选契约报：这个包缺席是部署形态，不是故障。
+    optional: true,
+    markers: [
+      { needle: 'scope = live ?? lease?.key', why: '查看会话的 agent（活着就取它，否则取预设租约）当 scope 传给官方清单' },
+      { needle: 'isUserInvocable', why: '官方清单只保留用户可调用的技能（被收紧的条目据此不再出现）' },
+    ],
+    manual: 'scope 的取值链（活着的 agent → 预设租约 → 无）只能核对字符串：真正验证要开两个会话各开一条技能，看清单是否分开。',
   },
   {
     package: '@deepseek-ai/dsh-host-plugin-inventory',

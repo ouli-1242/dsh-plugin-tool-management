@@ -110,7 +110,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 - **升级差异**：逐包对照 cordis、11 个 peer 与 15 个运行时官方包的版本和适配基准（超出 peer 范围直接进阻塞项），并把事件名、会话目录布局、补丁方言、MCP 配置键与工具参数表、提示词段排序位、客户端界面槽位、官方技能资产等宿主契约的 canary 一并列出。
 - **访问令牌**：设置 / 关闭 / 修改 / 删除；写操作与明文密钥都走它。
 - **生效层级**：全部全局 / 按工作区 / 按会话，一键切。
-- **注入**：六个域各自开关、极简模式兜底注入、斜杠命令两段入口、侧栏入口。
+- **注入**：六个域各自开关、极简模式兜底注入、技能 / MCP / 子智能体的目录上限（超出的折叠为一行，描述字符数也可配）、斜杠命令两段入口、侧栏入口。
 - **模型工具表**：26 条逐条可见性，按层保存方案。
 - **维护**：清理旧备份、功能总览、最近改动。
 
@@ -126,7 +126,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 | 回收站（技能 / 记忆 / 人设 / 预设 / 场景）  | `~/.dsh/tool-management/trash/<域>-trash/`                        |
 | 归档账本 / 保留期                           | `~/.dsh/tool-management/history-*.json`                           |
 | MCP 侧车（停用表 / 已知工具 / 备注 / 设置） | `~/.dsh/tool-management/mcp-*.json`                               |
-| 注入设置（六个域开关）                      | `~/.dsh/tool-management/inject-settings.json`                     |
+| 注入设置（六个域开关 · 目录上限）           | `~/.dsh/tool-management/inject-settings.json`                     |
 | 模型工具表 / 作用域覆盖                     | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json` |
 | 运行日志 / patch 备份                       | `~/.dsh/tool-management/tool-management.log` · `backups/`         |
 

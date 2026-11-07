@@ -23,6 +23,7 @@ import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { MCP_CLIENT_MODULE, MCP_TOOL_PREFIX, ambiguousServerNames, looksLikeMcpPrefixDrift, serverNameCandidates, splitMcpToolName } from '../host-names.js'
 import { hubPath } from '../hub.js'
+import type { CatalogCaps } from '../context-inject.js'
 import { stampConflict, stampOfText } from '../stale-write.js'
 import {
   cloneDisabledTools,
@@ -119,6 +120,8 @@ export interface McpManagerDeps {
    * 两个目录同一份 —— 见 `skills/catalog.ts` 里 `listToolVisible` 的注释。缺席时按"在手里"算。
    */
   listToolVisible?(agent?: unknown): boolean
+  /** 状态段条数上限的设置来源（`catalogCaps.mcp`；缺席 = 出厂值 50）。 */
+  catalogCaps?(): CatalogCaps
   /** 记忆服务：mcpm-edit 要把停用表写进当前模式的快照；mcpm-remove 清场景引用时用它避开被锁场景。 */
   memoriesService: {
     readArchiveSlice(): Promise<any>
@@ -385,6 +388,8 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   const mcpStateCatalog = createMcpStateCatalog({
     rows: () => mcpmRowsWithNotes(false),
     ...(deps.listToolVisible === undefined ? {} : { listToolVisible: deps.listToolVisible }),
+    // 条数上限吃兼容页注入设置（`catalogCaps.mcp`）：函数式取值，设置有 TTL 缓存，这里只是转发。
+    ...(deps.catalogCaps === undefined ? {} : { maxEntries: () => deps.catalogCaps!().mcp }),
     // 会话层：本会话隐藏的服务器整条不进段（理由见 state-section.ts）。逐行问谓词 ——
     // 行数组本身就是服务器全集，不需要另建一份。
     ...(deps.sessionHiddenServer === undefined ? {} : { sessionServerHidden: deps.sessionHiddenServer }),

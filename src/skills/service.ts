@@ -40,7 +40,7 @@ import {
   trashRootPath,
 } from './core.js'
 import { watchDirectories } from './dir-watch.js'
-import { registerAgentSkillProviders, externalSkillProvider } from './provider-registration.js'
+import { registerAgentSkillProviders, externalSkillProvider, type SkillProviderSessionViewOf } from './provider-registration.js'
 import { moveToSystemTrash, permanentlyDeleteTrashSafely } from './system-trash.js'
 
 const MAX_LOG_BYTES = 1 << 20
@@ -157,6 +157,14 @@ export interface SkillsService {
   /** 注册全局层与 agent-scope provider；返回清理函数（配合 ctx.effect）。 */
   registerProviders: () => () => void
   /**
+   * 作废官方技能目录的缓存（官方注册表按 revision 缓存各作用域链的清单）。
+   *
+   * 什么时候要调：**会话层**改了技能的启停、而机器级那张表没变时（例如"本对话关掉一条
+   * 全局开着的技能"）—— 官方那份清单（宿主 `/` 菜单的「技能」段、官方 `skill` 工具的
+   * 候选）是按会话过滤的，不作废就停在改动前那一份。
+   */
+  invalidateSkills: () => void
+  /**
    * 该绝对路径是否落在「本插件认识的技能来源」内（静态根 + 自定义根 + 项目来源）。
    * `skill-open` 用它把该 op 限制在技能文件上，避免成为「任意绝对路径 → 系统编辑器」的入口。
    */
@@ -172,7 +180,7 @@ export function pluginLog(): (event: string, detail?: unknown) => Promise<void> 
 }
 
 /** 技能域服务门面：来源枚举、清单扫描、启停与新建 / 更新。 */
-export function createSkillsService(ctx: any): SkillsService {
+export function createSkillsService(ctx: any, deps: { sessionViewOf?: SkillProviderSessionViewOf } = {}): SkillsService {
   const log = pluginLog()
   // 根系**按需推导**：`userRoots()` 会物化官方内置技能（同步拷贝宿主安装里的文件）。
   // 放在构造期等于让宿主启动路径去读宿主目录；首次取用（列技能、装 watcher、越界校验）
@@ -335,13 +343,13 @@ export function createSkillsService(ctx: any): SkillsService {
       disposers.push(dispose)
     }
     try {
-      const dispose = ctx.skills.registerProvider((control: any) => externalSkillProvider(control, providerInvalidators, 'global'))
+      const dispose = ctx.skills.registerProvider((control: any) => externalSkillProvider(control, providerInvalidators, 'global', deps.sessionViewOf))
       if (typeof dispose === 'function') add(dispose)
     } catch (e) {
       console.error('[dsh-plugin-tool-management] global skills provider registration failed:', message(e))
     }
     try {
-      add(registerAgentSkillProviders(ctx, providerInvalidators))
+      add(registerAgentSkillProviders(ctx, providerInvalidators, deps.sessionViewOf))
     } catch (e) {
       console.error('[dsh-plugin-tool-management] agent-scoped provider setup failed:', message(e))
     }
@@ -661,5 +669,5 @@ export function createSkillsService(ctx: any): SkillsService {
     return false
   }
 
-  return { ops, writeOps, registerProviders, isInsideKnownSkillRoot }
+  return { ops, writeOps, registerProviders, isInsideKnownSkillRoot, invalidateSkills }
 }

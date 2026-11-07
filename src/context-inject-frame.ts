@@ -64,8 +64,24 @@ export interface DomainFrame {
    * 权威声明 / 正文。
    */
   how?: string | ((info: FrameRenderInfo) => string | undefined)
-  /** 权威声明：「最新一份才是权威」这条得逐域说清取代的是什么。 */
-  supersede: string
+  /**
+   * 权威声明：「最新一份才是权威」这条得逐域说清取代的是什么。
+   *
+   * 支持函数型（与 `how` 同款）：技能域用它做**条件版**的取代句 —— 清单列全时追一句官方
+   * 同款的「Use only names in this catalog」（此时缺席 = 停用，句子为真）；被条数上限截断
+   * 时缺席可能是「还在、只是没挤进可见清单」（字典序会随新增重排），那句就成了假话，
+   * 折叠行「还有 N 条」也会跟它打架 —— 截断态只发统一句。
+   */
+  supersede: string | ((info: FrameRenderInfo) => string)
+  /**
+   * 正文**之后**的收尾段（可选；函数型与 `how` 同款，求值上下文相同）。
+   *
+   * 为什么要有它：官方目录的版式是「一句引入 → 清单 → 动作段」—— 动作句跟在清单后面，
+   * 模型扫完条目紧接着读到"拿这些名字做什么"；整面墙的说明压在清单前面，会把清单推到
+   * 消息末尾，动作语义离条目最远（用户对照官方版式指出）。只有"看完清单才成立"的段落
+   * 才放这里 —— 引入与定义仍走 `how`（清单前），`boundary` 在它之后（两者都在收尾区）。
+   */
+  afterBody?: string | ((info: FrameRenderInfo) => string | undefined)
   /**
    * 与本份内容同生共死的**边界陈述**（不含"取代"语义），与 `supersede` 分开两件事。
    *
@@ -74,6 +90,9 @@ export interface DomainFrame {
    * 「取代了旧的那份」只在**替换**时成立，「只列了能用的」在这块一出现时就成立。拼在一起
    * 只能同生同灭：首个块没有旧内容可取代（说了是废话），却连边界也一起丢了（那是防幻觉的）。
    * 分开之后：`supersede` 只在 `replacing` 时发，`boundary` 每次都发。
+   *
+   * 位置在**正文之后**（收尾区）：它说的是"这份清单的边界"，贴着清单读才顺 —— 与
+   * `afterBody` 同属收尾区，顺序为 清单 → afterBody → boundary。
    */
   boundary?: string
 }
@@ -126,7 +145,7 @@ export const SUPERSEDE_NOTE = 'Supersedes earlier injected content of the same k
  * （`hiddenTools`），而工具注册在热重载 / 启动间隙会瞬时为空 —— 并进键会先注入一句
  * "你手里没有这个工具"（假话），下一步再撤回。静态字符串型 `how` 已经自动进键（见 `frameKeyOf`）。
  */
-export const FRAME_REVISION = 1
+export const FRAME_REVISION = 2
 
 /**
  * 框架指纹：决定"该域消息的框架是不是这一版"。
@@ -178,21 +197,16 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   },
   memory: {
     title: 'Current memories',
-    // 但没给出口——被截掉的条目连名字都没列出来，模型既调不了 `memory_manager_read`（不知道
-    // 传什么名字），也不知道该用 `memory_manager_list` 去发现。另外三个域的溢出行都点名了
-    // 自己的 list 工具，唯独记忆段没有。
-    //
-    // 修法选了「frame `how` 条件点名」而不是「把 listToolVisible 管道接到记忆服务」：记忆 SWR
-    // 缓存是指纹驱动的（缓存渲染结果，不是缓存数据按 agent 重渲染），重构成技能目录那种方式
-    // 要动 4–5 个文件。而 `how` 已经能看 `{ text }`——MCP 就是这么按正文内容决定发不发的。
+    // 出口句放在**正文之后**（`afterBody`）：它说的是"刚才那段没列全的部分去哪查"——
+    // 模型读完 `## Not injected` 名单紧接着读到出口，顺序才通。条件判据不变：
     // `text.includes('more not listed')` 只在折叠行出现时命中（rest > 0）；rest = 0（清单列全）
-    // 时折叠行不出现，how 不发——那些条目有名字，模型调 `memory_manager_read` 就行。
-    // 工具被关掉（兼容页 / 人设 toolsDeny）时不点名——与另外三域同一纪律。
-    how: ({ text, toolHidden }) => {
+    // 时不发——那些条目有名字，模型调 `memory_manager_read` 就行；工具被关掉（兼容页 /
+    // 人设 toolsDeny）时不点名——与另外三域同一纪律。
+    afterBody: ({ text, toolHidden }) => {
       // 折叠行 `more not listed` 和截断标记 `(Truncated:` 两种信号都要覆盖：
       //   - 折叠行 = 清单部分列了 + 剩余没列 → 没名的那些需要 list 工具发现
       //   - 标记 = 连清单都没放进来 → 全部没名，更需要 list 工具
-      //   - 清单列全（`## Not injected` + 所有名字，rest = 0）→ 两种信号都没有 → 不发 how：
+      //   - 清单列全（`## Not injected` + 所有名字，rest = 0）→ 两种信号都没有 → 不发：
       //     模型用 `memory_manager_read` 按名字读就行
       if (!text.includes('more not listed') && !text.includes('(Truncated:')) return undefined
       if (toolHidden('memory_manager_list')) return undefined
@@ -220,7 +234,10 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     // 也就无从提示"它在重连 / 检查网络"。这是该要求的直接代价，与 state-section.ts 文件头
     // 记的是同一件事。剩下的 `no tools enabled here` 是 server **此刻在跑**、只是工具被关掉，
     // 那句话仍然防着"别把它报成缺失"。
-    how: ({ text }) => {
+    // 两句解释都放在**正文之后**（`afterBody`）：它们解释的是"刚才那些行上的记号怎么读"
+    // （`user hint:` / `no tools enabled here`），模型扫完服务器行紧接着读到读法，顺序才通。
+    // 按需发的判据不变。
+    afterBody: ({ text }) => {
       const parts: string[] = []
       if (text.includes('user hint: ')) {
         parts.push("`user hint:` marks the user's own note on that server — read it before choosing one.")
@@ -234,36 +251,60 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   },
   skills: {
     title: 'Current skills',
-    // 两句都只在预设没挂官方 `skill` 工具时出现，差别只在点名不点名那个取正文的工具
-    // （工具被用户在兼容页关掉时不点名 —— 点名一个模型手里没有的工具只会让它去猜名字）。
+    // 版式对齐官方目录（`dsh-tool-skill`）：清单前一句、清单后动作段，官方是**两套文案
+    // 二选一** —— 首份说「以下技能可用」，更新说「目录变了、取代此前每一份」。我们也二选一：
+    // 两句都说是重复（"可用" 与 "变了" 并列，模型要读两遍才知道当前是什么），也是白付的
+    // 常驻 token。
     //
-    // 两句都要有：**怎么想起它**（"任务对得上就去读"）与**读完再用**（已经决定用之后的
-    // 纪律）。官方那条行两者都有（`if … the task clearly matches … call the skill tool …
-    // before taking task actions`），而这一域恰恰只在官方那条行**缺席**时才注入 —— 模型手上
-    // 既没有 `skill` 工具、也没人告诉过它技能的调用时机，缺的正是这一句。同理补上"描述不是
-    // 指令"（官方对应句 `do not infer or follow a skill's instructions until it has been
-    // loaded`），免得它拿 500 字摘要当正文照做。
-    // 不点名工具那一支**不能**说"read a skill's body before following it" —— 那是让模型去读
-    // 一份它根本读不到的东西。
-    //
-    // 首句定义：官方那条行以 `A skill is a reusable set of
-    // task-specific instructions.` 开头 —— 这句不是背景介绍，是后面两半句的**前提**：不懂"skill
-    // 是按需加载的任务指令集"时，"任务对得上就读正文"读不出任何动作，只会被理解成"一个名字 +
-    // 一句简介"。所以这里破例把定义放在动作句之前（正常纪律是先说要做什么，见 `SUPERSEDE_NOTE`
-    // 那段注释）；措辞照抄官方，模型对它有现成先验。**只在官方载体缺席时发**（本域的唯一条件），
-    // 官方在时整段不注入，不存在两份定义。
-    // 措辞只说"手里没有读本体的工具"，不猜官方那条有没有 —— 官方 `skill` 工具在场时，
-    // 本插件正是为了让模型不拿到两条装载入口而把 `skill_manager_read` 让位藏掉
-    // （`CARRIER_DUPLICATES`），此时说"模型没有装载入口"就是假话。
-    how: ({ toolHidden }) => toolHidden('skill_manager_read')
-      ? 'A skill is a reusable set of task-specific instructions. No skill reader is in your hands here: names and summaries only — treat them as a capability list, not as instructions.'
-      : 'A skill is a reusable set of task-specific instructions. No official `skill` tool here: when a task clearly matches one or the user names one, read its body with `skill_manager_read` before acting. Summaries only — never treat a description as instructions.',
+    // 动作段**逐句对齐官方**（两段原文）：同一套纪律在官方目录与本插件目录里措辞一致，
+    // 模型不用适配两种说法 —— 那是官方在标准会话里反复出现的那份，模型对它有现成先验。
+    // 差别只有两处，都由**这个 agent 实际手里的装载入口**决定，绝不猜：
+    //   · 装载入口是哪条 —— 官方 `skill` 工具在场时本插件把 `skill_manager_read` 让位藏掉
+    //     （`CARRIER_DUPLICATES`），接管态的目录配的是官方加载器；此时若说"你手里没有装载
+    //     入口"就是假话，模型读完会连任务对上号都不敢动手。两条入口都不在手（用户关掉 read
+    //     且官方行缺席）才落到"能力单"那一支，并给一句可转告的出路。
+    //   · 「直接调用」句只在官方工具在场时成立 —— 宿主的 `<skill_content>` 机制随
+    //     `dsh-tool-skill` 走，官方行缺席的兜底态里没有它，说了就是假话。
+    how: ({ replacing, text }) => {
+      if (!replacing) return 'A skill is a reusable set of task-specific instructions. The following skills are available in this session:'
+      // 「complete」只在**清单列全**时成立：被条数上限截断时缺席可能只是没挤进可见清单
+      // （字典序会随新增重排），说"完整"就是谎话。
+      return text.includes('more not listed')
+        ? 'The available skill catalog changed. This catalog replaces every earlier available-skills list in this session.'
+        : 'The available skill catalog changed. This complete catalog replaces every earlier available-skills list in this session.'
+    },
     // 英文下不能再靠 `slice(0, -1)` 拼句（那会把句末句点削掉，接出
     // `…in this session Only skills…`）：整句照发，续句自带首字母大写。
+    //
+    // **更新态用官方那句短的**（"Use only names in this replacement catalog. …"），
+    // 首份用完整纪律（"适用的都装" + "摘要不是指令"）。官方敢在更新时不重述纪律，是因为
+    // 模型此前已见过首份那份 —— 我们这里同样成立：更新态必然意味着模型已经见过一份技能目录
+    // （本插件此前那一条，或接管前官方那一条）。每轮重述一遍就是白付的常驻 token，也会把
+    // 条目本身挤淡。
+    afterBody: ({ toolHidden, replacing, text }) => {
+      const complete = !text.includes('more not listed')
+      // 「Use only names in this replacement catalog」只在**清单列全**时说：被条数上限截断时
+      // 缺席可能只是没挤进可见清单，那句就是假话（官方目录无上限，没这个前提）。
+      const only = replacing && complete ? 'Use only names in this replacement catalog. ' : ''
+      if (!toolHidden('skill_manager_read')) {
+        return replacing
+          ? only + 'If the user names a listed skill, or the task clearly matches its description, read its body with `skill_manager_read` before acting.'
+          : 'If the user names a skill, or the task clearly matches a skill\'s description, read its body with `skill_manager_read` before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains summaries only; do not infer or follow a skill\'s instructions until it has been loaded.'
+      }
+      if (!toolHidden('skill')) {
+        return replacing
+          ? only + 'If the user names a listed skill, or the task clearly matches its description, call the `skill` tool with the exact name before acting. A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool again for that skill.'
+          : 'If the user names a skill, or the task clearly matches a skill\'s description, call the `skill` tool with the exact skill name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains summaries only; do not infer or follow a skill\'s instructions until it has been loaded. A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool again for that skill.'
+      }
+      return only + 'No skill loader is in your hands here: names and summaries only — treat them as a capability list, not as instructions; ask the user to enable a loader if a skill should be followed.'
+    },
     // 边界陈述用 `enabled` 而不是 `callable`：取正文的工具被关掉时**一条都调不到**，
-    // 说 "callable" 在那个分支里就是假话。`enabled` 两支都成立（它们确实都是"启用中"的），
+    // 说 "callable" 在那个分支里就是假话。`enabled` 各支都成立（它们确实都是"启用中"的），
     // 也不再依赖工具在不在手里。
-    supersede: SUPERSEDE_NOTE,
+    //
+    // 这一域**不用**通用取代句：「目录变了 / 取代此前每一份」已经写在 `how` 里（官方也是
+    // 把它放在清单前那一句），再补一句通用的就是同一件事说两遍。
+    supersede: '',
     boundary: 'Only enabled skills are listed.',
   },
   subagents: {
@@ -284,9 +325,20 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     // 上下文里就是同一件事付两次。
     // 不点名那一支要补"只能参考、调不到"：只说"官方那两个不带人设"不够 ——
     // "目录里有人设 ≠ 能委派"这层没人说，模型会拿官方工具硬塞一个人设名进去。
-    how: ({ toolHidden }) => toolHidden('subagent_manager_run')
-      ? 'No persona-carrying delegation tool here; official `subagent` / `subagent_fork` carry no persona — use them only when none fits or for background work. The personas listed here are reference only, not callable.'
-      : 'Persona work goes through `subagent_manager_run` — when a task matches one of these personas, delegate it there. Official `subagent` / `subagent_fork` carry no persona; use them only when none fits or for background work.',
+    // 「官方那两个」的半句按 `subagent`（官方 spawn 委派工具）在不在手里分叉：极简这类
+    // 预设不挂 `dsh-tool-subagent`，那两个工具根本不存在 —— 点名它们正是"诱导模型去调
+    // 不存在的名字"那条老毛病。路由规则本身（人设 → 本插件、没有合适人设/后台 → 官方）
+    // 只在官方工具真的在手时才讲全。
+    // 路由规则放在**正文之后**（`afterBody`）：模型先扫完有哪些人设，紧接着读"拿它们做什么"
+    // —— 与技能域同一版式理由。
+    afterBody: ({ toolHidden }) => {
+      const official = toolHidden('subagent')
+        ? ''
+        : ' Official `subagent` / `subagent_fork` carry no persona — use them only when none fits or for background work.'
+      return toolHidden('subagent_manager_run')
+        ? 'No persona-carrying delegation tool here.' + official + ' The personas listed here are reference only, not callable; ask the user to enable the delegation tool if a persona should run.'
+        : 'Persona work goes through `subagent_manager_run` — when a task matches one of these personas, delegate it there.' + official
+    },
     supersede: SUPERSEDE_NOTE,
   },
   prompt: {
@@ -304,7 +356,8 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
 }
 
 /**
- * `how` 行里**点名过的工具**（skills / subagents / memory 三个域会点名）。
+ * `how` 行里**点名过的工具**（`skill` / `skill_manager_read` / `subagent` /
+ * `subagent_manager_run` / `memory_manager_list`）。
  *
  * 为什么要有这份名单：一条 `how` 行是否成立，取决于它点名的工具在**这个 agent 手里**还在不在。
  * 名单放在这里而不是调用方 —— 与上面那几条 `how` 相邻，改一处不会漏另一处。
@@ -315,11 +368,15 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
  *      人设启动的子代理）。②此前没人管：目录照注、`how` 行照样点名一个模型手里没有的工具，
  *      等于诱导它去调一个不存在的名字。
  *
+ * 官方的两条（`skill` / `subagent`）也在名单里：技能目录接管态下装载入口是官方 `skill` 工具、
+ * 人设目录的「没有合适人设 → 用官方委派」半句只在官方委派工具真的存在时才成立 —— 它们不是
+ * 本插件的工具，但 `toolVisibleFor` 走 `tools.get(name, agent)`，官方注册表照样答得上来。
+ *
  * `memory_manager_list` 加入：记忆段截断折叠行不点名查询工具时，
  * 被截掉的条目无名、模型无法发现它们。`how` 在折叠行出现时点名它，与技能 / 子智能体 /
  * MCP 三个域的溢出行同构。
  */
-export const HOW_NAMED_TOOLS: readonly string[] = ['skill_manager_read', 'subagent_manager_run', 'memory_manager_list']
+export const HOW_NAMED_TOOLS: readonly string[] = ['skill', 'skill_manager_read', 'subagent', 'subagent_manager_run', 'memory_manager_list']
 
 /** 域声明里没登记的 key（理论上到不了这里）：给一个不出错的通用框架。 */
 export const fallbackFrame = (label: string): DomainFrame => ({
@@ -426,7 +483,10 @@ export function renderDomainText(
   // 开标签后**必须空一行**：markdown 里 `#` 紧跟在一行文字后面只是**段落续行**，不会被渲染成
   // 标题 —— 用户截图里 `## 本机当前的场景` 就是这么被吞掉的（和 `<system-reminder>` 挤成一段）。
   // 收尾同理：正文末尾先归一成单个空行，免得 `</system-reminder>` 粘在最后一行上。
-  // 结构：标题 → 补充说明（有才发）→ 权威声明（只在替换时）→ 边界陈述（有才发）→ 正文。
+  // 结构：标题 → 补充说明（有才发）→ 权威声明（只在替换时）→ 正文 → 动作段（`afterBody`，
+  // 有才发）→ 边界陈述（有才发）。动作段与边界在**收尾区**（官方目录版式：一句引入 →
+  // 清单 → 动作段 —— 模型扫完条目紧接着读到"拿这些名字做什么"，说明压在清单前面会把
+  // 清单推到消息末尾）。
   // 没有 cue 那一行（见 `DomainFrame` 的注释）。
   const info: FrameRenderInfo = { toolHidden, text: section.text, replacing }
   const lines = [FRAME_OPEN, '', `# ${frame.title}`]
@@ -442,9 +502,18 @@ export function renderDomainText(
   if (how !== undefined) lines.push(how)
   // 权威声明只在**替换**时发：本会话的第一份没有旧内容可取代，那句话
   // 只是占一行。边界陈述反过来 —— 它不依赖"有没有旧的"，第一份就要发。
-  if (replacing) lines.push(frame.supersede)
-  if (frame.boundary !== undefined) lines.push(frame.boundary)
-  lines.push('', escapeFrameBody(section.text).replace(/\n+$/, ''), '', FRAME_CLOSE)
+  // 空串 = 这一域不用通用取代句（技能域把"目录变了 / 取代此前每一份"写进了清单前那句，
+  // 官方也是这么写的 —— 再补一句通用的就是同一件事说两遍）。
+  if (replacing) {
+    const supersede = typeof frame.supersede === 'function' ? frame.supersede(info) : frame.supersede
+    if (supersede !== '') lines.push(supersede)
+  }
+  lines.push('', escapeFrameBody(section.text).replace(/\n+$/, ''))
+  // 收尾区：动作段（按 agent 与正文内容求值）与边界句各占一段，与清单隔开。
+  const after = typeof frame.afterBody === 'function' ? frame.afterBody(info) : frame.afterBody
+  if (after !== undefined) lines.push('', after)
+  if (frame.boundary !== undefined) lines.push('', frame.boundary)
+  lines.push('', FRAME_CLOSE)
   return { text: lines.join('\n'), body: section.text, frameKey }
 }
 

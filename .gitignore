@@ -37,3 +37,5 @@ scripts/*
 .persona-preview.html
 .trash-preview.html
 .token-banner-preview.html
+.fastgraph/
+.serena/

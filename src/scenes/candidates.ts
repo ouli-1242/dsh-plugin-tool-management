@@ -19,7 +19,7 @@ import type { ToolsService } from '../mcp/manager.js'
 import { MCP_TOOL_PREFIX } from '../host-names.js'
 import { serverNameCandidates, type McpToolNameParts } from '../host-names.js'
 import { presetRosterOf } from '../compat/preset-reach.js'
-import { injectionFactsOf, readCompositionFacts, readCompositionText } from '../compat/preset-reach.js'
+import { combinePresence, injectionFactsOf, readCompositionFacts, readCompositionText, readPatchCarrierPresence } from '../compat/preset-reach.js'
 import { decideToolFilter, type ToolFilterDecision } from '../subagents/service.js'
 
 /** 本文件需要的外部能力。 */
@@ -46,6 +46,14 @@ export interface CandidateDeps {
    * 因为登记发生在 apply 过程中，而本工厂构造在更早处。
    */
   selfToolNames(): ReadonlySet<string>
+  /**
+   * 宿主平面 patch 文本（全局 + 当前 profile 两份 `cordis.patch.yml` 拼接）。
+   *
+   * 预设事实的**第二来源**：官方载体行（`dsh-tool-skill` / `dsh-agent-instructions`）
+   * 挂在 patch 里时组合文本里没有那一行，只看组合会把「官方在送」误判成「缺席」。
+   * 读取器自带缓存时可省读；缺席判断（见 `presetFactsForAgent`）只在真需要时才调它。
+   */
+  profilePatchText?: () => Promise<string>
 }
 
 /**
@@ -274,7 +282,21 @@ export function createCandidates(deps: CandidateDeps): Candidates {
     if (hit && Date.now() - hit.at < PRESET_FACTS_TTL_MS) return hit.value
     try {
       const text = await readCompositionText(roster, presetId)
-      const value = injectionFactsOf(readCompositionFacts(text))
+      let facts = readCompositionFacts(text)
+      // 载体行在组合里缺席时再看一眼 patch（`cordis.patch.yml`）：官方载体挂在宿主平面时
+      // 组合里没有那一行，不并这一路的话本插件的兜底目录会盖到官方头上。只在缺席时读
+      // patch（两次文件读取），挂上了 / 读不到就维持组合口径。
+      if ((facts.toolSkill === 'absent' || facts.agentInstructions === 'absent') && deps.profilePatchText !== undefined) {
+        try {
+          const patch = readPatchCarrierPresence(await deps.profilePatchText())
+          facts = {
+            ...facts,
+            agentInstructions: combinePresence(facts.agentInstructions, patch.agentInstructions),
+            toolSkill: combinePresence(facts.toolSkill, patch.toolSkill),
+          }
+        } catch { /* patch 读不到 = 维持组合口径 */ }
+      }
+      const value = injectionFactsOf(facts)
       presetFactsCache.set(presetId, { at: Date.now(), value })
       return value
     } catch { return undefined }

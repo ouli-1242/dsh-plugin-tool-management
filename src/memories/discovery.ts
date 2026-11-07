@@ -10,7 +10,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -308,4 +308,4 @@ export async function relocateLegacyLayout(memoriesRoot: string): Promise<void> 
       }
     }
   }
-}
+}

@@ -24,11 +24,18 @@ import {
   domainOfTool,
   explainInjections,
   isSubagentSession,
+  normalizeInjectSettings,
   renderDomainText,
   selectInjections,
   shouldAnnounceCleared,
   subagentDepthOf,
 } from '../lib/context-inject.js'
+import { renderSubagentCatalog } from '../lib/subagents/catalog.js'
+import { combinePresence, readPatchCarrierPresence } from '../lib/compat/preset-reach.js'
+import { CATALOG_CAP_DEFAULTS } from '../lib/catalog-caps.js'
+import { SKILL_CATALOG_MAX_ENTRIES, SKILL_CATALOG_DESCRIPTION_MAX_LENGTH } from '../lib/skills/catalog.js'
+import { DEFAULT_MCP_MAX_ENTRIES } from '../lib/mcp/state-section.js'
+import { DEFAULT_CATALOG_MAX_ENTRIES, DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH } from '../lib/subagents/catalog.js'
 import { newestDomainTexts, PLUGIN_KINDS } from '../lib/context-inject-surface.js'
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
 import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/skills/frontmatter.js'
@@ -41,6 +48,7 @@ import { createAccessToken, createFrozenGate, guardModelOps, installHandlerGuard
 import { officeKitApplies } from '../lib/skills/official.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
 import { checkPatchWrite, decidePatchWrite, judgePatchText } from '../lib/compat/patch-dialect.js'
+import { narrowToSession } from '../lib/skills/provider-registration.js'
 import * as yaml from 'js-yaml'
 import { MASK_PLACEHOLDER, describeMaskedOutcome, isMaskedUrl, isMaskedValue, maskSecretValue, maskUrlQuery, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from '../lib/mcp/secret-guard.js'
 import { isValidTrashPayloadPath, isPatchBackupName, moveOutOfTrash, moveToTrash, readTrashPayloadFiles } from '../lib/hub.js'
@@ -1641,7 +1649,8 @@ test('技能目录接管端到端：拦官方、送会话版整份；无差异�
   const ours = out.messages.filter((m) => (m.source || {}).kind === 'skill-manager-catalog')
   assert.equal(ours.length, 1, '插件送会话版整份')
   assert.ok(ours[0].content[0].text.includes('SESSION-CATALOG'))
-  assert.ok(ours[0].content[0].text.includes('Supersedes earlier injected content'), '首份会话版要带取代声明')
+  // 取代声明存在即可（措辞按官方更新态那句，见 context-inject-frame 的 skills 帧）。
+  assert.ok(ours[0].content[0].text.includes('replaces every earlier available-skills list'), '首份会话版要带取代声明')
 
   // 无差异：官方照常放行，插件不出声（S3）。
   const quiet = [{ ...domains[0], delta: () => '   ' }]
@@ -5227,4 +5236,161 @@ test('观测包基线：office / sandbox / LibreOffice Kit 都登记，且没有
     assert.equal(item.observed, true)
   }
   assert.equal(HOST_PACKAGE_BASELINES.find((item) => item.name === '@deepseek-ai/libreoffice-kit').baselineVersion, '0.1.5')
+})
+
+test('目录上限：夹取语义是"0 / 非法回出厂"，合法值夹进范围；上限走函数式时按次求值', async () => {
+  const caps = normalizeInjectSettings({
+    catalogCaps: { skills: 0, mcp: 99999, subagents: 7.9, skillsDescription: 5, subagentsDescription: 'x' },
+  }).catalogCaps
+  assert.equal(caps.skills, undefined)
+  assert.equal(caps.mcp, 500)
+  assert.equal(caps.subagents, 7)
+  assert.equal(caps.skillsDescription, 20)
+  assert.equal(caps.subagentsDescription, undefined)
+
+  // 函数式上限按次求值（`createSkillCatalog` 的 opts 契约，不是纯渲染器的参数）：
+  // 兼容页改完设置，下一次渲染就生效 —— 渲染缓存键吃生效值，改 cap 不用等 TTL。
+  const skills = { roots: [{ key: 'g', skills: Array.from({ length: 55 }, (_, i) => ({ name: 's' + String(i).padStart(2, '0'), description: 'd', enabled: true, modelInvocable: true })) }] }
+  let cap = 50
+  const catalog = createSkillCatalog({ state: async () => skills }, { maxEntries: () => cap, ttlMs: 60_000 })
+  await catalog.warm()
+  assert.match(catalog.text(), /more not listed/)
+  cap = 200
+  assert.equal(catalog.text().includes('more not listed'), false)
+})
+
+test('折叠出口的硬不变量：查询工具不在手里时，折叠行不得点名它 —— 三个目录同一条纪律', () => {
+  // "点名"是行为不变量（指向模型没有的工具 = 诱导猜名字），不是文案断言：
+  // 具体措辞可以改，"关着还点名"不行；反过来工具在手里时出口必须点名。
+  const skills = { roots: [{ key: 'g', skills: Array.from({ length: 55 }, (_, i) => ({ name: 's' + String(i).padStart(2, '0'), description: 'd', enabled: true, modelInvocable: true })) }] }
+  assert.match(renderSkillCatalog(skills, 50, 500, true), /skill_manager_list/)
+  assert.doesNotMatch(renderSkillCatalog(skills, 50, 500, false), /skill_manager_list/)
+
+  const subs = Array.from({ length: 52 }, (_, i) => ({ name: 'p' + i, description: 'd' }))
+  assert.match(renderSubagentCatalog(subs, 50, 500, true), /subagent_manager_list/)
+  assert.doesNotMatch(renderSubagentCatalog(subs, 50, 500, false), /subagent_manager_list/)
+
+  const rows = Array.from({ length: 52 }, (_, i) => ({ serverName: 'srv' + i, liveTools: ['t'] }))
+  assert.match(renderMcpStateSection(rows, { maxEntries: 50 }, true), /mcp_manager_list/)
+  assert.doesNotMatch(renderMcpStateSection(rows, { maxEntries: 50 }, false), /mcp_manager_list/)
+})
+
+test('patch 载体行：cordis.patch.yml 里的官方行按组合同款判据解析，两路在场性 mounted > conditional > absent', () => {
+  const patch = [
+    '- insert:',
+    '    - id: skill',
+    "      name: '@deepseek-ai/dsh-tool-skill'",
+    '    - id: agentsmd',
+    "      name: '@deepseek-ai/dsh-agent-instructions'",
+    '      disabled: true',
+  ].join('\n')
+  const presence = readPatchCarrierPresence(patch)
+  assert.equal(presence.toolSkill, 'mounted')
+  assert.equal(presence.agentInstructions, 'absent')
+  assert.equal(combinePresence('absent', 'mounted'), 'mounted')
+  assert.equal(combinePresence('conditional', 'absent'), 'conditional')
+  assert.equal(combinePresence('absent', 'absent'), 'absent')
+})
+
+test('patch 载体行：`- name:` 同行写法（loader 的 id 可省）也要认，且不被兄弟条目的 disabled 污染', () => {
+  // 判据级不变量：官方载体行写成 `- name: X`（同行）时必须判成 mounted —— 漏判会让本插件
+  // 的兜底目录与官方那份同时进上下文（同一份技能清单发两遍）。
+  const shorthand = [
+    '- insert:',
+    "    - name: '@deepseek-ai/dsh-tool-skill'",
+    "    - name: '@deepseek-ai/dsh-tool-fs'",
+    '      disabled: true',
+  ].join('\n')
+  assert.equal(readPatchCarrierPresence(shorthand).toolSkill, 'mounted')
+
+  // 自己被 disabled 才是缺席；兄弟条目的 disabled 与它无关。
+  const ownOff = [
+    '- insert:',
+    "    - name: '@deepseek-ai/dsh-tool-skill'",
+    '      disabled: true',
+  ].join('\n')
+  assert.equal(readPatchCarrierPresence(ownOff).toolSkill, 'absent')
+
+  // 标准形状（`- id:` + 另起一行的 name）不受影响。
+  const canonical = [
+    '- insert:',
+    '    - id: tool-skill',
+    "      name: '@deepseek-ai/dsh-tool-skill'",
+  ].join('\n')
+  assert.equal(readPatchCarrierPresence(canonical).toolSkill, 'mounted')
+})
+
+test('技能目录信封与取代声明：闭合标签独占一行（markdown 惰性续行会把它粘进最后一条），截断时不声称完整', () => {
+  const data = { roots: [{ key: 'g', skills: [{ name: 'a', description: 'd', enabled: true, modelInvocable: true }] }] }
+  const body = renderSkillCatalog(data, 100, 500, false)
+  const lines = body.split('\n')
+  const closeAt = lines.indexOf('</available_skills>')
+  assert.ok(closeAt >= 0, '技能清单要套官方信封')
+  assert.notEqual(lines[closeAt - 1], '- `a`: d', '闭合标签前必须有空行，否则会被 markdown 当成上一个列表项的续行')
+  assert.equal(lines[closeAt - 2], '- `a`: d')
+
+  // 截断态：取代声明不声称「完整」，也不追加「Use only names」（缺席可能只是没挤进可见清单）。
+  const many = { roots: [{ key: 'g', skills: Array.from({ length: 60 }, (_, i) => ({ name: 's' + String(i).padStart(2, '0'), description: 'd', enabled: true, modelInvocable: true })) }] }
+  const truncated = renderSkillCatalog(many, 50, 500, false)
+  assert.ok(truncated.includes('more not listed'))
+  const section = { key: 'skills', name: 'x', label: '技能目录', form: 'catalog', text: truncated }
+  const rendered = renderDomainText(section, () => false, true).text
+  assert.equal(rendered.includes('Use only names'), false, '截断时不得说"只用这些名字"')
+  assert.equal(rendered.includes('This complete catalog'), false, '截断时不得声称清单完整')
+})
+
+test('记忆授权语在条目之后：授权语是收尾句（句号），不是清单前的引入（冒号）', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-mem-order-'))
+  try {
+    const stateDir = join(home, 'tool-management')
+    const memoriesRoot = join(stateDir, 'memories')
+    mkdirSync(join(memoriesRoot, 'alpha'), { recursive: true })
+    writeFileSync(join(memoriesRoot, 'alpha', 'note.md'), '---\nname: note\ndescription: d\n---\nBODY\n')
+    const svc = createMemoriesService({}, { memoriesRoot, stateDir })
+    await svc.patchIndex({ active: ['alpha'] }, ['active'])
+    const text = svc.memoryText()
+    const bodyAt = text.indexOf('BODY')
+    const noteAt = text.indexOf('Memories for the current scene')
+    assert.ok(bodyAt >= 0 && noteAt >= 0, '段里应有条目与授权语')
+    assert.ok(noteAt > bodyAt, '授权语必须在条目之后（它是收尾句）')
+    assert.equal(text.trimEnd().endsWith('set.**'), true, '授权语以句号收尾，不是引出清单的冒号')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('目录上限出厂值只有一份真相：三个目录模块的常量与服务端回包一致', () => {
+  // 界面（兼容页输入框的 placeholder）从服务端拿出厂值 —— 服务端那份与三个目录模块的常量
+  // 必须同源，否则改一次默认值要改三四处，漏一处界面就显示陈旧值。
+  assert.equal(SKILL_CATALOG_MAX_ENTRIES, CATALOG_CAP_DEFAULTS.skills)
+  assert.equal(SKILL_CATALOG_DESCRIPTION_MAX_LENGTH, CATALOG_CAP_DEFAULTS.skillsDescription)
+  assert.equal(DEFAULT_MCP_MAX_ENTRIES, CATALOG_CAP_DEFAULTS.mcp)
+  assert.equal(DEFAULT_CATALOG_MAX_ENTRIES, CATALOG_CAP_DEFAULTS.subagents)
+  assert.equal(DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH, CATALOG_CAP_DEFAULTS.subagentsDescription)
+})
+
+test('技能清单按查看方那一层收紧：别个会话开着的那条不串过来，来源关着时里面那条也不列', () => {
+  // 机器级那份策略表是**所有会话共用**的：A 会话开一条全局关着的技能，那条会被临时落进
+  // 表里（官方 `skill` 工具只认那张表），于是每个会话的官方清单里都看得见它。
+  // 官方那份清单（宿主 `/` 菜单的「技能」段、官方 `skill` 工具的候选）按会话过滤，
+  // 破了就是「A 会话开的技能出现在 B / C 会话的菜单里」。
+  const candidates = [
+    { name: 'alpha', invocation: { modelInvocable: true, userInvocable: true }, locator: { rootKey: 'dsh', entryName: 'alpha' } },
+    { name: 'beta', invocation: { modelInvocable: true, userInvocable: true }, locator: { rootKey: 'dsh', entryName: 'beta' } },
+    { name: 'gamma', invocation: { modelInvocable: true, userInvocable: true }, locator: { rootKey: 'other', entryName: 'gamma' } },
+  ]
+  const viewA = {
+    // 本会话只开了 alpha；beta 全局关着；来源 other 整个关着。
+    skill: (key) => (key === 'dsh/alpha' ? true : false),
+    source: (rootKey) => (rootKey === 'other' ? false : undefined),
+  }
+  const narrowed = narrowToSession(candidates, viewA)
+  assert.deepEqual(
+    narrowed.filter((c) => c.invocation.userInvocable).map((c) => c.name),
+    ['alpha'],
+    '本会话只该留下自己开着的那条：别个会话开着的、来源关着的都不列',
+  )
+  // 没有会话层（全局层读）→ 机器级那份照旧，两条都还在。
+  const global = narrowToSession(candidates, { skill: () => undefined, source: () => undefined })
+  assert.deepEqual(global.map((c) => c.invocation.userInvocable), [true, true, true])
 })

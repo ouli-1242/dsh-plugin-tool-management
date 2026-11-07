@@ -416,7 +416,28 @@ export default {
     // 来源裁剪为 dsh/agents/codex/claude）；服务层把 core 的结果适配成 { op, args }
     // 协议，并在全局层与每个活动 agent 的 scope 内注册 manager provider：
     // rank 覆盖实现不改源文件的启停；外部来源由 provider 接入。
-    const skillsService = createSkillsService(ctx)
+    /**
+     * 技能 provider 的**会话层**：官方技能服务问 provider「有哪些技能」时，provider 按
+     * **查看方**（官方传进来的 `options.scope` = 调用方 agent）那一层的生效值回答。
+     *
+     * 为什么必须有：策略表 / 来源状态是**机器级**的 —— 会话 A 开一条全局关着的技能，那条
+     * 必须临时落进机器级那张表才加载得了（官方 `skill` 工具只认那张表），于是**每个**
+     * 会话的清单里都看得见它。注入目录早就按会话过滤了（`renderSkillCatalog` 的 layer），
+     * 官方那份清单（宿主 `/` 菜单的「技能」段、官方 `skill` 工具的候选）没有 —— 那条串味
+     * 就留在那里：A 会话开的技能出现在 B / C 会话的菜单里。
+     *
+     * 两格与注入目录**同一份判据**（`skillViewOf` / `skillSourceViewOf`），不多定义第二套。
+     * 全局粒度没有会话层（`scopeKeyForAgent` 返回 null）→ 按机器级那一份，与面板一致。
+     */
+    const skillProviderSessionViewOf = (viewer: unknown) => {
+      const scopeKey = scopeKeyForAgent(viewer)
+      if (!scopeKey) return undefined
+      return {
+        skill: (key: string) => skillViewOf(scopeKey, key).visible,
+        source: (rootKey: string) => skillSourceViewOf(scopeKey, rootKey).visible,
+      }
+    }
+    const skillsService = createSkillsService(ctx, { sessionViewOf: skillProviderSessionViewOf })
     try {
       ctx.effect(() => skillsService.registerProviders(), 'dsh-plugin-tool-management: skills providers')
     } catch (e) {
@@ -2038,6 +2059,11 @@ export default {
       // 场景绑定的排除项；没话说时目录自己落到全局口径（场景绑定 ∩ 全局启停）。
       flagFor: (agent) => flagResolverOfAgent(agent, 'subagents'),
       layerKeyFor: (agent) => layerKeyOfAgent(agent),
+    }, {
+      // 目录上限吃兼容页注入设置（`catalogCaps`）：函数式取值，设置有 TTL 缓存，
+      // 这里只是转发（目录在启动时建，传死数会让界面改完不生效）。
+      maxEntries: () => injectSettingsSync().catalogCaps.subagents,
+      maxDescription: () => injectSettingsSync().catalogCaps.subagentsDescription,
     })
     // ⚠️ 取数必须用 mcpmRowsWithNotes(false)：true 会带上**未打码**的 url/headers/env（含明文密钥）。
     // 技能目录与提示词两个域是**官方载体的兜底**：预设挂得到官方
@@ -2064,6 +2090,10 @@ export default {
         return { skill, source }
       },
       layerKeyFor: (agent) => layerKeyOfAgent(agent),
+    }, {
+      // 目录上限吃兼容页注入设置（`catalogCaps`）：与子智能体目录同一条理由 —— 函数式取值。
+      maxEntries: () => injectSettingsSync().catalogCaps.skills,
+      maxDescription: () => injectSettingsSync().catalogCaps.skillsDescription,
     })
     /**
      * 技能目录重算的**合并调度**。
@@ -2646,6 +2676,20 @@ export default {
       }
     }
 
+    /**
+     * 宿主平面 patch 文本（全局 + 当前 profile 两份 `cordis.patch.yml` 拼接）。
+     *
+     * 官方载体行（`dsh-tool-skill` / `dsh-agent-instructions`）预设事实的第二来源：
+     * 组合文本里缺席时，注入侧（`candidates.presetFactsForAgent`）与兼容页矩阵
+     * （`preset-reach` op）都拿它做并集判定，两处同一份文本、不会各说各话。
+     * 不带缓存：调用方各有自己的节拍（注入事实 15s TTL、矩阵点开才算），缺文件返回空串。
+     */
+    async function patchCarrierText(): Promise<string> {
+      const paths = await ensurePaths()
+      const [globalText, profileText] = await Promise.all([readPatch(paths.globalPatch), readPatch(paths.projectPatch)])
+      return globalText + '\n' + profileText
+    }
+
     // 每次写补丁前留一份带时间戳的副本：cordis.patch.yml 改坏能让 DSH 起不来，
     // 所以写前那份必须不靠 git 也能拿回来。
     const KEEP_PATCH_BACKUPS = 5
@@ -2908,6 +2952,8 @@ export default {
       // 状态段尾句那句「用 `mcp_manager_list` 查」的前提：与技能 / 子智能体两个目录同一份判据
       // 。
       listToolVisible: (agent: unknown) => toolVisibleFor('mcp_manager_list', agent),
+      // 状态段条数上限：与技能 / 子智能体两个目录同一份设置来源（`catalogCaps.mcp`）。
+      catalogCaps: () => injectSettingsSync().catalogCaps,
       // 会话层：两半各管一头 ——
       //   · `sessionMcpOverlay`（异步）给 restrictAgent：在**此刻注册着的**工具全名上算
       //     allow / deny（deny 追加、allow 从全局停用名单里减掉，见 tool-visibility.ts）；
@@ -3023,6 +3069,8 @@ export default {
       // 传 getter 而不是快照：登记发生在 apply 过程中（本行之后 600 余行），
       // 而这个工厂现在就要构造完。
       selfToolNames: () => selfToolNames,
+      // 预设事实的 patch 第二来源：官方载体行挂在宿主平面 patch 时组合里没有那一行。
+      profilePatchText: patchCarrierText,
     })
 
 
@@ -4101,6 +4149,8 @@ export default {
         // 先读一次：预热前 state 是乐观的 'ok'，而这一行要回答的是"文件现在能不能读"。
         toolTableState: async () => { await readToolTableSettings(); return toolTableState() },
         presetRoster: candidates.presetRoster,
+        // 预设矩阵的 patch 第二来源：与注入侧同一份文本（`patchCarrierText`），口径不分叉。
+        profilePatchText: patchCarrierText,
         listPatchBackups,
         cleanPatchBackups,
         getContextInjectorLive: () => contextInjectorLive,
@@ -4287,6 +4337,10 @@ export default {
             scheduleSkillCatalogRefresh()
             void subagentCatalog.refresh().catch(() => { /* 同上 */ })
           }
+          // 会话层改了技能的启停 → 官方那份清单（宿主 `/` 菜单的「技能」段、官方 `skill`
+          // 工具的候选）得重新算：它是按会话过滤的，缓存键里没有会话层，不作废就停在
+          // 改动前那一份。机器级那张表没变时（"本对话关掉一条全局开着的技能"）尤其需要。
+          if (domain === 'skills' || domain === 'skillSources' || domain === '') skillsService.invalidateSkills()
         },
         message,
       }),

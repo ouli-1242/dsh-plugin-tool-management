@@ -136,6 +136,11 @@ export interface ReachContext {
     readonly underSuppressingPresets: boolean
     readonly domains: Readonly<Record<string, boolean>>
   }
+  /**
+   * 宿主平面 patch 里两条官方载体行的在场性（调用方读好传入）：组合文本里缺席的载体行，
+   * patch 挂了也算挂着 —— 与注入侧（`presetFactsForAgent`）同一口径，矩阵不能跟注入各说各话。
+   */
+  readonly patchCarriers?: Pick<CompositionFacts, 'agentInstructions' | 'toolSkill'>
 }
 
 /**
@@ -167,12 +172,51 @@ export function injectionFactsOf(facts: CompositionFacts | undefined): PresetInj
   }
 }
 
+/**
+ * 两路在场性合并：`mounted` > `conditional` > `absent`（任一路明确挂着就算挂着）。
+ *
+ * 用于组合文本与宿主平面 patch 的并集 —— patch 挂了官方载体、组合里没有那一行时，
+ * 只看组合会把「官方在送」误判成「缺席」，本插件的兜底目录就会盖到官方那份上面。
+ */
+export function combinePresence(a: ModulePresence, b: ModulePresence): ModulePresence {
+  if (a === 'mounted' || b === 'mounted') return 'mounted'
+  if (a === 'conditional' || b === 'conditional') return 'conditional'
+  return 'absent'
+}
+
+/**
+ * 从宿主平面 patch 文本（`cordis.patch.yml`，全局与 profile 两份都算）里解析两条官方
+ * 载体行（`dsh-agent-instructions` / `dsh-tool-skill`）的在场性 —— 组合文本里缺席时的
+ * **第二来源**。
+ *
+ * 为什么必须有它：{@link readCompositionFacts} 只读**预设自己的组合文本**，而 patch 是
+ * 另一条挂载路 —— 用户把载体行写进 `cordis.patch.yml` 时它对所有预设生效，组合文本里
+ * 却没有那一行。patch 的行形状与组合一致（条目也是 `id` / `name` / `disabled`），所以
+ * 同一套行扫描直接适用。patch 方言目前只有 `insert` 操作块（官方 presets 与实际部署都是），
+ * 行扫描不做块级区分；扫描失败按两路都缺席处理 —— 与"读不到组合"同一条保守口径。
+ */
+export function readPatchCarrierPresence(text: string): Pick<CompositionFacts, 'agentInstructions' | 'toolSkill'> {
+  try {
+    const lines = String(text ?? '').split(/\r?\n/)
+    return {
+      agentInstructions: presenceOf(lines, AGENT_INSTRUCTIONS_MODULE),
+      toolSkill: presenceOf(lines, TOOL_SKILL_MODULE),
+    }
+  } catch {
+    return { agentInstructions: 'absent', toolSkill: 'absent' }
+  }
+}
+
 /** 这几个模块挂没挂，直接决定可达性。 */
 const PERSONA_MODULE = '@deepseek-ai/dsh-persona'
 const AGENT_INSTRUCTIONS_MODULE = '@deepseek-ai/dsh-agent-instructions'
 const TOOL_SKILL_MODULE = '@deepseek-ai/dsh-tool-skill'
 
-const NAME_LINE = /^(\s*)name:\s*(['"]?)([^'"\s#]+)\2\s*(?:#.*)?$/
+// `name:` 行两种写法都要认：`- id: x` 后另起一行的 `name: y`（官方组合与 patch 都这么写），
+// 以及 `- name: y` 同行写法 —— loader 的条目 id **可省**（`cordis-plugin-loader` 缺 id 时自己
+// 生成随机 id），所以 `- name: y` 是合法行。只认前一种时，这种行整个看不见 → 载体被判成
+// 缺席 → 本插件的兜底目录与官方那份同时进上下文（同一份技能清单发两遍）。
+const NAME_LINE = /^(\s*)(?:-\s+)?name:\s*(['"]?)([^'"\s#]+)\2\s*(?:#.*)?$/
 const ENTRY_LINE = /^(\s*)-\s/
 const DISABLED_LINE = /^\s*disabled:\s*(.+?)\s*(?:#.*)?$/
 const COMPLETE_LINE = /^\s*complete:\s*(true|false)\s*(?:#.*)?$/
@@ -189,15 +233,22 @@ function indentOf(line: string): number {
  *
  * 行从 `name:` 上方最近、缩进更浅的条目 bullet 开始（`cordis:group` 里的嵌套行仍拿到自己的
  * 块），到下一个缩进不深于该 bullet 的条目为止。
+ *
+ * ⚠️ `name:` 与条目 bullet **同行**（`- name: y`）时，块从它**自己**开始：不另找上方的
+ * bullet —— 那会越过 `- insert:` 找到整个 insert 组，于是组内**别的条目**的 `disabled:`
+ * 被算到这一行头上（载体被误判成缺席）。
  */
 function rowBlockAround(lines: readonly string[], nameIndex: number): readonly string[] {
   const nameIndent = indentOf(lines[nameIndex])
   let start = nameIndex
-  for (let i = nameIndex - 1; i >= 0; i -= 1) {
-    const entry = ENTRY_LINE.exec(lines[i])
-    if (entry !== null && entry[1].length < nameIndent) {
-      start = i
-      break
+  // `name:` 行自己就是条目 bullet（`- name: y` 写法）→ 块从这一行开始。
+  if (ENTRY_LINE.exec(lines[nameIndex]) === null) {
+    for (let i = nameIndex - 1; i >= 0; i -= 1) {
+      const entry = ENTRY_LINE.exec(lines[i])
+      if (entry !== null && entry[1].length < nameIndent) {
+        start = i
+        break
+      }
     }
   }
   const entryIndent = indentOf(lines[start])
@@ -346,8 +397,10 @@ export function deriveReach(
     // 组合文本读不出来时既不能断言官方到得了，也不能断言本插件会兜底
     // （注入侧对读不到的预设保守跳过兜底域）→ 如实报"判断不了"。
     if (personaUnknown) return 'unknown'
-    // 官方行"可能挂着"（有条件启用）同样判断不了：注入侧对本插件兜底域的门槛是"官方明确没挂"
-    // （`carrier !== false`），所以这种预设下兜底根本不会发，官方挂不挂只有挂载期才知道。
+    // 官方行"可能挂着"（有条件启用）时如实报"判断不了"：`!!js` 表达式只有挂载后才有答案。
+    // 注意注入侧（`injectionFactsOf`）对 conditional 的口径是**按缺席兜底**（`=== 'mounted'`
+    // 才算官方在送）—— 宁可多一条兜底目录，也不让模型两手空空；与这里"报 unknown"并不冲突：
+    // 一个是给用户的矩阵口径（不猜），一个是给模型的动作口径（宁多勿缺）。
     if (carrier === 'conditional') return 'unknown'
     if (domainOff(domainKey)) return 'absent'
     if (suppressed && !forceUnderSuppressing) return 'suppressed'
@@ -480,14 +533,22 @@ async function composeRow(roster: PresetRosterLike, meta: Record<string, unknown
   }
 
   const facts = readCompositionFacts(text)
-  const reach = deriveReach(facts, ctx)
+  // 载体行并上 patch 第二来源：组合里缺席、patch 挂了的行按挂着算（与注入侧同一口径）。
+  // persona 事实只在组合里，patch 不参与。
+  const patch = ctx?.patchCarriers
+  const merged: CompositionFacts = patch === undefined ? facts : {
+    ...facts,
+    agentInstructions: combinePresence(facts.agentInstructions, patch.agentInstructions),
+    toolSkill: combinePresence(facts.toolSkill, patch.toolSkill),
+  }
+  const reach = deriveReach(merged, ctx)
   return {
     ...base,
     personaComplete: facts.personaComplete,
     personaMounted: facts.personaMounted,
-    agentInstructions: facts.agentInstructions,
-    toolSkill: facts.toolSkill,
-    suppressing: isSuppressingPreset(facts),
+    agentInstructions: merged.agentInstructions,
+    toolSkill: merged.toolSkill,
+    suppressing: isSuppressingPreset(merged),
     ...reach,
     ...(facts.parseFailure === undefined ? {} : { reason: `解析组合失败：${facts.parseFailure}` }),
   }

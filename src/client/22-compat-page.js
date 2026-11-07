@@ -57,6 +57,12 @@
       // 注入设置（本插件各注入域的开关，清单见 context-inject 的 INJECT_DOMAIN_KEYS）。它和可达性矩阵是一体两面：
       // 矩阵说"到不到得了"，这里决定"要不要"。读不到时这一节不显示。
       const [inject, setInject] = React.useState(null)
+      // 目录上限输入框的本地编辑态（`catalogCaps` 的键 → 未提交的字符串）。输入框不直接受
+      // inject 控制：每键一次 apiCall 太吵，blur / 回车才提交。框里恒空（当前值在 placeholder
+      // 灰显），所以编辑态只记"用户正在敲的那几个字符"。
+      const [capEdits, setCapEdits] = React.useState({})
+      // 目录上限的**出厂值**（服务端给的，src/catalog-caps.ts 是唯一真相）：拿不到时显示 `—`。
+      const [catalogDefaults, setCatalogDefaults] = React.useState(null)
       // 斜杠命令入口（`/` 菜单里那个「工具」段）的开关。与 inject 同一类：读不到就不渲染这一节。
       const [slash, setSlash] = React.useState(null)
       // 注入 / 斜杠开关保存失败的原因。这两个开关是乐观更新（点一下立刻变），
@@ -441,7 +447,11 @@
       const enterToSubmit = function (ev) { if (ev.key === 'Enter') submitTokenModal() }
       const loadInject = function (alive) {
         apiCall('inject-settings', {})
-          .then(function (r) { if (alive !== false && r && r.ok && r.settings) setInject(r.settings) })
+          .then(function (r) {
+            if (alive === false || !r || !r.ok || !r.settings) return
+            setInject(r.settings)
+            if (r.catalogDefaults) setCatalogDefaults(r.catalogDefaults)
+          })
           .catch(function () { /* 读不到 → 不渲染这一节 */ })
       }
       const loadSlash = function (alive) {
@@ -1407,6 +1417,75 @@
                   React.createElement('span', { className: 'dsm-inject-chip-dot' }),
                   React.createElement('span', { className: 'dsm-inject-chip-name' }, t('compat.inject.domain.' + key)))
               })))
+        const caps = inject.catalogCaps || {}
+        // 键 = `catalogCaps` 里的字段名（skills / skillsDescription / mcp / subagents /
+        // subagentsDescription），五域各一个，天然唯一 —— 编辑态直接用数据键，不做二次拼接。
+        // 框**永远空着**：当前生效值只在 placeholder 里灰显（没配 = 出厂值），提交后即清空
+        // —— 界面常态是"空框 + 灰字"，不与真值打架，也看不出这是能编辑的既有值还是占位。
+        // 清空发 `null`（回出厂值）而不是 `undefined`：后者会被 JSON 丢掉，服务端逐项合并
+        // 时会把旧值留下来。
+        const capValueShown = function (key) {
+          return Object.prototype.hasOwnProperty.call(capEdits, key) ? capEdits[key] : ''
+        }
+        const capPlaceholder = function (key, fallback) {
+          const v = caps[key]
+          if (v !== undefined && v !== null) return String(v)
+          // 没配 = 出厂值：只用服务端给的那份（src/catalog-caps.ts 是唯一真相，界面不写第二份
+          // 字面量 —— 改一次默认值要改三四处，漏一处就显示陈旧值）。拿不到时显示 `—`。
+          const d = catalogDefaults && catalogDefaults[key]
+          return d === undefined || d === null ? fallback : String(d)
+        }
+        const capCommit = function (key) {
+          const raw = capEdits[key]
+          if (raw === undefined) return
+          setCapEdits(function (prev) { const next = Object.assign({}, prev); delete next[key]; return next })
+          const text = String(raw).trim()
+          const parsed = text === '' ? null : Number(text)
+          const value = parsed !== null && Number.isFinite(parsed) ? Math.floor(parsed) : null
+          const current = caps[key] === undefined || caps[key] === null ? null : caps[key]
+          if (value === current) return
+          // 清空发 `null`（回出厂值）而不是 `undefined`：后者会被 JSON 丢掉，
+          // 服务端逐项合并时会把旧值留下来。
+          const patchCaps = Object.assign({}, caps)
+          patchCaps[key] = value
+          saveInject({ catalogCaps: patchCaps })
+        }
+        const capInput = function (key, label, unit, fallback) {
+          return React.createElement('label', { key: key, className: 'dsm-cap-field' },
+            React.createElement('span', { className: 'dsm-cap-label' }, label),
+            React.createElement('input', {
+              className: 'dsm-control dsm-cap-input', type: 'number', min: 1,
+              value: capValueShown(key), placeholder: capPlaceholder(key, fallback),
+              onChange: function (e) { setCapEdits(Object.assign({}, capEdits, (function () { const p = {}; p[key] = e.target.value; return p }()) )) },
+              onBlur: function () { capCommit(key) },
+              onKeyDown: function (e) { if (e.key === 'Enter') { e.preventDefault(); capCommit(key) } },
+            }),
+            React.createElement('span', { className: 'dsm-cap-unit' }, unit))
+        }
+        // 三个域各占一行（域名固定宽，三行的「最多注入」列左右对齐）：域名 + 「最多注入 [框] 条
+        // 描述最多显示 [框] 字符」。单位跟在框后（不塞进 placeholder）：框里的数是当前生效值，
+        // 单位是这一格的量纲，两者分开才读得出「最多注入 100 条」是一句话。
+        const capGroup = function (domain, fields) {
+          return React.createElement('span', { key: 'cap-' + domain, className: 'dsm-cap-group' },
+            React.createElement('span', { className: 'dsm-cap-name' }, t('compat.inject.domain.' + domain)),
+            fields.map(function (f) { return capInput(f.key, t(f.label), t(f.unit), f.ph) }))
+        }
+        injectParts.push(
+          React.createElement('div', { key: 'caps-head', className: 'dsm-seg-group' },
+            React.createElement('span', null, t('compat.inject.caps')),
+            React.createElement('span', { className: 'dsm-seg-group-line' })),
+          React.createElement('div', { key: 'caps', className: 'dsm-caps-row' },
+            capGroup('skills', [
+              { key: 'skills', label: 'compat.inject.caps.entries', unit: 'compat.inject.caps.entriesUnit', ph: '—' },
+              { key: 'skillsDescription', label: 'compat.inject.caps.descLen', unit: 'compat.inject.caps.descLenUnit', ph: '—' },
+            ]),
+            capGroup('mcp', [
+              { key: 'mcp', label: 'compat.inject.caps.entries', unit: 'compat.inject.caps.entriesUnit', ph: '—' },
+            ]),
+            capGroup('subagents', [
+              { key: 'subagents', label: 'compat.inject.caps.entries', unit: 'compat.inject.caps.entriesUnit', ph: '—' },
+              { key: 'subagentsDescription', label: 'compat.inject.caps.descLen', unit: 'compat.inject.caps.descLenUnit', ph: '—' },
+            ])))
       }
       // 两块数据各自独立加载：inject 读不到时斜杠入口照样要出现，反之也一样，所以整块的条件是
       // 「任一有值」—— 缺的那半只是不出现，不把另一半一起吞掉。
@@ -1561,7 +1640,7 @@
         push(React.createElement('div', { className: 'dsm-upload-requirements' },
           React.createElement('div', { className: 'dsm-label' }, t('compat.reach.tools.title')),
           React.createElement('ul', null,
-            [1, 2, 3].map(function (n) {
+            [1, 2, 3, 4].map(function (n) {
               return React.createElement('li', { key: n }, t('compat.reach.tools.' + n))
             }))))
       }

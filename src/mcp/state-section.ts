@@ -45,8 +45,10 @@
 // 同步性：`text()` 必须同步返回（renderPrompt 不接受 Promise），而 MCP 清单是异步读盘 →
 // 与子智能体目录同构的 stale-while-revalidate（见 src/subagents/catalog.ts）。
 
+import { CATALOG_CAP_DEFAULTS } from '../catalog-caps.js'
+
 /** 段里最多列几台 server；超出部分只报数量。 */
-export const DEFAULT_MCP_MAX_ENTRIES = 50
+export const DEFAULT_MCP_MAX_ENTRIES = CATALOG_CAP_DEFAULTS.mcp
 /**
  * 备注截断长度。界面上那两枚输入框（MCP 页与场景档案）用同一个数当字数上限，
  * 客户端镜像在 `42-shared-ui.js` 的 `MCP_NOTE_MAX` —— 改这里要一起改它。
@@ -109,6 +111,7 @@ export interface McpStateRow {
 
 /** MCP 状态段的渲染选项：条目上限与备注长度。 */
 export interface McpStateOptions {
+  /** 最多列几台服务器（可用与静音两档各按这个数截）。 */
   maxEntries?: number
   noteMaxLength?: number
 }
@@ -253,13 +256,13 @@ export function renderMcpStateSection(
   const out = [...lines]
   const hidden = (usable.length + muted.length)
     - (shownUsable.length + shownMuted.length)
-  // 超上限时给出口：技能与子智能体两个目录早就这么写了，这是唯一漏掉
-  // 的一处。工具被关掉（兼容页 / 人设 toolsDeny）时不点名 —— 点名一个模型手里没有的工具，
-  // 只会让它去猜名字；数量照报，那是实话。
+  // 超上限时给出口：工具可见就点名（技能与子智能体两个目录同款）；被关掉时不点名"去调它"
+  // —— 点名一个模型手里没有的工具，只会让它去猜名字；但也不只报数量，补一句可转告的事实
+  // （工具是关着的、用户能开），别让被截掉的部分在模型看来"不存在"。数量照报，那是实话。
   if (hidden > 0) {
     out.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`mcp_manager_list\`.)`
-      : `(${hidden} more not listed.)`)
+      : `(${hidden} more not listed — the listing tool is disabled in this session; ask the user to enable it.)`)
   }
   return out.join('\n')
 }
@@ -318,7 +321,13 @@ export interface McpStateCatalog {
 }
 
 /** 状态段缓存的 TTL 与时钟（时钟可注入，便于测试）。 */
-export interface McpStateCatalogOptions extends McpStateOptions {
+export interface McpStateCatalogOptions extends Omit<McpStateOptions, 'maxEntries'> {
+  /**
+   * 最多列几台服务器；支持函数式（与技能 / 子智能体两个目录同一条理由：兼容页的设置有
+   * TTL 缓存，目录是启动时建的，传死数会让界面改完不生效）。缺省 / 返回 `undefined`
+   * = 出厂值 `DEFAULT_MCP_MAX_ENTRIES`。
+   */
+  maxEntries?: number | (() => number | undefined)
   /**
    * 缓存新鲜度（清单非空时）。取 3000ms，与 `readNotes` 的 `SIDECAR_TTL_MS` 对齐；
    * `mcpmList` 比人设目录重（要枚举工具 schema + 读补丁文件），不适合更短的 TTL。
@@ -363,8 +372,8 @@ export function createMcpStateCatalog(
   let data: McpStateRow[] | null = null
   let loadedAt = Number.NEGATIVE_INFINITY
   let inflight: Promise<void> | null = null
-  // 渲染缓存键 = (尾句前提, 本会话停用的服务器)。两者都影响正文，少一个就会让 A 的段
-  // 出现在 B 里（与技能 / 人设两个目录同一手法）。
+  // 渲染缓存键 = (尾句前提, 本会话停用的服务器, 逐工具判定, 条数上限)。全都影响正文，
+  // 少一个就会让 A 的段出现在 B 里，或让改完设置后的旧文本继续发（与技能 / 人设两个目录同一手法）。
   let rendered: { key: string; text: string } | null = null
   /** 空清单按 `emptyTtlMs` 走，有行时仍按 `ttlMs`（判据见 `emptyTtlMs` 的注释）。 */
   const ttlFor = (): number => (data !== null && data.length === 0 ? emptyTtlMs : ttlMs)
@@ -440,15 +449,19 @@ export function createMcpStateCatalog(
         }
       } catch { toolOn.length = 0; toolOff.length = 0 }
     }
+    // 上限每次渲染现取（设置有 TTL 缓存，这里只是转发）；缺省回落厂值。
+    const maxEntries = (typeof opts.maxEntries === 'function' ? opts.maxEntries() : opts.maxEntries) ?? DEFAULT_MCP_MAX_ENTRIES
     const key = (visible ? '1' : '0') +
       '\u0000' + sessionOff.slice().sort().join('\u0001') +
       '\u0002' + toolOn.slice().sort().join('\u0001') +
-      '\u0003' + toolOff.slice().sort().join('\u0001')
+      '\u0003' + toolOff.slice().sort().join('\u0001') +
+      // 缓存键必须带上条数上限：改了设置而键没变的话，渲染缓存会一直发旧文本。
+      '\u0004' + maxEntries
     if (rendered && rendered.key === key) {
       if (rendered.text !== '') markNonEmpty(agent)
       return rendered.text
     }
-    const out = renderMcpStateSection(data, opts, visible, sessionOff, { on: toolOn, off: toolOff })
+    const out = renderMcpStateSection(data, { ...opts, maxEntries }, visible, sessionOff, { on: toolOn, off: toolOff })
     rendered = { key, text: out }
     if (out !== '') markNonEmpty(agent)
     return out

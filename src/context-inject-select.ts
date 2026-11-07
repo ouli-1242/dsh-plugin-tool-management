@@ -13,6 +13,27 @@ import {
   type InjectSettings,
 } from './context-inject-contract.js'
 
+/**
+ * 目录上限的夹取范围。条数下限 1（关掉目录是域开关的事，上限不为它开口）；描述下限 20
+ * （再短截不出可读摘要，模型只会拿到一串残句）；上限给到覆盖一切正常装机 —— 官方目录
+ * 本就无条数上限，这里只挡手滑输入的四位数。
+ */
+const CAP_ENTRIES_MAX = 500
+const CAP_DESCRIPTION_MIN = 20
+const CAP_DESCRIPTION_MAX = 2000
+
+/**
+ * 夹一个目录上限值：`0` / 空 / 非法 → `undefined`（回到出厂值）；其余夹进 `[lo, hi]`。
+ *
+ * "0 = 回默认"而不是"列 0 条"：把目录清空是域开关的语义，上限这里给 0 只会让用户以为
+ * 保存失败。写盘前在 {@link normalizeInjectSettings} 统一夹一遍，读侧与写侧看到同一份形状。
+ */
+function clampCap(raw: unknown, lo: number, hi: number): number | undefined {
+  const n = typeof raw === 'number' ? Math.floor(raw) : Number.NaN
+  if (!Number.isFinite(n) || n <= 0) return undefined
+  return Math.min(Math.max(n, lo), hi)
+}
+
 /** 把任意输入夹成合法设置（缺项/类型不对一律退回默认；默认从不阻止注入）。 */
 export function normalizeInjectSettings(raw: unknown): InjectSettings {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
@@ -21,11 +42,19 @@ export function normalizeInjectSettings(raw: unknown): InjectSettings {
   for (const key of INJECT_DOMAIN_KEYS) {
     domains[key] = typeof domainsRaw[key] === 'boolean' ? (domainsRaw[key] as boolean) : DEFAULT_INJECT_SETTINGS.domains[key]
   }
+  const capsRaw = (obj.catalogCaps && typeof obj.catalogCaps === 'object' ? obj.catalogCaps : {}) as Record<string, unknown>
   return {
     underSuppressingPresets: typeof obj.underSuppressingPresets === 'boolean'
       ? obj.underSuppressingPresets
       : DEFAULT_INJECT_SETTINGS.underSuppressingPresets,
     domains,
+    catalogCaps: {
+      skills: clampCap(capsRaw.skills, 1, CAP_ENTRIES_MAX),
+      skillsDescription: clampCap(capsRaw.skillsDescription, CAP_DESCRIPTION_MIN, CAP_DESCRIPTION_MAX),
+      mcp: clampCap(capsRaw.mcp, 1, CAP_ENTRIES_MAX),
+      subagents: clampCap(capsRaw.subagents, 1, CAP_ENTRIES_MAX),
+      subagentsDescription: clampCap(capsRaw.subagentsDescription, CAP_DESCRIPTION_MIN, CAP_DESCRIPTION_MAX),
+    },
   }
 }
 

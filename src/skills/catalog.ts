@@ -18,10 +18,18 @@
 // 与子智能体目录同构的 stale-while-revalidate：`text()` 返回缓存值并在超龄时后台重算，
 // `refresh()` 供技能写操作后立即重算。
 
+import { CATALOG_CAP_DEFAULTS } from '../catalog-caps.js'
+
 /** 描述截断长度（与官方目录的 `catalogDescriptionMaxLength` 默认值一致）。 */
-export const SKILL_CATALOG_DESCRIPTION_MAX_LENGTH = 500
-/** 目录最多列几条；超出只报数量（让模型去调 `skill_manager_list`）。 */
-export const SKILL_CATALOG_MAX_ENTRIES = 50
+export const SKILL_CATALOG_DESCRIPTION_MAX_LENGTH = CATALOG_CAP_DEFAULTS.skillsDescription
+/**
+ * 目录最多列几条；超出只报数量（让模型去调 `skill_manager_list`）。
+ *
+ * 出厂 100：技能是六个域里唯一常见规模上百的（多个技能根 + 全局根），50 会把字母序靠后的
+ * 一批截进折叠行 —— 那部分在模型侧完全不可见，比多付几十行 token 更伤。官方目录本就无上限，
+ * 100 是「覆盖常见装机」与「控制每轮成本」的折中；配合兼容页的 `catalogCaps` 可再调。
+ */
+export const SKILL_CATALOG_MAX_ENTRIES = CATALOG_CAP_DEFAULTS.skills
 
 /** 技能清单里的一行（`skill-state` 的 `roots[].skills[]` 子集）。 */
 export interface SkillCatalogRow {
@@ -119,17 +127,26 @@ export function renderSkillCatalog(
   const shown = sorted.slice(0, Math.max(0, maxEntries))
   const lines = shown.map((row) => (row.description ? '- `' + row.name + '`: ' + row.description : '- `' + row.name + '`'))
   // 只有清单：标题、工具名与"只给摘要、读完再用"的纪律由注入通道的框架承担
-  // （见 context-inject.ts 的 DOMAIN_FRAME 的 `how` 行）—— 一处内容一个出处。
+  // （见 context-inject.ts 的 DOMAIN_FRAME）—— 一处内容一个出处。
   const out = [...lines]
   const hidden = sorted.length - shown.length
-  // 查询工具被关掉（兼容页的模型工具表）时只说"还有几个"：点名一个模型手里没有的工具，
-  // 它只会去猜名字。数量照报 —— 那是实话，与有没有出口无关。
+  // 官方同款信封：条目收进 `<available_skills>`，与官方目录同形 —— 接管态下模型在同一
+  // 会话先后看到两份目录，信封一致切换零成本。折叠行在信封外（官方的不完整提示也在外）。
+  //
+  // 闭合标签前留一个空行：条目是 markdown 列表，紧挨着闭合标签的那行会被 markdown 当成
+  // **上一个列表项的续行**（惰性续行）—— 渲染出来闭合标签就粘在最后一条后面，而不是自己
+  // 占一行。空行把它断成独立段落。
+  const enveloped = ['<available_skills>', '', ...out, '', '</available_skills>']
   if (hidden > 0) {
-    out.push('', listToolVisible
+    // 查询工具被关掉（兼容页的模型工具表 / 人设 toolsDeny）时不点名"去调它"：模型手里没有
+    // 这条工具，点名只会让它去猜名字。但也不能只报数量 —— 那等于告诉模型"没了"，被截掉的
+    // 部分对它完全不存在。改为陈述事实并指向用户：工具是关着的、用户能开 —— 模型可把这句
+    // 转告用户，误调也有工具执行门禁接住。数量照报，那是实话。
+    enveloped.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`skill_manager_list\`.)`
-      : `(${hidden} more not listed.)`)
+      : `(${hidden} more not listed — the listing tool is disabled in this session; ask the user to enable it.)`)
   }
-  return out.join('\n')
+  return enveloped.join('\n')
 }
 
 /**
@@ -266,10 +283,12 @@ export interface SkillCatalog {
   warmSession: (sessionId: string) => Promise<void>
 }
 
-/** 技能目录的选项：工作区路径与是否含被覆盖的副本。 */
+/** 技能目录的选项：工作区路径与是否含被覆盖的副本。上限支持函数式（兼容页的设置有 TTL 缓存，目录是启动时建的，传死数会让界面改完不生效）。 */
 export interface SkillCatalogOptions {
-  maxEntries?: number
-  maxDescription?: number
+  /** 最多列几条；缺省 / 返回 `undefined` = 出厂值 `SKILL_CATALOG_MAX_ENTRIES`。 */
+  maxEntries?: number | (() => number | undefined)
+  /** 单条描述的最大字符数；缺省 / 返回 `undefined` = 出厂值。 */
+  maxDescription?: number | (() => number | undefined)
   /** 缓存新鲜度；与子智能体目录同量级。 */
   ttlMs?: number
   now?: () => number
@@ -286,6 +305,9 @@ export interface SkillCatalogOptions {
 export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOptions = {}): SkillCatalog {
   const ttlMs = opts.ttlMs ?? 30_000
   const now = opts.now ?? (() => Date.now())
+  /** 函数式上限求值（兼容页的设置每次渲染现取；静态值原样返回）。 */
+  const resolveCap = (value: number | (() => number | undefined) | undefined): number | undefined =>
+    typeof value === 'function' ? value() : value
   // 缓存的是**清单数据**而不是渲染结果：清单本体只依赖磁盘 + 会话 cwd，而尾句要不要点名
   // 那个查询工具 / 本会话关了哪几条取决于 agent。渲染是纯字符串操作，代价可忽略。
   const SESSION_CACHE_MAX = 16
@@ -293,8 +315,9 @@ export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOpt
   const inflight = new Map<string, Promise<void>>()
   /** 写操作后自增：旧的 inflight 回来时据此作废，不能拿旧磁盘状态盖掉新缓存。 */
   let generation = 0
-  // 渲染结果的缓存键 = (会话 id, 尾句要不要点名查询工具, 本会话的覆盖指纹)。
-  // 少任何一个都会让 A 的目录出现在 B 里（与人设目录的按深度缓存同一手法）。
+  // 渲染结果的缓存键 = (会话 id, 两个上限, 尾句要不要点名查询工具, 本会话的覆盖指纹)。
+  // 少任何一个都会让 A 的目录出现在 B 里，或让改完设置后的旧文本继续发
+  // （与人设目录的按深度缓存同一手法）。
   let rendered: { key: string; text: string } | null = null
 
   /** 某条缓存移到队尾（Map 保序 ⇒ 头部就是最久没用的那条）。 */
@@ -350,13 +373,17 @@ export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOpt
       touch(key)
       const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
       const layer = deps.layerFor ? deps.layerFor(agent) : undefined
+      // 上限每次渲染现取（设置有 TTL 缓存，这里只是转发）；缺省回落厂值。
+      const maxEntries = resolveCap(opts.maxEntries) ?? SKILL_CATALOG_MAX_ENTRIES
+      const maxDescription = resolveCap(opts.maxDescription) ?? SKILL_CATALOG_DESCRIPTION_MAX_LENGTH
       // 有会话层但装配层没给指纹（老装配 / 测试）时不走渲染缓存：宁可多算一次，
       // 也不拿 A 的目录糊弄 B。
       const layerKey = deps.layerKeyFor ? deps.layerKeyFor(agent) : ''
       const cacheable = layer === undefined || deps.layerKeyFor !== undefined
-      const keyOfRender = key + '\u0000' + (visible ? '1' : '0') + '\u0000' + layerKey
+      // 缓存键必须带上两个上限：改了设置而键没变的话，渲染缓存会一直发旧文本。
+      const keyOfRender = key + '\u0000' + maxEntries + '\u0000' + maxDescription + '\u0000' + (visible ? '1' : '0') + '\u0000' + layerKey
       if (cacheable && rendered && rendered.key === keyOfRender) return rendered.text
-      const out = renderSkillCatalog(hit.data, opts.maxEntries, opts.maxDescription, visible, layer)
+      const out = renderSkillCatalog(hit.data, maxEntries, maxDescription, visible, layer)
       if (cacheable) rendered = { key: keyOfRender, text: out }
       return out
     },
