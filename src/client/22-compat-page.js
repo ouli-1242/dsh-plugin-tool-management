@@ -1507,7 +1507,11 @@
         const report = toolTable.report
         const hidden = toolTable.hidden || []
         const groups = report.groups || []
-        const groupLabel = function (key) { return key === 'other' ? t('compat.tools.other') : t('compat.inject.domain.' + key) }
+        const groupLabel = function (key) {
+          if (key === 'other') return t('compat.tools.other')
+          if (key === 'control') return t('compat.tools.group.control')
+          return t('compat.inject.domain.' + key)
+        }
         const toolTableDisabled = toolTableBusy || scopeSessionLocked || toolTable.state === 'unknown'
         const rows = []
         groups.forEach(function (group) {

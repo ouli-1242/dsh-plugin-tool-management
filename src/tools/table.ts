@@ -4,20 +4,15 @@
 // 根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；面板
 // （118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着二十条**（整张表 26 条，每轮实发 6 条）—— 名单、判据与代价见下面
+// 出厂**默认就关着二十条**（整张表 27 条，每轮实发 7 条）—— 名单、判据与代价见下面
 // `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // 实测数字（口径：宿主 `recordToolSize` 的 `ceil(JSON.stringify(header.tools).length / 4) + 4`，
-// 即**字符数 / 4**；界面「模型工具表」那行合计与逐条 ≈tok 就是这份，逐条相加与整份数组
-// 的算法差不到 1%）：
-//   · 重测：二十条隐藏 ≈**5,213 tok**（≈20,852 字符），默认可见那六条 ≈**1,547 tok**
-//     （0.21.5 又动了默认可见的两条：`mcp_manager_switch` 补 38 字符的场景锁豁免说明（+10），
-//     `subagent_manager_list` 补正文文件路径的说明（+14），同一口径现为 **1,571**；
-//     隐藏那二十条没动，仍是 5,213）。
-//     比 10-18 那份（16,743 字符 ≈4,186）涨了两成 —— 会话作用域这轮给工具描述加了"写本对话
-//     还是全局""`scope` 参数""租约"这些句子，名单一个字没变。
-//     那次实测的名单里还没有 `memory_manager_search`（它自己 ≈70 tok 未计入）。
-//   · 10-18 那轮 A/B（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
+// 即**字符数 / 4**；`header.tools` 里只有 name / description / parameters —— 官方的
+// `projectToolSchema` 不投影 output / execute，那几个不进请求。界面「模型工具表」那行
+// 合计与逐条 ≈tok 就是这份）：
+//   · 二十条隐藏 ≈**4,883 tok**，默认可见那七条 ≈**1,701 tok**，全开 ≈**6,579 tok**。
+//   · A/B 实测（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
 //     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
 //     所以它们是**净节省的下界**，不是"省了多少"的上界。**那对数量的是当天那份描述** ——
 //     描述一改就得重测，新的净省要在真实环境跑 A/B，这里不拿估算冒充实测。
@@ -28,9 +23,9 @@
 // 所以"工具表 / 注入"这两个数不是同一把尺子，跨语言比大小会得出错的结论。
 // 口径本身是**宿主的**（`recordToolSize`），我们改不了；能做的只是知道它偏在哪。
 //
-// 当前环境（查过，复述）**没有 BPE 分词器可实测**：306 个官方包里零个
-// 词表文件，本机 python site-packages 里也没有 tiktoken / transformers。所以 5,213 只是
-// **按宿主的尺子**量出来的数，真 BPE 值按上面那条经验约低一成（≈4,7xx）—— 没有实测，别当实测引用。
+// 当前环境**没有 BPE 分词器可实测**：官方包里零个词表文件，本机也没有 tiktoken /
+// transformers。所以上面那些只是**按宿主的尺子**量出来的数，真 BPE 值按上面那条经验约低一成 ——
+// 没有实测，别当实测引用。
 //
 // 本文件只放纯逻辑（normalize / 分域分组 / 体积汇总）。落盘与 TTL 缓存在 index.ts，与
 // 注入设置（`inject-settings.json`）走同一套写法。
@@ -46,6 +41,7 @@
 //   · 注入通道与两个目录：目录里「用 `skill_manager_list` 查」这类句子在工具关掉后就是假的。
 
 import { INJECT_DOMAIN_KEYS, domainOfTool, type InjectDomainKey } from '../context-inject.js'
+import { CONTROL_TOOL_NAME } from './deps.js'
 
 /** 一份命名方案：名字 + 那一组"不发给模型"的工具名（与 `hidden` 同口径，不是"开着哪些"）。 */
 export interface ToolTablePreset {
@@ -66,7 +62,7 @@ export interface ToolTableSettings {
 }
 
 /**
- * 出厂默认关掉的**二十条**：整张表 26 条，关掉后**每轮实发 6 条**。
+ * 出厂默认关掉的**二十条**：整张表 27 条，关掉后**每轮实发 7 条**。
  *
  * 判据只有一条：**这些信息或动作常态下由注入段与面板承担，
  * 平时也用不到模型自己伸手**。三组：
@@ -86,6 +82,10 @@ export interface ToolTableSettings {
  *
  * 技能 / 人设"是常问的，但它**低频于"读现状 + 拨开关 + 建改定义"**那批，而且面板每个域都有
  * 删除入口 —— 默认关、要用时在「兼容」页勾上（与另外十四条同一条纪律，不额外付 token）。
+ *
+ * 关掉的这些**模型自己也能打开**：`tool_manager_tools`（每轮常驻的那一条）能按对话
+ * 打开任意一条被关掉的工具，列清单时给出名字、一句话用途与 ≈token。这条工具不在
+ * 这份名单里 —— 它是唯一的回头路，自己关掉自己的话就再也开不回来了。
  *
  * ⚠️ 关掉的是**能力**，不是"冗余"，代价如实记在这里（要拿回来就在「兼容」页勾，或整批换：
  * 「恢复方案」）：注入的目录是**筛过的视图**（MCP 段只列可用/曾可用的、人设目录只列本场景
@@ -305,7 +305,7 @@ export interface ToolTableTool {
 /** 工具表里的一个族：族名、显示名与成员。 */
 export interface ToolTableGroup {
   /** 域 key；与注入域清单（context-inject 的 INJECT_DOMAIN_KEYS）同源。认不出前缀的工具归到 `other`。 */
-  key: InjectDomainKey | 'other'
+  key: InjectDomainKey | 'control' | 'other'
   tools: ToolTableTool[]
   /** 该域全部工具的 ≈token 合计（含关掉的）。 */
   tok: number
@@ -402,14 +402,17 @@ export function buildToolTableReport(
 ): ToolTableReport {
   const off = new Set(hidden.map((name) => String(name)))
   const carried = new Set(carrierHidden.map((name) => String(name)))
-  const buckets = new Map<InjectDomainKey | 'other', ToolTableTool[]>()
+  // 「控制」组排在最前：它是**管着这张表的那一条工具**，放在末尾的「其它」组里
+  // 等于把它放到离它要控制的东西最远的地方。
+  const buckets = new Map<InjectDomainKey | 'control' | 'other', ToolTableTool[]>()
+  buckets.set('control', [])
   for (const key of INJECT_DOMAIN_KEYS) buckets.set(key, [])
   for (const row of rows) {
     const name = String(row && row.name ? row.name : '').trim()
     if (name === '') continue
     // 认不出前缀的工具归到 `other` 而不是丢掉：丢掉 = 它在界面上根本不出现，
     // 于是"没登记的域"就永远关不掉，而且没人看得出来（静默降级）。
-    const key = domainOfTool(name) ?? 'other'
+    const key = name === CONTROL_TOOL_NAME ? 'control' : (domainOfTool(name) ?? 'other')
     let list = buckets.get(key)
     if (list === undefined) { list = []; buckets.set(key, list) }
     list.push({ name, tok: estimateTok(row.bytes), hidden: off.has(name), defaultHidden: DEFAULT_HIDDEN_SET.has(name) })
