@@ -73,6 +73,9 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
         exec && (exec as { agent?: { ctx?: unknown } }).agent && (exec as { agent?: { ctx?: unknown } }).agent!.ctx,
         deps.injectNoticeOptions(),
       ),
+      // 逐条点明「这个人设勾的工具里，有几条被这个对话关着」—— 子代理的实际工具集是
+      // 「人设的限制 ∩ 本对话看得见的」，不说的话用户看到人设勾着它却用不了。
+      toolVisibleFor: deps.toolVisibleFor,
     })))
   } catch (e) {
     recordFailure('subagent_manager_list', e)

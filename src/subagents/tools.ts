@@ -103,6 +103,13 @@ export function defineSubagentManagerListTool(subagents: {
    * 这项能力」。缺省（未注入）时行为与从前一致。
    */
   noticeFor?: (exec: unknown) => Promise<string>
+  /**
+   * 这个 agent 手里有没有某条工具（兼容页开关 + 本对话的工具表）。
+   *
+   * 用来点明「这个人设勾的工具里，有几条被这个对话关着」—— 子代理的实际工具集是
+   * 人设的限制 ∩ 本对话看得见的，不说清的话，用户看到人设勾着它却用不了。
+   */
+  toolVisibleFor?: (name: string, agent: unknown) => boolean
 }) {
   return {
     name: 'subagent_manager_list',
@@ -149,9 +156,18 @@ export function defineSubagentManagerListTool(subagents: {
       // 返回体也要有上限：返回值进上下文，工具表只管 schema —— 这一笔它管不着。
       const limit = listLimit((args as { limit?: unknown } | null)?.limit)
       const visible = allowed.slice(0, limit)
+      // 人设勾的工具里有多少条在这个对话里被关着：子代理的实际工具集是
+      // 「人设的限制 ∩ 本对话看得见的」，不说的话用户看到人设勾着它却用不了。
+      const visibleTool = (name: string): boolean => {
+        if (typeof subagents.toolVisibleFor !== 'function') return true
+        try { return subagents.toolVisibleFor(name, (exec as { agent?: unknown } | null)?.agent) } catch { return true }
+      }
+      const offTools = (p: { tools?: string[] }): number =>
+        (Array.isArray(p.tools) ? p.tools : []).filter((t) => !visibleTool(String(t))).length
       const lines = visible.map((p) => '- ' + p.name + ' — ' + (p.description || '(no description)') +
         (p.continuable === true ? CONTINUABLE_MARK : '') +
         (includeUnavailable ? (!decideInSession(p, flag, boundSet) ? ' (disabled — turn it on first)' : '') : '') +
+        (offTools(p) > 0 ? ' (' + offTools(p) + ' of its tools are off in this conversation)' : '') +
         (p.path ? ' · ' + p.path : ''))
       // 默认口径下有多少个没列出来（停用的 + 不在启用场景里的）：不报的话，模型看到一份短名单
       // 会当成"本机只有这些人设"。数量照报，与另外三个 list 的表头同一口径。
@@ -303,6 +319,17 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
       const r = await subagents.runSerial(exec.agent, persona, task, exec.signal, decision === undefined ? undefined : decision.filter, inherit)
       const prefix = r.stopReason && r.stopReason !== 'completed' ? `[stopReason: ${r.stopReason}]\n` : ''
       const note = decision && decision.note ? `⚠ ${decision.note}\n\n` : ''
+      // 这个人设勾的工具里，有几条被**这个对话**的工具表关着 —— 子代理实际能用的是
+      // 「人设的限制 ∩ 本对话看得见的」，不说的话用户看到人设勾着它却调不动。
+      let offToolsNote = ''
+      if (typeof subagents.toolVisibleFor === 'function' && Array.isArray(persona.tools) && persona.tools.length > 0) {
+        const off = persona.tools.filter((t) => {
+          try { return !subagents.toolVisibleFor!(String(t), exec.agent) } catch { return false }
+        })
+        if (off.length > 0) {
+          offToolsNote = 'note: ' + off.length + ' of this persona\'s tools are switched off in this conversation, so the subagent cannot call them (' + off.join(', ') + ').\n'
+        }
+      }
       // 允许追问通道（人设 `continuable: true`）：产出是**异步**到达的，这里只拿到子会话 id。
       // 回执必须把"id + 产出怎么回来 + 怎么追问 + 怎么中止"写全 —— 少写一句，模型就会把
       // "没拿到结果"读成"委派失败"而重试一次（那会再起一个后台子代理，白白翻倍）。
@@ -313,13 +340,13 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
       // 要求它在收尾前把自包含结果发给父代理），不是产出的唯一来路 —— 回执不能只说前者，
       // 否则子代理没主动发消息时父代理会把"还没收到结果"当成"还在跑"。
       if (r.continuable === true) {
-        return note + 'started the continuable subagent "' + name + '" (running in the background)\n'
+        return offToolsNote + note + 'started the continuable subagent "' + name + '" (running in the background)\n'
           + 'agent_id: ' + r.runId + '\n\n'
           + 'you will get a notification carrying its final output when it settles. To follow up: '
           + 'send_message({ agent_id: "' + r.runId + '", message: "..." }), '
           + 'To stop it: interrupt_agent({ agent_id: "' + r.runId + '" }).'
       }
-      return note + prefix + r.text
+      return offToolsNote + note + prefix + r.text
     },
   }
 }
