@@ -85,6 +85,12 @@ export function renderSkillCatalog(
    * 反过来把会话塞进 `state()` 就得为每个会话各扫一遍磁盘。
    */
   layer?: SkillCatalogLayer,
+  /**
+   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：截断尾句的中间档出口。
+   * 与 `listToolVisible` 同一判据来源（按 agent）；缺席时按"在手里"算，
+   * 与 `listToolVisible` 的缺省口径一致 —— 它出厂常驻，且模型自己关不掉它。
+   */
+  controlVisible: boolean = true,
 ): string {
   const roots = (data && typeof data === 'object' ? (data as { roots?: unknown }).roots : undefined) ?? []
   const byName = new Map<string, { name: string; description: string }>()
@@ -138,13 +144,15 @@ export function renderSkillCatalog(
   // 占一行。空行把它断成独立段落。
   const enveloped = ['<available_skills>', '', ...out, '', '</available_skills>']
   if (hidden > 0) {
-    // 查询工具被关掉（兼容页的模型工具表 / 人设 toolsDeny）时不点名"去调它"：模型手里没有
-    // 这条工具，点名只会让它去猜名字。但也不能只报数量 —— 那等于告诉模型"没了"，被截掉的
-    // 部分对它完全不存在。改为陈述事实并指向用户：工具是关着的、用户能开 —— 模型可把这句
-    // 转告用户，误调也有工具执行门禁接住。数量照报，那是实话。
+    // 截断尾句三档：清单工具在手 → 点名它；不在手但控制面工具在（出厂常驻、模型关不掉
+    // 自己的回头路）→ 指自举；两者都关（面板动了手）→ 才指向用户。被截掉的部分不能在
+    // 模型看来"不存在"，数量照报 —— 那是实话。中间档必须带上清单工具的名字：
+    // 模型手里没有它，光说"listing tool"它连要开哪条都不知道。
     enveloped.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`skill_manager_list\`.)`
-      : `(${hidden} more not listed — the listing tool is disabled in this session; ask the user to enable it.)`)
+      : controlVisible
+        ? `(${hidden} more not listed — \`skill_manager_list\` is disabled in this session; enable it with \`tool_manager_tools\` to see them.)`
+        : `(${hidden} more not listed — \`skill_manager_list\` is disabled in this session; ask the user to enable it.)`)
   }
   return enveloped.join('\n')
 }
@@ -235,6 +243,11 @@ export interface SkillCatalogDeps {
    * `injectHiddenToolsFor`），不再定义第二份。
    */
   listToolVisible?: (agent?: unknown) => boolean
+  /**
+   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：截断提示中间档（指自举）的前提。
+   * 与 `listToolVisible` 同一份判据（index.ts 的 `toolVisibleFor`）；缺席按在手里算。
+   */
+  controlVisible?: (agent?: unknown) => boolean
   /**
    * 本会话的两格解析：技能（`skills` 域）与来源（`skillSources` 域）。
    * 按 agent 取，不在目录里自己算 —— 判据只有一份（`scope-overrides.json` + 场景档案），
@@ -372,6 +385,7 @@ export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOpt
       if (now() - hit.at > ttlMs) void revalidate(key)
       touch(key)
       const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
+      const control = deps.controlVisible ? deps.controlVisible(agent) : true
       const layer = deps.layerFor ? deps.layerFor(agent) : undefined
       // 上限每次渲染现取（设置有 TTL 缓存，这里只是转发）；缺省回落厂值。
       const maxEntries = resolveCap(opts.maxEntries) ?? SKILL_CATALOG_MAX_ENTRIES
@@ -380,10 +394,10 @@ export function createSkillCatalog(deps: SkillCatalogDeps, opts: SkillCatalogOpt
       // 也不拿 A 的目录糊弄 B。
       const layerKey = deps.layerKeyFor ? deps.layerKeyFor(agent) : ''
       const cacheable = layer === undefined || deps.layerKeyFor !== undefined
-      // 缓存键必须带上两个上限：改了设置而键没变的话，渲染缓存会一直发旧文本。
-      const keyOfRender = key + '\u0000' + maxEntries + '\u0000' + maxDescription + '\u0000' + (visible ? '1' : '0') + '\u0000' + layerKey
+      // 缓存键必须带上两个上限与两档可见性：改了设置/开关而键没变的话，渲染缓存会一直发旧文本。
+      const keyOfRender = key + '\u0000' + maxEntries + '\u0000' + maxDescription + '\u0000' + (visible ? '1' : '0') + (control ? '1' : '0') + '\u0000' + layerKey
       if (cacheable && rendered && rendered.key === keyOfRender) return rendered.text
-      const out = renderSkillCatalog(hit.data, maxEntries, maxDescription, visible, layer)
+      const out = renderSkillCatalog(hit.data, maxEntries, maxDescription, visible, layer, control)
       if (cacheable) rendered = { key: keyOfRender, text: out }
       return out
     },

@@ -7,7 +7,7 @@
 // 「是哪一个没注册上」——只打一行日志时，模型侧只会「查无此工具」、界面毫无痕迹。
 
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from '../subagents/tools.js'
-import { effectiveScope, globalActionNote, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, text, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, globalActionNote, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, text, toolAccessSentence, type ToolDomainDeps } from './deps.js'
 
 /**
  * 高频高级字段：`subagent_manager_save` 与 op 之间原样透传的那几个（省略 = 不出现 = op 侧保持）。
@@ -218,12 +218,12 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
           const r: any = await ops()['subagent-create']({ name, description: args.description, body: args.body, output: args.output, ...advancedArgs(args) })
           if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to create the persona')
           // 新建的人设默认停用（与 MCP / 技能同口径）。这句必须留：不说的话模型会直接去委派，
-          // 然后收到"人设不可用"，而它并不知道自己少拨了一个开关。点名的 subagent_manager_switch
-          // 在出厂默认名单里就是关着的 —— 关着就改说"用户启用后才能委派"，别指一条模型没有的
-          // 工具（与 mcp/skill 的 listHint 同一条纪律）。
-          const enableHint = deps.toolVisibleFor('subagent_manager_switch', exec && exec.agent)
-            ? ' (created disabled; use subagent_manager_switch to enable it before delegating)'
-            : ' (created disabled; the user has to enable it before you can delegate)'
+          // 然后收到"人设不可用"，而它并不知道自己少拨了一个开关。点名按 toolAccessSentence
+          // 三档分叉：subagent_manager_switch 在出厂默认名单里就是关着的，多数时候落在
+          // 中间档（先用控制面工具把 switch 打开），两头都关才轮到"用户启用"
+          // （与 mcp/skill 的 listHint 同一条纪律）。
+          const enableHint = ' (created disabled; '
+            + toolAccessSentence(deps, 'subagent_manager_switch', exec && exec.agent, 'the user has to enable it before you can delegate') + ')'
           // 会话层：人设文件是**机器级**的，本会话的开关只决定这里看不看得到它。
           return 'OK: persona ' + String(r.name || name) + ' created' + enableHint +
             globalActionNote(deps, exec && exec.agent, 'subagents', 'persona')

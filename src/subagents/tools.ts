@@ -4,7 +4,7 @@
 // 参数与 output schema 用 as const 保留字面量类型，defineTool 才能推断出参数表。
 import { CONTINUABLE_MARK } from './service.js'
 import type { PersonaDoc, SubagentService, ToolFilterDecision } from './service.js'
-import { listLimit, moreNotShown } from '../tools/deps.js'
+import { listLimit, moreNotShown, toolAccessSentence } from '../tools/deps.js'
 
 /** 把一段文本包成工具回执要的内容块数组（各工具域共用这一份形状）。 */
 export function text(v: string) {
@@ -289,15 +289,10 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
         const offHere = docs.some((p) => p.name === name)
         if (offHere) {
           // 模型自己有出路就别推给用户：它能开这条人设，或者用控制面工具先把那条工具打开。
-          const fix = typeof subagents.toolVisibleFor === 'function'
-            ? (() => {
-              try {
-                return subagents.toolVisibleFor!('subagent_manager_switch', exec && exec.agent) ? 'turn it on with subagent_manager_switch'
-                  : subagents.toolVisibleFor!('tool_manager_tools', exec && exec.agent)
-                    ? 'enable subagent_manager_switch with tool_manager_tools (action="enable", tools:["subagent_manager_switch"]), then turn it on'
-                    : 'the user can enable it'
-              } catch { return 'the user can enable it' }
-            })()
+          // 三档判据在 toolAccessSentence —— 与工具面各处回执同一份，不再这里手写一份。
+          const vis = subagents.toolVisibleFor
+          const fix = typeof vis === 'function'
+            ? toolAccessSentence({ toolVisibleFor: vis }, 'subagent_manager_switch', exec && exec.agent, 'the user can enable it')
             : 'the user can enable it'
           throw new Error('persona unavailable: ' + name + ' (turned off — here, by its global switch, or outside the active scene; ' + fix + ')')
         }

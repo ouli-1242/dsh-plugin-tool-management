@@ -103,13 +103,24 @@ export const CONTROL_TOOL_NAME = 'tool_manager_tools'
 export type ToolAccessRoute = 'direct' | 'via-control' | 'none'
 
 /**
+ * {@link toolAccessRoute} 需要的最小判据面：按 agent 看一条工具在不在模型手里。
+ *
+ * 刻意不是整个 `ToolDomainDeps`：域外的调用方（`src/subagents/tools.ts`）的 deps 是
+ * 自己的接口、`toolVisibleFor` 还是可选字段，收窄成单方法后可以直接传入，
+ * 不必为过一次类型检查造整份共享依赖。
+ */
+export interface ToolVisibilityJudge {
+  toolVisibleFor(name: string, agent: unknown): boolean
+}
+
+/**
  * 判定模型自己能不能弄到 `fixer`（那条能修好问题的工具）。
  *
- * @param deps 工具面共享依赖（`toolVisibleFor` 是唯一判据）。
+ * @param deps 判据面（只需 `toolVisibleFor`，见 {@link ToolVisibilityJudge}）。
  * @param fixer 能修好问题的工具名（如 `subagent_manager_switch`）。
  * @param agent 当前会话的 agent（工具表按对话解析，判据要跟着它走）。
  */
-export function toolAccessRoute(deps: ToolDomainDeps, fixer: string, agent: unknown): ToolAccessRoute {
+export function toolAccessRoute(deps: ToolVisibilityJudge, fixer: string, agent: unknown): ToolAccessRoute {
   const visible = (name: string): boolean => {
     try { return deps.toolVisibleFor(name, agent) } catch { return false }
   }
@@ -123,7 +134,7 @@ export function toolAccessRoute(deps: ToolDomainDeps, fixer: string, agent: unkn
  *
  * `fallback` 是模型确实没有别的路时的那句（各调用点的措辞不同：永久删除与改绑不是一回事）。
  */
-export function toolAccessSentence(deps: ToolDomainDeps, fixer: string, agent: unknown, fallback: string): string {
+export function toolAccessSentence(deps: ToolVisibilityJudge, fixer: string, agent: unknown, fallback: string): string {
   const route = toolAccessRoute(deps, fixer, agent)
   if (route === 'direct') return 'use ' + fixer
   if (route === 'via-control') {

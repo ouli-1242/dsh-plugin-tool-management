@@ -74,6 +74,8 @@ export function renderSubagentCatalog(
   maxEntries: number = DEFAULT_CATALOG_MAX_ENTRIES,
   maxDescription: number = DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH,
   listToolVisible: boolean = true,
+  /** 控制面工具在不在手里：截断尾句中间档（指自举）的前提。缺席按在手里算。 */
+  controlVisible: boolean = true,
 ): string {
   if (!allowed.length) return ''
   const sorted = [...allowed].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
@@ -89,11 +91,14 @@ export function renderSubagentCatalog(
   // 「确认一遍」去调它（没列出来的就是当前不想要的）。与 MCP 状态段的
   // `(${N} more not listed.)` 同一句式，但这里多给一个出口——不给人设就真的找不回来了。
   if (hidden > 0) {
-    // 与技能目录同一条纪律：点名一个被关掉的工具只会让模型去猜名字。数量照报，
-    // 再补一句可转告的事实 —— 工具是关着的、用户能开（折叠行只在真被截掉时出现）。
+    // 与技能目录同一条三档纪律：清单工具在手 → 点名它；不在手但控制面工具在 → 指自举；
+    // 两者都关 → 才指向用户。中间档带上清单工具的名字 —— 模型手里没有它，
+    // 光说"listing tool"它连要开哪条都不知道。数量照报，那是实话。
     out.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`subagent_manager_list\`.)`
-      : `(${hidden} more not listed — the listing tool is disabled in this session; ask the user to enable it.)`)
+      : controlVisible
+        ? `(${hidden} more not listed — \`subagent_manager_list\` is disabled in this session; enable it with \`tool_manager_tools\` to see them.)`
+        : `(${hidden} more not listed — \`subagent_manager_list\` is disabled in this session; ask the user to enable it.)`)
   }
   return out.join('\n')
 }
@@ -109,6 +114,11 @@ export interface SubagentCatalogDeps {
    * 人设用 `toolsDeny` 砍掉这条工具之后，目录尾句照样点名一条它手里没有的工具。
    */
   listToolVisible?: (agent?: unknown) => boolean
+  /**
+   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：截断提示中间档（指自举）的前提。
+   * 与 `listToolVisible` 同一份判据；缺席按在手里算。
+   */
+  controlVisible?: (agent?: unknown) => boolean
   /**
    * 本会话人设那一格的四层并值：覆盖 → 场景层（进入场景的档案绑定）→ 基线 →
    * `undefined`（= 落到全局口径：正在用的场景绑定 ∩ 全局启停）。
@@ -229,6 +239,7 @@ export function createSubagentCatalog(
       if (now() - loadedAt > ttlMs) void revalidate()
       const depth = subagentDepthOf(agent)
       const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
+      const control = deps.controlVisible ? deps.controlVisible(agent) : true
       // 上限每次渲染现取（设置有 TTL 缓存，这里只是转发）；缺省回落厂值。
       const maxEntries = resolveCap(opts.maxEntries) ?? maxEntriesDefault
       const maxDescription = resolveCap(opts.maxDescription) ?? maxDescriptionDefault
@@ -236,13 +247,13 @@ export function createSubagentCatalog(
       // 有会话层但装配层没给指纹（老装配 / 测试）时不走渲染缓存：宁可多算一次。
       const cacheable = !hasLayer || deps.layerKeyFor !== undefined
       const layerKey = deps.layerKeyFor ? deps.layerKeyFor(agent) : ''
-      // 缓存键必须带上两个上限：改了设置而键没变的话，渲染缓存会一直发旧文本。
-      const key = layerKey + '\u0000' + depth + '|' + (visible ? '1' : '0') + '\u0000' + maxEntries + '\u0000' + maxDescription
+      // 缓存键必须带上两个上限与两档可见性：改了设置/开关而键没变的话，渲染缓存会一直发旧文本。
+      const key = layerKey + '\u0000' + depth + '|' + (visible ? '1' : '0') + (control ? '1' : '0') + '\u0000' + maxEntries + '\u0000' + maxDescription
       if (cacheable) {
         const cached = rendered.get(key)
         if (cached !== undefined) return cached
       }
-      const out = renderSubagentCatalog(listedFor(agent, depth), maxEntries, maxDescription, visible)
+      const out = renderSubagentCatalog(listedFor(agent, depth), maxEntries, maxDescription, visible, control)
       if (cacheable) rendered.set(key, out)
       return out
     },

@@ -515,12 +515,12 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       // 界面上同样如实报（`scenes.result.created.collapsed`）。
       const collapsed = created.collapsedActive === true
       const parts: string[] = [touchedRecord.length ? 'scene record updated (' + touchedRecord.join(', ') + ')' : 'scene existence ensured']
-      // 点名 scene_manager_switch 的那句按可见性分叉（它在出厂默认名单里就是关着的）：
-      // 部分启用（开 save 不开 switch）时指向一条模型没有的工具，只会让它白跑一趟 ——
-      // 与 mcp/skill 的 listHint 同一条纪律。
-      const enterHint = deps.toolVisibleFor('scene_manager_switch', exec && exec.agent)
-        ? 'To take effect, enter it with scene_manager_switch.'
-        : 'To take effect, the user has to enter this scene manually (scene_manager_switch is not available in this session).'
+      // 点名 scene_manager_switch 的那句按 toolAccessSentence 三档分叉（它在出厂默认
+      // 名单里就是关着的）：部分启用（开 save 不开 switch）时落在中间档 ——
+      // 先用控制面工具把 switch 打开，两头都关才轮到"用户手动进"。与 mcp/skill 同一条纪律。
+      const enterHint = 'To take effect: '
+        + toolAccessSentence(deps, 'scene_manager_switch', exec && exec.agent,
+          'the user has to enter this scene manually (scene_manager_switch is not available in this session)') + '.'
       // 会话层：场景记录与档案是**机器级**的（一份索引 + 一份档案），本会话能改的
       // 只有「这个对话用哪个场景」。不说清的话，模型会把「存好了」读成「只在这个对话里生效」。
       const pinned = sessionScopeOf(deps, exec && exec.agent)?.scope?.scene
@@ -696,10 +696,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       if (archiveNote) parts.push(archiveNote)
       if (toolTableNote) parts.push(toolTableNote)
       if (quickNote) parts.push(quickNote)
-      // 点名 scene_manager_switch 的那句按可见性分叉（它在出厂默认名单里就是关着的）。
-      const enterHint = deps.toolVisibleFor('scene_manager_switch', exec && exec.agent)
-        ? 'To take effect, enter it with scene_manager_switch.'
-        : 'To take effect, the user has to enter this scene manually (scene_manager_switch is not available in this session).'
+      // 点名 scene_manager_switch 的那句按 toolAccessSentence 三档分叉（与 _save 回执同款）。
+      const enterHint = 'To take effect: '
+        + toolAccessSentence(deps, 'scene_manager_switch', exec && exec.agent,
+          'the user has to enter this scene manually (scene_manager_switch is not available in this session)') + '.'
       // 会话层：档案是**机器级**的，本会话能改的只有「这个对话用哪个场景」。
       const pinned = sessionScopeOf(deps, exec && exec.agent)?.scope?.scene
       const globalNote = pinned === undefined

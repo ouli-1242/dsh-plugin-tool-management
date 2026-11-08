@@ -164,6 +164,12 @@ export function renderMcpStateSection(
    * 把一台服务器的工具全关掉，状态段仍报它可用，模型会去调一条它手里没有的工具。
    */
   sessionTools: { on: readonly string[]; off: readonly string[] } = { on: [], off: [] },
+  /**
+   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：截断尾句的中间档出口。
+   * 与 `listToolVisible` 同一判据来源（按 agent）；缺席按在手里算 ——
+   * 它出厂常驻，且模型自己关不掉它。
+   */
+  controlVisible: boolean = true,
 ): string {
   const maxEntries = opts.maxEntries ?? DEFAULT_MCP_MAX_ENTRIES
   const noteMaxLength = opts.noteMaxLength ?? DEFAULT_MCP_NOTE_MAX_LENGTH
@@ -256,13 +262,15 @@ export function renderMcpStateSection(
   const out = [...lines]
   const hidden = (usable.length + muted.length)
     - (shownUsable.length + shownMuted.length)
-  // 超上限时给出口：工具可见就点名（技能与子智能体两个目录同款）；被关掉时不点名"去调它"
-  // —— 点名一个模型手里没有的工具，只会让它去猜名字；但也不只报数量，补一句可转告的事实
-  // （工具是关着的、用户能开），别让被截掉的部分在模型看来"不存在"。数量照报，那是实话。
+  // 超上限时给出口，三档与技能 / 子智能体两个目录同款：清单工具在手 → 点名它；
+  // 不在手但控制面工具在 → 指自举；两者都关 → 才指向用户。中间档带上清单工具的名字 ——
+  // 模型手里没有它，光说"listing tool"它连要开哪条都不知道。数量照报，那是实话。
   if (hidden > 0) {
     out.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`mcp_manager_list\`.)`
-      : `(${hidden} more not listed — the listing tool is disabled in this session; ask the user to enable it.)`)
+      : controlVisible
+        ? `(${hidden} more not listed — \`mcp_manager_list\` is disabled in this session; enable it with \`tool_manager_tools\` to see them.)`
+        : `(${hidden} more not listed — \`mcp_manager_list\` is disabled in this session; ask the user to enable it.)`)
   }
   return out.join('\n')
 }
@@ -279,6 +287,11 @@ export interface McpStateDeps {
    * 判据与技能 / 子智能体两个目录同一份（index.ts 的 `toolVisibleFor`），不定义第二份。
    */
   listToolVisible?: (agent?: unknown) => boolean
+  /**
+   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：尾句中间档（指自举）的前提。
+   * 与 `listToolVisible` 同一份判据；缺席按在手里算。
+   */
+  controlVisible?: (agent?: unknown) => boolean
   /**
    * 某台服务器在本会话里是不是**隐藏**的。判据只有一份（index.ts 的四层并值：
    * 会话覆盖 → 场景层 → 基线 → 全局），这里逐行问它 —— 行数组本身就是服务器全集。
@@ -421,6 +434,7 @@ export function createMcpStateCatalog(
     if (now() - loadedAt > ttlFor()) void revalidate()
     if (data === null) return ''
     const visible = deps.listToolVisible ? deps.listToolVisible(agent) : true
+    const control = deps.controlVisible ? deps.controlVisible(agent) : true
     // 本会话隐藏的服务器：**逐行**问谓词（行数组就是全集），算出名字清单再渲染 ——
     // 缓存键吃这份清单，所以"覆盖改了但隐藏集合没变"不会白重算。
     let sessionOff: string[] = []
@@ -451,17 +465,17 @@ export function createMcpStateCatalog(
     }
     // 上限每次渲染现取（设置有 TTL 缓存，这里只是转发）；缺省回落厂值。
     const maxEntries = (typeof opts.maxEntries === 'function' ? opts.maxEntries() : opts.maxEntries) ?? DEFAULT_MCP_MAX_ENTRIES
-    const key = (visible ? '1' : '0') +
+    // 缓存键必须带上两档可见性与条数上限：改了开关/设置而键没变的话，渲染缓存会一直发旧文本。
+    const key = (visible ? '1' : '0') + (control ? '1' : '0') +
       '\u0000' + sessionOff.slice().sort().join('\u0001') +
       '\u0002' + toolOn.slice().sort().join('\u0001') +
       '\u0003' + toolOff.slice().sort().join('\u0001') +
-      // 缓存键必须带上条数上限：改了设置而键没变的话，渲染缓存会一直发旧文本。
       '\u0004' + maxEntries
     if (rendered && rendered.key === key) {
       if (rendered.text !== '') markNonEmpty(agent)
       return rendered.text
     }
-    const out = renderMcpStateSection(data, { ...opts, maxEntries }, visible, sessionOff, { on: toolOn, off: toolOff })
+    const out = renderMcpStateSection(data, { ...opts, maxEntries }, visible, sessionOff, { on: toolOn, off: toolOff }, control)
     rendered = { key, text: out }
     if (out !== '') markNonEmpty(agent)
     return out

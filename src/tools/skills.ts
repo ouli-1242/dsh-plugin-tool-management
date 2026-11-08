@@ -7,7 +7,7 @@
 
 import { toKebab } from '../skills/core.js'
 import { OFFICIAL_SOURCE_KEY, officeKitApplies, officialOfficeRuntimeSection } from '../skills/official.js'
-import { effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, locateSkillRoot, moreNotShown, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, locateSkillRoot, moreNotShown, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, toolAccessSentence, type ToolDomainDeps } from './deps.js'
 
 /** 技能工具域要的宿主能力：技能 op 表与来源解析。 */
 export interface SkillToolDeps extends ToolDomainDeps {
@@ -515,11 +515,11 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         const data: any = r.data || {}
         // 新建的技能默认停用（与 MCP / 人设同口径）。这句必须留 —— 不说的话模型会直接去用，
         // 然后发现技能不生效，而它不知道自己少拨了一个开关（三个 save
-        // 里只有这一条不报启用状态）。点名的 `skill_manager_switch` 在出厂默认名单里就是关着的，
-        // 关着就改说"用户启用后才能用"，别指一条模型没有的工具。
-        const enableHint = deps.toolVisibleFor('skill_manager_switch', exec && exec.agent)
-          ? ' (created disabled; use skill_manager_switch to enable it)'
-          : ' (created disabled; the user has to enable it first)'
+        // 里只有这一条不报启用状态）。点名按 toolAccessSentence 三档分叉：
+        // skill_manager_switch 在出厂默认名单里就是关着的，多数时候落在中间档
+        // （先用控制面工具把 switch 打开），两头都关才轮到"用户启用"。
+        const enableHint = ' (created disabled; '
+          + toolAccessSentence(deps, 'skill_manager_switch', exec && exec.agent, 'the user has to enable it first') + ')'
         // 会话层：技能文件是**机器级**的，本会话的开关只决定这里看不看得到它。
         return 'Created DSH skill ' + (data.name || kebab) + ' at ' + (data.path || '(unknown)') + enableHint +
           globalActionNote(deps, exec && exec.agent, 'skills', 'skill')

@@ -41,7 +41,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 而 `scene` 是它在 `scene_manager_*`、`<scene>/<name>` 与注入段标题里的叫法。
       // op 的内部契约字段仍是 `group`（`rules-list` 与界面侧调用方都读它），所以 execute 里
       // 显式映射一次 —— 改 op 的字段名要动界面，那不是这一条能顺手做的事。
-      scene: { type: 'string', description: 'Optional scene filter; `global` is the always-on scene.' },
+      scene: { type: 'string', description: 'Optional scene filter; `global` and `_shared` are the always-on scenes.' },
       all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
       limit: { type: 'number', description: 'Max entries (default 50, max 100).' },
     },

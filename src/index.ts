@@ -2072,6 +2072,8 @@ export default {
       // 截断提示里那句「用 X 查」就是假的。判据按 **agent**：
       // 与 `how` 行、MCP 回执同一份 `toolVisibleFor`，不再只看全局开关。
       listToolVisible: (agent) => toolVisibleFor('subagent_manager_list', agent),
+      // 截断提示的中间档：清单工具不在手、但控制面工具在时，指模型自己开（同一份判据）。
+      controlVisible: (agent) => toolVisibleFor('tool_manager_tools', agent),
       // 会话层：四层并值（覆盖 → 场景层绑定 → 基线）。本会话开的**能救回**
       // 场景绑定的排除项；没话说时目录自己落到全局口径（场景绑定 ∩ 全局启停）。
       flagFor: (agent) => flagResolverOfAgent(agent, 'subagents'),
@@ -2095,6 +2097,7 @@ export default {
       // 与子智能体目录同一份判据：只看全局开关时，人设用
       // `toolsDeny` 砍掉 `skill_manager_list` 之后，技能目录尾句照样点名一条它手里没有的工具。
       listToolVisible: (agent) => toolVisibleFor('skill_manager_list', agent),
+      controlVisible: (agent) => toolVisibleFor('tool_manager_tools', agent),
       // 会话层：两格 —— 技能（覆盖 → 场景层 → 基线 + 全局意图）与来源（同一条）。
       //
       // 两格**总是给**：策略表 / 来源状态是机器级的，租约期间读到的是运行态。不给会话层
@@ -2969,6 +2972,7 @@ export default {
       // 状态段尾句那句「用 `mcp_manager_list` 查」的前提：与技能 / 子智能体两个目录同一份判据
       // 。
       listToolVisible: (agent: unknown) => toolVisibleFor('mcp_manager_list', agent),
+      controlVisible: (agent: unknown) => toolVisibleFor('tool_manager_tools', agent),
       // 状态段条数上限：与技能 / 子智能体两个目录同一份设置来源（`catalogCaps.mcp`）。
       catalogCaps: () => injectSettingsSync().catalogCaps,
       // 会话层：两半各管一头 ——
