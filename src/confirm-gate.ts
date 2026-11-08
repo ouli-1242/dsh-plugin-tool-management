@@ -25,11 +25,7 @@ export type ConfirmScopeMode = 'global' | 'session' | 'workspace'
  * 不在这张表里的工具仍走 `CONFIRM_LABELS` 的既有分支（无条件问，或按设置开关问）。
  */
 export const ARG_CONDITIONAL_CONFIRM_TOOLS: ReadonlySet<string> = new Set([
-  'memory_manager_remove',
-  'skill_manager_remove',
-  'subagent_manager_remove',
-  'scene_manager_remove',
-  'prompt_manager_remove',
+  'plugin_manager_remove',
   'prompt_manager_apply',
   'mcp_manager_switch',
   'memory_manager_switch',
@@ -48,13 +44,20 @@ function machineWide(args: Record<string, unknown>, mode: ConfirmScopeMode): boo
   return mode === 'global' || args.scope === 'global'
 }
 
-/** 开关类回执里的目标名词，避免每个分支各拼一遍。 */
-function removeSubject(name: string): string {
-  if (name === 'memory_manager_remove') return 'memory'
-  if (name === 'skill_manager_remove') return 'skill'
-  if (name === 'subagent_manager_remove') return 'persona'
-  if (name === 'scene_manager_remove') return 'scene'
-  return 'AGENTS.md preset'
+/**
+ * 删除类工具的域 → 卡上回显的名词。
+ *
+ * 删除是一条**跨域**工具（`plugin_manager_remove`），所以名词由 `domain` 参数决定，
+ * 不由工具名决定 —— 五个域合进一条之后，工具名不再携带是删什么。
+ *
+ * 域不认识（或没给）时返回 undefined：那种调用注定失败，问了也是一次无效审批。
+ */
+const REMOVE_SUBJECT: Record<string, string> = {
+  memory: 'memory',
+  skill: 'skill',
+  persona: 'persona',
+  preset: 'AGENTS.md preset',
+  scene: 'scene',
 }
 
 /**
@@ -83,7 +86,9 @@ export function argConditionalConfirmReason(
     const id = text(args.id)
     // 缺 id 时工具自己会拒；先弹一张卡等于让用户批准一次注定失败的删除。
     if (id === '') return null
-    return `Delete ${removeSubject(name)}「${id}」 — moved to the trash, restorable from the panel.`
+    const subject = REMOVE_SUBJECT[text(args.domain)]
+    if (subject === undefined) return null
+    return `Delete ${subject}「${id}」 — moved to the trash, restorable from the panel.`
   }
 
   if (name === 'prompt_manager_apply') {

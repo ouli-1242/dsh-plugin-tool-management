@@ -4739,11 +4739,15 @@ test('记忆搜索工具出厂默认关闭（schema 成本按需付）', () => {
 test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器级写入才拦', () => {
   const asks = (name, args, mode = 'session') => argConditionalConfirmReason(name, args, mode) !== null
   // 删除：trash 才是删除；list 是读、restore 是恢复（与 restart 同一档，不该拦）
-  assert.equal(asks('memory_manager_remove', { action: 'trash', id: 'global/x' }), true)
-  assert.equal(asks('memory_manager_remove', { action: 'restore', id: 't1' }), false)
-  assert.equal(asks('skill_manager_remove', { action: 'list' }), false)
+  // 五个域合进一条之后，删什么由 domain 决定 —— 域不认识（或没给）时那次调用注定失败
+  assert.equal(asks('plugin_manager_remove', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
+  assert.equal(asks('plugin_manager_remove', { action: 'restore', domain: 'memory', id: 't1' }), false)
+  assert.equal(asks('plugin_manager_remove', { action: 'list', domain: 'skill' }), false)
   // 缺 id 的删除注定失败：弹卡等于让用户批准一次做不成的操作
-  assert.equal(asks('memory_manager_remove', { action: 'trash' }), false)
+  assert.equal(asks('plugin_manager_remove', { action: 'trash', domain: 'memory' }), false)
+  // 缺 domain / 域不认识：同样做不成，问了也是一次无效审批
+  assert.equal(asks('plugin_manager_remove', { action: 'trash', id: 'global/x' }), false)
+  assert.equal(asks('plugin_manager_remove', { action: 'trash', domain: 'nope', id: 'x' }), false)
   // 提示词：正向应用要问，撤销（apply=false）不问
   assert.equal(asks('prompt_manager_apply', { id: 'p' }), true)
   assert.equal(asks('prompt_manager_apply', { id: 'p', apply: false }), false)

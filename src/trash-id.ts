@@ -4,8 +4,9 @@
 // 引 `hub.ts` 取这个函数 —— 那正好把 剥层拆掉的那个运行时环重新接上（见 core.ts
 // 头部的层注释）。放到这一叶模块里，两边都只向下引，不产生环。
 //
-// 形状：时间戳 base36 + uuid 前 8 位。统一它不是为了审美 —— 五个域的 `*_manager_remove` 都按
-// `action=list` 给出的 id 做 restore，模型跨域操作时认得这一种形状就够。此前技能域另写了一套
+// 形状：时间戳 base36 + uuid 前 8 位。统一它不是为了审美 —— 五个域的删除都走同一条
+// `plugin_manager_remove`，都按 `action=list` 给出的 id 做 restore，模型跨域操作时
+// 认得这一种形状就够。此前技能域另写了一套
 // `${Date.now()}-${randomUUID()}`（十进制时间戳 + 完整 uuid），拿到的是另一种长相。
 //
 // 读写都是**向后兼容**的：读侧只校验「单个合法路径段」（`entryPath` / `isValidSegment`），

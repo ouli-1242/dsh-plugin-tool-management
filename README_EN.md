@@ -40,7 +40,7 @@ Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart
 <td width="34%" valign="top"><b>Three scopes</b><br>All global / per workspace / per conversation. By default every conversation has its own settings — two conversations in the same project can run two different environments at once.</td>
 </tr>
 <tr>
-<td valign="top"><b>The agent can drive it</b><br>27 model tools across six domains: list, read, create, update, delete, toggle, enter scenes, apply prompts, run personas. Writes ask for confirmation (except in a full-permission session, where the card is skipped and only a log line is written); disabled tools are not in the schema at all.</td>
+<td valign="top"><b>The agent can drive it</b><br>23 model tools across six domains: list, read, create, update, delete, toggle, enter scenes, apply prompts, run personas. Writes ask for confirmation (except in a full-permission session, where the card is skipped and only a log line is written); disabled tools are not in the schema at all.</td>
 <td valign="top"><b>The Host page is a control center</b><br>Version and capability checks, access token, scope mode, per-domain injection switches, the model-tool table and the sidebar entry — all on one page.</td>
 <td valign="top"><b>One panel, eight tabs</b><br>Scenes / MCP / Skills / Subagents / Prompts / Memories / Sessions / Host — no more hunting through six different settings pages.</td>
 </tr>
@@ -95,12 +95,12 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 
 ## Let the agent drive it
 
-Six domains, **27 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona.
+Six domains, **23 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona.
 
-- **Only 7 ship enabled** (~1.7k tokens/turn); the other 20 stay off. Off means **not in the schema at all** — the model cannot see them, let alone call them.
+- **Only 7 ship enabled** (~1.7k tokens/turn); the other 16 stay off. Off means **not in the schema at all** — the model cannot see them, let alone call them.
 - **Scoped writes**: the model writes to the current layer by default and the receipt says which one; `scope: "global"` is required to touch everything.
 - **Confirmation cards**: stopping servers, deleting, machine-wide toggles and similar writes ask first; recovery actions (restart, restore, undo apply) go straight through.
-- **Per-tool control**: the model-tool table on the Host page adjusts visibility per layer. All 27 on is ~6.6k tokens/turn; profiles can be saved per task and switched together with a scene.
+- **Per-tool control**: the model-tool table on the Host page adjusts visibility per layer. All 23 on is ~5.8k tokens/turn; profiles can be saved per task and switched together with a scene.
 - **The model can switch tools back on**: the always-on `tool_manager_tools` lists the tools that are off in this conversation (name, purpose, ≈tokens) and turns them on as needed — when the user asks for a scene whose tools happen to be off, the model has a way forward instead of bouncing back to the user.
 
 ## The Host page
@@ -144,7 +144,7 @@ More than a version number:
 | Symptom                                 | Fix                                                                                                                                                      |
 |:--------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | No panel after installing               | Hard-refresh the browser; if that fails, restart DSH.                                                                                                    |
-| The model cannot call a tool            | Host page → “Model tools”, make sure the right conversation / workspace is selected (20 tools are off by default). The panel and scripts are unaffected. |
+| The model cannot call a tool            | Host page → “Model tools”, make sure the right conversation / workspace is selected (16 tools are off by default). The panel and scripts are unaffected. |
 | Actions unavailable after a DSH upgrade | Check the reason on the Host page; run `node scripts/doctor.mjs`, then `node scripts/host-deps.mjs --fix`.                                               |
 | Version mismatch                        | Supports DSH **0.2.2** only (`>=0.2.2-rc.1 <0.2.3`); cross-generation upgrades wait for the plugin to catch up. Install 0.21.x for older hosts.          |
 | Duplicate MCP tab                       | Remove the old loader line from `cordis.patch.yml` and restart.                                                                                          |

@@ -12,6 +12,7 @@ import { createRequire } from 'node:module'
 import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { renameWithRetry } from '../skills/core.js'
+import { translateLegacyToolName } from '../legacy-tool-names.js'
 import { normalizePresetId } from '../prompts/preset-id.js'
 import { normalizeArchive } from './archive.js'
 import type { ModeState, SceneArchive } from './archive.js'
@@ -186,8 +187,10 @@ export function parseModeState(raw: unknown): ModeState {
     .filter((x) => x.id !== '')
   // 模型工具表原值名单：**同样必须原样透传**（剥掉它 = 退出场景后工具表停在方案那份，
   // 与历史上 mcpServers / mcpNotes 被剥掉是同一类 bug）。老快照没有这一栏 → null = 不还原。
+  // 旧工具名顺手翻成新名（合并过的删除族在旧快照里是五条）：翻完可能重复，去掉重复项 ——
+  // 名单要跟别处的名单逐字比对，重复项会让"变了没有"的判断失真。
   const toolTableHidden = Array.isArray(snapshotRaw.toolTableHidden)
-    ? snapshotRaw.toolTableHidden.map((x) => String(x))
+    ? Array.from(new Set(snapshotRaw.toolTableHidden.map((x) => translateLegacyToolName(String(x)))))
     : null
   return {
     scene,

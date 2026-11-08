@@ -1,8 +1,13 @@
-// 删除 / 回收站族的 model 工具：五个域各一条 `*_manager_remove`。
+// 删除 / 回收站族的 model 工具：**一条** `plugin_manager_remove`（五个域共用）。
 //
-// 为什么单开一族：此前模型**只能停用、不能删除** —— "把这条过时的记忆删掉"这类要求手里
+// 为什么要有这一族：此前模型**只能停用、不能删除** —— "把这条过时的记忆删掉"这类要求手里
 // 没有出口，模型会去调 `*_switch(enabled:false)` 然后回一句"已停用"，用户以为删了。面板上
 // 每个域都有删除，模型侧一条都没有。
+//
+// 为什么是**一条**而不是五个域各一条：五个域的动词、参数、回执骨架完全相同，只有名词与
+// id 形状不同 —— 分成五条就是同一段文字抄五遍（≈1.1k token/轮）。合成一条后省下 ≈800 token，
+// 代价是模型要多填一个 `domain`。
+// ⚠️ 代价只在**全开模式**兑现：出厂默认关着的工具，schema 一分不付。
 //
 // 三条纪律：
 //   · **删除一律进回收站**（可恢复），与面板同一条路 —— 回执如实说"可恢复"。
@@ -65,25 +70,34 @@ export interface RemoveToolDeps extends ToolDomainDeps {
   sceneRemove: (args: any) => Promise<any>
 }
 
-/** 三个动词共用的描述骨架。 */
-function removeDescription(noun: string): string {
-  return 'Delete one ' + noun + ' (to the trash), restore one, or list the trash. '
+/**
+ * 三个动词共用的描述骨架（跨域版）。
+ *
+ * 五个域共用这一段，所以这里**不点名任何一个域、也不点名任何一条工具** —— 域由
+ * `domain` 参数说，别的工具该不该点名按可见性在运行时分叉（见 `toolOrNeutral`）。
+ * 静态文案点名一条模型手里没有的工具就是把它往墙上推（插件的既定纪律）。
+ */
+function removeDescription(): string {
+  return 'Delete one item (to the trash), restore one, or list the trash. '
     + 'Deletes are recoverable; this tool never empties the trash. '
     + 'Deleting asks the user to confirm; listing the trash and restoring do not. '
-    + 'Blocked while the active scene is locked. Only on the user\'s instruction.'
+    + 'Blocked while the active scene is locked. '
+    + 'Only on the user\'s instruction.'
 }
 
 /** `action` 参数：三个动词 + 每个动词要哪个 `id`。 */
 const ACTION_DESC = 'trash = delete the item named by `id`; restore = put back a trash entry id (from list); list = list the trash (no `id`).'
 
-/** 删除只有全局一份（会话层没有可删的东西），四个域同一句话。 */
-const REMOVE_SCOPE_DESC = scopeGlobalOnlyDesc('one machine-wide copy', 'switch it off here instead')
 /**
- * 场景的变体：`REMOVE_SCOPE_DESC` 让模型「在本会话里把它关掉」，
- * 而场景根本没有「关掉」这个动作 —— `scene_manager_switch` 只有 enter / exit。照抄那一句
- * 会让模型去找一个不存在的开关，或者干脆回一句「做不到」。
+ * 删除只有全局一份（会话层没有可删的东西），五个域同一句话。
+ *
+ * 「改用开关停掉」那句只写通配形式：五个域里只有记忆 / 技能 / 人设有对应的开关，
+ * 场景没有「关掉」这个动作（退出是另一件事，见 `sceneExitNote`），预设根本没有开关。
  */
-const REMOVE_SCOPE_DESC_SCENE = scopeGlobalOnlyDesc('the scene record and archive are machine-wide', 'exit it here with scene_manager_switch (action=exit)')
+const REMOVE_SCOPE_DESC = scopeGlobalOnlyDesc(
+  'these items have one machine-wide copy',
+  'to stop one being used instead, switch it off with the matching *_manager_switch',
+)
 
 /**
  * 恢复 op 回传的**最终落盘名**。五个域把名字放在不同字段上：
@@ -107,14 +121,6 @@ function restoredName(r: any): string {
 }
 
 /**
- * 一条删除工具的 execute：三个动词的分派与回执。
- *
- * 会话层：删除是**全局**动作 —— 技能正文、人设 `.md`、场景档案、MCP 补丁
- * 提示词预设都只有一份，没有「本会话的副本」，所以这一格的口径就是「全局动作」。
- * 所以这里不写会话层，只在**这个对话真有该域覆盖**时补一句尾注：
- * 删完之后那条会话覆盖还在（读时忽略，对账才清），不说明的话用户会以为它跟着没了。
- */
-/**
  * 记忆库存在性探测：给「带斜杠的 id 传到别的域」那条错误用。
  *
  * 单独传进来而不是放进 `RemoveCfg`：五个域共用同一个实现，而它要读的是记忆域的 op。
@@ -122,6 +128,14 @@ function restoredName(r: any): string {
  */
 type MemoryIdProbe = (id: string) => Promise<boolean>
 
+/**
+ * 一条删除工具的 execute：三个动词的分派与回执。
+ *
+ * 会话层：删除是**全局**动作 —— 技能正文、人设 `.md`、场景档案、MCP 补丁
+ * 提示词预设都只有一份，没有「本会话的副本」，所以这一格的口径就是「全局动作」。
+ * 所以这里不写会话层，只在**这个对话真有该域覆盖**时补一句尾注：
+ * 删完之后那条会话覆盖还在（读时忽略，对账才清），不说明的话用户会以为它跟着没了。
+ */
 async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent: unknown, isMemoryId: MemoryIdProbe): Promise<string> {
   const action = String((args && args.action) || '')
   if (action !== 'trash' && action !== 'restore' && action !== 'list') {
@@ -162,9 +176,9 @@ async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent:
   // 只按形状（`a/b`）判会误伤 —— 场景名与技能名都没有禁止斜杠的校验，用户起的名字里
   // 完全可能出现。所以这里读一次记忆库确认存在；读不到就当不是，宁可少说一句。
   if (action === 'trash' && cfg.domain !== 'memory' && id.indexOf('/') > 0 && await isMemoryId(id)) {
-    throw new Error('"' + id + '" is a memory id (memory ids are <scene>/<name>); this tool handles ' + cfg.noun + 's.'
-      + toolOrNeutral(deps, agent, 'memory_manager_remove', ' Use `memory_manager_remove` with action=trash for it.',
-        ' Pass it to the memory manager instead — this one only handles ' + cfg.noun + 's.'))
+    // 五个域合进一条之后，这条错误只差一个 domain —— 说的是同一个工具，不必绕。
+    throw new Error('"' + id + '" is a memory id (memory ids are <scene>/<name>), but domain=' + cfg.domain
+      + ' handles ' + cfg.noun + 's. Call this tool again with domain=memory (action=trash) for it.')
   }
   const r: any = action === 'trash' ? await cfg.trash(args) : await cfg.restore(args)
   if (!r || r.ok === false) throw new Error((r && r.error) || (action === 'trash' ? 'failed to move it to the trash' : 'restore failed'))
@@ -172,7 +186,8 @@ async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent:
     // 永久删除是**刻意不给模型**的（不可恢复，且低频）—— 但这句话是给模型看的，
     // 说清「这里只到回收站」就够，不必把人推去面板。
     return 'OK: ' + cfg.label + ' "' + id + '" moved to the trash (recoverable; permanent deletion is not offered here)' +
-      (cfg.domain === undefined ? '' : globalActionNote(deps, agent, cfg.domain, cfg.label))
+      (cfg.domain === undefined ? '' : globalActionNote(deps, agent, cfg.domain, cfg.label)) +
+      sceneExitNote(deps, agent, cfg.domain)
   }
   // 恢复的回执要说**恢复成了什么**，而不是回收站条目 id：
   // `id` 是 `action=list` 给的那一串（记忆 `mv…`、技能 `<时间戳>-<uuid>`），模型看到它
@@ -182,7 +197,23 @@ async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent:
     (name === id ? '' : ' (trash entry ' + id + ')')
 }
 
-/** 注册删除类工具：技能 / 人设 / 场景三种对象各一个动词。 */
+/**
+ * 删掉场景之后的补充：场景删了**不等于离开了当前场景**。
+ *
+ * 退出是另一件事（`scene_manager_switch` action=exit），而那条工具出厂关着 ——
+ * 静态描述里点名它就是在指一条模型手里没有的工具，所以这句话按可见性分叉：
+ * 看得见就点名，看不见就退回中性说法（工具面的一致纪律，见 `toolOrNeutral`）。
+ *
+ * 只有场景域需要这一句：其余四个域删掉的就是「不再被使用」，没有「留在里面」这回事。
+ */
+function sceneExitNote(deps: ToolDomainDeps, agent: unknown, domain: string | undefined): string {
+  if (domain !== 'scene') return ''
+  return ' ' + toolOrNeutral(deps, agent, 'scene_manager_switch',
+    'You are still in it — leave it with scene_manager_switch (action=exit).',
+    'You are still in it — leaving it is a separate action, and the scene tools are off here.')
+}
+
+/** 注册删除类工具：五个域共用一条 `plugin_manager_remove`（按 `domain` 分派）。 */
 export function buildRemoveTools(deps: RemoveToolDeps): void {
   const { defineTool, register } = deps
   const mem = deps.memoryOps
@@ -320,64 +351,42 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
     },
   }
 
+  // 五个域的配置表：一条工具按 `domain` 取用哪一份。
+  const cfgs: Record<string, RemoveCfg> = {
+    memory: memoryCfg,
+    skill: skillCfg,
+    persona: subagentCfg,
+    preset: promptCfg,
+    scene: sceneCfg,
+  }
+
   register(defineTool({
-    name: 'memory_manager_remove',
-    description: removeDescription('memory'),
+    name: 'plugin_manager_remove',
+    description: removeDescription(),
     parameters: {
       action: { type: 'string', required: true, enum: ['trash', 'restore', 'list'], description: ACTION_DESC },
-      id: { type: 'string', description: 'For trash: the memory id `<scene>/<name>`; for restore: a trash entry id; omit for list.' },
+      domain: {
+        type: 'string', required: true, enum: ['memory', 'skill', 'persona', 'preset', 'scene'],
+        description: 'Which kind of item: memory | skill | persona | preset | scene. Their ids differ — '
+          + 'memory is `<scene>/<name>`, the others are a plain name (a preset uses its id).',
+      },
+      id: {
+        type: 'string',
+        description: 'For trash: that item\'s id (`<scene>/<name>` for memory, a name for skill/persona/scene, '
+          + 'the preset id for preset); for restore: a trash entry id from action=list for that domain; omit for list.',
+      },
       scope: { type: 'string', enum: ['session', 'global'], description: REMOVE_SCOPE_DESC },
+      root: { type: 'string', description: 'Source root the skill lives in — skills only. Default: whichever source holds that skill; only used by action=trash.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, memoryCfg, args, exec && exec.agent, isMemoryId) },
-  }))
-
-  register(defineTool({
-    name: 'skill_manager_remove',
-    description: removeDescription('skill'),
-    parameters: {
-      action: { type: 'string', required: true, enum: ['trash', 'restore', 'list'], description: ACTION_DESC },
-      id: { type: 'string', description: 'For trash: the skill name; for restore: a trash entry id; omit for list.' },
-      scope: { type: 'string', enum: ['session', 'global'], description: REMOVE_SCOPE_DESC },
-      root: { type: 'string', description: 'Source root the skill lives in. Default: whichever source holds that skill; only used by action=trash.' },
+    async execute(args: any, exec: any) {
+      const domain = String((args && args.domain) || '').trim()
+      const cfg = cfgs[domain]
+      if (cfg === undefined) {
+        throw new Error('missing argument: domain — one of ' + Object.keys(cfgs).join(', ')
+          + ' (which kind of item to trash, restore or list)')
+      }
+      return runRemove(deps, cfg, args, exec && exec.agent, isMemoryId)
     },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, skillCfg, args, exec && exec.agent, isMemoryId) },
-  }))
-
-  register(defineTool({
-    name: 'subagent_manager_remove',
-    description: removeDescription('persona'),
-    parameters: {
-      action: { type: 'string', required: true, enum: ['trash', 'restore', 'list'], description: ACTION_DESC },
-      id: { type: 'string', description: 'For trash: the persona name; for restore: a trash entry id; omit for list.' },
-      scope: { type: 'string', enum: ['session', 'global'], description: REMOVE_SCOPE_DESC },
-    },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, subagentCfg, args, exec && exec.agent, isMemoryId) },
-  }))
-
-  register(defineTool({
-    name: 'prompt_manager_remove',
-    description: removeDescription('AGENTS.md preset'),
-    parameters: {
-      action: { type: 'string', required: true, enum: ['trash', 'restore', 'list'], description: ACTION_DESC },
-      id: { type: 'string', description: 'For trash: the preset id; for restore: a trash entry id; omit for list.' },
-      scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('a preset writes the one global baseline', 'there is nothing per-conversation to delete') },
-    },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, promptCfg, args, exec && exec.agent, isMemoryId) },
-  }))
-
-  register(defineTool({
-    name: 'scene_manager_remove',
-    description: removeDescription('scene'),
-    parameters: {
-      action: { type: 'string', required: true, enum: ['trash', 'restore', 'list'], description: ACTION_DESC },
-      id: { type: 'string', description: 'For trash: the scene name; for restore: a trash entry id; omit for list.' },
-      scope: { type: 'string', enum: ['session', 'global'], description: REMOVE_SCOPE_DESC_SCENE },
-    },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(String(v)) },
-    async execute(args: any, exec: any) { return runRemove(deps, sceneCfg, args, exec && exec.agent, isMemoryId) },
   }))
 }

@@ -1,7 +1,7 @@
 // 控制面工具 `tool_manager_tools`：模型自己看得到哪些工具、能不能自己打开。
 //
-// 为什么要有它：插件出厂只发 6 条工具（`src/tools/table.ts` 的 `DEFAULT_HIDDEN_TOOLS`
-// 关掉 20 条）。场景那一族**四条全关**，而场景目录注入只列**当前已启用的**场景 ——
+// 为什么要有它：插件出厂只发 7 条工具（`src/tools/table.ts` 的 `DEFAULT_HIDDEN_TOOLS`
+// 关掉 16 条）。场景那一族**三条全关**，而场景目录注入只列**当前已启用的**场景 ——
 // 一个都没启用时整段不注入（`src/memories/constants.ts` 的 `SCENE_CATALOG_MAX_BYTES` 注释）。
 // 于是「用户说进入编程场景」这件事，模型既不知道有哪些场景，也没有开关工具：
 // 零信息 + 零手段，是死局。

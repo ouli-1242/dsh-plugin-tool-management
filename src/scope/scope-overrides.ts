@@ -48,6 +48,7 @@
 // 场景绑定的方案在**进入那一次**套到本对话（不是常驻的一层），退出时连场景里改的一起清掉。
 
 import type { SceneArchive } from '../memories/archive.js'
+import { translateLegacyToolName } from '../legacy-tool-names.js'
 import { normalizePresetId } from '../prompts/preset-id.js'
 import type { IntentState } from './intent.js'
 
@@ -259,13 +260,19 @@ export function normalizeScopeOverrides(raw: unknown): ScopeOverrides {
 /**
  * 夹一份工具名名单。与 `normalizeFlagMap` 不同，**空数组是有效值**（"一个都不关"），
  * 只有"不是数组"才返回 undefined（这一层没话说）。
+ *
+ * 顺手做**旧名 → 新名**的翻译（`translateLegacyToolName`）：这份名单是整份工具表的快照，
+ * 盘上可能留着改名前的名字 —— 而这一层是**整份替换**全局名单的，不翻译的话，
+ * 升级后老会话里的那份旧名单会把已经并成一条的新工具漏出去（新的那条照旧每轮发）。
+ * 翻译在这一层做（而不是只在全局侧车那侧）是因为会话侧车与场景快照各有各的盘。
  */
 function normalizeToolNameList(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const out: string[] = []
   for (const item of raw) {
     if (!validKey(item)) continue
-    if (out.indexOf(item) < 0) out.push(item)
+    const name = translateLegacyToolName(String(item))
+    if (out.indexOf(name) < 0) out.push(name)
   }
   return out
 }

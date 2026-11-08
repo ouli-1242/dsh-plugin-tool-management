@@ -4,14 +4,14 @@
 // 根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；面板
 // （118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着二十条**（整张表 27 条，每轮实发 7 条）—— 名单、判据与代价见下面
+// 出厂**默认就关着十六条**（整张表 23 条，每轮实发 7 条）—— 名单、判据与代价见下面
 // `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // 实测数字（口径：宿主 `recordToolSize` 的 `ceil(JSON.stringify(header.tools).length / 4) + 4`，
 // 即**字符数 / 4**；`header.tools` 里只有 name / description / parameters —— 官方的
 // `projectToolSchema` 不投影 output / execute，那几个不进请求。界面「模型工具表」那行
 // 合计与逐条 ≈tok 就是这份）：
-//   · 二十条隐藏 ≈**4,883 tok**，默认可见那七条 ≈**1,701 tok**，全开 ≈**6,579 tok**。
+//   · 十六条隐藏 ≈**4,085 tok**，默认可见那七条 ≈**1,701 tok**，全开 ≈**5,781 tok**。
 //   · A/B 实测（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
 //     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
 //     所以它们是**净节省的下界**，不是"省了多少"的上界。**那对数量的是当天那份描述** ——
@@ -41,6 +41,7 @@
 //   · 注入通道与两个目录：目录里「用 `skill_manager_list` 查」这类句子在工具关掉后就是假的。
 
 import { INJECT_DOMAIN_KEYS, domainOfTool, type InjectDomainKey } from '../context-inject.js'
+import { LEGACY_TOOL_NAME_MAP } from '../legacy-tool-names.js'
 import { CONTROL_TOOL_NAME } from './deps.js'
 
 /** 一份命名方案：名字 + 那一组"不发给模型"的工具名（与 `hidden` 同口径，不是"开着哪些"）。 */
@@ -62,18 +63,21 @@ export interface ToolTableSettings {
 }
 
 /**
- * 出厂默认关掉的**二十条**：整张表 27 条，关掉后**每轮实发 7 条**。
+ * 出厂默认关掉的**十六条**：整张表 23 条，关掉后**每轮实发 7 条**。
  *
  * 判据只有一条：**这些信息或动作常态下由注入段与面板承担，
- * 平时也用不到模型自己伸手**。三组：
- *   · **写侧五条** —— 三个 `*_save`（MCP / 技能 / 人设：配置本体在面板上改）+ 提示词两条
- *     （这一族只有两条，而当前生效的那份本来就在 `Current prompt` 注入段里）。
- *   · **读侧三条** —— 两个 `*_list`（MCP / 技能）+ `memory_manager_read`。会话开头注入的那几段
- *     目录已经写了当前有什么，模型不必每轮再带一份查询工具。
- *   · **场景三条 + 开关三条** —— 场景一族（建 / 勾档案 / 进入退出）与 `skill` / `memory` /
- *     `subagent` 三个 `_switch`（用户：「平时使用也很少」）。启停在面板上都有同款，注入段也
- *     写着当前开着哪些。**`mcp_manager_switch` 刻意留着**：它是"这台先给我关了"这条最常用的
- *     临时动作的唯一入口，也是 MCP 域留下来的一条腿。
+ * 平时也用不到模型自己伸手**。分五组：
+ *   · **写侧五条** —— 三个 `*_save`（MCP / 技能 / 人设：配置本体在面板上改）+
+ *     `prompt_manager_apply`（当前生效的那份本来就在 `Current prompt` 注入段里）+
+ *     `plugin_manager_remove`（删除进回收站可恢复，但常态下由面板承担）。
+ *   · **读侧六条** —— `mcp_manager_list` / `skill_manager_list` / `prompt_manager_list` /
+ *     `scene_manager_list` 四个清单 + `memory_manager_read` + `memory_manager_search`。
+ *     会话开头注入的那几段目录已经写了当前有什么，模型不必每轮再带一份查询工具。
+ *   · **切场一条** —— `scene_manager_switch`：进入 / 退出场景。
+ *   · **开关三条** —— `skill` / `memory` / `subagent` 三个 `_switch`（用户：「平时使用也很少」）。
+ *     启停在面板上都有同款，注入段也写着当前开着哪些。**`mcp_manager_switch` 刻意留着**：
+ *     它是"这台先给我关了"这条最常用的临时动作的唯一入口，也是 MCP 域留下来的一条腿。
+ *   · **建档一条** —— `scene_manager_save`：新建 / 改写场景剧本，配置本体在面板上改。
  *
  * 判据与上面那条"注入段承担"不同 —— 人设域**没有官方载体兜底**：MCP / 技能 / 记忆三个域的
  * 目录即便被压制型预设压掉，也各自还有一条常驻发现路径，而人设目录一旦不注入，模型手里就
@@ -81,7 +85,7 @@ export interface ToolTableSettings {
  * 它只有 42 tok，买的是把"注入段是唯一发现路径"这个单点消掉。
  *
  * 技能 / 人设"是常问的，但它**低频于"读现状 + 拨开关 + 建改定义"**那批，而且面板每个域都有
- * 删除入口 —— 默认关、要用时在「兼容」页勾上（与另外十四条同一条纪律，不额外付 token）。
+ * 删除入口 —— 默认关、要用时在「兼容」页勾上（与另外十五条同一条纪律，不额外付 token）。
  *
  * 关掉的这些**模型自己也能打开**：`tool_manager_tools`（每轮常驻的那一条）能按对话
  * 打开任意一条被关掉的工具，列清单时给出名字、一句话用途与 ≈token。这条工具不在
@@ -103,26 +107,22 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'scene_manager_list',
   'scene_manager_switch',
   'scene_manager_save',
-  'scene_manager_remove',
   'memory_manager_read',
   'memory_manager_search',
   'memory_manager_switch',
-  'memory_manager_remove',
   'mcp_manager_list',
   'mcp_manager_save',
   'skill_manager_list',
   'skill_manager_switch',
   'skill_manager_save',
-  'skill_manager_remove',
   'subagent_manager_switch',
   'subagent_manager_save',
-  'subagent_manager_remove',
   'prompt_manager_list',
   'prompt_manager_apply',
-  'prompt_manager_remove',
+  'plugin_manager_remove',
 ])
 
-/** 出厂默认那份设置：二十条不发（名单与理由见上面），方案清单是空的。 */
+/** 出厂默认那份设置：十六条不发（名单与理由见上面），方案清单是空的。 */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */
@@ -206,9 +206,9 @@ export function classifyToolTableSettings(raw: unknown): { ok: true; value: Tool
 }
 
 /**
- * 旧工具名 → 新工具名迁移表（两轮改名累积）。
+ * 旧工具名 → 新工具名迁移表（几轮改名累积）。
  *
- * 为什么必须有它：`tool-table.json` 存的是**用户点名关掉的那些工具**。五族并成 17 条
+ * 为什么必须有它：`tool-table.json` 存的是**用户点名关掉的那些工具**。几族并成 17 条
  * 之后，旧名在新表里根本不存在 —— 不迁移的话，用户"关掉了某条"的意图会在新名字上**静默失效**
  * （那条工具照旧每轮发出去，而他以为早就关了）。
  *
@@ -217,26 +217,11 @@ export function classifyToolTableSettings(raw: unknown): { ok: true; value: Tool
  *
  * 只翻译**认识的名字**，其余原样保留：我们无法区分"用户的旧名"与"别的插件的工具名"，
  * 误删别人的条目比留着一条死名更糟。
+ *
+ * 表本身放在根目录那一叶（`src/legacy-tool-names.ts`）：它还有两个使用方在更低的层
+ * （会话侧车、场景快照），那些层不能反向引本文件。
  */
-export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
-  // 记忆族：只把 write + update 并成一条 `save`，名字本身没动 —— 所以只有这两条要迁移。
-  // （开发中途曾把整族改叫 `scene_memory_manager_*`，但那个名字**从未发布**，用户侧
-  // 不可能有它，因此不存在需要从它迁回来的数据。）
-  memory_manager_write: 'memory_manager_save',
-  memory_manager_update: 'memory_manager_save',
-  mcp_manager_set_enabled: 'mcp_manager_switch',
-  mcp_manager_restart: 'mcp_manager_switch',
-  mcp_manager_add: 'mcp_manager_save',
-  skill_manager_create: 'skill_manager_save',
-  subagent_manager_create: 'subagent_manager_save',
-  subagent_manager_update: 'subagent_manager_save',
-  // 「拨一个开关」六域同形 —— `_set_enabled` → `_switch`（与 `mcp_manager_set_enabled`
-  // → `mcp_manager_switch` 同一条路）。**改的只是名字，参数不动**（仍是 `enabled` 布尔），
-  // 所以这里是一对一翻译、不涉及语义合并。
-  memory_manager_set_enabled: 'memory_manager_switch',
-  skill_manager_set_enabled: 'skill_manager_switch',
-  subagent_manager_set_enabled: 'subagent_manager_switch',
-})
+export { LEGACY_TOOL_NAME_MAP } from '../legacy-tool-names.js'
 
 /**
  * 把一份设置里的旧工具名翻译成新名（**幂等**：已经全是新名时 `changed` 为 false、原样返回）。

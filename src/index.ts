@@ -5210,7 +5210,7 @@ export default {
       },
       failures: subagentFailures,
     })
-    // 删除 / 回收站族（tools/remove.ts）：五个域各一条 `*_manager_remove`。
+    // 删除 / 回收站族（tools/remove.ts）：**一条** `plugin_manager_remove`（五个域共用）。
     // 此前模型只能停用、不能删除。删除一律进回收站（可恢复）；**不做永久删除**（低频且
     // 不可恢复，留给面板）。`sceneRemove` 传 handlers 里那份（`withAgentsMdSync` 包过），
     // 与 `sceneActivate` 同一条纪律：直调 `memoriesService.ops` 会静默漏掉 AGENTS.md 那一步。
@@ -5227,7 +5227,7 @@ export default {
     })
     // 控制面工具（tools/control.ts）：模型自己看得到哪些工具、能不能自己打开。
     //
-    // 为什么必须常驻：出厂只发 6 条，场景那一族四条全关，而场景目录注入只列
+    // 为什么必须常驻：出厂只发 7 条，场景那一族三条全关，而场景目录注入只列
     // **当前已启用的**场景 —— 一个都没启用时整段不注入。于是「用户说进入编程场景」
     // 这件事模型既不知道有哪些场景、也没有开关工具。其余能力一律按需调用，
     // 这条是唯一每轮都在的例外。
@@ -5298,11 +5298,10 @@ export default {
         // 删除与「应用提示词」原先只有描述里的 consent 句。它们动的都是磁盘上那一份：
         // 删除进回收站可恢复，应用改写的是全局 AGENTS.md 基线 —— 与上面几条同一档，
         // 门禁不该比"往 hub 里写一个技能文件"更松。
-        memory_manager_remove: '「删除记忆」',
-        skill_manager_remove: '「删除技能」',
-        subagent_manager_remove: '「删除人设」',
-        scene_manager_remove: '「删除场景」',
-        prompt_manager_remove: '「删除提示词预设」',
+        // 五个域合进一条 `plugin_manager_remove` 之后，标签也只能是一条：卡上真正的
+        // 标题由 `confirm-gate.ts` 按 `domain` 生成（"删除记忆「…」"），这里的标签只当
+        // 门禁标记与 bypass 日志用。
+        plugin_manager_remove: '「删除条目」',
         prompt_manager_apply: '「应用提示词预设」',
         // 四条 switch 只在**机器级**写入时问一次（判据在 `confirm-gate.ts`）。
         // 默认写本会话，爆炸半径只有一个对话 —— 给默认路径挂卡是纯摩擦。
