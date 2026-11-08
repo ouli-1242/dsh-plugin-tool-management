@@ -4,6 +4,7 @@
 // 参数与 output schema 用 as const 保留字面量类型，defineTool 才能推断出参数表。
 import { CONTINUABLE_MARK } from './service.js'
 import type { PersonaDoc, SubagentService, ToolFilterDecision } from './service.js'
+import { listLimit, moreNotShown } from '../tools/deps.js'
 
 /** 把一段文本包成工具回执要的内容块数组（各工具域共用这一份形状）。 */
 export function text(v: string) {
@@ -110,6 +111,7 @@ export function defineSubagentManagerListTool(subagents: {
     description: 'List personas (pre-configured subagent profiles) with descriptions and the file holding each body (read it with your file tools). The "Current subagents" reminder carries a view of the same catalog; call this for the always-current full list, or all=true to include disabled personas and ones outside the active scene.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled personas and ones outside the active scene (default false). Listed ≠ delegable: `run` still refuses those.' },
+      limit: { type: 'number', description: 'Max entries (default 50, max 100).' },
     } as const,
     output: {
       schema: { type: 'string' } as const,
@@ -144,7 +146,10 @@ export function defineSubagentManagerListTool(subagents: {
       // 放在行尾而不是表头给一个目录模板：模型拼 `<dir>/<name>.md` 要多一步推理，路径里
       // 有空格或非 ASCII 目录名时还可能拼错；每条一个完整路径是零歧义，代价只在调用时付
       // （不是每轮的 schema 成本）。
-      const lines = allowed.map((p) => '- ' + p.name + ' — ' + (p.description || '(no description)') +
+      // 返回体也要有上限：返回值进上下文，工具表只管 schema —— 这一笔它管不着。
+      const limit = listLimit((args as { limit?: unknown } | null)?.limit)
+      const visible = allowed.slice(0, limit)
+      const lines = visible.map((p) => '- ' + p.name + ' — ' + (p.description || '(no description)') +
         (p.continuable === true ? CONTINUABLE_MARK : '') +
         (includeUnavailable ? (!decideInSession(p, flag, boundSet) ? ' (disabled — turn it on first)' : '') : '') +
         (p.path ? ' · ' + p.path : ''))
@@ -167,7 +172,8 @@ export function defineSubagentManagerListTool(subagents: {
       const header = 'persona subagents (' + allowed.length + ')' +
         (hiddenCount > 0 ? ' (' + hiddenCount + ' more are disabled or outside the current scene; pass all=true to see them)' : '') +
         (offHere > 0 ? ' (' + offHere + ' switched off here only)' : '') + ':\n'
-      return header + (lines.join('\n') || '(none)') + (reason ? '\nnote: ' + reason : '') + notice
+      return header + (lines.join('\n') || '(none)') + moreNotShown(allowed.length, visible.length)
+        + (reason ? '\nnote: ' + reason : '') + notice
     },
   }
 }

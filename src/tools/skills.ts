@@ -7,7 +7,7 @@
 
 import { toKebab } from '../skills/core.js'
 import { OFFICIAL_SOURCE_KEY, officeKitApplies, officialOfficeRuntimeSection } from '../skills/official.js'
-import { effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, locateSkillRoot, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, locateSkillRoot, moreNotShown, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
 /** 技能工具域要的宿主能力：技能 op 表与来源解析。 */
 export interface SkillToolDeps extends ToolDomainDeps {
@@ -29,6 +29,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
     description: 'List skills with enabled state, effective/shadowed status and source file path. The "Current skills" reminder carries callable skills and summaries only; use this for entries that are off, for source paths, and to see which source wins a name collision — a copy marked "shadowed-by:<root>" stays inactive even if enabled, "preferred" marks the winner. Defaults to enabled only; all=true for every entry.',
     parameters: {
       all: { type: 'boolean', description: 'Include disabled and shadowed entries (default false).' },
+      limit: { type: 'number', description: 'Max entries (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -116,6 +117,9 @@ export function buildSkillTools(deps: SkillToolDeps): void {
         : ' (this scope\'s view: project roots come from its own cwd' +
           (scoped.scope?.scene === undefined ? '' : ', scene "' + scoped.scope.scene + '"') +
           (overrides === undefined ? '' : ', ' + Object.keys(overrides).length + ' switch(es) overridden here') + ')'
+      // 返回体也要有上限：返回值进上下文，工具表只管 schema —— 这一笔它管不着。
+      const limit = listLimit(args && args.limit)
+      const visible = shown.slice(0, limit)
       const header = 'Skills: ' + (showAll
         ? rows.length + ' entries'
         : shown.length + ' enabled of ' + rows.length + ' entries') +
@@ -126,7 +130,8 @@ export function buildSkillTools(deps: SkillToolDeps): void {
       // 「技能目录」注入域会在开关打开时兜底（见上面的注入通道）；两者都没有时模型看到的
       // 只是这份名单 —— 说清边界，别让它以为上下文里已经有技能正文（正文用路径读）。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
-      return header + (shown.map((row) => row.text).join('\n') || '(none)') + notice
+      return header + (visible.map((row) => row.text).join('\n') || '(none)')
+        + moreNotShown(shown.length, visible.length) + notice
     },
   }))
   // 一次拿到技能正文。此前读正文要两步：`skill_manager_list` 拿路径 → 自己再去读那个文件。

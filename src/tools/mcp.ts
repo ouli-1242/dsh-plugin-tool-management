@@ -27,7 +27,15 @@
 // `resolveMaskedKv({}, 旧值)` 把整份 headers / env 静默清空、连 warning 都不给。
 
 import { DEFAULT_MCP_NOTE_MAX_LENGTH, normalizeMcpNote } from '../mcp/state-section.js'
-import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, text, type ToolDomainDeps } from './deps.js'
+
+/**
+ * 一台服务器最多列多少个工具名（`mcp_manager_list` 的 `tools=true`）。
+ *
+ * 为什么要有上限：一次列十几台 × 二十来个工具 ≈ 3k token，而返回值进上下文、
+ * 工具表管不着这一笔。超出的部分用「(+N more)」点名，模型知道还有就行。
+ */
+const MCP_TOOL_NAMES_MAX = 40
+import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, text, type ToolDomainDeps } from './deps.js'
 
 /** MCP 工具域要的宿主能力：列表视图、工具预览、逐工具开关与备注。 */
 export interface McpToolDeps extends ToolDomainDeps {
@@ -137,6 +145,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
     parameters: {
       all: { type: 'boolean', description: 'Include disabled servers (default false).' },
       tools: { type: 'boolean', description: 'Also list each server\'s tool names, marking the switched-off ones (default false).' },
+      limit: { type: 'number', description: 'Max servers (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -161,7 +170,10 @@ export function buildMcpTools(deps: McpToolDeps): void {
         }
       }
       const isOff = (x: any): boolean => x.disabled === true || offHere.has(String(x.serverName))
-      const shown = showAll ? all : all.filter((x: any) => !isOff(x))
+      const allShown = showAll ? all : all.filter((x: any) => !isOff(x))
+      // 返回体也要有上限：返回值进上下文，工具表只管 schema —— 这一笔它管不着。
+      const limit = listLimit(args && args.limit)
+      const shown = allShown.slice(0, limit)
       const lines: string[] = []
       for (const x of shown) {
         const note = normalizeMcpNote(x.notes, DEFAULT_MCP_NOTE_MAX_LENGTH)
@@ -215,7 +227,10 @@ export function buildMcpTools(deps: McpToolDeps): void {
             (missing.length ? ' — not filled in yet: ' + missing.join(', ') : ''))
           continue
         }
-        lines.push('    tools: ' + items.map((it: any) => {
+        // 每台的工具名清单也要有上限：十几台 × 二十来个工具 ≈ 一次 3k token，
+        // 而这一笔工具表管不着（工具表只管 schema）。超出的部分点名说清还剩多少。
+        const named = items.slice(0, MCP_TOOL_NAMES_MAX)
+        lines.push('    tools: ' + named.map((it: any) => {
           // 服务器在这一层整个不可用时，逐工具不再重复标注：上面那行已经说了它不可用。
           // 停用表读不出来时同理 —— 那一档执行侧全拒，(on here) 会与上面那句打架。
           const here = offHere.has(String(x.serverName)) || (t && t.disabledState === 'unknown')
@@ -224,7 +239,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
           const off = here === undefined ? it.enabled === false : !here
           if (!off) return String(it.name) + (it.enabled === false ? ' (on here)' : '')
           return String(it.name) + (it.enabled === false ? ' (off)' : ' (off here)')
-        }).join(', '))
+        }).join(', ') + (items.length > named.length ? ' (+' + (items.length - named.length) + ' more)' : ''))
       }
       // 会话层（`mcp_manager_list` 标注本会话可见性）：本会话停用的服务器
       // 与全局停用**同形**（默认不列、all=true 标注），但两者的含义完全不同 —— 前者换个对话
@@ -235,15 +250,15 @@ export function buildMcpTools(deps: McpToolDeps): void {
           [...offHere].join(', ') + ') — the connection is still up, and conversations outside this scope keep them.\n'
       const header = 'MCP servers: ' + (showAll
         ? all.length + ' configured'
-        : shown.length + ' enabled of ' + all.length + ' configured' +
-          (shown.length === all.length ? '' : ' (pass all=true for every configured server)')) +
+        : allShown.length + ' enabled of ' + all.length + ' configured' +
+          (allShown.length === all.length ? '' : ' (pass all=true for every configured server)')) +
         (sessionLine === '' ? '\n' : sessionLine)
       // 注入边界：压制型预设（persona complete / 关闭运行时上下文，如极简）下本插件
       // 默认不注入 —— 模型只有 mcp__* 的工具名与参数，没有服务级信息。不说明的话，
       // 模型会把「能调用这些工具」当成「已经知道有哪些 server、用户给它们写了什么备注」。
       // 提示本身不点名任何工具，所以挂在哪个发现型工具上都不会出现循环指引。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
-      return header + (lines.join('\n') || '(none)') + notice
+      return header + (lines.join('\n') || '(none)') + moreNotShown(allShown.length, shown.length) + notice
     },
   }))
   register(defineTool({

@@ -20,7 +20,7 @@
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
 import { GLOBAL_SCENE, SHARED_GROUP } from '../memories/constants.js'
-import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 
 /** 记忆工具域要的宿主能力：记忆 op 表与场景记录。 */
 export interface MemoryToolDeps extends ToolDomainDeps {
@@ -43,6 +43,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 显式映射一次 —— 改 op 的字段名要动界面，那不是这一条能顺手做的事。
       scene: { type: 'string', description: 'Optional scene filter; `global` is the always-on scene.' },
       all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
+      limit: { type: 'number', description: 'Max entries (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -79,7 +80,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const rows: Array<{ x: any; injects: boolean; label: string }> =
         (r.rules || []).map((x: any) => ({ x, ...stateOf(x) }))
       const shown = showAll ? rows : rows.filter((row) => row.injects)
-      const lines = shown.map(({ x, label }) => (
+      // 返回体也要有上限：返回值进上下文，而工具表只管 schema —— 这一笔它管不着。
+      const limit = listLimit(args && args.limit)
+      const visible = shown.slice(0, limit)
+      const lines = visible.map(({ x, label }) => (
         '- ' + x.id + ' [' + (x.group || 'no scene') + '] ' + label +
         // 形态与附件：此前不报，模型分不清哪条是 bundle、更不知道它带了几个附件
         // （`rules-list` 早就把 `form` 与 bundle 的附件摘要给了出来，只是这里没渲染）。
@@ -113,7 +117,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 注入边界：压制型预设（persona complete / 关闭运行时上下文）下本插件默认不注入，
       // 此时列出的记忆**不在**模型上下文里。必须说出来，否则模型会假设自己已经看到正文。
       const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
-      return header + (lines.join('\n') || '(none)') + notice
+      return header + (lines.join('\n') || '(none)') + moreNotShown(shown.length, visible.length) + notice
     },
   }))
   register(defineTool({

@@ -132,6 +132,35 @@ export function toolAccessSentence(deps: ToolDomainDeps, fixer: string, agent: u
   return fallback
 }
 
+/** 列表类工具一次默认返回多少条。 */
+export const LIST_LIMIT_DEFAULT = 50
+
+/** 列表类工具一次最多返回多少条。 */
+export const LIST_LIMIT_MAX = 100
+
+/**
+ * 列表类工具的 `limit` 参数归一：夹到 [1, {@link LIST_LIMIT_MAX}]，缺省给默认值。
+ *
+ * 为什么要有上限：返回值进上下文，而**工具表管不着这一笔**（工具表只管 schema）。
+ * 模型爱「先全列出来看看」，一次就是几千 token —— 而它省下的那点（不用再调一次）
+ * 远不抵。`memory_manager_search` 早就带这个上限了，list 那几条没有 —— 同一族里
+ * 只有一条有限，不一致。
+ */
+export function listLimit(raw: unknown): number {
+  const n = Math.floor(Number(raw))
+  if (!Number.isFinite(n) || n <= 0) return LIST_LIMIT_DEFAULT
+  return Math.min(n, LIST_LIMIT_MAX)
+}
+
+/**
+ * 「还有 N 条没列」那句：超限时必须说，否则模型会以为那就是全部。
+ */
+export function moreNotShown(total: number, shown: number): string {
+  return total > shown
+    ? '\n' + (total - shown) + ' more not shown; pass a higher limit or narrow the filter.'
+    : ''
+}
+
 /** `locateSkillRoot` 的结论。 */
 export interface SkillRootLookup {
   /** `skill-state` 探测成功了吗。false = 探不到，调用方应退回旧默认、别在这里编结论。 */
