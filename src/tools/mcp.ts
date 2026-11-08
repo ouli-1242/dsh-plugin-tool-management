@@ -187,6 +187,10 @@ export function buildMcpTools(deps: McpToolDeps): void {
         lines.push('server:' + x.serverName + ' | level:' + x.level + ' | ' + state +
           (x.live ? ' | loader:' + (x.live.enabled ? 'on' : 'off') + (x.live.phase ? ':' + x.live.phase : '') : '') +
           (typeof usableTools === 'number' ? ' | tools:' + usableTools : '') +
+          // **还缺哪几把钥匙**：这台声明了环境变量 / 请求头但值是空的（只有键名）。
+          // MCP 认证失败最常见的原因就是这个，而模型看不到界面上的空框。
+          (Array.isArray(x.missingEnv) && x.missingEnv.length ? ' | missing-env:' + x.missingEnv.join(',') : '') +
+          (Array.isArray(x.missingHeaders) && x.missingHeaders.length ? ' | missing-header:' + x.missingHeaders.join(',') : '') +
           (note ? ' | user-hint:' + note : ''))
         if (!showTools) continue
         // 工具名单只在要的时候才去问：`mcpm-tools` 要读 schemas() + 停用表 + 「上次见过」缓存，
@@ -201,7 +205,14 @@ export function buildMcpTools(deps: McpToolDeps): void {
         }
         const items: any[] = t && t.ok !== false ? (t.tools || []) : []
         if (!items.length) {
-          lines.push('    ' + (x.disabled ? '(tools not recorded: server is off)' : '(no tools recorded)'))
+          // 「一个工具都没有」最常见的原因就是**钥匙没填**：声明了环境变量而值是空的。
+          // 不说清的话模型只能报「这台没有工具」，用户也不知道该去填哪一格。
+          const missing = [
+            ...(Array.isArray(x.missingEnv) ? x.missingEnv.map((k: string) => 'env ' + k) : []),
+            ...(Array.isArray(x.missingHeaders) ? x.missingHeaders.map((k: string) => 'header ' + k) : []),
+          ]
+          lines.push('    ' + (x.disabled ? '(tools not recorded: server is off)' : '(no tools recorded)') +
+            (missing.length ? ' — not filled in yet: ' + missing.join(', ') : ''))
           continue
         }
         lines.push('    tools: ' + items.map((it: any) => {

@@ -74,6 +74,28 @@ export function maskSecretValue(value: unknown): string {
   return MASK_PLACEHOLDER
 }
 
+/**
+ * 一张 kv 里**值为空**的键名（只给键名，永远不给值）。
+ *
+ * 为什么需要它：MCP 服务器认证失败最常见的原因就是「配置里声明了环境变量、值却是空的」。
+ * 键名在补丁里本来就有（列表视图打码值、保留键名），但「哪些还没填」没人算 ——
+ * 模型看不见，界面上也只是一个个空框。
+ *
+ * `$VAR` 与 `!!js` 是**间接引用**（值在运行时才解析），不算缺 —— 与 `maskSecretValue`
+ * 同一口径：这两形态不是密钥本身。
+ */
+export function missingSecretKeys(map: Record<string, string> | null | undefined): string[] {
+  if (!map || typeof map !== 'object') return []
+  const out: string[] = []
+  for (const [key, value] of Object.entries(map)) {
+    const text = String(value == null ? '' : value)
+    if (text.trim() === '') { out.push(key); continue }
+    if (text.startsWith('$')) continue
+    if (/^!!js\s/.test(text)) continue
+  }
+  return out
+}
+
 /** `maskUrlQuery` 写进 URL 各段的哨兵（userinfo / 查询串 / 片段共用同一个字面值）。 */
 const URL_REDACTED_QUERY = '<redacted>'
 

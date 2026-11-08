@@ -40,7 +40,7 @@ import {
   appendBlock, buildDisableBlock, buildInsertBlock, insertEntryIds, parseRows, removeEntryAll, removeMarked,
   spliceRanges, splitLines, type ManagedRow,
 } from './patch-yaml.js'
-import { describeMaskedOutcome, maskSecretValue, maskUrlQuery, maskedKeysIn, resolveMaskedKv, resolveMaskedUrl } from './secret-guard.js'
+import { describeMaskedOutcome, maskSecretValue, maskUrlQuery, maskedKeysIn, missingSecretKeys, resolveMaskedKv, resolveMaskedUrl } from './secret-guard.js'
 import { clearMcpRestartMarker, writeMcpRestartMarker } from './restart-marker.js'
 
 /** 本文件需要的外部能力（全部显式传入，不再靠闭包捕获）。 */
@@ -740,6 +740,13 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
         // 由 maskSecretValue 原样保留；编辑弹窗里的打码值由 resolveMaskedKv 从旧配置回填。
         view.headers = maskValueMap(row.headers)
         view.env = maskValueMap(row.env)
+        // **还缺哪几把钥匙**（只有键名）：MCP 认证失败最常见的原因就是「声明了环境变量、
+        // 值却是空的」。键名在补丁里本来就有，但没人算过「哪些还没填」—— 模型看不见，
+        // 界面上也只是空框。这一栏从**未打码**的那份算（值不出这一层）。
+        const missingEnv = missingSecretKeys(row.env)
+        const missingHeaders = missingSecretKeys(row.headers)
+        if (missingEnv.length) view.missingEnv = missingEnv
+        if (missingHeaders.length) view.missingHeaders = missingHeaders
       }
       return view
     })
