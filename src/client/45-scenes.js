@@ -388,6 +388,26 @@
             }
             saveScene(name, isEdit)
           }
+          /**
+           * 「照现在的样子存」：档案四组由**当前生效的状态**算出来，不由界面逐项勾。
+           *
+           * 与模型那条路（`scene_manager_save` 的 capture 参数）同一个 op（`scene-capture`）：
+           * 服务端建场景、采集、存档案三步在一次调用里做完，采集失败时**不写档案**。
+           *
+           * 只在新建态给：编辑态是用户正在逐项改的档案，一键覆盖等于把他改的东西扔掉。
+           */
+          function submitSceneCapture() {
+            if (!modal || modal.type !== 'scene-editor') return
+            var name = String(sceneForm.name || '').trim()
+            if (!isValidSceneSegment(name)) { setSceneForm(Object.assign({}, sceneForm, { error: t('error.rules.invalidGroup') })); return }
+            // 撞名同样要问：`rules-create-scene` 是幂等 upsert，撞名会**覆盖**那个场景的
+            // 档案 —— 那是整份替换，比普通新建危险得多。
+            var taken = {}
+            ;(data.scenes || []).forEach(function (s) { taken[String(s.name)] = true })
+            var finalName = uniqueName(name, taken)
+            if (finalName !== name) { setSceneDupAsk({ name: name, finalName: finalName, capture: true }); return }
+            captureScene(name)
+          }
           /** 真正落盘那一步（名字已定）。`name` 来自 `submitSceneEditor` 或确认弹窗。 */
           function saveScene(name, isEdit) {
             if (!modal || modal.type !== 'scene-editor') return
@@ -430,6 +450,32 @@
                 setBusy(false)
                 setModal(Object.assign({}, modal, { name: name, error: errMsg(e) }))
               })
+            }).catch(function (e) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: errMsg(e) })) })
+          }
+          /**
+           * 「照现在的样子存」的落盘那一步（名字已定）。
+           *
+           * 服务端一次做完建场景 / 采集 / 存档案；采集失败时它**不写档案**（宁可留一个
+           * 空场景，也不要写一份少了一半的档案 —— 那份档案进场景时会关掉一半东西）。
+           * 失败时留在编辑器里如实报错，主按钮不变，可以改个名字重试。
+           */
+          function captureScene(name) {
+            if (!modal || modal.type !== 'scene-editor') return
+            var description = String(sceneForm.description || '').trim()
+            setBusy(true)
+            apiCall('scene-capture', { name: name, description: description }).then(function (res) {
+              setBusy(false)
+              if (!(res && res.ok)) {
+                setSceneForm(Object.assign({}, sceneForm, { error: translateError(t, res) }))
+                return
+              }
+              setModal(null)
+              var text = t('done.created', { name: name })
+              // 采集到、但存的时候已经失效的条目：如实报（与服务端那份一致）。
+              if (res.stale && res.stale.length) text += ' · ' + t('memory.archive.stale', { items: res.stale.join('、') })
+              setResult({ ok: true, text: text })
+              refresh(true)
+              syncScopeBar()
             }).catch(function (e) { setBusy(false); setSceneForm(Object.assign({}, sceneForm, { error: errMsg(e) })) })
           }
           function finishSceneEditor(name, isEdit, sceneRes, archiveRes, memRes) {
@@ -1570,6 +1616,12 @@
                   memoriesGroup())),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                // 「照现在的样子存」只在新建态：编辑态是用户正在逐项改的档案，
+                // 一键覆盖等于把他改的东西扔掉。
+                !isEdit ? React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-secondary', title: t('scenes.capture.hint'),
+                  disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitSceneCapture,
+                }, t('scenes.capture.btn')) : null,
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || !String(sceneForm.name || '').trim(), onClick: submitSceneEditor }, isEdit ? t('memory.archive.save') : t('memory.btn.create'))))
             var edit = modal.drill ? mcpEditNode() : null
             return edit ? React.createElement(React.Fragment, { key: 'sedit-wrap' }, main, edit) : main
@@ -2307,7 +2359,11 @@
               name: sceneDupAsk.name, finalName: sceneDupAsk.finalName, action: 'create',
               busy: busy,
               onCancel: function () { setSceneDupAsk(null) },
-              onConfirm: function () { setSceneDupAsk(null); saveScene(sceneDupAsk.finalName, false) },
+              onConfirm: function () {
+                setSceneDupAsk(null)
+                if (sceneDupAsk.capture) captureScene(sceneDupAsk.finalName)
+                else saveScene(sceneDupAsk.finalName, false)
+              },
             }) : null,
             // 快捷提示词勾选弹窗（2026-10-12）：**排在编辑器之后**，两层遮罩同 z-index，
             // 后渲染的在上面 —— 它是编辑器里那颗按钮开出来的子弹窗。
