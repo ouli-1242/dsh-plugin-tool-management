@@ -403,6 +403,63 @@ export function snapshotRuntime(
   }
 }
 
+// ── 采集当前状态 → 档案 ───────────────────────────────────────────────────
+
+/**
+ * 「当前生效状态」的原始数据（由调用方从各处读出；这个模块不碰盘）。
+ *
+ * 全部是**全局**口径，不含会话层覆盖：会话覆盖是「这个对话看什么」，场景是机器级的。
+ */
+export interface CaptureStateInput {
+  /** 服务器名 → 工具级停用表（停用的工具名；`'*'` = 整台停用）。 */
+  mcpDisabledTools: Record<string, string[]>
+  /** 服务器名 → 服务器级是否停用。 */
+  mcpServerDisabled: Record<string, boolean>
+  /** 服务器名 → **已知**的工具名（没在跑 / 从没见过时为空）。 */
+  mcpKnownTools: Record<string, string[]>
+  /** 现在**开着**的技能键（`<root>/<name>`）。 */
+  skills: string[]
+  /** 现在开着的人设名。 */
+  subagents: string[]
+  /** 现在开着的快捷提示词 id。 */
+  quickPrompts: string[]
+}
+
+/**
+ * 把「当前生效状态」算成一份场景档案（勾选集 = 现在开着的东西）。
+ *
+ * 语义与档案的其余写法一致：**段已定义** = 进入该场景时按勾选集逐条设开关；
+ * **段未定义** = 这一域不碰。所以「照现在的样子存」= 四段全部定义 —— 空段是
+ * 合法值（「进入后全部停用」），与「不碰」是两句话，不能混。
+ *
+ * MCP 段的值有三种：
+ *   · 键不存在 = 该服务器在场景里停用（键存在即段已定义 → 启用）；
+ *   · `'*'` = 整台开着，工具全开；
+ *   · 工具名清单 = 该服务器开着、且只有清单里的工具开着。
+ *
+ * 工具名清单**枚举不出来时一律记 `'*'`**：档案里的清单是「只有这些工具开着」，
+ * 而「已知工具」为空时那份清单等于「一个都不开」—— 与现状相反，宁可记宽一点。
+ */
+export function captureArchive(state: CaptureStateInput): SceneArchive {
+  const mcp: Record<string, '*' | string[]> = {}
+  for (const [server, disabled] of Object.entries(state.mcpServerDisabled)) {
+    if (disabled) continue
+    const off = state.mcpDisabledTools[server] || []
+    if (off.length === 0) { mcp[server] = '*'; continue }
+    // 整台停用（工具级 '*'）：服务器开着但一个工具都不给 —— 记空清单而不是记 '*'。
+    if (off.indexOf('*') >= 0) { mcp[server] = []; continue }
+    const known = state.mcpKnownTools[server] || []
+    if (known.length === 0) { mcp[server] = '*'; continue }
+    mcp[server] = known.filter((t) => off.indexOf(t) < 0)
+  }
+  return {
+    mcp,
+    skills: state.skills.slice(),
+    subagents: state.subagents.slice(),
+    quickPrompts: state.quickPrompts.slice(),
+  }
+}
+
 // ── 记忆勾选（v3）──────────────────────────────────────────────────────────
 //
 // 记忆段与其余三段有一处关键差别：MCP / 技能是**运行时启停**（改了要落表、进/退模式要回滚），

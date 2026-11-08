@@ -173,6 +173,10 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 若往里加了 apply* / saveSlice，登记表与实现就对不上了）。
   'scene-mode-preview': { readonly: true },
   'scene-archive-save': { serviceWrite: true, frozen: true, frozenScope: 'self-scene' },
+  // 「照现在的样子存成场景」：建场景 + 把当前生效状态算成勾选集 + 存档案。
+  // **不冻结**：新建场景不触碰任何既有场景的数据，与 `rules-create-scene` 同一档
+  // （锁住一个场景的人照样可以新建另一个）。
+  'scene-capture': { write: true },
   'scene-mode-set': { serviceWrite: true },
   // 一键修复：索引被隔离后唯一的出口。按写门禁 —— 它整份改写 memories-index.json。
   // **刻意不冻结**：隔离期间所有记忆写 op 都已经被 writeIndex 拒了，它能修复状态而不是改状态，

@@ -86,6 +86,7 @@ import { buildDiagnostics, type DiagnosticsSidecar } from './diagnostics.js'
 import { buildPromptOps } from './ops/prompts.js'
 import { buildQuickPromptOps } from './ops/quick-prompts.js'
 import { buildScopeOps, type ScopeSessionRow } from './ops/scope.js'
+import { buildSceneCaptureOps } from './ops/scene-capture.js'
 import { buildSessionOps } from './ops/sessions.js'
 import { buildTrashRetentionOps } from './ops/trash-retention.js'
 // 会话作用域：侧车 scope-overrides.json / scope-intent.json + 作用域 op + 启动对账。
@@ -1582,6 +1583,59 @@ export default {
       return withIntent(current, domain, [key], state)
     }
 
+    /**
+     * 服务器名 → **已知**的工具名。
+     *
+     * 候选集合必须在**往 out 里补 live 工具之前**取：补进去的键是从 schema 名切出来的，
+     * 拿它当候选就成了循环论证（切错了也照样"命中"）。
+     *
+     * 三个来源里，补丁那份（`configuredServerNames`）是唯一与切分结果无关的 —— 停用表的键
+     * 来自界面勾选、缓存键来自上一次切分，单靠它们会锁死错误结论。
+     */
+    const serverKnownToolsNow = async (): Promise<Record<string, string[]>> => {
+      const out: Record<string, string[]> = {}
+      const raw = await mcp.readDisabledTools()
+      for (const [server, list] of Object.entries(raw)) out[server] = list.filter((t) => t !== '*')
+      // 「已知工具」缓存：未运行服务器也能按最后见过的名单计算补集。
+      const known = await mcp.readKnownMcpTools()
+      for (const [server, list] of Object.entries(known)) {
+        out[server] = [...new Set([...(out[server] || []), ...list.map((item) => item.name)])].sort()
+      }
+      let configured: string[] = []
+      try { configured = await mcp.configuredServerNames() } catch { /* 补丁读不到 → 退化为另两份 */ }
+      const serverNames = serverNameCandidates(configured, raw, known)
+      let schemas: any[] = []
+      try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅停用表 + 缓存 */ }
+      for (const s of schemas) {
+        const p = toolKeyParts(String((s && s.name) || ''), serverNames)
+        if (!p) continue
+        const list = out[p.server] || (out[p.server] = [])
+        if (list.indexOf(p.tool) < 0) list.push(p.tool)
+      }
+      return out
+    }
+
+    /**
+     * 每台服务器当前是否停用（只报**补丁文件里真实存在**的行）。
+     *
+     * loader 级条目改不了补丁，所以不在这份里。
+     */
+    const mcpServerStatesNow = async (): Promise<Array<{ id: string; serverName: string; level: string; disabled: boolean }>> => {
+      const r: any = await mcp.mcpmListView()
+      const out: Array<{ id: string; serverName: string; level: string; disabled: boolean }> = []
+      for (const row of ((r && r.rows) || [])) {
+        const level = String((row && row.level) || '')
+        if (level !== 'global' && level !== 'project') continue
+        out.push({
+          id: String(row.id),
+          serverName: String(row.serverName || row.id),
+          level,
+          disabled: !!row.disabled,
+        })
+      }
+      return out
+    }
+
     const archiveService = createArchiveEngine({
       // 引擎每应用/还原一次整套档案记一条流水（source='engine'，见 ./audit-log.ts）。
       // 记在边界这一层而不是往五个 apply* 里散着写：一条流水说的是「引擎动了整个环境」，
@@ -1599,33 +1653,7 @@ export default {
       // 早先这里走 `mcpmListView()` —— 那份会顺带枚举工具 schema 并回写「已知工具」缓存，
       // 而档案引擎只要名字。
       configuredServers: () => mcp.configuredServerNames(),
-      serverKnownTools: async () => {
-        const out: Record<string, string[]> = {}
-        const raw = await mcp.readDisabledTools()
-        for (const [server, list] of Object.entries(raw)) out[server] = list.filter((t) => t !== '*')
-        // 「已知工具」缓存：未运行服务器也能按最后见过的名单计算补集。
-        const known = await mcp.readKnownMcpTools()
-        for (const [server, list] of Object.entries(known)) {
-          out[server] = [...new Set([...(out[server] || []), ...list.map((item) => item.name)])].sort()
-        }
-        // 候选集合必须在**往 out 里补 live 工具之前**取：补进去的键是从 schema 名切出来的，
-        // 拿它当候选就成了循环论证（切错了也照样"命中"）。
-        //
-        // 三个来源里，补丁那份（`configuredServerNames`）是唯一与切分结果无关的 —— 停用表的键
-        // 来自界面勾选、缓存键来自上一次切分，单靠它们会锁死错误结论。
-        let configured: string[] = []
-        try { configured = await mcp.configuredServerNames() } catch { /* 补丁读不到 → 退化为另两份 */ }
-        const serverNames = serverNameCandidates(configured, raw, known)
-        let schemas: any[] = []
-        try { schemas = await tools.schemas() } catch { /* 无 live 工具 → 仅停用表 + 缓存 */ }
-        for (const s of schemas) {
-          const p = toolKeyParts(String((s && s.name) || ''), serverNames)
-          if (!p) continue
-          const list = out[p.server] || (out[p.server] = [])
-          if (list.indexOf(p.tool) < 0) list.push(p.tool)
-        }
-        return out
-      },
+      serverKnownTools: serverKnownToolsNow,
       currentMcpRaw: () => mcp.readDisabledTools(),
       applyMcpEntries: async (entries: Record<string, string[]>, reason: 'scene-apply' | 'scene-restore') => {
         await mcp.writeDisabledTools(entries, { reason })
@@ -1726,21 +1754,7 @@ export default {
       // 服务器没起来，它的工具根本不存在，勾选与否毫无区别。技能同理：来源关闭时，
       // 技能级的 enable 会被 core 的 sourceEnabled 判定直接吞掉。
       // 只报**补丁文件里真实存在**的行（level = project/global）；loader 级条目改不了补丁。
-      mcpServerStates: async () => {
-        const r: any = await mcp.mcpmListView()
-        const out: Array<{ id: string; serverName: string; level: string; disabled: boolean }> = []
-        for (const row of ((r && r.rows) || [])) {
-          const level = String((row && row.level) || '')
-          if (level !== 'global' && level !== 'project') continue
-          out.push({
-            id: String(row.id),
-            serverName: String(row.serverName || row.id),
-            level,
-            disabled: !!row.disabled,
-          })
-        }
-        return out
-      },
+      mcpServerStates: mcpServerStatesNow,
       applyMcpServerSwitches: async (switches) => {
         // 场景引擎改的是**全局定义**：先按 id → serverName 归一，再把意图写下来。
         // 不能只写补丁：补丁是运行态，而运行态恒为 `意图 ∪ 租约` —— 只改补丁的话，
@@ -4132,6 +4146,36 @@ export default {
       // scene-archive-save / scene-mode-set。成功返回扁平 {ok:true, ...}，
       // 失败 {ok:false, error}；写 op 已含 archiveService.writeOps 门禁派生。
       ...archiveService.ops,
+      // 「照现在的样子存成场景」（./ops/scene-capture.ts）：编排建场景 + 存档案，
+      // 中间那步「把当前生效状态算成勾选集」是它独有的。
+      ...buildSceneCaptureOps({
+        // 两步都走 **handlers** 那一份：`scene-archive-save` 在 handlers 上装着冻结闸
+        // （`frozenScope: 'self-scene'`），直调 archiveService.ops 会绕过它 ——
+        // 那样「把当前状态存成场景」就能覆盖掉一个**锁着的**同名场景的档案。
+        createScene: (args) => handlers['rules-create-scene'](args),
+        saveArchive: (args) => handlers['scene-archive-save'](args),
+        captureState: async () => {
+          const [disabledTools, serverStates, knownTools, skillStates, personaNames, quickPrompts] = await Promise.all([
+            mcp.readDisabledTools(),
+            mcpServerStatesNow(),
+            serverKnownToolsNow(),
+            skillScan().then((s) => s.states),
+            subagentService.enabledStore.enabledNames(),
+            quickPromptsService.list().then((r: any) => (r && r.ok === true
+              ? r.prompts.filter((p: any) => p.enabled !== false).map((p: any) => p.id)
+              : [])),
+          ])
+          return {
+            mcpDisabledTools: disabledTools,
+            mcpServerDisabled: Object.fromEntries(serverStates.map((s) => [s.serverName, s.disabled === true])),
+            mcpKnownTools: knownTools,
+            skills: Object.keys(skillStates).filter((k) => skillStates[k] === true),
+            subagents: personaNames,
+            quickPrompts,
+          }
+        },
+        message,
+      }),
       // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list/get（只读）
       // + subagent-create/update/delete（写，writeOps 已派生进门禁）。
       ...subagentService.ops,
@@ -5127,6 +5171,9 @@ export default {
         }),
       },
       sceneActivate: auditFn('rules-set-active', (args: any) => handlers['rules-set-active'](args)),
+      // 「照现在的样子存成场景」：模型那条路走 op（建场景 + 存档案同一件事），
+      // 流水与冻结闸照旧（`scene-capture` 不冻结 —— 新建场景不碰既有场景的数据）。
+      sceneCapture: auditFn('scene-capture', (args: any) => handlers['scene-capture'](args)),
     })
     buildSubagentTools({
       ...toolDeps,

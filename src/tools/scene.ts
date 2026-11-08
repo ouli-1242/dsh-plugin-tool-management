@@ -48,6 +48,14 @@ export interface SceneToolDeps extends ToolDomainDeps {
    * 全局提示词还是上一份，而回执看起来完全成功。
    */
   sceneActivate: (args: any) => Promise<any>
+  /**
+   * 「照现在的样子存成场景」（`scene-capture` op 的正文）。
+   *
+   * 给了 `capture: true` 时 `_save` 改走这一条：档案的勾选集由**当前生效状态**算出来，
+   * 而不是由模型逐项填。模型填档案最容易错在「勾选集 = 现在开着的东西」这件事上，
+   * 而那一段本来就是机器能自己读出来的。
+   */
+  sceneCapture?: (args: any) => Promise<any>
 }
 
 /** 档案里由模型设置的段（`memories` 段在 P5 已废弃，不再是档案的一部分）。
@@ -446,6 +454,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       // 场景记录与档案是**机器级**的，没有「本会话的一份」。这个参数只为一件事：
       // 模型以为自己在改会话时，当场纠回来（见 deps.ts 的 requireGlobalScope）。
       scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('the scene record and archive are machine-wide', 'entering a scene for one conversation is a switch action') },
+      // 「照现在的样子存」：档案的勾选集由当前生效状态算出来，不由模型逐项填。
+      // 模型填错一个键的后果是「进场景时把某个服务器 / 某条技能关掉了」—— 而那一段
+      // 本来就是机器能自己读出来的，用户说「存一下刚才那套」时也不该由模型转述现状。
+      capture: { type: 'boolean', description: 'Fill the archive from what is currently switched on (MCP servers and their tools, skills, personas, quick prompts) instead of the sections above. Use it when the user says "save the current setup as a scene".' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -459,6 +471,27 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       // 报错也更贴模型要的东西（它要的是"这个名字不行"，不是内部规则）。
       if (scene.indexOf('/') >= 0 || scene.indexOf('\\') >= 0) {
         throw new Error('a scene name is a single path segment (no / or \\): ' + scene)
+      }
+
+      // 「照现在的样子存」：档案的勾选集由**当前生效状态**算出来，不由模型逐项填。
+      // 这一支走 `scene-capture`（建场景 + 存档案同一件事），不走下面的 ①② ——
+      // 两条路各自建一次场景会让第二次的档案覆盖第一次，没有意义。
+      if (args && args.capture === true) {
+        if (deps.sceneCapture === undefined) throw new Error('capturing the current setup is unavailable in this host')
+        const captured: any = await deps.sceneCapture({
+          name: scene,
+          ...(args.label !== undefined ? { label: String(args.label) } : {}),
+          ...(args.description !== undefined ? { description: String(args.description) } : {}),
+        })
+        if (!captured || captured.ok === false) throw new Error((captured && captured.error) || 'failed to capture the current setup')
+        const summary = captured.summary || {}
+        const stale = Array.isArray(captured.stale) ? captured.stale : []
+        return 'OK: scene "' + scene + '" saved from the current setup ('
+          + (summary.mcp || 0) + ' MCP server(s), ' + (summary.skills || 0) + ' skill(s), '
+          + (summary.subagents || 0) + ' persona(s), ' + (summary.quickPrompts || 0) + ' quick prompt(s)). '
+          + 'Entering it will switch exactly those on and everything else off.'
+          + (stale.length ? '\nWARN: dropped entries that no longer exist: ' + stale.join(', ') : '')
+          + ' Saving does not enter it.'
       }
 
       // ① 场景记录：`rules-create-scene` 本身是**幂等 upsert**（已存在则更新描述/标签/绑定的
