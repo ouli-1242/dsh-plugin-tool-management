@@ -5263,20 +5263,52 @@ test('目录上限：夹取语义是"0 / 非法回出厂"，合法值夹进范�
   assert.equal(catalog.text().includes('more not listed'), false)
 })
 
-test('折叠出口的硬不变量：查询工具不在手里时，折叠行不得点名它 —— 三个目录同一条纪律', () => {
+test('折叠出口的硬不变量：三档出口各自点名正确的东西 —— 三个目录同一条纪律', () => {
   // "点名"是行为不变量（指向模型没有的工具 = 诱导猜名字），不是文案断言：
   // 具体措辞可以改，"关着还点名"不行；反过来工具在手里时出口必须点名。
+  //
+  // ⚠️ 0.22.4 把两档扩成三档（c4a28e3）：中间档（清单工具关着、但 `tool_manager_tools`
+  // 在手里）**必须**点名清单工具，否则模型只知道"有个 listing tool"却不知道要开哪条。
+  // 本测试原先只断言"关着就不得出现那个名字"，于是把中间档判成违规 —— 那不是实现错，
+  // 是测试没跟上三档。现在逐档断言：
+  //   ① 清单工具在手      → 必须点名清单工具
+  //   ② 它关着但控制面在手 → 必须点名它（说明被停用）+ 指向 tool_manager_tools
+  //   ③ 两者都关          → 必须点名它（说明被停用）+ 指向用户，且**不得**指向一个也没在手里的工具
   const skills = { roots: [{ key: 'g', skills: Array.from({ length: 55 }, (_, i) => ({ name: 's' + String(i).padStart(2, '0'), description: 'd', enabled: true, modelInvocable: true })) }] }
-  assert.match(renderSkillCatalog(skills, 50, 500, true), /skill_manager_list/)
-  assert.doesNotMatch(renderSkillCatalog(skills, 50, 500, false), /skill_manager_list/)
+  const skillsOn = renderSkillCatalog(skills, 50, 500, true, undefined, true)
+  assert.match(skillsOn, /skill_manager_list/)
+  assert.doesNotMatch(skillsOn, /disabled in this session/)
+
+  const skillsCtrl = renderSkillCatalog(skills, 50, 500, false, undefined, true)
+  assert.match(skillsCtrl, /skill_manager_list/, '中间档必须点名清单工具，否则模型不知道要开哪条')
+  assert.match(skillsCtrl, /tool_manager_tools/)
+
+  const skillsNone = renderSkillCatalog(skills, 50, 500, false, undefined, false)
+  assert.match(skillsNone, /skill_manager_list/)
+  assert.match(skillsNone, /ask the user/)
+  assert.doesNotMatch(skillsNone, /tool_manager_tools/, '控制面工具也不在手里时，不得指向它')
 
   const subs = Array.from({ length: 52 }, (_, i) => ({ name: 'p' + i, description: 'd' }))
-  assert.match(renderSubagentCatalog(subs, 50, 500, true), /subagent_manager_list/)
-  assert.doesNotMatch(renderSubagentCatalog(subs, 50, 500, false), /subagent_manager_list/)
+  assert.match(renderSubagentCatalog(subs, 50, 500, true, true), /subagent_manager_list/)
+  const subsCtrl = renderSubagentCatalog(subs, 50, 500, false, true)
+  assert.match(subsCtrl, /subagent_manager_list/)
+  assert.match(subsCtrl, /tool_manager_tools/)
+  const subsNone = renderSubagentCatalog(subs, 50, 500, false, false)
+  assert.match(subsNone, /subagent_manager_list/)
+  assert.match(subsNone, /ask the user/)
+  assert.doesNotMatch(subsNone, /tool_manager_tools/)
 
   const rows = Array.from({ length: 52 }, (_, i) => ({ serverName: 'srv' + i, liveTools: ['t'] }))
-  assert.match(renderMcpStateSection(rows, { maxEntries: 50 }, true), /mcp_manager_list/)
-  assert.doesNotMatch(renderMcpStateSection(rows, { maxEntries: 50 }, false), /mcp_manager_list/)
+  // `controlVisible` 是第 6 个位置参数（不在 opts 里）：opts / listToolVisible / sessionDisabled / sessionTools / controlVisible
+  const mcpOn = renderMcpStateSection(rows, { maxEntries: 50 }, true)
+  assert.match(mcpOn, /mcp_manager_list/)
+  const mcpCtrl = renderMcpStateSection(rows, { maxEntries: 50 }, false, [], { on: [], off: [] }, true)
+  assert.match(mcpCtrl, /mcp_manager_list/)
+  assert.match(mcpCtrl, /tool_manager_tools/)
+  const mcpNone = renderMcpStateSection(rows, { maxEntries: 50 }, false, [], { on: [], off: [] }, false)
+  assert.match(mcpNone, /mcp_manager_list/)
+  assert.match(mcpNone, /ask the user/)
+  assert.doesNotMatch(mcpNone, /tool_manager_tools/)
 })
 
 test('patch 载体行：cordis.patch.yml 里的官方行按组合同款判据解析，两路在场性 mounted > conditional > absent', () => {
