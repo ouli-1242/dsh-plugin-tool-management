@@ -40,7 +40,7 @@ Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart
 <td width="34%" valign="top"><b>Three scopes</b><br>All global / per workspace / per conversation. By default every conversation has its own settings — two conversations in the same project can run two different environments at once.</td>
 </tr>
 <tr>
-<td valign="top"><b>The agent can drive it</b><br>26 model tools across six domains: list, read, create, update, delete, toggle, enter scenes, apply prompts, run personas. Writes ask for confirmation (except in a full-permission session, where the card is skipped and only a log line is written); disabled tools are not in the schema at all.</td>
+<td valign="top"><b>The agent can drive it</b><br>27 model tools across six domains: list, read, create, update, delete, toggle, enter scenes, apply prompts, run personas. Writes ask for confirmation (except in a full-permission session, where the card is skipped and only a log line is written); disabled tools are not in the schema at all.</td>
 <td valign="top"><b>The Host page is a control center</b><br>Version and capability checks, access token, scope mode, per-domain injection switches, the model-tool table and the sidebar entry — all on one page.</td>
 <td valign="top"><b>One panel, eight tabs</b><br>Scenes / MCP / Skills / Subagents / Prompts / Memories / Sessions / Host — no more hunting through six different settings pages.</td>
 </tr>
@@ -95,12 +95,13 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 
 ## Let the agent drive it
 
-Six domains, **26 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona.
+Six domains, **27 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona.
 
-- **Only 6 ship enabled** (~1.6k tokens/turn); the other 20 stay off. Off means **not in the schema at all** — the model cannot see them, let alone call them.
+- **Only 7 ship enabled** (~1.7k tokens/turn); the other 20 stay off. Off means **not in the schema at all** — the model cannot see them, let alone call them.
 - **Scoped writes**: the model writes to the current layer by default and the receipt says which one; `scope: "global"` is required to touch everything.
 - **Confirmation cards**: stopping servers, deleting, machine-wide toggles and similar writes ask first; recovery actions (restart, restore, undo apply) go straight through.
-- **Per-tool control**: the model-tool table on the Host page adjusts visibility per layer. All 26 on is ~6.2k tokens/turn; profiles can be saved per task and switched together with a scene.
+- **Per-tool control**: the model-tool table on the Host page adjusts visibility per layer. All 27 on is ~6.6k tokens/turn; profiles can be saved per task and switched together with a scene.
+- **The model can switch tools back on**: the always-on `tool_manager_tools` lists the tools that are off in this conversation (name, purpose, ≈tokens) and turns them on as needed — when the user asks for a scene whose tools happen to be off, the model has a way forward instead of bouncing back to the user.
 
 ## The Host page
 
