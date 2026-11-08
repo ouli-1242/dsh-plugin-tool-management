@@ -152,6 +152,7 @@ import { buildMemoryTools } from './tools/memory.js'
 import { buildRemoveTools } from './tools/remove.js'
 import { buildSceneTools } from './tools/scene.js'
 import { buildSubagentTools } from './tools/subagent.js'
+import { buildControlTools } from './tools/control.js'
 import { ARG_CONDITIONAL_CONFIRM_TOOLS, argConditionalConfirmReason } from './confirm-gate.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './subagents/tools.js'
@@ -1963,7 +1964,7 @@ export default {
     // mcp / skillCatalog / subagentCatalog 在本块之后才建，按 getter 交进去：取值发生在真正要
     // 用的那一刻，与原闭包同形，既不撞 TDZ 也不动搬走的那些行。
     const {
-      toolTableSizes, recordToolSize, readToolTableSettings, toolTableState, toolTableWriteError, toolTableHidden,
+      toolTableSizes, toolTableSummaries, recordToolSize, readToolTableSettings, toolTableState, toolTableWriteError, toolTableHidden,
       mutateToolTableSettings, toolTableReport, toolTableOp,
     } = createToolTableSwitch({
       ensurePaths, readJsonFileStrict, writeJsonFile, withWriteLock, message, EMPTY_TOOL_SET,
@@ -5158,6 +5159,40 @@ export default {
       sceneOps: auditOps(memoriesService.ops),
       sceneRemove: auditFn('rules-remove-scene', (args: any) => handlers['rules-remove-scene'](args)),
     })
+    // 控制面工具（tools/control.ts）：模型自己看得到哪些工具、能不能自己打开。
+    //
+    // 为什么必须常驻：出厂只发 6 条，场景那一族四条全关，而场景目录注入只列
+    // **当前已启用的**场景 —— 一个都没启用时整段不注入。于是「用户说进入编程场景」
+    // 这件事模型既不知道有哪些场景、也没有开关工具。其余能力一律按需调用，
+    // 这条是唯一每轮都在的例外。
+    buildControlTools({
+      ...toolDeps,
+      toolTableSizes,
+      toolTableSummaries,
+      hiddenForSession: (agent: unknown) => toolTableHiddenForSession(scopeKeyForAgent(agent)),
+      // 写本对话的工具表：走面板同一条路（`tool-table` op 带 sessionId 的那一支），
+      // 锁、基线补写、可见性重排、两个目录重算全都照旧。
+      writeSessionTable: async (agent: unknown, hidden: string[]) => {
+        const sessionId = scopeKeyForAgent(agent)
+        if (sessionId === null) {
+          return { ok: false, error: 'no session id on this agent: cannot change the tool table for this conversation' }
+        }
+        const args = { sessionId, set: true, hidden }
+        const r: any = await handlers['tool-table'](args)
+        // 模型侧直调 handler 不经过 HTTP 路由，那条路由才会记流水 —— 这里自己记一条，
+        // 否则「谁改了工具表」在「最近改动」里查不到。
+        modelAudit('tool-table', args, r)
+        if (!r || r.ok === false) return { ok: false, error: (r && r.error) || 'failed to save the tool table' }
+        return { ok: true }
+      },
+      // 修复类动作：侧车坏了以后，模型手里的写操作全被拒，而它一个出口都没有
+      // （这三个 op 在登记表里刻意不冻结，却没有模型能调的按钮）。
+      repair: async (kind) => {
+        if (kind === 'memory-index') return await auditFn('memories-index-repair', (a: any) => memoriesService.ops['memories-index-repair'](a))({})
+        if (kind === 'scope') return await auditFn('scope-repair', (a: any) => handlers['scope-repair'](a))({})
+        return await auditFn('mcpm-disabled-reset', (a: any) => mcp.ops['mcpm-disabled-reset'](a))({})
+      },
+    })
 
     if (typeof ctx.on === 'function') {
       // 三个确认门的统一前裁决。口径（方案 B）：会话审批策略为 never（「完全权限」预设）
@@ -5204,6 +5239,9 @@ export default {
         memory_manager_switch: '「记忆开关」',
         skill_manager_switch: '「技能开关」',
         subagent_manager_switch: '「人设开关」',
+        // 控制面工具：开关本对话的工具表**不问**（只动这一个对话的视图，随时可退），
+        // 只有修复类动作问 —— 那一档会把损坏的侧车改名留存、按空表继续（判据在 confirm-gate.ts）。
+        tool_manager_tools: '「修复插件状态」',
       }
       const bypassedByFullAccess = (exec: any): boolean => {
         if (!isApprovalNever(ctx, exec)) return false

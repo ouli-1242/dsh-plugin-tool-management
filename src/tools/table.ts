@@ -364,6 +364,27 @@ export function estimateTok(bytes: number): number {
 }
 
 /**
+ * 一句话用途的字符上限（模型看「这条工具能干什么」时用）。
+ *
+ * 为什么截：整段描述在模型读 schema 时已经在上下文里，重复贴一遍只是把回执撑大；
+ * 清单是**按需**调用，一次贴二十条整段描述就是几千字符。
+ */
+export const TOOL_SUMMARY_MAX = 180
+
+/**
+ * 从工具描述里取一句话用途：第一行非空行，截到 {@link TOOL_SUMMARY_MAX}。
+ *
+ * 各工具描述的组织惯例是「是什么 → 怎么做 → 何时用」，首句就是「是什么」。
+ * 空描述返回空串（那一条在清单里就只留名字）。
+ */
+export function summarizeToolDescription(description: unknown): string {
+  const text = String(description ?? '')
+  const line = text.split('\n').find((l) => l.trim() !== '') ?? ''
+  const trimmed = line.trim()
+  return trimmed.length > TOOL_SUMMARY_MAX ? trimmed.slice(0, TOOL_SUMMARY_MAX - 1) + '…' : trimmed
+}
+
+/**
  * 纯函数：把注册时量到的体积按域分组，标出哪些被关掉，给出四档合计。
  *
  * 顺序：域按 `INJECT_DOMAIN_KEYS`（界面与注入通道同一顺序），域内按**注册顺序**

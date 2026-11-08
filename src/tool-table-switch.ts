@@ -20,7 +20,7 @@ import { hubPath } from './hub.js'
 import type { JsonFileRead } from './mcp/disabled-tools.js'
 import {
   addPreset, buildToolTableReport, classifyToolTableSettings, DEFAULT_HIDDEN_TOOLS, DEFAULT_TOOL_TABLE_SETTINGS, dropPreset, migrateLegacyToolNames,
-  normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH,
+  normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH, summarizeToolDescription,
   type ToolTableReport, type ToolTableRow, type ToolTableSettings,
 } from './tools/table.js'
 
@@ -57,6 +57,14 @@ export interface ToolTableSwitchDeps {
 export interface ToolTableSwitch {
   /** 注册时量到的工具体积（同一个 Map 交回母文件：注册口在别处写它）。 */
   toolTableSizes: Map<string, number>
+  /**
+   * 工具名 → 一句话用途（描述的首句，截断）。
+   *
+   * 为什么要有它：模型要判断「这条工具能干什么」时，只有名字是不够的（`scene_manager_switch`
+   * 这种名字看不出是进场景还是存档案）。整段描述是给模型读 schema 时用的，整段复制出来
+   * 会让一次清单回执变成几千字符 —— 首句够用。
+   */
+  toolTableSummaries: Map<string, string>
   recordToolSize(def: ToolDefinition): void
   readToolTableSettings(force?: boolean): Promise<ToolTableSettings>
   /**
@@ -102,6 +110,17 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   const TOOL_TABLE_TTL_MS = 3000
   /** 注册时量到的工具体积（只记真进了表的那些；量的是 register 收到的整份定义）。 */
   const toolTableSizes = new Map<string, number>()
+  /** 工具名 → 一句话用途（描述的首句）。 */
+  const toolTableSummaries = new Map<string, string>()
+  /**
+   * 一句话用途：描述里第一行非空行，截到 {@link TOOL_SUMMARY_MAX} 字符。
+   *
+   * 为什么只取第一行：各工具描述的组织惯例是「是什么 → 怎么做 → 何时用」，首句就是
+   * 「是什么」。整段描述在模型读 schema 时已经在上下文里，重复贴一遍只是把回执撑大。
+   */
+  function summarizeTool(def: ToolDefinition): string {
+    return summarizeToolDescription((def as { description?: unknown }).description)
+  }
   function recordToolSize(def: ToolDefinition): void {
     try {
       const name = String((def as { name?: unknown }).name ?? '')
@@ -109,6 +128,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       // 与宿主同一口径（dsh-token-meter 的 estimateToolsTokens 就是把 tools 整份
       // JSON.stringify 后除以 4），所以这里量整份定义，不只量 description。
       toolTableSizes.set(name, JSON.stringify(def).length)
+      toolTableSummaries.set(name, summarizeTool(def))
     } catch { /* 量不出来就不记：它只影响界面上的估算数字 */ }
   }
   let toolTableCache: { at: number; value: ToolTableSettings; off: ReadonlySet<string> } | null = null
@@ -320,6 +340,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   }
   return {
     toolTableSizes,
+    toolTableSummaries,
     recordToolSize,
     readToolTableSettings,
     toolTableState: () => ({ state: toolTableStateValue, issue: toolTableIssueValue }),

@@ -35,6 +35,7 @@ export const ARG_CONDITIONAL_CONFIRM_TOOLS: ReadonlySet<string> = new Set([
   'memory_manager_switch',
   'skill_manager_switch',
   'subagent_manager_switch',
+  'tool_manager_tools',
 ])
 
 /** 取一个必填字符串参数；不是非空字符串就返回空串。 */
@@ -128,6 +129,21 @@ export function argConditionalConfirmReason(
       return `Turn ${label}「${key}」 ${args.enabled ? 'on' : 'off'} for every conversation (global switch).`
     }
     return `${args.prefer ? 'Make' : 'Stop preferring'} the copy of ${label}「${key}」 win its name collision, machine-wide.`
+  }
+
+  if (name === 'tool_manager_tools') {
+    // 开关工具表（开 / 关本对话能用的工具）不问：只动这一个对话的视图，随时可退。
+    // 修复类动作要问：它会把**已损坏的侧车改名留存**、按空表继续 —— 那是一次不可逆的
+    // 数据处置（原始文件还在，但插件从此不再读它），与「换个开关」不是一档。
+    if (action !== 'repair') return null
+    const target = text(args.target)
+    if (target === '') return null
+    const subject = target === 'memory-index' ? '记忆索引'
+      : target === 'scope' ? '作用域侧车'
+        : target === 'mcp-disabled' ? 'MCP 停用表'
+          : ''
+    if (subject === '') return null
+    return `Repair the ${subject} — the damaged file is renamed aside and the plugin continues with an empty table. Anything it held is no longer applied.`
   }
 
   return null
