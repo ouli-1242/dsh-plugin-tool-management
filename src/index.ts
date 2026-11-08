@@ -154,6 +154,7 @@ import { buildRemoveTools } from './tools/remove.js'
 import { buildSceneTools } from './tools/scene.js'
 import { buildSubagentTools } from './tools/subagent.js'
 import { buildControlTools } from './tools/control.js'
+import { toolAccessRoute } from './tools/deps.js'
 import { ARG_CONDITIONAL_CONFIRM_TOOLS, argConditionalConfirmReason } from './confirm-gate.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './subagents/tools.js'
@@ -5513,6 +5514,18 @@ export default {
         }
       } catch (e) { /* agents 服务不可用 → 仅靠事件（与技能侧同一退路） */ }
     }
+    /**
+     * 「会话层停用」那句话：按**当前隔离粒度**说清「别人」是谁。
+     *
+     * 按工作区时那一格是 `ws:<cwd>` —— 同工作区的每个对话都读它，写死「其他对话不受影响」
+     * 是假话（与自举工具那轮同一个毛病）。
+     */
+    function sessionDisabledNotice(): string {
+      const mode = scopeMode()
+      if (mode === 'workspace') return '该工具在本工作区已停用（其他工作区不受影响）'
+      if (mode === 'global') return '该工具已停用（全局设置）'
+      return '该工具在本次对话中已停用（其他对话不受影响）'
+    }
     if (typeof tools.guard === 'function') {
       try {
         ctx.effect(() => tools.guard!((exec) => {
@@ -5547,7 +5560,7 @@ export default {
             // `allow` 是"这个对话里显式开着"，后者要能**越过全局停用表**（逐工具开关按会话
             // 独立：全局关着的工具，本会话开着就该能调）。判据见 `sessionMcpVerdictSync`。
             const verdict = sessionMcpVerdictSync(exec && exec.agent, name)
-            if (verdict === 'deny') return '该工具在本次对话中已停用（其他对话不受影响）'
+            if (verdict === 'deny') return sessionDisabledNotice()
             // 只读 TTL 缓存、不做 I/O —— 这段跑在每一次工具调用的热路径上。
             if (verdict !== 'allow' && mcp.isToolDisabled(name)) {
               return '该工具已在 MCP 管理页停用'
@@ -5555,7 +5568,11 @@ export default {
             // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
             // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。
             if (toolTableHiddenForSession(scopeKeyForAgent(exec && exec.agent)).has(name)) {
-              return '该工具已在本对话的模型工具表里关掉（要它先在那里打开）'
+              // 模型自己有出路就别把它推给用户：它手里有控制面工具（tool_manager_tools），
+              // 能把这条打开 —— 说清怎么开，比说「去面板点」有用得多。
+              return toolAccessRoute(toolDeps, name, exec && exec.agent) === 'none'
+                ? '该工具已在本对话的模型工具表里关掉（要它先在那里打开）'
+                : '该工具已在本对话的模型工具表里关掉 —— 用 tool_manager_tools 打开它（action="enable", tools:["' + name + '"]）'
             }
           } catch (e) {
             // 守卫自身算不出来时，MCP 工具必须 fail-closed；其余工具保持原来的放行方向，

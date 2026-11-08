@@ -161,9 +161,12 @@ export function buildPromptTools(deps: PromptToolDeps): void {
           : pinned === target
             ? '\nnote: that is the scene pinned here, so this scope follows it.'
             : '\nnote: this scope pins scene "' + pinned + '", so what it gets here is unchanged — this call rebound the machine-wide scene "' + shown + '". '
+              + 'To change the binding that applies here, save scene "' + pinned + '" with that preset'
               + (deps.toolVisibleFor('scene_manager_save', exec && exec.agent)
-                ? 'To change the binding that applies here, save scene "' + pinned + '" with that preset (scene_manager_save).'
-                : 'To change the binding that applies here, the user has to rebind scene "' + pinned + '" in the panel.')
+                ? ' (scene_manager_save).'
+                : deps.toolVisibleFor('tool_manager_tools', exec && exec.agent)
+                  ? ' — enable scene_manager_save with tool_manager_tools (action="enable", tools:["scene_manager_save"]) first.'
+                  : ' — the user has to rebind that scene in the panel.')
         return 'OK: preset ' + id + ' is now the prompt binding of scene "' + shown + '" and the scene was re-synced (effective next turn; ~/.dsh/AGENTS.md now carries that scene\'s binding).' + scopeNote
       }
       // 生效时机与宿主行为对齐（index.ts 提示词服务一节考证过）：dsh-agent-instructions

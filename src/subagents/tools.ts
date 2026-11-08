@@ -183,6 +183,12 @@ export interface RunToolDeps extends SubagentService {
    * 枚举该预设的工具名，见 index.ts 的 subagentToolFilterFor）。
    */
   toolFilterFor?(persona: PersonaDoc, agentCtx: unknown): Promise<ToolFilterDecision>
+  /**
+   * 这个 agent 手里有没有某条工具（兼容页开关 + 人设工具限制）。
+   *
+   * 用于「这个人设关掉了」那条回执：模型自己能开的就别推给用户。
+   */
+  toolVisibleFor?(name: string, agent: unknown): boolean
 }
 
 /**
@@ -259,7 +265,20 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
       if (!persona) {
         // 关掉的人设要单独说清 —— 否则模型会以为"这个人设不存在"，转而去编一个名字。
         const offHere = docs.some((p) => p.name === name)
-        if (offHere) throw new Error('persona unavailable: ' + name + ' (turned off — here, by its global switch, or outside the active scene; the user can enable it)')
+        if (offHere) {
+          // 模型自己有出路就别推给用户：它能开这条人设，或者用控制面工具先把那条工具打开。
+          const fix = typeof subagents.toolVisibleFor === 'function'
+            ? (() => {
+              try {
+                return subagents.toolVisibleFor!('subagent_manager_switch', exec && exec.agent) ? 'turn it on with subagent_manager_switch'
+                  : subagents.toolVisibleFor!('tool_manager_tools', exec && exec.agent)
+                    ? 'enable subagent_manager_switch with tool_manager_tools (action="enable", tools:["subagent_manager_switch"]), then turn it on'
+                    : 'the user can enable it'
+              } catch { return 'the user can enable it' }
+            })()
+            : 'the user can enable it'
+          throw new Error('persona unavailable: ' + name + ' (turned off — here, by its global switch, or outside the active scene; ' + fix + ')')
+        }
         const available = allowed.map((p) => p.name).join(', ') || '(none)'
         throw new Error('persona unavailable: ' + name + (reason ? ' (' + reason + ')' : ' (available: ' + available + ')'))
       }

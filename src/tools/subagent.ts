@@ -90,7 +90,13 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
     // 与 index.ts 造这个包装层时用的是同一个写法（那边注释写的是「原型链回真实服务，其余读法一字不动」）。
     register(defineTool(defineSubagentManagerRunTool(Object.assign(
       Object.create(deps.subagentService),
-      { sceneLists: deps.sceneLists, toolFilterFor: deps.toolFilterFor, flagFor: deps.subagentFlagFor },
+      {
+        sceneLists: deps.sceneLists,
+        toolFilterFor: deps.toolFilterFor,
+        flagFor: deps.subagentFlagFor,
+        // 「这个人设关掉了」那条回执要判断模型自己能不能开它（见 subagents/tools.ts）。
+        toolVisibleFor: deps.toolVisibleFor,
+      },
     ))))
   } catch (e) {
     recordFailure('subagent_manager_run', e)

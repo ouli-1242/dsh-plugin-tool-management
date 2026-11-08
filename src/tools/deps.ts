@@ -79,6 +79,59 @@ export function toolOrNeutral(
   return visible ? named : neutral
 }
 
+/**
+ * 控制面工具的名字（模型自己开关工具表的那条）。
+ *
+ * 定义在这一层而不是 `tools/control.ts`：回执与报错常要问「模型能不能自己打开某条工具」，
+ * 那问的就是这条的名字 —— 两处各写一个字面量，改名时就分叉了。
+ */
+export const CONTROL_TOOL_NAME = 'tool_manager_tools'
+
+/**
+ * 一条工具看不见时，模型自己还能走的路。
+ *
+ * 三档：
+ *   · `direct`     —— 修好它的那条工具就在模型手里（直接用）。
+ *   · `via-control`—— 那条工具关着，但模型有控制面工具：先开它，再用它。
+ *   · `none`       —— 两条都没有：模型确实没有别的路，只能让用户去面板。
+ *
+ * 为什么要有这一层：工具表能按对话关掉工具，而模型手里有一条能自己打开的工具。
+ * 不知道这一层的回执会把模型推回面板 —— 那正是这条自举工具要消灭的死路。
+ *
+ * 判据读不出来时按**看不见**处理：点名一条模型没有的工具是把它往墙上推。
+ */
+export type ToolAccessRoute = 'direct' | 'via-control' | 'none'
+
+/**
+ * 判定模型自己能不能弄到 `fixer`（那条能修好问题的工具）。
+ *
+ * @param deps 工具面共享依赖（`toolVisibleFor` 是唯一判据）。
+ * @param fixer 能修好问题的工具名（如 `subagent_manager_switch`）。
+ * @param agent 当前会话的 agent（工具表按对话解析，判据要跟着它走）。
+ */
+export function toolAccessRoute(deps: ToolDomainDeps, fixer: string, agent: unknown): ToolAccessRoute {
+  const visible = (name: string): boolean => {
+    try { return deps.toolVisibleFor(name, agent) } catch { return false }
+  }
+  if (visible(fixer)) return 'direct'
+  if (visible(CONTROL_TOOL_NAME)) return 'via-control'
+  return 'none'
+}
+
+/**
+ * {@link toolAccessRoute} 的英文句子版（给英文回执用）。
+ *
+ * `fallback` 是模型确实没有别的路时的那句（各调用点的措辞不同：永久删除与改绑不是一回事）。
+ */
+export function toolAccessSentence(deps: ToolDomainDeps, fixer: string, agent: unknown, fallback: string): string {
+  const route = toolAccessRoute(deps, fixer, agent)
+  if (route === 'direct') return 'use ' + fixer
+  if (route === 'via-control') {
+    return 'enable ' + fixer + ' with tool_manager_tools (action="enable", tools:["' + fixer + '"]), then use it'
+  }
+  return fallback
+}
+
 /** `locateSkillRoot` 的结论。 */
 export interface SkillRootLookup {
   /** `skill-state` 探测成功了吗。false = 探不到，调用方应退回旧默认、别在这里编结论。 */

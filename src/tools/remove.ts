@@ -168,7 +168,9 @@ async function runRemove(deps: ToolDomainDeps, cfg: RemoveCfg, args: any, agent:
   const r: any = action === 'trash' ? await cfg.trash(args) : await cfg.restore(args)
   if (!r || r.ok === false) throw new Error((r && r.error) || (action === 'trash' ? 'failed to move it to the trash' : 'restore failed'))
   if (action === 'trash') {
-    return 'OK: ' + cfg.label + ' "' + id + '" moved to the trash (recoverable; permanent deletion lives in the panel trash)' +
+    // 永久删除是**刻意不给模型**的（不可恢复，且低频）—— 但这句话是给模型看的，
+    // 说清「这里只到回收站」就够，不必把人推去面板。
+    return 'OK: ' + cfg.label + ' "' + id + '" moved to the trash (recoverable; permanent deletion is not offered here)' +
       (cfg.domain === undefined ? '' : globalActionNote(deps, agent, cfg.domain, cfg.label))
   }
   // 恢复的回执要说**恢复成了什么**，而不是回收站条目 id：

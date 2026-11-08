@@ -517,7 +517,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       const setToolTable = args.toolTablePreset !== undefined && String(args.toolTablePreset).trim() !== ''
       const setQuickPrompts = args.quickPrompts !== undefined
       if (setQuickPrompts && !Array.isArray(args.quickPrompts)) {
-        throw new Error('quickPrompts must be an array of ids ([] = turn them all off on entry; unbinding is a manual step in the panel, not offered here)')
+        // 档案里 quickPrompts 是一份**完整清单**（在里面的开着，不在里面的关着），
+        // 所以「改绑」是改这一份清单 —— 模型自己就能做，原先那句「解绑是面板里的人工步骤」
+        // 是错的（模型能存一份新清单）。
+        throw new Error('quickPrompts must be an array of ids ([] = turn them all off on entry; the binding is one full list, so to change which prompts are on, save this scene again with the new list)')
       }
       const touched = ARCHIVE_SECTIONS.filter((k) => (args as Record<string, unknown>)[k] !== undefined)
       const mustWriteArchive = touched.length > 0 || setToolTable || setQuickPrompts
