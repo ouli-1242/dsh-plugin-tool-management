@@ -251,7 +251,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // （场景段 128 KiB），而模型很乐意把「这个项目用 pnpm」记一条 —— 那看一眼 `package.json`
     // 就知道，记下来却永久占着每一轮请求。合并 write/update 后这两句更要留：upsert 降低了
     // "再记一条"的摩擦，而摩擦正是这里唯一拦得住它的东西。
-    description: 'Create a memory, or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. Blocked while the active scene is locked. Only on the user\'s instruction.',
+    description: 'Create a memory, or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name> — copy it from the list. `global` is the always-on scene.' },
       description: { type: 'string', description: 'One-sentence description (<=500 chars). Required when creating. Empty string = drop it and re-derive from the body; omit = keep.' },

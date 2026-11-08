@@ -170,7 +170,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
       //
       // 描述里不写落点路径：模型不按路径行动，这条工具也没有"给我路径"的用法（要读正文有
       // `list` + 宿主的文件工具，而人设正文本来就是给它自己当系统提示词用的）。
-      description: 'Create a persona, or update the one with this name — the receipt says which; omitted fields keep their values. Write `body` as who this is and how it judges its own work, not steps or paths (those belong to the task); put hard output requirements in `output`, one per line. Also settable: `model` (\'\' = inherit), `continuable`, `tools`/`toolsDeny` ([] = clear) — other routing/limit fields aren\'t. Blocked while the active scene is locked. Only on the user\'s instruction.',
+      description: 'Create a persona, or update the one with this name — the receipt says which; omitted fields keep their values. Write `body` as who this is and how it judges its own work, not steps or paths (those belong to the task); put hard output requirements in `output`, one per line. Also settable: `model` (\'\' = inherit), `continuable`, `tools`/`toolsDeny` ([] = clear) — other routing/limit fields aren\'t. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
       parameters: {
         name: { type: 'string', required: true, description: 'Persona name (= file name); ≤64 chars, one path segment — no / \\ or < > : " | ? *, no leading dot, no reserved device name, no trailing dot or space.' },
         description: { type: 'string', description: 'One-line routing description (what the delegation catalog shows). Required when creating.' },

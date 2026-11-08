@@ -465,7 +465,7 @@ export function buildSkillTools(deps: SkillToolDeps): void {
     //
     // 描述里不写落点路径：模型不按路径行动，而写死路径还会与 `remove.ts` 头注释里的落点
     // 口径打架。真正要它知道的是"建在哪一侧"，而"只认本插件写的技能"那半句已经说清了。
-    description: 'Create a DSH skill, or update the one that already has this name — the receipt says which. Only skills this plugin wrote can be updated. Only on the user\'s instruction.',
+    description: 'Create a DSH skill, or update the one that already has this name — the receipt says which. Only skills this plugin wrote can be updated. Asks the user to confirm before it runs. Only on the user\'s instruction.',
     parameters: {
       name: { type: 'string', required: true, description: 'Skill name; normalized to kebab-case (≤128 chars, [a-z0-9-]).' },
       description: { type: 'string', description: 'A concise routing description (≤500 chars). Required when creating; omit = keep.' },

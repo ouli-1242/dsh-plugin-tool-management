@@ -259,7 +259,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
     // 紧挨着的 "Only when the user asks or approves" 就被读成对别的动作说的 —— 模型可能理解成
     // 「restart 是我的自愈手段，不用问」。`the lock skips it, approval does not` 把两个主语
     // 摆在一起，豁免只剥掉锁那一层。
-    description: 'Turn one MCP server on or off, restart it, or stop it machine-wide; pass `tool` to target named tools on it. `off` leaves a server running while any conversation still uses it, `stop` ends it for them too. Blocked while the active scene is locked, except restart (the recovery path; the lock skips it, approval does not). Only when the user asks or approves.',
+    description: 'Turn one MCP server on or off, restart it, or stop it machine-wide; pass `tool` to target named tools on it. `off` leaves a server running while any conversation still uses it, `stop` ends it for them too. Blocked while the active scene is locked, except restart (the recovery path; the lock skips it, approval does not). Stopping and a machine-wide on/off ask the user to confirm; a per-conversation switch and restart do not. Only when the user asks or approves.',
     parameters: {
       // 出口必须指向**常驻**来源，不能指向 `mcp_manager_list`：
       // 那条工具在出厂默认里就是关着的，`listHint()` 在它不可见时返回空串，于是猜错名字时的
@@ -428,7 +428,7 @@ export function buildMcpTools(deps: McpToolDeps): void {
   }))
   register(defineTool({
     name: 'mcp_manager_save',
-    description: 'Add a new MCP server, or update the one with this name — the receipt says which. Omitted fields keep their current values, so never restate the whole server. Pass `hint` for a usage note. Blocked while the active scene is locked. Only on the user\'s instruction.',
+    description: 'Add a new MCP server, or update the one with this name — the receipt says which. Omitted fields keep their current values, so never restate the whole server. Pass `hint` for a usage note. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
     parameters: {
       server: { type: 'string', required: true, description: 'Server name (1-32 chars, [A-Za-z0-9_-]) — the name the mcp__<server>__ tools use.' },
       transport: { type: 'string', description: 'streamable-http or stdio. Required when creating.' },

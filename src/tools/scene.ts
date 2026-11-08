@@ -276,7 +276,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 为什么 `action` 是必填枚举而不是一个布尔：与 `mcp_manager_switch` 同一条理由 ——
     // 让模型在 enter / exit 两个动词里选一个，比让它猜"scene 传 null 是什么意思"省一次往返。
     // 参数里刻意不出现 `null`：那是 op（`scene-mode-set`）的形态，模型照着填只会填错。
-    description: 'Enter a scene, or leave the one currently entered. Entering switches on its archive and everything else off, narrows injection to its memories, and applies its bound prompt preset to AGENTS.md. Leaving restores the runtime snapshot taken on entry. Only when the user asks or approves.',
+    description: 'Enter a scene, or leave the one currently entered. Entering switches on its archive and everything else off, narrows injection to its memories, and applies its bound prompt preset to AGENTS.md. Leaving restores the runtime snapshot taken on entry. Asks the user to confirm before it runs. Only when the user asks or approves.',
     parameters: {
       action: { type: 'string', required: true, enum: ['enter', 'exit'], description: 'enter = switch to the scene named in `scene`; exit = leave the current one (no scene needed).' },
       scene: { type: 'string', description: 'Scene name (one path segment), required for enter — the exact name, not the display label.' },
@@ -412,7 +412,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 参数说明与注入侧各说各话时，模型信的那份是错的。改为如实说明去向。
     // 描述不再逐项列举档案里有哪些段（参数表本身就是那张清单，模型读参数时两处都在手上）：
     // 这里只留参数表**答不了**的三件事 —— 场景是什么、整段替换的语义、保存不等于进入。
-    description: 'Save a scene — a named bundle the user enters: entering switches on exactly what its archive lists and everything else off. Creates it if absent. Omitted fields keep their values; an archive section you give replaces that section whole (include what should stay — the receipt reports what got displaced). Saving does not enter it. Only on the user\'s instruction.',
+    description: 'Save a scene — a named bundle the user enters: entering switches on exactly what its archive lists and everything else off. Creates it if absent. Omitted fields keep their values; an archive section you give replaces that section whole (include what should stay — the receipt reports what got displaced). Saving does not enter it. Asks the user to confirm before it runs. Only on the user\'s instruction.',
     parameters: {
       scene: { type: 'string', required: true, description: 'Scene name (one path segment, ≤64 chars, no / \\ or < > : " | ? *, not `_shared`). Created if absent.' },
       label: { type: 'string', description: 'Display name for this scene.' },

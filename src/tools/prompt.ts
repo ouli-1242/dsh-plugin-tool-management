@@ -100,7 +100,7 @@ export function buildPromptTools(deps: PromptToolDeps): void {
   }))
   register(defineTool({
     name: 'prompt_manager_apply',
-    description: 'Apply one AGENTS.md preset by id; effective next turn. When a scene drives the baseline this does not refuse — it rebinds that scene, so tell the user which one. A locked scene blocks the call. apply=false cancels instead: AGENTS.md goes back to what it was before this run of applies (removed if there was none), which a scene-driven baseline refuses — rebind the scene instead. Only on the user\'s instruction.',
+    description: 'Apply one AGENTS.md preset by id; effective next turn. When a scene drives the baseline this does not refuse — it rebinds that scene, so tell the user which one. A locked scene blocks the call. apply=false cancels instead: AGENTS.md goes back to what it was before this run of applies (removed if there was none), which a scene-driven baseline refuses — rebind the scene instead. Applying asks the user to confirm first; cancelling (apply=false) does not. Only on the user\'s instruction.',
     parameters: {
       // `id` 从 required 摘掉：描述一直写着 "Ignored when
       // apply=false"，schema 却把它标成必填 —— 模型照描述「取消不用给 id」操作，先被 schema

@@ -69,6 +69,7 @@ export interface RemoveToolDeps extends ToolDomainDeps {
 function removeDescription(noun: string): string {
   return 'Delete one ' + noun + ' (to the trash), restore one, or list the trash. '
     + 'Deletes are recoverable; this tool never empties the trash. '
+    + 'Deleting asks the user to confirm; listing the trash and restoring do not. '
     + 'Blocked while the active scene is locked. Only on the user\'s instruction.'
 }
 

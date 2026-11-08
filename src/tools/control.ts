@@ -76,8 +76,8 @@ export function buildControlTools(deps: ControlToolDeps): void {
     register(defineTool({
       name: CONTROL_TOOL_NAME,
       description:
-        'Turn this plugin\'s own tools on or off for the scope that governs this conversation: '
-        + 'this conversation alone, its whole workspace under workspace isolation, or every conversation once isolation is off. '
+        'Turn this plugin\'s own tools on or off for the scope that governs this conversation '
+        + '(this conversation, its whole workspace under workspace isolation, or every conversation once isolation is off). '
         + 'Call `list` when the user asks for something this conversation cannot do yet (e.g. switching scene while the scene tools are off): it returns the tools that are off here, one line each. '
         + '`enable`/`disable` take one or more names and apply from the next request.',
       parameters: {
