@@ -4697,7 +4697,7 @@ export default {
       // 由档案同步的回执如实告诉用户（见 syncSceneArchive 的 catch）。
       const read = await mcp.readDisabledToolsResult()
       if (read.status === 'corrupt' || read.status === 'unreadable') {
-        throw new Error('MCP 停用表状态不可读，无法把「全部工具」具化成名单（本笔未写入档案）')
+        throw new Error('the MCP disabled-tools table is unreadable: cannot expand the "all tools" entry into a name list (nothing was written to the archive)')
       }
       const live = await (async () => {
         try {
@@ -5544,9 +5544,9 @@ export default {
      */
     function sessionDisabledNotice(): string {
       const mode = scopeMode()
-      if (mode === 'workspace') return '该工具在本工作区已停用（其他工作区不受影响）'
-      if (mode === 'global') return '该工具已停用（全局设置）'
-      return '该工具在本次对话中已停用（其他对话不受影响）'
+      if (mode === 'workspace') return 'this tool is switched off for this workspace (other workspaces are unaffected)'
+      if (mode === 'global') return 'this tool is switched off (global setting)'
+      return 'this tool is switched off for this conversation (other conversations are unaffected)'
     }
     if (typeof tools.guard === 'function') {
       try {
@@ -5569,14 +5569,14 @@ export default {
               const args = (exec && exec.arguments) as { server?: unknown } | undefined
               const server = String((args && args.server) || '')
               if (server !== '' && sessionServerHiddenOf(exec && exec.agent, server)) {
-                return 'MCP 服务器「' + server + '」在本对话中不可用'
+                return 'MCP server "' + server + '" is not available in this conversation'
               }
             } catch (e) { /* 算不出来 = 不拦 */ }
           }
           try {
             // unknown 必须先于会话 verdict：本会话显式开着也不能越过“停用表读不出来”。
             if (isMcpTool && mcp.disabledToolsState() === 'unknown') {
-              return 'MCP 停用表不可读：所有 MCP 工具已暂时拒绝调用（请在 MCP 页重置停用表）'
+              return 'the MCP disabled-tools table is unreadable: every MCP tool is refused for now — repair it with tool_manager_tools (action="repair", target="mcp-disabled")'
             }
             // 会话层的判定：它有两个方向 —— `deny` 是"这个对话里关掉了"
             // `allow` 是"这个对话里显式开着"，后者要能**越过全局停用表**（逐工具开关按会话
@@ -5585,7 +5585,7 @@ export default {
             if (verdict === 'deny') return sessionDisabledNotice()
             // 只读 TTL 缓存、不做 I/O —— 这段跑在每一次工具调用的热路径上。
             if (verdict !== 'allow' && mcp.isToolDisabled(name)) {
-              return '该工具已在 MCP 管理页停用'
+              return 'this tool has been switched off on the MCP page (mcp_manager_switch can turn it back on)'
             }
             // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
             // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。
@@ -5593,13 +5593,13 @@ export default {
               // 模型自己有出路就别把它推给用户：它手里有控制面工具（tool_manager_tools），
               // 能把这条打开 —— 说清怎么开，比说「去面板点」有用得多。
               return toolAccessRoute(toolDeps, name, exec && exec.agent) === 'none'
-                ? '该工具已在本对话的模型工具表里关掉（要它先在那里打开）'
-                : '该工具已在本对话的模型工具表里关掉 —— 用 tool_manager_tools 打开它（action="enable", tools:["' + name + '"]）'
+                ? 'this tool is switched off in this conversation\'s tool table (the user has to turn it back on)'
+                : 'this tool is switched off in this conversation\'s tool table — enable it with tool_manager_tools (action="enable", tools:["' + name + '"])'
             }
           } catch (e) {
             // 守卫自身算不出来时，MCP 工具必须 fail-closed；其余工具保持原来的放行方向，
             // 避免一个守卫 bug 让整个工具表都不可用。
-            if (isMcpTool) return 'MCP 停用表状态不可读：已拒绝调用'
+            if (isMcpTool) return 'the MCP disabled-tools table is unreadable: this call is refused'
           }
           return undefined
         }), 'dsh-plugin-tool-management: disabled mcp tool guard')
