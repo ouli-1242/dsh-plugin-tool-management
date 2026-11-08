@@ -45,6 +45,7 @@ import {
 } from './context-inject.js'
 import { isApprovalNever } from './approval-policy.js'
 import {
+  applyToolTableToggles,
   DEFAULT_HIDDEN_TOOLS,
   FACTORY_TOOL_TABLE_PRESET,
   normalizeToolTableSettings,
@@ -4003,16 +4004,29 @@ export default {
       const settings = await readToolTableSettings()
       // 侧车 unknown：会话覆盖也拒绝写入 —— 基线 / 全局兜底都读不准，落一份基于空表的
       // 覆盖只会把问题搬到会话层。读取（上面那次）仍按"上次成功值 → 出厂默认"服务。
-      if (args && args.set === true && toolTableState().state === 'unknown') {
+      if (args && (args.set === true || args.toggle !== undefined) && toolTableState().state === 'unknown') {
         return { ok: false, error: toolTableWriteError() }
       }
       let scope = scopeStore.scopeOfSync(sessionId)
-      if (!args || args.set !== true) {
+      // 两条写路：`set` = 整份替换（面板用），`toggle` = 逐条改（模型用）。
+      // 后者的改动落在**当前这份**名单上，在写锁里现读现改 —— 整份替换要先读出名单
+      // 再算差量，读与写之间有窗口，两个写者（面板、模型）会互相覆盖（丢更新）。
+      const toggles = args && Array.isArray(args.toggle)
+        ? (args.toggle as any[])
+          .filter((t) => t && typeof t.name === 'string' && t.name !== '')
+          .map((t) => ({ name: String(t.name), hidden: t.hidden === true }))
+          // 只收注册过的工具名：陌生名字会让官方 restrict 抛错。
+          .filter((t) => toolTableSizes.has(t.name))
+        : null
+      if (!args || (args.set !== true && toggles === null)) {
         // 方案库是全局的：会话层只负责"读这一层 / 应用一份方案"，不在这里存删。
         if (args && (args.presetSave !== undefined || args.presetDelete !== undefined)) {
           return { ok: false, code: 'globalOnly' }
         }
         return toolTableSessionPayload(sessionId, scope, settings)
+      }
+      if (toggles !== null && toggles.length === 0) {
+        return { ok: false, error: 'none of these are this plugin\'s tools: ' + (args.toggle as any[]).map((t: any) => String(t && t.name)).join(', ') }
       }
       if (scope?.locked === true) {
         const layer = isWorkspaceScopeKey(sessionId) ? '工作区' : '会话'
@@ -4027,7 +4041,7 @@ export default {
         }
       }
       // 只收注册过的工具名：陌生名字会让官方 restrict 抛错。
-      const target = normalizeToolTableSettings({ hidden: args.hidden }).hidden
+      const target = normalizeToolTableSettings({ hidden: args && args.hidden }).hidden
         .filter((name) => toolTableSizes.has(name))
       // 老会话的基线里没有这一栏：第一次写时按**当前全局**补一份，
       // 否则退出场景会退回"实时全局"，与"每个对话从创建起有自己的那份"这条口径不符。
@@ -4039,9 +4053,13 @@ export default {
           if (backfillBaselineTt && out.baseline !== undefined) {
             out.baseline = { ...out.baseline, toolTableHidden: settings.hidden.slice() }
           }
+          // 逐条改的那一路：起点是**锁内的当前生效名单**（现读现改）。
+          const next = toggles !== null
+            ? applyToolTableToggles(sessionToolTableHidden(cur, settings.hidden), toggles)
+            : target
           // 与基线同值就不留显式名单：退出场景 / 全局再变时少一条永远相等的覆盖。
-          if (base !== undefined && sameToolNameList(target, base)) delete out.toolTableHidden
-          else out.toolTableHidden = target.slice()
+          if (base !== undefined && sameToolNameList(next, base)) delete out.toolTableHidden
+          else out.toolTableHidden = next.slice()
           return Object.keys(out).length > 0 ? out : undefined
         })
       } catch (e) {
@@ -5218,9 +5236,10 @@ export default {
       toolTableSizes,
       toolTableSummaries,
       hiddenForSession: (agent: unknown) => toolTableHiddenForSession(scopeKeyForAgent(agent)),
-      // 写管着这个对话的那一层的工具表：走面板同一条路（`tool-table` op），
-      // 锁、基线补写、可见性重排、两个目录重算全都照旧。
-      writeSessionTable: async (agent: unknown, hidden: string[]) => {
+      // 逐条改管着这个对话的那一层的工具表：走面板同一条路（`tool-table` op 的
+      // `toggle` 那一支），锁、基线补写、可见性重排、两个目录重算全都照旧；
+      // 逐条改在写锁里现读现改，不会把面板刚写进去的东西覆盖掉。
+      applyToolTable: async (agent: unknown, changes: Array<{ name: string; hidden: boolean }>) => {
         const sessionId = scopeKeyForAgent(agent)
         // 全局粒度：没有会话层，管着这个对话的就是全局那一份 —— 写全局表（机器级，
         // 调用前已被确认卡问过）。**不能**因为「解析不出会话 id」就写全局：那是
@@ -5229,7 +5248,7 @@ export default {
         if (sessionId === null && !globalLayer) {
           return { ok: false, error: 'cannot resolve the scope of this conversation: the tool table was not changed' }
         }
-        const args = globalLayer ? { set: true, hidden } : { sessionId, set: true, hidden }
+        const args = globalLayer ? { toggle: changes } : { sessionId, toggle: changes }
         const r: any = await handlers['tool-table'](args)
         // 模型侧直调 handler 不经过 HTTP 路由，那条路由才会记流水 —— 这里自己记一条，
         // 否则「谁改了工具表」在「最近改动」里查不到。

@@ -289,7 +289,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // —— 后两条不经过 `set`，只认 `set` 的判据会把它们当成读放行。
   'tool-table': {
     write: true,
-    writeWhen: (a) => a.set === true || a.presetSave !== undefined || a.presetDelete !== undefined,
+    writeWhen: (a) => a.set === true || a.toggle !== undefined || a.presetSave !== undefined || a.presetDelete !== undefined,
   },
   // 场景页的界面设置（进入场景前要不要弹「会改什么」的预览卡）：写侧车，按写门禁。
   // **刻意不冻结**：它只是界面提示，锁着场景的人在场景页照样该能关掉提醒 —— 冻结的是五个

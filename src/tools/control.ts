@@ -18,7 +18,7 @@
 
 import { text, type ToolDomainDeps } from './deps.js'
 import { governingScopeNote } from './deps.js'
-import { estimateTok } from './table.js'
+import { applyToolTableToggles, estimateTok } from './table.js'
 
 /** 控制面工具要的依赖：本插件的工具清单 + 会话工具表的读写。 */
 export interface ControlToolDeps extends ToolDomainDeps {
@@ -34,14 +34,17 @@ export interface ControlToolDeps extends ToolDomainDeps {
    */
   hiddenForSession(agent: unknown): ReadonlySet<string>
   /**
-   * 写管着这个对话的那一层的工具表（整份关停名单）。
+   * 逐条改管着这个对话的那一层的工具表。
    *
-   * 走面板同一条写路径（`tool-table` op），所以锁、基线补写、可见性重排、两个目录重算
-   * 全都照旧 —— 这里不另写一份。带 sessionId 时写会话那一层，不带时写全局那一份
-   * （隔离关掉时没有会话层，管着这个对话的就是全局那份；那一档是机器级改动，
-   * 调用前已被确认卡问过）。
+   * 走面板同一条写路径（`tool-table` op 的 `toggle` 那一支），所以锁、基线补写、
+   * 可见性重排、两个目录重算全都照旧 —— 这里不另写一份。带 sessionId 时写会话那一层，
+   * 不带时写全局那一份（隔离关掉时没有会话层，管着这个对话的就是全局那份；那一档是
+   * 机器级改动，调用前已被确认卡问过）。
+   *
+   * **逐条改**而不是整份替换：整份替换要先读出当前名单再算差量，读与写之间有窗口，
+   * 两个写者（面板、模型）会互相覆盖。逐条改在写锁里现读现改（见 `applyToolTableToggles`）。
    */
-  writeSessionTable(agent: unknown, hidden: string[]): Promise<{ ok: boolean; error?: string }>
+  applyToolTable(agent: unknown, changes: Array<{ name: string; hidden: boolean }>): Promise<{ ok: boolean; error?: string }>
   /**
    * 修复类动作：把**已损坏**的侧车改名留存、按空表继续。
    *
@@ -124,12 +127,12 @@ export function buildControlTools(deps: ControlToolDeps): void {
           throw new Error('this tool cannot switch itself off — it is the only way back to the others. Only the user can disable it (in the panel).')
         }
         const hidden = deps.hiddenForSession(agent)
-        const next = action === 'enable'
-          ? [...hidden].filter((n: string) => !known.includes(n))
-          : [...hidden, ...known.filter((n: string) => !hidden.has(n))]
-        const saved = await deps.writeSessionTable(agent, next)
+        // 逐条改：每一处改动是一个「关掉 / 打开某一条」，写侧在锁里现读现改。
+        const changes = known.map((name) => ({ name, hidden: action === 'disable' }))
+        const next = applyToolTableToggles([...hidden], changes)
+        const saved = await deps.applyToolTable(agent, changes)
         if (!saved.ok) throw new Error(saved.error || 'failed to save the tool table for this conversation')
-        const changed = action === 'enable' ? known.filter((n) => hidden.has(n)) : known.filter((n) => !hidden.has(n))
+        const changed = changes.filter((c) => (c.hidden ? !hidden.has(c.name) : hidden.has(c.name))).map((c) => c.name)
         const lines = [
           'OK: ' + (action === 'enable' ? 'enabled' : 'disabled') + ': ' + (changed.join(', ') || '(nothing changed)')
             + governingScopeNote(deps) + '.',

@@ -385,6 +385,27 @@ export function summarizeToolDescription(description: unknown): string {
 }
 
 /**
+ * 逐条改一份关停名单：返回新的名单（不改动入参）。
+ *
+ * 为什么要有「改一格」而不只有「整份替换」：整份替换要先**读出**当前名单再算差量，
+ * 而那次读与后面那次写之间有窗口 —— 两个写者（面板、模型）各拿一份旧名单写回时，
+ * 后写的会把先写的覆盖掉（丢更新）。逐条改可以在写锁里现读现改，窗口消失。
+ *
+ * `hidden: true` = 关掉（进名单），`false` = 打开（出名单）。
+ */
+export function applyToolTableToggles(
+  current: readonly string[],
+  toggles: ReadonlyArray<{ name: string; hidden: boolean }>,
+): string[] {
+  const out = current.slice()
+  for (const t of toggles) {
+    const i = out.indexOf(t.name)
+    if (t.hidden) { if (i < 0) out.push(t.name) } else if (i >= 0) out.splice(i, 1)
+  }
+  return out
+}
+
+/**
  * 纯函数：把注册时量到的体积按域分组，标出哪些被关掉，给出四档合计。
  *
  * 顺序：域按 `INJECT_DOMAIN_KEYS`（界面与注入通道同一顺序），域内按**注册顺序**

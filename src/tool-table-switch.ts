@@ -19,7 +19,7 @@ import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 import { hubPath } from './hub.js'
 import type { JsonFileRead } from './mcp/disabled-tools.js'
 import {
-  addPreset, buildToolTableReport, classifyToolTableSettings, DEFAULT_HIDDEN_TOOLS, DEFAULT_TOOL_TABLE_SETTINGS, dropPreset, migrateLegacyToolNames,
+  addPreset, applyToolTableToggles, buildToolTableReport, classifyToolTableSettings, DEFAULT_HIDDEN_TOOLS, DEFAULT_TOOL_TABLE_SETTINGS, dropPreset, migrateLegacyToolNames,
   normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH, summarizeToolDescription,
   type ToolTableReport, type ToolTableRow, type ToolTableSettings,
 } from './tools/table.js'
@@ -320,6 +320,29 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
         return toolTablePayload(outcome.settings)
       }
       return toolTablePayload(await readToolTableSettings())
+    }
+    // 逐条改（`toggle`）：改动落在**当前这份**名单上，在写锁里现读现改 ——
+    // 整份替换要先把名单读出来再算差量，读与写之间有窗口，两个写者会互相覆盖。
+    if (Array.isArray(args.toggle) && args.toggle.length > 0) {
+      const toggles = (args.toggle as any[])
+        .filter((t) => t && typeof t.name === 'string' && t.name !== '')
+        .map((t) => ({ name: String(t.name), hidden: t.hidden === true }))
+        // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错。
+        .filter((t) => toolTableSizes.has(t.name))
+      if (toggles.length === 0) {
+        return { ok: false, error: 'none of these are this plugin\'s tools: ' + args.toggle.map((t: any) => String(t && t.name)).join(', ') }
+      }
+      const outcome = await mutateToolTableSettings((current) => ({
+        hidden: applyToolTableToggles(current.hidden, toggles),
+        presets: current.presets,
+      }))
+      if (!outcome.ok) return outcome
+      deps.mcp.scheduleToolRestrictions()
+      await Promise.all([
+        deps.skillCatalog.refresh().catch(() => { /* 目录刷新失败不该让保存失败 */ }),
+        deps.subagentCatalog.refresh().catch(() => { /* 同上 */ }),
+      ])
+      return toolTablePayload(outcome.settings)
     }
     // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错
     // （"names unknown global tool"）。注册失败的工具本来也不在表里。
