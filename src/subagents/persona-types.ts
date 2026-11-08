@@ -128,7 +128,10 @@ export interface ToolFilterDecision {
 export interface SubagentService {
   list(): Promise<PersonaDoc[]>
   /**
-   * 场景绑定校验 + 串行运行一个子代理（结果文本截断 ≤16 KiB）。`inherit` = 用 fork 通道（见 runOnce）。
+   * 场景绑定校验 + 委派一个子代理（结果文本截断 ≤16 KiB）。`inherit` = 用 fork 通道（见 runOnce）。
+   *
+   * **启动串行、等待可重叠**：同一时刻至多一次启动在途，启动完之后子代理们各自跑各自的 ——
+   * 所以多个委派可以并行（宿主按工具的并发准入标志分组）。
    *
    * `continuable: true` = 这次走的是**允许追问通道**：没有产出文本，`runId` 是持久子会话 id，
    * `stopReason` 固定为 `'started'`，产出稍后由子代理自己 `send_message` 回来（见 PersonaDoc.continuable）。

@@ -207,7 +207,23 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     } catch { /* effect 不可用 → 只影响清理，不影响本次委派 */ }
   }
   installChildPresetCleanup()
-  async function runOnce(parentAgent: any, p: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean): Promise<{ text: string; runId: string; stopReason: string; continuable?: true }> {
+  /**
+   * 一次委派的启动句柄。
+   *
+   * `continuable` 那支没有等待段：子代理在后台跑，产出由官方结算通知送回父代理。
+   */
+  type RunHandle =
+    | { continuable: true; runId: string }
+    | { continuable: false; activation: any; releasePreset: (() => Promise<void>) | undefined }
+
+  /**
+   * 一次委派的**启动**阶段：走到子代理跑起来为止，不等它跑完。
+   *
+   * 为什么要拆成两段：等待段（`activation.result`）是纯等待，而启动段会碰共享状态
+   * （provider 挂载、临时子预设的注册、官方 `startActivation`）。串行只该护住启动段 ——
+   * 整趟串行会让"同时派三个人设"退化成排队，而那正是并行派活要解决的问题。
+   */
+  async function startRun(parentAgent: any, p: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean): Promise<RunHandle> {
     // 这里**刻意没有**"预算用尽就拒绝"的前置检查：宿主统一决定委派深度
     // （当前默认 maxDepth=1），本工具不传 maxDepth，也不自行判断能否继续委派。
     //
@@ -341,9 +357,24 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
       throw new Error(`failed to apply the subagent tool restriction: ${restrictionFailure.message}`)
     }
     if (p.continuable === true) {
-      return { text: '', runId: String(activation.childId ?? ''), stopReason: 'started', continuable: true }
+      // 允许追问的子代理是**后台**跑的：产出不在这里，启动完就交回控制权。
+      // 这次激活不 dispose、临时预设也不释放 —— 追问要靠它们恢复（见 presetLeases 的注释）。
+      return { continuable: true, runId: String(activation.childId ?? '') }
     }
+    return { continuable: false, activation, releasePreset }
+  }
 
+  /**
+   * 一次委派的**等待**阶段：等子代理跑完，取结果并收尾。
+   *
+   * 与启动段分开，是为了让多次委派的**等待**能重叠：等待是纯等待，不碰共享状态。
+   */
+  async function finishRun(handle: RunHandle): Promise<{ text: string; runId: string; stopReason: string; continuable?: true }> {
+    if (handle.continuable === true) {
+      return { text: '', runId: handle.runId, stopReason: 'started', continuable: true }
+    }
+    const activation = handle.activation
+    const releasePreset = handle.releasePreset
     try {
       const result = await activation.result   // 官方契约：child 级失败不 reject（stopReason 体现）
       // 只取 `text` 块（见 textOfBlocks）。此前这里只判了 `typeof b.text === 'string'`，
@@ -366,18 +397,28 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     }
   }
 
-  // v1 串行：同一时刻至多一次**启动**在途。
-  // ⚠️这条不再等于"至多一个子代理在跑"：允许追问（`continuable`）的子代理在
-  // `startActivation()` 返回后仍在后台运行，而这里只串行化"启动"这一步。这是官方通道的
-  // 固有语义（后台子级本来就允许并存），不是本插件放宽了限制。
+  /** 启动 + 等待走一遍（不重叠的那条路；并行通道见 runSerial）。 */
+  async function runOnce(parentAgent: any, p: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean): Promise<{ text: string; runId: string; stopReason: string; continuable?: true }> {
+    return finishRun(await startRun(parentAgent, p, task, signal, toolFilter, inherit))
+  }
+
+  // 启动串行、等待重叠：同一时刻至多一次**启动**在途，启动完之后子代理们各自跑各自的。
+  // ⚠️ 这条不等于"至多一个子代理在跑"：允许追问（`continuable`）的子代理在 `startActivation()`
+  // 返回后仍在后台运行，而这里只串行化"启动"这一步。这是官方通道的固有语义（后台子级本来就
+  // 允许并存），不是本插件放宽了限制。
+  // 串行只护住启动段，是因为它会碰共享状态：provider 挂载（`ensureProvider` 的检查-执行不是
+  // 原子的）、临时子预设的注册（官方对重名直接报 `Duplicate agent preset`）、官方
+  // `startActivation`。等待段是纯等待，挂在链上只会让"同时派三个人设"退化成排队。
   // `continuable: true` 的返回值是 `{ text: '', stopReason: 'started' }` —— 产出不在这里，
   // 而由官方的结算通知在子代理结束时送到父代理（见 persona-types.ts 的 continuable 注释）。
   let chain: Promise<unknown> = Promise.resolve()
   const runSerial = (parentAgent: any, p: PersonaDoc, task: string, signal: AbortSignal | undefined, toolFilter?: ToolFilter | null, inherit?: boolean) => {
-    const start = () => runOnce(parentAgent, p, task, signal, toolFilter, inherit)
-    const queued = chain.then(start, start)
-    chain = queued.catch(() => undefined)
-    return queued
+    const start = () => startRun(parentAgent, p, task, signal, toolFilter, inherit)
+    const started = chain.then(start, start)
+    // 链上只挂**启动**这一段：等待不占链（否则并行批次里的第二个人设仍要排队等第一个跑完）。
+    // 失败不污染链：启动抛错与等待抛错都不该让后面的委派一起挂掉。
+    chain = started.then(() => undefined, () => undefined)
+    return started.then(finishRun)
   }
 
   return { PROVIDER_PACKAGES, providerMounts, hasProvider, ensureProvider, runOnce, runSerial }

@@ -225,6 +225,19 @@ export function defineSubagentManagerRunTool(subagents: RunToolDeps) {
       schema: { type: 'string' } as const,
       render: (_a: unknown, v: unknown) => text(String(v)),
     },
+    /**
+     * 并行准入：这一条**允许**与同批的兄弟调用并发跑（宿主的 `isConcurrencySafe` 契约：
+     * 只有 `true` 才进并行批次，缺省即独占）。
+     *
+     * 为什么可以并发：委派跑的是**独立的子会话**（spawn 通道），不改父会话的任何状态；
+     * 插件自己的共享写入（记忆索引、场景档案）都在 hub 写锁下面，与并发子代理无关。
+     * 运行侧也为此把「启动串行 + 等待重叠」拆开了（run-provider 的 runSerial）——
+     * 不拆的话这里标了 `true` 也只是形式上并行，实际仍在排队。
+     *
+     * 为什么 `inherit` 那支不给并发：fork 通道继承的是**本次会话的上下文**，两个 fork
+     * 同时读同一个父会话，是本插件判不准的那一类共享状态。宁可它排队。
+     */
+    isConcurrencySafe: (args: { inherit?: boolean }) => args?.inherit !== true,
     async execute(args: { agent: string; task: string; inherit?: boolean }, exec: any) {
       const name = String((args && args.agent) || '').trim()
       const task = String((args && args.task) || '').trim()
