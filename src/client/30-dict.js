@@ -629,6 +629,7 @@
         "compat.tools.about.subagent_manager_remove": "删除/恢复人设",
         "compat.tools.about.prompt_manager_list": "列出全局提示词",
         "compat.tools.about.prompt_manager_apply": "应用全局提示词",
+        "compat.tools.about.tool_manager_tools": "本对话的工具开关",
         "compat.tools.about.prompt_manager_remove": "删除/恢复全局提示词",
         "compat.tools.hover.memory_manager_list": "列出记忆的 id、所属场景、启停与一句话描述，并标明注入按哪个场景走。默认只列这次真的会注入的记忆；all=true 会把停用、场景未启用、被同名覆盖的一起列出来。场景本身（档案、绑定的预设、锁没锁）在 scene_manager_list。只看不改。",
         "compat.tools.hover.memory_manager_read": "按 id（<场景>/<名字>）读一条记忆的完整正文。清单里只有一句话描述，要看正文就用它 —— 尤其是被停用、场景没启用、或被体积预算挤掉的记忆。",
@@ -651,6 +652,7 @@
         "compat.tools.hover.subagent_manager_save": "新建人设，或改掉已存在的那份 —— 回执会说清走了哪条。可改名字、描述、正文（正文会作为子代理的系统提示词）与输出要求，没传的字段保持原样；改名会连带改场景与档案里的绑定。provider / 模型 / 工具限制只留给面板（模型看不到自己改对了没有，所以不给）。描述决定模型什么时候会选它。",
         "compat.tools.hover.prompt_manager_list": "列出全局提示词预设（写进 AGENTS.md 的那一类）与摘要，标明当前生效的是哪一份 —— 同时只有一份生效。要换用哪份之前先用它确认名字。快捷提示词不在这个域里：那是用户自己在输入框里点出来的一段话，不进上下文，模型这边没有可做的动作。",
         "compat.tools.hover.prompt_manager_apply": "把某份预设应用到用户级 AGENTS.md，之后的对话立刻按它走。一次只有一份在生效，换一份就是替换上一份。",
+        "compat.tools.hover.tool_manager_tools": "模型自己开关**本对话**能用的插件工具。action=list 列出这个对话当前关着的那些（每条一句话用途 + 每轮 ≈token）；action=enable / disable 把它们打开或关掉，只影响这个对话，从下一次请求起生效。要在对话里说「进入某个场景」而场景工具恰好是关着的时候，就靠它。action=repair 修坏掉的侧车（记忆索引 / 作用域侧车 / MCP 停用表）—— 那一步会把损坏的文件改名留存、按空表继续，所以会先问一次。",
         // 删除族（2026-10-15）统一悬停模板：`把<对象>移进回收站、从回收站恢复，或列出回收站。
         // 删除可恢复；永久删除在「<页>」页的回收站里做。` —— 五条同形，只换对象词与页名。
         "compat.tools.hover.scene_manager_remove": "把场景移进回收站、从回收站恢复，或列出回收站。删除可恢复；永久删除在「场景」页的回收站里做。",
@@ -1559,6 +1561,7 @@
         "compat.tools.about.subagent_manager_remove": "Delete/restore a persona",
         "compat.tools.about.prompt_manager_list": "List global prompts",
         "compat.tools.about.prompt_manager_apply": "Apply a global prompt",
+        "compat.tools.about.tool_manager_tools": "This conversation's tool switches",
         "compat.tools.about.prompt_manager_remove": "Delete/restore a global prompt",
         "compat.tools.hover.memory_manager_list": "Lists each memory's id, scene, on/off state and one-line description, and says which scene injection follows. Only the memories that would actually be injected by default; all=true adds disabled, inactive-scene and shadowed entries. The scenes themselves (archives, bound presets, locks) are in scene_manager_list. Read-only.",
         "compat.tools.hover.memory_manager_read": "Reads the full body of one memory by id (<scene>/<name>). The list carries a one-line description only — use this for the body, especially for memories that are off, in an inactive scene, or dropped by the byte budget.",
@@ -1581,6 +1584,7 @@
         "compat.tools.hover.subagent_manager_save": "Creates a persona, or updates the existing one — the receipt says which. You can set the name, description, body (the body becomes the subagent's system prompt) and output contract; omitted fields keep their current values, and a rename makes scene and archive bindings follow. Provider, model and tool limits stay in the panel (the model cannot tell whether it got them right, so it is not offered them). The description decides when the model picks it.",
         "compat.tools.hover.prompt_manager_list": "Lists the global prompt presets (the ones written into AGENTS.md) with their summaries and marks the one currently in effect — only one is active at a time. Use it to confirm the name before switching. Quick prompts are not this domain: the user picks those in the composer, they never enter the context, and there is nothing for the model to do with them.",
         "compat.tools.hover.prompt_manager_apply": "Applies a preset to the user-level AGENTS.md; later conversations follow it immediately. Only one preset is in effect, so applying another replaces it.",
+        "compat.tools.hover.tool_manager_tools": "The model switches which of this plugin's tools THIS conversation can use. action=list lists the ones that are off here (one line of purpose each, plus their per-turn token cost); action=enable / disable turns them on or off, affecting this conversation only and taking effect from the next request. This is what unblocks \"switch to that scene\" when the scene tools happen to be off. action=repair fixes a broken sidecar (memory index / scope sidecar / MCP disabled-tools table) — that renames the damaged file aside and continues with an empty table, so it asks first.",
         "compat.tools.hover.scene_manager_remove": "Moves a scene to the trash, restores one from the trash, or lists the trash. Deleting is reversible; emptying the trash is a panel action.",
         "compat.tools.hover.memory_manager_remove": "Moves a memory to the trash, restores one from the trash, or lists the trash. Deleting is reversible — to just stop it being injected, disable it with switch instead. Emptying the trash is a panel action.",
         "compat.tools.hover.skill_manager_remove": "Moves a skill to the trash, restores one from the trash, or lists the trash. Deleting is reversible — to just stop the model seeing it, disable it with switch; pass root to pick the source on trash (omit it and the name is looked up across every source, independently of where save put it). Emptying the trash is a panel action.",
