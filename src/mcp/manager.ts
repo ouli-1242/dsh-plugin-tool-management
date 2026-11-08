@@ -74,6 +74,13 @@ export interface McpManagerDeps {
    */
   pluginHiddenTools?(): string[]
   /**
+   * 这个名字是不是本插件注册的工具（注册事实判据，不是前缀枚举）。
+   *
+   * 透给可见性模块做观测日志：工具表只该管自家那批，deny 名单里出现别的东西
+   * 意味着有别的东西混进来了。缺省（未给）时不判，日志少打一行。
+   */
+  isPluginToolName?(name: string): boolean
+  /**
    * 「有官方等价物在场就让位」那半边：按 **agent** 算的额外 hide 名单（异步，读该 agent 的
    * 预设事实 / 观察它 scope 里解析得到什么）。
    *
@@ -679,6 +686,7 @@ export function createMcpManager(deps: McpManagerDeps): McpManager {
   } = createToolVisibility({
     readJsonFile, readJsonFileStrict, writeJsonFile, ensurePaths, withWriteLock, message, tools,
     pluginHiddenTools: deps.pluginHiddenTools, carrierHiddenTools: deps.carrierHiddenTools,
+    isPluginToolName: deps.isPluginToolName,
     sessionMcpOverlay: deps.sessionMcpOverlay,
     sessionToolTableOverlay: deps.sessionToolTableOverlay,
     normalizeKnownTools, mcpSidecar, SIDECAR_TTL_MS, MCP_DISABLED_TOOLS_FILE, MCP_KNOWN_TOOLS_FILE,

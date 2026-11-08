@@ -55,6 +55,18 @@ export interface ToolVisibilityDeps {
   MCP_KNOWN_TOOLS_FILE: string
   /** 「模型工具表」关掉的本插件工具（同步快照）。 */
   pluginHiddenTools?(): string[]
+  /**
+   * 本插件**注册过**的工具名判据：这个名字是不是我们自己的工具。
+   *
+   * 为什么要有这条：观测日志要区分「关掉的是自家工具」与「关掉的是别的东西」，
+   * 而后者在这套设计里不该出现 —— 工具表只管自家那批（宿主工具归宿主，插件不代管）。
+   * 判据必须是**注册事实**（母文件那份注册漏斗记下的全集），不能靠枚举工具名前缀：
+   * 前缀表会漏 —— 控制面工具 `tool_manager_tools` 就不在「域名 + `_manager_`」那套前缀里，
+   * 漏掉它等于把自家工具误报成外来的。
+   *
+   * 缺省（未给）时不判（视为「没有外来工具」）：成功侧那行日志不触发，不影响功能。
+   */
+  isPluginToolName?(name: string): boolean
   /** 「有官方等价物在场就让位」那半边：按 agent 算的额外 hide 名单。 */
   carrierHiddenTools?(agent: unknown): Promise<string[]>
   /**
@@ -473,6 +485,23 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   /** 见过的 agent（重放时逐个重新应用；disposed 时移除）。 */
   const seenAgents = new Set<unknown>()
   /**
+   * 已报过的装层失败：(agent, 名单, 原因) → 已报。
+   *
+   * 为什么要有：装层失败没有「键相同就跳过」的保护（没装上就得再试），
+   * 而 `tools/change` 空闲时也能到十几次/秒 —— 不去重的话同一份失败会刷满日志，
+   * 真正的新问题反而被淹没。名单或原因变了才算新问题，才会再报一行。
+   *
+   * 键里带 agent 身份：不同 scope 的失败是不同的事。
+   */
+  const reportedRestrictFailures = new Map<string, boolean>()
+  /** agent 的可读标识（给日志用；读不到就退化成空串，不影响判断）。 */
+  const agentIdOf = (agent: unknown): string => {
+    try {
+      const id = (agent as { id?: unknown })?.id
+      return id === undefined || id === null ? '' : String(id)
+    } catch { return '' }
+  }
+  /**
    * 重放代数：`carrierHiddenTools` 是异步的，算名单期间可能又来了新的一轮重放（或 agent
    * 已经下线）。每次重放自增，回来时代数对不上就作废 —— 否则会用旧名单盖掉新的那一层。
    */
@@ -562,6 +591,22 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
       agentRestrictions.set(agent, typeof dispose === 'function' ? dispose as () => void : () => {})
       appliedByAgent.set(agent, denyKey)
       clearRuntimeNote('mcp-tool-visibility')
+      // 成功路径此前完全静默，出问题时日志里看不到任何证据 —— 只能靠猜。
+      // 报这一行是为了让「工具表关掉了什么、这一层装上了没有」在命令行就能查。
+      //
+      // 只在**装上了非自家工具**时才打：工具表只管自家那批，deny 名单里出现别的东西
+      // 意味着有别的东西混进来了 —— 那是该查的异常。日常（全是自家工具 + MCP 工具）不刷屏。
+      const foreign = denyNames.filter((name) => {
+        if (name.startsWith(MCP_TOOL_PREFIX)) return false
+        return deps.isPluginToolName ? !deps.isPluginToolName(name) : false
+      })
+      if (foreign.length > 0) {
+        console.warn(
+          '[dsh-plugin-tool-management] restrict 已装上，但名单里有非本插件的工具：'
+          + foreign.slice(0, 20).join('、')
+          + '（工具表只该管自家工具，宿主工具归宿主 —— 这几条是谁放进来的？）',
+        )
+      }
     } catch (e) {
       // 这个名字在这个 scope 里认不出 / scope 已经收了：可见性半边没生效。执行侧的 guard
       // 仍然拦住调用，所以功能不缺 —— 但必须如实上报，不能假装成功（此前正是静默吞掉）。
@@ -574,6 +619,25 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
         detailKey: 'mcp-tool-visibility.partial',
         params: { reason: deps.message(e) },
       })
+      // 失败也要落到日志：`noteRuntime` 只存进程内存，只能从兼容页看到，
+      // 命令行排查时等于没有。带上原因与名单长度 —— 官方 `restrict` 对认不出的名字是
+      // **整份名单抛错**，所以「装不上」往往意味着名单里有一条过期名字。
+      //
+      // 失败路径没有「键相同就跳过」那层保护（装不上就没装上，下一轮还要再试），
+      // 而 `tools/change` 在空闲时也能到十几次/秒 —— 每次都打一行会把日志刷爆。
+      // 按 (agent, 名单, 原因) 去重：同一份失败只报第一次，名单或原因变了才再报。
+      const failKey = agentIdOf(agent) + '\u0000' + denyKey + '\u0000' + deps.message(e)
+      if (reportedRestrictFailures.get(failKey) !== true) {
+        // 上限：失败是罕见路径，但 agent 会话来来去去，键会一直攒 —— 满了就清空重来
+        // （代价是旧失败可能再报一次，那也比无界增长好）。
+        if (reportedRestrictFailures.size >= 200) reportedRestrictFailures.clear()
+        reportedRestrictFailures.set(failKey, true)
+        console.warn(
+          '[dsh-plugin-tool-management] restrict 装层失败（可见性半边没生效，执行侧拦截仍在拦）：'
+          + deps.message(e)
+          + '｜本次名单 ' + denyNames.length + ' 条',
+        )
+      }
     }
   }
 

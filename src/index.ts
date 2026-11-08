@@ -2949,6 +2949,16 @@ export default {
     // 打码后的列表行、场景档案引擎要读写停用表与备注、工具门禁要读 TTL 缓存判断某工具是否
     // 被停用、审批策略要读插件设置。以前这些靠闭包隐式共享（谁在用什么看不出来），现在全部
     // 经返回的 McpManager 显式暴露。
+    //
+    // 本插件注册过的工具名。**唯一**可靠的"插件工具"判据：官方没有工具级归属接口
+    // （`ToolSchema` 无归属字段、`ToolRuntime` 公开面无来源、`tools/change` 无载荷），
+    // 但自己注册了什么自己当然知道。登记点在下面 `toolDeps.register`（那个漏斗，
+    // 六个域的构建器全部经它），所以不可能漂移 —— 新增工具自动进集合，不用维护前缀表。
+    //
+    // 声明放在这里而不是下面 `candidates` 那处：可见性模块要用它判「这个名字是不是自家工具」
+    // （观测日志的判据），那个 deps 传得比这行早。注册发生在后面（`toolDeps.register`），
+    // 所以读到的是运行时真值 —— 集合由闭包持有，早声明只是早建一个空 Set。
+    const selfToolNames = new Set<string>()
     const mcp = createMcpManager({
       readJsonFile,
       readJsonFileStrict,
@@ -2967,6 +2977,9 @@ export default {
       // `tools.restrict()` 是"每个 scope 一层限制"，两边各调一次会互相覆盖（后一层赢）。
       // 名单的合法性（只含已注册工具）由 manager 那边与 schemas() 求交后保证。
       pluginHiddenTools: () => [...toolTableHidden()],
+      // 「这个名字是不是自家工具」：注册漏斗记下的全集（`selfToolNames`，注册成功才记）——
+      // 注册事实，不是前缀枚举（前缀表会漏掉控制面工具 `tool_manager_tools`）。
+      isPluginToolName: (name: string) => selfToolNames.has(name),
       // 有官方等价物时逐 agent 让位（见上面 CARRIER_DUPLICATES 的注释）。
       carrierHiddenTools: carrierHiddenToolsFor,
       // 状态段尾句那句「用 `mcp_manager_list` 查」的前提：与技能 / 子智能体两个目录同一份判据
@@ -3075,11 +3088,6 @@ export default {
     // 实现在 ./scenes/candidates.ts（从本闭包 10 段抽出，约 260 行）。
     // 放在这里而不是更早：它要 mcp（读停用表）与 toolKeyParts（416 行的 const），
     // 而唯一在更早处引用它的地方（注入 deps 的 factsFor）是箭头函数，调用发生在之后。
-    // 本插件注册过的工具名。**唯一**可靠的"插件工具"判据：官方没有工具级归属接口
-    // （`ToolSchema` 无归属字段、`ToolRuntime` 公开面无来源、`tools/change` 无载荷），
-    // 但自己注册了什么自己当然知道。登记点在下面 `toolDeps.register`（2115 行那个漏斗，
-    // 六个域的构建器全部经它），所以不可能漂移 —— 新增工具自动进集合，不用维护前缀表。
-    const selfToolNames = new Set<string>()
     const candidates = createCandidates({
       get: (name: string) => ctx.get(name),
       tools,
