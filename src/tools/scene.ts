@@ -25,7 +25,7 @@
 // **场景段的动作句仍然不加回来**：「上下文注入只给现在是什么」是同一天定下的原则，
 // 不因为多了一条工具就破例（工具描述本来就是写"什么时候该用它"的地方）。
 
-import { candidateNote, effectiveScope, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, toolNameList, type ToolDomainDeps } from './deps.js'
+import { candidateNote, effectiveScope, globalUnchangedNote, isolationOffNote, requireGlobalScope, scopeGlobalOnlyDesc, scopeOnlyNote, scopeSessionDesc, sessionLayerOn, sessionScopeOf, text, toolAccessSentence, toolNameList, type ToolDomainDeps } from './deps.js'
 import { FACTORY_TOOL_TABLE_PRESET } from './table.js'
 
 /** 场景工具域要的宿主能力：场景记录、联动与档案。 */
@@ -61,6 +61,16 @@ export interface SceneToolDeps extends ToolDomainDeps {
 /** 档案里由模型设置的段（`memories` 段在 P5 已废弃，不再是档案的一部分）。
  *  `mcpNotes`与其余三段同族：整段替换、段缺席 = 不碰这一域。 */
 const ARCHIVE_SECTIONS = ['mcp', 'mcpNotes', 'skills', 'subagents'] as const
+
+/**
+ * 档案侧的**全部**入参（`scene_manager_archive` 那条工具的参数表）。
+ *
+ * 为什么要单独列一张：`scene_manager_save` 只管场景记录（名字 / 标签 / 说明 / 绑的预设），
+ * 档案段搬到了另一条工具。而宿主对**多出来的**参数不报错（schema 默认放行额外属性）——
+ * 模型照旧给 `_save` 传一个 `mcp` 时，不挡就是一次**静默失效**：回执说「已保存」，
+ * 而档案根本没写。所以 `_save` 见到这里任何一条都要当场说清它搬到了哪里。
+ */
+const ARCHIVE_PARAMS = ['mcp', 'mcpNotes', 'skills', 'subagents', 'quickPrompts', 'toolTablePreset'] as const
 
 /** 段里的名单：数组段是名字列表，`mcp` 段是 serverName → `'*'` | 工具名数组。段缺席 = 空。 */
 function segmentNames(value: any): string[] {
@@ -410,9 +420,11 @@ export function buildSceneTools(deps: SceneToolDeps): void {
     // 「写入指引」保留（"写成指令而不是备注"—— 这是场景说明质量的杠杆），但不再声称
     // "注入后模型会被要求照办"：定稿把场景段的授权语删了（注入只陈述现状），
     // 参数说明与注入侧各说各话时，模型信的那份是错的。改为如实说明去向。
-    // 描述不再逐项列举档案里有哪些段（参数表本身就是那张清单，模型读参数时两处都在手上）：
-    // 这里只留参数表**答不了**的三件事 —— 场景是什么、整段替换的语义、保存不等于进入。
-    description: 'Save a scene — a named bundle the user enters: entering switches on exactly what its archive lists and everything else off. Creates it if absent. Omitted fields keep their values; an archive section you give replaces that section whole (include what should stay — the receipt reports what got displaced). Saving does not enter it. Asks the user to confirm before it runs. Only on the user\'s instruction.',
+    // 描述不再逐项列举档案里有哪些段（档案段已经搬去 `scene_manager_archive`）：
+    // 这里只留参数表**答不了**的三件事 —— 场景是什么、保存不等于进入、档案另有一条工具。
+    // 那条工具的名字**不点**（它在出厂默认名单里是关着的）：静态文案点名一条模型手里
+    // 没有的工具只会让它白跑一趟（插件的既定纪律，见 `toolAccessSentence`）。
+    description: 'Save a scene — a named bundle the user enters: entering switches on exactly what its archive lists and everything else off. Creates it if absent. Sets the name, the display name, the description and the bound prompt preset; omitted fields keep their values. The archive (which MCP servers, skills and personas entering it switches on) is set by a separate tool — capture: true fills it from what is currently switched on. Saving does not enter it. Asks the user to confirm before it runs. Only on the user\'s instruction.',
     parameters: {
       scene: { type: 'string', required: true, description: 'Scene name (one path segment, ≤64 chars, no / \\ or < > : " | ? *, not `_shared`). Created if absent.' },
       label: { type: 'string', description: 'Display name for this scene.' },
@@ -421,43 +433,13 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       // 界面 补了「无」这个选项，工具侧的空串语义要跟着说清，否则模型只知道
       // 「省略 = 保持」，不知道还有一条「解绑」的路。
       prompt: { type: 'string', description: 'Prompt preset id to bind; while this scene is on it is the global baseline. \'\' = bind none (this scene leaves AGENTS.md alone).' },
-      // 模型工具表方案绑定：界面早就能绑、档案里一直有这一栏，`_list` / `_switch` 也读它，
-      // 唯独 `_save` 写不了。'' = 解绑只能走
-      // `rules-update-scene` —— `scene-archive-save` 对载荷里**不带的栏**一律保留现值
-      // （archive-engine 的「不带 ≠ 解绑」），所以解绑与设置分成两条路，见 execute 的 ②。
-      // 哨兵 `factory-default` 与界面下拉同值（tools/table.ts 的 FACTORY_TOOL_TABLE_PRESET）；
-      // 不存在的方案名由引擎按 stale 丢弃并在进入时报告，op 不硬拒（与悬空绑定同口径）。
-      toolTablePreset: { type: 'string', description: "Model tool-table scheme to bind while this scene is on. '' = unbind; 'factory-default' = the factory default; otherwise a saved scheme name. An unknown name is dropped and reported." },
-      // 快捷提示词绑定。段语义与上面三个档案段相反：**空数组是合法值**
-      // （进入后全部停用），不是"清除这一段"。本工具不提供解绑（界面可解）—— 与
-      // mcp / skills / subagents 三段没有解绑参数同一条口径。id 从场景清单里别的场景的
-      // 绑定、或用户口述里来；不存在的 id 被引擎丢弃并在回执报出来。
-      quickPrompts: { type: 'array', items: { type: 'string' }, description: 'Quick-prompt ids to switch on when this scene is entered; every other one goes off, and the pre-entry state is restored on exit. [] = all off on entry. Unknown ids are dropped and reported — copy them from the listing.' },
-      mcp: {
-        type: 'object',
-        // 官方要求对象类型**显式声明开放性**（`additionalProperties` 是必需字段，且只能是
-        // boolean）—— 嵌套对象不允许带 schema，所以值的形状（`'*'` 还是工具名数组）只能在
-        // 描述里说清。这不是偷懒：键是服务器名，本身是动态的。
-        additionalProperties: true,
-        description: "Archive: serverName -> '*' (whole server) or a list of tool names to leave on. {} = switch none on.",
-      },
-      // 场景级 MCP 备注覆盖：进入这个场景时用这份盖掉全局备注，退出时还原。
-      // 与 mcp 段同一句式（省略 = 保持；{} = 一个都不覆盖）—— 界面存档编辑器早就能改，
-      // `_list` 也显示它，`_save` 此前不接这一段。
-      mcpNotes: {
-        type: 'object',
-        additionalProperties: true,
-        description: "Archive: serverName -> note overriding that server's global note while this scene is on (back on exit). {} = drop all scene-level overrides.",
-      },
-      skills: { type: 'array', items: { type: 'string' }, description: 'Archive: skill keys `<root>/<name>` to switch on. [] = switch none on.' },
-      subagents: { type: 'array', items: { type: 'string' }, description: 'Archive: persona names to switch on. [] = switch none on.' },
       // 场景记录与档案是**机器级**的，没有「本会话的一份」。这个参数只为一件事：
       // 模型以为自己在改会话时，当场纠回来（见 deps.ts 的 requireGlobalScope）。
       scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('the scene record and archive are machine-wide', 'entering a scene for one conversation is a switch action') },
       // 「照现在的样子存」：档案的勾选集由当前生效状态算出来，不由模型逐项填。
       // 模型填错一个键的后果是「进场景时把某个服务器 / 某条技能关掉了」—— 而那一段
       // 本来就是机器能自己读出来的，用户说「存一下刚才那套」时也不该由模型转述现状。
-      capture: { type: 'boolean', description: 'Fill the archive from what is currently switched on (MCP servers and their tools, skills, personas, quick prompts) instead of the sections above. Use it when the user says "save the current setup as a scene".' },
+      capture: { type: 'boolean', description: 'Fill the archive from what is currently switched on (MCP servers and their tools, skills, personas, quick prompts) — the archive is otherwise set by a separate tool. Use it when the user says "save the current setup as a scene".' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -472,10 +454,21 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       if (scene.indexOf('/') >= 0 || scene.indexOf('\\') >= 0) {
         throw new Error('a scene name is a single path segment (no / or \\): ' + scene)
       }
+      // 档案段搬走了，而宿主**不拦多出来的参数**（schema 默认放行额外属性）：不挡就是
+      // 一次静默失效 —— 回执说「已保存」，档案根本没写。
+      const moved = ARCHIVE_PARAMS.filter((k) => args && (args as Record<string, unknown>)[k] !== undefined)
+      if (moved.length > 0) {
+        // 那条工具在出厂默认里是关着的，所以不点名、只给「怎么弄到它」—— 模型手里有
+        // 控制面工具时自己就能开（`toolAccessSentence` 的第二档），没有才让用户去面板。
+        throw new Error('this tool no longer takes ' + moved.join(' / ')
+          + ' — the archive of a scene is set by a separate tool: '
+          + toolAccessSentence(deps, 'scene_manager_archive', exec && exec.agent,
+            'the user has to open it in the panel') + '.')
+      }
 
       // 「照现在的样子存」：档案的勾选集由**当前生效状态**算出来，不由模型逐项填。
-      // 这一支走 `scene-capture`（建场景 + 存档案同一件事），不走下面的 ①② ——
-      // 两条路各自建一次场景会让第二次的档案覆盖第一次，没有意义。
+      // 这一支走 `scene-capture`（建场景 + 存档案同一件事），不走下面的 ① ——
+      // 档案由这条工具写，模型手填的那几段这里一概不接。
       if (args && args.capture === true) {
         if (deps.sceneCapture === undefined) throw new Error('capturing the current setup is unavailable in this host')
         const captured: any = await deps.sceneCapture({
@@ -496,8 +489,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
 
       // ① 场景记录：`rules-create-scene` 本身是**幂等 upsert**（已存在则更新描述/标签/绑定的
       //    预设，不报错），所以不必先查再分建/改 —— 与记忆 save 的"有则改、无则建"同一口径。
-      //    总是调它：模型给 scene + 档案段而场景还不存在时，这一步把场景建出来，否则
-      //    `scene-archive-save` 会以"场景不存在"拒绝。
+      //    总是调它：模型给 scene 而场景还不存在时，这一步把场景建出来。
       const payload: any = { name: scene }
       const touchedRecord: string[] = []
       if (args.label !== undefined) { payload.label = String(args.label); touchedRecord.push('label') }
@@ -506,13 +498,107 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       const created: any = await deps.rulesOps['rules-create-scene'](payload)
       if (!created || created.ok === false) throw new Error((created && created.error) || 'failed to save the scene')
 
-      // ② 两处「解绑」只能走 `rules-update-scene`：`scene-archive-save` 对载荷里**不带的栏**
-      //    一律保留现值（archive-engine 的「不带 ≠ 解绑」），从现值复制出来的合并档案会把
-      //    刚解掉的绑定又写回去 —— 所以解绑与设置分成两条路，合并前还要先摘掉刚解掉的键。
-      //    · `prompt` 的 '' 此前也走不到实处 —— `rules-create-scene` 的 upsert 分支把空串
-      //      当"没给"（ops/scene-records.ts），旧绑定原样保留而回执报"已更新"。
-      //    · `toolTablePreset` 的 '' 同解（那个 op 的更新分支认空串 = 解绑）。
+      // ② `prompt` 的解绑只能走 `rules-update-scene`：`rules-create-scene` 的 upsert 分支把
+      //    空串当"没给"（ops/scene-records.ts），旧绑定原样保留而回执报"已更新"。
       const clearPrompt = args.prompt !== undefined && String(args.prompt).trim() === ''
+      let clearWarn = ''
+      if (clearPrompt) {
+        const u: any = await deps.rulesOps['rules-update-scene']({ name: scene, prompt: '' })
+        if (!u || u.ok === false) {
+          // 主路径已成功、解绑没写上：如实报，别让回执假装绑定已经没了。
+          clearWarn = '\nWARN: the unbind was not written (' + ((u && u.error) || 'unknown error') + '); the old binding still applies'
+        }
+      }
+
+      // 收敛提示：`rules-create-scene` 在"历史默认（全部启用）"状态下会把启用集合收窄成
+      // 单选（`collapseActiveForNewScene`）—— 那是一次**会改变运行时**的动作，必须说出来。
+      // 界面上同样如实报（`scenes.result.created.collapsed`）。
+      const collapsed = created.collapsedActive === true
+      const parts: string[] = [touchedRecord.length ? 'scene record updated (' + touchedRecord.join(', ') + ')' : 'scene existence ensured']
+      // 点名 scene_manager_switch 的那句按可见性分叉（它在出厂默认名单里就是关着的）：
+      // 部分启用（开 save 不开 switch）时指向一条模型没有的工具，只会让它白跑一趟 ——
+      // 与 mcp/skill 的 listHint 同一条纪律。
+      const enterHint = deps.toolVisibleFor('scene_manager_switch', exec && exec.agent)
+        ? 'To take effect, enter it with scene_manager_switch.'
+        : 'To take effect, the user has to enter this scene manually (scene_manager_switch is not available in this session).'
+      // 会话层：场景记录与档案是**机器级**的（一份索引 + 一份档案），本会话能改的
+      // 只有「这个对话用哪个场景」。不说清的话，模型会把「存好了」读成「只在这个对话里生效」。
+      const pinned = sessionScopeOf(deps, exec && exec.agent)?.scope?.scene
+      const globalNote = pinned === undefined
+        ? ''
+        : '\nnote: scenes are global (one record and one archive for the whole machine). The pin here only decides which scene this scope uses' +
+          ' (currently "' + pinned + '"); ' + globalUnchangedNote(deps)
+      // 档案没动这句话**必须说**：模型是照着「建一个进场景时开 A 服务器的场景」来的，
+      // 而档案已经搬去另一条工具 —— 不说，它会以为整件事做完了。
+      // 给「怎么弄到那条工具」而不是只报错名：它在出厂默认里是关着的，但模型手里有控制面
+      // 工具（自己就能开），别把它推回面板。
+      const archiveNote = '\nThe archive (what entering this scene switches on) was not touched by this call — to set it: '
+        + toolAccessSentence(deps, 'scene_manager_archive', exec && exec.agent,
+          'the user has to open it in the panel') + '.'
+      return 'OK: scene "' + scene + '" — ' + parts.join('; ') + clearWarn + globalNote + archiveNote +
+        (collapsed
+          ? '\nnote: every scene was enabled until now (the historical all-enabled default); this call narrowed the enabled set to one scene, and the new one is not it — the user should confirm the enabled state.'
+          : '') +
+        '\nSaving does not change the runtime: ' + enterHint
+    },
+  }))
+
+  register(defineTool({
+    name: 'scene_manager_archive',
+    // 档案 = 「进入这个场景时开什么」。它与场景记录（名字 / 标签 / 说明 / 绑的预设）是**两个
+    // 对象**，所以分成两条工具：只想改一句场景说明的模型不必面对五段档案参数，而要改档案的
+    // 那条路径参数表本身很宽 —— 拆开之后，**只想写场景**的那条工具窄了一半。
+    //
+    // 整段替换的语义写在这里（`_save` 那条已经不接档案段了）：给的段整段替换，没给的段保持。
+    description: 'Set the archive of a scene — what entering it switches on: MCP servers (and which of their tools), skills, personas, quick prompts and the model tool-table scheme. A section you give replaces that section whole (include what should stay — the receipt reports what got displaced); sections you omit keep their values. Creates the scene if it does not exist yet. Saving the archive does not enter the scene. Asks the user to confirm before it runs. Only on the user\'s instruction.',
+    parameters: {
+      scene: { type: 'string', required: true, description: 'Scene name (one path segment, ≤64 chars, no / \\ or < > : " | ? *, not `_shared`).' },
+      mcp: {
+        type: 'object',
+        // 官方要求对象类型**显式声明开放性**（`additionalProperties` 是必需字段，且只能是
+        // boolean）—— 嵌套对象不允许带 schema，所以值的形状（`'*'` 还是工具名数组）只能在
+        // 描述里说清。这不是偷懒：键是服务器名，本身是动态的。
+        additionalProperties: true,
+        description: "Archive: serverName -> '*' (whole server) or a list of tool names to leave on. {} = switch none on.",
+      },
+      // 场景级 MCP 备注覆盖：进入这个场景时用这份盖掉全局备注，退出时还原。
+      // 与 mcp 段同一句式（省略 = 保持；{} = 一个都不覆盖）。
+      mcpNotes: {
+        type: 'object',
+        additionalProperties: true,
+        description: "Archive: serverName -> note overriding that server's global note while this scene is on (back on exit). {} = drop all scene-level overrides.",
+      },
+      skills: { type: 'array', items: { type: 'string' }, description: 'Archive: skill keys `<root>/<name>` to switch on. [] = switch none on.' },
+      subagents: { type: 'array', items: { type: 'string' }, description: 'Archive: persona names to switch on. [] = switch none on.' },
+      // 快捷提示词绑定。段语义与上面三个档案段相反：**空数组是合法值**
+      // （进入后全部停用），不是"清除这一段"。本工具不提供解绑（界面可解）—— 与
+      // mcp / skills / subagents 三段没有解绑参数同一条口径。id 从场景清单里别的场景的
+      // 绑定、或用户口述里来；不存在的 id 被引擎丢弃并在回执报出来。
+      quickPrompts: { type: 'array', items: { type: 'string' }, description: 'Quick-prompt ids to switch on when this scene is entered; every other one goes off, and the pre-entry state is restored on exit. [] = all off on entry. Unknown ids are dropped and reported — copy them from the listing.' },
+      // 模型工具表方案绑定：界面早就能绑、档案里一直有这一栏，`_list` / `_switch` 也读它。
+      // 哨兵 `factory-default` 与界面下拉同值（tools/table.ts 的 FACTORY_TOOL_TABLE_PRESET）；
+      // 不存在的方案名由引擎按 stale 丢弃并在进入时报告，op 不硬拒（与悬空绑定同口径）。
+      toolTablePreset: { type: 'string', description: "Model tool-table scheme to bind while this scene is on. '' = unbind; 'factory-default' = the factory default; otherwise a saved scheme name. An unknown name is dropped and reported." },
+      // 档案与场景记录一样是**机器级**的（一份索引 + 一份档案），没有「本会话的一份」。
+      scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('the scene record and archive are machine-wide', 'entering a scene for one conversation is a switch action') },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+    async execute(args: any, exec: any) {
+      const blocked = await deps.lockedSceneGuard()
+      if (blocked) throw new Error(blocked)
+      requireGlobalScope(args, 'scenes', !sessionLayerOn(deps))
+      const scene = String((args && args.scene) || '').trim()
+      if (scene === '') throw new Error('missing argument: scene (the scene name)')
+      if (scene.indexOf('/') >= 0 || scene.indexOf('\\') >= 0) {
+        throw new Error('a scene name is a single path segment (no / or \\): ' + scene)
+      }
+
+      // 场景得先在（档案挂在场景上）。用 upsert 建出来：模型为了写档案先建一次场景是
+      // 一次白跑，而档案那条路自己建不出场景记录。
+      const ensured: any = await deps.rulesOps['rules-create-scene']({ name: scene })
+      if (!ensured || ensured.ok === false) throw new Error((ensured && ensured.error) || 'failed to save the scene')
+
+      // 三种「设置」方向 + 一种「解绑」：
       const unbindToolTable = args.toolTablePreset !== undefined && String(args.toolTablePreset).trim() === ''
       const setToolTable = args.toolTablePreset !== undefined && String(args.toolTablePreset).trim() !== ''
       const setQuickPrompts = args.quickPrompts !== undefined
@@ -524,7 +610,10 @@ export function buildSceneTools(deps: SceneToolDeps): void {
       }
       const touched = ARCHIVE_SECTIONS.filter((k) => (args as Record<string, unknown>)[k] !== undefined)
       const mustWriteArchive = touched.length > 0 || setToolTable || setQuickPrompts
-      // 档案现状在读的时候就取一次，且必须在 ② **之前** —— 解绑落盘后这一栏已经没了，
+      if (!mustWriteArchive && !unbindToolTable) {
+        throw new Error('nothing to change: give at least one archive section (mcp / mcpNotes / skills / subagents / quickPrompts / toolTablePreset)')
+      }
+      // 档案现状在读的时候就取一次，且必须在解绑**之前** —— 解绑落盘后这一栏已经没了，
       // 回执的「X → 解绑」要的是解绑前的那个 X。只为看回执的 diff 而读时（解绑且不写档案）
       // 容忍读失败：那一步已经写成功了，别为一句对比话把整次调用判失败。
       let before: any = {}
@@ -539,25 +628,21 @@ export function buildSceneTools(deps: SceneToolDeps): void {
         }
       }
       let clearWarn = ''
-      if (clearPrompt || unbindToolTable) {
-        const upd: any = { name: scene }
-        if (clearPrompt) upd.prompt = ''
-        if (unbindToolTable) upd.toolTablePreset = ''
-        const u: any = await deps.rulesOps['rules-update-scene'](upd)
+      if (unbindToolTable) {
+        const u: any = await deps.rulesOps['rules-update-scene']({ name: scene, toolTablePreset: '' })
         if (!u || u.ok === false) {
-          // 主路径已成功、解绑没写上：如实报，别让回执假装绑定已经没了。
           clearWarn = '\nWARN: the unbind was not written (' + ((u && u.error) || 'unknown error') + '); the old binding still applies'
         }
       }
 
-      // ③ 档案 read-modify-write：段（mcp / mcpNotes / skills / subagents）与两个绑定栏的
-      //    「设置」方向合并成一份，只经 `scene-archive-save` 一条路落盘。
-      //    **必须 read-modify-write**：`scene-archive-save` 是**整份替换**，只把模型给的段
-      //    传过去，没给的段会被静默清掉 —— 与 `subagent_manager_save` 省略字段被
-      //    清空同一形状，只是这次清掉的是"这个场景进入时要开哪些东西"。
-      //    注意段语义：**段不存在 = 不限制（全部照常）**，段存在但为空 = 全部停用。所以模型给
-      //    `mcp: {}` 得到的是"全不勾"，不是"清除该段" —— 后者只能靠不给。
-      //    `quickPrompts` 与三段都不同：段缺席 = 这一域不碰，空数组 = 进入后全部停用。
+      // 档案 read-modify-write：段（mcp / mcpNotes / skills / subagents）与两个绑定栏的
+      // 「设置」方向合并成一份，只经 `scene-archive-save` 一条路落盘。
+      // **必须 read-modify-write**：`scene-archive-save` 是**整份替换**，只把模型给的段
+      // 传过去，没给的段会被静默清掉 —— 与 `subagent_manager_save` 省略字段被
+      // 清空同一形状，只是这次清掉的是"这个场景进入时要开哪些东西"。
+      // 注意段语义：**段不存在 = 不限制（全部照常）**，段存在但为空 = 全部停用。所以模型给
+      // `mcp: {}` 得到的是"全不勾"，不是"清除该段" —— 后者只能靠不给。
+      // `quickPrompts` 与三段都不同：段缺席 = 这一域不碰，空数组 = 进入后全部停用。
       let archiveNote = ''
       let toolTableNote = ''
       let quickNote = ''
@@ -587,7 +672,7 @@ export function buildSceneTools(deps: SceneToolDeps): void {
         // 重应用，失败不回滚档案。如实报出去，别假装生效了（与界面同口径）。
         if (r.applyError) warnTail += '\n(saved, but applying it to the runtime failed: ' + r.applyError + ')'
       }
-      // 解绑写失败了就别输出「X → 解绑」—— 上面那句 WARN 才是事实；设置方向不受 ② 影响。
+      // 解绑写失败了就别输出「X → 解绑」—— 上面那句 WARN 才是事实；设置方向不受影响。
       if (args.toolTablePreset !== undefined && !(unbindToolTable && clearWarn !== '')) {
         toolTableNote = beforeKnown
           ? 'tool-table preset: ' + (toolTableLabel(before.toolTablePreset) || 'unbound') + ' -> ' +
@@ -607,28 +692,25 @@ export function buildSceneTools(deps: SceneToolDeps): void {
           (marks.length ? ' (' + marks.join(' ') + ')' : '')
       }
 
-      // 收敛提示：`rules-create-scene` 在"历史默认（全部启用）"状态下会把启用集合收窄成
-      // 单选（`collapseActiveForNewScene`）—— 那是一次**会改变运行时**的动作，必须说出来。
-      // 界面上同样如实报（`scenes.result.created.collapsed`）。
-      const collapsed = created.collapsedActive === true
-      const parts: string[] = [touchedRecord.length ? 'scene record updated (' + touchedRecord.join(', ') + ')' : 'scene existence ensured']
+      const parts: string[] = []
       if (archiveNote) parts.push(archiveNote)
       if (toolTableNote) parts.push(toolTableNote)
       if (quickNote) parts.push(quickNote)
-      // 点名 scene_manager_switch 的那句按可见性分叉（它在出厂默认名单里就是关着的）：
-      // 部分启用（开 save 不开 switch）时指向一条模型没有的工具，只会让它白跑一趟 ——
-      // 与 mcp/skill 的 listHint 同一条纪律。
+      // 点名 scene_manager_switch 的那句按可见性分叉（它在出厂默认名单里就是关着的）。
       const enterHint = deps.toolVisibleFor('scene_manager_switch', exec && exec.agent)
         ? 'To take effect, enter it with scene_manager_switch.'
         : 'To take effect, the user has to enter this scene manually (scene_manager_switch is not available in this session).'
-      // 会话层：场景记录与档案是**机器级**的（一份索引 + 一份档案），本会话能改的
-      // 只有「这个对话用哪个场景」。不说清的话，模型会把「存好了」读成「只在这个对话里生效」。
+      // 会话层：档案是**机器级**的，本会话能改的只有「这个对话用哪个场景」。
       const pinned = sessionScopeOf(deps, exec && exec.agent)?.scope?.scene
       const globalNote = pinned === undefined
         ? ''
         : '\nnote: scenes are global (one record and one archive for the whole machine). The pin here only decides which scene this scope uses' +
           ' (currently "' + pinned + '"); ' + globalUnchangedNote(deps)
-      return 'OK: scene "' + scene + '"' + parts.join('; ') + warnTail + clearWarn + globalNote +
+      // 建场景时把启用集合收窄成单选（`collapseActiveForNewScene`）是一次**会改变运行时**
+      // 的动作，必须说出来 —— 那是 `rules-create-scene` 干的，与档案无关。
+      const collapsed = ensured.collapsedActive === true
+      return 'OK: archive of scene "' + scene + '"' + (parts.length ? ' — ' + parts.join('; ') : '') +
+        warnTail + clearWarn + globalNote +
         (collapsed
           ? '\nnote: every scene was enabled until now (the historical all-enabled default); this call narrowed the enabled set to one scene, and the new one is not it — the user should confirm the enabled state.'
           : '') +

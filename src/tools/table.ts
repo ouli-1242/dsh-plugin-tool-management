@@ -4,14 +4,14 @@
 // 根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；面板
 // （118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着十六条**（整张表 23 条，每轮实发 7 条）—— 名单、判据与代价见下面
+// 出厂**默认就关着十七条**（整张表 24 条，每轮实发 7 条）—— 名单、判据与代价见下面
 // `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // 实测数字（口径：宿主 `recordToolSize` 的 `ceil(JSON.stringify(header.tools).length / 4) + 4`，
 // 即**字符数 / 4**；`header.tools` 里只有 name / description / parameters —— 官方的
 // `projectToolSchema` 不投影 output / execute，那几个不进请求。界面「模型工具表」那行
 // 合计与逐条 ≈tok 就是这份）：
-//   · 十六条隐藏 ≈**4,085 tok**，默认可见那七条 ≈**1,701 tok**，全开 ≈**5,781 tok**。
+//   · 十七条隐藏 ≈**4,359 tok**，默认可见那七条 ≈**1,701 tok**，全开 ≈**6,055 tok**。
 //   · A/B 实测（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
 //     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
 //     所以它们是**净节省的下界**，不是"省了多少"的上界。**那对数量的是当天那份描述** ——
@@ -63,7 +63,7 @@ export interface ToolTableSettings {
 }
 
 /**
- * 出厂默认关掉的**十六条**：整张表 23 条，关掉后**每轮实发 7 条**。
+ * 出厂默认关掉的**十七条**：整张表 24 条，关掉后**每轮实发 7 条**。
  *
  * 判据只有一条：**这些信息或动作常态下由注入段与面板承担，
  * 平时也用不到模型自己伸手**。分五组：
@@ -77,7 +77,9 @@ export interface ToolTableSettings {
  *   · **开关三条** —— `skill` / `memory` / `subagent` 三个 `_switch`（用户：「平时使用也很少」）。
  *     启停在面板上都有同款，注入段也写着当前开着哪些。**`mcp_manager_switch` 刻意留着**：
  *     它是"这台先给我关了"这条最常用的临时动作的唯一入口，也是 MCP 域留下来的一条腿。
- *   · **建档一条** —— `scene_manager_save`：新建 / 改写场景剧本，配置本体在面板上改。
+ *   · **建档两条** —— `scene_manager_save`（场景记录）+ `scene_manager_archive`（档案段：
+ *     进入时开哪些 MCP / 技能 / 人设）。配置本体在面板上改；档案的勾选集机器自己算得出来
+ *     （`capture`），模型逐项填反而容易填错。
  *
  * 判据与上面那条"注入段承担"不同 —— 人设域**没有官方载体兜底**：MCP / 技能 / 记忆三个域的
  * 目录即便被压制型预设压掉，也各自还有一条常驻发现路径，而人设目录一旦不注入，模型手里就
@@ -85,7 +87,7 @@ export interface ToolTableSettings {
  * 它只有 42 tok，买的是把"注入段是唯一发现路径"这个单点消掉。
  *
  * 技能 / 人设"是常问的，但它**低频于"读现状 + 拨开关 + 建改定义"**那批，而且面板每个域都有
- * 删除入口 —— 默认关、要用时在「兼容」页勾上（与另外十五条同一条纪律，不额外付 token）。
+ * 删除入口 —— 默认关、要用时在「兼容」页勾上（与另外十六条同一条纪律，不额外付 token）。
  *
  * 关掉的这些**模型自己也能打开**：`tool_manager_tools`（每轮常驻的那一条）能按对话
  * 打开任意一条被关掉的工具，列清单时给出名字、一句话用途与 ≈token。这条工具不在
@@ -107,6 +109,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'scene_manager_list',
   'scene_manager_switch',
   'scene_manager_save',
+  'scene_manager_archive',
   'memory_manager_read',
   'memory_manager_search',
   'memory_manager_switch',
@@ -122,7 +125,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'plugin_manager_remove',
 ])
 
-/** 出厂默认那份设置：十六条不发（名单与理由见上面），方案清单是空的。 */
+/** 出厂默认那份设置：十七条不发（名单与理由见上面），方案清单是空的。 */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */
