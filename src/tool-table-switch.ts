@@ -99,9 +99,9 @@ export interface ToolTableMutationFailure {
 /** 模型工具表开关（侧车 `tool-table.json`）：出厂默认名单、按会话 / 全局改可见集。 */
 export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitch {
       // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
-  // 工具表按**每个请求**付钱：20 个工具的整份定义合计 ≈3,769 tok 每轮都在。关掉某几个，
-  // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十四条**
-  // （20 条里实发 6 条）—— 名单、判据与代价在 `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过
+  // 工具表按**每个请求**付钱：整张表的定义合计 ≈6.1k tok 每轮都在。关掉某几个，
+  // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十八条**
+  // （24 条里实发 6 条）—— 名单、判据与代价在 `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过
   // 选择时铺（见下面的 `toolTableSettingsFrom`）。
   //
   // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话

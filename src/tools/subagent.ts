@@ -59,7 +59,7 @@ export function buildSubagentTools(deps: SubagentToolDeps): void {
     console.error('[dsh-plugin-tool-management] subagent tool registration failed:', name, deps.message(e))
   }
   try {
-    // 与其余 19 个工具同一条注册通道：defineTool 负责编译 parameters（object root + required），
+    // 与其余 23 个工具同一条注册通道：defineTool 负责编译 parameters（object root + required），
     // 裸 register 会把未编译的参数声明直接发给模型 API。
     register(defineTool(defineSubagentManagerListTool({
       list: () => deps.subagentService.list(),

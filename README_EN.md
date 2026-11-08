@@ -97,7 +97,7 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 
 Six domains, **24 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona.
 
-- **Only 7 ship enabled** (~1.7k tokens/turn); the other 17 stay off. Off means **not in the schema at all** — the model cannot see them, let alone call them.
+- **Only 6 ship enabled** (~1.5k tokens/turn); the other 18 stay off. Off means **not in the schema at all** — the model cannot see them, let alone call them.
 - **Scoped writes**: the model writes to the current layer by default and the receipt says which one; `scope: "global"` is required to touch everything.
 - **Confirmation cards**: stopping servers, deleting, machine-wide toggles and similar writes ask first; recovery actions (restart, restore, undo apply) go straight through.
 - **Per-tool control**: the model-tool table on the Host page adjusts visibility per layer. All 24 on is ~6.1k tokens/turn; profiles can be saved per task and switched together with a scene.
@@ -144,7 +144,7 @@ More than a version number:
 | Symptom                                 | Fix                                                                                                                                                      |
 |:--------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | No panel after installing               | Hard-refresh the browser; if that fails, restart DSH.                                                                                                    |
-| The model cannot call a tool            | Host page → “Model tools”, make sure the right conversation / workspace is selected (17 tools are off by default). The panel and scripts are unaffected. |
+| The model cannot call a tool            | Host page → “Model tools”, make sure the right conversation / workspace is selected (18 tools are off by default). The panel and scripts are unaffected. |
 | Actions unavailable after a DSH upgrade | Check the reason on the Host page; run `node scripts/doctor.mjs`, then `node scripts/host-deps.mjs --fix`.                                               |
 | Version mismatch                        | Supports DSH **0.2.2** only (`>=0.2.2-rc.1 <0.2.3`); cross-generation upgrades wait for the plugin to catch up. Install 0.21.x for older hosts.          |
 | Duplicate MCP tab                       | Remove the old loader line from `cordis.patch.yml` and restart.                                                                                          |
