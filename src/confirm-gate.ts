@@ -132,18 +132,27 @@ export function argConditionalConfirmReason(
   }
 
   if (name === 'tool_manager_tools') {
-    // 开关工具表（开 / 关本对话能用的工具）不问：只动这一个对话的视图，随时可退。
+    // 会话层自开不弹（只动管着这个对话的那一层，随时可退）；隔离关掉时那一层就是全局，
+    // 动的是所有对话 —— 与三个 `_switch` 在全局粒度下的口径一致，要问。
     // 修复类动作要问：它会把**已损坏的侧车改名留存**、按空表继续 —— 那是一次不可逆的
     // 数据处置（原始文件还在，但插件从此不再读它），与「换个开关」不是一档。
-    if (action !== 'repair') return null
-    const target = text(args.target)
-    if (target === '') return null
-    const subject = target === 'memory-index' ? '记忆索引'
-      : target === 'scope' ? '作用域侧车'
-        : target === 'mcp-disabled' ? 'MCP 停用表'
-          : ''
-    if (subject === '') return null
-    return `Repair the ${subject} — the damaged file is renamed aside and the plugin continues with an empty table. Anything it held is no longer applied.`
+    if (action === 'repair') {
+      const target = text(args.target)
+      if (target === '') return null
+      const subject = target === 'memory-index' ? '记忆索引'
+        : target === 'scope' ? '作用域侧车'
+          : target === 'mcp-disabled' ? 'MCP 停用表'
+            : ''
+      if (subject === '') return null
+      return `Repair the ${subject} — the damaged file is renamed aside and the plugin continues with an empty table. Anything it held is no longer applied.`
+    }
+    if (action !== 'enable' && action !== 'disable') return null
+    if (!machineWide(args, mode)) return null
+    const names = Array.isArray(args.tools)
+      ? args.tools.map((n) => text(n)).filter((n) => n !== '')
+      : []
+    if (names.length === 0) return null
+    return `Turn ${action === 'enable' ? 'on' : 'off'} ${names.join(', ')} for every conversation (machine-wide tool table).`
   }
 
   return null

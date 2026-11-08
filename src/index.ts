@@ -5217,14 +5217,18 @@ export default {
       toolTableSizes,
       toolTableSummaries,
       hiddenForSession: (agent: unknown) => toolTableHiddenForSession(scopeKeyForAgent(agent)),
-      // 写本对话的工具表：走面板同一条路（`tool-table` op 带 sessionId 的那一支），
+      // 写管着这个对话的那一层的工具表：走面板同一条路（`tool-table` op），
       // 锁、基线补写、可见性重排、两个目录重算全都照旧。
       writeSessionTable: async (agent: unknown, hidden: string[]) => {
         const sessionId = scopeKeyForAgent(agent)
-        if (sessionId === null) {
-          return { ok: false, error: 'no session id on this agent: cannot change the tool table for this conversation' }
+        // 全局粒度：没有会话层，管着这个对话的就是全局那一份 —— 写全局表（机器级，
+        // 调用前已被确认卡问过）。**不能**因为「解析不出会话 id」就写全局：那是
+        // 另一个原因（冷 agent / 会话头拿不到），写全局会让一次会话级操作变成机器级。
+        const globalLayer = sessionId === null && scopeMode() === 'global'
+        if (sessionId === null && !globalLayer) {
+          return { ok: false, error: 'cannot resolve the scope of this conversation: the tool table was not changed' }
         }
-        const args = { sessionId, set: true, hidden }
+        const args = globalLayer ? { set: true, hidden } : { sessionId, set: true, hidden }
         const r: any = await handlers['tool-table'](args)
         // 模型侧直调 handler 不经过 HTTP 路由，那条路由才会记流水 —— 这里自己记一条，
         // 否则「谁改了工具表」在「最近改动」里查不到。
@@ -5286,9 +5290,9 @@ export default {
         memory_manager_switch: '「记忆开关」',
         skill_manager_switch: '「技能开关」',
         subagent_manager_switch: '「人设开关」',
-        // 控制面工具：开关本对话的工具表**不问**（只动这一个对话的视图，随时可退），
-        // 只有修复类动作问 —— 那一档会把损坏的侧车改名留存、按空表继续（判据在 confirm-gate.ts）。
-        tool_manager_tools: '「修复插件状态」',
+        // 控制面工具：开关工具表**默认不问**（只动管着这个对话的那一层，随时可退），
+        // 只有机器级那一档与修复类动作问（判据在 confirm-gate.ts）。
+        tool_manager_tools: '「插件工具表」',
       }
       const bypassedByFullAccess = (exec: any): boolean => {
         if (!isApprovalNever(ctx, exec)) return false

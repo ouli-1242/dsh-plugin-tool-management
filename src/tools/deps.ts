@@ -401,6 +401,24 @@ export function scopeOnlyNote(deps: ToolDomainDeps): string {
 }
 
 /**
+ * 「**管着这个对话的那一层**」的写入回执后缀。
+ *
+ * 与 {@link scopeOnlyNote} 的区别：那条说的是「本对话那一层」—— `_switch` 家族写的就是它，
+ * 而那几条在全局粒度下压根不写这一层（`effectiveScope` 把一切导向全局，走各自的机器级措辞）。
+ * 这条说的是**真正被写到的那一层**：隔离关掉时没有会话层，管着这个对话的就是全局那一份，
+ * 说成「只影响这个对话」就是假话。
+ *
+ * 三档各说各的，别混：按会话 = 这个对话；按工作区 = 这个工作区里的每个对话；
+ * 全局 = 每个对话（且这一档必然是机器级，调用前会被确认卡问过）。
+ */
+export function governingScopeNote(deps: ToolDomainDeps): string {
+  const mode = deps.scopeMode?.()
+  if (mode === 'global') return ' **for every conversation** (isolation is off — there is no per-conversation layer)'
+  if (mode === 'workspace') return ' **for this whole workspace only** (every conversation in it)'
+  return ' **for this conversation only**'
+}
+
+/**
  * 「全局没动、别人不受影响」那句：谁算「别人」由粒度决定。
  *
  * 工作区粒度下同工作区的其它对话读的是**同一格**，照旧写 "other conversations keep

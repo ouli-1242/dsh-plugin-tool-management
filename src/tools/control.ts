@@ -10,11 +10,14 @@
 // 它是唯一必须常驻的一条（其余能力一律按需调用，不进每轮的 schema）。
 //
 // 边界（有意不做的事）：
-//   · 只管**本对话**：全局工具表留给面板。全局一改就是所有对话的事，模型的爆炸半径太大。
+//   · 只写**管着这个对话的那一层**：按会话 = 这个对话；按工作区 = 这个工作区（那一层本来就
+//     是同工作区共享的）；隔离关掉（全局）时没有会话层，管着这个对话的就是全局那一份 ——
+//     那一档是机器级改动，调用前会被确认卡问过。
 //   · 只认本插件注册过的工具名：MCP 工具归 MCP 停用表管，混进来会写出官方 restrict 认不出的名字。
 //   · 自己不可被关：唯一的回头路不能被自己关掉（面板仍然可以关）。
 
 import { text, type ToolDomainDeps } from './deps.js'
+import { governingScopeNote } from './deps.js'
 import { estimateTok } from './table.js'
 
 /** 控制面工具要的依赖：本插件的工具清单 + 会话工具表的读写。 */
@@ -31,10 +34,12 @@ export interface ControlToolDeps extends ToolDomainDeps {
    */
   hiddenForSession(agent: unknown): ReadonlySet<string>
   /**
-   * 写本对话的工具表（整份关停名单）。
+   * 写管着这个对话的那一层的工具表（整份关停名单）。
    *
-   * 走面板同一条写路径（`tool-table` op 带 sessionId 的那一支），所以锁、基线补写、
-   * 可见性重排、两个目录重算全都照旧 —— 这里不另写一份。
+   * 走面板同一条写路径（`tool-table` op），所以锁、基线补写、可见性重排、两个目录重算
+   * 全都照旧 —— 这里不另写一份。带 sessionId 时写会话那一层，不带时写全局那一份
+   * （隔离关掉时没有会话层，管着这个对话的就是全局那份；那一档是机器级改动，
+   * 调用前已被确认卡问过）。
    */
   writeSessionTable(agent: unknown, hidden: string[]): Promise<{ ok: boolean; error?: string }>
   /**
@@ -71,9 +76,10 @@ export function buildControlTools(deps: ControlToolDeps): void {
     register(defineTool({
       name: CONTROL_TOOL_NAME,
       description:
-        'Turn this plugin\'s own tools on or off for THIS conversation. '
+        'Turn this plugin\'s own tools on or off for the scope that governs this conversation: '
+        + 'this conversation alone, its whole workspace under workspace isolation, or every conversation once isolation is off. '
         + 'Call `list` when the user asks for something this conversation cannot do yet (e.g. switching scene while the scene tools are off): it returns the tools that are off here, one line each. '
-        + '`enable`/`disable` apply from the next request, to this conversation only.',
+        + '`enable`/`disable` take one or more names and apply from the next request.',
       parameters: {
         action: {
           type: 'string',
@@ -115,7 +121,7 @@ export function buildControlTools(deps: ControlToolDeps): void {
         // 自己不可被关：这条工具是模型唯一的回头路，关掉它就再也开不回来
         // （面板仍然可以关 —— 用户说了算）。
         if (action === 'disable' && known.includes(CONTROL_TOOL_NAME)) {
-          throw new Error('this tool cannot switch itself off — it is the only way back to the others; the user can turn it off in the panel')
+          throw new Error('this tool cannot switch itself off — it is the only way back to the others. Only the user can disable it (in the panel).')
         }
         const hidden = deps.hiddenForSession(agent)
         const next = action === 'enable'
@@ -125,12 +131,14 @@ export function buildControlTools(deps: ControlToolDeps): void {
         if (!saved.ok) throw new Error(saved.error || 'failed to save the tool table for this conversation')
         const changed = action === 'enable' ? known.filter((n) => hidden.has(n)) : known.filter((n) => !hidden.has(n))
         const lines = [
-          'OK: ' + (action === 'enable' ? 'enabled' : 'disabled') + ' here: ' + (changed.join(', ') || '(nothing changed)'),
-          'These take effect from the next request. Other conversations are unaffected.',
+          'OK: ' + (action === 'enable' ? 'enabled' : 'disabled') + ': ' + (changed.join(', ') || '(nothing changed)')
+            + governingScopeNote(deps) + '.',
+          'These take effect from the next request.',
         ]
         if (unknown.length > 0) lines.push('not this plugin\'s tools (ignored): ' + unknown.join(', '))
-        // 说清「这一轮看得见的条数」：模型据此判断自己还有没有别的路。
-        lines.push('this conversation can currently use ' + (deps.toolTableSizes.size - next.length) + ' of ' + deps.toolTableSizes.size + ' tools.')
+        // 说清「这一层看得见的条数」：模型据此判断自己还有没有别的路。
+        const total = deps.toolTableSizes.size
+        lines.push((total - next.length) + ' of ' + total + ' tools are available here now.')
         return lines.join('\n')
       },
     }))
@@ -170,11 +178,11 @@ function listTools(deps: ControlToolDeps, agent: unknown): string {
     if (!hidden.has(name)) continue
     rows.push(toolLine(name, deps.toolTableSummaries.get(name) ?? '', bytes))
   }
+  const total = deps.toolTableSizes.size
   if (rows.length === 0) {
-    return 'every tool of this plugin is already on in this conversation (' +
-      deps.toolTableSizes.size + ' tools); nothing to enable.'
+    return 'every tool of this plugin is already on here (' + total + ' tools); nothing to enable.'
   }
-  return 'tools switched off in this conversation (' + rows.length + ' of ' + deps.toolTableSizes.size + '):\n' +
+  return 'tools switched off here (' + rows.length + ' of ' + total + '):\n' +
     rows.join('\n') +
-    '\ncall this tool with action="enable" and the names you need.'
+    '\ncall this tool with action="enable" and the names you need (one or more).'
 }
