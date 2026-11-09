@@ -1543,8 +1543,9 @@
         }
         const toolTableDisabled = toolTableBusy || scopeSessionLocked || toolTable.state === 'unknown'
         // 自主记忆那条工具没有独立开关：面板画成「只读行」—— 名字与介绍照常显示，
-        // 但没有勾选框（禁用框看着仍像能点）。服务端按总开关状态把它放进 forced（开）或
-        // forcedOff（关），合并即"被接管的工具"；模型侧控制面也按同一份名单挡。
+        // 勾选框也画，但固定是禁用态（灰的、点不动），只用来**展示**此刻跟随总开关的
+        // 开 / 关；真开关在记忆页头的「自主记忆」按钮上。服务端按总开关状态把它放进
+        // forced（开）或 forcedOff（关），合并即"被接管的工具"；模型侧控制面也按同一份名单挡。
         const managed = forcedToolNames().concat(forcedOffToolNames())
         const rows = []
         groups.forEach(function (group) {
@@ -1574,14 +1575,20 @@
                   // 于是"悬停什么也没有"不会发生。
                   const hover = translateOrFallback(t, 'compat.tools.hover.' + tool.name, about)
                   if (managed.indexOf(tool.name) >= 0) {
-                    // 只读行：四列对齐照旧，第一列空着 —— 没有勾选框就没有开关可点。
-                    // 介绍仍显示（用户要能看懂这条工具是干什么的），只是不能改它。
+                    // 只读行：四列对齐照旧，第一列画一个**禁用的勾选框**（灰的、点不动）。
+                    // 它只表达"这条工具此刻跟着总开关是开还是关"（在 forced 里=勾上、
+                    // forcedOff 里=空），勾/不勾都改不了它 —— 不是可点的开关。
+                    // 介绍仍显示（用户要能看懂这条工具是干什么的），只是不能在这里改。
                     return React.createElement('div', {
                       className: 'dsm-tooltable-tool dsm-tooltable-managed',
                       key: tool.name,
                       title: (hover ? hover + '\n\n' : '') + t('compat.tools.lockedTitle'),
                     },
-                      React.createElement('span', null),
+                      React.createElement(RowCheck, {
+                        checked: forcedToolNames().indexOf(tool.name) >= 0,
+                        disabled: true,
+                        label: tool.name,
+                      }),
                       React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
                       React.createElement('span', { className: 'dsm-tooltable-tok' }, '≈' + tool.tok),
                       React.createElement('span', { className: 'dsm-tooltable-about' }, about))
