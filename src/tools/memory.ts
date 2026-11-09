@@ -21,6 +21,7 @@
 
 import { GLOBAL_SCENE, SHARED_GROUP } from '../memories/constants.js'
 import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { PROACTIVE_MEMORY_TOOL } from './table.js'
 
 /** 记忆工具域要的宿主能力：记忆 op 表与场景记录。 */
 export interface MemoryToolDeps extends ToolDomainDeps {
@@ -204,7 +205,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           lines.push('', String(a.body || ''))
           // P4：procedure 的成功计数只认显式回报。不在这里说，模型读完就去做事，不会
           // 想到回来报一次 —— 那这条流程永远停在 0/3，playbook 阶梯就断了。
-          if (a.kind === 'procedure') lines.push('', 'This is a procedure. After you actually follow these steps and they work, call memory_manager_procedure_done with id ' + wantId + '; three verified runs promote it to a playbook.')
+          if (a.kind === 'procedure') lines.push('', 'This is a procedure. After you actually follow these steps and they work, call ' + PROACTIVE_MEMORY_TOOL + ' with { action: "done", memory: "' + wantId + '" }; three verified runs promote it to a playbook.')
           const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
           if (ev.length) {
             lines.push('', 'evidence (latest ' + ev.length + '):')
@@ -467,33 +468,76 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   // 弹一次卡，用户三分钟就会把开关关掉，"自进化"就没了。反过来，给 `save` 加一个 `auto`
   // 参数会让同一个工具同时代表两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。
   // 授权边界写在工具名上，门禁不用猜。
+  //
+  // 2026-11-09（用户：新增工具合并成一个）：原先 learn / forget / organize /
+  // procedure_done 四条合成这一条，靠 `action` 分叉。四条行为共享同一个"开关打开才可用"
+  // 的前提，分成四个名字只是让工具表多三行、让模型多记三个工具；合成后界面只需要给
+  // 一条写介绍、只锁一个勾选框。四个分支的 op 与门禁一个字没改 —— 合并的只是入口。
   if (!deps.evolutionOps || !deps.autoLearnEnabled) return
   const evo = deps.evolutionOps
 
   register(defineTool({
-    name: 'memory_manager_learn',
-    // 描述要同时挡住两类滥用：把可推导的东西记下来（永久吃注入预算）、
-    // 以及把"自己总结的话"当成用户说的（证据门会拒，但先说清更省一次往返）。
-    description: 'Remember one durable thing from this conversation: a preference, a fact, a correction, or a repeatable procedure. It is injected into later conversations, so record only what cannot be re-derived from the code. Not for one-off instructions ("this time", "for now"). Pass `quote` with the user\'s exact words whenever they said it.',
+    name: PROACTIVE_MEMORY_TOOL,
+    description: 'Proactive memory, one tool with four actions. action=learn: record one durable preference, fact, correction or repeatable procedure from this conversation (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). action=forget: delete a learned note, which stays un-learnable for 30 days — only when the user asks. action=organize: read-only draft of merges / archives / promotions for the user to apply. action=done: report that a recorded procedure really ran end-to-end; three verified runs promote it to a playbook (ok=false when it failed). Available only while proactive memory is on.',
     parameters: {
-      text: { type: 'string', required: true, description: 'One sentence: what to remember (<=400 chars).' },
-      kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'What kind of thing it is; inferred from the text when omitted.' },
-      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'Why you know it. user_explicit / user_correction require a verbatim `quote`; model_inference only ever becomes a candidate.' },
-      quote: { type: 'string', description: 'The user\'s exact words (must be a verbatim substring of what they said). Required for user_explicit / user_correction.' },
-      key: { type: 'string', description: 'Short slot name like `package-manager` — the same key merges with the existing note instead of adding a near-duplicate.' },
-      boundary: { type: 'string', description: 'When it might not hold (e.g. "CI still uses npm").' },
-      // P4：procedure 的拆解步骤。不传仍会记一条做法类结论，但不会升 playbook / 生成技能。
-      steps: { type: 'array', items: { type: 'string' }, description: 'For kind=procedure: the ordered steps (2-12 short lines) that were actually followed. Without these the note can never become a playbook or a skill.' },
-      layer: { type: 'string', enum: ['global', 'workspace', 'scene', 'session'], description: 'Where it applies. Omit to route by content: project facts go to the workspace, temporary constraints to this conversation.' },
-      ttlDays: { type: 'number', description: 'Days before it should be re-checked; defaults by kind.' },
+      action: { type: 'string', enum: ['learn', 'forget', 'organize', 'done'], required: true, description: 'learn (default if omitted) / forget / organize / done.' },
+      // ── learn ──
+      text: { type: 'string', description: 'learn: one sentence, what to remember (<=400 chars).' },
+      kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: what kind of thing it is; inferred from the text when omitted.' },
+      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it. user_explicit / user_correction require a verbatim `quote`; model_inference only ever becomes a candidate.' },
+      quote: { type: 'string', description: 'learn: the user\'s exact words (verbatim substring of what they said). Required for user_explicit / user_correction.' },
+      key: { type: 'string', description: 'learn: short slot name like `package-manager` — the same key merges with the existing note.' },
+      boundary: { type: 'string', description: 'learn: when it might not hold (e.g. "CI still uses npm").' },
+      steps: { type: 'array', items: { type: 'string' }, description: 'learn: for kind=procedure, the ordered steps (2-12 short lines) actually followed. Without these it can never become a playbook or a skill.' },
+      layer: { type: 'string', enum: ['global', 'workspace', 'scene', 'session'], description: 'learn: where it applies. Omit to route by content.' },
+      ttlDays: { type: 'number', description: 'learn: days before it should be re-checked; defaults by kind.' },
+      // ── forget / done ──
+      memory: { type: 'string', description: 'forget / done: the learned note or procedure id, copied from the learned notes block.' },
+      ok: { type: 'boolean', description: 'done: true (default) = the steps worked; false = they failed and should not count toward promotion.' },
+      // ── organize ──
+      scope: { type: 'string', enum: ['workspace', 'global', 'all'], description: 'organize: which set to look at (default workspace).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
       const agent = exec && exec.agent
       if (!deps.autoLearnEnabled!(agent)) {
         // 开关在调用途中被关掉（另一个窗口 / 本会话切了）也要说清，而不是静默什么都不做。
-        throw new Error('proactive memory is off here, so nothing was recorded. The user can turn it on in Memory → Proactive memory.')
+        throw new Error('proactive memory is off here, so nothing was done. The user can turn it on in Memory → Proactive memory.')
       }
+      const action = String((args && args.action) || 'learn')
+
+      if (action === 'forget') {
+        const id = String((args && args.memory) || '').trim()
+        if (id === '') throw new Error('missing argument: memory')
+        const r: any = await evo['evolution-forget']({ id, actor: 'model' })
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to forget it'))
+        return 'OK: forgot ' + String(r.id || id) + '. It will not be learned again for 30 days.'
+      }
+
+      if (action === 'organize') {
+        const r: any = await evo['evolution-organize']({ scope: (args && args.scope) || 'workspace' })
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to draft a cleanup'))
+        const drafts: any[] = Array.isArray(r.drafts) ? r.drafts : []
+        const scanned = Number(r.scanned) || 0
+        if (!drafts.length) return 'Nothing to tidy: ' + scanned + ' learned note(s) scanned, no merges / archives / promotions suggested.'
+        const lines = drafts.map((d: any, i: number) =>
+          (i + 1) + '. [' + String(d.action) + '] ' + (Array.isArray(d.ids) ? d.ids.join(' + ') : '') + ' — ' + String(d.reason || ''))
+        return 'Drafted ' + drafts.length + ' change(s) from ' + scanned + ' learned note(s). Nothing has been changed yet — the user applies them in Memory → Learned notes.\n' + lines.join('\n')
+      }
+
+      if (action === 'done') {
+        // 「真的执行完」才算一次验证：只读过步骤、或只是打算照做，都不该把流程升成 playbook。
+        const id = String((args && args.memory) || '').trim()
+        if (id === '') throw new Error('missing argument: memory')
+        const r: any = await evo['evolution-procedure-done']({ id, ok: args?.ok !== false })
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record the run'))
+        if (r.promoted) return 'OK: ' + String(r.successes) + ' verified run(s) — promoted ' + id + ' to a playbook. Its steps are now shown only as a title in the learned notes block.'
+        return 'OK: recorded for ' + id + ' (' + String(r.successes) + ' successful / ' + String(r.failures) + ' failed). Three successful runs are needed to become a playbook.'
+      }
+
+      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget / organize / done)')
+
+      // ── learn（默认）──
       const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
       const payload: any = {
         text: String((args && args.text) || ''),
@@ -532,67 +576,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       }
       if (typeof r.layer === 'string' && layerNote[r.layer]) parts.push(layerNote[r.layer])
       return parts.join('; ')
-    },
-  }))
-
-  register(defineTool({
-    name: 'memory_manager_forget',
-    // 「30 天不能复活」必须写进描述：否则模型会以为忘了之后可以立刻重新学，
-    // 而实际会拿到一条 tombstoned 拒绝 —— 它会以为是 bug 而不是设计。
-    description: 'Delete one note you learned earlier. A 30-day tombstone keeps it from being re-learned, so only use this when the user asks to forget something. Notes the user wrote themselves are deleted from the Memory page, not here.',
-    parameters: {
-      memory: { type: 'string', required: true, description: 'Learned-note id, copy it from the learned notes block or from memory_manager_list.' },
-    },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args: any) {
-      const id = String((args && args.memory) || '').trim()
-      if (id === '') throw new Error('missing argument: memory')
-      const r: any = await evo['evolution-forget']({ id, actor: 'model' })
-      if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to forget it'))
-      return 'OK: forgot ' + String(r.id || id) + '. It will not be learned again for 30 days.'
-    },
-  }))
-
-  register(defineTool({
-    name: 'memory_manager_organize',
-    // 只出草案、不给 apply 参数：整理是**不可逆**的（合并会丢掉一条的独立地位、归档会
-    // 让它不再注入）。模型说一句"整理一下"就把五条合并了，用户没有机会看它合了什么。
-    // 应用入口留在界面（用户逐条点），与 learn 的零摩擦正好相反 —— 那条是"多记一条"，
-    // 这条是"少一条 / 改一条"。
-    description: 'Draft a cleanup of the notes you learned: merge near-duplicates, archive stale candidates, promote proven ones. Read-only — returns suggestions to show the user; they apply them in Memory. Use when asked to tidy up what you remember.',
-    parameters: {
-      scope: { type: 'string', enum: ['workspace', 'global', 'all'], description: 'Which set to look at (default workspace).' },
-    },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args: any) {
-      const r: any = await evo['evolution-organize']({ scope: (args && args.scope) || 'workspace' })
-      if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to draft a cleanup'))
-      const drafts: any[] = Array.isArray(r.drafts) ? r.drafts : []
-      const scanned = Number(r.scanned) || 0
-      if (!drafts.length) return 'Nothing to tidy: ' + scanned + ' learned note(s) scanned, no merges / archives / promotions suggested.'
-      const lines = drafts.map((d: any, i: number) =>
-        (i + 1) + '. [' + String(d.action) + '] ' + (Array.isArray(d.ids) ? d.ids.join(' + ') : '') + ' — ' + String(d.reason || ''))
-      return 'Drafted ' + drafts.length + ' change(s) from ' + scanned + ' learned note(s). Nothing has been changed yet — the user applies them in Memory → Learned notes.\n' + lines.join('\n')
-    },
-  }))
-
-  register(defineTool({
-    name: 'memory_manager_procedure_done',
-    // 描述里把"真的执行完"写死：只 read 过一次、或只是打算照做，都不算验证。三次误报
-    // 就会把一条没跑过的流程升成 playbook，而 playbook 是生成技能的唯一入口。
-    description: 'Report that you actually followed a recorded procedure end-to-end. Call only after the steps ran and the result was as expected — not after merely reading it. Three verified runs promote the note to a playbook; pass ok=false if following it failed.',
-    parameters: {
-      memory: { type: 'string', required: true, description: 'The procedure id, copied from the learned notes block or memory_manager_list.' },
-      ok: { type: 'boolean', description: 'true (default) = the steps worked; false = they failed and should not count toward promotion.' },
-    },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args: any) {
-      const id = String((args && args.memory) || '').trim()
-      if (id === '') throw new Error('missing argument: memory')
-      const r: any = await evo['evolution-procedure-done']({ id, ok: args?.ok !== false })
-      if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record the run'))
-      if (r.promoted) return 'OK: ' + String(r.successes) + ' verified run(s) — promoted ' + id + ' to a playbook. Its steps are now shown only as a title in the learned notes block.'
-      return 'OK: recorded for ' + id + ' (' + String(r.successes) + ' successful / ' + String(r.failures) + ' failed). Three successful runs are needed to become a playbook.'
     },
   }))
 }

@@ -4,7 +4,7 @@
 // 根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；面板
 // （118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着十八条**（整张表 24 条，每轮实发 6 条）—— 名单、判据与代价见下面
+// 出厂**默认就关着十九条**（旧的十八条 + 主动记忆那一条；整张表 25 条，每轮实发 6 条）—— 名单、判据与代价见下面
 // `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // 实测数字（口径：宿主 `recordToolSize` 的 `ceil(JSON.stringify(header.tools).length / 4) + 4`，
@@ -12,10 +12,9 @@
 // `projectToolSchema` 不投影 output / execute，那几个不进请求。界面「模型工具表」那行
 // 合计与逐条 ≈tok 就是这份）：
 //   · 十八条隐藏 ≈**4,524 tok**，默认可见那六条 ≈**1,536 tok**，全开 ≈**6,055 tok**。
-//   · ⚠️ 上面那个 4,524 是**十八条**的值。之后又加了 `memory_manager_learn` /
-//     `memory_manager_forget` / `memory_manager_organize` / `memory_manager_procedure_done`
-//     四条（主动记忆，默认隐藏、其中前两条与 P4 那条在开关打开时可见），**没有重测** ——
-//     引用合计时按"18 条 + 新增 4 条"分开说，别把 4,524 当成二十二条的值。
+//   · ⚠️ 上面那个 4,524 是**十八条**的值。之后又加了主动记忆那条工具（起初四条，
+//     2026-11-09 合成 `memory_manager_auto` 一条，默认隐藏、开关打开时强制可见），**没有重测** ——
+//     引用合计时按"18 条 + 主动记忆 1 条"分开说，别把 4,524 当成十九条的值。
 //   · A/B 实测（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
 //     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
 //     所以它们是**净节省的下界**，不是"省了多少"的上界。**那对数量的是当天那份描述** ——
@@ -47,6 +46,15 @@
 import { INJECT_DOMAIN_KEYS, domainOfTool, type InjectDomainKey } from '../context-inject.js'
 import { LEGACY_TOOL_NAME_MAP } from '../legacy-tool-names.js'
 import { CONTROL_TOOL_NAME } from './deps.js'
+
+/**
+ * 主动记忆唯一那条工具的名字。
+ *
+ * 2026-11-09 按用户要求把 learn / forget / organize / procedure_done 四条并成一条：
+ * 工具表少三行、模型少认三个名字，四个行为靠 `action` 参数分叉。名字集中在这里，
+ * 是因为「出厂隐藏名单」「开启时强制可见」「旧名迁移」「工具注册」四处都得认同一串字符。
+ */
+export const PROACTIVE_MEMORY_TOOL = 'memory_manager_auto'
 
 /** 一份命名方案：名字 + 那一组"不发给模型"的工具名（与 `hidden` 同口径，不是"开着哪些"）。 */
 export interface ToolTablePreset {
@@ -131,19 +139,14 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'prompt_manager_list',
   'prompt_manager_apply',
   'plugin_manager_remove',
-  // 主动记忆的两条：默认藏着（它们是权限，不是便利），**开关打开时**才被
-  // `sessionToolTableOverlayOf` 的 `allow` 减出来（见 index.ts）。
-  // 放在这份名单而不是另建一张表：工具表清单、体积统计、兼容页分组全都读这一份，
-  // 多一张表就多一处"清单显示开着、实际被藏着"的错位。
-  'memory_manager_learn',
-  'memory_manager_forget',
-  'memory_manager_organize',
-  // P4：回报一次流程执行结果。与 learn 同为零摩擦的记数动作，开关打开时一起放行
-  // （见 index.ts 的 autoAllow），否则 procedure 永远停在 0/3、阶梯到不了 playbook。
-  'memory_manager_procedure_done',
+  // 主动记忆：默认藏着（它是权限，不是便利），**开关打开时**强制可见且不能手动关掉
+  // （见 index.ts 的 proactiveMemoryGlobalOn 那条过滤链）。放在这份名单而不是另建一张表：
+  // 工具表清单、体积统计、兼容页分组全都读这一份，多一张表就多一处"清单显示开着、
+  // 实际被藏着"的错位。
+  PROACTIVE_MEMORY_TOOL,
 ])
 
-/** 出厂默认那份设置：二十条不发（名单与理由见上面），方案清单是空的。 */
+/** 出厂默认那份设置：十九条不发（名单与理由见上面），方案清单是空的。 */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */

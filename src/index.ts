@@ -49,6 +49,7 @@ import {
   DEFAULT_HIDDEN_TOOLS,
   FACTORY_TOOL_TABLE_PRESET,
   normalizeToolTableSettings,
+  PROACTIVE_MEMORY_TOOL,
   type ToolTableSettings,
 } from './tools/table.js'
 import { createToolTableSwitch } from './tool-table-switch.js'
@@ -1295,11 +1296,13 @@ export default {
      */
     function toolTableHiddenForSession(sessionId: string | null): ReadonlySet<string> {
       const globalHidden = toolTableHidden()
-      if (sessionId === null) return globalHidden
+      // 主动记忆开着时它那条工具不在"关停名单"里：执行门禁 / toolVisibleFor / 注入尾句
+      // 三处都问这一份，名单里留着就会说"这条工具没在模型手里"的假话。
+      if (sessionId === null) return withoutForcedTool(globalHidden)
       const scope = scopeStore.scopeOfSync(scopeKeyForIdSync(sessionId))
-      if (scope === undefined) return globalHidden
-      if (scope.toolTableHidden === undefined && scope.baseline?.toolTableHidden === undefined) return globalHidden
-      return new Set(sessionToolTableHidden(scope, [...globalHidden]))
+      if (scope === undefined) return withoutForcedTool(globalHidden)
+      if (scope.toolTableHidden === undefined && scope.baseline?.toolTableHidden === undefined) return withoutForcedTool(globalHidden)
+      return withoutForcedTool(new Set(sessionToolTableHidden(scope, [...globalHidden])))
     }
 
     /**
@@ -1311,19 +1314,46 @@ export default {
     let autoLearnVisibleFor: ((agent: unknown) => boolean) | null = null
 
     /**
+     * 主动记忆**全局**开关开没开（同步、给工具表用）。
+     *
+     * 为什么单独一份、不复用 autoLearnEnabledFor：那一条要 agent（深度 / 会话身份 / 生效
+     * 配置），而「这条工具能不能被关掉」是整张工具表的一条静态规则，面板读它时手里没有
+     * agent。用运行时视图里的全局 settings 就够 —— 它是同一份文件，开关一变视图即失效。
+     *
+     * TDZ 是真实存在的：evolutionRuntime 在本函数声明之后才建，而启动期有些目录会先问
+     * 一次可见性。读不到一律按"没开"（不强制），这样最多是这一拍少显示一格锁定态。
+     */
+    function proactiveMemoryGlobalOn(): boolean {
+      try { return evolutionRuntime.view().settings.enabled === true } catch { return false }
+    }
+
+    /** 开启时那条必须保持可见的工具名；给 op 回包 / 写路径 / restrict 三处共用。 */
+    function forcedVisibleToolsNow(): string[] {
+      return proactiveMemoryGlobalOn() ? [PROACTIVE_MEMORY_TOOL] : []
+    }
+
+    /** 从一份隐藏名单里减掉"开启时不能关"的那条。 */
+    function withoutForcedTool(names: ReadonlySet<string>): ReadonlySet<string> {
+      if (!proactiveMemoryGlobalOn() || !names.has(PROACTIVE_MEMORY_TOOL)) return names
+      const out = new Set(names)
+      out.delete(PROACTIVE_MEMORY_TOOL)
+      return out
+    }
+
+    /**
      * 本会话相对全局的工具表差异（restrict 层用）：`allow` = 本会话重新打开、
      * `deny` = 本会话关掉。与 MCP 的 overlay 同一条合并路径（见 mcp/manager.ts）。
      */
     function sessionToolTableOverlayOf(agent: unknown): { allow: string[]; deny: string[] } {
       const sessionId = scopeKeyForAgent(agent)
       if (sessionId === null) return { allow: [], deny: [] }
-      // 主动记忆的两条工具：出厂在 `DEFAULT_HIDDEN_TOOLS` 里藏着（省 token），
-      // 开关打开时才把这两条**减出来**。为什么用 allow 而不是 deny 的方向：默认藏起来
-      // 意味着关着时它们连清单都不占（工具表清单按注册表列，藏着的仍在清单里可手动打开），
-      // 而"开关关着也能被用户手动打开"这条不成立 —— 它们是权限，不是便利。
+      // 主动记忆那一条工具：出厂在 `DEFAULT_HIDDEN_TOOLS` 里藏着（省 token），
+      // 开关打开时才**减出来**。为什么用 allow 而不是 deny 的方向：默认藏起来
+      // 意味着关着时它不占请求体积，而"开关关着也能被用户手动打开"这条不成立 ——
+      // 它是权限，不是便利。开着时反过来：连手动关都不许（见下面的 deny 过滤）。
       let autoAllow: string[] = []
       try {
-        if (autoLearnVisibleFor && autoLearnVisibleFor(agent)) autoAllow = ['memory_manager_learn', 'memory_manager_forget', 'memory_manager_procedure_done']
+        if (autoLearnVisibleFor && autoLearnVisibleFor(agent)) autoAllow = [PROACTIVE_MEMORY_TOOL]
       } catch { autoAllow = [] }
       const scope = scopeStore.scopeOfSync(sessionId)
       if (scope === undefined) return { allow: autoAllow, deny: [] }
@@ -1341,7 +1371,12 @@ export default {
         if (!hiddenHere && hiddenGlobal && !allow.includes(name)) allow.push(name)
         else if (hiddenHere && !hiddenGlobal) deny.push(name)
       }
-      return { allow, deny }
+      // `deny` 在 tool-visibility.ts 里是**无条件追加**的，allow 减不掉它。主动记忆开着时
+      // 只要这一条还通过会话覆盖进了 deny，用户/模型就能把它关掉 —— 显式摘掉。
+      return {
+        allow,
+        deny: proactiveMemoryGlobalOn() ? deny.filter((name) => name !== PROACTIVE_MEMORY_TOOL) : deny,
+      }
     }
 
     /**
@@ -1504,8 +1539,10 @@ export default {
       // 与 `tool-table` op 写分支同一条路径、同一顺序：落盘 → 重排可见性 → 两个目录重算。
       // 绕开这套顺序就会留下「名单已经改了、工具下一轮还发给模型」这种最难查的状态。
       // **锁内读-改-写**：presets 必须取锁内最新值，否则并发的存方案会被这次整表写覆盖。
+      const forced = new Set(forcedVisibleToolsNow())
       const saved = await mutateToolTableSettings((current) => ({
-        hidden: normalizeToolTableSettings({ hidden }).hidden.filter((name) => toolTableSizes.has(name)),
+        hidden: normalizeToolTableSettings({ hidden }).hidden
+          .filter((name) => toolTableSizes.has(name) && !forced.has(name)),
         presets: current.presets,
       }))
       if (!saved.ok) throw new Error(saved.error || toolTableWriteError())
@@ -2027,6 +2064,7 @@ export default {
       mutateToolTableSettings, toolTableReport, toolTableOp,
     } = createToolTableSwitch({
       ensurePaths, readJsonFileStrict, writeJsonFile, withWriteLock, message, EMPTY_TOOL_SET,
+      forcedVisibleTools: () => forcedVisibleToolsNow(),
       get mcp() { return mcp },
       get skillCatalog() { return skillCatalog },
       get subagentCatalog() { return subagentCatalog },
@@ -3197,7 +3235,12 @@ export default {
       // 兼容页「模型工具表」关掉的工具与 MCP 停用工具**合并成一次 restrict**：官方
       // `tools.restrict()` 是"每个 scope 一层限制"，两边各调一次会互相覆盖（后一层赢）。
       // 名单的合法性（只含已注册工具）由 manager 那边与 schemas() 求交后保证。
-      pluginHiddenTools: () => [...toolTableHidden()],
+      // 出厂默认藏着的那条主动记忆工具，在开关打开时**不许进限制名单**（面板把勾选框
+      // 锁成开、服务端这里再挡一道：工具表是 per-agent 的，面板挡不住模型侧的 toggle）。
+      pluginHiddenTools: () => {
+        const off = [...toolTableHidden()]
+        return proactiveMemoryGlobalOn() ? off.filter((name) => name !== PROACTIVE_MEMORY_TOOL) : off
+      },
       // 「这个名字是不是自家工具」：注册漏斗记下的全集（`selfToolNames`，注册成功才记）——
       // 注册事实，不是前缀枚举（前缀表会漏掉控制面工具 `tool_manager_tools`）。
       isPluginToolName: (name: string) => selfToolNames.has(name),
@@ -4195,7 +4238,9 @@ export default {
      */
     function toolTableSessionPayload(sessionId: string, scope: SessionScope | undefined, settings: ToolTableSettings): any {
       // 只报注册过的名字：基线 / 方案里可能留着更早版本关停过、如今已不存在的工具。
-      const hidden = sessionToolTableHidden(scope, settings.hidden).filter((name) => toolTableSizes.has(name))
+      const forced = forcedVisibleToolsNow()
+      const hidden = sessionToolTableHidden(scope, settings.hidden)
+        .filter((name) => toolTableSizes.has(name) && forced.indexOf(name) < 0)
       const source = scope?.toolTableHidden !== undefined
         ? 'session'
         : (scope?.baseline?.toolTableHidden !== undefined ? 'baseline' : 'global')
@@ -4204,6 +4249,8 @@ export default {
         sessionId,
         scopeKind: isWorkspaceScopeKey(sessionId) ? 'workspace' : 'session',
         hidden,
+        // 面板据此把这一行画成"已勾选 + 禁用"，而不是让用户点一下发现没反应。
+        forcedVisible: forced,
         globalHidden: settings.hidden.slice(),
         presets: settings.presets,
         defaultHidden: [...DEFAULT_HIDDEN_TOOLS],
@@ -4244,12 +4291,13 @@ export default {
       // 两条写路：`set` = 整份替换（面板用），`toggle` = 逐条改（模型用）。
       // 后者的改动落在**当前这份**名单上，在写锁里现读现改 —— 整份替换要先读出名单
       // 再算差量，读与写之间有窗口，两个写者（面板、模型）会互相覆盖（丢更新）。
+      const forced = new Set(forcedVisibleToolsNow())
       const toggles = args && Array.isArray(args.toggle)
         ? (args.toggle as any[])
           .filter((t) => t && typeof t.name === 'string' && t.name !== '')
           .map((t) => ({ name: String(t.name), hidden: t.hidden === true }))
           // 只收注册过的工具名：陌生名字会让官方 restrict 抛错。
-          .filter((t) => toolTableSizes.has(t.name))
+          .filter((t) => toolTableSizes.has(t.name) && !forced.has(t.name))
         : null
       if (!args || (args.set !== true && toggles === null)) {
         // 方案库是全局的：会话层只负责"读这一层 / 应用一份方案"，不在这里存删。
@@ -4275,7 +4323,7 @@ export default {
       }
       // 只收注册过的工具名：陌生名字会让官方 restrict 抛错。
       const target = normalizeToolTableSettings({ hidden: args && args.hidden }).hidden
-        .filter((name) => toolTableSizes.has(name))
+        .filter((name) => toolTableSizes.has(name) && !forced.has(name))
       // 老会话的基线里没有这一栏：第一次写时按**当前全局**补一份，
       // 否则退出场景会退回"实时全局"，与"每个对话从创建起有自己的那份"这条口径不符。
       const backfillBaselineTt = scope?.baseline !== undefined && scope.baseline.toolTableHidden === undefined
@@ -4287,9 +4335,9 @@ export default {
             out.baseline = { ...out.baseline, toolTableHidden: settings.hidden.slice() }
           }
           // 逐条改的那一路：起点是**锁内的当前生效名单**（现读现改）。
-          const next = toggles !== null
+          const next = (toggles !== null
             ? applyToolTableToggles(sessionToolTableHidden(cur, settings.hidden), toggles)
-            : target
+            : target).filter((name) => !forced.has(name))
           // 与基线同值就不留显式名单：退出场景 / 全局再变时少一条永远相等的覆盖。
           if (base !== undefined && sameToolNameList(next, base)) delete out.toolTableHidden
           else out.toolTableHidden = next.slice()

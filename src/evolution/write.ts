@@ -977,7 +977,7 @@ export function createLearner(deps: LearnDeps) {
 
   /**
    * 记一次 procedure 的执行结果（P4）。**只认显式回报**：调用方是
-   * `memory_manager_procedure_done` 工具 / 界面上的「记一次成功」，不是从工具成功里猜。
+   * `memory_manager_auto` 的 `action=done` / 界面上的「记一次成功」，不是从工具成功里猜。
    *
    * 没有状态记录的旧条目也能补：从正文解析出步骤就地建一份，省得为了计数让用户先重写
    * 一遍记忆。但解析不出 ≥2 步就拒绝 —— 那种条目本来也不该升 playbook。

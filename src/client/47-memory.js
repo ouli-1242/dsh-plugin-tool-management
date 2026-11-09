@@ -750,6 +750,14 @@
           // 程序性记忆（P4）：步骤、验证次数、技能草案与 learned 名单。null = 没接线。
           var evp = React.useState(null)
           var evoProc = evp[0], setEvoProc = evp[1]
+          // 主动记忆弹窗（2026-11-09：从平铺卡片搬进回收站左边那颗按钮打开的弹窗）。
+          // 与 `modal` 分开存：弹窗里点「删除 / 提升 / 整理」还要再开一层确认弹窗，
+          // 共用一个槽会把主动记忆一起关掉。
+          var eos = React.useState(false)
+          var evoOpen = eos[0], setEvoOpen = eos[1]
+          // 「更多」：后台复习 / 全库整理 / 程序性记忆默认收着，弹窗第一屏只有开关和清单。
+          var ems = React.useState(false)
+          var evoMore = ems[0], setEvoMore = ems[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -821,19 +829,38 @@
           // 跟着「当前对话」重取，不跟「选中层」：切对话时这张卡必须跟着变。
           React.useEffect(function () { refreshEvolution() }, [scopeState.currentSessionId])
 
-          /** value：`true` / `false` / `null`（= 继承上一级）。 */
-          function setEvolutionScope(scope, value) {
+          /**
+           * 唯一那颗总开关：写全局，并把本工作区 / 本会话原先的覆盖清成「继承」。
+           *
+           * 为什么要连覆盖一起清：三级开关是逐字段覆盖，只要本会话还留着 `false`，
+           * 全局打开后这里依然是关的 —— 用户看到的是"我开了，怎么没反应"。界面已经不再
+           * 提供那两行选项（用户 2026-11-09：要更傻瓜），就没有任何地方能把它拨回来，
+           * 所以一键开关必须把它俩一起收回。三个写串行走，避免并发覆盖配置侧车。
+           */
+          function setEvolutionMaster(next) {
             var sid = evoSessionId()
-            if (scope !== 'global' && sid === '') { setResult({ ok: false, text: t('evo.need.session') }); return }
+            var st = evo.status || {}
+            /** @type {any[]} 三个写形状不同（enabled / inherit），别让 TS 按第一条收窄。 */
+            var calls = [{ scope: 'global', enabled: next, sessionId: sid }]
+            if (sid !== '' && st.workspace && st.workspace.defined === true) {
+              calls.push({ scope: 'workspace', inherit: true, sessionId: sid })
+            }
+            if (sid !== '' && st.session && st.session.defined === true) {
+              calls.push({ scope: 'session', inherit: true, sessionId: sid })
+            }
             setEvoBusy(true)
-            var args = { scope: scope }
-            if (value === null) args.inherit = true
-            else args.enabled = value
-            if (sid !== '') args.sessionId = sid
-            apiCall('evolution-toggle', args).then(function (res) {
+            var outs = []
+            var chain = Promise.resolve()
+            calls.forEach(function (args) {
+              chain = chain.then(function () {
+                return apiCall('evolution-toggle', args).then(function (res) { outs.push(res); return res })
+              })
+            })
+            chain.then(function () {
               setEvoBusy(false)
-              if (res && res.ok !== false) { setResult({ ok: true, text: t('evo.saved') }); refreshEvolution() }
-              else setResult({ ok: false, text: translateError(t, res) })
+              var bad = outs.filter(function (r) { return !r || r.ok === false })[0]
+              if (!bad) { setResult({ ok: true, text: t('evo.saved') }); refreshEvolution() }
+              else setResult({ ok: false, text: translateError(t, bad) })
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
 
@@ -942,25 +969,6 @@
             }).catch(function (e) {
               setEvoQueue(function (cur) { return cur ? Object.assign({}, cur, { busy: false, error: errMsg(e) }) : null })
             })
-          }
-
-          /** 三级里的一行：分段控件 [继承][开][关]。全局那行没有「继承」。 */
-          function renderEvoScopeRow(scope, label, defined, value, inherited) {
-            var effective = defined ? value === true : inherited === true
-            function seg(key, text, active, onClick) {
-              return React.createElement('button', {
-                key: key, type: 'button', 'aria-pressed': active === true,
-                disabled: evoBusy,
-                onClick: onClick,
-              }, text)
-            }
-            return React.createElement('div', { key: 'sc:' + scope, className: 'dsm-evo-scope' },
-              React.createElement('span', { className: 'dsm-evo-scope-name' }, label),
-              React.createElement('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': label },
-                scope === 'global' ? null : seg('inh', t('evo.inherit'), !defined, function () { setEvolutionScope(scope, null) }),
-                seg('on', t('evo.on'), defined ? value === true : false, function () { setEvolutionScope(scope, true) }),
-                seg('off', t('evo.off'), defined ? value === false : false, function () { setEvolutionScope(scope, false) })),
-              React.createElement('span', { className: 'dsm-evo-scope-state' + (effective ? ' dsm-evo-on' : '') }, effective ? t('evo.state.on') : t('evo.state.off')))
           }
 
           /** 展开区：依据 / 边界 / 证据 / 时间线。数据来自 `evolution-read`（按需拉一次）。 */
@@ -1101,7 +1109,6 @@
                   onClick: function () { replayEvolution() },
                 }, busy ? t('evo.queue.busy') : t('evo.queue.now'))),
               evoQueue.error ? React.createElement(Notice, { kind: 'err', text: evoQueue.error }) : null,
-              React.createElement('p', { className: 'dsm-help' }, t('evo.queue.hint')),
               items.slice(0, 5).map(function (x) {
                 return React.createElement('div', { key: x.id, className: 'dsm-evo-queue-row', title: x.id },
                   React.createElement('span', { className: tagOf[x.status] || 'dsm-tag' }, t('evo.queue.status.' + x.status)),
@@ -1242,7 +1249,6 @@
                   onClick: function () { setModal({ type: 'evo-dream-run' }) },
                 }, busy ? t('evo.queue.busy') : t('evo.dream.now'))),
               d.error ? React.createElement(Notice, { key: 'err', kind: 'err', text: d.error }) : null,
-              React.createElement('p', { key: 'hint', className: 'dsm-help' }, t('evo.dream.hint')),
               // 健康度：三行数字里藏着"为什么该整理"，放在草案列表之前。
               React.createElement('div', { key: 'health', className: 'dsm-evo-dream-health' },
                 React.createElement('span', {}, t('evo.health.tokens', { n: health.tokens || 0 })),
@@ -1357,7 +1363,6 @@
                 React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.proc.title')),
                 React.createElement('span', { className: 'dsm-help' }, t('evo.proc.steps.total', { n: entries.length }))),
               p.error ? React.createElement(Notice, { key: 'err', kind: 'err', text: p.error }) : null,
-              React.createElement('p', { key: 'hint', className: 'dsm-help' }, t('evo.proc.hint')),
             ]
             if (entries.length === 0) out.push(React.createElement('p', { key: 'none', className: 'dsm-help' }, t('evo.proc.none')))
             else out.push(React.createElement('div', { key: 'list', className: 'dsm-evo-dream-list' },
@@ -1420,69 +1425,45 @@
             return React.createElement('div', { key: 'proc', className: 'dsm-evo-queue dsm-evo-proc' }, out)
           }
 
-          function renderEvolutionCard() {
+          /**
+           * 主动记忆弹窗（用户 2026-11-09：按钮放回收站左边、点击出弹窗、文字越少越好）。
+           *
+           * 第一屏只有「一个开关 + 一行数字 + 一份清单」：三级分段开关并进总开关，
+           * 三块后台工序的长说明删掉、本体折进「更多」。确认弹窗走 `modal` 那个槽，
+           * 与 `evoOpen` 分开存，才能叠在它上面而不把整块关掉。
+           */
+          function renderEvolutionModal() {
             var st = evo.status
-            var auto = (st && st.auto) || { entries: 0, needsReview: 0, active: 0 }
+            var auto = (st && st.auto) || { entries: 0 }
             var eff = (st && st.effective) || {}
-            var gOn = !!(st && st.global && st.global.enabled === true)
-            var wsDef = !!(st && st.workspace && st.workspace.defined === true)
-            var wsVal = st && st.workspace && st.workspace.values ? st.workspace.values.enabled : undefined
-            var sesDef = !!(st && st.session && st.session.defined === true)
-            var sesVal = st && st.session && st.session.values ? st.session.values.enabled : undefined
-            var wsEffective = wsDef ? wsVal === true : gOn
-            var sourceKey = 'evo.source.' + (eff.source || 'global')
+            var overall = eff.enabled === true
             var rows = evo.entries || []
             var groups = [['session', 'evo.group.session'], ['workspace', 'evo.group.workspace'], ['scene', 'evo.group.scene'], ['global', 'evo.group.global']]
-            var body = [
-              React.createElement('div', { key: 'scopes', className: 'dsm-evo-scopes' },
-                renderEvoScopeRow('global', t('evo.scope.global'), true, gOn, gOn),
-                st && st.workspace ? renderEvoScopeRow('workspace', t('evo.scope.workspace'), wsDef, wsVal, gOn) : null,
-                st && st.session ? renderEvoScopeRow('session', t('evo.scope.session'), sesDef, sesVal, wsEffective) : null),
-              React.createElement('div', { key: 'src', className: 'dsm-evo-foot' },
-                React.createElement('span', { className: 'dsm-help' }, t(sourceKey)),
-                React.createElement('span', { className: 'dsm-help' }, t('evo.stat', {
-                  learned: auto.entries || 0,
-                  active: auto.active || 0,
-                  pending: auto.needsReview || 0,
-                })),
-                // 「整理」放在统计这一行的右端：它管的是整份清单，不是某一条。
-                // 只在已经学到东西时出现 —— 零条时点它只会得到一句"没有需要整理的"。
-                rows.length === 0 ? null : React.createElement('button', {
-                  key: 'org',
-                  type: 'button',
-                  className: 'dsm-btn dsm-btn-quiet dsm-evo-organize-btn',
-                  disabled: !!(evoOrg && evoOrg.busy),
-                  onClick: runOrganize,
-                }, evoOrg && evoOrg.busy ? t('evo.organize.scanning') : t('evo.organize'))),
-              (auto.needsReview || 0) > 0 || rows.length > 0 ? null : React.createElement('p', { key: 'empty', className: 'dsm-help' }, t('evo.empty')),
-              // 队列放在列表**之前**：它回答"后台在干什么"，是这张卡的时间敏感部分；
-              // 列表是结果，用户来翻的时候不着急。
-              renderEvolutionQueue(),
-              // 全库整理放在队列之后、条目列表之前：它和队列一样是"后台工序"，但改的是
-              // 整份清单；放在列表旁边能顺手对照条目，又不会插进逐条操作里。
-              renderEvolutionDream(),
-              // 程序性记忆放在最后一块后台工序之后：它管的是"哪条做法能变成技能"，
-              // 与下面逐条的开关/停用是两类操作，混进列表会把行挤得看不清。
-              renderEvolutionProcedure(),
-              rows.length === 0 ? null : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
-                groups.map(function (g) {
-                  var list = rows.filter(function (e) { return e.layer === g[0] })
-                  if (!list.length) return null
-                  return React.createElement('div', { key: 'g:' + g[0], className: 'dsm-evo-group' },
-                    React.createElement('div', { className: 'dsm-evo-group-head' },
-                      React.createElement('span', { className: 'dsm-evo-group-name' }, t(g[1])),
-                      React.createElement('span', { className: 'dsm-count dsm-count-tight' }, String(list.length))),
-                    list.map(renderEvolutionRow))
-                })),
-              // 整理草案：只出建议，逐条「应用」。用红色 / 确定的语气说"还没改"，
-              // 否则用户会以为点了「整理」就已经合并掉了。
-              evoOrg ? React.createElement('div', { key: 'org', className: 'dsm-evo-organize' },
-                evoOrg.error ? React.createElement(Notice, { kind: 'err', text: evoOrg.error }) : null,
-                !evoOrg.error && evoOrg.drafts !== null && evoOrg.drafts.length === 0
-                  ? React.createElement('p', { className: 'dsm-help' }, t('evo.organize.none', { scanned: evoOrg.scanned }))
-                  : null,
-                !evoOrg.error && evoOrg.drafts && evoOrg.drafts.length
-                  ? React.createElement('div', null,
+            var list = rows.length === 0
+              ? React.createElement('p', { key: 'empty', className: 'dsm-help' }, t('evo.empty'))
+              : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
+                  groups.map(function (g) {
+                    var part = rows.filter(function (e) { return e.layer === g[0] })
+                    if (!part.length) return null
+                    return React.createElement('div', { key: 'g:' + g[0], className: 'dsm-evo-group' },
+                      React.createElement('div', { className: 'dsm-evo-group-head' },
+                        React.createElement('span', { className: 'dsm-evo-group-name' }, t(g[1])),
+                        React.createElement('span', { className: 'dsm-count dsm-count-tight' }, String(part.length))),
+                      part.map(renderEvolutionRow))
+                  }))
+            // 整理草案只出建议、逐条「应用」；点「整理」后必须立刻看得见，所以不折进「更多」。
+            // 三块后台工序可能都没接线（旧版宿主）；全空时给一句最短的空态，别让「更多」点了没反应。
+            var advancedBits = [renderEvolutionQueue(), renderEvolutionDream(), renderEvolutionProcedure()]
+              .filter(function (x) { return !!x })
+            var advanced = evoMore ? React.createElement('div', { key: 'advanced', className: 'dsm-evo-advanced' },
+              advancedBits.length ? advancedBits : React.createElement('p', { className: 'dsm-help' }, t('evo.empty'))) : null
+            var drafts = evoOrg ? React.createElement('div', { key: 'org', className: 'dsm-evo-organize' },
+              evoOrg.error ? React.createElement(Notice, { kind: 'err', text: evoOrg.error }) : null,
+              !evoOrg.error && evoOrg.drafts !== null && evoOrg.drafts.length === 0
+                ? React.createElement('p', { className: 'dsm-help' }, t('evo.organize.none', { scanned: evoOrg.scanned }))
+                : null,
+              !evoOrg.error && evoOrg.drafts && evoOrg.drafts.length
+                ? React.createElement('div', null,
                     React.createElement('div', { className: 'dsm-evo-detail-key' }, t('evo.organize.title', { count: evoOrg.drafts.length })),
                     evoOrg.drafts.map(function (d) {
                       return React.createElement('div', { key: d.id, className: 'dsm-evo-draft' },
@@ -1490,37 +1471,42 @@
                         React.createElement('span', { className: 'dsm-evo-draft-id' }, (d.ids || []).join(' + ')),
                         React.createElement('span', { className: 'dsm-evo-draft-reason' }, String(d.reason || '')),
                         React.createElement('button', {
-                          type: 'button',
-                          className: 'dsm-btn dsm-btn-quiet',
-                          disabled: !!evoOrg.busy,
+                          type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !!evoOrg.busy,
                           onClick: function () { applyOrganizeDraft(d) },
                         }, t('evo.organize.apply')))
                     }))
-                  : null)
-                : null,
-            ]
-            // 收着也能看懂"现在开没开"：卡头右侧那颗灯 + 一句话。
-            var overall = eff.enabled === true
-            return React.createElement('div', { key: 'evo', className: 'dsm-source dsm-evo-card' },
-              React.createElement('div', { className: 'dsm-source-head' },
-                React.createElement('div', { className: 'dsm-source-head-main dsm-source-head-stack' },
-                  React.createElement('span', { className: 'dsm-source-head-line' },
-                    React.createElement('span', { className: 'dsm-source-title' }, t('evo.title')),
-                    React.createElement('span', { className: 'dsm-tag' + (overall ? ' dsm-tag-on' : '') }, overall ? t('evo.state.on') : t('evo.state.off'))),
-                  React.createElement('span', { className: 'dsm-source-desc' }, t('evo.desc'))),
-                React.createElement('div', { className: 'dsm-source-actions' },
+                : null) : null
+            return React.createElement(Modal, {
+              key: 'evo', className: 'dsm-modal-evo', title: t('evo.title'),
+              closeLabel: t('btn.close'), onClose: function () { setEvoOpen(false) },
+            },
+              React.createElement('div', { className: 'dsm-evo-modal' },
+                React.createElement('div', { className: 'dsm-evo-master' },
                   React.createElement(Switch, {
-                    on: gOn,
-                    disabled: evoBusy,
+                    on: overall,
+                    disabled: evoBusy || (evo.loading && !st),
                     label: t('evo.title'),
-                    onClick: function () { setEvolutionScope('global', !gOn) },
-                  }))),
-              React.createElement('div', { className: 'dsm-source-body' },
+                    onClick: function () { setEvolutionMaster(!overall) },
+                  }),
+                  React.createElement('span', { className: 'dsm-tag' + (overall ? ' dsm-tag-on' : '') }, overall ? t('evo.state.on') : t('evo.state.off')),
+                  React.createElement('span', { className: 'dsm-help' }, t('evo.stat.short', { learned: auto.entries || 0 })),
+                  rows.length === 0 ? null : React.createElement('button', {
+                    key: 'org', type: 'button', className: 'dsm-btn dsm-btn-quiet',
+                    disabled: !!(evoOrg && evoOrg.busy), onClick: runOrganize,
+                  }, evoOrg && evoOrg.busy ? t('evo.organize.scanning') : t('evo.organize'))),
                 evo.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: evo.error }) : null,
                 evo.loading && !st ? React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')) : null,
-                ...body))
+                list,
+                drafts,
+                React.createElement('button', {
+                  key: 'more', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-evo-more',
+                  onClick: function () { setEvoMore(!evoMore) },
+                }, evoMore ? t('evo.more.hide') : t('evo.more')),
+                advanced))
           }
 
+          // 页头那颗按钮要能一眼看出开没开，省得每次都点进弹窗确认。
+          var evoOn = !!(evo.status && evo.status.effective && evo.status.effective.enabled === true)
           return React.createElement('section', { className: 'dsm-section' },
             // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 回收站；统计内联。
             React.createElement(PageHead, {
@@ -1545,6 +1531,12 @@
                 // 旁边」）。它管的是列表，但和「回收站」一样是**整页范围**的动作，跟其余页头键
                 // 同排读起来才成组；留在工具条会把搜索行挤窄，而那一行现在要让给搜索框。
                 React.createElement('button', { key: 'bulk', type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy || scopeWriteLocked(anyLocked) || !bulkIds.length, onClick: function () { setMemories(bulkIds, !bulkAllOn, null) } }, bulkPair(bulkAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), bulkAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
+                // 主动记忆：紧挨回收站左边（用户 2026-11-09）。原来那张平铺卡片搬进弹窗，
+                // 页头只留这一颗入口，记忆列表不再被它顶下去。
+                React.createElement('button', {
+                  key: 'evo', type: 'button', className: 'dsm-btn dsm-btn-secondary' + (evoOn ? ' dsm-evo-head-on' : ''),
+                  onClick: function () { setResult(null); setEvoOpen(true) },
+                }, t('evo.title') + (evoOn ? ' · ' + t('evo.state.on') : '')),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
                 scopeLeaseKeys('memory').length > 0 ? React.createElement('button', { key: 'stopall', type: 'button', className: 'dsm-btn dsm-btn-danger-outline', disabled: busy || scopeWriteLocked(anyLocked), onClick: stopAllMemories }, t('scope.stopAll')) : null,
               ],
@@ -1555,9 +1547,7 @@
             anyLocked && !scopeIsSession() ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             // 会话层不显示（同 MCP 页）：本层开关写的是会话覆盖，不同步档案。
             (!anyLocked && sceneName && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
-            // 主动记忆的开关卡与条目列表：放在工具条**之前** —— 下面那条工具条（搜索 +
-            // 场景筛选）管的是"用户自己写的记忆"，两者混在一条里会让人以为搜索能搜到自动条目。
-            renderEvolutionCard(),
+            // 主动记忆已从本页移走：页头一颗按钮 → 弹窗（见下方 evoOpen）。
             // 工具条（REDESIGN §3.3 + §6 备注，切片四换共享 Toolbar）：搜索 + 场景筛选住 children。
             // batch 槽已空 —— 「全选」上移页头（挨着回收站），预算上移统计格；空槽不传，
             // 免得渲染出一个没有内容的 .dsm-toolbar-batch 把搜索框往里挤。
@@ -1585,6 +1575,8 @@
                 : visibleBuckets.length ? React.createElement('div', { key: 'scenes', className: 'dsm-sources' }, visibleBuckets.map(renderSceneCard))
                   : (q || sceneFilter) ? React.createElement(ListStates, { key: 'search', t: t, state: 'search', text: t('memory.empty.search'), onClearFilter: function () { setQuery(''); setSceneFilter('') } })
                     : React.createElement(ListStates, { key: 'empty', t: t, state: 'empty', text: t('memory.empty') }),
+            // 主动记忆弹窗先渲染：它里面开的确认弹窗排在后面，DOM 顺序决定后一层盖在上面。
+            evoOpen ? renderEvolutionModal() : null,
             modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', className: 'dsm-modal-sm', title: t('memory.delete.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.delete.desc', { name: modal.rule.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },

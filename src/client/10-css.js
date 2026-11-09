@@ -161,11 +161,20 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-sources{gap:0}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
-/* ── 主动记忆卡（记忆页顶部）──────────────────────────────────────────────────
-   三段：三级开关（分段控件）/ 来源与统计 / 按层分组的条目。
-   条目沿用 .dsm-listrow（与用户记忆同一个行原语）—— 这里只管分组头与外层间距，
-   不给行另起一套排版，否则同一个页面里两种行的行高不一样。 */
+/* ── 主动记忆（2026-11-09 起：页头按钮 + 弹窗）────────────────────────────────
+   原来的平铺卡片与三级分段开关已收走；弹窗第一屏只有开关 + 一行数字 + 条目清单，
+   后台三块工序折在「更多」里。条目沿用 .dsm-listrow，不给行另起一套排版。 */
 .dsm-evo-card{margin-bottom:8px}
+.dsm-evo-head-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+.dsm-modal-evo{width:min(620px,100%)!important}
+.dsm-evo-modal{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
+.dsm-evo-master{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:2px 0 6px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsm-evo-master .dsm-help{margin:0;margin-left:auto}
+.dsm-evo-modal .dsm-evo-list{max-height:42vh;overflow:auto}
+.dsm-evo-modal .dsm-evo-organize{margin:0}
+.dsm-evo-more{align-self:flex-start}
+.dsm-evo-advanced{display:flex;flex-direction:column;gap:8px;padding-top:6px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-evo-advanced .dsm-evo-queue{margin:0}
 .dsm-evo-scopes{display:flex;flex-wrap:wrap;gap:8px 20px;padding:10px 12px 4px}
 .dsm-evo-scope{display:flex;min-width:0;align-items:center;gap:8px}
 .dsm-evo-scope-name{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:16px;white-space:nowrap}

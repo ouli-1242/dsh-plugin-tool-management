@@ -51,6 +51,13 @@ export interface ToolTableSwitchDeps {
    * 缺省（未给）时按不让位算，与从前逐字一致。
    */
   carrierHiddenTools?: () => readonly string[]
+  /**
+   * 此刻**必须保持可见**的工具名（主动记忆开启时那一条）。
+   *
+   * 读回包会把它从 hidden 与体积报表里减掉并回一份 `forcedVisible` 给面板；写路径也
+   * 一律剔除，免得模型侧 `tool_manager_tools` 绕过面板把它关掉。没给 = 不锁任何工具。
+   */
+  forcedVisibleTools?: () => readonly string[]
 }
 
 /** 工具表切换的对外面：换方案、还原、读当前关停名单。 */
@@ -100,9 +107,9 @@ export interface ToolTableMutationFailure {
 export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitch {
       // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
   // 工具表按**每个请求**付钱：整张表的定义合计 ≈6.1k tok 每轮都在。关掉某几个，
-  // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十八条**
-  // （24 条里实发 6 条）—— 名单、判据与代价在 `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过
-  // 选择时铺（见下面的 `toolTableSettingsFrom`）。
+  // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十九条**
+  // （旧的十八条 + 主动记忆合成后的那一条；25 条里实发 6 条）—— 名单、判据与代价在
+  // `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过选择时铺（见下面的 `toolTableSettingsFrom`）。
   //
   // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话
   // 就是假的），所以它们的构造依赖在这块之后 —— 不做前向引用，顺序就是依赖顺序。
@@ -275,6 +282,15 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       return { ok: true as const, settings: next }
     })
   }
+  /** 此刻不允许被关掉的工具（只认已注册的；开关没开时是空表）。 */
+  const forcedVisible = (): string[] =>
+    (deps.forcedVisibleTools?.() ?? []).filter((name) => toolTableSizes.has(name))
+  /** 从一份关停名单里减掉它们：回包、报表、写盘三处共用，别各写一份判据。 */
+  const stripForced = (hidden: readonly string[]): string[] => {
+    const forced = new Set(forcedVisible())
+    return forced.size === 0 ? hidden.slice() : hidden.filter((name) => !forced.has(name))
+  }
+
   /**
    * 回给界面的同一份形状：当前名单 + 已存方案 + 出厂默认名单 + 体积报告。
    *
@@ -282,16 +298,21 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
    * `DEFAULT_HIDDEN_TOOLS`），写进文件就会出现"用户删不掉的一条数据"。界面把它排在最前、
    * 不给删除键，词典出它的名字。
    */
-  const toolTablePayload = (value: ToolTableSettings) => ({
-    ok: true, hidden: value.hidden, presets: value.presets,
-    defaultHidden: [...DEFAULT_HIDDEN_TOOLS], report: toolTableReport(value.hidden),
-    // 侧车状态随每次读回传：界面据此禁用开关并说明原因（unknown 时保存会被服务端拒绝）。
-    state: toolTableStateValue, issue: toolTableIssueValue,
-  })
+  const toolTablePayload = (value: ToolTableSettings) => {
+    const hidden = stripForced(value.hidden)
+    return {
+      ok: true, hidden, presets: value.presets,
+      forcedVisible: forcedVisible(),
+      defaultHidden: [...DEFAULT_HIDDEN_TOOLS], report: toolTableReport(hidden),
+      // 侧车状态随每次读回传：界面据此禁用开关并说明原因（unknown 时保存会被服务端拒绝）。
+      state: toolTableStateValue, issue: toolTableIssueValue,
+    }
+  }
   /** 方案名：折叠空白 + 截到上限。空名由调用方报错（这里不猜"用户想叫什么"）。 */
   const presetNameOf = (raw: unknown): string =>
     String(raw ?? '').replaceAll(/\s+/g, ' ').trim().slice(0, PRESET_NAME_MAX_LENGTH)
   async function toolTableOp(args: any): Promise<any> {
+    const forced = new Set(forcedVisible())
     if (!args || args.set !== true) {
       // 存 / 删方案都不动 `hidden`，所以这两条路**不**重排可见性、也不刷目录（那是 `set`
       // 那一条才有的三处联动）。失败原因回 `code` 不回中文串 —— 英文界面会原样露出中文。
@@ -328,12 +349,21 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
         .filter((t) => t && typeof t.name === 'string' && t.name !== '')
         .map((t) => ({ name: String(t.name), hidden: t.hidden === true }))
         // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错。
-        .filter((t) => toolTableSizes.has(t.name))
+        // 锁开的那条也不收：主动记忆开着时模型侧同样不许把它关掉。
+        .filter((t) => toolTableSizes.has(t.name) && !forced.has(t.name))
       if (toggles.length === 0) {
-        return { ok: false, error: 'none of these are this plugin\'s tools: ' + args.toggle.map((t: any) => String(t && t.name)).join(', ') }
+        const names = (args.toggle as any[]).map((t: any) => String(t && t.name))
+        const blocked = names.filter((name) => forced.has(name))
+        return {
+          ok: false,
+          error: blocked.length
+            ? 'locked on while proactive memory is enabled: ' + blocked.join(', ')
+            : 'none of these are this plugin\'s tools: ' + names.join(', '),
+        }
       }
       const outcome = await mutateToolTableSettings((current) => ({
-        hidden: applyToolTableToggles(current.hidden, toggles),
+        // 盘上可能留着上一版（开关关着时）存下来的那条；这次写一并摘掉。
+        hidden: stripForced(applyToolTableToggles(current.hidden, toggles)),
         presets: current.presets,
       }))
       if (!outcome.ok) return outcome
@@ -348,7 +378,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     // （"names unknown global tool"）。注册失败的工具本来也不在表里。
     const outcome = await mutateToolTableSettings((current) => {
       const hidden = normalizeToolTableSettings({ hidden: args.hidden }).hidden
-        .filter((name) => toolTableSizes.has(name))
+        .filter((name) => toolTableSizes.has(name) && !forced.has(name))
       return { hidden, presets: current.presets }
     })
     if (!outcome.ok) return outcome

@@ -42,7 +42,7 @@ import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/s
 import { parseModeState } from '../lib/memories/service.js'
 import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
-import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
+import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
 import { argConditionalConfirmReason } from '../lib/confirm-gate.js'
 import { createAccessToken, createFrozenGate, guardModelOps, installHandlerGuards } from '../lib/request-gate.js'
 import { officeKitApplies } from '../lib/skills/official.js'
@@ -4822,6 +4822,27 @@ test('记忆搜索片段：压平换行、围绕命中截断、总长不超过 1
 
 test('记忆搜索工具出厂默认关闭（schema 成本按需付）', () => {
   assert.ok(DEFAULT_HIDDEN_TOOLS.includes('memory_manager_search'))
+})
+
+test('主动记忆四条工具合并成一条：出厂只藏这一条，旧名全部迁过来', () => {
+  const old = ['memory_manager_learn', 'memory_manager_forget', 'memory_manager_organize', 'memory_manager_procedure_done']
+  assert.equal(PROACTIVE_MEMORY_TOOL, 'memory_manager_auto')
+  assert.ok(DEFAULT_HIDDEN_TOOLS.includes(PROACTIVE_MEMORY_TOOL), '合并后的工具出厂默认隐藏')
+  for (const name of old) {
+    assert.ok(!DEFAULT_HIDDEN_TOOLS.includes(name), '旧名不该还留在出厂名单：' + name)
+    assert.equal(LEGACY_TOOL_NAME_MAP[name], PROACTIVE_MEMORY_TOOL, '旧名要能迁到新工具：' + name)
+  }
+  // 语义合并：任意一条旧名被关过，迁移后新工具也只留一份。
+  assert.deepEqual(
+    migrateLegacyToolNames(normalizeToolTableSettings({ hidden: old })).settings.hidden,
+    [PROACTIVE_MEMORY_TOOL],
+  )
+  // 注册侧不能再冒出旧名字：否则工具表又会多出几行，且词典没有它们的介绍。
+  const src = readFileSync(new URL('../src/tools/memory.ts', import.meta.url), 'utf8')
+  for (const name of old) {
+    assert.ok(!src.includes("name: '" + name + "'"), '旧工具名不该再注册：' + name)
+  }
+  assert.ok(src.includes('PROACTIVE_MEMORY_TOOL'), '工具注册要用共享常量，别再手写字符串')
 })
 
 test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器级写入才拦', () => {

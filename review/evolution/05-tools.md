@@ -18,6 +18,12 @@
 
 ## 2. 工具清单
 
+> **已过时（2026-11-09）**：下表写的是 P1 的形状。实际落地时四条主动记忆工具
+> （`learn` / `forget` / `organize` / `procedure_done`）已合成一条
+> `memory_manager_auto`，用 `action=learn|forget|organize|done` 分叉；开关打开时
+> 它**强制可见且不能关闭**。工具表、词典介绍与偏差理由见 `07-roadmap.md`
+> 「界面收敛」一节。下面的权限原则与四个动作本身的契约仍然成立。
+
 现有 5 条（`src/tools/memory.ts`）+ 新增 3 条 = 8 条。
 
 | 工具 | 状态 | 读/写 | 需确认 | 开关关时可见 |

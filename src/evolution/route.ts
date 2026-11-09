@@ -77,7 +77,7 @@ export interface RouteInput {
   /** 会话 id；拿不到时为 undefined。 */
   sessionId?: string
   /**
-   * 模型显式要求的层（`memory_manager_learn` 的 `layer` 参数）。
+   * 模型显式要求的层（`memory_manager_auto` 的 `action=learn` 里的 `layer` 参数）。
    *
    * 它**只是"想要"**，不越过上限与环境：指定的层缺身份（比如要 session 但没有 sid）或
    * 超过 `writeTarget` 上限时照样压窄。理由：模型看不到"这个工作区有没有登记"、
