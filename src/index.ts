@@ -4406,7 +4406,10 @@ export default {
     // 在运行中重装自己）。
     const evolutionLog = async (row: Record<string, unknown>): Promise<void> => {
       try {
-        const dir = hubPath('evolution/logs')
+        // 跟 episode / outbox 用同一个根（`memoriesService.autoAccess.stateDir`）：
+        // 用户把 `memoriesStateDir` 指到别处时，这三样必须一起搬，不然"日志说学了、
+        // 队列说没学"会成为排查时最大的干扰。
+        const dir = join(memoriesService.autoAccess.stateDir, 'evolution/logs')
         await mkdir(dir, { recursive: true })
         const day = new Date().toISOString().slice(0, 10)
         await appendFile(`${dir}/cold-${day}.jsonl`, JSON.stringify(row) + '\n', 'utf8')
@@ -4416,7 +4419,7 @@ export default {
     }
     const episodeStore = createEpisodeStore({ stateDir: memoriesService.autoAccess.stateDir, message })
     const reviewBudget = createReviewBudget({
-      path: hubPath('evolution/reviews.json'),
+      path: join(memoriesService.autoAccess.stateDir, 'evolution/reviews.json'),
       // 上限从默认配置取；每题的实际值在 review 里按 cfg 再判一次（用户可能调过）。
       max: 2,
       message,
