@@ -289,18 +289,37 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   // 值 = probe 结果。会话覆盖不同 → 不同条目，与两份段缓存同一口径。
   const PROBE_CACHE_TTL_MS = 5000
   const probeCache = new Map<string, { at: number; value: ReturnType<typeof probeSceneFilesSync> }>()
+  /**
+   * 监听没挂上时多久重试一次。
+   *
+   * 为什么不能"试一次就认命"：`watchDirectories` 在目录**当时不存在**时直接返回未挂上，
+   * 而全新用户的记忆根目录是在第一次写记忆时才建出来的 —— 一次性的装配会让这个进程
+   * 从此永远拿不到缓存（每步仍全树 stat）。也不能每步都重试：没挂上时每步新建一个
+   * worker。30s 是两者的折中：最坏多付 30s 的无缓存，之后自动回到稳态。
+   *
+   * 同时兼作"worker 已崩"的复活间隔 —— 崩溃同样只表现为 `attached()` 为 false。
+   */
+  const WATCH_RETRY_MS = 30000
   let memoriesWatch: { dispose(): void; attached(): boolean } | null = null
-  let memoriesWatchStarted = false
+  let memoriesWatchAt = 0
   /** 清空探测缓存（watcher 报变化 / 写操作后 / 索引不可信时）。 */
   const clearProbeCache = (): void => { probeCache.clear() }
   /**
-   * 第一次取数时挂上监听。**推迟到首次使用**：apply 期 `roots()` / 目录物化会读宿主目录，
-   * 而这里只需要一个已存在的目录。目录不存在时 `watchDirectories` 返回未挂上，
-   * 于是缓存不生效 —— 与"全新用户没有记忆树"这一情形天然一致。
+   * 取数时确保监听在。**推迟到首次使用**：apply 期 `roots()` / 目录物化会读宿主目录，
+   * 而这里只需要一个已存在的目录。
+   *
+   * `attached()` 是异步回来的：刚建出来的那一两拍必然读到 false。所以"没挂上"的重试
+   * 只在距上次装配超过 `WATCH_RETRY_MS` 时发生 —— 否则每步都会拆了重建一个 worker。
    */
   const ensureMemoriesWatch = (): void => {
-    if (memoriesWatchStarted) return
-    memoriesWatchStarted = true
+    const now = Date.now()
+    if (memoriesWatch !== null) {
+      if (memoriesWatch.attached()) return
+      if (now - memoriesWatchAt < WATCH_RETRY_MS) return
+      try { memoriesWatch.dispose() } catch { /* 旧的拆不掉也不挡新建 */ }
+      memoriesWatch = null
+    }
+    memoriesWatchAt = now
     try {
       memoriesWatch = watchDirectories([memoriesRoot], clearProbeCache)
     } catch {

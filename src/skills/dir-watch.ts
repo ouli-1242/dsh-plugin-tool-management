@@ -81,7 +81,11 @@ export function watchDirectories(paths: string[], invalidate: () => void): Direc
       if (msg && typeof msg === 'object' && 'attached' in msg) { attached = msg.attached === true; return }
       fire()
     })
-    worker.on('error', () => { /* worker 崩溃即失去监听；调用方的 TTL 兜底 */ })
+    // 崩溃 / 意外退出必须把 `attached` 降回 false：否则调用方会一直以为监听还挂着，
+    // 只靠 TTL 兜底，而重试逻辑（见记忆服务的 `ensureMemoriesWatch`）永远等不到复活机会。
+    // `dispose()` 先 `removeAllListeners()`，所以主动终止不会走到这里。
+    worker.on('error', () => { attached = false })
+    worker.on('exit', () => { attached = false })
   } catch { /* worker 不可用时静默跳过，功能退化为依赖调用方自己的 TTL */ }
   return {
     attached: () => attached,
