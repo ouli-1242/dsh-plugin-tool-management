@@ -1359,6 +1359,11 @@ export default {
       withWriteLock,
     })
     // 场景记忆段的注册/生命周期由下面的注入通道统一管（memoriesService.memoryText / promptText）。
+    // 记忆根目录的目录监听（探测缓存的失效来源）随插件作用域一起收掉 —— 不清理的话，
+    // 每次热重载都会在进程里多留一个 Worker 线程。
+    try {
+      ctx.effect(() => () => { memoriesService.dispose() }, 'dsh-plugin-tool-management: memories dir watch')
+    } catch { /* 没有 effect 的装配（测试）→ 监听随进程退出 */ }
 
     // ---------- 场景档案引擎----------
     // deps 把既有写通道（MCP 单工具启停 / 技能启停）注入引擎；引擎自身串行，

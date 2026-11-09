@@ -105,6 +105,7 @@ import {
 import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, repairFromQuarantine, sceneRecordOf, normalizeScenePromptId, pathExists, isAbsentError } from './index-io.js'
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
 import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
+import { watchDirectories } from '../skills/dir-watch.js'
 import type { ParsedSkillDoc, DiscoveredEntry, Snapshot } from './snapshot.js'
 
 // ── 目录常量与失败约定 ─────────────────────────────────────────────────────
@@ -272,12 +273,68 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     if (isIndexQuarantined(stateDir)) throw new Error('记忆索引当前读不到，无法确定哪些记忆处于启用状态')
   }
 
+  // ── 探测结果缓存（目录监听 + TTL 兜底）────────────────────────────────────
+  //
+  // 为什么需要：`probeSceneFilesSync` 是一次**完整目录树**的 readdirSync + 每文件 statSync，
+  // 而注入通道每个 step 都要同步取一次文本（scene 与 memory 两域各一次，入参相同）。
+  // 实测 2000 个记忆文件 ≈ 23 ms/次，每步 46 ms 全在事件循环上。
+  //
+  // 为什么不能只靠监听：worker 崩溃 / 某个目录挂不上都**不会**回报（`attached()` 只说
+  // "有没有挂上过"），把"监听还在"当成前提，静默失效就会变成永久返回旧内容 —— 那正是
+  // 本模块一直在避免的形态。所以监听只用来**提前**失效，TTL 才是兜底：
+  //   · 监听挂着 → 命中缓存，watcher 一报变化立刻清；最坏 TTL 过期。
+  //   · 监听没挂上 → 不进缓存，保持原来的每次探测。
+  //
+  // 键 = memoriesRoot + 索引指纹 + 会话覆盖指纹（`probeSceneFilesSync` 的入参三要素），
+  // 值 = probe 结果。会话覆盖不同 → 不同条目，与两份段缓存同一口径。
+  const PROBE_CACHE_TTL_MS = 5000
+  const probeCache = new Map<string, { at: number; value: ReturnType<typeof probeSceneFilesSync> }>()
+  let memoriesWatch: { dispose(): void; attached(): boolean } | null = null
+  let memoriesWatchStarted = false
+  /** 清空探测缓存（watcher 报变化 / 写操作后 / 索引不可信时）。 */
+  const clearProbeCache = (): void => { probeCache.clear() }
+  /**
+   * 第一次取数时挂上监听。**推迟到首次使用**：apply 期 `roots()` / 目录物化会读宿主目录，
+   * 而这里只需要一个已存在的目录。目录不存在时 `watchDirectories` 返回未挂上，
+   * 于是缓存不生效 —— 与"全新用户没有记忆树"这一情形天然一致。
+   */
+  const ensureMemoriesWatch = (): void => {
+    if (memoriesWatchStarted) return
+    memoriesWatchStarted = true
+    try {
+      memoriesWatch = watchDirectories([memoriesRoot], clearProbeCache)
+    } catch {
+      memoriesWatch = null // 建不出 worker = 没有监听，缓存靠 TTL（见上面的取舍）
+    }
+  }
+  /** 探测：监听挂着时走缓存，否则直连（`clearProbeCache` 之后必然直连一次）。 */
+  function probeWithCache(
+    index: Parameters<typeof probeSceneFilesSync>[1],
+    override: { scene?: string | null; memory?: Record<string, boolean> },
+  ): ReturnType<typeof probeSceneFilesSync> {
+    ensureMemoriesWatch()
+    const watched = memoriesWatch !== null && memoriesWatch.attached()
+    if (!watched) return probeSceneFilesSync(memoriesRoot, index, false, override)
+    const key = memoriesRoot + '\u0000' + signatureOfIndex(index) + '\u0000' + scopeKeyOf(override as MemoryScopeOverride | undefined)
+    const hit = probeCache.get(key)
+    if (hit !== undefined && Date.now() - hit.at < PROBE_CACHE_TTL_MS) return hit.value
+    const value = probeSceneFilesSync(memoriesRoot, index, false, override)
+    probeCache.set(key, { at: Date.now(), value })
+    // 上限：键里带会话覆盖，会话多时会有很多条；100 条 LRU 足够（同一时刻活跃的会话远少于此）。
+    while (probeCache.size > 100) {
+      const oldest = probeCache.keys().next()
+      if (oldest.done === true) break
+      probeCache.delete(oldest.value)
+    }
+    return value
+  }
+
   /** 记忆段：注入侧口径（索引不可信或目录读不动 → 抛）。 */
   function requireSceneMemory(scope?: MemoryScopeOverride): SceneMemoryProjection {
     const index = readIndexSync(stateDir)
     assertIndexReadable() // 抛在这里 ⇒ 下面必然处于「索引可信」状态，无需再传 forceDisabled
     const override = { scene: scope?.scene, memory: scope?.memory }
-    const probe = probeSceneFilesSync(memoriesRoot, index, false, override)
+    const probe = probeWithCache(index, override)
     const key = scopeKeyOf(scope)
     const hit = cacheGet(sceneCache, key)
     if (hit !== undefined && hit.signature === probe.signature) return hit.value
@@ -304,7 +361,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     const index = readIndexSync(stateDir)
     assertIndexReadable()
     const override = { scene: scope?.scene, memory: scope?.memory }
-    const probe = probeSceneFilesSync(memoriesRoot, index, false, override)
+    const probe = probeWithCache(index, override)
     const key = scopeKeyOf(scope)
     const hit = cacheGet(sceneCatalogCache, key)
     if (hit !== undefined && hit.signature === probe.signature) return hit.value
@@ -612,6 +669,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     // 都可能不同（比如某条记忆被本会话覆盖关掉），逐条算哪几条受影响只会漏。
     sceneCache.clear()
     sceneCatalogCache.clear()
+    // 探测缓存同样清：写操作刚改了磁盘，下一拍必须重扫（监听会晚 200ms 才报，别等它）。
+    clearProbeCache()
   }
 
   /**
@@ -1076,6 +1135,11 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     promptFiles,
     promptBaselineText: readGlobalAgentsMdSync,
     refresh,
+    dispose: () => {
+      try { memoriesWatch?.dispose() } catch { /* 卸载路径上不留抛错 */ }
+      memoriesWatch = null
+      probeCache.clear()
+    },
     patchIndex,
     saveArchive,
     readArchiveSlice,

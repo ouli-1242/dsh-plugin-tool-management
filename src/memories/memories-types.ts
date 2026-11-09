@@ -180,6 +180,13 @@ export interface MemoriesService {
   /** 失效快照与场景记忆缓存（写操作后调用）。 */
   refresh: () => Promise<void>
   /**
+   * 卸载清理：停掉记忆根目录的监听（worker 线程 + fs.watch 句柄）。
+   *
+   * 不清理的后果与技能侧那条 watcher 相同：每次热重载多留一个 Worker。它已 `unref`，
+   * 不挡进程退出，但会在长期运行的宿主里累积。
+   */
+  dispose: () => void
+  /**
    * 场景档案引擎专用：读-改-写 mode/archives/active 切片（写队列内执行，非公开 op，无门禁面）。
    * `fields` = 意图声明，只写列出的那几项；不传按 `patch` 里出现的字段全写（见实现处注释）。
    */

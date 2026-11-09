@@ -363,7 +363,7 @@ export function createSkillsService(ctx: any, deps: { sessionViewOf?: SkillProvi
           .filter((root: any) => root.key !== 'official')
           .map((root: any) => String((root && root.path) || ''))
           .filter(Boolean)
-        add(watchDirectories(watchPaths, invalidateSkills))
+        add(watchDirectories(watchPaths, invalidateSkills).dispose)
         // 自定义目录在状态文件里，注册时读取一次并一并监听（后添加的目录由
         // provider 首次 list 天然覆盖，等插件重载后才有 watcher）。
         return readManagerState()
@@ -373,7 +373,7 @@ export function createSkillsService(ctx: any, deps: { sessionViewOf?: SkillProvi
         const customPaths = customRootsFromState(current.state)
           .map((root: any) => String((root && root.path) || ''))
           .filter(Boolean)
-        if (customPaths.length) add(watchDirectories(customPaths, invalidateSkills))
+        if (customPaths.length) add(watchDirectories(customPaths, invalidateSkills).dispose)
       })
       .catch((e) => {
         console.error('[dsh-plugin-tool-management] skill watcher setup failed:', message(e))
