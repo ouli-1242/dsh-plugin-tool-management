@@ -161,12 +161,14 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-sources{gap:0}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
-/* ── 主动记忆（2026-11-09 起：页头按钮 + 弹窗）────────────────────────────────
+/* ── 自主记忆（2026-11-09 起：页头按钮 + 弹窗）────────────────────────────────
    原来的平铺卡片与三级分段开关已收走；弹窗第一屏只有开关 + 一行数字 + 条目清单，
    后台三块工序折在「更多」里。条目沿用 .dsm-listrow，不给行另起一套排版。 */
 .dsm-evo-card{margin-bottom:8px}
 .dsm-evo-head-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 .dsm-modal-evo{width:min(620px,100%)!important}
+/* 开启态只靠边框表达：不写「已开启」，也不给按钮加文字后缀。 */
+.dsm-modal-evo.dsm-evo-on{border-color:var(--dsw-alias-state-success-primary)}
 .dsm-evo-modal{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
 .dsm-evo-master{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:2px 0 6px;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-evo-master .dsm-help{margin:0;margin-left:auto}
@@ -615,6 +617,9 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-tooltable-tools{display:flex;flex-direction:column;padding-left:20px}
 .dsm-tooltable-tool{display:grid;grid-template-columns:15px 186px 48px minmax(0,1fr);align-items:center;gap:0 8px;padding:4px 4px;border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer}
 .dsm-tooltable-tool:hover{background:var(--dsw-alias-interactive-bg-hover)}
+/* 跟随自主记忆开关的那一行：只读，没有勾选框，也不能整行点击。 */
+.dsm-tooltable-managed{cursor:default}
+.dsm-tooltable-managed:hover{background:transparent}
 .dsm-tooltable-tool input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-tooltable-name{overflow:hidden;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);text-overflow:ellipsis;white-space:nowrap}
 .dsm-tooltable-tok{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}

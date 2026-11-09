@@ -758,7 +758,8 @@
             // 锁定期间不显示场景那条长句：开关全是灰的，"改动会同步写进档案"没有落点，
             // 两条并排还会互相矛盾（用户 2026-09-19）。
             // 会话层不显示（同 MCP 页）：本层开关写的是会话覆盖，不同步档案。
-            (anyLocked !== true && sceneName && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
+            // global 是常驻默认场景，不需要「进场景」提示。
+            (anyLocked !== true && sceneName && sceneName !== 'global' && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
             // 列表工具条（REDESIGN §3.3，切片四）：搜索住 children；本页无批量动作。
             React.createElement(Toolbar, null,
               React.createElement('input', {

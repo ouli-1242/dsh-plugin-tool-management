@@ -39,7 +39,7 @@ export const GLOBAL_SCENE = 'global'
 export const GLOBAL_SCENE_LABEL = '全局'
 export const SHARED_GROUP = '_shared'       // 保留场景名：公共基线（历史语义，仍可使用）
 
-// ── 层（主动记忆 / 自进化）─────────────────────────────────────────────────
+// ── 层（自主记忆 / 自进化）─────────────────────────────────────────────────
 
 /**
  * 记忆的四个生效层。目录即层：`global` / `<scene>` / `_ws/<hash16>` / `_session/<sid>`，

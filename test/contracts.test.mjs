@@ -4825,7 +4825,7 @@ test('记忆搜索工具出厂默认关闭（schema 成本按需付）', () => {
   assert.ok(DEFAULT_HIDDEN_TOOLS.includes('memory_manager_search'))
 })
 
-test('主动记忆四条工具合并成一条：出厂只藏这一条，旧名全部迁过来', () => {
+test('自主记忆四条工具合并成一条：出厂只藏这一条，旧名全部迁过来', () => {
   const old = ['memory_manager_learn', 'memory_manager_forget', 'memory_manager_organize', 'memory_manager_procedure_done']
   assert.equal(PROACTIVE_MEMORY_TOOL, 'memory_manager_auto')
   assert.ok(DEFAULT_HIDDEN_TOOLS.includes(PROACTIVE_MEMORY_TOOL), '合并后的工具出厂默认隐藏')
@@ -4846,7 +4846,7 @@ test('主动记忆四条工具合并成一条：出厂只藏这一条，旧名�
   assert.ok(src.includes('PROACTIVE_MEMORY_TOOL'), '工具注册要用共享常量，别再手写字符串')
 })
 
-test('主动记忆工具双向跟随总开关：开→摘掉、关→加回，纯函数不改入参', () => {
+test('自主记忆工具双向跟随总开关：开→摘掉、关→加回，纯函数不改入参', () => {
   const withTool = ['memory_manager_search', PROACTIVE_MEMORY_TOOL]
   assert.deepEqual(normalizeProactiveToolHidden(withTool, true), ['memory_manager_search'])
   assert.deepEqual(withTool, ['memory_manager_search', PROACTIVE_MEMORY_TOOL], '归一不能改调用方那份名单')
@@ -4870,7 +4870,7 @@ test('工具表读路径与回包两个方向都归一，不给面板留"能手�
   assert.ok(ix.includes('overlayWithProactiveTool(allow, deny, on)'), 'per-agent overlay 也要两个方向都锁')
 })
 
-test('拨动主动记忆开关会通知模型侧立刻重排工具表', async () => {
+test('拨动自主记忆开关会通知模型侧立刻重排工具表', async () => {
   let notified = 0
   const ops = buildEvolutionOps({
     config: {

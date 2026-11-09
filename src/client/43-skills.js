@@ -31,7 +31,7 @@
       var dfs = react.useState(null), draftFile = dfs[0], setDraftFile = dfs[1];
       var attachInputRef = react.useRef(null);
       // P4：哪些技能是「从已验证的流程生成的」。徽章只是附加信息，这份名单拿不到
-      // （老版本 / 没接主动记忆）就不显示，绝不让技能页跟着报错。
+      // （老版本 / 没接自主记忆）就不显示，绝不让技能页跟着报错。
       var ls = react.useState({}), learnedMap = ls[0], setLearnedMap = ls[1];
       function refreshLearned() {
         apiCall('evolution-learned-skills', {}).then(function (r) {
@@ -551,7 +551,7 @@
         var metaBits = [
           h("span", { key: "desc", className: "dsm-listrow-meta-desc", title: skill.description || t("note.missing") }, skill.description || t("note.missing")),
           skill.preferred === true ? h("span", { key: "preferred", className: "dsm-listrow-meta-info" }, t("status.preferred")) : null,
-          // P4：从主动记忆生成、且已通过写后 lint 的技能挂这枚徽章；回滚后名单里就没了。
+          // P4：从自主记忆生成、且已通过写后 lint 的技能挂这枚徽章；回滚后名单里就没了。
           learnedMap[skillName] ? h("span", { key: "learned", className: "dsm-tag dsm-tag-learned", title: t("status.learned.hint") }, t("status.learned")) : null,
           // 六域租约徽章（0.21.2）：这一条有几个对话在认领它（真写运行态的域，文案「临时运行 · N 个对话」）。
           // 放在行 2 而不是行 1：行 1 的契约是「名称 + 至多 1 个需要处理的 tag」（见 ListRow 注释）。
@@ -911,7 +911,8 @@
       // 锁定期间不显示场景那条长句：开关全是灰的，"改动会同步写进档案"没有落点，
       // 两条并排还会互相矛盾（用户 2026-09-19）。
       // 会话层不显示（同 MCP 页）：本层开关写的是会话覆盖，不同步档案。
-      (!anyLocked && sceneName && !scopeIsSession()) ? h("div", { key: "scenebanner", className: "dsm-feedback dsm-warning", role: "status" }, t("scene.switch.banner", { scene: sceneName })) : null,
+      // global 是常驻默认场景，不需要「进场景」提示。
+      (!anyLocked && sceneName && sceneName !== 'global' && !scopeIsSession()) ? h("div", { key: "scenebanner", className: "dsm-feedback dsm-warning", role: "status" }, t("scene.switch.banner", { scene: sceneName })) : null,
       h(Toolbar, { key: "filters" }, h("input", { className: "dsm-control dsm-search", value: query, "aria-label": t("search"), placeholder: t("search.placeholder"), onChange: function (e) { setQuery(e.target.value); } }), h("div", { className: "dsm-source-filter" }, h(SourceSelect, { value: activeSource, options: options, onChange: setSource }))), undo && undo.scope == null ? h(UndoBar, { key: "undo", undo: undo, busy: busy, t: t, onUndo: undoBulk, onClose: dismissUndo }) : null, result && modal !== "import" ? h(Notice, { key: "result", kind: result.warning ? "warn" : result.ok ? "ok" : "err", text: result.text }) : null].concat((data.warnings || []).map(function (warning, index) { return h(Notice, { key: "warning-" + index, kind: "warn", text: translateError(t, warning) }); }), [snapshot.error ? h(Notice, { key: "error", kind: "err", text: snapshot.error }) : null,
       // 列表四态（REDESIGN §12.2，切片四）：加载 / 失败（EmptyState + 重试，只在完全没有
       // 旧数据时顶掉列表）/ 有数据。错误横幅照旧挂着 —— 它同时承担「有缓存数据时的错误」。

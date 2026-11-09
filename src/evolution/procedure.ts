@@ -188,11 +188,11 @@ export interface SkillDraftInput {
 export function skillDraftOf(input: SkillDraftInput): Omit<SkillProposal, 'createdAt' | 'installedAt' | 'installedPath' | 'installedRoot' | 'rolledBackAt' | 'lastError'> {
   const steps = cleanSteps(input.steps)
   const name = skillNameOf(input.key, input.title)
-  const description = `${input.title}。按已验证的流程执行（成功 ${input.successes} 次）。来自主动记忆 ${input.id}。`.slice(0, 500)
+  const description = `${input.title}。按已验证的流程执行（成功 ${input.successes} 次）。来自自主记忆 ${input.id}。`.slice(0, 500)
   const lines = [
     `# ${input.title}`,
     '',
-    `这份流程来自主动记忆 \`${input.id}\`，累计成功执行 ${input.successes} 次后由用户确认生成。`,
+    `这份流程来自自主记忆 \`${input.id}\`，累计成功执行 ${input.successes} 次后由用户确认生成。`,
     '',
     '## 步骤',
     ...steps.map((s, i) => `${i + 1}. ${s}`),
@@ -204,7 +204,7 @@ export function skillDraftOf(input: SkillDraftInput): Omit<SkillProposal, 'creat
     '## 注意',
     '',
     '- 若项目文件或用户的当前指令与这里冲突，以它们为准。',
-    '- 流程有变化时回到「记忆」页更新对应的主动记忆，再重新生成技能。',
+    '- 流程有变化时回到「记忆」页更新对应的自主记忆，再重新生成技能。',
   )
   return { name, memoryId: input.id, title: input.title, description, body: lines.join('\n') + '\n', steps, boundary, successes: input.successes }
 }

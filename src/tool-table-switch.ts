@@ -53,7 +53,7 @@ export interface ToolTableSwitchDeps {
    */
   carrierHiddenTools?: () => readonly string[]
   /**
-   * 主动记忆总开关此刻开没开 —— 那一条工具**完全**由它决定，盘上的关停名单无效。
+   * 自主记忆总开关此刻开没开 —— 那一条工具**完全**由它决定，盘上的关停名单无效。
    *
    * 读回包 / 体积报表 / 两条写路径都按它双向归一（开 → 强制可见，关 → 强制隐藏），
    * 面板拿到 `forcedVisible` / `forcedHidden` 把勾选框锁在对应状态；模型侧
@@ -110,7 +110,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
   // 工具表按**每个请求**付钱：整张表的定义合计 ≈6.1k tok 每轮都在。关掉某几个，
   // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十九条**
-  // （旧的十八条 + 主动记忆合成后的那一条；25 条里实发 6 条）—— 名单、判据与代价在
+  // （旧的十八条 + 自主记忆合成后的那一条；25 条里实发 6 条）—— 名单、判据与代价在
   // `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过选择时铺（见下面的 `toolTableSettingsFrom`）。
   //
   // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话
@@ -284,7 +284,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       return { ok: true as const, settings: next }
     })
   }
-  /** 主动记忆总开关此刻开没开。没装配时按关算（藏起来是安全侧）。 */
+  /** 自主记忆总开关此刻开没开。没装配时按关算（藏起来是安全侧）。 */
   const proactiveOn = (): boolean => deps.proactiveMemoryEnabled?.() === true
   /** 此刻不允许被关掉的工具（只认已注册的；开关没开时是空表）。 */
   const forcedVisible = (): string[] =>
@@ -361,7 +361,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
         .filter((t) => t && typeof t.name === 'string' && t.name !== '')
         .map((t) => ({ name: String(t.name), hidden: t.hidden === true }))
         // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错。
-        // 锁定的两条方向都不收：模型侧 `tool_manager_tools` 也改不动主动记忆工具。
+        // 锁定的两条方向都不收：模型侧 `tool_manager_tools` 也改不动自主记忆工具。
         .filter((t) => toolTableSizes.has(t.name) && !forced.has(t.name) && !forcedOff.has(t.name))
       if (toggles.length === 0) {
         const names = (args.toggle as any[]).map((t: any) => String(t && t.name))
@@ -369,7 +369,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
         return {
           ok: false,
           error: blocked.length
-            ? 'this tool follows the proactive memory switch and cannot be toggled here: ' + blocked.join(', ')
+            ? 'this tool follows the autonomous memory switch and cannot be toggled here: ' + blocked.join(', ')
             : 'none of these are this plugin\'s tools: ' + names.join(', '),
         }
       }

@@ -55,7 +55,7 @@ import {
 } from './tools/table.js'
 import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
-// 主动记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
+// 自主记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
 import { createEvolutionConfig, workspaceHashOf } from './evolution/config.js'
 // 注入热路径的同步视图（`agent/pre-step` 的 text() 没有 await 的位置）。
 import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
@@ -1296,7 +1296,7 @@ export default {
      * 的兜底）。全局只给新对话当默认模板；已有对话不会再跟着全局变。
      */
     function toolTableHiddenForSession(sessionId: string | null): ReadonlySet<string> {
-      // 主动记忆那条工具只跟总开关走：执行门禁 / toolVisibleFor / 注入尾句三处都问
+      // 自主记忆那条工具只跟总开关走：执行门禁 / toolVisibleFor / 注入尾句三处都问
       // 这一份，开着时留着、关着时漏掉都会说"这条工具在不在模型手里"的假话。
       const globalHidden = withProactiveTool(toolTableHidden())
       if (sessionId === null) return globalHidden
@@ -1307,7 +1307,7 @@ export default {
     }
 
     /**
-     * 主动记忆**全局**开关开没开（同步、给工具表用）。
+     * 自主记忆**全局**开关开没开（同步、给工具表用）。
      *
      * 为什么单独一份、不复用 autoLearnEnabledFor：那一条要 agent（深度 / 会话身份 / 生效
      * 配置），而「这条工具能不能被关掉」是整张工具表的一条静态规则，面板读它时手里没有
@@ -1333,7 +1333,7 @@ export default {
      * 把一份关停名单归一到「工具跟随总开关」：开 → 摘掉，关 → 加回。
      *
      * 只做「开时摘掉」是不够的：开着时保存过一次工具表，盘上那份名单就永久不再包含
-     * 这条工具，而 `DEFAULT_HIDDEN_TOOLS` 只在首次铺底 —— 之后关掉主动记忆，模型手里
+     * 这条工具，而 `DEFAULT_HIDDEN_TOOLS` 只在首次铺底 —— 之后关掉自主记忆，模型手里
      * 仍留着一条调了只会报错的工具。所有读路径都问这一份，别再各写一半判据。
      */
     function withProactiveTool(names: ReadonlySet<string>): ReadonlySet<string> {
@@ -1341,7 +1341,7 @@ export default {
     }
 
     /**
-     * overlay 的最后一刀：让主动记忆那条工具**只听总开关**。
+     * overlay 的最后一刀：让自主记忆那条工具**只听总开关**。
      *
      * `deny` 在 tool-visibility.ts 里是**无条件追加**到最终隐藏名单的，allow 减不掉它 ——
      * 所以关着时把它放进 deny，就能压过会话层 / MCP 层的任何 allow；开着时反过来从 deny
@@ -1551,7 +1551,7 @@ export default {
       // 绕开这套顺序就会留下「名单已经改了、工具下一轮还发给模型」这种最难查的状态。
       // **锁内读-改-写**：presets 必须取锁内最新值，否则并发的存方案会被这次整表写覆盖。
       const saved = await mutateToolTableSettings((current) => ({
-        // 进场景套方案也一样：那条工具只跟主动记忆开关走，方案不能把它打开或关掉。
+        // 进场景套方案也一样：那条工具只跟自主记忆开关走，方案不能把它打开或关掉。
         hidden: normalizeProactiveToolHidden(
           normalizeToolTableSettings({ hidden }).hidden.filter((name) => toolTableSizes.has(name)),
           proactiveMemoryGlobalOn(),
@@ -2262,7 +2262,7 @@ export default {
       message,
     })
 
-    // 主动记忆的策略：三份文件（settings / workspaces / sessions），同一把写锁。
+    // 自主记忆的策略：三份文件（settings / workspaces / sessions），同一把写锁。
     const evolutionConfig = createEvolutionConfig({
       ensurePaths,
       readJsonFile,
@@ -3247,7 +3247,7 @@ export default {
       // 兼容页「模型工具表」关掉的工具与 MCP 停用工具**合并成一次 restrict**：官方
       // `tools.restrict()` 是"每个 scope 一层限制"，两边各调一次会互相覆盖（后一层赢）。
       // 名单的合法性（只含已注册工具）由 manager 那边与 schemas() 求交后保证。
-      // 那条主动记忆工具跟随总开关：开着不许进限制名单，关着**必须**在名单里。
+      // 那条自主记忆工具跟随总开关：开着不许进限制名单，关着**必须**在名单里。
       // 面板把勾选框锁住、服务端这里再挡一道：工具表是 per-agent 的，面板挡不住
       // 模型侧的 toggle，而开关关着时盘上名单很可能早就没有这条了。
       pluginHiddenTools: () => [...withProactiveTool(toolTableHidden())],
@@ -4327,7 +4327,7 @@ export default {
         return {
           ok: false,
           error: locked.length
-            ? 'this tool follows the proactive memory switch and cannot be toggled here: ' + locked.join(', ')
+            ? 'this tool follows the autonomous memory switch and cannot be toggled here: ' + locked.join(', ')
             : 'none of these are this plugin\'s tools: ' + names.join(', '),
         }
       }
@@ -4447,7 +4447,7 @@ export default {
     // 预热不 await：更新检查失败（无网 / 代理 / registry 故障）不影响任何启动路径。
     updateChecker.start()
 
-    // 主动记忆的 op 表：HTTP 层与工具层**共用同一份实例**。
+    // 自主记忆的 op 表：HTTP 层与工具层**共用同一份实例**。
     // 为什么要共用：`learn` 的两道门禁（工具表可见性 + op 的开关判断）必须读同一份配置，
     // 各建一份会在热更新后出现"工具说开着、op 说关着"的错位。
     // `removeMemory` 复用记忆域已有的删除路径（进回收站 + 清索引），不自己 rm ——
@@ -4736,7 +4736,7 @@ export default {
       // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list/get（只读）
       // + subagent-create/update/delete（写，writeOps 已派生进门禁）。
       ...subagentService.ops,
-      // 主动记忆的策略 op（ops/evolution.ts）：status / settings / toggle / learn / forget / list。
+      // 自主记忆的策略 op（ops/evolution.ts）：status / settings / toggle / learn / forget / list。
       // 写端点由 request-gate 的回环校验兜底；`removeMemory` 复用记忆域已有的删除路径
       // （进回收站 + 清索引），不自己 rm —— 「删除都进回收站」这条 README 承诺没有例外。
       ...evolutionOpsTable,
@@ -5692,7 +5692,7 @@ export default {
     buildMemoryTools({
       ...toolDeps,
       rulesOps: auditOps(memoriesService.ops),
-      // 主动记忆的两条工具（learn / forget）：只有开关打开时才进工具表（见
+      // 自主记忆的两条工具（learn / forget）：只有开关打开时才进工具表（见
       // `sessionToolTableOverlayOf` 的 allow）。op 层再挡一道 —— 两道都要，因为
       // 工具表是"模型看不看得见"，op 是"调得通调不通"，中间隔着一次模型采样。
       evolutionOps: auditOps(evolutionOpsTable),

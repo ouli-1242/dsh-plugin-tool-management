@@ -1,4 +1,4 @@
-// 主动记忆的三级开关：全局 / 工作区 / 会话。
+// 自主记忆的三级开关：全局 / 工作区 / 会话。
 //
 // 为什么三级而不是一个总开关：用户的两个真实诉求 ——「只给这个对话开」「只给这个项目开」——
 // 一个布尔值都表达不了。要么全局开（每个新会话都学，敏感项目里是负担），要么全局关
@@ -345,7 +345,7 @@ export function createEvolutionConfig(deps: EvolutionConfigDeps): EvolutionConfi
   async function writeSettings(next: EvolutionSettings): Promise<{ ok: true; settings: EvolutionSettings } | { ok: false; error: string }> {
     await ensureEvolutionDir()
     return deps.withWriteLock(async () => {
-      const read = await readForWrite(hubPath(EVOLUTION_SETTINGS_FILE), '主动记忆设置')
+      const read = await readForWrite(hubPath(EVOLUTION_SETTINGS_FILE), '自主记忆设置')
       if (!read.ok) return read
       const normalized = normalizeEvolutionSettings({ ...normalizeEvolutionSettings(read.raw), ...next })
       await deps.writeJsonFile(hubPath(EVOLUTION_SETTINGS_FILE), normalized)

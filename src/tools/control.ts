@@ -18,7 +18,7 @@
 
 import { text, type ToolDomainDeps } from './deps.js'
 import { governingScopeNote } from './deps.js'
-import { applyToolTableToggles, estimateTok } from './table.js'
+import { applyToolTableToggles, estimateTok, PROACTIVE_MEMORY_TOOL } from './table.js'
 
 /** 控制面工具要的依赖：本插件的工具清单 + 会话工具表的读写。 */
 export interface ControlToolDeps extends ToolDomainDeps {
@@ -114,6 +114,11 @@ export function buildControlTools(deps: ControlToolDeps): void {
           .map((n: unknown) => String(n ?? '').trim())
           .filter((n: string) => n !== '')
         if (requested.length === 0) throw new Error('missing argument: tools — the names of the tools to ' + action)
+        // 自主记忆那条工具没有独立状态：它只跟总开关走，模型不能自己把它开出来或关掉。
+        // 提前在这里说清，而不是等写路径返回一句笼统的 "cannot be toggled"。
+        if (requested.includes(PROACTIVE_MEMORY_TOOL)) {
+          throw new Error(PROACTIVE_MEMORY_TOOL + ' follows the autonomous memory switch and cannot be turned on or off here — the user changes it on the Memory page.')
+        }
         // 只认本插件注册过的名字：陌生名字写进关停名单会让官方的 restrict 抛错。
         const known = requested.filter((n: string) => deps.toolTableSizes.has(n))
         const unknown = requested.filter((n: string) => !deps.toolTableSizes.has(n))
@@ -179,6 +184,8 @@ function listTools(deps: ControlToolDeps, agent: unknown): string {
   const rows: string[] = []
   for (const [name, bytes] of deps.toolTableSizes) {
     if (!hidden.has(name)) continue
+    // 自主记忆那条工具不进「可以打开」的清单：列出来只会让模型去 enable，而那条路是封死的。
+    if (name === PROACTIVE_MEMORY_TOOL) continue
     rows.push(toolLine(name, deps.toolTableSummaries.get(name) ?? '', bytes))
   }
   const total = deps.toolTableSizes.size

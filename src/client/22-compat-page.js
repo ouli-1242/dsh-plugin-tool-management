@@ -470,7 +470,7 @@
         return {
           hidden: r.hidden || hiddenFallback || [], presets: r.presets || [],
           defaultHidden: r.defaultHidden || [], report: r.report,
-          // 主动记忆那条工具锁成"开"或"关"：面板只认这两份，不自己猜开关状态。
+          // 自主记忆那条工具锁成"开"或"关"：面板只认这两份，不自己猜开关状态。
           forcedVisible: r.forcedVisible || [], forcedHidden: r.forcedHidden || [],
           // 会话层：当前名单的来源（本对话 / 创建时 / 全局兜底）与全局默认名单（「恢复默认」用）。
           source: r.source || '',
@@ -524,11 +524,11 @@
           })
           .then(function () { setToolTableBusy(false) })
       }
-      /** 服务端说"此刻必须开着"的工具名：主动记忆开启时那一条，不允许手动关。 */
+      /** 服务端说"此刻必须开着"的工具名：自主记忆开启时那一条，不允许手动关。 */
       const forcedToolNames = function () {
         return (toolTable && toolTable.forcedVisible) || []
       }
-      /** "此刻必须关着"的那一半：主动记忆关着时同一条工具，不允许手动开。 */
+      /** "此刻必须关着"的那一半：自主记忆关着时同一条工具，不允许手动开。 */
       const forcedOffToolNames = function () {
         return (toolTable && toolTable.forcedHidden) || []
       }
@@ -1542,58 +1542,66 @@
           return t('compat.inject.domain.' + key)
         }
         const toolTableDisabled = toolTableBusy || scopeSessionLocked || toolTable.state === 'unknown'
-        const forced = forcedToolNames()
-        const forcedOff = forcedOffToolNames()
+        // 自主记忆那条工具没有独立开关：面板画成「只读行」—— 名字与介绍照常显示，
+        // 但没有勾选框（禁用框看着仍像能点）。服务端按总开关状态把它放进 forced（开）或
+        // forcedOff（关），合并即"被接管的工具"；模型侧控制面也按同一份名单挡。
+        const managed = forcedToolNames().concat(forcedOffToolNames())
         const rows = []
         groups.forEach(function (group) {
-          const onCount = group.tools.filter(function (tool) {
-            return (!tool.hidden || forced.indexOf(tool.name) >= 0) && forcedOff.indexOf(tool.name) < 0
-          }).length
+          // 组头只数"能开关"的那些，否则这条永远跟着开关走的工具会让 3/4 看着像有人关了一条。
+          const tools = group.tools.filter(function (tool) { return managed.indexOf(tool.name) < 0 })
+          if (!group.tools.length) return
+          const onCount = tools.filter(function (tool) { return !tool.hidden }).length
+          const groupTok = tools.reduce(function (sum, tool) { return sum + (Number(tool.tok) || 0) }, 0)
             rows.push(React.createElement('div', { className: 'dsm-tooltable-group', key: 'g-' + group.key },
               // 组头与工具行：原生勾选框换自绘框 RowCheck（REDESIGN §5.1，切片五）。
               // label 包裹照旧 —— 点击行内任意文字都翻勾（button 是可标注控件）。
               React.createElement('label', { className: 'dsm-tooltable-ghead' },
                 React.createElement(RowCheck, {
-                  checked: onCount === group.tools.length,
+                  checked: onCount === tools.length,
                   // 半开半关时显示成"未全选"，点一下 = 全开（与其余全选控件同款：勾选框只表达
                   // 两种意思，第三种状态靠计数说清）。
-                  onChange: function () { toggleToolTableGroup(group, onCount !== group.tools.length) },
-                  disabled: toolTableDisabled,
+                  onChange: function () { toggleToolTableGroup(group, onCount !== tools.length) },
+                  disabled: toolTableDisabled || tools.length === 0,
                   label: groupLabel(group.key),
                 }),
                 React.createElement('span', { className: 'dsm-tooltable-gname' }, groupLabel(group.key)),
-                React.createElement('span', { className: 'dsm-tooltable-gcount' }, t('compat.tools.groupCount', { on: onCount, total: group.tools.length, tok: group.tok }))),
+                React.createElement('span', { className: 'dsm-tooltable-gcount' }, t('compat.tools.groupCount', { on: onCount, total: tools.length, tok: groupTok }))),
               React.createElement('div', { className: 'dsm-tooltable-tools' },
                 group.tools.map(function (tool) {
                   const about = translateOrFallback(t, 'compat.tools.about.' + tool.name, '')
                   // 悬停 = 稍详细那句 + 空行 + 当前状态。取不到详细那句时退回行内那句，
                   // 于是"悬停什么也没有"不会发生。
                   const hover = translateOrFallback(t, 'compat.tools.hover.' + tool.name, about)
-                  // 这一行完全跟随主动记忆总开关：开着锁成"已开"，关着锁成"已关"。
-                  // 两边都禁用并给一句短原因，别让人一直点。
-                  const lockedOn = forced.indexOf(tool.name) >= 0
-                  const lockedOff = forcedOff.indexOf(tool.name) >= 0
+                  if (managed.indexOf(tool.name) >= 0) {
+                    // 只读行：四列对齐照旧，第一列空着 —— 没有勾选框就没有开关可点。
+                    // 介绍仍显示（用户要能看懂这条工具是干什么的），只是不能改它。
+                    return React.createElement('div', {
+                      className: 'dsm-tooltable-tool dsm-tooltable-managed',
+                      key: tool.name,
+                      title: (hover ? hover + '\n\n' : '') + t('compat.tools.lockedTitle'),
+                    },
+                      React.createElement('span', null),
+                      React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
+                      React.createElement('span', { className: 'dsm-tooltable-tok' }, '≈' + tool.tok),
+                      React.createElement('span', { className: 'dsm-tooltable-about' }, about))
+                  }
                   return React.createElement('label', {
                     className: 'dsm-tooltable-tool',
                     key: tool.name,
-                    title: (hover ? hover + '\n\n' : '') + (lockedOn
-                      ? t('compat.tools.lockedTitle')
-                      : lockedOff
-                        ? t('compat.tools.lockedOffTitle')
-                        : tool.hidden
-                          ? (tool.defaultHidden ? t('compat.tools.defaultOffTitle') : t('compat.tools.offTitle'))
-                          : t('compat.tools.onTitle')),
+                    title: (hover ? hover + '\n\n' : '') + (tool.hidden
+                      ? (tool.defaultHidden ? t('compat.tools.defaultOffTitle') : t('compat.tools.offTitle'))
+                      : t('compat.tools.onTitle')),
                   },
                     React.createElement(RowCheck, {
-                      checked: (!tool.hidden || lockedOn) && !lockedOff,
-                      disabled: toolTableDisabled || lockedOn || lockedOff,
+                      checked: !tool.hidden,
+                      disabled: toolTableDisabled,
                       label: tool.name,
                       onChange: function () { toggleToolTableTool(tool.name, !!tool.hidden) },
                     }),
                     React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
                     React.createElement('span', { className: 'dsm-tooltable-tok' }, '≈' + tool.tok),
-                    React.createElement('span', { className: 'dsm-tooltable-about' },
-                      about + (lockedOn ? ' · ' + t('compat.tools.locked') : lockedOff ? ' · ' + t('compat.tools.lockedOff') : '')))
+                    React.createElement('span', { className: 'dsm-tooltable-about' }, about))
                 }))))
         })
         const presetCount = (toolTable.presets || []).length

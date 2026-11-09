@@ -1,4 +1,4 @@
-// 主动记忆的 op（HTTP 层 + 工具层共用）：开关、学习、遗忘、清单。
+// 自主记忆的 op（HTTP 层 + 工具层共用）：开关、学习、遗忘、清单。
 //
 // 为什么单独一个域：这些读写不碰记忆正文的**通用编辑**（那是 `memories-*` 的职责），
 // 只碰"自动记忆"这个受策略约束的子集。混进记忆域会让"改一条记忆"和"让 agent 学一条"
@@ -63,7 +63,7 @@ export interface EvolutionOpDeps {
     total: number
   }>
   /**
-   * 设置写入后的通知：那条主动记忆工具跟随总开关，而模型侧的 restrict 名单是缓存的。
+   * 设置写入后的通知：那条自主记忆工具跟随总开关，而模型侧的 restrict 名单是缓存的。
    * 不主动重排一次，拨完开关要等下一次无关的 tools/change 工具才真的出现 / 消失。
    * 可选：单测里不接也能跑；回调自己抛错不该让开关保存失败。
    */
@@ -289,7 +289,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const cfg = await config.effective(scopeKey, sessionId)
         // 开关：学不学是一道独立的门，与"能不能写"无关。关了就说清为什么，别静默成功。
         if (!cfg.enabled || cfg.learnScope === 'off') {
-          return { ok: false, error: 'proactive memory is off for this conversation / workspace', code: 'disabled' }
+          return { ok: false, error: 'autonomous memory is off for this conversation / workspace', code: 'disabled' }
         }
         const result = await learner.learn(
           {
@@ -585,7 +585,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const { scopeKey } = await workspaceOf(args)
         const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
         const cfg = await config.effective(scopeKey, sessionId)
-        if (!cfg.enabled) return { ok: false, error: '主动记忆已关闭，整理不会运行', code: 'disabled' }
+        if (!cfg.enabled) return { ok: false, error: '自主记忆已关闭，整理不会运行', code: 'disabled' }
         // 模型路由：优先用这个会话正在用的那个；没有就靠 `evolution.model` 或上次记下的路由。
         const route = sessionId ? deps.cold?.()?.routeOf(sessionId) ?? null : null
         const out = await dreamer.dream(cfg, route)

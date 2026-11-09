@@ -28,7 +28,7 @@ export interface MemoryToolDeps extends ToolDomainDeps {
   /** rules service 的 ops 表：rules-list / rules-read / rules-create / rules-update / rules-toggle。 */
   rulesOps: Record<string, (args: any) => Promise<any>>
   /**
-   * 主动记忆的 op（`evolution-learn` / `evolution-forget` / `evolution-list`）。
+   * 自主记忆的 op（`evolution-learn` / `evolution-forget` / `evolution-list`）。
    *
    * 不给 = 这版没接自动记忆：两条工具**不注册**（注册了却调不通比不存在更糟 ——
    * 模型会照描述去试，然后拿到一个内部错误）。
@@ -64,7 +64,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 显式映射一次 —— 改 op 的字段名要动界面，那不是这一条能顺手做的事。
       scene: { type: 'string', description: 'Optional scene filter; `global` and `_shared` are the always-on scenes.' },
       all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
-      auto: { type: 'boolean', description: 'List the notes the agent learned by itself (proactive memory) instead of the ones the user wrote. Off entries are hidden unless all=true.' },
+      auto: { type: 'boolean', description: 'List the notes the agent learned by itself (autonomous memory) instead of the ones the user wrote. Off entries are hidden unless all=true.' },
       limit: { type: 'number', description: 'Max entries (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
@@ -73,7 +73,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // （一个能 approve / promote，一个能 edit / bundle）。混成一张表时模型会拿
       // 「已确认」去描述用户写的东西，也会拿 `layer` 去描述场景 —— 两边的术语不一样。
       if (args && args.auto === true) {
-        if (!deps.evolutionOps) throw new Error('proactive memory is not available in this build')
+        if (!deps.evolutionOps) throw new Error('autonomous memory is not available in this build')
         const r: any = await deps.evolutionOps['evolution-list']({ all: args.all === true })
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read learned notes'))
         const rows: any[] = Array.isArray(r.entries) ? r.entries : []
@@ -461,7 +461,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     },
   }))
 
-  // ── 主动记忆（只在开关打开时出现在工具表里）────────────────────────────────
+  // ── 自主记忆（只在开关打开时出现在工具表里）────────────────────────────────
   //
   // 为什么不复用 `memory_manager_save`：那条的契约是「Only on the user's instruction」并且
   // 受 `requireConfirmForModelRuleWrite` 门禁（一次确认卡）。自动记忆必须零摩擦 —— 每学一条
@@ -478,7 +478,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Proactive memory, one tool with four actions. action=learn: record one durable preference, fact, correction or repeatable procedure from this conversation (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). action=forget: delete a learned note, which stays un-learnable for 30 days — only when the user asks. action=organize: read-only draft of merges / archives / promotions for the user to apply. action=done: report that a recorded procedure really ran end-to-end; three verified runs promote it to a playbook (ok=false when it failed). Available only while proactive memory is on.',
+    description: 'Autonomous memory, one tool with four actions. action=learn: record one durable preference, fact, correction or repeatable procedure from this conversation (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). action=forget: delete a learned note, which stays un-learnable for 30 days — only when the user asks. action=organize: read-only draft of merges / archives / promotions for the user to apply. action=done: report that a recorded procedure really ran end-to-end; three verified runs promote it to a playbook (ok=false when it failed). Available only while autonomous memory is on.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget', 'organize', 'done'], required: true, description: 'learn (default if omitted) / forget / organize / done.' },
       // ── learn ──
@@ -502,7 +502,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const agent = exec && exec.agent
       if (!deps.autoLearnEnabled!(agent)) {
         // 开关在调用途中被关掉（另一个窗口 / 本会话切了）也要说清，而不是静默什么都不做。
-        throw new Error('proactive memory is off here, so nothing was done. The user can turn it on in Memory → Proactive memory.')
+        throw new Error('autonomous memory is off here, so nothing was done. The user can turn it on in Memory → Autonomous memory.')
       }
       const action = String((args && args.action) || 'learn')
 

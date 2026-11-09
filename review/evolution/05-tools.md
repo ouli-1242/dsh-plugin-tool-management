@@ -18,7 +18,7 @@
 
 ## 2. 工具清单
 
-> **已过时（2026-11-09）**：下表写的是 P1 的形状。实际落地时四条主动记忆工具
+> **已过时（2026-11-09）**：下表写的是 P1 的形状。实际落地时四条自主记忆工具
 > （`learn` / `forget` / `organize` / `procedure_done`）已合成一条
 > `memory_manager_auto`，用 `action=learn|forget|organize|done` 分叉；它**跟随总开关开合**：
 > 开着强制可见且不能关，关着强制隐藏且不能开。工具表、词典介绍与偏差理由见 `07-roadmap.md`
@@ -189,7 +189,7 @@
 
 ```text
 ┌──────────────────────────────────────────────┐
-│ 主动记忆                          [ 已开启 ] │
+│ 自主记忆                          [ 已开启 ] │
 │ 全局：关   本工作区：开   本会话：继承        │
 │ 来源：本工作区设置                            │
 │ [暂停本会话]  [关闭本工作区]  [高级设置]      │
@@ -231,7 +231,7 @@
 ```text
 memory_manager_learn:
   Record something worth remembering across sessions, without asking.
-  Only available when proactive memory is on. Evidence must be a verbatim
+  Only available when autonomous memory is on. Evidence must be a verbatim
   quote from this turn; inferred notes are stored as candidates.
 
 memory_manager_forget:

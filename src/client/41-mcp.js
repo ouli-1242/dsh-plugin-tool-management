@@ -1375,7 +1375,8 @@
             // 并排还会互相矛盾（用户 2026-09-19）。
             // 会话层不显示这条：它说的是「改动会同步档案」，而本层的开关写的是会话覆盖，
             // 与档案无关（说了就是假话）。本层另有作用域条上那句说明。
-            (state.locked !== true && state.scene && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('scene.switch.banner', { scene: state.scene })) : null,
+            // 「global」是常驻的默认场景，不是"用户进了某个场景"——这句提示对它没有信息量。
+            (state.locked !== true && state.scene && state.scene !== 'global' && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, mt('scene.switch.banner', { scene: state.scene })) : null,
             // 列表工具条（REDESIGN §3.3，切片四）：搜索 + 层级筛选住 children；本页无批量动作，
             // batch 槽留空。
             React.createElement(Toolbar, { key: 'filters' },

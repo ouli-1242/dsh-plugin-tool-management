@@ -725,7 +725,7 @@
             }).catch(function (e) { setExportState({ busy: false, result: { ok: false, text: errMsg(e) } }) })
           }
 
-          // ── 主动记忆（agent 自己学的那一半）──────────────────────────────────
+          // ── 自主记忆（agent 自己学的那一半）──────────────────────────────────
           // 两条 op 分工：`evolution-status` 给三级开关 + 计数（卡片要），`evolution-list`
           // 给具体条目（列表要）。不合成一条：卡片每次刷新都要读，而条目会越攒越多。
           var evs = React.useState({ loading: true, status: null, entries: [], error: null })
@@ -750,9 +750,9 @@
           // 程序性记忆（P4）：步骤、验证次数、技能草案与 learned 名单。null = 没接线。
           var evp = React.useState(null)
           var evoProc = evp[0], setEvoProc = evp[1]
-          // 主动记忆弹窗（2026-11-09：从平铺卡片搬进回收站左边那颗按钮打开的弹窗）。
+          // 自主记忆弹窗（2026-11-09：从平铺卡片搬进回收站左边那颗按钮打开的弹窗）。
           // 与 `modal` 分开存：弹窗里点「删除 / 提升 / 整理」还要再开一层确认弹窗，
-          // 共用一个槽会把主动记忆一起关掉。
+          // 共用一个槽会把自主记忆一起关掉。
           var eos = React.useState(false)
           var evoOpen = eos[0], setEvoOpen = eos[1]
           // 「更多」：后台复习 / 全库整理 / 程序性记忆默认收着，弹窗第一屏只有开关和清单。
@@ -1430,7 +1430,7 @@
           }
 
           /**
-           * 主动记忆弹窗（用户 2026-11-09：按钮放回收站左边、点击出弹窗、文字越少越好）。
+           * 自主记忆弹窗（用户 2026-11-09：按钮放回收站左边、点击出弹窗、文字越少越好）。
            *
            * 第一屏只有「一个开关 + 一行数字 + 一份清单」：三级分段开关并进总开关，
            * 三块后台工序的长说明删掉、本体折进「更多」。确认弹窗走 `modal` 那个槽，
@@ -1481,7 +1481,7 @@
                     }))
                 : null) : null
             return React.createElement(Modal, {
-              key: 'evo', className: 'dsm-modal-evo', title: t('evo.title'),
+              key: 'evo', className: 'dsm-modal-evo' + (overall ? ' dsm-evo-on' : ''), title: t('evo.title'),
               closeLabel: t('btn.close'), onClose: function () { setEvoOpen(false) },
             },
               React.createElement('div', { className: 'dsm-evo-modal' },
@@ -1492,7 +1492,7 @@
                     label: t('evo.title'),
                     onClick: function () { setEvolutionMaster(!overall) },
                   }),
-                  React.createElement('span', { className: 'dsm-tag' + (overall ? ' dsm-tag-on' : '') }, overall ? t('evo.state.on') : t('evo.state.off')),
+                  // 开没开只看边框：开启时弹窗与页头按钮走成功色边框，不再写「已开启」。
                   React.createElement('span', { className: 'dsm-help' }, t('evo.stat.short', { learned: auto.entries || 0 })),
                   rows.length === 0 ? null : React.createElement('button', {
                     key: 'org', type: 'button', className: 'dsm-btn dsm-btn-quiet',
@@ -1535,12 +1535,12 @@
                 // 旁边」）。它管的是列表，但和「回收站」一样是**整页范围**的动作，跟其余页头键
                 // 同排读起来才成组；留在工具条会把搜索行挤窄，而那一行现在要让给搜索框。
                 React.createElement('button', { key: 'bulk', type: 'button', className: 'dsm-btn dsm-btn-secondary dsm-btn-bulk', disabled: busy || scopeWriteLocked(anyLocked) || !bulkIds.length, onClick: function () { setMemories(bulkIds, !bulkAllOn, null) } }, bulkPair(bulkAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), bulkAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
-                // 主动记忆：紧挨回收站左边（用户 2026-11-09）。原来那张平铺卡片搬进弹窗，
+                // 自主记忆：紧挨回收站左边（用户 2026-11-09）。原来那张平铺卡片搬进弹窗，
                 // 页头只留这一颗入口，记忆列表不再被它顶下去。
                 React.createElement('button', {
                   key: 'evo', type: 'button', className: 'dsm-btn dsm-btn-secondary' + (evoOn ? ' dsm-evo-head-on' : ''),
                   onClick: function () { setResult(null); setEvoOpen(true) },
-                }, t('evo.title') + (evoOn ? ' · ' + t('evo.state.on') : '')),
+                }, t('evo.title')),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
                 scopeLeaseKeys('memory').length > 0 ? React.createElement('button', { key: 'stopall', type: 'button', className: 'dsm-btn dsm-btn-danger-outline', disabled: busy || scopeWriteLocked(anyLocked), onClick: stopAllMemories }, t('scope.stopAll')) : null,
               ],
@@ -1550,8 +1550,9 @@
             // 还会互相矛盾（用户 2026-09-19 指出：锁定时长的场景提示没必要出现）。
             anyLocked && !scopeIsSession() ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             // 会话层不显示（同 MCP 页）：本层开关写的是会话覆盖，不同步档案。
-            (!anyLocked && sceneName && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
-            // 主动记忆已从本页移走：页头一颗按钮 → 弹窗（见下方 evoOpen）。
+            // global 是常驻默认场景，不需要「进场景」提示。
+            (!anyLocked && sceneName && sceneName !== 'global' && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
+            // 自主记忆已从本页移走：页头一颗按钮 → 弹窗（见下方 evoOpen）。
             // 工具条（REDESIGN §3.3 + §6 备注，切片四换共享 Toolbar）：搜索 + 场景筛选住 children。
             // batch 槽已空 —— 「全选」上移页头（挨着回收站），预算上移统计格；空槽不传，
             // 免得渲染出一个没有内容的 .dsm-toolbar-batch 把搜索框往里挤。
@@ -1579,7 +1580,7 @@
                 : visibleBuckets.length ? React.createElement('div', { key: 'scenes', className: 'dsm-sources' }, visibleBuckets.map(renderSceneCard))
                   : (q || sceneFilter) ? React.createElement(ListStates, { key: 'search', t: t, state: 'search', text: t('memory.empty.search'), onClearFilter: function () { setQuery(''); setSceneFilter('') } })
                     : React.createElement(ListStates, { key: 'empty', t: t, state: 'empty', text: t('memory.empty') }),
-            // 主动记忆弹窗先渲染：它里面开的确认弹窗排在后面，DOM 顺序决定后一层盖在上面。
+            // 自主记忆弹窗先渲染：它里面开的确认弹窗排在后面，DOM 顺序决定后一层盖在上面。
             evoOpen ? renderEvolutionModal() : null,
             modal && modal.type === 'delete' ? React.createElement(Modal, { key: 'del', className: 'dsm-modal-sm', title: t('memory.delete.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('memory.delete.desc', { name: modal.rule.name })),
