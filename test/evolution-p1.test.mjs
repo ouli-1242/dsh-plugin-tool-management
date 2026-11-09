@@ -154,6 +154,32 @@ test('来源门：说「用户明说」却不给引句 → 降级为推断，不
   assert.equal(r.status, 'candidate')
 })
 
+test('确认卡批准：推断直接生效，证据升级 user_approved（信心上调）', () => {
+  // 对话工具路径必然先过确认卡：用户看过原文点了同意 → 卡片就是确认，不再进候选。
+  const r = runGates({ text: '这个仓库用 pnpm', source: 'model_inference', via: 'tool', approved: true }, ctxOf())
+  assert.equal(r.ok, true)
+  assert.equal(r.status, 'active')
+  assert.equal(r.source, 'user_approved')
+  assert.equal(r.confidence, 0.85)
+  assert.equal(r.needsReview, undefined)
+  // 后台复习器没有任何人在场：同样 approved 也不该出现（复习器不会带这个参数），
+  // 这里钉的是「review 来路恒为候选」，防止哪天有人把 approved 泄给无人看管的写入。
+  const rev = runGates({ text: '这个仓库用 pnpm', source: 'model_inference', via: 'review', approved: true }, ctxOf())
+  assert.equal(rev.ok, true)
+  assert.equal(rev.status, 'candidate')
+  assert.ok(rev.needsReview)
+})
+
+test('完全权限跳过卡：生效但不虚报证据 —— model_inference 保持 0.4', () => {
+  // approval=never 的会话里确认卡被插件放行，用户没看过这条原文：
+  // 状态按「已预先批准一切」生效，证据链不说谎（仍是 model_inference）。
+  const r = runGates({ text: '这个仓库用 pnpm', source: 'model_inference', via: 'tool' }, ctxOf())
+  assert.equal(r.ok, true)
+  assert.equal(r.status, 'active')
+  assert.equal(r.source, 'model_inference')
+  assert.equal(r.confidence, 0.4)
+})
+
 test('配额门：该层满了就拒，并说清怎么解', () => {
   const r = runGates(
     { text: '这个仓库用 pnpm', source: 'user_explicit', quote: '用 pnpm' },

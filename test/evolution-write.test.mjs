@@ -284,6 +284,48 @@ test('approve：候选 → 生效，四处一起改（文件 / state / 索引 / 
   } finally { h.done() }
 })
 
+test('learn(via=tool, approved)：确认卡批下来的推断一次到位 —— 生效 + user_approved 证据', async () => {
+  const h = harness()
+  try {
+    // 对话工具路径：执行到 learner 这一步 = 用户已在确认卡上按了「同意」。
+    // 卡片就是确认：直接生效、不再挂"待确认"，证据升级为 user_approved（0.85），
+    // 页面里不需要（也不应该）再点一次「确认」。
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'model_inference', via: 'tool', approved: true },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    assert.equal(r.status, 'active')
+    assert.equal(r.needsReview, undefined)
+
+    const doc = h.readDoc(r.id)
+    assert.equal(pickField(doc, 'auto_status'), 'active')
+    assert.equal(pickField(doc, 'auto_confidence'), '0.85')
+
+    const st = h.readState().entries[r.id]
+    assert.equal(st.evidence.length, 1)
+    assert.equal(st.evidence[0].source, 'user_approved')
+    assert.equal(st.confidence, 0.85)
+
+    // 学完即注入：索引与 catalog 都是 active + enabled
+    assert.equal(h.readIndex().rules[r.id].enabled, true)
+    assert.equal(h.readCatalog().entries[r.id].status, 'active')
+
+    // 完全权限跳过卡的那一半：生效，但证据保持 model_inference（0.4），不虚报。
+    const bypassed = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'model_inference', via: 'tool' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(bypassed.ok, true, bypassed.error)
+    assert.equal(bypassed.status, 'active')
+    assert.equal(bypassed.confidence, 0.4)
+    const st2 = h.readState().entries[bypassed.id]
+    assert.equal(st2.evidence[0].source, 'model_inference')
+  } finally { h.done() }
+})
+
 test('forget：正文交给回收站、条目从 state 消失、索引停用、墓碑落盘', async () => {
   const h = harness()
   try {

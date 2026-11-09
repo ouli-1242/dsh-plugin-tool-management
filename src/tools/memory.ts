@@ -485,7 +485,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // ── learn ──
       text: { type: 'string', description: 'learn: one sentence, what to remember (<=400 chars).' },
       kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: what kind of thing it is; inferred from the text when omitted.' },
-      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it. user_explicit / user_correction require a verbatim `quote`; model_inference only ever becomes a candidate.' },
+      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it. user_explicit / user_correction require a verbatim `quote`; model_inference goes active as soon as the user approves the card (unattended review keeps it a candidate).' },
       quote: { type: 'string', description: 'learn: the user\'s exact words (verbatim substring of what they said). Required for user_explicit / user_correction.' },
       key: { type: 'string', description: 'learn: short slot name like `package-manager` — the same key merges with the existing note.' },
       boundary: { type: 'string', description: 'learn: when it might not hold (e.g. "CI still uses npm").' },
@@ -552,6 +552,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         text: String((args && args.text) || ''),
         // 默认按"模型推断"起步：说这是用户明说的却不给引句，证据门会降级 —— 但先如实默认更省一次往返。
         source: (args && args.source) || 'model_inference',
+        // 执行到这一步 = 确认卡已走完；卡上按过「同意」的（pre-execute 钩子在 exec 上留了
+        // 标记），证据升级为 user_approved、状态直接生效 —— 卡片就是确认，页面里不再二次确认。
+        // 标记丢了（宿主换对象 / 完全权限跳过卡）不带这个字段，门禁按保守口径处理。
+        ...((exec && exec.__userConfirmed === true) ? { approved: true } : {}),
       }
       for (const key of ['kind', 'quote', 'key', 'boundary', 'layer', 'ttlDays'] as const) {
         if (args && args[key] !== undefined && args[key] !== '') payload[key] = args[key]

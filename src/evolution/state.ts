@@ -24,10 +24,15 @@ import type { JsonFileRead } from '../mcp/disabled-tools.js'
 export const EVOLUTION_STATE_FILE = 'evolution/state.json'
 export const STATE_VERSION = 1
 
-/** 证据来源。权重见 `baseConfidenceOf`：不是"谁说的"，而是"可复核到什么程度"。 */
-export type EvidenceSource = 'user_explicit' | 'user_correction' | 'tool_verified' | 'model_inference'
+/**
+ * 证据来源。权重见 `baseConfidenceOf`：不是"谁说的"，而是"可复核到什么程度"。
+ *
+ * `user_approved` 是确认卡的产物：用户在卡片上看过**这条原文**并按了同意 —— 比模型推断
+ * 强得多，但没到"用户自己说的"（user_explicit 要逐字引句核对）那一档。
+ */
+export type EvidenceSource = 'user_explicit' | 'user_correction' | 'tool_verified' | 'model_inference' | 'user_approved'
 
-export const EVIDENCE_SOURCES: readonly EvidenceSource[] = ['user_explicit', 'user_correction', 'tool_verified', 'model_inference']
+export const EVIDENCE_SOURCES: readonly EvidenceSource[] = ['user_explicit', 'user_correction', 'tool_verified', 'model_inference', 'user_approved']
 
 /**
  * 一条证据。
@@ -284,6 +289,9 @@ export function normalizeState(raw: any): { ok: true; state: EvolutionState } | 
 export const BASE_CONFIDENCE: Record<EvidenceSource, number> = {
   user_explicit: 0.95,
   user_correction: 0.9,
+  // 确认卡批下来的：用户看过原文点了同意，但没有逐字引句可核对 —— 夹在 tool_verified
+  // 与 user_correction 之间。没有这张卡（后台复习 / 完全权限跳过）就不会出现这个来源。
+  user_approved: 0.85,
   tool_verified: 0.8,
   model_inference: 0.4,
 }

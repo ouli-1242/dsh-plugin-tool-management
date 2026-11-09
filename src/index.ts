@@ -5914,6 +5914,12 @@ export default {
           const reason = argConditionalConfirmReason(confirmName, exec.arguments, await scopeStore.mode())
           if (reason === null) return next()
           if (bypassedByFullAccess(exec)) return next()
+          // 卡已弹：宿主只有拿到「同意」才会继续执行这条工具。给 exec 打上标记，
+          // 工具层据此把这次学习记成 user_approved 证据（信心上调）。宿主若在钩子与
+          // 执行之间换了对象，标记丢了也只是退回 model_inference 的保守值，不出错。
+          if (confirmName === PROACTIVE_MEMORY_TOOL) {
+            try { (exec as any).__userConfirmed = true } catch { /* exec 被冻结时静默：标记只是加分项 */ }
+          }
           return Promise.resolve({ kind: 'ask', reason })
         }
         if (bypassedByFullAccess(exec)) return next()

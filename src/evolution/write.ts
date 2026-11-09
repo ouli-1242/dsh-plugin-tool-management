@@ -48,6 +48,10 @@ export interface LearnRequest {
   key?: string
   source: EvidenceSource
   quote?: string
+  /** 学习来路：`tool` = 对话工具（必然已过确认卡）；缺省按 `review`（后台复习，保守候选）。 */
+  via?: 'tool' | 'review'
+  /** 用户在确认卡上按了「同意」：证据升级为 user_approved（信心上调）。 */
+  approved?: boolean
   layer?: MemoryLayer
   boundary?: string
   ttlDays?: number
@@ -220,6 +224,8 @@ export function createLearner(deps: LearnDeps) {
           ...(req.kind !== undefined ? { kind: req.kind } : {}),
           ...(req.key !== undefined ? { key: req.key } : {}),
           source: req.source,
+          ...(req.via !== undefined ? { via: req.via } : {}),
+          ...(req.approved === true ? { approved: true } : {}),
           ...(req.quote !== undefined ? { quote: req.quote } : {}),
           ...(req.layer !== undefined ? { layer: req.layer } : {}),
           ...(req.boundary !== undefined ? { boundary: req.boundary } : {}),

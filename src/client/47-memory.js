@@ -979,6 +979,9 @@
           function renderEvolutionDetail(e) {
             var d = evoCache[e.id]
             var out = []
+            // "为什么待确认"放展开区第一行：meta 行是单行省略，长理由挤在那里只会被截断
+            // （用户 2026-11-10：内容被截断）——这里宽度管够，完整读完。
+            if (e.needsReview) out.push(React.createElement('p', { key: 'nr', className: 'dsm-help' }, e.needsReview))
             if (!d) {
               out.push(React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')))
             } else if (d.ok === false) {
@@ -1042,7 +1045,7 @@
               t('evo.confidence', { value: Math.round((Number(e.confidence) || 0) * 100) }),
               t('evo.tokens', { count: Number(e.tokens) || 0 }),
             ]
-            if (e.needsReview) metaBits.push(String(e.needsReview))
+            // 待确认的理由不进 meta（单行省略会把它截成半句话）：悬停给全文，展开区也完整显示。
             return React.createElement(ListRow, {
               key: e.id,
               dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: t(statusKey) })],
@@ -1057,6 +1060,7 @@
               }, (e.oneLine || e.id) + (open ? ' ▾' : ' ▸')),
               tag: React.createElement(StatusTag, { tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : undefined, text: t(statusKey) }),
               meta: metaBits.join(' · '),
+              metaTitle: e.needsReview || undefined,
               extra: open ? renderEvolutionDetail(e) : null,
               side: pending
                 ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
@@ -1430,34 +1434,58 @@
           }
 
           /**
-           * 自主记忆弹窗（用户 2026-11-09：按钮放回收站左边、点击出弹窗、文字越少越好）。
+           * 自主记忆的两张页签卡（用户 2026-11-10：记忆应该和其他记忆一样直接在页签显示，
+           * 只是结构不同 —— 自主记忆分全局 / 工作区两层，不绑场景）。
            *
-           * 第一屏只有「一个开关 + 一行数字 + 一份清单」：三级分段开关并进总开关，
-           * 三块后台工序的长说明删掉、本体折进「更多」。确认弹窗走 `modal` 那个槽，
-           * 与 `evoOpen` 分开存，才能叠在它上面而不把整块关掉。
+           * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
+           * 点行名展开详情，候选行右侧有「确认」。卡头右侧的「设置」开设置弹窗
+           * （总开关 / 整理 / 后台工序都住在那里），卡片本身只管展示与逐条操作。
+           */
+          function renderEvolutionCard(layerKey, titleKey) {
+            // 只有全局与本项目两层；迁移过来的旧会话/场景条目标成 archived，归到本项目组展示。
+            var rows = (evo.entries || []).filter(function (e) {
+              return e.layer === layerKey || (layerKey === 'workspace' && (e.layer === 'session' || e.layer === 'scene'))
+            })
+            // 搜索词与场景卡同源同口径：一行摘要 / id 命中即留（大小写不敏感）。
+            if (q !== '') {
+              rows = rows.filter(function (e) {
+                var hay = String(e.oneLine || '') + ' ' + String(e.id || '')
+                return hay.toLowerCase().indexOf(q) >= 0
+              })
+            }
+            // 这个层一条都没有（或没搜到）→ 不渲染：空卡是噪音，不是信息。
+            if (rows.length === 0) return null
+            // 「启用 / 总数」与场景卡同一读法：生效（active/core）且没被停用的才算"开"。
+            var onCount = rows.filter(function (e) { return (e.status === 'active' || e.status === 'core') && e.enabled !== false }).length
+            // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
+            var openFlag = collapsed['auto:' + layerKey]
+            var baseOpen = openFlag === undefined ? evoOn : openFlag !== true
+            var open = baseOpen || q !== ''
+            // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
+            return React.createElement('div', { key: 'auto:' + layerKey, className: 'dsm-source' + (evoOn ? '' : ' dsm-rule-off') },
+              React.createElement('div', { className: 'dsm-source-head' },
+                React.createElement('button', { type: 'button', className: 'dsm-source-head-main dsm-source-head-stack', 'aria-expanded': open, onClick: function () { toggleCollapse('auto:' + layerKey, baseOpen) } },
+                  React.createElement('span', { className: 'dsm-source-head-line' },
+                    React.createElement('span', { className: 'dsm-source-title' }, t(titleKey)),
+                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: rows.length })),
+                    React.createElement('span', { className: 'dsm-tag' + (evoOn ? ' dsm-tag-on' : '') }, t('memory.auto.tag')))),
+                React.createElement('div', { className: 'dsm-source-actions' },
+                  React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setResult(null); setEvoOpen(true) } }, t('evo.settings')))),
+              open ? React.createElement('div', { className: 'dsm-source-body' }, rows.map(renderEvolutionRow)) : null)
+          }
+
+          /**
+           * 自主记忆设置弹窗（2026-11-10 收口：清单已搬到记忆页签上，这里只留**设置**）。
+           *
+           * 第一屏只有「一个开关 + 一行数字 + 整理入口」；后台三块工序（复习队列 / 全库
+           * 整理 / 程序性记忆）仍折在「更多」里。确认弹窗走 `modal` 那个槽，与 `evoOpen`
+           * 分开存，才能叠在它上面而不把整块关掉。
            */
           function renderEvolutionModal() {
             var st = evo.status
             var auto = (st && st.auto) || { entries: 0 }
             var eff = (st && st.effective) || {}
             var overall = eff.enabled === true
-            var rows = evo.entries || []
-            // 只有全局与本项目两层；迁移过来的旧会话/场景条目标成 archived，归到本项目组展示。
-            var groups = [['workspace', 'evo.group.workspace'], ['global', 'evo.group.global']]
-            var list = rows.length === 0
-              ? React.createElement('p', { key: 'empty', className: 'dsm-help' }, t('evo.empty'))
-              : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
-                  groups.map(function (g) {
-                    var part = rows.filter(function (e) {
-                      return e.layer === g[0] || (g[0] === 'workspace' && (e.layer === 'session' || e.layer === 'scene'))
-                    })
-                    if (!part.length) return null
-                    return React.createElement('div', { key: 'g:' + g[0], className: 'dsm-evo-group' },
-                      React.createElement('div', { className: 'dsm-evo-group-head' },
-                        React.createElement('span', { className: 'dsm-evo-group-name' }, t(g[1])),
-                        React.createElement('span', { className: 'dsm-count dsm-count-tight' }, String(part.length))),
-                      part.map(renderEvolutionRow))
-                  }))
             // 整理草案只出建议、逐条「应用」；点「整理」后必须立刻看得见，所以不折进「更多」。
             // 三块后台工序可能都没接线（旧版宿主）；全空时给一句最短的空态，别让「更多」点了没反应。
             var advancedBits = [renderEvolutionQueue(), renderEvolutionDream(), renderEvolutionProcedure()]
@@ -1497,13 +1525,13 @@
                   }),
                   // 开没开只看边框：开启时弹窗与页头按钮走成功色边框，不再写「已开启」。
                   React.createElement('span', { className: 'dsm-help' }, t('evo.stat.short', { learned: auto.entries || 0 })),
-                  rows.length === 0 ? null : React.createElement('button', {
+                  React.createElement('button', {
                     key: 'org', type: 'button', className: 'dsm-btn dsm-btn-quiet',
-                    disabled: !!(evoOrg && evoOrg.busy), onClick: runOrganize,
+                    disabled: !!(evoOrg && evoOrg.busy) || auto.entries === 0, onClick: runOrganize,
                   }, evoOrg && evoOrg.busy ? t('evo.organize.scanning') : t('evo.organize'))),
+                React.createElement('p', { className: 'dsm-help' }, t('evo.modal.hint')),
                 evo.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: evo.error }) : null,
                 evo.loading && !st ? React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')) : null,
-                list,
                 drafts,
                 React.createElement('button', {
                   key: 'more', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-evo-more',
@@ -1514,6 +1542,11 @@
 
           // 页头那颗按钮要能一眼看出开没开，省得每次都点进弹窗确认。
           var evoOn = !!(evo.status && evo.status.effective && evo.status.effective.enabled === true)
+          // 自主记忆的两张页签卡（全局 / 工作区）：与场景卡并列、同一套搜索与折叠逻辑。
+          // 场景筛选选了具体场景时它们跟着隐藏 —— 自主记忆不绑场景，出现在"某场景里有什么"
+          // 的答案里只会添乱。某个层一条都没有时那张卡不渲染：空卡是噪音，不是信息。
+          var evoCards = sceneFilter !== '' ? [] : [renderEvolutionCard('global', 'memory.auto.card.global'), renderEvolutionCard('workspace', 'memory.auto.card.workspace')]
+            .filter(function (c) { return !!c })
           return React.createElement('section', { className: 'dsm-section' },
             // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 回收站；统计内联。
             React.createElement(PageHead, {
@@ -1580,7 +1613,7 @@
             // 照旧 —— 它同时承担「有缓存数据时的错误」与令牌没过两种渠道。
             data.loading && !hasAnyRule ? React.createElement(ListStates, { key: 'loading', t: t, state: 'loading' })
               : data.error && !hasAnyRule ? React.createElement(ListStates, { key: 'errstate', t: t, state: 'error', text: String(data.error), onRetry: function () { refresh() } })
-                : visibleBuckets.length ? React.createElement('div', { key: 'scenes', className: 'dsm-sources' }, visibleBuckets.map(renderSceneCard))
+                : (visibleBuckets.length || evoCards.length) ? React.createElement('div', { key: 'scenes', className: 'dsm-sources' }, visibleBuckets.map(renderSceneCard).concat(evoCards))
                   : (q || sceneFilter) ? React.createElement(ListStates, { key: 'search', t: t, state: 'search', text: t('memory.empty.search'), onClearFilter: function () { setQuery(''); setSceneFilter('') } })
                     : React.createElement(ListStates, { key: 'empty', t: t, state: 'empty', text: t('memory.empty') }),
             // 自主记忆弹窗先渲染：它里面开的确认弹窗排在后面，DOM 顺序决定后一层盖在上面。

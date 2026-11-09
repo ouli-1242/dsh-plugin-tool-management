@@ -97,6 +97,15 @@ export interface GateInput {
   key?: string
   source: EvidenceSource
   quote?: string
+  /**
+   * 这次学习从哪条路进来。`tool` = 对话里 `memory_manager_auto` 走的（它必然先过确认卡
+   * —— 用户同意了才执行，或会话是完全权限、用户已预先批准一切）；`review` = 后台复习器
+   * 直接落的，**没有任何人在场**。缺省按 `review` 处理（保守：候选），这样直接调 learner
+   * 的旧测试与遗漏参数的新调用都不会把没人看过的推断直接放进上下文。
+   */
+  via?: 'tool' | 'review'
+  /** 用户在确认卡上按了「同意」：证据升级为 `user_approved`（信心上调）。 */
+  approved?: boolean
   /** 模型强制指定的层；仍受 `writeTarget` 上限与环境压窄。 */
   layer?: MemoryLayer
   boundary?: string
@@ -334,6 +343,11 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   }
 
   // ── 门 8：证据 ──
+  // 「在场」= 这次学习来自对话里的工具调用，而那条路**必然**先过确认卡：用户同意了才会
+  // 执行，或会话是完全权限、用户已预先批准一切。后台复习器（`via: 'review'`）没有任何人
+  // 在场，它的推断只能进候选。
+  const attended = input.via === 'tool'
+  const approved = input.approved === true
   const evidence: EvidenceRef[] = []
   let status: 'active' | 'candidate' = 'candidate'
   let review: string | undefined
@@ -343,10 +357,14 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
       evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote, at: new Date().toISOString() })
       status = 'active'
     } else if (checked.reason === 'no-cache') {
-      // 缓存没到手（插件刚加载 / pre-step 没跑）：不拒，降 candidate 并说明。
+      // 缓存没到手（插件刚加载 / pre-step 没跑）：不拒，降级处理并说明。
       // 直接拒会让"第一次打开开关就试"永远失败，那个体验比降级差得多。
-      evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source: 'model_inference', quote, at: new Date().toISOString() })
-      review = '没有可核对的用户原文（本会话还没记录到），先按候选保存'
+      // 卡上批准过的（attended + approved）内容本身已获同意，只有引句的出处核对不到 ——
+      // 证据记 user_approved、直接生效；没人看过的（复习器）仍进候选。
+      if (approved) source = 'user_approved'
+      evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote, at: new Date().toISOString() })
+      if (!attended) review = '没有可核对的用户原文（本会话还没记录到），先按候选保存'
+      else status = 'active'
     } else {
       return reject(
         'evidence',
@@ -358,10 +376,15 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote: quote || rawText, at: new Date().toISOString() })
     status = 'active'
   } else {
-    evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source: 'model_inference', quote: quote || rawText, at: new Date().toISOString() })
-    status = 'candidate'
-    // 候选一定要说清"为什么还得等确认"：界面上只有标签没有理由时，用户只能全信或全删。
-    review = '这是模型自己的推断（不是你的原话），确认后才进上下文'
+    // 模型推断：确认卡批准的那次，用户看过**这条原文**并点了同意 —— 证据升级为
+    // user_approved（信心上调），状态直接生效：卡片就是确认，页面里不再二次确认。
+    // 完全权限跳过卡的那次同样直接生效（用户已声明"别再问我"），但证据保持
+    // model_inference —— 用户没看过这条原文，证据链不说谎。复习器落的没有人在场，
+    // 保持候选 + 一句"为什么还得等确认"：界面上只有标签没有理由时，用户只能全信或全删。
+    if (approved) source = 'user_approved'
+    evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote: quote || rawText, at: new Date().toISOString() })
+    if (attended) status = 'active'
+    else review = '这是模型自己的推断（不是你的原话），确认后才进上下文'
   }
 
   // ── 门 6：冲突 ──

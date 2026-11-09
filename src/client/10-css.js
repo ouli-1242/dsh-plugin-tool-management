@@ -161,10 +161,9 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-sources{gap:0}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
-/* ── 自主记忆（2026-11-09 起：页头按钮 + 弹窗）────────────────────────────────
-   原来的平铺卡片与三级分段开关已收走；弹窗第一屏只有开关 + 一行数字 + 条目清单，
-   后台三块工序折在「更多」里。条目沿用 .dsm-listrow，不给行另起一套排版。 */
-.dsm-evo-card{margin-bottom:8px}
+/* ── 自主记忆（2026-11-10 起：条目在记忆页签上以两张卡显示，弹窗只留设置）────
+   页签卡复用 .dsm-source 骨架（与场景卡同一套头 / 计数 / 折叠）；行沿用 .dsm-listrow。
+   弹窗第一屏只有开关 + 一行数字 + 整理入口，后台三块工序折在「更多」里。 */
 .dsm-evo-head-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 .dsm-modal-evo{width:min(620px,100%)!important}
 /* 开启态只靠边框表达：不写「已开启」，也不给按钮加文字后缀。 */
@@ -172,34 +171,23 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-modal{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
 .dsm-evo-master{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:2px 0 6px;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-evo-master .dsm-help{margin:0;margin-left:auto}
-.dsm-evo-modal .dsm-evo-list{max-height:42vh;overflow:auto}
 .dsm-evo-modal .dsm-evo-organize{margin:0}
 .dsm-evo-more{align-self:flex-start}
 .dsm-evo-advanced{display:flex;flex-direction:column;gap:8px;padding-top:6px;border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-evo-advanced .dsm-evo-queue{margin:0}
-.dsm-evo-scopes{display:flex;flex-wrap:wrap;gap:8px 20px;padding:10px 12px 4px}
-.dsm-evo-scope{display:flex;min-width:0;align-items:center;gap:8px}
-.dsm-evo-scope-name{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:16px;white-space:nowrap}
-.dsm-evo-scope-state{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;white-space:nowrap}
-.dsm-evo-scope-state.dsm-evo-on{color:var(--dsw-alias-state-success-primary)}
-.dsm-evo-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 16px;padding:4px 12px 10px}
-.dsm-evo-foot .dsm-help{margin:0}
-.dsm-evo-list{padding:0 0 6px}
-.dsm-evo-group+.dsm-evo-group{margin-top:4px}
-.dsm-evo-group-head{display:flex;align-items:center;gap:6px;padding:6px 12px 2px;border-top:1px solid var(--dsw-alias-border-l1)}
-.dsm-evo-list>.dsm-evo-group:first-child>.dsm-evo-group-head{border-top:0}
-.dsm-evo-group-name{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600}
-/* 「整理」占掉 foot 那行剩下的空间（foot 是 space-between，第三个孩子会落到中间）。 */
-.dsm-evo-organize-btn{margin-left:auto}
 /* 行名是展开开关：复位成文字，读起来与别的行的名字一样，只是多一个 ▸ / ▾。 */
 .dsm-evo-name{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;word-break:break-word}
 .dsm-evo-name:hover{color:var(--dsw-alias-label-primary)}
 .dsm-evo-detail{display:flex;flex-direction:column;gap:4px;padding:4px 0 6px}
 .dsm-evo-detail-id{color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);font-size:12px;word-break:break-all}
+/* 键值两列的行：值那一格必须能收缩，否则 flex 的 min-width:auto 会把它顶成一行硬裁
+   （用户 2026-11-10：内容被截断）——放开 min-width 后 word-break 接管换行。 */
 .dsm-evo-detail-row{display:flex;gap:8px;font-size:12px;line-height:17px}
+.dsm-evo-detail-row>span:last-child{flex:1;min-width:0}
 .dsm-evo-detail-block{display:flex;flex-direction:column;gap:2px;margin-top:2px}
 .dsm-evo-detail-key{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
 .dsm-evo-ev{display:flex;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;word-break:break-word}
+.dsm-evo-ev>span:last-child{flex:1;min-width:0}
 .dsm-evo-ev-src{flex:none;color:var(--dsw-alias-label-tertiary)}
 /* 整理草案：虚线框 = "还没生效"，与实线的记忆卡片区分开。 */
 .dsm-evo-organize{display:flex;flex-direction:column;gap:6px;margin:0 12px 10px;padding:8px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s)}

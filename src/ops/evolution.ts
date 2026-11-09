@@ -297,6 +297,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(args?.kind !== undefined ? { kind: args.kind } : {}),
             ...(args?.key !== undefined ? { key: args.key } : {}),
             source: args?.source ?? 'model_inference',
+            // 这条 op 只服务对话里的 `memory_manager_auto`：执行到这一步 = 确认卡已经
+            // 走完（用户同意，或完全权限下用户预先批准一切），所以 via 恒为 'tool'，
+            // 不从入参取 —— 免得哪个调用方忘带参数就把没人看过的推断直接放进上下文。
+            // `approved` 由工具层按「卡上按了同意」的标记传入，只在证据上加分。
+            via: 'tool' as const,
+            ...(args?.approved === true ? { approved: true } : {}),
             ...(args?.quote !== undefined ? { quote: args.quote } : {}),
             ...(args?.layer !== undefined ? { layer: args.layer } : {}),
             ...(args?.boundary !== undefined ? { boundary: args.boundary } : {}),
