@@ -2326,8 +2326,11 @@ export default {
       const cwd = identity?.cwd
       const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
       const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
-      // `enabled`（允不允许学）与 `inject`（要不要显示）是两件事：用户可能"不学了，但学过的还能用"。
-      if (!cfg.enabled && !cfg.inject) return ''
+      // `enabled`（允不允许学）与 `inject`（要不要显示）是两件事：用户可能"不学了，但学过的
+      // 还能用"（enabled=false + inject=true）。判据只看 `inject` —— 它是解析后的最终答案
+      // （没显式设过就跟随 enabled）。写成 `!enabled && !inject` 会把
+      // "开着学习但明确不想显示"也当成要显示，那正是这个字段存在的意义。
+      if (!cfg.inject) return ''
 
       const scene = memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined
       const enabledScenes = new Set<string>(scene ? [scene] : [])
