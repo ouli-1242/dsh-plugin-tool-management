@@ -93,6 +93,7 @@ import { buildTrashOps } from '../lib/ops/trash.js'
 import { bundleDocName, GLOBAL_SCENE, LEGACY_BUNDLE_DOC, MEMORIES_TRASH_DIR, SHARED_GROUP } from '../lib/memories/constants.js'
 import { buildSceneSyncOps } from '../lib/ops/scene-sync.js'
 import { detectFormat, parseMarkdownTranscript } from '../lib/imports/parsers.js'
+import { unzipLimited } from '../lib/imports/unzip.js'
 import { extractExportTurns, serializeTranscript } from '../lib/exports/transcript.js'
 import { buildPromptOps } from '../lib/ops/prompts.js'
 import { createPromptsService } from '../lib/prompts/service.js'
@@ -1924,6 +1925,54 @@ test('技能上传：尾随空格的 .. 不得逃出暂存目录，正常点文�
     else process.env.DSH_HOME = prev
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+test('zip 限额：按实际解出字节判，且损坏档案必须抛错而不是"0 个条目"', async () => {
+  // 两条都是**静默**出错的形状，靠真实使用发现不了：
+  //   ① 申报值说谎：`unzipSync` 把中央目录的 `originalSize` 当输出缓冲区大小，申报偏小
+  //      会**静默截断**内容（实测申报 1 KiB、实际 8 MiB → 拿到 1 KiB 的坏文件），
+  //      申报偏大则按申报值分配内存（2000 × 8 MiB = 16 GiB，与宿主同进程）。
+  //      所以判据必须是"实际解出多少"，不能信申报值。
+  //   ② 流式解压顺着局部文件头走，**不校验**整份结构：随机字节 / 被截断的 zip 会
+  //      "正常结束、0 个条目"，调用方据此报「导入成功 0 个文件」，用户不知道谁的问题。
+  const { zipSync } = await import('fflate')
+  const enc = (s) => new TextEncoder().encode(s)
+
+  // ① 谎报未压缩大小：局部头 offset 22 与中央目录 offset 24 都写成 1 KiB，实际 4 MiB。
+  const real = new Uint8Array(4 * 1024 * 1024)
+  for (let i = 0; i < real.length; i += 1) real[i] = i & 0xff
+  const zip = zipSync({ 'lie.bin': real }, { level: 1 })
+  const lie = zip.slice()
+  const dv = new DataView(lie.buffer, lie.byteOffset, lie.byteLength)
+  dv.setUint32(22, 1024, true)
+  const cd = lie.findIndex((_, i) => dv.getUint32(i, true) === 0x02014b50)
+  assert.ok(cd > 0, '测试自身前提：找得到中央目录头')
+  dv.setUint32(cd + 24, 1024, true)
+
+  const limits = { maxEntries: 10, maxEntryBytes: 8 << 20, maxTotalUncompressedBytes: 16 << 20 }
+  const got = unzipLimited(lie, limits).entries['lie.bin']
+  assert.equal(got && got.length, real.length, '谎报申报值不得截断内容')
+  assert.ok(got && Buffer.compare(Buffer.from(got), Buffer.from(real)) === 0, '解出的内容必须逐字节正确')
+
+  // 单条闸门同样按实际字节：申报 1 KiB、实际 4 MiB，上限 1 MiB → 必须挡下。
+  const blocked = unzipLimited(lie, { ...limits, maxEntryBytes: 1 << 20 })
+  assert.equal(blocked.entries['lie.bin'], undefined, '实际字节超限的条目不得进结果')
+  assert.equal(blocked.problems.length, 1, '挡下的条目要在 problems 里留一条（不能静默丢弃）')
+
+  // ② 结构损坏：随机字节 / 截掉尾部 / 纯文本都必须抛，与 `unzipSync` 同一条失败语义。
+  const good = zipSync({ 'a.txt': enc('hello') })
+  for (const [label, bytes] of [
+    ['随机字节', new Uint8Array(2048).map(() => Math.floor(Math.random() * 256))],
+    ['截掉尾部', good.subarray(0, good.length - 22)],
+    ['纯文本', enc('this is not a zip')],
+    ['空字节', new Uint8Array(0)],
+  ]) {
+    assert.throws(() => unzipLimited(bytes, limits), /invalid zip data/, label + '：必须抛 invalid zip data')
+  }
+  // 正常档案照旧放行，目录条目仍进结果（`ops/snapshot.ts` 靠它数条目）。
+  const normal = unzipLimited(zipSync({ 'a.txt': enc('hello'), 'd/': new Uint8Array(0) }), limits)
+  assert.deepEqual(Object.keys(normal.entries).sort(), ['a.txt', 'd/'])
+  assert.equal(normal.problems.length, 0)
 })
 
 test('备份名与 peer range：两代时间戳都认、两份范围不漂移', () => {
