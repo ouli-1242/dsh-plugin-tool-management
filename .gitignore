@@ -10,7 +10,10 @@ Thumbs.db
 npm-debug.log*
 
 # 本地工作文件：不进发布树（计划文件是过程产物，留本地）
-review/
+# 例外：主动记忆的设计文档集要入库（是规格说明，不是过程草稿）
+review/*
+!review/evolution/
+!review/evolution/**
 
 # 演示视频原片只留本地：README 的内联播放器走 GitHub 附件（见 issue #3），仓库不驮这几十 MB
 docs/videos/
