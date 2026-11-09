@@ -324,20 +324,13 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   let degraded = routedBy.degraded
 
   // ── 门 9：层 ──
-  if (layer === LAYER_SESSION && (!ctx.sessionId || group !== `_session/${ctx.sessionId}`)) {
-    return reject('layer', 'refused: a conversation-scoped note needs a conversation id', '层门拒绝：会话层缺 sid')
-  }
-  if (layer === LAYER_SCENE && (!ctx.scene || !ctx.knownScenes.has(ctx.scene))) {
-    // 场景没了（改名 / 删除）：降级到工作区，别让这条记忆凭空消失。
-    if (ctx.workspaceHash) {
-      layer = LAYER_WORKSPACE
-      group = `_ws/${ctx.workspaceHash}`
-      degraded = 'no-scene'
-    } else {
-      layer = LAYER_SESSION
-      group = ctx.sessionId ? `_session/${ctx.sessionId}` : 'global'
-      degraded = 'no-scene'
-    }
+  // 只剩全局 / 本项目两种。routeLayer 已经收窄过；这里再兜一道，防止旧调用带 session /
+  // scene 的 forcedLayer、或将来有人改了路由却忘了这里 —— 一律按本项目落，不再产生
+  // `_session/` 与场景目录（那两套和用户记忆的场景单选绑在一起）。
+  if (layer !== LAYER_GLOBAL && layer !== LAYER_WORKSPACE) {
+    layer = LAYER_WORKSPACE
+    group = ctx.workspaceHash ? `_ws/${ctx.workspaceHash}` : 'global'
+    degraded = degraded ?? 'no-scene'
   }
 
   // ── 门 8：证据 ──

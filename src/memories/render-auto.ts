@@ -93,10 +93,10 @@ export function competitorBudgetOf(total: number, userSegmentTokens: number): { 
 }
 
 /**
- * 分层分配：先给每层 min，剩余按 session > workspace > scene > global 填到 max。
+ * 分层分配：先给每层 min，剩余先本项目后全局填到 max。
  *
- * 为什么这个优先级：会话层条目最少但最近，价值密度最高（一次对话的约束通常 2–5 条，
- * 每条都直接改变下一步动作）；全局层最稳定，一条说清能用很久，少露几条不亏。
+ * 为什么这个优先级：本项目层条目更近、更具体，价值密度最高（一次协作里的项目约定
+ * 通常直接改变下一步动作）；全局层最稳定，一条说清能用很久，少露几条不亏。
  */
 export function allocateByLayer(
   total: number,

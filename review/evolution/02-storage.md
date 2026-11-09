@@ -1,5 +1,13 @@
 # 02 · 存储：一条一文件，另建 catalog
 
+> **实现更新（2026-11-09）**：本文写的是"自动条目住在 `memories/<group>/`、与用户记忆共用
+> `memories-index.json`"的早期形状。落地时它们已搬进**独立库** `evolution/notes/`：
+> 正文在 `evolution/notes/global/` 与 `evolution/notes/_ws/<hash16>/`，启停索引是
+> `evolution/notes/memories-index.json`，catalog 仍是 `evolution/catalog.json`。
+> 用户记忆的目录、索引、场景单选、导出、回收站都不再包含自主记忆；旧文件由
+> `migrateLegacyAutoNotes()` 一次性搬过来。层只剩全局 / 本项目两种（会话层、场景层取消）。
+> 理由与偏差登记见 `07-roadmap.md`。下面"一条一文件 + 派生 catalog"的结论不变。
+
 ## 1. 一条一文件，还是合并成一个大文件
 
 结论：**一条记忆一个 `.md` 文件**。合并省的是读取，丢的是单条回滚和并发安全；读取的问题用 catalog（§4）解决，不用合并解决。

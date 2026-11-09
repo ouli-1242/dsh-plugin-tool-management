@@ -11,18 +11,21 @@
 | 动作 | 可逆性 | 给谁 |
 | --- | --- | --- |
 | 读（list / read / search） | 无副作用 | 模型 |
-| 追加（learn / save） | 删掉即可 | 模型 |
-| 忘单条（forget） | 墓碑 30 天可恢复 | 模型 + 确认卡 |
-| 触发整理（organize） | 只出草案，不应用 | 模型 + 确认卡 |
+| 追加（learn / save） | 删掉即可 | 模型**提议** + 用户逐条确认 |
+| 忘单条（forget） | 墓碑 30 天可恢复 | 模型（用户要求时） |
+| 触发整理（organize） | 只出草案，不应用 | 模型 |
 | 换层 / 合并 / 批量删 / 清空 | 影响不可见 | **只给 UI 和 dream** |
 
 ## 2. 工具清单
 
 > **已过时（2026-11-09）**：下表写的是 P1 的形状。实际落地时四条自主记忆工具
 > （`learn` / `forget` / `organize` / `procedure_done`）已合成一条
-> `memory_manager_auto`，用 `action=learn|forget|organize|done` 分叉；它**跟随总开关开合**：
-> 开着强制可见且不能关，关着强制隐藏且不能开。工具表、词典介绍与偏差理由见 `07-roadmap.md`
-> 「界面收敛」一节。下面的权限原则与四个动作本身的契约仍然成立。
+> `memory_manager_auto`，用 `action=learn|forget|organize|done|idea` 分叉。
+> `action=learn` 每次都弹宿主确认卡，用户可选同意（写入）/ 拒绝（不写）/ 输入想法
+> （模型调 `idea` 后改好重提）；只有同意落盘。工具本身**跟随总开关开合**，在工具表里
+> 是只读行，`tool_manager_tools` 也不能把它开出来。记忆只分全局 / 本项目两层，正文存
+> `evolution/notes/`，不进用户记忆的场景体系。偏差理由见 `07-roadmap.md` 的
+> 「界面收敛」与「独立库 / 两层 / 逐条确认」两节。
 
 现有 5 条（`src/tools/memory.ts`）+ 新增 3 条 = 8 条。
 

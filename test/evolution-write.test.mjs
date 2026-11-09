@@ -422,7 +422,7 @@ test('setStatus：已被取代的条目拒绝恢复（新旧两条同时注入 =
   } finally { h.done() }
 })
 
-test('promote：auto_* 删干净、origin 变 user、从 state 与 catalog 里移出', async () => {
+test('promote：正文搬进用户记忆全局场景、auto_* 删干净、原文件进自主回收站', async () => {
   const h = harness()
   try {
     const r = await h.learner.learn(
@@ -435,15 +435,26 @@ test('promote：auto_* 删干净、origin 变 user、从 state 与 catalog 里�
     assert.equal(p.ok, true, p.error)
     assert.equal(p.promoted, true)
 
-    const doc = h.readDoc(r.id)
+    // 自主库与用户记忆是**两个目录**：只在原地改 origin 会让它两边都不出现
+    // （不进自动 catalog、也不在用户记忆段）—— 症状是"点了提升，这条凭空消失"。
+    const promotedId = 'global/' + String(r.id).split('/').pop()
+    const doc = h.readDoc(promotedId)
     assert.equal(pickField(doc, 'origin'), 'user')
     // 留一个 auto_ 字段就会在下一次全量重建时被重新收进自动段 —— 提升等于没提升。
     for (const field of ['auto_status', 'auto_key', 'auto_kind', 'auto_confidence', 'auto_basis', 'auto_workspace']) {
       assert.equal(pickField(doc, field), '', field + ' 必须删掉')
     }
+    // 原件移进自主回收站（evolution/trash，可人工找回），不留在原地变成幽灵。
+    let gone = false
+    try { h.readDoc(r.id) } catch { gone = true }
+    assert.ok(gone, '原文件不该还留在自主库')
+    const trash = readdirSync(join(h.stateDir, 'evolution', 'trash')).filter((f) => f.endsWith('.md'))
+    assert.equal(trash.length, 1, '回收站里该有一份可找回的正文')
+
     assert.equal(h.readState().entries[r.id], undefined, '它不再是自动条目，state 里不该留着')
     assert.equal(h.readCatalog().entries[r.id], undefined, 'catalog 只索引自动条目')
-    assert.equal(h.readIndex().rules[r.id].enabled, true, '提升后仍要注入（走用户记忆那条路）')
+    assert.equal(h.readIndex().rules[promotedId].enabled, true, '提升后仍要注入（走用户记忆那条路）')
+    assert.equal(h.readIndex().rules[r.id], undefined, '自动索引里已移出')
   } finally { h.done() }
 })
 

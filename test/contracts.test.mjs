@@ -4913,6 +4913,23 @@ test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器�
   assert.equal(asks('subagent_manager_switch', { name: 'x' }), false)
 })
 
+test('自主记忆只在「新增」时弹卡：回显原文与建议范围，其它动作不拦', () => {
+  const reason = (args) => argConditionalConfirmReason('memory_manager_auto', args, 'session')
+  const r = reason({ action: 'learn', text: '这个仓库统一用 pnpm', layer: 'workspace' })
+  assert.ok(r !== null)
+  assert.match(r, /用 pnpm/, '提议原文要回显 —— 用户批准的是这一句，不是"允许以后自动记"')
+  assert.match(r, /this project/)
+  assert.match(reason({ action: 'learn', text: '所有项目都先给结论', layer: 'global' }), /all projects/)
+  assert.match(reason({ action: 'learn', text: '先给结论' }), /this project/, '没给 layer 按本项目建议')
+  // 其它动作不弹卡：forget 只在用户要求时发生、organize 是只读草案、done 只记数、idea 无写入
+  assert.equal(reason({ action: 'forget', memory: 'global/x' }), null)
+  assert.equal(reason({ action: 'organize' }), null)
+  assert.equal(reason({ action: 'done', memory: 'global/x' }), null)
+  assert.equal(reason({ action: 'idea', idea: '换个说法' }), null)
+  // 缺正文的 learn 注定失败：不产生无效审批
+  assert.equal(reason({ action: 'learn' }), null)
+})
+
 // 签发端与校验端的指纹必须同口径（#22）：get-current 发的是 stampOfText 16 位指纹，
 // apply 核对时也要先算指纹再比 —— 任何一侧拿正文当指纹，应用预设就会恒判冲突静默失效。
 // deps 全部注入假实现：钉的是口径不变量，不碰真实文件与服务。

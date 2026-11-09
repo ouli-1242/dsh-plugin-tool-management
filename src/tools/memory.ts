@@ -79,7 +79,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         const rows: any[] = Array.isArray(r.entries) ? r.entries : []
         const limit = listLimit(args && args.limit)
         const shown = rows.slice(0, limit)
-        const order = ['session', 'workspace', 'scene', 'global']
+        const order = ['workspace', 'global']
         const lines: string[] = []
         for (const layer of order) {
           const group = shown.filter((e) => e.layer === layer)
@@ -478,9 +478,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory, one tool with four actions. action=learn: record one durable preference, fact, correction or repeatable procedure from this conversation (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). action=forget: delete a learned note, which stays un-learnable for 30 days — only when the user asks. action=organize: read-only draft of merges / archives / promotions for the user to apply. action=done: report that a recorded procedure really ran end-to-end; three verified runs promote it to a playbook (ok=false when it failed). Available only while autonomous memory is on.',
+    description: 'Autonomous memory. action=learn: propose one durable preference, fact, correction or repeatable procedure (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). The host asks the user before anything is written: they can approve, reject, or type an idea. On reject do NOT propose the same thing again in this conversation. On an idea, call action=idea with their words, then propose a revised version — the card will ask again. action=forget: delete a learned note (stays un-learnable for 30 days), only when the user asks. action=organize: read-only draft of merges / archives / promotions. action=done: report that a recorded procedure really ran end-to-end; three verified runs promote it to a playbook (ok=false when it failed). Available only while autonomous memory is on.',
     parameters: {
-      action: { type: 'string', enum: ['learn', 'forget', 'organize', 'done'], required: true, description: 'learn (default if omitted) / forget / organize / done.' },
+      action: { type: 'string', enum: ['learn', 'forget', 'organize', 'done', 'idea'], required: true, description: 'learn (default) / forget / organize / done / idea.' },
+      idea: { type: 'string', description: 'idea: the user\'s own words about how this note should change. Nothing is written; use it to revise the proposal.' },
       // ── learn ──
       text: { type: 'string', description: 'learn: one sentence, what to remember (<=400 chars).' },
       kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: what kind of thing it is; inferred from the text when omitted.' },
@@ -489,7 +490,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       key: { type: 'string', description: 'learn: short slot name like `package-manager` — the same key merges with the existing note.' },
       boundary: { type: 'string', description: 'learn: when it might not hold (e.g. "CI still uses npm").' },
       steps: { type: 'array', items: { type: 'string' }, description: 'learn: for kind=procedure, the ordered steps (2-12 short lines) actually followed. Without these it can never become a playbook or a skill.' },
-      layer: { type: 'string', enum: ['global', 'workspace', 'scene', 'session'], description: 'learn: where it applies. Omit to route by content.' },
+      layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project only). Omit to route by content; only explicit cross-project wording reaches global.' },
       ttlDays: { type: 'number', description: 'learn: days before it should be re-checked; defaults by kind.' },
       // ── forget / done ──
       memory: { type: 'string', description: 'forget / done: the learned note or procedure id, copied from the learned notes block.' },
@@ -505,6 +506,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         throw new Error('autonomous memory is off here, so nothing was done. The user can turn it on in Memory → Autonomous memory.')
       }
       const action = String((args && args.action) || 'learn')
+
+      if (action === 'idea') {
+        // 「输入想法」不是一次写入：只把用户的话接回模型手里，让它改好再提一次（会再弹卡）。
+        // 这样三个动作里只有「同意」会真正落盘，拒绝与想法都不产生记忆。
+        const note = String((args && args.idea) || '').trim()
+        if (note === '') throw new Error('missing argument: idea')
+        return 'Noted (nothing was saved): "' + note.slice(0, 400) + '". Rewrite the note to match this idea, then call action=learn again — the user will be asked once more.'
+      }
 
       if (action === 'forget') {
         const id = String((args && args.memory) || '').trim()
@@ -535,7 +544,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         return 'OK: recorded for ' + id + ' (' + String(r.successes) + ' successful / ' + String(r.failures) + ' failed). Three successful runs are needed to become a playbook.'
       }
 
-      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget / organize / done)')
+      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget / organize / done / idea)')
 
       // ── learn（默认）──
       const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
@@ -566,13 +575,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       if (Array.isArray(r.supersedes) && r.supersedes.length) parts.push('replaced ' + r.supersedes.join(', '))
       if (r.note) parts.push(String(r.note))
       if (r.needsReview) parts.push('needs review: ' + String(r.needsReview))
-      // 层要说出来：用户以为"只在这个对话里"，实际它进了工作区（下个会话还会出现）——
+      // 层要说出来：用户以为"只在这个项目里"，实际它进了全局（别的项目也会出现）——
       // 这个误读比记错内容更难发现。
       const layerNote: Record<string, string> = {
         global: 'applies in every project',
         workspace: 'applies in this project (visible to other conversations here too)',
-        scene: 'applies while that scene is on',
-        session: 'applies in this conversation only',
       }
       if (typeof r.layer === 'string' && layerNote[r.layer]) parts.push(layerNote[r.layer])
       return parts.join('; ')

@@ -106,6 +106,7 @@ import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readInd
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
 import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
 import { buildCatalog, catalogPathOf } from './catalog.js'
+import { autoNotesRootOf, migrateLegacyAutoNotes } from '../evolution/notes.js'
 import { watchDirectories } from '../skills/dir-watch.js'
 import type { ParsedSkillDoc, DiscoveredEntry, Snapshot } from './snapshot.js'
 
@@ -145,6 +146,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   // 旧的 $DSH_HOME/scene-memory 与更旧的 $DSH_HOME/rules 由 relocateLegacyLayout() 搬入。
   const stateDir = deps.stateDir && deps.stateDir.trim() !== '' ? resolve(deps.stateDir) : join(resolveDshHome(), HUB_DIR)
   const memoriesRoot = deps.memoriesRoot && deps.memoriesRoot.trim() !== '' ? resolve(deps.memoriesRoot) : join(stateDir, MEMORIES_DIR)
+  // 自主记忆的独立根：正文与它自己的启停索引都住这里，不进用户记忆的场景体系。
+  const autoNotesRoot = autoNotesRootOf(stateDir)
   const scenesRoot = deps.scenesDir && deps.scenesDir.trim() !== '' ? resolve(deps.scenesDir) : join(stateDir, SCENES_DIR)
   const maxBytes = Number.isFinite(deps.maxBytes) && deps.maxBytes! > 0 ? deps.maxBytes! : DEFAULT_MAX_BYTES
 
@@ -160,6 +163,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     }
     try {
       await mkdir(join(memoriesRoot, GLOBAL_SCENE), { recursive: true })
+      await mkdir(autoNotesRoot, { recursive: true })
       await mkdir(scenesRoot, { recursive: true })
     } catch {
       /* 目录建不出来时后面的 op 会各自报错，这里不提前抛 */
@@ -704,8 +708,14 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
    * 失败一律吞掉 —— 派生索引坏了的后果是"这轮注入少几条"，而抛出去会让写操作假失败。
    */
   const rebuildCatalog = async (): Promise<void> => {
-    const index = await readIndex(stateDir)
-    const built = await buildCatalog(memoriesRoot, index)
+    // 一次性迁移放在重建之前：老版本把自动条目写在 memories/ 下，不搬过来它们就永远
+    // 不进这份 catalog。marker 让这一步整体幂等，写后每次重建也不会重复搬。
+    await migrateLegacyAutoNotes({ memoriesRoot, stateDir, autoRoot: autoNotesRoot }).catch(() => undefined)
+    // 读**自主库自己那份**索引，不是用户记忆的 memories-index.json：启停 / 置顶是两码事，
+    // 共用一份就会出现「用户停用了一个场景，自动条目跟着消失」。
+    await mkdir(autoNotesRoot, { recursive: true })
+    const index = await readIndex(autoNotesRoot)
+    const built = await buildCatalog(autoNotesRoot, index)
     await mkdir(join(stateDir, 'evolution'), { recursive: true })
     await writeFileAtomically(catalogPathOf(stateDir), JSON.stringify(built, null, 2) + '\n', { mode: 0o600 })
   }
@@ -1205,6 +1215,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
         }
       },
       memoriesRoot,
+      /** 自主记忆自己的根目录（装配 learner / dreamer 时传它，别再传 memoriesRoot）。 */
+      autoNotesRoot,
       stateDir,
       invalidateSnapshot,
       rebuildCatalog,

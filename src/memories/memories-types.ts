@@ -252,8 +252,10 @@ export interface MemoriesService {
      * 场景层要不要露头。`null` = 一个都没启用（此时场景层的自动记忆不注入）。
      */
     activeSceneSync(scope?: MemoryScopeOverride): string | null
-    /** 记忆根目录（绝对路径）。 */
+    /** 用户记忆根目录（绝对路径）。 */
     memoriesRoot: string
+    /** 自主记忆独立根目录（绝对路径；与用户记忆的场景体系隔离）。 */
+    autoNotesRoot: string
     /** 索引所在目录（hub 根）。 */
     stateDir: string
     /** 写后失效快照缓存。 */

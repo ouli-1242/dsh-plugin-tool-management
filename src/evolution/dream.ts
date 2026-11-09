@@ -677,13 +677,19 @@ export function createDreamer(deps: DreamDeps) {
         const dir = join(deps.stateDir, DREAMS_DIR, id)
         try {
           await mkdir(join(dir, 'backup'), { recursive: true })
-          for (const rel of ['evolution/state.json', 'memories-index.json']) {
-            const from = join(deps.stateDir, rel)
-            if (!(await stat(from).then(() => true).catch(() => false))) continue
-            const to = join(dir, 'backup', rel)
+          // state.json 在 stateDir；启停索引是**自主库自己那份**（deps.memoriesRoot 现在指
+          // evolution/notes），不是用户记忆的 memories-index.json —— 后者根本不在备份范围。
+          // 两条备份 rel 都挂在 `memories/` 前缀下，回滚时才映得回自主根目录。
+          const stateFiles = [
+            { rel: 'evolution/state.json', from: join(deps.stateDir, 'evolution/state.json') },
+            { rel: 'memories/memories-index.json', from: join(deps.memoriesRoot, 'memories-index.json') },
+          ]
+          for (const f of stateFiles) {
+            if (!(await stat(f.from).then(() => true).catch(() => false))) continue
+            const to = join(dir, 'backup', f.rel)
             await mkdir(dirname(to), { recursive: true })
-            await copyFile(from, to)
-            backup.push(rel)
+            await copyFile(f.from, to)
+            backup.push(f.rel)
           }
           for (const mid of files) {
             const slash = mid.lastIndexOf('/')

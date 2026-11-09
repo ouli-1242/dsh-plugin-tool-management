@@ -117,8 +117,10 @@ export const AUTO_L1_MIN_CONFIDENCE = 0.7
 export const AUTO_LAYER_BUDGET: Record<MemoryLayer, { min: number; max: number }> = {
   global: { min: 100, max: 300 },
   workspace: { min: 200, max: 650 },
-  scene: { min: 80, max: 300 },
-  session: { min: 120, max: 350 },
+  // 会话层 / 场景层已取消：留着键只为读旧 catalog 不炸，配额归零，
+  // 免得「用户段过大时压到各层 min 之和」还把两份用不到的下限算进去。
+  scene: { min: 0, max: 0 },
+  session: { min: 0, max: 0 },
 }
 /** 单行摘要截断长度（注入用）。 */
 export const AUTO_ONELINE_MAX = 160

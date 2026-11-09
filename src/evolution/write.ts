@@ -18,9 +18,10 @@ import { hubPath } from '../hub.js'
 import { writeFileAtomically, readIndex, writeIndex } from '../memories/index-io.js'
 import { catalogEntryOf, catalogPathOf, normalizeCatalog, type CatalogFile } from '../memories/catalog.js'
 import {
-  LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE,
+  GLOBAL_SCENE, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE,
   isValidGroupPath, isValidGroupSegment, type MemoryLayer,
 } from '../memories/constants.js'
+import { trashAutoNote } from './notes.js'
 import { layerOfGroup } from '../memories/constants.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
 import type { EffectiveEvolutionConfig } from './config.js'
@@ -94,10 +95,14 @@ export interface LearnDeps {
   knownWorkspaces(): Promise<Set<string>>
   /** 序列化 frontmatter + 正文（复用记忆域的现成实现）。 */
   serializeRuleFile(fields: Record<string, string | boolean>, body: string): string
-  /** 记忆根目录绝对路径。 */
+  /** 用户记忆根目录（兼容回落；生产应传 `notesRoot`）。 */
   memoriesRoot: string
-  /** 索引所在目录（hub 根）。 */
+  /** 自主记忆根目录绝对路径。不传时回落 `memoriesRoot`。 */
+  notesRoot?: string
+  /** 索引所在目录（hub 根；catalog / 日志仍认它）。 */
   stateDir: string
+  /** 自主记忆自己的启停索引目录。不传时回落 `stateDir`。 */
+  indexDir?: string
   /** 写后失效快照缓存。 */
   invalidateSnapshot(): void
   /** 串行化写（与记忆域同一把锁）。 */
@@ -137,6 +142,10 @@ const cjkOrWord = (s: string): boolean => /\p{L}/u.test(s)
 
 export function createLearner(deps: LearnDeps) {
   const { state } = deps
+  // 正文与启停索引都落在自主记忆自己的库里；两个旧字段只作兼容回落（测试自造 deps 时
+  // 仍按原来的临时目录跑），生产装配会把 notesRoot / indexDir 都指到 evolution/notes。
+  const notesRoot = deps.notesRoot ?? deps.memoriesRoot
+  const indexDir = deps.indexDir ?? deps.stateDir
 
   /** 会话层目录名：sid 必须是合法段名，否则拒绝（回退会让两个会话共享同一目录）。 */
   function sessionSegmentOk(sid: string): boolean {
@@ -241,8 +250,8 @@ export function createLearner(deps: LearnDeps) {
   ): Promise<LearnResult> {
     const now = new Date()
     const nowIso = now.toISOString()
-    const root = deps.memoriesRoot
-    const index = await readIndex(deps.stateDir)
+    const root = notesRoot
+    const index = await readIndex(indexDir)
 
     if (!isValidGroupPath(pass.group)) {
       return { ok: false, code: 'bad-group', error: `internal: routed to an invalid directory "${pass.group}"`, gate: 'layer' }
@@ -322,7 +331,7 @@ export function createLearner(deps: LearnDeps) {
       enabled: true,
       updatedAt: nowIso,
     }
-    await writeIndex(deps.stateDir, index)
+    await writeIndex(indexDir, index)
 
     // ── ④ 取代旧的同 key 条目 ──
     const superseded: string[] = []
@@ -330,7 +339,7 @@ export function createLearner(deps: LearnDeps) {
       const ok = await markSuperseded(oldId, id, st, nowIso, index)
       if (ok) superseded.push(oldId)
     }
-    if (superseded.length > 0) await writeIndex(deps.stateDir, index)
+    if (superseded.length > 0) await writeIndex(indexDir, index)
 
     // ── ⑤ state 落盘（放在前四步之后：正文与索引都在了，状态最后写才不会被"有状态无文件"毁掉） ──
     const written = await state.write(st)
@@ -375,7 +384,7 @@ export function createLearner(deps: LearnDeps) {
     if (slash <= 0) return null
     const group = targetId.slice(0, slash)
     const name = targetId.slice(slash + 1)
-    const docPath = join(deps.memoriesRoot, group, name + '.md')
+    const docPath = join(notesRoot, group, name + '.md')
     let existing: string
     try {
       existing = await readFile(docPath, 'utf8')
@@ -446,7 +455,7 @@ export function createLearner(deps: LearnDeps) {
     if (slash <= 0) return false
     const group = oldId.slice(0, slash)
     const name = oldId.slice(slash + 1)
-    const docPath = join(deps.memoriesRoot, group, name + '.md')
+    const docPath = join(notesRoot, group, name + '.md')
     try {
       const text = await readFile(docPath, 'utf8')
       await writeFileAtomically(
@@ -556,7 +565,7 @@ export function createLearner(deps: LearnDeps) {
       const name = id.slice(slash + 1)
       const layer = layerOfGroup(group)
       const entry = st.entries[id]
-      const docPath = join(deps.memoriesRoot, group, name + '.md')
+      const docPath = join(notesRoot, group, name + '.md')
       const raw = await safeRead(docPath)
       const key = pickField(raw, 'auto_key')
       const body = normalizeForCompare(raw)
@@ -597,10 +606,10 @@ export function createLearner(deps: LearnDeps) {
 
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
-      const index = await readIndex(deps.stateDir)
+      const index = await readIndex(indexDir)
       if (index.rules[id]) {
         index.rules[id] = { ...index.rules[id], enabled: false, updatedAt: new Date().toISOString() }
-        await writeIndex(deps.stateDir, index)
+        await writeIndex(indexDir, index)
       }
       await demoteCatalog(id, 'archived')
       deps.invalidateSnapshot()
@@ -626,7 +635,7 @@ export function createLearner(deps: LearnDeps) {
       if (slash <= 0) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
       const group = id.slice(0, slash)
       const name = id.slice(slash + 1)
-      const docPath = join(deps.memoriesRoot, group, name + '.md')
+      const docPath = join(notesRoot, group, name + '.md')
       let text: string
       try {
         text = await readFile(docPath, 'utf8')
@@ -648,9 +657,9 @@ export function createLearner(deps: LearnDeps) {
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
-      const index = await readIndex(deps.stateDir)
+      const index = await readIndex(indexDir)
       index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: true, updatedAt: nowIso }
-      await writeIndex(deps.stateDir, index)
+      await writeIndex(indexDir, index)
       await patchCatalogEntry(id, { status: 'active', enabled: true, confidence: entry.confidence })
       deps.invalidateSnapshot()
       return {
@@ -693,7 +702,7 @@ export function createLearner(deps: LearnDeps) {
       const split = splitId(id)
       if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
       const { group, name, layer } = split
-      const docPath = join(deps.memoriesRoot, group, name + '.md')
+      const docPath = join(notesRoot, group, name + '.md')
       let text: string
       try {
         text = await readFile(docPath, 'utf8')
@@ -769,9 +778,9 @@ export function createLearner(deps: LearnDeps) {
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
-      const index = await readIndex(deps.stateDir)
+      const index = await readIndex(indexDir)
       index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: status !== 'archived', updatedAt: nowIso }
-      await writeIndex(deps.stateDir, index)
+      await writeIndex(indexDir, index)
       await patchCatalogEntry(id, {
         status,
         enabled: status !== 'archived',
@@ -797,7 +806,7 @@ export function createLearner(deps: LearnDeps) {
       const split = splitId(id)
       if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
       const { group, name, layer } = split
-      const docPath = join(deps.memoriesRoot, group, name + '.md')
+      const docPath = join(notesRoot, group, name + '.md')
       let text: string
       try {
         text = await readFile(docPath, 'utf8')
@@ -814,20 +823,32 @@ export function createLearner(deps: LearnDeps) {
       const nowIso = new Date().toISOString()
       // 字段逐个置 null（= 删掉），不是整块重写：正文里可能有用户手改过的措辞，
       // 只动 frontmatter 才保得住。
-      await writeFileAtomically(docPath, rewriteFrontmatterFields(text, {
+      const stripped = rewriteFrontmatterFields(text, {
         origin: 'user',
         auto_status: null, auto_kind: null, auto_key: null, auto_confidence: null,
         auto_basis: null, auto_boundary: null, auto_degraded: null, auto_superseded_by: null,
         auto_workspace: null, auto_scene: null, auto_ttl_days: null,
         auto_created: null, auto_updated: null,
-      }))
+      })
+      // 自主库与用户记忆是**两个目录**：只在原地改 origin 会让它既不进自动 catalog、
+      // 也不在用户记忆段里 —— 症状是"点了提升，这条凭空消失"。所以正文搬进用户的全局场景。
+      const destDir = join(deps.memoriesRoot, GLOBAL_SCENE)
+      await mkdir(destDir, { recursive: true })
+      let destName = name
+      for (let i = 2; await exists(join(destDir, destName + '.md')) && i <= 20; i++) destName = `${name}-${i}`
+      const userId = `${GLOBAL_SCENE}/${destName}`
+      await writeFileAtomically(join(destDir, destName + '.md'), stripped)
+      // 原件移进自主回收站（可找回），不留在原地变成幽灵。
+      await trashAutoNote(notesRoot, deps.stateDir, id).catch(() => undefined)
+      const userIndex = await readIndex(deps.stateDir)
+      userIndex.rules[userId] = { ...(userIndex.rules[userId] ?? { order: 1000 }), enabled: true, updatedAt: nowIso }
+      await writeIndex(deps.stateDir, userIndex)
+      const autoIndex = await readIndex(indexDir)
+      delete autoIndex.rules[id]
+      await writeIndex(indexDir, autoIndex)
       delete st.entries[id]
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
-
-      const index = await readIndex(deps.stateDir)
-      index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: true, updatedAt: nowIso }
-      await writeIndex(deps.stateDir, index)
       await dropCatalogEntry(id)
       deps.invalidateSnapshot()
       return { ok: true, id, layer, status: 'active' as const, confidence: 0, promoted: true as const }
@@ -884,8 +905,8 @@ export function createLearner(deps: LearnDeps) {
       let keepText: string
       let dropText: string
       try {
-        keepText = await readFile(join(deps.memoriesRoot, keepAt.group, keepAt.name + '.md'), 'utf8')
-        dropText = await readFile(join(deps.memoriesRoot, dropAt.group, dropAt.name + '.md'), 'utf8')
+        keepText = await readFile(join(notesRoot, keepAt.group, keepAt.name + '.md'), 'utf8')
+        dropText = await readFile(join(notesRoot, dropAt.group, dropAt.name + '.md'), 'utf8')
       } catch {
         return { ok: false, code: 'missing', error: 'one of the memories no longer exists' }
       }
@@ -899,7 +920,7 @@ export function createLearner(deps: LearnDeps) {
       const dropBody = bodyOf(dropText).replaceAll(/\s+/g, ' ').trim().slice(0, 160)
       const prevBoundary = pickField(keepText, 'auto_boundary')
       const nextBoundary = dedupeBoundary(prevBoundary, dropBody)
-      await writeFileAtomically(join(deps.memoriesRoot, keepAt.group, keepAt.name + '.md'), rewriteFrontmatterFields(keepText, {
+      await writeFileAtomically(join(notesRoot, keepAt.group, keepAt.name + '.md'), rewriteFrontmatterFields(keepText, {
         auto_boundary: nextBoundary,
         auto_updated: nowIso,
       }))
@@ -917,9 +938,9 @@ export function createLearner(deps: LearnDeps) {
       keepEntry.confidence = confidenceOf(keepEntry.evidence, keepEntry.counters.harmful)
       st.entries[keepId] = keepEntry
 
-      const index = await readIndex(deps.stateDir)
+      const index = await readIndex(indexDir)
       await markSuperseded(dropId, keepId, st, nowIso, index)
-      await writeIndex(deps.stateDir, index)
+      await writeIndex(indexDir, index)
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
       await patchCatalogEntry(keepId, { confidence: keepEntry.confidence })
@@ -940,7 +961,7 @@ export function createLearner(deps: LearnDeps) {
     if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
     let text: string
     try {
-      text = await readFile(join(deps.memoriesRoot, split.group, split.name + '.md'), 'utf8')
+      text = await readFile(join(notesRoot, split.group, split.name + '.md'), 'utf8')
     } catch {
       return { ok: false, code: 'missing', error: `not found: ${id}` }
     }
@@ -995,7 +1016,7 @@ export function createLearner(deps: LearnDeps) {
       const st = read.state
       const split = splitId(id)
       if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
-      const docPath = join(deps.memoriesRoot, split.group, split.name + '.md')
+      const docPath = join(notesRoot, split.group, split.name + '.md')
       let text: string
       try {
         text = await readFile(docPath, 'utf8')

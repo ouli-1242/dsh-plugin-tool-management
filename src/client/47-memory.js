@@ -1442,12 +1442,15 @@
             var eff = (st && st.effective) || {}
             var overall = eff.enabled === true
             var rows = evo.entries || []
-            var groups = [['session', 'evo.group.session'], ['workspace', 'evo.group.workspace'], ['scene', 'evo.group.scene'], ['global', 'evo.group.global']]
+            // 只有全局与本项目两层；迁移过来的旧会话/场景条目标成 archived，归到本项目组展示。
+            var groups = [['workspace', 'evo.group.workspace'], ['global', 'evo.group.global']]
             var list = rows.length === 0
               ? React.createElement('p', { key: 'empty', className: 'dsm-help' }, t('evo.empty'))
               : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
                   groups.map(function (g) {
-                    var part = rows.filter(function (e) { return e.layer === g[0] })
+                    var part = rows.filter(function (e) {
+                      return e.layer === g[0] || (g[0] === 'workspace' && (e.layer === 'session' || e.layer === 'scene'))
+                    })
                     if (!part.length) return null
                     return React.createElement('div', { key: 'g:' + g[0], className: 'dsm-evo-group' },
                       React.createElement('div', { className: 'dsm-evo-group-head' },

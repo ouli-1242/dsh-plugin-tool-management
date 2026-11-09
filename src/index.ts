@@ -65,6 +65,7 @@ import { createEpisodeStore } from './evolution/episodes.js'
 import { createReviewBudget, createReviewer } from './evolution/review.js'
 // 整理（P3）：全库草案 + 应用/回滚；维护扫描：TTL / 会话 GC / 配额。
 import { createDreamer, shouldDreamToday, shouldRetryDream, type DreamEntryView, type Dreamer } from './evolution/dream.js'
+import { trashAutoNote } from './evolution/notes.js'
 import { healthOf, runSweep, shouldSweepNow, type SweepEntry, type SweepReport } from './evolution/maintenance.js'
 import { createProcedureSkillStore, type ProcedureSkillStore } from './evolution/procedure.js'
 // 真源状态（证据 / 计数器 / 墓碑）：读坏就停写，不静默覆盖。
@@ -2300,7 +2301,10 @@ export default {
       },
       knownWorkspaces: async () => new Set(Object.keys((await evolutionConfig.readWorkspaces()).workspaces)),
       serializeRuleFile: memoriesService.autoAccess.serializeRuleFile,
+      // 自主记忆写自己的库：正文、启停索引都不碰用户记忆的目录与 memories-index.json。
       memoriesRoot: memoriesService.autoAccess.memoriesRoot,
+      notesRoot: memoriesService.autoAccess.autoNotesRoot,
+      indexDir: memoriesService.autoAccess.autoNotesRoot,
       stateDir: memoriesService.autoAccess.stateDir,
       invalidateSnapshot: () => {
         memoriesService.autoAccess.invalidateSnapshot()
@@ -4466,9 +4470,15 @@ export default {
       config: evolutionConfig,
       runtime: evolutionRuntime,
       learner: autoLearner,
+      // 自主记忆的正文住独立库，不能走用户记忆的 rules-remove（那边找不到文件，
+      // 还会把用户记忆回收站写脏）。移进 evolution/trash/，可人工找回。
       removeMemory: async (id: string) => {
-        const r: any = await memoriesService.ops['rules-remove']({ id })
-        return { ok: r?.ok !== false, ...(r?.error ? { error: String(r.error) } : {}) }
+        const ok = await trashAutoNote(
+          memoriesService.autoAccess.autoNotesRoot,
+          memoriesService.autoAccess.stateDir,
+          id,
+        ).catch(() => false)
+        return ok ? { ok: true } : { ok: false, error: `not found: ${id}` }
       },
       // 界面的「本工作区」开关只知道自己当前是哪个对话：按会话 id 查一次 cwd。
       // 与 scope 页同一份来源（`scopeSessionRows`），不另建一套映射 —— 两套迟早分家，
@@ -4635,7 +4645,7 @@ export default {
       episodes: episodeStore,
       entries: evolutionEntryView,
       rebuildCatalog: () => memoriesService.autoAccess.rebuildCatalog(),
-      memoriesRoot: memoriesService.autoAccess.memoriesRoot,
+      memoriesRoot: memoriesService.autoAccess.autoNotesRoot,
       stateDir: memoriesService.autoAccess.stateDir,
       withWriteLock,
       log: evolutionLog,
@@ -5865,6 +5875,9 @@ export default {
         // 控制面工具：开关工具表**默认不问**（只动管着这个对话的那一层，随时可退），
         // 只有机器级那一档与修复类动作问（判据在 confirm-gate.ts）。
         tool_manager_tools: '「插件工具表」',
+        // 自主记忆新增：每次 learn 都在对话里问一次，卡面回显提议原文与建议范围。
+        // 只有「同意」会落盘；拒绝与输入想法都不产生记忆。
+        [PROACTIVE_MEMORY_TOOL]: '「自主记忆·新增」',
       }
       const bypassedByFullAccess = (exec: any): boolean => {
         if (!isApprovalNever(ctx, exec)) return false

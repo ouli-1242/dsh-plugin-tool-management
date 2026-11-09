@@ -16,6 +16,8 @@
 // 本模块保持纯函数：不读磁盘、不看会话、不抛错。参数不成立（缺 id / 不是布尔）时返回
 // `null` 让工具自己报错 —— 给一次注定失败的调用弹卡只会产生无效审批。
 
+import { PROACTIVE_MEMORY_TOOL } from './tools/table.js'
+
 /** 隔离粒度（与 `scope/scope-overrides.ts` 的 `ScopeMode` 同形，这里只取用到的三档）。 */
 export type ConfirmScopeMode = 'global' | 'session' | 'workspace'
 
@@ -32,6 +34,7 @@ export const ARG_CONDITIONAL_CONFIRM_TOOLS: ReadonlySet<string> = new Set([
   'skill_manager_switch',
   'subagent_manager_switch',
   'tool_manager_tools',
+  PROACTIVE_MEMORY_TOOL,
 ])
 
 /** 取一个必填字符串参数；不是非空字符串就返回空串。 */
@@ -79,6 +82,23 @@ export function argConditionalConfirmReason(
 ): string | null {
   const args = (rawArgs !== null && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
   const action = text(args.action)
+
+  if (name === PROACTIVE_MEMORY_TOOL) {
+    // 只问「新增」这一下：删除/整理/回报/反馈都不该弹卡（整理是只读草案、done 只是记数）。
+    // 卡上把提议原文和建议范围回显出来 —— 用户批准的是**这一句话**，不是"允许以后自动记"。
+    // 三个动作：同意=批准执行（写入）、拒绝=工具不执行、输入想法=用户写文字让模型改后重提。
+    // 卡文沿用本文件的英文惯例（其余 reason 也都是英文）。
+    if (action !== 'learn' && action !== '') return null
+    const note = text(args.text)
+    if (note === '') return null
+    const scope = text(args.layer) === 'global' ? 'all projects' : 'this project'
+    return [
+      'Autonomous memory wants to add a note (suggested scope: ' + scope + '):',
+      '「' + note.slice(0, 200) + '」',
+      'Approve → it is written to the autonomous library; Reject → nothing is saved; Idea → type how it should change, the agent revises it and asks again.',
+      'Only the autonomous library is touched — your hand-written memories and scenes are unaffected.',
+    ].join('\n')
+  }
 
   if (name.endsWith('_remove')) {
     // 只有 trash 是删除。list 是读、restore 是恢复（与 mcp 的 restart 同一档，不该拦）。

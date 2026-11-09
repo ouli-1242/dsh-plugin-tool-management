@@ -33,8 +33,8 @@ export const narrowerOf = (a: MemoryLayer, b: MemoryLayer): MemoryLayer => (LAYE
  * "两个看起来一样的选项行为不同"的坑。
  */
 export function capLayerOf(target: WriteTarget): MemoryLayer {
-  if (target === 'session') return LAYER_SESSION
-  if (target === 'workspace') return LAYER_WORKSPACE
+  // 会话层已取消：旧配置里残留的 `session` 按最窄的工作区解释，不再产生 `_session/` 目录。
+  if (target === 'session' || target === 'workspace') return LAYER_WORKSPACE
   return LAYER_GLOBAL
 }
 
@@ -101,76 +101,51 @@ export type DegradeReason = 'scope-too-narrow' | 'no-scene' | 'no-workspace' | '
 
 /** 降级原因的人话（界面与工具回执共用一份，避免两处措辞不同）。 */
 export const DEGRADE_NOTE: Record<DegradeReason, string> = {
-  'scope-too-narrow': '记到了更窄的层（当前的写入上限不允许更宽）',
-  'no-scene': '当前没有启用场景，记到了工作区层',
-  'no-workspace': '拿不到工作区路径，记到了本次会话层',
-  'no-session': '拿不到会话 id，记到了工作区层',
+  'scope-too-narrow': '记到了本项目（当前的写入上限不允许全局）',
+  'no-scene': '场景层已取消，记到了本项目',
+  'no-workspace': '拿不到工作区路径，记到了全局',
+  'no-session': '会话层已取消，记到了本项目',
 }
 
 export function routeLayer(input: RouteInput): RouteResult {
-  // ① 想要哪层。顺序即优先级：模型显式指定 > 全局措辞 > 场景措辞 > 有工作区 > 会话兜底。
-  let desired: MemoryLayer
-  if (input.forcedLayer) {
-    desired = input.forcedLayer
-  } else if ((input.source === 'user_explicit' || input.source === 'user_correction') && hasGlobalPhrase(input.text)) {
-    desired = LAYER_GLOBAL
-  } else if (input.scene && hasScenePhrase(input.text)) {
-    desired = LAYER_SCENE
-  } else if (input.workspaceHash) {
-    desired = LAYER_WORKSPACE
-  } else {
-    desired = LAYER_SESSION
-  }
+  // 只判两种层：**全局 / 本项目**。会话层与场景层已取消 —— 它们和用户记忆的场景单选
+  // 绑在一起（一个场景开着就不能开别的），而自主记忆不参与那套机制。
+  //
+  // 判据刻意不交给模型：只有①用户明说/纠正且带明确跨项目措辞，或②显式 `layer=global`，
+  // 才升全局；其余一律本项目。`forcedLayer` 里的 session/scene 一律按本项目解释。
+  const wantsGlobal =
+    input.forcedLayer === LAYER_GLOBAL ||
+    ((input.source === 'user_explicit' || input.source === 'user_correction') && hasGlobalPhrase(input.text))
 
-  // ② 环境兜底：想要的层缺身份就往下退，退到会话为止。
-  let degraded: DegradeReason | undefined
-  if (desired === LAYER_SCENE && !input.scene) {
-    desired = input.workspaceHash ? LAYER_WORKSPACE : LAYER_SESSION
-    degraded = 'no-scene'
-  }
-  if (desired === LAYER_WORKSPACE && !input.workspaceHash) {
-    desired = LAYER_SESSION
-    degraded = 'no-workspace'
-  }
-  if (desired === LAYER_GLOBAL && !input.scene && !input.workspaceHash) {
-    // 全局不需要环境身份，不降级；这一支留空是刻意的（写出来才说明"这里真的不降"）。
-    degraded = undefined
-  }
-
-  // ③ 上限。取更窄者。
   const cap = capLayerOf(input.writeTarget)
-  const layer = narrowerOf(desired, cap)
-  if (layer !== desired && degraded === undefined) degraded = 'scope-too-narrow'
-
-  // ④ 算出目录。落层缺身份时再退一格（理论上已被 ② 挡住，这里是最后一道）。
+  // `desired` 记**原始想要**，不随后续降级改写：界面解释"为什么被降级"靠它对照
+  // （想要全局、落了本项目），改写了这句解释就没法生成。
+  const desired: MemoryLayer = wantsGlobal ? LAYER_GLOBAL : LAYER_WORKSPACE
+  let layer = desired
+  let degraded: DegradeReason | undefined
+  if (layer === LAYER_GLOBAL && cap !== LAYER_GLOBAL) {
+    layer = LAYER_WORKSPACE
+    degraded = 'scope-too-narrow'
+  }
   let group: string
   if (layer === LAYER_GLOBAL) {
     group = 'global'
-  } else if (layer === LAYER_SCENE) {
-    group = input.scene ?? 'global'
-    if (!input.scene) degraded = degraded ?? 'no-scene'
-  } else if (layer === LAYER_WORKSPACE) {
-    if (input.workspaceHash) group = `_ws/${input.workspaceHash}`
-    else {
-      group = input.sessionId ? `_session/${input.sessionId}` : 'global'
-      degraded = degraded ?? 'no-workspace'
-    }
+  } else if (input.workspaceHash) {
+    group = `_ws/${input.workspaceHash}`
   } else {
-    if (input.sessionId) group = `_session/${input.sessionId}`
-    else {
-      group = input.workspaceHash ? `_ws/${input.workspaceHash}` : 'global'
-      degraded = degraded ?? 'no-session'
-    }
+    // 拿不到工作区身份时不静默丢：落到全局并留降级痕迹，界面会说明"这条没绑到本项目"。
+    // 宁可多一条全局，也不要一条学完永远看不见的记忆。
+    layer = LAYER_GLOBAL
+    group = 'global'
+    degraded = degraded ?? 'no-workspace'
   }
 
   return { layer, group, desired, ...(degraded !== undefined ? { degraded } : {}) }
 }
 
-/** 从 group 反推层（与 `layerOfGroup` 同源，这里只做一次断言式收窄，便于调用方拿类型）。 */
+/** 从 group 反推层；旧 `_session/` / 场景目录一律按本项目读（迁移后只作兼容）。 */
 export function layerOfRoute(group: string): MemoryLayer {
   const head = String(group ?? '').split('/')[0]
   if (head === 'global') return LAYER_GLOBAL
-  if (head === '_ws') return LAYER_WORKSPACE
-  if (head === '_session') return LAYER_SESSION
-  return LAYER_SCENE
+  return LAYER_WORKSPACE
 }

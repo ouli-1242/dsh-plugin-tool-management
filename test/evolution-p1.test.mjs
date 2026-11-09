@@ -15,8 +15,9 @@ import { renderAutoBlock, allocateByLayer, autoBudgetOf, competitorBudgetOf } fr
 /**
  * 门禁上下文：给一份最小可用的默认值，逐个测试只覆盖它关心的字段。
  *
- * `workspaceHash` 必须给：不给的话路由会落到会话层，而会话层没有 sid 就会被层门拒绝 ——
- * 那是**正确**行为（无处可落），但会让每个"期望通过"的测试都红在层门上，掩盖真正要测的东西。
+ * `workspaceHash` 必须给：不给的话路由会落到全局层并标 `no-workspace` 降级 ——
+ * 那是**正确**行为（没有更近的地方可落），但会让每个"期望工作区"的测试都红在层上，
+ * 掩盖真正要测的东西。
  */
 const ctxOf = (patch = {}) => ({
   writeTarget: 'route',
@@ -77,22 +78,27 @@ test('路由：全局措辞只有「用户明说」才算数', () => {
 test('路由：writeTarget 是上限，不是目标', () => {
   const r = routeLayer({ text: '以后所有项目都先给结论', source: 'user_explicit', writeTarget: 'workspace', workspaceHash: 'abcd1234abcd1234' })
   assert.equal(r.layer, 'workspace')
-  assert.equal(r.desired, 'global')
+  assert.equal(r.desired, 'global', 'desired 记原始想要，界面靠它解释"为什么被降级"')
   assert.equal(r.degraded, 'scope-too-narrow')
 })
 
-test('路由：缺身份时逐级退，不退到别的会话', () => {
+test('路由：拿不到工作区身份就落全局并留痕（不静默丢）', () => {
   const noScene = routeLayer({ text: '这个场景不要用表格', source: 'user_explicit', writeTarget: 'route', workspaceHash: 'abcd1234abcd1234' })
-  assert.equal(noScene.layer, 'workspace')
+  assert.equal(noScene.layer, 'workspace', '场景措辞不再产生场景层，按本项目落')
   const noWs = routeLayer({ text: '别动 migrations', source: 'model_inference', writeTarget: 'route' })
-  assert.equal(noWs.layer, 'session')
-  // 上限=会话时，工作区内容也只能当便签
-  assert.equal(narrowerOf('workspace', 'session'), 'session')
+  assert.equal(noWs.layer, 'global')
+  assert.equal(noWs.degraded, 'no-workspace', '宁可多一条全局，也不要一条学完永远看不见的')
+  // 取窄仍有定义：全局比本项目宽
+  assert.equal(narrowerOf('global', 'workspace'), 'workspace')
 })
 
-test('路由：模型显式指定的层也越不过上限', () => {
+test('路由：模型显式指定的层也越不过上限；旧 session/scene 按本项目解释', () => {
   const r = routeLayer({ text: '别动 migrations', source: 'model_inference', writeTarget: 'session', workspaceHash: 'abcd1234abcd1234', forcedLayer: 'global' })
-  assert.equal(r.layer, 'session')
+  assert.equal(r.layer, 'workspace')
+  assert.equal(r.desired, 'global')
+  assert.equal(r.degraded, 'scope-too-narrow')
+  const legacy = routeLayer({ text: '别动 migrations', source: 'model_inference', writeTarget: 'route', workspaceHash: 'abcd1234abcd1234', forcedLayer: 'session' })
+  assert.equal(legacy.layer, 'workspace', '会话层已取消：旧入参不再产生 _session 目录')
 })
 
 // ── 九道门 ─────────────────────────────────────────────────────────────────
@@ -158,10 +164,11 @@ test('配额门：该层满了就拒，并说清怎么解', () => {
   assert.match(r.error, /limit/)
 })
 
-test('层门：会话层没有 sid 就拒（不静默落到别处）', () => {
+test('层门：旧的 session 层按本项目落（不再产生 _session 目录，也不静默丢）', () => {
   const r = runGates({ text: '别动 migrations', source: 'model_inference', layer: 'session' }, ctxOf())
-  assert.equal(r.ok, false)
-  assert.equal(r.gate, 'layer')
+  assert.equal(r.ok, true)
+  assert.equal(r.layer, 'workspace')
+  assert.ok(!String(r.group).startsWith('_session/'), r.group)
 })
 
 test('冲突门：与用户写的记忆冲突 → 只进候选等裁决，且不取代它', () => {
@@ -293,18 +300,19 @@ test('自动段：预算按上下文窗口算，且有硬上下限', () => {
   assert.equal(autoBudgetOf(1_000_000), 2400) // 夹到上限
   assert.equal(competitorBudgetOf(1600, 0).reduced, 'none')
   assert.equal(competitorBudgetOf(1600, 10_000).reduced, 'min')
-  assert.equal(competitorBudgetOf(1600, 10_000).budget, 500)
+  // 降到各层 min 之和：只剩两层后是 100 + 200 = 300（旧的四层是 500）
+  assert.equal(competitorBudgetOf(1600, 10_000).budget, 300)
   assert.equal(competitorBudgetOf(1600, 30_000).budget, 0)
 })
 
-test('分层预算：先满足 min，剩余按 session > workspace > scene > global', () => {
-  const layers = ['global', 'workspace', 'scene', 'session']
+test('分层预算：先满足 min，剩余先本项目后全局', () => {
+  const layers = ['global', 'workspace']
   const q = allocateByLayer(1600, layers)
   for (const l of layers) assert.ok(q[l] > 0, l)
-  const sum = q.global + q.workspace + q.scene + q.session
+  const sum = q.global + q.workspace
   assert.ok(sum <= 1600, String(sum))
-  // 会话层比全局层拿得多：它更近、更少、价值密度更高
-  assert.ok(q.session >= q.global)
+  // 本项目层比全局层拿得多：更近、更具体，价值密度更高
+  assert.ok(q.workspace >= q.global)
   // 连 min 都不够时按比例缩，但每层都还在 —— 不能整层消失
   const tiny = allocateByLayer(200, layers)
   for (const l of layers) assert.ok(tiny[l] >= 1, l)
