@@ -730,7 +730,8 @@
         "compat.tools.onTitle": "已下发：模型能看到并调用它",
         "compat.tools.offTitle": "已关掉：整份不进请求，模型看不到也调不到（面板不受影响）",
         "compat.tools.defaultOffTitle": "出厂默认就是关着的：模型看不到也调不到，面板不受影响。要模型做这件事，在这里勾上即可（只改本机）。",
-        "compat.tools.locked": "已锁定", "compat.tools.lockedTitle": "主动记忆已开启，这条工具不能关闭；到记忆页关掉主动记忆后恢复可改。",
+        "compat.tools.locked": "已锁定", "compat.tools.lockedTitle": "跟随主动记忆开关，不能在这里改。",
+        "compat.tools.lockedOff": "跟随开关", "compat.tools.lockedOffTitle": "主动记忆已关闭，这条工具随之关闭；开启后自动打开。",
         // 「方案」：把一整组勾选存成名字，之后一键换回来（合计行右侧那两颗按钮）。
         "compat.tools.preset.save": "保存方案",
         "compat.tools.preset.apply": "恢复方案",
@@ -1830,7 +1831,8 @@
         "compat.tools.onTitle": "Sent: the model can see and call it",
         "compat.tools.offTitle": "Switched off: not sent at all, so the model cannot see or call it (the panel is unaffected)",
         "compat.tools.defaultOffTitle": "Switched off in the shipped default: the model cannot see or call it, the panel is unaffected. Tick it here if you want the model to do this (this machine only).",
-        "compat.tools.locked": "Locked on", "compat.tools.lockedTitle": "Proactive memory is on, so this tool cannot be switched off. Turn proactive memory off on the Memory page to change it.",
+        "compat.tools.locked": "Locked on", "compat.tools.lockedTitle": "This tool follows the proactive memory switch and cannot be changed here.",
+        "compat.tools.lockedOff": "Follows switch", "compat.tools.lockedOffTitle": "Proactive memory is off, so this tool is off too. Turning it on brings the tool back automatically.",
         // "Sets": store a whole tick pattern under a name and switch back to it in one click.
         "compat.tools.preset.save": "Save set",
         "compat.tools.preset.apply": "Restore set",

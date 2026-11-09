@@ -859,8 +859,12 @@
             chain.then(function () {
               setEvoBusy(false)
               var bad = outs.filter(function (r) { return !r || r.ok === false })[0]
-              if (!bad) { setResult({ ok: true, text: t('evo.saved') }); refreshEvolution() }
-              else setResult({ ok: false, text: translateError(t, bad) })
+              if (!bad) {
+                setResult({ ok: true, text: t('evo.saved') })
+                refreshEvolution()
+                // 工具跟着这个开关一起开 / 关：兼容页若正开着，让它立刻重拉那张表。
+                try { window.dispatchEvent(new Event('dsm:proactive-memory-changed')) } catch (e) {}
+              } else setResult({ ok: false, text: translateError(t, bad) })
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
 

@@ -13,7 +13,7 @@
 // 合计与逐条 ≈tok 就是这份）：
 //   · 十八条隐藏 ≈**4,524 tok**，默认可见那六条 ≈**1,536 tok**，全开 ≈**6,055 tok**。
 //   · ⚠️ 上面那个 4,524 是**十八条**的值。之后又加了主动记忆那条工具（起初四条，
-//     2026-11-09 合成 `memory_manager_auto` 一条，默认隐藏、开关打开时强制可见），**没有重测** ——
+//     2026-11-09 合成 `memory_manager_auto` 一条，默认隐藏、跟随总开关开合），**没有重测** ——
 //     引用合计时按"18 条 + 主动记忆 1 条"分开说，别把 4,524 当成十九条的值。
 //   · A/B 实测（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
 //     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
@@ -52,9 +52,27 @@ import { CONTROL_TOOL_NAME } from './deps.js'
  *
  * 2026-11-09 按用户要求把 learn / forget / organize / procedure_done 四条并成一条：
  * 工具表少三行、模型少认三个名字，四个行为靠 `action` 参数分叉。名字集中在这里，
- * 是因为「出厂隐藏名单」「开启时强制可见」「旧名迁移」「工具注册」四处都得认同一串字符。
+ * 是因为「出厂隐藏名单」「跟随总开关开合」「旧名迁移」「工具注册」四处都得认同一串字符。
  */
 export const PROACTIVE_MEMORY_TOOL = 'memory_manager_auto'
+
+/**
+ * 主动记忆那条工具**只跟总开关走**，工具表盘上存过的关停名单对它无效。
+ *
+ * 为什么两个方向都要强制：开着时保存一次工具表会把它从 `hidden` 摘掉（那时不许关），
+ * 名单从此不再包含它；而 `DEFAULT_HIDDEN_TOOLS` 只在用户从没存过设置时铺一次底 ——
+ * 于是关掉主动记忆之后，模型手里仍留着一条"看得见、调了只会报错"的工具。
+ *
+ * 一份纯函数给全局读路径、会话读路径、两条写路径和回包共用：少一处判据就少一处
+ * 「面板说开着、restrict 说关着」的分叉。
+ */
+export function normalizeProactiveToolHidden(hidden: readonly string[], enabled: boolean): string[] {
+  const has = hidden.includes(PROACTIVE_MEMORY_TOOL)
+  if (enabled ? !has : has) return hidden.slice()
+  return enabled
+    ? hidden.filter((name) => name !== PROACTIVE_MEMORY_TOOL)
+    : [...hidden, PROACTIVE_MEMORY_TOOL]
+}
 
 /** 一份命名方案：名字 + 那一组"不发给模型"的工具名（与 `hidden` 同口径，不是"开着哪些"）。 */
 export interface ToolTablePreset {
@@ -139,8 +157,9 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'prompt_manager_list',
   'prompt_manager_apply',
   'plugin_manager_remove',
-  // 主动记忆：默认藏着（它是权限，不是便利），**开关打开时**强制可见且不能手动关掉
-  // （见 index.ts 的 proactiveMemoryGlobalOn 那条过滤链）。放在这份名单而不是另建一张表：
+  // 主动记忆：默认藏着（它是权限，不是便利），此后**跟随总开关开合** —— 开着强制可见、
+  // 关着强制隐藏，两边都不能手动改（见 index.ts 的 proactiveMemoryGlobalOn 那条过滤链）。
+  // 放在这份名单而不是另建一张表：
   // 工具表清单、体积统计、兼容页分组全都读这一份，多一张表就多一处"清单显示开着、
   // 实际被藏着"的错位。
   PROACTIVE_MEMORY_TOOL,

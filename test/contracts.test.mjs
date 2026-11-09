@@ -42,7 +42,8 @@ import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/s
 import { parseModeState } from '../lib/memories/service.js'
 import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
-import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeToolTableSettings } from '../lib/tools/table.js'
+import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings } from '../lib/tools/table.js'
+import { buildEvolutionOps } from '../lib/ops/evolution.js'
 import { argConditionalConfirmReason } from '../lib/confirm-gate.js'
 import { createAccessToken, createFrozenGate, guardModelOps, installHandlerGuards } from '../lib/request-gate.js'
 import { officeKitApplies } from '../lib/skills/official.js'
@@ -4843,6 +4844,47 @@ test('主动记忆四条工具合并成一条：出厂只藏这一条，旧名�
     assert.ok(!src.includes("name: '" + name + "'"), '旧工具名不该再注册：' + name)
   }
   assert.ok(src.includes('PROACTIVE_MEMORY_TOOL'), '工具注册要用共享常量，别再手写字符串')
+})
+
+test('主动记忆工具双向跟随总开关：开→摘掉、关→加回，纯函数不改入参', () => {
+  const withTool = ['memory_manager_search', PROACTIVE_MEMORY_TOOL]
+  assert.deepEqual(normalizeProactiveToolHidden(withTool, true), ['memory_manager_search'])
+  assert.deepEqual(withTool, ['memory_manager_search', PROACTIVE_MEMORY_TOOL], '归一不能改调用方那份名单')
+  // 关键回归：开着时存过一次工具表，盘上就永久没有这条了；关掉开关仍要把它加回来。
+  assert.deepEqual(
+    normalizeProactiveToolHidden(['memory_manager_search'], false),
+    ['memory_manager_search', PROACTIVE_MEMORY_TOOL],
+  )
+  assert.deepEqual(normalizeProactiveToolHidden([], false), [PROACTIVE_MEMORY_TOOL])
+  assert.deepEqual(normalizeProactiveToolHidden([PROACTIVE_MEMORY_TOOL], true), [])
+  assert.deepEqual(normalizeProactiveToolHidden(withTool, false), withTool, '已含时不重复')
+})
+
+test('工具表读路径与回包两个方向都归一，不给面板留"能手动改"的缝', () => {
+  const tt = readFileSync(new URL('../src/tool-table-switch.ts', import.meta.url), 'utf8')
+  const ix = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.ok(tt.includes('normalizeProactiveToolHidden'), '全局回包 / 写盘共用同一份纯函数')
+  assert.ok(tt.includes('forcedHidden: forcedHidden()'), '全局回包要告诉面板哪条锁成"关"')
+  assert.ok(ix.includes('forcedHidden: forcedHiddenToolsNow()'), '会话回包同样要给 forcedHidden')
+  assert.ok(ix.includes('pluginHiddenTools: () => [...withProactiveTool(toolTableHidden())]'), 'restrict 名单要双向归一')
+  assert.ok(ix.includes('overlayWithProactiveTool(allow, deny, on)'), 'per-agent overlay 也要两个方向都锁')
+})
+
+test('拨动主动记忆开关会通知模型侧立刻重排工具表', async () => {
+  let notified = 0
+  const ops = buildEvolutionOps({
+    config: {
+      readSettings: async () => ({ enabled: false }),
+      writeSettings: async (v) => ({ ok: true, settings: v }),
+    },
+    runtime: { invalidate() {} },
+    message: (e) => String(e),
+    onSettingsChanged: () => { notified += 1 },
+  })
+  assert.equal((await ops['evolution-toggle']({ scope: 'global', enabled: true })).ok, true)
+  assert.equal(notified, 1)
+  assert.equal((await ops['evolution-settings']({ set: true, settings: { enabled: false } })).ok, true)
+  assert.equal(notified, 2)
 })
 
 test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器级写入才拦', () => {

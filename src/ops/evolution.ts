@@ -62,6 +62,12 @@ export interface EvolutionOpDeps {
     expired: number
     total: number
   }>
+  /**
+   * 设置写入后的通知：那条主动记忆工具跟随总开关，而模型侧的 restrict 名单是缓存的。
+   * 不主动重排一次，拨完开关要等下一次无关的 tools/change 工具才真的出现 / 消失。
+   * 可选：单测里不接也能跑；回调自己抛错不该让开关保存失败。
+   */
+  onSettingsChanged?(): void
   message(e: unknown): string
 }
 
@@ -72,6 +78,10 @@ function layerView(overrides: EvolutionOverrides | undefined) {
 
 export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: any) => Promise<any>> {
   const { config, runtime, learner, message } = deps
+  /** 只在这四处「写设置」之后调；记忆正文写入不碰工具表，不必重排。 */
+  const notifySettingsChanged = () => {
+    try { deps.onSettingsChanged?.() } catch { /* 重排失败不该让开关保存失败 */ }
+  }
 
   /**
    * 把一条 playbook 读成「技能草案的输入」。
@@ -202,6 +212,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const written = await config.writeSettings(next)
         if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
         runtime.invalidate()
+        notifySettingsChanged()
         return { ok: true, settings: written.settings }
       } catch (e) {
         return { ok: false, error: message(e), code: 'settings-failed' }
@@ -228,6 +239,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           const written = await config.writeSettings({ ...(await config.readSettings()), enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
+          notifySettingsChanged()
           return { ok: true, scope, enabled }
         }
         if (scope === 'workspace') {
@@ -243,6 +255,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           const written = await config.writeWorkspace(scopeKey, cwd ?? '', label, inherit ? {} : { ...prev, enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
+          notifySettingsChanged()
           return { ok: true, scope, inherit, ...(inherit ? {} : { enabled }), hash: written.hash }
         }
         if (scope === 'session') {
@@ -253,6 +266,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           const written = await config.writeSession(sessionId, inherit ? {} : { ...prev, enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
+          notifySettingsChanged()
           return { ok: true, scope, inherit, ...(inherit ? {} : { enabled }) }
         }
         return { ok: false, error: 'scope 必须是 global / workspace / session', code: 'bad-args' }

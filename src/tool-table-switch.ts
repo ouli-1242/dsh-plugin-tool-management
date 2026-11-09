@@ -20,7 +20,8 @@ import { hubPath } from './hub.js'
 import type { JsonFileRead } from './mcp/disabled-tools.js'
 import {
   addPreset, applyToolTableToggles, buildToolTableReport, classifyToolTableSettings, DEFAULT_HIDDEN_TOOLS, DEFAULT_TOOL_TABLE_SETTINGS, dropPreset, migrateLegacyToolNames,
-  normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH, summarizeToolDescription,
+  normalizeProactiveToolHidden, normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH,
+  PROACTIVE_MEMORY_TOOL, summarizeToolDescription,
   type ToolTableReport, type ToolTableRow, type ToolTableSettings,
 } from './tools/table.js'
 
@@ -52,12 +53,13 @@ export interface ToolTableSwitchDeps {
    */
   carrierHiddenTools?: () => readonly string[]
   /**
-   * 此刻**必须保持可见**的工具名（主动记忆开启时那一条）。
+   * 主动记忆总开关此刻开没开 —— 那一条工具**完全**由它决定，盘上的关停名单无效。
    *
-   * 读回包会把它从 hidden 与体积报表里减掉并回一份 `forcedVisible` 给面板；写路径也
-   * 一律剔除，免得模型侧 `tool_manager_tools` 绕过面板把它关掉。没给 = 不锁任何工具。
+   * 读回包 / 体积报表 / 两条写路径都按它双向归一（开 → 强制可见，关 → 强制隐藏），
+   * 面板拿到 `forcedVisible` / `forcedHidden` 把勾选框锁在对应状态；模型侧
+   * `tool_manager_tools` 绕过面板也改不动。没给（旧装配）按关算 = 藏起来，安全侧。
    */
-  forcedVisibleTools?: () => readonly string[]
+  proactiveMemoryEnabled?: () => boolean
 }
 
 /** 工具表切换的对外面：换方案、还原、读当前关停名单。 */
@@ -282,14 +284,22 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       return { ok: true as const, settings: next }
     })
   }
+  /** 主动记忆总开关此刻开没开。没装配时按关算（藏起来是安全侧）。 */
+  const proactiveOn = (): boolean => deps.proactiveMemoryEnabled?.() === true
   /** 此刻不允许被关掉的工具（只认已注册的；开关没开时是空表）。 */
   const forcedVisible = (): string[] =>
-    (deps.forcedVisibleTools?.() ?? []).filter((name) => toolTableSizes.has(name))
-  /** 从一份关停名单里减掉它们：回包、报表、写盘三处共用，别各写一份判据。 */
-  const stripForced = (hidden: readonly string[]): string[] => {
-    const forced = new Set(forcedVisible())
-    return forced.size === 0 ? hidden.slice() : hidden.filter((name) => !forced.has(name))
-  }
+    proactiveOn() && toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? [PROACTIVE_MEMORY_TOOL] : []
+  /** 此刻不允许被打开的工具（对称的另一半）。 */
+  const forcedHidden = (): string[] =>
+    !proactiveOn() && toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? [PROACTIVE_MEMORY_TOOL] : []
+  /**
+   * 归一：开着的强制摘掉、关着的强制加回。回包、体积报表、两条写盘路径共用同一份纯函数，
+   * 免得「面板说开着、restrict 说关着」各说各话。
+   */
+  const normalizeHidden = (hidden: readonly string[]): string[] =>
+    toolTableSizes.has(PROACTIVE_MEMORY_TOOL)
+      ? normalizeProactiveToolHidden(hidden, proactiveOn())
+      : hidden.slice()
 
   /**
    * 回给界面的同一份形状：当前名单 + 已存方案 + 出厂默认名单 + 体积报告。
@@ -299,10 +309,10 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
    * 不给删除键，词典出它的名字。
    */
   const toolTablePayload = (value: ToolTableSettings) => {
-    const hidden = stripForced(value.hidden)
+    const hidden = normalizeHidden(value.hidden)
     return {
       ok: true, hidden, presets: value.presets,
-      forcedVisible: forcedVisible(),
+      forcedVisible: forcedVisible(), forcedHidden: forcedHidden(),
       defaultHidden: [...DEFAULT_HIDDEN_TOOLS], report: toolTableReport(hidden),
       // 侧车状态随每次读回传：界面据此禁用开关并说明原因（unknown 时保存会被服务端拒绝）。
       state: toolTableStateValue, issue: toolTableIssueValue,
@@ -312,7 +322,9 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   const presetNameOf = (raw: unknown): string =>
     String(raw ?? '').replaceAll(/\s+/g, ' ').trim().slice(0, PRESET_NAME_MAX_LENGTH)
   async function toolTableOp(args: any): Promise<any> {
+    // 两个方向都锁：开着的不能关、关着的不能开，这条工具没有独立于总开关的状态。
     const forced = new Set(forcedVisible())
+    const forcedOff = new Set(forcedHidden())
     if (!args || args.set !== true) {
       // 存 / 删方案都不动 `hidden`，所以这两条路**不**重排可见性、也不刷目录（那是 `set`
       // 那一条才有的三处联动）。失败原因回 `code` 不回中文串 —— 英文界面会原样露出中文。
@@ -349,21 +361,21 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
         .filter((t) => t && typeof t.name === 'string' && t.name !== '')
         .map((t) => ({ name: String(t.name), hidden: t.hidden === true }))
         // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错。
-        // 锁开的那条也不收：主动记忆开着时模型侧同样不许把它关掉。
-        .filter((t) => toolTableSizes.has(t.name) && !forced.has(t.name))
+        // 锁定的两条方向都不收：模型侧 `tool_manager_tools` 也改不动主动记忆工具。
+        .filter((t) => toolTableSizes.has(t.name) && !forced.has(t.name) && !forcedOff.has(t.name))
       if (toggles.length === 0) {
         const names = (args.toggle as any[]).map((t: any) => String(t && t.name))
-        const blocked = names.filter((name) => forced.has(name))
+        const blocked = names.filter((name) => forced.has(name) || forcedOff.has(name))
         return {
           ok: false,
           error: blocked.length
-            ? 'locked on while proactive memory is enabled: ' + blocked.join(', ')
+            ? 'this tool follows the proactive memory switch and cannot be toggled here: ' + blocked.join(', ')
             : 'none of these are this plugin\'s tools: ' + names.join(', '),
         }
       }
       const outcome = await mutateToolTableSettings((current) => ({
-        // 盘上可能留着上一版（开关关着时）存下来的那条；这次写一并摘掉。
-        hidden: stripForced(applyToolTableToggles(current.hidden, toggles)),
+        // 归一放在最后：不管盘上留的是上一版哪一边的值，这条工具都只跟总开关走。
+        hidden: normalizeHidden(applyToolTableToggles(current.hidden, toggles)),
         presets: current.presets,
       }))
       if (!outcome.ok) return outcome
@@ -377,8 +389,10 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错
     // （"names unknown global tool"）。注册失败的工具本来也不在表里。
     const outcome = await mutateToolTableSettings((current) => {
-      const hidden = normalizeToolTableSettings({ hidden: args.hidden }).hidden
-        .filter((name) => toolTableSizes.has(name) && !forced.has(name))
+      // 先滤掉没注册的名字，再归一那条跟随开关的工具（顺序不能反：归一可能往里加名字）。
+      const hidden = normalizeHidden(
+        normalizeToolTableSettings({ hidden: args.hidden }).hidden.filter((name) => toolTableSizes.has(name)),
+      )
       return { hidden, presets: current.presets }
     })
     if (!outcome.ok) return outcome

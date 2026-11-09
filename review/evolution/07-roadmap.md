@@ -61,10 +61,14 @@
 > - **四条新增工具并成一条 `memory_manager_auto`**：`action=learn|forget|organize|done`。
 >   四个 op、九道门、procedure 计数一个字没改，只合并入口；旧名写进
 >   `LEGACY_TOOL_NAME_MAP`，避免盘上的关停名单变成死名。工具表少三行、词典只要一条介绍。
-> - **开启时强制可见且不可关闭**：`tool-table` 回包新增 `forcedVisible`，写路径 /
->   `pluginHiddenTools` / `toolTableHiddenForSession` / overlay 的 `deny` 四处都把这条工具
->   从关停名单里减掉；兼容页把它画成"已勾选 + 禁用 + 已锁定"。设计里"用户可手动开关
->   每一条工具"这条对主动记忆不再适用 —— 它是开关本身的一部分，跟开关自相矛盾。
+> - **工具与总开关双向同步**：这条工具没有独立于开关的状态。开 → 强制可见且不可关；
+>   关 → 强制隐藏且不可开。最初只做了"开"这一半：开着时保存过一次工具表，盘上名单
+>   就永久不含它，而 `DEFAULT_HIDDEN_TOOLS` 只在首次铺底 —— 关掉开关后模型手里仍留着
+>   一条"看得见、调了只会报错"的工具。现在 `normalizeProactiveToolHidden` 一份纯函数给
+>   全局/会话读路径、两条写路径、体积报表共用；回包同时给 `forcedVisible` /
+>   `forcedHidden`，面板把该行锁在对应状态；`evolution-toggle` / `evolution-settings`
+>   写完后立刻 `mcp.scheduleToolRestrictions()`，不等下一次 `tools/change`。设计里
+>   "用户可手动开关每一条工具"这条对主动记忆不再适用 —— 它是开关本身的一部分。
 > - **`05-tools.md` 的三条新增工具表**以本节为准（那条文档写的是 P1 时的形状）。
 
 ### P0 地基（小）
