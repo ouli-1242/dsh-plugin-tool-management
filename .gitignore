@@ -25,7 +25,6 @@ scripts/*
 !scripts/compat-matrix.mjs
 !scripts/sync-profile.mjs
 !scripts/check-strict.mjs
-!scripts/check-css-chain.mjs
 
 # 工具产物
 .host-deps-backup/
