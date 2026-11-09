@@ -1902,7 +1902,12 @@ test('技能上传：尾随空格的 .. 不得逃出暂存目录，正常点文�
     const found = []
     const walk = (dir, depth) => {
       if (depth > 3 || !existsSync(dir)) return
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
+      let list
+      // 临时目录里躺着别的进程正在用的目录时，Windows 的 scandir 直接 EPERM。
+      // 跳过它而不是让整条测试红：这条钉的是"上传能不能逃出暂存目录"，
+      // 不是"能不能读遍 tmp"—— 一个读不动的目录本来就放不进我们写的文件。
+      try { list = readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const e of list) {
         const p = join(dir, e.name)
         if (e.isFile() && e.name === 'pwned.md') found.push(p)
         if (e.isDirectory()) walk(p, depth + 1)

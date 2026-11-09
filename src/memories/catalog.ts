@@ -12,6 +12,7 @@
 
 import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import { parseSkillDoc } from '../skills/core.js'
 import { AUTO_ONELINE_MAX, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, layerOfGroup, type MemoryLayer } from './constants.js'
 import { deriveFromDoc, discover, type ParsedSkillDoc } from './discovery.js'
@@ -21,6 +22,15 @@ import type { RulesIndex } from './service.js'
 /** hub 内相对路径。 */
 export const CATALOG_FILE = 'evolution/catalog.json'
 export const CATALOG_VERSION = 1
+
+/**
+ * catalog 的绝对落点。
+ *
+ * 由 `stateDir` 拼出来而不是走 `hubPath()`：服务可以注入自定义 stateDir（测试与多实例），
+ * 而 `hubPath()` 永远指向 `$DSH_HOME/tool-management`。两边各拼一次的话，注入 stateDir
+ * 时会出现"写在一处、读在另一处"——症状是学了但注入里永远看不见。
+ */
+export const catalogPathOf = (stateDir: string): string => join(stateDir, CATALOG_FILE)
 
 /** 一条自动记忆的注入卡片。字段全为标量，便于稳定序列化与界面直读。 */
 export interface CatalogEntry {

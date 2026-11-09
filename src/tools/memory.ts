@@ -26,7 +26,27 @@ import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUn
 export interface MemoryToolDeps extends ToolDomainDeps {
   /** rules service 的 ops 表：rules-list / rules-read / rules-create / rules-update / rules-toggle。 */
   rulesOps: Record<string, (args: any) => Promise<any>>
+  /**
+   * 主动记忆的 op（`evolution-learn` / `evolution-forget` / `evolution-list`）。
+   *
+   * 不给 = 这版没接自动记忆：两条工具**不注册**（注册了却调不通比不存在更糟 ——
+   * 模型会照描述去试，然后拿到一个内部错误）。
+   */
+  evolutionOps?: Record<string, (args: any) => Promise<any>>
+  /** 这个 agent 现在能不能主动学（三级开关 + depth + 会话 id 是否可作目录名）。 */
+  autoLearnEnabled?: (agent: unknown) => boolean
+  /** 当前启用的场景名（写入路由要它判"该不该落场景层"）。 */
+  activeSceneOf?: (agent: unknown) => string | undefined
+  /**
+   * **真实**会话身份（sid + cwd），不是作用域键。
+   *
+   * 为什么不能用 `sessionScopeOf`：那个返回的是按作用域粒度派生的键 ——「按工作区」粒度下
+   * 所有会话共用一个键。拿它当会话层目录名，切一次粒度就会让所有会话的记忆互相串进对方
+   * 的目录（静默的隐私事故）。层永远认真实 sid（见 docs 01-model §4）。
+   */
+  sessionIdentity?: (agent: unknown) => { sessionId?: string; cwd?: string } | null
 }
+
 
 /** 注册记忆域的 model 工具（列表 / 读取 / 检索 / 切换 / 保存）。 */
 export function buildMemoryTools(deps: MemoryToolDeps): void {
@@ -372,6 +392,96 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // "这里看不看得到"。模型据此回一句"记下了"时，用户很容易读成"只在这个对话里"。
       return 'OK: created ' + r.rule.id + enableHint + warn +
         globalActionNote(deps, exec && exec.agent, 'memory', 'memory')
+    },
+  }))
+
+  // ── 主动记忆（只在开关打开时出现在工具表里）────────────────────────────────
+  //
+  // 为什么不复用 `memory_manager_save`：那条的契约是「Only on the user's instruction」并且
+  // 受 `requireConfirmForModelRuleWrite` 门禁（一次确认卡）。自动记忆必须零摩擦 —— 每学一条
+  // 弹一次卡，用户三分钟就会把开关关掉，"自进化"就没了。反过来，给 `save` 加一个 `auto`
+  // 参数会让同一个工具同时代表两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。
+  // 授权边界写在工具名上，门禁不用猜。
+  if (!deps.evolutionOps || !deps.autoLearnEnabled) return
+  const evo = deps.evolutionOps
+
+  register(defineTool({
+    name: 'memory_manager_learn',
+    // 描述要同时挡住两类滥用：把可推导的东西记下来（永久吃注入预算）、
+    // 以及把"自己总结的话"当成用户说的（证据门会拒，但先说清更省一次往返）。
+    description: 'Remember one durable thing from this conversation: a preference, a fact, a correction, or a repeatable procedure. It is injected into later conversations, so record only what cannot be re-derived from the code. Not for one-off instructions ("this time", "for now"). Pass `quote` with the user\'s exact words whenever they said it.',
+    parameters: {
+      text: { type: 'string', required: true, description: 'One sentence: what to remember (<=400 chars).' },
+      kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'What kind of thing it is; inferred from the text when omitted.' },
+      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'Why you know it. user_explicit / user_correction require a verbatim `quote`; model_inference only ever becomes a candidate.' },
+      quote: { type: 'string', description: 'The user\'s exact words (must be a verbatim substring of what they said). Required for user_explicit / user_correction.' },
+      key: { type: 'string', description: 'Short slot name like `package-manager` — the same key merges with the existing note instead of adding a near-duplicate.' },
+      boundary: { type: 'string', description: 'When it might not hold (e.g. "CI still uses npm").' },
+      layer: { type: 'string', enum: ['global', 'workspace', 'scene', 'session'], description: 'Where it applies. Omit to route by content: project facts go to the workspace, temporary constraints to this conversation.' },
+      ttlDays: { type: 'number', description: 'Days before it should be re-checked; defaults by kind.' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+    async execute(args: any, exec: any) {
+      const agent = exec && exec.agent
+      if (!deps.autoLearnEnabled!(agent)) {
+        // 开关在调用途中被关掉（另一个窗口 / 本会话切了）也要说清，而不是静默什么都不做。
+        throw new Error('proactive memory is off here, so nothing was recorded. The user can turn it on in Memory → Proactive memory.')
+      }
+      const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
+      const payload: any = {
+        text: String((args && args.text) || ''),
+        // 默认按"模型推断"起步：说这是用户明说的却不给引句，证据门会降级 —— 但先如实默认更省一次往返。
+        source: (args && args.source) || 'model_inference',
+      }
+      for (const key of ['kind', 'quote', 'key', 'boundary', 'layer', 'ttlDays'] as const) {
+        if (args && args[key] !== undefined && args[key] !== '') payload[key] = args[key]
+      }
+      if (identity?.sessionId) payload.sessionId = identity.sessionId
+      if (identity?.cwd) payload.cwd = identity.cwd
+      const scene = deps.activeSceneOf ? deps.activeSceneOf(agent) : undefined
+      if (scene !== undefined) payload.scene = scene
+
+      const r: any = await evo['evolution-learn'](payload)
+      if (!r || r.ok === false) {
+        // 门禁拒绝是**正常的业务结果**，不是异常：把它当异常抛会让模型以为工具坏了。
+        // 但工具层只能通过 throw 回话，所以把 `error` 原样抛（它已经是一句给模型看的话）。
+        throw new Error(String((r && r.error) || 'failed to record it'))
+      }
+      const parts = ['OK: recorded ' + String(r.id)]
+      parts.push(String(r.status === 'active' ? 'active' : 'candidate (not injected until it is confirmed)'))
+      if (typeof r.confidence === 'number') parts.push('confidence ' + r.confidence.toFixed(2))
+      if (r.merged === true) parts.push('merged into the existing note')
+      if (Array.isArray(r.supersedes) && r.supersedes.length) parts.push('replaced ' + r.supersedes.join(', '))
+      if (r.note) parts.push(String(r.note))
+      if (r.needsReview) parts.push('needs review: ' + String(r.needsReview))
+      // 层要说出来：用户以为"只在这个对话里"，实际它进了工作区（下个会话还会出现）——
+      // 这个误读比记错内容更难发现。
+      const layerNote: Record<string, string> = {
+        global: 'applies in every project',
+        workspace: 'applies in this project (visible to other conversations here too)',
+        scene: 'applies while that scene is on',
+        session: 'applies in this conversation only',
+      }
+      if (typeof r.layer === 'string' && layerNote[r.layer]) parts.push(layerNote[r.layer])
+      return parts.join('; ')
+    },
+  }))
+
+  register(defineTool({
+    name: 'memory_manager_forget',
+    // 「30 天不能复活」必须写进描述：否则模型会以为忘了之后可以立刻重新学，
+    // 而实际会拿到一条 tombstoned 拒绝 —— 它会以为是 bug 而不是设计。
+    description: 'Delete one note you learned earlier. A 30-day tombstone keeps it from being re-learned, so only use this when the user asks to forget something. Notes the user wrote themselves are deleted from the Memory page, not here.',
+    parameters: {
+      memory: { type: 'string', required: true, description: 'Learned-note id, copy it from the learned notes block or from memory_manager_list.' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+    async execute(args: any) {
+      const id = String((args && args.memory) || '').trim()
+      if (id === '') throw new Error('missing argument: memory')
+      const r: any = await evo['evolution-forget']({ id, actor: 'model' })
+      if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to forget it'))
+      return 'OK: forgot ' + String(r.id || id) + '. It will not be learned again for 30 days.'
     },
   }))
 }

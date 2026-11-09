@@ -55,6 +55,15 @@ import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
 // 主动记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
 import { createEvolutionConfig } from './evolution/config.js'
+// 注入热路径的同步视图（`agent/pre-step` 的 text() 没有 await 的位置）。
+import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
+// 真源状态（证据 / 计数器 / 墓碑）：读坏就停写，不静默覆盖。
+import { createEvolutionState } from './evolution/state.js'
+// 写入管线：九道门 + 六步落盘。
+import { createLearner } from './evolution/write.js'
+import { isReservedGroup, layerOfGroup } from './memories/constants.js'
+import { renderAutoBlock, estimateTextTokens } from './memories/render-auto.js'
+import { workspaceMemoryKeyOf } from './scope/workspace-key.js'
 import { buildEvolutionOps } from './ops/evolution.js'
 // 改名 / 进场景 / 存档案的联动（op 重包，从本文件 apply 闭包整段抽出）。
 import { installSceneLinkage } from './scene-linkage.js'
@@ -1286,26 +1295,42 @@ export default {
     }
 
     /**
+     * 「本 agent 现在能不能主动学」—— 由主动记忆的三级开关决定，在 `evolutionRuntime` 建好
+     * 之后赋值（`const` 的 TDZ 在这里是真实的：`sessionToolTableOverlayOf` 在它之前声明，
+     * 而工具限制可能在 apply 还没走到那一行时就被调度）。
+     * 未赋值 = 一律不可见：失败方向是"少给两条工具"，不是"给了却调不通"。
+     */
+    let autoLearnVisibleFor: ((agent: unknown) => boolean) | null = null
+
+    /**
      * 本会话相对全局的工具表差异（restrict 层用）：`allow` = 本会话重新打开、
      * `deny` = 本会话关掉。与 MCP 的 overlay 同一条合并路径（见 mcp/manager.ts）。
      */
     function sessionToolTableOverlayOf(agent: unknown): { allow: string[]; deny: string[] } {
       const sessionId = scopeKeyForAgent(agent)
       if (sessionId === null) return { allow: [], deny: [] }
+      // 主动记忆的两条工具：出厂在 `DEFAULT_HIDDEN_TOOLS` 里藏着（省 token），
+      // 开关打开时才把这两条**减出来**。为什么用 allow 而不是 deny 的方向：默认藏起来
+      // 意味着关着时它们连清单都不占（工具表清单按注册表列，藏着的仍在清单里可手动打开），
+      // 而"开关关着也能被用户手动打开"这条不成立 —— 它们是权限，不是便利。
+      let autoAllow: string[] = []
+      try {
+        if (autoLearnVisibleFor && autoLearnVisibleFor(agent)) autoAllow = ['memory_manager_learn', 'memory_manager_forget']
+      } catch { autoAllow = [] }
       const scope = scopeStore.scopeOfSync(sessionId)
-      if (scope === undefined) return { allow: [], deny: [] }
+      if (scope === undefined) return { allow: autoAllow, deny: [] }
       if (scope.toolTableHidden === undefined && scope.baseline?.toolTableHidden === undefined) {
-        return { allow: [], deny: [] }
+        return { allow: autoAllow, deny: [] }
       }
       const effective = new Set(sessionToolTableHidden(scope, [...toolTableHidden()]))
       const globalHidden = toolTableHidden()
-      const allow: string[] = []
+      const allow: string[] = [...autoAllow]
       const deny: string[] = []
       // 只算本插件注册过的工具：MCP 工具走各自的 mcp / mcpTools 覆盖，不混进这一域。
       for (const name of toolTableSizes.keys()) {
         const hiddenHere = effective.has(name)
         const hiddenGlobal = globalHidden.has(name)
-        if (!hiddenHere && hiddenGlobal) allow.push(name)
+        if (!hiddenHere && hiddenGlobal && !allow.includes(name)) allow.push(name)
         else if (hiddenHere && !hiddenGlobal) deny.push(name)
       }
       return { allow, deny }
@@ -2179,7 +2204,6 @@ export default {
     })
 
     // 主动记忆的策略：三份文件（settings / workspaces / sessions），同一把写锁。
-    // 只读开关，不碰记忆正文 —— 正文的写入走 memories 域的 op（P1 再加）。
     const evolutionConfig = createEvolutionConfig({
       ensurePaths,
       readJsonFile,
@@ -2188,6 +2212,158 @@ export default {
       withWriteLock,
       message,
     })
+
+    // 注入热路径的同步视图（catalog / state / 三级开关，1s TTL）。
+    // 为什么要独立一份：`agent/pre-step` 的 `text()` 是同步的，而上面那份是异步门面。
+    // 两者读同一批文件，视图只做"同步可读"，不参与写入 —— 写永远走 `evolutionConfig` / `evolutionState`。
+    const evolutionRuntime = createEvolutionRuntime()
+
+    // 真源状态：证据链、计数器、墓碑、水位。读坏就停写（见 evolution/state.ts 头部）。
+    const evolutionState = createEvolutionState({ ensurePaths, readJsonFileStrict, message })
+
+    // 自动记忆的写入管线：九道门 → 六步落盘。
+    // 依赖里给的是**既有**的记忆域实现（序列化、快照失效、写锁），不另建一套读模型。
+    const autoLearner = createLearner({
+      state: evolutionState,      // 现有条目视图：直接问记忆服务要快照，而不是自己再扫一遍目录 ——
+      // 两套扫描口径迟早会在"同名 bundle 遮蔽""保留组过滤"这些细节上分家。
+      existingEntries: async () => {
+        const snap = await memoriesService.autoAccess.snapshot()
+        const entries = snap.rules.map((r) => ({
+          id: r.id,
+          layer: layerOfGroup(r.group),
+          key: r.autoKey ?? '',
+          text: snap.bodies.get(r.id) ?? '',
+          status: r.autoStatus ?? (r.origin === 'auto' ? 'candidate' : 'active'),
+          origin: (r.origin === 'auto' ? 'auto' : 'user') as 'user' | 'auto',
+        }))
+        const knownScenes = new Set(snap.groups.map((g) => g.name).filter((n) => !isReservedGroup(n)))
+        return { entries, knownScenes }
+      },
+      knownWorkspaces: async () => new Set(Object.keys((await evolutionConfig.readWorkspaces()).workspaces)),
+      serializeRuleFile: memoriesService.autoAccess.serializeRuleFile,
+      memoriesRoot: memoriesService.autoAccess.memoriesRoot,
+      stateDir: memoriesService.autoAccess.stateDir,
+      invalidateSnapshot: () => {
+        memoriesService.autoAccess.invalidateSnapshot()
+        // 写入后同步视图要立刻失效，否则同一轮里"刚学的一条"要等 1 秒才在界面上出现。
+        evolutionRuntime.invalidate()
+        evolutionState.invalidateCache()
+      },
+      withWriteLock,
+      message,
+    })
+
+    // 启动时补齐派生索引（`evolution/catalog.json`）。
+    //
+    // 为什么必须有这一步：注入只读 catalog，而它是**派生**数据。老版本升上来时 `_ws/` /
+    // `_session/` 下可能已经躺着自动条目（P0 就能建），但 catalog 文件还不存在 —— 不重建，
+    // 用户会看到"开关开了、记忆也在磁盘上，可模型一条都不知道"。文件被删 / 版本不符同理。
+    //
+    // 失败不阻断启动：派生数据坏了最多这轮少几条注入，而启动失败是整片功能不可用。
+    //
+    // 不能 `await`：`apply()` 是同步的（宿主装配期没有 await 的位置）。几十毫秒的延迟不影响
+    // 第一轮 —— 首轮若还没建好，自动段这轮为空、下一轮就有；而阻塞装配会拖慢整个宿主启动。
+    void memoriesService.autoAccess.rebuildCatalog().catch(() => undefined)
+
+    /**
+     * 「这个 agent 现在能不能主动学」。三个条件缺一不可：
+     *
+     *   ① 三级开关解析后 `enabled` 且 `learnScope !== 'off'`；
+     *   ② 深度 0（子代理有**自己的** session id，让它学就会把父子两套记忆写进不同目录，
+     *      而回收 / 合并 / 墓碑都按 id 走，父代理根本看不到子代理写的那份）；
+     *   ③ 能取到会话身份（取不到就没有"哪一层"这一说）。
+     *
+     * 状态文件读坏**不**影响可见性：让它调用并拿到"state.json 损坏"比让它消失有用 ——
+     * 用户能从模型的回执里知道出了什么事。停写是在写入管线里做的，不是在这里。
+     */
+    function autoLearnEnabledFor(agent: unknown): boolean {
+      try {
+        if (subagentDepthOf(agent) !== 0) return false
+        const identity = sessionIdentityOf(agent)
+        if (identity === null) return false
+        const scopeKey = identity.cwd ? workspaceMemoryKeyOf(identity.cwd) : undefined
+        const cfg = evolutionRuntime.effectiveSync(scopeKey, identity.sessionId)
+        return cfg.enabled && cfg.learnScope !== 'off'
+      } catch {
+        return false
+      }
+    }
+    autoLearnVisibleFor = autoLearnEnabledFor
+
+    /**
+     * 记忆域的注入文本 = 用户记忆段 + 自动段（`## Learned notes (auto)`）。
+     *
+     * 为什么拼在同一条消息里而不是新开一个注入域：六个域的开关、去重、`applicableTo`
+     * 各有一份，加第七个域意味着界面多一个勾选、注入实况多一行、每个预设都要重新验一遍
+     * 可达性（#27 的教训）。而这两段说的是同一件事 —— "之前记下的东西" —— 只是一个
+     * 是用户写的、一个是 agent 学的。拼在一条消息里，两层授权语也就在同一条里说得清。
+     *
+     * 自动段**永不抛**：它只是附加信息，坏了就当没有。记忆段本身的 `memoryText` 反过来
+     * 是抛异常的（读不动时不能报成"用户清空了记忆"）—— 两个方向的失败语义不同，不能统一。
+     */
+    function memoryDomainText(agent: unknown): string {
+      const base = memoriesService.memoryText(memoryScopeOf(agent))
+      let auto = ''
+      try {
+        auto = autoSegmentText(agent, base)
+      } catch { auto = '' }
+      if (auto === '') return base
+      if (base.trim() === '') return auto
+      return base.replace(/\s+$/, '') + '\n\n' + auto
+    }
+
+    /**
+     * 自动段：按会话快照。
+     *
+     * 只有 depth 0 有（与记忆域同一条 `applicableTo`：子代理的上下文要收敛为
+     * 「角色 + 任务」，而自动记忆是父会话的处境）。
+     */
+    function autoSegmentText(agent: unknown, baseText: string): string {
+      if (subagentDepthOf(agent) !== 0) return ''
+      if (!agent || typeof agent !== 'object') return ''
+      const identity = sessionIdentityOf(agent)
+      const sid = identity?.sessionId ?? undefined
+      const cwd = identity?.cwd
+      const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
+      const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
+      // `enabled`（允不允许学）与 `inject`（要不要显示）是两件事：用户可能"不学了，但学过的还能用"。
+      if (!cfg.enabled && !cfg.inject) return ''
+
+      const scene = memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined
+      const enabledScenes = new Set<string>(scene ? [scene] : [])
+      const key = autoSnapshotKey({
+        ...(sid !== undefined ? { sessionId: sid } : {}),
+        ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
+        scenes: [...enabledScenes],
+        enabled: cfg.enabled,
+        inject: cfg.inject,
+      })
+      const prev = readAutoSnapshot(agent)
+      if (prev && prev.key === key) return prev.text
+
+      const view = evolutionRuntime.view()
+      const result = renderAutoBlock({
+        entries: Object.values(view.catalog.entries),
+        state: view.state,
+        scope: {
+          ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
+          ...(sid !== undefined ? { sessionId: sid } : {}),
+          enabledScenes,
+        },
+        userSegmentTokens: estimateTextTokens(baseText),
+      })
+      const snap: AutoSnapshot = {
+        key,
+        text: result.text,
+        count: result.count,
+        tokens: result.tokens,
+        budget: result.budget,
+        dropped: result.dropped,
+        builtAt: Date.now(),
+      }
+      writeAutoSnapshot(agent, snap)
+      return result.text
+    }
 
     // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的各域文本。
     // 挂在 apply 作用域：`injection-live` op 与注入器不在同一层（effect 内部）。
@@ -2225,8 +2401,9 @@ export default {
             // 场景与记忆两域**按会话取覆盖**：`scopeOf(agent)` 给出本会话的场景与逐条
             // 开关，取不到会话 id 时返回 undefined = 跟随全局（风险表最后一条：取不到不猜）。
             { key: 'scene', name: 'tool-management:scene', label: '场景', form: 'snapshot', text: (agent) => memoriesService.sceneCatalogText(memoryScopeOf(agent)), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            // 记忆（**内容**）：各场景下的条目。与场景段同源、同一条 `applicableTo`。
-            { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: (agent) => memoriesService.memoryText(memoryScopeOf(agent)), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            // 记忆（**内容**）：各场景下的条目 + 自动段（用户写的 vs agent 学的，两层授权语）。
+            // 与场景段同源、同一条 `applicableTo`。
+            { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: (agent) => memoryDomainText(agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // `pending`：启动 / 重连窗口里段是空的，但"空"不等于"用户关光了" —— 这一轮沉默，
             // 别先发一条「已清空」再在 server 连上后发一次内容（两次注入，第一次还是假的）。
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent), pending: (agent) => mcp.stateCatalog.pending(agent) },
@@ -4184,6 +4361,22 @@ export default {
     // 预热不 await：更新检查失败（无网 / 代理 / registry 故障）不影响任何启动路径。
     updateChecker.start()
 
+    // 主动记忆的 op 表：HTTP 层与工具层**共用同一份实例**。
+    // 为什么要共用：`learn` 的两道门禁（工具表可见性 + op 的开关判断）必须读同一份配置，
+    // 各建一份会在热更新后出现"工具说开着、op 说关着"的错位。
+    // `removeMemory` 复用记忆域已有的删除路径（进回收站 + 清索引），不自己 rm ——
+    // 「删除都进回收站」这条 README 承诺没有例外。
+    const evolutionOpsTable = buildEvolutionOps({
+      config: evolutionConfig,
+      runtime: evolutionRuntime,
+      learner: autoLearner,
+      removeMemory: async (id: string) => {
+        const r: any = await memoriesService.ops['rules-remove']({ id })
+        return { ok: r?.ok !== false, ...(r?.error ? { error: String(r.error) } : {}) }
+      },
+      message,
+    })
+
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,
       // 「最近改动」流水的读侧：只读 hub 里的 `audit.jsonl`，倒序、可按域过滤。
@@ -4243,9 +4436,10 @@ export default {
       // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list/get（只读）
       // + subagent-create/update/delete（写，writeOps 已派生进门禁）。
       ...subagentService.ops,
-      // 主动记忆的策略 op（ops/evolution.ts）：evolution-status / -settings / -toggle。
-      // 只读写开关，不碰记忆正文；写端点由 request-gate 的回环校验兜底。
-      ...buildEvolutionOps({ config: evolutionConfig, message }),
+      // 主动记忆的策略 op（ops/evolution.ts）：status / settings / toggle / learn / forget / list。
+      // 写端点由 request-gate 的回环校验兜底；`removeMemory` 复用记忆域已有的删除路径
+      // （进回收站 + 清索引），不自己 rm —— 「删除都进回收站」这条 README 承诺没有例外。
+      ...evolutionOpsTable,
       // 兼容 / 注入 / 备份域（ops/compat.ts 提供）：compat-status / preset-reach /
       // inject-settings / backups-list / backups-clean / injection-live。
       // 依赖显式传参，不再靠闭包隐式捕获。
@@ -5195,7 +5389,18 @@ export default {
         : (promptOps['agentsmd-unapply'] as () => Promise<{ ok: boolean; error?: string; removed?: boolean }>)()
     }
     buildPromptTools({ ...toolDeps, promptOps: auditOps(promptOps), applyPresetGuarded: applyPresetForModel, unapplyPreset: unapplyPresetForModel, promptsDir })
-    buildMemoryTools({ ...toolDeps, rulesOps: auditOps(memoriesService.ops) })
+    buildMemoryTools({
+      ...toolDeps,
+      rulesOps: auditOps(memoriesService.ops),
+      // 主动记忆的两条工具（learn / forget）：只有开关打开时才进工具表（见
+      // `sessionToolTableOverlayOf` 的 allow）。op 层再挡一道 —— 两道都要，因为
+      // 工具表是"模型看不看得见"，op 是"调得通调不通"，中间隔着一次模型采样。
+      evolutionOps: auditOps(evolutionOpsTable),
+      autoLearnEnabled: autoLearnEnabledFor,
+      // 真实会话身份：层必须用它，不能用作用域键（切粒度会让会话记忆互相串目录）。
+      sessionIdentity: (agent: unknown) => sessionIdentityOf(agent),
+      activeSceneOf: (agent: unknown) => memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined,
+    })
     // 场景族（tools/scene.ts）：列场景与档案（`_list`）+ 建场景 / 写档案 / 绑提示词（`_save`）
     // + 进入与退出（`_switch`）。
     // 传**包装后**的 `archiveService.ops`：`scene-archive-save` 与 `scene-mode-set` 都在本文件

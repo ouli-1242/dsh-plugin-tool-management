@@ -5,6 +5,7 @@
 // 是要对着这些形状写的。
 import type { ModeState, SceneArchive } from './archive.js'
 import type { GroupIndexEntry, RuleIndexEntry, SceneIndexEntry } from './index-io.js'
+import type { Snapshot } from './snapshot.js'
 
 // ── 对外接口 ───────────────────────────────────────────────────────────────
 
@@ -233,6 +234,38 @@ export interface MemoriesService {
    * 那部分键必须保留并如实上报，不能绕开门禁偷偷写（见 mcpmRemove）。
    */
   sceneLocks: () => Promise<Record<string, boolean>>
+  /**
+   * 自动记忆写入管线要用的四样底层能力。
+   *
+   * 为什么打包成一个入口而不是五个顶层方法：这四样都不是"记忆域的对外行为"，
+   * 而是它内部实现的一部分（快照、序列化、路径、缓存失效）。自动记忆是它们唯一的
+   * 第二个调用方 —— 收在一个名字下，让"第二个调用方出现了"这件事在接口上是可见的，
+   * 同时不给三十个既有调用点各加一个可能被误用的方法。
+   */
+  autoAccess: {
+    /** 现有条目 + 正文 + 场景名（写入管线的门禁与去重要读）。 */
+    snapshot(): Promise<Snapshot>
+    /** 序列化 `frontmatter + 正文`（与 `rules-create` 同一实现，口径不会分叉）。 */
+    serializeRuleFile(fields: Record<string, string | boolean>, body: string): string
+    /**
+     * 当前启用的**非保留**场景（同步）。场景是单选模型，至多一个 —— 自动段据此决定
+     * 场景层要不要露头。`null` = 一个都没启用（此时场景层的自动记忆不注入）。
+     */
+    activeSceneSync(scope?: MemoryScopeOverride): string | null
+    /** 记忆根目录（绝对路径）。 */
+    memoriesRoot: string
+    /** 索引所在目录（hub 根）。 */
+    stateDir: string
+    /** 写后失效快照缓存。 */
+    invalidateSnapshot(): void
+    /**
+     * 全量重建自动记忆的派生索引（`evolution/catalog.json`）。
+     *
+     * 启动时跑一次（补齐历史条目 / 版本不符 / 文件缺失），之后每次记忆写操作由服务内部
+     * 自动重建 —— 所以调用方一般只需要在启动时调一次。
+     */
+    rebuildCatalog(): Promise<void>
+  }
 }
 
 // ── 内部类型 ───────────────────────────────────────────────────────────────

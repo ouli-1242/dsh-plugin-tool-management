@@ -12,6 +12,9 @@
 // `projectToolSchema` 不投影 output / execute，那几个不进请求。界面「模型工具表」那行
 // 合计与逐条 ≈tok 就是这份）：
 //   · 十八条隐藏 ≈**4,524 tok**，默认可见那六条 ≈**1,536 tok**，全开 ≈**6,055 tok**。
+//   · ⚠️ 上面那个 4,524 是**十八条**的值。之后又加了 `memory_manager_learn` /
+//     `memory_manager_forget` 两条（主动记忆，默认隐藏、开关打开时可见），**没有重测** ——
+//     引用合计时按"18 条 + 新增 2 条"分开说，别把 4,524 当成二十条的值。
 //   · A/B 实测（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
 //     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
 //     所以它们是**净节省的下界**，不是"省了多少"的上界。**那对数量的是当天那份描述** ——
@@ -127,9 +130,15 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'prompt_manager_list',
   'prompt_manager_apply',
   'plugin_manager_remove',
+  // 主动记忆的两条：默认藏着（它们是权限，不是便利），**开关打开时**才被
+  // `sessionToolTableOverlayOf` 的 `allow` 减出来（见 index.ts）。
+  // 放在这份名单而不是另建一张表：工具表清单、体积统计、兼容页分组全都读这一份，
+  // 多一张表就多一处"清单显示开着、实际被藏着"的错位。
+  'memory_manager_learn',
+  'memory_manager_forget',
 ])
 
-/** 出厂默认那份设置：十八条不发（名单与理由见上面），方案清单是空的。 */
+/** 出厂默认那份设置：二十条不发（名单与理由见上面），方案清单是空的。 */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */

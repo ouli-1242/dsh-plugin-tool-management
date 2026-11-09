@@ -105,6 +105,7 @@ import {
 import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, repairFromQuarantine, sceneRecordOf, normalizeScenePromptId, pathExists, isAbsentError } from './index-io.js'
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
 import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
+import { buildCatalog, catalogPathOf } from './catalog.js'
 import { watchDirectories } from '../skills/dir-watch.js'
 import type { ParsedSkillDoc, DiscoveredEntry, Snapshot } from './snapshot.js'
 
@@ -690,6 +691,23 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     sceneCatalogCache.clear()
     // 探测缓存同样清：写操作刚改了磁盘，下一拍必须重扫（监听会晚 200ms 才报，别等它）。
     clearProbeCache()
+    // 顺带重建自动记忆的派生索引：删除 / 编辑一条自动记忆走的是本服务的 op，
+    // 它不知道 catalog 的存在，而注入只读 catalog —— 不在这里重建，用户就会看到
+    // "删了还在注入"。全量重建 300 条约 40ms，写操作本来就不频繁，值得。
+    await rebuildCatalog().catch(() => {})
+  }
+
+  /**
+   * 全量重建 `evolution/catalog.json`（派生数据：丢了可重建）。
+   *
+   * 两个入口共用：启动时（补齐历史条目 / 版本不符 / 文件缺失）与每次记忆写之后。
+   * 失败一律吞掉 —— 派生索引坏了的后果是"这轮注入少几条"，而抛出去会让写操作假失败。
+   */
+  const rebuildCatalog = async (): Promise<void> => {
+    const index = await readIndex(stateDir)
+    const built = await buildCatalog(memoriesRoot, index)
+    await mkdir(join(stateDir, 'evolution'), { recursive: true })
+    await writeFileAtomically(catalogPathOf(stateDir), JSON.stringify(built, null, 2) + '\n', { mode: 0o600 })
   }
 
   /**
@@ -1171,6 +1189,25 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
         if (rec && rec.locked === true) out[name] = true
       }
       return out
+    },
+    // 自动记忆管线的第二个调用方（见接口注释）：四样都是本域内部已有的能力，这里只是
+    // 明确地交出去，不新增实现。
+    autoAccess: {
+      snapshot,
+      serializeRuleFile,
+      // 同步版：注入的 `text(agent)` 没有 await 的位置。读不到索引就当"没有启用场景"，
+      // 失败方向是"少注入场景层"而不是"把工作区层也关掉"。
+      activeSceneSync: (scope?: MemoryScopeOverride): string | null => {
+        try {
+          return enabledSceneOf(readIndexSync(stateDir), scope?.scene)
+        } catch {
+          return null
+        }
+      },
+      memoriesRoot,
+      stateDir,
+      invalidateSnapshot,
+      rebuildCatalog,
     },
   }
   return service
