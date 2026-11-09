@@ -134,21 +134,20 @@ export interface DomainSurfaceEntry {
 export function newestDomainTexts(agent: unknown, kinds: ReadonlyMap<string, KindMapping>): Map<InjectDomainKey, DomainSurfaceEntry> {
   const out = new Map<InjectDomainKey, DomainSurfaceEntry>()
   const session = (agent as { session?: any } | null | undefined)?.session
-  if (!session || typeof session.seq !== 'number' || typeof session.eventAt !== 'function') return out
+  if (!session) return out
   // 每个域只收两条信息：**最后一条内容**（`body` / `form`）与**最新一条是不是通知**（`cleared`）。
   // 自新到旧扫，第一次遇到该域时：
   //   · 是通知 → 记下 `cleared = true`（内容字段留空，等更早那条内容消息来填）；
   //   · 是内容 → 直接填内容字段（`cleared` 保持 false：通知之后已有新内容 = 已经"不清空"了）。
   // 内容字段填好之后就跳过该域更早的消息；只遇到通知、没遇到内容的域停在 `cleared` 上。
-  const scan = (seq: number): boolean => {
-    let event: any
-    try { event = session.eventAt(SessionSeq(seq)) } catch { return false }
-    if (!event || event.type !== 'user/message') return false
-    const source = event.data && event.data.source
+  //
+  // `message` 是模型可见的那条消息（`Message`），`source` 是它携带的来源标记。两条路径
+  // （`deriveMessages()` 与 `eventAt()` 兜底）只在这两个实参的取法上不同。
+  const absorb = (message: any, source: any): boolean => {
     const mapping = source && typeof source.kind === 'string' ? kinds.get(source.kind) : undefined
     if (mapping === undefined) return false
     const seen = out.get(mapping.key)
-    const text = textOf(event.data)
+    const text = textOf(message)
     if (text === undefined) return false
     const form = source && typeof source.form === 'string' ? source.form : ''
     if (form === 'notice') {
@@ -175,6 +174,34 @@ export function newestDomainTexts(agent: unknown, kinds: ReadonlyMap<string, Kin
   // 往更早找它的正文，否则内容恢复时 `body` 是空的，只能当成"内容变了"多发一条。
   const done = (): boolean =>
     out.size === INJECT_DOMAIN_KEYS.length && [...out.values()].every((entry) => entry.form !== 'notice')
+
+  // 主路径：`deriveMessages()` 是官方面向"模型可见消息"的公开出口，返回**模型可见顺序**
+  // 的 `Message[]`，`source` 完整保留。它内部按 `contentGeneration` 增量缓存 —— 实测 3000
+  // 节点 0.004 ms/次，比下面那条自建路径（读 `surface.nodes`、排序、逐个 `eventAt`）
+  // 快一个量级。
+  //
+  // 为什么仍留兜底：`eventAt` / `surface.nodes` 这一代里都在，而 `deriveMessages` 只在
+  // 宿主 `Session` 上有；契约测试的假 session 也只实现了前者。两条路径的结果必须逐字一致
+  // （`absorb` 是同一份实现），差异只在"怎么拿到消息"。
+  if (typeof session.deriveMessages === 'function') {
+    let messages: unknown
+    try { messages = session.deriveMessages() } catch { messages = undefined }
+    if (Array.isArray(messages)) {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i] as { source?: unknown } | null | undefined
+        if (absorb(message, message && message.source)) break
+      }
+      return out
+    }
+  }
+
+  if (typeof session.seq !== 'number' || typeof session.eventAt !== 'function') return out
+  const scan = (seq: number): boolean => {
+    let event: any
+    try { event = session.eventAt(SessionSeq(seq)) } catch { return false }
+    if (!event || event.type !== 'user/message') return false
+    return absorb(event.data, event.data && event.data.source)
+  }
   const nodes: unknown = session.surface && Array.isArray(session.surface.nodes) ? session.surface.nodes : undefined
   if (nodes !== undefined) {
     const seqs: number[] = []

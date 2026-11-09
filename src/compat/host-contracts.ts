@@ -257,10 +257,12 @@ export const HOST_BEHAVIOR_CONTRACTS: readonly HostModuleContract[] = [
   },
   {
     package: '@deepseek-ai/dsh-session',
-    feature: '会话事件序号',
-    impact: '注入表面的事件定位会失配',
+    feature: '会话事件序号与可见消息',
+    impact: '注入表面的事件定位与去重会失配',
     markers: [
       { needle: 'SessionSeq', why: '会话事件序号（注入表面按它定位事件）' },
+      { needle: 'deriveMessages', why: '模型可见消息的公开出口（注入表面按它读各域最新正文）' },
+      { needle: 'eventAt', why: '同步事件读取（deriveMessages 缺席时的兜底路径）' },
     ],
   },
   {
