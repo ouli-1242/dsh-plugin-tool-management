@@ -81,7 +81,7 @@ import { pruneSessionScopes } from '../lib/scope/store.js'
 import { createSkillCatalog, renderSkillCatalog, renderSkillCatalogDelta, skillCatalogNeedsTakeover } from '../lib/skills/catalog.js'
 import { createMcpStateCatalog } from '../lib/mcp/state-section.js'
 import { discoverProjectInstructions, findInstructionProjectRoot, renderProjectInstructions } from '../lib/prompts/project-instructions.js'
-import { OP_REGISTRY, contradictoryEntries, frozenOps, isReadCall, opClassOf, unclassifiedOps, writeWhenUnwritten } from '../lib/op-registry.js'
+import { OP_REGISTRY, contradictoryEntries, frozenOps, isReadCall, opClassOf, staleRegistryEntries, unclassifiedOps, writeWhenUnwritten } from '../lib/op-registry.js'
 import { appendOverrideEntry } from '../lib/token-config.js'
 import { assertStamp, normalizeStamp, stampConflict, stampOfText } from '../lib/stale-write.js'
 import { searchMemories, snippetOf } from '../lib/memories/search.js'
@@ -3359,6 +3359,40 @@ test('op 登记表里的每一条都必须真被接上（只登记不接线 = �
     !corpus.includes("'" + op + "'") && !corpus.includes('"' + op + '"'))
   assert.deepEqual(missing, [],
     '这些 op 只登记在 op-registry 里、没有任何一处接上（点下去只会 reject）：' + missing.join(', '))
+})
+
+test('op 登记表反向对账：真实 op 表里的键都必须登记（未登记 = 绕过写门禁与场景冻结）', () => {
+  // 上一条测的是「登记了没人接」；这一条测反方向。漏登记的症状**不报错**：`isReadCall`
+  // 对未登记 op 返回 false（按写处理，这一侧安全），但 `frozenOps()` 与写令牌门禁都只认
+  // 登记表，未登记的写 op 于是既不受场景冻结也不受令牌约束。启动期 `auditOpRegistry`
+  // 只往兼容页挂降级，拦不住发布 —— 这里把它钉在构建期。
+  //
+  // 扫的是「键 + 函数形态的值」：`'skill-open': skillOpen,` / `'rules-list': async (args) => …`
+  // 都算 op 表的一行。`'quick-prompts': []` 这类配置表、以及 `'subagent-persona': 'agentPreset.register'`
+  // 这类 canary 标签表，值不是函数，天然被排除。
+  const root = join(import.meta.dirname, '..', 'src')
+  const files = []
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name)
+      // `src/client` 是调用方，写着 op 名字只说明界面会打这个请求；`op-registry.ts` 是登记表
+      // 本身，拿它当证据等于自证。
+      if (e.isDirectory()) { if (e.name !== 'client') walk(p) }
+      else if (/\.(ts|js|mjs)$/.test(e.name) && e.name !== 'op-registry.ts') files.push(p)
+    }
+  }
+  walk(root)
+  const opKeyLine = /^[ \t]*(['"])([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\1[ \t]*:[ \t]*(?:async[ \t]+)?(?:\(|function\b|[A-Za-z_$][\w$]*[ \t]*[(,}])/gm
+  const liveOps = new Set()
+  for (const file of files) {
+    for (const m of readFileSync(file, 'utf8').matchAll(opKeyLine)) liveOps.add(m[2])
+  }
+  // 扫描器自身失效（目录改名、源码被移到别处）时不能静默通过：空集合喂给两个对账函数都返回空。
+  assert.ok(liveOps.size > 100, 'op 键扫描只找到 ' + liveOps.size + ' 个，扫描规则已失效，先修测试')
+  assert.deepEqual(unclassifiedOps(liveOps), [],
+    '这些 op 有 handler 但没在 op-registry 登记，因此不受写门禁与场景冻结约束：' + unclassifiedOps(liveOps).join(', '))
+  assert.deepEqual(staleRegistryEntries(liveOps), [],
+    '这些 op 登记了但没有 handler 接上（改名或删除时漏同步）：' + staleRegistryEntries(liveOps).join(', '))
 })
 
 test('回收站详情：技能条目名走「安全路径段」，hub / 记忆条目名走严格白名单', async () => {
