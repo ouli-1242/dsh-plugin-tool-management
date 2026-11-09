@@ -732,6 +732,15 @@
           var evo = evs[0], setEvo = evs[1]
           var evb = React.useState(false)
           var evoBusy = evb[0], setEvoBusy = evb[1]
+          // 展开的是哪一条（同时只开一条：这一页的行已经够密，开三条会把记忆列表推出一屏）。
+          var evd = React.useState(null)
+          var evoDetail = evd[0], setEvoDetail = evd[1]
+          // 详情缓存（id → evolution-read 的返回）。不缓存的话每点一次都重读一次盘，
+          // 而用户会在几条之间来回比。
+          var evc = React.useState({})
+          var evoCache = evc[0], setEvoCache = evc[1]
+          var evoOrgState = React.useState(null)
+          var evoOrg = evoOrgState[0], setEvoOrg = evoOrgState[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -801,6 +810,77 @@
             }).catch(function (e) { setEvoBusy(false); setModal(null); setResult({ ok: false, text: errMsg(e) }) })
           }
 
+          /** 停用 / 启用。停用不删文件 —— 这是它与「删除」的区别，回执里要说清。 */
+          function setEvolutionStatus(id, enabled) {
+            setEvoBusy(true)
+            apiCall('evolution-set-status', { id: id, enabled: enabled, actor: 'user' }).then(function (res) {
+              setEvoBusy(false)
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t(enabled ? 'evo.enabled' : 'evo.disabled') })
+                setEvoCache({})
+                refreshEvolution()
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
+          function promoteEvolution(id) {
+            setEvoBusy(true)
+            apiCall('evolution-promote', { id: id, actor: 'user' }).then(function (res) {
+              setEvoBusy(false)
+              setModal(null)
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.promoted') })
+                setEvoCache({})
+                refreshEvolution()
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setEvoBusy(false); setModal(null); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
+          /** 点行名展开详情：详情按需拉一次（basis / boundary / 证据只在正文与 state 里）。 */
+          function toggleEvolutionDetail(id) {
+            if (evoDetail === id) { setEvoDetail(null); return }
+            setEvoDetail(id)
+            if (evoCache[id]) return
+            apiCall('evolution-read', { id: id }).then(function (res) {
+              if (res && res.ok !== false) {
+                setEvoCache(function (cur) { var next = Object.assign({}, cur); next[id] = res; return next })
+              }
+            }).catch(function () { /* 详情拉不到不影响列表；展开区显示"暂无" */ })
+          }
+
+          /** 算整理草案（只读）。结果留在卡片里，用户逐条「应用」。 */
+          function runOrganize() {
+            setEvoOrg({ busy: true, drafts: null, scanned: 0, error: null })
+            apiCall('evolution-organize', { scope: 'workspace' }).then(function (res) {
+              if (res && res.ok !== false) {
+                setEvoOrg({ busy: false, drafts: res.drafts || [], scanned: Number(res.scanned) || 0, error: null })
+              } else setEvoOrg({ busy: false, drafts: null, scanned: 0, error: translateError(t, res) })
+            }).catch(function (e) { setEvoOrg({ busy: false, drafts: null, scanned: 0, error: errMsg(e) }) })
+          }
+
+          function applyOrganizeDraft(d) {
+            setEvoOrg(function (cur) { return cur ? Object.assign({}, cur, { busy: true }) : cur })
+            apiCall('evolution-apply-organize', { action: d.action, ids: d.ids, keep: d.keep }).then(function (res) {
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.organize.applied') })
+                setEvoCache({})
+                setEvoOrg(function (cur) {
+                  if (!cur) return cur
+                  // 应用过的那条从草案里拿掉：留着会让用户以为没生效、再点一次。
+                  return Object.assign({}, cur, {
+                    busy: false,
+                    drafts: (cur.drafts || []).filter(function (x) { return x.id !== d.id }),
+                  })
+                })
+                refreshEvolution()
+              } else {
+                setEvoOrg(function (cur) { return cur ? Object.assign({}, cur, { busy: false, error: translateError(t, res) }) : cur })
+              }
+            }).catch(function (e) {
+              setEvoOrg(function (cur) { return cur ? Object.assign({}, cur, { busy: false, error: errMsg(e) }) : cur })
+            })
+          }
+
           /** 三级里的一行：分段控件 [继承][开][关]。全局那行没有「继承」。 */
           function renderEvoScopeRow(scope, label, defined, value, inherited) {
             var effective = defined ? value === true : inherited === true
@@ -820,6 +900,59 @@
               React.createElement('span', { className: 'dsm-evo-scope-state' + (effective ? ' dsm-evo-on' : '') }, effective ? t('evo.state.on') : t('evo.state.off')))
           }
 
+          /** 展开区：依据 / 边界 / 证据 / 时间线。数据来自 `evolution-read`（按需拉一次）。 */
+          function renderEvolutionDetail(e) {
+            var d = evoCache[e.id]
+            var out = []
+            if (!d) {
+              out.push(React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')))
+            } else if (d.ok === false) {
+              out.push(React.createElement('p', { key: 'e', className: 'dsm-help' }, translateError(t, d)))
+            } else {
+              var st = d.state || {}
+              var c = st.counters || {}
+              out.push(React.createElement('div', { key: 'id', className: 'dsm-evo-detail-id' }, e.id))
+              out.push(React.createElement('div', { key: 'c', className: 'dsm-help' }, t('evo.detail.counters', {
+                injected: Number(c.injected) || 0,
+                helpful: Number(c.helpful) || 0,
+                harmful: Number(c.harmful) || 0,
+              })))
+              if (d.basis) out.push(React.createElement('div', { key: 'b', className: 'dsm-evo-detail-row' },
+                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.detail.basis')),
+                React.createElement('span', null, String(d.basis))))
+              if (d.boundary) out.push(React.createElement('div', { key: 'bd', className: 'dsm-evo-detail-row' },
+                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.detail.boundary')),
+                React.createElement('span', null, String(d.boundary))))
+              var ev = Array.isArray(st.evidence) ? st.evidence : []
+              out.push(React.createElement('div', { key: 'ev', className: 'dsm-evo-detail-block' },
+                React.createElement('div', { className: 'dsm-evo-detail-key' }, t('evo.detail.evidence')),
+                ev.length
+                  ? ev.map(function (x, i) {
+                    return React.createElement('div', { key: 'e' + i, className: 'dsm-evo-ev' },
+                      React.createElement('span', { className: 'dsm-evo-ev-src' }, String(x.source || '')),
+                      React.createElement('span', null, String(x.quote || '')))
+                  })
+                  : React.createElement('div', { className: 'dsm-help' }, t('evo.detail.empty'))))
+              // 时间线：状态转移是"这条记忆经历过什么"的唯一记录。删除 / 取代之后
+              // 条目会从默认列表里消失，而这条线是事后追查的唯一入口。
+              var tr = Array.isArray(st.transitions) ? st.transitions : []
+              out.push(React.createElement('div', { key: 'tr', className: 'dsm-evo-detail-block' },
+                React.createElement('div', { className: 'dsm-evo-detail-key' }, t('evo.detail.timeline')),
+                tr.length
+                  ? tr.map(function (x, i) {
+                    var when = x.at ? new Date(String(x.at)).toLocaleString() : ''
+                    var actor = t('evo.actor.' + String(x.actor || 'system'))
+                    return React.createElement('div', { key: 't' + i, className: 'dsm-evo-ev' },
+                      React.createElement('span', { className: 'dsm-evo-ev-src' }, when),
+                      React.createElement('span', null,
+                        String(x.from || '') + ' → ' + String(x.to || '') + ' · ' + actor +
+                        (x.reason ? ' · ' + String(x.reason) : '')))
+                  })
+                  : React.createElement('div', { className: 'dsm-help' }, t('evo.detail.empty'))))
+            }
+            return React.createElement('div', { className: 'dsm-evo-detail' }, out)
+          }
+
           function renderEvolutionRow(e) {
             var statusKey = e.status === 'core' ? 'evo.tag.core'
               : e.status === 'active' ? 'evo.tag.active'
@@ -828,6 +961,7 @@
                     : 'evo.tag.candidate'
             var tone = e.status === 'core' || e.status === 'active' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
             var pending = e.status === 'candidate' || typeof e.needsReview === 'string'
+            var open = evoDetail === e.id
             var metaBits = [
               t('evo.layer.' + e.layer),
               t('evo.confidence', { value: Math.round((Number(e.confidence) || 0) * 100) }),
@@ -837,9 +971,18 @@
             return React.createElement(ListRow, {
               key: e.id,
               dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: t(statusKey) })],
-              name: e.oneLine || e.id,
+              // 行名就是展开开关：详情（依据 / 证据 / 时间线）收在名字下面，
+              // 不另开一个弹窗 —— 用户要对照着几条看，弹窗一次只能看一条。
+              name: React.createElement('button', {
+                type: 'button',
+                className: 'dsm-evo-name',
+                'aria-expanded': open,
+                title: e.id,
+                onClick: function (ev) { ev.stopPropagation(); toggleEvolutionDetail(e.id) },
+              }, (e.oneLine || e.id) + (open ? ' ▾' : ' ▸')),
               tag: React.createElement(StatusTag, { tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : undefined, text: t(statusKey) }),
               meta: metaBits.join(' · '),
+              extra: open ? renderEvolutionDetail(e) : null,
               side: pending
                 ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
                 : null,
@@ -848,6 +991,12 @@
                 label: t('evo.menu', { name: e.oneLine || e.id }),
                 items: [
                   { key: 'approve', label: t('evo.approve'), disabled: evoBusy || !pending, onClick: function () { approveEvolution(e.id) } },
+                  // 停用与删除是两种意图：前者"别再拿它烦我"（随时能回来），
+                  // 后者"别再存在"（30 天墓碑）。菜单里相邻但不合并。
+                  e.status === 'archived'
+                    ? { key: 'enable', label: t('evo.enable'), disabled: evoBusy, onClick: function () { setEvolutionStatus(e.id, true) } }
+                    : { key: 'disable', label: t('evo.disable'), disabled: evoBusy || e.status === 'superseded', onClick: function () { setEvolutionStatus(e.id, false) } },
+                  { key: 'promote', label: t('evo.promote'), disabled: evoBusy || e.status === 'archived' || e.status === 'superseded', onClick: function () { setModal({ type: 'evo-promote', entry: e }) } },
                   { key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } },
                 ],
               })],
@@ -878,7 +1027,16 @@
                   learned: auto.entries || 0,
                   active: auto.active || 0,
                   pending: auto.needsReview || 0,
-                }))),
+                })),
+                // 「整理」放在统计这一行的右端：它管的是整份清单，不是某一条。
+                // 只在已经学到东西时出现 —— 零条时点它只会得到一句"没有需要整理的"。
+                rows.length === 0 ? null : React.createElement('button', {
+                  key: 'org',
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn-quiet dsm-evo-organize-btn',
+                  disabled: !!(evoOrg && evoOrg.busy),
+                  onClick: runOrganize,
+                }, evoOrg && evoOrg.busy ? t('evo.organize.scanning') : t('evo.organize'))),
               (auto.needsReview || 0) > 0 || rows.length > 0 ? null : React.createElement('p', { key: 'empty', className: 'dsm-help' }, t('evo.empty')),
               rows.length === 0 ? null : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
                 groups.map(function (g) {
@@ -890,6 +1048,30 @@
                       React.createElement('span', { className: 'dsm-count dsm-count-tight' }, String(list.length))),
                     list.map(renderEvolutionRow))
                 })),
+              // 整理草案：只出建议，逐条「应用」。用红色 / 确定的语气说"还没改"，
+              // 否则用户会以为点了「整理」就已经合并掉了。
+              evoOrg ? React.createElement('div', { key: 'org', className: 'dsm-evo-organize' },
+                evoOrg.error ? React.createElement(Notice, { kind: 'err', text: evoOrg.error }) : null,
+                !evoOrg.error && evoOrg.drafts !== null && evoOrg.drafts.length === 0
+                  ? React.createElement('p', { className: 'dsm-help' }, t('evo.organize.none', { scanned: evoOrg.scanned }))
+                  : null,
+                !evoOrg.error && evoOrg.drafts && evoOrg.drafts.length
+                  ? React.createElement('div', null,
+                    React.createElement('div', { className: 'dsm-evo-detail-key' }, t('evo.organize.title', { count: evoOrg.drafts.length })),
+                    evoOrg.drafts.map(function (d) {
+                      return React.createElement('div', { key: d.id, className: 'dsm-evo-draft' },
+                        React.createElement('span', { className: 'dsm-tag' }, t('evo.organize.action.' + d.action)),
+                        React.createElement('span', { className: 'dsm-evo-draft-id' }, (d.ids || []).join(' + ')),
+                        React.createElement('span', { className: 'dsm-evo-draft-reason' }, String(d.reason || '')),
+                        React.createElement('button', {
+                          type: 'button',
+                          className: 'dsm-btn dsm-btn-quiet',
+                          disabled: !!evoOrg.busy,
+                          onClick: function () { applyOrganizeDraft(d) },
+                        }, t('evo.organize.apply')))
+                    }))
+                  : null)
+                : null,
             ]
             // 收着也能看懂"现在开没开"：卡头右侧那颗灯 + 一句话。
             var overall = eff.enabled === true
@@ -986,6 +1168,13 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: evoBusy, onClick: function () { forgetEvolution(modal.entry.id) } }, t('evo.forget')))) : null,
+            // 提升会改变这条记忆的**归属**（自动 → 用户），而不只是状态位：它从此不再被
+            // 自动调整，也开始占用用户记忆的预算。这一条要单独确认，不能混进菜单点了就走。
+            modal && modal.type === 'evo-promote' ? React.createElement(Modal, { key: 'evoprom', className: 'dsm-modal-sm', title: t('evo.promote.title', { name: modal.entry.oneLine || modal.entry.id }), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.promote.desc')),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: evoBusy, onClick: function () { promoteEvolution(modal.entry.id) } }, t('evo.promote')))) : null,
             modal && modal.type === 'stop' ? React.createElement(Modal, { key: 'mstop', className: 'dsm-modal-sm', title: t('scope.unifiedClose'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('scope.unifiedClose.viewDesc', { name: modal.rule.name || modal.rule.id })),
               React.createElement('div', { className: 'dsm-modal-actions' },

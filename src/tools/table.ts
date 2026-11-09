@@ -136,6 +136,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   // 多一张表就多一处"清单显示开着、实际被藏着"的错位。
   'memory_manager_learn',
   'memory_manager_forget',
+  'memory_manager_organize',
 ])
 
 /** 出厂默认那份设置：二十条不发（名单与理由见上面），方案清单是空的。 */

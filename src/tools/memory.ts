@@ -63,10 +63,40 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 显式映射一次 —— 改 op 的字段名要动界面，那不是这一条能顺手做的事。
       scene: { type: 'string', description: 'Optional scene filter; `global` and `_shared` are the always-on scenes.' },
       all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
+      auto: { type: 'boolean', description: 'List the notes the agent learned by itself (proactive memory) instead of the ones the user wrote. Off entries are hidden unless all=true.' },
       limit: { type: 'number', description: 'Max entries (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
+      // 自动记忆与用户记忆**分成两次列**：两者权威等级、状态机、可做的操作都不同
+      // （一个能 approve / promote，一个能 edit / bundle）。混成一张表时模型会拿
+      // 「已确认」去描述用户写的东西，也会拿 `layer` 去描述场景 —— 两边的术语不一样。
+      if (args && args.auto === true) {
+        if (!deps.evolutionOps) throw new Error('proactive memory is not available in this build')
+        const r: any = await deps.evolutionOps['evolution-list']({ all: args.all === true })
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read learned notes'))
+        const rows: any[] = Array.isArray(r.entries) ? r.entries : []
+        const limit = listLimit(args && args.limit)
+        const shown = rows.slice(0, limit)
+        const order = ['session', 'workspace', 'scene', 'global']
+        const lines: string[] = []
+        for (const layer of order) {
+          const group = shown.filter((e) => e.layer === layer)
+          if (!group.length) continue
+          lines.push('[' + layer + ']')
+          for (const e of group) {
+            lines.push('- ' + e.id + ' · ' + String(e.status || 'active') +
+              ' · conf ' + (Number(e.confidence) || 0).toFixed(2) +
+              ' · ' + (e.injects ? 'injects' : 'not injected') +
+              (e.needsReview ? ' · needs review: ' + String(e.needsReview) : '') +
+              (e.oneLine ? ' — ' + String(e.oneLine) : ''))
+          }
+        }
+        const head = 'learned notes (agent-written): ' + rows.length + ' listed' +
+          (r.total !== undefined ? ' / ' + r.total + ' in catalog' : '') +
+          (rows.length > shown.length ? ' (showing ' + shown.length + ', raise limit for more)' : '')
+        return head + '\n' + (lines.join('\n') || '(none)')
+      }
       const showAll = Boolean(args && args.all === true)
       // `scene` → `group`：只把 op 认的那个字段传过去，别把 `scene` 也塞给它（它不认）。
       const opArgs: any = {}
@@ -152,7 +182,39 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
       // op 的字段名是 `id`，不改 op：这里显式转换（键名对模型是 `<场景>/<名字>`，对 op 是 `id`）。
-      const r: any = await deps.rulesOps['rules-read']({ id: String((args && args.memory) || '') })
+      const wantId = String((args && args.memory) || '')
+      const r: any = await deps.rulesOps['rules-read']({ id: wantId })
+      const isAuto = r && r.ok !== false && r.rule && r.rule.origin === 'auto'
+      // 自动条目要补证据链：`rules-read` 给的是正文与 form，回答不了"为什么记它、现在还成立吗"。
+      // 那几样只在 state.json 里（`evolution-read`）。用户记忆没有这一段，所以按 origin 分流，
+      // 不是每次 read 都多读一次盘。
+      if (deps.evolutionOps && (isAuto || !r || r.ok === false)) {
+        const a: any = await deps.evolutionOps['evolution-read']({ id: wantId })
+        if (a && a.ok) {
+          const st = a.state || {}
+          const bits = [
+            'status ' + String(a.status || 'active'),
+            'confidence ' + (Number(st.confidence) || 0).toFixed(2),
+            a.layer,
+          ]
+          const lines = ['# ' + wantId + ' (learned note)', bits.join(' · ')]
+          if (a.basis) lines.push('basis: ' + String(a.basis))
+          if (a.boundary) lines.push('boundary: ' + String(a.boundary))
+          if (a.degraded) lines.push('degraded: ' + String(a.degraded))
+          lines.push('', String(a.body || ''))
+          const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
+          if (ev.length) {
+            lines.push('', 'evidence (latest ' + ev.length + '):')
+            for (const e of ev) lines.push('- [' + String(e.source || '') + '] ' + String(e.quote || '').slice(0, 200))
+          }
+          const tr: any[] = Array.isArray(st.transitions) ? st.transitions : []
+          if (tr.length) {
+            lines.push('', 'timeline:')
+            for (const x of tr) lines.push('- ' + String(x.at || '') + ' ' + String(x.from || '') + ' → ' + String(x.to || '') + ' (' + String(x.actor || '') + ': ' + String(x.reason || '') + ')')
+          }
+          return lines.join('\n')
+        }
+      }
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read memories')
       const rule: any = r.rule || {}
       // 形态与附件名：op 一直把 `attachments` 给了出来，这里此前**整个丢掉**，
@@ -482,6 +544,29 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const r: any = await evo['evolution-forget']({ id, actor: 'model' })
       if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to forget it'))
       return 'OK: forgot ' + String(r.id || id) + '. It will not be learned again for 30 days.'
+    },
+  }))
+
+  register(defineTool({
+    name: 'memory_manager_organize',
+    // 只出草案、不给 apply 参数：整理是**不可逆**的（合并会丢掉一条的独立地位、归档会
+    // 让它不再注入）。模型说一句"整理一下"就把五条合并了，用户没有机会看它合了什么。
+    // 应用入口留在界面（用户逐条点），与 learn 的零摩擦正好相反 —— 那条是"多记一条"，
+    // 这条是"少一条 / 改一条"。
+    description: 'Draft a cleanup of the notes you learned: merge near-duplicates, archive stale candidates, promote proven ones. Read-only — returns suggestions to show the user; they apply them in Memory. Use when asked to tidy up what you remember.',
+    parameters: {
+      scope: { type: 'string', enum: ['workspace', 'global', 'all'], description: 'Which set to look at (default workspace).' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+    async execute(args: any) {
+      const r: any = await evo['evolution-organize']({ scope: (args && args.scope) || 'workspace' })
+      if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to draft a cleanup'))
+      const drafts: any[] = Array.isArray(r.drafts) ? r.drafts : []
+      const scanned = Number(r.scanned) || 0
+      if (!drafts.length) return 'Nothing to tidy: ' + scanned + ' learned note(s) scanned, no merges / archives / promotions suggested.'
+      const lines = drafts.map((d: any, i: number) =>
+        (i + 1) + '. [' + String(d.action) + '] ' + (Array.isArray(d.ids) ? d.ids.join(' + ') : '') + ' — ' + String(d.reason || ''))
+      return 'Drafted ' + drafts.length + ' change(s) from ' + scanned + ' learned note(s). Nothing has been changed yet — the user applies them in Memory → Learned notes.\n' + lines.join('\n')
     },
   }))
 }

@@ -438,7 +438,12 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     kind,
     key,
     source,
-    quote,
+    // `quote` 入参可以为空（tool_verified / model_inference 不需要引句），但回执里的
+    // `quote` 是**证据链上的那一句**，不能是空串：
+    //   · `collectEvidence` 拿它当 evidence.quote，空了这条证据就没法回答"凭什么"；
+    //   · 合并去重按 `session + quote` 判重，两条空 quote 会被当成同一条，
+    //     症状是"合并只并了状态、证据没并过来"，置信度凭空掉一截。
+    quote: quote || rawText,
     layer,
     group,
     status,

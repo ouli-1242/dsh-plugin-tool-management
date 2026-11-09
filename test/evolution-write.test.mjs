@@ -371,3 +371,113 @@ test('会话层：sid 不能当目录名时拒，不静默落到别的层', asyn
     assert.deepEqual(h.docs(), [])
   } finally { h.done() }
 })
+
+// ── P1 补充：停用 / 恢复 / 提升 / 整理 ─────────────────────────────────────
+
+test('setStatus：停用只转状态、不搬文件；恢复后索引与 catalog 都回来', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+
+    const off = await h.learner.setStatus(r.id, 'archived')
+    assert.equal(off.ok, true, off.error)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'archived')
+    assert.equal(h.readIndex().rules[r.id].enabled, false)
+    assert.equal(h.readCatalog().entries[r.id].enabled, false)
+    // 关键词：**不搬文件**。这是「停用」与「删除」的全部区别，也是它可恢复的前提。
+    assert.deepEqual(h.docs(), [r.id], '停用不该把正文移走')
+    assert.equal(h.readState().entries[r.id].transitions.at(-1).to, 'archived')
+
+    const on = await h.learner.setStatus(r.id, 'active')
+    assert.equal(on.ok, true, on.error)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
+    assert.equal(h.readIndex().rules[r.id].enabled, true)
+    assert.equal(h.readCatalog().entries[r.id].enabled, true)
+  } finally { h.done() }
+})
+
+test('setStatus：已被取代的条目拒绝恢复（新旧两条同时注入 = 模型看到矛盾）', async () => {
+  const h = harness()
+  try {
+    const first = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    const second = await h.learner.learn(
+      { text: '这个仓库改用 npm 了，pnpm 不再可用', key: 'package-manager', source: 'user_explicit' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(second.ok, true, second.error)
+    const revive = await h.learner.setStatus(first.id, 'active')
+    assert.equal(revive.ok, false)
+    assert.equal(revive.code, 'superseded')
+    assert.match(revive.error, /conflicting/i)
+  } finally { h.done() }
+})
+
+test('promote：auto_* 删干净、origin 变 user、从 state 与 catalog 里移出', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { text: '回答先给结论，再给理由', key: 'answer-style', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    const p = await h.learner.promote(r.id)
+    assert.equal(p.ok, true, p.error)
+    assert.equal(p.promoted, true)
+
+    const doc = h.readDoc(r.id)
+    assert.equal(pickField(doc, 'origin'), 'user')
+    // 留一个 auto_ 字段就会在下一次全量重建时被重新收进自动段 —— 提升等于没提升。
+    for (const field of ['auto_status', 'auto_key', 'auto_kind', 'auto_confidence', 'auto_basis', 'auto_workspace']) {
+      assert.equal(pickField(doc, field), '', field + ' 必须删掉')
+    }
+    assert.equal(h.readState().entries[r.id], undefined, '它不再是自动条目，state 里不该留着')
+    assert.equal(h.readCatalog().entries[r.id], undefined, 'catalog 只索引自动条目')
+    assert.equal(h.readIndex().rules[r.id].enabled, true, '提升后仍要注入（走用户记忆那条路）')
+  } finally { h.done() }
+})
+
+test('organize → applyOrganize(merge)：保留项正文不动、被并项转 superseded、证据并过来', async () => {
+  const h = harness()
+  try {
+    const a = await h.learner.learn(
+      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    const b = await h.learner.learn(
+      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-message-lang', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(a.ok, true, a.error)
+    assert.equal(b.ok, true, b.error)
+    assert.equal(h.docs().length, 2, '不同 key 不会被写入管线合并')
+
+    const plan = await h.learner.organize('workspace')
+    assert.equal(plan.ok, true, plan.error)
+    const merge = plan.drafts.find((d) => d.action === 'merge')
+    assert.ok(merge, '相似度 0.86 的两条该出合并草案')
+
+    const res = await h.learner.applyOrganize(merge)
+    assert.equal(res.ok, true, res.error)
+    assert.equal(pickField(h.readDoc(b.id), 'auto_status'), 'superseded')
+    assert.match(pickField(h.readDoc(a.id), 'auto_boundary'), /不要写英文/, '被并项的说法要补进保留项的边界')
+    assert.equal(h.readState().entries[a.id].evidence.length, 2, '证据并过来，置信度才不会因为少了一条而掉')
+
+    // 再算一次不该再出同一对：草案必须以"当前状态"为输入，否则界面点两次都成功。
+    const again = await h.learner.organize('workspace')
+    assert.equal(again.ok, true, again.error)
+    assert.equal(again.drafts.filter((d) => d.action === 'merge').length, 0)
+  } finally { h.done() }
+})

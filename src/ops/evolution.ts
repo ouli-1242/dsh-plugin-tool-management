@@ -288,6 +288,89 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     /**
+     * 停用 / 恢复一条。
+     *
+     * 与 `evolution-forget` 的区别要体现在回执里：这条**不删文件、不写墓碑**，随时能恢复。
+     * 用户点「停用」时想的是"别再拿它烦我"，不是"永远别让我看见"。
+     */
+    'evolution-set-status': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '')
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        // 两个入参名都收：界面按开关语义传 `enabled`，工具按状态语义传 `status`。
+        // 只认一个会让另一条路静默写成 undefined —— 而 `setStatus` 会拿它跟当前值比、
+        // 比不出来就返回 unchanged，症状是"点了没反应但不报错"。
+        const status = args?.status === 'archived' || args?.enabled === false
+          ? 'archived'
+          : 'active'
+        const result = await learner.setStatus(id, status, args?.actor === 'user' ? 'user' : 'curator')
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'status-failed' }
+      }
+    },
+
+    /** 提升为用户记忆：从自动段移出，进用户记忆的注入与预算。 */
+    'evolution-promote': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '')
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        const result = await learner.promote(id, { actor: args?.actor === 'user' ? 'user' : 'curator' })
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'promote-failed' }
+      }
+    },
+
+    /** 读一条自动记忆的详情（界面展开 / `memory_manager_read` 兜底）。 */
+    'evolution-read': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '')
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        return await learner.describe(id)
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'read-failed' }
+      }
+    },
+
+    /**
+     * 算整理草案：只读。
+     *
+     * 返回的 `drafts[].id` 是确定性的（action + ids）—— 界面「应用」时原样回传，
+     * 服务端不靠"再算一遍碰运气"，而是按回传的 ids 直接执行并逐条校验。
+     */
+    'evolution-organize': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const scope = args?.scope === 'all' ? 'all' : args?.scope === 'global' ? 'global' : 'workspace'
+        return await learner.organize(scope)
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'organize-failed' }
+      }
+    },
+
+    /** 应用一条草案（用户点过「应用」才会到这里）。 */
+    'evolution-apply-organize': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const result = await learner.applyOrganize({
+          action: args?.action,
+          ids: Array.isArray(args?.ids) ? args.ids.map((x: unknown) => String(x)) : undefined,
+          ...(typeof args?.keep === 'string' ? { keep: args.keep } : {}),
+        })
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'apply-failed' }
+      }
+    },
+
+    /**
      * 列自动记忆（界面与 `memory_manager_list` 共用）。
      *
      * 与 `rules-list` 分开：那条列的是"用户记忆"，这条列的是"agent 学的" —— 两者在界面上
@@ -297,10 +380,14 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       try {
         const view = runtime.view()
         const layerFilter = typeof args?.layer === 'string' && args.layer !== '' ? args.layer : undefined
+        const statusFilter = typeof args?.status === 'string' && args.status !== '' ? args.status : undefined
+        const kindFilter = typeof args?.kind === 'string' && args.kind !== '' ? args.kind : undefined
         const includeAll = args?.all === true
         const rows: any[] = []
         for (const entry of Object.values(view.catalog.entries)) {
           if (layerFilter && entry.layer !== layerFilter) continue
+          if (statusFilter && entry.status !== statusFilter) continue
+          if (kindFilter && entry.kind !== kindFilter) continue
           const st = view.state.entries[entry.id]
           const needsReview = st && typeof st.needsReview === 'string' && st.needsReview !== ''
           // 默认只列"会注入的 + 待确认的"：archived / superseded 只在 all=true 时出现。
@@ -315,6 +402,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             oneLine: entry.oneLine,
             pinned: entry.pinned,
             enabled: entry.enabled,
+            // 「会不会进上下文」的主判据就是这两个：状态与单条开关。层匹配由调用方判
+            // （界面知道自己是谁、模型知道自己的 sid/cwd），op 层不猜。
+            injects: entry.enabled && (entry.status === 'active' || entry.status === 'core'),
             tokens: entry.estTokens,
             workspace: entry.workspace,
             scene: entry.scene,
@@ -323,8 +413,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(needsReview ? { needsReview: st!.needsReview } : {}),
             ...(st?.locked === true ? { locked: true } : {}),
             counters: st?.counters ?? { injected: 0, read: 0, helpful: 0, harmful: 0 },
-            evidence: (st?.evidence ?? []).map((ev) => ({ source: ev.source, quote: ev.quote, at: ev.at, session: ev.session })),
-            transitions: st?.transitions ?? [],
+            // 证据不在这里返回：一条 quote 可以到 2000 字，界面一次刷新几十条就是几十 KB。
+            // 时间线留最近 5 条（很小），展开单条时再走 `evolution-read` 补证据与依据。
+            transitions: (st?.transitions ?? []).slice(-5),
           })
         }
         // 待确认的排前面：界面的「待确认」入口靠这个顺序。

@@ -28,6 +28,7 @@ import {
   runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome,
 } from './gates.js'
 import { deriveKey } from './gates.js'
+import { draftOrganize, type OrganizeAction, type OrganizeDraft } from './organize.js'
 import {
   confidenceOf, emptyCounters, pushTransition, textHashOf, type EvidenceSource, type EvolutionState, type EvolutionStateStore,
 } from './state.js'
@@ -505,6 +506,20 @@ export function createLearner(deps: LearnDeps) {
   const demoteCatalog = (id: string, status: 'archived' | 'superseded'): Promise<void> =>
     patchCatalogEntry(id, { status, enabled: false })
 
+  /** 派生数据：从 catalog 里删掉一条（提升为用户记忆后，它不再归自动段管）。 */
+  async function dropCatalogEntry(id: string): Promise<void> {
+    try {
+      const abs = catalogPathOf(deps.stateDir)
+      const catalog = normalizeCatalog(JSON.parse(await readFile(abs, 'utf8')))
+      if (!catalog.entries[id]) return
+      delete catalog.entries[id]
+      catalog.builtAt = new Date().toISOString()
+      await writeFileAtomically(abs, JSON.stringify(catalog, null, 2) + '\n', { mode: 0o600 })
+    } catch {
+      /* 派生数据：下次全量重建会把它清掉（用户记忆不进 catalog） */
+    }
+  }
+
   /** 忘掉一条：正文进回收站，状态转 archived，写墓碑。 */
   async function forget(
     id: string,
@@ -629,7 +644,254 @@ export function createLearner(deps: LearnDeps) {
     })
   }
 
-  return { learn, forget, approve }
+  /**
+   * 停用 / 恢复一条。
+   *
+   * 停用 = `archived`（文件留着、不写墓碑、可恢复）；它与 `forget` 的区别是"不想再看到"
+   * 还是"不想再存在"。用户把一条学错的收起来，过两周可能又想用 —— 那就得能恢复。
+   *
+   * 恢复只对 `archived` 开放：`superseded` 是被新事实取代的历史，复活它会让新旧两条
+   * 同时注入，模型看到矛盾的两句话然后随机选一句。候选走 `approve`，不走这里。
+   */
+  async function setStatus(
+    id: string,
+    status: 'active' | 'archived',
+    actor: 'user' | 'curator' = 'user',
+  ): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'active' | 'archived'; confidence: number; unchanged?: boolean }> {
+    return deps.withWriteLock(async () => {
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const { group, name, layer } = split
+      const docPath = join(deps.memoriesRoot, group, name + '.md')
+      let text: string
+      try {
+        text = await readFile(docPath, 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: `not found: ${id}` }
+      }
+      const current = pickField(text, 'auto_status') || 'active'
+      if (current === 'superseded') {
+        return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory; restoring it would inject two conflicting facts.` }
+      }
+      const entry = st.entries[id] ?? { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
+      if (current === status) {
+        return { ok: true, id, layer, status, confidence: entry.confidence ?? 0, unchanged: true }
+      }
+      const nowIso = new Date().toISOString()
+      await writeFileAtomically(docPath, rewriteFrontmatterFields(text, { auto_status: status, auto_updated: nowIso }))
+      pushTransition(entry, current, status, actor, status === 'archived' ? 'disabled in Memory page' : 'restored in Memory page', Date.parse(nowIso))
+      st.entries[id] = entry
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+
+      const index = await readIndex(deps.stateDir)
+      index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: status === 'active', updatedAt: nowIso }
+      await writeIndex(deps.stateDir, index)
+      await patchCatalogEntry(id, {
+        status,
+        enabled: status === 'active',
+        ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
+      })
+      deps.invalidateSnapshot()
+      return { ok: true, id, layer, status, confidence: entry.confidence ?? 0 }
+    })
+  }
+
+  /**
+   * 提升为用户记忆：去掉 `auto_*`，`origin` 改 `user`，从自动索引里移出。
+   *
+   * 为什么值得做：自动记忆的层是"看得见的范围"（这个工作区 / 这个场景），而用户记忆是
+   * "我认下的规则"。一条被反复验证有用的自动记忆，用户会希望它跟着自己换项目也在。
+   * 提升不是复制：留在原地会变成两份（一份自动、一份手写），改一份另一份不变。
+   */
+  async function promote(id: string, opts: { actor?: 'user' | 'curator' } = {}): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'active'; confidence: number; promoted: true }> {
+    return deps.withWriteLock(async () => {
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const { group, name, layer } = split
+      const docPath = join(deps.memoriesRoot, group, name + '.md')
+      let text: string
+      try {
+        text = await readFile(docPath, 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: `not found: ${id}` }
+      }
+      const current = pickField(text, 'auto_status') || 'active'
+      if (current === 'superseded') {
+        return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory.` }
+      }
+      if (current === 'archived') {
+        return { ok: false, code: 'archived', error: `refused: "${id}" is turned off — restore it first if you want to keep it.` }
+      }
+      const nowIso = new Date().toISOString()
+      // 字段逐个置 null（= 删掉），不是整块重写：正文里可能有用户手改过的措辞，
+      // 只动 frontmatter 才保得住。
+      await writeFileAtomically(docPath, rewriteFrontmatterFields(text, {
+        origin: 'user',
+        auto_status: null, auto_kind: null, auto_key: null, auto_confidence: null,
+        auto_basis: null, auto_boundary: null, auto_degraded: null, auto_superseded_by: null,
+        auto_workspace: null, auto_scene: null, auto_ttl_days: null,
+        auto_created: null, auto_updated: null,
+      }))
+      delete st.entries[id]
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+
+      const index = await readIndex(deps.stateDir)
+      index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: true, updatedAt: nowIso }
+      await writeIndex(deps.stateDir, index)
+      await dropCatalogEntry(id)
+      deps.invalidateSnapshot()
+      return { ok: true, id, layer, status: 'active' as const, confidence: 0, promoted: true as const }
+    })
+  }
+
+  /** 算整理草案（只读，不改任何文件）。 */
+  async function organize(scope: 'workspace' | 'global' | 'all' = 'workspace'): Promise<{ ok: true; drafts: OrganizeDraft[]; scanned: number } | LearnFailure> {
+    try {
+      const { entries } = await deps.existingEntries()
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const visible = entries.filter((e) => {
+        if (scope === 'all') return true
+        if (scope === 'global') return e.layer === 'global'
+        // 「本工作区」= 非全局层：工作区 / 场景 / 会话都是"在这个环境里学到的"。
+        return e.layer !== 'global'
+      })
+      const drafts = draftOrganize({ entries: visible, states: read.state.entries })
+      return { ok: true, drafts, scanned: visible.filter((e) => e.origin === 'auto').length }
+    } catch (e) {
+      return { ok: false, code: 'organize-failed', error: deps.message(e) }
+    }
+  }
+
+  /**
+   * 应用一条草案。用户点过「应用」才会到这里 —— 草案本身不改任何文件。
+   *
+   * 不做"整批原子应用"：三条草案里有一条失败时，整批回滚会让用户看不出是哪一条出的问题，
+   * 而三条都成功、第四条失败时"全没了"比"前三条生效"更让人意外。逐条应用、逐条报。
+   */
+  async function applyOrganize(draft: { action?: OrganizeAction; ids?: string[]; keep?: string }): Promise<any> {
+    const action = draft?.action
+    const ids = Array.isArray(draft?.ids) ? draft!.ids.filter((x) => typeof x === 'string' && x !== '') : []
+    if (action !== 'merge' && action !== 'archive' && action !== 'promote') {
+      return { ok: false, code: 'bad-args', error: 'action must be merge / archive / promote' }
+    }
+    if (ids.length === 0) return { ok: false, code: 'bad-args', error: 'missing ids' }
+    if (action === 'archive') return setStatus(ids[0]!, 'archived', 'curator')
+    if (action === 'promote') return promote(ids[0]!, { actor: 'curator' })
+    return mergeDraft(draft!.keep && ids.includes(draft!.keep) ? draft!.keep : ids[0]!, ids.find((x) => x !== (draft!.keep ?? ids[0])) ?? '')
+  }
+
+  /** merge 草案的执行：把 drop 的说法并进 keep，drop 转 superseded。 */
+  async function mergeDraft(keepId: string, dropId: string): Promise<any> {
+    if (dropId === '') return { ok: false, code: 'bad-args', error: 'merge needs two ids' }
+    return deps.withWriteLock(async () => {
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      const keepAt = splitId(keepId)
+      const dropAt = splitId(dropId)
+      if (!keepAt || !dropAt) return { ok: false, code: 'bad-id', error: 'merge targets must be memory ids' }
+      let keepText: string
+      let dropText: string
+      try {
+        keepText = await readFile(join(deps.memoriesRoot, keepAt.group, keepAt.name + '.md'), 'utf8')
+        dropText = await readFile(join(deps.memoriesRoot, dropAt.group, dropAt.name + '.md'), 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: 'one of the memories no longer exists' }
+      }
+      const keepEntry = st.entries[keepId] ?? { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
+      if (keepEntry.locked === true) {
+        return { ok: false, code: 'locked', error: `refused: "${keepId}" was edited by the user and is locked.` }
+      }
+      const nowIso = new Date().toISOString()
+      // 把 drop 的正文补进 keep 的边界：两句话说法不同，但都表达了同一个意思，
+      // 用户下次看 keep 时能认出另一句也指这条（与 learn 的"补边界不取代"同一口径）。
+      const dropBody = bodyOf(dropText).replaceAll(/\s+/g, ' ').trim().slice(0, 160)
+      const prevBoundary = pickField(keepText, 'auto_boundary')
+      const nextBoundary = dedupeBoundary(prevBoundary, dropBody)
+      await writeFileAtomically(join(deps.memoriesRoot, keepAt.group, keepAt.name + '.md'), rewriteFrontmatterFields(keepText, {
+        auto_boundary: nextBoundary,
+        auto_updated: nowIso,
+      }))
+
+      const dropEntry = st.entries[dropId]
+      const seen = new Set(keepEntry.evidence.map((e) => e.session + '\u0000' + e.quote))
+      for (const ev of dropEntry?.evidence ?? []) {
+        const k = ev.session + '\u0000' + ev.quote
+        if (seen.has(k)) continue
+        seen.add(k)
+        keepEntry.evidence.push(ev)
+      }
+      keepEntry.evidence = keepEntry.evidence.slice(-50)
+      keepEntry.counters = keepEntry.counters ?? emptyCounters()
+      keepEntry.confidence = confidenceOf(keepEntry.evidence, keepEntry.counters.harmful)
+      st.entries[keepId] = keepEntry
+
+      const index = await readIndex(deps.stateDir)
+      await markSuperseded(dropId, keepId, st, nowIso, index)
+      await writeIndex(deps.stateDir, index)
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+      await patchCatalogEntry(keepId, { confidence: keepEntry.confidence })
+      deps.invalidateSnapshot()
+      return { ok: true, action: 'merge', id: keepId, mergedFrom: dropId, confidence: keepEntry.confidence }
+    })
+  }
+
+  /**
+   * 读一条自动记忆的详情（正文 + 关键字段 + 证据 / 计数器 / 时间线）。
+   *
+   * 为什么不复用 `rules-read`：那条给的是"用户记忆"的形态（form / attachments / shadowed），
+   * 而自动记忆要回答的是"为什么记它、它现在还成立吗" —— recent evidence、helpful 计数、
+   * 状态转移。这些只在 state.json 里，记忆域看不见。
+   */
+  async function describe(id: string): Promise<any> {
+    const split = splitId(id)
+    if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+    let text: string
+    try {
+      text = await readFile(join(deps.memoriesRoot, split.group, split.name + '.md'), 'utf8')
+    } catch {
+      return { ok: false, code: 'missing', error: `not found: ${id}` }
+    }
+    const read = await state.read()
+    const st = read.ok ? read.state.entries[id] : undefined
+    return {
+      ok: true,
+      id,
+      layer: split.layer,
+      origin: pickField(text, 'origin') || 'auto',
+      // 用户手改过（locked）的条目，自动路径不会改它 —— 读的时候要能看出来。
+      status: pickField(text, 'auto_status') || 'active',
+      kind: pickField(text, 'auto_kind') || '',
+      key: pickField(text, 'auto_key') || '',
+      description: pickField(text, 'description') || '',
+      basis: pickField(text, 'auto_basis') || '',
+      boundary: pickField(text, 'auto_boundary') || '',
+      body: bodyOf(text),
+      ...(pickField(text, 'auto_degraded') ? { degraded: pickField(text, 'auto_degraded') } : {}),
+      state: st
+        ? {
+            confidence: st.confidence ?? 0,
+            counters: st.counters ?? emptyCounters(),
+            evidence: st.evidence.slice(-5),
+            transitions: st.transitions.slice(-5),
+            ...(st.needsReview !== undefined ? { needsReview: st.needsReview } : {}),
+            ...(st.locked === true ? { locked: true } : {}),
+          }
+        : null,
+    }
+  }
+
+  return { learn, forget, approve, setStatus, promote, organize, applyOrganize, describe }
 }
 
 /**
@@ -707,7 +969,12 @@ function collectEvidence(
     turn: 0,
     seq: -1,
     source: pass.source,
-    quote: String(req.quote ?? pass.quote ?? pass.text).slice(0, 2000),
+    // 取**第一个非空**：`??` 只挡 null / undefined，而调用方常传 `quote: ''`（"没有引句"），
+    // 空串会一路穿过 `.??` 落到证据里。症状是每条证据的 quote 都是空 —— 看板上"依据"一栏
+    // 永远空白，而合并去重按 `session+quote` 判重时会把两条不同的证据当成同一条。
+    quote: [req.quote, pass.quote, pass.text]
+      .map((x) => String(x ?? '').trim())
+      .find((x) => x !== '')?.slice(0, 2000) ?? '',
     at: nowIso,
   }]
 }
@@ -737,3 +1004,36 @@ export function describeEntry(entry: { evidence?: unknown[]; counters?: any; tra
 
 /** 只在 `_ws` / `_session` 目录里出现的组才算保留组（`isValidGroupPath` 的补充断言）。 */
 export const isLayerGroup = (group: string): boolean => layerOfGroup(group) !== LAYER_SCENE || group === 'global'
+
+/**
+ * 记忆 id → 磁盘位置与层。
+ *
+ * `id` 用最后一个 `/` 切开：场景名里不会有 `/`（`isValidGroupPath` 挡了），而保留段的组
+ * 是 `_ws/<hash16>` 这种**带斜杠的组名**，所以只能按"最后一段是文件名"来分。
+ */
+function splitId(id: string): { group: string; name: string; layer: MemoryLayer } | null {
+  const slash = id.lastIndexOf('/')
+  if (slash <= 0 || slash === id.length - 1) return null
+  const group = id.slice(0, slash)
+  const name = id.slice(slash + 1)
+  return { group, name, layer: layerOfGroup(group) }
+}
+
+/** frontmatter 之后的正文（合并时要把对方的说法抄进边界）。 */
+function bodyOf(text: string): string {
+  const s = String(text ?? '')
+  if (!s.startsWith('---')) return s.trim()
+  const end = s.indexOf('\n---', 3)
+  if (end < 0) return s.trim()
+  const nl = s.indexOf('\n', end + 1)
+  return nl < 0 ? '' : s.slice(nl + 1).trim()
+}
+
+/** 边界追加：已经包含过的不重复加（合并跑两遍不该长出两份）。 */
+function dedupeBoundary(prev: string, add: string): string {
+  const base = String(prev ?? '').trim()
+  const extra = String(add ?? '').trim()
+  if (extra === '') return base
+  if (base.includes(extra)) return base
+  return [base, extra].filter((x) => x !== '').join('；').slice(0, MAX_BOUNDARY)
+}
