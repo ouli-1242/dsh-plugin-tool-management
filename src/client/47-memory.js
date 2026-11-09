@@ -744,6 +744,9 @@
           // 后台复习队列（待复习 / 失败 / 无法处理）。null = 还没取过或这版没接线。
           var evq = React.useState(null)
           var evoQueue = evq[0], setEvoQueue = evq[1]
+          // 全库整理（dream）：草案清单 + 健康度 + 上次整理 / 体检时间。null = 没接线。
+          var evd = React.useState(null)
+          var evoDream = evd[0], setEvoDream = evd[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -759,11 +762,17 @@
           function refreshEvolution() {
             var sid = evoSessionId()
             var args = sid === '' ? {} : { sessionId: sid }
-            Promise.all([apiCall('evolution-status', args), apiCall('evolution-list', {}), apiCall('evolution-queue', {})])
+            Promise.all([
+              apiCall('evolution-status', args),
+              apiCall('evolution-list', {}),
+              apiCall('evolution-queue', {}),
+              apiCall('evolution-dreams', { limit: 8 }),
+            ])
               .then(function (out) {
                 var st = out[0] || null
                 var ls = out[1] || null
                 var q = out[2] || null
+                var dr = out[3] || null
                 var err = null
                 if (st && st.ok === false) err = translateError(t, st)
                 else if (ls && ls.ok === false) err = translateError(t, ls)
@@ -776,6 +785,23 @@
                 // 队列拿不到（这版没接线）就不显示这一块：它回答的是"后台在干什么"，
                 // 不是"学成了什么"，缺了不该让整张卡片报错。
                 setEvoQueue(q && q.ok !== false ? { stats: q.stats || {}, items: q.items || [], error: null } : null)
+                // 整理区同理：草案是后台产品，缺了不让整张卡报错。已展开的详情要保留，
+                // 否则每刷一次列表就把用户正在看的 diff 收起来。
+                if (dr && dr.ok !== false) {
+                  setEvoDream(function (cur) {
+                    return {
+                      drafts: dr.drafts || [],
+                      lastDreamAt: dr.lastDreamAt || null,
+                      lastSweepAt: dr.lastSweepAt || null,
+                      health: dr.health || null,
+                      busy: false,
+                      error: null,
+                      open: cur ? cur.open : null,
+                      detail: cur ? cur.detail : null,
+                      detailBusy: false,
+                    }
+                  })
+                } else setEvoDream(null)
               })
               .catch(function (e) { setEvo({ loading: false, status: null, entries: [], error: errMsg(e) }) })
           }
@@ -1078,6 +1104,191 @@
               }))
           }
 
+          /**
+           * 全库整理（dream）与维护扫描。
+           *
+           * 与上面那份「整理草案」不是一回事：那条是本地规则算的合并建议，这条是模型看完整库
+           * 之后给的一份**可整批回滚**的草案。所以这里每个写动作都要过确认弹窗，且草案永远
+           * 先落盘、先给用户看 diff，应用是另一次点击。
+           */
+          function patchDream(patch) {
+            setEvoDream(function (cur) {
+              return Object.assign({ drafts: [], lastDreamAt: null, lastSweepAt: null, health: null, open: null, detail: null, maintain: null }, cur || {}, patch)
+            })
+          }
+
+          function runDream() {
+            patchDream({ busy: true, error: null })
+            setModal(null)
+            var sid = evoSessionId()
+            apiCall('evolution-dream', sid === '' ? {} : { sessionId: sid }).then(function (res) {
+              patchDream({ busy: false })
+              if (res && res.ok !== false) setResult({ ok: true, text: t('evo.dream.done', { ops: res.ops || 0 }) })
+              else setResult({ ok: false, text: translateError(t, res) })
+              refreshEvolution()
+            }).catch(function (e) { patchDream({ busy: false, error: errMsg(e) }) })
+          }
+
+          /** 展开一份草案：id → oneLine 的 diff 按需拉一次。 */
+          function toggleDream(id) {
+            if (evoDream && evoDream.open === id) { patchDream({ open: null, detail: null }); return }
+            patchDream({ open: id, detail: null, detailBusy: true })
+            apiCall('evolution-dream-read', { id: id }).then(function (res) {
+              if (res && res.ok !== false) {
+                // 请求在飞的时候用户可能已经点开另一份：旧响应不许盖掉当前展开的那份。
+                setEvoDream(function (cur) {
+                  return cur && cur.open === id ? Object.assign({}, cur, { detail: res, detailBusy: false }) : cur
+                })
+              } else patchDream({ detailBusy: false, error: translateError(t, res) })
+            }).catch(function (e) { patchDream({ detailBusy: false, error: errMsg(e) }) })
+          }
+
+          function applyDream(id) {
+            patchDream({ busy: true, error: null })
+            setModal(null)
+            apiCall('evolution-dream-apply', { id: id }).then(function (res) {
+              patchDream({ busy: false })
+              if (res && res.ok !== false) setResult({ ok: true, text: t('evo.dream.applied', { n: res.applied || 0 }) })
+              else setResult({ ok: false, text: translateError(t, res) })
+              refreshEvolution()
+            }).catch(function (e) { patchDream({ busy: false, error: errMsg(e) }) })
+          }
+
+          /** 回滚默认拒绝"应用后又学了新东西"；用户看懂代价后才传 force。 */
+          function revertDream(id, force) {
+            patchDream({ busy: true, error: null })
+            setModal(null)
+            apiCall('evolution-dream-revert', { id: id, force: force === true }).then(function (res) {
+              patchDream({ busy: false })
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.dream.reverted') })
+                refreshEvolution()
+              } else if (res && res.code === 'drift') {
+                setModal({ type: 'evo-dream-force', id: id })
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { patchDream({ busy: false, error: errMsg(e) }) })
+          }
+
+          /** 维护扫描：dry 只出计划，真跑要用户在预览里再点一次。 */
+          function runMaintain(dry) {
+            patchDream({ busy: true, error: null, maintain: null })
+            setModal(null)
+            apiCall('evolution-maintain', { dry: dry }).then(function (res) {
+              patchDream({ busy: false })
+              if (res && res.ok !== false) {
+                if (dry) patchDream({ maintain: res })
+                else {
+                  setResult({ ok: true, text: t('evo.maintain.done', { n: (res.actions || []).length }) })
+                  patchDream({ maintain: null })
+                  refreshEvolution()
+                }
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { patchDream({ busy: false, error: errMsg(e) }) })
+          }
+
+          function renderDreamDiff(detail) {
+            if (!detail || !detail.draft) return React.createElement('p', { className: 'dsm-help' }, t('evo.dream.loading'))
+            var nameOf = {}
+            ;(detail.items || []).forEach(function (x) { nameOf[x.id] = x.oneLine || x.id })
+            var ops = (detail.draft.plan && detail.draft.plan.ops) || []
+            return React.createElement('div', { className: 'dsm-evo-dream-diff' },
+              ops.map(function (o, i) {
+                var ids = o.op === 'merge' ? [o.keep].concat(o.drop || []) : [o.id]
+                return React.createElement('div', { key: 'op' + i, className: 'dsm-evo-dream-op' },
+                  React.createElement('span', { className: 'dsm-tag' }, t('evo.dream.op.' + o.op)),
+                  React.createElement('div', { className: 'dsm-evo-dream-op-body' },
+                    ids.map(function (id) {
+                      return React.createElement('div', { key: id, className: 'dsm-evo-dream-op-name', title: id }, nameOf[id] || id)
+                    }),
+                    React.createElement('span', { className: 'dsm-evo-draft-reason' }, String(o.reason || ''))))
+              }),
+              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.estimate', {
+                before: detail.draft.tokensBefore || 0, after: detail.draft.tokensAfter || 0,
+              })),
+              detail.manifest && detail.manifest.results && detail.manifest.results.length
+                ? React.createElement('p', { className: 'dsm-help' }, t('evo.dream.results', {
+                    ok: detail.manifest.results.filter(function (r) { return r.ok }).length,
+                    total: detail.manifest.results.length,
+                  }))
+                : null)
+          }
+
+          function renderEvolutionDream() {
+            if (!evoDream) return null
+            var d = evoDream
+            var busy = !!d.busy
+            var health = d.health || {}
+            var drafts = d.drafts || []
+            var fmt = function (x) { return x ? new Date(String(x)).toLocaleString() : t('evo.dream.never') }
+            var out = [
+              React.createElement('div', { key: 'head', className: 'dsm-evo-queue-head' },
+                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.dream.title')),
+                React.createElement('span', { className: 'dsm-help' }, t('evo.dream.last', { at: fmt(d.lastDreamAt) })),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                  onClick: function () { setModal({ type: 'evo-dream-run' }) },
+                }, busy ? t('evo.queue.busy') : t('evo.dream.now'))),
+              d.error ? React.createElement(Notice, { key: 'err', kind: 'err', text: d.error }) : null,
+              React.createElement('p', { key: 'hint', className: 'dsm-help' }, t('evo.dream.hint')),
+              // 健康度：三行数字里藏着"为什么该整理"，放在草案列表之前。
+              React.createElement('div', { key: 'health', className: 'dsm-evo-dream-health' },
+                React.createElement('span', {}, t('evo.health.tokens', { n: health.tokens || 0 })),
+                React.createElement('span', {}, t('evo.health.review', { n: health.needsReview || 0 })),
+                React.createElement('span', {}, t('evo.health.conflicts', { n: health.conflicts || 0 })),
+                React.createElement('span', {}, t('evo.health.expired', { n: health.expired || 0 }))),
+              React.createElement('div', { key: 'maint', className: 'dsm-evo-dream-actions' },
+                React.createElement('span', { className: 'dsm-help' }, t('evo.maintain.last', { at: fmt(d.lastSweepAt) })),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                  onClick: function () { runMaintain(true) },
+                }, t('evo.maintain.preview'))),
+              // 预览结果：列出"会动哪几条"，确认后才真的改状态。
+              d.maintain ? React.createElement('div', { key: 'mrep', className: 'dsm-evo-dream-preview' },
+                (d.maintain.actions || []).length === 0
+                  ? React.createElement('p', { className: 'dsm-help' }, t('evo.maintain.none'))
+                  : (d.maintain.actions || []).slice(0, 12).map(function (a) {
+                      return React.createElement('div', { key: a.id, className: 'dsm-evo-queue-row', title: a.id },
+                        React.createElement('span', { className: 'dsm-tag' }, t('evo.maintain.bucket.' + a.bucket)),
+                        React.createElement('span', { className: 'dsm-evo-draft-reason' }, String(a.reason || '')))
+                    }),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                  onClick: function () { setModal({ type: 'evo-dream-sweep' }) },
+                }, t('evo.maintain.run'))) : null,
+              drafts.length === 0
+                ? React.createElement('p', { key: 'none', className: 'dsm-help' }, t('evo.dream.none'))
+                : React.createElement('div', { key: 'drafts', className: 'dsm-evo-dream-list' },
+                    drafts.map(function (x) {
+                      var open = d.open === x.id
+                      var tagTone = x.status === 'applied' ? 'dsm-tag dsm-tag-on' : x.status === 'applying' ? 'dsm-tag dsm-evo-queue-warn' : x.status === 'reverted' ? 'dsm-tag' : 'dsm-tag'
+                      return React.createElement('div', { key: x.id, className: 'dsm-evo-dream-item' },
+                        React.createElement('div', { className: 'dsm-evo-queue-row' },
+                          React.createElement('span', { className: tagTone }, t('evo.dream.status.' + x.status)),
+                          React.createElement('span', { className: 'dsm-evo-queue-meta' }, fmt(x.createdAt)),
+                          React.createElement('span', { className: 'dsm-help' }, t('evo.dream.counts', {
+                            merges: x.merges || 0, archives: x.archives || 0, promotes: x.promotes || 0,
+                          })),
+                          React.createElement('button', {
+                            type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                            onClick: function () { toggleDream(x.id) },
+                          }, open ? t('evo.dream.hide') : t('evo.dream.view')),
+                          x.status === 'draft' ? React.createElement('button', {
+                            type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                            onClick: function () { setModal({ type: 'evo-dream-apply', id: x.id, ops: x.ops }) },
+                          }, t('evo.dream.apply')) : null,
+                          x.status === 'applied' ? React.createElement('button', {
+                            type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                            onClick: function () { setModal({ type: 'evo-dream-revert', id: x.id }) },
+                          }, t('evo.dream.revert')) : null),
+                        open ? React.createElement('div', { className: 'dsm-evo-dream-detail' },
+                          d.detail && d.detail.draft && d.detail.draft.id === x.id
+                            ? renderDreamDiff(d.detail)
+                            : React.createElement('p', { className: 'dsm-help' }, t('evo.dream.loading'))) : null)
+                    })),
+            ]
+            return React.createElement('div', { key: 'dream', className: 'dsm-evo-queue dsm-evo-dream' }, out)
+          }
+
           function renderEvolutionCard() {
             var st = evo.status
             var auto = (st && st.auto) || { entries: 0, needsReview: 0, active: 0 }
@@ -1116,6 +1327,9 @@
               // 队列放在列表**之前**：它回答"后台在干什么"，是这张卡的时间敏感部分；
               // 列表是结果，用户来翻的时候不着急。
               renderEvolutionQueue(),
+              // 全库整理放在队列之后、条目列表之前：它和队列一样是"后台工序"，但改的是
+              // 整份清单；放在列表旁边能顺手对照条目，又不会插进逐条操作里。
+              renderEvolutionDream(),
               rows.length === 0 ? null : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
                 groups.map(function (g) {
                   var list = rows.filter(function (e) { return e.layer === g[0] })
@@ -1253,6 +1467,33 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: evoBusy, onClick: function () { promoteEvolution(modal.entry.id) } }, t('evo.promote')))) : null,
+            // 整理会花一次模型调用；应用 / 回滚 / 执行清理都是全库写动作，逐条确认。
+            modal && modal.type === 'evo-dream-run' ? React.createElement(Modal, { key: 'edrun', className: 'dsm-modal-sm', title: t('evo.dream.now'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.confirm')),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { runDream() } }, t('evo.dream.now')))) : null,
+            modal && modal.type === 'evo-dream-apply' ? React.createElement(Modal, { key: 'edapply', className: 'dsm-modal-sm', title: t('evo.dream.apply.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.apply.desc', { n: modal.ops || 0 })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { applyDream(modal.id) } }, t('evo.dream.apply')))) : null,
+            modal && modal.type === 'evo-dream-revert' ? React.createElement(Modal, { key: 'edrev', className: 'dsm-modal-sm', title: t('evo.dream.revert'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.revert.desc')),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { revertDream(modal.id, false) } }, t('evo.dream.revert')))) : null,
+            // 漂移：应用之后又学了新东西。默认拒绝，只有这里能传 force —— 代价写清楚。
+            modal && modal.type === 'evo-dream-force' ? React.createElement(Modal, { key: 'edforce', className: 'dsm-modal-sm', title: t('evo.dream.force.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.force.desc')),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: function () { revertDream(modal.id, true) } }, t('evo.dream.force.ok')))) : null,
+            modal && modal.type === 'evo-dream-sweep' ? React.createElement(Modal, { key: 'edsweep', className: 'dsm-modal-sm', title: t('evo.maintain.run'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.maintain.confirm')),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { runMaintain(false) } }, t('evo.maintain.run')))) : null,
             modal && modal.type === 'stop' ? React.createElement(Modal, { key: 'mstop', className: 'dsm-modal-sm', title: t('scope.unifiedClose'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('scope.unifiedClose.viewDesc', { name: modal.rule.name || modal.rule.id })),
               React.createElement('div', { className: 'dsm-modal-actions' },

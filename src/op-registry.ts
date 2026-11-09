@@ -165,6 +165,20 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 手动重跑会真的写记忆（复习器 + 九道门），所以与 apply-organize 同权：
   // 这是"补一次学习"，不是"看一眼状态"。
   'evolution-replay': { write: true, frozen: true },
+  // dream 生成只写 `evolution/dreams/<id>/` 这份草案，记忆库一个字节不动；但它要花一次
+  // 模型调用、且会读全库，所以按写门禁（要令牌），**不冻结** —— 锁的是场景内容，
+  // 生成草案不改内容。
+  'evolution-dream': { write: true },
+  // 清单与详情读的是草案目录，只读。
+  'evolution-dreams': { readonly: true },
+  'evolution-dream-read': { readonly: true },
+  // 应用 / 回滚改的是记忆正文与 state，与 learn 同权、且场景锁定时拒。
+  'evolution-dream-apply': { write: true, frozen: true },
+  'evolution-dream-revert': { write: true, frozen: true },
+  // 维护扫描会归档 / 降级条目（改正文 frontmatter），与 apply 同权。
+  'evolution-maintain': { write: true, frozen: true },
+  // 健康度只是统计。
+  'evolution-health': { readonly: true },
 
   // ── 记忆与场景域（28：memories 25 + archive-engine 3）──────────────────────
   'rules-list': { readonly: true },

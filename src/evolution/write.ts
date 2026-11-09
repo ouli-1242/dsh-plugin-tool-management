@@ -645,19 +645,26 @@ export function createLearner(deps: LearnDeps) {
   }
 
   /**
-   * 停用 / 恢复一条。
+   * 改状态：停用 / 恢复 / 降为候选 / 升为常驻。
    *
    * 停用 = `archived`（文件留着、不写墓碑、可恢复）；它与 `forget` 的区别是"不想再看到"
-   * 还是"不想再存在"。用户把一条学错的收起来，过两周可能又想用 —— 那就得能恢复。
+   * 还是"不想再存在"。恢复只对 `archived` 开放：`superseded` 是被新事实取代的历史，
+   * 复活它会让新旧两条同时注入，模型看到矛盾的两句话然后随机选一句。
    *
-   * 恢复只对 `archived` 开放：`superseded` 是被新事实取代的历史，复活它会让新旧两条
-   * 同时注入，模型看到矛盾的两句话然后随机选一句。候选走 `approve`，不走这里。
+   * `candidate` 是维护扫描（TTL 到期）用的"降级但保留"：候选不进注入，用户还能在
+   * 「待确认」里看到它 —— 直接归档等于替用户决定"过期的事实永远不要了"。
+   *
+   * `core` 只给 dream 与用户用（`promote` 那条是"转成用户记忆"，与这里不是一件事）。
+   * dream 升 core 必须满足治理表里的硬条件：helpful ≥ 3 且 harmful = 0 —— 常驻意味着
+   * 每次会话都占预算，靠模型自报"这很重要"是不够的。用户手动设 core 不设门槛：
+   * 那是显式裁决，不是推断。
    */
   async function setStatus(
     id: string,
-    status: 'active' | 'archived',
-    actor: 'user' | 'curator' = 'user',
-  ): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'active' | 'archived'; confidence: number; unchanged?: boolean }> {
+    status: 'active' | 'archived' | 'core' | 'candidate',
+    actor: 'user' | 'curator' | 'dream' = 'user',
+    opts: { reason?: string; needsReview?: string | null } = {},
+  ): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'active' | 'archived' | 'core' | 'candidate'; confidence: number; unchanged?: boolean }> {
     return deps.withWriteLock(async () => {
       const read = await state.read()
       if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
@@ -676,23 +683,56 @@ export function createLearner(deps: LearnDeps) {
       if (current === 'superseded') {
         return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory; restoring it would inject two conflicting facts.` }
       }
+      // 降级只给维护扫描：用户点「停用」想的是"别再注入"，归档比候选更符合那个意思，
+      // 而且候选会在界面上继续出现（用户刚收起来的东西又冒出来，很像 bug）。
+      if (status === 'candidate' && actor !== 'dream') {
+        return { ok: false, code: 'refused', error: 'only the maintenance sweep can demote an entry to candidate' }
+      }
       const entry = st.entries[id] ?? { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
+      if (status === 'core' && actor === 'dream') {
+        const counters = entry.counters ?? emptyCounters()
+        if (counters.helpful < 3 || counters.harmful > 0) {
+          return {
+            ok: false,
+            code: 'not-proven',
+            error: `refused: "${id}" needs helpful ≥ 3 and harmful = 0 to become core (currently ${counters.helpful} / ${counters.harmful}).`,
+          }
+        }
+      }
       if (current === status) {
+        // 状态没变也要应用 needsReview 补丁：TTL 扫描重复跑时，第一次已经降级、第二次
+        // 只补标记。否则"降级成功但没标待确认"会让条目从界面默认列表里消失。
+        if (opts.needsReview !== undefined) {
+          if (opts.needsReview === null) delete entry.needsReview
+          else entry.needsReview = opts.needsReview
+          st.entries[id] = entry
+          const w = await state.write(st)
+          if (!w.ok) return { ok: false, code: 'state-write-failed', error: w.error }
+        }
         return { ok: true, id, layer, status, confidence: entry.confidence ?? 0, unchanged: true }
       }
       const nowIso = new Date().toISOString()
       await writeFileAtomically(docPath, rewriteFrontmatterFields(text, { auto_status: status, auto_updated: nowIso }))
-      pushTransition(entry, current, status, actor, status === 'archived' ? 'disabled in Memory page' : 'restored in Memory page', Date.parse(nowIso))
+      pushTransition(
+        entry,
+        current,
+        status,
+        actor,
+        opts.reason ?? (status === 'archived' ? 'disabled in Memory page' : status === 'core' ? 'promoted to core' : status === 'candidate' ? 'demoted to candidate' : 'restored in Memory page'),
+        Date.parse(nowIso),
+      )
+      if (opts.needsReview === null) delete entry.needsReview
+      else if (opts.needsReview !== undefined) entry.needsReview = opts.needsReview
       st.entries[id] = entry
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
       const index = await readIndex(deps.stateDir)
-      index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: status === 'active', updatedAt: nowIso }
+      index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: status !== 'archived', updatedAt: nowIso }
       await writeIndex(deps.stateDir, index)
       await patchCatalogEntry(id, {
         status,
-        enabled: status === 'active',
+        enabled: status !== 'archived',
         ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
       })
       deps.invalidateSnapshot()

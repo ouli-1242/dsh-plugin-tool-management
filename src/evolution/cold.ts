@@ -27,6 +27,14 @@ export interface ColdPathDeps {
   message(e: unknown): string
   /** 测试注入：固定时间（退避判定）。 */
   now?(): number
+  /**
+   * 复习结束后的钩子（P3 的每日整理挂在这里）。
+   *
+   * 为什么挂在轮末而不是启动时：整理要调模型，而"用哪个模型"只有这一轮请求头知道。
+   * 启动时拿不到路由，只能赌一个默认模型 —— 学到的风格会和对话不一致。
+   * 钩子不 await、异常全吞：它跑在会话主链的尾巴上，慢一点可以，炸一次不行。
+   */
+  afterReview?(sessionId: string, cwd: string | undefined, cfg: EffectiveEvolutionConfig, route: { provider: string; model: string } | null): Promise<void>
 }
 
 export interface ColdPathHandle {
@@ -119,15 +127,15 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
     return next
   }
 
-  async function onTurnEnd(sessionId: string, turn: number, cwd: string | undefined): Promise<void> {
+  async function onTurnEnd(sessionId: string, turn: number, cwd: string | undefined): Promise<EffectiveEvolutionConfig | null> {
     const digest = digests.seal(sessionId, turn)
-    if (!digest) return
+    if (!digest) return null
     const cfg = await deps.effectiveOf(sessionId, cwd)
-    if (!cfg.enabled || cfg.learnScope === 'off') return
+    if (!cfg.enabled || cfg.learnScope === 'off') return null
     const decision = reviewDecision(digest, cfg.reviewEveryTurns)
     if (!decision.review) {
       await deps.log({ at: new Date().toISOString(), session: sessionId, turn, event: 'turn-skipped', reason: decision.reason })
-      return
+      return cfg
     }
     const at = new Date().toISOString()
     const hash = cwd ? deps.workspaceHashOf(cwd) : undefined
@@ -142,21 +150,27 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
     if (!written.ok) {
       // 宁可这轮不学，也不要产生指向空文件的队列项。
       await deps.log({ at, session: sessionId, turn, event: 'episode-write-failed', error: written.error })
-      return
+      return cfg
     }
     const item = await deps.episodes.enqueue({ id: ep.id, session: sessionId, turn, at, path: written.path })
     if (!item) {
       await deps.log({ at, session: sessionId, turn, event: 'outbox-write-failed' })
-      return
+      return cfg
     }
     await deps.log({ at, session: sessionId, turn, event: 'queued', reason: decision.reason, signals: decision.signals })
+    return cfg
   }
 
   // 轮末：先封存 episode 与 outbox，再异步复习。不 await —— 见文件头第 2 条。
   async function handleTurnEnd(sessionId: string, turn: number, cwd: string | undefined): Promise<void> {
     try {
-      await onTurnEnd(sessionId, turn, cwd)
+      const cfg = await onTurnEnd(sessionId, turn, cwd)
       await schedule(sessionId)
+      // 整理钩子放在复习之后：它要看的是"这一轮学完之后"的库。
+      if (cfg && deps.afterReview) {
+        void deps.afterReview(sessionId, cwd, cfg, routeOf(sessionId))
+          .catch((e) => deps.log({ at: new Date().toISOString(), session: sessionId, turn, event: 'after-review-failed', error: deps.message(e) }).then(() => undefined))
+      }
     } catch (e) {
       await deps.log({ at: new Date().toISOString(), session: sessionId, turn, event: 'turn-end-failed', error: deps.message(e) }).catch(() => undefined)
     }

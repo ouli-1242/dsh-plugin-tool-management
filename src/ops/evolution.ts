@@ -13,6 +13,8 @@ import type { EvolutionRuntime } from '../evolution/runtime.js'
 import type { Learner } from '../evolution/write.js'
 // 只取类型：冷路径在装配层晚于本函数创建，所以拿的是 getter 而不是实例。
 import type { ColdPathHandle } from '../evolution/cold.js'
+import type { Dreamer } from '../evolution/dream.js'
+import type { SweepReport } from '../evolution/maintenance.js'
 import { workspaceMemoryKeyOf } from '../scope/workspace-key.js'
 
 export interface EvolutionOpDeps {
@@ -43,6 +45,19 @@ export interface EvolutionOpDeps {
    * "先建一份空队列、真正跑起来的是另一份"的错位。
    */
   cold?(): ColdPathHandle | null
+  /** dream 执行器（P3）。同样用 getter：它依赖冷路径的 episode 存储。 */
+  dream?(): Dreamer | null
+  /** 维护扫描（P3）：TTL / 会话 GC / 衰减 / 工作区失效 / 配额。 */
+  sweep?(opts?: { dry?: boolean }): Promise<SweepReport>
+  /** 健康度（只读统计）。 */
+  health?(): Promise<{
+    byLayer: Record<string, { active: number; candidate: number; archived: number; cap: number; tokens: number }>
+    tokens: number
+    conflicts: number
+    needsReview: number
+    expired: number
+    total: number
+  }>
   message(e: unknown): string
 }
 
@@ -496,6 +511,119 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         }
       } catch (e) {
         return { ok: false, error: message(e), code: 'list-failed' }
+      }
+    },
+
+    /**
+     * 生成一份整理草案（P3）。
+     *
+     * 只出草案，不改库 —— 应用是用户点过之后的另一条 op。这条会花一次模型调用，
+     * 所以界面上的按钮有确认弹窗，而不是进页面就自动跑。
+     */
+    'evolution-dream': async (args: any) => {
+      const dreamer = deps.dream?.()
+      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
+      try {
+        const { scopeKey } = await workspaceOf(args)
+        const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
+        const cfg = await config.effective(scopeKey, sessionId)
+        if (!cfg.enabled) return { ok: false, error: '主动记忆已关闭，整理不会运行', code: 'disabled' }
+        // 模型路由：优先用这个会话正在用的那个；没有就靠 `evolution.model` 或上次记下的路由。
+        const route = sessionId ? deps.cold?.()?.routeOf(sessionId) ?? null : null
+        const out = await dreamer.dream(cfg, route)
+        if (out.ok) runtime.invalidate()
+        return out
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'dream-failed' }
+      }
+    },
+
+    /** 草案清单 + 上次整理 / 体检时间（界面顶部那块）。 */
+    'evolution-dreams': async (args: any) => {
+      const dreamer = deps.dream?.()
+      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
+      try {
+        const limit = typeof args?.limit === 'number' && args.limit > 0 ? Math.min(50, Math.floor(args.limit)) : 20
+        const view = runtime.view()
+        return {
+          ok: true,
+          drafts: await dreamer.listDrafts(limit),
+          lastDreamAt: view.state.watermarks.lastDreamAt ?? null,
+          lastSweepAt: view.state.watermarks.lastSweepAt ?? null,
+          ...(deps.health ? { health: await deps.health() } : {}),
+        }
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'dreams-failed' }
+      }
+    },
+
+    /** 读一份草案（界面渲染 diff：id → oneLine）。 */
+    'evolution-dream-read': async (args: any) => {
+      const dreamer = deps.dream?.()
+      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
+      try {
+        const id = String(args?.id ?? '').trim()
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        return await dreamer.readDraft(id)
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'dream-read-failed' }
+      }
+    },
+
+    'evolution-dream-apply': async (args: any) => {
+      const dreamer = deps.dream?.()
+      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
+      try {
+        const id = String(args?.id ?? '').trim()
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        const out = await dreamer.apply(id)
+        if (out.ok) runtime.invalidate()
+        return out
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'dream-apply-failed' }
+      }
+    },
+
+    /**
+     * 回滚一份已应用的草案。
+     *
+     * `force` 只在用户确认过"应用之后的新写入也会被撤销"后才传 —— 默认拒绝是为了不让
+     * 一次误点把刚学会的几条一起抹掉。
+     */
+    'evolution-dream-revert': async (args: any) => {
+      const dreamer = deps.dream?.()
+      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
+      try {
+        const id = String(args?.id ?? '').trim()
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        const out = await dreamer.revert(id, { force: args?.force === true })
+        if (out.ok) runtime.invalidate()
+        return out
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'dream-revert-failed' }
+      }
+    },
+
+    /** 跑一遍维护扫描（`dry: true` 只出计划）。 */
+    'evolution-maintain': async (args: any) => {
+      if (!deps.sweep) return { ok: false, error: '维护扫描尚未接线', code: 'no-sweep' }
+      try {
+        const dry = args?.dry === true
+        const report = await deps.sweep({ dry })
+        if (!dry) runtime.invalidate()
+        return { ok: true, ...report }
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'maintain-failed' }
+      }
+    },
+
+    /** 健康度：只读，界面每次打开记忆页都会拉一次。 */
+    'evolution-health': async () => {
+      if (!deps.health) return { ok: false, error: '健康度尚未接线', code: 'no-health' }
+      try {
+        return { ok: true, ...(await deps.health()) }
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'health-failed' }
       }
     },
   }

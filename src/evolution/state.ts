@@ -100,6 +100,10 @@ export interface Watermarks {
   lastReviewedTurn?: number
   lastReviewAt?: string
   lastDreamAt?: string
+  /** 上次**尝试**整理的时间。失败也要记：否则模型一直返回坏 JSON 时每轮都会重烧一次钱。 */
+  lastDreamTryAt?: string
+  /** 最近一次维护扫描（P3）。界面据此显示"上次体检：3 天前"。 */
+  lastSweepAt?: string
 }
 
 export interface EvolutionState {
@@ -223,6 +227,8 @@ export function normalizeState(raw: any): { ok: true; state: EvolutionState } | 
         ...(typeof w.lastReviewedTurn === 'number' ? { lastReviewedTurn: w.lastReviewedTurn } : {}),
         ...(typeof w.lastReviewAt === 'string' ? { lastReviewAt: w.lastReviewAt } : {}),
         ...(typeof w.lastDreamAt === 'string' ? { lastDreamAt: w.lastDreamAt } : {}),
+        ...(typeof w.lastDreamTryAt === 'string' ? { lastDreamTryAt: w.lastDreamTryAt } : {}),
+        ...(typeof w.lastSweepAt === 'string' ? { lastSweepAt: w.lastSweepAt } : {}),
       },
     },
   }

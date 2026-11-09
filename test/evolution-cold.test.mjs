@@ -8,7 +8,7 @@
 // evolution-write / evolution-organize 里已经钉住了。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, readFile, appendFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, appendFile, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -288,6 +288,30 @@ test('episodes：compact 清掉老 done，保留 pending 与新的 done', async 
   const text = await readFile(join(dir, 'evolution/outbox.jsonl'), 'utf8')
   assert.equal(text.trim().split('\n').length, 2)
   for (const line of text.trim().split('\n')) JSON.parse(line)
+})
+
+test('episodes：prune 只删 30 天前的摘要，recent 按修改时间倒序', async () => {
+  const dir = await tmp()
+  const store = createEpisodeStore({ stateDir: dir, message })
+  const now = Date.now()
+  const day = 86400_000
+  const oldEp = episodeOf(digestOf(1, { userTexts: ['旧的一轮'] }), { session: 's1', at: new Date(now).toISOString(), reason: 'signal' })
+  const newEp = episodeOf(digestOf(2, { userTexts: ['新的一轮'] }), { session: 's1', at: new Date(now).toISOString(), reason: 'periodic' })
+  const a = await store.write(oldEp)
+  const b = await store.write(newEp)
+  assert.equal(a.ok, true)
+  assert.equal(b.ok, true)
+  // 用 mtime 判"多久没人碰过"：at 是内容的一部分，重写一次正文不该让过期文件续命。
+  await utimes(join(dir, a.path), new Date(now - 40 * day), new Date(now - 40 * day))
+  await utimes(join(dir, b.path), new Date(now - day), new Date(now - day))
+  assert.deepEqual((await store.recent(10)).map((e) => e.turn), [2, 1])
+  const r = await store.prune(30, now)
+  assert.equal(r.removed, 1)
+  assert.deepEqual((await store.recent(10)).map((e) => e.turn), [2])
+  // 空会话目录也一并收掉，别让目录数量跟会话数一起涨。
+  const other = await store.write(episodeOf(digestOf(1, {}), { session: 's2', at: new Date(now).toISOString(), reason: 'signal' }))
+  await utimes(join(dir, other.path), new Date(now - 40 * day), new Date(now - 40 * day))
+  assert.equal((await store.prune(30, now)).removed, 1)
 })
 
 test('safeSegment：会话 id 里的路径分隔符被压平', () => {

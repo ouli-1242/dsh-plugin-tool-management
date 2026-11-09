@@ -61,6 +61,9 @@ import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoSnapsh
 import { attachColdPath } from './evolution/cold.js'
 import { createEpisodeStore } from './evolution/episodes.js'
 import { createReviewBudget, createReviewer } from './evolution/review.js'
+// 整理（P3）：全库草案 + 应用/回滚；维护扫描：TTL / 会话 GC / 配额。
+import { createDreamer, shouldDreamToday, shouldRetryDream, type DreamEntryView, type Dreamer } from './evolution/dream.js'
+import { healthOf, runSweep, shouldSweepNow, type SweepEntry, type SweepReport } from './evolution/maintenance.js'
 // 真源状态（证据 / 计数器 / 墓碑）：读坏就停写，不静默覆盖。
 import { createEvolutionState } from './evolution/state.js'
 // 写入管线：九道门 + 六步落盘。
@@ -4376,6 +4379,11 @@ export default {
     // 冷路径的句柄：op 表先于 `attachColdPath` 装配（开关打开前界面也要能查队列），
     // 所以这里先留一个可变槽，装配完再填。op 里拿到的是 getter 的**当前值**。
     let coldHandle: ReturnType<typeof attachColdPath> | null = null
+    // 整理器与维护扫描同样晚于 op 表创建（它们依赖 episode 存储）。用同样的可变槽，
+    // op 里取到的是**装配完成后**的实例，不会出现"界面上那份是空壳"。
+    let dreamHandle: Dreamer | null = null
+    let sweepRunner: ((opts?: { dry?: boolean }) => Promise<SweepReport>) | null = null
+    let healthRunner: (() => Promise<ReturnType<typeof healthOf>>) | null = null
     const evolutionOpsTable = buildEvolutionOps({
       config: evolutionConfig,
       runtime: evolutionRuntime,
@@ -4397,6 +4405,15 @@ export default {
         }
       },
       cold: () => coldHandle,
+      dream: () => dreamHandle,
+      sweep: async (opts) => {
+        if (!sweepRunner) throw new Error('maintenance is not wired yet')
+        return sweepRunner(opts)
+      },
+      health: async () => {
+        if (!healthRunner) throw new Error('health is not wired yet')
+        return healthRunner()
+      },
       message,
     })
 
@@ -4451,10 +4468,122 @@ export default {
         const key = workspaceMemoryKeyOf(cwd)
         return key ? workspaceHashOf(key) : undefined
       },
+      // 每日整理挂在这里：轮末是唯一"既有模型路由、又刚好学完一轮"的时刻。
+      afterReview: async (_sessionId, _cwd, cfg, route) => {
+        if (cfg.dream !== 'daily') return
+        const view = evolutionRuntime.view()
+        if (!shouldDreamToday(cfg, view.state.watermarks.lastDreamAt)) return
+        if (!shouldRetryDream(view.state.watermarks.lastDreamTryAt)) return
+        const dreamer = dreamHandle
+        if (!dreamer) return
+        await dreamer.dream(cfg, route)
+        evolutionRuntime.invalidate()
+      },
       log: evolutionLog,
       message,
     })
     coldHandle = evolutionCold
+
+    // ── 整理与维护（P3）──────────────────────────────────────────────────────
+    // 条目视图只读 catalog + state：dream 要的是"全库长什么样"，不需要正文；维护扫描
+    // 额外需要文件路径来读 TTL，那份路径只有记忆快照知道。
+    const evolutionEntryView = (): DreamEntryView[] => {
+      const view = evolutionRuntime.view()
+      return Object.values(view.catalog.entries).map((e) => {
+        const st = view.state.entries[e.id]
+        return {
+          id: e.id,
+          layer: e.layer,
+          key: e.key,
+          status: e.status,
+          origin: 'auto' as const,
+          oneLine: e.oneLine,
+          confidence: e.confidence,
+          tokens: e.estTokens,
+          ...(st?.locked === true ? { locked: true } : {}),
+          helpful: st?.counters.helpful ?? 0,
+          harmful: st?.counters.harmful ?? 0,
+          evidence: 0,
+        }
+      })
+    }
+    const sweepEntries = async (): Promise<(SweepEntry & { filePath?: string })[]> => {
+      const snap = await memoriesService.autoAccess.snapshot()
+      const view = evolutionRuntime.view()
+      const pathOf = new Map(snap.rules.map((r) => [r.id, r.path]))
+      return Object.values(view.catalog.entries).map((e) => {
+        const st = view.state.entries[e.id]
+        const counters = st?.counters
+        const filePath = pathOf.get(e.id)
+        return {
+          id: e.id,
+          layer: e.layer,
+          key: e.key,
+          status: e.status,
+          origin: 'auto' as const,
+          confidence: e.confidence,
+          tokens: e.estTokens,
+          // 用文件 mtime 当 `auto_updated`：每次写正文都会刷新，两者在语义上等价，
+          // 而 mtime 已经随 catalog 读过一次，不必打开 400 个文件。
+          updatedAt: e.mtime > 0 ? new Date(e.mtime).toISOString() : '',
+          kind: e.kind,
+          ...(e.workspace !== '' ? { workspace: e.workspace } : {}),
+          ...(st?.locked === true ? { locked: true } : {}),
+          counters: {
+            injected: counters?.injected ?? 0,
+            read: counters?.read ?? 0,
+            helpful: counters?.helpful ?? 0,
+            harmful: counters?.harmful ?? 0,
+            ...(counters?.lastInjectedAt !== undefined ? { lastInjectedAt: counters.lastInjectedAt } : {}),
+            ...(counters?.lastUsedAt !== undefined ? { lastUsedAt: counters.lastUsedAt } : {}),
+          },
+          ...(filePath !== undefined ? { filePath } : {}),
+        }
+      })
+    }
+
+    const dreamer = createDreamer({
+      llm: (() => {
+        try { return typeof (ctx as any).get === 'function' ? (ctx as any).get('llm') : undefined } catch { return undefined }
+      })(),
+      learner: autoLearner,
+      state: evolutionState,
+      episodes: episodeStore,
+      entries: evolutionEntryView,
+      rebuildCatalog: () => memoriesService.autoAccess.rebuildCatalog(),
+      memoriesRoot: memoriesService.autoAccess.memoriesRoot,
+      stateDir: memoriesService.autoAccess.stateDir,
+      withWriteLock,
+      log: evolutionLog,
+      message,
+    })
+    dreamHandle = dreamer
+    sweepRunner = (opts) => runSweep({
+      entries: sweepEntries,
+      learner: autoLearner,
+      episodes: episodeStore,
+      state: evolutionState,
+      config: evolutionConfig,
+      withWriteLock,
+      log: evolutionLog,
+      message,
+    }, opts ?? {})
+    healthRunner = async () => healthOf(await sweepEntries(), evolutionRuntime.view().state)
+
+    // 启动时跑一次维护（每天最多一次）。不 await：扫描要读几十个文件，挡在装配期
+    // 会让宿主启动变慢，而它清理的都是"已经放了几个月的东西"，晚两秒没有区别。
+    void (async () => {
+      try {
+        if (!evolutionRuntime.view().settings.enabled) return
+        if (!shouldSweepNow(evolutionRuntime.view().state.watermarks.lastSweepAt)) return
+        const run = sweepRunner
+        if (!run) return
+        await run({})
+        evolutionRuntime.invalidate()
+      } catch {
+        /* 维护失败不影响启动：它本来就只是清理 */
+      }
+    })()
 
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,

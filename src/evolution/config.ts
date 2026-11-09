@@ -261,6 +261,8 @@ export interface EvolutionConfigStore {
   writeSettings(next: EvolutionSettings): Promise<{ ok: true; settings: EvolutionSettings } | { ok: false; error: string }>
   /** 写某个工作区的覆盖（`overrides` 为 undefined 表示清除覆盖）。 */
   writeWorkspace(scopeKey: string, cwd: string, label: string, overrides: EvolutionOverrides | undefined): Promise<{ ok: true; hash: string } | { ok: false; error: string }>
+  /** 标记 / 清除工作区失效（不刷新 lastSeenAt）。 */
+  markWorkspaceMissing(hash: string, missingAt: string | null): Promise<{ ok: true; changed: boolean } | { ok: false; error: string }>
   /** 写某个会话的覆盖。 */
   writeSession(sid: string, overrides: EvolutionOverrides | undefined): Promise<{ ok: true } | { ok: false; error: string }>
 }
@@ -381,11 +383,36 @@ export function createEvolutionConfig(deps: EvolutionConfigDeps): EvolutionConfi
     })
   }
 
+  /**
+   * 标记 / 清除工作区失效。
+   *
+   * 为什么不复用 `writeWorkspace`：那个方法每次都会刷新 `lastSeenAt`，而失效扫描的
+   * 语义正相反 —— 目录都不在了，"刚刚见过"是假话。而且它需要 scopeKey 与 cwd，
+   * 扫描手上只有 hash。
+   */
+  async function markWorkspaceMissing(
+    hash: string,
+    missingAt: string | null,
+  ): Promise<{ ok: true; changed: boolean } | { ok: false; error: string }> {
+    await ensureEvolutionDir()
+    return deps.withWriteLock(async () => {
+      const read = await readForWrite(hubPath(EVOLUTION_WORKSPACES_FILE), '工作区记录')
+      if (!read.ok) return read
+      const current = normalizeWorkspacesFile(read.raw)
+      const prev = current.workspaces[hash]
+      if (!prev) return { ok: true as const, changed: false }
+      if ((prev.missingAt ?? null) === missingAt) return { ok: true as const, changed: false }
+      current.workspaces[hash] = { ...prev, missingAt }
+      await deps.writeJsonFile(hubPath(EVOLUTION_WORKSPACES_FILE), current)
+      workspacesCache = { at: Date.now(), value: current }
+      return { ok: true as const, changed: true }
+    })
+  }
+
   async function writeSession(
     sid: string,
     overrides: EvolutionOverrides | undefined,
-  ): Promise<{ ok: true } | { ok: false; error: string }> {
-    await ensureEvolutionDir()
+  ): Promise<{ ok: true } | { ok: false; error: string }> {    await ensureEvolutionDir()
     return deps.withWriteLock(async () => {
       const read = await readForWrite(hubPath(EVOLUTION_SESSIONS_FILE), '会话记录')
       if (!read.ok) return read
@@ -400,5 +427,5 @@ export function createEvolutionConfig(deps: EvolutionConfigDeps): EvolutionConfi
     })
   }
 
-  return { readSettings, settingsSync, readWorkspaces, readSessions, effective, writeSettings, writeWorkspace, writeSession }
+  return { readSettings, settingsSync, readWorkspaces, readSessions, effective, writeSettings, writeWorkspace, markWorkspaceMissing, writeSession }
 }
