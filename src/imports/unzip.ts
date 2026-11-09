@@ -6,8 +6,13 @@
 // ## 为什么按**实际解出**的字节计
 //
 // `unzipSync` 的 `filter` 里拿到的是档案自报的 `info.originalSize`（来自中央目录），
-// 不是真实产出。一个谎报的档案 —— 申报 1 KiB、实际 8 MiB × 2000 条 —— 能让累计闸门
-// 完全失效，一次性把 16 GiB 展开进内存；宿主与插件同进程，这会直接拖死宿主。
+// 不是真实产出，而它把这个申报值直接当输出缓冲区大小（`inflateSync(…, { out: new u8(su) })`）。
+// 两个方向都错：
+//   · 申报**偏小**：内容被静默截断 —— 实测申报 1 KiB、实际 8 MiB，返回的就是 1 KiB，
+//     导入进来的文件是坏的，而没有任何一处报错。比"解压失败"更糟：用户拿到的是残缺数据。
+//   · 申报**偏大**：缓冲区按申报值分配，2000 条 × 8 MiB 就是 16 GiB，宿主与插件同进程，
+//     直接拖死宿主。
+// 两道闸门都建在"实际解出多少"上，才两头都挡得住。
 //
 // 所以改用 fflate 的流式 `Unzip`：`file.ondata` 拿到的是**真正解出来的字节**，按它累加
 // 单条与总量。超限的条目立刻停止收集（`terminate()` 只对实现了它的解码器生效，
@@ -46,6 +51,25 @@ export interface UnzipLimits {
 const PUSH_CHUNK_BYTES = 1024 * 1024
 
 /**
+ * 档案尾部有没有中央目录结束记录（EOCD）。
+ *
+ * 流式 `Unzip` 只顺着局部文件头往下读，**不校验**整份档案的结构：随机字节、纯文本、
+ * 被截断的 zip 都可能"读到 0 个条目"或"读到前几条"就正常结束。`unzipSync` 则先找 EOCD，
+ * 找不到就抛 `invalid zip data` —— 调用方据此报「ZIP 解压失败」。少了这道判据，损坏的
+ * 上传会静默变成「导入成功 0 个文件」，用户不知道是自己传错了还是插件没干活。
+ *
+ * 判据与 `unzipSync` 逐字一致：从末尾 22 字节处往前找，最多回看 65558 字节（22 + 64 KiB
+ * 注释上限）。ZIP64 档案同样带这条记录（只是字段填占位值），所以这里不必特判。
+ */
+function hasEndOfCentralDirectory(bytes: Uint8Array): boolean {
+  const floor = Math.max(0, bytes.length - 65558)
+  for (let i = bytes.length - 22; i >= floor; i -= 1) {
+    if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x05 && bytes[i + 3] === 0x06) return true
+  }
+  return false
+}
+
+/**
  * 解包并丢弃超限条目；返回被丢弃的条目清单。
  *
  * 条目顺序与 `unzipSync` 的返回一致（档案内出现顺序）。超限的条目**不进** `entries`，
@@ -60,6 +84,8 @@ export function unzipLimited(
   bytes: Uint8Array,
   limits: UnzipLimits,
 ): { entries: Record<string, Uint8Array>; problems: UnzipProblem[] } {
+  // 先确认这是一份结构完整的 zip：流式读取不会替我们报这个错（见 `hasEndOfCentralDirectory`）。
+  if (!hasEndOfCentralDirectory(bytes)) throw new Error('invalid zip data')
   const problems: UnzipProblem[] = []
   const sourceName = limits.sourceName || '(zip)'
   const entries: Record<string, Uint8Array> = Object.create(null)
