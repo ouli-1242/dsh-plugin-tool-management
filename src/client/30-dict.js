@@ -241,7 +241,7 @@
         "root.dsh": "DSH 技能", "root.hub": "导入技能", "root.official": "官方内置", "root.agents": "公共 Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "项目 DSH", "root.projectAgents": "项目 Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "memory.title": "记忆",
         "tabs.scenes": "场景", "tabs.skills": "技能", "tabs.subagents": "子智能体", "tabs.prompts": "提示词", "tabs.memory": "记忆", "tabs.sessions": "会话", "tabs.compat": "兼容",
-        "compat.title": "宿主兼容", "compat.desc": "本插件与 DSH 的对接体检（只读）。",
+        "compat.title": "宿主兼容", "compat.desc": "本插件与 DSH 的对接体检，以及工具表、令牌、注入与维护开关。",
         "compat.refresh": "重新检测", "compat.refresh.title": "重新探测宿主能力、版本与契约（忽略 5 秒缓存）",
         "compat.backups.btn": "清理旧备份", "compat.backups.btnCount": "清理旧备份 · {count} 份", "compat.backups.btnHint": "删掉多余的配置备份副本（它们含明文密钥）", "compat.backups.btnTitle": "现有 {count} 份配置备份（共 {size}，含明文密钥）", "compat.backups.title": "清理旧备份",
         // 侧栏入口的开关（按钮文字说"点下去会发生什么"：开着 → 「关闭侧栏」）。
@@ -1187,7 +1187,7 @@
         "root.dsh": "DSH skills", "root.hub": "Imported skills", "root.official": "Official built-in", "root.agents": "Shared Agent", "root.ccswitch": "CC Switch", "root.projectDsh": "Project DSH", "root.projectAgents": "Project Agent", "root.codex": "Codex", "root.claude": "Claude", "root.gemini": "Gemini", "root.opencode": "OpenCode", "root.cursor": "Cursor",
         "memory.title": "Memories",
         "tabs.scenes": "Scenes", "tabs.skills": "Skills", "tabs.subagents": "Subagents", "tabs.prompts": "Prompts", "tabs.memory": "Memories", "tabs.sessions": "Sessions", "tabs.compat": "Host",
-        "compat.title": "Host compatibility", "compat.desc": "How this plugin attaches to DSH (read-only).",
+        "compat.title": "Host compatibility", "compat.desc": "How this plugin attaches to DSH, plus the tool table, token, injection and maintenance controls.",
         "compat.refresh": "Re-check", "compat.refresh.title": "Re-probe host capabilities, versions and contracts (bypasses the 5-second cache)",
         "compat.backups.btn": "Clean old backups", "compat.backups.btnCount": "Clean old backups · {count}", "compat.backups.btnHint": "Delete surplus config backup copies (they hold secrets in cleartext)", "compat.backups.btnTitle": "{count} config backups exist ({size}, secrets in cleartext)", "compat.backups.title": "Clean old backups",
         "compat.sidebar.hide": "Hide from sidebar", "compat.sidebar.show": "Show in sidebar", "compat.sidebar.hideHint": "Remove this plugin's row from the sidebar (Settings → Tools Management still works)", "compat.sidebar.showHint": "Add this plugin's row to the sidebar; it opens the same pages right here", "compat.sidebar.failed": "Could not save the sidebar toggle",
