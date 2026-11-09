@@ -53,6 +53,9 @@ import {
 } from './tools/table.js'
 import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
+// 主动记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
+import { createEvolutionConfig } from './evolution/config.js'
+import { buildEvolutionOps } from './ops/evolution.js'
 // 改名 / 进场景 / 存档案的联动（op 重包，从本文件 apply 闭包整段抽出）。
 import { installSceneLinkage } from './scene-linkage.js'
 // 访问令牌的宿主侧配置读写（从本文件 apply 闭包整段抽出，依赖显式传参）。
@@ -2175,6 +2178,17 @@ export default {
       message,
     })
 
+    // 主动记忆的策略：三份文件（settings / workspaces / sessions），同一把写锁。
+    // 只读开关，不碰记忆正文 —— 正文的写入走 memories 域的 op（P1 再加）。
+    const evolutionConfig = createEvolutionConfig({
+      ensurePaths,
+      readJsonFile,
+      readJsonFileStrict,
+      writeJsonFile,
+      withWriteLock,
+      message,
+    })
+
     // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的各域文本。
     // 挂在 apply 作用域：`injection-live` op 与注入器不在同一层（effect 内部）。
     let contextInjectorLive: (() => LiveInjectionSnapshot) | null = null
@@ -4229,6 +4243,9 @@ export default {
       // 子智能体 ops（由 ./subagents/service.ts 提供）：subagent-list/get（只读）
       // + subagent-create/update/delete（写，writeOps 已派生进门禁）。
       ...subagentService.ops,
+      // 主动记忆的策略 op（ops/evolution.ts）：evolution-status / -settings / -toggle。
+      // 只读写开关，不碰记忆正文；写端点由 request-gate 的回环校验兜底。
+      ...buildEvolutionOps({ config: evolutionConfig, message }),
       // 兼容 / 注入 / 备份域（ops/compat.ts 提供）：compat-status / preset-reach /
       // inject-settings / backups-list / backups-clean / injection-live。
       // 依赖显式传参，不再靠闭包隐式捕获。

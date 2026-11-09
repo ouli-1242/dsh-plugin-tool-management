@@ -12,7 +12,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP, isReservedGroup, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -380,10 +380,15 @@ export function probeSceneFilesSync(
   }
 
   // 一级目录 = 场景（根层的裸 .md 不再是记忆，故此处不处理文件）。
+  // 保留组里只有 `_shared` 进这份 probe：`_ws` / `_session` / `_auto` 是自动记忆的层，
+  // 由自动段单独渲染（读 catalog，不读正文）。把它们扫进来有两个坏处：每次自动写入都会
+  // 改变记忆段指纹（整段重发），以及它们会以 `## Scene: _ws` 的形式混进用户记忆段。
+  const autoOnlyGroups = new Set([WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP])
   for (const item of [...rootEntries].sort((a, b) => a.name.localeCompare(b.name))) {
     if (item.name.startsWith('.')) continue
     if (item.isSymbolicLink()) continue
     if (!item.isDirectory()) continue
+    if (autoOnlyGroups.has(item.name)) continue
     if (!isValidGroupSegment(item.name)) continue // 非法目录名 → 不作为场景
     scenes.push(item.name)
   }
@@ -444,6 +449,9 @@ export function renderSceneMemory(
   const { active } = resolveActiveScenes(index, probe.scenes, sceneOverride)
   const buckets = new Map<string, SceneMemoryFile[]>()
   for (const file of files) {
+    // 保留组不是场景：`_shared` 是恒常基线（保留在记忆段），`_ws` / `_session` / `_auto`
+    // 由自动段单独渲染。probe 已经把它们挡在外面，这里是第二道保险（防止 refs 从缓存来）。
+    if (file.scene !== GLOBAL_SCENE && file.scene !== SHARED_GROUP && isReservedGroup(file.scene)) continue
     // 保留场景 global 恒定生效（「全局」= 任何对话都注入）；其余由 index.active 决定。
     if (file.scene !== GLOBAL_SCENE && !active.has(file.scene)) continue
     // ⚠️ 这里**不再**看场景档案的 memories 段：记忆的开关是**单一真相源** `rules[*].enabled`

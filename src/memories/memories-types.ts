@@ -83,6 +83,22 @@ export interface Rule {
    * flat 记忆没有这个字段。目录读不到时也不会有（界面据此不显示附件标签，而不是谎报 0）。
    */
   attach?: { count: number; bytes: number; names: string[] }
+  /**
+   * 谁写的：`user`（用户手写 / `save`）/ `auto`（agent 学的）。缺省按 `user` 处理。
+   * 只用于界面分组与权威裁决；门禁不读这个字段（门禁看入口，不看数据）。
+   */
+  origin?: 'user' | 'auto'
+  /** 自动记忆的类型（frontmatter `auto_kind`）：preference / fact / correction / procedure。 */
+  autoKind?: string
+  /** 语义槽位（`auto_key`）：同 key 视为同一件事，写入时合并而不是新增。 */
+  autoKey?: string
+  /** 生命周期（`auto_status`）：candidate / active / core / superseded / archived。 */
+  autoStatus?: string
+  /** 置信度（`auto_confidence`）：反规范化值，真值在 evolution/state.json。 */
+  autoConfidence?: number
+  /** 归属：工作区 hash16 / 场景名（`auto_workspace` / `auto_scene`）。 */
+  autoWorkspace?: string
+  autoScene?: string
 }
 
 /** 场景清单里的一行：名字、显示名、顺序、条目数。 */

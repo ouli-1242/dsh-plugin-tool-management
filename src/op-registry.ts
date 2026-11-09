@@ -129,6 +129,14 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 打开系统编辑器改文件：不改宿主状态，但它是"界面按钮"性质的写入口，按写门禁。
   'skill-open': { write: true },
 
+  // ── 主动记忆的策略（三级开关）──────────────────────────────────────────────
+  // 只改 `evolution/` 下的策略文件，不碰记忆正文。与 `inject-settings` 同权：读免令牌，
+  // 写要令牌。**不受场景锁冻结** —— 场景锁冻结的是"这个场景的内容"，而关掉主动学习是
+  // 安全侧动作，锁定期间更应该允许（否则用户想停都停不了）。
+  'evolution-status': { readonly: true },
+  'evolution-settings': { write: true, writeWhen: (a) => a.set === true },
+  'evolution-toggle': { write: true },
+
   // ── 记忆与场景域（28：memories 25 + archive-engine 3）──────────────────────
   'rules-list': { readonly: true },
   'rules-read': { readonly: true },

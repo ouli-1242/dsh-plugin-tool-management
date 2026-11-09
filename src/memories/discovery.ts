@@ -224,7 +224,30 @@ export interface DerivedFields {
   whenToUse?: string
   globs?: string
   metadata?: unknown
+  /** 自动记忆字段：手写记忆一律不带这些键（不是 undefined，是**没有**）。 */
+  origin?: 'user' | 'auto'
+  autoKind?: string
+  autoKey?: string
+  autoStatus?: string
+  autoConfidence?: number
+  autoWorkspace?: string
+  autoScene?: string
 }
+
+/** frontmatter 标量 → 去引号后的非空字符串；空 / 缺失返回 undefined。 */
+function scalarOf(v: unknown): string | undefined {
+  if (v == null) return undefined
+  const s = unquote(String(v)).trim()
+  return s === '' ? undefined : s
+}
+
+/** frontmatter 标量 → 有限数字；解析不了返回 undefined（不抛，也不当 0）。 */
+function numberOf(v: unknown): number | undefined {
+  if (v == null) return undefined
+  const n = Number(unquote(String(v)))
+  return Number.isFinite(n) ? n : undefined
+}
+
 /** 由文档派生名字、描述、绑定等字段（声明值优先，缺省时从正文推）。 */
 export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): DerivedFields {
   const declaredName = doc.map.name != null && String(doc.map.name).trim() !== '' ? unquote(String(doc.map.name)).trim() : ''
@@ -243,7 +266,28 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
     whenToUse = `适用路径：${globs}`
   }
   const metadata = doc.map.metadata !== undefined ? doc.map.metadata : undefined
-  return { name, description, descriptionDerived, whenToUse, globs, metadata }
+  // 自动记忆的元数据。`origin` 只认两个字面量：拼错时宁可当作"未声明"（界面按用户记忆显示），
+  // 也不要让它半自动半用户 —— 权威裁决靠这个字段。
+  const rawOrigin = scalarOf(doc.map.origin)
+  const origin: 'user' | 'auto' | undefined = rawOrigin === 'auto' ? 'auto' : rawOrigin === 'user' ? 'user' : undefined
+  const autoKind = scalarOf(doc.map.auto_kind)
+  const autoKey = scalarOf(doc.map.auto_key)
+  const autoStatus = scalarOf(doc.map.auto_status)
+  const autoConfidence = numberOf(doc.map.auto_confidence)
+  const autoWorkspace = scalarOf(doc.map.auto_workspace)
+  const autoScene = scalarOf(doc.map.auto_scene)
+  return {
+    name, description, descriptionDerived, whenToUse, globs, metadata,
+    // 只在有值时加键：DerivedFields 的形状要与旧版逐字段相同，否则
+    // 现有快照/索引的深比较会因为多出 undefined 而报"变了"。
+    ...(origin !== undefined ? { origin } : {}),
+    ...(autoKind !== undefined ? { autoKind } : {}),
+    ...(autoKey !== undefined ? { autoKey } : {}),
+    ...(autoStatus !== undefined ? { autoStatus } : {}),
+    ...(autoConfidence !== undefined ? { autoConfidence } : {}),
+    ...(autoWorkspace !== undefined ? { autoWorkspace } : {}),
+    ...(autoScene !== undefined ? { autoScene } : {}),
+  }
 }
 /** 把发现结果投影成注入侧用的规则行（体积、启用状态、场景归属都在这步定）。 */
 export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxEntry: RuleIndexEntry | undefined): Rule {
@@ -269,6 +313,14 @@ export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxE
     pinned: idxEntry?.pinned === true,
     note: typeof idxEntry?.note === 'string' ? idxEntry.note : '',
     ...(typeof idxEntry?.updatedAt === 'string' ? { updatedAt: idxEntry.updatedAt } : {}),
+    // 自动记忆字段只在有值时出现，理由同 deriveFromDoc。
+    ...(derived.origin !== undefined ? { origin: derived.origin } : {}),
+    ...(derived.autoKind !== undefined ? { autoKind: derived.autoKind } : {}),
+    ...(derived.autoKey !== undefined ? { autoKey: derived.autoKey } : {}),
+    ...(derived.autoStatus !== undefined ? { autoStatus: derived.autoStatus } : {}),
+    ...(derived.autoConfidence !== undefined ? { autoConfidence: derived.autoConfidence } : {}),
+    ...(derived.autoWorkspace !== undefined ? { autoWorkspace: derived.autoWorkspace } : {}),
+    ...(derived.autoScene !== undefined ? { autoScene: derived.autoScene } : {}),
   }
   return rule
 }

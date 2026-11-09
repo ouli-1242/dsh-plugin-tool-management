@@ -10,7 +10,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ATTACHMENT_LIST_MAX, bundleDocName, DEFAULT_GROUP_ORDER, DEFAULT_ORDER, GLOBAL_SCENE,
-  GLOBAL_SCENE_LABEL, INLINE_BODY_MAX, LEGACY_BUNDLE_DOC, SHARED_GROUP,
+  GLOBAL_SCENE_LABEL, INLINE_BODY_MAX, LEGACY_BUNDLE_DOC, SHARED_GROUP, isReservedGroup,
 } from './constants.js'
 import type { RulesIndex, SceneMemoryFile } from './service.js'
 
@@ -40,7 +40,10 @@ export function ensureSceneRecords(index: RulesIndex, probeScenes: string[]): bo
     dirty = true
   }
   // 有目录但没记录（旧布局搬进来的、或用户手工建的目录）→ 补记录，label 用目录名。
+  // 保留组（`_ws` / `_session` / `_auto` / `_shared`）不补：它们不是场景，补了就会出现在
+  // 场景选择器里，用户点进去看到的是一堆按 hash 命名的目录。
   for (const name of probeScenes) {
+    if (isReservedGroup(name)) continue
     if (index.scenes[name]) continue
     index.scenes[name] = { order: DEFAULT_GROUP_ORDER }
     dirty = true
@@ -72,17 +75,22 @@ export function resolveActiveScenes(
    */
   override?: string | null,
 ): { active: Set<string>; mode: 'all' | 'custom' } {
+  // 保留组不是场景：`_ws` / `_session` / `_auto` / `_shared` 由各自的层规则处理，
+  // 不能进"当前启用场景"集合 —— 否则它们会以 `## Scene: _ws` 的形式注入。
+  const scenes = knownScenes.filter((n) => !isReservedGroup(n))
   if (override === null) {
     return { active: new Set<string>([SHARED_GROUP, GLOBAL_SCENE]), mode: 'custom' }
   }
   if (override !== undefined) {
     // 会话层是单选：一个场景 + 两个恒常保留桶。`mode` 报 custom —— 它不是"全部启用"。
-    const active = new Set<string>([override, SHARED_GROUP, GLOBAL_SCENE])
+    // 传入保留组当作"启用场景"是调用方 bug：忽略它，只留两个恒常桶。
+    const active = new Set<string>([SHARED_GROUP, GLOBAL_SCENE])
+    if (!isReservedGroup(override)) active.add(override)
     return { active, mode: 'custom' }
   }
   const stored = normalizeActive(index.active)
   const mode: 'all' | 'custom' = stored === null ? 'all' : 'custom'
-  const active = new Set<string>(stored === null ? knownScenes : stored)
+  const active = new Set<string>(stored === null ? scenes : stored)
   active.add(SHARED_GROUP)
   active.add(GLOBAL_SCENE)
   return { active, mode }
@@ -93,7 +101,7 @@ export function enabledSceneOf(index: RulesIndex, override?: string | null): str
   const names = Object.keys(index.scenes || {})
   const { active } = resolveActiveScenes(index, names, override)
   const enabled = names
-    .filter((n) => n !== SHARED_GROUP && n !== GLOBAL_SCENE && active.has(n))
+    .filter((n) => !isReservedGroup(n) && active.has(n))
     .sort((a, b) => sceneOrderOf(index, a) - sceneOrderOf(index, b) || a.localeCompare(b))
   return enabled[0] ?? null
 }
@@ -107,7 +115,7 @@ export function enabledSceneOf(index: RulesIndex, override?: string | null): str
  */
 export function collapseActiveForNewScene(index: RulesIndex): boolean {
   if (normalizeActive(index.active) !== null) return false
-  const names = Object.keys(index.scenes || {}).filter((n) => n !== SHARED_GROUP && n !== GLOBAL_SCENE)
+  const names = Object.keys(index.scenes || {}).filter((n) => !isReservedGroup(n))
   const first = names.sort((a, b) => sceneOrderOf(index, a) - sceneOrderOf(index, b) || a.localeCompare(b))[0]
   index.active = first === undefined ? [] : [first]
   return true

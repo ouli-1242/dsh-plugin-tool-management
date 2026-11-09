@@ -12,6 +12,8 @@
 //
 // 前缀 `ws:` 只用于本侧车；宿主会话 id 不会以它开头，真实会话 id 仍原样存在。
 
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { workspaceBaseName, workspacePathKey } from '../sessions/path-key.js'
 
 /** 工作区作用域键的前缀。 */
@@ -68,4 +70,38 @@ export function scopeKeyOfRow(
     if (workspace !== undefined) return workspace
   }
   return row.id
+}
+
+// ── 记忆层用的工作区身份 ───────────────────────────────────────────────────
+
+/** cwd → 项目根：向上找 `.git`（文件或目录），最多 8 层；找不到就用 cwd 自己。 */
+const rootCache = new Map<string, string>()
+
+export function workspaceRootOf(cwd: unknown): string | undefined {
+  if (typeof cwd !== 'string' || cwd.trim() === '') return undefined
+  const cached = rootCache.get(cwd)
+  if (cached !== undefined) return cached
+  let cur = cwd
+  let found = cwd
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(cur, '.git'))) { found = cur; break }
+    const parent = dirname(cur)
+    if (parent === cur || parent === '') break
+    cur = parent
+  }
+  // 简单的上界：一个进程通常只碰几个项目，超过 256 条就整体清空（不做 LRU，代价不值得）。
+  if (rootCache.size > 256) rootCache.clear()
+  rootCache.set(cwd, found)
+  return found
+}
+
+/**
+ * 记忆层用的工作区键：**先向上收敛到 git root**，再派生 `ws:` 键。
+ *
+ * 为什么不复用 `workspaceScopeKeyOf`：它直接吃 cwd（「作用域」页的现有口径，改了会让存量的
+ * 逐条开关全部失配）。记忆层是新数据，可以从一开始就用更稳的身份 —— 否则用户从 `/repo`
+ * 进到 `/repo/src`，刚学的项目事实就"消失"了，而他只会认为"记忆丢了"。
+ */
+export function workspaceMemoryKeyOf(cwd: unknown): string | undefined {
+  return workspaceScopeKeyOf(workspaceRootOf(cwd))
 }
