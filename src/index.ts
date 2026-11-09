@@ -2124,11 +2124,23 @@ export default {
      *
      * 目录是 SWR：旧值保留在缓存里，晚 120ms 重算不会让注入读到空，也不影响写回执。
      */
-    let skillCatalogRefreshTimer: ReturnType<typeof setTimeout> | null = null
+    /**
+     * 定时器持有者。放进 `ctx.effect` 的作用域里，卸载时（HMR / 停用 / 更新）由宿主清掉 ——
+     * 裸 `setTimeout` 会在插件已经不在了之后仍跑一次 `refresh()`。
+     */
+    const skillCatalogRefreshTimer: { handle: ReturnType<typeof setTimeout> | null } = { handle: null }
+    try {
+      ctx.effect(() => () => {
+        if (skillCatalogRefreshTimer.handle !== null) {
+          clearTimeout(skillCatalogRefreshTimer.handle)
+          skillCatalogRefreshTimer.handle = null
+        }
+      }, 'dsh-plugin-tool-management: skill catalog refresh timer')
+    } catch { /* 没有 effect 的装配（测试）→ 退化成不清理，与从前一致 */ }
     function scheduleSkillCatalogRefresh(): void {
-      if (skillCatalogRefreshTimer !== null) return
-      skillCatalogRefreshTimer = setTimeout(function () {
-        skillCatalogRefreshTimer = null
+      if (skillCatalogRefreshTimer.handle !== null) return
+      skillCatalogRefreshTimer.handle = setTimeout(function () {
+        skillCatalogRefreshTimer.handle = null
         void skillCatalog.refresh().catch(() => { /* 下一轮读会重建，不影响已完成的写 */ })
       }, 120)
     }
