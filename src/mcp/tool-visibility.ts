@@ -72,15 +72,18 @@ export interface ToolVisibilityDeps {
   /**
    * 本会话的 MCP 可见性覆盖：在**此刻注册着的**工具全名上算出的两个名单。
    *
-   * 全名要按"此刻注册了什么"（`tools.schemas()`）算，而那件事只有本模块顺手 —— 让调用方
-   * 去拼全名等于把"哪些名字算数"抄第二份。所以调用方的判据（四层并值）是按
-   * `(server, tool)` 出的，展开成注册全名的这一步留在 `restrictAgent`（见那里的调用）。
+   * 全名要按"此刻注册了什么"算 —— 调用方的判据（四层并值）是按 `(server, tool)` 出的，
+   * 展开成注册全名需要那份全集。**由本模块传进去**（`registered`）：一轮 restrict 里
+   * 只枚举一次 `tools.schemas()`，再逐 agent 复用同一份；让调用方自己枚举就是
+   * 「1 + N 次全量 schema 深拷贝」。
    *
    * 语义边界：会话层**不改连接**（`cordis.patch.yml` 是进程级的），只让工具在本会话里
    * 看不见。`allow` 名单会把全局停用表关着的工具**从 deny 里减掉** —— 本会话看得见、
    * 调得动，别的会话照旧。
+   *
+   * @param registered 这一轮从 `tools.schemas()` 取到的已注册工具名全集
    */
-  sessionMcpOverlay?(agent: unknown): Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
+  sessionMcpOverlay?(agent: unknown, registered: ReadonlySet<string>): Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
   /** 本会话的模型工具表覆盖：与 MCP overlay 合进同一层 restrict。 */
   sessionToolTableOverlay?(agent: unknown): { allow?: readonly string[]; deny?: readonly string[] } | Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
 }
@@ -520,8 +523,14 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     if (release) { try { release() } catch (e) { /* ignore */ } }
   }
 
-  /** 把该 agent 该背的名单装到它 scope 上（全局那份 ∓ 会话覆盖 ∪ 它自己那份；空名单 = 不碰它）。 */
-  async function restrictAgent(agent: any): Promise<void> {
+  /**
+   * 把该 agent 该背的名单装到它 scope 上（全局那份 ∓ 会话覆盖 ∪ 它自己那份；空名单 = 不碰它）。
+   *
+   * @param registered 这一轮 `applyToolRestrictions` 枚举到的已注册工具名全集。逐 agent
+   *   复用同一份 —— 覆盖判据要在"此刻注册着什么"上算全名，而每轮只该枚举一次
+   *   （`schemas()` 是全量深拷贝，N 个 agent 就是 1+N 次）。
+   */
+  async function restrictAgent(agent: any, registered: ReadonlySet<string>): Promise<void> {
     const mine = epoch
     let extra: string[] = []
     if (deps.carrierHiddenTools) {
@@ -530,12 +539,12 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     }
     // 会话层的两个方向：`deny` 追加、`allow` 从全局名单里减掉 —— 允许**减**
     // 是关键：全局停用表（含场景引擎写的收窄）关着的工具，本会话显式拨开 / 场景勾着时
-    // 要能重新看见，而全局一个字不动。名单已按注册全名算过（调用方用同一份 schemas），
+    // 要能重新看见，而全局一个字不动。名单已按注册全名算过（调用方用同一份 registered），
     // 这里照样过一遍 registered 过滤 —— 认不出的名字官方 restrict 会直接抛。
     let allowSet = new Set<string>()
     if (deps.sessionMcpOverlay) {
       try {
-        const ov = await deps.sessionMcpOverlay(agent)
+        const ov = await deps.sessionMcpOverlay(agent, registered)
         if (ov) {
           if (ov.deny !== undefined && ov.deny.length) extra = [...extra, ...ov.deny]
           if (ov.allow !== undefined && ov.allow.length) allowSet = new Set(ov.allow)
@@ -641,11 +650,20 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     }
   }
 
-  /** agent 上线（`agent/created` 或启动期的 agent 列表）：登记并立刻应用当前名单。 */
+  /**
+   * agent 上线（`agent/created` 或启动期的 agent 列表）：登记并立刻应用当前名单。
+   *
+   * 新 agent 没有已装层的键可复用，所以这里自己枚举一次。事件频率是"每个会话一次"，
+   * 与 `tools/change` 那条热路径无关 —— 后者在 `applyToolRestrictions` 里共用一份。
+   */
   function attachAgent(agent: any): void {
     if (!agent || (typeof agent !== 'object' && typeof agent !== 'function')) return
     seenAgents.add(agent)
-    void restrictAgent(agent).catch(() => { /* 可见性半边 best effort */ })
+    void (async () => {
+      let registered: ReadonlySet<string>
+      try { registered = new Set((await deps.tools.schemas()).map((schema) => String(schema.name))) } catch { registered = new Set() }
+      await restrictAgent(agent, registered)
+    })().catch(() => { /* 可见性半边 best effort */ })
   }
 
   /** agent 下线（`agent/disposed`）：先撤限制再销登记。 */
@@ -670,9 +688,10 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
       })
       return
     }
-    // 强制重读：这条走 tools/change 路径，频率低，但旧缓存绝不能把外部改过的停用名单
-    // 一直藏住。
-    const read = await readDisabledToolsResult(true)
+    // 走 TTL 缓存：写路径自己会 bump epoch 让缓存失效，外部手改最迟一个 TTL（3s）生效。
+    // 此前这里用 force，注释说"这条走 tools/change 路径，频率低" —— 而同一个文件记录了
+    // 空闲态能到 ~17.8 次/秒 tools/change，两处对同一事件的判断互相矛盾。
+    const read = await readDisabledToolsResult()
     const unknown = read.status === 'corrupt' || read.status === 'unreadable'
     const map = read.status === 'ok' ? read.value : emptyDisabledTools()
     let registered: Set<string>
@@ -737,7 +756,9 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     // 空转、零事件 → 稳态。
     epoch += 1
     for (const agent of [...agentRestrictions.keys()]) if (!seenAgents.has(agent)) liftRestriction(agent)
-    for (const agent of seenAgents) void restrictAgent(agent).catch(() => { /* best effort */ })
+    // 逐 agent 复用上面那份 `registered`：`schemas()` 是全量深拷贝，每 agent 各枚举一次
+    // 就是 1+N 次，而它们要回答的只是"这个名字此刻注册着吗"。
+    for (const agent of seenAgents) void restrictAgent(agent, registered).catch(() => { /* best effort */ })
   }
   function scheduleToolRestrictions(): void {
     if (restrictTimer) return

@@ -99,8 +99,11 @@ export interface McpManagerDeps {
    *
    * 与 `carrierHiddenTools` 分开的理由同上：那是"官方在场就让位"的推断，这是明确动作。
    * 取不到会话 / 没有任何一层时返回空（= 跟随全局）。
+   *
+   * @param registered 这一轮已枚举的注册工具名全集 —— 由可见性模块传进来，一轮只枚举一次；
+   *   调用方不必（也不该）自己再 `schemas()` 一遍。
    */
-  sessionMcpOverlay?(agent: unknown): Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
+  sessionMcpOverlay?(agent: unknown, registered: ReadonlySet<string>): Promise<{ allow?: readonly string[]; deny?: readonly string[] }>
   /**
    * 本会话的**模型工具表**覆盖：本对话自己的整份关停名单相对全局的差异。
    * `allow` = 本对话重新打开、`deny` = 本对话关掉；与 `sessionMcpOverlay` 合进同一层 restrict。

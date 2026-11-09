@@ -1211,7 +1211,11 @@ export default {
      * 官方那三个共享资源工具也进这一份名单（见 `resourceToolDenyFor`）：它们不在
      * `mcp__` 前缀里，上面的切分认不出，但它们同样要服从「这个作用域看不看得见服务器」。
      */
-    async function sessionMcpOverlayOf(agent: unknown): Promise<{ allow: string[]; deny: string[] }> {
+    async function sessionMcpOverlayOf(
+      agent: unknown,
+      /** 这一轮已枚举的注册工具名全集（由 `tool-visibility` 传进来，一轮只枚举一次）。 */
+      registered: ReadonlySet<string>,
+    ): Promise<{ allow: string[]; deny: string[] }> {
       const ctx = sessionMcpContextOf(agent)
       const intentSnapshot = intentStore.snapshot()
       const hasGlobalFilter = Object.values(intentSnapshot.mcp).some((state) => state === 'off' || state === 'blocked')
@@ -1221,13 +1225,11 @@ export default {
       // 与会话层有没有覆盖记录无关（全局开着的一台服务器在任何会话都看得见）。
       const resourceDeny = await resourceToolDenyFor(agent)
       if (!hasGlobalFilter && !hasSessionLayer) return { allow: [], deny: resourceDeny }
-      let schemas: any[] = []
-      try { schemas = await tools.schemas() } catch { return { allow: [], deny: resourceDeny } }
-      if (schemas.length === 0) return { allow: [], deny: resourceDeny }
+      if (registered.size === 0) return { allow: [], deny: resourceDeny }
       const allow: string[] = []
       const deny: string[] = []
-      for (const s of schemas) {
-        const name = String((s && s.name) || '')
+      // 遍历注册全集即可：`registered` 就是 `schemas()` 的名字集合，不必再为拿名字深拷贝一遍。
+      for (const name of registered) {
         const parts = toolKeyParts(name, ctx.candidates)
         if (parts === null) continue
         const verdict = mcpVerdictOf(ctx, parts)
@@ -3004,7 +3006,7 @@ export default {
       //   · `sessionMcpOverlay`（异步）给 restrictAgent：在**此刻注册着的**工具全名上算
       //     allow / deny（deny 追加、allow 从全局停用名单里减掉，见 tool-visibility.ts）；
       //   · `sessionHiddenServer`（同步）给状态段与 mcp_manager_list 逐行问。
-      sessionMcpOverlay: (agent: unknown) => sessionMcpOverlayOf(agent),
+      sessionMcpOverlay: (agent: unknown, registered: ReadonlySet<string>) => sessionMcpOverlayOf(agent, registered),
       // 模型工具表也按对话走：本对话的整份关停名单与全局的差异并进同一层 restrict。
       sessionToolTableOverlay: (agent: unknown) => sessionToolTableOverlayOf(agent),
       sessionHiddenServer: (agent: unknown, serverName: string) => sessionServerHiddenOf(agent, serverName),
