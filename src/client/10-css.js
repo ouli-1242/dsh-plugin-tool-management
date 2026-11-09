@@ -216,6 +216,14 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-dream-op-body{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px}
 .dsm-evo-dream-op-name{color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsm-evo-dream-preview{display:flex;flex-direction:column;gap:4px;padding:6px 8px;background:var(--dsw-alias-bg-l2);border-radius:var(--dsm-radius-s)}
+.dsm-evo-proc{border-color:var(--dsw-alias-border-l2)}
+.dsm-evo-proc-item{border-top:1px solid var(--dsw-alias-border-l3);padding-top:6px}
+.dsm-evo-proc-title{flex:1 1 120px;min-width:0;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-evo-proc-detail{padding:6px 0 2px 12px;border-left:2px solid var(--dsw-alias-border-l2);margin:4px 0 2px}
+.dsm-evo-proc-steps{display:flex;flex-direction:column;gap:3px}
+.dsm-evo-proc-step{display:flex;align-items:flex-start;gap:8px;font-size:12px}
+.dsm-evo-proc-skills{display:flex;flex-direction:column;gap:4px;margin-top:8px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l3)}
+.dsm-tag-learned{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 /* 中性标签：灰边框 + 主色字（用户 2026-11-06：MCP 的「未运行」不该是红的 —— 没跑起来不是故障）。 */
 .dsm-tag-quiet{border-color:var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}

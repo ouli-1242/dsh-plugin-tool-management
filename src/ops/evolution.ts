@@ -15,6 +15,8 @@ import type { Learner } from '../evolution/write.js'
 import type { ColdPathHandle } from '../evolution/cold.js'
 import type { Dreamer } from '../evolution/dream.js'
 import type { SweepReport } from '../evolution/maintenance.js'
+import { canPromotePlaybook, parseProcedureSteps, type ProcedureSkillStore, type SkillDraftInput } from '../evolution/procedure.js'
+import { isInjectableStatus } from '../memories/catalog.js'
 import { workspaceMemoryKeyOf } from '../scope/workspace-key.js'
 
 export interface EvolutionOpDeps {
@@ -49,6 +51,8 @@ export interface EvolutionOpDeps {
   dream?(): Dreamer | null
   /** 维护扫描（P3）：TTL / 会话 GC / 衰减 / 工作区失效 / 配额。 */
   sweep?(opts?: { dry?: boolean }): Promise<SweepReport>
+  /** P4：程序性记忆与技能提议的存储（同样用 getter，装配晚于 op 表）。 */
+  procedureSkills?(): ProcedureSkillStore | null
   /** 健康度（只读统计）。 */
   health?(): Promise<{
     byLayer: Record<string, { active: number; candidate: number; archived: number; cap: number; tokens: number }>
@@ -68,6 +72,37 @@ function layerView(overrides: EvolutionOverrides | undefined) {
 
 export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: any) => Promise<any>> {
   const { config, runtime, learner, message } = deps
+
+  /**
+   * 把一条 playbook 读成「技能草案的输入」。
+   *
+   * 只认 `playbook`：active / core 的 procedure 还没走完验证阶梯，直接生成技能等于跳过
+   * 人工确认链。步骤以 state.json 为准，正文解析只给旧条目兜底。
+   */
+  const procedureInputOf = async (id: string): Promise<{ ok: true; input: SkillDraftInput } | { ok: false; error: string }> => {
+    if (!learner) return { ok: false, error: '自动记忆尚未启用' }
+    const view = runtime.view()
+    const entry = view.catalog.entries[id]
+    if (!entry || entry.kind !== 'procedure') return { ok: false, error: `不是程序性记忆：${id}` }
+    if (entry.status !== 'playbook') return { ok: false, error: '只有 playbook 能生成技能（先验证 3 次并晋升）' }
+    const d = await learner.describe(id)
+    if (!d.ok) return { ok: false, error: d.error }
+    const st = view.state.entries[id]
+    const steps = st?.procedure?.steps ?? parseProcedureSteps(d.body)
+    if (steps.length < 2) return { ok: false, error: '这条流程没有至少 2 个步骤' }
+    return {
+      ok: true,
+      input: {
+        id,
+        key: entry.key,
+        title: d.title || entry.title || entry.key,
+        description: entry.oneLine,
+        steps,
+        boundary: d.boundary,
+        successes: st?.procedure?.successes ?? 0,
+      },
+    }
+  }
 
   /**
    * cwd → 工作区身份（与 scope 页同一口径：先向上收敛到 git root）。
@@ -139,7 +174,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             needsReview,
             pendingReview: needsReview,
             broken: view.broken,
-            active: entries.filter((e) => e.enabled && (e.status === 'active' || e.status === 'core')).length,
+            active: entries.filter((e) => e.enabled && isInjectableStatus(e.status)).length,
           },
         }
       } catch (e) {
@@ -253,6 +288,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(args?.boundary !== undefined ? { boundary: args.boundary } : {}),
             ...(args?.ttlDays !== undefined ? { ttlDays: args.ttlDays } : {}),
             ...(args?.description !== undefined ? { description: args.description } : {}),
+            // P4：只有 procedure 用；写入管线会洗净并限长，非 procedure 一律忽略。
+            ...(Array.isArray(args?.steps) ? { steps: args.steps.map((x: unknown) => String(x)) } : {}),
           },
           cfg,
           {
@@ -326,10 +363,14 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         // 两个入参名都收：界面按开关语义传 `enabled`，工具按状态语义传 `status`。
         // 只认一个会让另一条路静默写成 undefined —— 而 `setStatus` 会拿它跟当前值比、
         // 比不出来就返回 unchanged，症状是"点了没反应但不报错"。
-        const status = args?.status === 'archived' || args?.enabled === false
-          ? 'archived'
-          : 'active'
-        const result = await learner.setStatus(id, status, args?.actor === 'user' ? 'user' : 'curator')
+        const wanted = typeof args?.status === 'string' ? args.status : ''
+        const status = wanted === 'playbook' || wanted === 'core'
+          ? wanted
+          : wanted === 'archived' || args?.enabled === false ? 'archived' : 'active'
+        // 升 playbook 一律走 dream 那条判据（core → playbook、成功 ≥3、harmful=0、有步骤），
+        // 不让界面传个 actor 就把门槛绕过去。
+        const actor = status === 'playbook' ? 'dream' : args?.actor === 'user' ? 'user' : 'curator'
+        const result = await learner.setStatus(id, status, actor)
         if (result && result.ok) runtime.invalidate()
         return result
       } catch (e) {
@@ -473,7 +514,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           const st = view.state.entries[entry.id]
           const needsReview = st && typeof st.needsReview === 'string' && st.needsReview !== ''
           // 默认只列"会注入的 + 待确认的"：archived / superseded 只在 all=true 时出现。
-          if (!includeAll && entry.status !== 'active' && entry.status !== 'core' && !needsReview) continue
+          if (!includeAll && !isInjectableStatus(entry.status) && !needsReview) continue
           rows.push({
             id: entry.id,
             layer: entry.layer,
@@ -482,11 +523,14 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             status: entry.status,
             confidence: entry.confidence,
             oneLine: entry.oneLine,
+            ...(entry.title !== undefined ? { title: entry.title } : {}),
+            // P4：列表不返回步骤正文（一次几十条会变大），只给条数与成功次数，展开再走 read。
+            ...(st?.procedure !== undefined ? { stepCount: st.procedure.steps.length, successes: st.procedure.successes, failures: st.procedure.failures } : {}),
             pinned: entry.pinned,
             enabled: entry.enabled,
             // 「会不会进上下文」的主判据就是这两个：状态与单条开关。层匹配由调用方判
             // （界面知道自己是谁、模型知道自己的 sid/cwd），op 层不猜。
-            injects: entry.enabled && (entry.status === 'active' || entry.status === 'core'),
+            injects: entry.enabled && isInjectableStatus(entry.status),
             tokens: entry.estTokens,
             workspace: entry.workspace,
             scene: entry.scene,
@@ -624,6 +668,117 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         return { ok: true, ...(await deps.health()) }
       } catch (e) {
         return { ok: false, error: message(e), code: 'health-failed' }
+      }
+    },
+
+    /**
+     * P4：程序性记忆清单 + 技能草案 + learned 名单。
+     *
+     * 一次拉全而不是让界面拼三次：这三者要画在同一块卡片上，分三次请求会出现
+     * "步骤显示 3 次成功、草案却说还没验证"的中间态。
+     */
+    'evolution-procedures': async () => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const view = runtime.view()
+        const rows: any[] = []
+        for (const e of Object.values(view.catalog.entries)) {
+          if (e.kind !== 'procedure') continue
+          const st = view.state.entries[e.id]
+          const d: any = await learner.describe(e.id)
+          const steps = st?.procedure?.steps ?? (d.ok ? parseProcedureSteps(d.body) : [])
+          const successes = st?.procedure?.successes ?? 0
+          const failures = st?.procedure?.failures ?? 0
+          rows.push({
+            id: e.id,
+            title: (d.ok && d.title) || e.title || e.key,
+            key: e.key,
+            status: e.status,
+            oneLine: e.oneLine,
+            boundary: d.ok ? d.boundary : '',
+            steps,
+            successes,
+            failures,
+            canPromote: canPromotePlaybook({
+              kind: e.kind, status: e.status, steps, successes,
+              harmful: st?.counters?.harmful ?? 0, needsReview: st?.needsReview,
+            }).ok,
+            canProposeSkill: e.status === 'playbook' && steps.length >= 2,
+          })
+        }
+        rows.sort((a, b) => Number(b.canProposeSkill) - Number(a.canProposeSkill) || b.successes - a.successes || a.id.localeCompare(b.id))
+        const store = deps.procedureSkills?.() ?? null
+        const skills = store ? await store.list() : { proposals: [], learned: [] }
+        return { ok: true, entries: rows, proposals: skills.proposals, learned: skills.learned }
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'procedures-failed' }
+      }
+    },
+
+    /** 记一次流程执行结果。到门槛会自动升 playbook（判据在 learner.setStatus 里再过一遍）。 */
+    'evolution-procedure-done': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '').trim()
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        const out = await learner.recordProcedure(id, args?.ok !== false)
+        if (out.ok) runtime.invalidate()
+        return out
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'procedure-done-failed' }
+      }
+    },
+
+    /** 出技能草案：只写 `evolution/procedures/*.json`，绝不碰技能目录。 */
+    'evolution-skill-propose': async (args: any) => {
+      const store = deps.procedureSkills?.() ?? null
+      if (!store) return { ok: false, error: '技能提议尚未接线', code: 'no-store' }
+      try {
+        const prepared = await procedureInputOf(String(args?.id ?? '').trim())
+        if (!prepared.ok) return { ok: false, error: prepared.error, code: 'bad-procedure' }
+        return await store.propose(prepared.input)
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'skill-propose-failed' }
+      }
+    },
+
+    /**
+     * 生成技能：`confirm` 必须由界面确认卡给出。写后 lint + 不在清单里就回滚，
+     * 失败原因原样返回（界面要解释"为什么没生成"）。
+     */
+    'evolution-skill-apply': async (args: any) => {
+      const store = deps.procedureSkills?.() ?? null
+      if (!store) return { ok: false, error: '技能提议尚未接线', code: 'no-store' }
+      try {
+        const out = await store.apply(String(args?.name ?? '').trim(), args?.confirm === true)
+        if (out.ok) runtime.invalidate()
+        return out
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'skill-apply-failed' }
+      }
+    },
+
+    /** 回滚：把本功能生成的技能移进回收站（可恢复），并摘掉 learned 徽章。 */
+    'evolution-skill-rollback': async (args: any) => {
+      const store = deps.procedureSkills?.() ?? null
+      if (!store) return { ok: false, error: '技能提议尚未接线', code: 'no-store' }
+      try {
+        const out = await store.rollback(String(args?.name ?? '').trim())
+        if (out.ok) runtime.invalidate()
+        return out
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'skill-rollback-failed' }
+      }
+    },
+
+    /** 技能页的「learned」徽章。没接线时返回空名单，不让整个技能页报错。 */
+    'evolution-learned-skills': async () => {
+      const store = deps.procedureSkills?.() ?? null
+      if (!store) return { ok: true, skills: [] }
+      try {
+        return { ok: true, skills: await store.learned() }
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'learned-failed' }
       }
     },
   }

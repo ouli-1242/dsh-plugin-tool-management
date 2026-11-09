@@ -179,6 +179,17 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'evolution-maintain': { write: true, frozen: true },
   // 健康度只是统计。
   'evolution-health': { readonly: true },
+  // P4 程序性记忆：清单与 learned 徽章只读。
+  'evolution-procedures': { readonly: true },
+  'evolution-learned-skills': { readonly: true },
+  // 记一次执行结果会改 state，并可能升 playbook（改正文 frontmatter）。
+  'evolution-procedure-done': { write: true, frozen: true },
+  // 出技能草案只写 evolution/procedures/，技能目录一个字节不动；与 dream 同档。
+  'evolution-skill-propose': { write: true },
+  // 真正写技能文件：与 apply 同权、且场景锁定时拒。写后 lint 不过会自动回滚。
+  'evolution-skill-apply': { write: true, frozen: true },
+  // 回滚把技能移进回收站，同样是写。
+  'evolution-skill-rollback': { write: true, frozen: true },
 
   // ── 记忆与场景域（28：memories 25 + archive-engine 3）──────────────────────
   'rules-list': { readonly: true },

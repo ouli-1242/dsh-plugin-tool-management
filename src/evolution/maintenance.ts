@@ -91,6 +91,8 @@ const lastTouched = (e: SweepEntry, now: number): number => {
   return (now - Math.max(...candidates)) / day
 }
 
+// playbook 有意排除（P4）：它是"验证过 3 次 + 用户确认链"的成果，TTL / 衰减 / 配额
+// 这类自动老化不该把它降回候选（那会把步骤与常驻待遇一起抹掉）。要下线由用户手动归档。
 const isLive = (e: SweepEntry): boolean =>
   e.origin === 'auto' && e.locked !== true && (e.status === 'active' || e.status === 'core' || e.status === 'candidate')
 
@@ -370,7 +372,7 @@ export function healthOf(entries: SweepEntry[], state: { entries: Record<string,
   for (const e of entries) {
     const row = byLayer[e.layer]
     if (!row) continue
-    if (e.status === 'active' || e.status === 'core') {
+    if (e.status === 'active' || e.status === 'core' || e.status === 'playbook') {
       row.active++
       row.tokens += e.tokens
       tokens += e.tokens

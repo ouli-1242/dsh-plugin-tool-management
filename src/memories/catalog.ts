@@ -32,6 +32,15 @@ export const CATALOG_VERSION = 1
  */
 export const catalogPathOf = (stateDir: string): string => join(stateDir, CATALOG_FILE)
 
+/**
+ * "会进上下文"的状态（P4 起含 playbook）。
+ *
+ * 散落在各处的 `status === 'active' || status === 'core'` 每加一级状态就要改一遍，漏一处
+ * 的症状很隐蔽：条目在清单里显示"生效"，注入里却永远看不见。统一收在这里。
+ */
+export const INJECTABLE_STATUSES: readonly string[] = ['active', 'core', 'playbook']
+export const isInjectableStatus = (status: string): boolean => INJECTABLE_STATUSES.includes(status)
+
 /** 一条自动记忆的注入卡片。字段全为标量，便于稳定序列化与界面直读。 */
 export interface CatalogEntry {
   id: string
@@ -50,6 +59,8 @@ export interface CatalogEntry {
   status: string
   /** 注入用的那一行（正文压成一行，超长截断）。 */
   oneLine: string
+  /** playbook 的标题：升为 playbook 后注入**只放这一行**，不展开步骤。 */
+  title?: string
   bytes: number
   estTokens: number
   confidence: number
@@ -124,6 +135,8 @@ export async function buildCatalog(memoriesRoot: string, index: RulesIndex): Pro
     const { workspace, session } = ownerOf(entry.group)
     const oneLine = oneLineOf(derived.description || doc.body)
     const bytes = Buffer.byteLength(oneLine, 'utf8')
+    // `auto_title` 是 P4 才有的字段；旧条目没有时留空，注入侧会退回 key / 文件名。
+    const autoTitle = typeof doc.map.auto_title === 'string' ? String(doc.map.auto_title).trim() : ''
     entries[entry.id] = {
       id: entry.id,
       layer,
@@ -132,6 +145,7 @@ export async function buildCatalog(memoriesRoot: string, index: RulesIndex): Pro
       session,
       kind: derived.autoKind ?? '',
       key: derived.autoKey ?? '',
+      ...(autoTitle !== '' ? { title: autoTitle } : {}),
       // 自动条目缺省 candidate：没有证据链的条目不该被当成 active 注入。
       status: derived.autoStatus ?? 'candidate',
       oneLine,
@@ -175,6 +189,8 @@ export function normalizeCatalog(raw: any): CatalogFile {
       mtime: typeof v.mtime === 'number' ? v.mtime : 0,
       size: typeof v.size === 'number' ? v.size : 0,
       hash: typeof v.hash === 'string' ? v.hash : '',
+      // 只在有值时加键：深比较时多出 undefined 会被当成"变了"。
+      ...(typeof v.title === 'string' && v.title !== '' ? { title: v.title } : {}),
     }
   }
   return { version: CATALOG_VERSION, builtAt: typeof r.builtAt === 'string' ? r.builtAt : '', entries }
@@ -193,7 +209,7 @@ export function visibleEntries(
   const out: CatalogEntry[] = []
   for (const e of Object.values(catalog.entries)) {
     if (!e.enabled) continue
-    if (e.status !== 'active' && e.status !== 'core') continue
+    if (!isInjectableStatus(e.status)) continue
     if (e.layer === LAYER_WORKSPACE) {
       if (scope.workspaceHash === undefined || e.workspace !== scope.workspaceHash) continue
     } else if (e.layer === LAYER_SESSION) {
@@ -223,6 +239,7 @@ export function catalogEntryOf(
     session: fields.session ?? session,
     kind: fields.kind ?? '',
     key: fields.key ?? '',
+    ...(fields.title !== undefined && fields.title !== '' ? { title: fields.title } : {}),
     status: fields.status ?? 'candidate',
     oneLine,
     bytes,

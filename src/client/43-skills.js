@@ -30,6 +30,16 @@
       var afs = react.useState(null), attachError = afs[0], setAttachError = afs[1];
       var dfs = react.useState(null), draftFile = dfs[0], setDraftFile = dfs[1];
       var attachInputRef = react.useRef(null);
+      // P4：哪些技能是「从已验证的流程生成的」。徽章只是附加信息，这份名单拿不到
+      // （老版本 / 没接主动记忆）就不显示，绝不让技能页跟着报错。
+      var ls = react.useState({}), learnedMap = ls[0], setLearnedMap = ls[1];
+      function refreshLearned() {
+        apiCall('evolution-learned-skills', {}).then(function (r) {
+          var map = {};
+          ((r && r.skills) || []).forEach(function (x) { if (x && x.name) map[x.name] = x.memoryId || true; });
+          setLearnedMap(map);
+        }).catch(function () { /* 徽章不是主数据：吞掉 */ });
+      }
       // 切走这一页 → 「创建技能」关窗时那份暂存作废（见 42-shared-ui.js 的 useFormDraftScope）。
       useFormDraftScope('skill:');
       // 组内「启用的排前面」的定序表（见 42-shared-ui.js 的 rankedFirst）：整页一张，
@@ -87,7 +97,9 @@
           .finally(function () { setBusy(false) })
       }
       // 项目技能根按**会话 cwd** 推导（skills/service.ts 的 `sessionCwdOf`），所以带上层。
-      function refresh(silent) { if (!silent) setSnapshot({ loading: true, error: null, data: snapshot.data }); return callApi("/state", { body: JSON.stringify({ sessionId: scopeSessionId() }) }).then(function (data) { setSnapshot({ loading: false, error: null, data: data }); return data; }).catch(function (error) { setSnapshot({ loading: false, error: translateError(t, error), data: snapshot.data }); }); }
+      // 每次刷新顺带重取 learned 名单：技能是在「记忆」页生成的，用户点回来时组件可能
+      // 没重新挂载，只靠 useEffect 会停在上一次的状态。
+      function refresh(silent) { if (!silent) setSnapshot({ loading: true, error: null, data: snapshot.data }); refreshLearned(); return callApi("/state", { body: JSON.stringify({ sessionId: scopeSessionId() }) }).then(function (data) { setSnapshot({ loading: false, error: null, data: data }); return data; }).catch(function (error) { setSnapshot({ loading: false, error: translateError(t, error), data: snapshot.data }); }); }
       react.useEffect(function () { refresh(false); }, [scopeState.sessionId]);
       function post(path, body, successKey, successParams) { if (inflightRef.current) return Promise.reject({ error: "operation already in progress" }); inflightRef.current = true; setBusy(true); setResult(null); return callApi(path, { body: JSON.stringify(body || {}) }).then(function (data) { var warn = joinWarn(sceneSyncWarn(t, data), stateSyncWarn(t, data)); setResult({ ok: !warn, warning: !!warn, text: (successKey ? t(successKey, successParams || data || {}) : t("result.updated")) + (warn ? " " + warn : "") }); return refresh(true).then(function () { return data; }); }).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); throw error; }).finally(function () { inflightRef.current = false; setBusy(false); }); }
       /** post 把失败写进 setResult 后会 re-throw 供链式消费；不消费的调用方挂它吞掉重抛，
@@ -539,6 +551,8 @@
         var metaBits = [
           h("span", { key: "desc", className: "dsm-listrow-meta-desc", title: skill.description || t("note.missing") }, skill.description || t("note.missing")),
           skill.preferred === true ? h("span", { key: "preferred", className: "dsm-listrow-meta-info" }, t("status.preferred")) : null,
+          // P4：从主动记忆生成、且已通过写后 lint 的技能挂这枚徽章；回滚后名单里就没了。
+          learnedMap[skillName] ? h("span", { key: "learned", className: "dsm-tag dsm-tag-learned", title: t("status.learned.hint") }, t("status.learned")) : null,
           // 六域租约徽章（0.21.2）：这一条有几个对话在认领它（真写运行态的域，文案「临时运行 · N 个对话」）。
           // 放在行 2 而不是行 1：行 1 的契约是「名称 + 至多 1 个需要处理的 tag」（见 ListRow 注释）。
           leaseTag({ t: t, domain: 'skills', key: skillKey, runtime: true }),

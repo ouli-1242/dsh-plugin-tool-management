@@ -62,6 +62,43 @@ export interface Transition {
   reason: string
 }
 
+/**
+ * 程序性记忆（`auto_kind: procedure`）的步骤与执行记录（P4）。
+ *
+ * 为什么不放 frontmatter：`parseSkillDoc` 只认顶层 `key: value`，数组进去会被解析成
+ * 一个字符串或干脆丢掉。步骤是数组，只能放 `state.json`。正文里的编号列表是**给人读的
+ * 投影**，`steps` 才是真值；两边不一致时以这里为准，`parseProcedureSteps` 只用于给
+ * 没有状态记录的旧条目兜底。
+ *
+ * `successes` 是"按这份流程做完且工具没失败"的次数；只有显式回报才计数，不从
+ * "这一轮工具都成功了"去猜 —— 猜错一次就会把一条还没验证的做法升成 playbook。
+ */
+export interface ProcedureState {
+  steps: string[]
+  successes: number
+  failures: number
+  lastSucceededAt?: string
+  lastFailedAt?: string
+}
+
+/** 宽松读 `procedure`：结构不对就当没有，别让一条脏记录拖垮整个 state。 */
+export function normalizeProcedure(raw: any): ProcedureState | undefined {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.steps)) return undefined
+  const steps = raw.steps
+    .filter((x: unknown): x is string => typeof x === 'string')
+    .map((x: string) => x.trim().slice(0, 240))
+    .filter((x: string) => x !== '')
+    .slice(0, 12)
+  if (steps.length === 0) return undefined
+  return {
+    steps,
+    successes: Math.max(0, Math.floor(Number(raw.successes) || 0)),
+    failures: Math.max(0, Math.floor(Number(raw.failures) || 0)),
+    ...(typeof raw.lastSucceededAt === 'string' ? { lastSucceededAt: raw.lastSucceededAt } : {}),
+    ...(typeof raw.lastFailedAt === 'string' ? { lastFailedAt: raw.lastFailedAt } : {}),
+  }
+}
+
 /** 一条自动记忆的状态。键是记忆 id（`_ws/<hash16>/<name>` 这类）。 */
 export interface EntryState {
   evidence: EvidenceRef[]
@@ -78,6 +115,8 @@ export interface EntryState {
   locked?: boolean
   /** 需要用户裁决的原因（与用户记忆冲突 / 表述有歧义）。有值 = 不注入，等确认。 */
   needsReview?: string
+  /** 只有 procedure 有：结构化步骤 + 成功/失败计数。 */
+  procedure?: ProcedureState
 }
 
 /**
@@ -180,6 +219,8 @@ function normalizeEntry(raw: any): EntryState | null {
     ...(typeof raw.degraded === 'string' && raw.degraded !== '' ? { degraded: raw.degraded } : {}),
     ...(bool(raw.locked) === true ? { locked: true } : {}),
     ...(typeof raw.needsReview === 'string' && raw.needsReview !== '' ? { needsReview: raw.needsReview } : {}),
+    // 显式归一化：上面的 `...raw` 会把脏的 procedure 原样带进来，界面拿去渲染就会炸。
+    ...(normalizeProcedure(raw.procedure) !== undefined ? { procedure: normalizeProcedure(raw.procedure)! } : {}),
   }
 }
 

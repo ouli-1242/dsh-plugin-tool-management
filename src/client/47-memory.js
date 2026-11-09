@@ -747,6 +747,9 @@
           // 全库整理（dream）：草案清单 + 健康度 + 上次整理 / 体检时间。null = 没接线。
           var evd = React.useState(null)
           var evoDream = evd[0], setEvoDream = evd[1]
+          // 程序性记忆（P4）：步骤、验证次数、技能草案与 learned 名单。null = 没接线。
+          var evp = React.useState(null)
+          var evoProc = evp[0], setEvoProc = evp[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -767,12 +770,14 @@
               apiCall('evolution-list', {}),
               apiCall('evolution-queue', {}),
               apiCall('evolution-dreams', { limit: 8 }),
+              apiCall('evolution-procedures', {}),
             ])
               .then(function (out) {
                 var st = out[0] || null
                 var ls = out[1] || null
                 var q = out[2] || null
                 var dr = out[3] || null
+                var pr = out[4] || null
                 var err = null
                 if (st && st.ok === false) err = translateError(t, st)
                 else if (ls && ls.ok === false) err = translateError(t, ls)
@@ -802,6 +807,14 @@
                     }
                   })
                 } else setEvoDream(null)
+                // 程序性记忆区同理：这一版可能没接线，缺了不让整张卡报错。展开的那一条
+                // 要保留，否则每刷一次就把用户正在看的步骤收起来。
+                setEvoProc(function (cur) {
+                  return pr && pr.ok !== false ? {
+                    entries: pr.entries || [], proposals: pr.proposals || [], learned: pr.learned || [],
+                    busy: false, error: null, open: cur ? cur.open : null,
+                  } : null
+                })
               })
               .catch(function (e) { setEvo({ loading: false, status: null, entries: [], error: errMsg(e) }) })
           }
@@ -1289,6 +1302,124 @@
             return React.createElement('div', { key: 'dream', className: 'dsm-evo-queue dsm-evo-dream' }, out)
           }
 
+          /**
+           * 程序性记忆（P4）：一条做法从"记下来"到"变成技能"的最后两级。
+           *
+           * 每个写动作都单独点一次：记一次成功是人的判断（模型也会通过工具回报），
+           * 升 playbook 要求这条已验证过，生成技能则要确认卡 —— 技能是机器级对象，
+           * 不能因为"步骤攒够了"就自动写进 skills/。
+           */
+          function patchProc(patch) {
+            setEvoProc(function (cur) {
+              return Object.assign({ entries: [], proposals: [], learned: [], busy: false, error: null, open: null }, cur || {}, patch)
+            })
+          }
+
+          function procCall(op, args, okText) {
+            patchProc({ busy: true, error: null })
+            setModal(null)
+            apiCall(op, args).then(function (res) {
+              patchProc({ busy: false })
+              if (res && res.ok !== false) setResult({ ok: true, text: okText(res) })
+              else { setResult({ ok: false, text: translateError(t, res) }); patchProc({ error: translateError(t, res) }) }
+              refreshEvolution()
+            }).catch(function (e) { patchProc({ busy: false, error: errMsg(e) }) })
+          }
+
+          function recordProc(id, ok) {
+            procCall('evolution-procedure-done', { id: id, ok: ok }, function (res) {
+              return res.promoted ? t('evo.proc.promoted') : t('evo.proc.recorded')
+            })
+          }
+          function promotePlaybook(id) {
+            procCall('evolution-set-status', { id: id, status: 'playbook' }, function () { return t('evo.proc.promoted') })
+          }
+          function proposeSkill(id) {
+            procCall('evolution-skill-propose', { id: id }, function () { return t('evo.proc.proposed') })
+          }
+          function applySkill(name) {
+            procCall('evolution-skill-apply', { name: name, confirm: true }, function () { return t('evo.proc.skill.applied') })
+          }
+          function rollbackSkill(name) {
+            procCall('evolution-skill-rollback', { name: name }, function () { return t('evo.proc.skill.rolledBack') })
+          }
+
+          function renderEvolutionProcedure() {
+            if (!evoProc) return null
+            var p = evoProc
+            var busy = !!p.busy
+            var entries = p.entries || []
+            var proposals = p.proposals || []
+            var learnedNames = {}
+            ;(p.learned || []).forEach(function (x) { learnedNames[x.name] = true })
+            var out = [
+              React.createElement('div', { key: 'head', className: 'dsm-evo-queue-head' },
+                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.proc.title')),
+                React.createElement('span', { className: 'dsm-help' }, t('evo.proc.steps.total', { n: entries.length }))),
+              p.error ? React.createElement(Notice, { key: 'err', kind: 'err', text: p.error }) : null,
+              React.createElement('p', { key: 'hint', className: 'dsm-help' }, t('evo.proc.hint')),
+            ]
+            if (entries.length === 0) out.push(React.createElement('p', { key: 'none', className: 'dsm-help' }, t('evo.proc.none')))
+            else out.push(React.createElement('div', { key: 'list', className: 'dsm-evo-dream-list' },
+              entries.map(function (x) {
+                var open = p.open === x.id
+                return React.createElement('div', { key: x.id, className: 'dsm-evo-proc-item' },
+                  React.createElement('div', { className: 'dsm-evo-queue-row' },
+                    React.createElement('span', { className: x.status === 'playbook' ? 'dsm-tag dsm-tag-on' : 'dsm-tag' }, t('evo.proc.status.' + x.status)),
+                    React.createElement('span', { className: 'dsm-evo-proc-title', title: x.id }, x.title || x.id),
+                    React.createElement('span', { className: 'dsm-evo-queue-meta' }, t('evo.proc.runs', { s: x.successes || 0, f: x.failures || 0 })),
+                    React.createElement('button', {
+                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                      onClick: function () { patchProc({ open: open ? null : x.id }) },
+                    }, open ? t('evo.proc.hide') : t('evo.proc.expand')),
+                    React.createElement('button', {
+                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                      onClick: function () { recordProc(x.id, true) },
+                    }, t('evo.proc.done')),
+                    x.canPromote ? React.createElement('button', {
+                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                      onClick: function () { promotePlaybook(x.id) },
+                    }, t('evo.proc.promote')) : null,
+                    x.canProposeSkill ? React.createElement('button', {
+                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                      onClick: function () { proposeSkill(x.id) },
+                    }, t('evo.proc.propose')) : null),
+                  open ? React.createElement('div', { className: 'dsm-evo-proc-detail' },
+                    React.createElement('div', { className: 'dsm-evo-proc-steps' },
+                      (x.steps || []).length === 0
+                        ? React.createElement('span', { className: 'dsm-help' }, t('evo.proc.noSteps'))
+                        : (x.steps || []).map(function (s, i) {
+                            return React.createElement('div', { key: i, className: 'dsm-evo-proc-step' },
+                              React.createElement('span', { className: 'dsm-evo-queue-meta' }, String(i + 1) + '.'),
+                              React.createElement('span', {}, String(s)))
+                          })),
+                    x.boundary ? React.createElement('p', { className: 'dsm-help' }, t('evo.proc.boundary', { text: x.boundary })) : null,
+                    React.createElement('button', {
+                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                      onClick: function () { recordProc(x.id, false) },
+                    }, t('evo.proc.fail'))) : null)
+              })))
+            if (proposals.length > 0) out.push(React.createElement('div', { key: 'skills', className: 'dsm-evo-proc-skills' },
+              React.createElement('div', { className: 'dsm-evo-queue-head' },
+                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.proc.skill.title'))),
+              proposals.map(function (x) {
+                var installed = !!x.installedAt && !!learnedNames[x.name]
+                var state = installed ? 'installed' : x.rolledBackAt ? 'rolledback' : 'draft'
+                return React.createElement('div', { key: x.name, className: 'dsm-evo-queue-row' },
+                  React.createElement('span', { className: installed ? 'dsm-tag dsm-tag-on' : 'dsm-tag' }, t('evo.proc.skill.state.' + state)),
+                  React.createElement('span', { className: 'dsm-evo-proc-title', title: x.memoryId }, x.name),
+                  x.lastError && !installed ? React.createElement('span', { className: 'dsm-evo-draft-reason' }, t('evo.proc.skill.error', { text: x.lastError })) : null,
+                  installed ? React.createElement('button', {
+                    type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                    onClick: function () { setModal({ type: 'evo-skill-rollback', name: x.name }) },
+                  }, t('evo.proc.skill.rollback')) : React.createElement('button', {
+                    type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
+                    onClick: function () { setModal({ type: 'evo-skill-apply', name: x.name }) },
+                  }, t('evo.proc.skill.apply')))
+              })))
+            return React.createElement('div', { key: 'proc', className: 'dsm-evo-queue dsm-evo-proc' }, out)
+          }
+
           function renderEvolutionCard() {
             var st = evo.status
             var auto = (st && st.auto) || { entries: 0, needsReview: 0, active: 0 }
@@ -1330,6 +1461,9 @@
               // 全库整理放在队列之后、条目列表之前：它和队列一样是"后台工序"，但改的是
               // 整份清单；放在列表旁边能顺手对照条目，又不会插进逐条操作里。
               renderEvolutionDream(),
+              // 程序性记忆放在最后一块后台工序之后：它管的是"哪条做法能变成技能"，
+              // 与下面逐条的开关/停用是两类操作，混进列表会把行挤得看不清。
+              renderEvolutionProcedure(),
               rows.length === 0 ? null : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
                 groups.map(function (g) {
                   var list = rows.filter(function (e) { return e.layer === g[0] })
@@ -1494,6 +1628,18 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { runMaintain(false) } }, t('evo.maintain.run')))) : null,
+            // 技能写入是机器级动作：这里必须把"写后 lint、失败自动回滚、默认停用"说清，
+            // 用户按下这一下才把 confirm=true 传给后端（后端对缺 confirm 一律拒绝）。
+            modal && modal.type === 'evo-skill-apply' ? React.createElement(Modal, { key: 'epapply', className: 'dsm-modal-sm', title: t('evo.proc.skill.apply.title', { name: modal.name }), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.proc.skill.apply.desc', { name: modal.name })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { applySkill(modal.name) } }, t('evo.proc.skill.apply')))) : null,
+            modal && modal.type === 'evo-skill-rollback' ? React.createElement(Modal, { key: 'eprev', className: 'dsm-modal-sm', title: t('evo.proc.skill.rollback.title', { name: modal.name }), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.proc.skill.rollback.desc', { name: modal.name })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: function () { rollbackSkill(modal.name) } }, t('evo.proc.skill.rollback')))) : null,
             modal && modal.type === 'stop' ? React.createElement(Modal, { key: 'mstop', className: 'dsm-modal-sm', title: t('scope.unifiedClose'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('scope.unifiedClose.viewDesc', { name: modal.rule.name || modal.rule.id })),
               React.createElement('div', { className: 'dsm-modal-actions' },

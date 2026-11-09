@@ -29,6 +29,7 @@ import {
 } from './gates.js'
 import { deriveKey } from './gates.js'
 import { draftOrganize, type OrganizeAction, type OrganizeDraft } from './organize.js'
+import { canPromotePlaybook, cleanSteps, procedureTitleOf, recordProcedureUse, renderProcedureBody, parseProcedureSteps } from './procedure.js'
 import {
   confidenceOf, emptyCounters, pushTransition, textHashOf, type EvidenceSource, type EvolutionState, type EvolutionStateStore,
 } from './state.js'
@@ -50,6 +51,11 @@ export interface LearnRequest {
   boundary?: string
   ttlDays?: number
   description?: string
+  /**
+   * procedure 的步骤（P4）。不传时只写一句话结论，正文仍可按旧格式读；传了才会在
+   * 正文里生成编号列表、在 state 里存结构化步骤 —— 升 playbook / 生成技能都要它。
+   */
+  steps?: string[]
 }
 
 export interface LearnEnv {
@@ -278,8 +284,15 @@ export function createLearner(deps: LearnDeps) {
     if (pass.layer === LAYER_SCENE && env.scene) fields.auto_scene = env.scene
     if (req.boundary && req.boundary.trim() !== '') fields.auto_boundary = req.boundary.trim().slice(0, MAX_BOUNDARY)
     if (pass.degraded) fields.auto_degraded = pass.degraded
+    // P4：procedure 的标题与步骤数都是**扁平标量**。步骤正文放正文的编号列表，结构化
+    // 数组放 state.json —— frontmatter 解析器不认数组，塞进去只会变成半句话。
+    const steps = pass.kind === 'procedure' ? cleanSteps(req.steps ?? []) : []
+    if (pass.kind === 'procedure') {
+      fields.auto_title = procedureTitleOf(pass.text, pass.key)
+      fields.auto_steps = String(steps.length)
+    }
 
-    const body = renderBody(pass.text, req.boundary, pass.kind)
+    const body = renderBody(pass.text, req.boundary, pass.kind, steps)
     await mkdir(join(root, pass.group), { recursive: true })
     await writeFileAtomically(join(root, pass.group, name + '.md'), deps.serializeRuleFile(fields, body))
 
@@ -293,6 +306,10 @@ export function createLearner(deps: LearnDeps) {
       transitions: prev?.transitions ?? [],
       ...(pass.degraded !== undefined ? { degraded: pass.degraded } : {}),
     }
+    // 只在真的给了步骤时挂上 procedure 状态：没有步骤的做法类条目仍是旧的一句话结论，
+    // 不该凭空得到一份空的步骤表（那样 canPromotePlaybook 反而会因 no-steps 拒绝，是好事，
+    // 但界面会多显示一块空的「步骤」区）。
+    if (steps.length > 0) st.entries[id].procedure = { steps, successes: 0, failures: 0 }
     pushTransition(st.entries[id], 'absent', pass.status, 'learn', `source=${pass.source} key=${pass.key}`, now.getTime())
     if (pass.needsReview) st.entries[id].needsReview = pass.needsReview
     // 信心以 state 里的证据为准重算一次：门禁算的是"这次"的，重算的是"全部证据的"。
@@ -467,8 +484,12 @@ export function createLearner(deps: LearnDeps) {
       catalog = normalizeCatalog(null)
     }
     const oneLine = describeOf(pass.text, req.description)
+    // 合并路径（mergeInto）传的是空的 req，别拿新的补充语句把原来那份 playbook 标题冲掉。
+    const title = catalog.entries[id]?.title
+      ?? (pass.kind === 'procedure' ? procedureTitleOf(pass.text, pass.key) : '')
     catalog.entries[id] = catalogEntryOf(id, pass.layer, {
       oneLine,
+      ...(title !== '' ? { title } : {}),
       status: pass.status,
       kind: pass.kind,
       key: pass.key,
@@ -489,7 +510,7 @@ export function createLearner(deps: LearnDeps) {
    * 都不经过记忆域的写漏斗（`refresh()` 才会重建索引）。忘了却不改卡片 = **下一轮还在注入它**，
    * 用户删了个寂寞，还看不出为什么。
    */
-  async function patchCatalogEntry(id: string, patch: Partial<{ status: string; enabled: boolean; confidence: number }>): Promise<void> {
+  async function patchCatalogEntry(id: string, patch: Partial<{ status: string; enabled: boolean; confidence: number; title: string }>): Promise<void> {
     try {
       const abs = catalogPathOf(deps.stateDir)
       const catalog = normalizeCatalog(JSON.parse(await readFile(abs, 'utf8')))
@@ -661,10 +682,10 @@ export function createLearner(deps: LearnDeps) {
    */
   async function setStatus(
     id: string,
-    status: 'active' | 'archived' | 'core' | 'candidate',
+    status: 'active' | 'archived' | 'core' | 'candidate' | 'playbook',
     actor: 'user' | 'curator' | 'dream' = 'user',
     opts: { reason?: string; needsReview?: string | null } = {},
-  ): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'active' | 'archived' | 'core' | 'candidate'; confidence: number; unchanged?: boolean }> {
+  ): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'active' | 'archived' | 'core' | 'candidate' | 'playbook'; confidence: number; unchanged?: boolean }> {
     return deps.withWriteLock(async () => {
       const read = await state.read()
       if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
@@ -699,6 +720,27 @@ export function createLearner(deps: LearnDeps) {
           }
         }
       }
+      if (status === 'playbook' && actor === 'dream') {
+        const check = canPromotePlaybook({
+          kind: pickField(text, 'auto_kind'),
+          status: current,
+          steps: entry.procedure?.steps ?? [],
+          successes: entry.procedure?.successes ?? 0,
+          harmful: entry.counters?.harmful ?? 0,
+          needsReview: entry.needsReview,
+        })
+        if (!check.ok) {
+          return { ok: false, code: 'not-proven', error: `refused: "${id}" cannot become a playbook (${check.reason}).` }
+        }
+      }
+      // 用户手动设 playbook 也要有步骤：没有步骤的"流程"注入只放标题后，模型 read 回来的
+      // 还是一句话，等于把一个普通 fact 伪装成 playbook。
+      if (status === 'playbook' && actor !== 'dream') {
+        const steps = entry.procedure?.steps ?? []
+        if (pickField(text, 'auto_kind') !== 'procedure' || steps.length < 2) {
+          return { ok: false, code: 'not-a-procedure', error: `refused: "${id}" needs at least 2 recorded steps to become a playbook.` }
+        }
+      }
       if (current === status) {
         // 状态没变也要应用 needsReview 补丁：TTL 扫描重复跑时，第一次已经降级、第二次
         // 只补标记。否则"降级成功但没标待确认"会让条目从界面默认列表里消失。
@@ -718,7 +760,7 @@ export function createLearner(deps: LearnDeps) {
         current,
         status,
         actor,
-        opts.reason ?? (status === 'archived' ? 'disabled in Memory page' : status === 'core' ? 'promoted to core' : status === 'candidate' ? 'demoted to candidate' : 'restored in Memory page'),
+        opts.reason ?? (status === 'archived' ? 'disabled in Memory page' : status === 'core' ? 'promoted to core' : status === 'candidate' ? 'demoted to candidate' : status === 'playbook' ? 'promoted to playbook after 3 verified runs' : 'restored in Memory page'),
         Date.parse(nowIso),
       )
       if (opts.needsReview === null) delete entry.needsReview
@@ -914,6 +956,7 @@ export function createLearner(deps: LearnDeps) {
       kind: pickField(text, 'auto_kind') || '',
       key: pickField(text, 'auto_key') || '',
       description: pickField(text, 'description') || '',
+      title: pickField(text, 'auto_title') || '',
       basis: pickField(text, 'auto_basis') || '',
       boundary: pickField(text, 'auto_boundary') || '',
       body: bodyOf(text),
@@ -924,6 +967,7 @@ export function createLearner(deps: LearnDeps) {
             counters: st.counters ?? emptyCounters(),
             evidence: st.evidence.slice(-5),
             transitions: st.transitions.slice(-5),
+            ...(st.procedure !== undefined ? { procedure: st.procedure } : {}),
             ...(st.needsReview !== undefined ? { needsReview: st.needsReview } : {}),
             ...(st.locked === true ? { locked: true } : {}),
           }
@@ -931,7 +975,65 @@ export function createLearner(deps: LearnDeps) {
     }
   }
 
-  return { learn, forget, approve, setStatus, promote, organize, applyOrganize, describe }
+  /**
+   * 记一次 procedure 的执行结果（P4）。**只认显式回报**：调用方是
+   * `memory_manager_procedure_done` 工具 / 界面上的「记一次成功」，不是从工具成功里猜。
+   *
+   * 没有状态记录的旧条目也能补：从正文解析出步骤就地建一份，省得为了计数让用户先重写
+   * 一遍记忆。但解析不出 ≥2 步就拒绝 —— 那种条目本来也不该升 playbook。
+   */
+  async function recordProcedure(
+    id: string,
+    ok: boolean,
+  ): Promise<
+    | { ok: true; id: string; successes: number; failures: number; promoted: boolean }
+    | { ok: false; code: string; error: string }
+  > {
+    return deps.withWriteLock(async () => {
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const docPath = join(deps.memoriesRoot, split.group, split.name + '.md')
+      let text: string
+      try {
+        text = await readFile(docPath, 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: `not found: ${id}` }
+      }
+      if (pickField(text, 'auto_kind') !== 'procedure') {
+        return { ok: false, code: 'not-a-procedure', error: `refused: "${id}" is not a procedure` }
+      }
+      const entry = st.entries[id] ?? { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
+      const steps = entry.procedure?.steps ?? parseProcedureSteps(bodyOf(text))
+      if (steps.length < 2) {
+        return { ok: false, code: 'no-steps', error: `refused: "${id}" has no recorded steps` }
+      }
+      const at = new Date().toISOString()
+      entry.procedure = recordProcedureUse({ steps, successes: entry.procedure?.successes ?? 0, failures: entry.procedure?.failures ?? 0 }, ok, at)
+      st.entries[id] = entry
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+
+      // 到门槛就顺手晋升，不让用户等到下一次 dream：这是"记一次成功"这个动作的自然结果，
+      // 而且 setStatus 里还有完整校验（core / harmful / 步骤），这里不做第二次判据。
+      let promoted = false
+      const current = pickField(text, 'auto_status') || 'active'
+      const check = canPromotePlaybook({
+        kind: 'procedure', status: current, steps,
+        successes: entry.procedure.successes, harmful: entry.counters?.harmful ?? 0,
+        needsReview: entry.needsReview,
+      })
+      if (check.ok) {
+        const r = await setStatus(id, 'playbook', 'dream', { reason: `verified ${entry.procedure.successes} times` })
+        promoted = Boolean(r && r.ok)
+      }
+      return { ok: true, id, successes: entry.procedure.successes, failures: entry.procedure.failures, promoted }
+    })
+  }
+
+  return { learn, forget, approve, setStatus, promote, organize, applyOrganize, describe, recordProcedure }
 }
 
 /**
@@ -990,11 +1092,12 @@ export function ttlDaysOf(kind: AutoKind, explicit?: number): number {
 }
 
 /** 正文：一句话结论，加一行边界（有的话）。 */
-function renderBody(text: string, boundary: string | undefined, kind: AutoKind): string {
+function renderBody(text: string, boundary: string | undefined, kind: AutoKind, steps: readonly string[] = []): string {
+  // P4：procedure 的正文交给 procedure.ts 统一渲染，保证 `parseProcedureSteps` 能原样读回。
+  if (kind === 'procedure') return renderProcedureBody(text, boundary, steps)
   const lines = [String(text ?? '').trim()]
   const b = String(boundary ?? '').trim()
   if (b !== '') lines.push('', `边界：${b}`)
-  if (kind === 'procedure') lines.push('', '（做法类：验证通过后才会进入注入；未验证前只在记忆页可见。）')
   return lines.join('\n') + '\n'
 }
 
@@ -1030,12 +1133,13 @@ async function appendLearnLog(row: Record<string, unknown>): Promise<void> {
 }
 
 /** 读回一条自动记忆的完整状态（界面展开详情用）。 */
-export function describeEntry(entry: { evidence?: unknown[]; counters?: any; transitions?: unknown[]; confidence?: number; degraded?: string; locked?: boolean; needsReview?: string }) {
+export function describeEntry(entry: { evidence?: unknown[]; counters?: any; transitions?: unknown[]; confidence?: number; degraded?: string; locked?: boolean; needsReview?: string; procedure?: unknown }) {
   return {
     confidence: typeof entry.confidence === 'number' ? entry.confidence : 0,
     evidence: Array.isArray(entry.evidence) ? entry.evidence : [],
     counters: entry.counters ?? emptyCounters(),
     transitions: Array.isArray(entry.transitions) ? entry.transitions : [],
+    ...(entry.procedure !== undefined ? { procedure: entry.procedure } : {}),
     ...(entry.degraded !== undefined ? { degraded: entry.degraded } : {}),
     ...(entry.locked === true ? { locked: true } : {}),
     ...(entry.needsReview !== undefined ? { needsReview: entry.needsReview } : {}),

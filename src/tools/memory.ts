@@ -202,6 +202,9 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           if (a.boundary) lines.push('boundary: ' + String(a.boundary))
           if (a.degraded) lines.push('degraded: ' + String(a.degraded))
           lines.push('', String(a.body || ''))
+          // P4：procedure 的成功计数只认显式回报。不在这里说，模型读完就去做事，不会
+          // 想到回来报一次 —— 那这条流程永远停在 0/3，playbook 阶梯就断了。
+          if (a.kind === 'procedure') lines.push('', 'This is a procedure. After you actually follow these steps and they work, call memory_manager_procedure_done with id ' + wantId + '; three verified runs promote it to a playbook.')
           const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
           if (ev.length) {
             lines.push('', 'evidence (latest ' + ev.length + '):')
@@ -479,6 +482,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       quote: { type: 'string', description: 'The user\'s exact words (must be a verbatim substring of what they said). Required for user_explicit / user_correction.' },
       key: { type: 'string', description: 'Short slot name like `package-manager` — the same key merges with the existing note instead of adding a near-duplicate.' },
       boundary: { type: 'string', description: 'When it might not hold (e.g. "CI still uses npm").' },
+      // P4：procedure 的拆解步骤。不传仍会记一条做法类结论，但不会升 playbook / 生成技能。
+      steps: { type: 'array', items: { type: 'string' }, description: 'For kind=procedure: the ordered steps (2-12 short lines) that were actually followed. Without these the note can never become a playbook or a skill.' },
       layer: { type: 'string', enum: ['global', 'workspace', 'scene', 'session'], description: 'Where it applies. Omit to route by content: project facts go to the workspace, temporary constraints to this conversation.' },
       ttlDays: { type: 'number', description: 'Days before it should be re-checked; defaults by kind.' },
     },
@@ -498,6 +503,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       for (const key of ['kind', 'quote', 'key', 'boundary', 'layer', 'ttlDays'] as const) {
         if (args && args[key] !== undefined && args[key] !== '') payload[key] = args[key]
       }
+      if (args && Array.isArray(args.steps) && args.steps.length) payload.steps = args.steps.map((x: unknown) => String(x))
       if (identity?.sessionId) payload.sessionId = identity.sessionId
       if (identity?.cwd) payload.cwd = identity.cwd
       const scene = deps.activeSceneOf ? deps.activeSceneOf(agent) : undefined
@@ -567,6 +573,26 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const lines = drafts.map((d: any, i: number) =>
         (i + 1) + '. [' + String(d.action) + '] ' + (Array.isArray(d.ids) ? d.ids.join(' + ') : '') + ' — ' + String(d.reason || ''))
       return 'Drafted ' + drafts.length + ' change(s) from ' + scanned + ' learned note(s). Nothing has been changed yet — the user applies them in Memory → Learned notes.\n' + lines.join('\n')
+    },
+  }))
+
+  register(defineTool({
+    name: 'memory_manager_procedure_done',
+    // 描述里把"真的执行完"写死：只 read 过一次、或只是打算照做，都不算验证。三次误报
+    // 就会把一条没跑过的流程升成 playbook，而 playbook 是生成技能的唯一入口。
+    description: 'Report that you actually followed a recorded procedure end-to-end. Call only after the steps ran and the result was as expected — not after merely reading it. Three verified runs promote the note to a playbook; pass ok=false if following it failed.',
+    parameters: {
+      memory: { type: 'string', required: true, description: 'The procedure id, copied from the learned notes block or memory_manager_list.' },
+      ok: { type: 'boolean', description: 'true (default) = the steps worked; false = they failed and should not count toward promotion.' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
+    async execute(args: any) {
+      const id = String((args && args.memory) || '').trim()
+      if (id === '') throw new Error('missing argument: memory')
+      const r: any = await evo['evolution-procedure-done']({ id, ok: args?.ok !== false })
+      if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record the run'))
+      if (r.promoted) return 'OK: ' + String(r.successes) + ' verified run(s) — promoted ' + id + ' to a playbook. Its steps are now shown only as a title in the learned notes block.'
+      return 'OK: recorded for ' + id + ' (' + String(r.successes) + ' successful / ' + String(r.failures) + ' failed). Three successful runs are needed to become a playbook.'
     },
   }))
 }

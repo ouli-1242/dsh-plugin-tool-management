@@ -21,6 +21,12 @@
 > - **P3 已落地**：`dream`（草案 / diff / 应用 / 整批回滚）与 `maintenance`（维护扫描）
 >   两个模块；每日轮末自动整理、启动时每天一次维护；记忆页「全库整理」区（健康度、
 >   草案清单、逐份 diff、应用 / 回滚、维护预览与执行）。详见下方 P3 章节。
+> - **P4 已落地**：`procedure`（步骤结构 / 成功计数 / playbook 晋升 / 技能提议的安装与
+>   回滚）一个模块，`INJECTABLE_STATUSES` 统一注入状态白名单；`memory_manager_procedure_done`
+>   工具、记忆页「程序性记忆」区、技能页「已学会」徽章。详见下方 P4 章节。
+> - **决策 #4「技能进化不进 v1」仍然成立**：P4 做的是"用户确认后才写一份技能"，不是
+>   自动技能进化。开关默认关、自动记忆工具默认隐藏、草案默认不应用、技能默认停用；
+>   决策 #4 划的是 v1 的边界，P4 是它之后的最后一档，两者不矛盾。
 > - **`pending.json` 最终取消**（不是继续推迟）：P3 的草案落在
 >   `evolution/dreams/<id>/`（`draft.json` + `manifest.json` + `backup/`），**每一份待审阅
 >   草案就是一条待确认项**，而且自带 diff、原由、备份与状态机。再造一份 `pending.json`
@@ -102,14 +108,41 @@
 
 **验收：100 条库整理后注入 token 不升；输入库不动；回滚 100%。**
 
-### P4 程序性记忆（大，可选）
+### P4 程序性记忆（大，可选）— 已落地
 
-- `procedure` 类型 + 步骤结构 + 成功计数。
-- playbook 晋升 + 注入只放标题。
-- 技能提议（`skill_manager_save` 确认卡 + 写后 lint + 回滚）。
-- `learned` 徽章。
+- 已落地：`procedure` 类型 + 步骤结构（真值在 `state.json`，正文的编号列表是给人读的
+  投影）+ 成功/失败计数（只认 `memory_manager_procedure_done` 的显式回报）。
+- 已落地：`core → playbook` 晋升（成功 ≥ 3、harmful = 0、有 ≥ 2 步、无待确认，
+  不认 active → playbook 的跳级）；注入只放标题 + id，L0 常驻待遇跟着走。
+- 已落地：技能提议（出草案 → 界面确认卡 → 写后回读 lint + 技能清单可加载校验 +
+  失败自动移进回收站）；走技能域自己的 `skill-create` / `skill-delete`，落点、默认停用
+  与回收站纪律和界面完全一致。
+- 已落地：`learned` 徽章（`evolution/learned-skills.json` sidecar）与
+  `evolution-skill-rollback`（移进回收站并摘徽章，原记忆与步骤不动、可再生成）。
 
-**验收：0 个不可加载技能；全部可回滚；全部人工确认。**
+实现时才看清的四件事：
+1. **步骤不能放 frontmatter**：`parseSkillDoc` 只认顶层 `key: value`，数组进去会被压成
+   半句话。所以结构化步骤放 `state.json`，frontmatter 只留 `auto_title` 与 `auto_steps`
+   两个标量；正文解析只用来给"有正文、没状态"的旧条目兜底。
+2. **成功只认显式回报**：设计里"工具全成功"那句暗示可以从轮末自动推断，但一次无关的
+   对话也会被算进去 —— 三次误判就能把一条没跑过的做法升成 playbook。改成模型做完之后
+   调一次 `memory_manager_procedure_done`（界面也有按钮），`memory_manager_read` 读
+   procedure 时会把这句话附在正文后面。
+3. **技能写入走 op 而不是 `skill_manager_save` 工具**：那条是给模型的，带"只在用户指令
+   下"的契约与自己的审批门禁；界面这边的确认卡是另一次授权。两者最终都落到
+   `skill-create`，差别只在谁点的确认 —— 直接调 op 不会绕过门禁，也不会让模型以为
+   它能自己建技能。
+4. **`learned` 徽章不写进技能文件**：技能格式是宿主的，往 frontmatter 塞私有字段会让
+   别的工具读到不认识的键。sidecar 名单只在自己的页面与 op 里用，回滚时删一行即可。
+
+另外：**playbook 是 `auto_status` 的新一级**，原先散落在各处的
+`status === 'active' || status === 'core'` 统一收进 `INJECTABLE_STATUSES` —— 漏改一处的
+症状是"清单里显示生效、注入里永远看不见"。维护扫描**有意跳过** playbook：它是验证 +
+人工确认链的成果，不该被 TTL / 衰减降回候选；要下线由用户手动归档。
+
+**验收：0 个不可加载技能（lint 不过即回滚）；全部可回滚（移进回收站，可恢复）；
+全部人工确认（`confirm !== true` 后端直接拒）。测试覆盖三种 lint 失败、清单不可加载、
+同名不覆盖、重复应用、回滚后可再生成。**
 
 ## 2. 阶段依赖
 

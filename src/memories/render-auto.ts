@@ -25,7 +25,7 @@ import {
   LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, TRUNCATION_MARKER,
   type MemoryLayer,
 } from './constants.js'
-import type { CatalogEntry } from './catalog.js'
+import { isInjectableStatus, type CatalogEntry } from './catalog.js'
 import { scoreOf, type EntryCounters, type EvolutionState } from '../evolution/state.js'
 
 /** 固定开销：标题 + 授权语 + 可能的截断行。从总盘里先扣掉，避免"装满了但发不出去"。 */
@@ -137,10 +137,22 @@ function countRemaining(order: MemoryLayer[], present: MemoryLayer[], from: Memo
   return Math.max(1, order.slice(i).filter((l) => present.includes(l)).length)
 }
 
-/** 一行：`- [pref] 正文`；procedure 带 id（它要读全文，没 id 就得多查一次）。 */
+/**
+ * 一行：`- [pref] 正文`；procedure 带 id（它要读全文，没 id 就得多查一次）。
+ *
+ * **playbook 只放标题**（P4）：它带着十几个步骤，整段塞进每轮上下文会吃掉自动段的大半
+ * 预算，而且模型在没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程、id 是
+ * 什么"，真要执行时再 `memory_manager_read` 取全文。预算仍按 `oneLine` 记（高估），
+ * 不会因为标题短就多塞几条进来。
+ */
 export function lineOf(entry: CatalogEntry): string {
   const tag = KIND_TAG[entry.kind] ?? 'note'
   const idPart = entry.kind === 'procedure' && entry.id !== '' ? ` (id: ${entry.id})` : ''
+  if (entry.status === 'playbook') {
+    const fallback = entry.id.slice(entry.id.lastIndexOf('/') + 1)
+    const title = (entry.title ?? '').trim() || entry.key || fallback
+    return `- [${tag}] ${title}${idPart || ` (id: ${entry.id})`} — playbook, read the memory for steps`
+  }
   return `- [${tag}] ${entry.oneLine}${idPart}`
 }
 
@@ -164,7 +176,7 @@ export function renderAutoBlock(input: AutoRenderInput): AutoRenderResult {
   const candidates: Array<{ entry: CatalogEntry; score: number; l0: boolean }> = []
   for (const entry of input.entries) {
     if (!entry.enabled) continue
-    if (entry.status !== 'active' && entry.status !== 'core') continue
+    if (!isInjectableStatus(entry.status)) continue
     if (entry.layer === LAYER_WORKSPACE && (scope.workspaceHash === undefined || entry.workspace !== scope.workspaceHash)) continue
     if (entry.layer === LAYER_SESSION && (scope.sessionId === undefined || entry.session !== scope.sessionId)) continue
     if (entry.layer === LAYER_SCENE && (!scope.enabledScenes || !scope.enabledScenes.has(entry.scene))) continue
@@ -174,7 +186,8 @@ export function renderAutoBlock(input: AutoRenderInput): AutoRenderResult {
     if (st && st.locked === true) {
       // 用户编辑过 = 已确认，按 active 处理（不受 L1 门槛限制）。
     }
-    const l0 = entry.status === 'core' || entry.pinned
+    // playbook 是从 core 晋升来的，常驻待遇跟着走：它比普通 active 更值得每次露一面。
+    const l0 = entry.status === 'core' || entry.status === 'playbook' || entry.pinned
     if (!l0 && !(countersOf(input.state, entry.id).helpful > 0 || entry.confidence >= AUTO_L1_MIN_CONFIDENCE)) continue
     candidates.push({
       entry,

@@ -64,6 +64,7 @@ import { createReviewBudget, createReviewer } from './evolution/review.js'
 // 整理（P3）：全库草案 + 应用/回滚；维护扫描：TTL / 会话 GC / 配额。
 import { createDreamer, shouldDreamToday, shouldRetryDream, type DreamEntryView, type Dreamer } from './evolution/dream.js'
 import { healthOf, runSweep, shouldSweepNow, type SweepEntry, type SweepReport } from './evolution/maintenance.js'
+import { createProcedureSkillStore, type ProcedureSkillStore } from './evolution/procedure.js'
 // 真源状态（证据 / 计数器 / 墓碑）：读坏就停写，不静默覆盖。
 import { createEvolutionState } from './evolution/state.js'
 // 写入管线：九道门 + 六步落盘。
@@ -1322,7 +1323,7 @@ export default {
       // 而"开关关着也能被用户手动打开"这条不成立 —— 它们是权限，不是便利。
       let autoAllow: string[] = []
       try {
-        if (autoLearnVisibleFor && autoLearnVisibleFor(agent)) autoAllow = ['memory_manager_learn', 'memory_manager_forget']
+        if (autoLearnVisibleFor && autoLearnVisibleFor(agent)) autoAllow = ['memory_manager_learn', 'memory_manager_forget', 'memory_manager_procedure_done']
       } catch { autoAllow = [] }
       const scope = scopeStore.scopeOfSync(sessionId)
       if (scope === undefined) return { allow: autoAllow, deny: [] }
@@ -4384,6 +4385,8 @@ export default {
     let dreamHandle: Dreamer | null = null
     let sweepRunner: ((opts?: { dry?: boolean }) => Promise<SweepReport>) | null = null
     let healthRunner: (() => Promise<ReturnType<typeof healthOf>>) | null = null
+    // P4：技能提议依赖技能域的 op 表与同一把写锁，同样晚于 op 表创建。
+    let procedureSkillHandle: ProcedureSkillStore | null = null
     const evolutionOpsTable = buildEvolutionOps({
       config: evolutionConfig,
       runtime: evolutionRuntime,
@@ -4414,6 +4417,7 @@ export default {
         if (!healthRunner) throw new Error('health is not wired yet')
         return healthRunner()
       },
+      procedureSkills: () => procedureSkillHandle,
       message,
     })
 
@@ -4569,6 +4573,14 @@ export default {
       message,
     }, opts ?? {})
     healthRunner = async () => healthOf(await sweepEntries(), evolutionRuntime.view().state)
+    // 走技能域自己的 op（skill-create / skill-delete / skill-state），落点、默认停用、
+    // 回收站这些既有纪律自动继承；这里只负责确认、lint 与失败回滚。
+    procedureSkillHandle = createProcedureSkillStore({
+      stateDir: memoriesService.autoAccess.stateDir,
+      skillsOps: skillsService.ops,
+      withWriteLock,
+      message,
+    })
 
     // 启动时跑一次维护（每天最多一次）。不 await：扫描要读几十个文件，挡在装配期
     // 会让宿主启动变慢，而它清理的都是"已经放了几个月的东西"，晚两秒没有区别。

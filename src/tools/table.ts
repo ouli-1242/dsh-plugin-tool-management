@@ -13,8 +13,9 @@
 // 合计与逐条 ≈tok 就是这份）：
 //   · 十八条隐藏 ≈**4,524 tok**，默认可见那六条 ≈**1,536 tok**，全开 ≈**6,055 tok**。
 //   · ⚠️ 上面那个 4,524 是**十八条**的值。之后又加了 `memory_manager_learn` /
-//     `memory_manager_forget` 两条（主动记忆，默认隐藏、开关打开时可见），**没有重测** ——
-//     引用合计时按"18 条 + 新增 2 条"分开说，别把 4,524 当成二十条的值。
+//     `memory_manager_forget` / `memory_manager_organize` / `memory_manager_procedure_done`
+//     四条（主动记忆，默认隐藏、其中前两条与 P4 那条在开关打开时可见），**没有重测** ——
+//     引用合计时按"18 条 + 新增 4 条"分开说，别把 4,524 当成二十二条的值。
 //   · A/B 实测（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
 //     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
 //     所以它们是**净节省的下界**，不是"省了多少"的上界。**那对数量的是当天那份描述** ——
@@ -137,6 +138,9 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'memory_manager_learn',
   'memory_manager_forget',
   'memory_manager_organize',
+  // P4：回报一次流程执行结果。与 learn 同为零摩擦的记数动作，开关打开时一起放行
+  // （见 index.ts 的 autoAllow），否则 procedure 永远停在 0/3、阶梯到不了 playbook。
+  'memory_manager_procedure_done',
 ])
 
 /** 出厂默认那份设置：二十条不发（名单与理由见上面），方案清单是空的。 */
