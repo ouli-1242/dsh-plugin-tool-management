@@ -8,7 +8,7 @@
 // `learn` 与 `save` 分成两条工具的完整理由见 docs 05-tools §2：授权边界写在工具名上，
 // 门禁不用猜参数。
 
-import { workspaceHashOf, type EvolutionConfigStore, type EvolutionOverrides, type EvolutionSettings } from '../evolution/config.js'
+import { normalizeNoteStyle, workspaceHashOf, type EvolutionConfigStore, type EvolutionOverrides, type EvolutionSettings } from '../evolution/config.js'
 import type { EvolutionRuntime } from '../evolution/runtime.js'
 import type { Learner } from '../evolution/write.js'
 // 只取类型：冷路径在装配层晚于本函数创建，所以拿的是 getter 而不是实例。
@@ -209,6 +209,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (typeof patch.reviewEveryTurns === 'number') next.reviewEveryTurns = patch.reviewEveryTurns
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession
         if (typeof patch.model === 'string') next.model = patch.model
+        // 风格：任意输入都过一遍 normalize，custom 没带文本自动退回 efficient。
+        if (patch.noteStyle !== undefined || patch.noteStyleText !== undefined) {
+          const style = normalizeNoteStyle({ style: patch.noteStyle, custom: patch.noteStyleText })
+          next.noteStyle = style.style
+          next.noteStyleText = style.custom
+        }
         const written = await config.writeSettings(next)
         if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
         runtime.invalidate()
@@ -526,6 +532,13 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const statusFilter = typeof args?.status === 'string' && args.status !== '' ? args.status : undefined
         const kindFilter = typeof args?.kind === 'string' && args.kind !== '' ? args.kind : undefined
         const includeAll = args?.all === true
+        // 工作区目录消失的条目要能被界面看出来（用户：工作区删除后记忆要跟着"消失"）：
+        // hash → missingAt。目录回来了 sweep 会清掉这个标记并同步恢复记忆。
+        const missingWs = new Set<string>(
+          Object.entries(view.workspaces.workspaces)
+            .filter(([, w]) => typeof w.missingAt === 'string' && w.missingAt !== '')
+            .map(([hash]) => hash),
+        )
         const rows: any[] = []
         for (const entry of Object.values(view.catalog.entries)) {
           if (layerFilter && entry.layer !== layerFilter) continue
@@ -555,6 +568,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             workspace: entry.workspace,
             scene: entry.scene,
             session: entry.session,
+            ...(entry.layer === 'workspace' && entry.workspace !== '' && missingWs.has(entry.workspace) ? { wsMissing: true } : {}),
             ...(st?.degraded !== undefined ? { degraded: st.degraded } : {}),
             ...(needsReview ? { needsReview: st!.needsReview } : {}),
             ...(st?.locked === true ? { locked: true } : {}),

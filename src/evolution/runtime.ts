@@ -167,6 +167,8 @@ export function autoSnapshotKey(parts: {
   scenes: string[]
   enabled: boolean
   inject: boolean
+  /** 笔记风格指引（换了风格要立刻重算整段）。 */
+  style?: string
 }): string {
   return [
     parts.sessionId ?? '-',
@@ -174,5 +176,6 @@ export function autoSnapshotKey(parts: {
     parts.scenes.join(','),
     parts.enabled ? '1' : '0',
     parts.inject ? '1' : '0',
+    parts.style ?? '-',
   ].join('|')
 }

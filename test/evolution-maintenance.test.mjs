@@ -169,7 +169,10 @@ function deps(over = {}) {
         return { kept: 5, dropped: 1 }
       },
     },
-    state: { update: async (fn) => ({ ok: true, result: fn({ watermarks: {} }) }) },
+    state: {
+      update: async (fn) => ({ ok: true, result: fn({ watermarks: {} }) }),
+      read: async () => ({ ok: true, state: { entries: {} } }),
+    },
     config: {
       async readWorkspaces() {
         return { workspaces: {} }
@@ -275,6 +278,47 @@ test('runSweep：工作区首次缺失只打标记，目录回来后清掉标记
   assert.deepEqual(d.marked.sort((a, b) => a.hash.localeCompare(b.hash)), [
     { hash: 'h1', missingAt: new Date(NOW).toISOString() },
     { hash: 'h2', missingAt: null },
+  ])
+})
+
+test('runSweep：工作区目录回来 → 同步恢复"因工作区失效"归档的记忆', async () => {
+  const d = deps({
+    config: {
+      async readWorkspaces() {
+        return { workspaces: { h2: { key: 'k2', cwd: process.cwd(), missingAt: iso(100) } } }
+      },
+      async markWorkspaceMissing(hash, missingAt) {
+        d.marked.push({ hash, missingAt })
+        return { ok: true, changed: true }
+      },
+    },
+    async entries() {
+      return [
+        // 三条都在 h2：一条是工作区失效归档的（要恢复）、一条是 decay 归档的（不动）、
+        // 一条还是 active（不动）。第四条属于别的 hash，与本工作区无关。
+        entry({ id: '_ws/h2/back', layer: 'workspace', workspace: 'h2', status: 'archived', updatedAt: iso(95) }),
+        entry({ id: '_ws/h2/decayed', layer: 'workspace', workspace: 'h2', status: 'archived', updatedAt: iso(95) }),
+        entry({ id: '_ws/h2/live', layer: 'workspace', workspace: 'h2', status: 'active', updatedAt: iso(1) }),
+        entry({ id: '_ws/other/note', layer: 'workspace', workspace: 'other', status: 'archived', updatedAt: iso(95) }),
+      ]
+    },
+  })
+  // state.read 给转移动机：只有 back 那条最后一次归档原因带 "workspace directory missing"。
+  d.state.read = async () => ({
+    ok: true,
+    state: {
+      entries: {
+        '_ws/h2/back': { transitions: [{ at: iso(90), from: 'active', to: 'archived', actor: 'dream', reason: 'workspace directory missing for 90 days' }] },
+        '_ws/h2/decayed': { transitions: [{ at: iso(80), from: 'active', to: 'archived', actor: 'dream', reason: 'never injected or read in 180 days' }] },
+      },
+    },
+  })
+  const r = await runSweep(d)
+  assert.equal(r.workspaces.back, 1)
+  const setCalls = d.calls.filter((c) => c.id)
+  // 只有"因工作区失效"归档的那条被恢复成 active；decay 归档与活条目不碰。
+  assert.deepEqual(setCalls.map((c) => [c.id, c.status, c.opts.reason]), [
+    ['_ws/h2/back', 'active', 'workspace directory is back'],
   ])
 })
 

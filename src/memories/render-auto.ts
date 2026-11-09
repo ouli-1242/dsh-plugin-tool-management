@@ -53,6 +53,11 @@ export interface AutoRenderInput {
   userSegmentTokens: number
   /** 上下文窗口；拿不到就传 undefined。 */
   contextWindow?: number
+  /**
+   * 笔记风格指引（用户设置，一句话）。放在授权语正下方 —— 模型在本会话里学新东西时，
+   * 写法照这个来；段文本含它，所以风格变化会随段重发一次（去重按整段字节比对）。
+   */
+  styleLine?: string
 }
 
 export interface AutoRenderResult {
@@ -238,7 +243,9 @@ export function renderAutoBlock(input: AutoRenderInput): AutoRenderResult {
     layerRank(a.layer) - layerRank(b.layer) || a.oneLine.localeCompare(b.oneLine) || a.id.localeCompare(b.id))
 
   const dropped = candidates.length - picked.length
-  const lines = [AUTO_MEMORY_HEADING, '', AUTO_MEMORY_NOTE, '', ...picked.map(lineOf)]
+  const lines = [AUTO_MEMORY_HEADING, '', AUTO_MEMORY_NOTE, '']
+  if (input.styleLine && String(input.styleLine).trim() !== '') lines.push(`(House style for new notes: ${String(input.styleLine).trim()})`, '')
+  lines.push(...picked.map(lineOf))
   if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; search memories for them.`)
   if (reduced === 'min') lines.push('', '(This conversation\'s hand-written memories are large, so learned notes are shown at their minimum budget.)')
   const text = lines.join('\n') + '\n'

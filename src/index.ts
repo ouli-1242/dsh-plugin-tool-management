@@ -56,7 +56,7 @@ import {
 import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
 // 自主记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
-import { createEvolutionConfig, workspaceHashOf } from './evolution/config.js'
+import { createEvolutionConfig, noteStyleGuideOf, workspaceHashOf } from './evolution/config.js'
 // 注入热路径的同步视图（`agent/pre-step` 的 text() 没有 await 的位置）。
 import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
 // 冷路径：轮内摘要 → 回合封存 episode → outbox → 异步复习器（不挡主链）。
@@ -179,7 +179,7 @@ import { buildSceneTools } from './tools/scene.js'
 import { buildSubagentTools } from './tools/subagent.js'
 import { buildControlTools } from './tools/control.js'
 import { toolAccessRoute } from './tools/deps.js'
-import { ARG_CONDITIONAL_CONFIRM_TOOLS, argConditionalConfirmReason } from './confirm-gate.js'
+import { ARG_CONDITIONAL_CONFIRM_TOOLS, argConditionalConfirmReason, isMustAskConfirm } from './confirm-gate.js'
 import { createScenePromptSync } from './scene-prompt-sync.js'
 import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './subagents/tools.js'
 import { extractExportTurns, serializeTranscript } from './exports/transcript.js'
@@ -2396,12 +2396,16 @@ export default {
 
       const scene = memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined
       const enabledScenes = new Set<string>(scene ? [scene] : [])
+      // 风格指引跟着设置走：改一次风格，段文本变一次（整段重发一次是内容真的变了）。
+      // 写进快照键：同一风格内不重建，换了风格立刻重建。
+      const styleGuide = noteStyleGuideOf(cfg.noteStyle, cfg.noteStyleText ?? '')
       const key = autoSnapshotKey({
         ...(sid !== undefined ? { sessionId: sid } : {}),
         ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
         scenes: [...enabledScenes],
         enabled: cfg.enabled,
         inject: cfg.inject,
+        style: styleGuide,
       })
       const prev = readAutoSnapshot(agent)
       if (prev && prev.key === key) return prev.text
@@ -2416,6 +2420,7 @@ export default {
           enabledScenes,
         },
         userSegmentTokens: estimateTextTokens(baseText),
+        ...(styleGuide !== '' ? { styleLine: styleGuide } : {}),
       })
       const snap: AutoSnapshot = {
         key,
@@ -5911,9 +5916,12 @@ export default {
         // 审计日志里留下一条"跳过了确认"。
         const confirmName = String(exec.name)
         if (ARG_CONDITIONAL_CONFIRM_TOOLS.has(confirmName)) {
-          const reason = argConditionalConfirmReason(confirmName, exec.arguments, await scopeStore.mode())
+          const mode = await scopeStore.mode()
+          const reason = argConditionalConfirmReason(confirmName, exec.arguments, mode)
           if (reason === null) return next()
-          if (bypassedByFullAccess(exec)) return next()
+          // must-ask 类（自主记忆新增 / 删除 / 机器级停用工具）在完全权限之上：
+          // 完全权限只预先批准常规审批，不批这几类的授权边界。先判它，再谈 bypass。
+          if (!isMustAskConfirm(confirmName, exec.arguments, mode) && bypassedByFullAccess(exec)) return next()
           // 卡已弹：宿主只有拿到「同意」才会继续执行这条工具。给 exec 打上标记，
           // 工具层据此把这次学习记成 user_approved 证据（信心上调）。宿主若在钩子与
           // 执行之间换了对象，标记丢了也只是退回 model_inference 的保守值，不出错。

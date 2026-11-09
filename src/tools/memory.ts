@@ -341,7 +341,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // （场景段 128 KiB），而模型很乐意把「这个项目用 pnpm」记一条 —— 那看一眼 `package.json`
     // 就知道，记下来却永久占着每一轮请求。合并 write/update 后这两句更要留：upsert 降低了
     // "再记一条"的摩擦，而摩擦正是这里唯一拦得住它的东西。
-    description: 'Create a memory, or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
+    description: 'Create a memory, or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. For standing orders and things to keep across sessions ("every time…", "always…"), prefer the autonomous-memory learn tool when it is available. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name> — copy it from the list. `global` is the always-on scene.' },
       description: { type: 'string', description: 'One-sentence description (<=500 chars). Required when creating. Empty string = drop it and re-derive from the body; omit = keep.' },
@@ -416,6 +416,16 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 查重只**说出来**，不拒绝 —— 猜错一次就把该记的东西记不下去，比多记一条代价大得多；
       // 而且"像不像同一条"本来就是人判断的事。只在建的分支提示：改的分支没有"再记一条"的风险。
       const norm = (value: unknown): string => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+      // 场景预检：op 层那条「场景不存在」错误是中文面板文案，直接透传给模型只会让它
+      // 猜。工具清单里已经拿到了全部现存场景，在这里用英文说清"这个场景没有、现成有
+      // 哪些"，比让一次注定失败的创建走到 op 层再报错体验好得多。
+      const knownGroups = new Set<string>((all.rules || []).map((x: any) => String(x.group || '')))
+      knownGroups.add(GLOBAL_SCENE)
+      knownGroups.add(SHARED_GROUP)
+      if (!knownGroups.has(group)) {
+        const scenes = [...knownGroups].filter((s) => s !== '').sort()
+        throw new Error('scene "' + group + '" does not exist — memories can only be created inside an existing scene. Existing scenes: ' + scenes.join(', ') + '. The user creates scenes in the plugin panel (Scenes page); then save again.')
+      }
       const wantName = norm(name)
       const wantDesc = norm(description)
       const similar: string[] = (all.rules || [])

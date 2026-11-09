@@ -286,7 +286,33 @@ export async function runSweep(deps: SweepDeps, opts: SweepOptions = {}): Promis
       if (present) {
         if (w.missingAt) {
           const r = dry ? { ok: true as const, changed: true } : await deps.config.markWorkspaceMissing(hash, null)
-          if (r.ok && r.changed) report.workspaces.back++
+          if (r.ok && r.changed) {
+            report.workspaces.back++
+            // 目录回来了，把它"因工作区失效"归档的记忆同步恢复（用户：删除与恢复要对等）。
+            // 只认这条原因的归档：decay / ttl 归档的是"真死了"的记忆，回来的是目录，
+            // 不是那些记忆的尸检结论。整段包住：恢复失败不该挡住后面的 TTL / 衰减扫描。
+            if (!dry) {
+              try {
+                const all = await deps.entries()
+                const stRead = await deps.state.read()
+                const transitionsOf = (id: string): Array<{ to?: string; reason?: string }> =>
+                  stRead.ok ? (stRead.state.entries[id]?.transitions ?? []) : []
+                for (const e of all) {
+                  if (e.layer !== 'workspace' || e.workspace !== hash) continue
+                  if (e.status !== 'archived') continue
+                  const lastArchive = [...transitionsOf(e.id)].reverse().find((x) => x.to === 'archived')
+                  if (!lastArchive || !String(lastArchive.reason || '').includes('workspace directory missing')) continue
+                  try {
+                    await deps.learner.setStatus(e.id, 'active', 'dream', { reason: 'workspace directory is back' })
+                  } catch (err) {
+                    report.errors.push('workspace-restore: ' + deps.message(err))
+                  }
+                }
+              } catch (err) {
+                report.errors.push('workspace-restore: ' + deps.message(err))
+              }
+            }
+          }
         }
         continue
       }

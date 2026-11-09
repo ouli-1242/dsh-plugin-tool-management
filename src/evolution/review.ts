@@ -20,7 +20,7 @@ import { writeFileAtomically } from '../memories/index-io.js'
 import type { Episode } from './digest.js'
 import type { OutboxItem } from './episodes.js'
 import type { Learner } from './write.js'
-import type { EffectiveEvolutionConfig } from './config.js'
+import { noteStyleGuideOf, type EffectiveEvolutionConfig } from './config.js'
 
 /** 一次复习最多落几条。多了就是在把摘要改写成记忆库，那不是复习。 */
 export const MAX_ITEMS_PER_REVIEW = 3
@@ -129,6 +129,15 @@ export const REVIEW_SYSTEM_PROMPT = [
   'At most 3 items. When in doubt, return fewer — a wrong memory is injected into every later conversation.',
   'Output strict JSON: {"memories":[{"text":"one sentence","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","boundary":"when it might not hold"}]}',
 ].join('\n')
+
+/** 系统提示 + 按需追加的风格行（custom 为空串时不追加）。 */
+export function reviewSystemPrompt(cfg: { noteStyle?: string; noteStyleText?: string }): string {
+  const guide = noteStyleGuideOf(
+    (cfg.noteStyle === 'friendly' || cfg.noteStyle === 'minimal' || cfg.noteStyle === 'custom') ? cfg.noteStyle : 'efficient',
+    cfg.noteStyleText ?? '',
+  )
+  return guide === '' ? REVIEW_SYSTEM_PROMPT : REVIEW_SYSTEM_PROMPT + '\nWrite every `text` field to the user\'s configured note style: ' + guide
+}
 
 /** 每会话的复习次数（花过的钱不退款，失败也计数）。 */
 export interface ReviewBudget {
@@ -258,7 +267,7 @@ export function createReviewer(deps: ReviewDeps): {
         const stream = prepared.stream({
           ...prepared.config,
           messages: [{ role: 'user', content: [{ type: 'text', text: buildReviewPrompt(episode, catalogLines) }] }],
-          system: REVIEW_SYSTEM_PROMPT,
+          system: reviewSystemPrompt(cfg),
           maxTokens: MAX_OUTPUT_TOKENS,
           signal: ac.signal,
         })

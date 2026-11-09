@@ -657,6 +657,20 @@ export function createLearner(deps: LearnDeps) {
 
       const entry = st.entries[id] ?? { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
       delete entry.needsReview
+      // 证据升级：用户在页面上确认的是**这条原文**，与确认卡上的「同意」同一语义 ——
+      // 推断证据随之升为 user_approved。只升状态不动证据的话，会留下一个隐蔽的静默失效：
+      // active 了、界面也显示"生效"，但注入门槛（L1 要 ≥0.7）对 0.4 的推断证据永远不放行，
+      // 用户确认过的内容一条都进不了上下文（2026-11-10 用户实测踩中）。
+      entry.evidence = entry.evidence.map((e) => e.source === 'model_inference' ? { ...e, source: 'user_approved' } : e)
+      const hasUserEvidence = entry.evidence.some((e) =>
+        e.source === 'user_approved' || e.source === 'user_explicit' || e.source === 'user_correction')
+      if (!hasUserEvidence) {
+        // 迁移条目 / 证据被清过：确认本身就是一份用户证据，补一条，别让信心停在 0。
+        entry.evidence.push({
+          session: '', turn: 0, seq: -1, source: 'user_approved',
+          quote: normalizeForCompare(text).slice(0, 300), at: nowIso,
+        })
+      }
       pushTransition(entry, current, 'active', 'user', 'approved in Memory page', Date.parse(nowIso))
       entry.confidence = confidenceOf(entry.evidence, entry.counters.harmful)
       st.entries[id] = entry

@@ -276,6 +276,14 @@ test('approve：候选 → 生效，四处一起改（文件 / state / 索引 / 
     assert.equal(h.readIndex().rules[r.id].enabled, true)
     assert.equal(h.readCatalog().entries[r.id].status, 'active', 'catalog 不跟着改 = 确认了还是不注入')
 
+    // 证据升级（2026-11-10）：页面上确认的也是"用户看过这条原文" —— 推断证据升为
+    // user_approved（0.85）。只升状态不动证据的话，注入门槛（L1 ≥ 0.7）永远放不过
+    // 0.4 的推断，症状是"界面显示生效、上下文里永远看不见"。
+    const stAfter = h.readState().entries[r.id]
+    assert.equal(stAfter.confidence, 0.85)
+    assert.ok(stAfter.evidence.every((e) => e.source !== 'model_inference'), '推断证据应已全部升级')
+    assert.equal(h.readCatalog().entries[r.id].confidence, 0.85)
+
     // 已归档 / 已取代的不许"确认复活"（那会绕过墓碑）
     await h.learner.forget(r.id, { actor: 'user' })
     const again = await h.learner.approve(r.id)

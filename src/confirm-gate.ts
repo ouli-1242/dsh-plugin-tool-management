@@ -64,6 +64,44 @@ const REMOVE_SUBJECT: Record<string, string> = {
 }
 
 /**
+ * 完全权限（approval=never）也**不许跳过**的确认。
+ *
+ * 完全权限的语义是"用户预先批准了常规审批"，但有几类动作的授权边界在它之上：
+ * 用户亲口说过"这种事必须问我"。目前两类（用户 2026-11-10：自主记忆、移除工具；
+ * 其余维持可跳过，后续再议）：
+ *
+ *   · 自主记忆新增 —— 每张卡批准的是**这一句话进入之后每一轮的上下文**，批准一次
+ *     ≠ 批准一切；完全权限跳过它等于"没人看过的内容常驻上下文"。
+ *   · 删除类（trash）与机器级停用工具 —— 数据处置 / 拿走能力，出错不可逆或难以察觉。
+ *
+ * 返回 false 不代表"不用问"：要不要问仍由 `argConditionalConfirmReason` 决定；这里只在
+ * "要问"之后决定"完全权限能不能免问"。纯函数，与上面那张表共用入参。
+ */
+export function isMustAskConfirm(
+  name: string,
+  rawArgs: unknown,
+  mode: ConfirmScopeMode,
+): boolean {
+  const args = (rawArgs !== null && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
+  const action = text(args.action)
+  if (name === PROACTIVE_MEMORY_TOOL) {
+    // 与 argConditionalConfirmReason 同口径：只有 learn（含缺省 action 但给了 text）要卡。
+    if (action !== 'learn' && action !== '') return false
+    return text(args.text) !== ''
+  }
+  if (name.endsWith('_remove')) {
+    return action === 'trash' && REMOVE_SUBJECT[text(args.domain)] !== undefined
+  }
+  if (name === 'tool_manager_tools') {
+    if (action === 'repair') return true
+    // 机器级停用 = 把工具从所有对话里拿走（"移除工具"）；启用是加回来，可跳过。
+    if (action === 'disable' && machineWide(args, mode)) return text(args.tools) !== '' || Array.isArray(args.tools)
+    return false
+  }
+  return false
+}
+
+/**
  * 这一次调用要不要问用户；要问就返回卡上那句理由，不问返回 `null`。
  *
  * @param name 工具名（大小写与注册名一致）。

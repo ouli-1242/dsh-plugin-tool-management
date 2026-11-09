@@ -179,16 +179,16 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-name{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;word-break:break-word}
 .dsm-evo-name:hover{color:var(--dsw-alias-label-primary)}
 .dsm-evo-detail{display:flex;flex-direction:column;gap:4px;padding:4px 0 6px}
-.dsm-evo-detail-id{color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);font-size:12px;word-break:break-all}
 /* 键值两列的行：值那一格必须能收缩，否则 flex 的 min-width:auto 会把它顶成一行硬裁
    （用户 2026-11-10：内容被截断）——放开 min-width 后 word-break 接管换行。 */
 .dsm-evo-detail-row{display:flex;gap:8px;font-size:12px;line-height:17px}
 .dsm-evo-detail-row>span:last-child{flex:1;min-width:0}
-.dsm-evo-detail-block{display:flex;flex-direction:column;gap:2px;margin-top:2px}
 .dsm-evo-detail-key{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
-.dsm-evo-ev{display:flex;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;word-break:break-word}
-.dsm-evo-ev>span:last-child{flex:1;min-width:0}
-.dsm-evo-ev-src{flex:none;color:var(--dsw-alias-label-tertiary)}
+/* 笔记风格一行：分段控件（dsm-form-seg）+ 自定义输入；只占一行，紧贴总开关下方。 */
+.dsm-evo-style{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.dsm-evo-style-label{color:var(--dsw-alias-label-secondary);font-size:12px}
+.dsm-evo-style-custom{display:flex;flex:1 1 100%;align-items:center;gap:6px}
+.dsm-evo-style-custom .dsm-control{flex:1;min-width:0}
 /* 整理草案：虚线框 = "还没生效"，与实线的记忆卡片区分开。 */
 .dsm-evo-organize{display:flex;flex-direction:column;gap:6px;margin:0 12px 10px;padding:8px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s)}
 .dsm-evo-organize .dsm-help{margin:0}

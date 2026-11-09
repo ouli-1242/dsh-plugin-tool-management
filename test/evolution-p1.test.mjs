@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { routeLayer, narrowerOf } from '../lib/evolution/route.js'
 import { runGates, securityScan, durabilityOf, looksDerivable, similarity, inferKind } from '../lib/evolution/gates.js'
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
+import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
 import { renderAutoBlock, allocateByLayer, autoBudgetOf, competitorBudgetOf } from '../lib/memories/render-auto.js'
 
 /**
@@ -285,6 +286,36 @@ test('自动段：同输入必须逐字节相同（否则每轮重发整段）',
   assert.equal(a.text, b.text)
   assert.ok(a.text.startsWith('## Learned notes (auto)'))
   assert.match(a.text, /- \[pref\] 这个仓库用 pnpm/)
+})
+
+test('自动段：风格指引跟设置走 —— 有就一行、换了文本整段变', () => {
+  const entry = entryOf({ id: '_ws/abcd1234abcd1234/pkg', layer: 'workspace', workspace: 'abcd1234abcd1234', kind: 'preference', oneLine: '这个仓库用 pnpm', confidence: 0.95 })
+  const input = { entries: [entry], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0, styleLine: 'Write terse and factual: no emoji.' }
+  const r = renderAutoBlock(input)
+  assert.match(r.text, /House style for new notes: Write terse and factual: no emoji\./)
+  // 没给 styleLine 就不该出现这一行（旧调用方不受影响）。
+  const plain = renderAutoBlock({ ...input, styleLine: undefined })
+  assert.doesNotMatch(plain.text, /House style/)
+  // 同一风格内逐字节稳定（去重的前提）；风格文本变了整段跟着变。
+  assert.equal(renderAutoBlock(input).text, r.text)
+  assert.notEqual(renderAutoBlock({ ...input, styleLine: 'Write in as few words as possible.' }).text, r.text)
+})
+
+test('风格设定：非法输入回退 efficient，custom 没文本不生效，生效配置就近覆盖', () => {
+  assert.deepEqual(normalizeNoteStyle(undefined), { style: 'efficient', custom: '' })
+  assert.deepEqual(normalizeNoteStyle('friendly'), { style: 'friendly', custom: '' })
+  assert.deepEqual(normalizeNoteStyle('wat'), { style: 'efficient', custom: '' })
+  assert.deepEqual(normalizeNoteStyle({ style: 'custom', custom: '  只写要点 ' }), { style: 'custom', custom: '只写要点' })
+  // custom 没带文本 = 没法注入指引，退回 efficient，绝不注入一句空话。
+  assert.deepEqual(normalizeNoteStyle({ style: 'custom', custom: '  ' }), { style: 'efficient', custom: '' })
+  // 200 字符上限：洗完不超。
+  assert.equal(normalizeNoteStyle({ style: 'custom', custom: 'x'.repeat(500) }).custom.length, 200)
+  const global = { ...DEFAULT_EVOLUTION_SETTINGS, noteStyle: 'custom', noteStyleText: 'terse' }
+  const resolved = resolveEffectiveConfig(global, { noteStyle: 'minimal' }, undefined)
+  assert.equal(resolved.noteStyle, 'minimal')
+  assert.equal(resolved.noteStyleText, 'terse', '风格文本没被下层覆盖时继承全局')
+  assert.equal(noteStyleGuideOf('efficient', ''), NOTE_STYLE_GUIDE.efficient)
+  assert.equal(noteStyleGuideOf('custom', 'terse'), 'terse')
 })
 
 test('自动段：会话层只露自己的条目（结构性隔离的第二道保险）', () => {

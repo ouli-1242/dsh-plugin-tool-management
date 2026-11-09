@@ -44,7 +44,7 @@ import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings } from '../lib/tools/table.js'
 import { buildEvolutionOps } from '../lib/ops/evolution.js'
-import { argConditionalConfirmReason } from '../lib/confirm-gate.js'
+import { argConditionalConfirmReason, isMustAskConfirm } from '../lib/confirm-gate.js'
 import { createAccessToken, createFrozenGate, guardModelOps, installHandlerGuards } from '../lib/request-gate.js'
 import { officeKitApplies } from '../lib/skills/official.js'
 import { applyLoaderToken, applyLoaderTokenDisabled, readLoaderToken } from '../lib/mcp/loader-token.js'
@@ -4928,6 +4928,28 @@ test('自主记忆只在「新增」时弹卡：回显原文与建议范围，�
   assert.equal(reason({ action: 'idea', idea: '换个说法' }), null)
   // 缺正文的 learn 注定失败：不产生无效审批
   assert.equal(reason({ action: 'learn' }), null)
+})
+
+test('must-ask：完全权限也不许跳过的确认（自主记忆新增 / 删除 / 机器级停用）', () => {
+  // 与 argConditionalConfirmReason 同口径：只有真的会弹卡的那次才谈得上 must-ask。
+  const must = (name, args, mode = 'session') => isMustAskConfirm(name, args, mode)
+  // 自主记忆新增：批准一次 ≠ 批准一切 —— 完全权限下也要弹卡。
+  assert.equal(must('memory_manager_auto', { action: 'learn', text: '统一用 pnpm' }), true)
+  assert.equal(must('memory_manager_auto', { text: '统一用 pnpm' }), true, '缺省 action 也是 learn')
+  assert.equal(must('memory_manager_auto', { action: 'forget', memory: 'x' }), false)
+  assert.equal(must('memory_manager_auto', { action: 'learn' }), false, '缺正文的 learn 根本不弹卡')
+  // 删除：trash 是数据处置；restore / list 可跳过。
+  assert.equal(must('plugin_manager_remove', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
+  assert.equal(must('plugin_manager_remove', { action: 'restore', domain: 'memory', id: 't' }), false)
+  assert.equal(must('plugin_manager_remove', { action: 'trash', domain: 'nope', id: 'x' }), false, '注定失败的调用不弹卡')
+  // 机器级停用工具 = 把工具从所有对话拿走；repair 是不可逆的数据处置。会话级停用、启用可跳过。
+  assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['memory_manager_search'], scope: 'global' }), true)
+  assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['x'] }, 'global'), true)
+  assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['x'] }), false, '会话级停用随时可退')
+  assert.equal(must('tool_manager_tools', { action: 'enable', tools: ['x'], scope: 'global' }), false, '启用是加回能力')
+  assert.equal(must('tool_manager_tools', { action: 'repair', target: 'memory-index' }), true)
+  assert.equal(must('tool_manager_tools', { action: 'list' }), false)
+  assert.equal(must('memory_manager_switch', { memory: 'global/a', enabled: false, scope: 'global' }), false, '未列入 must-ask 的维持可跳过')
 })
 
 // 签发端与校验端的指纹必须同口径（#22）：get-current 发的是 stampOfText 16 位指纹，

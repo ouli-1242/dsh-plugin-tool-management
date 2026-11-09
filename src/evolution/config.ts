@@ -33,6 +33,37 @@ export type LearnScope = 'off' | 'session' | 'workspace' | 'global'
 export type WriteTarget = 'session' | 'workspace' | 'global' | 'route'
 export type DreamMode = 'off' | 'daily' | 'manual'
 export type SkillMode = 'off' | 'propose'
+/** 学到的笔记用什么口吻写（用户 2026-11-10：默认简洁高效，不要表情和语气词）。 */
+export type NoteStyle = 'efficient' | 'friendly' | 'minimal' | 'custom'
+
+/** 每种风格给模型的一句话指引（注入进自动段与复习器提示）。custom 用用户自己的话。 */
+export const NOTE_STYLE_GUIDE: Record<Exclude<NoteStyle, 'custom'>, string> = {
+  efficient: 'Write terse and factual: no emoji, no tone words, no filler; one imperative sentence.',
+  friendly: 'Write plain and warm but still short: no emoji, no exclamation marks.',
+  minimal: 'Write in as few words as possible.',
+}
+
+/** 把任意输入洗成合法风格与自定义文本（custom 文本截到 200 字符）。 */
+export function normalizeNoteStyle(raw: any): { style: NoteStyle; custom: string } {
+  const preset = (s: unknown): NoteStyle | null =>
+    (typeof s === 'string' && (s === 'efficient' || s === 'friendly' || s === 'minimal' || s === 'custom')) ? s as NoteStyle : null
+  // 两种输入形态：裸字符串（老接口 / 界面快捷写法）或 { style, custom } 对象。
+  const style = raw !== null && typeof raw === 'object' ? preset(raw.style) : preset(raw)
+  const custom = raw !== null && typeof raw === 'object' && typeof raw.custom === 'string'
+    ? raw.custom.trim().slice(0, 200)
+    : ''
+  return {
+    // custom 没给文本 = 没法注入指引，退回 efficient，绝不注入一句空话。
+    style: (style === null || (style === 'custom' && custom === '')) ? 'efficient' : style,
+    custom: style === 'custom' ? custom : '',
+  }
+}
+
+/** 生效的风格指引（一句话，注入用）。 */
+export function noteStyleGuideOf(style: NoteStyle, custom: string): string {
+  if (style === 'custom') return custom.trim()
+  return NOTE_STYLE_GUIDE[style]
+}
 
 /** 全局默认值与可覆盖字段的公共形状。 */
 export interface EvolutionOverrides {
@@ -52,6 +83,10 @@ export interface EvolutionOverrides {
   maxReviewsPerSession?: number
   /** 复习用哪个模型；空串 = 会话当前模型。 */
   model?: string
+  /** 笔记风格：efficient（默认）/ friendly / minimal / custom。 */
+  noteStyle?: NoteStyle
+  /** noteStyle=custom 时的自定义指引（≤200 字符）。 */
+  noteStyleText?: string
 }
 
 /** 全局设置：所有字段都有值。 */
@@ -73,6 +108,8 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
   reviewEveryTurns: 8,
   maxReviewsPerSession: 2,
   model: '',
+  noteStyle: 'efficient',
+  noteStyleText: '',
 }
 
 /** 解析后的生效配置，附带「哪一档说了算」。 */
@@ -107,6 +144,9 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
   const r = raw && typeof raw === 'object' ? raw : {}
   const d = DEFAULT_EVOLUTION_SETTINGS
   const inject = typeof r.inject === 'boolean' ? r.inject : undefined
+  const style = normalizeNoteStyle(r.noteStyle === undefined && r.noteStyleText === undefined
+    ? undefined
+    : { style: r.noteStyle, custom: r.noteStyleText })
   return {
     enabled: boolOf(r.enabled, d.enabled),
     learnScope: oneOf(r.learnScope, LEARN_SCOPES, d.learnScope),
@@ -118,6 +158,8 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
     reviewEveryTurns: intOf(r.reviewEveryTurns, d.reviewEveryTurns, 1, 100),
     maxReviewsPerSession: intOf(r.maxReviewsPerSession, d.maxReviewsPerSession, 0, 20),
     model: typeof r.model === 'string' ? r.model : d.model,
+    noteStyle: style.style,
+    noteStyleText: style.custom,
   }
 }
 
@@ -135,6 +177,11 @@ export function normalizeOverrides(raw: any): EvolutionOverrides {
   if (typeof r.reviewEveryTurns === 'number' && Number.isFinite(r.reviewEveryTurns)) out.reviewEveryTurns = intOf(r.reviewEveryTurns, 8, 1, 100)
   if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, 2, 0, 20)
   if (typeof r.model === 'string') out.model = r.model
+  if (r.noteStyle !== undefined || r.noteStyleText !== undefined) {
+    const style = normalizeNoteStyle({ style: r.noteStyle, custom: r.noteStyleText })
+    out.noteStyle = style.style
+    if (style.style === 'custom') out.noteStyleText = style.custom
+  }
   return out
 }
 
@@ -177,6 +224,8 @@ export function resolveEffectiveConfig(
     reviewEveryTurns: pick('reviewEveryTurns') ?? global.reviewEveryTurns,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,
     model: pick('model') ?? global.model,
+    noteStyle: pick('noteStyle') ?? global.noteStyle,
+    noteStyleText: pick('noteStyleText') ?? global.noteStyleText,
     source: hasOverrides(session) ? 'session' : hasOverrides(workspace) ? 'workspace' : 'global',
   }
 }

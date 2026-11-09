@@ -793,6 +793,8 @@
                   loading: false,
                   status: st && st.ok !== false ? st : null,
                   entries: ls && ls.ok !== false ? (ls.entries || []) : [],
+                  // 全局设置（含笔记风格）：设置弹窗直接读，不用再发一次请求。
+                  settings: ls && ls.ok !== false ? (ls.settings || null) : null,
                   error: err,
                 })
                 // 队列拿不到（这版没接线）就不显示这一块：它回答的是"后台在干什么"，
@@ -824,7 +826,7 @@
                   } : null
                 })
               })
-              .catch(function (e) { setEvo({ loading: false, status: null, entries: [], error: errMsg(e) }) })
+              .catch(function (e) { setEvo({ loading: false, status: null, entries: [], settings: null, error: errMsg(e) }) })
           }
           // 跟着「当前对话」重取，不跟「选中层」：切对话时这张卡必须跟着变。
           React.useEffect(function () { refreshEvolution() }, [scopeState.currentSessionId])
@@ -975,7 +977,10 @@
             })
           }
 
-          /** 展开区：依据 / 边界 / 证据 / 时间线。数据来自 `evolution-read`（按需拉一次）。 */
+          /**
+           * 展开区（用户 2026-11-10：只要重要信息 —— 边界、用量；时间线 / 证据 / 路径全砍）。
+           * 数据来自 `evolution-read`（按需拉一次；boundary 不在列表行里）。
+           */
           function renderEvolutionDetail(e) {
             var d = evoCache[e.id]
             var out = []
@@ -989,44 +994,14 @@
             } else {
               var st = d.state || {}
               var c = st.counters || {}
-              out.push(React.createElement('div', { key: 'id', className: 'dsm-evo-detail-id' }, e.id))
+              // 有用 / 有害：升常驻（helpful≥3）与整理判定的依据，不是装饰数字。
               out.push(React.createElement('div', { key: 'c', className: 'dsm-help' }, t('evo.detail.counters', {
-                injected: Number(c.injected) || 0,
                 helpful: Number(c.helpful) || 0,
                 harmful: Number(c.harmful) || 0,
               })))
-              if (d.basis) out.push(React.createElement('div', { key: 'b', className: 'dsm-evo-detail-row' },
-                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.detail.basis')),
-                React.createElement('span', null, String(d.basis))))
               if (d.boundary) out.push(React.createElement('div', { key: 'bd', className: 'dsm-evo-detail-row' },
                 React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.detail.boundary')),
                 React.createElement('span', null, String(d.boundary))))
-              var ev = Array.isArray(st.evidence) ? st.evidence : []
-              out.push(React.createElement('div', { key: 'ev', className: 'dsm-evo-detail-block' },
-                React.createElement('div', { className: 'dsm-evo-detail-key' }, t('evo.detail.evidence')),
-                ev.length
-                  ? ev.map(function (x, i) {
-                    return React.createElement('div', { key: 'e' + i, className: 'dsm-evo-ev' },
-                      React.createElement('span', { className: 'dsm-evo-ev-src' }, String(x.source || '')),
-                      React.createElement('span', null, String(x.quote || '')))
-                  })
-                  : React.createElement('div', { className: 'dsm-help' }, t('evo.detail.empty'))))
-              // 时间线：状态转移是"这条记忆经历过什么"的唯一记录。删除 / 取代之后
-              // 条目会从默认列表里消失，而这条线是事后追查的唯一入口。
-              var tr = Array.isArray(st.transitions) ? st.transitions : []
-              out.push(React.createElement('div', { key: 'tr', className: 'dsm-evo-detail-block' },
-                React.createElement('div', { className: 'dsm-evo-detail-key' }, t('evo.detail.timeline')),
-                tr.length
-                  ? tr.map(function (x, i) {
-                    var when = x.at ? new Date(String(x.at)).toLocaleString() : ''
-                    var actor = t('evo.actor.' + String(x.actor || 'system'))
-                    return React.createElement('div', { key: 't' + i, className: 'dsm-evo-ev' },
-                      React.createElement('span', { className: 'dsm-evo-ev-src' }, when),
-                      React.createElement('span', null,
-                        String(x.from || '') + ' → ' + String(x.to || '') + ' · ' + actor +
-                        (x.reason ? ' · ' + String(x.reason) : '')))
-                  })
-                  : React.createElement('div', { className: 'dsm-help' }, t('evo.detail.empty'))))
             }
             return React.createElement('div', { className: 'dsm-evo-detail' }, out)
           }
@@ -1040,22 +1015,23 @@
             var tone = e.status === 'core' || e.status === 'active' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
             var pending = e.status === 'candidate' || typeof e.needsReview === 'string'
             var open = evoDetail === e.id
+            // 一眼要能拿到的东西（用户 2026-11-10）：哪一层、注入过几次、多大。
+            // 信心不进 meta —— 它是排序内参，不是用户要做决定的依据；待确认理由走悬停与展开区。
             var metaBits = [
               t('evo.layer.' + e.layer),
-              t('evo.confidence', { value: Math.round((Number(e.confidence) || 0) * 100) }),
+              t('evo.injected', { count: (e.counters && Number(e.counters.injected)) || 0 }),
               t('evo.tokens', { count: Number(e.tokens) || 0 }),
             ]
+            if (e.wsMissing) metaBits.push(t('evo.ws.missing'))
             // 待确认的理由不进 meta（单行省略会把它截成半句话）：悬停给全文，展开区也完整显示。
             return React.createElement(ListRow, {
               key: e.id,
               dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: t(statusKey) })],
-              // 行名就是展开开关：详情（依据 / 证据 / 时间线）收在名字下面，
-              // 不另开一个弹窗 —— 用户要对照着几条看，弹窗一次只能看一条。
+              // 行名就是展开开关：详情（边界 / 用量）收在名字下面，不另开一个弹窗。
               name: React.createElement('button', {
                 type: 'button',
                 className: 'dsm-evo-name',
                 'aria-expanded': open,
-                title: e.id,
                 onClick: function (ev) { ev.stopPropagation(); toggleEvolutionDetail(e.id) },
               }, (e.oneLine || e.id) + (open ? ' ▾' : ' ▸')),
               tag: React.createElement(StatusTag, { tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : undefined, text: t(statusKey) }),
@@ -1481,6 +1457,63 @@
            * 整理 / 程序性记忆）仍折在「更多」里。确认弹窗走 `modal` 那个槽，与 `evoOpen`
            * 分开存，才能叠在它上面而不把整块关掉。
            */
+          /** 笔记风格的本地编辑态（custom 文本）。预设切换即时保存，custom 要点「保存」。 */
+          var evsStyle = React.useState({ busy: false, text: '', open: false })
+          var evoStyle = evsStyle[0], setEvoStyle = evsStyle[1]
+
+          function saveNoteStyle(style, custom) {
+            setEvoStyle(function (cur) { return Object.assign({}, cur, { busy: true, text: custom, open: style === 'custom' }) })
+            apiCall('evolution-settings', { set: true, settings: { noteStyle: style, noteStyleText: custom } }).then(function (res) {
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.style.saved') })
+                refreshEvolution()
+                setEvoStyle(function (cur) { return Object.assign({}, cur, { busy: false }) })
+              } else {
+                setResult({ ok: false, text: translateError(t, res) })
+                setEvoStyle(function (cur) { return Object.assign({}, cur, { busy: false }) })
+              }
+            }).catch(function (e) {
+              setResult({ ok: false, text: errMsg(e) })
+              setEvoStyle(function (cur) { return Object.assign({}, cur, { busy: false }) })
+            })
+          }
+
+          /** 笔记风格一行（用户 2026-11-10：默认高效，不要表情和语气词；支持自定义）。 */
+          function renderEvolutionStyle() {
+            var s = (evo.settings && evo.settings.noteStyle) || 'efficient'
+            var customText = (evo.settings && evo.settings.noteStyleText) || ''
+            var options = [
+              ['efficient', 'evo.style.efficient'],
+              ['friendly', 'evo.style.friendly'],
+              ['minimal', 'evo.style.minimal'],
+              ['custom', 'evo.style.custom'],
+            ]
+            return React.createElement('div', { className: 'dsm-evo-style' },
+              React.createElement('span', { className: 'dsm-evo-style-label' }, t('evo.style')),
+              React.createElement('div', { className: 'dsm-form-seg', role: 'group' },
+                options.map(function (o) {
+                  return React.createElement('button', {
+                    key: o[0], type: 'button', 'aria-pressed': s === o[0],
+                    disabled: evoStyle.busy,
+                    onClick: function () { saveNoteStyle(o[0], customText) },
+                  }, t(o[1]))
+                })),
+              // 自定义展开一行输入 + 保存：预设切换即时生效，custom 是用户自己的话，要显式保存。
+              s === 'custom' || evoStyle.open
+                ? React.createElement('div', { className: 'dsm-evo-style-custom' },
+                    React.createElement('input', {
+                      className: 'dsm-control', type: 'text',
+                      placeholder: t('evo.style.custom.hint'),
+                      value: evoStyle.text || customText,
+                      onChange: function (ev) { setEvoStyle(function (cur) { return Object.assign({}, cur, { text: ev.target.value, open: true }) }) },
+                    }),
+                    React.createElement('button', {
+                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoStyle.busy || (evoStyle.text || customText).trim() === '',
+                      onClick: function () { saveNoteStyle('custom', (evoStyle.text || customText).trim()) },
+                    }, t('evo.style.save')))
+                : null)
+          }
+
           function renderEvolutionModal() {
             var st = evo.status
             var auto = (st && st.auto) || { entries: 0 }
@@ -1529,6 +1562,8 @@
                     key: 'org', type: 'button', className: 'dsm-btn dsm-btn-quiet',
                     disabled: !!(evoOrg && evoOrg.busy) || auto.entries === 0, onClick: runOrganize,
                   }, evoOrg && evoOrg.busy ? t('evo.organize.scanning') : t('evo.organize'))),
+                // 笔记风格：模型写新记忆的口吻（默认高效——无表情、无语气词）。
+                overall ? renderEvolutionStyle() : null,
                 React.createElement('p', { className: 'dsm-help' }, t('evo.modal.hint')),
                 evo.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: evo.error }) : null,
                 evo.loading && !st ? React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')) : null,
