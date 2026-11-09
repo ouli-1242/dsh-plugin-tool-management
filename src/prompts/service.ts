@@ -40,6 +40,22 @@ const META_FILE = 'meta.json'
 export const DEFAULT_PRESET_DESC_MAX_LENGTH = 300
 
 /**
+ * 预设正文的字节上限（256 KiB），与记忆正文的 `MAX_RULE_BYTES` 同档。
+ *
+ * 为什么需要：注入侧虽按 64 KiB 截断（`AGENTS_MD_MAX_BYTES`），但盘上可以无限大，
+ * 而每次读都要整份进内存。上限拦在**写**这一侧 —— 已存在的超大文件不阻断读取，
+ * 用户还能把它改小。
+ */
+export const MAX_PRESET_BYTES = 256 * 1024
+
+/** 正文超限时的拒绝回执；没超返回 null。 */
+function presetTooLarge(content: string): { ok: false; error: string } | null {
+  const bytes = Buffer.byteLength(String(content ?? ''), 'utf8')
+  if (bytes <= MAX_PRESET_BYTES) return null
+  return { ok: false, error: `提示词正文过大（${bytes} 字节，上限 ${MAX_PRESET_BYTES >> 10} KiB）` }
+}
+
+/**
  * 压成一行并按上限截断。与 `normalizeMcpNote`（`../mcp/state-section.ts`）同形：两处都是
  * "给模型看的一句用户文字"，口径必须一致，否则同一句在界面、段、工具里会是三个样子。
  */
@@ -289,6 +305,9 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
         content = BLANK_TEMPLATE
       }
     }
+    // 判在 mkdir 之前：拒绝时磁盘上不留空目录。
+    const tooLarge = presetTooLarge(content)
+    if (tooLarge) return tooLarge
     await mkdir(dir, { recursive: true })
     await writeFileAtomically(join(dir, FILENAME), content)
     await writeDescription(safeId, options?.description)
@@ -302,6 +321,9 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
   async function update(id: string, content: string, nextId?: string, description?: string): Promise<{ ok: true; id: string; renamedFrom?: string } | { ok: false; error: string }> {
     const bad = idError(id)
     if (bad) return { ok: false, error: '非法 id：' + bad }
+    // 判在任何落盘之前：否则改名会先发生，正文却被拒，目录停在新 id 上。
+    const tooLarge = presetTooLarge(content)
+    if (tooLarge) return tooLarge
     const safeId = String(id ?? '').trim()
     const dir = join(deps.presetsDir, safeId)
     try { await stat(dir) } catch { return { ok: false, error: '预设不存在：' + safeId } }
@@ -617,6 +639,9 @@ export function createPromptsService(_ctx: unknown, deps: PromptsDeps): PromptsS
     const safeId = String(id ?? '').trim()
     const dir = join(deps.presetsDir, safeId)
     try { await stat(dir); return { ok: false, error: 'id 已存在：' + safeId } } catch { /* 不存在，继续 */ }
+    // 判在 mkdir 之前：拒绝时磁盘上不留空目录。
+    const tooLarge = presetTooLarge(content)
+    if (tooLarge) return tooLarge
     await mkdir(dir, { recursive: true })
     await writeFileAtomically(join(dir, FILENAME), String(content ?? ''))
     await writeDescription(safeId, description)
