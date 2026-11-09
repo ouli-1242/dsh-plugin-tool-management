@@ -15,6 +15,7 @@ import { DEFAULT_EVOLUTION_SETTINGS, workspaceHashOf } from '../lib/evolution/co
 import { createEvolutionState } from '../lib/evolution/state.js'
 import { createLearner, pickField } from '../lib/evolution/write.js'
 import { layerOfGroup } from '../lib/memories/constants.js'
+import { buildCatalog } from '../lib/memories/catalog.js'
 
 const HUB = 'tool-management'
 const WS_KEY = 'D:/work/demo'
@@ -252,6 +253,37 @@ test('supersede：同 key 但说的不是一回事 → 旧的标 superseded，�
   } finally { h.done() }
 })
 
+test('approve：候选 → 生效，四处一起改（文件 / state / 索引 / catalog）', async () => {
+  const h = harness()
+  try {
+    // 模型推断只能进候选（不注入）—— 这是九道门里最重要的一条保守策略
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'model_inference' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    assert.equal(r.status, 'candidate')
+    assert.ok(r.needsReview, '候选必须带上"为什么待确认"')
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'candidate')
+    assert.equal(h.readCatalog().entries[r.id].status, 'candidate', '候选不该被注入')
+
+    const ok = await h.learner.approve(r.id)
+    assert.equal(ok.ok, true, ok.error)
+    assert.equal(ok.status, 'active')
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
+    assert.equal(h.readState().entries[r.id].needsReview, undefined, '确认过就不该再挂"待确认"')
+    assert.equal(h.readIndex().rules[r.id].enabled, true)
+    assert.equal(h.readCatalog().entries[r.id].status, 'active', 'catalog 不跟着改 = 确认了还是不注入')
+
+    // 已归档 / 已取代的不许"确认复活"（那会绕过墓碑）
+    await h.learner.forget(r.id, { actor: 'user' })
+    const again = await h.learner.approve(r.id)
+    assert.equal(again.ok, false)
+    assert.equal(again.code, 'not-pending')
+  } finally { h.done() }
+})
+
 test('forget：正文交给回收站、条目从 state 消失、索引停用、墓碑落盘', async () => {
   const h = harness()
   try {
@@ -273,6 +305,11 @@ test('forget：正文交给回收站、条目从 state 消失、索引停用、�
     assert.equal(tomb.length, 1)
     assert.equal(tomb[0].key, 'commit-lang')
     assert.ok(Date.parse(tomb[0].until) > Date.now() + 20 * 86400_000, '墓碑至少留 20 天以上')
+
+    // 最要命的一条：正文如果还写着 active，下一次**全量重建**（启动 / 任何记忆写都会跑）
+    // 就会把它原样复活，用户看到"删了又回来"且没有任何提示。
+    const rebuilt = await buildCatalog(h.memoriesRoot, h.readIndex())
+    assert.equal(rebuilt.entries[r.id].status, 'archived')
   } finally { h.done() }
 })
 

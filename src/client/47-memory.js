@@ -725,6 +725,194 @@
             }).catch(function (e) { setExportState({ busy: false, result: { ok: false, text: errMsg(e) } }) })
           }
 
+          // ── 主动记忆（agent 自己学的那一半）──────────────────────────────────
+          // 两条 op 分工：`evolution-status` 给三级开关 + 计数（卡片要），`evolution-list`
+          // 给具体条目（列表要）。不合成一条：卡片每次刷新都要读，而条目会越攒越多。
+          var evs = React.useState({ loading: true, status: null, entries: [], error: null })
+          var evo = evs[0], setEvo = evs[1]
+          var evb = React.useState(false)
+          var evoBusy = evb[0], setEvoBusy = evb[1]
+
+          /**
+           * 当前**对话**的会话 id。
+           *
+           * 不是下拉框选中的那一层（`scopeState.sessionId`）—— 那一层是"本页在编辑谁"，
+           * 而开关卡回答的是"我现在到底开没开"。两者混用会出现"我给自己开了，结果改的是
+           * 另一个对话"。
+           */
+          function evoSessionId() {
+            try { return String((scopeDeps.currentSessionId && scopeDeps.currentSessionId()) || '') } catch (e) { return '' }
+          }
+
+          function refreshEvolution() {
+            var sid = evoSessionId()
+            var args = sid === '' ? {} : { sessionId: sid }
+            Promise.all([apiCall('evolution-status', args), apiCall('evolution-list', {})])
+              .then(function (out) {
+                var st = out[0] || null
+                var ls = out[1] || null
+                var err = null
+                if (st && st.ok === false) err = translateError(t, st)
+                else if (ls && ls.ok === false) err = translateError(t, ls)
+                setEvo({
+                  loading: false,
+                  status: st && st.ok !== false ? st : null,
+                  entries: ls && ls.ok !== false ? (ls.entries || []) : [],
+                  error: err,
+                })
+              })
+              .catch(function (e) { setEvo({ loading: false, status: null, entries: [], error: errMsg(e) }) })
+          }
+          // 跟着「当前对话」重取，不跟「选中层」：切对话时这张卡必须跟着变。
+          React.useEffect(function () { refreshEvolution() }, [scopeState.currentSessionId])
+
+          /** value：`true` / `false` / `null`（= 继承上一级）。 */
+          function setEvolutionScope(scope, value) {
+            var sid = evoSessionId()
+            if (scope !== 'global' && sid === '') { setResult({ ok: false, text: t('evo.need.session') }); return }
+            setEvoBusy(true)
+            var args = { scope: scope }
+            if (value === null) args.inherit = true
+            else args.enabled = value
+            if (sid !== '') args.sessionId = sid
+            apiCall('evolution-toggle', args).then(function (res) {
+              setEvoBusy(false)
+              if (res && res.ok !== false) { setResult({ ok: true, text: t('evo.saved') }); refreshEvolution() }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
+          function approveEvolution(id) {
+            setEvoBusy(true)
+            apiCall('evolution-approve', { id: id }).then(function (res) {
+              setEvoBusy(false)
+              if (res && res.ok !== false) { setResult({ ok: true, text: t('evo.approved') }); refreshEvolution() }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
+          function forgetEvolution(id) {
+            setEvoBusy(true)
+            apiCall('evolution-forget', { id: id, actor: 'user' }).then(function (res) {
+              setEvoBusy(false)
+              setModal(null)
+              if (res && res.ok !== false) { setResult({ ok: true, text: t('evo.forgotten') }); refreshEvolution() }
+              else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setEvoBusy(false); setModal(null); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
+          /** 三级里的一行：分段控件 [继承][开][关]。全局那行没有「继承」。 */
+          function renderEvoScopeRow(scope, label, defined, value, inherited) {
+            var effective = defined ? value === true : inherited === true
+            function seg(key, text, active, onClick) {
+              return React.createElement('button', {
+                key: key, type: 'button', 'aria-pressed': active === true,
+                disabled: evoBusy,
+                onClick: onClick,
+              }, text)
+            }
+            return React.createElement('div', { key: 'sc:' + scope, className: 'dsm-evo-scope' },
+              React.createElement('span', { className: 'dsm-evo-scope-name' }, label),
+              React.createElement('div', { className: 'dsm-form-seg', role: 'group', 'aria-label': label },
+                scope === 'global' ? null : seg('inh', t('evo.inherit'), !defined, function () { setEvolutionScope(scope, null) }),
+                seg('on', t('evo.on'), defined ? value === true : false, function () { setEvolutionScope(scope, true) }),
+                seg('off', t('evo.off'), defined ? value === false : false, function () { setEvolutionScope(scope, false) })),
+              React.createElement('span', { className: 'dsm-evo-scope-state' + (effective ? ' dsm-evo-on' : '') }, effective ? t('evo.state.on') : t('evo.state.off')))
+          }
+
+          function renderEvolutionRow(e) {
+            var statusKey = e.status === 'core' ? 'evo.tag.core'
+              : e.status === 'active' ? 'evo.tag.active'
+                : e.status === 'superseded' ? 'evo.tag.superseded'
+                  : e.status === 'archived' ? 'evo.tag.archived'
+                    : 'evo.tag.candidate'
+            var tone = e.status === 'core' || e.status === 'active' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
+            var pending = e.status === 'candidate' || typeof e.needsReview === 'string'
+            var metaBits = [
+              t('evo.layer.' + e.layer),
+              t('evo.confidence', { value: Math.round((Number(e.confidence) || 0) * 100) }),
+              t('evo.tokens', { count: Number(e.tokens) || 0 }),
+            ]
+            if (e.needsReview) metaBits.push(String(e.needsReview))
+            return React.createElement(ListRow, {
+              key: e.id,
+              dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: t(statusKey) })],
+              name: e.oneLine || e.id,
+              tag: React.createElement(StatusTag, { tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : undefined, text: t(statusKey) }),
+              meta: metaBits.join(' · '),
+              side: pending
+                ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
+                : null,
+              actions: [React.createElement(RowMenu, {
+                key: 'menu',
+                label: t('evo.menu', { name: e.oneLine || e.id }),
+                items: [
+                  { key: 'approve', label: t('evo.approve'), disabled: evoBusy || !pending, onClick: function () { approveEvolution(e.id) } },
+                  { key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } },
+                ],
+              })],
+            })
+          }
+
+          function renderEvolutionCard() {
+            var st = evo.status
+            var auto = (st && st.auto) || { entries: 0, needsReview: 0, active: 0 }
+            var eff = (st && st.effective) || {}
+            var gOn = !!(st && st.global && st.global.enabled === true)
+            var wsDef = !!(st && st.workspace && st.workspace.defined === true)
+            var wsVal = st && st.workspace && st.workspace.values ? st.workspace.values.enabled : undefined
+            var sesDef = !!(st && st.session && st.session.defined === true)
+            var sesVal = st && st.session && st.session.values ? st.session.values.enabled : undefined
+            var wsEffective = wsDef ? wsVal === true : gOn
+            var sourceKey = 'evo.source.' + (eff.source || 'global')
+            var rows = evo.entries || []
+            var groups = [['session', 'evo.group.session'], ['workspace', 'evo.group.workspace'], ['scene', 'evo.group.scene'], ['global', 'evo.group.global']]
+            var body = [
+              React.createElement('div', { key: 'scopes', className: 'dsm-evo-scopes' },
+                renderEvoScopeRow('global', t('evo.scope.global'), true, gOn, gOn),
+                st && st.workspace ? renderEvoScopeRow('workspace', t('evo.scope.workspace'), wsDef, wsVal, gOn) : null,
+                st && st.session ? renderEvoScopeRow('session', t('evo.scope.session'), sesDef, sesVal, wsEffective) : null),
+              React.createElement('div', { key: 'src', className: 'dsm-evo-foot' },
+                React.createElement('span', { className: 'dsm-help' }, t(sourceKey)),
+                React.createElement('span', { className: 'dsm-help' }, t('evo.stat', {
+                  learned: auto.entries || 0,
+                  active: auto.active || 0,
+                  pending: auto.needsReview || 0,
+                }))),
+              (auto.needsReview || 0) > 0 || rows.length > 0 ? null : React.createElement('p', { key: 'empty', className: 'dsm-help' }, t('evo.empty')),
+              rows.length === 0 ? null : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
+                groups.map(function (g) {
+                  var list = rows.filter(function (e) { return e.layer === g[0] })
+                  if (!list.length) return null
+                  return React.createElement('div', { key: 'g:' + g[0], className: 'dsm-evo-group' },
+                    React.createElement('div', { className: 'dsm-evo-group-head' },
+                      React.createElement('span', { className: 'dsm-evo-group-name' }, t(g[1])),
+                      React.createElement('span', { className: 'dsm-count dsm-count-tight' }, String(list.length))),
+                    list.map(renderEvolutionRow))
+                })),
+            ]
+            // 收着也能看懂"现在开没开"：卡头右侧那颗灯 + 一句话。
+            var overall = eff.enabled === true
+            return React.createElement('div', { key: 'evo', className: 'dsm-source dsm-evo-card' },
+              React.createElement('div', { className: 'dsm-source-head' },
+                React.createElement('div', { className: 'dsm-source-head-main dsm-source-head-stack' },
+                  React.createElement('span', { className: 'dsm-source-head-line' },
+                    React.createElement('span', { className: 'dsm-source-title' }, t('evo.title')),
+                    React.createElement('span', { className: 'dsm-tag' + (overall ? ' dsm-tag-on' : '') }, overall ? t('evo.state.on') : t('evo.state.off'))),
+                  React.createElement('span', { className: 'dsm-source-desc' }, t('evo.desc'))),
+                React.createElement('div', { className: 'dsm-source-actions' },
+                  React.createElement(Switch, {
+                    on: gOn,
+                    disabled: evoBusy,
+                    label: t('evo.title'),
+                    onClick: function () { setEvolutionScope('global', !gOn) },
+                  }))),
+              React.createElement('div', { className: 'dsm-source-body' },
+                evo.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: evo.error }) : null,
+                evo.loading && !st ? React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')) : null,
+                ...body))
+          }
+
           return React.createElement('section', { className: 'dsm-section' },
             // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 回收站；统计内联。
             React.createElement(PageHead, {
@@ -759,6 +947,9 @@
             anyLocked && !scopeIsSession() ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('lock.banner')) : null,
             // 会话层不显示（同 MCP 页）：本层开关写的是会话覆盖，不同步档案。
             (!anyLocked && sceneName && !scopeIsSession()) ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('scene.switch.banner', { scene: sceneName })) : null,
+            // 主动记忆的开关卡与条目列表：放在工具条**之前** —— 下面那条工具条（搜索 +
+            // 场景筛选）管的是"用户自己写的记忆"，两者混在一条里会让人以为搜索能搜到自动条目。
+            renderEvolutionCard(),
             // 工具条（REDESIGN §3.3 + §6 备注，切片四换共享 Toolbar）：搜索 + 场景筛选住 children。
             // batch 槽已空 —— 「全选」上移页头（挨着回收站），预算上移统计格；空槽不传，
             // 免得渲染出一个没有内容的 .dsm-toolbar-batch 把搜索框往里挤。
@@ -790,6 +981,11 @@
               React.createElement('p', { className: 'dsm-help' }, t('memory.delete.desc', { name: modal.rule.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('memory.btn.delete.confirm')))) : null,
+            modal && modal.type === 'evo-delete' ? React.createElement(Modal, { key: 'evodel', className: 'dsm-modal-sm', title: t('evo.forget.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.forget.desc', { name: modal.entry.oneLine || modal.entry.id })),
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: evoBusy, onClick: function () { forgetEvolution(modal.entry.id) } }, t('evo.forget')))) : null,
             modal && modal.type === 'stop' ? React.createElement(Modal, { key: 'mstop', className: 'dsm-modal-sm', title: t('scope.unifiedClose'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('scope.unifiedClose.viewDesc', { name: modal.rule.name || modal.rule.id })),
               React.createElement('div', { className: 'dsm-modal-actions' },

@@ -482,25 +482,28 @@ export function createLearner(deps: LearnDeps) {
   }
 
   /**
-   * 派生数据：把一条卡片改成「不再注入」。
+   * 派生数据：改一条卡片的局部字段。
    *
-   * 为什么 forget / supersede 必须自己改 catalog：注入只读 catalog，而这两条路径都不经过
-   * 记忆域的写漏斗（`refresh()` 才会重建索引）。忘了却不改卡片 = **下一轮还在注入它**，
+   * 为什么 forget / supersede / approve 必须自己改 catalog：注入只读 catalog，而这几条路径
+   * 都不经过记忆域的写漏斗（`refresh()` 才会重建索引）。忘了却不改卡片 = **下一轮还在注入它**，
    * 用户删了个寂寞，还看不出为什么。
    */
-  async function demoteCatalog(id: string, status: 'archived' | 'superseded'): Promise<void> {
+  async function patchCatalogEntry(id: string, patch: Partial<{ status: string; enabled: boolean; confidence: number }>): Promise<void> {
     try {
       const abs = catalogPathOf(deps.stateDir)
       const catalog = normalizeCatalog(JSON.parse(await readFile(abs, 'utf8')))
       const hit = catalog.entries[id]
       if (!hit) return
-      catalog.entries[id] = { ...hit, status, enabled: false }
+      catalog.entries[id] = { ...hit, ...patch }
       catalog.builtAt = new Date().toISOString()
       await writeFileAtomically(abs, JSON.stringify(catalog, null, 2) + '\n', { mode: 0o600 })
     } catch {
       /* 派生数据：改不动就等下一次全量重建校正（服务写路径会重建） */
     }
   }
+
+  const demoteCatalog = (id: string, status: 'archived' | 'superseded'): Promise<void> =>
+    patchCatalogEntry(id, { status, enabled: false })
 
   /** 忘掉一条：正文进回收站，状态转 archived，写墓碑。 */
   async function forget(
@@ -517,8 +520,23 @@ export function createLearner(deps: LearnDeps) {
       const name = id.slice(slash + 1)
       const layer = layerOfGroup(group)
       const entry = st.entries[id]
-      const key = pickField(await safeRead(join(deps.memoriesRoot, group, name + '.md')), 'auto_key')
-      const body = normalizeForCompare(await safeRead(join(deps.memoriesRoot, group, name + '.md')))
+      const docPath = join(deps.memoriesRoot, group, name + '.md')
+      const raw = await safeRead(docPath)
+      const key = pickField(raw, 'auto_key')
+      const body = normalizeForCompare(raw)
+
+      // 先把正文标成 archived，再交给回收站。
+      //
+      // 为什么非改文件不可：注入只读 catalog，但 catalog 会被**全量重建**（启动 / 任何记忆写
+      // 之后），而重建读的是 frontmatter。文件里还写着 `auto_status: active` 的话，删掉的那条
+      // 会在下一次重建时原样复活 —— 用户会看到"删了又回来了"，且中间没有任何提示。
+      // 顺序也重要：先改后搬，搬走了就再也改不到了。
+      if (raw !== '') {
+        await writeFileAtomically(
+          docPath,
+          rewriteFrontmatterFields(raw, { auto_status: 'archived', auto_updated: new Date().toISOString() }),
+        ).catch(() => {})
+      }
 
       // 正文进回收站由调用方给（记忆域已有的 `rules-remove` 那条路，它自己会把文件放进
       // 回收站）；给不了就只标状态、文件留着 —— 少删一次好过悄悄真删。
@@ -554,7 +572,64 @@ export function createLearner(deps: LearnDeps) {
     })
   }
 
-  return { learn, forget }
+  /**
+   * 用户确认一条候选 → active。
+   *
+   * 为什么需要这条：候选**不注入**，而九道门的设计是"模糊就降级"，于是候选一定会积累
+   * （歧义表述、模型推断、程序性记忆全进候选）。没有这条，用户唯一的出路是删掉或者让模型
+   * 再说一遍 —— 前者浪费证据，后者会撞上配额与冲突门。
+   *
+   * 已 superseded / archived 的不许确认：那不是"待确认"，是历史。给它们复活等于绕过墓碑。
+   */
+  async function approve(id: string): Promise<LearnResult> {
+    return deps.withWriteLock(async () => {
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      const slash = id.lastIndexOf('/')
+      if (slash <= 0) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const group = id.slice(0, slash)
+      const name = id.slice(slash + 1)
+      const docPath = join(deps.memoriesRoot, group, name + '.md')
+      let text: string
+      try {
+        text = await readFile(docPath, 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: `not found: ${id}` }
+      }
+      const current = pickField(text, 'auto_status') || 'candidate'
+      if (current === 'superseded' || current === 'archived') {
+        return { ok: false, code: 'not-pending', error: `refused: "${id}" is ${current} — only candidates can be approved.` }
+      }
+      const nowIso = new Date().toISOString()
+      await writeFileAtomically(docPath, rewriteFrontmatterFields(text, { auto_status: 'active', auto_updated: nowIso }))
+
+      const entry = st.entries[id] ?? { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
+      delete entry.needsReview
+      pushTransition(entry, current, 'active', 'user', 'approved in Memory page', Date.parse(nowIso))
+      entry.confidence = confidenceOf(entry.evidence, entry.counters.harmful)
+      st.entries[id] = entry
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+
+      const index = await readIndex(deps.stateDir)
+      index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: true, updatedAt: nowIso }
+      await writeIndex(deps.stateDir, index)
+      await patchCatalogEntry(id, { status: 'active', enabled: true, confidence: entry.confidence })
+      deps.invalidateSnapshot()
+      return {
+        ok: true,
+        id,
+        layer: layerOfGroup(group),
+        status: 'active',
+        confidence: entry.confidence ?? 0,
+        merged: false,
+        supersedes: [],
+      }
+    })
+  }
+
+  return { learn, forget, approve }
 }
 
 /**

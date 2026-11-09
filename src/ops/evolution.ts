@@ -26,6 +26,13 @@ export interface EvolutionOpDeps {
   learner?: Learner
   /** 把一条记忆移进回收站（记忆域的 `rules-remove`）。forget 用它，不自己删文件。 */
   removeMemory?(id: string): Promise<{ ok: boolean; error?: string }>
+  /**
+   * 会话 id → 工作目录。客户端的「本工作区」那一行只知道自己当前是哪个对话，
+   * 不知道 cwd；宿主那边的映射只有装配层有（与 `scope-sessions-list` 同一份）。
+   *
+   * 取不到就当作"没有工作区"：界面少一行工作区开关，好过写错层。
+   */
+  sessionCwd?(sessionId: string): Promise<string | undefined>
   message(e: unknown): string
 }
 
@@ -37,9 +44,17 @@ function layerView(overrides: EvolutionOverrides | undefined) {
 export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: any) => Promise<any>> {
   const { config, runtime, learner, message } = deps
 
-  /** cwd → 工作区身份（与 scope 页同一口径：先向上收敛到 git root）。 */
-  const workspaceOf = (args: any): { scopeKey?: string; cwd?: string; hash?: string } => {
-    const cwd = typeof args?.cwd === 'string' && args.cwd !== '' ? args.cwd : undefined
+  /**
+   * cwd → 工作区身份（与 scope 页同一口径：先向上收敛到 git root）。
+   *
+   * 客户端只给 `sessionId` 时按会话查一次 cwd（`deps.sessionCwd`）—— 界面上「本工作区」
+   * 那颗开关否则永远没有落点。查不到就返回空：宁可少一行开关，也不猜一个工作区。
+   */
+  const workspaceOf = async (args: any): Promise<{ scopeKey?: string; cwd?: string; hash?: string }> => {
+    let cwd = typeof args?.cwd === 'string' && args.cwd !== '' ? args.cwd : undefined
+    if (!cwd && deps.sessionCwd && typeof args?.sessionId === 'string' && args.sessionId !== '') {
+      cwd = await deps.sessionCwd(args.sessionId)
+    }
     if (!cwd) return {}
     const scopeKey = workspaceMemoryKeyOf(cwd)
     if (!scopeKey) return { cwd }
@@ -55,7 +70,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      */
     'evolution-status': async (args: any) => {
       try {
-        const { scopeKey, cwd, hash } = workspaceOf(args)
+        const { scopeKey, cwd, hash } = await workspaceOf(args)
         const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
         const global = await config.readSettings()
         const effective = await config.effective(scopeKey, sessionId)
@@ -85,7 +100,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           workspace: workspaceRecord
             ? { hash, key: workspaceRecord.key, cwd: workspaceRecord.cwd, label: workspaceRecord.label, ...layerView(workspaceRecord.evolution) }
             : hash ? { hash, key: scopeKey, cwd: cwd ?? '', label: '', defined: false, values: {} } : null,
-          session: sessionRecord ? layerView(sessionRecord.evolution) : null,
+          // 会话那一行：**有会话 id 就要给一行**（哪怕还没写过记录）。
+          // 返回 null 会让界面把整行藏掉 —— 用户第一次想给这个对话开开关时，找不到入口。
+          // 工作区那一档就是这么处理的（`defined: false` + 空 values 表示"还没覆盖"）。
+          session: sessionId === ''
+            ? null
+            : (sessionRecord ? layerView(sessionRecord.evolution) : { defined: false, values: {} }),
           defaults: global,
           auto: {
             entries: entries.length,
@@ -137,34 +157,43 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     'evolution-toggle': async (args: any) => {
       try {
         const scope = args?.scope
+        // `inherit: true` = 清掉这一档的覆盖，回到跟上一级走。
+        // 为什么需要它：三级开关是"逐字段覆盖"，没有"清除"这条路的话，用户一旦点过
+        // 工作区那一档就再也回不到"跟随全局" —— 他只能选开或关，而上层改了之后这里不会跟。
+        const inherit = args?.inherit === true
         const enabled = args?.enabled
-        if (typeof enabled !== 'boolean') return { ok: false, error: 'enabled 必须是布尔值', code: 'bad-args' }
+        if (!inherit && typeof enabled !== 'boolean') return { ok: false, error: 'enabled 必须是布尔值', code: 'bad-args' }
         if (scope === 'global') {
+          if (inherit) return { ok: false, error: '全局这一档没有「继承」', code: 'bad-args' }
           const written = await config.writeSettings({ ...(await config.readSettings()), enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
           return { ok: true, scope, enabled }
         }
         if (scope === 'workspace') {
-          const { scopeKey, cwd } = workspaceOf(args)
+          const { scopeKey, cwd } = await workspaceOf(args)
           if (!scopeKey) return { ok: false, error: '拿不到工作区路径，无法保存工作区开关', code: 'no-workspace' }
-          // 保留同一档的其它覆盖字段，只换 enabled。
+          // 保留同一档的其它覆盖字段，只换 enabled（继承 = 整块清空）。
           const workspaces = await config.readWorkspaces()
-          const prev = workspaces.workspaces[workspaceHashOf(scopeKey)]?.evolution ?? {}
-          const written = await config.writeWorkspace(scopeKey, cwd ?? '', typeof args?.label === 'string' ? args.label : '', { ...prev, enabled })
+          const record = workspaces.workspaces[workspaceHashOf(scopeKey)]
+          const prev = record?.evolution ?? {}
+          // 标签沿用已存的那一份：开关请求通常不带 label，覆盖成 '' 会把用户见过的
+          // 工作区名字抹掉（下拉框里就只剩一串路径）。
+          const label = typeof args?.label === 'string' && args.label !== '' ? args.label : (record?.label ?? '')
+          const written = await config.writeWorkspace(scopeKey, cwd ?? '', label, inherit ? {} : { ...prev, enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
-          return { ok: true, scope, enabled, hash: written.hash }
+          return { ok: true, scope, inherit, ...(inherit ? {} : { enabled }), hash: written.hash }
         }
         if (scope === 'session') {
           const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : ''
           if (!sessionId) return { ok: false, error: '拿不到会话 id，无法保存会话开关', code: 'no-session' }
           const sessions = await config.readSessions()
           const prev = sessions.sessions[sessionId]?.evolution ?? {}
-          const written = await config.writeSession(sessionId, { ...prev, enabled })
+          const written = await config.writeSession(sessionId, inherit ? {} : { ...prev, enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
-          return { ok: true, scope, enabled }
+          return { ok: true, scope, inherit, ...(inherit ? {} : { enabled }) }
         }
         return { ok: false, error: 'scope 必须是 global / workspace / session', code: 'bad-args' }
       } catch (e) {
@@ -181,7 +210,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     'evolution-learn': async (args: any) => {
       if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
       try {
-        const { scopeKey, cwd } = workspaceOf(args)
+        const { scopeKey, cwd } = await workspaceOf(args)
         const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
         const cfg = await config.effective(scopeKey, sessionId)
         // 开关：学不学是一道独立的门，与"能不能写"无关。关了就说清为什么，别静默成功。
@@ -236,6 +265,25 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         return result
       } catch (e) {
         return { ok: false, error: message(e), code: 'forget-failed' }
+      }
+    },
+
+    /**
+     * 确认一条候选（记忆页的「确认」）。
+     *
+     * 只做"候选 → 生效"这一件事：换层 / 合并 / 拆条属于 dream 的草案，不走这条。
+     * 候选不注入，所以确认是用户把一条自动记忆真正启用的唯一入口。
+     */
+    'evolution-approve': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '')
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        const result = await learner.approve(id)
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'approve-failed' }
       }
     },
 

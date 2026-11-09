@@ -367,6 +367,8 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   } else {
     evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source: 'model_inference', quote: quote || rawText, at: new Date().toISOString() })
     status = 'candidate'
+    // 候选一定要说清"为什么还得等确认"：界面上只有标签没有理由时，用户只能全信或全删。
+    review = '这是模型自己的推断（不是你的原话），确认后才进上下文'
   }
 
   // ── 门 6：冲突 ──

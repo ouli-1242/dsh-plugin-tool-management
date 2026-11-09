@@ -4374,6 +4374,18 @@ export default {
         const r: any = await memoriesService.ops['rules-remove']({ id })
         return { ok: r?.ok !== false, ...(r?.error ? { error: String(r.error) } : {}) }
       },
+      // 界面的「本工作区」开关只知道自己当前是哪个对话：按会话 id 查一次 cwd。
+      // 与 scope 页同一份来源（`scopeSessionRows`），不另建一套映射 —— 两套迟早分家，
+      // 症状是"下拉框里的工作区"和"记忆写入的工作区"不是同一个。
+      sessionCwd: async (sessionId: string) => {
+        try {
+          const rows = await scopeSessionRows()
+          const hit = rows.find((r) => String(r.id) === sessionId)
+          return hit && typeof hit.cwd === 'string' && hit.cwd !== '' ? hit.cwd : undefined
+        } catch {
+          return undefined
+        }
+      },
       message,
     })
 

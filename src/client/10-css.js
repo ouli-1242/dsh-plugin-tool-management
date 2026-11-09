@@ -161,6 +161,23 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-sources{gap:0}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
+/* ── 主动记忆卡（记忆页顶部）──────────────────────────────────────────────────
+   三段：三级开关（分段控件）/ 来源与统计 / 按层分组的条目。
+   条目沿用 .dsm-listrow（与用户记忆同一个行原语）—— 这里只管分组头与外层间距，
+   不给行另起一套排版，否则同一个页面里两种行的行高不一样。 */
+.dsm-evo-card{margin-bottom:8px}
+.dsm-evo-scopes{display:flex;flex-wrap:wrap;gap:8px 20px;padding:10px 12px 4px}
+.dsm-evo-scope{display:flex;min-width:0;align-items:center;gap:8px}
+.dsm-evo-scope-name{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:16px;white-space:nowrap}
+.dsm-evo-scope-state{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;white-space:nowrap}
+.dsm-evo-scope-state.dsm-evo-on{color:var(--dsw-alias-state-success-primary)}
+.dsm-evo-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 16px;padding:4px 12px 10px}
+.dsm-evo-foot .dsm-help{margin:0}
+.dsm-evo-list{padding:0 0 6px}
+.dsm-evo-group+.dsm-evo-group{margin-top:4px}
+.dsm-evo-group-head{display:flex;align-items:center;gap:6px;padding:6px 12px 2px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-evo-list>.dsm-evo-group:first-child>.dsm-evo-group-head{border-top:0}
+.dsm-evo-group-name{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 /* 中性标签：灰边框 + 主色字（用户 2026-11-06：MCP 的「未运行」不该是红的 —— 没跑起来不是故障）。 */
 .dsm-tag-quiet{border-color:var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}
