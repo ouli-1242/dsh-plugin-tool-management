@@ -196,6 +196,15 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-draft{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;line-height:17px}
 .dsm-evo-draft-id{color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);font-size:12px;word-break:break-all}
 .dsm-evo-draft-reason{flex:1 1 200px;min-width:0;color:var(--dsw-alias-label-secondary)}
+/* 后台复习队列：虚线框与「整理」区别开 —— 那块是用户点出来的建议，这块是后台在跑的状态。 */
+.dsm-evo-queue{display:flex;flex-direction:column;gap:6px;margin:0 12px 10px;padding:8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s)}
+.dsm-evo-queue .dsm-help{margin:0}
+.dsm-evo-queue-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-evo-queue-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;line-height:17px}
+.dsm-evo-queue-meta{color:var(--dsw-alias-label-secondary);white-space:nowrap}
+.dsm-evo-queue-reason{flex:1 1 160px;min-width:0;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-evo-queue-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
+.dsm-evo-queue-err{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 /* 中性标签：灰边框 + 主色字（用户 2026-11-06：MCP 的「未运行」不该是红的 —— 没跑起来不是故障）。 */
 .dsm-tag-quiet{border-color:var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}

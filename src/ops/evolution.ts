@@ -11,6 +11,8 @@
 import { workspaceHashOf, type EvolutionConfigStore, type EvolutionOverrides, type EvolutionSettings } from '../evolution/config.js'
 import type { EvolutionRuntime } from '../evolution/runtime.js'
 import type { Learner } from '../evolution/write.js'
+// 只取类型：冷路径在装配层晚于本函数创建，所以拿的是 getter 而不是实例。
+import type { ColdPathHandle } from '../evolution/cold.js'
 import { workspaceMemoryKeyOf } from '../scope/workspace-key.js'
 
 export interface EvolutionOpDeps {
@@ -33,6 +35,14 @@ export interface EvolutionOpDeps {
    * 取不到就当作"没有工作区"：界面少一行工作区开关，好过写错层。
    */
   sessionCwd?(sessionId: string): Promise<string | undefined>
+  /**
+   * 冷路径句柄（后台复习队列）。
+   *
+   * 用 getter 而不是直接传实例：op 表在 `attachColdPath` **之前**装配（op 要能被
+   * 「开关打开」之前就调用，那时光标还没有后台复习）。传 getter 就不会出现
+   * "先建一份空队列、真正跑起来的是另一份"的错位。
+   */
+  cold?(): ColdPathHandle | null
   message(e: unknown): string
 }
 
@@ -367,6 +377,63 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         return result
       } catch (e) {
         return { ok: false, error: message(e), code: 'apply-failed' }
+      }
+    },
+
+    /**
+     * 后台复习队列（只读）。
+     *
+     * 为什么界面需要看这个：复习完全在后台跑，用户唯一的观察窗口就是"学到的条目"。一旦
+     * 整批失败（模型没配、密钥过期、上游 5xx），表现是"开了开关但什么都不学" —— 没有
+     * 这个 op，这个状态和"这几轮确实没什么可记"长得一模一样。
+     *
+     * 只返回非 done 的项：done 的计数在 `stats` 里，条目本身进了记忆库，再列一遍没有意义。
+     */
+    'evolution-queue': async () => {
+      const cold = deps.cold?.()
+      if (!cold) return { ok: false, error: '后台复习尚未接线', code: 'no-cold' }
+      try {
+        const [items, stats] = await Promise.all([cold.queue(), cold.stats()])
+        const order = ['dead', 'failed', 'pending', 'orphan']
+        const rows = items
+          .filter((x) => x.status !== 'done')
+          .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || b.turn - a.turn)
+          .slice(0, 50)
+          .map((x) => ({
+            id: x.id,
+            session: x.session,
+            turn: x.turn,
+            status: x.status,
+            attempts: x.attempts,
+            at: x.at,
+            ...(x.reason !== undefined ? { reason: x.reason } : {}),
+            ...(x.nextAt !== undefined ? { nextAt: x.nextAt } : {}),
+          }))
+        return { ok: true, stats, items: rows }
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'queue-failed' }
+      }
+    },
+
+    /**
+     * 手动重跑复习。
+     *
+     * 带 `id` = 重试那一条（含 dead-letter：这是它唯一的出口）；不带 = 把队列里所有
+     * pending / failed 跑一遍。两者都不改记忆正文本身 —— 真正写库的仍是复习器 + 九道门。
+     */
+    'evolution-replay': async (args: any) => {
+      const cold = deps.cold?.()
+      if (!cold) return { ok: false, error: '后台复习尚未接线', code: 'no-cold' }
+      const id = typeof args?.id === 'string' ? args.id.trim() : ''
+      try {
+        if (id !== '') {
+          const r = await cold.retry(id)
+          if (!r.ok) return { ok: false, error: '队列里没有这一条', code: 'not-found' }
+          return { ok: true, attempted: 1 }
+        }
+        return { ok: true, ...(await cold.replay()) }
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'replay-failed' }
       }
     },
 

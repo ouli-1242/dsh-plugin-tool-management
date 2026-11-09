@@ -10,6 +10,14 @@
 > - **P1 已落地**（`2543c88` 热路径 / `3689629` 界面 / 后续补齐）：九道门、写入管线、
 >   自动段注入、五条工具（`learn` / `forget` / `list(auto)` / `read` / `organize`）、
 >   记忆页开关卡、自动记忆列表、候选确认、时间线、停用/恢复、提升为用户记忆、整理草案。
+> - **P2 已落地**（冷路径）：`digest`（轮内摘要）/ `episodes`（outbox + dead-letter）/
+>   `review`（复习器 + 预算 + 退避）/ `cold`（事件接线）四个模块；`turn/end` 只认
+>   `completed`；同会话串行、不同会话并行；`evolution-queue` / `evolution-replay` 两条
+>   op 与记忆页的「后台复习」三栏（待复习 / 失败 / 无法处理）+ 手动重跑。
+> - **P2 的一处推迟**：`pending.json` 与「待确认」UI 没做。理由：这个队列的生产者是
+>   `dream` 的改写/删除提议（P3）与技能提议（P4），P2 阶段没有任何东西会往里放 ——
+>   先做一份永远是空的文件加一块永远不出现的界面，只会让"待确认"这三个字在用户眼里
+>   失去意义。弱记忆的确认入口不需要它（`candidate` + `evolution-approve` 已经有了）。
 > - 与本文的**五处偏差**，都是实现时才看清的：
 >   1. **catalog 不是纯增量**：`learn` 走增量（`touchCatalog`），但记忆域任何写操作之后
 >      与启动时都做一次全量重建。理由是删除/编辑走的是记忆域的 op，它不知道 catalog 的
@@ -54,12 +62,13 @@
 
 ### P2 冷路径（中大）
 
-- `session/event` 累积 digest；`turn/end` 封存。
-- `episodes/` + `outbox.jsonl` + 幂等重放。
-- 复习器（宿主 llm）+ 严格 JSON + 成本上限（每会话 ≤2 次）。
-- `pending.json` + 待确认 UI + 时间线。
-- `memory_manager_organize`（只出草案）。
-- dead-letter + 失败可见。
+- 已落地：`session/event` 累积 digest；`turn/end` 封存。
+- 已落地：`episodes/` + `outbox.jsonl` + 幂等重放。
+- 已落地：复习器（宿主 llm）+ 严格 JSON + 成本上限（每会话 ≤2 次）。
+- 推迟：`pending.json` + 待确认 UI（推迟到 P3：P2 没有生产者，见上方实施状态）。
+- 已落地：时间线（P1 已落；复习的 `actor` 写作 `learn`）。
+- 已落地：`memory_manager_organize`（只出草案，P1 收尾时落地）。
+- 已落地：dead-letter + 失败可见（`evolution-queue` + 「后台复习」三栏 + 逐条重试）。
 
 **验收：crash 重放 0 重复；模型失败降级不影响会话；复习成本 ≤3%。**
 

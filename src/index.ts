@@ -54,9 +54,13 @@ import {
 import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
 // 主动记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
-import { createEvolutionConfig } from './evolution/config.js'
+import { createEvolutionConfig, workspaceHashOf } from './evolution/config.js'
 // 注入热路径的同步视图（`agent/pre-step` 的 text() 没有 await 的位置）。
 import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
+// 冷路径：轮内摘要 → 回合封存 episode → outbox → 异步复习器（不挡主链）。
+import { attachColdPath } from './evolution/cold.js'
+import { createEpisodeStore } from './evolution/episodes.js'
+import { createReviewBudget, createReviewer } from './evolution/review.js'
 // 真源状态（证据 / 计数器 / 墓碑）：读坏就停写，不静默覆盖。
 import { createEvolutionState } from './evolution/state.js'
 // 写入管线：九道门 + 六步落盘。
@@ -174,7 +178,7 @@ import { defineSubagentManagerListTool, defineSubagentManagerRunTool } from './s
 import { extractExportTurns, serializeTranscript } from './exports/transcript.js'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
-import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { zipSync } from 'fflate'
 
@@ -4369,6 +4373,9 @@ export default {
     // 各建一份会在热更新后出现"工具说开着、op 说关着"的错位。
     // `removeMemory` 复用记忆域已有的删除路径（进回收站 + 清索引），不自己 rm ——
     // 「删除都进回收站」这条 README 承诺没有例外。
+    // 冷路径的句柄：op 表先于 `attachColdPath` 装配（开关打开前界面也要能查队列），
+    // 所以这里先留一个可变槽，装配完再填。op 里拿到的是 getter 的**当前值**。
+    let coldHandle: ReturnType<typeof attachColdPath> | null = null
     const evolutionOpsTable = buildEvolutionOps({
       config: evolutionConfig,
       runtime: evolutionRuntime,
@@ -4389,8 +4396,62 @@ export default {
           return undefined
         }
       },
+      cold: () => coldHandle,
       message,
     })
+
+    // ── 冷路径（P2）：会话事件 → digest → episode → outbox → 复习器 ──────────
+    // 默认**不跑**：每道判断都先看 `enabled`，而它出厂是 false。装上监听但不做事的成本
+    // 只有每条事件一次 switch —— 比"用户打开开关后再热挂监听"可靠得多（后者要求插件
+    // 在运行中重装自己）。
+    const evolutionLog = async (row: Record<string, unknown>): Promise<void> => {
+      try {
+        const dir = hubPath('evolution/logs')
+        await mkdir(dir, { recursive: true })
+        const day = new Date().toISOString().slice(0, 10)
+        await appendFile(`${dir}/cold-${day}.jsonl`, JSON.stringify(row) + '\n', 'utf8')
+      } catch {
+        /* 日志不是真相源：写不进去不该影响任何判断 */
+      }
+    }
+    const episodeStore = createEpisodeStore({ stateDir: memoriesService.autoAccess.stateDir, message })
+    const reviewBudget = createReviewBudget({
+      path: hubPath('evolution/reviews.json'),
+      // 上限从默认配置取；每题的实际值在 review 里按 cfg 再判一次（用户可能调过）。
+      max: 2,
+      message,
+    })
+    const reviewer = createReviewer({
+      llm: (() => {
+        try { return typeof (ctx as any).get === 'function' ? (ctx as any).get('llm') : undefined } catch { return undefined }
+      })(),
+      learner: autoLearner,
+      budget: reviewBudget,
+      catalogLines: async () => {
+        const view = evolutionRuntime.view()
+        return Object.values(view.catalog.entries)
+          .filter((e) => e.enabled && (e.status === 'active' || e.status === 'core'))
+          .sort((a, b) => b.confidence - a.confidence)
+          .map((e) => '[' + e.layer + '] ' + e.oneLine)
+      },
+      log: evolutionLog,
+      message,
+    })
+    const evolutionCold = attachColdPath(ctx as any, {
+      episodes: episodeStore,
+      reviewer,
+      effectiveOf: async (sessionId: string, cwd: string | undefined) => {
+        const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
+        return evolutionConfig.effective(scopeKey, sessionId)
+      },
+      workspaceHashOf: (cwd: string) => {
+        const key = workspaceMemoryKeyOf(cwd)
+        return key ? workspaceHashOf(key) : undefined
+      },
+      log: evolutionLog,
+      message,
+    })
+    coldHandle = evolutionCold
 
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,

@@ -160,6 +160,11 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'evolution-organize': { readonly: true },
   // 应用草案才落盘：合并 / 归档 / 提升，与 learn 同权。
   'evolution-apply-organize': { write: true, frozen: true },
+  // 后台复习队列：读 outbox 与 dead-letter，只读。
+  'evolution-queue': { readonly: true },
+  // 手动重跑会真的写记忆（复习器 + 九道门），所以与 apply-organize 同权：
+  // 这是"补一次学习"，不是"看一眼状态"。
+  'evolution-replay': { write: true, frozen: true },
 
   // ── 记忆与场景域（28：memories 25 + archive-engine 3）──────────────────────
   'rules-list': { readonly: true },

@@ -741,6 +741,9 @@
           var evoCache = evc[0], setEvoCache = evc[1]
           var evoOrgState = React.useState(null)
           var evoOrg = evoOrgState[0], setEvoOrg = evoOrgState[1]
+          // 后台复习队列（待复习 / 失败 / 无法处理）。null = 还没取过或这版没接线。
+          var evq = React.useState(null)
+          var evoQueue = evq[0], setEvoQueue = evq[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -756,10 +759,11 @@
           function refreshEvolution() {
             var sid = evoSessionId()
             var args = sid === '' ? {} : { sessionId: sid }
-            Promise.all([apiCall('evolution-status', args), apiCall('evolution-list', {})])
+            Promise.all([apiCall('evolution-status', args), apiCall('evolution-list', {}), apiCall('evolution-queue', {})])
               .then(function (out) {
                 var st = out[0] || null
                 var ls = out[1] || null
+                var q = out[2] || null
                 var err = null
                 if (st && st.ok === false) err = translateError(t, st)
                 else if (ls && ls.ok === false) err = translateError(t, ls)
@@ -769,6 +773,9 @@
                   entries: ls && ls.ok !== false ? (ls.entries || []) : [],
                   error: err,
                 })
+                // 队列拿不到（这版没接线）就不显示这一块：它回答的是"后台在干什么"，
+                // 不是"学成了什么"，缺了不该让整张卡片报错。
+                setEvoQueue(q && q.ok !== false ? { stats: q.stats || {}, items: q.items || [], error: null } : null)
               })
               .catch(function (e) { setEvo({ loading: false, status: null, entries: [], error: errMsg(e) }) })
           }
@@ -878,6 +885,23 @@
               }
             }).catch(function (e) {
               setEvoOrg(function (cur) { return cur ? Object.assign({}, cur, { busy: false, error: errMsg(e) }) : cur })
+            })
+          }
+
+          /** 手动重跑复习。带 id = 只重试那一条（dead-letter 的唯一出口）；不带 = 整队跑一遍。 */
+          function replayEvolution(id) {
+            setEvoQueue(function (cur) { return cur ? Object.assign({}, cur, { busy: true }) : { stats: {}, items: [], error: null, busy: true } })
+            var args = id ? { id: id } : {}
+            apiCall('evolution-replay', args).then(function (res) {
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: id ? t('evo.queue.retried') : t('evo.queue.done', { attempted: Number(res.attempted) || 0 }) })
+                setEvoCache({})
+                refreshEvolution()
+              } else {
+                setEvoQueue(function (cur) { return cur ? Object.assign({}, cur, { busy: false, error: translateError(t, res) }) : null })
+              }
+            }).catch(function (e) {
+              setEvoQueue(function (cur) { return cur ? Object.assign({}, cur, { busy: false, error: errMsg(e) }) : null })
             })
           }
 
@@ -1003,6 +1027,57 @@
             })
           }
 
+          /**
+           * 后台复习队列。
+           *
+           * 为什么要显示这一块：复习完全在后台跑，用户唯一的观察窗口是"学到的条目"。整批
+           * 失败时（模型没配、密钥过期、上游 5xx）表现就是"开了开关但什么都不学" —— 那和
+           * "这几轮确实没什么可记"长得一模一样。三栏（待复习 / 失败 / 无法处理）把这两种
+           * 情况分开，并且给死信一个手动出口。
+           */
+          function renderEvolutionQueue() {
+            if (!evoQueue) return null
+            var s = evoQueue.stats || {}
+            var pending = Number(s.pending) || 0
+            var failed = Number(s.failed) || 0
+            var dead = Number(s.dead) || 0
+            var items = evoQueue.items || []
+            // 队列空就不占地方：这张卡片已经够长，一行"0 · 0 · 0"只会教用户忽略它。
+            if (pending + failed + dead === 0 && items.length === 0) return null
+            var busy = !!evoQueue.busy
+            var tagOf = {
+              pending: 'dsm-tag',
+              failed: 'dsm-tag dsm-evo-queue-warn',
+              dead: 'dsm-tag dsm-evo-queue-err',
+              orphan: 'dsm-tag',
+            }
+            return React.createElement('div', { key: 'queue', className: 'dsm-evo-queue' },
+              React.createElement('div', { className: 'dsm-evo-queue-head' },
+                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.queue.title')),
+                React.createElement('span', { className: 'dsm-help' }, t('evo.queue.stat', { pending: pending, failed: failed, dead: dead })),
+                React.createElement('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn-quiet',
+                  disabled: busy,
+                  onClick: function () { replayEvolution() },
+                }, busy ? t('evo.queue.busy') : t('evo.queue.now'))),
+              evoQueue.error ? React.createElement(Notice, { kind: 'err', text: evoQueue.error }) : null,
+              React.createElement('p', { className: 'dsm-help' }, t('evo.queue.hint')),
+              items.slice(0, 5).map(function (x) {
+                return React.createElement('div', { key: x.id, className: 'dsm-evo-queue-row', title: x.id },
+                  React.createElement('span', { className: tagOf[x.status] || 'dsm-tag' }, t('evo.queue.status.' + x.status)),
+                  React.createElement('span', { className: 'dsm-evo-queue-meta' }, t('evo.queue.row', { turn: x.turn, attempts: x.attempts })),
+                  x.reason ? React.createElement('span', { className: 'dsm-evo-queue-reason' }, String(x.reason)) : null,
+                  // 待复习的会被自动捞走，不给按钮：多一个"重试"只会让人怀疑它没在跑。
+                  x.status === 'pending' ? null : React.createElement('button', {
+                    type: 'button',
+                    className: 'dsm-btn dsm-btn-quiet',
+                    disabled: busy,
+                    onClick: function () { replayEvolution(x.id) },
+                  }, t('evo.queue.retry')))
+              }))
+          }
+
           function renderEvolutionCard() {
             var st = evo.status
             var auto = (st && st.auto) || { entries: 0, needsReview: 0, active: 0 }
@@ -1038,6 +1113,9 @@
                   onClick: runOrganize,
                 }, evoOrg && evoOrg.busy ? t('evo.organize.scanning') : t('evo.organize'))),
               (auto.needsReview || 0) > 0 || rows.length > 0 ? null : React.createElement('p', { key: 'empty', className: 'dsm-help' }, t('evo.empty')),
+              // 队列放在列表**之前**：它回答"后台在干什么"，是这张卡的时间敏感部分；
+              // 列表是结果，用户来翻的时候不着急。
+              renderEvolutionQueue(),
               rows.length === 0 ? null : React.createElement('div', { key: 'list', className: 'dsm-evo-list' },
                 groups.map(function (g) {
                   var list = rows.filter(function (e) { return e.layer === g[0] })

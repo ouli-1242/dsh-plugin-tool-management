@@ -11,8 +11,9 @@
 //
 // 缓存纪律：
 //   - 只留本会话最近若干条，按字节封顶（长对话不无限占内存）；
-//   - 跳过带 `source.kind` 的 user 消息 —— 那是各插件注入的合成消息（含本插件的
-//     `<system-reminder>`），不是用户原话。模型引用它们不算"用户明说"。
+//   - 只收 `source.kind === 'user'`（或没有 source）的 user 消息 —— 其余 kind 都是各插件
+//     注入的合成消息（`runtime-context` / `tool-registry` / 本插件的 `<system-reminder>`），
+//     不是用户原话。模型引用它们不算"用户明说"。
 //   - 会话结束不主动清（拿不到可靠信号），靠 LRU + TTL 自然淘汰。
 
 /** 单个会话保留多少条用户消息。压缩后更早的原话不在了，模型也不该再引用它。 */
@@ -48,10 +49,25 @@ export function textOfMessage(msg: any): string {
 }
 
 /**
+ * 是不是用户真的说了这句话。
+ *
+ * **`kind === 'user'` 是真人输入**（`MessageSourceMap` 里 `user` 与 `user-rpc` 两种源的
+ * kind 都是 `'user'`），其余非空 kind（`runtime-context` / `tool-registry` /
+ * `working-directory` / 各插件自定义）都是注入的合成消息。早先这里写成"有 kind 就跳过"，
+ * 等于把真人说的话也一起丢了 —— 症状是所有 `user_explicit` 都降级成候选（证据门报
+ * `no-cache`），而开关看起来一切正常。这是本模块最容易写错的一行。
+ */
+export function isGenuineUserMessage(msg: any): boolean {
+  const kind = msg && msg.source && typeof msg.source === 'object' ? msg.source.kind : undefined
+  if (typeof kind !== 'string' || kind === '') return true
+  return kind === 'user'
+}
+
+/**
  * 收下这一步的用户原话。
  *
- * 调用点在 `agent/pre-step` 的监听器里，`decision.messages` 是**本插件追加之前**的那份
- * （`next()` 的返回值），所以这里天然不含 `<system-reminder>` 之外的自家内容。
+ * 调用点在 `session/event` 的 `user/message`（冷路径）与 `agent/pre-step`：前者是落盘
+ * 事件、口径最准；后者带的是"本插件追加之前"的那份（`next()` 的返回值）。
  */
 export function captureUserTexts(sessionId: string, messages: readonly unknown[]): void {
   if (!sessionId) return
@@ -59,9 +75,7 @@ export function captureUserTexts(sessionId: string, messages: readonly unknown[]
   for (const raw of messages) {
     const msg = raw as any
     if (!msg || msg.role !== 'user') continue
-    // 合成消息：各注入插件都带 `source.kind`（本插件的六域同样如此）。
-    const kind = msg.source && typeof msg.source === 'object' ? msg.source.kind : undefined
-    if (typeof kind === 'string' && kind !== '') continue
+    if (!isGenuineUserMessage(msg)) continue
     const text = textOfMessage(msg).trim()
     if (text !== '') collected.push(text)
   }
