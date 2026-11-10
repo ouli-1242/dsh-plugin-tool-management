@@ -354,6 +354,20 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
+      // 参数写错要报错，不能静默降级：`limit` 被夹取、空 `query` / 空 `id` 被当成没传，
+      // 调用方会以为查询按自己的意图跑了。
+      if (args && args.limit !== undefined) {
+        const n = Number(args.limit)
+        if (!Number.isFinite(n) || n < 1 || n > LIST_LIMIT_MAX) {
+          throw new Error('limit must be a number between 1 and ' + LIST_LIMIT_MAX)
+        }
+      }
+      if (args && args.query !== undefined && String(args.query).trim() === '') {
+        throw new Error('query is empty: pass words to search for, or omit it to list the catalog')
+      }
+      if (args && args.id !== undefined && String(args.id).trim() === '') {
+        throw new Error('id is empty: pass a memory id, or omit it to list the catalog')
+      }
       const id = String((args && args.id) || '').trim()
       if (id !== '') return readEntry(id, exec)
       const query = String((args && args.query) || '').trim()
@@ -431,6 +445,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 会话层只改"注入不注入"，不碰索引里那条记录 —— 所以不需要场景档案同步。
       if (sessionOnly) {
         if (!deps.sessionScopeSet) throw new Error('per-conversation switches are unavailable in this host: pass scope="global" to change it for every conversation')
+        // 会话覆盖只对真实存在的记忆有意义：拼错的 id 会静默写一条永远不会生效的覆盖。
+        const read: any = await deps.rulesOps['rules-read']({ id: memory })
+        if (!read || read.ok === false) {
+          throw new Error('no such memory: ' + memory + ' (per-conversation switches only apply to existing memories)')
+        }
         const sc = await deps.sessionScopeSet(exec && exec.agent, 'memory', memory, args.enabled === true)
         if (!sc || sc.ok === false) throw new Error((sc && sc.error) || 'failed to switch this memory here')
         return 'OK: ' + memory + ' now ' + (args.enabled ? 'enabled' : 'disabled') + scopeOnlyNote(deps) +
@@ -582,6 +601,17 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
         const hit = (all.rules || []).find((x: any) => String(x.id) === rawId)
         if (!hit) {
+          // 与 memory_get 同一条回退：裸 id 也可能是笔记 id（`note:` 前缀可省）。
+          if (evo) {
+            let note: any = null
+            try { note = await evo['evolution-read']({ id: rawId, touch: true }) } catch { note = null }
+            if (note && note.ok !== false) {
+              if (!(deps.autoLearnEnabled && deps.autoLearnEnabled(agent))) {
+                throw new Error('autonomous memory is off here, so agent notes cannot be updated. The user can turn it on in Memory → Autonomous memory.')
+              }
+              return updateNote(note, rawId)
+            }
+          }
           const ids: string[] = (all.rules || []).map((x: any) => String(x.id))
           throw new Error('no memory with id "' + rawId + '"' + existingNote(ids, 'memory ids') + '. Pass scope=scene/global/workspace to create a new one.')
         }
@@ -833,6 +863,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const bodyArg = args && String(args.text || '').trim() !== '' ? args.text : args && args.note
       const text = String(bodyArg || '').trim()
       if (text === '') throw new Error('missing argument: text (or note) — the note itself, one sentence.')
+      // 非法 TTL 不能静默落默认值：调用方会以为"30 天后重查"生效了。
+      if (args && args.ttlDays !== undefined) {
+        const ttl = Number(args.ttlDays)
+        if (!Number.isFinite(ttl) || ttl <= 0) throw new Error('ttlDays must be a positive number of days')
+      }
       const quote = String((args && args.quote) || '').trim()
       const payload: any = {
         text,
