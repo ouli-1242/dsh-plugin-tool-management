@@ -1398,7 +1398,7 @@
               pending: auto.pendingReview || 0,
             })
             return React.createElement(Modal, {
-              key: 'evo', className: 'dsm-modal-evo' + (overall ? ' dsm-evo-on' : ''), title: t('evo.title'),
+              key: 'evo', className: 'dsm-modal-evo', title: t('evo.title'),
               closeLabel: t('btn.close'), onClose: function () { setEvoOpen(false) },
             },
               React.createElement('div', { className: 'dsm-evo-modal' },

@@ -166,8 +166,6 @@ button.dsm-qty:disabled{cursor:default}
    弹窗按「学习范围 / 笔记风格 / 学习记录」分组：开关统一右对齐，整理与后台复习同卡展示。 */
 .dsm-evo-head-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 .dsm-modal-evo{width:min(620px,100%)!important}
-/* 开启态只靠边框表达：不写「已开启」，也不给按钮加文字后缀。 */
-.dsm-modal-evo.dsm-evo-on{border-color:var(--dsw-alias-state-success-primary)}
 .dsm-evo-modal{display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow:auto}
 /* 设置行统一两列：左标题 + 说明，右控件固定列。开关不再跟着标签宽度跑。 */
 .dsm-evo-section{display:flex;flex-direction:column;gap:6px}
