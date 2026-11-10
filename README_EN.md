@@ -93,6 +93,16 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 <tr><td><b>Host</b></td><td>Version and capability checks, access token, scope mode, injection switches, model-tool table, sidebar entry, backup cleanup.</td></tr>
 </table>
 
+### Autonomous memory
+
+Off by default. When on, the agent records preferences, facts and corrections worth keeping across conversations — **as pending notes that enter the context only after you confirm them**.
+
+- **Confirm before injection**: new notes wait under "Pending" on the Memory page and cost no context; they become active only when you confirm them.
+- **Two layers only**: global (every project) and this workspace; the workspace card lists only notes from the project this conversation belongs to.
+- **Disable is reversible**: a disabled note stops being injected and moves into an "Archived" section at the bottom of its card; restore it any time. Deleting keeps the wording from being re-learned for 30 days.
+- **Background review and upkeep**: review runs every few turns with a retry entry on failure; maintenance runs at most once a day and only changes status, never deletes files.
+- **Separate storage**: bodies and state live under `evolution/notes/`, apart from hand-written memories; turning the feature off stops injection but leaves the files in place.
+
 ## Let the agent drive it
 
 Six domains, **24 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona.
