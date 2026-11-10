@@ -335,7 +335,7 @@ test('extractJson：整段 / 代码围栏 / 前后带人话', () => {
 test('parseReviewItems：越界字段丢弃，缺 text 整条丢', () => {
   const items = parseReviewItems({
     memories: [
-      { text: ' 用 pnpm ', kind: 'nonsense', source: 'made_up', quote: ' 以后用 pnpm ', layer: 'mars', ttlDays: -3 },
+      { title: ' 包管理器 ', text: ' 用 pnpm ', kind: 'nonsense', source: 'made_up', quote: ' 以后用 pnpm ', layer: 'mars', ttlDays: -3 },
       { text: '', source: 'user_explicit' },
       { kind: 'fact', source: 'user_explicit' },
       { text: '第二条', source: 'tool_verified' },
@@ -345,6 +345,7 @@ test('parseReviewItems：越界字段丢弃，缺 text 整条丢', () => {
   })
   assert.equal(items.length, MAX_ITEMS_PER_REVIEW)
   assert.equal(items[0].text, '用 pnpm')
+  assert.equal(items[0].title, '包管理器', '名称 trim 后保留')
   // 越界的 kind / layer 丢掉，但条目本身保留（一条写错不该让别的白跑）。
   assert.equal('kind' in items[0], false)
   assert.equal('layer' in items[0], false)
@@ -456,7 +457,7 @@ test('reviewer：解析出条目后逐条过 learner，记账一次', async () =
     '```json\n' +
       JSON.stringify({
         memories: [
-          { text: '提交信息用中文', kind: 'preference', source: 'user_explicit', quote: '以后提交信息都写中文', key: 'commit-lang' },
+          { title: '提交语言', text: '提交信息用中文', kind: 'preference', source: 'user_explicit', quote: '以后提交信息都写中文', key: 'commit-lang' },
           { text: '这个项目用 pnpm', source: 'tool_verified' },
         ],
       }) +
@@ -478,6 +479,7 @@ test('reviewer：解析出条目后逐条过 learner，记账一次', async () =
   // 逐条带的上下文必须是这一轮的会话与工作区，否则层级会写错。
   assert.deepEqual(learner.calls[0].scope, { sessionId: 's1', workspaceHash: 'h1' })
   assert.equal(learner.calls[0].req.key, 'commit-lang')
+  assert.equal(learner.calls[0].req.title, '提交语言')
   assert.equal(learner.calls[0].req.quote, '以后提交信息都写中文')
   // 显式配置了 model 时优先（`provider/model` 形态）。
   assert.equal(llm.calls[0].provider, 'p')

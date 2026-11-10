@@ -855,7 +855,7 @@
             setResult(null)
             apiCall('evolution-read', { id: e.id }).then(function (res) {
               if (res && res.ok !== false) {
-                setModal({ type: 'evo-edit', entry: e, body: String(res.body || ''), hash: String(res.hash || ''), busy: false, error: null })
+                setModal({ type: 'evo-edit', entry: e, title: String(res.title || ''), body: String(res.body || ''), hash: String(res.hash || ''), busy: false, error: null })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (err) { setResult({ ok: false, text: errMsg(err) }) })
           }
@@ -870,7 +870,7 @@
             }
             var entry = modal.entry
             setModal(Object.assign({}, modal, { busy: true, error: null }))
-            apiCall('evolution-update', { id: entry.id, text: body, baseHash: modal.hash || '' }).then(function (res) {
+            apiCall('evolution-update', { id: entry.id, title: String(modal.title || '').trim(), text: body, baseHash: modal.hash || '' }).then(function (res) {
               if (res && res.ok !== false) {
                 setModal(null)
                 setResult({ ok: true, text: t('evo.edit.saved') })
@@ -1433,12 +1433,24 @@
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('memory.btn.delete.confirm')))) : null,
             modal && modal.type === 'evo-edit' ? React.createElement(Modal, { key: 'evoedit', title: t('evo.edit.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('evo.edit.hint')),
-              React.createElement('textarea', {
-                className: 'dsm-control dsm-textarea-md',
-                value: modal.body || '',
-                disabled: modal.busy,
-                onChange: function (ev) { setModal(Object.assign({}, modal, { body: ev.target.value, error: null })) },
-              }),
+              React.createElement('div', { className: 'dsm-form' },
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.name')),
+                  React.createElement('input', {
+                    className: 'dsm-control',
+                    value: modal.title || '',
+                    placeholder: t('evo.edit.name.placeholder'),
+                    disabled: modal.busy,
+                    onChange: function (ev) { setModal(Object.assign({}, modal, { title: ev.target.value, error: null })) },
+                  })),
+                React.createElement('label', { className: 'dsm-field' },
+                  React.createElement('span', { className: 'dsm-label' }, t('memory.field.body')),
+                  React.createElement('textarea', {
+                    className: 'dsm-control dsm-textarea-md',
+                    value: modal.body || '',
+                    disabled: modal.busy,
+                    onChange: function (ev) { setModal(Object.assign({}, modal, { body: ev.target.value, error: null })) },
+                  }))),
               modal.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: modal.error }) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: modal.busy, onClick: function () { setModal(null) } }, t('btn.cancel')),

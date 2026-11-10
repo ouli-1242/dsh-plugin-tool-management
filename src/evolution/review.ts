@@ -19,7 +19,7 @@ import { dirname } from 'node:path'
 import { writeFileAtomically } from '../memories/index-io.js'
 import type { Episode } from './digest.js'
 import type { OutboxItem } from './episodes.js'
-import type { Learner } from './write.js'
+import { MAX_AUTO_TITLE, type Learner } from './write.js'
 import { noteStyleGuideOf, type EffectiveEvolutionConfig } from './config.js'
 
 /** 一次复习最多落几条。多了就是在把摘要改写成记忆库，那不是复习。 */
@@ -31,6 +31,8 @@ const REVIEW_TIMEOUT_MS = 45_000
 
 export interface ReviewItem {
   text: string
+  /** 行名 / 注入行的加粗名；缺省时列表按正文首句兜底。 */
+  title?: string
   kind?: 'preference' | 'fact' | 'correction' | 'procedure'
   source: 'user_explicit' | 'user_correction' | 'tool_verified' | 'model_inference'
   quote?: string
@@ -88,6 +90,8 @@ export function parseReviewItems(raw: unknown): ReviewItem[] {
     const source = typeof r.source === 'string' && SOURCES.has(r.source) ? (r.source as ReviewItem['source']) : 'model_inference'
     if (text === '') continue
     const item: ReviewItem = { text, source }
+    const title = typeof r.title === 'string' ? r.title.trim().slice(0, MAX_AUTO_TITLE) : ''
+    if (title !== '') item.title = title
     if (typeof r.kind === 'string' && KINDS.has(r.kind)) item.kind = r.kind as ReviewItem['kind']
     if (typeof r.quote === 'string' && r.quote.trim() !== '') item.quote = r.quote.trim().slice(0, 2000)
     if (typeof r.key === 'string' && r.key.trim() !== '') item.key = r.key.trim().slice(0, 80)
@@ -128,8 +132,9 @@ export const REVIEW_SYSTEM_PROMPT = [
   'For every item, `quote` must be an exact substring of what the user said in this turn. Do not paraphrase it.',
   '`layer`: "global" only when it applies to every project or to the user personally; otherwise "workspace". Omit if unsure.',
   'Write every `text` in the user\'s language, one terse sentence.',
+  'Give every item a short `title` (2-8 words) in the user\'s language; it becomes the row name.',
   'At most 3 items. When in doubt, return fewer — a wrong memory is injected into every later conversation.',
-  'Output strict JSON: {"memories":[{"text":"one sentence","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
+  'Output strict JSON: {"memories":[{"title":"Reply style","text":"one sentence","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
 ].join('\n')
 
 /** 系统提示 + 按需追加的风格行（custom 为空串时不追加）。 */
@@ -301,6 +306,7 @@ export function createReviewer(deps: ReviewDeps): {
           const r = await deps.learner.learn(
             {
               text: item.text,
+              ...(item.title !== undefined ? { title: item.title } : {}),
               ...(item.kind !== undefined ? { kind: item.kind } : {}),
               ...(item.key !== undefined ? { key: item.key } : {}),
               source: item.source,

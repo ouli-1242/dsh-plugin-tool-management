@@ -205,6 +205,37 @@ test('learn：正文 / state / 索引 / catalog 四处一起落，且一律先�
   } finally { h.done() }
 })
 
+test('title：learn 写入 auto_title，catalog 与重建都带上；update 可改可清', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { title: '  包管理器  ', text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_title'), '包管理器', '名称要 trim 后落盘')
+    assert.equal(h.readCatalog().entries[r.id].title, '包管理器')
+    const rebuilt = await buildCatalog(h.memoriesRoot, h.readIndex())
+    assert.equal(rebuilt.entries[r.id].title, '包管理器', 'catalog 重建不能丢名称')
+
+    // 只改正文：名称不动。
+    assert.equal((await h.learner.update(r.id, '这个仓库统一用 pnpm，不要用 npm')).ok, true)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_title'), '包管理器')
+    assert.equal(h.readCatalog().entries[r.id].title, '包管理器')
+
+    // 改名称：文件与 catalog 一起变。
+    assert.equal((await h.learner.update(r.id, '这个仓库统一用 pnpm', '', 'Node 包管理器')).ok, true)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_title'), 'Node 包管理器')
+    assert.equal(h.readCatalog().entries[r.id].title, 'Node 包管理器')
+
+    // 清空名称：字段与 catalog 键都删掉，列表按首句兜底。
+    assert.equal((await h.learner.update(r.id, '这个仓库统一用 pnpm', '', '')).ok, true)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_title'), '')
+    assert.equal('title' in h.readCatalog().entries[r.id], false)
+  } finally { h.done() }
+})
+
 test('autoActive：工作区 + 用户原话直接生效，且证据不冒充用户批准', async () => {
   const h = harness()
   try {
@@ -327,7 +358,7 @@ test('merge：同 key 且说法几乎一样 → 只加证据与边界，不新�
     assert.equal(first.ok, true, first.error)
 
     const second = await h.learner.learn(
-      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-lang', source: 'tool_verified' },
+      { title: '提交语言', text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-lang', source: 'tool_verified' },
       cfgOf(),
       envOf(),
     )
@@ -338,6 +369,8 @@ test('merge：同 key 且说法几乎一样 → 只加证据与边界，不新�
     assert.deepEqual(h.docs(), [first.id], '目录里只该有一个文件')
     const doc = h.readDoc(first.id)
     assert.match(pickField(doc, 'auto_boundary'), /不要写英文/, '新说法要补进边界（用户下次能看见差别）')
+    assert.equal(pickField(doc, 'auto_title'), '提交语言', '合并时给旧条目补上名称')
+    assert.equal(h.readCatalog().entries[first.id].title, '提交语言')
     assert.equal(h.readState().entries[first.id].evidence.length, 2, '两次说法 = 两条证据')
   } finally { h.done() }
 })

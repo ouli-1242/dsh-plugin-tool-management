@@ -41,6 +41,8 @@ import {
 
 /** 一条自动记忆的正文上限（字符）。超过说明它该是一份文档或一个技能，不是一条记忆。 */
 export const MAX_AUTO_TEXT = 400
+/** 名称上限：列表一行要放得下，注入行也会加粗它。 */
+export const MAX_AUTO_TITLE = 40
 /** 描述上限（与 `MAX_DESCRIPTION_LENGTH` 一致，但这里更紧：注入只显示一行）。 */
 export const MAX_AUTO_DESCRIPTION = 200
 /** `boundary` 上限：合并时会追加，靠它兜住长度。 */
@@ -48,6 +50,8 @@ const MAX_BOUNDARY = 500
 
 export interface LearnRequest {
   text: string
+  /** 展示名：记忆页的行名，注入行也会用它加粗。缺省时列表按正文首句兜底。 */
+  title?: string
   kind?: AutoKind
   key?: string
   source: EvidenceSource
@@ -179,6 +183,11 @@ export function describeOf(text: string, explicit?: string): string {
   const cut = String(text ?? '').split(/[。\n]/, 1)[0]?.trim() ?? ''
   const base = cut === '' ? String(text ?? '').trim() : cut
   return base.slice(0, MAX_AUTO_DESCRIPTION)
+}
+
+/** 名称：显式给的优先，空白视为没有。 */
+export function titleOf(title: string | undefined): string {
+  return String(title ?? '').trim().slice(0, MAX_AUTO_TITLE)
 }
 
 const cjkOrWord = (s: string): boolean => /\p{L}/u.test(s)
@@ -398,7 +407,7 @@ export function createLearner(deps: LearnDeps) {
 
     // ── 合并：同 key 同义 → 追加边界与证据，不新建 ──
     if (pass.mergeInto) {
-      const merged = await mergeInto(pass, pass.mergeInto, st, nowIso, env)
+      const merged = await mergeInto(pass, pass.mergeInto, st, nowIso, env, req)
       if (merged) return merged
       // 合并失败（文件被删 / 读不动）→ 落到下面的新建路径，别把这次学习丢掉。
     }
@@ -415,8 +424,10 @@ export function createLearner(deps: LearnDeps) {
 
     // ── ① 正文 ──
     const ttl = ttlDaysOf(pass.kind, req.ttlDays)
+    const title = titleOf(req.title)
     const fields: Record<string, string | boolean> = {
       name,
+      ...(title !== '' ? { auto_title: title } : {}),
       description: describeOf(pass.text, req.description),
       origin: 'auto',
       auto_kind: pass.kind,
@@ -522,6 +533,7 @@ export function createLearner(deps: LearnDeps) {
     st: EvolutionState,
     nowIso: string,
     env: LearnEnv,
+    req: LearnRequest,
   ): Promise<LearnResult | null> {
     const slash = targetId.lastIndexOf('/')
     if (slash <= 0) return null
@@ -557,11 +569,15 @@ export function createLearner(deps: LearnDeps) {
     // 合并后的这条就该生效（否则「批准了却还是候选」又是一次静默失效）。
     const current = pickField(existing, 'auto_status') || 'candidate'
     const nextStatus = (pass.approved || pass.autoActive) ? 'active' : current
+    // 旧条目可能还没有名称：合并时顺手补上，之后列表与注入行都能用。
+    const prevTitle = pickField(existing, 'auto_title')
+    const nextTitle = prevTitle !== '' ? prevTitle : titleOf(req.title)
     const merged = rewriteFrontmatterFields(
       existing,
       {
         auto_status: nextStatus,
         auto_updated: nowIso,
+        ...(nextTitle !== prevTitle ? { auto_title: nextTitle } : {}),
         ...(nextBoundary !== prevBoundary ? { auto_boundary: nextBoundary } : {}),
       },
     )
@@ -600,7 +616,7 @@ export function createLearner(deps: LearnDeps) {
     const written = await state.write(st)
     if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
-    await touchCatalog(targetId, pass, name, {} as LearnRequest, nowIso, entry.confidence ?? pass.confidence, nextStatus).catch(() => {})
+    await touchCatalog(targetId, pass, name, req, nowIso, entry.confidence ?? pass.confidence, nextStatus).catch(() => {})
     deps.invalidateSnapshot()
     return {
       ok: true,
@@ -669,9 +685,9 @@ export function createLearner(deps: LearnDeps) {
       catalog = normalizeCatalog(null)
     }
     const prev = catalog.entries[id]
-    // 合并路径（mergeInto）传的是空的 req：保留原来的摘要与标题，别拿补充语句把它们冲掉。
+    // 合并路径保留原来的摘要与标题；目标还没有标题时，用本次请求补一个。
     const oneLine = prev?.oneLine ?? describeOf(pass.text, req.description)
-    const title = prev?.title ?? ''
+    const title = prev?.title || titleOf(req.title)
     catalog.entries[id] = catalogEntryOf(id, pass.layer, {
       oneLine,
       ...(title !== '' ? { title } : {}),
@@ -704,7 +720,13 @@ export function createLearner(deps: LearnDeps) {
       const catalog = normalizeCatalog(JSON.parse(await readFile(abs, 'utf8')))
       const hit = catalog.entries[id]
       if (!hit) return
-      catalog.entries[id] = { ...hit, ...patch }
+      const next = { ...hit, ...patch }
+      // 空标题 = 删掉这个键（normalizeCatalog 也只在有值时保留），别留一个空串。
+      if (patch.title !== undefined) {
+        if (patch.title === '') delete next.title
+        else next.title = patch.title
+      }
+      catalog.entries[id] = next
       catalog.builtAt = new Date().toISOString()
       await writeFileAtomically(abs, JSON.stringify(catalog, null, 2) + '\n', { mode: 0o600 })
     } catch {
@@ -1074,7 +1096,7 @@ export function createLearner(deps: LearnDeps) {
       // 只动 frontmatter 才保得住。
       const stripped = rewriteFrontmatterFields(text, {
         origin: 'user',
-        auto_status: null, auto_kind: null, auto_key: null, auto_confidence: null,
+        auto_title: null, auto_status: null, auto_kind: null, auto_key: null, auto_confidence: null,
         auto_basis: null, auto_boundary: null, auto_degraded: null, auto_superseded_by: null,
         auto_workspace: null, auto_scene: null, auto_ttl_days: null,
         auto_created: null, auto_updated: null,
@@ -1310,7 +1332,7 @@ export function createLearner(deps: LearnDeps) {
    * 只改正文，不动 id / 层 / 状态 / 证据：用户改的是措辞，不是这条记忆的身份。
    * superseded 拒绝 —— 历史条目改了也不会注入，只会让人以为改动生效。
    */
-  async function update(id: string, text: string, baseHash = ''): Promise<LearnResult> {
+  async function update(id: string, text: string, baseHash = '', title?: string): Promise<LearnResult> {
     return deps.withWriteLock(async () => {
       const split = splitId(id)
       if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
@@ -1334,11 +1356,17 @@ export function createLearner(deps: LearnDeps) {
         return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory; editing it would have no effect.` }
       }
       const oneLine = describeOf(body)
+      // `undefined` = 这次不动名称；空串 = 用户清空了名称（删掉字段，列表按首句兜底）。
+      const nextTitle = title === undefined ? undefined : titleOf(title)
       // description 是 catalog 重建时的一行摘要来源：只改正文不写它，下一次重建就会
       // 把列表与注入行退回到旧说法。
       const next = rewriteFrontmatterFields(
         raw,
-        { description: oneLine, auto_updated: new Date().toISOString() },
+        {
+          description: oneLine,
+          auto_updated: new Date().toISOString(),
+          ...(nextTitle !== undefined ? { auto_title: nextTitle === '' ? null : nextTitle } : {}),
+        },
         body + '\n',
       )
       // 先 bump revision：注入缓存按它失效。state 写失败就整次拒绝，正文一个字不动。
@@ -1356,6 +1384,7 @@ export function createLearner(deps: LearnDeps) {
         hash: createHash('sha256').update(next).digest('hex'),
         mtime: Date.now(),
         size: Buffer.byteLength(next, 'utf8'),
+        ...(nextTitle !== undefined ? { title: nextTitle } : {}),
       })
       deps.invalidateSnapshot()
       return {

@@ -294,6 +294,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         return await learner.preview(
           {
             text: String(args?.text ?? ''),
+            ...(args?.title !== undefined ? { title: args.title } : {}),
             ...(args?.kind !== undefined ? { kind: args.kind } : {}),
             ...(args?.key !== undefined ? { key: args.key } : {}),
             source: args?.source ?? 'model_inference',
@@ -328,6 +329,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const result = await learner.learn(
           {
             text: String(args?.text ?? ''),
+            ...(args?.title !== undefined ? { title: args.title } : {}),
             ...(args?.kind !== undefined ? { kind: args.kind } : {}),
             ...(args?.key !== undefined ? { key: args.key } : {}),
             source: args?.source ?? 'model_inference',
@@ -446,7 +448,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
         const text = typeof args?.text === 'string' ? args.text : ''
         const baseHash = typeof args?.baseHash === 'string' ? args.baseHash : ''
-        const result = await learner.update(id, text, baseHash)
+        // 不传 = 不改名称；传空串 = 清空名称（列表按正文首句兜底）。
+        const title = typeof args?.title === 'string' ? args.title : undefined
+        const result = await learner.update(id, text, baseHash, title)
         if (result && result.ok) runtime.invalidate()
         return result
       } catch (e) {

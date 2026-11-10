@@ -495,10 +495,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory. Call only when the user explicitly asks you to remember something, or when they just corrected you and the correction must persist. Do not scan the conversation for memory candidates; a background review covers that. learn: one terse sentence in the user\'s language (<=400 chars). `layer`: global = every project / the user personally; workspace = this project only. Pass it when clear; omit only when unsure (the user is asked). `quote`: the user\'s exact words for user_explicit / user_correction; otherwise use model_inference. Workspace notes backed by the user\'s exact words may go active directly; everything else is confirmed first. forget: only when asked; pass the note id or its unique key.',
+    description: 'Autonomous memory. Call only when the user explicitly asks you to remember something, or when they just corrected you and the correction must persist. Do not scan the conversation for memory candidates; a background review covers that. learn: a short `title` (2-8 words) and one terse sentence in the user\'s language (<=400 chars). `layer`: global = every project / the user personally; workspace = this project only. Pass it when clear; omit only when unsure (the user is asked). `quote`: the user\'s exact words for user_explicit / user_correction; otherwise use model_inference. Workspace notes backed by the user\'s exact words may go active directly; everything else is confirmed first. forget: only when asked; pass the note id or its unique key.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn (default) or forget.' },
       // ── learn ──
+      title: { type: 'string', description: 'learn: a short name for the row (2-8 words, <=40 chars), in the user\'s language.' },
       text: { type: 'string', description: 'learn: one terse sentence (<=400 chars), in the user\'s language.' },
       kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: optional; inferred from the text.' },
       source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it; default model_inference.' },
@@ -559,7 +560,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         // 默认按"模型推断"起步：说这是用户明说的却不给引句，证据门会降级 —— 但先如实默认更省一次往返。
         source: (args && args.source) || 'model_inference',
       }
-      for (const key of ['kind', 'quote', 'key', 'boundary', 'layer', 'ttlDays'] as const) {
+      for (const key of ['title', 'kind', 'quote', 'key', 'boundary', 'layer', 'ttlDays'] as const) {
         if (args && args[key] !== undefined && args[key] !== '') payload[key] = args[key]
       }
       if (identity?.sessionId) payload.sessionId = identity.sessionId
