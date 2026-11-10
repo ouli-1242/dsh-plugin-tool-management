@@ -336,7 +336,7 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     return reject(
       'scope',
       'not recorded: no autonomous-memory layer is available here. Global memory is off and this conversation has no workspace path — turn on a layer in the autonomous-memory settings, or open the project from a folder.',
-      '范围门拒绝：没有可用的自动记忆层',
+      '范围门拒绝：没有可用的自主记忆层',
     )
   }
   let layer = routedBy.layer

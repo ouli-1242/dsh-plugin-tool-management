@@ -2524,8 +2524,8 @@ export default {
             { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: (agent) => memoryDomainText(agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // 自动记忆拆成两条独立消息：任何一条新增只让对应层重发；用户记忆的正文
             // 不因自动记忆变化而重载。两层各有一条授权语（见 render-auto 的 AUTO_MEMORY_NOTE）。
-            { key: 'autoGlobal', name: 'tool-management:auto-global', label: '全局自动记忆', form: 'snapshot', text: (agent) => autoDomainText('global', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            { key: 'autoWorkspace', name: 'tool-management:auto-workspace', label: '工作区自动记忆', form: 'snapshot', text: (agent) => autoDomainText('workspace', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            { key: 'autoGlobal', name: 'tool-management:auto-global', label: '全局自主记忆', form: 'snapshot', text: (agent) => autoDomainText('global', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            { key: 'autoWorkspace', name: 'tool-management:auto-workspace', label: '工作区自主记忆', form: 'snapshot', text: (agent) => autoDomainText('workspace', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // `pending`：启动 / 重连窗口里段是空的，但"空"不等于"用户关光了" —— 这一轮沉默，
             // 别先发一条「已清空」再在 server 连上后发一次内容（两次注入，第一次还是假的）。
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent), pending: (agent) => mcp.stateCatalog.pending(agent) },
@@ -2556,8 +2556,8 @@ export default {
             { key: 'prompt', name: 'tool-management:prompt', label: '提示词', form: 'instructions', text: (agent) => memoriesService.promptText(promptScopeOf(agent)), files: (agent) => memoriesService.promptFiles(promptScopeOf(agent)) },
           ],
           settings: () => injectSettingsSync(),
-          // 隔离粒度：注入侧据此在**一条**消息里写一行「设置写在哪一层」。工具 schema 是静态的，
-          // 三档并列写在 `scope` 参数里，模型读不出自己处在哪一档（见 `scopeLineOf`）。
+          // 隔离粒度：注入侧据此在**一条**消息里写一行「设置写在哪一层」。只在作用域跨出
+          // 当前对话（工作区 / 全局）时发；默认会话档不写，那句与工具参数重复（见 `scopeLineOf`）。
           scopeMode: () => scopeMode(),
           // 工具表开关：`how` 行里点名工具的那几句要跟着它换话术（关掉的不点名）。
           hiddenTools: injectHiddenToolsFor,

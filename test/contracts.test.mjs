@@ -26,6 +26,7 @@ import {
   isSubagentSession,
   normalizeInjectSettings,
   renderDomainText,
+  scopeLineOf,
   selectInjections,
   shouldAnnounceCleared,
   subagentDepthOf,
@@ -5630,4 +5631,11 @@ test('技能清单按查看方那一层收紧：别个会话开着的那条不�
   // 没有会话层（全局层读）→ 机器级那份照旧，两条都还在。
   const global = narrowToSession(candidates, { skill: () => undefined, source: () => undefined })
   assert.deepEqual(global.map((c) => c.invocation.userInvocable), [true, true, true])
+})
+
+test('设置作用域行：会话档不发（与工具默认值重复），工作区 / 全局保留', () => {
+  assert.equal(scopeLineOf('session'), undefined)
+  assert.equal(scopeLineOf(undefined), undefined)
+  assert.match(scopeLineOf('workspace') ?? '', /every conversation in this workspace/)
+  assert.match(scopeLineOf('global') ?? '', /machine-wide/)
 })

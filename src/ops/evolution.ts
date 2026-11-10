@@ -275,7 +275,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * 要不要弹卡（门禁拒绝、与用户记忆冲突、锁定目标都不弹）。
      */
     'evolution-preview': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const { scopeKey } = await workspaceOf(args)
         const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
@@ -308,7 +308,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     'evolution-learn': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const { scopeKey, cwd } = await workspaceOf(args)
         const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
@@ -358,7 +358,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
 
     /** 忘掉一条：正文进回收站，写墓碑（30 天内自动路径不能复活）。 */
     'evolution-forget': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
@@ -388,7 +388,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * 候选不注入，所以确认是用户把一条自动记忆真正启用的唯一入口。
      */
     'evolution-approve': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
@@ -407,7 +407,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * 用户点「停用」时想的是"别再拿它烦我"，不是"永远别让我看见"。
      */
     'evolution-set-status': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
@@ -431,7 +431,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * 自主记忆不绑场景，场景锁定不该挡住它。
      */
     'evolution-update': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
@@ -452,7 +452,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * 完全不同，不能靠一个 op 猜。
      */
     'evolution-restore': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const trashId = String(args?.trashId ?? '')
         if (trashId === '') return { ok: false, error: 'missing trashId', code: 'bad-args' }
@@ -466,7 +466,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
 
     /** 永久删除回收站里的自动记忆：写墓碑、清 state、删正文与回收站副本。 */
     'evolution-trash-remove': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const trashId = String(args?.trashId ?? '')
         if (trashId === '') return { ok: false, error: 'missing trashId', code: 'bad-args' }
@@ -480,7 +480,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
 
     /** 提升为用户记忆：从自动段移出，进用户记忆的注入与预算。 */
     'evolution-promote': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
@@ -494,7 +494,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
 
     /** 读一条自动记忆的详情（界面展开 / `memory_manager_read` 兜底）。 */
     'evolution-read': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
@@ -514,7 +514,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * 服务端不靠"再算一遍碰运气"，而是按回传的 ids 直接执行并逐条校验。
      */
     'evolution-organize': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const scope = args?.scope === 'all' ? 'all' : args?.scope === 'global' ? 'global' : 'workspace'
         return await learner.organize(scope)
@@ -525,7 +525,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
 
     /** 应用一条草案（用户点过「应用」才会到这里）。 */
     'evolution-apply-organize': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const result = await learner.applyOrganize({
           action: args?.action,

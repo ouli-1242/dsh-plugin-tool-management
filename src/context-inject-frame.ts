@@ -447,18 +447,16 @@ export interface RenderedDomain {
 /**
  * 「设置作用域」那一行：把**当前隔离粒度**说给模型听。
  *
- * 为什么需要它：工具 schema 是静态的，`scope` 参数的说明只能把三档并列写一遍
- * （"this conversation; its whole workspace under workspace isolation; machine-wide once
- * isolation is off"）—— 于是模型读完仍不知道自己处在哪一档，用户问「这个开关影响谁」
- * 时只能把那句并列再念一遍。这一行把三选一收成一档（≈7–13 tok/轮，只挂一条消息）。
+ * 只在作用域**跨出当前对话**时发：会话档下这句和工具参数的默认值完全重复，注入本身
+ * 也只到当前对话，写出来是白付 token。工作区 / 全局两档说明的是"这次改动会影响本工作区
+ * 的其它对话 / 整台机器"，模型从静态 schema 读不出来，保留。
  *
  * 为什么是**状态**而不是指令：它说的是"此刻设置写在哪一层"，正是注入通道该讲的东西；
  * 动作（"改会话就传 scope=session"）已经在工具参数里，这里不重复。
  *
- * `undefined` = 粒度读不到：整句不发，宁可少一句，也不发一句猜的。
+ * `undefined` = 粒度读不到或就是默认会话档：整句不发，宁可少一句，也不发一句猜的。
  */
 export function scopeLineOf(mode: 'global' | 'session' | 'workspace' | undefined): string | undefined {
-  if (mode === 'session') return 'Settings scope: this conversation only.'
   if (mode === 'workspace') return 'Settings scope: shared by every conversation in this workspace.'
   if (mode === 'global') return 'Settings scope: machine-wide, shared by every conversation (isolation off).'
   return undefined
