@@ -708,6 +708,10 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         // 模型看到的最新消息仍是「不再发送」，而内容其实已经回来了。通知不是内容 —— 必须重发。
         // 增量域在 `plan.kind !== 'none'` 时**不能**跳过：账本失效意味着模型手里的链不完整，
         // 哪怕正文指纹相同也要重发整块（首次 / 重启 / 压缩后的回退）。
+        // 框架（含作用域行）变了而正文也刚好变了：差集只带条目，带不上框架句。若这时发差集，
+        // 又把新框架指纹写进 `source.frame`，下一步就会判"没变"，那句新框架永远到不了模型。
+        // 所以框架一变就回全量，让新框架跟着整块走。
+        const frameChanged = current !== undefined && current.frame !== rendered.frameKey
         const unchanged = (plan === undefined || plan.kind === 'none')
           && current !== undefined
           && current.cleared !== true
@@ -718,8 +722,9 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         let text = rendered.text
         let displayText = section.text
         let body = rendered.body
+        const sendDelta = plan?.kind === 'delta' && !frameChanged
         let isDelta = false
-        if (plan?.kind === 'delta') {
+        if (sendDelta) {
           // 差集正文进 content 与 `source.sections`；`source.body` 仍是全量（宿主去重与
           // 下一次差集都靠它），框架指纹也沿用全量那一份。
           const deltaRendered = renderDomainText({ ...section, text: plan.text, delta: true }, toolHidden, replacing)
@@ -744,7 +749,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
           if (id === undefined) {
             // 宿主没给 id 就无法在下一轮确认这条还在表面里；宁可下一轮回全量。
             incrementalStateMap.delete(section.key)
-          } else if (plan?.kind === 'delta' && state !== undefined) {
+          } else if (sendDelta && state !== undefined && plan !== undefined) {
             state.deltaIds.push(id)
             state.deltaCount += 1
             state.entries = plan.entries

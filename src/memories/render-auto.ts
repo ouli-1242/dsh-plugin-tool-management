@@ -149,7 +149,16 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   const empty: AutoRenderResult = { text: '', body: '', truncated: false, count: 0, tokens: 0, budget: 0, dropped: 0, byLayer: zeroByLayer(), pickedIds: [], picked: [] }
   const total = autoBudgetOf(input.contextWindow)
   const { budget, reduced } = competitorBudgetOfLayer(total, input.userSegmentTokens, layer)
-  if (budget <= 0) return { ...empty, budget: 0, dropped: input.entries.length }
+  if (budget <= 0) {
+    const dropped = input.entries.length
+    if (dropped === 0) return { ...empty, budget: 0 }
+    // 预算归零（手写记忆太大）时也要留一句"笔记没显示"：合并块只在 `truncated` 为真时
+    // 去掉「完整集合」，没有这一句，模型会以为自动笔记本来就不存在。这里不报条数 ——
+    // 这个分支还没按层过滤，`input.entries.length` 会把别的层 / 已停用的条目也算进去。
+    const body = `${TRUNCATION_MARKER} Learned notes are not shown here because the hand-written memories are large; list them with memory_manager_list (auto=true).`
+    const text = body + '\n\n' + AUTO_MEMORY_NOTE_PARTIAL + '\n'
+    return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget: 0, dropped }
+  }
 
   const usable = Math.max(0, budget - OVERHEAD_TOKENS)
   const scope = input.scope
@@ -204,7 +213,11 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
     spent += cost
   }
 
-  if (picked.length === 0) return { ...empty, budget, dropped: candidates.length }
+  if (picked.length === 0) {
+    const body = `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_manager_list (auto=true).`
+    const text = body + '\n\n' + AUTO_MEMORY_NOTE_PARTIAL + '\n'
+    return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget, dropped: candidates.length }
+  }
 
   // 单层内按正文排序：先总则后特例在这里没有意义（层已经分开了），稳定才是第一位的。
   picked.sort((a, b) => a.oneLine.localeCompare(b.oneLine) || a.id.localeCompare(b.id))

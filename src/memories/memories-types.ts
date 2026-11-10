@@ -146,7 +146,7 @@ export interface SceneMemoryProjection {
   /** 因超出预算**未**注入的记忆（确定性顺序；段尾也会列出它们，模型与用户都能看见）。 */
   dropped: Array<{ id: string; scene: string; name: string; bytes: number }>
   /** 实际注入的条目块（顺序与正文一致）；增量注入按 `id` 做差集。 */
-  blocks: Array<{ id: string; scene: string; sceneLabel: string; name: string; description: string; block: string }>
+  blocks: Array<{ id: string; scene: string; group: string; name: string; description: string; block: string }>
 }
 
 /** 当前生效的场景提示词投影（供注入兜底与只读状态展示）。 */

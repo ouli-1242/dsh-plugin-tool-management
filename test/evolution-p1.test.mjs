@@ -521,6 +521,26 @@ test('自动段：条数多时截断并明说（不静默丢）', () => {
   assert.ok(r.tokens <= r.budget, `${r.tokens} > ${r.budget}`)
 })
 
+test('自动段：预算归零 / 一条都放不下时明说未显示，并标 truncated', () => {
+  // 合并块只在 truncated 为真时去掉「完整集合」；这两个早退分支若仍报 false，
+  // 合并后的记忆块会一边省略全部笔记、一边声称"这就是全部"。
+  const zero = renderAutoLayer('global', {
+    entries: [entryOf({ id: 'g/a', oneLine: '一条笔记', estTokens: 100 })],
+    state: emptyState(), scope: {}, userSegmentTokens: 30_000,
+  })
+  assert.equal(zero.truncated, true)
+  assert.match(zero.text, /Learned notes are not shown here/)
+  assert.doesNotMatch(zero.text, /complete set/)
+  // min 档只剩 100 token 可用，一条渲染行就超过它 → picked 为空也要明说。
+  const min = renderAutoLayer('global', {
+    entries: [entryOf({ id: 'g/b', oneLine: 'x'.repeat(400), estTokens: 100 })],
+    state: emptyState(), scope: {}, userSegmentTokens: 10_000,
+  })
+  assert.equal(min.truncated, true)
+  assert.match(min.text, /not shown/)
+  assert.doesNotMatch(min.text, /complete set/)
+})
+
 test('自动段：预算按实际渲染行计（带 key 的加粗前缀不能白送）', () => {
   const entries = Array.from({ length: 40 }, (_, i) => entryOf({
     id: 'g/' + i,

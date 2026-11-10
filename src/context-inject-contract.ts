@@ -162,8 +162,11 @@ export interface InjectSourceFile {
 export interface IncrementalEntry {
   key: string
   text: string
-  /** 分组标签（用户记忆的场景名）；`undefined` = 不分组（自主笔记）。 */
-  scene?: string
+  /**
+   * 分组标题，必须与全量块里的 `##` 标题一致（`Always-on memories` / `Scene: <名>`）。
+   * `undefined` = 自主笔记，差集里归到 `Learned notes` 组。
+   */
+  group?: string
 }
 
 /**

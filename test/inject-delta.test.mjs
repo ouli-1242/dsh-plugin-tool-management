@@ -25,23 +25,23 @@ const stateOf = (entries, opts = {}) => ({
   deltaIds: opts.deltaIds ?? [],
   deltaCount: opts.deltaCount ?? 0,
   truncated: opts.truncated === true,
-  entries: new Map(entries.map((entry) => [entry.key, { text: entry.text, ...(entry.scene !== undefined ? { scene: entry.scene } : {}) }])),
+  entries: new Map(entries.map((entry) => [entry.key, { text: entry.text, ...(entry.group !== undefined ? { group: entry.group } : {}) }])),
 })
 
 const visible = (...ids) => new Set(ids)
 
 test('差集按 key 认身份：新增 / 改正文 / 换场景 / 删除各归各位', () => {
   const previous = new Map([
-    ['a', { text: 'A old', scene: 'one' }],
-    ['b', { text: 'B old', scene: 'one' }],
-    ['c', { text: 'C old', scene: 'one' }],
-    ['d', { text: 'D old', scene: 'one' }],
+    ['a', { text: 'A old', group: 'Scene: one' }],
+    ['b', { text: 'B old', group: 'Scene: one' }],
+    ['c', { text: 'C old', group: 'Scene: one' }],
+    ['d', { text: 'D old', group: 'Scene: one' }],
   ])
   const diff = diffIncremental(previous, [
-    { key: 'a', text: 'A old', scene: 'one' }, // 没变
-    { key: 'b', text: 'B new', scene: 'one' }, // 改正文
-    { key: 'c', text: 'C old', scene: 'two' }, // 换场景
-    { key: 'e', text: 'E new', scene: 'two' }, // 新增
+    { key: 'a', text: 'A old', group: 'Scene: one' }, // 没变
+    { key: 'b', text: 'B new', group: 'Scene: one' }, // 改正文
+    { key: 'c', text: 'C old', group: 'Scene: two' }, // 换场景
+    { key: 'e', text: 'E new', group: 'Scene: two' }, // 新增
   ])
   assert.deepEqual(diff.added.map((entry) => entry.key), ['e'])
   assert.deepEqual(diff.updated.map((entry) => entry.key), ['b', 'c'])
@@ -51,12 +51,16 @@ test('差集按 key 认身份：新增 / 改正文 / 换场景 / 删除各归各
 
 test('差集正文：三类各有标题、按场景分组、删除只留第一行', () => {
   const text = renderIncrementalDelta({
-    added: [{ key: 'a', text: '- **A** — new\n\nsecond line', scene: 'Work' }],
-    updated: [{ key: 'b', text: '- **B** — changed', scene: 'Work' }],
-    removed: [{ key: 'c', text: '- **C** — old body\n\nsecond line', scene: 'Home' }],
+    added: [
+      { key: 'a', text: '- **A** — new\n\nsecond line', group: 'Scene: Work' },
+      { key: 'n', text: '- **Note** — learned' }, // 无分组 = 自主笔记
+    ],
+    updated: [{ key: 'b', text: '- **B** — changed', group: 'Scene: Work' }],
+    removed: [{ key: 'c', text: '- **C** — old body\n\nsecond line', group: 'Scene: Home' }],
   })
   assert.match(text, /only the entries below changed/)
   assert.match(text, /## Added\n\n### Scene: Work\n\n- \*\*A\*\* — new/)
+  assert.match(text, /### Learned notes\n\n- \*\*Note\*\* — learned/)
   assert.match(text, /## Updated\n\n### Scene: Work\n\n- \*\*B\*\* — changed/)
   assert.match(text, /## Removed\n\n### Scene: Home\n\n- \*\*C\*\* — old body\n?$/)
   assert.ok(!/## Removed[\s\S]*second line/.test(text), '删除项不重贴旧正文')

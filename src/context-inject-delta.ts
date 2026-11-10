@@ -5,10 +5,10 @@
 // 改名 / 改正文 / 换场景都是同一条的"更新"，不是删一条再加一条。
 import type { IncrementalEntry, IncrementalSnapshot } from './context-inject-contract.js'
 
-/** 上一次发送时一条条目的样子；`scene` 也参与比较（换场景 = 更新）。 */
+/** 上一次发送时一条条目的样子；`group` 也参与比较（换场景 = 更新）。 */
 export interface IncrementalEntryState {
   text: string
-  scene?: string
+  group?: string
 }
 
 export interface IncrementalDiff {
@@ -28,11 +28,11 @@ export function diffIncremental(
   for (const entry of current) {
     const old = previous.get(entry.key)
     if (old === undefined) added.push(entry)
-    else if (old.text !== entry.text || old.scene !== entry.scene) updated.push(entry)
+    else if (old.text !== entry.text || old.group !== entry.group) updated.push(entry)
   }
   const removed: IncrementalEntry[] = []
   for (const [key, old] of previous) {
-    if (!now.has(key)) removed.push({ key, text: old.text, ...(old.scene !== undefined ? { scene: old.scene } : {}) })
+    if (!now.has(key)) removed.push({ key, text: old.text, ...(old.group !== undefined ? { group: old.group } : {}) })
   }
   return { added, updated, removed }
 }
@@ -55,13 +55,13 @@ function entryTextOf(entry: IncrementalEntry, removed: boolean): string {
   return first === undefined ? text : first.trimEnd()
 }
 
-/** 按场景分组；无场景的条目归在空串组（不写 `### Scene:` 标题）。 */
+/** 按分组标题聚合；无分组的（自主笔记）归在空串组，渲染成 `Learned notes`。 */
 function grouped(entries: readonly IncrementalEntry[]): Map<string, IncrementalEntry[]> {
   const out = new Map<string, IncrementalEntry[]>()
   for (const entry of entries) {
-    const scene = entry.scene ?? ''
-    const list = out.get(scene)
-    if (list === undefined) out.set(scene, [entry])
+    const group = entry.group ?? ''
+    const list = out.get(group)
+    if (list === undefined) out.set(group, [entry])
     else list.push(entry)
   }
   return out
@@ -69,8 +69,10 @@ function grouped(entries: readonly IncrementalEntry[]): Map<string, IncrementalE
 
 function renderGroup(entries: readonly IncrementalEntry[], removed: boolean): string {
   const chunks: string[] = []
-  for (const [scene, list] of grouped(entries)) {
-    if (scene !== '') chunks.push(`### Scene: ${scene}`)
+  for (const [group, list] of grouped(entries)) {
+    // 空串组是自主笔记：全量块里它的标题是 `## Learned notes`，差集沿用同一个名字，
+    // 不能让这些"任何对话都成立"的笔记落进上一条用户记忆的场景标题下。
+    chunks.push(`### ${group === '' ? 'Learned notes' : group}`)
     for (const entry of list) chunks.push(entryTextOf(entry, removed))
   }
   return chunks.join('\n\n')
@@ -126,7 +128,7 @@ export function planIncremental(input: {
   maxDeltas?: number
   maxChanges?: number
 }): IncrementalPlan {
-  const entries = new Map(input.snapshot.entries.map((entry) => [entry.key, { text: entry.text, ...(entry.scene !== undefined ? { scene: entry.scene } : {}) }] as const))
+  const entries = new Map(input.snapshot.entries.map((entry) => [entry.key, { text: entry.text, ...(entry.group !== undefined ? { group: entry.group } : {}) }] as const))
   const mode = input.snapshot.mode
   const state = input.state
   if (state === undefined) return { kind: 'full', mode, entries }

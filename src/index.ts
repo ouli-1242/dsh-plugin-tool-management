@@ -2519,7 +2519,9 @@ export default {
       const auto = autoDomainProjection('global', agent)
       const parts: string[] = []
       if (user.body.trim() !== '') parts.push(user.body.replace(/\s+$/, ''))
-      if (auto.body.trim() !== '') parts.push(auto.body.replace(/\s+$/, ''))
+      // 自主笔记单独起一个 `## Learned notes` 组：用户记忆的最后一个 `## Scene: X` 会一直
+      // 延续到下一个 `##`，不隔开的话这些"任何对话都成立"的笔记会被读成那个场景下的条目。
+      if (auto.body.trim() !== '') parts.push('## Learned notes\n\n' + auto.body.replace(/\s+$/, ''))
       const tail = user.tail.trim()
       const note = user.truncated || auto.truncated ? COMBINED_MEMORY_NOTE_PARTIAL : COMBINED_MEMORY_NOTE
       // 尾注（`## Not injected`）放在最后当附录：夹在用户记忆与全局笔记之间会把后者
@@ -2528,7 +2530,7 @@ export default {
         ? ''
         : [...parts, note, ...(tail === '' ? [] : [tail])].join('\n\n') + '\n'
       const entries: IncrementalSnapshot['entries'] = [
-        ...user.blocks.map((block) => ({ key: 'user:' + block.id, text: block.block, scene: block.sceneLabel })),
+        ...user.blocks.map((block) => ({ key: 'user:' + block.id, text: block.block, group: block.group })),
         ...auto.picked.map((line) => ({ key: 'auto:' + line.id, text: line.line })),
       ]
       return {

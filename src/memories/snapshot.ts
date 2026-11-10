@@ -628,7 +628,8 @@ export function renderSceneMemory(
     blocks: selected.map((c) => ({
       id: c.item.id,
       scene: c.item.scene,
-      sceneLabel: sceneLabelOf(c.item.scene),
+      // 与全量块的 `##` 标题逐字一致：全局桶是 `Always-on memories`，其余是 `Scene: <名>`。
+      group: c.item.scene === GLOBAL_SCENE ? 'Always-on memories' : `Scene: ${sceneLabelOf(c.item.scene)}`,
       name: c.item.name,
       description: c.item.description,
       block: c.block,
