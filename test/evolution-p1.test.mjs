@@ -492,6 +492,18 @@ test('自动段：条数多时截断并明说（不静默丢）', () => {
   assert.ok(r.tokens <= r.budget, `${r.tokens} > ${r.budget}`)
 })
 
+test('自动段：预算按实际渲染行计（带 key 的加粗前缀不能白送）', () => {
+  const entries = Array.from({ length: 40 }, (_, i) => entryOf({
+    id: 'g/' + i,
+    key: 'a-very-long-key-name-' + i,
+    oneLine: 'x',
+    estTokens: 1,
+  }))
+  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 64000 })
+  assert.ok(r.count > 0)
+  assert.ok(r.tokens <= r.budget, `${r.tokens} > ${r.budget}`)
+})
+
 test('自动段：总条数不超过硬顶', () => {
   const entries = Array.from({ length: 200 }, (_, i) => entryOf({ id: 'g/' + i, oneLine: 'x' + i, estTokens: 3, pinned: true }))
   const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 400000 })

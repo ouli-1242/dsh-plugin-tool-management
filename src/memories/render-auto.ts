@@ -179,19 +179,23 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   // 去重指纹跟着变，整段重发）。
   candidates.sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
 
+  // 预算按**实际渲染行**记，不按 oneLine 的 estTokens：行里还有 `- `、加粗的 key 与
+  // procedure 的 id，旧口径会少算，条目一多就超出该层预算。
+  const costOf = (entry: CatalogEntry): number => Math.ceil(Buffer.byteLength(lineOf(entry), 'utf8') / 3)
   const picked: CatalogEntry[] = []
   let l0Count = 0
   let spent = 0
   for (const cand of candidates) {
     if (picked.length >= AUTO_MAX_ENTRIES) break
-    if (spent + cand.entry.estTokens > usable) continue
+    const cost = costOf(cand.entry)
+    if (spent + cost > usable) continue
     if (cand.l0) {
       // L0 常驻：不受层配额限制，只受 L0 条数上限与总盘限制。
       if (l0Count >= AUTO_L0_MAX) continue
       l0Count++
     }
     picked.push(cand.entry)
-    spent += cand.entry.estTokens
+    spent += cost
   }
 
   if (picked.length === 0) return { ...empty, budget, dropped: candidates.length }

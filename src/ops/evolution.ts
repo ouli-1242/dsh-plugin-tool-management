@@ -17,9 +17,14 @@ import type { SweepReport } from '../evolution/maintenance.js'
 import { isInjectableStatus } from '../memories/catalog.js'
 import { workspaceMemoryKeyOf } from '../scope/workspace-key.js'
 
-/** 工作区显示名：取路径最后一段。记录里已有 label 时优先用记录那份。 */
-function workspaceLabelOfCwd(cwd: string): string {
-  const s = String(cwd || '').replace(/[\\/]+$/, '')
+/**
+ * 工作区显示名：取作用域键（`ws:<路径>`）的最后一段。
+ *
+ * 用 key 而不是会话 cwd：`workspaceMemoryKeyOf` 会把子目录收敛到 git 根，从
+ * `repo/src` 启动的会话也该显示 `repo`，不是 `src`。
+ */
+function workspaceLabelOfPath(path: string): string {
+  const s = String(path || '').replace(/^ws:/, '').replace(/[\\/]+$/, '')
   const cut = s.split(/[\\/]/).pop() ?? ''
   return cut === '' ? s : cut
 }
@@ -143,8 +148,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           effective,
           global,
           workspace: workspaceRecord
-            ? { hash, key: workspaceRecord.key, cwd: workspaceRecord.cwd, label: workspaceRecord.label || workspaceLabelOfCwd(workspaceRecord.cwd), ...layerView(workspaceRecord.evolution) }
-            : hash ? { hash, key: scopeKey, cwd: cwd ?? '', label: workspaceLabelOfCwd(cwd ?? ''), defined: false, values: {} } : null,
+            ? { hash, key: workspaceRecord.key, cwd: workspaceRecord.cwd, label: workspaceRecord.label || workspaceLabelOfPath(workspaceRecord.key), ...layerView(workspaceRecord.evolution) }
+            : hash ? { hash, key: scopeKey, cwd: cwd ?? '', label: workspaceLabelOfPath(scopeKey ?? ''), defined: false, values: {} } : null,
           // 会话那一行：**有会话 id 就要给一行**（哪怕还没写过记录）。
           // 返回 null 会让界面把整行藏掉 —— 用户第一次想给这个对话开开关时，找不到入口。
           // 工作区那一档就是这么处理的（`defined: false` + 空 values 表示"还没覆盖"）。
@@ -341,7 +346,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             const hash = workspaceHashOf(scopeKey)
             const prev = workspaces.workspaces[hash]
             if (prev === undefined || prev.cwd !== cwd || prev.label === '') {
-              await config.writeWorkspace(scopeKey, cwd, prev?.label || workspaceLabelOfCwd(cwd), prev?.evolution)
+              await config.writeWorkspace(scopeKey, cwd, prev?.label || workspaceLabelOfPath(scopeKey), prev?.evolution)
             }
           } catch { /* 展示名没写上：下一次学习或拨开关会再试 */ }
         }
@@ -431,7 +436,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
         const text = typeof args?.text === 'string' ? args.text : ''
-        const result = await learner.update(id, text)
+        const baseHash = typeof args?.baseHash === 'string' ? args.baseHash : ''
+        const result = await learner.update(id, text, baseHash)
         if (result && result.ok) runtime.invalidate()
         return result
       } catch (e) {
@@ -646,8 +652,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             tokens: entry.estTokens,
             workspace: entry.workspace,
             ...(wsRecord !== undefined ? {
-              workspaceLabel: typeof wsRecord.label === 'string' ? wsRecord.label : '',
-              workspaceCwd: typeof wsRecord.cwd === 'string' ? wsRecord.cwd : '',
+              workspaceLabel: typeof wsRecord.label === 'string' && wsRecord.label !== ''
+                ? wsRecord.label
+                : workspaceLabelOfPath(wsRecord.key),
             } : {}),
             scene: entry.scene,
             session: entry.session,

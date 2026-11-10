@@ -575,20 +575,35 @@ test('update：只换正文，catalog 摘要跟着变；frontmatter / 状态不�
     )
     assert.equal(r.ok, true, r.error)
     const before = h.readCatalog().entries[r.id]
+    const revisionBefore = h.readState().watermarks.autoRevision ?? 0
 
     const up = await h.learner.update(r.id, '这个仓库统一用 pnpm，不要用 npm')
+    assert.equal(h.readState().watermarks.autoRevision, revisionBefore + 1, '编辑要让注入快照失效')
     assert.equal(up.ok, true, up.error)
     const doc = h.readDoc(r.id)
     assert.match(doc, /统一用 pnpm，不要用 npm/)
     assert.equal(pickField(doc, 'auto_key'), 'package-manager', '编辑不能动 frontmatter 身份')
     assert.equal(pickField(doc, 'auto_status'), 'candidate', '编辑不改状态')
+    assert.equal(pickField(doc, 'description'), '这个仓库统一用 pnpm，不要用 npm', 'description 也要跟着正文走')
     const after = h.readCatalog().entries[r.id]
     assert.equal(after.oneLine, '这个仓库统一用 pnpm，不要用 npm')
     assert.ok(after.estTokens > 0)
     assert.notEqual(after.oneLine, before.oneLine)
+    // catalog 重建后摘要不能退回旧说法（description 已同步）
+    const rebuilt = await buildCatalog(h.memoriesRoot, h.readIndex())
+    assert.equal(rebuilt.entries[r.id].oneLine, '这个仓库统一用 pnpm，不要用 npm')
 
     // 空正文拒绝
     assert.equal((await h.learner.update(r.id, '   ')).ok, false)
+
+    // 并发编辑：带上打开时的指纹，文件已变就拒绝覆盖
+    const detail = await h.learner.describe(r.id)
+    const stale = await h.learner.update(r.id, '另一个窗口写的', 'deadbeef')
+    assert.equal(stale.ok, false)
+    assert.equal(stale.code, 'stale')
+    const fresh = await h.learner.update(r.id, '另一个窗口写的', detail.hash)
+    assert.equal(fresh.ok, true, fresh.error)
+    assert.match(h.readDoc(r.id), /另一个窗口写的/)
   } finally { h.done() }
 })
 

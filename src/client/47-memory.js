@@ -858,7 +858,7 @@
             setResult(null)
             apiCall('evolution-read', { id: e.id }).then(function (res) {
               if (res && res.ok !== false) {
-                setModal({ type: 'evo-edit', entry: e, body: String(res.body || ''), busy: false, error: null })
+                setModal({ type: 'evo-edit', entry: e, body: String(res.body || ''), hash: String(res.hash || ''), busy: false, error: null })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (err) { setResult({ ok: false, text: errMsg(err) }) })
           }
@@ -873,13 +873,16 @@
             }
             var entry = modal.entry
             setModal(Object.assign({}, modal, { busy: true, error: null }))
-            apiCall('evolution-update', { id: entry.id, text: body }).then(function (res) {
+            apiCall('evolution-update', { id: entry.id, text: body, baseHash: modal.hash || '' }).then(function (res) {
               if (res && res.ok !== false) {
                 setModal(null)
                 setResult({ ok: true, text: t('evo.edit.saved') })
                 refreshEvolution()
               } else {
-                setModal(Object.assign({}, modal, { busy: false, error: translateError(t, res) }))
+                setModal(Object.assign({}, modal, {
+                  busy: false,
+                  error: res && res.code === 'stale' ? t('evo.edit.stale') : translateError(t, res),
+                }))
               }
             }).catch(function (err) {
               setModal(Object.assign({}, modal, { busy: false, error: errMsg(err) }))
@@ -1153,7 +1156,7 @@
                 groups.push(group)
               }
               group.rows.push(e)
-              if (group.label === '') group.label = String(e.workspaceLabel || e.workspaceCwd || '')
+              if (group.label === '') group.label = String(e.workspaceLabel || '')
             })
             groups.forEach(function (group) {
               if (group.label === '' && group.hash === currentHash) group.label = currentLabel

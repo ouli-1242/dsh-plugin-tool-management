@@ -1199,6 +1199,8 @@ export function createLearner(deps: LearnDeps) {
       ok: true,
       id,
       layer: split.layer,
+      // 编辑弹窗保存时回传：文件在这期间被别处改过就拒绝覆盖。
+      hash: createHash('sha256').update(text).digest('hex'),
       origin: pickField(text, 'origin') || 'auto',
       // 用户手改过（locked）的条目，自动路径不会改它 —— 读的时候要能看出来。
       status: pickField(text, 'auto_status') || 'active',
@@ -1273,7 +1275,7 @@ export function createLearner(deps: LearnDeps) {
    * 只改正文，不动 id / 层 / 状态 / 证据：用户改的是措辞，不是这条记忆的身份。
    * superseded 拒绝 —— 历史条目改了也不会注入，只会让人以为改动生效。
    */
-  async function update(id: string, text: string): Promise<LearnResult> {
+  async function update(id: string, text: string, baseHash = ''): Promise<LearnResult> {
     return deps.withWriteLock(async () => {
       const split = splitId(id)
       if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
@@ -1287,13 +1289,30 @@ export function createLearner(deps: LearnDeps) {
       } catch {
         return { ok: false, code: 'missing', error: `not found: ${id}` }
       }
+      // 两个窗口同时编辑同一条时，后保存的会静默盖掉先保存的。带上打开弹窗时的
+      // 文件指纹，变了就拒绝并让用户重新加载。
+      if (baseHash !== '' && baseHash !== createHash('sha256').update(raw).digest('hex')) {
+        return { ok: false, code: 'stale', error: 'this note changed elsewhere; reload it before saving' }
+      }
       const current = pickField(raw, 'auto_status') || 'active'
       if (current === 'superseded') {
         return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory; editing it would have no effect.` }
       }
-      const next = rewriteFrontmatterFields(replaceBodyOf(raw, body), { auto_updated: new Date().toISOString() })
-      await writeFileAtomically(docPath, next)
       const oneLine = describeOf(body)
+      // description 是 catalog 重建时的一行摘要来源：只改正文不写它，下一次重建就会
+      // 把列表与注入行退回到旧说法。
+      const next = rewriteFrontmatterFields(
+        raw,
+        { description: oneLine, auto_updated: new Date().toISOString() },
+        body + '\n',
+      )
+      // 先 bump revision：注入缓存按它失效。state 写失败就整次拒绝，正文一个字不动。
+      const bumped = await state.update((st) => {
+        bumpRevision(st)
+        return st.entries[id]?.confidence ?? 0
+      })
+      if (!bumped.ok) return { ok: false, code: 'state-write-failed', error: bumped.error }
+      await writeFileAtomically(docPath, next)
       const bytes = Buffer.byteLength(oneLine, 'utf8')
       await patchCatalogEntry(id, {
         oneLine,
@@ -1303,10 +1322,11 @@ export function createLearner(deps: LearnDeps) {
         mtime: Date.now(),
         size: Buffer.byteLength(next, 'utf8'),
       })
-      const read = await state.read()
-      const confidence = read.ok ? (read.state.entries[id]?.confidence ?? 0) : 0
       deps.invalidateSnapshot()
-      return { ok: true, id, layer: split.layer, status: current, confidence, merged: false, supersedes: [] }
+      return {
+        ok: true, id, layer: split.layer, status: current, confidence: bumped.result,
+        merged: false, supersedes: [],
+      }
     })
   }
 
@@ -1507,17 +1527,6 @@ function bodyOf(text: string): string {
   if (end < 0) return s.trim()
   const nl = s.indexOf('\n', end + 1)
   return nl < 0 ? '' : s.slice(nl + 1).trim()
-}
-
-/** 只换正文，frontmatter 原样保留（编辑不改身份 / 状态 / 证据）。 */
-function replaceBodyOf(text: string, body: string): string {
-  const s = String(text ?? '')
-  if (!s.startsWith('---')) return body + '\n'
-  const end = s.indexOf('\n---', 3)
-  if (end < 0) return body + '\n'
-  const close = s.indexOf('\n', end + 1)
-  if (close < 0) return s + '\n\n' + body + '\n'
-  return s.slice(0, close + 1) + '\n' + body + '\n'
 }
 
 /** 边界追加：已经包含过的不重复加（合并跑两遍不该长出两份）。 */
