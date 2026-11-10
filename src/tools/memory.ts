@@ -38,6 +38,8 @@ export interface MemoryToolDeps extends ToolDomainDeps {
    * 模型会照描述去试，然后拿到一个内部错误）。
    */
   evolutionOps?: Record<string, (args: any) => Promise<any>>
+  /** 能不能列 / 读笔记；与「能不能学」分开（子代理可读不可学）。 */
+  autoNotesReadable?: (agent: unknown) => boolean
   /** 这个 agent 现在能不能主动学（三级开关 + depth + 会话 id 是否可作目录名）。 */
   autoLearnEnabled?: (agent: unknown) => boolean
   /** 当前启用的场景名（写入路由要它判"该不该落场景层"）。 */
@@ -361,7 +363,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const scene = args && typeof args.scene === 'string' && args.scene !== '' ? args.scene : undefined
       // 自主记忆关着时，笔记不在这份清单里出现：功能没开，模型不该看到「有笔记可读」
       // 这种半开状态（直接给 note: id 仍然读得到 —— 那是显式请求）。
-      const notesOn = Boolean(evo && deps.autoLearnEnabled && deps.autoLearnEnabled(exec && exec.agent))
+      const readable = deps.autoNotesReadable ?? deps.autoLearnEnabled
+      const notesOn = Boolean(evo && readable && readable(exec && exec.agent))
       if (kind === 'note' && !notesOn) {
         throw new Error('autonomous memory is off here, so agent notes are not available. The user can turn it on in Memory → Autonomous memory.')
       }

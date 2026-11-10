@@ -2394,6 +2394,25 @@ export default {
     }
 
     /**
+     * 「这个 agent 现在能不能读自主笔记」。
+     *
+     * 读与学分开：子代理不能学（写入会让父子记忆分叉），但应该能读到父会话已经学到的内容。
+     * 作用域归到父会话（`sessionScopeIdOf`），开关仍按生效配置判；取不到身份时按关处理。
+     * 不控制注入：子代理的 learned-notes 段仍为空（见 `autoDomainProjection`）。
+     */
+    function autoNotesReadableFor(agent: unknown): boolean {
+      try {
+        const identity = sessionIdentityOf(agent)
+        if (identity === null) return false
+        const scopeKey = identity.cwd ? workspaceMemoryKeyOf(identity.cwd) : undefined
+        const cfg = evolutionRuntime.effectiveSync(scopeKey, sessionScopeIdOf(agent) ?? identity.sessionId)
+        return cfg.enabled
+      } catch {
+        return false
+      }
+    }
+
+    /**
      * 在对话里问「这条记忆放哪」。
      *
      * 走官方 `ctx.userQuestions.ask`，**不传 `wait.callId`**：我们的工具不是
@@ -5855,6 +5874,8 @@ export default {
       // 工具表是"模型看不看得见"，op 是"调得通调不通"，中间隔着一次模型采样。
       evolutionOps: auditOps(evolutionOpsTable),
       autoLearnEnabled: autoLearnEnabledFor,
+      // 读不要求深度 0：子代理能看到父会话学到的笔记，但不能学、也不自动注入。
+      autoNotesReadable: autoNotesReadableFor,
       // 真实会话身份：层必须用它，不能用作用域键（切粒度会让会话记忆互相串目录）。
       sessionIdentity: (agent: unknown) => sessionIdentityOf(agent),
       // 对话内选层卡片：没有 userQuestions 服务的宿主返回 null，工具退回待确认。
