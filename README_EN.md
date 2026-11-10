@@ -97,14 +97,14 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 
 Off by default. When on, the agent records preferences, facts and corrections worth keeping across conversations — **and asks you in the chat whether to keep each one, and at which scope**.
 
-- **Two independent switches**: global and this workspace can be on together or one at a time; learning and injection both follow them, and the card only lists the layers that are on.
+- **Two independent switches**: global and this workspace can be on together or one at a time; learning and injection both follow them, and the card only lists the layers that are on. On the Memory page they sit right below Global, with workspace notes grouped by workspace name.
 - **Ask in the chat**: when the agent wants to keep something, a card offers global memory / this workspace / not at all. Choosing either scope makes it active immediately — no trip to the Memory page.
 - **Card language and rewording**: the card uses the language of the note body; type your own wording in the card and it goes back to the model to rewrite, then asks you again.
 - **Pending only without a card**: background review and headless sessions still save as pending, which you can confirm on the Memory page.
 - **Two separate injection blocks**: global learned notes and workspace learned notes are injected as their own messages, apart from hand-written memories; adding one note re-sends only its layer.
-- **Disable goes to the recycle bin**: a disabled note stops being injected and moves to the recycle bin on the Memory page, tagged as autonomous; restore or delete it permanently. Deleting keeps the wording from being re-learned for 30 days.
+- **Disable goes to the recycle bin, and rows are editable**: a disabled note stops being injected and moves to the recycle bin on the Memory page, tagged as autonomous; restore or delete it permanently. The row switch matches memories, and the ⋯ menu edits the body. Deleting keeps the wording from being re-learned for 30 days.
 - **Background review and upkeep**: review runs every few turns with a retry entry on failure; maintenance runs at most once a day and only changes status, never deletes files.
-- **Separate storage and tool table**: bodies and state live under `evolution/notes/`, apart from hand-written memories; the autonomous-memory tool is not part of tool-table presets or scenes and follows only the two switches.
+- **Separate storage and tool table**: bodies and state live under `evolution/notes/`, apart from hand-written memories; the autonomous-memory tool does not appear in the model tool table and does not follow scenes — only the two switches.
 
 ## Let the agent drive it
 
