@@ -35,6 +35,7 @@
 - **`memory_note` 的正文参数接受 `note` 别名**：按工具名传参不再因缺 `text` 白跑一次。
 - **`memory_remember` 支持按 id 删除用户记忆**：`action=forget` 移入回收站；未知 action 不再被静默当成一次更新。
 - **`/记忆` 的自主记忆全局组排在工作区组前面**。
+- **当前场景被 `global` 顶掉**：恒常桶 `global` 的排序值最小，`activeScene` 因此恒为它，按场景过滤的列表（斜杠命令的记忆域）只剩全局记忆；现在 `enabledSceneOf` 排除 `global`。
 
 ### 变更
 

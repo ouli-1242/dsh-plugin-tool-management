@@ -96,12 +96,18 @@ export function resolveActiveScenes(
   return { active, mode }
 }
 
-/** 当前启用的**非保留**场景（单选模型下至多一个；多个时按场景顺序取第一个）。 */
+/**
+ * 当前启用的**非保留**场景（单选模型下至多一个；多个时按场景顺序取第一个）。
+ *
+ * `global` 必须单独排掉：它不是场景，而是恒常注入的桶，`resolveActiveScenes` 总会把它
+ * 放进 active；它的 order 是 0，排在最前 —— 漏掉这一条，`activeScene` 就恒为 `global`，
+ * 界面上「当前场景」永远不跟着用户切，按场景过滤的列表（斜杠命令的记忆域）也只剩全局。
+ */
 export function enabledSceneOf(index: RulesIndex, override?: string | null): string | null {
   const names = Object.keys(index.scenes || {})
   const { active } = resolveActiveScenes(index, names, override)
   const enabled = names
-    .filter((n) => !isReservedGroup(n) && active.has(n))
+    .filter((n) => n !== GLOBAL_SCENE && !isReservedGroup(n) && active.has(n))
     .sort((a, b) => sceneOrderOf(index, a) - sceneOrderOf(index, b) || a.localeCompare(b))
   return enabled[0] ?? null
 }

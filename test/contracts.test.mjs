@@ -41,6 +41,7 @@ import { newestDomainTexts, PLUGIN_KINDS } from '../lib/context-inject-surface.j
 import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, renderPersonaPrompt, serializePersona, textOfBlocks } from '../lib/subagents/service.js'
 import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/skills/frontmatter.js'
 import { parseModeState } from '../lib/memories/service.js'
+import { enabledSceneOf } from '../lib/memories/projection.js'
 import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings, stripProactiveToolHidden } from '../lib/tools/table.js'
@@ -4843,6 +4844,24 @@ test('记忆搜索片段：压平换行、围绕命中截断、总长不超过 1
   assert.ok(snippet.startsWith('…') && snippet.endsWith('…'), '两侧都有省略号')
   assert.equal(snippetOf('short body', ['short']), 'short body', '短文本原样返回')
   assert.equal(snippetOf('a\nb   c', []), 'a b c', '换行与多余空白压平')
+})
+
+test('当前场景排除恒常的 global：global 恒启用，但不是 activeScene', () => {
+  // global 的 order 是 0，且 resolveActiveScenes 总会把它放进 active；不单独排掉它，
+  // activeScene 就恒为 global —— 按场景过滤的列表（斜杠命令的记忆域）只剩全局。
+  const index = {
+    active: [],
+    scenes: {
+      global: { label: '全局', order: 0 },
+      alpha: { order: 1000 },
+      beta: { order: 1001 },
+    },
+    rules: {},
+  }
+  assert.equal(enabledSceneOf(index, 'alpha'), 'alpha', '会话钉住的场景要压过 global')
+  assert.equal(enabledSceneOf(index, null), null, '钉住「没有场景」时不能把 global 当当前场景')
+  index.active = ['beta']
+  assert.equal(enabledSceneOf(index), 'beta', '全局启用的场景同样要压过 global')
 })
 
 test('记忆读取入口保留可见：合并后的清单 / 搜索 / 正文是发现路径', () => {
