@@ -374,7 +374,11 @@
           load: async function (sessionId) {
             // 会话层（0.21.2）：带 sessionId 时 `activeScene` 是本会话生效的场景（钉住的 /
             // 跟随全局），默认列出的记忆才与这个对话实际注入的一致。
-            const res = await apiCall('rules-list', sessionId ? { sessionId: sessionId } : {})
+            // `evolution-status` 并行读：它给自主记忆的层开关与当前工作区 hash；失败就只列用户记忆。
+            const [res, evoStatus] = await Promise.all([
+              apiCall('rules-list', sessionId ? { sessionId: sessionId } : {}),
+              apiCall('evolution-status', sessionId ? { sessionId: sessionId } : {}).catch(function () { return null }),
+            ])
             if (!res || !res.ok) throw new Error(translateError(t, res))
             const active = res.activeScene || ''
             // 场景显示名（`global` → 「全局」）：分组标题用它，别让用户在 `/` 菜单里看到磁盘名。
@@ -411,14 +415,24 @@
             // 都成立、恒常在上下文里，用户想停掉的往往正是它。（场景域不列 global 是另一回事：
             // 它没有开关可给；这里的判断对象是记忆条目，不是场景。）打了字才跨场景搜。
             const shown = active ? all.filter(function (r) { return r.scene === active || r.scene === GLOBAL_SCENE }) : all
+            // 自主记忆：与用户记忆同形，但开关写的是条目自己的 `enabled`（没有会话层覆盖）。
+            // 只列会注入的 active / core / playbook —— 候选是还没被用户认可的，归档与已取代
+            // 是明确不再用的，摆进"管理哪些记忆生效"的菜单只会让人以为它们还在生效。
+            // 层开关关着的组整组不列：那和场景没开时不列该场景记忆是同一条口径。
+            const noteRows = await slashAutoNoteRows(t, evoStatus)
+            const userItems = globalFirst(shown)
+            const userPool = globalFirst(all)
             return {
               summaryOf: function (items) {
-                return active
-                  ? t('slash.sum.sceneGlobal', { scene: labels[active] || active, n: items.length })
-                  : t('slash.sum.count', { n: all.length })
+                const users = items.filter(function (x) { return x.kind !== 'note' }).length
+                const notes = items.length - users
+                const base = active
+                  ? t('slash.sum.sceneGlobal', { scene: labels[active] || active, n: users })
+                  : t('slash.sum.count', { n: users })
+                return notes > 0 ? base + ' · ' + t('slash.sum.notes', { n: notes }) : base
               },
-              items: globalFirst(shown),
-              searchPool: active ? globalFirst(all) : null,
+              items: userItems.concat(noteRows),
+              searchPool: active || noteRows.length ? userPool.concat(noteRows) : null,
             }
           },
         },
@@ -470,6 +484,58 @@
             return apiCall('scope-set', { sessionId: sessionId, domain: 'quickPrompts', key: p.id, value: next })
           },
           done: function (next) { return t(next ? 'slash.did.quickOn' : 'slash.did.quickOff', { name: p.id }) },
+        }
+      })
+    }
+
+    /**
+     * 记忆域里的自主记忆两组（全局 / 本工作区）。
+     *
+     * 只收会注入的 `active` / `core` / `playbook`：候选还没被用户认可，归档与已取代已经退场，
+     * 摆进"哪些记忆现在生效"的菜单只会让人以为它们仍在注入。层开关关着时整组不出现 ——
+     * 与场景没开时不列该场景记忆同一条口径。
+     *
+     * 读失败一律回空数组、不抛：用户记忆那一半不能因为自主记忆读不到就整域报错。
+     * 开关写的是条目自己的 `enabled`（层内全局），没有会话级覆盖，所以回执不说「本会话」。
+     */
+    async function slashAutoNoteRows(t, evoStatus) {
+      if (!evoStatus || evoStatus.ok !== true || !evoStatus.effective) return []
+      const eff = evoStatus.effective
+      const hash = evoStatus.workspace && typeof evoStatus.workspace.hash === 'string' ? evoStatus.workspace.hash : ''
+      const globalOn = eff.learnGlobal === true
+      const workspaceOn = eff.learnWorkspace === true && hash !== ''
+      if (!globalOn && !workspaceOn) return []
+      let res
+      try {
+        // 带 hash 时服务端只把工作区条目收窄到本仓库；全局条目照常返回。
+        res = await apiCall('evolution-list', hash !== '' ? { workspaceHash: hash } : {})
+      } catch (e) { return [] }
+      if (!res || res.ok !== true) return []
+      const layerWord = function (layer) {
+        return t(layer === 'global' ? 'slash.layer.global' : 'slash.layer.workspace')
+      }
+      return (res.entries || []).filter(function (e) {
+        if (!e || typeof e.id !== 'string' || e.id === '') return false
+        if (e.status !== 'active' && e.status !== 'core' && e.status !== 'playbook') return false
+        if (e.layer === 'global') return globalOn
+        if (e.layer === 'workspace') return workspaceOn && e.workspace === hash
+        return false
+      }).map(function (e) {
+        const name = String(e.title || e.oneLine || e.id)
+        return {
+          // 前缀避免与用户记忆的 `<场景>/<名>` 撞；`leafRows` 拿它当排序与写回键。
+          id: 'note:' + e.id, key: 'note:' + e.id, label: name, note: e.oneLine,
+          on: e.enabled !== false,
+          kind: 'note',
+          // 用户记忆那行「全局：所有对话生效」的尾巴对笔记是错的：笔记的开关按层生效。
+          noScopeTail: true,
+          group: t(e.layer === 'global' ? 'slash.memory.auto.global' : 'slash.memory.auto.workspace'),
+          run: function (next) {
+            return apiCall('evolution-set-enabled', { id: e.id, enabled: next })
+          },
+          done: function (next) {
+            return t(next ? 'slash.did.noteOn' : 'slash.did.noteOff', { name: name, layer: layerWord(e.layer) })
+          },
         }
       })
     }
@@ -1442,7 +1508,8 @@
                 const warn = joinWarn(stateSyncWarn(t, res) || sceneSyncWarn(t, res), slashModeStaleWarn(t, res))
                 // 全局粒度下这一下改的是**所有对话共用的那份**：回执必须说出来，不然用户会以为
                 // 只动了当前这个对话（正是切到全局后最容易误解的一步）。
-                const doneText = item.done(next) + (layerId === '' ? t('slash.did.globalTail') : '')
+                // 自主记忆的开关按层生效，没有"全局粒度"这一说：那句尾巴只属于用户记忆。
+                const doneText = item.done(next) + (layerId === '' && item.noScopeTail !== true ? t('slash.did.globalTail') : '')
                 showPluginToast(warn ? joinWarn(doneText, warn) : doneText, warn ? 'warn' : 'ok')
               })
             }).catch(function (e) {
