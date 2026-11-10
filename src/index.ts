@@ -115,7 +115,7 @@ import { buildSceneCaptureOps } from './ops/scene-capture.js'
 import { buildSessionOps } from './ops/sessions.js'
 import { buildTrashRetentionOps } from './ops/trash-retention.js'
 // 会话作用域：侧车 scope-overrides.json / scope-intent.json + 作用域 op + 启动对账。
-import { rememberSessionCwd, scopeKeyOfAgent, scopeKeyOfIdSync, sessionIdentityOf, sessionIdOf, sessionScopeIdOf } from './scope/resolve.js'
+import { rememberSessionCwd, scopeKeyOfAgent, scopeKeyOfIdSync, sessionCwdOfId, sessionIdentityOf, sessionIdOf, sessionScopeIdOf } from './scope/resolve.js'
 import { createScopeStore } from './scope/store.js'
 import { isWorkspaceScopeKey, scopeKeyLabel, workspaceCwdOfScopeKey, workspaceScopeKeyOf } from './scope/workspace-key.js'
 import { createIntentStore } from './scope/intent-store.js'
@@ -2404,8 +2404,11 @@ export default {
       try {
         const identity = sessionIdentityOf(agent)
         if (identity === null) return false
-        const scopeKey = identity.cwd ? workspaceMemoryKeyOf(identity.cwd) : undefined
-        const cfg = evolutionRuntime.effectiveSync(scopeKey, sessionScopeIdOf(agent) ?? identity.sessionId)
+        const sid = sessionScopeIdOf(agent) ?? identity.sessionId
+        // 子会话的头里没带 cwd 时用父会话记下的那份，否则"只开了本工作区"会被误判成关。
+        const cwd = identity.cwd ?? sessionCwdOfId(sid)
+        const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
+        const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
         return cfg.enabled
       } catch {
         return false
