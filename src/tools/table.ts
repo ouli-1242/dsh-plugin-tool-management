@@ -74,6 +74,17 @@ export function normalizeProactiveToolHidden(hidden: readonly string[], enabled:
     : [...hidden, PROACTIVE_MEMORY_TOOL]
 }
 
+/**
+ * 从工具表数据里**永久摘掉**自主记忆那条工具（只删不加）。
+ *
+ * 它与 `normalizeProactiveToolHidden` 是两件事：后者给运行时算可见性（关着时要把它补进
+ * 隐藏名单）；这一份给界面回包与落盘，保证「工具表」这份数据里根本没有这条工具 ——
+ * 面板不显示它，保存名单 / 方案也不会多带一条用户改不了的记录。
+ */
+export function stripProactiveToolHidden(hidden: readonly string[]): string[] {
+  return hidden.filter((name) => name !== PROACTIVE_MEMORY_TOOL)
+}
+
 /** 一份命名方案：名字 + 那一组"不发给模型"的工具名（与 `hidden` 同口径，不是"开着哪些"）。 */
 export interface ToolTablePreset {
   name: string
@@ -204,7 +215,7 @@ function normalizePresetList(list: unknown): ToolTablePreset[] {
     const name = raw.name.trim().slice(0, PRESET_NAME_MAX_LENGTH)
     if (name === '' || !Array.isArray(raw.hidden)) continue
     if (out.some((p) => p.name === name)) continue
-    // 方案不保存自主记忆那条工具：它只跟两个开关走（见 normalizeProactiveToolHidden）。
+    // 方案不保存自主记忆那条工具：它只跟两个开关走（见 stripProactiveToolHidden）。
     // 旧方案里残留的名字读出来就过滤掉，应用时也不会被它影响。
     out.push({ name, hidden: normalizeNameList(raw.hidden).filter((n) => n !== PROACTIVE_MEMORY_TOOL) })
     if (out.length >= PRESET_MAX_COUNT) break

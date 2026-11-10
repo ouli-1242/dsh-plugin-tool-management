@@ -579,9 +579,6 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-tooltable-tools{display:flex;flex-direction:column;padding-left:20px}
 .dsm-tooltable-tool{display:grid;grid-template-columns:15px 186px 48px minmax(0,1fr);align-items:center;gap:0 8px;padding:4px 4px;border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer}
 .dsm-tooltable-tool:hover{background:var(--dsw-alias-interactive-bg-hover)}
-/* 跟随自主记忆开关的那一行：只读，没有勾选框，也不能整行点击。 */
-.dsm-tooltable-managed{cursor:default}
-.dsm-tooltable-managed:hover{background:transparent}
 .dsm-tooltable-tool input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:var(--dsw-alias-state-success-primary)}
 .dsm-tooltable-name{overflow:hidden;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);text-overflow:ellipsis;white-space:nowrap}
 .dsm-tooltable-tok{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}

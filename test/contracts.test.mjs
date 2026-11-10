@@ -42,7 +42,7 @@ import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/s
 import { parseModeState } from '../lib/memories/service.js'
 import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
-import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings } from '../lib/tools/table.js'
+import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings, stripProactiveToolHidden } from '../lib/tools/table.js'
 import { buildEvolutionOps } from '../lib/ops/evolution.js'
 import { argConditionalConfirmReason, isMustAskConfirm } from '../lib/confirm-gate.js'
 import { createAccessToken, createFrozenGate, guardModelOps, installHandlerGuards } from '../lib/request-gate.js'
@@ -4873,13 +4873,19 @@ test('自主记忆工具双向跟随总开关：开→摘掉、关→加回，�
   assert.deepEqual(normalizeProactiveToolHidden(withTool, false), withTool, '已含时不重复')
 })
 
-test('工具表读路径与回包两个方向都归一，不给面板留"能手动改"的缝', () => {
+test('工具表数据里没有自主记忆工具：回包 / 落盘都摘掉，运行时仍双向强制', () => {
+  const withTool = ['memory_manager_search', PROACTIVE_MEMORY_TOOL]
+  assert.deepEqual(stripProactiveToolHidden(withTool), ['memory_manager_search'])
+  assert.deepEqual(withTool, ['memory_manager_search', PROACTIVE_MEMORY_TOOL], 'strip 不能改调用方那份名单')
+  assert.deepEqual(stripProactiveToolHidden([]), [])
+  assert.deepEqual(stripProactiveToolHidden([PROACTIVE_MEMORY_TOOL]), [])
+
   const tt = readFileSync(new URL('../src/tool-table-switch.ts', import.meta.url), 'utf8')
   const ix = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.ok(tt.includes('normalizeProactiveToolHidden'), '全局回包 / 写盘共用同一份纯函数')
-  assert.ok(tt.includes('forcedHidden: forcedHidden()'), '全局回包要告诉面板哪条锁成"关"')
-  assert.ok(ix.includes('forcedHidden: forcedHiddenToolsNow()'), '会话回包同样要给 forcedHidden')
-  assert.ok(ix.includes('pluginHiddenTools: () => [...withProactiveTool(toolTableHidden())]'), 'restrict 名单要双向归一')
+  assert.ok(tt.includes('stripProactiveToolHidden'), '全局回包 / 写盘共用同一份摘除函数')
+  assert.ok(!tt.includes('forcedHidden: forcedHidden()'), '回包不再有只读行，就不该再给 forced 字段')
+  assert.ok(!ix.includes('forcedHidden: forcedHiddenToolsNow()'), '会话回包同样不再给 forcedHidden')
+  assert.ok(ix.includes('pluginHiddenTools: () => [...withProactiveTool(toolTableHidden())]'), 'restrict 名单仍按开关强制')
   assert.ok(ix.includes('overlayWithProactiveTool(allow, deny, on)'), 'per-agent overlay 也要两个方向都锁')
 })
 

@@ -20,8 +20,8 @@ import { hubPath } from './hub.js'
 import type { JsonFileRead } from './mcp/disabled-tools.js'
 import {
   addPreset, applyToolTableToggles, buildToolTableReport, classifyToolTableSettings, DEFAULT_HIDDEN_TOOLS, DEFAULT_TOOL_TABLE_SETTINGS, dropPreset, migrateLegacyToolNames,
-  normalizeProactiveToolHidden, normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH,
-  PROACTIVE_MEMORY_TOOL, summarizeToolDescription,
+  normalizeToolTableSettings, PRESET_MAX_COUNT, PRESET_NAME_MAX_LENGTH,
+  PROACTIVE_MEMORY_TOOL, stripProactiveToolHidden, summarizeToolDescription,
   type ToolTableReport, type ToolTableRow, type ToolTableSettings,
 } from './tools/table.js'
 
@@ -55,9 +55,8 @@ export interface ToolTableSwitchDeps {
   /**
    * 自主记忆总开关此刻开没开 —— 那一条工具**完全**由它决定，盘上的关停名单无效。
    *
-   * 读回包 / 体积报表 / 两条写路径都按它双向归一（开 → 强制可见，关 → 强制隐藏），
-   * 面板拿到 `forcedVisible` / `forcedHidden` 把勾选框锁在对应状态；模型侧
-   * `tool_manager_tools` 绕过面板也改不动。没给（旧装配）按关算 = 藏起来，安全侧。
+   * 工具表数据里不再出现它（界面不显示、名单 / 方案不保存）；这里只用于拒绝
+   * `toggle` 请求与运行时可见性判据。没给（旧装配）按关算 = 藏起来，安全侧。
    */
   proactiveMemoryEnabled?: () => boolean
 }
@@ -202,6 +201,9 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       toolTableIssueValue = checked.status
       publishToolTableNote(checked.status, checked.error)
     }
+    // 工具表数据里不保留自主记忆那条工具：旧文件里残留的名字读出来就摘掉。
+    // 运行时可见性由 `withProactiveTool` / `overlayWithProactiveTool` 按开关强制。
+    value = { ...value, hidden: stripProactiveToolHidden(value.hidden) }
     const changed = toolTableCache === null || toolTableCache.value.hidden.join('\u0000') !== value.hidden.join('\u0000')
     toolTableCache = { at: Date.now(), value, off: new Set(value.hidden) }
     // 首读 / 文件被外部改过 ⇒ 可见性要跟着重排。同步快照的调用方（门禁、注入通道）不会
@@ -223,7 +225,10 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     }
     return toolTableCache.off
   }
-  const toolTableRows = (): ToolTableRow[] => [...toolTableSizes].map(([name, bytes]) => ({ name, bytes }))
+  // 自主记忆那条工具不进报表：它不出现在面板里，也不该出现在分组计数 / 体积合计里。
+  const toolTableRows = (): ToolTableRow[] => [...toolTableSizes]
+    .filter(([name]) => name !== PROACTIVE_MEMORY_TOOL)
+    .map(([name, bytes]) => ({ name, bytes }))
   const toolTableReport = (hidden: readonly string[] = [...toolTableHidden()]): ToolTableReport =>
     buildToolTableReport(toolTableRows(), hidden, deps.carrierHiddenTools ? deps.carrierHiddenTools() : [])
   /** 落盘 + 同步内存缓存；调用方必须已持有写锁。 */
@@ -236,12 +241,14 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
       publishToolTableNote(checked.status, checked.error)
       return { ok: false as const, error: toolTableRefuseMessage() }
     }
+    // 落盘前再摘一次：旧文件 / 旧方案里残留的名字不能借这次写回磁盘。
+    const clean: ToolTableSettings = { ...next, hidden: stripProactiveToolHidden(next.hidden) }
     try {
-      await deps.writeJsonFile(hubPath(TOOL_TABLE_FILE), next)
+      await deps.writeJsonFile(hubPath(TOOL_TABLE_FILE), clean)
     } catch (e) {
       return { ok: false as const, error: '设置保存失败: ' + deps.message(e) }
     }
-    toolTableCache = { at: Date.now(), value: next, off: new Set(next.hidden) }
+    toolTableCache = { at: Date.now(), value: clean, off: new Set(clean.hidden) }
     toolTableStateValue = 'ok'
     toolTableIssueValue = null
     clearRuntimeNote('tool-table-file')
@@ -293,13 +300,10 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   const forcedHidden = (): string[] =>
     !proactiveOn() && toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? [PROACTIVE_MEMORY_TOOL] : []
   /**
-   * 归一：开着的强制摘掉、关着的强制加回。回包、体积报表、两条写盘路径共用同一份纯函数，
-   * 免得「面板说开着、restrict 说关着」各说各话。
+   * 工具表数据里永远不含自主记忆那条工具（展示与保存都不带它）。
+   * 运行时的「开 / 关」由 `withProactiveTool` 与 `overlayWithProactiveTool` 按开关强制。
    */
-  const normalizeHidden = (hidden: readonly string[]): string[] =>
-    toolTableSizes.has(PROACTIVE_MEMORY_TOOL)
-      ? normalizeProactiveToolHidden(hidden, proactiveOn())
-      : hidden.slice()
+  const normalizeHidden = (hidden: readonly string[]): string[] => stripProactiveToolHidden(hidden)
 
   /**
    * 回给界面的同一份形状：当前名单 + 已存方案 + 出厂默认名单 + 体积报告。
@@ -312,10 +316,8 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     const hidden = normalizeHidden(value.hidden)
     return {
       ok: true, hidden, presets: value.presets,
-      forcedVisible: forcedVisible(), forcedHidden: forcedHidden(),
-      // 出厂名单里那条自主记忆工具不进「方案」口径：它只跟两个开关走，恢复出厂时由
-      // normalizeProactiveToolHidden 按当前开关补回。界面「出厂默认关 N 条」也据此计数。
-      defaultHidden: DEFAULT_HIDDEN_TOOLS.filter((n) => n !== PROACTIVE_MEMORY_TOOL),
+      // 出厂名单同样不含自主记忆工具：它在界面上没有行，也不进「出厂默认关 N 条」的计数。
+      defaultHidden: stripProactiveToolHidden(DEFAULT_HIDDEN_TOOLS),
       report: toolTableReport(hidden),
       // 侧车状态随每次读回传：界面据此禁用开关并说明原因（unknown 时保存会被服务端拒绝）。
       state: toolTableStateValue, issue: toolTableIssueValue,

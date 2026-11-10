@@ -484,8 +484,6 @@
         return {
           hidden: r.hidden || hiddenFallback || [], presets: r.presets || [],
           defaultHidden: r.defaultHidden || [], report: r.report,
-          // 自主记忆那条工具锁成"开"或"关"：面板只认这两份，不自己猜开关状态。
-          forcedVisible: r.forcedVisible || [], forcedHidden: r.forcedHidden || [],
           // 会话层：当前名单的来源（本对话 / 创建时 / 全局兜底）与全局默认名单（「恢复默认」用）。
           source: r.source || '',
           globalHidden: r.globalHidden || r.hidden || [],
@@ -538,37 +536,19 @@
           })
           .then(function () { setToolTableBusy(false) })
       }
-      /** 服务端说"此刻必须开着"的工具名：自主记忆开启时那一条，不允许手动关。 */
-      const forcedToolNames = function () {
-        return (toolTable && toolTable.forcedVisible) || []
-      }
-      /** "此刻必须关着"的那一半：自主记忆关着时同一条工具，不允许手动开。 */
-      const forcedOffToolNames = function () {
-        return (toolTable && toolTable.forcedHidden) || []
-      }
-      /** 单个工具的勾选：在 hidden 名单里加 / 删一个名字。两个方向锁定的都不参与。 */
+      /** 单个工具的勾选：在 hidden 名单里加 / 删一个名字。 */
       const toggleToolTableTool = function (name, on) {
         if (!toolTable || scopeSessionLocked) return
-        const forced = forcedToolNames()
-        const forcedOff = forcedOffToolNames()
-        if (forced.indexOf(name) >= 0 || forcedOff.indexOf(name) >= 0) return
-        const hid = (toolTable.hidden || []).filter(function (n) { return n !== name && forced.indexOf(n) < 0 })
+        const hid = (toolTable.hidden || []).filter(function (n) { return n !== name })
         if (!on) hid.push(name)
-        // 锁关的那条始终留在名单里（服务端也会加回，这里保持一致，免得回包前抖一下）。
-        forcedOff.forEach(function (n) { if (hid.indexOf(n) < 0) hid.push(n) })
         saveToolTable(hid)
       }
-      /** 整个域一起开 / 关（分组勾选框）。两个方向锁定的都不参与整组。 */
+      /** 整个域一起开 / 关（分组勾选框）。 */
       const toggleToolTableGroup = function (group, on) {
         if (!toolTable || scopeSessionLocked) return
-        const forced = forcedToolNames()
-        const forcedOff = forcedOffToolNames()
-        const names = group.tools
-          .filter(function (tool) { return forced.indexOf(tool.name) < 0 && forcedOff.indexOf(tool.name) < 0 })
-          .map(function (tool) { return tool.name })
-        const hid = (toolTable.hidden || []).filter(function (n) { return names.indexOf(n) < 0 && forced.indexOf(n) < 0 })
+        const names = group.tools.map(function (tool) { return tool.name })
+        const hid = (toolTable.hidden || []).filter(function (n) { return names.indexOf(n) < 0 })
         if (!on) Array.prototype.push.apply(hid, names)
-        forcedOff.forEach(function (n) { if (hid.indexOf(n) < 0) hid.push(n) })
         saveToolTable(hid)
       }
       // ---------- 「方案」：把一组勾选存成名字，之后一键换回来 ----------
@@ -1592,15 +1572,12 @@
         }
         const toolTableDisabled = toolTableBusy || scopeSessionLocked || toolTable.state === 'unknown'
         // 自主记忆那条工具没有独立开关：面板画成「只读行」—— 名字与介绍照常显示，
-        // 勾选框也画，但固定是禁用态（灰的、点不动），只用来**展示**此刻跟随总开关的
-        // 开 / 关；真开关在记忆页头的「自主记忆」按钮上。服务端按总开关状态把它放进
-        // forced（开）或 forcedOff（关），合并即"被接管的工具"；模型侧控制面也按同一份名单挡。
-        const managed = forcedToolNames().concat(forcedOffToolNames())
+        // 自主记忆那条工具不在这份报表里（服务端已把它从分组与计数中摘掉）：
+        // 它的可见性只跟记忆页的两个开关走，这里没有它的行。
         const rows = []
         groups.forEach(function (group) {
-          // 组头只数"能开关"的那些，否则这条永远跟着开关走的工具会让 3/4 看着像有人关了一条。
-          const tools = group.tools.filter(function (tool) { return managed.indexOf(tool.name) < 0 })
-          if (!group.tools.length) return
+          const tools = group.tools
+          if (!tools.length) return
           const onCount = tools.filter(function (tool) { return !tool.hidden }).length
           const groupTok = tools.reduce(function (sum, tool) { return sum + (Number(tool.tok) || 0) }, 0)
             rows.push(React.createElement('div', { className: 'dsm-tooltable-group', key: 'g-' + group.key },
@@ -1623,25 +1600,6 @@
                   // 悬停 = 稍详细那句 + 空行 + 当前状态。取不到详细那句时退回行内那句，
                   // 于是"悬停什么也没有"不会发生。
                   const hover = translateOrFallback(t, 'compat.tools.hover.' + tool.name, about)
-                  if (managed.indexOf(tool.name) >= 0) {
-                    // 只读行：四列对齐照旧，第一列画一个**禁用的勾选框**（灰的、点不动）。
-                    // 它只表达"这条工具此刻跟着总开关是开还是关"（在 forced 里=勾上、
-                    // forcedOff 里=空），勾/不勾都改不了它 —— 不是可点的开关。
-                    // 介绍仍显示（用户要能看懂这条工具是干什么的），只是不能在这里改。
-                    return React.createElement('div', {
-                      className: 'dsm-tooltable-tool dsm-tooltable-managed',
-                      key: tool.name,
-                      title: (hover ? hover + '\n\n' : '') + t('compat.tools.lockedTitle'),
-                    },
-                      React.createElement(RowCheck, {
-                        checked: forcedToolNames().indexOf(tool.name) >= 0,
-                        disabled: true,
-                        label: tool.name,
-                      }),
-                      React.createElement('span', { className: 'dsm-tooltable-name' }, tool.name),
-                      React.createElement('span', { className: 'dsm-tooltable-tok' }, '≈' + tool.tok),
-                      React.createElement('span', { className: 'dsm-tooltable-about' }, about))
-                  }
                   return React.createElement('label', {
                     className: 'dsm-tooltable-tool',
                     key: tool.name,

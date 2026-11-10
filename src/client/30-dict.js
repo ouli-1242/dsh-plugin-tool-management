@@ -638,8 +638,6 @@
         "compat.tools.onTitle": "已下发：模型能看到并调用它",
         "compat.tools.offTitle": "已关掉：整份不进请求，模型看不到也调不到（面板不受影响）",
         "compat.tools.defaultOffTitle": "出厂默认就是关着的：模型看不到也调不到，面板不受影响。要模型做这件事，在这里勾上即可（只改本机）。",
-        "compat.tools.locked": "已锁定", "compat.tools.lockedTitle": "跟随自主记忆开关，不能在这里改。",
-        "compat.tools.lockedOff": "跟随开关", "compat.tools.lockedOffTitle": "自主记忆已关闭，这条工具随之关闭；开启后自动打开。",
         // 「方案」：把一整组勾选存成名字，之后一键换回来（合计行右侧那两颗按钮）。
         "compat.tools.preset.save": "保存方案",
         "compat.tools.preset.apply": "恢复方案",
@@ -706,13 +704,11 @@
         // 五个域的删除合进一条之后，行内只能给一个中性对象词（"条目"）；
         // 具体是哪一类写在悬停那一档的 domain 里。
         "compat.tools.about.plugin_manager_remove": "删除/恢复条目",
-        "compat.tools.about.memory_manager_auto": "自主记忆 · 新增需确认",
         "compat.tools.hover.memory_manager_list": "列出记忆的 id、所属场景、启停与一句话描述，并标明注入按哪个场景走。默认只列这次真的会注入的记忆；all=true 会把停用、场景未启用、被同名覆盖的一起列出来。场景本身（档案、绑定的预设、锁没锁）在 scene_manager_list。只看不改。",
         "compat.tools.hover.memory_manager_read": "按 id（<场景>/<名字>）读一条记忆的完整正文。清单里只有一句话描述，要看正文就用它 —— 尤其是被停用、场景没启用、或被体积预算挤掉的记忆。",
         "compat.tools.hover.memory_manager_search": "按词在名字、场景、描述、标签与正文里找记忆：所有词都要命中（不分大小写），结果按名字的贴近程度排序，只回 id 与一小段片段 —— 要看正文用 read。搜的是全部记忆，停用的、场景没启用的、没进上下文的都在内，所以「清单里没有」不等于「不存在」，新建之前先搜一遍。limit 默认 20、上限 100。",
         "compat.tools.hover.memory_manager_switch": "只拨索引里的开关，.md 文件一个字不动，随时能拨回来。停用的记忆不再进上下文，等于把注入预算让给别人 —— 想省 token 优先用它，而不是删。",
         "compat.tools.hover.memory_manager_save": "新建一条记忆，或改掉已经存在的那条同名记忆 —— 回执会说清走了哪条。记忆会进之后每一轮请求，所以只记从代码、配置、git 推不出来的事；建之前先看清单里有没有已经讲了同一件事的。没传的字段保持原样；改名会把旧文件留在回收站。",
-        "compat.tools.hover.memory_manager_auto": "learn 只写一条「待确认」，不会进入上下文；在记忆页确认后才会注入。其余动作：forget 删除（30 天不复活）、organize 只出草案。记忆只分全局 / 本项目两层，正文单独存放，不占场景。工具跟随总开关，不能单独开关。",
         "compat.tools.hover.scene_manager_list": "列出每个场景：场景名（界面显示名不同时会一并标出 —— 工具要的是前者）、启用 / 已进入 / 已锁定、场景说明、绑定的预设、记忆条数，以及档案：进入它时会开哪些 MCP / 技能 / 人设（没勾的一律关掉）。要改某个场景的档案之前先看它 —— 保存是整段替换，看不到现有勾选就会把原来勾的挤掉；要进入哪个场景也在这一份里挑。只看不改。",
         "compat.tools.hover.scene_manager_switch": "进入一个场景：按它的档案把 MCP / 技能 / 人设整套拨到位（没勾的一律关掉），注入范围收窄成它的记忆，并把场景绑定的预设正文写进全局 AGENTS.md。退出则按进场景前的快照精确还原，基线也恢复。切之前先用 scene_manager_list 看一眼那个场景的档案。改的是整个运行时环境，所以默认要用户确认。",
         "compat.tools.hover.scene_manager_save": "建一个场景，或改掉已有的那个 —— 回执会说清走了哪条。场景是「进入时按它切换」的一套：档案里勾了什么，进入后就开什么，其余全部关掉。只写记录不碰档案 —— 档案由另一条工具写；「照现在的样子存」（capture）则由当前生效状态把档案一次填好。写档案或写记录都不会让场景生效 —— 要生效得进入它（scene_manager_switch，或你在「场景」页点）。没传的字段保持原样。",
@@ -1648,8 +1644,6 @@
         "compat.tools.onTitle": "Sent: the model can see and call it",
         "compat.tools.offTitle": "Switched off: not sent at all, so the model cannot see or call it (the panel is unaffected)",
         "compat.tools.defaultOffTitle": "Switched off in the shipped default: the model cannot see or call it, the panel is unaffected. Tick it here if you want the model to do this (this machine only).",
-        "compat.tools.locked": "Locked on", "compat.tools.lockedTitle": "This tool follows the autonomous memory switch and cannot be changed here.",
-        "compat.tools.lockedOff": "Follows switch", "compat.tools.lockedOffTitle": "Autonomous memory is off, so this tool is off too. Turning it on brings the tool back automatically.",
         // "Sets": store a whole tick pattern under a name and switch back to it in one click.
         "compat.tools.preset.save": "Save set",
         "compat.tools.preset.apply": "Restore set",
@@ -1713,13 +1707,11 @@
         // One merged delete tool for all five domains: the inline line needs a neutral
         // object noun, the domain values live in the hover tier.
         "compat.tools.about.plugin_manager_remove": "Delete/restore an item",
-        "compat.tools.about.memory_manager_auto": "Autonomous memory · ask before adding",
         "compat.tools.hover.memory_manager_list": "Lists each memory's id, scene, on/off state and one-line description, and says which scene injection follows. Only the memories that would actually be injected by default; all=true adds disabled, inactive-scene and shadowed entries. The scenes themselves (archives, bound presets, locks) are in scene_manager_list. Read-only.",
         "compat.tools.hover.memory_manager_read": "Reads the full body of one memory by id (<scene>/<name>). The list carries a one-line description only — use this for the body, especially for memories that are off, in an inactive scene, or dropped by the byte budget.",
         "compat.tools.hover.memory_manager_search": "Finds memories by words in name, scene, description, tags and body: every word must match (case-insensitive), hits are ranked by how closely the name matches, and only an id plus a short snippet comes back — use read for the body. It searches every memory, including disabled ones, ones in inactive scenes and ones not in the context, so a memory missing from the list does not mean it does not exist — search before creating. limit defaults to 20, capped at 100.",
         "compat.tools.hover.memory_manager_switch": "Flips the index switch only — the .md file is untouched and it is reversible. A disabled memory stops being injected, which frees byte budget for the others; prefer this over deleting when you want to spend fewer tokens.",
         "compat.tools.hover.memory_manager_save": "Creates a memory, or updates the existing one with that id — the receipt says which. Memories enter every later request, so record only what cannot be re-derived from code, config or git — and check the list first for an entry that already says this. Omitted fields are kept; a rename leaves the old file in the trash.",
-        "compat.tools.hover.memory_manager_auto": "learn saves a pending note; it is not injected until you confirm it on the Memory page. Other actions: forget deletes a learned note (30-day tombstone), organize only drafts a cleanup. Notes are global or project-only, stored apart from your own memories and scenes. The tool follows the master switch and cannot be toggled separately.",
         "compat.tools.hover.scene_manager_list": "Lists every scene: its name (with the display label when it differs — tools need the name), enabled / entered / locked state, its description, bound preset, memory count, and its archive: which MCP servers, skills and personas entering it switches on, everything else going off. Look here before changing a scene's archive — saving replaces a whole section, so an unseen selection gets dropped — and use it to pick which scene to enter. Read-only.",
         "compat.tools.hover.scene_manager_switch": "Enters a scene: its archive is applied across MCP, skills and personas (anything it does not list goes off), injection narrows to its memories, and its bound preset is written into the global AGENTS.md. Leaving restores the runtime snapshot taken on entry, including the previous baseline. Check the scene's archive in scene_manager_list first. It rewrites the whole runtime environment, so it asks for confirmation by default.",
         "compat.tools.hover.scene_manager_save": "Saves a scene — a named bundle the user enters: whatever its archive lists gets switched on, everything else off. It writes the record only; the archive is written by a separate tool (capture fills the archive from what is currently switched on). Writing does not turn the scene on — enter it with scene_manager_switch (or the Scenes page) for that. Fields you omit keep their current value.",

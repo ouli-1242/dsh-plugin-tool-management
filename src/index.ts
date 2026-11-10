@@ -50,6 +50,7 @@ import {
   FACTORY_TOOL_TABLE_PRESET,
   normalizeProactiveToolHidden,
   normalizeToolTableSettings,
+  stripProactiveToolHidden,
   PROACTIVE_MEMORY_TOOL,
   type ToolTableSettings,
 } from './tools/table.js'
@@ -1556,10 +1557,9 @@ export default {
       // 绕开这套顺序就会留下「名单已经改了、工具下一轮还发给模型」这种最难查的状态。
       // **锁内读-改-写**：presets 必须取锁内最新值，否则并发的存方案会被这次整表写覆盖。
       const saved = await mutateToolTableSettings((current) => ({
-        // 进场景套方案也一样：那条工具只跟自主记忆开关走，方案不能把它打开或关掉。
-        hidden: normalizeProactiveToolHidden(
+        // 进场景套方案也一样：自主记忆工具不进工具表数据，运行时由开关单独强制。
+        hidden: stripProactiveToolHidden(
           normalizeToolTableSettings({ hidden }).hidden.filter((name) => toolTableSizes.has(name)),
-          proactiveMemoryGlobalOn(),
         ),
         presets: current.presets,
       }))
@@ -4309,10 +4309,9 @@ export default {
      */
     function toolTableSessionPayload(sessionId: string, scope: SessionScope | undefined, settings: ToolTableSettings): any {
       // 只报注册过的名字：基线 / 方案里可能留着更早版本关停过、如今已不存在的工具。
-      const forced = forcedVisibleToolsNow()
-      const hidden = normalizeProactiveToolHidden(
+      // 自主记忆工具不进这份数据（界面没有它的行），运行时可见性由 overlay 单独强制。
+      const hidden = stripProactiveToolHidden(
         sessionToolTableHidden(scope, settings.hidden).filter((name) => toolTableSizes.has(name)),
-        proactiveMemoryGlobalOn(),
       )
       const source = scope?.toolTableHidden !== undefined
         ? 'session'
@@ -4322,13 +4321,10 @@ export default {
         sessionId,
         scopeKind: isWorkspaceScopeKey(sessionId) ? 'workspace' : 'session',
         hidden,
-        // 面板据此把这一行画成"已勾选 + 禁用"或"未勾选 + 禁用"，而不是让用户点一下发现没反应。
-        forcedVisible: forced,
-        forcedHidden: forcedHiddenToolsNow(),
-        globalHidden: settings.hidden.slice(),
+        globalHidden: stripProactiveToolHidden(settings.hidden),
         presets: settings.presets,
         // 与全局回包同口径：方案 / 出厂名单都不含自主记忆工具。
-        defaultHidden: DEFAULT_HIDDEN_TOOLS.filter((n) => n !== PROACTIVE_MEMORY_TOOL),
+        defaultHidden: stripProactiveToolHidden(DEFAULT_HIDDEN_TOOLS),
         report: toolTableReport(hidden),
         source,
         locked: scope?.locked === true,
@@ -4406,26 +4402,26 @@ export default {
         }
       }
       // 只收注册过的工具名：陌生名字会让官方 restrict 抛错。
-      const target = normalizeProactiveToolHidden(
+      // 自主记忆工具不进会话名单：它的可见性由 overlay 按开关单独强制。
+      const target = stripProactiveToolHidden(
         normalizeToolTableSettings({ hidden: args && args.hidden }).hidden.filter((name) => toolTableSizes.has(name)),
-        proactiveMemoryGlobalOn(),
       )
       // 老会话的基线里没有这一栏：第一次写时按**当前全局**补一份，
       // 否则退出场景会退回"实时全局"，与"每个对话从创建起有自己的那份"这条口径不符。
       const backfillBaselineTt = scope?.baseline !== undefined && scope.baseline.toolTableHidden === undefined
-      const base = scope?.baseline?.toolTableHidden ?? (backfillBaselineTt ? settings.hidden : undefined)
+      const cleanGlobalHidden = stripProactiveToolHidden(settings.hidden)
+      const base = scope?.baseline?.toolTableHidden ?? (backfillBaselineTt ? cleanGlobalHidden : undefined)
       try {
         await scopeStore.mutate(sessionId, (cur) => {
           const out: SessionScope = { ...(cur === undefined ? {} : cur) }
           if (backfillBaselineTt && out.baseline !== undefined) {
-            out.baseline = { ...out.baseline, toolTableHidden: settings.hidden.slice() }
+            out.baseline = { ...out.baseline, toolTableHidden: cleanGlobalHidden.slice() }
           }
           // 逐条改的那一路：起点是**锁内的当前生效名单**（现读现改）。
-          const next = normalizeProactiveToolHidden(
+          const next = stripProactiveToolHidden(
             toggles !== null
               ? applyToolTableToggles(sessionToolTableHidden(cur, settings.hidden), toggles)
               : target,
-            proactiveMemoryGlobalOn(),
           )
           // 与基线同值就不留显式名单：退出场景 / 全局再变时少一条永远相等的覆盖。
           if (base !== undefined && sameToolNameList(next, base)) delete out.toolTableHidden

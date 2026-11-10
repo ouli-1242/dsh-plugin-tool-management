@@ -145,8 +145,10 @@ export function buildControlTools(deps: ControlToolDeps): void {
         ]
         if (unknown.length > 0) lines.push('not this plugin\'s tools (ignored): ' + unknown.join(', '))
         // 说清「这一层看得见的条数」：模型据此判断自己还有没有别的路。
-        const total = deps.toolTableSizes.size
-        lines.push((total - next.length) + ' of ' + total + ' tools are available here now.')
+        // 总数同样不含自主记忆那条工具：它不在工具表里，也不该出现在「N 条工具」的分母里。
+  const total = deps.toolTableSizes.size - (deps.toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? 1 : 0)
+        const offHere = next.filter((name) => name !== PROACTIVE_MEMORY_TOOL).length
+        lines.push((total - offHere) + ' of ' + total + ' tools are available here now.')
         return lines.join('\n')
       },
     }))
@@ -188,7 +190,8 @@ function listTools(deps: ControlToolDeps, agent: unknown): string {
     if (name === PROACTIVE_MEMORY_TOOL) continue
     rows.push(toolLine(name, deps.toolTableSummaries.get(name) ?? '', bytes))
   }
-  const total = deps.toolTableSizes.size
+  // 总数同样不含自主记忆那条工具：它不在工具表里，也不该出现在「N 条工具」的分母里。
+  const total = deps.toolTableSizes.size - (deps.toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? 1 : 0)
   if (rows.length === 0) {
     return 'every tool of this plugin is already on here (' + total + ' tools); nothing to enable.'
   }
