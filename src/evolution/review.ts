@@ -19,7 +19,8 @@ import { dirname } from 'node:path'
 import { writeFileAtomically } from '../memories/index-io.js'
 import type { Episode } from './digest.js'
 import type { OutboxItem, ReviewLearnedItem } from './episodes.js'
-import { MAX_AUTO_TITLE, type Learner } from './write.js'
+import { MAX_AUTO_TEXT_WIDTH, MAX_AUTO_TITLE_WIDTH, type Learner } from './write.js'
+import { truncateToWidth } from '../text-width.js'
 import { normalizeNoteStyle, noteStyleGuideOf, type CustomNoteStyle, type EffectiveEvolutionConfig } from './config.js'
 
 /** 一次复习最多落几条。多了就是在把摘要改写成记忆库，那不是复习。 */
@@ -45,7 +46,6 @@ export interface ReviewItem {
 const SOURCES = new Set(['user_explicit', 'user_correction', 'tool_verified', 'model_inference'])
 const KINDS = new Set(['preference', 'fact', 'correction', 'procedure'])
 const LAYERS = new Set(['global', 'workspace', 'scene', 'session'])
-const MAX_TEXT = 400
 
 /**
  * 从模型输出里抽出 JSON 对象。
@@ -86,11 +86,11 @@ export function parseReviewItems(raw: unknown): ReviewItem[] {
     if (out.length >= MAX_ITEMS_PER_REVIEW) break
     if (!row || typeof row !== 'object') continue
     const r = row as Record<string, unknown>
-    const text = typeof r.text === 'string' ? r.text.trim().slice(0, MAX_TEXT) : ''
+    const text = typeof r.text === 'string' ? truncateToWidth(r.text.trim(), MAX_AUTO_TEXT_WIDTH) : ''
     const source = typeof r.source === 'string' && SOURCES.has(r.source) ? (r.source as ReviewItem['source']) : 'model_inference'
     if (text === '') continue
     const item: ReviewItem = { text, source }
-    const title = typeof r.title === 'string' ? r.title.trim().slice(0, MAX_AUTO_TITLE) : ''
+    const title = typeof r.title === 'string' ? truncateToWidth(r.title.trim(), MAX_AUTO_TITLE_WIDTH) : ''
     if (title !== '') item.title = title
     if (typeof r.kind === 'string' && KINDS.has(r.kind)) item.kind = r.kind as ReviewItem['kind']
     if (typeof r.quote === 'string' && r.quote.trim() !== '') item.quote = r.quote.trim().slice(0, 2000)

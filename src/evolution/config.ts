@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { hubPath } from '../hub.js'
 import { WORKSPACE_HASH_LEN } from '../memories/constants.js'
+import { charWidth } from '../text-width.js'
 import type { JsonFileRead } from '../mcp/disabled-tools.js'
 import {
   NOTE_RATE_DEFAULTS, NOTE_RATE_MINUTES_MAX, NOTE_RATE_MINUTES_MIN, NOTE_RATE_NOTES_MAX, NOTE_RATE_NOTES_MIN,
@@ -77,24 +78,6 @@ function styleIdOf(raw: unknown): NoteStyle | undefined {
 }
 
 /** 名称显示宽度：汉字 / 全角 / emoji 算 2，其余算 1。客户端 `evoNameMetrics` 同一口径。 */
-function styleNameWidth(ch: string): number {
-  const code = ch.codePointAt(0) ?? 0
-  return (
-    (code >= 0x1100 && code <= 0x115f) ||
-    code === 0x2329 || code === 0x232a ||
-    (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe10 && code <= 0xfe19) ||
-    (code >= 0xfe30 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1f64f) ||
-    (code >= 0x1f900 && code <= 0x1f9ff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  ) ? 2 : 1
-}
-
 /**
  * 名称截断：宽度最多 16 个半角单位，且宽字符最多 8 个。
  * 于是中文最多 8 个字，英文最多 16 个字母，混排同时受两者约束。
@@ -104,7 +87,7 @@ function truncateStyleName(s: string): string {
   let width = 0
   let wide = 0
   for (const ch of s) {
-    const w = styleNameWidth(ch)
+    const w = charWidth(ch)
     const nextWide = wide + (w === 2 ? 1 : 0)
     if (width + w > MAX_CUSTOM_NOTE_STYLE_NAME_WIDTH || nextWide > MAX_CUSTOM_NOTE_STYLE_WIDE) break
     out += ch

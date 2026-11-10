@@ -74,6 +74,7 @@ import { pickBestCompatible, sourcePlan } from '../lib/update-check.js'
 import { scanLoaderRows } from '../lib/mcp/loader-token.js'
 import { isValidGroupPath, isValidGroupSegment } from '../lib/memories/constants.js'
 import { createMemoriesService } from '../lib/memories/service.js'
+import { textWidthOf, truncateToWidth } from '../lib/text-width.js'
 import { deleteSkill, forgetSource, importUploadedSkill, listProviderCandidates, permanentlyDeleteTrash, restoreTrash, setPreferredSkill, setSkillEnabled, setSourceRemoved, state, userRoots } from '../lib/skills/core.js'
 // 字符串形态的 RootInput 是**路径**不是 key（见 rootDefinition），所以这里按 key 取定义对象。
 import { rootByKey } from '../lib/skills/skill-roots.js'
@@ -1254,6 +1255,14 @@ test('场景名口径：命名路径必须单段，定位路径按完整路径',
   assert.equal(isValidGroupPath('/a'), false)
   assert.equal(isValidGroupPath('a/'), false)
   assert.equal(isValidGroupPath('a/../b'), false, '路径谓词仍拒绝穿越')
+})
+
+test('显示宽度：汉字 / emoji 算 2，字母算 1，截断不劈开代理对', () => {
+  assert.equal(textWidthOf('汉a'), 3)
+  assert.equal(textWidthOf('😀a'), 3)
+  assert.equal(truncateToWidth('汉a', 2), '汉')
+  assert.equal(truncateToWidth('😀a', 1), '', '宽字符放不下时整字丢弃，不返回半个代理对')
+  assert.equal(truncateToWidth('😀a', 2), '😀')
 })
 
 test('工具表逐条改：enable 一条不会把别的已开工具关掉', () => {
@@ -4936,7 +4945,7 @@ test('自主记忆频率门：窗口内新增到量就拒绝，合并不占名�
     knownWorkspaces: new Set(),
     knownScenes: new Set(),
     tombstones: [],
-    maxTextLength: 400,
+    maxTextWidth: 800,
   })
   const input = { text: '使用 pnpm', source: 'model_inference', layer: 'global' }
   const rejected = runGates(input, ctx(5))

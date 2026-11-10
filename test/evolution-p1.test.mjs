@@ -30,7 +30,7 @@ const ctxOf = (patch = {}) => ({
   knownScenes: new Set(['code']),
   workspaceHash: 'abcd1234abcd1234',
   tombstones: [],
-  maxTextLength: 400,
+  maxTextWidth: 800,
   ...patch,
 })
 

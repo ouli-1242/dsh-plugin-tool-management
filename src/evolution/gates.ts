@@ -16,6 +16,7 @@
 //      清洗后保存更糟 —— 用户会以为系统记住的是他说的那句。
 
 import { LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
+import { truncateToWidth } from '../text-width.js'
 import { checkQuote } from './evidence.js'
 import { NOTE_RATE_DEFAULTS } from './limits.js'
 import { DEGRADE_NOTE, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
@@ -112,8 +113,8 @@ export interface GateContext {
   knownWorkspaces: Set<string>
   knownScenes: Set<string>
   tombstones: Tombstone[]
-  /** 单条正文长度上限（字符）。 */
-  maxTextLength: number
+  /** 单条正文长度上限（显示宽度）。 */
+  maxTextWidth: number
 }
 
 export interface GateInput {
@@ -535,7 +536,7 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   const note = notes.length > 0 ? notes.join('；') : undefined
   return {
     ok: true,
-    text: rawText.slice(0, ctx.maxTextLength),
+    text: truncateToWidth(rawText, ctx.maxTextWidth),
     kind,
     key,
     source,

@@ -27,6 +27,7 @@ import {
   readAutoTrashManifest, restoreAutoNoteFromTrash, trashAutoNote,
 } from './notes.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
+import { textWidthOf, truncateToWidth } from '../text-width.js'
 import type { EffectiveEvolutionConfig } from './config.js'
 import {
   runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome, type ReviewCode,
@@ -38,10 +39,15 @@ import {
   type EntryState, type EvidenceSource, type EvolutionState, type EvolutionStateStore,
 } from './state.js'
 
-/** 一条自动记忆的正文上限（字符）。超过说明它该是一份文档或一个技能，不是一条记忆。 */
-export const MAX_AUTO_TEXT = 400
-/** 名称上限：列表一行要放得下，注入行也会加粗它。 */
-export const MAX_AUTO_TITLE = 40
+/**
+ * 一条自动记忆的正文上限（显示宽度）。800 单位 = 400 汉字 / 800 字母。
+ *
+ * 按宽度而不是字符数：400 个汉字约等于 800–1000 个英文字母的内容，按字符数设限
+ * 会让英文笔记只有中文的一半。超过说明它该是一份文档或一个技能，不是一条记忆。
+ */
+export const MAX_AUTO_TEXT_WIDTH = 800
+/** 名称上限（显示宽度）：80 单位 = 40 汉字 / 80 字母；列表一行要放得下。 */
+export const MAX_AUTO_TITLE_WIDTH = 80
 /** 描述上限（与 `MAX_DESCRIPTION_LENGTH` 一致，但这里更紧：注入只显示一行）。 */
 export const MAX_AUTO_DESCRIPTION = 200
 /** `boundary` 上限：合并时会追加，靠它兜住长度。 */
@@ -205,7 +211,7 @@ export function describeOf(text: string, explicit?: string): string {
 
 /** 名称：显式给的优先，空白视为没有。 */
 export function titleOf(title: string | undefined): string {
-  return String(title ?? '').trim().slice(0, MAX_AUTO_TITLE)
+  return truncateToWidth(String(title ?? '').trim(), MAX_AUTO_TITLE_WIDTH)
 }
 
 const cjkOrWord = (s: string): boolean => /\p{L}/u.test(s)
@@ -260,7 +266,7 @@ export function createLearner(deps: LearnDeps) {
       knownWorkspaces: await deps.knownWorkspaces(),
       knownScenes,
       tombstones: st.tombstones,
-      maxTextLength: MAX_AUTO_TEXT,
+      maxTextWidth: MAX_AUTO_TEXT_WIDTH,
     }
   }
 
@@ -272,8 +278,9 @@ export function createLearner(deps: LearnDeps) {
   async function learn(req: LearnRequest, config: EffectiveEvolutionConfig, env: LearnEnv): Promise<LearnResult> {
     const text = String(req.text ?? '').trim()
     if (text === '') return { ok: false, code: 'empty', error: 'nothing to learn: text is empty' }
-    if (text.length > MAX_AUTO_TEXT) {
-      return { ok: false, code: 'too-long', error: `refused: this note is ${text.length} chars; the limit is ${MAX_AUTO_TEXT}. Split it, or record it as a normal memory.` }
+    const width = textWidthOf(text)
+    if (width > MAX_AUTO_TEXT_WIDTH) {
+      return { ok: false, code: 'too-long', error: `refused: this note is ${width} width units; the limit is ${MAX_AUTO_TEXT_WIDTH} (about 400 Chinese chars or 800 letters). Split it, or record it as a normal memory.` }
     }
 
     // 会话层：sid 不合法时不能落（目录即身份，换个名字就等于换了会话）。
@@ -340,8 +347,9 @@ export function createLearner(deps: LearnDeps) {
   async function preview(req: LearnRequest, config: EffectiveEvolutionConfig, env: LearnEnv): Promise<LearnPreview> {
     const text = String(req.text ?? '').trim()
     if (text === '') return { ok: false, code: 'empty', error: 'nothing to learn: text is empty' }
-    if (text.length > MAX_AUTO_TEXT) {
-      return { ok: false, code: 'too-long', error: `refused: this note is ${text.length} chars; the limit is ${MAX_AUTO_TEXT}. Split it, or record it as a normal memory.` }
+    const width = textWidthOf(text)
+    if (width > MAX_AUTO_TEXT_WIDTH) {
+      return { ok: false, code: 'too-long', error: `refused: this note is ${width} width units; the limit is ${MAX_AUTO_TEXT_WIDTH} (about 400 Chinese chars or 800 letters). Split it, or record it as a normal memory.` }
     }
     if (req.layer === LAYER_SESSION && env.sessionId && !sessionSegmentOk(env.sessionId)) {
       return { ok: false, code: 'bad-session', error: 'refused: this conversation id cannot be used as a directory name, so it cannot hold conversation-scoped notes. Use layer="workspace" instead.', gate: 'layer' }
