@@ -68,6 +68,7 @@ import { trashAutoNote } from './evolution/notes.js'
 import { healthOf, runSweep, shouldSweepNow, type SweepEntry, type SweepReport } from './evolution/maintenance.js'
 // 真源状态（证据 / 计数器 / 墓碑）：读坏就停写，不静默覆盖。
 import { createEvolutionState } from './evolution/state.js'
+import { buildScopeQuestion, scopeChoiceOf, scopeFailureOf, type ScopeAskRequest, type ScopeChoice } from './evolution/scope-card.js'
 // 写入管线：九道门 + 六步落盘。
 import { createLearner } from './evolution/write.js'
 import { isReservedGroup, layerOfGroup } from './memories/constants.js'
@@ -2347,6 +2348,34 @@ export default {
         return cfg.enabled && cfg.learnScope !== 'off'
       } catch {
         return false
+      }
+    }
+
+    /**
+     * 在对话里问「这条记忆放哪」。
+     *
+     * 走官方 `ctx.userQuestions.ask`，**不传 `wait.callId`**：我们的工具不是
+     * `ask_user_question`，卡片按非 `ask_user_question` 行无法重开；传了 callId 后用户关卡片
+     * 会把等待永久挂起。不传时客户端把关闭当成取消（`ASK_CANCELLED`），可以安全收尾。
+     *
+     * 失败语义（见 scope-card 的 `scopeFailureOf`）：用户关卡片 = 不加入；本轮取消 = 上抛；
+     * 没有 answerer / 非 live root / 未知异常 = 返回 null，调用方退回待确认，不丢笔记。
+     */
+    async function askMemoryScopeFor(agent: unknown, req: ScopeAskRequest): Promise<ScopeChoice | null> {
+      try {
+        const svc = typeof ctx.get === 'function' ? ctx.get('userQuestions') as any : undefined
+        if (!svc || typeof svc.ask !== 'function') return null
+        const answer = await svc.ask({
+          agent,
+          questions: [buildScopeQuestion(req)],
+          ...(req.signal !== undefined ? { signal: req.signal } : {}),
+        })
+        return scopeChoiceOf(answer)
+      } catch (e) {
+        const action = scopeFailureOf(e)
+        if (action === 'abort') throw e
+        if (action === 'skip') return { choice: 'skip' }
+        return null
       }
     }
 
@@ -5672,6 +5701,8 @@ export default {
       autoLearnEnabled: autoLearnEnabledFor,
       // 真实会话身份：层必须用它，不能用作用域键（切粒度会让会话记忆互相串目录）。
       sessionIdentity: (agent: unknown) => sessionIdentityOf(agent),
+      // 对话内选层卡片：没有 userQuestions 服务的宿主返回 null，工具退回待确认。
+      askMemoryScope: askMemoryScopeFor,
       activeSceneOf: (agent: unknown) => memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined,
     })
     // 场景族（tools/scene.ts）：列场景与档案（`_list`）+ 建场景 / 写档案 / 绑提示词（`_save`）

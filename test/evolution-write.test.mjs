@@ -579,3 +579,118 @@ test('organize → applyOrganize(merge)：保留项正文不动、被并项转 s
     assert.equal(again.drafts.filter((d) => d.action === 'merge').length, 0)
   } finally { h.done() }
 })
+
+// ── 对话卡片：批准直接生效 ─────────────────────────────────────────────────
+
+test('preview：只读预演不落盘；批准后 model_inference 直接生效并升级证据', async () => {
+  const h = harness()
+  try {
+    const req = { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'model_inference' }
+    const p = await h.learner.preview(req, cfgOf(), envOf())
+    assert.equal(p.ok, true, p.error)
+    assert.equal(p.status, 'active')
+    assert.equal(p.layer, 'workspace')
+    assert.deepEqual([...p.allowedLayers].sort(), ['global', 'workspace'])
+    assert.deepEqual(h.docs(), [], '预演不能写正文')
+    let hasState = true
+    try { h.readState() } catch { hasState = false }
+    assert.equal(hasState, false, '预演不能写 state')
+
+    const r = await h.learner.learn({ ...req, approved: true }, cfgOf(), envOf())
+    assert.equal(r.ok, true, r.error)
+    assert.equal(r.status, 'active')
+    assert.equal(r.approved, true)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
+    const st = h.readState()
+    assert.equal(st.entries[r.id].needsReview, undefined)
+    assert.equal(st.entries[r.id].evidence[0].source, 'user_approved')
+    assert.equal(st.entries[r.id].confidence, 0.85)
+    assert.ok((st.watermarks.autoRevision ?? 0) > 0, '卡片批准是用户动作，要 bump 版本号')
+  } finally { h.done() }
+})
+
+test('approved + 与用户手写记忆冲突：仍然 candidate，卡片不越过用户记忆', async () => {
+  const h = harness()
+  try {
+    mkdirSync(join(h.memoriesRoot, 'global'), { recursive: true })
+    writeFileSync(join(h.memoriesRoot, 'global', 'pkg.md'), [
+      '---', 'name: pkg', 'description: 用户写的包管理器约定', 'origin: user', '---', '',
+      '这个仓库统一用 pnpm，不要用 npm', '',
+    ].join('\n'))
+    const req = { text: '这个仓库统一用 pnpm，不要用 npm。', key: 'package-manager', source: 'model_inference' }
+    const p = await h.learner.preview(req, cfgOf(), envOf())
+    assert.equal(p.ok, true, p.error)
+    assert.equal(p.status, 'candidate')
+    assert.equal(p.reviewCode, 'user-conflict')
+
+    const r = await h.learner.learn({ ...req, approved: true }, cfgOf(), envOf())
+    assert.equal(r.ok, true, r.error)
+    assert.equal(r.status, 'candidate')
+    assert.equal(r.reviewCode, 'user-conflict')
+    assert.ok(r.needsReview)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'candidate')
+  } finally { h.done() }
+})
+
+test('approved + 同 key 生效旧说法：新说法直接取代旧的', async () => {
+  const h = harness()
+  try {
+    const first = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'tool_verified', approved: true },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(first.status, 'active')
+    const second = await h.learner.learn(
+      { text: '这个仓库统一用 yarn', key: 'package-manager', source: 'model_inference', approved: true },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(second.ok, true, second.error)
+    assert.equal(second.status, 'active')
+    assert.deepEqual(second.supersedes, [first.id])
+    assert.equal(pickField(h.readDoc(first.id), 'auto_status'), 'superseded')
+  } finally { h.done() }
+})
+
+test('approved + 跨层相似条目：按用户选的层新建，并取代另一层的旧说法', async () => {
+  const h = harness()
+  try {
+    const globalFirst = await h.learner.learn(
+      { text: '所有项目统一用 pnpm 管理依赖', key: 'pkg-global', source: 'tool_verified', layer: 'global', approved: true },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(globalFirst.layer, 'global')
+    const workspace = await h.learner.learn(
+      { text: '所有项目统一用 pnpm 管理依赖', key: 'pkg-global', source: 'model_inference', layer: 'workspace', approved: true },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(workspace.ok, true, workspace.error)
+    assert.equal(workspace.layer, 'workspace')
+    assert.deepEqual(workspace.supersedes, [globalFirst.id])
+    assert.equal(pickField(h.readDoc(globalFirst.id), 'auto_status'), 'superseded')
+  } finally { h.done() }
+})
+
+test('archived 相似条目不再被当成合并目标（新条目不生效的旧坑）', async () => {
+  const h = harness()
+  try {
+    const old = await h.learner.learn(
+      { text: '发布前先跑完整测试', key: 'release-test', source: 'tool_verified', approved: true },
+      cfgOf(),
+      envOf(),
+    )
+    await h.learner.setStatus(old.id, 'archived', 'user')
+    const r = await h.learner.learn(
+      { text: '发布前先跑完整测试', key: 'release-test', source: 'model_inference', approved: true },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    assert.notEqual(r.id, old.id, '归档条目不能吞掉新学到的同一条')
+    assert.equal(r.status, 'active')
+    assert.equal(pickField(h.readDoc(old.id), 'auto_status'), 'archived')
+  } finally { h.done() }
+})

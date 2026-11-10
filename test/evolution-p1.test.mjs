@@ -103,6 +103,20 @@ test('路由：模型显式指定的层也越不过上限；旧 session/scene �
   assert.equal(legacy.layer, 'workspace', '会话层已取消：旧入参不再产生 _session 目录')
 })
 
+test('路由：显式层压过内容措辞（卡片选工作区不被「所有项目」抬到全局）', () => {
+  const forcedWs = routeLayer({
+    text: '以后所有项目都先给结论', source: 'user_explicit', writeTarget: 'route',
+    workspaceHash: 'abcd1234abcd1234', forcedLayer: 'workspace',
+  })
+  assert.equal(forcedWs.layer, 'workspace', '用户选了本工作区，措辞不能把它抬走')
+  assert.equal(forcedWs.desired, 'workspace')
+  const forcedGlobal = routeLayer({
+    text: '这个仓库用 pnpm', source: 'model_inference', writeTarget: 'route',
+    workspaceHash: 'abcd1234abcd1234', forcedLayer: 'global',
+  })
+  assert.equal(forcedGlobal.layer, 'global', '用户选了全局，没有全局措辞也照样进全局')
+})
+
 // ── 九道门 ─────────────────────────────────────────────────────────────────
 
 test('安全门：密钥 / 指令覆盖 / 不可见字符一律拒绝（不清洗后保存）', () => {

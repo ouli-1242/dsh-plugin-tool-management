@@ -18,7 +18,7 @@ import { hubPath } from '../hub.js'
 import { writeFileAtomically, readIndex, writeIndex } from '../memories/index-io.js'
 import { catalogEntryOf, catalogPathOf, normalizeCatalog, type CatalogFile } from '../memories/catalog.js'
 import {
-  GLOBAL_SCENE, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE,
+  GLOBAL_SCENE, LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE,
   isValidGroupPath, isValidGroupSegment, type MemoryLayer,
 } from '../memories/constants.js'
 import { trashAutoNote } from './notes.js'
@@ -26,9 +26,10 @@ import { layerOfGroup } from '../memories/constants.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
 import type { EffectiveEvolutionConfig } from './config.js'
 import {
-  runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome,
+  runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome, type ReviewCode,
 } from './gates.js'
 import { deriveKey } from './gates.js'
+import { capLayerOf } from './route.js'
 import { draftOrganize, type OrganizeAction, type OrganizeDraft } from './organize.js'
 import {
   bumpRevision, confidenceOf, emptyCounters, pushTransition, textHashOf,
@@ -52,6 +53,8 @@ export interface LearnRequest {
   boundary?: string
   ttlDays?: number
   description?: string
+  /** 用户在对话卡片上批准了这条原文：直接生效，但用户手写记忆的冲突仍然只进 candidate。 */
+  approved?: boolean
 }
 
 export interface LearnEnv {
@@ -70,6 +73,9 @@ export interface LearnSuccess {
   supersedes: string[]
   note?: string
   needsReview?: string
+  /** 卡片批准过这条原文（即使最终因用户记忆冲突仍是 candidate）。 */
+  approved?: boolean
+  reviewCode?: ReviewCode
 }
 
 export interface LearnFailure {
@@ -81,6 +87,32 @@ export interface LearnFailure {
 }
 
 export type LearnResult = LearnSuccess | LearnFailure
+
+/**
+ * 只读预演：同一条请求**如果用户在卡片上选了推荐层并批准**，会落到哪一层、是否生效、
+ * 会合并 / 取代谁。调用方据此决定要不要弹卡（门禁拒绝、与用户记忆冲突、锁定目标都不弹）。
+ *
+ * `allowedLayers` 是卡片可提供的选项：受 `writeTarget` 上限与工作区身份裁剪；
+ * 至少包含 `layer` 本身（拿不到工作区路径时，写入仍会按现有规则回落到全局）。
+ */
+export interface LearnPreviewSuccess {
+  ok: true
+  /** 将要保存的正文（已按上限截断）。卡片展示它，而不是模型的原始入参。 */
+  text: string
+  boundary?: string
+  layer: MemoryLayer
+  allowedLayers: MemoryLayer[]
+  status: 'active' | 'candidate'
+  confidence: number
+  approved: boolean
+  needsReview?: string
+  reviewCode?: ReviewCode
+  mergeInto?: string
+  supersedes: string[]
+  note?: string
+}
+
+export type LearnPreview = LearnPreviewSuccess | LearnFailure
 
 export interface LearnDeps {
   state: EvolutionStateStore
@@ -165,7 +197,10 @@ export function createLearner(deps: LearnDeps) {
       ...(env.workspaceHash !== undefined ? { workspaceHash: env.workspaceHash } : {}),
       ...(env.scene !== undefined ? { scene: env.scene } : {}),
       writeTarget: config.writeTarget,
-      existing: entries,
+      // `locked` 只在 state 里：快照给的是记忆域的形状，没有这个字段。不补上的话
+      // 门禁会把一条用户手改过的条目当成普通合并目标，预览也会说「会合并」，
+      // 真正写入时才被 mergeInto 拒掉。
+      existing: entries.map((e) => (e.origin === 'auto' && st.entries[e.id]?.locked === true ? { ...e, locked: true } : e)),
       countByLayer,
       knownWorkspaces: await deps.knownWorkspaces(),
       knownScenes,
@@ -220,6 +255,7 @@ export function createLearner(deps: LearnDeps) {
           ...(req.layer !== undefined ? { layer: req.layer } : {}),
           ...(req.boundary !== undefined ? { boundary: req.boundary } : {}),
           ...(req.ttlDays !== undefined ? { ttlDays: req.ttlDays } : {}),
+          ...(req.approved === true ? { approved: true } : {}),
         },
         ctx,
       )
@@ -234,6 +270,84 @@ export function createLearner(deps: LearnDeps) {
       }
       return applyOutcome(outcome, req, st, env, config)
     })
+  }
+
+  /**
+   * 只读预演（对话卡片弹之前调）。
+   *
+   * 跑两遍门禁：第一遍按内容 / 环境取路由层；第二遍把该层当成「用户选的层」再跑一次，
+   * 这样合并 / 取代信息与用户点第一项（推荐层）时真正会发生的事一致。
+   *
+   * 不写任何文件、不 bump revision、不拿写锁 —— 用户看卡片可能要看很久，
+   * 期间不能把其他写操作卡住。
+   */
+  async function preview(req: LearnRequest, config: EffectiveEvolutionConfig, env: LearnEnv): Promise<LearnPreview> {
+    const text = String(req.text ?? '').trim()
+    if (text === '') return { ok: false, code: 'empty', error: 'nothing to learn: text is empty' }
+    if (text.length > MAX_AUTO_TEXT * 2) {
+      return { ok: false, code: 'too-long', error: `refused: a learned note should be one sentence (limit ${MAX_AUTO_TEXT} chars). Split it, or record it as a normal memory.` }
+    }
+    if (req.layer === LAYER_SESSION && env.sessionId && !sessionSegmentOk(env.sessionId)) {
+      return { ok: false, code: 'bad-session', error: 'refused: this conversation id cannot be used as a directory name, so it cannot hold conversation-scoped notes. Use layer="workspace" instead.', gate: 'layer' }
+    }
+
+    const read = await state.read()
+    if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+    const st = read.state
+    const keyForTomb = (req.key ?? '').trim() !== '' ? String(req.key).trim() : deriveKey(text)
+    const blocked = tombstoneBlocked({ tombstones: st.tombstones } as GateContext, keyForTomb, text)
+    if (blocked) {
+      return {
+        ok: false,
+        code: 'tombstoned',
+        error: `not recorded: this was deleted ${blocked.at.slice(0, 10)} and stays deleted until ${blocked.until.slice(0, 10)}. If it should come back, the user has to say so explicitly.`,
+        gate: 'conflict',
+      }
+    }
+
+    const ctx = await buildGateContext(config, env, st)
+    const input = (layer?: MemoryLayer) => ({
+      text,
+      ...(req.kind !== undefined ? { kind: req.kind } : {}),
+      ...(req.key !== undefined ? { key: req.key } : {}),
+      source: req.source,
+      ...(req.quote !== undefined ? { quote: req.quote } : {}),
+      ...(layer !== undefined ? { layer } : req.layer !== undefined ? { layer: req.layer } : {}),
+      ...(req.boundary !== undefined ? { boundary: req.boundary } : {}),
+      ...(req.ttlDays !== undefined ? { ttlDays: req.ttlDays } : {}),
+      approved: true,
+    })
+
+    const first = runGates(input(), ctx)
+    if (!first.ok) return { ok: false, code: 'gate', error: first.error, gate: first.gate, detail: first.detail }
+    // 用户记忆冲突是卡片也解不开的：不必再按推荐层跑一遍。
+    const chosen = first.reviewCode === 'user-conflict' ? first : runGates(input(first.layer), ctx)
+    if (!chosen.ok) return { ok: false, code: 'gate', error: chosen.error, gate: chosen.gate, detail: chosen.detail }
+
+    const cap = capLayerOf(config.writeTarget)
+    const allowed: MemoryLayer[] = []
+    if (cap === LAYER_GLOBAL) allowed.push(LAYER_GLOBAL)
+    if (env.workspaceHash !== undefined) allowed.push(LAYER_WORKSPACE)
+    // 拿不到工作区路径时 routeLayer 会回落到全局；此时即使 writeTarget 上限是工作区，
+    // 可选层也只能是它实际能落的这一层（否则卡片会给出一个必然被改写的选项）。
+    if (!allowed.includes(chosen.layer)) allowed.unshift(chosen.layer)
+
+    const boundary = String(req.boundary ?? '').trim().slice(0, MAX_BOUNDARY)
+    return {
+      ok: true,
+      text: chosen.text,
+      ...(boundary !== '' ? { boundary } : {}),
+      layer: chosen.layer,
+      allowedLayers: allowed,
+      status: chosen.status,
+      confidence: chosen.confidence,
+      approved: chosen.approved,
+      ...(chosen.needsReview !== undefined ? { needsReview: chosen.needsReview } : {}),
+      ...(chosen.reviewCode !== undefined ? { reviewCode: chosen.reviewCode } : {}),
+      ...(chosen.mergeInto !== undefined ? { mergeInto: chosen.mergeInto } : {}),
+      supersedes: chosen.supersedes,
+      ...(chosen.note !== undefined ? { note: chosen.note } : {}),
+    }
   }
 
   /** 门禁通过后的落盘。 */
@@ -255,7 +369,7 @@ export function createLearner(deps: LearnDeps) {
 
     // ── 合并：同 key 同义 → 追加边界与证据，不新建 ──
     if (pass.mergeInto) {
-      const merged = await mergeInto(pass, pass.mergeInto, st, nowIso)
+      const merged = await mergeInto(pass, pass.mergeInto, st, nowIso, env)
       if (merged) return merged
       // 合并失败（文件被删 / 读不动）→ 落到下面的新建路径，别把这次学习丢掉。
     }
@@ -304,7 +418,14 @@ export function createLearner(deps: LearnDeps) {
       transitions: prev?.transitions ?? [],
       ...(pass.degraded !== undefined ? { degraded: pass.degraded } : {}),
     }
-    pushTransition(st.entries[id], 'absent', pass.status, 'learn', `source=${pass.source} key=${pass.key}`, now.getTime())
+    pushTransition(
+      st.entries[id],
+      'absent',
+      pass.status,
+      pass.approved ? 'user' : 'learn',
+      pass.approved ? `approved in chat card (source=${pass.source} key=${pass.key})` : `source=${pass.source} key=${pass.key}`,
+      now.getTime(),
+    )
     if (pass.needsReview) st.entries[id].needsReview = pass.needsReview
     // 信心以 state 里的证据为准重算一次：门禁算的是"这次"的，重算的是"全部证据的"。
     st.entries[id].confidence = confidenceOf(st.entries[id].evidence, harmfulOf(prev))
@@ -325,6 +446,10 @@ export function createLearner(deps: LearnDeps) {
       if (ok) superseded.push(oldId)
     }
     if (superseded.length > 0) await writeIndex(indexDir, index)
+
+    // 卡片批准是用户动作：本会话的自动段要立刻重建（学习写入不加版本号，
+    // 因为新学的条目靠对话上下文本身；批准不同，用户期待它马上生效）。
+    if (pass.status === 'active') bumpRevision(st)
 
     // ── ⑤ state 落盘（放在前四步之后：正文与索引都在了，状态最后写才不会被"有状态无文件"毁掉） ──
     const written = await state.write(st)
@@ -353,8 +478,10 @@ export function createLearner(deps: LearnDeps) {
       confidence: st.entries[id].confidence ?? pass.confidence,
       merged: false,
       supersedes: superseded,
+      approved: pass.approved,
       ...(pass.note !== undefined ? { note: pass.note } : {}),
       ...(pass.needsReview !== undefined ? { needsReview: pass.needsReview } : {}),
+      ...(pass.reviewCode !== undefined ? { reviewCode: pass.reviewCode } : {}),
     }
   }
 
@@ -364,6 +491,7 @@ export function createLearner(deps: LearnDeps) {
     targetId: string,
     st: EvolutionState,
     nowIso: string,
+    env: LearnEnv,
   ): Promise<LearnResult | null> {
     const slash = targetId.lastIndexOf('/')
     if (slash <= 0) return null
@@ -394,40 +522,66 @@ export function createLearner(deps: LearnDeps) {
     const nextBoundary = alreadyKnown
       ? prevBoundary
       : [prevBoundary, extra].filter((x) => x !== '').join('；').slice(0, MAX_BOUNDARY)
-    // 合并保留目标条目自己的状态：重新学到一条已经确认过的记忆，不该把它打回候选；
-    // 反过来，合并进候选也不该凭空生效。
+    // 合并默认保留目标条目自己的状态：重新学到一条已经确认过的记忆，不该把它打回候选；
+    // 反过来，合并进候选也不该凭空生效。卡片批准是例外：用户看过新说法并点了同意，
+    // 合并后的这条就该生效（否则「批准了却还是候选」又是一次静默失效）。
     const current = pickField(existing, 'auto_status') || 'candidate'
+    const nextStatus = pass.approved ? 'active' : current
     const merged = rewriteFrontmatterFields(
       existing,
       {
-        auto_status: current,
+        auto_status: nextStatus,
         auto_updated: nowIso,
         ...(nextBoundary !== prevBoundary ? { auto_boundary: nextBoundary } : {}),
       },
     )
     await writeFileAtomically(docPath, merged)
 
-    const evidence = collectEvidence(pass, { sessionId: undefined, workspaceHash: undefined, scene: undefined }, {} as LearnRequest, nowIso)
+    const evidence = collectEvidence(pass, env, {} as LearnRequest, nowIso)
     entry.evidence = [...entry.evidence, ...evidence].slice(-50)
     entry.counters = entry.counters ?? emptyCounters()
+    if (pass.approved) activateEvidence(entry, existing, nowIso)
     entry.confidence = confidenceOf(entry.evidence, entry.counters.harmful)
-    pushTransition(entry, current, current, 'learn', 'merge: same key, new evidence', Date.parse(nowIso))
+    pushTransition(
+      entry,
+      current,
+      nextStatus,
+      pass.approved ? 'user' : 'learn',
+      pass.approved ? 'merge: approved in chat card' : 'merge: same key, new evidence',
+      Date.parse(nowIso),
+    )
     st.entries[targetId] = entry
+
+    // 批准时可能还带着要取代的旧条目（跨层同 key / 相似说法）。合并目标自己不在其中，
+    // 但其余旧条目必须一起让位 —— 否则批准后两条矛盾的事实会同时注入。
+    const superseded: string[] = []
+    if (pass.approved && pass.supersedes.length > 0) {
+      const index = await readIndex(indexDir)
+      for (const oldId of pass.supersedes) {
+        if (oldId === targetId) continue
+        const ok = await markSuperseded(oldId, targetId, st, nowIso, index)
+        if (ok) superseded.push(oldId)
+      }
+      if (superseded.length > 0) await writeIndex(indexDir, index)
+    }
+    if (pass.approved && nextStatus === 'active') bumpRevision(st)
 
     const written = await state.write(st)
     if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
-    await touchCatalog(targetId, pass, name, {} as LearnRequest, nowIso, entry.confidence ?? pass.confidence, current).catch(() => {})
+    await touchCatalog(targetId, pass, name, {} as LearnRequest, nowIso, entry.confidence ?? pass.confidence, nextStatus).catch(() => {})
     deps.invalidateSnapshot()
     return {
       ok: true,
       id: targetId,
       layer: pass.layer,
-      status: current as 'active' | 'candidate',
+      status: nextStatus as 'active' | 'candidate',
       confidence: entry.confidence ?? pass.confidence,
       merged: true,
-      supersedes: [],
+      supersedes: superseded,
+      approved: pass.approved,
       note: alreadyKnown ? '已存在同样的说法，只新增了一条证据' : '同一条记忆，把新说法补进了边界',
+      ...(pass.reviewCode !== undefined ? { reviewCode: pass.reviewCode } : {}),
     }
   }
 
@@ -1064,7 +1218,7 @@ export function createLearner(deps: LearnDeps) {
     })
   }
 
-  return { learn, forget, approve, setStatus, promote, organize, applyOrganize, describe, noteInjected, noteRead }
+  return { learn, preview, forget, approve, setStatus, promote, organize, applyOrganize, describe, noteInjected, noteRead }
 }
 
 /**

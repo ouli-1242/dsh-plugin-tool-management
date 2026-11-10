@@ -20,6 +20,7 @@
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
 import { GLOBAL_SCENE, SHARED_GROUP } from '../memories/constants.js'
+import type { ScopeAskRequest, ScopeChoice, ScopeLayer } from '../evolution/scope-card.js'
 import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 import { PROACTIVE_MEMORY_TOOL } from './table.js'
 
@@ -46,6 +47,14 @@ export interface MemoryToolDeps extends ToolDomainDeps {
    * 的目录（静默的隐私事故）。层永远认真实 sid（见 docs 01-model §4）。
    */
   sessionIdentity?: (agent: unknown) => { sessionId?: string; cwd?: string } | null
+  /**
+   * 在对话里问用户「这条记忆放哪」。
+   *
+   * 返回 `null` = 没有可用卡片（headless / 非 live root / 卡片异常）—— 调用方退回待确认，
+   * 不丢笔记；返回 `{ choice: 'skip' }` = 用户明确不加入或关掉了卡片。
+   * 不接这个依赖 = 这版没有卡片，走原来的待确认路径。
+   */
+  askMemoryScope?: (agent: unknown, req: ScopeAskRequest) => Promise<ScopeChoice | null>
 }
 
 
@@ -485,17 +494,17 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory. action=learn: save one durable preference, fact, correction or procedure as a **pending note** (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). Pending notes are NOT injected into context; the user confirms them on the Memory page. Tell the user it was saved for review, do not claim it is active. action=forget: delete a learned note (stays un-learnable for 30 days), only when the user asks. action=organize: read-only draft of merges / archives. Available only while autonomous memory is on.',
+    description: 'Autonomous memory. action=learn: save one durable preference, fact, correction or procedure (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). A chat card asks the user whether to keep it in global memory, this workspace, or not at all; if they approve, it is active immediately. Without an interactive card it is saved as pending and is NOT injected until the user confirms it on the Memory page — the receipt says which happened, so do not claim it is active unless the receipt does. action=forget: delete a learned note (stays un-learnable for 30 days), only when the user asks. action=organize: read-only draft of merges / archives. Available only while autonomous memory is on.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget', 'organize'], required: true, description: 'learn (default) / forget / organize.' },
       // ── learn ──
       text: { type: 'string', description: 'learn: one sentence, what to remember (<=400 chars).' },
       kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: what kind of thing it is; inferred from the text when omitted.' },
-      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it. user_explicit / user_correction require a verbatim `quote`. All sources are saved as pending; evidence only affects confidence and ordering.' },
+      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it. user_explicit / user_correction require a verbatim `quote`. All sources go through the same card; evidence only affects confidence and ordering.' },
       quote: { type: 'string', description: 'learn: the user\'s exact words (verbatim substring of what they said). Required for user_explicit / user_correction.' },
       key: { type: 'string', description: 'learn: short slot name like `package-manager` — the same key merges with the existing note.' },
       boundary: { type: 'string', description: 'learn: when it might not hold (e.g. "CI still uses npm").' },
-      layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project only). Omit to route by content; only explicit cross-project wording reaches global.' },
+      layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project only). Omit to let the card offer the routed layer first; the user\'s choice wins.' },
       ttlDays: { type: 'number', description: 'learn: days before it should be re-checked; defaults by kind.' },
       // ── forget ──
       memory: { type: 'string', description: 'forget: the learned note id, copied from the learned notes block.' },
@@ -547,30 +556,94 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const scene = deps.activeSceneOf ? deps.activeSceneOf(agent) : undefined
       if (scene !== undefined) payload.scene = scene
 
-      const r: any = await evo['evolution-learn'](payload)
-      if (!r || r.ok === false) {
+      // 没有 preview / 卡片依赖（旧装配、测试）：保持原来的待确认路径。
+      const previewOp = evo['evolution-preview']
+      const ask = deps.askMemoryScope
+      if (!previewOp || !ask) {
+        const r: any = await evo['evolution-learn'](payload)
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
+        return learnReceipt(r, 'none')
+      }
+
+      // 先只读预演：门禁拒绝的条目不弹卡；与用户记忆冲突的也不弹（卡片也解不开）。
+      const preview: any = await previewOp(payload)
+      if (!preview || preview.ok === false) {
         // 门禁拒绝是**正常的业务结果**，不是异常：把它当异常抛会让模型以为工具坏了。
         // 但工具层只能通过 throw 回话，所以把 `error` 原样抛（它已经是一句给模型看的话）。
-        throw new Error(String((r && r.error) || 'failed to record it'))
+        throw new Error(String((preview && preview.error) || 'failed to record it'))
       }
-      const parts = ['OK: recorded ' + String(r.id)]
-      if (r.merged === true) {
-        parts.push(String(r.status === 'active' ? 'merged into an existing active note' : 'merged into an existing pending note'))
-      } else {
-        parts.push('saved as pending review — not injected until the user confirms it on the Memory page')
+      if (preview.status !== 'active') {
+        const r: any = await evo['evolution-learn'](payload)
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
+        return learnReceipt(r, preview.reviewCode === 'user-conflict' ? 'pending-conflict' : 'pending')
       }
-      if (r.merged !== true && typeof r.confidence === 'number') parts.push('confidence ' + r.confidence.toFixed(2))
-      if (Array.isArray(r.supersedes) && r.supersedes.length) parts.push('replaced ' + r.supersedes.join(', '))
-      if (r.note) parts.push(String(r.note))
-      if (r.needsReview) parts.push('needs review: ' + String(r.needsReview))
-      // 层要说出来：用户以为"只在这个项目里"，实际它进了全局（别的项目也会出现）——
-      // 这个误读比记错内容更难发现。
-      const layerNote: Record<string, string> = {
-        global: 'applies in every project',
-        workspace: 'applies in this project (visible to other conversations here too)',
+
+      const allowed: ScopeLayer[] = Array.isArray(preview.allowedLayers)
+        ? (preview.allowedLayers as unknown[]).filter((l): l is ScopeLayer => l === 'global' || l === 'workspace')
+        : []
+      const recommended: ScopeLayer = preview.layer === 'global' ? 'global' : 'workspace'
+      const request: ScopeAskRequest = {
+        text: String(preview.text || payload.text || ''),
+        ...(typeof preview.boundary === 'string' && preview.boundary !== '' ? { boundary: preview.boundary } : {}),
+        recommended,
+        allowed: allowed.length > 0 ? allowed : [recommended],
+        ...(typeof preview.mergeInto === 'string' && preview.mergeInto !== '' ? { mergeInto: preview.mergeInto } : {}),
+        ...(Array.isArray(preview.supersedes) && preview.supersedes.length > 0
+          ? { supersedes: (preview.supersedes as unknown[]).filter((x): x is string => typeof x === 'string') }
+          : {}),
+        ...(exec && exec.signal !== undefined ? { signal: exec.signal } : {}),
       }
-      if (typeof r.layer === 'string' && layerNote[r.layer]) parts.push(layerNote[r.layer])
-      return parts.join('; ')
+      const choice = await ask(agent, request)
+
+      // 没有可用卡片（headless / 非 live root / 卡片异常）：退回待确认，不丢笔记。
+      if (choice === null) {
+        const r: any = await evo['evolution-learn'](payload)
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
+        return learnReceipt(r, 'unavailable')
+      }
+      if (choice.choice === 'skip') {
+        return 'Not saved: the user chose not to add it' +
+          (choice.custom ? ' (they wrote: ' + choice.custom + ')' : '') +
+          '. Do not save it again unless they ask.'
+      }
+
+      const r: any = await evo['evolution-learn']({
+        ...payload,
+        layer: choice.choice,
+        approved: true,
+      })
+      if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
+      return learnReceipt(r, 'approved')
     },
   }))
+}
+
+/** learn 回执。状态（active / pending）以 learn 的返回为准，`card` 只补充「卡片那一侧发生了什么」。 */
+function learnReceipt(r: any, card: 'approved' | 'unavailable' | 'pending-conflict' | 'pending' | 'none'): string {
+  const parts = ['OK: recorded ' + String(r.id)]
+  if (r.merged === true) {
+    parts.push(String(r.status === 'active' ? 'merged into an existing active note' : 'merged into an existing pending note'))
+  } else if (r.status === 'active') {
+    parts.push('saved as active')
+  } else {
+    parts.push('saved as pending review — not injected until the user confirms it on the Memory page')
+  }
+  if (r.merged !== true && typeof r.confidence === 'number') parts.push('confidence ' + r.confidence.toFixed(2))
+  if (Array.isArray(r.supersedes) && r.supersedes.length) parts.push('replaced ' + r.supersedes.join(', '))
+  if (r.note) parts.push(String(r.note))
+  if (r.needsReview) parts.push('needs review: ' + String(r.needsReview))
+  if (card === 'approved' && r.status !== 'active' && r.needsReview) {
+    parts.push('the card approved it, but it stayed pending for the reason above')
+  }
+  if (card === 'unavailable') parts.push('no interactive card was available, so it stayed pending')
+  if (card === 'pending-conflict') parts.push('it conflicts with a memory the user wrote; they can resolve it on the Memory page')
+  if (card === 'pending') parts.push('it stayed pending for the reason above')
+  // 层要说出来：用户以为"只在这个项目里"，实际它进了全局（别的项目也会出现）——
+  // 这个误读比记错内容更难发现。
+  const layerNote: Record<string, string> = {
+    global: 'applies in every project',
+    workspace: 'applies in this project (visible to other conversations here too)',
+  }
+  if (typeof r.layer === 'string' && layerNote[r.layer]) parts.push(layerNote[r.layer])
+  return parts.join('; ')
 }

@@ -111,11 +111,13 @@ export function routeLayer(input: RouteInput): RouteResult {
   // 只判两种层：**全局 / 本项目**。会话层与场景层已取消 —— 它们和用户记忆的场景单选
   // 绑在一起（一个场景开着就不能开别的），而自主记忆不参与那套机制。
   //
-  // 判据刻意不交给模型：只有①用户明说/纠正且带明确跨项目措辞，或②显式 `layer=global`，
-  // 才升全局；其余一律本项目。`forcedLayer` 里的 session/scene 一律按本项目解释。
-  const wantsGlobal =
-    input.forcedLayer === LAYER_GLOBAL ||
-    ((input.source === 'user_explicit' || input.source === 'user_correction') && hasGlobalPhrase(input.text))
+  // 显式 `forcedLayer` **压过内容措辞**：用户在对话卡片里选了「本工作区」，正文里恰好有
+  // 「所有项目」时不能悄悄抬到全局 —— 那等于用户的选择没生效。没有显式层时才按内容判：
+  // 只有用户明说 / 纠正且带明确跨项目措辞才升全局；其余一律本项目。`forcedLayer` 里的
+  // session / scene 一律按本项目解释。
+  const wantsGlobal = input.forcedLayer !== undefined
+    ? input.forcedLayer === LAYER_GLOBAL
+    : ((input.source === 'user_explicit' || input.source === 'user_correction') && hasGlobalPhrase(input.text))
 
   const cap = capLayerOf(input.writeTarget)
   // `desired` 记**原始想要**，不随后续降级改写：界面解释"为什么被降级"靠它对照

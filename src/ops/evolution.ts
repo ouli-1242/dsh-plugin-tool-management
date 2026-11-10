@@ -253,6 +253,45 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * `source` 的四个值决定证据强度：`user_explicit` / `user_correction` 必须带**逐字引句**
      * （证据门会核对），`tool_verified` 指"工具结果证明了它"，`model_inference` 只能进候选。
      */
+    /**
+     * 只读预演：同一条 learn 请求如果被用户在卡片上批准，会落到哪一层、会不会合并 / 取代。
+     *
+     * 与 `evolution-learn` 同一套开关与路由；不写盘、不 bump revision。工具层据此决定
+     * 要不要弹卡（门禁拒绝、与用户记忆冲突、锁定目标都不弹）。
+     */
+    'evolution-preview': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const { scopeKey } = await workspaceOf(args)
+        const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
+        const cfg = await config.effective(scopeKey, sessionId)
+        if (!cfg.enabled || cfg.learnScope === 'off') {
+          return { ok: false, error: 'autonomous memory is off for this conversation / workspace', code: 'disabled' }
+        }
+        return await learner.preview(
+          {
+            text: String(args?.text ?? ''),
+            ...(args?.kind !== undefined ? { kind: args.kind } : {}),
+            ...(args?.key !== undefined ? { key: args.key } : {}),
+            source: args?.source ?? 'model_inference',
+            ...(args?.quote !== undefined ? { quote: args.quote } : {}),
+            ...(args?.layer !== undefined ? { layer: args.layer } : {}),
+            ...(args?.boundary !== undefined ? { boundary: args.boundary } : {}),
+            ...(args?.ttlDays !== undefined ? { ttlDays: args.ttlDays } : {}),
+            ...(args?.description !== undefined ? { description: args.description } : {}),
+          },
+          cfg,
+          {
+            ...(sessionId !== undefined ? { sessionId } : {}),
+            ...(scopeKey !== undefined ? { workspaceHash: workspaceHashOf(scopeKey) } : {}),
+            ...(typeof args?.scene === 'string' && args.scene !== '' ? { scene: args.scene } : {}),
+          },
+        )
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'preview-failed' }
+      }
+    },
+
     'evolution-learn': async (args: any) => {
       if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
       try {
@@ -274,6 +313,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(args?.boundary !== undefined ? { boundary: args.boundary } : {}),
             ...(args?.ttlDays !== undefined ? { ttlDays: args.ttlDays } : {}),
             ...(args?.description !== undefined ? { description: args.description } : {}),
+            ...(args?.approved === true ? { approved: true } : {}),
           },
           cfg,
           {
