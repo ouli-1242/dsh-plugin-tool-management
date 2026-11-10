@@ -514,13 +514,19 @@
       const layerWord = function (layer) {
         return t(layer === 'global' ? 'slash.layer.global' : 'slash.layer.workspace')
       }
-      return (res.entries || []).filter(function (e) {
+      const rows = (res.entries || []).filter(function (e) {
         if (!e || typeof e.id !== 'string' || e.id === '') return false
         if (e.status !== 'active' && e.status !== 'core' && e.status !== 'playbook') return false
         if (e.layer === 'global') return globalOn
         if (e.layer === 'workspace') return workspaceOn && e.workspace === hash
         return false
-      }).map(function (e) {
+      })
+      // 全局组排在工作区组前面：与用户记忆那一侧「全局恒常注入、排最前」同一条口径。
+      // sort 稳定，组内保持 `evolution-list` 的返回顺序。
+      rows.sort(function (a, b) {
+        return (a.layer === 'global' ? 0 : 1) - (b.layer === 'global' ? 0 : 1)
+      })
+      return rows.map(function (e) {
         const name = String(e.title || e.oneLine || e.id)
         return {
           // 前缀避免与用户记忆的 `<场景>/<名>` 撞；`leafRows` 拿它当排序与写回键。
