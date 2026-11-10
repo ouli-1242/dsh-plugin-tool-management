@@ -214,6 +214,17 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     },
     supersede: SUPERSEDE_NOTE,
   },
+  // 两条自动记忆各自一条消息：标题在这里，正文里不再写 `## Learned notes` ——
+  // 框架的 `#` 已经是板块层，正文再写一个 `##` 只会让模型读成两个层级。
+  // 不写 `how`：正文第一行就是授权语，同一件事说两遍是白付 token。
+  autoGlobal: {
+    title: 'Learned notes (all projects)',
+    supersede: SUPERSEDE_NOTE,
+  },
+  autoWorkspace: {
+    title: 'Learned notes (this workspace)',
+    supersede: SUPERSEDE_NOTE,
+  },
   mcp: {
     title: 'Current MCP servers',
     // how 只剩"怎么用备注"这半句：前半个分句「工具名是 `mcp__<服务器>__<工具>`」删掉了

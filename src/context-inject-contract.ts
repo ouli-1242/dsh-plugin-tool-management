@@ -1,19 +1,21 @@
-// 注入域的身份契约：六个域、每域对应消息 kind 与工具名前缀、子代理深度探针、设置默认值。
+// 注入域的身份契约：八个域、每域对应消息 kind 与工具名前缀、子代理深度探针、设置默认值。
 //
-// 从 context-inject.ts 整段搬来，一行未改。这一层回答的是「哪个域是哪个域」——界面按它排六行
+// 从 context-inject.ts 整段搬来，一行未改。这一层回答的是「哪个域是哪个域」——界面按它排八行
 // 勾选、门禁按它把工具名归域、拦截按它认消息来源，四处读同一份，所以它必须是谁都能引、
 // 但自己不依赖任何其它层的那一份。
 import type { PresetInjectionFacts } from './compat/preset-reach.js'
 
-/** 可注入的域（界面上的六个勾选，顺序即界面与消息顺序）。 */
-export type InjectDomainKey = 'scene' | 'memory' | 'mcp' | 'skills' | 'subagents' | 'prompt'
+/** 可注入的域（界面上的八个勾选，顺序即界面与消息顺序）。 */
+export type InjectDomainKey = 'scene' | 'memory' | 'autoGlobal' | 'autoWorkspace' | 'mcp' | 'skills' | 'subagents' | 'prompt'
 
 /**
  * 权威域顺序（界面勾选、注入消息先后都按它）。
  * 场景排第一、记忆紧跟：场景是"当前模式"的**框架**（有哪些场景、各自是什么约定），
- * 记忆是各场景下的**内容** —— 先给框架再给内容。
+ * 记忆是各场景下的**内容** —— 先给框架再给内容。两条自动记忆跟在用户记忆之后：
+ * 它们说的是同一类东西（记下的东西），但必须各占一条消息 —— 任何一条新增只该让对应
+ * 那一层重发，不能把用户记忆和另一层一起重载。
  */
-export const INJECT_DOMAIN_KEYS = ['scene', 'memory', 'mcp', 'skills', 'subagents', 'prompt'] as const
+export const INJECT_DOMAIN_KEYS = ['scene', 'memory', 'autoGlobal', 'autoWorkspace', 'mcp', 'skills', 'subagents', 'prompt'] as const
 
 /**
  * 域 → 消息来源 kind（轨迹行标签，也是去重时的身份）。
@@ -28,6 +30,8 @@ export const INJECT_DOMAIN_KEYS = ['scene', 'memory', 'mcp', 'skills', 'subagent
 export const INJECT_KIND_OF: Record<InjectDomainKey, string> = {
   scene: 'scene-manager-catalog',
   memory: 'memory-manager-catalog',
+  autoGlobal: 'auto-global-catalog',
+  autoWorkspace: 'auto-workspace-catalog',
   mcp: 'mcp-manager-catalog',
   skills: 'skill-manager-catalog',
   subagents: 'subagent-manager-catalog',
@@ -53,6 +57,11 @@ export const INJECT_KIND_OF: Record<InjectDomainKey, string> = {
 export const DOMAIN_TOOL_PREFIX: Record<InjectDomainKey, readonly string[]> = {
   scene: ['scene_manager_'],
   memory: ['memory_manager_'],
+  // 两条自动记忆没有专属工具：`memory_manager_auto` 是两层共用的写入口，按前缀仍归
+  // `memory`（先匹配）。采纳遥测因此不按层拆分 —— 同一个工具写哪层由卡片决定，
+  // 从工具名反推不出来，硬拆只会给出一个看起来精确、实际是猜的数字。
+  autoGlobal: [],
+  autoWorkspace: [],
   mcp: ['mcp_manager_'],
   skills: ['skill_manager_'],
   subagents: ['subagent_manager_'],
@@ -231,20 +240,20 @@ export interface InjectSettings {
   /**
    * 各域开关（任何预设下都生效；默认全开）。
    *
-   * 一张表管所有会话，但**深度判据逐域写在域声明上**（`InjectDomain.applicableTo`）：场景与记忆
-   * 只在顶层注入，子智能体目录按人设的 `catalogDepth` 注入，其余三域不分深度。此前另有一张
-   * `subagentDomains` 给子代理会话单独开路，已删除：它需要按会话分流，而分流所需的人设身份
-   * 在官方机制里取不到（descriptor 字段是白名单、冷恢复只还原 provider/model/effort），
-   * 只能靠一份 childId → 人设名的持久映射，代价远超收益。
+   * 一张表管所有会话，但**深度判据逐域写在域声明上**（`InjectDomain.applicableTo`）：场景、
+   * 用户记忆与两条自动记忆只在顶层注入，子智能体目录按人设的 `catalogDepth` 注入，
+   * 其余三域不分深度。此前另有一张 `subagentDomains` 给子代理会话单独开路，已删除：它需要
+   * 按会话分流，而分流所需的人设身份在官方机制里取不到（descriptor 字段是白名单、
+   * 冷恢复只还原 provider/model/effort），只能靠一份 childId → 人设名的持久映射，代价远超收益。
    */
   domains: Record<InjectDomainKey, boolean>
   /** 条数型目录的渲染上限；缺省项落回各目录模块的出厂常量。 */
   catalogCaps: CatalogCaps
 }
 
-/** 出厂注入设置：六个域全开，目录上限全走出厂值，由用户或档案再收窄。 */
+/** 出厂注入设置：八个域全开，目录上限全走出厂值，由用户或档案再收窄。 */
 export const DEFAULT_INJECT_SETTINGS: InjectSettings = {
   underSuppressingPresets: false,
-  domains: { scene: true, memory: true, mcp: true, skills: true, subagents: true, prompt: true },
+  domains: { scene: true, memory: true, autoGlobal: true, autoWorkspace: true, mcp: true, skills: true, subagents: true, prompt: true },
   catalogCaps: {},
 }

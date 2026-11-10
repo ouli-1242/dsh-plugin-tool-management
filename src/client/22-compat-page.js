@@ -1415,15 +1415,14 @@
             React.createElement('div', { key: 'domains-head', className: 'dsm-seg-group' },
               React.createElement('span', null, t('compat.inject.domains')),
               React.createElement('span', { className: 'dsm-seg-group-line' })),
-            // 六域**一行**（用户 2026-10-12：「分六行很占用空间，能不能一行显示，而且还能美观、
-            // 简洁、高级」）：六颗 chip 等分排开，开 = 成功色描边 + 实心点、关 = 默认描边 + 灰点。
-            // 不再用六颗 32px 开关 —— 名字与开关并排要 ~105px，六份就是 630px，一行放不下还得
-            // 靠缩小字号硬塞；chip 把「名字」本身变成控件，一行 6 个在 760px 里还有余量，
-            // 窄栏按 flex-basis 折成两行也不会挤成一团。
+            // 多域**一行**（用户 2026-10-12：「分六行很占用空间，能不能一行显示，而且还能美观、
+            // 简洁、高级」）：每颗 chip 等分排开，开 = 成功色描边 + 实心点、关 = 默认描边 + 灰点。
+            // 不再用一排 32px 开关 —— 名字与开关并排要 ~105px，六份就是 630px，一行放不下还得
+            // 靠缩小字号硬塞；chip 把「名字」本身变成控件，窄栏按 flex-basis 折行也不会挤成一团。
             // a11y：role=switch + aria-checked 挂在 chip 上（它就是一个开关，只是长成了标签的样子），
             // 键盘可聚焦、Enter/Space 由 button 语义自带。
             React.createElement('div', { key: 'domains', className: 'dsm-inject-domains' },
-              ['scene', 'memory', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
+              ['scene', 'memory', 'autoGlobal', 'autoWorkspace', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
                 // 技能与提示词两域在标准类预设下由宿主送、本插件让位 —— 关掉它们时本插件会连
                 // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
                 // 那两项一句 title，免得用户以为"关了没用"。

@@ -126,15 +126,18 @@ export function createEvolutionRuntime(): EvolutionRuntime {
 }
 
 /**
- * 自动段的**会话快照**。
+ * 自动段的**会话快照**：每个 agent 一份，按注入层（全局 / 工作区）分槽。
  *
  * 为什么必须有：注入去重是按正文字节比对的。如果每学一条就重算整段，那么在一次会话里
  * 学三次，整段记忆就会重发三次 —— session 级前缀缓存全废，且模型会看到三份内容略有
  * 差别的同一段提醒。所以本会话一旦算出自动段就固定住：本会话新学的条目靠对话上下文
  * 本身（模型刚写完它，不会忘），下个会话才从注入里拿到。
  *
- * 重建条件（`key`）：会话 / 工作区 / 启用场景 / 开关状态变了。刻意**不含**条目内容 ——
- * 含了就等于"每学一条重建"，快照就没意义了。
+ * 为什么按层分槽：批准一条全局笔记时，工作区那一层的正文一个字都没变。分槽后它连重渲染
+ * 都不必做；即使因为共用 revision 重渲染了，注入器按字节比对也会跳过，token 成本为 0。
+ *
+ * 重建条件（`key`）：层 / 会话 / 工作区 / 启用场景 / 开关状态 / 风格 / 用户动作版本号 /
+ * 用户记忆的预算档位变了。刻意**不含**条目内容 —— 含了就等于"每学一条重建"，快照就没意义了。
  */
 export interface AutoSnapshot {
   key: string
@@ -146,22 +149,24 @@ export interface AutoSnapshot {
   builtAt: number
 }
 
-const snapshots = new WeakMap<object, AutoSnapshot>()
+/** 槽位 = 注入层。两层各存一份，互不覆盖。 */
+const snapshots = new WeakMap<object, Map<string, AutoSnapshot>>()
 
-export function readAutoSnapshot(agent: object): AutoSnapshot | undefined {
-  return snapshots.get(agent)
+export function readAutoSnapshot(agent: object, layer: 'global' | 'workspace'): AutoSnapshot | undefined {
+  return snapshots.get(agent)?.get(layer)
 }
 
-export function writeAutoSnapshot(agent: object, snap: AutoSnapshot): void {
-  snapshots.set(agent, snap)
-}
-
-/** 强制丢弃（用户在本会话里改了自动记忆 / 切了场景时）。 */
-export function dropAutoSnapshot(agent: object): void {
-  snapshots.delete(agent)
+export function writeAutoSnapshot(agent: object, layer: 'global' | 'workspace', snap: AutoSnapshot): void {
+  let slots = snapshots.get(agent)
+  if (slots === undefined) {
+    slots = new Map()
+    snapshots.set(agent, slots)
+  }
+  slots.set(layer, snap)
 }
 
 export function autoSnapshotKey(parts: {
+  layer: 'global' | 'workspace'
   sessionId?: string
   workspaceHash?: string
   scenes: string[]
@@ -172,10 +177,16 @@ export function autoSnapshotKey(parts: {
   /**
    * 用户动作版本号（确认 / 停用 / 恢复 / 删除 / 提升）。学习写入不加它：
    * 本会话新学的条目靠对话上下文本身，不需要把整段记忆重发一次。
+   *
+   * 两层共用同一个版本号（不做分层 revision）：跨层取代必须同时失效两域，
+   * 分层的版本号反而要记得两边都 bump，漏一边就会让旧说法继续注入。
    */
   revision?: number
+  /** 用户记忆段的预算档位：跨过 8K / 24K 阈值时该层要按新预算重算。 */
+  budgetMode?: 'none' | 'min' | 'zero'
 }): string {
   return [
+    parts.layer,
     parts.sessionId ?? '-',
     parts.workspaceHash ?? '-',
     parts.scenes.join(','),
@@ -183,5 +194,6 @@ export function autoSnapshotKey(parts: {
     parts.inject ? '1' : '0',
     parts.style ?? '-',
     String(parts.revision ?? 0),
+    parts.budgetMode ?? 'none',
   ].join('|')
 }

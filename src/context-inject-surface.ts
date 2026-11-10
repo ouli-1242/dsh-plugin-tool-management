@@ -42,7 +42,7 @@ export function textOf(message: unknown): string | undefined {
 /** 消息来源 kind → 本插件域（`official` = 官方载体发的，不是本插件注入的）。 */
 export interface KindMapping { key: InjectDomainKey; official: boolean }
 
-/** 本插件自己的五个注入 kind（去重比对只用这一份 —— 绝不能让官方正文影响"发不发"的判断）。 */
+/** 本插件自己的八个注入 kind（去重比对只用这一份 —— 绝不能让官方正文影响"发不发"的判断）。 */
 export const PLUGIN_KINDS: ReadonlyMap<string, KindMapping> = new Map(
   INJECT_DOMAIN_KEYS.map((key) => [INJECT_KIND_OF[key], { key, official: false }] as const),
 )
@@ -170,7 +170,7 @@ export function newestDomainTexts(agent: unknown, kinds: ReadonlyMap<string, Kin
     })
     return done()
   }
-  // 提前收工的条件是"六个域都拿到了**内容**"：只有通知的域（`form === 'notice'`）还得继续
+  // 提前收工的条件是"八个域都拿到了**内容**"：只有通知的域（`form === 'notice'`）还得继续
   // 往更早找它的正文，否则内容恢复时 `body` 是空的，只能当成"内容变了"多发一条。
   const done = (): boolean =>
     out.size === INJECT_DOMAIN_KEYS.length && [...out.values()].every((entry) => entry.form !== 'notice')

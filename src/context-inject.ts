@@ -544,7 +544,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // 判据真算 delta（租约造成的差异在侧车里根本没有覆盖记录），来自 SWR 缓存，同步可得。
       const visible = newestDomainTexts(agent, PLUGIN_KINDS)
       // 两个判据各自抛异常时按"没有差异"处理：宁可这一轮沿用旧口径，也不能让整条注入通道
-      // 因为一次文件/目录计算失败而全线停摆（外层的 catch 会把六个域一起丢掉）。
+      // 因为一次文件/目录计算失败而全线停摆（外层的 catch 会把八个域一起丢掉）。
       let promptDiverged = false
       try { promptDiverged = deps.promptBaselineDiverged?.(agent) === true } catch { promptDiverged = false }
       const promptTakeover = promptDiverged || deps.promptOverrideActive?.(agent) === true || visible.has('prompt')
@@ -635,7 +635,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // 人设的工具限制也会让工具不在手里，而那份名单逐 agent 不同。
       const hiddenNow = deps.hiddenTools !== undefined ? deps.hiddenTools(agent) : null
       const toolHidden = hiddenNow === null ? () => false : (name: string) => hiddenNow.has(name)
-      // 「设置写在哪一层」那一行**只挂一条消息**：六条各挂一份 = 同一句话付六次（≈60 tok/轮）。
+      // 「设置写在哪一层」那一行**只挂一条消息**：八条各挂一份 = 同一句话付八次（≈80 tok/轮）。
       // 优先「场景」（它讲的就是此刻的处境），其次「记忆」，都没有就挂本步第一条。
       // 跳过 `delta` 那一条：它是"官方那份还在，这里只补差异"，多一行状态读起来像两份都说。
       const scopeLine = scopeLineOf(deps.scopeMode?.())

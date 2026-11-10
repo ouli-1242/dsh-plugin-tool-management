@@ -517,7 +517,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-pill-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
 .dsm-compat-reach-marks{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;min-width:0}
 .dsm-inject-settings{display:flex;flex-direction:column;gap:8px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
-/* 注入域开关：六域**一行**等分（用户 2026-10-12：「分六行很占用空间，能不能一行显示，
+/* 注入域开关：多域**一行**等分（用户 2026-10-12：「分六行很占用空间，能不能一行显示，
    而且还能美观、简洁、高级」）。
    做法：把「名字」本身做成控件（chip），而不是"名字 + 一颗 32px 开关"并排 —— 后者六份要
    ~630px，一行塞不下只能缩字号。

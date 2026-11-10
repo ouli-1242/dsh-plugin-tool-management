@@ -139,6 +139,8 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 列表读的是 catalog（派生索引，丢了可重建），与 `rules-list` 同一档：写的是自己的侧车，
   // 不改宿主状态 → readonly。
   'evolution-list': { readonly: true },
+  // 卡片弹出前的只读预演：跑门禁、算路由与合并目标，不写任何文件 → 与 list 同档。
+  'evolution-preview': { readonly: true },
   // 学一条 / 忘一条写的是**记忆正文**（`_auto/*.md` + state + 索引 + 墓碑），落在与
   // `rules-create` / `rules-remove` 同一棵树里 —— 所以同权：要令牌、且场景锁定时拒。
   // 冻结这一刀容易让人觉得"学习又不改场景配置"，但锁的意义是"这份内容别再变"，

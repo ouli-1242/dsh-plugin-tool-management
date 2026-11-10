@@ -101,7 +101,14 @@ import { createPromptsService } from '../lib/prompts/service.js'
 import { createScenePromptSync } from '../lib/scene-prompt-sync.js'
 
 test('域与工具名前缀双向对得上（对不上就有域永远统计不到调用）', () => {
+  // 两条自动记忆没有专属工具：`memory_manager_auto` 是两层共用的写入口，按前缀归 `memory`。
+  // 空数组是显式声明「这个域没有工具」，不是漏配。
+  const noTool = new Set(['autoGlobal', 'autoWorkspace'])
   for (const key of INJECT_DOMAIN_KEYS) {
+    if (noTool.has(key)) {
+      assert.deepEqual(DOMAIN_TOOL_PREFIX[key], [], key + ' 没有专属工具，前缀必须为空')
+      continue
+    }
     // 一个域可以挂多个前缀（场景与记忆同域两族），所以逐个前缀都要成环。
     assert.ok(DOMAIN_TOOL_PREFIX[key].length > 0, key + ' 至少要有一个前缀')
     for (const prefix of DOMAIN_TOOL_PREFIX[key]) {
@@ -109,6 +116,8 @@ test('域与工具名前缀双向对得上（对不上就有域永远统计不�
     }
   }
   assert.equal(domainOfTool('read_file'), undefined, '不是本插件的工具不该被认领')
+  // 共用写入口仍归用户记忆域：自动记忆的采纳遥测不按层拆（工具名反推不出写哪层）。
+  assert.equal(domainOfTool('memory_manager_auto'), 'memory')
 })
 
 test('记忆族与场景族各归自己的域，中途用过的名字不是别名', () => {
@@ -124,12 +133,16 @@ test('记忆族与场景族各归自己的域，中途用过的名字不是别�
   assert.equal(domainOfTool('scene_memory_manager_save'), undefined)
 })
 
-test('注入域里场景排在记忆之前（先给框架再给内容）', () => {
+test('注入域里场景排在记忆之前（先给框架再给内容），自动记忆紧跟用户记忆', () => {
   // 顺序就是界面勾选顺序与消息顺序。场景是"当前模式的框架"，记忆是它下面的内容 ——
   // 反过来的话模型先读到一堆条目，才知道自己在哪个场景。
   const keys = [...INJECT_DOMAIN_KEYS]
   assert.ok(keys.indexOf('scene') >= 0, '场景必须是独立域')
   assert.ok(keys.indexOf('scene') < keys.indexOf('memory'), '场景要排在记忆前面')
+  // 自动记忆说的是同一类东西（记下的东西），排在用户记忆之后；两层之间固定先全局后本地。
+  assert.ok(keys.indexOf('memory') < keys.indexOf('autoGlobal'), '自动记忆要跟在用户记忆后面')
+  assert.ok(keys.indexOf('autoGlobal') < keys.indexOf('autoWorkspace'), '先全局后本工作区')
+  assert.ok(keys.indexOf('autoWorkspace') < keys.indexOf('mcp'), '自动记忆在目录类域之前')
 })
 
 test('旧工具名迁移：用户「关掉了某条」的意图不能在改名后静默失效', () => {

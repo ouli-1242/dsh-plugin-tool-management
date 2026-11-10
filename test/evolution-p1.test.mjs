@@ -13,7 +13,7 @@ import { autoSnapshotKey } from '../lib/evolution/runtime.js'
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
 import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
 import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
-import { renderAutoBlock, allocateByLayer, autoBudgetOf, competitorBudgetOf } from '../lib/memories/render-auto.js'
+import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf } from '../lib/memories/render-auto.js'
 
 /**
  * 门禁上下文：给一份最小可用的默认值，逐个测试只覆盖它关心的字段。
@@ -322,11 +322,18 @@ test('墓碑：原文相似也拦 —— 换个 key 或改一个字都不能让�
   assert.equal(tombstoneBlocked(ctx, 'deploy', '发布前先跑 lint'), undefined)
 })
 
-test('快照键含用户动作版本号：确认 / 停用后本会话立刻重算，学习不触发重发', () => {
-  const base = { sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
+test('快照键：分层 + 用户动作版本号 + 预算档位，学习写入不触发重发', () => {
+  const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
   assert.notEqual(autoSnapshotKey({ ...base, revision: 1 }), autoSnapshotKey({ ...base, revision: 0 }))
   // 旧调用方没传 revision 时与 0 同键：升级本身不该让所有会话重发一次整段。
   assert.equal(autoSnapshotKey(base), autoSnapshotKey({ ...base, revision: 0 }))
+  // 两层必须不同键：共用一份快照会让批准一层时把另一层也重建。
+  assert.notEqual(autoSnapshotKey({ ...base, layer: 'workspace' }), autoSnapshotKey(base))
+  // 用户记忆跨过预算阈值时该层要按新预算重算。
+  assert.notEqual(autoSnapshotKey({ ...base, budgetMode: 'min' }), autoSnapshotKey(base))
+  assert.equal(budgetModeOf(0), 'none')
+  assert.equal(budgetModeOf(10_000), 'min')
+  assert.equal(budgetModeOf(30_000), 'zero')
 })
 
 test('墓碑：删过的不能被自动路径复活', () => {
@@ -344,29 +351,34 @@ test('墓碑：删过的不能被自动路径复活', () => {
   assert.equal(tombstoneActive(expired), false)
 })
 
-// ── 自动段渲染 ─────────────────────────────────────────────────────────────
+// ── 自动段渲染（按层）─────────────────────────────────────────────────────
 
-test('自动段：同输入必须逐字节相同（否则每轮重发整段）', () => {
-  const entry = entryOf({ id: '_ws/abcd1234abcd1234/pkg', layer: 'workspace', workspace: 'abcd1234abcd1234', kind: 'preference', key: 'package-manager', oneLine: '这个仓库用 pnpm', confidence: 0.95 })
-  const input = { entries: [entry], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0 }
-  const a = renderAutoBlock(input)
-  const b = renderAutoBlock(input)
+const wsEntry = (over = {}) => entryOf({
+  id: '_ws/abcd1234abcd1234/pkg', layer: 'workspace', workspace: 'abcd1234abcd1234',
+  kind: 'preference', key: 'package-manager', oneLine: '这个仓库用 pnpm', confidence: 0.95, ...over,
+})
+
+test('自动段：同输入必须逐字节相同（否则每轮重发整段），正文不含标题', () => {
+  const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0 }
+  const a = renderAutoLayer('workspace', input)
+  const b = renderAutoLayer('workspace', input)
   assert.equal(a.text, b.text)
-  assert.ok(a.text.startsWith('## Learned notes (auto)'))
+  // 标题由注入框架（`# Learned notes (...)`）提供，正文再写 `##` 会变成两个层级。
+  assert.doesNotMatch(a.text, /^#/m)
+  assert.match(a.text, /^\*\*Notes the agent wrote/)
   assert.match(a.text, /- \[pref\] 这个仓库用 pnpm/)
 })
 
 test('自动段：风格指引跟设置走 —— 有就一行、换了文本整段变', () => {
-  const entry = entryOf({ id: '_ws/abcd1234abcd1234/pkg', layer: 'workspace', workspace: 'abcd1234abcd1234', kind: 'preference', oneLine: '这个仓库用 pnpm', confidence: 0.95 })
-  const input = { entries: [entry], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0, styleLine: 'Write terse and factual: no emoji.' }
-  const r = renderAutoBlock(input)
+  const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0, styleLine: 'Write terse and factual: no emoji.' }
+  const r = renderAutoLayer('workspace', input)
   assert.match(r.text, /House style for new notes: Write terse and factual: no emoji\./)
   // 没给 styleLine 就不该出现这一行（旧调用方不受影响）。
-  const plain = renderAutoBlock({ ...input, styleLine: undefined })
+  const plain = renderAutoLayer('workspace', { ...input, styleLine: undefined })
   assert.doesNotMatch(plain.text, /House style/)
   // 同一风格内逐字节稳定（去重的前提）；风格文本变了整段跟着变。
-  assert.equal(renderAutoBlock(input).text, r.text)
-  assert.notEqual(renderAutoBlock({ ...input, styleLine: 'Write in as few words as possible.' }).text, r.text)
+  assert.equal(renderAutoLayer('workspace', input).text, r.text)
+  assert.notEqual(renderAutoLayer('workspace', { ...input, styleLine: 'Write in as few words as possible.' }).text, r.text)
 })
 
 test('风格设定：非法输入回退 efficient，custom 没文本不生效，生效配置就近覆盖', () => {
@@ -386,23 +398,51 @@ test('风格设定：非法输入回退 efficient，custom 没文本不生效，
   assert.equal(noteStyleGuideOf('custom', 'terse'), 'terse')
 })
 
-test('自动段：会话层只露自己的条目（结构性隔离的第二道保险）', () => {
+test('自动段：全局层只收全局，工作区块只收本工作区与旧会话层', () => {
   const entries = [
-    entryOf({ id: '_session/s-1/a', layer: 'session', session: 's-1' }),
-    entryOf({ id: '_session/s-2/b', layer: 'session', session: 's-2' }),
+    entryOf({ id: 'global-a', oneLine: '全局条目' }),
+    wsEntry({ id: '_ws/abcd1234abcd1234/ws-a', oneLine: '本项目条目' }),
+    wsEntry({ id: '_ws/ffffffffffffffff/other', workspace: 'ffffffffffffffff', oneLine: '别的项目条目' }),
+    entryOf({ id: '_session/s-1/legacy', layer: 'session', session: 's-1', oneLine: '本会话旧条目' }),
+    entryOf({ id: '_session/s-2/other', layer: 'session', session: 's-2', oneLine: '别的会话旧条目' }),
   ]
-  const r = renderAutoBlock({ entries, state: emptyState(), scope: { sessionId: 's-1' }, userSegmentTokens: 0 })
-  assert.match(r.text, /_session\/s-1\/a/)
-  assert.doesNotMatch(r.text, /s-2/)
+  const scope = { workspaceHash: 'abcd1234abcd1234', sessionId: 's-1' }
+  const g = renderAutoLayer('global', { entries, state: emptyState(), scope, userSegmentTokens: 0 })
+  assert.match(g.text, /全局条目/)
+  assert.doesNotMatch(g.text, /本项目条目/)
+  assert.doesNotMatch(g.text, /别的项目条目/)
+  const w = renderAutoLayer('workspace', { entries, state: emptyState(), scope, userSegmentTokens: 0 })
+  assert.doesNotMatch(w.text, /全局条目/, '全局条目不进工作区块')
+  assert.match(w.text, /本项目条目/)
+  assert.doesNotMatch(w.text, /别的项目条目/)
+  assert.match(w.text, /本会话旧条目/, '旧会话层按当前 sid 兼容可见')
+  assert.doesNotMatch(w.text, /别的会话旧条目/)
+})
+
+test('自动段：新增一层的条目不改另一层的正文（拆域的意义）', () => {
+  const scope = { workspaceHash: 'abcd1234abcd1234' }
+  const wsOnly = [wsEntry()]
+  const wsBefore = renderAutoLayer('workspace', { entries: wsOnly, state: emptyState(), scope, userSegmentTokens: 0 }).text
+  const wsAfter = renderAutoLayer('workspace', {
+    entries: [...wsOnly, entryOf({ id: 'global-new', oneLine: '新增的全局条目' })],
+    state: emptyState(), scope, userSegmentTokens: 0,
+  }).text
+  assert.equal(wsAfter, wsBefore, '新增全局条目不该改变工作区块的正文')
+  const globalBefore = renderAutoLayer('global', { entries: [entryOf({ id: 'global-a', oneLine: '全局条目' })], state: emptyState(), scope, userSegmentTokens: 0 }).text
+  const globalAfter = renderAutoLayer('global', {
+    entries: [entryOf({ id: 'global-a', oneLine: '全局条目' }), wsEntry({ id: '_ws/abcd1234abcd1234/ws-new' })],
+    state: emptyState(), scope, userSegmentTokens: 0,
+  }).text
+  assert.equal(globalAfter, globalBefore, '新增工作区条目不该改变全局块的正文')
 })
 
 test('自动段：确认过的不再按信心二次筛选；候选一条都不注入', () => {
-  // 能进入注入集合的条目已经过记忆页确认，confidence 只参与排序 —— 再拿它筛一次
+  // 能进入注入集合的条目已经过记忆页 / 卡片确认，confidence 只参与排序 —— 再拿它筛一次
   // 就是「确认了却不注入」那类静默失效。
-  const weak = renderAutoBlock({ entries: [entryOf({ id: 'a', confidence: 0.5 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const weak = renderAutoLayer('global', { entries: [entryOf({ id: 'a', confidence: 0.5 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
   assert.match(weak.text, /a/)
   // 候选没被确认，哪怕信心很高也不注入。
-  const pending = renderAutoBlock({ entries: [entryOf({ id: 'b', status: 'candidate', confidence: 0.95 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const pending = renderAutoLayer('global', { entries: [entryOf({ id: 'b', status: 'candidate', confidence: 0.95 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
   assert.equal(pending.text, '')
 })
 
@@ -412,43 +452,32 @@ test('自动段：待裁决的、关掉的一律不注入', () => {
     ...emptyState(),
     entries: { x: { evidence: [], counters: { injected: 0, read: 0, helpful: 0, harmful: 0 }, transitions: [], needsReview: '与你的记忆冲突' } },
   }
-  assert.equal(renderAutoBlock({ entries: [base], state, scope: {}, userSegmentTokens: 0 }).text, '')
-  assert.equal(renderAutoBlock({ entries: [{ ...base, enabled: false }], state: emptyState(), scope: {}, userSegmentTokens: 0 }).text, '')
+  assert.equal(renderAutoLayer('global', { entries: [base], state, scope: {}, userSegmentTokens: 0 }).text, '')
+  assert.equal(renderAutoLayer('global', { entries: [{ ...base, enabled: false }], state: emptyState(), scope: {}, userSegmentTokens: 0 }).text, '')
 })
 
 test('自动段：core / pinned 常驻（低信心也照常注入）', () => {
   const core = entryOf({ id: 'core-x', status: 'core', confidence: 0.5 })
-  const r = renderAutoBlock({ entries: [core], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const r = renderAutoLayer('global', { entries: [core], state: emptyState(), scope: {}, userSegmentTokens: 0 })
   assert.match(r.text, /core-x/)
 })
 
-test('自动段：预算按上下文窗口算，且有硬上下限', () => {
+test('自动段：预算按上下文窗口算，且有硬上下限；按层缩到自己的 min', () => {
   assert.equal(autoBudgetOf(undefined), 1600)
   assert.equal(autoBudgetOf(32 * 1024), 800) // 32K × 1.5% = 491 → 夹到下限
   assert.equal(autoBudgetOf(1_000_000), 2400) // 夹到上限
-  assert.equal(competitorBudgetOf(1600, 0).reduced, 'none')
-  assert.equal(competitorBudgetOf(1600, 10_000).reduced, 'min')
-  // 降到各层 min 之和：只剩两层后是 100 + 200 = 300（旧的四层是 500）
-  assert.equal(competitorBudgetOf(1600, 10_000).budget, 300)
-  assert.equal(competitorBudgetOf(1600, 30_000).budget, 0)
-})
-
-test('分层预算：先满足 min，剩余先本项目后全局', () => {
-  const layers = ['global', 'workspace']
-  const q = allocateByLayer(1600, layers)
-  for (const l of layers) assert.ok(q[l] > 0, l)
-  const sum = q.global + q.workspace
-  assert.ok(sum <= 1600, String(sum))
-  // 本项目层比全局层拿得多：更近、更具体，价值密度更高
-  assert.ok(q.workspace >= q.global)
-  // 连 min 都不够时按比例缩，但每层都还在 —— 不能整层消失
-  const tiny = allocateByLayer(200, layers)
-  for (const l of layers) assert.ok(tiny[l] >= 1, l)
+  assert.equal(competitorBudgetOfLayer(1600, 0, 'global').reduced, 'none')
+  assert.equal(competitorBudgetOfLayer(1600, 0, 'global').budget, 500) // 300 + 200 开销
+  assert.equal(competitorBudgetOfLayer(1600, 0, 'workspace').budget, 850) // 650 + 200
+  assert.equal(competitorBudgetOfLayer(1600, 10_000, 'global').reduced, 'min')
+  assert.equal(competitorBudgetOfLayer(1600, 10_000, 'global').budget, 300) // 100 + 200
+  assert.equal(competitorBudgetOfLayer(1600, 10_000, 'workspace').budget, 400) // 200 + 200
+  assert.equal(competitorBudgetOfLayer(1600, 30_000, 'global').budget, 0)
 })
 
 test('自动段：条数多时截断并明说（不静默丢）', () => {
   const entries = Array.from({ length: 60 }, (_, i) => entryOf({ id: 'g/' + i, oneLine: '条目 ' + i, estTokens: 7 }))
-  const r = renderAutoBlock({ entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 64000 })
+  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 64000 })
   assert.ok(r.count > 0)
   assert.ok(r.dropped > 0)
   assert.match(r.text, /not shown/)
@@ -457,12 +486,12 @@ test('自动段：条数多时截断并明说（不静默丢）', () => {
 
 test('自动段：总条数不超过硬顶', () => {
   const entries = Array.from({ length: 200 }, (_, i) => entryOf({ id: 'g/' + i, oneLine: 'x' + i, estTokens: 3, pinned: true }))
-  const r = renderAutoBlock({ entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 400000 })
+  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 400000 })
   assert.ok(r.count <= 40, String(r.count))
 })
 
 test('自动段：没有候选时不发空块（不占上下文）', () => {
-  const r = renderAutoBlock({ entries: [], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const r = renderAutoLayer('global', { entries: [], state: emptyState(), scope: {}, userSegmentTokens: 0 })
   assert.equal(r.text, '')
   assert.deepEqual(r.pickedIds, [])
 })
@@ -472,7 +501,7 @@ test('自动段：pickedIds 只含真正进入快照的条目（注入计数靠�
     entryOf({ id: 'a', oneLine: 'a' }),
     entryOf({ id: 'b', status: 'candidate', oneLine: 'b' }),
   ]
-  const r = renderAutoBlock({ entries, state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0 })
   assert.deepEqual(r.pickedIds, ['a'])
 })
 

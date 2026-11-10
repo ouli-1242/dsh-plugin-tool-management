@@ -72,7 +72,7 @@ import { buildScopeQuestion, scopeChoiceOf, scopeFailureOf, type ScopeAskRequest
 // 写入管线：九道门 + 六步落盘。
 import { createLearner } from './evolution/write.js'
 import { isReservedGroup, layerOfGroup } from './memories/constants.js'
-import { renderAutoBlock, estimateTextTokens } from './memories/render-auto.js'
+import { renderAutoLayer, budgetModeOf, estimateTextTokens, type AutoLayer } from './memories/render-auto.js'
 import { workspaceMemoryKeyOf } from './scope/workspace-key.js'
 import { buildEvolutionOps } from './ops/evolution.js'
 // 改名 / 进场景 / 存档案的联动（op 重包，从本文件 apply 闭包整段抽出）。
@@ -2380,91 +2380,100 @@ export default {
     }
 
     /**
-     * 记忆域的注入文本 = 用户记忆段 + 自动段（`## Learned notes (auto)`）。
+     * 记忆域 = 用户手写记忆。
      *
-     * 为什么拼在同一条消息里而不是新开一个注入域：六个域的开关、去重、`applicableTo`
-     * 各有一份，加第七个域意味着界面多一个勾选、注入实况多一行、每个预设都要重新验一遍
-     * 可达性（#27 的教训）。而这两段说的是同一件事 —— "之前记下的东西" —— 只是一个
-     * 是用户写的、一个是 agent 学的。拼在一条消息里，两层授权语也就在同一条里说得清。
+     * 自动记忆**不再拼在这里**：两条自动记忆（全局 / 本工作区）各占一条独立消息。拼在一条
+     * 里时，任何一条新增都会让整段（含用户记忆）重发；拆开后只有变化的那一层重发，
+     * 另一层与用户记忆按字节比对直接跳过。
      *
-     * 自动段**永不抛**：它只是附加信息，坏了就当没有。记忆段本身的 `memoryText` 反过来
-     * 是抛异常的（读不动时不能报成"用户清空了记忆"）—— 两个方向的失败语义不同，不能统一。
+     * `memoryText` 读不动时仍然抛：不能把"读失败"报成"用户清空了记忆"。
      */
     function memoryDomainText(agent: unknown): string {
-      const base = memoriesService.memoryText(memoryScopeOf(agent))
-      let auto = ''
-      try {
-        auto = autoSegmentText(agent, base)
-      } catch { auto = '' }
-      if (auto === '') return base
-      if (base.trim() === '') return auto
-      return base.replace(/\s+$/, '') + '\n\n' + auto
+      return memoriesService.memoryText(memoryScopeOf(agent))
     }
 
     /**
-     * 自动段：按会话快照。
+     * 自动记忆某一层的注入正文（按会话快照）。
      *
      * 只有 depth 0 有（与记忆域同一条 `applicableTo`：子代理的上下文要收敛为
      * 「角色 + 任务」，而自动记忆是父会话的处境）。
+     *
+     * **永不抛**：自动段只是附加信息，坏了就当没有；注入失败会让整段上下文停摆，
+     * 而自动段是可选内容。读不动用户记忆时预算按 0 算，不让它连累自动段。
      */
-    function autoSegmentText(agent: unknown, baseText: string): string {
-      if (subagentDepthOf(agent) !== 0) return ''
-      if (!agent || typeof agent !== 'object') return ''
-      const identity = sessionIdentityOf(agent)
-      const sid = identity?.sessionId ?? undefined
-      const cwd = identity?.cwd
-      const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
-      const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
-      // `enabled`（允不允许学）与 `inject`（要不要显示）是两件事：用户可能"不学了，但学过的
-      // 还能用"（enabled=false + inject=true）。判据只看 `inject` —— 它是解析后的最终答案
-      // （没显式设过就跟随 enabled）。写成 `!enabled && !inject` 会把
-      // "开着学习但明确不想显示"也当成要显示，那正是这个字段存在的意义。
-      if (!cfg.inject) return ''
+    function autoDomainText(layer: AutoLayer, agent: unknown): string {
+      try {
+        if (subagentDepthOf(agent) !== 0) return ''
+        if (!agent || typeof agent !== 'object') return ''
+        const identity = sessionIdentityOf(agent)
+        const sid = identity?.sessionId ?? undefined
+        const cwd = identity?.cwd
+        const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
+        const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
+        // `enabled`（允不允许学）与 `inject`（要不要显示）是两件事：用户可能"不学了，但学过的
+        // 还能用"（enabled=false + inject=true）。判据只看 `inject` —— 它是解析后的最终答案
+        // （没显式设过就跟随 enabled）。写成 `!enabled && !inject` 会把
+        // "开着学习但明确不想显示"也当成要显示，那正是这个字段存在的意义。
+        if (!cfg.inject) return ''
 
-      const scene = memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined
-      const enabledScenes = new Set<string>(scene ? [scene] : [])
-      // 风格指引跟着设置走：改一次风格，段文本变一次（整段重发一次是内容真的变了）。
-      // 写进快照键：同一风格内不重建，换了风格立刻重建。
-      const styleGuide = noteStyleGuideOf(cfg.noteStyle, cfg.noteStyleText ?? '')
-      const view = evolutionRuntime.view()
-      const key = autoSnapshotKey({
-        ...(sid !== undefined ? { sessionId: sid } : {}),
-        ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
-        scenes: [...enabledScenes],
-        enabled: cfg.enabled,
-        inject: cfg.inject,
-        style: styleGuide,
-        // 用户确认 / 停用 / 删除后立刻重建本会话的段；学习写入不加版本号。
-        revision: view.state.watermarks.autoRevision ?? 0,
-      })
-      const prev = readAutoSnapshot(agent)
-      if (prev && prev.key === key) return prev.text
+        const scene = memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined
+        const enabledScenes = new Set<string>(scene ? [scene] : [])
+        // 风格指引跟着设置走：改一次风格，段文本变一次（整段重发一次是内容真的变了）。
+        // 写进快照键：同一风格内不重建，换了风格立刻重建。
+        const styleGuide = noteStyleGuideOf(cfg.noteStyle, cfg.noteStyleText ?? '')
+        const view = evolutionRuntime.view()
 
-      const result = renderAutoBlock({
-        entries: Object.values(view.catalog.entries),
-        state: view.state,
-        scope: {
-          ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
+        // 用户记忆段的预算档位也进快照键：手写记忆跨过 8K / 24K 阈值时，
+        // 自动段该按新预算重算，而不是等下一次无关的 revision 变化。
+        let userSegmentTokens = 0
+        try { userSegmentTokens = estimateTextTokens(memoryDomainText(agent)) } catch { userSegmentTokens = 0 }
+        const budgetMode = budgetModeOf(userSegmentTokens)
+
+        const key = autoSnapshotKey({
+          layer,
           ...(sid !== undefined ? { sessionId: sid } : {}),
-          enabledScenes,
-        },
-        userSegmentTokens: estimateTextTokens(baseText),
-        ...(styleGuide !== '' ? { styleLine: styleGuide } : {}),
-      })
-      const snap: AutoSnapshot = {
-        key,
-        text: result.text,
-        count: result.count,
-        tokens: result.tokens,
-        budget: result.budget,
-        dropped: result.dropped,
-        builtAt: Date.now(),
+          ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
+          scenes: [...enabledScenes],
+          enabled: cfg.enabled,
+          inject: cfg.inject,
+          style: styleGuide,
+          // 用户确认 / 停用 / 删除后立刻重建本会话的段；学习写入不加版本号。
+          revision: view.state.watermarks.autoRevision ?? 0,
+          budgetMode,
+        })
+        const prev = readAutoSnapshot(agent, layer)
+        if (prev && prev.key === key) return prev.text
+
+        const result = renderAutoLayer(layer, {
+          entries: Object.values(view.catalog.entries),
+          state: view.state,
+          scope: {
+            ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
+            ...(sid !== undefined ? { sessionId: sid } : {}),
+            enabledScenes,
+          },
+          userSegmentTokens,
+          ...(styleGuide !== '' ? { styleLine: styleGuide } : {}),
+        })
+        const snap: AutoSnapshot = {
+          key,
+          text: result.text,
+          count: result.count,
+          tokens: result.tokens,
+          budget: result.budget,
+          dropped: result.dropped,
+          builtAt: Date.now(),
+        }
+        writeAutoSnapshot(agent, layer, snap)
+        // 计数只记「正文真的变了」的那一次：revision 重建后正文可能逐字节相同，
+        // 那一份没有重新发给模型，不该把注入次数 +1。
+        if (prev === undefined || prev.text !== result.text) {
+          void autoLearner.noteInjected(result.pickedIds).catch(() => undefined)
+        }
+        return result.text
+      } catch {
+        return ''
       }
-      writeAutoSnapshot(agent, snap)
-      // 计数只记「真正进了这一份快照」的条目：同一会话里段是冻结的，逐轮 +1 会把
-      // 注入次数变成轮数。写失败不影响本轮注入。
-      void autoLearner.noteInjected(result.pickedIds).catch(() => undefined)
-      return result.text
     }
 
     // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的各域文本。
@@ -2485,16 +2494,16 @@ export default {
           // 委派"。委派可行性由官方决定：`dsh-subagent` 默认 `maxDepth: 1`（0.2.1 实测核对），provider 只在
           // 传了该值时才校验，所以子代理本来就能继续嵌套（用户实测确认）。此前判据叫"还有没有
           // 委派预算"、语义是"还能不能委派"，那是错的 —— 详见 service.ts 里 `catalogDepth` 的注释。
-          //   · 场景与记忆：**恒为"只在顶层"**。这两段说的是**父会话的处境**（此刻在哪个场景、
-          //     这个场景下攒了什么），子代理要什么由父代理写进委派说明；记忆本体又是几 KB 的
-          //     常驻文本，子代理真有需要可以自己用 `memory_manager_*` 取。放它们进子会话，
-          //     子代理的上下文就不再收敛为「角色 + 任务」。（曾把这两条放开到所有深度，已回退。）
+          //   · 场景、记忆与两条自动记忆：**恒为"只在顶层"**。这几段说的是**父会话的处境**
+          //     （此刻在哪个场景、这个场景下攒了什么），子代理要什么由父代理写进委派说明；
+          //     记忆本体又是几 KB 的常驻文本，子代理真有需要可以自己用 `memory_manager_*` 取。
+          //     放它们进子会话，子代理的上下文就不再收敛为「角色 + 任务」。
           //   · 子智能体目录：人设的 `catalogDepth`（默认 1 = 只在顶层）—— 它问的是"**目录该不该
           //     注入到这么深的会话**"，与"这个域要不要注入"是两件事。目录正文也按同一判据过滤
           //     （`text(agent)`），两处同源所以不会分叉。
           //   · MCP / 技能 / 提示词：不分深度。
           //
-          // 同一张 `domains` 表管着六个域的开关，没有按会话分流的第二张表 —— 那张
+          // 同一张 `domains` 表管着八个域的开关，没有按会话分流的第二张表 —— 那张
           // `subagentDomains` 已删：人设身份在官方机制里取不到（descriptor 是字段白名单、
           // 冷恢复只还原 provider/model/effort）。
           domains: () => [
@@ -2503,9 +2512,13 @@ export default {
             // 场景与记忆两域**按会话取覆盖**：`scopeOf(agent)` 给出本会话的场景与逐条
             // 开关，取不到会话 id 时返回 undefined = 跟随全局（风险表最后一条：取不到不猜）。
             { key: 'scene', name: 'tool-management:scene', label: '场景', form: 'snapshot', text: (agent) => memoriesService.sceneCatalogText(memoryScopeOf(agent)), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            // 记忆（**内容**）：各场景下的条目 + 自动段（用户写的 vs agent 学的，两层授权语）。
+            // 记忆（**用户内容**）：各场景下的手写条目。
             // 与场景段同源、同一条 `applicableTo`。
             { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: (agent) => memoryDomainText(agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            // 自动记忆拆成两条独立消息：任何一条新增只让对应层重发；用户记忆的正文
+            // 不因自动记忆变化而重载。两层各有一条授权语（见 render-auto 的 AUTO_MEMORY_NOTE）。
+            { key: 'autoGlobal', name: 'tool-management:auto-global', label: '全局自动记忆', form: 'snapshot', text: (agent) => autoDomainText('global', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            { key: 'autoWorkspace', name: 'tool-management:auto-workspace', label: '工作区自动记忆', form: 'snapshot', text: (agent) => autoDomainText('workspace', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // `pending`：启动 / 重连窗口里段是空的，但"空"不等于"用户关光了" —— 这一轮沉默，
             // 别先发一条「已清空」再在 server 连上后发一次内容（两次注入，第一次还是假的）。
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent), pending: (agent) => mcp.stateCatalog.pending(agent) },
