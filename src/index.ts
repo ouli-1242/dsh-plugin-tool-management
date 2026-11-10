@@ -59,7 +59,7 @@ import { createSettingsSidecars } from './settings-sidecars.js'
 // 自主记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
 import { createEvolutionConfig, workspaceHashOf } from './evolution/config.js'
 // 注入热路径的同步视图（`agent/pre-step` 的 text() 没有 await 的位置）。
-import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
+import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoIncrementalModeKey, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
 // 冷路径：轮内摘要 → 回合封存 episode → outbox → 异步复习器（不挡主链）。
 import { attachColdPath } from './evolution/cold.js'
 import { createEpisodeStore } from './evolution/episodes.js'
@@ -2450,22 +2450,25 @@ export default {
         try { userSegmentTokens = estimateTextTokens(memoryDomainText(agent)) } catch { userSegmentTokens = 0 }
         const budgetMode = budgetModeOf(userSegmentTokens)
 
-        const key = autoSnapshotKey({
+        // 快照键含 revision（用户动作后重建本会话的段）；增量模式键**不含** —— 学习 / 确认 /
+        // 删除本来就会改变条目集合，差集能表达成 `+ / -`；把 revision 并进模式键只会让每次
+        // 学习都判"环境变了"而回全量，增量等于没做。预算档 / 场景 / 工作区 / 开关仍在模式键里。
+        const modeParts = {
           layer,
           ...(sid !== undefined ? { sessionId: sid } : {}),
           ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
           scenes: [...enabledScenes],
           enabled: cfg.enabled,
           inject: cfg.inject,
-          // 用户确认 / 停用 / 删除后立刻重建本会话的段；学习写入不加版本号。
-          revision: view.state.watermarks.autoRevision ?? 0,
           budgetMode,
-        })
+        }
+        const key = autoSnapshotKey({ ...modeParts, revision: view.state.watermarks.autoRevision ?? 0 })
+        const mode = autoIncrementalModeKey(modeParts)
         const prev = readAutoSnapshot(agent, layer)
         if (prev && prev.key === key) {
           // `??` 兜住热重载前写下的旧快照（那个形状没有这三个字段）：宁可这一轮少一块
           // 自动正文，也不能让 `undefined` 流进合并块。
-          return { text: prev.text, body: prev.body ?? '', truncated: prev.truncated === true, picked: prev.picked ?? [], mode: key }
+          return { text: prev.text, body: prev.body ?? '', truncated: prev.truncated === true, picked: prev.picked ?? [], mode }
         }
 
         const result = renderAutoLayer(layer, {
@@ -2496,7 +2499,7 @@ export default {
         if (prev === undefined || prev.text !== result.text) {
           void autoLearner.noteInjected(result.pickedIds).catch(() => undefined)
         }
-        return { text: result.text, body: result.body, truncated: result.truncated, picked: result.picked, mode: key }
+        return { text: result.text, body: result.body, truncated: result.truncated, picked: result.picked, mode }
       } catch {
         return emptyAutoProjection()
       }

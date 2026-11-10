@@ -9,7 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { routeLayer } from '../lib/evolution/route.js'
 import { runGates, securityScan, durabilityOf, looksDerivable, similarity, inferKind, tombstoneBlocked } from '../lib/evolution/gates.js'
-import { autoSnapshotKey } from '../lib/evolution/runtime.js'
+import { autoIncrementalModeKey, autoSnapshotKey } from '../lib/evolution/runtime.js'
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
 import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
 import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
@@ -369,6 +369,17 @@ test('快照键：分层 + 用户动作版本号 + 预算档位，学习写入�
   assert.equal(budgetModeOf(0), 'none')
   assert.equal(budgetModeOf(10_000), 'min')
   assert.equal(budgetModeOf(30_000), 'zero')
+})
+
+test('增量模式键不含 revision：学习 / 删除不触发全量，预算档 / 场景变化才触发', () => {
+  const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
+  // 确认 / 学习 / 删除都会 bump revision；它们改变的是条目集合，差集能表达。
+  assert.equal(autoIncrementalModeKey(base), autoIncrementalModeKey({ ...base, revision: 99 }))
+  // 这些改变的是分组 / 入选集合，差集表达不了，必须回全量。
+  assert.notEqual(autoIncrementalModeKey({ ...base, budgetMode: 'min' }), autoIncrementalModeKey(base))
+  assert.notEqual(autoIncrementalModeKey({ ...base, scenes: ['other'] }), autoIncrementalModeKey(base))
+  assert.notEqual(autoIncrementalModeKey({ ...base, layer: 'workspace' }), autoIncrementalModeKey(base))
+  assert.notEqual(autoIncrementalModeKey({ ...base, inject: false }), autoIncrementalModeKey(base))
 })
 
 test('墓碑：删过的不能被自动路径复活', () => {

@@ -171,7 +171,7 @@ export function writeAutoSnapshot(agent: object, layer: 'global' | 'workspace', 
   slots.set(layer, snap)
 }
 
-export function autoSnapshotKey(parts: {
+export interface AutoSnapshotKeyParts {
   layer: 'global' | 'workspace'
   sessionId?: string
   workspaceHash?: string
@@ -188,7 +188,9 @@ export function autoSnapshotKey(parts: {
   revision?: number
   /** 用户记忆段的预算档位：跨过 8K / 24K 阈值时该层要按新预算重算。 */
   budgetMode?: 'none' | 'min' | 'zero'
-}): string {
+}
+
+export function autoSnapshotKey(parts: AutoSnapshotKeyParts): string {
   return [
     parts.layer,
     parts.sessionId ?? '-',
@@ -199,4 +201,18 @@ export function autoSnapshotKey(parts: {
     String(parts.revision ?? 0),
     parts.budgetMode ?? 'none',
   ].join('|')
+}
+
+/**
+ * 增量注入的**模式键**：与快照键同一组渲染环境，但**不含 revision**。
+ *
+ * 为什么不能复用快照键：确认 / 停用 / 删除 / 学习都会 bump revision，于是每次条目集合
+ * 变化都会被判成"渲染环境变了"而回全量 —— 差集永远没机会发。条目集合的变化由
+ * `entries` 差集表达（`+ / ~ / -`）；模式键只保留会改变分组与入选集合的因素
+ * （场景 / 预算档 / 工作区 / 开关），这些一变才真的需要整块重发。
+ */
+export function autoIncrementalModeKey(parts: Omit<AutoSnapshotKeyParts, 'revision'>): string {
+  // 显式写回 0：类型上 `parts` 没有 revision，但 JS 调用方仍可能带着它进来，
+  // 直接透传会让模式键又变回快照键。
+  return autoSnapshotKey({ ...parts, revision: 0 })
 }
