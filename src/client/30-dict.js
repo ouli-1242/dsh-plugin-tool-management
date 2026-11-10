@@ -252,7 +252,7 @@
         "evo.switch.workspace": "工作区自主记忆",
         "evo.switch.workspace.hint": "只在这个项目生效",
         "evo.switch.autoConfirm": "自动确认",
-        "evo.switch.autoConfirm.hint": "不再弹卡，由 agent 决定",
+        "evo.switch.autoConfirm.hint": "不再弹卡，由Agent自主决定",
         "evo.section.scope": "学习范围",
         "evo.section.records": "学习记录",
         "evo.pending.short": "待确认 {count} 条",
