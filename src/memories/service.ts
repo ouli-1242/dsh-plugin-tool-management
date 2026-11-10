@@ -1207,7 +1207,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     autoAccess: {
       snapshot,
       // 笔记库有自己的根与自己的索引；门禁读它，不能拿用户记忆快照顶替。
-      autoSnapshot: () => buildSnapshot(autoNotesRoot, autoNotesRoot),
+      // 不写索引清理：预演在写锁外跑，写清理会与真正的写入并发。
+      autoSnapshot: () => buildSnapshot(autoNotesRoot, autoNotesRoot, { writeCleanup: false }),
       serializeRuleFile,
       // 同步版：注入的 `text(agent)` 没有 await 的位置。读不到索引就当"没有启用场景"，
       // 失败方向是"少注入场景层"而不是"把工作区层也关掉"。

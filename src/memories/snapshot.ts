@@ -119,7 +119,11 @@ export interface SceneBlockCandidate {
  * @param stateDir 索引侧车所在目录
  * @returns 规则、场景与警告；目录不存在时是空集合而不是抛错
  */
-export async function buildSnapshot(memoriesRoot: string, stateDir: string): Promise<Snapshot> {
+export async function buildSnapshot(
+  memoriesRoot: string,
+  stateDir: string,
+  options?: { writeCleanup?: boolean },
+): Promise<Snapshot> {
   const discovery = await discover(memoriesRoot)
   let index = await readIndex(stateDir)
   // 索引损坏时一律按「未启用」投影（理由同 probeSceneFilesSync 的 forceDisabled）。
@@ -149,7 +153,9 @@ export async function buildSnapshot(memoriesRoot: string, stateDir: string): Pro
   // 扫描不完整时同理跳过：没扫到 ≠ 已删除。根目录 / 子目录读失败、条目在扫描期间消失、
   // 或触发目录 / 条目预算，都会让 discovery.entries 少几条；若照旧反删索引，用户会丢掉
   // enabled/order/tags/pinned/note/scene 绑定，而正文文件还在磁盘上。
-  if (dirty && !quarantined && discovery.complete) await writeIndex(stateDir, index)
+  // 只读调用方（对话卡片预演）不能因为一次扫描就写索引：它拿的是锁外的快照，
+  // 与真正的写操作并发时会把清理结果盖到别人刚写的索引上。
+  if (dirty && !quarantined && discovery.complete && options?.writeCleanup !== false) await writeIndex(stateDir, index)
 
   const rules: Rule[] = []
   const bodies = new Map<string, string>()
