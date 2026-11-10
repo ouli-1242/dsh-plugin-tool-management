@@ -643,7 +643,8 @@
           }
 
           function renderSceneCard(name) {
-            var bucket = buckets[name]
+            // 全局卡在搜索态可能被强行保留（里面还有自主记忆分节），此时桶不一定存在。
+            var bucket = buckets[name] || { name: name, meta: null, rules: [] }
             var meta = bucket.meta || { name: name, count: 0, active: true, shared: false, label: null }
             var isShared = meta.shared === true
             var isGlobal = meta.global === true || name === 'global'
@@ -658,6 +659,10 @@
             // + 三遍 toggleableIds），每次重渲染都重来。
             var cardToggles = toggleableIds(bucket.rules)
             var cardAllOn = allMemoriesOn(bucket.rules)
+            // 搜索命中后的行；空桶在搜索态下可能整卡不可见，但全局卡会因自主记忆分节被强行保留。
+            var bucketRows = rowsByBucket[name] || []
+            // 全局自主记忆嵌在「全局」卡里，不再单独成卡。
+            var autoSection = isGlobal ? renderAutoGlobalSection() : null
             // 卡头的计数：`启用 / 总数`（与页头统计、技能页来源卡同一个读法）。
             var cardOn = bucket.rules.filter(function (r) { return r.enabled !== false }).length
             // 两种「不进上下文」要分开：游离记忆（没有归属场景）是**真问题**，用错误色；
@@ -680,16 +685,18 @@
                 React.createElement('div', { className: 'dsm-source-actions' },
                   // 每个场景一张卡：卡内的「全选 / 取消全选」只作用于**这张卡里的**记忆
                   // —— 用户说的「记忆的不同场景都缺少全选清空」。
-                  isOrphan || !bucket.rules.length ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: busy || scopeWriteLocked(anyLocked) || !cardToggles.length, onClick: function () { setMemories(cardToggles, !cardAllOn, 's:' + name) } }, bulkPair(cardAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), cardAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
+                  isOrphan || !bucketRows.length ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-btn-bulk', disabled: busy || scopeWriteLocked(anyLocked) || !cardToggles.length, onClick: function () { setMemories(cardToggles, !cardAllOn, 's:' + name) } }, bulkPair(cardAllOn ? t('bulk.unselectAll') : t('bulk.selectAll'), cardAllOn ? t('bulk.selectAll') : t('bulk.unselectAll'))),
                   // 卡内的「新建记忆」是写盘动作，锁定态必须置灰（用户 2026-10-12：
                   // 「场景锁定情况下新建记忆应该也是灰色的，不能点击」）—— 原先这里只看了 busy。
                   isOrphan ? null : React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy || anyLocked, onClick: function () { openCreate(name) } }, t('memory.scene.new')))),
               open ? React.createElement('div', { className: 'dsm-source-body' },
                 isOrphan ? React.createElement('div', { className: 'dsm-source-note' }, t('memory.scene.orphan.hint')) : null,
-                bucket.rules.length
-                  // 表头已随列表行两行制拆除（REDESIGN §3.4 没有表头行；tags 列并入行 2 元信息）。
-                  ? (rowsByBucket[name] || []).map(function (r) { return renderRuleRow(r, meta.active !== false) })
-                  : React.createElement('div', { className: 'dsm-empty' }, t('memory.scene.empty'))) : null)
+                // 表头已随列表行两行制拆除（REDESIGN §3.4 没有表头行；tags 列并入行 2 元信息）。
+                bucketRows.length
+                  ? bucketRows.map(function (r) { return renderRuleRow(r, meta.active !== false) })
+                  // 全局卡里还有自主记忆分节时，不写「还没有记忆」——下面那节就是内容。
+                  : (isGlobal && autoSection ? null : React.createElement('div', { className: 'dsm-empty' }, t('memory.scene.empty'))),
+                isGlobal ? autoSection : null) : null)
             // 这张卡里那颗「全选」的撤销条贴在这张卡上方 —— 它只作用于这张卡里的记忆，而页头
             // 那颗的撤销条在搜索框下面（见 content）。撤销条跟着**触发它的按钮**走。
             return React.createElement(React.Fragment, { key: 's:' + name },
@@ -1073,17 +1080,11 @@
           }
 
           /**
-           * 一张自主记忆卡。`groups` 是这张卡要展示的分组，每组带名称与行；
-           * `grouped` 为真时组间画一行小节标题（工作区卡：卡内按工作区分节）。
-           * `cardKey` 同时是折叠状态的键；标题由调用方按组给。
-           *
-           * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
-           * 点行名展开详情，候选行右侧有「确认」，生效行右侧是开关，停用进记忆页的回收站。
-           * 卡头右侧的「设置」开设置弹窗（两层开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
+           * 过滤一组自主记忆：搜索命中 + 去掉已归档 / 已取代，并算出生效数。
+           * 卡片与「全局」卡里的内嵌分节共用这一份口径。
            */
-          function renderEvolutionCard(opts) {
-            var layerOn = opts.layerOn
-            var groups = (opts.groups || []).map(function (g) {
+          function evolutionGroupView(groups) {
+            return (groups || []).map(function (g) {
               var rows = g.rows
               // 搜索词与场景卡同源同口径：一行摘要 / id 命中即留（大小写不敏感）。
               if (q !== '') {
@@ -1096,6 +1097,27 @@
               var live = rows.filter(function (e) { return e.status !== 'archived' && e.status !== 'superseded' })
               return { key: g.key, label: g.label, live: live, on: evolutionOnCount(live) }
             })
+          }
+
+          /** 分节线：名称 + 实线 + 启用/总数。线从名称一直拉到计数，读起来是一道分隔。 */
+          function renderEvolutionDivider(key, label, on, total) {
+            return React.createElement('div', { key: key, className: 'dsm-evo-divider' },
+              React.createElement('span', { className: 'dsm-evo-divider-label' }, label),
+              React.createElement('span', { className: 'dsm-evo-divider-line' }),
+              React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: on, total: total })))
+          }
+
+          /**
+           * 工作区自主记忆卡。`groups` 是这张卡要展示的工作区分组，组间画分节线。
+           * `cardKey` 同时是折叠状态的键。
+           *
+           * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
+           * 点行名展开详情，候选行右侧有「确认」，生效行右侧是开关，停用进记忆页的回收站。
+           * 卡头右侧的「设置」开设置弹窗（两层开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
+           */
+          function renderEvolutionCard(opts) {
+            var layerOn = opts.layerOn
+            var groups = evolutionGroupView(opts.groups)
             var total = 0
             var onCount = 0
             groups.forEach(function (g) { total += g.live.length; onCount += g.on })
@@ -1112,11 +1134,7 @@
             } else {
               groups.forEach(function (g) {
                 if (g.live.length === 0) return
-                if (opts.grouped) {
-                  body.push(React.createElement('div', { key: 'h:' + g.key, className: 'dsm-evo-ws-head' },
-                    React.createElement('span', { className: 'dsm-evo-ws-name' }, g.label),
-                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: g.on, total: g.live.length }))))
-                }
+                body.push(renderEvolutionDivider('h:' + g.key, g.label, g.on, g.live.length))
                 body = body.concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
               })
             }
@@ -1126,8 +1144,7 @@
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main dsm-source-head-stack', 'aria-expanded': open, onClick: function () { toggleCollapse(opts.cardKey, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-head-line' },
                     React.createElement('span', { className: 'dsm-source-title' }, opts.title),
-                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: total })),
-                    React.createElement('span', { className: 'dsm-tag' + (layerOn ? ' dsm-tag-on' : '') }, t('memory.auto.tag')))),
+                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: total })))),
                 React.createElement('div', { className: 'dsm-source-actions' },
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setResult(null); setEvoOpen(true) } }, t('evo.settings')))),
               open ? React.createElement('div', { className: 'dsm-source-body' }, body) : null)
@@ -1140,8 +1157,31 @@
           }
 
           /**
-           * 自主记忆的全部卡片：全局一张，工作区一张（卡内按工作区名称分节，
-           * 让用户知道每组条目属于哪个工作区）。别的仓库的条目只展示，不会注入当前对话。
+           * 全局自主记忆在「全局」卡里的内嵌分节：分节线 + 行。
+           *
+           * 不单独成卡：它和手写全局记忆是同一层的东西，分两张卡读起来像两套配置。
+           * 全局层关着且没有条目时不占地方；关着但有条目时整节置灰（条目还在盘上）。
+           */
+          function renderAutoGlobalSection() {
+            if (sceneFilter !== '') return null
+            var g = evolutionGroupView([{
+              key: 'global',
+              label: t('memory.auto.tag'),
+              rows: (evo.entries || []).filter(function (e) { return e.layer === 'global' }),
+            }])[0]
+            if (!evoGlobalOn && g.live.length === 0) return null
+            var body = [renderEvolutionDivider('auto:head', g.label, g.on, g.live.length)]
+            if (g.live.length === 0) {
+              body.push(React.createElement('div', { key: 'empty', className: 'dsm-empty' }, t('evo.empty.on')))
+            } else {
+              body = body.concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
+            }
+            return React.createElement('div', { key: 'auto:global', className: 'dsm-evo-embed' + (evoGlobalOn ? '' : ' dsm-rule-off') }, body)
+          }
+
+          /**
+           * 自主记忆的工作区卡：所有工作区合成一张，卡内按工作区名称分节。
+           * 别的仓库的条目只展示，不会注入当前对话。
            */
           function renderEvolutionCards() {
             if (sceneFilter !== '') return []
@@ -1149,16 +1189,6 @@
             var currentHash = (evo.status && evo.status.workspace && evo.status.workspace.hash) || ''
             // 当前工作区可能还没写进 workspaces.json（从没拨过开关）：status 会按 cwd 给个名字。
             var currentLabel = (evo.status && evo.status.workspace && evo.status.workspace.label) || ''
-            var cards = []
-            var globalCard = renderEvolutionCard({
-              cardKey: 'auto:global',
-              title: t('memory.auto.card.global'),
-              layerOn: evoGlobalOn,
-              groups: [{ key: 'global', label: '', rows: all.filter(function (e) { return e.layer === 'global' }) }],
-              emptyText: t('evo.empty.on'),
-            })
-            if (globalCard) cards.push(globalCard)
-
             var groups = []
             var byHash = {}
             all.forEach(function (e) {
@@ -1191,11 +1221,9 @@
               title: t('memory.auto.card.workspace'),
               layerOn: evoWorkspaceOn,
               groups: groups,
-              grouped: true,
               emptyText: groups.length === 0 && currentHash === '' ? t('evo.empty.workspace') : t('evo.empty.on'),
             })
-            if (wsCard) cards.push(wsCard)
-            return cards
+            return wsCard ? [wsCard] : []
           }
 
           /**
@@ -1338,15 +1366,25 @@
           var evoWorkspaceOn = evoEff.learnWorkspace === true
           var evoOn = evoGlobalOn || evoWorkspaceOn
           var evoPending = Number(evo.status && evo.status.auto && evo.status.auto.pendingReview) || 0
-          // 自主记忆卡片：全局一张，工作区按名称分节。场景筛选选了具体场景时跟着隐藏 ——
-          // 自主记忆不绑场景，出现在"某场景里有什么"的答案里只会添乱。
+          // 工作区自主记忆卡：所有工作区合成一张，卡内按名称分节。场景筛选选了具体场景时
+          // 跟着隐藏 —— 自主记忆不绑场景，出现在"某场景里有什么"的答案里只会添乱。
           var evoCards = renderEvolutionCards()
-          // 顺序（用户 2026-11-10）：全局记忆 → 自主记忆 → 其余场景卡。没有全局卡时
-          // 自主记忆排最前；它不绑场景，不该被挤到页面末尾。
-          var sceneCards = visibleBuckets.map(renderSceneCard)
+          // 全局自主记忆嵌在「全局」卡里：搜索只命中自主记忆时，用户记忆一条都没命中的
+          // 全局卡也必须出现，否则那节内容跟着卡一起消失。
+          var autoGlobalGroups = evolutionGroupView([{
+            key: 'global',
+            label: '',
+            rows: (evo.entries || []).filter(function (e) { return e.layer === 'global' }),
+          }])
+          var autoGlobalVisible = sceneFilter === '' && (evoGlobalOn || autoGlobalGroups[0].live.length > 0)
+          var cardBuckets = visibleBuckets
+          if (autoGlobalVisible && cardBuckets.indexOf('global') < 0) cardBuckets = ['global'].concat(cardBuckets)
+          // 顺序（用户 2026-11-10）：全局（含全局自主记忆）→ 工作区自主记忆 → 其余场景卡。
+          // 没有全局卡时工作区卡排最前；它不绑场景，不该被挤到页面末尾。
+          var sceneCards = cardBuckets.map(renderSceneCard)
           var allCards = sceneCards
           if (evoCards.length > 0) {
-            var globalIndex = visibleBuckets.indexOf('global')
+            var globalIndex = cardBuckets.indexOf('global')
             allCards = globalIndex >= 0
               ? sceneCards.slice(0, globalIndex + 1).concat(evoCards, sceneCards.slice(globalIndex + 1))
               : evoCards.concat(sceneCards)
