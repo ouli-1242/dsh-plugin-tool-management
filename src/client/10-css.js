@@ -612,6 +612,7 @@ button.dsm-qty:disabled{cursor:default}
    gap:0 4px 会在它们之间再插一段间距，比可展开的行多出 6px。 */
 .dsm-inject-live-mark-blank{visibility:hidden}
 .dsm-inject-live-size{color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dsm-inject-live-delta{margin-left:6px;padding:0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px;vertical-align:1px;white-space:nowrap}
 /* 实况面板的域名格里有多个行内元素（域名 / 体积 / 采纳统计），行内元素之间没有空白节点，
    不设间距就会挤成「场景· 3.2 KB」。
    刻意**不复用** .dsm-compat-name：那一类在另外五个面板里只放一个文本子节点，改成 flex 会让

@@ -1789,6 +1789,10 @@
                       : React.createElement('span', { className: 'dsm-inject-live-static' },
                         React.createElement('span', { className: 'dsm-inject-live-mark-blank', 'aria-hidden': 'true' }, '▸ '),
                         domainLabel(row.key)),
+                    // 最新一条是差集而不是整块：体积会比全量小，别让用户以为内容丢了。
+                    row.incremental === true
+                      ? React.createElement('span', { className: 'dsm-inject-live-delta', title: t('compat.live.delta.title') }, t('compat.live.delta'))
+                      : null,
                     canOpen
                       ? React.createElement('span', { className: 'dsm-inject-live-size' }, '· ' + fmtSize(row.bytes) + ' · ' + t('compat.live.est', { count: estTokens(row.text) }))
                       : null,
