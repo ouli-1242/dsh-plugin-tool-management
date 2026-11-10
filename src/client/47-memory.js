@@ -972,10 +972,8 @@
               t('evo.tokens', { count: Number(e.tokens) || 0 }),
             ]
             if (e.wsMissing) metaBits.push(t('evo.ws.missing'))
+            // 停用由行内开关承担（与记忆行同构）；菜单里只留编辑与删除。
             var menuItems = []
-            if (e.status !== 'archived' && e.status !== 'superseded') {
-              menuItems.push({ key: 'disable', label: t('evo.disable'), disabled: evoBusy, onClick: function () { disableEvolution(e.id) } })
-            }
             menuItems.push({ key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } })
             return React.createElement(ListRow, {
               key: e.id,
@@ -991,9 +989,15 @@
               meta: metaBits.join(' · '),
               metaTitle: e.needsReview || undefined,
               extra: open ? renderEvolutionDetail(e) : null,
+              // 候选行右侧是「确认」；生效行是开关，与记忆行同一语义：关 = 停用进回收站。
               side: pending
                 ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
-                : null,
+                : React.createElement(Switch, {
+                  on: e.enabled !== false,
+                  disabled: evoBusy,
+                  label: t('evo.disable') + ' ' + (e.oneLine || e.id),
+                  onClick: function () { disableEvolution(e.id) },
+                }),
               actions: [React.createElement(RowMenu, {
                 key: 'menu',
                 label: t('evo.menu', { name: e.oneLine || e.id }),
@@ -1030,24 +1034,16 @@
 
 
           /**
-           * 自主记忆的两张页签卡（用户 2026-11-10：记忆应该和其他记忆一样直接在页签显示，
-           * 只是结构不同 —— 自主记忆分全局 / 工作区两层，不绑场景）。
+           * 一张自主记忆卡。`rows` 已经过滤到这一组（全局 / 某个工作区），
+           * `cardKey` 同时是折叠状态的键；标题由调用方按组给。
            *
            * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
-           * 点行名展开详情，候选行右侧有「确认」，停用的条目进记忆页的回收站。
+           * 点行名展开详情，候选行右侧有「确认」，生效行右侧是开关，停用进记忆页的回收站。
            * 卡头右侧的「设置」开设置弹窗（两层开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
            */
-          function renderEvolutionCard(layerKey, titleKey) {
-            var isWorkspace = layerKey === 'workspace'
-            var layerOn = isWorkspace ? evoWorkspaceOn : evoGlobalOn
-            // 工作区卡只列**当前对话**的工作区：别的仓库的条目不会注入，列出来只会误导。
-            var wsHash = (evo.status && evo.status.workspace && evo.status.workspace.hash) || ''
-            var noWorkspace = isWorkspace && wsHash === ''
-            var rows = (evo.entries || []).filter(function (e) {
-              if (e.layer !== layerKey) return false
-              if (isWorkspace && wsHash !== '' && e.workspace !== wsHash) return false
-              return true
-            })
+          function renderEvolutionCard(opts) {
+            var layerOn = opts.layerOn
+            var rows = opts.rows
             // 搜索词与场景卡同源同口径：一行摘要 / id 命中即留（大小写不敏感）。
             if (q !== '') {
               rows = rows.filter(function (e) {
@@ -1063,26 +1059,99 @@
             // 「启用 / 总数」与场景卡同一读法：生效（active/core/playbook）且没被停用的才算"开"。
             var onCount = live.filter(function (e) { return (e.status === 'active' || e.status === 'core' || e.status === 'playbook') && e.enabled !== false }).length
             // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
-            var openFlag = collapsed['auto:' + layerKey]
+            var openFlag = collapsed[opts.cardKey]
             var baseOpen = openFlag === undefined ? layerOn : openFlag !== true
             var open = baseOpen || q !== ''
             var body = []
             if (live.length === 0) {
-              body.push(React.createElement('div', { key: 'empty', className: 'dsm-empty' }, noWorkspace ? t('evo.empty.workspace') : t('evo.empty.on')))
+              body.push(React.createElement('div', { key: 'empty', className: 'dsm-empty' }, opts.emptyText))
             } else {
               body = body.concat(live.map(function (e) { return renderEvolutionRow(e) }))
             }
             // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
-            return React.createElement('div', { key: 'auto:' + layerKey, className: 'dsm-source' + (layerOn ? '' : ' dsm-rule-off') },
+            return React.createElement('div', { key: opts.cardKey, className: 'dsm-source' + (layerOn ? '' : ' dsm-rule-off') },
               React.createElement('div', { className: 'dsm-source-head' },
-                React.createElement('button', { type: 'button', className: 'dsm-source-head-main dsm-source-head-stack', 'aria-expanded': open, onClick: function () { toggleCollapse('auto:' + layerKey, baseOpen) } },
+                React.createElement('button', { type: 'button', className: 'dsm-source-head-main dsm-source-head-stack', 'aria-expanded': open, onClick: function () { toggleCollapse(opts.cardKey, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-head-line' },
-                    React.createElement('span', { className: 'dsm-source-title' }, t(titleKey)),
+                    React.createElement('span', { className: 'dsm-source-title' }, opts.title),
                     React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: live.length })),
                     React.createElement('span', { className: 'dsm-tag' + (layerOn ? ' dsm-tag-on' : '') }, t('memory.auto.tag')))),
                 React.createElement('div', { className: 'dsm-source-actions' },
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setResult(null); setEvoOpen(true) } }, t('evo.settings')))),
               open ? React.createElement('div', { className: 'dsm-source-body' }, body) : null)
+          }
+
+          /** 工作区 hash 的短码：workspaces.json 还没登记这个目录时的显示兜底。 */
+          function shortWorkspaceHash(hash) {
+            var s = String(hash || '')
+            return s === '' ? '?' : s.slice(0, 8)
+          }
+
+          /**
+           * 自主记忆的全部卡片：全局一张，工作区按工作区名称各一张（用户 2026-11-10：
+           * 要知道这一组是哪个工作区的）。别的仓库的条目只展示，不会注入当前对话。
+           */
+          function renderEvolutionCards() {
+            if (sceneFilter !== '') return []
+            var all = evo.entries || []
+            var currentHash = (evo.status && evo.status.workspace && evo.status.workspace.hash) || ''
+            // 当前工作区可能还没写进 workspaces.json（从没拨过开关）：status 会按 cwd 给个名字。
+            var currentLabel = (evo.status && evo.status.workspace && evo.status.workspace.label) || ''
+            var cards = []
+            var globalCard = renderEvolutionCard({
+              cardKey: 'auto:global',
+              title: t('memory.auto.card.global'),
+              layerOn: evoGlobalOn,
+              rows: all.filter(function (e) { return e.layer === 'global' }),
+              emptyText: t('evo.empty.on'),
+            })
+            if (globalCard) cards.push(globalCard)
+
+            var groups = []
+            var byHash = {}
+            all.forEach(function (e) {
+              if (e.layer !== 'workspace') return
+              var hash = String(e.workspace || '')
+              var group = byHash[hash]
+              if (group === undefined) {
+                group = byHash[hash] = { hash: hash, rows: [], label: '' }
+                groups.push(group)
+              }
+              group.rows.push(e)
+              if (group.label === '') group.label = String(e.workspaceLabel || e.workspaceCwd || '')
+            })
+            groups.forEach(function (group) {
+              if (group.label === '' && group.hash === currentHash) group.label = currentLabel
+            })
+            // 当前对话的工作区排最前；其余按名称排，没有名称的按 hash。
+            groups.sort(function (a, b) {
+              if (a.hash === currentHash && b.hash !== currentHash) return -1
+              if (b.hash === currentHash && a.hash !== currentHash) return 1
+              return a.label.localeCompare(b.label) || a.hash.localeCompare(b.hash)
+            })
+            if (groups.length === 0) {
+              var emptyWs = renderEvolutionCard({
+                cardKey: 'auto:workspace',
+                title: t('memory.auto.card.workspace'),
+                layerOn: evoWorkspaceOn,
+                rows: [],
+                emptyText: currentHash === '' ? t('evo.empty.workspace') : t('evo.empty.on'),
+              })
+              if (emptyWs) cards.push(emptyWs)
+            } else {
+              groups.forEach(function (group) {
+                var label = group.label !== '' ? group.label : shortWorkspaceHash(group.hash)
+                var card = renderEvolutionCard({
+                  cardKey: 'auto:workspace:' + (group.hash || 'unknown'),
+                  title: t('memory.auto.card.workspaceNamed', { name: label }),
+                  layerOn: evoWorkspaceOn,
+                  rows: group.rows,
+                  emptyText: t('evo.empty.on'),
+                })
+                if (card) cards.push(card)
+              })
+            }
+            return cards
           }
 
           /**
@@ -1225,11 +1294,19 @@
           var evoWorkspaceOn = evoEff.learnWorkspace === true
           var evoOn = evoGlobalOn || evoWorkspaceOn
           var evoPending = Number(evo.status && evo.status.auto && evo.status.auto.pendingReview) || 0
-          // 自主记忆的两张页签卡（全局 / 工作区）：与场景卡并列、同一套搜索与折叠逻辑。
-          // 场景筛选选了具体场景时它们跟着隐藏 —— 自主记忆不绑场景，出现在"某场景里有什么"
-          // 的答案里只会添乱。关着且没有条目时那张卡不渲染；开着时留一张空卡说明它在跑。
-          var evoCards = sceneFilter !== '' ? [] : [renderEvolutionCard('global', 'memory.auto.card.global'), renderEvolutionCard('workspace', 'memory.auto.card.workspace')]
-            .filter(function (c) { return !!c })
+          // 自主记忆卡片：全局一张，工作区按名称分节。场景筛选选了具体场景时跟着隐藏 ——
+          // 自主记忆不绑场景，出现在"某场景里有什么"的答案里只会添乱。
+          var evoCards = renderEvolutionCards()
+          // 顺序（用户 2026-11-10）：全局记忆 → 自主记忆 → 其余场景卡。没有全局卡时
+          // 自主记忆排最前；它不绑场景，不该被挤到页面末尾。
+          var sceneCards = visibleBuckets.map(renderSceneCard)
+          var allCards = sceneCards
+          if (evoCards.length > 0) {
+            var globalIndex = visibleBuckets.indexOf('global')
+            allCards = globalIndex >= 0
+              ? sceneCards.slice(0, globalIndex + 1).concat(evoCards, sceneCards.slice(globalIndex + 1))
+              : evoCards.concat(sceneCards)
+          }
           return React.createElement('section', { className: 'dsm-section' },
             // 页头一行化（REDESIGN §3 + §6）：新增(实底) · 导入 · 导出 · 回收站；统计内联。
             React.createElement(PageHead, {
@@ -1298,7 +1375,7 @@
             // 照旧 —— 它同时承担「有缓存数据时的错误」与令牌没过两种渠道。
             data.loading && !hasAnyRule ? React.createElement(ListStates, { key: 'loading', t: t, state: 'loading' })
               : data.error && !hasAnyRule ? React.createElement(ListStates, { key: 'errstate', t: t, state: 'error', text: String(data.error), onRetry: function () { refresh() } })
-                : (visibleBuckets.length || evoCards.length) ? React.createElement('div', { key: 'scenes', className: 'dsm-sources' }, visibleBuckets.map(renderSceneCard).concat(evoCards))
+                : (visibleBuckets.length || evoCards.length) ? React.createElement('div', { key: 'scenes', className: 'dsm-sources' }, allCards)
                   : (q || sceneFilter) ? React.createElement(ListStates, { key: 'search', t: t, state: 'search', text: t('memory.empty.search'), onClearFilter: function () { setQuery(''); setSceneFilter('') } })
                     : React.createElement(ListStates, { key: 'empty', t: t, state: 'empty', text: t('memory.empty') }),
             // 自主记忆弹窗先渲染：它里面开的确认弹窗排在后面，DOM 顺序决定后一层盖在上面。

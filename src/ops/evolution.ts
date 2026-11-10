@@ -17,6 +17,13 @@ import type { SweepReport } from '../evolution/maintenance.js'
 import { isInjectableStatus } from '../memories/catalog.js'
 import { workspaceMemoryKeyOf } from '../scope/workspace-key.js'
 
+/** 工作区显示名：取路径最后一段。记录里已有 label 时优先用记录那份。 */
+function workspaceLabelOfCwd(cwd: string): string {
+  const s = String(cwd || '').replace(/[\\/]+$/, '')
+  const cut = s.split(/[\\/]/).pop() ?? ''
+  return cut === '' ? s : cut
+}
+
 export interface EvolutionOpDeps {
   config: EvolutionConfigStore
   /** 同步视图（清单与统计读它，比异步门面新鲜且不额外读盘）。 */
@@ -136,8 +143,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           effective,
           global,
           workspace: workspaceRecord
-            ? { hash, key: workspaceRecord.key, cwd: workspaceRecord.cwd, label: workspaceRecord.label, ...layerView(workspaceRecord.evolution) }
-            : hash ? { hash, key: scopeKey, cwd: cwd ?? '', label: '', defined: false, values: {} } : null,
+            ? { hash, key: workspaceRecord.key, cwd: workspaceRecord.cwd, label: workspaceRecord.label || workspaceLabelOfCwd(workspaceRecord.cwd), ...layerView(workspaceRecord.evolution) }
+            : hash ? { hash, key: scopeKey, cwd: cwd ?? '', label: workspaceLabelOfCwd(cwd ?? ''), defined: false, values: {} } : null,
           // 会话那一行：**有会话 id 就要给一行**（哪怕还没写过记录）。
           // 返回 null 会让界面把整行藏掉 —— 用户第一次想给这个对话开开关时，找不到入口。
           // 工作区那一档就是这么处理的（`defined: false` + 空 values 表示"还没覆盖"）。
@@ -326,6 +333,18 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           },
         )
         if (result.ok) runtime.invalidate()
+        // 记下工作区名：记忆页要按名称分节，而 workspaces.json 此前只在拨开关时才写。
+        // 展示增强，失败不影响学习本身。
+        if (result.ok && result.layer === 'workspace' && scopeKey !== undefined && cwd !== undefined) {
+          try {
+            const workspaces = await config.readWorkspaces()
+            const hash = workspaceHashOf(scopeKey)
+            const prev = workspaces.workspaces[hash]
+            if (prev === undefined || prev.cwd !== cwd || prev.label === '') {
+              await config.writeWorkspace(scopeKey, cwd, prev?.label || workspaceLabelOfCwd(cwd), prev?.evolution)
+            }
+          } catch { /* 展示名没写上：下一次学习或拨开关会再试 */ }
+        }
         return result
       } catch (e) {
         return { ok: false, error: message(e), code: 'learn-failed' }
@@ -582,6 +601,11 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           if (workspaceFilter && entry.layer === 'workspace' && entry.workspace !== workspaceFilter) continue
           const st = view.state.entries[entry.id]
           const needsReview = st && typeof st.needsReview === 'string' && st.needsReview !== ''
+          // 工作区条目的显示名：界面按它分节，用户才知道这一组属于哪个项目。
+          // 记录可能还没登记（新工作区第一次写入）：留给界面用 hash 短码兜底。
+          const wsRecord = entry.layer === 'workspace' && entry.workspace !== ''
+            ? view.workspaces.workspaces[entry.workspace]
+            : undefined
           // 默认列「待确认 + 会注入的」：候选不看 needsReview（所有新学条目都是候选，
           // 不是每条都带理由）；archived / superseded 只在 all=true 时出现。
           if (!includeAll && entry.status !== 'candidate' && !isInjectableStatus(entry.status)) continue
@@ -601,6 +625,10 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             injects: entry.enabled && isInjectableStatus(entry.status),
             tokens: entry.estTokens,
             workspace: entry.workspace,
+            ...(wsRecord !== undefined ? {
+              workspaceLabel: typeof wsRecord.label === 'string' ? wsRecord.label : '',
+              workspaceCwd: typeof wsRecord.cwd === 'string' ? wsRecord.cwd : '',
+            } : {}),
             scene: entry.scene,
             session: entry.session,
             ...(entry.layer === 'workspace' && entry.workspace !== '' && missingWs.has(entry.workspace) ? { wsMissing: true } : {}),
