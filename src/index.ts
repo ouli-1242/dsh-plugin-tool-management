@@ -6081,6 +6081,7 @@ export default {
           //     先弹一张"保存记忆"再让工具失败，用户批准的是一个注定不发生的动作；
           //   · 笔记（`note:` id 或 scope=workspace）—— 它走自主记忆的授权链，与用户记忆
           //     不是同一道门；
+          //   · 删除（`action=forget`）—— 用户明确要求删，卡上的「保存记忆」是句假话；
           //   · 非法 scope / 空内容 —— 同样是注定失败的调用。
           const a = (exec && exec.arguments) || {}
           // 与工具 execute 的 fallback 同口径：旧参数名（memory / layer / body / text）
@@ -6089,6 +6090,9 @@ export default {
           const scope = String((a.scope !== undefined ? a.scope : a.layer) || '').trim()
           const scene = String(a.scene || '').trim()
           const content = String((a.content !== undefined ? a.content : (a.body !== undefined ? a.body : a.text)) || '').trim()
+          // 删除只按 id 定位、不写正文，而且用户已经明确要求删；「保存记忆」那张卡对它是句假话。
+          // 校验与场景锁仍在工具 execute 里，失败会原样回给模型。
+          if (String(a.action || '').trim() === 'forget') return next()
           if (id === '' && scope === '' && scene === '') return next()
           if (id.startsWith('note:') || scope === 'workspace') return next()
           if (scope !== '' && scope !== 'scene' && scope !== 'global') return next()

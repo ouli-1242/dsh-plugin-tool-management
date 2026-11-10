@@ -457,9 +457,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // 写入口只按**范围**分叉，不再按内容长短分叉：用户说「记录 a」时，唯一要判断的是
     // 「记到哪儿」，而那是用户的问题，不是模型能猜的。旧版按"一句话 → 笔记 / 多段 → 记忆"
     // 重定向，模型于是要在两条工具、三种后端之间选，参数串用是必然的。
-    description: 'Remember something the user explicitly asked you to keep. scope=scene → a memory in a scene (injected only when that scene is on); scope=global → every project; scope=workspace → a note for this project (needs autonomous memory). Omit scope and ask the user where it belongs; do not guess. Pass `id` to update an existing memory or note instead of creating one. For your own inferences use the agent-note tool, not this. User-memory writes are blocked while the active scene is locked.',
+    description: 'Remember something the user explicitly asked you to keep. scope=scene → a memory in a scene (injected only when that scene is on); scope=global → every project; scope=workspace → a note for this project (needs autonomous memory). Omit scope and ask the user where it belongs; do not guess. Pass `id` to update an existing memory or note instead of creating one. To delete a user memory the user asked you to remove, pass `action: "forget"` and `id` (moved to the recycle bin). For your own inferences use the agent-note tool, not this. User-memory writes are blocked while the active scene is locked.',
     parameters: {
-      content: { type: 'string', description: 'What to remember. For scene/global: the memory body (Markdown, <=256 KiB). For workspace: one sentence (<=400 chars). Required when creating.' },
+      action: { type: 'string', enum: ['forget'], description: 'forget: delete an existing user memory by `id` (moved to the recycle bin, restorable on the Memory page). Omit to create or update.' },
+      content: { type: 'string', description: 'What to remember. For scene/global: the memory body (Markdown, <=256 KiB). For workspace: one sentence (<=400 chars). Required when creating; do not pass with action=forget.' },
       title: { type: 'string', description: 'Short name: the file name for a user memory, the note title for a workspace note. Omit to derive from the first line.' },
       id: { type: 'string', description: 'Update an existing entry instead of creating: a user memory id (<scene>/<name>) or an agent note id (note:...).' },
       scope: { type: 'string', enum: ['scene', 'global', 'workspace', 'conversation'], description: 'Where it belongs: scene (this working mode), global (every project), workspace (this project, stored as an agent note). Ask the user when unsure.' },
@@ -481,6 +482,32 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const scopeArg = String((args && (args.scope !== undefined ? args.scope : args.layer)) || '').trim()
       const sceneArg = String((args && args.scene) || '').trim()
       const slotArg = String((args && (args.slot !== undefined ? args.slot : args.key)) || '').trim()
+      const actionArg = String((args && args.action) || '').trim()
+
+      // 删除是用户明确要求时才走的另一条路：只按 id 定位，绝不把同时带来的 content /
+      // description 当成一次更新写回去 —— 真实会话里 `action=forget` + `content` 就把
+      // 一条待删记忆的正文改成了「删」，回执却说更新成功。
+      if (actionArg !== '' && actionArg !== 'forget') {
+        throw new Error('unknown action: ' + actionArg + ' — memory_remember creates or updates; use action=forget with id to delete a user memory.')
+      }
+      if (actionArg === 'forget') {
+        if (rawId === '') throw new Error('missing argument: id — the user memory to delete (<scene>/<name>). Agent notes use memory_note action=forget.')
+        if (isNoteRef(rawId)) throw new Error('that is an agent note: delete it with memory_note action=forget.')
+        if (!rawId.includes('/')) throw new Error('id must be <scene>/<name> (a user memory): ' + rawId)
+        if (content.trim() !== '' || descriptionArg !== undefined || nextName !== '' || title !== '' || slotArg !== '' || scopeArg !== '' || sceneArg !== '') {
+          throw new Error('action=forget deletes by id only: do not pass content, title, description, nextName, scope or scene.')
+        }
+        const blocked = await deps.lockedSceneGuard()
+        if (blocked) throw new Error(blocked)
+        const all: any = await deps.rulesOps['rules-list']({})
+        if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
+        const hit = (all.rules || []).find((x: any) => String(x.id) === rawId)
+        if (!hit) throw new Error('no memory with id "' + rawId + '".' + existingNote((all.rules || []).map((x: any) => String(x.id)), 'memory ids'))
+        if (isAutoRule(hit)) throw new Error('that is an agent note: delete it with memory_note action=forget.')
+        const r: any = await deps.rulesOps['rules-remove']({ id: rawId })
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to delete the memory'))
+        return 'OK: deleted ' + rawId + ' (moved to the recycle bin; restore it on the Memory page).'
+      }
 
       /** 就地更新一条已有笔记：id / 层 / 状态不变，正文与标题替换。 */
       const updateNote = async (a: any, ref: string): Promise<string> => {
@@ -749,7 +776,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn or forget.' },
       // ── learn ──
       title: { type: 'string', description: 'learn: a short name for the row (2-8 words, <=40 chars), in the user\'s language.' },
-      text: { type: 'string', description: 'learn: the note itself — one sentence (<=400 chars), in the user\'s language.' },
+      text: { type: 'string', description: 'learn: the note itself — one sentence (<=400 chars), in the user\'s language. `note` is accepted as an alias.' },
       source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it; user_explicit when you quote the user, user_correction when they corrected you; default model_inference (or user_explicit when quote is set).' },
       quote: { type: 'string', description: 'learn: the user\'s exact words; implies source=user_explicit unless source says otherwise.' },
       slot: { type: 'string', description: 'learn: optional stable slot name; learning again with the same slot merges into that note.' },
@@ -757,7 +784,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure; the card asks, or auto-confirm uses the default.' },
       ttlDays: { type: 'number', description: 'learn: optional; re-check after N days.' },
       // ── forget ──
-      note: { type: 'string', description: 'forget: the note — id (note:...), slot, title, or exact text.' },
+      note: { type: 'string', description: 'forget: the note — id (note:...), slot, title, or exact text. learn: alias for text (the note body).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -814,8 +841,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           hit.n += 1
         }
       }
-      const text = String((args && args.text) || '').trim()
-      if (text === '') throw new Error('missing argument: text — the note itself, one sentence.')
+      // `note` 是模型按工具名最常写的那个字段（真实会话里就有人把正文塞进 `note`，
+      // 然后在 `text` 的必填校验上白跑一次）。learn 时把它当正文别名；forget 仍只读 `note`。
+      const bodyArg = args && String(args.text || '').trim() !== '' ? args.text : args && args.note
+      const text = String(bodyArg || '').trim()
+      if (text === '') throw new Error('missing argument: text (or note) — the note itself, one sentence.')
       const quote = String((args && args.quote) || '').trim()
       const payload: any = {
         text,
