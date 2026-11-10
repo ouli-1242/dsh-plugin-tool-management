@@ -144,6 +144,9 @@ export function buildControlTools(deps: ControlToolDeps): void {
           'These take effect from the next request.',
         ]
         if (unknown.length > 0) lines.push('not this plugin\'s tools (ignored): ' + unknown.join(', '))
+        // 进入 / 退出场景会把场景工具表整份抄进本对话的名单。模型把"开了一条、别的没了"
+        // 误读成 enable 替换整份时，这一句是唯一能解释它的话。
+        lines.push('Entering or leaving a scene re-applies that scene\'s tool-table scheme here.')
         // 说清「这一层看得见的条数」：模型据此判断自己还有没有别的路。
         // 总数同样不含自主记忆那条工具：它不在工具表里，也不该出现在「N 条工具」的分母里。
   const total = deps.toolTableSizes.size - (deps.toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? 1 : 0)

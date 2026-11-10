@@ -49,7 +49,7 @@ import {
 import { LAYER_QUOTA, runGates } from '../lib/evolution/gates.js'
 import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
-import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings, stripProactiveToolHidden } from '../lib/tools/table.js'
+import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, applyToolTableToggles, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings, stripProactiveToolHidden } from '../lib/tools/table.js'
 import { NOTE_REF_PREFIX, isNoteRef, noteRefOf, stripNoteRef } from '../lib/tools/note-ref.js'
 import { buildEvolutionOps } from '../lib/ops/evolution.js'
 import { argConditionalConfirmReason, isMustAskConfirm } from '../lib/confirm-gate.js'
@@ -1254,6 +1254,13 @@ test('场景名口径：命名路径必须单段，定位路径按完整路径',
   assert.equal(isValidGroupPath('/a'), false)
   assert.equal(isValidGroupPath('a/'), false)
   assert.equal(isValidGroupPath('a/../b'), false, '路径谓词仍拒绝穿越')
+})
+
+test('工具表逐条改：enable 一条不会把别的已开工具关掉', () => {
+  // 破了这一条的症状是"开了一条、别的没了"，而调用方会把它当成场景切换的副作用。
+  assert.deepEqual(applyToolTableToggles(['a', 'b', 'c'], [{ name: 'd', hidden: false }]), ['a', 'b', 'c'])
+  assert.deepEqual(applyToolTableToggles(['a', 'b', 'c'], [{ name: 'b', hidden: false }]), ['a', 'c'])
+  assert.deepEqual(applyToolTableToggles(['a'], [{ name: 'b', hidden: true }]), ['a', 'b'])
 })
 
 test('自动笔记快照与用户记忆快照各扫各的根', async () => {

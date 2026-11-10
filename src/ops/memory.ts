@@ -10,7 +10,7 @@ import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseSkillDoc, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
-import { MAX_DESCRIPTION_LENGTH, MAX_RULE_BYTES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
+import { MAX_DESCRIPTION_LENGTH, MAX_RULE_BYTES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, SHARED_GROUP, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
 import { normalizeActive, enabledSceneOf, sceneOf, sceneLabel, attachmentSummarySync } from '../memories/projection.js'
 import { writeFileAtomically, writeFileAtomicBinary, readIndex, writeIndex, pathExists } from '../memories/index-io.js'
 import type { RuleIndexEntry } from '../memories/index-io.js'
@@ -254,8 +254,10 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     if (group !== '' && !isValidGroupPath(group)) return fail('error.rules.invalidGroup', `场景名非法：${group}（${SEGMENT_RULE_HINT}）`)
     const targetGroup = group === '' ? GLOBAL_SCENE : group
     const indexForScene = await readIndex(stateDir)
-    // 保留场景 global 恒存在（不用先建）；其余场景必须已存在——见上方注释。
-    if (targetGroup !== GLOBAL_SCENE && !indexForScene.scenes?.[targetGroup] && !(await pathExists(join(memoriesRoot, targetGroup)))) {
+    // 保留组 `global` / `_shared` 恒存在（不用先建场景记录）；其余场景必须已存在。
+    // `_shared` 与 `global` 一样是恒常注入的保留组：`memory_remember` 已把它列为可用目标，
+    // 这里再按"场景必须已存在"拒掉，两条路径就会互相矛盾。
+    if (targetGroup !== GLOBAL_SCENE && targetGroup !== SHARED_GROUP && !indexForScene.scenes?.[targetGroup] && !(await pathExists(join(memoriesRoot, targetGroup)))) {
       return fail('error.rules.sceneNotFound', `场景不存在：${targetGroup}（请先在「场景」页创建该场景）`, { group: targetGroup })
     }
     if (!isValidGroupSegment(name)) return fail('error.rules.invalidName', `记忆名非法：${name}（${SEGMENT_RULE_HINT}）`)
