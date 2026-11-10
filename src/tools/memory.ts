@@ -1,5 +1,8 @@
 // 记忆（rules）域的 model 工具：memory_manager_list / _read / _search / _switch / _save。
 //
+// 自主笔记（agent 学的一句话）是另一族 `memory_note`：两族按对象分开，不共用 list/read，
+// id 形状也不同（用户记忆 `<scene>/<name>`，笔记 `note:<layer>/<slug>`）。
+//
 // 为什么族名是 `memory_manager_` 而不是 `scene_memory_manager_`：后者是为了跟注入段名
 // （`scene-memory-manager-catalog`）对齐才改的，但那个名字描述的是**域**，
 // 而这个族操作的全是记忆。加场景能力时这个错配就现形了 —— 场景是另一个对象（容器，
@@ -21,7 +24,7 @@
 
 import { GLOBAL_SCENE, SHARED_GROUP } from '../memories/constants.js'
 import type { ScopeAskRequest, ScopeChoice, ScopeLayer } from '../evolution/scope-card.js'
-import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
+import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, toolOrNeutral, type ToolDomainDeps } from './deps.js'
 import { PROACTIVE_MEMORY_TOOL } from './table.js'
 
 /** 记忆工具域要的宿主能力：记忆 op 表与场景记录。 */
@@ -61,11 +64,19 @@ export interface MemoryToolDeps extends ToolDomainDeps {
 /** 注册记忆域的 model 工具（列表 / 读取 / 检索 / 切换 / 保存）。 */
 export function buildMemoryTools(deps: MemoryToolDeps): void {
   const { defineTool, register } = deps
+  /**
+   * 运行时点名自主笔记工具：它不在工具表里时退回中性说法。
+   *
+   * 静态描述不能点名（契约测试拦），错误消息与回执同理 —— 指一条模型没有的工具
+   * 等于把它往墙上推。`toolOrNeutral` 只在可见时说出真实名字。
+   */
+  const noteTool = (agent: unknown, named: string, neutral: string): string =>
+    toolOrNeutral(deps, agent, PROACTIVE_MEMORY_TOOL, named, neutral)
   register(defineTool({
     name: 'memory_manager_list',
     // 末尾**不点名** `scene_manager_list`：场景一族在出厂默认里就是关着的，指向一条模型没有的
     // 工具只会让它去猜名字（用户 把默认名单扩到十五条时去掉的这句）。
-    description: 'List memories (id, scene, enabled, form flat|bundle, description) plus the scene the injection follows. What is injected each turn is in the "Current memories" reminder; use this for ids and for entries that are off. Pass `scene` to filter; all=true lists everything.',
+    description: 'List user-written memories only (id, scene, enabled, form flat|bundle, description) plus the scene the injection follows. Agent notes are not included — list them with the agent-note tool. What is injected each turn is in the "Current memories" reminder; use this for ids and for entries that are off. Pass `scene` to filter; all=true lists everything.',
     parameters: {
       // 参数名与其余五个域同词：同一个概念在工具面只该有一个名字
       // 而 `scene` 是它在 `scene_manager_*`、`<scene>/<name>` 与注入段标题里的叫法。
@@ -73,39 +84,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 显式映射一次 —— 改 op 的字段名要动界面，那不是这一条能顺手做的事。
       scene: { type: 'string', description: 'Optional scene filter; `global` and `_shared` are the always-on scenes.' },
       all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
-      auto: { type: 'boolean', description: 'List the notes the agent learned by itself (autonomous memory) instead of the ones the user wrote. Off entries are hidden unless all=true.' },
       limit: { type: 'number', description: 'Max entries (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
-      // 自动记忆与用户记忆**分成两次列**：两者权威等级、状态机、可做的操作都不同
-      // （一个能 approve / promote，一个能 edit / bundle）。混成一张表时模型会拿
-      // 「已确认」去描述用户写的东西，也会拿 `layer` 去描述场景 —— 两边的术语不一样。
+      // 旧版把笔记列表塞在这条工具的 `auto` 参数里。两域分开后明确报错，
+      // 别让一次旧习惯静默返回一份用户记忆清单。
       if (args && args.auto === true) {
-        if (!deps.evolutionOps) throw new Error('autonomous memory is not available in this build')
-        const r: any = await deps.evolutionOps['evolution-list']({ all: args.all === true })
-        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read learned notes'))
-        const rows: any[] = Array.isArray(r.entries) ? r.entries : []
-        const limit = listLimit(args && args.limit)
-        const shown = rows.slice(0, limit)
-        const order = ['workspace', 'global']
-        const lines: string[] = []
-        for (const layer of order) {
-          const group = shown.filter((e) => e.layer === layer)
-          if (!group.length) continue
-          lines.push('[' + layer + ']')
-          for (const e of group) {
-            lines.push('- ' + e.id + ' · ' + String(e.status || 'active') +
-              ' · conf ' + (Number(e.confidence) || 0).toFixed(2) +
-              ' · ' + (e.injects ? 'injects' : 'not injected') +
-              (e.needsReview ? ' · needs review: ' + String(e.needsReview) : '') +
-              (e.oneLine ? ' — ' + String(e.oneLine) : ''))
-          }
-        }
-        const head = 'learned notes (agent-written): ' + rows.length + ' listed' +
-          (r.total !== undefined ? ' / ' + r.total + ' in catalog' : '') +
-          (rows.length > shown.length ? ' (showing ' + shown.length + ', raise limit for more)' : '')
-        return head + '\n' + (lines.join('\n') || '(none)')
+        throw new Error('the auto flag was removed: agent notes are listed by ' + noteTool(exec && exec.agent, 'memory_note action=list', 'the agent-note tool') + '. This tool lists user-written memories only.')
       }
       const showAll = Boolean(args && args.all === true)
       // `scene` → `group`：只把 op 认的那个字段传过去，别把 `scene` 也塞给它（它不认）。
@@ -185,7 +171,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // "dropped by the byte budget" 改成"left out of it"：byte budget
     // 是本插件内部术语，模型没有这个概念 —— 它只知道"这条在不在我上下文里"。说内部机制
     // 等于让它去猜一个它观测不到的量。
-    description: 'Read one memory\'s full body, its form (flat|bundle) and its attachment names. Only for ones not already in your context (disabled, in an inactive scene, or left out). Attachment contents are not returned — use your file tools.',
+    description: 'Read one user-written memory\'s full body, its form (flat|bundle) and its attachment names. Agent notes are not user memories — read them with the agent-note tool. Only for ones not already in your context (disabled, in an inactive scene, or left out). Attachment contents are not returned — use your file tools.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
     },
@@ -193,39 +179,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     async execute(args: any, exec: any) {
       // op 的字段名是 `id`，不改 op：这里显式转换（键名对模型是 `<场景>/<名字>`，对 op 是 `id`）。
       const wantId = String((args && args.memory) || '')
-      const r: any = await deps.rulesOps['rules-read']({ id: wantId })
-      const isAuto = r && r.ok !== false && r.rule && r.rule.origin === 'auto'
-      // 自动条目要补证据链：`rules-read` 给的是正文与 form，回答不了"为什么记它、现在还成立吗"。
-      // 那几样只在 state.json 里（`evolution-read`）。用户记忆没有这一段，所以按 origin 分流，
-      // 不是每次 read 都多读一次盘。
-      if (deps.evolutionOps && (isAuto || !r || r.ok === false)) {
-        const a: any = await deps.evolutionOps['evolution-read']({ id: wantId, touch: true })
-        if (a && a.ok) {
-          const st = a.state || {}
-          const bits = [
-            'status ' + String(a.status || 'active'),
-            'confidence ' + (Number(st.confidence) || 0).toFixed(2),
-            a.layer,
-          ]
-          const lines = ['# ' + wantId + ' (learned note)', bits.join(' · ')]
-          if (a.basis) lines.push('basis: ' + String(a.basis))
-          if (a.boundary) lines.push('boundary: ' + String(a.boundary))
-          if (a.degraded) lines.push('degraded: ' + String(a.degraded))
-          lines.push('', String(a.body || ''))
-          const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
-          if (ev.length) {
-            lines.push('', 'evidence (latest ' + ev.length + '):')
-            for (const e of ev) lines.push('- [' + String(e.source || '') + '] ' + String(e.quote || '').slice(0, 200))
-          }
-          const tr: any[] = Array.isArray(st.transitions) ? st.transitions : []
-          if (tr.length) {
-            lines.push('', 'timeline:')
-            for (const x of tr) lines.push('- ' + String(x.at || '') + ' ' + String(x.from || '') + ' → ' + String(x.to || '') + ' (' + String(x.actor || '') + ': ' + String(x.reason || '') + ')')
-          }
-          return lines.join('\n')
-        }
+      // 笔记 id 带 `note:` 前缀：这条工具只读用户记忆，直接指向正确的族。
+      if (wantId.startsWith('note:')) {
+        throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_note action=read', 'the agent-note tool') + '. User memory ids look like <scene>/<name>.')
       }
-      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read memories')
+      const r: any = await deps.rulesOps['rules-read']({ id: wantId })
+      if (!r || r.ok === false) {
+        throw new Error(((r && r.error) || 'failed to read memories') + ' (if this is an agent note, use ' + noteTool(exec && exec.agent, 'memory_note action=read', 'the agent-note tool') + ')')
+      }
       const rule: any = r.rule || {}
       // 形态与附件名：op 一直把 `attachments` 给了出来，这里此前**整个丢掉**，
       // 于是模型连"这条记忆是 bundle、带了 3 个附件"都看不到。只给名字不给内容 ——
@@ -251,7 +212,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // 搜索是"找一条"（片段 + 排序）。混在一起时，搜不到就等于清单为空 —— 模型分不清
     // "没有这条记忆"和"这个词没匹配上"。默认在工具表里**关着**（见 tools/table.ts）：
     // 它是按需检索，不是每轮都该付 schema 成本的能力。
-    description: 'Search memories by words in id, scene, description, tags or body. Returns ids plus a short snippet; read the memory itself for the full body. All words must match (case-insensitive).',
+    description: 'Search user-written memories by words in id, scene, description, tags or body. Agent notes are not included — list them with the agent-note tool. Returns ids plus a short snippet; read the memory itself for the full body. All words must match (case-insensitive).',
     parameters: {
       query: { type: 'string', required: true, description: 'Words to look for; every word must match somewhere in the memory.' },
       limit: { type: 'number', description: 'Max hits (default 20, max 100).' },
@@ -292,7 +253,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // 描述同时按"省 token"重写了一遍 —— 这几段文字每次请求都要发出去，废话是常驻成本。
     // 后半句"freeing the byte budget"删掉：byte budget 是本插件
     // 内部术语，模型据此做不了任何判断 —— "不再被注入"已经是它需要的全部因果。
-    description: 'Enable or disable one memory. Disabled memories stop being injected. Reversible. Only when the user asks or approves.',
+    description: 'Enable or disable one user-written memory. Disabled memories stop being injected. Reversible. Agent notes are not switched here — forget them with the agent-note tool. Only when the user asks or approves.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
       enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable.' },
@@ -302,6 +263,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
       const memory = String((args && args.memory) || '')
+      // 笔记不是用户记忆：这条工具拨的是索引里的开关，笔记的删除/停用走另一族。
+      if (memory.startsWith('note:')) {
+        throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_note action=forget', 'the agent-note tool') + '. User memory ids look like <scene>/<name>.')
+      }
       // `enabled` 必须是布尔：`rules-toggle` 缺了它直接拒（ops/memory.ts），但那是给用户看的
       // 中文 op 错；这里先挡一句说清"这条工具要什么"。
       if (typeof (args && args.enabled) !== 'boolean') throw new Error('missing argument: enabled must be true or false')
@@ -347,7 +312,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // （场景段 128 KiB），而模型很乐意把「这个项目用 pnpm」记一条 —— 那看一眼 `package.json`
     // 就知道，记下来却永久占着每一轮请求。合并 write/update 后这两句更要留：upsert 降低了
     // "再记一条"的摩擦，而摩擦正是这里唯一拦得住它的东西。
-    description: 'Create a full memory (a convention, procedure or reference worth keeping), or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. For a one-line note, standing order, reminder or preference ("every time…", "always…"), use the autonomous-memory learn tool instead when it is available. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
+    description: 'Create a full user-written memory (a convention, procedure or reference worth keeping), or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. For a one-line note, standing order, reminder or preference ("every time…", "always…"), use the agent-note learn action instead. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name> — copy it from the list. `global` is the always-on scene.' },
       description: { type: 'string', description: 'One-sentence description (<=500 chars). Required when creating. Empty string = drop it and re-derive from the body; omit = keep.' },
@@ -362,6 +327,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const blocked = await deps.lockedSceneGuard()
       if (blocked) throw new Error(blocked)
       const memory = String((args && args.memory) || '').trim()
+      // 笔记不是用户记忆：它有自己的 id 前缀与写入路径，别让一次前缀传错落到"场景不存在"。
+      if (memory.startsWith('note:')) {
+        throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_note action=learn', 'the agent-note learn action') + ' to update it (same slot) or action=forget. User memory ids look like <scene>/<name>.')
+      }
       // 拆成 `<场景>/<名字>`：要求两段都非空。**不做"没有斜杠就落 global"的兜底** —— 那会把
       // 一次拼错的 id 变成一条"每轮都注入"的全局记忆，而清单上看起来完全正常。
       // 清单里打印的就是 `<场景>/<名字>`，照抄比拼装准。
@@ -415,7 +384,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const trimmedBody = body.trim()
       const oneParagraph = trimmedBody !== '' && !/\n\s*\n/.test(trimmedBody)
       if (oneParagraph && trimmedBody.length <= 300 && deps.autoLearnEnabled && deps.autoLearnEnabled(exec && exec.agent)) {
-        throw new Error('this is a one-line note, not a full memory: call memory_manager_auto action=learn with title and text instead (layer=global for every project, workspace for this one). memory_manager_save is for a multi-paragraph memory such as a convention, procedure or reference.')
+        throw new Error('this is a one-line note, not a full memory: call ' + noteTool(exec && exec.agent, 'memory_note action=learn', 'the agent-note learn action') + ' with title and text instead (layer=global for every project, workspace for this one). memory_manager_save is for a multi-paragraph memory such as a convention, procedure or reference.')
       }
       const missing = [
         body.trim() === '' ? 'body' : '',
@@ -482,13 +451,15 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     },
   }))
 
-  // ── 自主记忆（只在开关打开时出现在工具表里）────────────────────────────────
+  // ── 自主笔记（只在开关打开时出现在工具表里）────────────────────────────────
   //
   // 为什么不复用 `memory_manager_save`：那条的契约是「Only on the user's instruction」并且
-  // 受确认门禁。自动记忆需要零摩擦：给 `save` 加一个 `auto` 参数会让同一个工具同时代表
+  // 受确认门禁。自主笔记需要零摩擦：给 `save` 加一个 `auto` 参数会让同一个工具同时代表
   // 两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。授权边界写在工具名上。
   //
-  // 只留 learn / forget：整理草案由界面「整理」承担，模型不需要多一个只读动作。
+  // 与用户记忆分开的另一点是**对象**：笔记是一句话、按层（global / workspace）走；
+  // 用户记忆是多段、按场景走。list/read 也各自一份 —— 让模型能看到自己的笔记，
+  // 不必从用户记忆的清单里推断。
   // 弹卡策略：自动确认关 → 每次都问；开 → 不弹卡，由 agent 决定。生效判断在 gates 的 `autoActive`。
   if (!deps.evolutionOps || !deps.autoLearnEnabled) return
   const evo = deps.evolutionOps
@@ -499,12 +470,12 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory — the default for a short note, standing order, reminder or preference ("every time…", "always…"), including one scoped to this workspace. Use it instead of memory_manager_save whenever the content is one terse sentence rather than a full memory. Call only when the user explicitly asks you to remember something, or when they just corrected you and the correction must persist. Do not scan the conversation for memory candidates; a background review covers that. learn: a short `title` (2-8 words) and one terse sentence in the user\'s language (<=400 chars). `layer`: global = every project / the user personally; workspace = this project only. Pass it when clear; omit only when unsure. The user picks the layer in a card unless auto-confirm is on; then your layer is final and the note is saved without asking. `quote`: the user\'s exact words for user_explicit / user_correction; otherwise use model_inference. forget: only when asked; pass the note id or its unique key.',
+    description: 'Agent notes (autonomous memory) — short one-line notes you learned: a preference, fact, correction or procedure. Not user-written memories: for a full multi-paragraph memory in a scene, use memory_manager_save. learn: `title` (2-8 words) + `text` (one sentence, <=400 chars); `layer` global = every project / workspace = this one; `key` (a stable slot) when you may update or forget it later; `quote` + `source` when the user said it. forget: `memory` = note id or its unique key. list/read: inspect your notes. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
     parameters: {
-      action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn (default) or forget.' },
+      action: { type: 'string', enum: ['learn', 'forget', 'list', 'read'], required: true, description: 'learn (default), forget, list, or read.' },
       // ── learn ──
       title: { type: 'string', description: 'learn: a short name for the row (2-8 words, <=40 chars), in the user\'s language.' },
-      text: { type: 'string', description: 'learn: one terse sentence (<=400 chars), in the user\'s language.' },
+      text: { type: 'string', description: 'learn: the note itself — one sentence (<=400 chars), in the user\'s language.' },
       kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: optional; inferred from the text.' },
       source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it; default model_inference.' },
       quote: { type: 'string', description: 'learn: the user\'s exact words for user_explicit / user_correction.' },
@@ -512,8 +483,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       boundary: { type: 'string', description: 'learn: optional; when it may not hold.' },
       layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure; the card asks, or auto-confirm uses the default.' },
       ttlDays: { type: 'number', description: 'learn: optional; re-check after N days.' },
-      // ── forget ──
-      memory: { type: 'string', description: 'forget: the note id or its unique key.' },
+      // ── forget / read ──
+      memory: { type: 'string', description: 'forget/read: the note id; forget also accepts its unique key.' },
+      // ── list ──
+      all: { type: 'boolean', description: 'list: include notes that are not injecting (archived / superseded).' },
+      limit: { type: 'number', description: 'list: max entries (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -523,6 +497,64 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         throw new Error('autonomous memory is off here, so nothing was done. The user can turn it on in Memory → Autonomous memory.')
       }
       const action = String((args && args.action) || 'learn')
+
+      if (action === 'list') {
+        const r: any = await evo['evolution-list']({ all: args && args.all === true })
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read learned notes'))
+        const rows: any[] = Array.isArray(r.entries) ? r.entries : []
+        const limit = listLimit(args && args.limit)
+        const shown = rows.slice(0, limit)
+        const order = ['workspace', 'global']
+        const lines: string[] = []
+        for (const layer of order) {
+          const group = shown.filter((e) => e.layer === layer)
+          if (!group.length) continue
+          lines.push('[' + layer + ']')
+          for (const e of group) {
+            lines.push('- ' + String(e.id) + ' · ' + String(e.status || 'active') +
+              (e.key ? ' · slot ' + String(e.key) : '') +
+              ' · conf ' + (Number(e.confidence) || 0).toFixed(2) +
+              ' · ' + (e.injects ? 'injects' : 'not injected') +
+              (e.needsReview ? ' · needs review: ' + String(e.needsReview) : '') +
+              (e.oneLine ? ' — ' + String(e.oneLine) : ''))
+          }
+        }
+        const head = 'learned notes (agent-written): ' + rows.length + ' listed' +
+          (r.total !== undefined ? ' / ' + r.total + ' in catalog' : '') +
+          (rows.length > shown.length ? ' (showing ' + shown.length + ', raise limit for more)' : '')
+        return head + '\n' + (lines.join('\n') || '(none)')
+      }
+
+      if (action === 'read') {
+        const ref = String((args && args.memory) || '').trim()
+        if (ref === '') throw new Error('missing argument: memory')
+        const a: any = await evo['evolution-read']({ id: ref, touch: true })
+        if (!a || a.ok === false) throw new Error(String((a && a.error) || 'no such learned note: ' + ref))
+        const st = a.state || {}
+        const bits = [
+          'status ' + String(a.status || 'active'),
+          'confidence ' + (Number(st.confidence) || 0).toFixed(2),
+          a.layer,
+        ]
+        const lines = ['# ' + String(a.id || ref) + ' (learned note)', bits.join(' · ')]
+        if (a.title) lines.push('title: ' + String(a.title))
+        if (a.key) lines.push('slot: ' + String(a.key))
+        if (a.basis) lines.push('basis: ' + String(a.basis))
+        if (a.boundary) lines.push('boundary: ' + String(a.boundary))
+        if (a.degraded) lines.push('degraded: ' + String(a.degraded))
+        lines.push('', String(a.body || ''))
+        const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
+        if (ev.length) {
+          lines.push('', 'evidence (latest ' + ev.length + '):')
+          for (const e of ev) lines.push('- [' + String(e.source || '') + '] ' + String(e.quote || '').slice(0, 200))
+        }
+        const tr: any[] = Array.isArray(st.transitions) ? st.transitions : []
+        if (tr.length) {
+          lines.push('', 'timeline:')
+          for (const x of tr) lines.push('- ' + String(x.at || '') + ' ' + String(x.from || '') + ' → ' + String(x.to || '') + ' (' + String(x.actor || '') + ': ' + String(x.reason || '') + ')')
+        }
+        return lines.join('\n')
+      }
 
       if (action === 'forget') {
         const ref = String((args && args.memory) || '').trim()
@@ -543,7 +575,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         return 'OK: forgot ' + String(r.id || ref) + '. It will not be learned again for 30 days.'
       }
 
-      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget)')
+      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget / list / read)')
 
       // ── learn（默认）──
       const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
@@ -634,7 +666,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       if (choice.choice === 'revise') {
         return 'Not saved yet. The user wants this note worded differently:\n' +
           String(choice.custom ?? '') + '\n\n' +
-          'Rewrite the note to match their wording, then call memory_manager_auto action=learn again with the revised text. The card will ask them to confirm the new version.'
+          'Rewrite the note to match their wording, then call memory_note action=learn again with the revised text. The card will ask them to confirm the new version.'
       }
       if (choice.choice === 'skip') {
         return 'Not saved: the user chose not to add it. Do not save it again unless they ask.'

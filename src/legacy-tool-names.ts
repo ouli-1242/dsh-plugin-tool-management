@@ -40,13 +40,14 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   subagent_manager_remove: 'plugin_manager_remove',
   scene_manager_remove: 'plugin_manager_remove',
   prompt_manager_remove: 'plugin_manager_remove',
-  // 自主记忆四条并成一条（2026-11-09，用户界面要求「新增工具合并成一个」）。
-  // 四条都曾在开发分支上注册过，盘上的 `tool-table.json` / 场景快照可能留着旧名；
-  // 任意一条被关过 ⇒ 合成这条也记成关过，别让旧名单变成一串永远认不出的死名。
-  memory_manager_learn: 'memory_manager_auto',
-  memory_manager_forget: 'memory_manager_auto',
-  memory_manager_organize: 'memory_manager_auto',
-  memory_manager_procedure_done: 'memory_manager_auto',
+  // 自主笔记：早期分开注册的四条，以及上一版合并后的 `memory_manager_auto`，都迁到
+  // `memory_note`。盘上的 `tool-table.json` / 场景快照可能留着旧名；任意一条被关过
+  // ⇒ 新工具也记成关过，别让旧名单变成一串永远认不出的死名。
+  memory_manager_learn: 'memory_note',
+  memory_manager_forget: 'memory_note',
+  memory_manager_organize: 'memory_note',
+  memory_manager_procedure_done: 'memory_note',
+  memory_manager_auto: 'memory_note',
 })
 
 /** 旧名 → 新名；不是旧名就原样返回。 */

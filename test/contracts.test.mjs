@@ -102,7 +102,7 @@ import { createPromptsService } from '../lib/prompts/service.js'
 import { createScenePromptSync } from '../lib/scene-prompt-sync.js'
 
 test('域与工具名前缀双向对得上（对不上就有域永远统计不到调用）', () => {
-  // 工作区笔记没有专属工具：`memory_manager_auto` 是两层共用的写入口，按前缀归
+  // 工作区笔记没有专属工具：`memory_note` 是两层共用的写入口，按前缀归
   // `memoryGlobal`。空数组是显式声明「这个域没有工具」，不是漏配。
   const noTool = new Set(['memoryWorkspace'])
   for (const key of INJECT_DOMAIN_KEYS) {
@@ -118,7 +118,7 @@ test('域与工具名前缀双向对得上（对不上就有域永远统计不�
   }
   assert.equal(domainOfTool('read_file'), undefined, '不是本插件的工具不该被认领')
   // 共用写入口仍归全局记忆域：自动记忆的采纳遥测不按层拆（工具名反推不出写哪层）。
-  assert.equal(domainOfTool('memory_manager_auto'), 'memoryGlobal')
+  assert.equal(domainOfTool('memory_note'), 'memoryGlobal')
 })
 
 test('记忆族与场景族各归自己的域，中途用过的名字不是别名', () => {
@@ -4837,9 +4837,9 @@ test('记忆搜索工具出厂默认关闭（schema 成本按需付）', () => {
   assert.ok(DEFAULT_HIDDEN_TOOLS.includes('memory_manager_search'))
 })
 
-test('自主记忆四条工具合并成一条：出厂只藏这一条，旧名全部迁过来', () => {
-  const old = ['memory_manager_learn', 'memory_manager_forget', 'memory_manager_organize', 'memory_manager_procedure_done']
-  assert.equal(PROACTIVE_MEMORY_TOOL, 'memory_manager_auto')
+test('自主笔记旧名合并成一条：出厂只藏这一条，旧名全部迁过来', () => {
+  const old = ['memory_manager_learn', 'memory_manager_forget', 'memory_manager_organize', 'memory_manager_procedure_done', 'memory_manager_auto']
+  assert.equal(PROACTIVE_MEMORY_TOOL, 'memory_note')
   assert.ok(DEFAULT_HIDDEN_TOOLS.includes(PROACTIVE_MEMORY_TOOL), '合并后的工具出厂默认隐藏')
   for (const name of old) {
     assert.ok(!DEFAULT_HIDDEN_TOOLS.includes(name), '旧名不该还留在出厂名单：' + name)
@@ -4970,7 +4970,7 @@ test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器�
 })
 
 test('自主记忆不走宿主确认门：范围卡在工具内部处理', () => {
-  const reason = (args) => argConditionalConfirmReason('memory_manager_auto', args, 'session')
+  const reason = (args) => argConditionalConfirmReason('memory_note', args, 'session')
   // 宿主审批层不介入：范围由工具内的卡片决定；待确认由记忆页逐条批准。
   assert.equal(reason({ action: 'learn', text: '这个仓库统一用 pnpm', layer: 'workspace' }), null)
   assert.equal(reason({ action: 'learn', text: '所有项目都先给结论', layer: 'global' }), null)
@@ -4982,9 +4982,9 @@ test('must-ask：完全权限也不许跳过的确认（删除 / 机器级停用
   // 与 argConditionalConfirmReason 同口径：只有真的会弹卡的那次才谈得上 must-ask。
   const must = (name, args, mode = 'session') => isMustAskConfirm(name, args, mode)
   // 自主记忆的新增/遗忘不在审批层：待确认由记忆页逐条批准，不进 must-ask。
-  assert.equal(must('memory_manager_auto', { action: 'learn', text: '统一用 pnpm' }), false)
-  assert.equal(must('memory_manager_auto', { text: '统一用 pnpm' }), false, '缺省 action 也是 learn')
-  assert.equal(must('memory_manager_auto', { action: 'forget', memory: 'x' }), false)
+  assert.equal(must('memory_note', { action: 'learn', text: '统一用 pnpm' }), false)
+  assert.equal(must('memory_note', { text: '统一用 pnpm' }), false, '缺省 action 也是 learn')
+  assert.equal(must('memory_note', { action: 'forget', memory: 'x' }), false)
   // 删除：trash 是数据处置；restore / list 可跳过。
   assert.equal(must('plugin_manager_remove', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
   assert.equal(must('plugin_manager_remove', { action: 'restore', domain: 'memory', id: 't' }), false)

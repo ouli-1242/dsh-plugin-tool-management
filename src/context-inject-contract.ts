@@ -60,15 +60,15 @@ export const LEGACY_INJECT_KIND_OF: Readonly<Record<string, InjectDomainKey>> = 
  * 都说明模型确实在读这一域。改工具名等于换身份，这几个字符串是稳定契约。
  *
  * 为什么值是**数组**：工具族与注入域不是一一对应的概念 —— 域是"给模型看的信息分组"
- * （界面上的勾选），族是"操作哪类对象"。场景与记忆就一度同域两族
- * （`memory_manager_*` + `scene_manager_*`），拆开后现在每个域各一个前缀。留着数组是
- * 为了让"一个域挂多个族"在类型上成立，将来加族不必改类型。顺序不影响判定。
+ * （界面上的勾选），族是"操作哪类对象"。场景与记忆一度同域两族
+ * （`memory_manager_*` + `scene_manager_*`）；现在记忆域又分出手写记忆与自主笔记两族
+ * （`memory_manager_*` + `memory_note`），数组正是为这种"一域多族"留的。顺序不影响判定。
  */
 export const DOMAIN_TOOL_PREFIX: Record<InjectDomainKey, readonly string[]> = {
   scene: ['scene_manager_'],
-  // `memory_manager_auto` 写哪一层由卡片决定，从工具名反推不出来，所以它归在合并后的
+  // `memory_note` 写哪一层由卡片决定，从工具名反推不出来，所以它归在合并后的
   // 全局块（先匹配）；工作区块没有专属工具，空数组是显式声明，不是漏配。
-  memoryGlobal: ['memory_manager_'],
+  memoryGlobal: ['memory_manager_', 'memory_note'],
   memoryWorkspace: [],
   mcp: ['mcp_manager_'],
   skills: ['skill_manager_'],

@@ -5805,7 +5805,7 @@ export default {
     buildMemoryTools({
       ...toolDeps,
       rulesOps: auditOps(memoriesService.ops),
-      // 自主记忆的两条工具（learn / forget）：只有开关打开时才进工具表（见
+      // 自主笔记工具（learn / forget / list / read）：只有开关打开时才进工具表（见
       // `sessionToolTableOverlayOf` 的 allow）。op 层再挡一道 —— 两道都要，因为
       // 工具表是"模型看不看得见"，op 是"调得通调不通"，中间隔着一次模型采样。
       evolutionOps: auditOps(evolutionOpsTable),

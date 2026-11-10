@@ -646,7 +646,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     /**
-     * 列自动记忆（界面与 `memory_manager_list` 共用）。
+     * 列自动记忆（界面与 `memory_note action=list` 共用）。
      *
      * 与 `rules-list` 分开：那条列的是"用户记忆"，这条列的是"agent 学的" —— 两者在界面上
      * 是同一页的两节，但权威等级、状态机、可做的操作都不同，混成一份返回会让界面到处判 `origin`。
@@ -659,7 +659,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const kindFilter = typeof args?.kind === 'string' && args.kind !== '' ? args.kind : undefined
         const includeAll = args?.all === true
         // 界面传当前工作区 hash：工作区卡只列本项目，别把别的仓库的条目混进来。
-        // 模型侧的 `memory_manager_list auto=true` 不传，保持全库可见。
+        // 模型侧的 `memory_note action=list` 不传，保持全库可见。
         const workspaceFilter = typeof args?.workspaceHash === 'string' && args.workspaceHash !== '' ? args.workspaceHash : undefined
         // 工作区目录消失的条目要能被界面看出来（用户：工作区删除后记忆要跟着"消失"）：
         // hash → missingAt。目录回来了 sweep 会清掉这个标记并同步恢复记忆。
