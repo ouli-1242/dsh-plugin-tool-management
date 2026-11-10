@@ -9,8 +9,33 @@
 // 中文正文配中文卡片，英文正文配英文卡片。代价是「中文界面 + 英文笔记」会出英文卡片，
 // 这是宿主契约缺 locale 时能做到的最好一档。
 
+import type { ReviewCode } from './gates.js'
+
 export type ScopeLayer = 'global' | 'workspace'
 export type CardLang = 'zh' | 'en'
+
+/**
+ * 这次 learn 要不要弹范围卡。
+ *
+ * 只在「模型/系统不确定」时问：未指定层、全局层、工作区里出现跨项目措辞（可能判错层）、
+ * 歧义、做法类、与生效条目冲突、引句核对不到。模型推断的工作区条目直接进候选，不打扰用户；
+ * 与用户手写记忆冲突的卡片也解不开，直接进候选等记忆页裁决。
+ */
+export function needsScopeCard(input: {
+  layerProvided: boolean
+  layer: ScopeLayer
+  reviewCode?: ReviewCode
+  hasGlobalPhrase: boolean
+}): boolean {
+  if (input.reviewCode === 'user-conflict') return false
+  if (!input.layerProvided) return true
+  if (input.layer === 'global') return true
+  if (input.hasGlobalPhrase) return true
+  return input.reviewCode === 'ambiguous'
+    || input.reviewCode === 'procedure'
+    || input.reviewCode === 'active-conflict'
+    || input.reviewCode === 'no-cache'
+}
 
 /** 卡片上的答案。`skip` = 明确不加入；`revise` = 用户自己写了新说法。 */
 export interface ScopeChoice {
@@ -23,8 +48,8 @@ export interface ScopeAskRequest {
   /** 将要保存的正文（已按上限截断）。 */
   text: string
   boundary?: string
-  /** 推荐层：排在选项第一位，描述里标「推荐」。 */
-  recommended: ScopeLayer
+  /** 推荐层：排在选项第一位，描述里标「推荐」。模型不确定时不传。 */
+  recommended?: ScopeLayer
   /** 可选的层（由两个自主记忆开关与工作区身份裁剪），至少一项。 */
   allowed: ScopeLayer[]
   /** 会合并到的已有条目 id（有就写进 detail）。 */
@@ -140,9 +165,13 @@ export function buildScopeQuestion(req: ScopeAskRequest): {
 } {
   const lang = cardLangOf(req.text)
   const labels = LABELS[lang]
-  const order: ScopeLayer[] = [req.recommended, ...req.allowed.filter((l) => l !== req.recommended)]
+  // 不确定时不标推荐；选项把工作区放前面 —— 用户按习惯点第一项时，宁可少记到全局，
+  // 也不要默认跨项目。
+  const order: ScopeLayer[] = req.recommended !== undefined
+    ? [req.recommended, ...req.allowed.filter((l) => l !== req.recommended)]
+    : req.allowed.slice().sort((a, b) => (a === 'workspace' ? -1 : b === 'workspace' ? 1 : 0))
   const options = order.map((layer) => {
-    const recommended = layer === req.recommended
+    const recommended = req.recommended !== undefined && layer === req.recommended
     const desc = layer === 'global' ? labels.globalDesc : labels.workspaceDesc
     return {
       label: layer === 'global' ? labels.global : labels.workspace,

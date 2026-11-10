@@ -4971,20 +4971,19 @@ test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器�
   assert.equal(asks('subagent_manager_switch', { name: 'x' }), false)
 })
 
-test('自主记忆不弹卡：learn 只写待确认收件箱，确认发生在记忆页', () => {
+test('自主记忆不走宿主确认门：范围卡在工具内部处理', () => {
   const reason = (args) => argConditionalConfirmReason('memory_manager_auto', args, 'session')
-  // 卡片既没有原文回显也不能带输入：待确认语义由记忆页承担，宿主审批层不再介入。
+  // 宿主审批层不介入：范围由工具内的卡片决定；待确认由记忆页逐条批准。
   assert.equal(reason({ action: 'learn', text: '这个仓库统一用 pnpm', layer: 'workspace' }), null)
   assert.equal(reason({ action: 'learn', text: '所有项目都先给结论', layer: 'global' }), null)
   assert.equal(reason({ action: 'forget', memory: 'global/x' }), null)
-  assert.equal(reason({ action: 'organize' }), null)
   assert.equal(reason({ action: 'learn' }), null)
 })
 
 test('must-ask：完全权限也不许跳过的确认（删除 / 机器级停用 / repair）', () => {
   // 与 argConditionalConfirmReason 同口径：只有真的会弹卡的那次才谈得上 must-ask。
   const must = (name, args, mode = 'session') => isMustAskConfirm(name, args, mode)
-  // 自主记忆的新增/遗忘/整理都不在审批层：待确认由记忆页逐条批准，不进 must-ask。
+  // 自主记忆的新增/遗忘不在审批层：待确认由记忆页逐条批准，不进 must-ask。
   assert.equal(must('memory_manager_auto', { action: 'learn', text: '统一用 pnpm' }), false)
   assert.equal(must('memory_manager_auto', { text: '统一用 pnpm' }), false, '缺省 action 也是 learn')
   assert.equal(must('memory_manager_auto', { action: 'forget', memory: 'x' }), false)

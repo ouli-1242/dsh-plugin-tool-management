@@ -20,7 +20,8 @@
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
 import { GLOBAL_SCENE, SHARED_GROUP } from '../memories/constants.js'
-import type { ScopeAskRequest, ScopeChoice, ScopeLayer } from '../evolution/scope-card.js'
+import { needsScopeCard, type ScopeAskRequest, type ScopeChoice, type ScopeLayer } from '../evolution/scope-card.js'
+import { hasGlobalPhrase } from '../evolution/route.js'
 import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 import { PROACTIVE_MEMORY_TOOL } from './table.js'
 
@@ -480,36 +481,34 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   // ── 自主记忆（只在开关打开时出现在工具表里）────────────────────────────────
   //
   // 为什么不复用 `memory_manager_save`：那条的契约是「Only on the user's instruction」并且
-  // 受 `requireConfirmForModelRuleWrite` 门禁（一次确认卡）。自动记忆必须零摩擦 —— 每学一条
-  // 弹一次卡，用户三分钟就会把开关关掉，"自进化"就没了。反过来，给 `save` 加一个 `auto`
-  // 参数会让同一个工具同时代表两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。
-  // 授权边界写在工具名上，门禁不用猜。
+  // 受确认门禁。自动记忆需要零摩擦：给 `save` 加一个 `auto` 参数会让同一个工具同时代表
+  // 两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。授权边界写在工具名上。
   //
-  // 2026-11-09（用户：新增工具合并成一个）：原先 learn / forget / organize /
-  // procedure_done 四条合成这一条，靠 `action` 分叉。四条行为共享同一个"开关打开才可用"
-  // 的前提，分成四个名字只是让工具表多三行、让模型多记三个工具；合成后界面只需要给
-  // 一条写介绍、只锁一个勾选框。四个分支的 op 与门禁一个字没改 —— 合并的只是入口。
+  // 只留 learn / forget：整理草案由界面「整理」承担，模型不需要多一个只读动作。
+  // 弹卡策略在 scope-card 的 `needsScopeCard`；直接生效策略在 gates 的 `canAutoActivate`。
   if (!deps.evolutionOps || !deps.autoLearnEnabled) return
   const evo = deps.evolutionOps
+  // 热路径的频率上限：模型在一轮里反复 learn / 弹卡时，10 分钟窗口最多 5 条。
+  const learnCalls = new Map<string, { at: number; n: number }>()
+  const LEARN_WINDOW_MS = 10 * 60_000
+  const LEARN_MAX = 5
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory. action=learn: save one durable preference, fact, correction or procedure (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). A chat card asks the user whether to keep it in an enabled layer (global memory / this workspace) or not at all; if they approve, it is active immediately. If they type their own wording instead, this call returns it without saving — rewrite the note to match their words and call learn again so they can confirm. Without an interactive card it is saved as pending and is NOT injected until the user confirms it on the Memory page — the receipt says which happened, so do not claim it is active unless the receipt does. action=forget: delete a learned note (stays un-learnable for 30 days), only when the user asks. action=organize: read-only draft of merges / archives. Available only while autonomous memory is on.',
+    description: 'Autonomous memory. Call only when the user explicitly asks you to remember something, or when they just corrected you and the correction must persist. Do not scan the conversation for memory candidates; a background review covers that. learn: one terse sentence in the user\'s language (<=400 chars). `layer`: global = every project / the user personally; workspace = this project only. Pass it when clear; omit only when unsure (the user is asked). `quote`: the user\'s exact words for user_explicit / user_correction; otherwise use model_inference. Workspace notes backed by the user\'s exact words may go active directly; everything else is confirmed first. forget: only when asked; pass the note id or its unique key.',
     parameters: {
-      action: { type: 'string', enum: ['learn', 'forget', 'organize'], required: true, description: 'learn (default) / forget / organize.' },
+      action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn (default) or forget.' },
       // ── learn ──
-      text: { type: 'string', description: 'learn: one sentence, what to remember (<=400 chars).' },
-      kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: what kind of thing it is; inferred from the text when omitted.' },
-      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it. user_explicit / user_correction require a verbatim `quote`. All sources go through the same card; evidence only affects confidence and ordering.' },
-      quote: { type: 'string', description: 'learn: the user\'s exact words (verbatim substring of what they said). Required for user_explicit / user_correction.' },
-      key: { type: 'string', description: 'learn: short slot name like `package-manager` — the same key merges with the existing note.' },
-      boundary: { type: 'string', description: 'learn: when it might not hold (e.g. "CI still uses npm").' },
-      layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project only). Omit to let the card offer the routed layer first; the user\'s choice wins.' },
-      ttlDays: { type: 'number', description: 'learn: days before it should be re-checked; defaults by kind.' },
+      text: { type: 'string', description: 'learn: one terse sentence (<=400 chars), in the user\'s language.' },
+      kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: optional; inferred from the text.' },
+      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it; default model_inference.' },
+      quote: { type: 'string', description: 'learn: the user\'s exact words for user_explicit / user_correction.' },
+      key: { type: 'string', description: 'learn: optional slot name; the same key merges.' },
+      boundary: { type: 'string', description: 'learn: optional; when it may not hold.' },
+      layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure.' },
+      ttlDays: { type: 'number', description: 'learn: optional; re-check after N days.' },
       // ── forget ──
-      memory: { type: 'string', description: 'forget: the learned note id, copied from the learned notes block.' },
-      // ── organize ──
-      scope: { type: 'string', enum: ['workspace', 'global', 'all'], description: 'organize: which set to look at (default workspace).' },
+      memory: { type: 'string', description: 'forget: the note id or its unique key.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -521,28 +520,40 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const action = String((args && args.action) || 'learn')
 
       if (action === 'forget') {
-        const id = String((args && args.memory) || '').trim()
-        if (id === '') throw new Error('missing argument: memory')
-        const r: any = await evo['evolution-forget']({ id, actor: 'model' })
+        const ref = String((args && args.memory) || '').trim()
+        if (ref === '') throw new Error('missing argument: memory')
+        const forget = async (id: string): Promise<any> => evo['evolution-forget']({ id, actor: 'model' })
+        let r: any = await forget(ref)
+        if (!r || r.ok === false) {
+          // 注入行对普通笔记只显示 key（没有 id）：按 key / 摘要反查一次，唯一命中才删。
+          const list: any = await evo['evolution-list']({ all: true })
+          const hits: any[] = (list && Array.isArray(list.entries) ? list.entries : [])
+            .filter((e: any) => String(e.key || '') === ref || String(e.oneLine || '') === ref)
+          if (hits.length === 1) r = await forget(String(hits[0].id))
+          else if (hits.length > 1) {
+            throw new Error('ambiguous: "' + ref + '" matches ' + hits.map((e: any) => String(e.id)).join(', ') + '; pass the full id.')
+          }
+        }
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to forget it'))
-        return 'OK: forgot ' + String(r.id || id) + '. It will not be learned again for 30 days.'
+        return 'OK: forgot ' + String(r.id || ref) + '. It will not be learned again for 30 days.'
       }
 
-      if (action === 'organize') {
-        const r: any = await evo['evolution-organize']({ scope: (args && args.scope) || 'workspace' })
-        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to draft a cleanup'))
-        const drafts: any[] = Array.isArray(r.drafts) ? r.drafts : []
-        const scanned = Number(r.scanned) || 0
-        if (!drafts.length) return 'Nothing to tidy: ' + scanned + ' learned note(s) scanned, no merges / archives / promotions suggested.'
-        const lines = drafts.map((d: any, i: number) =>
-          (i + 1) + '. [' + String(d.action) + '] ' + (Array.isArray(d.ids) ? d.ids.join(' + ') : '') + ' — ' + String(d.reason || ''))
-        return 'Drafted ' + drafts.length + ' change(s) from ' + scanned + ' learned note(s). Nothing has been changed yet — the user applies them in Memory → Learned notes.\n' + lines.join('\n')
-      }
-
-      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget / organize)')
+      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget)')
 
       // ── learn（默认）──
       const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
+      if (identity?.sessionId) {
+        const now = Date.now()
+        const hit = learnCalls.get(identity.sessionId)
+        if (!hit || now - hit.at > LEARN_WINDOW_MS) {
+          if (learnCalls.size > 256) learnCalls.clear()
+          learnCalls.set(identity.sessionId, { at: now, n: 1 })
+        } else if (hit.n >= LEARN_MAX) {
+          throw new Error('already tried to save ' + LEARN_MAX + ' notes in the last 10 minutes; stop and continue the task. The user can still ask you to remember more.')
+        } else {
+          hit.n += 1
+        }
+      }
       const payload: any = {
         text: String((args && args.text) || ''),
         // 默认按"模型推断"起步：说这是用户明说的却不给引句，证据门会降级 —— 但先如实默认更省一次往返。
@@ -565,14 +576,32 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         return learnReceipt(r, 'none')
       }
 
-      // 先只读预演：门禁拒绝的条目不弹卡；与用户记忆冲突的也不弹（卡片也解不开）。
+      // 先只读预演：同时拿到「弹卡后会发生什么」与「不弹卡直接落盘会发生什么」。
       const preview: any = await previewOp(payload)
       if (!preview || preview.ok === false) {
         // 门禁拒绝是**正常的业务结果**，不是异常：把它当异常抛会让模型以为工具坏了。
         // 但工具层只能通过 throw 回话，所以把 `error` 原样抛（它已经是一句给模型看的话）。
         throw new Error(String((preview && preview.error) || 'failed to record it'))
       }
-      if (preview.status !== 'active') {
+      const direct = preview.direct
+      // 工作区 + 强证据 + 非做法类：不打扰用户，直接生效。
+      if (direct && direct.status === 'active' && direct.autoActive === true) {
+        const r: any = await evo['evolution-learn']({ ...payload, autoActive: true })
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
+        return learnReceipt(r, 'auto')
+      }
+
+      const layerProvided = payload.layer === 'global' || payload.layer === 'workspace'
+      const layer: ScopeLayer = preview.layer === 'global' ? 'global' : 'workspace'
+      // 卡片只在「模型/系统不确定」时出现；模型推断的工作区条目直接进候选，不打扰用户。
+      const cardNeeded = needsScopeCard({
+        layerProvided,
+        layer,
+        ...(direct && direct.reviewCode !== undefined ? { reviewCode: direct.reviewCode } : {}),
+        hasGlobalPhrase: hasGlobalPhrase(String(preview.text || payload.text || '')),
+      })
+      // 用户手写记忆冲突是卡片也解不开的；模型推断的工作区条目也不需要卡。
+      if (!cardNeeded || preview.status !== 'active') {
         const r: any = await evo['evolution-learn'](payload)
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
         return learnReceipt(r, preview.reviewCode === 'user-conflict' ? 'pending-conflict' : 'pending')
@@ -581,12 +610,12 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const allowed: ScopeLayer[] = Array.isArray(preview.allowedLayers)
         ? (preview.allowedLayers as unknown[]).filter((l): l is ScopeLayer => l === 'global' || l === 'workspace')
         : []
-      const recommended: ScopeLayer = preview.layer === 'global' ? 'global' : 'workspace'
       const request: ScopeAskRequest = {
         text: String(preview.text || payload.text || ''),
         ...(typeof preview.boundary === 'string' && preview.boundary !== '' ? { boundary: preview.boundary } : {}),
-        recommended,
-        allowed: allowed.length > 0 ? allowed : [recommended],
+        // 只有模型明确给了层才标「推荐」；省略层就是不确定，让用户自己选。
+        ...(layerProvided ? { recommended: layer } : {}),
+        allowed: allowed.length > 0 ? allowed : [layer],
         ...(typeof preview.mergeInto === 'string' && preview.mergeInto !== '' ? { mergeInto: preview.mergeInto } : {}),
         ...(Array.isArray(preview.supersedes) && preview.supersedes.length > 0
           ? { supersedes: (preview.supersedes as unknown[]).filter((x): x is string => typeof x === 'string') }
@@ -624,8 +653,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   }))
 }
 
-/** learn 回执。状态（active / pending）以 learn 的返回为准，`card` 只补充「卡片那一侧发生了什么」。 */
-function learnReceipt(r: any, card: 'approved' | 'unavailable' | 'pending-conflict' | 'pending' | 'none'): string {
+/** learn 回执。状态（active / pending）以 learn 的返回为准，`card` 只补充「卡片 / 自动路径那一侧发生了什么」。 */
+function learnReceipt(r: any, card: 'approved' | 'unavailable' | 'pending-conflict' | 'pending' | 'none' | 'auto'): string {
   const parts = ['OK: recorded ' + String(r.id)]
   if (r.merged === true) {
     parts.push(String(r.status === 'active' ? 'merged into an existing active note' : 'merged into an existing pending note'))
