@@ -736,13 +736,6 @@
           var evo = evs[0], setEvo = evs[1]
           var evb = React.useState(false)
           var evoBusy = evb[0], setEvoBusy = evb[1]
-          // 展开的是哪一条（同时只开一条：这一页的行已经够密，开三条会把记忆列表推出一屏）。
-          var evd = React.useState(null)
-          var evoDetail = evd[0], setEvoDetail = evd[1]
-          // 详情缓存（id → evolution-read 的返回）。不缓存的话每点一次都重读一次盘，
-          // 而用户会在几条之间来回比。
-          var evc = React.useState({})
-          var evoCache = evc[0], setEvoCache = evc[1]
           var evoOrgState = React.useState(null)
           var evoOrg = evoOrgState[0], setEvoOrg = evoOrgState[1]
           // 后台复习队列：只用来在「有失败 / 无法处理」时给一个重试入口。
@@ -900,22 +893,9 @@
               setEvoBusy(false)
               if (res && res.ok !== false) {
                 setResult({ ok: true, text: t('evo.disabled') })
-                setEvoCache({})
                 refreshEvolution()
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
-          }
-
-          /** 点行名展开详情：详情按需拉一次（boundary / 待确认理由只在正文与 state 里）。 */
-          function toggleEvolutionDetail(id) {
-            if (evoDetail === id) { setEvoDetail(null); return }
-            setEvoDetail(id)
-            if (evoCache[id]) return
-            apiCall('evolution-read', { id: id }).then(function (res) {
-              if (res && res.ok !== false) {
-                setEvoCache(function (cur) { var next = Object.assign({}, cur); next[id] = res; return next })
-              }
-            }).catch(function () { /* 详情拉不到不影响列表；展开区显示"暂无" */ })
           }
 
           /** 算整理草案（只读）。结果留在卡片里，用户逐条「应用」。 */
@@ -933,7 +913,6 @@
             apiCall('evolution-apply-organize', { action: d.action, ids: d.ids, keep: d.keep }).then(function (res) {
               if (res && res.ok !== false) {
                 setResult({ ok: true, text: t('evo.organize.applied') })
-                setEvoCache({})
                 setEvoOrg(function (cur) {
                   if (!cur) return cur
                   // 应用过的那条从草案里拿掉：留着会让用户以为没生效、再点一次。
@@ -958,7 +937,6 @@
             apiCall('evolution-replay', args).then(function (res) {
               if (res && res.ok !== false) {
                 setResult({ ok: true, text: id ? t('evo.queue.retried') : t('evo.queue.done', { attempted: Number(res.attempted) || 0 }) })
-                setEvoCache({})
                 refreshEvolution()
               } else {
                 setEvoQueue(function (cur) { return cur ? Object.assign({}, cur, { busy: false, error: translateError(t, res) }) : null })
@@ -969,32 +947,22 @@
           }
 
           /**
-           * 展开区（用户 2026-11-10：只要重要信息 —— 边界；时间线 / 证据 / 路径全砍）。
-           * 数据来自 `evolution-read`（按需拉一次；boundary 不在列表行里）。
+           * 行名：模型给的标题优先；旧条目没有标题时取正文第一个分句。
+           * 只用于展示，不写盘 —— 用户在编辑弹窗里补的名称才会成为 title。
            */
-          function renderEvolutionDetail(e) {
-            var d = evoCache[e.id]
-            var out = []
-            // "为什么待确认"放展开区第一行：meta 行是单行省略，长理由挤在那里只会被截断
-            // （用户 2026-11-10：内容被截断）——这里宽度管够，完整读完。
-            if (e.needsReview) out.push(React.createElement('p', { key: 'nr', className: 'dsm-help' }, e.needsReview))
-            if (!d) {
-              out.push(React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')))
-            } else if (d.ok === false) {
-              out.push(React.createElement('p', { key: 'e', className: 'dsm-help' }, translateError(t, d)))
-            } else if (d.boundary) {
-              out.push(React.createElement('div', { key: 'bd', className: 'dsm-evo-detail-row' },
-                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.detail.boundary')),
-                React.createElement('span', null, String(d.boundary))))
-            }
-            return React.createElement('div', { className: 'dsm-evo-detail' }, out)
+          function evolutionNameOf(e) {
+            var given = String(e.title || '').trim()
+            if (given !== '') return given
+            var text = String(e.oneLine || '').trim()
+            if (text === '') return String(e.id || '')
+            var cut = text.split(/[，,。；;：:！!？?\n]/, 1)[0].trim()
+            if (cut === '') return text
+            return cut.length > 24 ? cut.slice(0, 24) + '…' : cut
           }
 
           /**
-           * 一行自动记忆。
-           *
-           * 行上只留三样量值（用户 2026-11-10）：层、注入次数、token。状态用标签表达，
-           * 候选行右侧一颗「确认」；停用 / 删除收进 ⋯ 菜单。
+           * 一行自动记忆，与其他记忆行同构：名称 + 正文，右侧开关 / 确认，⋯ 里编辑与删除。
+           * 行名不可点：详情走编辑弹窗，点一下不该把整张列表推开。
            */
           function renderEvolutionRow(e) {
             // core / playbook 是旧数据里仍可注入的两档，按「生效」显示，不标成待确认。
@@ -1005,12 +973,14 @@
                     : 'evo.tag.candidate'
             var tone = e.status === 'core' || e.status === 'active' || e.status === 'playbook' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
             var pending = e.status === 'candidate'
-            var open = evoDetail === e.id
-            var metaBits = [
-              t('evo.injected', { count: (e.counters && Number(e.counters.injected)) || 0 }),
-              t('evo.tokens', { count: Number(e.tokens) || 0 }),
-            ]
-            if (e.wsMissing) metaBits.push(t('evo.ws.missing'))
+            var title = evolutionNameOf(e)
+            var body = String(e.oneLine || '').trim()
+            var metaBits = []
+            // 名称与正文相同（短句旧条目）时不重复第二行。
+            if (body !== '' && body !== title) {
+              metaBits.push(React.createElement('span', { key: 'body', className: 'dsm-listrow-meta-desc', title: body }, body))
+            }
+            if (e.wsMissing) metaBits.push(React.createElement('span', { key: 'ws', className: 'dsm-listrow-meta-info' }, t('evo.ws.missing')))
             // 停用由行内开关承担（与记忆行同构）；菜单里只留编辑与删除。
             var menuItems = [
               { key: 'edit', label: t('btn.edit'), disabled: evoBusy, onClick: function () { openEvolutionEditor(e) } },
@@ -1019,29 +989,22 @@
             return React.createElement(ListRow, {
               key: e.id,
               dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: t(statusKey) })],
-              // 行名就是展开开关：详情（边界 / 待确认理由）收在名字下面，不另开一个弹窗。
-              name: React.createElement('button', {
-                type: 'button',
-                className: 'dsm-evo-name',
-                'aria-expanded': open,
-                onClick: function (ev) { ev.stopPropagation(); toggleEvolutionDetail(e.id) },
-              }, (e.oneLine || e.id) + (open ? ' ▾' : ' ▸')),
-              tag: React.createElement(StatusTag, { tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : undefined, text: t(statusKey) }),
-              meta: metaBits.join(' · '),
+              name: title,
+              nameAfter: React.createElement('span', { className: 'dsm-qty' }, t('evo.tokens', { count: Number(e.tokens) || 0 })),
+              meta: metaBits.length ? metaBits : undefined,
               metaTitle: e.needsReview || undefined,
-              extra: open ? renderEvolutionDetail(e) : null,
               // 候选行右侧是「确认」；生效行是开关，与记忆行同一语义：关 = 停用进回收站。
               side: pending
                 ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
                 : React.createElement(Switch, {
                   on: e.enabled !== false,
                   disabled: evoBusy,
-                  label: t('evo.disable') + ' ' + (e.oneLine || e.id),
+                  label: t('evo.disable') + ' ' + title,
                   onClick: function () { disableEvolution(e.id) },
                 }),
               actions: [React.createElement(RowMenu, {
                 key: 'menu',
-                label: t('evo.menu', { name: e.oneLine || e.id }),
+                label: t('evo.menu', { name: title }),
                 items: menuItems,
               })],
             })
@@ -1099,12 +1062,14 @@
             })
           }
 
-          /** 分节线：名称 + 实线 + 启用/总数。线从名称一直拉到计数，读起来是一道分隔。 */
+          /** 分节线：短线 + 名称(启用/总数) + 长线。计数紧跟名称，用英文小括号。 */
           function renderEvolutionDivider(key, label, on, total) {
             return React.createElement('div', { key: key, className: 'dsm-evo-divider' },
-              React.createElement('span', { className: 'dsm-evo-divider-label' }, label),
-              React.createElement('span', { className: 'dsm-evo-divider-line' }),
-              React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: on, total: total })))
+              React.createElement('span', { className: 'dsm-evo-divider-line dsm-evo-divider-line-start' }),
+              React.createElement('span', { className: 'dsm-evo-divider-label' },
+                React.createElement('span', { className: 'dsm-evo-divider-name' }, String(label || '')),
+                React.createElement('span', { className: 'dsm-evo-divider-count' }, '(' + on + '/' + total + ')')),
+              React.createElement('span', { className: 'dsm-evo-divider-line' }))
           }
 
           /**
@@ -1112,7 +1077,7 @@
            * `cardKey` 同时是折叠状态的键。
            *
            * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
-           * 点行名展开详情，候选行右侧有「确认」，生效行右侧是开关，停用进记忆页的回收站。
+           * 名称 + 正文，候选行右侧有「确认」，生效行右侧是开关，停用进记忆页的回收站。
            * 卡头右侧的「设置」开设置弹窗（两层开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
            */
           function renderEvolutionCard(opts) {

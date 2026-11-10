@@ -176,21 +176,15 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-master{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:2px 0 6px}
 .dsm-evo-master .dsm-help{margin:0;margin-left:auto}
 .dsm-evo-modal .dsm-evo-organize{margin:0}
-/* 行名是展开开关：复位成文字，读起来与别的行的名字一样，只是多一个 ▸ / ▾。 */
-.dsm-evo-name{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;word-break:break-word}
-.dsm-evo-name:hover{color:var(--dsw-alias-label-primary)}
-/* 自主记忆分节线：名称 + 实线 + 启用/总数。线把相邻两组行真正隔开，名称可省略。
+/* 自主记忆分节线：短线 + 名称(启用/总数) + 长线。名称后紧跟计数，右侧长线负责分隔。
    按设置页分组头（.dsm-form-section）的档位收：12px/400/弱色、线用 l1 —— 它只是
-   一行说明，不该和 13px/600 的行名抢注意力。 */
+   一行说明，不该和 13px/600 的行名抢注意力。名称过长时只截名称，计数始终可见。 */
 .dsm-evo-divider{display:flex;align-items:center;gap:8px;margin:10px 0 2px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;font-weight:400}
-.dsm-evo-divider-label{min-width:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-evo-divider-label{display:inline-flex;min-width:0;max-width:70%;align-items:baseline}
+.dsm-evo-divider-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-evo-divider-count{flex:none}
 .dsm-evo-divider-line{flex:1;height:1px;background:var(--dsw-alias-border-l1)}
-.dsm-evo-divider .dsm-count{flex:none;font-weight:400}
-.dsm-evo-detail{display:flex;flex-direction:column;gap:4px;padding:4px 0 6px}
-/* 键值两列的行：值那一格必须能收缩，否则 flex 的 min-width:auto 会把它顶成一行硬裁
-   （用户 2026-11-10：内容被截断）——放开 min-width 后 word-break 接管换行。 */
-.dsm-evo-detail-row{display:flex;gap:8px;font-size:12px;line-height:17px}
-.dsm-evo-detail-row>span:last-child{flex:1;min-width:0}
+.dsm-evo-divider-line-start{flex:none;width:16px}
 .dsm-evo-detail-key{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
 /* 笔记风格一行：分段控件（dsm-form-seg）+ 自定义输入；只占一行，紧贴总开关下方。 */
 .dsm-evo-style{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
