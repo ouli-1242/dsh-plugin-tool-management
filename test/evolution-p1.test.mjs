@@ -371,20 +371,20 @@ test('自动段：同输入必须逐字节相同（否则每轮重发整段）�
   assert.equal(a.text, b.text)
   // 标题由注入框架（`# Learned notes (...)`）提供，正文再写 `##` 会变成两个层级。
   assert.doesNotMatch(a.text, /^#/m)
-  assert.match(a.text, /^\*\*Notes the agent wrote/)
-  assert.match(a.text, /- \[pref\] 这个仓库用 pnpm/)
+  assert.match(a.text, /^- \[pref\] 这个仓库用 pnpm/m, '正文从条目开始')
+  assert.match(a.text, /\*\*Learned notes from earlier sessions;[\s\S]*\*\*\n$/, '授权语收尾')
 })
 
-test('自动段：风格指引跟设置走 —— 有就一行、换了文本整段变', () => {
-  const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0, styleLine: 'Write terse and factual: no emoji.' }
+test('自动段：不注入风格行；授权语收在条目之后', () => {
+  const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0 }
   const r = renderAutoLayer('workspace', input)
-  assert.match(r.text, /House style for new notes: Write terse and factual: no emoji\./)
-  // 没给 styleLine 就不该出现这一行（旧调用方不受影响）。
-  const plain = renderAutoLayer('workspace', { ...input, styleLine: undefined })
-  assert.doesNotMatch(plain.text, /House style/)
-  // 同一风格内逐字节稳定（去重的前提）；风格文本变了整段跟着变。
+  // 风格是写新笔记时的指引，不是当前上下文该看到的信息。
+  assert.doesNotMatch(r.text, /House style/)
+  const lines = r.text.trim().split('\n')
+  assert.match(lines[0], /^- \[/, '正文从条目开始')
+  assert.match(lines[lines.length - 1], /^\*\*Learned notes from earlier sessions;/, '授权语收尾')
+  // 同一输入逐字节稳定（去重的前提）。
   assert.equal(renderAutoLayer('workspace', input).text, r.text)
-  assert.notEqual(renderAutoLayer('workspace', { ...input, styleLine: 'Write in as few words as possible.' }).text, r.text)
 })
 
 test('风格设定：非法输入回退 efficient，custom 没文本不生效，生效配置就近覆盖', () => {

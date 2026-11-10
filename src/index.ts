@@ -56,7 +56,7 @@ import {
 import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
 // 自主记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
-import { createEvolutionConfig, noteStyleGuideOf, workspaceHashOf } from './evolution/config.js'
+import { createEvolutionConfig, workspaceHashOf } from './evolution/config.js'
 // 注入热路径的同步视图（`agent/pre-step` 的 text() 没有 await 的位置）。
 import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
 // 冷路径：轮内摘要 → 回合封存 episode → outbox → 异步复习器（不挡主链）。
@@ -2426,9 +2426,6 @@ export default {
 
         const scene = memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined
         const enabledScenes = new Set<string>(scene ? [scene] : [])
-        // 风格指引跟着设置走：改一次风格，段文本变一次（整段重发一次是内容真的变了）。
-        // 写进快照键：同一风格内不重建，换了风格立刻重建。
-        const styleGuide = noteStyleGuideOf(cfg.noteStyle, cfg.noteStyleText ?? '')
         const view = evolutionRuntime.view()
 
         // 用户记忆段的预算档位也进快照键：手写记忆跨过 8K / 24K 阈值时，
@@ -2444,7 +2441,6 @@ export default {
           scenes: [...enabledScenes],
           enabled: cfg.enabled,
           inject: cfg.inject,
-          style: styleGuide,
           // 用户确认 / 停用 / 删除后立刻重建本会话的段；学习写入不加版本号。
           revision: view.state.watermarks.autoRevision ?? 0,
           budgetMode,
@@ -2461,7 +2457,6 @@ export default {
             enabledScenes,
           },
           userSegmentTokens,
-          ...(styleGuide !== '' ? { styleLine: styleGuide } : {}),
         })
         const snap: AutoSnapshot = {
           key,

@@ -172,8 +172,6 @@ export function autoSnapshotKey(parts: {
   scenes: string[]
   enabled: boolean
   inject: boolean
-  /** 笔记风格指引（换了风格要立刻重算整段）。 */
-  style?: string
   /**
    * 用户动作版本号（确认 / 停用 / 恢复 / 删除 / 提升）。学习写入不加它：
    * 本会话新学的条目靠对话上下文本身，不需要把整段记忆重发一次。
@@ -192,7 +190,6 @@ export function autoSnapshotKey(parts: {
     parts.scenes.join(','),
     parts.enabled ? '1' : '0',
     parts.inject ? '1' : '0',
-    parts.style ?? '-',
     String(parts.revision ?? 0),
     parts.budgetMode ?? 'none',
   ].join('|')
