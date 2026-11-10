@@ -565,6 +565,52 @@ test('purgeTrash：正文不是 archived 时只清孤儿副本，不误删正文
   } finally { h.done() }
 })
 
+test('update：只换正文，catalog 摘要跟着变；frontmatter / 状态不动', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    const before = h.readCatalog().entries[r.id]
+
+    const up = await h.learner.update(r.id, '这个仓库统一用 pnpm，不要用 npm')
+    assert.equal(up.ok, true, up.error)
+    const doc = h.readDoc(r.id)
+    assert.match(doc, /统一用 pnpm，不要用 npm/)
+    assert.equal(pickField(doc, 'auto_key'), 'package-manager', '编辑不能动 frontmatter 身份')
+    assert.equal(pickField(doc, 'auto_status'), 'candidate', '编辑不改状态')
+    const after = h.readCatalog().entries[r.id]
+    assert.equal(after.oneLine, '这个仓库统一用 pnpm，不要用 npm')
+    assert.ok(after.estTokens > 0)
+    assert.notEqual(after.oneLine, before.oneLine)
+
+    // 空正文拒绝
+    assert.equal((await h.learner.update(r.id, '   ')).ok, false)
+  } finally { h.done() }
+})
+
+test('update：已被取代的条目拒绝编辑（改了也不会注入）', async () => {
+  const h = harness()
+  try {
+    const first = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    await h.learner.learn(
+      { text: '这个仓库改用 npm 了，pnpm 不再可用', key: 'package-manager', source: 'user_explicit' },
+      cfgOf(),
+      envOf(),
+    )
+    const up = await h.learner.update(first.id, '改个说法')
+    assert.equal(up.ok, false)
+    assert.equal(up.code, 'superseded')
+  } finally { h.done() }
+})
+
 test('setStatus：已被取代的条目拒绝恢复（新旧两条同时注入 = 模型看到矛盾）', async () => {
   const h = harness()
   try {

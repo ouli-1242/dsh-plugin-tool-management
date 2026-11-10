@@ -11,12 +11,13 @@
 //   改 op 的语义会动到用户手写那条路；所以这里直接做底层六步，共用 `serializeRuleFile`
 //   与 `writeFileAtomically`，把差异限制在本文件内。
 
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { hubPath } from '../hub.js'
 import { writeFileAtomically, readIndex, writeIndex } from '../memories/index-io.js'
-import { catalogEntryOf, catalogPathOf, normalizeCatalog, type CatalogFile } from '../memories/catalog.js'
+import { catalogEntryOf, catalogPathOf, estimateTokens, normalizeCatalog, type CatalogFile } from '../memories/catalog.js'
 import {
   GLOBAL_SCENE, LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE,
   isValidGroupPath, isValidGroupSegment, type MemoryLayer,
@@ -664,7 +665,10 @@ export function createLearner(deps: LearnDeps) {
    * 都不经过记忆域的写漏斗（`refresh()` 才会重建索引）。忘了却不改卡片 = **下一轮还在注入它**，
    * 用户删了个寂寞，还看不出为什么。
    */
-  async function patchCatalogEntry(id: string, patch: Partial<{ status: string; enabled: boolean; confidence: number; title: string }>): Promise<void> {
+  async function patchCatalogEntry(id: string, patch: Partial<{
+    status: string; enabled: boolean; confidence: number; title: string
+    oneLine: string; bytes: number; estTokens: number; hash: string; mtime: number; size: number
+  }>): Promise<void> {
     try {
       const abs = catalogPathOf(deps.stateDir)
       const catalog = normalizeCatalog(JSON.parse(await readFile(abs, 'utf8')))
@@ -1264,6 +1268,49 @@ export function createLearner(deps: LearnDeps) {
   }
 
   /**
+   * 编辑一条自动记忆的正文。
+   *
+   * 只改正文，不动 id / 层 / 状态 / 证据：用户改的是措辞，不是这条记忆的身份。
+   * superseded 拒绝 —— 历史条目改了也不会注入，只会让人以为改动生效。
+   */
+  async function update(id: string, text: string): Promise<LearnResult> {
+    return deps.withWriteLock(async () => {
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const body = String(text ?? '').trim()
+      if (body === '') return { ok: false, code: 'empty', error: 'the note body cannot be empty' }
+      if (body.length > 4000) return { ok: false, code: 'too-long', error: 'the note body is limited to 4000 characters' }
+      const docPath = join(notesRoot, split.group, split.name + '.md')
+      let raw: string
+      try {
+        raw = await readFile(docPath, 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: `not found: ${id}` }
+      }
+      const current = pickField(raw, 'auto_status') || 'active'
+      if (current === 'superseded') {
+        return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory; editing it would have no effect.` }
+      }
+      const next = rewriteFrontmatterFields(replaceBodyOf(raw, body), { auto_updated: new Date().toISOString() })
+      await writeFileAtomically(docPath, next)
+      const oneLine = describeOf(body)
+      const bytes = Buffer.byteLength(oneLine, 'utf8')
+      await patchCatalogEntry(id, {
+        oneLine,
+        bytes,
+        estTokens: estimateTokens(bytes),
+        hash: createHash('sha256').update(next).digest('hex'),
+        mtime: Date.now(),
+        size: Buffer.byteLength(next, 'utf8'),
+      })
+      const read = await state.read()
+      const confidence = read.ok ? (read.state.entries[id]?.confidence ?? 0) : 0
+      deps.invalidateSnapshot()
+      return { ok: true, id, layer: split.layer, status: current, confidence, merged: false, supersedes: [] }
+    })
+  }
+
+  /**
    * 从统一回收站恢复一条自动记忆。
    *
    * 走 `setStatus(active)`：文件还在原地时直接激活并删掉回收站副本；文件被旧版搬走时
@@ -1336,7 +1383,7 @@ export function createLearner(deps: LearnDeps) {
   }
 
   return {
-    learn, preview, forget, approve, setStatus, promote, organize, applyOrganize, describe,
+    learn, preview, forget, approve, setStatus, promote, organize, applyOrganize, describe, update,
     restoreFromTrash, purgeTrash, backfillTrash, noteInjected, noteRead,
   }
 }
@@ -1460,6 +1507,17 @@ function bodyOf(text: string): string {
   if (end < 0) return s.trim()
   const nl = s.indexOf('\n', end + 1)
   return nl < 0 ? '' : s.slice(nl + 1).trim()
+}
+
+/** 只换正文，frontmatter 原样保留（编辑不改身份 / 状态 / 证据）。 */
+function replaceBodyOf(text: string, body: string): string {
+  const s = String(text ?? '')
+  if (!s.startsWith('---')) return body + '\n'
+  const end = s.indexOf('\n---', 3)
+  if (end < 0) return body + '\n'
+  const close = s.indexOf('\n', end + 1)
+  if (close < 0) return s + '\n\n' + body + '\n'
+  return s.slice(0, close + 1) + '\n' + body + '\n'
 }
 
 /** 边界追加：已经包含过的不重复加（合并跑两遍不该长出两份）。 */

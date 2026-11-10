@@ -155,6 +155,8 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 「停用」看起来像安全侧动作，但它改的是内容本身（那条记忆不再注入），
   // 与"关掉整个主动学习开关"不同 —— 后者是策略，前者是内容。
   'evolution-set-status': { write: true },
+  // 编辑正文：与 set-status 同权（写、不冻结）—— 自主记忆不绑场景。
+  'evolution-update': { write: true },
   'evolution-restore': { write: true, frozen: true },
   'evolution-trash-remove': { write: true, frozen: true },
   'evolution-promote': { write: true },

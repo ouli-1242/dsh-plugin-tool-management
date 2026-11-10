@@ -420,6 +420,26 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     /**
+     * 编辑一条自动记忆的正文。
+     *
+     * 与记忆页的编辑弹窗同一条路：只改正文，id / 层 / 状态不变。`frozen` 不设 ——
+     * 自主记忆不绑场景，场景锁定不该挡住它。
+     */
+    'evolution-update': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '')
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        const text = typeof args?.text === 'string' ? args.text : ''
+        const result = await learner.update(id, text)
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'update-failed' }
+      }
+    },
+
+    /**
      * 从统一回收站恢复一条停用的自动记忆。
      *
      * 只接受 `auto: true` 的条目：用户手写记忆走 `rules-restore`，两条路的落点与索引

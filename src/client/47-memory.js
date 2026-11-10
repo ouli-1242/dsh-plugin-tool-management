@@ -853,6 +853,39 @@
             }).catch(function (e) { setEvoBusy(false); setModal(null); setResult({ ok: false, text: errMsg(e) }) })
           }
 
+          /** 打开编辑弹窗：先读正文（列表回包里不带正文，省流量）。 */
+          function openEvolutionEditor(e) {
+            setResult(null)
+            apiCall('evolution-read', { id: e.id }).then(function (res) {
+              if (res && res.ok !== false) {
+                setModal({ type: 'evo-edit', entry: e, body: String(res.body || ''), busy: false, error: null })
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (err) { setResult({ ok: false, text: errMsg(err) }) })
+          }
+
+          /** 保存正文：只改正文，层 / 状态 / 证据不变。 */
+          function saveEvolutionEditor() {
+            if (!modal || modal.type !== 'evo-edit' || modal.busy) return
+            var body = String(modal.body || '').trim()
+            if (body === '') {
+              setModal(Object.assign({}, modal, { error: t('evo.edit.empty') }))
+              return
+            }
+            var entry = modal.entry
+            setModal(Object.assign({}, modal, { busy: true, error: null }))
+            apiCall('evolution-update', { id: entry.id, text: body }).then(function (res) {
+              if (res && res.ok !== false) {
+                setModal(null)
+                setResult({ ok: true, text: t('evo.edit.saved') })
+                refreshEvolution()
+              } else {
+                setModal(Object.assign({}, modal, { busy: false, error: translateError(t, res) }))
+              }
+            }).catch(function (err) {
+              setModal(Object.assign({}, modal, { busy: false, error: errMsg(err) }))
+            })
+          }
+
           /** 停用：条目进回收站、不再注入；恢复在记忆页的回收站里。 */
           function disableEvolution(id) {
             setEvoBusy(true)
@@ -973,8 +1006,10 @@
             ]
             if (e.wsMissing) metaBits.push(t('evo.ws.missing'))
             // 停用由行内开关承担（与记忆行同构）；菜单里只留编辑与删除。
-            var menuItems = []
-            menuItems.push({ key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } })
+            var menuItems = [
+              { key: 'edit', label: t('btn.edit'), disabled: evoBusy, onClick: function () { openEvolutionEditor(e) } },
+              { key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } },
+            ]
             return React.createElement(ListRow, {
               key: e.id,
               dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: t(statusKey) })],
@@ -1384,6 +1419,18 @@
               React.createElement('p', { className: 'dsm-help' }, t('memory.delete.desc', { name: modal.rule.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('memory.btn.delete.confirm')))) : null,
+            modal && modal.type === 'evo-edit' ? React.createElement(Modal, { key: 'evoedit', title: t('evo.edit.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
+              React.createElement('p', { className: 'dsm-help' }, t('evo.edit.hint')),
+              React.createElement('textarea', {
+                className: 'dsm-control dsm-textarea-md',
+                value: modal.body || '',
+                disabled: modal.busy,
+                onChange: function (ev) { setModal(Object.assign({}, modal, { body: ev.target.value, error: null })) },
+              }),
+              modal.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: modal.error }) : null,
+              React.createElement('div', { className: 'dsm-modal-actions' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: modal.busy, onClick: function () { setModal(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: modal.busy || String(modal.body || '').trim() === '', onClick: saveEvolutionEditor }, t('btn.save')))) : null,
             modal && modal.type === 'evo-delete' ? React.createElement(Modal, { key: 'evodel', className: 'dsm-modal-sm', title: t('evo.forget.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('evo.forget.desc', { name: modal.entry.oneLine || modal.entry.id })),
               React.createElement('div', { className: 'dsm-modal-actions' },
