@@ -161,23 +161,23 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-source-body .dsm-sources{gap:0}
 .dsm-source-body .dsm-source{border:0;border-radius:0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-source-body .dsm-source:last-child{border-bottom:0}
-/* ── 自主记忆（2026-11-10 起：条目在记忆页签上以两张卡显示，弹窗只留设置）────
+/* ── 自主记忆（条目在记忆页签上以两张卡显示，弹窗只留设置与学习记录）────
    页签卡复用 .dsm-source 骨架（与场景卡同一套头 / 计数 / 折叠）；行沿用 .dsm-listrow。
-   弹窗第一屏只有开关 + 一行数字 + 整理入口，后台三块工序折在「更多」里。 */
+   弹窗按「学习范围 / 笔记风格 / 学习记录」分组：开关统一右对齐，整理与后台复习同卡展示。 */
 .dsm-evo-head-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 .dsm-modal-evo{width:min(620px,100%)!important}
 /* 开启态只靠边框表达：不写「已开启」，也不给按钮加文字后缀。 */
 .dsm-modal-evo.dsm-evo-on{border-color:var(--dsw-alias-state-success-primary)}
-.dsm-evo-modal{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
-.dsm-evo-layers{display:flex;flex-direction:column;gap:8px;padding:2px 0 8px;border-bottom:1px solid var(--dsw-alias-border-l1)}
-.dsm-evo-layer{display:flex;align-items:center;gap:10px}
-.dsm-evo-layer .dsm-label{flex:none}
-.dsm-evo-layer .dsm-help{margin:0;margin-left:auto}
-/* 自动确认与两层开关是两种授权：一条细线把「学不学」和「问不问」分开。 */
-.dsm-evo-layer-auto{margin-top:2px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
-.dsm-evo-master{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:2px 0 6px}
-.dsm-evo-master .dsm-help{margin:0;margin-left:auto}
-.dsm-evo-modal .dsm-evo-organize{margin:0}
+.dsm-evo-modal{display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow:auto}
+/* 设置行统一两列：左标题 + 说明，右控件固定列。开关不再跟着标签宽度跑。 */
+.dsm-evo-section{display:flex;flex-direction:column;gap:6px}
+.dsm-evo-section-title{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
+.dsm-evo-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;min-height:34px}
+.dsm-evo-row-main{display:flex;min-width:0;flex-direction:column;gap:1px}
+.dsm-evo-row-main .dsm-label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:20px}
+.dsm-evo-row-main .dsm-help{margin:0;font-size:12px;line-height:17px}
+.dsm-evo-row-control{display:flex;min-width:44px;align-items:center;justify-content:flex-end}
+.dsm-evo-row-sep{margin-top:6px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1)}
 /* 自主记忆分节线：短线 + 名称(启用/总数) + 长线。名称后紧跟计数，右侧长线负责分隔。
    按设置页分组头（.dsm-form-section）的档位收：12px/400/弱色、线用 l1 —— 它只是
    一行说明，不该和 13px/600 的行名抢注意力。名称过长时只截名称，计数始终可见。 */
@@ -188,21 +188,36 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-divider-line{flex:1;height:1px;background:var(--dsw-alias-border-l1)}
 .dsm-evo-divider-line-start{flex:none;width:16px}
 .dsm-evo-detail-key{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
-/* 笔记风格一行：分段控件（dsm-form-seg）+ 自定义输入；只占一行，紧贴总开关下方。 */
-.dsm-evo-style{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
-.dsm-evo-style-label{color:var(--dsw-alias-label-secondary);font-size:12px}
-.dsm-evo-style-custom{display:flex;flex:1 1 100%;align-items:center;gap:6px}
+/* 笔记风格：标题在上，分段控件与自定义输入在下。 */
+.dsm-evo-style{display:flex;flex-direction:column;gap:6px}
+.dsm-evo-style .dsm-form-seg{align-self:flex-start}
+.dsm-evo-style-custom{display:flex;align-items:center;gap:6px}
 .dsm-evo-style-custom .dsm-control{flex:1;min-width:0}
-/* 整理草案：虚线框 = "还没生效"，与实线的记忆卡片区分开。 */
-.dsm-evo-organize{display:flex;flex-direction:column;gap:6px;margin:0 12px 10px;padding:8px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s)}
+/* 学习记录：统计 + 整理 + 后台复习共用一张卡；不再用虚线框和左右内缩。 */
+.dsm-evo-records{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}
+.dsm-evo-records-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-evo-records-head .dsm-evo-row-main{flex:1}
+.dsm-evo-records-stat{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px}
+.dsm-evo-records-head .dsm-btn{margin-left:auto}
+.dsm-evo-organize{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-organize .dsm-help{margin:0}
 .dsm-evo-draft{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;line-height:17px}
-.dsm-evo-draft-id{color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);font-size:12px;word-break:break-all}
-.dsm-evo-draft-reason{flex:1 1 200px;min-width:0;color:var(--dsw-alias-label-secondary)}
-/* 后台复习队列：虚线框与「整理」区别开 —— 那块是用户点出来的建议，这块是后台在跑的状态。 */
-.dsm-evo-queue{display:flex;flex-direction:column;gap:6px;margin:0 12px 10px;padding:8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s)}
-.dsm-evo-queue .dsm-help{margin:0}
-.dsm-evo-queue-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-evo-draft-name{min-width:0;flex:1 1 auto;overflow:hidden;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}
+.dsm-evo-draft-reason{flex:1 1 100%;min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap}
+.dsm-evo-review{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-evo-review-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-evo-review-head .dsm-help{margin:0;margin-left:auto}
+.dsm-evo-review-fails .dsm-evo-review-head .dsm-help{margin-left:0}
+.dsm-evo-review-list{display:flex;flex-direction:column}
+.dsm-evo-review-row{display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsm-evo-review-row:last-child{border-bottom:0}
+.dsm-evo-review-main{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}
+.dsm-evo-review-title{overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:19px;text-overflow:ellipsis;white-space:nowrap}
+.dsm-evo-review-body{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}
+.dsm-evo-review-meta{display:flex;flex:none;align-items:center;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
+.dsm-evo-review-fail{color:var(--dsw-alias-state-error-primary)}
+.dsm-evo-review-empty{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}
+.dsm-evo-review-fails{display:flex;flex-direction:column}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 /* 中性标签：灰边框 + 主色字（用户 2026-11-06：MCP 的「未运行」不该是红的 —— 没跑起来不是故障）。 */
 .dsm-tag-quiet{border-color:var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}
