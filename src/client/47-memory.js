@@ -1439,7 +1439,8 @@
               t: t,
               domain: 'memories',
               onClose: function () { setModal(null) },
-              onReload: function () { refresh(true) },
+              // 回收站里也有自动记忆的停用副本：恢复 / 永久删除后两张自主记忆卡要跟着刷新。
+              onReload: function () { refresh(true); refreshEvolution() },
             }) : null,
             // 「已存在同名记忆」小窗叠在编辑弹窗之上（`Modal` 自带 gateModalDepth 计数，
             // 叠弹窗是既有形态）。取消 → 回到编辑弹窗改名字，编辑器里的内容一个字都不动。

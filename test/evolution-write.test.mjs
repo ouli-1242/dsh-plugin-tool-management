@@ -8,7 +8,7 @@
 // 这三类的共同点是不报错、界面也不一定看得出来。所以这里一律读回真文件核对。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_EVOLUTION_SETTINGS, workspaceHashOf } from '../lib/evolution/config.js'
@@ -16,6 +16,7 @@ import { createEvolutionState } from '../lib/evolution/state.js'
 import { createLearner, pickField } from '../lib/evolution/write.js'
 import { layerOfGroup } from '../lib/memories/constants.js'
 import { buildCatalog } from '../lib/memories/catalog.js'
+import { archiveAutoNote } from '../lib/evolution/notes.js'
 
 const HUB = 'tool-management'
 const WS_KEY = 'D:/work/demo'
@@ -478,6 +479,89 @@ test('setStatus：停用只转状态、不搬文件；恢复后索引与 catalog
     assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
     assert.equal(h.readIndex().rules[r.id].enabled, true)
     assert.equal(h.readCatalog().entries[r.id].enabled, true)
+  } finally { h.done() }
+})
+
+test('停用写回收站副本；restoreFromTrash 恢复并删副本；purgeTrash 连正文一起删', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+
+    assert.equal((await h.learner.setStatus(r.id, 'archived')).ok, true)
+    const trashDir = join(h.stateDir, 'trash', 'memories-trash')
+    const ids = readdirSync(trashDir)
+    assert.equal(ids.length, 1, '停用必须在回收站留一份可恢复的副本')
+    const manifest = JSON.parse(readFileSync(join(trashDir, ids[0], 'manifest.json'), 'utf8'))
+    assert.equal(manifest.auto, true)
+    assert.equal(manifest.autoId, r.id)
+    assert.equal(manifest.autoLayer, 'workspace')
+
+    const back = await h.learner.restoreFromTrash(ids[0])
+    assert.equal(back.ok, true, back.error)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
+    assert.deepEqual(readdirSync(trashDir), [], '恢复后副本必须消失，不能在回收站留幽灵')
+    assert.equal(h.readIndex().rules[r.id].enabled, true)
+
+    assert.equal((await h.learner.setStatus(r.id, 'archived')).ok, true)
+    const again = readdirSync(trashDir)
+    assert.equal(again.length, 1)
+    const purged = await h.learner.purgeTrash(again[0])
+    assert.equal(purged.ok, true, purged.error)
+    assert.equal(existsSync(join(h.memoriesRoot, r.id + '.md')), false, '永久删除要连原地正文一起删')
+    assert.deepEqual(readdirSync(trashDir), [])
+    assert.equal(h.readCatalog().entries[r.id].status, 'archived')
+  } finally { h.done() }
+})
+
+test('restoreFromTrash：正文被旧版搬走时从副本还原，并补回索引的启用位', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    await h.learner.setStatus(r.id, 'archived')
+    const trashDir = join(h.stateDir, 'trash', 'memories-trash')
+    const trashId = readdirSync(trashDir)[0]
+    // 模拟旧版把正文搬进别处：原文件不在，只有回收站副本。
+    rmSync(join(h.memoriesRoot, r.id + '.md'))
+
+    const back = await h.learner.restoreFromTrash(trashId)
+    assert.equal(back.ok, true, back.error)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
+    assert.deepEqual(readdirSync(trashDir), [])
+    // 关键：索引也要回 true，否则下一次 catalog 重建会按旧索引把它重新排除。
+    assert.equal(h.readIndex().rules[r.id].enabled, true)
+    assert.equal(h.readCatalog().entries[r.id].enabled, true)
+  } finally { h.done() }
+})
+
+test('purgeTrash：正文不是 archived 时只清孤儿副本，不误删正文', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    // 模拟「停用写盘失败」留下的孤儿副本：正文仍在可注入状态，回收站里却有一份。
+    const trashId = await archiveAutoNote(h.memoriesRoot, h.stateDir, r.id, 'workspace')
+    assert.notEqual(trashId, null)
+
+    const purged = await h.learner.purgeTrash(trashId)
+    assert.equal(purged.ok, false)
+    assert.equal(purged.code, 'not-archived')
+    assert.equal(existsSync(join(h.memoriesRoot, r.id + '.md')), true, '正在注入的正文不能被永久删除')
+    assert.notEqual(pickField(h.readDoc(r.id), 'auto_status'), 'archived')
+    assert.deepEqual(readdirSync(join(h.stateDir, 'trash', 'memories-trash')), [], '孤儿副本要清掉')
   } finally { h.done() }
 })
 

@@ -298,3 +298,34 @@ export async function restoreAutoNoteFromTrash(
 export async function dropAutoTrashEntry(stateDir: string, trashId: string): Promise<void> {
   await rm(trashDirOf(stateDir, trashId), { recursive: true, force: true })
 }
+
+/**
+ * 把旧版本留下的 archived 条目补进统一回收站。
+ *
+ * 旧版的「停用」只改 frontmatter，不写回收站副本；升级后卡片不再列 archived，回收站
+ * 又只认 manifest —— 不补这一步，升级前停用的条目会从界面上消失（文件还在）。
+ * 先扫一遍现有条目，避免逐条 `findAutoTrashByNoteId` 把回收站目录读成 N²。
+ *
+ * @returns 本次新补进回收站的条目数；已有副本的跳过。
+ */
+export async function backfillArchivedTrash(
+  autoRoot: string,
+  stateDir: string,
+  entries: ReadonlyArray<{ id: string; layer: MemoryLayer }>,
+): Promise<number> {
+  const existing = new Set<string>()
+  try {
+    for (const trashId of await readdir(join(stateDir, MEMORIES_TRASH_DIR))) {
+      const manifest = await readAutoTrashManifest(stateDir, trashId)
+      if (manifest !== null) existing.add(manifest.autoId)
+    }
+  } catch { /* 回收站为空或不可读：当作没有副本 */ }
+  let added = 0
+  for (const entry of entries) {
+    if (existing.has(entry.id)) continue
+    if (await archiveAutoNote(autoRoot, stateDir, entry.id, entry.layer) === null) continue
+    existing.add(entry.id)
+    added++
+  }
+  return added
+}

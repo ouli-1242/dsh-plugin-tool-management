@@ -1369,11 +1369,13 @@ export default {
      */
     function sessionToolTableOverlayOf(agent: unknown): { allow: string[]; deny: string[] } {
       const sessionId = scopeKeyForAgent(agent)
-      const on = proactiveMemoryGlobalOn()
+      // 按 agent 判可用性，而不是只看全局开关：只开工作区且本会话没有 cwd、或是子代理时，
+      // 执行门会拒绝每一次调用 —— 这种会话里让工具消失，别让模型看得见却调不动。
+      const on = autoLearnEnabledFor(agent)
       if (sessionId === null) return overlayWithProactiveTool([], [], on)
-      // 这条工具的可见性**只听总开关**，不看本会话的覆盖：开着时从出厂隐藏名单里减出来
-      // （省 token 是默认值，不是权限），关着时上面那一刀把它按回 deny。
-      // 能不能真的学是执行门 `autoLearnEnabledFor` 的事，两者同向才不会"看得见却调不动"。
+      // 这条工具的可见性**只听两个开关与 agent 可用性**，不看本会话的工具表覆盖：
+      // 可用时从出厂隐藏名单里减出来（省 token 是默认值，不是权限），不可用时按回 deny。
+      // 判据与执行门 `autoLearnEnabledFor` 同一份，才不会"看得见却调不动"。
       const scope = scopeStore.scopeOfSync(sessionId)
       if (scope === undefined) return overlayWithProactiveTool([], [], on)
       if (scope.toolTableHidden === undefined && scope.baseline?.toolTableHidden === undefined) {
@@ -2328,7 +2330,11 @@ export default {
     //
     // 不能 `await`：`apply()` 是同步的（宿主装配期没有 await 的位置）。几十毫秒的延迟不影响
     // 第一轮 —— 首轮若还没建好，自动段这轮为空、下一轮就有；而阻塞装配会拖慢整个宿主启动。
-    void memoriesService.autoAccess.rebuildCatalog().catch(() => undefined)
+    // catalog 重建后再补回收站：旧版「停用」只改 frontmatter，不写副本；不补这一步，
+    // 升级前停用的条目会从卡片上消失、回收站里也找不到。一次启动只扫一遍。
+    void memoriesService.autoAccess.rebuildCatalog()
+      .then(() => autoLearner.backfillTrash())
+      .catch(() => undefined)
 
     /**
      * 「这个 agent 现在能不能主动学」。三个条件缺一不可：
@@ -2415,10 +2421,8 @@ export default {
         const cwd = identity?.cwd
         const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
         const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
-        // `enabled`（允不允许学）与 `inject`（要不要显示）是两件事：用户可能"不学了，但学过的
-        // 还能用"（enabled=false + inject=true）。判据只看 `inject` —— 它是解析后的最终答案
-        // （没显式设过就跟随 enabled）。写成 `!enabled && !inject` 会把
-        // "开着学习但明确不想显示"也当成要显示，那正是这个字段存在的意义。
+        // `inject` 已按两个开关解析过：层都关时它也是 false；显式 false 是「只学不用」的
+        // 逃生口。这里先看它，再按层开关过滤 —— 关掉的那一层不注入已有条目。
         if (!cfg.inject) return ''
         // 两层各有自己的开关：关掉一层 = 不再学这一层，也不再注入这一层已有的条目。
         // 注入器的域开关对这两域被强制为 true（见 normalizeInjectSettings），真正的门在这里。

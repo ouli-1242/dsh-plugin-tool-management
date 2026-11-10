@@ -74,8 +74,9 @@ export interface EvolutionOverrides {
   /** 工作区层是否启用；语义同上。 */
   learnWorkspace?: boolean
   /**
-   * 是否注入。`undefined` = 跟随 `enabled`（见 resolveEffectiveConfig）。
-   * 独立出来的理由：用户可能"不想学，但之前学的还能用"，也可能"先攒着，回头再看"。
+   * 是否注入。`undefined` = 跟随两个开关（任一为真即注入）。
+   * 显式 `false` 是"只学不用"的逃生口；显式 `true` 不能把两个都关掉的层重新打开 ——
+   * 开关本身就是注入的授权，否则「关掉」在界面上就成了假动作。
    */
   inject?: boolean
   reviewEveryTurns?: number
@@ -111,7 +112,7 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
 export interface EffectiveEvolutionConfig extends EvolutionSettings {
   /** 两项任一为真；工具可见性与后台复习读它。 */
   enabled: boolean
-  /** `inject` 已按「跟随 enabled」解析过，不是 undefined。 */
+  /** `inject` 已解析：跟随两个开关，显式 true 也不能越过「层没开」。 */
   inject: boolean
   /** 最具体的那一档：界面显示「来源：本工作区设置」。 */
   source: 'global' | 'workspace' | 'session'
@@ -128,12 +129,13 @@ const boolOf = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolea
  *
  * 旧版有 `enabled` + `learnScope` + `writeTarget` 三个字段，但界面只暴露过 `enabled`；
  * `writeTarget` 是「最多写到哪」的上限，升级时把它翻译成「只开哪一层」最接近原意：
- * 上限是工作区的人不该突然获得写全局的资格。`learnScope` 除 `off` 外没有实际限制作用，
- * 因此不参与迁移。旧值在 `enabled=false` 时一律两项全关。
+ * 上限是工作区的人不该突然获得写全局的资格。`learnScope='off'` 是旧版的「不学」开关，
+ * 即使 `enabled=true` 也必须迁成两项全关，否则升级后会在用户没点头的情况下开始学习。
+ * 旧值在 `enabled=false` 时同样两项全关。
  */
 function legacyLearnFlags(raw: any): { global: boolean; workspace: boolean } | undefined {
   if (typeof raw?.enabled !== 'boolean') return undefined
-  if (raw.enabled === false) return { global: false, workspace: false }
+  if (raw.enabled === false || raw.learnScope === 'off') return { global: false, workspace: false }
   if (raw.writeTarget === 'workspace' || raw.writeTarget === 'session') return { global: false, workspace: true }
   return { global: true, workspace: true }
 }
@@ -195,7 +197,7 @@ export function hasOverrides(o: EvolutionOverrides | undefined): boolean {
  * 逐字段解析：会话 → 工作区 → 全局，取第一个有定义的。
  *
  * `inject` 的默认值**跟随解析后的 `enabled`**：全新安装（全局关）不会因为磁盘上有历史文件
- * 而注入自动记忆。用户要"不学但用已有的"，显式设 `inject=true`。
+ * 而注入自动记忆。显式 `inject=false` 可以"只学不用"；显式 `true` 不能绕过两个开关。
  */
 export function resolveEffectiveConfig(
   global: EvolutionSettings,
@@ -214,12 +216,13 @@ export function resolveEffectiveConfig(
   const learnWorkspace = pick('learnWorkspace') ?? global.learnWorkspace
   const enabled = learnGlobal || learnWorkspace
   // 全局也可能显式设了 `inject`（"只记不用"）；只查两层覆盖会把它当成"没设"。
+  // 显式 true 只在至少一层开着时才算数：注入不能绕过层的授权。
   const injectRaw = pick('inject') ?? global.inject
   return {
     learnGlobal,
     learnWorkspace,
     enabled,
-    inject: injectRaw === undefined ? enabled : injectRaw,
+    inject: injectRaw === undefined ? enabled : (enabled && injectRaw),
     reviewEveryTurns: pick('reviewEveryTurns') ?? global.reviewEveryTurns,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,
     model: pick('model') ?? global.model,

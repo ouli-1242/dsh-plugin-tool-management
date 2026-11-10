@@ -48,9 +48,10 @@ test('两层开关：只开一层时 enabled 仍为真，另一层保持关', ()
 test('inject 默认跟随 enabled：全新安装不会因为磁盘上有历史文件就注入', () => {
   assert.equal(resolveEffectiveConfig(G).inject, false)
   assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true }).inject, true)
-  // 显式设了就听显式的（"不学但用已有的"）
+  // 显式 false 是"只学不用"
   assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true, inject: false }).inject, false)
-  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: false, learnWorkspace: false, inject: true }).inject, true)
+  // 显式 true 不能越过两个开关：层都关着时注入就是关着
+  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: false, learnWorkspace: false, inject: true }).inject, false)
 })
 
 test('source 报最具体的那一档（界面显示「来源」）', () => {
@@ -71,6 +72,10 @@ test('旧配置迁移：enabled + writeTarget 翻译成两个开关', () => {
   const off = normalizeEvolutionSettings({ enabled: false })
   assert.equal(off.learnGlobal, false)
   assert.equal(off.learnWorkspace, false)
+  // 旧版 learnScope='off' 是「不学」开关：enabled=true 也不该在升级后开始学。
+  const scopeOff = normalizeEvolutionSettings({ enabled: true, learnScope: 'off', writeTarget: 'global' })
+  assert.equal(scopeOff.learnGlobal, false)
+  assert.equal(scopeOff.learnWorkspace, false)
 })
 
 test('坏值回退出厂值，不抛错', () => {

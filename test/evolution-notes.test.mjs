@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { autoNotesRootOf, migrateLegacyAutoNotes, targetGroupOf, trashAutoNote } from '../lib/evolution/notes.js'
+import { autoNotesRootOf, backfillArchivedTrash, migrateLegacyAutoNotes, targetGroupOf, trashAutoNote } from '../lib/evolution/notes.js'
 
 const WS = 'abcd1234abcd1234'
 
@@ -111,5 +111,28 @@ test('trashAutoNote：正文进 evolution/trash 可找回；id 非法 / 文件�
     assert.equal(await trashAutoNote(h.autoRoot, h.stateDir, 'global/auto-global'), false)
     // 非法 id（没有 group）
     assert.equal(await trashAutoNote(h.autoRoot, h.stateDir, 'no-slash'), false)
+  } finally { h.done() }
+})
+
+test('backfillArchivedTrash：旧版 archived 条目补进统一回收站，已有副本不重复', async () => {
+  const h = harness()
+  try {
+    mkdirSync(join(h.autoRoot, 'global'), { recursive: true })
+    writeFileSync(join(h.autoRoot, 'global', 'old-disabled.md'), doc({ origin: 'auto', auto_status: 'archived' }, '升级前停用的条目'))
+    const entries = [{ id: 'global/old-disabled', layer: 'global' }]
+
+    assert.equal(await backfillArchivedTrash(h.autoRoot, h.stateDir, entries), 1)
+    const trashRoot = join(h.stateDir, 'trash', 'memories-trash')
+    const ids = readdirSync(trashRoot)
+    assert.equal(ids.length, 1)
+    const manifest = JSON.parse(readFileSync(join(trashRoot, ids[0], 'manifest.json'), 'utf8'))
+    assert.equal(manifest.auto, true)
+    assert.equal(manifest.autoId, 'global/old-disabled')
+    assert.equal(manifest.autoLayer, 'global')
+    assert.ok(existsSync(join(trashRoot, ids[0], 'rule.md')), '副本里要有正文，恢复才不依赖原文件')
+
+    // 再跑一次：已有副本，不堆第二份
+    assert.equal(await backfillArchivedTrash(h.autoRoot, h.stateDir, entries), 0)
+    assert.equal(readdirSync(trashRoot).length, 1)
   } finally { h.done() }
 })

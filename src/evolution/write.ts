@@ -22,8 +22,8 @@ import {
   isValidGroupPath, isValidGroupSegment, type MemoryLayer,
 } from '../memories/constants.js'
 import {
-  archiveAutoNote, dropAutoTrashEntry, findAutoTrashByNoteId, readAutoTrashManifest,
-  restoreAutoNoteFromTrash, trashAutoNote,
+  archiveAutoNote, backfillArchivedTrash, dropAutoTrashEntry, findAutoTrashByNoteId,
+  readAutoTrashManifest, restoreAutoNoteFromTrash, trashAutoNote,
 } from './notes.js'
 import { layerOfGroup } from '../memories/constants.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
@@ -941,11 +941,22 @@ export function createLearner(deps: LearnDeps) {
           bumpRevision(st)
           const w = await state.write(st)
           if (!w.ok) return { ok: false, code: 'state-write-failed', error: w.error }
+          // 从回收站还原时正文是新写回来的，旧索引还记着 enabled:false；不补这一笔，
+          // 下一次 catalog 重建会按索引把条目重新排除，界面显示生效、注入里却没有。
+          const index = await readIndex(indexDir)
+          index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: status !== 'archived', updatedAt: nowIso }
+          await writeIndex(indexDir, index)
           await patchCatalogEntry(id, { status, enabled: status !== 'archived', confidence: entry.confidence ?? 0 })
           deps.invalidateSnapshot()
         }
         // 旧版本停用的条目没有回收站副本：这里补一份，让它们也能在统一回收站里恢复。
         if (status === 'archived') await archiveAutoNote(notesRoot, deps.stateDir, id, layer)
+        // 恢复时回收站副本的使命结束；状态已经是 active 说明它只是写盘失败留下的孤儿，
+        // 删掉副本，别让用户再点一次「恢复」却发现什么都没发生。
+        else if (status === 'active') {
+          const trashId = await findAutoTrashByNoteId(deps.stateDir, id)
+          if (trashId !== null) await dropAutoTrashEntry(deps.stateDir, trashId)
+        }
         return { ok: true, id, layer, status, confidence: entry.confidence ?? 0, unchanged: true }
       }
       // 停用先复制进统一回收站；复制失败就拒绝这次状态变更，别留下「已归档但回收站里没有」
@@ -1278,16 +1289,55 @@ export function createLearner(deps: LearnDeps) {
     if (manifest === null) {
       return { ok: false, code: 'missing', error: 'recycle-bin entry not found or not an autonomous note' }
     }
+    const docPath = join(notesRoot, manifest.group, manifest.name + '.md')
+    // 归档副本可能是写盘失败留下的孤儿：正文已回到 active 时，永久删除会误删一条
+    // 正在注入的记忆。这里只清副本，正文一个字不动。
+    const raw = await safeRead(docPath)
+    if (raw !== '' && (pickField(raw, 'auto_status') || 'active') !== 'archived') {
+      await dropAutoTrashEntry(deps.stateDir, trashId)
+      return {
+        ok: false,
+        code: 'not-archived',
+        error: 'this note is active again; the stale recycle-bin copy was removed and the note was left untouched',
+      }
+    }
     const result = await forget(manifest.autoId, { actor: 'user' })
     if (!result.ok) return result
-    await rm(join(notesRoot, manifest.group, manifest.name + '.md'), { force: true }).catch(() => undefined)
+    try {
+      await rm(docPath, { force: true })
+    } catch (e) {
+      // 墓碑与 state 已落盘；正文删不掉时保留回收站条目，让用户能再点一次，别报成功。
+      return { ok: false, code: 'io', error: e instanceof Error ? e.message : String(e) }
+    }
     await dropAutoTrashEntry(deps.stateDir, trashId)
     return result as LearnResult
   }
 
+  /**
+   * 启动时把旧版本留下的 archived 条目补进统一回收站。
+   *
+   * 读 catalog 而不是 state：archived 是 frontmatter 派生的状态，catalog 与卡片同一口径。
+   * 调用方要在 `rebuildCatalog()` 之后跑，保证刚重建出来的条目也覆盖到；失败不阻断启动。
+   *
+   * @returns 本次新补进回收站的条目数。
+   */
+  async function backfillTrash(): Promise<number> {
+    let catalog: CatalogFile
+    try {
+      catalog = normalizeCatalog(JSON.parse(await readFile(catalogPathOf(deps.stateDir), 'utf8')))
+    } catch {
+      return 0
+    }
+    const archived = Object.entries(catalog.entries)
+      .filter(([, e]) => e.status === 'archived')
+      .map(([id, e]) => ({ id, layer: e.layer }))
+    if (archived.length === 0) return 0
+    return backfillArchivedTrash(notesRoot, deps.stateDir, archived)
+  }
+
   return {
     learn, preview, forget, approve, setStatus, promote, organize, applyOrganize, describe,
-    restoreFromTrash, purgeTrash, noteInjected, noteRead,
+    restoreFromTrash, purgeTrash, backfillTrash, noteInjected, noteRead,
   }
 }
 
