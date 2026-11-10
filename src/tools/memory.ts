@@ -23,7 +23,7 @@
 import { GLOBAL_SCENE, MAX_DESCRIPTION_LENGTH, MAX_GROUP_SEGMENT_LENGTH, SHARED_GROUP } from '../memories/constants.js'
 import { MAX_AUTO_DESCRIPTION, MAX_AUTO_TEXT, MAX_AUTO_TITLE } from '../evolution/write.js'
 import type { ScopeAskRequest, ScopeChoice, ScopeLayer } from '../evolution/scope-card.js'
-import { effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, toolOrNeutral, type ToolDomainDeps } from './deps.js'
+import { LIST_LIMIT_MAX, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, toolOrNeutral, type ToolDomainDeps } from './deps.js'
 import { PROACTIVE_MEMORY_TOOL } from './table.js'
 import { isNoteRef, noteRefOf, stripNoteRef } from './note-ref.js'
 
@@ -184,6 +184,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   const noteSearchText = async (query: string, limit: number): Promise<string> => {
     if (!evo) return ''
+    // 与用户记忆搜索同口径：搜索覆盖归档 / 未注入的条目，`all` 只影响清单。
     const r: any = await evo['evolution-list']({ all: true })
     if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read agent notes'))
     const words = query.toLowerCase().split(/\s+/).filter((w) => w !== '')
@@ -249,7 +250,9 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   }
 
   const userSearchText = async (query: string, limit: number, scene: string | undefined, exec: any): Promise<string> => {
-    const opArgs: any = { query, limit }
+    // 搜索不跟随 `all`：找一条已停用 / 归档的条目正是搜索的用途（新建前先确认有没有）。
+    // 带场景过滤时向 op 要满上限，否则 op 先按 limit 截断、再过滤，目标场景的命中会被挤掉。
+    const opArgs: any = { query, limit: scene !== undefined ? LIST_LIMIT_MAX : limit }
     const scoped = sessionScopeOf(deps, exec && exec.agent)
     if (scoped !== null) opArgs.sessionId = scoped.sessionId
     const r: any = await deps.rulesOps['rules-search'](opArgs)
@@ -344,7 +347,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       query: { type: 'string', description: 'Filter the catalog by words in id, scene, description, tags or body; every word must match (case-insensitive).' },
       kind: { type: 'string', enum: ['memory', 'note'], description: 'Limit the catalog to user-written memories or agent notes.' },
       scene: { type: 'string', description: 'Only user memories in this scene; `global` and `_shared` are the always-on scenes.' },
-      all: { type: 'boolean', description: 'Include entries that are off, in an inactive scene, or archived (default false).' },
+      all: { type: 'boolean', description: 'Catalog only: include entries that are off, in an inactive scene, or archived (default false). Search always covers everything.' },
       limit: { type: 'number', description: 'Max entries per kind (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
@@ -393,7 +396,9 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // 内部术语，模型据此做不了任何判断 —— "不再被注入"已经是它需要的全部因果。
     description: 'Enable or disable one user-written memory. Disabled memories stop being injected. Reversible. Agent notes are not switched here — forget them with the agent-note tool. Only when the user asks or approves.',
     parameters: {
-      id: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
+      id: { type: 'string', description: 'Memory id like <scene>/<name>.' },
+      // 改名前的参数名。保留在 schema 里，旧调用习惯（以及确认门的兼容分支）才真的走得通。
+      memory: { type: 'string', description: 'Deprecated alias for id; use id.' },
       enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable.' },
       // 默认只改**这个对话**。写全局要显式说明。
       scope: { type: 'string', enum: ['session', 'global'], description: scopeSessionDesc('global = every conversation.') },
@@ -401,7 +406,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
       // `memory` 是改名前的参数名，兼容一次；新调用方用 `id`。
-      const memory = String((args && (args.id !== undefined ? args.id : args.memory)) || '')
+      const memory = String((args && (args.id !== undefined ? args.id : args.memory)) || '').trim()
+      if (memory === '') throw new Error('missing argument: id — the memory id like <scene>/<name>.')
       // 笔记不是用户记忆：这条工具拨的是索引里的开关，笔记的删除/停用走另一族。
       if (isNoteRef(memory)) {
         throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_note action=forget', 'the agent-note tool') + '. User memory ids look like <scene>/<name>.')
@@ -476,7 +482,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const sceneArg = String((args && args.scene) || '').trim()
       const slotArg = String((args && (args.slot !== undefined ? args.slot : args.key)) || '').trim()
 
-      /** 按 slot 更新一条已有笔记：正文替换、标题可换、用户明确要求所以直接批准生效。 */
+      /** 就地更新一条已有笔记：id / 层 / 状态不变，正文与标题替换。 */
       const updateNote = async (a: any, ref: string): Promise<string> => {
         if (descriptionArg !== undefined) {
           throw new Error('description is for user memories; a note has no description. Use title or content.')
@@ -486,23 +492,35 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         if (layer !== 'global' && layer !== 'workspace') {
           throw new Error('that note is not a global or workspace note, so memory_remember cannot update it: ' + ref)
         }
-        const key = String(a.key || '')
-        if (key === '') {
-          throw new Error('this note has no slot, so it cannot be updated in place. Forget it with memory_note action=forget and learn a new one, or create a new note.')
-        }
+        const id = String(a.id || stripNoteRef(ref))
         const text = content !== '' ? content.trim() : String(a.body || '').trim()
         if (text === '') throw new Error('missing argument: content — the updated note text.')
         if (text.length > MAX_AUTO_TEXT || /\n\s*\n/.test(text)) {
           throw new Error('an agent note is one sentence (<= ' + MAX_AUTO_TEXT + ' chars). This content is longer — use a user memory (scope=scene / global) instead.')
         }
-        const payload: any = { text, key, layer, source: 'user_explicit', approved: true }
-        // 标题没给时把原标题带回去：evolution-learn 是整条重写，省略字段是否保留由后端决定，
-        // 这里显式保住，避免一次正文更新把标题清空。
+        // 笔记的正文编辑是 `evolution-update`（就地改文件、id/层/状态不变）；
+        // `evolution-learn` 是"学一条新的"——同 key 只会合并/追加，没 key 会新建 id，
+        // 拿它做更新会把原文留在旧条目里，回执却说"updated"。
+        const updateOp = evo!['evolution-update']
+        if (typeof updateOp !== 'function') {
+          throw new Error('this host cannot edit an agent note in place. Forget it with memory_note action=forget and learn a new one, or use memory_note action=learn with the same slot.')
+        }
+        const payload: any = { id, text }
         if (title !== '') payload.title = title.slice(0, MAX_AUTO_TITLE)
-        else if (a.title) payload.title = String(a.title).slice(0, MAX_AUTO_TITLE)
-        const r: any = await evo!['evolution-learn'](payload)
+        const r: any = await updateOp(payload)
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to update the note'))
-        return 'OK: updated ' + noteRefOf(String(r.id || stripNoteRef(ref))) + ' (agent note)'
+        const status = String(r.status || a.status || 'active')
+        const state = status === 'active' ? 'active' : status + ' — confirm it in Memory → Autonomous memory before it injects'
+        return 'OK: updated ' + noteRefOf(String(r.id || id)) + ' (' + String(r.layer || layer) + ' note, ' + state + ')'
+      }
+
+      // 带 id 时 scope 不参与路由，但仍要先挡掉不可能的范围：用户说「只在这个对话里」
+      // 时不能因为传了 id 就悄悄改掉磁盘上那份全局记忆。
+      if (scopeArg === 'conversation') {
+        throw new Error('scope=conversation is not supported: per-conversation memories are not injected. Use scope=scene (this working mode) or scope=global (every project).')
+      }
+      if (rawId !== '' && scopeArg === 'workspace' && !isNoteRef(rawId)) {
+        throw new Error('scope=workspace is for agent notes; to update a user memory pass id alone (or use id=note:... for a note).')
       }
 
       if (rawId !== '') {
@@ -569,9 +587,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       if (scope === '') {
         throw new Error('where should this be remembered? Pass scope=scene (only when this working mode is active), scope=global (every project), or scope=workspace (this project). Ask the user which one; do not guess.')
       }
-      if (scope === 'conversation') {
-        throw new Error('scope=conversation is not supported: per-conversation memories are not injected. Use scope=scene (this working mode) or scope=global (every project).')
-      }
       if (scope !== 'scene' && scope !== 'global' && scope !== 'workspace') {
         throw new Error('unknown scope: ' + scope + ' (expected scene / global / workspace)')
       }
@@ -601,10 +616,32 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         if (identity?.cwd) payload.cwd = identity.cwd
         const scene = deps.activeSceneOf ? deps.activeSceneOf(agent) : undefined
         if (scene !== undefined) payload.scene = scene
+        // 预演一次：`routeLayer` 在工作区层关着或拿不到 cwd 时会静默落到全局。
+        // 用户选的是「这个项目」，落到全局是另一件事 —— 写入前先问清楚，别写错再解释。
+        const previewOp = evo['evolution-preview']
+        if (typeof previewOp === 'function') {
+          const preview: any = await previewOp(payload)
+          if (!preview || preview.ok === false) {
+            throw new Error(String((preview && preview.error) || 'workspace memory is not available here'))
+          }
+          const allowed: string[] = Array.isArray(preview.allowedLayers) ? preview.allowedLayers : []
+          if (preview.layer !== 'workspace' || (allowed.length > 0 && allowed.indexOf('workspace') < 0)) {
+            throw new Error('workspace memories are not available here (workspace learning is off, or this workspace could not be resolved). Use scope=global or scope=scene, or turn on workspace autonomous memory.')
+          }
+        }
         const r: any = await evo['evolution-learn'](payload)
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record the workspace note'))
-        const ref = r.id ? noteRefOf(String(r.id)) : 'note:workspace/' + payload.key
-        return 'OK: remembered as a workspace note ' + ref + ' (active in this workspace; stored with agent notes).'
+        const ref = r.id ? noteRefOf(String(r.id)) : 'the new note'
+        const layer = String(r.layer || '')
+        if (layer !== 'workspace') {
+          // 旧宿主没有 preview 时可能走到这里：如实说落到了哪一层，别把全局笔记说成工作区笔记。
+          return 'Not saved as a workspace note: this host stored it as a ' + (layer || 'global') + ' note (' + ref + '). Workspace memories need workspace learning on and a resolvable workspace; use scope=global or scope=scene instead.'
+        }
+        const status = String(r.status || 'active')
+        const state = status === 'active'
+          ? 'active in this workspace'
+          : status + ' — confirm it in Memory → Autonomous memory before it injects'
+        return 'OK: remembered as a workspace note ' + ref + ' (' + state + '; stored with agent notes).'
       }
 
       if (scope === 'global' && sceneArg !== '' && sceneArg !== GLOBAL_SCENE) {

@@ -176,6 +176,16 @@ test('旧工具名迁移：用户「关掉了某条」的意图不能在改名�
   assert.equal(LEGACY_TOOL_NAME_MAP.other_plugin_tool, undefined)
 })
 
+test('旧读取工具的隐藏设置不会连坐 memory_get', () => {
+  // read/search 出厂就是关着的；把旧名单直接映射到 memory_get 会让升级用户的
+  // 唯一读取入口也变关。它们不是新工具的旧名，按死名原样保留即可。
+  const migrated = migrateLegacyToolNames(normalizeToolTableSettings({
+    hidden: ['memory_manager_read', 'memory_manager_search'],
+  }))
+  assert.deepEqual(migrated.settings.hidden, ['memory_manager_read', 'memory_manager_search'])
+  assert.ok(!migrated.settings.hidden.includes('memory_get'))
+})
+
 test('深度探针读的是官方那几个字段，取最大者', () => {
   assert.equal(subagentDepthOf({ session: { header: {} } }), 0)
   assert.equal(subagentDepthOf({ session: { header: { origin: 'subagent' } } }), 1, 'origin 是硬信号，至少算 1 层')

@@ -155,7 +155,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
     // 预算归零（手写记忆太大）时也要留一句"笔记没显示"：合并块只在 `truncated` 为真时
     // 去掉「完整集合」，没有这一句，模型会以为自动笔记本来就不存在。这里不报条数 ——
     // 这个分支还没按层过滤，`input.entries.length` 会把别的层 / 已停用的条目也算进去。
-    const body = `${TRUNCATION_MARKER} Learned notes are not shown here because the hand-written memories are large; list them with memory_note action=list.`
+    const body = `${TRUNCATION_MARKER} Learned notes are not shown here because the hand-written memories are large; list them with memory_get (kind=note).`
     const text = body + '\n\n' + AUTO_MEMORY_NOTE_PARTIAL + '\n'
     return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget: 0, dropped }
   }
@@ -214,7 +214,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   }
 
   if (picked.length === 0) {
-    const body = `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_note action=list.`
+    const body = `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_get (kind=note).`
     const text = body + '\n\n' + AUTO_MEMORY_NOTE_PARTIAL + '\n'
     return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget, dropped: candidates.length }
   }
@@ -225,7 +225,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   const dropped = candidates.length - picked.length
   const entryLines = picked.map(lineOf)
   const lines = [...entryLines]
-  if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; list them with memory_note action=list.`)
+  if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; list them with memory_get (kind=note).`)
   if (reduced === 'min') lines.push('', '(This conversation\'s hand-written memories are large, so learned notes are shown at their minimum budget.)')
   // 收尾句（与用户记忆的版式一致）：条目 → 截断/降级提示 → 空行 → 收尾句。
   // 截断时去掉「完整集合」声明，否则段尾那句与上面的省略提示自相矛盾。

@@ -22,10 +22,11 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   memory_manager_write: 'memory_remember',
   memory_manager_update: 'memory_remember',
   memory_manager_save: 'memory_remember',
-  // 读取三合一：清单 / 正文 / 搜索并成 `memory_get`（多对一，翻译后按新名去重）。
+  // 清单并进 `memory_get`：用户显式关过清单的，升级后读取入口仍保持关闭。
+  // `memory_manager_read` / `_search` **不映射**：它们出厂就是关着的，映射到
+  // `memory_get` 会让升级用户的合并读取入口也变关 —— 那是唯一的发现路径。
+  // 旧名留在名单里只是死名，不影响任何工具。
   memory_manager_list: 'memory_get',
-  memory_manager_read: 'memory_get',
-  memory_manager_search: 'memory_get',
   mcp_manager_set_enabled: 'mcp_manager_switch',
   mcp_manager_restart: 'mcp_manager_switch',
   mcp_manager_add: 'mcp_manager_save',

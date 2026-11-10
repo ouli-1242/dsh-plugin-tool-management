@@ -6083,14 +6083,17 @@ export default {
           //     不是同一道门；
           //   · 非法 scope / 空内容 —— 同样是注定失败的调用。
           const a = (exec && exec.arguments) || {}
-          const id = String(a.id || '').trim()
-          const scope = String(a.scope || '').trim()
+          // 与工具 execute 的 fallback 同口径：旧参数名（memory / layer / body / text）
+          // 也能走到这里，否则一次旧习惯调用会绕过确认门直接写盘。
+          const id = String((a.id !== undefined ? a.id : a.memory) || '').trim()
+          const scope = String((a.scope !== undefined ? a.scope : a.layer) || '').trim()
           const scene = String(a.scene || '').trim()
+          const content = String((a.content !== undefined ? a.content : (a.body !== undefined ? a.body : a.text)) || '').trim()
           if (id === '' && scope === '' && scene === '') return next()
           if (id.startsWith('note:') || scope === 'workspace') return next()
           if (scope !== '' && scope !== 'scene' && scope !== 'global') return next()
           if (scope === 'global' && scene !== '' && scene !== 'global') return next()
-          if (id === '' && String(a.content || '').trim() === '') return next()
+          if (id === '' && content === '') return next()
           const what = 'Create or overwrite a memory under ~/.dsh/tool-management/memories'
           return mcp.readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite ? { kind: 'ask', reason: what } : next()))
