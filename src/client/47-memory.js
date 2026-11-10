@@ -745,10 +745,10 @@
           // 还要再开一层确认弹窗，共用一个槽会把自主记忆一起关掉。
           var eos = React.useState(false)
           var evoOpen = eos[0], setEvoOpen = eos[1]
-          // 每层学习频率的输入态：键 = `maxLearnsGlobal` / `maxLearnsWorkspace`，值是未提交的
+          // 学习频率的输入态：键 = `learnWindowMinutes` / `maxLearnsPerWindow`，值是未提交的
           // 字符串。输入框常态空着、当前值只在 placeholder 里灰显（与兼容页目录上限同一交互）。
           var evc = React.useState({})
-          var evoCapEdits = evc[0], setEvoCapEdits = evc[1]
+          var evoRateEdits = evc[0], setEvoRateEdits = evc[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -850,15 +850,15 @@
           }
 
           /**
-           * 提交一层的学习频率：数字 = 新值，空框 = 回默认值（服务端按 `null` 处理）。
-           * 越界值由服务端归一化夹取；这里只挡掉 `type=number` 挡不住的负值。
+           * 提交学习频率的一项：数字 = 新值，空框 = 回默认值（服务端按 `null` 处理）。
+           * 越界值由服务端归一化夹取；这里只挡掉非数字与负值。
            */
-          function commitEvolutionCap(key) {
-            var raw = evoCapEdits[key]
+          function commitEvolutionRate(key) {
+            var raw = evoRateEdits[key]
             if (raw === undefined) return
-            var nextEdits = Object.assign({}, evoCapEdits)
+            var nextEdits = Object.assign({}, evoRateEdits)
             delete nextEdits[key]
-            setEvoCapEdits(nextEdits)
+            setEvoRateEdits(nextEdits)
             var text = String(raw).trim()
             var parsed = text === '' ? null : Number(text)
             var value = parsed === null ? null : (Number.isFinite(parsed) ? Math.floor(parsed) : null)
@@ -1381,30 +1381,45 @@
           }
 
           /**
-           * 一层学习频率的输入行。空框 + placeholder = 当前值，失焦 / 回车提交。
-           * 与兼容页「目录上限」同一交互：输入框常态不显示真值，避免和占位灰字打架。
+           * 学习频率里的一个数字框。空框 + placeholder = 当前值，失焦 / 回车提交。
+           * 用 text + inputMode 而不是 number：小框里不需要步进箭头。
            */
-          function renderEvolutionCapRow(o) {
-            var raw = evoCapEdits[o.key]
-            return React.createElement('div', { className: 'dsm-evo-row' },
-              React.createElement('div', { className: 'dsm-evo-row-main' },
-                React.createElement('span', { className: 'dsm-label' }, o.label)),
-              React.createElement('div', { className: 'dsm-evo-row-control' },
-                React.createElement('input', {
-                  className: 'dsm-control dsm-evo-cap-input', type: 'number', min: 1,
-                  value: raw === undefined ? '' : raw,
-                  placeholder: String(o.placeholder),
-                  disabled: o.disabled,
-                  'aria-label': o.label,
-                  onChange: function (e) {
-                    var next = Object.assign({}, evoCapEdits)
-                    next[o.key] = e.target.value
-                    setEvoCapEdits(next)
-                  },
-                  onBlur: function () { commitEvolutionCap(o.key) },
-                  onKeyDown: function (e) { if (e.key === 'Enter') { e.preventDefault(); commitEvolutionCap(o.key) } },
+          function renderEvolutionRateInput(o) {
+            var raw = evoRateEdits[o.key]
+            return React.createElement('input', {
+              className: 'dsm-control dsm-cap-input', type: 'text', inputMode: 'numeric',
+              value: raw === undefined ? '' : raw,
+              placeholder: String(o.placeholder),
+              disabled: o.disabled,
+              'aria-label': o.label,
+              onChange: function (e) {
+                var next = Object.assign({}, evoRateEdits)
+                next[o.key] = e.target.value
+                setEvoRateEdits(next)
+              },
+              onBlur: function () { commitEvolutionRate(o.key) },
+              onKeyDown: function (e) { if (e.key === 'Enter') { e.preventDefault(); commitEvolutionRate(o.key) } },
+            })
+          }
+
+          /**
+           * 学习频率：一句话里两个可填框 —— 「每 [10] 分钟最多产生 [5] 条记忆」。
+           * 全局 / 工作区共用这一份设置，两层各自计数。
+           */
+          function renderEvolutionRate(o) {
+            return React.createElement('div', { className: 'dsm-caps-row' },
+              React.createElement('div', { className: 'dsm-cap-field' },
+                React.createElement('span', { className: 'dsm-cap-label' }, t('evo.rate.every')),
+                renderEvolutionRateInput({
+                  key: 'learnWindowMinutes', placeholder: o.minutes,
+                  label: t('evo.rate.window'), disabled: o.disabled,
                 }),
-                React.createElement('span', { className: 'dsm-help' }, t('evo.cap.unit'))))
+                React.createElement('span', { className: 'dsm-cap-unit' }, t('evo.rate.minutes')),
+                renderEvolutionRateInput({
+                  key: 'maxLearnsPerWindow', placeholder: o.notes,
+                  label: t('evo.rate.count'), disabled: o.disabled,
+                }),
+                React.createElement('span', { className: 'dsm-cap-unit' }, t('evo.rate.notes'))))
           }
 
           /** 草案里的 id → 用户看得懂的名称；找不到（已归档 / 已删）才退回 id。 */
@@ -1452,8 +1467,8 @@
             var workspaceOn = eff.learnWorkspace === true
             var autoConfirm = eff.autoConfirm === true
             // 当前频率：`evolution-list` 回的设置已归一化，字段一定在；拿不到时按出厂值兜底。
-            var capGlobal = evo.settings && typeof evo.settings.maxLearnsGlobal === 'number' ? evo.settings.maxLearnsGlobal : 5
-            var capWorkspace = evo.settings && typeof evo.settings.maxLearnsWorkspace === 'number' ? evo.settings.maxLearnsWorkspace : 5
+            var rateMinutes = evo.settings && typeof evo.settings.learnWindowMinutes === 'number' ? evo.settings.learnWindowMinutes : 10
+            var rateNotes = evo.settings && typeof evo.settings.maxLearnsPerWindow === 'number' ? evo.settings.maxLearnsPerWindow : 5
             var statText = t('evo.stat', {
               learned: auto.entries || 0,
               active: auto.active || 0,
@@ -1489,16 +1504,11 @@
                     disabled: evoBusy || (evo.loading && !st) || !overall,
                     onClick: function () { setEvolutionAutoConfirm(!autoConfirm) },
                   })),
-                // 每层学习频率：全局 / 工作区各一个；达到后拒绝新的 learn（合并 / 更新不受影响）。
+                // 学习频率：全局 / 工作区共用一份设置；到量后拒绝新的 learn（合并 / 更新不受影响）。
                 overall ? React.createElement('div', { className: 'dsm-evo-section' },
-                  React.createElement('div', { className: 'dsm-evo-section-title' }, t('evo.cap.title')),
-                  React.createElement('p', { className: 'dsm-help dsm-evo-cap-hint' }, t('evo.cap.hint')),
-                  renderEvolutionCapRow({
-                    key: 'maxLearnsGlobal', label: t('evo.cap.global'), placeholder: capGlobal,
-                    disabled: evoBusy || (evo.loading && !st),
-                  }),
-                  renderEvolutionCapRow({
-                    key: 'maxLearnsWorkspace', label: t('evo.cap.workspace'), placeholder: capWorkspace,
+                  React.createElement('div', { className: 'dsm-evo-section-title' }, t('evo.rate.title')),
+                  renderEvolutionRate({
+                    minutes: rateMinutes, notes: rateNotes,
                     disabled: evoBusy || (evo.loading && !st),
                   })) : null,
                 // 笔记风格：模型写新记忆的口吻（默认高效——无表情、无语气词）。

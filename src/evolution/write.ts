@@ -32,7 +32,6 @@ import {
   runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome, type ReviewCode,
 } from './gates.js'
 import { deriveKey } from './gates.js'
-import { NOTE_RATE_WINDOW_MS } from './limits.js'
 import { draftOrganize, type OrganizeAction, type OrganizeDraft } from './organize.js'
 import {
   bumpRevision, confidenceOf, emptyCounters, pushTransition, textHashOf,
@@ -214,16 +213,9 @@ export function createLearner(deps: LearnDeps) {
     st: EvolutionState,
   ): Promise<GateContext> {
     const { entries, knownScenes } = await deps.existingEntries()
-    // 配额只数活条目：归档 / 已取代的正文还在盘上，但它们不再注入，也不该把层占满。
-    const countByLayer: Partial<Record<MemoryLayer, number>> = {}
-    for (const e of entries) {
-      if (e.origin !== 'auto') continue
-      if (e.status === 'archived' || e.status === 'superseded') continue
-      countByLayer[e.layer] = (countByLayer[e.layer] ?? 0) + 1
-    }
     // 频率只数「新建」：state 里第一条 `from: 'absent'` 的迁移就是这条记忆诞生的时刻。
     // 合并 / 更新只追加证据与迁移，不产生 `absent` 起点，所以天然不占名额。
-    const cutoff = Date.now() - NOTE_RATE_WINDOW_MS
+    const cutoff = Date.now() - config.learnWindowMinutes * 60_000
     const recentByLayer: Partial<Record<MemoryLayer, number>> = {}
     for (const [id, entry] of Object.entries(st.entries)) {
       const created = entry.transitions.find((t) => t.from === 'absent')
@@ -244,13 +236,9 @@ export function createLearner(deps: LearnDeps) {
       // 门禁会把一条用户手改过的条目当成普通合并目标，预览也会说「会合并」，
       // 真正写入时才被 mergeInto 拒掉。
       existing: entries.map((e) => (e.origin === 'auto' && st.entries[e.id]?.locked === true ? { ...e, locked: true } : e)),
-      countByLayer,
       recentByLayer,
-      // 全局 / 工作区两档吃用户设置；会话 / 场景没有界面入口，仍用固定总数配额。
-      rateByLayer: {
-        [LAYER_GLOBAL]: config.maxLearnsGlobal,
-        [LAYER_WORKSPACE]: config.maxLearnsWorkspace,
-      },
+      // 全局 / 工作区共用一份频率；两层各自按 `recentByLayer` 计数。
+      rate: { notes: config.maxLearnsPerWindow, windowMinutes: config.learnWindowMinutes },
       knownWorkspaces: await deps.knownWorkspaces(),
       knownScenes,
       tombstones: st.tombstones,

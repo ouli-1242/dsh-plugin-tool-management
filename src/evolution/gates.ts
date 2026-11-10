@@ -17,7 +17,7 @@
 
 import { LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
 import { checkQuote } from './evidence.js'
-import { NOTE_RATE_DEFAULTS, NOTE_RATE_WINDOW_MS } from './limits.js'
+import { NOTE_RATE_DEFAULTS } from './limits.js'
 import { DEGRADE_NOTE, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
 import { BASE_CONFIDENCE, confidenceOf, textHashOf, tombstoneActive, type EvidenceRef, type EvidenceSource, type Tombstone } from './state.js'
 
@@ -94,16 +94,13 @@ export interface GateContext {
   /** 两个自主记忆开关给出的允许层。 */
   allowed: RouteAllowed
   existing: ExistingEntry[]
-  /** 各层现有自动条目数（只数活条目：归档 / 已取代不占配额）。 */
-  countByLayer: Partial<Record<MemoryLayer, number>>
   /** 各层在最近一个频率窗口内**新增**了多少条（合并 / 更新不算）。 */
   recentByLayer?: Partial<Record<MemoryLayer, number>>
   /**
-   * 各层每窗口最多新增多少条。全局 / 工作区来自用户设置
-   * （`maxLearnsGlobal` / `maxLearnsWorkspace`）；缺项时用出厂频率。
-   * 没有这一项（或值为 undefined）的层走总数配额（会话 / 场景）。
+   * 全局 / 工作区共用的学习频率。缺项时用出厂值。
+   * 同一份设置，两层各自计数：一层到量不影响另一层。
    */
-  rateByLayer?: Partial<Record<MemoryLayer, number>>
+  rate?: { notes: number; windowMinutes: number }
   knownWorkspaces: Set<string>
   knownScenes: Set<string>
   tombstones: Tombstone[]
@@ -274,11 +271,10 @@ export const looksDerivable = (text: string): boolean => DERIVABLE_PATTERNS.some
 // ── 配额 ───────────────────────────────────────────────────────────────────
 
 /**
- * 会话 / 场景两层的自动条目软上限（内部层，界面不暴露）。
+ * 维护扫描使用的每层软上限（`maintenance.ts` 读它判断健康度与清理）。
  *
- * 全局 / 工作区**没有总条数上限**：记忆多了只影响注入预算，不拒绝写入。这两层改由
- * `NOTE_RATE_DEFAULTS` 的「每 10 分钟最多新增几条」限流（见门 7），所以这里放
- * `Infinity` —— 维护扫描与健康度对这两层永远不会因总数触发清理。
+ * 全局 / 工作区**没有总条数上限**：记忆多了只影响注入预算，不拒绝写入。这两层放
+ * `Infinity` —— 维护扫描不会因总数触发清理；写入速度由门 7 的频率限制。
  */
 export const LAYER_QUOTA: Record<MemoryLayer, number> = {
   [LAYER_SESSION]: 50,
@@ -493,35 +489,18 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     }
   }
 
-  // ── 门 7：配额 ──
-  // 合并不新增条目；取代只有在**同层**时才抵掉配额（跨层取代仍会在本层新增一条）。
+  // ── 门 7：频率 ──
+  // 合并不新增条目；同层取代也不新增。跨层取代会在本层新建一条，仍要占名额。
   const supersedesHere = supersedes.some((id) => ctx.existing.find((e) => e.id === id)?.layer === layer)
   const createsEntry = !mergeInto && !supersedesHere
-  // 全局 / 工作区没有总条数上限，只限「每窗口新增几条」；会话 / 场景仍用总数配额。
-  // 缺 `rateByLayer` 时按出厂频率兜底，避免旧调用方绕过限流。
-  const rate = ctx.rateByLayer?.[layer] ?? (
-    layer === LAYER_GLOBAL ? NOTE_RATE_DEFAULTS.global
-      : layer === LAYER_WORKSPACE ? NOTE_RATE_DEFAULTS.workspace
-        : undefined
-  )
-  if (rate !== undefined) {
+  if (createsEntry) {
+    const rate = ctx.rate ?? { notes: NOTE_RATE_DEFAULTS.notes, windowMinutes: NOTE_RATE_DEFAULTS.minutes }
     const recent = ctx.recentByLayer?.[layer] ?? 0
-    if (createsEntry && recent >= rate) {
-      const minutes = Math.round(NOTE_RATE_WINDOW_MS / 60_000)
+    if (recent >= rate.notes) {
       return reject(
         'quota',
-        `not recorded: this layer already learned ${recent} new notes in the last ${minutes} minutes (limit ${rate}). Merge or update existing notes instead, or wait for the window to pass.`,
-        `配额门拒绝：${layer} 层近 ${minutes} 分钟已新增 ${recent} 条（上限 ${rate}）`,
-      )
-    }
-  } else {
-    const used = ctx.countByLayer[layer] ?? 0
-    const cap = LAYER_QUOTA[layer]
-    if (createsEntry && used >= cap) {
-      return reject(
-        'quota',
-        `not recorded: this layer already holds ${used} learned notes (limit ${cap}). Merge or archive some first — the Memory page has a cleanup view.`,
-        `配额门拒绝：${layer} 层已满（${used}/${cap}）`,
+        `not recorded: this layer already learned ${recent} new notes in the last ${rate.windowMinutes} minutes (limit ${rate.notes}). Merge or update existing notes instead, or wait for the window to pass.`,
+        `配额门拒绝：${layer} 层近 ${rate.windowMinutes} 分钟已新增 ${recent} 条（上限 ${rate.notes}）`,
       )
     }
   }

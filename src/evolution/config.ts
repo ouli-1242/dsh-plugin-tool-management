@@ -17,7 +17,9 @@ import { mkdir } from 'node:fs/promises'
 import { hubPath } from '../hub.js'
 import { WORKSPACE_HASH_LEN } from '../memories/constants.js'
 import type { JsonFileRead } from '../mcp/disabled-tools.js'
-import { NOTE_RATE_DEFAULTS, NOTE_RATE_MAX, NOTE_RATE_MIN } from './limits.js'
+import {
+  NOTE_RATE_DEFAULTS, NOTE_RATE_MINUTES_MAX, NOTE_RATE_MINUTES_MIN, NOTE_RATE_NOTES_MAX, NOTE_RATE_NOTES_MIN,
+} from './limits.js'
 
 /** 策略文件的目录（hub 内相对路径）。 */
 export const EVOLUTION_DIR = 'evolution'
@@ -88,10 +90,13 @@ export interface EvolutionOverrides {
   inject?: boolean
   reviewEveryTurns?: number
   maxReviewsPerSession?: number
-  /** 全局层每 10 分钟最多新增多少条自主记忆；合并 / 更新不占名额。 */
-  maxLearnsGlobal?: number
-  /** 工作区层（所有工作区合计）每 10 分钟最多新增多少条自主记忆。 */
-  maxLearnsWorkspace?: number
+  /**
+   * 学习频率的窗口长度（分钟）。全局 / 工作区共用；
+   * 每一层各自在窗口内计数，互不占用名额。
+   */
+  learnWindowMinutes?: number
+  /** 每个窗口内每层最多新增多少条自主记忆；合并 / 更新不占名额。 */
+  maxLearnsPerWindow?: number
   /** 复习用哪个模型；空串 = 会话当前模型。 */
   model?: string
   /** 笔记风格：efficient（默认）/ friendly / minimal / custom。 */
@@ -115,8 +120,8 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
   autoConfirm: false,
   reviewEveryTurns: 8,
   maxReviewsPerSession: 2,
-  maxLearnsGlobal: NOTE_RATE_DEFAULTS.global,
-  maxLearnsWorkspace: NOTE_RATE_DEFAULTS.workspace,
+  learnWindowMinutes: NOTE_RATE_DEFAULTS.minutes,
+  maxLearnsPerWindow: NOTE_RATE_DEFAULTS.notes,
   model: '',
   noteStyle: 'efficient',
   noteStyleText: '',
@@ -175,8 +180,8 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
     ...(inject !== undefined ? { inject } : {}),
     reviewEveryTurns: intOf(r.reviewEveryTurns, d.reviewEveryTurns, 1, 100),
     maxReviewsPerSession: intOf(r.maxReviewsPerSession, d.maxReviewsPerSession, 0, 20),
-    maxLearnsGlobal: intOf(r.maxLearnsGlobal, d.maxLearnsGlobal, NOTE_RATE_MIN, NOTE_RATE_MAX),
-    maxLearnsWorkspace: intOf(r.maxLearnsWorkspace, d.maxLearnsWorkspace, NOTE_RATE_MIN, NOTE_RATE_MAX),
+    learnWindowMinutes: intOf(r.learnWindowMinutes, d.learnWindowMinutes, NOTE_RATE_MINUTES_MIN, NOTE_RATE_MINUTES_MAX),
+    maxLearnsPerWindow: intOf(r.maxLearnsPerWindow, d.maxLearnsPerWindow, NOTE_RATE_NOTES_MIN, NOTE_RATE_NOTES_MAX),
     model: typeof r.model === 'string' ? r.model : d.model,
     noteStyle: style.style,
     noteStyleText: style.custom,
@@ -196,8 +201,8 @@ export function normalizeOverrides(raw: any): EvolutionOverrides {
   if (typeof r.inject === 'boolean') out.inject = r.inject
   if (typeof r.reviewEveryTurns === 'number' && Number.isFinite(r.reviewEveryTurns)) out.reviewEveryTurns = intOf(r.reviewEveryTurns, 8, 1, 100)
   if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, 2, 0, 20)
-  if (typeof r.maxLearnsGlobal === 'number' && Number.isFinite(r.maxLearnsGlobal)) out.maxLearnsGlobal = intOf(r.maxLearnsGlobal, NOTE_RATE_DEFAULTS.global, NOTE_RATE_MIN, NOTE_RATE_MAX)
-  if (typeof r.maxLearnsWorkspace === 'number' && Number.isFinite(r.maxLearnsWorkspace)) out.maxLearnsWorkspace = intOf(r.maxLearnsWorkspace, NOTE_RATE_DEFAULTS.workspace, NOTE_RATE_MIN, NOTE_RATE_MAX)
+  if (typeof r.learnWindowMinutes === 'number' && Number.isFinite(r.learnWindowMinutes)) out.learnWindowMinutes = intOf(r.learnWindowMinutes, NOTE_RATE_DEFAULTS.minutes, NOTE_RATE_MINUTES_MIN, NOTE_RATE_MINUTES_MAX)
+  if (typeof r.maxLearnsPerWindow === 'number' && Number.isFinite(r.maxLearnsPerWindow)) out.maxLearnsPerWindow = intOf(r.maxLearnsPerWindow, NOTE_RATE_DEFAULTS.notes, NOTE_RATE_NOTES_MIN, NOTE_RATE_NOTES_MAX)
   if (typeof r.model === 'string') out.model = r.model
   if (r.noteStyle !== undefined || r.noteStyleText !== undefined) {
     const style = normalizeNoteStyle({ style: r.noteStyle, custom: r.noteStyleText })
@@ -246,8 +251,8 @@ export function resolveEffectiveConfig(
     inject: injectRaw === undefined ? enabled : (enabled && injectRaw),
     reviewEveryTurns: pick('reviewEveryTurns') ?? global.reviewEveryTurns,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,
-    maxLearnsGlobal: pick('maxLearnsGlobal') ?? global.maxLearnsGlobal,
-    maxLearnsWorkspace: pick('maxLearnsWorkspace') ?? global.maxLearnsWorkspace,
+    learnWindowMinutes: pick('learnWindowMinutes') ?? global.learnWindowMinutes,
+    maxLearnsPerWindow: pick('maxLearnsPerWindow') ?? global.maxLearnsPerWindow,
     model: pick('model') ?? global.model,
     noteStyle: pick('noteStyle') ?? global.noteStyle,
     noteStyleText: pick('noteStyleText') ?? global.noteStyleText,

@@ -25,7 +25,6 @@ import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf } 
 const ctxOf = (patch = {}) => ({
   allowed: { global: true, workspace: true },
   existing: [],
-  countByLayer: {},
   knownWorkspaces: new Set(['abcd1234abcd1234']),
   knownScenes: new Set(['code']),
   workspaceHash: 'abcd1234abcd1234',
@@ -234,10 +233,10 @@ test('证据门：所有来源一律候选；信心按来源算，不虚报', ()
   }
 })
 
-test('配额门：该层满了就拒，并说清怎么解', () => {
+test('频率门：窗口内新增到量就拒，并说清怎么解', () => {
   const r = runGates(
     { text: '这个仓库用 pnpm', source: 'user_explicit', quote: '用 pnpm' },
-    ctxOf({ countByLayer: { workspace: 200 }, workspaceHash: 'abcd1234abcd1234' }),
+    ctxOf({ recentByLayer: { workspace: 5 }, rate: { notes: 5, windowMinutes: 10 } }),
   )
   assert.equal(r.ok, false)
   assert.equal(r.gate, 'quota')
