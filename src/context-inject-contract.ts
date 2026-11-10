@@ -56,8 +56,8 @@ export const LEGACY_INJECT_KIND_OF: Readonly<Record<string, InjectDomainKey>> = 
  * 「用了」长得一模一样。有了映射，就能把「投递 N 次 / 调用 M 次」并排摆出来，
  * 措辞与形式的调整才有依据（否则改文案就是猜）。
  *
- * 前缀而不是精确名：记忆族现有 `memory_get` / `memory_manager_*` / `memory_note`，
- * 任何一个都说明模型确实在读这一域。改工具名等于换身份，这几个字符串是稳定契约。
+ * 前缀而不是精确名：记忆族现有 `memory_get` / `memory_remember` / `memory_manager_*` /
+ * `memory_note`，任何一个都说明模型确实在读这一域。改工具名等于换身份，这几个字符串是稳定契约。
  *
  * 为什么值是**数组**：工具族与注入域不是一一对应的概念 —— 域是"给模型看的信息分组"
  * （界面上的勾选），族是"操作哪类对象"。场景与记忆一度同域两族
@@ -68,7 +68,7 @@ export const DOMAIN_TOOL_PREFIX: Record<InjectDomainKey, readonly string[]> = {
   scene: ['scene_manager_'],
   // `memory_note` 写哪一层由卡片决定，从工具名反推不出来，所以它归在合并后的
   // 全局块（先匹配）；工作区块没有专属工具，空数组是显式声明，不是漏配。
-  memoryGlobal: ['memory_get', 'memory_manager_', 'memory_note'],
+  memoryGlobal: ['memory_get', 'memory_remember', 'memory_manager_', 'memory_note'],
   memoryWorkspace: [],
   mcp: ['mcp_manager_'],
   skills: ['skill_manager_'],

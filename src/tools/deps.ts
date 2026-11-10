@@ -423,7 +423,7 @@ export function sessionLayerOn(deps: ToolDomainDeps): boolean {
  * 全局，拒绝它只会让模型白跑一趟。
  *
  * 加在：技能 / 人设 / 场景 / MCP 四条 `*_save`、五条 `*_remove`。
- * 不加在：`memory_manager_save`（落 `<场景>/<名字>`，写哪儿由 id 自己说清）、
+ * 不加在：`memory_remember`（它的 `scope` 指场景 / 工作区，不是会话层）、
  * `*_manager_switch`（它们本来就按会话写，`scope` 是真的）。
  * `prompt_manager_apply` 也从清单里去掉了：它的参数表里没有
  * `scope`，守卫读不到东西 —— 模型按 schema 不可能传，这条守卫等于永不触发，留着只会

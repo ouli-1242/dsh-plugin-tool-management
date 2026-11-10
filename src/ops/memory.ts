@@ -295,7 +295,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     const index = indexForScene
     // 新建记忆默认**不开启** —— 记忆的开关是单一真相源（`enabled`），
     // 用户要求「创建的记忆默认不开启，在记忆页开启后对应的场景档案也要显示开启」。
-    // 调用方可以显式传 `enabled: true`（`memory_manager_save` 建的就是一条当时就要生效的记忆）；
+    // 调用方可以显式传 `enabled: true`（`memory_remember` 建的就是一条当时就要生效的记忆）；
     // 界面新建不传，保持默认关闭，由用户在记忆页决定。
     index.rules[createdId] = { order: DEFAULT_ORDER, enabled: args && args.enabled === true, updatedAt: new Date().toISOString() }
     if (!index.groups[targetGroup]) index.groups[targetGroup] = { order: DEFAULT_GROUP_ORDER, label: targetGroup }

@@ -1,4 +1,4 @@
-// 记忆（rules）域的 model 工具：memory_get / memory_manager_switch / memory_manager_save。
+// 记忆（rules）域的 model 工具：memory_get / memory_manager_switch / memory_remember。
 //
 // 自主笔记（agent 学的一句话）是另一族 `memory_note`：两族按对象分开，读取统一走
 // `memory_get`，id 形状也不同（用户记忆 `<scene>/<name>`，笔记 `note:<layer>/<slug>`）。
@@ -19,12 +19,13 @@
 // 模型必须自己先查一次再决定调哪条，而它手里的清单可能已经过期。合并后由工具侧兜住。
 //
 // 活动场景的记忆正文会自动注入上下文（无需调用工具读取）；这里的工具用于查询/编辑规则
-// 本身。memory_manager_save 受 tools/pre-execute 审批门禁。
+// 本身。memory_remember 受 tools/pre-execute 审批门禁。
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
-import { GLOBAL_SCENE, SHARED_GROUP } from '../memories/constants.js'
+import { GLOBAL_SCENE, MAX_DESCRIPTION_LENGTH, MAX_GROUP_SEGMENT_LENGTH, SHARED_GROUP } from '../memories/constants.js'
+import { MAX_AUTO_DESCRIPTION, MAX_AUTO_TEXT, MAX_AUTO_TITLE } from '../evolution/write.js'
 import type { ScopeAskRequest, ScopeChoice, ScopeLayer } from '../evolution/scope-card.js'
-import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, toolOrNeutral, type ToolDomainDeps } from './deps.js'
+import { effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, toolOrNeutral, type ToolDomainDeps } from './deps.js'
 import { PROACTIVE_MEMORY_TOOL } from './table.js'
 import { isNoteRef, noteRefOf, stripNoteRef } from './note-ref.js'
 
@@ -297,6 +298,46 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     throw new Error('no user memory with id "' + id + '". Call memory_get with no id to list what exists.')
   }
 
+  /**
+   * 从标题或正文首行派生文件名：保留 Unicode，去掉路径分隔符与控制字符，空白压成 `-`。
+   *
+   * 用户说的是「记录一下：以后提交前跑测试」，不会给文件 slug。文件名必须是一个合法路径段
+   * （`isValidGroupSegment` 允许 Unicode），所以这里只做最低限度的清洗；真正的合法性
+   * 仍由 `rules-create` 兜底。
+   */
+  const slugOf = (raw: string): string => {
+    const line = String(raw || '').split('\n').map((l) => l.trim()).find((l) => l !== '') || ''
+    const cleaned = line
+      .replace(/^#+\s*/, '')
+      .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^[-.]+|[-.]+$/g, '')
+      .slice(0, MAX_GROUP_SEGMENT_LENGTH)
+    return cleaned !== '' ? cleaned : 'memory'
+  }
+
+  /** 正文首行（去掉 markdown 标题标记），用于派生描述。 */
+  const firstLineOf = (raw: string): string => {
+    const line = String(raw || '').split('\n').map((l) => l.trim()).find((l) => l !== '') || ''
+    return line.replace(/^#+\s*/, '').slice(0, 500)
+  }
+
+  /** 当前可用场景名：`scenes` 行与规则里的 group 取并集（有记忆但没显式记录的场景也要认）。 */
+  const sceneNamesOf = (r: any): string[] => {
+    const names = new Set<string>()
+    const rows: any[] = Array.isArray(r && r.scenes) ? r.scenes : []
+    for (const s of rows) {
+      const name = String((s && (s.key || s.name)) || '')
+      if (name !== '') names.add(name)
+    }
+    for (const x of (Array.isArray(r && r.rules) ? r.rules : [])) {
+      const group = String((x && x.group) || '')
+      if (group !== '') names.add(group)
+    }
+    return [...names]
+  }
+
   register(defineTool({
     name: 'memory_get',
     description: 'Look up user-written memories and agent notes. No id → catalog (what exists and what injects); `id` → full body; `query` → filtered catalog with snippets. Agent note ids start with `note:`. Use this for ids and for entries not already in your context. Read-only.',
@@ -406,124 +447,213 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     },
   }))
   register(defineTool({
-    name: 'memory_manager_save',
-    // 「能推导的别记」「先查重」这两句必须有：记忆是唯一直接吃注入预算的域
-    // （场景段 128 KiB），而模型很乐意把「这个项目用 pnpm」记一条 —— 那看一眼 `package.json`
-    // 就知道，记下来却永久占着每一轮请求。合并 write/update 后这两句更要留：upsert 降低了
-    // "再记一条"的摩擦，而摩擦正是这里唯一拦得住它的东西。
-    description: 'Create a full user-written memory (a convention, procedure or reference worth keeping), or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. For a one-line note, standing order, reminder or preference ("every time…", "always…"), use the agent-note learn action instead. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
+    name: 'memory_remember',
+    // 写入口只按**范围**分叉，不再按内容长短分叉：用户说「记录 a」时，唯一要判断的是
+    // 「记到哪儿」，而那是用户的问题，不是模型能猜的。旧版按"一句话 → 笔记 / 多段 → 记忆"
+    // 重定向，模型于是要在两条工具、三种后端之间选，参数串用是必然的。
+    description: 'Remember something the user explicitly asked you to keep. scope=scene → a memory in a scene (injected only when that scene is on); scope=global → every project; scope=workspace → a note for this project (needs autonomous memory). Omit scope and ask the user where it belongs; do not guess. Pass `id` to update an existing memory or note instead of creating one. For your own inferences use the agent-note tool, not this. User-memory writes are blocked while the active scene is locked.',
     parameters: {
-      memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name> — copy it from the list. `global` is the always-on scene.' },
-      description: { type: 'string', description: 'One-sentence description (<=500 chars). Required when creating. Empty string = drop it and re-derive from the body; omit = keep.' },
-      body: { type: 'string', description: 'Markdown body (<=256 KiB). Required when creating. Omit to keep the current body.' },
-      // 不再承诺「旧文件进回收站」：bundle 记忆改名走的是
-      // 「只重写正文、目录不动」那条路，一个字都不进回收站 —— 对 bundle 说进回收站是假话。
-      // 与上一轮 P1-1 同口径：**只说可逆，不说实现细节**。
-      nextName: { type: 'string', description: 'New memory name (= file name); omit to keep it.' },
+      content: { type: 'string', description: 'What to remember. For scene/global: the memory body (Markdown, <=256 KiB). For workspace: one sentence (<=400 chars). Required when creating.' },
+      title: { type: 'string', description: 'Short name: the file name for a user memory, the note title for a workspace note. Omit to derive from the first line.' },
+      id: { type: 'string', description: 'Update an existing entry instead of creating: a user memory id (<scene>/<name>) or an agent note id (note:...).' },
+      scope: { type: 'string', enum: ['scene', 'global', 'workspace', 'conversation'], description: 'Where it belongs: scene (this working mode), global (every project), workspace (this project, stored as an agent note). Ask the user when unsure.' },
+      scene: { type: 'string', description: 'scope=scene: the scene name; defaults to the active scene. `global` is the always-on scene.' },
+      description: { type: 'string', description: 'User memories: one-sentence description; omit to derive from the first line.' },
+      nextName: { type: 'string', description: 'User memories: rename the existing memory to this file name.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
-      const blocked = await deps.lockedSceneGuard()
-      if (blocked) throw new Error(blocked)
-      // 这两个是自主笔记的参数。模型在两族之间串用参数时（会话里确实发生过），
-      // 先把它指回 note，别让它继续猜 scene id。
-      if (args && (args.layer !== undefined || args.title !== undefined)) {
-        throw new Error('those are agent-note parameters, not memory parameters: for a one-line note call ' + noteTool(exec && exec.agent, 'memory_note action=learn', 'the agent-note learn action') + ' with title and text. To create a user memory pass memory=<scene>/<name>, description and body.')
-      }
-      const memory = String((args && args.memory) || '').trim()
-      // 笔记不是用户记忆：它有自己的 id 前缀与写入路径，别让一次前缀传错落到"场景不存在"。
-      if (isNoteRef(memory)) {
-        throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_note action=learn', 'the agent-note learn action') + ' to update it (same slot) or action=forget. User memory ids look like <scene>/<name>.')
-      }
-      // 拆成 `<场景>/<名字>`：要求两段都非空。**不做"没有斜杠就落 global"的兜底** —— 那会把
-      // 一次拼错的 id 变成一条"每轮都注入"的全局记忆，而清单上看起来完全正常。
-      // 清单里打印的就是 `<场景>/<名字>`，照抄比拼装准。
-      const slash = memory.indexOf('/')
-      if (slash <= 0 || slash === memory.length - 1) {
-        // 这一条错得最有规律：用户口语里说的是「编程约定」，模型手里没有 id，就把那个名字
-        // 直接传进来了。给两条现成的 id 比再解释一遍格式有用；读失败就只报格式
-        // （`candidateNote` 自己吞掉失败，不改变错误结论）。
-        const note = await candidateNote(async () => {
-          const r: any = await deps.rulesOps['rules-list']({})
-          return r && r.ok !== false ? (r.rules || []).map((x: any) => String(x.id)) : []
-        }, 'memory ids')
-        throw new Error('memory must be <scene>/<name> (copy that from the listing; the always-on scene is written global/<name>): ' + (memory || '(empty)') + note +
-          '. For a one-line note use ' + noteTool(exec && exec.agent, 'memory_note action=learn', 'the agent-note learn action') + ' instead.')
-      }
-      const group = memory.slice(0, slash)
-      const name = memory.slice(slash + 1)
-      // 先取全量：既用来定位（命中 = 改、未命中 = 建），也是查重的数据源。判定必须在工具
-      // 这一侧 —— `rules-create` 对同名是**拒绝**的（`error.rules.exists`），op 不会 upsert。
-      const all: any = await deps.rulesOps['rules-list']({})
-      if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
-      const hit = (all.rules || []).find((x: any) => String(x.id) === memory)
+      const agent = exec && exec.agent
+      // 旧两条工具的字段名做一次兼容：`memory`/`body` 来自 save，`text`/`layer`/`slot`
+      // 来自 note。模型按旧习惯传进来时不该整次失败 —— 这正是合并写入入口要消掉的摩擦。
+      // 只做 fallback，不写进 schema：新调用方看到的仍是 content / id / scope。
+      const rawId = String((args && (args.id !== undefined ? args.id : args.memory)) || '').trim()
+      const content = String((args && (args.content !== undefined ? args.content : (args.body !== undefined ? args.body : (args.text !== undefined ? args.text : '')))) || '')
+      const title = String((args && args.title) || '').trim()
+      const nextName = String((args && args.nextName) || '').trim()
+      const descriptionArg = args && args.description !== undefined ? String(args.description) : undefined
+      const scopeArg = String((args && (args.scope !== undefined ? args.scope : args.layer)) || '').trim()
+      const sceneArg = String((args && args.scene) || '').trim()
+      const slotArg = String((args && (args.slot !== undefined ? args.slot : args.key)) || '').trim()
 
-      if (hit) {
-        // 改的分支一律 read-modify-write（省略 = 保持），因为 `rules-update` 是整份重写。
-        // 三个可改字段一个都没给就拒：op 会按"保留现有"落一次盘并刷新 updatedAt，
-        // 模型以为改了点什么，其实只是把文件重写了一遍。
-        const touched = ['body', 'description', 'nextName'].filter((k) => (args as Record<string, unknown>)[k] !== undefined)
-        if (!touched.length) throw new Error('nothing to change: give at least one of body / description / nextName')
-        const payload: any = { id: memory }
-        // 只带模型真给过的键：`description` 传空串在 op 里是"删除并重新派生"，与"未给"是两种
-        // 意图，都必须原样透传 —— 所以用 `!== undefined` 而不是真值判断。
-        if (args.body !== undefined) payload.body = args.body
-        if (args.description !== undefined) payload.description = args.description
-        if (args.nextName !== undefined) payload.name = args.nextName
+      /** 按 slot 更新一条已有笔记：正文替换、标题可换、用户明确要求所以直接批准生效。 */
+      const updateNote = async (a: any, ref: string): Promise<string> => {
+        if (descriptionArg !== undefined) {
+          throw new Error('description is for user memories; a note has no description. Use title or content.')
+        }
+        if (nextName !== '') throw new Error('nextName is for user memories; a note uses title.')
+        const layer = String(a.layer || '')
+        if (layer !== 'global' && layer !== 'workspace') {
+          throw new Error('that note is not a global or workspace note, so memory_remember cannot update it: ' + ref)
+        }
+        const key = String(a.key || '')
+        if (key === '') {
+          throw new Error('this note has no slot, so it cannot be updated in place. Forget it with memory_note action=forget and learn a new one, or create a new note.')
+        }
+        const text = content !== '' ? content.trim() : String(a.body || '').trim()
+        if (text === '') throw new Error('missing argument: content — the updated note text.')
+        if (text.length > MAX_AUTO_TEXT || /\n\s*\n/.test(text)) {
+          throw new Error('an agent note is one sentence (<= ' + MAX_AUTO_TEXT + ' chars). This content is longer — use a user memory (scope=scene / global) instead.')
+        }
+        const payload: any = { text, key, layer, source: 'user_explicit', approved: true }
+        // 标题没给时把原标题带回去：evolution-learn 是整条重写，省略字段是否保留由后端决定，
+        // 这里显式保住，避免一次正文更新把标题清空。
+        if (title !== '') payload.title = title.slice(0, MAX_AUTO_TITLE)
+        else if (a.title) payload.title = String(a.title).slice(0, MAX_AUTO_TITLE)
+        const r: any = await evo!['evolution-learn'](payload)
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to update the note'))
+        return 'OK: updated ' + noteRefOf(String(r.id || stripNoteRef(ref))) + ' (agent note)'
+      }
+
+      if (rawId !== '') {
+        if (isNoteRef(rawId)) {
+          if (!evo) throw new Error('agent notes are not available in this build')
+          if (!(deps.autoLearnEnabled && deps.autoLearnEnabled(agent))) {
+            throw new Error('autonomous memory is off here, so agent notes cannot be updated. The user can turn it on in Memory → Autonomous memory.')
+          }
+          const raw = stripNoteRef(rawId)
+          let a: any = await evo['evolution-read']({ id: raw, touch: true })
+          if (!a || a.ok === false) {
+            const resolved = await resolveNote(raw)
+            if (resolved.id !== null) {
+              const found: any = await evo['evolution-read']({ id: resolved.id, touch: true })
+              if (found && found.ok !== false) a = found
+            } else if (resolved.hits.length > 1) {
+              throw new Error('ambiguous: "' + rawId + '" matches ' + describeNoteHits(resolved.hits) + '; pass one of these ids.')
+            }
+          }
+          if (!a || a.ok === false) throw new Error(String((a && a.error) || 'no such agent note: ' + rawId))
+          return updateNote(a, rawId)
+        }
+        if (!rawId.includes('/')) {
+          throw new Error('id must be <scene>/<name> (a user memory) or note:... (an agent note): ' + rawId)
+        }
+        const blocked = await deps.lockedSceneGuard()
+        if (blocked) throw new Error(blocked)
+        const all: any = await deps.rulesOps['rules-list']({})
+        if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
+        const hit = (all.rules || []).find((x: any) => String(x.id) === rawId)
+        if (!hit) {
+          const ids: string[] = (all.rules || []).map((x: any) => String(x.id))
+          throw new Error('no memory with id "' + rawId + '"' + existingNote(ids, 'memory ids') + '. Pass scope=scene/global/workspace to create a new one.')
+        }
+        if (isAutoRule(hit)) {
+          throw new Error('that is an agent note, not a user memory: update it with id=note:' + rawId + ' or the agent-note tool.')
+        }
+        const touched: string[] = []
+        const payload: any = { id: rawId }
+        const contentGiven = Boolean(args && (args.content !== undefined || args.body !== undefined || args.text !== undefined))
+        if (contentGiven) {
+          if (content.trim() === '') throw new Error('content cannot be empty when updating a memory')
+          payload.body = content
+          touched.push('content')
+        }
+        if (descriptionArg !== undefined) { payload.description = descriptionArg; touched.push('description') }
+        if (nextName !== '') { payload.name = nextName; touched.push('nextName') }
+        if (!touched.length) throw new Error('nothing to change: give content, description, or nextName')
         const r: any = await deps.rulesOps['rules-update'](payload)
         if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to update the memory')
         const rule = r.rule || {}
-        return 'OK: updated ' + String(rule.id || memory) + ' (changed ' + touched.join(', ') + ')' +
-          (rule.id && String(rule.id) !== memory ? ' → now ' + rule.id : '')
+        return 'OK: updated ' + String(rule.id || rawId) + ' (changed ' + touched.join(', ') + ')' +
+          (rule.id && String(rule.id) !== rawId ? ' → now ' + rule.id : '')
       }
 
-      // 建的分支：正文与描述都必填。`rules-create` 自己会拒空正文与非法名（ops/memory.ts），
-      // 但那是给用户看的中文 op 错；模型需要的是"这条工具要什么"，所以在工具侧先挡、点名缺哪个。
-      const body = args && args.body !== undefined ? String(args.body) : ''
-      const description = args && args.description !== undefined ? String(args.description) : ''
-      // 一行正文不是"完整记忆"，是自主记忆的短笔记。模型手里有两条写入工具时，
-      // `save` 的名字更直白，它就会把「每次提醒我喝水」也塞进一条全局记忆；而这类内容
-      // 本该走零摩擦的 learn（卡片选层、可 TTL、可合并）。只在 auto 真正可用时重定向：
-      // 开关关着却让模型去调一条看不见的工具，等于把这次记录丢掉。
-      // 放在必填校验之前：短笔记往往也没有 description，先报缺字段会把它推回 save。
-      const trimmedBody = body.trim()
-      const oneParagraph = trimmedBody !== '' && !/\n\s*\n/.test(trimmedBody)
-      if (oneParagraph && trimmedBody.length <= 300 && deps.autoLearnEnabled && deps.autoLearnEnabled(exec && exec.agent)) {
-        throw new Error('this is a one-line note, not a full memory: call ' + noteTool(exec && exec.agent, 'memory_note action=learn', 'the agent-note learn action') + ' with title and text instead (layer=global for every project, workspace for this one). memory_manager_save is for a multi-paragraph memory such as a convention, procedure or reference.')
+      if (content.trim() === '') {
+        throw new Error('missing argument: content — what to remember. (The old body / text arguments are now content.)')
       }
-      const missing = [
-        body.trim() === '' ? 'body' : '',
-        description.trim() === '' ? 'description' : '',
-      ].filter((x) => x !== '')
-      if (missing.length) {
-        // id 不存在 + 内容也不全：最可能是名字记差了一个字。先给**同一场景**里现成的 id
-        // （整个库列出来只会把这条错误变成噪音），一条都没有才退回全库。
-        const ids: string[] = (all.rules || []).map((x: any) => String(x.id))
-        const here = ids.filter((id: string) => id.indexOf(group + '/') === 0)
-        throw new Error('creating a memory needs ' + missing.join(' and ') + ' (' + memory + ' does not exist yet)'
-          + existingNote(here.length ? here : ids, 'memory ids'))
+      if (nextName !== '') throw new Error('nextName renames an existing memory; to name a new one use title.')
+      if (descriptionArg !== undefined && descriptionArg.length > MAX_DESCRIPTION_LENGTH) {
+        throw new Error('description is too long (limit ' + MAX_DESCRIPTION_LENGTH + ' chars).')
       }
-      // 查重只**说出来**，不拒绝 —— 猜错一次就把该记的东西记不下去，比多记一条代价大得多；
-      // 而且"像不像同一条"本来就是人判断的事。只在建的分支提示：改的分支没有"再记一条"的风险。
-      const norm = (value: unknown): string => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
-      // 场景预检：op 层那条「场景不存在」错误是中文面板文案，直接透传给模型只会让它
-      // 猜。工具清单里已经拿到了全部现存场景，在这里用英文说清"这个场景没有、现成有
-      // 哪些"，比让一次注定失败的创建走到 op 层再报错体验好得多。
-      const knownGroups = new Set<string>((all.rules || []).map((x: any) => String(x.group || '')))
+      const scope = scopeArg !== '' ? scopeArg : (sceneArg !== '' ? 'scene' : '')
+      if (scope === '') {
+        throw new Error('where should this be remembered? Pass scope=scene (only when this working mode is active), scope=global (every project), or scope=workspace (this project). Ask the user which one; do not guess.')
+      }
+      if (scope === 'conversation') {
+        throw new Error('scope=conversation is not supported: per-conversation memories are not injected. Use scope=scene (this working mode) or scope=global (every project).')
+      }
+      if (scope !== 'scene' && scope !== 'global' && scope !== 'workspace') {
+        throw new Error('unknown scope: ' + scope + ' (expected scene / global / workspace)')
+      }
+
+      if (scope === 'workspace') {
+        if (!evo) throw new Error('workspace notes need autonomous memory, which is not available in this build. Use scope=scene or scope=global.')
+        if (!(deps.autoLearnEnabled && deps.autoLearnEnabled(agent))) {
+          throw new Error('workspace notes need autonomous memory. The user can turn it on in Memory → Autonomous memory, or choose scope=scene / scope=global.')
+        }
+        const text = content.trim()
+        if (text.length > MAX_AUTO_TEXT || /\n\s*\n/.test(text)) {
+          throw new Error('a workspace note is one sentence (<= ' + MAX_AUTO_TEXT + ' chars). This content is longer — use scope=scene (this working mode) or scope=global (every project) for a full memory.')
+        }
+        const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
+        const payload: any = {
+          text,
+          title: (title !== '' ? title : text).slice(0, MAX_AUTO_TITLE),
+          key: slotArg !== '' ? slotArg : slugOf(title !== '' ? title : text),
+          layer: 'workspace',
+          source: 'user_explicit',
+          approved: true,
+        }
+        if (descriptionArg !== undefined && descriptionArg.trim() !== '') {
+          payload.description = descriptionArg.slice(0, MAX_AUTO_DESCRIPTION)
+        }
+        if (identity?.sessionId) payload.sessionId = identity.sessionId
+        if (identity?.cwd) payload.cwd = identity.cwd
+        const scene = deps.activeSceneOf ? deps.activeSceneOf(agent) : undefined
+        if (scene !== undefined) payload.scene = scene
+        const r: any = await evo['evolution-learn'](payload)
+        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record the workspace note'))
+        const ref = r.id ? noteRefOf(String(r.id)) : 'note:workspace/' + payload.key
+        return 'OK: remembered as a workspace note ' + ref + ' (active in this workspace; stored with agent notes).'
+      }
+
+      if (scope === 'global' && sceneArg !== '' && sceneArg !== GLOBAL_SCENE) {
+        throw new Error('scope=global does not take a scene (got "' + sceneArg + '"). Use scope=scene with that scene, or omit scene.')
+      }
+      const blocked = await deps.lockedSceneGuard()
+      if (blocked) throw new Error(blocked)
+      const all: any = await deps.rulesOps['rules-list']({})
+      if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
+      const knownGroups = new Set<string>(sceneNamesOf(all))
       knownGroups.add(GLOBAL_SCENE)
       knownGroups.add(SHARED_GROUP)
-      // `_ws` / `_session` 是自主笔记的内部存储目录，不是用户场景。模型从笔记 id
-      // 反推出 `_ws/<hash>` 当 scene 时（会话里发生过），说清它是另一族，别再让它试。
+      let group = scope === 'global' ? GLOBAL_SCENE : sceneArg
+      if (scope === 'scene' && group === '') {
+        group = String((deps.activeSceneOf ? deps.activeSceneOf(agent) : '') || '')
+      }
+      if (group === '') {
+        const scenes = [...knownGroups].filter((s) => s !== '').sort()
+        throw new Error('scope=scene needs a scene, and this conversation has no active scene. Existing scenes: ' + scenes.join(', ') + '. Ask the user which one; do not guess.')
+      }
       if (group === '_ws' || group.startsWith('_ws/') || group === '_session' || group.startsWith('_session/')) {
-        throw new Error('"' + group + '" is internal storage for agent notes, not a user scene. For a workspace note use ' + noteTool(exec && exec.agent, 'memory_note action=learn', 'the agent-note learn action') + ' with layer=workspace; for a user memory use an existing scene (global, …).')
+        throw new Error('"' + group + '" is internal storage for agent notes, not a user scene. For a workspace note use scope=workspace; for a user memory use an existing scene (global, …).')
       }
       if (!knownGroups.has(group)) {
         const scenes = [...knownGroups].filter((s) => s !== '').sort()
-        throw new Error('scene "' + group + '" does not exist — memories can only be created inside an existing scene. Existing scenes: ' + scenes.join(', ') + '. The user creates scenes in the plugin panel (Scenes page); then save again.')
+        throw new Error('scene "' + group + '" does not exist — memories can only be created inside an existing scene. Existing scenes: ' + scenes.join(', ') + '. The user creates scenes in the plugin panel (Scenes page); then remember again.')
       }
+      const body = content
+      const name = slugOf(title !== '' ? title : firstLineOf(body))
+      const description = descriptionArg !== undefined && descriptionArg.trim() !== '' ? descriptionArg : firstLineOf(body)
+      const id = group + '/' + name
+      const hit = (all.rules || []).find((x: any) => String(x.id) === id)
+      if (hit) {
+        if (isAutoRule(hit)) {
+          throw new Error('the derived id "' + id + '" belongs to an agent note, not a user memory. Pick a different title, or use scope=workspace for a note.')
+        }
+        // 同名 upsert：用户说「记住」两次，第二句通常是在改同一条；替换正文而不是再建一条。
+        const payload: any = { id, body }
+        if (descriptionArg !== undefined) payload.description = descriptionArg
+        const r: any = await deps.rulesOps['rules-update'](payload)
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to update the memory')
+        return 'OK: updated ' + String((r.rule && r.rule.id) || id) + ' (same name already existed; content replaced)' +
+          globalActionNote(deps, agent, 'memory', 'memory')
+      }
+      const norm = (value: unknown): string => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
       const wantName = norm(name)
       const wantDesc = norm(description)
       const similar: string[] = (all.rules || [])
+        .filter((x: any) => !isAutoRule(x))
         .filter((x: any) => {
           const have = norm(x.name)
           const desc = norm(x.description)
@@ -537,7 +667,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const r: any = await deps.rulesOps['rules-create']({ group, name, description, body, enabled: true })
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to create the memory')
       // 刚建好的这条自己会在列表里，从名单里去掉。
-      const dup = similar.filter((id) => id !== String(r.rule.id))
+      const dup = similar.filter((sid) => sid !== String(r.rule.id))
       const warn = dup.length
         ? `\nnote: ${dup.length} existing memories have a similar name or description (${dup.join(', ')}) — if it is the same thing, update that one instead of keeping two.`
         : ''
@@ -545,25 +675,23 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 但它落进的场景在这个对话里未必开着 —— 场景没开，单条开关拨上去也不会注入。
       // 「会不会注入」按**本会话**的投影判：会话钉了别的场景时，照全局口径回一句
       // "打开就能用"是错的答案。
-      const scoped = sessionScopeOf(deps, exec && exec.agent)
+      const scoped = sessionScopeOf(deps, agent)
       const effScene = scoped?.scope?.scene
       const activeNow = effScene === undefined ? all.activeScene : effScene
       const activeMode = effScene === undefined ? all.activeMode : 'custom'
-      const sceneActive = group === 'global' ||
+      const sceneActive = group === GLOBAL_SCENE || group === SHARED_GROUP ||
         (group !== '' && (activeMode === 'all' || String(activeNow || '') === group))
       const enableHint = sceneActive
         ? ' (created enabled)'
         : ' (created enabled, but scene "' + group + '" is not on in this conversation, so it will not be injected here until that scene is turned on)'
-      // 会话层：这条记忆写的是**磁盘上的那一份**（所有对话共用），本会话的开关只决定
-      // "这里看不看得到"。模型据此回一句"记下了"时，用户很容易读成"只在这个对话里"。
       return 'OK: created ' + r.rule.id + enableHint + warn +
-        globalActionNote(deps, exec && exec.agent, 'memory', 'memory')
+        globalActionNote(deps, agent, 'memory', 'memory')
     },
   }))
 
   // ── 自主笔记（只在开关打开时出现在工具表里）────────────────────────────────
   //
-  // 为什么不复用 `memory_manager_save`：那条的契约是「Only on the user's instruction」并且
+  // 为什么不复用 `memory_remember`：那条的契约是「Only on the user's instruction」并且
   // 受确认门禁。自主笔记需要零摩擦：给 `save` 加一个 `auto` 参数会让同一个工具同时代表
   // 两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。授权边界写在工具名上。
   //
@@ -579,7 +707,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Agent notes (autonomous memory) — short one-line notes you learned: a preference, fact, correction or procedure. Only for what YOU inferred; when the user explicitly asks to remember something, use memory_manager_save instead. learn: `title` (2-8 words) + `text` (one sentence, <=400 chars); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; `quote` + `source` when the user said it. forget: `note` = id (note:...), slot, title or exact text. Inspect notes with the memory read tool. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
+    description: 'Agent notes (autonomous memory) — short one-line notes you learned: a preference, fact, correction or procedure. Only for what YOU inferred; when the user explicitly asks to remember something, use memory_remember instead. learn: `title` (2-8 words) + `text` (one sentence, <=400 chars); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; `quote` + `source` when the user said it. forget: `note` = id (note:...), slot, title or exact text. Inspect notes with the memory read tool. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn or forget.' },
       // ── learn ──
@@ -632,7 +760,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // save 的参数串进来时（`body` / `description` / `memory`），直接指回用户记忆，
       // 别让一次完整记忆被当成一句话笔记丢掉。
       if (args && (args.body !== undefined || args.description !== undefined || args.memory !== undefined)) {
-        throw new Error('those are user-memory parameters, not note parameters: for a full memory call memory_manager_save with memory=<scene>/<name>, description and body. For a note pass title and text (the same slot updates the existing note).')
+        throw new Error('those are user-memory parameters, not note parameters: for a full memory call memory_remember with content and scope=scene/global. For a note pass title and text (the same slot updates the existing note).')
       }
 
       // ── learn（默认）──

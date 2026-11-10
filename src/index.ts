@@ -5946,7 +5946,7 @@ export default {
         skill_manager_save: '「保存技能」',
         // write/update 并成一条 upsert，标签取中性的「保存记忆」：「写入」在改一条
         // 已有记忆时是句假话（与同一轮修 `prompt_manager_list` 的「生效中」同一个口径）。
-        memory_manager_save: '「保存记忆」',
+        memory_remember: '「保存记忆」',
         // 场景族的唯一写工具。无条件问（不设开关）—— 它改的是"进入这个场景时会切换哪些
         // mcp / 技能 / 人设"，改错了影响的是用户切场景之后的**整个运行时环境**，而不是一次
         // 输出。与 skill / subagent 的 save 同一档（都是"以后每次都按它来"的长期资产）。
@@ -6072,13 +6072,25 @@ export default {
             reason: `${cur ? 'Update' : 'Add'} MCP server「${server}」— ${detail}. A stdio server is spawned by the host and the entry persists in the config.`,
           })
         }
-        if (exec.name === 'memory_manager_save') {
+        if (exec.name === 'memory_remember') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
           // 不在此处做任何兜底放行。
-          // write/update 并成一条 upsert，reason 必须同时覆盖两种可能：卡是**执行前**
-          // 弹的，此时工具还没跑，走"建"还是"改"要读一次 `rules-list` 才知道。旧实现按工具名
-          // 分叉出两句，合并后只能取并集 —— 不能只留 "write"，那会让一次覆盖已有内容的操作
-          // 在卡上看起来像新建（危险度与门禁强度必须同向）。
+          //
+          // 三种情况不弹卡：
+          //   · 缺范围（没有 id / scope / scene）—— 工具自己会报错让模型去问用户，
+          //     先弹一张"保存记忆"再让工具失败，用户批准的是一个注定不发生的动作；
+          //   · 笔记（`note:` id 或 scope=workspace）—— 它走自主记忆的授权链，与用户记忆
+          //     不是同一道门；
+          //   · 非法 scope / 空内容 —— 同样是注定失败的调用。
+          const a = (exec && exec.arguments) || {}
+          const id = String(a.id || '').trim()
+          const scope = String(a.scope || '').trim()
+          const scene = String(a.scene || '').trim()
+          if (id === '' && scope === '' && scene === '') return next()
+          if (id.startsWith('note:') || scope === 'workspace') return next()
+          if (scope !== '' && scope !== 'scene' && scope !== 'global') return next()
+          if (scope === 'global' && scene !== '' && scene !== 'global') return next()
+          if (id === '' && String(a.content || '').trim() === '') return next()
           const what = 'Create or overwrite a memory under ~/.dsh/tool-management/memories'
           return mcp.readPluginSettings()
             .then((s) => (s.requireConfirmForModelRuleWrite ? { kind: 'ask', reason: what } : next()))

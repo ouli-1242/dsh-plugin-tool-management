@@ -125,7 +125,7 @@ test('域与工具名前缀双向对得上（对不上就有域永远统计不�
 test('记忆族与场景族各归自己的域，中途用过的名字不是别名', () => {
   // 破了这一条的后果是**静默**的：漏配 DOMAIN_TOOL_PREFIX 时编译不报错，症状只是
   // 兼容页那一组工具掉进「其它」桶、注入实况里该域的调用数永远是 0。
-  assert.equal(domainOfTool('memory_manager_save'), 'memoryGlobal')
+  assert.equal(domainOfTool('memory_remember'), 'memoryGlobal')
   assert.equal(domainOfTool('memory_get'), 'memoryGlobal')
   // 场景与记忆是**两个域**（`scene-manager-catalog` / `memory-global-catalog`），
   // 工具族跟着分开。
@@ -153,14 +153,14 @@ test('旧工具名迁移：用户「关掉了某条」的意图不能在改名�
   }))
   assert.equal(migrated.changed, true)
   assert.deepEqual(migrated.settings.hidden, [
-    'memory_manager_save', 'mcp_manager_switch', 'skill_manager_save', 'other_plugin_tool',
+    'memory_remember', 'mcp_manager_switch', 'skill_manager_save', 'other_plugin_tool',
   ])
   // 幂等：已经全是新名时必须报"没改"，否则每次读盘都会白回写一次。
   assert.equal(migrateLegacyToolNames(migrated.settings).changed, false)
   // 两条旧工具并成同一条 save 时只留一份（去重，不是简单替换）。
   assert.deepEqual(
     migrateLegacyToolNames(normalizeToolTableSettings({ hidden: ['memory_manager_write', 'memory_manager_update'] })).settings.hidden,
-    ['memory_manager_save'],
+    ['memory_remember'],
   )
   // 0.14.x：「拨一个开关」六域同形 —— `_set_enabled` → `_switch`（**一对一**，参数没动，
   // 所以不涉及语义合并）。漏了这三条的后果与上面完全一样，且更容易漏 ——

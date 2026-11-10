@@ -16,11 +16,12 @@
 // 比原来分五条开省事。
 
 export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
-  // 记忆族：只把 write + update 并成一条 `save`，名字本身没动 —— 所以只有这两条要迁移。
+  // 记忆族：write + update + save 三条并成 `memory_remember`（多对一）。
   // （开发中途曾把整族改叫 `scene_memory_manager_*`，但那个名字**从未发布**，用户侧
   // 不可能有它，因此不存在需要从它迁回来的数据。）
-  memory_manager_write: 'memory_manager_save',
-  memory_manager_update: 'memory_manager_save',
+  memory_manager_write: 'memory_remember',
+  memory_manager_update: 'memory_remember',
+  memory_manager_save: 'memory_remember',
   // 读取三合一：清单 / 正文 / 搜索并成 `memory_get`（多对一，翻译后按新名去重）。
   memory_manager_list: 'memory_get',
   memory_manager_read: 'memory_get',

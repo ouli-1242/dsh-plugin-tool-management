@@ -115,7 +115,7 @@ export interface ToolTableSettings {
  *     `scene_manager_list`。会话开头注入的那几段目录已经写了当前有什么，模型不必每轮
  *     再带一份查询工具。
  *     **`memory_get` 刻意不在这份名单**：合并后的读取入口同时承担清单、搜索与正文，
- *     藏掉它等于把被截断的条目、以及 `memory_manager_save` 需要的 id 变成不可发现。
+ *     藏掉它等于把被截断的条目、以及 `memory_remember` 需要的 id 变成不可发现。
  *   · **切场一条** —— `scene_manager_switch`：进入 / 退出场景。
  *   · **开关三条** —— `skill` / `memory` / `subagent` 三个 `_switch`（用户：「平时使用也很少」）。
  *     启停在面板上都有同款，注入段也写着当前开着哪些。**`mcp_manager_switch` 刻意留着**：
