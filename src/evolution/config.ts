@@ -202,7 +202,6 @@ export interface EvolutionOverrides {
    * 开关本身就是注入的授权，否则「关掉」在界面上就成了假动作。
    */
   inject?: boolean
-  reviewEveryTurns?: number
   maxReviewsPerSession?: number
   /**
    * 学习频率的窗口长度（分钟）。全局 / 工作区共用；
@@ -231,8 +230,7 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
   learnGlobal: false,
   learnWorkspace: false,
   autoConfirm: false,
-  reviewEveryTurns: 8,
-  maxReviewsPerSession: 2,
+  maxReviewsPerSession: 5,
   learnWindowMinutes: NOTE_RATE_DEFAULTS.minutes,
   maxLearnsPerWindow: NOTE_RATE_DEFAULTS.notes,
   model: '',
@@ -293,7 +291,6 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
     learnWorkspace: typeof r.learnWorkspace === 'boolean' ? r.learnWorkspace : (legacy?.workspace ?? d.learnWorkspace),
     autoConfirm: typeof r.autoConfirm === 'boolean' ? r.autoConfirm : d.autoConfirm,
     ...(inject !== undefined ? { inject } : {}),
-    reviewEveryTurns: intOf(r.reviewEveryTurns, d.reviewEveryTurns, 1, 100),
     maxReviewsPerSession: intOf(r.maxReviewsPerSession, d.maxReviewsPerSession, 0, 20),
     learnWindowMinutes: intOf(r.learnWindowMinutes, d.learnWindowMinutes, NOTE_RATE_MINUTES_MIN, NOTE_RATE_MINUTES_MAX),
     maxLearnsPerWindow: intOf(r.maxLearnsPerWindow, d.maxLearnsPerWindow, NOTE_RATE_NOTES_MIN, NOTE_RATE_NOTES_MAX),
@@ -314,8 +311,7 @@ export function normalizeOverrides(raw: any): EvolutionOverrides {
   else if (legacy !== undefined) out.learnWorkspace = legacy.workspace
   if (typeof r.autoConfirm === 'boolean') out.autoConfirm = r.autoConfirm
   if (typeof r.inject === 'boolean') out.inject = r.inject
-  if (typeof r.reviewEveryTurns === 'number' && Number.isFinite(r.reviewEveryTurns)) out.reviewEveryTurns = intOf(r.reviewEveryTurns, 8, 1, 100)
-  if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, 2, 0, 20)
+  if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, DEFAULT_EVOLUTION_SETTINGS.maxReviewsPerSession, 0, 20)
   if (typeof r.learnWindowMinutes === 'number' && Number.isFinite(r.learnWindowMinutes)) out.learnWindowMinutes = intOf(r.learnWindowMinutes, NOTE_RATE_DEFAULTS.minutes, NOTE_RATE_MINUTES_MIN, NOTE_RATE_MINUTES_MAX)
   if (typeof r.maxLearnsPerWindow === 'number' && Number.isFinite(r.maxLearnsPerWindow)) out.maxLearnsPerWindow = intOf(r.maxLearnsPerWindow, NOTE_RATE_DEFAULTS.notes, NOTE_RATE_NOTES_MIN, NOTE_RATE_NOTES_MAX)
   if (typeof r.model === 'string') out.model = r.model
@@ -370,7 +366,6 @@ export function resolveEffectiveConfig(
     autoConfirm: pick('autoConfirm') ?? global.autoConfirm,
     enabled,
     inject: injectRaw === undefined ? enabled : (enabled && injectRaw),
-    reviewEveryTurns: pick('reviewEveryTurns') ?? global.reviewEveryTurns,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,
     learnWindowMinutes: pick('learnWindowMinutes') ?? global.learnWindowMinutes,
     maxLearnsPerWindow: pick('maxLearnsPerWindow') ?? global.maxLearnsPerWindow,

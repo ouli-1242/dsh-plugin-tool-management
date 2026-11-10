@@ -57,10 +57,10 @@ import {
 import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
 // 自主记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
-import { createEvolutionConfig, noteStyleLineOf, workspaceHashOf } from './evolution/config.js'
+import { createEvolutionConfig, DEFAULT_EVOLUTION_SETTINGS, noteStyleLineOf, workspaceHashOf } from './evolution/config.js'
 // 注入热路径的同步视图（`agent/pre-step` 的 text() 没有 await 的位置）。
 import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoIncrementalModeKey, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
-// 冷路径：轮内摘要 → 回合封存 episode → outbox → 异步复习器（不挡主链）。
+// 冷路径：官方压缩事件 → episode → outbox → 异步复习器（不挡主链）。
 import { attachColdPath } from './evolution/cold.js'
 import { createEpisodeStore } from './evolution/episodes.js'
 import { createReviewBudget, createReviewer } from './evolution/review.js'
@@ -4744,7 +4744,7 @@ export default {
     const reviewBudget = createReviewBudget({
       path: join(memoriesService.autoAccess.stateDir, 'evolution/reviews.json'),
       // 上限从默认配置取；每题的实际值在 review 里按 cfg 再判一次（用户可能调过）。
-      max: 2,
+      max: DEFAULT_EVOLUTION_SETTINGS.maxReviewsPerSession,
       message,
     })
     const reviewer = createReviewer({

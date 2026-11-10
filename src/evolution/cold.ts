@@ -1,16 +1,20 @@
-// 冷路径的接线：把 `session/event` 与 `turn/end` 接到 digest → episode → outbox → 复习器。
+// 冷路径的接线：把官方 `compaction/summary` 接到 episode → outbox → 复习器。
 //
-// 这一层只做"什么时候做什么"，判断都在 digest / episodes / review 里。三个原则：
+// 这一层只做"什么时候做什么"，判断都在 episodes / review 里。三个原则：
 //
 //   1. **事件钩子绝不抛**。它跑在宿主的会话主链上，抛一次就是用户的一轮对话崩掉。
 //      所有分支都包在 try/catch 里，失败只写日志。
-//   2. **不阻塞 turn/end**。复习是异步的：`turn/end` 的处理器同步返回，模型调用在
+//   2. **不阻塞压缩**。复习是异步的：`compaction/summary` 的处理器同步返回，模型调用在
 //      后台跑。用户等的是下一句话，不是我们的记忆整理。
 //   3. **每会话串行**。同一会话的两轮复习并发跑会撞 state 写锁（那是全局锁，会互相拖慢），
 //      也会让两条相似的记忆互相看不见、各写一份。一个会话一条 promise 链。
+//
+// 为什么只在压缩时复习：宿主已经把整段对话交给模型提炼成一份结构化 checkpoint，那是
+// 信息密度最高、且已经付过钱的产物。按轮次自己攒几条用户消息 / 工具结果再读一遍，既
+// 重复劳动又容易把关键话挤掉。没触发压缩就不复习 —— 热路径 `memory_note` 负责当场记。
 
-import { textOfMessage, captureUserTexts, isGenuineUserMessage } from './evidence.js'
-import { createDigestStore, episodeOf, reviewDecision, type DigestStore } from './digest.js'
+import { captureUserTexts, isGenuineUserMessage, textOfMessage } from './evidence.js'
+import { checkpointEpisodeOf } from './digest.js'
 import type { EpisodeStore, OutboxItem } from './episodes.js'
 import type { EffectiveEvolutionConfig } from './config.js'
 import { outboxFailed, type createReviewer } from './review.js'
@@ -18,7 +22,7 @@ import { outboxFailed, type createReviewer } from './review.js'
 export interface ColdPathDeps {
   /** 每会话的生效配置（异步：要读三级开关文件）。 */
   effectiveOf(sessionId: string, cwd: string | undefined): Promise<EffectiveEvolutionConfig>
-  /** outbox 与 episodes（启动重放与轮末都走它）。 */
+  /** outbox 与 episodes（启动重放与压缩时都走它）。 */
   episodes: EpisodeStore
   reviewer: ReturnType<typeof createReviewer>
   /** cwd → 工作区 hash（与写入路由同一口径）。 */
@@ -30,21 +34,18 @@ export interface ColdPathDeps {
   /**
    * 复习结束后的钩子（P3 的每日整理挂在这里）。
    *
-   * 为什么挂在轮末而不是启动时：整理要调模型，而"用哪个模型"只有这一轮请求头知道。
-   * 启动时拿不到路由，只能赌一个默认模型 —— 学到的风格会和对话不一致。
-   * 钩子不 await、异常全吞：它跑在会话主链的尾巴上，慢一点可以，炸一次不行。
+   * 压缩时才有"这一轮请求用的模型"可参照；钩子不 await、异常全吞：它跑在会话主链的
+   * 尾巴上，慢一点可以，炸一次不行。
    */
   afterReview?(sessionId: string, cwd: string | undefined, cfg: EffectiveEvolutionConfig, route: { provider: string; model: string } | null): Promise<void>
 }
 
 export interface ColdPathHandle {
-  digests: DigestStore
-  /** `turn/start`：记下当前轮次（`user/message` 不带 turn）。 */
-  noteTurn(sessionId: string, turn: number): void
-  currentTurn(sessionId: string): number
   /** `request/header`：记下这一轮用的模型路由（复习默认用它）。 */
   noteRoute(sessionId: string, route: { provider: string; model: string }): void
   routeOf(sessionId: string): { provider: string; model: string } | null
+  /** 官方压缩事件：落 episode、入队、异步复习。 */
+  compactionSummary(sessionId: string, seq: number, summary: unknown, cwd?: string): Promise<void>
   /** 启动时重放：把 pending / failed 且没过重试上限的项跑一遍。 */
   replay(): Promise<{ attempted: number; done: number; failed: number }>
   /** 手动触发（界面「立即复习」/ 测试）。 */
@@ -55,17 +56,39 @@ export interface ColdPathHandle {
   queue(): Promise<OutboxItem[]>
   /** 手动重试一条（含 dead-letter 里的）：用户明确要求时才把计数清零。 */
   retry(id: string): Promise<{ ok: boolean; session?: string }>
-  /** 轮末入口：封存 digest → episode → outbox，然后异步复习。 */
-  turnEnd(sessionId: string, turn: number, cwd?: string): Promise<void>
 }
 
 /** 一次复习取几条（按 turn 升序）。 */
 const BATCH = 3
 
+/** checkpoint 纯文本的字节上限：它已经是一份摘要，再长就该截断，不能撑爆复习提示。 */
+export const MAX_CHECKPOINT_BYTES = 12_000
+
+/** 官方 `compaction/summary` 的 `data.summary`：只取 text 块拼成纯文本。 */
+export function checkpointTextOf(summary: unknown): string {
+  if (!Array.isArray(summary)) return ''
+  const parts: string[] = []
+  for (const block of summary) {
+    if (!block || typeof block !== 'object') continue
+    const b = block as { type?: unknown; text?: unknown }
+    if (b.type !== 'text' || typeof b.text !== 'string') continue
+    parts.push(b.text)
+  }
+  const text = parts.join('\n').trim()
+  if (Buffer.byteLength(text, 'utf8') <= MAX_CHECKPOINT_BYTES) return text
+  // 按字符截，不按字节切：中文 / emoji 被切半个会变成乱码。
+  let out = ''
+  let bytes = 0
+  for (const ch of text) {
+    const size = Buffer.byteLength(ch, 'utf8')
+    if (bytes + size > MAX_CHECKPOINT_BYTES) break
+    out += ch
+    bytes += size
+  }
+  return out
+}
+
 export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
-  const digests = createDigestStore()
-  /** 每个会话当前的 turn（`user/message` 不带 turn，只能跟 `turn/start`）。 */
-  const currentTurn = new Map<string, number>()
   /** 每会话一条串行链。 */
   const chains = new Map<string, Promise<void>>()
   /** 最近一次请求头里的模型路由。 */
@@ -94,13 +117,13 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
       })
       return 'done'
     }
-    // 这几类重试没有意义：预算用光、拿不到模型、输出不是 JSON（模型已经跑偏）。
-    // 标 done + reason，让它们从队列里消失，但在 episode 与日志里留痕。
-    if (out.reason === 'budget' || out.reason === 'no-model' || out.reason === 'no-llm' || out.reason === 'bad-json') {
-      await deps.episodes.mark(item, { status: 'done', reason: out.reason })
+    // 名额用尽是终态；拿不到模型 / 输出坏 JSON 是可恢复的环境问题，走退避重试，
+    // 但不占「成功学习次数」（见 review.ts 的预算口径）。
+    if (out.reason === 'budget') {
+      await deps.episodes.mark(item, { status: 'done', reason: 'budget' })
       return 'done'
     }
-    await deps.episodes.mark(item, outboxFailed(item, out.error ?? 'review failed', clock()))
+    await deps.episodes.mark(item, outboxFailed(item, out.error ?? out.reason ?? 'review failed', clock()))
     return 'failed'
   }
 
@@ -129,73 +152,68 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
     return next
   }
 
-  async function onTurnEnd(sessionId: string, turn: number, cwd: string | undefined): Promise<EffectiveEvolutionConfig | null> {
-    const digest = digests.seal(sessionId, turn)
-    if (!digest) return null
+  /** 官方压缩事件落盘：先写 episode，再 append outbox，最后才调模型。 */
+  async function onCompaction(
+    sessionId: string,
+    seq: number,
+    checkpoint: string,
+    cwd: string | undefined,
+  ): Promise<EffectiveEvolutionConfig | null> {
+    if (checkpoint === '') return null
     const cfg = await deps.effectiveOf(sessionId, cwd)
     if (!cfg.enabled) return null
-    const decision = reviewDecision(digest, cfg.reviewEveryTurns)
-    if (!decision.review) {
-      await deps.log({ at: new Date().toISOString(), session: sessionId, turn, event: 'turn-skipped', reason: decision.reason })
-      return cfg
-    }
     const at = new Date().toISOString()
     const hash = cwd ? deps.workspaceHashOf(cwd) : undefined
-    const ep = episodeOf(digest, {
+    const ep = checkpointEpisodeOf({
       session: sessionId,
+      seq,
       at,
-      reason: decision.reason,
+      checkpoint,
       ...(cwd !== undefined ? { cwd } : {}),
       ...(hash !== undefined ? { workspaceHash: hash } : {}),
     })
     const written = await deps.episodes.write(ep)
     if (!written.ok) {
-      // 宁可这轮不学，也不要产生指向空文件的队列项。
-      await deps.log({ at, session: sessionId, turn, event: 'episode-write-failed', error: written.error })
+      // 宁可这次不学，也不要产生指向空文件的队列项。
+      await deps.log({ at, session: sessionId, seq, event: 'episode-write-failed', error: written.error })
       return cfg
     }
-    const item = await deps.episodes.enqueue({ id: ep.id, session: sessionId, turn, at, path: written.path })
+    const item = await deps.episodes.enqueue({ id: ep.id, session: sessionId, turn: ep.turn, at, path: written.path })
     if (!item) {
-      await deps.log({ at, session: sessionId, turn, event: 'outbox-write-failed' })
+      await deps.log({ at, session: sessionId, seq, event: 'outbox-write-failed' })
       return cfg
     }
-    await deps.log({ at, session: sessionId, turn, event: 'queued', reason: decision.reason, signals: decision.signals })
+    await deps.log({ at, session: sessionId, seq, event: 'queued', reason: 'compaction' })
     return cfg
   }
 
-  // 轮末：先封存 episode 与 outbox，再异步复习。不 await —— 见文件头第 2 条。
-  async function handleTurnEnd(sessionId: string, turn: number, cwd: string | undefined): Promise<void> {
+  async function handleCompaction(
+    sessionId: string,
+    seq: number,
+    summary: unknown,
+    cwd: string | undefined,
+  ): Promise<void> {
     try {
-      const cfg = await onTurnEnd(sessionId, turn, cwd)
+      const cfg = await onCompaction(sessionId, seq, checkpointTextOf(summary), cwd)
       await schedule(sessionId)
-      // 整理钩子放在复习之后：它要看的是"这一轮学完之后"的库。
+      // 整理钩子放在复习之后：它要看的是"这次学完之后"的库。
       if (cfg && deps.afterReview) {
         void deps.afterReview(sessionId, cwd, cfg, routeOf(sessionId))
-          .catch((e) => deps.log({ at: new Date().toISOString(), session: sessionId, turn, event: 'after-review-failed', error: deps.message(e) }).then(() => undefined))
+          .catch((e) => deps.log({ at: new Date().toISOString(), session: sessionId, seq, event: 'after-review-failed', error: deps.message(e) }).then(() => undefined))
       }
     } catch (e) {
-      await deps.log({ at: new Date().toISOString(), session: sessionId, turn, event: 'turn-end-failed', error: deps.message(e) }).catch(() => undefined)
+      await deps.log({ at: new Date().toISOString(), session: sessionId, seq, event: 'compaction-failed', error: deps.message(e) }).catch(() => undefined)
     }
   }
 
   return {
-    digests,
-
-    turnEnd: handleTurnEnd,
-
-    noteTurn(sessionId, turn) {
-      if (sessionId !== '' && Number.isFinite(turn)) currentTurn.set(sessionId, Math.floor(turn))
-    },
-
-    currentTurn(sessionId) {
-      return currentTurn.get(sessionId) ?? 0
-    },
-
     noteRoute(sessionId, route) {
       if (sessionId !== '' && route.provider !== '' && route.model !== '') routes.set(sessionId, route)
     },
 
     routeOf,
+
+    compactionSummary: handleCompaction,
 
     async replay() {
       const all = await deps.episodes.list()
@@ -247,7 +265,6 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
       return { ok: true, session: hit.session }
     },
   }
-
 }
 
 /**
@@ -276,39 +293,13 @@ export function attachColdPath(
       const type = String(event.type ?? '')
       const data = event.data || {}
       switch (type) {
-        case 'turn/start': {
-          const turn = Number(data.turn)
-          if (Number.isFinite(turn)) cold.noteTurn(sid, turn)
-          break
-        }
         case 'user/message': {
-          // 只收真人输入：`kind === 'user'` 才是用户自己打的字（`user` / `user-rpc` 两种源
-          // 都是这个 kind）；`runtime-context` / `tool-registry` / `system-reminder` 那些是
-          // 各插件注入的合成消息。摘要在"用户说了什么"这件事上不能比证据门更宽松。
+          // 真人原话继续喂证据缓存：热路径 `memory_note` 声明 user_explicit 时，
+          // 证据门要逐字核对这句是不是用户真的说过。
           if (!isGenuineUserMessage(data)) break
           const text = textOfMessage(data).trim()
           if (text === '') break
-          cold.digests.capture(sid, cold.currentTurn(sid), { kind: 'user', text })
-          // 证据门要逐字核对；这里顺手喂一份，热路径的 learn 与冷路径的复习都能查到。
-          captureUserTexts(sid, [data])
-          break
-        }
-        case 'tool/call': {
-          const turn = Number(data.turn)
-          cold.digests.noteToolCall(sid, Number.isFinite(turn) ? turn : cold.currentTurn(sid), String(data.callId ?? ''), String(data.name ?? ''))
-          break
-        }
-        case 'tool/result': {
-          const m = data.message
-          const callId = m?.source && typeof m.source === 'object' ? String(m.source.callId ?? '') : ''
-          const turn = Number(data.turn)
-          const useTurn = Number.isFinite(turn) ? turn : cold.currentTurn(sid)
-          cold.digests.capture(sid, useTurn, {
-            kind: 'tool',
-            tool: cold.digests.toolNameOf(sid, useTurn, callId),
-            ok: m?.isError !== true,
-            text: textOfMessage(m).trim(),
-          })
+          captureUserTexts(sid, [{ ...data, role: 'user' }])
           break
         }
         case 'request/header': {
@@ -318,18 +309,12 @@ export function attachColdPath(
           }
           break
         }
-        case 'turn/end': {
-          const turn = Number(data.turn)
-          if (!Number.isFinite(turn)) return
-          const reasonKind = data.reason && typeof data.reason === 'object' ? String(data.reason.kind ?? '') : ''
-          if (reasonKind !== 'completed') {
-            // 取消 / 出错的一轮没有"发生了什么"的完整叙述，不复习；digest 也丢掉。
-            cold.digests.drop(sid, turn)
-            return
-          }
+        case 'compaction/summary': {
+          const seq = Number(event.seq)
+          if (!Number.isFinite(seq)) return
           const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : undefined
-          // 不 await：turn/end 的处理器必须同步返回，复习在后台跑。
-          void cold.turnEnd(sid, turn, cwd)
+          // 不 await：压缩的处理器必须同步返回，复习在后台跑。
+          void cold.compactionSummary(sid, seq, data.summary, cwd)
           break
         }
         default:

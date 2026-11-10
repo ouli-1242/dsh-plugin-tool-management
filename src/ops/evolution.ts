@@ -195,7 +195,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         else if (typeof patch.enabled === 'boolean') next.learnWorkspace = patch.enabled
         if (typeof patch.autoConfirm === 'boolean') next.autoConfirm = patch.autoConfirm
         if (typeof patch.inject === 'boolean') next.inject = patch.inject
-        if (typeof patch.reviewEveryTurns === 'number') next.reviewEveryTurns = patch.reviewEveryTurns
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession
         // 学习频率：窗口分钟数与每窗口条数；`null` = 回出厂值（空框语义）。
         // 越界值由 `normalizeEvolutionSettings` 统一夹取，这里不写第二份判据。

@@ -88,10 +88,12 @@ test('旧配置迁移：enabled + writeTarget 翻译成两个开关', () => {
 })
 
 test('坏值回退出厂值，不抛错', () => {
-  const s = normalizeEvolutionSettings({ learnGlobal: 'yes', learnWorkspace: 42, reviewEveryTurns: -3 })
+  const s = normalizeEvolutionSettings({ learnGlobal: 'yes', learnWorkspace: 42, maxReviewsPerSession: 'nope' })
   assert.equal(s.learnGlobal, G.learnGlobal)
   assert.equal(s.learnWorkspace, G.learnWorkspace)
-  assert.equal(s.reviewEveryTurns, 1) // 夹到下限
+  assert.equal(s.maxReviewsPerSession, 5)
+  // 合法但越界的值夹到下限 0（0 = 不复习，不是坏值）。
+  assert.equal(normalizeEvolutionSettings({ maxReviewsPerSession: -3 }).maxReviewsPerSession, 0)
 })
 
 test('layerOfGroup：保留组按前缀判，其余都是场景层', () => {
