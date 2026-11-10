@@ -4545,6 +4545,24 @@ export default {
           return undefined
         }
       },
+      // 未登记的工作区从宿主会话反查：`workspaceMemoryKeyOf` 与学习时同一口径
+      // （先收敛到 git 根），否则从子目录启动的会话会算成另一个工作区。
+      workspaceKeysOfHashes: async (hashes: string[]) => {
+        const wanted = new Set(hashes.map((h) => String(h)))
+        const out: Record<string, string> = {}
+        if (wanted.size === 0) return out
+        try {
+          const rows = await scopeSessionRows()
+          for (const row of rows) {
+            if (typeof row.cwd !== 'string' || row.cwd === '') continue
+            const key = workspaceMemoryKeyOf(row.cwd)
+            if (key === undefined) continue
+            const hash = workspaceHashOf(key)
+            if (wanted.has(hash) && out[hash] === undefined) out[hash] = key
+          }
+        } catch { /* 反查失败：列表按 hash 短码兜底 */ }
+        return out
+      },
       cold: () => coldHandle,
       sweep: async (opts) => {
         if (!sweepRunner) throw new Error('maintenance is not wired yet')

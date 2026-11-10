@@ -15,7 +15,7 @@ import type { Learner } from '../evolution/write.js'
 import type { ColdPathHandle } from '../evolution/cold.js'
 import type { SweepReport } from '../evolution/maintenance.js'
 import { isInjectableStatus } from '../memories/catalog.js'
-import { workspaceMemoryKeyOf } from '../scope/workspace-key.js'
+import { workspaceCwdOfScopeKey, workspaceMemoryKeyOf } from '../scope/workspace-key.js'
 
 /**
  * 工作区显示名：取作用域键（`ws:<路径>`）的最后一段。
@@ -49,6 +49,14 @@ export interface EvolutionOpDeps {
    * 取不到就当作"没有工作区"：界面少一行工作区开关，好过写错层。
    */
   sessionCwd?(sessionId: string): Promise<string | undefined>
+  /**
+   * 未登记工作区的反查：hash → `ws:<路径>` 键。
+   *
+   * 旧笔记（以及卡片确认那条学习路径）可能没写 `evolution/workspaces.json`，
+   * 列表却要按工作区名称分节。装配层用宿主会话的 cwd 反查，口径与学习时一致
+   * （先收敛到 git 根再算 hash）；反查不到就按 hash 短码兜底。
+   */
+  workspaceKeysOfHashes?(hashes: string[]): Promise<Record<string, string>>
   /**
    * 冷路径句柄（后台复习队列）。
    *
@@ -619,6 +627,27 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             .filter(([, w]) => typeof w.missingAt === 'string' && w.missingAt !== '')
             .map(([hash]) => hash),
         )
+        // 没登记过的工作区（旧笔记 / 卡片确认早于登记逻辑）：按会话 cwd 反查名称，
+        // 顺手补登记。补完下一次列表就直接读记录，不必再枚举会话。
+        const unresolved = [...new Set(
+          Object.values(view.catalog.entries)
+            .filter((e: any) => e.layer === 'workspace' && e.workspace !== '' && view.workspaces.workspaces[e.workspace] === undefined)
+            .map((e: any) => String(e.workspace)),
+        )]
+        const resolvedLabels: Record<string, string> = {}
+        if (unresolved.length > 0 && deps.workspaceKeysOfHashes) {
+          try {
+            const keys = await deps.workspaceKeysOfHashes(unresolved)
+            for (const [hash, key] of Object.entries(keys || {})) {
+              if (typeof key !== 'string' || key === '') continue
+              const label = workspaceLabelOfPath(key)
+              resolvedLabels[hash] = label
+              try {
+                await config.writeWorkspace(key, workspaceCwdOfScopeKey(key) ?? '', label, undefined)
+              } catch { /* 补登记失败不影响本次显示 */ }
+            }
+          } catch { /* 反查失败就按 hash 短码兜底 */ }
+        }
         const rows: any[] = []
         for (const entry of Object.values(view.catalog.entries)) {
           if (layerFilter && entry.layer !== layerFilter) continue
@@ -651,11 +680,15 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             injects: entry.enabled && isInjectableStatus(entry.status),
             tokens: entry.estTokens,
             workspace: entry.workspace,
-            ...(wsRecord !== undefined ? {
-              workspaceLabel: typeof wsRecord.label === 'string' && wsRecord.label !== ''
-                ? wsRecord.label
-                : workspaceLabelOfPath(wsRecord.key),
-            } : {}),
+            ...(wsRecord !== undefined
+              ? {
+                  workspaceLabel: typeof wsRecord.label === 'string' && wsRecord.label !== ''
+                    ? wsRecord.label
+                    : workspaceLabelOfPath(wsRecord.key),
+                }
+              : resolvedLabels[String(entry.workspace)] !== undefined
+                ? { workspaceLabel: resolvedLabels[String(entry.workspace)] }
+                : {}),
             scene: entry.scene,
             session: entry.session,
             ...(entry.layer === 'workspace' && entry.workspace !== '' && missingWs.has(entry.workspace) ? { wsMissing: true } : {}),

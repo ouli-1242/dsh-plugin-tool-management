@@ -4907,6 +4907,44 @@ test('拨动自主记忆开关会通知模型侧立刻重排工具表', async ()
   assert.equal(notified, 2)
 })
 
+test('未登记的工作区按会话 cwd 反查名称并补登记', async () => {
+  const written = []
+  const hash = '8fce1e9335ad60c8'
+  const key = 'ws:c:\\users\\ouli\\desktop\\demo\\暂时没想好'
+  const ops = buildEvolutionOps({
+    config: {
+      writeWorkspace: async (scopeKey, cwd, label) => { written.push({ key: scopeKey, cwd, label }); return { ok: true, hash } },
+    },
+    runtime: {
+      invalidate() {},
+      view: () => ({
+        catalog: {
+          entries: {
+            [`_ws/${hash}/测试`]: {
+              id: `_ws/${hash}/测试`, layer: 'workspace', workspace: hash, scene: '', session: '',
+              kind: 'fact', key: '测试', status: 'active', oneLine: '测试', estTokens: 1,
+              confidence: 0.85, pinned: false, enabled: true,
+            },
+          },
+        },
+        workspaces: { workspaces: {} },
+        state: { entries: {} },
+        settings: {},
+        broken: [],
+      }),
+    },
+    workspaceKeysOfHashes: async (hashes) => {
+      assert.deepEqual(hashes, [hash])
+      return { [hash]: key }
+    },
+    message: (e) => String(e),
+  })
+  const res = await ops['evolution-list']({})
+  assert.equal(res.ok, true)
+  assert.equal(res.entries[0].workspaceLabel, '暂时没想好')
+  assert.deepEqual(written, [{ key, cwd: 'c:\\users\\ouli\\desktop\\demo\\暂时没想好', label: '暂时没想好' }])
+})
+
 test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器级写入才拦', () => {
   const asks = (name, args, mode = 'session') => argConditionalConfirmReason(name, args, mode) !== null
   // 删除：trash 才是删除；list 是读、restore 是恢复（与 restart 同一档，不该拦）
