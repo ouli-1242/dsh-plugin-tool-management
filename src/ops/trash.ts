@@ -150,7 +150,19 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     } catch {
       return { ok: true, entries: [] } // 目录不存在 = 回收站为空
     }
-    const entries: Array<{ trashId: string; group: string; name: string; form: 'flat' | 'bundle'; deletedAt: string; bytes: number }> = []
+    const entries: Array<{
+      trashId: string
+      group: string
+      name: string
+      form: 'flat' | 'bundle'
+      deletedAt: string
+      bytes: number
+      /** 自动记忆的停用副本：界面据此分派恢复 / 永久删除到 `evolution-*`。 */
+      auto?: true
+      autoId?: string
+      autoLayer?: string
+      autoStatus?: string
+    }> = []
     for (const trashId of ids) {
       if (!isValidTrashId(trashId)) continue
       const dir = join(root, trashId)
@@ -174,7 +186,19 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
             try { bytes = (await stat(join(dir, 'bundle', LEGACY_BUNDLE_DOC))).size } catch { /* 内容缺失 */ }
           }
         }
-        entries.push({ trashId, group, name: manifest.name, form, deletedAt: String(manifest.deletedAt || ''), bytes })
+        const auto = manifest.auto === true
+        entries.push({
+          trashId,
+          group,
+          name: manifest.name,
+          form,
+          deletedAt: String(manifest.deletedAt || ''),
+          bytes,
+          ...(auto ? { auto: true as const } : {}),
+          ...(auto && typeof manifest.autoId === 'string' ? { autoId: manifest.autoId } : {}),
+          ...(auto && typeof manifest.autoLayer === 'string' ? { autoLayer: manifest.autoLayer } : {}),
+          ...(auto && typeof manifest.autoStatus === 'string' ? { autoStatus: manifest.autoStatus } : {}),
+        })
       } catch { /* 损坏条目跳过 */ }
     }
     entries.sort((a, b) => (a.deletedAt === b.deletedAt ? b.trashId.localeCompare(a.trashId) : b.deletedAt.localeCompare(a.deletedAt)))

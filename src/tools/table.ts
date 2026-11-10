@@ -204,7 +204,9 @@ function normalizePresetList(list: unknown): ToolTablePreset[] {
     const name = raw.name.trim().slice(0, PRESET_NAME_MAX_LENGTH)
     if (name === '' || !Array.isArray(raw.hidden)) continue
     if (out.some((p) => p.name === name)) continue
-    out.push({ name, hidden: normalizeNameList(raw.hidden) })
+    // 方案不保存自主记忆那条工具：它只跟两个开关走（见 normalizeProactiveToolHidden）。
+    // 旧方案里残留的名字读出来就过滤掉，应用时也不会被它影响。
+    out.push({ name, hidden: normalizeNameList(raw.hidden).filter((n) => n !== PROACTIVE_MEMORY_TOOL) })
     if (out.length >= PRESET_MAX_COUNT) break
   }
   return out
@@ -303,7 +305,13 @@ export function migrateLegacyToolNames(settings: ToolTableSettings): { settings:
 export function addPreset(settings: ToolTableSettings, name: string, hidden: readonly string[]): { settings: ToolTableSettings; exists: boolean } {
   if (settings.presets.some((p) => p.name === name)) return { settings, exists: true }
   return {
-    settings: { hidden: settings.hidden, presets: settings.presets.concat([{ name, hidden: normalizeNameList(hidden) }]) },
+    settings: {
+      hidden: settings.hidden,
+      presets: settings.presets.concat([{
+        name,
+        hidden: normalizeNameList(hidden).filter((n) => n !== PROACTIVE_MEMORY_TOOL),
+      }]),
+    },
     exists: false,
   }
 }

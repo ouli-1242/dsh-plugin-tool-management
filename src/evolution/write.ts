@@ -11,7 +11,7 @@
 //   改 op 的语义会动到用户手写那条路；所以这里直接做底层六步，共用 `serializeRuleFile`
 //   与 `writeFileAtomically`，把差异限制在本文件内。
 
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { hubPath } from '../hub.js'
@@ -21,7 +21,10 @@ import {
   GLOBAL_SCENE, LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE,
   isValidGroupPath, isValidGroupSegment, type MemoryLayer,
 } from '../memories/constants.js'
-import { trashAutoNote } from './notes.js'
+import {
+  archiveAutoNote, dropAutoTrashEntry, findAutoTrashByNoteId, readAutoTrashManifest,
+  restoreAutoNoteFromTrash, trashAutoNote,
+} from './notes.js'
 import { layerOfGroup } from '../memories/constants.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
 import type { EffectiveEvolutionConfig } from './config.js'
@@ -890,7 +893,25 @@ export function createLearner(deps: LearnDeps) {
       try {
         text = await readFile(docPath, 'utf8')
       } catch {
-        return { ok: false, code: 'missing', error: `not found: ${id}` }
+        // 停用的条目正文仍在原地（回收站里是副本），所以「文件不在」只可能是：
+        // 旧版把正文搬走了，或用户手删了。恢复时先试回收站副本，让维护扫描的
+        // 「工作区目录回来 → 恢复记忆」不会因为文件位置变化而失效。
+        if (status === 'active') {
+          const trashId = await findAutoTrashByNoteId(deps.stateDir, id)
+          if (trashId !== null) {
+            const restored = await restoreAutoNoteFromTrash(notesRoot, deps.stateDir, trashId)
+            if (!restored.ok) return { ok: false, code: restored.code, error: restored.error }
+            try {
+              text = await readFile(docPath, 'utf8')
+            } catch {
+              return { ok: false, code: 'missing', error: `not found: ${id}` }
+            }
+          } else {
+            return { ok: false, code: 'missing', error: `not found: ${id}` }
+          }
+        } else {
+          return { ok: false, code: 'missing', error: `not found: ${id}` }
+        }
       }
       const current = pickField(text, 'auto_status') || 'active'
       if (current === 'superseded') {
@@ -923,7 +944,17 @@ export function createLearner(deps: LearnDeps) {
           await patchCatalogEntry(id, { status, enabled: status !== 'archived', confidence: entry.confidence ?? 0 })
           deps.invalidateSnapshot()
         }
+        // 旧版本停用的条目没有回收站副本：这里补一份，让它们也能在统一回收站里恢复。
+        if (status === 'archived') await archiveAutoNote(notesRoot, deps.stateDir, id, layer)
         return { ok: true, id, layer, status, confidence: entry.confidence ?? 0, unchanged: true }
+      }
+      // 停用先复制进统一回收站；复制失败就拒绝这次状态变更，别留下「已归档但回收站里没有」
+      // 的半截状态。正文仍在原地（archived），维护扫描的按 id 恢复不受影响。
+      if (status === 'archived') {
+        const trashId = await archiveAutoNote(notesRoot, deps.stateDir, id, layer)
+        if (trashId === null) {
+          return { ok: false, code: 'trash-failed', error: 'could not copy this note into the recycle bin; nothing was changed' }
+        }
       }
       await writeFileAtomically(docPath, rewriteFrontmatterFields(text, { auto_status: status, auto_updated: nowIso }))
       pushTransition(
@@ -949,6 +980,11 @@ export function createLearner(deps: LearnDeps) {
         enabled: status !== 'archived',
         ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
       })
+      // 恢复成功 = 回收站里那份副本完成了使命；不删会在回收站里留下一条「已恢复」的幽灵。
+      if (status === 'active') {
+        const trashId = await findAutoTrashByNoteId(deps.stateDir, id)
+        if (trashId !== null) await dropAutoTrashEntry(deps.stateDir, trashId)
+      }
       deps.invalidateSnapshot()
       return { ok: true, id, layer, status, confidence: entry.confidence ?? 0 }
     })
@@ -1216,7 +1252,43 @@ export function createLearner(deps: LearnDeps) {
     })
   }
 
-  return { learn, preview, forget, approve, setStatus, promote, organize, applyOrganize, describe, noteInjected, noteRead }
+  /**
+   * 从统一回收站恢复一条自动记忆。
+   *
+   * 走 `setStatus(active)`：文件还在原地时直接激活并删掉回收站副本；文件被旧版搬走时
+   * `setStatus` 会先按 id 找到副本还原。两条路共用同一套证据升级与 catalog 更新。
+   */
+  async function restoreFromTrash(trashId: string): Promise<LearnResult> {
+    const manifest = await readAutoTrashManifest(deps.stateDir, trashId)
+    if (manifest === null) {
+      return { ok: false, code: 'missing', error: 'recycle-bin entry not found or not an autonomous note' }
+    }
+    return (await setStatus(manifest.autoId, 'active', 'user')) as LearnResult
+  }
+
+  /**
+   * 永久删除一条回收站里的自动记忆。
+   *
+   * 复用 `forget` 写墓碑、清 state、停索引；再删掉原地那份正文与回收站副本。
+   * 不走 `forget` 的 `remove` 回调：那条路会把正文移进 `evolution/trash`，对「永久删除」
+   * 只是换了个隐藏位置，用户以为清掉了、磁盘上还留着一份。
+   */
+  async function purgeTrash(trashId: string): Promise<LearnResult> {
+    const manifest = await readAutoTrashManifest(deps.stateDir, trashId)
+    if (manifest === null) {
+      return { ok: false, code: 'missing', error: 'recycle-bin entry not found or not an autonomous note' }
+    }
+    const result = await forget(manifest.autoId, { actor: 'user' })
+    if (!result.ok) return result
+    await rm(join(notesRoot, manifest.group, manifest.name + '.md'), { force: true }).catch(() => undefined)
+    await dropAutoTrashEntry(deps.stateDir, trashId)
+    return result as LearnResult
+  }
+
+  return {
+    learn, preview, forget, approve, setStatus, promote, organize, applyOrganize, describe,
+    restoreFromTrash, purgeTrash, noteInjected, noteRead,
+  }
 }
 
 /**

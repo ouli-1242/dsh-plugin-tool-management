@@ -313,7 +313,10 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     return {
       ok: true, hidden, presets: value.presets,
       forcedVisible: forcedVisible(), forcedHidden: forcedHidden(),
-      defaultHidden: [...DEFAULT_HIDDEN_TOOLS], report: toolTableReport(hidden),
+      // 出厂名单里那条自主记忆工具不进「方案」口径：它只跟两个开关走，恢复出厂时由
+      // normalizeProactiveToolHidden 按当前开关补回。界面「出厂默认关 N 条」也据此计数。
+      defaultHidden: DEFAULT_HIDDEN_TOOLS.filter((n) => n !== PROACTIVE_MEMORY_TOOL),
+      report: toolTableReport(hidden),
       // 侧车状态随每次读回传：界面据此禁用开关并说明原因（unknown 时保存会被服务端拒绝）。
       state: toolTableStateValue, issue: toolTableIssueValue,
     }

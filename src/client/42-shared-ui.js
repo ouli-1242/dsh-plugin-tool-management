@@ -1161,6 +1161,14 @@ function enabledMemoryCount(rules) {
         return t(res && res.renamed === true ? 'done.restoredAs' : 'done.restored', { name: name })
       }
       const memoryNote = function (item) {
+        // 自动记忆的停用副本：层是「全局 / 本工作区」，没有场景、也不是 bundle。
+        // 用「自动记忆」开头把它和用户手写记忆在同一组里区分开。
+        if (item.auto === true) {
+          return t('trash.auto.note', {
+            layer: t('evo.layer.' + (item.autoLayer === 'global' ? 'global' : 'workspace')),
+            time: item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '',
+          })
+        }
         return sceneLabel(sceneList, item.group) + ' · '
           + t('memory.form.' + (item.form === 'bundle' ? 'bundle' : 'flat')) + ' · '
           + item.bytes + ' B · '
@@ -1264,8 +1272,19 @@ function enabledMemoryCount(rules) {
           idOf: function (it) { return it.trashId },
           nameOf: function (it) { return it.name }, noteOf: memoryNote,
           dupKind: 'dup.kind.memory',
-          restore: function (it, dedupe) { return apiCall('rules-restore', { trashId: it.trashId, dedupe: dedupe === true }) },
-          purge: function (it) { return apiCall('rules-trash-remove', { trashId: it.trashId }) },
+          // 自动记忆的停用副本与用户手写记忆同住一个回收站目录，但恢复 / 永久删除的
+          // 落点完全不同：前者要回 `evolution/notes` 并改状态机，后者回 `memories/` 与索引。
+          // 按 manifest 的 `auto` 分派，不靠组名猜。
+          restore: function (it, dedupe) {
+            return it.auto === true
+              ? apiCall('evolution-restore', { trashId: it.trashId })
+              : apiCall('rules-restore', { trashId: it.trashId, dedupe: dedupe === true })
+          },
+          purge: function (it) {
+            return it.auto === true
+              ? apiCall('evolution-trash-remove', { trashId: it.trashId })
+              : apiCall('rules-trash-remove', { trashId: it.trashId })
+          },
           resultRestore: restoredText,
           resultPurge: function (it) { return t('memory.result.trashRemoved', { name: it.name }) },
         },

@@ -4323,7 +4323,8 @@ export default {
         forcedHidden: forcedHiddenToolsNow(),
         globalHidden: settings.hidden.slice(),
         presets: settings.presets,
-        defaultHidden: [...DEFAULT_HIDDEN_TOOLS],
+        // 与全局回包同口径：方案 / 出厂名单都不含自主记忆工具。
+        defaultHidden: DEFAULT_HIDDEN_TOOLS.filter((n) => n !== PROACTIVE_MEMORY_TOOL),
         report: toolTableReport(hidden),
         source,
         locked: scope?.locked === true,

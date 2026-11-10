@@ -400,6 +400,39 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       }
     },
 
+    /**
+     * 从统一回收站恢复一条停用的自动记忆。
+     *
+     * 只接受 `auto: true` 的条目：用户手写记忆走 `rules-restore`，两条路的落点与索引
+     * 完全不同，不能靠一个 op 猜。
+     */
+    'evolution-restore': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const trashId = String(args?.trashId ?? '')
+        if (trashId === '') return { ok: false, error: 'missing trashId', code: 'bad-args' }
+        const result = await learner.restoreFromTrash(trashId)
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'restore-failed' }
+      }
+    },
+
+    /** 永久删除回收站里的自动记忆：写墓碑、清 state、删正文与回收站副本。 */
+    'evolution-trash-remove': async (args: any) => {
+      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
+      try {
+        const trashId = String(args?.trashId ?? '')
+        if (trashId === '') return { ok: false, error: 'missing trashId', code: 'bad-args' }
+        const result = await learner.purgeTrash(trashId)
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'purge-failed' }
+      }
+    },
+
     /** 提升为用户记忆：从自动段移出，进用户记忆的注入与预算。 */
     'evolution-promote': async (args: any) => {
       if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }

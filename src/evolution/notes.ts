@@ -13,11 +13,12 @@
 // 旧版本留下的 `_session/<sid>/` 与场景层文件不删：迁进目标层并标成 archived，
 // 数据不丢、不注入，用户能在弹窗里看到它们。
 
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join, posix } from 'node:path'
-import { GLOBAL_SCENE, WORKSPACE_GROUP_PREFIX, isValidGroupPath } from '../memories/constants.js'
+import { GLOBAL_SCENE, MEMORIES_TRASH_DIR, WORKSPACE_GROUP_PREFIX, isValidGroupPath, type MemoryLayer } from '../memories/constants.js'
 import { parseSkillDoc } from '../skills/core.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
+import { newTrashId } from '../trash-id.js'
 
 /** hub 内相对目录（与 `evolution/state.json` 同一个 stateDir）。 */
 export const AUTO_NOTES_DIR = 'evolution/notes'
@@ -154,4 +155,146 @@ export async function trashAutoNote(autoRoot: string, stateDir: string, id: stri
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   await rename(src, join(dir, `${stamp}-${group.replaceAll('/', '_')}-${name}.md`))
   return true
+}
+
+/** 统一回收站里的自动记忆条目清单（`manifest.json` 的自动字段）。 */
+export interface AutoTrashManifest {
+  group: string
+  name: string
+  form: 'flat'
+  deletedAt: string
+  auto: true
+  autoId: string
+  autoLayer: MemoryLayer
+  autoStatus: 'archived'
+}
+
+const trashDirOf = (stateDir: string, trashId: string): string => join(stateDir, MEMORIES_TRASH_DIR, trashId)
+
+/** 读一条自动记忆回收站条目；不是自动条目 / 损坏 / 不存在都返回 null。 */
+export async function readAutoTrashManifest(stateDir: string, trashId: string): Promise<AutoTrashManifest | null> {
+  try {
+    const raw = JSON.parse(await readFile(join(trashDirOf(stateDir, trashId), 'manifest.json'), 'utf8'))
+    if (!raw || raw.auto !== true) return null
+    if (typeof raw.autoId !== 'string' || raw.autoId === '') return null
+    if (typeof raw.group !== 'string' || !isValidGroupPath(raw.group)) return null
+    if (typeof raw.name !== 'string' || raw.name === '') return null
+    if (raw.autoLayer !== 'global' && raw.autoLayer !== 'workspace') return null
+    return {
+      group: raw.group,
+      name: raw.name,
+      form: 'flat',
+      deletedAt: typeof raw.deletedAt === 'string' ? raw.deletedAt : '',
+      auto: true,
+      autoId: raw.autoId,
+      autoLayer: raw.autoLayer,
+      autoStatus: 'archived',
+    }
+  } catch {
+    return null
+  }
+}
+
+/** 按条目 id 找已有的自动回收站条目（重复停用不重复建）。 */
+export async function findAutoTrashByNoteId(stateDir: string, id: string): Promise<string | null> {
+  let ids: string[] = []
+  try {
+    ids = await readdir(join(stateDir, MEMORIES_TRASH_DIR))
+  } catch {
+    return null
+  }
+  for (const trashId of ids) {
+    const manifest = await readAutoTrashManifest(stateDir, trashId)
+    if (manifest !== null && manifest.autoId === id) return trashId
+  }
+  return null
+}
+
+/**
+ * 停用 = 复制一份进统一回收站（原文件保留为 archived）。
+ *
+ * 为什么是复制不是移动：维护扫描会在工作区目录回来时按 id 恢复条目，catalog 重建也要
+ * 能读到这条 archived 记录。移动会把「恢复」变成一条找不到文件的死路。永久删除由
+ * `purgeAutoTrash` 负责，会同时删掉原文件。
+ *
+ * 同一 id 已有条目时直接返回旧 trashId：重复停用（例如维护扫描与用户操作撞车）不该在
+ * 回收站里堆出第二份。
+ */
+export async function archiveAutoNote(
+  autoRoot: string,
+  stateDir: string,
+  id: string,
+  layer: MemoryLayer,
+): Promise<string | null> {
+  const slash = id.lastIndexOf('/')
+  if (slash <= 0) return null
+  const group = id.slice(0, slash)
+  const name = id.slice(slash + 1)
+  if (!isValidGroupPath(group) || name === '') return null
+  const src = join(autoRoot, group, `${name}.md`)
+  let text: string
+  try {
+    text = await readFile(src, 'utf8')
+  } catch {
+    return null
+  }
+  const existing = await findAutoTrashByNoteId(stateDir, id)
+  if (existing !== null) return existing
+  const trashId = newTrashId()
+  const dir = trashDirOf(stateDir, trashId)
+  const deletedAt = new Date().toISOString()
+  const manifest: AutoTrashManifest = {
+    group,
+    name,
+    form: 'flat',
+    deletedAt,
+    auto: true,
+    autoId: id,
+    autoLayer: layer,
+    autoStatus: 'archived',
+  }
+  try {
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+    await writeFile(
+      join(dir, 'rule.md'),
+      rewriteFrontmatterFields(text, { auto_status: 'archived', auto_updated: deletedAt }),
+      { encoding: 'utf8', mode: 0o600 },
+    )
+    return trashId
+  } catch {
+    // 半份条目比没有更糟：失败时清掉，让调用方拒绝这次归档。
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+    return null
+  }
+}
+
+/** 从回收站副本还原正文到独立库；目标已存在时拒绝（不覆盖正在用的条目）。 */
+export async function restoreAutoNoteFromTrash(
+  autoRoot: string,
+  stateDir: string,
+  trashId: string,
+): Promise<{ ok: true; manifest: AutoTrashManifest } | { ok: false; code: 'missing' | 'exists' | 'io'; error: string }> {
+  const manifest = await readAutoTrashManifest(stateDir, trashId)
+  if (manifest === null) return { ok: false, code: 'missing', error: 'recycle-bin entry not found or not an autonomous note' }
+  const dir = trashDirOf(stateDir, trashId)
+  const target = join(autoRoot, manifest.group, `${manifest.name}.md`)
+  if (await exists(target)) return { ok: false, code: 'exists', error: `a note with this id already exists: ${manifest.autoId}` }
+  try {
+    const text = await readFile(join(dir, 'rule.md'), 'utf8')
+    await mkdir(join(autoRoot, manifest.group), { recursive: true })
+    await writeFile(target, rewriteFrontmatterFields(text, {
+      auto_status: 'active',
+      auto_updated: new Date().toISOString(),
+    }), { encoding: 'utf8', mode: 0o600 })
+    await rm(dir, { recursive: true, force: true })
+    return { ok: true, manifest }
+  } catch (e) {
+    return { ok: false, code: 'io', error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** 删掉一条自动回收站条目（恢复 / 永久删除后调用）。 */
+export async function dropAutoTrashEntry(stateDir: string, trashId: string): Promise<void> {
+  await rm(trashDirOf(stateDir, trashId), { recursive: true, force: true })
 }

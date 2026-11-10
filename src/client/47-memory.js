@@ -748,9 +748,6 @@
           // 还要再开一层确认弹窗，共用一个槽会把自主记忆一起关掉。
           var eos = React.useState(false)
           var evoOpen = eos[0], setEvoOpen = eos[1]
-          // 已归档折叠区：key = 'auto-arch:<layer>'，true = 展开。
-          var eas = React.useState({})
-          var evoArchOpen = eas[0], setEvoArchOpen = eas[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -768,8 +765,8 @@
             var args = sid === '' ? {} : { sessionId: sid }
             Promise.all([
               apiCall('evolution-status', args),
-              // `all: true`：卡片自己分「待确认 / 生效 / 已归档」，停用的条目才能被恢复。
-              apiCall('evolution-list', { all: true }),
+              // 默认列表 = 待确认 + 生效；停用的条目已经进回收站，不在卡片里重复出现。
+              apiCall('evolution-list', {}),
               apiCall('evolution-queue', {}),
             ])
               .then(function (out) {
@@ -856,13 +853,13 @@
             }).catch(function (e) { setEvoBusy(false); setModal(null); setResult({ ok: false, text: errMsg(e) }) })
           }
 
-          /** 停用 / 启用。停用不删文件 —— 这是它与「删除」的区别，回执里要说清。 */
-          function setEvolutionStatus(id, enabled) {
+          /** 停用：条目进回收站、不再注入；恢复在记忆页的回收站里。 */
+          function disableEvolution(id) {
             setEvoBusy(true)
-            apiCall('evolution-set-status', { id: id, enabled: enabled, actor: 'user' }).then(function (res) {
+            apiCall('evolution-set-status', { id: id, enabled: false, actor: 'user' }).then(function (res) {
               setEvoBusy(false)
               if (res && res.ok !== false) {
-                setResult({ ok: true, text: t(enabled ? 'evo.enabled' : 'evo.disabled') })
+                setResult({ ok: true, text: t('evo.disabled') })
                 setEvoCache({})
                 refreshEvolution()
               } else setResult({ ok: false, text: translateError(t, res) })
@@ -954,12 +951,12 @@
           }
 
           /**
-           * 一行自动记忆。`archivedMode` = 来自卡片底部的「已归档」区，右侧给「恢复」。
+           * 一行自动记忆。
            *
            * 行上只留三样量值（用户 2026-11-10）：层、注入次数、token。状态用标签表达，
            * 候选行右侧一颗「确认」；停用 / 删除收进 ⋯ 菜单。
            */
-          function renderEvolutionRow(e, archivedMode) {
+          function renderEvolutionRow(e) {
             // core / playbook 是旧数据里仍可注入的两档，按「生效」显示，不标成待确认。
             var statusKey = e.status === 'core' ? 'evo.tag.core'
               : e.status === 'active' || e.status === 'playbook' ? 'evo.tag.active'
@@ -977,7 +974,7 @@
             if (e.wsMissing) metaBits.push(t('evo.ws.missing'))
             var menuItems = []
             if (e.status !== 'archived' && e.status !== 'superseded') {
-              menuItems.push({ key: 'disable', label: t('evo.disable'), disabled: evoBusy, onClick: function () { setEvolutionStatus(e.id, false) } })
+              menuItems.push({ key: 'disable', label: t('evo.disable'), disabled: evoBusy, onClick: function () { disableEvolution(e.id) } })
             }
             menuItems.push({ key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } })
             return React.createElement(ListRow, {
@@ -996,9 +993,7 @@
               extra: open ? renderEvolutionDetail(e) : null,
               side: pending
                 ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
-                : archivedMode
-                  ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { setEvolutionStatus(e.id, true) } }, t('evo.restore'))
-                  : null,
+                : null,
               actions: [React.createElement(RowMenu, {
                 key: 'menu',
                 label: t('evo.menu', { name: e.oneLine || e.id }),
@@ -1039,8 +1034,8 @@
            * 只是结构不同 —— 自主记忆分全局 / 工作区两层，不绑场景）。
            *
            * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
-           * 点行名展开详情，候选行右侧有「确认」，停用条收在卡底「已归档」里可恢复。
-           * 卡头右侧的「设置」开设置弹窗（总开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
+           * 点行名展开详情，候选行右侧有「确认」，停用的条目进记忆页的回收站。
+           * 卡头右侧的「设置」开设置弹窗（两层开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
            */
           function renderEvolutionCard(layerKey, titleKey) {
             var isWorkspace = layerKey === 'workspace'
@@ -1060,40 +1055,22 @@
                 return hay.toLowerCase().indexOf(q) >= 0
               })
             }
-            // 已取代是历史，不占列表；已归档单独收在卡底，可恢复。
+            // 已取代是历史，已归档在回收站，都不占列表。
             var live = rows.filter(function (e) { return e.status !== 'archived' && e.status !== 'superseded' })
-            var archived = rows.filter(function (e) { return e.status === 'archived' })
             // 关着且一条都没有 → 不渲染：空卡是噪音。开着但还没学到东西 → 留一张空卡，
             // 让用户知道「它开着，只是还没有内容」。
-            if (!layerOn && rows.length === 0) return null
+            if (!layerOn && live.length === 0) return null
             // 「启用 / 总数」与场景卡同一读法：生效（active/core/playbook）且没被停用的才算"开"。
             var onCount = live.filter(function (e) { return (e.status === 'active' || e.status === 'core' || e.status === 'playbook') && e.enabled !== false }).length
             // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
             var openFlag = collapsed['auto:' + layerKey]
             var baseOpen = openFlag === undefined ? layerOn : openFlag !== true
             var open = baseOpen || q !== ''
-            var archOpen = evoArchOpen[layerKey] === true
             var body = []
             if (live.length === 0) {
               body.push(React.createElement('div', { key: 'empty', className: 'dsm-empty' }, noWorkspace ? t('evo.empty.workspace') : t('evo.empty.on')))
             } else {
-              body = body.concat(live.map(function (e) { return renderEvolutionRow(e, false) }))
-            }
-            if (archived.length > 0) {
-              body.push(React.createElement('div', { key: 'arch', className: 'dsm-evo-archived' },
-                React.createElement('button', {
-                  type: 'button', className: 'dsm-btn dsm-btn-quiet',
-                  onClick: function () {
-                    setEvoArchOpen(function (cur) {
-                      var next = Object.assign({}, cur)
-                      next[layerKey] = !archOpen
-                      return next
-                    })
-                  },
-                }, t(archOpen ? 'evo.archived.hide' : 'evo.archived.toggle', { count: archived.length })),
-                archOpen
-                  ? React.createElement('div', { className: 'dsm-evo-archived-list' }, archived.map(function (e) { return renderEvolutionRow(e, true) }))
-                  : null))
+              body = body.concat(live.map(function (e) { return renderEvolutionRow(e) }))
             }
             // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
             return React.createElement('div', { key: 'auto:' + layerKey, className: 'dsm-source' + (layerOn ? '' : ' dsm-rule-off') },

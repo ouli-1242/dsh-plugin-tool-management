@@ -1604,7 +1604,10 @@
                       value: String(sceneForm.toolTablePreset || ''),
                       options: toolTablePresetOptions(),
                       onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { toolTablePreset: v })) },
-                    }))),
+                    }),
+                    // 自主记忆工具不随场景切换：场景管的是「当前这套环境」，自动记忆是
+                    // 跨场景的个人偏好，混进场景档案只会让用户以为换个场景就换了记忆。
+                    React.createElement('p', { className: 'dsm-help' }, t('scenes.field.toolTable.autoHint')))),
                 // （原先这里是「自定义」时就地展开的勾选段卡片，2026-10-12 用户「能不能设置成弹窗」
                 // 改为独立弹窗 —— 见下面的 quickPick 与 openQuickPick。）
                 // 四组 2×2（档案四段并入）：行选择 + 组内滚，组容器底色分层不画边框。

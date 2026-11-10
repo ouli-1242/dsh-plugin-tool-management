@@ -180,8 +180,6 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-name{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;word-break:break-word}
 .dsm-evo-name:hover{color:var(--dsw-alias-label-primary)}
 .dsm-evo-detail{display:flex;flex-direction:column;gap:4px;padding:4px 0 6px}
-.dsm-evo-archived{margin-top:8px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l3)}
-.dsm-evo-archived-list{margin-top:4px;opacity:.85}
 /* 键值两列的行：值那一格必须能收缩，否则 flex 的 min-width:auto 会把它顶成一行硬裁
    （用户 2026-11-10：内容被截断）——放开 min-width 后 word-break 接管换行。 */
 .dsm-evo-detail-row{display:flex;gap:8px;font-size:12px;line-height:17px}
