@@ -5,7 +5,7 @@
 // 但自己不依赖任何其它层的那一份。
 import type { PresetInjectionFacts } from './compat/preset-reach.js'
 
-/** 可注入的域（界面上的七个勾选，顺序即界面与消息顺序）。 */
+/** 可注入的域（界面上的六个勾选 —— 两块记忆共用一个；顺序即界面与消息顺序）。 */
 export type InjectDomainKey = 'scene' | 'memoryGlobal' | 'memoryWorkspace' | 'mcp' | 'skills' | 'subagents' | 'prompt'
 
 /**

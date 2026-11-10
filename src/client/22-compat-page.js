@@ -1402,23 +1402,37 @@
             // a11y：role=switch + aria-checked 挂在 chip 上（它就是一个开关，只是长成了标签的样子），
             // 键盘可聚焦、Enter/Space 由 button 语义自带。
             React.createElement('div', { key: 'domains', className: 'dsm-inject-domains' },
-              ['scene', 'memoryGlobal', 'memoryWorkspace', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
+              // 两块记忆在界面上只占一个「记忆」开关：工作区笔记不是用户要单独管的东西，
+              // 自主记忆的学习 / 注入层开关在记忆页签。这里只管"记忆这一域注不注入"，
+              // 点一下同时写 memoryGlobal / memoryWorkspace 两个内部域。
+              ['scene', 'memoryGlobal', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
                 // 技能与提示词两域在标准类预设下由宿主送、本插件让位 —— 关掉它们时本插件会连
                 // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
                 // 那两项一句 title，免得用户以为"关了没用"。
                 const carrier = key === 'skills' || key === 'prompt'
-                const on = domains[key] !== false
+                const memoryPair = key === 'memoryGlobal'
+                const on = memoryPair
+                  ? domains.memoryGlobal !== false && domains.memoryWorkspace !== false
+                  : domains[key] !== false
                 return React.createElement('button', {
                   key: 'domain-' + key,
                   type: 'button',
                   role: 'switch',
                   'aria-checked': on,
                   className: 'dsm-inject-chip' + (on ? ' dsm-inject-chip-on' : ''),
-                  title: carrier ? t('compat.inject.domain.carrier.title') : undefined,
+                  title: memoryPair
+                    ? t('compat.inject.domain.memory.title')
+                    : carrier ? t('compat.inject.domain.carrier.title') : undefined,
                   'aria-label': t('compat.inject.domain.' + key),
                   onClick: function () {
                     const nextDomains = Object.assign({}, domains)
-                    nextDomains[key] = domains[key] === false
+                    if (memoryPair) {
+                      const next = !on
+                      nextDomains.memoryGlobal = next
+                      nextDomains.memoryWorkspace = next
+                    } else {
+                      nextDomains[key] = domains[key] === false
+                    }
                     saveInject({ domains: nextDomains })
                   },
                 },

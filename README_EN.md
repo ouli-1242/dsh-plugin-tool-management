@@ -140,7 +140,7 @@ More than a version number:
 | Recycle bins (skills / memories / personas / presets / scenes) | `~/.dsh/tool-management/trash/<domain>-trash/`                               |
 | Archive ledger / retention                                     | `~/.dsh/tool-management/history-*.json`                                      |
 | MCP sidecars (disabled tools / known tools / notes / settings) | `~/.dsh/tool-management/mcp-*.json`                                          |
-| Injection settings (seven domain switches · catalog caps)       | `~/.dsh/tool-management/inject-settings.json`                                |
+| Injection settings (six domain switches · catalog caps)       | `~/.dsh/tool-management/inject-settings.json`                                |
 | Model-tool table / scope overrides                             | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json`            |
 | Runtime log / patch backups                                    | `~/.dsh/tool-management/tool-management.log` · `backups/`                    |
 
