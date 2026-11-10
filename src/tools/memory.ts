@@ -494,7 +494,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory. action=learn: save one durable preference, fact, correction or procedure (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). A chat card asks the user whether to keep it in global memory, this workspace, or not at all; if they approve, it is active immediately. Without an interactive card it is saved as pending and is NOT injected until the user confirms it on the Memory page — the receipt says which happened, so do not claim it is active unless the receipt does. action=forget: delete a learned note (stays un-learnable for 30 days), only when the user asks. action=organize: read-only draft of merges / archives. Available only while autonomous memory is on.',
+    description: 'Autonomous memory. action=learn: save one durable preference, fact, correction or procedure (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). A chat card asks the user whether to keep it in an enabled layer (global memory / this workspace) or not at all; if they approve, it is active immediately. If they type their own wording instead, this call returns it without saving — rewrite the note to match their words and call learn again so they can confirm. Without an interactive card it is saved as pending and is NOT injected until the user confirms it on the Memory page — the receipt says which happened, so do not claim it is active unless the receipt does. action=forget: delete a learned note (stays un-learnable for 30 days), only when the user asks. action=organize: read-only draft of merges / archives. Available only while autonomous memory is on.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget', 'organize'], required: true, description: 'learn (default) / forget / organize.' },
       // ── learn ──
@@ -601,10 +601,16 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
         return learnReceipt(r, 'unavailable')
       }
+      // 用户在卡片里自己写了说法：不写盘，交回模型按他们的话重写，再调一次 learn 弹卡。
+      // 不在同一次工具调用里循环，是因为用户写的可能是一句修改要求（「改成只在写代码时用」），
+      // 而不是可以直接落盘的完整正文。
+      if (choice.choice === 'revise') {
+        return 'Not saved yet. The user wants this note worded differently:\n' +
+          String(choice.custom ?? '') + '\n\n' +
+          'Rewrite the note to match their wording, then call memory_manager_auto action=learn again with the revised text. The card will ask them to confirm the new version.'
+      }
       if (choice.choice === 'skip') {
-        return 'Not saved: the user chose not to add it' +
-          (choice.custom ? ' (they wrote: ' + choice.custom + ')' : '') +
-          '. Do not save it again unless they ask.'
+        return 'Not saved: the user chose not to add it. Do not save it again unless they ask.'
       }
 
       const r: any = await evo['evolution-learn']({

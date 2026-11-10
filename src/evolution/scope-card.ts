@@ -4,15 +4,18 @@
 // 就会把「全局」读成「未识别」；失败分类又决定「不保存」还是「退回待确认」。两者都不依赖
 // 宿主对象，单独放这里才能用测试钉住。
 //
-// 为什么中英双语：`ctx.userQuestions` 没有 locale 协商，服务端拿不到界面语言；只写中文会
-// 让英文界面出现中文按钮，只写英文则相反。两种都写，代价是标签长一点。
+// 为什么按正文语言只写一种：`ctx.userQuestions` 没有 locale 协商，服务端拿不到界面语言；
+// 双语并排会让卡片显得啰嗦。正文是用户/模型在对话里写的，它的语言就是最可靠的信号 ——
+// 中文正文配中文卡片，英文正文配英文卡片。代价是「中文界面 + 英文笔记」会出英文卡片，
+// 这是宿主契约缺 locale 时能做到的最好一档。
 
 export type ScopeLayer = 'global' | 'workspace'
+export type CardLang = 'zh' | 'en'
 
-/** 卡片上的三个答案。`skip` = 用户明确不加入（关掉卡片也归到这里）。 */
+/** 卡片上的答案。`skip` = 明确不加入；`revise` = 用户自己写了新说法。 */
 export interface ScopeChoice {
-  choice: ScopeLayer | 'skip'
-  /** 用户通过「其它」输入的文字；原样回给模型，不拿它猜层。 */
+  choice: ScopeLayer | 'skip' | 'revise'
+  /** 用户通过「其它」输入的文字。`revise` 时是用户希望改成的说法。 */
   custom?: string
 }
 
@@ -22,7 +25,7 @@ export interface ScopeAskRequest {
   boundary?: string
   /** 推荐层：排在选项第一位，描述里标「推荐」。 */
   recommended: ScopeLayer
-  /** 可选的层（受 writeTarget 上限与工作区身份裁剪），至少一项。 */
+  /** 可选的层（由两个自主记忆开关与工作区身份裁剪），至少一项。 */
   allowed: ScopeLayer[]
   /** 会合并到的已有条目 id（有就写进 detail）。 */
   mergeInto?: string
@@ -32,14 +35,58 @@ export interface ScopeAskRequest {
   signal?: AbortSignal
 }
 
-/** 卡片的答案标签。改字符串等于改协议：映射函数与测试都读这三个常量。 */
-export const SCOPE_GLOBAL_LABEL = '全局记忆 / Global'
-export const SCOPE_WORKSPACE_LABEL = '本工作区记忆 / Workspace'
-export const SCOPE_SKIP_LABEL = '不加入 / Don\'t save'
-export const SCOPE_QUESTION = '记住这条？ / Save this?'
-export const SCOPE_HEADER = '自主记忆 / Memory'
+/** 正文语言：含 CJK 统一表意文字即中文，否则英文。 */
+export function cardLangOf(text: string): CardLang {
+  return /[㐀-鿿]/.test(String(text ?? '')) ? 'zh' : 'en'
+}
 
-/** 答案 → 请求的层；认不出的答案返回 null（调用方退回待确认，不猜）。 */
+interface CardLabels {
+  header: string
+  question: string
+  global: string
+  workspace: string
+  skip: string
+  recommended: string
+  globalDesc: string
+  workspaceDesc: string
+  skipDesc: string
+  reviseHint: string
+}
+
+const LABELS: Record<CardLang, CardLabels> = {
+  zh: {
+    header: '自主记忆',
+    question: '记住这条？',
+    global: '全局记忆',
+    workspace: '本工作区记忆',
+    skip: '不加入',
+    recommended: '推荐：',
+    globalDesc: '所有项目都生效',
+    workspaceDesc: '只在这个项目生效',
+    skipDesc: '这次不记',
+    reviseHint: '想改措辞？在下方输入你的说法，模型会按你的话重写后再问你一次。',
+  },
+  en: {
+    header: 'Memory',
+    question: 'Save this?',
+    global: 'Global memory',
+    workspace: 'This workspace',
+    skip: 'Don\'t save',
+    recommended: 'Recommended — ',
+    globalDesc: 'Applies in every project',
+    workspaceDesc: 'Applies only in this project',
+    skipDesc: 'Do not save this note',
+    reviseHint: 'Want different wording? Type your version below; the model will rewrite it and ask again.',
+  },
+}
+
+/**
+ * 答案 → 请求的层。认不出的答案返回 null（调用方退回待确认，不猜）。
+ *
+ * 用户自己输入文字时（官方单选的 custom 会清空 selected），返回 `revise`：不写盘，
+ * 把用户的话交回模型重写，再走一次 learn 弹卡。这比在同一次工具调用里循环更符合
+ * 「用户的想法可能是一句修改要求，而不是完整正文」的实际用法。
+ */
 export function scopeChoiceOf(answer: unknown): ScopeChoice | null {
   const a = answer as { answers?: Array<{ selected?: unknown; custom?: unknown }> } | null | undefined
   const item = Array.isArray(a?.answers) ? a!.answers[0] : undefined
@@ -48,11 +95,12 @@ export function scopeChoiceOf(answer: unknown): ScopeChoice | null {
     : []
   const rawCustom = typeof item?.custom === 'string' ? item.custom.trim() : ''
   const custom = rawCustom === '' ? undefined : rawCustom
-  const hit = selected.find((label) =>
-    label === SCOPE_GLOBAL_LABEL || label === SCOPE_WORKSPACE_LABEL || label === SCOPE_SKIP_LABEL)
-  if (hit === SCOPE_GLOBAL_LABEL) return { choice: 'global', ...(custom !== undefined ? { custom } : {}) }
-  if (hit === SCOPE_WORKSPACE_LABEL) return { choice: 'workspace', ...(custom !== undefined ? { custom } : {}) }
-  if (hit === SCOPE_SKIP_LABEL) return { choice: 'skip', ...(custom !== undefined ? { custom } : {}) }
+  if (custom !== undefined) return { choice: 'revise', custom }
+  for (const labels of Object.values(LABELS)) {
+    if (selected.includes(labels.global)) return { choice: 'global' }
+    if (selected.includes(labels.workspace)) return { choice: 'workspace' }
+    if (selected.includes(labels.skip)) return { choice: 'skip' }
+  }
   return null
 }
 
@@ -90,36 +138,30 @@ export function buildScopeQuestion(req: ScopeAskRequest): {
   options: Array<{ label: string; description: string }>
   multiSelect: false
 } {
+  const lang = cardLangOf(req.text)
+  const labels = LABELS[lang]
   const order: ScopeLayer[] = [req.recommended, ...req.allowed.filter((l) => l !== req.recommended)]
   const options = order.map((layer) => {
     const recommended = layer === req.recommended
-    if (layer === 'global') {
-      return {
-        label: SCOPE_GLOBAL_LABEL,
-        description: recommended
-          ? '推荐：所有项目都生效 / Recommended — applies in every project'
-          : '所有项目都生效 / Applies in every project',
-      }
-    }
+    const desc = layer === 'global' ? labels.globalDesc : labels.workspaceDesc
     return {
-      label: SCOPE_WORKSPACE_LABEL,
-      description: recommended
-        ? '推荐：只在这个项目生效 / Recommended — applies only in this project'
-        : '只在这个项目生效 / Applies only in this project',
+      label: layer === 'global' ? labels.global : labels.workspace,
+      description: recommended ? labels.recommended + desc : desc,
     }
   })
-  options.push({ label: SCOPE_SKIP_LABEL, description: '这次不记 / Do not save this note' })
+  options.push({ label: labels.skip, description: labels.skipDesc })
 
   const lines = [req.text]
-  if (req.boundary !== undefined && req.boundary !== '') lines.push('', `边界 / Boundary: ${req.boundary}`)
-  if (req.mergeInto !== undefined && req.mergeInto !== '') lines.push('', `将合并到已有记忆 / Will merge into: ${req.mergeInto}`)
+  if (req.boundary !== undefined && req.boundary !== '') lines.push('', (lang === 'zh' ? '边界：' : 'Boundary: ') + req.boundary)
+  if (req.mergeInto !== undefined && req.mergeInto !== '') lines.push('', (lang === 'zh' ? '将合并到已有记忆：' : 'Will merge into: ') + req.mergeInto)
   if (req.supersedes !== undefined && req.supersedes.length > 0) {
-    lines.push('', `将取代 / Will replace: ${req.supersedes.join(', ')}`)
+    lines.push('', (lang === 'zh' ? '将取代：' : 'Will replace: ') + req.supersedes.join(', '))
   }
+  lines.push('', labels.reviseHint)
   return {
     id: 'memory-scope',
-    header: SCOPE_HEADER,
-    question: SCOPE_QUESTION,
+    header: labels.header,
+    question: labels.question,
     detail: lines.join('\n'),
     options,
     multiSelect: false,
