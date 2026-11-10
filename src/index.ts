@@ -72,6 +72,7 @@ import { createEvolutionState } from './evolution/state.js'
 import { buildScopeQuestion, scopeChoiceOf, scopeFailureOf, type ScopeAskRequest, type ScopeChoice } from './evolution/scope-card.js'
 // 写入管线：九道门 + 六步落盘。
 import { createLearner } from './evolution/write.js'
+import type { IncrementalSnapshot } from './context-inject-contract.js'
 import { COMBINED_MEMORY_NOTE, COMBINED_MEMORY_NOTE_PARTIAL, isReservedGroup, layerOfGroup } from './memories/constants.js'
 import { renderAutoLayer, budgetModeOf, estimateTextTokens, type AutoLayer } from './memories/render-auto.js'
 import { workspaceMemoryKeyOf } from './scope/workspace-key.js'
@@ -2417,9 +2418,11 @@ export default {
       body: string
       truncated: boolean
       picked: Array<{ id: string; line: string }>
+      /** 渲染环境签名（复用会话快照键）；变了就让增量回全量。 */
+      mode: string
     }
     const emptyAutoProjection = (): AutoDomainProjection =>
-      ({ text: '', body: '', truncated: false, picked: [] })
+      ({ text: '', body: '', truncated: false, picked: [], mode: '' })
 
     function autoDomainProjection(layer: AutoLayer, agent: unknown): AutoDomainProjection {
       try {
@@ -2462,7 +2465,7 @@ export default {
         if (prev && prev.key === key) {
           // `??` 兜住热重载前写下的旧快照（那个形状没有这三个字段）：宁可这一轮少一块
           // 自动正文，也不能让 `undefined` 流进合并块。
-          return { text: prev.text, body: prev.body ?? '', truncated: prev.truncated === true, picked: prev.picked ?? [] }
+          return { text: prev.text, body: prev.body ?? '', truncated: prev.truncated === true, picked: prev.picked ?? [], mode: key }
         }
 
         const result = renderAutoLayer(layer, {
@@ -2493,7 +2496,7 @@ export default {
         if (prev === undefined || prev.text !== result.text) {
           void autoLearner.noteInjected(result.pickedIds).catch(() => undefined)
         }
-        return { text: result.text, body: result.body, truncated: result.truncated, picked: result.picked }
+        return { text: result.text, body: result.body, truncated: result.truncated, picked: result.picked, mode: key }
       } catch {
         return emptyAutoProjection()
       }
@@ -2511,18 +2514,44 @@ export default {
      * （`memoryProjection` 的口径）：不能把"读不动"报成"用户清空了记忆"；自动段坏了
      * 只当没有（`autoDomainProjection` 自己吞）。
      */
-    function memoryGlobalText(agent: unknown): string {
+    function memoryGlobalSnapshot(agent: unknown): IncrementalSnapshot {
       const user = memoriesService.memoryProjection(memoryScopeOf(agent))
       const auto = autoDomainProjection('global', agent)
       const parts: string[] = []
       if (user.body.trim() !== '') parts.push(user.body.replace(/\s+$/, ''))
       if (auto.body.trim() !== '') parts.push(auto.body.replace(/\s+$/, ''))
       const tail = user.tail.trim()
-      if (parts.length === 0 && tail === '') return ''
       const note = user.truncated || auto.truncated ? COMBINED_MEMORY_NOTE_PARTIAL : COMBINED_MEMORY_NOTE
       // 尾注（`## Not injected`）放在最后当附录：夹在用户记忆与全局笔记之间会把后者
       // 读成"未注入清单"的一部分。
-      return [...parts, note, ...(tail === '' ? [] : [tail])].join('\n\n') + '\n'
+      const text = parts.length === 0 && tail === ''
+        ? ''
+        : [...parts, note, ...(tail === '' ? [] : [tail])].join('\n\n') + '\n'
+      const entries: IncrementalSnapshot['entries'] = [
+        ...user.blocks.map((block) => ({ key: 'user:' + block.id, text: block.block, scene: block.sceneLabel })),
+        ...auto.picked.map((line) => ({ key: 'auto:' + line.id, text: line.line })),
+      ]
+      return {
+        text,
+        entries,
+        truncated: user.truncated || auto.truncated,
+        // 用户记忆按场景集合分组；自动段复用会话快照键（含预算档 / 工作区 / 层开关）。
+        mode: ['user', user.scenes.join('\u0000'), 'auto', auto.mode].join('\u0001'),
+      }
+    }
+
+    function memoryGlobalText(agent: unknown): string {
+      return memoryGlobalSnapshot(agent).text
+    }
+
+    function memoryWorkspaceSnapshot(agent: unknown): IncrementalSnapshot {
+      const auto = autoDomainProjection('workspace', agent)
+      return {
+        text: auto.text,
+        entries: auto.picked.map((line) => ({ key: 'auto:' + line.id, text: line.line })),
+        truncated: auto.truncated,
+        mode: auto.mode,
+      }
     }
 
     // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的各域文本。
@@ -2564,10 +2593,10 @@ export default {
             // 记忆（**全局内容**）：各场景下的手写条目 + 自主全局笔记。
             // 两块都是"在任何对话里都成立的东西"，合成一条消息，只带一句授权语。
             // 与场景段同源、同一条 `applicableTo`。
-            { key: 'memoryGlobal', name: 'tool-management:memory-global', label: '全局记忆', form: 'snapshot', text: (agent) => memoryGlobalText(agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            { key: 'memoryGlobal', name: 'tool-management:memory-global', label: '全局记忆', form: 'snapshot', text: (agent) => memoryGlobalText(agent), incremental: (agent) => memoryGlobalSnapshot(agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // 工作区自主笔记单独一条：它只在本工作区成立，和上面的全局块分开去重，
             // 一条工作区笔记新增不会让用户记忆重载。
-            { key: 'memoryWorkspace', name: 'tool-management:memory-workspace', label: '工作区笔记', form: 'snapshot', text: (agent) => autoDomainText('workspace', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            { key: 'memoryWorkspace', name: 'tool-management:memory-workspace', label: '工作区笔记', form: 'snapshot', text: (agent) => autoDomainText('workspace', agent), incremental: (agent) => memoryWorkspaceSnapshot(agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // `pending`：启动 / 重连窗口里段是空的，但"空"不等于"用户关光了" —— 这一轮沉默，
             // 别先发一条「已清空」再在 server 连上后发一次内容（两次注入，第一次还是假的）。
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent), pending: (agent) => mcp.stateCatalog.pending(agent) },

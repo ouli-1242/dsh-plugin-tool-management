@@ -628,6 +628,7 @@ export function renderSceneMemory(
     blocks: selected.map((c) => ({
       id: c.item.id,
       scene: c.item.scene,
+      sceneLabel: sceneLabelOf(c.item.scene),
       name: c.item.name,
       description: c.item.description,
       block: c.block,

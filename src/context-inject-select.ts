@@ -7,6 +7,7 @@ import {
   CARRIER_FACT_OF,
   DEFAULT_INJECT_SETTINGS,
   INJECT_DOMAIN_KEYS,
+  type IncrementalSnapshot,
   type InjectDomain,
   type InjectDomainKey,
   type InjectForm,
@@ -84,6 +85,8 @@ export interface InjectSection {
    * 框架层据此不套 `how` / 边界句 —— 那两句是整份目录的说明，配在一行差异上是假话。
    */
   delta?: boolean
+  /** 逐条快照（只有声明了 `incremental` 的域才有）；通道据此决定发差集还是全量。 */
+  incremental?: IncrementalSnapshot
 }
 
 /**
@@ -146,7 +149,17 @@ export function selectInjections(
       continue
     }
     let text = ''
-    try { text = String(domain.text(agent) ?? '') } catch (error) {
+    let incremental: IncrementalSnapshot | undefined
+    try {
+      // 增量域只调一次：`incremental.text` 就是全量正文，再调 `text()` 会把同一份投影
+      // 算两遍，也给"两者不一致"留了口子。
+      if (domain.incremental !== undefined) {
+        incremental = domain.incremental(agent)
+        text = String(incremental.text ?? '')
+      } else {
+        text = String(domain.text(agent) ?? '')
+      }
+    } catch (error) {
       // 取数失败 ≠ 没有内容：交给调用方（上报 + 这一轮不发"已清空"），本域这一轮不发。
       try { onError?.(domain.key, error) } catch { /* 上报本身绝不能影响注入 */ }
       continue
@@ -155,7 +168,7 @@ export function selectInjections(
     const fingerprint = text.trim()
     if (seen.has(fingerprint)) continue
     seen.add(fingerprint)
-    out.push({ key: domain.key, name: domain.name, label: domain.label, form: domain.form, text })
+    out.push({ key: domain.key, name: domain.name, label: domain.label, form: domain.form, text, ...(incremental !== undefined ? { incremental } : {}) })
   }
   return out
 }
@@ -237,7 +250,11 @@ export function explainInjections(
     // 从 `selectInjections` 的 `onError` 收集；**只认抛异常**，返回空串仍算 `empty`。
     if (failed?.has(domain.key)) { reasons[domain.key] = 'error'; continue }
     let text = ''
-    try { text = String(domain.text(agent) ?? '') } catch { text = '' }
+    try {
+      text = domain.incremental !== undefined
+        ? String(domain.incremental(agent).text ?? '')
+        : String(domain.text(agent) ?? '')
+    } catch { text = '' }
     reasons[domain.key] = text.trim() === '' ? 'empty' : 'sent'
   }
   return reasons

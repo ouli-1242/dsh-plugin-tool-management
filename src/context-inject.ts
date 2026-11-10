@@ -16,9 +16,10 @@
 // 与官方 skill-catalog 同款：各自的来源 kind（轨迹里各自一行、各显各的名字）、各自的
 // form、各自的去重。好处是"只改了一个域就只重发那一条"；代价是进场景这类多域同时变的
 // 时刻会一次发几条（每条带一句自己的引导语）。各域与轨迹行名（清单见下 INJECT_DOMAIN_KEYS）：
-//   scene     → scene-manager-catalog（场景：启用的场景 + 场景说明，约定）
-//   memory    → memory-manager-catalog（记忆：各场景下的条目，记录）
-//   mcp       → mcp-manager-catalog
+//   scene           → scene-manager-catalog（场景：启用的场景 + 场景说明，约定）
+//   memoryGlobal    → memory-global-catalog（用户记忆 + 自主全局笔记，记录）
+//   memoryWorkspace → memory-workspace-catalog（自主工作区笔记，记录）
+//   mcp             → mcp-manager-catalog
 //   skills    → skill-manager-catalog（不叫 skill-catalog：那是官方那条行的名字）
 //   subagents → subagent-manager-catalog
 //   prompt    → prompt-manager-catalog
@@ -92,6 +93,7 @@ import {
   shouldAnnounceCleared,
 } from './context-inject-select.js'
 import { clearedDomainText, renderDomainText, scopeLineOf } from './context-inject-frame.js'
+import { planIncremental, type IncrementalEntryState } from './context-inject-delta.js'
 import {
   kindOfMessage,
   LIVE_KINDS,
@@ -285,6 +287,8 @@ export interface LiveInjectionDomain {
   state: 'in-context' | 'cleared' | 'official' | 'off' | 'empty' | 'absent' | 'child' | 'error' | 'unknown'
   bytes: number
   text: string
+  /** 最新一条内容是不是增量差集（不是全量块）。 */
+  incremental?: boolean
   /** 采纳统计（这一段对话的；与 `state` 无关，那个是"现在"，这个是"这段对话以来"）。 */
   adoption: LiveAdoption
 }
@@ -384,6 +388,30 @@ export function createContextInjector(deps: ContextInjectorDeps): {
   // 每个 agent 最近一步"在上下文里"的域集合 —— 采纳判定要回答的是"调用发生时正文在不在眼前"。
   // WeakMap：不阻止会话被回收（与 lastAgent 同一考虑）。
   const liveDomainsByAgent = new WeakMap<object, Set<InjectDomainKey>>()
+  /**
+   * 增量账本：每个 agent 一份，按域记「上一次全量是哪条、之后发了哪些差集、当时有哪些条目」。
+   *
+   * 只放内存：进程重启后账本消失，下一步回全量 —— 这是有意的安全回退，不需要落盘。
+   * 压缩的判据不是监听宿主事件，而是下一次扫描时基准 / 差集 id 已不在可见表面里
+   * （见 `planIncremental` 的 `visibleIds`）。
+   */
+  interface IncrementalState {
+    mode: string
+    baseId: string
+    deltaIds: string[]
+    deltaCount: number
+    truncated: boolean
+    entries: Map<string, IncrementalEntryState>
+  }
+  const incrementalStates = new WeakMap<object, Map<InjectDomainKey, IncrementalState>>()
+  const incrementalStatesFor = (agent: object): Map<InjectDomainKey, IncrementalState> => {
+    let states = incrementalStates.get(agent)
+    if (states === undefined) {
+      states = new Map()
+      incrementalStates.set(agent, states)
+    }
+    return states
+  }
   // 最近一步里"每个域为什么发/不发"（官方载体 / 开关关 / 空 / 子会话不适用 / 本插件负责）。
   // 只在没有可见注入时用来解释状态 —— 标准类预设下技能与提示词由官方在送，
   // 插件的实况若只说"未投递"，读起来像出了问题。
@@ -394,7 +422,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
     // 面板读的是**这一段对话**的账本；会话已经被回收了就没有账本可读，全零 + `hasAgent:false`。
     const ledger = agent === undefined ? emptyLedger() : ledgerFor(agent)
     const visible = agent === undefined
-      ? new Map<InjectDomainKey, { text: string; body?: string; form: string; official: boolean }>()
+      ? new Map<InjectDomainKey, { text: string; body?: string; form: string; official: boolean; incremental?: boolean }>()
       : newestDomainTexts(agent, LIVE_KINDS)
     const labelOf = new Map<InjectDomainKey, string>(deps.domains().map((domain) => [domain.key, domain.label] as const))
     const rows: LiveInjectionDomain[] = INJECT_DOMAIN_KEYS.map((key) => {
@@ -417,6 +445,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         state,
         bytes: bytesOf(text),
         text,
+        ...(entry?.incremental === true && (state === 'in-context' || state === 'official') ? { incremental: true } : {}),
         adoption: { ...ledger.adoption[key] },
       }
     })
@@ -542,7 +571,9 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // 清单，不知道租约 / 会话层；有差异时它先列出本对话不可用的条目，插件再补一行纠正。
       // 现在改成有差异就拦下官方、由插件送会话版整份（`text()` 已按会话层过滤）。
       // 判据真算 delta（租约造成的差异在侧车里根本没有覆盖记录），来自 SWR 缓存，同步可得。
-      const visible = newestDomainTexts(agent, PLUGIN_KINDS)
+      // 同时收集可见消息 id：增量账本要确认"上一次全量 + 之后的每条差集"都还在表面里。
+      const visibleIds = new Set<string>()
+      const visible = newestDomainTexts(agent, PLUGIN_KINDS, visibleIds)
       // 两个判据各自抛异常时按"没有差异"处理：宁可这一轮沿用旧口径，也不能让整条注入通道
       // 因为一次文件/目录计算失败而全线停摆（外层的 catch 会把八个域一起丢掉）。
       let promptDiverged = false
@@ -643,6 +674,9 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       const scopeCarrier = scopeCarrierPool.find((section) => section.key === 'scene')
         ?? scopeCarrierPool.find((section) => section.key === 'memoryGlobal')
         ?? scopeCarrierPool[0]
+      const incrementalStateMap = typeof agent === 'object' && agent !== null
+        ? incrementalStatesFor(agent as object)
+        : undefined
       for (const section of sections) {
         published.add(section.key)
         // `current !== undefined` = 该域在可见表面上有一条更早的己方**内容**消息 → 这次是**替换**，
@@ -655,6 +689,13 @@ export function createContextInjector(deps: ContextInjectorDeps): {
           || (section.key === 'prompt' && promptOnSurface)
           || (section.key === 'skills' && skillOnSurface)
         const rendered = renderDomainText(section, toolHidden, replacing, section === scopeCarrier ? scopeLine : undefined)
+        // 增量域先过账本：`none` = 账本有效且条目没变（发不发仍按正文 / 框架指纹判）；
+        // `full` = 账本不可用（首次 / 重启 / 压缩 / 环境变 / 差集太多）；`delta` = 只发差集。
+        const snapshot = section.incremental
+        const state = snapshot !== undefined ? incrementalStateMap?.get(section.key) : undefined
+        const plan = snapshot !== undefined
+          ? planIncremental({ snapshot, state, visibleIds, fullText: rendered.body })
+          : undefined
         // 判据是**域正文 + 框架指纹**，不是整条消息：框架里 `Supersedes …` 只在替换时发，
         // 首帧没有它 —— 比整条会把"这是本会话第一份"误判成内容变化，每个域在第二步多重发一次
         // （用户实测：场景 / 记忆 / MCP / 子智能体每轮重发）。
@@ -665,20 +706,66 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         // **最新一条是「已清空」通知时例外**：通知携带的 `body` 只是更早
         // 那条内容的指纹，供"恢复后变没变"比对；拿它判"没变"会跳过重发，于是域重新打开后
         // 模型看到的最新消息仍是「不再发送」，而内容其实已经回来了。通知不是内容 —— 必须重发。
-        const unchanged = current !== undefined
+        // 增量域在 `plan.kind !== 'none'` 时**不能**跳过：账本失效意味着模型手里的链不完整，
+        // 哪怕正文指纹相同也要重发整块（首次 / 重启 / 压缩后的回退）。
+        const unchanged = (plan === undefined || plan.kind === 'none')
+          && current !== undefined
           && current.cleared !== true
           && current.body !== undefined
           && current.body === rendered.body
           && current.frame === rendered.frameKey
         if (unchanged) continue
-        const text = rendered.text
+        let text = rendered.text
+        let displayText = section.text
+        let body = rendered.body
+        let isDelta = false
+        if (plan?.kind === 'delta') {
+          // 差集正文进 content 与 `source.sections`；`source.body` 仍是全量（宿主去重与
+          // 下一次差集都靠它），框架指纹也沿用全量那一份。
+          const deltaRendered = renderDomainText({ ...section, text: plan.text, delta: true }, toolHidden, replacing)
+          text = deltaRendered.text
+          displayText = plan.text
+          isDelta = true
+        }
         let files: readonly InjectSourceFile[] | undefined
         // 传 agent：提示词域的来源文件清单按**本会话的 cwd** 算项目链。
         // 其余域不用它，多一个实参对它们没有影响。
         try { files = domainOf.get(section.key)?.files?.(agent) } catch { files = undefined }
-        additions.push(domainMessage(section, text, rendered.frameKey, files, replacing))
+        const message = domainMessage(section, text, rendered.frameKey, files, replacing, {
+          body,
+          displayText,
+          ...(isDelta ? { incremental: true } : {}),
+        })
+        additions.push(message)
         appended.push(section.key)
         injectedKeys.add(section.key)
+        if (snapshot !== undefined && incrementalStateMap !== undefined) {
+          const id = messageIdOf(message)
+          if (id === undefined) {
+            // 宿主没给 id 就无法在下一轮确认这条还在表面里；宁可下一轮回全量。
+            incrementalStateMap.delete(section.key)
+          } else if (plan?.kind === 'delta' && state !== undefined) {
+            state.deltaIds.push(id)
+            state.deltaCount += 1
+            state.entries = plan.entries
+          } else {
+            incrementalStateMap.set(section.key, {
+              mode: plan?.mode ?? snapshot.mode,
+              baseId: id,
+              deltaIds: [],
+              deltaCount: 0,
+              truncated: snapshot.truncated,
+              entries: plan?.entries ?? new Map(),
+            })
+          }
+        }
+      }
+      // 这一轮没进 `sections` 的增量域（关掉 / 清空 / 取数失败）账本作废：下一次有内容
+      // 时必须从全量重新建立，不能拿一份模型已经看不到的旧账本做差集。
+      if (incrementalStateMap !== undefined) {
+        for (const key of [...incrementalStateMap.keys()]) {
+          if (!published.has(key)) incrementalStateMap.delete(key)
+        }
       }
       // 曾经注入过、这一轮没有内容的域 → 一条「已清空」；从没注入过的域什么都不用说。
       // **取数失败的域不发「已清空」**：那条通知的字面意思是"这份内容已失效"，而真实情况是
@@ -789,6 +876,12 @@ function messagesOf(decision: any): readonly unknown[] {
   return Array.isArray(messages) ? messages : []
 }
 
+/** 宿主给消息生成的 id；增量账本用它确认"这一条还在可见表面里"。 */
+function messageIdOf(message: unknown): string | undefined {
+  const id = (message as { id?: unknown } | null | undefined)?.id
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
+
 /**
  * 一条域消息。`source` 上带的字段是**给界面的结构化数据**（模型侧只看 content，不受影响）：
  *   - snapshot 形态带 `sections`（界面分节显示，框架句由界面用固定 caption 顶替）；
@@ -806,6 +899,14 @@ function domainMessage(
   frameKey: string,
   files?: readonly InjectSourceFile[],
   replacing?: boolean,
+  options?: {
+    /** `source.body` 的指纹（全量正文）；缺省 = `section.text`。 */
+    body?: string
+    /** `source.sections` 的展示文本；缺省 = `section.text`。 */
+    displayText?: string
+    /** 这条内容是增量差集。 */
+    incremental?: boolean
+  },
 ): unknown {
   // `body` 是**给扫描侧用的域正文指纹**：下一轮 `newestDomainTexts` 要从会话
   // 表面认出"这条域的内容变没变"，而整条正文里有按场合发的框架行（`Supersedes …` 只在替换时
@@ -813,8 +914,16 @@ function domainMessage(
   // 读它即可，不必去剥框架（剥框架要认标题/how/boundary 三行的起止，随时会因改排版而错）。
   // `frame` 是同一层里的第二个指纹：正文不变、框架换了（插件升级）也要重发一次，
   // 否则模型手里那份引导语永远是旧版本。两个字段都只占 source，模型侧只看 content。
-  const source: Record<string, unknown> = { kind: INJECT_KIND_OF[section.key], form: section.form, body: section.text, frame: frameKey }
-  if (section.form === 'snapshot') source.sections = [{ name: section.name, text: section.text }]
+  const source: Record<string, unknown> = {
+    kind: INJECT_KIND_OF[section.key],
+    form: section.form,
+    // 增量消息的 content 是差集，但指纹必须是**当前全量**：下一轮的"变没变"与下一条
+    // 差集的基准都读它。界面展示走 `sections`，那边放差集原文。
+    body: options?.body ?? section.text,
+    frame: frameKey,
+  }
+  if (options?.incremental === true) source.incremental = true
+  if (section.form === 'snapshot') source.sections = [{ name: section.name, text: options?.displayText ?? section.text }]
   if (section.form === 'instructions' && files !== undefined && files.length > 0) {
     if (replacing !== true) source.baseline = true
     source.changes = files.map((file) => ({

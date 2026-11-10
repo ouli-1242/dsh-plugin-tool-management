@@ -158,6 +158,30 @@ export interface InjectSourceFile {
   digest?: string
 }
 
+/** 增量快照里的一条：`key` 是稳定身份，`text` 是这一条当前的注入文本。 */
+export interface IncrementalEntry {
+  key: string
+  text: string
+  /** 分组标签（用户记忆的场景名）；`undefined` = 不分组（自主笔记）。 */
+  scene?: string
+}
+
+/**
+ * 一个域的可增量快照。
+ *
+ * `text` 仍是**当前全量正文**：它进 `source.body` 供宿主逐字节比对，也是增量不划算时的
+ * 回退内容。`entries` 只用于和上一次发送的条目做差集；`mode` 是渲染环境的稳定签名
+ * （场景 / 预算档 / 工作区 / 层开关），变了就回全量 —— 模型对条目的理解依赖这层环境，
+ * 只补差集会让它拿着旧分组读新条目。
+ */
+export interface IncrementalSnapshot {
+  text: string
+  entries: ReadonlyArray<IncrementalEntry>
+  /** 有条目被预算截掉：差集无法表达"未列出清单"的变化，这一步回全量。 */
+  truncated: boolean
+  mode: string
+}
+
 /** 一个域的注入声明。 */
 export interface InjectDomain {
   key: InjectDomainKey
@@ -175,6 +199,14 @@ export interface InjectDomain {
    * 仍然必须同步：注入通道每个 step 同步取文本，域自带 SWR 缓存，这里不能读盘。
    */
   text: (agent?: unknown) => string
+  /**
+   * 可选：同一份内容的逐条快照，供通道在内容变化时只发 `+ / ~ / -` 差集。
+   *
+   * 给了它就由它提供正文（`text` 仍保留给「注入实况」解释与旧调用方）；返回值里的
+   * `text` 必须与 `text()` 逐字节一致，否则 `source.body` 的去重指纹会和模型看到的内容
+   * 分家。同步、纯函数，与 `text()` 同一条不能读盘的约束。
+   */
+  incremental?: (agent?: unknown) => IncrementalSnapshot
   /**
    * 官方载体正在送整份时的**兜底差异行**。`''` = 没有差异。
    *

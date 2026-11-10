@@ -136,6 +136,8 @@ export interface DomainSurfaceEntry {
   cleared: boolean
   /** 这条是不是官方载体（`skill-catalog` / `agent-instructions`）发的。 */
   official: boolean
+  /** 最新一条内容是不是增量差集（「注入实况」据此标出来）。 */
+  incremental?: boolean
 }
 
 /**
@@ -187,6 +189,7 @@ export function newestDomainTexts(
       // 才是"内容就是最新一条"。
       cleared: seen !== undefined && seen.cleared,
       official: mapping.official,
+      incremental: source.incremental === true,
     })
     return done()
   }
@@ -209,7 +212,9 @@ export function newestDomainTexts(
     if (Array.isArray(messages)) {
       for (let i = messages.length - 1; i >= 0; i -= 1) {
         const message = messages[i] as { source?: unknown } | null | undefined
-        if (absorb(message, message && message.source)) break
+        // 收集 id 时不能提前收工：增量链的基准消息可能比"最后一个域的最新内容"更旧，
+        // 漏掉它会被判成"已被压缩"而白白回一次全量。
+        if (absorb(message, message && message.source) && visibleIds === undefined) break
       }
       return out
     }
@@ -230,9 +235,9 @@ export function newestDomainTexts(
       if (Number.isFinite(n)) seqs.push(n)
     }
     seqs.sort((a, b) => b - a) // 从新到旧（表面自身的顺序不保证）
-    for (const seq of seqs) if (scan(seq)) break
+    for (const seq of seqs) if (scan(seq) && visibleIds === undefined) break
     return out
   }
-  for (let seq = session.seq - 1; seq >= 0; seq -= 1) if (scan(seq)) break
+  for (let seq = session.seq - 1; seq >= 0; seq -= 1) if (scan(seq) && visibleIds === undefined) break
   return out
 }
