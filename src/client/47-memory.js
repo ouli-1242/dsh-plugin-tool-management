@@ -1778,7 +1778,7 @@
                 // 自主记忆：紧挨回收站左边（用户 2026-11-09）。原来那张平铺卡片搬进弹窗，
                 // 页头只留这一颗入口，记忆列表不再被它顶下去。
                 React.createElement('button', {
-                  key: 'evo', type: 'button', className: 'dsm-btn dsm-btn-secondary' + (evoOn ? ' dsm-evo-head-on' : ''),
+                  key: 'evo', type: 'button', className: 'dsm-btn dsm-btn-secondary' + (evoOn ? ' dsm-evo-head-on' : '') + (evoPending > 0 ? ' dsm-evo-head-pending' : ''),
                   title: evoPending > 0 ? t('evo.pending.short', { count: evoPending }) : t('evo.title'),
                   onClick: function () { setResult(null); setEvoOpen(true) },
                 }, t('evo.title'),
