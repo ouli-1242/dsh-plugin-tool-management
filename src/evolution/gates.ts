@@ -17,7 +17,7 @@
 
 import { LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
 import { checkQuote } from './evidence.js'
-import { NOTE_CAP_DEFAULTS } from './limits.js'
+import { NOTE_RATE_DEFAULTS, NOTE_RATE_WINDOW_MS } from './limits.js'
 import { DEGRADE_NOTE, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
 import { BASE_CONFIDENCE, confidenceOf, textHashOf, tombstoneActive, type EvidenceRef, type EvidenceSource, type Tombstone } from './state.js'
 
@@ -96,11 +96,14 @@ export interface GateContext {
   existing: ExistingEntry[]
   /** 各层现有自动条目数（只数活条目：归档 / 已取代不占配额）。 */
   countByLayer: Partial<Record<MemoryLayer, number>>
+  /** 各层在最近一个频率窗口内**新增**了多少条（合并 / 更新不算）。 */
+  recentByLayer?: Partial<Record<MemoryLayer, number>>
   /**
-   * 各层的条数上限。全局 / 工作区来自用户设置（`maxNotesGlobal` / `maxNotesWorkspace`）；
-   * 缺项时门 7 回退 `LAYER_QUOTA`，测试与旧装配不必补全四层。
+   * 各层每窗口最多新增多少条。全局 / 工作区来自用户设置
+   * （`maxLearnsGlobal` / `maxLearnsWorkspace`）；缺项时用出厂频率。
+   * 没有这一项（或值为 undefined）的层走总数配额（会话 / 场景）。
    */
-  maxByLayer?: Partial<Record<MemoryLayer, number>>
+  rateByLayer?: Partial<Record<MemoryLayer, number>>
   knownWorkspaces: Set<string>
   knownScenes: Set<string>
   tombstones: Tombstone[]
@@ -271,16 +274,17 @@ export const looksDerivable = (text: string): boolean => DERIVABLE_PATTERNS.some
 // ── 配额 ───────────────────────────────────────────────────────────────────
 
 /**
- * 每层的自动条目软上限。超了拒绝并提示整理（不静默丢新的）。
+ * 会话 / 场景两层的自动条目软上限（内部层，界面不暴露）。
  *
- * 全局 / 工作区两档可由用户在自主记忆设置里改（`maxNotesGlobal` / `maxNotesWorkspace`），
- * 这里只是出厂值与没有配置时的兜底；会话 / 场景两档不暴露，仍固定。
+ * 全局 / 工作区**没有总条数上限**：记忆多了只影响注入预算，不拒绝写入。这两层改由
+ * `NOTE_RATE_DEFAULTS` 的「每 10 分钟最多新增几条」限流（见门 7），所以这里放
+ * `Infinity` —— 维护扫描与健康度对这两层永远不会因总数触发清理。
  */
 export const LAYER_QUOTA: Record<MemoryLayer, number> = {
   [LAYER_SESSION]: 50,
   [LAYER_SCENE]: 100,
-  [LAYER_WORKSPACE]: NOTE_CAP_DEFAULTS.workspace,
-  [LAYER_GLOBAL]: NOTE_CAP_DEFAULTS.global,
+  [LAYER_WORKSPACE]: Number.POSITIVE_INFINITY,
+  [LAYER_GLOBAL]: Number.POSITIVE_INFINITY,
 }
 
 // ── 主流程 ─────────────────────────────────────────────────────────────────
@@ -490,16 +494,36 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   }
 
   // ── 门 7：配额 ──
-  const used = ctx.countByLayer[layer] ?? 0
-  const cap = ctx.maxByLayer?.[layer] ?? LAYER_QUOTA[layer]
   // 合并不新增条目；取代只有在**同层**时才抵掉配额（跨层取代仍会在本层新增一条）。
   const supersedesHere = supersedes.some((id) => ctx.existing.find((e) => e.id === id)?.layer === layer)
-  if (!mergeInto && !supersedesHere && used >= cap) {
-    return reject(
-      'quota',
-      `not recorded: this layer already holds ${used} learned notes (limit ${cap}). Merge or archive some first — the Memory page has a cleanup view.`,
-      `配额门拒绝：${layer} 层已满（${used}/${cap}）`,
-    )
+  const createsEntry = !mergeInto && !supersedesHere
+  // 全局 / 工作区没有总条数上限，只限「每窗口新增几条」；会话 / 场景仍用总数配额。
+  // 缺 `rateByLayer` 时按出厂频率兜底，避免旧调用方绕过限流。
+  const rate = ctx.rateByLayer?.[layer] ?? (
+    layer === LAYER_GLOBAL ? NOTE_RATE_DEFAULTS.global
+      : layer === LAYER_WORKSPACE ? NOTE_RATE_DEFAULTS.workspace
+        : undefined
+  )
+  if (rate !== undefined) {
+    const recent = ctx.recentByLayer?.[layer] ?? 0
+    if (createsEntry && recent >= rate) {
+      const minutes = Math.round(NOTE_RATE_WINDOW_MS / 60_000)
+      return reject(
+        'quota',
+        `not recorded: this layer already learned ${recent} new notes in the last ${minutes} minutes (limit ${rate}). Merge or update existing notes instead, or wait for the window to pass.`,
+        `配额门拒绝：${layer} 层近 ${minutes} 分钟已新增 ${recent} 条（上限 ${rate}）`,
+      )
+    }
+  } else {
+    const used = ctx.countByLayer[layer] ?? 0
+    const cap = LAYER_QUOTA[layer]
+    if (createsEntry && used >= cap) {
+      return reject(
+        'quota',
+        `not recorded: this layer already holds ${used} learned notes (limit ${cap}). Merge or archive some first — the Memory page has a cleanup view.`,
+        `配额门拒绝：${layer} 层已满（${used}/${cap}）`,
+      )
+    }
   }
 
   // ── 收尾：信心与状态 ──

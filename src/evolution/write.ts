@@ -29,9 +29,10 @@ import {
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
 import type { EffectiveEvolutionConfig } from './config.js'
 import {
-  LAYER_QUOTA, runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome, type ReviewCode,
+  runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome, type ReviewCode,
 } from './gates.js'
 import { deriveKey } from './gates.js'
+import { NOTE_RATE_WINDOW_MS } from './limits.js'
 import { draftOrganize, type OrganizeAction, type OrganizeDraft } from './organize.js'
 import {
   bumpRevision, confidenceOf, emptyCounters, pushTransition, textHashOf,
@@ -220,6 +221,20 @@ export function createLearner(deps: LearnDeps) {
       if (e.status === 'archived' || e.status === 'superseded') continue
       countByLayer[e.layer] = (countByLayer[e.layer] ?? 0) + 1
     }
+    // 频率只数「新建」：state 里第一条 `from: 'absent'` 的迁移就是这条记忆诞生的时刻。
+    // 合并 / 更新只追加证据与迁移，不产生 `absent` 起点，所以天然不占名额。
+    const cutoff = Date.now() - NOTE_RATE_WINDOW_MS
+    const recentByLayer: Partial<Record<MemoryLayer, number>> = {}
+    for (const [id, entry] of Object.entries(st.entries)) {
+      const created = entry.transitions.find((t) => t.from === 'absent')
+      if (!created) continue
+      const at = Date.parse(created.at)
+      if (!Number.isFinite(at) || at < cutoff) continue
+      const slash = id.lastIndexOf('/')
+      if (slash <= 0) continue
+      const layer = layerOfGroup(id.slice(0, slash))
+      recentByLayer[layer] = (recentByLayer[layer] ?? 0) + 1
+    }
     return {
       ...(env.sessionId !== undefined ? { sessionId: env.sessionId } : {}),
       ...(env.workspaceHash !== undefined ? { workspaceHash: env.workspaceHash } : {}),
@@ -230,12 +245,11 @@ export function createLearner(deps: LearnDeps) {
       // 真正写入时才被 mergeInto 拒掉。
       existing: entries.map((e) => (e.origin === 'auto' && st.entries[e.id]?.locked === true ? { ...e, locked: true } : e)),
       countByLayer,
-      // 全局 / 工作区两档吃用户设置；会话 / 场景没有界面入口，仍用固定配额。
-      maxByLayer: {
-        [LAYER_GLOBAL]: config.maxNotesGlobal,
-        [LAYER_WORKSPACE]: config.maxNotesWorkspace,
-        [LAYER_SESSION]: LAYER_QUOTA[LAYER_SESSION],
-        [LAYER_SCENE]: LAYER_QUOTA[LAYER_SCENE],
+      recentByLayer,
+      // 全局 / 工作区两档吃用户设置；会话 / 场景没有界面入口，仍用固定总数配额。
+      rateByLayer: {
+        [LAYER_GLOBAL]: config.maxLearnsGlobal,
+        [LAYER_WORKSPACE]: config.maxLearnsWorkspace,
       },
       knownWorkspaces: await deps.knownWorkspaces(),
       knownScenes,

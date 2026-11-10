@@ -745,7 +745,7 @@
           // 还要再开一层确认弹窗，共用一个槽会把自主记忆一起关掉。
           var eos = React.useState(false)
           var evoOpen = eos[0], setEvoOpen = eos[1]
-          // 每层条数上限的输入态：键 = `maxNotesGlobal` / `maxNotesWorkspace`，值是未提交的
+          // 每层学习频率的输入态：键 = `maxLearnsGlobal` / `maxLearnsWorkspace`，值是未提交的
           // 字符串。输入框常态空着、当前值只在 placeholder 里灰显（与兼容页目录上限同一交互）。
           var evc = React.useState({})
           var evoCapEdits = evc[0], setEvoCapEdits = evc[1]
@@ -850,7 +850,7 @@
           }
 
           /**
-           * 提交一层的条数上限：数字 = 新值，空框 = 回默认值（服务端按 `null` 处理）。
+           * 提交一层的学习频率：数字 = 新值，空框 = 回默认值（服务端按 `null` 处理）。
            * 越界值由服务端归一化夹取；这里只挡掉 `type=number` 挡不住的负值。
            */
           function commitEvolutionCap(key) {
@@ -1381,7 +1381,7 @@
           }
 
           /**
-           * 一层条数上限的输入行。空框 + placeholder = 当前值，失焦 / 回车提交。
+           * 一层学习频率的输入行。空框 + placeholder = 当前值，失焦 / 回车提交。
            * 与兼容页「目录上限」同一交互：输入框常态不显示真值，避免和占位灰字打架。
            */
           function renderEvolutionCapRow(o) {
@@ -1451,9 +1451,9 @@
             var globalOn = eff.learnGlobal === true
             var workspaceOn = eff.learnWorkspace === true
             var autoConfirm = eff.autoConfirm === true
-            // 当前上限：`evolution-list` 回的设置已归一化，字段一定在；拿不到时按出厂值兜底。
-            var capGlobal = evo.settings && typeof evo.settings.maxNotesGlobal === 'number' ? evo.settings.maxNotesGlobal : 100
-            var capWorkspace = evo.settings && typeof evo.settings.maxNotesWorkspace === 'number' ? evo.settings.maxNotesWorkspace : 200
+            // 当前频率：`evolution-list` 回的设置已归一化，字段一定在；拿不到时按出厂值兜底。
+            var capGlobal = evo.settings && typeof evo.settings.maxLearnsGlobal === 'number' ? evo.settings.maxLearnsGlobal : 5
+            var capWorkspace = evo.settings && typeof evo.settings.maxLearnsWorkspace === 'number' ? evo.settings.maxLearnsWorkspace : 5
             var statText = t('evo.stat', {
               learned: auto.entries || 0,
               active: auto.active || 0,
@@ -1489,16 +1489,16 @@
                     disabled: evoBusy || (evo.loading && !st) || !overall,
                     onClick: function () { setEvolutionAutoConfirm(!autoConfirm) },
                   })),
-                // 每层条数上限：全局 / 工作区各一个；达到后拒绝新的 learn（合并 / 更新不受影响）。
+                // 每层学习频率：全局 / 工作区各一个；达到后拒绝新的 learn（合并 / 更新不受影响）。
                 overall ? React.createElement('div', { className: 'dsm-evo-section' },
                   React.createElement('div', { className: 'dsm-evo-section-title' }, t('evo.cap.title')),
                   React.createElement('p', { className: 'dsm-help dsm-evo-cap-hint' }, t('evo.cap.hint')),
                   renderEvolutionCapRow({
-                    key: 'maxNotesGlobal', label: t('evo.cap.global'), placeholder: capGlobal,
+                    key: 'maxLearnsGlobal', label: t('evo.cap.global'), placeholder: capGlobal,
                     disabled: evoBusy || (evo.loading && !st),
                   }),
                   renderEvolutionCapRow({
-                    key: 'maxNotesWorkspace', label: t('evo.cap.workspace'), placeholder: capWorkspace,
+                    key: 'maxLearnsWorkspace', label: t('evo.cap.workspace'), placeholder: capWorkspace,
                     disabled: evoBusy || (evo.loading && !st),
                   })) : null,
                 // 笔记风格：模型写新记忆的口吻（默认高效——无表情、无语气词）。

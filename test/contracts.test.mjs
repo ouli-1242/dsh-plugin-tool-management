@@ -43,8 +43,8 @@ import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/s
 import { parseModeState } from '../lib/memories/service.js'
 import { enabledSceneOf } from '../lib/memories/projection.js'
 import { normalizeEvolutionSettings, resolveEffectiveConfig } from '../lib/evolution/config.js'
-import { NOTE_CAP_DEFAULTS, NOTE_CAP_MAX, NOTE_CAP_MIN } from '../lib/evolution/limits.js'
-import { LAYER_QUOTA } from '../lib/evolution/gates.js'
+import { NOTE_RATE_DEFAULTS, NOTE_RATE_MAX, NOTE_RATE_MIN } from '../lib/evolution/limits.js'
+import { LAYER_QUOTA, runGates } from '../lib/evolution/gates.js'
 import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings, stripProactiveToolHidden } from '../lib/tools/table.js'
@@ -4867,27 +4867,55 @@ test('当前场景排除恒常的 global：global 恒启用，但不是 activeSc
   assert.equal(enabledSceneOf(index), 'beta', '全局启用的场景同样要压过 global')
 })
 
-test('自主记忆每层条数上限：出厂值与夹取范围只有一份真相', () => {
+test('自主记忆每层学习频率：出厂值与夹取范围只有一份真相', () => {
   // 设置弹窗的 placeholder、配置归一化、门禁兜底都读同一份默认值；改一处忘另一处
-  // 会表现为「界面显示 100，实际按旧值拒绝」。
+  // 会表现为「界面显示 5，实际按旧值拒绝」。
   const d = normalizeEvolutionSettings({})
-  assert.equal(d.maxNotesGlobal, NOTE_CAP_DEFAULTS.global)
-  assert.equal(d.maxNotesWorkspace, NOTE_CAP_DEFAULTS.workspace)
-  assert.equal(LAYER_QUOTA.global, NOTE_CAP_DEFAULTS.global)
-  assert.equal(LAYER_QUOTA.workspace, NOTE_CAP_DEFAULTS.workspace)
+  assert.equal(d.maxLearnsGlobal, NOTE_RATE_DEFAULTS.global)
+  assert.equal(d.maxLearnsWorkspace, NOTE_RATE_DEFAULTS.workspace)
+  // 条数没有总上限：限流只走频率门，全局 / 工作区不因总数触发配额拒绝。
+  assert.equal(LAYER_QUOTA.global, Number.POSITIVE_INFINITY)
+  assert.equal(LAYER_QUOTA.workspace, Number.POSITIVE_INFINITY)
 
-  assert.equal(normalizeEvolutionSettings({ maxNotesGlobal: 0 }).maxNotesGlobal, NOTE_CAP_MIN, '0 会锁死这一层，夹到下限')
-  assert.equal(normalizeEvolutionSettings({ maxNotesWorkspace: 99999 }).maxNotesWorkspace, NOTE_CAP_MAX, '超大值夹到上限')
-  assert.equal(normalizeEvolutionSettings({ maxNotesGlobal: 12.7 }).maxNotesGlobal, 13, '取整')
+  assert.equal(normalizeEvolutionSettings({ maxLearnsGlobal: 0 }).maxLearnsGlobal, NOTE_RATE_MIN, '0 会让这一层永远学不进来，夹到下限')
+  assert.equal(normalizeEvolutionSettings({ maxLearnsWorkspace: 99999 }).maxLearnsWorkspace, NOTE_RATE_MAX, '超大值夹到上限')
+  assert.equal(normalizeEvolutionSettings({ maxLearnsGlobal: 12.7 }).maxLearnsGlobal, 13, '取整')
 
-  // 会话 / 工作区覆盖逐字段压过全局：上限也走同一条解析。
+  // 会话 / 工作区覆盖逐字段压过全局：频率也走同一条解析。
   const eff = resolveEffectiveConfig(
-    normalizeEvolutionSettings({ maxNotesGlobal: 30, maxNotesWorkspace: 40 }),
-    { maxNotesGlobal: 7 },
-    { maxNotesWorkspace: 9 },
+    normalizeEvolutionSettings({ maxLearnsGlobal: 30, maxLearnsWorkspace: 40 }),
+    { maxLearnsGlobal: 7 },
+    { maxLearnsWorkspace: 9 },
   )
-  assert.equal(eff.maxNotesGlobal, 7, '会话覆盖优先')
-  assert.equal(eff.maxNotesWorkspace, 9, '会话覆盖优先（工作区）')
+  assert.equal(eff.maxLearnsGlobal, 7, '会话覆盖优先')
+  assert.equal(eff.maxLearnsWorkspace, 9, '会话覆盖优先（工作区）')
+})
+
+test('自主记忆频率门：窗口内新增到量就拒绝，合并不占名额', () => {
+  const ctx = (recent, existing = []) => ({
+    allowed: { global: true, workspace: true },
+    existing,
+    countByLayer: {},
+    recentByLayer: { global: recent },
+    rateByLayer: { global: 5 },
+    knownWorkspaces: new Set(),
+    knownScenes: new Set(),
+    tombstones: [],
+    maxTextLength: 400,
+  })
+  const input = { text: '使用 pnpm', source: 'model_inference', layer: 'global' }
+  const rejected = runGates(input, ctx(5))
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.gate, 'quota', '到量后拒绝新的 learn')
+  assert.equal(runGates(input, ctx(4)).ok, true, '未到量仍可写入')
+
+  const existing = [{
+    id: 'global/pkg', layer: 'global', key: 'pkg',
+    text: '使用 pnpm', status: 'active', origin: 'auto',
+  }]
+  const merged = runGates(input, ctx(5, existing))
+  assert.equal(merged.ok, true, '合并已有条目不占名额')
+  assert.equal(merged.mergeInto, 'global/pkg')
 })
 
 test('记忆读取入口保留可见：合并后的清单 / 搜索 / 正文是发现路径', () => {

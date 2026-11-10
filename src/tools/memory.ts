@@ -764,10 +764,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   // 弹卡策略：自动确认关 → 每次都问；开 → 不弹卡，由 agent 决定。生效判断在 gates 的 `autoActive`。
   if (!deps.evolutionOps || !deps.autoLearnEnabled) return
   const noteOps = deps.evolutionOps
-  // 热路径的频率上限：模型在一轮里反复 learn / 弹卡时，10 分钟窗口最多 5 条。
-  const learnCalls = new Map<string, { at: number; n: number }>()
-  const LEARN_WINDOW_MS = 10 * 60_000
-  const LEARN_MAX = 5
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
@@ -829,18 +825,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
       // ── learn（默认）──
       const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
-      if (identity?.sessionId) {
-        const now = Date.now()
-        const hit = learnCalls.get(identity.sessionId)
-        if (!hit || now - hit.at > LEARN_WINDOW_MS) {
-          if (learnCalls.size > 256) learnCalls.clear()
-          learnCalls.set(identity.sessionId, { at: now, n: 1 })
-        } else if (hit.n >= LEARN_MAX) {
-          throw new Error('already tried to save ' + LEARN_MAX + ' notes in the last 10 minutes; stop and continue the task. The user can still ask you to remember more.')
-        } else {
-          hit.n += 1
-        }
-      }
       // `note` 是模型按工具名最常写的那个字段（真实会话里就有人把正文塞进 `note`，
       // 然后在 `text` 的必填校验上白跑一次）。learn 时把它当正文别名；forget 仍只读 `note`。
       const bodyArg = args && String(args.text || '').trim() !== '' ? args.text : args && args.note

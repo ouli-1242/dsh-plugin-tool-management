@@ -197,12 +197,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (typeof patch.inject === 'boolean') next.inject = patch.inject
         if (typeof patch.reviewEveryTurns === 'number') next.reviewEveryTurns = patch.reviewEveryTurns
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession
-        // 每层条数上限：数字 = 新值；`null` = 清空回出厂值（与目录上限的「空框」同一语义）。
+        // 每层学习频率：数字 = 每 10 分钟最多新增多少条；`null` = 回出厂值（空框语义）。
         // 越界值由 `normalizeEvolutionSettings` 统一夹取，这里不写第二份判据。
-        if (typeof patch.maxNotesGlobal === 'number') next.maxNotesGlobal = patch.maxNotesGlobal
-        else if (patch.maxNotesGlobal === null) next.maxNotesGlobal = DEFAULT_EVOLUTION_SETTINGS.maxNotesGlobal
-        if (typeof patch.maxNotesWorkspace === 'number') next.maxNotesWorkspace = patch.maxNotesWorkspace
-        else if (patch.maxNotesWorkspace === null) next.maxNotesWorkspace = DEFAULT_EVOLUTION_SETTINGS.maxNotesWorkspace
+        if (typeof patch.maxLearnsGlobal === 'number') next.maxLearnsGlobal = patch.maxLearnsGlobal
+        else if (patch.maxLearnsGlobal === null) next.maxLearnsGlobal = DEFAULT_EVOLUTION_SETTINGS.maxLearnsGlobal
+        if (typeof patch.maxLearnsWorkspace === 'number') next.maxLearnsWorkspace = patch.maxLearnsWorkspace
+        else if (patch.maxLearnsWorkspace === null) next.maxLearnsWorkspace = DEFAULT_EVOLUTION_SETTINGS.maxLearnsWorkspace
         if (typeof patch.model === 'string') next.model = patch.model
         // 风格：任意输入都过一遍 normalize，custom 没带文本自动退回 efficient。
         if (patch.noteStyle !== undefined || patch.noteStyleText !== undefined) {
