@@ -7,7 +7,7 @@
 // 不测文案、不测字段顺序、不测具体 token 数（改一句话就红的那种）。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { routeLayer, narrowerOf } from '../lib/evolution/route.js'
+import { routeLayer } from '../lib/evolution/route.js'
 import { runGates, securityScan, durabilityOf, looksDerivable, similarity, inferKind, tombstoneBlocked } from '../lib/evolution/gates.js'
 import { autoSnapshotKey } from '../lib/evolution/runtime.js'
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
@@ -23,7 +23,7 @@ import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf } 
  * 掩盖真正要测的东西。
  */
 const ctxOf = (patch = {}) => ({
-  writeTarget: 'route',
+  allowed: { global: true, workspace: true },
   existing: [],
   countByLayer: {},
   knownWorkspaces: new Set(['abcd1234abcd1234']),
@@ -69,49 +69,55 @@ const entryOf = (over = {}) => {
 
 // ── 路由 ───────────────────────────────────────────────────────────────────
 
+const BOTH = { global: true, workspace: true }
+
 test('路由：全局措辞只有「用户明说」才算数', () => {
-  const explicit = routeLayer({ text: '以后所有项目都先给结论', source: 'user_explicit', writeTarget: 'route', workspaceHash: 'abcd1234abcd1234' })
+  const explicit = routeLayer({ text: '以后所有项目都先给结论', source: 'user_explicit', allowed: BOTH, workspaceHash: 'abcd1234abcd1234' })
   assert.equal(explicit.layer, 'global')
   // 同一句话是模型推断的 → 不进全局：它只是"看起来像全局"
-  const inferred = routeLayer({ text: '以后所有项目都先给结论', source: 'model_inference', writeTarget: 'route', workspaceHash: 'abcd1234abcd1234' })
+  const inferred = routeLayer({ text: '以后所有项目都先给结论', source: 'model_inference', allowed: BOTH, workspaceHash: 'abcd1234abcd1234' })
   assert.equal(inferred.layer, 'workspace')
 })
 
-test('路由：writeTarget 是上限，不是目标', () => {
-  const r = routeLayer({ text: '以后所有项目都先给结论', source: 'user_explicit', writeTarget: 'workspace', workspaceHash: 'abcd1234abcd1234' })
+test('路由：关掉的层不是目标，落到开着的那层并留痕', () => {
+  const r = routeLayer({ text: '以后所有项目都先给结论', source: 'user_explicit', allowed: { global: false, workspace: true }, workspaceHash: 'abcd1234abcd1234' })
   assert.equal(r.layer, 'workspace')
   assert.equal(r.desired, 'global', 'desired 记原始想要，界面靠它解释"为什么被降级"')
-  assert.equal(r.degraded, 'scope-too-narrow')
+  assert.equal(r.degraded, 'layer-off')
+  const onlyGlobal = routeLayer({ text: '这个仓库用 pnpm', source: 'model_inference', allowed: { global: true, workspace: false }, workspaceHash: 'abcd1234abcd1234', forcedLayer: 'workspace' })
+  assert.equal(onlyGlobal.layer, 'global')
+  assert.equal(onlyGlobal.degraded, 'layer-off')
 })
 
 test('路由：拿不到工作区身份就落全局并留痕（不静默丢）', () => {
-  const noScene = routeLayer({ text: '这个场景不要用表格', source: 'user_explicit', writeTarget: 'route', workspaceHash: 'abcd1234abcd1234' })
+  const noScene = routeLayer({ text: '这个场景不要用表格', source: 'user_explicit', allowed: BOTH, workspaceHash: 'abcd1234abcd1234' })
   assert.equal(noScene.layer, 'workspace', '场景措辞不再产生场景层，按本项目落')
-  const noWs = routeLayer({ text: '别动 migrations', source: 'model_inference', writeTarget: 'route' })
+  const noWs = routeLayer({ text: '别动 migrations', source: 'model_inference', allowed: BOTH })
   assert.equal(noWs.layer, 'global')
   assert.equal(noWs.degraded, 'no-workspace', '宁可多一条全局，也不要一条学完永远看不见的')
-  // 取窄仍有定义：全局比本项目宽
-  assert.equal(narrowerOf('global', 'workspace'), 'workspace')
+  // 只开工作区又没有 cwd：不能退到用户关掉的全局层，只能拒绝。
+  const blocked = routeLayer({ text: '别动 migrations', source: 'model_inference', allowed: { global: false, workspace: true } })
+  assert.equal(blocked.blocked, true)
 })
 
-test('路由：模型显式指定的层也越不过上限；旧 session/scene 按本项目解释', () => {
-  const r = routeLayer({ text: '别动 migrations', source: 'model_inference', writeTarget: 'session', workspaceHash: 'abcd1234abcd1234', forcedLayer: 'global' })
+test('路由：模型显式指定的层也越不过开关；旧 session/scene 按本项目解释', () => {
+  const r = routeLayer({ text: '别动 migrations', source: 'model_inference', allowed: { global: false, workspace: true }, workspaceHash: 'abcd1234abcd1234', forcedLayer: 'global' })
   assert.equal(r.layer, 'workspace')
   assert.equal(r.desired, 'global')
-  assert.equal(r.degraded, 'scope-too-narrow')
-  const legacy = routeLayer({ text: '别动 migrations', source: 'model_inference', writeTarget: 'route', workspaceHash: 'abcd1234abcd1234', forcedLayer: 'session' })
+  assert.equal(r.degraded, 'layer-off')
+  const legacy = routeLayer({ text: '别动 migrations', source: 'model_inference', allowed: BOTH, workspaceHash: 'abcd1234abcd1234', forcedLayer: 'session' })
   assert.equal(legacy.layer, 'workspace', '会话层已取消：旧入参不再产生 _session 目录')
 })
 
 test('路由：显式层压过内容措辞（卡片选工作区不被「所有项目」抬到全局）', () => {
   const forcedWs = routeLayer({
-    text: '以后所有项目都先给结论', source: 'user_explicit', writeTarget: 'route',
+    text: '以后所有项目都先给结论', source: 'user_explicit', allowed: BOTH,
     workspaceHash: 'abcd1234abcd1234', forcedLayer: 'workspace',
   })
   assert.equal(forcedWs.layer, 'workspace', '用户选了本工作区，措辞不能把它抬走')
   assert.equal(forcedWs.desired, 'workspace')
   const forcedGlobal = routeLayer({
-    text: '这个仓库用 pnpm', source: 'model_inference', writeTarget: 'route',
+    text: '这个仓库用 pnpm', source: 'model_inference', allowed: BOTH,
     workspaceHash: 'abcd1234abcd1234', forcedLayer: 'global',
   })
   assert.equal(forcedGlobal.layer, 'global', '用户选了全局，没有全局措辞也照样进全局')

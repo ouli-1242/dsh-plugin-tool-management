@@ -29,7 +29,6 @@ import {
   runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome, type ReviewCode,
 } from './gates.js'
 import { deriveKey } from './gates.js'
-import { capLayerOf } from './route.js'
 import { draftOrganize, type OrganizeAction, type OrganizeDraft } from './organize.js'
 import {
   bumpRevision, confidenceOf, emptyCounters, pushTransition, textHashOf,
@@ -92,7 +91,7 @@ export type LearnResult = LearnSuccess | LearnFailure
  * 只读预演：同一条请求**如果用户在卡片上选了推荐层并批准**，会落到哪一层、是否生效、
  * 会合并 / 取代谁。调用方据此决定要不要弹卡（门禁拒绝、与用户记忆冲突、锁定目标都不弹）。
  *
- * `allowedLayers` 是卡片可提供的选项：受 `writeTarget` 上限与工作区身份裁剪；
+ * `allowedLayers` 是卡片可提供的选项：由两个自主记忆开关与工作区身份裁剪；
  * 至少包含 `layer` 本身（拿不到工作区路径时，写入仍会按现有规则回落到全局）。
  */
 export interface LearnPreviewSuccess {
@@ -196,7 +195,7 @@ export function createLearner(deps: LearnDeps) {
       ...(env.sessionId !== undefined ? { sessionId: env.sessionId } : {}),
       ...(env.workspaceHash !== undefined ? { workspaceHash: env.workspaceHash } : {}),
       ...(env.scene !== undefined ? { scene: env.scene } : {}),
-      writeTarget: config.writeTarget,
+      allowed: { global: config.learnGlobal, workspace: config.learnWorkspace },
       // `locked` 只在 state 里：快照给的是记忆域的形状，没有这个字段。不补上的话
       // 门禁会把一条用户手改过的条目当成普通合并目标，预览也会说「会合并」，
       // 真正写入时才被 mergeInto 拒掉。
@@ -324,12 +323,11 @@ export function createLearner(deps: LearnDeps) {
     const chosen = first.reviewCode === 'user-conflict' ? first : runGates(input(first.layer), ctx)
     if (!chosen.ok) return { ok: false, code: 'gate', error: chosen.error, gate: chosen.gate, detail: chosen.detail }
 
-    const cap = capLayerOf(config.writeTarget)
     const allowed: MemoryLayer[] = []
-    if (cap === LAYER_GLOBAL) allowed.push(LAYER_GLOBAL)
-    if (env.workspaceHash !== undefined) allowed.push(LAYER_WORKSPACE)
-    // 拿不到工作区路径时 routeLayer 会回落到全局；此时即使 writeTarget 上限是工作区，
-    // 可选层也只能是它实际能落的这一层（否则卡片会给出一个必然被改写的选项）。
+    if (config.learnGlobal) allowed.push(LAYER_GLOBAL)
+    if (config.learnWorkspace && env.workspaceHash !== undefined) allowed.push(LAYER_WORKSPACE)
+    // 路由可能因为「只开工作区但拿不到 cwd」之类的原因落到一个不在开关里的层；此时
+    // 卡片只能给出实际能落的这一层（否则会给出一个必然被改写的选项）。
     if (!allowed.includes(chosen.layer)) allowed.unshift(chosen.layer)
 
     const boundary = String(req.boundary ?? '').trim().slice(0, MAX_BOUNDARY)

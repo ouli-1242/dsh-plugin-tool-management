@@ -25,36 +25,58 @@ const G = DEFAULT_EVOLUTION_SETTINGS
 
 test('三级开关：下层可以覆盖上层的「关」', () => {
   // 全局关 + 工作区开 → 开（只给这个项目开）
-  assert.equal(resolveEffectiveConfig(G, { enabled: true }).enabled, true)
+  assert.equal(resolveEffectiveConfig(G, { learnWorkspace: true }).enabled, true)
   // 全局开 + 会话关 → 关（这个对话别学）
-  assert.equal(resolveEffectiveConfig({ ...G, enabled: true }, undefined, { enabled: false }).enabled, false)
+  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true }, undefined, { learnGlobal: false, learnWorkspace: false }).enabled, false)
   // 会话优先于工作区
-  assert.equal(resolveEffectiveConfig(G, { enabled: true }, { enabled: false }).enabled, false)
+  assert.equal(resolveEffectiveConfig(G, { learnWorkspace: true }, { learnGlobal: false, learnWorkspace: false }).enabled, false)
   // 都没设 → 全局
-  assert.equal(resolveEffectiveConfig({ ...G, enabled: true }, {}, {}).enabled, true)
+  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true }, {}, {}).enabled, true)
+})
+
+test('两层开关：只开一层时 enabled 仍为真，另一层保持关', () => {
+  const onlyWorkspace = resolveEffectiveConfig({ ...G, learnWorkspace: true })
+  assert.equal(onlyWorkspace.enabled, true)
+  assert.equal(onlyWorkspace.learnGlobal, false)
+  assert.equal(onlyWorkspace.learnWorkspace, true)
+  const onlyGlobal = resolveEffectiveConfig({ ...G, learnGlobal: true })
+  assert.equal(onlyGlobal.enabled, true)
+  assert.equal(onlyGlobal.learnGlobal, true)
+  assert.equal(onlyGlobal.learnWorkspace, false)
 })
 
 test('inject 默认跟随 enabled：全新安装不会因为磁盘上有历史文件就注入', () => {
   assert.equal(resolveEffectiveConfig(G).inject, false)
-  assert.equal(resolveEffectiveConfig({ ...G, enabled: true }).inject, true)
+  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true }).inject, true)
   // 显式设了就听显式的（"不学但用已有的"）
-  assert.equal(resolveEffectiveConfig({ ...G, enabled: true, inject: false }).inject, false)
-  assert.equal(resolveEffectiveConfig({ ...G, enabled: false, inject: true }).inject, true)
+  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true, inject: false }).inject, false)
+  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: false, learnWorkspace: false, inject: true }).inject, true)
 })
 
 test('source 报最具体的那一档（界面显示「来源」）', () => {
   assert.equal(resolveEffectiveConfig(G).source, 'global')
-  assert.equal(resolveEffectiveConfig(G, { enabled: true }).source, 'workspace')
-  assert.equal(resolveEffectiveConfig(G, { enabled: true }, { enabled: false }).source, 'session')
+  assert.equal(resolveEffectiveConfig(G, { learnWorkspace: true }).source, 'workspace')
+  assert.equal(resolveEffectiveConfig(G, { learnWorkspace: true }, { learnGlobal: false, learnWorkspace: false }).source, 'session')
   // 空对象不算覆盖
   assert.equal(resolveEffectiveConfig(G, {}, {}).source, 'global')
 })
 
+test('旧配置迁移：enabled + writeTarget 翻译成两个开关', () => {
+  const both = normalizeEvolutionSettings({ enabled: true, learnScope: 'global', writeTarget: 'route' })
+  assert.equal(both.learnGlobal, true)
+  assert.equal(both.learnWorkspace, true)
+  const workspaceOnly = normalizeEvolutionSettings({ enabled: true, writeTarget: 'workspace' })
+  assert.equal(workspaceOnly.learnGlobal, false)
+  assert.equal(workspaceOnly.learnWorkspace, true)
+  const off = normalizeEvolutionSettings({ enabled: false })
+  assert.equal(off.learnGlobal, false)
+  assert.equal(off.learnWorkspace, false)
+})
+
 test('坏值回退出厂值，不抛错', () => {
-  const s = normalizeEvolutionSettings({ enabled: 'yes', learnScope: 'nope', writeTarget: 42, reviewEveryTurns: -3 })
-  assert.equal(s.enabled, G.enabled)
-  assert.equal(s.learnScope, G.learnScope)
-  assert.equal(s.writeTarget, G.writeTarget)
+  const s = normalizeEvolutionSettings({ learnGlobal: 'yes', learnWorkspace: 42, reviewEveryTurns: -3 })
+  assert.equal(s.learnGlobal, G.learnGlobal)
+  assert.equal(s.learnWorkspace, G.learnWorkspace)
   assert.equal(s.reviewEveryTurns, 1) // 夹到下限
 })
 

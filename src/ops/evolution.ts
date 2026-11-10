@@ -168,9 +168,11 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (args?.set !== true) return { ok: true, settings: current }
         const patch = args.settings && typeof args.settings === 'object' ? args.settings : {}
         const next: EvolutionSettings = { ...current }
-        if (typeof patch.enabled === 'boolean') next.enabled = patch.enabled
-        if (typeof patch.learnScope === 'string') next.learnScope = patch.learnScope
-        if (typeof patch.writeTarget === 'string') next.writeTarget = patch.writeTarget
+        // 旧客户端只认识 `enabled`：按「两层同值」兼容，不让老界面把新字段写丢。
+        if (typeof patch.learnGlobal === 'boolean') next.learnGlobal = patch.learnGlobal
+        else if (typeof patch.enabled === 'boolean') next.learnGlobal = patch.enabled
+        if (typeof patch.learnWorkspace === 'boolean') next.learnWorkspace = patch.learnWorkspace
+        else if (typeof patch.enabled === 'boolean') next.learnWorkspace = patch.enabled
         if (typeof patch.inject === 'boolean') next.inject = patch.inject
         if (typeof patch.reviewEveryTurns === 'number') next.reviewEveryTurns = patch.reviewEveryTurns
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession
@@ -208,7 +210,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (!inherit && typeof enabled !== 'boolean') return { ok: false, error: 'enabled 必须是布尔值', code: 'bad-args' }
         if (scope === 'global') {
           if (inherit) return { ok: false, error: '全局这一档没有「继承」', code: 'bad-args' }
-          const written = await config.writeSettings({ ...(await config.readSettings()), enabled })
+          // 旧的总开关语义保留：一次拨动两层同值。新界面用 `evolution-settings` 分别写。
+          const written = await config.writeSettings({ ...(await config.readSettings()), learnGlobal: enabled, learnWorkspace: enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
           notifySettingsChanged()
@@ -224,7 +227,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           // 标签沿用已存的那一份：开关请求通常不带 label，覆盖成 '' 会把用户见过的
           // 工作区名字抹掉（下拉框里就只剩一串路径）。
           const label = typeof args?.label === 'string' && args.label !== '' ? args.label : (record?.label ?? '')
-          const written = await config.writeWorkspace(scopeKey, cwd ?? '', label, inherit ? {} : { ...prev, enabled })
+          const written = await config.writeWorkspace(scopeKey, cwd ?? '', label, inherit ? {} : { ...prev, learnGlobal: enabled, learnWorkspace: enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
           notifySettingsChanged()
@@ -235,7 +238,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           if (!sessionId) return { ok: false, error: '拿不到会话 id，无法保存会话开关', code: 'no-session' }
           const sessions = await config.readSessions()
           const prev = sessions.sessions[sessionId]?.evolution ?? {}
-          const written = await config.writeSession(sessionId, inherit ? {} : { ...prev, enabled })
+          const written = await config.writeSession(sessionId, inherit ? {} : { ...prev, learnGlobal: enabled, learnWorkspace: enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
           notifySettingsChanged()
@@ -265,7 +268,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const { scopeKey } = await workspaceOf(args)
         const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
         const cfg = await config.effective(scopeKey, sessionId)
-        if (!cfg.enabled || cfg.learnScope === 'off') {
+        if (!cfg.enabled) {
           return { ok: false, error: 'autonomous memory is off for this conversation / workspace', code: 'disabled' }
         }
         return await learner.preview(
@@ -299,7 +302,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
         const cfg = await config.effective(scopeKey, sessionId)
         // 开关：学不学是一道独立的门，与"能不能写"无关。关了就说清为什么，别静默成功。
-        if (!cfg.enabled || cfg.learnScope === 'off') {
+        if (!cfg.enabled) {
           return { ok: false, error: 'autonomous memory is off for this conversation / workspace', code: 'disabled' }
         }
         const result = await learner.learn(

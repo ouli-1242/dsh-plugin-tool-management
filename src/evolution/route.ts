@@ -1,41 +1,21 @@
 // 写入路由：一条自动记忆该落在哪一层。
 //
-// 三个轴是正交的（docs 01-model §2）：`layer` 是数据属性（谁能看见），`origin` 是谁写的，
-// `learnScope` 是策略（在哪儿允许学）。本文件只算 `layer`，不看 `learnScope` —— 后者决定
-// "开不开学习"，不影响"该记在哪"。混在一起就会出现"在会话里学的没资格进全局"这种错论：
-// 会话只是场所，不是证据强度的上限。
+// 三个轴是正交的：`layer` 是数据属性（谁能看见），`origin` 是谁写的，`allowed` 是策略
+// （哪几层允许写）。本文件只算 `layer`；「开不开学习」由 `enabled` 在更外层判。
 //
 // 路由两步，顺序不能反：
 //   ① 按**内容与环境**判"想要哪层"（下面 ROUTE_RULES）
-//   ② 与 `writeTarget` 的**上限**取更窄者
-// 为什么第②步是"取窄"而不是"拒绝"：拒绝会让"全局措辞 + 会话上限"这句话一个字都记不下来，
-// 而降级到工作区仍然有用。降级必须留痕（`degraded`），否则用户会以为全局记上了。
+//   ② 与两个开关的**允许层**求交
+// 目标层被关掉时落到另一层并留痕（`degraded`），不静默改层；两层都不可用则 `blocked`，
+// 由门禁给出明确错误 —— 拒绝比悄悄写到用户关掉的那一层好。
 
-import { LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
-import type { WriteTarget } from './config.js'
+import { LAYER_GLOBAL, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
 import type { EvidenceSource } from './state.js'
 
-/** 层从窄到宽的序号：取 `min` 即"取更窄的上限"。 */
-const LAYER_RANK: Record<MemoryLayer, number> = {
-  [LAYER_SESSION]: 0,
-  [LAYER_SCENE]: 1,
-  [LAYER_WORKSPACE]: 2,
-  [LAYER_GLOBAL]: 3,
-}
-
-export const narrowerOf = (a: MemoryLayer, b: MemoryLayer): MemoryLayer => (LAYER_RANK[a] <= LAYER_RANK[b] ? a : b)
-
-/**
- * `writeTarget` 的**上限层**。
- *
- * `global` 与 `route` 都表示"不设上限"：前者是给界面的措辞（"最多记到全局"），后者是
- * 出厂默认。让两个值行为一致是有意的 —— 区别只在文案，不在语义，少一条分支就少一个
- * "两个看起来一样的选项行为不同"的坑。
- */
-export function capLayerOf(target: WriteTarget): MemoryLayer {
-  // 会话层已取消：旧配置里残留的 `session` 按最窄的工作区解释，不再产生 `_session/` 目录。
-  if (target === 'session' || target === 'workspace') return LAYER_WORKSPACE
-  return LAYER_GLOBAL
+/** 两个自主记忆开关给出的允许层。 */
+export interface RouteAllowed {
+  global: boolean
+  workspace: boolean
 }
 
 /**
@@ -68,8 +48,8 @@ export interface RouteInput {
   text: string
   /** 证据来源：只有用户明说/纠正才可能升全局。 */
   source: EvidenceSource
-  /** `writeTarget`（配置）。 */
-  writeTarget: WriteTarget
+  /** 两个开关给出的允许层。 */
+  allowed: RouteAllowed
   /** 工作区 hash16；取不到 cwd 时为 undefined。 */
   workspaceHash?: string
   /** 当前启用的场景名；没有启用场景时为 undefined。 */
@@ -79,9 +59,9 @@ export interface RouteInput {
   /**
    * 模型显式要求的层（`memory_manager_auto` 的 `action=learn` 里的 `layer` 参数）。
    *
-   * 它**只是"想要"**，不越过上限与环境：指定的层缺身份（比如要 session 但没有 sid）或
-   * 超过 `writeTarget` 上限时照样压窄。理由：模型看不到"这个工作区有没有登记"、
-   * 也不知道用户把上限设成了会话；给它一个能绕过上限的参数，等于让上限形同虚设。
+   * 它**只是"想要"**，不越过开关与环境：指定的层关着或缺身份（比如要 workspace 但没有
+   * cwd）时照样改落另一层。理由：模型看不到用户关掉了哪一层；给它一个能绕过开关的参数，
+   * 等于让开关形同虚设。
    */
   forcedLayer?: MemoryLayer
 }
@@ -89,22 +69,22 @@ export interface RouteInput {
 export interface RouteResult {
   /** 最终落层。 */
   layer: MemoryLayer
-  /** 目录 group：`global` / `<scene>` / `_ws/<hash16>` / `_session/<sid>`。 */
+  /** 目录 group：`global` / `_ws/<hash16>`。 */
   group: string
   /** 按内容与环境算出的"想要"层（界面解释"为什么被降级"用）。 */
   desired: MemoryLayer
   /** 降级原因；没降级则没有这个键。 */
   degraded?: DegradeReason
+  /** 两层都不可用（或只开工作区但拿不到 cwd）：调用方应拒绝写入。 */
+  blocked?: boolean
 }
 
-export type DegradeReason = 'scope-too-narrow' | 'no-scene' | 'no-workspace' | 'no-session'
+export type DegradeReason = 'layer-off' | 'no-workspace'
 
 /** 降级原因的人话（界面与工具回执共用一份，避免两处措辞不同）。 */
 export const DEGRADE_NOTE: Record<DegradeReason, string> = {
-  'scope-too-narrow': '记到了本项目（当前的写入上限不允许全局）',
-  'no-scene': '场景层已取消，记到了本项目',
+  'layer-off': '记到了另一层（想写的那一层在自主记忆设置里关着）',
   'no-workspace': '拿不到工作区路径，记到了全局',
-  'no-session': '会话层已取消，记到了本项目',
 }
 
 export function routeLayer(input: RouteInput): RouteResult {
@@ -119,30 +99,34 @@ export function routeLayer(input: RouteInput): RouteResult {
     ? input.forcedLayer === LAYER_GLOBAL
     : ((input.source === 'user_explicit' || input.source === 'user_correction') && hasGlobalPhrase(input.text))
 
-  const cap = capLayerOf(input.writeTarget)
   // `desired` 记**原始想要**，不随后续降级改写：界面解释"为什么被降级"靠它对照
   // （想要全局、落了本项目），改写了这句解释就没法生成。
   const desired: MemoryLayer = wantsGlobal ? LAYER_GLOBAL : LAYER_WORKSPACE
   let layer = desired
   let degraded: DegradeReason | undefined
-  if (layer === LAYER_GLOBAL && cap !== LAYER_GLOBAL) {
+  if (layer === LAYER_GLOBAL && !input.allowed.global) {
     layer = LAYER_WORKSPACE
-    degraded = 'scope-too-narrow'
-  }
-  let group: string
-  if (layer === LAYER_GLOBAL) {
-    group = 'global'
-  } else if (input.workspaceHash) {
-    group = `_ws/${input.workspaceHash}`
-  } else {
-    // 拿不到工作区身份时不静默丢：落到全局并留降级痕迹，界面会说明"这条没绑到本项目"。
-    // 宁可多一条全局，也不要一条学完永远看不见的记忆。
+    degraded = 'layer-off'
+  } else if (layer === LAYER_WORKSPACE && !input.allowed.workspace) {
     layer = LAYER_GLOBAL
-    group = 'global'
-    degraded = degraded ?? 'no-workspace'
+    degraded = 'layer-off'
   }
 
-  return { layer, group, desired, ...(degraded !== undefined ? { degraded } : {}) }
+  // 目标层已经确定；只有工作区层需要 cwd。只开工作区又没有 cwd 时不能退到全局 ——
+  // 那是用户明确关掉的一层，写进去等于开关失效。
+  if (layer === LAYER_WORKSPACE) {
+    if (!input.allowed.workspace) return { layer, group: '', desired, blocked: true }
+    if (input.workspaceHash) return { layer, group: `_ws/${input.workspaceHash}`, desired, ...(degraded !== undefined ? { degraded } : {}) }
+    if (input.allowed.global) {
+      // 拿不到工作区身份时不静默丢：落到全局并留降级痕迹，界面会说明"这条没绑到本项目"。
+      return { layer: LAYER_GLOBAL, group: 'global', desired, degraded: 'no-workspace' }
+    }
+    return { layer: LAYER_WORKSPACE, group: '', desired, degraded: 'no-workspace', blocked: true }
+  }
+
+  // 全局层：开关允许才走到这里；两者都关时也不该静默写全局。
+  if (!input.allowed.global) return { layer: LAYER_GLOBAL, group: '', desired, blocked: true }
+  return { layer: LAYER_GLOBAL, group: 'global', desired, ...(degraded !== undefined ? { degraded } : {}) }
 }
 
 /** 从 group 反推层；旧 `_session/` / 场景目录一律按本项目读（迁移后只作兼容）。 */

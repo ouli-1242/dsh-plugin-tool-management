@@ -169,7 +169,11 @@ button.dsm-qty:disabled{cursor:default}
 /* 开启态只靠边框表达：不写「已开启」，也不给按钮加文字后缀。 */
 .dsm-modal-evo.dsm-evo-on{border-color:var(--dsw-alias-state-success-primary)}
 .dsm-evo-modal{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
-.dsm-evo-master{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:2px 0 6px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsm-evo-layers{display:flex;flex-direction:column;gap:8px;padding:2px 0 8px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsm-evo-layer{display:flex;align-items:center;gap:10px}
+.dsm-evo-layer .dsm-label{flex:none}
+.dsm-evo-layer .dsm-help{margin:0;margin-left:auto}
+.dsm-evo-master{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:2px 0 6px}
 .dsm-evo-master .dsm-help{margin:0;margin-left:auto}
 .dsm-evo-modal .dsm-evo-organize{margin:0}
 /* 行名是展开开关：复位成文字，读起来与别的行的名字一样，只是多一个 ▸ / ▾。 */
@@ -517,18 +521,15 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-pill-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
 .dsm-compat-reach-marks{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;min-width:0}
 .dsm-inject-settings{display:flex;flex-direction:column;gap:8px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
-/* 注入域开关：多域**一行**等分（用户 2026-10-12：「分六行很占用空间，能不能一行显示，
-   而且还能美观、简洁、高级」）。
-   做法：把「名字」本身做成控件（chip），而不是"名字 + 一颗 32px 开关"并排 —— 后者六份要
-   ~630px，一行塞不下只能缩字号。
-   ⚠️ 宽度写法是 flex:1 1 0 + min-width:max-content，**不是** flex:1 1 84px：
-   后者允许 flex 把 chip 压到比文字还窄，于是「全局提示词」被截成「全局提…」（用户
-   2026-10-12 报「有的显示不全」）。min-width:max-content 把每颗的下限钉在"文字完整放得下"，
-   行放得开就等分填满，放不开就按 flex-wrap 折成两行 —— 任何宽度下都不会截字。
+/* 注入域开关：八颗 chip 排成等宽网格（用户 2026-11-10：「这个排版设计好点」）。
+   此前是 flex 等分，最后一行只剩两颗时会被 flex:1 1 0 拉成整行宽的两大块；
+   改成 4 列 grid 后每颗同宽，八颗正好两行。窄栏（≤640px）退成两列，保证
+   「工作区自动记忆」这类长标签不被截断。
    开/关不只靠颜色：chip 里有一颗 6px 圆点，开 = 成功色实心、关 = 当前字色半透明，
    色盲或低对比屏上也能分辨；再加 role=switch + aria-checked 供读屏。 */
-.dsm-inject-domains{display:flex;flex-wrap:wrap;gap:6px}
-.dsm-inject-chip{box-sizing:border-box;display:inline-flex;flex:1 1 0;min-width:max-content;min-height:32px;align-items:center;justify-content:center;gap:6px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}
+.dsm-inject-domains{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+@media (max-width:640px){.dsm-inject-domains{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.dsm-inject-chip{box-sizing:border-box;display:inline-flex;width:100%;min-width:0;min-height:32px;align-items:center;justify-content:center;gap:6px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}
 .dsm-inject-chip:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsm-inject-chip:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}
 .dsm-inject-chip-dot{flex:none;width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.4}

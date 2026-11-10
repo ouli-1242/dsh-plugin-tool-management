@@ -29,8 +29,6 @@ export function workspaceHashOf(scopeKey: string): string {
   return createHash('sha256').update(String(scopeKey)).digest('hex').slice(0, WORKSPACE_HASH_LEN)
 }
 
-export type LearnScope = 'off' | 'session' | 'workspace' | 'global'
-export type WriteTarget = 'session' | 'workspace' | 'global' | 'route'
 /** 学到的笔记用什么口吻写（用户 2026-11-10：默认简洁高效，不要表情和语气词）。 */
 export type NoteStyle = 'efficient' | 'friendly' | 'minimal' | 'custom'
 
@@ -65,9 +63,16 @@ export function noteStyleGuideOf(style: NoteStyle, custom: string): string {
 
 /** 全局默认值与可覆盖字段的公共形状。 */
 export interface EvolutionOverrides {
-  enabled?: boolean
-  learnScope?: LearnScope
-  writeTarget?: WriteTarget
+  /**
+   * 全局层是否启用：同时决定「允不允许学」与「注不注入」。
+   *
+   * 两个开关取代了旧的 `enabled` + `learnScope` + `writeTarget` 三件套：旧模型里
+   * 「在哪学」和「最多写到哪」是两条正交轴，但界面上从来没有暴露过后两者，用户实际
+   * 只会问「全局要不要 / 工作区要不要」。两项都关 = 功能关闭。
+   */
+  learnGlobal?: boolean
+  /** 工作区层是否启用；语义同上。 */
+  learnWorkspace?: boolean
   /**
    * 是否注入。`undefined` = 跟随 `enabled`（见 resolveEffectiveConfig）。
    * 独立出来的理由：用户可能"不想学，但之前学的还能用"，也可能"先攒着，回头再看"。
@@ -89,13 +94,12 @@ export interface EvolutionSettings extends Required<Omit<EvolutionOverrides, 'in
 }
 
 /**
- * 出厂值。`enabled=false` 是硬要求：这个功能改变的是「agent 可以不经用户要求就写记忆」，
+ * 出厂值。两个开关都 `false` 是硬要求：这个功能改变的是「agent 可以不经用户要求就写记忆」，
  * 授权边界的变更必须由用户显式打开。
  */
 export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
-  enabled: false,
-  learnScope: 'global',
-  writeTarget: 'route',
+  learnGlobal: false,
+  learnWorkspace: false,
   reviewEveryTurns: 8,
   maxReviewsPerSession: 2,
   model: '',
@@ -105,6 +109,8 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
 
 /** 解析后的生效配置，附带「哪一档说了算」。 */
 export interface EffectiveEvolutionConfig extends EvolutionSettings {
+  /** 两项任一为真；工具可见性与后台复习读它。 */
+  enabled: boolean
   /** `inject` 已按「跟随 enabled」解析过，不是 undefined。 */
   inject: boolean
   /** 最具体的那一档：界面显示「来源：本工作区设置」。 */
@@ -115,13 +121,22 @@ export interface EffectiveEvolutionConfig extends EvolutionSettings {
   sessionId?: string
 }
 
-const LEARN_SCOPES: readonly LearnScope[] = ['off', 'session', 'workspace', 'global']
-const WRITE_TARGETS: readonly WriteTarget[] = ['session', 'workspace', 'global', 'route']
-
-const oneOf = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
-  (typeof v === 'string' && (allowed as readonly string[]).includes(v) ? (v as T) : fallback)
-
 const boolOf = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback)
+
+/**
+ * 旧配置 → 两个新开关。
+ *
+ * 旧版有 `enabled` + `learnScope` + `writeTarget` 三个字段，但界面只暴露过 `enabled`；
+ * `writeTarget` 是「最多写到哪」的上限，升级时把它翻译成「只开哪一层」最接近原意：
+ * 上限是工作区的人不该突然获得写全局的资格。`learnScope` 除 `off` 外没有实际限制作用，
+ * 因此不参与迁移。旧值在 `enabled=false` 时一律两项全关。
+ */
+function legacyLearnFlags(raw: any): { global: boolean; workspace: boolean } | undefined {
+  if (typeof raw?.enabled !== 'boolean') return undefined
+  if (raw.enabled === false) return { global: false, workspace: false }
+  if (raw.writeTarget === 'workspace' || raw.writeTarget === 'session') return { global: false, workspace: true }
+  return { global: true, workspace: true }
+}
 
 const intOf = (v: unknown, fallback: number, min: number, max: number): number => {
   if (typeof v !== 'number' || !Number.isFinite(v)) return fallback
@@ -133,13 +148,13 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
   const r = raw && typeof raw === 'object' ? raw : {}
   const d = DEFAULT_EVOLUTION_SETTINGS
   const inject = typeof r.inject === 'boolean' ? r.inject : undefined
+  const legacy = legacyLearnFlags(r)
   const style = normalizeNoteStyle(r.noteStyle === undefined && r.noteStyleText === undefined
     ? undefined
     : { style: r.noteStyle, custom: r.noteStyleText })
   return {
-    enabled: boolOf(r.enabled, d.enabled),
-    learnScope: oneOf(r.learnScope, LEARN_SCOPES, d.learnScope),
-    writeTarget: oneOf(r.writeTarget, WRITE_TARGETS, d.writeTarget),
+    learnGlobal: typeof r.learnGlobal === 'boolean' ? r.learnGlobal : (legacy?.global ?? d.learnGlobal),
+    learnWorkspace: typeof r.learnWorkspace === 'boolean' ? r.learnWorkspace : (legacy?.workspace ?? d.learnWorkspace),
     ...(inject !== undefined ? { inject } : {}),
     reviewEveryTurns: intOf(r.reviewEveryTurns, d.reviewEveryTurns, 1, 100),
     maxReviewsPerSession: intOf(r.maxReviewsPerSession, d.maxReviewsPerSession, 0, 20),
@@ -153,9 +168,11 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
 export function normalizeOverrides(raw: any): EvolutionOverrides {
   const r = raw && typeof raw === 'object' ? raw : {}
   const out: EvolutionOverrides = {}
-  if (typeof r.enabled === 'boolean') out.enabled = r.enabled
-  if (typeof r.learnScope === 'string' && (LEARN_SCOPES as readonly string[]).includes(r.learnScope)) out.learnScope = r.learnScope
-  if (typeof r.writeTarget === 'string' && (WRITE_TARGETS as readonly string[]).includes(r.writeTarget)) out.writeTarget = r.writeTarget
+  const legacy = legacyLearnFlags(r)
+  if (typeof r.learnGlobal === 'boolean') out.learnGlobal = r.learnGlobal
+  else if (legacy !== undefined) out.learnGlobal = legacy.global
+  if (typeof r.learnWorkspace === 'boolean') out.learnWorkspace = r.learnWorkspace
+  else if (legacy !== undefined) out.learnWorkspace = legacy.workspace
   if (typeof r.inject === 'boolean') out.inject = r.inject
   if (typeof r.reviewEveryTurns === 'number' && Number.isFinite(r.reviewEveryTurns)) out.reviewEveryTurns = intOf(r.reviewEveryTurns, 8, 1, 100)
   if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, 2, 0, 20)
@@ -193,13 +210,15 @@ export function resolveEffectiveConfig(
     }
     return undefined
   }
-  const enabled = pick('enabled') ?? global.enabled
+  const learnGlobal = pick('learnGlobal') ?? global.learnGlobal
+  const learnWorkspace = pick('learnWorkspace') ?? global.learnWorkspace
+  const enabled = learnGlobal || learnWorkspace
   // 全局也可能显式设了 `inject`（"只记不用"）；只查两层覆盖会把它当成"没设"。
   const injectRaw = pick('inject') ?? global.inject
   return {
+    learnGlobal,
+    learnWorkspace,
     enabled,
-    learnScope: pick('learnScope') ?? global.learnScope,
-    writeTarget: pick('writeTarget') ?? global.writeTarget,
     inject: injectRaw === undefined ? enabled : injectRaw,
     reviewEveryTurns: pick('reviewEveryTurns') ?? global.reviewEveryTurns,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,

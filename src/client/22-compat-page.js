@@ -57,6 +57,9 @@
       // 注入设置（本插件各注入域的开关，清单见 context-inject 的 INJECT_DOMAIN_KEYS）。它和可达性矩阵是一体两面：
       // 矩阵说"到不到得了"，这里决定"要不要"。读不到时这一节不显示。
       const [inject, setInject] = React.useState(null)
+      // 两条自动记忆的开关住在 `evolution/settings.json`（学习 + 注入一体），不在 inject 侧车。
+      // 这一页的两颗 auto chip 只做它的视图：读 `evolution-status`，点它写 `evolution-settings`。
+      const [evoLayers, setEvoLayers] = React.useState(null)
       // 目录上限输入框的本地编辑态（`catalogCaps` 的键 → 未提交的字符串）。输入框不直接受
       // inject 控制：每键一次 apiCall 太吵，blur / 回车才提交。框里恒空（当前值在 placeholder
       // 灰显），所以编辑态只记"用户正在敲的那几个字符"。
@@ -454,6 +457,17 @@
           })
           .catch(function () { /* 读不到 → 不渲染这一节 */ })
       }
+      // 自动记忆两层开关：只取 effective 的两个布尔。读不到就让 chip 退回 inject 域开关的
+      // 显示值（不会把"读失败"画成"用户关掉了"）。
+      const loadEvolutionLayers = function (alive) {
+        apiCall('evolution-status', {})
+          .then(function (r) {
+            if (alive === false || !r || r.ok === false) return
+            const eff = r.effective || {}
+            setEvoLayers({ global: eff.learnGlobal === true, workspace: eff.learnWorkspace === true })
+          })
+          .catch(function () { /* 读不到 → chip 退回 inject 域开关 */ })
+      }
       const loadSlash = function (alive) {
         apiCall('slash-settings', {})
           .then(function (r) { if (alive !== false && r && r.ok && r.settings) setSlash(r.settings) })
@@ -661,7 +675,7 @@
       // 总开关在记忆页，工具表在这页：拨完开关这一屏里两处不能一个开一个关。
       // 跟 toolScopeSig 一起重绑，事件回调里拿到的才是当前这一层的 sessionId。
       React.useEffect(function () {
-        function onProactiveChange() { loadToolTable(true) }
+        function onProactiveChange() { loadToolTable(true); loadEvolutionLayers(true) }
         try {
           window.addEventListener('dsm:proactive-memory-changed', onProactiveChange)
           return function () { window.removeEventListener('dsm:proactive-memory-changed', onProactiveChange) }
@@ -675,6 +689,7 @@
           .catch(function (e) { if (alive) { setError(errMsg(e)); setBusy(false) } })
         loadReach(alive)
         loadInject(alive)
+        loadEvolutionLayers(alive)
         loadSlash(alive)
         loadLive(alive)
         loadFeatures(alive)
@@ -719,6 +734,32 @@
             loadReach(true)
           })
           .catch(function (e) { setSaveError(errMsg(e)); loadInject(true); loadReach(true) })
+      }
+      /**
+       * 保存一条自动记忆层的开关。
+       *
+       * 与 saveInject 分开：这两格不写 `inject-settings.json`，写的是 `evolution/settings.json`
+       * 的 `learnGlobal` / `learnWorkspace`。它们同时决定学习与注入，所以切换后要重拉工具表
+       * （两层都关时 `memory_manager_auto` 会从 schema 里消失）。
+       */
+      const saveEvolutionLayer = function (layer, next) {
+        const key = layer === 'global' ? 'global' : 'workspace'
+        if (evoLayers) setEvoLayers(Object.assign({}, evoLayers, key === 'global' ? { global: next } : { workspace: next }))
+        setSaveError(null)
+        const settings = {}
+        settings[key === 'global' ? 'learnGlobal' : 'learnWorkspace'] = next
+        apiCall('evolution-settings', { set: true, settings: settings })
+          .then(function (r) {
+            if (r && r.ok === false) {
+              setSaveError(r.error || t('compat.save.failed'))
+              loadEvolutionLayers(true)
+              return
+            }
+            loadEvolutionLayers(true)
+            loadToolTable(true)
+            loadReach(true)
+          })
+          .catch(function (e) { setSaveError(errMsg(e)); loadEvolutionLayers(true); loadToolTable(true) })
       }
       /**
        * 保存斜杠命令入口的两颗开关（「工具」段 / 「快捷提示词」段）。与 saveInject 同一条口径：
@@ -1427,16 +1468,25 @@
                 // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
                 // 那两项一句 title，免得用户以为"关了没用"。
                 const carrier = key === 'skills' || key === 'prompt'
-                const on = domains[key] !== false
+                // 两条自动记忆没有独立的注入开关：它们跟着 `evolution/settings.json` 的
+                // `learnGlobal` / `learnWorkspace` 走（学 + 注入一体）。chip 只是那两个开关的视图。
+                const autoLayer = key === 'autoGlobal' ? 'global' : key === 'autoWorkspace' ? 'workspace' : ''
+                const on = autoLayer !== ''
+                  ? (evoLayers ? evoLayers[autoLayer] === true : domains[key] !== false)
+                  : domains[key] !== false
                 return React.createElement('button', {
                   key: 'domain-' + key,
                   type: 'button',
                   role: 'switch',
                   'aria-checked': on,
                   className: 'dsm-inject-chip' + (on ? ' dsm-inject-chip-on' : ''),
-                  title: carrier ? t('compat.inject.domain.carrier.title') : undefined,
+                  title: autoLayer !== '' ? t('compat.inject.domain.auto.title') : carrier ? t('compat.inject.domain.carrier.title') : undefined,
                   'aria-label': t('compat.inject.domain.' + key),
                   onClick: function () {
+                    if (autoLayer !== '') {
+                      saveEvolutionLayer(autoLayer, !on)
+                      return
+                    }
                     const nextDomains = Object.assign({}, domains)
                     nextDomains[key] = domains[key] === false
                     saveInject({ domains: nextDomains })

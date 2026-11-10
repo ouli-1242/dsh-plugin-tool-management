@@ -16,9 +16,8 @@
 //      清洗后保存更糟 —— 用户会以为系统记住的是他说的那句。
 
 import { LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
-import type { WriteTarget } from './config.js'
 import { checkQuote } from './evidence.js'
-import { DEGRADE_NOTE, routeLayer, type DegradeReason } from './route.js'
+import { DEGRADE_NOTE, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
 import { BASE_CONFIDENCE, confidenceOf, textHashOf, tombstoneActive, type EvidenceRef, type EvidenceSource, type Tombstone } from './state.js'
 
 export type AutoKind = 'preference' | 'fact' | 'correction' | 'procedure'
@@ -88,7 +87,8 @@ export interface GateContext {
   sessionId?: string
   workspaceHash?: string
   scene?: string
-  writeTarget: WriteTarget
+  /** 两个自主记忆开关给出的允许层。 */
+  allowed: RouteAllowed
   existing: ExistingEntry[]
   /** 各层现有自动条目数（只数活条目：归档 / 已取代不占配额）。 */
   countByLayer: Partial<Record<MemoryLayer, number>>
@@ -105,7 +105,7 @@ export interface GateInput {
   key?: string
   source: EvidenceSource
   quote?: string
-  /** 模型 / 用户在卡片上指定的层；仍受 `writeTarget` 上限与环境压窄。 */
+  /** 模型 / 用户在卡片上指定的层；仍受两个开关与环境压窄。 */
   layer?: MemoryLayer
   boundary?: string
   ttlDays?: number
@@ -326,12 +326,19 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   const routedBy = routeLayer({
     text: rawText,
     source,
-    writeTarget: ctx.writeTarget,
+    allowed: ctx.allowed,
     ...(ctx.workspaceHash !== undefined ? { workspaceHash: ctx.workspaceHash } : {}),
     ...(ctx.scene !== undefined ? { scene: ctx.scene } : {}),
     ...(ctx.sessionId !== undefined ? { sessionId: ctx.sessionId } : {}),
     ...(input.layer !== undefined ? { forcedLayer: input.layer } : {}),
   })
+  if (routedBy.blocked === true) {
+    return reject(
+      'scope',
+      'not recorded: no autonomous-memory layer is available here. Global memory is off and this conversation has no workspace path — turn on a layer in the autonomous-memory settings, or open the project from a folder.',
+      '范围门拒绝：没有可用的自动记忆层',
+    )
+  }
   let layer = routedBy.layer
   let group = routedBy.group
   let degraded = routedBy.degraded
@@ -341,9 +348,14 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   // scene 的 forcedLayer、或将来有人改了路由却忘了这里 —— 一律按本项目落，不再产生
   // `_session/` 与场景目录（那两套和用户记忆的场景单选绑在一起）。
   if (layer !== LAYER_GLOBAL && layer !== LAYER_WORKSPACE) {
-    layer = LAYER_WORKSPACE
-    group = ctx.workspaceHash ? `_ws/${ctx.workspaceHash}` : 'global'
-    degraded = degraded ?? 'no-scene'
+    if (ctx.allowed.workspace && ctx.workspaceHash) {
+      layer = LAYER_WORKSPACE
+      group = `_ws/${ctx.workspaceHash}`
+    } else {
+      layer = LAYER_GLOBAL
+      group = 'global'
+    }
+    degraded = degraded ?? 'layer-off'
   }
 
   // ── 门 8：证据 ──

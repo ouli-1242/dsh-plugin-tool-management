@@ -797,30 +797,32 @@
           React.useEffect(function () { refreshEvolution() }, [scopeState.currentSessionId])
 
           /**
-           * 唯一那颗总开关：写全局，并把本工作区 / 本会话原先的覆盖清成「继承」。
+           * 拨某一层的开关：写全局，并把本工作区 / 本会话原先的覆盖清成「继承」。
            *
            * 为什么要连覆盖一起清：三级开关是逐字段覆盖，只要本会话还留着 `false`，
            * 全局打开后这里依然是关的 —— 用户看到的是"我开了，怎么没反应"。界面已经不再
            * 提供那两行选项（用户 2026-11-09：要更傻瓜），就没有任何地方能把它拨回来，
-           * 所以一键开关必须把它俩一起收回。三个写串行走，避免并发覆盖配置侧车。
+           * 所以拨动开关必须把它俩一起收回。写串行走，避免并发覆盖配置侧车。
            */
-          function setEvolutionMaster(next) {
+          function setEvolutionLayer(key, next) {
             var sid = evoSessionId()
             var st = evo.status || {}
-            /** @type {any[]} 三个写形状不同（enabled / inherit），别让 TS 按第一条收窄。 */
-            var calls = [{ scope: 'global', enabled: next, sessionId: sid }]
+            var settings = {}
+            settings[key === 'global' ? 'learnGlobal' : 'learnWorkspace'] = next
+            /** @type {any[]} 三种写形状（settings / inherit），别让 TS 按第一条收窄。 */
+            var calls = [{ op: 'evolution-settings', args: { set: true, settings: settings } }]
             if (sid !== '' && st.workspace && st.workspace.defined === true) {
-              calls.push({ scope: 'workspace', inherit: true, sessionId: sid })
+              calls.push({ op: 'evolution-toggle', args: { scope: 'workspace', inherit: true, sessionId: sid } })
             }
             if (sid !== '' && st.session && st.session.defined === true) {
-              calls.push({ scope: 'session', inherit: true, sessionId: sid })
+              calls.push({ op: 'evolution-toggle', args: { scope: 'session', inherit: true, sessionId: sid } })
             }
             setEvoBusy(true)
             var outs = []
             var chain = Promise.resolve()
-            calls.forEach(function (args) {
+            calls.forEach(function (c) {
               chain = chain.then(function () {
-                return apiCall('evolution-toggle', args).then(function (res) { outs.push(res); return res })
+                return apiCall(c.op, c.args).then(function (res) { outs.push(res); return res })
               })
             })
             chain.then(function () {
@@ -829,7 +831,7 @@
               if (!bad) {
                 setResult({ ok: true, text: t('evo.saved') })
                 refreshEvolution()
-                // 工具跟着这个开关一起开 / 关：兼容页若正开着，让它立刻重拉那张表。
+                // 工具跟着两个开关一起开 / 关：兼容页若正开着，让它立刻重拉那张表与 chip。
                 try { window.dispatchEvent(new Event('dsm:proactive-memory-changed')) } catch (e) {}
               } else setResult({ ok: false, text: translateError(t, bad) })
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
@@ -1042,6 +1044,7 @@
            */
           function renderEvolutionCard(layerKey, titleKey) {
             var isWorkspace = layerKey === 'workspace'
+            var layerOn = isWorkspace ? evoWorkspaceOn : evoGlobalOn
             // 工作区卡只列**当前对话**的工作区：别的仓库的条目不会注入，列出来只会误导。
             var wsHash = (evo.status && evo.status.workspace && evo.status.workspace.hash) || ''
             var noWorkspace = isWorkspace && wsHash === ''
@@ -1062,12 +1065,12 @@
             var archived = rows.filter(function (e) { return e.status === 'archived' })
             // 关着且一条都没有 → 不渲染：空卡是噪音。开着但还没学到东西 → 留一张空卡，
             // 让用户知道「它开着，只是还没有内容」。
-            if (!evoOn && rows.length === 0) return null
+            if (!layerOn && rows.length === 0) return null
             // 「启用 / 总数」与场景卡同一读法：生效（active/core/playbook）且没被停用的才算"开"。
             var onCount = live.filter(function (e) { return (e.status === 'active' || e.status === 'core' || e.status === 'playbook') && e.enabled !== false }).length
             // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
             var openFlag = collapsed['auto:' + layerKey]
-            var baseOpen = openFlag === undefined ? evoOn : openFlag !== true
+            var baseOpen = openFlag === undefined ? layerOn : openFlag !== true
             var open = baseOpen || q !== ''
             var archOpen = evoArchOpen[layerKey] === true
             var body = []
@@ -1093,13 +1096,13 @@
                   : null))
             }
             // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
-            return React.createElement('div', { key: 'auto:' + layerKey, className: 'dsm-source' + (evoOn ? '' : ' dsm-rule-off') },
+            return React.createElement('div', { key: 'auto:' + layerKey, className: 'dsm-source' + (layerOn ? '' : ' dsm-rule-off') },
               React.createElement('div', { className: 'dsm-source-head' },
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main dsm-source-head-stack', 'aria-expanded': open, onClick: function () { toggleCollapse('auto:' + layerKey, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-head-line' },
                     React.createElement('span', { className: 'dsm-source-title' }, t(titleKey)),
                     React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: live.length })),
-                    React.createElement('span', { className: 'dsm-tag' + (evoOn ? ' dsm-tag-on' : '') }, t('memory.auto.tag')))),
+                    React.createElement('span', { className: 'dsm-tag' + (layerOn ? ' dsm-tag-on' : '') }, t('memory.auto.tag')))),
                 React.createElement('div', { className: 'dsm-source-actions' },
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setResult(null); setEvoOpen(true) } }, t('evo.settings')))),
               open ? React.createElement('div', { className: 'dsm-source-body' }, body) : null)
@@ -1173,6 +1176,8 @@
             var auto = (st && st.auto) || { entries: 0, pendingReview: 0 }
             var eff = (st && st.effective) || {}
             var overall = eff.enabled === true
+            var globalOn = eff.learnGlobal === true
+            var workspaceOn = eff.learnWorkspace === true
             // 本地整理只出建议、逐条「应用」；它不花模型调用，是设置弹窗里唯一的清理入口。
             var drafts = evoOrg ? React.createElement('div', { key: 'org', className: 'dsm-evo-organize' },
               evoOrg.error ? React.createElement(Notice, { kind: 'err', text: evoOrg.error }) : null,
@@ -1198,13 +1203,28 @@
               closeLabel: t('btn.close'), onClose: function () { setEvoOpen(false) },
             },
               React.createElement('div', { className: 'dsm-evo-modal' },
+                // 两层各一颗开关：同时管「学不学」与「注不注入」。只开一层时，对话卡片
+                // 不会再给出另一层的选项（allowedLayers 由服务端按这两个开关算）。
+                React.createElement('div', { className: 'dsm-evo-layers' },
+                  React.createElement('div', { className: 'dsm-evo-layer' },
+                    React.createElement('span', { className: 'dsm-label' }, t('evo.switch.global')),
+                    React.createElement(Switch, {
+                      on: globalOn,
+                      disabled: evoBusy || (evo.loading && !st),
+                      label: t('evo.switch.global'),
+                      onClick: function () { setEvolutionLayer('global', !globalOn) },
+                    }),
+                    React.createElement('span', { className: 'dsm-help' }, t('evo.switch.global.hint'))),
+                  React.createElement('div', { className: 'dsm-evo-layer' },
+                    React.createElement('span', { className: 'dsm-label' }, t('evo.switch.workspace')),
+                    React.createElement(Switch, {
+                      on: workspaceOn,
+                      disabled: evoBusy || (evo.loading && !st),
+                      label: t('evo.switch.workspace'),
+                      onClick: function () { setEvolutionLayer('workspace', !workspaceOn) },
+                    }),
+                    React.createElement('span', { className: 'dsm-help' }, t('evo.switch.workspace.hint')))),
                 React.createElement('div', { className: 'dsm-evo-master' },
-                  React.createElement(Switch, {
-                    on: overall,
-                    disabled: evoBusy || (evo.loading && !st),
-                    label: t('evo.title'),
-                    onClick: function () { setEvolutionMaster(!overall) },
-                  }),
                   // 开没开只看边框：开启时弹窗与页头按钮走成功色边框，不再写「已开启」。
                   React.createElement('span', { className: 'dsm-help' }, t('evo.stat.short', { learned: auto.entries || 0, pending: auto.pendingReview || 0 })),
                   React.createElement('button', {
@@ -1214,6 +1234,7 @@
                 // 笔记风格：模型写新记忆的口吻（默认高效——无表情、无语气词）。
                 overall ? renderEvolutionStyle() : null,
                 React.createElement('p', { className: 'dsm-help' }, t('evo.modal.hint')),
+                React.createElement('p', { className: 'dsm-help' }, t('evo.modal.trashHint')),
                 evo.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: evo.error }) : null,
                 evo.loading && !st ? React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')) : null,
                 drafts,
@@ -1222,7 +1243,10 @@
           }
 
           // 页头那颗按钮要能一眼看出开没开、有几条待确认，省得每次都点进弹窗确认。
-          var evoOn = !!(evo.status && evo.status.effective && evo.status.effective.enabled === true)
+          var evoEff = (evo.status && evo.status.effective) || {}
+          var evoGlobalOn = evoEff.learnGlobal === true
+          var evoWorkspaceOn = evoEff.learnWorkspace === true
+          var evoOn = evoGlobalOn || evoWorkspaceOn
           var evoPending = Number(evo.status && evo.status.auto && evo.status.auto.pendingReview) || 0
           // 自主记忆的两张页签卡（全局 / 工作区）：与场景卡并列、同一套搜索与折叠逻辑。
           // 场景筛选选了具体场景时它们跟着隐藏 —— 自主记忆不绑场景，出现在"某场景里有什么"

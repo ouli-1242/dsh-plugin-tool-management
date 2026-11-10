@@ -109,7 +109,7 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
     for (const item of items) {
       const ep = await deps.episodes.read(item.path)
       const cfg = await deps.effectiveOf(item.session, ep?.cwd)
-      if (!cfg.enabled || cfg.learnScope === 'off') return
+      if (!cfg.enabled) return
       await reviewOne(item, cfg)
     }
   }
@@ -131,7 +131,7 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
     const digest = digests.seal(sessionId, turn)
     if (!digest) return null
     const cfg = await deps.effectiveOf(sessionId, cwd)
-    if (!cfg.enabled || cfg.learnScope === 'off') return null
+    if (!cfg.enabled) return null
     const decision = reviewDecision(digest, cfg.reviewEveryTurns)
     if (!decision.review) {
       await deps.log({ at: new Date().toISOString(), session: sessionId, turn, event: 'turn-skipped', reason: decision.reason })
@@ -203,7 +203,7 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
       for (const item of targets) {
         const ep = await deps.episodes.read(item.path)
         const cfg = await deps.effectiveOf(item.session, ep?.cwd)
-        if (!cfg.enabled || cfg.learnScope === 'off') continue
+        if (!cfg.enabled) continue
         try {
           const r = await reviewOne(item, cfg)
           if (r === 'done') done++

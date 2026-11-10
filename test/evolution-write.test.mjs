@@ -24,10 +24,10 @@ const WS_HASH = workspaceHashOf(WS_KEY)
 /** 生效配置：全开、路由决定层（测试里逐个覆盖它关心的字段）。 */
 const cfgOf = (over = {}) => ({
   ...DEFAULT_EVOLUTION_SETTINGS,
+  learnGlobal: true,
+  learnWorkspace: true,
   enabled: true,
   inject: true,
-  learnScope: 'workspace',
-  writeTarget: 'route',
   source: 'global',
   ...over,
 })

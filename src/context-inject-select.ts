@@ -40,6 +40,13 @@ export function normalizeInjectSettings(raw: unknown): InjectSettings {
   const domainsRaw = (obj.domains && typeof obj.domains === 'object' ? obj.domains : {}) as Record<string, unknown>
   const domains = {} as Record<InjectDomainKey, boolean>
   for (const key of INJECT_DOMAIN_KEYS) {
+    // 两条自动记忆的开关由 `evolution/settings.json` 的两个开关负责（学习 + 注入一体）。
+    // 这里强制为 true，避免旧快照 / 旧客户端把 domains.autoGlobal=false 写成一个
+    // 看起来开着、实际永远不注入的第二道门。
+    if (key === 'autoGlobal' || key === 'autoWorkspace') {
+      domains[key] = true
+      continue
+    }
     domains[key] = typeof domainsRaw[key] === 'boolean' ? (domainsRaw[key] as boolean) : DEFAULT_INJECT_SETTINGS.domains[key]
   }
   const capsRaw = (obj.catalogCaps && typeof obj.catalogCaps === 'object' ? obj.catalogCaps : {}) as Record<string, unknown>

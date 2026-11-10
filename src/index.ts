@@ -1317,7 +1317,10 @@ export default {
      * 一次可见性。读不到一律按"没开"（不强制），这样最多是这一拍少显示一格锁定态。
      */
     function proactiveMemoryGlobalOn(): boolean {
-      try { return evolutionRuntime.view().settings.enabled === true } catch { return false }
+      try {
+        const s = evolutionRuntime.view().settings
+        return s.learnGlobal === true || s.learnWorkspace === true
+      } catch { return false }
     }
 
     /** 开启时那条必须保持可见的工具名；给 op 回包 / 写路径 / restrict 三处共用。 */
@@ -2330,7 +2333,7 @@ export default {
     /**
      * 「这个 agent 现在能不能主动学」。三个条件缺一不可：
      *
-     *   ① 三级开关解析后 `enabled` 且 `learnScope !== 'off'`；
+     *   ① 两个开关至少开一层（解析后的 `enabled`）；只开工作区时还必须拿得到 cwd；
      *   ② 深度 0（子代理有**自己的** session id，让它学就会把父子两套记忆写进不同目录，
      *      而回收 / 合并 / 墓碑都按 id 走，父代理根本看不到子代理写的那份）；
      *   ③ 能取到会话身份（取不到就没有"哪一层"这一说）。
@@ -2345,7 +2348,9 @@ export default {
         if (identity === null) return false
         const scopeKey = identity.cwd ? workspaceMemoryKeyOf(identity.cwd) : undefined
         const cfg = evolutionRuntime.effectiveSync(scopeKey, identity.sessionId)
-        return cfg.enabled && cfg.learnScope !== 'off'
+        if (!cfg.enabled) return false
+        // 只开工作区时没有 cwd 就无处可写：让工具消失，别让模型调到一个必然失败的动作。
+        return cfg.learnGlobal || Boolean(identity.cwd)
       } catch {
         return false
       }
@@ -2415,6 +2420,9 @@ export default {
         // （没显式设过就跟随 enabled）。写成 `!enabled && !inject` 会把
         // "开着学习但明确不想显示"也当成要显示，那正是这个字段存在的意义。
         if (!cfg.inject) return ''
+        // 两层各有自己的开关：关掉一层 = 不再学这一层，也不再注入这一层已有的条目。
+        // 注入器的域开关对这两域被强制为 true（见 normalizeInjectSettings），真正的门在这里。
+        if (layer === 'global' ? !cfg.learnGlobal : !cfg.learnWorkspace) return ''
 
         const scene = memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined
         const enabledScenes = new Set<string>(scene ? [scene] : [])
@@ -4607,7 +4615,7 @@ export default {
     const sweepIfDue = async (): Promise<void> => {
       if (sweepInFlight) return
       const view = evolutionRuntime.view()
-      if (!view.settings.enabled) return
+      if (!view.settings.learnGlobal && !view.settings.learnWorkspace) return
       if (!shouldSweepNow(view.state.watermarks.lastSweepAt)) return
       const run = sweepRunner
       if (!run) return
