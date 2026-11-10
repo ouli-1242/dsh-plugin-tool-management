@@ -436,9 +436,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     /**
-     * 编辑一条自动记忆的正文。
+     * 编辑一条自动记忆的名称与正文。
      *
-     * 与记忆页的编辑弹窗同一条路：只改正文，id / 层 / 状态不变。`frozen` 不设 ——
+     * 与记忆页的编辑弹窗同一条路：id / 层 / 状态不变。`frozen` 不设 ——
      * 自主记忆不绑场景，场景锁定不该挡住它。
      */
     'evolution-update': async (args: any) => {

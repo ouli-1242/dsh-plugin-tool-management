@@ -1329,7 +1329,7 @@ export function createLearner(deps: LearnDeps) {
   /**
    * 编辑一条自动记忆的正文。
    *
-   * 只改正文，不动 id / 层 / 状态 / 证据：用户改的是措辞，不是这条记忆的身份。
+   * 改正文与名称，不动 id / 层 / 状态 / 证据：用户改的是措辞，不是这条记忆的身份。
    * superseded 拒绝 —— 历史条目改了也不会注入，只会让人以为改动生效。
    */
   async function update(id: string, text: string, baseHash = '', title?: string): Promise<LearnResult> {
