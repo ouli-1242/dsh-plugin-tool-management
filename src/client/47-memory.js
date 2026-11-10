@@ -745,6 +745,10 @@
           // 还要再开一层确认弹窗，共用一个槽会把自主记忆一起关掉。
           var eos = React.useState(false)
           var evoOpen = eos[0], setEvoOpen = eos[1]
+          // 每层条数上限的输入态：键 = `maxNotesGlobal` / `maxNotesWorkspace`，值是未提交的
+          // 字符串。输入框常态空着、当前值只在 placeholder 里灰显（与兼容页目录上限同一交互）。
+          var evc = React.useState({})
+          var evoCapEdits = evc[0], setEvoCapEdits = evc[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -837,6 +841,34 @@
           function setEvolutionAutoConfirm(next) {
             setEvoBusy(true)
             apiCall('evolution-settings', { set: true, settings: { autoConfirm: next } }).then(function (res) {
+              setEvoBusy(false)
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.saved') })
+                refreshEvolution()
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
+          /**
+           * 提交一层的条数上限：数字 = 新值，空框 = 回默认值（服务端按 `null` 处理）。
+           * 越界值由服务端归一化夹取；这里只挡掉 `type=number` 挡不住的负值。
+           */
+          function commitEvolutionCap(key) {
+            var raw = evoCapEdits[key]
+            if (raw === undefined) return
+            var nextEdits = Object.assign({}, evoCapEdits)
+            delete nextEdits[key]
+            setEvoCapEdits(nextEdits)
+            var text = String(raw).trim()
+            var parsed = text === '' ? null : Number(text)
+            var value = parsed === null ? null : (Number.isFinite(parsed) ? Math.floor(parsed) : null)
+            if (value !== null && value < 1) value = 1
+            var current = evo.settings && evo.settings[key]
+            if (value !== null && current === value) return
+            setEvoBusy(true)
+            var settings = {}
+            settings[key] = value
+            apiCall('evolution-settings', { set: true, settings: settings }).then(function (res) {
               setEvoBusy(false)
               if (res && res.ok !== false) {
                 setResult({ ok: true, text: t('evo.saved') })
@@ -1348,6 +1380,33 @@
                 })))
           }
 
+          /**
+           * 一层条数上限的输入行。空框 + placeholder = 当前值，失焦 / 回车提交。
+           * 与兼容页「目录上限」同一交互：输入框常态不显示真值，避免和占位灰字打架。
+           */
+          function renderEvolutionCapRow(o) {
+            var raw = evoCapEdits[o.key]
+            return React.createElement('div', { className: 'dsm-evo-row' },
+              React.createElement('div', { className: 'dsm-evo-row-main' },
+                React.createElement('span', { className: 'dsm-label' }, o.label)),
+              React.createElement('div', { className: 'dsm-evo-row-control' },
+                React.createElement('input', {
+                  className: 'dsm-control dsm-evo-cap-input', type: 'number', min: 1,
+                  value: raw === undefined ? '' : raw,
+                  placeholder: String(o.placeholder),
+                  disabled: o.disabled,
+                  'aria-label': o.label,
+                  onChange: function (e) {
+                    var next = Object.assign({}, evoCapEdits)
+                    next[o.key] = e.target.value
+                    setEvoCapEdits(next)
+                  },
+                  onBlur: function () { commitEvolutionCap(o.key) },
+                  onKeyDown: function (e) { if (e.key === 'Enter') { e.preventDefault(); commitEvolutionCap(o.key) } },
+                }),
+                React.createElement('span', { className: 'dsm-help' }, t('evo.cap.unit'))))
+          }
+
           /** 草案里的 id → 用户看得懂的名称；找不到（已归档 / 已删）才退回 id。 */
           function evoNameById(id) {
             var hit = (evo.entries || []).find(function (x) { return x.id === id })
@@ -1392,6 +1451,9 @@
             var globalOn = eff.learnGlobal === true
             var workspaceOn = eff.learnWorkspace === true
             var autoConfirm = eff.autoConfirm === true
+            // 当前上限：`evolution-list` 回的设置已归一化，字段一定在；拿不到时按出厂值兜底。
+            var capGlobal = evo.settings && typeof evo.settings.maxNotesGlobal === 'number' ? evo.settings.maxNotesGlobal : 100
+            var capWorkspace = evo.settings && typeof evo.settings.maxNotesWorkspace === 'number' ? evo.settings.maxNotesWorkspace : 200
             var statText = t('evo.stat', {
               learned: auto.entries || 0,
               active: auto.active || 0,
@@ -1427,6 +1489,18 @@
                     disabled: evoBusy || (evo.loading && !st) || !overall,
                     onClick: function () { setEvolutionAutoConfirm(!autoConfirm) },
                   })),
+                // 每层条数上限：全局 / 工作区各一个；达到后拒绝新的 learn（合并 / 更新不受影响）。
+                overall ? React.createElement('div', { className: 'dsm-evo-section' },
+                  React.createElement('div', { className: 'dsm-evo-section-title' }, t('evo.cap.title')),
+                  React.createElement('p', { className: 'dsm-help dsm-evo-cap-hint' }, t('evo.cap.hint')),
+                  renderEvolutionCapRow({
+                    key: 'maxNotesGlobal', label: t('evo.cap.global'), placeholder: capGlobal,
+                    disabled: evoBusy || (evo.loading && !st),
+                  }),
+                  renderEvolutionCapRow({
+                    key: 'maxNotesWorkspace', label: t('evo.cap.workspace'), placeholder: capWorkspace,
+                    disabled: evoBusy || (evo.loading && !st),
+                  })) : null,
                 // 笔记风格：模型写新记忆的口吻（默认高效——无表情、无语气词）。
                 overall ? React.createElement('div', { className: 'dsm-evo-section' },
                   React.createElement('div', { className: 'dsm-evo-section-title' }, t('evo.style')),

@@ -17,6 +17,7 @@
 
 import { LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
 import { checkQuote } from './evidence.js'
+import { NOTE_CAP_DEFAULTS } from './limits.js'
 import { DEGRADE_NOTE, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
 import { BASE_CONFIDENCE, confidenceOf, textHashOf, tombstoneActive, type EvidenceRef, type EvidenceSource, type Tombstone } from './state.js'
 
@@ -95,6 +96,11 @@ export interface GateContext {
   existing: ExistingEntry[]
   /** 各层现有自动条目数（只数活条目：归档 / 已取代不占配额）。 */
   countByLayer: Partial<Record<MemoryLayer, number>>
+  /**
+   * 各层的条数上限。全局 / 工作区来自用户设置（`maxNotesGlobal` / `maxNotesWorkspace`）；
+   * 缺项时门 7 回退 `LAYER_QUOTA`，测试与旧装配不必补全四层。
+   */
+  maxByLayer?: Partial<Record<MemoryLayer, number>>
   knownWorkspaces: Set<string>
   knownScenes: Set<string>
   tombstones: Tombstone[]
@@ -264,12 +270,17 @@ export const looksDerivable = (text: string): boolean => DERIVABLE_PATTERNS.some
 
 // ── 配额 ───────────────────────────────────────────────────────────────────
 
-/** 每层的自动条目软上限。超了拒绝并提示整理（不静默丢新的）。 */
+/**
+ * 每层的自动条目软上限。超了拒绝并提示整理（不静默丢新的）。
+ *
+ * 全局 / 工作区两档可由用户在自主记忆设置里改（`maxNotesGlobal` / `maxNotesWorkspace`），
+ * 这里只是出厂值与没有配置时的兜底；会话 / 场景两档不暴露，仍固定。
+ */
 export const LAYER_QUOTA: Record<MemoryLayer, number> = {
   [LAYER_SESSION]: 50,
   [LAYER_SCENE]: 100,
-  [LAYER_WORKSPACE]: 200,
-  [LAYER_GLOBAL]: 100,
+  [LAYER_WORKSPACE]: NOTE_CAP_DEFAULTS.workspace,
+  [LAYER_GLOBAL]: NOTE_CAP_DEFAULTS.global,
 }
 
 // ── 主流程 ─────────────────────────────────────────────────────────────────
@@ -480,7 +491,7 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
 
   // ── 门 7：配额 ──
   const used = ctx.countByLayer[layer] ?? 0
-  const cap = LAYER_QUOTA[layer]
+  const cap = ctx.maxByLayer?.[layer] ?? LAYER_QUOTA[layer]
   // 合并不新增条目；取代只有在**同层**时才抵掉配额（跨层取代仍会在本层新增一条）。
   const supersedesHere = supersedes.some((id) => ctx.existing.find((e) => e.id === id)?.layer === layer)
   if (!mergeInto && !supersedesHere && used >= cap) {

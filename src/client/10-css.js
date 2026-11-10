@@ -175,6 +175,9 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-row-main .dsm-label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:20px}
 .dsm-evo-row-main .dsm-help{margin:0;font-size:12px;line-height:17px}
 .dsm-evo-row-control{display:flex;min-width:44px;align-items:center;justify-content:flex-end}
+.dsm-evo-cap-hint{margin:0}
+.dsm-evo-cap-input{width:88px;text-align:right}
+.dsm-evo-row-control .dsm-help{margin-left:6px;white-space:nowrap}
 .dsm-evo-row-sep{margin-top:6px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1)}
 /* 自主记忆分节线：短线 + 名称(启用/总数) + 长线。名称后紧跟计数，右侧长线负责分隔。
    按设置页分组头（.dsm-form-section）的档位收：12px/400/弱色、线用 l1 —— 它只是

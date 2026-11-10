@@ -20,17 +20,16 @@ import { writeFileAtomically, readIndex, writeIndex } from '../memories/index-io
 import { catalogEntryOf, catalogPathOf, estimateTokens, normalizeCatalog, type CatalogFile } from '../memories/catalog.js'
 import {
   GLOBAL_SCENE, LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE,
-  isValidGroupPath, isValidGroupSegment, type MemoryLayer,
+  isValidGroupPath, isValidGroupSegment, layerOfGroup, type MemoryLayer,
 } from '../memories/constants.js'
 import {
   archiveAutoNote, backfillArchivedTrash, dropAutoTrashEntry, findAutoTrashByNoteId,
   readAutoTrashManifest, restoreAutoNoteFromTrash, trashAutoNote,
 } from './notes.js'
-import { layerOfGroup } from '../memories/constants.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
 import type { EffectiveEvolutionConfig } from './config.js'
 import {
-  runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome, type ReviewCode,
+  LAYER_QUOTA, runGates, tombstoneBlocked, type AutoKind, type ExistingEntry, type GateContext, type GateName, type GateOutcome, type ReviewCode,
 } from './gates.js'
 import { deriveKey } from './gates.js'
 import { draftOrganize, type OrganizeAction, type OrganizeDraft } from './organize.js'
@@ -231,6 +230,13 @@ export function createLearner(deps: LearnDeps) {
       // 真正写入时才被 mergeInto 拒掉。
       existing: entries.map((e) => (e.origin === 'auto' && st.entries[e.id]?.locked === true ? { ...e, locked: true } : e)),
       countByLayer,
+      // 全局 / 工作区两档吃用户设置；会话 / 场景没有界面入口，仍用固定配额。
+      maxByLayer: {
+        [LAYER_GLOBAL]: config.maxNotesGlobal,
+        [LAYER_WORKSPACE]: config.maxNotesWorkspace,
+        [LAYER_SESSION]: LAYER_QUOTA[LAYER_SESSION],
+        [LAYER_SCENE]: LAYER_QUOTA[LAYER_SCENE],
+      },
       knownWorkspaces: await deps.knownWorkspaces(),
       knownScenes,
       tombstones: st.tombstones,

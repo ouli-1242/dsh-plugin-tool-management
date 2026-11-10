@@ -42,6 +42,9 @@ import { catalogDepthOf, catalogInjectedAt, emptyResultNote, parsePersona, rende
 import { decodeYamlScalar, rewriteFrontmatterFields, yamlScalar } from '../lib/skills/frontmatter.js'
 import { parseModeState } from '../lib/memories/service.js'
 import { enabledSceneOf } from '../lib/memories/projection.js'
+import { normalizeEvolutionSettings, resolveEffectiveConfig } from '../lib/evolution/config.js'
+import { NOTE_CAP_DEFAULTS, NOTE_CAP_MAX, NOTE_CAP_MIN } from '../lib/evolution/limits.js'
+import { LAYER_QUOTA } from '../lib/evolution/gates.js'
 import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings, stripProactiveToolHidden } from '../lib/tools/table.js'
@@ -4862,6 +4865,29 @@ test('当前场景排除恒常的 global：global 恒启用，但不是 activeSc
   assert.equal(enabledSceneOf(index, null), null, '钉住「没有场景」时不能把 global 当当前场景')
   index.active = ['beta']
   assert.equal(enabledSceneOf(index), 'beta', '全局启用的场景同样要压过 global')
+})
+
+test('自主记忆每层条数上限：出厂值与夹取范围只有一份真相', () => {
+  // 设置弹窗的 placeholder、配置归一化、门禁兜底都读同一份默认值；改一处忘另一处
+  // 会表现为「界面显示 100，实际按旧值拒绝」。
+  const d = normalizeEvolutionSettings({})
+  assert.equal(d.maxNotesGlobal, NOTE_CAP_DEFAULTS.global)
+  assert.equal(d.maxNotesWorkspace, NOTE_CAP_DEFAULTS.workspace)
+  assert.equal(LAYER_QUOTA.global, NOTE_CAP_DEFAULTS.global)
+  assert.equal(LAYER_QUOTA.workspace, NOTE_CAP_DEFAULTS.workspace)
+
+  assert.equal(normalizeEvolutionSettings({ maxNotesGlobal: 0 }).maxNotesGlobal, NOTE_CAP_MIN, '0 会锁死这一层，夹到下限')
+  assert.equal(normalizeEvolutionSettings({ maxNotesWorkspace: 99999 }).maxNotesWorkspace, NOTE_CAP_MAX, '超大值夹到上限')
+  assert.equal(normalizeEvolutionSettings({ maxNotesGlobal: 12.7 }).maxNotesGlobal, 13, '取整')
+
+  // 会话 / 工作区覆盖逐字段压过全局：上限也走同一条解析。
+  const eff = resolveEffectiveConfig(
+    normalizeEvolutionSettings({ maxNotesGlobal: 30, maxNotesWorkspace: 40 }),
+    { maxNotesGlobal: 7 },
+    { maxNotesWorkspace: 9 },
+  )
+  assert.equal(eff.maxNotesGlobal, 7, '会话覆盖优先')
+  assert.equal(eff.maxNotesWorkspace, 9, '会话覆盖优先（工作区）')
 })
 
 test('记忆读取入口保留可见：合并后的清单 / 搜索 / 正文是发现路径', () => {

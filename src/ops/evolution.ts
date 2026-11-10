@@ -8,7 +8,7 @@
 // `learn` 与 `save` 分成两条工具的完整理由见 docs 05-tools §2：授权边界写在工具名上，
 // 门禁不用猜参数。
 
-import { normalizeNoteStyle, workspaceHashOf, type EvolutionConfigStore, type EvolutionOverrides, type EvolutionSettings } from '../evolution/config.js'
+import { DEFAULT_EVOLUTION_SETTINGS, normalizeNoteStyle, workspaceHashOf, type EvolutionConfigStore, type EvolutionOverrides, type EvolutionSettings } from '../evolution/config.js'
 import type { EvolutionRuntime } from '../evolution/runtime.js'
 import type { Learner } from '../evolution/write.js'
 // 只取类型：冷路径在装配层晚于本函数创建，所以拿的是 getter 而不是实例。
@@ -197,6 +197,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (typeof patch.inject === 'boolean') next.inject = patch.inject
         if (typeof patch.reviewEveryTurns === 'number') next.reviewEveryTurns = patch.reviewEveryTurns
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession
+        // 每层条数上限：数字 = 新值；`null` = 清空回出厂值（与目录上限的「空框」同一语义）。
+        // 越界值由 `normalizeEvolutionSettings` 统一夹取，这里不写第二份判据。
+        if (typeof patch.maxNotesGlobal === 'number') next.maxNotesGlobal = patch.maxNotesGlobal
+        else if (patch.maxNotesGlobal === null) next.maxNotesGlobal = DEFAULT_EVOLUTION_SETTINGS.maxNotesGlobal
+        if (typeof patch.maxNotesWorkspace === 'number') next.maxNotesWorkspace = patch.maxNotesWorkspace
+        else if (patch.maxNotesWorkspace === null) next.maxNotesWorkspace = DEFAULT_EVOLUTION_SETTINGS.maxNotesWorkspace
         if (typeof patch.model === 'string') next.model = patch.model
         // 风格：任意输入都过一遍 normalize，custom 没带文本自动退回 efficient。
         if (patch.noteStyle !== undefined || patch.noteStyleText !== undefined) {
