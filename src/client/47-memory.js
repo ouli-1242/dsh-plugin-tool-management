@@ -1332,6 +1332,36 @@
             return s.indexOf('custom:') === 0 ? s.slice('custom:'.length) : ''
           }
 
+          /**
+           * 名称的显示宽度与宽字符数：汉字 / 全角 / emoji 算 2，其余算 1。
+           * 上限 16 = 8 个汉字 = 16 个字母。口径与服务端 config.ts 的 truncateStyleName 一致。
+           */
+          function evoNameMetrics(value) {
+            var chars = Array.from(String(value || ''))
+            var width = 0
+            var wide = 0
+            for (var i = 0; i < chars.length; i++) {
+              var code = chars[i].codePointAt(0)
+              var w = (
+                (code >= 0x1100 && code <= 0x115f) ||
+                code === 0x2329 || code === 0x232a ||
+                (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+                (code >= 0xac00 && code <= 0xd7a3) ||
+                (code >= 0xf900 && code <= 0xfaff) ||
+                (code >= 0xfe10 && code <= 0xfe19) ||
+                (code >= 0xfe30 && code <= 0xfe6f) ||
+                (code >= 0xff00 && code <= 0xff60) ||
+                (code >= 0xffe0 && code <= 0xffe6) ||
+                (code >= 0x1f300 && code <= 0x1f64f) ||
+                (code >= 0x1f900 && code <= 0x1f9ff) ||
+                (code >= 0x20000 && code <= 0x3fffd)
+              ) ? 2 : 1
+              width += w
+              if (w === 2) wide += 1
+            }
+            return { width: width, wide: wide }
+          }
+
           function evoStyleSet(patch) {
             setEvoStyle(function (cur) { return Object.assign({}, cur, patch) })
           }
@@ -1380,8 +1410,8 @@
             if (mode !== 'new' && mode !== 'edit') return
             var name = String(evoStyle.name || '').trim()
             var guide = String(evoStyle.guide || '').trim().slice(0, 200)
-            var nameLen = Array.from(name).length
-            if (nameLen < 1 || nameLen > 4) {
+            var nameMetrics = evoNameMetrics(name)
+            if (nameMetrics.width < 1 || nameMetrics.width > 16 || nameMetrics.wide > 8) {
               evoStyleSet({ error: t('evo.style.err.name') })
               return
             }
@@ -1489,22 +1519,24 @@
               React.createElement('div', { className: 'dsm-form-seg', role: 'group' }, chips),
               formOpen
                 ? React.createElement('div', { className: 'dsm-evo-style-custom' },
-                    React.createElement('input', {
-                      className: 'dsm-control', type: 'text', maxLength: 4,
-                      placeholder: t('evo.style.name.placeholder'),
-                      'aria-label': t('evo.style.name.placeholder'),
-                      value: evoStyle.name,
-                      disabled: evoStyle.busy,
-                      onChange: function (e) { evoStyleSet({ name: e.target.value, error: '' }) },
-                    }),
-                    React.createElement('input', {
-                      className: 'dsm-control', type: 'text', maxLength: 200,
-                      placeholder: t('evo.style.custom.hint'),
-                      'aria-label': t('evo.style.custom.hint'),
-                      value: evoStyle.guide,
-                      disabled: evoStyle.busy,
-                      onChange: function (e) { evoStyleSet({ guide: e.target.value, error: '' }) },
-                    }),
+                    React.createElement('div', { className: 'dsm-evo-style-row' },
+                      React.createElement('input', {
+                        className: 'dsm-control dsm-evo-style-name', type: 'text', maxLength: 32,
+                        size: Math.max(8, Math.min(16, evoNameMetrics(evoStyle.name).width)),
+                        placeholder: t('evo.style.name.placeholder'),
+                        'aria-label': t('evo.style.name.placeholder'),
+                        value: evoStyle.name,
+                        disabled: evoStyle.busy,
+                        onChange: function (e) { evoStyleSet({ name: e.target.value, error: '' }) },
+                      }),
+                      React.createElement('input', {
+                        className: 'dsm-control dsm-evo-style-guide', type: 'text', maxLength: 200,
+                        placeholder: t('evo.style.custom.hint'),
+                        'aria-label': t('evo.style.custom.hint'),
+                        value: evoStyle.guide,
+                        disabled: evoStyle.busy,
+                        onChange: function (e) { evoStyleSet({ guide: e.target.value, error: '' }) },
+                      })),
                     React.createElement('div', { className: 'dsm-evo-style-actions' },
                       React.createElement('button', {
                         type: 'button', className: 'dsm-btn dsm-btn-quiet',

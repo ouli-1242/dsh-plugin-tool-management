@@ -45,8 +45,10 @@ export interface CustomNoteStyle {
 
 /** 用户最多保存几档自定义风格。 */
 export const MAX_CUSTOM_NOTE_STYLES = 3
-/** 自定义名称上限（字符数，不是字节）：一行放得下，也不至于和内置档混在一起。 */
-export const MAX_CUSTOM_NOTE_STYLE_NAME = 4
+/** 名称的显示宽度上限（半角单位）：16 个字母，或 8 个汉字（每个算 2）。 */
+export const MAX_CUSTOM_NOTE_STYLE_NAME_WIDTH = 16
+/** 宽字符（汉字 / 全角 / emoji）个数上限：8 个。 */
+export const MAX_CUSTOM_NOTE_STYLE_WIDE = 8
 /** 自定义指引上限：与旧 `noteStyleText` 同一长度，足够写清口吻。 */
 export const MAX_CUSTOM_NOTE_STYLE_GUIDE = 200
 
@@ -74,8 +76,46 @@ function styleIdOf(raw: unknown): NoteStyle | undefined {
   return undefined
 }
 
+/** 名称显示宽度：汉字 / 全角 / emoji 算 2，其余算 1。客户端 `evoNameMetrics` 同一口径。 */
+function styleNameWidth(ch: string): number {
+  const code = ch.codePointAt(0) ?? 0
+  return (
+    (code >= 0x1100 && code <= 0x115f) ||
+    code === 0x2329 || code === 0x232a ||
+    (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe10 && code <= 0xfe19) ||
+    (code >= 0xfe30 && code <= 0xfe6f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1f64f) ||
+    (code >= 0x1f900 && code <= 0x1f9ff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  ) ? 2 : 1
+}
+
 /**
- * 自定义风格列表归一化：最多 3 个，名称截到 4 字，指引截到 200 字符。
+ * 名称截断：宽度最多 16 个半角单位，且宽字符最多 8 个。
+ * 于是中文最多 8 个字，英文最多 16 个字母，混排同时受两者约束。
+ */
+function truncateStyleName(s: string): string {
+  let out = ''
+  let width = 0
+  let wide = 0
+  for (const ch of s) {
+    const w = styleNameWidth(ch)
+    const nextWide = wide + (w === 2 ? 1 : 0)
+    if (width + w > MAX_CUSTOM_NOTE_STYLE_NAME_WIDTH || nextWide > MAX_CUSTOM_NOTE_STYLE_WIDE) break
+    out += ch
+    width += w
+    wide = nextWide
+  }
+  return out
+}
+
+/**
+ * 自定义风格列表归一化：最多 3 个，名称按显示宽度截断，指引截到 200 字符。
  *
  * id 只保留安全字符；缺失 / 重复时补一个 `cN`。id 是 `noteStyle` 的引用键，
  * 不能为空，也不能重复 —— 否则选中一个会命中另一个。
@@ -86,7 +126,7 @@ function normalizeCustomStyles(raw: unknown): CustomNoteStyle[] {
   const seen = new Set<string>()
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue
-    const name = Array.from(String((item as any).name ?? '').trim().replaceAll(/\s+/g, ' ')).slice(0, MAX_CUSTOM_NOTE_STYLE_NAME).join('')
+    const name = truncateStyleName(String((item as any).name ?? '').trim().replaceAll(/\s+/g, ' '))
     const guide = String((item as any).guide ?? '').trim().replaceAll(/\s+/g, ' ').slice(0, MAX_CUSTOM_NOTE_STYLE_GUIDE)
     if (name === '' || guide === '') continue
     let id = String((item as any).id ?? '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32)

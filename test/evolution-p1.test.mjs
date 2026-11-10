@@ -441,20 +441,31 @@ test('风格设定：四档解析、旧值兼容、自定义档上限与就近�
   assert.deepEqual(normalizeNoteStyle({ style: 'custom', custom: '  ' }), { style: 'default', customStyles: [] })
   assert.equal(normalizeNoteStyle({ style: 'custom', custom: 'x'.repeat(500) }).customStyles[0].guide.length, 200)
 
-  // 自定义档：最多 3 个，名称截到 4 字，选中的 id 必须存在。
+  // 自定义档：最多 3 个；名称最多 8 个汉字 / 16 个字母，选中的 id 必须存在。
   const many = normalizeNoteStyle({
     style: 'custom:c1',
     customStyles: [
-      { id: 'c1', name: '一二三四五', guide: 'a' },
+      { id: 'c1', name: '一二三四五六七八九', guide: 'a' },
       { id: 'c2', name: '二', guide: 'b' },
       { id: 'c3', name: '三', guide: 'c' },
       { id: 'c4', name: '四', guide: 'd' },
     ],
   })
   assert.equal(many.customStyles.length, 3)
-  assert.equal(many.customStyles[0].name, '一二三四', '名称截到 4 字')
+  assert.equal(many.customStyles[0].name, '一二三四五六七八', '名称最多 8 个汉字')
   assert.equal(many.style, 'custom:c1')
   assert.equal(normalizeNoteStyle({ style: 'custom:nope', customStyles: [] }).style, 'default', '引用不存在的自定义档退回默认')
+
+  const en = normalizeNoteStyle({
+    style: 'custom:c1',
+    customStyles: [{ id: 'c1', name: 'abcdefghijklmnopq', guide: 'x' }],
+  })
+  assert.equal(en.customStyles[0].name, 'abcdefghijklmnop', '英文最多 16 个字母')
+  const mixed = normalizeNoteStyle({
+    style: 'custom:c1',
+    customStyles: [{ id: 'c1', name: '一二三四abcdefghi', guide: 'x' }],
+  })
+  assert.equal(mixed.customStyles[0].name, '一二三四abcdefgh', '混排按显示宽度截断')
 
   // 自定义档定义只存全局；覆盖层只选不改，选中的 id 不在全局列表时退回全局。
   const global = {

@@ -191,7 +191,10 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-style .dsm-form-seg{align-self:flex-start;flex-wrap:wrap}
 .dsm-evo-style-add{border-style:dashed}
 .dsm-evo-style-custom{display:flex;flex-direction:column;gap:6px}
-.dsm-evo-style-custom .dsm-control{width:100%}
+.dsm-evo-style-row{display:flex;align-items:center;gap:6px}
+/* 名称框从 4 个汉字宽起步，随内容长到 8 个汉字 / 16 个字母宽；右侧说明吃掉剩余空间。 */
+.dsm-evo-style-name{flex:none;width:auto;min-width:82px;max-width:150px}
+.dsm-evo-style-guide{flex:1;min-width:0;width:auto}
 .dsm-evo-style-actions{display:flex;align-items:center;gap:6px}
 .dsm-evo-style-error{margin:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:17px}
 /* 学习记录：统计 + 整理 + 后台复习共用一张卡；不再用虚线框和左右内缩。 */
