@@ -384,6 +384,24 @@ test('preview：direct 反映自动确认的结果', async () => {
   } finally { h.done() }
 })
 
+test('learn：正文超过 400 字符直接拒绝，不再静默截断', async () => {
+  const h = harness()
+  try {
+    const long = '提交前先跑完整构建与测试，确认所有用例通过后再打标签。'.repeat(20)
+    assert.ok(long.length > 400)
+    const r = await h.learner.learn({ text: long, source: 'tool_verified' }, cfgOf(), envOf())
+    assert.equal(r.ok, false)
+    assert.equal(r.code, 'too-long')
+    assert.match(r.error, /limit is 400/)
+
+    // 400 是允许值：长度门只在 >400 时拦，不能把边界也拒掉。
+    const text400 = ('提交前先跑完整构建与测试。'.repeat(40)).slice(0, 400)
+    assert.equal(text400.length, 400)
+    const ok = await h.learner.learn({ text: text400, source: 'tool_verified' }, cfgOf(), envOf())
+    assert.notEqual(ok.code, 'too-long', '400 字符应进入门禁，而不是被长度拦下')
+  } finally { h.done() }
+})
+
 test('merge：同 key 且说法几乎一样 → 只加证据与边界，不新建第二个文件', async () => {
   const h = harness()
   try {

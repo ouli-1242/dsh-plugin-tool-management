@@ -931,7 +931,8 @@ function learnReceipt(r: any, card: 'approved' | 'unavailable' | 'pending-confli
   const parts = ['OK: recorded ' + noteRefOf(String(r.id))]
   // 回执要给出之后能原样引用的东西：id 与 slot 都在，模型就不必猜 title/quote 哪个是键。
   if (payload && typeof payload.key === 'string' && payload.key !== '') parts.push('slot: ' + payload.key)
-  if (payload && typeof payload.title === 'string' && payload.title !== '') parts.push('title: ' + payload.title)
+  // 回执要报落盘值：标题超长时写入侧会截到 MAX_AUTO_TITLE，回显原串会让模型以为它存下了完整标题。
+  if (payload && typeof payload.title === 'string' && payload.title !== '') parts.push('title: ' + payload.title.trim().slice(0, MAX_AUTO_TITLE))
   if (r.merged === true) {
     parts.push(String(r.status === 'active' ? 'merged into an existing active note' : 'merged into an existing pending note'))
   } else if (r.status === 'active') {

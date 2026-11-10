@@ -271,8 +271,8 @@ export function createLearner(deps: LearnDeps) {
   async function learn(req: LearnRequest, config: EffectiveEvolutionConfig, env: LearnEnv): Promise<LearnResult> {
     const text = String(req.text ?? '').trim()
     if (text === '') return { ok: false, code: 'empty', error: 'nothing to learn: text is empty' }
-    if (text.length > MAX_AUTO_TEXT * 2) {
-      return { ok: false, code: 'too-long', error: `refused: a learned note should be one sentence (limit ${MAX_AUTO_TEXT} chars). Split it, or record it as a normal memory.` }
+    if (text.length > MAX_AUTO_TEXT) {
+      return { ok: false, code: 'too-long', error: `refused: this note is ${text.length} chars; the limit is ${MAX_AUTO_TEXT}. Split it, or record it as a normal memory.` }
     }
 
     // 会话层：sid 不合法时不能落（目录即身份，换个名字就等于换了会话）。
@@ -339,8 +339,8 @@ export function createLearner(deps: LearnDeps) {
   async function preview(req: LearnRequest, config: EffectiveEvolutionConfig, env: LearnEnv): Promise<LearnPreview> {
     const text = String(req.text ?? '').trim()
     if (text === '') return { ok: false, code: 'empty', error: 'nothing to learn: text is empty' }
-    if (text.length > MAX_AUTO_TEXT * 2) {
-      return { ok: false, code: 'too-long', error: `refused: a learned note should be one sentence (limit ${MAX_AUTO_TEXT} chars). Split it, or record it as a normal memory.` }
+    if (text.length > MAX_AUTO_TEXT) {
+      return { ok: false, code: 'too-long', error: `refused: this note is ${text.length} chars; the limit is ${MAX_AUTO_TEXT}. Split it, or record it as a normal memory.` }
     }
     if (req.layer === LAYER_SESSION && env.sessionId && !sessionSegmentOk(env.sessionId)) {
       return { ok: false, code: 'bad-session', error: 'refused: this conversation id cannot be used as a directory name, so it cannot hold conversation-scoped notes. Use layer="workspace" instead.', gate: 'layer' }
