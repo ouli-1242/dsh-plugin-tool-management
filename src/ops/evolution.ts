@@ -579,7 +579,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * 整批失败（模型没配、密钥过期、上游 5xx），表现是"开了开关但什么都不学" —— 没有
      * 这个 op，这个状态和"这几轮确实没什么可记"长得一模一样。
      *
-     * 只返回非 done 的项：done 的计数在 `stats` 里，条目本身进了记忆库，再列一遍没有意义。
+     * `items` 只列未完成的项：done 的条目已经进了记忆库，列在失败清单里没有意义。
+     * `recent` 另给最近 10 条 done 行（带这次学到的条目摘要）—— 界面用它回答
+     * 「后台复习到底学成了什么」，而不是只报一个失败数字。
      */
     'evolution-queue': async () => {
       const cold = deps.cold?.()
@@ -601,7 +603,21 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(x.reason !== undefined ? { reason: x.reason } : {}),
             ...(x.nextAt !== undefined ? { nextAt: x.nextAt } : {}),
           }))
-        return { ok: true, stats, items: rows }
+        // 旧 done 行没有 learnedItems；照常返回，界面据此显示「没学到」而不是丢掉时间线。
+        const recent = items
+          .filter((x) => x.status === 'done')
+          .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0) || b.turn - a.turn)
+          .slice(0, 10)
+          .map((x) => ({
+            id: x.id,
+            session: x.session,
+            turn: x.turn,
+            at: x.at,
+            ...(x.reason !== undefined ? { reason: x.reason } : {}),
+            ...(x.learnedItems !== undefined && x.learnedItems.length > 0 ? { learnedItems: x.learnedItems } : {}),
+            ...(x.rejected !== undefined ? { rejected: x.rejected } : {}),
+          }))
+        return { ok: true, stats, items: rows, recent }
       } catch (e) {
         return { ok: false, error: message(e), code: 'queue-failed' }
       }

@@ -89,6 +89,8 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
       await deps.episodes.mark(item, {
         status: 'done',
         reason: out.reason ?? (out.learned > 0 ? `learned ${out.learned}` : 'nothing worth keeping'),
+        ...(out.items !== undefined && out.items.length > 0 ? { learnedItems: out.items } : {}),
+        ...(out.rejected > 0 ? { rejected: out.rejected } : {}),
       })
       return 'done'
     }

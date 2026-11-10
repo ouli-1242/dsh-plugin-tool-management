@@ -92,7 +92,12 @@ function fakeLearner(result = { ok: true }) {
 }
 
 /** 假 reviewer：给 `createColdPath` 用（它只要求返回 `ReviewOutcome`）。 */
-function fakeReviewer(outcome = { ok: true, learned: 1, rejected: 0 }) {
+function fakeReviewer(outcome = {
+  ok: true,
+  learned: 1,
+  rejected: 0,
+  items: [{ id: 'm1', title: '测试标题', text: '测试正文', layer: 'workspace', status: 'active', confidence: 0.85 }],
+}) {
   const calls = []
   return {
     calls,
@@ -610,6 +615,9 @@ test('cold：turnEnd 写 episode + 入队 + 复习到 done', async () => {
   assert.equal(all.length, 1)
   assert.equal(all[0].status, 'done')
   assert.equal(all[0].reason, 'learned 1')
+  // done 行要留下这次学到的摘要：界面靠它展示「后台复习学到了什么」。
+  assert.equal(all[0].learnedItems[0].id, 'm1')
+  assert.equal(all[0].learnedItems[0].title, '测试标题')
   assert.equal(reviewer.calls.length, 1)
   // episode 里要留下 cwd 与工作区 hash：复习是异步的，那时候已经拿不到活的 session。
   const ep = await episodes.read(all[0].path)
@@ -793,7 +801,10 @@ test('op：evolution-queue 只列未完成的项，dead 排最前', async () => 
   const cold = {
     async queue() {
       return [
-        { id: 's1:1', session: 's1', turn: 1, at: 'x', path: 'p', status: 'done', attempts: 1 },
+        {
+          id: 's1:1', session: 's1', turn: 1, at: '2026-11-10T09:00:00.000Z', path: 'p', status: 'done', attempts: 1,
+          learnedItems: [{ id: 'm1', title: '测试标题', text: '测试正文', layer: 'workspace', status: 'active', confidence: 0.85 }],
+        },
         { id: 's1:2', session: 's1', turn: 2, at: 'x', path: 'p', status: 'pending', attempts: 0 },
         { id: 's1:3', session: 's1', turn: 3, at: 'x', path: 'p', status: 'dead', attempts: 3, reason: 'upstream 500' },
         { id: 's1:4', session: 's1', turn: 4, at: 'x', path: 'p', status: 'failed', attempts: 1, reason: 'timeout', nextAt: 99 },
@@ -807,10 +818,13 @@ test('op：evolution-queue 只列未完成的项，dead 排最前', async () => 
   const res = await ops['evolution-queue']({})
   assert.equal(res.ok, true)
   assert.deepEqual(res.stats, { pending: 1, failed: 1, dead: 1, done: 1 })
-  // done 不进列表（条目已经进记忆库了），其余按严重程度排。
+  // done 不进失败列表（条目已经进记忆库了），其余按严重程度排。
   assert.deepEqual(res.items.map((x) => x.id), ['s1:3', 's1:4', 's1:2'])
   assert.equal(res.items[0].reason, 'upstream 500')
   assert.equal(res.items[1].nextAt, 99)
+  // done 的摘要另走 recent：界面用它展示「后台复习学到了什么」。
+  assert.deepEqual(res.recent.map((x) => x.id), ['s1:1'])
+  assert.equal(res.recent[0].learnedItems[0].id, 'm1')
 })
 
 test('op：evolution-replay 带 id 走 retry，不带 id 走整队重放', async () => {

@@ -18,7 +18,7 @@ import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { writeFileAtomically } from '../memories/index-io.js'
 import type { Episode } from './digest.js'
-import type { OutboxItem } from './episodes.js'
+import type { OutboxItem, ReviewLearnedItem } from './episodes.js'
 import { MAX_AUTO_TITLE, type Learner } from './write.js'
 import { noteStyleGuideOf, type EffectiveEvolutionConfig } from './config.js'
 
@@ -240,6 +240,8 @@ export interface ReviewOutcome {
   rejected: number
   reason?: string
   error?: string
+  /** 落下的条目摘要：outbox 的 done 行与界面据此展示「复习学到了什么」。 */
+  items?: ReviewLearnedItem[]
 }
 
 export function createReviewer(deps: ReviewDeps): {
@@ -301,6 +303,7 @@ export function createReviewer(deps: ReviewDeps): {
 
       let learned = 0
       let rejected = 0
+      const learnedItems: ReviewLearnedItem[] = []
       for (const item of items) {
         try {
           const r = await deps.learner.learn(
@@ -324,8 +327,21 @@ export function createReviewer(deps: ReviewDeps): {
               ...(episode.workspaceHash !== undefined ? { workspaceHash: episode.workspaceHash } : {}),
             },
           )
-          if (r.ok) learned++
-          else {
+          if (r.ok) {
+            learned++
+            // 测试替身可能只返回 `{ok:true}`；没有 id 就不记摘要，不能因为展示字段缺失
+            // 让一次已经成功的复习在记账时抛异常。
+            if (typeof r.id === 'string' && r.id !== '') {
+              learnedItems.push({
+                id: r.id,
+                ...(item.title !== undefined ? { title: item.title } : {}),
+                text: item.text,
+                layer: String(r.layer ?? ''),
+                status: String(r.status ?? ''),
+                confidence: Number(r.confidence) || 0,
+              })
+            }
+          } else {
             rejected++
             await deps.log({ at: new Date().toISOString(), session: episode.session, turn: episode.turn, event: 'review-rejected', code: r.code, gate: r.gate })
           }
@@ -335,7 +351,7 @@ export function createReviewer(deps: ReviewDeps): {
         }
       }
       await deps.log({ at: new Date().toISOString(), session: episode.session, turn: episode.turn, event: 'review-done', learned, rejected })
-      return { ok: true, learned, rejected }
+      return { ok: true, learned, rejected, ...(learnedItems.length > 0 ? { items: learnedItems } : {}) }
     },
   }
 }

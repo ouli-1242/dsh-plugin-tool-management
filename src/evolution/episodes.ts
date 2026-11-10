@@ -16,6 +16,23 @@ import type { Episode } from './digest.js'
 
 export type OutboxStatus = 'pending' | 'done' | 'failed' | 'dead' | 'orphan'
 
+/**
+ * 一次复习真正落下的条目。
+ *
+ * 只存界面要展示的摘要：正文在记忆库里，这里留一份是为了"复习跑完但用户没看见学成了
+ * 什么"时有个可读的回执；不存证据与完整 Markdown。
+ */
+export interface ReviewLearnedItem {
+  id: string
+  /** 模型给的标题；旧条目 / 合并时可能没有，界面按正文首句兜底。 */
+  title?: string
+  /** 学到的正文（与 LearnRequest.text 同源，已截断）。 */
+  text: string
+  layer: string
+  status: string
+  confidence: number
+}
+
 export interface OutboxItem {
   id: string
   session: string
@@ -28,6 +45,10 @@ export interface OutboxItem {
   /** 退避：下次可重试的最早时间（毫秒）。没有 = 立即可试。 */
   nextAt?: number
   reason?: string
+  /** done 行：这次复习落下的条目（旧行没有这个字段 = 没记录）。 */
+  learnedItems?: ReviewLearnedItem[]
+  /** done 行：被门禁拒 / 合并掉的条数。 */
+  rejected?: number
 }
 
 export interface EpisodeStoreDeps {
