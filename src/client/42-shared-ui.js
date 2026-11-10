@@ -1741,6 +1741,12 @@ function enabledMemoryCount(rules) {
       return (Math.round((v / (1024 * 1024)) * 10) / 10) + ' MB'
     }
 
+    /** 字节 → 估算 token：与 catalog 的 3 bytes/token 同口径，向上取整。 */
+    function fmtTokensOfBytes(n) {
+      var v = Number(n) || 0
+      return v <= 0 ? 0 : Math.max(1, Math.ceil(v / 3))
+    }
+
     // 通用导入弹窗（人设 / 记忆共用）：拖放或点选 .md / .zip → 已选计数 → 交由调用方走自己的写 op。
     // t 由调用方注入（各页的 t 是局部函数，不在模块作用域）；extra 用于注入「导入到场景」一类的额外字段。
     function ImportModal(props) {

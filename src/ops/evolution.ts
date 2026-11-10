@@ -193,6 +193,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         else if (typeof patch.enabled === 'boolean') next.learnGlobal = patch.enabled
         if (typeof patch.learnWorkspace === 'boolean') next.learnWorkspace = patch.learnWorkspace
         else if (typeof patch.enabled === 'boolean') next.learnWorkspace = patch.enabled
+        if (typeof patch.autoConfirm === 'boolean') next.autoConfirm = patch.autoConfirm
         if (typeof patch.inject === 'boolean') next.inject = patch.inject
         if (typeof patch.reviewEveryTurns === 'number') next.reviewEveryTurns = patch.reviewEveryTurns
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession

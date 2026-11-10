@@ -74,6 +74,12 @@ export interface EvolutionOverrides {
   /** 工作区层是否启用；语义同上。 */
   learnWorkspace?: boolean
   /**
+   * 自动确认：不再弹范围卡，层与内容全交给 agent 决定。
+   *
+   * 关闭时（默认）每一次交互式 learn 都弹卡；后台复习没有界面，始终按自动确认处理。
+   */
+  autoConfirm?: boolean
+  /**
    * 是否注入。`undefined` = 跟随两个开关（任一为真即注入）。
    * 显式 `false` 是"只学不用"的逃生口；显式 `true` 不能把两个都关掉的层重新打开 ——
    * 开关本身就是注入的授权，否则「关掉」在界面上就成了假动作。
@@ -101,6 +107,7 @@ export interface EvolutionSettings extends Required<Omit<EvolutionOverrides, 'in
 export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
   learnGlobal: false,
   learnWorkspace: false,
+  autoConfirm: false,
   reviewEveryTurns: 8,
   maxReviewsPerSession: 2,
   model: '',
@@ -157,6 +164,7 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
   return {
     learnGlobal: typeof r.learnGlobal === 'boolean' ? r.learnGlobal : (legacy?.global ?? d.learnGlobal),
     learnWorkspace: typeof r.learnWorkspace === 'boolean' ? r.learnWorkspace : (legacy?.workspace ?? d.learnWorkspace),
+    autoConfirm: typeof r.autoConfirm === 'boolean' ? r.autoConfirm : d.autoConfirm,
     ...(inject !== undefined ? { inject } : {}),
     reviewEveryTurns: intOf(r.reviewEveryTurns, d.reviewEveryTurns, 1, 100),
     maxReviewsPerSession: intOf(r.maxReviewsPerSession, d.maxReviewsPerSession, 0, 20),
@@ -175,6 +183,7 @@ export function normalizeOverrides(raw: any): EvolutionOverrides {
   else if (legacy !== undefined) out.learnGlobal = legacy.global
   if (typeof r.learnWorkspace === 'boolean') out.learnWorkspace = r.learnWorkspace
   else if (legacy !== undefined) out.learnWorkspace = legacy.workspace
+  if (typeof r.autoConfirm === 'boolean') out.autoConfirm = r.autoConfirm
   if (typeof r.inject === 'boolean') out.inject = r.inject
   if (typeof r.reviewEveryTurns === 'number' && Number.isFinite(r.reviewEveryTurns)) out.reviewEveryTurns = intOf(r.reviewEveryTurns, 8, 1, 100)
   if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, 2, 0, 20)
@@ -221,6 +230,7 @@ export function resolveEffectiveConfig(
   return {
     learnGlobal,
     learnWorkspace,
+    autoConfirm: pick('autoConfirm') ?? global.autoConfirm,
     enabled,
     inject: injectRaw === undefined ? enabled : (enabled && injectRaw),
     reviewEveryTurns: pick('reviewEveryTurns') ?? global.reviewEveryTurns,

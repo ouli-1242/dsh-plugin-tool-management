@@ -256,7 +256,7 @@ test('autoActive：工作区 + 用户原话直接生效，且证据不冒充用�
   } finally { h.done() }
 })
 
-test('autoActive：全局 / 做法类 / 模型推断 / 全局措辞都只进候选', async () => {
+test('autoActive：全局 / 做法类 / 模型推断 / 歧义都直接生效', async () => {
   const h = harness()
   try {
     const globalText = '用户喜欢简洁的回答'
@@ -265,7 +265,7 @@ test('autoActive：全局 / 做法类 / 模型推断 / 全局措辞都只进候�
       { text: globalText, key: 'answer-style', source: 'user_explicit', quote: globalText, layer: 'global', autoActive: true },
       cfgOf(), envOf(),
     )
-    assert.equal(global.status, 'candidate', '全局层必须等用户确认')
+    assert.equal(global.status, 'active')
 
     const procText = '发布前先跑构建再打 tag'
     userSaid(procText)
@@ -273,13 +273,13 @@ test('autoActive：全局 / 做法类 / 模型推断 / 全局措辞都只进候�
       { text: procText, key: 'release-steps', source: 'user_explicit', quote: procText, kind: 'procedure', autoActive: true },
       cfgOf(), envOf(),
     )
-    assert.equal(procedure.status, 'candidate', '做法类必须等用户确认')
+    assert.equal(procedure.status, 'active')
 
     const inferred = await h.learner.learn(
       { text: '这个仓库可能用 pnpm', key: 'pkg-guess', source: 'model_inference', autoActive: true },
       cfgOf(), envOf(),
     )
-    assert.equal(inferred.status, 'candidate', '模型推断不能直接生效')
+    assert.equal(inferred.status, 'active')
 
     const mixedText = '所有项目都统一用 pnpm'
     userSaid(mixedText)
@@ -287,7 +287,15 @@ test('autoActive：全局 / 做法类 / 模型推断 / 全局措辞都只进候�
       { text: mixedText, key: 'pnpm-all', source: 'user_explicit', quote: mixedText, layer: 'workspace', autoActive: true },
       cfgOf(), envOf(),
     )
-    assert.equal(mixed.status, 'candidate', '工作区层出现跨项目措辞，说明可能判错层，交给卡片')
+    assert.equal(mixed.status, 'active')
+
+    const ambiguousText = '这次先这样，以后都别用 npm'
+    userSaid(ambiguousText)
+    const ambiguous = await h.learner.learn(
+      { text: ambiguousText, key: 'ambiguous', source: 'user_explicit', quote: ambiguousText, autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(ambiguous.status, 'active', '自动确认由 agent 承担歧义判断')
   } finally { h.done() }
 })
 
@@ -346,7 +354,7 @@ test('forget：不存在的 id 返回 not-found，不写空墓碑', async () => 
   } finally { h.done() }
 })
 
-test('preview：direct 结果区分「可自动生效」与「必须确认」', async () => {
+test('preview：direct 反映自动确认的结果', async () => {
   const h = harness()
   try {
     const text = '这个仓库统一用 pnpm'
@@ -366,8 +374,8 @@ test('preview：direct 结果区分「可自动生效」与「必须确认」', 
       cfgOf(), envOf(),
     )
     assert.equal(global.ok, true, global.error)
-    assert.equal(global.direct.status, 'candidate')
-    assert.equal(global.direct.autoActive, false)
+    assert.equal(global.direct.status, 'active')
+    assert.equal(global.direct.autoActive, true)
   } finally { h.done() }
 })
 

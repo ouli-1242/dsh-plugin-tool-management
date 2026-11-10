@@ -17,7 +17,7 @@
 
 import { LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
 import { checkQuote } from './evidence.js'
-import { DEGRADE_NOTE, hasGlobalPhrase, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
+import { DEGRADE_NOTE, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
 import { BASE_CONFIDENCE, confidenceOf, textHashOf, tombstoneActive, type EvidenceRef, type EvidenceSource, type Tombstone } from './state.js'
 
 export type AutoKind = 'preference' | 'fact' | 'correction' | 'procedure'
@@ -28,7 +28,8 @@ export type GateName = 'source' | 'novelty' | 'durability' | 'safety' | 'scope' 
 
 /**
  * 待确认的理由代码。`needsReview` 是给人看的一句话，这个是给调用方判断「要不要弹卡」的稳定标识：
- * 只有 `user-conflict` 是卡片批准也解不开的（用户手写的记忆永远优先），其余都能被卡片批准清掉。
+ * 只有 `user-conflict` 是卡片批准或自动确认也解不开的（用户手写的记忆永远优先），
+ * 其余都能被用户批准 / 自动确认清掉。
  */
 export type ReviewCode = 'inference' | 'no-cache' | 'ambiguous' | 'procedure' | 'active-conflict' | 'user-conflict'
 
@@ -72,34 +73,6 @@ export interface GatePass {
 }
 
 export type GateOutcome = GatePass | GateReject
-
-/**
- * 自动生效策略：没有用户确认时，哪些条目可以直接 active。
- *
- * 只放开「工作区 + 用户原话/纠正 + 非做法类」：
- *   - 全局层影响所有项目，误判代价最高；
- *   - 模型推断、工具自报都可能是猜的，必须等用户确认；
- *   - 做法类改变行为，确认时更该让用户看一眼；
- *   - 文本里出现跨项目措辞而层是工作区，说明模型可能判错，交给卡片。
- */
-export function canAutoActivate(input: {
-  layer: MemoryLayer
-  source: EvidenceSource
-  kind: AutoKind
-  text: string
-  degraded?: DegradeReason
-  reviewCode?: ReviewCode
-  confidence: number
-}): boolean {
-  if (input.layer !== LAYER_WORKSPACE) return false
-  if (input.source !== 'user_explicit' && input.source !== 'user_correction') return false
-  if (input.kind === 'procedure') return false
-  if (input.degraded !== undefined) return false
-  if (input.reviewCode !== undefined) return false
-  if (input.confidence < 0.8) return false
-  if (hasGlobalPhrase(input.text)) return false
-  return true
-}
 
 /** 冲突门与合并需要的现有条目视图。 */
 export interface ExistingEntry {
@@ -145,8 +118,8 @@ export interface GateInput {
    */
   approved?: boolean
   /**
-   * 按自动生效策略直接落 active。与 `approved` 的区别：
-   * 没有用户看过原文，所以不把证据升成 `user_approved`；只放开「工作区 + 强证据 + 非做法类」。
+   * 自动确认：调用方已获授权，不弹卡直接落 active。与 `approved` 的区别：
+   * 没有用户看过原文，所以不把证据升成 `user_approved`；用户手写记忆冲突仍候选。
    */
   autoActive?: boolean
 }
@@ -398,12 +371,22 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   // 卡片批准（approved）把「等确认」变成「直接生效」，并让推断证据升为 user_approved ——
   // 用户看过这条原文点了同意，那本身就是一份比推断强得多的证据。
   const approved = input.approved === true
+  /**
+   * 自动确认：agent 已获授权，不再弹卡。
+   *
+   * 与 `approved` 一样能清掉待确认理由，但**不冒充用户看过原文** —— 证据来源不会升成
+   * `user_approved`。唯一不能越过的是用户手写记忆冲突：那条永远等用户裁决。
+   */
+  const autoActive = input.autoActive === true
+  const decided = approved || autoActive
   const evidence: EvidenceRef[] = []
   const nowIso = new Date().toISOString()
   let review: string | undefined
   let reviewCode: ReviewCode | undefined
   /** 第一条理由胜出；`user-conflict` 是唯一会覆盖已有理由的（用户手写记忆永远优先）。 */
   const setReview = (code: ReviewCode, text: string): void => {
+    // 自动确认下由 agent 承担判断；用户手写记忆冲突仍然必须由用户裁决。
+    if (autoActive && code !== 'user-conflict') return
     if (reviewCode === 'user-conflict') return
     if (reviewCode === undefined || code === 'user-conflict') {
       review = text
@@ -420,7 +403,7 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
       // 引句核不上不影响「这条原文被批准了」这个事实。
       source = approved ? 'user_approved' : 'model_inference'
       evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote: approved ? rawText : quote, at: nowIso })
-      if (!approved) setReview('no-cache', '没有可核对的用户原文（本会话还没记录到），先按候选保存')
+      if (!decided) setReview('no-cache', '没有可核对的用户原文（本会话还没记录到），先按候选保存')
     } else {
       // 引句对不上就是伪造：卡片批准也不能把它洗白，否则证据链会记下「用户说过」。
       return reject(
@@ -434,7 +417,7 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   } else {
     if (approved) source = 'user_approved'
     evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote: quote || rawText, at: nowIso })
-    if (!approved) setReview('inference', '这是模型自己的推断（不是你的原话），确认后才进上下文')
+    if (!decided) setReview('inference', '这是模型自己的推断（不是你的原话），确认后才进上下文')
   }
 
   // ── 门 6：冲突 ──
@@ -462,14 +445,15 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
       const sameThing = similarity(e.text, rawText) >= MERGE_SIMILARITY
       // 批准后层是用户选的：跨层目标不合并，改为取代 —— 否则用户选了工作区，
       // 这条却被并进全局那条，选择等于没生效。
-      if (sameThing && mergeableStatus(e.status) && (!approved || e.layer === layer)) {
+      if (sameThing && mergeableStatus(e.status) && (!decided || e.layer === layer)) {
         mergeInto = e.id
       } else if (e.status === 'candidate') {
         // 候选之间同 key 不同说法：直接取代旧的，收件箱里只留最新说法。
         supersedes.push(e.id)
       } else if (injectableStatus(e.status)) {
-        if (approved) {
-          // 卡片批准的新说法直接取代旧的（同层 / 跨层都算），不能两条矛盾的事实同时注入。
+        if (decided) {
+          // 用户批准 / 自动确认的新说法直接取代旧的（同层 / 跨层都算），
+          // 不能两条矛盾的事实同时注入。
           supersedes.push(e.id)
         } else {
           // 生效中的旧说法不能因为一条还没确认的候选就被静默拿下；等用户在记忆页确认
@@ -480,9 +464,9 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
       // archived / superseded 不合并、不取代：用户已经把它收起来或换掉了，
       // 重新学到时应该是一条新条目，而不是悄悄并进一条不注入的历史。
     }
-    // 合并保留目标条目自己的状态（write.ts 的 mergeInto 负责）；批准时目标会被激活。
+    // 合并保留目标条目自己的状态（write.ts 的 mergeInto 负责）；批准 / 自动确认时目标会被激活。
     if (mergeInto) {
-      if (!approved) supersedes.length = 0
+      if (!decided) supersedes.length = 0
       const target = ctx.existing.find((e) => e.id === mergeInto)
       if (target?.locked) {
         return reject(
@@ -511,29 +495,20 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   let confidence = confidenceOf(evidence)
   const notes: string[] = []
   if (downgraded && !approved) notes.push(downgraded)
-  if (ambiguousDurability && !approved) {
+  if (ambiguousDurability && !decided) {
     // 同时有"这次"和"以后"：不猜，降级。这比猜错安全一个数量级。
     setReview('ambiguous', '表述里同时有一次性与长期两种说法，先按候选保存')
     confidence = Math.min(confidence, BASE_CONFIDENCE.user_explicit - 0.15)
     notes.push('表述有歧义（一次性 vs 长期），先按候选保存')
   }
   if (degraded) notes.push(DEGRADE_NOTE[degraded])
-  if (kind === 'procedure' && !approved) {
+  if (kind === 'procedure' && !decided) {
     // 做法类记忆影响"怎么做"，确认时更该让用户看一眼；卡片批准本身就是那一眼。
     setReview('procedure', '做法类记忆先按候选保存，确认后再启用')
   }
 
-  const autoActive = input.autoActive === true && canAutoActivate({
-    layer,
-    source,
-    kind,
-    text: rawText,
-    ...(degraded !== undefined ? { degraded } : {}),
-    ...(reviewCode !== undefined ? { reviewCode } : {}),
-    confidence,
-  })
-  // 有理由就不生效：卡片批准或自动生效策略通过，且一条待确认理由都不剩时才 active。
-  const status: 'active' | 'candidate' = (approved || autoActive) && review === undefined ? 'active' : 'candidate'
+  // 有理由就不生效：卡片批准或自动确认授权，且一条待确认理由都不剩时才 active。
+  const status: 'active' | 'candidate' = decided && review === undefined ? 'active' : 'candidate'
   const note = notes.length > 0 ? notes.join('；') : undefined
   return {
     ok: true,

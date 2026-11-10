@@ -130,7 +130,7 @@ export const REVIEW_SYSTEM_PROMPT = [
   'Record only what will still matter in a different conversation: a stated preference, a correction of your behaviour, a project fact that cannot be read from the code, or a repeatable procedure.',
   'Do NOT record: one-off instructions ("this time", "for now"), anything derivable from package.json / config / git, or your own reasoning.',
   'For every item, `quote` must be an exact substring of what the user said in this turn. Do not paraphrase it.',
-  '`layer`: "global" only when it applies to every project or to the user personally; otherwise "workspace". Omit if unsure.',
+  '`layer`: "global" only when it applies to every project or to the user personally; otherwise "workspace". Always pass it.',
   'Write every `text` in the user\'s language, one terse sentence.',
   'Give every item a short `title` (2-8 words) in the user\'s language; it becomes the row name.',
   'At most 3 items. When in doubt, return fewer — a wrong memory is injected into every later conversation.',
@@ -310,14 +310,12 @@ export function createReviewer(deps: ReviewDeps): {
               ...(item.kind !== undefined ? { kind: item.kind } : {}),
               ...(item.key !== undefined ? { key: item.key } : {}),
               source: item.source,
-              // 复习器在后台落笔，没有任何人在场；门禁对所有来源都先落候选，
-              // 用户在记忆页确认后才会进上下文。
               ...(item.quote !== undefined ? { quote: item.quote } : {}),
               ...(item.layer !== undefined ? { layer: item.layer } : {}),
               ...(item.boundary !== undefined ? { boundary: item.boundary } : {}),
               ...(item.ttlDays !== undefined ? { ttlDays: item.ttlDays } : {}),
-              // 后台没有人可确认：工作区 + 用户原话/工具验证的条目按策略直接生效，
-              // 全局与模型推断仍落候选。策略本身在 gates.canAutoActivate 里。
+              // 后台没有人可弹卡：按自动确认授权直接落 active，由 agent 承担判断；
+              // 与用户手写记忆冲突的条目仍落候选，等用户裁决。
               autoActive: true,
             },
             cfg,

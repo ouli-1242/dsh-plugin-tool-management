@@ -151,9 +151,10 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 比 learn 更"用户自己的动作"，所以**不冻结** —— 锁定的是场景档案，不是"用户能不能
   // 确认自己刚看到的一条记忆"。这与 `rules-scene-lock` 不被自己挡住是同一条理由。
   'evolution-approve': { write: true },
-  // 停用 / 恢复 / 提升：都是同一条记忆的状态位，与 approve 同权（写、不冻结）。
+  // 行内开关 / 恢复 / 提升：都是同一条记忆的状态位，与 approve 同权（写、不冻结）。
   // 「停用」看起来像安全侧动作，但它改的是内容本身（那条记忆不再注入），
   // 与"关掉整个主动学习开关"不同 —— 后者是策略，前者是内容。
+  'evolution-set-enabled': { write: true },
   'evolution-set-status': { write: true },
   // 编辑正文：与 set-status 同权（写、不冻结）—— 自主记忆不绑场景。
   'evolution-update': { write: true },

@@ -173,6 +173,8 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-layer{display:flex;align-items:center;gap:10px}
 .dsm-evo-layer .dsm-label{flex:none}
 .dsm-evo-layer .dsm-help{margin:0;margin-left:auto}
+/* 自动确认与两层开关是两种授权：一条细线把「学不学」和「问不问」分开。 */
+.dsm-evo-layer-auto{margin-top:2px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-evo-master{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:2px 0 6px}
 .dsm-evo-master .dsm-help{margin:0;margin-left:auto}
 .dsm-evo-modal .dsm-evo-organize{margin:0}

@@ -108,6 +108,8 @@ export type LearnResult = LearnSuccess | LearnFailure
  */
 export interface LearnPreviewSuccess {
   ok: true
+  /** 当前生效的自动确认设置：为真时工具不弹卡，直接按模型给的层落盘。 */
+  autoConfirm: boolean
   /** 将要保存的正文（已按上限截断）。卡片展示它，而不是模型的原始入参。 */
   text: string
   boundary?: string
@@ -372,6 +374,7 @@ export function createLearner(deps: LearnDeps) {
     const boundary = String(req.boundary ?? '').trim().slice(0, MAX_BOUNDARY)
     return {
       ok: true,
+      autoConfirm: config.autoConfirm,
       text: chosen.text,
       ...(boundary !== '' ? { boundary } : {}),
       layer: chosen.layer,

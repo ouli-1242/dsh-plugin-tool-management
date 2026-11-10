@@ -20,8 +20,7 @@
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
 import { GLOBAL_SCENE, SHARED_GROUP } from '../memories/constants.js'
-import { needsScopeCard, type ScopeAskRequest, type ScopeChoice, type ScopeLayer } from '../evolution/scope-card.js'
-import { hasGlobalPhrase } from '../evolution/route.js'
+import type { ScopeAskRequest, ScopeChoice, ScopeLayer } from '../evolution/scope-card.js'
 import { candidateNote, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, type ToolDomainDeps } from './deps.js'
 import { PROACTIVE_MEMORY_TOOL } from './table.js'
 
@@ -485,7 +484,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   // 两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。授权边界写在工具名上。
   //
   // 只留 learn / forget：整理草案由界面「整理」承担，模型不需要多一个只读动作。
-  // 弹卡策略在 scope-card 的 `needsScopeCard`；直接生效策略在 gates 的 `canAutoActivate`。
+  // 弹卡策略：自动确认关 → 每次都问；开 → 不弹卡，由 agent 决定。生效判断在 gates 的 `autoActive`。
   if (!deps.evolutionOps || !deps.autoLearnEnabled) return
   const evo = deps.evolutionOps
   // 热路径的频率上限：模型在一轮里反复 learn / 弹卡时，10 分钟窗口最多 5 条。
@@ -495,7 +494,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory. Call only when the user explicitly asks you to remember something, or when they just corrected you and the correction must persist. Do not scan the conversation for memory candidates; a background review covers that. learn: a short `title` (2-8 words) and one terse sentence in the user\'s language (<=400 chars). `layer`: global = every project / the user personally; workspace = this project only. Pass it when clear; omit only when unsure (the user is asked). `quote`: the user\'s exact words for user_explicit / user_correction; otherwise use model_inference. Workspace notes backed by the user\'s exact words may go active directly; everything else is confirmed first. forget: only when asked; pass the note id or its unique key.',
+    description: 'Autonomous memory. Call only when the user explicitly asks you to remember something, or when they just corrected you and the correction must persist. Do not scan the conversation for memory candidates; a background review covers that. learn: a short `title` (2-8 words) and one terse sentence in the user\'s language (<=400 chars). `layer`: global = every project / the user personally; workspace = this project only. Pass it when clear; omit only when unsure. The user picks the layer in a card unless auto-confirm is on; then your layer is final and the note is saved without asking. `quote`: the user\'s exact words for user_explicit / user_correction; otherwise use model_inference. forget: only when asked; pass the note id or its unique key.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn (default) or forget.' },
       // ── learn ──
@@ -506,7 +505,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       quote: { type: 'string', description: 'learn: the user\'s exact words for user_explicit / user_correction.' },
       key: { type: 'string', description: 'learn: optional slot name; the same key merges.' },
       boundary: { type: 'string', description: 'learn: optional; when it may not hold.' },
-      layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure.' },
+      layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure; the card asks, or auto-confirm uses the default.' },
       ttlDays: { type: 'number', description: 'learn: optional; re-check after N days.' },
       // ── forget ──
       memory: { type: 'string', description: 'forget: the note id or its unique key.' },
@@ -584,9 +583,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         // 但工具层只能通过 throw 回话，所以把 `error` 原样抛（它已经是一句给模型看的话）。
         throw new Error(String((preview && preview.error) || 'failed to record it'))
       }
-      const direct = preview.direct
-      // 工作区 + 强证据 + 非做法类：不打扰用户，直接生效。
-      if (direct && direct.status === 'active' && direct.autoActive === true) {
+      // 自动确认：不弹卡，模型给的层就是最终层；后台复习也走这条授权。
+      if (preview.autoConfirm === true) {
         const r: any = await evo['evolution-learn']({ ...payload, autoActive: true })
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
         return learnReceipt(r, 'auto')
@@ -594,20 +592,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
       const layerProvided = payload.layer === 'global' || payload.layer === 'workspace'
       const layer: ScopeLayer = preview.layer === 'global' ? 'global' : 'workspace'
-      // 卡片只在「模型/系统不确定」时出现；模型推断的工作区条目直接进候选，不打扰用户。
-      const cardNeeded = needsScopeCard({
-        layerProvided,
-        layer,
-        ...(direct && direct.reviewCode !== undefined ? { reviewCode: direct.reviewCode } : {}),
-        hasGlobalPhrase: hasGlobalPhrase(String(preview.text || payload.text || '')),
-      })
-      // 用户手写记忆冲突是卡片也解不开的；模型推断的工作区条目也不需要卡。
-      if (!cardNeeded || preview.status !== 'active') {
+      // 合并进一条已生效的记忆：层已经定了，结果也仍是 active，不必再问一次。
+      if (typeof preview.mergeInto === 'string' && preview.mergeInto !== '' && preview.status === 'active') {
         const r: any = await evo['evolution-learn'](payload)
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
-        return learnReceipt(r, preview.reviewCode === 'user-conflict' ? 'pending-conflict' : 'pending')
+        return learnReceipt(r, 'none')
       }
 
+      // 其余一律弹卡：新条目、候选合并、冲突都由用户选层；选了就批准并立即生效。
       const allowed: ScopeLayer[] = Array.isArray(preview.allowedLayers)
         ? (preview.allowedLayers as unknown[]).filter((l): l is ScopeLayer => l === 'global' || l === 'workspace')
         : []

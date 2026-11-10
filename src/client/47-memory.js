@@ -599,7 +599,7 @@
                 key: 'size',
                 className: 'dsm-qty',
                 title: t('memory.size.tip', { size: fmtBytes(r.bytes) }),
-              }, fmtBytes(r.bytes))
+              }, t('memory.size.tokens', { count: fmtTokensOfBytes(r.bytes) }))
               : null
             return React.createElement(ListRow, {
               key: r.id,
@@ -762,7 +762,7 @@
             var args = sid === '' ? {} : { sessionId: sid }
             Promise.all([
               apiCall('evolution-status', args),
-              // 默认列表 = 待确认 + 生效；停用的条目已经进回收站，不在卡片里重复出现。
+              // 默认列表 = 待确认 + 生效；归档 / 已取代才隐藏，行内停用的条目仍留在卡片里。
               apiCall('evolution-list', {}),
               apiCall('evolution-queue', {}),
             ])
@@ -828,6 +828,18 @@
                 // 工具跟着两个开关一起开 / 关：兼容页若正开着，让它立刻重拉那张表与 chip。
                 try { window.dispatchEvent(new Event('dsm:proactive-memory-changed')) } catch (e) {}
               } else setResult({ ok: false, text: translateError(t, bad) })
+            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
+          /** 自动确认：写全局设置；关掉时每次 learn 都会弹卡。 */
+          function setEvolutionAutoConfirm(next) {
+            setEvoBusy(true)
+            apiCall('evolution-settings', { set: true, settings: { autoConfirm: next } }).then(function (res) {
+              setEvoBusy(false)
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.saved') })
+                refreshEvolution()
+              } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
 
@@ -991,10 +1003,10 @@
               key: e.id,
               dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: enabled ? t(statusKey) : t('evo.tag.off') })],
               name: title,
-              nameAfter: React.createElement('span', { className: 'dsm-qty' }, t('evo.tokens', { count: Number(e.tokens) || 0 })),
+              nameAfter: React.createElement('span', { className: 'dsm-qty' }, t('memory.size.tokens', { count: Number(e.tokens) || 0 })),
               meta: metaBits.length ? metaBits : undefined,
               metaTitle: e.needsReview || undefined,
-              // 候选行右侧是「确认」；生效行是开关，与记忆行同一语义：关 = 停用进回收站。
+              // 候选行右侧是「确认」；生效行是开关，与记忆行同一语义：关 = 不再注入，条目保留。
               side: pending
                 ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
                 : React.createElement(Switch, {
@@ -1078,7 +1090,7 @@
            * `cardKey` 同时是折叠状态的键。
            *
            * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
-           * 名称 + 正文，候选行右侧有「确认」，生效行右侧是开关，停用进记忆页的回收站。
+           * 名称 + 正文，候选行右侧有「确认」，生效行右侧是开关（关闭只停止注入，删除才进回收站）。
            * 卡头右侧的「设置」开设置弹窗（两层开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
            */
           function renderEvolutionCard(opts) {
@@ -1262,26 +1274,32 @@
             var overall = eff.enabled === true
             var globalOn = eff.learnGlobal === true
             var workspaceOn = eff.learnWorkspace === true
+            var autoConfirm = eff.autoConfirm === true
             // 本地整理只出建议、逐条「应用」；它不花模型调用，是设置弹窗里唯一的清理入口。
-            var drafts = evoOrg ? React.createElement('div', { key: 'org', className: 'dsm-evo-organize' },
-              evoOrg.error ? React.createElement(Notice, { kind: 'err', text: evoOrg.error }) : null,
-              !evoOrg.error && evoOrg.drafts !== null && evoOrg.drafts.length === 0
-                ? React.createElement('p', { className: 'dsm-help' }, t('evo.organize.none', { scanned: evoOrg.scanned }))
-                : null,
-              !evoOrg.error && evoOrg.drafts && evoOrg.drafts.length
-                ? React.createElement('div', null,
-                    React.createElement('div', { className: 'dsm-evo-detail-key' }, t('evo.organize.title', { count: evoOrg.drafts.length })),
-                    evoOrg.drafts.map(function (d) {
-                      return React.createElement('div', { key: d.id, className: 'dsm-evo-draft' },
-                        React.createElement('span', { className: 'dsm-tag' }, t('evo.organize.action.' + d.action)),
-                        React.createElement('span', { className: 'dsm-evo-draft-id' }, (d.ids || []).join(' + ')),
-                        React.createElement('span', { className: 'dsm-evo-draft-reason' }, String(d.reason || '')),
-                        React.createElement('button', {
-                          type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !!evoOrg.busy,
-                          onClick: function () { applyOrganizeDraft(d) },
-                        }, t('evo.organize.apply')))
-                    }))
-                : null) : null
+            // 没有草案时不画虚线框 —— 一句普通提示就够，框只会让空弹窗更重。
+            var drafts = evoOrg && (evoOrg.error || (evoOrg.drafts && evoOrg.drafts.length > 0))
+              ? React.createElement('div', { key: 'org', className: 'dsm-evo-organize' },
+                  evoOrg.error ? React.createElement(Notice, { kind: 'err', text: evoOrg.error }) : null,
+                  !evoOrg.error && evoOrg.drafts && evoOrg.drafts.length
+                    ? React.createElement('div', null,
+                        React.createElement('div', { className: 'dsm-evo-detail-key' }, t('evo.organize.title', { count: evoOrg.drafts.length })),
+                        evoOrg.drafts.map(function (d) {
+                          return React.createElement('div', { key: d.id, className: 'dsm-evo-draft' },
+                            React.createElement('span', { className: 'dsm-tag' }, t('evo.organize.action.' + d.action)),
+                            React.createElement('span', { className: 'dsm-evo-draft-id' }, (d.ids || []).join(' + ')),
+                            React.createElement('span', { className: 'dsm-evo-draft-reason' }, String(d.reason || '')),
+                            React.createElement('button', {
+                              type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: !!evoOrg.busy,
+                              onClick: function () { applyOrganizeDraft(d) },
+                            }, t('evo.organize.apply')))
+                        }))
+                    : null)
+              : null
+            var orgEmpty = evoOrg && !evoOrg.error && evoOrg.drafts !== null && evoOrg.drafts.length === 0
+              ? React.createElement('p', { key: 'org-empty', className: 'dsm-help' }, t('evo.organize.none', { scanned: evoOrg.scanned }))
+              : null
+            var statText = t('evo.stat.learned', { learned: auto.entries || 0 })
+            if (Number(auto.pendingReview) > 0) statText += ' · ' + t('evo.stat.pending', { pending: auto.pendingReview })
             return React.createElement(Modal, {
               key: 'evo', className: 'dsm-modal-evo' + (overall ? ' dsm-evo-on' : ''), title: t('evo.title'),
               closeLabel: t('btn.close'), onClose: function () { setEvoOpen(false) },
@@ -1307,21 +1325,29 @@
                       label: t('evo.switch.workspace'),
                       onClick: function () { setEvolutionLayer('workspace', !workspaceOn) },
                     }),
-                    React.createElement('span', { className: 'dsm-help' }, t('evo.switch.workspace.hint')))),
+                    React.createElement('span', { className: 'dsm-help' }, t('evo.switch.workspace.hint'))),
+                  React.createElement('div', { className: 'dsm-evo-layer dsm-evo-layer-auto' },
+                    React.createElement('span', { className: 'dsm-label' }, t('evo.switch.autoConfirm')),
+                    React.createElement(Switch, {
+                      on: autoConfirm,
+                      disabled: evoBusy || (evo.loading && !st) || !overall,
+                      label: t('evo.switch.autoConfirm'),
+                      onClick: function () { setEvolutionAutoConfirm(!autoConfirm) },
+                    }),
+                    React.createElement('span', { className: 'dsm-help' }, t('evo.switch.autoConfirm.hint')))),
                 React.createElement('div', { className: 'dsm-evo-master' },
                   // 开没开只看边框：开启时弹窗与页头按钮走成功色边框，不再写「已开启」。
-                  React.createElement('span', { className: 'dsm-help' }, t('evo.stat.short', { learned: auto.entries || 0, pending: auto.pendingReview || 0 })),
+                  React.createElement('span', { className: 'dsm-help' }, statText),
                   React.createElement('button', {
                     key: 'org', type: 'button', className: 'dsm-btn dsm-btn-quiet',
                     disabled: !!(evoOrg && evoOrg.busy) || auto.entries === 0, onClick: runOrganize,
                   }, evoOrg && evoOrg.busy ? t('evo.organize.scanning') : t('evo.organize'))),
                 // 笔记风格：模型写新记忆的口吻（默认高效——无表情、无语气词）。
                 overall ? renderEvolutionStyle() : null,
-                React.createElement('p', { className: 'dsm-help' }, t('evo.modal.hint')),
-                React.createElement('p', { className: 'dsm-help' }, t('evo.modal.trashHint')),
                 evo.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: evo.error }) : null,
                 evo.loading && !st ? React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')) : null,
                 drafts,
+                orgEmpty,
                 // 后台复习失败只在真有时露一行；没失败就不占地方。
                 renderEvolutionQueue()))
           }

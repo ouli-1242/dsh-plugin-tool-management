@@ -7,7 +7,7 @@
 //   · 失败分类错 → 没有 answerer 的会话把笔记丢掉，或关掉卡片反而保存了。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildScopeQuestion, scopeChoiceOf, scopeFailureOf, cardLangOf, needsScopeCard } from '../lib/evolution/scope-card.js'
+import { buildScopeQuestion, scopeChoiceOf, scopeFailureOf, cardLangOf } from '../lib/evolution/scope-card.js'
 
 test('语言：正文含中文用中文卡片，否则英文；不再中英并排', () => {
   assert.equal(cardLangOf('这个仓库统一用 pnpm'), 'zh')
@@ -28,20 +28,6 @@ test('卡片：模型没给层时不标推荐，选项按 allowed 顺序', () =>
   const q = buildScopeQuestion({ text: '这个仓库统一用 pnpm', allowed: ['global', 'workspace'] })
   assert.deepEqual(q.options.map((o) => o.label), ['本工作区记忆', '全局记忆', '不加入'], '不确定时工作区在前，避免默认跨项目')
   assert.ok(q.options.every((o) => !/推荐/.test(o.description)), '不确定时不能假装有推荐')
-})
-
-test('范围卡只在不确定时出现：未指定层 / 全局 / 跨项目措辞 / 歧义 / 做法 / 冲突 / 引句核对不到', () => {
-  const card = (over = {}) => needsScopeCard({ layerProvided: true, layer: 'workspace', hasGlobalPhrase: false, ...over })
-  assert.equal(card({ layerProvided: false }), true, '模型没给层')
-  assert.equal(card({ layer: 'global' }), true, '全局层')
-  assert.equal(card({ hasGlobalPhrase: true }), true, '工作区里出现跨项目措辞，可能判错层')
-  assert.equal(card({ reviewCode: 'ambiguous' }), true)
-  assert.equal(card({ reviewCode: 'procedure' }), true)
-  assert.equal(card({ reviewCode: 'active-conflict' }), true)
-  assert.equal(card({ reviewCode: 'no-cache' }), true)
-  assert.equal(card({ reviewCode: 'inference' }), false, '工作区模型推断直接进候选')
-  assert.equal(card({ reviewCode: 'user-conflict' }), false, '卡片解不开用户手写记忆冲突')
-  assert.equal(card(), false, '工作区 + 明确层 + 无理由：不打扰')
 })
 
 test('卡片：推荐层排第一，跳过永远最后；detail 带上要保存的正文与合并信息', () => {

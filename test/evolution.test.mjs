@@ -62,6 +62,15 @@ test('source 报最具体的那一档（界面显示「来源」）', () => {
   assert.equal(resolveEffectiveConfig(G, {}, {}).source, 'global')
 })
 
+test('autoConfirm：默认关，可全局设置，下层可覆盖', () => {
+  assert.equal(G.autoConfirm, false)
+  assert.equal(normalizeEvolutionSettings({ autoConfirm: true }).autoConfirm, true)
+  assert.equal(normalizeEvolutionSettings({ autoConfirm: 'yes' }).autoConfirm, false)
+  assert.equal(resolveEffectiveConfig({ ...G, autoConfirm: true }).autoConfirm, true)
+  assert.equal(resolveEffectiveConfig({ ...G, autoConfirm: true }, { autoConfirm: false }).autoConfirm, false)
+  assert.equal(resolveEffectiveConfig({ ...G, autoConfirm: false }, undefined, { autoConfirm: true }).autoConfirm, true)
+})
+
 test('旧配置迁移：enabled + writeTarget 翻译成两个开关', () => {
   const both = normalizeEvolutionSettings({ enabled: true, learnScope: 'global', writeTarget: 'route' })
   assert.equal(both.learnGlobal, true)
