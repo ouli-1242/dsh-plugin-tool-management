@@ -159,9 +159,11 @@ export function createLearner(deps: LearnDeps) {
     st: EvolutionState,
   ): Promise<GateContext> {
     const { entries, knownScenes } = await deps.existingEntries()
+    // 配额只数活条目：归档 / 已取代的正文还在盘上，但它们不再注入，也不该把层占满。
     const countByLayer: Partial<Record<MemoryLayer, number>> = {}
     for (const e of entries) {
       if (e.origin !== 'auto') continue
+      if (e.status === 'archived' || e.status === 'superseded') continue
       countByLayer[e.layer] = (countByLayer[e.layer] ?? 0) + 1
     }
     return {
@@ -171,7 +173,6 @@ export function createLearner(deps: LearnDeps) {
       writeTarget: config.writeTarget,
       existing: entries,
       countByLayer,
-      maxEntries: config.maxEntries,
       knownWorkspaces: await deps.knownWorkspaces(),
       knownScenes,
       tombstones: st.tombstones,

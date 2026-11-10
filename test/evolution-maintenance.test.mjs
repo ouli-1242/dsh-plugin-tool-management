@@ -83,18 +83,21 @@ test('planSweep：显式 TTL 覆盖 kind 默认值', () => {
   assert.deepEqual(actions.map((a) => a.id), ['w/a'])
 })
 
-test('planSweep：衰减只碰"从没被注入也没人读"的 active', () => {
+test('planSweep：衰减看最后一次注入 / 读取，而不是"有没有被用过"', () => {
   const { actions } = planSweep(
     [
       entry({ id: 'dead', updatedAt: iso(DECAY_DAYS + 1) }),
-      entry({ id: 'injected', updatedAt: iso(DECAY_DAYS + 1), counters: counters({ injected: 3 }) }),
-      entry({ id: 'read', updatedAt: iso(DECAY_DAYS + 1), counters: counters({ read: 1 }) }),
+      // 半年前学过，但昨天刚被注入：还活着。
+      entry({ id: 'injected', updatedAt: iso(DECAY_DAYS + 1), counters: counters({ injected: 3, lastInjectedAt: iso(1) }) }),
+      entry({ id: 'read', updatedAt: iso(DECAY_DAYS + 1), counters: counters({ read: 1, lastUsedAt: iso(1) }) }),
+      // 用过，但最后一次也超过半年：和从没用过一样该归档。
+      entry({ id: 'stale', updatedAt: iso(DECAY_DAYS + 1), counters: counters({ injected: 2, lastInjectedAt: iso(DECAY_DAYS + 10) }) }),
       entry({ id: 'core', status: 'core', updatedAt: iso(DECAY_DAYS + 1) }),
     ],
     { now: NOW },
   )
-  assert.deepEqual(actions.map((a) => a.id), ['dead'])
-  assert.equal(actions[0].bucket, 'decay')
+  assert.deepEqual(actions.map((a) => a.id).sort(), ['dead', 'stale'])
+  assert.ok(actions.every((a) => a.bucket === 'decay'))
 })
 
 test('planSweep：工作区目录没消失够久，不归档它的记忆', () => {

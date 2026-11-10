@@ -80,10 +80,8 @@ export interface GateContext {
   scene?: string
   writeTarget: WriteTarget
   existing: ExistingEntry[]
-  /** 各层现有自动条目数。 */
+  /** 各层现有自动条目数（只数活条目：归档 / 已取代不占配额）。 */
   countByLayer: Partial<Record<MemoryLayer, number>>
-  /** 每层条数上限；0 = 用常量默认。 */
-  maxEntries: number
   knownWorkspaces: Set<string>
   knownScenes: Set<string>
   tombstones: Tombstone[]
@@ -365,20 +363,22 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
 
   // ── 门 6：冲突 ──
   const ownKey = ctx.existing.filter((e) => e.key !== '' && e.key === key)
-  const sameText = ctx.existing.filter((e) => e.key === '' && similarity(e.text, rawText) >= MERGE_SIMILARITY)
+  // 相似度不按 key 分组：同一句话换了个 key 也是同一件事（模型常把同一条记忆
+  // 记成 `package-manager` / `pkg-manager` 两个槽）。跨 key 不合并的话，收件箱里
+  // 会并排出现两条几乎一样的候选，用户只能二选一删掉一条。
+  const similar = ctx.existing.filter((e) => similarity(e.text, rawText) >= MERGE_SIMILARITY)
   let mergeInto: string | undefined
   const supersedes: string[] = []
 
-  const userConflict = ownKey.find((e) => e.origin === 'user') ??
-    ctx.existing.find((e) => e.origin === 'user' && similarity(e.text, rawText) >= MERGE_SIMILARITY)
+  const userConflict = ownKey.find((e) => e.origin === 'user') ?? similar.find((e) => e.origin === 'user')
   if (userConflict) {
     // 用户写的记忆永远赢：不覆盖、不取代，只排队等用户裁决。
     review = `与你自己写的记忆「${userConflict.id}」冲突，等你在记忆页确认`
   } else {
-    const autoSame = [...ownKey, ...sameText].filter((e) => e.origin === 'auto' && e.id !== mergeInto)
+    const autoSame = [...ownKey, ...similar].filter((e) => e.origin === 'auto')
     for (const e of autoSame) {
-      // 同一件事的两种说法（高相似）→ 合并；同 key 但说法不同 → 取代旧的。
-      if (e.key !== '' && e.key === key && similarity(e.text, rawText) >= MERGE_SIMILARITY) {
+      // 同一件事的两种说法（高相似）→ 合并，不管 key 是否相同。
+      if (similarity(e.text, rawText) >= MERGE_SIMILARITY) {
         mergeInto = e.id
       } else if (e.status === 'candidate') {
         // 候选之间同 key 不同说法：直接取代旧的，收件箱里只留最新说法。
@@ -395,7 +395,7 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
 
   // ── 门 7：配额 ──
   const used = ctx.countByLayer[layer] ?? 0
-  const cap = ctx.maxEntries > 0 ? ctx.maxEntries : LAYER_QUOTA[layer]
+  const cap = LAYER_QUOTA[layer]
   // 合并与取代不新增条目，不占配额。
   if (!mergeInto && supersedes.length === 0 && used >= cap) {
     return reject(

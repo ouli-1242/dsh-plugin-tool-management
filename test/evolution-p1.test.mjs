@@ -26,7 +26,6 @@ const ctxOf = (patch = {}) => ({
   writeTarget: 'route',
   existing: [],
   countByLayer: {},
-  maxEntries: 0,
   knownWorkspaces: new Set(['abcd1234abcd1234']),
   knownScenes: new Set(['code']),
   workspaceHash: 'abcd1234abcd1234',
@@ -221,6 +220,20 @@ test('冲突门：同 key 的自动条目说法一样 → 合并而不是新增'
   const same = '这个仓库用 pnpm'
   const r = runGates(
     { text: same, source: 'user_explicit', quote: same, key: 'package-manager' },
+    ctxOf({
+      existing: [{ id: '_ws/abcd1234abcd1234/pkg', layer: 'workspace', key: 'package-manager', text: same, status: 'active', origin: 'auto' }],
+      workspaceHash: 'abcd1234abcd1234',
+    }),
+  )
+  assert.equal(r.ok, true)
+  assert.equal(r.mergeInto, '_ws/abcd1234abcd1234/pkg')
+  assert.deepEqual(r.supersedes, [])
+})
+
+test('冲突门：换了 key 但说法一样 → 仍合并，不在收件箱里并排两条', () => {
+  const same = '这个仓库用 pnpm 装依赖'
+  const r = runGates(
+    { text: same, source: 'tool_verified', key: 'pkg-manager' },
     ctxOf({
       existing: [{ id: '_ws/abcd1234abcd1234/pkg', layer: 'workspace', key: 'package-manager', text: same, status: 'active', origin: 'auto' }],
       workspaceHash: 'abcd1234abcd1234',

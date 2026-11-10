@@ -547,13 +547,20 @@ test('organize → applyOrganize(merge)：保留项正文不动、被并项转 s
       envOf(),
     )
     const b = await h.learner.learn(
-      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-message-lang', source: 'tool_verified' },
+      { text: '提交信息别写英文', key: 'commit-message-lang', source: 'tool_verified' },
       cfgOf(),
       envOf(),
     )
     assert.equal(a.ok, true, a.error)
     assert.equal(b.ok, true, b.error)
-    assert.equal(h.docs().length, 2, '不同 key 不会被写入管线合并')
+    // 写入管线现在会跨 key 合并相似文本；这里模拟**历史上已经并存**的两条：
+    // 把 b 的正文改成与 a 几乎一样的说法，状态与证据保持 learn 写下的那份。
+    const bPath = join(h.memoriesRoot, b.id + '.md')
+    writeFileSync(bPath, readFileSync(bPath, 'utf8').replace(
+      /\n---\n[\s\S]*$/,
+      '\n---\n\n所有提交信息都用中文写，不要写英文，因为团队里有人不看英文\n',
+    ))
+    assert.equal(h.docs().length, 2)
 
     const plan = await h.learner.organize('workspace')
     assert.equal(plan.ok, true, plan.error)

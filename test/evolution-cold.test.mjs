@@ -414,6 +414,30 @@ test('reviewer：没有 llm 服务 → no-llm，不花钱', async () => {
   assert.equal(await budget.remaining('s1'), 2)
 })
 
+test('review budget：生效配置的上限覆盖默认值，0 = 不复习', async () => {
+  const dir = await tmp()
+  const budget = createReviewBudget({ path: join(dir, 'reviews.json'), max: 2, message })
+  assert.equal(await budget.remaining('s1', 5), 5)
+  assert.equal(await budget.remaining('s1', 0), 0, '0 是合法上限，不夹到至少 1 次')
+  await budget.spend('s1')
+  assert.equal(await budget.remaining('s1', 5), 4)
+  assert.equal(await budget.remaining('s1'), 1, '不传 max 时仍按构造时的默认值')
+})
+
+test('reviewer：每会话上限从生效配置来 —— 设 0 时一次都不跑', async () => {
+  const dir = await tmp()
+  const budget = createReviewBudget({ path: join(dir, 'reviews.json'), max: 2, message })
+  const llm = fakeLlm()
+  const r = createReviewer({ llm, learner: fakeLearner(), budget, catalogLines: async () => [], log, message })
+  const out = await r.review(
+    episodeOf(digestOf(1), { session: 's1', at: 'x', reason: 'signal' }),
+    cfgOf({ maxReviewsPerSession: 0 }),
+    { provider: 'p', model: 'm' },
+  )
+  assert.equal(out.reason, 'budget')
+  assert.equal(llm.calls.length, 0)
+})
+
 test('reviewer：拿不到模型路由 → no-model', async () => {
   const dir = await tmp()
   const budget = createReviewBudget({ path: join(dir, 'reviews.json'), max: 2, message })
@@ -529,7 +553,11 @@ test('reviewer：预算用光 → budget，且不调模型', async () => {
 
   const llm = fakeLlm()
   const r = createReviewer({ llm, learner: fakeLearner(), budget, catalogLines: async () => [], log, message })
-  const out = await r.review(episodeOf(digestOf(1), { session: 's1', at: 'x', reason: 'signal' }), cfgOf(), { provider: 'p', model: 'm' })
+  const out = await r.review(
+    episodeOf(digestOf(1), { session: 's1', at: 'x', reason: 'signal' }),
+    cfgOf({ maxReviewsPerSession: 1 }),
+    { provider: 'p', model: 'm' },
+  )
   assert.equal(out.reason, 'budget')
   assert.equal(llm.calls.length, 0)
   // 别的会话不受影响。

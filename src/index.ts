@@ -64,7 +64,7 @@ import { attachColdPath } from './evolution/cold.js'
 import { createEpisodeStore } from './evolution/episodes.js'
 import { createReviewBudget, createReviewer } from './evolution/review.js'
 // 整理（P3）：全库草案 + 应用/回滚；维护扫描：TTL / 会话 GC / 配额。
-import { createDreamer, shouldDreamToday, shouldRetryDream, type DreamEntryView, type Dreamer } from './evolution/dream.js'
+import { createDreamer, type DreamEntryView, type Dreamer } from './evolution/dream.js'
 import { trashAutoNote } from './evolution/notes.js'
 import { healthOf, runSweep, shouldSweepNow, type SweepEntry, type SweepReport } from './evolution/maintenance.js'
 import { createProcedureSkillStore, type ProcedureSkillStore } from './evolution/procedure.js'
@@ -4473,6 +4473,8 @@ export default {
     // op 里取到的是**装配完成后**的实例，不会出现"界面上那份是空壳"。
     let dreamHandle: Dreamer | null = null
     let sweepRunner: ((opts?: { dry?: boolean }) => Promise<SweepReport>) | null = null
+    // 轮末与启动都可能同时想跑扫描；lastSweepAt 要到扫描结束才写，光看它会并发跑两遍。
+    let sweepInFlight = false
     let healthRunner: (() => Promise<ReturnType<typeof healthOf>>) | null = null
     // P4：技能提议依赖技能域的 op 表与同一把写锁，同样晚于 op 表创建。
     let procedureSkillHandle: ProcedureSkillStore | null = null
@@ -4553,14 +4555,35 @@ export default {
       budget: reviewBudget,
       catalogLines: async () => {
         const view = evolutionRuntime.view()
+        // 已知清单要含候选：复习器看不到待确认的条目时，会把同一件事再学一遍，
+        // 收件箱里就出现两条几乎一样的候选。
         return Object.values(view.catalog.entries)
-          .filter((e) => e.enabled && (e.status === 'active' || e.status === 'core'))
+          .filter((e) => e.enabled && e.status !== 'archived' && e.status !== 'superseded')
           .sort((a, b) => b.confidence - a.confidence)
           .map((e) => '[' + e.layer + '] ' + e.oneLine)
       },
       log: evolutionLog,
       message,
     })
+    /**
+     * 每日维护：轮末与启动共用。`sweepInFlight` 挡住并发轮末的重复扫描 ——
+     * `lastSweepAt` 要到扫描结束才写，只查它的话两个会话同时轮末会各跑一遍。
+     */
+    const sweepIfDue = async (): Promise<void> => {
+      if (sweepInFlight) return
+      const view = evolutionRuntime.view()
+      if (!view.settings.enabled) return
+      if (!shouldSweepNow(view.state.watermarks.lastSweepAt)) return
+      const run = sweepRunner
+      if (!run) return
+      sweepInFlight = true
+      try {
+        await run({})
+        evolutionRuntime.invalidate()
+      } finally {
+        sweepInFlight = false
+      }
+    }
     const evolutionCold = attachColdPath(ctx as any, {
       episodes: episodeStore,
       reviewer,
@@ -4572,17 +4595,8 @@ export default {
         const key = workspaceMemoryKeyOf(cwd)
         return key ? workspaceHashOf(key) : undefined
       },
-      // 每日整理挂在这里：轮末是唯一"既有模型路由、又刚好学完一轮"的时刻。
-      afterReview: async (_sessionId, _cwd, cfg, route) => {
-        if (cfg.dream !== 'daily') return
-        const view = evolutionRuntime.view()
-        if (!shouldDreamToday(cfg, view.state.watermarks.lastDreamAt)) return
-        if (!shouldRetryDream(view.state.watermarks.lastDreamTryAt)) return
-        const dreamer = dreamHandle
-        if (!dreamer) return
-        await dreamer.dream(cfg, route)
-        evolutionRuntime.invalidate()
-      },
+      // 维护扫描每天最多一次，挂在轮末：用户真的在用的时候才跑，启动时那次只是补跑。
+      afterReview: async () => { await sweepIfDue() },
       log: evolutionLog,
       message,
     })
@@ -4682,20 +4696,11 @@ export default {
       message,
     })
 
-    // 启动时跑一次维护（每天最多一次）。不 await：扫描要读几十个文件，挡在装配期
+    // 启动时补跑一次维护（每天最多一次）。不 await：扫描要读几十个文件，挡在装配期
     // 会让宿主启动变慢，而它清理的都是"已经放了几个月的东西"，晚两秒没有区别。
-    void (async () => {
-      try {
-        if (!evolutionRuntime.view().settings.enabled) return
-        if (!shouldSweepNow(evolutionRuntime.view().state.watermarks.lastSweepAt)) return
-        const run = sweepRunner
-        if (!run) return
-        await run({})
-        evolutionRuntime.invalidate()
-      } catch {
-        /* 维护失败不影响启动：它本来就只是清理 */
-      }
-    })()
+    void sweepIfDue().catch(() => {
+      /* 维护失败不影响启动：它本来就只是清理 */
+    })
 
     const handlers: Record<string, (args: any) => Promise<any>> = {
       'plugin-version': pluginVersion,

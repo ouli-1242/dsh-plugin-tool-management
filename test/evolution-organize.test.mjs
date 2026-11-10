@@ -62,13 +62,13 @@ test('archive：候选放了三周没人确认 → 建议归档（不删）', ()
   assert.match(drafts[0].reason, /22 days/)
 })
 
-test('archive：注入很多次一次没帮上、置信度又低 → 建议归档', () => {
+test('archive：只归档候选 —— 生效中的条目注入再多、置信度再低也不动', () => {
   const a = entryOf('_ws/h1/noise', 'workspace', 'noise', '某个没用的推断', 'active')
   const drafts = draftOrganize({
     entries: [a],
     states: { [a.id]: stateOf({ confidence: 0.5, counters: { injected: 30, read: 0, helpful: 0, harmful: 0 } }) },
   })
-  assert.deepEqual(idsOf(drafts), ['archive ' + a.id])
+  assert.deepEqual(drafts, [])
 })
 
 test('archive：刚学会的候选不动它（还没到能判断的时候）', () => {
@@ -80,21 +80,12 @@ test('archive：刚学会的候选不动它（还没到能判断的时候）', (
   assert.deepEqual(drafts, [])
 })
 
-test('promote：高置信 + 真的帮上过两次 → 建议提升为用户记忆', () => {
+test('promote：helpful 没有写入路径，不再生成提升草案', () => {
+  // 旧规则要求 helpful ≥ 2，但没有任何工具 / 界面会写这个计数 —— 规则永远不触发。
   const a = entryOf('_ws/h1/answer-style', 'workspace', 'answer-style', '回答先给结论再给理由')
   const drafts = draftOrganize({
     entries: [a],
-    states: { [a.id]: stateOf({ confidence: 0.9, counters: { injected: 5, read: 1, helpful: 2, harmful: 0 } }) },
-  })
-  assert.deepEqual(idsOf(drafts), ['promote ' + a.id])
-  assert.match(drafts[0].reason, /helped 2 times/)
-})
-
-test('promote：帮上过但置信度不够 → 不提升（提升是给"我认了"的，不是给"可能吧"的）', () => {
-  const a = entryOf('_ws/h1/guess', 'workspace', 'guess', '也许该这样')
-  const drafts = draftOrganize({
-    entries: [a],
-    states: { [a.id]: stateOf({ confidence: 0.6, counters: { injected: 5, read: 0, helpful: 3, harmful: 0 } }) },
+    states: { [a.id]: stateOf({ confidence: 0.9, counters: { injected: 5, read: 1, helpful: 3, harmful: 0 } }) },
   })
   assert.deepEqual(drafts, [])
 })

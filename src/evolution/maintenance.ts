@@ -147,14 +147,15 @@ export function planSweep(entries: SweepEntry[], opts: SweepOptions = {}): { act
     }
   }
 
-  // 3. 衰减：从来没被注入、也没人读过，且半年没更新。核心与钉住的条目不在这里 ——
-  //    它们本来就不靠"被用到"来证明自己。
+  // 3. 衰减：半年没被注入、也没人读过。计数与时间戳都来自真实注入 / 读取路径
+  //    （`noteInjected` / `noteRead`），不再用"从没注入过"这种永远为真的旧判据。
+  //    核心与钉住的条目不在这里 —— 它们本来就不靠"被用到"来证明自己。
   for (const e of entries) {
     if (!isLive(e) || taken.has(e.id)) continue
     if (e.status !== 'active') continue
-    if (e.counters.injected > 0 || e.counters.read > 0) continue
-    if (ageDaysOf(e.updatedAt, now) < decayDays) continue
-    push({ kind: 'archive', id: e.id, bucket: 'decay', reason: `never injected or read in ${Math.floor(ageDaysOf(e.updatedAt, now))} days` })
+    const idle = lastTouched(e, now)
+    if (idle < decayDays) continue
+    push({ kind: 'archive', id: e.id, bucket: 'decay', reason: `not injected or read for ${Math.floor(idle)} days` })
   }
 
   // 4. 工作区失效：目录拔了 90 天（移动硬盘 / 删了仓库）。记忆留着，但不该继续占注入

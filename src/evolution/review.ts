@@ -141,8 +141,8 @@ export function reviewSystemPrompt(cfg: { noteStyle?: string; noteStyleText?: st
 
 /** 每会话的复习次数（花过的钱不退款，失败也计数）。 */
 export interface ReviewBudget {
-  /** 还能复习几次。 */
-  remaining(session: string): Promise<number>
+  /** 还能复习几次。`max` 给了就按它算（生效配置可能被用户在会话里改过）。 */
+  remaining(session: string, max?: number): Promise<number>
   /** 记一次（在真正调模型之前调用：超时也是花了钱）。 */
   spend(session: string): Promise<void>
 }
@@ -183,11 +183,13 @@ export function createReviewBudget(deps: { path: string; max: number; message(e:
   }
 
   return {
-    async remaining(session) {
+    async remaining(session, max) {
       const file = await load()
       const hit = file.sessions[session]
       const used = hit ? Math.max(0, Number(hit.count) || 0) : 0
-      return Math.max(0, Math.max(1, deps.max) - used)
+      // 0 是合法值（用户把每会话次数设成 0 = 不复习），不再夹到至少 1 次。
+      const cap = Math.max(0, Math.round(max ?? deps.max))
+      return Math.max(0, cap - used)
     },
     async spend(session) {
       const file = await load()
@@ -242,7 +244,7 @@ export function createReviewer(deps: ReviewDeps): {
       if (!llm || typeof llm.prepareCall !== 'function') {
         return { ok: false, learned: 0, rejected: 0, reason: 'no-llm', error: '宿主没有提供 llm 服务' }
       }
-      const left = await deps.budget.remaining(episode.session)
+      const left = await deps.budget.remaining(episode.session, cfg.maxReviewsPerSession)
       if (left <= 0) {
         await deps.log({ at: new Date().toISOString(), session: episode.session, turn: episode.turn, event: 'review-skipped', reason: 'budget' })
         return { ok: false, learned: 0, rejected: 0, reason: 'budget' }

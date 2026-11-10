@@ -211,7 +211,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (typeof patch.inject === 'boolean') next.inject = patch.inject
         if (typeof patch.dream === 'string') next.dream = patch.dream
         if (typeof patch.skills === 'string') next.skills = patch.skills
-        if (typeof patch.maxEntries === 'number') next.maxEntries = patch.maxEntries
         if (typeof patch.reviewEveryTurns === 'number') next.reviewEveryTurns = patch.reviewEveryTurns
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession
         if (typeof patch.model === 'string') next.model = patch.model

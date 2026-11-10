@@ -77,8 +77,6 @@ export interface EvolutionOverrides {
   inject?: boolean
   dream?: DreamMode
   skills?: SkillMode
-  /** 单层条数上限（0 = 用常量默认）。 */
-  maxEntries?: number
   reviewEveryTurns?: number
   maxReviewsPerSession?: number
   /** 复习用哪个模型；空串 = 会话当前模型。 */
@@ -104,7 +102,6 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
   writeTarget: 'route',
   dream: 'daily',
   skills: 'off',
-  maxEntries: 0,
   reviewEveryTurns: 8,
   maxReviewsPerSession: 2,
   model: '',
@@ -154,7 +151,6 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
     ...(inject !== undefined ? { inject } : {}),
     dream: oneOf(r.dream, DREAM_MODES, d.dream),
     skills: oneOf(r.skills, SKILL_MODES, d.skills),
-    maxEntries: intOf(r.maxEntries, d.maxEntries, 0, 2000),
     reviewEveryTurns: intOf(r.reviewEveryTurns, d.reviewEveryTurns, 1, 100),
     maxReviewsPerSession: intOf(r.maxReviewsPerSession, d.maxReviewsPerSession, 0, 20),
     model: typeof r.model === 'string' ? r.model : d.model,
@@ -173,7 +169,6 @@ export function normalizeOverrides(raw: any): EvolutionOverrides {
   if (typeof r.inject === 'boolean') out.inject = r.inject
   if (typeof r.dream === 'string' && (DREAM_MODES as readonly string[]).includes(r.dream)) out.dream = r.dream
   if (typeof r.skills === 'string' && (SKILL_MODES as readonly string[]).includes(r.skills)) out.skills = r.skills
-  if (typeof r.maxEntries === 'number' && Number.isFinite(r.maxEntries)) out.maxEntries = intOf(r.maxEntries, 0, 0, 2000)
   if (typeof r.reviewEveryTurns === 'number' && Number.isFinite(r.reviewEveryTurns)) out.reviewEveryTurns = intOf(r.reviewEveryTurns, 8, 1, 100)
   if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, 2, 0, 20)
   if (typeof r.model === 'string') out.model = r.model
@@ -220,7 +215,6 @@ export function resolveEffectiveConfig(
     inject: injectRaw === undefined ? enabled : injectRaw,
     dream: pick('dream') ?? global.dream,
     skills: pick('skills') ?? global.skills,
-    maxEntries: pick('maxEntries') ?? global.maxEntries,
     reviewEveryTurns: pick('reviewEveryTurns') ?? global.reviewEveryTurns,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,
     model: pick('model') ?? global.model,
