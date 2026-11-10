@@ -1099,23 +1099,18 @@
             var total = 0
             var onCount = 0
             groups.forEach(function (g) { total += g.live.length; onCount += g.on })
-            // 关着且一条都没有 → 不渲染：空卡是噪音。开着但还没学到东西 → 留一张空卡，
-            // 让用户知道「它开着，只是还没有内容」。
-            if (!layerOn && total === 0) return null
+            // 一条都没有 → 不渲染：空卡 / 空提示只占空间，开关状态在页头按钮与设置弹窗里。
+            if (total === 0) return null
             // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
             var openFlag = collapsed[opts.cardKey]
             var baseOpen = openFlag === undefined ? layerOn : openFlag !== true
             var open = baseOpen || q !== ''
             var body = []
-            if (total === 0) {
-              body.push(React.createElement('div', { key: 'empty', className: 'dsm-empty' }, opts.emptyText))
-            } else {
-              groups.forEach(function (g) {
-                if (g.live.length === 0) return
-                body.push(renderEvolutionDivider('h:' + g.key, g.label, g.on, g.live.length))
-                body = body.concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
-              })
-            }
+            groups.forEach(function (g) {
+              if (g.live.length === 0) return
+              body.push(renderEvolutionDivider('h:' + g.key, g.label, g.on, g.live.length))
+              body = body.concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
+            })
             // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
             return React.createElement('div', { key: opts.cardKey, className: 'dsm-source' + (layerOn ? '' : ' dsm-rule-off') },
               React.createElement('div', { className: 'dsm-source-head' },
@@ -1138,7 +1133,7 @@
            * 全局自主记忆在「全局」卡里的内嵌分节：分节线 + 行。
            *
            * 不单独成卡：它和手写全局记忆是同一层的东西，分两张卡读起来像两套配置。
-           * 全局层关着且没有条目时不占地方；关着但有条目时整节置灰（条目还在盘上）。
+           * 没有条目时整节不渲染；有条目但层关着时整节置灰（条目还在盘上）。
            */
           function renderAutoGlobalSection() {
             if (sceneFilter !== '') return null
@@ -1147,13 +1142,9 @@
               label: t('memory.auto.tag'),
               rows: (evo.entries || []).filter(function (e) { return e.layer === 'global' }),
             }])[0]
-            if (!evoGlobalOn && g.live.length === 0) return null
+            if (g.live.length === 0) return null
             var body = [renderEvolutionDivider('auto:head', g.label, g.on, g.live.length)]
-            if (g.live.length === 0) {
-              body.push(React.createElement('div', { key: 'empty', className: 'dsm-empty' }, t('evo.empty.on')))
-            } else {
-              body = body.concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
-            }
+              .concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
             return React.createElement('div', { key: 'auto:global', className: 'dsm-evo-embed' + (evoGlobalOn ? '' : ' dsm-rule-off') }, body)
           }
 
@@ -1199,7 +1190,6 @@
               title: t('memory.auto.card.workspace'),
               layerOn: evoWorkspaceOn,
               groups: groups,
-              emptyText: groups.length === 0 && currentHash === '' ? t('evo.empty.workspace') : t('evo.empty.on'),
             })
             return wsCard ? [wsCard] : []
           }
