@@ -609,7 +609,7 @@
         "compat.inject.domain.scene": "场景", "compat.inject.domain.memoryGlobal": "记忆", "compat.inject.domain.mcp": "MCP",
         "compat.inject.domain.memoryWorkspace": "工作区笔记",
         "compat.inject.domain.memory.title": "同时管控用户记忆与自主记忆的注入；自主记忆的学习 / 注入开关在记忆页签",
-        "compat.inject.domain.subagents": "子智能体", "compat.inject.domain.prompt": "全局提示词",
+        "compat.inject.domain.subagents": "子智能体", "compat.inject.domain.prompt": "提示词",
         "compat.inject.domain.skills": "技能",
         "compat.inject.domain.carrier.title": "关掉后，系统自带的那份也会一并停掉",
         // 生效层级（0.21.2）：会话各自一份，还是同一工作区共用一份。切换只播种缺的那一侧。
@@ -1634,7 +1634,7 @@
         "compat.inject.domain.scene": "Scene", "compat.inject.domain.memoryGlobal": "Memory", "compat.inject.domain.mcp": "MCP",
         "compat.inject.domain.memoryWorkspace": "Workspace notes",
         "compat.inject.domain.memory.title": "Controls injection for hand-written and autonomous memories together; the autonomous-memory switches live on the Memory tab",
-        "compat.inject.domain.subagents": "Subagents", "compat.inject.domain.prompt": "Global prompts",
+        "compat.inject.domain.subagents": "Subagents", "compat.inject.domain.prompt": "Prompt",
         "compat.inject.domain.skills": "Skills",
         "compat.inject.domain.carrier.title": "Turning this off also stops the copy the system sends by itself",
         "compat.scopeMode": "Where settings apply",

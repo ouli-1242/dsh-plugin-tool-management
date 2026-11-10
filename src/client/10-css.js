@@ -541,8 +541,8 @@ button.dsm-qty:disabled{cursor:default}
    「工作区自动记忆」这类长标签不被截断。
    开/关不只靠颜色：chip 里有一颗 6px 圆点，开 = 成功色实心、关 = 当前字色半透明，
    色盲或低对比屏上也能分辨；再加 role=switch + aria-checked 供读屏。 */
-.dsm-inject-domains{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
-@media (max-width:640px){.dsm-inject-domains{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.dsm-inject-domains{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+@media (max-width:640px){.dsm-inject-domains{grid-template-columns:repeat(3,minmax(0,1fr))}}
 .dsm-inject-chip{box-sizing:border-box;display:inline-flex;width:100%;min-width:0;min-height:32px;align-items:center;justify-content:center;gap:6px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}
 .dsm-inject-chip:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsm-inject-chip:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}
