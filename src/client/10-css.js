@@ -179,10 +179,12 @@ button.dsm-qty:disabled{cursor:default}
 /* 行名是展开开关：复位成文字，读起来与别的行的名字一样，只是多一个 ▸ / ▾。 */
 .dsm-evo-name{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;word-break:break-word}
 .dsm-evo-name:hover{color:var(--dsw-alias-label-primary)}
-/* 自主记忆分节线：名称 + 实线 + 启用/总数。线把相邻两组行真正隔开，名称可省略。 */
-.dsm-evo-divider{display:flex;align-items:center;gap:8px;margin:12px 0 4px;color:var(--dsw-alias-label-secondary);font-weight:600}
+/* 自主记忆分节线：名称 + 实线 + 启用/总数。线把相邻两组行真正隔开，名称可省略。
+   按设置页分组头（.dsm-form-section）的档位收：12px/400/弱色、线用 l1 —— 它只是
+   一行说明，不该和 13px/600 的行名抢注意力。 */
+.dsm-evo-divider{display:flex;align-items:center;gap:8px;margin:10px 0 2px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;font-weight:400}
 .dsm-evo-divider-label{min-width:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsm-evo-divider-line{flex:1;height:1px;background:var(--dsw-alias-border-l2)}
+.dsm-evo-divider-line{flex:1;height:1px;background:var(--dsw-alias-border-l1)}
 .dsm-evo-divider .dsm-count{flex:none;font-weight:400}
 .dsm-evo-detail{display:flex;flex-direction:column;gap:4px;padding:4px 0 6px}
 /* 键值两列的行：值那一格必须能收缩，否则 flex 的 min-width:auto 会把它顶成一行硬裁
