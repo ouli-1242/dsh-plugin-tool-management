@@ -347,7 +347,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // （场景段 128 KiB），而模型很乐意把「这个项目用 pnpm」记一条 —— 那看一眼 `package.json`
     // 就知道，记下来却永久占着每一轮请求。合并 write/update 后这两句更要留：upsert 降低了
     // "再记一条"的摩擦，而摩擦正是这里唯一拦得住它的东西。
-    description: 'Create a memory, or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. For standing orders and things to keep across sessions ("every time…", "always…"), prefer the autonomous-memory learn tool when it is available. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
+    description: 'Create a full memory (a convention, procedure or reference worth keeping), or update the one with this id — the receipt says which. Memories cost context on every later request: record only what cannot be re-derived from code, config or git, and update an existing one rather than adding a near-duplicate. For a one-line note, standing order, reminder or preference ("every time…", "always…"), use the autonomous-memory learn tool instead when it is available. Blocked while the active scene is locked. Asks the user to confirm before it runs. Only on the user\'s instruction.',
     parameters: {
       memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name> — copy it from the list. `global` is the always-on scene.' },
       description: { type: 'string', description: 'One-sentence description (<=500 chars). Required when creating. Empty string = drop it and re-derive from the body; omit = keep.' },
@@ -407,6 +407,16 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 但那是给用户看的中文 op 错；模型需要的是"这条工具要什么"，所以在工具侧先挡、点名缺哪个。
       const body = args && args.body !== undefined ? String(args.body) : ''
       const description = args && args.description !== undefined ? String(args.description) : ''
+      // 一行正文不是"完整记忆"，是自主记忆的短笔记。模型手里有两条写入工具时，
+      // `save` 的名字更直白，它就会把「每次提醒我喝水」也塞进一条全局记忆；而这类内容
+      // 本该走零摩擦的 learn（卡片选层、可 TTL、可合并）。只在 auto 真正可用时重定向：
+      // 开关关着却让模型去调一条看不见的工具，等于把这次记录丢掉。
+      // 放在必填校验之前：短笔记往往也没有 description，先报缺字段会把它推回 save。
+      const trimmedBody = body.trim()
+      const oneParagraph = trimmedBody !== '' && !/\n\s*\n/.test(trimmedBody)
+      if (oneParagraph && trimmedBody.length <= 300 && deps.autoLearnEnabled && deps.autoLearnEnabled(exec && exec.agent)) {
+        throw new Error('this is a one-line note, not a full memory: call memory_manager_auto action=learn with title and text instead (layer=global for every project, workspace for this one). memory_manager_save is for a multi-paragraph memory such as a convention, procedure or reference.')
+      }
       const missing = [
         body.trim() === '' ? 'body' : '',
         description.trim() === '' ? 'description' : '',
@@ -445,31 +455,26 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         })
         .map((x: any) => String(x.id))
         .slice(0, 3)
-      const r: any = await deps.rulesOps['rules-create']({ group, name, description, body })
+      const r: any = await deps.rulesOps['rules-create']({ group, name, description, body, enabled: true })
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to create the memory')
       // 刚建好的这条自己会在列表里，从名单里去掉。
       const dup = similar.filter((id) => id !== String(r.rule.id))
       const warn = dup.length
         ? `\nnote: ${dup.length} existing memories have a similar name or description (${dup.join(', ')}) — if it is the same thing, update that one instead of keeping two.`
         : ''
-      // 回执必须同时说清**两个**条件：新建的记忆在 op 层是
-      // `enabled: false`（ops/memory.ts 的 rulesCreate），而原先这句只提场景 —— 读起来像
-      // "场景一开它就自动生效"，模型据此以为已经生效，实际还差一次开关。与 skill_manager_save
-      // 的 enableHint 同一形状：点名的工具在出厂默认名单里是关着的，关着就改说"用户开启后"。
-      // 「会不会注入」按**本会话**的投影判：会话钉了别的场景时，这条记忆落进的
-      // 那个场景在这个对话里根本没开着 —— 照全局口径回一句"打开就能用"是错的答案。
+      // 回执必须同时说清**两个**条件：记忆本身已开启（本工具创建时传了 `enabled: true`），
+      // 但它落进的场景在这个对话里未必开着 —— 场景没开，单条开关拨上去也不会注入。
+      // 「会不会注入」按**本会话**的投影判：会话钉了别的场景时，照全局口径回一句
+      // "打开就能用"是错的答案。
       const scoped = sessionScopeOf(deps, exec && exec.agent)
       const effScene = scoped?.scope?.scene
       const activeNow = effScene === undefined ? all.activeScene : effScene
       const activeMode = effScene === undefined ? all.activeMode : 'custom'
       const sceneActive = group === 'global' ||
         (group !== '' && (activeMode === 'all' || String(activeNow || '') === group))
-      const sceneTail = sceneActive ? '' : ', and turn scene "' + group + '" on'
-      // 判据按 **agent**：工具表是每个作用域一份，本作用域把它关掉（或人设 toolsDeny 砍掉）
-      // 之后，点名它就是让模型白跑一趟 —— 与 mcp/skill 的 listHint 同一条。
-      const enableHint = deps.toolVisibleFor('memory_manager_switch', exec && exec.agent)
-        ? ' (created disabled — turn it on first with memory_manager_switch' + sceneTail + ')'
-        : ' (created disabled — the user has to turn it on first' + sceneTail + ')'
+      const enableHint = sceneActive
+        ? ' (created enabled)'
+        : ' (created enabled, but scene "' + group + '" is not on in this conversation, so it will not be injected here until that scene is turned on)'
       // 会话层：这条记忆写的是**磁盘上的那一份**（所有对话共用），本会话的开关只决定
       // "这里看不看得到"。模型据此回一句"记下了"时，用户很容易读成"只在这个对话里"。
       return 'OK: created ' + r.rule.id + enableHint + warn +
@@ -494,7 +499,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory. Call only when the user explicitly asks you to remember something, or when they just corrected you and the correction must persist. Do not scan the conversation for memory candidates; a background review covers that. learn: a short `title` (2-8 words) and one terse sentence in the user\'s language (<=400 chars). `layer`: global = every project / the user personally; workspace = this project only. Pass it when clear; omit only when unsure. The user picks the layer in a card unless auto-confirm is on; then your layer is final and the note is saved without asking. `quote`: the user\'s exact words for user_explicit / user_correction; otherwise use model_inference. forget: only when asked; pass the note id or its unique key.',
+    description: 'Autonomous memory — the default for a short note, standing order, reminder or preference ("every time…", "always…"), including one scoped to this workspace. Use it instead of memory_manager_save whenever the content is one terse sentence rather than a full memory. Call only when the user explicitly asks you to remember something, or when they just corrected you and the correction must persist. Do not scan the conversation for memory candidates; a background review covers that. learn: a short `title` (2-8 words) and one terse sentence in the user\'s language (<=400 chars). `layer`: global = every project / the user personally; workspace = this project only. Pass it when clear; omit only when unsure. The user picks the layer in a card unless auto-confirm is on; then your layer is final and the note is saved without asking. `quote`: the user\'s exact words for user_explicit / user_correction; otherwise use model_inference. forget: only when asked; pass the note id or its unique key.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn (default) or forget.' },
       // ── learn ──

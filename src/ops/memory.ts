@@ -293,9 +293,11 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     // id 恒为 `<场景>/<名>`（与 parseId 同构）；场景记录此时必然已存在。
     const createdId = `${targetGroup}/${name}`
     const index = indexForScene
-    // P5：新建记忆默认**不开启** —— 记忆的开关是单一真相源（`enabled`），
+    // 新建记忆默认**不开启** —— 记忆的开关是单一真相源（`enabled`），
     // 用户要求「创建的记忆默认不开启，在记忆页开启后对应的场景档案也要显示开启」。
-    index.rules[createdId] = { order: DEFAULT_ORDER, enabled: false, updatedAt: new Date().toISOString() }
+    // 调用方可以显式传 `enabled: true`（`memory_manager_save` 建的就是一条当时就要生效的记忆）；
+    // 界面新建不传，保持默认关闭，由用户在记忆页决定。
+    index.rules[createdId] = { order: DEFAULT_ORDER, enabled: args && args.enabled === true, updatedAt: new Date().toISOString() }
     if (!index.groups[targetGroup]) index.groups[targetGroup] = { order: DEFAULT_GROUP_ORDER, label: targetGroup }
     // **先落索引、再落文件**，顺序不能反。索引条目指向一个尚不存在的文件是无害的：列表与投影
     // 都以「发现到的文件」为准，找不到就跳过，buildSnapshot 的清理还会顺手把这条记录删掉。
