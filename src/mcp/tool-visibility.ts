@@ -481,6 +481,8 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   let appliedNamesKey: string | null = null
   /** 当前期望的**全局** deny 名单（agent 晚到 / 重放时用它，再叠加该 agent 自己那份）。 */
   let desiredNames: string[] = []
+  /** 最近一次成功枚举的已注册工具名全集：agent 上线时复用，免去每个子代理各做一次全量深拷贝。 */
+  let registeredNames: ReadonlySet<string> | null = null
   /** agent → 撤掉这层限制的 disposer。 */
   const agentRestrictions = new Map<unknown, () => void>()
   /** agent → 已应用的**合并后**名单键（名单现在与 agent 有关，不能再只记一份全局的）。 */
@@ -521,6 +523,64 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     agentRestrictions.delete(agent)
     appliedByAgent.delete(agent)
     if (release) { try { release() } catch (e) { /* ignore */ } }
+  }
+
+  /**
+   * 同步段能算出的 deny 名单：全局名单 + 本会话模型工具表覆盖。
+   *
+   * 子代理创建时，宿主在 `agent/created` 返回后立刻组装首轮工具表；限制层若等
+   * `tools.schemas()` 回来再装，那一轮就会先看到全部工具（子代理 fork 时表现为
+   * 「新增 24 / 移除 24」）。MCP 会话覆盖与载体工具是异步的，由随后的
+   * `restrictAgent` 补齐。
+   */
+  function syncDenyNamesFor(agent: any): string[] {
+    const wanted = new Set<string>(desiredNames)
+    // 启动早期 `desiredNames` 可能还没算出来；工具表设置本身是同步可读的，先并进来。
+    if (deps.pluginHiddenTools) {
+      try { for (const name of deps.pluginHiddenTools()) wanted.add(name) } catch { /* 读设置失败 = 只装全局名单 */ }
+    }
+    let allow: readonly string[] = []
+    if (deps.sessionToolTableOverlay) {
+      try {
+        const ov = deps.sessionToolTableOverlay(agent)
+        // 覆盖实现是异步的时拿不到这一轮结果：只装全局名单，交给 `restrictAgent` 补。
+        if (ov !== undefined && typeof (ov as Promise<unknown>).then !== 'function') {
+          const sync = ov as { allow?: readonly string[]; deny?: readonly string[] }
+          if (sync.allow !== undefined) allow = sync.allow
+          if (sync.deny !== undefined) for (const name of sync.deny) wanted.add(name)
+        }
+      } catch { /* 取不到 = 跟随全局 */ }
+    }
+    // 与 `restrictAgent` 同一条边界：停用表读不出来时，会话 allow 不得越过它把 mcp__* 放回来。
+    const allowSet = disabledToolsState() === 'unknown'
+      ? new Set([...allow].filter((name) => !name.startsWith(MCP_TOOL_PREFIX)))
+      : new Set(allow)
+    const names = [...wanted].filter((name) => !allowSet.has(name))
+    // 官方 `restrict` 对认不出的名字是整份名单抛错。同步段没有注册全集可求交，
+    // 改问全局视图（同步、无 I/O）；已被限制摘掉的名字在这里仍算 known。
+    return typeof deps.tools.get === 'function'
+      ? names.filter((name) => { try { return deps.tools.get!(name) !== undefined } catch { return false } })
+      : names
+  }
+
+  /**
+   * 同步装层，赶在宿主组装首轮工具表之前（只给 `attachAgent` 用）。
+   *
+   * 失败不在这里上报：随后的 `restrictAgent` 会重试并如实上报，两处都失败才是问题。
+   */
+  function installSyncRestriction(agent: any): void {
+    const scoped = scopedToolsOf(agent)
+    if (!scoped || typeof scoped.restrict !== 'function') return
+    const denyNames = syncDenyNamesFor(agent)
+    const denyKey = denyNames.slice().sort().join('\u0000')
+    if (appliedByAgent.get(agent) === denyKey) return
+    liftRestriction(agent)
+    if (denyNames.length === 0) return
+    try {
+      const dispose = scoped.restrict({ deny: denyNames })
+      agentRestrictions.set(agent, typeof dispose === 'function' ? dispose as () => void : () => {})
+      appliedByAgent.set(agent, denyKey)
+    } catch { /* 异步那一轮会重试并上报 */ }
   }
 
   /**
@@ -569,7 +629,14 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     const effectiveAllow = disabledToolsState() === 'unknown'
       ? new Set([...allowSet].filter((name) => !name.startsWith(MCP_TOOL_PREFIX)))
       : allowSet
-    const names = [...new Set([...desiredNames.filter((name) => !effectiveAllow.has(name)), ...extra])]
+    // 全局名单以 `desiredNames` 为底，再并一次当前的工具表设置：启动早期
+    // `applyToolRestrictions` 可能还没算出 `desiredNames`，而 `attachAgent` 的同步段
+    // 已经按设置装了一层 —— 两边必须同源，否则异步这一轮会把同步层撤掉。
+    const globalNames = new Set<string>(desiredNames)
+    if (deps.pluginHiddenTools) {
+      try { for (const name of deps.pluginHiddenTools()) globalNames.add(name) } catch { /* 读设置失败 = 只装已算出的全局名单 */ }
+    }
+    const names = [...new Set([...globalNames].filter((name) => !effectiveAllow.has(name)).concat(extra))]
     const scoped = scopedToolsOf(agent)
     if (!scoped || typeof scoped.restrict !== 'function') {
       if (names.length === 0) return
@@ -651,17 +718,26 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   }
 
   /**
-   * agent 上线（`agent/created` 或启动期的 agent 列表）：登记并立刻应用当前名单。
+   * agent 上线（`agent/created` 或启动期的 agent 列表）：登记，先同步装一层，再异步补齐。
    *
-   * 新 agent 没有已装层的键可复用，所以这里自己枚举一次。事件频率是"每个会话一次"，
-   * 与 `tools/change` 那条热路径无关 —— 后者在 `applyToolRestrictions` 里共用一份。
+   * 同步那层是给宿主首轮工具表用的（见 `installSyncRestriction`）；异步那层补 MCP 会话
+   * 覆盖与载体工具。注册全集优先复用 `registeredNames`，没有才枚举一次。事件频率是
+   * "每个会话一次"，与 `tools/change` 那条热路径无关 —— 后者在 `applyToolRestrictions`
+   * 里共用一份。
    */
   function attachAgent(agent: any): void {
     if (!agent || (typeof agent !== 'object' && typeof agent !== 'function')) return
     seenAgents.add(agent)
+    // 先同步装一层：`agent/created` 返回后宿主就组装首轮工具表，等异步枚举回来已经晚了一轮。
+    installSyncRestriction(agent)
     void (async () => {
-      let registered: ReadonlySet<string>
-      try { registered = new Set((await deps.tools.schemas()).map((schema) => String(schema.name))) } catch { registered = new Set() }
+      let registered = registeredNames
+      if (registered === null) {
+        try {
+          registered = new Set((await deps.tools.schemas()).map((schema) => String(schema.name)))
+          registeredNames = registered
+        } catch { registered = new Set() }
+      }
       await restrictAgent(agent, registered)
     })().catch(() => { /* 可见性半边 best effort */ })
   }
@@ -697,6 +773,7 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     let registered: Set<string>
     try {
       registered = new Set((await deps.tools.schemas()).map((schema) => String(schema.name)))
+      registeredNames = registered
       // 枚举成功 = 上一轮「schemas 失败」已恢复；no-restrict 也在前面那道检查里确认过。
       // 逐 agent 的 partial 若仍成立，restrictAgent 会在下面重新上报。
       clearRuntimeNote('mcp-tool-visibility')
