@@ -497,6 +497,30 @@ test('approve：候选 → 生效，四处一起改（文件 / state / 索引 / 
   } finally { h.done() }
 })
 
+test('approve：只取代同工作区的同 key 旧条目', async () => {
+  const h = harness()
+  try {
+    const otherHash = 'ffffffffffffffff'
+    const a = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified', approved: true },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(a.status, 'active')
+    const b = await h.learner.learn(
+      { text: '这个仓库统一用 yarn', key: 'package-manager', source: 'model_inference' },
+      cfgOf(),
+      { ...envOf(), workspaceHash: otherHash },
+    )
+    assert.equal(b.status, 'candidate')
+
+    const approved = await h.learner.approve(b.id)
+    assert.equal(approved.ok, true, approved.error)
+    assert.equal(pickField(h.readDoc(a.id), 'auto_status'), 'active', '别的工作区的同 key 旧条目不能被带走')
+    assert.equal(pickField(h.readDoc(b.id), 'auto_status'), 'active')
+  } finally { h.done() }
+})
+
 test('learn 来源只影响信心与待确认理由，不影响「是否生效」：一律候选', async () => {
   const h = harness()
   try {

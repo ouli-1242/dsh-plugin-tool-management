@@ -302,12 +302,13 @@ test('门禁只看当前作用域的自动条目', () => {
     { ...base, id: '_session/s2/x', layer: 'session', session: 's2' },
     { ...base, id: 'sceneA/x', layer: 'scene', scene: 'sceneA' },
     { ...base, id: 'sceneB/x', layer: 'scene', scene: 'sceneB' },
+    { ...base, id: '_shared/x', layer: 'scene', scene: '_shared' },
     { ...base, id: 'global/x', layer: 'global' },
     // 用户记忆没有 scene 字段：任何场景都该看到它（用户写过的永远优先）。
     { ...base, id: 'sceneA/user', layer: 'scene', origin: 'user' },
   ]
   const got = visibleExistingEntries(entries, { workspaceHash: 'a', sessionId: 's1', scene: 'sceneA' })
-  assert.deepEqual(got.map((e) => e.id), ['_ws/a/x', '_session/s1/x', 'sceneA/x', 'global/x', 'sceneA/user'])
+  assert.deepEqual(got.map((e) => e.id), ['_ws/a/x', '_session/s1/x', 'sceneA/x', '_shared/x', 'global/x', 'sceneA/user'])
 })
 
 test('停用的笔记不作为合并目标', () => {

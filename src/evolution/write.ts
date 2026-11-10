@@ -19,7 +19,7 @@ import { hubPath } from '../hub.js'
 import { writeFileAtomically, readIndex, writeIndex } from '../memories/index-io.js'
 import { catalogEntryOf, catalogPathOf, estimateTokens, normalizeCatalog, type CatalogFile } from '../memories/catalog.js'
 import {
-  GLOBAL_SCENE, LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE,
+  GLOBAL_SCENE, LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, SHARED_GROUP,
   isValidGroupPath, isValidGroupSegment, layerOfGroup, type MemoryLayer,
 } from '../memories/constants.js'
 import {
@@ -82,7 +82,8 @@ export function visibleExistingEntries(entries: ExistingEntry[], env: LearnEnv):
   return entries.filter((e) => {
     if (e.layer === LAYER_WORKSPACE) return env.workspaceHash !== undefined && e.workspace === env.workspaceHash
     if (e.layer === LAYER_SESSION) return env.sessionId !== undefined && e.session === env.sessionId
-    if (e.layer === LAYER_SCENE && e.scene !== undefined) return env.scene === e.scene
+    // `_shared` 是恒常注入的公共基线，不属于某一个场景 —— 它在任何场景下都可见。
+    if (e.layer === LAYER_SCENE && e.scene !== undefined && e.scene !== SHARED_GROUP) return env.scene === e.scene
     return true
   })
 }
@@ -922,10 +923,18 @@ export function createLearner(deps: LearnDeps) {
       // 会同时注入。候选不在这里处理（gates 已经直接取代候选）。
       const activatedKey = pickField(text, 'auto_key')
       if (activatedKey !== '') {
+        const approvedLayer = layerOfGroup(group)
+        const approvedWorkspace = group.startsWith('_ws/') ? group.slice('_ws/'.length) : ''
+        const approvedSession = group.startsWith('_session/') ? group.slice('_session/'.length) : ''
         try {
           const { entries } = await deps.existingEntries()
           for (const e of entries) {
             if (e.id === id || e.origin !== 'auto' || e.key !== activatedKey) continue
+            // 同层还要同作用域：别的仓库 / 会话 / 场景的同 slot 笔记不能被这次确认带走。
+            if (e.layer !== approvedLayer) continue
+            if (approvedLayer === LAYER_WORKSPACE && e.workspace !== approvedWorkspace) continue
+            if (approvedLayer === LAYER_SESSION && e.session !== approvedSession) continue
+            if (approvedLayer === LAYER_SCENE && e.scene !== undefined && e.scene !== group && e.scene !== SHARED_GROUP) continue
             if (e.status !== 'active' && e.status !== 'core' && e.status !== 'playbook') continue
             await markSuperseded(e.id, id, st, nowIso, index)
           }
