@@ -97,15 +97,6 @@ export interface GateInput {
   key?: string
   source: EvidenceSource
   quote?: string
-  /**
-   * 这次学习从哪条路进来。`tool` = 对话里 `memory_manager_auto` 走的（它必然先过确认卡
-   * —— 用户同意了才执行，或会话是完全权限、用户已预先批准一切）；`review` = 后台复习器
-   * 直接落的，**没有任何人在场**。缺省按 `review` 处理（保守：候选），这样直接调 learner
-   * 的旧测试与遗漏参数的新调用都不会把没人看过的推断直接放进上下文。
-   */
-  via?: 'tool' | 'review'
-  /** 用户在确认卡上按了「同意」：证据升级为 `user_approved`（信心上调）。 */
-  approved?: boolean
   /** 模型强制指定的层；仍受 `writeTarget` 上限与环境压窄。 */
   layer?: MemoryLayer
   boundary?: string
@@ -343,28 +334,21 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   }
 
   // ── 门 8：证据 ──
-  // 「在场」= 这次学习来自对话里的工具调用，而那条路**必然**先过确认卡：用户同意了才会
-  // 执行，或会话是完全权限、用户已预先批准一切。后台复习器（`via: 'review'`）没有任何人
-  // 在场，它的推断只能进候选。
-  const attended = input.via === 'tool'
-  const approved = input.approved === true
+  // 所有新条目一律先落候选：确认发生在记忆页，候选不进上下文。证据只决定信心与排序，
+  // 不再决定「是否直接生效」—— 没有人在卡片上按同意，就没有理由让一句话进入之后每一轮。
   const evidence: EvidenceRef[] = []
-  let status: 'active' | 'candidate' = 'candidate'
+  const status = 'candidate' as const
   let review: string | undefined
   if (source === 'user_explicit' || source === 'user_correction') {
     const checked = ctx.sessionId ? checkQuote(ctx.sessionId, quote) : { ok: false as const, reason: 'no-cache' as const }
     if (checked.ok) {
       evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote, at: new Date().toISOString() })
-      status = 'active'
     } else if (checked.reason === 'no-cache') {
-      // 缓存没到手（插件刚加载 / pre-step 没跑）：不拒，降级处理并说明。
-      // 直接拒会让"第一次打开开关就试"永远失败，那个体验比降级差得多。
-      // 卡上批准过的（attended + approved）内容本身已获同意，只有引句的出处核对不到 ——
-      // 证据记 user_approved、直接生效；没人看过的（复习器）仍进候选。
-      if (approved) source = 'user_approved'
+      // 缓存没到手（插件刚加载 / pre-step 没跑）：不拒，降级为模型推断并说明。
+      // 直接拒会让「第一次打开开关就试」永远失败，那个体验比降级差得多。
+      source = 'model_inference'
       evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote, at: new Date().toISOString() })
-      if (!attended) review = '没有可核对的用户原文（本会话还没记录到），先按候选保存'
-      else status = 'active'
+      review = '没有可核对的用户原文（本会话还没记录到），先按候选保存'
     } else {
       return reject(
         'evidence',
@@ -374,17 +358,9 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     }
   } else if (source === 'tool_verified') {
     evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote: quote || rawText, at: new Date().toISOString() })
-    status = 'active'
   } else {
-    // 模型推断：确认卡批准的那次，用户看过**这条原文**并点了同意 —— 证据升级为
-    // user_approved（信心上调），状态直接生效：卡片就是确认，页面里不再二次确认。
-    // 完全权限跳过卡的那次同样直接生效（用户已声明"别再问我"），但证据保持
-    // model_inference —— 用户没看过这条原文，证据链不说谎。复习器落的没有人在场，
-    // 保持候选 + 一句"为什么还得等确认"：界面上只有标签没有理由时，用户只能全信或全删。
-    if (approved) source = 'user_approved'
     evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote: quote || rawText, at: new Date().toISOString() })
-    if (attended) status = 'active'
-    else review = '这是模型自己的推断（不是你的原话），确认后才进上下文'
+    review = '这是模型自己的推断（不是你的原话），确认后才进上下文'
   }
 
   // ── 门 6：冲突 ──
@@ -397,7 +373,6 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     ctx.existing.find((e) => e.origin === 'user' && similarity(e.text, rawText) >= MERGE_SIMILARITY)
   if (userConflict) {
     // 用户写的记忆永远赢：不覆盖、不取代，只排队等用户裁决。
-    status = 'candidate'
     review = `与你自己写的记忆「${userConflict.id}」冲突，等你在记忆页确认`
   } else {
     const autoSame = [...ownKey, ...sameText].filter((e) => e.origin === 'auto' && e.id !== mergeInto)
@@ -405,14 +380,17 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
       // 同一件事的两种说法（高相似）→ 合并；同 key 但说法不同 → 取代旧的。
       if (e.key !== '' && e.key === key && similarity(e.text, rawText) >= MERGE_SIMILARITY) {
         mergeInto = e.id
-      } else if (e.status === 'active' || e.status === 'core') {
+      } else if (e.status === 'candidate') {
+        // 候选之间同 key 不同说法：直接取代旧的，收件箱里只留最新说法。
         supersedes.push(e.id)
+      } else if (e.status === 'active' || e.status === 'core' || e.status === 'playbook') {
+        // 生效中的旧说法不能因为一条还没确认的候选就被静默拿下；等用户在记忆页确认
+        // 新条目时再由 approve 取代（write.ts）。
+        review = review ?? `与现有生效记忆「${e.id}」同 key 但说法不同，确认后会取代它`
       }
     }
-    if (mergeInto) {
-      status = 'active'
-      supersedes.length = 0
-    }
+    // 合并保留目标条目自己的状态（write.ts 的 mergeInto 负责），这里不再把 pass 标成 active。
+    if (mergeInto) supersedes.length = 0
   }
 
   // ── 门 7：配额 ──
@@ -433,18 +411,14 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   if (downgraded) notes.push(downgraded)
   if (ambiguousDurability) {
     // 同时有"这次"和"以后"：不猜，降级。这比猜错安全一个数量级。
-    status = 'candidate'
     review = review ?? '表述里同时有一次性与长期两种说法，先按候选保存'
     confidence = Math.min(confidence, BASE_CONFIDENCE.user_explicit - 0.15)
     notes.push('表述有歧义（一次性 vs 长期），先按候选保存')
   }
   if (degraded) notes.push(DEGRADE_NOTE[degraded])
   if (kind === 'procedure') {
-    // 程序性记忆影响"怎么做"，一律先候选：成功两次之后由 dream 提名进 playbook。
-    if (status === 'active') {
-      status = 'candidate'
-      review = review ?? '做法类记忆先按候选保存，验证通过后再启用'
-    }
+    // 做法类记忆影响"怎么做"，确认时更该让用户看一眼。
+    review = review ?? '做法类记忆先按候选保存，确认后再启用'
   }
 
   const note = notes.length > 0 ? notes.join('；') : undefined
@@ -472,8 +446,18 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
   }
 }
 
-/** 墓碑拦截：删过的条目不能复活（`key` 或文本指纹任一命中）。 */
+/**
+ * 墓碑拦截：删过的条目不能复活。
+ *
+ * 三条判据任一命中：同 key、同文本指纹、或与墓碑原文高度相似（≥ MERGE_SIMILARITY）。
+ * 第三条是必要的：用户删的是「以后都用 pnpm」，模型换个说法写「包管理器统一 pnpm」时，
+ * 精确哈希拦不住，而这条恰好是最伤信任的「删了又回来」。
+ */
 export function tombstoneBlocked(ctx: GateContext, key: string, text: string): Tombstone | undefined {
   const hash = textHashOf(text)
-  return ctx.tombstones.find((t) => tombstoneActive(t) && ((key !== '' && t.key === key) || (hash !== '' && t.textHash === hash)))
+  return ctx.tombstones.find((t) => tombstoneActive(t) && (
+    (key !== '' && t.key === key) ||
+    (hash !== '' && t.textHash === hash) ||
+    (t.text !== '' && similarity(t.text, text) >= MERGE_SIMILARITY)
+  ))
 }

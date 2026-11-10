@@ -190,7 +190,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 那几样只在 state.json 里（`evolution-read`）。用户记忆没有这一段，所以按 origin 分流，
       // 不是每次 read 都多读一次盘。
       if (deps.evolutionOps && (isAuto || !r || r.ok === false)) {
-        const a: any = await deps.evolutionOps['evolution-read']({ id: wantId })
+        const a: any = await deps.evolutionOps['evolution-read']({ id: wantId, touch: true })
         if (a && a.ok) {
           const st = a.state || {}
           const bits = [
@@ -203,9 +203,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           if (a.boundary) lines.push('boundary: ' + String(a.boundary))
           if (a.degraded) lines.push('degraded: ' + String(a.degraded))
           lines.push('', String(a.body || ''))
-          // P4：procedure 的成功计数只认显式回报。不在这里说，模型读完就去做事，不会
-          // 想到回来报一次 —— 那这条流程永远停在 0/3，playbook 阶梯就断了。
-          if (a.kind === 'procedure') lines.push('', 'This is a procedure. After you actually follow these steps and they work, call ' + PROACTIVE_MEMORY_TOOL + ' with { action: "done", memory: "' + wantId + '" }; three verified runs promote it to a playbook.')
           const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
           if (ev.length) {
             lines.push('', 'evidence (latest ' + ev.length + '):')
@@ -488,23 +485,20 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Autonomous memory. action=learn: propose one durable preference, fact, correction or repeatable procedure (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). The host asks the user before anything is written: they can approve, reject, or type an idea. On reject do NOT propose the same thing again in this conversation. On an idea, call action=idea with their words, then propose a revised version — the card will ask again. action=forget: delete a learned note (stays un-learnable for 30 days), only when the user asks. action=organize: read-only draft of merges / archives / promotions. action=done: report that a recorded procedure really ran end-to-end; three verified runs promote it to a playbook (ok=false when it failed). Available only while autonomous memory is on.',
+    description: 'Autonomous memory. action=learn: save one durable preference, fact, correction or procedure as a **pending note** (only what cannot be re-derived from code; pass the user\'s exact words in `quote`). Pending notes are NOT injected into context; the user confirms them on the Memory page. Tell the user it was saved for review, do not claim it is active. action=forget: delete a learned note (stays un-learnable for 30 days), only when the user asks. action=organize: read-only draft of merges / archives. Available only while autonomous memory is on.',
     parameters: {
-      action: { type: 'string', enum: ['learn', 'forget', 'organize', 'done', 'idea'], required: true, description: 'learn (default) / forget / organize / done / idea.' },
-      idea: { type: 'string', description: 'idea: the user\'s own words about how this note should change. Nothing is written; use it to revise the proposal.' },
+      action: { type: 'string', enum: ['learn', 'forget', 'organize'], required: true, description: 'learn (default) / forget / organize.' },
       // ── learn ──
       text: { type: 'string', description: 'learn: one sentence, what to remember (<=400 chars).' },
       kind: { type: 'string', enum: ['preference', 'fact', 'correction', 'procedure'], description: 'learn: what kind of thing it is; inferred from the text when omitted.' },
-      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it. user_explicit / user_correction require a verbatim `quote`; model_inference goes active as soon as the user approves the card (unattended review keeps it a candidate).' },
+      source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it. user_explicit / user_correction require a verbatim `quote`. All sources are saved as pending; evidence only affects confidence and ordering.' },
       quote: { type: 'string', description: 'learn: the user\'s exact words (verbatim substring of what they said). Required for user_explicit / user_correction.' },
       key: { type: 'string', description: 'learn: short slot name like `package-manager` — the same key merges with the existing note.' },
       boundary: { type: 'string', description: 'learn: when it might not hold (e.g. "CI still uses npm").' },
-      steps: { type: 'array', items: { type: 'string' }, description: 'learn: for kind=procedure, the ordered steps (2-12 short lines) actually followed. Without these it can never become a playbook or a skill.' },
       layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project only). Omit to route by content; only explicit cross-project wording reaches global.' },
       ttlDays: { type: 'number', description: 'learn: days before it should be re-checked; defaults by kind.' },
-      // ── forget / done ──
-      memory: { type: 'string', description: 'forget / done: the learned note or procedure id, copied from the learned notes block.' },
-      ok: { type: 'boolean', description: 'done: true (default) = the steps worked; false = they failed and should not count toward promotion.' },
+      // ── forget ──
+      memory: { type: 'string', description: 'forget: the learned note id, copied from the learned notes block.' },
       // ── organize ──
       scope: { type: 'string', enum: ['workspace', 'global', 'all'], description: 'organize: which set to look at (default workspace).' },
     },
@@ -516,14 +510,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         throw new Error('autonomous memory is off here, so nothing was done. The user can turn it on in Memory → Autonomous memory.')
       }
       const action = String((args && args.action) || 'learn')
-
-      if (action === 'idea') {
-        // 「输入想法」不是一次写入：只把用户的话接回模型手里，让它改好再提一次（会再弹卡）。
-        // 这样三个动作里只有「同意」会真正落盘，拒绝与想法都不产生记忆。
-        const note = String((args && args.idea) || '').trim()
-        if (note === '') throw new Error('missing argument: idea')
-        return 'Noted (nothing was saved): "' + note.slice(0, 400) + '". Rewrite the note to match this idea, then call action=learn again — the user will be asked once more.'
-      }
 
       if (action === 'forget') {
         const id = String((args && args.memory) || '').trim()
@@ -544,17 +530,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         return 'Drafted ' + drafts.length + ' change(s) from ' + scanned + ' learned note(s). Nothing has been changed yet — the user applies them in Memory → Learned notes.\n' + lines.join('\n')
       }
 
-      if (action === 'done') {
-        // 「真的执行完」才算一次验证：只读过步骤、或只是打算照做，都不该把流程升成 playbook。
-        const id = String((args && args.memory) || '').trim()
-        if (id === '') throw new Error('missing argument: memory')
-        const r: any = await evo['evolution-procedure-done']({ id, ok: args?.ok !== false })
-        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record the run'))
-        if (r.promoted) return 'OK: ' + String(r.successes) + ' verified run(s) — promoted ' + id + ' to a playbook. Its steps are now shown only as a title in the learned notes block.'
-        return 'OK: recorded for ' + id + ' (' + String(r.successes) + ' successful / ' + String(r.failures) + ' failed). Three successful runs are needed to become a playbook.'
-      }
-
-      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget / organize / done / idea)')
+      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget / organize)')
 
       // ── learn（默认）──
       const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
@@ -562,15 +538,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         text: String((args && args.text) || ''),
         // 默认按"模型推断"起步：说这是用户明说的却不给引句，证据门会降级 —— 但先如实默认更省一次往返。
         source: (args && args.source) || 'model_inference',
-        // 执行到这一步 = 确认卡已走完；卡上按过「同意」的（pre-execute 钩子在 exec 上留了
-        // 标记），证据升级为 user_approved、状态直接生效 —— 卡片就是确认，页面里不再二次确认。
-        // 标记丢了（宿主换对象 / 完全权限跳过卡）不带这个字段，门禁按保守口径处理。
-        ...((exec && exec.__userConfirmed === true) ? { approved: true } : {}),
       }
       for (const key of ['kind', 'quote', 'key', 'boundary', 'layer', 'ttlDays'] as const) {
         if (args && args[key] !== undefined && args[key] !== '') payload[key] = args[key]
       }
-      if (args && Array.isArray(args.steps) && args.steps.length) payload.steps = args.steps.map((x: unknown) => String(x))
       if (identity?.sessionId) payload.sessionId = identity.sessionId
       if (identity?.cwd) payload.cwd = identity.cwd
       const scene = deps.activeSceneOf ? deps.activeSceneOf(agent) : undefined
@@ -583,9 +554,12 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         throw new Error(String((r && r.error) || 'failed to record it'))
       }
       const parts = ['OK: recorded ' + String(r.id)]
-      parts.push(String(r.status === 'active' ? 'active' : 'candidate (not injected until it is confirmed)'))
-      if (typeof r.confidence === 'number') parts.push('confidence ' + r.confidence.toFixed(2))
-      if (r.merged === true) parts.push('merged into the existing note')
+      if (r.merged === true) {
+        parts.push(String(r.status === 'active' ? 'merged into an existing active note' : 'merged into an existing pending note'))
+      } else {
+        parts.push('saved as pending review — not injected until the user confirms it on the Memory page')
+      }
+      if (r.merged !== true && typeof r.confidence === 'number') parts.push('confidence ' + r.confidence.toFixed(2))
       if (Array.isArray(r.supersedes) && r.supersedes.length) parts.push('replaced ' + r.supersedes.join(', '))
       if (r.note) parts.push(String(r.note))
       if (r.needsReview) parts.push('needs review: ' + String(r.needsReview))

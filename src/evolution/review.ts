@@ -300,9 +300,8 @@ export function createReviewer(deps: ReviewDeps): {
               ...(item.kind !== undefined ? { kind: item.kind } : {}),
               ...(item.key !== undefined ? { key: item.key } : {}),
               source: item.source,
-              // 复习器在后台落笔，没有任何人在场：via 必须如实写 'review'，
-              // 门禁据此把 model_inference 压成候选等用户确认，绝不直接放进上下文。
-              via: 'review' as const,
+              // 复习器在后台落笔，没有任何人在场；门禁对所有来源都先落候选，
+              // 用户在记忆页确认后才会进上下文。
               ...(item.quote !== undefined ? { quote: item.quote } : {}),
               ...(item.layer !== undefined ? { layer: item.layer } : {}),
               ...(item.boundary !== undefined ? { boundary: item.boundary } : {}),

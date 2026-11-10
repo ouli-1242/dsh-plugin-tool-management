@@ -16,8 +16,6 @@
 // 本模块保持纯函数：不读磁盘、不看会话、不抛错。参数不成立（缺 id / 不是布尔）时返回
 // `null` 让工具自己报错 —— 给一次注定失败的调用弹卡只会产生无效审批。
 
-import { PROACTIVE_MEMORY_TOOL } from './tools/table.js'
-
 /** 隔离粒度（与 `scope/scope-overrides.ts` 的 `ScopeMode` 同形，这里只取用到的三档）。 */
 export type ConfirmScopeMode = 'global' | 'session' | 'workspace'
 
@@ -34,7 +32,6 @@ export const ARG_CONDITIONAL_CONFIRM_TOOLS: ReadonlySet<string> = new Set([
   'skill_manager_switch',
   'subagent_manager_switch',
   'tool_manager_tools',
-  PROACTIVE_MEMORY_TOOL,
 ])
 
 /** 取一个必填字符串参数；不是非空字符串就返回空串。 */
@@ -67,12 +64,12 @@ const REMOVE_SUBJECT: Record<string, string> = {
  * 完全权限（approval=never）也**不许跳过**的确认。
  *
  * 完全权限的语义是"用户预先批准了常规审批"，但有几类动作的授权边界在它之上：
- * 用户亲口说过"这种事必须问我"。目前两类（用户 2026-11-10：自主记忆、移除工具；
- * 其余维持可跳过，后续再议）：
+ * 用户亲口说过"这种事必须问我"。目前两类：
  *
- *   · 自主记忆新增 —— 每张卡批准的是**这一句话进入之后每一轮的上下文**，批准一次
- *     ≠ 批准一切；完全权限跳过它等于"没人看过的内容常驻上下文"。
  *   · 删除类（trash）与机器级停用工具 —— 数据处置 / 拿走能力，出错不可逆或难以察觉。
+ *   · 修复类（repair）—— 把损坏侧车改名留存、按空表继续，同属数据处置。
+ *
+ * 自主记忆 learn 不在其中：它只写一条候选，候选不进上下文，确认发生在记忆页。
  *
  * 返回 false 不代表"不用问"：要不要问仍由 `argConditionalConfirmReason` 决定；这里只在
  * "要问"之后决定"完全权限能不能免问"。纯函数，与上面那张表共用入参。
@@ -84,11 +81,6 @@ export function isMustAskConfirm(
 ): boolean {
   const args = (rawArgs !== null && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
   const action = text(args.action)
-  if (name === PROACTIVE_MEMORY_TOOL) {
-    // 与 argConditionalConfirmReason 同口径：只有 learn（含缺省 action 但给了 text）要卡。
-    if (action !== 'learn' && action !== '') return false
-    return text(args.text) !== ''
-  }
   if (name.endsWith('_remove')) {
     return action === 'trash' && REMOVE_SUBJECT[text(args.domain)] !== undefined
   }
@@ -120,23 +112,6 @@ export function argConditionalConfirmReason(
 ): string | null {
   const args = (rawArgs !== null && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
   const action = text(args.action)
-
-  if (name === PROACTIVE_MEMORY_TOOL) {
-    // 只问「新增」这一下：删除/整理/回报/反馈都不该弹卡（整理是只读草案、done 只是记数）。
-    // 卡上把提议原文和建议范围回显出来 —— 用户批准的是**这一句话**，不是"允许以后自动记"。
-    // 三个动作：同意=批准执行（写入）、拒绝=工具不执行、输入想法=用户写文字让模型改后重提。
-    // 卡文沿用本文件的英文惯例（其余 reason 也都是英文）。
-    if (action !== 'learn' && action !== '') return null
-    const note = text(args.text)
-    if (note === '') return null
-    const scope = text(args.layer) === 'global' ? 'all projects' : 'this project'
-    return [
-      'Autonomous memory wants to add a note (suggested scope: ' + scope + '):',
-      '「' + note.slice(0, 200) + '」',
-      'Approve → it is written to the autonomous library; Reject → nothing is saved; Idea → type how it should change, the agent revises it and asks again.',
-      'Only the autonomous library is touched — your hand-written memories and scenes are unaffected.',
-    ].join('\n')
-  }
 
   if (name.endsWith('_remove')) {
     // 只有 trash 是删除。list 是读、restore 是恢复（与 mcp 的 restart 同一档，不该拦）。

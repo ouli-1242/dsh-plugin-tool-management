@@ -32,7 +32,8 @@ import { deriveKey } from './gates.js'
 import { draftOrganize, type OrganizeAction, type OrganizeDraft } from './organize.js'
 import { canPromotePlaybook, cleanSteps, procedureTitleOf, recordProcedureUse, renderProcedureBody, parseProcedureSteps } from './procedure.js'
 import {
-  confidenceOf, emptyCounters, pushTransition, textHashOf, type EvidenceSource, type EvolutionState, type EvolutionStateStore,
+  bumpRevision, confidenceOf, emptyCounters, pushTransition, textHashOf,
+  type EntryState, type EvidenceSource, type EvolutionState, type EvolutionStateStore,
 } from './state.js'
 
 /** 一条自动记忆的正文上限（字符）。超过说明它该是一份文档或一个技能，不是一条记忆。 */
@@ -48,10 +49,6 @@ export interface LearnRequest {
   key?: string
   source: EvidenceSource
   quote?: string
-  /** 学习来路：`tool` = 对话工具（必然已过确认卡）；缺省按 `review`（后台复习，保守候选）。 */
-  via?: 'tool' | 'review'
-  /** 用户在确认卡上按了「同意」：证据升级为 user_approved（信心上调）。 */
-  approved?: boolean
   layer?: MemoryLayer
   boundary?: string
   ttlDays?: number
@@ -224,8 +221,6 @@ export function createLearner(deps: LearnDeps) {
           ...(req.kind !== undefined ? { kind: req.kind } : {}),
           ...(req.key !== undefined ? { key: req.key } : {}),
           source: req.source,
-          ...(req.via !== undefined ? { via: req.via } : {}),
-          ...(req.approved === true ? { approved: true } : {}),
           ...(req.quote !== undefined ? { quote: req.quote } : {}),
           ...(req.layer !== undefined ? { layer: req.layer } : {}),
           ...(req.boundary !== undefined ? { boundary: req.boundary } : {}),
@@ -361,7 +356,7 @@ export function createLearner(deps: LearnDeps) {
     }
 
     // ── ⑥ catalog（派生数据：失败可忽略，下次重建会补） ──
-    await touchCatalog(id, pass, name, req, nowIso).catch(() => {})
+    await touchCatalog(id, pass, name, req, nowIso, st.entries[id].confidence ?? pass.confidence).catch(() => {})
 
     deps.invalidateSnapshot()
     await appendLearnLog({ at: nowIso, id, layer: pass.layer, status: pass.status, source: pass.source, key: pass.key, session: env.sessionId ?? '' }).catch(() => {})
@@ -415,10 +410,13 @@ export function createLearner(deps: LearnDeps) {
     const nextBoundary = alreadyKnown
       ? prevBoundary
       : [prevBoundary, extra].filter((x) => x !== '').join('；').slice(0, MAX_BOUNDARY)
+    // 合并保留目标条目自己的状态：重新学到一条已经确认过的记忆，不该把它打回候选；
+    // 反过来，合并进候选也不该凭空生效。
+    const current = pickField(existing, 'auto_status') || 'candidate'
     const merged = rewriteFrontmatterFields(
       existing,
       {
-        auto_status: pass.status,
+        auto_status: current,
         auto_updated: nowIso,
         ...(nextBoundary !== prevBoundary ? { auto_boundary: nextBoundary } : {}),
       },
@@ -429,19 +427,19 @@ export function createLearner(deps: LearnDeps) {
     entry.evidence = [...entry.evidence, ...evidence].slice(-50)
     entry.counters = entry.counters ?? emptyCounters()
     entry.confidence = confidenceOf(entry.evidence, entry.counters.harmful)
-    pushTransition(entry, entry.transitions.at(-1)?.to ?? 'active', pass.status, 'learn', 'merge: same key, new evidence', Date.parse(nowIso))
+    pushTransition(entry, current, current, 'learn', 'merge: same key, new evidence', Date.parse(nowIso))
     st.entries[targetId] = entry
 
     const written = await state.write(st)
     if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
-    await touchCatalog(targetId, pass, name, {} as LearnRequest, nowIso).catch(() => {})
+    await touchCatalog(targetId, pass, name, {} as LearnRequest, nowIso, entry.confidence ?? pass.confidence, current).catch(() => {})
     deps.invalidateSnapshot()
     return {
       ok: true,
       id: targetId,
       layer: pass.layer,
-      status: pass.status,
+      status: current as 'active' | 'candidate',
       confidence: entry.confidence ?? pass.confidence,
       merged: true,
       supersedes: [],
@@ -489,6 +487,8 @@ export function createLearner(deps: LearnDeps) {
     name: string,
     req: LearnRequest,
     nowIso: string,
+    confidence: number,
+    statusOverride?: string,
   ): Promise<void> {
     const abs = catalogPathOf(deps.stateDir)
     let catalog: CatalogFile
@@ -498,19 +498,20 @@ export function createLearner(deps: LearnDeps) {
     } catch {
       catalog = normalizeCatalog(null)
     }
-    const oneLine = describeOf(pass.text, req.description)
-    // 合并路径（mergeInto）传的是空的 req，别拿新的补充语句把原来那份 playbook 标题冲掉。
-    const title = catalog.entries[id]?.title
+    const prev = catalog.entries[id]
+    // 合并路径（mergeInto）传的是空的 req：保留原来的摘要与标题，别拿补充语句把它们冲掉。
+    const oneLine = prev?.oneLine ?? describeOf(pass.text, req.description)
+    const title = prev?.title
       ?? (pass.kind === 'procedure' ? procedureTitleOf(pass.text, pass.key) : '')
     catalog.entries[id] = catalogEntryOf(id, pass.layer, {
       oneLine,
       ...(title !== '' ? { title } : {}),
-      status: pass.status,
+      status: statusOverride ?? pass.status,
       kind: pass.kind,
       key: pass.key,
-      confidence: pass.confidence,
+      confidence,
       enabled: true,
-      hash: textHashOf(pass.text),
+      hash: prev?.hash || textHashOf(pass.text),
       mtime: Date.parse(nowIso),
     })
     catalog.builtAt = nowIso
@@ -595,12 +596,14 @@ export function createLearner(deps: LearnDeps) {
       // 时，严格结构类型**不会报错**（参数双变），症状是"忘了但文件还在"，没有任何提示。
       if (opts.remove) await opts.remove(id).catch(() => false)
 
-      // 墓碑：key 与文本指纹都写，任一路径再次申请都能拦住。
+      // 墓碑：key、文本指纹与原文都写。原文是给相似度拦截用的 —— 用户删的是
+      // 「以后都用 pnpm」，模型换个说法写「包管理器统一 pnpm」时，精确哈希拦不住。
       const tomb = textHashOf(body)
       if (key !== '' || tomb !== '') {
         st.tombstones.push({
           key,
           textHash: tomb,
+          text: body.slice(0, 400),
           at: new Date().toISOString(),
           until: new Date(Date.now() + 30 * 86400_000).toISOString(),
           actor: opts.actor ?? 'model',
@@ -609,6 +612,7 @@ export function createLearner(deps: LearnDeps) {
       if (entry) pushTransition(entry, entry.transitions.at(-1)?.to ?? 'active', 'archived', 'learn', 'forgotten by user', Date.now())
       else st.entries[id] = { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
       delete st.entries[id]
+      bumpRevision(st)
 
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
@@ -624,10 +628,33 @@ export function createLearner(deps: LearnDeps) {
   }
 
   /**
+   * 把一条候选升级为「用户确认过」的证据。
+   *
+   * 所有激活路径（页面确认、从归档恢复）都必须走这里：只改 `auto_status` 不动证据，
+   * 会留下「界面显示生效、注入不选」的静默失效；只清 `needsReview` 不升级证据，信心
+   * 会停在推断档。这里同时做三件事：升级证据、清待确认、按全部证据重算信心。
+   */
+  function activateEvidence(entry: EntryState, text: string, nowIso: string): void {
+    entry.evidence = entry.evidence.map((e) => e.source === 'model_inference' ? { ...e, source: 'user_approved' } : e)
+    const hasUserEvidence = entry.evidence.some((e) =>
+      e.source === 'user_approved' || e.source === 'user_explicit' || e.source === 'user_correction')
+    if (!hasUserEvidence) {
+      // 迁移条目 / 证据被清过：确认本身就是一份用户证据，补一条，别让信心停在 0。
+      entry.evidence.push({
+        session: '', turn: 0, seq: -1, source: 'user_approved',
+        quote: normalizeForCompare(text).slice(0, 300), at: nowIso,
+      })
+    }
+    delete entry.needsReview
+    entry.counters = entry.counters ?? emptyCounters()
+    entry.confidence = confidenceOf(entry.evidence, entry.counters.harmful)
+  }
+
+  /**
    * 用户确认一条候选 → active。
    *
    * 为什么需要这条：候选**不注入**，而九道门的设计是"模糊就降级"，于是候选一定会积累
-   * （歧义表述、模型推断、程序性记忆全进候选）。没有这条，用户唯一的出路是删掉或者让模型
+   * （歧义表述、模型推断、程序化记忆全进候选）。没有这条，用户唯一的出路是删掉或者让模型
    * 再说一遍 —— 前者浪费证据，后者会撞上配额与冲突门。
    *
    * 已 superseded / archived 的不许确认：那不是"待确认"，是历史。给它们复活等于绕过墓碑。
@@ -656,30 +683,33 @@ export function createLearner(deps: LearnDeps) {
       await writeFileAtomically(docPath, rewriteFrontmatterFields(text, { auto_status: 'active', auto_updated: nowIso }))
 
       const entry = st.entries[id] ?? { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
-      delete entry.needsReview
-      // 证据升级：用户在页面上确认的是**这条原文**，与确认卡上的「同意」同一语义 ——
-      // 推断证据随之升为 user_approved。只升状态不动证据的话，会留下一个隐蔽的静默失效：
-      // active 了、界面也显示"生效"，但注入门槛（L1 要 ≥0.7）对 0.4 的推断证据永远不放行，
-      // 用户确认过的内容一条都进不了上下文（2026-11-10 用户实测踩中）。
-      entry.evidence = entry.evidence.map((e) => e.source === 'model_inference' ? { ...e, source: 'user_approved' } : e)
-      const hasUserEvidence = entry.evidence.some((e) =>
-        e.source === 'user_approved' || e.source === 'user_explicit' || e.source === 'user_correction')
-      if (!hasUserEvidence) {
-        // 迁移条目 / 证据被清过：确认本身就是一份用户证据，补一条，别让信心停在 0。
-        entry.evidence.push({
-          session: '', turn: 0, seq: -1, source: 'user_approved',
-          quote: normalizeForCompare(text).slice(0, 300), at: nowIso,
-        })
-      }
+      // 证据升级：用户在页面上确认的是**这条原文**，推断证据随之升为 user_approved。
+      // 只升状态不动证据会留下静默失效：界面显示"生效"，注入却选不中它。
+      activateEvidence(entry, text, nowIso)
       pushTransition(entry, current, 'active', 'user', 'approved in Memory page', Date.parse(nowIso))
-      entry.confidence = confidenceOf(entry.evidence, entry.counters.harmful)
       st.entries[id] = entry
-      const written = await state.write(st)
-      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
       const index = await readIndex(indexDir)
       index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled: true, updatedAt: nowIso }
+      // 同 key 的旧生效条目：用户确认新说法后，旧的让位 —— 否则两条互相矛盾的事实
+      // 会同时注入。候选不在这里处理（gates 已经直接取代候选）。
+      const activatedKey = pickField(text, 'auto_key')
+      if (activatedKey !== '') {
+        try {
+          const { entries } = await deps.existingEntries()
+          for (const e of entries) {
+            if (e.id === id || e.origin !== 'auto' || e.key !== activatedKey) continue
+            if (e.status !== 'active' && e.status !== 'core' && e.status !== 'playbook') continue
+            await markSuperseded(e.id, id, st, nowIso, index)
+          }
+        } catch {
+          /* 快照读不到就只确认这一条；旧的仍可由用户手动停用 */
+        }
+      }
       await writeIndex(indexDir, index)
+      bumpRevision(st)
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
       await patchCatalogEntry(id, { status: 'active', enabled: true, confidence: entry.confidence })
       deps.invalidateSnapshot()
       return {
@@ -770,19 +800,29 @@ export function createLearner(deps: LearnDeps) {
           return { ok: false, code: 'not-a-procedure', error: `refused: "${id}" needs at least 2 recorded steps to become a playbook.` }
         }
       }
+      const nowIso = new Date().toISOString()
+      // 任何回到可注入状态的路径都走同一套证据升级：从「已归档」恢复、从候选恢复都一样。
+      const activating = status === 'active' || status === 'core' || status === 'playbook'
+      if (activating) activateEvidence(entry, text, nowIso)
       if (current === status) {
         // 状态没变也要应用 needsReview 补丁：TTL 扫描重复跑时，第一次已经降级、第二次
-        // 只补标记。否则"降级成功但没标待确认"会让条目从界面默认列表里消失。
+        // 只补标记。激活同理：旧数据可能 active 但证据仍是推断档，这里补一次升级。
+        let changed = activating
         if (opts.needsReview !== undefined) {
           if (opts.needsReview === null) delete entry.needsReview
           else entry.needsReview = opts.needsReview
+          changed = true
+        }
+        if (changed) {
           st.entries[id] = entry
+          bumpRevision(st)
           const w = await state.write(st)
           if (!w.ok) return { ok: false, code: 'state-write-failed', error: w.error }
+          await patchCatalogEntry(id, { status, enabled: status !== 'archived', confidence: entry.confidence ?? 0 })
+          deps.invalidateSnapshot()
         }
         return { ok: true, id, layer, status, confidence: entry.confidence ?? 0, unchanged: true }
       }
-      const nowIso = new Date().toISOString()
       await writeFileAtomically(docPath, rewriteFrontmatterFields(text, { auto_status: status, auto_updated: nowIso }))
       pushTransition(
         entry,
@@ -795,6 +835,7 @@ export function createLearner(deps: LearnDeps) {
       if (opts.needsReview === null) delete entry.needsReview
       else if (opts.needsReview !== undefined) entry.needsReview = opts.needsReview
       st.entries[id] = entry
+      bumpRevision(st)
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
@@ -866,7 +907,21 @@ export function createLearner(deps: LearnDeps) {
       const autoIndex = await readIndex(indexDir)
       delete autoIndex.rules[id]
       await writeIndex(indexDir, autoIndex)
+      // 提升后这条内容已经以用户记忆的身份存在，自动路径不该再学一份 —— 写墓碑拦住。
+      const promotedKey = pickField(text, 'auto_key')
+      const promotedBody = bodyOf(text).trim()
+      if (promotedKey !== '' || promotedBody !== '') {
+        st.tombstones.push({
+          key: promotedKey,
+          textHash: textHashOf(promotedBody),
+          text: promotedBody.slice(0, 400),
+          at: nowIso,
+          until: new Date(Date.now() + 30 * 86400_000).toISOString(),
+          actor: 'user',
+        })
+      }
       delete st.entries[id]
+      bumpRevision(st)
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
       await dropCatalogEntry(id)
@@ -1074,7 +1129,50 @@ export function createLearner(deps: LearnDeps) {
     })
   }
 
-  return { learn, forget, approve, setStatus, promote, organize, applyOrganize, describe, recordProcedure }
+  /**
+   * 注入计数：一次会话快照重建时，对真正进入上下文的那几条 +1。
+   *
+   * 为什么只记「进了快照」而不是每一轮：同一会话里整段文本是冻结的，逐轮 +1 会把
+   * 「注入次数」变成「轮数」，衰减与排序都会失真。读坏 state 时静默跳过：计数不是真相源。
+   */
+  async function noteInjected(ids: readonly string[]): Promise<void> {
+    const picked = ids.filter((id) => typeof id === 'string' && id !== '')
+    if (picked.length === 0) return
+    await deps.withWriteLock(async () => {
+      const read = await state.read()
+      if (!read.ok) return
+      const st = read.state
+      const at = new Date().toISOString()
+      let changed = false
+      for (const id of picked) {
+        const entry = st.entries[id]
+        if (!entry) continue
+        entry.counters = entry.counters ?? emptyCounters()
+        entry.counters.injected += 1
+        entry.counters.lastInjectedAt = at
+        changed = true
+      }
+      if (changed) await state.write(st)
+    })
+  }
+
+  /** 模型读过一条自动记忆：`read` + `lastUsedAt`。界面展开详情不走这条。 */
+  async function noteRead(id: string): Promise<void> {
+    if (id === '') return
+    await deps.withWriteLock(async () => {
+      const read = await state.read()
+      if (!read.ok) return
+      const st = read.state
+      const entry = st.entries[id]
+      if (!entry) return
+      entry.counters = entry.counters ?? emptyCounters()
+      entry.counters.read += 1
+      entry.counters.lastUsedAt = new Date().toISOString()
+      await state.write(st)
+    })
+  }
+
+  return { learn, forget, approve, setStatus, promote, organize, applyOrganize, describe, recordProcedure, noteInjected, noteRead }
 }
 
 /**

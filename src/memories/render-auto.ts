@@ -19,7 +19,7 @@
 
 import {
   AUTO_BUDGET_DEFAULT, AUTO_BUDGET_MAX, AUTO_BUDGET_MIN, AUTO_BUDGET_RATIO,
-  AUTO_L0_MAX, AUTO_LAYER_BUDGET, AUTO_L1_MIN_CONFIDENCE, AUTO_MAX_ENTRIES,
+  AUTO_L0_MAX, AUTO_LAYER_BUDGET, AUTO_MAX_ENTRIES,
   AUTO_MEMORY_HEADING, AUTO_MEMORY_NOTE,
   AUTO_USER_SEGMENT_HARD_TOKENS, AUTO_USER_SEGMENT_SOFT_TOKENS,
   LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, TRUNCATION_MARKER,
@@ -73,6 +73,8 @@ export interface AutoRenderResult {
   dropped: number
   /** 各层进来几条（诊断与界面用）。 */
   byLayer: Record<MemoryLayer, number>
+  /** 真正进入这段文本的条目 id（调用方据此写注入计数）。 */
+  pickedIds: string[]
 }
 
 /** 总盘：`clamp(contextWindow × 1.5%, 800, 2400)`，拿不到窗口用 1600。 */
@@ -168,7 +170,7 @@ const countersOf = (state: EvolutionState, id: string): EntryCounters =>
  * 渲染自动段。纯函数：同样的输入永远给同样的字节（去重的前提）。
  */
 export function renderAutoBlock(input: AutoRenderInput): AutoRenderResult {
-  const empty: AutoRenderResult = { text: '', count: 0, tokens: 0, budget: 0, dropped: 0, byLayer: { global: 0, workspace: 0, scene: 0, session: 0 } }
+  const empty: AutoRenderResult = { text: '', count: 0, tokens: 0, budget: 0, dropped: 0, byLayer: { global: 0, workspace: 0, scene: 0, session: 0 }, pickedIds: [] }
   const total = autoBudgetOf(input.contextWindow)
   const { budget, reduced } = competitorBudgetOf(total, input.userSegmentTokens)
   if (budget <= 0) return { ...empty, budget: 0, dropped: input.entries.length }
@@ -176,7 +178,7 @@ export function renderAutoBlock(input: AutoRenderInput): AutoRenderResult {
   const usable = Math.max(0, budget - OVERHEAD_TOKENS)
   const scope = input.scope
 
-  // 候选：层匹配 + L1 门槛。L0（core / pinned）不受门槛限制。
+  // 候选：状态可注入 + 层匹配 + 未挂待裁决。L0（core / playbook / pinned）只影响预算次序。
   const maxHelpful = Math.max(1, ...Object.values(input.state.entries).map((e) => e.counters?.helpful ?? 0))
   const candidates: Array<{ entry: CatalogEntry; score: number; l0: boolean }> = []
   for (const entry of input.entries) {
@@ -188,12 +190,10 @@ export function renderAutoBlock(input: AutoRenderInput): AutoRenderResult {
     const st = input.state.entries[entry.id]
     // 待裁决的不注入：与用户记忆冲突、或表述有歧义的条目，等用户确认后才算数。
     if (st && typeof st.needsReview === 'string' && st.needsReview !== '') continue
-    if (st && st.locked === true) {
-      // 用户编辑过 = 已确认，按 active 处理（不受 L1 门槛限制）。
-    }
     // playbook 是从 core 晋升来的，常驻待遇跟着走：它比普通 active 更值得每次露一面。
+    // 不再设信心门槛：能进 `isInjectableStatus` 的条目已经过用户在记忆页确认；
+    // 再拿 confidence 筛一次，正是「确认了却不注入」那类静默失效的来源。
     const l0 = entry.status === 'core' || entry.status === 'playbook' || entry.pinned
-    if (!l0 && !(countersOf(input.state, entry.id).helpful > 0 || entry.confidence >= AUTO_L1_MIN_CONFIDENCE)) continue
     candidates.push({
       entry,
       l0,
@@ -257,6 +257,7 @@ export function renderAutoBlock(input: AutoRenderInput): AutoRenderResult {
     budget,
     dropped,
     byLayer,
+    pickedIds: picked.map((e) => e.id),
   }
 }
 

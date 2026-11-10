@@ -741,23 +741,16 @@
           var evoCache = evc[0], setEvoCache = evc[1]
           var evoOrgState = React.useState(null)
           var evoOrg = evoOrgState[0], setEvoOrg = evoOrgState[1]
-          // 后台复习队列（待复习 / 失败 / 无法处理）。null = 还没取过或这版没接线。
+          // 后台复习队列：只用来在「有失败 / 无法处理」时给一个重试入口。
           var evq = React.useState(null)
           var evoQueue = evq[0], setEvoQueue = evq[1]
-          // 全库整理（dream）：草案清单 + 健康度 + 上次整理 / 体检时间。null = 没接线。
-          var evd = React.useState(null)
-          var evoDream = evd[0], setEvoDream = evd[1]
-          // 程序性记忆（P4）：步骤、验证次数、技能草案与 learned 名单。null = 没接线。
-          var evp = React.useState(null)
-          var evoProc = evp[0], setEvoProc = evp[1]
-          // 自主记忆弹窗（2026-11-09：从平铺卡片搬进回收站左边那颗按钮打开的弹窗）。
-          // 与 `modal` 分开存：弹窗里点「删除 / 提升 / 整理」还要再开一层确认弹窗，
-          // 共用一个槽会把自主记忆一起关掉。
+          // 自主记忆弹窗（设置入口）。与 `modal` 分开存：弹窗里点「删除 / 提升 / 整理」
+          // 还要再开一层确认弹窗，共用一个槽会把自主记忆一起关掉。
           var eos = React.useState(false)
           var evoOpen = eos[0], setEvoOpen = eos[1]
-          // 「更多」：后台复习 / 全库整理 / 程序性记忆默认收着，弹窗第一屏只有开关和清单。
-          var ems = React.useState(false)
-          var evoMore = ems[0], setEvoMore = ems[1]
+          // 已归档折叠区：key = 'auto-arch:<layer>'，true = 展开。
+          var eas = React.useState({})
+          var evoArchOpen = eas[0], setEvoArchOpen = eas[1]
 
           /**
            * 当前**对话**的会话 id。
@@ -775,17 +768,14 @@
             var args = sid === '' ? {} : { sessionId: sid }
             Promise.all([
               apiCall('evolution-status', args),
-              apiCall('evolution-list', {}),
+              // `all: true`：卡片自己分「待确认 / 生效 / 已归档」，停用的条目才能被恢复。
+              apiCall('evolution-list', { all: true }),
               apiCall('evolution-queue', {}),
-              apiCall('evolution-dreams', { limit: 8 }),
-              apiCall('evolution-procedures', {}),
             ])
               .then(function (out) {
                 var st = out[0] || null
                 var ls = out[1] || null
                 var q = out[2] || null
-                var dr = out[3] || null
-                var pr = out[4] || null
                 var err = null
                 if (st && st.ok === false) err = translateError(t, st)
                 else if (ls && ls.ok === false) err = translateError(t, ls)
@@ -800,31 +790,6 @@
                 // 队列拿不到（这版没接线）就不显示这一块：它回答的是"后台在干什么"，
                 // 不是"学成了什么"，缺了不该让整张卡片报错。
                 setEvoQueue(q && q.ok !== false ? { stats: q.stats || {}, items: q.items || [], error: null } : null)
-                // 整理区同理：草案是后台产品，缺了不让整张卡报错。已展开的详情要保留，
-                // 否则每刷一次列表就把用户正在看的 diff 收起来。
-                if (dr && dr.ok !== false) {
-                  setEvoDream(function (cur) {
-                    return {
-                      drafts: dr.drafts || [],
-                      lastDreamAt: dr.lastDreamAt || null,
-                      lastSweepAt: dr.lastSweepAt || null,
-                      health: dr.health || null,
-                      busy: false,
-                      error: null,
-                      open: cur ? cur.open : null,
-                      detail: cur ? cur.detail : null,
-                      detailBusy: false,
-                    }
-                  })
-                } else setEvoDream(null)
-                // 程序性记忆区同理：这一版可能没接线，缺了不让整张卡报错。展开的那一条
-                // 要保留，否则每刷一次就把用户正在看的步骤收起来。
-                setEvoProc(function (cur) {
-                  return pr && pr.ok !== false ? {
-                    entries: pr.entries || [], proposals: pr.proposals || [], learned: pr.learned || [],
-                    busy: false, error: null, open: cur ? cur.open : null,
-                  } : null
-                })
               })
               .catch(function (e) { setEvo({ loading: false, status: null, entries: [], settings: null, error: errMsg(e) }) })
           }
@@ -902,20 +867,7 @@
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
 
-          function promoteEvolution(id) {
-            setEvoBusy(true)
-            apiCall('evolution-promote', { id: id, actor: 'user' }).then(function (res) {
-              setEvoBusy(false)
-              setModal(null)
-              if (res && res.ok !== false) {
-                setResult({ ok: true, text: t('evo.promoted') })
-                setEvoCache({})
-                refreshEvolution()
-              } else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setEvoBusy(false); setModal(null); setResult({ ok: false, text: errMsg(e) }) })
-          }
-
-          /** 点行名展开详情：详情按需拉一次（basis / boundary / 证据只在正文与 state 里）。 */
+          /** 点行名展开详情：详情按需拉一次（boundary / 待确认理由只在正文与 state 里）。 */
           function toggleEvolutionDetail(id) {
             if (evoDetail === id) { setEvoDetail(null); return }
             setEvoDetail(id)
@@ -978,7 +930,7 @@
           }
 
           /**
-           * 展开区（用户 2026-11-10：只要重要信息 —— 边界、用量；时间线 / 证据 / 路径全砍）。
+           * 展开区（用户 2026-11-10：只要重要信息 —— 边界；时间线 / 证据 / 路径全砍）。
            * 数据来自 `evolution-read`（按需拉一次；boundary 不在列表行里）。
            */
           function renderEvolutionDetail(e) {
@@ -991,43 +943,44 @@
               out.push(React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')))
             } else if (d.ok === false) {
               out.push(React.createElement('p', { key: 'e', className: 'dsm-help' }, translateError(t, d)))
-            } else {
-              var st = d.state || {}
-              var c = st.counters || {}
-              // 有用 / 有害：升常驻（helpful≥3）与整理判定的依据，不是装饰数字。
-              out.push(React.createElement('div', { key: 'c', className: 'dsm-help' }, t('evo.detail.counters', {
-                helpful: Number(c.helpful) || 0,
-                harmful: Number(c.harmful) || 0,
-              })))
-              if (d.boundary) out.push(React.createElement('div', { key: 'bd', className: 'dsm-evo-detail-row' },
+            } else if (d.boundary) {
+              out.push(React.createElement('div', { key: 'bd', className: 'dsm-evo-detail-row' },
                 React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.detail.boundary')),
                 React.createElement('span', null, String(d.boundary))))
             }
             return React.createElement('div', { className: 'dsm-evo-detail' }, out)
           }
 
-          function renderEvolutionRow(e) {
+          /**
+           * 一行自动记忆。`archivedMode` = 来自卡片底部的「已归档」区，右侧给「恢复」。
+           *
+           * 行上只留三样量值（用户 2026-11-10）：层、注入次数、token。状态用标签表达，
+           * 候选行右侧一颗「确认」；停用 / 删除收进 ⋯ 菜单。
+           */
+          function renderEvolutionRow(e, archivedMode) {
             var statusKey = e.status === 'core' ? 'evo.tag.core'
               : e.status === 'active' ? 'evo.tag.active'
                 : e.status === 'superseded' ? 'evo.tag.superseded'
                   : e.status === 'archived' ? 'evo.tag.archived'
                     : 'evo.tag.candidate'
             var tone = e.status === 'core' || e.status === 'active' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
-            var pending = e.status === 'candidate' || typeof e.needsReview === 'string'
+            var pending = e.status === 'candidate'
             var open = evoDetail === e.id
-            // 一眼要能拿到的东西（用户 2026-11-10）：哪一层、注入过几次、多大。
-            // 信心不进 meta —— 它是排序内参，不是用户要做决定的依据；待确认理由走悬停与展开区。
             var metaBits = [
               t('evo.layer.' + e.layer),
               t('evo.injected', { count: (e.counters && Number(e.counters.injected)) || 0 }),
               t('evo.tokens', { count: Number(e.tokens) || 0 }),
             ]
             if (e.wsMissing) metaBits.push(t('evo.ws.missing'))
-            // 待确认的理由不进 meta（单行省略会把它截成半句话）：悬停给全文，展开区也完整显示。
+            var menuItems = []
+            if (e.status !== 'archived' && e.status !== 'superseded') {
+              menuItems.push({ key: 'disable', label: t('evo.disable'), disabled: evoBusy, onClick: function () { setEvolutionStatus(e.id, false) } })
+            }
+            menuItems.push({ key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } })
             return React.createElement(ListRow, {
               key: e.id,
               dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: t(statusKey) })],
-              // 行名就是展开开关：详情（边界 / 用量）收在名字下面，不另开一个弹窗。
+              // 行名就是展开开关：详情（边界 / 待确认理由）收在名字下面，不另开一个弹窗。
               name: React.createElement('button', {
                 type: 'button',
                 className: 'dsm-evo-name',
@@ -1040,387 +993,61 @@
               extra: open ? renderEvolutionDetail(e) : null,
               side: pending
                 ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
-                : null,
+                : archivedMode
+                  ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { setEvolutionStatus(e.id, true) } }, t('evo.restore'))
+                  : null,
               actions: [React.createElement(RowMenu, {
                 key: 'menu',
                 label: t('evo.menu', { name: e.oneLine || e.id }),
-                items: [
-                  { key: 'approve', label: t('evo.approve'), disabled: evoBusy || !pending, onClick: function () { approveEvolution(e.id) } },
-                  // 停用与删除是两种意图：前者"别再拿它烦我"（随时能回来），
-                  // 后者"别再存在"（30 天墓碑）。菜单里相邻但不合并。
-                  e.status === 'archived'
-                    ? { key: 'enable', label: t('evo.enable'), disabled: evoBusy, onClick: function () { setEvolutionStatus(e.id, true) } }
-                    : { key: 'disable', label: t('evo.disable'), disabled: evoBusy || e.status === 'superseded', onClick: function () { setEvolutionStatus(e.id, false) } },
-                  { key: 'promote', label: t('evo.promote'), disabled: evoBusy || e.status === 'archived' || e.status === 'superseded', onClick: function () { setModal({ type: 'evo-promote', entry: e }) } },
-                  { key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } },
-                ],
+                items: menuItems,
               })],
             })
           }
 
           /**
-           * 后台复习队列。
+           * 后台复习失败：只在真有失败 / 无法处理时出现。
            *
-           * 为什么要显示这一块：复习完全在后台跑，用户唯一的观察窗口是"学到的条目"。整批
-           * 失败时（模型没配、密钥过期、上游 5xx）表现就是"开了开关但什么都不学" —— 那和
-           * "这几轮确实没什么可记"长得一模一样。三栏（待复习 / 失败 / 无法处理）把这两种
-           * 情况分开，并且给死信一个手动出口。
+           * 复习完全在后台跑，整批失败时（模型没配、密钥过期、上游 5xx）表现就是
+           * 「开了开关但什么都不学」。给一行数字与一个重试出口，不把队列详情铺在设置里。
            */
           function renderEvolutionQueue() {
             if (!evoQueue) return null
             var s = evoQueue.stats || {}
-            var pending = Number(s.pending) || 0
             var failed = Number(s.failed) || 0
             var dead = Number(s.dead) || 0
-            var items = evoQueue.items || []
-            // 队列空就不占地方：这张卡片已经够长，一行"0 · 0 · 0"只会教用户忽略它。
-            if (pending + failed + dead === 0 && items.length === 0) return null
+            if (failed + dead === 0) return null
             var busy = !!evoQueue.busy
-            var tagOf = {
-              pending: 'dsm-tag',
-              failed: 'dsm-tag dsm-evo-queue-warn',
-              dead: 'dsm-tag dsm-evo-queue-err',
-              orphan: 'dsm-tag',
-            }
             return React.createElement('div', { key: 'queue', className: 'dsm-evo-queue' },
               React.createElement('div', { className: 'dsm-evo-queue-head' },
                 React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.queue.title')),
-                React.createElement('span', { className: 'dsm-help' }, t('evo.queue.stat', { pending: pending, failed: failed, dead: dead })),
+                React.createElement('span', { className: 'dsm-help' }, t('evo.queue.failStat', { failed: failed, dead: dead })),
                 React.createElement('button', {
                   type: 'button',
                   className: 'dsm-btn dsm-btn-quiet',
                   disabled: busy,
                   onClick: function () { replayEvolution() },
-                }, busy ? t('evo.queue.busy') : t('evo.queue.now'))),
-              evoQueue.error ? React.createElement(Notice, { kind: 'err', text: evoQueue.error }) : null,
-              items.slice(0, 5).map(function (x) {
-                return React.createElement('div', { key: x.id, className: 'dsm-evo-queue-row', title: x.id },
-                  React.createElement('span', { className: tagOf[x.status] || 'dsm-tag' }, t('evo.queue.status.' + x.status)),
-                  React.createElement('span', { className: 'dsm-evo-queue-meta' }, t('evo.queue.row', { turn: x.turn, attempts: x.attempts })),
-                  x.reason ? React.createElement('span', { className: 'dsm-evo-queue-reason' }, String(x.reason)) : null,
-                  // 待复习的会被自动捞走，不给按钮：多一个"重试"只会让人怀疑它没在跑。
-                  x.status === 'pending' ? null : React.createElement('button', {
-                    type: 'button',
-                    className: 'dsm-btn dsm-btn-quiet',
-                    disabled: busy,
-                    onClick: function () { replayEvolution(x.id) },
-                  }, t('evo.queue.retry')))
-              }))
+                }, busy ? t('evo.queue.busy') : t('evo.queue.retryAll'))),
+              evoQueue.error ? React.createElement(Notice, { kind: 'err', text: evoQueue.error }) : null)
           }
 
-          /**
-           * 全库整理（dream）与维护扫描。
-           *
-           * 与上面那份「整理草案」不是一回事：那条是本地规则算的合并建议，这条是模型看完整库
-           * 之后给的一份**可整批回滚**的草案。所以这里每个写动作都要过确认弹窗，且草案永远
-           * 先落盘、先给用户看 diff，应用是另一次点击。
-           */
-          function patchDream(patch) {
-            setEvoDream(function (cur) {
-              return Object.assign({ drafts: [], lastDreamAt: null, lastSweepAt: null, health: null, open: null, detail: null, maintain: null }, cur || {}, patch)
-            })
-          }
-
-          function runDream() {
-            patchDream({ busy: true, error: null })
-            setModal(null)
-            var sid = evoSessionId()
-            apiCall('evolution-dream', sid === '' ? {} : { sessionId: sid }).then(function (res) {
-              patchDream({ busy: false })
-              if (res && res.ok !== false) setResult({ ok: true, text: t('evo.dream.done', { ops: res.ops || 0 }) })
-              else setResult({ ok: false, text: translateError(t, res) })
-              refreshEvolution()
-            }).catch(function (e) { patchDream({ busy: false, error: errMsg(e) }) })
-          }
-
-          /** 展开一份草案：id → oneLine 的 diff 按需拉一次。 */
-          function toggleDream(id) {
-            if (evoDream && evoDream.open === id) { patchDream({ open: null, detail: null }); return }
-            patchDream({ open: id, detail: null, detailBusy: true })
-            apiCall('evolution-dream-read', { id: id }).then(function (res) {
-              if (res && res.ok !== false) {
-                // 请求在飞的时候用户可能已经点开另一份：旧响应不许盖掉当前展开的那份。
-                setEvoDream(function (cur) {
-                  return cur && cur.open === id ? Object.assign({}, cur, { detail: res, detailBusy: false }) : cur
-                })
-              } else patchDream({ detailBusy: false, error: translateError(t, res) })
-            }).catch(function (e) { patchDream({ detailBusy: false, error: errMsg(e) }) })
-          }
-
-          function applyDream(id) {
-            patchDream({ busy: true, error: null })
-            setModal(null)
-            apiCall('evolution-dream-apply', { id: id }).then(function (res) {
-              patchDream({ busy: false })
-              if (res && res.ok !== false) setResult({ ok: true, text: t('evo.dream.applied', { n: res.applied || 0 }) })
-              else setResult({ ok: false, text: translateError(t, res) })
-              refreshEvolution()
-            }).catch(function (e) { patchDream({ busy: false, error: errMsg(e) }) })
-          }
-
-          /** 回滚默认拒绝"应用后又学了新东西"；用户看懂代价后才传 force。 */
-          function revertDream(id, force) {
-            patchDream({ busy: true, error: null })
-            setModal(null)
-            apiCall('evolution-dream-revert', { id: id, force: force === true }).then(function (res) {
-              patchDream({ busy: false })
-              if (res && res.ok !== false) {
-                setResult({ ok: true, text: t('evo.dream.reverted') })
-                refreshEvolution()
-              } else if (res && res.code === 'drift') {
-                setModal({ type: 'evo-dream-force', id: id })
-              } else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { patchDream({ busy: false, error: errMsg(e) }) })
-          }
-
-          /** 维护扫描：dry 只出计划，真跑要用户在预览里再点一次。 */
-          function runMaintain(dry) {
-            patchDream({ busy: true, error: null, maintain: null })
-            setModal(null)
-            apiCall('evolution-maintain', { dry: dry }).then(function (res) {
-              patchDream({ busy: false })
-              if (res && res.ok !== false) {
-                if (dry) patchDream({ maintain: res })
-                else {
-                  setResult({ ok: true, text: t('evo.maintain.done', { n: (res.actions || []).length }) })
-                  patchDream({ maintain: null })
-                  refreshEvolution()
-                }
-              } else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { patchDream({ busy: false, error: errMsg(e) }) })
-          }
-
-          function renderDreamDiff(detail) {
-            if (!detail || !detail.draft) return React.createElement('p', { className: 'dsm-help' }, t('evo.dream.loading'))
-            var nameOf = {}
-            ;(detail.items || []).forEach(function (x) { nameOf[x.id] = x.oneLine || x.id })
-            var ops = (detail.draft.plan && detail.draft.plan.ops) || []
-            return React.createElement('div', { className: 'dsm-evo-dream-diff' },
-              ops.map(function (o, i) {
-                var ids = o.op === 'merge' ? [o.keep].concat(o.drop || []) : [o.id]
-                return React.createElement('div', { key: 'op' + i, className: 'dsm-evo-dream-op' },
-                  React.createElement('span', { className: 'dsm-tag' }, t('evo.dream.op.' + o.op)),
-                  React.createElement('div', { className: 'dsm-evo-dream-op-body' },
-                    ids.map(function (id) {
-                      return React.createElement('div', { key: id, className: 'dsm-evo-dream-op-name', title: id }, nameOf[id] || id)
-                    }),
-                    React.createElement('span', { className: 'dsm-evo-draft-reason' }, String(o.reason || ''))))
-              }),
-              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.estimate', {
-                before: detail.draft.tokensBefore || 0, after: detail.draft.tokensAfter || 0,
-              })),
-              detail.manifest && detail.manifest.results && detail.manifest.results.length
-                ? React.createElement('p', { className: 'dsm-help' }, t('evo.dream.results', {
-                    ok: detail.manifest.results.filter(function (r) { return r.ok }).length,
-                    total: detail.manifest.results.length,
-                  }))
-                : null)
-          }
-
-          function renderEvolutionDream() {
-            if (!evoDream) return null
-            var d = evoDream
-            var busy = !!d.busy
-            var health = d.health || {}
-            var drafts = d.drafts || []
-            var fmt = function (x) { return x ? new Date(String(x)).toLocaleString() : t('evo.dream.never') }
-            var out = [
-              React.createElement('div', { key: 'head', className: 'dsm-evo-queue-head' },
-                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.dream.title')),
-                React.createElement('span', { className: 'dsm-help' }, t('evo.dream.last', { at: fmt(d.lastDreamAt) })),
-                React.createElement('button', {
-                  type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                  onClick: function () { setModal({ type: 'evo-dream-run' }) },
-                }, busy ? t('evo.queue.busy') : t('evo.dream.now'))),
-              d.error ? React.createElement(Notice, { key: 'err', kind: 'err', text: d.error }) : null,
-              // 健康度：三行数字里藏着"为什么该整理"，放在草案列表之前。
-              React.createElement('div', { key: 'health', className: 'dsm-evo-dream-health' },
-                React.createElement('span', {}, t('evo.health.tokens', { n: health.tokens || 0 })),
-                React.createElement('span', {}, t('evo.health.review', { n: health.needsReview || 0 })),
-                React.createElement('span', {}, t('evo.health.conflicts', { n: health.conflicts || 0 })),
-                React.createElement('span', {}, t('evo.health.expired', { n: health.expired || 0 }))),
-              React.createElement('div', { key: 'maint', className: 'dsm-evo-dream-actions' },
-                React.createElement('span', { className: 'dsm-help' }, t('evo.maintain.last', { at: fmt(d.lastSweepAt) })),
-                React.createElement('button', {
-                  type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                  onClick: function () { runMaintain(true) },
-                }, t('evo.maintain.preview'))),
-              // 预览结果：列出"会动哪几条"，确认后才真的改状态。
-              d.maintain ? React.createElement('div', { key: 'mrep', className: 'dsm-evo-dream-preview' },
-                (d.maintain.actions || []).length === 0
-                  ? React.createElement('p', { className: 'dsm-help' }, t('evo.maintain.none'))
-                  : (d.maintain.actions || []).slice(0, 12).map(function (a) {
-                      return React.createElement('div', { key: a.id, className: 'dsm-evo-queue-row', title: a.id },
-                        React.createElement('span', { className: 'dsm-tag' }, t('evo.maintain.bucket.' + a.bucket)),
-                        React.createElement('span', { className: 'dsm-evo-draft-reason' }, String(a.reason || '')))
-                    }),
-                React.createElement('button', {
-                  type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                  onClick: function () { setModal({ type: 'evo-dream-sweep' }) },
-                }, t('evo.maintain.run'))) : null,
-              drafts.length === 0
-                ? React.createElement('p', { key: 'none', className: 'dsm-help' }, t('evo.dream.none'))
-                : React.createElement('div', { key: 'drafts', className: 'dsm-evo-dream-list' },
-                    drafts.map(function (x) {
-                      var open = d.open === x.id
-                      var tagTone = x.status === 'applied' ? 'dsm-tag dsm-tag-on' : x.status === 'applying' ? 'dsm-tag dsm-evo-queue-warn' : x.status === 'reverted' ? 'dsm-tag' : 'dsm-tag'
-                      return React.createElement('div', { key: x.id, className: 'dsm-evo-dream-item' },
-                        React.createElement('div', { className: 'dsm-evo-queue-row' },
-                          React.createElement('span', { className: tagTone }, t('evo.dream.status.' + x.status)),
-                          React.createElement('span', { className: 'dsm-evo-queue-meta' }, fmt(x.createdAt)),
-                          React.createElement('span', { className: 'dsm-help' }, t('evo.dream.counts', {
-                            merges: x.merges || 0, archives: x.archives || 0, promotes: x.promotes || 0,
-                          })),
-                          React.createElement('button', {
-                            type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                            onClick: function () { toggleDream(x.id) },
-                          }, open ? t('evo.dream.hide') : t('evo.dream.view')),
-                          x.status === 'draft' ? React.createElement('button', {
-                            type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                            onClick: function () { setModal({ type: 'evo-dream-apply', id: x.id, ops: x.ops }) },
-                          }, t('evo.dream.apply')) : null,
-                          x.status === 'applied' ? React.createElement('button', {
-                            type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                            onClick: function () { setModal({ type: 'evo-dream-revert', id: x.id }) },
-                          }, t('evo.dream.revert')) : null),
-                        open ? React.createElement('div', { className: 'dsm-evo-dream-detail' },
-                          d.detail && d.detail.draft && d.detail.draft.id === x.id
-                            ? renderDreamDiff(d.detail)
-                            : React.createElement('p', { className: 'dsm-help' }, t('evo.dream.loading'))) : null)
-                    })),
-            ]
-            return React.createElement('div', { key: 'dream', className: 'dsm-evo-queue dsm-evo-dream' }, out)
-          }
-
-          /**
-           * 程序性记忆（P4）：一条做法从"记下来"到"变成技能"的最后两级。
-           *
-           * 每个写动作都单独点一次：记一次成功是人的判断（模型也会通过工具回报），
-           * 升 playbook 要求这条已验证过，生成技能则要确认卡 —— 技能是机器级对象，
-           * 不能因为"步骤攒够了"就自动写进 skills/。
-           */
-          function patchProc(patch) {
-            setEvoProc(function (cur) {
-              return Object.assign({ entries: [], proposals: [], learned: [], busy: false, error: null, open: null }, cur || {}, patch)
-            })
-          }
-
-          function procCall(op, args, okText) {
-            patchProc({ busy: true, error: null })
-            setModal(null)
-            apiCall(op, args).then(function (res) {
-              patchProc({ busy: false })
-              if (res && res.ok !== false) setResult({ ok: true, text: okText(res) })
-              else { setResult({ ok: false, text: translateError(t, res) }); patchProc({ error: translateError(t, res) }) }
-              refreshEvolution()
-            }).catch(function (e) { patchProc({ busy: false, error: errMsg(e) }) })
-          }
-
-          function recordProc(id, ok) {
-            procCall('evolution-procedure-done', { id: id, ok: ok }, function (res) {
-              return res.promoted ? t('evo.proc.promoted') : t('evo.proc.recorded')
-            })
-          }
-          function promotePlaybook(id) {
-            procCall('evolution-set-status', { id: id, status: 'playbook' }, function () { return t('evo.proc.promoted') })
-          }
-          function proposeSkill(id) {
-            procCall('evolution-skill-propose', { id: id }, function () { return t('evo.proc.proposed') })
-          }
-          function applySkill(name) {
-            procCall('evolution-skill-apply', { name: name, confirm: true }, function () { return t('evo.proc.skill.applied') })
-          }
-          function rollbackSkill(name) {
-            procCall('evolution-skill-rollback', { name: name }, function () { return t('evo.proc.skill.rolledBack') })
-          }
-
-          function renderEvolutionProcedure() {
-            if (!evoProc) return null
-            var p = evoProc
-            var busy = !!p.busy
-            var entries = p.entries || []
-            var proposals = p.proposals || []
-            var learnedNames = {}
-            ;(p.learned || []).forEach(function (x) { learnedNames[x.name] = true })
-            var out = [
-              React.createElement('div', { key: 'head', className: 'dsm-evo-queue-head' },
-                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.proc.title')),
-                React.createElement('span', { className: 'dsm-help' }, t('evo.proc.steps.total', { n: entries.length }))),
-              p.error ? React.createElement(Notice, { key: 'err', kind: 'err', text: p.error }) : null,
-            ]
-            if (entries.length === 0) out.push(React.createElement('p', { key: 'none', className: 'dsm-help' }, t('evo.proc.none')))
-            else out.push(React.createElement('div', { key: 'list', className: 'dsm-evo-dream-list' },
-              entries.map(function (x) {
-                var open = p.open === x.id
-                return React.createElement('div', { key: x.id, className: 'dsm-evo-proc-item' },
-                  React.createElement('div', { className: 'dsm-evo-queue-row' },
-                    React.createElement('span', { className: x.status === 'playbook' ? 'dsm-tag dsm-tag-on' : 'dsm-tag' }, t('evo.proc.status.' + x.status)),
-                    React.createElement('span', { className: 'dsm-evo-proc-title', title: x.id }, x.title || x.id),
-                    React.createElement('span', { className: 'dsm-evo-queue-meta' }, t('evo.proc.runs', { s: x.successes || 0, f: x.failures || 0 })),
-                    React.createElement('button', {
-                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                      onClick: function () { patchProc({ open: open ? null : x.id }) },
-                    }, open ? t('evo.proc.hide') : t('evo.proc.expand')),
-                    React.createElement('button', {
-                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                      onClick: function () { recordProc(x.id, true) },
-                    }, t('evo.proc.done')),
-                    x.canPromote ? React.createElement('button', {
-                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                      onClick: function () { promotePlaybook(x.id) },
-                    }, t('evo.proc.promote')) : null,
-                    x.canProposeSkill ? React.createElement('button', {
-                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                      onClick: function () { proposeSkill(x.id) },
-                    }, t('evo.proc.propose')) : null),
-                  open ? React.createElement('div', { className: 'dsm-evo-proc-detail' },
-                    React.createElement('div', { className: 'dsm-evo-proc-steps' },
-                      (x.steps || []).length === 0
-                        ? React.createElement('span', { className: 'dsm-help' }, t('evo.proc.noSteps'))
-                        : (x.steps || []).map(function (s, i) {
-                            return React.createElement('div', { key: i, className: 'dsm-evo-proc-step' },
-                              React.createElement('span', { className: 'dsm-evo-queue-meta' }, String(i + 1) + '.'),
-                              React.createElement('span', {}, String(s)))
-                          })),
-                    x.boundary ? React.createElement('p', { className: 'dsm-help' }, t('evo.proc.boundary', { text: x.boundary })) : null,
-                    React.createElement('button', {
-                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                      onClick: function () { recordProc(x.id, false) },
-                    }, t('evo.proc.fail'))) : null)
-              })))
-            if (proposals.length > 0) out.push(React.createElement('div', { key: 'skills', className: 'dsm-evo-proc-skills' },
-              React.createElement('div', { className: 'dsm-evo-queue-head' },
-                React.createElement('span', { className: 'dsm-evo-detail-key' }, t('evo.proc.skill.title'))),
-              proposals.map(function (x) {
-                var installed = !!x.installedAt && !!learnedNames[x.name]
-                var state = installed ? 'installed' : x.rolledBackAt ? 'rolledback' : 'draft'
-                return React.createElement('div', { key: x.name, className: 'dsm-evo-queue-row' },
-                  React.createElement('span', { className: installed ? 'dsm-tag dsm-tag-on' : 'dsm-tag' }, t('evo.proc.skill.state.' + state)),
-                  React.createElement('span', { className: 'dsm-evo-proc-title', title: x.memoryId }, x.name),
-                  x.lastError && !installed ? React.createElement('span', { className: 'dsm-evo-draft-reason' }, t('evo.proc.skill.error', { text: x.lastError })) : null,
-                  installed ? React.createElement('button', {
-                    type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                    onClick: function () { setModal({ type: 'evo-skill-rollback', name: x.name }) },
-                  }, t('evo.proc.skill.rollback')) : React.createElement('button', {
-                    type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: busy,
-                    onClick: function () { setModal({ type: 'evo-skill-apply', name: x.name }) },
-                  }, t('evo.proc.skill.apply')))
-              })))
-            return React.createElement('div', { key: 'proc', className: 'dsm-evo-queue dsm-evo-proc' }, out)
-          }
 
           /**
            * 自主记忆的两张页签卡（用户 2026-11-10：记忆应该和其他记忆一样直接在页签显示，
            * 只是结构不同 —— 自主记忆分全局 / 工作区两层，不绑场景）。
            *
            * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
-           * 点行名展开详情，候选行右侧有「确认」。卡头右侧的「设置」开设置弹窗
-           * （总开关 / 整理 / 后台工序都住在那里），卡片本身只管展示与逐条操作。
+           * 点行名展开详情，候选行右侧有「确认」，停用条收在卡底「已归档」里可恢复。
+           * 卡头右侧的「设置」开设置弹窗（总开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
            */
           function renderEvolutionCard(layerKey, titleKey) {
-            // 只有全局与本项目两层；迁移过来的旧会话/场景条目标成 archived，归到本项目组展示。
+            var isWorkspace = layerKey === 'workspace'
+            // 工作区卡只列**当前对话**的工作区：别的仓库的条目不会注入，列出来只会误导。
+            var wsHash = (evo.status && evo.status.workspace && evo.status.workspace.hash) || ''
+            var noWorkspace = isWorkspace && wsHash === ''
             var rows = (evo.entries || []).filter(function (e) {
-              return e.layer === layerKey || (layerKey === 'workspace' && (e.layer === 'session' || e.layer === 'scene'))
+              if (e.layer !== layerKey) return false
+              if (isWorkspace && wsHash !== '' && e.workspace !== wsHash) return false
+              return true
             })
             // 搜索词与场景卡同源同口径：一行摘要 / id 命中即留（大小写不敏感）。
             if (q !== '') {
@@ -1429,33 +1056,59 @@
                 return hay.toLowerCase().indexOf(q) >= 0
               })
             }
-            // 这个层一条都没有（或没搜到）→ 不渲染：空卡是噪音，不是信息。
-            if (rows.length === 0) return null
-            // 「启用 / 总数」与场景卡同一读法：生效（active/core）且没被停用的才算"开"。
-            var onCount = rows.filter(function (e) { return (e.status === 'active' || e.status === 'core') && e.enabled !== false }).length
+            // 已取代是历史，不占列表；已归档单独收在卡底，可恢复。
+            var live = rows.filter(function (e) { return e.status !== 'archived' && e.status !== 'superseded' })
+            var archived = rows.filter(function (e) { return e.status === 'archived' })
+            // 关着且一条都没有 → 不渲染：空卡是噪音。开着但还没学到东西 → 留一张空卡，
+            // 让用户知道「它开着，只是还没有内容」。
+            if (!evoOn && rows.length === 0) return null
+            // 「启用 / 总数」与场景卡同一读法：生效（active/core/playbook）且没被停用的才算"开"。
+            var onCount = live.filter(function (e) { return (e.status === 'active' || e.status === 'core' || e.status === 'playbook') && e.enabled !== false }).length
             // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
             var openFlag = collapsed['auto:' + layerKey]
             var baseOpen = openFlag === undefined ? evoOn : openFlag !== true
             var open = baseOpen || q !== ''
+            var archOpen = evoArchOpen[layerKey] === true
+            var body = []
+            if (live.length === 0) {
+              body.push(React.createElement('div', { key: 'empty', className: 'dsm-empty' }, noWorkspace ? t('evo.empty.workspace') : t('evo.empty.on')))
+            } else {
+              body = body.concat(live.map(function (e) { return renderEvolutionRow(e, false) }))
+            }
+            if (archived.length > 0) {
+              body.push(React.createElement('div', { key: 'arch', className: 'dsm-evo-archived' },
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-quiet',
+                  onClick: function () {
+                    setEvoArchOpen(function (cur) {
+                      var next = Object.assign({}, cur)
+                      next[layerKey] = !archOpen
+                      return next
+                    })
+                  },
+                }, t(archOpen ? 'evo.archived.hide' : 'evo.archived.toggle', { count: archived.length })),
+                archOpen
+                  ? React.createElement('div', { className: 'dsm-evo-archived-list' }, archived.map(function (e) { return renderEvolutionRow(e, true) }))
+                  : null))
+            }
             // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
             return React.createElement('div', { key: 'auto:' + layerKey, className: 'dsm-source' + (evoOn ? '' : ' dsm-rule-off') },
               React.createElement('div', { className: 'dsm-source-head' },
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main dsm-source-head-stack', 'aria-expanded': open, onClick: function () { toggleCollapse('auto:' + layerKey, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-head-line' },
                     React.createElement('span', { className: 'dsm-source-title' }, t(titleKey)),
-                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: rows.length })),
+                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: live.length })),
                     React.createElement('span', { className: 'dsm-tag' + (evoOn ? ' dsm-tag-on' : '') }, t('memory.auto.tag')))),
                 React.createElement('div', { className: 'dsm-source-actions' },
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setResult(null); setEvoOpen(true) } }, t('evo.settings')))),
-              open ? React.createElement('div', { className: 'dsm-source-body' }, rows.map(renderEvolutionRow)) : null)
+              open ? React.createElement('div', { className: 'dsm-source-body' }, body) : null)
           }
 
           /**
-           * 自主记忆设置弹窗（2026-11-10 收口：清单已搬到记忆页签上，这里只留**设置**）。
+           * 自主记忆设置弹窗（清单已搬到记忆页签上，这里只留**设置**）。
            *
-           * 第一屏只有「一个开关 + 一行数字 + 整理入口」；后台三块工序（复习队列 / 全库
-           * 整理 / 程序性记忆）仍折在「更多」里。确认弹窗走 `modal` 那个槽，与 `evoOpen`
-           * 分开存，才能叠在它上面而不把整块关掉。
+           * 只有「总开关 + 一行数字 + 笔记风格 + 本地整理 + 后台失败重试」。确认弹窗走
+           * `modal` 那个槽，与 `evoOpen` 分开存，才能叠在它上面而不把整块关掉。
            */
           /** 笔记风格的本地编辑态（custom 文本）。预设切换即时保存，custom 要点「保存」。 */
           var evsStyle = React.useState({ busy: false, text: '', open: false })
@@ -1516,15 +1169,10 @@
 
           function renderEvolutionModal() {
             var st = evo.status
-            var auto = (st && st.auto) || { entries: 0 }
+            var auto = (st && st.auto) || { entries: 0, pendingReview: 0 }
             var eff = (st && st.effective) || {}
             var overall = eff.enabled === true
-            // 整理草案只出建议、逐条「应用」；点「整理」后必须立刻看得见，所以不折进「更多」。
-            // 三块后台工序可能都没接线（旧版宿主）；全空时给一句最短的空态，别让「更多」点了没反应。
-            var advancedBits = [renderEvolutionQueue(), renderEvolutionDream(), renderEvolutionProcedure()]
-              .filter(function (x) { return !!x })
-            var advanced = evoMore ? React.createElement('div', { key: 'advanced', className: 'dsm-evo-advanced' },
-              advancedBits.length ? advancedBits : React.createElement('p', { className: 'dsm-help' }, t('evo.empty'))) : null
+            // 本地整理只出建议、逐条「应用」；它不花模型调用，是设置弹窗里唯一的清理入口。
             var drafts = evoOrg ? React.createElement('div', { key: 'org', className: 'dsm-evo-organize' },
               evoOrg.error ? React.createElement(Notice, { kind: 'err', text: evoOrg.error }) : null,
               !evoOrg.error && evoOrg.drafts !== null && evoOrg.drafts.length === 0
@@ -1557,7 +1205,7 @@
                     onClick: function () { setEvolutionMaster(!overall) },
                   }),
                   // 开没开只看边框：开启时弹窗与页头按钮走成功色边框，不再写「已开启」。
-                  React.createElement('span', { className: 'dsm-help' }, t('evo.stat.short', { learned: auto.entries || 0 })),
+                  React.createElement('span', { className: 'dsm-help' }, t('evo.stat.short', { learned: auto.entries || 0, pending: auto.pendingReview || 0 })),
                   React.createElement('button', {
                     key: 'org', type: 'button', className: 'dsm-btn dsm-btn-quiet',
                     disabled: !!(evoOrg && evoOrg.busy) || auto.entries === 0, onClick: runOrganize,
@@ -1568,18 +1216,16 @@
                 evo.error ? React.createElement(Notice, { key: 'e', kind: 'err', text: evo.error }) : null,
                 evo.loading && !st ? React.createElement('p', { key: 'l', className: 'dsm-help' }, t('loading')) : null,
                 drafts,
-                React.createElement('button', {
-                  key: 'more', type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-evo-more',
-                  onClick: function () { setEvoMore(!evoMore) },
-                }, evoMore ? t('evo.more.hide') : t('evo.more')),
-                advanced))
+                // 后台复习失败只在真有时露一行；没失败就不占地方。
+                renderEvolutionQueue()))
           }
 
-          // 页头那颗按钮要能一眼看出开没开，省得每次都点进弹窗确认。
+          // 页头那颗按钮要能一眼看出开没开、有几条待确认，省得每次都点进弹窗确认。
           var evoOn = !!(evo.status && evo.status.effective && evo.status.effective.enabled === true)
+          var evoPending = Number(evo.status && evo.status.auto && evo.status.auto.pendingReview) || 0
           // 自主记忆的两张页签卡（全局 / 工作区）：与场景卡并列、同一套搜索与折叠逻辑。
           // 场景筛选选了具体场景时它们跟着隐藏 —— 自主记忆不绑场景，出现在"某场景里有什么"
-          // 的答案里只会添乱。某个层一条都没有时那张卡不渲染：空卡是噪音，不是信息。
+          // 的答案里只会添乱。关着且没有条目时那张卡不渲染；开着时留一张空卡说明它在跑。
           var evoCards = sceneFilter !== '' ? [] : [renderEvolutionCard('global', 'memory.auto.card.global'), renderEvolutionCard('workspace', 'memory.auto.card.workspace')]
             .filter(function (c) { return !!c })
           return React.createElement('section', { className: 'dsm-section' },
@@ -1610,8 +1256,10 @@
                 // 页头只留这一颗入口，记忆列表不再被它顶下去。
                 React.createElement('button', {
                   key: 'evo', type: 'button', className: 'dsm-btn dsm-btn-secondary' + (evoOn ? ' dsm-evo-head-on' : ''),
+                  title: evoPending > 0 ? t('evo.pending.short', { count: evoPending }) : t('evo.title'),
                   onClick: function () { setResult(null); setEvoOpen(true) },
-                }, t('evo.title')),
+                }, t('evo.title'),
+                  evoPending > 0 ? React.createElement('span', { key: 'p', className: 'dsm-count dsm-count-tight' }, String(evoPending)) : null),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
                 scopeLeaseKeys('memory').length > 0 ? React.createElement('button', { key: 'stopall', type: 'button', className: 'dsm-btn dsm-btn-danger-outline', disabled: busy || scopeWriteLocked(anyLocked), onClick: stopAllMemories }, t('scope.stopAll')) : null,
               ],
@@ -1662,52 +1310,6 @@
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { setModal(null) } }, t('btn.cancel')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: evoBusy, onClick: function () { forgetEvolution(modal.entry.id) } }, t('evo.forget')))) : null,
-            // 提升会改变这条记忆的**归属**（自动 → 用户），而不只是状态位：它从此不再被
-            // 自动调整，也开始占用用户记忆的预算。这一条要单独确认，不能混进菜单点了就走。
-            modal && modal.type === 'evo-promote' ? React.createElement(Modal, { key: 'evoprom', className: 'dsm-modal-sm', title: t('evo.promote.title', { name: modal.entry.oneLine || modal.entry.id }), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.promote.desc')),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: evoBusy, onClick: function () { promoteEvolution(modal.entry.id) } }, t('evo.promote')))) : null,
-            // 整理会花一次模型调用；应用 / 回滚 / 执行清理都是全库写动作，逐条确认。
-            modal && modal.type === 'evo-dream-run' ? React.createElement(Modal, { key: 'edrun', className: 'dsm-modal-sm', title: t('evo.dream.now'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.confirm')),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { runDream() } }, t('evo.dream.now')))) : null,
-            modal && modal.type === 'evo-dream-apply' ? React.createElement(Modal, { key: 'edapply', className: 'dsm-modal-sm', title: t('evo.dream.apply.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.apply.desc', { n: modal.ops || 0 })),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { applyDream(modal.id) } }, t('evo.dream.apply')))) : null,
-            modal && modal.type === 'evo-dream-revert' ? React.createElement(Modal, { key: 'edrev', className: 'dsm-modal-sm', title: t('evo.dream.revert'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.revert.desc')),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { revertDream(modal.id, false) } }, t('evo.dream.revert')))) : null,
-            // 漂移：应用之后又学了新东西。默认拒绝，只有这里能传 force —— 代价写清楚。
-            modal && modal.type === 'evo-dream-force' ? React.createElement(Modal, { key: 'edforce', className: 'dsm-modal-sm', title: t('evo.dream.force.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.dream.force.desc')),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: function () { revertDream(modal.id, true) } }, t('evo.dream.force.ok')))) : null,
-            modal && modal.type === 'evo-dream-sweep' ? React.createElement(Modal, { key: 'edsweep', className: 'dsm-modal-sm', title: t('evo.maintain.run'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.maintain.confirm')),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { runMaintain(false) } }, t('evo.maintain.run')))) : null,
-            // 技能写入是机器级动作：这里必须把"写后 lint、失败自动回滚、默认停用"说清，
-            // 用户按下这一下才把 confirm=true 传给后端（后端对缺 confirm 一律拒绝）。
-            modal && modal.type === 'evo-skill-apply' ? React.createElement(Modal, { key: 'epapply', className: 'dsm-modal-sm', title: t('evo.proc.skill.apply.title', { name: modal.name }), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.proc.skill.apply.desc', { name: modal.name })),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn', onClick: function () { applySkill(modal.name) } }, t('evo.proc.skill.apply')))) : null,
-            modal && modal.type === 'evo-skill-rollback' ? React.createElement(Modal, { key: 'eprev', className: 'dsm-modal-sm', title: t('evo.proc.skill.rollback.title', { name: modal.name }), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.proc.skill.rollback.desc', { name: modal.name })),
-              React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setModal(null) } }, t('btn.cancel')),
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', onClick: function () { rollbackSkill(modal.name) } }, t('evo.proc.skill.rollback')))) : null,
             modal && modal.type === 'stop' ? React.createElement(Modal, { key: 'mstop', className: 'dsm-modal-sm', title: t('scope.unifiedClose'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('scope.unifiedClose.viewDesc', { name: modal.rule.name || modal.rule.id })),
               React.createElement('div', { className: 'dsm-modal-actions' },

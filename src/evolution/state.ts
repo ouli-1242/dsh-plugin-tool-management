@@ -131,8 +131,14 @@ export interface EntryState {
 export interface Tombstone {
   /** 语义槽位：同 key 的新条目也要拦。 */
   key: string
-  /** 归一化正文的 sha256：没有 key 的条目靠它拦。 */
+  /** 归一化正文的哈希：没有 key 的条目靠它拦。 */
   textHash: string
+  /**
+   * 归一化后的原文（≤400 字符）。只用于**相似度**拦截：用户删掉「以后都用 pnpm」，
+   * 模型换个说法写「包管理器统一 pnpm」时，精确哈希拦不住。旧墓碑没有这个字段，
+   * 读取时按空串处理，退回 key / 哈希两条精确判据。
+   */
+  text: string
   at: string
   until: string
   /** 谁删的：`model` / `user` / `dream`。界面显示"你在 3 天前删过它"。 */
@@ -148,6 +154,13 @@ export interface Watermarks {
   lastDreamTryAt?: string
   /** 最近一次维护扫描（P3）。界面据此显示"上次体检：3 天前"。 */
   lastSweepAt?: string
+  /**
+   * 用户动作版本号（确认 / 停用 / 恢复 / 删除 / 提升时 +1）。
+   *
+   * 注入快照按会话冻结，但用户在本会话里做的决定必须立刻生效 —— 快照 key 带上这个版本号，
+   * 用户一改就重建；学习写入**不**加它，否则每学一条都会重发整段。
+   */
+  autoRevision?: number
 }
 
 export interface EvolutionState {
@@ -256,6 +269,7 @@ export function normalizeState(raw: any): { ok: true; state: EvolutionState } | 
       tombstones.push({
         key,
         textHash,
+        text: str(t.text).slice(0, 400),
         at: str(t.at),
         until: str(t.until),
         actor: str(t.actor, 'unknown'),
@@ -275,6 +289,7 @@ export function normalizeState(raw: any): { ok: true; state: EvolutionState } | 
         ...(typeof w.lastDreamAt === 'string' ? { lastDreamAt: w.lastDreamAt } : {}),
         ...(typeof w.lastDreamTryAt === 'string' ? { lastDreamTryAt: w.lastDreamTryAt } : {}),
         ...(typeof w.lastSweepAt === 'string' ? { lastSweepAt: w.lastSweepAt } : {}),
+        ...(typeof w.autoRevision === 'number' && Number.isFinite(w.autoRevision) ? { autoRevision: w.autoRevision } : {}),
       },
     },
   }
@@ -337,10 +352,15 @@ export function tombstonedBy(state: EvolutionState, key: string, textHash: strin
   return state.tombstones.find((t) => tombstoneActive(t, now) && ((key !== '' && t.key === key) || (textHash !== '' && t.textHash === textHash)))
 }
 
-export function makeTombstone(key: string, textHash: string, actor: string, now = Date.now()): Tombstone {
+export function makeTombstone(key: string, textHash: string, actor: string, now = Date.now(), text = ''): Tombstone {
   const at = new Date(now)
   const until = new Date(now + TOMBSTONE_DAYS * 86400_000)
-  return { key, textHash, at: at.toISOString(), until: until.toISOString(), actor }
+  return { key, textHash, text: text.slice(0, 400), at: at.toISOString(), until: until.toISOString(), actor }
+}
+
+/** 用户动作版本号 +1。写入方在确认 / 停用 / 恢复 / 删除 / 提升之后调用。 */
+export function bumpRevision(state: EvolutionState): void {
+  state.watermarks.autoRevision = (state.watermarks.autoRevision ?? 0) + 1
 }
 
 /** 清掉过期墓碑；返回是否有变化（调用方据此决定要不要写盘）。 */

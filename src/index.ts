@@ -2399,6 +2399,7 @@ export default {
       // 风格指引跟着设置走：改一次风格，段文本变一次（整段重发一次是内容真的变了）。
       // 写进快照键：同一风格内不重建，换了风格立刻重建。
       const styleGuide = noteStyleGuideOf(cfg.noteStyle, cfg.noteStyleText ?? '')
+      const view = evolutionRuntime.view()
       const key = autoSnapshotKey({
         ...(sid !== undefined ? { sessionId: sid } : {}),
         ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
@@ -2406,11 +2407,12 @@ export default {
         enabled: cfg.enabled,
         inject: cfg.inject,
         style: styleGuide,
+        // 用户确认 / 停用 / 删除后立刻重建本会话的段；学习写入不加版本号。
+        revision: view.state.watermarks.autoRevision ?? 0,
       })
       const prev = readAutoSnapshot(agent)
       if (prev && prev.key === key) return prev.text
 
-      const view = evolutionRuntime.view()
       const result = renderAutoBlock({
         entries: Object.values(view.catalog.entries),
         state: view.state,
@@ -2432,6 +2434,9 @@ export default {
         builtAt: Date.now(),
       }
       writeAutoSnapshot(agent, snap)
+      // 计数只记「真正进了这一份快照」的条目：同一会话里段是冻结的，逐轮 +1 会把
+      // 注入次数变成轮数。写失败不影响本轮注入。
+      void autoLearner.noteInjected(result.pickedIds).catch(() => undefined)
       return result.text
     }
 
@@ -5880,9 +5885,8 @@ export default {
         // 控制面工具：开关工具表**默认不问**（只动管着这个对话的那一层，随时可退），
         // 只有机器级那一档与修复类动作问（判据在 confirm-gate.ts）。
         tool_manager_tools: '「插件工具表」',
-        // 自主记忆新增：每次 learn 都在对话里问一次，卡面回显提议原文与建议范围。
-        // 只有「同意」会落盘；拒绝与输入想法都不产生记忆。
-        [PROACTIVE_MEMORY_TOOL]: '「自主记忆·新增」',
+        // 自主记忆新增**不在这里**：learn 只写一条候选，候选不进上下文；确认发生在记忆页。
+        // 把它挂成确认卡会让每次学习都打断对话，而卡片又只有允许/拒绝、没有输入框。
       }
       const bypassedByFullAccess = (exec: any): boolean => {
         if (!isApprovalNever(ctx, exec)) return false
@@ -5919,15 +5923,10 @@ export default {
           const mode = await scopeStore.mode()
           const reason = argConditionalConfirmReason(confirmName, exec.arguments, mode)
           if (reason === null) return next()
-          // must-ask 类（自主记忆新增 / 删除 / 机器级停用工具）在完全权限之上：
+          // must-ask 类（删除 / 机器级停用工具）在完全权限之上：
           // 完全权限只预先批准常规审批，不批这几类的授权边界。先判它，再谈 bypass。
+          // 自主记忆 learn 不在其中：它只写候选，候选不进上下文，确认在记忆页。
           if (!isMustAskConfirm(confirmName, exec.arguments, mode) && bypassedByFullAccess(exec)) return next()
-          // 卡已弹：宿主只有拿到「同意」才会继续执行这条工具。给 exec 打上标记，
-          // 工具层据此把这次学习记成 user_approved 证据（信心上调）。宿主若在钩子与
-          // 执行之间换了对象，标记丢了也只是退回 model_inference 的保守值，不出错。
-          if (confirmName === PROACTIVE_MEMORY_TOOL) {
-            try { (exec as any).__userConfirmed = true } catch { /* exec 被冻结时静默：标记只是加分项 */ }
-          }
           return Promise.resolve({ kind: 'ask', reason })
         }
         if (bypassedByFullAccess(exec)) return next()

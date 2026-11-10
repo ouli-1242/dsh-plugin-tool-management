@@ -161,7 +161,7 @@ function harness() {
 
 const envOf = () => ({ sessionId: 's-1', workspaceHash: WS_HASH })
 
-test('learn：正文 / state / 索引 / catalog 四处一起落，且索引是「学完就生效」', async () => {
+test('learn：正文 / state / 索引 / catalog 四处一起落，且一律先落待确认', async () => {
   const h = harness()
   try {
     const r = await h.learner.learn(
@@ -172,12 +172,13 @@ test('learn：正文 / state / 索引 / catalog 四处一起落，且索引是�
     assert.equal(r.ok, true, r.error)
     assert.equal(r.layer, 'workspace')
     assert.equal(r.merged, false)
+    assert.equal(r.status, 'candidate', '没有任何卡片批准，学完只能进待确认')
 
     // ① 正文：frontmatter 带上「谁写的 / 什么状态 / 靠什么证据」
     const doc = h.readDoc(r.id)
     assert.equal(pickField(doc, 'origin'), 'auto')
     assert.equal(pickField(doc, 'auto_key'), 'package-manager')
-    assert.equal(pickField(doc, 'auto_status'), 'active')
+    assert.equal(pickField(doc, 'auto_status'), 'candidate')
     assert.equal(pickField(doc, 'auto_workspace'), WS_HASH, '工作区层必须记下归属，否则换台机器就串了')
 
     // ② state：证据链只有一份真相
@@ -188,13 +189,14 @@ test('learn：正文 / state / 索引 / catalog 四处一起落，且索引是�
     assert.equal(entry.evidence[0].source, 'tool_verified')
     assert.ok(entry.confidence > 0.5)
 
-    // ③ 索引：自动记忆学完必须立刻 enabled，否则等于没学（下一轮不注入）
+    // ③ 索引：候选不注入靠的是 status，不靠索引停用 —— 索引保持启用，确认后无需再补一次写
     assert.equal(h.readIndex().rules[r.id].enabled, true)
 
-    // ④ catalog：注入只读它，缺了这条就"学了但看不见"
+    // ④ catalog：注入只读它，缺了这条就"学了但看不见"；候选在，但 status 把它挡在注入之外
     const cat = h.readCatalog()
     assert.ok(cat.entries[r.id], 'catalog 必须有条目')
     assert.equal(cat.entries[r.id].layer, 'workspace')
+    assert.equal(cat.entries[r.id].status, 'candidate')
     assert.ok(cat.entries[r.id].estTokens > 0)
   } finally { h.done() }
 })
@@ -292,45 +294,73 @@ test('approve：候选 → 生效，四处一起改（文件 / state / 索引 / 
   } finally { h.done() }
 })
 
-test('learn(via=tool, approved)：确认卡批下来的推断一次到位 —— 生效 + user_approved 证据', async () => {
+test('learn 来源只影响信心与待确认理由，不影响「是否生效」：一律候选', async () => {
   const h = harness()
   try {
-    // 对话工具路径：执行到 learner 这一步 = 用户已在确认卡上按了「同意」。
-    // 卡片就是确认：直接生效、不再挂"待确认"，证据升级为 user_approved（0.85），
-    // 页面里不需要（也不应该）再点一次「确认」。
+    const verified = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(verified.ok, true, verified.error)
+    assert.equal(verified.status, 'candidate')
+    assert.equal(verified.needsReview, undefined, '工具验证过的推断不需要额外解释，但仍是候选')
+    assert.ok(verified.confidence > 0.5)
+
+    const inferred = await h.learner.learn(
+      { text: '回答先给结论，再给理由', key: 'answer-style', source: 'model_inference' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(inferred.ok, true, inferred.error)
+    assert.equal(inferred.status, 'candidate')
+    assert.ok(inferred.needsReview, '模型推断要说明为什么等确认')
+    assert.equal(h.readState().entries[inferred.id].confidence, 0.4)
+
+    // 没有确认就没有生效路径：收件箱里的条目一条都不该是 active / core / playbook。
+    const injectable = Object.values(h.readCatalog().entries)
+      .filter((e) => e.status === 'active' || e.status === 'core' || e.status === 'playbook')
+    assert.deepEqual(injectable, [])
+  } finally { h.done() }
+})
+
+test('计数：注入只记进快照的那次，读只记模型 read；缺失条目静默跳过', async () => {
+  const h = harness()
+  try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'model_inference', via: 'tool', approved: true },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
       cfgOf(),
       envOf(),
     )
     assert.equal(r.ok, true, r.error)
-    assert.equal(r.status, 'active')
-    assert.equal(r.needsReview, undefined)
+    await h.learner.noteInjected([r.id, 'missing/id'])
+    await h.learner.noteInjected([r.id])
+    await h.learner.noteRead(r.id)
 
-    const doc = h.readDoc(r.id)
-    assert.equal(pickField(doc, 'auto_status'), 'active')
-    assert.equal(pickField(doc, 'auto_confidence'), '0.85')
+    const c = h.readState().entries[r.id].counters
+    assert.equal(c.injected, 2)
+    assert.equal(c.read, 1)
+    assert.ok(c.lastInjectedAt, '注入时间要落，衰减与排序都读它')
+    assert.ok(c.lastUsedAt)
+  } finally { h.done() }
+})
 
-    const st = h.readState().entries[r.id]
-    assert.equal(st.evidence.length, 1)
-    assert.equal(st.evidence[0].source, 'user_approved')
-    assert.equal(st.confidence, 0.85)
-
-    // 学完即注入：索引与 catalog 都是 active + enabled
-    assert.equal(h.readIndex().rules[r.id].enabled, true)
-    assert.equal(h.readCatalog().entries[r.id].status, 'active')
-
-    // 完全权限跳过卡的那一半：生效，但证据保持 model_inference（0.4），不虚报。
-    const bypassed = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'model_inference', via: 'tool' },
+test('用户动作版本号：确认 / 停用 / 删除各 +1，学习写入不 +1', async () => {
+  const h = harness()
+  try {
+    const revOf = () => h.readState().watermarks.autoRevision ?? 0
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
       cfgOf(),
       envOf(),
     )
-    assert.equal(bypassed.ok, true, bypassed.error)
-    assert.equal(bypassed.status, 'active')
-    assert.equal(bypassed.confidence, 0.4)
-    const st2 = h.readState().entries[bypassed.id]
-    assert.equal(st2.evidence[0].source, 'model_inference')
+    assert.equal(revOf(), 0, '学习不重发本会话的自动段')
+    await h.learner.approve(r.id)
+    assert.equal(revOf(), 1)
+    await h.learner.setStatus(r.id, 'archived')
+    assert.equal(revOf(), 2)
+    await h.learner.forget(r.id)
+    assert.equal(revOf(), 3)
   } finally { h.done() }
 })
 

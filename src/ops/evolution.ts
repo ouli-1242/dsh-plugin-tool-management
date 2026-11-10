@@ -162,6 +162,11 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           const st = view.state.entries[e.id]
           return st && typeof st.needsReview === 'string' && st.needsReview !== ''
         }).length
+        // 「待确认」= 当前会话看得见的候选：全局层 + 本工作区。别的仓库的候选不在这里
+        // 计数，否则页头徽标会说「3 条待确认」而卡片里只有 1 条。
+        const visibleHere = (e: any): boolean => e.layer === 'global' || (hash !== undefined && e.workspace === hash)
+        const pending = entries.filter((e) => e.status === 'candidate' && visibleHere(e)).length
+        const archived = entries.filter((e) => e.status === 'archived' && visibleHere(e)).length
 
         return {
           ok: true,
@@ -182,7 +187,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             byLayer,
             byStatus,
             needsReview,
-            pendingReview: needsReview,
+            pendingReview: pending,
+            archived,
             broken: view.broken,
             active: entries.filter((e) => e.enabled && isInjectableStatus(e.status)).length,
           },
@@ -303,12 +309,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(args?.kind !== undefined ? { kind: args.kind } : {}),
             ...(args?.key !== undefined ? { key: args.key } : {}),
             source: args?.source ?? 'model_inference',
-            // 这条 op 只服务对话里的 `memory_manager_auto`：执行到这一步 = 确认卡已经
-            // 走完（用户同意，或完全权限下用户预先批准一切），所以 via 恒为 'tool'，
-            // 不从入参取 —— 免得哪个调用方忘带参数就把没人看过的推断直接放进上下文。
-            // `approved` 由工具层按「卡上按了同意」的标记传入，只在证据上加分。
-            via: 'tool' as const,
-            ...(args?.approved === true ? { approved: true } : {}),
             ...(args?.quote !== undefined ? { quote: args.quote } : {}),
             ...(args?.layer !== undefined ? { layer: args.layer } : {}),
             ...(args?.boundary !== undefined ? { boundary: args.boundary } : {}),
@@ -390,13 +390,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         // 只认一个会让另一条路静默写成 undefined —— 而 `setStatus` 会拿它跟当前值比、
         // 比不出来就返回 unchanged，症状是"点了没反应但不报错"。
         const wanted = typeof args?.status === 'string' ? args.status : ''
-        const status = wanted === 'playbook' || wanted === 'core'
-          ? wanted
-          : wanted === 'archived' || args?.enabled === false ? 'archived' : 'active'
-        // 升 playbook 一律走 dream 那条判据（core → playbook、成功 ≥3、harmful=0、有步骤），
-        // 不让界面传个 actor 就把门槛绕过去。
-        const actor = status === 'playbook' ? 'dream' : args?.actor === 'user' ? 'user' : 'curator'
-        const result = await learner.setStatus(id, status, actor)
+        const status = wanted === 'archived' || args?.enabled === false ? 'archived' : 'active'
+        const result = await learner.setStatus(id, status, 'user')
         if (result && result.ok) runtime.invalidate()
         return result
       } catch (e) {
@@ -424,7 +419,10 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       try {
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
-        return await learner.describe(id)
+        const detail = await learner.describe(id)
+        // 只有模型读（`touch: true`）才计数；界面展开详情不算「被用过」。
+        if (detail && detail.ok && args?.touch === true) await learner.noteRead(id)
+        return detail
       } catch (e) {
         return { ok: false, error: message(e), code: 'read-failed' }
       }
@@ -532,6 +530,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const statusFilter = typeof args?.status === 'string' && args.status !== '' ? args.status : undefined
         const kindFilter = typeof args?.kind === 'string' && args.kind !== '' ? args.kind : undefined
         const includeAll = args?.all === true
+        // 界面传当前工作区 hash：工作区卡只列本项目，别把别的仓库的条目混进来。
+        // 模型侧的 `memory_manager_list auto=true` 不传，保持全库可见。
+        const workspaceFilter = typeof args?.workspaceHash === 'string' && args.workspaceHash !== '' ? args.workspaceHash : undefined
         // 工作区目录消失的条目要能被界面看出来（用户：工作区删除后记忆要跟着"消失"）：
         // hash → missingAt。目录回来了 sweep 会清掉这个标记并同步恢复记忆。
         const missingWs = new Set<string>(
@@ -544,10 +545,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           if (layerFilter && entry.layer !== layerFilter) continue
           if (statusFilter && entry.status !== statusFilter) continue
           if (kindFilter && entry.kind !== kindFilter) continue
+          if (workspaceFilter && entry.layer === 'workspace' && entry.workspace !== workspaceFilter) continue
           const st = view.state.entries[entry.id]
           const needsReview = st && typeof st.needsReview === 'string' && st.needsReview !== ''
-          // 默认只列"会注入的 + 待确认的"：archived / superseded 只在 all=true 时出现。
-          if (!includeAll && !isInjectableStatus(entry.status) && !needsReview) continue
+          // 默认列「待确认 + 会注入的」：候选不看 needsReview（所有新学条目都是候选，
+          // 不是每条都带理由）；archived / superseded 只在 all=true 时出现。
+          if (!includeAll && entry.status !== 'candidate' && !isInjectableStatus(entry.status)) continue
           rows.push({
             id: entry.id,
             layer: entry.layer,
@@ -579,7 +582,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           })
         }
         // 待确认的排前面：界面的「待确认」入口靠这个顺序。
-        rows.sort((a, b) => Number(Boolean(b.needsReview)) - Number(Boolean(a.needsReview)) || b.confidence - a.confidence || a.id.localeCompare(b.id))
+        const rankOf = (s: string): number => s === 'candidate' ? 0 : isInjectableStatus(s) ? 1 : s === 'archived' ? 2 : 3
+        rows.sort((a, b) => rankOf(a.status) - rankOf(b.status) || b.confidence - a.confidence || a.id.localeCompare(b.id))
         return {
           ok: true,
           entries: rows,

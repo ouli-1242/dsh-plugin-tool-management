@@ -111,8 +111,6 @@ export const AUTO_MAX_ENTRIES = 40
 export const AUTO_L0_MAX = 12
 /** 单条 token 上限：超了说明它其实是一份文档，该做成 procedure 或写进仓库。 */
 export const AUTO_SINGLE_MAX_TOKENS = 60
-/** L1 准入门槛：`helpful > 0` 或 `confidence ≥ 这个值`。 */
-export const AUTO_L1_MIN_CONFIDENCE = 0.7
 /** 每层的 min / max token 配额；分配算法见 04-governance §3.2。 */
 export const AUTO_LAYER_BUDGET: Record<MemoryLayer, { min: number; max: number }> = {
   global: { min: 100, max: 300 },

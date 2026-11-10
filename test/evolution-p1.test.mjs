@@ -8,8 +8,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { routeLayer, narrowerOf } from '../lib/evolution/route.js'
-import { runGates, securityScan, durabilityOf, looksDerivable, similarity, inferKind } from '../lib/evolution/gates.js'
+import { runGates, securityScan, durabilityOf, looksDerivable, similarity, inferKind, tombstoneBlocked } from '../lib/evolution/gates.js'
+import { autoSnapshotKey } from '../lib/evolution/runtime.js'
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
+import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
 import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
 import { renderAutoBlock, allocateByLayer, autoBudgetOf, competitorBudgetOf } from '../lib/memories/render-auto.js'
 
@@ -155,30 +157,33 @@ test('来源门：说「用户明说」却不给引句 → 降级为推断，不
   assert.equal(r.status, 'candidate')
 })
 
-test('确认卡批准：推断直接生效，证据升级 user_approved（信心上调）', () => {
-  // 对话工具路径必然先过确认卡：用户看过原文点了同意 → 卡片就是确认，不再进候选。
-  const r = runGates({ text: '这个仓库用 pnpm', source: 'model_inference', via: 'tool', approved: true }, ctxOf())
-  assert.equal(r.ok, true)
-  assert.equal(r.status, 'active')
-  assert.equal(r.source, 'user_approved')
-  assert.equal(r.confidence, 0.85)
-  assert.equal(r.needsReview, undefined)
-  // 后台复习器没有任何人在场：同样 approved 也不该出现（复习器不会带这个参数），
-  // 这里钉的是「review 来路恒为候选」，防止哪天有人把 approved 泄给无人看管的写入。
-  const rev = runGates({ text: '这个仓库用 pnpm', source: 'model_inference', via: 'review', approved: true }, ctxOf())
-  assert.equal(rev.ok, true)
-  assert.equal(rev.status, 'candidate')
-  assert.ok(rev.needsReview)
-})
+test('证据门：所有来源一律候选；信心按来源算，不虚报', () => {
+  // 没有确认卡，也没有「完全权限跳过卡」这条路：learn 的终点永远是待确认收件箱。
+  const inferred = runGates({ text: '这个仓库用 pnpm', source: 'model_inference' }, ctxOf())
+  assert.equal(inferred.ok, true)
+  assert.equal(inferred.status, 'candidate')
+  assert.equal(inferred.source, 'model_inference')
+  assert.equal(inferred.confidence, 0.4)
+  assert.ok(inferred.needsReview)
 
-test('完全权限跳过卡：生效但不虚报证据 —— model_inference 保持 0.4', () => {
-  // approval=never 的会话里确认卡被插件放行，用户没看过这条原文：
-  // 状态按「已预先批准一切」生效，证据链不说谎（仍是 model_inference）。
-  const r = runGates({ text: '这个仓库用 pnpm', source: 'model_inference', via: 'tool' }, ctxOf())
-  assert.equal(r.ok, true)
-  assert.equal(r.status, 'active')
-  assert.equal(r.source, 'model_inference')
-  assert.equal(r.confidence, 0.4)
+  const verified = runGates({ text: '这个仓库用 pnpm', source: 'tool_verified' }, ctxOf())
+  assert.equal(verified.status, 'candidate')
+  assert.equal(verified.confidence, 0.8)
+
+  // 引句逐字命中缓存：来源保持 user_explicit，信心最高 —— 但状态仍是候选。
+  captureUserTexts('s-evidence', [{ role: 'user', content: '以后这个仓库都用 pnpm' }])
+  try {
+    const explicit = runGates(
+      { text: '这个仓库用 pnpm', source: 'user_explicit', quote: '这个仓库都用 pnpm' },
+      ctxOf({ sessionId: 's-evidence' }),
+    )
+    assert.equal(explicit.status, 'candidate')
+    assert.equal(explicit.source, 'user_explicit')
+    assert.equal(explicit.confidence, 0.95)
+    assert.equal(explicit.needsReview, undefined)
+  } finally {
+    clearUserTexts('s-evidence')
+  }
 })
 
 test('配额门：该层满了就拒，并说清怎么解', () => {
@@ -226,16 +231,33 @@ test('冲突门：同 key 的自动条目说法一样 → 合并而不是新增'
   assert.deepEqual(r.supersedes, [])
 })
 
-test('冲突门：同 key 但说法不同 → 新的取代旧的', () => {
-  const r = runGates(
-    { text: '这个仓库统一用 pnpm 管理依赖', source: 'user_explicit', quote: '统一用 pnpm', key: 'package-manager' },
-    ctxOf({
-      existing: [{ id: '_ws/abcd1234abcd1234/pkg', layer: 'workspace', key: 'package-manager', text: '用 npm 装依赖', status: 'active', origin: 'auto' }],
-      workspaceHash: 'abcd1234abcd1234',
-    }),
+test('冲突门：同 key 不同说法 —— 候选直接被取代，生效中的等确认后才让位', () => {
+  const existingOf = (status) => ({
+    id: '_ws/abcd1234abcd1234/pkg',
+    layer: 'workspace',
+    key: 'package-manager',
+    text: '用 npm 装依赖',
+    status,
+    origin: 'auto',
+  })
+  // 旧的是候选：收件箱里只留最新说法，不积累同 key 的两条。
+  const pending = runGates(
+    { text: '这个仓库统一用 pnpm 管理依赖', source: 'tool_verified', key: 'package-manager' },
+    ctxOf({ existing: [existingOf('candidate')], workspaceHash: 'abcd1234abcd1234' }),
   )
-  assert.equal(r.ok, true)
-  assert.deepEqual(r.supersedes, ['_ws/abcd1234abcd1234/pkg'])
+  assert.equal(pending.ok, true)
+  assert.deepEqual(pending.supersedes, ['_ws/abcd1234abcd1234/pkg'])
+
+  // 旧的是生效记忆：不能因为一条还没确认的候选就被静默拿下 —— 新条目先挂待确认，
+  // 用户确认时由 approve 负责取代旧的。
+  const live = runGates(
+    { text: '这个仓库统一用 pnpm 管理依赖', source: 'tool_verified', key: 'package-manager' },
+    ctxOf({ existing: [existingOf('active')], workspaceHash: 'abcd1234abcd1234' }),
+  )
+  assert.equal(live.ok, true)
+  assert.equal(live.status, 'candidate')
+  assert.deepEqual(live.supersedes, [])
+  assert.match(live.needsReview ?? '', /pkg/)
 })
 
 test('程序性记忆一律先候选：验证过才启用', () => {
@@ -259,6 +281,25 @@ test('置信度：由证据类型算，不信模型自报', () => {
   // 矛盾惩罚（-0.15）比重复加成（+0.03）重得多
   assert.equal(confidenceOf([ev('user_explicit', 's1'), ev('user_explicit', 's2')], 1), 0.83)
   assert.equal(confidenceOf([ev('user_explicit', 's1')], 9), 0)
+})
+
+test('墓碑：原文相似也拦 —— 换个 key 或改一个字都不能让删掉的记忆复活', () => {
+  const text = '以后这个仓库统一用 pnpm，不要用 npm'
+  const tomb = makeTombstone('package-manager', textHashOf(text), 'user', Date.now(), text)
+  const ctx = ctxOf({ tombstones: [tomb] })
+  // 同 key 命中
+  assert.ok(tombstoneBlocked(ctx, 'package-manager', '无关内容'))
+  // 换 key + 末尾加一个字：哈希不同，只剩原文相似度这一道
+  assert.ok(tombstoneBlocked(ctx, 'pkg', '以后这个仓库统一用 pnpm，不要用 npm 了'))
+  // 无关内容不拦
+  assert.equal(tombstoneBlocked(ctx, 'deploy', '发布前先跑 lint'), undefined)
+})
+
+test('快照键含用户动作版本号：确认 / 停用后本会话立刻重算，学习不触发重发', () => {
+  const base = { sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
+  assert.notEqual(autoSnapshotKey({ ...base, revision: 1 }), autoSnapshotKey({ ...base, revision: 0 }))
+  // 旧调用方没传 revision 时与 0 同键：升级本身不该让所有会话重发一次整段。
+  assert.equal(autoSnapshotKey(base), autoSnapshotKey({ ...base, revision: 0 }))
 })
 
 test('墓碑：删过的不能被自动路径复活', () => {
@@ -328,11 +369,14 @@ test('自动段：会话层只露自己的条目（结构性隔离的第二道�
   assert.doesNotMatch(r.text, /s-2/)
 })
 
-test('自动段：L1 门槛挡住弱条目（新学的不靠「新」混进来）', () => {
+test('自动段：确认过的不再按信心二次筛选；候选一条都不注入', () => {
+  // 能进入注入集合的条目已经过记忆页确认，confidence 只参与排序 —— 再拿它筛一次
+  // 就是「确认了却不注入」那类静默失效。
   const weak = renderAutoBlock({ entries: [entryOf({ id: 'a', confidence: 0.5 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
-  assert.equal(weak.text, '')
-  const strong = renderAutoBlock({ entries: [entryOf({ id: 'a', confidence: 0.9 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
-  assert.match(strong.text, /a/)
+  assert.match(weak.text, /a/)
+  // 候选没被确认，哪怕信心很高也不注入。
+  const pending = renderAutoBlock({ entries: [entryOf({ id: 'b', status: 'candidate', confidence: 0.95 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  assert.equal(pending.text, '')
 })
 
 test('自动段：待裁决的、关掉的一律不注入', () => {
@@ -345,7 +389,7 @@ test('自动段：待裁决的、关掉的一律不注入', () => {
   assert.equal(renderAutoBlock({ entries: [{ ...base, enabled: false }], state: emptyState(), scope: {}, userSegmentTokens: 0 }).text, '')
 })
 
-test('自动段：core / pinned 不受 L1 门槛限制（L0 常驻）', () => {
+test('自动段：core / pinned 常驻（低信心也照常注入）', () => {
   const core = entryOf({ id: 'core-x', status: 'core', confidence: 0.5 })
   const r = renderAutoBlock({ entries: [core], state: emptyState(), scope: {}, userSegmentTokens: 0 })
   assert.match(r.text, /core-x/)
@@ -391,7 +435,18 @@ test('自动段：总条数不超过硬顶', () => {
 })
 
 test('自动段：没有候选时不发空块（不占上下文）', () => {
-  assert.equal(renderAutoBlock({ entries: [], state: emptyState(), scope: {}, userSegmentTokens: 0 }).text, '')
+  const r = renderAutoBlock({ entries: [], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  assert.equal(r.text, '')
+  assert.deepEqual(r.pickedIds, [])
+})
+
+test('自动段：pickedIds 只含真正进入快照的条目（注入计数靠它，别把候选算进去）', () => {
+  const entries = [
+    entryOf({ id: 'a', oneLine: 'a' }),
+    entryOf({ id: 'b', status: 'candidate', oneLine: 'b' }),
+  ]
+  const r = renderAutoBlock({ entries, state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  assert.deepEqual(r.pickedIds, ['a'])
 })
 
 // ── 文本工具 ───────────────────────────────────────────────────────────────
