@@ -58,7 +58,11 @@ test('差集正文：三类各有标题、按场景分组、删除只留第一�
     updated: [{ key: 'b', text: '- **B** — changed', group: 'Scene: Work' }],
     removed: [{ key: 'c', text: '- **C** — old body\n\nsecond line', group: 'Scene: Home' }],
   })
-  assert.match(text, /only the entries below changed/)
+  assert.match(text, /Only the entries below differ from the earlier block/)
+  assert.match(text, /Added entries are new/)
+  assert.match(text, /updated entries replace their own earlier version/)
+  assert.match(text, /removed entries no longer apply/)
+  assert.match(text, /Every other entry is unchanged/)
   assert.match(text, /## Added\n\n### Scene: Work\n\n- \*\*A\*\* — new/)
   assert.match(text, /### Learned notes\n\n- \*\*Note\*\* — learned/)
   assert.match(text, /## Updated\n\n### Scene: Work\n\n- \*\*B\*\* — changed/)
@@ -66,6 +70,30 @@ test('差集正文：三类各有标题、按场景分组、删除只留第一�
   assert.ok(!/## Removed[\s\S]*second line/.test(text), '删除项不重贴旧正文')
   // 空差集不产生正文（调用方据此回全量）。
   assert.equal(renderIncrementalDelta({ added: [], updated: [], removed: [] }), '')
+})
+
+test('差集首句按变化组成说清语义：只有新增时明确「未替代旧条目」', () => {
+  const only = (diff) => renderIncrementalDelta({ added: [], updated: [], removed: [], ...diff })
+
+  const added = only({ added: [{ key: 'a', text: '- **A** — new' }] })
+  assert.match(added, /^New entries were added below\./)
+  assert.match(added, /They are additions — no earlier entry was replaced/)
+  assert.match(added, /every other entry is unchanged/)
+
+  const updated = only({ updated: [{ key: 'b', text: '- **B** — changed' }] })
+  assert.match(updated, /^The entries below were updated\./)
+  assert.match(updated, /Each replaces its own earlier version/)
+
+  const removed = only({ removed: [{ key: 'c', text: '- **C** — old' }] })
+  assert.match(removed, /^The entries below were removed\./)
+  assert.match(removed, /They are no longer in effect/)
+
+  const mixed = only({
+    added: [{ key: 'a', text: '- **A** — new' }],
+    updated: [{ key: 'b', text: '- **B** — changed' }],
+  })
+  assert.match(mixed, /^Only the entries below differ from the earlier block\./)
+  assert.match(mixed, /Added entries are new/)
 })
 
 test('规划：首次 / 账本不可见 / 环境变 / 连续差集过多 → 全量', () => {

@@ -79,10 +79,34 @@ function renderGroup(entries: readonly IncrementalEntry[], removed: boolean): st
 }
 
 /**
+ * 差集首句：按这次变化由哪几类组成，说清每一类该怎么读。
+ *
+ * 只有新增时单独写「新增、未替代任何旧条目」—— 这是最常见的情形，也是 `## Added` 下的
+ * 分组标题最容易被读成「这个场景的新整份」的地方。混合变化用一句覆盖三类；「未列出的
+ * 条目不变」三类都成立，始终留在句尾。
+ */
+function leadOf(diff: IncrementalDiff): string {
+  const kinds = (diff.added.length > 0 ? 1 : 0)
+    + (diff.updated.length > 0 ? 1 : 0)
+    + (diff.removed.length > 0 ? 1 : 0)
+  if (kinds === 1 && diff.added.length > 0) {
+    return 'New entries were added below. They are additions — no earlier entry was replaced, and every other entry is unchanged.'
+  }
+  if (kinds === 1 && diff.updated.length > 0) {
+    return 'The entries below were updated. Each replaces its own earlier version; every other entry is unchanged.'
+  }
+  if (kinds === 1 && diff.removed.length > 0) {
+    return 'The entries below were removed. They are no longer in effect; every other entry is unchanged.'
+  }
+  return 'Only the entries below differ from the earlier block. Added entries are new; updated entries replace their own earlier version; removed entries no longer apply. Every other entry is unchanged.'
+}
+
+/**
  * 把差集写成一条注入正文（不含框架标题）。
  *
  * 首句必须说清"这只是变化，不是新的全量"：模型手里还有上一块，差集本身不包含未变化的
- * 条目；不说清的话，它会把没列出的条目当成被关掉了。
+ * 条目；不说清的话，它会把没列出的条目当成被关掉了。新增与更新还要分清「追加」与
+ * 「同一替换」—— 两者在 `## Added` / `## Updated` 标题下长得一样。
  */
 export function renderIncrementalDelta(diff: IncrementalDiff): string {
   const sections: string[] = []
@@ -90,7 +114,7 @@ export function renderIncrementalDelta(diff: IncrementalDiff): string {
   if (diff.updated.length > 0) sections.push('## Updated\n\n' + renderGroup(diff.updated, false))
   if (diff.removed.length > 0) sections.push('## Removed\n\n' + renderGroup(diff.removed, true))
   if (sections.length === 0) return ''
-  return 'Changes since the earlier block — only the entries below changed; every other entry from that block is unchanged.\n\n' + sections.join('\n\n')
+  return leadOf(diff) + '\n\n' + sections.join('\n\n')
 }
 
 /** 通道里记的那份增量账本（只读视图，便于纯函数规划）。 */

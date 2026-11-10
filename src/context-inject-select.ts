@@ -85,6 +85,13 @@ export interface InjectSection {
    * 框架层据此不套 `how` / 边界句 —— 那两句是整份目录的说明，配在一行差异上是假话。
    */
   delta?: boolean
+  /**
+   * 差异行是**增量差集**（记忆 / 工作区笔记的条目变化），而不是目录的兜底差异行。
+   *
+   * 框架层据此把标题标成 `<原标题> (changes)`：差集只列变化，不是新整份；标题不说，
+   * 模型容易把 `## Added` 下的分组读成「这个场景的新全量」。目录兜底差异行不置这一位。
+   */
+  incrementalDelta?: boolean
   /** 逐条快照（只有声明了 `incremental` 的域才有）；通道据此决定发差集还是全量。 */
   incremental?: IncrementalSnapshot
 }

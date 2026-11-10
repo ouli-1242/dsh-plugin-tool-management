@@ -1622,6 +1622,24 @@ test('差异行通道：官方在送整份时只补本会话差异，无差异�
   assert.equal(rendered.text.includes('Only enabled skills are listed'), false, '差异行不套边界句')
 })
 
+test('记忆增量差集的标题标出 changes；目录兜底差异行保持原标题', () => {
+  const memory = renderDomainText(
+    { key: 'memoryGlobal', name: 'x', label: '全局记忆', form: 'snapshot', text: 'DELTA', delta: true, incrementalDelta: true },
+    () => false,
+    true,
+  )
+  assert.ok(memory.text.includes('# Current memories (changes)'))
+  assert.equal(memory.text.includes('# Current memories\n'), false, '差集不再用整份块的标题')
+
+  const skills = renderDomainText(
+    { key: 'skills', name: 'x', label: '技能目录', form: 'catalog', text: 'DELTA', delta: true },
+    () => false,
+    false,
+  )
+  assert.ok(skills.text.includes('# Current skills'))
+  assert.equal(skills.text.includes('(changes)'), false, '目录兜底差异行不是增量差集')
+})
+
 // ── 技能目录整份接管（0.21.2 第二轮）─────────────────────────────────────────
 //
 // 用户 2026-10-21 真机发现：A 会话启动技能（租约运行中）时，B 会话的官方 available_skills

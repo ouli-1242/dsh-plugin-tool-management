@@ -727,7 +727,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
         if (sendDelta) {
           // 差集正文进 content 与 `source.sections`；`source.body` 仍是全量（宿主去重与
           // 下一次差集都靠它），框架指纹也沿用全量那一份。
-          const deltaRendered = renderDomainText({ ...section, text: plan.text, delta: true }, toolHidden, replacing)
+          const deltaRendered = renderDomainText({ ...section, text: plan.text, delta: true, incrementalDelta: true }, toolHidden, replacing)
           text = deltaRendered.text
           displayText = plan.text
           isDelta = true

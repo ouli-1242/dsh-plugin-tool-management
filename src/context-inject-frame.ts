@@ -495,7 +495,12 @@ export function renderDomainText(
   // 清单推到消息末尾）。
   // 没有 cue 那一行（见 `DomainFrame` 的注释）。
   const info: FrameRenderInfo = { toolHidden, text: section.text, replacing }
-  const lines = [FRAME_OPEN, '', `# ${frame.title}`]
+  // 增量差集的标题标出 `(changes)`：它只列变化，不是新整份。目录兜底差异行（`delta` 但没有
+  // `incrementalDelta`）保持原标题 —— 那一行补的是本会话与官方整份的差异，标题仍指整份目录。
+  const title = section.delta === true && section.incrementalDelta === true
+    ? `${frame.title} (changes)`
+    : frame.title
+  const lines = [FRAME_OPEN, '', `# ${title}`]
   // 作用域行紧贴标题：它是"此刻的处境"，`how` 才是动作句，顺序不能反。
   if (scopeLine !== undefined) lines.push(scopeLine)
   // 差异行：官方那份整段还在，这里只补一句"本对话另有启停"。
