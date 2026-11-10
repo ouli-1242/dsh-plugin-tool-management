@@ -32,36 +32,127 @@ export function workspaceHashOf(scopeKey: string): string {
   return createHash('sha256').update(String(scopeKey)).digest('hex').slice(0, WORKSPACE_HASH_LEN)
 }
 
-/** 学到的笔记用什么口吻写（用户 2026-11-10：默认简洁高效，不要表情和语气词）。 */
-export type NoteStyle = 'efficient' | 'friendly' | 'minimal' | 'custom'
+/** 内置笔记风格。`default` 是均衡档：1–2 句，结论 + 关键理由。 */
+export type BuiltinNoteStyle = 'default' | 'detailed' | 'minimal'
+/** 自定义风格的引用前缀；后面接 `CustomNoteStyle.id`。 */
+export const CUSTOM_NOTE_STYLE_PREFIX = 'custom:'
+/** 自定义风格：名称给用户认，`guide` 给模型看。 */
+export interface CustomNoteStyle {
+  id: string
+  name: string
+  guide: string
+}
 
-/** 每种风格给模型的一句话指引（注入进自动段与复习器提示）。custom 用用户自己的话。 */
-export const NOTE_STYLE_GUIDE: Record<Exclude<NoteStyle, 'custom'>, string> = {
-  efficient: 'Write terse and factual: no emoji, no tone words, no filler; one imperative sentence.',
-  friendly: 'Write plain and warm but still short: no emoji, no exclamation marks.',
+/** 用户最多保存几档自定义风格。 */
+export const MAX_CUSTOM_NOTE_STYLES = 3
+/** 自定义名称上限（字符数，不是字节）：一行放得下，也不至于和内置档混在一起。 */
+export const MAX_CUSTOM_NOTE_STYLE_NAME = 4
+/** 自定义指引上限：与旧 `noteStyleText` 同一长度，足够写清口吻。 */
+export const MAX_CUSTOM_NOTE_STYLE_GUIDE = 200
+
+/** 选中的风格：内置档，或 `custom:<id>`。 */
+export type NoteStyle = BuiltinNoteStyle | `${typeof CUSTOM_NOTE_STYLE_PREFIX}${string}`
+
+/**
+ * 每种内置风格给模型的一句话指引（注入进自动段与复习器提示）。
+ *
+ * 长度也归这里管：复习器的基础提示不再硬写「一句」，否则详细档与它直接打架。
+ */
+export const NOTE_STYLE_GUIDE: Record<BuiltinNoteStyle, string> = {
+  default: 'Write one or two clear sentences: the conclusion first, then the key reason only when it changes how the note is applied. No emoji, no tone words, no filler.',
+  detailed: 'Write a complete note in two or three short sentences: state the conclusion first, then the reason and any conditions or exceptions. No emoji, no tone words, no filler.',
   minimal: 'Write in as few words as possible.',
 }
 
-/** 把任意输入洗成合法风格与自定义文本（custom 文本截到 200 字符）。 */
-export function normalizeNoteStyle(raw: any): { style: NoteStyle; custom: string } {
-  const preset = (s: unknown): NoteStyle | null =>
-    (typeof s === 'string' && (s === 'efficient' || s === 'friendly' || s === 'minimal' || s === 'custom')) ? s as NoteStyle : null
-  // 两种输入形态：裸字符串（老接口 / 界面快捷写法）或 { style, custom } 对象。
-  const style = raw !== null && typeof raw === 'object' ? preset(raw.style) : preset(raw)
-  const custom = raw !== null && typeof raw === 'object' && typeof raw.custom === 'string'
-    ? raw.custom.trim().slice(0, 200)
-    : ''
-  return {
-    // custom 没给文本 = 没法注入指引，退回 efficient，绝不注入一句空话。
-    style: (style === null || (style === 'custom' && custom === '')) ? 'efficient' : style,
-    custom: style === 'custom' ? custom : '',
-  }
+/** 旧值 → 新值：`efficient` 改名为 `default`，`friendly` 并入 `detailed`。 */
+function styleIdOf(raw: unknown): NoteStyle | undefined {
+  const s = typeof raw === 'string' ? raw.trim() : ''
+  if (s === 'efficient') return 'default'
+  if (s === 'friendly') return 'detailed'
+  if (s === 'default' || s === 'detailed' || s === 'minimal') return s
+  if (s.startsWith(CUSTOM_NOTE_STYLE_PREFIX) && s.length > CUSTOM_NOTE_STYLE_PREFIX.length) return s as NoteStyle
+  return undefined
 }
 
-/** 生效的风格指引（一句话，注入用）。 */
-export function noteStyleGuideOf(style: NoteStyle, custom: string): string {
-  if (style === 'custom') return custom.trim()
-  return NOTE_STYLE_GUIDE[style]
+/**
+ * 自定义风格列表归一化：最多 3 个，名称截到 4 字，指引截到 200 字符。
+ *
+ * id 只保留安全字符；缺失 / 重复时补一个 `cN`。id 是 `noteStyle` 的引用键，
+ * 不能为空，也不能重复 —— 否则选中一个会命中另一个。
+ */
+function normalizeCustomStyles(raw: unknown): CustomNoteStyle[] {
+  if (!Array.isArray(raw)) return []
+  const out: CustomNoteStyle[] = []
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const name = Array.from(String((item as any).name ?? '').trim().replaceAll(/\s+/g, ' ')).slice(0, MAX_CUSTOM_NOTE_STYLE_NAME).join('')
+    const guide = String((item as any).guide ?? '').trim().replaceAll(/\s+/g, ' ').slice(0, MAX_CUSTOM_NOTE_STYLE_GUIDE)
+    if (name === '' || guide === '') continue
+    let id = String((item as any).id ?? '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32)
+    if (id === '' || seen.has(id)) {
+      let n = out.length + 1
+      while (seen.has('c' + n)) n++
+      id = 'c' + n
+    }
+    seen.add(id)
+    out.push({ id, name, guide })
+    if (out.length >= MAX_CUSTOM_NOTE_STYLES) break
+  }
+  return out
+}
+
+/** 选中的风格是否还指向一个存在的自定义档。 */
+function styleAvailable(style: NoteStyle, customStyles: readonly CustomNoteStyle[]): boolean {
+  if (style === 'default' || style === 'detailed' || style === 'minimal') return true
+  const id = style.slice(CUSTOM_NOTE_STYLE_PREFIX.length)
+  return customStyles.some((s) => s.id === id)
+}
+
+/**
+ * 把任意输入洗成合法风格与自定义风格列表。
+ *
+ * 兼容两种旧设置：`efficient` / `friendly` 改名；`noteStyle=custom` + `noteStyleText`
+ * 的单条自定义文本迁移成一条名为「我的风格」的自定义档。迁移只发生在读设置时，
+ * `writeSettings` 落盘的是新形状，所以旧字段不会一直存在。
+ */
+export function normalizeNoteStyle(raw: any): { style: NoteStyle; customStyles: CustomNoteStyle[] } {
+  // 兼容裸字符串（老接口 / 测试直接传 `'detailed'`）。
+  const r = raw !== null && typeof raw === 'object' ? raw : { style: raw }
+  const legacyText = typeof r.custom === 'string'
+    ? r.custom.trim().replaceAll(/\s+/g, ' ').slice(0, MAX_CUSTOM_NOTE_STYLE_GUIDE)
+    : ''
+  let customStyles = normalizeCustomStyles(r.customStyles)
+  if (r.style === 'custom' && legacyText !== '' && customStyles.length === 0) {
+    customStyles = [{ id: 'legacy', name: '我的风格', guide: legacyText }]
+  }
+  let style: NoteStyle = r.style === 'custom' && legacyText !== ''
+    ? `custom:legacy`
+    : (styleIdOf(r.style) ?? 'default')
+  // 选中的自定义档被删掉 / 引用了不存在的 id：退回默认档，绝不注入一句空指引。
+  if (!styleAvailable(style, customStyles)) style = 'default'
+  return { style, customStyles }
+}
+
+/** 生效的风格指引（一句话，注入用）。找不到自定义档时退回默认档。 */
+export function noteStyleGuideOf(style: NoteStyle, customStyles: readonly CustomNoteStyle[] = []): string {
+  if (style.startsWith(CUSTOM_NOTE_STYLE_PREFIX)) {
+    const id = style.slice(CUSTOM_NOTE_STYLE_PREFIX.length)
+    return customStyles.find((s) => s.id === id)?.guide ?? NOTE_STYLE_GUIDE.default
+  }
+  return NOTE_STYLE_GUIDE[style as BuiltinNoteStyle] ?? NOTE_STYLE_GUIDE.default
+}
+
+/**
+ * 注入到自主记忆段的风格行；默认档返回空串。
+ *
+ * 默认档不注入：`memory_note` 的工具描述已经约束了均衡写法，再发一行只是常驻 token。
+ * 非默认档（详细 / 极简 / 自定义）才需要把实际风格告诉模型。
+ */
+export function noteStyleLineOf(style: NoteStyle, customStyles: readonly CustomNoteStyle[] = []): string {
+  if (style === 'default') return ''
+  const guide = noteStyleGuideOf(style, customStyles)
+  return guide === '' ? '' : `When saving a new learned note, write it in this style: ${guide}`
 }
 
 /** 全局默认值与可覆盖字段的公共形状。 */
@@ -99,15 +190,14 @@ export interface EvolutionOverrides {
   maxLearnsPerWindow?: number
   /** 复习用哪个模型；空串 = 会话当前模型。 */
   model?: string
-  /** 笔记风格：efficient（默认）/ friendly / minimal / custom。 */
+  /** 笔记风格：default（默认）/ detailed / minimal / custom:<id>。 */
   noteStyle?: NoteStyle
-  /** noteStyle=custom 时的自定义指引（≤200 字符）。 */
-  noteStyleText?: string
 }
 
-/** 全局设置：所有字段都有值。 */
+/** 全局设置：所有字段都有值。自定义风格的**定义**只存全局，覆盖层只能选不能改。 */
 export interface EvolutionSettings extends Required<Omit<EvolutionOverrides, 'inject'>> {
   inject?: boolean
+  customNoteStyles: CustomNoteStyle[]
 }
 
 /**
@@ -123,8 +213,8 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
   learnWindowMinutes: NOTE_RATE_DEFAULTS.minutes,
   maxLearnsPerWindow: NOTE_RATE_DEFAULTS.notes,
   model: '',
-  noteStyle: 'efficient',
-  noteStyleText: '',
+  noteStyle: 'default',
+  customNoteStyles: [],
 }
 
 /** 解析后的生效配置，附带「哪一档说了算」。 */
@@ -170,9 +260,11 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
   const d = DEFAULT_EVOLUTION_SETTINGS
   const inject = typeof r.inject === 'boolean' ? r.inject : undefined
   const legacy = legacyLearnFlags(r)
-  const style = normalizeNoteStyle(r.noteStyle === undefined && r.noteStyleText === undefined
-    ? undefined
-    : { style: r.noteStyle, custom: r.noteStyleText })
+  const style = normalizeNoteStyle({
+    style: r.noteStyle,
+    customStyles: r.customNoteStyles,
+    custom: r.noteStyleText,
+  })
   return {
     learnGlobal: typeof r.learnGlobal === 'boolean' ? r.learnGlobal : (legacy?.global ?? d.learnGlobal),
     learnWorkspace: typeof r.learnWorkspace === 'boolean' ? r.learnWorkspace : (legacy?.workspace ?? d.learnWorkspace),
@@ -184,7 +276,7 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
     maxLearnsPerWindow: intOf(r.maxLearnsPerWindow, d.maxLearnsPerWindow, NOTE_RATE_NOTES_MIN, NOTE_RATE_NOTES_MAX),
     model: typeof r.model === 'string' ? r.model : d.model,
     noteStyle: style.style,
-    noteStyleText: style.custom,
+    customNoteStyles: style.customStyles,
   }
 }
 
@@ -204,10 +296,10 @@ export function normalizeOverrides(raw: any): EvolutionOverrides {
   if (typeof r.learnWindowMinutes === 'number' && Number.isFinite(r.learnWindowMinutes)) out.learnWindowMinutes = intOf(r.learnWindowMinutes, NOTE_RATE_DEFAULTS.minutes, NOTE_RATE_MINUTES_MIN, NOTE_RATE_MINUTES_MAX)
   if (typeof r.maxLearnsPerWindow === 'number' && Number.isFinite(r.maxLearnsPerWindow)) out.maxLearnsPerWindow = intOf(r.maxLearnsPerWindow, NOTE_RATE_DEFAULTS.notes, NOTE_RATE_NOTES_MIN, NOTE_RATE_NOTES_MAX)
   if (typeof r.model === 'string') out.model = r.model
-  if (r.noteStyle !== undefined || r.noteStyleText !== undefined) {
-    const style = normalizeNoteStyle({ style: r.noteStyle, custom: r.noteStyleText })
-    out.noteStyle = style.style
-    if (style.style === 'custom') out.noteStyleText = style.custom
+  // 覆盖层只选风格，不定义自定义档；`custom:<id>` 是否存在由 resolveEffectiveConfig 校验。
+  if (r.noteStyle !== undefined) {
+    const style = styleIdOf(r.noteStyle)
+    if (style !== undefined) out.noteStyle = style
   }
   return out
 }
@@ -243,6 +335,12 @@ export function resolveEffectiveConfig(
   // 全局也可能显式设了 `inject`（"只记不用"）；只查两层覆盖会把它当成"没设"。
   // 显式 true 只在至少一层开着时才算数：注入不能绕过层的授权。
   const injectRaw = pick('inject') ?? global.inject
+  // 自定义档的定义永远来自全局；覆盖层只能选，不能改。选中的 id 被删掉时退回默认档。
+  const customStyles = global.customNoteStyles ?? []
+  const pickedStyle = pick('noteStyle')
+  const noteStyle = pickedStyle !== undefined && styleAvailable(pickedStyle, customStyles)
+    ? pickedStyle
+    : (styleAvailable(global.noteStyle, customStyles) ? global.noteStyle : 'default')
   return {
     learnGlobal,
     learnWorkspace,
@@ -254,8 +352,8 @@ export function resolveEffectiveConfig(
     learnWindowMinutes: pick('learnWindowMinutes') ?? global.learnWindowMinutes,
     maxLearnsPerWindow: pick('maxLearnsPerWindow') ?? global.maxLearnsPerWindow,
     model: pick('model') ?? global.model,
-    noteStyle: pick('noteStyle') ?? global.noteStyle,
-    noteStyleText: pick('noteStyleText') ?? global.noteStyleText,
+    noteStyle,
+    customNoteStyles: customStyles,
     source: hasOverrides(session) ? 'session' : hasOverrides(workspace) ? 'workspace' : 'global',
   }
 }

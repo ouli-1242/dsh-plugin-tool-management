@@ -57,7 +57,7 @@ import {
 import { createToolTableSwitch } from './tool-table-switch.js'
 import { createSettingsSidecars } from './settings-sidecars.js'
 // 自主记忆的三级开关（全局 / 工作区 / 会话）：策略读写，不碰记忆正文。
-import { createEvolutionConfig, workspaceHashOf } from './evolution/config.js'
+import { createEvolutionConfig, noteStyleLineOf, workspaceHashOf } from './evolution/config.js'
 // 注入热路径的同步视图（`agent/pre-step` 的 text() 没有 await 的位置）。
 import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoIncrementalModeKey, autoSnapshotKey, type AutoSnapshot } from './evolution/runtime.js'
 // 冷路径：轮内摘要 → 回合封存 episode → outbox → 异步复习器（不挡主链）。
@@ -2420,9 +2420,11 @@ export default {
       picked: Array<{ id: string; line: string }>
       /** 渲染环境签名（复用会话快照键）；变了就让增量回全量。 */
       mode: string
+      /** 当前笔记风格的注入行；默认档为空。全局合并块用它，工作区块已拼进 `text`。 */
+      styleLine: string
     }
     const emptyAutoProjection = (): AutoDomainProjection =>
-      ({ text: '', body: '', truncated: false, picked: [], mode: '' })
+      ({ text: '', body: '', truncated: false, picked: [], mode: '', styleLine: '' })
 
     function autoDomainProjection(layer: AutoLayer, agent: unknown): AutoDomainProjection {
       try {
@@ -2449,6 +2451,13 @@ export default {
         let userSegmentTokens = 0
         try { userSegmentTokens = estimateTextTokens(memoryDomainText(agent)) } catch { userSegmentTokens = 0 }
         const budgetMode = budgetModeOf(userSegmentTokens)
+        // 非默认风格要告诉模型。两层都有内容时只由全局块携带，避免同一句注入两次；
+        // 全局块为空（没有用户记忆、也没有全局笔记）时才由工作区块兜底。
+        const styleLine = (
+          layer === 'global'
+          || !cfg.learnGlobal
+          || (userSegmentTokens === 0 && !Object.values(view.catalog.entries).some((e) => e.layer === 'global'))
+        ) ? noteStyleLineOf(cfg.noteStyle, cfg.customNoteStyles) : ''
 
         // 快照键含 revision（用户动作后重建本会话的段）；增量模式键**不含** —— 学习 / 确认 /
         // 删除本来就会改变条目集合，差集能表达成 `+ / -`；把 revision 并进模式键只会让每次
@@ -2461,6 +2470,9 @@ export default {
           enabled: cfg.enabled,
           inject: cfg.inject,
           budgetMode,
+          // 风格变了要重渲染：工作区块的正文里带着风格行，不能等下一次无关的 revision。
+          noteStyle: cfg.noteStyle,
+          customNoteStyles: cfg.customNoteStyles.map((s) => `${s.id}:${s.name}:${s.guide}`).join('\u0000'),
         }
         const key = autoSnapshotKey({ ...modeParts, revision: view.state.watermarks.autoRevision ?? 0 })
         const mode = autoIncrementalModeKey(modeParts)
@@ -2468,7 +2480,7 @@ export default {
         if (prev && prev.key === key) {
           // `??` 兜住热重载前写下的旧快照（那个形状没有这三个字段）：宁可这一轮少一块
           // 自动正文，也不能让 `undefined` 流进合并块。
-          return { text: prev.text, body: prev.body ?? '', truncated: prev.truncated === true, picked: prev.picked ?? [], mode }
+          return { text: prev.text, body: prev.body ?? '', truncated: prev.truncated === true, picked: prev.picked ?? [], mode, styleLine }
         }
 
         const result = renderAutoLayer(layer, {
@@ -2480,6 +2492,7 @@ export default {
             enabledScenes,
           },
           userSegmentTokens,
+          noteStyleLine: styleLine,
         })
         const snap: AutoSnapshot = {
           key,
@@ -2499,7 +2512,7 @@ export default {
         if (prev === undefined || prev.text !== result.text) {
           void autoLearner.noteInjected(result.pickedIds).catch(() => undefined)
         }
-        return { text: result.text, body: result.body, truncated: result.truncated, picked: result.picked, mode }
+        return { text: result.text, body: result.body, truncated: result.truncated, picked: result.picked, mode, styleLine }
       } catch {
         return emptyAutoProjection()
       }
@@ -2528,10 +2541,12 @@ export default {
       const tail = user.tail.trim()
       const note = user.truncated || auto.truncated ? COMBINED_MEMORY_NOTE_PARTIAL : COMBINED_MEMORY_NOTE
       // 尾注（`## Not injected`）放在最后当附录：夹在用户记忆与全局笔记之间会把后者
-      // 读成"未注入清单"的一部分。
+      // 读成"未注入清单"的一部分。风格行跟在尾注之后 —— 它约束的是"以后怎么写"，
+      // 不是对当前条目的解释。没有任何记忆内容时整块仍然为空，不为了风格行单独注入。
+      const style = auto.styleLine.trim()
       const text = parts.length === 0 && tail === ''
         ? ''
-        : [...parts, note, ...(tail === '' ? [] : [tail])].join('\n\n') + '\n'
+        : [...parts, note, ...(tail === '' ? [] : [tail]), ...(style === '' ? [] : [style])].join('\n\n') + '\n'
       const entries: IncrementalSnapshot['entries'] = [
         ...user.blocks.map((block) => ({ key: 'user:' + block.id, text: block.block, group: block.group })),
         ...auto.picked.map((line) => ({ key: 'auto:' + line.id, text: line.line })),

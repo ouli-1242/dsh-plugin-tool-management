@@ -204,11 +204,16 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (typeof patch.maxLearnsPerWindow === 'number') next.maxLearnsPerWindow = patch.maxLearnsPerWindow
         else if (patch.maxLearnsPerWindow === null) next.maxLearnsPerWindow = DEFAULT_EVOLUTION_SETTINGS.maxLearnsPerWindow
         if (typeof patch.model === 'string') next.model = patch.model
-        // 风格：任意输入都过一遍 normalize，custom 没带文本自动退回 efficient。
-        if (patch.noteStyle !== undefined || patch.noteStyleText !== undefined) {
-          const style = normalizeNoteStyle({ style: patch.noteStyle, custom: patch.noteStyleText })
+        // 风格：预设、自定义档列表、选中的 id 可能分两次到，缺哪项就沿用当前值。
+        // 选中的自定义档被删掉时，normalize 会退回默认档。
+        if (patch.noteStyle !== undefined || patch.customNoteStyles !== undefined || patch.noteStyleText !== undefined) {
+          const style = normalizeNoteStyle({
+            style: patch.noteStyle !== undefined ? patch.noteStyle : next.noteStyle,
+            customStyles: patch.customNoteStyles !== undefined ? patch.customNoteStyles : next.customNoteStyles,
+            custom: patch.noteStyleText,
+          })
           next.noteStyle = style.style
-          next.noteStyleText = style.custom
+          next.customNoteStyles = style.customStyles
         }
         const written = await config.writeSettings(next)
         if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }

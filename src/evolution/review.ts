@@ -20,7 +20,7 @@ import { writeFileAtomically } from '../memories/index-io.js'
 import type { Episode } from './digest.js'
 import type { OutboxItem, ReviewLearnedItem } from './episodes.js'
 import { MAX_AUTO_TITLE, type Learner } from './write.js'
-import { noteStyleGuideOf, type EffectiveEvolutionConfig } from './config.js'
+import { normalizeNoteStyle, noteStyleGuideOf, type CustomNoteStyle, type EffectiveEvolutionConfig } from './config.js'
 
 /** 一次复习最多落几条。多了就是在把摘要改写成记忆库，那不是复习。 */
 export const MAX_ITEMS_PER_REVIEW = 3
@@ -131,19 +131,27 @@ export const REVIEW_SYSTEM_PROMPT = [
   'Do NOT record: one-off instructions ("this time", "for now"), anything derivable from package.json / config / git, or your own reasoning.',
   'For every item, `quote` must be an exact substring of what the user said in this turn. Do not paraphrase it.',
   '`layer`: "global" only when it applies to every project or to the user personally; otherwise "workspace". Always pass it.',
-  'Write every `text` in the user\'s language, one terse sentence.',
+  'Write every `text` in the user\'s language.',
   'Give every item a short `title` (2-8 words) in the user\'s language; it becomes the row name.',
   'At most 3 items. When in doubt, return fewer — a wrong memory is injected into every later conversation.',
-  'Output strict JSON: {"memories":[{"title":"Reply style","text":"one sentence","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
+  'Output strict JSON: {"memories":[{"title":"Reply style","text":"the note","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
 ].join('\n')
 
 /** 系统提示 + 按需追加的风格行（custom 为空串时不追加）。 */
-export function reviewSystemPrompt(cfg: { noteStyle?: string; noteStyleText?: string }): string {
-  const guide = noteStyleGuideOf(
-    (cfg.noteStyle === 'friendly' || cfg.noteStyle === 'minimal' || cfg.noteStyle === 'custom') ? cfg.noteStyle : 'efficient',
-    cfg.noteStyleText ?? '',
-  )
-  return guide === '' ? REVIEW_SYSTEM_PROMPT : REVIEW_SYSTEM_PROMPT + '\nWrite every `text` field to the user\'s configured note style: ' + guide
+export function reviewSystemPrompt(cfg: {
+  noteStyle?: string
+  noteStyleText?: string
+  customNoteStyles?: readonly CustomNoteStyle[]
+}): string {
+  // 句长由风格指引决定：基础提示只保留语言要求，否则「详细」的 2–3 句会与
+  // 基础提示里的「one terse sentence」互相矛盾。
+  const style = normalizeNoteStyle({
+    style: cfg.noteStyle,
+    customStyles: cfg.customNoteStyles,
+    custom: cfg.noteStyleText,
+  })
+  const guide = noteStyleGuideOf(style.style, style.customStyles)
+  return guide === '' ? REVIEW_SYSTEM_PROMPT : REVIEW_SYSTEM_PROMPT + '\nWrite every `text` field in this style: ' + guide
 }
 
 /** 每会话的复习次数（花过的钱不退款，失败也计数）。 */

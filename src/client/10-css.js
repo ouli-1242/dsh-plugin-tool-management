@@ -186,11 +186,14 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-divider-line{flex:1;height:1px;background:var(--dsw-alias-border-l1)}
 .dsm-evo-divider-line-start{flex:none;width:16px}
 .dsm-evo-detail-key{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
-/* 笔记风格：标题在上，分段控件与自定义输入在下。 */
+/* 笔记风格：标题在上，分段控件与自定义表单在下。自定义档多了要换行。 */
 .dsm-evo-style{display:flex;flex-direction:column;gap:6px}
-.dsm-evo-style .dsm-form-seg{align-self:flex-start}
-.dsm-evo-style-custom{display:flex;align-items:center;gap:6px}
-.dsm-evo-style-custom .dsm-control{flex:1;min-width:0}
+.dsm-evo-style .dsm-form-seg{align-self:flex-start;flex-wrap:wrap}
+.dsm-evo-style-add{border-style:dashed}
+.dsm-evo-style-custom{display:flex;flex-direction:column;gap:6px}
+.dsm-evo-style-custom .dsm-control{width:100%}
+.dsm-evo-style-actions{display:flex;align-items:center;gap:6px}
+.dsm-evo-style-error{margin:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:17px}
 /* 学习记录：统计 + 整理 + 后台复习共用一张卡；不再用虚线框和左右内缩。 */
 .dsm-evo-records{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}
 .dsm-evo-records-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}

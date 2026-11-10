@@ -47,6 +47,11 @@ export interface AutoRenderInput {
   userSegmentTokens: number
   /** 上下文窗口；拿不到就传 undefined。 */
   contextWindow?: number
+  /**
+   * 当前笔记风格的注入行（`noteStyleLineOf` 生成）。空 / 缺省 = 默认风格，不注入 ——
+   * 默认档由工具描述约束，额外一行只是常驻 token。
+   */
+  noteStyleLine?: string
 }
 
 export interface AutoRenderResult {
@@ -147,6 +152,11 @@ function inLayer(entry: CatalogEntry, layer: AutoLayer, scope: AutoRenderScope):
  */
 export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoRenderResult {
   const empty: AutoRenderResult = { text: '', body: '', truncated: false, count: 0, tokens: 0, budget: 0, dropped: 0, byLayer: zeroByLayer(), pickedIds: [], picked: [] }
+  // 风格行只进 `text`（注入正文），不进 `body`（条目集合）：合并块用 body 拼用户记忆，
+  // 风格行由调用方单独拼在收尾句之后。它也算进条目预算，否则会在满配时把正文顶出上限。
+  const styleLine = String(input.noteStyleLine ?? '').trim()
+  const styleCost = styleLine === '' ? 0 : Math.ceil(Buffer.byteLength(styleLine, 'utf8') / 3)
+  const tailOf = (note: string): string => note + (styleLine === '' ? '' : '\n' + styleLine)
   const total = autoBudgetOf(input.contextWindow)
   const { budget, reduced } = competitorBudgetOfLayer(total, input.userSegmentTokens, layer)
   if (budget <= 0) {
@@ -156,11 +166,11 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
     // 去掉「完整集合」，没有这一句，模型会以为自动笔记本来就不存在。这里不报条数 ——
     // 这个分支还没按层过滤，`input.entries.length` 会把别的层 / 已停用的条目也算进去。
     const body = `${TRUNCATION_MARKER} Learned notes are not shown here because the hand-written memories are large; list them with memory_get (kind=note).`
-    const text = body + '\n\n' + AUTO_MEMORY_NOTE_PARTIAL + '\n'
+    const text = body + '\n\n' + tailOf(AUTO_MEMORY_NOTE_PARTIAL) + '\n'
     return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget: 0, dropped }
   }
 
-  const usable = Math.max(0, budget - OVERHEAD_TOKENS)
+  const usable = Math.max(0, budget - OVERHEAD_TOKENS - styleCost)
   const scope = input.scope
 
   // 候选：状态可注入 + 层匹配 + 未挂待裁决。L0（core / playbook / pinned）只影响预算次序。
@@ -215,7 +225,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
 
   if (picked.length === 0) {
     const body = `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_get (kind=note).`
-    const text = body + '\n\n' + AUTO_MEMORY_NOTE_PARTIAL + '\n'
+    const text = body + '\n\n' + tailOf(AUTO_MEMORY_NOTE_PARTIAL) + '\n'
     return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget, dropped: candidates.length }
   }
 
@@ -231,7 +241,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   // 截断时去掉「完整集合」声明，否则段尾那句与上面的省略提示自相矛盾。
   const note = dropped > 0 ? AUTO_MEMORY_NOTE_PARTIAL : AUTO_MEMORY_NOTE
   const body = lines.join('\n')
-  const text = body + '\n\n' + note + '\n'
+  const text = body + '\n\n' + tailOf(note) + '\n'
 
   const byLayer = zeroByLayer()
   byLayer[layer] = picked.length

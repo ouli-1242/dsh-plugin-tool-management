@@ -12,7 +12,7 @@ import { runGates, securityScan, durabilityOf, looksDerivable, similarity, infer
 import { autoIncrementalModeKey, autoSnapshotKey } from '../lib/evolution/runtime.js'
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
 import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
-import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
+import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, noteStyleLineOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
 import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf } from '../lib/memories/render-auto.js'
 
 /**
@@ -427,21 +427,63 @@ test('自动段：不注入风格行；授权语收在条目之后', () => {
   assert.equal(renderAutoLayer('workspace', input).text, r.text)
 })
 
-test('风格设定：非法输入回退 efficient，custom 没文本不生效，生效配置就近覆盖', () => {
-  assert.deepEqual(normalizeNoteStyle(undefined), { style: 'efficient', custom: '' })
-  assert.deepEqual(normalizeNoteStyle('friendly'), { style: 'friendly', custom: '' })
-  assert.deepEqual(normalizeNoteStyle('wat'), { style: 'efficient', custom: '' })
-  assert.deepEqual(normalizeNoteStyle({ style: 'custom', custom: '  只写要点 ' }), { style: 'custom', custom: '只写要点' })
-  // custom 没带文本 = 没法注入指引，退回 efficient，绝不注入一句空话。
-  assert.deepEqual(normalizeNoteStyle({ style: 'custom', custom: '  ' }), { style: 'efficient', custom: '' })
-  // 200 字符上限：洗完不超。
-  assert.equal(normalizeNoteStyle({ style: 'custom', custom: 'x'.repeat(500) }).custom.length, 200)
-  const global = { ...DEFAULT_EVOLUTION_SETTINGS, noteStyle: 'custom', noteStyleText: 'terse' }
+test('风格设定：四档解析、旧值兼容、自定义档上限与就近覆盖', () => {
+  assert.deepEqual(normalizeNoteStyle(undefined), { style: 'default', customStyles: [] })
+  assert.deepEqual(normalizeNoteStyle('detailed'), { style: 'detailed', customStyles: [] })
+  assert.deepEqual(normalizeNoteStyle('efficient'), { style: 'default', customStyles: [] }, '旧默认档改名')
+  assert.deepEqual(normalizeNoteStyle('friendly'), { style: 'detailed', customStyles: [] }, '旧亲切档并入详细')
+  assert.deepEqual(normalizeNoteStyle('wat'), { style: 'default', customStyles: [] })
+  // 旧单条自定义文本迁移成一条具名自定义档。
+  assert.deepEqual(
+    normalizeNoteStyle({ style: 'custom', custom: '  只写要点 ' }),
+    { style: 'custom:legacy', customStyles: [{ id: 'legacy', name: '我的风格', guide: '只写要点' }] },
+  )
+  assert.deepEqual(normalizeNoteStyle({ style: 'custom', custom: '  ' }), { style: 'default', customStyles: [] })
+  assert.equal(normalizeNoteStyle({ style: 'custom', custom: 'x'.repeat(500) }).customStyles[0].guide.length, 200)
+
+  // 自定义档：最多 3 个，名称截到 4 字，选中的 id 必须存在。
+  const many = normalizeNoteStyle({
+    style: 'custom:c1',
+    customStyles: [
+      { id: 'c1', name: '一二三四五', guide: 'a' },
+      { id: 'c2', name: '二', guide: 'b' },
+      { id: 'c3', name: '三', guide: 'c' },
+      { id: 'c4', name: '四', guide: 'd' },
+    ],
+  })
+  assert.equal(many.customStyles.length, 3)
+  assert.equal(many.customStyles[0].name, '一二三四', '名称截到 4 字')
+  assert.equal(many.style, 'custom:c1')
+  assert.equal(normalizeNoteStyle({ style: 'custom:nope', customStyles: [] }).style, 'default', '引用不存在的自定义档退回默认')
+
+  // 自定义档定义只存全局；覆盖层只选不改，选中的 id 不在全局列表时退回全局。
+  const global = {
+    ...DEFAULT_EVOLUTION_SETTINGS,
+    noteStyle: 'custom:c1',
+    customNoteStyles: [{ id: 'c1', name: '简短', guide: '只写要点' }],
+  }
   const resolved = resolveEffectiveConfig(global, { noteStyle: 'minimal' }, undefined)
   assert.equal(resolved.noteStyle, 'minimal')
-  assert.equal(resolved.noteStyleText, 'terse', '风格文本没被下层覆盖时继承全局')
-  assert.equal(noteStyleGuideOf('efficient', ''), NOTE_STYLE_GUIDE.efficient)
-  assert.equal(noteStyleGuideOf('custom', 'terse'), 'terse')
+  assert.deepEqual(resolved.customNoteStyles, global.customNoteStyles, '自定义档定义始终来自全局')
+  assert.equal(resolveEffectiveConfig(global, { noteStyle: 'custom:nope' }, undefined).noteStyle, 'custom:c1', '覆盖层引用不存在的档时退回全局选择')
+  assert.equal(noteStyleGuideOf('default', []), NOTE_STYLE_GUIDE.default)
+  assert.equal(noteStyleGuideOf('custom:c1', global.customNoteStyles), '只写要点')
+  assert.equal(noteStyleLineOf('default', []), '', '默认档不注入风格行')
+  assert.match(noteStyleLineOf('detailed', []), /two or three short sentences/)
+})
+
+test('自动段带上非默认风格行：默认档不注入，body 只放条目', () => {
+  const input = {
+    entries: [entryOf({ id: 'w-a', layer: 'workspace', workspace: 'abcd1234abcd1234', oneLine: '工作区条目' })],
+    state: emptyState(),
+    scope: { workspaceHash: 'abcd1234abcd1234' },
+    userSegmentTokens: 0,
+  }
+  const plain = renderAutoLayer('workspace', input)
+  assert.ok(!plain.text.includes('When saving a new learned note'), '默认档不注入风格行')
+  const detailed = renderAutoLayer('workspace', { ...input, noteStyleLine: noteStyleLineOf('detailed', []) })
+  assert.match(detailed.text, /When saving a new learned note, write it in this style:/)
+  assert.ok(!detailed.body.includes('When saving a new learned note'), 'body 只放条目')
 })
 
 test('自动段：全局层只收全局，工作区块只收本工作区与旧会话层', () => {

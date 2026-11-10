@@ -1309,60 +1309,219 @@
            * 只有「总开关 + 一行数字 + 笔记风格 + 本地整理 + 后台失败重试」。确认弹窗走
            * `modal` 那个槽，与 `evoOpen` 分开存，才能叠在它上面而不把整块关掉。
            */
-          /** 笔记风格的本地编辑态（custom 文本）。预设切换即时保存，custom 要点「保存」。 */
-          var evsStyle = React.useState({ busy: false, text: '', open: false })
+          /**
+           * 笔记风格的本地编辑态。
+           *
+           * 预设与已保存的自定义档点一下就生效；新建 / 编辑自定义档走表单，必须点「保存」
+           * 才写入 —— 空表单不能把当前选择打回默认档。
+           */
+          var evsStyle = React.useState({ busy: false, mode: '', id: '', name: '', guide: '', error: '' })
           var evoStyle = evsStyle[0], setEvoStyle = evsStyle[1]
 
-          function saveNoteStyle(style, custom) {
-            setEvoStyle(function (cur) { return Object.assign({}, cur, { busy: true, text: custom, open: style === 'custom' }) })
-            apiCall('evolution-settings', { set: true, settings: { noteStyle: style, noteStyleText: custom } }).then(function (res) {
+          function evoCustomStyles() {
+            return (evo.settings && evo.settings.customNoteStyles) || []
+          }
+
+          function evoCustomStyle(id) {
+            var hit = evoCustomStyles().filter(function (s) { return s.id === id })
+            return hit.length > 0 ? hit[0] : null
+          }
+
+          function evoStyleCustomId(style) {
+            var s = String(style || '')
+            return s.indexOf('custom:') === 0 ? s.slice('custom:'.length) : ''
+          }
+
+          function evoStyleSet(patch) {
+            setEvoStyle(function (cur) { return Object.assign({}, cur, patch) })
+          }
+
+          /** 选预设 / 已保存的自定义档：即时保存。自定义档同时打开编辑表单。 */
+          function selectNoteStyle(style) {
+            var customId = evoStyleCustomId(style)
+            var hit = customId === '' ? null : evoCustomStyle(customId)
+            evoStyleSet({
+              busy: true, error: '',
+              mode: hit ? 'edit' : '',
+              id: hit ? hit.id : '',
+              name: hit ? hit.name : '',
+              guide: hit ? hit.guide : '',
+            })
+            apiCall('evolution-settings', { set: true, settings: { noteStyle: style } }).then(function (res) {
               if (res && res.ok !== false) {
                 setResult({ ok: true, text: t('evo.style.saved') })
                 refreshEvolution()
-                setEvoStyle(function (cur) { return Object.assign({}, cur, { busy: false }) })
+                evoStyleSet({ busy: false })
               } else {
                 setResult({ ok: false, text: translateError(t, res) })
-                setEvoStyle(function (cur) { return Object.assign({}, cur, { busy: false }) })
+                evoStyleSet({ busy: false })
               }
             }).catch(function (e) {
               setResult({ ok: false, text: errMsg(e) })
-              setEvoStyle(function (cur) { return Object.assign({}, cur, { busy: false }) })
+              evoStyleSet({ busy: false })
             })
           }
 
-          /** 笔记风格一行（用户 2026-11-10：默认高效，不要表情和语气词；支持自定义）。 */
+          function openNewNoteStyle() {
+            if (evoCustomStyles().length >= 3) {
+              evoStyleSet({ busy: false, mode: '', error: t('evo.style.err.limit') })
+              return
+            }
+            evoStyleSet({ busy: false, mode: 'new', id: '', name: '', guide: '', error: '' })
+          }
+
+          function closeNoteStyleForm() {
+            evoStyleSet({ busy: false, mode: '', id: '', name: '', guide: '', error: '' })
+          }
+
+          /** 新建 / 编辑自定义档：校验通过才写，写成功后选中它。 */
+          function saveCustomNoteStyle() {
+            var mode = evoStyle.mode
+            if (mode !== 'new' && mode !== 'edit') return
+            var name = String(evoStyle.name || '').trim()
+            var guide = String(evoStyle.guide || '').trim().slice(0, 200)
+            var nameLen = Array.from(name).length
+            if (nameLen < 1 || nameLen > 4) {
+              evoStyleSet({ error: t('evo.style.err.name') })
+              return
+            }
+            if (guide === '') {
+              evoStyleSet({ error: t('evo.style.err.content') })
+              return
+            }
+            var styles = evoCustomStyles().slice()
+            var id = mode === 'edit' ? evoStyle.id : ''
+            if (styles.some(function (s) { return s.name === name && s.id !== id })) {
+              evoStyleSet({ error: t('evo.style.err.duplicate') })
+              return
+            }
+            if (mode === 'new') {
+              if (styles.length >= 3) {
+                evoStyleSet({ error: t('evo.style.err.limit') })
+                return
+              }
+              id = 'c' + Date.now().toString(36)
+              styles.push({ id: id, name: name, guide: guide })
+            } else {
+              var hit = false
+              styles = styles.map(function (s) {
+                if (s.id !== id) return s
+                hit = true
+                return { id: id, name: name, guide: guide }
+              })
+              if (!hit) {
+                closeNoteStyleForm()
+                return
+              }
+            }
+            evoStyleSet({ busy: true, error: '' })
+            apiCall('evolution-settings', {
+              set: true,
+              settings: { customNoteStyles: styles, noteStyle: 'custom:' + id },
+            }).then(function (res) {
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.style.saved') })
+                refreshEvolution()
+                evoStyleSet({ busy: false, mode: 'edit', id: id, name: name, guide: guide })
+              } else {
+                setResult({ ok: false, text: translateError(t, res) })
+                evoStyleSet({ busy: false })
+              }
+            }).catch(function (e) {
+              setResult({ ok: false, text: errMsg(e) })
+              evoStyleSet({ busy: false })
+            })
+          }
+
+          /** 删除自定义档；删的是当前选中档时回到默认档。 */
+          function deleteCustomNoteStyle() {
+            if (evoStyle.mode !== 'edit') return
+            var id = evoStyle.id
+            var styles = evoCustomStyles().filter(function (s) { return s.id !== id })
+            var settings = { customNoteStyles: styles }
+            if ((evo.settings && evo.settings.noteStyle) === 'custom:' + id) settings.noteStyle = 'default'
+            evoStyleSet({ busy: true, error: '' })
+            apiCall('evolution-settings', { set: true, settings: settings }).then(function (res) {
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.style.deleted') })
+                closeNoteStyleForm()
+                refreshEvolution()
+              } else {
+                setResult({ ok: false, text: translateError(t, res) })
+                evoStyleSet({ busy: false })
+              }
+            }).catch(function (e) {
+              setResult({ ok: false, text: errMsg(e) })
+              evoStyleSet({ busy: false })
+            })
+          }
+
+          /** 笔记风格：预设 + 已保存的自定义档 + 「自定义」新建入口。 */
           function renderEvolutionStyle() {
-            var s = (evo.settings && evo.settings.noteStyle) || 'efficient'
-            var customText = (evo.settings && evo.settings.noteStyleText) || ''
-            var options = [
-              ['efficient', 'evo.style.efficient'],
-              ['friendly', 'evo.style.friendly'],
+            var s = (evo.settings && evo.settings.noteStyle) || 'default'
+            var customStyles = evoCustomStyles()
+            var builtins = [
+              ['default', 'evo.style.default'],
+              ['detailed', 'evo.style.detailed'],
               ['minimal', 'evo.style.minimal'],
-              ['custom', 'evo.style.custom'],
             ]
+            var chip = function (key, label, pressed, onClick) {
+              return React.createElement('button', {
+                key: key, type: 'button', 'aria-pressed': pressed,
+                disabled: evoStyle.busy, onClick: onClick,
+              }, label)
+            }
+            var chips = builtins.map(function (o) {
+              return chip(o[0], t(o[1]), s === o[0], function () { selectNoteStyle(o[0]) })
+            }).concat(customStyles.map(function (cs) {
+              var id = 'custom:' + cs.id
+              return chip(id, cs.name, s === id, function () { selectNoteStyle(id) })
+            }))
+            chips.push(React.createElement('button', {
+              key: 'custom-new', type: 'button',
+              className: 'dsm-evo-style-add',
+              disabled: evoStyle.busy || customStyles.length >= 3,
+              title: customStyles.length >= 3 ? t('evo.style.err.limit') : '',
+              onClick: openNewNoteStyle,
+            }, t('evo.style.custom')))
+            var formOpen = evoStyle.mode === 'new' || evoStyle.mode === 'edit'
             return React.createElement('div', { className: 'dsm-evo-style' },
-              React.createElement('div', { className: 'dsm-form-seg', role: 'group' },
-                options.map(function (o) {
-                  return React.createElement('button', {
-                    key: o[0], type: 'button', 'aria-pressed': s === o[0],
-                    disabled: evoStyle.busy,
-                    onClick: function () { saveNoteStyle(o[0], customText) },
-                  }, t(o[1]))
-                })),
-              // 自定义展开一行输入 + 保存：预设切换即时生效，custom 是用户自己的话，要显式保存。
-              s === 'custom' || evoStyle.open
+              React.createElement('div', { className: 'dsm-form-seg', role: 'group' }, chips),
+              formOpen
                 ? React.createElement('div', { className: 'dsm-evo-style-custom' },
                     React.createElement('input', {
-                      className: 'dsm-control', type: 'text',
-                      placeholder: t('evo.style.custom.hint'),
-                      value: evoStyle.text || customText,
-                      onChange: function (ev) { setEvoStyle(function (cur) { return Object.assign({}, cur, { text: ev.target.value, open: true }) }) },
+                      className: 'dsm-control', type: 'text', maxLength: 4,
+                      placeholder: t('evo.style.name.placeholder'),
+                      'aria-label': t('evo.style.name.placeholder'),
+                      value: evoStyle.name,
+                      disabled: evoStyle.busy,
+                      onChange: function (e) { evoStyleSet({ name: e.target.value, error: '' }) },
                     }),
-                    React.createElement('button', {
-                      type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoStyle.busy || (evoStyle.text || customText).trim() === '',
-                      onClick: function () { saveNoteStyle('custom', (evoStyle.text || customText).trim()) },
-                    }, t('evo.style.save')))
-                : null)
+                    React.createElement('input', {
+                      className: 'dsm-control', type: 'text', maxLength: 200,
+                      placeholder: t('evo.style.custom.hint'),
+                      'aria-label': t('evo.style.custom.hint'),
+                      value: evoStyle.guide,
+                      disabled: evoStyle.busy,
+                      onChange: function (e) { evoStyleSet({ guide: e.target.value, error: '' }) },
+                    }),
+                    React.createElement('div', { className: 'dsm-evo-style-actions' },
+                      React.createElement('button', {
+                        type: 'button', className: 'dsm-btn dsm-btn-quiet',
+                        disabled: evoStyle.busy, onClick: saveCustomNoteStyle,
+                      }, t('evo.style.save')),
+                      evoStyle.mode === 'edit'
+                        ? React.createElement('button', {
+                            type: 'button', className: 'dsm-btn dsm-btn-quiet',
+                            disabled: evoStyle.busy, onClick: deleteCustomNoteStyle,
+                          }, t('evo.style.delete'))
+                        : null,
+                      React.createElement('button', {
+                        type: 'button', className: 'dsm-btn dsm-btn-quiet',
+                        disabled: evoStyle.busy, onClick: closeNoteStyleForm,
+                      }, t('evo.style.cancel'))))
+                : null,
+              evoStyle.error ? React.createElement('p', { className: 'dsm-evo-style-error' }, evoStyle.error) : null)
           }
 
           /** 一行开关：左标题 + 说明，右控件固定列；三颗开关共用同一条对齐线。 */
@@ -1511,7 +1670,7 @@
                     minutes: rateMinutes, notes: rateNotes,
                     disabled: evoBusy || (evo.loading && !st),
                   })) : null,
-                // 笔记风格：模型写新记忆的口吻（默认高效——无表情、无语气词）。
+                // 笔记风格：模型写新记忆的口吻（默认均衡——1–2 句，无表情和语气词）。
                 overall ? React.createElement('div', { className: 'dsm-evo-section' },
                   React.createElement('div', { className: 'dsm-evo-section-title' }, t('evo.style')),
                   renderEvolutionStyle()) : null,
