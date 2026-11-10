@@ -958,12 +958,13 @@
            * 候选行右侧一颗「确认」；停用 / 删除收进 ⋯ 菜单。
            */
           function renderEvolutionRow(e, archivedMode) {
+            // core / playbook 是旧数据里仍可注入的两档，按「生效」显示，不标成待确认。
             var statusKey = e.status === 'core' ? 'evo.tag.core'
-              : e.status === 'active' ? 'evo.tag.active'
+              : e.status === 'active' || e.status === 'playbook' ? 'evo.tag.active'
                 : e.status === 'superseded' ? 'evo.tag.superseded'
                   : e.status === 'archived' ? 'evo.tag.archived'
                     : 'evo.tag.candidate'
-            var tone = e.status === 'core' || e.status === 'active' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
+            var tone = e.status === 'core' || e.status === 'active' || e.status === 'playbook' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
             var pending = e.status === 'candidate'
             var open = evoDetail === e.id
             var metaBits = [

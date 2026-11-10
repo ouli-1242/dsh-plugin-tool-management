@@ -31,8 +31,6 @@ export function workspaceHashOf(scopeKey: string): string {
 
 export type LearnScope = 'off' | 'session' | 'workspace' | 'global'
 export type WriteTarget = 'session' | 'workspace' | 'global' | 'route'
-export type DreamMode = 'off' | 'daily' | 'manual'
-export type SkillMode = 'off' | 'propose'
 /** 学到的笔记用什么口吻写（用户 2026-11-10：默认简洁高效，不要表情和语气词）。 */
 export type NoteStyle = 'efficient' | 'friendly' | 'minimal' | 'custom'
 
@@ -75,8 +73,6 @@ export interface EvolutionOverrides {
    * 独立出来的理由：用户可能"不想学，但之前学的还能用"，也可能"先攒着，回头再看"。
    */
   inject?: boolean
-  dream?: DreamMode
-  skills?: SkillMode
   reviewEveryTurns?: number
   maxReviewsPerSession?: number
   /** 复习用哪个模型；空串 = 会话当前模型。 */
@@ -100,8 +96,6 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
   enabled: false,
   learnScope: 'global',
   writeTarget: 'route',
-  dream: 'daily',
-  skills: 'off',
   reviewEveryTurns: 8,
   maxReviewsPerSession: 2,
   model: '',
@@ -123,8 +117,6 @@ export interface EffectiveEvolutionConfig extends EvolutionSettings {
 
 const LEARN_SCOPES: readonly LearnScope[] = ['off', 'session', 'workspace', 'global']
 const WRITE_TARGETS: readonly WriteTarget[] = ['session', 'workspace', 'global', 'route']
-const DREAM_MODES: readonly DreamMode[] = ['off', 'daily', 'manual']
-const SKILL_MODES: readonly SkillMode[] = ['off', 'propose']
 
 const oneOf = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
   (typeof v === 'string' && (allowed as readonly string[]).includes(v) ? (v as T) : fallback)
@@ -149,8 +141,6 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
     learnScope: oneOf(r.learnScope, LEARN_SCOPES, d.learnScope),
     writeTarget: oneOf(r.writeTarget, WRITE_TARGETS, d.writeTarget),
     ...(inject !== undefined ? { inject } : {}),
-    dream: oneOf(r.dream, DREAM_MODES, d.dream),
-    skills: oneOf(r.skills, SKILL_MODES, d.skills),
     reviewEveryTurns: intOf(r.reviewEveryTurns, d.reviewEveryTurns, 1, 100),
     maxReviewsPerSession: intOf(r.maxReviewsPerSession, d.maxReviewsPerSession, 0, 20),
     model: typeof r.model === 'string' ? r.model : d.model,
@@ -167,8 +157,6 @@ export function normalizeOverrides(raw: any): EvolutionOverrides {
   if (typeof r.learnScope === 'string' && (LEARN_SCOPES as readonly string[]).includes(r.learnScope)) out.learnScope = r.learnScope
   if (typeof r.writeTarget === 'string' && (WRITE_TARGETS as readonly string[]).includes(r.writeTarget)) out.writeTarget = r.writeTarget
   if (typeof r.inject === 'boolean') out.inject = r.inject
-  if (typeof r.dream === 'string' && (DREAM_MODES as readonly string[]).includes(r.dream)) out.dream = r.dream
-  if (typeof r.skills === 'string' && (SKILL_MODES as readonly string[]).includes(r.skills)) out.skills = r.skills
   if (typeof r.reviewEveryTurns === 'number' && Number.isFinite(r.reviewEveryTurns)) out.reviewEveryTurns = intOf(r.reviewEveryTurns, 8, 1, 100)
   if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, 2, 0, 20)
   if (typeof r.model === 'string') out.model = r.model
@@ -213,8 +201,6 @@ export function resolveEffectiveConfig(
     learnScope: pick('learnScope') ?? global.learnScope,
     writeTarget: pick('writeTarget') ?? global.writeTarget,
     inject: injectRaw === undefined ? enabled : injectRaw,
-    dream: pick('dream') ?? global.dream,
-    skills: pick('skills') ?? global.skills,
     reviewEveryTurns: pick('reviewEveryTurns') ?? global.reviewEveryTurns,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,
     model: pick('model') ?? global.model,

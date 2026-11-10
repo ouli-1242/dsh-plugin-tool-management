@@ -226,7 +226,7 @@ test('runSweep：真跑时逐条翻译成 setStatus，并在报告里留原因',
   assert.equal(setCalls.length, 1)
   assert.equal(setCalls[0].id, 'x1')
   assert.equal(setCalls[0].status, 'candidate')
-  assert.equal(setCalls[0].actor, 'dream')
+  assert.equal(setCalls[0].actor, 'sweep')
   assert.equal(setCalls[0].opts.needsReview, 'ttl')
   assert.match(setCalls[0].opts.reason, /ttl 180d/)
 })

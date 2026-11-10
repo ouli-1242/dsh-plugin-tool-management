@@ -7,7 +7,7 @@
 // 为什么证据不放 frontmatter：`parseSkillDoc` 只识别顶层扁平标量（见 skills/frontmatter.ts 的
 // 注释），数组与嵌套结构进不了 map。硬塞只能序列化成一行 JSON，那既不可读、也会让
 // `description` 这类字段被 500 字符上限截断。所以：frontmatter 只放标量（给发现层与界面读），
-// 证据与计数器放这里（给写入管线与 dream 读）。
+// 证据与计数器放这里（给写入管线与维护扫描读）。
 //
 // 读的纪律（与 `settings-sidecars` 相反，这是有意的）：
 //   - 侧车读坏 → 回默认值，因为界面必须能打开；
@@ -63,7 +63,8 @@ export interface Transition {
   at: string
   from: string
   to: string
-  actor: 'learn' | 'curator' | 'user' | 'dream' | 'system'
+  /** `dream` 只出现在旧数据里（已移除的全库整理），保留是为了原样读回时间线。 */
+  actor: 'learn' | 'curator' | 'user' | 'sweep' | 'dream' | 'system'
   reason: string
 }
 
@@ -215,7 +216,7 @@ function normalizeEntry(raw: any): EntryState | null {
         at: str(t.at),
         from: str(t.from),
         to: str(t.to),
-        actor: ['learn', 'curator', 'user', 'dream', 'system'].includes(t.actor) ? t.actor : 'system',
+        actor: ['learn', 'curator', 'user', 'sweep', 'dream', 'system'].includes(t.actor) ? t.actor : 'system',
         reason: str(t.reason),
       })
     }
@@ -390,7 +391,7 @@ export interface EvolutionStateStore {
    * 串行由调用方保证（op 层已过写队列）；本方法只负责"读坏就不写"和原子落盘。
    */
   update<T>(fn: (state: EvolutionState) => T | Promise<T>): Promise<{ ok: true; result: T } | { ok: false; error: string }>
-  /** 直接把整份 state 写下去（dream 应用时用）。 */
+  /** 直接把整份 state 写下去（写入管线用）。 */
   write(state: EvolutionState): Promise<{ ok: true } | { ok: false; error: string }>
   /** 直接丢弃内存缓存（写入后让注入侧立刻读回新值）。 */
   invalidateCache(): void

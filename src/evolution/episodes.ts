@@ -60,8 +60,6 @@ export interface EpisodeStore {
   retryable(session: string, limit: number, now?: number): Promise<OutboxItem[]>
   /** 清掉很久以前的 done / dead 行，避免 outbox 长到几万行。返回保留的条数。 */
   compact(maxAgeDays: number, now?: number): Promise<{ kept: number; dropped: number }>
-  /** 最近 N 个 episode（按文件修改时间倒序，给 dream 当输入）。读不出来的跳过。 */
-  recent(limit: number): Promise<Episode[]>
   /** 删掉超过 N 天的 episode 文件（含空会话目录）。返回删了几个。 */
   prune(maxAgeDays: number, now?: number): Promise<{ removed: number }>
 }
@@ -175,52 +173,6 @@ export function createEpisodeStore(deps: EpisodeStoreDeps): EpisodeStore {
       return { kept: keep.length, dropped: all.length - keep.length }
     },
 
-    /**
-     * 最近 N 个 episode。
-     *
-     * 按 mtime 倒序而不是按「会话 + turn」排序：dream 要的是"最近发生了什么"，跨会话的
-     * 时间线才是它的输入。先排序再读文件 —— 目录里可能有上万个旧摘要，全读一遍再排是
-     * 把一次整理变成一次全盘扫描。
-     */
-    async recent(limit) {
-      const dir = abs(EPISODES_DIR)
-      const rows: { path: string; mtime: number }[] = []
-      let sessions: string[] = []
-      try {
-        sessions = (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name)
-      } catch {
-        return []
-      }
-      for (const sid of sessions) {
-        let names: string[] = []
-        try {
-          names = (await readdir(join(dir, sid))).filter((n) => n.endsWith('.json'))
-        } catch {
-          continue
-        }
-        for (const name of names) {
-          const path = join(dir, sid, name)
-          try {
-            const st = await stat(path)
-            rows.push({ path, mtime: st.mtimeMs })
-          } catch {
-            /* 刚被 prune 掉：跳过 */
-          }
-        }
-      }
-      rows.sort((a, b) => b.mtime - a.mtime)
-      const out: Episode[] = []
-      for (const row of rows.slice(0, Math.max(0, limit))) {
-        try {
-          const parsed = JSON.parse(await readFile(row.path, 'utf8'))
-          if (parsed && typeof parsed === 'object' && typeof parsed.turn === 'number') out.push(parsed as Episode)
-        } catch {
-          /* 半截文件：跳过 */
-        }
-      }
-      return out
-    },
-
     async prune(maxAgeDays, now = Date.now()) {
       const dir = abs(EPISODES_DIR)
       const cutoff = now - Math.max(1, maxAgeDays) * 86400_000
@@ -256,7 +208,7 @@ export function createEpisodeStore(deps: EpisodeStoreDeps): EpisodeStore {
             /* 读不到就当它不在 */
           }
         }
-        // 空目录留着会让 `recent()` 每次多 readdir 一次；顺手清掉。
+        // 空会话目录留着只会让后续扫描多 readdir 一次；顺手清掉。
         if (left === 0) await rm(sessionDir, { recursive: true, force: true }).catch(() => {})
       }
       return { removed }

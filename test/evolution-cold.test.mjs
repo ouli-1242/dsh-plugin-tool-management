@@ -290,7 +290,7 @@ test('episodes：compact 清掉老 done，保留 pending 与新的 done', async 
   for (const line of text.trim().split('\n')) JSON.parse(line)
 })
 
-test('episodes：prune 只删 30 天前的摘要，recent 按修改时间倒序', async () => {
+test('episodes：prune 只删 30 天前的摘要（按文件 mtime，不看正文）', async () => {
   const dir = await tmp()
   const store = createEpisodeStore({ stateDir: dir, message })
   const now = Date.now()
@@ -304,10 +304,10 @@ test('episodes：prune 只删 30 天前的摘要，recent 按修改时间倒序'
   // 用 mtime 判"多久没人碰过"：at 是内容的一部分，重写一次正文不该让过期文件续命。
   await utimes(join(dir, a.path), new Date(now - 40 * day), new Date(now - 40 * day))
   await utimes(join(dir, b.path), new Date(now - day), new Date(now - day))
-  assert.deepEqual((await store.recent(10)).map((e) => e.turn), [2, 1])
   const r = await store.prune(30, now)
   assert.equal(r.removed, 1)
-  assert.deepEqual((await store.recent(10)).map((e) => e.turn), [2])
+  await assert.rejects(readFile(join(dir, a.path), 'utf8'), '过期摘要要删掉')
+  assert.equal(JSON.parse(await readFile(join(dir, b.path), 'utf8')).turn, 2)
   // 空会话目录也一并收掉，别让目录数量跟会话数一起涨。
   const other = await store.write(episodeOf(digestOf(1, {}), { session: 's2', at: new Date(now).toISOString(), reason: 'signal' }))
   await utimes(join(dir, other.path), new Date(now - 40 * day), new Date(now - 40 * day))

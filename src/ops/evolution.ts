@@ -13,9 +13,7 @@ import type { EvolutionRuntime } from '../evolution/runtime.js'
 import type { Learner } from '../evolution/write.js'
 // 只取类型：冷路径在装配层晚于本函数创建，所以拿的是 getter 而不是实例。
 import type { ColdPathHandle } from '../evolution/cold.js'
-import type { Dreamer } from '../evolution/dream.js'
 import type { SweepReport } from '../evolution/maintenance.js'
-import { canPromotePlaybook, parseProcedureSteps, type ProcedureSkillStore, type SkillDraftInput } from '../evolution/procedure.js'
 import { isInjectableStatus } from '../memories/catalog.js'
 import { workspaceMemoryKeyOf } from '../scope/workspace-key.js'
 
@@ -47,12 +45,8 @@ export interface EvolutionOpDeps {
    * "先建一份空队列、真正跑起来的是另一份"的错位。
    */
   cold?(): ColdPathHandle | null
-  /** dream 执行器（P3）。同样用 getter：它依赖冷路径的 episode 存储。 */
-  dream?(): Dreamer | null
   /** 维护扫描（P3）：TTL / 会话 GC / 衰减 / 工作区失效 / 配额。 */
   sweep?(opts?: { dry?: boolean }): Promise<SweepReport>
-  /** P4：程序性记忆与技能提议的存储（同样用 getter，装配晚于 op 表）。 */
-  procedureSkills?(): ProcedureSkillStore | null
   /** 健康度（只读统计）。 */
   health?(): Promise<{
     byLayer: Record<string, { active: number; candidate: number; archived: number; cap: number; tokens: number }>
@@ -81,37 +75,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
   /** 只在这四处「写设置」之后调；记忆正文写入不碰工具表，不必重排。 */
   const notifySettingsChanged = () => {
     try { deps.onSettingsChanged?.() } catch { /* 重排失败不该让开关保存失败 */ }
-  }
-
-  /**
-   * 把一条 playbook 读成「技能草案的输入」。
-   *
-   * 只认 `playbook`：active / core 的 procedure 还没走完验证阶梯，直接生成技能等于跳过
-   * 人工确认链。步骤以 state.json 为准，正文解析只给旧条目兜底。
-   */
-  const procedureInputOf = async (id: string): Promise<{ ok: true; input: SkillDraftInput } | { ok: false; error: string }> => {
-    if (!learner) return { ok: false, error: '自动记忆尚未启用' }
-    const view = runtime.view()
-    const entry = view.catalog.entries[id]
-    if (!entry || entry.kind !== 'procedure') return { ok: false, error: `不是程序性记忆：${id}` }
-    if (entry.status !== 'playbook') return { ok: false, error: '只有 playbook 能生成技能（先验证 3 次并晋升）' }
-    const d = await learner.describe(id)
-    if (!d.ok) return { ok: false, error: d.error }
-    const st = view.state.entries[id]
-    const steps = st?.procedure?.steps ?? parseProcedureSteps(d.body)
-    if (steps.length < 2) return { ok: false, error: '这条流程没有至少 2 个步骤' }
-    return {
-      ok: true,
-      input: {
-        id,
-        key: entry.key,
-        title: d.title || entry.title || entry.key,
-        description: entry.oneLine,
-        steps,
-        boundary: d.boundary,
-        successes: st?.procedure?.successes ?? 0,
-      },
-    }
   }
 
   /**
@@ -209,8 +172,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (typeof patch.learnScope === 'string') next.learnScope = patch.learnScope
         if (typeof patch.writeTarget === 'string') next.writeTarget = patch.writeTarget
         if (typeof patch.inject === 'boolean') next.inject = patch.inject
-        if (typeof patch.dream === 'string') next.dream = patch.dream
-        if (typeof patch.skills === 'string') next.skills = patch.skills
         if (typeof patch.reviewEveryTurns === 'number') next.reviewEveryTurns = patch.reviewEveryTurns
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession
         if (typeof patch.model === 'string') next.model = patch.model
@@ -313,8 +274,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(args?.boundary !== undefined ? { boundary: args.boundary } : {}),
             ...(args?.ttlDays !== undefined ? { ttlDays: args.ttlDays } : {}),
             ...(args?.description !== undefined ? { description: args.description } : {}),
-            // P4：只有 procedure 用；写入管线会洗净并限长，非 procedure 一律忽略。
-            ...(Array.isArray(args?.steps) ? { steps: args.steps.map((x: unknown) => String(x)) } : {}),
           },
           cfg,
           {
@@ -358,7 +317,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     /**
      * 确认一条候选（记忆页的「确认」）。
      *
-     * 只做"候选 → 生效"这一件事：换层 / 合并 / 拆条属于 dream 的草案，不走这条。
+     * 只做"候选 → 生效"这一件事：换层 / 合并 / 拆条属于整理草案，不走这条。
      * 候选不注入，所以确认是用户把一条自动记忆真正启用的唯一入口。
      */
     'evolution-approve': async (args: any) => {
@@ -559,8 +518,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             confidence: entry.confidence,
             oneLine: entry.oneLine,
             ...(entry.title !== undefined ? { title: entry.title } : {}),
-            // P4：列表不返回步骤正文（一次几十条会变大），只给条数与成功次数，展开再走 read。
-            ...(st?.procedure !== undefined ? { stepCount: st.procedure.steps.length, successes: st.procedure.successes, failures: st.procedure.failures } : {}),
             pinned: entry.pinned,
             enabled: entry.enabled,
             // 「会不会进上下文」的主判据就是这两个：状态与单条开关。层匹配由调用方判
@@ -595,96 +552,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       }
     },
 
-    /**
-     * 生成一份整理草案（P3）。
-     *
-     * 只出草案，不改库 —— 应用是用户点过之后的另一条 op。这条会花一次模型调用，
-     * 所以界面上的按钮有确认弹窗，而不是进页面就自动跑。
-     */
-    'evolution-dream': async (args: any) => {
-      const dreamer = deps.dream?.()
-      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
-      try {
-        const { scopeKey } = await workspaceOf(args)
-        const sessionId = typeof args?.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : undefined
-        const cfg = await config.effective(scopeKey, sessionId)
-        if (!cfg.enabled) return { ok: false, error: '自主记忆已关闭，整理不会运行', code: 'disabled' }
-        // 模型路由：优先用这个会话正在用的那个；没有就靠 `evolution.model` 或上次记下的路由。
-        const route = sessionId ? deps.cold?.()?.routeOf(sessionId) ?? null : null
-        const out = await dreamer.dream(cfg, route)
-        if (out.ok) runtime.invalidate()
-        return out
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'dream-failed' }
-      }
-    },
-
-    /** 草案清单 + 上次整理 / 体检时间（界面顶部那块）。 */
-    'evolution-dreams': async (args: any) => {
-      const dreamer = deps.dream?.()
-      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
-      try {
-        const limit = typeof args?.limit === 'number' && args.limit > 0 ? Math.min(50, Math.floor(args.limit)) : 20
-        const view = runtime.view()
-        return {
-          ok: true,
-          drafts: await dreamer.listDrafts(limit),
-          lastDreamAt: view.state.watermarks.lastDreamAt ?? null,
-          lastSweepAt: view.state.watermarks.lastSweepAt ?? null,
-          ...(deps.health ? { health: await deps.health() } : {}),
-        }
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'dreams-failed' }
-      }
-    },
-
-    /** 读一份草案（界面渲染 diff：id → oneLine）。 */
-    'evolution-dream-read': async (args: any) => {
-      const dreamer = deps.dream?.()
-      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
-      try {
-        const id = String(args?.id ?? '').trim()
-        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
-        return await dreamer.readDraft(id)
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'dream-read-failed' }
-      }
-    },
-
-    'evolution-dream-apply': async (args: any) => {
-      const dreamer = deps.dream?.()
-      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
-      try {
-        const id = String(args?.id ?? '').trim()
-        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
-        const out = await dreamer.apply(id)
-        if (out.ok) runtime.invalidate()
-        return out
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'dream-apply-failed' }
-      }
-    },
-
-    /**
-     * 回滚一份已应用的草案。
-     *
-     * `force` 只在用户确认过"应用之后的新写入也会被撤销"后才传 —— 默认拒绝是为了不让
-     * 一次误点把刚学会的几条一起抹掉。
-     */
-    'evolution-dream-revert': async (args: any) => {
-      const dreamer = deps.dream?.()
-      if (!dreamer) return { ok: false, error: '整理器尚未接线', code: 'no-dream' }
-      try {
-        const id = String(args?.id ?? '').trim()
-        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
-        const out = await dreamer.revert(id, { force: args?.force === true })
-        if (out.ok) runtime.invalidate()
-        return out
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'dream-revert-failed' }
-      }
-    },
-
     /** 跑一遍维护扫描（`dry: true` 只出计划）。 */
     'evolution-maintain': async (args: any) => {
       if (!deps.sweep) return { ok: false, error: '维护扫描尚未接线', code: 'no-sweep' }
@@ -705,117 +572,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         return { ok: true, ...(await deps.health()) }
       } catch (e) {
         return { ok: false, error: message(e), code: 'health-failed' }
-      }
-    },
-
-    /**
-     * P4：程序性记忆清单 + 技能草案 + learned 名单。
-     *
-     * 一次拉全而不是让界面拼三次：这三者要画在同一块卡片上，分三次请求会出现
-     * "步骤显示 3 次成功、草案却说还没验证"的中间态。
-     */
-    'evolution-procedures': async () => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
-      try {
-        const view = runtime.view()
-        const rows: any[] = []
-        for (const e of Object.values(view.catalog.entries)) {
-          if (e.kind !== 'procedure') continue
-          const st = view.state.entries[e.id]
-          const d: any = await learner.describe(e.id)
-          const steps = st?.procedure?.steps ?? (d.ok ? parseProcedureSteps(d.body) : [])
-          const successes = st?.procedure?.successes ?? 0
-          const failures = st?.procedure?.failures ?? 0
-          rows.push({
-            id: e.id,
-            title: (d.ok && d.title) || e.title || e.key,
-            key: e.key,
-            status: e.status,
-            oneLine: e.oneLine,
-            boundary: d.ok ? d.boundary : '',
-            steps,
-            successes,
-            failures,
-            canPromote: canPromotePlaybook({
-              kind: e.kind, status: e.status, steps, successes,
-              harmful: st?.counters?.harmful ?? 0, needsReview: st?.needsReview,
-            }).ok,
-            canProposeSkill: e.status === 'playbook' && steps.length >= 2,
-          })
-        }
-        rows.sort((a, b) => Number(b.canProposeSkill) - Number(a.canProposeSkill) || b.successes - a.successes || a.id.localeCompare(b.id))
-        const store = deps.procedureSkills?.() ?? null
-        const skills = store ? await store.list() : { proposals: [], learned: [] }
-        return { ok: true, entries: rows, proposals: skills.proposals, learned: skills.learned }
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'procedures-failed' }
-      }
-    },
-
-    /** 记一次流程执行结果。到门槛会自动升 playbook（判据在 learner.setStatus 里再过一遍）。 */
-    'evolution-procedure-done': async (args: any) => {
-      if (!learner) return { ok: false, error: '自动记忆尚未启用', code: 'unavailable' }
-      try {
-        const id = String(args?.id ?? '').trim()
-        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
-        const out = await learner.recordProcedure(id, args?.ok !== false)
-        if (out.ok) runtime.invalidate()
-        return out
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'procedure-done-failed' }
-      }
-    },
-
-    /** 出技能草案：只写 `evolution/procedures/*.json`，绝不碰技能目录。 */
-    'evolution-skill-propose': async (args: any) => {
-      const store = deps.procedureSkills?.() ?? null
-      if (!store) return { ok: false, error: '技能提议尚未接线', code: 'no-store' }
-      try {
-        const prepared = await procedureInputOf(String(args?.id ?? '').trim())
-        if (!prepared.ok) return { ok: false, error: prepared.error, code: 'bad-procedure' }
-        return await store.propose(prepared.input)
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'skill-propose-failed' }
-      }
-    },
-
-    /**
-     * 生成技能：`confirm` 必须由界面确认卡给出。写后 lint + 不在清单里就回滚，
-     * 失败原因原样返回（界面要解释"为什么没生成"）。
-     */
-    'evolution-skill-apply': async (args: any) => {
-      const store = deps.procedureSkills?.() ?? null
-      if (!store) return { ok: false, error: '技能提议尚未接线', code: 'no-store' }
-      try {
-        const out = await store.apply(String(args?.name ?? '').trim(), args?.confirm === true)
-        if (out.ok) runtime.invalidate()
-        return out
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'skill-apply-failed' }
-      }
-    },
-
-    /** 回滚：把本功能生成的技能移进回收站（可恢复），并摘掉 learned 徽章。 */
-    'evolution-skill-rollback': async (args: any) => {
-      const store = deps.procedureSkills?.() ?? null
-      if (!store) return { ok: false, error: '技能提议尚未接线', code: 'no-store' }
-      try {
-        const out = await store.rollback(String(args?.name ?? '').trim())
-        if (out.ok) runtime.invalidate()
-        return out
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'skill-rollback-failed' }
-      }
-    },
-
-    /** 技能页的「learned」徽章。没接线时返回空名单，不让整个技能页报错。 */
-    'evolution-learned-skills': async () => {
-      const store = deps.procedureSkills?.() ?? null
-      if (!store) return { ok: true, skills: [] }
-      try {
-        return { ok: true, skills: await store.learned() }
-      } catch (e) {
-        return { ok: false, error: message(e), code: 'learned-failed' }
       }
     },
   }

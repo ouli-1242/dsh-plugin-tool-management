@@ -63,11 +63,9 @@ import { createEvolutionRuntime, readAutoSnapshot, writeAutoSnapshot, autoSnapsh
 import { attachColdPath } from './evolution/cold.js'
 import { createEpisodeStore } from './evolution/episodes.js'
 import { createReviewBudget, createReviewer } from './evolution/review.js'
-// 整理（P3）：全库草案 + 应用/回滚；维护扫描：TTL / 会话 GC / 配额。
-import { createDreamer, type DreamEntryView, type Dreamer } from './evolution/dream.js'
+// 维护扫描：TTL / 会话 GC / 配额。
 import { trashAutoNote } from './evolution/notes.js'
 import { healthOf, runSweep, shouldSweepNow, type SweepEntry, type SweepReport } from './evolution/maintenance.js'
-import { createProcedureSkillStore, type ProcedureSkillStore } from './evolution/procedure.js'
 // 真源状态（证据 / 计数器 / 墓碑）：读坏就停写，不静默覆盖。
 import { createEvolutionState } from './evolution/state.js'
 // 写入管线：九道门 + 六步落盘。
@@ -4469,15 +4467,12 @@ export default {
     // 冷路径的句柄：op 表先于 `attachColdPath` 装配（开关打开前界面也要能查队列），
     // 所以这里先留一个可变槽，装配完再填。op 里拿到的是 getter 的**当前值**。
     let coldHandle: ReturnType<typeof attachColdPath> | null = null
-    // 整理器与维护扫描同样晚于 op 表创建（它们依赖 episode 存储）。用同样的可变槽，
+    // 维护扫描同样晚于 op 表创建（它依赖 episode 存储）。用同样的可变槽，
     // op 里取到的是**装配完成后**的实例，不会出现"界面上那份是空壳"。
-    let dreamHandle: Dreamer | null = null
     let sweepRunner: ((opts?: { dry?: boolean }) => Promise<SweepReport>) | null = null
     // 轮末与启动都可能同时想跑扫描；lastSweepAt 要到扫描结束才写，光看它会并发跑两遍。
     let sweepInFlight = false
     let healthRunner: (() => Promise<ReturnType<typeof healthOf>>) | null = null
-    // P4：技能提议依赖技能域的 op 表与同一把写锁，同样晚于 op 表创建。
-    let procedureSkillHandle: ProcedureSkillStore | null = null
     const evolutionOpsTable = buildEvolutionOps({
       config: evolutionConfig,
       runtime: evolutionRuntime,
@@ -4505,7 +4500,6 @@ export default {
         }
       },
       cold: () => coldHandle,
-      dream: () => dreamHandle,
       sweep: async (opts) => {
         if (!sweepRunner) throw new Error('maintenance is not wired yet')
         return sweepRunner(opts)
@@ -4514,7 +4508,6 @@ export default {
         if (!healthRunner) throw new Error('health is not wired yet')
         return healthRunner()
       },
-      procedureSkills: () => procedureSkillHandle,
       // 总开关一拨，那条工具要**这一轮**就跟着出现 / 消失：restrict 名单是按 agent 缓存的，
       // 不通知就得等下一次无关的 tools/change（用户会看到"开关开了，模型还摸不到工具"）。
       onSettingsChanged: () => {
@@ -4602,29 +4595,8 @@ export default {
     })
     coldHandle = evolutionCold
 
-    // ── 整理与维护（P3）──────────────────────────────────────────────────────
-    // 条目视图只读 catalog + state：dream 要的是"全库长什么样"，不需要正文；维护扫描
-    // 额外需要文件路径来读 TTL，那份路径只有记忆快照知道。
-    const evolutionEntryView = (): DreamEntryView[] => {
-      const view = evolutionRuntime.view()
-      return Object.values(view.catalog.entries).map((e) => {
-        const st = view.state.entries[e.id]
-        return {
-          id: e.id,
-          layer: e.layer,
-          key: e.key,
-          status: e.status,
-          origin: 'auto' as const,
-          oneLine: e.oneLine,
-          confidence: e.confidence,
-          tokens: e.estTokens,
-          ...(st?.locked === true ? { locked: true } : {}),
-          helpful: st?.counters.helpful ?? 0,
-          harmful: st?.counters.harmful ?? 0,
-          evidence: 0,
-        }
-      })
-    }
+    // ── 维护扫描（P3）───────────────────────────────────────────────────────
+    // 条目视图只读 catalog + state；扫描额外需要文件路径来读 TTL，那份路径只有记忆快照知道。
     const sweepEntries = async (): Promise<(SweepEntry & { filePath?: string })[]> => {
       const snap = await memoriesService.autoAccess.snapshot()
       const view = evolutionRuntime.view()
@@ -4660,22 +4632,6 @@ export default {
       })
     }
 
-    const dreamer = createDreamer({
-      llm: (() => {
-        try { return typeof (ctx as any).get === 'function' ? (ctx as any).get('llm') : undefined } catch { return undefined }
-      })(),
-      learner: autoLearner,
-      state: evolutionState,
-      episodes: episodeStore,
-      entries: evolutionEntryView,
-      rebuildCatalog: () => memoriesService.autoAccess.rebuildCatalog(),
-      memoriesRoot: memoriesService.autoAccess.autoNotesRoot,
-      stateDir: memoriesService.autoAccess.stateDir,
-      withWriteLock,
-      log: evolutionLog,
-      message,
-    })
-    dreamHandle = dreamer
     sweepRunner = (opts) => runSweep({
       entries: sweepEntries,
       learner: autoLearner,
@@ -4687,14 +4643,6 @@ export default {
       message,
     }, opts ?? {})
     healthRunner = async () => healthOf(await sweepEntries(), evolutionRuntime.view().state)
-    // 走技能域自己的 op（skill-create / skill-delete / skill-state），落点、默认停用、
-    // 回收站这些既有纪律自动继承；这里只负责确认、lint 与失败回滚。
-    procedureSkillHandle = createProcedureSkillStore({
-      stateDir: memoriesService.autoAccess.stateDir,
-      skillsOps: skillsService.ops,
-      withWriteLock,
-      message,
-    })
 
     // 启动时补跑一次维护（每天最多一次）。不 await：扫描要读几十个文件，挡在装配期
     // 会让宿主启动变慢，而它清理的都是"已经放了几个月的东西"，晚两秒没有区别。

@@ -91,8 +91,8 @@ const lastTouched = (e: SweepEntry, now: number): number => {
   return (now - Math.max(...candidates)) / day
 }
 
-// playbook 有意排除（P4）：它是"验证过 3 次 + 用户确认链"的成果，TTL / 衰减 / 配额
-// 这类自动老化不该把它降回候选（那会把步骤与常驻待遇一起抹掉）。要下线由用户手动归档。
+// playbook 有意排除：它是旧数据里"验证过 3 次 + 用户确认链"的成果，TTL / 衰减 / 配额
+// 这类自动老化不该把它降回候选。要下线由用户手动归档。
 const isLive = (e: SweepEntry): boolean =>
   e.origin === 'auto' && e.locked !== true && (e.status === 'active' || e.status === 'core' || e.status === 'candidate')
 
@@ -304,7 +304,7 @@ export async function runSweep(deps: SweepDeps, opts: SweepOptions = {}): Promis
                   const lastArchive = [...transitionsOf(e.id)].reverse().find((x) => x.to === 'archived')
                   if (!lastArchive || !String(lastArchive.reason || '').includes('workspace directory missing')) continue
                   try {
-                    await deps.learner.setStatus(e.id, 'active', 'dream', { reason: 'workspace directory is back' })
+                    await deps.learner.setStatus(e.id, 'active', 'sweep', { reason: 'workspace directory is back' })
                   } catch (err) {
                     report.errors.push('workspace-restore: ' + deps.message(err))
                   }
@@ -349,8 +349,8 @@ export async function runSweep(deps: SweepDeps, opts: SweepOptions = {}): Promis
     }
     try {
       const r = a.kind === 'archive'
-        ? await deps.learner.setStatus(a.id, 'archived', 'dream', { reason: a.reason })
-        : await deps.learner.setStatus(a.id, 'candidate', 'dream', { reason: a.reason, needsReview: a.needsReview })
+        ? await deps.learner.setStatus(a.id, 'archived', 'sweep', { reason: a.reason })
+        : await deps.learner.setStatus(a.id, 'candidate', 'sweep', { reason: a.reason, needsReview: a.needsReview })
       const ok = Boolean(r && r.ok)
       const err = (r as { error?: string } | undefined)?.error
       report.actions.push({ id: a.id, bucket: a.bucket, kind: a.kind, reason: a.reason, ok, ...(ok ? {} : { error: err }) })
