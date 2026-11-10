@@ -84,6 +84,14 @@ export interface ExistingEntry {
   text: string
   status: string
   origin: 'user' | 'auto'
+  /** 索引里的单条开关；缺省 = 开。停用的条目不能当合并目标。 */
+  enabled?: boolean
+  /** workspace 层的所属工作区；其它层没有。 */
+  workspace?: string
+  /** session 层的所属会话；其它层没有。 */
+  session?: string
+  /** scene 层的场景名；用户记忆没有这个字段（对所有场景可见）。 */
+  scene?: string
   locked?: boolean
 }
 
@@ -456,7 +464,8 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
       const sameThing = similarity(e.text, rawText) >= MERGE_SIMILARITY
       // 批准后层是用户选的：跨层目标不合并，改为取代 —— 否则用户选了工作区，
       // 这条却被并进全局那条，选择等于没生效。
-      if (sameThing && mergeableStatus(e.status) && (!decided || e.layer === layer)) {
+      // 停用的条目也不能当合并目标：并进去仍是停用，新说法等于没记下来。
+      if (sameThing && e.enabled !== false && mergeableStatus(e.status) && (!decided || e.layer === layer)) {
         mergeInto = e.id
       } else if (e.status === 'candidate') {
         // 候选之间同 key 不同说法：直接取代旧的，收件箱里只留最新说法。

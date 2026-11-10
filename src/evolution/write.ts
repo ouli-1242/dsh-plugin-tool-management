@@ -71,6 +71,22 @@ export interface LearnEnv {
   scene?: string
 }
 
+/**
+ * 门禁能看到的现有条目：自动条目只留当前作用域内的。
+ *
+ * 用户记忆没有 workspace / session / scene 字段（它们按场景体系存），照旧全部可见 ——
+ * 用户写过的相似记忆在任何场景都该挡住自动覆盖。自动笔记必须按层过滤：别的仓库、
+ * 别的会话、别的场景的同 slot 笔记不能被当成本次的合并目标。
+ */
+export function visibleExistingEntries(entries: ExistingEntry[], env: LearnEnv): ExistingEntry[] {
+  return entries.filter((e) => {
+    if (e.layer === LAYER_WORKSPACE) return env.workspaceHash !== undefined && e.workspace === env.workspaceHash
+    if (e.layer === LAYER_SESSION) return env.sessionId !== undefined && e.session === env.sessionId
+    if (e.layer === LAYER_SCENE && e.scene !== undefined) return env.scene === e.scene
+    return true
+  })
+}
+
 export interface LearnSuccess {
   ok: true
   id: string
@@ -213,6 +229,7 @@ export function createLearner(deps: LearnDeps) {
     st: EvolutionState,
   ): Promise<GateContext> {
     const { entries, knownScenes } = await deps.existingEntries()
+    const visible = visibleExistingEntries(entries, env)
     // 频率只数「新建」：state 里第一条 `from: 'absent'` 的迁移就是这条记忆诞生的时刻。
     // 合并 / 更新只追加证据与迁移，不产生 `absent` 起点，所以天然不占名额。
     const cutoff = Date.now() - config.learnWindowMinutes * 60_000
@@ -235,7 +252,7 @@ export function createLearner(deps: LearnDeps) {
       // `locked` 只在 state 里：快照给的是记忆域的形状，没有这个字段。不补上的话
       // 门禁会把一条用户手改过的条目当成普通合并目标，预览也会说「会合并」，
       // 真正写入时才被 mergeInto 拒掉。
-      existing: entries.map((e) => (e.origin === 'auto' && st.entries[e.id]?.locked === true ? { ...e, locked: true } : e)),
+      existing: visible.map((e) => (e.origin === 'auto' && st.entries[e.id]?.locked === true ? { ...e, locked: true } : e)),
       recentByLayer,
       // 全局 / 工作区共用一份频率；两层各自按 `recentByLayer` 计数。
       rate: { notes: config.maxLearnsPerWindow, windowMinutes: config.learnWindowMinutes },

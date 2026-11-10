@@ -100,13 +100,18 @@ function harness() {
         if (e.isDirectory()) { walk(p, g); continue }
         if (!e.name.endsWith('.md')) continue
         const text = readFileSync(p, 'utf8')
+        const layer = layerOfGroup(group)
+        // 门禁按层过滤：工作区条目必须带归属，否则会被当成"别的仓库"。
+        const workspace = layer === 'workspace' && group.startsWith('_ws/') ? group.slice('_ws/'.length) : ''
         entries.push({
           id: g.replace(/\.md$/, ''),
-          layer: layerOfGroup(group),
+          layer,
           key: pickField(text, 'auto_key'),
           text: bodyOf(text),
           status: pickField(text, 'auto_status') || 'active',
           origin: pickField(text, 'origin') === 'auto' ? 'auto' : 'user',
+          enabled: true,
+          ...(workspace !== '' ? { workspace } : {}),
         })
       }
     }

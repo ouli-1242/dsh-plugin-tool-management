@@ -2292,16 +2292,46 @@ export default {
       state: evolutionState,      // 现有条目视图：直接问记忆服务要快照，而不是自己再扫一遍目录 ——
       // 两套扫描口径迟早会在"同名 bundle 遮蔽""保留组过滤"这些细节上分家。
       existingEntries: async () => {
-        const snap = await memoriesService.autoAccess.snapshot()
-        const entries = snap.rules.map((r) => ({
+        // 两份快照各有根：用户记忆在 memories/，自主笔记在 evolution/notes/。
+        // 只读其中一份都会让门禁漏掉另一半 —— 用户记忆冲突与同 slot 合并都靠这份列表。
+        const [userSnap, noteSnap] = await Promise.all([
+          memoriesService.autoAccess.snapshot(),
+          memoriesService.autoAccess.autoSnapshot(),
+        ])
+        const userEntries = userSnap.rules.filter((r) => r.shadowed !== true).map((r) => ({
           id: r.id,
           layer: layerOfGroup(r.group),
           key: r.autoKey ?? '',
-          text: snap.bodies.get(r.id) ?? '',
+          text: userSnap.bodies.get(r.id) ?? '',
           status: r.autoStatus ?? (r.origin === 'auto' ? 'candidate' : 'active'),
           origin: (r.origin === 'auto' ? 'auto' : 'user') as 'user' | 'auto',
+          enabled: r.enabled !== false,
         }))
-        const knownScenes = new Set(snap.groups.map((g) => g.name).filter((n) => !isReservedGroup(n)))
+        // 笔记库只装自动条目，origin 不必再按 frontmatter 猜；层归属决定合并范围。
+        const noteEntries = noteSnap.rules.filter((r) => r.shadowed !== true).map((r) => {
+          const layer = layerOfGroup(r.group)
+          const workspace = layer === 'workspace'
+            ? String(r.autoWorkspace ?? (r.group.startsWith('_ws/') ? r.group.slice('_ws/'.length) : ''))
+            : ''
+          const session = layer === 'session' && r.group.startsWith('_session/')
+            ? r.group.slice('_session/'.length)
+            : ''
+          const scene = layer === 'scene' ? String(r.autoScene ?? r.group) : ''
+          return {
+            id: r.id,
+            layer,
+            key: r.autoKey ?? '',
+            text: noteSnap.bodies.get(r.id) ?? '',
+            status: r.autoStatus ?? 'candidate',
+            origin: 'auto' as const,
+            enabled: r.enabled !== false,
+            ...(workspace !== '' ? { workspace } : {}),
+            ...(session !== '' ? { session } : {}),
+            ...(scene !== '' ? { scene } : {}),
+          }
+        })
+        const entries = [...userEntries, ...noteEntries]
+        const knownScenes = new Set(userSnap.groups.map((g) => g.name).filter((n) => !isReservedGroup(n)))
         return { entries, knownScenes }
       },
       knownWorkspaces: async () => new Set(Object.keys((await evolutionConfig.readWorkspaces()).workspaces)),
@@ -4753,7 +4783,7 @@ export default {
     // ── 维护扫描（P3）───────────────────────────────────────────────────────
     // 条目视图只读 catalog + state；扫描额外需要文件路径来读 TTL，那份路径只有记忆快照知道。
     const sweepEntries = async (): Promise<(SweepEntry & { filePath?: string })[]> => {
-      const snap = await memoriesService.autoAccess.snapshot()
+      const snap = await memoriesService.autoAccess.autoSnapshot()
       const view = evolutionRuntime.view()
       const pathOf = new Map(snap.rules.map((r) => [r.id, r.path]))
       return Object.values(view.catalog.entries).map((e) => {

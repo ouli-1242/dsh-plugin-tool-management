@@ -257,8 +257,15 @@ export interface MemoriesService {
    * 同时不给三十个既有调用点各加一个可能被误用的方法。
    */
   autoAccess: {
-    /** 现有条目 + 正文 + 场景名（写入管线的门禁与去重要读）。 */
+    /** 用户记忆快照（现有条目 + 正文 + 场景名）。 */
     snapshot(): Promise<Snapshot>
+    /**
+     * 自主笔记快照：扫 `autoNotesRoot`，与用户记忆是两份根。
+     *
+     * 写入管线的门禁要判「同 slot / 同文本」与用户记忆冲突，必须同时拿到两份；
+     * 只读 `snapshot()` 会让门禁看不到任何已有笔记。
+     */
+    autoSnapshot(): Promise<Snapshot>
     /** 序列化 `frontmatter + 正文`（与 `rules-create` 同一实现，口径不会分叉）。 */
     serializeRuleFile(fields: Record<string, string | boolean>, body: string): string
     /**

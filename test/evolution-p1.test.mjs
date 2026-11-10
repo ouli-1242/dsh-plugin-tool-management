@@ -14,6 +14,7 @@ import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy,
 import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
 import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, noteStyleLineOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
 import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf } from '../lib/memories/render-auto.js'
+import { visibleExistingEntries } from '../lib/evolution/write.js'
 
 /**
  * 门禁上下文：给一份最小可用的默认值，逐个测试只覆盖它关心的字段。
@@ -290,6 +291,40 @@ test('冲突门：换了 key 但说法一样 → 仍合并，不在收件箱里�
   assert.equal(r.ok, true)
   assert.equal(r.mergeInto, '_ws/abcd1234abcd1234/pkg')
   assert.deepEqual(r.supersedes, [])
+})
+
+test('门禁只看当前作用域的自动条目', () => {
+  const base = { key: '', text: '', status: 'active', origin: 'auto' }
+  const entries = [
+    { ...base, id: '_ws/a/x', layer: 'workspace', workspace: 'a' },
+    { ...base, id: '_ws/b/x', layer: 'workspace', workspace: 'b' },
+    { ...base, id: '_session/s1/x', layer: 'session', session: 's1' },
+    { ...base, id: '_session/s2/x', layer: 'session', session: 's2' },
+    { ...base, id: 'sceneA/x', layer: 'scene', scene: 'sceneA' },
+    { ...base, id: 'sceneB/x', layer: 'scene', scene: 'sceneB' },
+    { ...base, id: 'global/x', layer: 'global' },
+    // 用户记忆没有 scene 字段：任何场景都该看到它（用户写过的永远优先）。
+    { ...base, id: 'sceneA/user', layer: 'scene', origin: 'user' },
+  ]
+  const got = visibleExistingEntries(entries, { workspaceHash: 'a', sessionId: 's1', scene: 'sceneA' })
+  assert.deepEqual(got.map((e) => e.id), ['_ws/a/x', '_session/s1/x', 'sceneA/x', 'global/x', 'sceneA/user'])
+})
+
+test('停用的笔记不作为合并目标', () => {
+  const same = '这个仓库用 pnpm'
+  const disabled = { id: '_ws/abcd1234abcd1234/pkg', layer: 'workspace', key: 'package-manager', text: same, status: 'active', origin: 'auto', enabled: false }
+  const r = runGates(
+    { text: same, source: 'tool_verified', key: 'package-manager', autoActive: true },
+    ctxOf({ existing: [disabled], workspaceHash: 'abcd1234abcd1234' }),
+  )
+  assert.equal(r.ok, true)
+  assert.equal(r.mergeInto, undefined, '停用条目并进去仍是停用，新说法等于没记下来')
+  // 同一条打开后照旧合并。
+  const on = runGates(
+    { text: same, source: 'tool_verified', key: 'package-manager', autoActive: true },
+    ctxOf({ existing: [{ ...disabled, enabled: true }], workspaceHash: 'abcd1234abcd1234' }),
+  )
+  assert.equal(on.mergeInto, '_ws/abcd1234abcd1234/pkg')
 })
 
 test('冲突门：同 key 不同说法 —— 候选直接被取代，生效中的等确认后才让位', () => {

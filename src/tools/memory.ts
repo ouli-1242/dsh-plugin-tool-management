@@ -775,7 +775,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       text: { type: 'string', description: 'learn: the note itself (<=400 chars), in the user\'s language; by default 1-2 clear sentences, conclusion first, key reason only when it matters. Follow the style shown in the learned-notes section when present. `note` is accepted as an alias.' },
       source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it; user_explicit when you quote the user, user_correction when they corrected you; default model_inference (or user_explicit when quote is set).' },
       quote: { type: 'string', description: 'learn: the user\'s exact words; implies source=user_explicit unless source says otherwise.' },
-      slot: { type: 'string', description: 'learn: optional stable slot name; learning again with the same slot merges into that note.' },
+      slot: { type: 'string', description: 'learn: optional stable slot name; learning again with the same slot merges when it says the same thing, and replaces the old note when it conflicts.' },
       boundary: { type: 'string', description: 'learn: optional; when it may not hold.' },
       layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure; the card asks, or auto-confirm uses the default.' },
       ttlDays: { type: 'number', description: 'learn: optional; re-check after N days.' },
@@ -820,7 +820,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // save 的参数串进来时（`body` / `description` / `memory`），直接指回用户记忆，
       // 别让一次完整记忆被当成一句话笔记丢掉。
       if (args && (args.body !== undefined || args.description !== undefined || args.memory !== undefined)) {
-        throw new Error('those are user-memory parameters, not note parameters: for a full memory call memory_remember with content and scope=scene/global. For a note pass title and text (the same slot updates the existing note).')
+        throw new Error('those are user-memory parameters, not note parameters: for a full memory call memory_remember with content and scope=scene/global. For a note pass title and text (the same slot merges the same meaning and replaces a conflicting note).')
       }
 
       // ── learn（默认）──

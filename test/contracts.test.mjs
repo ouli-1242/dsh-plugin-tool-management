@@ -1256,6 +1256,30 @@ test('场景名口径：命名路径必须单段，定位路径按完整路径',
   assert.equal(isValidGroupPath('a/../b'), false, '路径谓词仍拒绝穿越')
 })
 
+test('自动笔记快照与用户记忆快照各扫各的根', async () => {
+  // 破了这一条的后果是**静默**的：门禁读错根就看不到任何已有笔记，同 slot 永远新建、
+  // 同文本永远命中频率门，而九道门本身看起来完全正常。
+  const home = mkdtempSync(join(tmpdir(), 'dsh-auto-snap-'))
+  try {
+    const stateDir = join(home, 'tool-management')
+    const memoriesRoot = join(stateDir, 'memories')
+    const notesRoot = join(stateDir, 'evolution', 'notes')
+    mkdirSync(join(notesRoot, '_ws', 'ws1'), { recursive: true })
+    mkdirSync(memoriesRoot, { recursive: true })
+    writeFileSync(
+      join(notesRoot, '_ws', 'ws1', 'slot.md'),
+      '---\nname: slot\ndescription: d\norigin: auto\nauto_kind: fact\nauto_key: slot\nauto_status: active\nauto_workspace: ws1\n---\n\nbody text\n',
+    )
+    const svc = createMemoriesService({}, { memoriesRoot, stateDir })
+    const notes = await svc.autoAccess.autoSnapshot()
+    const user = await svc.autoAccess.snapshot()
+    assert.deepEqual(notes.rules.map((r) => r.id), ['_ws/ws1/slot'])
+    assert.equal(notes.rules[0].autoKey, 'slot')
+    assert.equal(notes.bodies.get('_ws/ws1/slot').trim(), 'body text')
+    assert.deepEqual(user.rules.map((r) => r.id), [], '用户记忆快照不扫 evolution/notes')
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
 test('档案切片写：只声明写的字段才动，场景档案按增量落盘', async () => {
   // 破了这一条的后果是**丢更新**：`loadSlice` 在写队列外读、`saveSlice` 在队列内写，
   // 两者之间的窗口里另一个写者改过的字段会被陈旧的整片回写抹掉（审查 P2-3）。
