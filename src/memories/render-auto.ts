@@ -17,7 +17,7 @@
 import {
   AUTO_BUDGET_DEFAULT, AUTO_BUDGET_MAX, AUTO_BUDGET_MIN, AUTO_BUDGET_RATIO,
   AUTO_L0_MAX, AUTO_LAYER_BUDGET, AUTO_MAX_ENTRIES,
-  AUTO_MEMORY_NOTE, AUTO_USER_SEGMENT_HARD_TOKENS, AUTO_USER_SEGMENT_SOFT_TOKENS,
+  AUTO_MEMORY_NOTE, AUTO_MEMORY_NOTE_PARTIAL, AUTO_USER_SEGMENT_HARD_TOKENS, AUTO_USER_SEGMENT_SOFT_TOKENS,
   LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, TRUNCATION_MARKER,
   type MemoryLayer,
 } from './constants.js'
@@ -28,18 +28,10 @@ import { scoreOf, type EntryCounters, type EvolutionState } from '../evolution/s
 export type AutoLayer = 'global' | 'workspace'
 
 /**
- * 固定开销：授权语 + 可能的风格行 / 截断行。从总盘里先扣掉，避免"装满了但发不出去"。
- * 比旧单块时代的 120 大：现在每个域各带一份授权语，拆域没有共享这一句。
+ * 固定开销：收尾句 + 可能的截断 / 降级行。从总盘里先扣掉，避免"装满了但发不出去"。
+ * 比旧单块时代的 120 大：现在每个域各带一份收尾句，拆域没有共享这一句。
  */
 const OVERHEAD_TOKENS = 200
-
-/** kind → 4 字符标签。短标签帮模型快速分型，也省 token。 */
-const KIND_TAG: Record<string, string> = {
-  preference: 'pref',
-  fact: 'fact',
-  correction: 'rule',
-  procedure: 'proc',
-}
 
 export interface AutoRenderScope {
   workspaceHash?: string
@@ -107,7 +99,10 @@ export function competitorBudgetOfLayer(
 }
 
 /**
- * 一行：`- [pref] 正文`；procedure 带 id（它要读全文，没 id 就得多查一次）。
+ * 一行：`- **key** — 正文`，与用户记忆段的 `- **名称** (描述) — 正文` 同形。
+ *
+ * 不再带 `[fact]` / `[pref]` 类型标签：模型不需要知道内部分类，标签只会让每条多付几个
+ * token。key / title 都为空时退回纯正文；procedure 带 id（它要读全文，没 id 就得多查一次）。
  *
  * **playbook 只放标题**（P4）：它带着十几个步骤，整段塞进每轮上下文会吃掉自动段的大半
  * 预算，而且模型在没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程、id 是
@@ -115,14 +110,14 @@ export function competitorBudgetOfLayer(
  * 不会因为标题短就多塞几条进来。
  */
 export function lineOf(entry: CatalogEntry): string {
-  const tag = KIND_TAG[entry.kind] ?? 'note'
   const idPart = entry.kind === 'procedure' && entry.id !== '' ? ` (id: ${entry.id})` : ''
+  const fallback = entry.id.slice(entry.id.lastIndexOf('/') + 1)
+  const name = (entry.title ?? '').trim() || entry.key || ''
   if (entry.status === 'playbook') {
-    const fallback = entry.id.slice(entry.id.lastIndexOf('/') + 1)
-    const title = (entry.title ?? '').trim() || entry.key || fallback
-    return `- [${tag}] ${title}${idPart || ` (id: ${entry.id})`} — playbook, read the memory for steps`
+    const title = name || fallback
+    return `- **${title}** (id: ${entry.id}) — playbook; read the full note for steps`
   }
-  return `- [${tag}] ${entry.oneLine}${idPart}`
+  return name === '' ? `- ${entry.oneLine}${idPart}` : `- **${name}** — ${entry.oneLine}${idPart}`
 }
 
 const countersOf = (state: EvolutionState, id: string): EntryCounters =>
@@ -142,7 +137,7 @@ function inLayer(entry: CatalogEntry, layer: AutoLayer, scope: AutoRenderScope):
 /**
  * 渲染某一层的自动段正文。纯函数：同样的输入永远给同样的字节（去重的前提）。
  *
- * 标题不在这里：`# Learned notes (all projects / this workspace)` 由注入框架按域提供。
+ * 标题不在这里：`# Learned notes` 由注入框架按域提供。
  */
 export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoRenderResult {
   const empty: AutoRenderResult = { text: '', count: 0, tokens: 0, budget: 0, dropped: 0, byLayer: zeroByLayer(), pickedIds: [] }
@@ -208,8 +203,10 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   const lines = picked.map(lineOf)
   if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; list them with memory_manager_list (auto=true).`)
   if (reduced === 'min') lines.push('', '(This conversation\'s hand-written memories are large, so learned notes are shown at their minimum budget.)')
-  // 授权语收尾（与用户记忆的版式一致）：条目 → 截断/降级提示 → 空行 → 授权语。
-  const text = lines.join('\n') + '\n\n' + AUTO_MEMORY_NOTE + '\n'
+  // 收尾句（与用户记忆的版式一致）：条目 → 截断/降级提示 → 空行 → 收尾句。
+  // 截断时去掉「完整集合」声明，否则段尾那句与上面的省略提示自相矛盾。
+  const note = dropped > 0 ? AUTO_MEMORY_NOTE_PARTIAL : AUTO_MEMORY_NOTE
+  const text = lines.join('\n') + '\n\n' + note + '\n'
 
   const byLayer = zeroByLayer()
   byLayer[layer] = picked.length

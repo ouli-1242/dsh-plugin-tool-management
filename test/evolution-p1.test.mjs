@@ -369,10 +369,10 @@ test('自动段：同输入必须逐字节相同（否则每轮重发整段）�
   const a = renderAutoLayer('workspace', input)
   const b = renderAutoLayer('workspace', input)
   assert.equal(a.text, b.text)
-  // 标题由注入框架（`# Learned notes (...)`）提供，正文再写 `##` 会变成两个层级。
+  // 标题由注入框架（`# Learned notes`）提供，正文再写 `##` 会变成两个层级。
   assert.doesNotMatch(a.text, /^#/m)
-  assert.match(a.text, /^- \[pref\] 这个仓库用 pnpm/m, '正文从条目开始')
-  assert.match(a.text, /\*\*Learned notes from earlier sessions;[\s\S]*\*\*\n$/, '授权语收尾')
+  assert.match(a.text, /^- \*\*package-manager\*\* — 这个仓库用 pnpm/m, '正文从条目开始，不带类型标签')
+  assert.match(a.text, /\*\*Learned notes;[\s\S]*complete set\.\*\*\n$/, '收尾句收在最后')
 })
 
 test('自动段：不注入风格行；授权语收在条目之后', () => {
@@ -381,8 +381,9 @@ test('自动段：不注入风格行；授权语收在条目之后', () => {
   // 风格是写新笔记时的指引，不是当前上下文该看到的信息。
   assert.doesNotMatch(r.text, /House style/)
   const lines = r.text.trim().split('\n')
-  assert.match(lines[0], /^- \[/, '正文从条目开始')
-  assert.match(lines[lines.length - 1], /^\*\*Learned notes from earlier sessions;/, '授权语收尾')
+  assert.match(lines[0], /^- /, '正文从条目开始')
+  assert.doesNotMatch(lines[0], /\[(pref|fact|rule|proc)\]/, '不再带类型标签')
+  assert.match(lines[lines.length - 1], /^\*\*Learned notes;/, '收尾句在最后')
   // 同一输入逐字节稳定（去重的前提）。
   assert.equal(renderAutoLayer('workspace', input).text, r.text)
 })
@@ -487,6 +488,7 @@ test('自动段：条数多时截断并明说（不静默丢）', () => {
   assert.ok(r.count > 0)
   assert.ok(r.dropped > 0)
   assert.match(r.text, /not shown/)
+  assert.doesNotMatch(r.text, /complete set/, '截断时不能声称「这就是全部」')
   assert.ok(r.tokens <= r.budget, `${r.tokens} > ${r.budget}`)
 })
 

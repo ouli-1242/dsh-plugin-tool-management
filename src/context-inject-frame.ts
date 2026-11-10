@@ -216,13 +216,14 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   },
   // 两条自动记忆各自一条消息：标题在这里，正文里不再写 `## Learned notes` ——
   // 框架的 `#` 已经是板块层，正文再写一个 `##` 只会让模型读成两个层级。
-  // 不写 `how`：正文第一行就是授权语，同一件事说两遍是白付 token。
+  // 范围后缀（all projects / this workspace）不进标题：两条消息本来就分开，模型从
+  // 各自的注入域就能区分；重复写只是噪音。收尾句在正文末尾，这里不再写 `how`。
   autoGlobal: {
-    title: 'Learned notes (all projects)',
+    title: 'Learned notes',
     supersede: SUPERSEDE_NOTE,
   },
   autoWorkspace: {
-    title: 'Learned notes (this workspace)',
+    title: 'Learned notes',
     supersede: SUPERSEDE_NOTE,
   },
   mcp: {
