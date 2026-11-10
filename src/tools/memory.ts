@@ -1,15 +1,13 @@
-// 记忆（rules）域的 model 工具：memory_get / memory_manager_switch / memory_remember。
+// 记忆（rules）域的 model 工具：memory_get / memory_switch / memory_remember。
 //
 // 自主笔记（agent 学的一句话）是另一族 `memory_note`：两族按对象分开，读取统一走
 // `memory_get`，id 形状也不同（用户记忆 `<scene>/<name>`，笔记 `note:<layer>/<slug>`）。
 //
-// 为什么族名是 `memory_manager_` 而不是 `scene_memory_manager_`：后者是为了跟注入段名
-// （`scene-memory-manager-catalog`）对齐才改的，但那个名字描述的是**域**，
-// 而这个族操作的全是记忆。加场景能力时这个错配就现形了 —— 场景是另一个对象（容器，
-// 进入时切换 mcp / 技能 / 人设），硬塞进 `save` 会让 `description` 变成双义参数（给
-// `memory` 时是记忆描述、给 `scene` 时是场景描述），门禁也得按参数分叉（记忆写入有开关
-// 可放行，场景写入是改运行时环境、不该有那条路）。所以拆成两族：这里管记忆内容，
-// `scene_manager_*`（tools/scene.ts）管场景本身。
+// 为什么工具名是 `memory_*` 而不是 `scene_memory_manager_*`：后者描述的是**域**，
+// 而这些工具操作的全是记忆。加场景能力时这个错配就现形了 —— 场景是另一个对象（容器，
+// 进入时切换 mcp / 技能 / 人设），硬塞进同一个写工具会让 `description` 变成双义参数、
+// 门禁按参数分叉（记忆写入有开关可放行，场景写入是改运行时环境、不该有那条路）。
+// 所以拆成两族：这里管记忆内容，`scene_manager_*`（tools/scene.ts）管场景本身。
 //
 // 场景清单也不挂在这条 list 的尾巴上（「记忆就管记忆，场景就管场景」）——
 // 它在 `scene_manager_list`，理由记在 tools/scene.ts 头部，别当"少写了一段"再加回来。
@@ -377,7 +375,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     },
   }))
   register(defineTool({
-    name: 'memory_manager_switch',
+    name: 'memory_switch',
     // 为什么叫 `_switch` 而不是 `_set_enabled`：六个域里"拨一个开关"
     // 是同一件事，名字该同形 —— `mcp_manager_switch` 早就是这个名字，`_set_enabled` 只剩
     // 记忆 / 技能 / 人设三族在叫。**参数保留 `enabled` 布尔**：这里没有 `restart` 那第三个
@@ -395,14 +393,15 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     // 内部术语，模型据此做不了任何判断 —— "不再被注入"已经是它需要的全部因果。
     description: 'Enable or disable one user-written memory. Disabled memories stop being injected. Reversible. Agent notes are not switched here — forget them with the agent-note tool. Only when the user asks or approves.',
     parameters: {
-      memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
+      id: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
       enabled: { type: 'boolean', required: true, description: 'true = enable, false = disable.' },
       // 默认只改**这个对话**。写全局要显式说明。
       scope: { type: 'string', enum: ['session', 'global'], description: scopeSessionDesc('global = every conversation.') },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
-      const memory = String((args && args.memory) || '')
+      // `memory` 是改名前的参数名，兼容一次；新调用方用 `id`。
+      const memory = String((args && (args.id !== undefined ? args.id : args.memory)) || '')
       // 笔记不是用户记忆：这条工具拨的是索引里的开关，笔记的删除/停用走另一族。
       if (isNoteRef(memory)) {
         throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_note action=forget', 'the agent-note tool') + '. User memory ids look like <scene>/<name>.')
@@ -439,7 +438,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         const all: any = await deps.rulesOps['rules-list']({})
         if (all && all.ok !== false) {
           const group = String(rule.group || '')
-          const on = group === 'global' || (group !== '' && (all.activeMode === 'all' || String(all.activeScene || '') === group))
+          const on = group === GLOBAL_SCENE || group === SHARED_GROUP ||
+            (group !== '' && (all.activeMode === 'all' || String(all.activeScene || '') === group))
           if (!on) sceneNote = ' — BUT its scene "' + group + '" is not the one injecting, so it still will not be injected; turn that scene on (or move it to global) first'
         }
       } catch { sceneNote = '' }

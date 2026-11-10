@@ -127,6 +127,7 @@ test('记忆族与场景族各归自己的域，中途用过的名字不是别�
   // 兼容页那一组工具掉进「其它」桶、注入实况里该域的调用数永远是 0。
   assert.equal(domainOfTool('memory_remember'), 'memoryGlobal')
   assert.equal(domainOfTool('memory_get'), 'memoryGlobal')
+  assert.equal(domainOfTool('memory_switch'), 'memoryGlobal')
   // 场景与记忆是**两个域**（`scene-manager-catalog` / `memory-global-catalog`），
   // 工具族跟着分开。
   assert.equal(domainOfTool('scene_manager_save'), 'scene')
@@ -167,9 +168,9 @@ test('旧工具名迁移：用户「关掉了某条」的意图不能在改名�
   // 改名的人往往会记得改 `src/tools/*.ts`，却忘了这份表。
   assert.deepEqual(
     migrateLegacyToolNames(normalizeToolTableSettings({
-      hidden: ['memory_manager_set_enabled', 'skill_manager_set_enabled', 'subagent_manager_set_enabled'],
+      hidden: ['memory_manager_set_enabled', 'memory_manager_switch', 'skill_manager_set_enabled', 'subagent_manager_set_enabled'],
     })).settings.hidden,
-    ['memory_manager_switch', 'skill_manager_switch', 'subagent_manager_switch'],
+    ['memory_switch', 'skill_manager_switch', 'subagent_manager_switch'],
   )
   // 不认识的名字原样保留：分不清"用户的旧名"与"别的插件的工具名"，误删比留着一条死名更糟。
   assert.equal(LEGACY_TOOL_NAME_MAP.other_plugin_tool, undefined)
@@ -3759,8 +3760,8 @@ test('四个回收站恢复 op：缺省撞名即拒，带 dedupe 才退号，拒
   }
 })
 
-// 反向：**新建**那四条 op 一条都不许认 `dedupe`。模型工具（memory_manager_* / skill_manager_* /
-// 子智能体 / 场景）靠"同名即拒"决定这次是新建还是更新 —— 给它们加一个自动改名开关，等于把
+// 反向：**新建**那四条 op 一条都不许认 `dedupe`。技能 / 子智能体 / 场景的模型工具靠
+// "同名即拒"决定这次是新建还是更新 —— 给它们加一个自动改名开关，等于把
 // 那条语义从根上改掉。界面侧的退号是本地算好名字再传下去的（见上两条测试），不碰 op。
 test('四条新建 op 不许认 dedupe：模型工具靠"同名即拒"判断新建还是更新', () => {
   const srcDir = join(import.meta.dirname, '..', 'src')
@@ -4975,8 +4976,10 @@ test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器�
   assert.equal(asks('mcp_manager_switch', { server: 's', action: 'stop' }), true)
   assert.equal(asks('mcp_manager_switch', { server: 's', action: 'restart' }), false)
   // 开关：默认写本会话（爆炸半径一个对话）不问，机器级才问
-  assert.equal(asks('memory_manager_switch', { memory: 'global/a', enabled: false }), false)
-  assert.equal(asks('memory_manager_switch', { memory: 'global/a', enabled: false, scope: 'global' }), true)
+  assert.equal(asks('memory_switch', { id: 'global/a', enabled: false }), false)
+  assert.equal(asks('memory_switch', { id: 'global/a', enabled: false, scope: 'global' }), true)
+  // 改名前的参数名仍能触发机器级确认（兼容一次，不注册别名工具）。
+  assert.equal(asks('memory_switch', { memory: 'global/a', enabled: false, scope: 'global' }), true)
   assert.equal(asks('skill_manager_switch', { name: 'x', enabled: false }, 'global'), true)
   // 参数不成立时不拦：让工具自己报错，别产生无效审批
   assert.equal(asks('subagent_manager_switch', { name: 'x' }), false)
@@ -5009,7 +5012,7 @@ test('must-ask：完全权限也不许跳过的确认（删除 / 机器级停用
   assert.equal(must('tool_manager_tools', { action: 'enable', tools: ['x'], scope: 'global' }), false, '启用是加回能力')
   assert.equal(must('tool_manager_tools', { action: 'repair', target: 'memory-index' }), true)
   assert.equal(must('tool_manager_tools', { action: 'list' }), false)
-  assert.equal(must('memory_manager_switch', { memory: 'global/a', enabled: false, scope: 'global' }), false, '未列入 must-ask 的维持可跳过')
+  assert.equal(must('memory_switch', { id: 'global/a', enabled: false, scope: 'global' }), false, '未列入 must-ask 的维持可跳过')
 })
 
 // 签发端与校验端的指纹必须同口径（#22）：get-current 发的是 stampOfText 16 位指纹，

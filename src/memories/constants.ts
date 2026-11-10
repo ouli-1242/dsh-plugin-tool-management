@@ -260,7 +260,7 @@ export const fail = (code: string, error: string, params?: Record<string, string
 
 /**
  * 记忆索引文件名 / 记忆回收站目录名（hub 根下）。
- * 域叫「记忆」（工具 `memory_manager_*`、界面「记忆」页），所以按域命名 ——
+ * 域叫「记忆」（工具 `memory_*`、界面「记忆」页），所以按域命名 ——
  * 旧名 `rules-index.json` / `rules-trash/` 由 hub 的启动迁移搬过来（见 hub.ts）。
  */
 export const MEMORIES_INDEX_FILE = 'memories-index.json'

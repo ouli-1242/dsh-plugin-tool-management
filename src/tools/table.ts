@@ -155,7 +155,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'scene_manager_switch',
   'scene_manager_save',
   'scene_manager_archive',
-  'memory_manager_switch',
+  'memory_switch',
   'mcp_manager_list',
   'mcp_manager_save',
   'skill_manager_list',

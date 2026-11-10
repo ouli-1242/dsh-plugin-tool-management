@@ -35,7 +35,8 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   // 「拨一个开关」六域同形 —— `_set_enabled` → `_switch`（与 `mcp_manager_set_enabled`
   // → `mcp_manager_switch` 同一条路）。**改的只是名字，参数不动**（仍是 `enabled` 布尔），
   // 所以这里是一对一翻译、不涉及语义合并。
-  memory_manager_set_enabled: 'memory_manager_switch',
+  memory_manager_set_enabled: 'memory_switch',
+  memory_manager_switch: 'memory_switch',
   skill_manager_set_enabled: 'skill_manager_switch',
   subagent_manager_set_enabled: 'subagent_manager_switch',
   // 删除族：五个域各一条 → 合成一条 `plugin_manager_remove`（**多对一**）。
