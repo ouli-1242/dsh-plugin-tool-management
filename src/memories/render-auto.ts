@@ -112,7 +112,7 @@ export function competitorBudgetOfLayer(
  *
  * **playbook 只放标题**（P4）：它带着十几个步骤，整段塞进每轮上下文会吃掉自动段的大半
  * 预算，而且模型在没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程、id 是
- * 什么"，真要执行时再 `memory_manager_read` 取全文。预算仍按 `oneLine` 记（高估），
+ * 什么"，真要执行时再 `memory_get` 取全文。预算仍按 `oneLine` 记（高估），
  * 不会因为标题短就多塞几条进来。
  */
 export function lineOf(entry: CatalogEntry): string {

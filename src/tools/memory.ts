@@ -1,7 +1,7 @@
-// 记忆（rules）域的 model 工具：memory_manager_list / _read / _search / _switch / _save。
+// 记忆（rules）域的 model 工具：memory_get / memory_manager_switch / memory_manager_save。
 //
-// 自主笔记（agent 学的一句话）是另一族 `memory_note`：两族按对象分开，不共用 list/read，
-// id 形状也不同（用户记忆 `<scene>/<name>`，笔记 `note:<layer>/<slug>`）。
+// 自主笔记（agent 学的一句话）是另一族 `memory_note`：两族按对象分开，读取统一走
+// `memory_get`，id 形状也不同（用户记忆 `<scene>/<name>`，笔记 `note:<layer>/<slug>`）。
 //
 // 为什么族名是 `memory_manager_` 而不是 `scene_memory_manager_`：后者是为了跟注入段名
 // （`scene-memory-manager-catalog`）对齐才改的，但那个名字描述的是**域**，
@@ -73,168 +73,266 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
    */
   const noteTool = (agent: unknown, named: string, neutral: string): string =>
     toolOrNeutral(deps, agent, PROACTIVE_MEMORY_TOOL, named, neutral)
+  const evo = deps.evolutionOps
+
+  /**
+   * 这条规则是不是自主笔记而不是用户记忆。
+   *
+   * `memory_get` 把两族并成一份输出，用户记忆那一半必须把笔记摘掉 —— 否则同一句话
+   * 会在「user memories」与「agent notes」各出现一次。`origin` 是权威字段；旧数据
+   * 没有它时按目录判（`_ws` / `_session` 只由笔记后端写入，见 memories/catalog.ts）。
+   */
+  const isAutoRule = (x: any): boolean => {
+    if (x && x.origin === 'auto') return true
+    if (x && x.origin === 'user') return false
+    // 搜索结果把场景叫 `scene`，清单叫 `group`；两边都要认。
+    const group = String((x && (x.group !== undefined ? x.group : x.scene)) || '')
+    return group === '_ws' || group.startsWith('_ws/') ||
+      group === '_session' || group.startsWith('_session/')
+  }
+
+  /**
+   * 把模型给的引用解析成一条笔记：id（可带 `note:`）→ slot → title → 原文，唯一命中才算。
+   *
+   * 为什么允许 title/原文：注入行里只有 key 与摘要，模型不一定记得 id；唯一命中时
+   * 直接读/删，比让它再查一次 list 省一轮。多条命中必须报候选 —— 猜错一条就是删错。
+   */
+  const resolveNote = async (ref: string): Promise<{ id: string | null; hits: any[] }> => {
+    const raw = stripNoteRef(ref)
+    if (raw === '' || !evo) return { id: null, hits: [] }
+    const list: any = await evo['evolution-list']({ all: true })
+    const rows: any[] = list && Array.isArray(list.entries) ? list.entries : []
+    const hits = rows.filter((e: any) =>
+      String(e.id || '') === raw ||
+      String(e.key || '') === raw ||
+      String(e.title || '') === raw ||
+      String(e.oneLine || '') === raw
+    )
+    return hits.length === 1 ? { id: String(hits[0].id), hits } : { id: null, hits }
+  }
+  const describeNoteHits = (hits: any[]): string =>
+    hits.map((e) => noteRefOf(String(e.id)) + (e.title ? ' (' + String(e.title) + ')' : '')).join(', ')
+  /** forget 的引用参数：新名 `note`，旧名 `memory` 兼容一次（改名前的调用习惯）。 */
+  const noteArgOf = (a: any): string => String((a && (a.note !== undefined ? a.note : a.memory)) || '').trim()
+
+  /** 一条笔记的正文 + 证据链；`note:` 前缀由调用方决定是否剥掉。 */
+  const noteReadText = async (ref: string): Promise<string> => {
+    if (!evo) throw new Error('agent notes are not available in this build')
+    const raw = stripNoteRef(ref)
+    if (raw === '') throw new Error('missing argument: id — the note id (note:...), slot, title or exact text.')
+    let a: any = await evo['evolution-read']({ id: raw, touch: true })
+    if (!a || a.ok === false) {
+      const resolved = await resolveNote(raw)
+      if (resolved.id !== null) a = await evo['evolution-read']({ id: resolved.id, touch: true })
+      else if (resolved.hits.length > 1) {
+        throw new Error('ambiguous: "' + ref + '" matches ' + describeNoteHits(resolved.hits) + '; pass one of these ids.')
+      }
+    }
+    if (!a || a.ok === false) throw new Error(String((a && a.error) || 'no such agent note: ' + ref))
+    const st = a.state || {}
+    const bits = [
+      'status ' + String(a.status || 'active'),
+      'confidence ' + (Number(st.confidence) || 0).toFixed(2),
+      a.layer,
+    ]
+    const lines = ['# ' + noteRefOf(String(a.id || raw)) + ' (agent note)', bits.join(' · ')]
+    if (a.title) lines.push('title: ' + String(a.title))
+    if (a.key) lines.push('slot: ' + String(a.key))
+    if (a.basis) lines.push('basis: ' + String(a.basis))
+    if (a.boundary) lines.push('boundary: ' + String(a.boundary))
+    if (a.degraded) lines.push('degraded: ' + String(a.degraded))
+    lines.push('', String(a.body || ''))
+    const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
+    if (ev.length) {
+      lines.push('', 'evidence (latest ' + ev.length + '):')
+      for (const e of ev) lines.push('- [' + String(e.source || '') + '] ' + String(e.quote || '').slice(0, 200))
+    }
+    const tr: any[] = Array.isArray(st.transitions) ? st.transitions : []
+    if (tr.length) {
+      lines.push('', 'timeline:')
+      for (const x of tr) lines.push('- ' + String(x.at || '') + ' ' + String(x.from || '') + ' → ' + String(x.to || '') + ' (' + String(x.actor || '') + ': ' + String(x.reason || '') + ')')
+    }
+    return lines.join('\n')
+  }
+
+  const noteCatalogText = async (all: boolean, limit: number): Promise<string> => {
+    if (!evo) return ''
+    const r: any = await evo['evolution-list']({ all })
+    if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read agent notes'))
+    const rows: any[] = Array.isArray(r.entries) ? r.entries : []
+    const shown = rows.slice(0, limit)
+    const order = ['workspace', 'global']
+    const lines: string[] = []
+    for (const layer of order) {
+      const group = shown.filter((e) => e.layer === layer)
+      if (!group.length) continue
+      lines.push('[' + layer + ']')
+      for (const e of group) {
+        lines.push('- ' + noteRefOf(String(e.id)) + ' · ' + String(e.status || 'active') +
+          (e.key ? ' · slot ' + String(e.key) : '') +
+          (e.title ? ' · ' + String(e.title) : '') +
+          ' · conf ' + (Number(e.confidence) || 0).toFixed(2) +
+          ' · ' + (e.injects ? 'injects' : 'not injected') +
+          (e.needsReview ? ' · needs review: ' + String(e.needsReview) : '') +
+          (e.oneLine ? ' — ' + String(e.oneLine) : ''))
+      }
+    }
+    const head = 'agent notes: ' + rows.length + ' listed' +
+      (r.total !== undefined ? ' / ' + r.total + ' in catalog' : '') +
+      (rows.length > shown.length ? ' (showing ' + shown.length + ', raise limit for more)' : '')
+    return head + '\n' + (lines.join('\n') || '(none)')
+  }
+
+  const noteSearchText = async (query: string, limit: number): Promise<string> => {
+    if (!evo) return ''
+    const r: any = await evo['evolution-list']({ all: true })
+    if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read agent notes'))
+    const words = query.toLowerCase().split(/\s+/).filter((w) => w !== '')
+    const rows: any[] = (Array.isArray(r.entries) ? r.entries : []).filter((e: any) => {
+      const hay = [e.id, e.key, e.title, e.oneLine].map((x) => String(x || '').toLowerCase()).join(' ')
+      return words.every((w) => hay.includes(w))
+    })
+    const shown = rows.slice(0, limit)
+    const lines = shown.map((e: any) => '- ' + noteRefOf(String(e.id)) + ' · ' + String(e.status || 'active') +
+      (e.title ? ' · ' + String(e.title) : '') +
+      (e.oneLine ? ' — ' + String(e.oneLine) : ''))
+    return 'agent notes matching "' + query + '": ' + rows.length +
+      (rows.length > shown.length ? ' (showing ' + shown.length + ')' : '') +
+      '\n' + (lines.join('\n') || '(none)')
+  }
+
+  const userCatalogText = async (all: boolean, limit: number, scene: string | undefined, exec: any): Promise<string> => {
+    const opArgs: any = {}
+    if (scene !== undefined) opArgs.group = scene
+    const scoped = sessionScopeOf(deps, exec && exec.agent)
+    if (scoped !== null) opArgs.sessionId = scoped.sessionId
+    const r: any = await deps.rulesOps['rules-list'](opArgs)
+    if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read memories')
+    // 「会注入」的判定与记忆段同源（renderSceneMemory）：global 与 _shared 恒常注入，
+    // 其余场景要在 index.active 里，再叠加单条 enabled 与同名 bundle 的 shadowed。
+    const alwaysInjects = (group: string): boolean => group === GLOBAL_SCENE || group === SHARED_GROUP
+    const sceneOn = (group: string): boolean => alwaysInjects(group) ||
+      (group !== '' && (r.activeMode === 'all' || String(r.activeScene || '') === group))
+    const stateOf = (x: any): { injects: boolean; label: string } => {
+      if (x.shadowed === true) return { injects: false, label: 'shadowed' }
+      if (x.enabled === false) return { injects: false, label: 'disabled' }
+      if (!sceneOn(String(x.group || ''))) return { injects: false, label: 'scene off' }
+      return { injects: true, label: 'injects' }
+    }
+    const rows: Array<{ x: any; injects: boolean; label: string }> =
+      (r.rules || []).filter((x: any) => !isAutoRule(x)).map((x: any) => ({ x, ...stateOf(x) }))
+    const shown = all ? rows : rows.filter((row) => row.injects)
+    const visible = shown.slice(0, limit)
+    const lines = visible.map(({ x, label }) => (
+      '- ' + x.id + ' [' + (x.group || 'no scene') + '] ' + label +
+      (x.form === 'bundle'
+        ? ' · bundle' + (x.attach && x.attach.count ? ' (' + x.attach.count + ' attachment(s))' : '')
+        : '') +
+      (x.description ? ' — ' + x.description : '')
+    ))
+    const scope = r.activeMode === 'all'
+      ? 'every scene (historical default, not narrowed)'
+      : (r.activeScene ? '"' + String(r.activeScene) + '"' : 'no scene is on')
+    const viewNoun = deps.scopeMode?.() === 'workspace' ? 'this workspace' : 'this conversation'
+    const sessionNote = scoped === null || scoped.scope === undefined
+      ? ''
+      : '\nthis is ' + viewNoun + "'s view" +
+        (scoped.scope.scene !== undefined ? ' — scene pinned to "' + scoped.scope.scene + '"; the machine-wide scene may differ' : '') +
+        (scoped.scope.memory !== undefined ? '; ' + Object.keys(scoped.scope.memory).length + ' switch(es) applied here' : '')
+    const sharedHere = rows.some(({ x }) => String(x.group || '') === SHARED_GROUP)
+    const header = 'user memories: ' + (all
+      ? rows.length + ' total'
+      : shown.length + ' injecting / ' + rows.length + ' total' +
+        (shown.length === rows.length ? '' : ' (pass all=true for all)')) +
+      '\ninjects from: ' + scope + ' + global' + (sharedHere ? ' + _shared' : '') + ' (always on)' + sessionNote + '\n'
+    const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
+    return header + (lines.join('\n') || '(none)') + moreNotShown(shown.length, visible.length) + notice
+  }
+
+  const userSearchText = async (query: string, limit: number, scene: string | undefined, exec: any): Promise<string> => {
+    const opArgs: any = { query, limit }
+    const scoped = sessionScopeOf(deps, exec && exec.agent)
+    if (scoped !== null) opArgs.sessionId = scoped.sessionId
+    const r: any = await deps.rulesOps['rules-search'](opArgs)
+    if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to search memories')
+    let hits: any[] = Array.isArray(r.hits) ? r.hits : []
+    hits = hits.filter((h) => !isAutoRule(h))
+    if (scene !== undefined) hits = hits.filter((h) => String(h.scene || '') === scene)
+    if (!hits.length) return 'user memories: no match for "' + query + '"'
+    const lines = hits.slice(0, limit).map((h) => '- ' + h.id + ' [' + (h.scene || 'no scene') + ']' +
+      (h.enabled === false ? ' (off here)' : '') +
+      (h.snippet ? ' — ' + h.snippet : ''))
+    return 'user memories matching "' + query + '": ' + hits.length +
+      (hits.length > limit ? ' (showing ' + limit + ')' : '') + '\n' + lines.join('\n')
+  }
+
+  const userReadText = async (id: string, exec: any): Promise<string | null> => {
+    const r: any = await deps.rulesOps['rules-read']({ id })
+    if (!r || r.ok === false) return null
+    const rule: any = r.rule || {}
+    // 自动条目由笔记渲染器负责；这里返回 null，让 readEntry 走 noteReadText。
+    if (isAutoRule(rule)) return null
+    const attach: any[] = Array.isArray(rule.attachments) ? rule.attachments : []
+    const form = rule.form === 'bundle' ? 'bundle' : 'flat'
+    const attLine = attach.length
+      ? '\nattachments (' + attach.length + '): ' + attach.map((a: any) => String((a && a.name) || a)).join(', ')
+      : ''
+    const scoped = sessionScopeOf(deps, exec && exec.agent)
+    const over = scoped?.scope?.memory?.[String(rule.id)]
+    const offHere = over === false
+      ? '\n(switched off here only — the body above is not injected here; the global setting is unchanged) '
+      : ''
+    return '# ' + rule.id + ' (memory, ' + form + ')' + attLine + '\n\n' + (rule.body || '') + offHere
+  }
+
+  const readEntry = async (id: string, exec: any): Promise<string> => {
+    if (isNoteRef(id)) return noteReadText(id)
+    const mem = await userReadText(id, exec)
+    if (mem !== null) return mem
+    if (evo) {
+      try { return await noteReadText(id) } catch (e) {
+        throw new Error('no user memory with id "' + id + '"; ' + (e instanceof Error ? e.message : String(e)))
+      }
+    }
+    throw new Error('no user memory with id "' + id + '". Call memory_get with no id to list what exists.')
+  }
+
   register(defineTool({
-    name: 'memory_manager_list',
-    // 末尾**不点名** `scene_manager_list`：场景一族在出厂默认里就是关着的，指向一条模型没有的
-    // 工具只会让它去猜名字（用户 把默认名单扩到十五条时去掉的这句）。
-    description: 'List user-written memories only (id, scene, enabled, form flat|bundle, description) plus the scene the injection follows. Agent notes are not included — list them with the agent-note tool. What is injected each turn is in the "Current memories" reminder; use this for ids and for entries that are off. Pass `scene` to filter; all=true lists everything.',
+    name: 'memory_get',
+    description: 'Look up user-written memories and agent notes. No id → catalog (what exists and what injects); `id` → full body; `query` → filtered catalog with snippets. Agent note ids start with `note:`. Use this for ids and for entries not already in your context. Read-only.',
     parameters: {
-      // 参数名与其余五个域同词：同一个概念在工具面只该有一个名字
-      // 而 `scene` 是它在 `scene_manager_*`、`<scene>/<name>` 与注入段标题里的叫法。
-      // op 的内部契约字段仍是 `group`（`rules-list` 与界面侧调用方都读它），所以 execute 里
-      // 显式映射一次 —— 改 op 的字段名要动界面，那不是这一条能顺手做的事。
-      scene: { type: 'string', description: 'Optional scene filter; `global` and `_shared` are the always-on scenes.' },
-      all: { type: 'boolean', description: 'Include memories that are off, in an inactive scene, or shadowed (default false).' },
-      limit: { type: 'number', description: 'Max entries (default 50, max 100).' },
+      id: { type: 'string', description: 'Read one entry: a user memory id (<scene>/<name>) or an agent note id (note:...).' },
+      query: { type: 'string', description: 'Filter the catalog by words in id, scene, description, tags or body; every word must match (case-insensitive).' },
+      kind: { type: 'string', enum: ['memory', 'note'], description: 'Limit the catalog to user-written memories or agent notes.' },
+      scene: { type: 'string', description: 'Only user memories in this scene; `global` and `_shared` are the always-on scenes.' },
+      all: { type: 'boolean', description: 'Include entries that are off, in an inactive scene, or archived (default false).' },
+      limit: { type: 'number', description: 'Max entries per kind (default 50, max 100).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
-      // 旧版把笔记列表塞在这条工具的 `auto` 参数里。两域分开后明确报错，
-      // 别让一次旧习惯静默返回一份用户记忆清单。
-      if (args && args.auto === true) {
-        throw new Error('the auto flag was removed: agent notes are listed by ' + noteTool(exec && exec.agent, 'memory_note action=list', 'the agent-note tool') + '. This tool lists user-written memories only.')
-      }
-      const showAll = Boolean(args && args.all === true)
-      // `scene` → `group`：只把 op 认的那个字段传过去，别把 `scene` 也塞给它（它不认）。
-      const opArgs: any = {}
-      if (args && args.scene !== undefined) opArgs.group = args.scene
-      // 会话层（`memory_manager_list` 只列本会话场景）：带上 sessionId，
-      // op 就按本会话钉住的场景与逐条开关投影 —— 「会注入」这一栏与模型真实看到的一致。
-      // 取不到会话 = 不给，op 退回全局口径（不报错）。
-      const scoped = sessionScopeOf(deps, exec && exec.agent)
-      if (scoped !== null) opArgs.sessionId = scoped.sessionId
-      const r: any = await deps.rulesOps['rules-list'](opArgs)
-      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to read memories')
-      // 「会注入」的判定与记忆段同源（renderSceneMemory）：global 场景恒常注入，其余场景要
-      // 在 index.active 里，再叠加单条 enabled 与同名 bundle 的 shadowed。默认只列这些，
-      // 全列一次会把没启用的条目也算进上下文（与技能列表同口径）。
-      //
-      // **两个**保留桶恒常注入，不是一个：`global`（界面「全局」）之外还有 `_shared`
-      // （公共基线）。注入侧 `resolveActiveScenes` 无条件把两者都放进 active
-      // （见 memories/projection.ts），这里只认 `global` 就会把 `_shared` 标成
-      // "scene off" 并默认藏起来 —— 而它每轮都在上下文里。模型照这份名单回答
-      // 「没有这条记忆」，实际它正躺在自己眼前。`activeScene` 永远报不到 `_shared`
-      // （`enabledSceneOf` 只回非保留场景），所以只能在这一层显式认。
-      const alwaysInjects = (group: string): boolean => group === GLOBAL_SCENE || group === SHARED_GROUP
-      const sceneOn = (group: string): boolean => alwaysInjects(group) ||
-        (group !== '' && (r.activeMode === 'all' || String(r.activeScene || '') === group))
-      const stateOf = (x: any): { injects: boolean; label: string } => {
-        if (x.shadowed === true) return { injects: false, label: 'shadowed' }
-        if (x.enabled === false) return { injects: false, label: 'disabled' }
-        if (!sceneOn(String(x.group || ''))) return { injects: false, label: 'scene off' }
-        return { injects: true, label: 'injects' }
-      }
-      const rows: Array<{ x: any; injects: boolean; label: string }> =
-        (r.rules || []).map((x: any) => ({ x, ...stateOf(x) }))
-      const shown = showAll ? rows : rows.filter((row) => row.injects)
-      // 返回体也要有上限：返回值进上下文，而工具表只管 schema —— 这一笔它管不着。
-      const limit = listLimit(args && args.limit)
-      const visible = shown.slice(0, limit)
-      const lines = visible.map(({ x, label }) => (
-        '- ' + x.id + ' [' + (x.group || 'no scene') + '] ' + label +
-        // 形态与附件：此前不报，模型分不清哪条是 bundle、更不知道它带了几个附件
-        // （`rules-list` 早就把 `form` 与 bundle 的附件摘要给了出来，只是这里没渲染）。
-        (x.form === 'bundle'
-          ? ' · bundle' + (x.attach && x.attach.count ? ' (' + x.attach.count + ' attachment(s))' : '')
-          : '') +
-        (x.description ? ' — ' + x.description : '')
-      ))
-      // 注入按哪个场景走 —— 上面那句「场景未启用」只有配上它才可解读：少了这一行，
-      // 模型看到一片"未启用"会以为是条目自己的问题。（场景本身的清单在 `scene_manager_list`，
-      const scope = r.activeMode === 'all'
-        ? 'every scene (historical default, not narrowed)'
-        : (r.activeScene ? '"' + String(r.activeScene) + '"' : 'no scene is on')
-      // 会话层：本会话钉了场景 / 改了个别开关时，上面那行报的是**本会话**的投影
-      // 与全局可能不同。不说清的话，模型会拿这份名单去回答"全局现在是什么" —— 那是错的答案。
-      // 粒度决定这句话的主语：工作区粒度下那一格是同工作区共享的，"本对话"是假话。
-      const viewNoun = deps.scopeMode?.() === 'workspace' ? 'this workspace' : 'this conversation'
-      const sessionNote = scoped === null || scoped.scope === undefined
-        ? ''
-        : '\nthis is ' + viewNoun + "'s view" +
-          (scoped.scope.scene !== undefined ? ' — scene pinned to "' + scoped.scope.scene + '"; the machine-wide scene may differ' : '') +
-          (scoped.scope.memory !== undefined ? '; ' + Object.keys(scoped.scope.memory).length + ' switch(es) applied here' : '')
-      // `_shared` 只在真有这类条目时点名：没有就不付这几个字，而有了不说的话，
-      // 上面那句「只列会注入的」会让人以为名单里全是 global + 当前场景。
-      const sharedHere = rows.some(({ x }) => String(x.group || '') === SHARED_GROUP)
-      const header = 'memories: ' + (showAll
-        ? rows.length + ' total'
-        : shown.length + ' injecting / ' + rows.length + ' total' +
-          (shown.length === rows.length ? '' : ' (pass all=true for all)')) +
-        '\ninjects from: ' + scope + ' + global' + (sharedHere ? ' + _shared' : '') + ' (always on)' + sessionNote + '\n'
-      // 注入边界：压制型预设（persona complete / 关闭运行时上下文）下本插件默认不注入，
-      // 此时列出的记忆**不在**模型上下文里。必须说出来，否则模型会假设自己已经看到正文。
-      const notice = await deps.reachNoticeForAgent(deps.presetRoster(), exec && exec.agent && exec.agent.ctx, deps.injectNoticeOptions())
-      return header + (lines.join('\n') || '(none)') + moreNotShown(shown.length, visible.length) + notice
-    },
-  }))
-  register(defineTool({
-    name: 'memory_manager_read',
-    // "dropped by the byte budget" 改成"left out of it"：byte budget
-    // 是本插件内部术语，模型没有这个概念 —— 它只知道"这条在不在我上下文里"。说内部机制
-    // 等于让它去猜一个它观测不到的量。
-    description: 'Read one user-written memory\'s full body, its form (flat|bundle) and its attachment names. Agent notes are not user memories — read them with the agent-note tool. Only for ones not already in your context (disabled, in an inactive scene, or left out). Attachment contents are not returned — use your file tools.',
-    parameters: {
-      memory: { type: 'string', required: true, description: 'Memory id like <scene>/<name>.' },
-    },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args: any, exec: any) {
-      // op 的字段名是 `id`，不改 op：这里显式转换（键名对模型是 `<场景>/<名字>`，对 op 是 `id`）。
-      const wantId = String((args && args.memory) || '')
-      // 笔记 id 带 `note:` 前缀：这条工具只读用户记忆，直接指向正确的族。
-      if (isNoteRef(wantId)) {
-        throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_note action=read', 'the agent-note tool') + '. User memory ids look like <scene>/<name>.')
-      }
-      const r: any = await deps.rulesOps['rules-read']({ id: wantId })
-      if (!r || r.ok === false) {
-        throw new Error(((r && r.error) || 'failed to read memories') + ' (if this is an agent note, use ' + noteTool(exec && exec.agent, 'memory_note action=read', 'the agent-note tool') + ')')
-      }
-      const rule: any = r.rule || {}
-      // 形态与附件名：op 一直把 `attachments` 给了出来，这里此前**整个丢掉**，
-      // 于是模型连"这条记忆是 bundle、带了 3 个附件"都看不到。只给名字不给内容 ——
-      // 附件可能是图片或大 md，全文塞回来会吃光这一轮的上下文（与注入段附件行同口径）。
-      const attach: any[] = Array.isArray(rule.attachments) ? rule.attachments : []
-      const form = rule.form === 'bundle' ? 'bundle' : 'flat'
-      const attLine = attach.length
-        ? '\nattachments (' + attach.length + '): ' + attach.map((a: any) => String((a && a.name) || a)).join(', ')
-        : ''
-      // 会话层：这条记忆在本会话是关着的（或不在本会话钉住的场景里）时，读得到
-      // 正文 ≠ 它会进上下文。不说清的话，模型会以为自己已经掌握了它、下一轮却看不到。
-      const scoped = sessionScopeOf(deps, exec && exec.agent)
-      const over = scoped?.scope?.memory?.[String(rule.id)]
-      const offHere = over === false
-        ? '\n(switched off here only — the body above is not injected here; the global setting is unchanged) '
-        : ''
-      return '# ' + rule.id + ' (' + form + ')' + attLine + '\n\n' + (rule.body || '') + offHere
-    },
-  }))
-  register(defineTool({
-    name: 'memory_manager_search',
-    // 为什么单独一条而不是给 list 加 `query`：list 是"清单"（每条都要占一行输出），
-    // 搜索是"找一条"（片段 + 排序）。混在一起时，搜不到就等于清单为空 —— 模型分不清
-    // "没有这条记忆"和"这个词没匹配上"。默认在工具表里**关着**（见 tools/table.ts）：
-    // 它是按需检索，不是每轮都该付 schema 成本的能力。
-    description: 'Search user-written memories by words in id, scene, description, tags or body. Agent notes are not included — list them with the agent-note tool. Returns ids plus a short snippet; read the memory itself for the full body. All words must match (case-insensitive).',
-    parameters: {
-      query: { type: 'string', required: true, description: 'Words to look for; every word must match somewhere in the memory.' },
-      limit: { type: 'number', description: 'Max hits (default 20, max 100).' },
-    },
-    output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-    async execute(args: any, exec: any) {
+      const id = String((args && args.id) || '').trim()
+      if (id !== '') return readEntry(id, exec)
       const query = String((args && args.query) || '').trim()
-      if (query === '') throw new Error('missing argument: query')
-      const opArgs: any = { query }
-      if (args && args.limit !== undefined) opArgs.limit = args.limit
-      // 与 list 同一条会话投影：`enabled` 报的是**这里**的生效值，不是全局。
-      const scoped = sessionScopeOf(deps, exec && exec.agent)
-      if (scoped !== null) opArgs.sessionId = scoped.sessionId
-      const r: any = await deps.rulesOps['rules-search'](opArgs)
-      if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to search memories')
-      const hits: any[] = Array.isArray(r.hits) ? r.hits : []
-      if (!hits.length) return 'no memories match "' + query + '"'
-      const lines = hits.map((h) => '- ' + h.id + ' [' + (h.scene || 'no scene') + ']' +
-        (h.enabled === false ? ' (off here)' : '') +
-        (h.snippet ? ' — ' + h.snippet : ''))
-      return 'memories matching "' + query + '": ' + hits.length + '\n' + lines.join('\n')
+      const kind = args && args.kind === 'note' ? 'note' : args && args.kind === 'memory' ? 'memory' : ''
+      const all = args && args.all === true
+      const limit = listLimit(args && args.limit)
+      const scene = args && typeof args.scene === 'string' && args.scene !== '' ? args.scene : undefined
+      // 自主记忆关着时，笔记不在这份清单里出现：功能没开，模型不该看到「有笔记可读」
+      // 这种半开状态（直接给 note: id 仍然读得到 —— 那是显式请求）。
+      const notesOn = Boolean(evo && deps.autoLearnEnabled && deps.autoLearnEnabled(exec && exec.agent))
+      if (kind === 'note' && !notesOn) {
+        throw new Error('autonomous memory is off here, so agent notes are not available. The user can turn it on in Memory → Autonomous memory.')
+      }
+      const sections: string[] = []
+      if (kind !== 'note') {
+        sections.push(query !== ''
+          ? await userSearchText(query, limit, scene, exec)
+          : await userCatalogText(all, limit, scene, exec))
+      }
+      if (kind !== 'memory' && notesOn) {
+        sections.push(query !== '' ? await noteSearchText(query, limit) : await noteCatalogText(all, limit))
+      }
+      return sections.filter((s) => s !== '').join('\n\n') || '(none)'
     },
   }))
   register(defineTool({
@@ -470,45 +568,20 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   // 两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。授权边界写在工具名上。
   //
   // 与用户记忆分开的另一点是**对象**：笔记是一句话、按层（global / workspace）走；
-  // 用户记忆是多段、按场景走。list/read 也各自一份 —— 让模型能看到自己的笔记，
-  // 不必从用户记忆的清单里推断。
+  // 用户记忆是多段、按场景走。读取统一走 `memory_get`，这里只保留写入与删除。
   // 弹卡策略：自动确认关 → 每次都问；开 → 不弹卡，由 agent 决定。生效判断在 gates 的 `autoActive`。
   if (!deps.evolutionOps || !deps.autoLearnEnabled) return
-  const evo = deps.evolutionOps
+  const noteOps = deps.evolutionOps
   // 热路径的频率上限：模型在一轮里反复 learn / 弹卡时，10 分钟窗口最多 5 条。
   const learnCalls = new Map<string, { at: number; n: number }>()
   const LEARN_WINDOW_MS = 10 * 60_000
   const LEARN_MAX = 5
 
-  /**
-   * 把模型给的引用解析成一条笔记：id（可带 `note:`）→ slot → title → 原文，唯一命中才算。
-   *
-   * 为什么允许 title/原文：注入行里只有 key 与摘要，模型不一定记得 id；唯一命中时
-   * 直接读/删，比让它再查一次 list 省一轮。多条命中必须报候选 —— 猜错一条就是删错。
-   */
-  const resolveNote = async (ref: string): Promise<{ id: string | null; hits: any[] }> => {
-    const raw = stripNoteRef(ref)
-    if (raw === '') return { id: null, hits: [] }
-    const list: any = await evo['evolution-list']({ all: true })
-    const rows: any[] = list && Array.isArray(list.entries) ? list.entries : []
-    const hits = rows.filter((e: any) =>
-      String(e.id || '') === raw ||
-      String(e.key || '') === raw ||
-      String(e.title || '') === raw ||
-      String(e.oneLine || '') === raw
-    )
-    return hits.length === 1 ? { id: String(hits[0].id), hits } : { id: null, hits }
-  }
-  const describeNoteHits = (hits: any[]): string =>
-    hits.map((e) => noteRefOf(String(e.id)) + (e.title ? ' (' + String(e.title) + ')' : '')).join(', ')
-  /** forget/read 的引用参数：新名 `note`，旧名 `memory` 兼容一次（改名前的调用习惯）。 */
-  const noteArgOf = (a: any): string => String((a && (a.note !== undefined ? a.note : a.memory)) || '').trim()
-
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Agent notes (autonomous memory) — short one-line notes you learned: a preference, fact, correction or procedure. Not user-written memories: for a full multi-paragraph memory in a scene, use memory_manager_save. learn: `title` (2-8 words) + `text` (one sentence, <=400 chars); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; `quote` + `source` when the user said it. forget: `note` = id (note:...), slot, title or exact text. list/read: inspect your notes. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
+    description: 'Agent notes (autonomous memory) — short one-line notes you learned: a preference, fact, correction or procedure. Only for what YOU inferred; when the user explicitly asks to remember something, use memory_manager_save instead. learn: `title` (2-8 words) + `text` (one sentence, <=400 chars); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; `quote` + `source` when the user said it. forget: `note` = id (note:...), slot, title or exact text. Inspect notes with the memory read tool. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
     parameters: {
-      action: { type: 'string', enum: ['learn', 'forget', 'list', 'read'], required: true, description: 'learn (default), forget, list, or read.' },
+      action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn or forget.' },
       // ── learn ──
       title: { type: 'string', description: 'learn: a short name for the row (2-8 words, <=40 chars), in the user\'s language.' },
       text: { type: 'string', description: 'learn: the note itself — one sentence (<=400 chars), in the user\'s language.' },
@@ -518,11 +591,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       boundary: { type: 'string', description: 'learn: optional; when it may not hold.' },
       layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure; the card asks, or auto-confirm uses the default.' },
       ttlDays: { type: 'number', description: 'learn: optional; re-check after N days.' },
-      // ── forget / read ──
-      note: { type: 'string', description: 'forget/read: the note — id (note:...), slot, title, or exact text.' },
-      // ── list ──
-      all: { type: 'boolean', description: 'list: include notes that are not injecting (archived / superseded).' },
-      limit: { type: 'number', description: 'list: max entries (default 50, max 100).' },
+      // ── forget ──
+      note: { type: 'string', description: 'forget: the note — id (note:...), slot, title, or exact text.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -533,78 +603,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       }
       const action = String((args && args.action) || 'learn')
 
-      if (action === 'list') {
-        const r: any = await evo['evolution-list']({ all: args && args.all === true })
-        if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read learned notes'))
-        const rows: any[] = Array.isArray(r.entries) ? r.entries : []
-        const limit = listLimit(args && args.limit)
-        const shown = rows.slice(0, limit)
-        const order = ['workspace', 'global']
-        const lines: string[] = []
-        for (const layer of order) {
-          const group = shown.filter((e) => e.layer === layer)
-          if (!group.length) continue
-          lines.push('[' + layer + ']')
-          for (const e of group) {
-            lines.push('- ' + noteRefOf(String(e.id)) + ' · ' + String(e.status || 'active') +
-              (e.key ? ' · slot ' + String(e.key) : '') +
-              (e.title ? ' · ' + String(e.title) : '') +
-              ' · conf ' + (Number(e.confidence) || 0).toFixed(2) +
-              ' · ' + (e.injects ? 'injects' : 'not injected') +
-              (e.needsReview ? ' · needs review: ' + String(e.needsReview) : '') +
-              (e.oneLine ? ' — ' + String(e.oneLine) : ''))
-          }
-        }
-        const head = 'learned notes (agent-written): ' + rows.length + ' listed' +
-          (r.total !== undefined ? ' / ' + r.total + ' in catalog' : '') +
-          (rows.length > shown.length ? ' (showing ' + shown.length + ', raise limit for more)' : '')
-        return head + '\n' + (lines.join('\n') || '(none)')
-      }
-
-      if (action === 'read') {
-        const ref = noteArgOf(args)
-        if (ref === '') throw new Error('missing argument: note — the note id (note:...), slot, title or exact text.')
-        const raw = stripNoteRef(ref)
-        let a: any = await evo['evolution-read']({ id: raw, touch: true })
-        if (!a || a.ok === false) {
-          const resolved = await resolveNote(raw)
-          if (resolved.id !== null) a = await evo['evolution-read']({ id: resolved.id, touch: true })
-          else if (resolved.hits.length > 1) {
-            throw new Error('ambiguous: "' + ref + '" matches ' + describeNoteHits(resolved.hits) + '; pass one of these ids.')
-          }
-        }
-        if (!a || a.ok === false) throw new Error(String((a && a.error) || 'no such learned note: ' + ref))
-        const st = a.state || {}
-        const bits = [
-          'status ' + String(a.status || 'active'),
-          'confidence ' + (Number(st.confidence) || 0).toFixed(2),
-          a.layer,
-        ]
-        const lines = ['# ' + noteRefOf(String(a.id || raw)) + ' (learned note)', bits.join(' · ')]
-        if (a.title) lines.push('title: ' + String(a.title))
-        if (a.key) lines.push('slot: ' + String(a.key))
-        if (a.basis) lines.push('basis: ' + String(a.basis))
-        if (a.boundary) lines.push('boundary: ' + String(a.boundary))
-        if (a.degraded) lines.push('degraded: ' + String(a.degraded))
-        lines.push('', String(a.body || ''))
-        const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
-        if (ev.length) {
-          lines.push('', 'evidence (latest ' + ev.length + '):')
-          for (const e of ev) lines.push('- [' + String(e.source || '') + '] ' + String(e.quote || '').slice(0, 200))
-        }
-        const tr: any[] = Array.isArray(st.transitions) ? st.transitions : []
-        if (tr.length) {
-          lines.push('', 'timeline:')
-          for (const x of tr) lines.push('- ' + String(x.at || '') + ' ' + String(x.from || '') + ' → ' + String(x.to || '') + ' (' + String(x.actor || '') + ': ' + String(x.reason || '') + ')')
-        }
-        return lines.join('\n')
-      }
-
       if (action === 'forget') {
         const ref = noteArgOf(args)
         if (ref === '') throw new Error('missing argument: note — the note id (note:...), slot, title or exact text.')
         const raw = stripNoteRef(ref)
-        const forget = async (id: string): Promise<any> => evo['evolution-forget']({ id, actor: 'model' })
+        const forget = async (id: string): Promise<any> => noteOps['evolution-forget']({ id, actor: 'model' })
         let r: any = await forget(raw)
         if (!r || r.ok === false) {
           // 注入行只显示 key / 摘要，模型不一定记得 id：按 id / slot / title / 原文反查一次，唯一命中才删。
@@ -624,7 +627,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         return 'OK: forgot ' + noteRefOf(String(r.id || raw)) + '. It will not be learned again for 30 days.'
       }
 
-      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget / list / read)')
+      if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget)')
 
       // save 的参数串进来时（`body` / `description` / `memory`），直接指回用户记忆，
       // 别让一次完整记忆被当成一句话笔记丢掉。
@@ -666,10 +669,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       if (scene !== undefined) payload.scene = scene
 
       // 没有 preview / 卡片依赖（旧装配、测试）：保持原来的待确认路径。
-      const previewOp = evo['evolution-preview']
+      const previewOp = noteOps['evolution-preview']
       const ask = deps.askMemoryScope
       if (!previewOp || !ask) {
-        const r: any = await evo['evolution-learn'](payload)
+        const r: any = await noteOps['evolution-learn'](payload)
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
         return learnReceipt(r, 'none', payload)
       }
@@ -683,7 +686,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       }
       // 自动确认：不弹卡，模型给的层就是最终层；后台复习也走这条授权。
       if (preview.autoConfirm === true) {
-        const r: any = await evo['evolution-learn']({ ...payload, autoActive: true })
+        const r: any = await noteOps['evolution-learn']({ ...payload, autoActive: true })
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
         return learnReceipt(r, 'auto', payload)
       }
@@ -692,7 +695,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const layer: ScopeLayer = preview.layer === 'global' ? 'global' : 'workspace'
       // 合并进一条已生效的记忆：层已经定了，结果也仍是 active，不必再问一次。
       if (typeof preview.mergeInto === 'string' && preview.mergeInto !== '' && preview.status === 'active') {
-        const r: any = await evo['evolution-learn'](payload)
+        const r: any = await noteOps['evolution-learn'](payload)
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
         return learnReceipt(r, 'none', payload)
       }
@@ -717,7 +720,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
       // 没有可用卡片（headless / 非 live root / 卡片异常）：退回待确认，不丢笔记。
       if (choice === null) {
-        const r: any = await evo['evolution-learn'](payload)
+        const r: any = await noteOps['evolution-learn'](payload)
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
         return learnReceipt(r, 'unavailable', payload)
       }
@@ -733,7 +736,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         return 'Not saved: the user chose not to add it. Do not save it again unless they ask.'
       }
 
-      const r: any = await evo['evolution-learn']({
+      const r: any = await noteOps['evolution-learn']({
         ...payload,
         layer: choice.choice,
         approved: true,

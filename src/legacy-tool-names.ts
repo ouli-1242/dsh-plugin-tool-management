@@ -21,6 +21,10 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   // 不可能有它，因此不存在需要从它迁回来的数据。）
   memory_manager_write: 'memory_manager_save',
   memory_manager_update: 'memory_manager_save',
+  // 读取三合一：清单 / 正文 / 搜索并成 `memory_get`（多对一，翻译后按新名去重）。
+  memory_manager_list: 'memory_get',
+  memory_manager_read: 'memory_get',
+  memory_manager_search: 'memory_get',
   mcp_manager_set_enabled: 'mcp_manager_switch',
   mcp_manager_restart: 'mcp_manager_switch',
   mcp_manager_add: 'mcp_manager_save',

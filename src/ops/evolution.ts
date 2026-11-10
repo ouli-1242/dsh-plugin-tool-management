@@ -525,7 +525,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       }
     },
 
-    /** 读一条自动记忆的详情（界面展开 / `memory_manager_read` 兜底）。 */
+    /** 读一条自动记忆的详情（界面展开 / `memory_get` 兜底）。 */
     'evolution-read': async (args: any) => {
       if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {

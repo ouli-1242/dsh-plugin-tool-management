@@ -4,21 +4,20 @@
 // 根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；面板
 // （118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着十九条**（旧的十八条 + 自主笔记那一条；整张表 25 条，每轮实发 6 条）—— 名单、判据与代价见下面
+// 出厂**默认就关着十七条**（其中自主笔记那一条跟随总开关开合；整张表 23 条，每轮实发 6 条）—— 名单、判据与代价见下面
 // `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // 实测数字（口径：宿主 `recordToolSize` 的 `ceil(JSON.stringify(header.tools).length / 4) + 4`，
 // 即**字符数 / 4**；`header.tools` 里只有 name / description / parameters —— 官方的
 // `projectToolSchema` 不投影 output / execute，那几个不进请求。界面「模型工具表」那行
 // 合计与逐条 ≈tok 就是这份）：
-//   · 十八条隐藏 ≈**4,524 tok**，默认可见那六条 ≈**1,536 tok**，全开 ≈**6,055 tok**。
-//   · ⚠️ 上面那个 4,524 是**十八条**的值。自主笔记那条工具（`memory_note`，一条工具用
-//     `action` 分叉 learn / forget / list / read，默认隐藏、跟随总开关开合）**没有重测** ——
-//     引用合计时按"18 条 + 自主笔记 1 条"分开说，别把 4,524 当成十九条的值。
-//   · A/B 实测（同一次请求里把十九条逐个打开，前后各跑两轮）净少 **4,119 / 4,197 tok**，
-//     对照当天那份合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4），
-//     所以它们是**净节省的下界**，不是"省了多少"的上界。**那对数量的是当天那份描述** ——
-//     描述一改就得重测，新的净省要在真实环境跑 A/B，这里不拿估算冒充实测。
+//   · 上一次实测（`memory_get` 合并之前）是 18 条隐藏 ≈**4,524 tok**、默认可见 6 条
+//     ≈**1,536 tok**、全开 ≈**6,055 tok**。合并后少了一条工具、描述也换了，**没有重测** ——
+//     引用时按"旧口径"说，别当成当前工具表的实测值。
+//   · 同一批 A/B 实测净少 **4,119 / 4,197 tok**（把当时那批隐藏工具逐个打开，前后各跑两轮），
+//     对照当天合计 4,186 略低是正常的（边界按 ceil 逐个算、四条一合并就省下那几个 +4）。
+//     那是**净节省的下界**，不是"省了多少"的上界；描述一改就得重测，新的净省要在真实环境跑
+//     A/B，这里不拿估算冒充实测。
 //
 // ⚠️ **那个口径不是 token 数，别拿它跟别的数直接比**（用真 BPE 词表实测）：
 // 工具描述是英文，`字符数 / 4` 对英文**高估约 10%** —— 18 个工具那一版真实是 ≈3,137 tok（o200k）。
@@ -50,7 +49,7 @@ import { CONTROL_TOOL_NAME } from './deps.js'
 /**
  * 自主笔记唯一那条工具的名字。
  *
- * learn / forget / list / read 四个行为靠 `action` 分叉；名字集中在这里，是因为
+ * learn / forget 两个行为靠 `action` 分叉；名字集中在这里，是因为
  * 「出厂隐藏名单」「跟随总开关开合」「旧名迁移」「工具注册」四处都得认同一串字符。
  */
 export const PROACTIVE_MEMORY_TOOL = 'memory_note'
@@ -103,17 +102,20 @@ export interface ToolTableSettings {
 }
 
 /**
- * 出厂默认关掉的**十八条**：整张表 24 条，关掉后**每轮实发 6 条**。下面五组列 17 条，
- * 人设清单（`subagent_manager_list`）单列在「人设域」那一段 —— 两条计数不要合并，否则又会对不上。
+ * 出厂默认关掉的**十七条**：整张表 23 条，关掉后**每轮实发 6 条**。下面五组列 15 条，
+ * 人设清单（`subagent_manager_list`）单列在「人设域」那一段，自主笔记单列在末尾 ——
+ * 三条计数不要合并，否则又会对不上。
  *
  * 判据只有一条：**这些信息或动作常态下由注入段与面板承担，
  * 平时也用不到模型自己伸手**。分五组：
  *   · **写侧五条** —— 三个 `*_save`（MCP / 技能 / 人设：配置本体在面板上改）+
  *     `prompt_manager_apply`（当前生效的那份本来就在 `Current prompt` 注入段里）+
  *     `plugin_manager_remove`（删除进回收站可恢复，但常态下由面板承担）。
- *   · **读侧六条** —— `mcp_manager_list` / `skill_manager_list` / `prompt_manager_list` /
- *     `scene_manager_list` 四个清单 + `memory_manager_read` + `memory_manager_search`。
- *     会话开头注入的那几段目录已经写了当前有什么，模型不必每轮再带一份查询工具。
+ *   · **读侧四条** —— `mcp_manager_list` / `skill_manager_list` / `prompt_manager_list` /
+ *     `scene_manager_list`。会话开头注入的那几段目录已经写了当前有什么，模型不必每轮
+ *     再带一份查询工具。
+ *     **`memory_get` 刻意不在这份名单**：合并后的读取入口同时承担清单、搜索与正文，
+ *     藏掉它等于把被截断的条目、以及 `memory_manager_save` 需要的 id 变成不可发现。
  *   · **切场一条** —— `scene_manager_switch`：进入 / 退出场景。
  *   · **开关三条** —— `skill` / `memory` / `subagent` 三个 `_switch`（用户：「平时使用也很少」）。
  *     启停在面板上都有同款，注入段也写着当前开着哪些。**`mcp_manager_switch` 刻意留着**：
@@ -142,7 +144,7 @@ export interface ToolTableSettings {
  * 上下文的记忆正文"在会话里查不到；`*_switch` 关掉后模型也不能再替你拨启停。三处配套改动为
  * 的就是不把模型往墙上推：目录被条数上限截断时那句「用 `X_manager_list` 查」自动退回「另有
  * N more not listed.)」（`listToolVisible`）；`mcp_manager_list` / `skill_manager_read` 里"没找到 →
- * 去调 list"那两句先问 `deps.toolVisible`；`memory_manager_list` 的描述不再点名已关的工具。
+ * 去调 list"那两句先问 `deps.toolVisible`；`memory_get` 的描述不再点名已关的工具。
  *
  * 只在**用户从没记过选择**时生效（见 index.ts 的 `toolTableSettingsFrom`：侧车文件读不出来
  * 才用这份）。已经存过盘的一律照原样，包括显式的 `hidden: []` —— 那是"我全都要"，
@@ -153,8 +155,6 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'scene_manager_switch',
   'scene_manager_save',
   'scene_manager_archive',
-  'memory_manager_read',
-  'memory_manager_search',
   'memory_manager_switch',
   'mcp_manager_list',
   'mcp_manager_save',
@@ -175,7 +175,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   PROACTIVE_MEMORY_TOOL,
 ])
 
-/** 出厂默认那份设置：十九条不发（名单与理由见上面），方案清单是空的。 */
+/** 出厂默认那份设置：十七条不发（名单与理由见上面），方案清单是空的。 */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */

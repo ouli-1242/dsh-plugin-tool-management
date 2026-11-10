@@ -154,7 +154,7 @@ export const LIST_LIMIT_MAX = 100
  *
  * 为什么要有上限：返回值进上下文，而**工具表管不着这一笔**（工具表只管 schema）。
  * 模型爱「先全列出来看看」，一次就是几千 token —— 而它省下的那点（不用再调一次）
- * 远不抵。`memory_manager_search` 早就带这个上限了，list 那几条没有 —— 同一族里
+ * 远不抵。`memory_get` 的搜索与清单都带这个上限，别的 list 那几条没有 —— 同一族里
  * 只有一条有限，不一致。
  */
 export function listLimit(raw: unknown): number {

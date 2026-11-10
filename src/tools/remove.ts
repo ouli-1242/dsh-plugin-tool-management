@@ -246,7 +246,7 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
       return (r.entries || []).map((e: any) => ({ id: String(e.trashId), name: String(e.name), deletedAt: e.deletedAt }))
     },
     idHelp: {
-      tool: 'memory_manager_list',
+      tool: 'memory_get',
       neutral: ' — the ids are the lines in the "Current memories" reminder.',
       label: 'memory ids',
       list: async () => {

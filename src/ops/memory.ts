@@ -706,6 +706,7 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
         tags: Array.isArray(r.tags) ? r.tags : [],
         body: snap.bodies.get(r.id) || '',
         enabled: typeof over === 'boolean' ? over : r.enabled,
+        ...(r.origin !== undefined ? { origin: r.origin } : {}),
       }
     })
     const hits = searchMemories(docs, query, args && args.limit)

@@ -18,6 +18,8 @@ export interface SearchDoc {
   body: string
   /** 会话投影后的生效值（调用方负责合成）。 */
   enabled: boolean
+  /** 写入方；缺省时按 `group` 判（`_ws` / `_session` 是笔记后端专用层）。 */
+  origin?: 'user' | 'auto'
 }
 
 /** 一条检索命中：属于哪个场景、叫什么、命中在哪。 */
@@ -27,6 +29,7 @@ export interface SearchHit {
   name: string
   description: string
   enabled: boolean
+  origin?: 'user' | 'auto'
   score: number
   snippet: string
 }
@@ -97,6 +100,7 @@ export function searchMemories(docs: SearchDoc[], query: string, limit?: number)
       name: doc.name,
       description: doc.description,
       enabled: doc.enabled,
+      ...(doc.origin !== undefined ? { origin: doc.origin } : {}),
       score,
       snippet,
     })
