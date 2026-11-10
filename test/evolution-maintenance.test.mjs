@@ -379,7 +379,8 @@ test('healthOf：按层统计，候选与归档分开算，过期数目单独给
     ],
     { entries: { 'w/a': { needsReview: 'ttl' } } },
   )
-  assert.deepEqual(h.byLayer.workspace, { active: 2, candidate: 1, archived: 1, cap: 200, tokens: 40 })
+  // 全局 / 工作区不设总条数上限，只限产生速度；`cap` 保留给维护扫描报告形状。
+  assert.deepEqual(h.byLayer.workspace, { active: 2, candidate: 1, archived: 1, cap: Infinity, tokens: 40 })
   assert.equal(h.byLayer.global.active, 2)
   // active/core 的体积都算：w/a 10 + w/d 30 + g/a 10 + g/old 10。过期的也还在注入，所以也算。
   assert.equal(h.tokens, 60)
