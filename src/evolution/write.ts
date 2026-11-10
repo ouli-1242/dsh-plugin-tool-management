@@ -1466,8 +1466,53 @@ export function createLearner(deps: LearnDeps) {
     return backfillArchivedTrash(notesRoot, deps.stateDir, archived)
   }
 
+  /**
+   * 行内开关：只改索引的 enabled 位，不动状态、不搬文件、不写回收站。
+   *
+   * 与 `setStatus(..., 'archived')` 的区别是「暂时不注入」vs「收起来」：前者要留在列表里，
+   * 随时拨回来；后者才是删除的语义。
+   */
+  async function setEnabled(id: string, enabled: boolean): Promise<LearnResult> {
+    return deps.withWriteLock(async () => {
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const docPath = join(notesRoot, split.group, split.name + '.md')
+      let text: string
+      try {
+        text = await readFile(docPath, 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: `not found: ${id}` }
+      }
+      const status = pickField(text, 'auto_status') || 'active'
+      if (status === 'superseded') {
+        return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory.` }
+      }
+      if (status === 'archived') {
+        return { ok: false, code: 'archived', error: `refused: "${id}" is archived; restore it from the recycle bin first.` }
+      }
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      // 注入缓存按 revision 失效：只改索引不 bump，下一次对话还会拿到旧快照。
+      bumpRevision(st)
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+      const nowIso = new Date().toISOString()
+      const index = await readIndex(indexDir)
+      index.rules[id] = { ...(index.rules[id] ?? { order: 1000 }), enabled, updatedAt: nowIso }
+      await writeIndex(indexDir, index)
+      await patchCatalogEntry(id, { enabled })
+      deps.invalidateSnapshot()
+      return {
+        ok: true, id, layer: split.layer, status,
+        confidence: st.entries[id]?.confidence ?? 0,
+        merged: false, supersedes: [],
+      }
+    })
+  }
+
   return {
-    learn, preview, forget, approve, setStatus, promote, organize, applyOrganize, describe, update,
+    learn, preview, forget, approve, setStatus, setEnabled, promote, organize, applyOrganize, describe, update,
     restoreFromTrash, purgeTrash, backfillTrash, noteInjected, noteRead,
   }
 }

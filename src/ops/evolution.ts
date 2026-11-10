@@ -412,10 +412,29 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     /**
-     * 停用 / 恢复一条。
+     * 行内开关：只拨索引，不归档、不写回收站。
+     *
+     * 与 `evolution-set-status` 的分工：这里管「暂时不注入」，条目留在列表里随时拨回来；
+     * 归档 / 恢复 / 删除才走状态那条路。
+     */
+    'evolution-set-enabled': async (args: any) => {
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '')
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        if (typeof args?.enabled !== 'boolean') return { ok: false, error: 'enabled 必须是布尔值', code: 'bad-args' }
+        const result = await learner.setEnabled(id, args.enabled)
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'status-failed' }
+      }
+    },
+
+    /**
+     * 归档 / 恢复一条。
      *
      * 与 `evolution-forget` 的区别要体现在回执里：这条**不删文件、不写墓碑**，随时能恢复。
-     * 用户点「停用」时想的是"别再拿它烦我"，不是"永远别让我看见"。
      */
     'evolution-set-status': async (args: any) => {
       if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }

@@ -886,13 +886,13 @@
             })
           }
 
-          /** 停用：条目进回收站、不再注入；恢复在记忆页的回收站里。 */
-          function disableEvolution(id) {
+          /** 行内开关：只拨启用位；关闭的条目留在列表里，删除才进回收站。 */
+          function toggleEvolutionEnabled(id, enabled) {
             setEvoBusy(true)
-            apiCall('evolution-set-status', { id: id, enabled: false, actor: 'user' }).then(function (res) {
+            apiCall('evolution-set-enabled', { id: id, enabled: enabled }).then(function (res) {
               setEvoBusy(false)
               if (res && res.ok !== false) {
-                setResult({ ok: true, text: t('evo.disabled') })
+                setResult({ ok: true, text: enabled ? t('evo.enabled') : t('evo.disabled') })
                 refreshEvolution()
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
@@ -971,7 +971,8 @@
                 : e.status === 'superseded' ? 'evo.tag.superseded'
                   : e.status === 'archived' ? 'evo.tag.archived'
                     : 'evo.tag.candidate'
-            var tone = e.status === 'core' || e.status === 'active' || e.status === 'playbook' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
+            var enabled = e.enabled !== false
+            var tone = !enabled ? 'idle' : e.status === 'core' || e.status === 'active' || e.status === 'playbook' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
             var pending = e.status === 'candidate'
             var title = evolutionNameOf(e)
             var body = String(e.oneLine || '').trim()
@@ -988,7 +989,7 @@
             ]
             return React.createElement(ListRow, {
               key: e.id,
-              dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: t(statusKey) })],
+              dots: [React.createElement(StatusDot, { key: 'd', tone: tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'idle', title: enabled ? t(statusKey) : t('evo.tag.off') })],
               name: title,
               nameAfter: React.createElement('span', { className: 'dsm-qty' }, t('evo.tokens', { count: Number(e.tokens) || 0 })),
               meta: metaBits.length ? metaBits : undefined,
@@ -997,10 +998,10 @@
               side: pending
                 ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
                 : React.createElement(Switch, {
-                  on: e.enabled !== false,
+                  on: enabled,
                   disabled: evoBusy,
-                  label: t('evo.disable') + ' ' + title,
-                  onClick: function () { disableEvolution(e.id) },
+                  label: (enabled ? t('evo.disable') : t('evo.enable')) + ' ' + title,
+                  onClick: function () { toggleEvolutionEnabled(e.id, !enabled) },
                 }),
               actions: [React.createElement(RowMenu, {
                 key: 'menu',

@@ -312,6 +312,30 @@ test('autoActive：合并进已有候选时一并升 active', async () => {
   } finally { h.done() }
 })
 
+test('setEnabled：只拨索引，不改状态、不搬文件、不进回收站', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified', approved: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    assert.equal(r.status, 'active')
+
+    const off = await h.learner.setEnabled(r.id, false)
+    assert.equal(off.ok, true, off.error)
+    assert.equal(h.readIndex().rules[r.id].enabled, false)
+    assert.equal(h.readCatalog().entries[r.id].enabled, false)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active', '开关不改状态')
+    assert.equal(existsSync(join(h.stateDir, 'trash', 'memories-trash')), false, '不进回收站')
+
+    const on = await h.learner.setEnabled(r.id, true)
+    assert.equal(on.ok, true, on.error)
+    assert.equal(h.readIndex().rules[r.id].enabled, true)
+    assert.equal(h.readCatalog().entries[r.id].enabled, true)
+  } finally { h.done() }
+})
+
 test('forget：不存在的 id 返回 not-found，不写空墓碑', async () => {
   const h = harness()
   try {
