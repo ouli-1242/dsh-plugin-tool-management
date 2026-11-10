@@ -8,11 +8,12 @@
 
 ## 一、注入链路：内容怎么到模型眼前
 
-插件的六个域（场景 / 记忆 / MCP / 技能 / 子智能体 / 提示词）各自算出一段文本，在**每一步请求开始前**塞进本轮消息。这条通道是宿主官方自己也在用的那一条，任何预设都关不掉它。
+插件的八个域（场景 / 记忆 / 全局自动记忆 / 工作区自动记忆 / MCP / 技能 / 子智能体 / 提示词）各自算出一段文本，在**每一步请求开始前**塞进本轮消息。这条通道是宿主官方自己也在用的那一条，任何预设都关不掉它。
 
 ```
 你的文件（真源）
-  hub/memories/<场景>/*.md        记忆正文
+  hub/memories/<场景>/*.md        记忆正文（用户写的）
+  hub/evolution/notes/**/*.md     自动记忆正文（agent 学的）
   hub/subagents/*.md              人设
   hub/skills/**/SKILL.md          技能
   hub/prompts/*/AGENTS.md         提示词预设
@@ -21,7 +22,7 @@
         │
         │  每个域各自算一段文本（各域自带缓存，这一步不读盘）
         ▼
-六个域：scene / memory / mcp / skills / subagents / prompt
+八个域：scene / memory / autoGlobal / autoWorkspace / mcp / skills / subagents / prompt
         │
         │  宿主 agent/pre-step 瀑布，每一步请求前触发
         ▼

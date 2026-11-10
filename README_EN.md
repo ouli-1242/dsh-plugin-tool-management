@@ -95,10 +95,11 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 
 ### Autonomous memory
 
-Off by default. When on, the agent records preferences, facts and corrections worth keeping across conversations — **as pending notes that enter the context only after you confirm them**.
+Off by default. When on, the agent records preferences, facts and corrections worth keeping across conversations — **and asks you in the chat whether to keep each one, and at which scope**.
 
-- **Confirm before injection**: new notes wait under "Pending" on the Memory page and cost no context; they become active only when you confirm them.
-- **Two layers only**: global (every project) and this workspace; the workspace card lists only notes from the project this conversation belongs to.
+- **Ask in the chat**: when the agent wants to keep something, a card offers global memory / this workspace / not at all. Choosing either scope makes it active immediately — no trip to the Memory page.
+- **Pending only without a card**: background review and headless sessions still save as pending, which you can confirm on the Memory page.
+- **Two separate injection blocks**: global learned notes and workspace learned notes are injected as their own messages, apart from hand-written memories; adding one note re-sends only its layer.
 - **Disable is reversible**: a disabled note stops being injected and moves into an "Archived" section at the bottom of its card; restore it any time. Deleting keeps the wording from being re-learned for 30 days.
 - **Background review and upkeep**: review runs every few turns with a retry entry on failure; maintenance runs at most once a day and only changes status, never deletes files.
 - **Separate storage**: bodies and state live under `evolution/notes/`, apart from hand-written memories; turning the feature off stops injection but leaves the files in place.
@@ -137,7 +138,7 @@ More than a version number:
 | Recycle bins (skills / memories / personas / presets / scenes) | `~/.dsh/tool-management/trash/<domain>-trash/`                               |
 | Archive ledger / retention                                     | `~/.dsh/tool-management/history-*.json`                                      |
 | MCP sidecars (disabled tools / known tools / notes / settings) | `~/.dsh/tool-management/mcp-*.json`                                          |
-| Injection settings (six domain switches · catalog caps)         | `~/.dsh/tool-management/inject-settings.json`                                |
+| Injection settings (eight domain switches · catalog caps)       | `~/.dsh/tool-management/inject-settings.json`                                |
 | Model-tool table / scope overrides                             | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json`            |
 | Runtime log / patch backups                                    | `~/.dsh/tool-management/tool-management.log` · `backups/`                    |
 
