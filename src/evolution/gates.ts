@@ -17,7 +17,7 @@
 
 import { LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
 import { checkQuote } from './evidence.js'
-import { DEGRADE_NOTE, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
+import { DEGRADE_NOTE, hasGlobalPhrase, routeLayer, type DegradeReason, type RouteAllowed } from './route.js'
 import { BASE_CONFIDENCE, confidenceOf, textHashOf, tombstoneActive, type EvidenceRef, type EvidenceSource, type Tombstone } from './state.js'
 
 export type AutoKind = 'preference' | 'fact' | 'correction' | 'procedure'
@@ -55,6 +55,8 @@ export interface GatePass {
   confidence: number
   /** 用户在对话卡片上批准过这条原文（不等于最终一定 active：与用户记忆冲突时仍是 candidate）。 */
   approved: boolean
+  /** 按自动生效策略直接落 active（没有用户确认，不改变证据来源）。 */
+  autoActive?: boolean
   /** 被降级的原因（路由压窄 / 模糊时降级）。 */
   degraded?: DegradeReason
   /** 需要人工裁决的原因：有值 = 不注入，等用户确认。 */
@@ -70,6 +72,34 @@ export interface GatePass {
 }
 
 export type GateOutcome = GatePass | GateReject
+
+/**
+ * 自动生效策略：没有用户确认时，哪些条目可以直接 active。
+ *
+ * 只放开「工作区 + 用户原话/纠正 + 非做法类」：
+ *   - 全局层影响所有项目，误判代价最高；
+ *   - 模型推断、工具自报都可能是猜的，必须等用户确认；
+ *   - 做法类改变行为，确认时更该让用户看一眼；
+ *   - 文本里出现跨项目措辞而层是工作区，说明模型可能判错，交给卡片。
+ */
+export function canAutoActivate(input: {
+  layer: MemoryLayer
+  source: EvidenceSource
+  kind: AutoKind
+  text: string
+  degraded?: DegradeReason
+  reviewCode?: ReviewCode
+  confidence: number
+}): boolean {
+  if (input.layer !== LAYER_WORKSPACE) return false
+  if (input.source !== 'user_explicit' && input.source !== 'user_correction') return false
+  if (input.kind === 'procedure') return false
+  if (input.degraded !== undefined) return false
+  if (input.reviewCode !== undefined) return false
+  if (input.confidence < 0.8) return false
+  if (hasGlobalPhrase(input.text)) return false
+  return true
+}
 
 /** 冲突门与合并需要的现有条目视图。 */
 export interface ExistingEntry {
@@ -114,6 +144,11 @@ export interface GateInput {
    * 但**不越过**与用户手写记忆的冲突：那条仍然只进 candidate，等用户在记忆页裁决。
    */
   approved?: boolean
+  /**
+   * 按自动生效策略直接落 active。与 `approved` 的区别：
+   * 没有用户看过原文，所以不把证据升成 `user_approved`；只放开「工作区 + 强证据 + 非做法类」。
+   */
+  autoActive?: boolean
 }
 
 // ── 文本归一化与相似度 ─────────────────────────────────────────────────────
@@ -488,8 +523,17 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     setReview('procedure', '做法类记忆先按候选保存，确认后再启用')
   }
 
-  // 有理由就不生效：只有卡片批准且一条待确认理由都不剩时才 active。
-  const status: 'active' | 'candidate' = approved && review === undefined ? 'active' : 'candidate'
+  const autoActive = input.autoActive === true && canAutoActivate({
+    layer,
+    source,
+    kind,
+    text: rawText,
+    ...(degraded !== undefined ? { degraded } : {}),
+    ...(reviewCode !== undefined ? { reviewCode } : {}),
+    confidence,
+  })
+  // 有理由就不生效：卡片批准或自动生效策略通过，且一条待确认理由都不剩时才 active。
+  const status: 'active' | 'candidate' = (approved || autoActive) && review === undefined ? 'active' : 'candidate'
   const note = notes.length > 0 ? notes.join('；') : undefined
   return {
     ok: true,
@@ -508,6 +552,7 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     status,
     confidence,
     approved,
+    ...(autoActive ? { autoActive: true } : {}),
     ...(degraded !== undefined ? { degraded } : {}),
     ...(review !== undefined ? { needsReview: review } : {}),
     ...(reviewCode !== undefined ? { reviewCode } : {}),

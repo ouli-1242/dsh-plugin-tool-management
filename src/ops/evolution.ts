@@ -337,6 +337,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(args?.ttlDays !== undefined ? { ttlDays: args.ttlDays } : {}),
             ...(args?.description !== undefined ? { description: args.description } : {}),
             ...(args?.approved === true ? { approved: true } : {}),
+            ...(args?.autoActive === true ? { autoActive: true } : {}),
           },
           cfg,
           {

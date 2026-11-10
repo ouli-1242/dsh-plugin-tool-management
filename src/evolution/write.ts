@@ -58,6 +58,8 @@ export interface LearnRequest {
   description?: string
   /** 用户在对话卡片上批准了这条原文：直接生效，但用户手写记忆的冲突仍然只进 candidate。 */
   approved?: boolean
+  /** 按自动生效策略直接落 active（工作区 + 强证据 + 非做法类）。 */
+  autoActive?: boolean
 }
 
 export interface LearnEnv {
@@ -76,6 +78,8 @@ export interface LearnSuccess {
   supersedes: string[]
   note?: string
   needsReview?: string
+  /** 按自动生效策略直接落 active（没有用户确认）。 */
+  autoActive?: boolean
   /** 卡片批准过这条原文（即使最终因用户记忆冲突仍是 candidate）。 */
   approved?: boolean
   reviewCode?: ReviewCode
@@ -113,6 +117,17 @@ export interface LearnPreviewSuccess {
   mergeInto?: string
   supersedes: string[]
   note?: string
+  /**
+   * 不弹卡、直接落盘的模拟结果。工具据此决定「直接生效 / 弹卡 / 进候选」：
+   * `status === 'active' && autoActive` 才可以直接写；其余按 reviewCode 分流。
+   */
+  direct?: {
+    status: 'active' | 'candidate'
+    autoActive: boolean
+    confidence: number
+    reviewCode?: ReviewCode
+    needsReview?: string
+  }
 }
 
 export type LearnPreview = LearnPreviewSuccess | LearnFailure
@@ -259,6 +274,7 @@ export function createLearner(deps: LearnDeps) {
           ...(req.boundary !== undefined ? { boundary: req.boundary } : {}),
           ...(req.ttlDays !== undefined ? { ttlDays: req.ttlDays } : {}),
           ...(req.approved === true ? { approved: true } : {}),
+          ...(req.autoActive === true ? { autoActive: true } : {}),
         },
         ctx,
       )
@@ -309,7 +325,7 @@ export function createLearner(deps: LearnDeps) {
     }
 
     const ctx = await buildGateContext(config, env, st)
-    const input = (layer?: MemoryLayer) => ({
+    const input = (layer?: MemoryLayer, mode: 'card' | 'direct' = 'card') => ({
       text,
       ...(req.kind !== undefined ? { kind: req.kind } : {}),
       ...(req.key !== undefined ? { key: req.key } : {}),
@@ -318,7 +334,7 @@ export function createLearner(deps: LearnDeps) {
       ...(layer !== undefined ? { layer } : req.layer !== undefined ? { layer: req.layer } : {}),
       ...(req.boundary !== undefined ? { boundary: req.boundary } : {}),
       ...(req.ttlDays !== undefined ? { ttlDays: req.ttlDays } : {}),
-      approved: true,
+      ...(mode === 'card' ? { approved: true } : { autoActive: true }),
     })
 
     const first = runGates(input(), ctx)
@@ -326,6 +342,16 @@ export function createLearner(deps: LearnDeps) {
     // 用户记忆冲突是卡片也解不开的：不必再按推荐层跑一遍。
     const chosen = first.reviewCode === 'user-conflict' ? first : runGates(input(first.layer), ctx)
     if (!chosen.ok) return { ok: false, code: 'gate', error: chosen.error, gate: chosen.gate, detail: chosen.detail }
+    // 直接落盘模拟：工具用它判断「不弹卡能不能生效」。与卡片模式分开跑，是因为
+    // `approved` 会压掉一些待确认理由（歧义 / 做法类），而自动生效不应该压掉它们。
+    const directOutcome = runGates(input(first.layer, 'direct'), ctx)
+    const direct = directOutcome.ok ? {
+      status: directOutcome.status,
+      autoActive: directOutcome.autoActive === true,
+      confidence: directOutcome.confidence,
+      ...(directOutcome.reviewCode !== undefined ? { reviewCode: directOutcome.reviewCode } : {}),
+      ...(directOutcome.needsReview !== undefined ? { needsReview: directOutcome.needsReview } : {}),
+    } : undefined
 
     const allowed: MemoryLayer[] = []
     if (config.learnGlobal) allowed.push(LAYER_GLOBAL)
@@ -349,6 +375,7 @@ export function createLearner(deps: LearnDeps) {
       ...(chosen.mergeInto !== undefined ? { mergeInto: chosen.mergeInto } : {}),
       supersedes: chosen.supersedes,
       ...(chosen.note !== undefined ? { note: chosen.note } : {}),
+      ...(direct !== undefined ? { direct } : {}),
     }
   }
 
@@ -481,6 +508,7 @@ export function createLearner(deps: LearnDeps) {
       merged: false,
       supersedes: superseded,
       approved: pass.approved,
+      ...(pass.autoActive ? { autoActive: true } : {}),
       ...(pass.note !== undefined ? { note: pass.note } : {}),
       ...(pass.needsReview !== undefined ? { needsReview: pass.needsReview } : {}),
       ...(pass.reviewCode !== undefined ? { reviewCode: pass.reviewCode } : {}),
@@ -528,7 +556,7 @@ export function createLearner(deps: LearnDeps) {
     // 反过来，合并进候选也不该凭空生效。卡片批准是例外：用户看过新说法并点了同意，
     // 合并后的这条就该生效（否则「批准了却还是候选」又是一次静默失效）。
     const current = pickField(existing, 'auto_status') || 'candidate'
-    const nextStatus = pass.approved ? 'active' : current
+    const nextStatus = (pass.approved || pass.autoActive) ? 'active' : current
     const merged = rewriteFrontmatterFields(
       existing,
       {
@@ -543,13 +571,14 @@ export function createLearner(deps: LearnDeps) {
     entry.evidence = [...entry.evidence, ...evidence].slice(-50)
     entry.counters = entry.counters ?? emptyCounters()
     if (pass.approved) activateEvidence(entry, existing, nowIso)
+    if (pass.autoActive) delete entry.needsReview
     entry.confidence = confidenceOf(entry.evidence, entry.counters.harmful)
     pushTransition(
       entry,
       current,
       nextStatus,
       pass.approved ? 'user' : 'learn',
-      pass.approved ? 'merge: approved in chat card' : 'merge: same key, new evidence',
+      pass.approved ? 'merge: approved in chat card' : pass.autoActive ? 'merge: auto-active (workspace + strong evidence)' : 'merge: same key, new evidence',
       Date.parse(nowIso),
     )
     st.entries[targetId] = entry
@@ -566,7 +595,7 @@ export function createLearner(deps: LearnDeps) {
       }
       if (superseded.length > 0) await writeIndex(indexDir, index)
     }
-    if (pass.approved && nextStatus === 'active') bumpRevision(st)
+    if ((pass.approved || pass.autoActive) && nextStatus === 'active') bumpRevision(st)
 
     const written = await state.write(st)
     if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
@@ -582,6 +611,7 @@ export function createLearner(deps: LearnDeps) {
       merged: true,
       supersedes: superseded,
       approved: pass.approved,
+      ...(pass.autoActive ? { autoActive: true } : {}),
       note: alreadyKnown ? '已存在同样的说法，只新增了一条证据' : '同一条记忆，把新说法补进了边界',
       ...(pass.reviewCode !== undefined ? { reviewCode: pass.reviewCode } : {}),
     }
@@ -716,6 +746,11 @@ export function createLearner(deps: LearnDeps) {
       const entry = st.entries[id]
       const docPath = join(notesRoot, group, name + '.md')
       const raw = await safeRead(docPath)
+      // 不存在的条目不能返回成功：那会写一条空墓碑、删一条不存在的 state，用户以为忘了、
+      // 实际什么都没发生。工具层据此改按 key 反查。
+      if (entry === undefined && raw === '') {
+        return { ok: false, code: 'not-found', error: `no such learned note: ${id}` }
+      }
       const key = pickField(raw, 'auto_key')
       const body = normalizeForCompare(raw)
 

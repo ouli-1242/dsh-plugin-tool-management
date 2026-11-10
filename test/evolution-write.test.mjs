@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { DEFAULT_EVOLUTION_SETTINGS, workspaceHashOf } from '../lib/evolution/config.js'
 import { createEvolutionState } from '../lib/evolution/state.js'
 import { createLearner, pickField } from '../lib/evolution/write.js'
+import { captureUserTexts } from '../lib/evolution/evidence.js'
 import { layerOfGroup } from '../lib/memories/constants.js'
 import { buildCatalog } from '../lib/memories/catalog.js'
 import { archiveAutoNote } from '../lib/evolution/notes.js'
@@ -161,6 +162,8 @@ function harness() {
 }
 
 const envOf = () => ({ sessionId: 's-1', workspaceHash: WS_HASH })
+/** 把一句用户原话放进证据缓存：`user_explicit` 的引句要能核对上。 */
+const userSaid = (text) => captureUserTexts('s-1', [{ role: 'user', content: text }])
 
 test('learn：正文 / state / 索引 / catalog 四处一起落，且一律先落待确认', async () => {
   const h = harness()
@@ -199,6 +202,117 @@ test('learn：正文 / state / 索引 / catalog 四处一起落，且一律先�
     assert.equal(cat.entries[r.id].layer, 'workspace')
     assert.equal(cat.entries[r.id].status, 'candidate')
     assert.ok(cat.entries[r.id].estTokens > 0)
+  } finally { h.done() }
+})
+
+test('autoActive：工作区 + 用户原话直接生效，且证据不冒充用户批准', async () => {
+  const h = harness()
+  try {
+    const text = '这个仓库统一用 pnpm'
+    userSaid(text)
+    const r = await h.learner.learn(
+      { text, key: 'package-manager', source: 'user_explicit', quote: text, autoActive: true },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    assert.equal(r.status, 'active')
+    assert.equal(r.autoActive, true)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
+    const entry = h.readState().entries[r.id]
+    assert.equal(entry.evidence[0].source, 'user_explicit', '没有用户确认，不能写成 user_approved')
+    assert.equal(entry.needsReview, undefined)
+  } finally { h.done() }
+})
+
+test('autoActive：全局 / 做法类 / 模型推断 / 全局措辞都只进候选', async () => {
+  const h = harness()
+  try {
+    const globalText = '用户喜欢简洁的回答'
+    userSaid(globalText)
+    const global = await h.learner.learn(
+      { text: globalText, key: 'answer-style', source: 'user_explicit', quote: globalText, layer: 'global', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(global.status, 'candidate', '全局层必须等用户确认')
+
+    const procText = '发布前先跑构建再打 tag'
+    userSaid(procText)
+    const procedure = await h.learner.learn(
+      { text: procText, key: 'release-steps', source: 'user_explicit', quote: procText, kind: 'procedure', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(procedure.status, 'candidate', '做法类必须等用户确认')
+
+    const inferred = await h.learner.learn(
+      { text: '这个仓库可能用 pnpm', key: 'pkg-guess', source: 'model_inference', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(inferred.status, 'candidate', '模型推断不能直接生效')
+
+    const mixedText = '所有项目都统一用 pnpm'
+    userSaid(mixedText)
+    const mixed = await h.learner.learn(
+      { text: mixedText, key: 'pnpm-all', source: 'user_explicit', quote: mixedText, layer: 'workspace', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(mixed.status, 'candidate', '工作区层出现跨项目措辞，说明可能判错层，交给卡片')
+  } finally { h.done() }
+})
+
+test('autoActive：合并进已有候选时一并升 active', async () => {
+  const h = harness()
+  try {
+    const text = '这个仓库统一用 pnpm'
+    userSaid(text)
+    const first = await h.learner.learn(
+      { text, key: 'package-manager', source: 'user_explicit', quote: text },
+      cfgOf(), envOf(),
+    )
+    assert.equal(first.status, 'candidate')
+    const merged = await h.learner.learn(
+      { text, key: 'package-manager', source: 'user_explicit', quote: text, autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(merged.ok, true, merged.error)
+    assert.equal(merged.merged, true)
+    assert.equal(merged.status, 'active')
+    assert.equal(pickField(h.readDoc(merged.id), 'auto_status'), 'active')
+  } finally { h.done() }
+})
+
+test('forget：不存在的 id 返回 not-found，不写空墓碑', async () => {
+  const h = harness()
+  try {
+    const r = await h.learner.forget('_ws/abcd/nope', { actor: 'model' })
+    assert.equal(r.ok, false)
+    assert.equal(r.code, 'not-found')
+    assert.equal(existsSync(join(h.stateDir, 'evolution', 'state.json')), false, '不该为了一个不存在的条目写 state')
+  } finally { h.done() }
+})
+
+test('preview：direct 结果区分「可自动生效」与「必须确认」', async () => {
+  const h = harness()
+  try {
+    const text = '这个仓库统一用 pnpm'
+    userSaid(text)
+    const ok = await h.learner.preview(
+      { text, key: 'package-manager', source: 'user_explicit', quote: text },
+      cfgOf(), envOf(),
+    )
+    assert.equal(ok.ok, true, ok.error)
+    assert.equal(ok.direct.status, 'active')
+    assert.equal(ok.direct.autoActive, true)
+
+    const globalText = '用户喜欢简洁的回答'
+    userSaid(globalText)
+    const global = await h.learner.preview(
+      { text: globalText, key: 'answer-style', source: 'user_explicit', quote: globalText, layer: 'global' },
+      cfgOf(), envOf(),
+    )
+    assert.equal(global.ok, true, global.error)
+    assert.equal(global.direct.status, 'candidate')
+    assert.equal(global.direct.autoActive, false)
   } finally { h.done() }
 })
 

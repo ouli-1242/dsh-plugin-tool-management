@@ -8,7 +8,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { routeLayer } from '../lib/evolution/route.js'
-import { runGates, securityScan, durabilityOf, looksDerivable, similarity, inferKind, tombstoneBlocked } from '../lib/evolution/gates.js'
+import { runGates, securityScan, durabilityOf, looksDerivable, similarity, inferKind, tombstoneBlocked, canAutoActivate } from '../lib/evolution/gates.js'
 import { autoSnapshotKey } from '../lib/evolution/runtime.js'
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
 import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
@@ -70,6 +70,19 @@ const entryOf = (over = {}) => {
 // ── 路由 ───────────────────────────────────────────────────────────────────
 
 const BOTH = { global: true, workspace: true }
+
+test('自动生效策略：只放开工作区 + 强证据 + 非做法类', () => {
+  const ok = { layer: 'workspace', source: 'user_explicit', kind: 'fact', text: '这个仓库用 pnpm', confidence: 0.95 }
+  assert.equal(canAutoActivate(ok), true)
+  assert.equal(canAutoActivate({ ...ok, layer: 'global' }), false, '全局层必须等用户确认')
+  assert.equal(canAutoActivate({ ...ok, source: 'model_inference' }), false, '模型推断不能直接生效')
+  assert.equal(canAutoActivate({ ...ok, source: 'tool_verified' }), false, '工具自报没有可核对的原话，不能直接生效')
+  assert.equal(canAutoActivate({ ...ok, kind: 'procedure' }), false, '做法类必须等用户确认')
+  assert.equal(canAutoActivate({ ...ok, text: '所有项目都用 pnpm' }), false, '工作区里出现跨项目措辞，可能判错层')
+  assert.equal(canAutoActivate({ ...ok, degraded: 'layer-off' }), false, '层被降级过，先让用户知道')
+  assert.equal(canAutoActivate({ ...ok, reviewCode: 'ambiguous' }), false)
+  assert.equal(canAutoActivate({ ...ok, confidence: 0.5 }), false)
+})
 
 test('路由：全局措辞只有「用户明说」才算数', () => {
   const explicit = routeLayer({ text: '以后所有项目都先给结论', source: 'user_explicit', allowed: BOTH, workspaceHash: 'abcd1234abcd1234' })

@@ -126,8 +126,10 @@ export const REVIEW_SYSTEM_PROMPT = [
   'Record only what will still matter in a different conversation: a stated preference, a correction of your behaviour, a project fact that cannot be read from the code, or a repeatable procedure.',
   'Do NOT record: one-off instructions ("this time", "for now"), anything derivable from package.json / config / git, or your own reasoning.',
   'For every item, `quote` must be an exact substring of what the user said in this turn. Do not paraphrase it.',
+  '`layer`: "global" only when it applies to every project or to the user personally; otherwise "workspace". Omit if unsure.',
+  'Write every `text` in the user\'s language, one terse sentence.',
   'At most 3 items. When in doubt, return fewer — a wrong memory is injected into every later conversation.',
-  'Output strict JSON: {"memories":[{"text":"one sentence","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","boundary":"when it might not hold"}]}',
+  'Output strict JSON: {"memories":[{"text":"one sentence","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
 ].join('\n')
 
 /** 系统提示 + 按需追加的风格行（custom 为空串时不追加）。 */
@@ -308,6 +310,9 @@ export function createReviewer(deps: ReviewDeps): {
               ...(item.layer !== undefined ? { layer: item.layer } : {}),
               ...(item.boundary !== undefined ? { boundary: item.boundary } : {}),
               ...(item.ttlDays !== undefined ? { ttlDays: item.ttlDays } : {}),
+              // 后台没有人可确认：工作区 + 用户原话/工具验证的条目按策略直接生效，
+              // 全局与模型推断仍落候选。策略本身在 gates.canAutoActivate 里。
+              autoActive: true,
             },
             cfg,
             {
