@@ -44,6 +44,7 @@ import { parseModeState } from '../lib/memories/service.js'
 import { buildMemoryOps } from '../lib/ops/memory.js'
 import { TOKEN_MSG } from '../lib/http-fence.js'
 import { DEFAULT_HIDDEN_TOOLS, LEGACY_TOOL_NAME_MAP, PROACTIVE_MEMORY_TOOL, migrateLegacyToolNames, normalizeProactiveToolHidden, normalizeToolTableSettings, stripProactiveToolHidden } from '../lib/tools/table.js'
+import { NOTE_REF_PREFIX, isNoteRef, noteRefOf, stripNoteRef } from '../lib/tools/note-ref.js'
 import { buildEvolutionOps } from '../lib/ops/evolution.js'
 import { argConditionalConfirmReason, isMustAskConfirm } from '../lib/confirm-gate.js'
 import { createAccessToken, createFrozenGate, guardModelOps, installHandlerGuards } from '../lib/request-gate.js'
@@ -4858,7 +4859,17 @@ test('自主笔记旧名合并成一条：出厂只藏这一条，旧名全部�
   assert.ok(src.includes('PROACTIVE_MEMORY_TOOL'), '工具注册要用共享常量，别再手写字符串')
 })
 
-test('自主记忆工具双向跟随总开关：开→摘掉、关→加回，纯函数不改入参', () => {
+test('笔记引用带 note: 前缀：与用户记忆的 <scene>/<name> 分开', () => {
+  assert.equal(NOTE_REF_PREFIX, 'note:')
+  assert.equal(noteRefOf('global/x'), 'note:global/x')
+  assert.equal(stripNoteRef('note:global/x'), 'global/x')
+  assert.equal(stripNoteRef('global/x'), 'global/x', '没有前缀的磁盘 id 原样接受')
+  assert.equal(isNoteRef('note:global/x'), true)
+  assert.equal(isNoteRef('global/x'), false)
+  assert.equal(isNoteRef('  note:global/x  '), true, '前后空白不影响判定')
+})
+
+test('自主笔记工具双向跟随总开关：开→摘掉、关→加回，纯函数不改入参', () => {
   const withTool = ['memory_manager_search', PROACTIVE_MEMORY_TOOL]
   assert.deepEqual(normalizeProactiveToolHidden(withTool, true), ['memory_manager_search'])
   assert.deepEqual(withTool, ['memory_manager_search', PROACTIVE_MEMORY_TOOL], '归一不能改调用方那份名单')
@@ -4974,7 +4985,7 @@ test('自主记忆不走宿主确认门：范围卡在工具内部处理', () =>
   // 宿主审批层不介入：范围由工具内的卡片决定；待确认由记忆页逐条批准。
   assert.equal(reason({ action: 'learn', text: '这个仓库统一用 pnpm', layer: 'workspace' }), null)
   assert.equal(reason({ action: 'learn', text: '所有项目都先给结论', layer: 'global' }), null)
-  assert.equal(reason({ action: 'forget', memory: 'global/x' }), null)
+  assert.equal(reason({ action: 'forget', note: 'note:global/x' }), null)
   assert.equal(reason({ action: 'learn' }), null)
 })
 
@@ -4984,7 +4995,7 @@ test('must-ask：完全权限也不许跳过的确认（删除 / 机器级停用
   // 自主记忆的新增/遗忘不在审批层：待确认由记忆页逐条批准，不进 must-ask。
   assert.equal(must('memory_note', { action: 'learn', text: '统一用 pnpm' }), false)
   assert.equal(must('memory_note', { text: '统一用 pnpm' }), false, '缺省 action 也是 learn')
-  assert.equal(must('memory_note', { action: 'forget', memory: 'x' }), false)
+  assert.equal(must('memory_note', { action: 'forget', note: 'x' }), false)
   // 删除：trash 是数据处置；restore / list 可跳过。
   assert.equal(must('plugin_manager_remove', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
   assert.equal(must('plugin_manager_remove', { action: 'restore', domain: 'memory', id: 't' }), false)
