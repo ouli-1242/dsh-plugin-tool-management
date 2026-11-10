@@ -635,13 +635,13 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       // 人设的工具限制也会让工具不在手里，而那份名单逐 agent 不同。
       const hiddenNow = deps.hiddenTools !== undefined ? deps.hiddenTools(agent) : null
       const toolHidden = hiddenNow === null ? () => false : (name: string) => hiddenNow.has(name)
-      // 「设置写在哪一层」那一行**只挂一条消息**：八条各挂一份 = 同一句话付八次（≈80 tok/轮）。
-      // 优先「场景」（它讲的就是此刻的处境），其次「记忆」，都没有就挂本步第一条。
+      // 「设置写在哪一层」那一行**只挂一条消息**：七条各挂一份 = 同一句话付七次（≈80 tok/轮）。
+      // 优先「场景」（它讲的就是此刻的处境），其次「全局记忆」，都没有就挂本步第一条。
       // 跳过 `delta` 那一条：它是"官方那份还在，这里只补差异"，多一行状态读起来像两份都说。
       const scopeLine = scopeLineOf(deps.scopeMode?.())
       const scopeCarrierPool = sections.filter((section) => section.delta !== true)
       const scopeCarrier = scopeCarrierPool.find((section) => section.key === 'scene')
-        ?? scopeCarrierPool.find((section) => section.key === 'memory')
+        ?? scopeCarrierPool.find((section) => section.key === 'memoryGlobal')
         ?? scopeCarrierPool[0]
       for (const section of sections) {
         published.add(section.key)

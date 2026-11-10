@@ -194,6 +194,19 @@ export const SCENE_MEMORY_NOTE = '**Memories for the current scene; where they c
  */
 export const SCENE_MEMORY_NOTE_PARTIAL = '**Memories for the current scene; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant.**'
 
+/**
+ * 合并块（用户记忆 + 自主全局笔记）的收尾语：把上面两句合成一句。
+ *
+ * 两块内容进同一条消息后，各带一句授权语会让模型读到两句措辞略有差别、说的却是同一条
+ * 规则的话；而且两段之间夹一句"完整集合"会把后一段切成"另一个集合"。合并后只在整块末尾
+ * 说一次，`complete` 只在**两块都没截断**时成立 —— 任一块截断就换 PARTIAL，否则尾注里的
+ * `## Not injected` / `more learned note(s)` 会直接打脸。
+ */
+export const COMBINED_MEMORY_NOTE = '**Memories and learned notes for this conversation; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant; this is the complete set.**'
+
+/** 合并块的收尾语，去掉完整性声明（任一块截断时用）。 */
+export const COMBINED_MEMORY_NOTE_PARTIAL = '**Memories and learned notes for this conversation; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant.**'
+
 // ── bundle 与索引 ──────────────────────────────────────────────────────────
 
 // bundle 附件限制（body 走 HTTP JSON + base64，故比技能上传收紧一档）。

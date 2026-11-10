@@ -102,9 +102,9 @@ import { createPromptsService } from '../lib/prompts/service.js'
 import { createScenePromptSync } from '../lib/scene-prompt-sync.js'
 
 test('域与工具名前缀双向对得上（对不上就有域永远统计不到调用）', () => {
-  // 两条自动记忆没有专属工具：`memory_manager_auto` 是两层共用的写入口，按前缀归 `memory`。
-  // 空数组是显式声明「这个域没有工具」，不是漏配。
-  const noTool = new Set(['autoGlobal', 'autoWorkspace'])
+  // 工作区笔记没有专属工具：`memory_manager_auto` 是两层共用的写入口，按前缀归
+  // `memoryGlobal`。空数组是显式声明「这个域没有工具」，不是漏配。
+  const noTool = new Set(['memoryWorkspace'])
   for (const key of INJECT_DOMAIN_KEYS) {
     if (noTool.has(key)) {
       assert.deepEqual(DOMAIN_TOOL_PREFIX[key], [], key + ' 没有专属工具，前缀必须为空')
@@ -117,33 +117,31 @@ test('域与工具名前缀双向对得上（对不上就有域永远统计不�
     }
   }
   assert.equal(domainOfTool('read_file'), undefined, '不是本插件的工具不该被认领')
-  // 共用写入口仍归用户记忆域：自动记忆的采纳遥测不按层拆（工具名反推不出写哪层）。
-  assert.equal(domainOfTool('memory_manager_auto'), 'memory')
+  // 共用写入口仍归全局记忆域：自动记忆的采纳遥测不按层拆（工具名反推不出写哪层）。
+  assert.equal(domainOfTool('memory_manager_auto'), 'memoryGlobal')
 })
 
 test('记忆族与场景族各归自己的域，中途用过的名字不是别名', () => {
   // 破了这一条的后果是**静默**的：漏配 DOMAIN_TOOL_PREFIX 时编译不报错，症状只是
   // 兼容页那一组工具掉进「其它」桶、注入实况里该域的调用数永远是 0。
-  assert.equal(domainOfTool('memory_manager_save'), 'memory')
-  assert.equal(domainOfTool('memory_manager_list'), 'memory')
-  // 0.14.0 把场景从记忆里分出来：注入段、界面勾选、遥测都是**两个域**了
-  // （`scene-manager-catalog` / `memory-manager-catalog`），工具族跟着分开。
+  assert.equal(domainOfTool('memory_manager_save'), 'memoryGlobal')
+  assert.equal(domainOfTool('memory_manager_list'), 'memoryGlobal')
+  // 场景与记忆是**两个域**（`scene-manager-catalog` / `memory-global-catalog`），
+  // 工具族跟着分开。
   assert.equal(domainOfTool('scene_manager_save'), 'scene')
   // `scene_memory_manager_*` 是 0.14.0 开发中途用过的名字，**从未发布** —— 不注册别名
   // （注册了就是每轮白付 token）。
   assert.equal(domainOfTool('scene_memory_manager_save'), undefined)
 })
 
-test('注入域里场景排在记忆之前（先给框架再给内容），自动记忆紧跟用户记忆', () => {
+test('注入域里场景排在记忆之前（先给框架再给内容），两块记忆先全局后工作区', () => {
   // 顺序就是界面勾选顺序与消息顺序。场景是"当前模式的框架"，记忆是它下面的内容 ——
   // 反过来的话模型先读到一堆条目，才知道自己在哪个场景。
   const keys = [...INJECT_DOMAIN_KEYS]
   assert.ok(keys.indexOf('scene') >= 0, '场景必须是独立域')
-  assert.ok(keys.indexOf('scene') < keys.indexOf('memory'), '场景要排在记忆前面')
-  // 自动记忆说的是同一类东西（记下的东西），排在用户记忆之后；两层之间固定先全局后本地。
-  assert.ok(keys.indexOf('memory') < keys.indexOf('autoGlobal'), '自动记忆要跟在用户记忆后面')
-  assert.ok(keys.indexOf('autoGlobal') < keys.indexOf('autoWorkspace'), '先全局后本工作区')
-  assert.ok(keys.indexOf('autoWorkspace') < keys.indexOf('mcp'), '自动记忆在目录类域之前')
+  assert.ok(keys.indexOf('scene') < keys.indexOf('memoryGlobal'), '场景要排在记忆前面')
+  assert.ok(keys.indexOf('memoryGlobal') < keys.indexOf('memoryWorkspace'), '先全局后本工作区')
+  assert.ok(keys.indexOf('memoryWorkspace') < keys.indexOf('mcp'), '记忆在目录类域之前')
 })
 
 test('旧工具名迁移：用户「关掉了某条」的意图不能在改名后静默失效', () => {
@@ -214,7 +212,7 @@ test('人设的目录注入深度能读能写（含旧的 maxDepth 键）', () =
 
 test('注入通道吞掉域异常：一次坏掉的注入不该打断会话', () => {
   const domains = [
-    { key: 'memory', name: 'm', label: '记忆', form: 'snapshot', text: () => { throw new Error('boom') } },
+    { key: 'memoryGlobal', name: 'm', label: '记忆', form: 'snapshot', text: () => { throw new Error('boom') } },
     { key: 'mcp', name: 'c', label: 'MCP', form: 'catalog', text: () => 'OK' },
   ]
   const out = selectInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {})
@@ -228,10 +226,10 @@ test('注入通道吞掉域异常：一次坏掉的注入不该打断会话', ()
   const failed = new Set()
   const errors = []
   selectInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {}, (key, error) => { failed.add(key); errors.push(error.message) })
-  assert.deepEqual([...failed], ['memory'], '抛异常的域要经 onError 报出去')
+  assert.deepEqual([...failed], ['memoryGlobal'], '抛异常的域要经 onError 报出去')
   assert.deepEqual(errors, ['boom'], '原始异常要原样带给调用方（降级说明要用它）')
-  assert.equal(explainInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {}, failed).memory, 'error', '实况要报「取数失败」而不是「无内容」')
-  assert.equal(explainInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {}).memory, 'empty', '不传失败集合时保持旧口径（向后兼容）')
+  assert.equal(explainInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {}, failed).memoryGlobal, 'error', '实况要报「取数失败」而不是「无内容」')
+  assert.equal(explainInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {}).memoryGlobal, 'empty', '不传失败集合时保持旧口径（向后兼容）')
 })
 
 test('遥测不反噬：任何输入都不抛（它绝不能影响工具调用本身）', () => {
@@ -2164,23 +2162,23 @@ test('注入域取数失败 → 通道报 error 且该域不进「已清空」�
   // 上一条钉的是**判据**（谁该抛），这一条钉的是**两半接得上**：抛出去的异常必须真的变成
   // `onError` → `failedKeys` → 实况 `error`。两半任缺一半，修复都不成立（F7 的原文即此）。
   const domains = [
-    { key: 'memory', name: 'm', label: '记忆', form: 'snapshot', text: () => { throw new Error('ENOTDIR') } },
+    { key: 'memoryGlobal', name: 'm', label: '记忆', form: 'snapshot', text: () => { throw new Error('ENOTDIR') } },
     // 好域用 `mcp`：提示词 / 技能目录有官方载体，`facts` 缺省时会被判成"官方在送"而不进列表。
     { key: 'mcp', name: 'c', label: 'MCP', form: 'catalog', text: () => 'OK' },
   ]
   const failed = new Set()
   const out = selectInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {}, (key) => failed.add(key))
   assert.deepEqual(out.map((s) => s.key), ['mcp'], '取数失败的域跳过，其余照发')
-  assert.deepEqual([...failed], ['memory'], '失败必须经 onError 报出去（`createContextInjector` 据此跳过「已清空」）')
-  assert.equal(explainInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {}, failed).memory, 'error', '实况报故障，不是「无内容」')
+  assert.deepEqual([...failed], ['memoryGlobal'], '失败必须经 onError 报出去（`createContextInjector` 据此跳过「已清空」）')
+  assert.equal(explainInjections(domains, DEFAULT_INJECT_SETTINGS, undefined, {}, failed).memoryGlobal, 'error', '实况报故障，不是「无内容」')
   // 反向：返回空串（不抛）仍是 `empty` —— 那是"本来就没有"，不该被报成故障。
   const emptyDomains = [
-    { key: 'memory', name: 'm', label: '记忆', form: 'snapshot', text: () => '' },
+    { key: 'memoryGlobal', name: 'm', label: '记忆', form: 'snapshot', text: () => '' },
   ]
   const noneFailed = new Set()
   selectInjections(emptyDomains, DEFAULT_INJECT_SETTINGS, undefined, {}, (key) => noneFailed.add(key))
   assert.equal(noneFailed.size, 0, '空串不算失败（否则全新用户每轮都报琥珀）')
-  assert.equal(explainInjections(emptyDomains, DEFAULT_INJECT_SETTINGS, undefined, {}, noneFailed).memory, 'empty')
+  assert.equal(explainInjections(emptyDomains, DEFAULT_INJECT_SETTINGS, undefined, {}, noneFailed).memoryGlobal, 'empty')
 })
 
 test('「已清空」通知不占内容键位：它之后内容恢复的域必须能重发', async () => {

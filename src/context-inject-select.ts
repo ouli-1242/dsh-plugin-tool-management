@@ -40,14 +40,21 @@ export function normalizeInjectSettings(raw: unknown): InjectSettings {
   const domainsRaw = (obj.domains && typeof obj.domains === 'object' ? obj.domains : {}) as Record<string, unknown>
   const domains = {} as Record<InjectDomainKey, boolean>
   for (const key of INJECT_DOMAIN_KEYS) {
-    // 两条自动记忆的开关由 `evolution/settings.json` 的两个开关负责（学习 + 注入一体）。
-    // 这里强制为 true，避免旧快照 / 旧客户端把 domains.autoGlobal=false 写成一个
-    // 看起来开着、实际永远不注入的第二道门。
-    if (key === 'autoGlobal' || key === 'autoWorkspace') {
-      domains[key] = true
+    if (typeof domainsRaw[key] === 'boolean') {
+      domains[key] = domainsRaw[key] as boolean
       continue
     }
-    domains[key] = typeof domainsRaw[key] === 'boolean' ? (domainsRaw[key] as boolean) : DEFAULT_INJECT_SETTINGS.domains[key]
+    // 合并前的三个键迁移到两个新块：`memory` 的用户选择优先，其次沿用旧的自动层开关。
+    // 旧自动层的真正门禁在 `evolution/settings.json`，这里只搬"用户有没有关过这一块"。
+    const legacy = key === 'memoryGlobal'
+      ? ['memory', 'autoGlobal']
+      : key === 'memoryWorkspace'
+        ? ['autoWorkspace']
+        : []
+    const inherited = legacy.find((name) => typeof domainsRaw[name] === 'boolean')
+    domains[key] = inherited === undefined
+      ? DEFAULT_INJECT_SETTINGS.domains[key]
+      : domainsRaw[inherited] as boolean
   }
   const capsRaw = (obj.catalogCaps && typeof obj.catalogCaps === 'object' ? obj.catalogCaps : {}) as Record<string, unknown>
   return {

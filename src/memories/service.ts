@@ -271,7 +271,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   // 「已清空」—— 它们是 SWR 缓存，计算失败时保留上一次的值，因此只可能"没能更新"，
   // 不可能从"有内容"变成"空串"；`''` 只在真的渲染不出东西时出现。
   const emptySceneMemory = (): SceneMemoryProjection =>
-    ({ text: '', bytes: 0, truncated: false, maxBytes, scenes: [], items: [], dropped: [] })
+    ({ text: '', body: '', tail: '', bytes: 0, truncated: false, maxBytes, scenes: [], items: [], dropped: [], blocks: [] })
 
   /** 索引读不到 / 解析不了 → 注入侧必须报「取数失败」，而不是把"全部未启用"当成"用户清空了记忆"。 */
   const assertIndexReadable = (): void => {
@@ -893,7 +893,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   //   - `promptText`：全局提示词正文 = 场景期间用场景提示词、平时用 AGENTS.md 正文。
   //     **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
   //     （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
-  const memoryText = (scope?: MemoryScopeOverride): string => requireSceneMemory(scope).text
+  const memoryProjection = (scope?: MemoryScopeOverride): SceneMemoryProjection => requireSceneMemory(scope)
+  const memoryText = (scope?: MemoryScopeOverride): string => memoryProjection(scope).text
   // 场景段。与记忆段是**两次探测**：`probeSceneFilesSync` 没有内部缓存（signature 本身就是
   // 扫描的结果，缓存不了），代价是有界的一次目录树 stat（**不读正文**），换来两段各自渲染、
   // 各自去重 —— 只改场景描述时不会连带重发整段记忆正文。
@@ -1177,6 +1178,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     ops,
     writeOps,
     memoryText,
+    memoryProjection,
     sceneCatalogText,
     promptText,
     promptFiles,

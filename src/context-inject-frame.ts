@@ -195,7 +195,7 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     how: "A scene is the user's working mode: the memories, tools and personas you are given are already filtered to it.",
     supersede: SUPERSEDE_NOTE,
   },
-  memory: {
+  memoryGlobal: {
     title: 'Current memories',
     // 出口句放在**正文之后**（`afterBody`）：它说的是"刚才那段没列全的部分去哪查"——
     // 模型读完 `## Not injected` 名单紧接着读到出口，顺序才通。条件判据不变：
@@ -214,15 +214,11 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     },
     supersede: SUPERSEDE_NOTE,
   },
-  // 两条自动记忆各自一条消息：标题在这里，正文里不再写 `## Learned notes` ——
-  // 框架的 `#` 已经是板块层，正文再写一个 `##` 只会让模型读成两个层级。
-  // 范围后缀（all projects / this workspace）不进标题：两条消息本来就分开，模型从
-  // 各自的注入域就能区分；重复写只是噪音。收尾句在正文末尾，这里不再写 `how`。
-  autoGlobal: {
-    title: 'Learned notes',
-    supersede: SUPERSEDE_NOTE,
-  },
-  autoWorkspace: {
+  // 工作区自主笔记：标题在这里，正文里不再写 `## Learned notes` —— 框架的 `#` 已经是
+  // 板块层，正文再写一个 `##` 只会让模型读成两个层级。范围后缀（this workspace）不进标题：
+  // 它和全局块本来就是两条消息，模型从各自的注入域就能区分；重复写只是噪音。
+  // 收尾句在正文末尾，这里不再写 `how`。
+  memoryWorkspace: {
     title: 'Learned notes',
     supersede: SUPERSEDE_NOTE,
   },

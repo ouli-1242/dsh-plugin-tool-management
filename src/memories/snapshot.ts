@@ -62,7 +62,7 @@ export interface SceneBlockCandidate {
   block: string
   /** 单行压缩形态（`- **名称** — 正文`）：连续两条可直接相邻，其余情况前空一行。 */
   inline: boolean
-  item: { id: string; scene: string; name: string; bytes: number }
+  item: { id: string; scene: string; name: string; description: string; bytes: number }
 }
 
 // ── 文件工具 ───────────────────────────────────────────────────────────────
@@ -480,12 +480,12 @@ export function renderSceneMemory(
         header,
         block,
         inline,
-        item: { id: file.id, scene: file.scene, name: file.name, bytes: byteLen(block) },
+        item: { id: file.id, scene: file.scene, name: file.name, description: file.description, bytes: byteLen(block) },
       })
     }
   }
   if (candidates.length === 0) {
-    return { text: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [] }
+    return { text: '', body: '', tail: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [], blocks: [] }
   }
 
   /**
@@ -495,8 +495,8 @@ export function renderSceneMemory(
    * "this is the complete set"，截断时去掉 —— 否则段首的完整性与段尾的 `## Not injected` 直接
    * 打架。预算仍按全量版预留（`sceneNoteBytes()`），截断态那句更短，不会多占。
    */
-  const renderBody = (selected: SceneBlockCandidate[], truncated: boolean): string => {
-    if (selected.length === 0) return ''
+  const renderBody = (selected: SceneBlockCandidate[], truncated: boolean): { text: string; content: string } => {
+    if (selected.length === 0) return { text: '', content: '' }
     const note = truncated ? SCENE_MEMORY_NOTE_PARTIAL : SCENE_MEMORY_NOTE
     const chunks: string[] = []
     let current: string | null = null
@@ -527,7 +527,9 @@ export function renderSceneMemory(
     //
     // 句式随之从"引入"改"收束"：原句以冒号结尾（`…this is the complete set:**:`）引出清单，
     // 挪到后面就成了没着落的悬空引号 —— 改句号收尾（常量里一并改）。
-    return `${chunks.join('\n')}\n\n${note}`
+    // `content` 是去掉这句的正文：合并块要自己补一条同时覆盖用户记忆与全局笔记的收尾句。
+    const content = chunks.join('\n')
+    return { text: `${content}\n\n${note}`, content }
   }
 
   const sceneLabelOf = (scene: string): string => sceneLabel(scene)
@@ -586,16 +588,17 @@ export function renderSceneMemory(
   // 结论）。两版字数差在 3 个词以内，预算按全量版预留，不会因此挤掉条目。
   let truncatedNow = probe.truncated || missed.length > 0
   let body = renderBody(selected, truncatedNow)
-  let tail = renderTail(missed, maxBytes - byteLen(body), truncatedNow)
-  while (byteLen(body) + byteLen(tail) > maxBytes && selected.length > 0) {
+  let tail = renderTail(missed, maxBytes - byteLen(body.text), truncatedNow)
+  while (byteLen(body.text) + byteLen(tail) > maxBytes && selected.length > 0) {
     missed.push(selected.pop() as SceneBlockCandidate)
     missed.sort((a, b) => a.seq - b.seq)
     truncatedNow = true
     body = renderBody(selected, truncatedNow)
-    tail = renderTail(missed, maxBytes - byteLen(body), truncatedNow)
+    tail = renderTail(missed, maxBytes - byteLen(body.text), truncatedNow)
   }
 
-  let text = `${body}${tail}`.replace(/^\n+/, '')
+  let text = `${body.text}${tail}`.replace(/^\n+/, '')
+  const content = body.content.replace(/^\n+/, '')
   // ③ 兜底：有记忆没注入时绝不能静默消失。
   //   - 只兜 text === '' 不够：body 非空、tail 放不下时，模型看到的是一段看起来完整的记忆段
   //     —— 既没有 `## Not injected` 也没有标记，被截掉的那些条目就**完全无痕**了。根因是
@@ -607,18 +610,28 @@ export function renderSceneMemory(
   //     也不能让截断无痕。两样有一样就不追加（信号已经在）。
   if ((missed.length > 0 || probe.truncated) && !text.includes(TRUNCATION_MARKER) && !text.includes(DROPPED_HEADING)) {
     text = text === '' ? `${TRUNCATION_MARKER}\n` : `${text.replace(/\n+$/, '')}\n${TRUNCATION_MARKER}\n`
+    tail = tail === '' ? `${TRUNCATION_MARKER}\n` : `${tail.replace(/\n+$/, '')}\n${TRUNCATION_MARKER}\n`
   }
 
   const scenes: string[] = []
   for (const c of selected) if (!scenes.includes(c.scene)) scenes.push(c.scene)
   return {
     text,
+    body: content,
+    tail,
     bytes: byteLen(text),
     truncated: truncatedNow,
     maxBytes,
     scenes,
     items: selected.map((c) => c.item),
     dropped: missed.map((c) => c.item),
+    blocks: selected.map((c) => ({
+      id: c.item.id,
+      scene: c.item.scene,
+      name: c.item.name,
+      description: c.item.description,
+      block: c.block,
+    })),
   }
 }
 
@@ -674,7 +687,7 @@ export function renderSceneCatalog(
   // 默认状态（只有保留桶生效）：整段不注入。返回空串而不是"当前处于全局"——后者是废话，
   // 而且会让通道每轮都发一条没有信息量的消息。
   if (wanted.length === 0) {
-    return { text: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [] }
+    return { text: '', body: '', tail: '', bytes: 0, truncated: probe.truncated, maxBytes, scenes: [], items: [], dropped: [], blocks: [] }
   }
   // 这一段**只给当前情况**：启用了哪些非保留场景、各自是什么（`sceneLine`）。
   //
@@ -700,12 +713,15 @@ export function renderSceneCatalog(
   text = text.replace(/^\n+/, '')
   return {
     text,
+    body: text,
+    tail: '',
     bytes: byteLen(text),
     truncated: probe.truncated || dropped,
     maxBytes,
     scenes: kept,
     items: [],
     dropped: [],
+    blocks: [],
   }
 }
 

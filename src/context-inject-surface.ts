@@ -4,7 +4,7 @@
 // 它写的是跨模块的运行时备注全局态，不属于这一层）。注入实况展示与「内容变了才重发」的
 // 判据都读这里，两处必须同一份口径，否则界面说的和模型收到的会分家。
 import { SessionSeq } from '@deepseek-ai/dsh-session'
-import { INJECT_DOMAIN_KEYS, INJECT_KIND_OF, type InjectDomainKey, type InjectSettings } from './context-inject-contract.js'
+import { INJECT_DOMAIN_KEYS, INJECT_KIND_OF, LEGACY_INJECT_KIND_OF, type InjectDomainKey, type InjectSettings } from './context-inject-contract.js'
 
 /** 取一条消息的正文（只认单 text 块；形如官方 RuntimeContextProjection.textOf）。 */
 export function textOf(message: unknown): string | undefined {
@@ -42,10 +42,16 @@ export function textOf(message: unknown): string | undefined {
 /** 消息来源 kind → 本插件域（`official` = 官方载体发的，不是本插件注入的）。 */
 export interface KindMapping { key: InjectDomainKey; official: boolean }
 
-/** 本插件自己的八个注入 kind（去重比对只用这一份 —— 绝不能让官方正文影响"发不发"的判断）。 */
-export const PLUGIN_KINDS: ReadonlyMap<string, KindMapping> = new Map(
-  INJECT_DOMAIN_KEYS.map((key) => [INJECT_KIND_OF[key], { key, official: false }] as const),
-)
+/**
+ * 本插件自己的注入 kind（去重比对只用这一份 —— 绝不能让官方正文影响"发不发"的判断）。
+ *
+ * 含合并前的旧 kind：那些消息仍在模型眼前，必须能被认成同一块，否则新块的第一条不带
+ * `Supersedes`，模型会同时看到两份相近的内容。
+ */
+export const PLUGIN_KINDS: ReadonlyMap<string, KindMapping> = new Map([
+  ...INJECT_DOMAIN_KEYS.map((key) => [INJECT_KIND_OF[key], { key, official: false }] as const),
+  ...Object.entries(LEGACY_INJECT_KIND_OF).map(([kind, key]) => [kind, { key, official: false }] as const),
+])
 
 /**
  * 官方载体消息的 kind → 本插件域：技能目录（`@deepseek-ai/dsh-tool-skill`）与
@@ -113,6 +119,8 @@ export const LIVE_KINDS: ReadonlyMap<string, KindMapping> = new Map([
 
 /** 扫描结果的一格：见 `newestDomainTexts` 的文档（`body` 与 `cleared` 各答一个问题）。 */
 export interface DomainSurfaceEntry {
+  /** 最新一条消息的 id（宿主生成）；增量注入据此确认"上次那条还在表面里"。 */
+  id?: string
   /** 最新一条消息的整条正文（含框架）；只在「注入实况」里展示给用户看。 */
   text: string
   /** 该域**最后一条内容**消息的域正文原文；从没注入过内容（或已被压缩出表面）时为 `undefined`。 */
@@ -130,8 +138,17 @@ export interface DomainSurfaceEntry {
   official: boolean
 }
 
-/** 取每个域在对话历史里**最新**那条官方消息的正文（供比对与差异行用）。 */
-export function newestDomainTexts(agent: unknown, kinds: ReadonlyMap<string, KindMapping>): Map<InjectDomainKey, DomainSurfaceEntry> {
+/**
+ * 取每个域在对话历史里**最新**那条官方消息的正文（供比对与差异行用）。
+ *
+ * `visibleIds` 给了就顺手收集所有被认出的消息 id（不只最新一条）：增量注入要确认
+ * "上一份全量 + 之后每一条增量"都还在模型可见表面上，少一条就得回全量。
+ */
+export function newestDomainTexts(
+  agent: unknown,
+  kinds: ReadonlyMap<string, KindMapping>,
+  visibleIds?: Set<string>,
+): Map<InjectDomainKey, DomainSurfaceEntry> {
   const out = new Map<InjectDomainKey, DomainSurfaceEntry>()
   const session = (agent as { session?: any } | null | undefined)?.session
   if (!session) return out
@@ -149,15 +166,18 @@ export function newestDomainTexts(agent: unknown, kinds: ReadonlyMap<string, Kin
     const seen = out.get(mapping.key)
     const text = textOf(message)
     if (text === undefined) return false
+    const id = typeof (message as { id?: unknown }).id === 'string' ? (message as { id: string }).id : undefined
+    if (id !== undefined) visibleIds?.add(id)
     const form = source && typeof source.form === 'string' ? source.form : ''
     if (form === 'notice') {
       // 通知只回答"此刻已清空"；它绝不提供 `body`（否则内容恢复后会被它挡住）。
-      if (seen === undefined) out.set(mapping.key, { text, form: 'notice', cleared: true, official: mapping.official })
+      if (seen === undefined) out.set(mapping.key, { ...(id !== undefined ? { id } : {}), text, form: 'notice', cleared: true, official: mapping.official })
       return done()
     }
     // 内容消息：已经记过内容就不再覆盖（自新到旧，先到的那条才是最新内容）。
     if (seen !== undefined && seen.form !== 'notice') return false
     out.set(mapping.key, {
+      ...(id !== undefined ? { id } : {}),
       text,
       body: typeof source.body === 'string' ? source.body : undefined,
       frame: typeof source.frame === 'string' ? source.frame : undefined,

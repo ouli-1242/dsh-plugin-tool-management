@@ -52,6 +52,10 @@ export interface AutoRenderInput {
 export interface AutoRenderResult {
   /** 整段正文（不含框架标题）；空串 = 不注入。 */
   text: string
+  /** 不含收尾授权语的正文（含截断 / 降级提示）；合并块自己补收尾句。 */
+  body: string
+  /** 有条目因预算没进来（合并块的收尾句据此去掉「完整集合」）。 */
+  truncated: boolean
   /** 实际注入条数。 */
   count: number
   /** 估算 token。 */
@@ -64,6 +68,8 @@ export interface AutoRenderResult {
   byLayer: Record<MemoryLayer, number>
   /** 真正进入这段文本的条目 id（调用方据此写注入计数）。 */
   pickedIds: string[]
+  /** 实际注入的条目与对应行（增量注入按 id 做差集）。 */
+  picked: Array<{ id: string; line: string }>
 }
 
 const zeroByLayer = (): Record<MemoryLayer, number> => ({ global: 0, workspace: 0, scene: 0, session: 0 })
@@ -140,7 +146,7 @@ function inLayer(entry: CatalogEntry, layer: AutoLayer, scope: AutoRenderScope):
  * 标题不在这里：`# Learned notes` 由注入框架按域提供。
  */
 export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoRenderResult {
-  const empty: AutoRenderResult = { text: '', count: 0, tokens: 0, budget: 0, dropped: 0, byLayer: zeroByLayer(), pickedIds: [] }
+  const empty: AutoRenderResult = { text: '', body: '', truncated: false, count: 0, tokens: 0, budget: 0, dropped: 0, byLayer: zeroByLayer(), pickedIds: [], picked: [] }
   const total = autoBudgetOf(input.contextWindow)
   const { budget, reduced } = competitorBudgetOfLayer(total, input.userSegmentTokens, layer)
   if (budget <= 0) return { ...empty, budget: 0, dropped: input.entries.length }
@@ -204,24 +210,29 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   picked.sort((a, b) => a.oneLine.localeCompare(b.oneLine) || a.id.localeCompare(b.id))
 
   const dropped = candidates.length - picked.length
-  const lines = picked.map(lineOf)
+  const entryLines = picked.map(lineOf)
+  const lines = [...entryLines]
   if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; list them with memory_manager_list (auto=true).`)
   if (reduced === 'min') lines.push('', '(This conversation\'s hand-written memories are large, so learned notes are shown at their minimum budget.)')
   // 收尾句（与用户记忆的版式一致）：条目 → 截断/降级提示 → 空行 → 收尾句。
   // 截断时去掉「完整集合」声明，否则段尾那句与上面的省略提示自相矛盾。
   const note = dropped > 0 ? AUTO_MEMORY_NOTE_PARTIAL : AUTO_MEMORY_NOTE
-  const text = lines.join('\n') + '\n\n' + note + '\n'
+  const body = lines.join('\n')
+  const text = body + '\n\n' + note + '\n'
 
   const byLayer = zeroByLayer()
   byLayer[layer] = picked.length
   return {
     text,
+    body,
+    truncated: dropped > 0,
     count: picked.length,
     tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3),
     budget,
     dropped,
     byLayer,
     pickedIds: picked.map((e) => e.id),
+    picked: picked.map((e, i) => ({ id: e.id, line: entryLines[i] })),
   }
 }
 

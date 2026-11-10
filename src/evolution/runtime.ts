@@ -142,6 +142,12 @@ export function createEvolutionRuntime(): EvolutionRuntime {
 export interface AutoSnapshot {
   key: string
   text: string
+  /** 不含收尾授权语的正文；合并块与增量注入要用。 */
+  body: string
+  /** 有条目因预算没进来（决定合并块收尾句与增量回退）。 */
+  truncated: boolean
+  /** 实际注入的条目与对应行；增量注入按 id 做差集。 */
+  picked: Array<{ id: string; line: string }>
   count: number
   tokens: number
   budget: number

@@ -380,7 +380,7 @@ export function deriveReach(
     return 'ok'
   }
   const scene = pluginText('scene')
-  const memory = pluginText('memory')
+  const memory = pluginText('memoryGlobal')
   const mcp = pluginText('mcp')
 
   /**

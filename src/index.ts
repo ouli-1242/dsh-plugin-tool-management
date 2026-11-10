@@ -72,7 +72,7 @@ import { createEvolutionState } from './evolution/state.js'
 import { buildScopeQuestion, scopeChoiceOf, scopeFailureOf, type ScopeAskRequest, type ScopeChoice } from './evolution/scope-card.js'
 // 写入管线：九道门 + 六步落盘。
 import { createLearner } from './evolution/write.js'
-import { isReservedGroup, layerOfGroup } from './memories/constants.js'
+import { COMBINED_MEMORY_NOTE, COMBINED_MEMORY_NOTE_PARTIAL, isReservedGroup, layerOfGroup } from './memories/constants.js'
 import { renderAutoLayer, budgetModeOf, estimateTextTokens, type AutoLayer } from './memories/render-auto.js'
 import { workspaceMemoryKeyOf } from './scope/workspace-key.js'
 import { buildEvolutionOps } from './ops/evolution.js'
@@ -2412,10 +2412,19 @@ export default {
      * **永不抛**：自动段只是附加信息，坏了就当没有；注入失败会让整段上下文停摆，
      * 而自动段是可选内容。读不动用户记忆时预算按 0 算，不让它连累自动段。
      */
-    function autoDomainText(layer: AutoLayer, agent: unknown): string {
+    interface AutoDomainProjection {
+      text: string
+      body: string
+      truncated: boolean
+      picked: Array<{ id: string; line: string }>
+    }
+    const emptyAutoProjection = (): AutoDomainProjection =>
+      ({ text: '', body: '', truncated: false, picked: [] })
+
+    function autoDomainProjection(layer: AutoLayer, agent: unknown): AutoDomainProjection {
       try {
-        if (subagentDepthOf(agent) !== 0) return ''
-        if (!agent || typeof agent !== 'object') return ''
+        if (subagentDepthOf(agent) !== 0) return emptyAutoProjection()
+        if (!agent || typeof agent !== 'object') return emptyAutoProjection()
         const identity = sessionIdentityOf(agent)
         const sid = identity?.sessionId ?? undefined
         const cwd = identity?.cwd
@@ -2423,10 +2432,10 @@ export default {
         const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
         // `inject` 已按两个开关解析过：层都关时它也是 false；显式 false 是「只学不用」的
         // 逃生口。这里先看它，再按层开关过滤 —— 关掉的那一层不注入已有条目。
-        if (!cfg.inject) return ''
+        if (!cfg.inject) return emptyAutoProjection()
         // 两层各有自己的开关：关掉一层 = 不再学这一层，也不再注入这一层已有的条目。
-        // 注入器的域开关对这两域被强制为 true（见 normalizeInjectSettings），真正的门在这里。
-        if (layer === 'global' ? !cfg.learnGlobal : !cfg.learnWorkspace) return ''
+        // 注入器的域开关对这两块仍然生效；这里的层开关是自动记忆自己的门。
+        if (layer === 'global' ? !cfg.learnGlobal : !cfg.learnWorkspace) return emptyAutoProjection()
 
         const scene = memoriesService.autoAccess.activeSceneSync(memoryScopeOf(agent)) ?? undefined
         const enabledScenes = new Set<string>(scene ? [scene] : [])
@@ -2450,7 +2459,11 @@ export default {
           budgetMode,
         })
         const prev = readAutoSnapshot(agent, layer)
-        if (prev && prev.key === key) return prev.text
+        if (prev && prev.key === key) {
+          // `??` 兜住热重载前写下的旧快照（那个形状没有这三个字段）：宁可这一轮少一块
+          // 自动正文，也不能让 `undefined` 流进合并块。
+          return { text: prev.text, body: prev.body ?? '', truncated: prev.truncated === true, picked: prev.picked ?? [] }
+        }
 
         const result = renderAutoLayer(layer, {
           entries: Object.values(view.catalog.entries),
@@ -2465,6 +2478,9 @@ export default {
         const snap: AutoSnapshot = {
           key,
           text: result.text,
+          body: result.body,
+          truncated: result.truncated,
+          picked: result.picked,
           count: result.count,
           tokens: result.tokens,
           budget: result.budget,
@@ -2477,10 +2493,36 @@ export default {
         if (prev === undefined || prev.text !== result.text) {
           void autoLearner.noteInjected(result.pickedIds).catch(() => undefined)
         }
-        return result.text
+        return { text: result.text, body: result.body, truncated: result.truncated, picked: result.picked }
       } catch {
-        return ''
+        return emptyAutoProjection()
       }
+    }
+
+    /** 自动记忆某一层的注入正文（含收尾句）。工作区块直接用；全局块取 `body` 参与合并。 */
+    function autoDomainText(layer: AutoLayer, agent: unknown): string {
+      return autoDomainProjection(layer, agent).text
+    }
+
+    /**
+     * 合并后的全局记忆块：用户记忆（全局 / 当前场景）+ 自主全局笔记。
+     *
+     * 两块都在任何对话里成立，合成一条消息后只需要一句授权语。用户记忆读失败照旧抛
+     * （`memoryProjection` 的口径）：不能把"读不动"报成"用户清空了记忆"；自动段坏了
+     * 只当没有（`autoDomainProjection` 自己吞）。
+     */
+    function memoryGlobalText(agent: unknown): string {
+      const user = memoriesService.memoryProjection(memoryScopeOf(agent))
+      const auto = autoDomainProjection('global', agent)
+      const parts: string[] = []
+      if (user.body.trim() !== '') parts.push(user.body.replace(/\s+$/, ''))
+      if (auto.body.trim() !== '') parts.push(auto.body.replace(/\s+$/, ''))
+      const tail = user.tail.trim()
+      if (parts.length === 0 && tail === '') return ''
+      const note = user.truncated || auto.truncated ? COMBINED_MEMORY_NOTE_PARTIAL : COMBINED_MEMORY_NOTE
+      // 尾注（`## Not injected`）放在最后当附录：夹在用户记忆与全局笔记之间会把后者
+      // 读成"未注入清单"的一部分。
+      return [...parts, note, ...(tail === '' ? [] : [tail])].join('\n\n') + '\n'
     }
 
     // 注入实况（只读诊断）：注入器的 live() 读回"最近活跃会话"可见表面上的各域文本。
@@ -2519,13 +2561,13 @@ export default {
             // 场景与记忆两域**按会话取覆盖**：`scopeOf(agent)` 给出本会话的场景与逐条
             // 开关，取不到会话 id 时返回 undefined = 跟随全局（风险表最后一条：取不到不猜）。
             { key: 'scene', name: 'tool-management:scene', label: '场景', form: 'snapshot', text: (agent) => memoriesService.sceneCatalogText(memoryScopeOf(agent)), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            // 记忆（**用户内容**）：各场景下的手写条目。
+            // 记忆（**全局内容**）：各场景下的手写条目 + 自主全局笔记。
+            // 两块都是"在任何对话里都成立的东西"，合成一条消息，只带一句授权语。
             // 与场景段同源、同一条 `applicableTo`。
-            { key: 'memory', name: 'tool-management:memory', label: '记忆', form: 'snapshot', text: (agent) => memoryDomainText(agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            // 自动记忆拆成两条独立消息：任何一条新增只让对应层重发；用户记忆的正文
-            // 不因自动记忆变化而重载。两层各有一条授权语（见 render-auto 的 AUTO_MEMORY_NOTE）。
-            { key: 'autoGlobal', name: 'tool-management:auto-global', label: '全局自主记忆', form: 'snapshot', text: (agent) => autoDomainText('global', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
-            { key: 'autoWorkspace', name: 'tool-management:auto-workspace', label: '工作区自主记忆', form: 'snapshot', text: (agent) => autoDomainText('workspace', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            { key: 'memoryGlobal', name: 'tool-management:memory-global', label: '全局记忆', form: 'snapshot', text: (agent) => memoryGlobalText(agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
+            // 工作区自主笔记单独一条：它只在本工作区成立，和上面的全局块分开去重，
+            // 一条工作区笔记新增不会让用户记忆重载。
+            { key: 'memoryWorkspace', name: 'tool-management:memory-workspace', label: '工作区笔记', form: 'snapshot', text: (agent) => autoDomainText('workspace', agent), applicableTo: (agent) => subagentDepthOf(agent) === 0 },
             // `pending`：启动 / 重连窗口里段是空的，但"空"不等于"用户关光了" —— 这一轮沉默，
             // 别先发一条「已清空」再在 server 连上后发一次内容（两次注入，第一次还是假的）。
             { key: 'mcp', name: 'tool-management:mcp-state', label: 'MCP 服务器', form: 'catalog', text: (agent) => mcp.stateCatalog.text(agent), pending: (agent) => mcp.stateCatalog.pending(agent) },

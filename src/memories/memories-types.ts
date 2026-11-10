@@ -130,6 +130,13 @@ export interface SceneRow {
 /** 场景记忆段的一次渲染结果（纯函数产物，确定性：无时间戳/计数）。 */
 export interface SceneMemoryProjection {
   text: string
+  /**
+   * 不含段尾授权语、也不含 `## Not injected` 尾注的正文。合并注入块时由调用方统一补一条
+   * 收尾句，避免用户记忆与全局笔记各带一句。
+   */
+  body: string
+  /** `## Not injected` / 截断标记那一截；`''` = 没有截断。合并块把它放在最后当附录。 */
+  tail: string
   bytes: number
   truncated: boolean
   maxBytes: number
@@ -138,6 +145,8 @@ export interface SceneMemoryProjection {
   items: Array<{ id: string; scene: string; name: string; bytes: number }>
   /** 因超出预算**未**注入的记忆（确定性顺序；段尾也会列出它们，模型与用户都能看见）。 */
   dropped: Array<{ id: string; scene: string; name: string; bytes: number }>
+  /** 实际注入的条目块（顺序与正文一致）；增量注入按 `id` 做差集。 */
+  blocks: Array<{ id: string; scene: string; name: string; description: string; block: string }>
 }
 
 /** 当前生效的场景提示词投影（供注入兜底与只读状态展示）。 */
@@ -168,6 +177,11 @@ export interface MemoriesService {
    * "用户清空了记忆"，从而不发那条假的「已清空」。界面投影走内部的 `sceneMemory()`（不抛）。
    */
   memoryText: (scope?: MemoryScopeOverride) => string
+  /**
+   * 记忆段的完整投影（正文 + 未注入清单 + 逐条块）。与 `memoryText` 同源、同一条读失败
+   * 口径；合并后的注入块要拿 `body` 与 `blocks`，不能从 `text` 反剥收尾句。
+   */
+  memoryProjection: (scope?: MemoryScopeOverride) => SceneMemoryProjection
   /**
    * 场景段文本（`scene-manager-catalog`）：**启用的场景 + 场景说明**（约定）。
    * 与记忆段是两个独立注入段，各自去重、各自可被关掉（见 snapshot.ts 的 renderSceneCatalog）。
