@@ -6,10 +6,10 @@
 // 记忆不是对话的副产品，是**对话结束后的独立工序**。
 //
 // 三条纪律：
-//   1. **严格 JSON**：只接受白名单字段；解析不出来就整批丢弃，不重试（模型已经跑偏，
-//      重试只会更贵）。逐条过九道门，复习器不是后门。
-//   2. **成本上限**：每会话最多 `maxReviewsPerSession` 次。超了直接跳过并在 outbox 记
-//      原因 —— 这条不是省钱，是防止长对话越跑越慢。
+//   1. **严格 JSON**：只接受白名单字段；解析不出来按可恢复失败走退避重试（不占学习名额）。
+//      逐条过九道门，复习器不是后门。
+//   2. **成本上限**：每会话最多 `maxReviewsPerSession` 次成功复习。超了直接跳过并在 outbox
+//      记原因 —— 失败 / 超时不占名额，失控由 outbox 的三次退避兜住。
 //   3. **失败不阻塞会话**：这里的所有异常都吞掉并写日志。用户不该因为记忆整理失败
 //      看到报错，更不该等它。
 
@@ -103,20 +103,31 @@ export function parseReviewItems(raw: unknown): ReviewItem[] {
   return out
 }
 
-/** 拼复习用的 prompt。导出是为了能单独看它长什么样（测试里也钉住"不塞全文"）。 */
+/**
+ * 拼复习用的 prompt。
+ *
+ * 压缩触发的复习只读官方 checkpoint；旧版按轮次排队的 episode 兼容旧渲染（盘上可能还有）。
+ * checkpoint 是模型转述，不是用户原话 —— 这里不给它「逐字」的标签，证据门也不会把它
+ * 当成引句来源。
+ */
 export function buildReviewPrompt(episode: Episode, catalogLines: string[]): string {
   const known = catalogLines.slice(0, 80)
-  const users = episode.userTexts.slice(-6)
-  const tools = episode.events
-    .filter((e) => e.kind === 'tool')
-    .slice(-8)
-    .map((e) => '- ' + String(e.tool || 'tool') + (e.ok === false ? ' (failed)' : '') + (e.text ? ': ' + e.text.slice(0, 200) : ''))
   const lines: string[] = []
-  lines.push('## 这一轮用户说的话（逐字，不要改写）')
-  lines.push(users.length ? users.map((t, i) => `[${i}] ${t.slice(0, 1500)}`).join('\n') : '(none)')
-  if (tools.length) {
-    lines.push('', '## 这一轮用到的工具')
-    lines.push(tools.join('\n'))
+  if (typeof episode.checkpoint === 'string' && episode.checkpoint.trim() !== '') {
+    lines.push('## Host-compiled checkpoint (a summary written by another model, not the user\'s words)')
+    lines.push(episode.checkpoint)
+  } else {
+    const users = episode.userTexts.slice(-6)
+    const tools = episode.events
+      .filter((e) => e.kind === 'tool')
+      .slice(-8)
+      .map((e) => '- ' + String(e.tool || 'tool') + (e.ok === false ? ' (failed)' : '') + (e.text ? ': ' + e.text.slice(0, 200) : ''))
+    lines.push('## 这一轮用户说的话（逐字，不要改写）')
+    lines.push(users.length ? users.map((t, i) => `[${i}] ${t.slice(0, 1500)}`).join('\n') : '(none)')
+    if (tools.length) {
+      lines.push('', '## 这一轮用到的工具')
+      lines.push(tools.join('\n'))
+    }
   }
   lines.push('', '## 已经记住的东西（不要重复记）')
   lines.push(known.length ? known.map((x) => '- ' + x).join('\n') : '(nothing yet)')
@@ -125,7 +136,16 @@ export function buildReviewPrompt(episode: Episode, catalogLines: string[]): str
   return lines.join('\n')
 }
 
-export const REVIEW_SYSTEM_PROMPT = [
+/** 压缩复习专用：checkpoint 里大半是「接着干活」的任务态，只有这一小类跨会话成立。 */
+const CHECKPOINT_FILTER = [
+  'The input is a host-compiled conversation checkpoint meant for resuming the current task, not for long-term memory.',
+  'Keep ONLY what will still be true in a different conversation: user preferences, corrections of your behaviour, durable constraints, project facts that cannot be read from the code, and repeatable procedures.',
+  'DISCARD everything task-local: Current Work, Next Step, Pending Jobs, Files and Code, Errors and Fixes, file paths, commands, error strings, dependency versions, and one-off instructions.',
+  'The checkpoint is a paraphrase, not the user\'s words: never invent a `quote`; set `source` to "model_inference".',
+].join(' ')
+
+/** 旧版按轮次复习的提示：那份 episode 里是用户逐字原话，可以要求引句核对。 */
+const TURN_SYSTEM_PROMPT = [
   'You extract durable memories from one finished conversation turn.',
   'Record only what will still matter in a different conversation: a stated preference, a correction of your behaviour, a project fact that cannot be read from the code, or a repeatable procedure.',
   'Do NOT record: one-off instructions ("this time", "for now"), anything derivable from package.json / config / git, or your own reasoning.',
@@ -137,28 +157,51 @@ export const REVIEW_SYSTEM_PROMPT = [
   'Output strict JSON: {"memories":[{"title":"Reply style","text":"the note","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
 ].join('\n')
 
-/** 系统提示 + 按需追加的风格行（custom 为空串时不追加）。 */
-export function reviewSystemPrompt(cfg: {
+export const REVIEW_SYSTEM_PROMPT = TURN_SYSTEM_PROMPT
+
+/** 系统提示按 episode 来源分叉：压缩那份必须明确排除任务态章节。 */
+export function reviewSystemPromptFor(episode: Episode, cfg: {
   noteStyle?: string
   noteStyleText?: string
   customNoteStyles?: readonly CustomNoteStyle[]
 }): string {
-  // 句长由风格指引决定：基础提示只保留语言要求，否则「详细」的 2–3 句会与
-  // 基础提示里的「one terse sentence」互相矛盾。
   const style = normalizeNoteStyle({
     style: cfg.noteStyle,
     customStyles: cfg.customNoteStyles,
     custom: cfg.noteStyleText,
   })
   const guide = noteStyleGuideOf(style.style, style.customStyles)
-  return guide === '' ? REVIEW_SYSTEM_PROMPT : REVIEW_SYSTEM_PROMPT + '\nWrite every `text` field in this style: ' + guide
+  const base = typeof episode.checkpoint === 'string' && episode.checkpoint.trim() !== ''
+    ? CHECKPOINT_FILTER + '\n' + [
+      '`layer`: "global" only when it applies to every project or to the user personally; otherwise "workspace". Always pass it.',
+      'Write every `text` in the user\'s language. Give every item a short `title` (2-8 words).',
+      'At most 3 items. When in doubt, return fewer — a wrong memory is injected into every later conversation.',
+      'Output strict JSON: {"memories":[{"title":"Reply style","text":"the note","kind":"preference|fact|correction|procedure","source":"model_inference","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
+    ].join('\n')
+    : TURN_SYSTEM_PROMPT
+  return guide === '' ? base : base + '\nWrite every `text` field in this style: ' + guide
 }
 
-/** 每会话的复习次数（花过的钱不退款，失败也计数）。 */
+/** 系统提示 + 按需追加的风格行（给旧调用方 / 测试用；生产走 `reviewSystemPromptFor`）。 */
+export function reviewSystemPrompt(cfg: {
+  noteStyle?: string
+  noteStyleText?: string
+  customNoteStyles?: readonly CustomNoteStyle[]
+}): string {
+  const style = normalizeNoteStyle({
+    style: cfg.noteStyle,
+    customStyles: cfg.customNoteStyles,
+    custom: cfg.noteStyleText,
+  })
+  const guide = noteStyleGuideOf(style.style, style.customStyles)
+  return guide === '' ? TURN_SYSTEM_PROMPT : TURN_SYSTEM_PROMPT + '\nWrite every `text` field in this style: ' + guide
+}
+
+/** 每会话的**成功**复习次数（失败 / 超时 / 坏 JSON 都不计数）。 */
 export interface ReviewBudget {
   /** 还能复习几次。`max` 给了就按它算（生效配置可能被用户在会话里改过）。 */
   remaining(session: string, max?: number): Promise<number>
-  /** 记一次（在真正调模型之前调用：超时也是花了钱）。 */
+  /** 记一次成功（复习真正跑完后才调用）。 */
   spend(session: string): Promise<void>
 }
 
@@ -274,8 +317,9 @@ export function createReviewer(deps: ReviewDeps): {
         return { ok: false, learned: 0, rejected: 0, reason: 'no-model', error: '拿不到这一轮的模型路由' }
       }
 
-      // 先记账再调：超时 / 崩溃也是花了钱，不记就等于"无限次重试"。
-      await deps.budget.spend(episode.session)
+      // 「学习次数」只在复习成功跑完后记一次；失败 / 坏 JSON 走重试，不占名额。
+      // 失控由 outbox 的 attempts（三次进 dead）兜住，不靠把失败算成一次学习。
+      const isCheckpoint = typeof episode.checkpoint === 'string' && episode.checkpoint.trim() !== ''
 
       let text = ''
       const ac = new AbortController()
@@ -286,7 +330,7 @@ export function createReviewer(deps: ReviewDeps): {
         const stream = prepared.stream({
           ...prepared.config,
           messages: [{ role: 'user', content: [{ type: 'text', text: buildReviewPrompt(episode, catalogLines) }] }],
-          system: reviewSystemPrompt(cfg),
+          system: reviewSystemPromptFor(episode, cfg),
           maxTokens: MAX_OUTPUT_TOKENS,
           signal: ac.signal,
         })
@@ -306,6 +350,7 @@ export function createReviewer(deps: ReviewDeps): {
       const items = parseReviewItems(parsed)
       if (items.length === 0) {
         await deps.log({ at: new Date().toISOString(), session: episode.session, turn: episode.turn, event: 'review-empty' })
+        await deps.budget.spend(episode.session)
         return { ok: true, learned: 0, rejected: 0 }
       }
 
@@ -320,8 +365,9 @@ export function createReviewer(deps: ReviewDeps): {
               ...(item.title !== undefined ? { title: item.title } : {}),
               ...(item.kind !== undefined ? { kind: item.kind } : {}),
               ...(item.key !== undefined ? { key: item.key } : {}),
-              source: item.source,
-              ...(item.quote !== undefined ? { quote: item.quote } : {}),
+              // checkpoint 是转述：不伪造用户原话，也不冒领 user_explicit。
+              source: isCheckpoint ? 'model_inference' : item.source,
+              ...(!isCheckpoint && item.quote !== undefined ? { quote: item.quote } : {}),
               ...(item.layer !== undefined ? { layer: item.layer } : {}),
               ...(item.boundary !== undefined ? { boundary: item.boundary } : {}),
               ...(item.ttlDays !== undefined ? { ttlDays: item.ttlDays } : {}),
@@ -358,6 +404,7 @@ export function createReviewer(deps: ReviewDeps): {
           await deps.log({ at: new Date().toISOString(), session: episode.session, turn: episode.turn, event: 'review-item-failed', error: deps.message(e) })
         }
       }
+      await deps.budget.spend(episode.session)
       await deps.log({ at: new Date().toISOString(), session: episode.session, turn: episode.turn, event: 'review-done', learned, rejected })
       return { ok: true, learned, rejected, ...(learnedItems.length > 0 ? { items: learnedItems } : {}) }
     },
