@@ -140,7 +140,7 @@
              * 宿主侧两种写法等价（`rules-create` 自己把空 group 映射到 `global`），所以这里
              * 只是把它提前落定，不改变任何落盘结果。
              */
-            setEditor(takeFormDraft('mem:create') || { mode: 'create', id: '', group: sceneName || GLOBAL_SCENE, name: '', description: '', body: '', form: 'flat', path: '', error: null, files: [], attachments: [] })
+            setEditor(takeFormDraft('mem:create') || { mode: 'create', id: '', group: sceneName || GLOBAL_SCENE, name: '', body: '', form: 'flat', path: '', error: null, files: [], attachments: [] })
             setModal({ type: 'editor' })
           }
           function openEditor(rule, focusAttach) {
@@ -156,7 +156,7 @@
                 var draft = takeFormDraft(draftKey)
                 // focusAttach 是"打开就替你把文件框点开"的一次性指令，重放它会凭空弹一次文件选择框。
                 if (draft) draft = Object.assign({}, draft, { focusAttach: false, error: null })
-                setEditor(draft || { mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], focusAttach: focusAttach === true, stamp: res.stamp })
+                setEditor(draft || { mode: 'edit', id: rd.id, group: rd.group, name: rd.name, body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], focusAttach: focusAttach === true, stamp: res.stamp })
                 setModal({ type: 'editor' })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
@@ -410,7 +410,6 @@
             var payload = {
               group: String(editor.group || '').trim(),
               name: name,
-              description: String(editor.description || '').trim(),
               body: editor.body || '',
               form: editor.form || 'flat',
             }
@@ -431,7 +430,6 @@
             var payload = {
               id: editor.id,
               name: String(editor.name || '').trim(),
-              description: String(editor.description || '').trim(),
               body: editor.body || '',
               form: editor.form || 'flat',
             }
@@ -459,7 +457,7 @@
               setBusy(false)
               if (res && res.ok && res.rule) {
                 var rd = res.rule
-                setEditor({ mode: 'edit', id: rd.id, group: rd.group, name: rd.name, description: rd.description || '', body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], stamp: res.stamp })
+                setEditor({ mode: 'edit', id: rd.id, group: rd.group, name: rd.name, body: rd.body || '', form: rd.form === 'bundle' ? 'bundle' : 'flat', path: rd.path || '', error: null, files: [], attachments: rd.attachments || [], stamp: res.stamp })
               } else setResult({ ok: false, text: translateError(t, res) })
             }).catch(function (e) { setBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
@@ -502,7 +500,6 @@
           // 空值改由提交按钮的 disabled 兜住（见下方 disabled 表达式）。
           var editorNameInvalid = editor ? String(editor.name || '').trim() !== '' && !isValidSceneSegment(String(editor.name || '').trim()) : false
           var editorGroupInvalid = editor && editor.mode === 'create' ? String(editor.group || '').trim() !== '' && !isValidScenePath(String(editor.group || '').trim()) : false
-          var editorDescLen = editor ? String(editor.description || '').length : 0
           /** 页头「全选 / 取消全选」的作用集 = 当前筛选后可见的、可切换的记忆。 */
           var bulkRules = React.useMemo(function () {
             var list = []
@@ -1003,7 +1000,6 @@
             var pending = e.status === 'candidate'
             var open = evoDetail === e.id
             var metaBits = [
-              t('evo.layer.' + e.layer),
               t('evo.injected', { count: (e.counters && Number(e.counters.injected)) || 0 }),
               t('evo.tokens', { count: Number(e.tokens) || 0 }),
             ]
@@ -1071,8 +1067,14 @@
           }
 
 
+          /** 生效（active/core/playbook）且没被停用的行才算"开"，与场景卡同一读法。 */
+          function evolutionOnCount(rows) {
+            return rows.filter(function (e) { return (e.status === 'active' || e.status === 'core' || e.status === 'playbook') && e.enabled !== false }).length
+          }
+
           /**
-           * 一张自主记忆卡。`rows` 已经过滤到这一组（全局 / 某个工作区），
+           * 一张自主记忆卡。`groups` 是这张卡要展示的分组，每组带名称与行；
+           * `grouped` 为真时组间画一行小节标题（工作区卡：卡内按工作区分节）。
            * `cardKey` 同时是折叠状态的键；标题由调用方按组给。
            *
            * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
@@ -1081,30 +1083,42 @@
            */
           function renderEvolutionCard(opts) {
             var layerOn = opts.layerOn
-            var rows = opts.rows
-            // 搜索词与场景卡同源同口径：一行摘要 / id 命中即留（大小写不敏感）。
-            if (q !== '') {
-              rows = rows.filter(function (e) {
-                var hay = String(e.oneLine || '') + ' ' + String(e.id || '')
-                return hay.toLowerCase().indexOf(q) >= 0
-              })
-            }
-            // 已取代是历史，已归档在回收站，都不占列表。
-            var live = rows.filter(function (e) { return e.status !== 'archived' && e.status !== 'superseded' })
+            var groups = (opts.groups || []).map(function (g) {
+              var rows = g.rows
+              // 搜索词与场景卡同源同口径：一行摘要 / id 命中即留（大小写不敏感）。
+              if (q !== '') {
+                rows = rows.filter(function (e) {
+                  var hay = String(e.oneLine || '') + ' ' + String(e.id || '')
+                  return hay.toLowerCase().indexOf(q) >= 0
+                })
+              }
+              // 已取代是历史，已归档在回收站，都不占列表。
+              var live = rows.filter(function (e) { return e.status !== 'archived' && e.status !== 'superseded' })
+              return { key: g.key, label: g.label, live: live, on: evolutionOnCount(live) }
+            })
+            var total = 0
+            var onCount = 0
+            groups.forEach(function (g) { total += g.live.length; onCount += g.on })
             // 关着且一条都没有 → 不渲染：空卡是噪音。开着但还没学到东西 → 留一张空卡，
             // 让用户知道「它开着，只是还没有内容」。
-            if (!layerOn && live.length === 0) return null
-            // 「启用 / 总数」与场景卡同一读法：生效（active/core/playbook）且没被停用的才算"开"。
-            var onCount = live.filter(function (e) { return (e.status === 'active' || e.status === 'core' || e.status === 'playbook') && e.enabled !== false }).length
+            if (!layerOn && total === 0) return null
             // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
             var openFlag = collapsed[opts.cardKey]
             var baseOpen = openFlag === undefined ? layerOn : openFlag !== true
             var open = baseOpen || q !== ''
             var body = []
-            if (live.length === 0) {
+            if (total === 0) {
               body.push(React.createElement('div', { key: 'empty', className: 'dsm-empty' }, opts.emptyText))
             } else {
-              body = body.concat(live.map(function (e) { return renderEvolutionRow(e) }))
+              groups.forEach(function (g) {
+                if (g.live.length === 0) return
+                if (opts.grouped) {
+                  body.push(React.createElement('div', { key: 'h:' + g.key, className: 'dsm-evo-ws-head' },
+                    React.createElement('span', { className: 'dsm-evo-ws-name' }, g.label),
+                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: g.on, total: g.live.length }))))
+                }
+                body = body.concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
+              })
             }
             // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
             return React.createElement('div', { key: opts.cardKey, className: 'dsm-source' + (layerOn ? '' : ' dsm-rule-off') },
@@ -1112,7 +1126,7 @@
                 React.createElement('button', { type: 'button', className: 'dsm-source-head-main dsm-source-head-stack', 'aria-expanded': open, onClick: function () { toggleCollapse(opts.cardKey, baseOpen) } },
                   React.createElement('span', { className: 'dsm-source-head-line' },
                     React.createElement('span', { className: 'dsm-source-title' }, opts.title),
-                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: live.length })),
+                    React.createElement('span', { className: 'dsm-count dsm-count-tight' }, t('memory.scene.count', { on: onCount, total: total })),
                     React.createElement('span', { className: 'dsm-tag' + (layerOn ? ' dsm-tag-on' : '') }, t('memory.auto.tag')))),
                 React.createElement('div', { className: 'dsm-source-actions' },
                   React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', onClick: function () { setResult(null); setEvoOpen(true) } }, t('evo.settings')))),
@@ -1126,8 +1140,8 @@
           }
 
           /**
-           * 自主记忆的全部卡片：全局一张，工作区按工作区名称各一张（用户 2026-11-10：
-           * 要知道这一组是哪个工作区的）。别的仓库的条目只展示，不会注入当前对话。
+           * 自主记忆的全部卡片：全局一张，工作区一张（卡内按工作区名称分节，
+           * 让用户知道每组条目属于哪个工作区）。别的仓库的条目只展示，不会注入当前对话。
            */
           function renderEvolutionCards() {
             if (sceneFilter !== '') return []
@@ -1140,7 +1154,7 @@
               cardKey: 'auto:global',
               title: t('memory.auto.card.global'),
               layerOn: evoGlobalOn,
-              rows: all.filter(function (e) { return e.layer === 'global' }),
+              groups: [{ key: 'global', label: '', rows: all.filter(function (e) { return e.layer === 'global' }) }],
               emptyText: t('evo.empty.on'),
             })
             if (globalCard) cards.push(globalCard)
@@ -1152,43 +1166,35 @@
               var hash = String(e.workspace || '')
               var group = byHash[hash]
               if (group === undefined) {
-                group = byHash[hash] = { hash: hash, rows: [], label: '' }
+                group = byHash[hash] = { key: hash || 'unknown', rows: [], label: '' }
                 groups.push(group)
               }
               group.rows.push(e)
               if (group.label === '') group.label = String(e.workspaceLabel || '')
             })
             groups.forEach(function (group) {
-              if (group.label === '' && group.hash === currentHash) group.label = currentLabel
+              if (group.label === '' && group.key === (currentHash || 'unknown')) group.label = currentLabel
             })
             // 当前对话的工作区排最前；其余按名称排，没有名称的按 hash。
             groups.sort(function (a, b) {
-              if (a.hash === currentHash && b.hash !== currentHash) return -1
-              if (b.hash === currentHash && a.hash !== currentHash) return 1
-              return a.label.localeCompare(b.label) || a.hash.localeCompare(b.hash)
+              var aCur = a.key === (currentHash || 'unknown')
+              var bCur = b.key === (currentHash || 'unknown')
+              if (aCur && !bCur) return -1
+              if (bCur && !aCur) return 1
+              return a.label.localeCompare(b.label) || a.key.localeCompare(b.key)
             })
-            if (groups.length === 0) {
-              var emptyWs = renderEvolutionCard({
-                cardKey: 'auto:workspace',
-                title: t('memory.auto.card.workspace'),
-                layerOn: evoWorkspaceOn,
-                rows: [],
-                emptyText: currentHash === '' ? t('evo.empty.workspace') : t('evo.empty.on'),
-              })
-              if (emptyWs) cards.push(emptyWs)
-            } else {
-              groups.forEach(function (group) {
-                var label = group.label !== '' ? group.label : shortWorkspaceHash(group.hash)
-                var card = renderEvolutionCard({
-                  cardKey: 'auto:workspace:' + (group.hash || 'unknown'),
-                  title: t('memory.auto.card.workspaceNamed', { name: label }),
-                  layerOn: evoWorkspaceOn,
-                  rows: group.rows,
-                  emptyText: t('evo.empty.on'),
-                })
-                if (card) cards.push(card)
-              })
-            }
+            groups.forEach(function (group) {
+              if (group.label === '') group.label = shortWorkspaceHash(group.key === 'unknown' ? '' : group.key)
+            })
+            var wsCard = renderEvolutionCard({
+              cardKey: 'auto:workspace',
+              title: t('memory.auto.card.workspace'),
+              layerOn: evoWorkspaceOn,
+              groups: groups,
+              grouped: true,
+              emptyText: groups.length === 0 && currentHash === '' ? t('evo.empty.workspace') : t('evo.empty.on'),
+            })
+            if (wsCard) cards.push(wsCard)
             return cards
           }
 
@@ -1508,13 +1514,6 @@
                   React.createElement('input', { className: 'dsm-control' + (editorNameInvalid ? ' dsm-rule-invalid' : ''), value: editor.name || '', placeholder: t('memory.field.name.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { name: e.target.value })) } }),
                   editorNameInvalid ? React.createElement('p', { className: 'dsm-rule-hint' }, t('memory.name.invalid')) : null),
                 React.createElement('label', { className: 'dsm-field' },
-                  // 字数计数与「描述」同一行、贴右缘（与 MCP 备注 / 人设与技能简介同款排版）——
-                  // 以前它单起一行落在输入框下面，看着像是另一个字段。
-                  React.createElement('div', { className: 'dsm-budget-meta' },
-                    React.createElement('span', { className: 'dsm-label' }, t('memory.field.description')),
-                    React.createElement('span', { className: 'dsm-char-count' + (editorDescLen > 500 ? ' dsm-char-over' : '') }, editorDescLen + ' / 500')),
-                  React.createElement('input', { className: 'dsm-control', value: editor.description || '', placeholder: t('memory.field.description.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { description: e.target.value })) } })),
-                React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.body')),
                   React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: editor.body || '', placeholder: t('memory.field.body.placeholder'), onChange: function (e) { setEditor(Object.assign({}, editor, { body: e.target.value })) } })),
                 React.createElement('div', { className: 'dsm-field' },
@@ -1557,7 +1556,7 @@
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: reloadEditor }, t('stale.write.reload')),
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: function () { submitUpdate(true) } }, t('stale.write.overwrite'))) : null,
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || anyLocked || editorNameInvalid || editorGroupInvalid || editorDescLen > 500 || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : function () { submitUpdate(false) } }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || anyLocked || editorNameInvalid || editorGroupInvalid || !String(editor.name || '').trim() || !String(editor.body || '').trim(), onClick: editor.mode === 'create' ? submitCreate : function () { submitUpdate(false) } }, editor.mode === 'create' ? t('memory.btn.create') : t('memory.btn.save')))) : null,
             // 场景建/删/档案弹窗已移至「场景」页（ScenesPage）。
             // 记忆回收站：本页那一个（42-shared-ui.js 的 TrashModal，domain = memories）。
             // 记忆域的备注（场景 / 形态 / 字节数 / 删除时间）在组件内部按同一条口径拼装。

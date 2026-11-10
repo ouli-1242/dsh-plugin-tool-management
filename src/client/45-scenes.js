@@ -53,7 +53,7 @@
           var drillTools = dts[0], setDrillTools = dts[1]
           // 记忆集组头的「创建」（用户 2026-10-14）：套用记忆页的「新建记忆」表单，但**不带场景
           // 选择器** —— 记忆归属由当前编辑的场景定死，于是这里建出来的条目立刻出现在本组清单里。
-          // null = 关闭；{ name, description, body, form, files, error } = 草稿。
+          // null = 关闭；{ name, body, form, files, error } = 草稿。
           var mns = React.useState(null)
           var memNew = mns[0], setMemNew = mns[1]
           // 「已存在同名记忆」确认弹窗（用户 2026-10-14 第二轮）：`{ name, finalName }` 或 null。
@@ -840,7 +840,7 @@
             // `editing` = 这一窗改的是第几条草稿；null = 新建一条。
             setMemNew(draft
               ? Object.assign({}, draft, { editing: null, error: null })
-              : { editing: null, name: '', description: '', body: '', form: 'flat', files: [], error: null })
+              : { editing: null, name: '', body: '', form: 'flat', files: [], error: null })
           }
           /** 改一条待创建的记忆：草稿回填进弹窗，保存时**替换**原来那条，而不是又添一条。 */
           function openMemoryEdit(index) {
@@ -855,7 +855,7 @@
             setMemNew(restore
               ? Object.assign({}, restore, { editing: index, error: null })
               : {
-                editing: index, name: m.name, description: m.description || '', body: m.body || '',
+                editing: index, name: m.name, body: m.body || '',
                 form: m.form || 'flat', files: (m.files || []).slice(), error: null,
               })
           }
@@ -951,7 +951,6 @@
             var editing = memNew.editing != null && list[memNew.editing] ? memNew.editing : null
             var draft = {
               name: name,
-              description: String(memNew.description || '').trim(),
               body: memNew.body || '',
               form: memNew.form || 'flat',
               files: (memNew.files || []).slice(),
@@ -992,7 +991,7 @@
             var chain = Promise.resolve()
             pending.forEach(function (m) {
               chain = chain.then(function () {
-                return apiCall('rules-create', { group: name, name: m.name, description: m.description, body: m.body, form: m.form }).then(function (res) {
+                return apiCall('rules-create', { group: name, name: m.name, body: m.body, form: m.form }).then(function (res) {
                   if (!res || !res.ok) { failed.push(m.name + '（' + translateError(t, res) + '）'); return null }
                   created += 1
                   var id = (res.rule && res.rule.id) || (name + '/' + m.name)
@@ -1016,13 +1015,12 @@
             })
           }
           /**
-           * 「新建记忆」弹窗本体。字段与记忆页逐项一致（名称 / 描述 / 正文 / 形态 + bundle 附件），
+           * 「新建记忆」弹窗本体。字段与记忆页逐项一致（名称 / 正文 / 形态 + bundle 附件），
            * 场景一栏改成只读展示 —— 这正是「套用记忆页的新建，但不需要选择场景」。
            */
           function memoryCreateNode() {
             if (!memNew || !modal || modal.type !== 'scene-editor') return null
             var nameInvalid = String(memNew.name || '').trim() !== '' && !isValidSceneSegment(String(memNew.name || '').trim())
-            var descLen = String(memNew.description || '').length
             var target = memoryCreateTarget()
             // 撞名改由提交时的确认窗处理（`DupNameDialog`）：输入框下面那行"保存会记为「X」"
             // 是它的**预告版**，用户 2026-10-14 裁定啰嗦，删掉 —— 真撞上了才弹窗问一句。
@@ -1038,7 +1036,7 @@
               stashFormDraft(memNewDraftKey(editing), {
                 editing: editing ? memNew.editing : null,
                 linkedName: editing && pending ? pending.name : null,
-                name: memNew.name || '', description: memNew.description || '', body: memNew.body || '',
+                name: memNew.name || '', body: memNew.body || '',
                 form: memNew.form || 'flat', files: (memNew.files || []).slice(),
               })
               setMemNew(null)
@@ -1054,11 +1052,6 @@
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.name')),
                   React.createElement('input', { className: 'dsm-control' + (nameInvalid ? ' dsm-rule-invalid' : ''), value: memNew.name || '', placeholder: t('memory.field.name.placeholder'), onChange: function (e) { setMemNew(Object.assign({}, memNew, { name: e.target.value })) } }),
                   nameInvalid ? React.createElement('p', { className: 'dsm-rule-hint' }, t('memory.name.invalid')) : null),
-                React.createElement('label', { className: 'dsm-field' },
-                  React.createElement('div', { className: 'dsm-budget-meta' },
-                    React.createElement('span', { className: 'dsm-label' }, t('memory.field.description')),
-                    React.createElement('span', { className: 'dsm-char-count' + (descLen > 500 ? ' dsm-char-over' : '') }, descLen + ' / 500')),
-                  React.createElement('input', { className: 'dsm-control', value: memNew.description || '', placeholder: t('memory.field.description.placeholder'), onChange: function (e) { setMemNew(Object.assign({}, memNew, { description: e.target.value })) } })),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.body')),
                   React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: memNew.body || '', placeholder: t('memory.field.body.placeholder'), onChange: function (e) { setMemNew(Object.assign({}, memNew, { body: e.target.value })) } })),
@@ -1087,7 +1080,7 @@
                     : null),
                 memNew.error ? React.createElement('div', { className: 'dsm-feedback dsm-error', role: 'alert' }, String(memNew.error)) : null),
               React.createElement('div', { className: 'dsm-modal-actions' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || nameInvalid || descLen > 500 || !String(memNew.name || '').trim() || !String(memNew.body || '').trim(), onClick: submitMemoryCreate }, editing ? t('memory.btn.save') : t('memory.btn.create'))))
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: busy || nameInvalid || !String(memNew.name || '').trim() || !String(memNew.body || '').trim(), onClick: submitMemoryCreate }, editing ? t('memory.btn.save') : t('memory.btn.create'))))
           }
           /** 组 1：MCP 工具集（服务器级行选择 → 行内「编辑」打开次级弹窗：备注 + 工具行选择）。 */
           function mcpGroup() {
@@ -1604,10 +1597,7 @@
                       value: String(sceneForm.toolTablePreset || ''),
                       options: toolTablePresetOptions(),
                       onChange: function (v) { setSceneForm(Object.assign({}, sceneForm, { toolTablePreset: v })) },
-                    }),
-                    // 自主记忆工具不随场景切换：场景管的是「当前这套环境」，自动记忆是
-                    // 跨场景的个人偏好，混进场景档案只会让用户以为换个场景就换了记忆。
-                    React.createElement('p', { className: 'dsm-help' }, t('scenes.field.toolTable.autoHint')))),
+                    }))),
                 // （原先这里是「自定义」时就地展开的勾选段卡片，2026-10-12 用户「能不能设置成弹窗」
                 // 改为独立弹窗 —— 见下面的 quickPick 与 openQuickPick。）
                 // 四组 2×2（档案四段并入）：行选择 + 组内滚，组容器底色分层不画边框。
