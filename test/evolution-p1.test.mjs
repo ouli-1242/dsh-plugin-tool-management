@@ -505,10 +505,23 @@ test('注入块：正文完整进上下文，不截断', () => {
   const r = lineOf(wsEntry({ body: long, oneLine: '摘要' }))
   assert.ok(r.includes(long), '完整正文必须在块里')
   assert.ok(!r.includes('…'), '注入不截断正文')
-  // 多行正文走围栏块（与手写记忆同构），单行压成一行。
+  // 多行正文默认走缩进段落（不进代码框）；只有会逃出条目的行才围栏。
   const multi = lineOf(wsEntry({ body: '第一行\n第二行' }))
-  assert.match(multi, /```/, '多行正文用围栏块')
+  assert.doesNotMatch(multi, /```/, '普通多行正文不进围栏')
+  assert.match(multi, /^- \*\*package-manager\*\*\n\n {2}第一行\n {2}第二行\n$/)
   assert.match(lineOf(wsEntry({ body: '一句话' })), /^- \*\*package-manager\*\* — 一句话\n$/)
+})
+
+test('注入块：会逃出条目的正文才用围栏', () => {
+  // markdown 允许 ≤3 格缩进的块级标记，正文里的 `# 标题` 会盖过容器的 `## Scene: X`；
+  // 围栏与 HTML 块还会吞掉后文。这些正文必须留在字面量里。
+  for (const body of ['# 代码/需求\n细节', '说明\n> 引用', '```js\ncode\n```', '说明\n<div>x</div>', '说明\n---', '第一行\n===', '说明\n~~~']) {
+    assert.match(lineOf(wsEntry({ body })), /```/, JSON.stringify(body) + ' 必须围栏')
+  }
+  // 列表标记不逃逸：缩进后只是条目下的嵌套列表。
+  assert.doesNotMatch(lineOf(wsEntry({ body: '- 甲\n- 乙' })), /```/, '嵌套列表不围栏')
+  // 单行正文恒在 `- **名称** — ` 之后，块级标记在这里只是字面量，不需要围栏。
+  assert.doesNotMatch(lineOf(wsEntry({ body: '> 引用' })), /```/, '单行不进块路径')
 })
 
 test('注入块：边界随正文一起进，不另附括号', () => {

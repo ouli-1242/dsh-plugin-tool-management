@@ -315,13 +315,16 @@ export function attachmentLine(file: SceneMemoryFile): string {
 // ── 单条记忆的渲染 ─────────────────────────────────────────────────────────
 
 /**
- * 多行正文的渲染形态：**围栏代码块**，整体缩进 2 格挂在条目下。
+ * 多行正文的渲染形态之一：**围栏代码块**，整体缩进 2 格挂在条目下。
  *
- * 为什么不是"缩进 2 格就完事"（实测推翻过）：markdown 里缩进 ≤3 格的 `#`
- * **仍然算标题**，所以正文里一句手写的 `# 代码/需求` 会渲染成 H1，**盖过容器自己的
- * `## Scene: X`** —— 用户看到的就是这个：内容看起来"逃出了条目"，与场景标题平级甚至更高。
- * 缩到 4 格能压住标题（块级标记都要求 ≤3 格缩进），但正文里的列表/引用只是被"压平"，
- * 视觉上仍与条目正文同级，达不到"明显从属"。
+ * 只在正文会**逃出条目**时才用它（判据见 `escapesItem`）—— 围栏块在宿主里被画成带
+ * 「复制」按钮的代码框，一条两句话的笔记不该长成代码的样子。普通多行正文走
+ * `indentBody` 的缩进段落。
+ *
+ * 为什么围栏仍然保留：markdown 里缩进 ≤3 格的 `#` **仍然算标题**，所以正文里一句手写的
+ * `# 代码/需求` 会渲染成 H1，**盖过容器自己的 `## Scene: X`** —— 用户看到的就是这个：
+ * 内容看起来"逃出了条目"，与场景标题平级甚至更高。缩到 4 格能压住标题（块级标记都要求
+ * ≤3 格缩进），但正文里的列表/引用只是被"压平"，视觉上仍与条目正文同级，达不到"明显从属"。
  *
  * 围栏块一次解决两件事（用户 明确要这两条）：
  *   - **不能逃出**：块内一切都是字面量，正文的 `#` / `>` / `---` / ``` 再也无法参与外围结构；
@@ -336,15 +339,39 @@ export function attachmentLine(file: SceneMemoryFile): string {
 export const bodyBlock = (text: string): string => {
   const longest = (text.match(/`+/g) ?? []).reduce((n, run) => Math.max(n, run.length), 0)
   const fence = '`'.repeat(Math.max(3, longest + 1))
-  const lines = text.split('\n').map((line) => (line === '' ? line : '  ' + line))
-  return ['  ' + fence, ...lines, '  ' + fence].join('\n')
+  return ['  ' + fence, indentBody(text), '  ' + fence].join('\n')
+}
+
+/**
+ * 正文整体缩进 2 格（空行保持空行）。
+ *
+ * 2 格刚好让正文成为上一条列表项的**续段**：既挂在条目下，又不够 4 格（不会变成缩进代码块）。
+ */
+const indentBody = (text: string): string =>
+  text.split('\n').map((line) => (line === '' ? line : '  ' + line)).join('\n')
+
+/**
+ * 这行正文在缩进 2 格后，会不会**逃出条目**变成块级结构。
+ *
+ * markdown 的块级标记允许 ≤3 格缩进，所以正文里一句手写的 `# 标题` 会盖过容器的
+ * `## Scene: X`；围栏与 HTML 块同理，还会把后面的行一起吞进去。命中这些的行必须进
+ * 围栏代码块（`bodyBlock`），其余多行正文按普通段落渲染。
+ *
+ * 不列列表标记（`- ` / `1. `）：缩进后只是条目下的嵌套列表，归属不变。
+ */
+const ITEM_ESCAPE = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|```|~~~|<|(?:-{3,}|\*{3,}|_{3,})[ \t]*$|={3,}[ \t]*$)/
+
+/** 正文里有没有会逃出条目的行（见 `ITEM_ESCAPE`）。 */
+export function escapesItem(text: string): boolean {
+  return text.split('\n').some((line) => ITEM_ESCAPE.test(line))
 }
 
 /**
  * 单条信息的渲染形态 —— **能一行就一行，但恒为列表项**。
  *
  *   单行且不长的正文 → `- **名称** — 正文`（与 MCP / 子智能体两个段的列表同形）
- *   多行或过长的正文 → `- **名称**` + 空行 + **围栏代码块里的正文**（挂在条目下；理由见 `bodyBlock`）
+ *   多行或过长的正文 → `- **名称**` + 空行 + 缩进 2 格的正文段落（挂在条目下）
+ *   正文里有会逃出条目的块级标记 → 改用**围栏代码块**（判据见 `escapesItem`）
  *
  * 名称恒为标题：它就是这条记忆的身份（工具 id `<场景>/<名称>`、bundle 目录/文件名都以它为准），
  * 用户说「记忆里的 X」、模型再调 `memory_get` 时都对得上号。
@@ -381,7 +408,9 @@ export function itemBlock(name: string, body: string, attach = ''): { text: stri
   const inline = text === '' || (!text.includes('\n') && text.length <= INLINE_BODY_MAX)
   const head = text === ''
     ? `- ${title}`
-    : (inline ? `- ${title} — ${text}` : `- ${title}\n\n${bodyBlock(text)}`)
+    : (inline
+        ? `- ${title} — ${text}`
+        : `- ${title}\n\n${escapesItem(text) ? bodyBlock(text) : indentBody(text)}`)
   if (attach === '') return { text: `${head}\n`, inline }
   // 附件行恒为缩进子项：只用 `- ` 会被解析成与记忆**同级**的列表项（`- A` / `- 附件目录：A的` /
   // `- B` … 四条平级，归属读不出来）。单行条目紧跟其后保持列表连续；多行条目前面空一行，
