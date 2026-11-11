@@ -1556,9 +1556,91 @@ export function createLearner(deps: LearnDeps) {
     })
   }
 
+  /**
+   * 挂一条「待复核」标记，**不改状态、不停注入**。
+   *
+   * 维护扫描用它代替以前的「降候选」：记忆突然从上下文里消失，比它稍微旧一点危险得多。
+   * 用户看到标记自己判断；点「复核」走 `markReviewed` 清掉标记并重置计时。
+   */
+  async function markReview(id: string, reason: string): Promise<LearnResult> {
+    return deps.withWriteLock(async () => {
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const docPath = join(notesRoot, split.group, split.name + '.md')
+      let text: string
+      try {
+        text = await readFile(docPath, 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: `not found: ${id}` }
+      }
+      const status = pickField(text, 'auto_status') || 'active'
+      if (status === 'archived' || status === 'superseded') {
+        return { ok: false, code: 'not-live', error: `refused: "${id}" is ${status}; nothing to review.` }
+      }
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      const entry = st.entries[id] ?? { evidence: [], counters: emptyCounters(), transitions: [], confidence: 0 }
+      if (entry.needsReview === reason) {
+        // 已经挂过同一条理由：不重复写 state，也不重复 bump revision ——
+        // 扫描每天跑一次，每次都写一遍会让注入缓存天天失效。
+        return { ok: true, id, layer: split.layer, status, confidence: entry.confidence ?? 0, merged: false, supersedes: [] }
+      }
+      entry.needsReview = reason
+      st.entries[id] = entry
+      bumpRevision(st)
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+      deps.invalidateSnapshot()
+      return { ok: true, id, layer: split.layer, status, confidence: entry.confidence ?? 0, merged: false, supersedes: [] }
+    })
+  }
+
+  /**
+   * 用户点「复核」：清掉待复核标记，并把 `auto_updated` 重置到现在。
+   *
+   * 两件事都要做。只清标记的话，下一次扫描会立刻按旧时间再挂一次 —— 用户会觉得
+   * "点了没反应"。`auto_updated` 就是扫描的计时起点（它由文件 mtime 兜底），
+   * 所以改写它等于把这一轮的 30 天重新起算。
+   */
+  async function markReviewed(id: string): Promise<LearnResult> {
+    return deps.withWriteLock(async () => {
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const docPath = join(notesRoot, split.group, split.name + '.md')
+      let text: string
+      try {
+        text = await readFile(docPath, 'utf8')
+      } catch {
+        return { ok: false, code: 'missing', error: `not found: ${id}` }
+      }
+      const status = pickField(text, 'auto_status') || 'active'
+      if (status === 'superseded') {
+        return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory.` }
+      }
+      const nowIso = new Date().toISOString()
+      await writeFileAtomically(docPath, rewriteFrontmatterFields(text, { auto_updated: nowIso }))
+      const read = await state.read()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      const entry = st.entries[id]
+      if (entry) {
+        delete entry.needsReview
+        bumpRevision(st)
+        const written = await state.write(st)
+        if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+      }
+      deps.invalidateSnapshot()
+      return {
+        ok: true, id, layer: split.layer, status,
+        confidence: entry?.confidence ?? 0, merged: false, supersedes: [],
+      }
+    })
+  }
+
   return {
     learn, preview, forget, approve, setStatus, setEnabled, promote, organize, applyOrganize, describe, update,
-    restoreFromTrash, purgeTrash, backfillTrash, noteInjected, noteRead,
+    restoreFromTrash, purgeTrash, backfillTrash, noteInjected, noteRead, markReview, markReviewed,
   }
 }
 
@@ -1612,9 +1694,11 @@ const normalizeForCompare = (s: string): string => String(s ?? '').toLowerCase()
 /** 默认 TTL：偏好/纠正活得久，事实与做法会过期。 */
 export function ttlDaysOf(kind: AutoKind, explicit?: number): number {
   if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit > 0) return Math.min(3650, Math.round(explicit))
-  if (kind === 'fact') return 180
-  if (kind === 'procedure') return 180
-  return 365
+  // 与 `maintenance.ts` 的 `REVIEW_DAYS` 同值：写进 frontmatter 的 `auto_ttl_days` 就是
+  // 「多久提醒一次复核」。偏好没有保质期（它只会被新偏好取代），这里仍给一个上限值 ——
+  // 字段必须有数，而扫描侧对 `kind === 'preference'` 直接跳过。
+  if (kind === 'fact' || kind === 'procedure') return 30
+  return 3650
 }
 
 /** 正文：一句话结论，加一行边界（有的话）。 */

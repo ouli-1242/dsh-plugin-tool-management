@@ -1080,6 +1080,18 @@
             })
           }
 
+          /** 复核：清掉「待复核」标记并重置计时（不改正文、不改状态）。 */
+          function reviewEvolution(id) {
+            setEvoBusy(true)
+            apiCall('evolution-review', { id: id }).then(function (res) {
+              setEvoBusy(false)
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.review.reviewed') })
+                refreshEvolution()
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
           /** 行内开关：只拨启用位；关闭的条目留在列表里，删除才进回收站。 */
           function toggleEvolutionEnabled(id, enabled) {
             setEvoBusy(true)
@@ -1178,9 +1190,13 @@
               metaBits.push(React.createElement('span', { key: 'body', className: 'dsm-listrow-meta-desc', title: body }, body))
             }
             if (e.wsMissing) metaBits.push(React.createElement('span', { key: 'ws', className: 'dsm-listrow-meta-info' }, t('evo.ws.missing')))
-            // 停用由行内开关承担（与记忆行同构）；菜单里只留编辑与删除。
+            // 待复核：维护扫描挂的标记。**不影响注入** —— 它只提示"这条 30 天没动过了"，
+            // 用户看一眼确认仍然成立就点菜单里的「复核」，计时重新开始。
+            if (e.needsReview) metaBits.push(React.createElement('span', { key: 'review', className: 'dsm-listrow-meta-info' }, t('evo.review.needed')))
+            // 停用由行内开关承担（与记忆行同构）；菜单里只留编辑、复核与删除。
             var menuItems = [
               { key: 'edit', label: t('btn.edit'), disabled: evoBusy, onClick: function () { openEvolutionEditor(e) } },
+              ...(e.needsReview ? [{ key: 'reviewed', label: t('evo.review.done'), disabled: evoBusy, onClick: function () { reviewEvolution(e.id) } }] : []),
               { key: 'forget', label: t('evo.forget'), danger: true, disabled: evoBusy, onClick: function () { setModal({ type: 'evo-delete', entry: e }) } },
             ]
             return React.createElement(ListRow, {

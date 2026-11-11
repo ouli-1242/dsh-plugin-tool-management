@@ -1,38 +1,45 @@
 // 维护扫描（P3）：把"记忆会自己变老"这件事从比喻变成一条可复现的规则。
 //
-// 四类清理，按代价从低到高：
+// 三件事，按代价从低到高：
 //   1. episode / outbox 裁剪 —— 30 天前的轮次摘要没人会再看，留着只是让目录变大。
-//   2. 会话层 GC —— 那个对话早就结束了，`_session/<sid>` 却还在磁盘上。
-//   3. TTL 到期 —— 事实会过期（端口号、包管理器），降候选而不是直接归档：
-//      "过期"不等于"错"，用户可能还在用，只是该复核一次。
-//   4. 衰减 / 工作区失效 / 配额 —— 最久没人用、所在目录都不在了、层已经满了。
+//   2. TTL 到期 —— 事实会过期（端口号、包管理器）：先**提醒**（30 天，继续注入），
+//      再久没人理才归档（90 天）。提醒不停用，是这一层的核心取舍，见 `planSweep`。
+//   3. 工作区失效 —— 目录拔了 90 天（移动硬盘 / 删了仓库），记忆留着只会占注入名额。
 //
 // 一条纪律：**这套扫描只改状态，不删文件**。归档是可恢复的，删除不是；把两者混在一起，
 // 用户迟早会遇到"我的记忆自己消失了"。真正的删除只有 `forget`（带墓碑与回收站）。
 //
 // 另一个纪律：**纯函数先出计划，再执行**。判断写在 `planSweep` 里，好测、可解释；
 // 执行只是把计划翻译成 `setStatus` 调用。否则"为什么它把我的记忆归档了"永远说不清。
+//
+// 已经删掉的两条，别再按"看起来该有"加回来：
+//   - **会话层 GC**：写入路由只剩全局 / 工作区（见 `evolution/route.ts`），门禁第九道
+//     还会把残留的 session 层改写成工作区 —— 新数据里根本没有会话层条目。
+//   - **衰减**：它读的注入计数只在**渲染文本变化**时 +1，量的是"这个文件多久没被改过"，
+//     与"有没有被用"无关。照它归档，等于把一直在干活的记忆按文件年龄清掉。
+//   - **配额**：只对 session 50 / scene 100 生效，而这两层正是废弃的那两层。
 
 import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { MemoryLayer } from '../memories/constants.js'
-import { LAYER_QUOTA } from './gates.js'
 import type { EvolutionStateStore } from './state.js'
-import { scoreOf } from './state.js'
 import type { EpisodeStore } from './episodes.js'
 import type { Learner } from './write.js'
 import { pickField } from './write.js'
 
-/** 会话层多久没用就回收。会话记忆本来就是"这个对话里有用"，不是长期记忆。 */
-export const SESSION_GC_DAYS = 14
-/** 多久没注入也没人读 = 死条目。 */
-export const DECAY_DAYS = 180
+/**
+ * 事实 / 流程多久提醒一次复核（天）。到点只挂「待复核」，**继续注入**。
+ *
+ * 为什么是 30 而不是 180：动作从"停用"变成了"提醒"，早提醒的成本几乎为零 ——
+ * 用户扫一眼就能判断，而晚提醒的代价是一条已经过时的记忆被当成事实用了半年。
+ */
+export const REVIEW_DAYS = 30
+/** 提醒之后再过多久仍没人理就归档（天）。到期停用一条可能还在用的记忆，代价太大。 */
+export const ARCHIVE_DAYS = 90
 /** 工作区目录消失多久之后归档它的记忆（设计文档：90 天）。 */
 export const WORKSPACE_MISSING_DAYS = 90
 /** episode / outbox 保留天数。 */
 export const EPISODE_KEEP_DAYS = 30
-/** 每次配额清理最多归档这一层容量的 20%，避免一次扫描把候选清空。 */
-const QUOTA_SWEEP_RATIO = 0.2
 
 export interface SweepEntry {
   id: string
@@ -59,19 +66,21 @@ export interface SweepEntry {
   }
 }
 
-export type SweepBucket = 'session-gc' | 'ttl' | 'decay' | 'workspace' | 'quota'
+export type SweepBucket = 'review' | 'ttl' | 'workspace'
 
 export type SweepAction =
-  | { kind: 'demote'; id: string; bucket: 'ttl'; reason: string; needsReview: string }
+  /** 只挂「待复核」，**不改状态、不停注入**。 */
+  | { kind: 'flag'; id: string; bucket: 'review'; reason: string; needsReview: string }
   | { kind: 'archive'; id: string; bucket: SweepBucket; reason: string }
 
 export interface SweepOptions {
   now?: number
-  sessionDays?: number
-  decayDays?: number
+  /** 多久提醒一次复核；默认 `REVIEW_DAYS`。 */
+  reviewDays?: number
+  /** 提醒后多久归档；默认 `ARCHIVE_DAYS`。 */
+  archiveDays?: number
   /** hash → 目录已消失多少天（只含确实不存在的）。 */
   workspaceMissingDays?: Map<string, number>
-  layerCaps?: Partial<Record<MemoryLayer, number>>
   /** 只出计划，不改任何状态（界面的「预览」）。 */
   dry?: boolean
 }
@@ -83,33 +92,24 @@ const ageDaysOf = (iso: string | undefined, now: number): number => {
   return Number.isFinite(t) ? Math.max(0, (now - t) / day) : 0
 }
 
-const lastTouched = (e: SweepEntry, now: number): number => {
-  const candidates = [e.updatedAt, e.counters.lastUsedAt, e.counters.lastInjectedAt]
-    .map((x) => (x ? Date.parse(x) : Number.NaN))
-    .filter((n) => Number.isFinite(n))
-  if (candidates.length === 0) return 0
-  return (now - Math.max(...candidates)) / day
-}
-
-// playbook 有意排除：它是旧数据里"验证过 3 次 + 用户确认链"的成果，TTL / 衰减 / 配额
-// 这类自动老化不该把它降回候选。要下线由用户手动归档。
+// playbook 有意排除：它是旧数据里"验证过 3 次 + 用户确认链"的成果，自动老化不该把它降回候选。
+// 要下线由用户手动归档。
 const isLive = (e: SweepEntry): boolean =>
   e.origin === 'auto' && e.locked !== true && (e.status === 'active' || e.status === 'core' || e.status === 'candidate')
 
 /**
  * 出计划。纯函数：同一份输入永远给同一份输出（`now` 显式传入）。
  *
- * 顺序固定，前面的动作会把条目从后面的判断里拿掉：一条刚被会话 GC 归档的条目，
- * 不该在 TTL 那一轮又降一次候选。
+ * 顺序固定，前面的动作会把条目从后面的判断里拿掉：一条已经被 TTL 归档的条目，
+ * 不该在工作区那一轮又被处理一次。
  */
 export function planSweep(entries: SweepEntry[], opts: SweepOptions = {}): { actions: SweepAction[]; counts: Record<SweepBucket, number> } {
   const now = opts.now ?? Date.now()
-  const sessionDays = opts.sessionDays ?? SESSION_GC_DAYS
-  const decayDays = opts.decayDays ?? DECAY_DAYS
-  const caps = { ...LAYER_QUOTA, ...(opts.layerCaps ?? {}) }
+  const reviewDays = opts.reviewDays ?? REVIEW_DAYS
+  const archiveDays = opts.archiveDays ?? ARCHIVE_DAYS
   const actions: SweepAction[] = []
   const taken = new Set<string>()
-  const counts: Record<SweepBucket, number> = { 'session-gc': 0, ttl: 0, decay: 0, workspace: 0, quota: 0 }
+  const counts: Record<SweepBucket, number> = { review: 0, ttl: 0, workspace: 0 }
 
   const push = (a: SweepAction): void => {
     actions.push(a)
@@ -117,48 +117,40 @@ export function planSweep(entries: SweepEntry[], opts: SweepOptions = {}): { act
     counts[a.bucket]++
   }
 
-  // 1. 会话层 GC：对话结束两周，这些条目不会再被任何会话看见（`_session/<sid>` 只对
-  //    那个 sid 生效）。归档而不是删除 —— 用户翻旧对话时还可能想看到它。
-  for (const e of entries) {
-    if (!isLive(e)) continue
-    if (e.layer !== 'session') continue
-    if (lastTouched(e, now) < sessionDays) continue
-    push({ kind: 'archive', id: e.id, bucket: 'session-gc', reason: `conversation inactive for ${Math.floor(lastTouched(e, now))} days` })
-  }
-
-  // 2. TTL：到期的**事实**降候选并标待确认；候选再躺一个 TTL 周期就归档（2×）。
-  //    为什么降级要标 needsReview：候选不进注入，但用户得能看见它 —— 否则"记忆自己
-  //    变少了"和"记忆还在只是不注入"在界面上长得一模一样。
+  // 1. TTL：**先提醒，后归档**。
+  //
+  //    提醒（`flag`）只挂一个 `needsReview`，状态与注入都不动 —— 一条记忆突然从上下文里
+  //    消失，比它稍微旧一点危险得多。用户看到「待复核」自己判断，点一下「复核」就重置计时。
+  //
+  //    归档（`archive`）只对**提醒过仍然没人理**的条目：`age >= archiveDays`，且
+  //    `archiveDays > reviewDays`。没提醒过就归档等于跳过用户，那正是这版要修掉的。
+  //
+  //    时钟取 `updatedAt`（`auto_updated` / 文件 mtime）：它量的是"最后一次被改写"，
+  //    而「复核」与「编辑」都会改写它 —— 两者都是用户确认过这条仍然正确的动作。
   for (const e of entries) {
     if (!isLive(e) || taken.has(e.id)) continue
-    const ttl = Number(e.ttlDays) > 0 ? Number(e.ttlDays) : e.kind === 'fact' || e.kind === 'procedure' ? 180 : 365
+    // 偏好没有保质期：它只会被新的偏好取代，时间不是判据。三年前说的「用中文」今天照样成立。
+    if (e.kind === 'preference') continue
+    // 显式 TTL（`ttlDays` 参数 / frontmatter 的 `auto_ttl_days`）是用户指定的复核间隔；
+    // 没给就按 kind 的默认值。归档阈值跟着它放大到 3 倍 —— 提醒过一次仍没人理，
+    // 才是「这条可能真的过时了」的信号。
+    const reviewAt = Number(e.ttlDays) > 0 ? Number(e.ttlDays) : reviewDays
+    const archiveAt = Number(e.ttlDays) > 0 ? reviewAt * 3 : archiveDays
     const age = ageDaysOf(e.updatedAt, now)
-    if (age < ttl) continue
-    if (e.status === 'active' || e.status === 'core') {
+    if (age >= archiveAt && archiveAt > reviewAt) {
+      push({ kind: 'archive', id: e.id, bucket: 'ttl', reason: `not reviewed for ${Math.floor(age)} days` })
+    } else if (age >= reviewAt) {
       push({
-        kind: 'demote',
+        kind: 'flag',
         id: e.id,
-        bucket: 'ttl',
-        reason: `not re-checked for ${Math.floor(age)} days (ttl ${ttl}d)`,
+        bucket: 'review',
+        reason: `not reviewed for ${Math.floor(age)} days`,
         needsReview: 'ttl',
       })
-    } else if (e.status === 'candidate' && age >= ttl * 2) {
-      push({ kind: 'archive', id: e.id, bucket: 'ttl', reason: `candidate expired after ${Math.floor(age)} days` })
     }
   }
 
-  // 3. 衰减：半年没被注入、也没人读过。计数与时间戳都来自真实注入 / 读取路径
-  //    （`noteInjected` / `noteRead`），不再用"从没注入过"这种永远为真的旧判据。
-  //    核心与钉住的条目不在这里 —— 它们本来就不靠"被用到"来证明自己。
-  for (const e of entries) {
-    if (!isLive(e) || taken.has(e.id)) continue
-    if (e.status !== 'active') continue
-    const idle = lastTouched(e, now)
-    if (idle < decayDays) continue
-    push({ kind: 'archive', id: e.id, bucket: 'decay', reason: `not injected or read for ${Math.floor(idle)} days` })
-  }
-
-  // 4. 工作区失效：目录拔了 90 天（移动硬盘 / 删了仓库）。记忆留着，但不该继续占注入
+  // 2. 工作区失效：目录拔了 90 天（移动硬盘 / 删了仓库）。记忆留着，但不该继续占注入
   //    名额 —— 它对应的路径已经不存在了。
   const missing = opts.workspaceMissingDays ?? new Map<string, number>()
   for (const e of entries) {
@@ -167,25 +159,6 @@ export function planSweep(entries: SweepEntry[], opts: SweepOptions = {}): { act
     const days = missing.get(e.workspace)
     if (days === undefined || days < WORKSPACE_MISSING_DAYS) continue
     push({ kind: 'archive', id: e.id, bucket: 'workspace', reason: `workspace directory missing for ${Math.floor(days)} days` })
-  }
-
-  // 5. 配额：层里活条目超过上限时，按分数从低到高归档候选（只动候选 —— 归档一条
-  //    active 等于替用户决定"这条不重要"，而候选本来就是"还没被确认"的那一档）。
-  //    每次最多清 20%：一次扫描把候选清空，用户会以为记忆被清库了。
-  for (const layer of ['session', 'scene', 'workspace', 'global'] as MemoryLayer[]) {
-    const live = entries.filter((e) => isLive(e) && !taken.has(e.id) && e.layer === layer)
-    const cap = caps[layer] ?? LAYER_QUOTA[layer]
-    if (live.length <= cap) continue
-    const maxHelpful = Math.max(0, ...live.map((e) => e.counters.helpful))
-    const candidates = live
-      .filter((e) => e.status === 'candidate')
-      .map((e) => ({ e, score: scoreOf({ confidence: e.confidence, pinned: false, updatedAt: e.updatedAt }, e.counters, maxHelpful, now) }))
-      .sort((a, b) => a.score - b.score)
-    const budget = Math.max(1, Math.floor(cap * QUOTA_SWEEP_RATIO))
-    const need = Math.min(live.length - cap, budget)
-    for (const row of candidates.slice(0, need)) {
-      push({ kind: 'archive', id: row.e.id, bucket: 'quota', reason: `layer ${layer} is over quota (${live.length}/${cap}); lowest-scoring candidates archived first` })
-    }
   }
 
   return { actions, counts }
@@ -261,7 +234,7 @@ export async function runSweep(deps: SweepDeps, opts: SweepOptions = {}): Promis
     outbox: { kept: 0, dropped: 0 },
     workspaces: { checked: 0, missing: 0, back: 0, archived: 0 },
     actions: [],
-    counts: { 'session-gc': 0, ttl: 0, decay: 0, workspace: 0, quota: 0 },
+    counts: { review: 0, ttl: 0, workspace: 0 },
     tokensBefore: 0,
     tokensAfter: 0,
     errors: [],
@@ -348,9 +321,10 @@ export async function runSweep(deps: SweepDeps, opts: SweepOptions = {}): Promis
       continue
     }
     try {
+      // `flag` 走 `markReview`（只挂标记，状态与注入都不动）；`archive` 才是停用。
       const r = a.kind === 'archive'
         ? await deps.learner.setStatus(a.id, 'archived', 'sweep', { reason: a.reason })
-        : await deps.learner.setStatus(a.id, 'candidate', 'sweep', { reason: a.reason, needsReview: a.needsReview })
+        : await deps.learner.markReview(a.id, a.needsReview)
       const ok = Boolean(r && r.ok)
       const err = (r as { error?: string } | undefined)?.error
       report.actions.push({ id: a.id, bucket: a.bucket, kind: a.kind, reason: a.reason, ok, ...(ok ? {} : { error: err }) })
@@ -360,8 +334,8 @@ export async function runSweep(deps: SweepDeps, opts: SweepOptions = {}): Promis
     }
   }
 
-  // 归档/降级之后的估算：被归档的不再进注入，降为候选的也不再进。
-  const changed = new Set(report.actions.filter((x) => x.ok).map((x) => x.id))
+  // 归档之后的估算：只有被归档的不再进注入（`flag` 仍然注入，所以不计入 `changed`）。
+  const changed = new Set(report.actions.filter((x) => x.ok && x.kind === 'archive').map((x) => x.id))
   report.tokensAfter = entries.filter((e) => isLive(e) && !changed.has(e.id)).reduce((n, e) => n + e.tokens, 0)
 
   if (!dry) {
@@ -384,18 +358,21 @@ export function shouldSweepNow(lastSweepAt: string | undefined, now = Date.now()
   return !Number.isFinite(t) || now - t >= SWEEP_INTERVAL_MS
 }
 
-/** 健康度：界面顶部那三行数字。只读，纯统计。 */
-export function healthOf(entries: SweepEntry[], state: { entries: Record<string, { needsReview?: string }> }, layerCaps: Partial<Record<MemoryLayer, number>> = {}) {
-  const caps = { ...LAYER_QUOTA, ...layerCaps }
-  const byLayer: Record<string, { active: number; candidate: number; archived: number; cap: number; tokens: number }> = {}
+/**
+ * 健康度：界面顶部那三行数字。只读，纯统计。
+ *
+ * `now` 显式传入（默认当前时间）：与 `planSweep` 同一条纪律 —— 纯统计函数不自己看表，
+ * 否则测试只能按真实时钟构造数据。
+ */
+export function healthOf(entries: SweepEntry[], state: { entries: Record<string, { needsReview?: string }> }, now = Date.now()) {
+  const byLayer: Record<string, { active: number; candidate: number; archived: number; tokens: number }> = {}
   for (const layer of ['session', 'scene', 'workspace', 'global'] as MemoryLayer[]) {
-    byLayer[layer] = { active: 0, candidate: 0, archived: 0, cap: caps[layer] ?? LAYER_QUOTA[layer], tokens: 0 }
+    byLayer[layer] = { active: 0, candidate: 0, archived: 0, tokens: 0 }
   }
   let tokens = 0
   let conflicts = 0
   let needsReview = 0
   let expired = 0
-  const now = Date.now()
   for (const e of entries) {
     const row = byLayer[e.layer]
     if (!row) continue
@@ -407,8 +384,8 @@ export function healthOf(entries: SweepEntry[], state: { entries: Record<string,
     else row.candidate++
     if (state.entries[e.id]?.needsReview) needsReview++
     if (e.counters.harmful >= 2) conflicts++
-    const ttl = e.ttlDays && e.ttlDays > 0 ? e.ttlDays : e.kind === 'fact' || e.kind === 'procedure' ? 180 : 365
-    if (ageDaysOf(e.updatedAt, now) >= ttl) expired++
+    // 「过期」= 该提醒复核了。与 `planSweep` 同一判据（偏好没有保质期）。
+    if (e.kind !== 'preference' && ageDaysOf(e.updatedAt, now) >= (Number(e.ttlDays) > 0 ? Number(e.ttlDays) : REVIEW_DAYS)) expired++
   }
   return { byLayer, tokens, conflicts, needsReview, expired, total: entries.length }
 }

@@ -65,11 +65,11 @@ export interface EvolutionOpDeps {
    * "先建一份空队列、真正跑起来的是另一份"的错位。
    */
   cold?(): ColdPathHandle | null
-  /** 维护扫描（P3）：TTL / 会话 GC / 衰减 / 工作区失效 / 配额。 */
+  /** 维护扫描：TTL 复核提醒 / 归档 + 工作区失效。 */
   sweep?(opts?: { dry?: boolean }): Promise<SweepReport>
   /** 健康度（只读统计）。 */
   health?(): Promise<{
-    byLayer: Record<string, { active: number; candidate: number; archived: number; cap: number; tokens: number }>
+    byLayer: Record<string, { active: number; candidate: number; archived: number; tokens: number }>
     tokens: number
     conflicts: number
     needsReview: number
@@ -445,6 +445,25 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         return result
       } catch (e) {
         return { ok: false, error: message(e), code: 'status-failed' }
+      }
+    },
+
+    /**
+     * 复核一条：清掉「待复核」标记并重置计时。
+     *
+     * 只清标记不重置时间的话，下一次扫描会立刻按旧时间再挂一次 —— 用户会觉得点了没反应。
+     * 用户改正文（`evolution-update`）同样会重置，所以这里只服务"内容没变、确认仍然对"。
+     */
+    'evolution-review': async (args: any) => {
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '')
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        const result = await learner.markReviewed(id)
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'review-failed' }
       }
     },
 

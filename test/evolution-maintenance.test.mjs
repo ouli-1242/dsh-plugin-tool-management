@@ -1,17 +1,17 @@
-// 维护扫描（P3）的测试。
+// 维护扫描的测试。
 //
-// 这里的每一条都在守同一件事：**记忆不会自己消失**。扫描只改状态（active → candidate →
-// archived），不删文件；而且是"先出计划，再执行" —— 计划是纯函数，所以可以逐条钉住
-// "为什么它被处理"。
+// 这里的每一条都在守同一件事：**记忆不会自己消失**。扫描只改状态（提醒 → 归档），
+// 不删文件；而且是"先出计划，再执行" —— 计划是纯函数，所以可以逐条钉住"为什么它被处理"。
 //
-// 顺序也是不变量：会话 GC 先跑，被它归档的条目不该在 TTL 那轮又降一次候选。真出过这种
-// 事的话，用户会在界面上看到同一条记忆的两次变更记录，而第二次毫无意义。
+// 两条口径尤其要钉住：
+//   - 到期**先提醒、不停用**。记忆突然从上下文里消失，比它稍微旧一点危险得多。
+//   - 归档只对提醒过仍然没人理的条目 —— 没提醒就归档等于跳过用户。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  DECAY_DAYS,
+  ARCHIVE_DAYS,
   EPISODE_KEEP_DAYS,
-  SESSION_GC_DAYS,
+  REVIEW_DAYS,
   WORKSPACE_MISSING_DAYS,
   healthOf,
   planSweep,
@@ -43,61 +43,48 @@ const entry = (over = {}) => ({
 test('planSweep：没到期的库一条都不动', () => {
   const { actions, counts } = planSweep([entry(), entry({ id: 'w/b', status: 'candidate' })], { now: NOW })
   assert.deepEqual(actions, [])
-  assert.deepEqual(counts, { 'session-gc': 0, ttl: 0, decay: 0, workspace: 0, quota: 0 })
+  assert.deepEqual(counts, { review: 0, ttl: 0, workspace: 0 })
 })
 
-test('planSweep：会话层两周没动就归档，且不会被后面的桶重复处理', () => {
+test('planSweep：到期先只提醒，状态与注入都不动', () => {
   const { actions, counts } = planSweep(
     [
-      entry({ id: '_session/s1/a', layer: 'session', updatedAt: iso(SESSION_GC_DAYS + 1) }),
-      entry({ id: '_session/s2/b', layer: 'session', updatedAt: iso(SESSION_GC_DAYS - 1) }),
+      entry({ id: 'fact-old', kind: 'fact', updatedAt: iso(REVIEW_DAYS + 1) }),
+      entry({ id: 'fact-fresh', kind: 'fact', updatedAt: iso(REVIEW_DAYS - 1) }),
     ],
     { now: NOW },
   )
-  assert.deepEqual(actions.map((a) => a.id), ['_session/s1/a'])
-  assert.equal(actions[0].bucket, 'session-gc')
-  assert.equal(counts['session-gc'], 1)
-  // 只有一条动作：说明 `taken` 真的挡住了后续桶。
-  assert.equal(actions.length, 1)
-})
-
-test('planSweep：TTL 到期先降候选并标待确认，候选要 2× 才归档', () => {
-  const { actions } = planSweep(
-    [
-      entry({ id: 'fact-old', kind: 'fact', updatedAt: iso(200) }),
-      entry({ id: 'cand-old', kind: 'fact', status: 'candidate', updatedAt: iso(200) }),
-      entry({ id: 'cand-ancient', kind: 'fact', status: 'candidate', updatedAt: iso(400) }),
-      entry({ id: 'fact-fresh', kind: 'fact', updatedAt: iso(10) }),
-    ],
-    { now: NOW },
-  )
-  assert.deepEqual(actions.map((a) => [a.id, a.kind, a.bucket]), [
-    ['fact-old', 'demote', 'ttl'],
-    ['cand-ancient', 'archive', 'ttl'],
-  ])
+  assert.deepEqual(actions.map((a) => [a.id, a.kind, a.bucket]), [['fact-old', 'flag', 'review']])
   assert.equal(actions[0].needsReview, 'ttl')
+  assert.equal(counts.review, 1)
+  assert.equal(counts.ttl, 0, '还没到归档线，一条都不该停用')
 })
 
-test('planSweep：显式 TTL 覆盖 kind 默认值', () => {
-  const { actions } = planSweep([entry({ kind: 'preference', ttlDays: 30, updatedAt: iso(40) })], { now: NOW })
-  assert.deepEqual(actions.map((a) => a.id), ['w/a'])
-})
-
-test('planSweep：衰减看最后一次注入 / 读取，而不是"有没有被用过"', () => {
+test('planSweep：提醒之后仍没人理才归档', () => {
   const { actions } = planSweep(
     [
-      entry({ id: 'dead', updatedAt: iso(DECAY_DAYS + 1) }),
-      // 半年前学过，但昨天刚被注入：还活着。
-      entry({ id: 'injected', updatedAt: iso(DECAY_DAYS + 1), counters: counters({ injected: 3, lastInjectedAt: iso(1) }) }),
-      entry({ id: 'read', updatedAt: iso(DECAY_DAYS + 1), counters: counters({ read: 1, lastUsedAt: iso(1) }) }),
-      // 用过，但最后一次也超过半年：和从没用过一样该归档。
-      entry({ id: 'stale', updatedAt: iso(DECAY_DAYS + 1), counters: counters({ injected: 2, lastInjectedAt: iso(DECAY_DAYS + 10) }) }),
-      entry({ id: 'core', status: 'core', updatedAt: iso(DECAY_DAYS + 1) }),
+      entry({ id: 'forgotten', kind: 'fact', updatedAt: iso(ARCHIVE_DAYS + 1) }),
+      entry({ id: 'warned', kind: 'fact', updatedAt: iso(ARCHIVE_DAYS - 1) }),
     ],
     { now: NOW },
   )
-  assert.deepEqual(actions.map((a) => a.id).sort(), ['dead', 'stale'])
-  assert.ok(actions.every((a) => a.bucket === 'decay'))
+  assert.deepEqual(actions.map((a) => [a.id, a.kind]), [['forgotten', 'archive'], ['warned', 'flag']])
+})
+
+test('planSweep：偏好没有保质期，放多久都不提醒', () => {
+  const { actions } = planSweep([entry({ kind: 'preference', updatedAt: iso(3650) })], { now: NOW })
+  assert.deepEqual(actions, [])
+})
+
+test('planSweep：显式 TTL 是复核间隔，归档线跟着放大到 3 倍', () => {
+  const { actions } = planSweep(
+    [
+      entry({ id: 'a', kind: 'fact', ttlDays: 10, updatedAt: iso(15) }),
+      entry({ id: 'b', kind: 'fact', ttlDays: 10, updatedAt: iso(35) }),
+    ],
+    { now: NOW },
+  )
+  assert.deepEqual(actions.map((a) => [a.id, a.kind]), [['a', 'flag'], ['b', 'archive']])
 })
 
 test('planSweep：工作区目录没消失够久，不归档它的记忆', () => {
@@ -114,34 +101,12 @@ test('planSweep：工作区目录没消失够久，不归档它的记忆', () =>
   }
 })
 
-test('planSweep：配额超了只清候选，从最低分开始，且一次不超过 20%', () => {
-  const rows = [
-    entry({ id: 'a1' }),
-    entry({ id: 'a2' }),
-    entry({ id: 'a3' }),
-    entry({ id: 'a4' }),
-    // 两条候选：低置信度的先走。
-    entry({ id: 'c-low', status: 'candidate', confidence: 0.62 }),
-    entry({ id: 'c-high', status: 'candidate', confidence: 0.9 }),
-  ]
-  // 上限 4 → 超 2 条，但预算 floor(4*0.2)=0 → 至少 1 条。
-  const { actions, counts } = planSweep(rows, { now: NOW, layerCaps: { workspace: 4 } })
-  assert.deepEqual(actions.map((a) => a.id), ['c-low'])
-  assert.equal(counts.quota, 1)
-
-  // 上限 12 → floor(12*0.2)=2，但仍只清候选（这里只有 2 条），active 一条不动。
-  const wide = [...Array.from({ length: 11 }, (_, i) => entry({ id: 'x' + i })), entry({ id: 'c1', status: 'candidate', confidence: 0.7 })]
-  const r2 = planSweep(wide, { now: NOW, layerCaps: { workspace: 10 } })
-  assert.equal(r2.actions.length, 1)
-  assert.equal(r2.actions[0].id, 'c1')
-})
-
 test('planSweep：用户记忆、锁定条目、已归档的都不进来', () => {
   const { actions } = planSweep(
     [
-      entry({ id: 'user', origin: 'user', updatedAt: iso(DECAY_DAYS + 10) }),
-      entry({ id: 'locked', locked: true, updatedAt: iso(DECAY_DAYS + 10) }),
-      entry({ id: 'archived', status: 'archived', updatedAt: iso(DECAY_DAYS + 10) }),
+      entry({ id: 'user', origin: 'user', updatedAt: iso(ARCHIVE_DAYS + 10) }),
+      entry({ id: 'locked', locked: true, updatedAt: iso(ARCHIVE_DAYS + 10) }),
+      entry({ id: 'archived', status: 'archived', updatedAt: iso(ARCHIVE_DAYS + 10) }),
     ],
     { now: NOW },
   )
@@ -159,6 +124,10 @@ function deps(over = {}) {
     learner: {
       async setStatus(id, status, actor, opts) {
         calls.push({ id, status, actor, opts })
+        return { ok: true, id }
+      },
+      async markReview(id, reason) {
+        calls.push({ id, review: reason })
         return { ok: true, id }
       },
     },
@@ -212,23 +181,21 @@ test('runSweep：dry 只出报告，一个状态都不改', async () => {
   assert.ok(d.calls.some((c) => c.prune === EPISODE_KEEP_DAYS))
 })
 
-test('runSweep：真跑时逐条翻译成 setStatus，并在报告里留原因', async () => {
+test('runSweep：提醒走 markReview，归档走 setStatus', async () => {
   const d = deps({
     async entries() {
-      return [entry({ id: 'x1', kind: 'fact', updatedAt: iso(200) })]
+      return [
+        entry({ id: 'warn', kind: 'fact', updatedAt: iso(REVIEW_DAYS + 1) }),
+        entry({ id: 'gone', kind: 'fact', updatedAt: iso(ARCHIVE_DAYS + 1) }),
+      ]
     },
   })
   const r = await runSweep(d)
-  assert.equal(r.actions.length, 1)
-  assert.equal(r.actions[0].bucket, 'ttl')
-  assert.equal(r.actions[0].ok, true)
-  const setCalls = d.calls.filter((c) => c.id)
-  assert.equal(setCalls.length, 1)
-  assert.equal(setCalls[0].id, 'x1')
-  assert.equal(setCalls[0].status, 'candidate')
-  assert.equal(setCalls[0].actor, 'sweep')
-  assert.equal(setCalls[0].opts.needsReview, 'ttl')
-  assert.match(setCalls[0].opts.reason, /ttl 180d/)
+  assert.deepEqual(r.actions.map((a) => [a.id, a.kind, a.ok]), [['warn', 'flag', true], ['gone', 'archive', true]])
+  const setCalls = d.calls.filter((c) => c.status)
+  assert.deepEqual(setCalls.map((c) => [c.id, c.status]), [['gone', 'archived']])
+  const reviewCalls = d.calls.filter((c) => c.review)
+  assert.deepEqual(reviewCalls.map((c) => [c.id, c.review]), [['warn', 'ttl']])
 })
 
 test('runSweep：单条失败不影响其它条，错误进报告', async () => {
@@ -236,6 +203,10 @@ test('runSweep：单条失败不影响其它条，错误进报告', async () => 
   const d = deps({
     learner: {
       async setStatus(id) {
+        n++
+        return id === 'bad' ? { ok: false, error: 'boom' } : { ok: true, id }
+      },
+      async markReview(id) {
         n++
         return id === 'bad' ? { ok: false, error: 'boom' } : { ok: true, id }
       },
@@ -248,7 +219,7 @@ test('runSweep：单条失败不影响其它条，错误进报告', async () => 
   assert.equal(n, 2)
   assert.deepEqual(r.actions.map((a) => [a.id, a.ok]), [['bad', false], ['good', true]])
   assert.equal(r.actions[0].error, 'boom')
-  // 成功的降为候选（不再注入），失败的那条还是 active，仍然算注入体积。
+  // 两条都到期归档（400 天 > 90 天）：成功的那条不再注入，失败的仍是 active。
   assert.equal(r.tokensBefore, 20)
   assert.equal(r.tokensAfter, 10)
 })
@@ -297,7 +268,7 @@ test('runSweep：工作区目录回来 → 同步恢复"因工作区失效"归�
     },
     async entries() {
       return [
-        // 三条都在 h2：一条是工作区失效归档的（要恢复）、一条是 decay 归档的（不动）、
+        // 三条都在 h2：一条是工作区失效归档的（要恢复）、一条是别的理由归档的（不动）、
         // 一条还是 active（不动）。第四条属于别的 hash，与本工作区无关。
         entry({ id: '_ws/h2/back', layer: 'workspace', workspace: 'h2', status: 'archived', updatedAt: iso(95) }),
         entry({ id: '_ws/h2/decayed', layer: 'workspace', workspace: 'h2', status: 'archived', updatedAt: iso(95) }),
@@ -312,7 +283,7 @@ test('runSweep：工作区目录回来 → 同步恢复"因工作区失效"归�
     state: {
       entries: {
         '_ws/h2/back': { transitions: [{ at: iso(90), from: 'active', to: 'archived', actor: 'dream', reason: 'workspace directory missing for 90 days' }] },
-        '_ws/h2/decayed': { transitions: [{ at: iso(80), from: 'active', to: 'archived', actor: 'dream', reason: 'never injected or read in 180 days' }] },
+        '_ws/h2/decayed': { transitions: [{ at: iso(80), from: 'active', to: 'archived', actor: 'sweep', reason: 'not reviewed for 100 days' }] },
       },
     },
   })
@@ -378,9 +349,9 @@ test('healthOf：按层统计，候选与归档分开算，过期数目单独给
       entry({ id: 'g/old', layer: 'global', kind: 'fact', updatedAt: iso(400) }),
     ],
     { entries: { 'w/a': { needsReview: 'ttl' } } },
+    NOW,
   )
-  // 全局 / 工作区不设总条数上限，只限产生速度；`cap` 保留给维护扫描报告形状。
-  assert.deepEqual(h.byLayer.workspace, { active: 2, candidate: 1, archived: 1, cap: Infinity, tokens: 40 })
+  assert.deepEqual(h.byLayer.workspace, { active: 2, candidate: 1, archived: 1, tokens: 40 })
   assert.equal(h.byLayer.global.active, 2)
   // active/core 的体积都算：w/a 10 + w/d 30 + g/a 10 + g/old 10。过期的也还在注入，所以也算。
   assert.equal(h.tokens, 60)

@@ -156,6 +156,7 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 与"关掉整个主动学习开关"不同 —— 后者是策略，前者是内容。
   'evolution-set-enabled': { write: true },
   'evolution-set-status': { write: true },
+  'evolution-review': { write: true },
   // 编辑正文：与 set-status 同权（写、不冻结）—— 自主记忆不绑场景。
   'evolution-update': { write: true },
   'evolution-restore': { write: true, frozen: true },
