@@ -258,11 +258,17 @@ export const HOST_BEHAVIOR_CONTRACTS: readonly HostModuleContract[] = [
   {
     package: '@deepseek-ai/dsh-session',
     feature: '会话事件序号与可见消息',
-    impact: '注入表面的事件定位与去重会失配',
+    impact: '注入表面的事件定位与去重会失配；自主记忆的后台复习不再被触发',
     markers: [
       { needle: 'SessionSeq', why: '会话事件序号（注入表面按它定位事件）' },
       { needle: 'deriveMessages', why: '模型可见消息的公开出口（注入表面按它读各域最新正文）' },
       { needle: 'eventAt', why: '同步事件读取（deriveMessages 缺席时的兜底路径）' },
+      // 自主记忆的冷路径只认这三个事件名：压缩触发复习、请求头给模型路由、真人消息喂证据缓存。
+      // 任何一个改名，对应那一段会**静默失效** —— 复习不触发 / 复习拿不到路由 / 引句核对
+      // 永远降级，日志里只有我们自己写的那几行。
+      { needle: 'compaction/summary', why: '压缩事件名（后台复习唯一的触发点）' },
+      { needle: 'request/header', why: '请求头事件名（复习用这一轮的模型路由）' },
+      { needle: 'user/message', why: '用户消息事件名（证据缓存，逐字引句核对）' },
     ],
   },
   {

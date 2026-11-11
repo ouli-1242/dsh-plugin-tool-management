@@ -525,6 +525,46 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     describe: (t) => isFn((t as Record<string, unknown>).listModels) ? '支持 listModels（可枚举模型）' : '无 listModels（只列来源，模型需手填）',
   },
   {
+    id: 'llm.prepare-call',
+    label: '后台复习的模型调用（prepareCall / stream）',
+    kind: 'read',
+    owner: 'llm',
+    fallback: 'inform-only',
+    methods: ['prepareCall'],
+    // 自主记忆的后台复习走这条路：`prepareCall(config)` 拿到 `{config, stream}`，再派发一次。
+    // 两个形状缺一个，复习每次都失败（日志里只有一句 review-failed），而热路径的
+    // `memory_note` 不受影响 —— 症状是「开了自主记忆但从来不学」，界面看起来一切正常。
+    //
+    // 官方实现是 **async**（`dsh-llm` 的 provider 门面）：返回的是 Promise，同步探测看不到
+    // 里面的 config / stream。那种情况只核对签名，不判形状 —— 把 Promise 当"缺 config"报，
+    // 会让一台完全正常的宿主永远亮一条红。也不真 await：探测是同步的，且可能联网。
+    probe: (t) => {
+      const prepareCall = (t as { prepareCall?: unknown }).prepareCall
+      if (typeof prepareCall !== 'function') return '宿主 llm 服务缺少 prepareCall()：后台复习无法发起模型调用'
+      if (prepareCall.length === 0) return 'prepareCall() 不再接收配置参数：复习无法指定模型与输出上限'
+      let prepared: unknown
+      try {
+        prepared = (prepareCall as (...args: unknown[]) => unknown).call(t, { provider: '', model: '', temperature: 0, maxTokens: 1 })
+      } catch (error) {
+        // 空 provider / model 被拒是**预期**（说明它在校验参数），不算契约漂移。
+        if (error instanceof TypeError) return `prepareCall() 抛 TypeError：${String((error as Error)?.message ?? error)}`
+        return undefined
+      }
+      if (prepared !== null && typeof prepared === 'object' && typeof (prepared as { then?: unknown }).then === 'function') {
+        // 异步实现：同步看不到返回值形状，顺手吞掉可能的 rejection，别让它变成未处理的拒绝。
+        const settled = prepared as { catch?: (onRejected: () => void) => unknown }
+        if (typeof settled.catch === 'function') settled.catch(() => undefined)
+        return undefined
+      }
+      if (prepared === null || typeof prepared !== 'object') return 'prepareCall() 没有返回对象：复习拿不到 config / stream'
+      const shape = prepared as { config?: unknown; stream?: unknown }
+      if (shape.config === null || typeof shape.config !== 'object') return 'prepareCall() 的返回值缺少 config：派发时无法回传同一份配置'
+      if (typeof shape.stream !== 'function') return 'prepareCall() 的返回值缺少 stream()：复习无法派发'
+      return undefined
+    },
+    describe: () => '支持 prepareCall（后台复习可用）',
+  },
+  {
     id: 'approval.effective-policy',
     label: '审批策略读取（完全权限判定）',
     kind: 'read',
