@@ -757,6 +757,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             // （界面知道自己是谁、模型知道自己的 sid/cwd），op 层不猜。
             injects: entry.enabled && isInjectableStatus(entry.status),
             tokens: entry.estTokens,
+            // 注入总盘按字节算，界面要把自主段并进页头那个「已用/上限」。
+            bytes: entry.bytes,
             workspace: entry.workspace,
             ...(wsRecord !== undefined
               ? {

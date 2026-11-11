@@ -482,7 +482,6 @@
           var memInfo = data.sceneMemory || EMPTY_MEMORY
           var memMax = Number(memInfo.maxBytes) || 0
           var memUsed = Number(memInfo.usedBytes) || 0
-          var budgetOver = memMax > 0 && memUsed > memMax
           var droppedNames = React.useMemo(function () {
             return (memInfo.dropped || []).map(function (d) { return (d.scene ? d.scene + '/' : '') + d.name })
           }, [memInfo])
@@ -1951,6 +1950,21 @@
           var evoWorkspaceOn = evoEff.learnWorkspace === true
           var evoOn = evoGlobalOn || evoWorkspaceOn
           var evoPending = Number(evo.status && evo.status.auto && evo.status.auto.pendingReview) || 0
+          // 自主记忆也吃同一个注入总盘（两块都会进上下文），页头那个「已用」必须含它 ——
+          // 只报手写记忆会让用户以为还剩 250 KiB，而实际已经没有余量了。
+          // 口径与注入侧一致：可注入状态 + 单条开关 + 层开关 + 当前工作区。
+          var evoBytes = (function () {
+            var hash = String((evo.status && evo.status.workspace && evo.status.workspace.hash) || '')
+            var total = 0
+            ;(evo.entries || []).forEach(function (e) {
+              if (e.injects !== true) return
+              if (e.layer === 'global') { if (evoGlobalOn) total += Number(e.bytes) || 0; return }
+              if (e.layer === 'workspace') { if (evoWorkspaceOn && hash !== '' && String(e.workspace || '') === hash) total += Number(e.bytes) || 0 }
+            })
+            return total
+          })()
+          // 超限判据用**合并后**的用量：两块共用一个池子，只看手写段会漏报。
+          var budgetOver = memMax > 0 && (memUsed + evoBytes) > memMax
           // 工作区自主记忆卡：所有工作区合成一张，卡内按名称分节。场景筛选选了具体场景时
           // 跟着隐藏 —— 自主记忆不绑场景，出现在"某场景里有什么"的答案里只会添乱。
           var evoCards = renderEvolutionCards()
@@ -1988,7 +2002,10 @@
                 [(stats.enabled || 0) + '/' + (stats.total || 0), t('memory.stat.total')],
                 [(stats.scenes || 0) + '/' + (data.scenes || []).length, t('memory.stat.sceneCount')],
                 // 注入预算本来就是"已用/上限"，与上面两格同形；超限整格转错误色。
-                [memMax > 0 ? t('memory.budget.bytes', { used: memUsed, max: memMax }) : '—', budgetOver ? t('memory.budget.label') + ' · ' + t('memory.budget.over') : t('memory.budget.label'), budgetOver ? 'dsm-stat-over' : ''],
+                // 已用 = 手写记忆段 + 本会话可见的自主笔记（两块共用同一个总盘）。
+                [memMax > 0 ? t('memory.budget.bytes', { used: memUsed + evoBytes, max: memMax }) : '—',
+                  budgetOver ? t('memory.budget.label') + ' · ' + t('memory.budget.over') : t('memory.budget.label'),
+                  budgetOver ? 'dsm-stat-over' : ''],
               ],
               actions: [
                 React.createElement('button', { key: 'new', type: 'button', className: 'dsm-btn', disabled: busy || anyLocked, onClick: function () { openCreate(sceneFilter || '') } }, t('memory.btn.new')),
