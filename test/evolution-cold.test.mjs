@@ -936,6 +936,45 @@ test('attachColdPath：压缩事件排队并复习，路由来自请求头', asy
   assert.deepEqual(reviewer.calls[0].route, { provider: 'p', model: 'm' })
 })
 
+test('attachColdPath：压缩早于请求头 → 路由到达后自动补跑，不等下一次压缩', async () => {
+  // 真实会话里压缩发生在请求中途，`request/header` 比 `compaction/summary` 晚几十秒。
+  // 只把队列项留在 pending 没用：能再触发 drain 的只有下一次压缩 / 重启 / 手动重放。
+  const { episodes, reviewer } = await coldFixture({
+    reviewer: fakeReviewer(),
+  })
+  const ctx = fakeCtx()
+  attachColdPath(ctx, {
+    effectiveOf: async () => cfgOf({ enabled: true }),
+    episodes,
+    reviewer: {
+      calls: reviewer.calls,
+      async review(ep, cfg, route) {
+        reviewer.calls.push({ ep, cfg, route })
+        // 第一次调用时路由还没到 —— 模拟真实的时序。
+        if (route === null) return { ok: false, learned: 0, rejected: 0, reason: 'no-model', error: '拿不到这一轮的模型路由' }
+        return { ok: true, learned: 1, rejected: 0, items: [{ id: 'm1', title: 't', text: 'x', layer: 'workspace', status: 'active', confidence: 0.8 }] }
+      },
+    },
+    workspaceHashOf: () => 'h1',
+    log,
+    message,
+  })
+
+  const session = { id: 's1', header: { cwd: 'C:/ws' } }
+  ctx.emit('session/event', session, summaryEvent(31, CHECKPOINT))
+  await waitFor(async () => (await episodes.list()).length === 1 && (await episodes.list())[0].status === 'pending')
+  const first = (await episodes.list())[0]
+  assert.equal(first.attempts, 0, '环境未就绪不烧重试次数')
+  assert.equal(first.nextAt, undefined, '不写退避：路由一到就该能立刻重跑')
+
+  // 路由到达：这一条要自己跑起来，不需要再压缩一次。
+  ctx.emit('session/event', session, { type: 'request/header', data: { header: { config: { provider: 'p', model: 'm' } } } })
+  await waitFor(async () => (await episodes.list())[0].status === 'done')
+  const done = (await episodes.list())[0]
+  assert.equal(done.reason, 'learned 1')
+  assert.deepEqual(reviewer.calls.at(-1).route, { provider: 'p', model: 'm' })
+})
+
 test('attachColdPath：真人消息仍喂证据缓存，合成消息不算用户说的话', async () => {
   const { episodes } = await coldFixture()
   const ctx = fakeCtx()

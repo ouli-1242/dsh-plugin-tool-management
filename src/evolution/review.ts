@@ -458,11 +458,14 @@ export function outboxFailed(
   item: OutboxItem,
   error: string,
   now = Date.now(),
-  opts: { transient?: boolean } = {},
+  opts: { transient?: boolean; immediate?: boolean } = {},
 ): Partial<OutboxItem> {
   if (opts.transient === true) {
     // 不增 attempts：保持 pending，等下一次触发（新压缩 / 重启 / 手动重放）。
-    return { status: 'pending', attempts: item.attempts ?? 0, reason: error, nextAt: nextRetryAt(1, now) }
+    // `immediate` 清掉退避（显式写 undefined —— `mark` 是合并写入，不给这个键会沿用旧值）：
+    // 这一项的触发条件已经就绪（路由刚记上），再等一分钟只是白拖。
+    const wait = opts.immediate === true ? { nextAt: undefined } : { nextAt: nextRetryAt(1, now) }
+    return { status: 'pending', attempts: item.attempts ?? 0, reason: error, ...wait }
   }
   const attempts = (item.attempts ?? 0) + 1
   if (attempts > MAX_REVIEW_ATTEMPTS) return { status: 'dead', attempts, reason: error }

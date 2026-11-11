@@ -128,6 +128,16 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
   const chains = new Map<string, Promise<void>>()
   /** 最近一次请求头里的模型路由。 */
   const routes = new Map<string, { provider: string; model: string }>()
+  /**
+   * 这个会话有复习项在**等路由**（`no-model`）。
+   *
+   * 为什么需要它：压缩可以发生在会话的第一轮请求里 —— 那时 `request/header` 还没到，
+   * 路由表是空的，复习直接判 `no-model`。只把队列项留在 pending 没用：能再触发 drain 的
+   * 只有「下一次压缩 / 重启 / 手动重放」，而这次压缩的摘要就这样一直躺着（真实会话里
+   * 请求头比压缩晚 30 秒到，用户看到的就是"压缩完了什么都没学"）。
+   * 记下这一位，路由一到就补跑。
+   */
+  const awaitingRoute = new Set<string>()
 
   const routeOf = (sessionId: string): { provider: string; model: string } | null => routes.get(sessionId) ?? null
 
@@ -161,7 +171,13 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
     // 拿不到模型路由 / 宿主没给 llm 服务：环境还没就绪，不算这次复习的失败次数。
     // 启动重放时路由表必然是空的，按失败计数的话重启三次就把残留项全烧成 dead-letter。
     const transient = out.reason === 'no-model' || out.reason === 'no-llm'
-    await deps.episodes.mark(item, outboxFailed(item, out.error ?? out.reason ?? 'review failed', clock(), { transient }))
+    // `no-model` 不写退避：路由一到就补跑，让 `nextAt` 先等一分钟只是白拖。
+    if (out.reason === 'no-model') awaitingRoute.add(item.session)
+    else awaitingRoute.delete(item.session)
+    await deps.episodes.mark(item, outboxFailed(item, out.error ?? out.reason ?? 'review failed', clock(), {
+      ...(transient ? { transient: true } : {}),
+      ...(out.reason === 'no-model' ? { immediate: true } : {}),
+    }))
     return 'failed'
   }
 
@@ -261,7 +277,10 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
 
   return {
     noteRoute(sessionId, route) {
-      if (sessionId !== '' && route.provider !== '' && route.model !== '') routes.set(sessionId, route)
+      if (sessionId === '' || route.provider === '' || route.model === '') return
+      routes.set(sessionId, route)
+      // 这个会话之前因为拿不到路由而没复习成：路由到了就补跑，不等下一次压缩 / 重启。
+      if (awaitingRoute.delete(sessionId)) void schedule(sessionId)
     },
 
     routeOf,
