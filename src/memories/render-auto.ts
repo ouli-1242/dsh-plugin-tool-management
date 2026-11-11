@@ -148,7 +148,8 @@ function inLayer(entry: CatalogEntry, layer: AutoLayer, scope: AutoRenderScope):
 /**
  * 渲染某一层的自动段正文。纯函数：同样的输入永远给同样的字节（去重的前提）。
  *
- * 标题不在这里：`# Learned notes` 由注入框架按域提供。
+ * 标题不在这里：全局那块并进 `## Always-on memories`，工作区那块由注入框架给
+ * `# Workspace notes`。
  */
 export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoRenderResult {
   const empty: AutoRenderResult = { text: '', body: '', truncated: false, count: 0, tokens: 0, budget: 0, dropped: 0, byLayer: zeroByLayer(), pickedIds: [], picked: [] }
@@ -166,6 +167,8 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
     // 去掉「完整集合」，没有这一句，模型会以为自动笔记本来就不存在。这里不报条数 ——
     // 这个分支还没按层过滤，`input.entries.length` 会把别的层 / 已停用的条目也算进去。
     const body = `${TRUNCATION_MARKER} Learned notes are not shown here because the hand-written memories are large; list them with memory_get (kind=note).`
+    // 「Learned notes」在这里指**这一类**（agent 学的笔记），不是板块名 —— 板块名随层不同，
+    // 这句要在两层的渲染里都读得通。
     const text = body + '\n\n' + tailOf(AUTO_MEMORY_NOTE_PARTIAL) + '\n'
     return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget: 0, dropped }
   }

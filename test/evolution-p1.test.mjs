@@ -14,6 +14,7 @@ import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy,
 import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
 import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, noteStyleLineOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
 import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf } from '../lib/memories/render-auto.js'
+import { appendToSceneGroup } from '../lib/memories/projection.js'
 import { visibleExistingEntries } from '../lib/evolution/write.js'
 
 /**
@@ -479,10 +480,10 @@ test('自动段：同输入必须逐字节相同（否则每轮重发整段）�
   const a = renderAutoLayer('workspace', input)
   const b = renderAutoLayer('workspace', input)
   assert.equal(a.text, b.text)
-  // 标题由注入框架（`# Learned notes` / `# Workspace notes`）提供，正文再写 `##` 会变成两个层级。
+  // 标题由注入框架（`# Workspace notes`）提供，正文再写 `##` 会变成两个层级。
   assert.doesNotMatch(a.text, /^#/m)
   assert.match(a.text, /^- \*\*package-manager\*\* — 这个仓库用 pnpm/m, '正文从条目开始，不带类型标签')
-  assert.match(a.text, /\*\*Learned notes;[\s\S]*complete set\.\*\*\n$/, '收尾句收在最后')
+  assert.match(a.text, /\*\*These notes;[\s\S]*complete set\.\*\*\n$/, '收尾句收在最后')
 })
 
 test('自动段：不注入风格行；授权语收在条目之后', () => {
@@ -493,7 +494,7 @@ test('自动段：不注入风格行；授权语收在条目之后', () => {
   const lines = r.text.trim().split('\n')
   assert.match(lines[0], /^- /, '正文从条目开始')
   assert.doesNotMatch(lines[0], /\[(pref|fact|rule|proc)\]/, '不再带类型标签')
-  assert.match(lines[lines.length - 1], /^\*\*Learned notes;/, '收尾句在最后')
+  assert.match(lines[lines.length - 1], /^\*\*These notes;/, '收尾句在最后')
   // 同一输入逐字节稳定（去重的前提）。
   assert.equal(renderAutoLayer('workspace', input).text, r.text)
 })
@@ -720,4 +721,20 @@ test('kind 推断：命令式否定是 correction，不是 preference', () => {
   assert.equal(inferKind('统一用 pnpm'), 'preference')
   assert.equal(inferKind('发布流程：先 lint 再 build 然后 test'), 'procedure')
   assert.equal(inferKind('端口是 8080'), 'fact')
+})
+
+// ── 全局块：自主笔记并进 Always-on 组 ──────────────────────────────────────
+
+test('appendToSceneGroup：并到组尾，不落进最后一个场景；组不存在时插最前', () => {
+  const user = '## Always-on memories\n\n- **身份** — 我叫 ouli\n\n## Scene: 代码\n\n- **前端** — 单文件 HTML'
+  const merged = appendToSceneGroup(user, '## Always-on memories', '- **演示页** — 单文件 HTML')
+  // 关键：新条目在 `## Scene: 代码` **之前** —— 追加在整段末尾会被读成那个场景的条目。
+  assert.match(merged, /- \*\*身份\*\* — 我叫 ouli\n- \*\*演示页\*\* — 单文件 HTML\n\n## Scene: 代码/)
+  // 组不存在（只有场景记忆）：插到最前，全局笔记照样有归属。
+  assert.match(
+    appendToSceneGroup('## Scene: 代码\n\n- **x** — y', '## Always-on memories', '- **n** — z'),
+    /^## Always-on memories\n\n- \*\*n\*\* — z\n\n## Scene: 代码/,
+  )
+  // 没有任何用户记忆：只留全局组。
+  assert.equal(appendToSceneGroup('', '## Always-on memories', '- **n** — z'), '## Always-on memories\n\n- **n** — z')
 })

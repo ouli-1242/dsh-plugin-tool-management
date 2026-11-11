@@ -165,7 +165,7 @@ export interface IncrementalEntry {
   text: string
   /**
    * 分组标题，必须与全量块里的 `##` 标题一致（`Always-on memories` / `Scene: <名>`）。
-   * `undefined` = 自主笔记，差集里归到 `Learned notes` 组。
+   * `undefined` = 没有分组，差集里归到 `groupTitle`（缺省 `Learned notes`）。
    */
   group?: string
 }
@@ -185,8 +185,8 @@ export interface IncrementalSnapshot {
   truncated: boolean
   mode: string
   /**
-   * 无分组条目的分组标题（自主笔记）。差集沿用它，必须与全量块里的 `##` 标题一致。
-   * 缺省 `Learned notes` —— 全局块里那一段的名字。
+   * 无分组条目的分组标题。差集沿用它，必须与全量块里的标题一致。
+   * 缺省 `Learned notes`；工作区那块传自己的板块名 `Workspace notes`。
    */
   groupTitle?: string
 }

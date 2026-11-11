@@ -169,11 +169,14 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-head-on.dsm-evo-head-pending{border-color:var(--dsm-warn);color:var(--dsm-warn)}
 .dsm-evo-head-pending{border-color:var(--dsm-warn);color:var(--dsm-warn)}
 .dsm-evo-head-pending .dsm-count{color:var(--dsm-warn)}
-.dsm-modal-evo{width:min(620px,100%)!important}
+.dsm-modal-evo{width:min(720px,100%)!important}
 .dsm-evo-modal{display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow:auto}
-/* 设置行统一两列：左标题 + 说明，右控件固定列。开关不再跟着标签宽度跑。 */
+/* 设置行统一两列：左标题，右控件固定列。开关不再跟着标签宽度跑。 */
 .dsm-evo-section{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-section-title{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
+/* 三颗开关装进一个和学习频率同款的框（同边框 / 同底色 / 同内边距）：框的内边距把开关从
+   滚动条边上挪开，也让「学习范围」这一段看起来是一组设置，而不是三行散落的内容。 */
+.dsm-evo-switch-box{display:flex;flex-direction:column;gap:6px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
 .dsm-evo-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;min-height:34px}
 .dsm-evo-row-main{display:flex;min-width:0;flex-direction:column;gap:1px}
 .dsm-evo-row-main .dsm-label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:20px}

@@ -1760,12 +1760,16 @@
               evoStyle.error ? React.createElement('p', { className: 'dsm-evo-style-error' }, evoStyle.error) : null)
           }
 
-          /** 一行开关：左标题 + 说明，右控件固定列；三颗开关共用同一条对齐线。 */
+          /**
+           * 一行开关：左标题，右控件固定列；三颗开关共用同一条对齐线。
+           *
+           * 只有一行标题、没有说明：开关名（全局自主记忆 / 工作区自主记忆 / 自动确认）
+           * 已经把范围与后果说清，补一句「所有项目都生效」只是重复（用户 2026-11-11）。
+           */
           function renderEvolutionSwitchRow(o) {
             return React.createElement('div', { className: 'dsm-evo-row' + (o.sep ? ' dsm-evo-row-sep' : '') },
               React.createElement('div', { className: 'dsm-evo-row-main' },
-                React.createElement('span', { className: 'dsm-label' }, o.label),
-                React.createElement('span', { className: 'dsm-help' }, o.hint)),
+                React.createElement('span', { className: 'dsm-label' }, o.label)),
               React.createElement('div', { className: 'dsm-evo-row-control' },
                 React.createElement(Switch, {
                   on: o.on,
@@ -1877,28 +1881,26 @@
                 // 学习范围：两层开关 + 自动确认。自动确认是「问不问」，用一条细线和「学不学」分开。
                 React.createElement('div', { className: 'dsm-evo-section' },
                   React.createElement('div', { className: 'dsm-evo-section-title' }, t('evo.section.scope')),
-                  renderEvolutionSwitchRow({
-                    label: t('evo.switch.global'),
-                    hint: t('evo.switch.global.hint'),
-                    on: globalOn,
-                    disabled: evoBusy || (evo.loading && !st),
-                    onClick: function () { setEvolutionLayer('global', !globalOn) },
-                  }),
-                  renderEvolutionSwitchRow({
-                    label: t('evo.switch.workspace'),
-                    hint: t('evo.switch.workspace.hint'),
-                    on: workspaceOn,
-                    disabled: evoBusy || (evo.loading && !st),
-                    onClick: function () { setEvolutionLayer('workspace', !workspaceOn) },
-                  }),
-                  renderEvolutionSwitchRow({
-                    sep: true,
-                    label: t('evo.switch.autoConfirm'),
-                    hint: t('evo.switch.autoConfirm.hint'),
-                    on: autoConfirm,
-                    disabled: evoBusy || (evo.loading && !st) || !overall,
-                    onClick: function () { setEvolutionAutoConfirm(!autoConfirm) },
-                  })),
+                  React.createElement('div', { className: 'dsm-evo-switch-box' },
+                    renderEvolutionSwitchRow({
+                      label: t('evo.switch.global'),
+                      on: globalOn,
+                      disabled: evoBusy || (evo.loading && !st),
+                      onClick: function () { setEvolutionLayer('global', !globalOn) },
+                    }),
+                    renderEvolutionSwitchRow({
+                      label: t('evo.switch.workspace'),
+                      on: workspaceOn,
+                      disabled: evoBusy || (evo.loading && !st),
+                      onClick: function () { setEvolutionLayer('workspace', !workspaceOn) },
+                    }),
+                    renderEvolutionSwitchRow({
+                      sep: true,
+                      label: t('evo.switch.autoConfirm'),
+                      on: autoConfirm,
+                      disabled: evoBusy || (evo.loading && !st) || !overall,
+                      onClick: function () { setEvolutionAutoConfirm(!autoConfirm) },
+                    }))),
                 // 学习频率：全局 / 工作区共用一份设置；到量后拒绝新的 learn（合并 / 更新不受影响）。
                 overall ? React.createElement('div', { className: 'dsm-evo-section' },
                   React.createElement('div', { className: 'dsm-evo-section-title' }, t('evo.rate.title')),

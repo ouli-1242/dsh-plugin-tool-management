@@ -217,9 +217,9 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
   // 工作区自主笔记：标题在这里，正文里不再写 `##` 标题 —— 框架的 `#` 已经是板块层，
   // 正文再写一个 `##` 只会让模型读成两个层级。
   //
-  // 标题**不能也叫 `Learned notes`**：全局块里已经有一个同名的 `## Learned notes` 组，
-  // 两块同时出现时模型分不清哪份是全局、哪份只在本项目成立（真实测试里两条都叫这个名字）。
-  // 范围写进标题而不是另起一句：标题是模型唯一能直接读到的区分依据，多一句说明只是噪音。
+  // 标题**不能也叫 `Learned notes`**：那是全局块里的组名，两块同时出现时模型分不清哪份是
+  // 全局、哪份只在本项目成立（真实测试里两条都叫这个名字）。范围写进标题而不是另起一句：
+  // 标题是模型唯一能直接读到的区分依据，多一句说明只是噪音。
   memoryWorkspace: {
     title: 'Workspace notes',
     supersede: SUPERSEDE_NOTE,

@@ -184,6 +184,32 @@ export const sceneHeading = (scene: string): string =>
   scene === GLOBAL_SCENE ? '## Always-on memories' : `## Scene: ${sceneLabel(scene)}`
 
 /**
+ * 把一段条目并进正文里某个 `##` 组的末尾。
+ *
+ * 为什么不能直接拼在整段之后：`##` 的作用域一直延续到下一个 `##`，追加在末尾会让这些条目
+ * 落进**最后一个场景**。组不存在时插到最前 —— 调用方只用它并全局组，而全局组本就排第一。
+ */
+export function appendToSceneGroup(body: string, heading: string, extra: string): string {
+  const add = String(extra ?? '').trim()
+  const src = String(body ?? '').replace(/\s+$/, '')
+  if (add === '') return src
+  const head = heading.trim()
+  const lines = src === '' ? [] : src.split('\n')
+  const start = lines.findIndex((line) => line.trim() === head)
+  if (start < 0) return src === '' ? `${head}\n\n${add}` : `${head}\n\n${add}\n\n${src}`
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i]!.startsWith('## ')) { end = i; break }
+  }
+  // 组尾的空行收掉再接：否则条目与组尾之间空出两行，下一条又紧贴上一行。
+  let cut = end
+  while (cut > start + 1 && lines[cut - 1]!.trim() === '') cut--
+  const merged = [...lines.slice(0, cut), ...add.split('\n')]
+  if (end < lines.length) merged.push('')
+  return [...merged, ...lines.slice(end)].join('\n')
+}
+
+/**
  * 场景段（`scene-manager-catalog`）里的一行：`**"<场景名>" — user description: <场景说明>**`。
  *
  * 用户看到**实际注入**之后提的：

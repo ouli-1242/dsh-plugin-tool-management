@@ -75,6 +75,7 @@ import { createLearner } from './evolution/write.js'
 import type { IncrementalSnapshot } from './context-inject-contract.js'
 import { COMBINED_MEMORY_NOTE, COMBINED_MEMORY_NOTE_PARTIAL, isReservedGroup, layerOfGroup } from './memories/constants.js'
 import { renderAutoLayer, budgetModeOf, estimateTextTokens, type AutoLayer } from './memories/render-auto.js'
+import { appendToSceneGroup } from './memories/projection.js'
 import { workspaceMemoryKeyOf } from './scope/workspace-key.js'
 import { buildEvolutionOps } from './ops/evolution.js'
 // 改名 / 进场景 / 存档案的联动（op 重包，从本文件 apply 闭包整段抽出）。
@@ -2588,11 +2589,19 @@ export default {
     function memoryGlobalSnapshot(agent: unknown): IncrementalSnapshot {
       const user = memoriesService.memoryProjection(memoryScopeOf(agent))
       const auto = autoDomainProjection('global', agent)
+      const autoBody = auto.body.replace(/\s+$/, '')
+      // 全局自主笔记**并进 `## Always-on memories` 组**，不再单起 `## Learned notes`。
+      //
+      // 两块本来就是同一层的东西（都在这台机器上任何对话都成立），各起一个标题只会让模型
+      // 把同一层读成两类，还要在两段之间自己对齐 —— 而工作区那块另有 `# Workspace notes`，
+      // 三个名字摆在一起更容易认错（用户 2026-11-11）。
+      //
+      // 必须**插到该组末尾**而不是整段末尾：用户记忆的最后一个 `## Scene: X` 会一直延续到
+      // 下一个 `##`，追加在整段之后会让这些全局笔记落进那个场景。
+      let body = user.body.replace(/\s+$/, '')
+      if (autoBody !== '') body = appendToSceneGroup(body, '## Always-on memories', autoBody)
       const parts: string[] = []
-      if (user.body.trim() !== '') parts.push(user.body.replace(/\s+$/, ''))
-      // 自主笔记单独起一个 `## Learned notes` 组：用户记忆的最后一个 `## Scene: X` 会一直
-      // 延续到下一个 `##`，不隔开的话这些"任何对话都成立"的笔记会被读成那个场景下的条目。
-      if (auto.body.trim() !== '') parts.push('## Learned notes\n\n' + auto.body.replace(/\s+$/, ''))
+      if (body !== '') parts.push(body)
       const tail = user.tail.trim()
       const note = user.truncated || auto.truncated ? COMBINED_MEMORY_NOTE_PARTIAL : COMBINED_MEMORY_NOTE
       // 尾注（`## Not injected`）放在最后当附录：夹在用户记忆与全局笔记之间会把后者
@@ -2602,9 +2611,11 @@ export default {
       const text = parts.length === 0 && tail === ''
         ? ''
         : [...parts, note, ...(tail === '' ? [] : [tail]), ...(style === '' ? [] : [style])].join('\n\n') + '\n'
+      // 自动条目带上 `Always-on memories` 组名：它们已经并进那个组，差集里必须与全量块的
+      // `##` 标题一致，否则差集会把它们画成另一个分组。
       const entries: IncrementalSnapshot['entries'] = [
         ...user.blocks.map((block) => ({ key: 'user:' + block.id, text: block.block, group: block.group })),
-        ...auto.picked.map((line) => ({ key: 'auto:' + line.id, text: line.line })),
+        ...auto.picked.map((line) => ({ key: 'auto:' + line.id, text: line.line, group: 'Always-on memories' })),
       ]
       return {
         text,
