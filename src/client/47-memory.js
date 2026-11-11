@@ -770,8 +770,10 @@
             var args = sid === '' ? {} : { sessionId: sid }
             Promise.all([
               apiCall('evolution-status', args),
-              // 默认列表 = 待确认 + 生效；归档 / 已取代才隐藏，行内停用的条目仍留在卡片里。
-              apiCall('evolution-list', {}),
+              // 全量（含归档 / 已取代）：卡片自己按状态过滤，而「后台复习」那列要用它把
+              // 历史快照翻译成**当前**状态 —— 只拿默认清单的话，已归档的条目查不到，
+              // 那一行就只能一直挂着学习当时的「待确认」。
+              apiCall('evolution-list', { all: true }),
               apiCall('evolution-queue', {}),
             ])
               .then(function (out) {
@@ -1275,7 +1277,18 @@
                       var title = hit ? evolutionNameOf(hit)
                         : (String(item.title || '').trim() || evolutionNameOf({ oneLine: item.text, id: item.id }))
                       var body = String(item.text || '').trim()
-                      var isCandidate = item.status === 'candidate'
+                      // 状态取**现在**的，不取学习当时的：`learnedItems` 是那一刻的快照，
+                      // 之后确认 / 否决 / 删除都不会回写它。照快照画标签，用户处理完以后
+                      // 这一列仍挂着「待确认」，与上面的统计（0 条）自相矛盾。
+                      // 列表里查不到 = 已删除（归档的仍在列表里，`all` 拿得到）。
+                      var nowStatus = hit ? String(hit.status || '') : 'deleted'
+                      var statusKey = nowStatus === 'candidate' ? 'evo.tag.candidate'
+                        : nowStatus === 'active' || nowStatus === 'core' || nowStatus === 'playbook' ? 'evo.tag.active'
+                          : nowStatus === 'archived' ? 'evo.tag.archived'
+                            : nowStatus === 'superseded' ? 'evo.tag.superseded'
+                              : 'evo.review.deleted'
+                      var statusTone = nowStatus === 'candidate' ? 'dsm-tag-warn'
+                        : nowStatus === 'active' || nowStatus === 'core' || nowStatus === 'playbook' ? 'dsm-tag-on' : ''
                       return React.createElement('div', { key: String(item.id || '') + ':' + i, className: 'dsm-evo-review-row' },
                         React.createElement('div', { className: 'dsm-evo-review-main' },
                           React.createElement('span', { className: 'dsm-evo-review-title' }, title),
@@ -1284,7 +1297,7 @@
                             : null),
                         React.createElement('div', { className: 'dsm-evo-review-meta' },
                           React.createElement('span', { className: 'dsm-tag' }, item.layer === 'global' ? t('evo.scope.global') : t('evo.scope.workspace')),
-                          React.createElement('span', { className: 'dsm-tag ' + (isCandidate ? 'dsm-tag-warn' : 'dsm-tag-on') }, isCandidate ? t('evo.tag.candidate') : t('evo.tag.active')),
+                          React.createElement('span', { className: 'dsm-tag' + (statusTone !== '' ? ' ' + statusTone : '') }, t(statusKey)),
                           React.createElement('span', null, evoTimeShort(row.at))))
                     }))
                 : (emptyLine ? React.createElement('p', { className: 'dsm-evo-review-empty' }, emptyLine) : null),
