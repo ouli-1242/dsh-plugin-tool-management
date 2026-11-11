@@ -97,6 +97,8 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 
 Off by default. When on, the agent records preferences, facts and corrections worth keeping across conversations — **and asks you in the chat whether to keep each one, and at which scope**.
 
+> **Experimental**: behaviour and UI are still changing. Please [open an issue](https://github.com/ouli-1242/dsh-plugin-tool-management/issues) if something goes wrong.
+
 - **Two independent switches**: global and this workspace can be on together or one at a time; learning and injection both follow them, and the card only lists the layers that are on. On the Memory page global autonomous notes sit inside the Global card, and workspace notes share one “Workspace memory” card with a section per workspace name.
 - **Asked only when needed**: workspace notes backed by the user's own words go active directly; global, procedure, ambiguous, conflicting or unsure-scope notes get a card. The agent does not scan the conversation during normal work — when the host compacts the context, that summary is reviewed once for anything durable.
 - **Card language and rewording**: the card uses the language of the note body; type your own wording in the card and it goes back to the model to rewrite, then asks you again.
