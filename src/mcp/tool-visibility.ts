@@ -67,8 +67,14 @@ export interface ToolVisibilityDeps {
    * 缺省（未给）时不判（视为「没有外来工具」）：成功侧那行日志不触发，不影响功能。
    */
   isPluginToolName?(name: string): boolean
-  /** 「有官方等价物在场就让位」那半边：按 agent 算的额外 hide 名单。 */
-  carrierHiddenTools?(agent: unknown): Promise<string[]>
+  /**
+   * 「有官方等价物在场就让位」那半边：按 agent 算的额外 hide 名单。
+   *
+   * 允许同步返回：判据本身是同步的（`tools.get(name, agent)` 不返回 Promise），
+   * 而 `attachAgent` 的同步段赶在宿主组装首轮工具表之前 —— 那条路等不了异步结果。
+   * 异步实现仍照旧可用（`await` 对同步值同样成立）。
+   */
+  carrierHiddenTools?(agent: unknown): string[] | Promise<string[]>
   /**
    * 本会话的 MCP 可见性覆盖：在**此刻注册着的**工具全名上算出的两个名单。
    *
@@ -526,18 +532,31 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
   }
 
   /**
-   * 同步段能算出的 deny 名单：全局名单 + 本会话模型工具表覆盖。
+   * 同步段能算出的 deny 名单：全局名单 + 本会话模型工具表覆盖 + 载体让位。
    *
    * 子代理创建时，宿主在 `agent/created` 返回后立刻组装首轮工具表；限制层若等
    * `tools.schemas()` 回来再装，那一轮就会先看到全部工具（子代理 fork 时表现为
-   * 「新增 24 / 移除 24」）。MCP 会话覆盖与载体工具是异步的，由随后的
-   * `restrictAgent` 补齐。
+   * 「新增 24 / 移除 24」）。凡是判据本身同步可得的都必须在这里算完 ——
+   * 包括载体让位（`tools.get(name, agent)` 是同步的）。只有真的异步的（MCP 会话覆盖）
+   * 才留给随后的 `restrictAgent` 补齐。
    */
   function syncDenyNamesFor(agent: any): string[] {
     const wanted = new Set<string>(desiredNames)
     // 启动早期 `desiredNames` 可能还没算出来；工具表设置本身是同步可读的，先并进来。
     if (deps.pluginHiddenTools) {
       try { for (const name of deps.pluginHiddenTools()) wanted.add(name) } catch { /* 读设置失败 = 只装全局名单 */ }
+    }
+    // 载体让位（官方 `skill` 在场 → 藏 `skill_manager_read`）同样必须进同步段：
+    // 判据只是 `tools.get(name, agent)`，同步可得。漏掉这一条的后果与 issue #29 一模一样 ——
+    // 子代理首轮工具表里两条都在，随后异步段才摘掉一条，轨迹上就是「移除工具」。
+    if (deps.carrierHiddenTools) {
+      try {
+        const hidden = deps.carrierHiddenTools(agent)
+        // 异步实现拿不到这一轮结果：交给 `restrictAgent` 补（那一轮会重装并上报）。
+        if (typeof (hidden as Promise<unknown>)?.then !== 'function') {
+          for (const name of hidden as string[]) wanted.add(name)
+        }
+      } catch { /* 判据失败 = 不让位（宁可多花 token，也不让模型少一条路） */ }
     }
     let allow: readonly string[] = []
     if (deps.sessionToolTableOverlay) {

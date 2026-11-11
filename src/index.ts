@@ -2105,7 +2105,10 @@ export default {
     // 跳过我们的目录，这里仍然保留我们的工具，方向是对的（模型手里还有 list + read）。
     /** `[官方工具名, 我们该让位的工具]` —— 只有技能这一对（官方没有 MCP 管理 / 记忆 / AGENTS 编辑工具）。 */
     const CARRIER_DUPLICATES: ReadonlyArray<readonly [string, string]> = [['skill', 'skill_manager_read']]
-    const carrierHiddenToolsFor = async (agent: unknown): Promise<string[]> => {
+    // 同步：`tools.get(name, scope)` 官方就是同步的（`dsh-tools/lib/index.js:519`），
+    // 而 `attachAgent` 的同步段要赶在宿主组装首轮工具表之前用它。写成 async 会让那条路
+    // 永远拿不到值 —— 子代理首轮工具表因此带着本该让位的工具，随后再被摘掉（issue #29）。
+    const carrierHiddenToolsFor = (agent: unknown): string[] => {
       // 拿不到 agent 就什么都不让位：`get(name, undefined)` 问的是**全局视图**，而官方那些
       // 工具是按预设挂进 agent 那一层的 —— 问错对象会得出相反的结论。
       if (agent === null || (typeof agent !== 'object' && typeof agent !== 'function')) return []

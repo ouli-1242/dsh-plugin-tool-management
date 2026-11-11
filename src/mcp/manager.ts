@@ -89,7 +89,7 @@ export interface McpManagerDeps {
    * agent 的那一层限制。判错的方向也相反：全局名单来自用户的明确动作，这份是推断出来的，
    * 所以调用方约定**拿不准就返回空**（宁可多花 token，也不让模型少一条路）。
    */
-  carrierHiddenTools?(agent: unknown): Promise<string[]>
+  carrierHiddenTools?(agent: unknown): string[] | Promise<string[]>
   /**
    * 本会话的 MCP 可见性覆盖：在**此刻注册着的**工具全名上算出的两个名单。
    *

@@ -13,6 +13,7 @@
 // 信息密度最高、且已经付过钱的产物。按轮次自己攒几条用户消息 / 工具结果再读一遍，既
 // 重复劳动又容易把关键话挤掉。没触发压缩就不复习 —— 热路径 `memory_note` 负责当场记。
 
+import { subagentDepthOf } from '../context-inject-contract.js'
 import { captureUserTexts, isGenuineUserMessage, textOfMessage } from './evidence.js'
 import { checkpointEpisodeOf } from './digest.js'
 import type { EpisodeStore, OutboxItem } from './episodes.js'
@@ -332,20 +333,6 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
  *
  * 事件处理里只做"记下来"与"排一次队"，任何异常都吞掉 —— 它跑在会话主链上。
  */
-/**
- * 这个会话是不是子代理。
- *
- * 口径照抄官方 `delegationDepthOf()`：持久化头的 `delegationDepth` 是权威值，
- * `origin === 'subagent'` 是硬信号（头里没记深度时深度至少算 1）。
- */
-function isSubagentSession(session: any): boolean {
-  const header = session && typeof session === 'object' ? session.header : undefined
-  if (!header || typeof header !== 'object') return false
-  if (header.origin === 'subagent') return true
-  const depth = Number(header.delegationDepth)
-  return Number.isFinite(depth) && depth > 0
-}
-
 export function attachColdPath(
   ctx: { on(name: string, cb: (...args: any[]) => any): unknown },
   deps: ColdPathDeps,
@@ -389,7 +376,10 @@ export function attachColdPath(
           // 子会话不复习：热路径明确禁止子代理学习（`autoLearnEnabledFor` 要求深度为 0），
           // 冷路径是同一个闸门 —— 子代理压缩出来的 checkpoint 是「父代理写进委派说明的任务」，
           // 不是用户偏好。放它进复习等于从后门绕过深度限制，还会把工作区笔记写成任务态。
-          if (isSubagentSession(session)) break
+          // 判据复用 `subagentDepthOf`（全仓唯一一份深度口径），不再写第二套。
+          // 它读的是 `agent.session.header`，而这里手里拿的已经是 `session` 本身 ——
+          // 包一层 `{ session }` 而不是另写一份读 header 的逻辑。
+          if (subagentDepthOf({ session }) >= 1) break
           const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : undefined
           // 不 await：压缩的处理器必须同步返回，复习在后台跑。
           void cold.compactionSummary(sid, seq, data.summary, cwd)
