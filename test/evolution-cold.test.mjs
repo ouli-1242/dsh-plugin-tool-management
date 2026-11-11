@@ -56,16 +56,31 @@ const REPLY_OK = JSON.stringify({
   ],
 })
 
-/** 假 llm：`stream()` 回一个 text-delta 序列。`calls` 用来断言"到底调没调"。 */
+/**
+ * 假 llm：`stream()` 回一个 text-delta 序列。`calls` 用来断言"到底调没调"。
+ *
+ * 刻意复刻官方 `prepared.stream` 的两条硬约束：**只能派发一次**、**dispatch 的配置必须与
+ * `prepared.config` 逐字段相等**。真实适配器（deepseek / pi-ai）恒有 `defaultMaxTokens`，
+ * 宿主会把它补进 `prepared.config`；调用方若把 `maxTokens` 放到 dispatch 那一侧，
+ * 真实环境抛 `INVALID_PREPARED_CALL`，而一个什么都收的假 llm 会让这条测试永远绿。
+ */
 function fakeLlm(reply = REPLY_OK) {
   const calls = []
+  const sameConfig = (a, b) => a.provider === b.provider && a.model === b.model
+    && a.temperature === b.temperature && a.maxTokens === b.maxTokens
   return {
     calls,
     prepareCall(cfg) {
       calls.push(cfg)
+      // 模拟适配器声明的默认输出上限：真实 deepseek 适配器恒有这一项。
+      const config = { ...cfg, maxTokens: cfg.maxTokens ?? 256_000 }
+      let dispatched = false
       return {
-        config: { ...cfg },
-        stream() {
+        config,
+        stream(options) {
+          if (dispatched) throw new Error('INVALID_PREPARED_CALL: dispatched twice')
+          if (!sameConfig(options, config)) throw new Error('INVALID_PREPARED_CALL: prepared config changed before dispatch')
+          dispatched = true
           return (async function* () {
             yield { type: 'text-delta', text: reply }
           })()
@@ -439,7 +454,8 @@ test('reviewer：`model` 只写 model 时沿用会话的 provider', async () => 
   const llm = fakeLlm()
   const r = createReviewer({ llm, learner: fakeLearner(), budget, catalogLines: async () => [], log, message })
   await r.review(episodeOf(digestOf(1), { session: 's1', at: 'x', reason: 'signal' }), cfgOf({ model: 'fast-model' }), { provider: 'live-provider', model: 'live-model' })
-  assert.deepEqual(llm.calls[0], { provider: 'live-provider', model: 'fast-model', temperature: 0 })
+  // 输出上限必须与路由一起进 `prepareCall`（放进 dispatch 会被官方判成配置变化）。
+  assert.deepEqual(llm.calls[0], { provider: 'live-provider', model: 'fast-model', temperature: 0, maxTokens: 900 })
 })
 
 test('reviewer：输出不是 JSON → bad-json，可重试且不占学习名额', async () => {

@@ -325,13 +325,21 @@ export function createReviewer(deps: ReviewDeps): {
       const ac = new AbortController()
       const timer = setTimeout(() => ac.abort(), REVIEW_TIMEOUT_MS)
       try {
-        const prepared = await llm.prepareCall({ provider: route.provider, model: route.model, temperature: 0 })
+        // 输出上限必须进 `prepareCall`：宿主会把适配器的默认 maxTokens 补进
+        // `prepared.config`（`dsh-llm-deepseek` 恒有 `defaultMaxTokens`），而 `prepared.stream`
+        // 会用 `callConfigEquals` 逐字段比对调用方传的配置与它，不一致直接抛
+        // `INVALID_PREPARED_CALL` —— 把上限放到 dispatch 那一侧，后台复习每次都失败。
+        const prepared = await llm.prepareCall({
+          provider: route.provider,
+          model: route.model,
+          temperature: 0,
+          maxTokens: MAX_OUTPUT_TOKENS,
+        })
         const catalogLines = await deps.catalogLines()
         const stream = prepared.stream({
           ...prepared.config,
           messages: [{ role: 'user', content: [{ type: 'text', text: buildReviewPrompt(episode, catalogLines) }] }],
           system: reviewSystemPromptFor(episode, cfg),
-          maxTokens: MAX_OUTPUT_TOKENS,
           signal: ac.signal,
         })
         text = await collectText(stream)
