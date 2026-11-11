@@ -497,7 +497,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     description: 'Remember something the user explicitly asked you to keep. scope=scene → a memory in a scene (injected only when that scene is on); scope=global → every project; scope=workspace → a note for this project (needs autonomous memory). Omit scope and ask the user where it belongs; do not guess. Pass `id` to update an existing memory or note instead of creating one. To delete a user memory the user asked you to remove, pass `action: "forget"` and `id` (moved to the recycle bin). For your own inferences use the agent-note tool, not this. User-memory writes are blocked while the active scene is locked.',
     parameters: {
       action: { type: 'string', enum: ['forget'], description: 'forget: delete an existing user memory by `id` (moved to the recycle bin, restorable on the Memory page). Omit to create or update.' },
-      content: { type: 'string', description: 'What to remember. For scene/global: the memory body (Markdown, <=256 KiB). For workspace: one sentence (<=400 Chinese chars / 800 letters). Required when creating; do not pass with action=forget.' },
+      content: { type: 'string', description: 'What to remember. For scene/global: the memory body (Markdown, <=2400 display width: about 1200 Chinese chars / 2400 letters). For workspace: one sentence (<=1200 Chinese chars / 2400 letters). Required when creating; do not pass with action=forget.' },
       title: { type: 'string', description: 'Short name: the file name for a user memory, the note title for a workspace note. Omit to derive from the first line.' },
       id: { type: 'string', description: 'Update an existing entry instead of creating: a user memory id (<scene>/<name>) or an agent note id (note:...).' },
       scope: { type: 'string', enum: ['scene', 'global', 'workspace', 'conversation'], description: 'Where it belongs: scene (this working mode), global (every project), workspace (this project, stored as an agent note). Ask the user when unsure.' },
@@ -555,7 +555,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         const text = content !== '' ? content.trim() : String(a.body || '').trim()
         if (text === '') throw new Error('missing argument: content — the updated note text.')
         if (textWidthOf(text) > MAX_AUTO_TEXT_WIDTH || /\n\s*\n/.test(text)) {
-          throw new Error('an agent note is one sentence (<= about 400 Chinese chars / 800 letters). This content is longer — use a user memory (scope=scene / global) instead.')
+          throw new Error('an agent note is one sentence (<= about 1200 Chinese chars / 2400 letters). This content is longer — use a user memory (scope=scene / global) instead.')
         }
         // 笔记的正文编辑是 `evolution-update`（就地改文件、id/层/状态不变）；
         // `evolution-learn` 是"学一条新的"——同 key 只会合并/追加，没 key 会新建 id，
@@ -664,7 +664,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         }
         const text = content.trim()
         if (textWidthOf(text) > MAX_AUTO_TEXT_WIDTH || /\n\s*\n/.test(text)) {
-          throw new Error('a workspace note is one sentence (<= about 400 Chinese chars / 800 letters). This content is longer — use scope=scene (this working mode) or scope=global (every project) for a full memory.')
+          throw new Error('a workspace note is one sentence (<= about 1200 Chinese chars / 2400 letters). This content is longer — use scope=scene (this working mode) or scope=global (every project) for a full memory.')
         }
         const identity = deps.sessionIdentity ? deps.sessionIdentity(agent) : null
         const payload: any = {
@@ -804,12 +804,12 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Agent notes (autonomous memory) — short notes you learned: a preference, fact, correction or procedure. Only for what YOU inferred; when the user explicitly asks to remember something, use memory_remember instead. learn: `title` (2-8 words) + `text` (<=400 Chinese chars / 800 letters; 1-2 clear sentences by default, or follow the style line in the learned-notes section); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; `quote` + `source` when the user said it. forget: `note` = id (note:...), slot, title, or the first line as it was injected. Inspect notes with the memory read tool. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
+    description: 'Agent notes (autonomous memory) — short notes you learned: a preference, fact, correction or procedure. Only for what YOU inferred; when the user explicitly asks to remember something, use memory_remember instead. learn: `title` (2-8 words) + `text` (<=1200 Chinese chars / 2400 letters; 1-2 clear sentences by default, or follow the style line in the learned-notes section); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; `quote` + `source` when the user said it. forget: `note` = id (note:...), slot, title, or the first line as it was injected. Inspect notes with the memory read tool. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn or forget.' },
       // ── learn ──
-      title: { type: 'string', description: 'learn: a short name for the row (2-8 words, <=40 Chinese chars / 80 letters), in the user\'s language.' },
-      text: { type: 'string', description: 'learn: the note itself (<=400 Chinese chars / 800 letters), in the user\'s language; by default 1-2 clear sentences, conclusion first, key reason only when it matters. Follow the style shown in the learned-notes section when present. `note` is accepted as an alias.' },
+      title: { type: 'string', description: 'learn: a short name for the row (2-8 words, <=50 Chinese chars / 100 letters), in the user\'s language.' },
+      text: { type: 'string', description: 'learn: the note itself (<=1200 Chinese chars / 2400 letters), in the user\'s language; by default 1-2 clear sentences, conclusion first, key reason only when it matters. Follow the style shown in the learned-notes section when present. `note` is accepted as an alias.' },
       source: { type: 'string', enum: ['user_explicit', 'user_correction', 'tool_verified', 'model_inference'], description: 'learn: why you know it; user_explicit when you quote the user, user_correction when they corrected you; default model_inference (or user_explicit when quote is set).' },
       quote: { type: 'string', description: 'learn: the user\'s exact words; implies source=user_explicit unless source says otherwise.' },
       slot: { type: 'string', description: 'learn: optional stable slot name; learning again with the same slot merges when it says the same thing, and replaces the old note when it conflicts.' },
