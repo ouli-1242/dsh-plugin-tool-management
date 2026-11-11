@@ -2016,10 +2016,10 @@
               // 否决 = 归档（不注入、可恢复），不是删除 —— 删除会写墓碑，30 天内同义内容
               // 都学不回来，那是另一件事。
               React.createElement('div', { className: 'dsm-modal-actions dsm-modal-actions-split' },
-                // 与「确认」同等分量的实底按钮（用户 2026-11-11：否决也要显眼）：两者都是
-                // 对这条记忆的处置，没有主次；只有颜色区分方向。用 `danger` 而不是
-                // `danger-outline` —— 描边在小弹窗里读起来像次要动作。
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: evoReview.busy || evoReview.loading, onClick: rejectEvolutionInReview }, t('evo.review.reject')),
+                // 与「确认」同一档主按钮（用户 2026-11-11）：两个都是对这条记忆的处置，
+                // 没有主次，方向由文案与左右位置表达。**不用红色** —— 否决是归档（不注入、
+                // 可恢复），不是销毁；红色在这里会把「先不采用」说成「危险操作」。
+                React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: evoReview.busy || evoReview.loading, onClick: rejectEvolutionInReview }, t('evo.review.reject')),
                 React.createElement('button', {
                   type: 'button', className: 'dsm-btn',
                   disabled: evoReview.busy || evoReview.loading || evoReview.error !== null,
