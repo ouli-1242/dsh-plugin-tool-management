@@ -6052,7 +6052,7 @@ export default {
     })
     // 控制面工具（tools/control.ts）：模型自己看得到哪些工具、能不能自己打开。
     //
-    // 为什么必须常驻：出厂只发 6 条，场景那一族四条全关，而场景目录注入只列
+    // 为什么必须常驻：出厂只发 5 条，场景那一族四条全关，而场景目录注入只列
     // **当前已启用的**场景 —— 一个都没启用时整段不注入。于是「用户说进入编程场景」
     // 这件事模型既不知道有哪些场景、也没有开关工具。其余能力一律按需调用，
     // 这条是唯一每轮都在的例外。
@@ -6439,7 +6439,14 @@ export default {
             if (verdict === 'deny') return sessionDisabledNotice()
             // 只读 TTL 缓存、不做 I/O —— 这段跑在每一次工具调用的热路径上。
             if (verdict !== 'allow' && mcp.isToolDisabled(name)) {
-              return 'this tool has been switched off on the MCP page (mcp_manager_switch can turn it back on)'
+              // 开关工具出厂默认关着：点名它之前先问一句它在这个 agent 手里没有 ——
+              // 不在手但控制面工具在时指自举，两条都没有才让用户去面板（判据同 `toolAccessRoute`）。
+              const route = toolAccessRoute(toolDeps, 'mcp_manager_switch', exec && exec.agent)
+              return route === 'direct'
+                ? 'this tool has been switched off on the MCP page (mcp_manager_switch can turn it back on)'
+                : route === 'via-control'
+                  ? 'this tool has been switched off on the MCP page — enable mcp_manager_switch with tool_manager_tools (action="enable", tools:["mcp_manager_switch"]) and turn it back on there'
+                  : 'this tool has been switched off on the MCP page (the user has to turn it back on)'
             }
             // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
             // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。

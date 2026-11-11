@@ -4,7 +4,7 @@
 // 根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；面板
 // （118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着十七条**（其中自主笔记那一条跟随总开关开合；整张表 23 条，每轮实发 6 条）—— 名单、判据与代价见下面
+// 出厂**默认就关着十八条**（其中自主笔记那一条跟随总开关开合；整张表 23 条，每轮实发 5 条）—— 名单、判据与代价见下面
 // `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // 实测数字（口径：宿主 `recordToolSize` 的 `ceil(JSON.stringify(header.tools).length / 4) + 4`，
@@ -102,7 +102,7 @@ export interface ToolTableSettings {
 }
 
 /**
- * 出厂默认关掉的**十七条**：整张表 23 条，关掉后**每轮实发 6 条**。下面五组列 15 条，
+ * 出厂默认关掉的**十八条**：整张表 23 条，关掉后**每轮实发 5 条**。下面五组列 16 条，
  * 人设清单（`subagent_manager_list`）单列在「人设域」那一段，自主笔记单列在末尾 ——
  * 三条计数不要合并，否则又会对不上。
  *
@@ -117,9 +117,11 @@ export interface ToolTableSettings {
  *     **`memory_get` 刻意不在这份名单**：合并后的读取入口同时承担清单、搜索与正文，
  *     藏掉它等于把被截断的条目、以及 `memory_remember` 需要的 id 变成不可发现。
  *   · **切场一条** —— `scene_manager_switch`：进入 / 退出场景。
- *   · **开关三条** —— `skill` / `memory` / `subagent` 三个 `_switch`（用户：「平时使用也很少」）。
- *     启停在面板上都有同款，注入段也写着当前开着哪些。**`mcp_manager_switch` 刻意留着**：
- *     它是"这台先给我关了"这条最常用的临时动作的唯一入口，也是 MCP 域留下来的一条腿。
+ *   · **开关四条** —— `skill` / `memory` / `subagent` 三个 `_switch`（用户：「平时使用也很少」）
+ *     + `mcp_manager_switch`。启停在面板上都有同款，注入段也写着当前开着哪些。
+ *     MCP 那条**也关**（用户指定的五条清单里没有它）：代价是这个域出厂没有一条可见工具 ——
+ *     模型要停 / 启服务器，得先用 `tool_manager_tools` 把它打开，多一次往返。默认清单以
+ *     用户点名的五条为准，不为了"每域留一条腿"自行加回。
  *   · **建档两条** —— `scene_manager_save`（场景记录）+ `scene_manager_archive`（档案段：
  *     进入时开哪些 MCP / 技能 / 人设）。配置本体在面板上改；档案的勾选集机器自己算得出来
  *     （`capture`），模型逐项填反而容易填错。
@@ -158,6 +160,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'memory_switch',
   'mcp_manager_list',
   'mcp_manager_save',
+  'mcp_manager_switch',
   'skill_manager_list',
   'skill_manager_switch',
   'skill_manager_save',
@@ -175,7 +178,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   PROACTIVE_MEMORY_TOOL,
 ])
 
-/** 出厂默认那份设置：十七条不发（名单与理由见上面），方案清单是空的。 */
+/** 出厂默认那份设置：十八条不发（名单与理由见上面），方案清单是空的。 */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */

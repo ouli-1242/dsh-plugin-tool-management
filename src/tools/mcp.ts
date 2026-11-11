@@ -63,9 +63,9 @@ const MCP_LIST_HINT = ' (see mcp_manager_list — all=true also lists disabled o
  * 指不到 `mcp_manager_list` 时的**中性出口**：不点名任何工具，两条常驻来源都成立
  * —— 模型自己的 `mcp__<server>__<tool>` 工具名（就在它的 schema 里），以及注入段。
  *
- * 为什么必须有这一句：`mcp_manager_switch` 是默认**唯一可见**
- * 的 MCP 工具，猜错 serverName 时若报错里只有「没有这台服务器：X」，模型拿不到任何补救线索
- * —— 它只能猜第二次。出口要么指向工具（那条工具得在它手里），要么指向这两条常驻来源。
+ * 为什么必须有这一句：MCP 域出厂没有一条可见工具（`mcp_manager_switch` 也在默认关停名单里），
+ * 猜错 serverName 时若报错里只有「没有这台服务器：X」，模型拿不到任何补救线索 —— 它只能猜
+ * 第二次。出口要么指向工具（那条工具得在它手里），要么指向这两条常驻来源。
  */
 const MCP_NEUTRAL_HINT = ' (copy the server name from your own `mcp__<server>__<tool>` tool names, or take one listed in the "Current MCP servers" reminder)'
 
@@ -460,7 +460,9 @@ export function buildMcpTools(deps: McpToolDeps): void {
       hint: { type: 'string', description: "Short hint for later (≤300 chars; longer is stored whole but truncated in listings). '' clears the existing hint." },
       // MCP 服务器是**机器级**配置（cordis 补丁），没有「本会话的一份」。这个参数只为一件事：
       // 模型以为自己在改会话时，当场纠回来（见 deps.ts 的 requireGlobalScope）。
-      scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('the server config is machine-wide', 'hide a server here with mcp_manager_switch') },
+      // 不点名开关工具：它出厂默认关着（静态描述里点名一条模型可能没有的工具，
+      // 就是把它往墙上推 —— 契约测试也拦这一条）。运行时那条回执按可见性分叉。
+      scope: { type: 'string', enum: ['session', 'global'], description: scopeGlobalOnlyDesc('the server config is machine-wide', 'switch the server on or off instead') },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
