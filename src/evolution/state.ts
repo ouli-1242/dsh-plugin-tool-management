@@ -37,9 +37,11 @@ export const EVIDENCE_SOURCES: readonly EvidenceSource[] = ['user_explicit', 'us
 /**
  * 一条证据。
  *
- * `quote` 对 `user_explicit` / `user_correction` 是**用户文本的逐字子串**（证据门校验的就是它）；
- * 对 `tool_verified` 是工具名 + 结果摘要（不必逐字，但要能定位到 `seq`）；对 `model_inference`
- * 是模型给出的推断依据 —— 这类证据无论多少条都只能让条目停在 `candidate`。
+ * `quote` 对 `user_explicit` 是**用户文本的逐字子串**（证据门校验的就是它）；对
+ * `user_correction` 尽力逐字，核不上时那条证据会被降级成 `model_inference`（用户纠正时常
+ * 只说「不对」，硬拒会让真实纠正记不下来）；对 `tool_verified` 是工具名 + 结果摘要（不必逐字，
+ * 但要能定位到 `seq`）；对 `model_inference` 是模型给出的推断依据 —— 这类证据无论多少条都
+ * 只能让条目停在 `candidate`。
  */
 export interface EvidenceRef {
   session: string

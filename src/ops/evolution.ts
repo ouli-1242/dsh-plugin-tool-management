@@ -290,8 +290,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     /**
      * 学一条（模型主动调；也是 P2 复习器的唯一写入口）。
      *
-     * `source` 的四个值决定证据强度：`user_explicit` / `user_correction` 必须带**逐字引句**
-     * （证据门会核对），`tool_verified` 指"工具结果证明了它"，`model_inference` 只能进候选。
+     * `source` 的四个值决定证据强度：`user_explicit` 必须带**逐字引句**（证据门会核对），
+     * `user_correction` 尽力带、核不上时降级为推断，`tool_verified` 指"工具结果证明了它"，
+     * `model_inference` 只能进候选。
      */
     /**
      * 只读预演：同一条 learn 请求如果被用户在卡片上批准，会落到哪一层、会不会合并 / 取代。
