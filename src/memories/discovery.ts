@@ -232,6 +232,8 @@ export interface DerivedFields {
   autoConfidence?: number
   autoWorkspace?: string
   autoScene?: string
+  /** 「什么时候可能不成立」；注入行末尾会带上它，见 `CatalogEntry.boundary`。 */
+  autoBoundary?: string
 }
 
 /** frontmatter 标量 → 去引号后的非空字符串；空 / 缺失返回 undefined。 */
@@ -276,6 +278,7 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
   const autoConfidence = numberOf(doc.map.auto_confidence)
   const autoWorkspace = scalarOf(doc.map.auto_workspace)
   const autoScene = scalarOf(doc.map.auto_scene)
+  const autoBoundary = scalarOf(doc.map.auto_boundary)
   return {
     name, description, descriptionDerived, whenToUse, globs, metadata,
     // 只在有值时加键：DerivedFields 的形状要与旧版逐字段相同，否则
@@ -287,6 +290,7 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
     ...(autoConfidence !== undefined ? { autoConfidence } : {}),
     ...(autoWorkspace !== undefined ? { autoWorkspace } : {}),
     ...(autoScene !== undefined ? { autoScene } : {}),
+    ...(autoBoundary !== undefined ? { autoBoundary } : {}),
   }
 }
 /** 把发现结果投影成注入侧用的规则行（体积、启用状态、场景归属都在这步定）。 */
@@ -330,6 +334,7 @@ export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxE
     ...(derived.autoConfidence !== undefined ? { autoConfidence: derived.autoConfidence } : {}),
     ...(derived.autoWorkspace !== undefined ? { autoWorkspace: derived.autoWorkspace } : {}),
     ...(derived.autoScene !== undefined ? { autoScene: derived.autoScene } : {}),
+    ...(derived.autoBoundary !== undefined ? { autoBoundary: derived.autoBoundary } : {}),
   }
   return rule
 }

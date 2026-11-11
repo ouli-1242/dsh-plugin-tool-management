@@ -61,6 +61,13 @@ export interface CatalogEntry {
   oneLine: string
   /** playbook 的标题：升为 playbook 后注入**只放这一行**，不展开步骤。 */
   title?: string
+  /**
+   * 「什么时候可能不成立」—— 注入行末尾会带上它。
+   *
+   * 这一条不进正文而是单列：`oneLine` 是「结论」，边界是「例外」。压成一行时两者必须
+   * 分得开，否则模型会把例外读成结论的一部分（`review/evolution/02-storage.md` 的字段表）。
+   */
+  boundary?: string
   bytes: number
   estTokens: number
   confidence: number
@@ -146,6 +153,7 @@ export async function buildCatalog(memoriesRoot: string, index: RulesIndex): Pro
       kind: derived.autoKind ?? '',
       key: derived.autoKey ?? '',
       ...(autoTitle !== '' ? { title: autoTitle } : {}),
+      ...(derived.autoBoundary !== undefined ? { boundary: derived.autoBoundary } : {}),
       // 自动条目缺省 candidate：没有证据链的条目不该被当成 active 注入。
       status: derived.autoStatus ?? 'candidate',
       oneLine,
@@ -191,6 +199,7 @@ export function normalizeCatalog(raw: any): CatalogFile {
       hash: typeof v.hash === 'string' ? v.hash : '',
       // 只在有值时加键：深比较时多出 undefined 会被当成"变了"。
       ...(typeof v.title === 'string' && v.title !== '' ? { title: v.title } : {}),
+      ...(typeof v.boundary === 'string' && v.boundary !== '' ? { boundary: v.boundary } : {}),
     }
   }
   return { version: CATALOG_VERSION, builtAt: typeof r.builtAt === 'string' ? r.builtAt : '', entries }
@@ -240,6 +249,7 @@ export function catalogEntryOf(
     kind: fields.kind ?? '',
     key: fields.key ?? '',
     ...(fields.title !== undefined && fields.title !== '' ? { title: fields.title } : {}),
+    ...(fields.boundary !== undefined && fields.boundary !== '' ? { boundary: fields.boundary } : {}),
     status: fields.status ?? 'candidate',
     oneLine,
     bytes,

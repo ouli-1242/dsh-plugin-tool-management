@@ -23,6 +23,7 @@ import {
 } from './constants.js'
 import { isInjectableStatus, type CatalogEntry } from './catalog.js'
 import { scoreOf, type EntryCounters, type EvolutionState } from '../evolution/state.js'
+import { textWidthOf, truncateToWidth } from '../text-width.js'
 
 /** 自动记忆的两个注入层。 */
 export type AutoLayer = 'global' | 'workspace'
@@ -110,25 +111,37 @@ export function competitorBudgetOfLayer(
 }
 
 /**
- * 一行：`- **key** — 正文`，与用户记忆段的 `- **名称** (描述) — 正文` 同形。
+ * 注入行末尾边界的宽度上限（显示宽度）：100 单位 = 50 汉字。
  *
- * 不再带 `[fact]` / `[pref]` 类型标签：模型不需要知道内部分类，标签只会让每条多付几个
- * token。key / title 都为空时退回纯正文；procedure 带 id（它要读全文，没 id 就得多查一次）。
+ * 边界是"什么时候不成立"，一两句就够；整段边界往往是在卡片上写给用户看的完整条件，
+ * 全塞进每一轮上下文既吃预算，也会把结论挤到看不见的地方。截断处加 `…`，
+ * 要读全的条件走 `memory_get`。
+ */
+export const INJECT_BOUNDARY_MAX_WIDTH = 100
+
+/**
+ * 一行：`- **名称** — 正文 (boundary: 边界)`，与用户记忆段的 `- **名称** (描述) — 正文` 同形。
+ *
+ * 不带类型标签，也**不带 id**：模型不需要知道内部分类；而 id（`_ws/<hash16>/<slug>`）
+ * 是磁盘目录，对模型和用户都没有意义 —— 真要按引用定位，`memory_get` 已经支持
+ * id / slot / 名称 / 注入行首句四种写法，注入行里有后三种。
  *
  * **playbook 只放标题**（P4）：它带着十几个步骤，整段塞进每轮上下文会吃掉自动段的大半
- * 预算，而且模型在没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程、id 是
- * 什么"，真要执行时再 `memory_get` 取全文。预算仍按 `oneLine` 记（高估），
- * 不会因为标题短就多塞几条进来。
+ * 预算，而且模型在没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程"，
+ * 真要执行时再 `memory_get` 取全文。预算按实际渲染行记，不会因为标题短就多塞几条进来。
  */
 export function lineOf(entry: CatalogEntry): string {
-  const idPart = entry.kind === 'procedure' && entry.id !== '' ? ` (id: ${entry.id})` : ''
   const fallback = entry.id.slice(entry.id.lastIndexOf('/') + 1)
   const name = (entry.title ?? '').trim() || entry.key || ''
+  const boundary = String(entry.boundary ?? '').trim()
+  const boundaryPart = boundary === ''
+    ? ''
+    : ` (boundary: ${truncateToWidth(boundary, INJECT_BOUNDARY_MAX_WIDTH)}${textWidthOf(boundary) > INJECT_BOUNDARY_MAX_WIDTH ? '…' : ''})`
   if (entry.status === 'playbook') {
     const title = name || fallback
-    return `- **${title}** (id: ${entry.id}) — playbook; read the full note for steps`
+    return `- **${title}** — playbook; read the full note for steps${boundaryPart}`
   }
-  return name === '' ? `- ${entry.oneLine}${idPart}` : `- **${name}** — ${entry.oneLine}${idPart}`
+  return (name === '' ? `- ${entry.oneLine}` : `- **${name}** — ${entry.oneLine}`) + boundaryPart
 }
 
 const countersOf = (state: EvolutionState, id: string): EntryCounters =>
