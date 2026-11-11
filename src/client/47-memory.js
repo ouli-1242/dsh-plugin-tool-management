@@ -578,20 +578,16 @@
             // 在同一场景里启用一条记忆，点当场消失，看着像这一行坏了。现在点照常画
             //（灰 = 不进上下文），原因留在 title 上。
             var attention = shadowed
-            // 行 2 元信息（切片三移交的「tags 列清理」）：描述 / 多级分组路径 / 派生标记。
+            // 行 2 元信息只剩多级分组路径：记忆只有名称与正文，描述已不再存在。
             // 附件计数不在这一行了 —— 它挪到名称旁与体积并排（见 attachTag）。
             //
-            // 体积（`145 B`）2026-10-12 从这一行挪到了行 1 的名称旁（用户：「记忆的 145B 带
-            // 边框然后加在名称旁边」）：它是这一行的"量值"，跟名称一样是**扫读**时先看的；
-            // 挤在描述后面既容易被长描述挤掉，也读不出"多大"。同时删掉「bundle」那颗形态标签
-            // （用户：「"bundle" 不用显示」）—— 形态由附件计数（`📎 N 个附件`）已经说清了，
-            // 再来一个英文单词只是噪音。`memory.form.*` 两个键**仍然在用**（42 片回收站/导出
+            // 体积（`145 B`）放在行 1 的名称旁：它是这一行的"量值"，跟名称一样是**扫读**时
+            // 先看的，挤在元信息后面容易被挤掉。形态标签「bundle」也不画 —— 形态由附件计数
+            // （`📎 N 个附件`）已经说清了。`memory.form.*` 两个键**仍然在用**（回收站/导出
             // 里按 `'memory.form.' + …` 计算取词），别顺手删掉。
             var attachNode = attachTag(r, shadowed)
             var metaBits = [
-              r.description ? React.createElement('span', { key: 'desc', className: 'dsm-listrow-meta-desc', title: r.description }, r.description) : null,
               r.group && r.group.indexOf('/') >= 0 ? React.createElement('span', { key: 'group', className: 'dsm-listrow-meta-info dsm-mono' }, r.group) : null,
-              r.descriptionDerived ? React.createElement('span', { key: 'derived', className: 'dsm-listrow-meta-info' }, t('memory.derived')) : null,
             ]
             // 名称旁那颗体积：纯量值、不可点，所以是 span；等宽数字免得整列右缘跟着抖。
             var sizeTag = typeof r.bytes === 'number'
@@ -710,7 +706,7 @@
           var exportableRules = React.useMemo(function () {
             return (data.rules || []).filter(function (r) { return r.shadowed !== true })
           }, [data.rules])
-          /** 导出条目：按**场景**分组（记忆页的分组维度就是场景），组内给出名称 + 描述。 */
+          /** 导出条目：按**场景**分组（记忆页的分组维度就是场景），组内只有名称。 */
           function memoryExportItems() {
             var sceneMeta = {}
             ;(data.scenes || []).forEach(function (s) { sceneMeta[s.name] = s })
@@ -718,7 +714,7 @@
               var scene = sceneOf(r.group)
               var meta = sceneMeta[scene]
               var label = (meta && (meta.label || meta.name)) || scene || t('memory.scene.orphan')
-              return { key: r.id, name: r.name, desc: r.description || '', group: label }
+              return { key: r.id, name: r.name, group: label }
             })
           }
           function submitExport(names, outDir) {
