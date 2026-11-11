@@ -111,13 +111,36 @@ export function competitorBudgetOfLayer(
 }
 
 /**
- * 注入行末尾边界的宽度上限（显示宽度）：100 单位 = 50 汉字。
+ * 注入行末尾边界的宽度上限（显示宽度）：160 单位 = 80 汉字 = 160 字母。
  *
- * 边界是"什么时候不成立"，一两句就够；整段边界往往是在卡片上写给用户看的完整条件，
- * 全塞进每一轮上下文既吃预算，也会把结论挤到看不见的地方。截断处加 `…`，
- * 要读全的条件走 `memory_get`。
+ * 与 `AUTO_ONELINE_MAX`（160）同档：一行里名称、正文、边界三部分权重相当，边界不该比
+ * 正文短一截。按显示宽度算而不是字符数 —— 汉字 2 单位、字母 1 单位，同一上限下英文
+ * 自然拿到两倍字符数（≈ 2 句，约 54 tok；中文 ≈ 80 tok）。
+ *
+ * 边界是"什么时候不成立"，两句话够；整段条件塞进每一轮上下文既吃预算，也会把结论挤到
+ * 看不见的地方。超限截断并标 `…`，要读全的条件走 `memory_get`。
  */
-export const INJECT_BOUNDARY_MAX_WIDTH = 100
+export const INJECT_BOUNDARY_MAX_WIDTH = 160
+
+/**
+ * 边界按上限截断：超限才动，截完补 `…`。
+ *
+ * 英文不能按码点硬切 —— 那样会切出半个单词（`…quick checks f`）。切点前
+ * {@link BOUNDARY_WORD_BACKOFF} 宽度内找得到空白就回退到那个空白，再补 `…`；
+ * 中文没有空白，回退自然不触发，仍按字切。
+ */
+export const BOUNDARY_WORD_BACKOFF = 20
+
+function truncateBoundary(text: string): string {
+  if (textWidthOf(text) <= INJECT_BOUNDARY_MAX_WIDTH) return text
+  const cut = truncateToWidth(text, INJECT_BOUNDARY_MAX_WIDTH)
+  // 回退到词边界：只在切点附近找，找得越远丢掉的内容越多，不如直接标 `…`。
+  const head = cut.slice(0, cut.length - BOUNDARY_WORD_BACKOFF)
+  const tail = cut.slice(cut.length - BOUNDARY_WORD_BACKOFF)
+  const space = tail.search(/\s/)
+  const kept = space >= 0 ? head + tail.slice(0, space) : cut
+  return kept.replace(/[\s,;:，；：]+$/, '') + '…'
+}
 
 /**
  * 一行：`- **名称** — 正文 (boundary: 边界)`，与用户记忆段的 `- **名称** (描述) — 正文` 同形。
@@ -134,9 +157,7 @@ export function lineOf(entry: CatalogEntry): string {
   const fallback = entry.id.slice(entry.id.lastIndexOf('/') + 1)
   const name = (entry.title ?? '').trim() || entry.key || ''
   const boundary = String(entry.boundary ?? '').trim()
-  const boundaryPart = boundary === ''
-    ? ''
-    : ` (boundary: ${truncateToWidth(boundary, INJECT_BOUNDARY_MAX_WIDTH)}${textWidthOf(boundary) > INJECT_BOUNDARY_MAX_WIDTH ? '…' : ''})`
+  const boundaryPart = boundary === '' ? '' : ` (boundary: ${truncateBoundary(boundary)})`
   if (entry.status === 'playbook') {
     const title = name || fallback
     return `- **${title}** — playbook; read the full note for steps${boundaryPart}`

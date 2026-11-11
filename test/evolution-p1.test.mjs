@@ -515,6 +515,24 @@ test('注入行：边界附在行末，超长按显示宽度截断', () => {
   assert.doesNotMatch(lineOf(wsEntry()), /boundary/)
 })
 
+test('注入行：英文边界按词截断，不留半个单词', () => {
+  // 显示宽度口径下英文拿到两倍字符数：160 宽 ≈ 160 字母，够放两句话。
+  const full = 'Applies to full-coverage testing, regression verification or acceptance; skip one-off quick checks.'
+  assert.ok(textWidthOf(full) <= INJECT_BOUNDARY_MAX_WIDTH, '整句不该被截')
+  assert.match(lineOf(wsEntry({ boundary: full })), / \(boundary: Applies to full-coverage testing, regression verification or acceptance; skip one-off quick checks\.\)$/)
+
+  // 超长时不能切在单词中间：截断点前的最后一个词必须完整。
+  const long = 'Coverage must include every branch of the feature matrix, including error paths and retries, because sampling hides the failure modes we care about most in this repository.'
+  const text = lineOf(wsEntry({ boundary: long }))
+  const shown = /\(boundary: (.*)\)$/.exec(text)?.[1] ?? ''
+  assert.match(shown, /…$/)
+  // 去掉省略号后应当是原句的前缀，且前缀之后原文紧接着一个空白 —— 即停在词边界。
+  const head = shown.slice(0, -1).trimEnd()
+  assert.ok(long.startsWith(head), '截断结果必须是原文前缀')
+  assert.match(head, /[\p{L}\p{N}]$/u, '不能停在空白或标点')
+  assert.equal(long[head.length], ' ', '前缀之后原文必须是空白：停在词边界，不是词中间')
+})
+
 test('自动段：不注入风格行；授权语收在条目之后', () => {
   const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0 }
   const r = renderAutoLayer('workspace', input)
