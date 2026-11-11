@@ -95,7 +95,7 @@ const COPIED = ['docs', 'locale', 'cordis.patch.yml', 'README.md', 'README_EN.md
 
 /**
  * 不进 profile 的 `docs/` 子目录：演示视频约 97MB，且不在发布面里
- * （`package.json#files` 只有 `docs/images` 与 `docs/UPDATE.md`）。镜像时跳过源里的它，
+ * （`package.json#files` 只有 `docs/images`）。镜像时跳过源里的它，
  * 目标里的旧副本会被底部的「清理陈旧文件」一并删掉。
  */
 const DOC_MIRROR_SKIP = new Set(['videos'])
@@ -189,11 +189,11 @@ function mirror(from, to, link, skipNames) {
   const entries = readdirSync(from, { withFileTypes: true }).filter((entry) => !(skipNames && skipNames.has(entry.name)))
   const names = new Set(entries.map((entry) => entry.name))
 
-  // 只改大小写的重命名（`docs/update.md` → `docs/UPDATE.md`）必须先删旧名，否则下面两步
+  // 只改大小写的重命名（`docs/foo.md` → `docs/FOO.md`）必须先删旧名，否则下面两步
   // 会互相抵消：复制时目标路径在大小写不敏感的文件系统（Windows / 默认 macOS）上**就是**
-  // 那个旧文件，copyFileSync 原地写穿、磁盘上的名字仍是 `update.md`；紧接着清理时 readdir
-  // 报出的还是 `update.md`，不在 `names` 里 → 被当成陈旧文件删掉。一次构建的净效果是文件
-  // **消失**（2026-10-22 改 `docs/UPDATE.md` 时实测：`1 个复制 · 清掉 1 个陈旧文件`，目录空）。
+  // 那个旧文件，copyFileSync 原地写穿、磁盘上的名字仍是旧的那份；紧接着清理时 readdir
+  // 报出的还是旧名，不在 `names` 里 → 被当成陈旧文件删掉。一次构建的净效果是文件
+  // **消失**。
   // 大小写敏感的文件系统上这段什么也不做（本来就该由下面的清理删掉），所以不需要探测文件系统。
   for (const entry of readdirSync(to, { withFileTypes: true })) {
     if (names.has(entry.name)) continue

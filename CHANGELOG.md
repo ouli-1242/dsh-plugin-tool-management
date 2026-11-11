@@ -4,7 +4,6 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-- 只想看「大致改了什么」→ [版本更新概要](docs/UPDATE.md)
 - 功能说明与用法 → [README](README.md) / [README_EN](README_EN.md)
 - 工程细节（根因分析、实测数据、设计取舍）在 git 历史里，不在这里。
 

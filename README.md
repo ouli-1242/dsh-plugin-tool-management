@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <b>简体中文</b> · <a href="README_EN.md">English</a> · <a href="CHANGELOG.md">更新日志</a> · <a href="docs/UPDATE.md">版本概要</a>
+  <b>简体中文</b> · <a href="README_EN.md">English</a> · <a href="CHANGELOG.md">更新日志</a>
 </p>
 
 DeepSeek Harness 的 MCP、技能、子智能体、提示词、记忆与归档会话，都收在一个面板里。把它们配成一套，就是**场景**——点一下整套切换，退出按快照还原。
@@ -175,7 +175,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 | [故障排查](docs/TROUBLESHOOTING.md)                   | 装完没页面、重复页签、升级后动作不可用、侧车损坏                 |
 | [架构](docs/ARCHITECTURE.md)                          | 内容怎么进模型、同一个开关为什么两个对话不一样、改完落到哪个文件 |
 | [兼容矩阵](docs/COMPATIBILITY.md)                     | 各 DSH 版本的能力矩阵（已验证 / 未实测 / 不可用）                |
-| [更新日志](CHANGELOG.md) · [版本概要](docs/UPDATE.md) | 每一版改了什么                                                   |
+| [更新日志](CHANGELOG.md)                               | 每一版改了什么                                                   |
 
 ## 开发
 

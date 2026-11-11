@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <b>English</b> · <a href="CHANGELOG.md">Changelog</a> · <a href="docs/UPDATE.md">Release overview</a>
+  <a href="README.md">简体中文</a> · <b>English</b> · <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 MCP servers, skills, subagents, prompts, memories and archived sessions for DeepSeek Harness — all in one panel. Bundle them into a **scene**, swap the whole environment with one click, and roll back to the pre-entry snapshot when you leave.
@@ -175,7 +175,7 @@ Full troubleshooting guide: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 | [Troubleshooting](docs/TROUBLESHOOTING.md)                     | Missing panel, duplicate tab, actions unavailable after an upgrade, broken sidecars                       |
 | [Architecture](docs/ARCHITECTURE.md)                           | How content reaches the model, why one toggle differs between conversations, which file a change lands in |
 | [Compatibility matrix](docs/COMPATIBILITY.md)                  | Capability matrix per DSH version (verified / untested / unavailable)                                     |
-| [Changelog](CHANGELOG.md) · [Release overview](docs/UPDATE.md) | What changed in each version                                                                              |
+| [Changelog](CHANGELOG.md)                               | What changed in each version                                                                              |
 
 ## Development
 

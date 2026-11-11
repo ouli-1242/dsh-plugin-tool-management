@@ -27,8 +27,7 @@
     "docs/images",
     "docs/ARCHITECTURE.md",
     "docs/COMPATIBILITY.md",
-    "docs/TROUBLESHOOTING.md",
-    "docs/UPDATE.md"
+    "docs/TROUBLESHOOTING.md"
   ],
   "engines": {
     "dsh": ">=0.2.2-rc.1 <0.2.3",
