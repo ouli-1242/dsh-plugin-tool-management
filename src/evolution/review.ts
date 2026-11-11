@@ -1,15 +1,16 @@
-// 复习器（冷路径的第二段）：轮末异步把 digest 过一遍，挑出值得记的几条。
+// 复习器（冷路径的第二段）：宿主压缩上下文时，把那份 checkpoint 过一遍，挑出值得记的几条。
 //
-// 为什么值得多花一次模型调用：热路径（`memory_note` 的 `action=learn`）靠模型在对话中"顺手"记，
-// 但它正忙着解决用户的问题，注意力不在"这句话以后还用得上吗"。轮末它已经交差了，同样
-// 一段对话再看一遍，判断质量完全不同。这也是 Claude Code / Codex 那类 harness 的做法：
-// 记忆不是对话的副产品，是**对话结束后的独立工序**。
+// 为什么值得多花一次模型调用：热路径（`memory_note`）靠模型在对话中"顺手"记，但它正忙着
+// 解决用户的问题，注意力不在"这句话以后还用得上吗"。压缩时宿主已经把整段对话交给模型提炼
+// 成结构化摘要 —— 那是信息密度最高、且已经付过钱的产物，同一个模型再读一遍它的判断质量
+// 完全不同。这也是 Claude Code / Codex 那类 harness 的做法：记忆不是对话的副产品，
+// 是**独立工序**。
 //
 // 三条纪律：
 //   1. **严格 JSON**：只接受白名单字段；解析不出来按可恢复失败走退避重试（不占学习名额）。
 //      逐条过九道门，复习器不是后门。
-//   2. **成本上限**：每会话最多 `maxReviewsPerSession` 次成功复习。超了直接跳过并在 outbox
-//      记原因 —— 失败 / 超时不占名额，失控由 outbox 的三次退避兜住。
+//   2. **成本上限**：每会话最多 `maxReviewsPerSession` 次**成功**复习。超了直接跳过并在
+//      outbox 记原因 —— 失败 / 超时 / 环境未就绪都不占名额，失控由 outbox 的退避兜住。
 //   3. **失败不阻塞会话**：这里的所有异常都吞掉并写日志。用户不该因为记忆整理失败
 //      看到报错，更不该等它。
 
@@ -166,8 +167,6 @@ const TURN_SYSTEM_PROMPT = [
   'Output strict JSON: {"memories":[{"title":"Reply style","text":"the note","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
 ].join('\n')
 
-export const REVIEW_SYSTEM_PROMPT = TURN_SYSTEM_PROMPT
-
 /** 系统提示按 episode 来源分叉：压缩那份必须明确排除任务态章节。 */
 export function reviewSystemPromptFor(episode: Episode, cfg: {
   noteStyle?: string
@@ -189,21 +188,6 @@ export function reviewSystemPromptFor(episode: Episode, cfg: {
     ].join('\n')
     : TURN_SYSTEM_PROMPT
   return guide === '' ? base : base + '\nWrite every `text` field in this style: ' + guide
-}
-
-/** 系统提示 + 按需追加的风格行（给旧调用方 / 测试用；生产走 `reviewSystemPromptFor`）。 */
-export function reviewSystemPrompt(cfg: {
-  noteStyle?: string
-  noteStyleText?: string
-  customNoteStyles?: readonly CustomNoteStyle[]
-}): string {
-  const style = normalizeNoteStyle({
-    style: cfg.noteStyle,
-    customStyles: cfg.customNoteStyles,
-    custom: cfg.noteStyleText,
-  })
-  const guide = noteStyleGuideOf(style.style, style.customStyles)
-  return guide === '' ? TURN_SYSTEM_PROMPT : TURN_SYSTEM_PROMPT + '\nWrite every `text` field in this style: ' + guide
 }
 
 /** 每会话的**成功**复习次数（失败 / 超时 / 坏 JSON 都不计数）。 */
