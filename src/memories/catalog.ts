@@ -73,7 +73,7 @@ export interface CatalogEntry {
    * 「什么时候可能不成立」—— 注入行末尾会带上它。
    *
    * 这一条不进正文而是单列：`oneLine` 是「结论」，边界是「例外」。压成一行时两者必须
-   * 分得开，否则模型会把例外读成结论的一部分（`review/evolution/02-storage.md` 的字段表）。
+   * 分得开，否则模型会把例外读成结论的一部分。
    */
   boundary?: string
   bytes: number
