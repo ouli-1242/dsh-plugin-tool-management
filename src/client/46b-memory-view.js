@@ -33,6 +33,11 @@
             if (b === '') return -1
             return String(a).localeCompare(String(b))
           })
+          // 空的 `_shared`（界面「常开」）不列：它是历史保留场景，恒常注入、没有开关，
+          // 一条记忆都没有时既不能管也不注入。此前它随磁盘目录一起出现在列表里，
+          // 读起来就像"凭空多了一个和「全局」一样的常驻场景" —— 而真正恒常的只有 global。
+          // 有内容的照常列（老用户的公共基线不能因此消失）。
+          order = order.filter(function (n) { return !(n === '_shared' && buckets[n].rules.length === 0) })
           var sceneOptions = [{ value: '', label: t('memory.filter.all') }].concat(
             order.map(function (n) { return { value: n, label: sceneLabel(data.scenes, n) } }))
           // 场景选择：保留场景「全局」排最前（它是真实场景，不是「留空」）；

@@ -349,7 +349,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       id: { type: 'string', description: 'Read one entry: a user memory id (<scene>/<name>) or an agent note id (note:...).' },
       query: { type: 'string', description: 'Filter the catalog by words in id, scene, description, tags or body; every word must match (case-insensitive).' },
       kind: { type: 'string', enum: ['memory', 'note'], description: 'Limit the catalog to user-written memories or agent notes.' },
-      scene: { type: 'string', description: 'Only user memories in this scene; `global` and `_shared` are the always-on scenes.' },
+      scene: { type: 'string', description: 'Only user memories in this scene; `global` is the always-on scene.' },
       all: { type: 'boolean', description: 'Catalog only: include entries that are off, in an inactive scene, or archived (default false). Search always covers everything.' },
       limit: { type: 'number', description: 'Max entries per kind (default 50, max 100).' },
     },
@@ -712,9 +712,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       if (blocked) throw new Error(blocked)
       const all: any = await deps.rulesOps['rules-list']({})
       if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
-      const knownGroups = new Set<string>(sceneNamesOf(all))
+      // `_shared` 不进候选：它恒常注入、在界面上也没有开关，agent 往里写等于**自己造一个
+      // 常开场景**，绕开了用户对"哪条记忆该生效"的控制。恒常注入的只有 `global` 一个。
+      const knownGroups = new Set<string>(sceneNamesOf(all).filter((s) => s !== SHARED_GROUP))
       knownGroups.add(GLOBAL_SCENE)
-      knownGroups.add(SHARED_GROUP)
       let group = scope === 'global' ? GLOBAL_SCENE : sceneArg
       if (scope === 'scene' && group === '') {
         group = String((deps.activeSceneOf ? deps.activeSceneOf(agent) : '') || '')
@@ -722,6 +723,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       if (group === '') {
         const scenes = [...knownGroups].filter((s) => s !== '').sort()
         throw new Error('scope=scene needs a scene, and this conversation has no active scene. Existing scenes: ' + scenes.join(', ') + '. Ask the user which one; do not guess.')
+      }
+      if (group === SHARED_GROUP) {
+        // 显式传了也拒：这条路径上没有"用户明确要求"的证据，而写进去的记忆不受任何开关
+        // 控制。要全局生效就用 scope=global；要场景生效就让用户先建 / 开一个场景。
+        throw new Error('_shared is not a writable scene: memories there are injected in every conversation and have no on/off switch, so an agent must not create one. Use scope=global for something that should apply everywhere, or scope=scene with a scene the user has turned on.')
       }
       if (group === '_ws' || group.startsWith('_ws/') || group === '_session' || group.startsWith('_session/')) {
         throw new Error('"' + group + '" is internal storage for agent notes, not a user scene. For a workspace note use scope=workspace; for a user memory use an existing scene (global, …).')
