@@ -174,9 +174,10 @@ button.dsm-qty:disabled{cursor:default}
 /* 设置行统一两列：左标题，右控件固定列。开关不再跟着标签宽度跑。 */
 .dsm-evo-section{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-section-title{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
-/* 三颗开关装进一个和学习频率同款的框（同边框 / 同底色 / 同内边距）：框的内边距把开关从
-   滚动条边上挪开，也让「学习范围」这一段看起来是一组设置，而不是三行散落的内容。 */
-.dsm-evo-switch-box{display:flex;flex-direction:column;gap:6px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
+/* 每段设置的内容框：学习范围的三颗开关、学习记录、后台复习共用同一档边框 / 底色 / 内边距
+   （与「学习频率」的 .dsm-caps-row 同形）。标题一律在框外 —— 框里只装这一段的控件与列表，
+   四段看起来才是并列的，而不是「一张卡套着另一张卡」。 */
+.dsm-evo-box,.dsm-evo-switch-box{display:flex;flex-direction:column;gap:6px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
 .dsm-evo-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;min-height:34px}
 .dsm-evo-row-main{display:flex;min-width:0;flex-direction:column;gap:1px}
 .dsm-evo-row-main .dsm-label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:20px}
@@ -204,12 +205,10 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-style-guide{flex:1;min-width:0;width:auto}
 .dsm-evo-style-actions{display:flex;align-items:center;gap:6px}
 .dsm-evo-style-error{margin:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:17px}
-/* 学习记录：统计 + 整理 + 后台复习共用一张卡；不再用虚线框和左右内缩。 */
-.dsm-evo-records{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}
+/* 学习记录：一行统计 + 右侧「整理」，整理结果紧贴其下。 */
 .dsm-evo-records-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.dsm-evo-records-head .dsm-evo-row-main{flex:1}
-.dsm-evo-records-stat{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px}
-.dsm-evo-records-head .dsm-btn{margin-left:auto}
+.dsm-evo-records-stat{flex:1;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px}
+.dsm-evo-records-head .dsm-btn{margin-left:auto;flex:none}
 .dsm-evo-organize{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-organize .dsm-help{margin:0}
 .dsm-evo-draft{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;line-height:17px}
@@ -222,14 +221,14 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-review-page{display:flex;min-width:0;flex:1;flex-direction:column;gap:8px}
 .dsm-evo-review-content{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-review-text{margin:0;max-height:40vh;overflow:auto;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;white-space:pre-wrap;word-break:break-word}
-.dsm-evo-review{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
+/* 后台复习与其它段同版式：标题在框外，列表与失败项在框里。 */
+.dsm-evo-review{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-review-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 /* 折叠标题：与其它分节标题同一档，但可点。下划线与内边距都不要 —— 它读起来该像一行标题，
    不像按钮（真正的按钮是右边那颗「重试全部」）。 */
 .dsm-evo-review-toggle{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;font:inherit;color:inherit;cursor:pointer}
 .dsm-evo-review-toggle:disabled{cursor:default}
 .dsm-evo-review-head .dsm-help{margin:0;margin-left:auto}
-.dsm-evo-review-fails .dsm-evo-review-head .dsm-help{margin-left:0}
 .dsm-evo-review-list{display:flex;flex-direction:column}
 .dsm-evo-review-row{display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-evo-review-row:last-child{border-bottom:0}
@@ -239,7 +238,9 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-review-meta{display:flex;flex:none;align-items:center;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
 .dsm-evo-review-fail{color:var(--dsw-alias-state-error-primary)}
 .dsm-evo-review-empty{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}
+/* 失败项单独一个框（排在「后台复习」框下面）：它是另一类东西 —— 上面是学到什么，这里是要修什么。 */
 .dsm-evo-review-fails{display:flex;flex-direction:column}
+.dsm-evo-review-fails>.dsm-help{margin:0}
 .dsm-note{overflow:hidden;margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:17px;text-overflow:ellipsis;white-space:nowrap}.dsm-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.dsm-tag{display:inline-flex;min-height:20px;align-items:center;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsm-radius-s);color:var(--dsw-alias-label-secondary);font-size:12px;white-space:nowrap}.dsm-tag-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}.dsm-tag-off{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.dsm-tag-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}.dsm-tag-lease{border-style:dashed;border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
 /* 中性标签：灰边框 + 主色字（用户 2026-11-06：MCP 的「未运行」不该是红的 —— 没跑起来不是故障）。 */
 .dsm-tag-quiet{border-color:var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}
