@@ -301,7 +301,7 @@
         "evo.forget.title": "删除这条自主记忆？",
         "evo.forget.desc": "「{name}」进回收站，30 天内不会重新学到。",
         "evo.edit.title.global": "编辑自主记忆（全局）",
-        "evo.edit.title.workspace": "编辑自主记忆（工作区）——{name}",
+        "evo.edit.title.workspace": "编辑自主记忆（工作区）—— {name}",
         "evo.edit.name.placeholder": "例如 回复风格",
         "evo.edit.saved": "已保存",
         "evo.edit.empty": "正文不能为空",
