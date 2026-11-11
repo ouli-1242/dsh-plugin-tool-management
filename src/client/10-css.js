@@ -224,9 +224,10 @@ button.dsm-qty:disabled{cursor:default}
 /* 后台复习与其它段同版式：标题在框外，列表与失败项在框里。 */
 .dsm-evo-review{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-review-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-/* 折叠标题：与其它分节标题同一档，但可点。下划线与内边距都不要 —— 它读起来该像一行标题，
-   不像按钮（真正的按钮是右边那颗「重试全部」）。 */
-.dsm-evo-review-toggle{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;font:inherit;color:inherit;cursor:pointer}
+/* 折叠标题：与其它分节标题**同一档字号 / 字重 / 颜色**，但可点。不能写 font:inherit ——
+   这个元素同时挂着 .dsm-evo-section-title，而 font 简写会把那条规则的 12px/600 一起
+   覆盖成父级的正文字号，结果只有这一段标题比别的大一号（用户截图里一眼就看出来了）。 */
+.dsm-evo-review-toggle{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px;cursor:pointer}
 .dsm-evo-review-toggle:disabled{cursor:default}
 .dsm-evo-review-head .dsm-help{margin:0;margin-left:auto}
 .dsm-evo-review-list{display:flex;flex-direction:column}
