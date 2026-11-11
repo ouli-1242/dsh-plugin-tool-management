@@ -477,7 +477,10 @@ export const HOST_CLIENT_UI_CONTRACTS: readonly HostModuleContract[] = [
     impact: '输入框锁定与作用域下拉拿不到当前会话 / 列表变化',
     optional: true,
     markers: [
-      { needle: 'reflect.provide("sessions"', why: '客户端 sessions 服务注册点', file: 'lib/client.js' },
+      // needle 只认**标识符**，不认包裹它的引号：官方发布形态一变（压缩构建把 `"` 换成
+      // 反引号），带引号的 needle 就会误报漂移，而契约其实没变。
+      { needle: 'reflect.provide(', why: '客户端 sessions 服务注册入口', file: 'lib/client.js' },
+      { needle: 'session-controller.client.sessions', why: '客户端会话服务的作用域标签（注册点与之同处）', file: 'lib/client.js' },
       { needle: 'projectList', why: '会话列表快照投影（list.getSnapshot 的数据源）', file: 'lib/client.js' },
     ],
     manual: '只能证明 sessions 服务与列表投影还在；list.current / selection.sessionId 的实际字段仍需浏览器里确认。',
