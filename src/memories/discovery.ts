@@ -291,10 +291,18 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
 }
 /** 把发现结果投影成注入侧用的规则行（体积、启用状态、场景归属都在这步定）。 */
 export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxEntry: RuleIndexEntry | undefined): Rule {
-  // 体积按**正文文件**算（bundle 的附件不计：附件不进注入正文）。一次 stat 一条记忆，
-  // 结果随快照的 1s TTL 缓存一起复用；读不到就不带这个字段，别把"不知道"报成 0 B。
+  // 体积与创建时间同一次 stat 取（一次系统调用换两个字段）。体积按**正文文件**算
+  // （bundle 的附件不计：附件不进注入正文）。读不到就不带这两个字段，别把"不知道"
+  // 报成 0 B / 1970 年。创建时间优先 birthtime；部分文件系统给 0，退回修改时间 ——
+  // 两者都没有时排序退化为按名字，与加这个字段之前完全一致。
   let size: number | undefined
-  try { size = statSync(entry.docPath).size } catch { size = undefined }
+  let createdAt: string | undefined
+  try {
+    const st = statSync(entry.docPath)
+    size = st.size
+    const born = st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs
+    if (born > 0) createdAt = new Date(born).toISOString()
+  } catch { size = undefined }
   const rule: Rule = {
     id: entry.id,
     group: entry.group,
@@ -302,6 +310,7 @@ export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxE
     form: entry.kind,
     path: entry.docPath,
     ...(size !== undefined ? { bytes: size } : {}),
+    ...(createdAt !== undefined ? { createdAt } : {}),
     description: derived.description,
     ...(derived.descriptionDerived ? { descriptionDerived: true } : {}),
     ...(derived.whenToUse !== undefined ? { whenToUse: derived.whenToUse } : {}),

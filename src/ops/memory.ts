@@ -21,9 +21,20 @@ import { searchMemories } from '../memories/search.js'
 import type { MemoriesOpsCtx } from './ctx.js'
 import type { MemoryScopeOverride } from '../memories/memories-types.js'
 
+/**
+ * 按创建时间升序；读不到创建时间（stat 失败 / 文件系统不给）的排在最后。
+ *
+ * 不能拿空串当"最旧"：空串比任何 ISO 字符串都小，会让读不到时间的条目冒充最老的一条。
+ * ISO 8601 同时区下字符串序与时间序一致，直接比字符串即可。
+ */
+function compareCreatedAt(a: string | undefined, b: string | undefined): number {
+  if (a === undefined) return b === undefined ? 0 : 1
+  if (b === undefined) return -1
+  return a.localeCompare(b)
+}
+
 /** 组装本域 op。rc 由 createMemoriesService 组装，契约见 ./ctx.ts。 */
-export function buildMemoryOps(rc: MemoriesOpsCtx) {
-  const { buildProjected, copyIntoMemoriesTrash, invalidateSnapshot, listAttachments, locateRule, maxBytes, parseId, refuseOutsideRoot, memoriesRoot, sceneMemory, scenePrompt, sceneRows, scenesRoot, serializeRuleFile, serializeUpdatedFile, snapshot, stateDir } = rc
+export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, copyIntoMemoriesTrash, invalidateSnapshot, listAttachments, locateRule, maxBytes, parseId, refuseOutsideRoot, memoriesRoot, sceneMemory, scenePrompt, sceneRows, scenesRoot, serializeRuleFile, serializeUpdatedFile, snapshot, stateDir } = rc
 
   /**
    * 从 op 入参取会话作用域。`sessionId` 缺失 = 全局口径（返回 undefined）。
@@ -50,7 +61,14 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {
     const index = snap.index
     const rules = snap.rules
       .filter((r) => !groupFilter || r.group === groupFilter)
-      .sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order || a.name.localeCompare(b.name))
+      // 场景内：显式 `order` 优先（用户手动排过就听用户的），其次按**创建时间**升序 ——
+      // 越早记下的越靠前。此前第三档直接比名字，而所有记忆的 order 都是默认 1000，
+      // 于是实际按名字排：新建的条目只因名字凑巧（中文按拼音、英文按字母）就顶到最前，
+      // 读起来像"agent 写的被置顶了"。创建时间读不到（stat 失败）的排最后，不冒充最旧。
+      .sort((a, b) => a.group.localeCompare(b.group)
+        || a.order - b.order
+        || compareCreatedAt(a.createdAt, b.createdAt)
+        || a.name.localeCompare(b.name))
       // bundle 记忆附带附件摘要：界面要显示「几个附件」。
       // 代价是**同步**系统调用（其余读路径都是 await）：每条 bundle 一次 `readdirSync`
       // + 每个附件一次 `statSync`，总量 = bundle 条数 × 平均附件数，随内容线性增长。
