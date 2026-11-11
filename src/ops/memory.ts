@@ -95,7 +95,8 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
       // 「可以忽略」这个判断只成立于 bundle 少、附件也少的时候 —— 记忆页不轮询（刷新点是
       // 页面打开 / 切换会话 / 写操作之后），但每次刷新都是全量，bundle 到几百条就该换缓存或异步。
       // flat 没有目录，原样返回（不加字段 = 界面不显示附件标签）。
-      // 列表行的正文摘要：界面扫读用，注入仍用完整正文（见 `Rule.excerpt`）。
+      //
+      // 顺带补上列表行的正文摘要：界面扫读用，注入仍用完整正文（见 `Rule.excerpt`）。
       .map((r) => {
         const excerpt = excerptOf(snap.bodies.get(r.id) ?? '')
         const withExcerpt = excerpt === '' ? r : { ...r, excerpt }

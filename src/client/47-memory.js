@@ -577,7 +577,8 @@
             // 在同一场景里启用一条记忆，点当场消失，看着像这一行坏了。现在点照常画
             //（灰 = 不进上下文），原因留在 title 上。
             var attention = shadowed
-            // 行 2 元信息只剩多级分组路径：记忆只有名称与正文，描述已不再存在。
+            // 行 2 元信息：正文摘要 + 多级分组路径。摘要与自主记忆行同一口径
+            // （服务端压平后按 160 显示宽度截断），行宽不够时再由 CSS 省略。
             // 附件计数不在这一行了 —— 它挪到名称旁与体积并排（见 attachTag）。
             //
             // 体积（`145 B`）放在行 1 的名称旁：它是这一行的"量值"，跟名称一样是**扫读**时
@@ -586,6 +587,7 @@
             // 里按 `'memory.form.' + …` 计算取词），别顺手删掉。
             var attachNode = attachTag(r, shadowed)
             var metaBits = [
+              r.excerpt ? React.createElement('span', { key: 'excerpt', className: 'dsm-listrow-meta-desc', title: r.excerpt }, r.excerpt) : null,
               r.group && r.group.indexOf('/') >= 0 ? React.createElement('span', { key: 'group', className: 'dsm-listrow-meta-info dsm-mono' }, r.group) : null,
             ]
             // 名称旁那颗体积：纯量值、不可点，所以是 span；等宽数字免得整列右缘跟着抖。

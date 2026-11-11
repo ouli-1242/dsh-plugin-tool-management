@@ -74,7 +74,7 @@ import { pickBestCompatible, sourcePlan } from '../lib/update-check.js'
 import { scanLoaderRows } from '../lib/mcp/loader-token.js'
 import { isValidGroupPath, isValidGroupSegment } from '../lib/memories/constants.js'
 import { createMemoriesService } from '../lib/memories/service.js'
-import { textWidthOf, truncateToWidth } from '../lib/text-width.js'
+import { excerptOf, textWidthOf, truncateToWidth } from '../lib/text-width.js'
 import { deleteSkill, forgetSource, importUploadedSkill, listProviderCandidates, permanentlyDeleteTrash, restoreTrash, setPreferredSkill, setSkillEnabled, setSourceRemoved, state, userRoots } from '../lib/skills/core.js'
 // 字符串形态的 RootInput 是**路径**不是 key（见 rootDefinition），所以这里按 key 取定义对象。
 import { rootByKey } from '../lib/skills/skill-roots.js'
@@ -5838,4 +5838,19 @@ test('设置作用域行：会话档不发（与工具默认值重复），工�
   assert.equal(scopeLineOf(undefined), undefined)
   assert.match(scopeLineOf('workspace') ?? '', /every conversation in this workspace/)
   assert.match(scopeLineOf('global') ?? '', /machine-wide/)
+})
+
+// ── 列表摘要（显示宽度）────────────────────────────────────────────────────
+// 摘要只给界面扫读，注入用完整正文。破了会静默截成半个汉字或半个单词。
+
+test('摘要：压平空白、按显示宽度截断并补省略号', () => {
+  assert.equal(excerptOf('  短 文本 \n 第二行 '), '短 文本 第二行')
+  assert.equal(excerptOf(''), '')
+  // 1200 个汉字 = 2400 宽度，超 160 → 截断且补 `…`。
+  const zh = excerptOf('汉'.repeat(1200))
+  assert.ok(zh.endsWith('…'))
+  assert.ok(textWidthOf(zh) <= 160, String(textWidthOf(zh)))
+  // 英文同一把尺：160 字母正好放满，161 才截。
+  assert.equal(excerptOf('a'.repeat(160)), 'a'.repeat(160))
+  assert.equal(textWidthOf(excerptOf('a'.repeat(161))), 160)
 })
