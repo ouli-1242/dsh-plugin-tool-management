@@ -745,6 +745,10 @@
           // 还要再开一层确认弹窗，共用一个槽会把自主记忆一起关掉。
           var eos = React.useState(false)
           var evoOpen = eos[0], setEvoOpen = eos[1]
+          // 「查看待确认」弹窗（见 openEvolutionReview）。单独一个槽：它从记忆列表行打开，
+          // 与设置弹窗不是同一件事，也不该互相关掉。
+          var evr = React.useState(null)
+          var evoReview = evr[0], setEvoReview = evr[1]
           // 学习频率的输入态：键 = `learnWindowMinutes` / `maxLearnsPerWindow`，值是未提交的
           // 字符串。输入框常态空着、当前值只在 placeholder 里灰显（与兼容页目录上限同一交互）。
           var evc = React.useState({})
@@ -877,13 +881,106 @@
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
 
-          function approveEvolution(id) {
-            setEvoBusy(true)
+          /**
+           * 待确认记忆的「查看」弹窗。
+           *
+           * 列表行只给一个入口：确认一条没看过的记忆是盲签 —— 而这条记忆之后会进入每一次
+           * 对话的上下文。弹窗里读正文、逐条确认；确认完自动跳下一条，全部确认完自动关窗，
+           * 左右两侧的箭头可以随时切换，不必关掉再点开。
+           *
+           * 快照取点开那一刻的候选清单：确认会让条目离开候选，实时重算会让下标在翻页时
+           * 跳位。已确认的 id 记在 `done` 里，找下一条时跳过。
+           */
+          function candidateIdsNow() {
+            return (evo.entries || [])
+              .filter(function (e) { return e.status === 'candidate' })
+              .map(function (e) { return String(e.id) })
+          }
+
+          function loadEvolutionReview(id) {
+            apiCall('evolution-read', { id: id }).then(function (res) {
+              setEvoReview(function (cur) {
+                if (!cur || cur.id !== id) return cur
+                if (!res || res.ok === false) {
+                  return Object.assign({}, cur, { loading: false, error: translateError(t, res) })
+                }
+                return Object.assign({}, cur, {
+                  loading: false,
+                  title: String(res.title || ''),
+                  body: String(res.body || ''),
+                  layer: String(res.layer || ''),
+                  kind: String(res.kind || ''),
+                  status: String(res.status || ''),
+                  boundary: String(res.boundary || ''),
+                  error: null,
+                })
+              })
+            }).catch(function (err) {
+              setEvoReview(function (cur) {
+                return cur && cur.id === id ? Object.assign({}, cur, { loading: false, error: errMsg(err) }) : cur
+              })
+            })
+          }
+
+          function openEvolutionReview(e) {
+            setResult(null)
+            var ids = candidateIdsNow()
+            var at = ids.indexOf(String(e.id))
+            if (at < 0) { ids = [String(e.id)]; at = 0 }
+            setEvoReview({ ids: ids, index: at, id: ids[at], done: {}, title: '', body: '', layer: '', kind: '', status: '', boundary: '', loading: true, busy: false, error: null })
+            loadEvolutionReview(ids[at])
+          }
+
+          /** 左右切换：跳过已确认的条目没有意义，照顺序走，越界不动。 */
+          function stepEvolutionReview(dir) {
+            var cur = evoReview
+            if (!cur || cur.busy) return
+            var next = cur.index + dir
+            if (next < 0 || next >= cur.ids.length) return
+            var id = cur.ids[next]
+            setEvoReview(Object.assign({}, cur, { index: next, id: id, loading: true, title: '', body: '', error: null }))
+            loadEvolutionReview(id)
+          }
+
+          /** 确认当前这条 → 自动进入下一条未确认的；全都确认完自动关窗。 */
+          function approveEvolutionInReview() {
+            var cur = evoReview
+            if (!cur || cur.busy || cur.loading) return
+            var id = cur.id
+            setEvoReview(Object.assign({}, cur, { busy: true, error: null }))
             apiCall('evolution-approve', { id: id }).then(function (res) {
-              setEvoBusy(false)
-              if (res && res.ok !== false) { setResult({ ok: true, text: t('evo.approved') }); refreshEvolution() }
-              else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+              if (!res || res.ok === false) {
+                setEvoReview(function (c) {
+                  return c && c.id === id ? Object.assign({}, c, { busy: false, error: translateError(t, res) }) : c
+                })
+                return
+              }
+              var done = Object.assign({}, cur.done)
+              done[id] = true
+              // 先往后找，没有再从头上找 —— 左右翻过页再确认时不会漏掉前面的。
+              var next = -1
+              for (var i = cur.index + 1; i < cur.ids.length; i++) {
+                if (!done[cur.ids[i]]) { next = i; break }
+              }
+              if (next < 0) {
+                for (var j = 0; j < cur.ids.length; j++) {
+                  if (!done[cur.ids[j]]) { next = j; break }
+                }
+              }
+              refreshEvolution()
+              if (next < 0) {
+                setEvoReview(null)
+                setResult({ ok: true, text: t('evo.approved') })
+                return
+              }
+              var nid = cur.ids[next]
+              setEvoReview({ ids: cur.ids, index: next, id: nid, done: done, title: '', body: '', layer: '', kind: '', status: '', boundary: '', loading: true, busy: false, error: null })
+              loadEvolutionReview(nid)
+            }).catch(function (e) {
+              setEvoReview(function (c) {
+                return c && c.id === id ? Object.assign({}, c, { busy: false, error: errMsg(e) }) : c
+              })
+            })
           }
 
           function forgetEvolution(id) {
@@ -1042,9 +1139,11 @@
               nameAfter: React.createElement('span', { className: 'dsm-qty' }, t('memory.size.tokens', { count: Number(e.tokens) || 0 })),
               meta: metaBits.length ? metaBits : undefined,
               metaTitle: e.needsReview || undefined,
-              // 候选行右侧是「确认」；生效行是开关，与记忆行同一语义：关 = 不再注入，条目保留。
+              // 候选行右侧是「查看」：先读正文再决定要不要它 —— 确认一条没看过的记忆是盲签，
+              // 而它会进入之后每一次对话的上下文。生效行是开关，与记忆行同一语义：
+              // 关 = 不再注入，条目保留。
               side: pending
-                ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { approveEvolution(e.id) } }, t('evo.approve'))
+                ? React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy, onClick: function () { openEvolutionReview(e) } }, t('evo.review.open'))
                 : React.createElement(Switch, {
                   on: enabled,
                   disabled: evoBusy,
@@ -1834,6 +1933,41 @@
               React.createElement('p', { className: 'dsm-help' }, t('memory.delete.desc', { name: modal.rule.name })),
               React.createElement('div', { className: 'dsm-modal-actions' },
                 React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-danger', disabled: busy, onClick: function () { submitDelete(modal.rule) } }, t('memory.btn.delete.confirm')))) : null,
+            evoReview ? React.createElement(Modal, { key: 'evorev', className: 'dsm-modal-evo', title: t('evo.review.title'), closeLabel: t('btn.close'), onClose: function () { setEvoReview(null) } },
+              React.createElement('div', { className: 'dsm-evo-review-nav' },
+                // 左右两颗切换键：翻页不必关掉重开。到头置灰而不是绕圈 —— 绕圈会让
+                // 「确认完自动跳下一条」的终点不可见。
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-evo-review-arrow',
+                  disabled: evoReview.busy || evoReview.index <= 0,
+                  title: t('evo.review.prev'), 'aria-label': t('evo.review.prev'),
+                  onClick: function () { stepEvolutionReview(-1) },
+                }, '‹'),
+                React.createElement('div', { className: 'dsm-evo-review-page' },
+                  React.createElement('div', { className: 'dsm-evo-review-head' },
+                    React.createElement('span', { className: 'dsm-evo-review-title' }, evoReview.title || evoReview.id),
+                    React.createElement('span', { className: 'dsm-tag' }, evoReview.layer === 'global' ? t('evo.scope.global') : evoReview.layer === 'workspace' ? t('evo.scope.workspace') : t('evo.tag.candidate')),
+                    React.createElement('span', { className: 'dsm-help' }, t('evo.review.position', { index: evoReview.index + 1, total: evoReview.ids.length }))),
+                  evoReview.loading
+                    ? React.createElement('p', { className: 'dsm-help' }, t('loading'))
+                    : React.createElement('div', { className: 'dsm-evo-review-content' },
+                        React.createElement('p', { className: 'dsm-evo-review-text' }, evoReview.body || ''),
+                        evoReview.boundary !== '' ? React.createElement('p', { className: 'dsm-help' }, t('evo.review.boundary', { text: evoReview.boundary })) : null),
+                  evoReview.error ? React.createElement(Notice, { kind: 'err', text: evoReview.error }) : null),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn dsm-btn-quiet dsm-evo-review-arrow',
+                  disabled: evoReview.busy || evoReview.index >= evoReview.ids.length - 1,
+                  title: t('evo.review.next'), 'aria-label': t('evo.review.next'),
+                  onClick: function () { stepEvolutionReview(1) },
+                }, '›')),
+              // 左下取消 / 右下确认（用户 2026-11-11）。确认后自动进下一条，全部确认完自动关窗。
+              React.createElement('div', { className: 'dsm-modal-actions dsm-modal-actions-split' },
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoReview.busy, onClick: function () { setEvoReview(null) } }, t('btn.cancel')),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-btn',
+                  disabled: evoReview.busy || evoReview.loading || evoReview.error !== null,
+                  onClick: approveEvolutionInReview,
+                }, evoReview.busy ? t('evo.review.approving') : t('evo.approve')))) : null,
             modal && modal.type === 'evo-edit' ? React.createElement(Modal, { key: 'evoedit', title: t('evo.edit.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('p', { className: 'dsm-help' }, t('evo.edit.hint')),
               React.createElement('div', { className: 'dsm-form' },

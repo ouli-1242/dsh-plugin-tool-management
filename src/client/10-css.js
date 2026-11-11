@@ -212,6 +212,13 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-draft{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;line-height:17px}
 .dsm-evo-draft-name{min-width:0;flex:1 1 auto;overflow:hidden;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}
 .dsm-evo-draft-reason{flex:1 1 100%;min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap}
+/* 待确认弹窗：左右箭头贴边、正文在中间。箭头是纯图标按钮（‹ ›），宽度固定 ——
+   它只在「翻页」这一个维度上工作，和底部那对取消 / 确认不是同一层动作。 */
+.dsm-evo-review-nav{display:flex;align-items:center;gap:8px}
+.dsm-evo-review-arrow{flex:none;width:30px;min-width:30px;padding:0;font-size:18px;line-height:1;color:var(--dsw-alias-label-secondary)}
+.dsm-evo-review-page{display:flex;min-width:0;flex:1;flex-direction:column;gap:8px}
+.dsm-evo-review-content{display:flex;flex-direction:column;gap:6px}
+.dsm-evo-review-text{margin:0;max-height:40vh;overflow:auto;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;white-space:pre-wrap;word-break:break-word}
 .dsm-evo-review{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-evo-review-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .dsm-evo-review-head .dsm-help{margin:0;margin-left:auto}
