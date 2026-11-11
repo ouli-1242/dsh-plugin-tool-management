@@ -1006,3 +1006,22 @@ test('attachColdPath：没有 seq / 空 session 的压缩事件被忽略', async
   assert.equal((await episodes.list()).length, 0)
   assert.equal(reviewer.calls.length, 0)
 })
+
+test('attachColdPath：子会话压缩不触发复习（热路径同样禁止子代理学习）', async () => {
+  const { episodes, reviewer } = await coldFixture()
+  const ctx = fakeCtx()
+  attachColdPath(ctx, {
+    effectiveOf: async () => cfgOf({ enabled: true }),
+    episodes,
+    reviewer: fakeReviewer(),
+    workspaceHashOf: () => 'h1',
+    log,
+    message,
+  })
+  // 两种官方标记都要挡住：`origin` 是硬信号，`delegationDepth` 是持久化深度。
+  ctx.emit('session/event', { id: 'sub1', header: { origin: 'subagent', cwd: 'C:/ws' } }, summaryEvent(31, CHECKPOINT))
+  ctx.emit('session/event', { id: 'sub2', header: { delegationDepth: 2, cwd: 'C:/ws' } }, summaryEvent(32, CHECKPOINT))
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal((await episodes.list()).length, 0)
+  assert.equal(reviewer.calls.length, 0)
+})

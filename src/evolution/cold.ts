@@ -315,6 +315,20 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
  *
  * 事件处理里只做"记下来"与"排一次队"，任何异常都吞掉 —— 它跑在会话主链上。
  */
+/**
+ * 这个会话是不是子代理。
+ *
+ * 口径照抄官方 `delegationDepthOf()`：持久化头的 `delegationDepth` 是权威值，
+ * `origin === 'subagent'` 是硬信号（头里没记深度时深度至少算 1）。
+ */
+function isSubagentSession(session: any): boolean {
+  const header = session && typeof session === 'object' ? session.header : undefined
+  if (!header || typeof header !== 'object') return false
+  if (header.origin === 'subagent') return true
+  const depth = Number(header.delegationDepth)
+  return Number.isFinite(depth) && depth > 0
+}
+
 export function attachColdPath(
   ctx: { on(name: string, cb: (...args: any[]) => any): unknown },
   deps: ColdPathDeps,
@@ -355,6 +369,10 @@ export function attachColdPath(
         case 'compaction/summary': {
           const seq = Number(event.seq)
           if (!Number.isFinite(seq)) return
+          // 子会话不复习：热路径明确禁止子代理学习（`autoLearnEnabledFor` 要求深度为 0），
+          // 冷路径是同一个闸门 —— 子代理压缩出来的 checkpoint 是「父代理写进委派说明的任务」，
+          // 不是用户偏好。放它进复习等于从后门绕过深度限制，还会把工作区笔记写成任务态。
+          if (isSubagentSession(session)) break
           const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : undefined
           // 不 await：压缩的处理器必须同步返回，复习在后台跑。
           void cold.compactionSummary(sid, seq, data.summary, cwd)
