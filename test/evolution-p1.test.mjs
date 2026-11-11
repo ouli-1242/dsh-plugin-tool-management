@@ -13,9 +13,10 @@ import { autoIncrementalModeKey, autoSnapshotKey } from '../lib/evolution/runtim
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
 import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
 import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, noteStyleLineOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
-import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf } from '../lib/memories/render-auto.js'
+import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf, lineOf, INJECT_BOUNDARY_MAX_WIDTH } from '../lib/memories/render-auto.js'
 import { appendToSceneGroup } from '../lib/memories/projection.js'
 import { visibleExistingEntries } from '../lib/evolution/write.js'
+import { textWidthOf } from '../lib/text-width.js'
 
 /**
  * 门禁上下文：给一份最小可用的默认值，逐个测试只覆盖它关心的字段。
@@ -484,6 +485,34 @@ test('自动段：同输入必须逐字节相同（否则每轮重发整段）�
   assert.doesNotMatch(a.text, /^#/m)
   assert.match(a.text, /^- \*\*package-manager\*\* — 这个仓库用 pnpm/m, '正文从条目开始，不带类型标签')
   assert.match(a.text, /\*\*These notes;[\s\S]*complete set\.\*\*\n$/, '收尾句收在最后')
+})
+
+test('注入行：不带内部 id（流程 / playbook 也一样）', () => {
+  // id 是磁盘目录（`_ws/<hash16>/<slug>`），对模型和用户都没有意义。定位靠
+  // `memory_get` 的 id / slot / 名称 / 注入行首句四种写法，后三种注入行里都有。
+  const proc = wsEntry({ kind: 'procedure', title: '发布流程', oneLine: '先跑构建再打 tag' })
+  assert.equal(lineOf(proc), '- **发布流程** — 先跑构建再打 tag')
+  assert.doesNotMatch(lineOf(proc), /_ws\/|\(id:/)
+  const book = wsEntry({ status: 'playbook', title: '发布流程' })
+  assert.equal(lineOf(book), '- **发布流程** — playbook; read the full note for steps')
+  assert.doesNotMatch(lineOf(book), /\(id:/)
+})
+
+test('注入行：边界附在行末，超长按显示宽度截断', () => {
+  const withBoundary = wsEntry({ boundary: '只在这个仓库里' })
+  assert.equal(lineOf(withBoundary), '- **package-manager** — 这个仓库用 pnpm (boundary: 只在这个仓库里)')
+  // 流程 / playbook 行同样带边界：适用条件与类型无关。
+  const proc = wsEntry({ kind: 'procedure', title: '发布流程', oneLine: '先跑构建再打 tag', boundary: '只在发布流程用' })
+  assert.match(lineOf(proc), / \(boundary: 只在发布流程用\)$/)
+  const book = wsEntry({ status: 'playbook', title: '发布流程', boundary: '只在发布流程用' })
+  assert.match(lineOf(book), / \(boundary: 只在发布流程用\)$/)
+  // 超过 INJECT_BOUNDARY_MAX_WIDTH 截断并加省略号（不把一句完整的话截成半句还不标出来）。
+  const long = wsEntry({ boundary: '很'.repeat(INJECT_BOUNDARY_MAX_WIDTH) })
+  const line = lineOf(long)
+  assert.match(line, /…\)$/)
+  assert.ok(textWidthOf(line) < textWidthOf('- **package-manager** — 这个仓库用 pnpm (boundary: ' + '很'.repeat(INJECT_BOUNDARY_MAX_WIDTH) + ')'))
+  // 没有边界时行不变（不出现空括号）。
+  assert.doesNotMatch(lineOf(wsEntry()), /boundary/)
 })
 
 test('自动段：不注入风格行；授权语收在条目之后', () => {
