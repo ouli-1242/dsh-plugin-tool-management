@@ -431,22 +431,42 @@ function routeOf(configured: string, fallback: { provider: string; model: string
   return fallback
 }
 
-/** 供冷路径判断"这次复习要不要重试"。纯函数，好测。 */
+/**
+ * 供冷路径判断"这次复习要不要重试"。纯函数，好测。
+ *
+ * 三档退避 1 / 5 / 30 分钟；第 4 次才进 dead-letter —— 档位与 dead 的界要**错开一位**，
+ * 否则 30 分钟那一档永远用不到（`attempts === 3` 时就死了）。
+ */
 export function nextRetryAt(attempts: number, now = Date.now()): number {
-  // 1min / 5min / 30min；第 3 次之后不再重试（进 dead-letter）。
   const delays = [60_000, 5 * 60_000, 30 * 60_000]
   const idx = Math.max(0, Math.min(delays.length - 1, attempts - 1))
   return now + delays[idx]!
 }
+
+/** 一次复习失败后还能再试几次（与 `nextRetryAt` 的档位数一致）。 */
+export const MAX_REVIEW_ATTEMPTS = 3
 
 /**
  * 失败后的补丁。
  *
  * `now` 与 `episodes.retryable` 用的是同一个时钟：两边各取一次 `Date.now()` 会在边界上
  * 出现"刚写下的 nextAt 已经过期"或"要等到下次才过期"的抖动，重试判定就变得不可复现。
+ *
+ * `transient` 是**环境还没就绪**（拿不到模型路由 / 宿主没给 llm 服务）：那不是这次复习的
+ * 错，重试次数不该被它烧掉 —— 启动重放时路由表必然是空的，按失败计数的话重启三次，
+ * 任何残留项都会在真正跑过一次之前就进 dead-letter。
  */
-export function outboxFailed(item: OutboxItem, error: string, now = Date.now()): Partial<OutboxItem> {
+export function outboxFailed(
+  item: OutboxItem,
+  error: string,
+  now = Date.now(),
+  opts: { transient?: boolean } = {},
+): Partial<OutboxItem> {
+  if (opts.transient === true) {
+    // 不增 attempts：保持 pending，等下一次触发（新压缩 / 重启 / 手动重放）。
+    return { status: 'pending', attempts: item.attempts ?? 0, reason: error, nextAt: nextRetryAt(1, now) }
+  }
   const attempts = (item.attempts ?? 0) + 1
-  if (attempts >= 3) return { status: 'dead', attempts, reason: error }
+  if (attempts > MAX_REVIEW_ATTEMPTS) return { status: 'dead', attempts, reason: error }
   return { status: 'failed', attempts, reason: error, nextAt: nextRetryAt(attempts, now) }
 }

@@ -352,15 +352,27 @@ test('nextRetryAt：1min → 5min → 30min，且不越界', () => {
   assert.equal(nextRetryAt(0, now), now + 1 * MIN)
 })
 
-test('outboxFailed：第 3 次进 dead-letter，不再退避', () => {
+test('outboxFailed：三档退避都用得上，第 4 次才进 dead-letter', () => {
   const item = { id: 's1:1', session: 's1', turn: 1, at: 'x', path: 'p', status: 'pending', attempts: 0 }
   const a = outboxFailed(item, 'boom')
   assert.equal(a.status, 'failed')
   assert.equal(a.attempts, 1)
   assert.ok(a.nextAt > Date.now())
+  // 第 3 次必须还在退避里（30 分钟档），否则那一档永远用不到。
   const b = outboxFailed({ ...item, attempts: 2 }, 'boom')
-  assert.equal(b.status, 'dead')
-  assert.equal('nextAt' in b, false)
+  assert.equal(b.status, 'failed')
+  assert.equal(b.attempts, 3)
+  const c = outboxFailed({ ...item, attempts: 3 }, 'boom')
+  assert.equal(c.status, 'dead')
+  assert.equal('nextAt' in c, false)
+})
+
+test('outboxFailed：环境未就绪不算失败次数（启动重放不会把残留项烧成死信）', () => {
+  const item = { id: 's1:1', session: 's1', turn: 1, at: 'x', path: 'p', status: 'failed', attempts: 2 }
+  const t = outboxFailed(item, '拿不到这一轮的模型路由', Date.now(), { transient: true })
+  assert.equal(t.status, 'pending')
+  assert.equal(t.attempts, 2, '次数不变')
+  assert.ok(typeof t.nextAt === 'number')
 })
 
 // ───────────────────────────── 复习器 ─────────────────────────────
@@ -586,7 +598,7 @@ test('cold：开关关掉时既不封存也不复习', async () => {
   assert.equal(reviewer.calls.length, 0)
 })
 
-test('cold：失败按退避重排，第 3 次进 dead-letter', async () => {
+test('cold：失败按退避重排，三档走完才进 dead-letter', async () => {
   const reviewer = fakeReviewer({ ok: false, learned: 0, rejected: 0, error: 'upstream 500' })
   let now = Date.parse('2026-01-01T00:00:00.000Z')
   const { episodes, cold } = await coldFixture({ reviewer, now: () => now })
@@ -607,11 +619,18 @@ test('cold：失败按退避重排，第 3 次进 dead-letter', async () => {
   now += 5 * MIN
   await cold.drain('s1')
   item = (await episodes.list())[0]
-  assert.equal(item.status, 'dead')
+  assert.equal(item.status, 'failed')
   assert.equal(item.attempts, 3)
+  assert.equal(item.nextAt, now + 30 * MIN)
+
+  now += 30 * MIN
+  await cold.drain('s1')
+  item = (await episodes.list())[0]
+  assert.equal(item.status, 'dead')
+  assert.equal(item.attempts, 4)
   assert.equal((await cold.stats()).dead, 1)
   await cold.drain('s1')
-  assert.equal(reviewer.calls.length, 3)
+  assert.equal(reviewer.calls.length, 4)
 })
 
 test('cold：坏 JSON / 拿不到模型可重试，不再直接标 done', async () => {
@@ -621,6 +640,44 @@ test('cold：坏 JSON / 拿不到模型可重试，不再直接标 done', async 
   const item = (await episodes.list())[0]
   assert.equal(item.status, 'failed')
   assert.equal((await cold.stats()).done, 0)
+})
+
+test('cold：环境未就绪（no-model）不烧重试次数，保持 pending', async () => {
+  const reviewer = fakeReviewer({ ok: false, learned: 0, rejected: 0, reason: 'no-model', error: '拿不到这一轮的模型路由' })
+  let now = Date.parse('2026-01-01T00:00:00.000Z')
+  const { episodes, cold } = await coldFixture({ reviewer, now: () => now })
+  await cold.compactionSummary('s1', 42, CHECKPOINT)
+  let item = (await episodes.list())[0]
+  assert.equal(item.status, 'pending')
+  assert.equal(item.attempts, 0)
+  // 连烧三次也不该死：启动重放时路由表必然是空的，按失败计数会让残留项在真跑之前就死。
+  for (let i = 0; i < 3; i++) {
+    now += 2 * MIN
+    await cold.drain('s1')
+    item = (await episodes.list())[0]
+  }
+  assert.equal(item.status, 'pending')
+  assert.equal(item.attempts, 0)
+  assert.equal((await cold.stats()).dead, 0)
+})
+
+test('cold：开关关掉时队列项标 done（不留永远 pending 的僵尸项）', async () => {
+  let enabled = true
+  let now = Date.parse('2026-01-01T00:00:00.000Z')
+  const reviewer = fakeReviewer({ ok: false, learned: 0, rejected: 0, error: 'upstream 500' })
+  const { episodes, cold } = await coldFixture({
+    reviewer,
+    effectiveOf: async () => cfgOf({ enabled }),
+    now: () => now,
+  })
+  await cold.compactionSummary('s1', 42, CHECKPOINT)
+  // 失败一次后把开关关掉，再让它重试 —— 应该收尾成 done/disabled，而不是继续躺着。
+  enabled = false
+  now += 2 * MIN
+  await cold.drain('s1')
+  const item = (await episodes.list())[0]
+  assert.equal(item.status, 'done')
+  assert.equal(item.reason, 'disabled')
 })
 
 test('cold：预算用光不是失败，标 done 并从队列消失', async () => {
@@ -711,6 +768,8 @@ test('cold：retry 把 dead 项重新排队，计数清零后再跑一遍', asyn
   now += 1 * MIN
   await cold.drain('s1')
   now += 5 * MIN
+  await cold.drain('s1')
+  now += 30 * MIN
   await cold.drain('s1')
   assert.equal((await episodes.list())[0].status, 'dead')
 

@@ -17,7 +17,7 @@ import { captureUserTexts, isGenuineUserMessage, textOfMessage } from './evidenc
 import { checkpointEpisodeOf } from './digest.js'
 import type { EpisodeStore, OutboxItem } from './episodes.js'
 import type { EffectiveEvolutionConfig } from './config.js'
-import { outboxFailed, type createReviewer } from './review.js'
+import { MAX_REVIEW_ATTEMPTS, outboxFailed, type createReviewer } from './review.js'
 
 export interface ColdPathDeps {
   /** 每会话的生效配置（异步：要读三级开关文件）。 */
@@ -117,13 +117,16 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
       })
       return 'done'
     }
-    // 名额用尽是终态；拿不到模型 / 输出坏 JSON 是可恢复的环境问题，走退避重试，
+    // 名额用尽是终态；输出坏 JSON / 模型报错是可恢复的，走退避重试，
     // 但不占「成功学习次数」（见 review.ts 的预算口径）。
     if (out.reason === 'budget') {
       await deps.episodes.mark(item, { status: 'done', reason: 'budget' })
       return 'done'
     }
-    await deps.episodes.mark(item, outboxFailed(item, out.error ?? out.reason ?? 'review failed', clock()))
+    // 拿不到模型路由 / 宿主没给 llm 服务：环境还没就绪，不算这次复习的失败次数。
+    // 启动重放时路由表必然是空的，按失败计数的话重启三次就把残留项全烧成 dead-letter。
+    const transient = out.reason === 'no-model' || out.reason === 'no-llm'
+    await deps.episodes.mark(item, outboxFailed(item, out.error ?? out.reason ?? 'review failed', clock(), { transient }))
     return 'failed'
   }
 
@@ -134,7 +137,12 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
     for (const item of items) {
       const ep = await deps.episodes.read(item.path)
       const cfg = await deps.effectiveOf(item.session, ep?.cwd)
-      if (!cfg.enabled) return
+      if (!cfg.enabled) {
+        // 开关关掉了：这一项**不会再有人复习**，留在队列里只会变成一条永远 pending 的
+        // 僵尸项（界面显示"待复习"、重试也跑不动）。标 done 并写清原因，用户事后能查。
+        await deps.episodes.mark(item, { status: 'done', reason: 'disabled' })
+        continue
+      }
       await reviewOne(item, cfg)
     }
   }
@@ -217,7 +225,8 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
 
     async replay() {
       const all = await deps.episodes.list()
-      const targets = all.filter((x) => x.status === 'pending' || (x.status === 'failed' && (x.attempts ?? 0) < 3))
+      const targets = all.filter((x) => x.status === 'pending'
+        || (x.status === 'failed' && (x.attempts ?? 0) <= MAX_REVIEW_ATTEMPTS))
       let done = 0
       let failed = 0
       for (const item of targets) {
