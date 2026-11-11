@@ -221,6 +221,10 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-review-text{margin:0;max-height:40vh;overflow:auto;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;white-space:pre-wrap;word-break:break-word}
 .dsm-evo-review{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
 .dsm-evo-review-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* 折叠标题：与其它分节标题同一档，但可点。下划线与内边距都不要 —— 它读起来该像一行标题，
+   不像按钮（真正的按钮是右边那颗「重试全部」）。 */
+.dsm-evo-review-toggle{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;font:inherit;color:inherit;cursor:pointer}
+.dsm-evo-review-toggle:disabled{cursor:default}
 .dsm-evo-review-head .dsm-help{margin:0;margin-left:auto}
 .dsm-evo-review-fails .dsm-evo-review-head .dsm-help{margin-left:0}
 .dsm-evo-review-list{display:flex;flex-direction:column}

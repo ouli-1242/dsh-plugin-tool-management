@@ -1214,9 +1214,21 @@
             var d = new Date(at)
             return isNaN(d.getTime()) ? '' : d.toLocaleString()
           }
+          /**
+           * 行内时间：当天只给时分，跨天补上日期。
+           *
+           * 只写时分会把前几天的记录显示成和今天一模一样的一串数字 —— 那正是「最近」这一列
+           * 最容易读错的地方（用户 2026-11-11 实测）。
+           */
           function evoTimeShort(at) {
             var d = new Date(at)
-            return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            if (isNaN(d.getTime())) return ''
+            var hhmm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            var now = new Date()
+            var sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+            if (sameDay) return hhmm
+            var md = (d.getMonth() + 1) + '-' + d.getDate()
+            return d.getFullYear() === now.getFullYear() ? md + ' ' + hhmm : d.getFullYear() + '-' + md + ' ' + hhmm
           }
 
           /**
@@ -1240,6 +1252,12 @@
                 var id = String(item.id || '')
                 if (id !== '' && seen[id]) return
                 if (id !== '') seen[id] = true
+                // 只留**现在还留着**的条目（用户 2026-11-11）：归档、已取代、已删除的都是
+                // 历史，它们在「已学」里也算过一遍，再挂在这里只会越积越多。
+                var cur = (evo.entries || []).find(function (x) { return x.id === id })
+                if (cur === undefined) return
+                var st = String(cur.status || '')
+                if (st !== 'candidate' && st !== 'active' && st !== 'core' && st !== 'playbook') return
                 learned.push({ item: item, at: run.at })
               })
             })
@@ -1255,9 +1273,18 @@
               if (recent.length > 0) emptyLine = t('evo.review.nothing')
               else if (failures.length === 0) emptyLine = t('evo.review.empty')
             }
+            // 学到的那几行默认收起（用户 2026-11-11）：它是**历史**，不是待办。开着只会让
+            // 「学习记录」这张卡越翻越长，而真正需要动手的是下面的失败项 —— 那一块不折叠。
+            var reviewOpen = collapsed['evo:review'] !== true
             return React.createElement('div', { className: 'dsm-evo-review' },
               React.createElement('div', { className: 'dsm-evo-review-head' },
-                React.createElement('span', { className: 'dsm-evo-section-title' }, t('evo.queue.title')),
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-evo-section-title dsm-evo-review-toggle',
+                  'aria-expanded': reviewOpen && learned.length > 0,
+                  disabled: learned.length === 0,
+                  onClick: function () { toggleCollapse('evo:review', reviewOpen) },
+                }, t('evo.queue.title'),
+                  learned.length > 0 ? React.createElement('span', { key: 'n', className: 'dsm-count dsm-count-tight' }, String(learned.length)) : null),
                 lastAt ? React.createElement('span', { className: 'dsm-help' }, t('evo.review.last', { time: evoTimeText(lastAt) })) : null,
                 (failed + dead + orphan > 0)
                   ? React.createElement('button', {
@@ -1267,7 +1294,7 @@
                       onClick: function () { replayEvolution() },
                     }, busy ? t('evo.queue.busy') : t('evo.queue.retryAll'))
                   : null),
-              learned.length > 0
+              learned.length > 0 && reviewOpen
                 ? React.createElement('div', { className: 'dsm-evo-review-list' },
                     learned.map(function (row, i) {
                       var item = row.item
@@ -1278,17 +1305,11 @@
                         : (String(item.title || '').trim() || evolutionNameOf({ oneLine: item.text, id: item.id }))
                       var body = String(item.text || '').trim()
                       // 状态取**现在**的，不取学习当时的：`learnedItems` 是那一刻的快照，
-                      // 之后确认 / 否决 / 删除都不会回写它。照快照画标签，用户处理完以后
-                      // 这一列仍挂着「待确认」，与上面的统计（0 条）自相矛盾。
-                      // 列表里查不到 = 已删除（归档的仍在列表里，`all` 拿得到）。
-                      var nowStatus = hit ? String(hit.status || '') : 'deleted'
-                      var statusKey = nowStatus === 'candidate' ? 'evo.tag.candidate'
-                        : nowStatus === 'active' || nowStatus === 'core' || nowStatus === 'playbook' ? 'evo.tag.active'
-                          : nowStatus === 'archived' ? 'evo.tag.archived'
-                            : nowStatus === 'superseded' ? 'evo.tag.superseded'
-                              : 'evo.review.deleted'
-                      var statusTone = nowStatus === 'candidate' ? 'dsm-tag-warn'
-                        : nowStatus === 'active' || nowStatus === 'core' || nowStatus === 'playbook' ? 'dsm-tag-on' : ''
+                      // 之后确认 / 否决 / 删除都不会回写它。上面的过滤已经只放行
+                      // candidate / active / core / playbook 四种，这里只剩「待确认」与「生效」。
+                      var nowStatus = hit ? String(hit.status || '') : ''
+                      var statusKey = nowStatus === 'candidate' ? 'evo.tag.candidate' : 'evo.tag.active'
+                      var statusTone = nowStatus === 'candidate' ? 'dsm-tag-warn' : 'dsm-tag-on'
                       return React.createElement('div', { key: String(item.id || '') + ':' + i, className: 'dsm-evo-review-row' },
                         React.createElement('div', { className: 'dsm-evo-review-main' },
                           React.createElement('span', { className: 'dsm-evo-review-title' }, title),

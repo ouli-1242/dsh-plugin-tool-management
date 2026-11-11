@@ -151,6 +151,10 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         // 只有这一个被收窄，用户只能以为计数坏了。
         const pending = entries.filter((e) => e.status === 'candidate').length
         const archived = entries.filter((e) => e.status === 'archived').length
+        // 「已学」只数**还留着**的条目：归档（用户否决 / 删除 / 维护扫描）与已取代的都是
+        // 历史，它们留在 catalog 里只是为了能恢复。照总数报，用户删得越多数字越大 ——
+        // 而他真正想知道的正是"现在还有多少条"。
+        const retained = entries.filter((e) => e.status !== 'archived' && e.status !== 'superseded').length
 
         return {
           ok: true,
@@ -167,7 +171,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             : (sessionRecord ? layerView(sessionRecord.evolution) : { defined: false, values: {} }),
           defaults: global,
           auto: {
-            entries: entries.length,
+            entries: retained,
+            total: entries.length,
             byLayer,
             byStatus,
             needsReview,
