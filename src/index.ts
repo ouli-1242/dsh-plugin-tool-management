@@ -18,6 +18,7 @@ import { createHistoryDomain } from './sessions/history.js'
 import type { SessionsRegistry } from './sessions/history.js'
 import { createSkillsService, pluginLog } from './skills/service.js'
 import { renameWithRetry, resolveDshHome, trashRootPath } from './skills/core.js'
+import { setOfficialPresetId } from './skills/official.js'
 import { createPromptsService } from './prompts/service.js'
 import { createQuickPromptsService } from './prompts/quick-service.js'
 import { isValidPresetId } from './prompts/preset-id.js'
@@ -467,6 +468,10 @@ export default {
       }
     }
     const skillsService = createSkillsService(ctx, { sessionViewOf: skillProviderSessionViewOf })
+    // 官方内置技能里那份「预设技能」收不收，看宿主默认预设有没有把预设技能目录接进
+    // 会话上下文 —— 名册里的默认值（用户选过的优先）才是这个宿主真正会注入的那一份。
+    // 必须在第一次物化之前设定：物化结果按进程缓存。
+    setOfficialPresetId(presetRosterOf(ctx)?.defaultId)
     try {
       ctx.effect(() => skillsService.registerProviders(), 'dsh-plugin-tool-management: skills providers')
     } catch (e) {

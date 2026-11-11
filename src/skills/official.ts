@@ -6,7 +6,7 @@
 // 文件与状态，宿主耦合集中在这里；两份模块级缓存（officeRuntimeSectionCache、
 // officialRootCache）随段同搬，仍是每进程一份的单例。
 import { createRequire } from "node:module";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { SkillSource } from "./core-types.js";
 import { resolveDshHome } from "./homes.js";
@@ -21,7 +21,7 @@ import { clearRuntimeNote, noteRuntime } from "../compat/runtime-notes.js";
 //     `process.platform === "win32"`，rank 600）。
 //   - 预设技能：dsh-agent-preset 的 skills 根（dsh-doc 等）—— 官方预设经
 //     dsh-skill-filesystem 的 customSkillDirs 把这份目录接进会话上下文，属于
-//     「官方自带」，一并收录。
+//     「官方自带」，一并收录；收不收看宿主默认预设接没接它（见下方「预设技能」段）。
 //   - web 版：沙盒诊断技能由宿主注入（门控只看 win32 —— 用户截图实锤，
 //     按「web 不注入」的误判把 web 挡在门外，会让页面不显示而宿主照注）；office
 //     插件 web 宿主不装配、不注入，但用户要求技能页照样把它们暴露出来
@@ -162,12 +162,85 @@ function officialSandboxSource(): string | null {
  * 官方预设经 dsh-skill-filesystem 的 customSkillDirs 把这份目录接进会话上下文，
  * 它和 office / sandbox 一样是「官方自带」，一并收录。桌面 asar 直连优先，其次宿主
  * 进程解析链；解析不到一律 null —— 不凭空列出。
+ *
+ * 这份目录**本身**不等于「宿主在注入」：接不接由预设决定（见 {@link presetInjectsPresetSkills}）。
  */
 function officialPresetSource(): string | null {
   const source =
     desktopPackageDir("@deepseek-ai/dsh-agent-preset", "skills") ??
     resolvedPackageDir("@deepseek-ai/dsh-agent-preset", "skills");
   return source !== null && hasSkillDocs(source) ? source : null;
+}
+
+// ── 预设技能：宿主到底注入哪一份 ───────────────────────────────────────────
+//
+// 官方预设给 skill-filesystem 配 `customSkillDirs`，指向 agent-preset 的 skills 目录；
+// 宿主把那份目录里的技能**整目录**注入会话上下文（没有逐个技能的选择余地）。
+// 所以「宿主注入的预设技能」= 「接了这个目录的预设」×「那份目录里的技能」。
+//
+// 收不收这份目录，看**宿主默认预设**（用户选过的默认值优先）接没接它：接了才收 ——
+// 没收的预设不注入那些技能，列进「官方内置」就是凭空多出来的条目。
+// 宿主把预设组合放在 dsh-web-app 的 presets/<id>.patch.yml 里，判据是那份文件同时
+// 出现 customSkillDirs 与 dsh-agent-preset（官方就用这条路径表达「接预设技能」）。
+// 读不到组合文件 → 保守当「接了」：宁可多列一条，也不让官方自带技能从列表里消失。
+
+/** 宿主默认预设的 id；官方部署的默认值是 standard，用户在名册里选过别的就以那个为准。 */
+export const DEFAULT_PRESET_ID = "standard";
+
+let officialPresetId = DEFAULT_PRESET_ID;
+
+/**
+ * 设定宿主默认预设的 id（由插件启动时按宿主名册的默认值设置）。
+ *
+ * 必须在第一次物化官方技能之前调用：物化结果按进程缓存，之后再改不重算。
+ *
+ * @param id - 宿主名册里的默认预设 id；空值表示沿用 standard。
+ */
+export function setOfficialPresetId(id: string | undefined): void {
+  const clean = typeof id === "string" ? id.trim() : "";
+  if (clean !== "") officialPresetId = clean;
+}
+
+/** 宿主某个预设的组合文本；取不到返回 null。 */
+function readHostPresetComposition(presetId: string): string | null {
+  const subpath = `presets/${presetId}.patch.yml`;
+  for (const path of [
+    desktopPackageDir("@deepseek-ai/dsh-web-app", subpath),
+    resolvedPackageDir("@deepseek-ai/dsh-web-app", subpath),
+  ]) {
+    if (path === null) continue;
+    try {
+      return readFileSync(path, "utf8");
+    } catch {
+      /* 换下一个来源 */
+    }
+  }
+  return null;
+}
+
+/**
+ * 一份预设组合文本里有没有「把预设技能目录接进会话上下文」这件事。
+ *
+ * 官方预设给 skill-filesystem 配 `customSkillDirs`，用一条路径表达式指向 agent-preset 的
+ * skills 目录 —— 组合文本里同时出现 customSkillDirs 与 dsh-agent-preset 就是这个意思。
+ *
+ * @param text - 预设组合文本。
+ * @returns 接了预设技能目录返回 true。
+ */
+export function presetCompositionWiresPresetSkills(text: string): boolean {
+  return text.includes("customSkillDirs") && text.includes("dsh-agent-preset");
+}
+
+/**
+ * 宿主这个预设有没有把预设技能目录接进会话上下文。
+ *
+ * @param presetId - 预设 id。
+ * @returns 接了返回 true；读不到组合文件时按「接了」处理（保守多列）。
+ */
+function presetInjectsPresetSkills(presetId: string): boolean {
+  const text = readHostPresetComposition(presetId);
+  if (text === null) return true;
+  return presetCompositionWiresPresetSkills(text);
 }
 
 // ── office 技能的「Installed LibreOffice Kit」段 ────────────────────────────
@@ -346,8 +419,11 @@ function cleanupLegacyOfficialLayout(root: string): void {
 function materializeOfficialSkills(): string | null {
   const office = officialOfficeSource();
   const sandbox = officialSandboxSource();
+  // 预设技能只在宿主默认预设真的接了这份目录时收：没接的预设不注入它们，
+  // 列进「官方内置」就是凭空多出来的条目（判据见 presetInjectsPresetSkills）。
   const preset = officialPresetSource();
-  if (office === null && sandbox === null && preset === null) return null;
+  const presetInjected = preset !== null && presetInjectsPresetSkills(officialPresetId);
+  if (office === null && sandbox === null && !presetInjected) return null;
   // 每种宿主形态只整目录重建**自己**这份（竞态教训见上方块注释）；对方形态的子目录
   // 与共享层残留清理互不干涉。
   const root = join(
@@ -360,9 +436,9 @@ function materializeOfficialSkills(): string | null {
     rmSync(root, { recursive: true, force: true });
     // office：整个 assets 根拷进来（每个技能一个子目录，目录之间的相对结构原样保留）。
     if (office !== null) copyDirectorySync(office, root);
-    // 预设技能：技能根下的每个技能目录整体拷进来。这份来源是机器级静态的 ——
-    // 预设没接 customSkillDirs 的模式（minimal / ptc）也会在技能页看到它们。
-    if (preset !== null) copyPresetSkills(preset, root);
+    // 预设技能：技能根下的每个技能目录整体拷进来。宿主默认预设没接这份目录时
+    // 整份不收 —— 那些技能不会被注入，列出来就是凭空多出来的条目。
+    if (presetInjected && preset !== null) copyPresetSkills(preset, root);
     if (sandbox !== null) {
       copyDirectorySync(sandbox, join(root, basename(sandbox)));
     }

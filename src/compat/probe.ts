@@ -80,6 +80,8 @@ export {
 } from './host-roots.js'
 export type { OperationName, RouteDecision } from './host-roots.js'
 import { hostRootCandidates, hostVersionOf, IDENTITY_PACKAGES, looksLikeHostPackageDir, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
+import { DEFAULT_PRESET_ID, presetCompositionWiresPresetSkills } from '../skills/official.js'
+import { presetRosterOf } from './preset-reach.js'
 
 // 「宿主在哪」这份口径只有一份（host-roots.ts 的 hostRootCandidates）。静态能力表里有条目要
 // 按宿主侧解析结果决定**这一轮能不能查**（`staticWhen`，见 connection.admit 那条），而
@@ -522,7 +524,7 @@ export function assessHost(ctx: {
   // 配置 schema 这类"导出对象上的字段名"：canary 只能证明字符串还在，读一次 JSON 表示才能
   // 确认插件写出的键仍被官方接受。解析不到就不出结论（契约清单会报包缺失）。
   const schemaFindings = inspectHostSchemaContracts(hostRoot)
-  const assetFindings = inspectOfficialSkillAssets(hostRoot)
+  const assetFindings = inspectOfficialSkillAssets(hostRoot, defaultPresetIdOf(ctx))
   const findings = CAPABILITY_SPECS.map((spec) => {
     const slot = targets[spec.owner]
     return inspectCapability(spec, slot.target, slot.reference)
@@ -718,7 +720,22 @@ function hostPackageStatuses(hostRoot: string | null, sameAsHost: Record<string,
 }
 
 /**
- * 官方技能资产：技能页把宿主安装里的 office / sandbox 技能整目录物化到插件自家目录。
+ * 宿主默认预设的 id：名册里的默认值（用户选过的优先）。
+ *
+ * 判定「宿主注入的预设技能」要看这份预设的组合文件；名册取不到时用官方部署的默认值。
+ */
+function defaultPresetIdOf(ctx: { get?: (name: string) => unknown }): string {
+  try {
+    const roster = presetRosterOf(ctx)
+    const id = roster?.defaultId
+    return typeof id === 'string' && id.trim() !== '' ? id.trim() : DEFAULT_PRESET_ID
+  } catch {
+    return DEFAULT_PRESET_ID
+  }
+}
+
+/**
+ * 官方技能资产：技能页把宿主安装里的 office / sandbox / 预设技能整目录物化到插件自家目录。
  * 包还在、`assets/<技能>/SKILL.md` 的形态变了，技能页只会少几个来源（或来源为空），
  * 而能力表全绿 —— 所以单独探测一次。
  *
@@ -726,8 +743,12 @@ function hostPackageStatuses(hostRoot: string | null, sameAsHost: Record<string,
  * 注入，预设技能按预设注入），合成一行会让「其中一个没了」看起来像「整个技能页坏了」。
  *
  * @param hostRoot - `.../node_modules/@deepseek-ai` 或 `null`。
+ * @param presetId - 宿主默认预设 id；决定预设技能目录被不被注入。
  */
-function inspectOfficialSkillAssets(hostRoot: string | null): CapabilityFinding[] {
+function inspectOfficialSkillAssets(
+  hostRoot: string | null,
+  presetId: string = DEFAULT_PRESET_ID,
+): CapabilityFinding[] {
   if (hostRoot === null) return []
   const requireFromHost = createRequire(join(dirname(hostRoot), 'package.json'))
   const resolvePackage = (name: string): string | null => {
@@ -813,17 +834,33 @@ function inspectOfficialSkillAssets(hostRoot: string | null): CapabilityFinding[
           .filter((entry) => entry.isDirectory() && existsSync(join(skills, entry.name, 'SKILL.md')))
           .map((entry) => entry.name)
       } catch { names = [] }
+      // 宿主把预设技能目录接进会话上下文与否，看默认预设的组合文件（官方部署的默认
+      // 预设 id 是 standard）：接了才注入，没接的预设不注入 —— 这一行据此说人话。
+      let wired: boolean | null = null
+      try {
+        const composition = readFileSync(
+          join(hostRoot, 'dsh-web-app', 'presets', `${presetId}.patch.yml`),
+          'utf8',
+        )
+        wired = presetCompositionWiresPresetSkills(composition)
+      } catch { /* 读不到就按「接了」处理，与物化侧同一口径 */ }
       out.push(names.length === 0
         ? {
             id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',
             owner: 'plugin', fallback: 'inform-only', state: 'not-available', missing: [], optional: true,
             detail: 'agent-preset 包在，但 skills 下没有技能目录：这份宿主不带预设技能。',
           }
-        : {
-            id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',
-            owner: 'plugin', fallback: 'inform-only', state: 'ok', missing: [],
-            detail: `预设技能源在位（${names.length} 个技能目录）`,
-          })
+        : wired === false
+          ? {
+              id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',
+              owner: 'plugin', fallback: 'inform-only', state: 'not-available', missing: [], optional: true,
+              detail: `宿主默认预设（${presetId}）没有接预设技能目录：这份宿主不注入预设技能，技能页也不列它们。`,
+            }
+          : {
+              id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',
+              owner: 'plugin', fallback: 'inform-only', state: 'ok', missing: [],
+              detail: `预设技能源在位（${names.length} 个技能目录）`,
+            })
     }
   }
   return out
