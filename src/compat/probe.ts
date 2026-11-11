@@ -155,14 +155,20 @@ export function isSourceInstall(): boolean {
  * 成员一个没少；新增项都是可选参数或新方法（`tools.register` 的准入选项、`executable` /
  * `resolve`、文件服务的 `deleteFile` / `move` / `patch`）。`agent/pre-step` 只增
  * `modelSelection` 字段；`dsh-skill-office` 的七个内置技能名与 LibreOffice Kit 注入名单未变。
+ *
+ * 0.2.2-rc.2 的验证依据：把 rc.1 → rc.2 的包逐份对拍。两处契约变了 —— 子代理运行时撤掉了
+ * provider 名册枚举（只剩按名查），激活请求把任务字段从 `request` 里挪到了顶层；本插件改成
+ * 按名查 provider、请求两种形状都带，两代都成立。其余契约逐条比对无漂移。
  */
 export const EXPECTED_PEER_RANGE = '>=0.2.2-rc.1 <0.2.3'
 /**
  * peer range 的下界。仍从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
  *
- * 范围收窄到一代之后它**与 VERIFIED_HOST_VERSION 重合**（都是 0.2.2-rc.1）—— 这是正确的：
- * 适配的那一代就是唯一允许安装的那一代。保留这个导出是因为它进了 `compat-status` 的载荷，
- * doctor 与外部脚本可能仍在读；语义仍是"最早支持哪一代"，只是现在只有一代。
+ * 它取的是范围的**下界**，与 `VERIFIED_HOST_VERSION`（最后验证过的那一版）不是同一件事：
+ * 下界是「这一代里最早能装的一版」，基准是「最近一次对着验证的一版」。同一代内追加 rc 时
+ * 基准前移、范围不动 —— 因为预发布只在同元组内比较，追加的 rc 本来就落在范围里
+ * （见 `docs/HOST-ADAPT.md` §2.2 与 §3.4）。保留这个导出是因为它进了 `compat-status`
+ * 的载荷，doctor 与外部脚本可能仍在读；语义仍是"最早支持哪一代"。
  */
 export const EXPECTED_MIN_HOST_VERSION =
   EXPECTED_PEER_RANGE.match(/(\d+\.\d+\.\d+(?:-rc\.\d+)?)/)?.[1] ?? VERIFIED_HOST_VERSION

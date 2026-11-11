@@ -2,7 +2,7 @@
 
 > 本文件由 `node scripts/compat-matrix.mjs` 生成，请勿手工编辑。
 >
-> 插件 0.22.3 · 生成于 2026-11-07 · 验证基准 DSH `0.2.2-rc.1` · 安装期适配范围 `>=0.2.2-rc.1 <0.2.3`
+> 插件 0.22.6 · 生成于 2026-11-11 · 验证基准 DSH `0.2.2-rc.2` · 安装期适配范围 `>=0.2.2-rc.1 <0.2.3`
 
 这张表回答一个问题：**同一个插件，装在不同版本的 DSH 宿主上，哪些能力还在、哪些已经对不上。**
 它只做静态判定（读宿主安装里的官方包，看原型上的成员在不在），不启动宿主、不碰会话数据。
@@ -28,56 +28,57 @@
 
 | DSH 版本 | 安装形态 | 安装位置 | 在适配范围内 | 静态可查 | 缺失 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0.2.2-rc.1`（基准） | 本地安装 | `C:\Users\ouli\AppData\Roaming\npm\node_modules\@deepseek-ai` | 是 | 26/28 | 2 | 与本插件适配基准一致（另 2 项可选原生入口不存在，走适配器） |
-| `0.2.1-rc.3` | npx 缓存 | `D:\Cache\npm\_npx\a3a60f53b42a237b\node_modules\@deepseek-ai` | **否** | 25/28 | 3 | **超出适配范围**（本插件只适配 `0.2.2-rc.1`） |
-| `0.2.1-rc.2` | npx 缓存 | `D:\Cache\npm\_npx\50d2c97abf8f4186\node_modules\@deepseek-ai` | **否** | 25/28 | 3 | **超出适配范围**（本插件只适配 `0.2.2-rc.1`） |
-| `0.2.0-rc.2` | npx 缓存 | `D:\Cache\npm\_npx\1e7f6d9597241db0\node_modules\@deepseek-ai` | **否** | 25/28 | 3 | **超出适配范围**（本插件只适配 `0.2.2-rc.1`） |
+| `0.2.2-rc.1` | 本地安装 | `C:\Users\ouli\AppData\Roaming\npm\node_modules\@deepseek-ai` | 是 | 26/28 | 2 | 成员齐备，行为未实测（另 2 项可选原生入口不存在，走适配器） |
+| `0.2.1-rc.3` | npx 缓存 | `D:\Cache\npm\_npx\a3a60f53b42a237b\node_modules\@deepseek-ai` | **否** | 25/28 | 3 | **超出适配范围**（本插件只适配 `0.2.2-rc.2`） |
+| `0.2.1-rc.2` | npx 缓存 | `D:\Cache\npm\_npx\50d2c97abf8f4186\node_modules\@deepseek-ai` | **否** | 25/28 | 3 | **超出适配范围**（本插件只适配 `0.2.2-rc.2`） |
+| `0.2.0-rc.2` | npx 缓存 | `D:\Cache\npm\_npx\1e7f6d9597241db0\node_modules\@deepseek-ai` | **否** | 25/28 | 3 | **超出适配范围**（本插件只适配 `0.2.2-rc.2`） |
 
 ## 能力
 
 | 能力 | 类型 | 可选 | `0.2.2-rc.1` | `0.2.1-rc.3` | `0.2.1-rc.2` | `0.2.0-rc.2` |
 | --- | --- | --- | --- | --- | --- | --- |
-| `workspace.read-state` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `workspace.read-table` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.read-state` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `workspace.read-table` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
 | `workspace.index-shape` | read |  | — | — | — | — |
-| `workspace.read-header` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `workspace.enqueue` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `workspace.set-state` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `workspace.index-header` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `workspace.archive-native` | write | 可选 | 已验证 | 未适配 | 未适配 | 未适配 |
-| `workspace.unarchive-native` | write | 可选 | 已验证 | 未适配 | 未适配 | 未适配 |
+| `workspace.read-header` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `workspace.enqueue` | write |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `workspace.set-state` | write |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `workspace.index-header` | write |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `workspace.archive-native` | write | 可选 | 未实测 | 未适配 | 未适配 | 未适配 |
+| `workspace.unarchive-native` | write | 可选 | 未实测 | 未适配 | 未适配 | 未适配 |
 | `workspace.batch-native` | write | 可选 | 不可用 | 不可用 | 不可用 | 不可用 |
 | `workspace.delete-native` | delete | 可选 | 不可用 | 不可用 | 不可用 | 不可用 |
-| `sessions.detach-live` | delete |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `sessions.cold-announce` | delete |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `sessions.live-access` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `sessions.detach-live` | delete |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `sessions.cold-announce` | delete |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `sessions.live-access` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
 | `persistence.list` | read |  | — | — | — | — |
 | `persistence.transcript-locate` | delete |  | — | — | — | — |
 | `persistence.transcript-read` | read | 可选 | — | — | — | — |
-| `projection.write` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `projection.write` | write |  | 未实测 | 未适配 | 未适配 | 未适配 |
 | `projection.table-delete` | delete |  | — | — | — | — |
-| `projection.cached-title` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `projection.cached-title` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
 | `projection.delete-native` | delete | 可选 | — | — | — | — |
-| `settings.document-path` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `settings.document-path` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
 | `fs.patch-io` | write |  | — | — | — | — |
 | `preset.roster-surface` | read |  | — | — | — | — |
-| `agentPreset.register` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `tools.restrict-method` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `agentPreset.register` | write |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `tools.restrict-method` | write |  | 未实测 | 未适配 | 未适配 | 未适配 |
 | `agent.created-event` | read |  | — | — | — | — |
-| `connection.admit` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `connection.admit` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
 | `subagents.runtime` | write |  | — | — | — | — |
 | `llm.model-catalog` | read |  | — | — | — | — |
+| `llm.prepare-call` | read |  | — | — | — | — |
 | `approval.effective-policy` | read |  | — | — | — | — |
-| `tools.schema-list` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `skills.register-provider` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `agents.list` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `pluginInventory.list` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `webServer.register` | write |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `sandboxPolicy.resolve` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `tools.get-method` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
-| `tools.guard-dispatch` | write |  | 已验证 | 不可用 | 不可用 | 不可用 |
+| `tools.schema-list` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `skills.register-provider` | write |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `agents.list` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `pluginInventory.list` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `webServer.register` | write |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `sandboxPolicy.resolve` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `tools.get-method` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
+| `tools.guard-dispatch` | write |  | 未实测 | 不可用 | 不可用 | 不可用 |
 | `tools.mcp-resource-args` | read |  | — | — | — | — |
-| `systemPrompt.mcp-section` | read |  | 已验证 | 未适配 | 未适配 | 未适配 |
+| `systemPrompt.mcp-section` | read |  | 未实测 | 未适配 | 未适配 | 未适配 |
 
 ## 操作
 

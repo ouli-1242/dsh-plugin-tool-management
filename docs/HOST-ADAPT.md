@@ -15,11 +15,11 @@
 
 | 常量 | 位置 | 当前值 |
 | --- | --- | --- |
-| `VERIFIED_HOST_VERSION` | `src/compat/host-roots.ts` | `0.2.2-rc.1` |
+| `VERIFIED_HOST_VERSION` | `src/compat/host-roots.ts` | `0.2.2-rc.2` |
 | `EXPECTED_PEER_RANGE` | `src/compat/probe.ts` | `>=0.2.2-rc.1 <0.2.3` |
 | `EXPECTED_MIN_HOST_VERSION` | `src/compat/probe.ts` | 从 `EXPECTED_PEER_RANGE` 派生，不手写 |
 
-`EXPECTED_MIN_HOST_VERSION` 从范围派生而不是单独手写，是为了避免两处漂移。范围收窄到一代之后它与 `VERIFIED_HOST_VERSION` 重合（都是 `0.2.2-rc.1`）—— 这是正确的：适配的那一代就是唯一允许安装的那一代。这个导出仍然保留是因为它进了 `compat-status` 的载荷。
+`EXPECTED_MIN_HOST_VERSION` 从范围派生而不是单独手写，是为了避免两处漂移。它取的是范围的**下界**（`0.2.2-rc.1`），而 `VERIFIED_HOST_VERSION` 是**最后验证过的那一版**（`0.2.2-rc.2`）—— 两者不同是正常的：范围下界是「这一代里最早能装的一版」，基准是「最近一次对着验证的一版」，同代内追加 rc 只动后者（见 §2.2 与 §3.4）。这个导出仍然保留是因为它进了 `compat-status` 的载荷。
 
 ### 1.2 三处同源
 
