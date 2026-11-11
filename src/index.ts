@@ -4769,10 +4769,29 @@ export default {
      * 每日维护：轮末与启动共用。`sweepInFlight` 挡住并发轮末的重复扫描 ——
      * `lastSweepAt` 要到扫描结束才写，只查它的话两个会话同时轮末会各跑一遍。
      */
+    /**
+     * 有任何一档开着自主记忆吗。
+     *
+     * 不能只看全局设置：只给某个工作区 / 某个对话打开（全局两层都关）是完全支持的用法，
+     * 那种用户按全局判断就永远不会触发维护 —— 记忆照样在攒，只是没人清。
+     */
+    const anyEvolutionLayerOn = (view: ReturnType<typeof evolutionRuntime.view>): boolean => {
+      if (view.settings.learnGlobal || view.settings.learnWorkspace) return true
+      for (const record of Object.values(view.workspaces.workspaces)) {
+        const ov = record?.evolution
+        if (ov !== undefined && (ov.learnGlobal === true || ov.learnWorkspace === true)) return true
+      }
+      for (const record of Object.values(view.sessions.sessions)) {
+        const ov = record?.evolution
+        if (ov !== undefined && (ov.learnGlobal === true || ov.learnWorkspace === true)) return true
+      }
+      return false
+    }
+
     const sweepIfDue = async (): Promise<void> => {
       if (sweepInFlight) return
       const view = evolutionRuntime.view()
-      if (!view.settings.learnGlobal && !view.settings.learnWorkspace) return
+      if (!anyEvolutionLayerOn(view)) return
       if (!shouldSweepNow(view.state.watermarks.lastSweepAt)) return
       const run = sweepRunner
       if (!run) return

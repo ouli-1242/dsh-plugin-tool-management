@@ -831,17 +831,19 @@ test('op：evolution-queue 只列未完成的项，dead 排最前', async () => 
         { id: 's1:2', session: 's1', turn: 2, at: 'x', path: 'p', status: 'pending', attempts: 0 },
         { id: 's1:3', session: 's1', turn: 3, at: 'x', path: 'p', status: 'dead', attempts: 3, reason: 'upstream 500' },
         { id: 's1:4', session: 's1', turn: 4, at: 'x', path: 'p', status: 'failed', attempts: 1, reason: 'timeout', nextAt: 99 },
+        { id: 's1:5', session: 's1', turn: 5, at: 'x', path: 'p', status: 'orphan', attempts: 0, reason: 'episode file missing' },
       ]
     },
-    async stats() { return { pending: 1, failed: 1, dead: 1, done: 1 } },
+    async stats() { return { pending: 1, failed: 1, dead: 1, done: 1, orphan: 1 } },
   }
   const ops = buildEvolutionOps({ cold: () => cold, message })
   const res = await ops['evolution-queue']({})
   assert.equal(res.ok, true)
-  assert.deepEqual(res.stats, { pending: 1, failed: 1, dead: 1, done: 1 })
-  assert.deepEqual(res.items.map((x) => x.id), ['s1:3', 's1:4', 's1:2'])
+  assert.deepEqual(res.stats, { pending: 1, failed: 1, dead: 1, done: 1, orphan: 1 })
+  // orphan 必须出现在未完成清单里：它永远不会自己好，但用户得能看见并重试。
+  assert.deepEqual(res.items.map((x) => x.id), ['s1:3', 's1:5', 's1:4', 's1:2'])
   assert.equal(res.items[0].reason, 'upstream 500')
-  assert.equal(res.items[1].nextAt, 99)
+  assert.equal(res.items[2].nextAt, 99)
   assert.deepEqual(res.recent.map((x) => x.id), ['s1:1'])
   assert.equal(res.recent[0].learnedItems[0].id, 'm1')
 })

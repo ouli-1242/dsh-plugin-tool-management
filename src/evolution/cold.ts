@@ -51,7 +51,7 @@ export interface ColdPathHandle {
   /** 手动触发（界面「立即复习」/ 测试）。 */
   drain(sessionId: string): Promise<void>
   /** 诊断：队列统计。 */
-  stats(): Promise<{ pending: number; failed: number; dead: number; done: number }>
+  stats(): Promise<{ pending: number; failed: number; dead: number; done: number; orphan: number }>
   /** 队列全貌（界面「待复习 / 失败 / 无法处理」三栏）。 */
   queue(): Promise<OutboxItem[]>
   /** 手动重试一条（含 dead-letter 里的）：用户明确要求时才把计数清零。 */
@@ -167,31 +167,41 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
   async function drain(sessionId: string): Promise<void> {
     const items = await deps.episodes.retryable(sessionId, BATCH, clock())
     if (items.length === 0) return
-    // 用 episode 里存的 cwd 取配置：这里是异步路径，拿不到活的 session 对象。
-    for (const item of items) {
-      const ep = await deps.episodes.read(item.path)
-      const cfg = await deps.effectiveOf(item.session, ep?.cwd)
-      if (!cfg.enabled) {
-        // 开关关掉了：这一项**不会再有人复习**，留在队列里只会变成一条永远 pending 的
-        // 僵尸项（界面显示"待复习"、重试也跑不动）。标 done 并写清原因，用户事后能查。
-        await deps.episodes.mark(item, { status: 'done', reason: 'disabled' })
-        continue
-      }
-      await reviewOne(item, cfg)
-    }
+    for (const item of items) await reviewItem(item)
   }
 
-  /** 同一会话的复习串行（不同会话可以并行）。 */
-  function schedule(sessionId: string): Promise<void> {
+  /** 复习一条指定的项（手动重试走这条路：整队重跑碰不到排在 BATCH 之后的那条）。 */
+  async function reviewItem(item: OutboxItem): Promise<void> {
+    const ep = await deps.episodes.read(item.path)
+    const cfg = await deps.effectiveOf(item.session, ep?.cwd)
+    if (!cfg.enabled) {
+      await deps.episodes.mark(item, { status: 'done', reason: 'disabled' })
+      return
+    }
+    await reviewOne(item, cfg)
+  }
+
+  /** 把一段工作排进该会话的串行链。 */
+  function enqueue(sessionId: string, work: () => Promise<void>): Promise<void> {
     const prev = chains.get(sessionId) ?? Promise.resolve()
     const next = prev
-      .then(() => drain(sessionId))
+      .then(work)
       .catch((e) => deps.log({ at: new Date().toISOString(), session: sessionId, event: 'drain-failed', error: deps.message(e) }).then(() => undefined))
       .finally(() => {
         if (chains.get(sessionId) === next) chains.delete(sessionId)
       })
     chains.set(sessionId, next)
     return next
+  }
+
+  /** 同一会话的复习串行（不同会话可以并行）。 */
+  function schedule(sessionId: string): Promise<void> {
+    return enqueue(sessionId, () => drain(sessionId))
+  }
+
+  /** 手动重试一条：只跑它自己，不去碰队列里其它的。 */
+  function scheduleOne(item: OutboxItem): Promise<void> {
+    return enqueue(item.session, () => reviewItem(item))
   }
 
   /** 官方压缩事件落盘：先写 episode，再 append outbox，最后才调模型。 */
@@ -283,12 +293,15 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
 
     async stats() {
       const all = await deps.episodes.list()
-      const out = { pending: 0, failed: 0, dead: 0, done: 0 }
+      const out = { pending: 0, failed: 0, dead: 0, done: 0, orphan: 0 }
       for (const x of all) {
         if (x.status === 'pending') out.pending++
         else if (x.status === 'failed') out.failed++
         else if (x.status === 'dead') out.dead++
         else if (x.status === 'done') out.done++
+        // orphan = episode 文件没了：这条永远不会再被处理，但用户得看得见它，
+        // 否则"队列里有东西"和"队列是空的"在界面上长得一样。
+        else if (x.status === 'orphan') out.orphan++
       }
       return out
     },
@@ -304,7 +317,11 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
       // 计数清零是**用户意图**的一部分：死信手动重试如果还接着上次的 attempts，
       // 第一次失败就直接又进 dead-letter，等于点了没反应。
       await deps.episodes.mark(hit, { status: 'pending', attempts: 0, nextAt: undefined, reason: 'manual retry' })
-      await schedule(hit.session)
+      // 只跑这一条：`drain` 按 turn 升序取前 BATCH 条，用户点的若是第 4 条，整队重跑
+      // 不会碰它 —— 界面回了 ok、实际什么都没发生。
+      // 传**清零后**的那份：`hit` 里的 attempts 还是旧值，直接用它复习失败一次就会
+      // 撞过上限再进 dead-letter，同样等于点了没反应。
+      await scheduleOne({ ...hit, status: 'pending', attempts: 0, nextAt: undefined, reason: 'manual retry' })
       return { ok: true, session: hit.session }
     },
   }

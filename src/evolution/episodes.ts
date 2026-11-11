@@ -121,7 +121,10 @@ export function createEpisodeStore(deps: EpisodeStoreDeps): EpisodeStore {
 
   return {
     async write(ep) {
-      const rel = `${EPISODES_DIR}/${safeSegment(ep.session)}/${ep.turn}.json`
+      // 文件名取 **id**，不是 turn：压缩 episode 的 id 是 `<session>:compact:<seq>`，而
+      // `turn` 就是那个 seq —— 拿 turn 当文件名，同一会话里一次压缩会和旧版同号轮次的
+      // episode 撞成同一个文件，先写的那条内容被后写的覆盖，而 outbox 里两行仍指着它。
+      const rel = `${EPISODES_DIR}/${safeSegment(ep.session)}/${safeSegment(ep.id)}.json`
       try {
         await mkdir(dirname(abs(rel)), { recursive: true })
         await writeFileAtomically(abs(rel), JSON.stringify(ep, null, 2) + '\n', { mode: 0o600 })

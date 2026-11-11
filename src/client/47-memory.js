@@ -1080,6 +1080,7 @@
             var s = evoQueue.stats || {}
             var failed = Number(s.failed) || 0
             var dead = Number(s.dead) || 0
+            var orphan = Number(s.orphan) || 0
             var recent = evoQueue.recent || []
             var busy = !!evoQueue.busy
             var seen = {}
@@ -1094,8 +1095,10 @@
             })
             learned = learned.slice(0, 5)
             var lastAt = recent.length > 0 ? recent[0].at : ''
+            // orphan 也算失败：episode 文件没了，这条永远不会自己好，但用户得看得见
+            // （它不进 failed/dead 计数，只出现在这份列表里）。
             var failures = (evoQueue.items || []).filter(function (x) {
-              return x.status === 'failed' || x.status === 'dead'
+              return x.status === 'failed' || x.status === 'dead' || x.status === 'orphan'
             })
             var emptyLine = null
             if (learned.length === 0) {
@@ -1106,7 +1109,7 @@
               React.createElement('div', { className: 'dsm-evo-review-head' },
                 React.createElement('span', { className: 'dsm-evo-section-title' }, t('evo.queue.title')),
                 lastAt ? React.createElement('span', { className: 'dsm-help' }, t('evo.review.last', { time: evoTimeText(lastAt) })) : null,
-                (failed + dead > 0)
+                (failed + dead + orphan > 0)
                   ? React.createElement('button', {
                       type: 'button',
                       className: 'dsm-btn dsm-btn-quiet',
@@ -1140,12 +1143,15 @@
               failures.length > 0
                 ? React.createElement('div', { className: 'dsm-evo-review-fails' },
                     React.createElement('div', { className: 'dsm-evo-review-head' },
-                      React.createElement('span', { className: 'dsm-help' }, t('evo.queue.failStat', { failed: failed, dead: dead }))),
+                      React.createElement('span', { className: 'dsm-help' }, t('evo.queue.failStat', { failed: failed, dead: dead, orphan: orphan }))),
                     failures.map(function (x) {
                       var reason = String(x.reason || '')
                       return React.createElement('div', { key: x.id, className: 'dsm-evo-review-row' },
                         React.createElement('div', { className: 'dsm-evo-review-main' },
-                          React.createElement('span', { className: 'dsm-evo-review-title dsm-evo-review-fail' }, x.status === 'dead' ? t('evo.review.dead') : t('evo.review.fail')),
+                          React.createElement('span', { className: 'dsm-evo-review-title dsm-evo-review-fail' },
+                            x.status === 'dead' ? t('evo.review.dead')
+                              : x.status === 'orphan' ? t('evo.review.orphan')
+                                : t('evo.review.fail')),
                           reason ? React.createElement('span', { className: 'dsm-evo-review-body', title: reason }, reason) : null),
                         React.createElement('div', { className: 'dsm-evo-review-meta' },
                           React.createElement('span', null, evoTimeShort(x.at)),

@@ -598,7 +598,9 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       if (!cold) return { ok: false, error: '后台复习尚未接线', code: 'no-cold' }
       try {
         const [items, stats] = await Promise.all([cold.queue(), cold.stats()])
-        const order = ['dead', 'failed', 'pending', 'orphan']
+        // orphan 排第二：它和 dead 一样「永远不会自己好」，但成因不同（摘要文件被清掉了），
+        // 混在 pending 后面会让用户以为它还在排队。
+        const order = ['dead', 'orphan', 'failed', 'pending']
         const rows = items
           .filter((x) => x.status !== 'done')
           .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || b.turn - a.turn)
